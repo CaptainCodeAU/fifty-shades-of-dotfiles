@@ -69,6 +69,12 @@ export PIP_REQUIRE_VIRTUALENV=true
 # enable completions for pipx:
 eval "$(register-python-argcomplete pipx)"
 
+# To enable shell autocompletion for uv commands
+eval "$(uv generate-shell-completion zsh)"
+# To enable shell autocompletion for uvx commands
+eval "$(uvx --generate-shell-completion zsh)"
+
+
 
 export NVM_DIR="$HOME/.nvm"
   # This loads nvm
@@ -261,25 +267,34 @@ update_vscode_settings() {
     "editor.inlineSuggest.enabled": true,
     "editor.bracketPairColorization.enabled": true,
     "editor.formatOnSave": true,
-    "editor.defaultFormatter": "ms-python.black-formatter",
     "editor.tabSize": 4,
     "editor.linkedEditing": true,
     "editor.accessibilitySupport": "off",
     "workbench.startupEditor": "none",
     "workbench.editor.enablePreview": false,
+    # "python.defaultInterpreterPath": ".venv/bin/python",
     "python.defaultInterpreterPath": ".venv/bin/python",
+    "python.analysis.extraPaths": [".venv/lib/python3.x/site-packages"],
     "python.analysis.typeCheckingMode": "basic",
     "python.experiments.optOutFrom": ["All"],
     "[python]": {
-        "editor.defaultFormatter": "ms-python.black-formatter",
-        "editor.formatOnSave": true,
         "editor.formatOnType": true,
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+            "source.fixAll": "explicit",
+            "source.organizeImports": "explicit"
+        },
+        "editor.defaultFormatter": "charliermarsh.ruff",
         "editor.rulers": [80],
         "editor.tabCompletion": "onlySnippets",
-        "editor.wordBasedSuggestions": false,
+        "editor.wordBasedSuggestions": "matchingDocuments",
         "python.formatting.provider": "black",
         "python.formatting.blackArgs": ["--line-length", "80"]
     },
+    "ruff.nativeServer": "on",
+    "ruff.logLevel": "trace",
+    "ruff.showNotifications": "always",
+    "ruff.interpreter": ["${workspaceFolder}/.venv/bin/python"],
     "[json]": {
         "editor.defaultFormatter": "vscode.json-language-features"
     },
@@ -296,19 +311,21 @@ update_vscode_settings() {
     "git.autofetch": true,
     "security.workspace.trust.untrustedFiles": "open",
     "gitHistory.logLevel": "Debug",
-    "audioCues.diffLineDeleted": "off",
-    "audioCues.diffLineInserted": "off",
-    "audioCues.diffLineModified": "off",
-    "audioCues.lineHasBreakpoint": "off",
-    "audioCues.lineHasError": "off",
-    "audioCues.lineHasFoldedArea": "off",
-    "audioCues.lineHasInlineSuggestion": "off",
-    "audioCues.noInlayHints": "off",
-    "audioCues.onDebugBreak": "off",
-    "audioCues.taskCompleted": "off",
-    "audioCues.taskFailed": "off",
-    "audioCues.terminalCommandFailed": "off",
-    "audioCues.terminalQuickFix": "off"
+    "accessibility.signals": {
+		"diffLineDeleted": "off",
+		"diffLineInserted": "off",
+		"diffLineModified": "off",
+		"lineHasBreakpoint": "off",
+		"lineHasError": "off",
+		"lineHasFoldedArea": "off",
+		"lineHasInlineSuggestion": "off",
+		"noInlayHints": "off",
+		"onDebugBreak": "off",
+		"taskCompleted": "off",
+		"taskFailed": "off",
+		"terminalCommandFailed": "off",
+		"terminalQuickFix": "off"
+	}
 }
 EOM
 )
@@ -510,55 +527,30 @@ venv_on() {
     return 1
   fi
 
+
   # Check for the `.python-version` file
   if [[ ! -f "./.python-version" ]]; then
-    echo "3.12.2" > ./.python-version
+    echo "3.13" > ./.python-version
     echo "" >> ./.python-version
     echo ".python-version file created."
   fi
-
-  # Create and activate uv virtual environment
-  echo "Creating and activating uv virtual environment..."
-  uv venv
-  source .venv/bin/activate
 
   # Determine project name from current directory if not set
   if [[ -z "$project_name" ]]; then
     project_name=$(basename "$PWD")
   fi
 
-  # Create project structure if it doesn't exist
-  if [[ ! -d "./src/$project_name" ]]; then
-    echo "Creating project structure..."
-    mkdir -p "src/$project_name"
-    touch "src/$project_name/__init__.py"
-    cat << EOF > "src/$project_name/main.py"
-def main():
-    print("Hello, $project_name!")
-
-if __name__ == "__main__":
-    main()
-EOF
-  fi
-
-  # Create test folder and example test file if they don't exist
-  if [[ ! -d "./tests" ]]; then
-    echo "Creating test folder and example test..."
-    mkdir -p "tests"
-    cat << EOF > "tests/test_main.py"
-from $project_name.main import main
-
-def test_main(capsys):
-    main()
-    captured = capsys.readouterr()
-    assert captured.out.strip() == "Hello, $project_name!"
-EOF
-  fi
-
-  # Create or update pyproject.toml
+  # Initialize the project using uv init --lib
   if [[ ! -f "./pyproject.toml" ]]; then
-    echo "Creating pyproject.toml..."
-    cat << EOF > pyproject.toml
+    echo "Initializing project with uv init --lib..."
+    uv init --lib --name "$project_name" .
+  else
+    echo "Project already initialized. Skipping uv init."
+  fi
+
+  # Create or update pyproject.toml with custom configuration
+  echo "Updating pyproject.toml with custom configuration..."
+  cat << EOF > pyproject.toml
 [project]
 name = "$project_name"
 version = "0.1.0"
@@ -567,15 +559,72 @@ authors = [
     {name = "Your Name", email = "your.email@example.com"},
 ]
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.13"
 dependencies = []
+
+[project.scripts]
+# hello = "example_package_app:hello"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+
 [tool.ruff]
+fix = true
 line-length = 100
+indent-width = 4
+src = ["."]
+target-version = "py313"
+extend-include = ["*.ipynb"]
+
+[tool.ruff.lint]
+# Enable Pyflakes (`F`) and a subset of the pycodestyle (`E`)  codes by default.
+# select = ["E4", "E7", "E9", "F"]
+select = ["ALL"]
+# select = [
+#     "E",  # pycodestyle errors
+#     "W",  # pycodestyle warnings
+#     "F",  # pyflakes
+#     "I",  # isort
+#     "C",  # flake8-comprehensions
+#     "B",  # flake8-bugbear
+# ]
+# Allow fix for all enabled rules (when `--fix`) is provided.
+fixable = ["ALL"]
+unfixable = []
+ignore = [
+#     "E501",  # line too long, handled by black
+#     "B008",  # do not perform function calls in argument defaults
+#     "C901",  # too complex
+    "D203",  # one-blank-line-before-class
+    "D212",  # multi-line-summary-first-line
+#     "D100",  # Missing docstring in public module
+#     "D101",  # Missing docstring in public class
+#     "D102",  # Missing docstring in public method
+    "D103",  # Missing docstring in public function
+    "D104",  # Missing docstring in public package
+#     "D107",  # Missing docstring in __init__
+    "T201",  # Print found
+#     "ANN001",  # Missing type annotation for function argument
+#     "ANN201",  # Missing return type annotation for public function
+    "S101",  # Use of assert detected
+    "COM812",  # Missing trailing comma
+    "ISC001",  # Implicitly concatenated strings on a single line
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "ANN001", "ANN201"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["checkout_ell_ai"]
+
 
 [tool.distutils.bdist_wheel]
 universal = true
@@ -587,6 +636,63 @@ packages = ["src/$project_name"]
 addopts = "-v -s"
 testpaths = ["tests"]
 EOF
+
+  # Create and activate uv virtual environment
+  echo "Creating and activating uv virtual environment..."
+  uv venv
+  source .venv/bin/activate
+
+  # Create project structure if it doesn't exist
+  if [[ ! -d "./src/$project_name" ]]; then
+    echo "Creating project structure..."
+    mkdir -p "src/$project_name"
+  fi
+
+  # Create or update __init__.py
+  echo "Creating/updating src/$project_name/__init__.py..."
+  cat << EOF > "src/$project_name/__init__.py"
+"""$project_name package."""
+
+def hello() -> str:
+    """Return a greeting message."""
+    return "Hello from $project_name!"
+EOF
+
+  # Create or update main.py
+  echo "Creating/updating main.py..."
+  cat << EOF > "src/$project_name/main.py"
+"""Main module for $project_name."""
+
+def main() -> None:
+    """Run the main application."""
+    print("Hello, $project_name!")
+
+if __name__ == "__main__":
+    main()
+EOF
+
+
+  # Create test folder if it doesn't exist
+  if [[ ! -d "./tests" ]]; then
+    echo "Creating test folder and example test..."
+    mkdir -p "tests"
+
+    # Create or update __init__.py
+    touch "tests/__init__.py"
+
+    # Create example test file
+    cat << EOF > "tests/test_main.py"
+"""Tests for the main module."""
+
+import pytest
+from $project_name.main import main
+
+def test_main(capsys: pytest.CaptureFixture[str]) -> None:
+    """Test the main function output."""
+    main()
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "Hello, $project_name!"
+EOF
   fi
 
   # Create README.md
@@ -594,6 +700,7 @@ EOF
 
   # Install dependencies
   echo "Installing dependencies..."
+  uv pip install ruff
   uv pip install -e .
 
   # Install development dependencies
@@ -604,12 +711,6 @@ EOF
   uv add --dev pyright
   # Code coverage: also track the code coverage
   uv add --dev pytest-cov
-
-
-  # Generate requirements files
-  # echo "Generating requirements files..."
-  # uv pip compile pyproject.toml -o requirements.txt
-  # uv pip compile pyproject.toml --extra dev -o requirements-dev.txt
 
   # Create .env file for environment variables if it doesn't exist
   if [[ ! -f "./.env" ]]; then
@@ -627,19 +728,23 @@ EOF
   # Check and create `.gitignore` if it doesn't exist
   create_gitignore
 
+  # Generate requirements files
+  # echo "Generating requirements files..."
+  # uv pip compile pyproject.toml -o requirements.txt
+  # uv pip compile pyproject.toml --extra dev -o requirements-dev.txt
+
+
+  # Run linting, formatting, and tests
+  echo "Running linting, formatting, and tests..."
   # Linting: To check if the project is up to standards we can run,
   uvx ruff check .
-
   # Formatting: This checks how your code is visually structured
   uvx ruff format .
-
   # To get pyright running we can run
   uv run pyright .
-
   # Neatly runs the tests. The `-v` flag for a bit more detailed output.
   # Pass in `--durations=5` which prints the duration of the 5 longest running tests.
   uv run pytest tests -v --durations=5
-
   # Code Coverage
   uv run pytest -v --durations=0 --cov --cov-report=xml
 
