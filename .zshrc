@@ -75,6 +75,11 @@ eval "$(uv generate-shell-completion zsh)"
 eval "$(uvx --generate-shell-completion zsh)"
 
 
+# Starship Setup
+export STARSHIP_CONFIG="$HOME/.config/starship/starship.toml"
+eval "$(starship init zsh)"
+
+
 
 export NVM_DIR="$HOME/.nvm"
   # This loads nvm
@@ -251,6 +256,7 @@ export PATH="/usr/local/opt/php@8.1/sbin:$PATH"
 
 # Created by `pipx` on 2024-10-16 04:03:51
 export PATH="$PATH:/Users/admin/.local/bin"
+
 
 [ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
 
@@ -540,6 +546,9 @@ venv_on() {
     project_name=$(basename "$PWD")
   fi
 
+  # Convert project name to Python-friendly format
+  project_name=$(echo "$project_name" | tr '[:upper:]' '[:lower:]' | tr '-' '_')
+
   # Initialize the project using uv init --lib
   if [[ ! -f "./pyproject.toml" ]]; then
     echo "Initializing project with uv init --lib..."
@@ -579,17 +588,7 @@ target-version = "py313"
 extend-include = ["*.ipynb"]
 
 [tool.ruff.lint]
-# Enable Pyflakes (`F`) and a subset of the pycodestyle (`E`)  codes by default.
-# select = ["E4", "E7", "E9", "F"]
 select = ["ALL"]
-# select = [
-#     "E",  # pycodestyle errors
-#     "W",  # pycodestyle warnings
-#     "F",  # pyflakes
-#     "I",  # isort
-#     "C",  # flake8-comprehensions
-#     "B",  # flake8-bugbear
-# ]
 # Allow fix for all enabled rules (when `--fix`) is provided.
 fixable = ["ALL"]
 unfixable = []
@@ -766,4 +765,5 @@ venv_off() {
         echo "No active virtual environment detected."
     fi
 }
+
 
