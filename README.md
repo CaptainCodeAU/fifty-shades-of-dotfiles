@@ -1,95 +1,193 @@
-# Dotfiles: Python Virtual Environment Management
+# Dotfiles: Python Development Environment Management
 
-This repository contains a set of Zsh functions designed to streamline the process of creating, activating, and managing Python virtual environments. These functions are particularly useful for developers who frequently work with multiple Python projects and need an efficient way to manage their development environments.
+A comprehensive set of Zsh functions for managing Python development environments using `uv`. These tools streamline project creation, setup, and management while enforcing best practices and consistent configurations.
 
-## Key Functions
+## Core Functions
 
-### 1. venv_on
+### 1. get_uv_python_path()
 
-The `venv_on` function is the core of this toolset. It performs the following tasks:
+Retrieves the full path to a Python interpreter managed by `uv`.
 
-1. Checks if `uv` (a fast Python package installer and resolver) is installed.
-2. Creates or updates a `.python-version` file with the Python version "3.13".
-3. Initializes the project using `uv init --lib` if `pyproject.toml` doesn't exist.
-4. Creates or updates `pyproject.toml` with a custom configuration.
-5. Creates and activates a `uv` virtual environment.
-6. Sets up a basic project structure with `src/` and `tests/` directories.
-7. Creates or updates `__init__.py` and `main.py` files in the project directory.
-8. Creates a `README.md` file if it doesn't exist.
-9. Installs project dependencies and development dependencies.
-10. Creates a `.env` file for environment variables.
-11. Updates VSCode settings for the project.
-12. Creates a `.gitignore` file with common entries.
-13. Runs linting, formatting, and tests using various tools (ruff, pyright, pytest).
-
-### 2. venv_off
-
-This function deactivates the currently active Python virtual environment.
-
-### 3. venv_delete
-
-This function removes the `venv` directory in the current project, effectively deleting the virtual environment.
-
-### 4. update_vscode_settings
-
-This function creates or updates the `.vscode/settings.json` file with predefined settings optimized for Python development in VSCode.
-
-### 5. create_gitignore
-
-This function creates a `.gitignore` file with common entries for Python projects if it doesn't already exist.
-
-### 6. create_readme
-
-This function creates a basic `README.md` file for the project if it doesn't exist.
-
-## Benefits and Convenience
-
-1. **Consistency**: Ensures a consistent setup across all your Python projects.
-2. **Time-saving**: Automates the process of setting up a new Python project, saving valuable development time.
-3. **Best Practices**: Incorporates best practices for Python development, including virtual environment usage, dependency management, and project structure.
-4. **Tool Integration**: Seamlessly integrates popular development tools like ruff, pyright, and pytest.
-5. **VSCode Optimization**: Automatically configures VSCode settings for optimal Python development.
-6. **Version Control Ready**: Sets up .gitignore and initializes the project for version control.
-7. **Environment Isolation**: Ensures each project has its own isolated environment, preventing conflicts between project dependencies.
-
-## Usage
-
-To use these functions, add them to your `.zshrc` file or source them from a separate file. Then, you can use them as follows:
-
-1. To set up and activate a new virtual environment:
-   ```
-   cd /path/to/your/project
-   venv_on
-   ```
-
-2. To deactivate the current virtual environment:
-   ```
-   venv_off
-   ```
-
-3. To delete the virtual environment in the current project:
-   ```
-   venv_delete
-   ```
-
-## Workflow Diagram
-
-```mermaid
-graph TD
-    A[Start] --> B{uv installed?}
-    B -->|Yes| C[Create/Update .python-version]
-    B -->|No| Z[Error: Install uv]
-    C --> D{pyproject.toml exists?}
-    D -->|No| E[Initialize project with uv init --lib]
-    D -->|Yes| F[Update pyproject.toml]
-    E --> F
-    F --> G[Create/Activate uv venv]
-    G --> H[Setup project structure]
-    H --> I[Create/Update project files]
-    I --> J[Install dependencies]
-    J --> K[Setup development tools]
-    K --> L[Run linting, formatting, tests]
-    L --> M[End]
+```bash
+get_uv_python_path 3.12
+# Output: /Users/admin/.local/share/uv/python/cpython-3.12.7-macos-x86_64-none/bin/python3.12
 ```
 
-This set of functions provides a robust and efficient workflow for Python project management, ensuring that each new project starts with a solid foundation and follows best practices in Python development.
+### 2. python_new_project()
+Creates a new Python project with complete scaffolding and tooling setup.
+```bash
+python_new_project 3.12
+```
+
+```mermaid
+    graph TD
+        A[Start] --> B{Validate Python Version}
+        B -->|Invalid| C[Show Error]
+        B -->|Valid| D[Get Python Path from uv]
+        D -->|Not Found| E[Show Error]
+        D -->|Found| F[Initialize Project with uv init]
+        F --> G[Create Project Structure]
+        G --> H[Create and Activate Virtual Environment]
+        H --> I[Install Dependencies]
+        I --> J[Create Configuration Files]
+        J --> K{Git Repo Exists?}
+        K -->|No| L[Initialize Git Repository]
+        K -->|Yes| L[Skip Git Init]
+        L --> M[End]
+         subgraph "Configuration Files"
+            J1[pyproject.toml]
+            J2[.gitignore]
+            J3[README.md]
+            J4[VSCode settings]
+            J5[.env]
+        end
+        J --> J1
+        J --> J2
+        J --> J3
+        J --> J4
+        J --> J5
+```
+
+### 3. python_setup()
+Sets up an existing Python project with virtual environment and dependencies.
+
+```mermaid
+    graph TD
+        A[Start] --> B{Validate Python Version}
+        B -->|Invalid| C[Show Error]
+        B -->|Valid| D{Project Files Exist?}
+        D -->|No| E[Show Error]
+        D -->|Yes| F{Virtual Environment Exists?}
+        F -->|No| G[Create Virtual Environment]
+        F -->|Yes| H[Skip Venv Creation]
+        G --> I[Activate Virtual Environment]
+        H --> I
+        I --> J{Install Dependencies}
+        J -->|pyproject.toml| K[Install from pyproject.toml]
+        J -->|requirements.txt| L[Install from requirements.txt]
+        J -->|None| M[Skip Dependency Installation]
+        K --> N[Create .env and .gitignore if not exists]
+        L --> N
+        M --> N
+        N --> O[End]
+```
+
+### 4. python_deactivate()
+Deactivates the current Python virtual environment.
+
+```bash
+python_deactivate
+```
+
+### 5. python_delete()
+Cleans up Python virtual environment and related files.
+
+```bash
+python_delete
+```
+
+## Convenient Aliases
+
+#### Project Management
+
+```bash
+# New project
+py_new, py_new_project, python_new
+
+# Setup existing project
+py_setup, py_existing, python_existing
+
+# Deactivate environment
+py_off, py_close, py_deactivate
+
+# Cleanup
+py_delete, py_clean, py_cleanup
+```
+
+#### Python Version Shortcuts
+
+```bash
+py313  # Python 3.13
+py312  # Python 3.12
+py311  # Python 3.11
+py310  # Python 3.10
+```
+
+## Features & Benefits
+
+#### 1. Automated Setup
+- Consistent project structure
+- Pre-configured development tools
+- VSCode integration
+- Git-ready configuration
+
+#### 2. Development Tools
+- Ruff for linting and formatting
+- Pytest for testing
+- Coverage reporting
+- Type checking with pyright
+
+#### 3. Best Practices
+- Isolated environments
+- Dependency management
+- Code quality tools
+- Version control integration
+
+#### 4. VSCode Integration
+- Optimized settings
+- Python extension configuration
+- Debugging setup
+- Linting and formatting
+
+## Project Structure
+
+```code
+project_name/
+├── .venv/
+├── .vscode/
+│   └── settings.json
+├── src/
+│   └── project_name/
+│       ├── __init__.py
+│       └── main.py
+├── tests/
+│   ├── __init__.py
+│   └── test_main.py
+├── .gitignore
+├── .env
+├── README.md
+└── pyproject.toml
+```
+
+## Requirements
+- Brew
+- Zsh shell
+- Oh My Zsh
+- uv package manager
+- Git (recommended)
+- VSCode (recommended)
+
+## Usage Examples
+
+#### 1. Creating a New Python Project
+```bash
+mkdir my_project
+cd my_project
+python_new_project 3.12
+```
+
+#### 2. Setting Up Existing Project
+```bash
+cd existing_project
+python_setup 3.12
+```
+
+#### 3. Managing Environment
+```bash
+# Deactivate environment
+python_deactivate
+
+# Clean up project
+python_delete
+```
+
