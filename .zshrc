@@ -80,8 +80,8 @@ eval "$(uvx --generate-shell-completion zsh)"
 
 
 # Starship Setup
-export STARSHIP_CONFIG="$HOME/.config/starship/starship.toml"
-eval "$(starship init zsh)"
+# export STARSHIP_CONFIG="$HOME/.config/starship/starship.toml"
+# eval "$(starship init zsh)"
 
 
 
@@ -166,8 +166,11 @@ ZSH_THEME="powerlevel10k/powerlevel10k"
 # Custom plugins may be added to $ZSH_CUSTOM/plugins/
 # Example format: plugins=(rails git textmate ruby lighthouse)
 # Add wisely, as too many plugins slow down shell startup.
+
 # plugins=(git zsh-autosuggestions zsh-syntax-highlighting zsh-completions vscode history-substring-search shellfirm pyenv)
-plugins=(git zsh-autosuggestions zsh-syntax-highlighting zsh-completions vscode history-substring-search shellfirm)
+# plugins=(git docker zsh-autosuggestions zsh-syntax-highlighting zsh-completions vscode history-substring-search shellfirm)
+plugins=(git docker zsh-autosuggestions zsh-syntax-highlighting zsh-completions vscode history-substring-search)
+
 # virtualenv virtualenv-autodetect
 # autoload -U compinit && compinit
 
@@ -265,7 +268,7 @@ export PATH="/usr/local/sbin:$PATH"
 export PATH="$PATH:/Users/admin/.local/bin"
 
 # Shell Integration (needed for Cline in VSCode Terminal)
-[[ "$TERM_PROGRAM" == "vscode" ]] && . "$(code --locate-shell-integration-path zsh)"
+# [[ "$TERM_PROGRAM" == "vscode" ]] && . "$(code --locate-shell-integration-path zsh)"
 
 
 [ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
@@ -275,7 +278,8 @@ export PATH="$PATH:/Users/admin/.local/bin"
 # Python version configuration
 PYTHON_MIN_VERSION="3.7"
 PYTHON_MAX_VERSION="3.13"
-PYTHON_VERSION_PATTERN="^3\.(1[0-${PYTHON_MAX_VERSION#*.}]|[7-9])(\.[0-9]+)?$"
+# PYTHON_VERSION_PATTERN="^3\.(1[0-${PYTHON_MAX_VERSION#*.}]|[7-9])(\.[0-9]+)?$"
+PYTHON_VERSION_PATTERN="^3\.(1[0-3]|[7-9])(\.[0-9]+)?$"
 
 
 # Function to create/update the VSCode project's local settings.json file
@@ -502,7 +506,7 @@ Brief description of your project.
 \`\`\`
 uv venv
 source .venv/bin/activate
-uv pip install -r requirements.txt
+uv pip install -r requirements.txt --python "${python_version}"
 \`\`\`
 
 ## Usage
@@ -640,6 +644,11 @@ python_new_project() {
     venv_cmd="uv venv --python ${python_version}"
     echo "Running command: $venv_cmd"
     eval "$venv_cmd"
+
+    # Install pip
+    echo "Installing pip into virtual environment..."
+    ${PWD}/.venv/bin/python -m ensurepip --upgrade
+    ${PWD}/.venv/bin/python -m pip install --upgrade pip
 
     # Activate virtual environment and install dependencies
     if [ -f ".venv/bin/activate" ]; then
@@ -850,6 +859,12 @@ python_setup() {
     local python_version=$1
     local project_name=$(basename "$PWD")
 
+    # Debug output
+    echo "Debug: python_version=$python_version"
+    echo "Debug: PYTHON_VERSION_PATTERN=$PYTHON_VERSION_PATTERN"
+    echo "Debug: Testing match..."
+    [[ "${python_version}" =~ $PYTHON_VERSION_PATTERN ]] && echo "Debug: Matches" || echo "Debug: No match"
+
     # Validate Python version using the global pattern
     if [[ ! "${python_version}" =~ ${PYTHON_VERSION_PATTERN} ]]; then
         echo "Error: Invalid Python version. Must be ${PYTHON_MIN_VERSION}-${PYTHON_MAX_VERSION}"
@@ -874,6 +889,11 @@ python_setup() {
     else
         echo "Virtual environment already exists."
     fi
+
+    # Install pip
+    echo "Installing pip into virtual environment..."
+    ${PWD}/.venv/bin/python -m ensurepip --upgrade
+    ${PWD}/.venv/bin/python -m pip install --upgrade pip
 
     # Activate virtual environment
     source .venv/bin/activate
@@ -1000,131 +1020,6 @@ python_delete() {
 }
 
 
-#   # Create and activate uv virtual environment
-#   echo "Creating and activating uv virtual environment..."
-#   uv venv -p "${python_version}"
-
-#   # Activate virtual environment
-#     if [ -f ".venv/bin/activate" ]; then
-#         source .venv/bin/activate
-#     else
-#         echo "Error: Virtual environment activation failed"
-#         return 1
-#     fi
-
-#   # Create project structure if it doesn't exist
-#   if [[ ! -d "./src/$project_name" ]]; then
-#     echo "Creating project structure..."
-#     mkdir -p "src/$project_name"
-#   fi
-
-#   # Create or update __init__.py
-#   echo "Creating/updating src/$project_name/__init__.py..."
-#   cat << EOF > "src/$project_name/__init__.py"
-# """$project_name package."""
-
-# def hello() -> str:
-#     """Return a greeting message."""
-#     return "Hello from $project_name!"
-# EOF
-
-#   # Create or update main.py
-#   echo "Creating/updating main.py..."
-#   cat << EOF > "src/$project_name/main.py"
-# """Main module for $project_name."""
-
-# def main() -> None:
-#     """Run the main application."""
-#     print("Hello, $project_name!")
-
-# if __name__ == "__main__":
-#     main()
-# EOF
-
-
-#   # Create test folder if it doesn't exist
-#   if [[ ! -d "./tests" ]]; then
-#     echo "Creating test folder and example test..."
-#     mkdir -p "tests"
-
-#     # Create or update __init__.py
-#     touch "tests/__init__.py"
-
-#     # Create example test file
-#     cat << EOF > "tests/test_main.py"
-# """Tests for the main module."""
-
-# import pytest
-# from $project_name.main import main
-
-# def test_main(capsys: pytest.CaptureFixture[str]) -> None:
-#     """Test the main function output."""
-#     main()
-#     captured = capsys.readouterr()
-#     assert captured.out.strip() == "Hello, $project_name!"
-# EOF
-#   fi
-
-#   # Create README.md
-#   create_readme
-
-#   # Install dependencies
-#   echo "Installing dependencies..."
-#   uv pip install ruff
-#   uv pip install -e .
-
-#   # Install development dependencies
-#   echo "Installing development dependencies..."
-#   # Testing
-#   uv add --dev pytest
-#   # Type checking: To make sure that the types are what you document it to be, we can use pyright.
-#   uv add --dev pyright
-#   # Code coverage: also track the code coverage
-#   uv add --dev pytest-cov
-
-#   # Create .env file for environment variables if it doesn't exist
-#   if [[ ! -f "./.env" ]]; then
-#     echo "Creating .env file..."
-#     cat << EOF > .env
-# # Add your environment variables here
-# # Example:
-# # API_KEY=your_api_key_here
-# EOF
-#   fi
-
-#   # Create or update the .vscode/settings.json file with the provided settings
-#   update_vscode_settings
-
-#   # Check and create `.gitignore` if it doesn't exist
-#   create_gitignore
-
-#   # Generate requirements files
-#   # echo "Generating requirements files..."
-#   # uv pip compile pyproject.toml -o requirements.txt
-#   # uv pip compile pyproject.toml --extra dev -o requirements-dev.txt
-
-
-#   # Run linting, formatting, and tests
-#   echo "Running linting, formatting, and tests..."
-#   # Linting: To check if the project is up to standards we can run,
-#   uvx ruff check .
-#   # Formatting: This checks how your code is visually structured
-#   uvx ruff format .
-#   # To get pyright running we can run
-#   uv run pyright .
-#   # Neatly runs the tests. The `-v` flag for a bit more detailed output.
-#   # Pass in `--durations=5` which prints the duration of the 5 longest running tests.
-#   uv run pytest tests -v --durations=5
-#   # Code Coverage
-#   uv run pytest -v --durations=0 --cov --cov-report=xml
-
-#   # Building a wheel
-#   # uv build
-
-#   echo "Project setup complete. Virtual environment activated."
-# }
-
-
 # --------------------------------
 
 # export UV_DEFAULT_PYTHON_VERSION="3.13"
@@ -1174,26 +1069,33 @@ export PATH="$PATH:/usr/local/opt/fzf/bin"
 export PATH="$PATH:/Library/Apple/usr/bin"
 export PATH="$PATH:/Library/TeX/texbin"
 
+export PATH="/usr/local/opt/postgresql@16/bin:$PATH"
+export PATH="$PATH:/Users/admin/.cargo/bin"
+export PATH="/usr/local/opt/libpq/bin:$PATH"
 
 # Python function aliases (because I forget the name of the function)
-# Python new project
-alias py_new='python_new_project'
-alias py_new_project='python_new_project'
-alias python_new='python_new_project'
-# Python existing project
-alias py_setup='python_setup'
-alias py_existing='python_setup'
-alias python_existing='python_setup'
-# deactivate virtual environment
-alias py_off='python_deactivate'
-alias py_close='python_deactivate'
-alias py_deactivate='python_deactivate'
-alias python_off='python_deactivate'
-alias python_close='python_deactivate'
-# delete virtual environment and related files
-alias py_delete='python_delete'
-alias py_clean='python_delete'
-alias py_cleanup='python_delete'
+# Use uv pip Consistently
+alias pip="uv pip"
+
+# # Python new project
+# alias py_new='python_new_project'
+# alias py_new_project='python_new_project'
+# alias python_new='python_new_project'
+# # Python existing project
+# alias py_setup='source <(python_setup)'
+# alias py_existing='source <(python_setup)'
+# alias python_existing='source <(python_setup)'
+# alias py_existing_project='source <(python_setup)'
+# # deactivate virtual environment
+# alias py_off='python_deactivate'
+# alias py_close='python_deactivate'
+# alias py_deactivate='python_deactivate'
+# alias python_off='python_deactivate'
+# alias python_close='python_deactivate'
+# # delete virtual environment and related files
+# alias py_delete='python_delete'
+# alias py_clean='python_delete'
+# alias py_cleanup='python_delete'
 
 # Python version aliases
 alias py313="/Users/admin/.local/share/uv/python/cpython-3.13.0-macos-x86_64-none/bin/python3.13"
@@ -1209,3 +1111,16 @@ alias llmfile="repomix"
 alias singlefile="repomix"
 
 alias aider="source ~/.local/share/aider/.venv/bin/activate && aider"
+# The following lines have been added by Docker Desktop to enable Docker CLI completions.
+fpath=(/Users/admin/.docker/completions $fpath)
+autoload -Uz compinit
+compinit
+# End of Docker CLI completions
+
+
+# Ensure .venv/bin is in PATH when uv virtual environment is activated
+if [[ -n "$VIRTUAL_ENV" ]]; then
+    if [[ ":$PATH:" != *":$VIRTUAL_ENV/bin:"* ]]; then
+        export PATH="$VIRTUAL_ENV/bin:$PATH"
+    fi
+fi
