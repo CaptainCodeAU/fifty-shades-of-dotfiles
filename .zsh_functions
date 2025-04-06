@@ -1,0 +1,949 @@
+# ==============================================================================
+# Helper Functions
+# ==============================================================================
+
+# Function to get the full path of the Python interpreter for a given UV-managed version
+# Usage: get_uv_python_path <major.minor_version> (e.g., 3.11)
+get_uv_python_path() {
+    local version_prefix=$1
+    local python_path=""
+
+    # Validate version format (should be like "3.11", "3.12")
+    if [[ ! "$version_prefix" =~ ^[0-9]+\.[0-9]+$ ]]; then
+        echo "Error: Invalid Python version format requested: '$version_prefix'. Expected format: 3.11, 3.12, etc." >&2
+        return 1
+    fi
+
+    # Use 'uv python list' and parse the output robustly
+    # Find the *latest installed patch version* for the requested major.minor
+    # Ignores lines indicating only "download available"
+    # Uses awk for cleaner parsing than multiple greps/tails
+    python_path=$(uv python list 2>/dev/null | \
+        awk -v prefix="cpython-${version_prefix}." '$1 ~ "^" prefix && $2 ~ /^\// { print $2 }' | \
+        sort -V | \
+        tail -n 1)
+
+    # Check if we found a path
+    if [[ -z "$python_path" ]]; then
+        echo "Error: No *installed* Python matching ${version_prefix}.* found via 'uv python list'." >&2
+        echo "You might need to run: uv python install ${version_prefix}" >&2
+        return 1
+    fi
+
+    # Verify the path exists and is executable
+    if [[ ! -x "$python_path" ]]; then
+        echo "Error: Python interpreter found at '${python_path}' is not executable." >&2
+        return 1
+    fi
+
+    echo "$python_path"
+    return 0
+}
+
+# Function to create/update the VSCode project's local settings.json file
+# Creates the file with defaults only if it doesn't exist, to avoid overwriting user changes.
+# Usage: update_vscode_settings
+update_vscode_settings() {
+    local settings_dir=".vscode"
+    local settings_file="$settings_dir/settings.json"
+
+    # Ensure .vscode directory exists
+    mkdir -p "$settings_dir"
+
+    # Only create settings.json if it doesn't already exist
+    if [[ ! -f "$settings_file" ]]; then
+        echo "Creating default VSCode settings file: $settings_file"
+        # Use tabs for indentation as requested by the original config's sed command
+        cat <<-'EOF' | sed 's/^    /\t/g' > "$settings_file"
+    {
+        "editor.indentSize": "tabSize",
+        "editor.tabSize": 4,
+        "editor.fontSize": 16,
+        "editor.suggestFontSize": 16,
+        "editor.minimap.enabled": false,
+        "editor.inlineSuggest.enabled": true,
+        "editor.bracketPairColorization.enabled": true,
+        "editor.formatOnSave": true,
+        "editor.linkedEditing": true,
+        "editor.accessibilitySupport": "off",
+        "workbench.startupEditor": "none",
+        "workbench.editor.enablePreview": false,
+        "explorer.confirmDragAndDrop": false,
+        "git.confirmSync": false,
+        "git.autofetch": true,
+        "security.workspace.trust.untrustedFiles": "open",
+        "gitHistory.logLevel": "Debug",
+        "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+        "python.analysis.typeCheckingMode": "basic",
+        "python.experiments.optOutFrom": ["All"],
+        "[python]": {
+            "editor.formatOnType": true,
+            "editor.formatOnSave": true,
+            "editor.codeActionsOnSave": {
+                "source.fixAll": "explicit",
+                "source.organizeImports": "explicit",
+            },
+            "editor.defaultFormatter": "charliermarsh.ruff",
+            "editor.rulers": [80],
+            "editor.tabCompletion": "onlySnippets",
+            "editor.wordBasedSuggestions": "matchingDocuments",
+            "python.formatting.provider": "black", # Ensure black is installed or use ruff format
+            "python.formatting.blackArgs": ["--line-length", "80"]
+        },
+        "ruff.nativeServer": "on",
+        "ruff.logLevel": "warn", # Changed from trace for less noise
+        "ruff.showNotifications": "onError", # Changed from always
+        "ruff.interpreter": ["${workspaceFolder}/.venv/bin/python"],
+        "[json]": {
+            "editor.defaultFormatter": "vscode.json-language-features"
+        },
+        "prettier.printWidth": 80,
+        "prettier.tabWidth": 4,
+        "prettier.singleQuote": true,
+        "prettier.trailingComma": "all",
+        "prettier.bracketSpacing": true,
+        "prettier.useTabs": true, # Consistent with outer sed command
+        "prettier.arrowParens": "avoid",
+        "prettier.endOfLine": "auto",
+        "accessibility.signals": {
+            "diffLineDeleted": "off",
+            "diffLineInserted": "off",
+            "diffLineModified": "off",
+            "lineHasBreakpoint": "off",
+            "lineHasError": "off",
+            "lineHasFoldedArea": "off",
+            "lineHasInlineSuggestion": "off",
+            "noInlayHints": "off",
+            "onDebugBreak": "off",
+            "taskCompleted": "off",
+            "taskFailed": "off",
+            "terminalCommandFailed": "off",
+            "terminalQuickFix": "off"
+        }
+    }
+EOF
+    else
+        echo "VSCode settings file already exists: $settings_file (Skipping creation)"
+    fi
+}
+
+# Function to create .gitignore file with common Python entries if it doesn't exist
+# Usage: create_gitignore
+create_gitignore() {
+    if [[ ! -f "./.gitignore" ]]; then
+        echo "Creating .gitignore with common Python entries..."
+        # Using a comprehensive template from the original function
+        cat <<-'EOF' > .gitignore
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+pytestdebug.log
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3*
+*.sqlite3* # More general catch
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+.pybuilder/
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# PEP 582; used by e.g. pyflow/pdm
+__pypackages__/
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDEs / Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Secrets (add specific files if necessary)
+# credentials.json
+# secrets.yaml
+
+# Logs
+*.log
+logs/
+
+# uv cache/lock files
+uv.lock
+.uv_cache/
+
+# npm / node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+yarn.lock
+
+# macOS files
+.AppleDouble
+.LSOverride
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+
+# Other common temp files
+tmp/
+temp/
+EOF
+    else
+        echo ".gitignore already exists. (Skipping creation)"
+    fi
+}
+
+# Function to create README.md file if it doesn't exist
+# Usage: create_readme <project_name> <python_version>
+create_readme() {
+    local project_name=${1:-"my_project"} # Default if not provided
+    local python_version=${2:-"3.x"}      # Default if not provided
+
+    if [[ ! -f "./README.md" ]]; then
+        echo "Creating README.md..."
+        cat <<-'EOF' > README.md
+# $project_name
+
+## Description
+Brief description of your project.
+
+## Setup and Installation
+
+1.  **Clone the Repository (if applicable)**
+    ```bash
+    git clone <repository_url>
+    cd $project_name
+    ```
+
+2.  **Set up Python Environment:**
+    *   Ensure you have [`uv`](https://github.com/astral-sh/uv) installed.
+    *   Ensure you have [`direnv`](https://direnv.net/) installed and hooked into your shell.
+    *   Run the setup script (first time or to recreate environment). Choose the desired Python version (e.g., ${python_version}):
+    ```bash
+    python_setup ${python_version}
+    ```
+    *(This creates/updates the `.venv` directory and installs dependencies)*
+
+3.  **Activate Environment (using direnv):**
+    *   Create a `.envrc` file in the project root:
+        ```bash
+        echo "source .venv/bin/activate" > .envrc
+        ```
+    *   Allow direnv to load the file:
+        ```bash
+        direnv allow .
+        ```
+    *   Now, `direnv` will automatically activate/deactivate the `.venv` whenever you `cd` into or out of the project directory.
+
+4.  **Install/Sync Dependencies (if not done by python_setup):**
+
+
+## Development
+*(Ensure your environment is active - direnv should handle this)*
+
+*   **Run the main script (Example):**
+    ```bash
+    python src/$project_name/main.py
+    ```
+
+*   **Run Tests:**
+    ```bash
+    uv run pytest
+    # Or directly:
+    # pytest
+    ```
+
+*   **Linting and Formatting (with Ruff):**
+    ```bash
+    # Check for issues
+    uv run ruff check .
+    # Format code
+    uv run ruff format .
+    ```
+
+## Managing Dependencies
+
+*   **Add a new dependency:**
+    ```bash
+    uv add <package_name>
+    ```
+*   **Add a new development dependency:**
+    ```bash
+    uv add --dev <package_name>
+    ```
+*   **Update dependencies:**
+    ```bash
+    # This command updates dependencies based on pyproject.toml constraints
+    # (Currently experimental or may require specific uv workflows)
+    # Alternatively, manually update versions in pyproject.toml and run:
+    uv pip install -e .[dev]
+    ```
+*   **Sync environment with lock file (if using one):**
+    ```bash
+    uv sync
+    ```
+
+## Deactivating Environment
+    ```bash
+    deactivate
+    ```
+EOF
+    else
+        echo "README.md already exists. (Skipping creation)"
+    fi
+}
+
+# Function to create a new Python project with uv scaffolding
+# Usage: python_new_project <PYTHON_VERSION> (e.g., 3.13)
+# Creates project structure, pyproject.toml, basic files, .venv,
+# installs dependencies, and sets up .envrc for direnv.
+python_new_project() {
+    # --- Require exactly one argument: the Python version ---
+    if [ "$#" -lt 1 ]; then
+        echo "Error: Python version is required." >&2
+        echo "Usage: python_new_project <PYTHON_VERSION> (e.g., 3.13)" >&2
+        return 1
+    fi
+
+    local req_python_version=$1 # e.g., 3.13
+    local project_name=$(basename "$PWD")
+    local python_interpreter_path=""
+
+    # --- Check if uv is installed ---
+    if ! command -v uv &> /dev/null; then
+        echo "Error: 'uv' command not found." >&2
+        echo "Please install uv first. See: https://github.com/astral-sh/uv" >&2
+        return 1
+    fi
+
+    # --- Validate Python version format (using global vars from .zshrc) ---
+    if [[ -z "$PYTHON_VERSION_PATTERN" ]]; then
+        echo "Warning: PYTHON_VERSION_PATTERN not defined. Using default: ^3\.(8|9|1[0-3])$" >&2
+        # PYTHON_VERSION_PATTERN="^3\.(1[0-3]|[7-9])(\.[0-9]+)?$" # Fallback
+        PYTHON_VERSION_PATTERN="^3\.(8|9|1[0-3])$" # Fallback (adjust range)
+    fi
+    if [[ ! "${req_python_version}" =~ ${PYTHON_VERSION_PATTERN} ]]; then
+        echo "Error: Invalid or unsupported Python version format: '${req_python_version}'." >&2
+        echo "Supported pattern roughly: ${PYTHON_VERSION_PATTERN}" >&2
+        echo "Usage: python_new_project <major.minor>" >&2
+        return 1
+    fi
+
+    # --- Check if requested Python version is installed via uv ---
+    python_interpreter_path=$(get_uv_python_path "${req_python_version}")
+    if [[ $? -ne 0 ]]; then
+        # Error message already printed by get_uv_python_path
+        return 1
+    fi
+    echo "Using Python interpreter: $python_interpreter_path"
+
+    # --- Validate Project Directory Name ---
+    # Convert project name to Python-friendly format
+    project_name=$(echo "$project_name" | tr '[:upper:]' '[:lower:]' | tr ' -' '_')
+    if [[ ! "$project_name" =~ ^[a-z][a-z0-9_]*$ ]]; then
+        echo "Error: Invalid directory name for a Python project." >&2
+        echo "Directory name must start with a letter and contain only lowercase letters, numbers, and underscores." >&2
+        return 1
+    fi
+
+    echo "--------------------------------------------------"
+    echo "Creating new Python project: $project_name"
+    echo "Using Python: $req_python_version ($python_interpreter_path)"
+    echo "--------------------------------------------------"
+
+
+    # --- 1. Initialize project with uv init (creates basic pyproject.toml) ---
+    if [[ ! -f "pyproject.toml" ]]; then
+        echo "Running: uv init --python \"${req_python_version}\""
+        # Use --no-readme flag since we create our own more detailed one
+        if ! uv init --no-readme --python "${req_python_version}"; then
+            echo "Error: 'uv init' failed." >&2
+            return 1
+        fi
+    else
+        echo "pyproject.toml already exists. Skipping 'uv init'."
+    fi
+
+    # --- 2. Create project structure ---
+    echo "Creating directories: src/$project_name and tests"
+    mkdir -p "src/$project_name"
+    mkdir -p "tests"
+
+    # --- 3. Create/Update pyproject.toml with more details ---
+    echo "Configuring pyproject.toml..."
+    local major_minor_version=$(echo "${req_python_version}" | cut -d'.' -f1,2)
+    local next_minor_version=$((${major_minor_version#*.} + 1)) # e.g., 11 -> 12
+    local py_version_constraint=">=${major_minor_version}, <3.${next_minor_version}" # e.g., >=3.11, <3.12
+
+    # Overwrite the basic pyproject.toml generated by 'uv init'
+    cat << EOF > pyproject.toml
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "$project_name"
+version = "0.1.0"
+description = "A fantastic Python project." # User should update this
+authors = [
+    { name = "Your Name", email = "your.email@example.com" }, # User should update this
+]
+readme = "README.md"
+requires-python = "$py_version_constraint"
+license = { text = "MIT" } # Example license
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: ${major_minor_version}",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    # Add core runtime dependencies here
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff",
+    "pytest",
+    "pytest-cov",
+    # Add other dev tools like type checkers (mypy, pyright) if desired
+]
+
+[project.urls]
+Homepage = "https://github.com/yourusername/$project_name" # Optional: Update URL
+Repository = "https://github.com/yourusername/$project_name" # Optional: Update URL
+
+# [project.scripts]
+# # Example: Define console scripts if your package has executables
+# # my-cli = "$project_name.cli:main"
+
+# Use hatch to manage version based on __init__.py
+[tool.hatch.version]
+path = "src/$project_name/__init__.py"
+
+# Example Ruff configuration (adjust as needed)
+[tool.ruff]
+src = ["src", "tests"]
+line-length = 88
+indent-width = 4
+target-version = "py${major_minor_version//./}" # e.g., py311
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "C", "B", "A", "RUF"] # Sensible defaults
+ignore = ["E501"] # Handled by formatter
+fixable = ["ALL"]
+unfixable = []
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+[tool.ruff.lint.isort]
+known-first-party = ["$project_name"]
+combine-as-imports = true
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"] # Allow 'assert' in tests
+
+# Example Pytest configuration
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q --cov=$project_name --cov-report=term-missing"
+testpaths = ["tests"]
+python_files = "test_*.py"
+EOF
+
+    # --- 4. Create basic source files ---
+    echo "Creating basic source files..."
+    # src/__init__.py (with version)
+    cat << EOF > "src/$project_name/__init__.py"
+"""$project_name package."""
+__version__ = "0.1.0"
+
+def hello() -> str:
+    """Return a greeting message."""
+    return f"Hello from $project_name version {__version__}!"
+EOF
+
+    # src/main.py (Example main execution)
+    cat << EOF > "src/$project_name/main.py"
+"""Main module for $project_name."""
+
+from $project_name import hello
+
+def main() -> None:
+    """Run the main application logic."""
+    message = hello()
+    print(message)
+
+if __name__ == "__main__":
+    main()
+EOF
+
+    # tests/__init__.py (Mark tests as a package)
+    touch "tests/__init__.py"
+
+    # tests/test_main.py (Basic example test)
+    cat << EOF > "tests/test_main.py"
+"""Tests for the main module and core functionality."""
+
+import pytest
+from $project_name import hello
+from $project_name.main import main
+
+def test_hello() -> None:
+    """Test the hello function includes the project name."""
+    assert "$project_name" in hello()
+
+def test_main_output(capsys: pytest.CaptureFixture[str]) -> None:
+    """Test the output of the main function."""
+    main()
+    captured = capsys.readouterr()
+    assert "$project_name" in captured.out
+    assert captured.err == ""
+EOF
+
+    # --- 5. Create supporting files (.gitignore, README.md, .env, .envrc) ---
+    echo "--------------------------------------------------"
+    echo "Creating supporting files..."
+    create_gitignore # Use helper function
+    create_readme "$project_name" "$req_python_version" # Use helper function
+    update_vscode_settings # Use helper function
+
+    # Create basic .env file
+    if [[ ! -f ".env" ]]; then
+        echo "# Environment variables for $project_name" > .env
+        echo "# Example: API_KEY=your_secret_key" >> .env
+    else
+        echo ".env already exists. Skipping creation."
+    fi
+
+    # Create .envrc for direnv if direnv is available
+    echo "Ensuring .envrc for direnv exists..."
+    if command -v direnv &> /dev/null; then
+        if [[ ! -f ".envrc" ]]; then
+            echo "Creating .envrc file with 'source .venv/bin/activate'"
+            echo "source .venv/bin/activate" > .envrc
+            # No need for explicit "allow" message, direnv handles it
+        else
+            echo ".envrc already exists. Skipping creation."
+        fi
+    else
+        echo "direnv command not found. Skipping .envrc creation."
+        echo "Install direnv for automatic environment activation: https://direnv.net/"
+    fi
+
+    # --- 6. Create and activate virtual environment ---
+    echo "--------------------------------------------------"
+    echo "Creating virtual environment (.venv)..."
+    if ! uv venv -p "$python_interpreter_path"; then
+        echo "Error: Failed to create virtual environment." >&2
+        return 1
+    fi
+
+    # No longer doing this next step - since we are now using direnv 
+    # (via the .envrc file containing source .venv/bin/activate) to handle activation automatically 
+    # when we cd into the directory, activating it explicitly within python_setup is redundant 
+    # and leads to the conflict where direnv unload doesn't fully clean up the manually sourced activation.
+
+    # # Activate for current session
+    # echo "Activating virtual environment (for current session)..."
+    # source .venv/bin/activate
+    # echo "Virtual environment activated: $VIRTUAL_ENV"
+
+    # --- 7. Install dependencies (including optional dev dependencies) ---
+    echo "--------------------------------------------------"
+    echo "Installing dependencies (including 'dev' group)..."
+    echo "Running: uv pip install -e '.[dev]'"
+    # Install editable with the 'dev' extras
+    if ! uv pip install -e '.[dev]'; then
+        echo "Warning: Failed to install dependencies (perhaps 'dev' group is empty or error occurred)." >&2
+        echo "You may need to install dependencies manually using 'uv pip install ...'"
+        # Don't necessarily fail the whole script here, let user fix deps
+    fi
+
+    # --- 8. Initialize git repository if needed ---
+    echo "--------------------------------------------------"
+    if [ ! -d ".git" ]; then
+        echo "Initializing git repository..."
+        git init
+        git add .
+        # Check if there's anything to commit (avoid empty initial commit)
+        if git diff --staged --quiet; then
+            echo "No changes staged for initial commit (perhaps files existed before)."
+        else
+            git commit -m "Initial project setup via python_new_project"
+            echo "Git repository initialized and initial commit created."
+        fi
+    else
+        echo "Git repository already exists."
+    fi
+
+    # --- Final Success Messages ---
+    echo "--------------------------------------------------"
+    echo "✅ Project '$project_name' setup complete!"
+    echo "✅ Virtual environment is active (for this session)."
+    echo "✅ Dependencies installed (attempted)."
+    echo "--------------------------------------------------"
+    echo "Next steps:"
+    echo "  - Edit 'pyproject.toml' authors/URLs and 'README.md' with your project details."
+    echo "  - Add your core code in 'src/$project_name/'."
+    echo "  - Write tests in 'tests/'."
+    echo "  - If '.envrc' was created/exists, 'direnv' will manage activation automatically."
+    echo "  - Remember to run 'direnv allow .' if prompted on first 'cd' into this directory."
+    echo "  - To run tests: pytest"
+    echo "  - To lint/format: ruff check . && ruff format ."
+    echo "--------------------------------------------------"
+
+    return 0
+}
+
+
+# Function to set up an existing Python project using uv
+# Usage: python_setup <PYTHON_VERSION> (e.g., 3.13)
+# Creates/recreates .venv, activates it for the current session,
+# installs dependencies, and ensures .envrc exists for direnv.
+python_setup() {
+    # --- Require exactly one argument: the Python version ---
+    if [ "$#" -lt 1 ]; then
+        echo "Error: Python version is required." >&2
+        echo "Usage: python_setup <PYTHON_VERSION> (e.g., 3.13)" >&2
+        return 1
+    fi
+
+    local req_python_version=$1
+    local project_name=$(basename "$PWD")
+    local python_interpreter_path=""
+
+    # --- Check if uv is installed ---
+    if ! command -v uv &> /dev/null; then
+        echo "Error: 'uv' command not found." >&2
+        echo "Please install uv first. See: https://github.com/astral-sh/uv" >&2
+        return 1
+    fi
+
+    # --- Validate Python Version Format ---
+    if [[ -z "$PYTHON_VERSION_PATTERN" ]]; then
+        # echo "Warning: PYTHON_VERSION_PATTERN not defined. Using default: ^3\.(1[0-3]|[7-9])(\.[0-9]+)?$" >&2
+        echo "Warning: PYTHON_VERSION_PATTERN not defined. Using default: ^3\.(8|9|1[0-3])$" >&2
+        # PYTHON_VERSION_PATTERN="^3\.(1[0-3]|[7-9])(\.[0-9]+)?$" # Fallback (adjust range)
+        PYTHON_VERSION_PATTERN="^3\.(8|9|1[0-3])$" # Fallback (adjust range)
+    fi
+    if [[ ! "${req_python_version}" =~ ${PYTHON_VERSION_PATTERN} ]]; then
+        echo "Error: Invalid or unsupported Python version: '${req_python_version}'." >&2
+        echo "Supported range roughly: ${PYTHON_MIN_VERSION:-3.7}-${PYTHON_MAX_VERSION:-3.13}" >&2
+        echo "Usage: python_setup <major.minor>" >&2
+        return 1
+    fi
+
+    # --- Check if requested Python version is installed via uv ---
+    python_interpreter_path=$(get_uv_python_path "${req_python_version}")
+    if [[ $? -ne 0 ]]; then
+        # Error message already printed by get_uv_python_path
+        return 1
+    fi
+    echo "Using Python interpreter: $python_interpreter_path"
+
+    # # --- Check for pyproject.toml or requirements.txt ---
+    # if [[ ! -f "pyproject.toml" ]] && [[ ! -f "requirements.txt" ]]; then
+    #     echo "Error: No 'pyproject.toml' or 'requirements.txt' found." >&2
+    #     echo "Make sure you are in a Python project directory." >&2
+    #     return 1
+    # fi
+
+    # --- Check for pyproject.toml or requirements.txt (Warn if missing, but proceed) ---
+    if [[ ! -f "pyproject.toml" ]] && [[ ! -f "requirements.txt" ]]; then
+        echo "Warning: No 'pyproject.toml' or 'requirements.txt' found." >&2
+        echo "Proceeding with venv creation, but dependency installation might be skipped or fail." >&2
+    fi
+
+    # --- Proceed with venv creation/recreation ---
+    # Since version argument is required, we always perform these steps.
+    echo "--------------------------------------------------"
+    echo "Setting up existing Python project: $project_name"
+    echo "Using Python: $req_python_version ($python_interpreter_path)"
+    echo "--------------------------------------------------"
+
+    # 1. Create/Update virtual environment (Remove old one first)
+    if [[ -d ".venv" ]]; then
+        echo "Removing existing .venv directory..."
+        rm -rf ".venv"
+    fi
+    echo "Creating virtual environment (.venv)..."
+    if ! uv venv -p "$python_interpreter_path"; then
+        echo "Error: Failed to create virtual environment." >&2
+        return 1
+    fi
+
+    # === Ensure supporting files exist BEFORE installing ===
+    # 2. Create supporting files if they don't exist
+    echo "--------------------------------------------------"
+    echo "Ensuring supporting files exist (README.md, .gitignore, etc.)..."
+    # Ensure README exists as it's often referenced in pyproject.toml
+    create_readme "$project_name" "$req_python_version" # Use helper function
+    create_gitignore # Use helper function
+    update_vscode_settings # Use helper function
+    if [[ ! -f ".env" ]]; then
+        echo "# Environment variables for $project_name" > .env
+    fi
+    # =================================================================
+
+    # No longer doing Step 3 - since we are now using direnv 
+    # (via the .envrc file containing source .venv/bin/activate) to handle activation automatically 
+    # when we cd into the directory, activating it explicitly within python_setup is redundant 
+    # and leads to the conflict where direnv unload doesn't fully clean up the manually sourced activation.
+
+    # 3. Activate virtual environment for this session
+    # echo "--------------------------------------------------"
+    # echo "Activating virtual environment (for current session)..."
+    # source .venv/bin/activate
+    # echo "Virtual environment activated: $VIRTUAL_ENV"
+
+    # 4. Install dependencies (Now README.md should exist)
+    echo "--------------------------------------------------"
+    echo "Installing/syncing dependencies..."
+    local install_cmd=""
+    if [[ -f "pyproject.toml" ]]; then
+        # Check if optional dev dependencies exist in pyproject.toml
+        if grep -q '\[project.optional-dependencies.dev\]' pyproject.toml; then
+            echo "Found dev dependencies. Running: uv pip install -e '.[dev]'"
+            install_cmd="uv pip install -e '.[dev]'"
+        else
+            echo "No dev dependencies found. Running: uv pip install -e ."
+            install_cmd="uv pip install -e ."
+        fi
+    elif [[ -f "requirements.txt" ]]; then
+        echo "Found requirements.txt. Running: uv pip sync requirements.txt"
+        install_cmd="uv pip sync requirements.txt"
+    fi
+
+    if [[ -n "$install_cmd" ]]; then
+        if ! eval "$install_cmd"; then
+            echo "Error: Failed to install dependencies." >&2
+            # Keep venv active for troubleshooting in current session
+            return 1
+        fi
+    else
+        echo "Warning: Could not determine installation command (no pyproject.toml or requirements.txt?)." >&2
+    fi
+
+    # 5. Create .envrc for direnv if needed
+    echo "--------------------------------------------------"
+    echo "Ensuring .envrc for direnv exists..."
+    if command -v direnv &> /dev/null; then
+        if [[ ! -f ".envrc" ]]; then
+            echo "Creating .envrc file with 'source .venv/bin/activate'" # Corrected command
+            echo "source .venv/bin/activate" > .envrc                  # Corrected command
+            echo "--> IMPORTANT: Run 'direnv allow .' in this directory to enable automatic activation."
+        else
+            echo ".envrc already exists. Skipping creation."
+        fi
+    else
+        echo "direnv command not found. Skipping .envrc creation."
+        echo "Install direnv for automatic environment activation: https://direnv.net/"
+    fi
+
+    # --- Final Success Messages ---
+    echo "--------------------------------------------------"
+    echo "✅ Project '$project_name' setup complete!"
+    echo "✅ Virtual environment (.venv) created/reset."
+    echo "✅ Environment is active (for this session)."
+    echo "✅ Dependencies installed/synced."
+    echo "--------------------------------------------------"
+    echo "💡 If '.envrc' was created/exists, direnv will manage activation automatically on 'cd'."
+    echo "   Remember to run 'direnv allow .' if you haven't already for this directory."
+    echo "--------------------------------------------------"
+
+    return 0
+}
+
+
+# Function to deactivate the Python virtual environment
+# Usage: python_deactivate (or alias py_off)
+python_deactivate() {
+    if [[ -n "$VIRTUAL_ENV" ]]; then
+        echo "Deactivating virtual environment: $VIRTUAL_ENV"
+        deactivate
+        # Check if deactivate command removed VIRTUAL_ENV var
+        if [[ -z "$VIRTUAL_ENV" ]]; then
+            echo "Virtual environment deactivated successfully."
+        else
+            # This case might happen if deactivate is redefined or fails partially
+            echo "Warning: 'deactivate' command finished, but VIRTUAL_ENV is still set." >&2
+            echo "You might need to manually unset VIRTUAL_ENV or check your 'deactivate' function." >&2
+        fi
+    else
+        echo "No active virtual environment detected."
+    fi
+}
+
+
+# Function to clean up Python virtual environment and common artifacts
+# Usage: python_delete (or alias py_clean)
+python_delete() {
+    echo "--------------------------------------------------"
+    echo "Cleaning Python project artifacts..."
+    echo "--------------------------------------------------"
+
+    local deleted_something=false
+
+    # 1. Deactivate if active
+    if [[ -n "$VIRTUAL_ENV" ]]; then
+        echo "Attempting to deactivate environment first..."
+        python_deactivate # Call the function correctly
+    fi
+
+    # Define items to remove
+    local items_to_remove=(
+        ".venv"
+        "uv.lock"
+        ".pytest_cache"
+        ".coverage"
+        "htmlcov"
+        "dist"
+        "build"
+        "*.egg-info" # Glob pattern for find
+        "__pycache__" # Directory name for find
+        "*.pyc"       # Glob pattern for find
+        "*.pyo"       # Glob pattern for find
+        # Add others if needed: ".mypy_cache", ".ruff_cache"
+    )
+
+    # 2. Remove directories and specific files
+    for item in ".venv" "uv.lock" ".pytest_cache" ".coverage" "htmlcov" "dist" "build"; do
+        if [[ -e "$item" ]]; then
+            echo "Deleting: $item"
+            rm -rf "$item"
+            deleted_something=true
+        fi
+    done
+
+    # 3. Remove direnv config file if it exists
+    if [[ -f ".envrc" ]]; then
+        echo "Deleting: .envrc"
+        rm -f ".envrc"
+        # Note: This doesn't automatically un-allow it in direnv's global state,
+        # but removing the file prevents it loading on next cd.
+        deleted_something=true
+    fi
+
+    # 4. Use find to remove patterns and cache dirs recursively
+    local find_deleted=false
+    echo "Searching for cache files/dirs and build artifacts..."
+    # Remove *.egg-info directories
+    if find . -maxdepth 1 -type d -name "*.egg-info" -print -exec rm -rf {} + 2>/dev/null; then find_deleted=true; fi
+    # Remove __pycache__ directories
+    if find . -type d -name "__pycache__" -print -exec rm -rf {} + 2>/dev/null; then find_deleted=true; fi
+    # Remove *.pyc/pyo files
+    if find . -type f \( -name "*.pyc" -o -name "*.pyo" \) -print -delete 2>/dev/null; then find_deleted=true; fi
+
+    if $find_deleted; then
+        echo "Cache files/dirs deleted."
+        deleted_something=true
+    else
+        echo "No cache files (*.pyc, *.pyo, __pycache__, *.egg-info) found."
+    fi
+
+    # 4. Final summary
+    echo "--------------------------------------------------"
+    if $deleted_something; then
+        echo "✅ Clean-up complete."
+    else
+        echo "ℹ️ No common Python project artifacts found to clean up."
+    fi
+    echo "--------------------------------------------------"
+}
+
+# Add Python version variables (can be overridden in .zshrc if needed)
+# Define default min/max versions if not set by .zshrc
+: ${PYTHON_MIN_VERSION:="3.8"}
+: ${PYTHON_MAX_VERSION:="3.13"}
+# Define pattern carefully to match only major.minor (adjust range as needed)
+# This matches 3.8, 3.9, 3.10, 3.11, 3.12, 3.13
+: ${PYTHON_VERSION_PATTERN:="^3\.(8|9|1[0-3])$"}
+
