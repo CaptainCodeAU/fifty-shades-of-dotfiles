@@ -1,193 +1,205 @@
-# Dotfiles: Python Development Environment Management
+# Dotfiles: An Opinionated Python Development Environment
 
-A comprehensive set of Zsh functions for managing Python development environments using `uv`. These tools streamline project creation, setup, and management while enforcing best practices and consistent configurations.
+![Python](https://img.shields.io/badge/Python-3.8%2B-blue.svg?logo=python&logoColor=white)
+![Shell](https://img.shields.io/badge/Shell-Zsh-lightgrey.svg?logo=gnome-terminal&logoColor=white)
+![OS](https://img.shields.io/badge/OS-macOS-blue.svg?logo=apple)
+![uv](https://img.shields.io/badge/uv-Fast-hotpink.svg)
+![direnv](https://img.shields.io/badge/direnv-Automatic-yellow.svg)
 
-## Core Functions
+This repository contains a set of dotfiles that create a seamless and highly automated Python development workflow on macOS. It is built around a modern toolchain that prioritizes speed, consistency, and best practices.
 
-### 1. get_uv_python_path()
+The core principle is **convention over configuration**. By using the provided functions and aliases, you can bootstrap, manage, and clean up complex Python projects with single commands, all while `uv`, `direnv`, and `pipx` handle the heavy lifting.
 
-Retrieves the full path to a Python interpreter managed by `uv`.
+## Core Philosophy & Key Technologies
 
-```bash
-get_uv_python_path 3.12
-# Output: /Users/admin/.local/share/uv/python/cpython-3.12.7-macos-x86_64-none/bin/python3.12
+This setup standardizes on a specific set of tools to create a zero-friction experience:
+
+*   **`uv`**: The primary tool for **everything** Python. It's used as a lightning-fast package manager (`pip`), virtual environment manager (`venv`), and command runner.
+*   **`direnv`**: Provides **automatic environment activation**. Simply `cd` into a project directory, and your `.venv` is sourced. `cd` out, and it's deactivated. No more `source .venv/bin/activate`.
+*   **`pipx`**: The standard for installing Python command-line applications. It installs them into isolated environments, ensuring no dependency conflicts on your system.
+*   **`Zsh` + `Oh My Zsh`**: The shell foundation, providing powerful completions, plugins, and the customization framework.
+*   **`Homebrew`**: The assumed package manager for installing system-level dependencies on macOS.
+
+## The Workflow at a Glance
+
+This diagram illustrates the entire lifecycle of a project using this automated setup.
+
+```mermaid
+graph TD
+    subgraph "1. Project Creation (One-Time)"
+        A[mkdir my-project & cd my-project] --> B[run: **python_new_project 3.12**]
+        B --> C{Project Scaffolding Done}
+        C --> D[Git Repo Initialized]
+        C --> E[.venv Created & Dependencies Installed]
+        C --> F[.envrc Created for direnv]
+    end
+
+    subgraph "2. Daily Development (Automatic & Seamless)"
+        G[cd my-project] --> H{direnv auto-runs .envrc}
+        H --> I["✅ **.venv is activated**"]
+        I --> J[Write code, run 'pytest', 'ruff', etc.]
+        J --> K[cd ..]
+        K --> L["❌ **.venv is deactivated**"]
+    end
+
+    subgraph "3. Deployment (Optional CLI Tooling)"
+        M[run: **pipx_install_current_project**] --> N[CLI tool available globally]
+    end
+
+    %% Transition from creation to daily workflow
+    B -.-> G
 ```
 
-### 2. python_new_project()
-Creates a new Python project with complete scaffolding and tooling setup.
+## Key Features
+
+*   🚀 **Blazing Fast Automation**: Use `uv` for near-instant dependency installation and environment creation.
+*   🏗️ **Comprehensive Scaffolding**: The `python_new_project` function generates a complete, best-practice project structure with a single command.
+*   ✨ **Zero-Friction Activation**: `direnv` handles virtual environment activation and deactivation automatically, so you never have to think about it.
+*   📦 **Reproducible Environments**: Strictly uses `pyproject.toml` for dependency definition, ensuring consistent setups everywhere.
+*   🔧 **Isolated CLI Tools**: A dedicated `pipx` workflow allows you to safely install your project's command-line tools for global use without conflicts.
+*   ✅ **Best Practices by Default**: The generated projects are pre-configured with:
+    *   **Ruff** for linting and formatting.
+    *   **Pytest** for testing with coverage.
+    *   A sensible `.gitignore` and `README.md` template.
+    *   Optimized VSCode settings for an integrated experience.
+
+## Prerequisites & Installation
+
+1.  **Homebrew**: Ensure [Homebrew](https://brew.sh/) is installed on your macOS system.
+2.  **Core Tools**: Install the key technologies using Homebrew.
+    ```bash
+    brew install uv direnv pipx
+    ```
+3.  **Clone this Repository**:
+    ```bash
+    git clone <your-repo-url> ~/dotfiles
+    ```
+4.  **Symlink Configuration**: Link the `.zshrc` and `.zsh_functions` files to your home directory.
+    ```bash
+    # WARNING: This will overwrite existing files. Backup yours first!
+    ln -sf ~/dotfiles/.zshrc ~/.zshrc
+    ln -sf ~/dotfiles/.zsh_functions ~/.zsh_functions
+    ```
+5.  **Enable `direnv`**: The provided `.zshrc` already contains the hook for `direnv`. If you are merging with an existing file, ensure this line is present:
+    ```zsh
+    # In your .zshrc
+    if command -v direnv &> /dev/null; then eval "$(direnv hook zsh)"; fi
+    ```
+6.  **Restart Your Shell**: Open a new terminal window or run `source ~/.zshrc` to apply all changes.
+
+---
+
+## Usage: Your Day-to-Day Workflow
+
+### 1. Creating a New Python Project
+
+This is the primary entry point. The function scaffolds everything you need.
+
 ```bash
+# 1. Create and enter a directory for your new project
+mkdir my-awesome-app && cd my-awesome-app
+
+# 2. Run the new project command with the desired Python version
 python_new_project 3.12
 ```
 
-```mermaid
-    graph TD
-        A[Start] --> B{Validate Python Version}
-        B -->|Invalid| C[Show Error]
-        B -->|Valid| D[Get Python Path from uv]
-        D -->|Not Found| E[Show Error]
-        D -->|Found| F[Initialize Project with uv init]
-        F --> G[Create Project Structure]
-        G --> H[Create and Activate Virtual Environment]
-        H --> I[Install Dependencies]
-        I --> J[Create Configuration Files]
-        J --> K{Git Repo Exists?}
-        K -->|No| L[Initialize Git Repository]
-        K -->|Yes| L[Skip Git Init]
-        L --> M[End]
-         subgraph "Configuration Files"
-            J1[pyproject.toml]
-            J2[.gitignore]
-            J3[README.md]
-            J4[VSCode settings]
-            J5[.env]
-        end
-        J --> J1
-        J --> J2
-        J --> J3
-        J --> J4
-        J --> J5
-```
+This single command performs over a dozen steps, including `git init`, `uv venv`, `uv pip install`, and creating all necessary config files.
 
-### 3. python_setup()
-Sets up an existing Python project with virtual environment and dependencies.
+### 2. Setting Up an Existing Project
 
-```mermaid
-    graph TD
-        A[Start] --> B{Validate Python Version}
-        B -->|Invalid| C[Show Error]
-        B -->|Valid| D{Project Files Exist?}
-        D -->|No| E[Show Error]
-        D -->|Yes| F{Virtual Environment Exists?}
-        F -->|No| G[Create Virtual Environment]
-        F -->|Yes| H[Skip Venv Creation]
-        G --> I[Activate Virtual Environment]
-        H --> I
-        I --> J{Install Dependencies}
-        J -->|pyproject.toml| K[Install from pyproject.toml]
-        J -->|requirements.txt| L[Install from requirements.txt]
-        J -->|None| M[Skip Dependency Installation]
-        K --> N[Create .env and .gitignore if not exists]
-        L --> N
-        M --> N
-        N --> O[End]
-```
-
-### 4. python_deactivate()
-Deactivates the current Python virtual environment.
+If you clone a project or need to reset your environment, use `python_setup`.
 
 ```bash
-python_deactivate
-```
+# 1. Clone a repo and enter it
+git clone <url> && cd <project-name>
 
-### 5. python_delete()
-Cleans up Python virtual environment and related files.
-
-```bash
-python_delete
-```
-
-## Convenient Aliases
-
-#### Project Management
-
-```bash
-# New project
-py_new, py_new_project, python_new
-
-# Setup existing project
-py_setup, py_existing, python_existing
-
-# Deactivate environment
-py_off, py_close, py_deactivate
-
-# Cleanup
-py_delete, py_clean, py_cleanup
-```
-
-#### Python Version Shortcuts
-
-```bash
-py313  # Python 3.13
-py312  # Python 3.12
-py311  # Python 3.11
-py310  # Python 3.10
-```
-
-## Features & Benefits
-
-#### 1. Automated Setup
-- Consistent project structure
-- Pre-configured development tools
-- VSCode integration
-- Git-ready configuration
-
-#### 2. Development Tools
-- Ruff for linting and formatting
-- Pytest for testing
-- Coverage reporting
-- Type checking with pyright
-
-#### 3. Best Practices
-- Isolated environments
-- Dependency management
-- Code quality tools
-- Version control integration
-
-#### 4. VSCode Integration
-- Optimized settings
-- Python extension configuration
-- Debugging setup
-- Linting and formatting
-
-## Project Structure
-
-```code
-project_name/
-├── .venv/
-├── .vscode/
-│   └── settings.json
-├── src/
-│   └── project_name/
-│       ├── __init__.py
-│       └── main.py
-├── tests/
-│   ├── __init__.py
-│   └── test_main.py
-├── .gitignore
-├── .env
-├── README.md
-└── pyproject.toml
-```
-
-## Requirements
-- Brew
-- Zsh shell
-- Oh My Zsh
-- uv package manager
-- Git (recommended)
-- VSCode (recommended)
-
-## Usage Examples
-
-#### 1. Creating a New Python Project
-```bash
-mkdir my_project
-cd my_project
-python_new_project 3.12
-```
-
-#### 2. Setting Up Existing Project
-```bash
-cd existing_project
+# 2. Set up the environment
 python_setup 3.12
 ```
 
-#### 3. Managing Environment
-```bash
-# Deactivate environment
-python_deactivate
+This will safely remove any old `.venv`, create a new one with the specified Python version, install all dependencies from `pyproject.toml`, and ensure `direnv` is ready.
 
-# Clean up project
+### 3. Creating a Command-Line Tool
+
+If your `pyproject.toml` defines a script, you can install it as a system-wide command using `pipx`.
+
+```bash
+# Inside your project directory:
+
+# Install the tool for the first time
+pipx_install_current_project
+
+# After making changes to your code, reinstall to update the tool
+pipx_reinstall_current_project
+
+# Uninstall the tool
+pipx_uninstall_current_project
+```
+
+### 4. Cleaning Up a Project
+
+To completely remove all generated artifacts and return the directory to a clean state, use `python_delete`.
+
+```bash
+# This will remove .venv, caches, build artifacts, uv.lock, and .envrc
 python_delete
 ```
 
+## Generated Project Structure
+
+Running `python_new_project` results in the following structure:
+
+```bash
+project_name/
+├── .env              # For local environment variables (in .gitignore)
+├── .gitignore        # A comprehensive gitignore for Python projects
+├── .venv/            # The local virtual environment managed by uv
+├── .vscode/
+│   └── settings.json # Pre-configured VSCode settings for this project
+├── README.md         # A template README for your project
+├── pyproject.toml    # The heart of your project: metadata, dependencies, and tool configs
+├── src/
+│   └── project_name/
+│       ├── __init__.py # Makes the directory a package (with __version__)
+│       └── main.py     # Example entrypoint script
+└── tests/
+    ├── __init__.py
+    └── test_main.py  # Example test file for pytest
+```
+
+---
+
+## Full Function & Alias Reference
+
+### Core Functions
+
+| Function | Arguments | Description |
+| :--- | :--- | :--- |
+| `python_new_project` | `<py_version>` | Scaffolds a complete new Python project in the current directory. |
+| `python_setup` | `<py_version>` | Resets/creates the `.venv` and installs dependencies for an existing project. |
+| `python_delete` | (none) | Deletes the `.venv`, caches, build artifacts, and `.envrc`. |
+| `python_deactivate` | (none) | Deactivates the current virtual environment. |
+| `get_uv_python_path` | `<py_version>` | (Helper) Prints the path to a `uv`-managed Python interpreter. |
+| `pipx_install_current_project` | (none) | Installs the current project as a global CLI tool via `pipx`. |
+| `pipx_reinstall_current_project` | (none) | Updates the globally installed CLI tool from local source. |
+| `pipx_uninstall_current_project` | (none) | Uninstalls the `pipx`-managed CLI tool for the current project. |
+
+### Convenience Aliases
+
+| Alias(es) | Maps To |
+| :--- | :--- |
+| `py_new`, `py_new_project`, `python_new` | `python_new_project` |
+| `py_setup`, `py_existing`, `python_existing` | `python_setup` |
+| `py_off`, `py_close`, `py_deactivate` | `python_deactivate` |
+| `py_delete`, `py_clean`, `py_cleanup` | `python_delete` |
+
+### Python Version Shortcuts (Functions)
+
+These functions allow you to run a command with a specific `uv`-managed Python version without creating a full environment.
+
+| Command | Example Usage |
+| :--- | :--- |
+| `py313` | `py313 my_script.py` |
+| `py312` | `py312 --version` |
+| `py311` | `py311 my_script.py` |
+| `py310` | `py310 --version` |

@@ -21,6 +21,9 @@ export ZSH="$HOME/.oh-my-zsh"
 # NVM Directory (ensure it matches your installation location)
 export NVM_DIR="$HOME/.nvm"
 
+# Powerlevel9k Instant Prompt (off by default)
+typeset -g POWERLEVEL9K_INSTANT_PROMPT=off
+
 # ==============================================================================
 # Oh My Zsh Configuration
 # ==============================================================================
@@ -74,7 +77,6 @@ command -v register-python-argcomplete >/dev/null && eval "$(register-python-arg
 
 # UV Completions
 command -v uv >/dev/null && eval "$(uv generate-shell-completion zsh)"
-command -v uvx >/dev/null && eval "$(uvx --generate-shell-completion zsh)"
 
 # FZF Setup (Key bindings and fuzzy completion)
 [ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
@@ -101,8 +103,12 @@ source "$ZSH/oh-my-zsh.sh"
 PATH=""
 
 # Homebrew (Recommended location: /opt/homebrew for Apple Silicon, /usr/local for Intel)
-# Adjust if your Homebrew prefix is different
-HOMEBREW_PREFIX="/usr/local" # Change if needed (e.g., /opt/homebrew)
+if [[ -d /opt/homebrew ]]; then
+    HOMEBREW_PREFIX="/opt/homebrew"
+else
+    HOMEBREW_PREFIX="/usr/local"
+fi
+
 export PATH="$HOMEBREW_PREFIX/bin:$PATH"
 export PATH="$HOMEBREW_PREFIX/sbin:$PATH"
 
@@ -134,6 +140,38 @@ export PATH="$PATH:/Library/Apple/usr/bin"
 # Ensure NVM path is handled dynamically by the NVM script, not hardcoded here.
 # Ensure virtual environment bin paths get prepended when activated (handled by activate scripts)
 
+
+# ==============================================================================
+# Custom Functions & Final Steps
+# ==============================================================================
+
+# Load custom functions
+if [ -f ~/.zsh_functions ]; then
+    source ~/.zsh_functions
+else
+    echo "Warning: ~/.zsh_functions not found."
+fi
+
+# Shell Integration (needed for Cmd+Click, etc., in VSCode Terminal)
+# Uncomment if needed
+# [[ "$TERM_PROGRAM" == "vscode" ]] && . "$(code --locate-shell-integration-path zsh)"
+
+# Ensure virtual environment PATH takes precedence if active
+# This might be redundant if activate scripts work correctly, but provides robustness.
+if [[ -n "$VIRTUAL_ENV" ]]; then
+    if [[ ":$PATH:" != *":$VIRTUAL_ENV/bin:"* ]]; then
+        export PATH="$VIRTUAL_ENV/bin:$PATH"
+    fi
+fi
+
+# =====> ADD DIRENV HOOK HERE <=====
+# Hook direnv into the shell
+if command -v direnv &> /dev/null; then
+    eval "$(direnv hook zsh)"
+fi
+# ==================================
+
+
 # ==============================================================================
 # Aliases
 # ==============================================================================
@@ -155,19 +193,18 @@ alias ports="sudo lsof -PiTCP -sTCP:LISTEN" # Show listening ports
 
 # ---- Development ----
 alias studio="open -a \"Android Studio\" " # Open Android Studio
-alias vi="nvim" # Use Neovim
-alias vim="nvim"
-alias aider="source $HOME/.local/share/aider/.venv/bin/activate && aider" # Aider (consider installing globally via pipx if possible)
+# alias vi="nvim" # Use Neovim
+# alias vim="nvim"
 
 # ---- Python (using UV) ----
 alias pip="uv pip" # Always use uv for pip operations
 alias python="python3" # Ensure python points to python3
 
 # Python version shortcuts (requires specific uv installations)
-alias py313="$HOME/.local/share/uv/python/cpython-3.13.0-macos-x86_64-none/bin/python3.13" # Adjust path/version if needed
-alias py312="$HOME/.local/share/uv/python/cpython-3.12.7-macos-x86_64-none/bin/python3.12" # Adjust path/version if needed
-alias py311="$HOME/.local/share/uv/python/cpython-3.11.10-macos-x86_64-none/bin/python3.11" # Adjust path/version if needed
-alias py310="$HOME/.local/share/uv/python/cpython-3.10.15-macos-x86_64-none/bin/python3.10" # Adjust path/version if needed
+py313() { "$(get_uv_python_path 3.13)" "$@"; }
+py312() { "$(get_uv_python_path 3.12)" "$@"; }
+py311() { "$(get_uv_python_path 3.11)" "$@"; }
+py310() { "$(get_uv_python_path 3.10)" "$@"; }
 
 # ---- Java Version Management ----
 # These rely on /usr/libexec/java_home (macOS specific)
@@ -196,6 +233,202 @@ alias repomix="repomix" # Assuming repomix is a function or script in PATH
 # ---- Network ----
 alias speedtest="wget -O /dev/null cachefly.cachefly.net/10mb.test" # Simple download speed test
 
+# echo "Zsh config loaded." # Uncomment for debugging startup
+# Task Master aliases added on 13/04/2025
+alias tm='task-master'
+alias taskmaster='task-master'
+export REPLICATE_API_TOKEN=your_token_here
+
+
+# ==============================================================================
+# Python 3.13 Health Check & Onboarding for Homebrew and uv (zsh)
+# ==============================================================================
+
+autoload -U colors && colors
+
+# ---- Color helpers ----
+ok="$fg[green]"
+warn="$fg[yellow]"
+err="$fg[red]"
+info="$fg[cyan]"
+example="$fg[magenta]"
+done="$reset_color"
+
+# ---- Homebrew Python locations ----
+BREW_PYTHON="/usr/local/bin/python3"
+BREW_PYTHON_CELLAR="/usr/local/Cellar/python@3.13"
+BREW_PYTHON_BIN="$BREW_PYTHON_CELLAR"/*/bin/python3.13
+
+# ---- Homebrew presence check ----
+HAVE_BREW=false
+if command -v brew >/dev/null 2>&1; then
+    HAVE_BREW=true
+fi
+
+echo
+echo "${info}🛡️  Python Environment Check:${done}"
+
+# ---- Show current python3 and its version ----
+if command -v python3 >/dev/null 2>&1; then
+    echo "    python3 path: $(which python3)"
+    echo -n "    python3 version: "
+    python3 --version
+else
+    echo "${err}    python3 not found in PATH.${done}"
+fi
+
+# ---- Check if python3 is Homebrew's 3.13 ----
+show_onboarding_summary() {
+    echo "${info}🚀  RECOMMENDED WORKFLOW: Use 'uv' for all Python project work!${done}"
+    echo "-------------------------------------------------------------------------------"
+    echo
+    echo "${ok}How to make your Python project a system-wide CLI executable (no conflicts):${done}"
+    echo
+    echo "  1. Activate your project's venv:"
+    echo "         source .venv/bin/activate"
+    echo "  2. Build/install your project in 'editable' mode (from project root):"
+    echo "         uv pip install -e ."
+    echo "     (Make sure your pyproject.toml defines a [project.scripts] entry for your CLI!)"
+    echo
+    echo "  3. Install your CLI globally for your user using pipx (best practice!):"
+    echo "         pipx install --force \$(pwd)"
+    echo "     - This puts your CLI in ~/.local/bin, which should already be in your PATH."
+    echo "     - Each CLI installed with pipx has its own isolated virtualenv—no dependency conflicts."
+    echo "     - You can run your CLI from any folder, in any shell session."
+    echo
+    echo "  4. To update your CLI after you change your code:"
+    echo "         pipx reinstall <your-cli-name>"
+    echo
+    echo "  5. See all installed pipx CLIs and manage them:"
+    echo "         pipx list"
+    echo "         pipx upgrade <your-cli-name>"
+    echo "         pipx uninstall <your-cli-name>"
+    echo "-------------------------------------------------------------------------------"
+    echo
+    echo "${ok}Custom Shell Helper Functions (.zsh_functions):${done}"
+    echo
+    echo "  1. ${info}python_setup <major.minor>${done}"
+    echo "      - Sets up (or recreates) .venv for the ${warn}existing${done} Python project using the specified Python."
+    echo "      - Example: ${example}python_setup 3.13${done}"
+    echo
+    echo "  2. ${info}python_new_project <major.minor>${done}"
+    echo "      - Scaffolds a ${warn}new${done} Python project in the current folder."
+    echo "      - Example: ${example}python_new_project 3.13${done}"
+    echo
+    echo "  3. ${info}get_uv_python_path <major.minor>${done}"
+    echo "      - Prints the absolute path of the uv-managed Python version."
+    echo "      - Example: ${example}get_uv_python_path 3.13${done}"
+    echo
+    echo "  4. ${info}python_deactivate${done}"
+    echo "      - Deactivates the current Python virtual environment."
+    echo
+    echo "  5. ${info}python_delete${done}"
+    echo "      - Cleans up all typical Python project artifacts (.venv, caches, build, etc.)."
+    echo
+    echo "  6. ${info}pipx_install_current_project${done}"
+    echo "      - Installs the current project as a global user CLI (isolated by pipx, no conflicts)."
+    echo "      - Just run inside your project folder: ${example}pipx_install_current_project${done}"
+    echo
+    echo "  7. ${info}pipx_reinstall_current_project${done}"
+    echo "      - Reinstalls the global user CLI after local code changes."
+    echo
+    echo "  8. ${info}pipx_uninstall_current_project${done}"
+    echo "      - Uninstalls the global CLI for the current project."
+    echo "-------------------------------------------------------------------------------"
+}
+
+main_python_path=$(which python3 2>/dev/null)
+resolved_link=$(readlink "$main_python_path" 2>/dev/null || echo "")
+
+if [[ -x "$BREW_PYTHON" && "$resolved_link" == *"Cellar/python@3.13"* ]]; then
+    echo "${ok}✅ Homebrew Python 3.13 detected at $BREW_PYTHON.${done}"
+    show_onboarding_summary
+    return 0
+fi
+
+# ---- Handle various "not Homebrew" situations ----
+if [[ -n "$main_python_path" ]]; then
+    resolved_link=$(readlink "$main_python_path" 2>/dev/null || echo "")
+    if [[ "$resolved_link" == *"Cellar/python@3.13"* ]]; then
+        echo "${ok}✅ Homebrew Python 3.13 detected at $main_python_path (via symlink).${done}"
+        show_onboarding_summary
+        return 0
+    elif [[ "$main_python_path" == "/usr/bin/python3" ]]; then
+        echo "${warn}⚠️  WARNING: Your 'python3' is the system Python at /usr/bin/python3 (not recommended for projects).${done}"
+    else
+        echo "${warn}⚠️  WARNING: Your 'python3' is at $main_python_path (symlink: $resolved_link), and is NOT Homebrew's python@3.13.${done}"
+    fi
+else
+    echo "${err}    python3 not found at all.${done}"
+fi
+
+# ---- Check if Homebrew's python@3.13 is installed but not linked ----
+if $HAVE_BREW; then
+    if [[ -d "$BREW_PYTHON_CELLAR" ]] && ls $BREW_PYTHON_BIN >/dev/null 2>&1; then
+        echo "${ok}    Homebrew Python 3.13 is installed at: $BREW_PYTHON_BIN${done}"
+        # Offer to link if needed
+        if [[ ! -x "$BREW_PYTHON" || "$(readlink "$BREW_PYTHON")" != *"Cellar/python@3.13"* ]]; then
+            if [[ -t 1 ]]; then
+                echo
+                read "REPLY?    👉 Would you like to link Homebrew Python 3.13 as 'python3'? [y/N] "
+                case "$REPLY" in
+                    [yY][eE][sS]|[yY])
+                        echo "${info}    Linking python@3.13...${done}"
+                        brew link python@3.13 --overwrite --force
+                        if [[ $? -eq 0 ]]; then
+                            echo "${ok}    ✅ python@3.13 linked as python3! Please restart your terminal.${done}"
+                        else
+                            echo "${err}    ❌ Failed to link python@3.13. See brew errors above.${done}"
+                        fi
+                        ;;
+                    *)
+                        echo "${warn}    Skipping Homebrew Python linking.${done}"
+                        ;;
+                esac
+            else
+                echo "    (Non-interactive shell; skipping auto-link prompt.)"
+            fi
+        fi
+        # Even if not linked, we can use uv!
+        show_onboarding_summary
+        return 0
+    else
+        echo "${warn}    Homebrew Python 3.13 not installed.${done}"
+        if [[ -t 1 ]]; then
+            read "REPLY?    👉 Would you like to install Homebrew Python 3.13 now? [y/N] "
+            case "$REPLY" in
+                [yY][eE][sS]|[yY])
+                    echo "${info}    Installing python@3.13 via Homebrew...${done}"
+                    brew install python@3.13
+                    if [[ $? -eq 0 ]]; then
+                        echo "${ok}    ✅ python@3.13 installed! Please restart your terminal.${done}"
+                    else
+                        echo "${err}    ❌ Installation failed. Check Homebrew errors above.${done}"
+                    fi
+                    ;;
+                *)
+                    echo "${warn}    Skipping Homebrew Python 3.13 installation.${done}"
+                    ;;
+            esac
+        else
+            echo "    (Non-interactive shell; skipping install prompt.)"
+        fi
+    fi
+else
+    echo "${err}    Homebrew is not installed, so Homebrew Python can't be managed.${done}"
+    echo "    Install Homebrew first: https://brew.sh/"
+fi
+
+echo
+echo "${info}    If you skip this, 'uv' will manage Python versions for your projects in ~/.local/share/uv/python/.${done}"
+echo "    New venvs will use the closest match, and 'uv' will download what you need."
+echo
+
+# Display Python / uv related info
+show_onboarding_summary
+
+
+
 # ==============================================================================
 # Settings & Options
 # ==============================================================================
@@ -203,42 +436,3 @@ alias speedtest="wget -O /dev/null cachefly.cachefly.net/10mb.test" # Simple dow
 # Prevent "zsh: no matches found" error for patterns like *
 setopt nonomatch
 
-# Settings for MONO (macOS specific, related to brew install mono)
-# Check if these are still needed; often handled by pkg-config automatically if set up correctly.
-#export LDFLAGS="-L/usr/local/opt/sqlite/lib $LDFLAGS"
-#export CPPFLAGS="-I/usr/local/opt/sqlite/include $CPPFLAGS"
-#export PKG_CONFIG_PATH="/usr/local/opt/sqlite/lib/pkgconfig:$PKG_CONFIG_PATH"
-#export MONO_GAC_PREFIX="/usr/local"
-#export FrameworkPathOverride="/Library/Frameworks/Mono.framework/Versions/Current"
-
-# =====> ADD DIRENV HOOK HERE <=====
-# Hook direnv into the shell
-if command -v direnv &> /dev/null; then
-    eval "$(direnv hook zsh)"
-fi
-# ==================================
-
-# ==============================================================================
-# Custom Functions & Final Steps
-# ==============================================================================
-
-# Load custom functions
-if [ -f ~/.zsh_functions ]; then
-    source ~/.zsh_functions
-else
-    echo "Warning: ~/.zsh_functions not found."
-fi
-
-# Shell Integration (needed for Cmd+Click, etc., in VSCode Terminal)
-# Uncomment if needed
-# [[ "$TERM_PROGRAM" == "vscode" ]] && . "$(code --locate-shell-integration-path zsh)"
-
-# Ensure virtual environment PATH takes precedence if active
-# This might be redundant if activate scripts work correctly, but provides robustness.
-if [[ -n "$VIRTUAL_ENV" ]]; then
-    if [[ ":$PATH:" != *":$VIRTUAL_ENV/bin:"* ]]; then
-        export PATH="$VIRTUAL_ENV/bin:$PATH"
-    fi
-fi
-
-# echo "Zsh config loaded." # Uncomment for debugging startup

@@ -1,3 +1,4 @@
+# .zsh_functions
 # ==============================================================================
 # Helper Functions
 # ==============================================================================
@@ -55,72 +56,71 @@ update_vscode_settings() {
         echo "Creating default VSCode settings file: $settings_file"
         # Use tabs for indentation as requested by the original config's sed command
         cat <<-'EOF' | sed 's/^    /\t/g' > "$settings_file"
-    {
-        "editor.indentSize": "tabSize",
-        "editor.tabSize": 4,
-        "editor.fontSize": 16,
-        "editor.suggestFontSize": 16,
-        "editor.minimap.enabled": false,
-        "editor.inlineSuggest.enabled": true,
-        "editor.bracketPairColorization.enabled": true,
-        "editor.formatOnSave": true,
-        "editor.linkedEditing": true,
-        "editor.accessibilitySupport": "off",
-        "workbench.startupEditor": "none",
-        "workbench.editor.enablePreview": false,
-        "explorer.confirmDragAndDrop": false,
-        "git.confirmSync": false,
-        "git.autofetch": true,
-        "security.workspace.trust.untrustedFiles": "open",
-        "gitHistory.logLevel": "Debug",
-        "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
-        "python.analysis.typeCheckingMode": "basic",
-        "python.experiments.optOutFrom": ["All"],
-        "[python]": {
-            "editor.formatOnType": true,
-            "editor.formatOnSave": true,
-            "editor.codeActionsOnSave": {
-                "source.fixAll": "explicit",
-                "source.organizeImports": "explicit",
-            },
-            "editor.defaultFormatter": "charliermarsh.ruff",
-            "editor.rulers": [80],
-            "editor.tabCompletion": "onlySnippets",
-            "editor.wordBasedSuggestions": "matchingDocuments",
-            "python.formatting.provider": "black", # Ensure black is installed or use ruff format
-            "python.formatting.blackArgs": ["--line-length", "80"]
-        },
-        "ruff.nativeServer": "on",
-        "ruff.logLevel": "warn", # Changed from trace for less noise
-        "ruff.showNotifications": "onError", # Changed from always
-        "ruff.interpreter": ["${workspaceFolder}/.venv/bin/python"],
-        "[json]": {
-            "editor.defaultFormatter": "vscode.json-language-features"
-        },
-        "prettier.printWidth": 80,
-        "prettier.tabWidth": 4,
-        "prettier.singleQuote": true,
-        "prettier.trailingComma": "all",
-        "prettier.bracketSpacing": true,
-        "prettier.useTabs": true, # Consistent with outer sed command
-        "prettier.arrowParens": "avoid",
-        "prettier.endOfLine": "auto",
-        "accessibility.signals": {
-            "diffLineDeleted": "off",
-            "diffLineInserted": "off",
-            "diffLineModified": "off",
-            "lineHasBreakpoint": "off",
-            "lineHasError": "off",
-            "lineHasFoldedArea": "off",
-            "lineHasInlineSuggestion": "off",
-            "noInlayHints": "off",
-            "onDebugBreak": "off",
-            "taskCompleted": "off",
-            "taskFailed": "off",
-            "terminalCommandFailed": "off",
-            "terminalQuickFix": "off"
-        }
-    }
+{
+	"editor.indentSize": "tabSize",
+	"editor.tabSize": 4,
+	"editor.fontSize": 12,
+	"editor.suggestFontSize": 12,
+	"editor.minimap.enabled": false,
+	"editor.inlineSuggest.enabled": true,
+	"editor.bracketPairColorization.enabled": true,
+	"editor.formatOnSave": true,
+	"editor.linkedEditing": true,
+	"editor.accessibilitySupport": "off",
+	"workbench.startupEditor": "none",
+	"workbench.editor.enablePreview": false,
+	"explorer.confirmDragAndDrop": false,
+	"git.confirmSync": false,
+	"git.autofetch": true,
+	"security.workspace.trust.untrustedFiles": "open",
+	"gitHistory.logLevel": "Debug",
+	"python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+	"python.analysis.typeCheckingMode": "basic",
+	"python.experiments.optOutFrom": ["All"],
+	"[python]": {
+		"editor.formatOnType": true,
+		"editor.formatOnSave": true,
+		"editor.codeActionsOnSave": {
+			"source.fixAll": "explicit",
+			"source.organizeImports": "explicit",
+		},
+		"editor.defaultFormatter": "charliermarsh.ruff",
+		"editor.rulers": [80],
+		"editor.tabCompletion": "onlySnippets",
+		"editor.wordBasedSuggestions": "matchingDocuments",
+		"python.formatting.provider": "black",
+		"python.formatting.blackArgs": ["--line-length", "80"],
+	},
+	"ruff.nativeServer": "on",
+	"ruff.logLevel": "warn",
+	"ruff.interpreter": ["${workspaceFolder}/.venv/bin/python"],
+	"[json]": {
+		"editor.defaultFormatter": "vscode.json-language-features"
+	},
+	"prettier.printWidth": 80,
+	"prettier.tabWidth": 4,
+	"prettier.singleQuote": true,
+	"prettier.trailingComma": "all",
+	"prettier.bracketSpacing": true,
+	"prettier.useTabs": true,
+	"prettier.arrowParens": "avoid",
+	"prettier.endOfLine": "auto",
+	"accessibility.signals": {
+		"diffLineDeleted": "off",
+		"diffLineInserted": "off",
+		"diffLineModified": "off",
+		"lineHasBreakpoint": "off",
+		"lineHasError": "off",
+		"lineHasFoldedArea": "off",
+		"lineHasInlineSuggestion": "off",
+		"noInlayHints": "off",
+		"onDebugBreak": "off",
+		"taskCompleted": "off",
+		"taskFailed": "off",
+		"terminalCommandFailed": "off",
+		"terminalQuickFix": "off"
+	}
+}
 EOF
     else
         echo "VSCode settings file already exists: $settings_file (Skipping creation)"
@@ -310,7 +310,8 @@ Brief description of your project.
 3.  **Activate Environment (using direnv):**
     *   Create a `.envrc` file in the project root:
         ```bash
-        echo "source .venv/bin/activate" > .envrc
+        echo "export VIRTUAL_ENV_PROMPT=\"($(basename \"\$PWD\"))\"" > .envrc
+        echo "source .venv/bin/activate" >> .envrc
         ```
     *   Allow direnv to load the file:
         ```bash
@@ -493,12 +494,12 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/$project_name" # Optional: Update URL
-Repository = "https://github.com/yourusername/$project_name" # Optional: Update URL
+Homepage = "https://github.com/CaptainCodeAU/$project_name" # Optional: Update URL
+Repository = "https://github.com/CaptainCodeAU/$project_name" # Optional: Update URL
 
 # [project.scripts]
-# # Example: Define console scripts if your package has executables
-# # my-cli = "$project_name.cli:main"
+# Example: Define console scripts if your package has executables
+my-cli = "$project_name.cli:main"
 
 # Use hatch to manage version based on __init__.py
 [tool.hatch.version]
@@ -607,11 +608,18 @@ EOF
     echo "Ensuring .envrc for direnv exists..."
     if command -v direnv &> /dev/null; then
         if [[ ! -f ".envrc" ]]; then
-            echo "Creating .envrc file with 'source .venv/bin/activate'"
-            echo "source .venv/bin/activate" > .envrc
-            # No need for explicit "allow" message, direnv handles it
+            echo "Creating .envrc file with 'source .venv/bin/activate' and project-based VIRTUAL_ENV_PROMPT"
+            echo "export VIRTUAL_ENV_PROMPT=\"($(basename \"\$PWD\"))\"" > .envrc
+            echo "source .venv/bin/activate" >> .envrc
+            if [[ -t 1 ]]; then
+                echo "Running: direnv allow ."
+                direnv allow .
+            fi
         else
             echo ".envrc already exists. Skipping creation."
+            # Optionally, uncomment below to always allow:
+            # echo "Refreshing direnv trust: direnv allow ."
+            direnv allow .
         fi
     else
         echo "direnv command not found. Skipping .envrc creation."
@@ -621,20 +629,12 @@ EOF
     # --- 6. Create and activate virtual environment ---
     echo "--------------------------------------------------"
     echo "Creating virtual environment (.venv)..."
-    if ! uv venv -p "$python_interpreter_path"; then
+    # DEBUG: Show the actual command with variables expanded
+    # echo "DEBUG: Running -> uv venv --prompt \"$(basename "$PWD")\" -p \"$python_interpreter_path\""
+    if ! uv venv --prompt "$(basename "$PWD")" -p "$python_interpreter_path"; then
         echo "Error: Failed to create virtual environment." >&2
         return 1
     fi
-
-    # No longer doing this next step - since we are now using direnv 
-    # (via the .envrc file containing source .venv/bin/activate) to handle activation automatically 
-    # when we cd into the directory, activating it explicitly within python_setup is redundant 
-    # and leads to the conflict where direnv unload doesn't fully clean up the manually sourced activation.
-
-    # # Activate for current session
-    # echo "Activating virtual environment (for current session)..."
-    # source .venv/bin/activate
-    # echo "Virtual environment activated: $VIRTUAL_ENV"
 
     # --- 7. Install dependencies (including optional dev dependencies) ---
     echo "--------------------------------------------------"
@@ -653,7 +653,6 @@ EOF
         echo "Initializing git repository..."
         git init
         git add .
-        # Check if there's anything to commit (avoid empty initial commit)
         if git diff --staged --quiet; then
             echo "No changes staged for initial commit (perhaps files existed before)."
         else
@@ -661,8 +660,22 @@ EOF
             echo "Git repository initialized and initial commit created."
         fi
     else
-        echo "Git repository already exists."
+        echo "Git repository already exists (likely created by uv init)."
+        # Check if there's already at least one commit
+        if git rev-parse HEAD >/dev/null 2>&1; then
+            echo "Initial commit already exists."
+        else
+            echo "No commit yet—creating initial commit..."
+            git add .
+            if git diff --staged --quiet; then
+                echo "No changes staged for initial commit (perhaps files existed before)."
+            else
+                git commit -m "Initial project setup via python_new_project"
+                echo "Initial commit created."
+            fi
+        fi
     fi
+
 
     # --- Final Success Messages ---
     echo "--------------------------------------------------"
@@ -674,8 +687,8 @@ EOF
     echo "  - Edit 'pyproject.toml' authors/URLs and 'README.md' with your project details."
     echo "  - Add your core code in 'src/$project_name/'."
     echo "  - Write tests in 'tests/'."
-    echo "  - If '.envrc' was created/exists, 'direnv' will manage activation automatically."
-    echo "  - Remember to run 'direnv allow .' if prompted on first 'cd' into this directory."
+    # echo "  - If '.envrc' was created/exists, 'direnv' will manage activation automatically."
+    # echo "  - Remember to run 'direnv allow .' if prompted on first 'cd' into this directory."
     echo "  - To run tests: pytest"
     echo "  - To lint/format: ruff check . && ruff format ."
     echo "--------------------------------------------------"
@@ -755,7 +768,9 @@ python_setup() {
         rm -rf ".venv"
     fi
     echo "Creating virtual environment (.venv)..."
-    if ! uv venv -p "$python_interpreter_path"; then
+    # DEBUG: Show the actual command with variables expanded
+    # echo "DEBUG: Running -> uv venv --prompt \"$(basename "$PWD")\" -p \"$python_interpreter_path\""
+    if ! uv venv --prompt "$(basename "$PWD")" -p "$python_interpreter_path"; then
         echo "Error: Failed to create virtual environment." >&2
         return 1
     fi
@@ -772,17 +787,6 @@ python_setup() {
         echo "# Environment variables for $project_name" > .env
     fi
     # =================================================================
-
-    # No longer doing Step 3 - since we are now using direnv 
-    # (via the .envrc file containing source .venv/bin/activate) to handle activation automatically 
-    # when we cd into the directory, activating it explicitly within python_setup is redundant 
-    # and leads to the conflict where direnv unload doesn't fully clean up the manually sourced activation.
-
-    # 3. Activate virtual environment for this session
-    # echo "--------------------------------------------------"
-    # echo "Activating virtual environment (for current session)..."
-    # source .venv/bin/activate
-    # echo "Virtual environment activated: $VIRTUAL_ENV"
 
     # 4. Install dependencies (Now README.md should exist)
     echo "--------------------------------------------------"
@@ -812,16 +816,23 @@ python_setup() {
         echo "Warning: Could not determine installation command (no pyproject.toml or requirements.txt?)." >&2
     fi
 
-    # 5. Create .envrc for direnv if needed
+    # 5. Create .envrc for direnv if direnv is available
     echo "--------------------------------------------------"
     echo "Ensuring .envrc for direnv exists..."
     if command -v direnv &> /dev/null; then
         if [[ ! -f ".envrc" ]]; then
-            echo "Creating .envrc file with 'source .venv/bin/activate'" # Corrected command
-            echo "source .venv/bin/activate" > .envrc                  # Corrected command
-            echo "--> IMPORTANT: Run 'direnv allow .' in this directory to enable automatic activation."
+            echo "Creating .envrc file with 'source .venv/bin/activate' and project-based VIRTUAL_ENV_PROMPT"
+            echo "export VIRTUAL_ENV_PROMPT=\"($(basename \"\$PWD\"))\"" > .envrc
+            echo "source .venv/bin/activate" >> .envrc
+            if [[ -t 1 ]]; then
+                echo "Running: direnv allow ."
+                direnv allow .
+            fi
         else
             echo ".envrc already exists. Skipping creation."
+            # Optionally, uncomment below to always allow:
+            # echo "Refreshing direnv trust: direnv allow ."
+            direnv allow .
         fi
     else
         echo "direnv command not found. Skipping .envrc creation."
@@ -835,9 +846,9 @@ python_setup() {
     echo "✅ Environment is active (for this session)."
     echo "✅ Dependencies installed/synced."
     echo "--------------------------------------------------"
-    echo "💡 If '.envrc' was created/exists, direnv will manage activation automatically on 'cd'."
-    echo "   Remember to run 'direnv allow .' if you haven't already for this directory."
-    echo "--------------------------------------------------"
+    # echo "💡 If '.envrc' was created/exists, direnv will manage activation automatically on 'cd'."
+    # echo "   Remember to run 'direnv allow .' if you haven't already for this directory."
+    # echo "--------------------------------------------------"
 
     return 0
 }
@@ -939,6 +950,75 @@ python_delete() {
     echo "--------------------------------------------------"
 }
 
+
+# Install current project as user-level CLI via pipx (isolated env, no conflicts)
+pipx_install_current_project() {
+    if [[ ! -f pyproject.toml ]]; then
+        echo "❌ Error: 'pyproject.toml' not found in the current directory." >&2
+        echo "   Cannot install project with pipx." >&2
+        return 1
+    fi
+
+    local project_name
+    project_name=$(awk -F'"' '/^name *=/ {gsub(/[[:space:]]/, "", $0); print $2; exit}' pyproject.toml)
+
+    echo "🔗 Installing '$project_name' as a CLI via pipx from the current directory..."
+    # Use '.' to refer to the current directory. This is more robust than `$(pwd)`
+    # as it avoids potential issues with special characters in the path.
+    if pipx install --force .; then
+        echo "✅ '$project_name' CLI installed! Run it from any folder. To update, run: pipx_reinstall_current_project"
+    else
+        echo "❌ Failed to install '$project_name' via pipx. Please check the errors above."
+        return 1
+    fi
+}
+
+
+# Reinstall the CLI for the current project from local source
+pipx_reinstall_current_project() {
+    if [[ ! -f pyproject.toml ]]; then
+        echo "❌ Error: 'pyproject.toml' not found in the current directory." >&2
+        echo "   Cannot reinstall project with pipx." >&2
+        return 1
+    fi
+
+    local project_name
+    project_name=$(awk -F'"' '/^name *=/ {gsub(/[[:space:]]/, "", $0); print $2; exit}' pyproject.toml)
+
+    echo "♻️  Reinstalling '$project_name' from local source via pipx..."
+    # Reinstalling from local source is the same as a forced install.
+    if pipx install --force .; then
+        echo "✅ '$project_name' CLI reinstalled successfully!"
+    else
+        echo "❌ Failed to reinstall '$project_name' via pipx. Please check the errors above."
+        return 1
+    fi
+}
+
+
+# Uninstall the CLI for the current project
+pipx_uninstall_current_project() {
+    if [[ ! -f pyproject.toml ]]; then
+        echo "❌ Error: 'pyproject.toml' not found in the current directory." >&2
+        echo "   Cannot determine project name to uninstall." >&2
+        return 1
+    fi
+
+    local project_name
+    project_name=$(awk -F'"' '/^name *=/ {gsub(/[[:space:]]/, "", $0); print $2; exit}' pyproject.toml)
+
+    echo "🗑️  Uninstalling '$project_name' CLI via pipx..."
+    if pipx uninstall "$project_name"; then
+        echo "✅ '$project_name' CLI uninstalled."
+    else
+        # Add a hint that it might not be installed.
+        echo "❌ Failed to uninstall '$project_name'. It might not be installed, or the name in pyproject.toml might not match the installed name."
+        return 1
+    fi
+}
+
+
+
 # Add Python version variables (can be overridden in .zshrc if needed)
 # Define default min/max versions if not set by .zshrc
 : ${PYTHON_MIN_VERSION:="3.8"}
@@ -946,4 +1026,3 @@ python_delete() {
 # Define pattern carefully to match only major.minor (adjust range as needed)
 # This matches 3.8, 3.9, 3.10, 3.11, 3.12, 3.13
 : ${PYTHON_VERSION_PATTERN:="^3\.(8|9|1[0-3])$"}
-
