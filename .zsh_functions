@@ -127,6 +127,35 @@ EOF
     fi
 }
 
+
+# Function to find and display runnable console scripts from pyproject.toml
+# Usage: _display_project_scripts
+_display_project_scripts() {
+    # Ensure pyproject.toml exists
+    if [[ ! -f "pyproject.toml" ]]; then
+        return 0
+    fi
+
+    # Use awk to parse the [project.scripts] section.
+    # It finds the section, then prints the key (before '=') for each line until the next section starts.
+    local scripts_list
+    scripts_list=$(awk '/^\[project\.scripts\]/{f=1;next} /^\[/{f=0} f && /=/{gsub(/[ \t]*=.*/, ""); gsub(/^[ \t]*/, ""); print}' pyproject.toml)
+
+    # Convert the string of script names into a zsh array
+    local -a scripts=("${(@f)scripts_list}")
+
+    # If scripts were found, display them using the global color variables
+    if (( ${#scripts[@]} > 0 )); then
+        echo "--------------------------------------------------"
+        echo "${info}✅ Found ${ok}${#scripts[@]}${info} command-line script(s) available in your venv:${done}"
+        for script_name in "${scripts[@]}"; do
+            echo "   - To run: ${ok}${script_name}${done}"
+        done
+        echo "${info}💡 You can also install these globally using your helper:${done} ${example}pipx_install_current_project${done}"
+    fi
+}
+
+
 # Function to create .gitignore file with common Python entries if it doesn't exist
 # Usage: create_gitignore
 create_gitignore() {
@@ -608,7 +637,8 @@ EOF
     echo "Ensuring .envrc for direnv exists..."
     if command -v direnv &> /dev/null; then
         if [[ ! -f ".envrc" ]]; then
-            echo "Creating .envrc file with 'source .venv/bin/activate' and project-based VIRTUAL_ENV_PROMPT"
+            echo "Creating .envrc file with 'source .venv/bin/activate'"
+            echo "and adding project-based VIRTUAL_ENV_PROMPT' to it."
             echo "export VIRTUAL_ENV_PROMPT=\"($(basename \"\$PWD\"))\"" > .envrc
             echo "source .venv/bin/activate" >> .envrc
             if [[ -t 1 ]]; then
@@ -682,6 +712,8 @@ EOF
     echo "✅ Project '$project_name' setup complete!"
     echo "✅ Virtual environment is active (for this session)."
     echo "✅ Dependencies installed (attempted)."
+    # Use helper function to display runnable console scripts
+    _display_project_scripts
     echo "--------------------------------------------------"
     echo "Next steps:"
     echo "  - Edit 'pyproject.toml' authors/URLs and 'README.md' with your project details."
@@ -821,7 +853,8 @@ python_setup() {
     echo "Ensuring .envrc for direnv exists..."
     if command -v direnv &> /dev/null; then
         if [[ ! -f ".envrc" ]]; then
-            echo "Creating .envrc file with 'source .venv/bin/activate' and project-based VIRTUAL_ENV_PROMPT"
+            echo "Creating .envrc file with 'source .venv/bin/activate'"
+            echo "(and adding project-based VIRTUAL_ENV_PROMPT' to it)."
             echo "export VIRTUAL_ENV_PROMPT=\"($(basename \"\$PWD\"))\"" > .envrc
             echo "source .venv/bin/activate" >> .envrc
             if [[ -t 1 ]]; then
@@ -831,7 +864,7 @@ python_setup() {
         else
             echo ".envrc already exists. Skipping creation."
             # Optionally, uncomment below to always allow:
-            # echo "Refreshing direnv trust: direnv allow ."
+            echo "Refreshing direnv trust: direnv allow ."
             direnv allow .
         fi
     else
@@ -845,6 +878,8 @@ python_setup() {
     echo "✅ Virtual environment (.venv) created/reset."
     echo "✅ Environment is active (for this session)."
     echo "✅ Dependencies installed/synced."
+    # Use helper function to display runnable console scripts
+    _display_project_scripts
     echo "--------------------------------------------------"
     # echo "💡 If '.envrc' was created/exists, direnv will manage activation automatically on 'cd'."
     # echo "   Remember to run 'direnv allow .' if you haven't already for this directory."
@@ -854,98 +889,83 @@ python_setup() {
 }
 
 
-# Function to deactivate the Python virtual environment
-# Usage: python_deactivate (or alias py_off)
-python_deactivate() {
-    if [[ -n "$VIRTUAL_ENV" ]]; then
-        echo "Deactivating virtual environment: $VIRTUAL_ENV"
-        deactivate
-        # Check if deactivate command removed VIRTUAL_ENV var
-        if [[ -z "$VIRTUAL_ENV" ]]; then
-            echo "Virtual environment deactivated successfully."
-        else
-            # This case might happen if deactivate is redefined or fails partially
-            echo "Warning: 'deactivate' command finished, but VIRTUAL_ENV is still set." >&2
-            echo "You might need to manually unset VIRTUAL_ENV or check your 'deactivate' function." >&2
-        fi
-    else
-        echo "No active virtual environment detected."
-    fi
-}
-
-
-# Function to clean up Python virtual environment and common artifacts
-# Usage: python_delete (or alias py_clean)
+# Function to clean up Python project artifacts.
+# This version provides detailed, technically informative output during the
+# manual teardown of the shell environment and file system.
 python_delete() {
     echo "--------------------------------------------------"
-    echo "Cleaning Python project artifacts..."
+    echo "${info}Python Project Teardown Initiated...${done}"
     echo "--------------------------------------------------"
 
-    local deleted_something=false
-
-    # 1. Deactivate if active
+    # --- PART 1: Manual Environment Teardown ---
     if [[ -n "$VIRTUAL_ENV" ]]; then
-        echo "Attempting to deactivate environment first..."
-        python_deactivate # Call the function correctly
+        echo "${info}Found active virtual environment. Proceeding with manual cleanup:${done}"
+
+        # Store critical values before they are unset
+        local venv_path="$VIRTUAL_ENV"
+        local venv_prompt="$VIRTUAL_ENV_PROMPT"
+        local venv_bin_path="${venv_path}/bin:"
+
+        # 1. Unset the custom prompt variable
+        echo "  - Unsetting VIRTUAL_ENV_PROMPT (was: '${warn}${venv_prompt}${done}')"
+        unset VIRTUAL_ENV_PROMPT
+
+        # 2. Unset the standard venv variable
+        echo "  - Unsetting VIRTUAL_ENV (was: '${warn}${venv_path}${done}')"
+        unset VIRTUAL_ENV
+
+        # 3. Manually remove the venv path from the main PATH variable.
+        if [[ "$PATH" == "$venv_bin_path"* ]]; then
+            echo "  - Removing prefix from \$PATH: '${warn}${venv_bin_path}${done}'"
+            export PATH="${PATH#$venv_bin_path}"
+            echo "${ok}  ✔ Environment variables and PATH have been cleaned.${done}"
+        else
+            echo "${err}  - Venv path not found at the start of \$PATH. Cannot clean automatically.${done}"
+        fi
+    else
+        echo "${info}No active virtual environment detected. Skipping environment cleanup.${done}"
     fi
 
-    # Define items to remove
+
+    # --- PART 2: File Deletion ---
+    echo "${info}Searching for and deleting project files...${done}"
     local items_to_remove=(
         ".venv"
+        ".envrc"
         "uv.lock"
         ".pytest_cache"
         ".coverage"
         "htmlcov"
         "dist"
         "build"
-        "*.egg-info" # Glob pattern for find
-        "__pycache__" # Directory name for find
-        "*.pyc"       # Glob pattern for find
-        "*.pyo"       # Glob pattern for find
-        # Add others if needed: ".mypy_cache", ".ruff_cache"
     )
 
-    # 2. Remove directories and specific files
-    for item in ".venv" "uv.lock" ".pytest_cache" ".coverage" "htmlcov" "dist" "build"; do
+    local deleted_something=false
+    for item in "${items_to_remove[@]}"; do
         if [[ -e "$item" ]]; then
-            echo "Deleting: $item"
+            echo "  - Deleting: ${item}"
             rm -rf "$item"
             deleted_something=true
         fi
     done
 
-    # 3. Remove direnv config file if it exists
-    if [[ -f ".envrc" ]]; then
-        echo "Deleting: .envrc"
-        rm -f ".envrc"
-        # Note: This doesn't automatically un-allow it in direnv's global state,
-        # but removing the file prevents it loading on next cd.
-        deleted_something=true
+    # Clean cache files quietly and efficiently
+    find . -type d -name "__pycache__" -print0 | xargs -0 rm -rf &>/dev/null
+
+
+    # --- PART 3: Final Visual Cleanup ---
+    if command -v p10k &>/dev/null; then
+        echo "${info}Reloading Powerlevel10k prompt for visual consistency...${done}"
+        # p10k reload
     fi
 
-    # 4. Use find to remove patterns and cache dirs recursively
-    local find_deleted=false
-    echo "Searching for cache files/dirs and build artifacts..."
-    # Remove *.egg-info directories
-    if find . -maxdepth 1 -type d -name "*.egg-info" -print -exec rm -rf {} + 2>/dev/null; then find_deleted=true; fi
-    # Remove __pycache__ directories
-    if find . -type d -name "__pycache__" -print -exec rm -rf {} + 2>/dev/null; then find_deleted=true; fi
-    # Remove *.pyc/pyo files
-    if find . -type f \( -name "*.pyc" -o -name "*.pyo" \) -print -delete 2>/dev/null; then find_deleted=true; fi
 
-    if $find_deleted; then
-        echo "Cache files/dirs deleted."
-        deleted_something=true
-    else
-        echo "No cache files (*.pyc, *.pyo, __pycache__, *.egg-info) found."
-    fi
-
-    # 4. Final summary
+    # --- PART 4: Final Summary ---
     echo "--------------------------------------------------"
-    if $deleted_something; then
-        echo "✅ Clean-up complete."
+    if [[ "$deleted_something" = true ]]; then
+        echo "${ok}✅ Teardown complete.${done}"
     else
-        echo "ℹ️ No common Python project artifacts found to clean up."
+        echo "${info}ℹ️ No project files found to delete.${done}"
     fi
     echo "--------------------------------------------------"
 }

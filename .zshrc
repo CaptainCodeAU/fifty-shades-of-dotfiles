@@ -15,6 +15,25 @@ export PIP_REQUIRE_VIRTUALENV=true
 # Opt-out of .NET CLI telemetry
 export DOTNET_CLI_TELEMETRY_OPTOUT=1
 
+# Disable telemetry for the mem0 library (which includes browser-use)
+export MEM0_TELEMETRY_DISABLED=true
+export ANONYMIZED_TELEMETRY=false
+
+# ==============================================================================
+# UI & Color Helpers
+# ==============================================================================
+# Load colors and define global variables for consistent script output.
+# These will be available to .zshrc and all functions sourced from .zsh_functions.
+autoload -U colors && colors
+
+ok="$fg[green]"
+warn="$fg[yellow]"
+err="$fg[red]"
+info="$fg[cyan]"
+example="$fg[magenta]"
+done="$reset_color"
+# ==============================================================================
+
 # Zsh & Oh My Zsh
 export ZSH="$HOME/.oh-my-zsh"
 
@@ -158,11 +177,11 @@ fi
 
 # Ensure virtual environment PATH takes precedence if active
 # This might be redundant if activate scripts work correctly, but provides robustness.
-if [[ -n "$VIRTUAL_ENV" ]]; then
-    if [[ ":$PATH:" != *":$VIRTUAL_ENV/bin:"* ]]; then
-        export PATH="$VIRTUAL_ENV/bin:$PATH"
-    fi
-fi
+# if [[ -n "$VIRTUAL_ENV" ]]; then
+#     if [[ ":$PATH:" != *":$VIRTUAL_ENV/bin:"* ]]; then
+#         export PATH="$VIRTUAL_ENV/bin:$PATH"
+#     fi
+# fi
 
 # =====> ADD DIRENV HOOK HERE <=====
 # Hook direnv into the shell
@@ -244,16 +263,6 @@ export REPLICATE_API_TOKEN=your_token_here
 # Python 3.13 Health Check & Onboarding for Homebrew and uv (zsh)
 # ==============================================================================
 
-autoload -U colors && colors
-
-# ---- Color helpers ----
-ok="$fg[green]"
-warn="$fg[yellow]"
-err="$fg[red]"
-info="$fg[cyan]"
-example="$fg[magenta]"
-done="$reset_color"
-
 # ---- Homebrew Python locations ----
 BREW_PYTHON="/usr/local/bin/python3"
 BREW_PYTHON_CELLAR="/usr/local/Cellar/python@3.13"
@@ -315,24 +324,17 @@ show_onboarding_summary() {
     echo "      - Scaffolds a ${warn}new${done} Python project in the current folder."
     echo "      - Example: ${example}python_new_project 3.13${done}"
     echo
-    echo "  3. ${info}get_uv_python_path <major.minor>${done}"
-    echo "      - Prints the absolute path of the uv-managed Python version."
-    echo "      - Example: ${example}get_uv_python_path 3.13${done}"
-    echo
-    echo "  4. ${info}python_deactivate${done}"
-    echo "      - Deactivates the current Python virtual environment."
-    echo
-    echo "  5. ${info}python_delete${done}"
+    echo "  3. ${info}python_delete${done}"
     echo "      - Cleans up all typical Python project artifacts (.venv, caches, build, etc.)."
     echo
-    echo "  6. ${info}pipx_install_current_project${done}"
+    echo "  4. ${info}pipx_install_current_project${done}"
     echo "      - Installs the current project as a global user CLI (isolated by pipx, no conflicts)."
     echo "      - Just run inside your project folder: ${example}pipx_install_current_project${done}"
     echo
-    echo "  7. ${info}pipx_reinstall_current_project${done}"
+    echo "  5. ${info}pipx_reinstall_current_project${done}"
     echo "      - Reinstalls the global user CLI after local code changes."
     echo
-    echo "  8. ${info}pipx_uninstall_current_project${done}"
+    echo "  6. ${info}pipx_uninstall_current_project${done}"
     echo "      - Uninstalls the global CLI for the current project."
     echo "-------------------------------------------------------------------------------"
 }

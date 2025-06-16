@@ -32,7 +32,7 @@
   # The list of segments shown on the left. Fill it with the most important segments.
   typeset -g POWERLEVEL9K_LEFT_PROMPT_ELEMENTS=(
     # =========================[ Line #1 ]=========================
-    os_icon                 # os identifier
+    # os_icon                 # os identifier
     dir                     # current directory
     vcs                     # git status
     # =========================[ Line #2 ]=========================
@@ -49,11 +49,11 @@
     status                  # exit code of the last command
     command_execution_time  # duration of the last command
     background_jobs         # presence of background jobs
-    direnv                  # direnv status (https://direnv.net/)
-    asdf                    # asdf version manager (https://github.com/asdf-vm/asdf)
+    # direnv                  # direnv status (https://direnv.net/)
+    # asdf                    # asdf version manager (https://github.com/asdf-vm/asdf)
     virtualenv              # python virtual environment (https://docs.python.org/3/library/venv.html)
     anaconda                # conda environment (https://conda.io/)
-    pyenv                   # python environment (https://github.com/pyenv/pyenv)
+    # pyenv                   # python environment (https://github.com/pyenv/pyenv)
     goenv                   # go environment (https://github.com/syndbg/goenv)
     nodenv                  # node.js version from nodenv (https://github.com/nodenv/nodenv)
     nvm                     # node.js version from nvm (https://github.com/nvm-sh/nvm)
@@ -579,6 +579,10 @@
   # Direnv color.
   typeset -g POWERLEVEL9K_DIRENV_FOREGROUND=3
   typeset -g POWERLEVEL9K_DIRENV_BACKGROUND=0
+  # typeset -g POWERLEVEL9K_DIRENV_PROMPT_ALWAYS_SHOW=true
+  # show direnv only when the command you are typing invokes one of these tools.
+  # list of values are '!virtualenv', '!pyenv', or '!python'  
+  # typeset -g POWERLEVEL9K_DIRENV_SHOW_ON_COMMAND='!virtualenv'
   # Custom icon.
   # typeset -g POWERLEVEL9K_DIRENV_VISUAL_IDENTIFIER_EXPANSION='⭐'
 
@@ -588,6 +592,9 @@
   # POWERLEVEL9K_ASDF_${TOOL}_BACKGROUND.
   typeset -g POWERLEVEL9K_ASDF_FOREGROUND=0
   typeset -g POWERLEVEL9K_ASDF_BACKGROUND=7
+  # Show asdf only when the command you are typing invokes one of these tools.
+  # Tip: Remove the next line to always show asdf.
+  # typeset -g POWERLEVEL9K_ASDF_SHOW_ON_COMMAND='!virtualenv'
 
   # There are four parameters that can be used to hide asdf tools. Each parameter describes
   # conditions under which a tool gets hidden. Parameters can hide tools but not unhide them. If at
@@ -623,13 +630,13 @@
   # Note: The name of this parameter doesn't reflect its meaning at all.
   # Note: If this parameter is set to true, it won't hide tools.
   # Tip:  Override this parameter for ${TOOL} with POWERLEVEL9K_ASDF_${TOOL}_PROMPT_ALWAYS_SHOW.
-  typeset -g POWERLEVEL9K_ASDF_PROMPT_ALWAYS_SHOW=false
+  typeset -g POWERLEVEL9K_ASDF_PROMPT_ALWAYS_SHOW=true
 
   # If set to false, hide tool versions that are equal to "system".
   #
   # Note: If this parameter is set to true, it won't hide tools.
   # Tip: Override this parameter for ${TOOL} with POWERLEVEL9K_ASDF_${TOOL}_SHOW_SYSTEM.
-  typeset -g POWERLEVEL9K_ASDF_SHOW_SYSTEM=true
+  typeset -g POWERLEVEL9K_ASDF_SHOW_SYSTEM=false
 
   # If set to non-empty value, hide tools unless there is a file matching the specified file pattern
   # in the current directory, or its parent directory, or its grandparent directory, and so on.
@@ -1000,14 +1007,18 @@
   ###[ virtualenv: python virtual environment (https://docs.python.org/3/library/venv.html) ]###
   # Python virtual environment color.
   typeset -g POWERLEVEL9K_VIRTUALENV_FOREGROUND=0
-  typeset -g POWERLEVEL9K_VIRTUALENV_BACKGROUND=4
+  typeset -g POWERLEVEL9K_VIRTUALENV_BACKGROUND=240
   # Don't show Python version next to the virtual environment name.
   typeset -g POWERLEVEL9K_VIRTUALENV_SHOW_PYTHON_VERSION=true
   # If set to "false", won't show virtualenv if pyenv is already shown.
   # If set to "if-different", won't show virtualenv if it's the same as pyenv.
-  typeset -g POWERLEVEL9K_VIRTUALENV_SHOW_WITH_PYENV="if-different"
+  # If set to "if-same", won't show virtualenv if it's the same as pyenv.
+  typeset -g POWERLEVEL9K_VIRTUALENV_SHOW_WITH_PYENV=false
+
+  typeset -g POWERLEVEL9K_VIRTUALENV_SHOW_SYSTEM=false
   # Separate environment name from Python version only with a space.
-  typeset -g POWERLEVEL9K_VIRTUALENV_{LEFT,RIGHT}_DELIMITER=
+  # typeset -g POWERLEVEL9K_VIRTUALENV_{LEFT,RIGHT}_DELIMITER=
+  typeset -g POWERLEVEL9K_VIRTUALENV_LEFT_DELIMITER="| "
   # Custom icon.
   # typeset -g POWERLEVEL9K_VIRTUALENV_VISUAL_IDENTIFIER_EXPANSION='⭐'
 
@@ -1049,13 +1060,17 @@
   # Pyenv color.
   typeset -g POWERLEVEL9K_PYENV_FOREGROUND=0
   typeset -g POWERLEVEL9K_PYENV_BACKGROUND=4
+  # Show pyenv only when the command you are typing invokes one of these tools.
+  # Tip: Remove the next line to always show pyenv.
+  # list of values are '!virtualenv', '!pyenv', or '!python'
+  # typeset -g POWERLEVEL9K_PYENV_SHOW_ON_COMMAND='!virtualenv'
   # Hide python version if it doesn't come from one of these sources.
   typeset -g POWERLEVEL9K_PYENV_SOURCES=(shell local global)
   # If set to false, hide python version if it's the same as global:
   # $(pyenv version-name) == $(pyenv global).
-  typeset -g POWERLEVEL9K_PYENV_PROMPT_ALWAYS_SHOW=false
+  typeset -g POWERLEVEL9K_PYENV_PROMPT_ALWAYS_SHOW=true
   # If set to false, hide python version if it's equal to "system".
-  typeset -g POWERLEVEL9K_PYENV_SHOW_SYSTEM=true
+  typeset -g POWERLEVEL9K_PYENV_SHOW_SYSTEM=false
 
   # Pyenv segment format. The following parameters are available within the expansion.
   #
@@ -1080,7 +1095,7 @@
   typeset -g POWERLEVEL9K_GOENV_SOURCES=(shell local global)
   # If set to false, hide go version if it's the same as global:
   # $(goenv version-name) == $(goenv global).
-  typeset -g POWERLEVEL9K_GOENV_PROMPT_ALWAYS_SHOW=false
+  typeset -g POWERLEVEL9K_GOENV_PROMPT_ALWAYS_SHOW=true
   # If set to false, hide go version if it's equal to "system".
   typeset -g POWERLEVEL9K_GOENV_SHOW_SYSTEM=true
   # Custom icon.
@@ -1094,7 +1109,7 @@
   typeset -g POWERLEVEL9K_NODENV_SOURCES=(shell local global)
   # If set to false, hide node version if it's the same as global:
   # $(nodenv version-name) == $(nodenv global).
-  typeset -g POWERLEVEL9K_NODENV_PROMPT_ALWAYS_SHOW=false
+  typeset -g POWERLEVEL9K_NODENV_PROMPT_ALWAYS_SHOW=true
   # If set to false, hide node version if it's equal to "system".
   typeset -g POWERLEVEL9K_NODENV_SHOW_SYSTEM=true
   # Custom icon.
@@ -1293,7 +1308,7 @@
   typeset -g POWERLEVEL9K_PHPENV_SOURCES=(shell local global)
   # If set to false, hide php version if it's the same as global:
   # $(phpenv version-name) == $(phpenv global).
-  typeset -g POWERLEVEL9K_PHPENV_PROMPT_ALWAYS_SHOW=false
+  typeset -g POWERLEVEL9K_PHPENV_PROMPT_ALWAYS_SHOW=true
   # If set to false, hide PHP version if it's equal to "system".
   typeset -g POWERLEVEL9K_PHPENV_SHOW_SYSTEM=true
   # Custom icon.
