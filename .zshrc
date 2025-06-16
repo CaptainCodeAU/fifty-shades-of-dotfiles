@@ -118,8 +118,9 @@ source "$ZSH/oh-my-zsh.sh"
 # ==============================================================================
 # PATH Configuration
 # ==============================================================================
-# Start with a clean slate to control order explicitly.
-PATH=""
+
+# Ensure PATH doesn't contain duplicates, which can cause some commands to not work.
+typeset -U path
 
 # Homebrew (Recommended location: /opt/homebrew for Apple Silicon, /usr/local for Intel)
 if [[ -d /opt/homebrew ]]; then
@@ -127,6 +128,10 @@ if [[ -d /opt/homebrew ]]; then
 else
     HOMEBREW_PREFIX="/usr/local"
 fi
+
+# Start with Homebrew to give it precedence, avoiding an empty initial PATH.
+PATH="$HOMEBREW_PREFIX/bin"
+PATH="$HOMEBREW_PREFIX/sbin:$PATH"
 
 export PATH="$HOMEBREW_PREFIX/bin:$PATH"
 export PATH="$HOMEBREW_PREFIX/sbin:$PATH"
@@ -289,31 +294,30 @@ fi
 # ---- Check if python3 is Homebrew's 3.13 ----
 show_onboarding_summary() {
     echo "${info}🚀  RECOMMENDED WORKFLOW: Use 'uv' for all Python project work!${done}"
-    echo "-------------------------------------------------------------------------------"
-    echo
-    echo "${ok}How to make your Python project a system-wide CLI executable (no conflicts):${done}"
-    echo
-    echo "  1. Activate your project's venv:"
-    echo "         source .venv/bin/activate"
-    echo "  2. Build/install your project in 'editable' mode (from project root):"
-    echo "         uv pip install -e ."
-    echo "     (Make sure your pyproject.toml defines a [project.scripts] entry for your CLI!)"
-    echo
-    echo "  3. Install your CLI globally for your user using pipx (best practice!):"
-    echo "         pipx install --force \$(pwd)"
-    echo "     - This puts your CLI in ~/.local/bin, which should already be in your PATH."
-    echo "     - Each CLI installed with pipx has its own isolated virtualenv—no dependency conflicts."
-    echo "     - You can run your CLI from any folder, in any shell session."
-    echo
-    echo "  4. To update your CLI after you change your code:"
-    echo "         pipx reinstall <your-cli-name>"
-    echo
-    echo "  5. See all installed pipx CLIs and manage them:"
-    echo "         pipx list"
-    echo "         pipx upgrade <your-cli-name>"
-    echo "         pipx uninstall <your-cli-name>"
-    echo "-------------------------------------------------------------------------------"
-    echo
+    echo "------------------------------------------------------------------------------------------------"
+    # echo
+    # echo "${ok}How to make your Python project a system-wide CLI executable (no conflicts):${done}"
+    # echo
+    # echo "  1. Activate your project's venv:"
+    # echo "         source .venv/bin/activate"
+    # echo "  2. Build/install your project in 'editable' mode (from project root):"
+    # echo "         uv pip install -e ."
+    # echo "     (Make sure your pyproject.toml defines a [project.scripts] entry for your CLI!)"
+    # echo
+    # echo "  3. Install your CLI globally for your user using pipx (best practice!):"
+    # echo "         pipx install --force \$(pwd)"
+    # echo "     - This puts your CLI in ~/.local/bin, which should already be in your PATH."
+    # echo "     - Each CLI installed with pipx has its own isolated virtualenv—no dependency conflicts."
+    # echo "     - You can run your CLI from any folder, in any shell session."
+    # echo
+    # echo "  4. To update your CLI after you change your code:"
+    # echo "         pipx reinstall <your-cli-name>"
+    # echo
+    # echo "  5. See all installed pipx CLIs and manage them:"
+    # echo "         pipx list"
+    # echo "         pipx upgrade <your-cli-name>"
+    # echo "         pipx uninstall <your-cli-name>"
+    # echo "------------------------------------------------------------------------------------------------"
     echo "${ok}Custom Shell Helper Functions (.zsh_functions):${done}"
     echo
     echo "  1. ${info}python_setup <major.minor>${done}"
@@ -325,25 +329,28 @@ show_onboarding_summary() {
     echo "      - Example: ${example}python_new_project 3.13${done}"
     echo
     echo "  3. ${info}python_delete${done}"
-    echo "      - Cleans up all typical Python project artifacts (.venv, caches, build, etc.)."
+    echo "      - ${warn}Cleans up${done} all typical Python project artifacts (.venv, caches, build, etc.)."
     echo
     echo "  4. ${info}pipx_install_current_project${done}"
-    echo "      - Installs the current project as a global user CLI (isolated by pipx, no conflicts)."
-    echo "      - Just run inside your project folder: ${example}pipx_install_current_project${done}"
+    echo "      - Installs the ${warn}current project${done} as a global user CLI (isolated by pipx, no conflicts)."
     echo
     echo "  5. ${info}pipx_reinstall_current_project${done}"
     echo "      - Reinstalls the global user CLI after local code changes."
     echo
     echo "  6. ${info}pipx_uninstall_current_project${done}"
     echo "      - Uninstalls the global CLI for the current project."
-    echo "-------------------------------------------------------------------------------"
+    echo
+    echo "  7. ${info}pipx_check_current_project${done}"
+    echo "      - ${warn}Checks${done} if the current project is installed via pipx and reports executable locations."
+    echo "------------------------------------------------------------------------------------------------"
+    echo
 }
 
 main_python_path=$(which python3 2>/dev/null)
 resolved_link=$(readlink "$main_python_path" 2>/dev/null || echo "")
 
 if [[ -x "$BREW_PYTHON" && "$resolved_link" == *"Cellar/python@3.13"* ]]; then
-    echo "${ok}✅ Homebrew Python 3.13 detected at $BREW_PYTHON.${done}"
+    echo "${ok}✅  Homebrew Python 3.13 detected at $BREW_PYTHON.${done}"
     show_onboarding_summary
     return 0
 fi
@@ -352,7 +359,7 @@ fi
 if [[ -n "$main_python_path" ]]; then
     resolved_link=$(readlink "$main_python_path" 2>/dev/null || echo "")
     if [[ "$resolved_link" == *"Cellar/python@3.13"* ]]; then
-        echo "${ok}✅ Homebrew Python 3.13 detected at $main_python_path (via symlink).${done}"
+        echo "${ok}✅  Homebrew Python 3.13 detected at $main_python_path (via symlink).${done}"
         show_onboarding_summary
         return 0
     elif [[ "$main_python_path" == "/usr/bin/python3" ]]; then

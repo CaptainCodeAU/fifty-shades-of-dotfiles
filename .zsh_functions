@@ -129,6 +129,7 @@ EOF
 
 
 # Function to find and display runnable console scripts from pyproject.toml
+# and report on the global pipx installation status.
 # Usage: _display_project_scripts
 _display_project_scripts() {
     # Ensure pyproject.toml exists
@@ -137,21 +138,24 @@ _display_project_scripts() {
     fi
 
     # Use awk to parse the [project.scripts] section.
-    # It finds the section, then prints the key (before '=') for each line until the next section starts.
     local scripts_list
     scripts_list=$(awk '/^\[project\.scripts\]/{f=1;next} /^\[/{f=0} f && /=/{gsub(/[ \t]*=.*/, ""); gsub(/^[ \t]*/, ""); print}' pyproject.toml)
 
     # Convert the string of script names into a zsh array
     local -a scripts=("${(@f)scripts_list}")
 
-    # If scripts were found, display them using the global color variables
+    # If scripts were found, display them and the pipx status
     if (( ${#scripts[@]} > 0 )); then
         echo "--------------------------------------------------"
-        echo "${info}✅ Found ${ok}${#scripts[@]}${info} command-line script(s) available in your venv:${done}"
+        echo "${info}Found ${ok}${#scripts[@]}${info} command-line script(s) available in your local venv:${done}"
         for script_name in "${scripts[@]}"; do
-            echo "   - To run: ${ok}${script_name}${done}"
+            echo "   - To run locally: ${ok}${script_name}${done}"
         done
-        echo "${info}💡 You can also install these globally using your helper:${done} ${example}pipx_install_current_project${done}"
+        echo
+        echo "${info}Global Installation Status:${done}"
+        # This call will display installation details if found, or a
+        # prompt to install if not found, fulfilling the requirement.
+        pipx_check_current_project
     fi
 }
 
@@ -971,24 +975,53 @@ python_delete() {
 }
 
 
+# # Install current project as user-level CLI via pipx (isolated env, no conflicts)
+# pipx_install_current_project() {
+#     if [[ ! -f pyproject.toml ]]; then
+#         echo "❌ Error: 'pyproject.toml' not found in the current directory." >&2
+#         echo "   Cannot install project with pipx." >&2
+#         return 1
+#     fi
+
+#     local project_name
+#     project_name=$(awk -F'"' '/^name *=/ {gsub(/[[:space:]]/, "", $0); print $2; exit}' pyproject.toml)
+
+#     echo "🔗 Installing '$project_name' as a CLI via pipx from the current directory..."
+#     # Use '.' to refer to the current directory. This is more robust than `$(pwd)`
+#     # as it avoids potential issues with special characters in the path.
+#     if pipx install --force .; then
+#         echo "✅ '$project_name' CLI installed! Run it from any folder. To update, run: pipx_reinstall_current_project"
+#     else
+#         echo "❌ Failed to install '$project_name' via pipx. Please check the errors above."
+#         return 1
+#     fi
+# }
+
+
 # Install current project as user-level CLI via pipx (isolated env, no conflicts)
 pipx_install_current_project() {
     if [[ ! -f pyproject.toml ]]; then
-        echo "❌ Error: 'pyproject.toml' not found in the current directory." >&2
-        echo "   Cannot install project with pipx." >&2
+        echo "${err}❌ Error: 'pyproject.toml' not found in the current directory.${done}" >&2
+        return 1
+    fi
+    if [[ -z "$VIRTUAL_ENV" ]]; then
+        echo "${err}❌ Error: No active virtual environment. Activate a venv to specify the Python version for pipx.${done}" >&2
         return 1
     fi
 
     local project_name
     project_name=$(awk -F'"' '/^name *=/ {gsub(/[[:space:]]/, "", $0); print $2; exit}' pyproject.toml)
+    local python_interpreter="$VIRTUAL_ENV/bin/python"
 
-    echo "🔗 Installing '$project_name' as a CLI via pipx from the current directory..."
-    # Use '.' to refer to the current directory. This is more robust than `$(pwd)`
-    # as it avoids potential issues with special characters in the path.
-    if pipx install --force .; then
-        echo "✅ '$project_name' CLI installed! Run it from any folder. To update, run: pipx_reinstall_current_project"
+    echo "${info}🔗 Installing '$project_name' as a CLI via pipx from the current directory...${done}"
+    echo "${info}   Using Python interpreter from active venv: $python_interpreter ($($python_interpreter --version))${done}"
+    if pipx install --python "$python_interpreter" --force .; then
+        echo "${ok}✅ '$project_name' CLI installed successfully.${done}"
+        echo "--------------------------------------------------"
+        # Automatically check and report the installation status
+        pipx_check_current_project
     else
-        echo "❌ Failed to install '$project_name' via pipx. Please check the errors above."
+        echo "${err}❌ Failed to install '$project_name' via pipx. Please check the errors above.${done}"
         return 1
     fi
 }
@@ -997,20 +1030,27 @@ pipx_install_current_project() {
 # Reinstall the CLI for the current project from local source
 pipx_reinstall_current_project() {
     if [[ ! -f pyproject.toml ]]; then
-        echo "❌ Error: 'pyproject.toml' not found in the current directory." >&2
-        echo "   Cannot reinstall project with pipx." >&2
+        echo "${err}❌ Error: 'pyproject.toml' not found in the current directory.${done}" >&2
+        return 1
+    fi
+    if [[ -z "$VIRTUAL_ENV" ]]; then
+        echo "${err}❌ Error: No active virtual environment. Activate a venv to specify the Python version for pipx.${done}" >&2
         return 1
     fi
 
     local project_name
     project_name=$(awk -F'"' '/^name *=/ {gsub(/[[:space:]]/, "", $0); print $2; exit}' pyproject.toml)
+    local python_interpreter="$VIRTUAL_ENV/bin/python"
 
-    echo "♻️  Reinstalling '$project_name' from local source via pipx..."
-    # Reinstalling from local source is the same as a forced install.
-    if pipx install --force .; then
-        echo "✅ '$project_name' CLI reinstalled successfully!"
+    echo "${info}♻️  Reinstalling '$project_name' from local source via pipx...${done}"
+    echo "${info}   Using Python interpreter from active venv: $python_interpreter ($($python_interpreter --version))${done}"
+    if pipx install --python "$python_interpreter" --force .; then
+        echo "${ok}✅ '$project_name' CLI reinstalled successfully.${done}"
+        echo "--------------------------------------------------"
+        # Automatically check and report the installation status
+        pipx_check_current_project
     else
-        echo "❌ Failed to reinstall '$project_name' via pipx. Please check the errors above."
+        echo "${err}❌ Failed to reinstall '$project_name' via pipx. Please check the errors above.${done}"
         return 1
     fi
 }
@@ -1034,6 +1074,78 @@ pipx_uninstall_current_project() {
         # Add a hint that it might not be installed.
         echo "❌ Failed to uninstall '$project_name'. It might not be installed, or the name in pyproject.toml might not match the installed name."
         return 1
+    fi
+}
+
+
+# Check if the current project is installed as a user-level CLI via pipx.
+# Returns 0 (true) if found, 1 (false) if not found.
+# If found, prints the location of the executable(s).
+# Requires 'jq' to be installed for JSON parsing.
+pipx_check_current_project() {
+    # --- Prerequisite Checks ---
+    if ! command -v pipx &> /dev/null; then
+        echo "${err}❌ Error: 'pipx' command not found.${done}" >&2
+        return 1
+    fi
+    if ! command -v jq &> /dev/null; then
+        echo "${err}❌ Error: 'jq' command not found. This function requires jq.${done}" >&2
+        echo "${info}   Please install it (e.g., 'brew install jq') and try again.${done}" >&2
+        return 1
+    fi
+    if [[ ! -f pyproject.toml ]]; then
+        echo "${err}❌ Error: 'pyproject.toml' not found in the current directory.${done}" >&2
+        return 1
+    fi
+
+    # --- Extract Project Name ---
+    local project_name
+    project_name=$(awk -F'"' '/^name *=/ {gsub(/[[:space:]]/, "", $0); print $2; exit}' pyproject.toml)
+
+    if [[ -z "$project_name" ]]; then
+        echo "${err}❌ Error: Could not determine project name from pyproject.toml.${done}" >&2
+        return 1
+    fi
+
+    # --- Query pipx and Check for the Project ---
+    local pipx_json
+    pipx_json=$(pipx list --json)
+
+    if echo "$pipx_json" | jq -e ".venvs | has(\"$project_name\")" > /dev/null; then
+        echo "${ok}✅ Found: Project '$project_name' is installed via pipx.${done}"
+
+        # 1. Reliably get the binary directory using the 'pipx environment' command.
+        local pipx_bin_dir
+        pipx_bin_dir=$(pipx environment --value PIPX_BIN_DIR 2>/dev/null)
+        if [[ -z "$pipx_bin_dir" ]]; then
+            echo "${err}❌ Error: Could not determine pipx binary directory via 'pipx environment'.${done}" >&2
+            return 1
+        fi
+
+        # 2. Extract only the application names from the JSON.
+        local jq_query='.venvs."'$project_name'".metadata.main_package.apps[]'
+        local -a app_names
+        app_names=($(echo "$pipx_json" | jq -r "$jq_query" 2>/dev/null))
+
+        # 3. Manually construct the full paths to the user-facing symlinks.
+        local -a executables
+        for app_name in "${app_names[@]}"; do
+            executables+=("$pipx_bin_dir/$app_name")
+        done
+
+        if (( ${#executables[@]} > 0 )); then
+            echo "${info}   Executable(s) located at:${done}"
+            for exec_path in "${executables[@]}"; do
+                echo "   - ${example}$exec_path${done}"
+            done
+        else
+            echo "${warn}   Warning: Package is installed but no executables were found.${done}"
+        fi
+        return 0 # Represents "true"
+    else
+        echo "${info}ℹ️ Not Found: Project '$project_name' is not currently installed via pipx.${done}"
+        echo "${info}   To install it, run: ${example}pipx_install_current_project${done}"
+        return 1 # Represents "false"
     fi
 }
 
