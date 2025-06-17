@@ -1,14 +1,15 @@
 # Dotfiles: An Opinionated Python Development Environment
 
 ![Python](https://img.shields.io/badge/Python-3.8%2B-blue.svg?logo=python&logoColor=white)
-![Shell](https://img.shields.io/badge/Shell-Zsh-lightgrey.svg?logo=gnome-terminal&logoColor=white)
-![OS](https://img.shields.io/badge/OS-macOS-blue.svg?logo=apple)
 ![uv](https://img.shields.io/badge/uv-Fast-hotpink.svg)
 ![direnv](https://img.shields.io/badge/direnv-Automatic-yellow.svg)
+![pipx](https://img.shields.io/badge/pipx-Isolated-green.svg)
+![Shell](https://img.shields.io/badge/Shell-Zsh-lightgrey.svg?logo=gnome-terminal&logoColor=white)
+![OS](https://img.shields.io/badge/OS-macOS-blue.svg?logo=apple)
 
 This repository contains a set of dotfiles that create a seamless and highly automated Python development workflow on macOS. It is built around a modern toolchain that prioritizes speed, consistency, and best practices.
 
-The core principle is **convention over configuration**. By using the provided functions and aliases, you can bootstrap, manage, and clean up complex Python projects with single commands, all while `uv`, `direnv`, and `pipx` handle the heavy lifting.
+The core principle is **convention over configuration**. By using the provided functions and aliases, you can bootstrap, manage, and deploy complex Python projects with single commands, while `uv`, `direnv`, and `pipx` handle the heavy lifting.
 
 ## Core Philosophy & Key Technologies
 
@@ -20,56 +21,126 @@ This setup standardizes on a specific set of tools to create a zero-friction exp
 *   **`Zsh` + `Oh My Zsh`**: The shell foundation, providing powerful completions, plugins, and the customization framework.
 *   **`Homebrew`**: The assumed package manager for installing system-level dependencies on macOS.
 
+---
+
 ## The Workflow at a Glance
 
-This diagram illustrates the entire lifecycle of a project using this automated setup.
+### 1. New Project Scaffolding
+
+This diagram illustrates the automated steps performed by the `python_new_project` function.
 
 ```mermaid
 graph TD
-    subgraph "1. Project Creation (One-Time)"
-        A[mkdir my-project & cd my-project] --> B[run: **python_new_project 3.12**]
-        B --> C{Project Scaffolding Done}
-        C --> D[Git Repo Initialized]
-        C --> E[.venv Created & Dependencies Installed]
-        C --> F[.envrc Created for direnv]
+    subgraph "🚀 Initial Setup"
+        A["💻 User runs:<br><b>mkdir my-app && cd my-app</b>"] --> B
+        B["💻 User runs:<br><b>python_new_project 3.12</b>"]
     end
 
-    subgraph "2. Daily Development (Automatic & Seamless)"
-        G[cd my-project] --> H{direnv auto-runs .envrc}
-        H --> I["✅ **.venv is activated**"]
-        I --> J[Write code, run 'pytest', 'ruff', etc.]
-        J --> K[cd ..]
-        K --> L["❌ **.venv is deactivated**"]
+    subgraph "🤖 Automated Scaffolding"
+        B --> C{"⚙️ `uv init`, `git init`"}
+        C --> D["📄 pyproject.toml<br>📄 .gitignore<br>📄 README.md"]
+        C --> E["📁 src/my_app/__init__.py<br>📁 tests/test_main.py"]
+        C --> F["🐍 `uv venv`<br>Creates .venv"]
+        F --> G["📦 `uv pip install -e .[dev]`<br>Installs dependencies"]
+        C --> H["🗝️ `direnv`<br>Creates .envrc for auto-activation"]
     end
 
-    subgraph "3. Deployment (Optional CLI Tooling)"
-        M[run: **pipx_install_current_project**] --> N[CLI tool available globally]
+    subgraph "✅ Result"
+        I["✨ A complete, ready-to-develop<br>Python project with one command."]
     end
 
-    %% Transition from creation to daily workflow
-    B -.-> G
+    D & E & G & H --> I
+
+    classDef userAction fill:#3498db,stroke:#2980b9,stroke-width:2px,color:white;
+    classDef automation fill:#f1c40f,stroke:#f39c12,stroke-width:2px,color:black;
+    classDef artifact fill:#2ecc71,stroke:#27ae60,stroke-width:2px,color:white;
+    classDef result fill:#9b59b6,stroke:#8e44ad,stroke-width:2px,color:white;
+
+    class A,B userAction;
+    class C,F,G,H automation;
+    class D,E artifact;
+    class I result;
 ```
 
-## Key Features
+### 2. Existing Project Setup
 
-*   🚀 **Blazing Fast Automation**: Use `uv` for near-instant dependency installation and environment creation.
-*   🏗️ **Comprehensive Scaffolding**: The `python_new_project` function generates a complete, best-practice project structure with a single command.
-*   ✨ **Zero-Friction Activation**: `direnv` handles virtual environment activation and deactivation automatically, so you never have to think about it.
-*   📦 **Reproducible Environments**: Strictly uses `pyproject.toml` for dependency definition, ensuring consistent setups everywhere.
-*   🔧 **Isolated CLI Tools**: A dedicated `pipx` workflow allows you to safely install your project's command-line tools for global use without conflicts.
-*   ✅ **Best Practices by Default**: The generated projects are pre-configured with:
-    *   **Ruff** for linting and formatting.
-    *   **Pytest** for testing with coverage.
-    *   A sensible `.gitignore` and `README.md` template.
-    *   Optimized VSCode settings for an integrated experience.
+This diagram shows how `python_setup` refreshes an existing project's environment.
+
+```mermaid
+graph TD
+    subgraph "🚀 Initial State"
+        A["📁 Existing Project<br>(e.g., after `git clone`)"]
+    end
+
+    subgraph "🤖 Automated Setup"
+        A --> B["💻 User runs:<br><b>python_setup 3.12 api</b>"]
+        B --> C["🗑️ Removes existing `.venv` folder"]
+        C --> D["🐍 Creates new `.venv` using<br>the specified Python version (3.12)"]
+        D --> E["📦 Installs dependencies from `pyproject.toml`<br>including `[dev]` and specified extras (`[api]`)"]
+        E --> F["🗝️ Ensures `.envrc` exists for `direnv`"]
+    end
+
+    subgraph "✅ Result"
+        G["✨ A clean, consistent, and<br>ready-to-use development environment."]
+    end
+
+    F --> G
+
+    classDef userAction fill:#3498db,stroke:#2980b9,stroke-width:2px,color:white;
+    classDef automation fill:#e67e22,stroke:#d35400,stroke-width:2px,color:white;
+    classDef initialState fill:#95a5a6,stroke:#7f8c8d,stroke-width:2px,color:white;
+    classDef result fill:#9b59b6,stroke:#8e44ad,stroke-width:2px,color:white;
+
+    class A initialState;
+    class B userAction;
+    class C,D,E,F automation;
+    class G result;
+```
+
+### 3. Daily Development & Deployment
+
+This diagram shows the seamless daily workflow enabled by `direnv` and the `pipx` helper functions.
+
+```mermaid
+graph TD
+    subgraph "🔄 Daily Development Cycle"
+        A["💻 `cd my-project`"] --> B
+        B["✨ `direnv` auto-activates<br>the `.venv` environment"]
+        B --> C["👨‍💻 Write code, run `pytest`, `ruff format`..."]
+        C --> D["💻 `cd ..`"]
+        D --> E["✨ `direnv` auto-deactivates<br>the `.venv` environment"]
+    end
+
+    subgraph "🌍 Global CLI Deployment (Optional)"
+        C --> F["Run: `pipx_install_current_project cli`<br>to install with 'cli' extra"]
+        F --> G["✅ `my-cli` is now available globally"]
+        G --> H["... make code changes ..."]
+        H --> I["Run: `pipx_reinstall_current_project cli`<br>to update the global command"]
+        I --> J["Run: `pipx_uninstall_current_project`<br>to remove the global command"]
+    end
+
+    classDef userAction fill:#3498db,stroke:#2980b9,stroke-width:2px,color:white;
+    classDef tool fill:#e67e22,stroke:#d35400,stroke-width:2px,color:white;
+    classDef devLoop fill:#1abc9c,stroke:#16a085,stroke-width:2px,color:white;
+    classDef result fill:#9b59b6,stroke:#8e44ad,stroke-width:2px,color:white;
+
+    class A,D,F,H,I,J userAction;
+    class B,E tool;
+    class C devLoop;
+    class G result;
+```
+
+---
 
 ## Prerequisites & Installation
 
 1.  **Homebrew**: Ensure [Homebrew](https://brew.sh/) is installed on your macOS system.
 2.  **Core Tools**: Install the key technologies using Homebrew.
     ```bash
-    brew install uv direnv pipx
+    brew install uv direnv pipx jq
     ```
+    > **Note:** `jq` is required by the `pipx_check_current_project` helper function.
+
 3.  **Clone this Repository**:
     ```bash
     git clone <your-repo-url> ~/dotfiles
@@ -77,8 +148,8 @@ graph TD
 4.  **Symlink Configuration**: Link the `.zshrc` and `.zsh_functions` files to your home directory.
     ```bash
     # WARNING: This will overwrite existing files. Backup yours first!
-    ln -sf ~/dotfiles/.zshrc ~/.zshrc
-    ln -sf ~/dotfiles/.zsh_functions ~/.zsh_functions
+    ln -sf ~/dotfiles/zshrc.txt ~/.zshrc
+    ln -sf ~/dotfiles/zsh_functions.txt ~/.zsh_functions
     ```
 5.  **Enable `direnv`**: The provided `.zshrc` already contains the hook for `direnv`. If you are merging with an existing file, ensure this line is present:
     ```zsh
@@ -102,35 +173,43 @@ mkdir my-awesome-app && cd my-awesome-app
 # 2. Run the new project command with the desired Python version
 python_new_project 3.12
 ```
-
 This single command performs over a dozen steps, including `git init`, `uv venv`, `uv pip install`, and creating all necessary config files.
 
 ### 2. Setting Up an Existing Project
 
-If you clone a project or need to reset your environment, use `python_setup`.
+If you clone a project or need to reset your environment, use `python_setup`. This function intelligently installs default `dev` dependencies and any other optional extras you specify.
 
 ```bash
 # 1. Clone a repo and enter it
 git clone <url> && cd <project-name>
 
-# 2. Set up the environment
+# 2. Set up the environment using a specific Python version
+# This will install base + 'dev' dependencies.
 python_setup 3.12
+
+# 3. Set up the environment and include additional optional dependencies
+# This will install base + 'dev' + 'api' + 'web' dependencies.
+python_setup 3.12 api web
 ```
 
-This will safely remove any old `.venv`, create a new one with the specified Python version, install all dependencies from `pyproject.toml`, and ensure `direnv` is ready.
+### 3. Managing a Global Command-Line Tool
 
-### 3. Creating a Command-Line Tool
-
-If your `pyproject.toml` defines a script, you can install it as a system-wide command using `pipx`.
+If your `pyproject.toml` defines a script, you can install it as a system-wide command using `pipx`. These helpers require an active virtual environment to determine which Python version `pipx` should use.
 
 ```bash
-# Inside your project directory:
+# Inside your project directory (with .venv active via direnv):
 
-# Install the tool for the first time
-pipx_install_current_project
+# Install the tool for the first time with 'cli' extras
+pipx_install_current_project cli
+
+# Install with NO extras
+pipx_install_current_project --no-extras
 
 # After making changes to your code, reinstall to update the tool
-pipx_reinstall_current_project
+pipx_reinstall_current_project cli
+
+# Check the installation status of the current project's tool
+pipx_check_current_project
 
 # Uninstall the tool
 pipx_uninstall_current_project
@@ -138,20 +217,23 @@ pipx_uninstall_current_project
 
 ### 4. Cleaning Up a Project
 
-To completely remove all generated artifacts and return the directory to a clean state, use `python_delete`.
+To completely remove all generated artifacts and return the directory to a clean state, use `python_delete`. This is non-destructive to your source code.
 
 ```bash
-# This will remove .venv, caches, build artifacts, uv.lock, and .envrc
+# This will remove .venv, .envrc, caches, build artifacts, and uv.lock
 python_delete
 ```
+
+---
 
 ## Generated Project Structure
 
 Running `python_new_project` results in the following structure:
 
-```bash
+```
 project_name/
 ├── .env              # For local environment variables (in .gitignore)
+├── .envrc            # For direnv to automatically activate the virtual environment
 ├── .gitignore        # A comprehensive gitignore for Python projects
 ├── .venv/            # The local virtual environment managed by uv
 ├── .vscode/
@@ -171,35 +253,25 @@ project_name/
 
 ## Full Function & Alias Reference
 
-### Core Functions
+### Core Project Functions
 
 | Function | Arguments | Description |
 | :--- | :--- | :--- |
 | `python_new_project` | `<py_version>` | Scaffolds a complete new Python project in the current directory. |
-| `python_setup` | `<py_version>` | Resets/creates the `.venv` and installs dependencies for an existing project. |
-| `python_delete` | (none) | Deletes the `.venv`, caches, build artifacts, and `.envrc`. |
-| `python_deactivate` | (none) | Deactivates the current virtual environment. |
-| `get_uv_python_path` | `<py_version>` | (Helper) Prints the path to a `uv`-managed Python interpreter. |
-| `pipx_install_current_project` | (none) | Installs the current project as a global CLI tool via `pipx`. |
-| `pipx_reinstall_current_project` | (none) | Updates the globally installed CLI tool from local source. |
-| `pipx_uninstall_current_project` | (none) | Uninstalls the `pipx`-managed CLI tool for the current project. |
+| `python_setup` | `<py_version> [extra1...]` | Resets/creates the `.venv` and installs dependencies for an existing project. |
+| `python_delete` | `(none)` | Deletes the `.venv`, `.envrc`, caches, and build artifacts. |
+| `pipx_install_current_project` | `[extra1...] \| --no-extras` | Installs the current project as a global CLI tool via `pipx`. |
+| `pipx_reinstall_current_project` | `[extra1...] \| --no-extras` | Updates the globally installed CLI tool from local source. |
+| `pipx_uninstall_current_project` | `(none)` | Uninstalls the `pipx`-managed CLI tool for the current project. |
+| `pipx_check_current_project` | `(none)` | Checks if the current project is installed via `pipx` and shows executables. |
 
-### Convenience Aliases
+### Utility Aliases & Functions
 
-| Alias(es) | Maps To |
-| :--- | :--- |
-| `py_new`, `py_new_project`, `python_new` | `python_new_project` |
-| `py_setup`, `py_existing`, `python_existing` | `python_setup` |
-| `py_off`, `py_close`, `py_deactivate` | `python_deactivate` |
-| `py_delete`, `py_clean`, `py_cleanup` | `python_delete` |
+| Command | Maps To / Description | Example |
+| :--- | :--- | :--- |
+| `pip` | `uv pip` | `pip install requests` |
+| `python` | `python3` | `python --version` |
+| `ll` | `lsd -al` | `ll` |
+| `py312` | Runs command with Python 3.12 | `py312 myscript.py` |
+| `py311` | Runs command with Python 3.11 | `py311 --version` |
 
-### Python Version Shortcuts (Functions)
-
-These functions allow you to run a command with a specific `uv`-managed Python version without creating a full environment.
-
-| Command | Example Usage |
-| :--- | :--- |
-| `py313` | `py313 my_script.py` |
-| `py312` | `py312 --version` |
-| `py311` | `py311 my_script.py` |
-| `py310` | `py310 --version` |
