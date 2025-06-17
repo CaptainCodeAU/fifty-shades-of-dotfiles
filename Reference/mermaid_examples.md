@@ -50,6 +50,42 @@ graph TD
 ---
 
 ```mermaid
+flowchart TD
+    A["👤 Ω Focus User"] -->|"1️⃣ Complete task & record"| B
+    B["🧠 Ω Brain"] -->|"2️⃣ Process video"| C
+    C{"🛡️ SN24 Validator API"}
+    C -->|"3️⃣ Score submission"| A
+    A -->|"4️⃣ List video"| E["🎥 Focus Videos Marketplace"]
+    F["⛏️ SN24 Miner"] -->|"5️⃣ Purchase video"| E
+    F -->|"6️⃣ Transfer TAO"| G["💰 User Wallet"]
+    F -.->|"7️⃣ Provide tx hash"| C
+    C -.->|"8️⃣ Verify transaction"| I
+    I["🔍 SN24 Validator"] -.->|"9️⃣ Check purchases & set weights"| H{"⛓️ Bittensor Chain"}
+    H -.->|"🔟 Reimburse miners"| F
+
+    classDef user fill:#30336b,stroke:#333,stroke-width:2px,color:white;
+    classDef brain fill:#eeac99,stroke:#333,stroke-width:2px,color:white;
+    classDef api fill:#e06377,stroke:#333,stroke-width:2px,color:white;
+    classDef market fill:#c83349,stroke:#333,stroke-width:2px,color:white;
+    classDef miner fill:#5b9aa0,stroke:#333,stroke-width:2px,color:white;
+    classDef validator fill:#f0932b,stroke:#333,stroke-width:2px,color:white;
+    classDef chain fill:#6ab04c,stroke:#333,stroke-width:2px,color:white;
+    classDef external fill:#61c0bf,stroke:#333,stroke-width:2px,color:white;
+
+    class A user;
+    class B brain;
+    class C api;
+    class D,E market;
+    class F miner;
+    class G user;
+    class H chain;
+    class I validator;
+    class J external;
+```
+
+---
+
+```mermaid
 graph TD
     A[Regular Rectangle]
     B(Round Edge Rectangle)
