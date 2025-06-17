@@ -1,11 +1,13 @@
 # Dotfiles: An Opinionated Python Development Environment
 
-![Python](https://img.shields.io/badge/Python-3.8%2B-blue.svg?logo=python&logoColor=white)
-![uv](https://img.shields.io/badge/uv-Fast-hotpink.svg)
-![direnv](https://img.shields.io/badge/direnv-Automatic-yellow.svg)
-![pipx](https://img.shields.io/badge/pipx-Isolated-green.svg)
-![Shell](https://img.shields.io/badge/Shell-Zsh-lightgrey.svg?logo=gnome-terminal&logoColor=white)
-![OS](https://img.shields.io/badge/OS-macOS-blue.svg?logo=apple)
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.8%2B-blue.svg?logo=python&logoColor=white" alt="Python">
+  <img src="https://img.shields.io/badge/uv-Fast-hotpink.svg" alt="uv">
+  <img src="https://img.shields.io/badge/direnv-Automatic-yellow.svg" alt="direnv">
+  <img src="https://img.shields.io/badge/pipx-Isolated-green.svg" alt="pipx">
+  <img src="https://img.shields.io/badge/Shell-Zsh-lightgrey.svg?logo=gnome-terminal&logoColor=white" alt="Shell">
+  <img src="https://img.shields.io/badge/OS-macOS-blue.svg?logo=apple" alt="OS">
+</p>
 
 This repository contains a set of dotfiles that create a seamless and highly automated Python development workflow on macOS. It is built around a modern toolchain that prioritizes speed, consistency, and best practices.
 

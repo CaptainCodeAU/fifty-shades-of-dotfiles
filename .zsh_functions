@@ -1013,7 +1013,17 @@ python_setup() {
     create_readme "$project_name" "$req_python_version"
     create_gitignore
     update_vscode_settings
-    if [[ ! -f ".env" ]]; then echo "# Environment variables for $project_name" > .env; fi
+    if [[ ! -f ".env" ]]; then
+        if [[ -f ".env.example" ]]; then
+            echo "Creating .env from .env.example template..."
+            cp .env.example .env
+        else
+            echo "Creating a new, empty .env file..."
+            echo "# Environment variables for $project_name" > .env
+        fi
+    else
+        echo ".env file already exists. Skipping creation."
+    fi
 
     # --- 6. Dependency Installation ---
     echo "--------------------------------------------------"
