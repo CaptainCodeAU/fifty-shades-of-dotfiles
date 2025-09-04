@@ -321,5 +321,9 @@ if [[ -f ~/.zshrc.private ]]; then
     source ~/.zshrc.private
 fi
 
-. "$HOME/.local/bin/env"
-[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
+# ==============================================================================
+# END OF MANAGED CONFIGURATION !
+# Any configuration below this line was likely added automatically by an
+# external script or installer. It should be reviewed, moved to the correct
+# file (e.g., ~/.zshrc.private), or deleted to keep this file clean.
+# ==============================================================================
