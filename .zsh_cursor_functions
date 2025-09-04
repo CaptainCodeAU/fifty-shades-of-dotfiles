@@ -1,8 +1,8 @@
 # ==============================================================================
-#  Cursor Editor Integration for Tmux (FULLY AUTOMATED)
+#  Cursor Editor Integration for Tmux (FULLY AUTOMATED, RACE-CONDITION-PROOF)
 # ==============================================================================
-# This file provides functions to automatically sync the special environment
-# from a working Cursor terminal into any new or existing tmux session.
+# This file provides a robust, automated solution to sync the Cursor
+# environment into tmux sessions and correct for shell startup race conditions.
 
 # --- UI Helpers ---
 autoload -U colors && colors
@@ -39,32 +39,51 @@ _load_cursor_env_silent() {
 #  2. TMUX WRAPPER FUNCTION
 # ==============================================================================
 
-# This function intercepts the `tmux` command. If the user is trying to attach,
-# it first saves the current, correct environment before letting tmux proceed.
-tmux() {
-    # Check if the first argument is 'attach', 'attach-session', or 'a'.
-    if [[ "$1" == "attach" || "$1" == "attach-session" || "$1" == "a" ]]; then
-        # Silently save the up-to-date environment from the client shell.
-        _save_cursor_env_silent
-    fi
+# # This function intercepts the `tmux` command. If the user is trying to attach,
+# # it first saves the current, correct environment before letting tmux proceed.
+# tmux() {
+#     # Check if the first argument is 'attach', 'attach-session', or 'a'.
+#     if [[ "$1" == "attach" || "$1" == "attach-session" || "$1" == "a" ]]; then
+#         # Silently save the up-to-date environment from the client shell.
+#         _save_cursor_env_silent
+#     fi
     
-    # Execute the actual tmux command, passing all arguments to it.
-    # 'command' is used to bypass this wrapper function and avoid an infinite loop.
-    # command tmux "$@"
-	command tmux -f ~/.tmux.conf "$@"
+#     # Execute the actual tmux command, passing all arguments to it.
+#     # 'command' is used to bypass this wrapper function and avoid an infinite loop.
+#     # command tmux "$@"
+# 	command tmux -f ~/.tmux.conf "$@"
+# }
+
+# This function intercepts the `tmux` command to ensure the environment
+# is fresh before attaching or creating sessions.
+tmux() {
+    # If we are in a valid Cursor terminal, always save the fresh environment first.
+    # This is cheap and guarantees the cache is always up-to-date for tmux.
+    _save_cursor_env_silent
+    
+    # Execute the actual tmux command with all its arguments.
+    command tmux -f ~/.tmux.conf "$@"
 }
 
 
 # ==============================================================================
-#  3. SHELL STARTUP AUTOMATION (for new panes)
+#  3. SHELL STARTUP AUTOMATION (for new panes and race conditions)
 # ==============================================================================
 
 # This logic runs every time a new zsh shell is initialized.
 if [[ -n "$TMUX" ]]; then
-    # We are inside a NEW tmux pane. LOAD the environment silently.
+    # We are inside a NEW tmux pane. Always LOAD the environment silently.
     _load_cursor_env_silent
 elif [[ -n "$VSCODE_INJECTION" || -n "$VSCODE_IPC_HOOK_CLI" ]]; then
-    # We are in a main Cursor/VSCode terminal. SAVE the environment silently.
-    # This is a fallback to ensure the cache is fresh.
+    # We are in a main Cursor/VSCode terminal (but not tmux).
+    # This block solves the race condition.
+    
+    # 1. LOAD the last known good environment first. This immediately corrects
+    #    the state of the current shell in case the environment variables
+    #    haven't been injected yet.
+    _load_cursor_env_silent
+    
+    # 2. SAVE the current environment. This updates the cache for future
+    #    tmux sessions with the freshest possible variables.
     _save_cursor_env_silent
 fi
