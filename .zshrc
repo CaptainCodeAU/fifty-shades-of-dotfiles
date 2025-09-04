@@ -201,7 +201,8 @@ command -v nvm &>/dev/null && load-nvmrc
 # ==============================================================================
 # --- Load Custom Functions ---
 # Make your helper functions available before they are used by aliases or other scripts.
-for func_file in ~/.zsh_python_functions ~/.zsh_node_functions ~/.zsh_docker_functions; do
+# Added ~/.zsh_cursor_functions to this loop
+for func_file in ~/.zsh_python_functions ~/.zsh_node_functions ~/.zsh_docker_functions ~/.zsh_cursor_functions; do
     [ -f "$func_file" ] && source "$func_file"
 done
 
