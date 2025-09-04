@@ -50,7 +50,8 @@ tmux() {
     
     # Execute the actual tmux command, passing all arguments to it.
     # 'command' is used to bypass this wrapper function and avoid an infinite loop.
-    command tmux "$@"
+    # command tmux "$@"
+	command tmux -f ~/.tmux.conf "$@"
 }
 
 
