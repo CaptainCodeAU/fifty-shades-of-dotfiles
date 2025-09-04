@@ -1,4 +1,6 @@
-# .zsh_functions
+# ~/.zsh_python_functions
+# Source this file in ~/.zshrc
+
 # ==============================================================================
 # Helper Functions
 # ==============================================================================
@@ -67,6 +69,10 @@ update_vscode_settings() {
 	"editor.formatOnSave": true,
 	"editor.linkedEditing": true,
 	"editor.accessibilitySupport": "off",
+    "editor.insertSpaces": false,
+	"editor.tabSize": 4,
+	"editor.detectIndentation": false,
+	"css.lint.unknownAtRules": "ignore",
 	"workbench.startupEditor": "none",
 	"workbench.editor.enablePreview": false,
 	"explorer.confirmDragAndDrop": false,
@@ -139,10 +145,10 @@ _display_project_scripts() {
 
     # Use awk to parse the [project.scripts] section.
     local scripts_list
-    scripts_list=$(awk '/^\[project\.scripts\]/{f=1;next} /^\[/{f=0} f && /=/{gsub(/[ \t]*=.*/, ""); gsub(/^[ \t]*/, ""); print}' pyproject.toml)
+    scripts_list=$(awk '/^\[project\.scripts\]/{f=1;next} /^\[/{f=0} f && /=/{gsub(/[[:space:]]*=.*/, ""); gsub(/^[[:space:]]*/, ""); print}' pyproject.toml)
 
-    # Convert the string of script names into a zsh array
-    local -a scripts=("${(@f)scripts_list}")
+    # Convert the string of script names into a zsh array, automatically discarding empty lines.
+    local -a scripts=(${(f)scripts_list})
 
     # If scripts were found, display them and the pipx status
     if (( ${#scripts[@]} > 0 )); then
@@ -303,6 +309,7 @@ yarn.lock
 # Other common temp files
 tmp/
 temp/
+_ignore/
 EOF
     else
         echo ".gitignore already exists. (Skipping creation)"
@@ -393,7 +400,7 @@ Brief description of your project.
     # This command updates dependencies based on pyproject.toml constraints
     # (Currently experimental or may require specific uv workflows)
     # Alternatively, manually update versions in pyproject.toml and run:
-    uv pip install -e .[dev]
+    uv pip install --prerelease=allow -e .[dev]
     ```
 *   **Sync environment with lock file (if using one):**
     ```bash
@@ -673,9 +680,9 @@ EOF
     # --- 7. Install dependencies (including optional dev dependencies) ---
     echo "--------------------------------------------------"
     echo "Installing dependencies (including 'dev' group)..."
-    echo "Running: uv pip install -e '.[dev]'"
+    echo "Running: uv pip install --prerelease=allow -e '.[dev]'"
     # Install editable with the 'dev' extras
-    if ! uv pip install -e '.[dev]'; then
+    if ! uv pip install --prerelease=allow -e '.[dev]'; then
         echo "Warning: Failed to install dependencies (perhaps 'dev' group is empty or error occurred)." >&2
         echo "You may need to install dependencies manually using 'uv pip install ...'"
         # Don't necessarily fail the whole script here, let user fix deps
@@ -775,167 +782,6 @@ _display_pyproject_hints() {
         fi
     fi
 }
-
-
-# # Function to set up an existing Python project using uv
-# # Usage: python_setup <PYTHON_VERSION> (e.g., 3.13)
-# # Creates/recreates .venv, activates it for the current session,
-# # installs dependencies, and ensures .envrc exists for direnv.
-# python_setup() {
-#     # --- Require exactly one argument: the Python version ---
-#     if [ "$#" -lt 1 ]; then
-#         echo "Error: Python version is required." >&2
-#         echo "Usage: python_setup <PYTHON_VERSION> (e.g., 3.13)" >&2
-#         return 1
-#     fi
-
-#     local req_python_version=$1
-#     local project_name=$(basename "$PWD")
-#     local python_interpreter_path=""
-
-#     # --- Check if uv is installed ---
-#     if ! command -v uv &> /dev/null; then
-#         echo "Error: 'uv' command not found." >&2
-#         echo "Please install uv first. See: https://github.com/astral-sh/uv" >&2
-#         return 1
-#     fi
-
-#     # --- Validate Python Version Format ---
-#     if [[ -z "$PYTHON_VERSION_PATTERN" ]]; then
-#         # echo "Warning: PYTHON_VERSION_PATTERN not defined. Using default: ^3\.(1[0-3]|[7-9])(\.[0-9]+)?$" >&2
-#         echo "Warning: PYTHON_VERSION_PATTERN not defined. Using default: ^3\.(8|9|1[0-3])$" >&2
-#         # PYTHON_VERSION_PATTERN="^3\.(1[0-3]|[7-9])(\.[0-9]+)?$" # Fallback (adjust range)
-#         PYTHON_VERSION_PATTERN="^3\.(8|9|1[0-3])$" # Fallback (adjust range)
-#     fi
-#     if [[ ! "${req_python_version}" =~ ${PYTHON_VERSION_PATTERN} ]]; then
-#         echo "Error: Invalid or unsupported Python version: '${req_python_version}'." >&2
-#         echo "Supported range roughly: ${PYTHON_MIN_VERSION:-3.7}-${PYTHON_MAX_VERSION:-3.13}" >&2
-#         echo "Usage: python_setup <major.minor>" >&2
-#         return 1
-#     fi
-
-#     # --- Check if requested Python version is installed via uv ---
-#     python_interpreter_path=$(get_uv_python_path "${req_python_version}")
-#     if [[ $? -ne 0 ]]; then
-#         # Error message already printed by get_uv_python_path
-#         return 1
-#     fi
-#     echo "Using Python interpreter: $python_interpreter_path"
-
-#     # # --- Check for pyproject.toml or requirements.txt ---
-#     # if [[ ! -f "pyproject.toml" ]] && [[ ! -f "requirements.txt" ]]; then
-#     #     echo "Error: No 'pyproject.toml' or 'requirements.txt' found." >&2
-#     #     echo "Make sure you are in a Python project directory." >&2
-#     #     return 1
-#     # fi
-
-#     # --- Check for pyproject.toml or requirements.txt (Warn if missing, but proceed) ---
-#     if [[ ! -f "pyproject.toml" ]] && [[ ! -f "requirements.txt" ]]; then
-#         echo "Warning: No 'pyproject.toml' or 'requirements.txt' found." >&2
-#         echo "Proceeding with venv creation, but dependency installation might be skipped or fail." >&2
-#     fi
-
-#     # --- Proceed with venv creation/recreation ---
-#     # Since version argument is required, we always perform these steps.
-#     echo "--------------------------------------------------"
-#     echo "Setting up existing Python project: $project_name"
-#     echo "Using Python: $req_python_version ($python_interpreter_path)"
-#     echo "--------------------------------------------------"
-
-#     # 1. Create/Update virtual environment (Remove old one first)
-#     if [[ -d ".venv" ]]; then
-#         echo "Removing existing .venv directory..."
-#         rm -rf ".venv"
-#     fi
-#     echo "Creating virtual environment (.venv)..."
-#     # DEBUG: Show the actual command with variables expanded
-#     # echo "DEBUG: Running -> uv venv --prompt \"$(basename "$PWD")\" -p \"$python_interpreter_path\""
-#     if ! uv venv --prompt "$(basename "$PWD")" -p "$python_interpreter_path"; then
-#         echo "Error: Failed to create virtual environment." >&2
-#         return 1
-#     fi
-
-#     # === Ensure supporting files exist BEFORE installing ===
-#     # 2. Create supporting files if they don't exist
-#     echo "--------------------------------------------------"
-#     echo "Ensuring supporting files exist (README.md, .gitignore, etc.)..."
-#     # Ensure README exists as it's often referenced in pyproject.toml
-#     create_readme "$project_name" "$req_python_version" # Use helper function
-#     create_gitignore # Use helper function
-#     update_vscode_settings # Use helper function
-#     if [[ ! -f ".env" ]]; then
-#         echo "# Environment variables for $project_name" > .env
-#     fi
-#     # =================================================================
-
-#     # 4. Install dependencies (Now README.md should exist)
-#     echo "--------------------------------------------------"
-#     echo "Installing/syncing dependencies..."
-#     local install_cmd=""
-#     if [[ -f "pyproject.toml" ]]; then
-#         # Check if optional dev dependencies exist in pyproject.toml
-#         if grep -q '\[project.optional-dependencies.dev\]' pyproject.toml; then
-#             echo "Found dev dependencies. Running: uv pip install -e '.[dev]'"
-#             install_cmd="uv pip install -e '.[dev]'"
-#         else
-#             echo "No dev dependencies found. Running: uv pip install -e ."
-#             install_cmd="uv pip install -e ."
-#         fi
-#     elif [[ -f "requirements.txt" ]]; then
-#         echo "Found requirements.txt. Running: uv pip sync requirements.txt"
-#         install_cmd="uv pip sync requirements.txt"
-#     fi
-
-#     if [[ -n "$install_cmd" ]]; then
-#         if ! eval "$install_cmd"; then
-#             echo "Error: Failed to install dependencies." >&2
-#             # Keep venv active for troubleshooting in current session
-#             return 1
-#         fi
-#     else
-#         echo "Warning: Could not determine installation command (no pyproject.toml or requirements.txt?)." >&2
-#     fi
-
-#     # 5. Create .envrc for direnv if direnv is available
-#     echo "--------------------------------------------------"
-#     echo "Ensuring .envrc for direnv exists..."
-#     if command -v direnv &> /dev/null; then
-#         if [[ ! -f ".envrc" ]]; then
-#             echo "Creating .envrc file with 'source .venv/bin/activate'"
-#             echo "(and adding project-based VIRTUAL_ENV_PROMPT' to it)."
-#             echo "export VIRTUAL_ENV_PROMPT=\"($(basename \"\$PWD\"))\"" > .envrc
-#             echo "source .venv/bin/activate" >> .envrc
-#             if [[ -t 1 ]]; then
-#                 echo "Running: direnv allow ."
-#                 direnv allow .
-#             fi
-#         else
-#             echo ".envrc already exists. Skipping creation."
-#             # Optionally, uncomment below to always allow:
-#             echo "Refreshing direnv trust: direnv allow ."
-#             direnv allow .
-#         fi
-#     else
-#         echo "direnv command not found. Skipping .envrc creation."
-#         echo "Install direnv for automatic environment activation: https://direnv.net/"
-#     fi
-
-#     # --- Final Success Messages ---
-#     echo "--------------------------------------------------"
-#     echo "✅ Project '$project_name' setup complete!"
-#     echo "✅ Virtual environment (.venv) created/reset."
-#     echo "✅ Environment is active (for this session)."
-#     echo "✅ Dependencies installed/synced."
-#     # Use helper function to display runnable console scripts
-#     _display_project_scripts
-#     echo "--------------------------------------------------"
-#     # echo "💡 If '.envrc' was created/exists, direnv will manage activation automatically on 'cd'."
-#     # echo "   Remember to run 'direnv allow .' if you haven't already for this directory."
-#     # echo "--------------------------------------------------"
-
-#     return 0
-# }
-
 
 
 # Function to set up an existing Python project using uv
@@ -1041,11 +887,11 @@ python_setup() {
         if (( ${#install_features[@]} > 0 )); then
             local features_str=$(printf ",%s" "${install_features[@]}")
             features_str=${features_str:1}
-            install_cmd="uv pip install -e '.[${features_str}]'"
+            install_cmd="uv pip install --prerelease=allow -e '.[${features_str}]'"
             echo "${info}   Installing project with extras: [${features_str}]${done}"
             echo "   Executing: ${example}${install_cmd}${done}"
         else
-            install_cmd="uv pip install -e ."
+            install_cmd="uv pip install --prerelease=allow -e ."
             echo "${info}   Installing project with no optional extras.${done}"
             echo "   Executing: ${example}${install_cmd}${done}"
         fi
@@ -1401,13 +1247,3 @@ pipx_check_current_project() {
         return 1 # Represents "false"
     fi
 }
-
-
-
-# Add Python version variables (can be overridden in .zshrc if needed)
-# Define default min/max versions if not set by .zshrc
-: ${PYTHON_MIN_VERSION:="3.8"}
-: ${PYTHON_MAX_VERSION:="3.13"}
-# Define pattern carefully to match only major.minor (adjust range as needed)
-# This matches 3.8, 3.9, 3.10, 3.11, 3.12, 3.13
-: ${PYTHON_VERSION_PATTERN:="^3\.(8|9|1[0-3])$"}

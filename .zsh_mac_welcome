@@ -1,0 +1,206 @@
+# ~/.zsh_mac_welcome
+# ==============================================================================
+#  macOS Environment Health Check & Onboarding Script
+# ==============================================================================
+
+# --- Homebrew Python locations ---
+BREW_PYTHON_CELLAR_PATH="$HOMEBREW_PREFIX/Cellar/python@3.13" # Uses HOMEBREW_PREFIX from .zshrc
+
+
+# --- Function to display onboarding summary ---
+show_onboarding_summary() {
+    echo "${info}🚀  RECOMMENDED WORKFLOW: Use 'uv' for all Python project work!${done}"
+    echo "------------------------------------------------------------------------------------------------"
+    echo "${ok}Custom Python Helper Functions (.zsh_python_functions):${done}"
+    echo "  - ${info}python_new_project, python_setup, python_delete${done}"
+    echo "  - ${info}pipx_install_current_project, pipx_reinstall_current_project, etc.${done}"
+    echo
+    echo "${ok}Custom Node.js Helper Functions (.zsh_node_functions):${done}"
+    echo "  - ${info}node_new_project, node_setup, node_clean${done}"
+    echo
+    echo "${ok}Custom Docker Helper Functions (.zsh_docker_functions):${done}"
+    echo "  - ${info}docker_clean, docker_stats, docker_logs, docker_shell, docker_ip${done}"
+    echo "------------------------------------------------------------------------------------------------"
+    echo
+}
+
+
+# --- Function for Python Health Check (Full version) ---
+show_python_health_check() {
+    echo
+    echo "${info}🛡️  Python Environment Health Check:${done}"
+    # --- Check for python3 executable ---
+    if ! command -v python3 &>/dev/null; then
+        echo "${err}    FATAL: python3 command not found in PATH.${done}"
+        # Offer to install Homebrew if it's missing, as it's the primary way to get Python
+        if ! command -v brew &> /dev/null; then
+            echo "${err}    Homebrew is not installed. Please install it to manage Python: https://brew.sh/${done}"
+        fi
+        return 1
+    fi
+
+    # --- Report current python3 status ---
+    local main_python_path
+    main_python_path=$(command which python3)
+    echo "    System 'python3' is at: $main_python_path"
+    echo -n "    It resolves to version: "
+    command python3 --version
+
+    # --- Check if it's already the correct Homebrew version ---
+    local resolved_link
+    resolved_link=$(readlink "$main_python_path" 2>/dev/null || echo "$main_python_path")
+    if [[ "$resolved_link" == *"/Cellar/python@3.13"* ]]; then
+        echo "${ok}✅  Your 'python3' is correctly linked to Homebrew's python@3.13.${done}"
+        return 0 # Success, no more action needed
+    fi
+
+    # --- If not, start diagnostic and interactive fixing ---
+    # Handle specific "wrong" versions
+    if [[ "$main_python_path" == "/usr/bin/python3" ]]; then
+        echo "${warn}⚠️  WARNING: Your 'python3' is the system default, not Homebrew's version.${done}"
+    else
+        echo "${warn}⚠️  WARNING: Your 'python3' is at '$main_python_path' and is NOT Homebrew's python@3.13.${done}"
+    fi
+
+    # Check for Homebrew
+    if ! command -v brew &> /dev/null; then
+        echo "${err}    Homebrew is not installed. Cannot manage python@3.13 automatically.${done}"
+        return 1
+    fi
+
+    # --- Interactive Prompts ---
+    local brew_python_cellar_path="$HOMEBREW_PREFIX/Cellar/python@3.13"
+    # Case 1: python@3.13 is installed but not linked
+    if [ -d "$brew_python_cellar_path" ]; then
+        echo "${info}    Homebrew Python 3.13 is installed but not active.${done}"
+        if [[ -t 1 ]]; then # Only prompt in interactive shells
+            read "REPLY?    👉 Would you like to link Homebrew Python 3.13 as your default 'python3'? [y/N] "
+            case "$REPLY" in
+                [yY][eE][sS]|[yY])
+                    echo "${info}    Linking python@3.13...${done}"
+                    brew link python@3.13 --overwrite --force
+                    if [[ $? -eq 0 ]]; then
+                        echo "${ok}    ✅ python@3.13 linked! Please restart your terminal.${done}"
+                    else
+                        echo "${err}    ❌ Failed to link python@3.13. See brew errors above.${done}"
+                    fi
+                    ;;
+                *)
+                    echo "${warn}    Skipping Homebrew Python linking. 'uv' will still function independently.${done}"
+                    ;;
+            esac
+        fi
+    # Case 2: python@3.13 is not installed at all
+    else
+        echo "${err}    Homebrew Python 3.13 is not installed.${done}"
+        if [[ -t 1 ]]; then # Only prompt in interactive shells
+            read "REPLY?    👉 Would you like to install it now with 'brew install python@3.13'? [y/N] "
+            case "$REPLY" in
+                [yY][eE][sS]|[yY])
+                    brew install python@3.13
+                    ;;
+                *)
+                    echo "${warn}    Skipping Homebrew Python installation.${done}"
+                    ;;
+            esac
+        fi
+    fi
+}
+
+
+# --- Function for Node.js Health Check ---
+show_node_health_check() {
+    echo
+    echo "${info}🛡️  Node.js Environment Health Check:${done}"
+    if ! command -v nvm &>/dev/null; then
+        echo "${err}    FATAL: nvm command not found.${done}"; return 1;
+    fi
+
+    local active_node=$(nvm current)
+    if [[ "$active_node" == "none" ]]; then
+        local default_version=$(nvm version default)
+        if [[ "$default_version" == "N/A" ]]; then
+            echo "${warn}⚠️  No active or default Node.js version set.${done}"
+            echo "${info}    Run '${example}nvm install --lts${info}' to get started.${done}"
+        else
+            echo "${warn}    No active Node.js version. Default is set to: ${ok}${default_version}${done}"
+            echo "${info}    A version will be activated automatically when you 'cd' into a project with an .nvmrc file.${done}"
+        fi
+    else
+        echo "${ok}✅  Active Node.js version: ${active_node}${done}"
+        echo "    npm version: $(npm -v 2>/dev/null || echo 'N/A')"
+        echo "    pnpm version: $(pnpm -v 2>/dev/null || echo 'N/A') (Managed by Corepack)"
+    fi
+}
+
+
+# --- Main Execution ---
+show_python_health_check
+show_node_health_check
+echo
+show_onboarding_summary
+
+
+# echo
+# echo "${info}🛡️  Python Environment Health Check:${done}"
+
+# # --- Show current python3 and its version, IGNORING aliases ---
+# if ! command -v python3 >/dev/null 2>&1; then # <-- Use `command`
+#     echo "${err}    FATAL: python3 command not found in PATH.${done}"
+#     return 1
+# fi
+# echo "    System 'python3' is at: $(command which python3)" # <-- Use `command`
+# echo -n "    It resolves to version: "
+# command python3 --version # <-- Use `command`
+
+# # --- Check if the active python3 is the one managed by Homebrew ---
+# main_python_path=$(command which python3) # <-- Use `command`
+# resolved_link=$(readlink "$main_python_path" 2>/dev/null || echo "$main_python_path")
+
+# if [[ "$resolved_link" == *"/Cellar/python@3.13"* ]]; then
+#     echo "${ok}✅  Your 'python3' is correctly linked to Homebrew's python@3.13.${done}"
+#     show_onboarding_summary
+#     return 0 # Exit the script successfully
+# fi
+
+# # --- If not, handle other cases ---
+# if [[ "$main_python_path" == "/usr/bin/python3" ]]; then
+#     echo "${warn}⚠️  WARNING: Your 'python3' is the system default, not Homebrew's version.${done}"
+# else
+#     echo "${warn}⚠️  WARNING: Your 'python3' is at '$main_python_path' and is NOT Homebrew's python@3.13.${done}"
+# fi
+
+# # --- Check if Homebrew's python@3.13 is installed but just not linked ---
+# if command -v brew >/dev/null && [ -d "$BREW_PYTHON_CELLAR_PATH" ]; then
+#     echo "${info}    Homebrew Python 3.13 is installed but not active.${done}"
+#     read "REPLY?    👉 Would you like to link Homebrew Python 3.13 as your default 'python3'? [y/N] "
+#     case "$REPLY" in
+#         [yY][eE][sS]|[yY])
+#             echo "${info}    Linking python@3.13...${done}"
+#             brew link python@3.13 --overwrite --force
+#             if [[ $? -eq 0 ]]; then
+#                 echo "${ok}    ✅ python@3.13 linked! Please restart your terminal.${done}"
+#             else
+#                 echo "${err}    ❌ Failed to link python@3.13. See brew errors above.${done}"
+#             fi
+#             ;;
+#         *)
+#             echo "${warn}    Skipping Homebrew Python linking. 'uv' will still function independently.${done}"
+#             ;;
+#     esac
+# # --- Check if it's not installed at all ---
+# elif command -v brew >/dev/null; then
+#     echo "${err}    Homebrew Python 3.13 is not installed.${done}"
+#     read "REPLY?    👉 Would you like to install it now with 'brew install python@3.13'? [y/N] "
+#     case "$REPLY" in
+#         [yY][eE][sS]|[yY])
+#             brew install python@3.13
+#             ;;
+#         *)
+#             echo "${warn}    Skipping Homebrew Python installation.${done}"
+#             ;;
+#     esac
+# else
+#     echo "${err}    Homebrew is not installed. Cannot manage python@3.13 automatically.${done}"
+# fi
+

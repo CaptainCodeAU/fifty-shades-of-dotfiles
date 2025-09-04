@@ -1,447 +1,300 @@
 # ==============================================================================
-# Environment Variables
+#  Unified Zsh Configuration for macOS, Linux & WSL
 # ==============================================================================
+
+# ==============================================================================
+# 1. Environment Variables & OS Detection
+# ==============================================================================
+# --- Cross-Platform Environment ---
 export LANG=en_AU.UTF-8
 export LC_ALL=en_AU.UTF-8
-# Note: Setting LC_ALL typically makes other LC_* vars redundant, but explicit is fine.
-# export LC_COLLATE=en_AU.UTF-8
-# export LC_CTYPE=en_AU.UTF-8
-# export LC_MESSAGES=en_AU.UTF-8
-# export LC_MONETARY=en_AU.UTF-8
 
-# Prevent pip from running outside a virtual environment
+# --- Python ---
 export PIP_REQUIRE_VIRTUALENV=true
+export PIP_DISABLE_PIP_VERSION_CHECK=1
+export PROMPT_EOL_MARK="" # Disable Powerlevel10k instant prompt
+: ${PYTHON_MIN_VERSION:="3.8"}
+: ${PYTHON_MAX_VERSION:="3.13"}
+: ${PYTHON_DEFAULT_VERSION:="$PYTHON_MAX_VERSION"}
+: ${PYTHON_VERSION_PATTERN:="^3\.(8|9|1[0-3])$"}
 
-# Opt-out of .NET CLI telemetry
-export DOTNET_CLI_TELEMETRY_OPTOUT=1
+# --- Telemetry Opt-Out ---
+export ANONYMIZED_TELEMETRY=false; export ARTILLERY_DISABLE_TELEMETRY=true
+export AWS_CLI_TELEMETRY_OPTOUT=1; export AZURE_TELEMETRY_OPTOUT=true
+export CLOUDSDK_CORE_DISABLE_USAGE_REPORTING=true; export CREWAI_DISABLE_TELEMETRY=true
+export DISABLE_TELEMETRY=true; export DOTNET_CLI_TELEMETRY_OPTOUT=true
+export DOTNET_NOLOGO=true; export GRAPHITI_TELEMETRY_ENABLED=false
+export JUPYTER_NO_TELEMETRY=1; export MEM0_TELEMETRY_DISABLED=true
+export N8N_DIAGNOSTICS_ENABLED=false; export NETLIFY_TELEMETRY_DISABLED=1
+export NEW_RELIC_TELEMETRY_ENABLED=false; export NEXT_TELEMETRY_DISABLED=1
+export OTEL_SDK_DISABLED=true; export PLAUSIBLE_TELEMETRY_DISABLED=true
+export POSTHOG_TELEMETRY_DISABLED=true; export TELEMETRY=false
+export TELEMETRY_DISABLED=true; export TELEMETRY_ENABLED=false
+export TELEMETRY_OPTOUT=true; export VSCODE_TELEMETRY_OPTOUT=1
 
-# Disable telemetry for the mem0 library (which includes browser-use)
-export MEM0_TELEMETRY_DISABLED=true
-export ANONYMIZED_TELEMETRY=false
+# --- PHP ---
+export WP_CLI_PHP_ARGS="-d error_reporting=E_ERROR^E_PARSE^E_COMPILE_ERROR -d display_errors=0"
 
 # ==============================================================================
-# UI & Color Helpers
+# 2. OS Detection & Environment-Specific Settings
 # ==============================================================================
-# Load colors and define global variables for consistent script output.
-# These will be available to .zshrc and all functions sourced from .zsh_functions.
+export IS_MAC=false
+export IS_WSL=false
+export IS_LINUX=false
+export HOMEBREW_PREFIX=""
+
+case "$(uname -s)" in
+    Darwin)
+        IS_MAC=true
+        # Set Homebrew prefix path for Apple Silicon or Intel
+        [[ -d /opt/homebrew ]] && HOMEBREW_PREFIX="/opt/homebrew" || HOMEBREW_PREFIX="/usr/local"
+        ;;
+    Linux)
+        if [[ "$(uname -r)" =~ [Ww][Ss][Ll] || -f /proc/sys/fs/binfmt_misc/WSLInterop ]]; then
+            IS_WSL=true
+            export DIRENV_LOG_FORMAT=""
+            export DIRENV_WARN_ON_PS1=0
+            export UV_LINK_MODE=copy # For NTFS compatibility
+        else
+            IS_LINUX=true
+        fi
+        ;;
+esac
+
+# ==============================================================================
+# 3. Onboarding & Dependency Checks (Linux Only)
+# ==============================================================================
+# On first run in a new Linux VM, this will check for and offer to install tools.
+if [[ "$IS_LINUX" == "true" && -f ~/.zsh_onboarding && -z "$_ONBOARDING_COMPLETE" ]]; then
+    source ~/.zsh_linux_onboarding
+    export _ONBOARDING_COMPLETE=true
+fi
+
+# ==============================================================================
+# 4. UI, Zsh, Oh My Zsh & Powerlevel10k
+# ==============================================================================
+# --- UI Helpers ---
 autoload -U colors && colors
+ok="$fg[green]"; warn="$fg[yellow]"; err="$fg[red]"; info="$fg[cyan]"; example="$fg[magenta]"; done="$reset_color"
 
-ok="$fg[green]"
-warn="$fg[yellow]"
-err="$fg[red]"
-info="$fg[cyan]"
-example="$fg[magenta]"
-done="$reset_color"
-# ==============================================================================
-
-# Zsh & Oh My Zsh
+# --- Zsh/OMZ Base ---
 export ZSH="$HOME/.oh-my-zsh"
-
-# NVM Directory (ensure it matches your installation location)
-export NVM_DIR="$HOME/.nvm"
 
 # Powerlevel9k Instant Prompt (off by default)
 typeset -g POWERLEVEL9K_INSTANT_PROMPT=off
 
-# ==============================================================================
-# Oh My Zsh Configuration
-# ==============================================================================
-
-# Theme (Powerlevel10k)
-ZSH_THEME="powerlevel10k/powerlevel10k"
-
-# Oh My Zsh Plugins
-# Add wisely, as too many plugins slow down shell startup.
-plugins=(
-    git
-    docker # Ensure completions are handled below if necessary
-    zsh-autosuggestions
-    zsh-syntax-highlighting
-    # zsh-completions # Can sometimes conflict with brew's completions or be slow. Test if needed.
-    vscode
-    history-substring-search
-    # shellfirm # Removed as per comments
-)
-
-# Source Oh My Zsh
-# IMPORTANT: This should typically come *after* plugin definitions and basic env vars,
-# but *before* things that rely on OMZ functions/aliases (like P10k sourcing or plugin configs)
-# However, P10k instant prompt requires being very early.
-# Let's keep OMZ source later as per its standard practice.
-
-# ==============================================================================
-# Completions & Initializations
-# ==============================================================================
-
-# Zsh Completions
-# If you uncomment the zsh-completions plugin above, this might be redundant
-# or need coordination. If not using the plugin, this is the standard way.
-autoload -U +X compinit && compinit
-
-# Enable Powerlevel10k instant prompt. Should stay close to the top.
-# Initialization code that may require console input must go above this block.
+# --- Powerlevel10k Instant Prompt (Load First) ---
+# Must be sourced before Zsh is initialized for speed.
 if [[ -r "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh" ]]; then
     source "${XDG_CACHE_HOME:-$HOME/.cache}/p10k-instant-prompt-${(%):-%n}.zsh"
 fi
 
-# Load NVM
-# Ensure the path `/usr/local/opt/nvm/nvm.sh` is correct for your Homebrew setup
-[ -s "/usr/local/opt/nvm/nvm.sh" ] && \. "/usr/local/opt/nvm/nvm.sh" --no-use # Load nvm without using default node
-# Load NVM bash_completion (often handled automatically by nvm script or zsh completion system)
-[ -s "/usr/local/opt/nvm/etc/bash_completion.d/nvm" ] && \. "/usr/local/opt/nvm/etc/bash_completion.d/nvm"
+# --- Oh My Zsh Theme ---
+#  # Use a simpler theme in Cursor editor
+[[ -n $CURSOR_TRACE_ID ]] && ZSH_THEME="robbyrussell" || ZSH_THEME="powerlevel10k/powerlevel10k"
 
-# Pipx Completions
-# Check if command exists before running eval to prevent errors if pipx isn't installed
-command -v register-python-argcomplete >/dev/null && eval "$(register-python-argcomplete pipx)"
+# --- Oh My Zsh Plugins ---
+plugins=(git docker zsh-autosuggestions zsh-syntax-highlighting vscode history-substring-search)
 
-# UV Completions
-command -v uv >/dev/null && eval "$(uv generate-shell-completion zsh)"
+# --- Add to fpath BEFORE sourcing Oh My Zsh ---
+# This ensures OMZ's `compinit` call finds these completion files.
+if [[ "$IS_MAC" == "true" && -d "$HOME/.docker/completions" ]]; then
+    # Suggested by Docker Desktop to enable Docker CLI completions.
+    fpath=("$HOME/.docker/completions" $fpath)
+fi
 
-# FZF Setup (Key bindings and fuzzy completion)
-[ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
+# This ensures OMZ's `compinit` call finds these completion files.
+if [[ "$IS_MAC" == "true" && -d "$HOME/.docker/completions" ]]; then
+    fpath=("$HOME/.docker/completions" $fpath)
+fi
 
-# Source Oh My Zsh (Standard location)
+# --- Source Oh My Zsh ---
+# This must come after theme, plugins, and fpath are defined.
+# OMZ will automatically run 'compinit' for us, no need for a separate call.
 source "$ZSH/oh-my-zsh.sh"
 
-# Source Powerlevel10k Theme
-# To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
+# --- Source Powerlevel10k Theme Configuration ---
+# This should come after sourcing Oh My Zsh.
 [[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
 
-# Docker Desktop Completions (Added by Docker)
-# Check if the directory exists to avoid errors
-[ -d "$HOME/.docker/completions" ] && fpath=("$HOME/.docker/completions" $fpath)
-# Note: OMZ or the primary compinit call should handle initializing completions.
-# Redundant calls to compinit can slow down startup. Avoid if possible.
-# autoload -Uz compinit
-# compinit
+# --- Source Other Completions AFTER Oh My Zsh ---
+# These commands often rely on the completion system already being initialized.
+command -v register-python-argcomplete >/dev/null && eval "$(register-python-argcomplete pipx)"
+command -v uv >/dev/null && eval "$(uv generate-shell-completion zsh)"
+[ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
 
 # ==============================================================================
-# PATH Configuration
+# 5. NVM (Node Version Manager)
 # ==============================================================================
+# Official, unified loading script for script-based installations (macOS & WSL).
+# This snippet is based on the official NVM README for robustness and XDG compliance.
+export NVM_DIR="$([ -z "${XDG_CONFIG_HOME-}" ] && printf %s "${HOME}/.nvm" || printf %s "${XDG_CONFIG_HOME}/nvm")"
+# Source nvm.sh if it exists. The --no-use flag prevents auto-loading a default version.
+if [ -s "$NVM_DIR/nvm.sh" ]; then
+    source "$NVM_DIR/nvm.sh" --no-use
+    # Source the bash_completion script if it exists. Nvm's script should handle Zsh,
+    # but this is a robust fallback for older versions or custom setups.
+    [ -s "$NVM_DIR/bash_completion" ] && source "$NVM_DIR/bash_completion"
+fi
 
-# Ensure PATH doesn't contain duplicates, which can cause some commands to not work.
+# --- NVM Automatic Version Switching ---
+# This hook automatically runs 'nvm use' if an .nvmrc file is found in the
+# current directory or any parent directory. This avoids the need to manually
+# switch versions for each project.
+# Based on the official nvm documentation for speeding up zsh.
+autoload -U add-zsh-hook
+load-nvmrc() {
+    # Use nvm's logic to find the .nvmrc file upwards from the current directory
+    local nvmrc_path="$(nvm_find_nvmrc)"
+    if [ -n "$nvmrc_path" ]; then
+        local nvmrc_node_version=$(nvm version "$(cat "${nvmrc_path}")")
+
+        # If the version in .nvmrc is different from the current active version
+        if [ "$nvmrc_node_version" != "N/A" ] && [ "$nvmrc_node_version" != "$(nvm version)" ]; then
+            nvm use --silent
+        fi
+    # If no .nvmrc is found, revert to the default version
+    elif [ "$(nvm version)" != "$(nvm version default)" ]; then
+        nvm use default --silent
+    fi
+}
+add-zsh-hook chpwd load-nvmrc
+load-nvmrc # Run once on startup
+
+# ==============================================================================
+# 6. PATH Configuration
+# ==============================================================================
+# Use Zsh's `path` array to avoid duplicates and simplify management.
 typeset -U path
 
-# Homebrew (Recommended location: /opt/homebrew for Apple Silicon, /usr/local for Intel)
-if [[ -d /opt/homebrew ]]; then
-    HOMEBREW_PREFIX="/opt/homebrew"
-else
-    HOMEBREW_PREFIX="/usr/local"
+# Prepend OS-specific paths
+if [[ "$IS_MAC" == "true" ]]; then
+    path+=(
+        "$HOMEBREW_PREFIX/bin"
+        "$HOMEBREW_PREFIX/sbin"
+        # Add any opt-in paths for tools that Homebrew doesn't symlink automatically
+        "$HOMEBREW_PREFIX/opt/libpq/bin"
+    )
 fi
 
-# Start with Homebrew to give it precedence, avoiding an empty initial PATH.
-PATH="$HOMEBREW_PREFIX/bin"
-PATH="$HOMEBREW_PREFIX/sbin:$PATH"
-
-export PATH="$HOMEBREW_PREFIX/bin:$PATH"
-export PATH="$HOMEBREW_PREFIX/sbin:$PATH"
-
-# Standard system paths
-export PATH="$PATH:/usr/bin"
-export PATH="$PATH:/bin"
-export PATH="$PATH:/usr/sbin"
-export PATH="$PATH:/sbin"
-
-# Tool-specific paths (Managed by Homebrew)
-# Add paths for tools installed via brew that aren't automatically linked
-export PATH="$HOMEBREW_PREFIX/opt/sqlite/bin:$PATH" # Example if needed, seems related to MONO below
-export PATH="$HOMEBREW_PREFIX/opt/tcl-tk/bin:$PATH"
-export PATH="$HOMEBREW_PREFIX/opt/php@8.1/bin:$PATH"
-export PATH="$HOMEBREW_PREFIX/opt/php@8.1/sbin:$PATH"
-export PATH="$HOMEBREW_PREFIX/opt/postgresql@16/bin:$PATH"
-export PATH="$HOMEBREW_PREFIX/opt/libpq/bin:$PATH"
-# export PATH="$HOMEBREW_PREFIX/opt/fzf/bin:$PATH" # Usually linked by brew into $HOMEBREW_PREFIX/bin
-
-# User-specific bin directories
-export PATH="$PATH:$HOME/.local/bin" # For pipx, uv bins, etc.
-export PATH="$PATH:$HOME/.cargo/bin" # Rust cargo
-export PATH="$PATH:$HOME/.dotnet/tools" # .NET tools
-
-# Other system paths (Add if necessary)
-export PATH="$PATH:/Library/Apple/usr/bin"
-# export PATH="$PATH:/Library/TeX/texbin" # Uncomment if you use TeX
-
-# Ensure NVM path is handled dynamically by the NVM script, not hardcoded here.
-# Ensure virtual environment bin paths get prepended when activated (handled by activate scripts)
-
+# Prepend common user paths (Cross-Platform)
+path+=(
+    "$HOME/.docker/bin"    # For Docker tools
+    "$HOME/.local/bin"     # For pipx and uv
+    "$HOME/.cargo/bin"     # For Rust
+    "$(go env GOPATH)/bin" # For Go
+    "$HOME/.dotnet/tools"  # For .NET
+)
 
 # ==============================================================================
-# Custom Functions & Final Steps
+# 7. Functions & Final Hooks
 # ==============================================================================
+# --- Load Custom Functions ---
+# Make your helper functions available before they are used by aliases or other scripts.
+for func_file in ~/.zsh_python_functions ~/.zsh_node_functions ~/.zsh_docker_functions; do
+    [ -f "$func_file" ] && source "$func_file"
+done
 
-# Load custom functions
-if [ -f ~/.zsh_functions ]; then
-    source ~/.zsh_functions
-else
-    echo "Warning: ~/.zsh_functions not found."
-fi
-
-# Shell Integration (needed for Cmd+Click, etc., in VSCode Terminal)
-# Uncomment if needed
-# [[ "$TERM_PROGRAM" == "vscode" ]] && . "$(code --locate-shell-integration-path zsh)"
-
-# Ensure virtual environment PATH takes precedence if active
-# This might be redundant if activate scripts work correctly, but provides robustness.
-# if [[ -n "$VIRTUAL_ENV" ]]; then
-#     if [[ ":$PATH:" != *":$VIRTUAL_ENV/bin:"* ]]; then
-#         export PATH="$VIRTUAL_ENV/bin:$PATH"
-#     fi
-# fi
-
-# =====> ADD DIRENV HOOK HERE <=====
-# Hook direnv into the shell
+# --- Hook Direnv into the Shell ---
+# IMPORTANT: This must be one of the last things in your .zshrc.
+# It needs to hook into the prompt after Oh My Zsh and P10k have finished setting it up.
 if command -v direnv &> /dev/null; then
     eval "$(direnv hook zsh)"
 fi
-# ==================================
 
-
-# ==============================================================================
-# Aliases
-# ==============================================================================
-
-# ---- General ----
-alias cls="clear"
-alias ..="cd .."
-alias ....="cd ../.."
-alias ~="cd ~"
-alias desk="cd ~/Desktop"
-alias down="cd ~/Downloads"
-alias ll="lsd -al" # Requires lsd to be installed
-# alias ls="ls -G" # Basic colorized ls as fallback
-
-# ---- File System & Search ----
-alias look="sudo find . -name" # Find by name
-alias search="grep --color=auto -rnw . -e " # Search for text in files recursively
-alias ports="sudo lsof -PiTCP -sTCP:LISTEN" # Show listening ports
-
-# ---- Development ----
-alias studio="open -a \"Android Studio\" " # Open Android Studio
-# alias vi="nvim" # Use Neovim
-# alias vim="nvim"
-
-# ---- Python (using UV) ----
-alias pip="uv pip" # Always use uv for pip operations
-alias python="python3" # Ensure python points to python3
-
-# Python version shortcuts (requires specific uv installations)
-py313() { "$(get_uv_python_path 3.13)" "$@"; }
-py312() { "$(get_uv_python_path 3.12)" "$@"; }
-py311() { "$(get_uv_python_path 3.11)" "$@"; }
-py310() { "$(get_uv_python_path 3.10)" "$@"; }
-
-# ---- Java Version Management ----
-# These rely on /usr/libexec/java_home (macOS specific)
-export JAVA_8_HOME=$(/usr/libexec/java_home -v1.8 2>/dev/null)
-export JAVA_11_HOME=$(/usr/libexec/java_home -v11 2>/dev/null)
-export JAVA_13_HOME=$(/usr/libexec/java_home -v13 2>/dev/null)
-export JAVA_16_HOME=$(/usr/libexec/java_home -v16 2>/dev/null)
-alias java8='[ -n "$JAVA_8_HOME" ] && export JAVA_HOME=$JAVA_8_HOME || echo "Java 8 not found"'
-alias java11='[ -n "$JAVA_11_HOME" ] && export JAVA_HOME=$JAVA_11_HOME || echo "Java 11 not found"'
-alias java13='[ -n "$JAVA_13_HOME" ] && export JAVA_HOME=$JAVA_13_HOME || echo "Java 13 not found"'
-alias java16='[ -n "$JAVA_16_HOME" ] && export JAVA_HOME=$JAVA_16_HOME || echo "Java 16 not found"'
-# Set a default Java version if desired, e.g.:
-# java11
-
-# ---- Multimedia (FFmpeg) ----
-# Assumes ffmpeg apps are in a specific location. Consider adding this dir to PATH instead.
-# export PATH="$PATH:$HOME/Documents/apps"
-alias ffmpeg="$HOME/Documents/apps/ffmpeg"
-alias ffprobe="$HOME/Documents/apps/ffprobe"
-alias ffplay="$HOME/Documents/apps/ffplay"
-
-# ---- Custom Scripts ----
-alias merge_tracks='$HOME/merge_tracks.sh' # Run custom script
-alias repomix="repomix" # Assuming repomix is a function or script in PATH
-
-# ---- Network ----
-alias speedtest="wget -O /dev/null cachefly.cachefly.net/10mb.test" # Simple download speed test
-
-# echo "Zsh config loaded." # Uncomment for debugging startup
-# Task Master aliases added on 13/04/2025
-alias tm='task-master'
-alias taskmaster='task-master'
-export REPLICATE_API_TOKEN=your_token_here
-
-
-# ==============================================================================
-# Python 3.13 Health Check & Onboarding for Homebrew and uv (zsh)
-# ==============================================================================
-
-# ---- Homebrew Python locations ----
-BREW_PYTHON="/usr/local/bin/python3"
-BREW_PYTHON_CELLAR="/usr/local/Cellar/python@3.13"
-BREW_PYTHON_BIN="$BREW_PYTHON_CELLAR"/*/bin/python3.13
-
-# ---- Homebrew presence check ----
-HAVE_BREW=false
-if command -v brew >/dev/null 2>&1; then
-    HAVE_BREW=true
-fi
-
-echo
-echo "${info}🛡️  Python Environment Check:${done}"
-
-# ---- Show current python3 and its version ----
-if command -v python3 >/dev/null 2>&1; then
-    echo "    python3 path: $(which python3)"
-    echo -n "    python3 version: "
-    python3 --version
-else
-    echo "${err}    python3 not found in PATH.${done}"
-fi
-
-# ---- Check if python3 is Homebrew's 3.13 ----
-show_onboarding_summary() {
-    echo "${info}🚀  RECOMMENDED WORKFLOW: Use 'uv' for all Python project work!${done}"
-    echo "------------------------------------------------------------------------------------------------"
-    # echo
-    # echo "${ok}How to make your Python project a system-wide CLI executable (no conflicts):${done}"
-    # echo
-    # echo "  1. Activate your project's venv:"
-    # echo "         source .venv/bin/activate"
-    # echo "  2. Build/install your project in 'editable' mode (from project root):"
-    # echo "         uv pip install -e ."
-    # echo "     (Make sure your pyproject.toml defines a [project.scripts] entry for your CLI!)"
-    # echo
-    # echo "  3. Install your CLI globally for your user using pipx (best practice!):"
-    # echo "         pipx install --force \$(pwd)"
-    # echo "     - This puts your CLI in ~/.local/bin, which should already be in your PATH."
-    # echo "     - Each CLI installed with pipx has its own isolated virtualenv—no dependency conflicts."
-    # echo "     - You can run your CLI from any folder, in any shell session."
-    # echo
-    # echo "  4. To update your CLI after you change your code:"
-    # echo "         pipx reinstall <your-cli-name>"
-    # echo
-    # echo "  5. See all installed pipx CLIs and manage them:"
-    # echo "         pipx list"
-    # echo "         pipx upgrade <your-cli-name>"
-    # echo "         pipx uninstall <your-cli-name>"
-    # echo "------------------------------------------------------------------------------------------------"
-    echo "${ok}Custom Shell Helper Functions (.zsh_functions):${done}"
-    echo
-    echo "  1. ${info}python_setup <major.minor>${done}"
-    echo "      - Sets up (or recreates) .venv for the ${warn}existing${done} Python project using the specified Python."
-    echo "      - Example: ${example}python_setup 3.13${done}"
-    echo
-    echo "  2. ${info}python_new_project <major.minor>${done}"
-    echo "      - Scaffolds a ${warn}new${done} Python project in the current folder."
-    echo "      - Example: ${example}python_new_project 3.13${done}"
-    echo
-    echo "  3. ${info}python_delete${done}"
-    echo "      - ${warn}Cleans up${done} all typical Python project artifacts (.venv, caches, build, etc.)."
-    echo
-    echo "  4. ${info}pipx_install_current_project${done}"
-    echo "      - Installs the ${warn}current project${done} as a global user CLI (isolated by pipx, no conflicts)."
-    echo
-    echo "  5. ${info}pipx_reinstall_current_project${done}"
-    echo "      - Reinstalls the global user CLI after local code changes."
-    echo
-    echo "  6. ${info}pipx_uninstall_current_project${done}"
-    echo "      - Uninstalls the global CLI for the current project."
-    echo
-    echo "  7. ${info}pipx_check_current_project${done}"
-    echo "      - ${warn}Checks${done} if the current project is installed via pipx and reports executable locations."
-    echo "------------------------------------------------------------------------------------------------"
-    echo
-}
-
-main_python_path=$(which python3 2>/dev/null)
-resolved_link=$(readlink "$main_python_path" 2>/dev/null || echo "")
-
-if [[ -x "$BREW_PYTHON" && "$resolved_link" == *"Cellar/python@3.13"* ]]; then
-    echo "${ok}✅  Homebrew Python 3.13 detected at $BREW_PYTHON.${done}"
-    show_onboarding_summary
-    return 0
-fi
-
-# ---- Handle various "not Homebrew" situations ----
-if [[ -n "$main_python_path" ]]; then
-    resolved_link=$(readlink "$main_python_path" 2>/dev/null || echo "")
-    if [[ "$resolved_link" == *"Cellar/python@3.13"* ]]; then
-        echo "${ok}✅  Homebrew Python 3.13 detected at $main_python_path (via symlink).${done}"
-        show_onboarding_summary
-        return 0
-    elif [[ "$main_python_path" == "/usr/bin/python3" ]]; then
-        echo "${warn}⚠️  WARNING: Your 'python3' is the system Python at /usr/bin/python3 (not recommended for projects).${done}"
-    else
-        echo "${warn}⚠️  WARNING: Your 'python3' is at $main_python_path (symlink: $resolved_link), and is NOT Homebrew's python@3.13.${done}"
-    fi
-else
-    echo "${err}    python3 not found at all.${done}"
-fi
-
-# ---- Check if Homebrew's python@3.13 is installed but not linked ----
-if $HAVE_BREW; then
-    if [[ -d "$BREW_PYTHON_CELLAR" ]] && ls $BREW_PYTHON_BIN >/dev/null 2>&1; then
-        echo "${ok}    Homebrew Python 3.13 is installed at: $BREW_PYTHON_BIN${done}"
-        # Offer to link if needed
-        if [[ ! -x "$BREW_PYTHON" || "$(readlink "$BREW_PYTHON")" != *"Cellar/python@3.13"* ]]; then
-            if [[ -t 1 ]]; then
-                echo
-                read "REPLY?    👉 Would you like to link Homebrew Python 3.13 as 'python3'? [y/N] "
-                case "$REPLY" in
-                    [yY][eE][sS]|[yY])
-                        echo "${info}    Linking python@3.13...${done}"
-                        brew link python@3.13 --overwrite --force
-                        if [[ $? -eq 0 ]]; then
-                            echo "${ok}    ✅ python@3.13 linked as python3! Please restart your terminal.${done}"
-                        else
-                            echo "${err}    ❌ Failed to link python@3.13. See brew errors above.${done}"
-                        fi
-                        ;;
-                    *)
-                        echo "${warn}    Skipping Homebrew Python linking.${done}"
-                        ;;
-                esac
-            else
-                echo "    (Non-interactive shell; skipping auto-link prompt.)"
-            fi
-        fi
-        # Even if not linked, we can use uv!
-        show_onboarding_summary
-        return 0
-    else
-        echo "${warn}    Homebrew Python 3.13 not installed.${done}"
-        if [[ -t 1 ]]; then
-            read "REPLY?    👉 Would you like to install Homebrew Python 3.13 now? [y/N] "
-            case "$REPLY" in
-                [yY][eE][sS]|[yY])
-                    echo "${info}    Installing python@3.13 via Homebrew...${done}"
-                    brew install python@3.13
-                    if [[ $? -eq 0 ]]; then
-                        echo "${ok}    ✅ python@3.13 installed! Please restart your terminal.${done}"
-                    else
-                        echo "${err}    ❌ Installation failed. Check Homebrew errors above.${done}"
-                    fi
-                    ;;
-                *)
-                    echo "${warn}    Skipping Homebrew Python 3.13 installation.${done}"
-                    ;;
-            esac
-        else
-            echo "    (Non-interactive shell; skipping install prompt.)"
-        fi
-    fi
-else
-    echo "${err}    Homebrew is not installed, so Homebrew Python can't be managed.${done}"
-    echo "    Install Homebrew first: https://brew.sh/"
-fi
-
-echo
-echo "${info}    If you skip this, 'uv' will manage Python versions for your projects in ~/.local/share/uv/python/.${done}"
-echo "    New venvs will use the closest match, and 'uv' will download what you need."
-echo
-
-# Display Python / uv related info
-show_onboarding_summary
-
-
-
-# ==============================================================================
-# Settings & Options
-# ==============================================================================
-
-# Prevent "zsh: no matches found" error for patterns like *
+# Prevent "zsh: no matches found" error
 setopt nonomatch
 
+# ==============================================================================
+# 8. Aliases & Functions
+# ==============================================================================
+# --- Common Aliases (Cross-Platform) ---
+alias cls="clear"; alias ..="cd .."; alias ....="cd ../.."; alias ~="cd ~"
+alias ll="lsd -al" # Requires lsd (https://github.com/lsd-rs/lsd)
+alias search="grep --color=auto -rnw . -e "
+alias pip="uv pip"
+alias python="$(get_uv_python_path $PYTHON_DEFAULT_VERSION)"
+alias python3="$(get_uv_python_path $PYTHON_DEFAULT_VERSION)"
+py313() { "$(get_uv_python_path 3.13)" "$@"; }; py312() { "$(get_uv_python_path 3.12)" "$@"; }
+py311() { "$(get_uv_python_path 3.11)" "$@"; }; py310() { "$(get_uv_python_path 3.10)" "$@"; }
+
+# --- Node.js 'npx' Aliases ---
+# Use npx to run commands without installing them globally. This avoids
+# having to reinstall them for every Node version with nvm.
+alias serve='npx http-server'
+alias tsc='npx -p typescript tsc'
+
+# --- OS-Specific Functions & Aliases ---
+
+# First, remove any existing 'ports' alias to prevent conflicts when defining
+# the function below. Errors are hidden for clean startup.
+unalias ports 2>/dev/null || true
+
+# NOTE: We use a function for `ports` on all systems to avoid Zsh parsing
+# conflicts that can occur when conditionally defining an alias and a function
+# with the same name.
+
+if [[ "$IS_MAC" == "true" ]]; then
+    # macOS-specific function for listing ports
+    ports() {
+        # Pass all arguments ($@) to lsof for filtering (e.g., ports -i :8080)
+        sudo lsof -PiTCP -sTCP:LISTEN "$@"
+    }
+
+    alias studio="open -a \"Android Studio\" "
+
+    # Java version management (macOS specific)
+    export JAVA_11_HOME=$(/usr/libexec/java_home -v11 2>/dev/null)
+    alias java11='[ -n "$JAVA_11_HOME" ] && export JAVA_HOME=$JAVA_11_HOME || echo "Java 11 not found"'
+else
+    # Generic Linux / WSL Function for listing ports
+    ports() {
+        if command -v ss &>/dev/null; then
+            # Pass all arguments ($@) to ss for filtering
+            sudo ss -tulpn "$@"
+        elif command -v netstat &>/dev/null; then
+            # Pass all arguments ($@) to netstat for filtering
+            sudo netstat -tulpn "$@"
+        else
+            echo "Error: Neither 'ss' nor 'netstat' command found." >&2
+            echo "Please install 'iproute2' (for ss) or 'net-tools' (for netstat)." >&2
+            return 1
+        fi
+    }
+fi
+
+
+# ==============================================================================
+# 9. Welcome / Onboarding Scripts
+# ==============================================================================
+# Only run in interactive shells on first load.
+if [[ -z "$_WELCOME_MESSAGE_SHOWN" && -t 1 ]]; then
+    if [[ "$IS_MAC" == "true" ]] && [ -f ~/.zsh_mac_welcome ]; then
+        source ~/.zsh_mac_welcome
+    elif [[ "$IS_WSL" == "true" ]] && [ -f ~/.zsh_wsl_welcome ]; then
+        source ~/.zsh_wsl_welcome
+    elif [[ "$IS_LINUX" == "true" ]] && [ -f ~/.zsh_linux_welcome ]; then
+        source ~/.zsh_linux_welcome
+    fi
+    # Set a flag to prevent this from running again in the same session
+    export _WELCOME_MESSAGE_SHOWN=true
+fi
+
+# ==============================================================================
+# 10. Load Private & Machine-Specific Configuration
+# ==============================================================================
+#
+# For settings that are unique to this specific machine or contain sensitive
+# information, create a file at ~/.zshrc.private.
+#
+# This file is for:
+#   - API keys and other secrets (e.g., export OPENAI_API_KEY="...")
+#   - Aliases for scripts that only exist on this machine.
+#   - PATH exports for tools installed in non-standard, local-only locations.
+#
+# IMPORTANT: This file should NEVER be checked into version control (e.g., Git).
+# Be sure to add ~/.zshrc.private to your .gitignore file.
+#
+if [[ -f ~/.zshrc.private ]]; then
+    source ~/.zshrc.private
+fi

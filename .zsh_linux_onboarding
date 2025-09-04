@@ -1,0 +1,130 @@
+# ==============================================================================
+#  Zsh Onboarding & Dependency Checker for Linux
+# ==============================================================================
+
+# --- UI Helpers (self-contained for this script) ---
+autoload -U colors && colors
+ok="$fg[green]"; warn="$fg[yellow]"; err="$fg[red]"; info="$fg[cyan]"; example="$fg[magenta]"; done="$reset_color"
+
+# --- Global variable to store the package manager command ---
+: ${PKG_MANAGER_CMD:=""}
+: ${PKG_MANAGER_NAME:="your system's package manager"}
+
+# Function to detect the Linux package manager
+_detect_package_manager() {
+    if command -v apt-get &>/dev/null; then
+        PKG_MANAGER_NAME="apt"
+        PKG_MANAGER_CMD="sudo apt-get install -y"
+    elif command -v dnf &>/dev/null; then
+        PKG_MANAGER_NAME="dnf"
+        PKG_MANAGER_CMD="sudo dnf install -y"
+    elif command -v pacman &>/dev/null; then
+        PKG_MANAGER_NAME="pacman"
+        PKG_MANAGER_CMD="sudo pacman -S --noconfirm"
+    elif command -v zypper &>/dev/null; then
+        PKG_MANAGER_NAME="zypper"
+        PKG_MANAGER_CMD="sudo zypper install -y"
+    else
+        echo "${warn}Could not determine package manager. Automatic installation will be disabled.${done}"
+        PKG_MANAGER_CMD=""
+    fi
+}
+
+# Generic function to ensure a command exists, or prompt to install it
+# Usage: _ensure_command <command_to_check> <package_name>
+_ensure_command() {
+    local cmd_to_check="$1"
+    local package_name="$2"
+
+    if command -v "$cmd_to_check" &>/dev/null; then
+        return 0 # Command exists
+    fi
+
+    # Command does not exist, prompt to install
+    if [[ -n "$PKG_MANAGER_CMD" && -t 1 ]]; then
+        echo "${warn}Dependency missing: '${cmd_to_check}' command not found.${done}"
+        read "REPLY?${info}    👉 Would you like to install the '${package_name}' package using ${PKG_MANAGER_NAME}? [y/N] ${done}"
+        if [[ "$REPLY" =~ ^[Yy]$ ]]; then
+            echo "${info}Installing '${package_name}'...${done}"
+            eval "$PKG_MANAGER_CMD $package_name"
+            if [[ $? -ne 0 ]]; then
+                echo "${err}    ❌ Installation failed. Please install '${package_name}' manually.${done}"
+            else
+                echo "${ok}    ✅ Successfully installed '${package_name}'.${done}"
+            fi
+        else
+            echo "${warn}    Skipping installation of '${package_name}'. Some features may not work.${done}"
+        fi
+    else
+        echo "${warn}Dependency missing: '${cmd_to_check}'. Please install the '${package_name}' package manually.${done}"
+    fi
+}
+
+# Function to ensure a tool installed via a curl script exists
+# Usage: _ensure_curl_install <command_to_check> <tool_name> <install_script_url>
+_ensure_curl_install() {
+    local cmd_to_check="$1"
+    local tool_name="$2"
+    local install_script_url="$3"
+
+    if command -v "$cmd_to_check" &>/dev/null; then
+        return 0 # Command exists
+    fi
+
+    if [[ -t 1 ]]; then # Only prompt in interactive shells
+        echo "${warn}Tool missing: '${tool_name}' command ('${cmd_to_check}') not found.${done}"
+        read "REPLY?${info}    👉 Would you like to install '${tool_name}' from the official source? [y/N] ${done}"
+        if [[ "$REPLY" =~ ^[Yy]$ ]]; then
+            echo "${info}Downloading and running the installer for '${tool_name}'...${done}"
+            # Fetch and execute the installer script
+            if ! bash -c "$(curl -fsSL ${install_script_url})"; then
+                echo "${err}    ❌ '${tool_name}' installation failed. Please try installing it manually.${done}"
+            else
+                echo "${ok}    ✅ '${tool_name}' installation seems successful. Please restart your shell.${done}"
+            fi
+        else
+            echo "${warn}    Skipping installation of '${tool_name}'.${done}"
+        fi
+    fi
+}
+
+# Main function to run all dependency checks
+run_dependency_checks() {
+    echo "${info}Checking for required tools...${done}"
+    _detect_package_manager
+
+    # Essential command-line tools
+    _ensure_command "git" "git"
+    _ensure_command "curl" "curl"
+    _ensure_command "unzip" "unzip"
+
+    # User-experience tools
+    _ensure_command "lsd" "lsd" # For the `ll` alias
+    _ensure_command "fzf" "fzf" # For shell history search
+    _ensure_command "jq" "jq"   # For Python and Node helper functions
+    _ensure_command "direnv" "direnv" # For automatic environment loading
+
+    # ===== NEW: Additional handy CLI tools =====
+    _ensure_command "rg" "ripgrep"
+    _ensure_command "neofetch" "neofetch"
+    _ensure_command "tree" "tree"
+    _ensure_command "ffmpeg" "ffmpeg"
+    _ensure_command "yt-dlp" "yt-dlp"
+    # =========================================
+
+    # Development tool managers
+    _ensure_curl_install "uv" "uv (Python)" "https://astral.sh/uv/install.sh"
+    _ensure_curl_install "pipx" "pipx (Python)" "https://pypa.github.io/pipx/main/install.py | python3"
+
+    # Docker (installation is more complex, so we just provide guidance)
+    if ! command -v docker &>/dev/null; then
+        echo "${warn}Tool missing: 'docker' not found.${done}"
+        echo "${info}    Docker installation on Linux is distribution-specific.${done}"
+        echo "${info}    Please follow the official instructions at: https://docs.docker.com/engine/install/${done}"
+    fi
+
+    echo "${ok}Dependency check complete.${done}"
+}
+
+# Run the checks if this script is sourced
+run_dependency_checks

@@ -1,0 +1,80 @@
+# ~/.zsh_wsl_welcome
+# ==============================================================================
+#  WSL Welcome & Onboarding Script
+# ==============================================================================
+# This script is sourced by ~/.zshrc on shell startup in a WSL environment.
+# It relies on color variables (e.g., $info, $ok) and functions being
+# defined in the main ~/.zshrc or sourced function files.
+
+# Function to show the WSL environment overview
+show_welcome() {
+    echo
+    echo "${info}🛡️  WSL Environment Overview:${done}"
+    if command -v lsb_release >/dev/null; then echo "    Distro: $(lsb_release -ds)"; fi
+    echo "    Kernel: $(uname -r)"
+
+    # --- Python ---
+    if command -v python3 &> /dev/null; then
+        echo "    System python3: $(command which python3) ($(command python3 --version 2>/dev/null))"
+    else
+        echo "    System python3: ${err}Not Found${done}"
+    fi
+
+    # --- Node.js ---
+    if command -v nvm &> /dev/null; then
+        local active_node=$(nvm current)
+        if [[ "$active_node" == "none" ]]; then
+            echo "    Active Node: ${warn}None (default is $(nvm version default))${done}"
+        else
+            echo "    Active Node: ${ok}${active_node}${done} (npm: $(npm -v 2>/dev/null || echo 'N/A'), pnpm: $(pnpm -v 2>/dev/null || echo 'N/A'))"
+        fi
+    else
+        echo "    Active Node: ${err}nvm not found${done}"
+    fi
+
+    # --- Docker ---
+    if command -v docker &> /dev/null && docker ps &>/dev/null; then
+        echo "    Docker: ${ok}Running${done}"
+    else
+        echo "    Docker: ${err}Not Running${done}"
+    fi
+}
+
+# Function to show the list of custom helpers
+show_onboarding_summary() {
+    echo "${info}🚀  RECOMMENDED WORKFLOW: Use 'uv' for all Python project work!${done}"
+    echo "------------------------------------------------------------------------------------------------"
+    echo "${ok}Custom Python Helper Functions (.zsh_python_functions):${done}"
+    echo "  - ${info}python_new_project, python_setup, python_delete${done}"
+    echo "  - ${info}pipx_install_current_project, pipx_reinstall_current_project, etc.${done}"
+    echo
+    echo "${ok}Custom Node.js Helper Functions (.zsh_node_functions):${done}"
+    echo "  - ${info}node_new_project, node_setup, node_clean${done}"
+    echo
+    echo "${ok}Custom Docker Helper Functions (.zsh_docker_functions):${done}"
+    echo "  - ${info}docker_clean, docker_stats, docker_logs, docker_shell, docker_ip${done}"
+    echo "------------------------------------------------------------------------------------------------"
+    echo
+}
+
+
+# --- Show the WSL environment overview and function summary ---
+show_welcome
+show_onboarding_summary
+
+# --- Check if uv has installed a base Python interpreter and prompt if not ---
+if ! get_uv_python_path 3.13 &>/dev/null; then
+    echo
+    echo "${warn}⚠️  Python 3.13 not found in 'uv' cache.${done}"
+    if [[ -t 1 ]]; then
+        read "REPLY?    👉 Would you like to run 'uv python install python@3.13' now? [y/N] "
+        case "$REPLY" in
+            [yY][eE][sS]|[yY])
+                uv python install python@3.13
+                ;;
+            *)
+                echo "${warn}    Skipping 'uv' Python 3.13 installation.${done}"
+                ;;
+        esac
+    fi
+fi
