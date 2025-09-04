@@ -30,6 +30,7 @@ tags
 .env.local
 node_modules/
 *.swp
+.zsh_history
 
 # Do not share your private .zshrc file
 .zshrc.private

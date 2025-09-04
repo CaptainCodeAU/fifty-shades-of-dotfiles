@@ -6,7 +6,7 @@
 show_welcome() {
     echo
     echo "${info}🛡️  Linux Environment Overview:${done}"
-    if command -v lsb_release &>/dev/null; then echo "    Distro: $(lsb_release -ds)"; fi
+    if command -v lsb_release >/dev/null; then echo "    Distro: $(lsb_release -ds)"; fi
     echo "    Kernel: $(uname -r)"
 
     # --- Python ---
@@ -59,14 +59,16 @@ show_onboarding_summary
 
 # --- Check if uv has installed a base Python interpreter and prompt if not ---
 # We use the get_uv_python_path function defined in .zsh_python_functions
-if command -v get_uv_python_path &>/dev/null && ! get_uv_python_path "${PYTHON_DEFAULT_VERSION%.*}" &>/dev/null; then
+if command -v get_uv_python_path &>/dev/null && ! get_uv_python_path "${PYTHON_DEFAULT_VERSION}" &>/dev/null; then
     echo
     echo "${warn}⚠️  Default Python (${PYTHON_DEFAULT_VERSION}) not found in 'uv' cache.${done}"
     if [[ -t 1 ]]; then
-        read "REPLY?    👉 Would you like to run 'uv python install python@${PYTHON_DEFAULT_VERSION%.*}' now? [y/N] "
+        # Corrected the variable in the prompt to show the full version.
+        read "REPLY?    👉 Would you like to run 'uv python install python@${PYTHON_DEFAULT_VERSION}' now? [y/N] "
         case "$REPLY" in
             [yY][eE][sS]|[yY])
-                uv python install "python@${PYTHON_DEFAULT_VERSION%.*}"
+                # uv python install "python@${PYTHON_DEFAULT_VERSION%.*}"
+				uv python install "python@${PYTHON_DEFAULT_VERSION}"
                 ;;
             *)
                 echo "${warn}    Skipping 'uv' Python installation.${done}"

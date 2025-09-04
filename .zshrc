@@ -3,7 +3,15 @@
 # ==============================================================================
 
 # ==============================================================================
-# 1. Environment Variables & OS Detection
+# 1. Core Path Configuration (CRITICAL)
+# ==============================================================================
+# Set the most important user path FIRST. This ensures that tools installed by
+# scripts (like uv, pipx) are available immediately in the same session,
+# preventing startup loops. The `typeset -U path` later will de-duplicate.
+export PATH="$HOME/.local/bin:$PATH"
+
+# ==============================================================================
+# 2. Environment Variables
 # ==============================================================================
 # --- Cross-Platform Environment ---
 export LANG=en_AU.UTF-8
@@ -15,8 +23,11 @@ export PIP_DISABLE_PIP_VERSION_CHECK=1
 export PROMPT_EOL_MARK="" # Disable Powerlevel10k instant prompt
 : ${PYTHON_MIN_VERSION:="3.8"}
 : ${PYTHON_MAX_VERSION:="3.13"}
-: ${PYTHON_DEFAULT_VERSION:="$PYTHON_MAX_VERSION"}
+: ${PYTHON_DEFAULT_VERSION:="3.13"} # Using major.minor for consistency
 : ${PYTHON_VERSION_PATTERN:="^3\.(8|9|1[0-3])$"}
+
+# --- PHP ---
+export WP_CLI_PHP_ARGS="-d error_reporting=E_ERROR^E_PARSE^E_COMPILE_ERROR -d display_errors=0"
 
 # --- Telemetry Opt-Out ---
 export ANONYMIZED_TELEMETRY=false; export ARTILLERY_DISABLE_TELEMETRY=true
@@ -32,11 +43,8 @@ export POSTHOG_TELEMETRY_DISABLED=true; export TELEMETRY=false
 export TELEMETRY_DISABLED=true; export TELEMETRY_ENABLED=false
 export TELEMETRY_OPTOUT=true; export VSCODE_TELEMETRY_OPTOUT=1
 
-# --- PHP ---
-export WP_CLI_PHP_ARGS="-d error_reporting=E_ERROR^E_PARSE^E_COMPILE_ERROR -d display_errors=0"
-
 # ==============================================================================
-# 2. OS Detection & Environment-Specific Settings
+# 3. OS Detection
 # ==============================================================================
 export IS_MAC=false
 export IS_WSL=false
@@ -62,16 +70,44 @@ case "$(uname -s)" in
 esac
 
 # ==============================================================================
-# 3. Onboarding & Dependency Checks (Linux Only)
+# 4. Onboarding & Dependency Checks (Linux Only)
 # ==============================================================================
-# On first run in a new Linux VM, this will check for and offer to install tools.
-if [[ "$IS_LINUX" == "true" && -f ~/.zsh_onboarding && -z "$_ONBOARDING_COMPLETE" ]]; then
+# This runs AFTER the core path is set, so it can find installed tools.
+if [[ "$IS_LINUX" == "true" && -f ~/.zsh_linux_onboarding && -z "$_ONBOARDING_COMPLETE" ]]; then
     source ~/.zsh_linux_onboarding
     export _ONBOARDING_COMPLETE=true
 fi
 
 # ==============================================================================
-# 4. UI, Zsh, Oh My Zsh & Powerlevel10k
+# 5. Full PATH Configuration
+# ==============================================================================
+# Use Zsh's `path` array to manage the rest of the PATH and avoid duplicates.
+typeset -U path
+
+# Prepend OS-specific paths
+if [[ "$IS_MAC" == "true" ]]; then
+    path+=(
+        "$HOMEBREW_PREFIX/bin"
+        "$HOMEBREW_PREFIX/sbin"
+		# Add any opt-in paths for tools that Homebrew doesn't symlink automatically
+        "$HOMEBREW_PREFIX/opt/libpq/bin"
+    )
+fi
+
+# Prepend common user paths (Cross-Platform)
+path+=(
+    "$HOME/.docker/bin"    # For Docker tools
+    "$HOME/.local/bin"     # This will be de-duplicated by `typeset -U`
+    "$HOME/.cargo/bin"     # For Rust
+	"$HOME/.dotnet/tools"  # For .NET
+)
+# Only add the Go path if the 'go' command actually exists.
+if command -v go &>/dev/null; then
+    path+=("$(go env GOPATH)/bin")
+fi
+
+# ==============================================================================
+# 6. UI, Zsh, Oh My Zsh & Powerlevel10k
 # ==============================================================================
 # --- UI Helpers ---
 autoload -U colors && colors
@@ -124,18 +160,12 @@ command -v uv >/dev/null && eval "$(uv generate-shell-completion zsh)"
 [ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
 
 # ==============================================================================
-# 5. NVM (Node Version Manager)
+# 6. NVM (Node Version Manager)
 # ==============================================================================
-# Official, unified loading script for script-based installations (macOS & WSL).
+# Official, unified loading script for script-based installations.
 # This snippet is based on the official NVM README for robustness and XDG compliance.
 export NVM_DIR="$([ -z "${XDG_CONFIG_HOME-}" ] && printf %s "${HOME}/.nvm" || printf %s "${XDG_CONFIG_HOME}/nvm")"
-# Source nvm.sh if it exists. The --no-use flag prevents auto-loading a default version.
-if [ -s "$NVM_DIR/nvm.sh" ]; then
-    source "$NVM_DIR/nvm.sh" --no-use
-    # Source the bash_completion script if it exists. Nvm's script should handle Zsh,
-    # but this is a robust fallback for older versions or custom setups.
-    [ -s "$NVM_DIR/bash_completion" ] && source "$NVM_DIR/bash_completion"
-fi
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh" --no-use
 
 # --- NVM Automatic Version Switching ---
 # This hook automatically runs 'nvm use' if an .nvmrc file is found in the
@@ -144,6 +174,9 @@ fi
 # Based on the official nvm documentation for speeding up zsh.
 autoload -U add-zsh-hook
 load-nvmrc() {
+	# Ensure nvm command is available before trying to use it
+    if ! command -v nvm &>/dev/null; then return; fi
+
     # Use nvm's logic to find the .nvmrc file upwards from the current directory
     local nvmrc_path="$(nvm_find_nvmrc)"
     if [ -n "$nvmrc_path" ]; then
@@ -159,32 +192,9 @@ load-nvmrc() {
     fi
 }
 add-zsh-hook chpwd load-nvmrc
-load-nvmrc # Run once on startup
+# Only run the initial load if the nvm command exists.
+command -v nvm &>/dev/null && load-nvmrc
 
-# ==============================================================================
-# 6. PATH Configuration
-# ==============================================================================
-# Use Zsh's `path` array to avoid duplicates and simplify management.
-typeset -U path
-
-# Prepend OS-specific paths
-if [[ "$IS_MAC" == "true" ]]; then
-    path+=(
-        "$HOMEBREW_PREFIX/bin"
-        "$HOMEBREW_PREFIX/sbin"
-        # Add any opt-in paths for tools that Homebrew doesn't symlink automatically
-        "$HOMEBREW_PREFIX/opt/libpq/bin"
-    )
-fi
-
-# Prepend common user paths (Cross-Platform)
-path+=(
-    "$HOME/.docker/bin"    # For Docker tools
-    "$HOME/.local/bin"     # For pipx and uv
-    "$HOME/.cargo/bin"     # For Rust
-    "$(go env GOPATH)/bin" # For Go
-    "$HOME/.dotnet/tools"  # For .NET
-)
 
 # ==============================================================================
 # 7. Functions & Final Hooks
@@ -213,8 +223,19 @@ alias cls="clear"; alias ..="cd .."; alias ....="cd ../.."; alias ~="cd ~"
 alias ll="lsd -al" # Requires lsd (https://github.com/lsd-rs/lsd)
 alias search="grep --color=auto -rnw . -e "
 alias pip="uv pip"
-alias python="$(get_uv_python_path $PYTHON_DEFAULT_VERSION)"
-alias python3="$(get_uv_python_path $PYTHON_DEFAULT_VERSION)"
+
+# alias python="$(get_uv_python_path $PYTHON_DEFAULT_VERSION)"
+# alias python3="$(get_uv_python_path $PYTHON_DEFAULT_VERSION)"
+
+# Use functions for python commands instead of aliases.
+# This avoids startup errors by checking for the python path only when the
+# command is actually run ("just-in-time"), not when the shell starts.
+python() {
+    local python_path=$(get_uv_python_path "${PYTHON_DEFAULT_VERSION}")
+    if [[ -n "$python_path" ]]; then "$python_path" "$@"; else return 1; fi
+}
+python3() { python "$@"; }
+
 py313() { "$(get_uv_python_path 3.13)" "$@"; }; py312() { "$(get_uv_python_path 3.12)" "$@"; }
 py311() { "$(get_uv_python_path 3.11)" "$@"; }; py310() { "$(get_uv_python_path 3.10)" "$@"; }
 
@@ -298,3 +319,6 @@ fi
 if [[ -f ~/.zshrc.private ]]; then
     source ~/.zshrc.private
 fi
+
+. "$HOME/.local/bin/env"
+[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion

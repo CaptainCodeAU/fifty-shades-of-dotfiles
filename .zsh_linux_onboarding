@@ -25,7 +25,7 @@ _detect_package_manager() {
         PKG_MANAGER_NAME="zypper"
         PKG_MANAGER_CMD="sudo zypper install -y"
     else
-        echo "${warn}Could not determine package manager. Automatic installation will be disabled.${done}"
+        echo "${warn}Could not determine package manager. Automatic installation disabled.${done}"
         PKG_MANAGER_CMD=""
     fi
 }
@@ -33,67 +33,94 @@ _detect_package_manager() {
 # Generic function to ensure a command exists, or prompt to install it
 # Usage: _ensure_command <command_to_check> <package_name>
 _ensure_command() {
-    local cmd_to_check="$1"
-    local package_name="$2"
+    local cmd_to_check="$1"; local package_name="$2"
 
-    if command -v "$cmd_to_check" &>/dev/null; then
-        return 0 # Command exists
-    fi
+    if command -v "$cmd_to_check" &>/dev/null; then return 0; fi
 
     # Command does not exist, prompt to install
     if [[ -n "$PKG_MANAGER_CMD" && -t 1 ]]; then
         echo "${warn}Dependency missing: '${cmd_to_check}' command not found.${done}"
-        read "REPLY?${info}    👉 Would you like to install the '${package_name}' package using ${PKG_MANAGER_NAME}? [y/N] ${done}"
+        read "REPLY?${info}    👉 Would you like to install '${package_name}' using ${PKG_MANAGER_NAME}? [y/N] ${done}"
         if [[ "$REPLY" =~ ^[Yy]$ ]]; then
             echo "${info}Installing '${package_name}'...${done}"
             eval "$PKG_MANAGER_CMD $package_name"
-            if [[ $? -ne 0 ]]; then
-                echo "${err}    ❌ Installation failed. Please install '${package_name}' manually.${done}"
-            else
+            if [[ $? -eq 0 ]]; then
                 echo "${ok}    ✅ Successfully installed '${package_name}'.${done}"
+            else
+                echo "${err}    ❌ Installation failed.${done}"
+                return 1
             fi
         else
-            echo "${warn}    Skipping installation of '${package_name}'. Some features may not work.${done}"
+            echo "${warn}    Skipping installation of '${package_name}'.${done}"
         fi
     else
-        echo "${warn}Dependency missing: '${cmd_to_check}'. Please install the '${package_name}' package manually.${done}"
+        echo "${warn}Dependency missing: '${cmd_to_check}'. Please install '${package_name}' manually.${done}"
     fi
 }
 
-# Function to ensure a tool installed via a curl script exists
-# Usage: _ensure_curl_install <command_to_check> <tool_name> <install_script_url>
-_ensure_curl_install() {
-    local cmd_to_check="$1"
-    local tool_name="$2"
-    local install_script_url="$3"
+# THE FIX: This function is now intelligent. It prioritizes the system package
+# manager, which is the correct method for modern Linux distros like Ubuntu 24.04.
+_ensure_pipx() {
+    if command -v "pipx" &>/dev/null; then return 0; fi
 
-    if command -v "$cmd_to_check" &>/dev/null; then
-        return 0 # Command exists
-    fi
-
-    if [[ -t 1 ]]; then # Only prompt in interactive shells
-        echo "${warn}Tool missing: '${tool_name}' command ('${cmd_to_check}') not found.${done}"
-        read "REPLY?${info}    👉 Would you like to install '${tool_name}' from the official source? [y/N] ${done}"
+    if [[ -n "$PKG_MANAGER_CMD" && -t 1 ]]; then
+        echo "${warn}Tool missing: 'pipx' not found.${done}"
+        # For Ubuntu/Debian, the package name is 'pipx'. For others it might be different.
+        # We will assume the package name is 'pipx' for all package managers.
+        # This covers the most common cases.
+        read "REPLY?${info}    👉 Would you like to install 'pipx' using ${PKG_MANAGER_NAME}? (Recommended) [y/N] ${done}"
         if [[ "$REPLY" =~ ^[Yy]$ ]]; then
-            echo "${info}Downloading and running the installer for '${tool_name}'...${done}"
-            # Fetch and execute the installer script
-            if ! bash -c "$(curl -fsSL ${install_script_url})"; then
-                echo "${err}    ❌ '${tool_name}' installation failed. Please try installing it manually.${done}"
+            eval "$PKG_MANAGER_CMD pipx"
+            if [[ $? -eq 0 ]]; then
+                echo "${ok}    ✅ Successfully installed 'pipx'.${done}"
+                # Run ensurepath after installing from package manager
+                if command -v pipx &>/dev/null; then
+                    pipx ensurepath
+                fi
             else
-                echo "${ok}    ✅ '${tool_name}' installation seems successful. Please restart your shell.${done}"
+                echo "${err}    ❌ Installation failed. Please try installing 'pipx' manually.${done}"
             fi
         else
-            echo "${warn}    Skipping installation of '${tool_name}'.${done}"
+            echo "${warn}    Skipping installation of 'pipx'.${done}"
+        fi
+    else
+        echo "${warn}Tool missing: 'pipx'. Could not detect a package manager to install it.${done}"
+    fi
+}
+
+# Added a function to install NVM (Node Version Manager).
+_ensure_nvm() {
+    # NVM is a shell function, not a binary, so we check for its directory.
+    if [ -d "$HOME/.nvm" ]; then return 0; fi
+
+    if [[ -t 1 ]]; then
+        echo "${warn}Tool missing: 'nvm' (Node Version Manager) not found.${done}"
+        read "REPLY?${info}    👉 Would you like to install 'nvm' from the official source? [y/N] ${done}"
+        if [[ "$REPLY" =~ ^[Yy]$ ]]; then
+            echo "${info}Downloading and running the installer for 'nvm'...${done}"
+            local nvm_install_script
+            nvm_install_script=$(curl -fsSL "https://raw.githubusercontent.com/nvm-sh/nvm/master/install.sh")
+            if bash -c "$nvm_install_script"; then
+                echo "${ok}    ✅ 'nvm' installation successful. Please restart your shell.${done}"
+            else
+                echo "${err}    ❌ 'nvm' installation failed.${done}"
+            fi
+        else
+            echo "${warn}    Skipping installation of 'nvm'.${done}"
         fi
     fi
 }
 
 # Main function to run all dependency checks
 run_dependency_checks() {
+	# Force Zsh to rebuild its command cache. This ensures it finds
+    # tools that were installed in a previous session (like uv and pipx).
+    rehash
+
     echo "${info}Checking for required tools...${done}"
     _detect_package_manager
 
-    # Essential command-line tools
+    # Essential tools
     _ensure_command "git" "git"
     _ensure_command "curl" "curl"
     _ensure_command "unzip" "unzip"
@@ -104,19 +131,18 @@ run_dependency_checks() {
     _ensure_command "jq" "jq"   # For Python and Node helper functions
     _ensure_command "direnv" "direnv" # For automatic environment loading
 
-    # ===== NEW: Additional handy CLI tools =====
+    # Additional CLI tools
     _ensure_command "rg" "ripgrep"
     _ensure_command "neofetch" "neofetch"
     _ensure_command "tree" "tree"
     _ensure_command "ffmpeg" "ffmpeg"
     _ensure_command "yt-dlp" "yt-dlp"
-    # =========================================
 
     # Development tool managers
-    _ensure_curl_install "uv" "uv (Python)" "https://astral.sh/uv/install.sh"
-    _ensure_curl_install "pipx" "pipx (Python)" "https://pypa.github.io/pipx/main/install.py | python3"
+	_ensure_nvm
+    _ensure_pipx # Use the new special function for pipx
 
-    # Docker (installation is more complex, so we just provide guidance)
+    # Docker guidance
     if ! command -v docker &>/dev/null; then
         echo "${warn}Tool missing: 'docker' not found.${done}"
         echo "${info}    Docker installation on Linux is distribution-specific.${done}"
