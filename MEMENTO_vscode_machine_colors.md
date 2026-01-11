@@ -2,7 +2,7 @@
 
 > **Memento File** - A complete guide for future-you who has forgotten everything.
 >
-> Last Updated: January 2025
+> Last Updated: January 12, 2025
 
 ---
 
@@ -31,6 +31,16 @@ cat ~/.cursor-server/data/Machine/settings.json
 | WSL Ubuntu (mlbox.lan) | Blue | `#1a4d7a` |
 | Linux LXC 111 (production) | Orange | `#D96400` |
 | Linux VM 105 (codebox.lan) | Green | `#97B500` |
+
+**Color Settings Applied:**
+| Setting | Value | Purpose |
+|---------|-------|---------|
+| `titleBar.activeBackground` | Machine color | Title bar when window focused |
+| `titleBar.activeForeground` | `#e7e7e7` | Title text when focused |
+| `titleBar.inactiveBackground` | Machine color | Title bar when window not focused |
+| `titleBar.inactiveForeground` | `#999999` | Title text when not focused (dimmer) |
+| `statusBar.background` | Machine color | Bottom status bar |
+| `statusBar.foreground` | `#e7e7e7` | Status bar text |
 
 ---
 
@@ -130,7 +140,9 @@ Workspace Settings   ← .vscode/settings.json (project-level, DO NOT add colors
 | `direnvrc` | Main logic - detects machine, sets colors | `~/.config/direnv/direnvrc` |
 | `direnv.toml` | direnv config (hides env diff output) | `~/.config/direnv/direnv.toml` |
 | `settings.json` | Template for VSCode/Cursor user settings | See "Settings File Locations" below |
-| `.zsh_python_functions` | Contains `update_vscode_settings()` | `~/.zsh_python_functions` |
+| `.zshrc` | Unified shell config with `python()` function | `~/.zshrc` |
+| `.zsh_python_functions` | Contains `update_vscode_settings()`, `create_envrc()` | `~/.zsh_python_functions` |
+| `.envrc` | Template for project .envrc with diagnostic check | Copy to projects as needed |
 
 ### Settings File Locations
 
@@ -333,6 +345,43 @@ case "$(hostname)" in
 esac
 ```
 
+### Existing colorCustomizations Block (Empty)
+
+**Symptom:** Settings file has `workbench.colorCustomizations` but no titleBar colors inside. The `.envrc` diagnostic shows "✗ Not configured".
+
+**Cause:** The settings.json template has an empty `colorCustomizations` block with just comments:
+```json
+"workbench.colorCustomizations": {
+    // titleBar and statusBar colors are automatically set by direnvrc
+},
+```
+
+Old versions of direnvrc would skip the file because the section "exists" (even though empty).
+
+**Fix:** Update to the latest `direnvrc` which now:
+1. Checks if `titleBar.activeBackground` exists (not just the section)
+2. If section exists but no titleBar settings → inserts colors INTO the existing block
+3. If section doesn't exist → creates the whole block
+
+```bash
+# Update direnvrc
+cp /path/to/Temp/direnvrc ~/.config/direnv/direnvrc
+
+# Clear session flag and re-trigger
+unset _VSCODE_COLORS_CHECKED
+cd .. && cd your-project
+```
+
+### Title Bar Color Reverts When Window Inactive
+
+**Symptom:** Title bar shows correct color when focused, but reverts to default when clicking away.
+
+**Cause:** Old direnvrc only set `titleBar.activeBackground`, not the inactive variant.
+
+**Fix:** Update to latest `direnvrc` which sets both:
+- `titleBar.activeBackground` - when window is focused
+- `titleBar.inactiveBackground` - when window is not focused
+
 ---
 
 ## Alternative Approaches (Rejected)
@@ -463,6 +512,13 @@ scp ~/.config/direnv/direnvrc newmachine:~/.config/direnv/
 - **2025-01-11:** Added OS-aware .envrc diagnostic check
 - **2025-01-11:** Created merged settings.json template
 - **2025-01-11:** Updated `update_vscode_settings()` with section comments and direnvrc note
+- **2025-01-12:** Fixed: direnvrc now inserts colors INTO existing empty `colorCustomizations` block
+- **2025-01-12:** Added inactive title bar colors (`titleBar.inactiveBackground`, `titleBar.inactiveForeground`)
+- **2025-01-12:** Fixed: Linux/WSL logic now mirrors macOS (handles existing files with empty colorCustomizations)
+- **2025-01-12:** Fixed `.envrc` template: only sets `VIRTUAL_ENV_PROMPT` when venv actually exists
+- **2025-01-12:** Updated `python()` function in `.zshrc`: checks `$VIRTUAL_ENV` → local `.venv` → uv global
+- **2025-01-12:** Removed pyenv reference from `settings.json` (workspace settings handle interpreter path)
+- **2025-01-12:** Updated `create_envrc()` to include Environment Info and VSCode Settings Check sections
 
 ---
 
