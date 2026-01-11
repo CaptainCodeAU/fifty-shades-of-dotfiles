@@ -2,13 +2,17 @@
 #  Unified Zsh Configuration for macOS, Linux & WSL
 # ==============================================================================
 
+# Profiling support - run with: ZPROF=1 zsh
+[[ -n "$ZPROF" ]] && zmodload zsh/zprof
+
 # ==============================================================================
 # 1. Core Path Configuration (CRITICAL)
 # ==============================================================================
-# Set the most important user path FIRST. This ensures that tools installed by
-# scripts (like uv, pipx) are available immediately in the same session,
+# Set the most important user paths FIRST. This ensures that tools installed by
+# scripts (like uv, pipx, fzf) are available immediately in the same session,
 # preventing startup loops. The `typeset -U path` later will de-duplicate.
-export PATH="$HOME/.local/bin:$PATH"
+export PATH="$HOME/.fzf/bin:$HOME/.local/bin:$PATH"
+
 
 # ==============================================================================
 # 2. Environment Variables
@@ -16,6 +20,27 @@ export PATH="$HOME/.local/bin:$PATH"
 # --- Cross-Platform Environment ---
 export LANG=en_AU.UTF-8
 export LC_ALL=en_AU.UTF-8
+
+# --- Editor ---
+export EDITOR=nvim
+
+# --- History ---
+export HISTFILE=~/.zsh_history
+export HISTSIZE=50000
+export SAVEHIST=50000
+setopt EXTENDED_HISTORY          # Write timestamp to history
+setopt HIST_EXPIRE_DUPS_FIRST    # Expire duplicates first
+setopt HIST_IGNORE_DUPS          # Don't record duplicates
+setopt HIST_IGNORE_ALL_DUPS      # Delete old duplicates
+setopt HIST_FIND_NO_DUPS         # Don't display duplicates
+setopt HIST_IGNORE_SPACE         # Don't record commands starting with space
+setopt HIST_SAVE_NO_DUPS         # Don't write duplicates
+setopt SHARE_HISTORY             # Share history between sessions
+
+# --- Globbing & Error Handling ---
+setopt EXTENDED_GLOB        # Use extended globbing syntax
+setopt NULL_GLOB            # Don't error on no matches, just return empty
+setopt NUMERIC_GLOB_SORT    # Sort filenames numerically
 
 # --- Python ---
 export PIP_REQUIRE_VIRTUALENV=true
@@ -42,6 +67,9 @@ export OTEL_SDK_DISABLED=true; export PLAUSIBLE_TELEMETRY_DISABLED=true
 export POSTHOG_TELEMETRY_DISABLED=true; export TELEMETRY=false
 export TELEMETRY_DISABLED=true; export TELEMETRY_ENABLED=false
 export TELEMETRY_OPTOUT=true; export VSCODE_TELEMETRY_OPTOUT=1
+export CLAUDE_CODE_ENABLE_TELEMETRY=0; export DISABLE_BUG_COMMAND=1
+export DISABLE_ERROR_REPORTING=1
+
 
 # ==============================================================================
 # 3. OS Detection
@@ -69,6 +97,7 @@ case "$(uname -s)" in
         ;;
 esac
 
+
 # ==============================================================================
 # 4. Onboarding & Dependency Checks (Linux Only)
 # ==============================================================================
@@ -78,10 +107,19 @@ if [[ "$IS_LINUX" == "true" && -f ~/.zsh_linux_onboarding && -z "$_ONBOARDING_CO
     export _ONBOARDING_COMPLETE=true
 fi
 
+
 # ==============================================================================
 # 5. Full PATH Configuration
 # ==============================================================================
-# Use Zsh's `path` array to manage the rest of the PATH and avoid duplicates.
+# --- WSL GPU Support (for SSH access) ---
+# WSL stores Windows NVIDIA drivers here. When SSHing into WSL, this path
+# isn't automatically added, so we add it manually for GPU access.
+if [[ "$IS_WSL" == "true" && -d "/usr/lib/wsl/lib" ]]; then
+    export LD_LIBRARY_PATH="/usr/lib/wsl/lib:${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    path+=("/usr/lib/wsl/lib")
+fi
+
+# Use Zsh's `path` array to manage the path and ensure that the path array contains only unique entries (no duplicates).
 typeset -U path
 
 # Prepend OS-specific paths
@@ -105,6 +143,18 @@ path+=(
 if command -v go &>/dev/null; then
     path+=("$(go env GOPATH)/bin")
 fi
+
+# Prepend macOS-specific paths
+if [[ "$IS_MAC" == "true" ]]; then
+    path+=(
+		"$HOME/.turso" # Turso
+		"$HOME/.antigravity/antigravity/bin" # Antigravity
+		"$HOME/Library/pnpm" # pnpm
+		"$PNPM_HOME" # pnpm home
+		"$HOME/Library/Application Support/Local/lightning-services/mysql-8.0.35+4/bin/darwin/bin" # MySQL from Local dev tool
+    )
+fi
+
 
 # ==============================================================================
 # 6. UI, Zsh, Oh My Zsh & Powerlevel10k
@@ -130,7 +180,7 @@ fi
 [[ -n $CURSOR_TRACE_ID ]] && ZSH_THEME="robbyrussell" || ZSH_THEME="powerlevel10k/powerlevel10k"
 
 # --- Oh My Zsh Plugins ---
-plugins=(git docker zsh-autosuggestions zsh-syntax-highlighting vscode history-substring-search)
+plugins=(git docker zsh-autosuggestions zsh-syntax-highlighting zsh-completions vscode history-substring-search)
 
 # --- Add to fpath BEFORE sourcing Oh My Zsh ---
 # This ensures OMZ's `compinit` call finds these completion files.
@@ -159,12 +209,16 @@ command -v register-python-argcomplete >/dev/null && eval "$(register-python-arg
 command -v uv >/dev/null && eval "$(uv generate-shell-completion zsh)"
 [ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
 
+
 # ==============================================================================
-# 6. NVM (Node Version Manager)
+# 7. NVM (Node Version Manager)
 # ==============================================================================
+# --- NVM Setup ---
 # Official, unified loading script for script-based installations.
 # This snippet is based on the official NVM README for robustness and XDG compliance.
 export NVM_DIR="$([ -z "${XDG_CONFIG_HOME-}" ] && printf %s "${HOME}/.nvm" || printf %s "${XDG_CONFIG_HOME}/nvm")"
+
+# If NVM is installed, load it but don't activate Node yet.
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh" --no-use
 
 # --- NVM Automatic Version Switching ---
@@ -173,6 +227,10 @@ export NVM_DIR="$([ -z "${XDG_CONFIG_HOME-}" ] && printf %s "${HOME}/.nvm" || pr
 # switch versions for each project.
 # Based on the official nvm documentation for speeding up zsh.
 autoload -U add-zsh-hook
+
+# --- NVM Automatic Version Switching ---
+# Automatically switches to the Node version specified in .nvmrc if found in the current directory
+# (or parent directories), otherwise reverts to the default Node version
 load-nvmrc() {
 	# Ensure nvm command is available before trying to use it
     if ! command -v nvm &>/dev/null; then return; fi
@@ -191,13 +249,16 @@ load-nvmrc() {
         nvm use default --silent
     fi
 }
+
+# Runs the load-nvmrc function automatically every time you change directories.
 add-zsh-hook chpwd load-nvmrc
-# Only run the initial load if the nvm command exists.
+
+# Runs the load-nvmrc function automatically when the shell starts.
 command -v nvm &>/dev/null && load-nvmrc
 
 
 # ==============================================================================
-# 7. Functions & Final Hooks
+# 8. Functions & Final Hooks
 # ==============================================================================
 # --- Load Custom Functions ---
 # Make your helper functions available before they are used by aliases or other scripts.
@@ -205,6 +266,31 @@ command -v nvm &>/dev/null && load-nvmrc
 for func_file in ~/.zsh_python_functions ~/.zsh_node_functions ~/.zsh_docker_functions ~/.zsh_cursor_functions; do
     [ -f "$func_file" ] && source "$func_file"
 done
+
+# --- Yazi File Manager Integration ---
+# Navigate directories visually and have the shell follow your location on exit
+function y() {
+    local tmp="$(mktemp -t "yazi-cwd.XXXXXX")" cwd
+    yazi "$@" --cwd-file="$tmp"
+    if cwd="$(command cat -- "$tmp")" && [ -n "$cwd" ] && [ "$cwd" != "$PWD" ]; then
+        builtin cd -- "$cwd"
+    fi
+    rm -f -- "$tmp"
+}
+
+# --- Performance Profiling ---
+# Time how long your shell takes to start
+timezsh() {
+    shell=${1-$SHELL}
+    for i in $(seq 1 10); do time $shell -i -c exit; done
+}
+# Profile which parts of .zshrc are slow
+profilezsh() {
+    ZPROF=1 zsh -i -c exit
+}
+
+# To hide direnv messages to be displayed in the terminal, added `hide_env_diff = true` in
+# this file: `~/.config/direnv/direnv.toml`
 
 # --- Hook Direnv into the Shell ---
 # IMPORTANT: This must be one of the last things in your .zshrc.
@@ -216,14 +302,54 @@ fi
 # Prevent "zsh: no matches found" error
 setopt nonomatch
 
+
 # ==============================================================================
-# 8. Aliases & Functions
+# 9. Aliases & Functions
 # ==============================================================================
 # --- Common Aliases (Cross-Platform) ---
-alias cls="clear"; alias ..="cd .."; alias ....="cd ../.."; alias ~="cd ~"
-alias ll="lsd -al" # Requires lsd (https://github.com/lsd-rs/lsd)
+alias cls="clear"
+alias ..="cd .."
+alias ...="cd ../.."
+alias ....="cd ../../.."
+alias .....="cd ../../../.."
+alias ~="cd ~"
+# alias ll="lsd -altr" # Requires lsd (https://github.com/lsd-rs/lsd)
+# alias l="lsd -altr"
+alias l="eza -l --git --grid --color=always --icons=always --no-quotes --hyperlink -a -s modified --time modified --git-repos-no-status"
+alias ll="eza -l --git --time-style relative --color=always --icons=always --no-quotes --hyperlink -a -s modified --time modified --git-repos-no-status"
 alias search="grep --color=auto -rnw . -e "
 alias pip="uv pip"
+alias chawan="cha"
+alias web="cha"
+alias www="cha"
+alias lzd='lazydocker'
+alias lzd='lazydocker'
+alias lzg='lazygit'
+alias lg='lazygit'
+# alias c="ENABLE_EXPERIMENTAL_MCP_CLI=true claude --dangerously-skip-permissions"
+alias c="ENABLE_EXPERIMENTAL_MCP_CLI=true ENABLE_TOOL_SEARCH=true claude --dangerously-skip-permissions"
+# alias c="ENABLE_TOOL_SEARCH=true claude --dangerously-skip-permissions"
+
+# Intercepting the use of a command like 'sudo claude update' :P
+sudo() {
+	if [[ "$1" == "claude" ]]; then
+		echo "⚠️  Don't use sudo with claude commands!"
+		echo "Running: claude ${@:2}"
+		command claude "${@:2}"
+	else
+		command sudo "$@"
+	fi
+}
+
+# --- OS Information Aliases ---
+if [[ "$IS_WSL" == "true" ]] || [[ "$IS_LINUX" == "true" ]]; then
+    alias os='cat /etc/os-release'
+fi
+
+# --- Zoxide ---
+# https://github.com/ajeetdsouza/zoxide
+# This makes zoxide respond to cd directly while keeping the real cd available as __zoxide_cd internally. This is the "official" way to replace cd
+eval "$(zoxide init zsh --cmd cd)"
 
 # alias python="$(get_uv_python_path $PYTHON_DEFAULT_VERSION)"
 # alias python3="$(get_uv_python_path $PYTHON_DEFAULT_VERSION)"
@@ -231,11 +357,29 @@ alias pip="uv pip"
 # Use functions for python commands instead of aliases.
 # This avoids startup errors by checking for the python path only when the
 # command is actually run ("just-in-time"), not when the shell starts.
+# Priority: active venv > local .venv > local venv > uv global
 python() {
+    # Priority 1: If VIRTUAL_ENV is set (venv activated), use it
+    if [[ -n "$VIRTUAL_ENV" && -x "$VIRTUAL_ENV/bin/python" ]]; then
+        "$VIRTUAL_ENV/bin/python" "$@"
+        return
+    fi
+    # Priority 2: Check for local .venv in current directory
+    if [[ -x ".venv/bin/python" ]]; then
+        ".venv/bin/python" "$@"
+        return
+    fi
+    # Priority 3: Check for local venv in current directory
+    if [[ -x "venv/bin/python" ]]; then
+        "venv/bin/python" "$@"
+        return
+    fi
+    # Fallback: Use uv-managed global python
     local python_path=$(get_uv_python_path "${PYTHON_DEFAULT_VERSION}")
     if [[ -n "$python_path" ]]; then "$python_path" "$@"; else return 1; fi
 }
-python3() { python "$@"; }
+# Commenting this!! Bad idea because it links to the system 'python' and not the uv venv's python
+# python3() { python "$@"; }
 
 py313() { "$(get_uv_python_path 3.13)" "$@"; }; py312() { "$(get_uv_python_path 3.12)" "$@"; }
 py311() { "$(get_uv_python_path 3.11)" "$@"; }; py310() { "$(get_uv_python_path 3.10)" "$@"; }
@@ -287,7 +431,7 @@ fi
 
 
 # ==============================================================================
-# 9. Welcome / Onboarding Scripts
+# 10. Welcome / Onboarding Scripts
 # ==============================================================================
 # Only run in interactive shells on first load.
 if [[ -z "$_WELCOME_MESSAGE_SHOWN" && -t 1 ]]; then
@@ -302,28 +446,5 @@ if [[ -z "$_WELCOME_MESSAGE_SHOWN" && -t 1 ]]; then
     export _WELCOME_MESSAGE_SHOWN=true
 fi
 
-# ==============================================================================
-# 10. Load Private & Machine-Specific Configuration
-# ==============================================================================
-#
-# For settings that are unique to this specific machine or contain sensitive
-# information, create a file at ~/.zshrc.private.
-#
-# This file is for:
-#   - API keys and other secrets (e.g., export OPENAI_API_KEY="...")
-#   - Aliases for scripts that only exist on this machine.
-#   - PATH exports for tools installed in non-standard, local-only locations.
-#
-# IMPORTANT: This file should NEVER be checked into version control (e.g., Git).
-# Be sure to add ~/.zshrc.private to your .gitignore file.
-#
-if [[ -f ~/.zshrc.private ]]; then
-    source ~/.zshrc.private
-fi
-
-# ==============================================================================
-# END OF MANAGED CONFIGURATION !
-# Any configuration below this line was likely added automatically by an
-# external script or installer. It should be reviewed, moved to the correct
-# file (e.g., ~/.zshrc.private), or deleted to keep this file clean.
-# ==============================================================================
+# End profiling
+[[ -n "$ZPROF" ]] && zprof

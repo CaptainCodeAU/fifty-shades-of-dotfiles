@@ -1,0 +1,216 @@
+# ~/.config/direnv/direnvrc
+# =============================================================================
+# Global direnv hooks - sourced before every .envrc file
+# =============================================================================
+
+# =============================================================================
+# VSCode/Cursor Machine Settings - Automatic Color Setup
+# =============================================================================
+# Sets machine-specific title bar and status bar colors for visual identification
+# when working across multiple machines via SSH.
+#
+# Colors:
+#   macOS (AdminMBP)           → Dark Gray  #202020
+#   WSL Ubuntu (mlbox.lan)     → Blue       #1a4d7a
+#   Linux LXC 111 (production) → Orange     #D96400
+#   Linux VM 105 (codebox.lan) → Green      #97B500
+
+_setup_vscode_machine_colors() {
+    # Only run once per shell session to avoid repeated checks
+    [[ -n "$_VSCODE_COLORS_CHECKED" ]] && return 0
+    export _VSCODE_COLORS_CHECKED=true
+
+    local color=""
+    local machine_name=""
+    local settings_files=()
+    local is_macos=false
+
+    # -------------------------------------------------------------------------
+    # OS/Environment Detection (mirrors .zshrc logic)
+    # -------------------------------------------------------------------------
+    local is_mac=false
+    local is_wsl=false
+    local is_linux=false
+
+    case "$(uname -s)" in
+        Darwin)
+            is_mac=true
+            is_macos=true
+            ;;
+        Linux)
+            if [[ "$(uname -r)" =~ [Ww][Ss][Ll] || -f /proc/sys/fs/binfmt_misc/WSLInterop ]]; then
+                is_wsl=true
+            else
+                is_linux=true
+            fi
+            ;;
+    esac
+
+    # -------------------------------------------------------------------------
+    # Machine-Specific Color Assignment
+    # -------------------------------------------------------------------------
+    if [[ "$is_mac" == true ]]; then
+        # macOS local development - Dark gray
+        color="#202020"
+        machine_name="macOS"
+        # macOS runs VSCode/Cursor locally - settings are in Application Support
+        settings_files=(
+            "$HOME/Library/Application Support/Code/User/settings.json"
+            "$HOME/Library/Application Support/Cursor/User/settings.json"
+        )
+
+    elif [[ "$is_wsl" == true ]]; then
+        # WSL Ubuntu (mlbox.lan) - Blue
+        color="#1a4d7a"
+        machine_name="WSL-Ubuntu"
+        settings_files=(
+            "$HOME/.vscode-server/data/Machine/settings.json"
+            "$HOME/.cursor-server/data/Machine/settings.json"
+        )
+
+    elif [[ "$is_linux" == true ]]; then
+        # Differentiate Linux machines by hostname
+        case "$(hostname)" in
+            *codebox*|*105*)
+                # Linux VM qemu 105 (codebox.lan) - Green
+                color="#97B500"
+                machine_name="Linux-Codebox"
+                ;;
+            *)
+                # Linux LXC 111 / production - Orange (default for unknown Linux)
+                color="#D96400"
+                machine_name="Linux-Production"
+                ;;
+        esac
+        settings_files=(
+            "$HOME/.vscode-server/data/Machine/settings.json"
+            "$HOME/.cursor-server/data/Machine/settings.json"
+        )
+    fi
+
+    # -------------------------------------------------------------------------
+    # Apply Color Settings
+    # -------------------------------------------------------------------------
+    # Skip if no color was determined
+    [[ -z "$color" ]] && return 0
+
+    # The color customization object to merge
+    local color_json
+    color_json=$(cat << EOF
+{
+    "workbench.colorCustomizations": {
+        "titleBar.activeBackground": "${color}",
+        "titleBar.activeForeground": "#e7e7e7",
+        "titleBar.inactiveBackground": "${color}",
+        "titleBar.inactiveForeground": "#999999",
+        "statusBar.background": "${color}",
+        "statusBar.foreground": "#e7e7e7"
+    }
+}
+EOF
+)
+
+    for settings_file in "${settings_files[@]}"; do
+        local settings_dir=$(dirname "$settings_file")
+
+        if [[ "$is_macos" == true ]]; then
+            # -----------------------------------------------------------------
+            # macOS: Insert color settings using sed (handles JSONC with comments)
+            # -----------------------------------------------------------------
+            # Skip if the Application Support directory doesn't exist
+            # (means the app isn't installed)
+            [[ ! -d "$settings_dir" ]] && continue
+
+            if [[ -f "$settings_file" ]]; then
+                # File exists - check if colorCustomizations already has titleBar settings
+                if grep -q "titleBar.activeBackground" "$settings_file" 2>/dev/null; then
+                    # Colors already configured - skip
+                    continue
+                fi
+
+                # Check if workbench.colorCustomizations section exists
+                if grep -q '"workbench.colorCustomizations"' "$settings_file" 2>/dev/null; then
+                    # Section exists - insert colors INTO the existing block
+                    # (after the "workbench.colorCustomizations": { line)
+                    sed -i.bak '/"workbench.colorCustomizations": {/a\
+        "titleBar.activeBackground": "'"${color}"'",\
+        "titleBar.activeForeground": "#e7e7e7",\
+        "titleBar.inactiveBackground": "'"${color}"'",\
+        "titleBar.inactiveForeground": "#999999",\
+        "statusBar.background": "'"${color}"'",\
+        "statusBar.foreground": "#e7e7e7",
+' "$settings_file"
+                    rm -f "${settings_file}.bak"
+                else
+                    # Section doesn't exist - insert after the very first line (opening brace)
+                    # Using line number 1 explicitly to avoid matching braces elsewhere
+                    sed -i.bak '1 a\
+    "workbench.colorCustomizations": {\
+        "titleBar.activeBackground": "'"${color}"'",\
+        "titleBar.activeForeground": "#e7e7e7",\
+        "titleBar.inactiveBackground": "'"${color}"'",\
+        "titleBar.inactiveForeground": "#999999",\
+        "statusBar.background": "'"${color}"'",\
+        "statusBar.foreground": "#e7e7e7"\
+    },
+' "$settings_file"
+                    rm -f "${settings_file}.bak"
+                fi
+            else
+                # File doesn't exist - create it with just the color settings
+                mkdir -p "$settings_dir"
+                echo "$color_json" > "$settings_file"
+            fi
+        else
+            # -----------------------------------------------------------------
+            # Linux/WSL: Remote server settings (similar logic to macOS)
+            # -----------------------------------------------------------------
+            if [[ -f "$settings_file" ]]; then
+                # File exists - check if colorCustomizations already has titleBar settings
+                if grep -q "titleBar.activeBackground" "$settings_file" 2>/dev/null; then
+                    # Colors already configured - skip
+                    continue
+                fi
+
+                # Check if workbench.colorCustomizations section exists
+                if grep -q '"workbench.colorCustomizations"' "$settings_file" 2>/dev/null; then
+                    # Section exists - insert colors INTO the existing block
+                    sed -i.bak '/"workbench.colorCustomizations": {/a\
+        "titleBar.activeBackground": "'"${color}"'",\
+        "titleBar.activeForeground": "#e7e7e7",\
+        "titleBar.inactiveBackground": "'"${color}"'",\
+        "titleBar.inactiveForeground": "#999999",\
+        "statusBar.background": "'"${color}"'",\
+        "statusBar.foreground": "#e7e7e7",
+' "$settings_file"
+                    rm -f "${settings_file}.bak"
+                else
+                    # Section doesn't exist - insert after the first line
+                    sed -i.bak '1 a\
+    "workbench.colorCustomizations": {\
+        "titleBar.activeBackground": "'"${color}"'",\
+        "titleBar.activeForeground": "#e7e7e7",\
+        "titleBar.inactiveBackground": "'"${color}"'",\
+        "titleBar.inactiveForeground": "#999999",\
+        "statusBar.background": "'"${color}"'",\
+        "statusBar.foreground": "#e7e7e7"\
+    },
+' "$settings_file"
+                    rm -f "${settings_file}.bak"
+                fi
+            else
+                # File doesn't exist - create it with color settings
+                mkdir -p "$settings_dir"
+                echo "$color_json" > "$settings_file"
+            fi
+        fi
+    done
+
+    # Uncomment the line below to see a notification when colors are set
+    # echo "✨ VSCode/Cursor colors configured for $machine_name ($color)"
+}
+
+# =============================================================================
+# Run Setup Hooks
+# =============================================================================
+_setup_vscode_machine_colors

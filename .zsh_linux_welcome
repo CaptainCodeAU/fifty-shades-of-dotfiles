@@ -9,7 +9,21 @@ show_welcome() {
     if command -v lsb_release >/dev/null; then echo "    Distro: $(lsb_release -ds)"; fi
     echo "    Kernel: $(uname -r)"
 
-    # --- Python ---
+    # --- uv (the preferred Python tool) ---
+    if command -v uv &>/dev/null; then
+        local uv_version=$(uv --version 2>/dev/null | awk '{print $2}')
+        local uv_python_path=$(get_uv_python_path "${PYTHON_DEFAULT_VERSION}" 2>/dev/null)
+        if [[ -n "$uv_python_path" ]]; then
+            local uv_python_version=$("$uv_python_path" --version 2>/dev/null)
+            echo "    uv: ${ok}${uv_version}${done} (Python ${PYTHON_DEFAULT_VERSION}: $uv_python_version)"
+        else
+            echo "    uv: ${ok}${uv_version}${done} (Python ${PYTHON_DEFAULT_VERSION}: ${warn}not installed${done})"
+        fi
+    else
+        echo "    uv: ${err}Not Found${done}"
+    fi
+
+    # --- System Python (informational only) ---
     if command -v python3 &>/dev/null; then
         echo "    System python3: $(command -v python3) ($(command python3 --version 2>/dev/null))"
     else
@@ -63,7 +77,7 @@ if command -v get_uv_python_path &>/dev/null && ! get_uv_python_path "${PYTHON_D
     echo
     echo "${warn}⚠️  Default Python (${PYTHON_DEFAULT_VERSION}) not found in 'uv' cache.${done}"
     if [[ -t 1 ]]; then
-        # Corrected the variable in the prompt to show the full version.
+	    # Corrected the variable in the prompt to show the full version.
         read "REPLY?    👉 Would you like to run 'uv python install python@${PYTHON_DEFAULT_VERSION}' now? [y/N] "
         case "$REPLY" in
             [yY][eE][sS]|[yY])

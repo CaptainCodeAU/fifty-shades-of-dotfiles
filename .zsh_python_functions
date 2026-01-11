@@ -21,8 +21,16 @@ get_uv_python_path() {
     # Find the *latest installed patch version* for the requested major.minor
     # Ignores lines indicating only "download available"
     # Uses awk for cleaner parsing than multiple greps/tails
+    # Note: uv may list paths as relative (.local/...) or absolute (/home/...)
     python_path=$(uv python list 2>/dev/null | \
-        awk -v prefix="cpython-${version_prefix}." '$1 ~ "^" prefix && $2 ~ /^\// { print $2 }' | \
+        awk -v prefix="cpython-${version_prefix}." -v home="$HOME" \
+            '$1 ~ "^" prefix && $2 ~ /^[\/\.]/ {
+                path = $2
+                # Convert relative paths (starting with .) to absolute paths
+                # .local/... -> $HOME/.local/...
+                if (substr(path, 1, 1) == ".") { path = home "/" path }
+                print path
+            }' | \
         sort -V | \
         tail -n 1)
 
@@ -45,6 +53,9 @@ get_uv_python_path() {
 
 # Function to create/update the VSCode project's local settings.json file
 # Creates the file with defaults only if it doesn't exist, to avoid overwriting user changes.
+# NOTE: This creates WORKSPACE settings (.vscode/settings.json), not user settings.
+#       Machine colors (titleBar, statusBar) are managed by ~/.config/direnv/direnvrc
+#       and should NOT be added here (workspace would override machine colors).
 # Usage: update_vscode_settings
 update_vscode_settings() {
     local settings_dir=".vscode"
@@ -56,76 +67,118 @@ update_vscode_settings() {
     # Only create settings.json if it doesn't already exist
     if [[ ! -f "$settings_file" ]]; then
         echo "Creating default VSCode settings file: $settings_file"
-        # Use tabs for indentation as requested by the original config's sed command
-        cat <<-'EOF' | sed 's/^    /\t/g' > "$settings_file"
+        # Convert 4-space indentation to tabs (matches prettier.useTabs: true)
+        cat << 'EOF' | sed 's/^    /\t/g' > "$settings_file"
 {
-	"editor.indentSize": "tabSize",
-	"editor.tabSize": 4,
-	"editor.fontSize": 12,
-	"editor.suggestFontSize": 12,
-	"editor.minimap.enabled": false,
-	"editor.inlineSuggest.enabled": true,
-	"editor.bracketPairColorization.enabled": true,
-	"editor.formatOnSave": true,
-	"editor.linkedEditing": true,
-	"editor.accessibilitySupport": "off",
+    // ========================================
+    // Workspace Settings (project-specific)
+    // ========================================
+    // NOTE: Machine colors (titleBar, statusBar) are managed by direnvrc.
+    //       Do NOT add workbench.colorCustomizations here.
+
+    // ========================================
+    // Editor Settings
+    // ========================================
+    "editor.tabSize": 4,
+    "editor.indentSize": "tabSize",
     "editor.insertSpaces": false,
-	"editor.tabSize": 4,
-	"editor.detectIndentation": false,
-	"css.lint.unknownAtRules": "ignore",
-	"workbench.startupEditor": "none",
-	"workbench.editor.enablePreview": false,
-	"explorer.confirmDragAndDrop": false,
-	"git.confirmSync": false,
-	"git.autofetch": true,
-	"security.workspace.trust.untrustedFiles": "open",
-	"gitHistory.logLevel": "Debug",
-	"python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
-	"python.analysis.typeCheckingMode": "basic",
-	"python.experiments.optOutFrom": ["All"],
-	"[python]": {
-		"editor.formatOnType": true,
-		"editor.formatOnSave": true,
-		"editor.codeActionsOnSave": {
-			"source.fixAll": "explicit",
-			"source.organizeImports": "explicit",
-		},
-		"editor.defaultFormatter": "charliermarsh.ruff",
-		"editor.rulers": [80],
-		"editor.tabCompletion": "onlySnippets",
-		"editor.wordBasedSuggestions": "matchingDocuments",
-		"python.formatting.provider": "black",
-		"python.formatting.blackArgs": ["--line-length", "80"],
-	},
-	"ruff.nativeServer": "on",
-	"ruff.logLevel": "warn",
-	"ruff.interpreter": ["${workspaceFolder}/.venv/bin/python"],
-	"[json]": {
-		"editor.defaultFormatter": "vscode.json-language-features"
-	},
-	"prettier.printWidth": 80,
-	"prettier.tabWidth": 4,
-	"prettier.singleQuote": true,
-	"prettier.trailingComma": "all",
-	"prettier.bracketSpacing": true,
-	"prettier.useTabs": true,
-	"prettier.arrowParens": "avoid",
-	"prettier.endOfLine": "auto",
-	"accessibility.signals": {
-		"diffLineDeleted": "off",
-		"diffLineInserted": "off",
-		"diffLineModified": "off",
-		"lineHasBreakpoint": "off",
-		"lineHasError": "off",
-		"lineHasFoldedArea": "off",
-		"lineHasInlineSuggestion": "off",
-		"noInlayHints": "off",
-		"onDebugBreak": "off",
-		"taskCompleted": "off",
-		"taskFailed": "off",
-		"terminalCommandFailed": "off",
-		"terminalQuickFix": "off"
-	}
+    "editor.detectIndentation": false,
+    "editor.fontSize": 12,
+    "editor.suggestFontSize": 12,
+    "editor.minimap.enabled": false,
+    "editor.inlineSuggest.enabled": true,
+    "editor.bracketPairColorization.enabled": true,
+    "editor.formatOnSave": true,
+    "editor.linkedEditing": true,
+    "editor.accessibilitySupport": "off",
+
+    // ========================================
+    // Workbench and Explorer
+    // ========================================
+    "workbench.startupEditor": "none",
+    "workbench.editor.enablePreview": false,
+    "explorer.confirmDragAndDrop": false,
+
+    // ========================================
+    // Git Settings
+    // ========================================
+    "git.confirmSync": false,
+    "git.autofetch": true,
+    "gitHistory.logLevel": "Debug",
+
+    // ========================================
+    // Security
+    // ========================================
+    "security.workspace.trust.untrustedFiles": "open",
+
+    // ========================================
+    // Python Settings
+    // ========================================
+    "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+    "python.analysis.typeCheckingMode": "basic",
+    "python.experiments.optOutFrom": ["All"],
+    "[python]": {
+        "editor.formatOnType": true,
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+            "source.fixAll": "explicit",
+            "source.organizeImports": "explicit"
+        },
+        "editor.defaultFormatter": "charliermarsh.ruff",
+        "editor.rulers": [80],
+        "editor.tabCompletion": "onlySnippets",
+        "editor.wordBasedSuggestions": "matchingDocuments"
+    },
+
+    // ========================================
+    // Ruff (Python Linter/Formatter)
+    // ========================================
+    "ruff.nativeServer": "on",
+    "ruff.logLevel": "warn",
+    "ruff.interpreter": ["${workspaceFolder}/.venv/bin/python"],
+
+    // ========================================
+    // JSON Settings
+    // ========================================
+    "[json]": {
+        "editor.defaultFormatter": "vscode.json-language-features"
+    },
+
+    // ========================================
+    // Prettier (Formatting)
+    // ========================================
+    "prettier.printWidth": 80,
+    "prettier.tabWidth": 4,
+    "prettier.singleQuote": true,
+    "prettier.trailingComma": "all",
+    "prettier.bracketSpacing": true,
+    "prettier.useTabs": true,
+    "prettier.arrowParens": "avoid",
+    "prettier.endOfLine": "auto",
+
+    // ========================================
+    // CSS
+    // ========================================
+    "css.lint.unknownAtRules": "ignore",
+
+    // ========================================
+    // Accessibility (sounds off)
+    // ========================================
+    "accessibility.signals": {
+        "diffLineDeleted": "off",
+        "diffLineInserted": "off",
+        "diffLineModified": "off",
+        "lineHasBreakpoint": "off",
+        "lineHasError": "off",
+        "lineHasFoldedArea": "off",
+        "lineHasInlineSuggestion": "off",
+        "noInlayHints": "off",
+        "onDebugBreak": "off",
+        "taskCompleted": "off",
+        "taskFailed": "off",
+        "terminalCommandFailed": "off",
+        "terminalQuickFix": "off"
+    }
 }
 EOF
     else
@@ -310,10 +363,135 @@ yarn.lock
 tmp/
 temp/
 _ignore/
+
+# Project-specific temp/working directories
+Temp/
 EOF
     else
         echo ".gitignore already exists. (Skipping creation)"
     fi
+}
+
+# Function to create .envrc file with rich formatted welcome and venv activation
+# Usage: create_envrc <project_name> <project_name_cli> <python_version>
+# Creates a visually styled .envrc with all common commands and project info
+create_envrc() {
+    local project_name=${1:-$(basename "$PWD")}
+    local project_name_cli=${2:-$(echo "$project_name" | tr '_' '-')}
+    local python_version=${3:-"3.x"}
+
+    if [[ -f ".envrc" ]]; then
+        echo ".envrc already exists. (Skipping creation)"
+        return
+    fi
+
+    echo "Creating .envrc with rich formatted welcome..."
+
+    # Create .envrc with rich styling and comprehensive commands
+    cat <<'EOF' > .envrc
+# PROJECT_NAME Python Environment
+
+# Essential venv activation (must be included)
+# Only set VIRTUAL_ENV_PROMPT and activate if venv actually exists
+if [[ -d ".venv" ]]; then
+    export VIRTUAL_ENV_PROMPT="($(basename "$PWD"))"
+    source .venv/bin/activate
+elif [[ -d "venv" ]]; then
+    export VIRTUAL_ENV_PROMPT="($(basename "$PWD"))"
+    source venv/bin/activate
+fi
+
+# Clear the "direnv: loading..." line
+printf "\033[A\033[2K"
+
+echo ""
+echo "┌───────────────────────────────────────────────────────────────────────┐"
+echo -e "│                        \033[35m🐍 PROJECT_DISPLAY\033[0m                           │"
+echo "└───────────────────────────────────────────────────────────────────────┘"
+echo "│"
+echo "│  🚀 Quick Start:"
+echo "│  ──────────────"
+echo -e "│     \033[3;33mPROJECT_CLI\033[0m                # Run CLI tool"
+echo -e "│     \033[3;33muv run pytest\033[0m              # Run tests"
+echo -e "│     \033[3;33muv run python -m PROJECT_NAME.cli --help\033[0m"
+echo "│"
+echo "│  🧪 Testing:"
+echo "│  ──────────"
+echo -e "│     \033[3;33muv run pytest\033[0m              # Run all tests"
+echo -e "│     \033[3;33muv run pytest -v\033[0m           # Verbose output"
+echo -e "│     \033[3;33muv run pytest --cov\033[0m        # With coverage report"
+echo "│"
+echo "│  🔧 Code Quality:"
+echo "│  ───────────────"
+echo -e "│     \033[3;33muv run ruff check .\033[0m        # Lint code"
+echo -e "│     \033[3;33muv run ruff format .\033[0m       # Format code"
+echo -e "│     \033[3;33muv run mypy src/\033[0m           # Type check"
+echo "│"
+echo "│  📦 Package Management:"
+echo "│  ─────────────────────"
+echo -e "│     \033[3;33muv pip install <pkg>\033[0m       # Install package"
+echo -e "│     \033[3;33muv add <package>\033[0m           # Add to dependencies"
+echo -e "│     \033[3;33muv pip list\033[0m                # List installed packages"
+echo "│"
+echo "│  🔄 Development:"
+echo "│  ──────────────"
+echo -e "│     \033[3;33muv pip install -e .\033[0m        # Reinstall in editable mode"
+echo -e "│     \033[3;33muv pip install -e '.[dev]'\033[0m # With dev dependencies"
+echo "│"
+echo "│  ℹ️  Info:"
+echo "│  ────────"
+echo -e "│     Python: \033[36m$(uv run python --version 2>&1 | cut -d' ' -f2)\033[0m"
+echo -e "│     Binary: \033[36m$(which python)\033[0m"
+echo -e "│     Project: \033[36m$(basename "$PWD")\033[0m"
+echo -e "│     Version: \033[36m$(uv run python -c "import PROJECT_NAME; print(PROJECT_NAME.__version__)" 2>/dev/null || echo "0.1.0")\033[0m"
+echo "│"
+echo "└───────────────────────────────────────────────────────────────────────┘"
+echo ""
+echo "│  ℹ️  Environment Info:"
+echo "│  ─────────────────────"
+echo -e "│     Machine: \033[36m$(hostname)\033[0m"
+echo -e "│     Kernel:  \033[36m$(uname -r)\033[0m"
+echo -e "│     Shell:   \033[36m$SHELL\033[0m"
+echo "│"
+echo "│  📁 VSCode Settings Check:"
+echo "│  ─────────────────────────"
+if [[ "$(uname -s)" == "Darwin" ]]; then
+    # macOS - check local app settings
+    if grep -q "titleBar.activeBackground" "$HOME/Library/Application Support/Code/User/settings.json" 2>/dev/null; then
+        echo -e "│     VSCode:  \033[32m✓ Configured\033[0m"
+    else
+        echo -e "│     VSCode:  \033[33m✗ Not configured\033[0m"
+    fi
+    if grep -q "titleBar.activeBackground" "$HOME/Library/Application Support/Cursor/User/settings.json" 2>/dev/null; then
+        echo -e "│     Cursor:  \033[32m✓ Configured\033[0m"
+    else
+        echo -e "│     Cursor:  \033[33m✗ Not configured\033[0m"
+    fi
+else
+    # Linux/WSL - check remote server settings
+    if [[ -f "$HOME/.vscode-server/data/Machine/settings.json" ]]; then
+        echo -e "│     VSCode:  \033[32m✓ Found\033[0m"
+    else
+        echo -e "│     VSCode:  \033[33m✗ Not found\033[0m"
+    fi
+    if [[ -f "$HOME/.cursor-server/data/Machine/settings.json" ]]; then
+        echo -e "│     Cursor:  \033[32m✓ Found\033[0m"
+    else
+        echo -e "│     Cursor:  \033[33m✗ Not found\033[0m"
+    fi
+fi
+echo "│"
+echo "└───────────────────────────────────────────────────────────────────────┘"
+echo ""
+EOF
+
+    # Replace placeholders with actual project values
+    sed -i.bak "s/PROJECT_NAME/$project_name/g" .envrc
+    sed -i.bak "s/PROJECT_CLI/$project_name_cli/g" .envrc
+    sed -i.bak "s/PROJECT_DISPLAY/$project_name_cli/g" .envrc
+    rm -f .envrc.bak
+
+    echo ".envrc created successfully with rich format."
 }
 
 # Function to create README.md file if it doesn't exist
@@ -475,8 +653,15 @@ python_new_project() {
     echo "Using Python: $req_python_version ($python_interpreter_path)"
     echo "--------------------------------------------------"
 
+    # --- Convert project name to CLI-friendly format ---
+    # Python packages use underscores, but CLI tools conventionally use hyphens
+    local project_name_cli=$(echo "$project_name" | tr '_' '-')
 
-    # --- 1. Initialize project with uv init (creates basic pyproject.toml) ---
+    # --- 1. Create .gitignore before uv init ---
+    # This ensures our comprehensive .gitignore is used instead of uv's minimal version
+    create_gitignore
+
+    # --- 2. Initialize project with uv init (creates basic pyproject.toml) ---
     if [[ ! -f "pyproject.toml" ]]; then
         echo "Running: uv init --python \"${req_python_version}\""
         # Use --no-readme flag since we create our own more detailed one
@@ -488,12 +673,12 @@ python_new_project() {
         echo "pyproject.toml already exists. Skipping 'uv init'."
     fi
 
-    # --- 2. Create project structure ---
+    # --- 3. Create project structure ---
     echo "Creating directories: src/$project_name and tests"
     mkdir -p "src/$project_name"
     mkdir -p "tests"
 
-    # --- 3. Create/Update pyproject.toml with more details ---
+    # --- 4. Create/Update pyproject.toml with more details ---
     echo "Configuring pyproject.toml..."
     local major_minor_version=$(echo "${req_python_version}" | cut -d'.' -f1,2)
     local next_minor_version=$((${major_minor_version#*.} + 1)) # e.g., 11 -> 12
@@ -530,16 +715,15 @@ dev = [
     "ruff",
     "pytest",
     "pytest-cov",
-    # Add other dev tools like type checkers (mypy, pyright) if desired
+    "mypy",  # Type checker for static analysis
 ]
 
 [project.urls]
 Homepage = "https://github.com/CaptainCodeAU/$project_name" # Optional: Update URL
 Repository = "https://github.com/CaptainCodeAU/$project_name" # Optional: Update URL
 
-# [project.scripts]
-# Example: Define console scripts if your package has executables
-my-cli = "$project_name.cli:main"
+[project.scripts]
+$project_name_cli = "$project_name.cli:main"
 
 # Use hatch to manage version based on __init__.py
 [tool.hatch.version]
@@ -577,62 +761,149 @@ minversion = "6.0"
 addopts = "-ra -q --cov=$project_name --cov-report=term-missing"
 testpaths = ["tests"]
 python_files = "test_*.py"
+
+# Mypy type checking configuration
+[tool.mypy]
+python_version = "$major_minor_version"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+strict_equality = true
 EOF
 
-    # --- 4. Create basic source files ---
+    # --- 5. Create basic source files ---
     echo "Creating basic source files..."
-    # src/__init__.py (with version)
+
+    # src/core.py (Business logic module)
+    # This separates core functionality from CLI, making it importable by other projects
+    cat << EOF > "src/$project_name/core.py"
+"""Core functionality for $project_name.
+
+This module contains the main business logic that can be imported
+and used by other Python projects.
+"""
+
+
+def run() -> str:
+    """Run the main functionality.
+
+    This is a placeholder function. Implement actual functionality here.
+
+    Returns:
+        A result string
+    """
+    return "$project_name core functionality - not yet implemented"
+EOF
+
+    # src/__init__.py (Package initialization and public API)
+    # Export core functionality for library usage
     cat << EOF > "src/$project_name/__init__.py"
-"""$project_name package."""
+"""$project_name package.
+
+This package can be used both as a CLI tool and as an importable library.
+"""
+
 __version__ = "0.1.0"
 
-def hello() -> str:
-    """Return a greeting message."""
-    return f"Hello from $project_name version {__version__}!"
+from $project_name.core import run
+
+__all__ = ["__version__", "run"]
 EOF
 
-    # src/main.py (Example main execution)
-    cat << EOF > "src/$project_name/main.py"
-"""Main module for $project_name."""
+    # src/cli.py (Command-line interface entry point)
+    # Handles CLI arguments and user interaction, delegates work to core module
+    cat << EOF > "src/$project_name/cli.py"
+"""Command-line interface for $project_name."""
 
-from $project_name import hello
+import sys
 
-def main() -> None:
-    """Run the main application logic."""
-    message = hello()
-    print(message)
+from $project_name import __version__, run
+
+
+def main() -> int:
+    """CLI entry point.
+
+    Returns:
+        Exit code (0 for success, non-zero for errors)
+    """
+    # Basic CLI structure - expand as needed
+    if len(sys.argv) > 1 and sys.argv[1] in ("--version", "-v"):
+        print(f"$project_name_cli version {__version__}")
+        return 0
+
+    if len(sys.argv) > 1 and sys.argv[1] in ("--help", "-h"):
+        print("$project_name_cli - CLI tool")
+        print(f"Version: {__version__}")
+        print("\\nUsage: $project_name_cli [options]")
+        print("\\nOptions:")
+        print("  --version, -v    Show version")
+        print("  --help, -h       Show this help message")
+        return 0
+
+    # Run the core functionality
+    result = run()
+    print(result)
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
 EOF
 
     # tests/__init__.py (Mark tests as a package)
     touch "tests/__init__.py"
 
-    # tests/test_main.py (Basic example test)
+    # tests/test_main.py (Comprehensive test suite)
+    # Tests both CLI interface and core functionality
     cat << EOF > "tests/test_main.py"
-"""Tests for the main module and core functionality."""
+"""Tests for the CLI and core functionality."""
+
+import sys
 
 import pytest
-from $project_name import hello
-from $project_name.main import main
 
-def test_hello() -> None:
-    """Test the hello function includes the project name."""
-    assert "$project_name" in hello()
+from $project_name import __version__, run
+from $project_name.cli import main
 
-def test_main_output(capsys: pytest.CaptureFixture[str]) -> None:
-    """Test the output of the main function."""
-    main()
+
+def test_version() -> None:
+    """Test version is defined."""
+    assert __version__ == "0.1.0"
+
+
+def test_run() -> None:
+    """Test the core run function."""
+    result = run()
+    assert isinstance(result, str)
+    assert len(result) > 0
+
+
+def test_cli_version(capsys: pytest.CaptureFixture[str]) -> None:
+    """Test CLI version flag."""
+    sys.argv = ["$project_name_cli", "--version"]
+    exit_code = main()
     captured = capsys.readouterr()
-    assert "$project_name" in captured.out
-    assert captured.err == ""
+    assert exit_code == 0
+    assert "0.1.0" in captured.out
+
+
+def test_cli_help(capsys: pytest.CaptureFixture[str]) -> None:
+    """Test CLI help flag."""
+    sys.argv = ["$project_name_cli", "--help"]
+    exit_code = main()
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "Usage" in captured.out
 EOF
 
-    # --- 5. Create supporting files (.gitignore, README.md, .env, .envrc) ---
+    # --- 6. Create supporting files (README.md, .env, .envrc) ---
     echo "--------------------------------------------------"
     echo "Creating supporting files..."
-    create_gitignore # Use helper function
     create_readme "$project_name" "$req_python_version" # Use helper function
     update_vscode_settings # Use helper function
 
@@ -644,22 +915,12 @@ EOF
         echo ".env already exists. Skipping creation."
     fi
 
-    # Create .envrc for direnv if direnv is available
+    # Create .envrc with rich formatted welcome
     echo "Ensuring .envrc for direnv exists..."
     if command -v direnv &> /dev/null; then
-        if [[ ! -f ".envrc" ]]; then
-            echo "Creating .envrc file with 'source .venv/bin/activate'"
-            echo "and adding project-based VIRTUAL_ENV_PROMPT' to it."
-            echo "export VIRTUAL_ENV_PROMPT=\"($(basename \"\$PWD\"))\"" > .envrc
-            echo "source .venv/bin/activate" >> .envrc
-            if [[ -t 1 ]]; then
-                echo "Running: direnv allow ."
-                direnv allow .
-            fi
-        else
-            echo ".envrc already exists. Skipping creation."
-            # Optionally, uncomment below to always allow:
-            # echo "Refreshing direnv trust: direnv allow ."
+        create_envrc "$project_name" "$project_name_cli" "$req_python_version"
+        if [[ -f ".envrc" && -t 1 ]]; then
+            echo "Running: direnv allow ."
             direnv allow .
         fi
     else
@@ -667,7 +928,7 @@ EOF
         echo "Install direnv for automatic environment activation: https://direnv.net/"
     fi
 
-    # --- 6. Create and activate virtual environment ---
+    # --- 7. Create and activate virtual environment ---
     echo "--------------------------------------------------"
     echo "Creating virtual environment (.venv)..."
     # DEBUG: Show the actual command with variables expanded
@@ -677,7 +938,7 @@ EOF
         return 1
     fi
 
-    # --- 7. Install dependencies (including optional dev dependencies) ---
+    # --- 8. Install dependencies (including optional dev dependencies) ---
     echo "--------------------------------------------------"
     echo "Installing dependencies (including 'dev' group)..."
     echo "Running: uv pip install --prerelease=allow -e '.[dev]'"
@@ -688,7 +949,7 @@ EOF
         # Don't necessarily fail the whole script here, let user fix deps
     fi
 
-    # --- 8. Initialize git repository if needed ---
+    # --- 9. Initialize git repository if needed ---
     echo "--------------------------------------------------"
     if [ ! -d ".git" ]; then
         echo "Initializing git repository..."
@@ -1061,7 +1322,7 @@ pipx_install_current_project() {
     local user_extras=("${@}")
     local project_name=$(awk -F'"' '/^name *=/ {gsub(/[[:space:]]/, "", $0); print $2; exit}' pyproject.toml)
     local python_interpreter="$VIRTUAL_ENV/bin/python"
-    
+
     local install_source="."
     # Check for the explicit --no-extras flag to perform a minimal install
     if [[ "$1" == "--no-extras" ]]; then
@@ -1076,7 +1337,7 @@ pipx_install_current_project() {
 
     echo "${info}🔗 Installing '$project_name' from source '${ok}${install_source}${info}' as a CLI via pipx...${done}"
     echo "${info}   Using Python from active venv: $python_interpreter ($($python_interpreter --version))${done}"
-    
+
     if pipx install --python "$python_interpreter" --force "$install_source"; then
         echo "${ok}✅ '$project_name' CLI installed successfully.${done}"
         echo "--------------------------------------------------"
