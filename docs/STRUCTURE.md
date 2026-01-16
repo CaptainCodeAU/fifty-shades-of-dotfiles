@@ -31,7 +31,6 @@ All files in `home/` are deployed directly to your home directory (`~/`).
 | `.zsh_linux_welcome` | Linux welcome message | `~/.zsh_linux_welcome` |
 | `.zsh_mac_welcome` | macOS welcome message | `~/.zsh_mac_welcome` |
 | `.zsh_wsl_welcome` | WSL welcome message | `~/.zsh_wsl_welcome` |
-| `.zsh_wsl_comfyui_functions` | WSL-specific ComfyUI helpers | `~/.zsh_wsl_comfyui_functions` |
 
 #### Other Configuration Files
 
