@@ -21,6 +21,9 @@ It is built around a modern toolchain that prioritizes speed, consistency, and d
     *   **`direnv`** for automatic activation/deactivation of Python virtual environments.
     *   **`nvm`** with automatic Node.js version switching via `.nvmrc` files.
 *   **🐳 Integrated Docker Helpers**: Functions to quickly start, stop, and manage common development services like PostgreSQL, Qdrant, and Jupyter Lab.
+*   **🖥️ Tmux Integration**: Powerful tmux session management with git-aware workflows and automatic window naming.
+*   **📝 Editor Integration**: Automatic environment syncing between Cursor/VSCode terminals and tmux sessions.
+*   **🎬 Media Tools**: Built-in `yt()` wrapper for yt-dlp with auto-generated configuration and quality presets.
 *   **🔒 Private Configuration**: A built-in pattern for managing your secret keys and machine-specific settings in a `.zshrc.private` file, which is kept out of version control.
 
 ---
@@ -270,11 +273,37 @@ The setup provides similar automation for Node.js projects, standardizing on `nv
 
 Quickly manage common development services and stacks.
 
-*   **Start a PostgreSQL container for development**: `pg_dev_start`
-*   **Start a Qdrant vector database**: `qdrant_start`
+*   **Start a PostgreSQL container for development**: `pg_dev_start [db] [pw] [port]`
+*   **Start a Qdrant vector database**: `qdrant_start [port]`
 *   **Start a full AI/ML stack (Qdrant + Jupyter)**: `dev_stack_start ai`
+*   **Start a web development stack**: `dev_stack_start web`
+*   **Start a full stack (web + AI/ML)**: `dev_stack_start full`
 *   **Check the status of all services**: `dev_stack_status`
 *   **Clean up all unused Docker resources**: `dcleanup`
+*   **View Docker overview**: `docker_overview`
+*   **Get help**: `docker_help`
+
+### Tmux Workflows
+
+The configuration includes powerful tmux session management:
+
+*   **Quick session access**: `ta mysession` (attach or create)
+*   **Coding sessions**: `tc` (coding session), `tcc` (claudecode session)
+*   **Development sessions**: `tdev myproject` (multi-window setup)
+*   **Git-aware sessions**: `tgit myproject` (split panes for git and editing)
+*   **Git integration**: All git branch operations automatically update tmux window names
+
+### Media Downloads
+
+Use the `yt()` wrapper for easy video/audio downloads:
+
+```bash
+yt https://youtube.com/watch?v=...              # Default: 1080p + best audio
+yt --video-highest https://youtube.com/watch?v=... # Maximum quality
+yt --audio-only https://youtube.com/watch?v=...    # Extract audio
+yt --bundle https://youtube.com/watch?v=...        # Video + all metadata
+yt --help                                          # Show all options
+```
 
 ---
 
@@ -307,12 +336,138 @@ alias my-server="ssh my-user@192.168.1.100"
 ## File Structure Overview
 
 *   `install.sh`: The script to symlink all configuration files into your home directory.
-*   `.zshrc`: The main controller. It detects the OS, loads plugins, and sources all other function files.
+*   `.zshrc`: The main controller. It detects the OS, loads plugins, and sources all other function files. Also contains inline functions like `yt()` (yt-dlp wrapper) and various aliases.
 *   `.zsh_python_functions`: Contains all Python-related helper functions (`python_new_project`, `pipx_*`, etc.).
 *   `.zsh_node_functions`: Contains all Node.js helper functions (`node_new_project`, etc.).
 *   `.zsh_docker_functions`: Contains all Docker helper functions and aliases (`pg_dev_start`, `dcleanup`, etc.).
+*   `.zsh_cursor_functions`: Cursor/VSCode editor integration for automatic environment syncing with tmux sessions.
+*   `.zsh_tmux`: Comprehensive tmux session management, git integration, and workflow functions.
 *   `.zsh_linux_onboarding`: The script that runs once on a new Linux machine to install dependencies.
 *   `.zsh_mac_welcome`, `.zsh_linux_welcome`, `.zsh_wsl_welcome`: Small scripts that show a status overview when a new shell starts on each respective OS.
+*   `.zsh_wsl_comfyui_functions`: WSL-specific ComfyUI helper functions (optional, WSL only).
+
+---
+
+## Cursor Editor Integration
+
+The `.zsh_cursor_functions` file provides seamless integration between Cursor/VSCode terminals and tmux sessions. It automatically syncs environment variables (like `VSCODE_INJECTION`, `CURSOR_TRACE_ID`, etc.) from Cursor/VSCode terminals into tmux sessions.
+
+### How It Works
+
+*   **Automatic Environment Capture**: When you're in a Cursor/VSCode terminal, the environment is automatically saved to `~/.cache/cursor_env.zsh`.
+*   **Tmux Integration**: The `tmux` command is wrapped to automatically load the saved environment when attaching to sessions.
+*   **New Pane Support**: New tmux panes automatically inherit the Cursor/VSCode environment variables.
+
+This ensures that tools and scripts that rely on editor-specific environment variables work correctly inside tmux sessions.
+
+---
+
+## Tmux Functions & Git Integration
+
+The `.zsh_tmux` file provides powerful tmux session management and git workflow functions.
+
+### Tmux Session Management
+
+| Function | Arguments | Description |
+| :--- | :--- | :--- |
+| `ta <session>` | session name | Attach to tmux session or create if doesn't exist |
+| `tc` | none | Attach to 'coding' session (create if needed) |
+| `tcc` | none | Attach to 'claudecode' session (create if needed) |
+| `tdev <project>` | project name | Create multi-window development session with code, git, terminal, and logs windows |
+| `tgit <project>` | project name | Create git-aware coding session with split panes for git status and editing |
+| `tbranch <project>` | project name | Create tmux session for branch management workflows |
+| `tpull <project>` | project name | Create session for pull/merge workflows |
+| `tclean` | none | Clean up old coding-related tmux sessions |
+| `tlast` | none | Quick attach to most recent session |
+| `tls` | none | List sessions with detailed information |
+
+### Git Integration Functions
+
+These functions integrate git workflows with tmux, automatically updating window names with branch information:
+
+| Function | Arguments | Description |
+| :--- | :--- | :--- |
+| `gstatus` | none | Full git repository dashboard with branch info, changes, commits, and stashes |
+| `gs` | none | Quick git status showing repo, branch, change count, and last commit |
+| `gtree` | none | Visual git tree (uses git-tree or tig if available) |
+| `gwip2` | none | Show what you're working on (recently modified files) |
+| `gt <branch>` | branch name | Tmux-aware git switch (updates window name) |
+| `gtc <branch>` | branch name | Tmux-aware branch creation (updates window name) |
+| `gswitch <branch>` | branch name | Switch branch and update tmux window name |
+| `gfeature <name>` | feature name | Create feature branch following git flow and update tmux window |
+| `gpr_quick <message>` | commit message | Quick PR workflow: add, commit, push |
+
+### Usage Examples
+
+**Create a development session:**
+```bash
+tdev myproject
+# Creates a tmux session with:
+# - 'code' window (opens editor)
+# - 'git' window (shows git status)
+# - 'term' window (for running commands)
+# - 'logs' window (for monitoring)
+```
+
+**Git workflow with tmux:**
+```bash
+cd ~/CODE/Ideas/myproject
+gt feature/new-feature  # Switches branch and updates tmux window name
+# Window name becomes: "myproject:feature/new-feature"
+```
+
+**Quick git overview:**
+```bash
+gs        # Quick status
+gstatus   # Full dashboard
+```
+
+---
+
+## Additional Aliases & Functions
+
+### yt-dlp Wrapper (`yt()`)
+
+A comprehensive wrapper function for `yt-dlp` that auto-generates configuration and provides a user-friendly interface:
+
+```bash
+# Basic usage (1080p + best audio, default)
+yt https://youtube.com/watch?v=dQw4w9WgXcQ
+
+# Quality presets
+yt --video https://youtube.com/watch?v=dQw4w9WgXcQ           # 1080p/720p
+yt --video-highest https://youtube.com/watch?v=dQw4w9WgXcQ   # Maximum resolution
+yt --audio-only https://youtube.com/watch?v=dQw4w9WgXcQ      # Extract audio
+
+# With subtitles
+yt --video --subs https://youtube.com/watch?v=dQw4w9WgXcQ
+
+# Metadata bundles
+yt --bundle https://youtube.com/watch?v=dQw4w9WgXcQ          # Video + all metadata
+yt --thumbnail https://youtube.com/watch?v=dQw4w9WgXcQ       # Thumbnail only
+
+# Help
+yt --help
+```
+
+The function auto-generates a comprehensive `~/.config/yt-dlp/config` file on first use with sensible defaults (1080p video, aria2c downloader, embedded metadata, etc.).
+
+### Other Useful Aliases
+
+*   **File Listing**: `l` and `ll` use `eza` for enhanced directory listings with git status
+*   **Navigation**: `..`, `...`, `....`, `.....` for quick directory navigation
+*   **Python Shortcuts**: `py313`, `py312`, `py311`, `py310` for quick Python version access
+*   **Node.js**: `serve` (npx http-server), `tsc` (npx typescript)
+*   **Docker**: `lzd` (lazydocker), `lzg`/`lg` (lazygit)
+*   **Claude CLI**: `c` alias with environment variables for enhanced functionality
+*   **Zoxide**: `cd` command is replaced with `zoxide` for intelligent directory jumping
+
+### Special Functions
+
+*   **`sudo()` wrapper**: Prevents accidental `sudo claude` commands and redirects appropriately
+*   **`python()` function**: Smart Python interpreter selection (venv > local .venv > uv global)
+*   **`ports()` function**: OS-specific port listing (macOS: `lsof`, Linux/WSL: `ss`/`netstat`)
+*   **`y()` function**: Yazi file manager integration for visual directory navigation
 
 ---
 
@@ -340,12 +495,81 @@ alias my-server="ssh my-user@192.168.1.100"
 
 ### Docker Functions
 
+#### Database Functions
+
 | Function | Arguments | Description |
 | :--- | :--- | :--- |
 | `pg_dev_start` | `[db] [pw] [port]` | Starts a PostgreSQL development container. |
+| `pg_dev_stop` | `(none)` | Stops PostgreSQL development container. |
+| `pg_dev_connect` | `[db_name]` | Connect to PostgreSQL container. |
+| `db_backup` | `[container] [backup_name]` | Backup database from container. |
+
+#### AI/ML Functions
+
+| Function | Arguments | Description |
+| :--- | :--- | :--- |
 | `qdrant_start` | `[port]` | Starts a Qdrant vector database container. |
-| `jupyter_start`| `[port] [work_dir]` | Starts a Jupyter Lab container. |
-| `dev_stack_start`| `[web\|ai\|full]` | Starts a pre-configured stack of development services. |
+| `qdrant_stop` | `(none)` | Stops Qdrant container. |
+| `qdrant_backup` | `[backup_name]` | Backup Qdrant data. |
+| `jupyter_start` | `[port] [work_dir]` | Starts a Jupyter Lab container. |
+| `jupyter_stop` | `(none)` | Stops Jupyter Lab container. |
+
+#### MCP Server Functions
+
+| Function | Arguments | Description |
+| :--- | :--- | :--- |
+| `mcp_start` | `<service> [port]` | Start MCP service container. |
+| `mcp_stop` | `[service\|all]` | Stop MCP service(s). |
+| `mcp_list` | `(none)` | List available and running MCP services. |
+
+#### Development Stack Functions
+
+| Function | Arguments | Description |
+| :--- | :--- | :--- |
+| `dev_stack_start` | `[web\|ai\|full]` | Starts a pre-configured stack of development services. |
 | `dev_stack_stop` | `(none)` | Stops all services managed by this script. |
-| `dev_stack_status`| `(none)` | Shows the running status of the dev stack services. |
-| `dcleanup` | `(none)` | Alias for `docker system prune -af && docker volume prune -f`. |
+| `dev_stack_status` | `(none)` | Shows the running status of the dev stack services. |
+
+#### Project Templates
+
+| Function | Arguments | Description |
+| :--- | :--- | :--- |
+| `create_web_project` | `<name> [node\|python]` | Create web project template with Docker Compose. |
+| `create_ai_project` | `<name>` | Create AI/ML project template with Qdrant and Jupyter. |
+
+#### MLbox Integration (SSH)
+
+| Function | Arguments | Description |
+| :--- | :--- | :--- |
+| `mlbox_tunnel` | `<local_port> <remote_port> [service]` | Create SSH tunnel to MLbox. |
+| `mlbox_deploy` | `<image_name> [container_name]` | Deploy Docker image to MLbox. |
+
+#### Utility Functions
+
+| Function | Arguments | Description |
+| :--- | :--- | :--- |
+| `py_docker_dev` | `[python_version] [port]` | Python development container. |
+| `docker_maintenance` | `(none)` | Interactive Docker system cleanup. |
+| `docker_overview` | `(none)` | Show Docker system overview. |
+| `docker_help` | `(none)` | Show all custom Docker functions. |
+
+#### Docker Aliases
+
+| Alias | Description |
+| :--- | :--- |
+| `dps` | `docker ps` |
+| `dpsa` | `docker ps -a` |
+| `di` | `docker images` |
+| `dlog` | `docker logs -f` |
+| `dexec` | `docker exec -it` |
+| `dstop` | Stop all running containers |
+| `drm` | Remove all stopped containers |
+| `drmi` | Remove all images |
+| `dcleanup` | `docker system prune -af && docker volume prune -f` |
+| `dcleanbuild` | `docker builder prune -af` |
+| `dspace` | `docker system df` |
+| `dinfo` | `docker info` |
+| `dc` | `docker-compose` |
+| `dcup` | `docker-compose up -d` |
+| `dcdown` | `docker-compose down` |
+| `dclogs` | `docker-compose logs -f` |
