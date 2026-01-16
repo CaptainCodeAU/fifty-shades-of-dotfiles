@@ -34,3 +34,6 @@ node_modules/
 
 # Do not share your private .zshrc file
 .zshrc.private
+
+# WSL-specific ComfyUI functions (private/local configuration)
+home/.zsh_wsl_comfyui_functions
