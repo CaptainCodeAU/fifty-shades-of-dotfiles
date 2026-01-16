@@ -189,11 +189,6 @@ if [[ "$IS_MAC" == "true" && -d "$HOME/.docker/completions" ]]; then
     fpath=("$HOME/.docker/completions" $fpath)
 fi
 
-# This ensures OMZ's `compinit` call finds these completion files.
-if [[ "$IS_MAC" == "true" && -d "$HOME/.docker/completions" ]]; then
-    fpath=("$HOME/.docker/completions" $fpath)
-fi
-
 # --- Source Oh My Zsh ---
 # This must come after theme, plugins, and fpath are defined.
 # OMZ will automatically run 'compinit' for us, no need for a separate call.
@@ -323,12 +318,11 @@ alias chawan="cha"
 alias web="cha"
 alias www="cha"
 alias lzd='lazydocker'
-alias lzd='lazydocker'
 alias lzg='lazygit'
 alias lg='lazygit'
-# alias c="ENABLE_EXPERIMENTAL_MCP_CLI=true claude --dangerously-skip-permissions"
-alias c="ENABLE_EXPERIMENTAL_MCP_CLI=true ENABLE_TOOL_SEARCH=true claude --dangerously-skip-permissions"
-# alias c="ENABLE_TOOL_SEARCH=true claude --dangerously-skip-permissions"
+# alias c="CLAUDE_CODE_HIDE_ACCOUNT_INFO=1 ENABLE_EXPERIMENTAL_MCP_CLI=true claude --dangerously-skip-permissions"
+# alias c="CLAUDE_CODE_HIDE_ACCOUNT_INFO=1 ENABLE_LSP_TOOL=true ENABLE_EXPERIMENTAL_MCP_CLI=true ENABLE_TOOL_SEARCH=true claude --dangerously-skip-permissions"
+alias c="CLAUDE_CODE_HIDE_ACCOUNT_INFO=1 ENABLE_LSP_TOOL=true ENABLE_TOOL_SEARCH=true claude --dangerously-skip-permissions --permission-mode plan"
 
 # Intercepting the use of a command like 'sudo claude update' :P
 sudo() {
@@ -340,6 +334,185 @@ sudo() {
 		command sudo "$@"
 	fi
 }
+
+
+# --- yt-dlp Wrapper ---
+# Custom wrapper for yt-dlp with simplified aliases defined in ~/.config/yt-dlp/config
+yt() {
+  # Auto-generate yt-dlp config if it doesn't exist
+  local config_dir="$HOME/.config/yt-dlp"
+  local config_file="$config_dir/config"
+  if [[ ! -f "$config_file" ]]; then
+    mkdir -p "$config_dir"
+    cat > "$config_file" << 'YTCONFIG'
+# =============================================================================
+# yt-dlp Configuration
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Output & Filename
+# -----------------------------------------------------------------------------
+--output "%(upload_date)s - %(title)s [%(id)s].%(ext)s"
+--restrict-filenames
+
+# -----------------------------------------------------------------------------
+# Default Behavior
+# -----------------------------------------------------------------------------
+--no-overwrites
+--no-keep-video
+--console-title
+
+# Default format: 1080p + best audio (fallback to best available)
+-f "bestvideo[height<=1080]+bestaudio/best"
+
+# -----------------------------------------------------------------------------
+# Embedding (into video file)
+# -----------------------------------------------------------------------------
+--embed-thumbnail
+--embed-chapters
+--embed-metadata
+--embed-info-json
+--clean-info-json
+
+# -----------------------------------------------------------------------------
+# Downloader
+# -----------------------------------------------------------------------------
+--downloader aria2c
+--downloader "dash,m3u8:native"
+
+# -----------------------------------------------------------------------------
+# Aliases: Video
+# -----------------------------------------------------------------------------
+# --video: 1080p preferred, fallback to 720p
+--alias video "-f bestvideo[height<=1080][height>=720]+bestaudio/best[height<=1080][height>=720]"
+
+# --video-low: Best quality below 1080p
+--alias video-low "-f bestvideo[height<1080]+bestaudio/best[height<1080]"
+
+# --video-high: Next resolution above 1080p (e.g., 1440p)
+--alias video-high "-f bestvideo[height>1080]+bestaudio/best[height>1080]"
+
+# --video-highest: Maximum available resolution
+--alias video-highest "-f bestvideo+bestaudio/best"
+
+# -----------------------------------------------------------------------------
+# Aliases: Audio
+# -----------------------------------------------------------------------------
+# --audio-only: Best audio, extracted to audio file
+--alias audio-only "-f bestaudio -x"
+
+# -----------------------------------------------------------------------------
+# Aliases: Subtitles
+# -----------------------------------------------------------------------------
+# --subs: Download subtitles along with video
+--alias subs "--write-subs --sub-format srt/ass/vtt --write-auto-subs"
+
+# --subs-only: Download subtitles only, skip video
+--alias subs-only "--write-subs --sub-format srt/ass/vtt --write-auto-subs --skip-download"
+
+# -----------------------------------------------------------------------------
+# Aliases: Metadata Only (standalone, skips video)
+# -----------------------------------------------------------------------------
+# --comments: Download comments only (to separate .comments.json)
+--alias comments "--write-comments --no-write-info-json --skip-download --print-to-file %(comments)#j %(upload_date)s-%(title)s-[%(id)s].comments.json"
+
+# --livechat: Download live chat only (for livestreams/premieres)
+--alias livechat "--sub-langs live_chat --write-subs --skip-download"
+
+# --description: Download video description only
+--alias description "--write-description --skip-download"
+
+# --thumbnail: Download video thumbnail only
+--alias thumbnail "--write-thumbnail --skip-download"
+
+# -----------------------------------------------------------------------------
+# Aliases: Bundles (video/audio + all metadata)
+# -----------------------------------------------------------------------------
+# --bundle-video: Video + all metadata
+--alias bundle-video "-f bestvideo[height<=1080][height>=720]+bestaudio/best[height<=1080][height>=720] --write-subs --sub-format srt/ass/vtt --write-auto-subs --write-comments --no-write-info-json --print-to-file %(comments)#j %(upload_date)s-%(title)s-[%(id)s].comments.json --sub-langs live_chat --write-description --write-thumbnail"
+
+# --bundle-audio: Audio + all metadata
+--alias bundle-audio "-f bestaudio -x --write-subs --sub-format srt/ass/vtt --write-auto-subs --write-comments --no-write-info-json --print-to-file %(comments)#j %(upload_date)s-%(title)s-[%(id)s].comments.json --sub-langs live_chat --write-description --write-thumbnail"
+
+# --bundle: Video + all metadata (same as bundle-video)
+--alias bundle "-f bestvideo[height<=1080][height>=720]+bestaudio/best[height<=1080][height>=720] --write-subs --sub-format srt/ass/vtt --write-auto-subs --write-comments --no-write-info-json --print-to-file %(comments)#j %(upload_date)s-%(title)s-[%(id)s].comments.json --sub-langs live_chat --write-description --write-thumbnail"
+
+# --bundle-high: Highest video + all metadata
+--alias bundle-high "-f bestvideo+bestaudio/best --write-subs --sub-format srt/ass/vtt --write-auto-subs --write-comments --no-write-info-json --print-to-file %(comments)#j %(upload_date)s-%(title)s-[%(id)s].comments.json --sub-langs live_chat --write-description --write-thumbnail"
+
+# -----------------------------------------------------------------------------
+# Aliases: Modifiers
+# -----------------------------------------------------------------------------
+# --overwrite: Force overwrite existing files
+--alias overwrite "--force-overwrites"
+YTCONFIG
+    echo "${fg[green]}✓${reset_color} Created yt-dlp config at ${fg[cyan]}$config_file${reset_color}"
+  fi
+
+  if [[ $# -eq 0 || "$1" == "--help" || "$1" == "-h" ]]; then
+    cat << EOF
+${fg[cyan]}yt${reset_color} - Custom yt-dlp wrapper
+
+${fg[yellow]}USAGE${reset_color}
+  yt [OPTIONS] URL
+
+${fg[yellow]}VIDEO${reset_color}
+  --video            1080p (fallback to 720p)
+  --video-low        Below 1080p (next tier down)
+  --video-high       Above 1080p (next tier up)
+  --video-highest    Highest available resolution
+
+${fg[yellow]}AUDIO${reset_color}
+  --audio-only       Highest bitrate audio (extracts audio)
+
+${fg[yellow]}EXTRAS ${fg[white]}(combine with video/audio options)${reset_color}
+  --subs             Include subtitles (srt/ass/vtt)
+
+${fg[yellow]}METADATA ONLY ${fg[white]}(standalone, skips video)${reset_color}
+  --subs-only        Subtitles only
+  --comments         Comments only (to .comments.json)
+  --livechat         Live chat only (livestreams/premieres)
+  --description      Video description only
+  --thumbnail        Video thumbnail only
+
+${fg[yellow]}BUNDLES ${fg[white]}(video/audio + all metadata)${reset_color}
+  --bundle-video     1080p video + subs, comments, chat, desc, thumb
+  --bundle-audio     Audio + subs, comments, chat, desc, thumb
+  --bundle           Same as --bundle-video
+  --bundle-high      Highest video + all metadata
+
+${fg[yellow]}MODIFIERS${reset_color}
+  --overwrite        Force overwrite existing files
+
+${fg[yellow]}EXAMPLES${reset_color}
+  ${fg[magenta]}yt https://youtube.com/watch?v=dQw4w9WgXcQ${reset_color}                   # 1080p + best audio (default)
+  ${fg[magenta]}yt --video https://youtube.com/watch?v=dQw4w9WgXcQ${reset_color}           # 1080p/720p video
+  ${fg[magenta]}yt --video --subs https://youtube.com/watch?v=dQw4w9WgXcQ${reset_color}    # video + subtitles
+  ${fg[magenta]}yt --video-highest https://youtube.com/watch?v=dQw4w9WgXcQ${reset_color}   # max resolution
+  ${fg[magenta]}yt --audio-only https://youtube.com/watch?v=dQw4w9WgXcQ${reset_color}      # extract audio
+  ${fg[magenta]}yt --bundle https://youtube.com/watch?v=dQw4w9WgXcQ${reset_color}          # video + all metadata
+  ${fg[magenta]}yt --thumbnail https://youtube.com/watch?v=dQw4w9WgXcQ${reset_color}       # thumbnail only
+  ${fg[magenta]}yt --overwrite https://youtube.com/watch?v=dQw4w9WgXcQ${reset_color}       # re-download, overwrite
+
+${fg[yellow]}DEFAULTS${reset_color}
+  ${fg[white]}•${reset_color} Format: 1080p video + best audio (fallback: best available)
+  ${fg[white]}•${reset_color} Output: ${fg[cyan]}%(upload_date)s - %(title)s [%(id)s].%(ext)s${reset_color}
+  ${fg[white]}•${reset_color} Embeds: thumbnail, chapters, metadata, info.json
+  ${fg[white]}•${reset_color} Restricted filenames (safe characters only)
+  ${fg[white]}•${reset_color} Intermediate files auto-deleted after merge
+  ${fg[white]}•${reset_color} No overwrites (use --overwrite to force)
+
+${fg[yellow]}REQUIRES${reset_color}
+  ${fg[white]}•${reset_color} aria2c (for faster downloads)
+
+${fg[yellow]}CONFIG${reset_color}
+  ${fg[cyan]}$config_file${reset_color}
+EOF
+  else
+    yt-dlp "$@"
+  fi
+}
+
 
 # --- OS Information Aliases ---
 if [[ "$IS_WSL" == "true" ]] || [[ "$IS_LINUX" == "true" ]]; then
