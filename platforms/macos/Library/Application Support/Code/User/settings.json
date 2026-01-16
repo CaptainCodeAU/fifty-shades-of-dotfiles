@@ -1,0 +1,411 @@
+{
+    // ========================================
+    // Machine Color Customizations (auto-managed by direnvrc)
+    // ========================================
+    "workbench.colorCustomizations": {
+        // titleBar and statusBar colors are automatically set by ~/.config/direnv/direnvrc
+        // based on machine type: macOS (#202020), WSL (#1a4d7a), Linux-Codebox (#97B500), Linux-Prod (#D96400)
+    },
+
+    // ========================================
+    // Updates and Extensions
+    // ========================================
+    "update.mode": "silentlyApplyOnQuit",
+    "update.showReleaseNotes": false,
+    "extensions.autoUpdate": true,
+    "extensions.ignoreRecommendations": true,
+
+    // ========================================
+    // Telemetry and Insights
+    // ========================================
+    "telemetry.telemetryLevel": "off",
+    "telemetry.enableTelemetry": false,
+    "telemetry.enableCrashReporter": false,
+    "code-runner.enableAppInsights": false,
+    "aws.telemetry": false,
+
+    // ========================================
+    // Workspace and Explorer
+    // ========================================
+    "explorer.confirmDelete": false,
+    "explorer.confirmDragAndDrop": false,
+    "explorer.fileNesting.patterns": {
+        "*.ts": "${capture}.js",
+        "*.js": "${capture}.js.map, ${capture}.min.js, ${capture}.d.ts",
+        "*.jsx": "${capture}.js",
+        "*.tsx": "${capture}.ts",
+        "tsconfig.json": "tsconfig.*.json",
+        "package.json": "package-lock.json, yarn.lock, pnpm-lock.yaml, bun.lockb, bun.lock",
+        "*.sqlite": "${capture}.${extname}-*",
+        "*.db": "${capture}.${extname}-*",
+        "*.sqlite3": "${capture}.${extname}-*",
+        "*.db3": "${capture}.${extname}-*",
+        "*.sdb": "${capture}.${extname}-*",
+        "*.s3db": "${capture}.${extname}-*"
+    },
+
+    // ========================================
+    // Workbench and UI Customizations
+    // ========================================
+    "workbench.colorTheme": "Catppuccin Mocha",
+    // "workbench.colorTheme": "Default Dark+",
+    // "workbench.colorTheme": "Monokai",
+    "workbench.iconTheme": "material-icon-theme",
+    "workbench.productIconTheme": "material-product-icons",
+    "workbench.startupEditor": "none",
+    "material-icon-theme.folders.theme": "specific",
+    "material-icon-theme.activeIconPack": "react",
+    "window.zoomLevel": 0,
+
+    // ========================================
+    // Editor General Settings
+    // ========================================
+    "editor.fontFamily": "MonoLisa Nerd Font Mono",
+    // "editor.fontFamily": "Hack Nerd Font Mono, monospace",
+    // "editor.fontFamily": "JetBrains Mono, monospace",
+    // "editor.fontFamily": "MesloLGS NF",
+    // "editor.fontFamily": "Fira Code",
+    // "editor.fontFamily": "Comic Code",
+    "editor.fontSize": 14,
+    "editor.suggestFontSize": 16,
+    "editor.tabSize": 4,
+    "editor.indentSize": "tabSize",
+    "editor.linkedEditing": true,
+    "editor.accessibilitySupport": "off",
+    "editor.formatOnSave": true,
+    "editor.inlineSuggest.enabled": true,
+    "editor.minimap.enabled": false,
+    "editor.bracketPairColorization.enabled": true,
+    "editor.semanticHighlighting.enabled": true,
+    "editor.rulers": [90],
+    "editor.defaultFormatter": "esbenp.prettier-vscode",
+    "editor.tokenColorCustomizations": {},
+    "files.trimTrailingWhitespace": true,
+
+    // ========================================
+    // Formatting and Linting (Prettier)
+    // ========================================
+    "prettier.printWidth": 90,
+    "prettier.tabWidth": 4,
+    "prettier.singleQuote": true,
+    "prettier.trailingComma": "all",
+    "prettier.bracketSpacing": true,
+    "prettier.useTabs": true,
+    "prettier.arrowParens": "avoid",
+    "prettier.endOfLine": "auto",
+    "prettier.eslintIntegration": true,
+
+    // ========================================
+    // Biome (alternative formatter)
+    // ========================================
+    "biome.suggestInstallingGlobally": false,
+
+    // ========================================
+    // Python Specific Settings
+    // ========================================
+    "[python]": {
+        "editor.defaultFormatter": "ms-python.python",
+        // "editor.defaultFormatter": "ms-python.black-formatter",
+        "editor.formatOnSave": true,
+        "editor.formatOnType": true,
+        "editor.formatOnPaste": true,
+        "editor.rulers": [80],
+        "editor.tabCompletion": "onlySnippets",
+        "editor.wordBasedSuggestions": "matchingDocuments",
+        "editor.selectionHighlight": true,
+        "editor.suggestSelection": "first",
+        "editor.wordBasedSuggestionsMode": "allDocuments",
+        "python.formatting.provider": "black",
+        "python.formatting.blackArgs": ["--line-length", "80"]
+    },
+    "python.formatting.blackArgs": ["--line-length", "80"],
+    // python.defaultInterpreterPath: Removed - workspace settings handle this
+    // Workspace .vscode/settings.json sets: "${workspaceFolder}/.venv/bin/python"
+    "python.analysis.typeCheckingMode": "basic",
+    "python.experiments.optOutFrom": ["All"],
+
+    // ========================================
+    // JavaScript Specific Settings
+    // ========================================
+    "emmet.includeLanguages": {
+        "javascript": "javascriptreact"
+    },
+    "[javascript]": {
+        "editor.defaultFormatter": "biomejs.biome",
+        "editor.formatOnSave": true,
+        "editor.formatOnType": true,
+        "editor.rulers": [80],
+        "editor.tabCompletion": "onlySnippets",
+        "editor.tabSize": 4,
+        "editor.insertSpaces": true,
+        "editor.wordBasedSuggestions": "off"
+    },
+    "javascript.updateImportsOnFileMove.enabled": "never",
+
+    // ========================================
+    // React / TypeScript Specific Settings
+    // ========================================
+    "[javascriptreact]": {
+        "editor.defaultFormatter": "esbenp.prettier-vscode"
+    },
+    "[typescriptreact]": {
+        "editor.insertSpaces": false,
+        "editor.tabSize": 4
+    },
+    "typescript.updateImportsOnFileMove.enabled": "never",
+
+    // ========================================
+    // JSON and HTML Settings
+    // ========================================
+    "[json]": {
+        "editor.defaultFormatter": "biomejs.biome"
+    },
+    "[html]": {
+        "editor.defaultFormatter": "vscode.html-language-features"
+    },
+    "json.maxItemsComputed": 5001,
+
+    // ========================================
+    // Docker Compose Settings
+    // ========================================
+    "[dockercompose]": {
+        "editor.insertSpaces": true,
+        "editor.tabSize": 2,
+        "editor.autoIndent": "advanced",
+        "editor.defaultFormatter": "redhat.vscode-yaml"
+    },
+    "[github-actions-workflow]": {
+        "editor.defaultFormatter": "redhat.vscode-yaml"
+    },
+
+    // ========================================
+    // Go / Golang Specific Settings
+    // ========================================
+    "go.toolsManagement.autoUpdate": true,
+
+    // ========================================
+    // Dart / Flutter Specific Settings
+    // ========================================
+    "[dart]": {
+        "editor.formatOnSave": true,
+        "editor.formatOnType": true,
+        "editor.rulers": [80],
+        "editor.selectionHighlight": false,
+        "editor.suggest.snippetsPreventQuickSuggestions": false,
+        "editor.suggestSelection": "first",
+        "editor.tabCompletion": "onlySnippets",
+        "editor.wordBasedSuggestions": "off"
+    },
+    "dart.allowAnalytics": false,
+    "dart.cliConsole": "terminal",
+    "dart.openDevTools": "flutter",
+    "dart.flutterHotReloadOnSave": "all",
+    "dart.hotReloadOnSave": "all",
+    "dart.debugExternalPackageLibraries": false,
+    "dart.debugSdkLibraries": false,
+
+    // ========================================
+    // Terminal Settings
+    // ========================================
+    "terminal.integrated.detectLocale": "on",
+    "terminal.integrated.fontFamily": "MesloLGS NF",
+    "terminal.integrated.fontSize": 11,
+    "terminal.integrated.fontWeight": "normal",
+    "terminal.integrated.scrollback": 50000,
+    "terminal.integrated.env.osx": {},
+    "terminal.integrated.env.windows": {},
+    "terminal.external.osxExec": "iterm.app",
+    "terminal.integrated.profiles.windows": {
+        "Command Prompt": {
+            "path": "C:\\Windows\\System32\\cmd.exe"
+        },
+        "PowerShell 7": {
+            "path": "C:\\Program Files\\PowerShell\\7\\pwsh.exe"
+        }
+    },
+    "terminal.integrated.defaultProfile.windows": "Command Prompt",
+
+    // ========================================
+    // Git Settings
+    // ========================================
+    "gitlens.hovers.currentLine.over": "line",
+    "git.confirmSync": false,
+    "git.autofetch": true,
+    "git.openRepositoryInParentFolders": "never",
+    "gitHistory.logLevel": "Debug",
+
+    // ========================================
+    // Remote SSH Settings
+    // ========================================
+    "remote.SSH.useLocalServer": false,
+    "remote.SSH.enableRemoteCommand": true,
+    "remote.SSH.connectTimeout": 120,
+    "remote.autoForwardPortsSource": "hybrid",
+    "remote.SSH.defaultForwardedPorts": [
+        { "name": "YOUR_HOSTNAME", "localPort": 8080, "remotePort": 8080 },
+        { "name": "MLBOX1", "localPort": 8080, "remotePort": 8080 }
+    ],
+    "remote.SSH.remotePlatform": {
+        "YOUR_HOSTNAME": "windows",
+        "MLBOX1": "windows",
+        "192.168.1.56": "windows",
+        "mlbox1.local": "windows",
+        "MLbox": "windows",
+        "codebox.lan": "linux",
+        "codebox-tailscale": "linux",
+        "MLbox-wsl": "linux",
+        "mlbox": "linux"
+    },
+
+    // ========================================
+    // Live Share and Live Server
+    // ========================================
+    "liveServer.settings.donotShowInfoMsg": true,
+    "liveServer.settings.donotVerifyTags": true,
+    "liveshare.diagnosticLoggingLevel": "Off",
+    "liveshare.accessibility.soundsEnabled": false,
+    "liveshare.accessibility.soundVolume": 0,
+
+    // ========================================
+    // Security
+    // ========================================
+    "security.workspace.trust.enabled": true,
+    "security.workspace.trust.untrustedFiles": "open",
+
+    // ========================================
+    // YAML Settings
+    // ========================================
+    "yaml.customTags": [
+        "!And",
+        "!And sequence",
+        "!If",
+        "!If sequence",
+        "!Not",
+        "!Not sequence",
+        "!Equals",
+        "!Equals sequence",
+        "!Or",
+        "!Or sequence",
+        "!FindInMap",
+        "!FindInMap sequence",
+        "!Base64",
+        "!Join",
+        "!Join sequence",
+        "!Cidr",
+        "!Ref",
+        "!Sub",
+        "!Sub sequence",
+        "!GetAtt",
+        "!GetAZs",
+        "!ImportValue",
+        "!ImportValue sequence",
+        "!Select",
+        "!Select sequence",
+        "!Split",
+        "!Split sequence"
+    ],
+
+    // ========================================
+    // Accessibility Signals (all sounds off)
+    // ========================================
+    "accessibility.signals.lineHasError": { "sound": "off" },
+    "accessibility.signals.lineHasFoldedArea": { "sound": "off" },
+    "accessibility.signals.lineHasBreakpoint": { "sound": "off" },
+    "accessibility.signals.lineHasInlineSuggestion": { "sound": "off" },
+    "accessibility.signals.terminalQuickFix": { "sound": "off" },
+    "accessibility.signals.onDebugBreak": { "sound": "off" },
+    "accessibility.signals.noInlayHints": { "sound": "off" },
+    "accessibility.signals.taskCompleted": { "sound": "off" },
+    "accessibility.signals.taskFailed": { "sound": "off" },
+    "accessibility.signals.terminalCommandFailed": { "sound": "off" },
+    "accessibility.signals.diffLineInserted": { "sound": "off" },
+    "accessibility.signals.diffLineDeleted": { "sound": "off" },
+    "accessibility.signals.diffLineModified": { "sound": "off" },
+
+    // ========================================
+    // Debug and Console Settings
+    // ========================================
+    "console-ninja.featureSet": "Community",
+    "console-ninja.fontSize": 11,
+    "debug.console.fontSize": 12,
+    "scm.inputFontSize": 14,
+    "chat.editor.fontSize": 14,
+
+    // ========================================
+    // Other Tools and Extensions
+    // ========================================
+    "vsicons.dontShowNewVersionMessage": true,
+    "hediet.vscode-drawio.resizeImages": null,
+    "hediet.vscode-drawio.theme": "atlas",
+    "database-client.autoSync": true,
+
+    // ========================================
+    // Spell Checker (cSpell)
+    // ========================================
+    "cSpell.userWords": [
+        "adduser",
+        "alpinejs",
+        "Amol",
+        "apexcharts",
+        "AUTOUPDATER",
+        "avadhut",
+        "biomejs",
+        "boxicons",
+        "Caddyfile",
+        "ccusage",
+        "connectionTimeoutMillis",
+        "datatables",
+        "daterangepicker",
+        "dbname",
+        "evextreme-cli",
+        "fkey",
+        "gitpick",
+        "Hostinger",
+        "idleTimeoutMillis",
+        "LEAPTEL",
+        "lightbox",
+        "livechat",
+        "loadbearing",
+        "Mahesh",
+        "materialdesignicons",
+        "opticomm",
+        "pg_isready",
+        "pre-reqs",
+        "psql",
+        "Pulumi",
+        "readlink",
+        "redaxios",
+        "remixicon",
+        "requirepass",
+        "Rollbar",
+        "signup",
+        "simplebar",
+        "sslmode",
+        "sslrootcert",
+        "statusline",
+        "supabase",
+        "timestamptz",
+        "topbar",
+        "usermod",
+        "Valky",
+        "varchar",
+        "vercel",
+        "WCAG",
+        "Zenbin"
+    ],
+
+    // ========================================
+    // Cursor-Specific Settings
+    // ========================================
+    "cursor.agent_layout_browser_beta_setting": true,
+    "cursor.cpp.enablePartialAccepts": true,
+    "cursor.cpp.disabledLanguages": ["markdown", "plaintext"],
+    "cursor.composer.usageSummaryDisplay": "always",
+    "cursor.composer.shouldChimeAfterChatFinishes": true,
+    "update.releaseTrack": "dev",
+
+    // ========================================
+    // Claude Code Settings
+    // ========================================
+    "claudeCode.preferredLocation": "panel"
+}

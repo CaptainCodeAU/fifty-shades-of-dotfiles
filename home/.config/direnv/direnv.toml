@@ -1,0 +1,7 @@
+# ~/.config/direnv/direnv.toml
+# direnv configuration settings
+
+[global]
+# Hide the environment diff output when entering/leaving directories
+# This keeps the terminal cleaner (the .envrc can print its own formatted output)
+hide_env_diff = true

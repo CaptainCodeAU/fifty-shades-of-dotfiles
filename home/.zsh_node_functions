@@ -1,0 +1,225 @@
+# ~/.zsh_node_functions
+# Source this file in ~/.zshrc
+
+# ==============================================================================
+# Helper Functions for Node.js Projects
+# ==============================================================================
+
+# Internal helper to get project name from package.json
+# Requires 'jq' to be installed.
+_get_node_project_name() {
+    if [[ ! -f "package.json" ]]; then return 1; fi
+    # Use jq for robust parsing
+    jq -r '.name // ""' package.json 2>/dev/null
+}
+
+# NEW: Function to check for a default NVM install and prompt if missing.
+nvm_check_and_install_lts() {
+    # Only run if nvm is installed and we haven't set a default version yet.
+    if ! command -v nvm &>/dev/null || [[ "$(nvm version default)" != "N/A" ]]; then
+        return 0
+    fi
+
+    echo "${warn}⚠️  No default Node.js version is set via nvm.${done}"
+    if [[ -t 1 ]]; then # Only prompt in interactive shells
+        read "REPLY?${info}    👉 Would you like to install the latest LTS version of Node.js and set it as your default? [y/N] ${done}"
+        if [[ "$REPLY" =~ ^[Yy]$ ]]; then
+            echo "${info}Installing Node.js LTS...${done}"
+            nvm install --lts
+            nvm alias default 'lts/*'
+            echo "${ok}✅ Node.js LTS installed and set as default.${done}"
+        else
+            echo "${warn}    Skipping Node.js installation.${done}"
+        fi
+    fi
+}
+
+# Function to scaffold a new, modern Node.js project.
+# Usage: node_new_project
+# Creates a project with pnpm, basic scripts, testing, and .nvmrc.
+node_new_project() {
+    local project_name
+    project_name=$(basename "$PWD" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/_/g')
+
+    if ! command -v pnpm &>/dev/null; then
+        echo "${err}Error: 'pnpm' not found. Please ensure Corepack has prepared it.${done}" >&2; return 1;
+    fi
+    if ! command -v nvm &>/dev/null; then
+        echo "${err}Error: 'nvm' not found.${done}" >&2; return 1;
+    fi
+
+    # IMPROVEMENT: Check for an active Node version before proceeding.
+    local current_node_version
+    current_node_version=$(nvm current)
+    if [[ "$current_node_version" == "none" ]]; then
+        echo "${err}Error: No active Node.js version found.${done}" >&2
+        echo "${info}Please run 'nvm install --lts' or 'nvm use <version>' first.${done}" >&2
+        return 1
+    fi
+
+    echo "--------------------------------------------------"
+    echo "${info}Creating new Node.js project: ${ok}${project_name}${done}"
+    echo "--------------------------------------------------"
+
+    # --- 1. Initialize project with pnpm ---
+    echo "Running: pnpm init"
+    pnpm init
+
+    # --- 2. Create standard project structure ---
+    echo "Creating directories: src/ and tests/"
+    mkdir -p src tests
+
+    # --- 3. Create basic source and test files ---
+    echo "Creating basic source files..."
+    echo 'console.log("Hello, Node.js project!");' > src/index.js
+    echo "test('initial test', () => { expect(true).toBe(true); });" > tests/index.test.js
+
+    # --- 4. Create .nvmrc with the current Node version ---
+    echo "Creating .nvmrc with version: ${current_node_version}"
+    echo "$current_node_version" > .nvmrc
+
+    # --- 5. Create .gitignore ---
+    if [[ ! -f "./.gitignore" ]]; then
+        echo "Creating .gitignore with Node.js entries..."
+        cat <<-'EOF' > .gitignore
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Dependency directories
+node_modules/
+.pnp
+.pnp.js
+
+# Build output
+dist
+build
+.next/
+out/
+
+# Other
+.DS_Store
+*.pem
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+coverage
+EOF
+    fi
+
+    # --- 6. Install dev dependencies ---
+    echo "Installing dev dependencies (eslint, prettier, jest)..."
+    pnpm add -D eslint prettier jest
+
+    # --- 7. Add scripts to package.json using jq ---
+    echo "Adding 'dev', 'start', and 'test' scripts to package.json..."
+    if command -v jq &>/dev/null; then
+        jq '.scripts.dev = "node --watch src/index.js" | .scripts.start = "node src/index.js" | .scripts.test = "jest"' package.json > tmp.$$.json && mv tmp.$$.json package.json
+    else
+        echo "${warn}Warning: 'jq' not found. Please add scripts to package.json manually.${done}"
+    fi
+
+    # --- 8. Final Success Message ---
+    echo "--------------------------------------------------"
+    echo "${ok}✅ Project '${project_name}' setup complete!${done}"
+    echo "${ok}   - Run '${example}pnpm dev${ok}' to start the development server."
+    echo "${ok}   - Run '${example}pnpm test${ok}' to run tests."
+    echo "${info}   - The '.nvmrc' file will now automatically switch to Node ${current_node_version} in this directory.${done}"
+    echo "--------------------------------------------------"
+}
+
+
+# Function to set up an existing Node.js project.
+# Usage: node_setup
+# Checks for .nvmrc and installs dependencies using pnpm.
+node_setup() {
+    if [[ ! -f "package.json" ]]; then
+        echo "${err}Error: 'package.json' not found. This does not appear to be a Node.js project.${done}" >&2
+        return 1
+    fi
+
+    echo "--------------------------------------------------"
+    echo "${info}Setting up existing Node.js project...${done}"
+    echo "--------------------------------------------------"
+
+    # --- 1. Check for .nvmrc and ensure correct version is used ---
+    if [[ -f ".nvmrc" ]]; then
+        # The 'load-nvmrc' hook should have already handled this, but we can verify.
+        local required_version
+        required_version=$(nvm version "$(cat .nvmrc)")
+        if [[ "$(nvm version)" != "$required_version" ]]; then
+            echo "${warn}Switching to project's required Node version...${done}"
+            nvm use
+        else
+            echo "${ok}✅ Correct Node version ($(nvm current)) is active.${done}"
+        fi
+    else
+        echo "${warn}Warning: No .nvmrc file found. Using current Node version: $(nvm current)${done}"
+    fi
+
+    # --- 2. Install dependencies with pnpm ---
+    if command -v pnpm &>/dev/null; then
+        echo "Installing dependencies with 'pnpm install'..."
+        if pnpm install; then
+            echo "${ok}✅ Dependencies installed successfully.${done}"
+        else
+            echo "${err}❌ pnpm install failed. Please check the errors above.${done}"
+            return 1
+        fi
+    else
+        echo "${err}Error: 'pnpm' not found. Cannot install dependencies.${done}" >&2
+        return 1
+    fi
+
+    echo "--------------------------------------------------"
+    echo "${ok}✅ Project setup complete.${done}"
+    echo "--------------------------------------------------"
+}
+
+# Function to clean up Node.js project artifacts.
+node_clean() {
+    echo "--------------------------------------------------"
+    echo "${info}Node.js Project Teardown Initiated...${done}"
+    echo "--------------------------------------------------"
+
+    local items_to_remove=(
+        "node_modules"
+        "dist"
+        "build"
+        ".next"
+        "coverage"
+        "pnpm-lock.yaml"
+    )
+
+    local deleted_something=false
+    for item in "${items_to_remove[@]}"; do
+        if [[ -e "$item" ]]; then
+            echo "  - Deleting: ${item}"
+            rm -rf "$item"
+            deleted_something=true
+        fi
+    done
+    
+    if [[ "$deleted_something" = true ]]; then
+        echo "${ok}✅ Teardown complete.${done}"
+    else
+        echo "${info}ℹ️ No project files found to delete.${done}"
+    fi
+    echo "--------------------------------------------------"
+}
+
+# ==============================================================================
+# NEW: Automatic NVM Check
+# ==============================================================================
+# This block runs once per session to check if a default Node.js version is set.
+# If not, it will prompt the user to install the latest LTS version.
+if [[ -z "$_NVM_CHECK_COMPLETE" && -t 1 ]]; then
+    nvm_check_and_install_lts
+    export _NVM_CHECK_COMPLETE=true
+fi
