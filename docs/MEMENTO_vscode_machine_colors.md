@@ -206,8 +206,8 @@ eval "$(direnv hook zsh)"
 mkdir -p ~/.config/direnv
 
 # Copy files from the dotfiles repository
-cp ~/CODE/Dotfiles/My_Dotfiles/home/.config/direnv/direnvrc ~/.config/direnv/
-cp ~/CODE/Dotfiles/My_Dotfiles/home/.config/direnv/direnv.toml ~/.config/direnv/
+cp ~/.dotfiles/home/.config/direnv/direnvrc ~/.config/direnv/
+cp ~/.dotfiles/home/.config/direnv/direnv.toml ~/.config/direnv/
 ```
 
 #### Step 3: Trigger Color Setup
@@ -365,7 +365,7 @@ Old versions of direnvrc would skip the file because the section "exists" (even 
 
 ```bash
 # Update direnvrc
-cp ~/CODE/Dotfiles/My_Dotfiles/home/.config/direnv/direnvrc ~/.config/direnv/direnvrc
+cp ~/.dotfiles/home/.config/direnv/direnvrc ~/.config/direnv/direnvrc
 
 # Clear session flag and re-trigger
 unset _VSCODE_COLORS_CHECKED

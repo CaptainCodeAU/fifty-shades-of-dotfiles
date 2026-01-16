@@ -51,12 +51,42 @@ Setting up is designed to be as simple as possible.
     ```bash
     git clone https://github.com/your-username/your-repo-name.git ~/.dotfiles
     ```
-4.  **Symlink Configuration (optioinal)**: Link the `.zshrc` and `.zsh_functions` files to your home directory.
+4.  **Symlink Configuration (optional)**: Link the configuration files to your home directory using the one-to-one mapping structure.
     ```bash
     # WARNING: This will overwrite existing files. Backup yours first!
-    ln -sf ~/dotfiles/zshrc.txt ~/.zshrc
-    ln -sf ~/dotfiles/zsh_functions.txt ~/.zsh_functions
+    # Link main zsh configuration
+    ln -sf ~/.dotfiles/home/.zshrc ~/.zshrc
+
+    # Link zsh function files
+    ln -sf ~/.dotfiles/home/.zsh_python_functions ~/.zsh_python_functions
+    ln -sf ~/.dotfiles/home/.zsh_node_functions ~/.zsh_node_functions
+    ln -sf ~/.dotfiles/home/.zsh_docker_functions ~/.zsh_docker_functions
+    ln -sf ~/.dotfiles/home/.zsh_cursor_functions ~/.zsh_cursor_functions
+    ln -sf ~/.dotfiles/home/.zsh_tmux ~/.zsh_tmux
+    ln -sf ~/.dotfiles/home/.zsh_linux_onboarding ~/.zsh_linux_onboarding
+    ln -sf ~/.dotfiles/home/.zsh_linux_welcome ~/.zsh_linux_welcome
+    ln -sf ~/.dotfiles/home/.zsh_mac_welcome ~/.zsh_mac_welcome
+    ln -sf ~/.dotfiles/home/.zsh_wsl_welcome ~/.zsh_wsl_welcome
+    ln -sf ~/.dotfiles/home/.zsh_wsl_comfyui_functions ~/.zsh_wsl_comfyui_functions
+
+    # Link other configuration files
+    ln -sf ~/.dotfiles/home/.tmux.conf ~/.tmux.conf
+    ln -sf ~/.dotfiles/home/.p10k.zsh ~/.p10k.zsh
+
+    # Link .config directory files
+    mkdir -p ~/.config/direnv ~/.config/yt-dlp
+    ln -sf ~/.dotfiles/home/.config/direnv/direnvrc ~/.config/direnv/direnvrc
+    ln -sf ~/.dotfiles/home/.config/direnv/direnv.toml ~/.config/direnv/direnv.toml
+    ln -sf ~/.dotfiles/home/.config/yt-dlp/config ~/.config/yt-dlp/config
+
+    # Link platform-specific files (macOS only)
+    # mkdir -p ~/Library/Application\ Support/Cursor/User
+    # mkdir -p ~/Library/Application\ Support/Code/User
+    # ln -sf ~/.dotfiles/platforms/macos/Library/Application\ Support/Cursor/User/settings.json ~/Library/Application\ Support/Cursor/User/settings.json
+    # ln -sf ~/.dotfiles/platforms/macos/Library/Application\ Support/Code/User/settings.json ~/Library/Application\ Support/Code/User/settings.json
     ```
+
+    > **Note**: The repository uses a one-to-one mapping structure where `home/` mirrors `~/` and `platforms/` contains platform-specific files. See [`docs/STRUCTURE.md`](docs/STRUCTURE.md) for details.
 5.  **Enable `direnv`**: The provided `.zshrc` already contains the hook for `direnv`. If you are merging with an existing file, ensure this line is present:
     ```zsh
     # In your .zshrc
