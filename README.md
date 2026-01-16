@@ -47,52 +47,52 @@ Setting up is designed to be as simple as possible.
     *   Ensure `git` and `zsh` are installed.
     *   Install **[Oh My Zsh](https://ohmy.zsh.sh/#install)**.
 
-3.  **Clone the Repository**:
+2.  **Clone the Repository**:
     ```bash
-    git clone https://github.com/your-username/your-repo-name.git ~/.dotfiles
+    git clone https://github.com/your-username/your-repo-name.git ~/My_Dotfiles
     ```
-4.  **Symlink Configuration (optional)**: Link the configuration files to your home directory using the one-to-one mapping structure.
+3.  **Symlink Configuration (optional)**: Link the configuration files to your home directory using the one-to-one mapping structure.
     ```bash
     # WARNING: This will overwrite existing files. Backup yours first!
     # Link main zsh configuration
-    ln -sf ~/.dotfiles/home/.zshrc ~/.zshrc
+    ln -sf ~/My_Dotfiles/home/.zshrc ~/.zshrc
 
     # Link zsh function files
-    ln -sf ~/.dotfiles/home/.zsh_python_functions ~/.zsh_python_functions
-    ln -sf ~/.dotfiles/home/.zsh_node_functions ~/.zsh_node_functions
-    ln -sf ~/.dotfiles/home/.zsh_docker_functions ~/.zsh_docker_functions
-    ln -sf ~/.dotfiles/home/.zsh_cursor_functions ~/.zsh_cursor_functions
-    ln -sf ~/.dotfiles/home/.zsh_tmux ~/.zsh_tmux
-    ln -sf ~/.dotfiles/home/.zsh_linux_onboarding ~/.zsh_linux_onboarding
-    ln -sf ~/.dotfiles/home/.zsh_linux_welcome ~/.zsh_linux_welcome
-    ln -sf ~/.dotfiles/home/.zsh_mac_welcome ~/.zsh_mac_welcome
-    ln -sf ~/.dotfiles/home/.zsh_wsl_welcome ~/.zsh_wsl_welcome
-    ln -sf ~/.dotfiles/home/.zsh_wsl_comfyui_functions ~/.zsh_wsl_comfyui_functions
+    ln -sf ~/My_Dotfiles/home/.zsh_python_functions ~/.zsh_python_functions
+    ln -sf ~/My_Dotfiles/home/.zsh_node_functions ~/.zsh_node_functions
+    ln -sf ~/My_Dotfiles/home/.zsh_docker_functions ~/.zsh_docker_functions
+    ln -sf ~/My_Dotfiles/home/.zsh_cursor_functions ~/.zsh_cursor_functions
+    ln -sf ~/My_Dotfiles/home/.zsh_tmux ~/.zsh_tmux
+    ln -sf ~/My_Dotfiles/home/.zsh_linux_onboarding ~/.zsh_linux_onboarding
+    ln -sf ~/My_Dotfiles/home/.zsh_linux_welcome ~/.zsh_linux_welcome
+    ln -sf ~/My_Dotfiles/home/.zsh_mac_welcome ~/.zsh_mac_welcome
+    ln -sf ~/My_Dotfiles/home/.zsh_wsl_welcome ~/.zsh_wsl_welcome
+    ln -sf ~/My_Dotfiles/home/.zsh_wsl_comfyui_functions ~/.zsh_wsl_comfyui_functions
 
     # Link other configuration files
-    ln -sf ~/.dotfiles/home/.tmux.conf ~/.tmux.conf
-    ln -sf ~/.dotfiles/home/.p10k.zsh ~/.p10k.zsh
+    ln -sf ~/My_Dotfiles/home/.tmux.conf ~/.tmux.conf
+    ln -sf ~/My_Dotfiles/home/.p10k.zsh ~/.p10k.zsh
 
     # Link .config directory files
     mkdir -p ~/.config/direnv ~/.config/yt-dlp
-    ln -sf ~/.dotfiles/home/.config/direnv/direnvrc ~/.config/direnv/direnvrc
-    ln -sf ~/.dotfiles/home/.config/direnv/direnv.toml ~/.config/direnv/direnv.toml
-    ln -sf ~/.dotfiles/home/.config/yt-dlp/config ~/.config/yt-dlp/config
+    ln -sf ~/My_Dotfiles/home/.config/direnv/direnvrc ~/.config/direnv/direnvrc
+    ln -sf ~/My_Dotfiles/home/.config/direnv/direnv.toml ~/.config/direnv/direnv.toml
+    ln -sf ~/My_Dotfiles/home/.config/yt-dlp/config ~/.config/yt-dlp/config
 
     # Link platform-specific files (macOS only)
     # mkdir -p ~/Library/Application\ Support/Cursor/User
     # mkdir -p ~/Library/Application\ Support/Code/User
-    # ln -sf ~/.dotfiles/platforms/macos/Library/Application\ Support/Cursor/User/settings.json ~/Library/Application\ Support/Cursor/User/settings.json
-    # ln -sf ~/.dotfiles/platforms/macos/Library/Application\ Support/Code/User/settings.json ~/Library/Application\ Support/Code/User/settings.json
+    # ln -sf ~/My_Dotfiles/platforms/macos/Library/Application\ Support/Cursor/User/settings.json ~/Library/Application\ Support/Cursor/User/settings.json
+    # ln -sf ~/My_Dotfiles/platforms/macos/Library/Application\ Support/Code/User/settings.json ~/Library/Application\ Support/Code/User/settings.json
     ```
 
     > **Note**: The repository uses a one-to-one mapping structure where `home/` mirrors `~/` and `platforms/` contains platform-specific files. See [`docs/STRUCTURE.md`](docs/STRUCTURE.md) for details.
-5.  **Enable `direnv`**: The provided `.zshrc` already contains the hook for `direnv`. If you are merging with an existing file, ensure this line is present:
+4.  **Enable `direnv`**: The provided `.zshrc` already contains the hook for `direnv`. If you are merging with an existing file, ensure this line is present:
     ```zsh
     # In your .zshrc
     if command -v direnv &> /dev/null; then eval "$(direnv hook zsh)"; fi
     ```
-6.  **Restart Your Shell**: Open a new terminal window or run `source ~/.zshrc`.
+5.  **Restart Your Shell**: Open a new terminal window or run `source ~/.zshrc`.
     *   **On a new Linux VM**, the onboarding script will run automatically and guide you through installing any missing dependencies.
     *   On other systems, a welcome message will confirm the setup is active.
 
