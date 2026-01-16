@@ -1,6 +1,6 @@
 # Repository Structure Documentation
 
-This document explains the organization of the dotfiles repository and how it maps to actual deployment locations.
+This document explains the organization of the fifty-shades-of-dotfiles repository and how it maps to actual deployment locations.
 
 ## Overview
 

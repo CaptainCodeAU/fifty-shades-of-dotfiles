@@ -205,9 +205,9 @@ eval "$(direnv hook zsh)"
 # Create directory
 mkdir -p ~/.config/direnv
 
-# Copy files from the dotfiles repository
-cp ~/.dotfiles/home/.config/direnv/direnvrc ~/.config/direnv/
-cp ~/.dotfiles/home/.config/direnv/direnv.toml ~/.config/direnv/
+# Copy files from the fifty-shades-of-dotfiles repository
+cp ~/fifty-shades-of-dotfiles/home/.config/direnv/direnvrc ~/.config/direnv/
+cp ~/fifty-shades-of-dotfiles/home/.config/direnv/direnv.toml ~/.config/direnv/
 ```
 
 #### Step 3: Trigger Color Setup
@@ -365,7 +365,7 @@ Old versions of direnvrc would skip the file because the section "exists" (even 
 
 ```bash
 # Update direnvrc
-cp ~/.dotfiles/home/.config/direnv/direnvrc ~/.config/direnv/direnvrc
+cp ~/fifty-shades-of-dotfiles/home/.config/direnv/direnvrc ~/.config/direnv/direnvrc
 
 # Clear session flag and re-trigger
 unset _VSCODE_COLORS_CHECKED
@@ -404,7 +404,7 @@ We considered several approaches before settling on Method G (direnv integration
 - **What:** Single script to curl/wget and run on each machine
 - **Rejected because:** Requires manual trigger
 
-### Method F: Dotfiles Repository
+### Method F: fifty-shades-of-dotfiles Repository
 - **What:** Store settings in git repo, sync across machines
 - **Rejected because:** Too much infrastructure for this specific feature
 

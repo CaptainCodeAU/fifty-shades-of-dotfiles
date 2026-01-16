@@ -49,41 +49,41 @@ Setting up is designed to be as simple as possible.
 
 2.  **Clone the Repository**:
     ```bash
-    git clone https://github.com/your-username/your-repo-name.git ~/My_Dotfiles
+    git clone https://github.com/CaptainCodeAU/fifty-shades-of-dotfiles.git ~/fifty-shades-of-dotfiles
     ```
 3.  **Symlink Configuration (optional)**: Link the configuration files to your home directory using the one-to-one mapping structure.
     ```bash
     # WARNING: This will overwrite existing files. Backup yours first!
     # Link main zsh configuration
-    ln -sf ~/My_Dotfiles/home/.zshrc ~/.zshrc
+    ln -sf ~/fifty-shades-of-dotfiles/home/.zshrc ~/.zshrc
 
     # Link zsh function files
-    ln -sf ~/My_Dotfiles/home/.zsh_python_functions ~/.zsh_python_functions
-    ln -sf ~/My_Dotfiles/home/.zsh_node_functions ~/.zsh_node_functions
-    ln -sf ~/My_Dotfiles/home/.zsh_docker_functions ~/.zsh_docker_functions
-    ln -sf ~/My_Dotfiles/home/.zsh_cursor_functions ~/.zsh_cursor_functions
-    ln -sf ~/My_Dotfiles/home/.zsh_tmux ~/.zsh_tmux
-    ln -sf ~/My_Dotfiles/home/.zsh_linux_onboarding ~/.zsh_linux_onboarding
-    ln -sf ~/My_Dotfiles/home/.zsh_linux_welcome ~/.zsh_linux_welcome
-    ln -sf ~/My_Dotfiles/home/.zsh_mac_welcome ~/.zsh_mac_welcome
-    ln -sf ~/My_Dotfiles/home/.zsh_wsl_welcome ~/.zsh_wsl_welcome
-    ln -sf ~/My_Dotfiles/home/.zsh_wsl_comfyui_functions ~/.zsh_wsl_comfyui_functions
+    ln -sf ~/fifty-shades-of-dotfiles/home/.zsh_python_functions ~/.zsh_python_functions
+    ln -sf ~/fifty-shades-of-dotfiles/home/.zsh_node_functions ~/.zsh_node_functions
+    ln -sf ~/fifty-shades-of-dotfiles/home/.zsh_docker_functions ~/.zsh_docker_functions
+    ln -sf ~/fifty-shades-of-dotfiles/home/.zsh_cursor_functions ~/.zsh_cursor_functions
+    ln -sf ~/fifty-shades-of-dotfiles/home/.zsh_tmux ~/.zsh_tmux
+    ln -sf ~/fifty-shades-of-dotfiles/home/.zsh_linux_onboarding ~/.zsh_linux_onboarding
+    ln -sf ~/fifty-shades-of-dotfiles/home/.zsh_linux_welcome ~/.zsh_linux_welcome
+    ln -sf ~/fifty-shades-of-dotfiles/home/.zsh_mac_welcome ~/.zsh_mac_welcome
+    ln -sf ~/fifty-shades-of-dotfiles/home/.zsh_wsl_welcome ~/.zsh_wsl_welcome
+    ln -sf ~/fifty-shades-of-dotfiles/home/.zsh_wsl_comfyui_functions ~/.zsh_wsl_comfyui_functions
 
     # Link other configuration files
-    ln -sf ~/My_Dotfiles/home/.tmux.conf ~/.tmux.conf
-    ln -sf ~/My_Dotfiles/home/.p10k.zsh ~/.p10k.zsh
+    ln -sf ~/fifty-shades-of-dotfiles/home/.tmux.conf ~/.tmux.conf
+    ln -sf ~/fifty-shades-of-dotfiles/home/.p10k.zsh ~/.p10k.zsh
 
     # Link .config directory files
     mkdir -p ~/.config/direnv ~/.config/yt-dlp
-    ln -sf ~/My_Dotfiles/home/.config/direnv/direnvrc ~/.config/direnv/direnvrc
-    ln -sf ~/My_Dotfiles/home/.config/direnv/direnv.toml ~/.config/direnv/direnv.toml
-    ln -sf ~/My_Dotfiles/home/.config/yt-dlp/config ~/.config/yt-dlp/config
+    ln -sf ~/fifty-shades-of-dotfiles/home/.config/direnv/direnvrc ~/.config/direnv/direnvrc
+    ln -sf ~/fifty-shades-of-dotfiles/home/.config/direnv/direnv.toml ~/.config/direnv/direnv.toml
+    ln -sf ~/fifty-shades-of-dotfiles/home/.config/yt-dlp/config ~/.config/yt-dlp/config
 
     # Link platform-specific files (macOS only)
     # mkdir -p ~/Library/Application\ Support/Cursor/User
     # mkdir -p ~/Library/Application\ Support/Code/User
-    # ln -sf ~/My_Dotfiles/platforms/macos/Library/Application\ Support/Cursor/User/settings.json ~/Library/Application\ Support/Cursor/User/settings.json
-    # ln -sf ~/My_Dotfiles/platforms/macos/Library/Application\ Support/Code/User/settings.json ~/Library/Application\ Support/Code/User/settings.json
+    # ln -sf ~/fifty-shades-of-dotfiles/platforms/macos/Library/Application\ Support/Cursor/User/settings.json ~/Library/Application\ Support/Cursor/User/settings.json
+    # ln -sf ~/fifty-shades-of-dotfiles/platforms/macos/Library/Application\ Support/Code/User/settings.json ~/Library/Application\ Support/Code/User/settings.json
     ```
 
     > **Note**: The repository uses a one-to-one mapping structure where `home/` mirrors `~/` and `platforms/` contains platform-specific files. See [`docs/STRUCTURE.md`](docs/STRUCTURE.md) for details.
@@ -368,7 +368,7 @@ alias my-server="ssh my-user@192.168.1.100"
 This repository uses a **one-to-one mapping** structure that mirrors actual deployment locations, making it clear where each file goes:
 
 ```
-My_Dotfiles/
+fifty-shades-of-dotfiles/
 ├── home/                              # Files that go directly in ~/
 │   ├── .zshrc                         # Main zsh config → ~/.zshrc
 │   ├── .zsh_python_functions          # Python helpers → ~/.zsh_python_functions
