@@ -51,6 +51,23 @@ export PROMPT_EOL_MARK="" # Disable Powerlevel10k instant prompt
 : ${PYTHON_DEFAULT_VERSION:="3.13"} # Using major.minor for consistency
 : ${PYTHON_VERSION_PATTERN:="^3\.(8|9|1[0-3])$"}
 
+# --- Welcome Message Settings ---
+# ZSH_WELCOME: Controls environment overview display
+#   - "full"    : Complete multi-line overview (default for new terminals)
+#   - "minimal" : Single-line compact status (default for SSH/tmux)
+#   - "none"    : No overview displayed
+#   - ""        : Auto-detect based on context (recommended)
+: ${ZSH_WELCOME:=""}
+
+# ZSH_WELCOME_QUICKREF: Controls quick reference display (independent of ZSH_WELCOME)
+#   - "full"    : Multi-line categorized reference
+#   - "minimal" : Compact 2-line hints
+#   - "none"    : No quick reference displayed
+: ${ZSH_WELCOME_QUICKREF:="full"}
+
+# ZSH_WELCOME_DISK_WARN: Disk usage percentage threshold for warning (default: 90)
+: ${ZSH_WELCOME_DISK_WARN:=90}
+
 # --- PHP ---
 export WP_CLI_PHP_ARGS="-d error_reporting=E_ERROR^E_PARSE^E_COMPILE_ERROR -d display_errors=0"
 
@@ -607,15 +624,10 @@ fi
 # 10. Welcome / Onboarding Scripts
 # ==============================================================================
 # Only run in interactive shells on first load.
+# Verbosity controlled by ZSH_WELCOME and ZSH_WELCOME_QUICKREF (see Section 2).
+# Auto-detects SSH/tmux sessions and adjusts verbosity accordingly.
 if [[ -z "$_WELCOME_MESSAGE_SHOWN" && -t 1 ]]; then
-    if [[ "$IS_MAC" == "true" ]] && [ -f ~/.zsh_mac_welcome ]; then
-        source ~/.zsh_mac_welcome
-    elif [[ "$IS_WSL" == "true" ]] && [ -f ~/.zsh_wsl_welcome ]; then
-        source ~/.zsh_wsl_welcome
-    elif [[ "$IS_LINUX" == "true" ]] && [ -f ~/.zsh_linux_welcome ]; then
-        source ~/.zsh_linux_welcome
-    fi
-    # Set a flag to prevent this from running again in the same session
+    [ -f ~/.zsh_welcome ] && source ~/.zsh_welcome
     export _WELCOME_MESSAGE_SHOWN=true
 fi
 
