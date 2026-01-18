@@ -1,0 +1,55 @@
+# Claude Code Hook Configuration
+# Each hook type can be enabled/disabled and configured independently
+
+global:
+  debug: false
+  debug_dir: "Temp"
+  project_dir: "/Users/admin/CODE/Ideas/git-foot"
+
+hooks:
+  stop:
+    enabled: true
+    sound:
+      enabled: true
+      file: ".claude/sounds/ui_open_1.mp3"
+      volume: 0.5
+      delay_ms: 200
+    voice:
+      enabled: true
+      name: "Victoria"
+      volume: 0.6
+      rate: 280
+    summary:
+      mode: "sentences"
+      max_sentences: 2
+      max_characters: 200
+      start: "action"
+
+  ask_user_question:
+    enabled: true
+    sound:
+      enabled: true
+      file: ".claude/sounds/bell_ring_1.mp3"
+      volume: 0.5
+      delay_ms: 200
+    voice:
+      enabled: true
+      name: "Victoria"
+      volume: 0.6
+      rate: 280
+    message_mode: "extract"
+    default_message: "Claude has a question for you"
+
+  permission_request:
+    enabled: true
+    sound:
+      enabled: true
+      file: ".claude/sounds/bell_call.mp3"
+      volume: 0.4
+      delay_ms: 200
+    voice:
+      enabled: true
+      name: "Victoria"
+      volume: 0.5
+      rate: 300
+    message_template: "Approve {tool_name}?"

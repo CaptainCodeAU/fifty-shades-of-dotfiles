@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(bd show:*)"
+      "Bash(ls:*)",
+      "WebSearch",
+      "Bash(git add:*)"
     ]
   }
 }
