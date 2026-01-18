@@ -15,7 +15,7 @@ It is built around a modern toolchain that prioritizes speed, consistency, and d
 ## Key Features
 
 *   **💻 Cross-Platform by Design**: Works seamlessly on macOS, Linux, and WSL with OS-specific adaptations handled automatically.
-*   **🚀 Automatic Onboarding**: On a fresh Linux system, the script detects missing tools (`git`, `curl`, `lsd`, `uv`, etc.) and interactively prompts to install them.
+*   **🚀 Automatic Onboarding**: On a fresh system (macOS, Linux, or WSL), the script detects missing tools and interactively prompts to install them. Run `run_onboarding` anytime to re-check.
 *   **🤖 Automated Project Scaffolding**: Create complete, best-practice Python (`python_new_project`) or Node.js (`node_new_project`) projects with a single command.
 *   **✨ Seamless Environment Management**:
     *   **`direnv`** for automatic activation/deactivation of Python virtual environments.
@@ -90,8 +90,58 @@ Setting up is designed to be as simple as possible.
     if command -v direnv &> /dev/null; then eval "$(direnv hook zsh)"; fi
     ```
 5.  **Restart Your Shell**: Open a new terminal window or run `source ~/.zshrc`.
-    *   **On a new Linux VM**, the onboarding script will run automatically and guide you through installing any missing dependencies.
-    *   On other systems, a welcome message will confirm the setup is active.
+    *   **On any new system**, the onboarding script will run automatically and guide you through installing any missing dependencies.
+    *   A welcome message will confirm the setup is active.
+
+---
+
+## Onboarding & Dependency Management
+
+The shell includes an automatic onboarding system that checks for required tools and offers to install them.
+
+### Automatic Onboarding
+
+On first shell start (on a new machine), the onboarding script runs automatically and:
+
+1. Detects your OS and package manager
+2. Checks for essential development tools
+3. Offers to install missing tools interactively
+
+### Manual Onboarding
+
+Re-run onboarding anytime to check for missing tools:
+
+```bash
+run_onboarding
+```
+
+### Supported Package Managers
+
+| OS | Package Manager |
+|----|-----------------|
+| macOS | Homebrew (auto-installs if missing) |
+| Ubuntu/Debian | apt |
+| Fedora | dnf |
+| Arch | pacman |
+| openSUSE | zypper |
+
+### Tools Checked
+
+| Category | Tools |
+|----------|-------|
+| **Essential** | git, curl, unzip |
+| **User Experience** | eza, fzf, jq, direnv, zoxide |
+| **CLI Tools** | ripgrep, tree, neofetch, ffmpeg, yt-dlp, aria2 |
+| **Development Managers** | nvm, pipx, uv |
+| **Special** | Docker (guidance only — requires manual installation) |
+
+### Skipping Onboarding
+
+To prevent auto-onboarding on a fresh shell:
+
+```bash
+export _ONBOARDING_COMPLETE=true
+```
 
 ---
 

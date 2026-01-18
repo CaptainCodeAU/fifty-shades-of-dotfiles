@@ -1,0 +1,368 @@
+# ~/.zsh_onboarding
+# ==============================================================================
+#  Unified Onboarding & Dependency Checker
+# ==============================================================================
+# Cross-platform onboarding script for macOS, Linux, and WSL.
+# Checks for essential development tools and offers to install missing ones.
+#
+# USAGE:
+#   - Runs automatically on first shell start
+#   - Run manually anytime with: run_onboarding
+#
+# SUPPORTED PLATFORMS:
+#   - macOS (via Homebrew)
+#   - Linux: Ubuntu/Debian (apt), Fedora (dnf), Arch (pacman), openSUSE (zypper)
+#   - WSL (same as Linux)
+#
+# Date Created: 16/01/2025
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# UI Helpers (self-contained for portability)
+# ------------------------------------------------------------------------------
+# These may already be defined in .zshrc, but we define them here too
+# to ensure the script works standalone.
+if [[ -z "$ok" ]]; then
+    autoload -U colors && colors
+    ok="$fg[green]"
+    warn="$fg[yellow]"
+    err="$fg[red]"
+    info="$fg[cyan]"
+    done="$reset_color"
+fi
+
+# ------------------------------------------------------------------------------
+# Global Variables
+# ------------------------------------------------------------------------------
+_PKG_MANAGER_NAME=""
+_PKG_MANAGER_CMD=""
+_PKG_MANAGER_CHECK=""
+
+# ------------------------------------------------------------------------------
+# Package Manager Detection
+# ------------------------------------------------------------------------------
+_detect_package_manager() {
+    _PKG_MANAGER_NAME=""
+    _PKG_MANAGER_CMD=""
+    _PKG_MANAGER_CHECK=""
+
+    if [[ "$IS_MAC" == "true" ]]; then
+        if command -v brew &>/dev/null; then
+            _PKG_MANAGER_NAME="Homebrew"
+            _PKG_MANAGER_CMD="brew install"
+            _PKG_MANAGER_CHECK="brew list"
+        else
+            _PKG_MANAGER_NAME=""
+            _PKG_MANAGER_CMD=""
+        fi
+    elif command -v apt-get &>/dev/null; then
+        _PKG_MANAGER_NAME="apt"
+        _PKG_MANAGER_CMD="sudo apt-get install -y"
+        _PKG_MANAGER_CHECK="dpkg -l"
+    elif command -v dnf &>/dev/null; then
+        _PKG_MANAGER_NAME="dnf"
+        _PKG_MANAGER_CMD="sudo dnf install -y"
+        _PKG_MANAGER_CHECK="dnf list installed"
+    elif command -v pacman &>/dev/null; then
+        _PKG_MANAGER_NAME="pacman"
+        _PKG_MANAGER_CMD="sudo pacman -S --noconfirm"
+        _PKG_MANAGER_CHECK="pacman -Q"
+    elif command -v zypper &>/dev/null; then
+        _PKG_MANAGER_NAME="zypper"
+        _PKG_MANAGER_CMD="sudo zypper install -y"
+        _PKG_MANAGER_CHECK="zypper se --installed-only"
+    else
+        echo "${warn}Could not detect package manager. Automatic installation disabled.${done}"
+        _PKG_MANAGER_NAME=""
+        _PKG_MANAGER_CMD=""
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# Homebrew Bootstrap (macOS only)
+# ------------------------------------------------------------------------------
+_ensure_homebrew() {
+    if [[ "$IS_MAC" != "true" ]]; then
+        return 0
+    fi
+
+    if command -v brew &>/dev/null; then
+        return 0
+    fi
+
+    echo "${warn}Homebrew not found.${done}"
+    echo "${info}Homebrew is the package manager for macOS and is required to install other tools.${done}"
+
+    if [[ -t 1 ]]; then
+        read "REPLY?${info}    Would you like to install Homebrew now? [y/N] ${done}"
+        if [[ "$REPLY" =~ ^[Yy]$ ]]; then
+            echo "${info}Installing Homebrew...${done}"
+            /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+            if [[ $? -eq 0 ]]; then
+                echo "${ok}    Homebrew installed successfully.${done}"
+                # Add Homebrew to PATH for this session
+                if [[ -d /opt/homebrew ]]; then
+                    eval "$(/opt/homebrew/bin/brew shellenv)"
+                else
+                    eval "$(/usr/local/bin/brew shellenv)"
+                fi
+                # Re-detect package manager
+                _detect_package_manager
+            else
+                echo "${err}    Homebrew installation failed.${done}"
+                return 1
+            fi
+        else
+            echo "${warn}    Skipping Homebrew installation. Some tools cannot be installed automatically.${done}"
+            return 1
+        fi
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# Generic Command Checker
+# ------------------------------------------------------------------------------
+# Usage: _ensure_command <command_to_check> <package_name_brew> <package_name_apt>
+# If only one package name provided, it's used for all package managers.
+_ensure_command() {
+    local cmd_to_check="$1"
+    local pkg_brew="${2:-$1}"
+    local pkg_apt="${3:-$pkg_brew}"
+    local pkg_name=""
+
+    # Select package name based on package manager
+    if [[ "$_PKG_MANAGER_NAME" == "Homebrew" ]]; then
+        pkg_name="$pkg_brew"
+    else
+        pkg_name="$pkg_apt"
+    fi
+
+    # Check if command exists
+    if command -v "$cmd_to_check" &>/dev/null; then
+        return 0
+    fi
+
+    # Command not found — offer to install
+    if [[ -n "$_PKG_MANAGER_CMD" && -t 1 ]]; then
+        echo "${warn}Tool missing: '$cmd_to_check' not found.${done}"
+        read "REPLY?${info}    Install '$pkg_name' using ${_PKG_MANAGER_NAME}? [y/N] ${done}"
+        if [[ "$REPLY" =~ ^[Yy]$ ]]; then
+            echo "${info}    Installing '$pkg_name'...${done}"
+            eval "$_PKG_MANAGER_CMD $pkg_name"
+            if [[ $? -eq 0 ]]; then
+                echo "${ok}    Successfully installed '$pkg_name'.${done}"
+                rehash  # Refresh command cache
+            else
+                echo "${err}    Installation failed.${done}"
+                return 1
+            fi
+        else
+            echo "${warn}    Skipping '$pkg_name'.${done}"
+        fi
+    else
+        echo "${warn}Tool missing: '$cmd_to_check'. Please install '$pkg_name' manually.${done}"
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# NVM (Node Version Manager) — Special Handler
+# ------------------------------------------------------------------------------
+_ensure_nvm() {
+    # NVM is a shell function, not a binary — check for its directory
+    if [[ -d "$HOME/.nvm" ]]; then
+        return 0
+    fi
+
+    if [[ -t 1 ]]; then
+        echo "${warn}Tool missing: 'nvm' (Node Version Manager) not found.${done}"
+        read "REPLY?${info}    Install nvm from the official source? [y/N] ${done}"
+        if [[ "$REPLY" =~ ^[Yy]$ ]]; then
+            echo "${info}    Downloading and installing nvm...${done}"
+            curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/master/install.sh | bash
+            if [[ $? -eq 0 ]]; then
+                echo "${ok}    nvm installed successfully.${done}"
+                echo "${info}    Note: Restart your shell or run 'source ~/.zshrc' to use nvm.${done}"
+            else
+                echo "${err}    nvm installation failed.${done}"
+            fi
+        else
+            echo "${warn}    Skipping nvm installation.${done}"
+        fi
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# pipx — Special Handler
+# ------------------------------------------------------------------------------
+_ensure_pipx() {
+    if command -v pipx &>/dev/null; then
+        return 0
+    fi
+
+    if [[ -n "$_PKG_MANAGER_CMD" && -t 1 ]]; then
+        echo "${warn}Tool missing: 'pipx' not found.${done}"
+        read "REPLY?${info}    Install 'pipx' using ${_PKG_MANAGER_NAME}? [y/N] ${done}"
+        if [[ "$REPLY" =~ ^[Yy]$ ]]; then
+            echo "${info}    Installing pipx...${done}"
+            eval "$_PKG_MANAGER_CMD pipx"
+            if [[ $? -eq 0 ]]; then
+                echo "${ok}    pipx installed successfully.${done}"
+                # Ensure pipx path is set up
+                if command -v pipx &>/dev/null; then
+                    pipx ensurepath &>/dev/null
+                fi
+            else
+                echo "${err}    pipx installation failed.${done}"
+            fi
+        else
+            echo "${warn}    Skipping pipx installation.${done}"
+        fi
+    else
+        echo "${warn}Tool missing: 'pipx'. Please install it manually.${done}"
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# uv (Python Package Manager) — Special Handler
+# ------------------------------------------------------------------------------
+_ensure_uv() {
+    if command -v uv &>/dev/null; then
+        return 0
+    fi
+
+    if [[ -t 1 ]]; then
+        echo "${warn}Tool missing: 'uv' (fast Python package manager) not found.${done}"
+        read "REPLY?${info}    Install uv from the official source? [y/N] ${done}"
+        if [[ "$REPLY" =~ ^[Yy]$ ]]; then
+            echo "${info}    Downloading and installing uv...${done}"
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+            if [[ $? -eq 0 ]]; then
+                echo "${ok}    uv installed successfully.${done}"
+                # Add to path for this session
+                export PATH="$HOME/.local/bin:$PATH"
+                rehash
+            else
+                echo "${err}    uv installation failed.${done}"
+            fi
+        else
+            echo "${warn}    Skipping uv installation.${done}"
+        fi
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# Docker — Guidance Only
+# ------------------------------------------------------------------------------
+_show_docker_guidance() {
+    if command -v docker &>/dev/null; then
+        return 0
+    fi
+
+    echo "${warn}Tool missing: 'docker' not found.${done}"
+
+    if [[ "$IS_MAC" == "true" ]]; then
+        echo "${info}    Docker Desktop for Mac: https://docs.docker.com/desktop/install/mac-install/${done}"
+    elif [[ "$IS_WSL" == "true" ]]; then
+        echo "${info}    Docker Desktop for Windows (with WSL backend): https://docs.docker.com/desktop/install/windows-install/${done}"
+        echo "${info}    Or install Docker Engine in WSL: https://docs.docker.com/engine/install/ubuntu/${done}"
+    else
+        echo "${info}    Docker Engine installation: https://docs.docker.com/engine/install/${done}"
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# Main Onboarding Function
+# ------------------------------------------------------------------------------
+run_onboarding() {
+    echo
+    echo "${info}==============================================================================${done}"
+    echo "${info}  Development Environment Onboarding${done}"
+    echo "${info}==============================================================================${done}"
+    echo
+
+    # Display OS info
+    if [[ "$IS_MAC" == "true" ]]; then
+        echo "${info}Platform:${done} macOS $(sw_vers -productVersion 2>/dev/null)"
+    elif [[ "$IS_WSL" == "true" ]]; then
+        echo "${info}Platform:${done} WSL ($(lsb_release -ds 2>/dev/null || echo 'Linux'))"
+    else
+        echo "${info}Platform:${done} $(lsb_release -ds 2>/dev/null || echo 'Linux')"
+    fi
+    echo
+
+    # Force Zsh to rebuild command cache
+    rehash
+
+    # --- macOS: Ensure Homebrew first ---
+    if [[ "$IS_MAC" == "true" ]]; then
+        echo "${info}Checking for Homebrew...${done}"
+        _ensure_homebrew
+        echo
+    fi
+
+    # --- Detect package manager ---
+    echo "${info}Detecting package manager...${done}"
+    _detect_package_manager
+
+    if [[ -n "$_PKG_MANAGER_NAME" ]]; then
+        echo "${ok}    Found: ${_PKG_MANAGER_NAME}${done}"
+    else
+        echo "${warn}    No supported package manager found. Manual installation required.${done}"
+    fi
+    echo
+
+    # --- Essential Tools ---
+    echo "${info}Checking essential tools...${done}"
+    _ensure_command "git" "git" "git"
+    _ensure_command "curl" "curl" "curl"
+    _ensure_command "unzip" "unzip" "unzip"
+    echo
+
+    # --- User Experience Tools ---
+    echo "${info}Checking user experience tools...${done}"
+    _ensure_command "eza" "eza" "eza"
+    _ensure_command "fzf" "fzf" "fzf"
+    _ensure_command "jq" "jq" "jq"
+    _ensure_command "direnv" "direnv" "direnv"
+    _ensure_command "zoxide" "zoxide" "zoxide"
+    echo
+
+    # --- CLI Tools ---
+    echo "${info}Checking CLI tools...${done}"
+    _ensure_command "rg" "ripgrep" "ripgrep"
+    _ensure_command "tree" "tree" "tree"
+    _ensure_command "neofetch" "neofetch" "neofetch"
+    _ensure_command "ffmpeg" "ffmpeg" "ffmpeg"
+    _ensure_command "yt-dlp" "yt-dlp" "yt-dlp"
+    _ensure_command "aria2c" "aria2" "aria2"
+    echo
+
+    # --- Development Tool Managers ---
+    echo "${info}Checking development tool managers...${done}"
+    _ensure_nvm
+    _ensure_pipx
+    _ensure_uv
+    echo
+
+    # --- Docker (guidance only) ---
+    echo "${info}Checking Docker...${done}"
+    _show_docker_guidance
+    echo
+
+    # --- Complete ---
+    echo "${info}==============================================================================${done}"
+    echo "${ok}  Onboarding complete!${done}"
+    echo "${info}==============================================================================${done}"
+    echo
+    echo "${info}Tips:${done}"
+    echo "  - Run ${info}run_onboarding${done} anytime to re-check dependencies"
+    echo "  - Restart your shell or run ${info}source ~/.zshrc${done} if new tools were installed"
+    echo
+}
+
+# ------------------------------------------------------------------------------
+# Export the function so it's available as a command
+# ------------------------------------------------------------------------------
+# The function is now defined and can be called manually with: run_onboarding
+# Auto-execution is handled by .zshrc Section 4

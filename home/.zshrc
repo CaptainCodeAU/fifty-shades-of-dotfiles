@@ -116,12 +116,20 @@ esac
 
 
 # ==============================================================================
-# 4. Onboarding & Dependency Checks (Linux Only)
+# 4. Onboarding & Dependency Checks
 # ==============================================================================
+# Unified onboarding for macOS, Linux, and WSL.
+# Runs automatically on first shell start. Can also be triggered manually
+# at any time by running: run_onboarding
+#
 # This runs AFTER the core path is set, so it can find installed tools.
-if [[ "$IS_LINUX" == "true" && -f ~/.zsh_linux_onboarding && -z "$_ONBOARDING_COMPLETE" ]]; then
-    source ~/.zsh_linux_onboarding
-    export _ONBOARDING_COMPLETE=true
+if [[ -f ~/.zsh_onboarding ]]; then
+    source ~/.zsh_onboarding
+    # Auto-run on first shell start only
+    if [[ -z "$_ONBOARDING_COMPLETE" && -t 1 ]]; then
+        run_onboarding
+        export _ONBOARDING_COMPLETE=true
+    fi
 fi
 
 
