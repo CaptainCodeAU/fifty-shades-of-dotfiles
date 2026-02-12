@@ -123,7 +123,7 @@ run_onboarding
 ### Supported Package Managers
 
 | OS | Package Manager |
-|----|-----------------|
+| ---- | ----------------- |
 | macOS | Homebrew (auto-installs if missing) |
 | Ubuntu/Debian | apt |
 | Fedora | dnf |
@@ -133,7 +133,7 @@ run_onboarding
 ### Tools Checked
 
 | Category | Tools |
-|----------|-------|
+| ---------- | ------- |
 | **Essential** | git, curl, unzip |
 | **User Experience** | eza, fzf, jq, direnv, zoxide |
 | **CLI Tools** | ripgrep, tree, neofetch, ffmpeg, yt-dlp, aria2 |
@@ -427,7 +427,7 @@ The shell displays an environment overview on startup. You can control this beha
 #### `ZSH_WELCOME` — Environment Overview
 
 | Value | Description |
-|-------|-------------|
+| ------- | ------------- |
 | `full` | Complete multi-line overview (default for new terminals) |
 | `minimal` | Single-line compact status (default for SSH/tmux) |
 | `none` | No overview displayed |
@@ -436,7 +436,7 @@ The shell displays an environment overview on startup. You can control this beha
 #### `ZSH_WELCOME_QUICKREF` — Quick Reference
 
 | Value | Description |
-|-------|-------------|
+| ------- | ------------- |
 | `full` | Multi-line categorized reference |
 | `minimal` | Compact 2-line hints |
 | `none` | No quick reference displayed |
@@ -463,7 +463,7 @@ export ZSH_WELCOME="none"
 When `ZSH_WELCOME` is empty (default), the welcome message automatically adjusts:
 
 | Context | Auto Default | Rationale |
-|---------|--------------|-----------|
+| --------- | -------------- | ----------- |
 | Regular terminal | `full` | First shell of the day, show full info |
 | SSH session | `minimal` | You're remoting in, you know your setup |
 | Tmux pane | `minimal` | You've seen the banner in the first pane |
@@ -502,7 +502,7 @@ TMUX="/tmp/test" zsh -i -c exit
 
 This repository uses a **one-to-one mapping** structure that mirrors actual deployment locations, making it clear where each file goes:
 
-```
+```text
 fifty-shades-of-dotfiles/
 ├── home/                              # Files that go directly in ~/
 │   ├── .zshrc                         # Main zsh config → ~/.zshrc
