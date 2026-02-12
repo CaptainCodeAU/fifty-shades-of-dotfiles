@@ -1,12 +1,10 @@
 # Cross-Platform Zsh Development Environment
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Shell-Zsh-lightgrey.svg?logo=gnome-terminal&logoColor=white" alt="Shell">
-  <img src="https://img.shields.io/badge/Python-uv-hotpink.svg?logo=python&logoColor=white" alt="Python with uv">
-  <img src="https://img.shields.io/badge/Node.js-nvm-green.svg?logo=nodedotjs&logoColor=white" alt="Node.js with nvm">
-  <img src="https://img.shields.io/badge/Tools-Docker-blue.svg?logo=docker&logoColor=white" alt="Docker">
-  <img src="https://img.shields.io/badge/OS-macOS%20%7C%20Linux%20%7C%20WSL-blue.svg?logo=apple" alt="OS Support">
-</p>
+![Shell](https://img.shields.io/badge/Shell-Zsh-lightgrey.svg?logo=gnome-terminal&logoColor=white)
+![Python with uv](https://img.shields.io/badge/Python-uv-hotpink.svg?logo=python&logoColor=white)
+![Node.js with nvm](https://img.shields.io/badge/Node.js-nvm-green.svg?logo=nodedotjs&logoColor=white)
+![Docker](https://img.shields.io/badge/Tools-Docker-blue.svg?logo=docker&logoColor=white)
+![OS Support](https://img.shields.io/badge/OS-macOS%20%7C%20Linux%20%7C%20WSL-blue.svg?logo=apple)
 
 Tired of manually setting up your development environment on every new machine? This repository contains a set of Zsh dotfiles that create a unified, powerful, and automated workflow across **macOS, Linux, and Windows (via WSL)**.
 
@@ -14,27 +12,29 @@ It is built around a modern toolchain that prioritizes speed, consistency, and d
 
 ## Key Features
 
-*   **💻 Cross-Platform by Design**: Works seamlessly on macOS, Linux, and WSL with OS-specific adaptations handled automatically.
-*   **🚀 Automatic Onboarding**: On a fresh system (macOS, Linux, or WSL), the script detects missing tools and interactively prompts to install them. Run `run_onboarding` anytime to re-check.
-*   **🤖 Automated Project Scaffolding**: Create complete, best-practice Python (`python_new_project`) or Node.js (`node_new_project`) projects with a single command.
-*   **✨ Seamless Environment Management**:
-    *   **`direnv`** for automatic activation/deactivation of Python virtual environments.
-    *   **`nvm`** with automatic Node.js version switching via `.nvmrc` files.
-*   **🐳 Integrated Docker Helpers**: Functions to quickly start, stop, and manage common development services like PostgreSQL, Qdrant, and Jupyter Lab.
-*   **🖥️ Tmux Integration**: Powerful tmux session management with git-aware workflows and automatic window naming.
-*   **📝 Editor Integration**: Automatic environment syncing between Cursor/VSCode terminals and tmux sessions.
-*   **🎬 Media Tools**: Built-in `yt()` wrapper for yt-dlp with auto-generated configuration and quality presets.
-*   **🔒 Private Configuration**: A built-in pattern for managing your secret keys and machine-specific settings in a `.zshrc.private` file, which is kept out of version control.
+* **💻 Cross-Platform by Design**: Works seamlessly on macOS, Linux, and WSL with OS-specific adaptations handled automatically.
+* **🚀 Automatic Onboarding**: On a fresh system (macOS, Linux, or WSL), the script detects missing tools and interactively prompts to install them. Run `run_onboarding` anytime to re-check.
+* **🤖 Automated Project Scaffolding**: Create complete, best-practice Python (`python_new_project`) or Node.js (`node_new_project`) projects with a single command.
+* **✨ Seamless Environment Management**:
+  * **`direnv`** for automatic activation/deactivation of Python virtual environments.
+  * **`nvm`** with automatic Node.js version switching via `.nvmrc` files.
+* **🐳 Integrated Docker Helpers**: Functions to quickly start, stop, and manage common development services like PostgreSQL, Qdrant, and Jupyter Lab.
+* **🖥️ Tmux Integration**: Powerful tmux session management with git-aware workflows and automatic window naming.
+* **📝 Editor Integration**: Automatic environment syncing between Cursor/VSCode terminals and tmux sessions.
+* **🎬 Media Tools**: Built-in `yt()` wrapper for yt-dlp with auto-generated configuration and quality presets.
+* **🔒 Private Configuration**: A built-in pattern for managing your secret keys and machine-specific settings in a `.zshrc.private` file, which is kept out of version control.
 
 ---
 
 ## Prerequisites for Mac
 
-1.  **Homebrew**: Ensure [Homebrew](https://brew.sh/) is installed on your macOS system.
-2.  **Core Tools**: Install the key technologies using Homebrew.
+1. **Homebrew**: Ensure [Homebrew](https://brew.sh/) is installed on your macOS system.
+2. **Core Tools**: Install the key technologies using Homebrew.
+
     ```bash
     brew install uv direnv pipx jq
     ```
+
     > **Note:** `jq` is required by the `pipx_check_current_project` helper function.
 
 ---
@@ -43,15 +43,18 @@ It is built around a modern toolchain that prioritizes speed, consistency, and d
 
 Setting up is designed to be as simple as possible.
 
-1.  **Prerequisites**:
-    *   Ensure `git` and `zsh` are installed.
-    *   Install **[Oh My Zsh](https://ohmy.zsh.sh/#install)**.
+1. **Prerequisites**:
+    * Ensure `git` and `zsh` are installed.
+    * Install **[Oh My Zsh](https://ohmy.zsh.sh/#install)**.
 
-2.  **Clone the Repository**:
+2. **Clone the Repository**:
+
     ```bash
     git clone https://github.com/CaptainCodeAU/fifty-shades-of-dotfiles.git ~/fifty-shades-of-dotfiles
     ```
-3.  **Symlink Configuration (optional)**: Link the configuration files to your home directory using the one-to-one mapping structure.
+
+3. **Symlink Configuration (optional)**: Link the configuration files to your home directory using the one-to-one mapping structure.
+
     ```bash
     # WARNING: This will overwrite existing files. Backup yours first!
     # Link main zsh configuration
@@ -84,14 +87,16 @@ Setting up is designed to be as simple as possible.
     ```
 
     > **Note**: The repository uses a one-to-one mapping structure where `home/` mirrors `~/` and `platforms/` contains platform-specific files. See [`docs/STRUCTURE.md`](docs/STRUCTURE.md) for details.
-4.  **Enable `direnv`**: The provided `.zshrc` already contains the hook for `direnv`. If you are merging with an existing file, ensure this line is present:
+4. **Enable `direnv`**: The provided `.zshrc` already contains the hook for `direnv`. If you are merging with an existing file, ensure this line is present:
+
     ```zsh
     # In your .zshrc
     if command -v direnv &> /dev/null; then eval "$(direnv hook zsh)"; fi
     ```
-5.  **Restart Your Shell**: Open a new terminal window or run `source ~/.zshrc`.
-    *   **On any new system**, the onboarding script will run automatically and guide you through installing any missing dependencies.
-    *   A welcome message will confirm the setup is active.
+
+5. **Restart Your Shell**: Open a new terminal window or run `source ~/.zshrc`.
+    * **On any new system**, the onboarding script will run automatically and guide you through installing any missing dependencies.
+    * A welcome message will confirm the setup is active.
 
 ---
 
@@ -158,6 +163,7 @@ mkdir my-awesome-app && cd my-awesome-app
 # 2. Run the new project command with the desired Python version
 python_new_project 3.12
 ```
+
 This single command performs over a dozen steps, including `git init`, `uv venv`, `uv pip install`, and creating all necessary config files.
 
 ### 2. Setting Up an Existing Project
@@ -208,6 +214,7 @@ To completely remove all generated artifacts and return the directory to a clean
 # This will remove .venv, .envrc, caches, build artifacts, and uv.lock
 python_delete
 ```
+
 ---
 
 ## Python Workflow at a Glance
@@ -341,34 +348,34 @@ graph TD
 
 The setup provides similar automation for Node.js projects, standardizing on `nvm` and `pnpm`.
 
-*   **Create a new project**: `mkdir my-node-app && cd my-node-app && node_new_project`
-    *   This initializes a `package.json`, creates `src/` and `tests/` directories, adds an `.nvmrc` file with your current Node version, and installs Jest, Prettier, and ESLint.
-*   **Set up an existing project**: `cd existing-project && node_setup`
-    *   This automatically uses the Node version from `.nvmrc` and installs dependencies with `pnpm install`.
+* **Create a new project**: `mkdir my-node-app && cd my-node-app && node_new_project`
+  * This initializes a `package.json`, creates `src/` and `tests/` directories, adds an `.nvmrc` file with your current Node version, and installs Jest, Prettier, and ESLint.
+* **Set up an existing project**: `cd existing-project && node_setup`
+  * This automatically uses the Node version from `.nvmrc` and installs dependencies with `pnpm install`.
 
 ### Docker (`docker_*` functions & aliases)
 
 Quickly manage common development services and stacks.
 
-*   **Start a PostgreSQL container for development**: `pg_dev_start [db] [pw] [port]`
-*   **Start a Qdrant vector database**: `qdrant_start [port]`
-*   **Start a full AI/ML stack (Qdrant + Jupyter)**: `dev_stack_start ai`
-*   **Start a web development stack**: `dev_stack_start web`
-*   **Start a full stack (web + AI/ML)**: `dev_stack_start full`
-*   **Check the status of all services**: `dev_stack_status`
-*   **Clean up all unused Docker resources**: `dcleanup`
-*   **View Docker overview**: `docker_overview`
-*   **Get help**: `docker_help`
+* **Start a PostgreSQL container for development**: `pg_dev_start [db] [pw] [port]`
+* **Start a Qdrant vector database**: `qdrant_start [port]`
+* **Start a full AI/ML stack (Qdrant + Jupyter)**: `dev_stack_start ai`
+* **Start a web development stack**: `dev_stack_start web`
+* **Start a full stack (web + AI/ML)**: `dev_stack_start full`
+* **Check the status of all services**: `dev_stack_status`
+* **Clean up all unused Docker resources**: `dcleanup`
+* **View Docker overview**: `docker_overview`
+* **Get help**: `docker_help`
 
 ### Tmux Workflows
 
 The configuration includes powerful tmux session management:
 
-*   **Quick session access**: `ta mysession` (attach or create)
-*   **Coding sessions**: `tc` (coding session), `tcc` (claudecode session)
-*   **Development sessions**: `tdev myproject` (multi-window setup)
-*   **Git-aware sessions**: `tgit myproject` (split panes for git and editing)
-*   **Git integration**: All git branch operations automatically update tmux window names
+* **Quick session access**: `ta mysession` (attach or create)
+* **Coding sessions**: `tc` (coding session), `tcc` (claudecode session)
+* **Development sessions**: `tdev myproject` (multi-window setup)
+* **Git-aware sessions**: `tgit myproject` (split panes for git and editing)
+* **Git integration**: All git branch operations automatically update tmux window names
 
 ### Media Downloads
 
@@ -390,10 +397,11 @@ To keep your main configuration portable and shareable, all personal, private, o
 
 **This file is ignored by Git.**
 
-1.  Create the file: `touch ~/.zshrc.private`
-2.  Add your private settings to it.
+1. Create the file: `touch ~/.zshrc.private`
+2. Add your private settings to it.
 
 **Example `~/.zshrc.private`:**
+
 ```zsh
 # Private and machine-specific settings for this computer.
 
@@ -535,16 +543,16 @@ fifty-shades-of-dotfiles/
 
 ### Key Files
 
-*   **`home/.zshrc`**: The main controller. It detects the OS, loads plugins, and sources all other function files. Also contains inline functions like `yt()` (yt-dlp wrapper) and various aliases.
-*   **`home/.zsh_python_functions`**: Contains all Python-related helper functions (`python_new_project`, `pipx_*`, etc.).
-*   **`home/.zsh_node_functions`**: Contains all Node.js helper functions (`node_new_project`, etc.).
-*   **`home/.zsh_docker_functions`**: Contains all Docker helper functions and aliases (`pg_dev_start`, `dcleanup`, etc.).
-*   **`home/.zsh_cursor_functions`**: Cursor/VSCode editor integration for automatic environment syncing with tmux sessions.
-*   **`home/.zsh_tmux`**: Comprehensive tmux session management, git integration, and workflow functions.
-*   **`home/.zsh_linux_onboarding`**: The script that runs once on a new Linux machine to install dependencies.
-*   **`home/.zsh_welcome`**: Unified cross-platform welcome script with verbosity controls, auto-detection for SSH/tmux, and environment overview.
-*   **`home/.config/direnv/`**: direnv configuration files for automatic environment management.
-*   **`home/.config/yt-dlp/config`**: yt-dlp configuration template (auto-generated by `yt()` function, but included as reference).
+* **`home/.zshrc`**: The main controller. It detects the OS, loads plugins, and sources all other function files. Also contains inline functions like `yt()` (yt-dlp wrapper) and various aliases.
+* **`home/.zsh_python_functions`**: Contains all Python-related helper functions (`python_new_project`, `pipx_*`, etc.).
+* **`home/.zsh_node_functions`**: Contains all Node.js helper functions (`node_new_project`, etc.).
+* **`home/.zsh_docker_functions`**: Contains all Docker helper functions and aliases (`pg_dev_start`, `dcleanup`, etc.).
+* **`home/.zsh_cursor_functions`**: Cursor/VSCode editor integration for automatic environment syncing with tmux sessions.
+* **`home/.zsh_tmux`**: Comprehensive tmux session management, git integration, and workflow functions.
+* **`home/.zsh_linux_onboarding`**: The script that runs once on a new Linux machine to install dependencies.
+* **`home/.zsh_welcome`**: Unified cross-platform welcome script with verbosity controls, auto-detection for SSH/tmux, and environment overview.
+* **`home/.config/direnv/`**: direnv configuration files for automatic environment management.
+* **`home/.config/yt-dlp/config`**: yt-dlp configuration template (auto-generated by `yt()` function, but included as reference).
 
 For detailed structure documentation, see [`docs/STRUCTURE.md`](docs/STRUCTURE.md).
 
@@ -556,9 +564,9 @@ The `.zsh_cursor_functions` file provides seamless integration between Cursor/VS
 
 ### How It Works
 
-*   **Automatic Environment Capture**: When you're in a Cursor/VSCode terminal, the environment is automatically saved to `~/.cache/cursor_env.zsh`.
-*   **Tmux Integration**: The `tmux` command is wrapped to automatically load the saved environment when attaching to sessions.
-*   **New Pane Support**: New tmux panes automatically inherit the Cursor/VSCode environment variables.
+* **Automatic Environment Capture**: When you're in a Cursor/VSCode terminal, the environment is automatically saved to `~/.cache/cursor_env.zsh`.
+* **Tmux Integration**: The `tmux` command is wrapped to automatically load the saved environment when attaching to sessions.
+* **New Pane Support**: New tmux panes automatically inherit the Cursor/VSCode environment variables.
 
 This ensures that tools and scripts that rely on editor-specific environment variables work correctly inside tmux sessions.
 
@@ -602,6 +610,7 @@ These functions integrate git workflows with tmux, automatically updating window
 ### Usage Examples
 
 **Create a development session:**
+
 ```bash
 tdev myproject
 # Creates a tmux session with:
@@ -612,6 +621,7 @@ tdev myproject
 ```
 
 **Git workflow with tmux:**
+
 ```bash
 cd ~/CODE/Ideas/myproject
 gt feature/new-feature  # Switches branch and updates tmux window name
@@ -619,6 +629,7 @@ gt feature/new-feature  # Switches branch and updates tmux window name
 ```
 
 **Quick git overview:**
+
 ```bash
 gs        # Quick status
 gstatus   # Full dashboard
@@ -656,20 +667,20 @@ The function auto-generates a comprehensive `~/.config/yt-dlp/config` file on fi
 
 ### Other Useful Aliases
 
-*   **File Listing**: `l` and `ll` use `eza` for enhanced directory listings with git status
-*   **Navigation**: `..`, `...`, `....`, `.....` for quick directory navigation
-*   **Python Shortcuts**: `py313`, `py312`, `py311`, `py310` for quick Python version access
-*   **Node.js**: `serve` (npx http-server), `tsc` (npx typescript)
-*   **Docker**: `lzd` (lazydocker), `lzg`/`lg` (lazygit)
-*   **Claude CLI**: `c` alias with environment variables for enhanced functionality
-*   **Zoxide**: `cd` command is replaced with `zoxide` for intelligent directory jumping
+* **File Listing**: `l` and `ll` use `eza` for enhanced directory listings with git status
+* **Navigation**: `..`, `...`, `....`, `.....` for quick directory navigation
+* **Python Shortcuts**: `py313`, `py312`, `py311`, `py310` for quick Python version access
+* **Node.js**: `serve` (npx http-server), `tsc` (npx typescript)
+* **Docker**: `lzd` (lazydocker), `lzg`/`lg` (lazygit)
+* **Claude CLI**: `c` alias with environment variables for enhanced functionality
+* **Zoxide**: `cd` command is replaced with `zoxide` for intelligent directory jumping
 
 ### Special Functions
 
-*   **`sudo()` wrapper**: Prevents accidental `sudo claude` commands and redirects appropriately
-*   **`python()` function**: Smart Python interpreter selection (venv > local .venv > uv global)
-*   **`ports()` function**: OS-specific port listing (macOS: `lsof`, Linux/WSL: `ss`/`netstat`)
-*   **`y()` function**: Yazi file manager integration for visual directory navigation
+* **`sudo()` wrapper**: Prevents accidental `sudo claude` commands and redirects appropriately
+* **`python()` function**: Smart Python interpreter selection (venv > local .venv > uv global)
+* **`ports()` function**: OS-specific port listing (macOS: `lsof`, Linux/WSL: `ss`/`netstat`)
+* **`y()` function**: Yazi file manager integration for visual directory navigation
 
 ---
 
