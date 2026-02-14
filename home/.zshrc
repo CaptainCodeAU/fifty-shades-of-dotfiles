@@ -9,7 +9,7 @@
 # 1. Core Path Configuration (CRITICAL)
 # ==============================================================================
 # Set the most important user paths FIRST. This ensures that tools installed by
-# scripts (like uv, pipx, fzf) are available immediately in the same session,
+# scripts (like uv, fzf) are available immediately in the same session,
 # preventing startup loops. The `typeset -U path` later will de-duplicate.
 export PATH="$HOME/.fzf/bin:$HOME/.local/bin:$PATH"
 
@@ -47,9 +47,9 @@ export PIP_REQUIRE_VIRTUALENV=true
 export PIP_DISABLE_PIP_VERSION_CHECK=1
 export PROMPT_EOL_MARK="" # Disable Powerlevel10k instant prompt
 : ${PYTHON_MIN_VERSION:="3.8"}
-: ${PYTHON_MAX_VERSION:="3.13"}
+: ${PYTHON_MAX_VERSION:="3.14"}
 : ${PYTHON_DEFAULT_VERSION:="3.13"} # Using major.minor for consistency
-: ${PYTHON_VERSION_PATTERN:="^3\.(8|9|1[0-3])$"}
+: ${PYTHON_VERSION_PATTERN:="^3\.(8|9|1[0-4])$"}
 
 # --- Welcome Message Settings ---
 # ZSH_WELCOME: Controls environment overview display
@@ -227,7 +227,6 @@ source "$ZSH/oh-my-zsh.sh"
 
 # --- Source Other Completions AFTER Oh My Zsh ---
 # These commands often rely on the completion system already being initialized.
-command -v register-python-argcomplete >/dev/null && eval "$(register-python-argcomplete pipx)"
 command -v uv >/dev/null && eval "$(uv generate-shell-completion zsh)"
 [ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
 
@@ -341,6 +340,50 @@ alias l="eza -l --git --grid --color=always --icons=always --no-quotes --hyperli
 alias ll="eza -l --git --time-style relative --color=always --icons=always --no-quotes --hyperlink -a -s modified --time modified --git-repos-no-status"
 alias search="grep --color=auto -rnw . -e "
 alias pip="uv pip"
+
+# Hijack pipx to redirect users to uv tool equivalents.
+# pipx is no longer used on this system — uv tool replaces it entirely.
+pipx() {
+    echo "${warn}⚠️  pipx is no longer used on this system. Use uv tool instead.${done}"
+    echo
+    case "$1" in
+        install)
+            echo "  Instead of:  ${err}pipx install ${@:2}${done}"
+            echo "  Run:         ${ok}uv tool install ${@:2}${done}"
+            ;;
+        uninstall)
+            echo "  Instead of:  ${err}pipx uninstall ${@:2}${done}"
+            echo "  Run:         ${ok}uv tool uninstall ${@:2}${done}"
+            ;;
+        run)
+            echo "  Instead of:  ${err}pipx run ${@:2}${done}"
+            echo "  Run:         ${ok}uvx ${@:2}${done}"
+            ;;
+        list)
+            echo "  Instead of:  ${err}pipx list${done}"
+            echo "  Run:         ${ok}uv tool list --show-paths${done}"
+            ;;
+        upgrade|upgrade-all)
+            echo "  Instead of:  ${err}pipx $1 ${@:2}${done}"
+            echo "  Run:         ${ok}uv tool upgrade ${@:2}${done}"
+            ;;
+        inject)
+            echo "  Instead of:  ${err}pipx inject ${@:2}${done}"
+            echo "  Run:         ${ok}uv tool install --with <extra-pkg> <tool-pkg>${done}"
+            ;;
+        *)
+            echo "  General replacement: ${ok}uv tool ${@}${done}"
+            echo
+            echo "  Common commands:"
+            echo "    ${example}uv tool install <package>${done}    # Install a CLI tool globally"
+            echo "    ${example}uv tool uninstall <package>${done}  # Remove a CLI tool"
+            echo "    ${example}uv tool list --show-paths${done}    # List installed tools"
+            echo "    ${example}uv tool upgrade <package>${done}    # Upgrade a tool"
+            echo "    ${example}uvx <package>${done}                # Run a tool without installing"
+            ;;
+    esac
+}
+
 alias chawan="cha"
 alias web="cha"
 alias www="cha"
