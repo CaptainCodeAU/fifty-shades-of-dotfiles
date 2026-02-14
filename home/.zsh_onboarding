@@ -193,37 +193,6 @@ _ensure_nvm() {
 }
 
 # ------------------------------------------------------------------------------
-# pipx — Special Handler
-# ------------------------------------------------------------------------------
-_ensure_pipx() {
-    if command -v pipx &>/dev/null; then
-        return 0
-    fi
-
-    if [[ -n "$_PKG_MANAGER_CMD" && -t 1 ]]; then
-        echo "${warn}Tool missing: 'pipx' not found.${done}"
-        read "REPLY?${info}    Install 'pipx' using ${_PKG_MANAGER_NAME}? [y/N] ${done}"
-        if [[ "$REPLY" =~ ^[Yy]$ ]]; then
-            echo "${info}    Installing pipx...${done}"
-            eval "$_PKG_MANAGER_CMD pipx"
-            if [[ $? -eq 0 ]]; then
-                echo "${ok}    pipx installed successfully.${done}"
-                # Ensure pipx path is set up
-                if command -v pipx &>/dev/null; then
-                    pipx ensurepath &>/dev/null
-                fi
-            else
-                echo "${err}    pipx installation failed.${done}"
-            fi
-        else
-            echo "${warn}    Skipping pipx installation.${done}"
-        fi
-    else
-        echo "${warn}Tool missing: 'pipx'. Please install it manually.${done}"
-    fi
-}
-
-# ------------------------------------------------------------------------------
 # uv (Python Package Manager) — Special Handler
 # ------------------------------------------------------------------------------
 _ensure_uv() {
@@ -341,7 +310,6 @@ run_onboarding() {
     # --- Development Tool Managers ---
     echo "${info}Checking development tool managers...${done}"
     _ensure_nvm
-    _ensure_pipx
     _ensure_uv
     echo
 
