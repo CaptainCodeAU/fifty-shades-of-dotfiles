@@ -122,6 +122,16 @@ EOF
             [[ ! -d "$settings_dir" ]] && continue
 
             if [[ -f "$settings_file" ]]; then
+                # If the file is a symlink, replace with a copy (copy-on-write)
+                # so sed -i can edit it in-place for per-machine customization
+                if [[ -L "$settings_file" ]]; then
+                    local real_file
+                    real_file=$(readlink "$settings_file")
+                    # Handle relative symlinks
+                    [[ "$real_file" != /* ]] && real_file="$(dirname "$settings_file")/$real_file"
+                    cp "$real_file" "${settings_file}.tmp" && mv "${settings_file}.tmp" "$settings_file"
+                fi
+
                 # File exists - check if colorCustomizations already has titleBar settings
                 if grep -q "titleBar.activeBackground" "$settings_file" 2>/dev/null; then
                     # Colors already configured - skip
