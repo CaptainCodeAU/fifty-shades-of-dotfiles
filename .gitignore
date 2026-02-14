@@ -30,6 +30,7 @@ tags
 ######################
 .env
 .env.local
+.env.production
 node_modules/
 *.swp
 .zsh_history
