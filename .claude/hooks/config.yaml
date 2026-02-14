@@ -4,7 +4,7 @@
 global:
   debug: false
   debug_dir: "Temp"
-  project_dir: "/Users/admin/CODE/Ideas/git-foot"
+  project_dir: ""
 
 hooks:
   stop:
