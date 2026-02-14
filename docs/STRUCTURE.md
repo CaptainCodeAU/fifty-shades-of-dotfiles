@@ -27,10 +27,8 @@ All files in `home/` are deployed directly to your home directory (`~/`).
 | `.zsh_docker_functions` | Docker helper functions | `~/.zsh_docker_functions` |
 | `.zsh_cursor_functions` | Cursor/VSCode integration | `~/.zsh_cursor_functions` |
 | `.zsh_tmux` | Tmux integration functions | `~/.zsh_tmux` |
-| `.zsh_linux_onboarding` | Linux onboarding script | `~/.zsh_linux_onboarding` |
-| `.zsh_linux_welcome` | Linux welcome message | `~/.zsh_linux_welcome` |
-| `.zsh_mac_welcome` | macOS welcome message | `~/.zsh_mac_welcome` |
-| `.zsh_wsl_welcome` | WSL welcome message | `~/.zsh_wsl_welcome` |
+| `.zsh_onboarding` | Cross-platform onboarding script | `~/.zsh_onboarding` |
+| `.zsh_welcome` | Unified cross-platform welcome script | `~/.zsh_welcome` |
 
 #### Other Configuration Files
 
