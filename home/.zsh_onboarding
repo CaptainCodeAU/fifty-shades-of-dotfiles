@@ -283,7 +283,7 @@ run_onboarding() {
 
     # Display OS info
     if [[ "$IS_MAC" == "true" ]]; then
-        echo "${info}Platform:${done} macOS $(sw_vers -productVersion 2>/dev/null)"
+        echo "${info}Platform:${done} macOS $(sw_vers -productVersion 2>/dev/null) (${MAC_ARCH:-$(uname -m)})"
     elif [[ "$IS_WSL" == "true" ]]; then
         echo "${info}Platform:${done} WSL ($(lsb_release -ds 2>/dev/null || echo 'Linux'))"
     else
