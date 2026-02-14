@@ -188,7 +188,7 @@ EOF
 
 
 # Function to find and display runnable console scripts from pyproject.toml
-# and report on the global pipx installation status.
+# and report on the global uv tool installation status.
 # Usage: _display_project_scripts
 _display_project_scripts() {
     # Ensure pyproject.toml exists
@@ -203,18 +203,19 @@ _display_project_scripts() {
     # Convert the string of script names into a zsh array, automatically discarding empty lines.
     local -a scripts=(${(f)scripts_list})
 
-    # If scripts were found, display them and the pipx status
+    # If scripts were found, display them and the uv tool status
     if (( ${#scripts[@]} > 0 )); then
         echo "--------------------------------------------------"
         echo "${info}Found ${ok}${#scripts[@]}${info} command-line script(s) available in your local venv:${done}"
         for script_name in "${scripts[@]}"; do
-            echo "   - To run locally: ${ok}${script_name}${done}"
+            echo "   - To run locally:        ${ok}${script_name}${done}"
+            echo "   - To run one-off (uvx):  ${example}uvx --from . ${script_name}${done}"
         done
         echo
         echo "${info}Global Installation Status:${done}"
         # This call will display installation details if found, or a
         # prompt to install if not found, fulfilling the requirement.
-        pipx_check_current_project
+        uv_tool_check_current_project
     fi
 }
 
@@ -479,6 +480,37 @@ else
     else
         echo -e "│     Cursor:  \033[33m✗ Not found\033[0m"
     fi
+fi
+echo "│"
+echo "│  🔗 Global CLI Status:"
+echo "│  ────────────────────"
+if command -v uv &>/dev/null; then
+    local _cli_status
+    _cli_status=$(uv tool list 2>/dev/null | grep -iE "^PROJECT_NAME[[:space:]]|^PROJECT_CLI[[:space:]]" | head -n 1)
+    if [[ -n "$_cli_status" ]]; then
+        local _cli_version=$(echo "$_cli_status" | awk '{print $2}')
+        echo -e "│     Tool:    \033[32m✓ Installed via uv tool ($_cli_version)\033[0m"
+        # Show executable paths
+        local _in_tool=false
+        while IFS= read -r _line; do
+            if [[ "$_in_tool" == true ]]; then
+                if [[ "$_line" == -\ * ]]; then
+                    local _exec_name=$(echo "$_line" | sed 's/^- //')
+                    echo -e "│     Binary:  \033[36m~/.local/bin/$_exec_name\033[0m"
+                else
+                    break
+                fi
+            fi
+            if echo "$_line" | grep -qiE "^PROJECT_NAME[[:space:]]|^PROJECT_CLI[[:space:]]"; then
+                _in_tool=true
+            fi
+        done <<< "$(uv tool list 2>/dev/null)"
+    else
+        echo -e "│     Tool:    \033[33m✗ Not installed globally\033[0m"
+        echo -e "│     Hint:    \033[3;33muv_tool_install_current_project dev\033[0m"
+    fi
+else
+    echo -e "│     Tool:    \033[31m✗ uv not found\033[0m"
 fi
 echo "│"
 echo "└───────────────────────────────────────────────────────────────────────┘"
@@ -1037,8 +1069,8 @@ _display_pyproject_hints() {
         (( ${#detected_extras[@]} > 0 )) && example_cmd_parts+=("${detected_extras[1]}")
         echo "${info}      Example command: ${example}${example_cmd_parts[*]}${done}"
 
-        # For pipx functions, add the --no-extras hint
-        if [[ "$command_name" == "pipx"* ]]; then
+        # For uv_tool functions, add the --no-extras hint
+        if [[ "$command_name" == "uv_tool"* ]]; then
             echo "${info}      To install with no extras, run: ${example}$command_name --no-extras${done}"
         fi
     fi
@@ -1275,39 +1307,18 @@ python_delete() {
 }
 
 
-# # Install current project as user-level CLI via pipx (isolated env, no conflicts)
-# pipx_install_current_project() {
-#     if [[ ! -f pyproject.toml ]]; then
-#         echo "❌ Error: 'pyproject.toml' not found in the current directory." >&2
-#         echo "   Cannot install project with pipx." >&2
-#         return 1
-#     fi
-
-#     local project_name
-#     project_name=$(awk -F'"' '/^name *=/ {gsub(/[[:space:]]/, "", $0); print $2; exit}' pyproject.toml)
-
-#     echo "🔗 Installing '$project_name' as a CLI via pipx from the current directory..."
-#     # Use '.' to refer to the current directory. This is more robust than `$(pwd)`
-#     # as it avoids potential issues with special characters in the path.
-#     if pipx install --force .; then
-#         echo "✅ '$project_name' CLI installed! Run it from any folder. To update, run: pipx_reinstall_current_project"
-#     else
-#         echo "❌ Failed to install '$project_name' via pipx. Please check the errors above."
-#         return 1
-#     fi
-# }
-
-
-# Install current project as user-level CLI via pipx, with optional extras.
-# Usage: pipx_install_current_project [extra1] [extra2] ...
-pipx_install_current_project() {
+# Install current project as user-level CLI via uv tool, with optional extras.
+# Uses editable install (-e) so code changes are reflected immediately.
+# Usage: uv_tool_install_current_project [extra1] [extra2] ...
+#        uv_tool_install_current_project --no-extras
+uv_tool_install_current_project() {
     # --- 1. User Guidance for no arguments ---
     if [ "$#" -eq 0 ]; then
         echo "${err}Error: No extras specified for installation.${done}" >&2
         echo "This function installs the project with optional features." >&2; echo
 
         # Call the centralized helper for pyproject.toml hints
-        _display_pyproject_hints "pipx_install_current_project"
+        _display_pyproject_hints "uv_tool_install_current_project"
         return 1
     fi
 
@@ -1322,6 +1333,7 @@ pipx_install_current_project() {
     local user_extras=("${@}")
     local project_name=$(awk -F'"' '/^name *=/ {gsub(/[[:space:]]/, "", $0); print $2; exit}' pyproject.toml)
     local python_interpreter="$VIRTUAL_ENV/bin/python"
+    local python_version=$("$python_interpreter" --version 2>&1 | awk '{print $2}' | cut -d. -f1,2)
 
     local install_source="."
     # Check for the explicit --no-extras flag to perform a minimal install
@@ -1335,32 +1347,33 @@ pipx_install_current_project() {
         install_source=".[${features_str}]"
     fi
 
-    echo "${info}🔗 Installing '$project_name' from source '${ok}${install_source}${info}' as a CLI via pipx...${done}"
+    echo "${info}🔗 Installing '$project_name' from source '${ok}${install_source}${info}' as a CLI via uv tool (editable)...${done}"
     echo "${info}   Using Python from active venv: $python_interpreter ($($python_interpreter --version))${done}"
 
-    if pipx install --python "$python_interpreter" --force "$install_source"; then
-        echo "${ok}✅ '$project_name' CLI installed successfully.${done}"
+    if uv tool install --force --editable --python "$python_version" "$install_source"; then
+        echo "${ok}✅ '$project_name' CLI installed successfully (editable mode).${done}"
+        echo "${info}   💡 Code changes are reflected immediately. Reinstall only needed if pyproject.toml entry points change.${done}"
         echo "--------------------------------------------------"
-        pipx_check_current_project
+        uv_tool_check_current_project
     else
-        echo "${err}❌ Failed to install '$project_name' via pipx. Please check errors above.${done}"
+        echo "${err}❌ Failed to install '$project_name' via uv tool. Please check errors above.${done}"
         return 1
     fi
 }
 
 
 # Reinstall the CLI for the current project from local source, with optional extras.
-# This is achieved by performing a clean uninstall followed by a fresh install
-# to ensure the correct Python version and extras are used.
-# Usage: pipx_reinstall_current_project [extra1] [extra2] ...
-pipx_reinstall_current_project() {
+# With uv tool, this is a single --force --reinstall operation (no uninstall-then-install needed).
+# Reinstalling is typically only needed when pyproject.toml entry points change.
+# Usage: uv_tool_reinstall_current_project [extra1] [extra2] ...
+uv_tool_reinstall_current_project() {
     # --- 1. User Guidance for no arguments ---
     if [ "$#" -eq 0 ]; then
         echo "${err}Error: No extras specified for reinstallation.${done}" >&2
         echo "This function reinstalls the project with optional features." >&2; echo
 
         # Call the centralized helper for pyproject.toml hints
-        _display_pyproject_hints "pipx_reinstall_current_project"
+        _display_pyproject_hints "uv_tool_reinstall_current_project"
         return 1
     fi
 
@@ -1376,6 +1389,7 @@ pipx_reinstall_current_project() {
     local user_extras=("${@}")
     local project_name=$(awk -F'"' '/^name *=/ {gsub(/[[:space:]]/, "", $0); print $2; exit}' pyproject.toml)
     local python_interpreter="$VIRTUAL_ENV/bin/python"
+    local python_version=$("$python_interpreter" --version 2>&1 | awk '{print $2}' | cut -d. -f1,2)
 
     local install_source="."
     if [[ "$1" == "--no-extras" ]]; then
@@ -1388,34 +1402,24 @@ pipx_reinstall_current_project() {
         install_source=".[${features_str}]"
     fi
 
-    echo "${info}♻️  Reinstalling '$project_name' from source '${ok}${install_source}${info}' via pipx...${done}"
-    echo "${info}   This is a two-step process: (1) Uninstall, (2) Install.${done}"
-
-    # --- 4. Uninstall Step ---
-    echo "   - Step 1: Uninstalling any existing version of '$project_name'..."
-    # We pipe output to /dev/null and use '|| true' to ensure that if the package
-    # was not installed, the script doesn't exit with an error.
-    pipx uninstall "$project_name" &>/dev/null || true
-
-    # --- 5. Install Step ---
-    echo "   - Step 2: Installing new version from source..."
+    echo "${info}♻️  Reinstalling '$project_name' from source '${ok}${install_source}${info}' via uv tool...${done}"
     echo "${info}   Using Python from active venv: $python_interpreter ($($python_interpreter --version))${done}"
 
-    # The --force flag is not needed because we have just uninstalled the package.
-    # This ensures the --python flag is respected.
-    if pipx install --python "$python_interpreter" "$install_source"; then
-        echo "${ok}✅ '$project_name' CLI reinstalled successfully.${done}"
+    # uv tool install --force --reinstall handles this in a single step
+    # (no need for the old uninstall-then-install dance that pipx required)
+    if uv tool install --force --reinstall --editable --python "$python_version" "$install_source"; then
+        echo "${ok}✅ '$project_name' CLI reinstalled successfully (editable mode).${done}"
         echo "--------------------------------------------------"
-        pipx_check_current_project
+        uv_tool_check_current_project
     else
-        echo "${err}❌ Failed to install '$project_name' via pipx. Please check errors above.${done}"
+        echo "${err}❌ Failed to reinstall '$project_name' via uv tool. Please check errors above.${done}"
         return 1
     fi
 }
 
 
 # Uninstall the CLI for the current project
-pipx_uninstall_current_project() {
+uv_tool_uninstall_current_project() {
     if [[ ! -f pyproject.toml ]]; then
         echo "${err}❌ Error: 'pyproject.toml' not found in the current directory.${done}" >&2
         echo "${err}   Cannot determine project name to uninstall.${done}" >&2
@@ -1425,32 +1429,26 @@ pipx_uninstall_current_project() {
     local project_name
     project_name=$(awk -F'"' '/^name *=/ {gsub(/[[:space:]]/, "", $0); print $2; exit}' pyproject.toml)
 
-    echo "${info}🗑️  Attempting to uninstall '$project_name' via pipx...${done}"
-    if pipx uninstall "$project_name"; then
+    echo "${info}🗑️  Attempting to uninstall '$project_name' via uv tool...${done}"
+    if uv tool uninstall "$project_name"; then
         echo "${ok}✅ '$project_name' CLI has been successfully uninstalled.${done}"
     else
         # The command returns a non-zero exit code if it fails, which includes the case where the package isn't installed.
         echo "${warn}⚠️  Could not uninstall '$project_name'. It may not have been installed.${done}"
         # Returning 0 here because "not installed" is not a critical script failure.
-        # This prevents a red '✘' in the prompt for a non-error state.
         return 0
     fi
 }
 
 
-# Check if the current project is installed as a user-level CLI via pipx.
+# Check if the current project is installed as a user-level CLI via uv tool.
 # Returns 0 (true) if found, 1 (false) if not found.
 # If found, prints the location of the executable(s).
-# Requires 'jq' to be installed for JSON parsing.
-pipx_check_current_project() {
+# Uses 'uv tool list --show-paths' for introspection.
+uv_tool_check_current_project() {
     # --- Prerequisite Checks ---
-    if ! command -v pipx &> /dev/null; then
-        echo "${err}❌ Error: 'pipx' command not found.${done}" >&2
-        return 1
-    fi
-    if ! command -v jq &> /dev/null; then
-        echo "${err}❌ Error: 'jq' command not found. This function requires jq.${done}" >&2
-        echo "${info}   Please install it (e.g., 'brew install jq') and try again.${done}" >&2
+    if ! command -v uv &> /dev/null; then
+        echo "${err}❌ Error: 'uv' command not found.${done}" >&2
         return 1
     fi
     if [[ ! -f pyproject.toml ]]; then
@@ -1467,44 +1465,90 @@ pipx_check_current_project() {
         return 1
     fi
 
-    # --- Query pipx and Check for the Project ---
-    local pipx_json
-    pipx_json=$(pipx list --json)
+    # --- Query uv tool list and Check for the Project ---
+    # uv tool list --show-paths output format:
+    #   package_name v1.2.3 (/path/to/tool/env/)
+    #   - executable_name (/path/to/bin/executable_name)
+    local tool_output
+    tool_output=$(uv tool list --show-paths 2>/dev/null)
 
-    if echo "$pipx_json" | jq -e ".venvs | has(\"$project_name\")" > /dev/null; then
-        echo "${ok}✅ Found: Project '$project_name' is installed via pipx.${done}"
+    # Normalize project name for matching (uv normalizes underscores to hyphens)
+    local project_name_normalized=$(echo "$project_name" | tr '_' '-')
 
-        # 1. Reliably get the binary directory using the 'pipx environment' command.
-        local pipx_bin_dir
-        pipx_bin_dir=$(pipx environment --value PIPX_BIN_DIR 2>/dev/null)
-        if [[ -z "$pipx_bin_dir" ]]; then
-            echo "${err}❌ Error: Could not determine pipx binary directory via 'pipx environment'.${done}" >&2
-            return 1
+    # Check if the project appears in the tool list (match either underscore or hyphen form)
+    local tool_line
+    tool_line=$(echo "$tool_output" | grep -iE "^${project_name}[[:space:]]|^${project_name_normalized}[[:space:]]" | head -n 1)
+
+    if [[ -n "$tool_line" ]]; then
+        echo "${ok}✅ Found: Project '$project_name' is installed via uv tool.${done}"
+
+        # Extract version from the tool line (format: "name vX.Y.Z (/path/)")
+        local tool_version
+        tool_version=$(echo "$tool_line" | awk '{print $2}')
+
+        if [[ -n "$tool_version" ]]; then
+            echo "${info}   Version: ${ok}${tool_version}${done}"
         fi
 
-        # 2. Extract only the application names from the JSON.
-        local jq_query='.venvs."'$project_name'".metadata.main_package.apps[]'
-        local -a app_names
-        app_names=($(echo "$pipx_json" | jq -r "$jq_query" 2>/dev/null))
-
-        # 3. Manually construct the full paths to the user-facing symlinks.
+        # Extract executable paths (lines starting with "- " after the tool line)
         local -a executables
-        for app_name in "${app_names[@]}"; do
-            executables+=("$pipx_bin_dir/$app_name")
-        done
+        local found_tool=false
+        while IFS= read -r line; do
+            if [[ "$found_tool" == true ]]; then
+                if [[ "$line" == -\ * ]]; then
+                    # Extract the executable name and path
+                    local exec_entry=$(echo "$line" | sed 's/^- //')
+                    executables+=("$exec_entry")
+                else
+                    # No longer in this tool's executables section
+                    break
+                fi
+            fi
+            # Match the tool line to start collecting executables
+            if echo "$line" | grep -qiE "^${project_name}[[:space:]]|^${project_name_normalized}[[:space:]]"; then
+                found_tool=true
+            fi
+        done <<< "$tool_output"
 
         if (( ${#executables[@]} > 0 )); then
-            echo "${info}   Executable(s) located at:${done}"
-            for exec_path in "${executables[@]}"; do
-                echo "   - ${example}$exec_path${done}"
+            echo "${info}   Executable(s):${done}"
+            for exec_entry in "${executables[@]}"; do
+                echo "   - ${example}${exec_entry}${done}"
             done
         else
             echo "${warn}   Warning: Package is installed but no executables were found.${done}"
         fi
         return 0 # Represents "true"
     else
-        echo "${info}ℹ️ Not Found: Project '$project_name' is not currently installed via pipx.${done}"
-        echo "${info}   To install it, run: ${example}pipx_install_current_project${done}"
+        echo "${info}ℹ️ Not Found: Project '$project_name' is not currently installed via uv tool.${done}"
+        echo "${info}   To install it, run: ${example}uv_tool_install_current_project${done}"
         return 1 # Represents "false"
     fi
 }
+
+
+# ==============================================================================
+# Zsh Completions for uv_tool project functions
+# ==============================================================================
+
+# Completion function that parses [project.optional-dependencies] from pyproject.toml
+# and offers extras as completions, plus the --no-extras flag.
+_uv_tool_project_extras() {
+    local -a extras
+    extras=("--no-extras:Install with no optional extras")
+
+    if [[ -f "pyproject.toml" ]]; then
+        local extras_list
+        extras_list=$(awk '/^\[project\.optional-dependencies\]/{f=1;next} /^\[/{f=0} f && /^[a-zA-Z]/{gsub(/[ \t]*=.*/, ""); gsub(/^[ \t]*/, ""); print}' pyproject.toml)
+        local -a parsed_extras=("${(@f)extras_list}")
+        for extra in "${parsed_extras[@]}"; do
+            [[ -n "$extra" ]] && extras+=("${extra}:Install with '${extra}' optional dependencies")
+        done
+    fi
+
+    _describe 'extras' extras
+}
+
+# Register completions for the uv_tool project functions
+compdef _uv_tool_project_extras uv_tool_install_current_project
+compdef _uv_tool_project_extras uv_tool_reinstall_current_project
