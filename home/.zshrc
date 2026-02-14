@@ -94,11 +94,13 @@ export DISABLE_ERROR_REPORTING=1
 export IS_MAC=false
 export IS_WSL=false
 export IS_LINUX=false
+export MAC_ARCH=""
 export HOMEBREW_PREFIX=""
 
 case "$(uname -s)" in
     Darwin)
         IS_MAC=true
+        MAC_ARCH="$(uname -m)"  # "arm64" or "x86_64"
         # Set Homebrew prefix path for Apple Silicon or Intel
         [[ -d /opt/homebrew ]] && HOMEBREW_PREFIX="/opt/homebrew" || HOMEBREW_PREFIX="/usr/local"
         ;;
