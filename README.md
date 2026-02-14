@@ -32,10 +32,10 @@ It is built around a modern toolchain that prioritizes speed, consistency, and d
 2. **Core Tools**: Install the key technologies using Homebrew.
 
     ```bash
-    brew install uv direnv pipx jq
+    brew install uv direnv jq
     ```
 
-    > **Note:** `jq` is required by the `pipx_check_current_project` helper function.
+    > **Note:** `jq` is used by Node.js scaffolding and onboarding checks.
 
 ---
 
@@ -66,7 +66,7 @@ Setting up is designed to be as simple as possible.
     ln -sf ~/fifty-shades-of-dotfiles/home/.zsh_docker_functions ~/.zsh_docker_functions
     ln -sf ~/fifty-shades-of-dotfiles/home/.zsh_cursor_functions ~/.zsh_cursor_functions
     ln -sf ~/fifty-shades-of-dotfiles/home/.zsh_tmux ~/.zsh_tmux
-    ln -sf ~/fifty-shades-of-dotfiles/home/.zsh_linux_onboarding ~/.zsh_linux_onboarding
+    ln -sf ~/fifty-shades-of-dotfiles/home/.zsh_onboarding ~/.zsh_onboarding
     ln -sf ~/fifty-shades-of-dotfiles/home/.zsh_welcome ~/.zsh_welcome
 
     # Link other configuration files
@@ -137,7 +137,7 @@ run_onboarding
 | **Essential** | git, curl, unzip |
 | **User Experience** | eza, fzf, jq, direnv, zoxide |
 | **CLI Tools** | ripgrep, tree, neofetch, ffmpeg, yt-dlp, aria2 |
-| **Development Managers** | nvm, pipx, uv |
+| **Development Managers** | nvm, uv |
 | **Special** | Docker (guidance only — requires manual installation) |
 
 ### Skipping Onboarding
@@ -185,25 +185,28 @@ python_setup 3.12 api web
 
 ### 3. Managing a Global Command-Line Tool
 
-If your `pyproject.toml` defines a script, you can install it as a system-wide command using `pipx`. These helpers require an active virtual environment to determine which Python version `pipx` should use.
+If your `pyproject.toml` defines a script, you can install it as a system-wide command using `uv tool`. The install uses **editable mode** by default, so code changes are reflected immediately without reinstalling. These helpers require an active virtual environment to determine which Python version to use.
 
 ```bash
 # Inside your project directory (with .venv active via direnv):
 
-# Install the tool for the first time with 'cli' extras
-pipx_install_current_project cli
+# Install the tool for the first time with 'cli' extras (editable mode)
+uv_tool_install_current_project cli
 
 # Install with NO extras
-pipx_install_current_project --no-extras
+uv_tool_install_current_project --no-extras
 
-# After making changes to your code, reinstall to update the tool
-pipx_reinstall_current_project cli
+# Reinstall (only needed when pyproject.toml entry points change)
+uv_tool_reinstall_current_project cli
 
 # Check the installation status of the current project's tool
-pipx_check_current_project
+uv_tool_check_current_project
 
 # Uninstall the tool
-pipx_uninstall_current_project
+uv_tool_uninstall_current_project
+
+# Run a tool once without installing (via uvx)
+uvx ruff check .
 ```
 
 ### 4. Cleaning Up a Project
@@ -219,7 +222,7 @@ python_delete
 
 ## Python Workflow at a Glance
 
-This environment supercharges Python development using `uv`, `direnv`, and `pipx`.
+This environment supercharges Python development using `uv` and `direnv`.
 
 ### 1. New Project Scaffolding (`python_new_project`)
 
@@ -289,7 +292,7 @@ graph TD
     class G result;
 ```
 
-### 3. Global CLI Deployment (`pipx_*`)
+### 3. Global CLI Deployment (`uv_tool_*`)
 
 ```mermaid
 graph TD
@@ -300,16 +303,16 @@ graph TD
     end
 
     subgraph "🌍 Global CLI Deployment (Optional)"
-        C --> F["Run: `pipx_install_current_project cli`"]
-        F --> G["✅ `my-cli` is now available globally"]
+        C --> F["Run: `uv_tool_install_current_project cli`"]
+        F --> G["✅ `my-cli` is now available globally<br>(editable — code changes apply immediately)"]
         G --> H["... make code changes ..."]
-        H --> I["Run: `pipx_reinstall_current_project cli`"]
+        H --> I["Run: `uv_tool_reinstall_current_project cli`<br>(only if entry points change)"]
     end
 ```
 
 ### 4. Daily Development & Deployment
 
-This diagram shows the seamless daily workflow enabled by `direnv` and the `pipx` helper functions.
+This diagram shows the seamless daily workflow enabled by `direnv` and the `uv tool` helper functions.
 
 ```mermaid
 graph TD
@@ -322,11 +325,11 @@ graph TD
     end
 
     subgraph "🌍 Global CLI Deployment (Optional)"
-        C --> F["Run: `pipx_install_current_project cli`<br>to install with 'cli' extra"]
+        C --> F["Run: `uv_tool_install_current_project cli`<br>to install with 'cli' extra (editable)"]
         F --> G["✅ `my-cli` is now available globally"]
         G --> H["... make code changes ..."]
-        H --> I["Run: `pipx_reinstall_current_project cli`<br>to update the global command"]
-        I --> J["Run: `pipx_uninstall_current_project`<br>to remove the global command"]
+        H --> I["Run: `uv_tool_reinstall_current_project cli`<br>to update (only if entry points change)"]
+        I --> J["Run: `uv_tool_uninstall_current_project`<br>to remove the global command"]
     end
 
     classDef userAction fill:#3498db,stroke:#2980b9,stroke-width:2px,color:white;
@@ -511,7 +514,7 @@ fifty-shades-of-dotfiles/
 │   ├── .zsh_docker_functions          # Docker helpers → ~/.zsh_docker_functions
 │   ├── .zsh_cursor_functions          # Cursor/VSCode integration → ~/.zsh_cursor_functions
 │   ├── .zsh_tmux                      # Tmux integration → ~/.zsh_tmux
-│   ├── .zsh_linux_onboarding          # Linux onboarding → ~/.zsh_linux_onboarding
+│   ├── .zsh_onboarding                # Cross-platform onboarding → ~/.zsh_onboarding
 │   ├── .zsh_welcome                   # Unified welcome script → ~/.zsh_welcome
 │   ├── .tmux.conf                     # Tmux config → ~/.tmux.conf
 │   ├── .p10k.zsh                      # Powerlevel10k config → ~/.p10k.zsh
@@ -544,12 +547,12 @@ fifty-shades-of-dotfiles/
 ### Key Files
 
 * **`home/.zshrc`**: The main controller. It detects the OS, loads plugins, and sources all other function files. Also contains inline functions like `yt()` (yt-dlp wrapper) and various aliases.
-* **`home/.zsh_python_functions`**: Contains all Python-related helper functions (`python_new_project`, `pipx_*`, etc.).
+* **`home/.zsh_python_functions`**: Contains all Python-related helper functions (`python_new_project`, `uv_tool_*`, etc.).
 * **`home/.zsh_node_functions`**: Contains all Node.js helper functions (`node_new_project`, etc.).
 * **`home/.zsh_docker_functions`**: Contains all Docker helper functions and aliases (`pg_dev_start`, `dcleanup`, etc.).
 * **`home/.zsh_cursor_functions`**: Cursor/VSCode editor integration for automatic environment syncing with tmux sessions.
 * **`home/.zsh_tmux`**: Comprehensive tmux session management, git integration, and workflow functions.
-* **`home/.zsh_linux_onboarding`**: The script that runs once on a new Linux machine to install dependencies.
+* **`home/.zsh_onboarding`**: Cross-platform onboarding script that detects missing tools and offers to install them on any OS.
 * **`home/.zsh_welcome`**: Unified cross-platform welcome script with verbosity controls, auto-detection for SSH/tmux, and environment overview.
 * **`home/.config/direnv/`**: direnv configuration files for automatic environment management.
 * **`home/.config/yt-dlp/config`**: yt-dlp configuration template (auto-generated by `yt()` function, but included as reference).
@@ -678,6 +681,7 @@ The function auto-generates a comprehensive `~/.config/yt-dlp/config` file on fi
 ### Special Functions
 
 * **`sudo()` wrapper**: Prevents accidental `sudo claude` commands and redirects appropriately
+* **`pipx()` wrapper**: Intercepts `pipx` commands and shows the equivalent `uv tool` commands
 * **`python()` function**: Smart Python interpreter selection (venv > local .venv > uv global)
 * **`ports()` function**: OS-specific port listing (macOS: `lsof`, Linux/WSL: `ss`/`netstat`)
 * **`y()` function**: Yazi file manager integration for visual directory navigation
@@ -693,10 +697,10 @@ The function auto-generates a comprehensive `~/.config/yt-dlp/config` file on fi
 | `python_new_project` | `<py_version>` | Scaffolds a complete new Python project in the current directory. |
 | `python_setup` | `<py_version> [extra1...]` | Resets/creates the `.venv` and installs dependencies for an existing project. |
 | `python_delete` | `(none)` | Deletes the `.venv`, `.envrc`, caches, and build artifacts. |
-| `pipx_install_current_project` | `[extra1...] \| --no-extras` | Installs the current project as a global CLI tool via `pipx`. |
-| `pipx_reinstall_current_project` | `[extra1...] \| --no-extras` | Updates the globally installed CLI tool from local source. |
-| `pipx_uninstall_current_project` | `(none)` | Uninstalls the `pipx`-managed CLI tool for the current project. |
-| `pipx_check_current_project` | `(none)` | Checks if the current project is installed via `pipx`. |
+| `uv_tool_install_current_project` | `[extra1...] \| --no-extras` | Installs the current project as a global CLI tool via `uv tool` (editable mode). |
+| `uv_tool_reinstall_current_project` | `[extra1...] \| --no-extras` | Reinstalls the global CLI tool (needed when entry points change). |
+| `uv_tool_uninstall_current_project` | `(none)` | Uninstalls the `uv tool`-managed CLI tool for the current project. |
+| `uv_tool_check_current_project` | `(none)` | Checks if the current project is installed via `uv tool`. |
 
 ### Node.js Functions
 
