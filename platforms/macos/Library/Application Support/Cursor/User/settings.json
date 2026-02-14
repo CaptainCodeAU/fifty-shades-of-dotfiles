@@ -208,7 +208,7 @@
     // Terminal Settings
     // ========================================
     "terminal.integrated.detectLocale": "on",
-    "terminal.integrated.fontFamily": "MesloLGS NF",
+    "terminal.integrated.fontFamily": "monospace",
     "terminal.integrated.fontSize": 11,
     "terminal.integrated.fontWeight": "normal",
     "terminal.integrated.scrollback": 50000,
