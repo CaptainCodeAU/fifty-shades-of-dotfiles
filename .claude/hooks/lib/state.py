@@ -1,5 +1,6 @@
 """Deduplication state management for Claude Code hooks."""
 
+import hashlib
 import json
 import time
 from pathlib import Path
@@ -125,6 +126,39 @@ def clear_state(session_id: str, state_dir: str | None = None) -> None:
         state_path.unlink(missing_ok=True)
     except (IOError, OSError):
         pass
+
+
+def set_last_spoken(session_id: str, message: str, state_dir: str | None = None) -> None:
+    """Store a hash of the last spoken message.
+
+    Args:
+        session_id: Unique session identifier
+        message: The message that was spoken
+        state_dir: Directory to store state files (defaults to STATE_DIR)
+    """
+    state_path = _get_state_file_path(session_id, state_dir)
+    state = _load_state(state_path)
+    state["last_spoken_hash"] = hashlib.md5(message.encode()).hexdigest()
+    _save_state(state_path, state)
+
+
+def was_already_spoken(session_id: str, message: str, state_dir: str | None = None) -> bool:
+    """Check if this message was the last one spoken.
+
+    Args:
+        session_id: Unique session identifier
+        message: The message to check
+        state_dir: Directory where state files are stored (defaults to STATE_DIR)
+
+    Returns:
+        True if this message was the last one spoken
+    """
+    state_path = _get_state_file_path(session_id, state_dir)
+    state = _load_state(state_path)
+    stored = state.get("last_spoken_hash")
+    if not stored:
+        return False
+    return stored == hashlib.md5(message.encode()).hexdigest()
 
 
 def cleanup_stale_states(state_dir: str | None = None) -> None:
