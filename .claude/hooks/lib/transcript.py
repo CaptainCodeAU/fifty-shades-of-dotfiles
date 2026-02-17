@@ -147,6 +147,52 @@ def read_transcript(transcript_path: str | Path | None) -> MessageInfo | None:
     return last_info
 
 
+def read_last_assistant_text(transcript_path: str | Path | None) -> str | None:
+    """Read JSONL transcript and return text from the last assistant message that has text.
+
+    Unlike read_transcript() which returns the very last assistant message (which may
+    be a tool-only message with no prose), this scans backward to find the most recent
+    assistant message that contains actual text content.
+
+    Args:
+        transcript_path: Path to the transcript JSONL file
+
+    Returns:
+        The text content, or None if no assistant message with text was found
+    """
+    if not transcript_path or not os.path.exists(transcript_path):
+        return None
+
+    last_text: str | None = None
+
+    try:
+        with open(transcript_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                    if entry.get("type") == "assistant":
+                        content = entry.get("message", {}).get("content", [])
+                        text_parts: list[str] = []
+
+                        for block in content:
+                            if isinstance(block, dict) and block.get("type") == "text":
+                                text_parts.append(block.get("text", ""))
+                            elif isinstance(block, str):
+                                text_parts.append(block)
+
+                        if text_parts:
+                            last_text = " ".join(text_parts)
+                except json.JSONDecodeError:
+                    continue
+    except (IOError, OSError):
+        return None
+
+    return last_text
+
+
 def get_transcript_path(
     hook_data: dict,
     project_dir: str,

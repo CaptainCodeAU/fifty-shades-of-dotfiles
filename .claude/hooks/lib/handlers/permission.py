@@ -3,6 +3,8 @@
 from ..audio import AudioSettings
 from ..config import PermissionRequestHookConfig
 from ..state import mark_handled
+from ..summary import SummaryConfig, extract_summary
+from ..transcript import get_transcript_path, read_last_assistant_text
 from .base import BaseHandler
 
 
@@ -49,6 +51,29 @@ class PermissionRequestHandler(BaseHandler):
                 first_q = questions[0].get("question", "")
                 if first_q:
                     return first_q
+
+        # Try to read the assistant's last text from the transcript.
+        # We use read_last_assistant_text (not read_transcript) because
+        # the very last assistant message may be a tool-only block with
+        # no prose — we want the most recent message that has text.
+        transcript_path, fallback_used = get_transcript_path(data, self.project_dir)
+        self.log(f"transcript_path: {transcript_path}")
+        self.log(f"fallback_used: {fallback_used}")
+        if transcript_path:
+            text = read_last_assistant_text(transcript_path)
+            self.log(f"text_preview: {(text or '')[:200]}")
+            if text:
+                summary_cfg = self.config.stop.summary
+                config = SummaryConfig(
+                    mode=summary_cfg.mode,
+                    max_sentences=summary_cfg.max_sentences,
+                    max_characters=summary_cfg.max_characters,
+                    start=summary_cfg.start,
+                )
+                summary = extract_summary(text, config)
+                self.log(f"summary: {summary}")
+                if summary:
+                    return summary
 
         return self.hook_config.message_template.format(tool_name=tool_name)
 
