@@ -66,6 +66,8 @@ summary:
 
 The stop handler reads Claude's transcript, extracts a summary of what it did, and speaks it. It also detects if Claude is waiting for input (question or permission) and uses the appropriate voice/sound settings for that case.
 
+When text ends with `?`, the handler uses input-waiting audio settings but prioritizes speaking the action summary over the trailing question. For example, "Committed as 034f960. Want me to push?" speaks the commit summary, not the follow-up question. If no action summary is found (the text is purely a question like "Should I continue?"), it falls back to speaking the question itself.
+
 ### Ask user question hook extras
 
 ```yaml

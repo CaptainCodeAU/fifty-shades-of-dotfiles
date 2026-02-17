@@ -67,13 +67,11 @@ class StopHandler(BaseHandler):
             return True, ask_config.default_message
 
         # Priority 2: Check if text ends with question mark
+        # Signal input-waiting for audio settings, but let get_message()
+        # decide whether to speak the summary or the question.
         text = message_info.text or ""
         if text.strip().endswith("?"):
-            if ask_config.message_mode == "extract":
-                question = extract_last_question(text)
-                if question:
-                    return True, question
-            return True, ask_config.default_message
+            return True, None
 
         # Priority 3: Check if message ends with tool_use (waiting for permission)
         if message_info.ends_with_tool_use:
@@ -165,10 +163,15 @@ class StopHandler(BaseHandler):
                 return None
             # Override audio settings and sound for input notification
             self._use_input_settings = True
-            return question
+            if question is not None:
+                # AskUserQuestion or ends-with-tool-use — speak the specific prompt
+                return question
+            # Text ends with ? — fall through to extract action summary below.
+            # If no action summary found, extract_last_question as fallback.
 
-        # Normal task completion
-        self._use_input_settings = False
+        if not is_waiting:
+            # Normal task completion
+            self._use_input_settings = False
 
         if not message_info.text:
             self.log("No text content")
@@ -185,6 +188,17 @@ class StopHandler(BaseHandler):
 
         summary = extract_summary(message_info.text, config)
         self.log(f"summary: {summary}")
+
+        if summary and summary != "Task completed":
+            return summary
+
+        # If input-waiting (text ended with ?) and no action summary, speak the question
+        if self._use_input_settings:
+            question = extract_last_question(message_info.text)
+            if question:
+                return question
+            return self.config.ask_user_question.default_message
+
         return summary
 
     def _resolve_audio_settings(self, data: dict) -> AudioSettings:
