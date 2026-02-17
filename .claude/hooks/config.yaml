@@ -2,7 +2,7 @@
 # Each hook type can be enabled/disabled and configured independently
 
 global:
-  debug: false
+  debug: true
   debug_dir: "Temp"
   project_dir: ""
 
@@ -53,3 +53,117 @@ hooks:
       volume: 0.5
       rate: 350
     message_template: "Approve {tool_name}?"
+
+  notification:
+    enabled: true
+    sound:
+      enabled: true
+      file: ".claude/sounds/bell_ring_1.mp3"
+      volume: 0.5
+      delay_ms: 200
+    voice:
+      enabled: true
+      name: "Victoria"
+      volume: 0.6
+      rate: 350
+    idle_message: "Claude is idle"
+    auth_message: "Auth successful"
+    default_message: "Notification"
+
+  subagent_start:
+    enabled: true
+    sound:
+      enabled: true
+      file: ".claude/sounds/coin_simple.mp3"
+      volume: 0.5
+      delay_ms: 200
+    voice:
+      enabled: true
+      name: "Victoria"
+      volume: 0.6
+      rate: 350
+    message_template: "Subagent {agent_type} started"
+
+  subagent_stop:
+    enabled: true
+    sound:
+      enabled: true
+      file: ".claude/sounds/marimba_complete.mp3"
+      volume: 0.5
+      delay_ms: 200
+    voice:
+      enabled: true
+      name: "Victoria"
+      volume: 0.6
+      rate: 350
+    message_template: "Subagent {agent_type} finished"
+
+  teammate_idle:
+    enabled: true
+    sound:
+      enabled: true
+      file: ".claude/sounds/marimba_nudge_1.mp3"
+      volume: 0.5
+      delay_ms: 200
+    voice:
+      enabled: true
+      name: "Victoria"
+      volume: 0.6
+      rate: 350
+    message_template: "{teammate_name} is idle"
+
+  task_completed:
+    enabled: true
+    sound:
+      enabled: true
+      file: ".claude/sounds/harp_finish.mp3"
+      volume: 0.5
+      delay_ms: 200
+    voice:
+      enabled: true
+      name: "Victoria"
+      volume: 0.6
+      rate: 350
+    message_template: "Task completed: {task_subject}"
+    max_subject_length: 80
+
+  post_tool_use_failure:
+    enabled: true
+    sound:
+      enabled: true
+      file: ".claude/sounds/error_buzz.mp3"
+      volume: 0.5
+      delay_ms: 200
+    voice:
+      enabled: true
+      name: "Victoria"
+      volume: 0.6
+      rate: 350
+    message_template: "{tool_name} failed"
+
+  user_prompt_submit:
+    enabled: false
+    sound:
+      enabled: false
+      file: ""
+      volume: 0.5
+      delay_ms: 200
+    voice:
+      enabled: false
+      name: "Victoria"
+      volume: 0.6
+      rate: 350
+
+  pre_compact:
+    enabled: true
+    sound:
+      enabled: true
+      file: ".claude/sounds/blink.mp3"
+      volume: 0.5
+      delay_ms: 200
+    voice:
+      enabled: true
+      name: "Victoria"
+      volume: 0.6
+      rate: 350
+    message: "Compacting context"

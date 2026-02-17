@@ -104,6 +104,16 @@ class StopHandler(BaseHandler):
             self.log("dedup: permission already handled - skipping")
             return True
 
+        # Check if Notification (idle_prompt) was already handled
+        if was_handled(session_id, "notification_idle"):
+            self.log("dedup: notification_idle already handled - skipping")
+            return True
+
+        # Check if PostToolUseFailure was already handled
+        if was_handled(session_id, "tool_failure"):
+            self.log("dedup: tool_failure already handled - skipping")
+            return True
+
         return False
 
     def get_message(self, data: dict) -> str | None:
