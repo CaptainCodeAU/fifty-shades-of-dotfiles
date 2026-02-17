@@ -30,13 +30,25 @@ class PermissionRequestHandler(BaseHandler):
         )
 
     def get_message(self, data: dict) -> str | None:
-        """Extract tool name and format permission message."""
-        # Try to get tool name from various possible locations
+        """Extract tool name and format permission message.
+
+        For AskUserQuestion, extracts the actual question text from tool_input
+        so the user hears the question itself rather than "Approve AskUserQuestion?".
+        """
         tool_name = (
             data.get("tool_name")
             or data.get("tool", {}).get("name")
             or "tool"
         )
+
+        # Special case: speak the actual question for AskUserQuestion
+        if tool_name == "AskUserQuestion":
+            tool_input = data.get("tool_input", {})
+            questions = tool_input.get("questions", [])
+            if questions:
+                first_q = questions[0].get("question", "")
+                if first_q:
+                    return first_q
 
         return self.hook_config.message_template.format(tool_name=tool_name)
 

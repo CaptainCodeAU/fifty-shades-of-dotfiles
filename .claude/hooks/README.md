@@ -9,10 +9,19 @@ Audio notification system for Claude Code. Plays sound effects and speaks status
 | Hook Event | Handler | Triggers when |
 |---|---|---|
 | `Stop` | `StopHandler` | Claude finishes a task or stops |
-| `PostToolUse` (AskUserQuestion) | `AskUserQuestionHandler` | Claude asks you a question |
+| `PostToolUse` (AskUserQuestion) | `AskUserQuestionHandler` | Claude asks you a question (auto-approved) |
 | `PermissionRequest` | `PermissionRequestHandler` | Claude needs tool approval |
 
 Each handler can play a **sound effect** (via `afplay`) and/or **speak a message** (via `say` rendered to file, then `afplay` for playback). Both are independently configurable.
+
+### Hook event flow
+
+When Claude calls a tool, the event flow depends on whether the tool is auto-approved:
+
+- **Auto-approved tool**: `PostToolUse` fires directly. For `AskUserQuestion`, the `AskUserQuestionHandler` extracts and speaks the actual question text.
+- **Tool requiring permission**: `PermissionRequest` fires first (before execution). If `AskUserQuestion` needs permission, the `PermissionRequestHandler` extracts the question from `tool_input` and speaks it instead of the generic "Approve {tool_name}?" message. After approval, `PostToolUse` would also fire, but deduplication prevents a double notification.
+
+This means you hear the actual question text regardless of whether the tool is auto-approved or needs permission.
 
 ## Configuration
 
@@ -67,6 +76,8 @@ default_message: "Claude has a question for you"
 ```yaml
 message_template: "Approve {tool_name}?"    # {tool_name} is replaced with the tool name
 ```
+
+For `AskUserQuestion`, the handler ignores the template and speaks the actual question text extracted from `tool_input`. Falls back to the template if the question can't be parsed.
 
 ## File structure
 
