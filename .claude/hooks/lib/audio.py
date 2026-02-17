@@ -9,11 +9,6 @@ from dataclasses import dataclass
 from .config import SoundConfig, VoiceConfig
 
 
-# Volume restoration lock to prevent race conditions
-_volume_lock = threading.Lock()
-_current_restore_id: int | None = None
-
-
 @dataclass
 class AudioSettings:
     """Settings for audio playback."""
@@ -62,106 +57,16 @@ def play_sound(path: str, volume: float = 1.0, project_dir: str = "") -> bool:
         return False
 
 
-def get_system_volume() -> float | None:
-    """Get current macOS system volume.
-
-    Returns:
-        Volume level (0.0 to 1.0) or None if failed
-    """
-    try:
-        result = subprocess.run(
-            ["osascript", "-e", "output volume of (get volume settings)"],
-            capture_output=True,
-            text=True,
-            timeout=1.0,
-        )
-        if result.returncode == 0:
-            return float(result.stdout.strip()) / 100.0
-    except (OSError, subprocess.SubprocessError, ValueError):
-        pass
-    return None
-
-
-def set_system_volume(volume: float) -> float | None:
-    """Set macOS system volume using AppleScript.
-
-    Args:
-        volume: Volume level (0.0 to 1.0)
-
-    Returns:
-        Previous volume level (0.0 to 1.0) or None if failed
-    """
-    # Clamp volume between 0.0 and 1.0
-    volume = max(0.0, min(1.0, volume))
-
-    # Get current volume first
-    old_volume = get_system_volume()
-
-    # Set new volume (0-100 scale for AppleScript)
-    volume_percent = int(volume * 100)
-    try:
-        subprocess.run(
-            ["osascript", "-e", f"set volume output volume {volume_percent}"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=1.0,
-        )
-    except (OSError, subprocess.SubprocessError):
-        pass
-
-    return old_volume
-
-
-def estimate_speech_duration(text: str, rate: int) -> float:
-    """Estimate speech duration in seconds based on text length and rate.
-
-    Args:
-        text: Text to speak
-        rate: Words per minute
-
-    Returns:
-        Estimated duration in seconds
-    """
-    word_count = len(text.split())
-    if word_count == 0:
-        return 0.5  # Minimum duration
-
-    # Calculate duration: words / (words per minute / 60 seconds per minute)
-    duration = (word_count / rate) * 60
-    # Add a small buffer for safety
-    return duration + 0.5
-
-
-def _restore_volume_after_delay(old_volume: float, delay_seconds: float, restore_id: int) -> None:
-    """Restore system volume after a delay in a background thread.
-
-    Args:
-        old_volume: Volume to restore to
-        delay_seconds: Delay before restoration
-        restore_id: Unique ID for this restoration task
-    """
-    global _current_restore_id
-
-    def restore():
-        time.sleep(delay_seconds)
-        with _volume_lock:
-            global _current_restore_id
-            # Only restore if this is still the active restoration task
-            if _current_restore_id == restore_id:
-                set_system_volume(old_volume)
-                _current_restore_id = None
-
-    thread = threading.Thread(target=restore, daemon=True)
-    thread.start()
-
-
 def speak(
     text: str,
     voice: str = "Victoria",
     rate: int = 280,
     volume: float = 1.0,
 ) -> bool:
-    """Speak text using macOS say command.
+    """Speak text using macOS say command with per-process volume control.
+
+    Renders speech to a temp file with `say -o`, then plays it with `afplay -v`
+    for volume control without touching the global system volume.
 
     Args:
         text: Text to speak
@@ -172,42 +77,43 @@ def speak(
     Returns:
         True if speech started, False otherwise
     """
-    global _current_restore_id
+    import tempfile
 
-    # Set system volume for voice (say command uses system volume)
-    old_volume = None
-    restore_id = None
-
-    if volume != 1.0:
-        with _volume_lock:
-            old_volume = set_system_volume(volume)
-            # Generate unique ID for this restoration
-            restore_id = id(text) + int(time.time() * 1000000)
-            _current_restore_id = restore_id
-
-    # Escape single quotes for shell
-    escaped_text = text.replace("'", "'\\''")
+    with tempfile.NamedTemporaryFile(suffix=".aiff", delete=False) as tmp:
+        tmp_path = tmp.name
 
     try:
+        result = subprocess.run(
+            ["say", "-v", voice, "-r", str(rate), "-o", tmp_path, text],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=10.0,
+        )
+        if result.returncode != 0:
+            os.unlink(tmp_path)
+            return False
+
         subprocess.Popen(
-            ["say", "-v", voice, "-r", str(rate), escaped_text],
+            ["afplay", "-v", str(volume), tmp_path],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
 
-        # Restore volume after estimated speech duration
-        if old_volume is not None and restore_id is not None:
-            duration = estimate_speech_duration(text, rate)
-            _restore_volume_after_delay(old_volume, duration, restore_id)
+        def cleanup():
+            time.sleep(30)
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
+        threading.Thread(target=cleanup, daemon=True).start()
         return True
-    except (OSError, subprocess.SubprocessError):
-        # Restore volume immediately on error
-        if old_volume is not None:
-            with _volume_lock:
-                set_system_volume(old_volume)
-                _current_restore_id = None
+    except (OSError, subprocess.SubprocessError, subprocess.TimeoutExpired):
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
         return False
 
 
