@@ -346,7 +346,43 @@ alias ~="cd ~"
 alias l="eza -l --git --grid --color=always --icons=always --no-quotes --hyperlink -a -s modified --time modified --git-repos-no-status"
 alias ll="eza -l --git --time-style relative --color=always --icons=always --no-quotes --hyperlink -a -s modified --time modified --git-repos-no-status"
 alias search="grep --color=auto -rnw . -e "
-alias pip="uv pip"
+# Hijack pip to intercept install/uninstall and redirect to uv add/remove.
+# Read-only subcommands (list, show, freeze, check) pass through to uv pip.
+# Note: internal helper functions call `uv pip` directly, bypassing this function.
+pip() {
+    case "$1" in
+        install)
+            # Allow editable installs — these are a legitimate uv pip workflow
+            if [[ "$*" == *"-e"* ]]; then
+                echo "${info}ℹ️  Passing editable install through to uv pip.${done}"
+                echo
+                command uv pip "${@}"
+                return
+            fi
+            echo "${warn}⚠️  pip install is not used on this system. Use uv add instead.${done}"
+            echo
+            # Detect -r/--requirement flag for requirements file installs
+            if [[ "$*" == *"-r "* || "$*" == *"--requirement "* ]]; then
+                echo "  Instead of:  ${err}pip install ${@:2}${done}"
+                echo "  Run:         ${ok}uv add -r <requirements-file>${done}"
+                echo "  Or:          ${ok}uv pip sync <requirements-file>${done}"
+            else
+                echo "  Instead of:  ${err}pip install ${@:2}${done}"
+                echo "  Run:         ${ok}uv add ${@:2}${done}"
+            fi
+            ;;
+        uninstall)
+            echo "${warn}⚠️  pip uninstall is not used on this system. Use uv remove instead.${done}"
+            echo
+            echo "  Instead of:  ${err}pip uninstall ${@:2}${done}"
+            echo "  Run:         ${ok}uv remove ${@:2}${done}"
+            ;;
+        *)
+            # Pass through read-only and other subcommands (list, show, freeze, check, etc.)
+            command uv pip "${@}"
+            ;;
+    esac
+}
 
 # Hijack pipx to redirect users to uv tool equivalents.
 # pipx is no longer used on this system — uv tool replaces it entirely.

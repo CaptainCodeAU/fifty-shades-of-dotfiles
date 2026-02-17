@@ -690,6 +690,7 @@ The function auto-generates a comprehensive `~/.config/yt-dlp/config` file on fi
 ### Special Functions
 
 * **`sudo()` wrapper**: Prevents accidental `sudo claude` commands and redirects appropriately
+* **`pip()` wrapper**: Intercepts `pip install` → `uv add` and `pip uninstall` → `uv remove`; passes through editable installs and read-only subcommands via `uv pip`
 * **`pipx()` wrapper**: Intercepts `pipx` commands and shows the equivalent `uv tool` commands
 * **`npx()` wrapper**: Intercepts `npx` commands and shows the equivalent `pnpm dlx` commands
 * **`python()`/`python3()` wrapper**: Intercepts direct Python calls and redirects to `uv run`
