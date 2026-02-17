@@ -390,11 +390,18 @@ alias www="cha"
 alias lzd='lazydocker'
 alias lzg='lazygit'
 alias lg='lazygit'
-# alias c="CLAUDE_CODE_HIDE_ACCOUNT_INFO=1 ENABLE_EXPERIMENTAL_MCP_CLI=true claude --dangerously-skip-permissions"
-# alias c="CLAUDE_CODE_HIDE_ACCOUNT_INFO=1 ENABLE_LSP_TOOL=true ENABLE_EXPERIMENTAL_MCP_CLI=true ENABLE_TOOL_SEARCH=true claude --dangerously-skip-permissions"
-alias c="CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 CLAUDE_CODE_HIDE_ACCOUNT_INFO=1 ENABLE_LSP_TOOL=true ENABLE_TOOL_SEARCH=true claude --dangerously-skip-permissions --permission-mode plan"
-# skip SKIP_SESSION_END_HOOK=1 claude
-alias cskip="CLAUDE_CODE_HIDE_ACCOUNT_INFO=1 ENABLE_LSP_TOOL=true ENABLE_TOOL_SEARCH=true SKIP_SESSION_END_HOOK=1 claude --dangerously-skip-permissions --permission-mode plan"
+# ── Claude Code ──────────────────────────────────────────────────────
+# Agent teams (still experimental opt-in), hide account info for recordings
+_claude_env="CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 CLAUDE_CODE_HIDE_ACCOUNT_INFO=1 ENABLE_EXPERIMENTAL_MCP_CLI=1"
+
+alias c="${_claude_env} claude --dangerously-skip-permissions --permission-mode plan"       # Standard launch
+alias ct="${_claude_env} claude --dangerously-skip-permissions --permission-mode plan --teammate-mode tmux"  # Tmux agent teams
+alias cb="${_claude_env} claude"                                                            # Bare (full control)
+alias cr="${_claude_env} claude --dangerously-skip-permissions --resume"                    # Resume last session
+alias ci="${_claude_env} claude --dangerously-skip-permissions -p"                          # Non-interactive / piped
+alias cpr="${_claude_env} claude --dangerously-skip-permissions --from-pr"                  # Resume session from PR
+alias cd_="${_claude_env} claude --dangerously-skip-permissions --permission-mode plan --verbose"               # Debug (verbose logging)
+alias cskip="${_claude_env} SKIP_SESSION_END_HOOK=1 claude --dangerously-skip-permissions --permission-mode plan"  # Skip end hooks
 
 # Intercepting the use of a command like 'sudo claude update' :P
 sudo() {
