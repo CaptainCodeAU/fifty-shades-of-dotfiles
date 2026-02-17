@@ -364,7 +364,7 @@ The setup provides similar automation for Node.js projects, standardizing on `nv
 
 #### Global Node.js Package Management
 
-For CLI tools you're developing, use `node_link` / `node_unlink` / `node_check_global` to manage global symlinks via `pnpm link --global`. Note that global links are tied to the current nvm Node version — switching nvm versions will lose access to the linked binary. For one-off tool execution, prefer `npx` or `pnpm dlx` which don't require global installation.
+For CLI tools you're developing, use `node_link` / `node_unlink` / `node_check_global` to manage global symlinks via `pnpm link --global`. Note that global links are tied to the current nvm Node version — switching nvm versions will lose access to the linked binary. For one-off tool execution, use `pnpm dlx` which doesn't require global installation. (`npx` is intercepted and will suggest the `pnpm dlx` equivalent.)
 
 ### Docker (`docker_*` functions & aliases)
 
@@ -682,8 +682,7 @@ The function auto-generates a comprehensive `~/.config/yt-dlp/config` file on fi
 
 * **File Listing**: `l` and `ll` use `eza` for enhanced directory listings with git status
 * **Navigation**: `..`, `...`, `....`, `.....` for quick directory navigation
-* **Python Shortcuts**: `py313`, `py312`, `py311`, `py310` for quick Python version access
-* **Node.js**: `serve` (npx http-server), `tsc` (npx typescript)
+* **Node.js**: `serve` (pnpm dlx http-server), `tsc` (pnpm dlx typescript)
 * **Docker**: `lzd` (lazydocker), `lzg`/`lg` (lazygit)
 * **Claude CLI**: `c` alias with environment variables for enhanced functionality
 * **Zoxide**: `cd` command is replaced with `zoxide` for intelligent directory jumping
@@ -692,7 +691,9 @@ The function auto-generates a comprehensive `~/.config/yt-dlp/config` file on fi
 
 * **`sudo()` wrapper**: Prevents accidental `sudo claude` commands and redirects appropriately
 * **`pipx()` wrapper**: Intercepts `pipx` commands and shows the equivalent `uv tool` commands
-* **`python()` function**: Smart Python interpreter selection (venv > local .venv > uv global)
+* **`npx()` wrapper**: Intercepts `npx` commands and shows the equivalent `pnpm dlx` commands
+* **`python()`/`python3()` wrapper**: Intercepts direct Python calls and redirects to `uv run`
+* **`py31X()` wrappers**: Intercepts version-specific Python calls (`py313`, `py312`, `py311`, `py310`) and redirects to `uv run --python`
 * **`ports()` function**: OS-specific port listing (macOS: `lsof`, Linux/WSL: `ss`/`netstat`)
 * **`y()` function**: Yazi file manager integration for visual directory navigation
 
