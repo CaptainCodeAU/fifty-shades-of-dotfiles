@@ -116,6 +116,13 @@ case "$(uname -s)" in
         ;;
 esac
 
+# --- Secrets from Keychain (macOS only) ---
+# Tokens stored in macOS Keychain — no plaintext secrets in config files.
+# To add a token: security add-generic-password -a "$USER" -s "github-pat" -w "YOUR_TOKEN"
+if [[ "$IS_MAC" == "true" ]]; then
+    export GITHUB_PERSONAL_ACCESS_TOKEN="$(security find-generic-password -a "$USER" -s github-pat -w 2>/dev/null)"
+fi
+
 
 # ==============================================================================
 # 4. Onboarding & Dependency Checks
