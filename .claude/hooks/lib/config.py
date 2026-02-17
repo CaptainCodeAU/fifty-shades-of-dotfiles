@@ -206,6 +206,10 @@ def load_config(config_path: str | Path | None = None, force_reload: bool = Fals
     if os.environ.get("HOOK_PROJECT_DIR"):
         config.global_config.project_dir = os.environ["HOOK_PROJECT_DIR"]
 
+    # Fall back to CWD (Claude Code sets this to the project root)
+    if not config.global_config.project_dir:
+        config.global_config.project_dir = os.getcwd()
+
     # Cache and return
     _config = config
     _config_path = config_path

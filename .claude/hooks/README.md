@@ -33,8 +33,10 @@ All settings live in `config.yaml`.
 global:
   debug: false        # Write debug logs to debug_dir
   debug_dir: "Temp"   # Relative to project_dir
-  project_dir: ""     # Set via $HOOK_PROJECT_DIR env var
+  project_dir: ""     # Resolved automatically (see below)
 ```
+
+`project_dir` is resolved in order: (1) value from `config.yaml`, (2) `$HOOK_PROJECT_DIR` env var, (3) current working directory. Claude Code sets the hook's CWD to the project root, so leaving `project_dir: ""` in the config works out of the box — no env var needed. Sound file paths, debug output, and transcript fallback all resolve relative to this directory.
 
 ### Per-hook settings
 
