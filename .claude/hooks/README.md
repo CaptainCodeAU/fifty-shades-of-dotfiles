@@ -79,6 +79,26 @@ message_template: "Approve {tool_name}?"    # {tool_name} is replaced with the t
 
 For `AskUserQuestion`, the handler ignores the template and speaks the actual question text extracted from `tool_input`. Falls back to the template if the question can't be parsed.
 
+## Handler architecture
+
+`BaseHandler.handle()` implements a Template Method that all handlers share:
+
+1. Log handler name, hook event, tool name
+2. `should_handle(data)` — gate (abstract)
+3. `_pre_message_hook(data)` — optional pre-processing (no-op by default)
+4. `get_message(data)` — extract the message to speak (abstract)
+5. `_resolve_audio_settings(data)` — pick audio settings (defaults to `get_audio_settings()`)
+6. `play_notification()` — play sound and/or speak
+7. Write debug log
+
+Subclasses override only the steps they need:
+
+| Handler | Overrides | Why |
+|---|---|---|
+| `AskUserQuestionHandler` | `_pre_message_hook` | Calls `mark_handled()` before message extraction for dedup |
+| `PermissionRequestHandler` | `_pre_message_hook` | Same — marks permission as handled |
+| `StopHandler` | `_resolve_audio_settings` | Selects input-waiting vs. task-completion audio settings based on a flag set during `get_message()` |
+
 ## File structure
 
 ```
@@ -92,10 +112,10 @@ For `AskUserQuestion`, the handler ignores the template and speaks the actual qu
     transcript.py         # Transcript JSONL parsing, file discovery
     state.py              # Deduplication state (prevents double notifications)
     handlers/
-      base.py             # BaseHandler ABC
-      stop.py             # StopHandler
-      ask_user.py         # AskUserQuestionHandler
-      permission.py       # PermissionRequestHandler
+      base.py             # BaseHandler ABC — Template Method in handle()
+      stop.py             # StopHandler — overrides _resolve_audio_settings()
+      ask_user.py         # AskUserQuestionHandler — overrides _pre_message_hook()
+      permission.py       # PermissionRequestHandler — overrides _pre_message_hook()
 ```
 
 ## Deduplication
