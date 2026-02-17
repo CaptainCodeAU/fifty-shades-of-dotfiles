@@ -82,8 +82,8 @@ message_template: "Approve {tool_name}?"    # {tool_name} is replaced with the t
 The permission handler resolves the spoken message in priority order:
 
 1. **AskUserQuestion**: extracts the actual question text from `tool_input`.
-2. **Transcript text**: reads the transcript to find the most recent assistant message with text content, then summarizes it using the stop handler's `summary` config. This handles the common case where Claude writes a detailed explanation and then calls a tool — you hear the summary instead of "Approve Bash?".
-3. **Template fallback**: uses `message_template` only when no text is available (e.g., the assistant message was purely tool calls with no prose).
+2. **Transcript text**: reads the transcript to find the most recent assistant message with text content, then summarizes it using the stop handler's `summary` config. This handles the common case where Claude writes a detailed explanation and then calls a tool — you hear the summary instead of "Approve Bash?". If the same summary was already spoken (e.g., during a burst of tool calls in one turn), it falls back to the template instead of repeating itself.
+3. **Template fallback**: uses `message_template` only when no text is available (e.g., the assistant message was purely tool calls with no prose), or when the transcript summary was already spoken.
 
 ## Handler architecture
 
@@ -131,6 +131,12 @@ The `PermissionRequest` and `PostToolUse` (AskUserQuestion) hooks fire *before* 
 The state module (`lib/state.py`) writes a short-lived marker to `/tmp/claude-hooks/` when a permission or question event is handled. The stop handler checks for these markers **only when it detects that Claude is waiting for input** (pending tool_use, text ending with `?`, or AskUserQuestion tool). If a marker exists, the input-waiting notification is suppressed.
 
 Task-completion summaries (the normal "Claude finished work" path) **never consult dedup state**. This is intentional: when a permission or question hook fires and Claude then continues working and eventually stops, the stop is a genuinely new event — the task-completion summary should always play through.
+
+### Repeated summary dedup
+
+During a burst of tool calls in the same turn (e.g., 4 parallel `Edit` calls), the transcript text doesn't change between calls — so the permission handler would speak the same summary repeatedly. To prevent this, `state.py` stores an MD5 hash of the last spoken summary. Before speaking a transcript summary, the permission handler checks if it matches the stored hash. If it does, it falls back to the template ("Approve {tool_name}?") instead of repeating the same sentence.
+
+The hash is stored in the same per-session state file as the dedup markers, so it shares the same 60-second expiry. This means stale hashes from a previous turn won't suppress a new summary.
 
 State files auto-expire after 60 seconds.
 

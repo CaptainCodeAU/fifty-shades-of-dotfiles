@@ -2,7 +2,7 @@
 
 from ..audio import AudioSettings
 from ..config import PermissionRequestHookConfig
-from ..state import mark_handled
+from ..state import mark_handled, set_last_spoken, was_already_spoken
 from ..summary import SummaryConfig, extract_summary
 from ..transcript import get_transcript_path, read_last_assistant_text
 from .base import BaseHandler
@@ -73,6 +73,12 @@ class PermissionRequestHandler(BaseHandler):
                 summary = extract_summary(text, config)
                 self.log(f"summary: {summary}")
                 if summary:
+                    session_id = data.get("session_id", "")
+                    if session_id and was_already_spoken(session_id, summary):
+                        self.log("summary already spoken — falling back to template")
+                        return self.hook_config.message_template.format(tool_name=tool_name)
+                    if session_id:
+                        set_last_spoken(session_id, summary)
                     return summary
 
         return self.hook_config.message_template.format(tool_name=tool_name)
