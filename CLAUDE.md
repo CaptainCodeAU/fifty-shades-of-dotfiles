@@ -12,4 +12,4 @@ This environment uses `uv` for Python and `pnpm` for Node.js. These tools manage
 ## Node.js
 
 - Use `pnpm` for all package management (`pnpm install`, `pnpm add`, `pnpm run`).
-- Use `pnpm dlx` to run one-off packages.
+- Use `pnpm dlx` instead of `npx` to run one-off packages.
