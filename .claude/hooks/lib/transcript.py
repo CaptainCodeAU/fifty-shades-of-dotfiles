@@ -50,6 +50,9 @@ def find_recent_transcript(project_dir: str) -> str | None:
     Returns:
         Path to most recent transcript file, or None if not found
     """
+    if not project_dir:
+        return None
+
     # The project path gets encoded with dashes replacing slashes
     project_path_encoded = project_dir.replace("/", "-")
     claude_projects_dir = os.path.expanduser("~/.claude/projects")
