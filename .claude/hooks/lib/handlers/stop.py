@@ -6,7 +6,7 @@ from ..audio import AudioSettings
 from ..config import StopHookConfig
 from ..state import was_handled
 from ..summary import SummaryConfig, extract_last_question, extract_summary
-from ..transcript import MessageInfo, get_transcript_path, read_transcript
+from ..transcript import MessageInfo, get_transcript_path, read_last_assistant_text, read_transcript
 from .base import BaseHandler
 
 
@@ -160,14 +160,26 @@ class StopHandler(BaseHandler):
             # genuine duplicates when PermissionRequest or AskUserQuestion already
             # spoke the same prompt. Task-completion summaries are never duplicates.
             if self._check_deduplication(data):
-                return None
-            # Override audio settings and sound for input notification
-            self._use_input_settings = True
-            if question is not None:
-                # AskUserQuestion or ends-with-tool-use — speak the specific prompt
-                return question
-            # Text ends with ? — fall through to extract action summary below.
-            # If no action summary found, extract_last_question as fallback.
+                # Dedup suppressed the input-waiting notification (permission/question
+                # already handled). But this is still a Stop event — if there's
+                # meaningful text from earlier in the turn, speak the summary instead
+                # of going silent. Use read_last_assistant_text to find text from an
+                # earlier assistant message (the last one may be tool-only).
+                self.log("dedup: falling through to summary extraction")
+                text = read_last_assistant_text(transcript_path)
+                if text:
+                    message_info = MessageInfo(text=text)
+                else:
+                    self.log("dedup: no text found in transcript")
+                    return None
+            else:
+                # Override audio settings and sound for input notification
+                self._use_input_settings = True
+                if question is not None:
+                    # AskUserQuestion or ends-with-tool-use — speak the specific prompt
+                    return question
+                # Text ends with ? — fall through to extract action summary below.
+                # If no action summary found, extract_last_question as fallback.
 
         if not is_waiting:
             # Normal task completion
