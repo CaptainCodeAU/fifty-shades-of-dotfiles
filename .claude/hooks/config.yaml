@@ -21,7 +21,7 @@ hooks:
       rate: 350
     summary:
       mode: "sentences"
-      max_sentences: 2
+      max_sentences: 3
       max_characters: 200
       start: "action"
 
