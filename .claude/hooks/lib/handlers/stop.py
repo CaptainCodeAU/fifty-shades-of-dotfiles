@@ -152,16 +152,17 @@ class StopHandler(BaseHandler):
         self.log(f"ends_with_tool_use: {message_info.ends_with_tool_use}")
         self.log(f"has_ask_user_question: {message_info.ask_user_question_input is not None}")
 
-        # Check deduplication before proceeding
-        if self._check_deduplication(data):
-            return None
-
         # Check if waiting for input
         is_waiting, question = self._detect_input_waiting(message_info)
 
         if is_waiting:
-            self.log(f"input_waiting: True")
+            self.log("input_waiting: True")
             self.log(f"question: {question}")
+            # Only check dedup for input-waiting notifications — these are the
+            # genuine duplicates when PermissionRequest or AskUserQuestion already
+            # spoke the same prompt. Task-completion summaries are never duplicates.
+            if self._check_deduplication(data):
+                return None
             # Override audio settings and sound for input notification
             self._use_input_settings = True
             return question
