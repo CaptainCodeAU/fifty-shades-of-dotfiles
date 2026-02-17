@@ -19,9 +19,9 @@ Each handler can play a **sound effect** (via `afplay`) and/or **speak a message
 When Claude calls a tool, the event flow depends on whether the tool is auto-approved:
 
 - **Auto-approved tool**: `PostToolUse` fires directly. For `AskUserQuestion`, the `AskUserQuestionHandler` extracts and speaks the actual question text.
-- **Tool requiring permission**: `PermissionRequest` fires first (before execution). If `AskUserQuestion` needs permission, the `PermissionRequestHandler` extracts the question from `tool_input` and speaks it instead of the generic "Approve {tool_name}?" message. After approval, `PostToolUse` would also fire, but deduplication prevents a double notification.
+- **Tool requiring permission**: `PermissionRequest` fires first (before execution). The `PermissionRequestHandler` reads the transcript and speaks a summary of the assistant's last text message (the same summarization logic the stop handler uses). For `AskUserQuestion` specifically, it extracts the question from `tool_input` instead. Falls back to "Approve {tool_name}?" only when there is no text to summarize. After approval, `PostToolUse` would also fire, but deduplication prevents a double notification.
 
-This means you hear the actual question text regardless of whether the tool is auto-approved or needs permission.
+This means you hear what Claude actually said (or asked) rather than a generic "Approve Bash?" prompt.
 
 ## Configuration
 
@@ -79,7 +79,11 @@ default_message: "Claude has a question for you"
 message_template: "Approve {tool_name}?"    # {tool_name} is replaced with the tool name
 ```
 
-For `AskUserQuestion`, the handler ignores the template and speaks the actual question text extracted from `tool_input`. Falls back to the template if the question can't be parsed.
+The permission handler resolves the spoken message in priority order:
+
+1. **AskUserQuestion**: extracts the actual question text from `tool_input`.
+2. **Transcript text**: reads the transcript to find the most recent assistant message with text content, then summarizes it using the stop handler's `summary` config. This handles the common case where Claude writes a detailed explanation and then calls a tool — you hear the summary instead of "Approve Bash?".
+3. **Template fallback**: uses `message_template` only when no text is available (e.g., the assistant message was purely tool calls with no prose).
 
 ## Handler architecture
 
@@ -98,7 +102,7 @@ Subclasses override only the steps they need:
 | Handler | Overrides | Why |
 |---|---|---|
 | `AskUserQuestionHandler` | `_pre_message_hook` | Calls `mark_handled()` before message extraction for dedup |
-| `PermissionRequestHandler` | `_pre_message_hook` | Same — marks permission as handled |
+| `PermissionRequestHandler` | `_pre_message_hook`, `get_message` | Marks permission as handled; reads transcript for text summary before falling back to template |
 | `StopHandler` | `_resolve_audio_settings` | Selects input-waiting vs. task-completion audio settings based on a flag set during `get_message()` |
 
 ## File structure
@@ -111,13 +115,13 @@ Subclasses override only the steps they need:
     audio.py              # play_sound(), speak(), play_notification()
     config.py             # YAML loading, dataclass definitions
     summary.py            # Text summarization (sentence extraction, action verb detection)
-    transcript.py         # Transcript JSONL parsing, file discovery
+    transcript.py         # Transcript JSONL parsing, file discovery, text extraction
     state.py              # Deduplication state (prevents double notifications)
     handlers/
       base.py             # BaseHandler ABC — Template Method in handle()
       stop.py             # StopHandler — overrides _resolve_audio_settings()
       ask_user.py         # AskUserQuestionHandler — overrides _pre_message_hook()
-      permission.py       # PermissionRequestHandler — overrides _pre_message_hook()
+      permission.py       # PermissionRequestHandler — transcript summary + dedup
 ```
 
 ## Deduplication
