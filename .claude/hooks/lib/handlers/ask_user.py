@@ -49,43 +49,9 @@ class AskUserQuestionHandler(BaseHandler):
         # Fall back to default message
         return self.hook_config.default_message
 
-    def handle(self, data: dict) -> None:
-        """Handle AskUserQuestion event and mark state."""
-        self.log(f"Handler: {self.__class__.__name__}")
-        self.log(f"hook_event_name: {data.get('hook_event_name', 'unknown')}")
-        self.log(f"tool_name: {data.get('tool_name', 'unknown')}")
-
-        if not self.should_handle(data):
-            self.log("should_handle: False - skipping")
-            self.write_debug_log()
-            return
-
-        self.log("should_handle: True")
-
-        # Mark as handled for deduplication BEFORE processing
+    def _pre_message_hook(self, data: dict) -> None:
+        """Mark as handled for deduplication before processing."""
         session_id = data.get("session_id", "")
         if session_id:
             mark_handled(session_id, "ask_user")
             self.log(f"marked_handled: ask_user for session {session_id}")
-
-        message = self.get_message(data)
-        if not message:
-            self.log("message: None - skipping notification")
-            self.write_debug_log()
-            return
-
-        self.log(f"message: {message}")
-
-        # Play notification
-        from ..audio import play_notification
-
-        settings = self.get_audio_settings()
-
-        play_notification(
-            message=message,
-            settings=settings,
-            project_dir=self.project_dir,
-        )
-
-        self.log("notification: played")
-        self.write_debug_log()

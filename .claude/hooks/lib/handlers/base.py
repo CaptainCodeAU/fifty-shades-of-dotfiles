@@ -93,6 +93,14 @@ class BaseHandler(ABC):
         """
         ...
 
+    def _pre_message_hook(self, data: dict) -> None:
+        """Called after should_handle passes, before get_message. No-op by default."""
+        pass
+
+    def _resolve_audio_settings(self, data: dict) -> AudioSettings:
+        """Resolve audio settings. Default delegates to get_audio_settings()."""
+        return self.get_audio_settings()
+
     def handle(self, data: dict) -> None:
         """Main entry point for handling hook events.
 
@@ -101,6 +109,9 @@ class BaseHandler(ABC):
         """
         self.log(f"Handler: {self.__class__.__name__}")
         self.log(f"hook_event_name: {data.get('hook_event_name', 'unknown')}")
+        tool_name = data.get("tool_name")
+        if tool_name:
+            self.log(f"tool_name: {tool_name}")
 
         if not self.should_handle(data):
             self.log("should_handle: False - skipping")
@@ -108,6 +119,8 @@ class BaseHandler(ABC):
             return
 
         self.log("should_handle: True")
+
+        self._pre_message_hook(data)
 
         message = self.get_message(data)
         if not message:
@@ -117,8 +130,7 @@ class BaseHandler(ABC):
 
         self.log(f"message: {message}")
 
-        # Play notification
-        settings = self.get_audio_settings()
+        settings = self._resolve_audio_settings(data)
 
         play_notification(
             message=message,

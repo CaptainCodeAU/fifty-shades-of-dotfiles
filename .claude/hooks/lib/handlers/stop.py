@@ -17,6 +17,10 @@ class StopHandler(BaseHandler):
     Checks deduplication state to avoid double-notifications.
     """
 
+    def __init__(self, config=None):
+        super().__init__(config)
+        self._use_input_settings = False
+
     @property
     def hook_config(self) -> StopHookConfig:
         """Get stop-specific hook configuration."""
@@ -182,41 +186,8 @@ class StopHandler(BaseHandler):
         self.log(f"summary: {summary}")
         return summary
 
-    def handle(self, data: dict) -> None:
-        """Handle stop event with custom audio path logic."""
-        self._use_input_settings = False
-
-        self.log(f"Handler: {self.__class__.__name__}")
-        self.log(f"hook_event_name: {data.get('hook_event_name', 'unknown')}")
-
-        if not self.should_handle(data):
-            self.log("should_handle: False - skipping")
-            self.write_debug_log()
-            return
-
-        self.log("should_handle: True")
-
-        message = self.get_message(data)
-        if not message:
-            self.log("message: None - skipping notification")
-            self.write_debug_log()
-            return
-
-        self.log(f"message: {message}")
-
-        # Use appropriate settings based on notification type
+    def _resolve_audio_settings(self, data: dict) -> AudioSettings:
+        """Use input-waiting settings when Claude is waiting for user input."""
         if self._use_input_settings:
-            settings = self._get_input_audio_settings()
-        else:
-            settings = self.get_audio_settings()
-
-        from ..audio import play_notification
-
-        play_notification(
-            message=message,
-            settings=settings,
-            project_dir=self.project_dir,
-        )
-
-        self.log("notification: played")
-        self.write_debug_log()
+            return self._get_input_audio_settings()
+        return self.get_audio_settings()
