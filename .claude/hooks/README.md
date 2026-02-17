@@ -120,7 +120,11 @@ Subclasses override only the steps they need:
 
 ## Deduplication
 
-The `PermissionRequest` and `PostToolUse` (AskUserQuestion) hooks fire *before* the `Stop` hook. Without deduplication, you'd hear the same notification twice. The state module (`lib/state.py`) writes a short-lived marker to `/tmp/claude-hooks/` when a permission or question event is handled, and the stop handler checks for it before playing.
+The `PermissionRequest` and `PostToolUse` (AskUserQuestion) hooks fire *before* the `Stop` hook. Without deduplication, you'd hear the same notification twice when Claude is waiting for input — the earlier hook speaks the prompt, then the stop handler detects the same input-waiting state and tries to speak it again.
+
+The state module (`lib/state.py`) writes a short-lived marker to `/tmp/claude-hooks/` when a permission or question event is handled. The stop handler checks for these markers **only when it detects that Claude is waiting for input** (pending tool_use, text ending with `?`, or AskUserQuestion tool). If a marker exists, the input-waiting notification is suppressed.
+
+Task-completion summaries (the normal "Claude finished work" path) **never consult dedup state**. This is intentional: when a permission or question hook fires and Claude then continues working and eventually stops, the stop is a genuinely new event — the task-completion summary should always play through.
 
 State files auto-expire after 60 seconds.
 
