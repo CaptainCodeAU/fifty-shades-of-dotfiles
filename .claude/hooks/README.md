@@ -11,6 +11,14 @@ Audio notification system for Claude Code. Plays sound effects and speaks status
 | `Stop` | `StopHandler` | Claude finishes a task or stops |
 | `PostToolUse` (AskUserQuestion) | `AskUserQuestionHandler` | Claude asks you a question (auto-approved) |
 | `PermissionRequest` | `PermissionRequestHandler` | Claude needs tool approval |
+| `Notification` | `NotificationHandler` | System notification (idle prompt, auth success) |
+| `SubagentStart` | `SubagentStartHandler` | A subagent is launched |
+| `SubagentStop` | `SubagentStopHandler` | A subagent finishes |
+| `TeammateIdle` | `TeammateIdleHandler` | A teammate goes idle |
+| `TaskCompleted` | `TaskCompletedHandler` | A task is completed |
+| `PostToolUseFailure` | `PostToolUseFailureHandler` | A tool use fails (skips user interruptions) |
+| `UserPromptSubmit` | `UserPromptSubmitHandler` | User submits a prompt (disabled by default) |
+| `PreCompact` | `PreCompactHandler` | Context is about to be compacted |
 
 Each handler can play a **sound effect** (via `afplay`) and/or **speak a message** (via `say` rendered to file, then `afplay` for playback). Both are independently configurable.
 
@@ -40,7 +48,7 @@ global:
 
 ### Per-hook settings
 
-Each hook (`stop`, `ask_user_question`, `permission_request`) has:
+Each hook has:
 
 - **sound** — play an audio file
   - `enabled`: toggle on/off
@@ -81,6 +89,52 @@ default_message: "Claude has a question for you"
 message_template: "Approve {tool_name}?"    # {tool_name} is replaced with the tool name
 ```
 
+### Notification hook extras
+
+```yaml
+idle_message: "Claude is idle"         # Spoken for idle_prompt notifications
+auth_message: "Auth successful"        # Spoken for auth_success notifications
+default_message: "Notification"        # Fallback for unrecognized notification types
+```
+
+### Subagent hooks extras
+
+```yaml
+# subagent_start / subagent_stop
+message_template: "Subagent {agent_type} started"   # {agent_type} is replaced
+```
+
+### Teammate idle hook extras
+
+```yaml
+message_template: "{teammate_name} is idle"   # {teammate_name} is replaced
+```
+
+### Task completed hook extras
+
+```yaml
+message_template: "Task completed: {task_subject}"   # {task_subject} is replaced
+max_subject_length: 80                               # Truncates long subjects with "..."
+```
+
+### Post tool use failure hook extras
+
+```yaml
+message_template: "{tool_name} failed"   # {tool_name} is replaced
+```
+
+The handler skips events where `is_interrupt` is `true` (user-caused interruptions, not real failures).
+
+### User prompt submit hook
+
+Disabled by default (`enabled: false`). Playing audio on your own input is redundant. Exists as a skeleton for future use — `get_message()` returns `None`.
+
+### Pre-compact hook extras
+
+```yaml
+message: "Compacting context"   # Static message spoken before compaction
+```
+
 The permission handler resolves the spoken message in priority order:
 
 1. **AskUserQuestion**: extracts the actual question text from `tool_input`.
@@ -106,6 +160,10 @@ Subclasses override only the steps they need:
 | `AskUserQuestionHandler` | `_pre_message_hook` | Calls `mark_handled()` before message extraction for dedup |
 | `PermissionRequestHandler` | `_pre_message_hook`, `get_message` | Marks permission as handled; reads transcript for text summary before falling back to template |
 | `StopHandler` | `_resolve_audio_settings` | Selects input-waiting vs. task-completion audio settings based on a flag set during `get_message()` |
+| `NotificationHandler` | `_pre_message_hook` | Marks `notification_idle` for Stop dedup when type is `idle_prompt` |
+| `SubagentStopHandler` | `_pre_message_hook` | Marks `subagent_stop` for Stop dedup |
+| `PostToolUseFailureHandler` | `should_handle`, `_pre_message_hook` | Skips user interruptions (`is_interrupt`); marks `tool_failure` for Stop dedup |
+| `UserPromptSubmitHandler` | `get_message` | Returns `None` — silent skeleton (disabled by default) |
 
 ## File structure
 
@@ -124,13 +182,31 @@ Subclasses override only the steps they need:
       stop.py             # StopHandler — overrides _resolve_audio_settings()
       ask_user.py         # AskUserQuestionHandler — overrides _pre_message_hook()
       permission.py       # PermissionRequestHandler — transcript summary + dedup
+      notification.py     # NotificationHandler — idle/auth notifications + dedup
+      subagent_start.py   # SubagentStartHandler — subagent launch
+      subagent_stop.py    # SubagentStopHandler — subagent completion + dedup
+      teammate_idle.py    # TeammateIdleHandler — teammate went idle
+      task_completed.py   # TaskCompletedHandler — task completion with subject truncation
+      tool_failure.py     # PostToolUseFailureHandler — tool failures + dedup
+      user_prompt_submit.py # UserPromptSubmitHandler — silent skeleton (disabled)
+      pre_compact.py      # PreCompactHandler — context compaction
 ```
 
 ## Deduplication
 
-The `PermissionRequest` and `PostToolUse` (AskUserQuestion) hooks fire *before* the `Stop` hook. Without deduplication, you'd hear the same notification twice when Claude is waiting for input — the earlier hook speaks the prompt, then the stop handler detects the same input-waiting state and tries to speak it again.
+Several hooks fire *before* the `Stop` hook. Without deduplication, you'd hear the same notification twice — the earlier hook speaks the prompt, then the stop handler detects the same state and tries to speak it again.
 
-The state module (`lib/state.py`) writes a short-lived marker to `/tmp/claude-hooks/` when a permission or question event is handled. The stop handler checks for these markers **only when it detects that Claude is waiting for input** (pending tool_use, text ending with `?`, or AskUserQuestion tool). If a marker exists, the input-waiting notification is suppressed.
+The state module (`lib/state.py`) writes a short-lived marker to `/tmp/claude-hooks/` when an event is handled. The stop handler checks for these markers **only when it detects that Claude is waiting for input** (pending tool_use, text ending with `?`, or AskUserQuestion tool). If a marker exists, the input-waiting notification is suppressed.
+
+Dedup markers checked by the stop handler:
+
+| Marker | Set by | Prevents |
+|---|---|---|
+| `ask_user` | `AskUserQuestionHandler` | Stop re-announcing a question |
+| `permission` | `PermissionRequestHandler` | Stop re-announcing a permission prompt |
+| `notification_idle` | `NotificationHandler` (idle_prompt) | Stop re-announcing idle state |
+| `tool_failure` | `PostToolUseFailureHandler` | Stop re-announcing a failure |
+| `subagent_stop` | `SubagentStopHandler` | Stop re-announcing subagent completion |
 
 Task-completion summaries (the normal "Claude finished work" path) **never consult dedup state**. This is intentional: when a permission or question hook fires and Claude then continues working and eventually stops, the stop is a genuinely new event — the task-completion summary should always play through.
 

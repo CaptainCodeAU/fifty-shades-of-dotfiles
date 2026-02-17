@@ -21,8 +21,16 @@ sys.path.insert(0, str(lib_path.parent))
 from lib.config import load_config
 from lib.handlers import (
     AskUserQuestionHandler,
+    NotificationHandler,
     PermissionRequestHandler,
+    PostToolUseFailureHandler,
+    PreCompactHandler,
     StopHandler,
+    SubagentStartHandler,
+    SubagentStopHandler,
+    TaskCompletedHandler,
+    TeammateIdleHandler,
+    UserPromptSubmitHandler,
 )
 
 
@@ -54,6 +62,22 @@ def main():
             handler = AskUserQuestionHandler(config)
     elif hook_event == "PermissionRequest":
         handler = PermissionRequestHandler(config)
+    elif hook_event == "PostToolUseFailure":
+        handler = PostToolUseFailureHandler(config)
+    elif hook_event == "Notification":
+        handler = NotificationHandler(config)
+    elif hook_event == "SubagentStart":
+        handler = SubagentStartHandler(config)
+    elif hook_event == "SubagentStop":
+        handler = SubagentStopHandler(config)
+    elif hook_event == "TeammateIdle":
+        handler = TeammateIdleHandler(config)
+    elif hook_event == "TaskCompleted":
+        handler = TaskCompletedHandler(config)
+    elif hook_event == "UserPromptSubmit":
+        handler = UserPromptSubmitHandler(config)
+    elif hook_event == "PreCompact":
+        handler = PreCompactHandler(config)
 
     # Handle the event
     if handler:
