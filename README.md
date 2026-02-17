@@ -349,12 +349,22 @@ graph TD
 
 ### Node.js (`node_*` functions)
 
-The setup provides similar automation for Node.js projects, standardizing on `nvm` and `pnpm`.
+The setup provides similar automation for Node.js projects, standardizing on `nvm`, `pnpm`, and Corepack. Projects scaffold with **TypeScript by default** (pass `--no-ts` for JavaScript), use **Vitest** for testing, and integrate with **direnv** for automatic environment activation.
 
-* **Create a new project**: `mkdir my-node-app && cd my-node-app && node_new_project`
-  * This initializes a `package.json`, creates `src/` and `tests/` directories, adds an `.nvmrc` file with your current Node version, and installs Jest, Prettier, and ESLint.
+* **Create a new TypeScript project**: `mkdir my-node-app && cd my-node-app && node_new_project`
+  * Scaffolds `src/index.ts`, `tests/index.test.ts`, `tsconfig.json`, `.nvmrc`, `.gitignore`, and a rich `.envrc` (if direnv is available). Installs TypeScript, Vitest, ESLint, Prettier, and `@types/node`.
+* **Create a JavaScript project**: `node_new_project --no-ts`
+  * Same scaffold without TypeScript — creates `src/index.js` and `tests/index.test.js` instead.
 * **Set up an existing project**: `cd existing-project && node_setup`
-  * This automatically uses the Node version from `.nvmrc` and installs dependencies with `pnpm install`.
+  * Switches to the Node version from `.nvmrc`, installs dependencies with `pnpm install`, creates `.envrc` if missing, and displays available scripts.
+* **Quick project dashboard**: `node_info`
+  * Shows Node/npm/pnpm/Corepack versions, `.nvmrc` status, package.json details, available scripts, and global link status.
+* **Clean up artifacts**: `node_clean`
+  * Removes `node_modules`, `dist`, `build`, `.next`, `.turbo`, `.tsbuildinfo`, coverage, caches, and lockfiles.
+
+#### Global Node.js Package Management
+
+For CLI tools you're developing, use `node_link` / `node_unlink` / `node_check_global` to manage global symlinks via `pnpm link --global`. Note that global links are tied to the current nvm Node version — switching nvm versions will lose access to the linked binary. For one-off tool execution, prefer `npx` or `pnpm dlx` which don't require global installation.
 
 ### Docker (`docker_*` functions & aliases)
 
@@ -706,9 +716,14 @@ The function auto-generates a comprehensive `~/.config/yt-dlp/config` file on fi
 
 | Function | Arguments | Description |
 | :--- | :--- | :--- |
-| `node_new_project` | `(none)` | Scaffolds a complete new Node.js project. |
-| `node_setup` | `(none)` | Installs dependencies for an existing Node.js project using `.nvmrc` and `pnpm`. |
-| `node_clean` | `(none)` | Deletes `node_modules`, build artifacts, and lockfiles. |
+| `node_new_project` | `[--no-ts\|--js]` | Scaffolds a new Node.js project (TypeScript by default, `--no-ts` for JavaScript). |
+| `node_setup` | `(none)` | Sets up an existing project: switches Node version, installs deps, creates `.envrc`. |
+| `node_clean` | `(none)` | Deletes `node_modules`, build artifacts, caches, and lockfiles. |
+| `node_info` | `(none)` | Displays project dashboard: versions, `.nvmrc` status, scripts, global link status. |
+| `node_link` | `(none)` | Links current project globally via `pnpm link --global`. |
+| `node_unlink` | `(none)` | Unlinks current project from global scope. |
+| `node_check_global` | `(none)` | Checks if current project is linked globally (returns 0/1). |
+| `create_node_envrc` | `(none)` | Creates a rich `.envrc` with nvm auto-switch and project info box. |
 
 ### Docker Functions
 

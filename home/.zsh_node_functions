@@ -5,50 +5,204 @@
 # Helper Functions for Node.js Projects
 # ==============================================================================
 
-# Internal helper to get project name from package.json
-# Requires 'jq' to be installed.
+# --- Internal Helpers ---
+
+# Get project name from package.json (requires jq)
 _get_node_project_name() {
     if [[ ! -f "package.json" ]]; then return 1; fi
-    # Use jq for robust parsing
     jq -r '.name // ""' package.json 2>/dev/null
 }
 
-# NEW: Function to check for a default NVM install and prompt if missing.
+# Display runnable scripts from package.json
+# Returns silently if no package.json or no jq
+_display_node_scripts() {
+    if [[ ! -f "package.json" ]] || ! command -v jq &>/dev/null; then
+        return 0
+    fi
+
+    local -a script_names
+    script_names=("${(@f)$(jq -r '.scripts // {} | keys[]' package.json 2>/dev/null)}")
+
+    if (( ${#script_names[@]} > 0 )); then
+        echo "--------------------------------------------------"
+        echo "${info}Found ${ok}${#script_names[@]}${info} script(s) in package.json:${done}"
+        for name in "${script_names[@]}"; do
+            local cmd
+            cmd=$(jq -r --arg n "$name" '.scripts[$n] // ""' package.json 2>/dev/null)
+            echo "   ${ok}pnpm ${name}${done}  ${info}# ${cmd}${done}"
+        done
+    fi
+}
+
+# Display hints about the current Node.js project
+_display_node_hints() {
+    echo "${info}Hint: Project environment details:${done}"
+
+    # .nvmrc content
+    if [[ -f ".nvmrc" ]]; then
+        echo "${info}      - .nvmrc version: ${ok}$(cat .nvmrc)${done}"
+    else
+        echo "${warn}      - No .nvmrc file found${done}"
+    fi
+
+    # engines.node from package.json
+    if [[ -f "package.json" ]] && command -v jq &>/dev/null; then
+        local engines_node
+        engines_node=$(jq -r '.engines.node // empty' package.json 2>/dev/null)
+        if [[ -n "$engines_node" ]]; then
+            echo "${info}      - engines.node: ${ok}${engines_node}${done}"
+        fi
+    fi
+
+    # Detected package manager from lockfile
+    if [[ -f "pnpm-lock.yaml" ]]; then
+        echo "${info}      - Package manager: ${ok}pnpm${done}"
+    elif [[ -f "yarn.lock" ]]; then
+        echo "${info}      - Package manager: ${ok}yarn${done}"
+    elif [[ -f "package-lock.json" ]]; then
+        echo "${info}      - Package manager: ${ok}npm${done}"
+    fi
+
+    # Available scripts
+    _display_node_scripts
+}
+
+# --- Environment ---
+
+# Check for a default NVM install and prompt if missing.
 nvm_check_and_install_lts() {
-    # Only run if nvm is installed and we haven't set a default version yet.
     if ! command -v nvm &>/dev/null || [[ "$(nvm version default)" != "N/A" ]]; then
         return 0
     fi
 
-    echo "${warn}⚠️  No default Node.js version is set via nvm.${done}"
-    if [[ -t 1 ]]; then # Only prompt in interactive shells
-        read "REPLY?${info}    👉 Would you like to install the latest LTS version of Node.js and set it as your default? [y/N] ${done}"
+    echo "${warn}No default Node.js version is set via nvm.${done}"
+    if [[ -t 1 ]]; then
+        read "REPLY?${info}    Would you like to install the latest LTS version and set it as default? [y/N] ${done}"
         if [[ "$REPLY" =~ ^[Yy]$ ]]; then
             echo "${info}Installing Node.js LTS...${done}"
             nvm install --lts
             nvm alias default 'lts/*'
-            echo "${ok}✅ Node.js LTS installed and set as default.${done}"
+            echo "${ok}Node.js LTS installed and set as default.${done}"
         else
             echo "${warn}    Skipping Node.js installation.${done}"
         fi
     fi
 }
 
-# Function to scaffold a new, modern Node.js project.
-# Usage: node_new_project
-# Creates a project with pnpm, basic scripts, testing, and .nvmrc.
+# Create .envrc for Node.js project with rich info box
+# Usage: create_node_envrc
+create_node_envrc() {
+    local project_name
+    project_name=$(_get_node_project_name 2>/dev/null)
+    project_name=${project_name:-$(basename "$PWD")}
+
+    if [[ -f ".envrc" ]]; then
+        echo "${info}.envrc already exists. (Skipping creation)${done}"
+        return
+    fi
+
+    echo "${info}Creating .envrc with Node.js environment...${done}"
+
+    cat <<'EOF' > .envrc
+# PROJECT_NAME Node.js Environment
+
+# Auto-switch Node version via nvm
+if [[ -f ".nvmrc" ]] && command -v nvm &>/dev/null; then
+    nvm use --silent 2>/dev/null || nvm use
+fi
+
+# Clear the "direnv: loading..." line
+printf "\033[A\033[2K"
+
+echo ""
+echo "┌───────────────────────────────────────────────────────────────────────┐"
+echo -e "│                        \033[32m📦 PROJECT_NAME\033[0m                               │"
+echo "└───────────────────────────────────────────────────────────────────────┘"
+echo "│"
+echo "│  🚀 Quick Start:"
+echo "│  ──────────────"
+echo -e "│     \033[3;33mpnpm dev\033[0m                   # Start dev server"
+echo -e "│     \033[3;33mpnpm test\033[0m                  # Run tests"
+echo -e "│     \033[3;33mpnpm build\033[0m                 # Build project"
+echo "│"
+echo "│  📦 Package Management:"
+echo "│  ─────────────────────"
+echo -e "│     \033[3;33mpnpm add <package>\033[0m         # Add dependency"
+echo -e "│     \033[3;33mpnpm add -D <package>\033[0m      # Add dev dependency"
+echo -e "│     \033[3;33mpnpm list\033[0m                  # List installed packages"
+echo "│"
+echo "│  🔧 Code Quality:"
+echo "│  ───────────────"
+echo -e "│     \033[3;33mpnpm exec eslint .\033[0m         # Lint code"
+echo -e "│     \033[3;33mpnpm exec prettier --write .\033[0m  # Format code"
+echo "│"
+echo "│  ℹ️  Info:"
+echo "│  ────────"
+echo -e "│     Node:    \033[36m$(node --version 2>/dev/null || echo 'N/A')\033[0m"
+echo -e "│     pnpm:    \033[36m$(pnpm --version 2>/dev/null || echo 'N/A')\033[0m"
+echo -e "│     Project: \033[36mPROJECT_NAME\033[0m"
+local _pkg_version
+_pkg_version=$(jq -r '.version // "0.1.0"' package.json 2>/dev/null || echo "0.1.0")
+echo -e "│     Version: \033[36m${_pkg_version}\033[0m"
+echo "│"
+echo "│  🔗 Global Link Status:"
+echo "│  ──────────────────────"
+if pnpm list --global 2>/dev/null | grep -q "PROJECT_NAME"; then
+    echo -e "│     Link:    \033[32m✓ Linked globally\033[0m"
+else
+    echo -e "│     Link:    \033[33m✗ Not linked globally\033[0m"
+    echo -e "│     Hint:    \033[3;33mnode_link\033[0m"
+fi
+echo "│"
+echo "└───────────────────────────────────────────────────────────────────────┘"
+echo ""
+EOF
+
+    # Replace placeholder with actual project name
+    sed -i.bak "s/PROJECT_NAME/$project_name/g" .envrc
+    rm -f .envrc.bak
+
+    # Allow direnv
+    if command -v direnv &>/dev/null; then
+        direnv allow .
+    fi
+
+    echo "${ok}.envrc created successfully.${done}"
+}
+
+# --- Project Lifecycle ---
+
+# Scaffold a new Node.js project (TypeScript by default).
+# Usage: node_new_project [--no-ts|--no-typescript|--js]
 node_new_project() {
+    local use_typescript=true
+
+    # Parse arguments
+    case "${1:-}" in
+        --no-ts|--no-typescript|--js)
+            use_typescript=false
+            ;;
+        "")
+            ;;
+        *)
+            echo "${err}Unknown option: $1${done}" >&2
+            echo "${info}Usage: node_new_project [--no-ts|--no-typescript|--js]${done}" >&2
+            return 1
+            ;;
+    esac
+
     local project_name
     project_name=$(basename "$PWD" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/_/g')
 
     if ! command -v pnpm &>/dev/null; then
-        echo "${err}Error: 'pnpm' not found. Please ensure Corepack has prepared it.${done}" >&2; return 1;
+        echo "${err}Error: 'pnpm' not found. Please ensure Corepack has prepared it.${done}" >&2
+        return 1
     fi
     if ! command -v nvm &>/dev/null; then
-        echo "${err}Error: 'nvm' not found.${done}" >&2; return 1;
+        echo "${err}Error: 'nvm' not found.${done}" >&2
+        return 1
     fi
 
-    # IMPROVEMENT: Check for an active Node version before proceeding.
     local current_node_version
     current_node_version=$(nvm current)
     if [[ "$current_node_version" == "none" ]]; then
@@ -57,30 +211,84 @@ node_new_project() {
         return 1
     fi
 
+    local lang_label="TypeScript"
+    [[ "$use_typescript" == false ]] && lang_label="JavaScript"
+
     echo "--------------------------------------------------"
-    echo "${info}Creating new Node.js project: ${ok}${project_name}${done}"
+    echo "${info}Creating new ${lang_label} project: ${ok}${project_name}${done}"
+    echo "${info}Using Node: ${ok}${current_node_version}${done}"
     echo "--------------------------------------------------"
 
     # --- 1. Initialize project with pnpm ---
-    echo "Running: pnpm init"
+    echo "${info}Running: pnpm init${done}"
     pnpm init
 
+    # Update project_name from package.json now that it exists
+    project_name=$(_get_node_project_name 2>/dev/null)
+    project_name=${project_name:-$(basename "$PWD" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/_/g')}
+
     # --- 2. Create standard project structure ---
-    echo "Creating directories: src/ and tests/"
+    echo "${info}Creating directories: src/ and tests/${done}"
     mkdir -p src tests
 
-    # --- 3. Create basic source and test files ---
-    echo "Creating basic source files..."
-    echo 'console.log("Hello, Node.js project!");' > src/index.js
-    echo "test('initial test', () => { expect(true).toBe(true); });" > tests/index.test.js
+    # --- 3. Create source and test files ---
+    if [[ "$use_typescript" == true ]]; then
+        echo "${info}Creating TypeScript source files...${done}"
+        echo 'console.log("Hello, TypeScript project!");' > src/index.ts
 
-    # --- 4. Create .nvmrc with the current Node version ---
-    echo "Creating .nvmrc with version: ${current_node_version}"
+        cat <<-'TESTEOF' > tests/index.test.ts
+import { describe, it, expect } from 'vitest';
+
+describe('initial test', () => {
+    it('should pass', () => {
+        expect(true).toBe(true);
+    });
+});
+TESTEOF
+
+        # Create tsconfig.json
+        cat <<-'TSEOF' > tsconfig.json
+{
+    "compilerOptions": {
+        "target": "ES2022",
+        "module": "Node16",
+        "moduleResolution": "Node16",
+        "outDir": "dist",
+        "rootDir": "src",
+        "strict": true,
+        "esModuleInterop": true,
+        "skipLibCheck": true,
+        "forceConsistentCasingInFileNames": true,
+        "declaration": true,
+        "declarationMap": true,
+        "sourceMap": true
+    },
+    "include": ["src/**/*"],
+    "exclude": ["node_modules", "dist", "tests"]
+}
+TSEOF
+    else
+        echo "${info}Creating JavaScript source files...${done}"
+        echo 'console.log("Hello, Node.js project!");' > src/index.js
+
+        cat <<-'TESTEOF' > tests/index.test.js
+import { describe, it, expect } from 'vitest';
+
+describe('initial test', () => {
+    it('should pass', () => {
+        expect(true).toBe(true);
+    });
+});
+TESTEOF
+    fi
+
+    # --- 4. Create .nvmrc ---
+    echo "${info}Creating .nvmrc with version: ${ok}${current_node_version}${done}"
     echo "$current_node_version" > .nvmrc
 
     # --- 5. Create .gitignore ---
     if [[ ! -f "./.gitignore" ]]; then
-        echo "Creating .gitignore with Node.js entries..."
+        echo "${info}Creating .gitignore...${done}"
         cat <<-'EOF' > .gitignore
 # Logs
 logs
@@ -96,10 +304,23 @@ node_modules/
 .pnp.js
 
 # Build output
-dist
-build
+dist/
+build/
 .next/
 out/
+
+# TypeScript
+*.tsbuildinfo
+
+# Test / Coverage
+coverage/
+.vitest/
+
+# Cache
+.turbo/
+.eslintcache
+.parcel-cache/
+.swc/
 
 # Other
 .DS_Store
@@ -109,55 +330,76 @@ out/
 .env.development.local
 .env.test.local
 .env.production.local
-coverage
 EOF
     fi
 
     # --- 6. Install dev dependencies ---
-    echo "Installing dev dependencies (eslint, prettier, jest)..."
-    pnpm add -D eslint prettier jest
+    if [[ "$use_typescript" == true ]]; then
+        echo "${info}Installing dev dependencies (typescript, vitest, eslint, prettier, @types/node)...${done}"
+        pnpm add -D typescript vitest eslint prettier @types/node
+    else
+        echo "${info}Installing dev dependencies (vitest, eslint, prettier)...${done}"
+        pnpm add -D vitest eslint prettier
+    fi
 
-    # --- 7. Add scripts to package.json using jq ---
-    echo "Adding 'dev', 'start', and 'test' scripts to package.json..."
+    # --- 7. Add scripts to package.json ---
+    echo "${info}Adding scripts to package.json...${done}"
     if command -v jq &>/dev/null; then
-        jq '.scripts.dev = "node --watch src/index.js" | .scripts.start = "node src/index.js" | .scripts.test = "jest"' package.json > tmp.$$.json && mv tmp.$$.json package.json
+        if [[ "$use_typescript" == true ]]; then
+            jq '.scripts.dev = "npx tsx --watch src/index.ts" |
+                .scripts.build = "tsc" |
+                .scripts.start = "node dist/index.js" |
+                .scripts.test = "vitest run" |
+                .scripts["test:watch"] = "vitest"' package.json > tmp.$$.json && mv tmp.$$.json package.json
+        else
+            jq '.scripts.dev = "node --watch src/index.js" |
+                .scripts.start = "node src/index.js" |
+                .scripts.test = "vitest run" |
+                .scripts["test:watch"] = "vitest"' package.json > tmp.$$.json && mv tmp.$$.json package.json
+        fi
     else
         echo "${warn}Warning: 'jq' not found. Please add scripts to package.json manually.${done}"
     fi
 
-    # --- 8. Final Success Message ---
+    # --- 8. Create .envrc if direnv is available ---
+    if command -v direnv &>/dev/null; then
+        create_node_envrc
+    fi
+
+    # --- 9. Final Success Message ---
     echo "--------------------------------------------------"
-    echo "${ok}✅ Project '${project_name}' setup complete!${done}"
-    echo "${ok}   - Run '${example}pnpm dev${ok}' to start the development server."
-    echo "${ok}   - Run '${example}pnpm test${ok}' to run tests."
-    echo "${info}   - The '.nvmrc' file will now automatically switch to Node ${current_node_version} in this directory.${done}"
+    echo "${ok}Project '${project_name}' setup complete!${done}"
     echo "--------------------------------------------------"
+
+    _display_node_scripts
 }
 
-
-# Function to set up an existing Node.js project.
+# Set up an existing Node.js project.
 # Usage: node_setup
-# Checks for .nvmrc and installs dependencies using pnpm.
 node_setup() {
     if [[ ! -f "package.json" ]]; then
         echo "${err}Error: 'package.json' not found. This does not appear to be a Node.js project.${done}" >&2
+        _display_node_hints
         return 1
     fi
 
+    local project_name
+    project_name=$(_get_node_project_name 2>/dev/null)
+    project_name=${project_name:-$(basename "$PWD")}
+
     echo "--------------------------------------------------"
-    echo "${info}Setting up existing Node.js project...${done}"
+    echo "${info}Setting up Node.js project: ${ok}${project_name}${done}"
     echo "--------------------------------------------------"
 
-    # --- 1. Check for .nvmrc and ensure correct version is used ---
+    # --- 1. Check for .nvmrc and ensure correct version ---
     if [[ -f ".nvmrc" ]]; then
-        # The 'load-nvmrc' hook should have already handled this, but we can verify.
         local required_version
         required_version=$(nvm version "$(cat .nvmrc)")
         if [[ "$(nvm version)" != "$required_version" ]]; then
             echo "${warn}Switching to project's required Node version...${done}"
             nvm use
         else
-            echo "${ok}✅ Correct Node version ($(nvm current)) is active.${done}"
+            echo "${ok}Correct Node version ($(nvm current)) is active.${done}"
         fi
     else
         echo "${warn}Warning: No .nvmrc file found. Using current Node version: $(nvm current)${done}"
@@ -165,11 +407,11 @@ node_setup() {
 
     # --- 2. Install dependencies with pnpm ---
     if command -v pnpm &>/dev/null; then
-        echo "Installing dependencies with 'pnpm install'..."
+        echo "${info}Installing dependencies with 'pnpm install'...${done}"
         if pnpm install; then
-            echo "${ok}✅ Dependencies installed successfully.${done}"
+            echo "${ok}Dependencies installed successfully.${done}"
         else
-            echo "${err}❌ pnpm install failed. Please check the errors above.${done}"
+            echo "${err}pnpm install failed. Please check the errors above.${done}"
             return 1
         fi
     else
@@ -177,15 +419,27 @@ node_setup() {
         return 1
     fi
 
+    # --- 3. Create .envrc if missing and direnv available ---
+    if [[ ! -f ".envrc" ]] && command -v direnv &>/dev/null; then
+        create_node_envrc
+    fi
+
     echo "--------------------------------------------------"
-    echo "${ok}✅ Project setup complete.${done}"
+    echo "${ok}Project setup complete.${done}"
     echo "--------------------------------------------------"
+
+    _display_node_scripts
 }
 
-# Function to clean up Node.js project artifacts.
+# Clean up Node.js project artifacts.
+# Usage: node_clean
 node_clean() {
+    local project_name
+    project_name=$(_get_node_project_name 2>/dev/null)
+    project_name=${project_name:-$(basename "$PWD")}
+
     echo "--------------------------------------------------"
-    echo "${info}Node.js Project Teardown Initiated...${done}"
+    echo "${info}Node.js Project Teardown: ${ok}${project_name}${done}"
     echo "--------------------------------------------------"
 
     local items_to_remove=(
@@ -195,30 +449,177 @@ node_clean() {
         ".next"
         "coverage"
         "pnpm-lock.yaml"
+        ".turbo"
+        ".eslintcache"
+        ".tsbuildinfo"
+        "out"
+        ".parcel-cache"
+        ".swc"
+        ".vitest"
     )
 
     local deleted_something=false
     for item in "${items_to_remove[@]}"; do
         if [[ -e "$item" ]]; then
-            echo "  - Deleting: ${item}"
+            echo "  ${warn}- Deleting: ${item}${done}"
             rm -rf "$item"
             deleted_something=true
         fi
     done
-    
+
     if [[ "$deleted_something" = true ]]; then
-        echo "${ok}✅ Teardown complete.${done}"
+        echo "${ok}Teardown complete.${done}"
     else
-        echo "${info}ℹ️ No project files found to delete.${done}"
+        echo "${info}No project files found to delete.${done}"
     fi
     echo "--------------------------------------------------"
 }
 
+# Quick project info dashboard.
+# Usage: node_info
+node_info() {
+    local project_name
+    project_name=$(_get_node_project_name 2>/dev/null)
+
+    echo "--------------------------------------------------"
+    echo "${info}Node.js Environment Info${done}"
+    echo "--------------------------------------------------"
+
+    # Runtime versions
+    echo "${info}  Node:     ${ok}$(node --version 2>/dev/null || echo 'not found')${done}"
+    echo "${info}  npm:      ${ok}$(npm --version 2>/dev/null || echo 'not found')${done}"
+    echo "${info}  pnpm:     ${ok}$(pnpm --version 2>/dev/null || echo 'not found')${done}"
+    if command -v corepack &>/dev/null; then
+        echo "${info}  Corepack: ${ok}$(corepack --version 2>/dev/null || echo 'not found')${done}"
+    fi
+
+    # .nvmrc status
+    if [[ -f ".nvmrc" ]]; then
+        local nvmrc_version
+        nvmrc_version=$(cat .nvmrc)
+        local current_version
+        current_version=$(nvm current 2>/dev/null)
+        if [[ "$(nvm version "$nvmrc_version" 2>/dev/null)" == "$(nvm version 2>/dev/null)" ]]; then
+            echo "${ok}  .nvmrc:   ${nvmrc_version} (active)${done}"
+        else
+            echo "${warn}  .nvmrc:   ${nvmrc_version} (current: ${current_version})${done}"
+        fi
+    else
+        echo "${warn}  .nvmrc:   not found${done}"
+    fi
+
+    # package.json info
+    if [[ -n "$project_name" ]]; then
+        local pkg_version
+        pkg_version=$(jq -r '.version // "N/A"' package.json 2>/dev/null)
+        echo "${info}  Project:  ${ok}${project_name}@${pkg_version}${done}"
+    else
+        echo "${warn}  Project:  no package.json found${done}"
+    fi
+
+    echo "--------------------------------------------------"
+
+    # Scripts
+    _display_node_scripts
+
+    # Global link status
+    if [[ -n "$project_name" ]]; then
+        echo "--------------------------------------------------"
+        echo "${info}Global Link Status:${done}"
+        node_check_global
+    fi
+
+    echo "--------------------------------------------------"
+}
+
+# --- Global CLI Management ---
+
+# Link current project globally via pnpm.
+# Usage: node_link
+node_link() {
+    if [[ ! -f "package.json" ]]; then
+        echo "${err}Error: 'package.json' not found.${done}" >&2
+        return 1
+    fi
+
+    local project_name
+    project_name=$(_get_node_project_name 2>/dev/null)
+    project_name=${project_name:-$(basename "$PWD")}
+
+    local current_node_version
+    current_node_version=$(nvm current 2>/dev/null || node --version 2>/dev/null)
+
+    echo "${info}Linking '${ok}${project_name}${info}' globally...${done}"
+    if pnpm link --global; then
+        echo "${ok}Successfully linked '${project_name}' globally.${done}"
+        echo "${warn}Note: Global links are tied to current nvm Node version (${current_node_version}).${done}"
+        echo "${info}Usage: Run '${example}${project_name}${info}' from anywhere.${done}"
+    else
+        echo "${err}Failed to link project globally.${done}" >&2
+        return 1
+    fi
+}
+
+# Unlink current project from global scope.
+# Usage: node_unlink
+node_unlink() {
+    if [[ ! -f "package.json" ]]; then
+        echo "${err}Error: 'package.json' not found.${done}" >&2
+        return 1
+    fi
+
+    local project_name
+    project_name=$(_get_node_project_name 2>/dev/null)
+    project_name=${project_name:-$(basename "$PWD")}
+
+    echo "${info}Unlinking '${ok}${project_name}${info}' from global scope...${done}"
+    if pnpm unlink --global 2>/dev/null; then
+        echo "${ok}Successfully unlinked '${project_name}'.${done}"
+    else
+        echo "${warn}'${project_name}' was not linked globally (nothing to unlink).${done}"
+    fi
+}
+
+# Check if current project is linked globally.
+# Usage: node_check_global
+# Returns 0 if linked, 1 if not.
+node_check_global() {
+    local project_name
+    project_name=$(_get_node_project_name 2>/dev/null)
+
+    if [[ -z "$project_name" ]]; then
+        echo "${warn}  No package.json found — cannot check global link.${done}"
+        return 1
+    fi
+
+    local current_node_version
+    current_node_version=$(nvm current 2>/dev/null || node --version 2>/dev/null)
+    local global_bin
+    global_bin=$(pnpm bin --global 2>/dev/null)
+
+    if pnpm list --global 2>/dev/null | grep -q "$project_name"; then
+        echo "${ok}  '${project_name}' is linked globally${done}"
+        echo "${info}  Node version: ${current_node_version}${done}"
+        [[ -n "$global_bin" ]] && echo "${info}  Global bin:   ${global_bin}${done}"
+        return 0
+    else
+        echo "${warn}  '${project_name}' is not linked globally${done}"
+        return 1
+    fi
+}
+
+# --- Zsh Completions ---
+
+_node_new_project_completions() {
+    _arguments \
+        '1:options:((--no-ts\:"Scaffold JavaScript project" --no-typescript\:"Scaffold JavaScript project" --js\:"Scaffold JavaScript project"))'
+}
+compdef _node_new_project_completions node_new_project
+
 # ==============================================================================
-# NEW: Automatic NVM Check
+# Automatic NVM Check
 # ==============================================================================
-# This block runs once per session to check if a default Node.js version is set.
-# If not, it will prompt the user to install the latest LTS version.
+# Runs once per session to check if a default Node.js version is set.
 if [[ -z "$_NVM_CHECK_COMPLETE" && -t 1 ]]; then
     nvm_check_and_install_lts
     export _NVM_CHECK_COMPLETE=true
