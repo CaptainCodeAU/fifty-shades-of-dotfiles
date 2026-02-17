@@ -18,7 +18,7 @@ hooks:
       enabled: true
       name: "Victoria"
       volume: 0.6
-      rate: 280
+      rate: 350
     summary:
       mode: "sentences"
       max_sentences: 2
