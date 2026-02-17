@@ -68,6 +68,9 @@ export PROMPT_EOL_MARK="" # Disable Powerlevel10k instant prompt
 # ZSH_WELCOME_DISK_WARN: Disk usage percentage threshold for warning (default: 90)
 : ${ZSH_WELCOME_DISK_WARN:=90}
 
+# --- pnpm ---
+export PNPM_HOME="$HOME/Library/pnpm"
+
 # --- PHP ---
 export WP_CLI_PHP_ARGS="-d error_reporting=E_ERROR^E_PARSE^E_COMPILE_ERROR -d display_errors=0"
 
