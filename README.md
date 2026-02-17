@@ -404,6 +404,18 @@ yt --help                                          # Show all options
 
 ---
 
+## Using in Other Projects
+
+To pull the `.claude` hooks folder into another project, use [gitpick](https://github.com/nrjdalal/gitpick):
+
+```bash
+pnpm dlx gitpick CaptainCodeAU/fifty-shades-of-dotfiles/tree/master/.claude
+```
+
+Run this from the target project's root directory. It downloads just the `.claude` folder without cloning the full repository.
+
+---
+
 ## Customization & Private Settings
 
 To keep your main configuration portable and shareable, all personal, private, or machine-specific settings should go into a `~/.zshrc.private` file.
