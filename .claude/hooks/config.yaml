@@ -36,7 +36,7 @@ hooks:
       enabled: true
       name: "Victoria"
       volume: 0.6
-      rate: 280
+      rate: 350
     message_mode: "extract"
     default_message: "Claude has a question for you"
 
@@ -51,5 +51,5 @@ hooks:
       enabled: true
       name: "Victoria"
       volume: 0.5
-      rate: 300
+      rate: 350
     message_template: "Approve {tool_name}?"
