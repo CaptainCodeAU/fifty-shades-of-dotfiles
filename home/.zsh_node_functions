@@ -346,7 +346,7 @@ EOF
     echo "${info}Adding scripts to package.json...${done}"
     if command -v jq &>/dev/null; then
         if [[ "$use_typescript" == true ]]; then
-            jq '.scripts.dev = "npx tsx --watch src/index.ts" |
+            jq '.scripts.dev = "pnpm dlx tsx --watch src/index.ts" |
                 .scripts.build = "tsc" |
                 .scripts.start = "node dist/index.js" |
                 .scripts.test = "vitest run" |

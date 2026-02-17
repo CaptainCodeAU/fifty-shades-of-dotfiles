@@ -391,6 +391,15 @@ pipx() {
     esac
 }
 
+# Hijack npx to redirect users to pnpm dlx equivalents.
+# npx is no longer used on this system — pnpm dlx replaces it entirely.
+npx() {
+    echo "${warn}⚠️  npx is not used on this system. Use pnpm dlx instead.${done}"
+    echo
+    echo "  Instead of:  ${err}npx $@${done}"
+    echo "  Run:         ${ok}pnpm dlx $@${done}"
+}
+
 alias chawan="cha"
 alias web="cha"
 alias www="cha"
@@ -610,44 +619,90 @@ fi
 # This makes zoxide respond to cd directly while keeping the real cd available as __zoxide_cd internally. This is the "official" way to replace cd
 eval "$(zoxide init zsh --cmd cd)"
 
+# --- OLD: Direct python resolution (replaced by uv run hijacks below) ---
 # alias python="$(get_uv_python_path $PYTHON_DEFAULT_VERSION)"
 # alias python3="$(get_uv_python_path $PYTHON_DEFAULT_VERSION)"
+#
+# # Use functions for python commands instead of aliases.
+# # This avoids startup errors by checking for the python path only when the
+# # command is actually run ("just-in-time"), not when the shell starts.
+# # Priority: active venv > local .venv > local venv > uv global
+# python() {
+#     # Priority 1: If VIRTUAL_ENV is set (venv activated), use it
+#     if [[ -n "$VIRTUAL_ENV" && -x "$VIRTUAL_ENV/bin/python" ]]; then
+#         "$VIRTUAL_ENV/bin/python" "$@"
+#         return
+#     fi
+#     # Priority 2: Check for local .venv in current directory
+#     if [[ -x ".venv/bin/python" ]]; then
+#         ".venv/bin/python" "$@"
+#         return
+#     fi
+#     # Priority 3: Check for local venv in current directory
+#     if [[ -x "venv/bin/python" ]]; then
+#         "venv/bin/python" "$@"
+#         return
+#     fi
+#     # Fallback: Use uv-managed global python
+#     local python_path=$(get_uv_python_path "${PYTHON_DEFAULT_VERSION}")
+#     if [[ -n "$python_path" ]]; then "$python_path" "$@"; else return 1; fi
+# }
+# # Commenting this!! Bad idea because it links to the system 'python' and not the uv venv's python
+# # python3() { python "$@"; }
+#
+# py313() { "$(get_uv_python_path 3.13)" "$@"; }; py312() { "$(get_uv_python_path 3.12)" "$@"; }
+# py311() { "$(get_uv_python_path 3.11)" "$@"; }; py310() { "$(get_uv_python_path 3.10)" "$@"; }
+# --- END OLD ---
 
-# Use functions for python commands instead of aliases.
-# This avoids startup errors by checking for the python path only when the
-# command is actually run ("just-in-time"), not when the shell starts.
-# Priority: active venv > local .venv > local venv > uv global
+# Hijack python/python3 to redirect users to uv run equivalents.
+# python/python3 should not be called directly — use uv run instead.
 python() {
-    # Priority 1: If VIRTUAL_ENV is set (venv activated), use it
-    if [[ -n "$VIRTUAL_ENV" && -x "$VIRTUAL_ENV/bin/python" ]]; then
-        "$VIRTUAL_ENV/bin/python" "$@"
-        return
-    fi
-    # Priority 2: Check for local .venv in current directory
-    if [[ -x ".venv/bin/python" ]]; then
-        ".venv/bin/python" "$@"
-        return
-    fi
-    # Priority 3: Check for local venv in current directory
-    if [[ -x "venv/bin/python" ]]; then
-        "venv/bin/python" "$@"
-        return
-    fi
-    # Fallback: Use uv-managed global python
-    local python_path=$(get_uv_python_path "${PYTHON_DEFAULT_VERSION}")
-    if [[ -n "$python_path" ]]; then "$python_path" "$@"; else return 1; fi
+    echo "${warn}⚠️  python is not used directly on this system. Use uv run instead.${done}"
+    echo
+    echo "  Instead of:  ${err}python $@${done}"
+    echo "  Run:         ${ok}uv run python $@${done}"
 }
-# Commenting this!! Bad idea because it links to the system 'python' and not the uv venv's python
-# python3() { python "$@"; }
 
-py313() { "$(get_uv_python_path 3.13)" "$@"; }; py312() { "$(get_uv_python_path 3.12)" "$@"; }
-py311() { "$(get_uv_python_path 3.11)" "$@"; }; py310() { "$(get_uv_python_path 3.10)" "$@"; }
+python3() {
+    echo "${warn}⚠️  python3 is not used directly on this system. Use uv run instead.${done}"
+    echo
+    echo "  Instead of:  ${err}python3 $@${done}"
+    echo "  Run:         ${ok}uv run python3 $@${done}"
+}
 
-# --- Node.js 'npx' Aliases ---
-# Use npx to run commands without installing them globally. This avoids
+py313() {
+    echo "${warn}⚠️  py313 is not used on this system. Use uv run instead.${done}"
+    echo
+    echo "  Instead of:  ${err}py313 $@${done}"
+    echo "  Run:         ${ok}uv run --python 3.13 python $@${done}"
+}
+
+py312() {
+    echo "${warn}⚠️  py312 is not used on this system. Use uv run instead.${done}"
+    echo
+    echo "  Instead of:  ${err}py312 $@${done}"
+    echo "  Run:         ${ok}uv run --python 3.12 python $@${done}"
+}
+
+py311() {
+    echo "${warn}⚠️  py311 is not used on this system. Use uv run instead.${done}"
+    echo
+    echo "  Instead of:  ${err}py311 $@${done}"
+    echo "  Run:         ${ok}uv run --python 3.11 python $@${done}"
+}
+
+py310() {
+    echo "${warn}⚠️  py310 is not used on this system. Use uv run instead.${done}"
+    echo
+    echo "  Instead of:  ${err}py310 $@${done}"
+    echo "  Run:         ${ok}uv run --python 3.10 python $@${done}"
+}
+
+# --- Node.js 'pnpm dlx' Aliases ---
+# Use pnpm dlx to run commands without installing them globally. This avoids
 # having to reinstall them for every Node version with nvm.
-alias serve='npx http-server'
-alias tsc='npx -p typescript tsc'
+alias serve='pnpm dlx http-server'
+alias tsc='pnpm dlx -p typescript tsc'
 
 # --- OS-Specific Functions & Aliases ---
 
