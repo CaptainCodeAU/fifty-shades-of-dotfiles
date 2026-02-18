@@ -455,7 +455,7 @@ alias cb="${_claude_env} claude"                                                
 alias cr="${_claude_env} claude --dangerously-skip-permissions --resume"                    # Resume last session
 alias ci="${_claude_env} claude --dangerously-skip-permissions -p"                          # Non-interactive / piped
 alias cpr="${_claude_env} claude --dangerously-skip-permissions --from-pr"                  # Resume session from PR
-alias cd_="${_claude_env} claude --dangerously-skip-permissions --permission-mode plan --verbose --debug"               # Debug (verbose logging)
+alias cd_="${_claude_env} claude --dangerously-skip-permissions --permission-mode plan --verbose --debug \"api,hooks,mcp,statsig\""               # Debug (verbose logging)
 alias cskip="${_claude_env} SKIP_SESSION_END_HOOK=1 claude --dangerously-skip-permissions --permission-mode plan"  # Skip end hooks
 
 # Intercepting the use of a command like 'sudo claude update' :P
