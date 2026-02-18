@@ -1,24 +1,39 @@
-# Claude Code Hook Runner
+# Claude Code Hooks
 
-Audio notification system for Claude Code. Plays sound effects and speaks status messages when Claude finishes a task, asks a question, or requests permission.
+Hook scripts for Claude Code. Includes an audio notification system (`hook_runner.py`), session lifecycle scripts, code quality gates, and safety guardrails.
 
-## How it works
+All hooks are registered in `.claude/settings.json`. Claude Code pipes JSON to stdin on every hook event — scripts read this JSON to inspect tool names, file paths, commands, and other context.
 
-`hook_runner.py` is the single entrypoint. Claude Code pipes JSON to stdin on hook events. The runner detects the event type and routes to the appropriate handler:
+## Overview
 
-| Hook Event | Handler | Triggers when |
-|---|---|---|
-| `Stop` | `StopHandler` | Claude finishes a task or stops |
-| `PostToolUse` (AskUserQuestion) | `AskUserQuestionHandler` | Claude asks you a question (auto-approved) |
-| `PermissionRequest` | `PermissionRequestHandler` | Claude needs tool approval |
-| `Notification` | `NotificationHandler` | System notification (idle prompt, auth success) |
-| `SubagentStart` | `SubagentStartHandler` | A subagent is launched |
-| `SubagentStop` | `SubagentStopHandler` | A subagent finishes |
-| `TeammateIdle` | `TeammateIdleHandler` | A teammate goes idle |
-| `TaskCompleted` | `TaskCompletedHandler` | A task is completed |
-| `PostToolUseFailure` | `PostToolUseFailureHandler` | A tool use fails (skips user interruptions) |
-| `UserPromptSubmit` | `UserPromptSubmitHandler` | User submits a prompt (disabled by default) |
-| `PreCompact` | `PreCompactHandler` | Context is about to be compacted |
+| Script                 | Hook Event     | Matcher                            | Purpose                                                   |
+| ---------------------- | -------------- | ---------------------------------- | --------------------------------------------------------- |
+| `session-checks.sh`    | `SessionStart` | `startup\|resume`                  | Git status + `.env` encryption check                      |
+| _(inline echo)_        | `SessionStart` | `compact`                          | Re-inject project conventions after compaction            |
+| `validate-bash.sh`     | `PreToolUse`   | `Bash`                             | Block destructive commands (`rm -rf /`, force push, etc.) |
+| `pre-commit-check.sh`  | `PreToolUse`   | `Bash`                             | Lint/build gate before `git commit`                       |
+| `protect-files.sh`     | `PreToolUse`   | `Edit\|Write`                      | Block edits to `.env`, lockfiles, `.git/`                 |
+| `hook_runner.py`       | Multiple       | Various                            | Audio notifications (sound + speech)                      |
+| _(inline prettier)_    | `PostToolUse`  | `Edit\|Write`                      | Auto-format with prettier after file changes              |
+| `export_transcript.sh` | `SessionEnd`   | `prompt_input_exit\|logout\|other` | Export session transcript (skips `/clear`)                |
+
+## Audio notification system
+
+`hook_runner.py` is the entrypoint for audio hooks. Claude Code pipes JSON to stdin on hook events. The runner detects the event type and routes to the appropriate handler:
+
+| Hook Event                      | Handler                     | Triggers when                                   |
+| ------------------------------- | --------------------------- | ----------------------------------------------- |
+| `Stop`                          | `StopHandler`               | Claude finishes a task or stops                 |
+| `PostToolUse` (AskUserQuestion) | `AskUserQuestionHandler`    | Claude asks you a question (auto-approved)      |
+| `PermissionRequest`             | `PermissionRequestHandler`  | Claude needs tool approval                      |
+| `Notification`                  | `NotificationHandler`       | System notification (idle prompt, auth success) |
+| `SubagentStart`                 | `SubagentStartHandler`      | A subagent is launched                          |
+| `SubagentStop`                  | `SubagentStopHandler`       | A subagent finishes                             |
+| `TeammateIdle`                  | `TeammateIdleHandler`       | A teammate goes idle                            |
+| `TaskCompleted`                 | `TaskCompletedHandler`      | A task is completed                             |
+| `PostToolUseFailure`            | `PostToolUseFailureHandler` | A tool use fails (skips user interruptions)     |
+| `UserPromptSubmit`              | `UserPromptSubmitHandler`   | User submits a prompt (disabled by default)     |
+| `PreCompact`                    | `PreCompactHandler`         | Context is about to be compacted                |
 
 Each handler can play a **sound effect** (via `afplay`) and/or **speak a message** (via `say` rendered to file, then `afplay` for playback). Both are independently configurable.
 
@@ -39,9 +54,9 @@ All settings live in `config.yaml`.
 
 ```yaml
 global:
-  debug: false        # Write debug logs to debug_dir
-  debug_dir: "Temp"   # Relative to project_dir
-  project_dir: ""     # Resolved automatically (see below)
+  debug: false # Write debug logs to debug_dir
+  debug_dir: "Temp" # Relative to project_dir
+  project_dir: "" # Resolved automatically (see below)
 ```
 
 `project_dir` is resolved in order: (1) value from `config.yaml`, (2) `$HOOK_PROJECT_DIR` env var, (3) current working directory. Claude Code sets the hook's CWD to the project root, so leaving `project_dir: ""` in the config works out of the box — no env var needed. Sound file paths, debug output, and transcript fallback all resolve relative to this directory.
@@ -66,10 +81,10 @@ Each hook has:
 
 ```yaml
 summary:
-  mode: "sentences"      # "sentences" or "characters"
-  max_sentences: 2       # how many sentences to speak
-  max_characters: 200    # max length in characters mode
-  start: "action"        # "action" finds first action verb, "beginning" starts from top
+  mode: "sentences" # "sentences" or "characters"
+  max_sentences: 2 # how many sentences to speak
+  max_characters: 200 # max length in characters mode
+  start: "action" # "action" finds first action verb, "beginning" starts from top
 ```
 
 The stop handler reads Claude's transcript, extracts a summary of what it did, and speaks it. It also detects if Claude is waiting for input (question or permission) and uses the appropriate voice/sound settings for that case.
@@ -79,48 +94,48 @@ When text ends with `?`, the handler uses input-waiting audio settings but prior
 ### Ask user question hook extras
 
 ```yaml
-message_mode: "extract"                        # "extract" pulls actual question text, "generic" uses default
+message_mode: "extract" # "extract" pulls actual question text, "generic" uses default
 default_message: "Claude has a question for you"
 ```
 
 ### Permission request hook extras
 
 ```yaml
-message_template: "Approve {tool_name}?"    # {tool_name} is replaced with the tool name
+message_template: "Approve {tool_name}?" # {tool_name} is replaced with the tool name
 ```
 
 ### Notification hook extras
 
 ```yaml
-idle_message: "Claude is idle"         # Spoken for idle_prompt notifications
-auth_message: "Auth successful"        # Spoken for auth_success notifications
-default_message: "Notification"        # Fallback for unrecognized notification types
+idle_message: "Claude is idle" # Spoken for idle_prompt notifications
+auth_message: "Auth successful" # Spoken for auth_success notifications
+default_message: "Notification" # Fallback for unrecognized notification types
 ```
 
 ### Subagent hooks extras
 
 ```yaml
 # subagent_start / subagent_stop
-message_template: "Subagent {agent_type} started"   # {agent_type} is replaced
+message_template: "Subagent {agent_type} started" # {agent_type} is replaced
 ```
 
 ### Teammate idle hook extras
 
 ```yaml
-message_template: "{teammate_name} is idle"   # {teammate_name} is replaced
+message_template: "{teammate_name} is idle" # {teammate_name} is replaced
 ```
 
 ### Task completed hook extras
 
 ```yaml
-message_template: "Task completed: {task_subject}"   # {task_subject} is replaced
-max_subject_length: 80                               # Truncates long subjects with "..."
+message_template: "Task completed: {task_subject}" # {task_subject} is replaced
+max_subject_length: 80 # Truncates long subjects with "..."
 ```
 
 ### Post tool use failure hook extras
 
 ```yaml
-message_template: "{tool_name} failed"   # {tool_name} is replaced
+message_template: "{tool_name} failed" # {tool_name} is replaced
 ```
 
 The handler skips events where `is_interrupt` is `true` (user-caused interruptions, not real failures).
@@ -132,7 +147,7 @@ Disabled by default (`enabled: false`). Playing audio on your own input is redun
 ### Pre-compact hook extras
 
 ```yaml
-message: "Compacting context"   # Static message spoken before compaction
+message: "Compacting context" # Static message spoken before compaction
 ```
 
 The permission handler resolves the spoken message in priority order:
@@ -155,22 +170,27 @@ The permission handler resolves the spoken message in priority order:
 
 Subclasses override only the steps they need:
 
-| Handler | Overrides | Why |
-|---|---|---|
-| `AskUserQuestionHandler` | `_pre_message_hook` | Calls `mark_handled()` before message extraction for dedup |
-| `PermissionRequestHandler` | `_pre_message_hook`, `get_message` | Marks permission as handled; reads transcript for text summary before falling back to template |
-| `StopHandler` | `_resolve_audio_settings` | Selects input-waiting vs. task-completion audio settings based on a flag set during `get_message()` |
-| `NotificationHandler` | `_pre_message_hook` | Marks `notification_idle` for Stop dedup when type is `idle_prompt` |
-| `SubagentStopHandler` | `_pre_message_hook` | Marks `subagent_stop` for Stop dedup |
-| `PostToolUseFailureHandler` | `should_handle`, `_pre_message_hook` | Skips user interruptions (`is_interrupt`); marks `tool_failure` for Stop dedup |
-| `UserPromptSubmitHandler` | `get_message` | Returns `None` — silent skeleton (disabled by default) |
+| Handler                     | Overrides                            | Why                                                                                                 |
+| --------------------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| `AskUserQuestionHandler`    | `_pre_message_hook`                  | Calls `mark_handled()` before message extraction for dedup                                          |
+| `PermissionRequestHandler`  | `_pre_message_hook`, `get_message`   | Marks permission as handled; reads transcript for text summary before falling back to template      |
+| `StopHandler`               | `_resolve_audio_settings`            | Selects input-waiting vs. task-completion audio settings based on a flag set during `get_message()` |
+| `NotificationHandler`       | `_pre_message_hook`                  | Marks `notification_idle` for Stop dedup when type is `idle_prompt`                                 |
+| `SubagentStopHandler`       | `_pre_message_hook`                  | Marks `subagent_stop` for Stop dedup                                                                |
+| `PostToolUseFailureHandler` | `should_handle`, `_pre_message_hook` | Skips user interruptions (`is_interrupt`); marks `tool_failure` for Stop dedup                      |
+| `UserPromptSubmitHandler`   | `get_message`                        | Returns `None` — silent skeleton (disabled by default)                                              |
 
 ## File structure
 
 ```
 .claude/hooks/
-  hook_runner.py          # Entrypoint — reads stdin, routes to handler
-  config.yaml             # All configuration
+  session-checks.sh       # SessionStart — git status + .env encryption check
+  pre-commit-check.sh     # PreToolUse Bash — lint/build gate before git commit
+  validate-bash.sh        # PreToolUse Bash — block destructive commands
+  protect-files.sh        # PreToolUse Edit|Write — block edits to protected files
+  export_transcript.sh    # SessionEnd — export session transcript
+  hook_runner.py          # Audio entrypoint — reads stdin, routes to handler
+  config.yaml             # Audio notification configuration
   lib/
     audio.py              # play_sound(), speak(), play_notification()
     config.py             # YAML loading, dataclass definitions
@@ -192,21 +212,68 @@ Subclasses override only the steps they need:
       pre_compact.py      # PreCompactHandler — context compaction
 ```
 
+## Shell hook scripts
+
+### session-checks.sh
+
+Runs on `SessionStart` with matcher `startup|resume` (skips `compact` and `clear`). Performs two checks:
+
+1. **Git status** — counts uncommitted changes and prints a one-line summary.
+2. **`.env` encryption** — checks if `dotenvx` is installed, whether `.env` files are encrypted, and whether `.env.keys` exists for decryption. Warns about unencrypted variants (`.env.local`, `.env.development`, etc.).
+
+### pre-commit-check.sh
+
+Runs on `PreToolUse` for `Bash` tools. Reads the stdin JSON and extracts `tool_input.command`. If the command contains `git commit`, runs a project-appropriate quality gate:
+
+- **Node.js** (`package.json`): `pnpm run lint && pnpm run build`
+- **Python** (`pyproject.toml`): `uv run ruff check . && uv run ruff format --check .`
+
+Non-commit Bash commands pass through with no effect.
+
+### validate-bash.sh
+
+Runs on `PreToolUse` for `Bash` tools. Reads the stdin JSON and blocks destructive commands by exiting with code 2:
+
+- `rm -rf /` or `rm -rf ~` (root/home deletion)
+- `git push --force` to `main` or `master`
+- `git reset --hard` without a ref
+- `git clean -fd` (removes untracked files)
+
+### protect-files.sh
+
+Runs on `PreToolUse` for `Edit|Write` tools. Reads the stdin JSON and blocks edits to protected files by exiting with code 2:
+
+- `.env`, `.env.keys`, `.env.local`, `.env.*` (except `.env.example`)
+- Lockfiles: `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`
+- `.git/` directory
+
+### export_transcript.sh
+
+Runs on `SessionEnd` with matcher `prompt_input_exit|logout|other` (skips `/clear`). Reads `transcript_path` from stdin JSON and exports it via `claude-code-transcripts`. Respects `SKIP_SESSION_END_HOOK=1` to disable.
+
+### PostToolUse prettier (inline)
+
+Runs on `PostToolUse` for `Edit|Write` tools. Reads `tool_input.file_path` from stdin JSON and runs `pnpm dlx prettier --write` on the file. Failures are silently ignored (`|| true`) to avoid blocking Claude.
+
+### SessionStart compact (inline)
+
+Runs on `SessionStart` with matcher `compact`. Echoes a reminder of project conventions (uv for Python, pnpm for Node.js) so Claude retains context after compaction.
+
 ## Deduplication
 
-Several hooks fire *before* the `Stop` hook. Without deduplication, you'd hear the same notification twice — the earlier hook speaks the prompt, then the stop handler detects the same state and tries to speak it again.
+Several hooks fire _before_ the `Stop` hook. Without deduplication, you'd hear the same notification twice — the earlier hook speaks the prompt, then the stop handler detects the same state and tries to speak it again.
 
 The state module (`lib/state.py`) writes a short-lived marker to `/tmp/claude-hooks/` when an event is handled. The stop handler checks for these markers **only when it detects that Claude is waiting for input** (pending tool_use, text ending with `?`, or AskUserQuestion tool). If a marker exists, the input-waiting notification is suppressed.
 
 Dedup markers checked by the stop handler:
 
-| Marker | Set by | Prevents |
-|---|---|---|
-| `ask_user` | `AskUserQuestionHandler` | Stop re-announcing a question |
-| `permission` | `PermissionRequestHandler` | Stop re-announcing a permission prompt |
-| `notification_idle` | `NotificationHandler` (idle_prompt) | Stop re-announcing idle state |
-| `tool_failure` | `PostToolUseFailureHandler` | Stop re-announcing a failure |
-| `subagent_stop` | `SubagentStopHandler` | Stop re-announcing subagent completion |
+| Marker              | Set by                              | Prevents                               |
+| ------------------- | ----------------------------------- | -------------------------------------- |
+| `ask_user`          | `AskUserQuestionHandler`            | Stop re-announcing a question          |
+| `permission`        | `PermissionRequestHandler`          | Stop re-announcing a permission prompt |
+| `notification_idle` | `NotificationHandler` (idle_prompt) | Stop re-announcing idle state          |
+| `tool_failure`      | `PostToolUseFailureHandler`         | Stop re-announcing a failure           |
+| `subagent_stop`     | `SubagentStopHandler`               | Stop re-announcing subagent completion |
 
 Task-completion summaries (the normal "Claude finished work" path) **never consult dedup state**. This is intentional: when a permission or question hook fires and Claude then continues working and eventually stops, the stop is a genuinely new event — the task-completion summary should always play through.
 
@@ -228,6 +295,11 @@ Set `global.debug: true` in `config.yaml` (or `HOOK_DEBUG=1` env var). Debug out
 
 ## Dependencies
 
-- macOS (uses `say` and `afplay`)
-- Python 3.11+
+- macOS (uses `say` and `afplay` for audio)
+- Python 3.11+ (for `hook_runner.py`)
 - PyYAML (declared via PEP 723 inline metadata in `hook_runner.py`)
+- `jq` (used by shell hooks to parse stdin JSON)
+- `pnpm` (used by prettier formatting and Node.js pre-commit checks)
+- `uv` (used by Python pre-commit checks and `hook_runner.py` execution)
+- `dotenvx` (optional — `.env` encryption check in `session-checks.sh`)
+- `claude-code-transcripts` (optional — transcript export in `export_transcript.sh`)

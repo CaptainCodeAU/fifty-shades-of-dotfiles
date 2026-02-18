@@ -2,23 +2,49 @@
   "hooks": {
     "SessionStart": [
       {
+        "matcher": "startup|resume",
         "hooks": [
           {
             "type": "command",
-            "command": ".claude/hooks/session-checks.sh",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/session-checks.sh",
             "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo 'Context compacted. Reminder: use uv for Python, pnpm for Node.js. Read CLAUDE.md for project conventions.'",
+            "timeout": 5
           }
         ]
       }
     ],
     "PreToolUse": [
       {
-        "matcher": "Bash(git commit:*)",
+        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
-            "command": ".claude/hooks/pre-commit-check.sh",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/validate-bash.sh",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pre-commit-check.sh",
             "timeout": 30
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/protect-files.sh",
+            "timeout": 10
           }
         ]
       }
@@ -29,38 +55,18 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv run .claude/hooks/hook_runner.py",
+            "command": "uv run \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/hook_runner.py",
             "timeout": 5
           }
         ]
       },
       {
-        "matcher": "Write",
+        "matcher": "Edit|Write",
         "hooks": [
           {
             "type": "command",
-            "command": "echo 'File written successfully'",
-            "timeout": 5
-          }
-        ]
-      },
-      {
-        "matcher": "Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "pnpm dlx prettier --write $CLAUDE_TOOL_FILE_PATH || true",
+            "command": "jq -r '.tool_input.file_path // .tool_input.filePath // empty' | xargs -I{} pnpm dlx prettier --write {} 2>/dev/null || true",
             "timeout": 10
-          }
-        ]
-      },
-      {
-        "matcher": "MultiEdit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "pnpm run test -- --passWithNoTests --watchAll=false || true",
-            "timeout": 60
           }
         ]
       }
@@ -70,7 +76,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv run .claude/hooks/hook_runner.py",
+            "command": "uv run \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/hook_runner.py",
             "timeout": 5
           }
         ]
@@ -81,7 +87,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv run .claude/hooks/hook_runner.py",
+            "command": "uv run \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/hook_runner.py",
             "timeout": 5
           }
         ]
@@ -89,11 +95,11 @@
     ],
     "Notification": [
       {
-        "matcher": "idle_prompt|auth_success",
+        "matcher": "idle_prompt|auth_success|permission_prompt|elicitation_dialog",
         "hooks": [
           {
             "type": "command",
-            "command": "uv run .claude/hooks/hook_runner.py",
+            "command": "uv run \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/hook_runner.py",
             "timeout": 5
           }
         ]
@@ -104,7 +110,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv run .claude/hooks/hook_runner.py",
+            "command": "uv run \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/hook_runner.py",
             "timeout": 5
           }
         ]
@@ -115,7 +121,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv run .claude/hooks/hook_runner.py",
+            "command": "uv run \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/hook_runner.py",
             "timeout": 5
           }
         ]
@@ -126,7 +132,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv run .claude/hooks/hook_runner.py",
+            "command": "uv run \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/hook_runner.py",
             "timeout": 5
           }
         ]
@@ -137,7 +143,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv run .claude/hooks/hook_runner.py",
+            "command": "uv run \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/hook_runner.py",
             "timeout": 5
           }
         ]
@@ -148,7 +154,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv run .claude/hooks/hook_runner.py",
+            "command": "uv run \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/hook_runner.py",
             "timeout": 5
           }
         ]
@@ -159,7 +165,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv run .claude/hooks/hook_runner.py",
+            "command": "uv run \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/hook_runner.py",
             "timeout": 5
           }
         ]
@@ -170,7 +176,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "uv run .claude/hooks/hook_runner.py",
+            "command": "uv run \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/hook_runner.py",
             "timeout": 5
           }
         ]
@@ -178,10 +184,11 @@
     ],
     "SessionEnd": [
       {
+        "matcher": "prompt_input_exit|logout|other",
         "hooks": [
           {
             "type": "command",
-            "command": ".claude/hooks/export_transcript.sh"
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/export_transcript.sh"
           }
         ]
       }
