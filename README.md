@@ -12,17 +12,17 @@ It is built around a modern toolchain that prioritizes speed, consistency, and d
 
 ## Key Features
 
-* **💻 Cross-Platform by Design**: Works seamlessly on macOS, Linux, and WSL with OS-specific adaptations handled automatically.
-* **🚀 Automatic Onboarding**: On a fresh system (macOS, Linux, or WSL), the script detects missing tools and interactively prompts to install them. Run `run_onboarding` anytime to re-check.
-* **🤖 Automated Project Scaffolding**: Create complete, best-practice Python (`python_new_project`) or Node.js (`node_new_project`) projects with a single command.
-* **✨ Seamless Environment Management**:
-  * **`direnv`** for automatic activation/deactivation of Python virtual environments.
-  * **`nvm`** with automatic Node.js version switching via `.nvmrc` files.
-* **🐳 Integrated Docker Helpers**: Functions to quickly start, stop, and manage common development services like PostgreSQL, Qdrant, and Jupyter Lab.
-* **🖥️ Tmux Integration**: Powerful tmux session management with git-aware workflows and automatic window naming.
-* **📝 Editor Integration**: Automatic environment syncing between Cursor/VSCode terminals and tmux sessions.
-* **🎬 Media Tools**: Built-in `yt()` wrapper for yt-dlp with auto-generated configuration and quality presets.
-* **🔒 Private Configuration**: A built-in pattern for managing your secret keys and machine-specific settings in a `.zshrc.private` file, which is kept out of version control.
+- **💻 Cross-Platform by Design**: Works seamlessly on macOS, Linux, and WSL with OS-specific adaptations handled automatically.
+- **🚀 Automatic Onboarding**: On a fresh system (macOS, Linux, or WSL), the script detects missing tools and interactively prompts to install them. Run `run_onboarding` anytime to re-check.
+- **🤖 Automated Project Scaffolding**: Create complete, best-practice Python (`python_new_project`) or Node.js (`node_new_project`) projects with a single command.
+- **✨ Seamless Environment Management**:
+  - **`direnv`** for automatic activation/deactivation of Python virtual environments.
+  - **`nvm`** with automatic Node.js version switching via `.nvmrc` files.
+- **🐳 Integrated Docker Helpers**: Functions to quickly start, stop, and manage common development services like PostgreSQL, Qdrant, and Jupyter Lab.
+- **🖥️ Tmux Integration**: Powerful tmux session management with git-aware workflows and automatic window naming.
+- **📝 Editor Integration**: Automatic environment syncing between Cursor/VSCode terminals and tmux sessions.
+- **🎬 Media Tools**: Built-in `yt()` wrapper for yt-dlp with auto-generated configuration and quality presets.
+- **🔒 Private Configuration**: A built-in pattern for managing your secret keys and machine-specific settings in a `.zshrc.private` file, which is kept out of version control.
 
 ---
 
@@ -31,11 +31,11 @@ It is built around a modern toolchain that prioritizes speed, consistency, and d
 1. **Homebrew**: Ensure [Homebrew](https://brew.sh/) is installed on your macOS system.
 2. **Core Tools**: Install the key technologies using Homebrew.
 
-    ```bash
-    brew install uv direnv jq
-    ```
+   ```bash
+   brew install uv direnv jq
+   ```
 
-    > **Note:** `jq` is used by Node.js scaffolding and onboarding checks.
+   > **Note:** `jq` is used by Node.js scaffolding and onboarding checks.
 
 ---
 
@@ -44,59 +44,60 @@ It is built around a modern toolchain that prioritizes speed, consistency, and d
 Setting up is designed to be as simple as possible.
 
 1. **Prerequisites**:
-    * Ensure `git` and `zsh` are installed.
-    * Install **[Oh My Zsh](https://ohmy.zsh.sh/#install)**.
+   - Ensure `git` and `zsh` are installed.
+   - Install **[Oh My Zsh](https://ohmy.zsh.sh/#install)**.
 
 2. **Clone the Repository**:
 
-    ```bash
-    git clone https://github.com/CaptainCodeAU/fifty-shades-of-dotfiles.git ~/fifty-shades-of-dotfiles
-    ```
+   ```bash
+   git clone https://github.com/CaptainCodeAU/fifty-shades-of-dotfiles.git ~/fifty-shades-of-dotfiles
+   ```
 
 3. **Symlink Configuration (optional)**: Link the configuration files to your home directory using the one-to-one mapping structure.
 
-    ```bash
-    # WARNING: This will overwrite existing files. Backup yours first!
-    # Link main zsh configuration
-    ln -sf ~/fifty-shades-of-dotfiles/home/.zshrc ~/.zshrc
+   ```bash
+   # WARNING: This will overwrite existing files. Backup yours first!
+   # Link main zsh configuration
+   ln -sf ~/fifty-shades-of-dotfiles/home/.zshrc ~/.zshrc
 
-    # Link zsh function files
-    ln -sf ~/fifty-shades-of-dotfiles/home/.zsh_python_functions ~/.zsh_python_functions
-    ln -sf ~/fifty-shades-of-dotfiles/home/.zsh_node_functions ~/.zsh_node_functions
-    ln -sf ~/fifty-shades-of-dotfiles/home/.zsh_docker_functions ~/.zsh_docker_functions
-    ln -sf ~/fifty-shades-of-dotfiles/home/.zsh_cursor_functions ~/.zsh_cursor_functions
-    ln -sf ~/fifty-shades-of-dotfiles/home/.zsh_tmux ~/.zsh_tmux
-    ln -sf ~/fifty-shades-of-dotfiles/home/.zsh_onboarding ~/.zsh_onboarding
-    ln -sf ~/fifty-shades-of-dotfiles/home/.zsh_welcome ~/.zsh_welcome
+   # Link zsh function files
+   ln -sf ~/fifty-shades-of-dotfiles/home/.zsh_python_functions ~/.zsh_python_functions
+   ln -sf ~/fifty-shades-of-dotfiles/home/.zsh_node_functions ~/.zsh_node_functions
+   ln -sf ~/fifty-shades-of-dotfiles/home/.zsh_docker_functions ~/.zsh_docker_functions
+   ln -sf ~/fifty-shades-of-dotfiles/home/.zsh_cursor_functions ~/.zsh_cursor_functions
+   ln -sf ~/fifty-shades-of-dotfiles/home/.zsh_tmux ~/.zsh_tmux
+   ln -sf ~/fifty-shades-of-dotfiles/home/.zsh_onboarding ~/.zsh_onboarding
+   ln -sf ~/fifty-shades-of-dotfiles/home/.zsh_welcome ~/.zsh_welcome
 
-    # Link other configuration files
-    ln -sf ~/fifty-shades-of-dotfiles/home/.tmux.conf ~/.tmux.conf
-    ln -sf ~/fifty-shades-of-dotfiles/home/.p10k.zsh ~/.p10k.zsh
+   # Link other configuration files
+   ln -sf ~/fifty-shades-of-dotfiles/home/.tmux.conf ~/.tmux.conf
+   ln -sf ~/fifty-shades-of-dotfiles/home/.p10k.zsh ~/.p10k.zsh
 
-    # Link .config directory files
-    mkdir -p ~/.config/direnv ~/.config/yt-dlp
-    ln -sf ~/fifty-shades-of-dotfiles/home/.config/direnv/direnvrc ~/.config/direnv/direnvrc
-    ln -sf ~/fifty-shades-of-dotfiles/home/.config/direnv/direnv.toml ~/.config/direnv/direnv.toml
-    ln -sf ~/fifty-shades-of-dotfiles/home/.config/yt-dlp/config ~/.config/yt-dlp/config
+   # Link .config directory files
+   mkdir -p ~/.config/direnv ~/.config/yt-dlp
+   ln -sf ~/fifty-shades-of-dotfiles/home/.config/direnv/direnvrc ~/.config/direnv/direnvrc
+   ln -sf ~/fifty-shades-of-dotfiles/home/.config/direnv/direnv.toml ~/.config/direnv/direnv.toml
+   ln -sf ~/fifty-shades-of-dotfiles/home/.config/yt-dlp/config ~/.config/yt-dlp/config
 
-    # Link platform-specific files (macOS only)
-    # mkdir -p ~/Library/Application\ Support/Cursor/User
-    # mkdir -p ~/Library/Application\ Support/Code/User
-    # ln -sf ~/fifty-shades-of-dotfiles/platforms/macos/Library/Application\ Support/Cursor/User/settings.json ~/Library/Application\ Support/Cursor/User/settings.json
-    # ln -sf ~/fifty-shades-of-dotfiles/platforms/macos/Library/Application\ Support/Code/User/settings.json ~/Library/Application\ Support/Code/User/settings.json
-    ```
+   # Link platform-specific files (macOS only)
+   # mkdir -p ~/Library/Application\ Support/Cursor/User
+   # mkdir -p ~/Library/Application\ Support/Code/User
+   # ln -sf ~/fifty-shades-of-dotfiles/platforms/macos/Library/Application\ Support/Cursor/User/settings.json ~/Library/Application\ Support/Cursor/User/settings.json
+   # ln -sf ~/fifty-shades-of-dotfiles/platforms/macos/Library/Application\ Support/Code/User/settings.json ~/Library/Application\ Support/Code/User/settings.json
+   ```
 
-    > **Note**: The repository uses a one-to-one mapping structure where `home/` mirrors `~/` and `platforms/` contains platform-specific files. See [`docs/STRUCTURE.md`](docs/STRUCTURE.md) for details.
+   > **Note**: The repository uses a one-to-one mapping structure where `home/` mirrors `~/` and `platforms/` contains platform-specific files. See [`docs/STRUCTURE.md`](docs/STRUCTURE.md) for details.
+
 4. **Enable `direnv`**: The provided `.zshrc` already contains the hook for `direnv`. If you are merging with an existing file, ensure this line is present:
 
-    ```zsh
-    # In your .zshrc
-    if command -v direnv &> /dev/null; then eval "$(direnv hook zsh)"; fi
-    ```
+   ```zsh
+   # In your .zshrc
+   if command -v direnv &> /dev/null; then eval "$(direnv hook zsh)"; fi
+   ```
 
 5. **Restart Your Shell**: Open a new terminal window or run `source ~/.zshrc`.
-    * **On any new system**, the onboarding script will run automatically and guide you through installing any missing dependencies.
-    * A welcome message will confirm the setup is active.
+   - **On any new system**, the onboarding script will run automatically and guide you through installing any missing dependencies.
+   - A welcome message will confirm the setup is active.
 
 ---
 
@@ -122,23 +123,23 @@ run_onboarding
 
 ### Supported Package Managers
 
-| OS | Package Manager |
-| ---- | ----------------- |
-| macOS | Homebrew (auto-installs if missing) |
-| Ubuntu/Debian | apt |
-| Fedora | dnf |
-| Arch | pacman |
-| openSUSE | zypper |
+| OS            | Package Manager                     |
+| ------------- | ----------------------------------- |
+| macOS         | Homebrew (auto-installs if missing) |
+| Ubuntu/Debian | apt                                 |
+| Fedora        | dnf                                 |
+| Arch          | pacman                              |
+| openSUSE      | zypper                              |
 
 ### Tools Checked
 
-| Category | Tools |
-| ---------- | ------- |
-| **Essential** | git, curl, unzip |
-| **User Experience** | eza, fzf, jq, direnv, zoxide |
-| **CLI Tools** | ripgrep, tree, neofetch, ffmpeg, yt-dlp, aria2 |
-| **Development Managers** | nvm, uv |
-| **Special** | Docker (guidance only — requires manual installation) |
+| Category                 | Tools                                                 |
+| ------------------------ | ----------------------------------------------------- |
+| **Essential**            | git, curl, unzip                                      |
+| **User Experience**      | eza, fzf, jq, direnv, zoxide                          |
+| **CLI Tools**            | ripgrep, tree, neofetch, ffmpeg, yt-dlp, aria2        |
+| **Development Managers** | nvm, uv                                               |
+| **Special**              | Docker (guidance only — requires manual installation) |
 
 ### Skipping Onboarding
 
@@ -351,16 +352,16 @@ graph TD
 
 The setup provides similar automation for Node.js projects, standardizing on `nvm`, `pnpm`, and Corepack. Projects scaffold with **TypeScript by default** (pass `--no-ts` for JavaScript), use **Vitest** for testing, and integrate with **direnv** for automatic environment activation.
 
-* **Create a new TypeScript project**: `mkdir my-node-app && cd my-node-app && node_new_project`
-  * Scaffolds `src/index.ts`, `tests/index.test.ts`, `tsconfig.json`, `.nvmrc`, `.gitignore`, and a rich `.envrc` (if direnv is available). Installs TypeScript, Vitest, ESLint, Prettier, and `@types/node`.
-* **Create a JavaScript project**: `node_new_project --no-ts`
-  * Same scaffold without TypeScript — creates `src/index.js` and `tests/index.test.js` instead.
-* **Set up an existing project**: `cd existing-project && node_setup`
-  * Switches to the Node version from `.nvmrc`, installs dependencies with `pnpm install`, creates `.envrc` if missing, and displays available scripts.
-* **Quick project dashboard**: `node_info`
-  * Shows Node/npm/pnpm/Corepack versions, `.nvmrc` status, package.json details, available scripts, and global link status.
-* **Clean up artifacts**: `node_clean`
-  * Removes `node_modules`, `dist`, `build`, `.next`, `.turbo`, `.tsbuildinfo`, coverage, caches, and lockfiles.
+- **Create a new TypeScript project**: `mkdir my-node-app && cd my-node-app && node_new_project`
+  - Scaffolds `src/index.ts`, `tests/index.test.ts`, `tsconfig.json`, `.nvmrc`, `.gitignore`, and a rich `.envrc` (if direnv is available). Installs TypeScript, Vitest, ESLint, Prettier, and `@types/node`.
+- **Create a JavaScript project**: `node_new_project --no-ts`
+  - Same scaffold without TypeScript — creates `src/index.js` and `tests/index.test.js` instead.
+- **Set up an existing project**: `cd existing-project && node_setup`
+  - Switches to the Node version from `.nvmrc`, installs dependencies with `pnpm install`, creates `.envrc` if missing, and displays available scripts.
+- **Quick project dashboard**: `node_info`
+  - Shows Node/npm/pnpm/Corepack versions, `.nvmrc` status, package.json details, available scripts, and global link status.
+- **Clean up artifacts**: `node_clean`
+  - Removes `node_modules`, `dist`, `build`, `.next`, `.turbo`, `.tsbuildinfo`, coverage, caches, and lockfiles.
 
 #### Global Node.js Package Management
 
@@ -370,25 +371,25 @@ For CLI tools you're developing, use `node_link` / `node_unlink` / `node_check_g
 
 Quickly manage common development services and stacks.
 
-* **Start a PostgreSQL container for development**: `pg_dev_start [db] [pw] [port]`
-* **Start a Qdrant vector database**: `qdrant_start [port]`
-* **Start a full AI/ML stack (Qdrant + Jupyter)**: `dev_stack_start ai`
-* **Start a web development stack**: `dev_stack_start web`
-* **Start a full stack (web + AI/ML)**: `dev_stack_start full`
-* **Check the status of all services**: `dev_stack_status`
-* **Clean up all unused Docker resources**: `dcleanup`
-* **View Docker overview**: `docker_overview`
-* **Get help**: `docker_help`
+- **Start a PostgreSQL container for development**: `pg_dev_start [db] [pw] [port]`
+- **Start a Qdrant vector database**: `qdrant_start [port]`
+- **Start a full AI/ML stack (Qdrant + Jupyter)**: `dev_stack_start ai`
+- **Start a web development stack**: `dev_stack_start web`
+- **Start a full stack (web + AI/ML)**: `dev_stack_start full`
+- **Check the status of all services**: `dev_stack_status`
+- **Clean up all unused Docker resources**: `dcleanup`
+- **View Docker overview**: `docker_overview`
+- **Get help**: `docker_help`
 
 ### Tmux Workflows
 
 The configuration includes powerful tmux session management:
 
-* **Quick session access**: `ta mysession` (attach or create)
-* **Coding sessions**: `tc` (coding session), `tcc` (claudecode session)
-* **Development sessions**: `tdev myproject` (multi-window setup)
-* **Git-aware sessions**: `tgit myproject` (split panes for git and editing)
-* **Git integration**: All git branch operations automatically update tmux window names
+- **Quick session access**: `ta mysession` (attach or create)
+- **Coding sessions**: `tc` (coding session), `tcc` (claudecode session)
+- **Development sessions**: `tdev myproject` (multi-window setup)
+- **Git-aware sessions**: `tgit myproject` (split panes for git and editing)
+- **Git integration**: All git branch operations automatically update tmux window names
 
 ### Media Downloads
 
@@ -400,6 +401,33 @@ yt --video-highest https://youtube.com/watch?v=... # Maximum quality
 yt --audio-only https://youtube.com/watch?v=...    # Extract audio
 yt --bundle https://youtube.com/watch?v=...        # Video + all metadata
 yt --help                                          # Show all options
+```
+
+---
+
+## Claude Code LSP Servers
+
+Claude Code supports LSP (Language Server Protocol) plugins for enhanced code intelligence. These servers need to be installed globally on the system so Claude Code can find them on `$PATH`.
+
+### Installation
+
+```bash
+# Pyright (Python) — installed via uv tool
+uv tool install pyright
+
+# TypeScript Language Server — installed via pnpm global
+pnpm add -g typescript-language-server typescript
+
+# Swift (sourcekit-lsp) — ships with Xcode, no install needed
+# Verify with: /usr/bin/sourcekit-lsp --help
+```
+
+### Verification
+
+```bash
+pyright --version                    # Should show version (e.g., 1.1.408)
+typescript-language-server --version # Should show version (e.g., 5.1.3)
+which sourcekit-lsp                  # Should show /usr/bin/sourcekit-lsp
 ```
 
 ---
@@ -451,20 +479,20 @@ The shell displays an environment overview on startup. You can control this beha
 
 #### `ZSH_WELCOME` — Environment Overview
 
-| Value | Description |
-| ------- | ------------- |
-| `full` | Complete multi-line overview (default for new terminals) |
-| `minimal` | Single-line compact status (default for SSH/tmux) |
-| `none` | No overview displayed |
-| _(empty)_ | Auto-detect based on context (recommended) |
+| Value     | Description                                              |
+| --------- | -------------------------------------------------------- |
+| `full`    | Complete multi-line overview (default for new terminals) |
+| `minimal` | Single-line compact status (default for SSH/tmux)        |
+| `none`    | No overview displayed                                    |
+| _(empty)_ | Auto-detect based on context (recommended)               |
 
 #### `ZSH_WELCOME_QUICKREF` — Quick Reference
 
-| Value | Description |
-| ------- | ------------- |
-| `full` | Multi-line categorized reference |
-| `minimal` | Compact 2-line hints |
-| `none` | No quick reference displayed |
+| Value     | Description                      |
+| --------- | -------------------------------- |
+| `full`    | Multi-line categorized reference |
+| `minimal` | Compact 2-line hints             |
+| `none`    | No quick reference displayed     |
 
 ### Setting Verbosity
 
@@ -487,11 +515,11 @@ export ZSH_WELCOME="none"
 
 When `ZSH_WELCOME` is empty (default), the welcome message automatically adjusts:
 
-| Context | Auto Default | Rationale |
-| --------- | -------------- | ----------- |
-| Regular terminal | `full` | First shell of the day, show full info |
-| SSH session | `minimal` | You're remoting in, you know your setup |
-| Tmux pane | `minimal` | You've seen the banner in the first pane |
+| Context          | Auto Default | Rationale                                |
+| ---------------- | ------------ | ---------------------------------------- |
+| Regular terminal | `full`       | First shell of the day, show full info   |
+| SSH session      | `minimal`    | You're remoting in, you know your setup  |
+| Tmux pane        | `minimal`    | You've seen the banner in the first pane |
 
 To override auto-detection, set `ZSH_WELCOME` explicitly.
 
@@ -568,16 +596,16 @@ fifty-shades-of-dotfiles/
 
 ### Key Files
 
-* **`home/.zshrc`**: The main controller. It detects the OS, loads plugins, and sources all other function files. Also contains inline functions like `yt()` (yt-dlp wrapper) and various aliases.
-* **`home/.zsh_python_functions`**: Contains all Python-related helper functions (`python_new_project`, `uv_tool_*`, etc.).
-* **`home/.zsh_node_functions`**: Contains all Node.js helper functions (`node_new_project`, etc.).
-* **`home/.zsh_docker_functions`**: Contains all Docker helper functions and aliases (`pg_dev_start`, `dcleanup`, etc.).
-* **`home/.zsh_cursor_functions`**: Cursor/VSCode editor integration for automatic environment syncing with tmux sessions.
-* **`home/.zsh_tmux`**: Comprehensive tmux session management, git integration, and workflow functions.
-* **`home/.zsh_onboarding`**: Cross-platform onboarding script that detects missing tools and offers to install them on any OS.
-* **`home/.zsh_welcome`**: Unified cross-platform welcome script with verbosity controls, auto-detection for SSH/tmux, and environment overview.
-* **`home/.config/direnv/`**: direnv configuration files for automatic environment management.
-* **`home/.config/yt-dlp/config`**: yt-dlp configuration template (auto-generated by `yt()` function, but included as reference).
+- **`home/.zshrc`**: The main controller. It detects the OS, loads plugins, and sources all other function files. Also contains inline functions like `yt()` (yt-dlp wrapper) and various aliases.
+- **`home/.zsh_python_functions`**: Contains all Python-related helper functions (`python_new_project`, `uv_tool_*`, etc.).
+- **`home/.zsh_node_functions`**: Contains all Node.js helper functions (`node_new_project`, etc.).
+- **`home/.zsh_docker_functions`**: Contains all Docker helper functions and aliases (`pg_dev_start`, `dcleanup`, etc.).
+- **`home/.zsh_cursor_functions`**: Cursor/VSCode editor integration for automatic environment syncing with tmux sessions.
+- **`home/.zsh_tmux`**: Comprehensive tmux session management, git integration, and workflow functions.
+- **`home/.zsh_onboarding`**: Cross-platform onboarding script that detects missing tools and offers to install them on any OS.
+- **`home/.zsh_welcome`**: Unified cross-platform welcome script with verbosity controls, auto-detection for SSH/tmux, and environment overview.
+- **`home/.config/direnv/`**: direnv configuration files for automatic environment management.
+- **`home/.config/yt-dlp/config`**: yt-dlp configuration template (auto-generated by `yt()` function, but included as reference).
 
 For detailed structure documentation, see [`docs/STRUCTURE.md`](docs/STRUCTURE.md).
 
@@ -589,9 +617,9 @@ The `.zsh_cursor_functions` file provides seamless integration between Cursor/VS
 
 ### How It Works
 
-* **Automatic Environment Capture**: When you're in a Cursor/VSCode terminal, the environment is automatically saved to `~/.cache/cursor_env.zsh`.
-* **Tmux Integration**: The `tmux` command is wrapped to automatically load the saved environment when attaching to sessions.
-* **New Pane Support**: New tmux panes automatically inherit the Cursor/VSCode environment variables.
+- **Automatic Environment Capture**: When you're in a Cursor/VSCode terminal, the environment is automatically saved to `~/.cache/cursor_env.zsh`.
+- **Tmux Integration**: The `tmux` command is wrapped to automatically load the saved environment when attaching to sessions.
+- **New Pane Support**: New tmux panes automatically inherit the Cursor/VSCode environment variables.
 
 This ensures that tools and scripts that rely on editor-specific environment variables work correctly inside tmux sessions.
 
@@ -603,34 +631,34 @@ The `.zsh_tmux` file provides powerful tmux session management and git workflow 
 
 ### Tmux Session Management
 
-| Function | Arguments | Description |
-| :--- | :--- | :--- |
-| `ta <session>` | session name | Attach to tmux session or create if doesn't exist |
-| `tc` | none | Attach to 'coding' session (create if needed) |
-| `tcc` | none | Attach to 'claudecode' session (create if needed) |
-| `tdev <project>` | project name | Create multi-window development session with code, git, terminal, and logs windows |
-| `tgit <project>` | project name | Create git-aware coding session with split panes for git status and editing |
-| `tbranch <project>` | project name | Create tmux session for branch management workflows |
-| `tpull <project>` | project name | Create session for pull/merge workflows |
-| `tclean` | none | Clean up old coding-related tmux sessions |
-| `tlast` | none | Quick attach to most recent session |
-| `tls` | none | List sessions with detailed information |
+| Function            | Arguments    | Description                                                                        |
+| :------------------ | :----------- | :--------------------------------------------------------------------------------- |
+| `ta <session>`      | session name | Attach to tmux session or create if doesn't exist                                  |
+| `tc`                | none         | Attach to 'coding' session (create if needed)                                      |
+| `tcc`               | none         | Attach to 'claudecode' session (create if needed)                                  |
+| `tdev <project>`    | project name | Create multi-window development session with code, git, terminal, and logs windows |
+| `tgit <project>`    | project name | Create git-aware coding session with split panes for git status and editing        |
+| `tbranch <project>` | project name | Create tmux session for branch management workflows                                |
+| `tpull <project>`   | project name | Create session for pull/merge workflows                                            |
+| `tclean`            | none         | Clean up old coding-related tmux sessions                                          |
+| `tlast`             | none         | Quick attach to most recent session                                                |
+| `tls`               | none         | List sessions with detailed information                                            |
 
 ### Git Integration Functions
 
 These functions integrate git workflows with tmux, automatically updating window names with branch information:
 
-| Function | Arguments | Description |
-| :--- | :--- | :--- |
-| `gstatus` | none | Full git repository dashboard with branch info, changes, commits, and stashes |
-| `gs` | none | Quick git status showing repo, branch, change count, and last commit |
-| `gtree` | none | Visual git tree (uses git-tree or tig if available) |
-| `gwip2` | none | Show what you're working on (recently modified files) |
-| `gt <branch>` | branch name | Tmux-aware git switch (updates window name) |
-| `gtc <branch>` | branch name | Tmux-aware branch creation (updates window name) |
-| `gswitch <branch>` | branch name | Switch branch and update tmux window name |
-| `gfeature <name>` | feature name | Create feature branch following git flow and update tmux window |
-| `gpr_quick <message>` | commit message | Quick PR workflow: add, commit, push |
+| Function              | Arguments      | Description                                                                   |
+| :-------------------- | :------------- | :---------------------------------------------------------------------------- |
+| `gstatus`             | none           | Full git repository dashboard with branch info, changes, commits, and stashes |
+| `gs`                  | none           | Quick git status showing repo, branch, change count, and last commit          |
+| `gtree`               | none           | Visual git tree (uses git-tree or tig if available)                           |
+| `gwip2`               | none           | Show what you're working on (recently modified files)                         |
+| `gt <branch>`         | branch name    | Tmux-aware git switch (updates window name)                                   |
+| `gtc <branch>`        | branch name    | Tmux-aware branch creation (updates window name)                              |
+| `gswitch <branch>`    | branch name    | Switch branch and update tmux window name                                     |
+| `gfeature <name>`     | feature name   | Create feature branch following git flow and update tmux window               |
+| `gpr_quick <message>` | commit message | Quick PR workflow: add, commit, push                                          |
 
 ### Usage Examples
 
@@ -692,23 +720,23 @@ The function auto-generates a comprehensive `~/.config/yt-dlp/config` file on fi
 
 ### Other Useful Aliases
 
-* **File Listing**: `l` and `ll` use `eza` for enhanced directory listings with git status
-* **Navigation**: `..`, `...`, `....`, `.....` for quick directory navigation
-* **Node.js**: `serve` (pnpm dlx http-server), `tsc` (pnpm dlx typescript)
-* **Docker**: `lzd` (lazydocker), `lzg`/`lg` (lazygit)
-* **Claude CLI**: `c` alias with environment variables for enhanced functionality
-* **Zoxide**: `cd` command is replaced with `zoxide` for intelligent directory jumping
+- **File Listing**: `l` and `ll` use `eza` for enhanced directory listings with git status
+- **Navigation**: `..`, `...`, `....`, `.....` for quick directory navigation
+- **Node.js**: `serve` (pnpm dlx http-server), `tsc` (pnpm dlx typescript)
+- **Docker**: `lzd` (lazydocker), `lzg`/`lg` (lazygit)
+- **Claude CLI**: `c` alias with environment variables for enhanced functionality
+- **Zoxide**: `cd` command is replaced with `zoxide` for intelligent directory jumping
 
 ### Special Functions
 
-* **`sudo()` wrapper**: Prevents accidental `sudo claude` commands and redirects appropriately
-* **`pip()` wrapper**: Intercepts `pip install` → `uv add` and `pip uninstall` → `uv remove`; passes through editable installs and read-only subcommands via `uv pip`
-* **`pipx()` wrapper**: Intercepts `pipx` commands and shows the equivalent `uv tool` commands
-* **`npx()` wrapper**: Intercepts `npx` commands and shows the equivalent `pnpm dlx` commands
-* **`python()`/`python3()` wrapper**: Intercepts direct Python calls and redirects to `uv run`
-* **`py31X()` wrappers**: Intercepts version-specific Python calls (`py313`, `py312`, `py311`, `py310`) and redirects to `uv run --python`
-* **`ports()` function**: OS-specific port listing (macOS: `lsof`, Linux/WSL: `ss`/`netstat`)
-* **`y()` function**: Yazi file manager integration for visual directory navigation
+- **`sudo()` wrapper**: Prevents accidental `sudo claude` commands and redirects appropriately
+- **`pip()` wrapper**: Intercepts `pip install` → `uv add` and `pip uninstall` → `uv remove`; passes through editable installs and read-only subcommands via `uv pip`
+- **`pipx()` wrapper**: Intercepts `pipx` commands and shows the equivalent `uv tool` commands
+- **`npx()` wrapper**: Intercepts `npx` commands and shows the equivalent `pnpm dlx` commands
+- **`python()`/`python3()` wrapper**: Intercepts direct Python calls and redirects to `uv run`
+- **`py31X()` wrappers**: Intercepts version-specific Python calls (`py313`, `py312`, `py311`, `py310`) and redirects to `uv run --python`
+- **`ports()` function**: OS-specific port listing (macOS: `lsof`, Linux/WSL: `ss`/`netstat`)
+- **`y()` function**: Yazi file manager integration for visual directory navigation
 
 ---
 
@@ -716,106 +744,106 @@ The function auto-generates a comprehensive `~/.config/yt-dlp/config` file on fi
 
 ### Python Functions
 
-| Function | Arguments | Description |
-| :--- | :--- | :--- |
-| `python_new_project` | `<py_version>` | Scaffolds a complete new Python project in the current directory. |
-| `python_setup` | `<py_version> [extra1...]` | Resets/creates the `.venv` and installs dependencies for an existing project. |
-| `python_delete` | `(none)` | Deletes the `.venv`, `.envrc`, caches, and build artifacts. |
-| `uv_tool_install_current_project` | `[extra1...] \| --no-extras` | Installs the current project as a global CLI tool via `uv tool` (editable mode). |
-| `uv_tool_reinstall_current_project` | `[extra1...] \| --no-extras` | Reinstalls the global CLI tool (needed when entry points change). |
-| `uv_tool_uninstall_current_project` | `(none)` | Uninstalls the `uv tool`-managed CLI tool for the current project. |
-| `uv_tool_check_current_project` | `(none)` | Checks if the current project is installed via `uv tool`. |
+| Function                            | Arguments                    | Description                                                                      |
+| :---------------------------------- | :--------------------------- | :------------------------------------------------------------------------------- |
+| `python_new_project`                | `<py_version>`               | Scaffolds a complete new Python project in the current directory.                |
+| `python_setup`                      | `<py_version> [extra1...]`   | Resets/creates the `.venv` and installs dependencies for an existing project.    |
+| `python_delete`                     | `(none)`                     | Deletes the `.venv`, `.envrc`, caches, and build artifacts.                      |
+| `uv_tool_install_current_project`   | `[extra1...] \| --no-extras` | Installs the current project as a global CLI tool via `uv tool` (editable mode). |
+| `uv_tool_reinstall_current_project` | `[extra1...] \| --no-extras` | Reinstalls the global CLI tool (needed when entry points change).                |
+| `uv_tool_uninstall_current_project` | `(none)`                     | Uninstalls the `uv tool`-managed CLI tool for the current project.               |
+| `uv_tool_check_current_project`     | `(none)`                     | Checks if the current project is installed via `uv tool`.                        |
 
 ### Node.js Functions
 
-| Function | Arguments | Description |
-| :--- | :--- | :--- |
-| `node_new_project` | `[--no-ts\|--js]` | Scaffolds a new Node.js project (TypeScript by default, `--no-ts` for JavaScript). |
-| `node_setup` | `(none)` | Sets up an existing project: switches Node version, installs deps, creates `.envrc`. |
-| `node_clean` | `(none)` | Deletes `node_modules`, build artifacts, caches, and lockfiles. |
-| `node_info` | `(none)` | Displays project dashboard: versions, `.nvmrc` status, scripts, global link status. |
-| `node_link` | `(none)` | Links current project globally via `pnpm link --global`. |
-| `node_unlink` | `(none)` | Unlinks current project from global scope. |
-| `node_check_global` | `(none)` | Checks if current project is linked globally (returns 0/1). |
-| `create_node_envrc` | `(none)` | Creates a rich `.envrc` with nvm auto-switch and project info box. |
+| Function            | Arguments         | Description                                                                          |
+| :------------------ | :---------------- | :----------------------------------------------------------------------------------- |
+| `node_new_project`  | `[--no-ts\|--js]` | Scaffolds a new Node.js project (TypeScript by default, `--no-ts` for JavaScript).   |
+| `node_setup`        | `(none)`          | Sets up an existing project: switches Node version, installs deps, creates `.envrc`. |
+| `node_clean`        | `(none)`          | Deletes `node_modules`, build artifacts, caches, and lockfiles.                      |
+| `node_info`         | `(none)`          | Displays project dashboard: versions, `.nvmrc` status, scripts, global link status.  |
+| `node_link`         | `(none)`          | Links current project globally via `pnpm link --global`.                             |
+| `node_unlink`       | `(none)`          | Unlinks current project from global scope.                                           |
+| `node_check_global` | `(none)`          | Checks if current project is linked globally (returns 0/1).                          |
+| `create_node_envrc` | `(none)`          | Creates a rich `.envrc` with nvm auto-switch and project info box.                   |
 
 ### Docker Functions
 
 #### Database Functions
 
-| Function | Arguments | Description |
-| :--- | :--- | :--- |
-| `pg_dev_start` | `[db] [pw] [port]` | Starts a PostgreSQL development container. |
-| `pg_dev_stop` | `(none)` | Stops PostgreSQL development container. |
-| `pg_dev_connect` | `[db_name]` | Connect to PostgreSQL container. |
-| `db_backup` | `[container] [backup_name]` | Backup database from container. |
+| Function         | Arguments                   | Description                                |
+| :--------------- | :-------------------------- | :----------------------------------------- |
+| `pg_dev_start`   | `[db] [pw] [port]`          | Starts a PostgreSQL development container. |
+| `pg_dev_stop`    | `(none)`                    | Stops PostgreSQL development container.    |
+| `pg_dev_connect` | `[db_name]`                 | Connect to PostgreSQL container.           |
+| `db_backup`      | `[container] [backup_name]` | Backup database from container.            |
 
 #### AI/ML Functions
 
-| Function | Arguments | Description |
-| :--- | :--- | :--- |
-| `qdrant_start` | `[port]` | Starts a Qdrant vector database container. |
-| `qdrant_stop` | `(none)` | Stops Qdrant container. |
-| `qdrant_backup` | `[backup_name]` | Backup Qdrant data. |
-| `jupyter_start` | `[port] [work_dir]` | Starts a Jupyter Lab container. |
-| `jupyter_stop` | `(none)` | Stops Jupyter Lab container. |
+| Function        | Arguments           | Description                                |
+| :-------------- | :------------------ | :----------------------------------------- |
+| `qdrant_start`  | `[port]`            | Starts a Qdrant vector database container. |
+| `qdrant_stop`   | `(none)`            | Stops Qdrant container.                    |
+| `qdrant_backup` | `[backup_name]`     | Backup Qdrant data.                        |
+| `jupyter_start` | `[port] [work_dir]` | Starts a Jupyter Lab container.            |
+| `jupyter_stop`  | `(none)`            | Stops Jupyter Lab container.               |
 
 #### MCP Server Functions
 
-| Function | Arguments | Description |
-| :--- | :--- | :--- |
-| `mcp_start` | `<service> [port]` | Start MCP service container. |
-| `mcp_stop` | `[service\|all]` | Stop MCP service(s). |
-| `mcp_list` | `(none)` | List available and running MCP services. |
+| Function    | Arguments          | Description                              |
+| :---------- | :----------------- | :--------------------------------------- |
+| `mcp_start` | `<service> [port]` | Start MCP service container.             |
+| `mcp_stop`  | `[service\|all]`   | Stop MCP service(s).                     |
+| `mcp_list`  | `(none)`           | List available and running MCP services. |
 
 #### Development Stack Functions
 
-| Function | Arguments | Description |
-| :--- | :--- | :--- |
-| `dev_stack_start` | `[web\|ai\|full]` | Starts a pre-configured stack of development services. |
-| `dev_stack_stop` | `(none)` | Stops all services managed by this script. |
-| `dev_stack_status` | `(none)` | Shows the running status of the dev stack services. |
+| Function           | Arguments         | Description                                            |
+| :----------------- | :---------------- | :----------------------------------------------------- |
+| `dev_stack_start`  | `[web\|ai\|full]` | Starts a pre-configured stack of development services. |
+| `dev_stack_stop`   | `(none)`          | Stops all services managed by this script.             |
+| `dev_stack_status` | `(none)`          | Shows the running status of the dev stack services.    |
 
 #### Project Templates
 
-| Function | Arguments | Description |
-| :--- | :--- | :--- |
-| `create_web_project` | `<name> [node\|python]` | Create web project template with Docker Compose. |
-| `create_ai_project` | `<name>` | Create AI/ML project template with Qdrant and Jupyter. |
+| Function             | Arguments               | Description                                            |
+| :------------------- | :---------------------- | :----------------------------------------------------- |
+| `create_web_project` | `<name> [node\|python]` | Create web project template with Docker Compose.       |
+| `create_ai_project`  | `<name>`                | Create AI/ML project template with Qdrant and Jupyter. |
 
 #### MLbox Integration (SSH)
 
-| Function | Arguments | Description |
-| :--- | :--- | :--- |
-| `mlbox_tunnel` | `<local_port> <remote_port> [service]` | Create SSH tunnel to MLbox. |
-| `mlbox_deploy` | `<image_name> [container_name]` | Deploy Docker image to MLbox. |
+| Function       | Arguments                              | Description                   |
+| :------------- | :------------------------------------- | :---------------------------- |
+| `mlbox_tunnel` | `<local_port> <remote_port> [service]` | Create SSH tunnel to MLbox.   |
+| `mlbox_deploy` | `<image_name> [container_name]`        | Deploy Docker image to MLbox. |
 
 #### Utility Functions
 
-| Function | Arguments | Description |
-| :--- | :--- | :--- |
-| `py_docker_dev` | `[python_version] [port]` | Python development container. |
-| `docker_maintenance` | `(none)` | Interactive Docker system cleanup. |
-| `docker_overview` | `(none)` | Show Docker system overview. |
-| `docker_help` | `(none)` | Show all custom Docker functions. |
+| Function             | Arguments                 | Description                        |
+| :------------------- | :------------------------ | :--------------------------------- |
+| `py_docker_dev`      | `[python_version] [port]` | Python development container.      |
+| `docker_maintenance` | `(none)`                  | Interactive Docker system cleanup. |
+| `docker_overview`    | `(none)`                  | Show Docker system overview.       |
+| `docker_help`        | `(none)`                  | Show all custom Docker functions.  |
 
 #### Docker Aliases
 
-| Alias | Description |
-| :--- | :--- |
-| `dps` | `docker ps` |
-| `dpsa` | `docker ps -a` |
-| `di` | `docker images` |
-| `dlog` | `docker logs -f` |
-| `dexec` | `docker exec -it` |
-| `dstop` | Stop all running containers |
-| `drm` | Remove all stopped containers |
-| `drmi` | Remove all images |
-| `dcleanup` | `docker system prune -af && docker volume prune -f` |
-| `dcleanbuild` | `docker builder prune -af` |
-| `dspace` | `docker system df` |
-| `dinfo` | `docker info` |
-| `dc` | `docker-compose` |
-| `dcup` | `docker-compose up -d` |
-| `dcdown` | `docker-compose down` |
-| `dclogs` | `docker-compose logs -f` |
+| Alias         | Description                                         |
+| :------------ | :-------------------------------------------------- |
+| `dps`         | `docker ps`                                         |
+| `dpsa`        | `docker ps -a`                                      |
+| `di`          | `docker images`                                     |
+| `dlog`        | `docker logs -f`                                    |
+| `dexec`       | `docker exec -it`                                   |
+| `dstop`       | Stop all running containers                         |
+| `drm`         | Remove all stopped containers                       |
+| `drmi`        | Remove all images                                   |
+| `dcleanup`    | `docker system prune -af && docker volume prune -f` |
+| `dcleanbuild` | `docker builder prune -af`                          |
+| `dspace`      | `docker system df`                                  |
+| `dinfo`       | `docker info`                                       |
+| `dc`          | `docker-compose`                                    |
+| `dcup`        | `docker-compose up -d`                              |
+| `dcdown`      | `docker-compose down`                               |
+| `dclogs`      | `docker-compose logs -f`                            |
