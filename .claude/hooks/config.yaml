@@ -30,7 +30,7 @@ hooks:
     sound:
       enabled: true
       file: ".claude/sounds/bell_ring_1.mp3"
-      volume: 0.5
+      volume: 0.8
       delay_ms: 200
     voice:
       enabled: true
@@ -45,7 +45,7 @@ hooks:
     sound:
       enabled: true
       file: ".claude/sounds/bell_call.mp3"
-      volume: 0.4
+      volume: 0.7
       delay_ms: 200
     voice:
       enabled: true
