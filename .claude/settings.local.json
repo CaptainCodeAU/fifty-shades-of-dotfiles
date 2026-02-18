@@ -61,7 +61,8 @@
       "Bash(git show:*)",
       "Bash(uv run:*)",
       "Bash(python3:*)",
-      "Bash(git remote get-url:*)"
+      "Bash(git remote get-url:*)",
+      "Bash(typescript-language-server:*)"
     ]
   }
 }
