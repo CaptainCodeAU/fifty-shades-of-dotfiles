@@ -447,10 +447,10 @@ alias lzg='lazygit'
 alias lg='lazygit'
 # ── Claude Code ──────────────────────────────────────────────────────
 # Agent teams (still experimental opt-in), hide account info for recordings
-_claude_env="CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 CLAUDE_CODE_HIDE_ACCOUNT_INFO=1 ENABLE_EXPERIMENTAL_MCP_CLI=1"
+_claude_env="CLAUDE_CODE_HIDE_ACCOUNT_INFO=1 ENABLE_EXPERIMENTAL_MCP_CLI=1"
 
 alias c="${_claude_env} claude --dangerously-skip-permissions --permission-mode plan"       # Standard launch
-alias ct="${_claude_env} claude --dangerously-skip-permissions --permission-mode plan --teammate-mode tmux"  # Tmux agent teams
+alias ct="${_claude_env} CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 claude --dangerously-skip-permissions --permission-mode plan --teammate-mode tmux"  # Tmux agent teams
 alias cb="${_claude_env} claude"                                                            # Bare (full control)
 alias cr="${_claude_env} claude --dangerously-skip-permissions --resume"                    # Resume last session
 alias ci="${_claude_env} claude --dangerously-skip-permissions -p"                          # Non-interactive / piped
