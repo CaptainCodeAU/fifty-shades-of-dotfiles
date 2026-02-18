@@ -191,6 +191,7 @@ Subclasses override only the steps they need:
   export_transcript.sh    # SessionEnd — export session transcript
   hook_runner.py          # Audio entrypoint — reads stdin, routes to handler
   config.yaml             # Audio notification configuration
+  security.log            # Audit log of blocked commands/edits (created on first block)
   lib/
     audio.py              # play_sound(), speak(), play_notification()
     config.py             # YAML loading, dataclass definitions
@@ -210,6 +211,10 @@ Subclasses override only the steps they need:
       tool_failure.py     # PostToolUseFailureHandler — tool failures + dedup
       user_prompt_submit.py # UserPromptSubmitHandler — silent skeleton (disabled)
       pre_compact.py      # PreCompactHandler — context compaction
+  tests/
+    test_state.py         # Dedup state machine tests
+    test_summary.py       # Text extraction tests
+    test_transcript.py    # JSONL parsing tests
 ```
 
 ## Shell hook scripts
@@ -235,9 +240,11 @@ Non-commit Bash commands pass through with no effect.
 Runs on `PreToolUse` for `Bash` tools. Reads the stdin JSON and blocks destructive commands by exiting with code 2:
 
 - `rm -rf /` or `rm -rf ~` (root/home deletion)
-- `git push --force` to `main` or `master`
+- `git push --force`, `git push --force-with-lease`, or `git push -f` to `main` or `master`
 - `git reset --hard` without a ref
-- `git clean -fd` (removes untracked files)
+- `git clean -fd` or `git clean -f -d` (removes untracked files)
+
+Blocked commands are logged to `security.log` (see [Audit logging](#audit-logging)).
 
 ### protect-files.sh
 
@@ -246,6 +253,8 @@ Runs on `PreToolUse` for `Edit|Write` tools. Reads the stdin JSON and blocks edi
 - `.env`, `.env.keys`, `.env.local`, `.env.*` (except `.env.example`)
 - Lockfiles: `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`
 - `.git/` directory
+
+Blocked edits are logged to `security.log` (see [Audit logging](#audit-logging)).
 
 ### export_transcript.sh
 
@@ -284,6 +293,37 @@ During a burst of tool calls in the same turn (e.g., 4 parallel `Edit` calls), t
 The hash is stored in the same per-session state file as the dedup markers, so it shares the same 60-second expiry. This means stale hashes from a previous turn won't suppress a new summary.
 
 State files auto-expire after 60 seconds.
+
+## Audit logging
+
+Both `validate-bash.sh` and `protect-files.sh` append a timestamped entry to `.claude/hooks/security.log` whenever a command or file edit is blocked. The log is append-only and never truncated by the hooks themselves.
+
+Format:
+
+```
+[2026-02-18T14:30:22Z] BLOCKED validate-bash "Force push to main/master" "git push --force main"
+[2026-02-18T14:31:05Z] BLOCKED protect-files "Secrets file" ".env.local"
+```
+
+The log file is created on first blocked event. It lives alongside the hook scripts so it's easy to find and review.
+
+## Testing
+
+Unit tests cover the Python library modules (`state.py`, `summary.py`, `transcript.py`).
+
+Run tests:
+
+```bash
+PYTHONPATH=.claude/hooks uv run pytest .claude/hooks/tests/ -v
+```
+
+Test files:
+
+| File                 | Covers                                                                                            |
+| -------------------- | ------------------------------------------------------------------------------------------------- |
+| `test_state.py`      | Dedup state machine: mark/check roundtrips, expiry, session isolation, corrupted files, cleanup   |
+| `test_summary.py`    | Text extraction: action verb detection, sentence/character modes, question extraction, edge cases |
+| `test_transcript.py` | JSONL parsing: text extraction, tool use detection, malformed input handling                      |
 
 ## Debugging
 
