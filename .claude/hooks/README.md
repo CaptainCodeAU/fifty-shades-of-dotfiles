@@ -314,7 +314,7 @@ Unit tests cover the Python library modules (`state.py`, `summary.py`, `transcri
 Run tests:
 
 ```bash
-PYTHONPATH=.claude/hooks uv run pytest .claude/hooks/tests/ -v
+PYTHONPATH=.claude/hooks uv run --with pytest pytest .claude/hooks/tests/ -v
 ```
 
 Test files:
