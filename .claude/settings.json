@@ -69,6 +69,16 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path // .tool_input.filePath // empty' | xargs -I{} sh -c 'case \"{}\" in *.md) pnpm dlx markdownlint-cli --fix \"{}\" 2>/dev/null ;; esac' || true",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "Stop": [

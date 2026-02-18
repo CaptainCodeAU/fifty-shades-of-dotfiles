@@ -6,16 +6,17 @@ All hooks are registered in `.claude/settings.json`. Claude Code pipes JSON to s
 
 ## Overview
 
-| Script                 | Hook Event     | Matcher                            | Purpose                                                   |
-| ---------------------- | -------------- | ---------------------------------- | --------------------------------------------------------- |
-| `session-checks.sh`    | `SessionStart` | `startup\|resume`                  | Git status + `.env` encryption check                      |
-| _(inline echo)_        | `SessionStart` | `compact`                          | Re-inject project conventions after compaction            |
-| `validate-bash.sh`     | `PreToolUse`   | `Bash`                             | Block destructive commands (`rm -rf /`, force push, etc.) |
-| `pre-commit-check.sh`  | `PreToolUse`   | `Bash`                             | Lint/build gate before `git commit`                       |
-| `protect-files.sh`     | `PreToolUse`   | `Edit\|Write`                      | Block edits to `.env`, lockfiles, `.git/`                 |
-| `hook_runner.py`       | Multiple       | Various                            | Audio notifications (sound + speech)                      |
-| _(inline prettier)_    | `PostToolUse`  | `Edit\|Write`                      | Auto-format with prettier after file changes              |
-| `export_transcript.sh` | `SessionEnd`   | `prompt_input_exit\|logout\|other` | Export session transcript (skips `/clear`)                |
+| Script                  | Hook Event     | Matcher                            | Purpose                                                   |
+| ----------------------- | -------------- | ---------------------------------- | --------------------------------------------------------- |
+| `session-checks.sh`     | `SessionStart` | `startup\|resume`                  | Git status + `.env` encryption check                      |
+| _(inline echo)_         | `SessionStart` | `compact`                          | Re-inject project conventions after compaction            |
+| `validate-bash.sh`      | `PreToolUse`   | `Bash`                             | Block destructive commands (`rm -rf /`, force push, etc.) |
+| `pre-commit-check.sh`   | `PreToolUse`   | `Bash`                             | Lint/build gate before `git commit`                       |
+| `protect-files.sh`      | `PreToolUse`   | `Edit\|Write`                      | Block edits to `.env`, lockfiles, `.git/`                 |
+| `hook_runner.py`        | Multiple       | Various                            | Audio notifications (sound + speech)                      |
+| _(inline prettier)_     | `PostToolUse`  | `Edit\|Write`                      | Auto-format with prettier after file changes              |
+| _(inline markdownlint)_ | `PostToolUse`  | `Edit\|Write`                      | Auto-fix markdown lint issues on `.md` files              |
+| `export_transcript.sh`  | `SessionEnd`   | `prompt_input_exit\|logout\|other` | Export session transcript (skips `/clear`)                |
 
 ## Audio notification system
 
@@ -233,6 +234,8 @@ Runs on `PreToolUse` for `Bash` tools. Reads the stdin JSON and extracts `tool_i
 - **Node.js** (`package.json`): `pnpm run lint && pnpm run build`
 - **Python** (`pyproject.toml`): `uv run ruff check . && uv run ruff format --check .`
 
+After the language-specific gate, **markdownlint** runs for all project types — it lints any staged `.md` files (`git diff --cached --name-only --diff-filter=ACM -- '*.md'`). No `--fix` here; this is a blocking gate. If it fails, Claude sees the errors and fixes them. Uses `pnpm dlx markdownlint-cli` consistently. Configuration lives in `.markdownlint.jsonc` at the repo root.
+
 Non-commit Bash commands pass through with no effect.
 
 ### validate-bash.sh
@@ -263,6 +266,10 @@ Runs on `SessionEnd` with matcher `prompt_input_exit|logout|other` (skips `/clea
 ### PostToolUse prettier (inline)
 
 Runs on `PostToolUse` for `Edit|Write` tools. Reads `tool_input.file_path` from stdin JSON and runs `pnpm dlx prettier --write` on the file. Failures are silently ignored (`|| true`) to avoid blocking Claude.
+
+### PostToolUse markdownlint (inline)
+
+Runs on `PostToolUse` for `Edit|Write` tools. Reads `tool_input.file_path` from stdin JSON and runs `pnpm dlx markdownlint-cli --fix` on the file, but only if it ends in `.md` (filtered via a `case` shell pattern). Failures are silently ignored (`|| true`, `2>/dev/null`) to avoid blocking Claude. Configuration lives in `.markdownlint.jsonc` at the repo root.
 
 ### SessionStart compact (inline)
 
@@ -341,5 +348,6 @@ Set `global.debug: true` in `config.yaml` (or `HOOK_DEBUG=1` env var). Debug out
 - `jq` (used by shell hooks to parse stdin JSON)
 - `pnpm` (used by prettier formatting and Node.js pre-commit checks)
 - `uv` (used by Python pre-commit checks and `hook_runner.py` execution)
+- `markdownlint-cli` (used via `pnpm dlx` — markdown linting in PostToolUse and pre-commit gate)
 - `dotenvx` (optional — `.env` encryption check in `session-checks.sh`)
 - `claude-code-transcripts` (optional — transcript export in `export_transcript.sh`)

@@ -18,6 +18,12 @@ elif [[ -f "pyproject.toml" ]]; then
   # Python project — lint + format check (fast gate, no tests)
   uv run ruff check . && uv run ruff format --check .
 else
-  # Unknown project type — no-op
-  exit 0
+  # Unknown project type — no-op for language-specific checks
+  true
+fi
+
+# Markdown lint (runs for all project types)
+MD_FILES=$(git diff --cached --name-only --diff-filter=ACM -- '*.md')
+if [[ -n "$MD_FILES" ]]; then
+  echo "$MD_FILES" | xargs pnpm dlx markdownlint-cli
 fi
