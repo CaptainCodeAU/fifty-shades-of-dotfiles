@@ -1,0 +1,6 @@
+{
+  // Defaults: all rules enabled, with these overrides
+  "MD013": false, // line length — not practical for prose
+  "MD033": false, // inline HTML — needed for GitHub markdown
+  "MD041": false, // first-line-h1 — not all files start with a heading
+}
