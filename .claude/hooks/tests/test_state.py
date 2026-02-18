@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["pyyaml"]
+# dependencies = ["pytest"]
 # ///
 """Tests for dedup state management."""
 
