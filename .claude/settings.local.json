@@ -131,6 +131,7 @@
       "Read(**/.gnupg/**)",
       "Read(**/.ssh/**)",
       "Read(**/credentials/**)",
+      "Read(**/pass.txt)",
       "Read(**/password.txt)",
       "Read(**/passwords.txt)",
       "Read(**/secrets/**)"

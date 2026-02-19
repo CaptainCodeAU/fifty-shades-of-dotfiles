@@ -12,17 +12,17 @@ hooks:
     sound:
       enabled: true
       file: ".claude/sounds/ui_open_1.mp3"
-      volume: 0.5
+      volume: 0.2
       delay_ms: 200
     voice:
       enabled: true
       name: "Victoria"
-      volume: 0.6
+      volume: 0.2
       rate: 350
     summary:
       mode: "sentences"
-      max_sentences: 3
-      max_characters: 200
+      max_sentences: 1
+      max_characters: 80
       start: "action"
 
   ask_user_question:
@@ -30,7 +30,7 @@ hooks:
     sound:
       enabled: true
       file: ".claude/sounds/bell_ring_1.mp3"
-      volume: 0.8
+      volume: 0.6
       delay_ms: 200
     voice:
       enabled: true
@@ -45,12 +45,12 @@ hooks:
     sound:
       enabled: true
       file: ".claude/sounds/bell_call.mp3"
-      volume: 0.7
+      volume: 0.4
       delay_ms: 200
     voice:
       enabled: true
       name: "Victoria"
-      volume: 0.5
+      volume: 0.4
       rate: 350
     message_template: "Approve {tool_name}?"
 
@@ -59,12 +59,12 @@ hooks:
     sound:
       enabled: true
       file: ".claude/sounds/bell_ring_1.mp3"
-      volume: 0.5
+      volume: 0.2
       delay_ms: 200
     voice:
       enabled: true
       name: "Victoria"
-      volume: 0.6
+      volume: 0.2
       rate: 350
     idle_message: "Claude is idle"
     auth_message: "Auth successful"
@@ -75,12 +75,12 @@ hooks:
     sound:
       enabled: true
       file: ".claude/sounds/coin_simple.mp3"
-      volume: 0.5
+      volume: 0.2
       delay_ms: 200
     voice:
       enabled: true
       name: "Victoria"
-      volume: 0.6
+      volume: 0.2
       rate: 350
     message_template: "Subagent {agent_type} started"
 
@@ -89,12 +89,12 @@ hooks:
     sound:
       enabled: true
       file: ".claude/sounds/marimba_complete.mp3"
-      volume: 0.5
+      volume: 0.2
       delay_ms: 200
     voice:
       enabled: true
       name: "Victoria"
-      volume: 0.6
+      volume: 0.2
       rate: 350
     message_template: "Subagent {agent_type} finished"
 
@@ -108,7 +108,7 @@ hooks:
     voice:
       enabled: true
       name: "Victoria"
-      volume: 0.6
+      volume: 0.5
       rate: 350
     message_template: "{teammate_name} is idle"
 
@@ -122,7 +122,7 @@ hooks:
     voice:
       enabled: true
       name: "Victoria"
-      volume: 0.6
+      volume: 0.5
       rate: 350
     message_template: "Task completed: {task_subject}"
     max_subject_length: 80
@@ -132,12 +132,12 @@ hooks:
     sound:
       enabled: true
       file: ".claude/sounds/error_buzz.mp3"
-      volume: 0.5
+      volume: 0.2
       delay_ms: 200
     voice:
       enabled: true
       name: "Victoria"
-      volume: 0.6
+      volume: 0.2
       rate: 350
     message_template: "{tool_name} failed"
 
@@ -146,12 +146,12 @@ hooks:
     sound:
       enabled: false
       file: ""
-      volume: 0.5
+      volume: 0.2
       delay_ms: 200
     voice:
       enabled: false
       name: "Victoria"
-      volume: 0.6
+      volume: 0.2
       rate: 350
 
   pre_compact:
@@ -159,11 +159,11 @@ hooks:
     sound:
       enabled: true
       file: ".claude/sounds/blink.mp3"
-      volume: 0.5
+      volume: 0.2
       delay_ms: 200
     voice:
       enabled: true
       name: "Victoria"
-      volume: 0.6
+      volume: 0.2
       rate: 350
     message: "Compacting context"
