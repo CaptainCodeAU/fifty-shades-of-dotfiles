@@ -2,8 +2,9 @@
 
 ![Shell](https://img.shields.io/badge/Shell-Zsh-lightgrey.svg?logo=gnome-terminal&logoColor=white)
 ![Python with uv](https://img.shields.io/badge/Python-uv-hotpink.svg?logo=python&logoColor=white)
-![Node.js with nvm](https://img.shields.io/badge/Node.js-nvm-green.svg?logo=nodedotjs&logoColor=white)
+![Node.js with nvm](https://img.shields.io/badge/Node.js-nvm%20%2B%20pnpm-green.svg?logo=nodedotjs&logoColor=white)
 ![Docker](https://img.shields.io/badge/Tools-Docker-blue.svg?logo=docker&logoColor=white)
+![Claude Code](https://img.shields.io/badge/Claude-Code-blueviolet.svg?logo=anthropic&logoColor=white)
 ![OS Support](https://img.shields.io/badge/OS-macOS%20%7C%20Linux%20%7C%20WSL-blue.svg?logo=apple)
 
 Tired of manually setting up your development environment on every new machine? This repository contains a set of Zsh dotfiles that create a unified, powerful, and automated workflow across **macOS, Linux, and Windows (via WSL)**.
@@ -32,10 +33,10 @@ It is built around a modern toolchain that prioritizes speed, consistency, and d
 2. **Core Tools**: Install the key technologies using Homebrew.
 
    ```bash
-   brew install uv direnv jq
+   brew install uv direnv jq zoxide eza fzf
    ```
 
-   > **Note:** `jq` is used by Node.js scaffolding and onboarding checks.
+   > **Note:** `jq` is used by Node.js scaffolding and onboarding checks. `zoxide` replaces `cd`, `eza` powers the `l`/`ll` aliases, and `fzf` provides fuzzy finding.
 
 ---
 
@@ -68,6 +69,15 @@ Setting up is designed to be as simple as possible.
    ln -sf ~/fifty-shades-of-dotfiles/home/.zsh_tmux ~/.zsh_tmux
    ln -sf ~/fifty-shades-of-dotfiles/home/.zsh_onboarding ~/.zsh_onboarding
    ln -sf ~/fifty-shades-of-dotfiles/home/.zsh_welcome ~/.zsh_welcome
+
+   # Link git configuration
+   # Option A: Copy and fill in your personal info
+   cp ~/fifty-shades-of-dotfiles/home/.gitconfig ~/.gitconfig
+   git config --global user.name "Your Name"
+   git config --global user.email "you@example.com"
+   # Option B: Include from your existing ~/.gitconfig (add to [include] section)
+   # git config --global include.path ~/fifty-shades-of-dotfiles/home/.gitconfig
+   ln -sf ~/fifty-shades-of-dotfiles/home/.gitignore_global ~/.gitignore_global
 
    # Link other configuration files
    ln -sf ~/fifty-shades-of-dotfiles/home/.tmux.conf ~/.tmux.conf
@@ -432,7 +442,26 @@ which sourcekit-lsp                  # Should show /usr/bin/sourcekit-lsp
 
 ---
 
-## Using in Other Projects
+## Claude Code Configuration
+
+This repository includes a comprehensive [Claude Code](https://code.claude.com/) setup in the `.claude/` directory.
+
+### Permissions (`.claude/settings.local.json`)
+
+The local settings file configures fine-grained permissions using the modern `Bash(command *)` wildcard syntax:
+
+- **`allow`**: Pre-approved commands for common shell utilities, git operations, Swift/Xcode tooling, package managers (uv, pnpm, brew, cargo, pip, pod), Docker, GitHub CLI, and more.
+- **`ask`**: Prompts before running destructive operations like `git push` and `git reset`.
+- **`deny`**: Blocks reading sensitive files — `.env` variants (except `.env.example`), private keys (`.pem`, `.key`, `.cert`), `~/.ssh/`, `~/.aws/`, `~/.gnupg/`, `secrets/`, `credentials/`, and password files.
+- **`WebFetch`**: Allowlisted domains for documentation lookups — GitHub, Anthropic docs, Apple Developer, Swift.org, npm, PyPI, Stack Overflow, and others.
+
+> **Note**: `.claude/settings.local.json` is gitignored by Claude Code. The version in this repo serves as a reference template.
+
+### Hooks (`.claude/hooks/`)
+
+Custom lifecycle hooks that run at various points during Claude Code sessions. See [`.claude/hooks/README.md`](.claude/hooks/README.md) for details.
+
+### Using in Other Projects
 
 To pull the `.claude` hooks folder into another project, use [gitpick](https://github.com/nrjdalal/gitpick):
 
@@ -558,6 +587,8 @@ This repository uses a **one-to-one mapping** structure that mirrors actual depl
 ```text
 fifty-shades-of-dotfiles/
 ├── home/                              # Files that go directly in ~/
+│   ├── .gitconfig                     # Git config template → ~/.gitconfig
+│   ├── .gitignore_global              # Global gitignore → ~/.gitignore_global
 │   ├── .zshrc                         # Main zsh config → ~/.zshrc
 │   ├── .zsh_python_functions          # Python helpers → ~/.zsh_python_functions
 │   ├── .zsh_node_functions            # Node.js helpers → ~/.zsh_node_functions
@@ -575,6 +606,14 @@ fifty-shades-of-dotfiles/
 │       │   └── direnvrc
 │       └── yt-dlp/                    # yt-dlp config → ~/.config/yt-dlp/
 │           └── config
+│
+├── .claude/                           # Claude Code configuration
+│   ├── settings.json                  # Shared project settings (committed)
+│   ├── settings.local.json            # Local permissions & deny rules (gitignored)
+│   └── hooks/                         # Claude Code lifecycle hooks
+│       ├── config.yaml                # Hook configuration
+│       ├── hook_runner.py             # Main hook runner
+│       └── lib/                       # Hook handler modules
 │
 ├── platforms/                         # Platform-specific locations
 │   └── macos/                         # macOS-specific paths
@@ -596,6 +635,8 @@ fifty-shades-of-dotfiles/
 
 ### Key Files
 
+- **`home/.gitconfig`**: Public-safe git configuration template. Contains credential helpers, LFS, merge/diff settings, and sensible defaults. Personal info (name, email) should be set separately via `git config --global`. See the header comment for usage options.
+- **`home/.gitignore_global`**: Global gitignore patterns for OS files, editor artifacts, environment/secret files, build outputs, and temporary files. Referenced by `.gitconfig` via `core.excludesfile`.
 - **`home/.zshrc`**: The main controller. It detects the OS, loads plugins, and sources all other function files. Also contains inline functions like `yt()` (yt-dlp wrapper) and various aliases.
 - **`home/.zsh_python_functions`**: Contains all Python-related helper functions (`python_new_project`, `uv_tool_*`, etc.).
 - **`home/.zsh_node_functions`**: Contains all Node.js helper functions (`node_new_project`, etc.).
@@ -724,7 +765,7 @@ The function auto-generates a comprehensive `~/.config/yt-dlp/config` file on fi
 - **Navigation**: `..`, `...`, `....`, `.....` for quick directory navigation
 - **Node.js**: `serve` (pnpm dlx http-server), `tsc` (pnpm dlx typescript)
 - **Docker**: `lzd` (lazydocker), `lzg`/`lg` (lazygit)
-- **Claude CLI**: `c` alias with environment variables for enhanced functionality
+- **Claude Code**: `c` (standard), `cb` (bare/full control), `cr` (resume), `ci` (non-interactive), `ct` (tmux agent teams), `cd_` (debug), `cskip` (skip end hooks)
 - **Zoxide**: `cd` command is replaced with `zoxide` for intelligent directory jumping
 
 ### Special Functions
