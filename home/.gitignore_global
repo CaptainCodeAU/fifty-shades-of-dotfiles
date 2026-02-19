@@ -1,0 +1,95 @@
+# === OS Generated Files ===
+.DS_Store
+.DS_Store?
+._.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+
+# === Editor/IDE Files ===
+*.code-workspace
+
+# JetBrains IDEs (PyCharm, IntelliJ, WebStorm, etc.)
+.idea/
+*.iml
+
+# Vim
+*.swp
+*.swo
+*~
+.*.sw?
+
+# Emacs
+*~
+\#*\#
+.\#*
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# === Environment & Secrets ===
+.env
+.env.local
+.env.*.local
+.env.production
+.env.staging
+.env.test
+.env.dev
+.env.development
+password.txt
+passwords.txt
+*.pem
+*.key
+*.cert
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+env/
+ENV/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# === Node.js ===
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.pnpm-debug.log*
+
+# === Build Artifacts ===
+dist/
+build/
+*.o
+*.so
+*.dylib
+*.exe
+*.out
+a.out
+
+# === Logs ===
+*.log
+logs/
+
+# === Temporary Files ===
+tmp/
+temp/
+*.tmp
+*.bak
+*.backup
+
+# === Misc ===
+.cache/
+.local/
+*.orig
+
