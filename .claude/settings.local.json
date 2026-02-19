@@ -117,18 +117,23 @@
     "ask": ["Bash(git push *)", "Bash(git reset *)"],
     "deny": [
       "Read(**/.env)",
-      "Read(**/.env.local)",
-      "Read(**/.env.production)",
+      "Read(**/.env.dev)",
       "Read(**/.env.development)",
+      "Read(**/.env.local)",
+      "Read(**/.env.*.local)",
+      "Read(**/.env.production)",
       "Read(**/.env.staging)",
       "Read(**/.env.test)",
-      "Read(**/*.pem)",
+      "Read(**/*.cert)",
       "Read(**/*.key)",
-      "Read(**/.ssh/**)",
+      "Read(**/*.pem)",
       "Read(**/.aws/**)",
-      "Read(**/secrets/**)",
+      "Read(**/.gnupg/**)",
+      "Read(**/.ssh/**)",
       "Read(**/credentials/**)",
-      "Read(**/.gnupg/**)"
+      "Read(**/password.txt)",
+      "Read(**/passwords.txt)",
+      "Read(**/secrets/**)"
     ]
   }
 }

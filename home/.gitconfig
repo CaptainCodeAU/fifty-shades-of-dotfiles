@@ -1,0 +1,55 @@
+# ==============================================================================
+#  Global Git Configuration (generic / shareable)
+# ==============================================================================
+# This is a public-safe template. Personal info (name, email, signing keys)
+# should be set in your local ~/.gitconfig or via environment variables:
+#
+#   git config --global user.name "Your Name"
+#   git config --global user.email "you@example.com"
+#
+# To use this file directly:
+#   cp home/.gitconfig ~/.gitconfig   (then fill in [user] section)
+#
+# Or include it from your existing ~/.gitconfig:
+#   [include]
+#       path = ~/CODE/Scaffoldings/fifty-shades-of-dotfiles/home/.gitconfig
+
+[credential]
+	helper = osxkeychain
+
+[credential "https://github.com"]
+	helper = !/opt/homebrew/bin/gh auth git-credential
+
+[credential "https://gist.github.com"]
+	helper = !/opt/homebrew/bin/gh auth git-credential
+
+[color]
+	ui = auto
+
+[init]
+	defaultbranch = master
+
+[pull]
+	ff = only
+
+[push]
+	autoSetupRemote = true
+
+[core]
+	excludesfile = ~/.gitignore_global
+	editor = nvim
+
+[filter "lfs"]
+	process = git-lfs filter-process
+	required = true
+	clean = git-lfs clean -- %f
+	smudge = git-lfs smudge -- %f
+
+[diff]
+	colorMoved = default
+
+[merge]
+	conflictstyle = diff3
+
+[rerere]
+	enabled = true
