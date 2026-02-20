@@ -30,19 +30,52 @@ It is built around a modern toolchain that prioritizes speed, consistency, and d
 ## Prerequisites for Mac
 
 1. **Homebrew**: Ensure [Homebrew](https://brew.sh/) is installed on your macOS system.
-2. **Core Tools**: Install the key technologies using Homebrew.
+2. **Core Tools**: Install the essential technologies using Homebrew.
 
    ```bash
-   brew install uv direnv jq zoxide eza fzf
+   brew install uv direnv jq zoxide eza fzf tmux ripgrep fd gh git-lfs
    ```
 
-   > **Note:** `jq` is used by Node.js scaffolding and onboarding checks. `zoxide` replaces `cd`, `eza` powers the `l`/`ll` aliases, and `fzf` provides fuzzy finding.
+   > **Note:** `jq` is used by Node.js scaffolding and onboarding checks. `zoxide` replaces `cd`, `eza` powers the `l`/`ll` aliases, `fzf` provides fuzzy finding, `tmux` powers session management, `ripgrep` (`rg`) enables fast code search, `fd` is a fast `find` alternative, `gh` is the GitHub CLI (used by `.gitconfig` for credential management), and `git-lfs` enables Git Large File Storage.
+
+3. **Recommended Tools**: These are optional but enhance the experience significantly.
+
+   ```bash
+   brew install ffmpeg yt-dlp aria2 tree neofetch lazygit lazydocker yazi
+   ```
+
+   > **Note:** `ffmpeg` and `aria2` are used by the `yt()` media download wrapper. `lazygit`/`lazydocker` power the `lg`/`lzd` aliases. `yazi` is a terminal file manager used by the `y()` function.
+
+4. **Nerd Font**: Required for Powerlevel10k icons and glyphs.
+
+   ```bash
+   brew install --cask font-symbols-only-nerd-font
+   ```
+
+5. **Post-install Setup**: Run these one-time setup commands after installing the tools above.
+
+   ```bash
+   git lfs install                    # One-time git-lfs setup (configures hooks)
+   gh auth login                      # Authenticate GitHub CLI (used by .gitconfig credential helper)
+   ```
 
 ---
 
 ## Installation
 
-Setting up is designed to be as simple as possible.
+Setting up is designed to be as simple as possible. The included `install.sh` script handles everything interactively, or you can set things up manually.
+
+### Automated Install (Recommended)
+
+```bash
+git clone https://github.com/CaptainCodeAU/fifty-shades-of-dotfiles.git ~/fifty-shades-of-dotfiles
+cd ~/fifty-shades-of-dotfiles
+./install.sh
+```
+
+The installer will check prerequisites, install missing tools, set up Oh My Zsh plugins, symlink dotfiles via GNU Stow, configure git identity, install TPM/nvm/pnpm/Nerd Fonts, and more. Run `./install.sh --help` for all options including `--check`, `--dry-run`, `--update`, and `--force`.
+
+### Manual Install
 
 1. **Prerequisites**:
    - Ensure `git` and `zsh` are installed.
@@ -98,14 +131,28 @@ Setting up is designed to be as simple as possible.
 
    > **Note**: The repository uses a one-to-one mapping structure where `home/` mirrors `~/` and `platforms/` contains platform-specific files. See [`docs/STRUCTURE.md`](docs/STRUCTURE.md) for details.
 
-4. **Enable `direnv`**: The provided `.zshrc` already contains the hook for `direnv`. If you are merging with an existing file, ensure this line is present:
+4. **Node.js Ecosystem**: Install nvm, pnpm, and TPM for tmux plugins.
+
+   ```bash
+   # nvm (Node Version Manager)
+   curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+
+   # pnpm (standalone install — used instead of Corepack)
+   curl -fsSL https://get.pnpm.io/install.sh | sh -
+
+   # TPM (Tmux Plugin Manager) — required for tmux plugins in .tmux.conf
+   git clone https://github.com/tmux-plugins/tpm ~/.tmux/plugins/tpm
+   # After starting tmux, press prefix + I to install plugins
+   ```
+
+5. **Enable `direnv`**: The provided `.zshrc` already contains the hook for `direnv`. If you are merging with an existing file, ensure this line is present:
 
    ```zsh
    # In your .zshrc
    if command -v direnv &> /dev/null; then eval "$(direnv hook zsh)"; fi
    ```
 
-5. **Restart Your Shell**: Open a new terminal window or run `source ~/.zshrc`.
+6. **Restart Your Shell**: Open a new terminal window or run `source ~/.zshrc`.
    - **On any new system**, the onboarding script will run automatically and guide you through installing any missing dependencies.
    - A welcome message will confirm the setup is active.
 
@@ -146,8 +193,9 @@ run_onboarding
 | Category                 | Tools                                                 |
 | ------------------------ | ----------------------------------------------------- |
 | **Essential**            | git, curl, unzip                                      |
-| **User Experience**      | eza, fzf, jq, direnv, zoxide                          |
+| **User Experience**      | eza, fzf, jq, direnv, zoxide, fd                      |
 | **CLI Tools**            | ripgrep, tree, neofetch, ffmpeg, yt-dlp, aria2        |
+| **Git**                  | gh, git-lfs                                           |
 | **Development Managers** | nvm, uv                                               |
 | **Special**              | Docker (guidance only — requires manual installation) |
 
@@ -419,7 +467,7 @@ yt --help                                          # Show all options
 
 Claude Code supports LSP (Language Server Protocol) plugins for enhanced code intelligence. These servers need to be installed globally on the system so Claude Code can find them on `$PATH`.
 
-### Installation
+### LSP Server Setup
 
 ```bash
 # Pyright (Python) — installed via uv tool
@@ -445,6 +493,22 @@ which sourcekit-lsp                  # Should show /usr/bin/sourcekit-lsp
 ## Claude Code Configuration
 
 This repository includes a comprehensive [Claude Code](https://code.claude.com/) setup in the `.claude/` directory.
+
+### Installing Claude Code
+
+Claude Code is a CLI tool from Anthropic. Install it following the [official documentation](https://docs.anthropic.com/en/docs/claude-code/overview). Once installed, the shell aliases (`c`, `cb`, `cr`, `ci`, `ct`, `cd_`, `cskip`) defined in `.zshrc` will work.
+
+### Optional Tools for Hooks
+
+The Claude Code hooks in this repo benefit from these optional tools:
+
+```bash
+# markdownlint — used by pre-commit gate for markdown auto-fix
+brew install markdownlint-cli
+
+# dotenvx — used by session-checks.sh to verify .env encryption
+brew install dotenvx/brew/dotenvx
+```
 
 ### Permissions (`.claude/settings.local.json`)
 
@@ -497,6 +561,30 @@ export PATH="/opt/custom-tool/bin:$PATH"
 # A personal alias
 alias my-server="ssh my-user@192.168.1.100"
 ```
+
+---
+
+## Additional macOS Tools
+
+These are specialized tools that are not part of the core setup but may be useful depending on your workflow. Install them individually as needed:
+
+```bash
+# Swift / Xcode development
+brew install swiftlint xcodegen
+
+# Networking & security
+brew install cloudflared mkcert
+
+# Document & image processing
+brew install poppler imagemagick mpack
+
+# Other utilities
+brew install ripmine              # Redmine CLI
+brew install markdownlint-cli     # Markdown linting (also used by Claude Code hooks)
+brew install dotenvx/brew/dotenvx # .env encryption (also used by Claude Code hooks)
+```
+
+> **Note:** These are macOS-specific Homebrew formulae. Equivalent packages may be available on Linux via apt/dnf/pacman but are not covered by the install script.
 
 ---
 
@@ -586,6 +674,7 @@ This repository uses a **one-to-one mapping** structure that mirrors actual depl
 
 ```text
 fifty-shades-of-dotfiles/
+├── install.sh                         # Interactive installer (./install.sh --help)
 ├── home/                              # Files that go directly in ~/
 │   ├── .gitconfig                     # Git config template → ~/.gitconfig
 │   ├── .gitignore_global              # Global gitignore → ~/.gitignore_global
@@ -635,6 +724,7 @@ fifty-shades-of-dotfiles/
 
 ### Key Files
 
+- **`install.sh`**: Interactive installer that handles prerequisites, tool installation, symlinks, and post-setup configuration. Supports `--check`, `--dry-run`, `--update`, `--force`, and `--uninstall` modes.
 - **`home/.gitconfig`**: Public-safe git configuration template. Contains credential helpers, LFS, merge/diff settings, and sensible defaults. Personal info (name, email) should be set separately via `git config --global`. See the header comment for usage options.
 - **`home/.gitignore_global`**: Global gitignore patterns for OS files, editor artifacts, environment/secret files, build outputs, and temporary files. Referenced by `.gitconfig` via `core.excludesfile`.
 - **`home/.zshrc`**: The main controller. It detects the OS, loads plugins, and sources all other function files. Also contains inline functions like `yt()` (yt-dlp wrapper) and various aliases.
