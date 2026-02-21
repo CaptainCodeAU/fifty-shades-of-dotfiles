@@ -286,6 +286,7 @@ run_onboarding() {
     _ensure_command "git" "git" "git"
     _ensure_command "curl" "curl" "curl"
     _ensure_command "unzip" "unzip" "unzip"
+    _ensure_command "safe-rm" "safe-rm" "safe-rm"
     echo
 
     # --- User Experience Tools ---
