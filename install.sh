@@ -594,26 +594,29 @@ post_install() {
     local os
     os=$(check_os)
 
-    # --- Git identity ---
+    # --- Git identity (stored in ~/.gitconfig.private, included by .gitconfig) ---
+    local git_private="$HOME/.gitconfig.private"
     local git_name git_email
-    git_name=$(git config --global user.name 2>/dev/null || true)
-    git_email=$(git config --global user.email 2>/dev/null || true)
+    git_name=$(git config user.name 2>/dev/null || true)
+    git_email=$(git config user.email 2>/dev/null || true)
     if [[ -z "$git_name" || -z "$git_email" ]]; then
         info "Git identity not configured."
+        info "Identity is stored in ${CYAN}~/.gitconfig.private${RESET} (not committed to the repo)."
         if confirm "Set up git user.name and user.email now?"; then
             if [[ -z "$git_name" ]]; then
                 read -rp "$(echo -e "${CYAN}  Your name: ${RESET}")" git_name
-                if [[ -n "$git_name" ]]; then
-                    run_cmd git config --global user.name "$git_name"
-                fi
             fi
             if [[ -z "$git_email" ]]; then
                 read -rp "$(echo -e "${CYAN}  Your email: ${RESET}")" git_email
-                if [[ -n "$git_email" ]]; then
-                    run_cmd git config --global user.email "$git_email"
-                fi
             fi
-            success "Git identity configured"
+            if [[ -n "$git_name" || -n "$git_email" ]]; then
+                run_cmd bash -c "cat > '$git_private' << GITEOF
+[user]
+	name = ${git_name}
+	email = ${git_email}
+GITEOF"
+                success "Git identity saved to $(pretty_path "$git_private")"
+            fi
         fi
     else
         success "Git identity: $git_name <$git_email>"
