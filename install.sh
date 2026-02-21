@@ -905,7 +905,7 @@ show_help() {
     echo -e "  4. Symlinks home/ → ~/ using GNU Stow"
     echo -e "  5. Symlinks platform-specific files (macOS Cursor/VSCode settings)"
     echo -e "  6. Sets up git identity, git-lfs, and GitHub CLI auth"
-    echo -e "  7. Installs Python 3.13 via uv, nvm, pnpm (standalone)"
+    echo -e "  7. Installs Python 3.13 via uv, nvm, pnpm, bun (standalone)"
     echo -e "  8. Installs TPM (Tmux Plugin Manager) and Nerd Fonts"
     echo -e "  9. Suggests creating ~/.zshrc.private for secrets"
     echo
