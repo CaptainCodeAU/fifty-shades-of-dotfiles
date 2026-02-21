@@ -33,10 +33,10 @@ It is built around a modern toolchain that prioritizes speed, consistency, and d
 2. **Core Tools**: Install the essential technologies using Homebrew.
 
    ```bash
-   brew install uv direnv jq zoxide eza fzf tmux ripgrep fd gh git-lfs
+   brew install stow uv direnv jq zoxide eza fzf tmux ripgrep fd gh git-lfs
    ```
 
-   > **Note:** `jq` is used by Node.js scaffolding and onboarding checks. `zoxide` replaces `cd`, `eza` powers the `l`/`ll` aliases, `fzf` provides fuzzy finding, `tmux` powers session management, `ripgrep` (`rg`) enables fast code search, `fd` is a fast `find` alternative, `gh` is the GitHub CLI (used by `.gitconfig` for credential management), and `git-lfs` enables Git Large File Storage.
+   > **Note:** `stow` is used by the installer to symlink dotfiles from this repo into `~/`. `jq` is used by Node.js scaffolding and onboarding checks. `zoxide` replaces `cd`, `eza` powers the `l`/`ll` aliases, `fzf` provides fuzzy finding, `tmux` powers session management, `ripgrep` (`rg`) enables fast code search, `fd` is a fast `find` alternative, `gh` is the GitHub CLI (used by `.gitconfig` for credential management), and `git-lfs` enables Git Large File Storage.
 
 3. **Recommended Tools**: These are optional but enhance the experience significantly.
 
@@ -198,7 +198,7 @@ run_onboarding
 
 | Category                 | Tools                                                 |
 | ------------------------ | ----------------------------------------------------- |
-| **Essential**            | git, curl, unzip                                      |
+| **Essential**            | git, curl, unzip, stow                                |
 | **User Experience**      | eza, fzf, jq, direnv, zoxide, fd, yazi                |
 | **CLI Tools**            | ripgrep, tree, neofetch, ffmpeg, yt-dlp, aria2        |
 | **Git**                  | gh, git-lfs                                           |
