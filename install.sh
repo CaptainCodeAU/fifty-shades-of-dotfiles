@@ -167,6 +167,7 @@ check_prerequisites() {
     check_command fd       "fd"       || true
     check_command gh       "GitHub CLI (gh)" || true
     check_command nvim     "neovim"   || true
+    check_command safe-rm  "safe-rm"  || true
     echo
 
     echo -e "${BOLD}Git Extras:${RESET}"
@@ -286,7 +287,7 @@ install_macos_prerequisites() {
     success "Homebrew ready"
 
     # --- Core formulae ---
-    local -a formulae=(stow uv direnv jq fzf eza zoxide neovim tmux ripgrep fd gh git-lfs)
+    local -a formulae=(stow uv direnv jq fzf eza zoxide neovim tmux ripgrep fd gh git-lfs safe-rm)
     local to_install=()
 
     for formula in "${formulae[@]}"; do
@@ -344,11 +345,11 @@ install_linux_prerequisites() {
         info "Detected package manager: $pkg_mgr"
 
         # --- Core tools ---
-        if confirm "Install core tools (stow, jq, fzf, direnv, eza, zoxide, tmux, ripgrep, fd, gh, git-lfs)?"; then
+        if confirm "Install core tools (stow, jq, fzf, direnv, eza, zoxide, tmux, ripgrep, fd, gh, git-lfs, safe-rm)?"; then
             case "$pkg_mgr" in
                 apt)
                     run_cmd sudo apt update
-                    run_cmd sudo apt install -y stow jq fzf direnv zoxide tmux ripgrep fd-find git-lfs
+                    run_cmd sudo apt install -y stow jq fzf direnv zoxide tmux ripgrep fd-find git-lfs safe-rm
                     # eza and gh need special repos on Ubuntu/Debian
                     if ! command -v eza &>/dev/null; then
                         info "eza requires a separate install on Debian/Ubuntu."
@@ -362,9 +363,9 @@ install_linux_prerequisites() {
                         run_cmd sudo apt update && run_cmd sudo apt install -y gh
                     fi
                     ;;
-                dnf)    run_cmd sudo dnf install -y stow jq fzf direnv eza zoxide tmux ripgrep fd-find gh git-lfs ;;
-                pacman) run_cmd sudo pacman -S --noconfirm stow jq fzf direnv eza zoxide tmux ripgrep fd github-cli git-lfs ;;
-                zypper) run_cmd sudo zypper install -y stow jq fzf direnv zoxide tmux ripgrep fd git-lfs ;;
+                dnf)    run_cmd sudo dnf install -y stow jq fzf direnv eza zoxide tmux ripgrep fd-find gh git-lfs safe-rm ;;
+                pacman) run_cmd sudo pacman -S --noconfirm stow jq fzf direnv eza zoxide tmux ripgrep fd github-cli git-lfs safe-rm ;;
+                zypper) run_cmd sudo zypper install -y stow jq fzf direnv zoxide tmux ripgrep fd git-lfs safe-rm ;;
             esac
         fi
 

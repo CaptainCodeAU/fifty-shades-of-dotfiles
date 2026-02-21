@@ -451,6 +451,7 @@ alias www="cha"
 alias lzd='lazydocker'
 alias lzg='lazygit'
 alias lg='lazygit'
+
 # ── Claude Code ──────────────────────────────────────────────────────
 # Agent teams (still experimental opt-in), hide account info for recordings
 _claude_env="CLAUDE_CODE_HIDE_ACCOUNT_INFO=1 ENABLE_EXPERIMENTAL_MCP_CLI=1"
@@ -475,6 +476,30 @@ sudo() {
 	fi
 }
 
+# Warn before deleting symlinks — prevents accidentally nuking files through
+# directory symlinks (e.g. rm ~/.config/direnv/file when ~/.config/direnv is
+# a symlink into the dotfiles repo). When safe-rm is installed, it acts as
+# the second layer: rm() (symlink warning) → safe-rm (path protection) → /bin/rm.
+rm() {
+	local symlinks=()
+	for arg in "$@"; do
+		[[ "$arg" != -* && -L "$arg" ]] && symlinks+=("$arg")
+	done
+	if (( ${#symlinks[@]} > 0 )); then
+		echo "${warn}⚠️  Symlink target(s) detected:${done}"
+		for s in "${symlinks[@]}"; do
+			echo "    $s → $(readlink "$s")"
+		done
+		echo "${info}   Deleting will remove the link (or follow into target dir with trailing slash).${done}"
+		read "REPLY?${warn}   Proceed? [y/N] ${done}"
+		[[ "$REPLY" =~ ^[Yy]$ ]] || return 1
+	fi
+	if command -v safe-rm &>/dev/null; then
+		safe-rm "$@"
+	else
+		command rm "$@"
+	fi
+}
 
 # --- yt-dlp Wrapper ---
 # Custom wrapper for yt-dlp with simplified aliases defined in ~/.config/yt-dlp/config
