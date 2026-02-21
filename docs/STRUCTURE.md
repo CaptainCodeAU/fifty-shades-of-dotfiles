@@ -105,6 +105,12 @@ Application settings exported for reference and manual import. These are not aut
 | --------------- | ---------------------------------------------------------------------------- |
 | `profiles.json` | iTerm2 profiles (import via Profiles > Other Actions > Import JSON Profiles) |
 
+#### `settings/wezterm/`
+
+| File          | Purpose                                                                    |
+| ------------- | -------------------------------------------------------------------------- |
+| `wezterm.lua` | WezTerm config (Coolnight colors, SSH detection, keybindings, tab styling) |
+
 ### `docs/` - Documentation
 
 Documentation and reference materials.
