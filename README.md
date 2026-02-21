@@ -104,13 +104,15 @@ The installer will check prerequisites, install missing tools, set up Oh My Zsh 
    ln -sf ~/fifty-shades-of-dotfiles/home/.zsh_welcome ~/.zsh_welcome
 
    # Link git configuration
-   # Option A: Copy and fill in your personal info
-   cp ~/fifty-shades-of-dotfiles/home/.gitconfig ~/.gitconfig
-   git config --global user.name "Your Name"
-   git config --global user.email "you@example.com"
-   # Option B: Include from your existing ~/.gitconfig (add to [include] section)
-   # git config --global include.path ~/fifty-shades-of-dotfiles/home/.gitconfig
+   ln -sf ~/fifty-shades-of-dotfiles/home/.gitconfig ~/.gitconfig
    ln -sf ~/fifty-shades-of-dotfiles/home/.gitignore_global ~/.gitignore_global
+
+   # Create private git identity (not committed to the repo)
+   cat > ~/.gitconfig.private << 'EOF'
+   [user]
+       name = Your Name
+       email = you@example.com
+   EOF
 
    # Link other configuration files
    ln -sf ~/fifty-shades-of-dotfiles/home/.tmux.conf ~/.tmux.conf
@@ -545,9 +547,39 @@ Run this from the target project's root directory. It downloads just the `.claud
 
 ## Customization & Private Settings
 
-To keep your main configuration portable and shareable, all personal, private, or machine-specific settings should go into a `~/.zshrc.private` file.
+To keep your main configuration portable and shareable, personal and machine-specific settings live in private files that are **never committed** to the repository. These are protected by `.gitignore_global`.
 
-**This file is ignored by Git.**
+### Git Identity (`~/.gitconfig.private`)
+
+The shared `.gitconfig` includes `~/.gitconfig.private` via `[include]`. This file holds your personal git identity:
+
+```ini
+[user]
+    name = Your Name
+    email = you@example.com
+
+# Optional: GPG signing
+# [commit]
+#     gpgsign = true
+# [user]
+#     signingkey = ABCDEF1234567890
+```
+
+The installer (`./install.sh`) will prompt you to create this file automatically. You can also create it manually:
+
+```bash
+cat > ~/.gitconfig.private << 'EOF'
+[user]
+    name = Your Name
+    email = you@example.com
+EOF
+```
+
+> **Note:** The files `.gitconfig.local`, `.gitconfig.private`, and `.gitconfig.private.local` are all protected by `.gitignore_global` to prevent accidental commits.
+
+### Shell Settings (`~/.zshrc.private`)
+
+Machine-specific shell settings, API keys, and personal aliases go in `~/.zshrc.private`:
 
 1. Create the file: `touch ~/.zshrc.private`
 2. Add your private settings to it.
@@ -747,7 +779,7 @@ fifty-shades-of-dotfiles/
 ### Key Files
 
 - **`install.sh`**: Interactive installer that handles prerequisites, tool installation, symlinks, and post-setup configuration. Supports `--check`, `--dry-run`, `--update`, `--force`, and `--uninstall` modes.
-- **`home/.gitconfig`**: Public-safe git configuration template. Contains credential helpers, LFS, merge/diff settings, and sensible defaults. Personal info (name, email) should be set separately via `git config --global`. See the header comment for usage options.
+- **`home/.gitconfig`**: Public-safe git configuration template. Contains credential helpers, LFS, merge/diff settings, and sensible defaults. Includes `~/.gitconfig.private` via `[include]` for personal identity (name, email, signing keys) — see [Customization & Private Settings](#customization--private-settings).
 - **`home/.gitignore_global`**: Global gitignore patterns for OS files, editor artifacts, environment/secret files, build outputs, and temporary files. Referenced by `.gitconfig` via `core.excludesfile`.
 - **`home/.zshrc`**: The main controller. It detects the OS, loads plugins, and sources all other function files. Also contains inline functions like `yt()` (yt-dlp wrapper), `rm()` (symlink-aware safe deletion wrapper), and various aliases.
 - **`home/.zsh_python_functions`**: Contains all Python-related helper functions (`python_new_project`, `uv_tool_*`, etc.).

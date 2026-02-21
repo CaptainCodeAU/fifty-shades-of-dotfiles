@@ -40,6 +40,9 @@ Desktop.ini
 .env.test
 .env.dev
 .env.development
+.gitconfig.local
+.gitconfig.private
+.gitconfig.private.local
 pass.txt
 password.txt
 passwords.txt

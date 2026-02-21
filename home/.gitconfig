@@ -1,18 +1,21 @@
 # ==============================================================================
 #  Global Git Configuration (generic / shareable)
 # ==============================================================================
-# This is a public-safe template. Personal info (name, email, signing keys)
-# should be set in your local ~/.gitconfig or via environment variables:
+# This is a public-safe template managed by GNU Stow. Personal info (name,
+# email, signing keys) lives in a separate private file that is NOT committed:
 #
-#   git config --global user.name "Your Name"
-#   git config --global user.email "you@example.com"
+#   ~/.gitconfig.private
 #
-# To use this file directly:
-#   cp home/.gitconfig ~/.gitconfig   (then fill in [user] section)
+# Create it with:
+#   [user]
+#       name = Your Name
+#       email = you@example.com
 #
-# Or include it from your existing ~/.gitconfig:
-#   [include]
-#       path = ~/CODE/Scaffoldings/fifty-shades-of-dotfiles/home/.gitconfig
+# The [include] below loads it automatically. The file is protected by
+# .gitignore_global so it will never be accidentally committed.
+
+[include]
+	path = ~/.gitconfig.private
 
 [credential]
 	helper = osxkeychain
