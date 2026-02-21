@@ -95,6 +95,16 @@ macOS-specific configuration files.
 
 **Note**: Linux/WSL editor settings are created dynamically by `direnvrc`, so they don't need to be in the repository.
 
+### `settings/` - Exported App Configurations
+
+Application settings exported for reference and manual import. These are not auto-deployed by the installer.
+
+#### `settings/iterm2/`
+
+| File            | Purpose                                                                      |
+| --------------- | ---------------------------------------------------------------------------- |
+| `profiles.json` | iTerm2 profiles (import via Profiles > Other Actions > Import JSON Profiles) |
+
 ### `docs/` - Documentation
 
 Documentation and reference materials.
@@ -135,6 +145,7 @@ When deploying files, use this quick reference:
 | `home/.config/yt-dlp/config`                                            | `~/.config/yt-dlp/config`                                 |
 | `platforms/macos/Library/Application Support/Cursor/User/settings.json` | `~/Library/Application Support/Cursor/User/settings.json` |
 | `platforms/macos/Library/Application Support/Code/User/settings.json`   | `~/Library/Application Support/Code/User/settings.json`   |
+| `settings/`                                                             | Manual import (not auto-deployed)                         |
 
 ## Benefits of This Structure
 
