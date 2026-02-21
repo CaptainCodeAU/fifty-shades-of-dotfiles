@@ -577,6 +577,49 @@ EOF
 
 > **Note:** The files `.gitconfig.local`, `.gitconfig.private`, and `.gitconfig.private.local` are all protected by `.gitignore_global` to prevent accidental commits.
 
+#### Multiple GitHub Accounts
+
+If you have multiple GitHub accounts (e.g., personal, work, side projects), use `[includeIf]` directives in `~/.gitconfig.private` to switch identity based on the repo's directory:
+
+```ini
+# ~/.gitconfig.private
+
+# Default identity (used when no includeIf matches)
+[user]
+    name = PersonalHandle
+    email = personal@example.com
+
+# Work account — repos cloned into ~/WORK/
+[includeIf "gitdir:~/WORK/"]
+    path = ~/.gitconfig-work
+
+# Side project account — repos cloned into ~/SIDEGIG/
+[includeIf "gitdir:~/SIDEGIG/"]
+    path = ~/.gitconfig-sidegig
+```
+
+Each included file contains its own identity and SSH key:
+
+```ini
+# ~/.gitconfig-work
+[user]
+    name = Work Name
+    email = you@company.com
+[core]
+    sshCommand = ssh -i ~/.ssh/id_ed25519_work
+```
+
+```ini
+# ~/.gitconfig-sidegig
+[user]
+    name = SideProjectHandle
+    email = side@example.com
+[core]
+    sshCommand = ssh -i ~/.ssh/id_ed25519_side
+```
+
+The trailing `/` in `gitdir:~/WORK/` is important — it matches any repo inside that directory recursively. The `core.sshCommand` per-identity avoids needing complex `~/.ssh/config` host aliases. Remember to add any extra config files (e.g., `~/.gitconfig-work`) to your `.gitignore_global`.
+
 ### Shell Settings (`~/.zshrc.private`)
 
 Machine-specific shell settings, API keys, and personal aliases go in `~/.zshrc.private`:
