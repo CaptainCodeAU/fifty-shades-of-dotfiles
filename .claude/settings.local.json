@@ -91,6 +91,7 @@
       "Bash(wget *)",
       "Bash(which *)",
       "Bash(whoami)",
+      "Bash(xargs basename:*)",
       "Bash(xcode-select *)",
       "Bash(xcodebuild *)",
       "Bash(xcrun *)",
