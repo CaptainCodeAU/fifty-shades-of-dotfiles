@@ -185,6 +185,7 @@ check_prerequisites() {
     fi
     check_command_optional pnpm "pnpm" || true
     check_command_optional node "node" || true
+    check_command_optional bun  "bun"  || true
     echo
 
     echo -e "${BOLD}Python (via uv):${RESET}"
@@ -669,6 +670,16 @@ post_install() {
         fi
     else
         success "pnpm installed"
+    fi
+
+    # --- Bun ---
+    if ! command -v bun &>/dev/null; then
+        if confirm "bun not found. Install it?"; then
+            run_cmd bash -c 'export BUN_INSTALL="$HOME/.bun" && export PATH="$BUN_INSTALL/bin:$PATH" && curl -fsSL https://bun.sh/install | bash'
+            success "bun installed (PATH already configured in .zshrc)"
+        fi
+    else
+        success "bun installed"
     fi
 
     # --- TPM (Tmux Plugin Manager) ---
