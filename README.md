@@ -73,7 +73,7 @@ cd ~/fifty-shades-of-dotfiles
 ./install.sh
 ```
 
-The installer will check prerequisites, install missing tools, set up Oh My Zsh plugins, symlink dotfiles via GNU Stow, configure git identity, install TPM/nvm/pnpm/Nerd Fonts, and more. Run `./install.sh --help` for all options including `--check`, `--dry-run`, `--update`, and `--force`.
+The installer will check prerequisites, install missing tools, set up Oh My Zsh plugins, symlink dotfiles via GNU Stow, configure git identity, install TPM/nvm/pnpm/bun/Nerd Fonts, and more. Run `./install.sh --help` for all options including `--check`, `--dry-run`, `--update`, and `--force`.
 
 ### Manual Install
 
@@ -140,6 +140,10 @@ The installer will check prerequisites, install missing tools, set up Oh My Zsh 
    # pnpm (standalone install — used instead of Corepack)
    curl -fsSL https://get.pnpm.io/install.sh | sh -
 
+   # bun (JavaScript runtime & toolkit)
+   # Pre-set BUN_INSTALL and PATH so the installer skips modifying .zshrc
+   export BUN_INSTALL="$HOME/.bun" && export PATH="$BUN_INSTALL/bin:$PATH" && curl -fsSL https://bun.sh/install | bash
+
    # TPM (Tmux Plugin Manager) — required for tmux plugins in .tmux.conf
    git clone https://github.com/tmux-plugins/tpm ~/.tmux/plugins/tpm
    # After starting tmux, press prefix + I to install plugins
@@ -196,7 +200,7 @@ run_onboarding
 | **User Experience**      | eza, fzf, jq, direnv, zoxide, fd                      |
 | **CLI Tools**            | ripgrep, tree, neofetch, ffmpeg, yt-dlp, aria2        |
 | **Git**                  | gh, git-lfs                                           |
-| **Development Managers** | nvm, uv                                               |
+| **Development Managers** | nvm, uv, bun                                          |
 | **Special**              | Docker (guidance only — requires manual installation) |
 
 ### Skipping Onboarding
