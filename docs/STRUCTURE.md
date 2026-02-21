@@ -5,6 +5,7 @@ This document explains the organization of the fifty-shades-of-dotfiles reposito
 ## Overview
 
 The repository uses a **one-to-one mapping** structure that mirrors actual deployment locations. This means:
+
 - `home/.zshrc` → `~/.zshrc`
 - `home/.config/direnv/direnvrc` → `~/.config/direnv/direnvrc`
 - And so on...
@@ -19,23 +20,23 @@ All files in `home/` are deployed directly to your home directory (`~/`).
 
 #### Shell Configuration Files
 
-| File | Purpose | Deployed To |
-|------|---------|-------------|
-| `.zshrc` | Main zsh configuration file | `~/.zshrc` |
-| `.zsh_python_functions` | Python helper functions | `~/.zsh_python_functions` |
-| `.zsh_node_functions` | Node.js helper functions | `~/.zsh_node_functions` |
-| `.zsh_docker_functions` | Docker helper functions | `~/.zsh_docker_functions` |
-| `.zsh_cursor_functions` | Cursor/VSCode integration | `~/.zsh_cursor_functions` |
-| `.zsh_tmux` | Tmux integration functions | `~/.zsh_tmux` |
-| `.zsh_onboarding` | Cross-platform onboarding script | `~/.zsh_onboarding` |
-| `.zsh_welcome` | Unified cross-platform welcome script | `~/.zsh_welcome` |
+| File                    | Purpose                               | Deployed To               |
+| ----------------------- | ------------------------------------- | ------------------------- |
+| `.zshrc`                | Main zsh configuration file           | `~/.zshrc`                |
+| `.zsh_python_functions` | Python helper functions               | `~/.zsh_python_functions` |
+| `.zsh_node_functions`   | Node.js helper functions              | `~/.zsh_node_functions`   |
+| `.zsh_docker_functions` | Docker helper functions               | `~/.zsh_docker_functions` |
+| `.zsh_cursor_functions` | Cursor/VSCode integration             | `~/.zsh_cursor_functions` |
+| `.zsh_tmux`             | Tmux integration functions            | `~/.zsh_tmux`             |
+| `.zsh_onboarding`       | Cross-platform onboarding script      | `~/.zsh_onboarding`       |
+| `.zsh_welcome`          | Unified cross-platform welcome script | `~/.zsh_welcome`          |
 
 #### Other Configuration Files
 
-| File | Purpose | Deployed To |
-|------|---------|-------------|
-| `.tmux.conf` | Tmux configuration | `~/.tmux.conf` |
-| `.p10k.zsh` | Powerlevel10k theme configuration | `~/.p10k.zsh` |
+| File         | Purpose                           | Deployed To    |
+| ------------ | --------------------------------- | -------------- |
+| `.tmux.conf` | Tmux configuration                | `~/.tmux.conf` |
+| `.p10k.zsh`  | Powerlevel10k theme configuration | `~/.p10k.zsh`  |
 
 ### `home/.config/` - Files for `~/.config/`
 
@@ -45,19 +46,36 @@ All files in `home/.config/` are deployed to `~/.config/`, maintaining the same 
 
 direnv configuration files for automatic environment management.
 
-| File | Purpose | Deployed To |
-|------|---------|-------------|
-| `direnv.toml` | direnv settings | `~/.config/direnv/direnv.toml` |
-| `direnvrc` | direnv hooks and scripts | `~/.config/direnv/direnvrc` |
+| File          | Purpose                  | Deployed To                    |
+| ------------- | ------------------------ | ------------------------------ |
+| `direnv.toml` | direnv settings          | `~/.config/direnv/direnv.toml` |
+| `direnvrc`    | direnv hooks and scripts | `~/.config/direnv/direnvrc`    |
 
 The `direnvrc` file includes automatic VSCode/Cursor color setup based on machine type (see `docs/MEMENTO_vscode_machine_colors.md`).
+
+#### `home/.config/yazi/`
+
+Yazi terminal file manager configuration with catppuccin-mocha theme, vim-style keybindings, and plugins.
+
+| File                             | Purpose                                           | Deployed To                                     |
+| -------------------------------- | ------------------------------------------------- | ----------------------------------------------- |
+| `yazi.toml`                      | Main config (layout, openers, sort, plugins)      | `~/.config/yazi/yazi.toml`                      |
+| `keymap.toml`                    | Keybindings (vim-style navigation + zoom)         | `~/.config/yazi/keymap.toml`                    |
+| `theme.toml`                     | Theme overrides and file-type icons               | `~/.config/yazi/theme.toml`                     |
+| `init.lua`                       | Init script (loads git plugin)                    | `~/.config/yazi/init.lua`                       |
+| `package.toml`                   | Plugin and flavor dependencies                    | `~/.config/yazi/package.toml`                   |
+| `plugins/git.yazi/`              | Git status indicators in file list                | `~/.config/yazi/plugins/git.yazi/`              |
+| `plugins/zoom.yazi/`             | Image zoom in preview pane (requires ImageMagick) | `~/.config/yazi/plugins/zoom.yazi/`             |
+| `flavors/catppuccin-mocha.yazi/` | Catppuccin Mocha color scheme                     | `~/.config/yazi/flavors/catppuccin-mocha.yazi/` |
+
+**Note**: The zoom plugin requires ImageMagick (`brew install imagemagick` on macOS) for the `magick` command.
 
 #### `home/.config/yt-dlp/`
 
 yt-dlp configuration template.
 
-| File | Purpose | Deployed To |
-|------|---------|-------------|
+| File     | Purpose              | Deployed To               |
+| -------- | -------------------- | ------------------------- |
 | `config` | yt-dlp configuration | `~/.config/yt-dlp/config` |
 
 **Note**: The `yt()` function in `.zshrc` auto-generates this config file if it doesn't exist. This file serves as a template/reference.
@@ -70,10 +88,10 @@ Files that are specific to certain operating systems or platforms.
 
 macOS-specific configuration files.
 
-| Path | Purpose | Deployed To |
-|------|---------|-------------|
+| Path                                                    | Purpose                        | Deployed To                                               |
+| ------------------------------------------------------- | ------------------------------ | --------------------------------------------------------- |
 | `Library/Application Support/Cursor/User/settings.json` | Cursor editor settings (macOS) | `~/Library/Application Support/Cursor/User/settings.json` |
-| `Library/Application Support/Code/User/settings.json` | VSCode editor settings (macOS) | `~/Library/Application Support/Code/User/settings.json` |
+| `Library/Application Support/Code/User/settings.json`   | VSCode editor settings (macOS) | `~/Library/Application Support/Code/User/settings.json`   |
 
 **Note**: Linux/WSL editor settings are created dynamically by `direnvrc`, so they don't need to be in the repository.
 
@@ -81,13 +99,13 @@ macOS-specific configuration files.
 
 Documentation and reference materials.
 
-| File/Directory | Purpose |
-|----------------|---------|
-| `MEMENTO_vscode_machine_colors.md` | Complete guide for VSCode/Cursor machine-specific color setup |
-| `reference/colors.md` | Color palette reference |
-| `reference/mermaid_examples.md` | Mermaid diagram examples |
-| `reference/tmux_cheatsheet.md` | Tmux quick reference guide |
-| `reference/windows/` | Historical Windows batch scripts (reference only, not for deployment) |
+| File/Directory                     | Purpose                                                               |
+| ---------------------------------- | --------------------------------------------------------------------- |
+| `MEMENTO_vscode_machine_colors.md` | Complete guide for VSCode/Cursor machine-specific color setup         |
+| `reference/colors.md`              | Color palette reference                                               |
+| `reference/mermaid_examples.md`    | Mermaid diagram examples                                              |
+| `reference/tmux_cheatsheet.md`     | Tmux quick reference guide                                            |
+| `reference/windows/`               | Historical Windows batch scripts (reference only, not for deployment) |
 
 #### `docs/reference/windows/`
 
@@ -95,27 +113,28 @@ Historical Windows batch scripts kept for reference. These scripts were used whe
 
 **Note**: These files are **not part of the deployment structure** - they are kept for historical reference only.
 
-| File | Purpose |
-|------|---------|
+| File              | Purpose                                                      |
+| ----------------- | ------------------------------------------------------------ |
 | `activate.v1.bat` | Project activation script (version 1) - historical reference |
 | `activate.v2.bat` | Project activation script (version 2) - historical reference |
-| `run.cmd` | Project launcher script - historical reference |
+| `run.cmd`         | Project launcher script - historical reference               |
 
 ## Deployment Mapping Reference
 
 When deploying files, use this quick reference:
 
-| Repository Location | Deployment Location |
-|---------------------|---------------------|
-| `home/.zshrc` | `~/.zshrc` |
-| `home/.zsh_*` | `~/.zsh_*` |
-| `home/.tmux.conf` | `~/.tmux.conf` |
-| `home/.p10k.zsh` | `~/.p10k.zsh` |
-| `home/.config/direnv/direnv.toml` | `~/.config/direnv/direnv.toml` |
-| `home/.config/direnv/direnvrc` | `~/.config/direnv/direnvrc` |
-| `home/.config/yt-dlp/config` | `~/.config/yt-dlp/config` |
+| Repository Location                                                     | Deployment Location                                       |
+| ----------------------------------------------------------------------- | --------------------------------------------------------- |
+| `home/.zshrc`                                                           | `~/.zshrc`                                                |
+| `home/.zsh_*`                                                           | `~/.zsh_*`                                                |
+| `home/.tmux.conf`                                                       | `~/.tmux.conf`                                            |
+| `home/.p10k.zsh`                                                        | `~/.p10k.zsh`                                             |
+| `home/.config/direnv/direnv.toml`                                       | `~/.config/direnv/direnv.toml`                            |
+| `home/.config/direnv/direnvrc`                                          | `~/.config/direnv/direnvrc`                               |
+| `home/.config/yazi/`                                                    | `~/.config/yazi/`                                         |
+| `home/.config/yt-dlp/config`                                            | `~/.config/yt-dlp/config`                                 |
 | `platforms/macos/Library/Application Support/Cursor/User/settings.json` | `~/Library/Application Support/Cursor/User/settings.json` |
-| `platforms/macos/Library/Application Support/Code/User/settings.json` | `~/Library/Application Support/Code/User/settings.json` |
+| `platforms/macos/Library/Application Support/Code/User/settings.json`   | `~/Library/Application Support/Code/User/settings.json`   |
 
 ## Benefits of This Structure
 
