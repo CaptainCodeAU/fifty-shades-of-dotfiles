@@ -33,10 +33,10 @@ It is built around a modern toolchain that prioritizes speed, consistency, and d
 2. **Core Tools**: Install the essential technologies using Homebrew.
 
    ```bash
-   brew install stow uv direnv jq zoxide eza fzf tmux ripgrep fd gh git-lfs
+   brew install stow uv direnv jq zoxide eza fzf tmux ripgrep fd gh git-lfs safe-rm
    ```
 
-   > **Note:** `stow` is used by the installer to symlink dotfiles from this repo into `~/`. `jq` is used by Node.js scaffolding and onboarding checks. `zoxide` replaces `cd`, `eza` powers the `l`/`ll` aliases, `fzf` provides fuzzy finding, `tmux` powers session management, `ripgrep` (`rg`) enables fast code search, `fd` is a fast `find` alternative, `gh` is the GitHub CLI (used by `.gitconfig` for credential management), and `git-lfs` enables Git Large File Storage.
+   > **Note:** `stow` is used by the installer to symlink dotfiles from this repo into `~/`. `jq` is used by Node.js scaffolding and onboarding checks. `zoxide` replaces `cd`, `eza` powers the `l`/`ll` aliases, `fzf` provides fuzzy finding, `tmux` powers session management, `ripgrep` (`rg`) enables fast code search, `fd` is a fast `find` alternative, `gh` is the GitHub CLI (used by `.gitconfig` for credential management), `git-lfs` enables Git Large File Storage, and `safe-rm` wraps `rm` to prevent accidental deletion of protected paths.
 
 3. **Recommended Tools**: These are optional but enhance the experience significantly.
 
@@ -198,7 +198,7 @@ run_onboarding
 
 | Category                 | Tools                                                 |
 | ------------------------ | ----------------------------------------------------- |
-| **Essential**            | git, curl, unzip, stow                                |
+| **Essential**            | git, curl, unzip, stow, safe-rm                       |
 | **User Experience**      | eza, fzf, jq, direnv, zoxide, fd, yazi                |
 | **CLI Tools**            | ripgrep, tree, neofetch, ffmpeg, yt-dlp, aria2        |
 | **Git**                  | gh, git-lfs                                           |
@@ -697,6 +697,7 @@ fifty-shades-of-dotfiles/
 │   ├── .vimrc                        # Vim config → ~/.vimrc
 │   │
 │   └── .config/                       # Files that go in ~/.config/
+│       ├── safe-rm                    # safe-rm protected paths → ~/.config/safe-rm
 │       ├── direnv/                    # direnv configs → ~/.config/direnv/
 │       │   ├── direnv.toml
 │       │   └── direnvrc
@@ -748,7 +749,7 @@ fifty-shades-of-dotfiles/
 - **`install.sh`**: Interactive installer that handles prerequisites, tool installation, symlinks, and post-setup configuration. Supports `--check`, `--dry-run`, `--update`, `--force`, and `--uninstall` modes.
 - **`home/.gitconfig`**: Public-safe git configuration template. Contains credential helpers, LFS, merge/diff settings, and sensible defaults. Personal info (name, email) should be set separately via `git config --global`. See the header comment for usage options.
 - **`home/.gitignore_global`**: Global gitignore patterns for OS files, editor artifacts, environment/secret files, build outputs, and temporary files. Referenced by `.gitconfig` via `core.excludesfile`.
-- **`home/.zshrc`**: The main controller. It detects the OS, loads plugins, and sources all other function files. Also contains inline functions like `yt()` (yt-dlp wrapper) and various aliases.
+- **`home/.zshrc`**: The main controller. It detects the OS, loads plugins, and sources all other function files. Also contains inline functions like `yt()` (yt-dlp wrapper), `rm()` (symlink-aware safe deletion wrapper), and various aliases.
 - **`home/.zsh_python_functions`**: Contains all Python-related helper functions (`python_new_project`, `uv_tool_*`, etc.).
 - **`home/.zsh_node_functions`**: Contains all Node.js helper functions (`node_new_project`, etc.).
 - **`home/.zsh_docker_functions`**: Contains all Docker helper functions and aliases (`pg_dev_start`, `dcleanup`, etc.).
@@ -757,6 +758,7 @@ fifty-shades-of-dotfiles/
 - **`home/.zsh_onboarding`**: Cross-platform onboarding script that detects missing tools and offers to install them on any OS.
 - **`home/.zsh_welcome`**: Unified cross-platform welcome script with verbosity controls, auto-detection for SSH/tmux, and environment overview.
 - **`home/.vimrc`**: Lightweight Vim configuration with line numbers, search highlighting, tab settings, and sensible defaults.
+- **`home/.config/safe-rm`**: User-level safe-rm configuration listing protected paths (one per line). Prevents accidental `rm` of critical system directories. Works alongside the `rm()` zsh wrapper for symlink-aware protection.
 - **`home/.config/direnv/`**: direnv configuration files for automatic environment management.
 - **`home/.config/yazi/`**: Yazi terminal file manager configuration with catppuccin-mocha theme, vim-style keybindings, and plugins for git status indicators and image zoom. The zoom plugin requires ImageMagick (`brew install imagemagick`).
 - **`home/.config/yt-dlp/config`**: yt-dlp configuration template (auto-generated by `yt()` function, but included as reference).
@@ -885,6 +887,7 @@ The function auto-generates a comprehensive `~/.config/yt-dlp/config` file on fi
 
 ### Special Functions
 
+- **`rm()` wrapper**: Two-layer deletion safety net. First warns before deleting symlinks (shows link target, prompts for confirmation). Then routes through `safe-rm` when installed (blocks deletion of protected paths like `/`, `/etc`, `/usr`). Falls back to native `rm` if `safe-rm` is absent. Configured via `~/.config/safe-rm`.
 - **`sudo()` wrapper**: Prevents accidental `sudo claude` commands and redirects appropriately
 - **`pip()` wrapper**: Intercepts `pip install` → `uv add` and `pip uninstall` → `uv remove`; passes through editable installs and read-only subcommands via `uv pip`
 - **`pipx()` wrapper**: Intercepts `pipx` commands and shows the equivalent `uv tool` commands
