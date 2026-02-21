@@ -37,6 +37,7 @@ All files in `home/` are deployed directly to your home directory (`~/`).
 | ------------ | --------------------------------- | -------------- |
 | `.tmux.conf` | Tmux configuration                | `~/.tmux.conf` |
 | `.p10k.zsh`  | Powerlevel10k theme configuration | `~/.p10k.zsh`  |
+| `.vimrc`     | Lightweight Vim configuration     | `~/.vimrc`     |
 
 ### `home/.config/` - Files for `~/.config/`
 
