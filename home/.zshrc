@@ -71,24 +71,28 @@ export PROMPT_EOL_MARK="" # Disable Powerlevel10k instant prompt
 # --- pnpm ---
 export PNPM_HOME="$HOME/Library/pnpm"
 
+# --- bun ---
+export BUN_INSTALL="$HOME/.bun"
+
 # --- PHP ---
 export WP_CLI_PHP_ARGS="-d error_reporting=E_ERROR^E_PARSE^E_COMPILE_ERROR -d display_errors=0"
 
 # --- Telemetry Opt-Out ---
-export ANONYMIZED_TELEMETRY=false; export ARTILLERY_DISABLE_TELEMETRY=true
-export AWS_CLI_TELEMETRY_OPTOUT=1; export AZURE_TELEMETRY_OPTOUT=true
+export ALCHEMY_TELEMETRY_DISABLED=1; export ANONYMIZED_TELEMETRY=false
+export ARTILLERY_DISABLE_TELEMETRY=true; export AWS_CLI_TELEMETRY_OPTOUT=1
+export AZURE_TELEMETRY_OPTOUT=true; export CLAUDE_CODE_ENABLE_TELEMETRY=0
 export CLOUDSDK_CORE_DISABLE_USAGE_REPORTING=true; export CREWAI_DISABLE_TELEMETRY=true
-export DISABLE_TELEMETRY=true; export DOTNET_CLI_TELEMETRY_OPTOUT=true
-export DOTNET_NOLOGO=true; export GRAPHITI_TELEMETRY_ENABLED=false
-export JUPYTER_NO_TELEMETRY=1; export MEM0_TELEMETRY_DISABLED=true
-export N8N_DIAGNOSTICS_ENABLED=false; export NETLIFY_TELEMETRY_DISABLED=1
-export NEW_RELIC_TELEMETRY_ENABLED=false; export NEXT_TELEMETRY_DISABLED=1
+export DISABLE_BUG_COMMAND=1; export DISABLE_ERROR_REPORTING=1
+export DISABLE_TELEMETRY=true; export DO_NOT_TRACK=1
+export DOTNET_CLI_TELEMETRY_OPTOUT=true; export DOTNET_NOLOGO=true
+export GRAPHITI_TELEMETRY_ENABLED=false; export JUPYTER_NO_TELEMETRY=1
+export MEM0_TELEMETRY_DISABLED=true; export N8N_DIAGNOSTICS_ENABLED=false
+export NETLIFY_TELEMETRY_DISABLED=1; export NEW_RELIC_TELEMETRY_ENABLED=false
+export NEXT_TELEMETRY_DISABLED=1; export NUXT_TELEMETRY_DISABLED=1
 export OTEL_SDK_DISABLED=true; export PLAUSIBLE_TELEMETRY_DISABLED=true
 export POSTHOG_TELEMETRY_DISABLED=true; export TELEMETRY=false
 export TELEMETRY_DISABLED=true; export TELEMETRY_ENABLED=false
 export TELEMETRY_OPTOUT=true; export VSCODE_TELEMETRY_OPTOUT=1
-export CLAUDE_CODE_ENABLE_TELEMETRY=0; export DISABLE_BUG_COMMAND=1
-export DISABLE_ERROR_REPORTING=1
 
 
 # ==============================================================================
@@ -175,6 +179,7 @@ path+=(
     "$HOME/.local/bin"     # This will be de-duplicated by `typeset -U`
     "$HOME/.cargo/bin"     # For Rust
 	"$HOME/.dotnet/tools"  # For .NET
+	"$BUN_INSTALL/bin"     # For Bun
 )
 # Only add the Go path if the 'go' command actually exists.
 if command -v go &>/dev/null; then
@@ -238,6 +243,7 @@ source "$ZSH/oh-my-zsh.sh"
 # --- Source Other Completions AFTER Oh My Zsh ---
 # These commands often rely on the completion system already being initialized.
 command -v uv >/dev/null && eval "$(uv generate-shell-completion zsh)"
+[ -s "$BUN_INSTALL/_bun" ] && source "$BUN_INSTALL/_bun"
 [ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
 
 
