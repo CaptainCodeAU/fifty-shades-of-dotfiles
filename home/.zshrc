@@ -511,7 +511,7 @@ _claude_ssh_ensure() {
 # Agent teams (still experimental opt-in), hide account info for recordings
 _claude_launch() {
   _claude_ssh_ensure
-  CLAUDE_CODE_HIDE_ACCOUNT_INFO=1 ENABLE_EXPERIMENTAL_MCP_CLI=1 "$@"
+  CLAUDE_CODE_HIDE_ACCOUNT_INFO=1 ENABLE_EXPERIMENTAL_MCP_CLI=1 ENABLE_TOOL_SEARCH=1 "$@"
 }
 
 alias c='_claude_launch claude --dangerously-skip-permissions --permission-mode plan'       # Standard launch
