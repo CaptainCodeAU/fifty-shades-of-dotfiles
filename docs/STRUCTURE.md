@@ -116,13 +116,14 @@ Application settings exported for reference and manual import. These are not aut
 
 Documentation and reference materials.
 
-| File/Directory                     | Purpose                                                               |
-| ---------------------------------- | --------------------------------------------------------------------- |
-| `MEMENTO_vscode_machine_colors.md` | Complete guide for VSCode/Cursor machine-specific color setup         |
-| `reference/colors.md`              | Color palette reference                                               |
-| `reference/mermaid_examples.md`    | Mermaid diagram examples                                              |
-| `reference/tmux_cheatsheet.md`     | Tmux quick reference guide                                            |
-| `reference/windows/`               | Historical Windows batch scripts (reference only, not for deployment) |
+| File/Directory                     | Purpose                                                                |
+| ---------------------------------- | ---------------------------------------------------------------------- |
+| `MEMENTO_ollama_setup.md`          | Complete guide for Ollama local AI server setup and LaunchAgent config |
+| `MEMENTO_vscode_machine_colors.md` | Complete guide for VSCode/Cursor machine-specific color setup          |
+| `reference/colors.md`              | Color palette reference                                                |
+| `reference/mermaid_examples.md`    | Mermaid diagram examples                                               |
+| `reference/tmux_cheatsheet.md`     | Tmux quick reference guide                                             |
+| `reference/windows/`               | Historical Windows batch scripts (reference only, not for deployment)  |
 
 #### `docs/reference/windows/`
 
