@@ -501,20 +501,29 @@ alias lzg='lazygit'
 alias lg='lazygit'
 
 # ── Claude Code ──────────────────────────────────────────────────────
-# Ensure the GitHub SSH key is in the agent before launching Claude Code.
-# Claude's marketplace plugin system clones repos via SSH; without the key
-# loaded, refreshes fail with "Permission denied (publickey)".
-_claude_ssh_ensure() {
-  local key="$HOME/.ssh/captaincodeau"
-  if [[ -f "$key" ]] && ! ssh-add -l 2>/dev/null | grep -q "$key"; then
-    ssh-add "$key"
-  fi
-}
-
-# Agent teams (still experimental opt-in), hide account info for recordings
+# Isolated ephemeral SSH agent per Claude Code session.
+# Spins up a dedicated ssh-agent in a subshell so the GitHub key is never
+# loaded into macOS's system-wide launchd agent. The agent (and key) die
+# when Claude Code exits; a 4h timeout is a safety net for SIGKILL.
 _claude_launch() {
-  _claude_ssh_ensure
-  CLAUDE_CODE_HIDE_ACCOUNT_INFO=1 ENABLE_EXPERIMENTAL_MCP_CLI=1 ENABLE_TOOL_SEARCH=1 "$@"
+  local key="$HOME/.ssh/captaincodeau"
+
+  if [[ -f "$key" ]]; then
+    (
+      eval "$(ssh-agent -s -t 14400)" >/dev/null
+      trap 'ssh-agent -k >/dev/null 2>&1' EXIT INT TERM HUP
+      ssh-add "$key"
+      CLAUDE_CODE_HIDE_ACCOUNT_INFO=1 \
+        ENABLE_EXPERIMENTAL_MCP_CLI=1 \
+        ENABLE_TOOL_SEARCH=1 \
+        "$@"
+    )
+  else
+    CLAUDE_CODE_HIDE_ACCOUNT_INFO=1 \
+      ENABLE_EXPERIMENTAL_MCP_CLI=1 \
+      ENABLE_TOOL_SEARCH=1 \
+      "$@"
+  fi
 }
 
 alias c='_claude_launch claude --dangerously-skip-permissions --permission-mode plan'       # Standard launch
