@@ -209,7 +209,7 @@
     // Terminal Settings
     // ========================================
     "terminal.integrated.detectLocale": "on",
-    "terminal.integrated.fontFamily": "monospace",
+    "terminal.integrated.fontFamily": "'JetBrains Mono', monospace",
     "terminal.integrated.fontSize": 11,
     "terminal.integrated.fontWeight": "normal",
     "terminal.integrated.scrollback": 50000,
