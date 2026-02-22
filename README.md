@@ -577,6 +577,34 @@ EOF
 
 > **Note:** The files `.gitconfig.local`, `.gitconfig.private`, and `.gitconfig.private.local` are all protected by `.gitignore_global` to prevent accidental commits.
 
+#### SSH URL Rewrites (HTTPS → SSH)
+
+This system enforces SSH-only authentication for GitHub. The shared `.gitconfig` has no credential helpers — instead, `~/.gitconfig.private` contains URL rewrite rules that transparently convert any HTTPS GitHub URL to SSH before git acts on it:
+
+```ini
+# ~/.gitconfig.private
+
+[user]
+    name = Your Name
+    email = you@example.com
+
+# Force all GitHub HTTPS URLs through SSH
+[url "git@<your-ssh-host-alias>:"]
+    insteadOf = https://github.com/
+[url "git@<your-ssh-host-alias>:"]
+    insteadOf = https://gist.github.com/
+```
+
+Replace `<your-ssh-host-alias>` with your SSH config host alias (e.g., `github.com-myaccount`) that maps to `github.com` with the correct key.
+
+This is part of a defence-in-depth model:
+
+1. **SSH config hardening** — `AddKeysToAgent no`, `UseKeychain no`, `IdentitiesOnly yes` ensure every operation requires a passphrase
+2. **URL rewrites** — any HTTPS remote is transparently rewritten to SSH, so HTTPS auth is never attempted
+3. **No credential helpers** — the shared `.gitconfig` contains no `[credential]` sections, so even if a URL rewrite is bypassed, HTTPS auth fails rather than silently succeeding
+
+> **Warning:** Running `gh auth login` or `gh auth setup-git` will silently re-add HTTPS credential helpers to `~/.gitconfig`. A `gh()` shell wrapper (in `.zshrc`) blocks these commands to prevent this.
+
 #### Multiple GitHub Accounts
 
 If you have multiple GitHub accounts (e.g., personal, work, side projects), use `[includeIf]` directives in `~/.gitconfig.private` to switch identity based on the repo's directory:

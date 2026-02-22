@@ -445,6 +445,50 @@ npx() {
     echo "  Run:         ${ok}pnpm dlx $@${done}"
 }
 
+# Guard gh auth subcommands that re-add HTTPS credential helpers.
+# Blocks: login, setup-git, refresh (these undermine SSH-only auth).
+# Allows: status, token, switch, logout, and all non-auth gh commands.
+gh() {
+    if [[ "$1" == "auth" ]]; then
+        case "$2" in
+            login)
+                echo "${err}BLOCKED: gh auth login${done}"
+                echo
+                echo "  This system uses SSH-only authentication for GitHub."
+                echo "  ${warn}gh auth login re-adds HTTPS credential helpers to ~/.gitconfig${done}"
+                echo "  which bypasses the SSH lockdown."
+                echo
+                echo "  To authenticate, configure your SSH keys in ~/.ssh/config"
+                echo "  and add URL rewrites in ~/.gitconfig.private instead."
+                return 1
+                ;;
+            setup-git)
+                echo "${err}BLOCKED: gh auth setup-git${done}"
+                echo
+                echo "  This system uses SSH-only authentication for GitHub."
+                echo "  ${warn}gh auth setup-git re-adds HTTPS credential helpers to ~/.gitconfig${done}"
+                echo "  which bypasses the SSH lockdown."
+                return 1
+                ;;
+            refresh)
+                echo "${err}BLOCKED: gh auth refresh${done}"
+                echo
+                echo "  This system uses SSH-only authentication for GitHub."
+                echo "  ${warn}gh auth refresh can update HTTPS tokens${done}"
+                echo "  which bypasses the SSH lockdown."
+                return 1
+                ;;
+            *)
+                # Allow: status, token, switch, logout, etc.
+                command gh "$@"
+                ;;
+        esac
+    else
+        # All non-auth commands pass through unchanged
+        command gh "$@"
+    fi
+}
+
 alias chawan="cha"
 alias web="cha"
 alias www="cha"
