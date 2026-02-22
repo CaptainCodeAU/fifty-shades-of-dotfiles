@@ -350,6 +350,7 @@ alias ...="cd ../.."
 alias ....="cd ../../.."
 alias .....="cd ../../../.."
 alias ~="cd ~"
+alias sysinfo="~/sysinfo.sh"
 # alias ll="lsd -altr" # Requires lsd (https://github.com/lsd-rs/lsd)
 # alias l="lsd -altr"
 alias l="eza -l --git --grid --color=always --icons=always --no-quotes --hyperlink -a -s modified --time modified --git-repos-no-status"
