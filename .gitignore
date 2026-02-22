@@ -44,3 +44,4 @@ home/.zsh_wsl_comfyui_functions
 # Local-only TODO items and slash commands
 temp/TODO/
 .claude/commands/todo.md
+.claude/commands/fix-authors.md
