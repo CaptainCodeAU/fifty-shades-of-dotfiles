@@ -6,7 +6,6 @@
         // titleBar and statusBar colors are automatically set by ~/.config/direnv/direnvrc
         // based on machine type: macOS (#202020), WSL (#1a4d7a), Linux-Codebox (#97B500), Linux-Prod (#D96400)
     },
-
     // ========================================
     // Updates and Extensions
     // ========================================
@@ -14,7 +13,6 @@
     "update.showReleaseNotes": false,
     "extensions.autoUpdate": true,
     "extensions.ignoreRecommendations": true,
-
     // ========================================
     // Telemetry and Insights
     // ========================================
@@ -23,7 +21,6 @@
     "telemetry.enableCrashReporter": false,
     "code-runner.enableAppInsights": false,
     "aws.telemetry": false,
-
     // ========================================
     // Workspace and Explorer
     // ========================================
@@ -43,7 +40,6 @@
         "*.sdb": "${capture}.${extname}-*",
         "*.s3db": "${capture}.${extname}-*"
     },
-
     // ========================================
     // Workbench and UI Customizations
     // ========================================
@@ -56,7 +52,6 @@
     "material-icon-theme.folders.theme": "specific",
     "material-icon-theme.activeIconPack": "react",
     "window.zoomLevel": 0,
-
     // ========================================
     // Editor General Settings
     // ========================================
@@ -77,11 +72,12 @@
     "editor.minimap.enabled": false,
     "editor.bracketPairColorization.enabled": true,
     "editor.semanticHighlighting.enabled": true,
-    "editor.rulers": [90],
+    "editor.rulers": [
+        90
+    ],
     "editor.defaultFormatter": "esbenp.prettier-vscode",
     "editor.tokenColorCustomizations": {},
     "files.trimTrailingWhitespace": true,
-
     // ========================================
     // Formatting and Linting (Prettier)
     // ========================================
@@ -94,12 +90,10 @@
     "prettier.arrowParens": "avoid",
     "prettier.endOfLine": "auto",
     "prettier.eslintIntegration": true,
-
     // ========================================
     // Biome (alternative formatter)
     // ========================================
     "biome.suggestInstallingGlobally": false,
-
     // ========================================
     // Python Specific Settings
     // ========================================
@@ -109,21 +103,30 @@
         "editor.formatOnSave": true,
         "editor.formatOnType": true,
         "editor.formatOnPaste": true,
-        "editor.rulers": [80],
+        "editor.rulers": [
+            80
+        ],
         "editor.tabCompletion": "onlySnippets",
         "editor.wordBasedSuggestions": "matchingDocuments",
         "editor.selectionHighlight": true,
         "editor.suggestSelection": "first",
         "editor.wordBasedSuggestionsMode": "allDocuments",
         "python.formatting.provider": "black",
-        "python.formatting.blackArgs": ["--line-length", "80"]
+        "python.formatting.blackArgs": [
+            "--line-length",
+            "80"
+        ]
     },
-    "python.formatting.blackArgs": ["--line-length", "80"],
+    "python.formatting.blackArgs": [
+        "--line-length",
+        "80"
+    ],
     // python.defaultInterpreterPath: Removed - workspace settings handle this
     // Workspace .vscode/settings.json sets: "${workspaceFolder}/.venv/bin/python"
     "python.analysis.typeCheckingMode": "basic",
-    "python.experiments.optOutFrom": ["All"],
-
+    "python.experiments.optOutFrom": [
+        "All"
+    ],
     // ========================================
     // JavaScript Specific Settings
     // ========================================
@@ -134,14 +137,15 @@
         "editor.defaultFormatter": "biomejs.biome",
         "editor.formatOnSave": true,
         "editor.formatOnType": true,
-        "editor.rulers": [80],
+        "editor.rulers": [
+            80
+        ],
         "editor.tabCompletion": "onlySnippets",
         "editor.tabSize": 4,
         "editor.insertSpaces": true,
         "editor.wordBasedSuggestions": "off"
     },
     "javascript.updateImportsOnFileMove.enabled": "never",
-
     // ========================================
     // React / TypeScript Specific Settings
     // ========================================
@@ -153,7 +157,6 @@
         "editor.tabSize": 4
     },
     "typescript.updateImportsOnFileMove.enabled": "never",
-
     // ========================================
     // JSON and HTML Settings
     // ========================================
@@ -164,7 +167,6 @@
         "editor.defaultFormatter": "vscode.html-language-features"
     },
     "json.maxItemsComputed": 5001,
-
     // ========================================
     // Docker Compose Settings
     // ========================================
@@ -177,19 +179,19 @@
     "[github-actions-workflow]": {
         "editor.defaultFormatter": "redhat.vscode-yaml"
     },
-
     // ========================================
     // Go / Golang Specific Settings
     // ========================================
     "go.toolsManagement.autoUpdate": true,
-
     // ========================================
     // Dart / Flutter Specific Settings
     // ========================================
     "[dart]": {
         "editor.formatOnSave": true,
         "editor.formatOnType": true,
-        "editor.rulers": [80],
+        "editor.rulers": [
+            80
+        ],
         "editor.selectionHighlight": false,
         "editor.suggest.snippetsPreventQuickSuggestions": false,
         "editor.suggestSelection": "first",
@@ -203,7 +205,6 @@
     "dart.hotReloadOnSave": "all",
     "dart.debugExternalPackageLibraries": false,
     "dart.debugSdkLibraries": false,
-
     // ========================================
     // Terminal Settings
     // ========================================
@@ -224,7 +225,6 @@
         }
     },
     "terminal.integrated.defaultProfile.windows": "Command Prompt",
-
     // ========================================
     // Git Settings
     // ========================================
@@ -233,7 +233,6 @@
     "git.autofetch": true,
     "git.openRepositoryInParentFolders": "never",
     "gitHistory.logLevel": "Debug",
-
     // ========================================
     // Remote SSH Settings
     // ========================================
@@ -242,8 +241,16 @@
     "remote.SSH.connectTimeout": 120,
     "remote.autoForwardPortsSource": "hybrid",
     "remote.SSH.defaultForwardedPorts": [
-        { "name": "YOUR_HOSTNAME", "localPort": 8080, "remotePort": 8080 },
-        { "name": "MLBOX1", "localPort": 8080, "remotePort": 8080 }
+        {
+            "name": "YOUR_HOSTNAME",
+            "localPort": 8080,
+            "remotePort": 8080
+        },
+        {
+            "name": "MLBOX1",
+            "localPort": 8080,
+            "remotePort": 8080
+        }
     ],
     "remote.SSH.remotePlatform": {
         "YOUR_HOSTNAME": "windows",
@@ -256,7 +263,6 @@
         "MLbox-wsl": "linux",
         "mlbox": "linux"
     },
-
     // ========================================
     // Live Share and Live Server
     // ========================================
@@ -265,13 +271,11 @@
     "liveshare.diagnosticLoggingLevel": "Off",
     "liveshare.accessibility.soundsEnabled": false,
     "liveshare.accessibility.soundVolume": 0,
-
     // ========================================
     // Security
     // ========================================
     "security.workspace.trust.enabled": true,
     "security.workspace.trust.untrustedFiles": "open",
-
     // ========================================
     // YAML Settings
     // ========================================
@@ -304,24 +308,48 @@
         "!Split",
         "!Split sequence"
     ],
-
     // ========================================
     // Accessibility Signals (all sounds off)
     // ========================================
-    "accessibility.signals.lineHasError": { "sound": "off" },
-    "accessibility.signals.lineHasFoldedArea": { "sound": "off" },
-    "accessibility.signals.lineHasBreakpoint": { "sound": "off" },
-    "accessibility.signals.lineHasInlineSuggestion": { "sound": "off" },
-    "accessibility.signals.terminalQuickFix": { "sound": "off" },
-    "accessibility.signals.onDebugBreak": { "sound": "off" },
-    "accessibility.signals.noInlayHints": { "sound": "off" },
-    "accessibility.signals.taskCompleted": { "sound": "off" },
-    "accessibility.signals.taskFailed": { "sound": "off" },
-    "accessibility.signals.terminalCommandFailed": { "sound": "off" },
-    "accessibility.signals.diffLineInserted": { "sound": "off" },
-    "accessibility.signals.diffLineDeleted": { "sound": "off" },
-    "accessibility.signals.diffLineModified": { "sound": "off" },
-
+    "accessibility.signals.lineHasError": {
+        "sound": "off"
+    },
+    "accessibility.signals.lineHasFoldedArea": {
+        "sound": "off"
+    },
+    "accessibility.signals.lineHasBreakpoint": {
+        "sound": "off"
+    },
+    "accessibility.signals.lineHasInlineSuggestion": {
+        "sound": "off"
+    },
+    "accessibility.signals.terminalQuickFix": {
+        "sound": "off"
+    },
+    "accessibility.signals.onDebugBreak": {
+        "sound": "off"
+    },
+    "accessibility.signals.noInlayHints": {
+        "sound": "off"
+    },
+    "accessibility.signals.taskCompleted": {
+        "sound": "off"
+    },
+    "accessibility.signals.taskFailed": {
+        "sound": "off"
+    },
+    "accessibility.signals.terminalCommandFailed": {
+        "sound": "off"
+    },
+    "accessibility.signals.diffLineInserted": {
+        "sound": "off"
+    },
+    "accessibility.signals.diffLineDeleted": {
+        "sound": "off"
+    },
+    "accessibility.signals.diffLineModified": {
+        "sound": "off"
+    },
     // ========================================
     // Debug and Console Settings
     // ========================================
@@ -330,7 +358,6 @@
     "debug.console.fontSize": 12,
     "scm.inputFontSize": 14,
     "chat.editor.fontSize": 14,
-
     // ========================================
     // Other Tools and Extensions
     // ========================================
@@ -338,72 +365,19 @@
     "hediet.vscode-drawio.resizeImages": null,
     "hediet.vscode-drawio.theme": "atlas",
     "database-client.autoSync": true,
-
-    // ========================================
-    // Spell Checker (cSpell)
-    // ========================================
-    "cSpell.userWords": [
-        "adduser",
-        "alpinejs",
-        "Amol",
-        "apexcharts",
-        "AUTOUPDATER",
-        "avadhut",
-        "biomejs",
-        "boxicons",
-        "Caddyfile",
-        "ccusage",
-        "connectionTimeoutMillis",
-        "datatables",
-        "daterangepicker",
-        "dbname",
-        "evextreme-cli",
-        "fkey",
-        "gitpick",
-        "Hostinger",
-        "idleTimeoutMillis",
-        "LEAPTEL",
-        "lightbox",
-        "livechat",
-        "loadbearing",
-        "Mahesh",
-        "materialdesignicons",
-        "opticomm",
-        "pg_isready",
-        "pre-reqs",
-        "psql",
-        "Pulumi",
-        "readlink",
-        "redaxios",
-        "remixicon",
-        "requirepass",
-        "Rollbar",
-        "signup",
-        "simplebar",
-        "sslmode",
-        "sslrootcert",
-        "statusline",
-        "supabase",
-        "timestamptz",
-        "topbar",
-        "usermod",
-        "Valky",
-        "varchar",
-        "vercel",
-        "WCAG",
-        "Zenbin"
-    ],
-
     // ========================================
     // Cursor-Specific Settings
     // ========================================
+    "cursor.chat.enableCoauthorTrailer": false,
     "cursor.agent_layout_browser_beta_setting": true,
     "cursor.cpp.enablePartialAccepts": true,
-    "cursor.cpp.disabledLanguages": ["markdown", "plaintext"],
+    "cursor.cpp.disabledLanguages": [
+        "markdown",
+        "plaintext"
+    ],
     "cursor.composer.usageSummaryDisplay": "always",
     "cursor.composer.shouldChimeAfterChatFinishes": true,
     "update.releaseTrack": "dev",
-
     // ========================================
     // Claude Code Settings
     // ========================================
