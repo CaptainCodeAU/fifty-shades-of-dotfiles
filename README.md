@@ -602,6 +602,7 @@ This is part of a defence-in-depth model:
 1. **SSH config hardening** — `AddKeysToAgent no`, `UseKeychain no`, `IdentitiesOnly yes` ensure every operation requires a passphrase
 2. **URL rewrites** — any HTTPS remote is transparently rewritten to SSH, so HTTPS auth is never attempted
 3. **No credential helpers** — the shared `.gitconfig` contains no `[credential]` sections, so even if a URL rewrite is bypassed, HTTPS auth fails rather than silently succeeding
+4. **Claude Code SSH pre-loading** — the `_claude_launch` wrapper calls `ssh-add` for the GitHub key before launching, so Claude Code's subprocess operations (marketplace clones, git) work without manual key loading — while still requiring the passphrase on first use per session
 
 > **Warning:** Running `gh auth login` or `gh auth setup-git` will silently re-add HTTPS credential helpers to `~/.gitconfig`. A `gh()` shell wrapper (in `.zshrc`) blocks these commands to prevent this.
 
@@ -985,7 +986,7 @@ The function auto-generates a comprehensive `~/.config/yt-dlp/config` file on fi
 - **Navigation**: `..`, `...`, `....`, `.....` for quick directory navigation
 - **Node.js**: `serve` (pnpm dlx http-server), `tsc` (pnpm dlx typescript)
 - **Docker**: `lzd` (lazydocker), `lzg`/`lg` (lazygit)
-- **Claude Code**: `c` (standard), `cb` (bare/full control), `cr` (resume), `ci` (non-interactive), `ct` (tmux agent teams), `cd_` (debug), `cskip` (skip end hooks)
+- **Claude Code**: `c` (standard), `cb` (bare/full control), `cr` (resume), `ci` (non-interactive), `ct` (tmux agent teams), `cpr` (from PR), `cd_` (debug), `cskip` (skip end hooks). All aliases pre-load the GitHub SSH key into the agent on first launch, so marketplace plugin refreshes and git operations work with SSH-only auth.
 - **Zoxide**: `cd` command is replaced with `zoxide` for intelligent directory jumping
 
 ### Special Functions

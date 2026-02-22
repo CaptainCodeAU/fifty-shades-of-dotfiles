@@ -497,17 +497,30 @@ alias lzg='lazygit'
 alias lg='lazygit'
 
 # ── Claude Code ──────────────────────────────────────────────────────
-# Agent teams (still experimental opt-in), hide account info for recordings
-_claude_env="CLAUDE_CODE_HIDE_ACCOUNT_INFO=1 ENABLE_EXPERIMENTAL_MCP_CLI=1"
+# Ensure the GitHub SSH key is in the agent before launching Claude Code.
+# Claude's marketplace plugin system clones repos via SSH; without the key
+# loaded, refreshes fail with "Permission denied (publickey)".
+_claude_ssh_ensure() {
+  local key="$HOME/.ssh/captaincodeau"
+  if [[ -f "$key" ]] && ! ssh-add -l 2>/dev/null | grep -q "$key"; then
+    ssh-add "$key"
+  fi
+}
 
-alias c="${_claude_env} claude --dangerously-skip-permissions --permission-mode plan"       # Standard launch
-alias ct="${_claude_env} CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 claude --dangerously-skip-permissions --permission-mode plan --teammate-mode tmux"  # Tmux agent teams
-alias cb="${_claude_env} claude"                                                            # Bare (full control)
-alias cr="${_claude_env} claude --dangerously-skip-permissions --resume"                    # Resume last session
-alias ci="${_claude_env} claude --dangerously-skip-permissions -p"                          # Non-interactive / piped
-alias cpr="${_claude_env} claude --dangerously-skip-permissions --from-pr"                  # Resume session from PR
-alias cd_="${_claude_env} claude --dangerously-skip-permissions --permission-mode plan --verbose --debug \"api,hooks,mcp,statsig\""               # Debug (verbose logging)
-alias cskip="${_claude_env} SKIP_SESSION_END_HOOK=1 claude --dangerously-skip-permissions --permission-mode plan"  # Skip end hooks
+# Agent teams (still experimental opt-in), hide account info for recordings
+_claude_launch() {
+  _claude_ssh_ensure
+  CLAUDE_CODE_HIDE_ACCOUNT_INFO=1 ENABLE_EXPERIMENTAL_MCP_CLI=1 "$@"
+}
+
+alias c='_claude_launch claude --dangerously-skip-permissions --permission-mode plan'       # Standard launch
+alias ct='_claude_launch CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 claude --dangerously-skip-permissions --permission-mode plan --teammate-mode tmux'  # Tmux agent teams
+alias cb='_claude_launch claude'                                                            # Bare (full control)
+alias cr='_claude_launch claude --dangerously-skip-permissions --resume'                    # Resume last session
+alias ci='_claude_launch claude --dangerously-skip-permissions -p'                          # Non-interactive / piped
+alias cpr='_claude_launch claude --dangerously-skip-permissions --from-pr'                  # Resume session from PR
+alias cd_='_claude_launch claude --dangerously-skip-permissions --permission-mode plan --verbose --debug "api,hooks,mcp,statsig"'               # Debug (verbose logging)
+alias cskip='_claude_launch SKIP_SESSION_END_HOOK=1 claude --dangerously-skip-permissions --permission-mode plan'  # Skip end hooks
 
 # Intercepting the use of a command like 'sudo claude update' :P
 sudo() {
