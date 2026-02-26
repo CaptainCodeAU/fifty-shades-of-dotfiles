@@ -13,6 +13,9 @@ All hooks are registered in `.claude/settings.json`. Claude Code pipes JSON to s
 | `validate-bash.sh`      | `PreToolUse`   | `Bash`                             | Block destructive commands (`rm -rf /`, force push, etc.) |
 | `pre-commit-check.sh`   | `PreToolUse`   | `Bash`                             | Lint/build gate before `git commit`                       |
 | `protect-files.sh`      | `PreToolUse`   | `Edit\|Write`                      | Block edits to `.env`, lockfiles, `.git/`                 |
+| `enforce-uv.sh`         | `PreToolUse`   | `Bash`                             | Block bare pip/python/pytest/ruff → enforce uv            |
+| `enforce-pnpm.sh`       | `PreToolUse`   | `Bash`                             | Block npm/yarn/npx → enforce pnpm                         |
+| `enforce-no-cd.sh`      | `PreToolUse`   | `Bash`                             | Block bare cd → enforce absolute paths or git -C          |
 | `hook_runner.py`        | Multiple       | Various                            | Audio notifications (sound + speech)                      |
 | _(inline prettier)_     | `PostToolUse`  | `Edit\|Write`                      | Auto-format with prettier after file changes              |
 | _(inline markdownlint)_ | `PostToolUse`  | `Edit\|Write`                      | Auto-fix markdown lint issues on `.md` files              |
@@ -189,6 +192,9 @@ Subclasses override only the steps they need:
   pre-commit-check.sh     # PreToolUse Bash — lint/build gate before git commit
   validate-bash.sh        # PreToolUse Bash — block destructive commands
   protect-files.sh        # PreToolUse Edit|Write — block edits to protected files
+  enforce-uv.sh           # PreToolUse Bash — block bare pip/python/pytest/ruff
+  enforce-pnpm.sh         # PreToolUse Bash — block npm/yarn/npx
+  enforce-no-cd.sh        # PreToolUse Bash — block bare cd
   export_transcript.sh    # SessionEnd — export session transcript
   hook_runner.py          # Audio entrypoint — reads stdin, routes to handler
   config.yaml             # Audio notification configuration
@@ -248,6 +254,36 @@ Runs on `PreToolUse` for `Bash` tools. Reads the stdin JSON and blocks destructi
 - `git clean -fd` or `git clean -f -d` (removes untracked files)
 
 Blocked commands are logged to `security.log` (see [Audit logging](#audit-logging)).
+
+### enforce-uv.sh
+
+Runs on `PreToolUse` for `Bash` tools. Enforces `uv` for all Python commands (from CLAUDE.md conventions):
+
+- `pip install` / `pip3 install` → use `uv add`
+- `pip uninstall` / `pip3 uninstall` → use `uv remove`
+- Bare `python` / `python3` → use `uv run python`
+- Bare `pytest` → use `uv run pytest`
+- Bare `ruff` → use `uv run ruff`
+
+Allows `uv run`, `uv pip`, and commands inside subshells or quoted strings. Blocked commands are logged to `security.log`.
+
+### enforce-pnpm.sh
+
+Runs on `PreToolUse` for `Bash` tools. Enforces `pnpm` for all Node.js commands (from CLAUDE.md conventions):
+
+- `npm` → use `pnpm`
+- `yarn` → use `pnpm`
+- `npx` → use `pnpm dlx`
+
+Allows commands inside subshells or quoted strings. Blocked commands are logged to `security.log`.
+
+### enforce-no-cd.sh
+
+Runs on `PreToolUse` for `Bash` tools. Blocks bare `cd` (from CLAUDE.md conventions — zoxide overrides `cd`):
+
+- `cd /path` → use absolute paths, `git -C <path>`, or `builtin cd`
+
+Allows `builtin cd` and `cd` inside `$(...)` subshells or quoted strings. Blocked commands are logged to `security.log`.
 
 ### protect-files.sh
 
