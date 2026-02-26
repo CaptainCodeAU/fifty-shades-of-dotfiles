@@ -115,7 +115,6 @@
       "WebFetch(domain:www.npmjs.com)",
       "WebSearch"
     ],
-    "ask": ["Bash(git push *)", "Bash(git reset *)"],
     "deny": [
       "Read(**/.env)",
       "Read(**/.env.dev)",
@@ -136,6 +135,10 @@
       "Read(**/password.txt)",
       "Read(**/passwords.txt)",
       "Read(**/secrets/**)"
+    ],
+    "ask": [
+      "Bash(git push *)",
+      "Bash(git reset *)"
     ]
   }
 }

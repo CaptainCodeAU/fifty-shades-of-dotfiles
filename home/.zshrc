@@ -885,6 +885,15 @@ fi
 
 
 # ==============================================================================
+# Private / Machine-Specific Overrides
+# ==============================================================================
+# Source machine-specific settings, API keys, and PATH additions.
+# This file is not tracked by git. Create it with: touch ~/.zshrc.private
+# See README.md → "Shell Settings (~/.zshrc.private)" for examples.
+[ -f ~/.zshrc.private ] && source ~/.zshrc.private
+
+
+# ==============================================================================
 # 10. Welcome / Onboarding Scripts
 # ==============================================================================
 # Only run in interactive shells on first load.

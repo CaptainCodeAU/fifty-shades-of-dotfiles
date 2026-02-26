@@ -43,6 +43,7 @@ Desktop.ini
 .gitconfig.local
 .gitconfig.private
 .gitconfig.private.local
+.zshrc.private
 pass.txt
 password.txt
 passwords.txt
