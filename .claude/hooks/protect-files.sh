@@ -11,6 +11,13 @@ log_blocked() {
   echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] BLOCKED protect-files \"$reason\" \"$file\"" >> "$LOG_FILE"
 }
 
+deny() {
+  local reason="$1"
+  jq -n --arg r "$reason" \
+    '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
+  exit 0
+}
+
 INPUT=$(cat)
 FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // .tool_input.filePath // empty' 2>/dev/null)
 
@@ -24,27 +31,23 @@ FILE_PATH="${FILE_PATH#"$CLAUDE_PROJECT_DIR"/}"
 # Protected patterns
 case "$FILE_PATH" in
   .env|.env.keys|.env.local)
-    echo "BLOCKED: Cannot modify $FILE_PATH — secrets file is protected"
     log_blocked "Secrets file" "$FILE_PATH"
-    exit 2
+    deny "Cannot modify $FILE_PATH — secrets file is protected"
     ;;
   .env.*)
     # Allow .env.example
     if [[ "$FILE_PATH" != ".env.example" ]]; then
-      echo "BLOCKED: Cannot modify $FILE_PATH — secrets file is protected"
       log_blocked "Secrets file" "$FILE_PATH"
-      exit 2
+      deny "Cannot modify $FILE_PATH — secrets file is protected"
     fi
     ;;
   package-lock.json|yarn.lock|pnpm-lock.yaml)
-    echo "BLOCKED: Cannot modify $FILE_PATH — lockfile managed by package manager"
     log_blocked "Lockfile" "$FILE_PATH"
-    exit 2
+    deny "Cannot modify $FILE_PATH — lockfile managed by package manager"
     ;;
   .git/*)
-    echo "BLOCKED: Cannot modify $FILE_PATH — .git directory is read-only"
     log_blocked ".git directory" "$FILE_PATH"
-    exit 2
+    deny "Cannot modify $FILE_PATH — .git directory is read-only"
     ;;
 esac
 

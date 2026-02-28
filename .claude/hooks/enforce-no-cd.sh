@@ -11,6 +11,13 @@ log_blocked() {
   echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] BLOCKED enforce-no-cd \"$reason\" \"$cmd\"" >> "$LOG_FILE"
 }
 
+deny() {
+  local reason="$1"
+  jq -n --arg r "$reason" \
+    '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
+  exit 0
+}
+
 INPUT=$(cat)
 COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)
 
@@ -28,9 +35,8 @@ if echo "$STRIPPED" | grep -qE '(^|[;&|]\s*)cd\s+'; then
   if echo "$STRIPPED" | grep -qE '(^|[;&|]\s*)builtin\s+cd\s+'; then
     : # allowed
   else
-    echo "BLOCKED: Don't use 'cd' — use absolute paths, 'git -C <path>', or 'builtin cd' instead"
     log_blocked "bare cd → absolute paths" "$COMMAND"
-    exit 2
+    deny "Don't use 'cd' — use absolute paths, 'git -C <path>', or 'builtin cd' instead"
   fi
 fi
 
