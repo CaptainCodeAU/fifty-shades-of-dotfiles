@@ -248,7 +248,7 @@ Non-commit Bash commands pass through with no effect.
 
 ### validate-bash.sh
 
-Runs on `PreToolUse` for `Bash` tools. Reads the stdin JSON and blocks destructive commands by exiting with code 2:
+Runs on `PreToolUse` for `Bash` tools. Reads the stdin JSON and blocks destructive commands via `hookSpecificOutput` JSON (`permissionDecision: "deny"`):
 
 - `rm -rf /` or `rm -rf ~` (root/home deletion)
 - `git push --force`, `git push --force-with-lease`, or `git push -f` to `main` or `master`
@@ -298,7 +298,7 @@ Blocked commands are logged to `security.log`.
 
 ### protect-files.sh
 
-Runs on `PreToolUse` for `Edit|Write` tools. Reads the stdin JSON and blocks edits to protected files by exiting with code 2:
+Runs on `PreToolUse` for `Edit|Write` tools. Reads the stdin JSON and blocks edits to protected files via `hookSpecificOutput` JSON (`permissionDecision: "deny"`):
 
 - `.env`, `.env.keys`, `.env.local`, `.env.*` (except `.env.example`)
 - Lockfiles: `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`
