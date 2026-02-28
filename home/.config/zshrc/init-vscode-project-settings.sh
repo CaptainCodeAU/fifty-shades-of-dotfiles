@@ -102,6 +102,11 @@ fi
 # -----------------------------------------------------------------------------
 # Project directory check
 # -----------------------------------------------------------------------------
+if [[ "$(basename "$PWD")" == "fifty-shades-of-dotfiles" ]]; then
+    echo "Error: This is the dotfiles repo. Its .vscode/settings.json is managed separately." >&2
+    exit 1
+fi
+
 if [[ ! -d ".git" ]]; then
     echo "Warning: No .git/ directory found. This might not be a project root."
     read -rp "Continue anyway? [y/N] " answer
