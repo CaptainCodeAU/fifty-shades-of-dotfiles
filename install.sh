@@ -462,10 +462,31 @@ install_omz_plugins() {
 # Installation: Stow
 # ==============================================================================
 
+_is_stow_managed() {
+    # Walk up parent directories of a target path. If any ancestor is a
+    # symlink pointing into the dotfiles repo, the file is already managed
+    # by stow via tree-folding — not a real conflict.
+    local path="$1"
+    local dir
+    dir="$(dirname "$path")"
+    while [[ "$dir" != "$HOME" && "$dir" != "/" ]]; do
+        if [[ -L "$dir" ]]; then
+            local link_target
+            link_target=$(readlink "$dir")
+            if [[ "$link_target" == *"fifty-shades-of-dotfiles"* ]]; then
+                return 0
+            fi
+        fi
+        dir="$(dirname "$dir")"
+    done
+    return 1
+}
+
 check_conflicts() {
     step "Checking for Conflicts"
 
     local conflicts=0
+    local stow_managed=0
     local conflict_files=()
     local home_dir="$REPO_DIR/home"
 
@@ -474,9 +495,16 @@ check_conflicts() {
         local target="$HOME/$relative"
 
         if [[ -e "$target" && ! -L "$target" ]]; then
-            warn "Conflict: ~/$relative already exists (not a symlink)"
-            conflict_files+=("$target")
-            ((conflicts++))
+            # File exists and isn't a symlink — but check if a parent dir
+            # is a stow tree-folded symlink into the repo
+            if _is_stow_managed "$target"; then
+                echo -e "  ${DIM}✓ ~/$relative (stow-managed)${RESET}"
+                ((stow_managed++))
+            else
+                warn "Conflict: ~/$relative already exists (not a symlink)"
+                conflict_files+=("$target")
+                ((conflicts++))
+            fi
         elif [[ -L "$target" ]]; then
             local link_target
             link_target=$(readlink "$target")
@@ -488,7 +516,13 @@ check_conflicts() {
         fi
     done < <(find "$home_dir" -type f -print0)
 
+    if (( stow_managed > 0 )); then
+        echo
+        echo -e "  ${DIM}$stow_managed file(s) inside stow-managed directories${RESET}"
+    fi
+
     if (( conflicts > 0 )); then
+        echo
         warn "$conflicts conflict(s) found"
         echo
         echo -e "  Options:"
