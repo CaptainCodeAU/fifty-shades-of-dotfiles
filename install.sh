@@ -129,6 +129,7 @@ check_prerequisites() {
     check_command git      "git"      || ((missing++))
     check_command zsh      "zsh"      || ((missing++))
     check_command stow     "GNU Stow" || ((missing++))
+    check_command jq       "jq"       || ((missing++))
     echo
 
     echo -e "${BOLD}Shell Framework:${RESET}"
@@ -158,7 +159,6 @@ check_prerequisites() {
     echo -e "${BOLD}Core Tools:${RESET}"
     check_command uv       "uv"       || ((missing++))
     check_command direnv   "direnv"   || true
-    check_command jq       "jq"       || true
     check_command fzf      "fzf"      || true
     check_command eza      "eza"      || true
     check_command zoxide   "zoxide"   || true
@@ -948,6 +948,7 @@ show_summary() {
     echo -e "  ${CYAN}./install.sh --uninstall${RESET}  Remove all symlinks"
     echo -e "  ${CYAN}./install.sh --dry-run${RESET}    Preview what would be done"
     echo
+    echo -e "${BOLD}${MAGENTA}╚══════════════════════════════════════════════════════════════╝${RESET}"
 }
 
 show_help() {

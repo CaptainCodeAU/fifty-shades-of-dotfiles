@@ -21,6 +21,7 @@ It is built around a modern toolchain that prioritizes speed, consistency, and d
   - **`nvm`** with automatic Node.js version switching via `.nvmrc` files.
 - **🐳 Integrated Docker Helpers**: Functions to quickly start, stop, and manage common development services like PostgreSQL, Qdrant, and Jupyter Lab.
 - **🖥️ Tmux Integration**: Powerful tmux session management with git-aware workflows and automatic window naming.
+- **🎨 Machine & Project Color Identity**: Automatic per-machine title bar/status bar colors via direnv (macOS ARM, Intel, WSL, Linux), plus a scaffolding script (`init-vscode-project-settings.sh`) to give each project its own visual identity. All colors come from 10 named profiles in `color-profiles.json`.
 - **📝 Editor Integration**: Automatic environment syncing between Cursor/VSCode terminals and tmux sessions.
 - **🎬 Media Tools**: Built-in `yt()` wrapper for yt-dlp with auto-generated configuration and quality presets.
 - **🔒 Private Configuration**: A built-in pattern for managing your secret keys and machine-specific settings in a `.zshrc.private` file, which is kept out of version control.
@@ -36,7 +37,7 @@ It is built around a modern toolchain that prioritizes speed, consistency, and d
    brew install stow uv direnv jq zoxide eza fzf tmux ripgrep fd gh git-lfs safe-rm neovim glow
    ```
 
-   > **Note:** `stow` is used by the installer to symlink dotfiles from this repo into `~/`. `jq` is used by Node.js scaffolding and onboarding checks. `zoxide` replaces `cd`, `eza` powers the `l`/`ll` aliases, `fzf` provides fuzzy finding, `tmux` powers session management, `ripgrep` (`rg`) enables fast code search, `fd` is a fast `find` alternative, `gh` is the GitHub CLI (used by `.gitconfig` for credential management), `git-lfs` enables Git Large File Storage, `safe-rm` wraps `rm` to prevent accidental deletion of protected paths, `neovim` is the default `$EDITOR` (with fallback to vim/vi), and `glow` renders Markdown files beautifully in the terminal.
+   > **Note:** `stow` is used by the installer to symlink dotfiles from this repo into `~/`. `jq` is required by the direnv color profile system and the project settings scaffolding script, as well as Node.js scaffolding and onboarding checks. `zoxide` replaces `cd`, `eza` powers the `l`/`ll` aliases, `fzf` provides fuzzy finding, `tmux` powers session management, `ripgrep` (`rg`) enables fast code search, `fd` is a fast `find` alternative, `gh` is the GitHub CLI (used by `.gitconfig` for credential management), `git-lfs` enables Git Large File Storage, `safe-rm` wraps `rm` to prevent accidental deletion of protected paths, `neovim` is the default `$EDITOR` (with fallback to vim/vi), and `glow` renders Markdown files beautifully in the terminal.
 
 3. **Recommended Tools**: These are optional but enhance the experience significantly.
 
@@ -120,9 +121,11 @@ The installer will check prerequisites, install missing tools, set up Oh My Zsh 
    ln -sf ~/fifty-shades-of-dotfiles/home/.vimrc ~/.vimrc
 
    # Link .config directory files
-   mkdir -p ~/.config/direnv ~/.config/yt-dlp
+   mkdir -p ~/.config/direnv ~/.config/zshrc ~/.config/yt-dlp
    ln -sf ~/fifty-shades-of-dotfiles/home/.config/direnv/direnvrc ~/.config/direnv/direnvrc
    ln -sf ~/fifty-shades-of-dotfiles/home/.config/direnv/direnv.toml ~/.config/direnv/direnv.toml
+   ln -sf ~/fifty-shades-of-dotfiles/home/.config/zshrc/color-profiles.json ~/.config/zshrc/color-profiles.json
+   ln -sf ~/fifty-shades-of-dotfiles/home/.config/zshrc/init-vscode-project-settings.sh ~/.config/zshrc/init-vscode-project-settings.sh
    ln -sf ~/fifty-shades-of-dotfiles/home/.config/yt-dlp/config ~/.config/yt-dlp/config
    ln -sf ~/fifty-shades-of-dotfiles/home/.config/yazi ~/.config/yazi
 
@@ -820,7 +823,10 @@ fifty-shades-of-dotfiles/
 │       ├── safe-rm                    # safe-rm protected paths → ~/.config/safe-rm
 │       ├── direnv/                    # direnv configs → ~/.config/direnv/
 │       │   ├── direnv.toml
-│       │   └── direnvrc
+│       │   └── direnvrc              # Machine color profiles + env hooks
+│       ├── zshrc/                     # Shared shell data → ~/.config/zshrc/
+│       │   ├── color-profiles.json   # 10 named color profiles (single source of truth)
+│       │   └── init-vscode-project-settings.sh  # Project-level .vscode/settings.json scaffold
 │       ├── yazi/                      # Yazi file manager → ~/.config/yazi/
 │       │   ├── yazi.toml              # Main config (layout, openers, plugins)
 │       │   ├── keymap.toml            # Keybindings (vim-style + zoom)
@@ -831,6 +837,10 @@ fifty-shades-of-dotfiles/
 │       │   └── flavors/               # Flavor themes (catppuccin-mocha)
 │       └── yt-dlp/                    # yt-dlp config → ~/.config/yt-dlp/
 │           └── config
+│
+├── .vscode/                           # VS Code workspace settings (not stowed)
+│   ├── settings.json                 # This repo's workspace colors
+│   └── tasks.json                    # Tasks: init project colors, list profiles
 │
 ├── .claude/                           # Claude Code configuration
 │   ├── settings.json                  # Shared project settings (committed)
@@ -880,7 +890,9 @@ fifty-shades-of-dotfiles/
 - **`home/.zsh_welcome`**: Unified cross-platform welcome script with verbosity controls, auto-detection for SSH/tmux, and environment overview.
 - **`home/.vimrc`**: Lightweight Vim configuration with line numbers, search highlighting, tab settings, and sensible defaults.
 - **`home/.config/safe-rm`**: User-level safe-rm configuration listing protected paths (one per line). Prevents accidental `rm` of critical system directories. Works alongside the `rm()` zsh wrapper for symlink-aware protection.
-- **`home/.config/direnv/`**: direnv configuration files for automatic environment management.
+- **`home/.config/direnv/`**: direnv configuration files. `direnvrc` reads color profiles from `color-profiles.json` via `jq` and applies machine-specific colors to VSCode/Cursor title bars, status bars, and borders.
+- **`home/.config/zshrc/color-profiles.json`**: 10 named color profiles (single source of truth). Used by both direnvrc (machine-level) and `init-vscode-project-settings.sh` (project-level).
+- **`home/.config/zshrc/init-vscode-project-settings.sh`**: Scaffolds `.vscode/settings.json` with a color profile and font settings. Supports `--profile`, `--random`, and `--list` flags.
 - **`home/.config/yazi/`**: Yazi terminal file manager configuration with catppuccin-mocha theme, vim-style keybindings, and plugins for git status indicators and image zoom. The zoom plugin requires ImageMagick (`brew install imagemagick`).
 - **`home/.config/yt-dlp/config`**: yt-dlp configuration template (auto-generated by `yt()` function, but included as reference).
 - **`settings/iterm2/profiles.json`**: Exported iTerm2 profiles for manual import (Profiles > Other Actions > Import JSON Profiles).

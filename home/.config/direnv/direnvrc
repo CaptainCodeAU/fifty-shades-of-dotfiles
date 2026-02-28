@@ -6,21 +6,26 @@
 # =============================================================================
 # VSCode/Cursor Machine Settings - Automatic Color Setup
 # =============================================================================
-# Sets machine-specific title bar and status bar colors for visual identification
-# when working across multiple machines via SSH.
+# Sets machine-specific title bar, status bar, and border colors for visual
+# identification when working across multiple machines via SSH.
 #
-# Colors:
-#   macOS (AdminMBP)           → Dark Gray  #202020
-#   WSL Ubuntu (mlbox.lan)     → Blue       #1a4d7a
-#   Linux LXC 111 (production) → Orange     #D96400
-#   Linux VM 105 (codebox.lan) → Green      #97B500
+# Colors are loaded from ~/.config/zshrc/color-profiles.json (10 named profiles).
+# Each profile defines active/inactive title bar, status bar, panel/sidebar
+# borders, and terminal selection colors.
+#
+# Profile assignments:
+#   macOS ARM (Apple Silicon)  → slate        #2F4858
+#   macOS Intel                → charcoal     #464F51
+#   WSL Ubuntu (mlbox.lan)     → ocean-deep   #23395B
+#   Linux VM 105 (codebox.lan) → forest-green #226F54
+#   Linux LXC 111 (production) → burnt-orange #A3320B
 
 _setup_vscode_machine_colors() {
     # Only run once per shell session to avoid repeated checks
     [[ -n "$_VSCODE_COLORS_CHECKED" ]] && return 0
     export _VSCODE_COLORS_CHECKED=true
 
-    local color=""
+    local profile_name=""
     local machine_name=""
     local settings_files=()
     local is_macos=false
@@ -47,12 +52,19 @@ _setup_vscode_machine_colors() {
     esac
 
     # -------------------------------------------------------------------------
-    # Machine-Specific Color Assignment
+    # Machine-Specific Profile Assignment
     # -------------------------------------------------------------------------
     if [[ "$is_mac" == true ]]; then
-        # macOS local development - Dark gray
-        color="#202020"
-        machine_name="macOS"
+        case "$(uname -m)" in
+            arm64)
+                profile_name="slate"
+                machine_name="macOS-ARM"
+                ;;
+            *)
+                profile_name="charcoal"
+                machine_name="macOS-Intel"
+                ;;
+        esac
         # macOS runs VSCode/Cursor locally - settings are in Application Support
         settings_files=(
             "$HOME/Library/Application Support/Code/User/settings.json"
@@ -60,8 +72,7 @@ _setup_vscode_machine_colors() {
         )
 
     elif [[ "$is_wsl" == true ]]; then
-        # WSL Ubuntu (mlbox.lan) - Blue
-        color="#1a4d7a"
+        profile_name="ocean-deep"
         machine_name="WSL-Ubuntu"
         settings_files=(
             "$HOME/.vscode-server/data/Machine/settings.json"
@@ -69,16 +80,13 @@ _setup_vscode_machine_colors() {
         )
 
     elif [[ "$is_linux" == true ]]; then
-        # Differentiate Linux machines by hostname
         case "$(hostname)" in
             *codebox*|*105*)
-                # Linux VM qemu 105 (codebox.lan) - Green
-                color="#97B500"
+                profile_name="forest-green"
                 machine_name="Linux-Codebox"
                 ;;
             *)
-                # Linux LXC 111 / production - Orange (default for unknown Linux)
-                color="#D96400"
+                profile_name="burnt-orange"
                 machine_name="Linux-Production"
                 ;;
         esac
@@ -89,27 +97,60 @@ _setup_vscode_machine_colors() {
     fi
 
     # -------------------------------------------------------------------------
-    # Apply Color Settings
+    # Read Profile Colors from JSON
     # -------------------------------------------------------------------------
-    # Skip if no color was determined
-    [[ -z "$color" ]] && return 0
+    [[ -z "$profile_name" ]] && return 0
 
-    # The color customization object to merge
+    local profiles_file="$HOME/.config/zshrc/color-profiles.json"
+    if [[ ! -f "$profiles_file" ]] || ! command -v jq &>/dev/null; then
+        return 0  # silently skip if file or jq missing
+    fi
+
+    local profile
+    profile=$(jq -r --arg name "$profile_name" '.profiles[] | select(.name == $name)' "$profiles_file")
+    [[ -z "$profile" ]] && return 0
+
+    # Extract individual color values from the profile
+    local titleBar_activeBackground titleBar_activeForeground
+    local titleBar_inactiveBackground titleBar_inactiveForeground
+    local panel_border sideBar_border
+    local statusBar_background statusBar_foreground
+    local terminal_inactiveSelectionBackground terminal_selectionBackground
+
+    titleBar_activeBackground=$(echo "$profile" | jq -r '.["titleBar.activeBackground"]')
+    titleBar_activeForeground=$(echo "$profile" | jq -r '.["titleBar.activeForeground"]')
+    titleBar_inactiveBackground=$(echo "$profile" | jq -r '.["titleBar.inactiveBackground"]')
+    titleBar_inactiveForeground=$(echo "$profile" | jq -r '.["titleBar.inactiveForeground"]')
+    panel_border=$(echo "$profile" | jq -r '.["panel.border"]')
+    sideBar_border=$(echo "$profile" | jq -r '.["sideBar.border"]')
+    statusBar_background=$(echo "$profile" | jq -r '.["statusBar.background"]')
+    statusBar_foreground=$(echo "$profile" | jq -r '.["statusBar.foreground"]')
+    terminal_inactiveSelectionBackground=$(echo "$profile" | jq -r '.["terminal.inactiveSelectionBackground"]')
+    terminal_selectionBackground=$(echo "$profile" | jq -r '.["terminal.selectionBackground"]')
+
+    # The color customization object to merge (used when creating new files)
     local color_json
     color_json=$(cat << EOF
 {
     "workbench.colorCustomizations": {
-        "titleBar.activeBackground": "${color}",
-        "titleBar.activeForeground": "#e7e7e7",
-        "titleBar.inactiveBackground": "${color}",
-        "titleBar.inactiveForeground": "#999999",
-        "statusBar.background": "${color}",
-        "statusBar.foreground": "#e7e7e7"
+        "titleBar.activeBackground": "${titleBar_activeBackground}",
+        "titleBar.activeForeground": "${titleBar_activeForeground}",
+        "titleBar.inactiveBackground": "${titleBar_inactiveBackground}",
+        "titleBar.inactiveForeground": "${titleBar_inactiveForeground}",
+        "panel.border": "${panel_border}",
+        "sideBar.border": "${sideBar_border}",
+        "statusBar.background": "${statusBar_background}",
+        "statusBar.foreground": "${statusBar_foreground}",
+        "terminal.inactiveSelectionBackground": "${terminal_inactiveSelectionBackground}",
+        "terminal.selectionBackground": "${terminal_selectionBackground}"
     }
 }
 EOF
 )
 
+    # -------------------------------------------------------------------------
+    # Apply Color Settings
+    # -------------------------------------------------------------------------
     for settings_file in "${settings_files[@]}"; do
         local settings_dir=$(dirname "$settings_file")
 
@@ -143,12 +184,16 @@ EOF
                     # Section exists - insert colors INTO the existing block
                     # (after the "workbench.colorCustomizations": { line)
                     sed -i.bak '/"workbench.colorCustomizations": {/a\
-        "titleBar.activeBackground": "'"${color}"'",\
-        "titleBar.activeForeground": "#e7e7e7",\
-        "titleBar.inactiveBackground": "'"${color}"'",\
-        "titleBar.inactiveForeground": "#999999",\
-        "statusBar.background": "'"${color}"'",\
-        "statusBar.foreground": "#e7e7e7",
+        "titleBar.activeBackground": "'"${titleBar_activeBackground}"'",\
+        "titleBar.activeForeground": "'"${titleBar_activeForeground}"'",\
+        "titleBar.inactiveBackground": "'"${titleBar_inactiveBackground}"'",\
+        "titleBar.inactiveForeground": "'"${titleBar_inactiveForeground}"'",\
+        "panel.border": "'"${panel_border}"'",\
+        "sideBar.border": "'"${sideBar_border}"'",\
+        "statusBar.background": "'"${statusBar_background}"'",\
+        "statusBar.foreground": "'"${statusBar_foreground}"'",\
+        "terminal.inactiveSelectionBackground": "'"${terminal_inactiveSelectionBackground}"'",\
+        "terminal.selectionBackground": "'"${terminal_selectionBackground}"'",
 ' "$settings_file"
                     rm -f "${settings_file}.bak"
                 else
@@ -156,12 +201,16 @@ EOF
                     # Using line number 1 explicitly to avoid matching braces elsewhere
                     sed -i.bak '1 a\
     "workbench.colorCustomizations": {\
-        "titleBar.activeBackground": "'"${color}"'",\
-        "titleBar.activeForeground": "#e7e7e7",\
-        "titleBar.inactiveBackground": "'"${color}"'",\
-        "titleBar.inactiveForeground": "#999999",\
-        "statusBar.background": "'"${color}"'",\
-        "statusBar.foreground": "#e7e7e7"\
+        "titleBar.activeBackground": "'"${titleBar_activeBackground}"'",\
+        "titleBar.activeForeground": "'"${titleBar_activeForeground}"'",\
+        "titleBar.inactiveBackground": "'"${titleBar_inactiveBackground}"'",\
+        "titleBar.inactiveForeground": "'"${titleBar_inactiveForeground}"'",\
+        "panel.border": "'"${panel_border}"'",\
+        "sideBar.border": "'"${sideBar_border}"'",\
+        "statusBar.background": "'"${statusBar_background}"'",\
+        "statusBar.foreground": "'"${statusBar_foreground}"'",\
+        "terminal.inactiveSelectionBackground": "'"${terminal_inactiveSelectionBackground}"'",\
+        "terminal.selectionBackground": "'"${terminal_selectionBackground}"'"\
     },
 ' "$settings_file"
                     rm -f "${settings_file}.bak"
@@ -186,24 +235,32 @@ EOF
                 if grep -q '"workbench.colorCustomizations"' "$settings_file" 2>/dev/null; then
                     # Section exists - insert colors INTO the existing block
                     sed -i.bak '/"workbench.colorCustomizations": {/a\
-        "titleBar.activeBackground": "'"${color}"'",\
-        "titleBar.activeForeground": "#e7e7e7",\
-        "titleBar.inactiveBackground": "'"${color}"'",\
-        "titleBar.inactiveForeground": "#999999",\
-        "statusBar.background": "'"${color}"'",\
-        "statusBar.foreground": "#e7e7e7",
+        "titleBar.activeBackground": "'"${titleBar_activeBackground}"'",\
+        "titleBar.activeForeground": "'"${titleBar_activeForeground}"'",\
+        "titleBar.inactiveBackground": "'"${titleBar_inactiveBackground}"'",\
+        "titleBar.inactiveForeground": "'"${titleBar_inactiveForeground}"'",\
+        "panel.border": "'"${panel_border}"'",\
+        "sideBar.border": "'"${sideBar_border}"'",\
+        "statusBar.background": "'"${statusBar_background}"'",\
+        "statusBar.foreground": "'"${statusBar_foreground}"'",\
+        "terminal.inactiveSelectionBackground": "'"${terminal_inactiveSelectionBackground}"'",\
+        "terminal.selectionBackground": "'"${terminal_selectionBackground}"'",
 ' "$settings_file"
                     rm -f "${settings_file}.bak"
                 else
                     # Section doesn't exist - insert after the first line
                     sed -i.bak '1 a\
     "workbench.colorCustomizations": {\
-        "titleBar.activeBackground": "'"${color}"'",\
-        "titleBar.activeForeground": "#e7e7e7",\
-        "titleBar.inactiveBackground": "'"${color}"'",\
-        "titleBar.inactiveForeground": "#999999",\
-        "statusBar.background": "'"${color}"'",\
-        "statusBar.foreground": "#e7e7e7"\
+        "titleBar.activeBackground": "'"${titleBar_activeBackground}"'",\
+        "titleBar.activeForeground": "'"${titleBar_activeForeground}"'",\
+        "titleBar.inactiveBackground": "'"${titleBar_inactiveBackground}"'",\
+        "titleBar.inactiveForeground": "'"${titleBar_inactiveForeground}"'",\
+        "panel.border": "'"${panel_border}"'",\
+        "sideBar.border": "'"${sideBar_border}"'",\
+        "statusBar.background": "'"${statusBar_background}"'",\
+        "statusBar.foreground": "'"${statusBar_foreground}"'",\
+        "terminal.inactiveSelectionBackground": "'"${terminal_inactiveSelectionBackground}"'",\
+        "terminal.selectionBackground": "'"${terminal_selectionBackground}"'"\
     },
 ' "$settings_file"
                     rm -f "${settings_file}.bak"
@@ -217,7 +274,7 @@ EOF
     done
 
     # Uncomment the line below to see a notification when colors are set
-    # echo "✨ VSCode/Cursor colors configured for $machine_name ($color)"
+    # echo "✨ VSCode/Cursor colors configured for $machine_name (profile: $profile_name)"
 }
 
 # =============================================================================
