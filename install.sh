@@ -589,37 +589,59 @@ stow_platform() {
     fi
 
     # --- Cursor ---
-    local cursor_src="$platform_dir/Cursor/User/settings.json"
-    local cursor_dst="$HOME/Library/Application Support/Cursor/User/settings.json"
-    if [[ -f "$cursor_src" ]]; then
-        if confirm "Symlink Cursor settings.json?"; then
-            run_cmd mkdir -p "$(dirname "$cursor_dst")"
-            if [[ -e "$cursor_dst" && ! -L "$cursor_dst" ]]; then
-                warn "Backing up existing Cursor settings to settings.json.bak"
-                run_cmd mv "$cursor_dst" "${cursor_dst}.bak"
+    local cursor_app_dir="$HOME/Library/Application Support/Cursor"
+    if [[ -d "$cursor_app_dir" ]]; then
+        local cursor_src="$platform_dir/Cursor/User/settings.json"
+        local cursor_dst="$cursor_app_dir/User/settings.json"
+        if [[ -f "$cursor_src" ]]; then
+            if [[ -f "$cursor_dst" ]]; then
+                local dst_lines src_lines
+                dst_lines=$(wc -l < "$cursor_dst" | tr -d ' ')
+                src_lines=$(wc -l < "$cursor_src" | tr -d ' ')
+                if (( dst_lines < src_lines )); then
+                    info "Cursor settings.json has fewer lines than repo ($dst_lines < $src_lines) — updating"
+                    run_cmd cp "$cursor_src" "$cursor_dst"
+                    success "Cursor settings.json updated from repo"
+                else
+                    echo -e "  ${GREEN}✓${RESET} Cursor settings.json is up to date ($dst_lines lines)"
+                fi
+            else
+                info "Cursor settings.json not found — copying from repo"
+                run_cmd mkdir -p "$(dirname "$cursor_dst")"
+                run_cmd cp "$cursor_src" "$cursor_dst"
+                success "Cursor settings.json created from repo"
             fi
-            run_cmd ln -sfn "$cursor_src" "$cursor_dst"
-            success "Cursor settings.json → repo"
-            echo -e "    ${CYAN}src: $(pretty_path "$cursor_src")${RESET}"
-            echo -e "    ${CYAN}dst: $(pretty_path "$cursor_dst")${RESET}"
         fi
+    else
+        info "Cursor not installed. Skipping."
     fi
 
     # --- VSCode ---
-    local code_src="$platform_dir/Code/User/settings.json"
-    local code_dst="$HOME/Library/Application Support/Code/User/settings.json"
-    if [[ -f "$code_src" ]]; then
-        if confirm "Symlink VSCode settings.json?"; then
-            run_cmd mkdir -p "$(dirname "$code_dst")"
-            if [[ -e "$code_dst" && ! -L "$code_dst" ]]; then
-                warn "Backing up existing VSCode settings to settings.json.bak"
-                run_cmd mv "$code_dst" "${code_dst}.bak"
+    local code_app_dir="$HOME/Library/Application Support/Code"
+    if [[ -d "$code_app_dir" ]]; then
+        local code_src="$platform_dir/Code/User/settings.json"
+        local code_dst="$code_app_dir/User/settings.json"
+        if [[ -f "$code_src" ]]; then
+            if [[ -f "$code_dst" ]]; then
+                local dst_lines src_lines
+                dst_lines=$(wc -l < "$code_dst" | tr -d ' ')
+                src_lines=$(wc -l < "$code_src" | tr -d ' ')
+                if (( dst_lines < src_lines )); then
+                    info "VSCode settings.json has fewer lines than repo ($dst_lines < $src_lines) — updating"
+                    run_cmd cp "$code_src" "$code_dst"
+                    success "VSCode settings.json updated from repo"
+                else
+                    echo -e "  ${GREEN}✓${RESET} VSCode settings.json is up to date ($dst_lines lines)"
+                fi
+            else
+                info "VSCode settings.json not found — copying from repo"
+                run_cmd mkdir -p "$(dirname "$code_dst")"
+                run_cmd cp "$code_src" "$code_dst"
+                success "VSCode settings.json created from repo"
             fi
-            run_cmd ln -sfn "$code_src" "$code_dst"
-            success "VSCode settings.json → repo"
-            echo -e "    ${CYAN}src: $(pretty_path "$code_src")${RESET}"
-            echo -e "    ${CYAN}dst: $(pretty_path "$code_dst")${RESET}"
         fi
+    else
+        info "VSCode not installed. Skipping."
     fi
 }
 
