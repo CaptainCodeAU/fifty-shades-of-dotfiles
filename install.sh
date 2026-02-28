@@ -420,17 +420,21 @@ install_omz_plugins() {
     local any_missing=false
 
     # --- Plugins ---
-    local -A plugins=(
-        [zsh-autosuggestions]="https://github.com/zsh-users/zsh-autosuggestions"
-        [zsh-syntax-highlighting]="https://github.com/zsh-users/zsh-syntax-highlighting"
-        [zsh-completions]="https://github.com/zsh-users/zsh-completions"
+    local -a plugin_names=(zsh-autosuggestions zsh-syntax-highlighting zsh-completions)
+    local -a plugin_urls=(
+        "https://github.com/zsh-users/zsh-autosuggestions"
+        "https://github.com/zsh-users/zsh-syntax-highlighting"
+        "https://github.com/zsh-users/zsh-completions"
     )
 
-    for plugin in "${!plugins[@]}"; do
+    local i
+    for i in "${!plugin_names[@]}"; do
+        local plugin="${plugin_names[$i]}"
+        local url="${plugin_urls[$i]}"
         if [[ ! -d "$omz_custom/plugins/$plugin" ]]; then
             any_missing=true
             if confirm "Install OMZ plugin: $plugin?"; then
-                run_cmd git clone "${plugins[$plugin]}" "$omz_custom/plugins/$plugin"
+                run_cmd git clone "$url" "$omz_custom/plugins/$plugin"
                 success "$plugin installed"
             fi
         else
