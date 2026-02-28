@@ -57,8 +57,9 @@ It is built around a modern toolchain that prioritizes speed, consistency, and d
 
    ```bash
    git lfs install                    # One-time git-lfs setup (configures hooks)
-   gh auth login                      # Authenticate GitHub CLI (used by .gitconfig credential helper)
    ```
+
+   > **Note:** This system uses SSH-only authentication for GitHub — do **not** run `gh auth login` as it re-adds HTTPS credential helpers. Instead, configure your SSH keys in `~/.ssh/config` and add URL rewrites in `~/.gitconfig.private`. See [Customization & Private Settings](#customization--private-settings) for details.
 
 ---
 
