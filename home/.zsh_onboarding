@@ -296,11 +296,13 @@ run_onboarding() {
     _ensure_command "jq" "jq" "jq"
     _ensure_command "direnv" "direnv" "direnv"
     _ensure_command "zoxide" "zoxide" "zoxide"
+    _ensure_command "glow" "glow" "glow"
     echo
 
     # --- CLI Tools ---
     echo "${info}Checking CLI tools...${done}"
     _ensure_command "rg" "ripgrep" "ripgrep"
+    _ensure_command "nvim" "neovim" "neovim"
     _ensure_command "tree" "tree" "tree"
     _ensure_command "neofetch" "neofetch" "neofetch"
     _ensure_command "ffmpeg" "ffmpeg" "ffmpeg"
@@ -318,6 +320,13 @@ run_onboarding() {
     echo "${info}Checking Docker...${done}"
     _show_docker_guidance
     echo
+
+    # --- Neovim state directories ---
+    # Pre-create nvim XDG state dirs as the current user to prevent
+    # root-ownership issues from prior sudo nvim invocations.
+    if command -v nvim &>/dev/null; then
+        mkdir -p ~/.local/state/nvim/{shada,swap,undo,backup}
+    fi
 
     # --- Complete ---
     echo "${info}==============================================================================${done}"

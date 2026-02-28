@@ -22,7 +22,13 @@ export LANG=en_AU.UTF-8
 export LC_ALL=en_AU.UTF-8
 
 # --- Editor ---
-export EDITOR=nvim
+if command -v nvim &>/dev/null; then
+    export EDITOR=nvim
+elif command -v vim &>/dev/null; then
+    export EDITOR=vim
+else
+    export EDITOR=vi
+fi
 
 # --- History ---
 export HISTFILE=~/.zsh_history
