@@ -577,6 +577,30 @@ rm() {
 	fi
 }
 
+# Prompt before overwriting files by default.
+# Use explicit -f when you intentionally want to overwrite without prompts.
+cp() {
+    local arg
+    for arg in "$@"; do
+        if [[ "$arg" == -f || "$arg" == -*f* ]]; then
+            command cp "$@"
+            return
+        fi
+    done
+    command cp -i "$@"
+}
+
+mv() {
+    local arg
+    for arg in "$@"; do
+        if [[ "$arg" == -f || "$arg" == -*f* ]]; then
+            command mv "$@"
+            return
+        fi
+    done
+    command mv -i "$@"
+}
+
 # --- yt-dlp Wrapper ---
 # Custom wrapper for yt-dlp with simplified aliases defined in ~/.config/yt-dlp/config
 yt() {
