@@ -1023,6 +1023,7 @@ The function auto-generates a comprehensive `~/.config/yt-dlp/config` file on fi
 ### Special Functions
 
 - **`rm()` wrapper**: Two-layer deletion safety net. First warns before deleting symlinks (shows link target, prompts for confirmation). Then routes through `safe-rm` when installed (blocks deletion of protected paths like `/`, `/etc`, `/usr`). Falls back to native `rm` if `safe-rm` is absent. Configured via `~/.config/safe-rm`.
+- **`cp()`/`mv()` wrappers**: Default to interactive overwrite protection (`-i`) so you are prompted before clobbering existing files. Explicit force flags (`-f`, e.g. `-rf`) bypass prompts when you intentionally want non-interactive overwrite behavior.
 - **`sudo()` wrapper**: Prevents accidental `sudo claude` commands and redirects appropriately
 - **`pip()` wrapper**: Intercepts `pip install` → `uv add` and `pip uninstall` → `uv remove`; passes through editable installs and read-only subcommands via `uv pip`
 - **`pipx()` wrapper**: Intercepts `pipx` commands and shows the equivalent `uv tool` commands
