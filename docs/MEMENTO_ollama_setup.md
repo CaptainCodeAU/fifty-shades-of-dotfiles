@@ -72,14 +72,14 @@ We use `launchctl` directly instead of `brew services` because Homebrew regenera
 
 ### File Locations
 
-| File           | Path                                              | Purpose                 |
-| -------------- | ------------------------------------------------- | ----------------------- |
-| Server plist   | `~/Library/LaunchAgents/ollama-custom.plist`      | Runs `ollama serve`     |
-| Preload plist  | `~/Library/LaunchAgents/com.ollama.preload.plist` | Keeps model loaded      |
-| Server log     | `/opt/homebrew/var/log/ollama.log`                | Server output           |
-| Preload log    | `/opt/homebrew/var/log/ollama-preload.log`        | Preload output          |
-| Ollama binary  | `/opt/homebrew/opt/ollama/bin/ollama`             | Installed via Homebrew  |
-| sysinfo script | `~/sysinfo.sh`                                    | System & Ollama monitor |
+| File            | Path                                              | Purpose                 |
+| --------------- | ------------------------------------------------- | ----------------------- |
+| Server plist    | `~/Library/LaunchAgents/ollama-custom.plist`      | Runs `ollama serve`     |
+| Preload plist   | `~/Library/LaunchAgents/com.ollama.preload.plist` | Keeps model loaded      |
+| Server log      | `/opt/homebrew/var/log/ollama.log`                | Server output           |
+| Preload log     | `/opt/homebrew/var/log/ollama-preload.log`        | Preload output          |
+| Ollama binary   | `/opt/homebrew/opt/ollama/bin/ollama`             | Installed via Homebrew  |
+| sysinfo command | `sysinfo`                                         | System & Ollama monitor |
 
 ### Environment Variables (Server)
 
@@ -287,7 +287,7 @@ curl -s http://localhost:11434/api/ps
 
 ## Monitoring
 
-A custom system monitor script is available at `~/sysinfo.sh` (aliased as `sysinfo`). It displays:
+A custom system monitor command is available as `sysinfo`. It displays:
 
 - Memory usage with health status and pressure
 - CPU usage and load average

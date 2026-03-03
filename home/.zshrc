@@ -356,7 +356,6 @@ alias ...="cd ../.."
 alias ....="cd ../../.."
 alias .....="cd ../../../.."
 alias ~="cd ~"
-alias sysinfo="~/sysinfo.sh"
 # --- Ollama (Local AI) ---
 alias ollama-up="launchctl load ~/Library/LaunchAgents/ollama-custom.plist && launchctl load ~/Library/LaunchAgents/com.ollama.preload.plist"
 alias ollama-down="launchctl unload ~/Library/LaunchAgents/com.ollama.preload.plist && launchctl unload ~/Library/LaunchAgents/ollama-custom.plist"

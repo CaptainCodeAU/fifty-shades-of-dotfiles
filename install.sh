@@ -692,14 +692,14 @@ GITEOF"
         success "git-lfs configured"
     fi
 
-    # --- gh auth ---
+    # --- gh (SSH-only model) ---
     if command -v gh &>/dev/null; then
-        if ! gh auth status &>/dev/null 2>&1; then
-            warn "GitHub CLI (gh) is not authenticated."
-            info "Your .gitconfig uses gh for credential management."
-            info "Run ${CYAN}gh auth login${RESET} after installation to authenticate."
+        if gh auth status &>/dev/null 2>&1; then
+            success "GitHub CLI authenticated (optional for API operations)"
         else
-            success "GitHub CLI authenticated"
+            info "GitHub CLI (gh) is not authenticated."
+            info "This setup uses SSH-only Git auth; ${CYAN}do not run gh auth login${RESET} or ${CYAN}gh auth setup-git${RESET}."
+            info "Use SSH keys plus URL rewrites in ${CYAN}~/.gitconfig.private${RESET} (see README)."
         fi
     fi
 
@@ -914,15 +914,20 @@ show_summary() {
         [[ -L "$cursor_dst" ]] && echo -e "  ${GREEN}✓${RESET} Cursor settings linked"
         [[ -L "$code_dst" ]] && echo -e "  ${GREEN}✓${RESET} VSCode settings linked"
     fi
+    if [[ -x "$HOME/.local/bin/sysinfo" ]]; then
+        echo -e "  ${GREEN}✓${RESET} Standalone script command available: ${CYAN}sysinfo${RESET}"
+    fi
 
     # Show what's still missing
     echo
     echo -e "${BOLD}Still needed (if not done above):${RESET}"
     local all_good=true
 
-    if ! command -v gh &>/dev/null || ! gh auth status &>/dev/null 2>&1; then
-        echo -e "  ${YELLOW}~${RESET} Run ${CYAN}gh auth login${RESET} to authenticate GitHub CLI"
-        all_good=false
+    if ! command -v gh &>/dev/null; then
+        echo -e "  ${YELLOW}~${RESET} Install GitHub CLI (${CYAN}gh${RESET}) if you need GitHub API/PR commands"
+    elif ! gh auth status &>/dev/null 2>&1; then
+        echo -e "  ${YELLOW}~${RESET} ${CYAN}gh${RESET} is not authenticated (optional for API/PR usage)."
+        echo -e "     ${DIM}Git transport here is SSH-only; avoid gh auth login/setup-git.${RESET}"
     fi
     if [[ -d "$HOME/.tmux/plugins/tpm" ]] && command -v tmux &>/dev/null; then
         echo -e "  ${YELLOW}~${RESET} Start tmux and press ${CYAN}prefix + I${RESET} to install tmux plugins"
@@ -947,6 +952,7 @@ show_summary() {
     echo -e "  ${CYAN}./install.sh --update${RESET}     Pull latest and restow"
     echo -e "  ${CYAN}./install.sh --uninstall${RESET}  Remove all symlinks"
     echo -e "  ${CYAN}./install.sh --dry-run${RESET}    Preview what would be done"
+    echo -e "  ${DIM}Note:${RESET} Standalone scripts deploy via ${CYAN}home/.local/bin${RESET} and ${CYAN}home/.local/share/fifty-shades-of-dotfiles/scripts${RESET}"
     echo
     echo -e "${BOLD}${MAGENTA}╚══════════════════════════════════════════════════════════════╝${RESET}"
 }
@@ -970,7 +976,7 @@ show_help() {
     echo -e "  3. Checks for file conflicts in ~/ (with auto-backup option)"
     echo -e "  4. Symlinks home/ → ~/ using GNU Stow"
     echo -e "  5. Symlinks platform-specific files (macOS Cursor/VSCode settings)"
-    echo -e "  6. Sets up git identity, git-lfs, and GitHub CLI auth"
+    echo -e "  6. Sets up git identity, git-lfs, and SSH-only GitHub workflow guidance"
     echo -e "  7. Installs Python 3.13 via uv, nvm, pnpm, bun (standalone)"
     echo -e "  8. Installs TPM (Tmux Plugin Manager) and Nerd Fonts"
     echo -e "  9. Suggests creating ~/.zshrc.private for secrets"
