@@ -189,7 +189,14 @@ Wrong command behavior due to old alias:
   - `type <name>`
 - Remove conflicting alias/function and reload shell.
 
+`dirdiff` config behavior:
+
+- Runtime config is local-only at `~/.config/dirdiff/config` (do not keep `home/.config/dirdiff/config` in repo).
+- Existing config is never overwritten by `dirdiff`.
+- `.bak` config files are not created.
+
 ## Current Script Index
 
+- `dirdiff` -> `~/.local/share/fifty-shades-of-dotfiles/scripts/dirdiff.sh`
 - `sysinfo` -> `~/.local/share/fifty-shades-of-dotfiles/scripts/sysinfo.sh`
 - `watch-history-sync` -> `~/.local/share/fifty-shades-of-dotfiles/scripts/watch-history-sync.sh`

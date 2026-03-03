@@ -917,6 +917,9 @@ show_summary() {
     if [[ -x "$HOME/.local/bin/sysinfo" ]]; then
         echo -e "  ${GREEN}✓${RESET} Standalone script command available: ${CYAN}sysinfo${RESET}"
     fi
+    if [[ -x "$HOME/.local/bin/dirdiff" ]]; then
+        echo -e "  ${GREEN}✓${RESET} Standalone script command available: ${CYAN}dirdiff${RESET}"
+    fi
     if [[ -x "$HOME/.local/bin/watch-history-sync" ]]; then
         echo -e "  ${GREEN}✓${RESET} Standalone script command available: ${CYAN}watch-history-sync${RESET}"
     fi

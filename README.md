@@ -558,6 +558,7 @@ Local AI inference server running on macOS via custom LaunchAgents (not `brew se
 | `ollama-up`   | Start Ollama server + model preload     |
 | `ollama-down` | Stop preload + server                   |
 | `sysinfo`     | System monitor (includes Ollama status) |
+| `dirdiff`     | Compare two directory trees             |
 
 The default preloaded model is `coreworxlab/caal-ministral:latest` (~7.8 GB VRAM). API available at `http://localhost:11434`.
 
@@ -841,12 +842,14 @@ fifty-shades-of-dotfiles/
 │   │
 │   └── .local/                        # User-level commands and shared script sources
 │       ├── bin/                       # Command entrypoints on PATH → ~/.local/bin/
+│       │   ├── dirdiff                # Wrapper command for directory diff script
 │       │   ├── sysinfo                # Wrapper command for system monitor script
 │       │   └── watch-history-sync     # Wrapper command for YouTube history exporter
 │       └── share/
 │           └── fifty-shades-of-dotfiles/
 │               └── scripts/           # Standalone script sources + local scripts README
 │                   ├── README.md
+│                   ├── dirdiff.sh
 │                   ├── sysinfo.sh
 │                   └── watch-history-sync.sh
 │
@@ -1038,7 +1041,7 @@ Standalone shell scripts are managed through the dotfiles stow layout and expose
 
 - Source scripts: `home/.local/share/fifty-shades-of-dotfiles/scripts/*.sh`
 - Command entrypoints: `home/.local/bin/<command>`
-- Current commands: `sysinfo`, `watch-history-sync`
+- Current commands: `dirdiff`, `sysinfo`, `watch-history-sync`
 
 For the full architecture, conventions, migration policy, and add-new-script workflow, see:
 
