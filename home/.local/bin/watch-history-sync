@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+script_path="$HOME/.local/share/fifty-shades-of-dotfiles/scripts/watch-history-sync.sh"
+
+if [[ ! -e "$script_path" ]]; then
+  echo "watch-history-sync: script not found at $script_path" >&2
+  echo "Restow dotfiles from current repo location (e.g. ./install.sh --stow-only)." >&2
+  exit 1
+fi
+
+if [[ ! -x "$script_path" ]]; then
+  echo "watch-history-sync: script is not executable: $script_path" >&2
+  echo "Run: chmod +x \"$script_path\"" >&2
+  exit 1
+fi
+
+exec "$script_path" "$@"

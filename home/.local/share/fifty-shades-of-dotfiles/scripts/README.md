@@ -192,3 +192,4 @@ Wrong command behavior due to old alias:
 ## Current Script Index
 
 - `sysinfo` -> `~/.local/share/fifty-shades-of-dotfiles/scripts/sysinfo.sh`
+- `watch-history-sync` -> `~/.local/share/fifty-shades-of-dotfiles/scripts/watch-history-sync.sh`

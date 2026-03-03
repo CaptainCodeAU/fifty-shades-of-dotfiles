@@ -841,12 +841,14 @@ fifty-shades-of-dotfiles/
 │   │
 │   └── .local/                        # User-level commands and shared script sources
 │       ├── bin/                       # Command entrypoints on PATH → ~/.local/bin/
-│       │   └── sysinfo                # Wrapper command for system monitor script
+│       │   ├── sysinfo                # Wrapper command for system monitor script
+│       │   └── watch-history-sync     # Wrapper command for YouTube history exporter
 │       └── share/
 │           └── fifty-shades-of-dotfiles/
 │               └── scripts/           # Standalone script sources + local scripts README
 │                   ├── README.md
-│                   └── sysinfo.sh
+│                   ├── sysinfo.sh
+│                   └── watch-history-sync.sh
 │
 ├── .vscode/                           # VS Code workspace settings (not stowed)
 │   ├── settings.json                 # This repo's workspace colors
@@ -1036,6 +1038,7 @@ Standalone shell scripts are managed through the dotfiles stow layout and expose
 
 - Source scripts: `home/.local/share/fifty-shades-of-dotfiles/scripts/*.sh`
 - Command entrypoints: `home/.local/bin/<command>`
+- Current commands: `sysinfo`, `watch-history-sync`
 
 For the full architecture, conventions, migration policy, and add-new-script workflow, see:
 

@@ -45,3 +45,12 @@ home/.zsh_wsl_comfyui_functions
 temp/TODO/
 .claude/commands/todo.md
 .claude/commands/fix-authors.md
+
+# Allow canonical standalone script subsystem under home/.local
+!home/.local/
+!home/.local/bin/
+!home/.local/bin/*
+!home/.local/share/
+!home/.local/share/fifty-shades-of-dotfiles/
+!home/.local/share/fifty-shades-of-dotfiles/scripts/
+!home/.local/share/fifty-shades-of-dotfiles/scripts/*
