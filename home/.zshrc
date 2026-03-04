@@ -506,6 +506,9 @@ alias lzg='lazygit'
 alias lg='lazygit'
 
 # ── Claude Code ──────────────────────────────────────────────────────
+# Use system ripgrep for Claude Code search (faster than bundled ripgrep).
+export USE_BUILTIN_RIPGREP=0
+
 # Isolated ephemeral SSH agent per Claude Code session.
 # Spins up a dedicated ssh-agent in a subshell so the GitHub key is never
 # loaded into macOS's system-wide launchd agent. The agent (and key) die
