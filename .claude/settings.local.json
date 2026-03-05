@@ -54,6 +54,13 @@
       "Bash(lsof *)",
       "Bash(mkdir *)",
       "Bash(mv *)",
+      "Bash(npm install:*)",
+      "Bash(npm run build:*)",
+      "Bash(npm run dev:*)",
+      "Bash(npm uninstall:*)",
+      "Bash(npm view:*)",
+      "Bash(npx inngest-cli@latest dev)",
+      "Bash(npx supabase:*)",
       "Bash(nvm *)",
       "Bash(obsidian help:*)",
       "Bash(obsidian files:*)",
@@ -75,8 +82,11 @@
       "Bash(rm *)",
       "Bash(security find-generic-password *)",
       "Bash(sed *)",
+      "Bash(shared-types/database.types.ts)",
       "Bash(sort *)",
       "Bash(sudo xcode-select *)",
+      "Bash(supabase db diff:*)",
+      "Bash(supabase migration:*)",
       "Bash(swift *)",
       "Bash(swift build *)",
       "Bash(swift run *)",
@@ -107,6 +117,7 @@
       "WebFetch(domain:cocoapods.org)",
       "WebFetch(domain:code.claude.com)",
       "WebFetch(domain:developer.apple.com)",
+      "WebFetch(domain:developers.google.com)",
       "WebFetch(domain:docs.anthropic.com)",
       "WebFetch(domain:docs.github.com)",
       "WebFetch(domain:docs.swift.org)",
@@ -114,13 +125,16 @@
       "WebFetch(domain:json.schemastore.org)",
       "WebFetch(domain:modelcontextprotocol.io)",
       "WebFetch(domain:npmjs.com)",
+      "WebFetch(domain:planetscale.com)",
       "WebFetch(domain:platform.claude.com)",
       "WebFetch(domain:pypi.org)",
       "WebFetch(domain:raw.githubusercontent.com)",
       "WebFetch(domain:registry.npmjs.org)",
       "WebFetch(domain:stackoverflow.com)",
       "WebFetch(domain:swift.org)",
+      "WebFetch(domain:www.better-auth.com)",
       "WebFetch(domain:www.npmjs.com)",
+      "mcp__exa__web_search_exa",
       "WebSearch"
     ],
     "deny": [
@@ -144,9 +158,6 @@
       "Read(**/passwords.txt)",
       "Read(**/secrets/**)"
     ],
-    "ask": [
-      "Bash(git push *)",
-      "Bash(git reset *)"
-    ]
+    "ask": ["Bash(git push *)", "Bash(git reset *)"]
   }
 }
