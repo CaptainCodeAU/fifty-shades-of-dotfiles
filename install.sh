@@ -661,22 +661,28 @@ post_install() {
     git_name=$(git config user.name 2>/dev/null || true)
     git_email=$(git config user.email 2>/dev/null || true)
     if [[ -z "$git_name" || -z "$git_email" ]]; then
-        info "Git identity not configured."
-        info "Identity is stored in ${CYAN}~/.gitconfig.private${RESET} (not committed to the repo)."
-        if confirm "Set up git user.name and user.email now?"; then
-            if [[ -z "$git_name" ]]; then
-                read -rp "$(echo -e "${CYAN}  Your name: ${RESET}")" git_name
-            fi
-            if [[ -z "$git_email" ]]; then
-                read -rp "$(echo -e "${CYAN}  Your email: ${RESET}")" git_email
-            fi
-            if [[ -n "$git_name" || -n "$git_email" ]]; then
-                run_cmd bash -c "cat > '$git_private' << GITEOF
+        if [[ -f "$git_private" ]]; then
+            warn "Git identity not fully resolved, but $(pretty_path "$git_private") already exists."
+            info "The file may contain includeIf rules, URL rewrites, or multi-account config."
+            info "Skipping auto-creation to avoid overwriting. Edit it manually if needed."
+        else
+            info "Git identity not configured."
+            info "Identity is stored in ${CYAN}~/.gitconfig.private${RESET} (not committed to the repo)."
+            if confirm "Set up git user.name and user.email now?"; then
+                if [[ -z "$git_name" ]]; then
+                    read -rp "$(echo -e "${CYAN}  Your name: ${RESET}")" git_name
+                fi
+                if [[ -z "$git_email" ]]; then
+                    read -rp "$(echo -e "${CYAN}  Your email: ${RESET}")" git_email
+                fi
+                if [[ -n "$git_name" || -n "$git_email" ]]; then
+                    run_cmd bash -c "cat > '$git_private' << GITEOF
 [user]
 	name = ${git_name}
 	email = ${git_email}
 GITEOF"
-                success "Git identity saved to $(pretty_path "$git_private")"
+                    success "Git identity saved to $(pretty_path "$git_private")"
+                fi
             fi
         fi
     else
