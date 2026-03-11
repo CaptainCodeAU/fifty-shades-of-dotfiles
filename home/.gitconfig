@@ -14,13 +14,19 @@
 # SSH-Only Authentication
 # -----------------------
 # This system enforces SSH-only authentication for GitHub. HTTPS credential
-# helpers have been intentionally removed. All HTTPS GitHub URLs are rewritten
-# to SSH via a [url] insteadOf rule in ~/.gitconfig.private:
+# helpers have been intentionally removed. All HTTPS GitHub URLs for YOUR
+# accounts are rewritten to SSH via scoped [url] insteadOf rules in
+# ~/.gitconfig.private. Third-party URLs (Homebrew, open-source repos)
+# stay on HTTPS and work without authentication.
 #
-#   [url "git@<your-ssh-host-alias>:"]
-#       insteadOf = https://github.com/
-#   [url "git@<your-ssh-host-alias>:"]
-#       insteadOf = https://gist.github.com/
+#   [url "<your-ssh-host-alias>:<YourGitHubUsername>/"]
+#       insteadOf = https://github.com/<YourGitHubUsername>/
+#   [url "<your-ssh-host-alias>:"]
+#       insteadOf = https://gist.github.com/<YourGitHubUsername>/
+#
+# Per-account git identities live alongside their SSH keys in ~/.ssh/
+# and are loaded via includeIf rules in ~/.gitconfig.private.
+# See ~/.gitconfig.private for the full account setup and instructions.
 #
 # WARNING: Running `gh auth login` or `gh auth setup-git` will silently
 # re-add HTTPS credential helpers to this file. If that happens, remove

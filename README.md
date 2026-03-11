@@ -572,56 +572,39 @@ To keep your main configuration portable and shareable, personal and machine-spe
 
 ### Git Identity (`~/.gitconfig.private`)
 
-The shared `.gitconfig` includes `~/.gitconfig.private` via `[include]`. This file holds your personal git identity:
+The shared `.gitconfig` includes `~/.gitconfig.private` via `[include]`. This file is the central hub for git identity, multi-account routing, and SSH URL rewrites.
+
+For a single account, a minimal setup is:
 
 ```ini
 [user]
     name = Your Name
     email = you@example.com
-
-# Optional: GPG signing
-# [commit]
-#     gpgsign = true
-# [user]
-#     signingkey = ABCDEF1234567890
 ```
 
-The installer (`./install.sh`) will prompt you to create this file automatically. You can also create it manually:
+The installer (`./install.sh`) will prompt you to create this file on a fresh machine. If the file already exists (e.g., with multi-account config), the installer skips creation to avoid overwriting it.
 
-```bash
-cat > ~/.gitconfig.private << 'EOF'
-[user]
-    name = Your Name
-    email = you@example.com
-EOF
-```
+> **Note:** The files `.gitconfig.local`, `.gitconfig.private`, `.gitconfig.private.local`, and `~/.ssh/gitconfig-*` are all protected by `.gitignore_global` to prevent accidental commits.
 
-> **Note:** The files `.gitconfig.local`, `.gitconfig.private`, and `.gitconfig.private.local` are all protected by `.gitignore_global` to prevent accidental commits.
+#### SSH-Only Authentication
 
-#### SSH URL Rewrites (HTTPS → SSH)
-
-This system enforces SSH-only authentication for GitHub. The shared `.gitconfig` has no credential helpers — instead, `~/.gitconfig.private` contains URL rewrite rules that transparently convert any HTTPS GitHub URL to SSH before git acts on it:
+This system enforces SSH-only authentication for GitHub. The shared `.gitconfig` has no credential helpers — instead, `~/.gitconfig.private` contains **scoped** URL rewrite rules that convert HTTPS URLs to SSH only for **your own** GitHub usernames. Third-party URLs (Homebrew taps, open-source repos) stay on HTTPS and work without authentication.
 
 ```ini
-# ~/.gitconfig.private
+# ~/.gitconfig.private — URL rewrites (scoped per username)
 
-[user]
-    name = Your Name
-    email = you@example.com
-
-# Force all GitHub HTTPS URLs through SSH
-[url "git@<your-ssh-host-alias>:"]
-    insteadOf = https://github.com/
-[url "git@<your-ssh-host-alias>:"]
-    insteadOf = https://gist.github.com/
+[url "<ssh-host-alias>:<YourGitHubUsername>/"]
+    insteadOf = https://github.com/<YourGitHubUsername>/
+[url "<ssh-host-alias>:"]
+    insteadOf = https://gist.github.com/<YourGitHubUsername>/
 ```
 
-Replace `<your-ssh-host-alias>` with your SSH config host alias (e.g., `github.com-myaccount`) that maps to `github.com` with the correct key.
+> **Important:** Do **not** use a blanket `insteadOf = https://github.com/` rule — this rewrites all GitHub URLs (including Homebrew taps and third-party repos) to SSH, which breaks `brew update` and any unauthenticated HTTPS clone.
 
 This is part of a defence-in-depth model:
 
 1. **SSH config hardening** — `AddKeysToAgent no`, `UseKeychain no`, `IdentitiesOnly yes` ensure every operation requires a passphrase
-2. **URL rewrites** — any HTTPS remote is transparently rewritten to SSH, so HTTPS auth is never attempted
+2. **Scoped URL rewrites** — only your own GitHub repos are rewritten to SSH; third-party HTTPS URLs pass through untouched
 3. **No credential helpers** — the shared `.gitconfig` contains no `[credential]` sections, so even if a URL rewrite is bypassed, HTTPS auth fails rather than silently succeeding
 4. **Claude Code SSH isolation** — the `_claude_launch` wrapper spins up an **isolated SSH agent** scoped to the Claude Code process — the key is loaded only into this ephemeral agent and is never visible to other terminals or the system launchd agent. The agent dies when Claude Code exits; a 4-hour timeout is a safety net for abnormal termination (SIGKILL).
 
@@ -629,46 +612,91 @@ This is part of a defence-in-depth model:
 
 #### Multiple GitHub Accounts
 
-If you have multiple GitHub accounts (e.g., personal, work, side projects), use `[includeIf]` directives in `~/.gitconfig.private` to switch identity based on the repo's directory:
+If you have multiple GitHub accounts, each account gets three things:
+
+1. **SSH host alias** in `~/.ssh/config` — maps a short name to `github.com` with the correct key
+2. **Git identity file** in `~/.ssh/gitconfig-<alias>` — sets `[user]` name/email and `core.sshCommand`
+3. **`includeIf` rule** in `~/.gitconfig.private` — loads the identity file based on repo directory
+
+**SSH config** (`~/.ssh/config`):
 
 ```ini
-# ~/.gitconfig.private
+# Global defaults — strict key handling
+Host *
+    AddKeysToAgent no
+    UseKeychain no
+    IdentitiesOnly yes
 
-# Default identity (used when no includeIf matches)
+Host git-personal
+    HostName github.com
+    User git
+    IdentityFile ~/.ssh/personal
+
+Host git-work
+    HostName github.com
+    User git
+    IdentityFile ~/.ssh/work
+```
+
+**Identity files** (co-located with SSH keys in `~/.ssh/`):
+
+```ini
+# ~/.ssh/gitconfig-personal
 [user]
     name = PersonalHandle
     email = personal@example.com
-
-# Work account — repos cloned into ~/WORK/
-[includeIf "gitdir:~/WORK/"]
-    path = ~/.gitconfig-work
-
-# Side project account — repos cloned into ~/SIDEGIG/
-[includeIf "gitdir:~/SIDEGIG/"]
-    path = ~/.gitconfig-sidegig
+[core]
+    sshCommand = ssh -i ~/.ssh/personal
 ```
 
-Each included file contains its own identity and SSH key:
-
 ```ini
-# ~/.gitconfig-work
+# ~/.ssh/gitconfig-work
 [user]
     name = Work Name
     email = you@company.com
 [core]
-    sshCommand = ssh -i ~/.ssh/id_ed25519_work
+    sshCommand = ssh -i ~/.ssh/work
 ```
+
+**Private config** (`~/.gitconfig.private`):
 
 ```ini
-# ~/.gitconfig-sidegig
+# Default identity (fallback for repos outside includeIf dirs)
 [user]
-    name = SideProjectHandle
-    email = side@example.com
-[core]
-    sshCommand = ssh -i ~/.ssh/id_ed25519_side
+    name = PersonalHandle
+    email = personal@example.com
+
+# Per-account identity overrides (last match wins)
+[includeIf "gitdir:~/CODE/"]
+    path = ~/.ssh/gitconfig-personal
+[includeIf "gitdir:~/WORK/"]
+    path = ~/.ssh/gitconfig-work
+
+# Scoped URL rewrites (only your repos → SSH)
+[url "git-personal:PersonalHandle/"]
+    insteadOf = https://github.com/PersonalHandle/
+[url "git-work:WorkOrg/"]
+    insteadOf = https://github.com/WorkOrg/
 ```
 
-The trailing `/` in `gitdir:~/WORK/` is important — it matches any repo inside that directory recursively. The `core.sshCommand` per-identity avoids needing complex `~/.ssh/config` host aliases. Remember to add any extra config files (e.g., `~/.gitconfig-work`) to your `.gitignore_global`.
+**Clone URLs** use the short SSH host aliases directly — no `git@` prefix needed since `User git` is defined in `~/.ssh/config`:
+
+```bash
+git clone git-personal:PersonalHandle/my-repo
+git clone git-work:WorkOrg/my-repo
+```
+
+The trailing `/` in `gitdir:~/WORK/` is important — it matches any repo inside that directory recursively (including nested subdirectories). The `includeIf` rules use last-match-wins ordering, so more specific directory rules should come after broader catch-all rules.
+
+#### Adding a New Account
+
+1. Create SSH key: `ssh-keygen -t ed25519 -f ~/.ssh/<account>`
+2. Add SSH host alias: `Host git-<alias>` in `~/.ssh/config`
+3. Create identity file: `~/.ssh/gitconfig-<alias>` with `[user]` and `[core] sshCommand`
+4. Add `includeIf` rule in `~/.gitconfig.private`
+5. Add scoped URL rewrites in `~/.gitconfig.private`
+6. Add public key to the GitHub account
+7. Verify: `ssh -T git-<alias>` should show "Hi &lt;username&gt;!"
 
 ### Shell Settings (`~/.zshrc.private`)
 
@@ -893,7 +921,7 @@ fifty-shades-of-dotfiles/
 ### Key Files
 
 - **`install.sh`**: Interactive installer that handles prerequisites, tool installation, symlinks, and post-setup configuration. Supports `--check`, `--dry-run`, `--update`, `--force`, and `--uninstall` modes.
-- **`home/.gitconfig`**: Public-safe git configuration template. Contains credential helpers, LFS, merge/diff settings, and sensible defaults. Includes `~/.gitconfig.private` via `[include]` for personal identity (name, email, signing keys) — see [Customization & Private Settings](#customization--private-settings).
+- **`home/.gitconfig`**: Public-safe git configuration template. Contains LFS filters, merge/diff settings, and sensible defaults. No credential helpers (SSH-only auth). Includes `~/.gitconfig.private` via `[include]` for personal identity, multi-account routing, and scoped URL rewrites — see [Customization & Private Settings](#customization--private-settings).
 - **`home/.gitignore_global`**: Global gitignore patterns for OS files, editor artifacts, environment/secret files, build outputs, and temporary files. Referenced by `.gitconfig` via `core.excludesfile`.
 - **`home/.zshrc`**: The main controller. It detects the OS, loads plugins, and sources all other function files. Also contains inline functions like `yt()` (yt-dlp wrapper), `rm()` (symlink-aware safe deletion wrapper), and various aliases.
 - **`home/.zsh_python_functions`**: Contains all Python-related helper functions (`python_new_project`, `uv_tool_*`, etc.).
