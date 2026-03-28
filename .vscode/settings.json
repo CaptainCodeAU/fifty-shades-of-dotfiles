@@ -148,3 +148,153 @@
 //         "terminal.selectionBackground": "#474747",
 //     }
 // }
+// Profile 11 — Electric Indigo
+// {
+//     "workbench.colorCustomizations": {
+//         "titleBar.activeBackground": "#4B0082",
+//         "titleBar.activeForeground": "#ffffff",
+//         "titleBar.inactiveBackground": "#3a0066",
+//         "titleBar.inactiveForeground": "#999999",
+//         "panel.border": "#3a0066",
+//         "sideBar.border": "#3a0066",
+//         "statusBar.background": "#4B0082",
+//         "statusBar.foreground": "#e7e7e7",
+//         "terminal.inactiveSelectionBackground": "#3D3D3D",
+//         "terminal.selectionBackground": "#474747",
+//     }
+// }
+// Profile 12 — Hot Pink
+// {
+//     "workbench.colorCustomizations": {
+//         "titleBar.activeBackground": "#C2185B",
+//         "titleBar.activeForeground": "#ffffff",
+//         "titleBar.inactiveBackground": "#9B1348",
+//         "titleBar.inactiveForeground": "#999999",
+//         "panel.border": "#9B1348",
+//         "sideBar.border": "#9B1348",
+//         "statusBar.background": "#C2185B",
+//         "statusBar.foreground": "#e7e7e7",
+//         "terminal.inactiveSelectionBackground": "#3D3D3D",
+//         "terminal.selectionBackground": "#474747",
+//     }
+// }
+// Profile 13 — Cobalt Blue
+// {
+//     "workbench.colorCustomizations": {
+//         "titleBar.activeBackground": "#0047AB",
+//         "titleBar.activeForeground": "#ffffff",
+//         "titleBar.inactiveBackground": "#003888",
+//         "titleBar.inactiveForeground": "#999999",
+//         "panel.border": "#003888",
+//         "sideBar.border": "#003888",
+//         "statusBar.background": "#0047AB",
+//         "statusBar.foreground": "#e7e7e7",
+//         "terminal.inactiveSelectionBackground": "#3D3D3D",
+//         "terminal.selectionBackground": "#474747",
+//     }
+// }
+// Profile 14 — Emerald
+// {
+//     "workbench.colorCustomizations": {
+//         "titleBar.activeBackground": "#008B45",
+//         "titleBar.activeForeground": "#ffffff",
+//         "titleBar.inactiveBackground": "#006C36",
+//         "titleBar.inactiveForeground": "#999999",
+//         "panel.border": "#006C36",
+//         "sideBar.border": "#006C36",
+//         "statusBar.background": "#008B45",
+//         "statusBar.foreground": "#e7e7e7",
+//         "terminal.inactiveSelectionBackground": "#3D3D3D",
+//         "terminal.selectionBackground": "#474747",
+//     }
+// }
+// Profile 15 — Sunset Gold
+// {
+//     "workbench.colorCustomizations": {
+//         "titleBar.activeBackground": "#B8860B",
+//         "titleBar.activeForeground": "#ffffff",
+//         "titleBar.inactiveBackground": "#926A09",
+//         "titleBar.inactiveForeground": "#999999",
+//         "panel.border": "#926A09",
+//         "sideBar.border": "#926A09",
+//         "statusBar.background": "#B8860B",
+//         "statusBar.foreground": "#e7e7e7",
+//         "terminal.inactiveSelectionBackground": "#3D3D3D",
+//         "terminal.selectionBackground": "#474747",
+//     }
+// }
+// Profile 16 — Coral Reef
+// {
+//     "workbench.colorCustomizations": {
+//         "titleBar.activeBackground": "#E04040",
+//         "titleBar.activeForeground": "#ffffff",
+//         "titleBar.inactiveBackground": "#B33333",
+//         "titleBar.inactiveForeground": "#999999",
+//         "panel.border": "#B33333",
+//         "sideBar.border": "#B33333",
+//         "statusBar.background": "#E04040",
+//         "statusBar.foreground": "#e7e7e7",
+//         "terminal.inactiveSelectionBackground": "#3D3D3D",
+//         "terminal.selectionBackground": "#474747",
+//     }
+// }
+// Profile 17 — Sapphire
+// {
+//     "workbench.colorCustomizations": {
+//         "titleBar.activeBackground": "#0F52BA",
+//         "titleBar.activeForeground": "#ffffff",
+//         "titleBar.inactiveBackground": "#0C4196",
+//         "titleBar.inactiveForeground": "#999999",
+//         "panel.border": "#0C4196",
+//         "sideBar.border": "#0C4196",
+//         "statusBar.background": "#0F52BA",
+//         "statusBar.foreground": "#e7e7e7",
+//         "terminal.inactiveSelectionBackground": "#3D3D3D",
+//         "terminal.selectionBackground": "#474747",
+//     }
+// }
+// Profile 18 — Plum
+// {
+//     "workbench.colorCustomizations": {
+//         "titleBar.activeBackground": "#7B2D5F",
+//         "titleBar.activeForeground": "#ffffff",
+//         "titleBar.inactiveBackground": "#60234A",
+//         "titleBar.inactiveForeground": "#999999",
+//         "panel.border": "#60234A",
+//         "sideBar.border": "#60234A",
+//         "statusBar.background": "#7B2D5F",
+//         "statusBar.foreground": "#e7e7e7",
+//         "terminal.inactiveSelectionBackground": "#3D3D3D",
+//         "terminal.selectionBackground": "#474747",
+//     }
+// }
+// Profile 19 — Turquoise
+// {
+//     "workbench.colorCustomizations": {
+//         "titleBar.activeBackground": "#00796B",
+//         "titleBar.activeForeground": "#ffffff",
+//         "titleBar.inactiveBackground": "#005E54",
+//         "titleBar.inactiveForeground": "#999999",
+//         "panel.border": "#005E54",
+//         "sideBar.border": "#005E54",
+//         "statusBar.background": "#00796B",
+//         "statusBar.foreground": "#e7e7e7",
+//         "terminal.inactiveSelectionBackground": "#3D3D3D",
+//         "terminal.selectionBackground": "#474747",
+//     }
+// }
+// Profile 20 — Amber
+// {
+//     "workbench.colorCustomizations": {
+//         "titleBar.activeBackground": "#CC7A00",
+//         "titleBar.activeForeground": "#ffffff",
+//         "titleBar.inactiveBackground": "#A36200",
+//         "titleBar.inactiveForeground": "#999999",
+//         "panel.border": "#A36200",
+//         "sideBar.border": "#A36200",
+//         "statusBar.background": "#CC7A00",
+//         "statusBar.foreground": "#e7e7e7",
+//         "terminal.inactiveSelectionBackground": "#3D3D3D",
+//         "terminal.selectionBackground": "#474747",
+//     }
+// }
