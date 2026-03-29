@@ -521,13 +521,15 @@ _claude_launch() {
       eval "$(ssh-agent -s -t 14400)" >/dev/null
       trap 'ssh-agent -k >/dev/null 2>&1' EXIT INT TERM HUP
       ssh-add "$key"
-      CLAUDE_CODE_HIDE_ACCOUNT_INFO=1 \
+      DISABLE_TELEMETRY= \
+        CLAUDE_CODE_HIDE_ACCOUNT_INFO=1 \
         ENABLE_EXPERIMENTAL_MCP_CLI=1 \
         ENABLE_TOOL_SEARCH=1 \
         "$@"
     )
   else
-    CLAUDE_CODE_HIDE_ACCOUNT_INFO=1 \
+    DISABLE_TELEMETRY= \
+      CLAUDE_CODE_HIDE_ACCOUNT_INFO=1 \
       ENABLE_EXPERIMENTAL_MCP_CLI=1 \
       ENABLE_TOOL_SEARCH=1 \
       "$@"
