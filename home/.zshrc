@@ -941,3 +941,6 @@ fi
 # End profiling
 [[ -n "$ZPROF" ]] && zprof
 [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
+
+# PAI alias
+alias pai='bun /Users/fonzarelli/.claude/PAI/Tools/pai.ts'
