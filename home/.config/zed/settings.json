@@ -1,0 +1,271 @@
+{
+	// Window behavior
+	"when_closing_with_no_tabs": "platform_default",
+
+	// Session settings
+	"session": {
+		"trust_all_worktrees": true,
+	},
+
+	// Telemetry (disabled)
+	"telemetry": {
+		"diagnostics": false,
+		"metrics": false,
+	},
+
+	// Theme configuration
+	"theme": {
+		"mode": "dark",
+		"light": "One Light",
+		"dark": "Ayu Mirage",
+	},
+
+	// Icon theme
+	"icon_theme": {
+		"mode": "dark",
+		"light": "Zed (Default)",
+		"dark": "Zed (Default)",
+	},
+
+	// Keyboard configuration
+	"base_keymap": "VSCode",
+
+	// Font settings
+	"ui_font_size": 16,
+	"buffer_font_family": "MonoLisa Nerd Font Mono",
+	"buffer_font_size": 14.0,
+
+	// Editor settings
+	"colorize_brackets": true,
+	"linked_edits": true,
+	"show_edit_predictions": true,
+	"semantic_tokens": "full",
+	"wrap_guides": [90],
+	"tab_size": 4,
+	"hard_tabs": true,
+	"auto_indent_on_paste": true,
+	"format_on_save": "on",
+
+	// Minimap
+	"minimap": {
+		"show": "never",
+	},
+
+	// Terminal settings
+	"terminal": {
+		"env": {},
+		"font_size": 11.0,
+		"font_family": "JetBrainsMono Nerd Font Mono",
+		"font_fallbacks": ["monospace"],
+		"max_scroll_history_lines": 50000,
+		"blinking": "terminal_controlled",
+		"cursor_shape": "block",
+	},
+
+	// ============================================================================
+	// COLOR PROFILES FOR ZED
+	// ============================================================================
+	// Uncomment ONE profile below to apply it. Only one can be active at a time.
+	// These override the title bar, status bar, panels, and borders.
+	// ============================================================================
+
+	// Profile 1 — Ocean Deep (ACTIVE)
+	// "experimental.theme_overrides": {
+	// 	"title_bar.background": "#1a4d7a",
+	// 	"status_bar.background": "#1a4d7a",
+	// 	"title_bar.inactive_background": "#154065",
+	// 	"tab.inactive_background": "#154065",
+	// 	"panel.focused_border": "#154065",
+	// 	"border": "#154065",
+	// },
+
+	// Profile 2 — Forest Green
+	// "experimental.theme_overrides": {
+	// 	"title_bar.background": "#226F54",
+	// 	"status_bar.background": "#226F54",
+	// 	"title_bar.inactive_background": "#1a5540",
+	// 	"tab.inactive_background": "#1a5540",
+	// 	"panel.focused_border": "#1a5540",
+	// 	"border": "#1a5540",
+	// },
+
+	// Profile 3 — Deep Purple
+	// "experimental.theme_overrides": {
+	// 	"title_bar.background": "#4B296B",
+	// 	"status_bar.background": "#4B296B",
+	// 	"title_bar.inactive_background": "#3a2052",
+	// 	"tab.inactive_background": "#3a2052",
+	// 	"panel.focused_border": "#3a2052",
+	// 	"border": "#3a2052",
+	// },
+
+	// Profile 4 — Crimson
+	// "experimental.theme_overrides": {
+	// 	"title_bar.background": "#A71D31",
+	// 	"status_bar.background": "#A71D31",
+	// 	"title_bar.inactive_background": "#821625",
+	// 	"tab.inactive_background": "#821625",
+	// 	"panel.focused_border": "#821625",
+	// 	"border": "#821625",
+	// },
+
+	// Profile 5 — Teal
+	// "experimental.theme_overrides": {
+	// 	"title_bar.background": "#0E9594",
+	// 	"status_bar.background": "#0E9594",
+	// 	"title_bar.inactive_background": "#0b7372",
+	// 	"tab.inactive_background": "#0b7372",
+	// 	"panel.focused_border": "#0b7372",
+	// 	"border": "#0b7372"
+	// }
+
+	// Profile 6 — Burnt Orange
+	// "experimental.theme_overrides": {
+	// 	"title_bar.background": "#A3320B",
+	// 	"status_bar.background": "#A3320B",
+	// 	"title_bar.inactive_background": "#7d2609",
+	// 	"tab.inactive_background": "#7d2609",
+	// 	"panel.focused_border": "#7d2609",
+	// 	"border": "#7d2609",
+	// },
+
+	// Profile 7 — Slate
+	// "experimental.theme_overrides": {
+	// 	"title_bar.background": "#2F4858",
+	// 	"status_bar.background": "#2F4858",
+	// 	"title_bar.inactive_background": "#243845",
+	// 	"tab.inactive_background": "#243845",
+	// 	"panel.focused_border": "#243845",
+	// 	"border": "#243845"
+	// }
+
+	// Profile 8 — Magenta
+	// "experimental.theme_overrides": {
+	// 	"title_bar.background": "#A40E4C",
+	// 	"status_bar.background": "#A40E4C",
+	// 	"title_bar.inactive_background": "#7e0b3b",
+	// 	"tab.inactive_background": "#7e0b3b",
+	// 	"panel.focused_border": "#7e0b3b",
+	// 	"border": "#7e0b3b"
+	// }
+
+	// Profile 9 — Dark Olive
+	// "experimental.theme_overrides": {
+	// 	"title_bar.background": "#262A10",
+	// 	"status_bar.background": "#262A10",
+	// 	"title_bar.inactive_background": "#1c1f0b",
+	// 	"tab.inactive_background": "#1c1f0b",
+	// 	"panel.focused_border": "#1c1f0b",
+	// 	"border": "#1c1f0b"
+	// }
+
+	// Profile 10 — Charcoal
+	// "experimental.theme_overrides": {
+	// 	"title_bar.background": "#464F51",
+	// 	"status_bar.background": "#464F51",
+	// 	"title_bar.inactive_background": "#363d3f",
+	// 	"tab.inactive_background": "#363d3f",
+	// 	"panel.focused_border": "#363d3f",
+	// 	"border": "#363d3f"
+	// }
+
+	// Profile 11 — Electric Indigo
+	// "experimental.theme_overrides": {
+	// 	"title_bar.background": "#4B0082",
+	// 	"status_bar.background": "#4B0082",
+	// 	"title_bar.inactive_background": "#3a0066",
+	// 	"tab.inactive_background": "#3a0066",
+	// 	"panel.focused_border": "#3a0066",
+	// 	"border": "#3a0066",
+	// },
+
+	// Profile 12 — Hot Pink
+	// "experimental.theme_overrides": {
+	// 	"title_bar.background": "#C2185B",
+	// 	"status_bar.background": "#C2185B",
+	// 	"title_bar.inactive_background": "#9B1348",
+	// 	"tab.inactive_background": "#9B1348",
+	// 	"panel.focused_border": "#9B1348",
+	// 	"border": "#9B1348"
+	// }
+
+	// Profile 13 — Cobalt Blue
+	// "experimental.theme_overrides": {
+	// 	"title_bar.background": "#0047AB",
+	// 	"status_bar.background": "#0047AB",
+	// 	"title_bar.inactive_background": "#003888",
+	// 	"tab.inactive_background": "#003888",
+	// 	"panel.focused_border": "#003888",
+	// 	"border": "#003888",
+	// },
+
+	// Profile 14 — Emerald
+	// "experimental.theme_overrides": {
+	// 	"title_bar.background": "#008B45",
+	// 	"status_bar.background": "#008B45",
+	// 	"title_bar.inactive_background": "#006C36",
+	// 	"tab.inactive_background": "#006C36",
+	// 	"panel.focused_border": "#006C36",
+	// 	"border": "#006C36",
+	// },
+
+	// Profile 15 — Sunset Gold
+	// "experimental.theme_overrides": {
+	// 	"title_bar.background": "#B8860B",
+	// 	"status_bar.background": "#B8860B",
+	// 	"title_bar.inactive_background": "#926A09",
+	// 	"tab.inactive_background": "#926A09",
+	// 	"panel.focused_border": "#926A09",
+	// 	"border": "#926A09",
+	// },
+
+	// Profile 16 — Coral Reef
+	// "experimental.theme_overrides": {
+	// 	"title_bar.background": "#E04040",
+	// 	"status_bar.background": "#E04040",
+	// 	"title_bar.inactive_background": "#B33333",
+	// 	"tab.inactive_background": "#B33333",
+	// 	"panel.focused_border": "#B33333",
+	// 	"border": "#B33333",
+	// },
+
+	// Profile 17 — Sapphire
+	// "experimental.theme_overrides": {
+	// 	"title_bar.background": "#0F52BA",
+	// 	"status_bar.background": "#0F52BA",
+	// 	"title_bar.inactive_background": "#0C4196",
+	// 	"tab.inactive_background": "#0C4196",
+	// 	"panel.focused_border": "#0C4196",
+	// 	"border": "#0C4196",
+	// },
+
+	// Profile 18 — Plum
+	// "experimental.theme_overrides": {
+	// 	"title_bar.background": "#7B2D5F",
+	// 	"status_bar.background": "#7B2D5F",
+	// 	"title_bar.inactive_background": "#60234A",
+	// 	"tab.inactive_background": "#60234A",
+	// 	"panel.focused_border": "#60234A",
+	// 	"border": "#60234A",
+	// },
+
+	// Profile 19 — Turquoise
+	// "experimental.theme_overrides": {
+	// 	"title_bar.background": "#00796B",
+	// 	"status_bar.background": "#00796B",
+	// 	"title_bar.inactive_background": "#005E54",
+	// 	"tab.inactive_background": "#005E54",
+	// 	"panel.focused_border": "#005E54",
+	// 	"border": "#005E54",
+	// },
+
+	// Profile 20 — Amber
+	// "experimental.theme_overrides": {
+	// 	"title_bar.background": "#CC7A00",
+	// 	"status_bar.background": "#CC7A00",
+	// 	"title_bar.inactive_background": "#A36200",
+	// 	"tab.inactive_background": "#A36200",
+	// 	"panel.focused_border": "#A36200",
+	// 	"border": "#A36200",
+	// },
+}

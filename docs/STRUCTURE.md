@@ -71,6 +71,14 @@ Yazi terminal file manager configuration with catppuccin-mocha theme, vim-style 
 
 **Note**: The zoom plugin requires ImageMagick (`brew install imagemagick` on macOS) for the `magick` command.
 
+#### `home/.config/zed/`
+
+Zed editor settings. Only `settings.json` is managed; `prompts/` and `themes/` remain user-local.
+
+| File            | Purpose             | Deployed To                   |
+| --------------- | ------------------- | ----------------------------- |
+| `settings.json` | Zed editor settings | `~/.config/zed/settings.json` |
+
 #### `home/.config/yt-dlp/`
 
 yt-dlp configuration template.
@@ -150,6 +158,7 @@ When deploying files, use this quick reference:
 | `home/.config/direnv/direnv.toml`                                       | `~/.config/direnv/direnv.toml`                            |
 | `home/.config/direnv/direnvrc`                                          | `~/.config/direnv/direnvrc`                               |
 | `home/.config/yazi/`                                                    | `~/.config/yazi/`                                         |
+| `home/.config/zed/settings.json`                                        | `~/.config/zed/settings.json`                             |
 | `home/.config/yt-dlp/config`                                            | `~/.config/yt-dlp/config`                                 |
 | `platforms/macos/Library/Application Support/Cursor/User/settings.json` | `~/Library/Application Support/Cursor/User/settings.json` |
 | `platforms/macos/Library/Application Support/Code/User/settings.json`   | `~/Library/Application Support/Code/User/settings.json`   |
