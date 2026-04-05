@@ -791,6 +791,8 @@ fi
 # --- Zoxide ---
 # https://github.com/ajeetdsouza/zoxide
 # This makes zoxide respond to cd directly while keeping the real cd available as __zoxide_cd internally. This is the "official" way to replace cd
+# Suppress false-positive config warning (zoxide init is correctly placed at end of config)
+export _ZO_DOCTOR=0
 eval "$(zoxide init zsh --cmd cd)"
 
 # --- OLD: Direct python resolution (replaced by uv run hijacks below) ---
