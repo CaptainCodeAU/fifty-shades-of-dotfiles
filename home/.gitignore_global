@@ -98,3 +98,6 @@ temp/
 .local/
 *.orig
 
+# === Documentation Generators ===
+.prompts/
+
