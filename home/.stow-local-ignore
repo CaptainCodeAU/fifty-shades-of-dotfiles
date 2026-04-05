@@ -1,0 +1,9 @@
+# Stow default ignores (must be re-declared when using .stow-local-ignore)
+\.git
+\.gitignore
+\.gitmodules
+
+# macOS metadata — Finder creates these in every directory it touches.
+# Without this, stow tries to symlink them into ~/ and conflicts with
+# the real .DS_Store files macOS maintains there.
+\.DS_Store
