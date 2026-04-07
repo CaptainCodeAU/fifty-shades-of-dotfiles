@@ -725,7 +725,7 @@ Full current version — all hooks use `$CLAUDE_PROJECT_DIR` for paths:
         "hooks": [
           {
             "type": "command",
-            "command": "echo 'Context compacted. Reminder: use uv for Python, pnpm for Node.js. Read CLAUDE.md for project conventions.'",
+            "command": "echo 'Context compacted. Reminder: use uv for Python, pnpm or bun for Node.js. Read CLAUDE.md for project conventions.'",
             "timeout": 5
           }
         ]
@@ -1496,7 +1496,7 @@ silently ignored. Config in `.markdownlint.jsonc`.
 #### SessionStart compact echo
 
 ```text
-echo 'Context compacted. Reminder: use uv for Python, pnpm for Node.js. Read CLAUDE.md for project conventions.'
+echo 'Context compacted. Reminder: use uv for Python, pnpm or bun for Node.js. Read CLAUDE.md for project conventions.'
 ```
 
 Re-injects project conventions after context compaction so Claude retains

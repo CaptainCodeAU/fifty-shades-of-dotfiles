@@ -14,7 +14,7 @@ All hooks are registered in `.claude/settings.json`. Claude Code pipes JSON to s
 | `pre-commit-check.sh`   | `PreToolUse`   | `Bash`                             | Lint/build gate before `git commit`                       |
 | `protect-files.sh`      | `PreToolUse`   | `Edit\|Write`                      | Block edits to `.env`, lockfiles, `.git/`                 |
 | `enforce-uv.sh`         | `PreToolUse`   | `Bash`                             | Block bare pip/python/pytest/ruff → enforce uv            |
-| `enforce-pnpm.sh`       | `PreToolUse`   | `Bash`                             | Block npm/yarn/npx → enforce pnpm                         |
+| `enforce-pnpm.sh`       | `PreToolUse`   | `Bash`                             | Block npm/yarn/npx → enforce pnpm or bun                  |
 | `enforce-no-cd.sh`      | `PreToolUse`   | `Bash`                             | Block bare cd → enforce absolute paths or git -C          |
 | `enforce-builtin.sh`    | `PreToolUse`   | `Bash`                             | Block `builtin` with non-builtins (git, swift, etc.)      |
 | `hook_runner.py`        | Multiple       | Various                            | Audio notifications (sound + speech)                      |
@@ -194,7 +194,7 @@ Subclasses override only the steps they need:
   validate-bash.sh        # PreToolUse Bash — block destructive commands
   protect-files.sh        # PreToolUse Edit|Write — block edits to protected files
   enforce-uv.sh           # PreToolUse Bash — block bare pip/python/pytest/ruff
-  enforce-pnpm.sh         # PreToolUse Bash — block npm/yarn/npx
+  enforce-pnpm.sh         # PreToolUse Bash — block npm/yarn/npx → pnpm or bun
   enforce-no-cd.sh        # PreToolUse Bash — block bare cd
   enforce-builtin.sh      # PreToolUse Bash — block builtin with non-builtins
   export_transcript.sh    # SessionEnd — export session transcript
@@ -271,11 +271,11 @@ Allows `uv run`, `uv pip`, and commands inside subshells or quoted strings. Bloc
 
 ### enforce-pnpm.sh
 
-Runs on `PreToolUse` for `Bash` tools. Enforces `pnpm` for all Node.js commands (from CLAUDE.md conventions):
+Runs on `PreToolUse` for `Bash` tools. Enforces `pnpm` or `bun` for all Node.js commands (from CLAUDE.md conventions):
 
-- `npm` → use `pnpm`
-- `yarn` → use `pnpm`
-- `npx` → use `pnpm dlx`
+- `npm` → use `pnpm` or `bun`
+- `yarn` → use `pnpm` or `bun`
+- `npx` → use `pnpm dlx` or `bunx`
 
 Allows commands inside subshells or quoted strings. Blocked commands are logged to `security.log`.
 

@@ -2,7 +2,7 @@
 
 ![Shell](https://img.shields.io/badge/Shell-Zsh-lightgrey.svg?logo=gnome-terminal&logoColor=white)
 ![Python with uv](https://img.shields.io/badge/Python-uv-hotpink.svg?logo=python&logoColor=white)
-![Node.js with nvm](https://img.shields.io/badge/Node.js-nvm%20%2B%20pnpm-green.svg?logo=nodedotjs&logoColor=white)
+![Node.js with nvm](https://img.shields.io/badge/Node.js-nvm%20%2B%20pnpm%2Fbun-green.svg?logo=nodedotjs&logoColor=white)
 ![Docker](https://img.shields.io/badge/Tools-Docker-blue.svg?logo=docker&logoColor=white)
 ![Claude Code](https://img.shields.io/badge/Claude-Code-blueviolet.svg?logo=anthropic&logoColor=white)
 ![OS Support](https://img.shields.io/badge/OS-macOS%20%7C%20Linux%20%7C%20WSL-blue.svg?logo=apple)
@@ -208,7 +208,7 @@ run_onboarding
 | **User Experience**      | eza, fzf, jq, direnv, zoxide, fd, yazi, glow           |
 | **CLI Tools**            | ripgrep, neovim, tree, neofetch, ffmpeg, yt-dlp, aria2 |
 | **Git**                  | gh, git-lfs                                            |
-| **Development Managers** | nvm, uv, bun                                           |
+| **Development Managers** | nvm, uv, pnpm, bun                                     |
 | **Special**              | Docker (guidance only — requires manual installation)  |
 
 ### Skipping Onboarding
@@ -420,22 +420,22 @@ graph TD
 
 ### Node.js (`node_*` functions)
 
-The setup provides similar automation for Node.js projects, standardizing on `nvm`, `pnpm`, and Corepack. Projects scaffold with **TypeScript by default** (pass `--no-ts` for JavaScript), use **Vitest** for testing, and integrate with **direnv** for automatic environment activation.
+The setup provides similar automation for Node.js projects, standardizing on `nvm` with `pnpm` or `bun` as co-primary package managers. Projects scaffold with **TypeScript by default** (pass `--no-ts` for JavaScript) and integrate with **direnv** for automatic environment activation. When creating a new project, you choose your package manager — pnpm uses **Vitest** for testing, bun uses its **built-in test runner**.
 
 - **Create a new TypeScript project**: `mkdir my-node-app && cd my-node-app && node_new_project`
-  - Scaffolds `src/index.ts`, `tests/index.test.ts`, `tsconfig.json`, `.nvmrc`, `.gitignore`, and a rich `.envrc` (if direnv is available). Installs TypeScript, Vitest, ESLint, Prettier, and `@types/node`.
-- **Create a JavaScript project**: `node_new_project --no-ts`
+  - Prompts for package manager (`pnpm` or `bun`), or pass `--pnpm`/`--bun` to skip the prompt. Scaffolds `src/index.ts`, `tests/index.test.ts`, `tsconfig.json`, `.nvmrc`, `.gitignore`, and a rich `.envrc` (if direnv is available). Installs TypeScript, ESLint, Prettier, and type definitions.
+- **Create a JavaScript project**: `node_new_project --no-ts` (or `node_new_project --no-ts --bun`)
   - Same scaffold without TypeScript — creates `src/index.js` and `tests/index.test.js` instead.
 - **Set up an existing project**: `cd existing-project && node_setup`
-  - Switches to the Node version from `.nvmrc`, installs dependencies with `pnpm install`, creates `.envrc` if missing, and displays available scripts.
+  - Switches to the Node version from `.nvmrc`, auto-detects the package manager from the lockfile (`bun.lockb` → bun, `pnpm-lock.yaml` → pnpm), installs dependencies, creates `.envrc` if missing, and displays available scripts.
 - **Quick project dashboard**: `node_info`
-  - Shows Node/npm/pnpm/Corepack versions, `.nvmrc` status, package.json details, available scripts, and global link status.
+  - Shows Node/pnpm/bun versions, `.nvmrc` status, package.json details, available scripts, and global link status.
 - **Clean up artifacts**: `node_clean`
   - Removes `node_modules`, `dist`, `build`, `.next`, `.turbo`, `.tsbuildinfo`, coverage, caches, and lockfiles.
 
 #### Global Node.js Package Management
 
-For CLI tools you're developing, use `node_link` / `node_unlink` / `node_check_global` to manage global symlinks via `pnpm link --global`. Note that global links are tied to the current nvm Node version — switching nvm versions will lose access to the linked binary. For one-off tool execution, use `pnpm dlx` which doesn't require global installation. (`npx` is intercepted and will suggest the `pnpm dlx` equivalent.)
+For CLI tools you're developing, use `node_link` / `node_unlink` / `node_check_global` to manage global symlinks. These auto-detect whether to use `pnpm link --global` or `bun link --global` based on the project's lockfile. Note that global links are tied to the current nvm Node version — switching nvm versions will lose access to the linked binary. For one-off tool execution, use `pnpm dlx` or `bunx` — neither requires global installation. (`npx` is intercepted and will suggest both alternatives.)
 
 ### Docker (`docker_*` functions & aliases)
 
@@ -485,8 +485,8 @@ Claude Code supports LSP (Language Server Protocol) plugins for enhanced code in
 # Pyright (Python) — installed via uv tool
 uv tool install pyright
 
-# TypeScript Language Server — installed via pnpm global
-pnpm add -g typescript-language-server typescript
+# TypeScript Language Server — installed via pnpm or bun global
+pnpm add -g typescript-language-server typescript  # or: bun add -g typescript-language-server typescript
 
 # Swift (sourcekit-lsp) — ships with Xcode, no install needed
 # Verify with: /usr/bin/sourcekit-lsp --help
@@ -542,7 +542,7 @@ Custom lifecycle hooks that run at various points during Claude Code sessions. S
 To pull the `.claude` hooks folder into another project, use [gitpick](https://github.com/nrjdalal/gitpick):
 
 ```bash
-pnpm dlx gitpick CaptainCodeAU/fifty-shades-of-dotfiles/tree/master/.claude
+pnpm dlx gitpick CaptainCodeAU/fifty-shades-of-dotfiles/tree/master/.claude  # or: bunx gitpick ...
 ```
 
 Run this from the target project's root directory. It downloads just the `.claude` folder without cloning the full repository.
@@ -1060,7 +1060,7 @@ The function auto-generates a comprehensive `~/.config/yt-dlp/config` file on fi
 
 - **File Listing**: `l` and `ll` use `eza` for enhanced directory listings with git status
 - **Navigation**: `..`, `...`, `....`, `.....` for quick directory navigation
-- **Node.js**: `serve` (pnpm dlx http-server), `tsc` (pnpm dlx typescript)
+- **Node.js**: `serve` (pnpm dlx http-server), `tsc` (pnpm dlx typescript) — also usable via `bunx`
 - **Docker**: `lzd` (lazydocker), `lzg`/`lg` (lazygit)
 - **Claude Code**: `c` (standard), `cb` (bare/full control), `cr` (resume), `ci` (non-interactive), `ct` (tmux agent teams), `cpr` (from PR), `cd_` (debug), `cskip` (skip end hooks). All aliases spin up an isolated ephemeral SSH agent scoped to the Claude Code process, so marketplace plugin refreshes and git operations work with SSH-only auth without leaking the key to other terminals.
 - **Ollama**: `ollama-up` (start server + preload), `ollama-down` (stop all)
