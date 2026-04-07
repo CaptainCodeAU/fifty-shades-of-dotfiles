@@ -1,6 +1,19 @@
 {
 	// Window behavior
-	"when_closing_with_no_tabs": "platform_default",
+	"ssh_connections": [
+  {
+   "host": "mlbox-ubuntu",
+   "args": [],
+   "projects": [
+    {
+     "paths": [
+      "/home/winadmin/repos/llmster-server-3090"
+     ]
+    }
+   ]
+  }
+ ],
+ "when_closing_with_no_tabs": "platform_default",
 
 	// Session settings
 	"session": {
@@ -17,7 +30,7 @@
 	"theme": {
 		"mode": "dark",
 		"light": "One Light",
-		"dark": "Ayu Mirage",
+		"dark": "Catppuccin Mocha",
 	},
 
 	// Icon theme
