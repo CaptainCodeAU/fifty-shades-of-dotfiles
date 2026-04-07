@@ -445,13 +445,14 @@ pipx() {
     esac
 }
 
-# Hijack npx to redirect users to pnpm dlx equivalents.
-# npx is no longer used on this system — pnpm dlx replaces it entirely.
+# Hijack npx to redirect users to pnpm dlx or bunx equivalents.
+# npx is no longer used on this system — pnpm dlx or bunx replaces it entirely.
 npx() {
-    echo "${warn}⚠️  npx is not used on this system. Use pnpm dlx instead.${done}"
+    echo "${warn}⚠️  npx is not used on this system. Use pnpm dlx or bunx instead.${done}"
     echo
     echo "  Instead of:  ${err}npx $@${done}"
     echo "  Run:         ${ok}pnpm dlx $@${done}"
+    echo "         or:   ${ok}bunx $@${done}"
 }
 
 # Guard gh auth subcommands that re-add HTTPS credential helpers.
@@ -874,9 +875,9 @@ py310() {
     echo "  Run:         ${ok}uv run --python 3.10 python $@${done}"
 }
 
-# --- Node.js 'pnpm dlx' Aliases ---
-# Use pnpm dlx to run commands without installing them globally. This avoids
-# having to reinstall them for every Node version with nvm.
+# --- Node.js 'pnpm dlx' / 'bunx' Aliases ---
+# Use pnpm dlx (or bunx) to run commands without installing them globally.
+# This avoids having to reinstall them for every Node version with nvm.
 alias serve='pnpm dlx http-server'
 alias tsc='pnpm dlx -p typescript tsc'
 
