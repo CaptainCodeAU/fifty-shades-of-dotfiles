@@ -13,6 +13,15 @@ _get_node_project_name() {
     jq -r '.name // ""' package.json 2>/dev/null
 }
 
+# Detect package manager from lockfile.
+# Returns "bun" or "pnpm" (pnpm is the default fallback).
+_detect_pkg_manager() {
+    if [[ -f "bun.lockb" ]] || [[ -f "bun.lock" ]]; then echo "bun"
+    elif [[ -f "pnpm-lock.yaml" ]]; then echo "pnpm"
+    else echo "pnpm"
+    fi
+}
+
 # Display runnable scripts from package.json
 # Returns silently if no package.json or no jq
 _display_node_scripts() {
@@ -24,12 +33,13 @@ _display_node_scripts() {
     script_names=("${(@f)$(jq -r '.scripts // {} | keys[]' package.json 2>/dev/null)}")
 
     if (( ${#script_names[@]} > 0 )); then
+        local pm=$(_detect_pkg_manager)
         echo "--------------------------------------------------"
         echo "${info}Found ${ok}${#script_names[@]}${info} script(s) in package.json:${done}"
         for name in "${script_names[@]}"; do
             local cmd
             cmd=$(jq -r --arg n "$name" '.scripts[$n] // ""' package.json 2>/dev/null)
-            echo "   ${ok}pnpm ${name}${done}  ${info}# ${cmd}${done}"
+            echo "   ${ok}${pm} ${name}${done}  ${info}# ${cmd}${done}"
         done
     fi
 }
@@ -55,13 +65,7 @@ _display_node_hints() {
     fi
 
     # Detected package manager from lockfile
-    if [[ -f "pnpm-lock.yaml" ]]; then
-        echo "${info}      - Package manager: ${ok}pnpm${done}"
-    elif [[ -f "yarn.lock" ]]; then
-        echo "${info}      - Package manager: ${ok}yarn${done}"
-    elif [[ -f "package-lock.json" ]]; then
-        echo "${info}      - Package manager: ${ok}npm${done}"
-    fi
+    echo "${info}      - Package manager: ${ok}$(_detect_pkg_manager)${done}"
 
     # Available scripts
     _display_node_scripts
@@ -90,19 +94,21 @@ nvm_check_and_install_lts() {
 }
 
 # Create .envrc for Node.js project with rich info box
-# Usage: create_node_envrc
+# Usage: create_node_envrc [pnpm|bun]
 create_node_envrc() {
     local project_name
     project_name=$(_get_node_project_name 2>/dev/null)
     project_name=${project_name:-$(basename "$PWD")}
+    local pm="${1:-$(_detect_pkg_manager)}"
 
     if [[ -f ".envrc" ]]; then
         echo "${info}.envrc already exists. (Skipping creation)${done}"
         return
     fi
 
-    echo "${info}Creating .envrc with Node.js environment...${done}"
+    echo "${info}Creating .envrc with Node.js environment (${pm})...${done}"
 
+    # Common header
     cat <<'EOF' > .envrc
 # PROJECT_NAME Node.js Environment
 
@@ -118,6 +124,49 @@ echo ""
 echo "┌───────────────────────────────────────────────────────────────────────┐"
 echo -e "│                        \033[32m📦 PROJECT_NAME\033[0m                               │"
 echo "└───────────────────────────────────────────────────────────────────────┘"
+EOF
+
+    # Package-manager-specific commands
+    if [[ "$pm" == "bun" ]]; then
+        cat <<'EOF' >> .envrc
+echo "│"
+echo "│  🚀 Quick Start:"
+echo "│  ──────────────"
+echo -e "│     \033[3;33mbun dev\033[0m                    # Start dev server"
+echo -e "│     \033[3;33mbun test\033[0m                   # Run tests"
+echo -e "│     \033[3;33mbun run build\033[0m              # Build project"
+echo "│"
+echo "│  📦 Package Management:"
+echo "│  ─────────────────────"
+echo -e "│     \033[3;33mbun add <package>\033[0m          # Add dependency"
+echo -e "│     \033[3;33mbun add -D <package>\033[0m       # Add dev dependency"
+echo -e "│     \033[3;33mbun pm ls\033[0m                  # List installed packages"
+echo "│"
+echo "│  🔧 Code Quality:"
+echo "│  ───────────────"
+echo -e "│     \033[3;33mbunx eslint .\033[0m              # Lint code"
+echo -e "│     \033[3;33mbunx prettier --write .\033[0m    # Format code"
+echo "│"
+echo "│  ℹ️  Info:"
+echo "│  ────────"
+echo -e "│     Node:    \033[36m$(node --version 2>/dev/null || echo 'N/A')\033[0m"
+echo -e "│     Bun:     \033[36m$(bun --version 2>/dev/null || echo 'N/A')\033[0m"
+echo -e "│     Project: \033[36mPROJECT_NAME\033[0m"
+local _pkg_version
+_pkg_version=$(jq -r '.version // "0.1.0"' package.json 2>/dev/null || echo "0.1.0")
+echo -e "│     Version: \033[36m${_pkg_version}\033[0m"
+echo "│"
+echo "│  🔗 Global Link Status:"
+echo "│  ──────────────────────"
+if bun pm ls -g 2>/dev/null | grep -q "PROJECT_NAME"; then
+    echo -e "│     Link:    \033[32m✓ Linked globally\033[0m"
+else
+    echo -e "│     Link:    \033[33m✗ Not linked globally\033[0m"
+    echo -e "│     Hint:    \033[3;33mnode_link\033[0m"
+fi
+EOF
+    else
+        cat <<'EOF' >> .envrc
 echo "│"
 echo "│  🚀 Quick Start:"
 echo "│  ──────────────"
@@ -153,6 +202,11 @@ else
     echo -e "│     Link:    \033[33m✗ Not linked globally\033[0m"
     echo -e "│     Hint:    \033[3;33mnode_link\033[0m"
 fi
+EOF
+    fi
+
+    # Common footer
+    cat <<'EOF' >> .envrc
 echo "│"
 echo "└───────────────────────────────────────────────────────────────────────┘"
 echo ""
@@ -173,29 +227,48 @@ EOF
 # --- Project Lifecycle ---
 
 # Scaffold a new Node.js project (TypeScript by default).
-# Usage: node_new_project [--no-ts|--no-typescript|--js]
+# Usage: node_new_project [--no-ts|--no-typescript|--js] [--pnpm|--bun]
 node_new_project() {
     local use_typescript=true
+    local pkg_manager=""
 
-    # Parse arguments
-    case "${1:-}" in
-        --no-ts|--no-typescript|--js)
-            use_typescript=false
-            ;;
-        "")
-            ;;
-        *)
-            echo "${err}Unknown option: $1${done}" >&2
-            echo "${info}Usage: node_new_project [--no-ts|--no-typescript|--js]${done}" >&2
-            return 1
-            ;;
-    esac
+    # Parse arguments (order-independent)
+    for arg in "$@"; do
+        case "$arg" in
+            --no-ts|--no-typescript|--js)
+                use_typescript=false
+                ;;
+            --pnpm)
+                pkg_manager="pnpm"
+                ;;
+            --bun)
+                pkg_manager="bun"
+                ;;
+            *)
+                echo "${err}Unknown option: $arg${done}" >&2
+                echo "${info}Usage: node_new_project [--no-ts|--no-typescript|--js] [--pnpm|--bun]${done}" >&2
+                return 1
+                ;;
+        esac
+    done
+
+    # Interactive package manager selection if not specified via flag
+    if [[ -z "$pkg_manager" ]]; then
+        echo ""
+        echo "${info}Select package manager:${done}"
+        select pkg_manager in "pnpm" "bun"; do
+            [[ -n "$pkg_manager" ]] && break
+            echo "${warn}Please select 1 or 2.${done}"
+        done
+        echo ""
+    fi
 
     local project_name
     project_name=$(basename "$PWD" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/_/g')
 
-    if ! command -v pnpm &>/dev/null; then
-        echo "${err}Error: 'pnpm' not found. Please ensure Corepack has prepared it.${done}" >&2
+    # Validate the selected package manager is available
+    if ! command -v "$pkg_manager" &>/dev/null; then
+        echo "${err}Error: '${pkg_manager}' not found. Please install it first.${done}" >&2
         return 1
     fi
     if ! command -v nvm &>/dev/null; then
@@ -217,11 +290,25 @@ node_new_project() {
     echo "--------------------------------------------------"
     echo "${info}Creating new ${lang_label} project: ${ok}${project_name}${done}"
     echo "${info}Using Node: ${ok}${current_node_version}${done}"
+    echo "${info}Package manager: ${ok}${pkg_manager}${done}"
     echo "--------------------------------------------------"
 
-    # --- 1. Initialize project with pnpm ---
-    echo "${info}Running: pnpm init${done}"
-    pnpm init
+    # --- 1. Initialize project ---
+    if [[ "$pkg_manager" == "bun" ]]; then
+        # Create package.json manually (bun init creates unwanted extra files)
+        echo "${info}Creating package.json...${done}"
+        cat <<-PKGEOF > package.json
+{
+    "name": "${project_name}",
+    "version": "0.1.0",
+    "private": true,
+    "type": "module"
+}
+PKGEOF
+    else
+        echo "${info}Running: pnpm init${done}"
+        pnpm init
+    fi
 
     # Update project_name from package.json now that it exists
     project_name=$(_get_node_project_name 2>/dev/null)
@@ -232,12 +319,19 @@ node_new_project() {
     mkdir -p src tests
 
     # --- 3. Create source and test files ---
+    local test_import
+    if [[ "$pkg_manager" == "bun" ]]; then
+        test_import="import { describe, it, expect } from 'bun:test';"
+    else
+        test_import="import { describe, it, expect } from 'vitest';"
+    fi
+
     if [[ "$use_typescript" == true ]]; then
         echo "${info}Creating TypeScript source files...${done}"
         echo 'console.log("Hello, TypeScript project!");' > src/index.ts
 
-        cat <<-'TESTEOF' > tests/index.test.ts
-import { describe, it, expect } from 'vitest';
+        cat > tests/index.test.ts <<TESTEOF
+${test_import}
 
 describe('initial test', () => {
     it('should pass', () => {
@@ -271,8 +365,8 @@ TSEOF
         echo "${info}Creating JavaScript source files...${done}"
         echo 'console.log("Hello, Node.js project!");' > src/index.js
 
-        cat <<-'TESTEOF' > tests/index.test.js
-import { describe, it, expect } from 'vitest';
+        cat > tests/index.test.js <<TESTEOF
+${test_import}
 
 describe('initial test', () => {
     it('should pass', () => {
@@ -334,41 +428,55 @@ EOF
     fi
 
     # --- 6. Install dev dependencies ---
-    if [[ "$use_typescript" == true ]]; then
-        echo "${info}Installing dev dependencies (typescript, vitest, eslint, prettier, @types/node)...${done}"
-        pnpm add -D typescript vitest eslint prettier @types/node
+    if [[ "$pkg_manager" == "bun" ]]; then
+        if [[ "$use_typescript" == true ]]; then
+            echo "${info}Installing dev dependencies (typescript, eslint, prettier, @types/bun)...${done}"
+            bun add -D typescript eslint prettier @types/bun
+        else
+            echo "${info}Installing dev dependencies (eslint, prettier)...${done}"
+            bun add -D eslint prettier
+        fi
     else
-        echo "${info}Installing dev dependencies (vitest, eslint, prettier)...${done}"
-        pnpm add -D vitest eslint prettier
+        if [[ "$use_typescript" == true ]]; then
+            echo "${info}Installing dev dependencies (typescript, vitest, eslint, prettier, @types/node)...${done}"
+            pnpm add -D typescript vitest eslint prettier @types/node
+        else
+            echo "${info}Installing dev dependencies (vitest, eslint, prettier)...${done}"
+            pnpm add -D vitest eslint prettier
+        fi
     fi
 
     # --- 7. Add scripts to package.json ---
     echo "${info}Adding scripts to package.json...${done}"
     if command -v jq &>/dev/null; then
-        if [[ "$use_typescript" == true ]]; then
-            jq '.scripts.dev = "pnpm dlx tsx --watch src/index.ts" |
-                .scripts.build = "tsc" |
-                .scripts.start = "node dist/index.js" |
-                .scripts.test = "vitest run" |
-                .scripts["test:watch"] = "vitest"' package.json > tmp.$$.json && mv tmp.$$.json package.json
+        local jq_filter=""
+        local ext="ts"
+        [[ "$use_typescript" == false ]] && ext="js"
+
+        if [[ "$pkg_manager" == "bun" ]]; then
+            jq_filter=".scripts.dev = \"bun --watch src/index.${ext}\" | .scripts.start = \"bun src/index.${ext}\" | .scripts.test = \"bun test\" | .scripts[\"test:watch\"] = \"bun test --watch\""
+            [[ "$use_typescript" == true ]] && jq_filter+=' | .scripts.build = "tsc"'
         else
-            jq '.scripts.dev = "node --watch src/index.js" |
-                .scripts.start = "node src/index.js" |
-                .scripts.test = "vitest run" |
-                .scripts["test:watch"] = "vitest"' package.json > tmp.$$.json && mv tmp.$$.json package.json
+            if [[ "$use_typescript" == true ]]; then
+                jq_filter='.scripts.dev = "pnpm dlx tsx --watch src/index.ts" | .scripts.build = "tsc" | .scripts.start = "node dist/index.js"'
+            else
+                jq_filter='.scripts.dev = "node --watch src/index.js" | .scripts.start = "node src/index.js"'
+            fi
+            jq_filter+=' | .scripts.test = "vitest run" | .scripts["test:watch"] = "vitest"'
         fi
+        jq "$jq_filter" package.json > tmp.$$.json && mv tmp.$$.json package.json
     else
         echo "${warn}Warning: 'jq' not found. Please add scripts to package.json manually.${done}"
     fi
 
     # --- 8. Create .envrc if direnv is available ---
     if command -v direnv &>/dev/null; then
-        create_node_envrc
+        create_node_envrc "$pkg_manager"
     fi
 
     # --- 9. Final Success Message ---
     echo "--------------------------------------------------"
-    echo "${ok}Project '${project_name}' setup complete!${done}"
+    echo "${ok}Project '${project_name}' setup complete! (${pkg_manager})${done}"
     echo "--------------------------------------------------"
 
     _display_node_scripts
@@ -405,23 +513,23 @@ node_setup() {
         echo "${warn}Warning: No .nvmrc file found. Using current Node version: $(nvm current)${done}"
     fi
 
-    # --- 2. Install dependencies with pnpm ---
-    if command -v pnpm &>/dev/null; then
-        echo "${info}Installing dependencies with 'pnpm install'...${done}"
-        if pnpm install; then
-            echo "${ok}Dependencies installed successfully.${done}"
-        else
-            echo "${err}pnpm install failed. Please check the errors above.${done}"
-            return 1
-        fi
+    # --- 2. Install dependencies ---
+    local pm=$(_detect_pkg_manager)
+    if ! command -v "$pm" &>/dev/null; then
+        echo "${err}Error: '${pm}' not found. Cannot install dependencies.${done}" >&2
+        return 1
+    fi
+    echo "${info}Installing dependencies with '${pm} install'...${done}"
+    if "$pm" install; then
+        echo "${ok}Dependencies installed successfully.${done}"
     else
-        echo "${err}Error: 'pnpm' not found. Cannot install dependencies.${done}" >&2
+        echo "${err}${pm} install failed. Please check the errors above.${done}"
         return 1
     fi
 
     # --- 3. Create .envrc if missing and direnv available ---
     if [[ ! -f ".envrc" ]] && command -v direnv &>/dev/null; then
-        create_node_envrc
+        create_node_envrc "$pm"
     fi
 
     echo "--------------------------------------------------"
@@ -449,6 +557,8 @@ node_clean() {
         ".next"
         "coverage"
         "pnpm-lock.yaml"
+        "bun.lockb"
+        "bun.lock"
         ".turbo"
         ".eslintcache"
         ".tsbuildinfo"
@@ -489,6 +599,7 @@ node_info() {
     echo "${info}  Node:     ${ok}$(node --version 2>/dev/null || echo 'not found')${done}"
     echo "${info}  npm:      ${ok}$(npm --version 2>/dev/null || echo 'not found')${done}"
     echo "${info}  pnpm:     ${ok}$(pnpm --version 2>/dev/null || echo 'not found')${done}"
+    echo "${info}  bun:      ${ok}$(bun --version 2>/dev/null || echo 'not found')${done}"
     if command -v corepack &>/dev/null; then
         echo "${info}  Corepack: ${ok}$(corepack --version 2>/dev/null || echo 'not found')${done}"
     fi
@@ -534,7 +645,7 @@ node_info() {
 
 # --- Global CLI Management ---
 
-# Link current project globally via pnpm.
+# Link current project globally via pnpm or bun.
 # Usage: node_link
 node_link() {
     if [[ ! -f "package.json" ]]; then
@@ -546,11 +657,12 @@ node_link() {
     project_name=$(_get_node_project_name 2>/dev/null)
     project_name=${project_name:-$(basename "$PWD")}
 
+    local pm=$(_detect_pkg_manager)
     local current_node_version
     current_node_version=$(nvm current 2>/dev/null || node --version 2>/dev/null)
 
-    echo "${info}Linking '${ok}${project_name}${info}' globally...${done}"
-    if pnpm link --global; then
+    echo "${info}Linking '${ok}${project_name}${info}' globally via ${pm}...${done}"
+    if "$pm" link --global; then
         echo "${ok}Successfully linked '${project_name}' globally.${done}"
         echo "${warn}Note: Global links are tied to current nvm Node version (${current_node_version}).${done}"
         echo "${info}Usage: Run '${example}${project_name}${info}' from anywhere.${done}"
@@ -572,8 +684,10 @@ node_unlink() {
     project_name=$(_get_node_project_name 2>/dev/null)
     project_name=${project_name:-$(basename "$PWD")}
 
-    echo "${info}Unlinking '${ok}${project_name}${info}' from global scope...${done}"
-    if pnpm unlink --global 2>/dev/null; then
+    local pm=$(_detect_pkg_manager)
+
+    echo "${info}Unlinking '${ok}${project_name}${info}' from global scope via ${pm}...${done}"
+    if "$pm" unlink --global 2>/dev/null; then
         echo "${ok}Successfully unlinked '${project_name}'.${done}"
     else
         echo "${warn}'${project_name}' was not linked globally (nothing to unlink).${done}"
@@ -592,19 +706,32 @@ node_check_global() {
         return 1
     fi
 
+    local pm=$(_detect_pkg_manager)
     local current_node_version
     current_node_version=$(nvm current 2>/dev/null || node --version 2>/dev/null)
-    local global_bin
-    global_bin=$(pnpm bin --global 2>/dev/null)
 
-    if pnpm list --global 2>/dev/null | grep -q "$project_name"; then
-        echo "${ok}  '${project_name}' is linked globally${done}"
-        echo "${info}  Node version: ${current_node_version}${done}"
-        [[ -n "$global_bin" ]] && echo "${info}  Global bin:   ${global_bin}${done}"
-        return 0
+    if [[ "$pm" == "bun" ]]; then
+        if bun pm ls -g 2>/dev/null | grep -q "$project_name"; then
+            echo "${ok}  '${project_name}' is linked globally (bun)${done}"
+            echo "${info}  Node version: ${current_node_version}${done}"
+            return 0
+        else
+            echo "${warn}  '${project_name}' is not linked globally${done}"
+            return 1
+        fi
     else
-        echo "${warn}  '${project_name}' is not linked globally${done}"
-        return 1
+        local global_bin
+        global_bin=$(pnpm bin --global 2>/dev/null)
+
+        if pnpm list --global 2>/dev/null | grep -q "$project_name"; then
+            echo "${ok}  '${project_name}' is linked globally (pnpm)${done}"
+            echo "${info}  Node version: ${current_node_version}${done}"
+            [[ -n "$global_bin" ]] && echo "${info}  Global bin:   ${global_bin}${done}"
+            return 0
+        else
+            echo "${warn}  '${project_name}' is not linked globally${done}"
+            return 1
+        fi
     fi
 }
 
@@ -612,7 +739,7 @@ node_check_global() {
 
 _node_new_project_completions() {
     _arguments \
-        '1:options:((--no-ts\:"Scaffold JavaScript project" --no-typescript\:"Scaffold JavaScript project" --js\:"Scaffold JavaScript project"))'
+        '*:options:((--no-ts\:"Scaffold JavaScript project" --no-typescript\:"Scaffold JavaScript project" --js\:"Scaffold JavaScript project" --pnpm\:"Use pnpm as package manager" --bun\:"Use bun as package manager"))'
 }
 compdef _node_new_project_completions node_new_project
 
