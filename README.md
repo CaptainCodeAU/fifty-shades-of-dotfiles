@@ -549,23 +549,6 @@ Run this from the target project's root directory. It downloads just the `.claud
 
 ---
 
-## Ollama (Local AI)
-
-Local AI inference server running on macOS via custom LaunchAgents (not `brew services`).
-
-| Alias         | Action                                  |
-| ------------- | --------------------------------------- |
-| `ollama-up`   | Start Ollama server + model preload     |
-| `ollama-down` | Stop preload + server                   |
-| `sysinfo`     | System monitor (includes Ollama status) |
-| `dirdiff`     | Compare two directory trees             |
-
-The default preloaded model is `coreworxlab/caal-ministral:latest` (~7.8 GB VRAM). API available at `http://localhost:11434`.
-
-See [`docs/MEMENTO_ollama_setup.md`](docs/MEMENTO_ollama_setup.md) for full configuration details, plist files, and troubleshooting.
-
----
-
 ## Customization & Private Settings
 
 To keep your main configuration portable and shareable, personal and machine-specific settings live in private files that are **never committed** to the repository. These are protected by `.gitignore_global`.
@@ -908,7 +891,6 @@ fifty-shades-of-dotfiles/
 │       └── wezterm.lua               # Full config (color scheme, keys, tabs, SSH detection)
 │
 └── docs/                              # Documentation
-    ├── MEMENTO_ollama_setup.md
     ├── MEMENTO_vscode_machine_colors.md
     └── reference/                     # Reference materials
         ├── colors.md
@@ -1063,7 +1045,6 @@ The function auto-generates a comprehensive `~/.config/yt-dlp/config` file on fi
 - **Node.js**: `serve` (pnpm dlx http-server), `tsc` (pnpm dlx typescript) — also usable via `bunx`
 - **Docker**: `lzd` (lazydocker), `lzg`/`lg` (lazygit)
 - **Claude Code**: `c` (standard), `cb` (bare/full control), `cr` (resume), `ci` (non-interactive), `ct` (tmux agent teams), `cpr` (from PR), `cd_` (debug), `cskip` (skip end hooks). All aliases spin up an isolated ephemeral SSH agent scoped to the Claude Code process, so marketplace plugin refreshes and git operations work with SSH-only auth without leaking the key to other terminals.
-- **Ollama**: `ollama-up` (start server + preload), `ollama-down` (stop all)
 - **Zoxide**: `cd` command is replaced with `zoxide` for intelligent directory jumping
 
 ### Standalone Script Commands

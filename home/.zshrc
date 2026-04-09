@@ -356,9 +356,6 @@ alias ...="cd ../.."
 alias ....="cd ../../.."
 alias .....="cd ../../../.."
 alias ~="cd ~"
-# --- Ollama (Local AI) ---
-alias ollama-up="launchctl load ~/Library/LaunchAgents/ollama-custom.plist && launchctl load ~/Library/LaunchAgents/com.ollama.preload.plist"
-alias ollama-down="launchctl unload ~/Library/LaunchAgents/com.ollama.preload.plist && launchctl unload ~/Library/LaunchAgents/ollama-custom.plist"
 # alias ll="lsd -altr" # Requires lsd (https://github.com/lsd-rs/lsd)
 # alias l="lsd -altr"
 alias l="eza -l --git --grid --color=always --icons=always --no-quotes --hyperlink -a -s modified --time modified --git-repos-no-status"

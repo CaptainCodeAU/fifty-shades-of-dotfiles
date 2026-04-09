@@ -108,33 +108,6 @@ bar "$total_cpu" 44 "$cpu_color"
 printf "  ${cpu_color}${total_cpu}%%${RST}\n"
 printf "  ${ARROW} Load avg: ${W}${load_avg}${RST}\n"
 
-# ── Ollama ───────────────────────────────────────────────
-header "🤖 Ollama" ""
-
-ollama_running=$(pgrep -x ollama 2>/dev/null | head -1)
-if [ -n "$ollama_running" ]; then
-  printf "  ${DOT} ${G}Server running${RST}  ${D}PID: ${ollama_running}${RST}\n"
-
-  ollama_ps=$(ollama ps 2>/dev/null | tail -n +2)
-  if [ -n "$ollama_ps" ]; then
-    model_count=$(echo "$ollama_ps" | wc -l | tr -d ' ')
-    printf "  ${DOT} ${C}${model_count} model(s) loaded${RST}\n\n"
-    echo -e "  ${D}$(printf '%-38s' 'NAME')$(printf '%8s' 'SIZE')$(printf '%13s' 'PROCESSOR')$(printf '%10s' 'CONTEXT')$(printf '%10s' 'UNTIL')${RST}"
-    divider
-    echo "$ollama_ps" | while IFS= read -r line; do
-      name=$(echo "$line" | awk '{print $1}')
-      size=$(echo "$line" | awk '{print $3, $4}')
-      proc=$(echo "$line" | awk '{print $5, $6}')
-      ctx=$(echo "$line" | awk '{print $7}')
-      until=$(echo "$line" | awk '{print $8}')
-      echo -e "  ${W}$(printf '%-38s' "$name")${RST}${M}$(printf '%8s' "$size")${RST}${C}$(printf '%13s' "$proc")${RST}${D}$(printf '%10s' "$ctx")${RST}${G}$(printf '%10s' "$until")${RST}"
-    done
-  else
-    printf "  ${DOT} ${Y}No models loaded${RST}\n"
-  fi
-else
-  printf "  ${DOT} ${R}Server not running${RST}\n"
-fi
 
 # ── App Memory Totals ────────────────────────────────────
 header "📦 App Totals" "grouped memory"
@@ -145,7 +118,6 @@ ps -eo rss,comm | tail -n +2 | awk '{
   if (cmd ~ /^Brave/) app="Brave"
   else if (cmd ~ /^Cursor/) app="Cursor"
   else if (cmd ~ /^claude/) app="Claude"
-  else if (cmd ~ /^ollama/) app="Ollama"
   else if (cmd ~ /^iTerm/) app="iTerm2"
   else if (cmd ~ /^Finder/) app="Finder"
   else if (cmd ~ /^WindowServer/) app="WindowServer"
@@ -217,20 +189,6 @@ ps -eo pid,pcpu,comm -r | head -6 | tail -5 | while read -r pid cpu cmd; do
   fi
 
   echo -e "  ${D}$(printf '%-8s' "$pid")${RST}${c}$(printf '%7s%%' "$cpu")${RST}  ${W}${short_cmd}${RST}"
-done
-
-# ── Services ─────────────────────────────────────────────
-header "⚙️  LaunchAgents" "ollama"
-launchctl list 2>/dev/null | grep ollama | while read -r pid status label; do
-  if [ "$pid" != "-" ]; then
-    printf "  ${DOT} ${G}running${RST}  ${W}%-35s${RST} ${D}PID: ${pid}${RST}\n" "$label"
-  else
-    if [ "$status" = "0" ]; then
-      printf "  ${DOT} ${C}done${RST}     ${W}%-35s${RST} ${D}exit: ${status}${RST}\n" "$label"
-    else
-      printf "  ${DOT} ${R}error${RST}    ${W}%-35s${RST} ${D}exit: ${status}${RST}\n" "$label"
-    fi
-  fi
 done
 
 echo ""
