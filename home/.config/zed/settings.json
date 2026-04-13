@@ -1,6 +1,23 @@
 {
 	// Window behavior
-	"ssh_connections": [
+	"project_panel": {
+  "dock": "left"
+ },
+ "outline_panel": {
+  "dock": "left"
+ },
+ "collaboration_panel": {
+  "dock": "left"
+ },
+ "agent": {
+  "dock": "right",
+  "favorite_models": [],
+  "model_parameters": []
+ },
+ "git_panel": {
+  "dock": "left"
+ },
+ "ssh_connections": [
   {
    "host": "mlbox-ubuntu",
    "args": [],
@@ -8,6 +25,18 @@
     {
      "paths": [
       "/home/winadmin/repos/llmster-server-3090"
+     ]
+    }
+   ]
+  },
+  {
+   "host": "192.168.1.101",
+   "username": "root",
+   "args": [],
+   "projects": [
+    {
+     "paths": [
+      "/root/audit/./"
      ]
     }
    ]
