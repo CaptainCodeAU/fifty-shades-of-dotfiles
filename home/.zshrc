@@ -443,14 +443,36 @@ pipx() {
     esac
 }
 
-# Hijack npx to redirect users to pnpm dlx or bunx equivalents.
-# npx is no longer used on this system — pnpm dlx or bunx replaces it entirely.
+# Hijack npx/npm/yarn — none are used on this system.
+# pnpm and bun are the package managers; npx is replaced by pnpm dlx / bunx.
+# These wrappers enforce the policy at the interactive shell level; the Claude
+# Code hook at .claude/hooks/enforce-pnpm.sh enforces the same policy for
+# commands Claude runs via its Bash tool.
 npx() {
     echo "${warn}⚠️  npx is not used on this system. Use pnpm dlx or bunx instead.${done}"
     echo
     echo "  Instead of:  ${err}npx $@${done}"
     echo "  Run:         ${ok}pnpm dlx $@${done}"
     echo "         or:   ${ok}bunx $@${done}"
+    return 1
+}
+
+npm() {
+    echo "${warn}⚠️  npm is not used on this system. Use pnpm or bun instead.${done}"
+    echo
+    echo "  Instead of:  ${err}npm $@${done}"
+    echo "  Run:         ${ok}pnpm $@${done}"
+    echo "         or:   ${ok}bun $@${done}"
+    return 1
+}
+
+yarn() {
+    echo "${warn}⚠️  yarn is not used on this system. Use pnpm or bun instead.${done}"
+    echo
+    echo "  Instead of:  ${err}yarn $@${done}"
+    echo "  Run:         ${ok}pnpm $@${done}"
+    echo "         or:   ${ok}bun $@${done}"
+    return 1
 }
 
 # Guard gh auth subcommands that re-add HTTPS credential helpers.
