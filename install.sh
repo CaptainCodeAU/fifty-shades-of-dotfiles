@@ -201,7 +201,8 @@ check_prerequisites() {
         if [[ -n "$uv_python" ]]; then
             echo -e "  ${GREEN}✓${RESET} Python 3.13 available via uv"
         else
-            echo -e "  ${YELLOW}~${RESET} Python 3.13 not yet installed (run: uv python install 3.13)"
+            echo -e "  ${RED}✗${RESET} Python 3.13 not installed — required (run: uv python install 3.13)"
+            ((missing++))
         fi
     fi
     echo
