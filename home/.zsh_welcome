@@ -147,16 +147,34 @@ _show_welcome_full() {
     fi
 
     # --- Docker ---
-    if command -v docker &>/dev/null && docker ps &>/dev/null 2>&1; then
-        echo "    Docker: ${ok}Running${done}"
-    elif command -v docker &>/dev/null; then
-        if [[ "$IS_MAC" == "true" ]]; then
-            echo "    Docker: ${warn}Not Running${done}"
+    if command -v docker &>/dev/null; then
+        local docker_bin
+        docker_bin=$(command -v docker)
+        local docker_running=false
+        docker ps &>/dev/null 2>&1 && docker_running=true
+
+        local engine_ver
+        if [[ "$docker_running" == true ]]; then
+            engine_ver=$(docker version --format '{{.Server.Version}}' 2>/dev/null || echo 'N/A')
+            echo "    Docker Engine: ${ok}${engine_ver} (Running)${done} — ${docker_bin}"
         else
-            echo "    Docker: ${warn}Not Running${done} (try: sudo usermod -aG docker \$USER)"
+            engine_ver=$(docker version --format '{{.Client.Version}}' 2>/dev/null || \
+                         docker --version 2>/dev/null | awk '{print $3}' | tr -d ',' || \
+                         echo 'N/A')
+            if [[ "$IS_MAC" == "true" ]]; then
+                echo "    Docker Engine: ${warn}${engine_ver} (Not Running)${done} — ${docker_bin}"
+            else
+                echo "    Docker Engine: ${warn}${engine_ver} (Not Running)${done} — ${docker_bin} (try: sudo usermod -aG docker \$USER)"
+            fi
+        fi
+
+        if [[ "$IS_MAC" == "true" && -d "/Applications/Docker.app" ]]; then
+            local desktop_ver
+            desktop_ver=$(defaults read /Applications/Docker.app/Contents/Info.plist CFBundleShortVersionString 2>/dev/null || echo 'N/A')
+            echo "    Docker Desktop: ${ok}${desktop_ver}${done} — /Applications/Docker.app"
         fi
     else
-        echo "    Docker: ${err}Not Installed${done}"
+        echo "    Docker Engine: ${err}Not Installed${done}"
     fi
 
     # --- Homebrew (macOS only) ---
