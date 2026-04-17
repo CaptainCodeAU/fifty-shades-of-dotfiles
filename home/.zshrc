@@ -47,6 +47,7 @@ setopt SHARE_HISTORY             # Share history between sessions
 setopt EXTENDED_GLOB        # Use extended globbing syntax
 setopt NULL_GLOB            # Don't error on no matches, just return empty
 setopt NUMERIC_GLOB_SORT    # Sort filenames numerically
+setopt RM_STAR_WAIT         # 10-second wait before confirming wildcard deletions (rm path/*)
 
 # --- Python ---
 export PIP_REQUIRE_VIRTUALENV=true
@@ -554,10 +555,25 @@ sudo() {
 	fi
 }
 
-# Warn before deleting symlinks — prevents accidentally nuking files through
-# directory symlinks (e.g. rm ~/.config/direnv/file when ~/.config/direnv is
-# a symlink into the dotfiles repo). When safe-rm is installed, it acts as
-# the second layer: rm() (symlink warning) → safe-rm (path protection) → /bin/rm.
+# Routes to the OS-native trash tool (recoverable) instead of permanent deletion.
+# macOS: 'trash' (brew install trash) → ~/.Trash (visible in Finder)
+# Linux: 'trash-put' (apt install trash-cli) → XDG trash (visible in Nautilus)
+_send_to_trash() {
+	if command -v trash &>/dev/null; then
+		trash "$@"
+	elif command -v trash-put &>/dev/null; then
+		trash-put "$@"
+	else
+		echo "${err}❌  No trash tool found. Install 'trash' (macOS: brew install trash) or 'trash-cli' (Linux: apt install trash-cli).${done}" >&2
+		return 1
+	fi
+}
+
+# Intercept rm: warn on symlinks (first layer), then send to trash (second layer).
+# Symlink warning prevents accidentally nuking files through directory symlinks
+# (e.g. rm ~/.config/direnv/file when ~/.config/direnv is a symlink into the repo).
+# Note: only intercepts interactive shell use — scripts calling /bin/rm directly
+# are unaffected, which is intentional.
 rm() {
 	local symlinks=()
 	for arg in "$@"; do
@@ -572,11 +588,22 @@ rm() {
 		read "REPLY?${warn}   Proceed? [y/N] ${done}"
 		[[ "$REPLY" =~ ^[Yy]$ ]] || return 1
 	fi
-	if command -v safe-rm &>/dev/null; then
-		safe-rm "$@"
-	else
-		command rm "$@"
-	fi
+	# Strip rm flags — trash tools don't understand -rf etc.
+	local targets=()
+	for arg in "$@"; do
+		[[ "$arg" != -* ]] && targets+=("$arg")
+	done
+	_send_to_trash "${targets[@]}"
+}
+
+# rmdir sends empty directories to trash rather than deleting permanently.
+rmdir() {
+	_send_to_trash "$@"
+}
+
+# Explicit trash convenience function — use when you want to be obvious about intent.
+trash() {
+	_send_to_trash "$@"
 }
 
 # Prompt before overwriting files by default.
