@@ -729,7 +729,10 @@ GITEOF"
     if [[ ! -d "$HOME/.nvm" ]]; then
         if confirm "nvm not found. Install it for Node.js version management?"; then
             run_cmd bash -c 'curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash'
+            # Activate in current session so subsequent steps and the user can
+            # use nvm immediately without opening a new terminal.
             export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
             success "nvm installed"
         fi
     else
@@ -740,7 +743,14 @@ GITEOF"
     if ! command -v pnpm &>/dev/null; then
         if confirm "pnpm not found. Install it (standalone)?"; then
             run_cmd bash -c 'curl -fsSL https://get.pnpm.io/install.sh | sh -'
-            success "pnpm installed (restart shell to use)"
+            # Activate in current session.
+            if [[ "$os" == "macos" ]]; then
+                export PNPM_HOME="$HOME/Library/pnpm"
+            else
+                export PNPM_HOME="$HOME/.local/share/pnpm"
+            fi
+            export PATH="$PNPM_HOME:$PATH"
+            success "pnpm installed"
         fi
     else
         success "pnpm installed"
@@ -749,8 +759,11 @@ GITEOF"
     # --- Bun ---
     if ! command -v bun &>/dev/null; then
         if confirm "bun not found. Install it?"; then
-            run_cmd bash -c 'export BUN_INSTALL="$HOME/.bun" && export PATH="$BUN_INSTALL/bin:$PATH" && curl -fsSL https://bun.sh/install | bash'
-            success "bun installed (PATH already configured in .zshrc)"
+            run_cmd bash -c 'curl -fsSL https://bun.sh/install | bash'
+            # Activate in current session.
+            export BUN_INSTALL="$HOME/.bun"
+            export PATH="$BUN_INSTALL/bin:$PATH"
+            success "bun installed"
         fi
     else
         success "bun installed"
@@ -958,7 +971,7 @@ show_summary() {
 
     echo
     echo -e "${BOLD}Next steps:${RESET}"
-    echo -e "  1. Open a new terminal (or: ${CYAN}exec zsh${RESET})"
+    echo -e "  1. Open a new terminal (or: ${CYAN}exec zsh${RESET}) — nvm/pnpm/bun usable immediately in this terminal if installed above"
     echo -e "  2. The onboarding script will run automatically on first start"
     echo -e "  3. Create ${CYAN}~/.zshrc.private${RESET} for API keys and secrets"
     echo
