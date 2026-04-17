@@ -7,3 +7,6 @@
 # Without this, stow tries to symlink them into ~/ and conflicts with
 # the real .DS_Store files macOS maintains there.
 \.DS_Store
+\._.*
+\.Spotlight-V100
+\.Trashes

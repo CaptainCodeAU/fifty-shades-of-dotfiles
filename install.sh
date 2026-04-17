@@ -514,7 +514,7 @@ check_conflicts() {
                 ((conflicts++))
             fi
         fi
-    done < <(find "$home_dir" -type f -print0)
+    done < <(find "$home_dir" -type f ! -name '.DS_Store' -print0)
 
     if (( stow_managed > 0 )); then
         echo
@@ -566,7 +566,7 @@ stow_home() {
     local count=0
     while IFS= read -r -d '' file; do
         ((count++))
-    done < <(find "$REPO_DIR/home" -type f -print0)
+    done < <(find "$REPO_DIR/home" -type f ! -name '.DS_Store' -print0)
     info "Linked $count file(s) from home/ to ~/"
 }
 
