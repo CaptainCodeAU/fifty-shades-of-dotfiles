@@ -466,10 +466,15 @@ _is_stow_managed() {
     # Walk up parent directories of a target path. If any ancestor is a
     # symlink pointing into the dotfiles repo, the file is already managed
     # by stow via tree-folding — not a real conflict.
+    #
+    # Note: the loop starts from the file's parent and walks up through
+    # $HOME (inclusive). Without checking $HOME itself, files placed
+    # directly in $HOME (e.g. ~/.foo) are never evaluated, which was a
+    # dead zone in the original while [[ dir != HOME ]] condition.
     local path="$1"
     local dir
     dir="$(dirname "$path")"
-    while [[ "$dir" != "$HOME" && "$dir" != "/" ]]; do
+    while [[ "$dir" != "/" ]]; do
         if [[ -L "$dir" ]]; then
             local link_target
             link_target=$(readlink "$dir")
@@ -477,6 +482,7 @@ _is_stow_managed() {
                 return 0
             fi
         fi
+        [[ "$dir" == "$HOME" ]] && break
         dir="$(dirname "$dir")"
     done
     return 1
