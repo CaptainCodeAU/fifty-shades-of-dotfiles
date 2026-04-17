@@ -197,7 +197,7 @@ check_prerequisites() {
     echo -e "${BOLD}Python (via uv):${RESET}"
     if command -v uv &>/dev/null; then
         local uv_python
-        uv_python=$(uv python list 2>/dev/null | grep -m1 "cpython-3.13" | grep -v "download available" | awk '{print $1}')
+        uv_python=$(uv python list 2>/dev/null | grep "cpython-3.13" | grep -v "download available" | awk '{print $1}' | head -1 || true)
         if [[ -n "$uv_python" ]]; then
             echo -e "  ${GREEN}✓${RESET} Python 3.13 available via uv"
         else
