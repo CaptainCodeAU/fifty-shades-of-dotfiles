@@ -138,9 +138,9 @@ _show_welcome_full() {
             local default_node=$(nvm version default 2>/dev/null)
             echo "    Node: ${warn}None active${done} (default: ${default_node:-N/A})"
         else
-            local npm_ver=$(npm -v 2>/dev/null || echo 'N/A')
             local pnpm_ver=$(pnpm -v 2>/dev/null || echo 'N/A')
-            echo "    Node: ${ok}${active_node}${done} (npm: ${npm_ver}, pnpm: ${pnpm_ver})"
+            local bun_ver=$(bun --version 2>/dev/null || echo 'N/A')
+            echo "    Node: ${ok}${active_node}${done} (pnpm: ${pnpm_ver}, bun: ${bun_ver})"
         fi
     else
         echo "    Node: ${err}nvm not found${done}"
