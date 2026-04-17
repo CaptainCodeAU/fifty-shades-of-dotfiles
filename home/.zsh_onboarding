@@ -382,11 +382,10 @@ run_onboarding() {
     echo "${info}==============================================================================${done}"
     echo "${ok}  Onboarding complete!${done}"
     echo "${info}==============================================================================${done}"
-    echo
-    echo "${info}Tips:${done}"
-    echo "  - Run ${info}run_onboarding${done} anytime to re-check dependencies"
-    echo "  - Restart your shell or run ${info}source ~/.zshrc${done} if new tools were installed"
-    echo
+    # echo "${info}Tips:${done}"
+    # echo "  - Run ${info}run_onboarding${done} anytime to re-check dependencies"
+    # echo "  - Restart your shell or run ${info}source ~/.zshrc${done} if new tools were installed"
+    # echo
 }
 
 # ------------------------------------------------------------------------------
