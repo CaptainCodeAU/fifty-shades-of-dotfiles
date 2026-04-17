@@ -286,7 +286,11 @@ run_onboarding() {
     _ensure_command "git" "git" "git"
     _ensure_command "curl" "curl" "curl"
     _ensure_command "unzip" "unzip" "unzip"
-    _ensure_command "safe-rm" "safe-rm" "safe-rm"
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        _ensure_command "trash" "trash (macOS)" "trash"
+    else
+        _ensure_command "trash-put" "trash-cli (Linux)" "trash-cli"
+    fi
     echo
 
     # --- User Experience Tools ---
