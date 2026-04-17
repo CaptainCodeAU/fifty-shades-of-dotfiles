@@ -600,17 +600,16 @@ stow_platform() {
         local cursor_src="$platform_dir/Cursor/User/settings.json"
         local cursor_dst="$cursor_app_dir/User/settings.json"
         if [[ -f "$cursor_src" ]]; then
-            if [[ -f "$cursor_dst" ]]; then
-                local dst_lines src_lines
-                dst_lines=$(wc -l < "$cursor_dst" | tr -d ' ')
-                src_lines=$(wc -l < "$cursor_src" | tr -d ' ')
-                if (( dst_lines < src_lines )); then
-                    info "Cursor settings.json has fewer lines than repo ($dst_lines < $src_lines) — updating"
-                    run_cmd cp "$cursor_src" "$cursor_dst"
-                    success "Cursor settings.json updated from repo"
-                else
-                    echo -e "  ${GREEN}✓${RESET} Cursor settings.json is up to date ($dst_lines lines)"
-                fi
+            if [[ -f "$cursor_dst" && ! -L "$cursor_dst" ]]; then
+                # Real file (direnvrc has injected machine colors) — back it up before overwriting.
+                # direnvrc will re-inject colors on next shell open (idempotent guard checks content).
+                local cursor_bak="${cursor_dst}.bak.$(date +%Y%m%d_%H%M%S)"
+                run_cmd cp "$cursor_dst" "$cursor_bak"
+                info "Cursor settings.json backed up → $(basename "$cursor_bak")"
+                run_cmd cp "$cursor_src" "$cursor_dst"
+                success "Cursor settings.json updated from repo"
+            elif [[ -L "$cursor_dst" ]]; then
+                echo -e "  ${GREEN}✓${RESET} Cursor settings.json is a symlink — leaving as-is"
             else
                 info "Cursor settings.json not found — copying from repo"
                 run_cmd mkdir -p "$(dirname "$cursor_dst")"
@@ -628,17 +627,15 @@ stow_platform() {
         local code_src="$platform_dir/Code/User/settings.json"
         local code_dst="$code_app_dir/User/settings.json"
         if [[ -f "$code_src" ]]; then
-            if [[ -f "$code_dst" ]]; then
-                local dst_lines src_lines
-                dst_lines=$(wc -l < "$code_dst" | tr -d ' ')
-                src_lines=$(wc -l < "$code_src" | tr -d ' ')
-                if (( dst_lines < src_lines )); then
-                    info "VSCode settings.json has fewer lines than repo ($dst_lines < $src_lines) — updating"
-                    run_cmd cp "$code_src" "$code_dst"
-                    success "VSCode settings.json updated from repo"
-                else
-                    echo -e "  ${GREEN}✓${RESET} VSCode settings.json is up to date ($dst_lines lines)"
-                fi
+            if [[ -f "$code_dst" && ! -L "$code_dst" ]]; then
+                # Real file (direnvrc has injected machine colors) — back it up before overwriting.
+                local code_bak="${code_dst}.bak.$(date +%Y%m%d_%H%M%S)"
+                run_cmd cp "$code_dst" "$code_bak"
+                info "VSCode settings.json backed up → $(basename "$code_bak")"
+                run_cmd cp "$code_src" "$code_dst"
+                success "VSCode settings.json updated from repo"
+            elif [[ -L "$code_dst" ]]; then
+                echo -e "  ${GREEN}✓${RESET} VSCode settings.json is a symlink — leaving as-is"
             else
                 info "VSCode settings.json not found — copying from repo"
                 run_cmd mkdir -p "$(dirname "$code_dst")"
