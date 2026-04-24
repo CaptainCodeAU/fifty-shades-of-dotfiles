@@ -1046,9 +1046,13 @@ _display_pyproject_hints() {
     local detected_py_req=$(awk '/requires-python/ { match($0, /[0-9]+\.[0-9]+/); if (RSTART) print substr($0, RSTART, RLENGTH) }' pyproject.toml)
     local detected_extras_str=$(awk '/^\[project\.optional-dependencies\]/{f=1;next} /^\[/{f=0} f && /^[a-zA-Z]/{gsub(/[ \t]*=.*/, ""); gsub(/^[ \t]*/, ""); print}' pyproject.toml)
     local -a detected_extras=("${(@f)detected_extras_str}")
+    detected_extras=(${detected_extras:#})
+    local detected_dep_groups_str=$(awk '/^\[dependency-groups\]/{f=1;next} /^\[/{f=0} f && /^[a-zA-Z]/{gsub(/[ \t]*=.*/, ""); gsub(/^[ \t]*/, ""); print}' pyproject.toml)
+    local -a detected_dep_groups=("${(@f)detected_dep_groups_str}")
+    detected_dep_groups=(${detected_dep_groups:#})
 
     # Only display hints if there is something to show
-    if [[ -n "$detected_py_req" || ${#detected_extras[@]} -gt 0 ]]; then
+    if [[ -n "$detected_py_req" || ${#detected_extras[@]} -gt 0 || ${#detected_dep_groups[@]} -gt 0 ]]; then
         echo "${info}Hint: Based on your pyproject.toml:${done}"
 
         # Only display the python version hint if the calling function is python_setup
@@ -1061,16 +1065,25 @@ _display_pyproject_hints() {
             echo "${info}      - Available extras found: ${ok}[${detected_extras[*]}]${info}.${done}"
         fi
 
+        # Display dependency groups (informational — not installable as extras)
+        if (( ${#detected_dep_groups[@]} > 0 )); then
+            echo "${info}      - Dependency groups found: ${ok}[${detected_dep_groups[*]}]${info} (not installable as extras).${done}"
+        fi
+
         # Construct an intelligent example command
         local -a example_cmd_parts=("$command_name")
         # Only add the python version to the example if the command is python_setup
         [[ "$command_name" == "python_setup" && -n "$detected_py_req" ]] && example_cmd_parts+=("$detected_py_req")
-        # Add the first available extra as an example, if any exist
-        (( ${#detected_extras[@]} > 0 )) && example_cmd_parts+=("${detected_extras[1]}")
+        # Add all available extras to the example so users see multi-arg syntax
+        if (( ${#detected_extras[@]} > 0 )); then
+            example_cmd_parts+=("${detected_extras[@]}")
+        elif [[ "$command_name" == "uv_tool"* ]]; then
+            example_cmd_parts+=("--no-extras")
+        fi
         echo "${info}      Example command: ${example}${example_cmd_parts[*]}${done}"
 
-        # For uv_tool functions, add the --no-extras hint
-        if [[ "$command_name" == "uv_tool"* ]]; then
+        # For uv_tool functions with extras, also show --no-extras as an alternative
+        if [[ "$command_name" == "uv_tool"* ]] && (( ${#detected_extras[@]} > 0 )); then
             echo "${info}      To install with no extras, run: ${example}$command_name --no-extras${done}"
         fi
     fi
