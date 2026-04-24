@@ -274,6 +274,7 @@ _show_quickref_full() {
     echo
     echo "${info}🚀  Quick Reference:${done}"
     echo "    Python:  python_new_project, python_setup, python_delete"
+    echo "    uv CLI:  uv_tool_install_current_project, uv_tool_check_current_project"
     echo "    Node:    node_new_project, node_setup, node_clean"
     echo "    Docker:  docker_help | Tmux: tdev, gs, gstatus"
     echo "    Media:   yt --help"
