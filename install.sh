@@ -621,8 +621,8 @@ stow_home() {
 
     _clean_stale_repo_links
 
-    local -a stow_args=(-R -t "$HOME" home)
-    [[ "$VERBOSE" == true ]] && stow_args=(-R -v -t "$HOME" home)
+    local -a stow_args=(-R --no-folding -t "$HOME" home)
+    [[ "$VERBOSE" == true ]] && stow_args=(-R --no-folding -v -t "$HOME" home)
 
     if run_cmd stow "${stow_args[@]}"; then
         success "home/ stowed successfully"
@@ -907,8 +907,8 @@ uninstall() {
 
     if confirm "Remove all symlinks created by stow (home/ → ~/)?"; then
         _clean_stale_repo_links
-        local -a stow_args=(-D -t "$HOME" home)
-        [[ "$VERBOSE" == true ]] && stow_args=(-D -v -t "$HOME" home)
+        local -a stow_args=(-D --no-folding -t "$HOME" home)
+        [[ "$VERBOSE" == true ]] && stow_args=(-D --no-folding -v -t "$HOME" home)
         if run_cmd stow "${stow_args[@]}"; then
             success "Symlinks removed"
         else
@@ -958,8 +958,8 @@ update() {
 
     info "Restowing home/ → ~/"
     _clean_stale_repo_links
-    local -a stow_args=(-R -t "$HOME" home)
-    [[ "$VERBOSE" == true ]] && stow_args=(-R -v -t "$HOME" home)
+    local -a stow_args=(-R --no-folding -t "$HOME" home)
+    [[ "$VERBOSE" == true ]] && stow_args=(-R --no-folding -v -t "$HOME" home)
     run_cmd stow "${stow_args[@]}"
 
     stow_platform
@@ -982,8 +982,8 @@ force_adopt() {
 
     if confirm "Proceed with stow --adopt?"; then
         _clean_stale_repo_links
-        local -a stow_args=(--adopt -t "$HOME" home)
-        [[ "$VERBOSE" == true ]] && stow_args=(--adopt -v -t "$HOME" home)
+        local -a stow_args=(--adopt --no-folding -t "$HOME" home)
+        [[ "$VERBOSE" == true ]] && stow_args=(--adopt --no-folding -v -t "$HOME" home)
         run_cmd stow "${stow_args[@]}"
         success "Adoption complete."
         echo
