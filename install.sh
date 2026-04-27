@@ -501,6 +501,43 @@ _is_stow_managed() {
     return 1
 }
 
+_clean_stale_repo_links() {
+    local home_dir="$REPO_DIR/home"
+    local cleaned=0
+
+    while IFS= read -r -d '' dir; do
+        local relative="${dir#$home_dir/}"
+        local target="$HOME/$relative"
+        if [[ -L "$target" ]]; then
+            local link_target
+            link_target=$(readlink "$target")
+            if [[ "$link_target" == *"fifty-shades-of-dotfiles"* ]]; then
+                verbose "Removing stale link: ~/$relative/ → $link_target"
+                run_cmd rm "$target"
+                ((cleaned++)) || true
+            fi
+        fi
+    done < <(find "$home_dir" -mindepth 1 -type d -print0)
+
+    while IFS= read -r -d '' file; do
+        local relative="${file#$home_dir/}"
+        local target="$HOME/$relative"
+        if [[ -L "$target" ]]; then
+            local link_target
+            link_target=$(readlink "$target")
+            if [[ "$link_target" == *"fifty-shades-of-dotfiles"* ]]; then
+                verbose "Removing stale link: ~/$relative → $link_target"
+                run_cmd rm "$target"
+                ((cleaned++)) || true
+            fi
+        fi
+    done < <(find "$home_dir" -type f ! -name '.DS_Store' -print0)
+
+    if (( cleaned > 0 )); then
+        info "Removed $cleaned stale symlink(s) from previous install"
+    fi
+}
+
 check_conflicts() {
     step "Checking for Conflicts"
 
@@ -582,8 +619,10 @@ stow_home() {
 
     cd "$REPO_DIR"
 
-    local -a stow_args=(-R "--override=.*" -t "$HOME" home)
-    [[ "$VERBOSE" == true ]] && stow_args=(-R "--override=.*" -v -t "$HOME" home)
+    _clean_stale_repo_links
+
+    local -a stow_args=(-R -t "$HOME" home)
+    [[ "$VERBOSE" == true ]] && stow_args=(-R -v -t "$HOME" home)
 
     if run_cmd stow "${stow_args[@]}"; then
         success "home/ stowed successfully"
@@ -867,8 +906,9 @@ uninstall() {
     cd "$REPO_DIR"
 
     if confirm "Remove all symlinks created by stow (home/ → ~/)?"; then
-        local -a stow_args=(-D "--override=.*" -t "$HOME" home)
-        [[ "$VERBOSE" == true ]] && stow_args=(-D "--override=.*" -v -t "$HOME" home)
+        _clean_stale_repo_links
+        local -a stow_args=(-D -t "$HOME" home)
+        [[ "$VERBOSE" == true ]] && stow_args=(-D -v -t "$HOME" home)
         if run_cmd stow "${stow_args[@]}"; then
             success "Symlinks removed"
         else
@@ -917,8 +957,9 @@ update() {
     run_cmd git pull
 
     info "Restowing home/ → ~/"
-    local -a stow_args=(-R "--override=.*" -t "$HOME" home)
-    [[ "$VERBOSE" == true ]] && stow_args=(-R "--override=.*" -v -t "$HOME" home)
+    _clean_stale_repo_links
+    local -a stow_args=(-R -t "$HOME" home)
+    [[ "$VERBOSE" == true ]] && stow_args=(-R -v -t "$HOME" home)
     run_cmd stow "${stow_args[@]}"
 
     stow_platform
@@ -940,8 +981,9 @@ force_adopt() {
     echo
 
     if confirm "Proceed with stow --adopt?"; then
-        local -a stow_args=(--adopt "--override=.*" -t "$HOME" home)
-        [[ "$VERBOSE" == true ]] && stow_args=(--adopt "--override=.*" -v -t "$HOME" home)
+        _clean_stale_repo_links
+        local -a stow_args=(--adopt -t "$HOME" home)
+        [[ "$VERBOSE" == true ]] && stow_args=(--adopt -v -t "$HOME" home)
         run_cmd stow "${stow_args[@]}"
         success "Adoption complete."
         echo
