@@ -582,11 +582,10 @@ stow_home() {
 
     cd "$REPO_DIR"
 
-    local stow_flags="-R"
-    [[ "$VERBOSE" == true ]] && stow_flags="-R -v"
+    local -a stow_args=(-R "--override=.*" -t "$HOME" home)
+    [[ "$VERBOSE" == true ]] && stow_args=(-R "--override=.*" -v -t "$HOME" home)
 
-    # shellcheck disable=SC2086
-    if run_cmd stow $stow_flags -t "$HOME" home; then
+    if run_cmd stow "${stow_args[@]}"; then
         success "home/ stowed successfully"
     else
         error "stow failed to create symlinks."
@@ -868,10 +867,9 @@ uninstall() {
     cd "$REPO_DIR"
 
     if confirm "Remove all symlinks created by stow (home/ → ~/)?"; then
-        local stow_flags="-D"
-        [[ "$VERBOSE" == true ]] && stow_flags="-D -v"
-        # shellcheck disable=SC2086
-        if run_cmd stow $stow_flags -t "$HOME" home; then
+        local -a stow_args=(-D "--override=.*" -t "$HOME" home)
+        [[ "$VERBOSE" == true ]] && stow_args=(-D "--override=.*" -v -t "$HOME" home)
+        if run_cmd stow "${stow_args[@]}"; then
             success "Symlinks removed"
         else
             error "stow -D failed"
@@ -919,10 +917,9 @@ update() {
     run_cmd git pull
 
     info "Restowing home/ → ~/"
-    local stow_flags="-R"
-    [[ "$VERBOSE" == true ]] && stow_flags="-R -v"
-    # shellcheck disable=SC2086
-    run_cmd stow $stow_flags -t "$HOME" home
+    local -a stow_args=(-R "--override=.*" -t "$HOME" home)
+    [[ "$VERBOSE" == true ]] && stow_args=(-R "--override=.*" -v -t "$HOME" home)
+    run_cmd stow "${stow_args[@]}"
 
     stow_platform
 
@@ -943,10 +940,9 @@ force_adopt() {
     echo
 
     if confirm "Proceed with stow --adopt?"; then
-        local stow_flags="--adopt"
-        [[ "$VERBOSE" == true ]] && stow_flags="--adopt -v"
-        # shellcheck disable=SC2086
-        run_cmd stow $stow_flags -t "$HOME" home
+        local -a stow_args=(--adopt "--override=.*" -t "$HOME" home)
+        [[ "$VERBOSE" == true ]] && stow_args=(--adopt "--override=.*" -v -t "$HOME" home)
+        run_cmd stow "${stow_args[@]}"
         success "Adoption complete."
         echo
         info "Review changes with: ${CYAN}git diff${RESET}"
