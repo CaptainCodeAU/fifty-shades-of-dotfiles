@@ -339,6 +339,15 @@ install_macos_prerequisites() {
         fi
     fi
 
+    # --- pnpm (standalone) ---
+    if ! command -v pnpm &>/dev/null; then
+        if confirm "pnpm not found. Install it (standalone)?"; then
+            run_cmd bash -c 'curl -fsSL https://get.pnpm.io/install.sh | sh -'
+            export PNPM_HOME="$HOME/Library/pnpm"
+            export PATH="$PNPM_HOME:$PATH"
+        fi
+    fi
+
     # --- Oh My Zsh ---
     if [[ ! -d "$HOME/.oh-my-zsh" ]]; then
         if confirm "Oh My Zsh not found. Install it?" "y"; then
@@ -413,6 +422,15 @@ install_linux_prerequisites() {
         if confirm "uv not found. Install it?"; then
             run_cmd bash -c 'curl -LsSf https://astral.sh/uv/install.sh | sh'
             export PATH="$HOME/.local/bin:$PATH"
+        fi
+    fi
+
+    # --- pnpm (standalone) ---
+    if ! command -v pnpm &>/dev/null; then
+        if confirm "pnpm not found. Install it (standalone)?"; then
+            run_cmd bash -c 'curl -fsSL https://get.pnpm.io/install.sh | sh -'
+            export PNPM_HOME="$HOME/.local/share/pnpm"
+            export PATH="$PNPM_HOME:$PATH"
         fi
     fi
 
@@ -810,23 +828,6 @@ GITEOF"
         fi
     else
         success "nvm installed"
-    fi
-
-    # --- pnpm (standalone) ---
-    if ! command -v pnpm &>/dev/null; then
-        if confirm "pnpm not found. Install it (standalone)?"; then
-            run_cmd bash -c 'curl -fsSL https://get.pnpm.io/install.sh | sh -'
-            # Activate in current session.
-            if [[ "$os" == "macos" ]]; then
-                export PNPM_HOME="$HOME/Library/pnpm"
-            else
-                export PNPM_HOME="$HOME/.local/share/pnpm"
-            fi
-            export PATH="$PNPM_HOME:$PATH"
-            success "pnpm installed"
-        fi
-    else
-        success "pnpm installed"
     fi
 
     # --- Bun ---
