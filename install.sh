@@ -34,6 +34,14 @@ RESET='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$SCRIPT_DIR"
 
+# --- Ensure tool paths are visible to bash ---
+# Tools installed via standalone installers (pnpm, bun, uv) land outside
+# /usr/bin and may not be on PATH in a bash login shell.
+[[ -d "$HOME/.local/bin" ]]           && export PATH="$HOME/.local/bin:$PATH"
+[[ -d "$HOME/.local/share/pnpm" ]]    && export PATH="$HOME/.local/share/pnpm:$PATH"
+[[ -d "$HOME/Library/pnpm" ]]         && export PATH="$HOME/Library/pnpm:$PATH"
+[[ -d "$HOME/.bun/bin" ]]             && export PATH="$HOME/.bun/bin:$PATH"
+
 # --- Mode flags ---
 DRY_RUN=false
 VERBOSE=false
