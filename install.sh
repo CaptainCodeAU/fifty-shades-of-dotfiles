@@ -172,14 +172,16 @@ check_prerequisites() {
     check_command zoxide   "zoxide"   || true
     check_command tmux     "tmux"     || true
     check_command rg       "ripgrep"  || true
-    check_command fd       "fd"       || true
-    check_command gh       "GitHub CLI (gh)" || true
+    if ! check_command fd "fd"; then
+        check_command fdfind "fd (as fdfind)" || ((missing++))
+    fi
+    check_command gh       "GitHub CLI (gh)" || ((missing++))
     check_command nvim     "neovim"   || true
     check_command glow     "glow"     || true
     if [[ "$(check_os)" == "macos" ]]; then
-        check_command trash    "trash (macOS)"  || true
+        check_command trash    "trash (macOS)"  || ((missing++))
     else
-        check_command trash-put "trash-cli (Linux)" || true
+        check_command trash-put "trash-cli (Linux)" || ((missing++))
     fi
     echo
 
@@ -197,7 +199,7 @@ check_prerequisites() {
     else
         echo -e "  ${YELLOW}~${RESET} nvm — not installed"
     fi
-    check_command_optional pnpm "pnpm" || true
+    check_command pnpm     "pnpm"     || ((missing++))
     check_command_optional node "node" || true
     check_command_optional bun  "bun"  || true
     echo
@@ -364,6 +366,12 @@ install_linux_prerequisites() {
                 apt)
                     run_cmd sudo apt update
                     run_cmd sudo apt install -y stow jq fzf direnv zoxide tmux ripgrep fd-find git-lfs trash-cli glow neovim
+                    # fd-find installs as fdfind on Debian/Ubuntu — symlink to fd
+                    if command -v fdfind &>/dev/null && ! command -v fd &>/dev/null; then
+                        run_cmd mkdir -p "$HOME/.local/bin"
+                        run_cmd ln -sf "$(command -v fdfind)" "$HOME/.local/bin/fd"
+                        info "Symlinked fdfind → ~/.local/bin/fd"
+                    fi
                     # eza and gh need special repos on Ubuntu/Debian
                     if ! command -v eza &>/dev/null; then
                         info "eza requires a separate install on Debian/Ubuntu."
