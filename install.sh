@@ -10,7 +10,12 @@
 #    ./install.sh --update     # Pull latest changes and restow
 #    ./install.sh --dry-run    # Show what would be done without changing anything
 #    ./install.sh --force      # Adopt existing files into repo (stow --adopt)
+#    ./install.sh --verbose    # Show detailed diagnostic output
 #    ./install.sh --help       # Show help
+#
+#  Modifiers (--verbose, --dry-run) can be combined with any action:
+#    ./install.sh --verbose --check
+#    ./install.sh --verbose --dry-run
 # ==============================================================================
 
 set -euo pipefail
@@ -31,6 +36,7 @@ REPO_DIR="$SCRIPT_DIR"
 
 # --- Mode flags ---
 DRY_RUN=false
+VERBOSE=false
 
 # --- Helpers ---
 info()    { echo -e "${CYAN}ℹ️  $*${RESET}"; }
@@ -38,6 +44,7 @@ success() { echo -e "${GREEN}✅ $*${RESET}"; }
 warn()    { echo -e "${YELLOW}⚠️  $*${RESET}"; }
 error()   { echo -e "${RED}❌ $*${RESET}" >&2; }
 step()    { echo -e "\n${BOLD}${MAGENTA}━━━ $* ━━━${RESET}"; }
+verbose() { [[ "$VERBOSE" == true ]] && echo -e "  ${DIM}$*${RESET}" || true; }
 
 pretty_path() {
     echo "${1/#$HOME/~}"
@@ -66,6 +73,7 @@ run_cmd() {
         echo -e "  ${DIM}[dry-run] Would run: $*${RESET}"
         return 0
     fi
+    verbose "Running: $*"
     "$@"
 }
 
@@ -498,6 +506,7 @@ check_conflicts() {
 
     local conflicts=0
     local stow_managed=0
+    local repo_symlinks=0
     local conflict_files=()
     local home_dir="$REPO_DIR/home"
 
@@ -506,8 +515,6 @@ check_conflicts() {
         local target="$HOME/$relative"
 
         if [[ -e "$target" && ! -L "$target" ]]; then
-            # File exists and isn't a symlink — but check if a parent dir
-            # is a stow tree-folded symlink into the repo
             if _is_stow_managed "$target"; then
                 echo -e "  ${DIM}✓ ~/$relative (stow-managed)${RESET}"
                 ((stow_managed++))
@@ -523,6 +530,9 @@ check_conflicts() {
                 warn "Conflict: ~/$relative is a symlink to something else: $link_target"
                 conflict_files+=("$target")
                 ((conflicts++))
+            else
+                ((repo_symlinks++))
+                verbose "~/$relative → $link_target (existing stow symlink)"
             fi
         fi
     done < <(find "$home_dir" -type f ! -name '.DS_Store' -print0)
@@ -530,6 +540,11 @@ check_conflicts() {
     if (( stow_managed > 0 )); then
         echo
         echo -e "  ${DIM}$stow_managed file(s) inside stow-managed directories${RESET}"
+    fi
+
+    if (( repo_symlinks > 0 )); then
+        echo
+        info "$repo_symlinks file(s) already symlinked to repo (re-install detected — will restow)"
     fi
 
     if (( conflicts > 0 )); then
@@ -567,10 +582,17 @@ stow_home() {
 
     cd "$REPO_DIR"
 
-    if run_cmd stow -t "$HOME" home; then
+    local stow_flags="-R"
+    [[ "$VERBOSE" == true ]] && stow_flags="-R -v"
+
+    # shellcheck disable=SC2086
+    if run_cmd stow $stow_flags -t "$HOME" home; then
         success "home/ stowed successfully"
     else
-        error "stow failed. Run with --verbose for details: stow -v -t ~ home"
+        error "stow failed to create symlinks."
+        echo -e "  ${CYAN}Re-install?${RESET}  Try ${CYAN}./install.sh --update${RESET}"
+        echo -e "  ${CYAN}Real files?${RESET}  Try ${CYAN}./install.sh --force${RESET}"
+        echo -e "  ${CYAN}Debug?${RESET}       Try ${CYAN}./install.sh --verbose${RESET}"
         return 1
     fi
 
@@ -846,7 +868,10 @@ uninstall() {
     cd "$REPO_DIR"
 
     if confirm "Remove all symlinks created by stow (home/ → ~/)?"; then
-        if run_cmd stow -D -t "$HOME" home; then
+        local stow_flags="-D"
+        [[ "$VERBOSE" == true ]] && stow_flags="-D -v"
+        # shellcheck disable=SC2086
+        if run_cmd stow $stow_flags -t "$HOME" home; then
             success "Symlinks removed"
         else
             error "stow -D failed"
@@ -894,7 +919,10 @@ update() {
     run_cmd git pull
 
     info "Restowing home/ → ~/"
-    run_cmd stow -R -t "$HOME" home
+    local stow_flags="-R"
+    [[ "$VERBOSE" == true ]] && stow_flags="-R -v"
+    # shellcheck disable=SC2086
+    run_cmd stow $stow_flags -t "$HOME" home
 
     stow_platform
 
@@ -915,7 +943,10 @@ force_adopt() {
     echo
 
     if confirm "Proceed with stow --adopt?"; then
-        run_cmd stow --adopt -t "$HOME" home
+        local stow_flags="--adopt"
+        [[ "$VERBOSE" == true ]] && stow_flags="--adopt -v"
+        # shellcheck disable=SC2086
+        run_cmd stow $stow_flags -t "$HOME" home
         success "Adoption complete."
         echo
         info "Review changes with: ${CYAN}git diff${RESET}"
@@ -985,6 +1016,7 @@ show_summary() {
     echo -e "  ${CYAN}./install.sh --update${RESET}     Pull latest and restow"
     echo -e "  ${CYAN}./install.sh --uninstall${RESET}  Remove all symlinks"
     echo -e "  ${CYAN}./install.sh --dry-run${RESET}    Preview what would be done"
+    echo -e "  ${CYAN}./install.sh --verbose${RESET}    Show detailed diagnostic output"
     echo -e "  ${DIM}Note:${RESET} Standalone scripts deploy via ${CYAN}home/.local/bin${RESET} and ${CYAN}home/.local/share/fifty-shades-of-dotfiles/scripts${RESET}"
     echo
     echo -e "${BOLD}${MAGENTA}╚══════════════════════════════════════════════════════════════╝${RESET}"
@@ -999,9 +1031,12 @@ show_help() {
     echo -e "  ./install.sh --stow-only  Just run stow (skip prereqs)"
     echo -e "  ./install.sh --uninstall  Remove all symlinks"
     echo -e "  ./install.sh --update     Pull latest changes and restow"
-    echo -e "  ./install.sh --dry-run    Preview what would be done (no changes)"
     echo -e "  ./install.sh --force      Adopt existing files into repo (stow --adopt)"
     echo -e "  ./install.sh --help       Show this help"
+    echo
+    echo -e "${BOLD}Modifiers (combinable with any action):${RESET}"
+    echo -e "  --verbose, -v             Show detailed diagnostic output"
+    echo -e "  --dry-run                 Preview what would be done (no changes)"
     echo
     echo -e "${BOLD}What it does:${RESET}"
     echo -e "  1. Checks and installs prerequisites (Homebrew, stow, uv, etc.)"
@@ -1079,36 +1114,27 @@ main() {
 # Argument Handling
 # ==============================================================================
 
-case "${1:-}" in
-    --help|-h)
-        show_help
-        ;;
-    --check)
-        check_prerequisites
-        ;;
-    --stow-only)
-        stow_home
-        stow_platform
-        ;;
-    --uninstall)
-        uninstall
-        ;;
-    --update)
-        update
-        ;;
-    --dry-run)
-        DRY_RUN=true
-        main
-        ;;
-    --force)
-        force_adopt
-        ;;
-    "")
-        main
-        ;;
-    *)
-        error "Unknown option: $1"
-        show_help
-        exit 1
-        ;;
+ACTION=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --verbose|-v)  VERBOSE=true; shift ;;
+        --dry-run)     DRY_RUN=true; shift ;;
+        --help|-h)     ACTION="help"; shift ;;
+        --check)       ACTION="check"; shift ;;
+        --stow-only)   ACTION="stow-only"; shift ;;
+        --uninstall)   ACTION="uninstall"; shift ;;
+        --update)      ACTION="update"; shift ;;
+        --force)       ACTION="force"; shift ;;
+        *)             error "Unknown option: $1"; show_help; exit 1 ;;
+    esac
+done
+
+case "${ACTION:-}" in
+    help)       show_help ;;
+    check)      check_prerequisites ;;
+    stow-only)  stow_home; stow_platform ;;
+    uninstall)  uninstall ;;
+    update)     update ;;
+    force)      force_adopt ;;
+    "")         main ;;
 esac
