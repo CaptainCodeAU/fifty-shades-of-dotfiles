@@ -11,7 +11,7 @@
 # Set the most important user paths FIRST. This ensures that tools installed by
 # scripts (like uv, fzf) are available immediately in the same session,
 # preventing startup loops. The `typeset -U path` later will de-duplicate.
-export PATH="$HOME/.fzf/bin:$HOME/.local/bin:$PATH"
+export PATH="$HOME/.fzf/bin:$HOME/.local/bin:$HOME/.docker/bin:$PATH"
 
 
 # ==============================================================================
