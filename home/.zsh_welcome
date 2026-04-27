@@ -161,9 +161,11 @@ _show_welcome_full() {
             engine_ver=$(docker version --format '{{.Server.Version}}' 2>/dev/null || echo 'N/A')
             echo "    Docker Engine: ${ok}${engine_ver} (Running)${done}"
         else
-            engine_ver=$(docker version --format '{{.Client.Version}}' 2>/dev/null || \
-                         docker --version 2>/dev/null | awk '{print $3}' | tr -d ',' || \
-                         echo 'N/A')
+            engine_ver=$(docker version --format '{{.Client.Version}}' 2>/dev/null)
+            if [[ -z "$engine_ver" ]]; then
+                engine_ver=$(docker --version 2>/dev/null | awk '{print $3}' | tr -d ',')
+            fi
+            : ${engine_ver:=N/A}
             if [[ "$IS_MAC" == "true" ]]; then
                 echo "    Docker Engine: ${warn}${engine_ver} (Not Running)${done}"
             else
