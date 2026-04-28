@@ -7,9 +7,25 @@
 ![Claude Code](https://img.shields.io/badge/Claude-Code-blueviolet.svg?logo=anthropic&logoColor=white)
 ![OS Support](https://img.shields.io/badge/OS-macOS%20%7C%20Linux%20%7C%20WSL-blue.svg?logo=apple)
 
-Tired of manually setting up your development environment on every new machine? This repository contains a set of Zsh dotfiles that create a unified, powerful, and automated workflow across **macOS, Linux, and Windows (via WSL)**.
+A set of Zsh dotfiles that create a unified, automated development environment across **macOS, Linux, and Windows (via WSL)**. Built around a modern toolchain (`uv`, `pnpm`/`bun`, `direnv`, `stow`) that prioritizes speed, consistency, and developer experience.
 
-It is built around a modern toolchain that prioritizes speed, consistency, and developer experience. By using the provided functions, you can bootstrap, manage, and work with complex Python, Node.js, and Docker-based projects using simple, memorable commands.
+---
+
+## Overview and history
+
+I created this repo because I kept losing my shell setup. Not dramatically, no hard drive failures or anything, just the slow erosion that happens when you set up a new machine, SSH into a Linux box, or spin up a WSL instance and realise you can't remember how you had things configured last time. Every time, I'd spend a day or two getting my terminal back to "normal," swearing I'd write it down this time, and then not writing it down.
+
+The first commit was just a `.zshrc` with some Python virtual environment helpers. I'd switched to `uv` and kept forgetting the incantations for setting up a new project with direnv, so I wrapped them in a function. Then I wrapped a few more things. Then I added Node.js scaffolding because I was tired of the same twenty minutes of boilerplate every time I started a TypeScript project. You can see where this is going.
+
+At some point it stopped being a dotfiles backup and became something closer to an operating philosophy for how I want to work. I have two GitHub accounts and a couple of machines / VMs, and I needed all of them to feel the same. Same aliases, same git identity routing, same safety rails, same muscle memory. One `./install.sh` on a fresh box and I'm home.
+
+A lot of what's in here exists because I got burned. The `rm` wrapper exists because I deleted a symlink target once when I meant to delete the link. The `gh auth` blocker exists because GitHub's credential helper silently broke my SSH-only setup twice before I caught it. The npm/yarn interceptors exist because a stray `npm install` in a pnpm project creates a `package-lock.json` that ghosts you for hours. Every guardrail in this repo is a scar from a past mistake, turned into a rule so I never make it again. I am not a fast learner but I am a stubborn one.
+
+The system is built around GNU Stow, which symlinks everything from one directory into your home folder. The `home/` directory mirrors `~/` exactly, so what you see in the repo is what you get on disk. The installer handles the rest: prerequisites, Oh My Zsh plugins, nvm, pnpm, bun, Nerd Fonts, tmux plugin manager, git identity. All interactive, all idempotent, all skippable if you already have your own setup for something.
+
+If you just want the shell functions without the full install, you can symlink individual files. But the real value is in having all the pieces wired together: direnv auto-activating environments, tmux windows naming themselves after git branches, per-machine colour profiles so you know at a glance whether you're on your laptop or SSHed into something else. It's the kind of thing that sounds like overkill until you've used it for a week and can't go back.
+
+---
 
 ## Key Features
 
@@ -1181,3 +1197,35 @@ For the full architecture, conventions, migration policy, and add-new-script wor
 | `dcup`        | `docker-compose up -d`                              |
 | `dcdown`      | `docker-compose down`                               |
 | `dclogs`      | `docker-compose logs -f`                            |
+
+---
+
+## FAQ
+
+**Can I use parts of this without installing everything?**
+
+Yeah. Each function file (`.zsh_python_functions`, `.zsh_node_functions`, etc.) can be symlinked individually and sourced from your own `.zshrc`. Some of them reference shared helpers defined in the main `.zshrc`, so you might need to grab a function or two, but there's no "all or nothing" requirement. The installer is the easy path, not the only path.
+
+**Will this nuke my existing dotfiles?**
+
+No. The installer is fully interactive and asks before every step. But it goes further than that: before stow even runs, it scans your home directory for conflicts. If it finds a real file where it wants to place a symlink, it stops and gives you three options: auto-backup the conflicting files to `~/dotfiles-backup/`, force-adopt them into the repo with `--force` (which uses `stow --adopt`, then you review with `git diff`), or handle it yourself. Stow itself also refuses to overwrite a real file with a symlink, so there are two layers of protection before anything gets touched.
+
+**Why GNU Stow instead of chezmoi / yadm / a bare git repo?**
+
+Stow is dumb in the best way. It makes symlinks. That's it. No templating language, no special commands to remember, no database of managed files. The repo structure mirrors your home directory exactly, so you can see what goes where just by looking at the file tree. I tried fancier tools and kept fighting them. Stow gets out of the way.
+
+**Why uv? Why pnpm and bun? Why not [thing I'm already using]?**
+
+These are my opinions, not universal truths. `uv` is absurdly fast and replaces pip, pip-tools, virtualenv, and pyenv in one binary. pnpm and bun are both faster and stricter than npm, and bun doubles as a runtime. npm and yarn aren't blocked because they're bad, they're blocked because mixing package managers in the same project creates lockfile conflicts that waste your afternoon. If you disagree, the wrappers are easy to find and easier to delete.
+
+**Does this work on my machine?**
+
+If you're running zsh on macOS, Ubuntu/Debian, Fedora, Arch, openSUSE, or WSL, probably yes. The installer detects your OS and package manager and adapts accordingly. On Linux it handles the quirks for you, like `fd` being packaged as `fdfind` on Debian/Ubuntu (it auto-symlinks), or `eza` and `gh` needing separate repos on apt-based systems. It does not support bash or fish. It's zsh all the way down, and converting it would be a different project entirely.
+
+**What about my API keys and private settings?**
+
+Nothing secret goes in this repo. There's a built-in pattern for private files that stay out of version control: `~/.zshrc.private` for shell secrets and machine-specific settings, `~/.gitconfig.private` for git identity and SSH routing. The installer will prompt you to create them on a fresh machine, but if `~/.gitconfig.private` already exists (say, with multi-account config), it won't touch it. The global `.gitignore` protects against accidentally committing them.
+
+**How do I update after pulling new changes?**
+
+`./install.sh --update` will pull the latest and restow everything. Under the hood, stow `-R` unstows and restows in one pass, so it's not literally a no-op, but the end result is the same as a fresh install: any new files in the repo get symlinked, and existing links stay put. If you've modified a symlinked file locally, well, you've modified it in the repo too, because that's how symlinks work. Which is either a feature or a footgun depending on your perspective.
