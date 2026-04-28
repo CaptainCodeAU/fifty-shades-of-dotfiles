@@ -321,19 +321,20 @@ graph TD
     end
 
     subgraph "🤖 Automated Scaffolding"
-        B --> C{"⚙️ `uv init`, `git init`"}
+        B --> C{"⚙️ `uv init`"}
         C --> D["📄 pyproject.toml<br>📄 .gitignore<br>📄 README.md"]
         C --> E["📁 src/my_app/__init__.py<br>📁 tests/test_main.py"]
         C --> F["🐍 `uv venv`<br>Creates .venv"]
         F --> G["📦 `uv pip install -e .[dev]`<br>Installs dependencies"]
         C --> H["🗝️ `direnv`<br>Creates .envrc for auto-activation"]
+        D & E & G & H --> J{"🔀 `git init` + initial commit"}
     end
 
     subgraph "✅ Result"
         I["✨ A complete, ready-to-develop<br>Python project with one command."]
     end
 
-    D & E & G & H --> I
+    J --> I
 
     classDef userAction fill:#3498db,stroke:#2980b9,stroke-width:2px,color:white;
     classDef automation fill:#f1c40f,stroke:#f39c12,stroke-width:2px,color:black;
@@ -341,7 +342,7 @@ graph TD
     classDef result fill:#9b59b6,stroke:#8e44ad,stroke-width:2px,color:white;
 
     class A,B userAction;
-    class C,F,G,H automation;
+    class C,F,G,H,J automation;
     class D,E artifact;
     class I result;
 ```
