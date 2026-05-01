@@ -38,6 +38,9 @@ node_modules/
 # Do not share your private .zshrc file
 .zshrc.private
 
+# Never commit local-only SSH overrides (private hosts, ForwardAgent, etc.)
+home/.ssh/config.local
+
 # WSL-specific ComfyUI functions (private/local configuration)
 home/.zsh_wsl_comfyui_functions
 

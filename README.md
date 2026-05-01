@@ -607,6 +607,22 @@ This is part of a defence-in-depth model:
 2. **Scoped URL rewrites** — only your own GitHub repos are rewritten to SSH; third-party HTTPS URLs pass through untouched
 3. **No credential helpers** — the shared `.gitconfig` contains no `[credential]` sections, so even if a URL rewrite is bypassed, HTTPS auth fails rather than silently succeeding
 4. **Claude Code SSH isolation** — the `_claude_launch` wrapper spins up an **isolated SSH agent** scoped to the Claude Code process — the key is loaded only into this ephemeral agent and is never visible to other terminals or the system launchd agent. The agent dies when Claude Code exits; a 4-hour timeout is a safety net for abnormal termination (SIGKILL).
+5. **Per-host opt-in agent forwarding (local override)** — the stowed `~/.ssh/config` ends with `Include ~/.ssh/config.local`. Private host blocks (real hostnames, internal IPs, `ForwardAgent yes` for trusted LAN remotes) live in `~/.ssh/config.local`, which is never stowed and never committed. This lets VS Code / Cursor Remote-SSH (or plain `ssh`) reach back through the tunnel to the Mac's `ssh-agent` to authorise GitHub operations on the remote — without ever copying private keys onto the remote machine. `ForwardAgent` is set only on specific trusted `Host` blocks, never on `Host *`.
+
+**Local override pattern (`~/.ssh/config.local`, mode 0600, not in repo):**
+
+```ini
+Host trusted-lan-box
+    HostName <real-hostname-or-ip>
+    User <real-user>
+    IdentityFile ~/.ssh/<dedicated-host-key>
+    ForwardAgent yes
+    AddKeysToAgent no
+    IdentitiesOnly yes
+```
+
+Before SSHing to such a host, run `ssh-add ~/.ssh/<github-key>` once in the
+Mac terminal so the agent has the GitHub key loaded and ready to forward.
 
 > **Warning:** Running `gh auth login` or `gh auth setup-git` will silently re-add HTTPS credential helpers to `~/.gitconfig`. A `gh()` shell wrapper (in `.zshrc`) blocks these commands to prevent this.
 
