@@ -624,6 +624,8 @@ Host trusted-lan-box
 Before SSHing to such a host, run `ssh-add ~/.ssh/<github-key>` once in the
 Mac terminal so the agent has the GitHub key loaded and ready to forward.
 
+> See [docs/SECURITY.md](docs/SECURITY.md) for full rationale, alternative postures considered, and daily SSH operations.
+
 > **Warning:** Running `gh auth login` or `gh auth setup-git` will silently re-add HTTPS credential helpers to `~/.gitconfig`. A `gh()` shell wrapper (in `.zshrc`) blocks these commands to prevent this.
 
 #### Multiple GitHub Accounts
