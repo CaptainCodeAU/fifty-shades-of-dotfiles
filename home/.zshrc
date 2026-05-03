@@ -201,6 +201,7 @@ if [[ "$IS_MAC" == "true" ]]; then
 		"$HOME/Library/pnpm" # pnpm
 		"$PNPM_HOME" # pnpm home
 		"$HOME/Library/Application Support/Local/lightning-services/mysql-8.0.35+4/bin/darwin/bin" # MySQL from Local dev tool
+		"$HOME/.lmstudio/bin" # LM Studio CLI (lms)
     )
 fi
 
