@@ -11,7 +11,7 @@
 # Set the most important user paths FIRST. This ensures that tools installed by
 # scripts (like uv, fzf) are available immediately in the same session,
 # preventing startup loops. The `typeset -U path` later will de-duplicate.
-export PATH="$HOME/.fzf/bin:$HOME/.local/bin:$HOME/.docker/bin:$PATH"
+export PATH="$HOME/.local/bin:$HOME/.docker/bin:$PATH"
 
 
 # ==============================================================================
@@ -249,7 +249,6 @@ source "$ZSH/oh-my-zsh.sh"
 # These commands often rely on the completion system already being initialized.
 command -v uv >/dev/null && eval "$(uv generate-shell-completion zsh)"
 [ -s "$BUN_INSTALL/_bun" ] && source "$BUN_INSTALL/_bun"
-[ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
 
 
 # ==============================================================================
