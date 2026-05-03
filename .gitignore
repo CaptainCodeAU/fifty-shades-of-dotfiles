@@ -49,6 +49,9 @@ Plans/
 .claude/commands/todo.md
 .claude/commands/fix-authors.md
 
+# Local-only memory
+MEMORY/
+
 # Documentation generators (local tooling, not project code)
 .prompts/
 
