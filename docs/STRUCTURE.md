@@ -124,13 +124,15 @@ Application settings exported for reference and manual import. These are not aut
 
 Documentation and reference materials.
 
-| File/Directory                     | Purpose                                                               |
-| ---------------------------------- | --------------------------------------------------------------------- |
-| `MEMENTO_vscode_machine_colors.md` | Complete guide for VSCode/Cursor machine-specific color setup         |
-| `reference/colors.md`              | Color palette reference                                               |
-| `reference/mermaid_examples.md`    | Mermaid diagram examples                                              |
-| `reference/tmux_cheatsheet.md`     | Tmux quick reference guide                                            |
-| `reference/windows/`               | Historical Windows batch scripts (reference only, not for deployment) |
+| File/Directory                     | Purpose                                                                                            |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `AGENT_BRIEF.md`                   | Safe cross-agent interaction patterns and stow/branch-switching hazards for sibling-project agents |
+| `SECURITY.md`                      | Strict SSH posture rationale, alternative postures table, and drift-check commands                 |
+| `MEMENTO_vscode_machine_colors.md` | Complete guide for VSCode/Cursor machine-specific color setup                                      |
+| `reference/colors.md`              | Color palette reference                                                                            |
+| `reference/mermaid_examples.md`    | Mermaid diagram examples                                                                           |
+| `reference/tmux_cheatsheet.md`     | Tmux quick reference guide                                                                         |
+| `reference/windows/`               | Historical Windows batch scripts (reference only, not for deployment)                              |
 
 #### `docs/reference/windows/`
 
@@ -143,6 +145,20 @@ Historical Windows batch scripts kept for reference. These scripts were used whe
 | `activate.v1.bat` | Project activation script (version 1) - historical reference |
 | `activate.v2.bat` | Project activation script (version 2) - historical reference |
 | `run.cmd`         | Project launcher script - historical reference               |
+
+### `.github/` - GitHub Repository Configuration
+
+GitHub-specific configuration files. Not deployed by stow — consumed directly by GitHub.
+
+#### `.github/rulesets/`
+
+Reusable branch protection ruleset templates. Import via: Repository → Settings → Rules → Rulesets → Import a ruleset.
+
+| File                            | Purpose                                                                                  |
+| ------------------------------- | ---------------------------------------------------------------------------------------- |
+| `branch-protection-master.json` | Blocks force pushes and deletion on `master`; requires a PR before merging (0 approvals) |
+
+**Note**: To reuse on a repo with a different default branch, swap `refs/heads/master` for `~DEFAULT_BRANCH` in `conditions.ref_name.include`.
 
 ## Deployment Mapping Reference
 
