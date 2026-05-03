@@ -11,7 +11,7 @@
 # Set the most important user paths FIRST. This ensures that tools installed by
 # scripts (like uv, fzf) are available immediately in the same session,
 # preventing startup loops. The `typeset -U path` later will de-duplicate.
-export PATH="$HOME/.fzf/bin:$HOME/.local/bin:$HOME/.docker/bin:$PATH"
+export PATH="$HOME/.local/bin:$HOME/.docker/bin:$PATH"
 
 
 # ==============================================================================
@@ -74,9 +74,6 @@ export PROMPT_EOL_MARK="" # Disable Powerlevel10k instant prompt
 
 # ZSH_WELCOME_DISK_WARN: Disk usage percentage threshold for warning (default: 90)
 : ${ZSH_WELCOME_DISK_WARN:=90}
-
-# --- pnpm ---
-export PNPM_HOME="$HOME/Library/pnpm"
 
 # --- bun ---
 export BUN_INSTALL="$HOME/.bun"
@@ -184,8 +181,6 @@ fi
 path+=(
     "$HOME/.docker/bin"    # For Docker tools
     "$HOME/.local/bin"     # This will be de-duplicated by `typeset -U`
-    "$HOME/.cargo/bin"     # For Rust
-	"$HOME/.dotnet/tools"  # For .NET
 	"$BUN_INSTALL/bin"     # For Bun
 )
 # Only add the Go path if the 'go' command actually exists.
@@ -195,12 +190,18 @@ fi
 
 # Prepend macOS-specific paths
 if [[ "$IS_MAC" == "true" ]]; then
+	export PNPM_HOME="$HOME/Library/pnpm"
     path+=(
-		"$HOME/.turso" # Turso
-		"$HOME/.antigravity/antigravity/bin" # Antigravity
-		"$HOME/Library/pnpm" # pnpm
-		"$PNPM_HOME" # pnpm home
-		"$HOME/Library/Application Support/Local/lightning-services/mysql-8.0.35+4/bin/darwin/bin" # MySQL from Local dev tool
+		"$PNPM_HOME" # pnpm
+		"$HOME/.lmstudio/bin" # LM Studio CLI (lms)
+    )
+fi
+
+# Prepend Linux/WSL-specific paths
+if [[ "$IS_LINUX" == "true" || "$IS_WSL" == "true" ]]; then
+	export PNPM_HOME="$HOME/.local/share/pnpm"
+    path+=(
+		"$PNPM_HOME" # pnpm
     )
 fi
 
@@ -251,7 +252,6 @@ source "$ZSH/oh-my-zsh.sh"
 # These commands often rely on the completion system already being initialized.
 command -v uv >/dev/null && eval "$(uv generate-shell-completion zsh)"
 [ -s "$BUN_INSTALL/_bun" ] && source "$BUN_INSTALL/_bun"
-[ -f ~/.fzf.zsh ] && source ~/.fzf.zsh
 
 
 # ==============================================================================

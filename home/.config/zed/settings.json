@@ -1,48 +1,44 @@
 {
 	// Window behavior
 	"project_panel": {
-  "dock": "left"
- },
- "outline_panel": {
-  "dock": "left"
- },
- "collaboration_panel": {
-  "dock": "left"
- },
- "agent": {
-  "dock": "right",
-  "favorite_models": [],
-  "model_parameters": []
- },
- "git_panel": {
-  "dock": "left"
- },
- "ssh_connections": [
-  {
-   "host": "mlbox-ubuntu",
-   "args": [],
-   "projects": [
-    {
-     "paths": [
-      "/home/winadmin/repos/llmster-server-3090"
-     ]
-    }
-   ]
-  },
-  {
-   "host": "192.168.1.101",
-   "username": "root",
-   "args": [],
-   "projects": [
-    {
-     "paths": [
-      "/root/audit/./"
-     ]
-    }
-   ]
-  }
- ],
- "when_closing_with_no_tabs": "platform_default",
+		"dock": "left",
+	},
+	"outline_panel": {
+		"dock": "left",
+	},
+	"collaboration_panel": {
+		"dock": "left",
+	},
+	"agent": {
+		"dock": "right",
+		"favorite_models": [],
+		"model_parameters": [],
+	},
+	"git_panel": {
+		"dock": "left",
+	},
+	"ssh_connections": [
+		{
+			"host": "mlbox-ubuntu",
+			"args": [],
+			"projects": [
+				{
+					"paths": ["/home/winadmin/repos/llmster-server-3090"],
+				},
+			],
+		},
+		{
+			"host": "192.168.1.101",
+			"username": "root",
+			"args": [],
+			"projects": [
+				{
+					"paths": ["/root/audit/./"],
+				},
+			],
+		},
+	],
+	"when_closing_with_no_tabs": "platform_default",
 
 	// Session settings
 	"session": {
@@ -72,10 +68,75 @@
 	// Keyboard configuration
 	"base_keymap": "VSCode",
 
-	// Font settings
-	"ui_font_size": 16,
+	// ============================================================================
+	// UI FONT — A/B/C COMPARISON BLOCK
+	// ============================================================================
+	// Uncomment ONE variant at a time. Restart Zed or close+reopen the preview
+	// pane (Cmd+Shift+P → "Markdown: Open Preview") after each change.
+	//
+	//   Variant A — System default (no explicit setting; SF Pro on macOS)
+	//   Variant B — Inter (ACTIVE: clean, modern, high x-height)
+	//   Variant C — IBM Plex Sans (slightly more character, also very readable)
+	// ============================================================================
+
+	// Variant A — System default (ORIGINAL — no ui_font_family set)
+	// (Leave all three commented to fall back to this.)
+
+	// Variant B — Inter (ACTIVE)
+	"ui_font_family": "Inter",
+
+	// Variant C — IBM Plex Sans
+	// "ui_font_family": "IBM Plex Sans",
+
+	// panels, tabs, sidebar, status bar, markdown preview
+	"ui_font_size": 14,
 	"buffer_font_family": "MonoLisa Nerd Font Mono",
-	"buffer_font_size": 14.0,
+	// editor (your code)
+	"buffer_font_size": 12.0,
+	// agent panel chrome
+	"agent_ui_font_size": 14,
+
+	// Buffer line height — affects code block density inside markdown preview too.
+	// "comfortable" = 1.618, "standard" = 1.3. Custom 1.8 opens things up further.
+	"buffer_line_height": "comfortable",
+	// "buffer_line_height": { "custom": 1.8 },
+	// "buffer_line_height": "standard",
+
+	// Terminal settings
+	"terminal": {
+		"env": {},
+		"font_size": 11.0,
+		"font_family": "JetBrainsMono Nerd Font Mono",
+		"font_fallbacks": [".SystemUIFont"],
+		"max_scroll_history_lines": 50000,
+		"blinking": "terminal_controlled",
+		"cursor_shape": "block",
+	},
+
+	// ============================================================================
+	// MARKDOWN PREVIEW FONT — A/B/C COMPARISON BLOCK
+	// ============================================================================
+	// Three variants for the preview-pane body font. Uncomment ONE at a time.
+	//
+	//   Variant A — MonoLisa (matches editor; everything monospace, original feel)
+	//   Variant B — Inter (ACTIVE: sans-serif for prose, clean and dense)
+	//   Variant C — Charter (serif, book-like reading experience)
+	// ============================================================================
+
+	// Variant A — MonoLisa (matches buffer font)
+	// "markdown_preview_font_family": "MonoLisa Nerd Font Mono",
+
+	// Variant B — Inter (ACTIVE)
+	"markdown_preview_font_family": "Inter",
+
+	// Variant C — Charter (serif)
+	// "markdown_preview_font_family": "Charter",
+
+	// Syntax theme for code blocks inside the preview pane.
+	// Independent of your editor theme — swap to taste.
+	"markdown_preview_theme": "Catppuccin Macchiato",
+	// "markdown_preview_theme": "One Dark",
+	// "markdown_preview_theme": "Ayu Dark",
 
 	// Editor settings
 	"colorize_brackets": true,
@@ -88,20 +149,26 @@
 	"auto_indent_on_paste": true,
 	"format_on_save": "on",
 
+	// ============================================================================
+	// MARKDOWN-SPECIFIC LANGUAGE OVERRIDES
+	// ============================================================================
+	// soft_wrap + preferred_line_length cap the visual line width in the preview
+	// so paragraphs don't run edge-to-edge on a wide monitor.
+	// 80 = tight, 100 = standard reading measure, 120 = wide.
+	// remove_trailing_whitespace_on_save: false preserves double-space line breaks.
+	// ============================================================================
+	"languages": {
+		"Markdown": {
+			"format_on_save": "on",
+			"soft_wrap": "editor_width",
+			"preferred_line_length": 100,
+			"remove_trailing_whitespace_on_save": false,
+		},
+	},
+
 	// Minimap
 	"minimap": {
 		"show": "never",
-	},
-
-	// Terminal settings
-	"terminal": {
-		"env": {},
-		"font_size": 11.0,
-		"font_family": "JetBrainsMono Nerd Font Mono",
-		"font_fallbacks": ["monospace"],
-		"max_scroll_history_lines": 50000,
-		"blinking": "terminal_controlled",
-		"cursor_shape": "block",
 	},
 
 	// ============================================================================
