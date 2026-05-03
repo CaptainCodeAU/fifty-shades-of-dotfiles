@@ -577,28 +577,12 @@ sudo() {
 	fi
 }
 
-# Routes to the OS-native trash tool (recoverable) instead of permanent deletion.
-# macOS: 'trash' (brew install trash) → ~/.Trash (visible in Finder)
-# Linux: 'trash-put' (apt install trash-cli) → XDG trash (visible in Nautilus)
-# 'command trash' (not bare 'trash') is intentional — bypasses shell functions and
-# calls the binary directly, preventing infinite recursion if a trash() shell function
-# ever exists in this file.
-_send_to_trash() {
-	if command -v trash &>/dev/null; then
-		command trash "$@"
-	elif command -v trash-put &>/dev/null; then
-		command trash-put "$@"
-	else
-		echo "${err}❌  No trash tool found. Install 'trash' (macOS: brew install trash) or 'trash-cli' (Linux: apt install trash-cli).${done}" >&2
-		return 1
-	fi
-}
-
 # Intercept rm: warn on symlinks (first layer), then send to trash (second layer).
 # Symlink warning prevents accidentally nuking files through directory symlinks
 # (e.g. rm ~/.config/direnv/file when ~/.config/direnv is a symlink into the repo).
-# Note: only intercepts interactive shell use — scripts calling /bin/rm directly
-# are unaffected, which is intentional.
+# Routes to OS-native trash (recoverable): macOS 'trash' → ~/.Trash; Linux 'trash-put' → XDG trash.
+# 'command trash' (not bare 'trash') bypasses shell functions — prevents infinite recursion.
+# Note: only intercepts interactive shell use — scripts calling /bin/rm directly are unaffected.
 rm() {
 	local symlinks=()
 	for arg in "$@"; do
@@ -618,12 +602,26 @@ rm() {
 	for arg in "$@"; do
 		[[ "$arg" != -* ]] && targets+=("$arg")
 	done
-	_send_to_trash "${targets[@]}"
+	if command -v trash &>/dev/null; then
+		command trash "${targets[@]}"
+	elif command -v trash-put &>/dev/null; then
+		command trash-put "${targets[@]}"
+	else
+		echo "${err}❌  No trash tool found. Install 'trash' (macOS: brew install trash) or 'trash-cli' (Linux: apt install trash-cli).${done}" >&2
+		return 1
+	fi
 }
 
 # rmdir sends empty directories to trash rather than deleting permanently.
 rmdir() {
-	_send_to_trash "$@"
+	if command -v trash &>/dev/null; then
+		command trash "$@"
+	elif command -v trash-put &>/dev/null; then
+		command trash-put "$@"
+	else
+		echo "${err}❌  No trash tool found. Install 'trash' (macOS: brew install trash) or 'trash-cli' (Linux: apt install trash-cli).${done}" >&2
+		return 1
+	fi
 }
 
 # Prompt before overwriting files by default.
