@@ -75,9 +75,6 @@ export PROMPT_EOL_MARK="" # Disable Powerlevel10k instant prompt
 # ZSH_WELCOME_DISK_WARN: Disk usage percentage threshold for warning (default: 90)
 : ${ZSH_WELCOME_DISK_WARN:=90}
 
-# --- pnpm ---
-export PNPM_HOME="$HOME/Library/pnpm"
-
 # --- bun ---
 export BUN_INSTALL="$HOME/.bun"
 
@@ -184,8 +181,6 @@ fi
 path+=(
     "$HOME/.docker/bin"    # For Docker tools
     "$HOME/.local/bin"     # This will be de-duplicated by `typeset -U`
-    "$HOME/.cargo/bin"     # For Rust
-	"$HOME/.dotnet/tools"  # For .NET
 	"$BUN_INSTALL/bin"     # For Bun
 )
 # Only add the Go path if the 'go' command actually exists.
@@ -195,10 +190,18 @@ fi
 
 # Prepend macOS-specific paths
 if [[ "$IS_MAC" == "true" ]]; then
+	export PNPM_HOME="$HOME/Library/pnpm"
     path+=(
-		"$HOME/Library/pnpm" # pnpm
-		"$PNPM_HOME" # pnpm home
+		"$PNPM_HOME" # pnpm
 		"$HOME/.lmstudio/bin" # LM Studio CLI (lms)
+    )
+fi
+
+# Prepend Linux/WSL-specific paths
+if [[ "$IS_LINUX" == "true" || "$IS_WSL" == "true" ]]; then
+	export PNPM_HOME="$HOME/.local/share/pnpm"
+    path+=(
+		"$PNPM_HOME" # pnpm
     )
 fi
 
