@@ -942,6 +942,9 @@ if [[ "$IS_MAC" == "true" ]]; then
 
     alias studio="open -a \"Android Studio\" "
 
+    # LibreOffice CLI (macOS app bundle has no symlinked binary on PATH)
+    alias soffice='/Applications/LibreOffice.app/Contents/MacOS/soffice'
+
     # Java version management (macOS specific)
     export JAVA_11_HOME=$(/usr/libexec/java_home -v11 2>/dev/null)
     alias java11='[ -n "$JAVA_11_HOME" ] && export JAVA_HOME=$JAVA_11_HOME || echo "Java 11 not found"'
