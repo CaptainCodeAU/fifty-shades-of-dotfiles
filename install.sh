@@ -41,6 +41,7 @@ REPO_DIR="$SCRIPT_DIR"
 [[ -d "$HOME/.local/share/pnpm" ]]    && export PATH="$HOME/.local/share/pnpm:$PATH"
 [[ -d "$HOME/Library/pnpm" ]]         && export PATH="$HOME/Library/pnpm:$PATH"
 [[ -d "$HOME/.bun/bin" ]]             && export PATH="$HOME/.bun/bin:$PATH"
+[[ -d "$HOME/.cargo/bin" ]]           && export PATH="$HOME/.cargo/bin:$PATH"
 
 # --- Mode flags ---
 DRY_RUN=false
@@ -262,6 +263,8 @@ check_prerequisites() {
     check_command_optional yazi     "yazi"     || true
     check_command_optional ffmpeg   "ffmpeg"   || true
     check_command_optional yt-dlp   "yt-dlp"   || true
+    check_command_optional rustup   "rustup"   || true
+    check_command_optional cargo    "cargo"    || true
     echo
 
     if (( missing > 0 )); then
@@ -291,6 +294,57 @@ install_prerequisites() {
         error "Unsupported OS"
         return 1
     fi
+}
+
+# Install rustup + stable Rust toolchain. Linux/WSL only — macOS users get
+# rust via Homebrew if they need it. Idempotent: returns early if rustup is
+# already installed. If apt's old cargo/rustc 1.75 is detected (too old for
+# cargo-binstall), offers to remove them with confirm — never silent.
+install_rust_toolchain() {
+    if command -v rustup &>/dev/null; then
+        success "rustup already installed ($(rustup --version 2>/dev/null | head -1))"
+        return 0
+    fi
+
+    # Detect apt's old cargo/rustc and offer removal — never silent.
+    if command -v apt &>/dev/null && dpkg -s cargo &>/dev/null 2>&1; then
+        local apt_cargo_version
+        apt_cargo_version=$(dpkg -s cargo 2>/dev/null | awk '/^Version:/ {print $2}')
+        warn "apt-installed cargo detected ($apt_cargo_version). This is too old for cargo-binstall (needs ≥1.79)."
+        if confirm "Remove apt cargo + rustc before installing rustup?" "y"; then
+            run_cmd sudo apt remove -y cargo rustc
+        else
+            warn "Keeping apt cargo/rustc — rustup will install alongside; PATH order will determine which wins."
+        fi
+    fi
+
+    info "Installing rustup (official Rust toolchain manager)..."
+    run_cmd bash -c "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile default"
+
+    # Source cargo env so the rest of this script sees cargo/rustc immediately.
+    if [[ -f "$HOME/.cargo/env" ]]; then
+        # shellcheck disable=SC1091
+        source "$HOME/.cargo/env"
+    fi
+
+    if command -v cargo &>/dev/null; then
+        success "Rust toolchain ready ($(rustc --version 2>/dev/null))"
+    else
+        warn "rustup install completed but cargo not on PATH — open a new shell or run: source ~/.cargo/env"
+    fi
+}
+
+install_yazi_via_cargo() {
+    if ! command -v cargo &>/dev/null; then
+        warn "cargo not found — skipping yazi install. Run install_rust_toolchain first."
+        return 1
+    fi
+    if command -v yazi &>/dev/null; then
+        success "yazi already installed ($(yazi --version 2>/dev/null | head -1))"
+        return 0
+    fi
+    info "Installing yazi via cargo (this compiles from source — may take several minutes)..."
+    run_cmd cargo install --locked yazi-fm yazi-cli
 }
 
 install_macos_prerequisites() {
@@ -416,7 +470,7 @@ install_linux_prerequisites() {
                         info "  yt-dlp:     pip install yt-dlp  OR  https://github.com/yt-dlp/yt-dlp#installation"
                         info "  lazygit:    https://github.com/jesseduffield/lazygit#installation"
                         info "  lazydocker: https://github.com/jesseduffield/lazydocker#installation"
-                        info "  yazi:       https://github.com/sxyazi/yazi#installation"
+                        info "  yazi:       installer offers cargo install if rustup is installed below; or see https://github.com/sxyazi/yazi#installation"
                         ;;
                 dnf)    run_cmd sudo dnf install -y ffmpeg aria2 tree neofetch yt-dlp lazygit yazi ;;
                 pacman) run_cmd sudo pacman -S --noconfirm ffmpeg aria2 tree neofetch yt-dlp lazygit yazi ;;
@@ -439,6 +493,18 @@ install_linux_prerequisites() {
             run_cmd bash -c 'curl -fsSL https://get.pnpm.io/install.sh | sh -'
             export PNPM_HOME="$HOME/.local/share/pnpm"
             export PATH="$PNPM_HOME:$PATH"
+        fi
+    fi
+
+    # --- Rust toolchain (rustup) — optional, needed for cargo-binstall / yazi ---
+    if ! command -v rustup &>/dev/null; then
+        if confirm "Install Rust toolchain (rustup)? Needed for yazi via cargo."; then
+            install_rust_toolchain
+            if command -v cargo &>/dev/null && ! command -v yazi &>/dev/null; then
+                if confirm "Install yazi now via cargo?" "y"; then
+                    install_yazi_via_cargo
+                fi
+            fi
         fi
     fi
 
