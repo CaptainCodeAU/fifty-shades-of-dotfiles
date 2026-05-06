@@ -334,17 +334,66 @@ install_rust_toolchain() {
     fi
 }
 
-install_yazi_via_cargo() {
-    if ! command -v cargo &>/dev/null; then
-        warn "cargo not found — skipping yazi install. Run install_rust_toolchain first."
-        return 1
-    fi
+# Install yazi from the latest GitHub release zip. Linux/WSL only.
+# Decoupled from rust — yazi binaries don't need a rust toolchain at runtime.
+# Avoids cargo install entirely because yazi-fm and yazi-cli on crates.io
+# (as of v26.5.6) ship with broken build.rs guards and missing Lua presets.
+install_yazi_release() {
     if command -v yazi &>/dev/null; then
         success "yazi already installed ($(yazi --version 2>/dev/null | head -1))"
         return 0
     fi
-    info "Installing yazi via cargo (this compiles from source — may take several minutes)..."
-    run_cmd cargo install --locked yazi-fm yazi-cli
+
+    if ! command -v unzip &>/dev/null; then
+        warn "unzip not found — required to extract yazi release. Install it first (e.g., sudo apt install -y unzip)."
+        return 1
+    fi
+
+    local arch_triple
+    case "$(uname -m)" in
+        x86_64)         arch_triple="x86_64-unknown-linux-gnu" ;;
+        aarch64|arm64)  arch_triple="aarch64-unknown-linux-gnu" ;;
+        *) warn "Unsupported architecture for yazi release: $(uname -m)"; return 1 ;;
+    esac
+
+    # Resolve latest release tag by following the /releases/latest redirect.
+    # No API call, no auth, no rate limit.
+    local latest_url tag
+    latest_url=$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
+        "https://github.com/sxyazi/yazi/releases/latest" 2>/dev/null || true)
+    tag="${latest_url##*/}"
+    if [[ -z "$tag" || "$tag" == "latest" ]]; then
+        warn "Could not resolve latest yazi release tag from GitHub"
+        return 1
+    fi
+    info "Latest yazi release: $tag"
+
+    local asset="yazi-${arch_triple}.zip"
+    local url="https://github.com/sxyazi/yazi/releases/download/${tag}/${asset}"
+    local tmp_dir
+    tmp_dir=$(mktemp -d)
+
+    info "Downloading $asset..."
+    if ! run_cmd curl -fL --proto '=https' --tlsv1.2 -o "$tmp_dir/$asset" "$url"; then
+        warn "yazi download failed from $url"
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+
+    run_cmd unzip -q "$tmp_dir/$asset" -d "$tmp_dir"
+
+    mkdir -p "$HOME/.local/bin"
+    run_cmd mv -f "$tmp_dir/yazi-${arch_triple}/yazi" "$HOME/.local/bin/yazi"
+    run_cmd mv -f "$tmp_dir/yazi-${arch_triple}/ya"   "$HOME/.local/bin/ya"
+    chmod +x "$HOME/.local/bin/yazi" "$HOME/.local/bin/ya"
+
+    rm -rf "$tmp_dir"
+
+    if command -v yazi &>/dev/null; then
+        success "yazi installed: $(yazi --version 2>/dev/null | head -1)"
+    else
+        warn "yazi install completed but not on PATH — ensure ~/.local/bin is on PATH"
+    fi
 }
 
 install_macos_prerequisites() {
@@ -436,7 +485,7 @@ install_linux_prerequisites() {
             case "$pkg_mgr" in
                 apt)
                     run_cmd sudo apt update
-                    run_cmd sudo apt install -y stow jq fzf direnv zoxide tmux ripgrep fd-find git-lfs trash-cli glow neovim
+                    run_cmd sudo apt install -y stow jq fzf direnv zoxide tmux ripgrep fd-find git-lfs trash-cli glow neovim unzip
                     # fd-find installs as fdfind on Debian/Ubuntu — symlink to fd
                     if command -v fdfind &>/dev/null && ! command -v fd &>/dev/null; then
                         run_cmd mkdir -p "$HOME/.local/bin"
@@ -470,7 +519,7 @@ install_linux_prerequisites() {
                         info "  yt-dlp:     pip install yt-dlp  OR  https://github.com/yt-dlp/yt-dlp#installation"
                         info "  lazygit:    https://github.com/jesseduffield/lazygit#installation"
                         info "  lazydocker: https://github.com/jesseduffield/lazydocker#installation"
-                        info "  yazi:       installer offers cargo install if rustup is installed below; or see https://github.com/sxyazi/yazi#installation"
+                        info "  yazi:       installer offers a GitHub release download below; or see https://github.com/sxyazi/yazi#installation"
                         ;;
                 dnf)    run_cmd sudo dnf install -y ffmpeg aria2 tree neofetch yt-dlp lazygit yazi ;;
                 pacman) run_cmd sudo pacman -S --noconfirm ffmpeg aria2 tree neofetch yt-dlp lazygit yazi ;;
@@ -496,15 +545,17 @@ install_linux_prerequisites() {
         fi
     fi
 
-    # --- Rust toolchain (rustup) — optional, needed for cargo-binstall / yazi ---
+    # --- Rust toolchain (rustup) — optional ---
     if ! command -v rustup &>/dev/null; then
-        if confirm "Install Rust toolchain (rustup)? Needed for yazi via cargo."; then
+        if confirm "Install Rust toolchain (rustup)? Needed for cargo-binstall and other rust CLI tools."; then
             install_rust_toolchain
-            if command -v cargo &>/dev/null && ! command -v yazi &>/dev/null; then
-                if confirm "Install yazi now via cargo?" "y"; then
-                    install_yazi_via_cargo
-                fi
-            fi
+        fi
+    fi
+
+    # --- yazi (terminal file manager) via GitHub release zip ---
+    if ! command -v yazi &>/dev/null; then
+        if confirm "Install yazi (terminal file manager) from GitHub release?"; then
+            install_yazi_release
         fi
     fi
 
