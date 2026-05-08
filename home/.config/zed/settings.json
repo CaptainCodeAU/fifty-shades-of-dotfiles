@@ -1,21 +1,53 @@
 {
 	// Window behavior
+
+	// ============================================================================
+	// AI / EDIT PREDICTIONS — DISABLED
+	// ============================================================================
+	// disable_ai: master kill switch. Disables the agent panel, inline ghost-text
+	//   predictions, model dropdowns — everything AI-powered in Zed.
+	//   Set to false to re-enable AI features.
+	// show_edit_predictions: controls just the ghost-text predictions while typing.
+	//   When disable_ai is true this is redundant — kept here as belt-and-braces
+	//   so it stays disabled even if disable_ai is flipped back to false.
+	// edit_predictions.provider: which prediction model would run ("zed" = Zeta,
+	//   Zed's own model). Only takes effect when AI is re-enabled.
+	// ============================================================================
+	"disable_ai": true,
+	"show_edit_predictions": false,
+	"edit_predictions": {
+		"provider": "zed",
+	},
+
 	"project_panel": {
-		"dock": "left",
+		"dock": "left"
 	},
 	"outline_panel": {
-		"dock": "left",
+		"dock": "left"
 	},
 	"collaboration_panel": {
-		"dock": "left",
+		"dock": "left"
 	},
+	// ============================================================================
+	// AGENT PANEL — readable width when AI is re-enabled
+	// ============================================================================
+	// dock: where to place the agent panel ("left" | "right" | "bottom").
+	// limit_content_width: when true, prose in the agent panel is capped at
+	//   max_content_width and centered if the panel is wider — keeps lines
+	//   from running edge-to-edge on a wide display.
+	// max_content_width: pixel cap for the centered content (default 850).
+	// NOTE: while disable_ai:true above, the agent panel is hidden so these
+	//   settings are dormant — they take effect the moment AI is re-enabled.
+	// ============================================================================
 	"agent": {
 		"dock": "right",
 		"favorite_models": [],
 		"model_parameters": [],
+		"limit_content_width": true,
+		"max_content_width": 900,
 	},
 	"git_panel": {
-		"dock": "left",
+		"dock": "left"
 	},
 	"ssh_connections": [
 		{
@@ -23,9 +55,9 @@
 			"args": [],
 			"projects": [
 				{
-					"paths": ["/home/winadmin/repos/llmster-server-3090"],
-				},
-			],
+					"paths": ["/home/winadmin/repos/llmster-server-3090"]
+				}
+			]
 		},
 		{
 			"host": "192.168.1.101",
@@ -33,40 +65,44 @@
 			"args": [],
 			"projects": [
 				{
-					"paths": ["/root/audit/./"],
-				},
-			],
-		},
+					"paths": ["/root/audit/./"]
+				}
+			]
+		}
 	],
 	"when_closing_with_no_tabs": "platform_default",
 
 	// Session settings
 	"session": {
-		"trust_all_worktrees": true,
+		"trust_all_worktrees": true
 	},
 
 	// Telemetry (disabled)
 	"telemetry": {
 		"diagnostics": false,
-		"metrics": false,
+		"metrics": false
 	},
 
 	// Theme configuration
 	"theme": {
 		"mode": "dark",
 		"light": "One Light",
-		"dark": "Catppuccin Macchiato",
+		"dark": "Catppuccin Macchiato"
 	},
 
 	// Icon theme
 	"icon_theme": {
 		"mode": "dark",
 		"light": "Zed (Default)",
-		"dark": "Zed (Default)",
+		"dark": "Zed (Default)"
 	},
 
 	// Keyboard configuration
 	"base_keymap": "VSCode",
+
+	// macOS text rendering: "platform_default" | "subpixel" (ClearType) | "grayscale"
+	// "subpixel" is the 1.2.0-pre clarity boost for dark themes (like Catppuccin Macchiato).
+	"text_rendering_mode": "subpixel",
 
 	// ============================================================================
 	// UI FONT — A/B/C COMPARISON BLOCK
@@ -105,13 +141,13 @@
 	// Terminal settings
 	"terminal": {
 		"dock": "bottom",
-  "env": {},
+		"env": {},
 		"font_size": 11.0,
 		"font_family": "JetBrainsMono Nerd Font Mono",
 		"font_fallbacks": [".SystemUIFont"],
 		"max_scroll_history_lines": 50000,
 		"blinking": "terminal_controlled",
-		"cursor_shape": "block",
+		"cursor_shape": "block"
 	},
 
 	// ============================================================================
@@ -141,14 +177,51 @@
 
 	// Editor settings
 	"colorize_brackets": true,
+	// ============================================================================
+	// INDENT GUIDES — colored per indent level (pairs with rainbow brackets)
+	// ============================================================================
+	// coloring: "fixed" | "indent_aware" — indent_aware varies hue by depth.
+	// background_coloring: "disabled" | "indent_aware" — fills the column behind guides.
+	// active_line_width thickens the guide for the indent level the cursor is on.
+	// ============================================================================
+	"indent_guides": {
+		"enabled": true,
+		"line_width": 1,
+		"active_line_width": 2,
+		"coloring": "indent_aware",
+		"background_coloring": "disabled",
+	},
 	"linked_edits": true,
-	"show_edit_predictions": true,
+	// show_edit_predictions moved up to "AI / EDIT PREDICTIONS — DISABLED" section
 	"semantic_tokens": "full",
 	"wrap_guides": [90],
 	"tab_size": 4,
 	"hard_tabs": true,
 	"auto_indent_on_paste": true,
 	"format_on_save": "on",
+
+	// ============================================================================
+	// ACTIVE PANE — dim inactive splits for focus
+	// ============================================================================
+	// inactive_opacity: 1.0 disables dim, 0.85 subtle, 0.7 obvious, 0.5 dramatic.
+	// border_size adds an inset ring (px) around the focused pane.
+	// ============================================================================
+	"active_pane_modifiers": {
+		"border_size": 1.0,
+		"inactive_opacity": 0.85,
+	},
+
+	// ============================================================================
+	// EDITOR TABS — color labels by git status
+	// ============================================================================
+	// tabs.git_status: true colors tab labels by their git state
+	//   (modified / staged / untracked / etc.) using your theme's diff colors.
+	// Other tab options exist (file_icons, show_close_button, activate_on_close,
+	// show_diagnostics) — leaving them at defaults for now.
+	// ============================================================================
+	"tabs": {
+		"git_status": true,
+	},
 
 	// ============================================================================
 	// MARKDOWN-SPECIFIC LANGUAGE OVERRIDES
@@ -163,8 +236,8 @@
 			"format_on_save": "on",
 			"soft_wrap": "editor_width",
 			"preferred_line_length": 100,
-			"remove_trailing_whitespace_on_save": false,
-		},
+			"remove_trailing_whitespace_on_save": false
+		}
 	},
 
 	// Minimap
@@ -180,202 +253,311 @@
 	// ============================================================================
 
 	// Profile 1 — Ocean Deep (ACTIVE)
-	// "experimental.theme_overrides": {
-	// 	"title_bar.background": "#1a4d7a",
-	// 	"status_bar.background": "#1a4d7a",
-	// 	"title_bar.inactive_background": "#154065",
-	// 	"tab.inactive_background": "#154065",
-	// 	"panel.focused_border": "#154065",
-	// 	"border": "#154065",
-	// },
+	// Modernized syntax: "theme_overrides" (no experimental. prefix), nested under theme name.
+	// Applies only when "Catppuccin Macchiato" is the active theme.
+	// NOTE: tab_bar.background is the strip CONTAINING the tabs; without overriding it,
+	// inactive tabs visually merge with the original bar color and look unchanged.
+	"theme_overrides": {
+		"Catppuccin Macchiato": {
+			"title_bar.background": "#1a4d7a",
+			"status_bar.background": "#1a4d7a",
+			"title_bar.inactive_background": "#154065",
+			"tab_bar.background": "#154065",
+			// "tab.inactive_background": "#1a4d7a",
+			"panel.focused_border": "#154065",
+			"border": "#154065",
+			// Border around the focused editor split (subtle, applies on multi-pane layouts)
+			"pane.focused_border": "#154065",
+			// Borders BETWEEN editor splits (visible only when you have ≥2 editor panes)
+			"pane_group.border": "#154065",
+			// Optional bonus keys — uncomment if you want even more Ocean Deep coverage:
+			// terminal.background paints the terminal panel; bold but unifies with bottom dock
+			// "terminal.background": "#154065",
+			// tab.active_background defaults to editor.background (#24273a Macchiato);
+			// override to make the active tab visually distinct from the editor canvas:
+			// "tab.active_background": "#1a4d7a",
+		},
+	},
 
 	// Profile 2 — Forest Green
-	// "experimental.theme_overrides": {
-	// 	"title_bar.background": "#226F54",
-	// 	"status_bar.background": "#226F54",
-	// 	"title_bar.inactive_background": "#1a5540",
-	// 	"tab.inactive_background": "#1a5540",
-	// 	"panel.focused_border": "#1a5540",
-	// 	"border": "#1a5540",
+	// "theme_overrides": {
+	// 	"Catppuccin Macchiato": {
+	// 		"title_bar.background": "#226F54",
+	// 		"status_bar.background": "#226F54",
+	// 		"title_bar.inactive_background": "#1a5540",
+	// 		"tab_bar.background": "#1a5540",
+	// 		"tab.inactive_background": "#1a5540",
+	// 		"panel.focused_border": "#1a5540",
+	// 		"border": "#1a5540",
+	// 	},
 	// },
 
 	// Profile 3 — Deep Purple
-	// "experimental.theme_overrides": {
-	// 	"title_bar.background": "#4B296B",
-	// 	"status_bar.background": "#4B296B",
-	// 	"title_bar.inactive_background": "#3a2052",
-	// 	"tab.inactive_background": "#3a2052",
-	// 	"panel.focused_border": "#3a2052",
-	// 	"border": "#3a2052",
+	// "theme_overrides": {
+	// 	"Catppuccin Macchiato": {
+	// 		"title_bar.background": "#4B296B",
+	// 		"status_bar.background": "#4B296B",
+	// 		"title_bar.inactive_background": "#3a2052",
+	// 		"tab_bar.background": "#3a2052",
+	// 		"tab.inactive_background": "#3a2052",
+	// 		"panel.focused_border": "#3a2052",
+	// 		"border": "#3a2052",
+	// 	},
 	// },
 
 	// Profile 4 — Crimson
-	// "experimental.theme_overrides": {
-	// 	"title_bar.background": "#A71D31",
-	// 	"status_bar.background": "#A71D31",
-	// 	"title_bar.inactive_background": "#821625",
-	// 	"tab.inactive_background": "#821625",
-	// 	"panel.focused_border": "#821625",
-	// 	"border": "#821625",
+	// "theme_overrides": {
+	// 	"Catppuccin Macchiato": {
+	// 		"title_bar.background": "#A71D31",
+	// 		"status_bar.background": "#A71D31",
+	// 		"title_bar.inactive_background": "#821625",
+	// 		"tab_bar.background": "#821625",
+	// 		"tab.inactive_background": "#821625",
+	// 		"panel.focused_border": "#821625",
+	// 		"border": "#821625",
+	// 	},
 	// },
 
 	// Profile 5 — Teal
-	// "experimental.theme_overrides": {
-	// 	"title_bar.background": "#0E9594",
-	// 	"status_bar.background": "#0E9594",
-	// 	"title_bar.inactive_background": "#0b7372",
-	// 	"tab.inactive_background": "#0b7372",
-	// 	"panel.focused_border": "#0b7372",
-	// 	"border": "#0b7372"
-	// }
+	// "theme_overrides": {
+	// 	"Catppuccin Macchiato": {
+	// 		"title_bar.background": "#0E9594",
+	// 		"status_bar.background": "#0E9594",
+	// 		"title_bar.inactive_background": "#0b7372",
+	// 		"tab_bar.background": "#0b7372",
+	// 		"tab.inactive_background": "#0b7372",
+	// 		"panel.focused_border": "#0b7372",
+	// 		"border": "#0b7372",
+	// 	},
+	// },
 
 	// Profile 6 — Burnt Orange
-	// "experimental.theme_overrides": {
-	// 	"title_bar.background": "#A3320B",
-	// 	"status_bar.background": "#A3320B",
-	// 	"title_bar.inactive_background": "#7d2609",
-	// 	"tab.inactive_background": "#7d2609",
-	// 	"panel.focused_border": "#7d2609",
-	// 	"border": "#7d2609",
+	// "theme_overrides": {
+	// 	"Catppuccin Macchiato": {
+	// 		"title_bar.background": "#A3320B",
+	// 		"status_bar.background": "#A3320B",
+	// 		"title_bar.inactive_background": "#7d2609",
+	// 		"tab_bar.background": "#7d2609",
+	// 		"tab.inactive_background": "#7d2609",
+	// 		"panel.focused_border": "#7d2609",
+	// 		"border": "#7d2609",
+	// 	},
 	// },
 
 	// Profile 7 — Slate
-	// "experimental.theme_overrides": {
-	// 	"title_bar.background": "#2F4858",
-	// 	"status_bar.background": "#2F4858",
-	// 	"title_bar.inactive_background": "#243845",
-	// 	"tab.inactive_background": "#243845",
-	// 	"panel.focused_border": "#243845",
-	// 	"border": "#243845"
-	// }
+	// "theme_overrides": {
+	// 	"Catppuccin Macchiato": {
+	// 		"title_bar.background": "#2F4858",
+	// 		"status_bar.background": "#2F4858",
+	// 		"title_bar.inactive_background": "#243845",
+	// 		"tab_bar.background": "#243845",
+	// 		"tab.inactive_background": "#243845",
+	// 		"panel.focused_border": "#243845",
+	// 		"border": "#243845",
+	// 	},
+	// },
 
 	// Profile 8 — Magenta
-	// "experimental.theme_overrides": {
-	// 	"title_bar.background": "#A40E4C",
-	// 	"status_bar.background": "#A40E4C",
-	// 	"title_bar.inactive_background": "#7e0b3b",
-	// 	"tab.inactive_background": "#7e0b3b",
-	// 	"panel.focused_border": "#7e0b3b",
-	// 	"border": "#7e0b3b"
-	// }
+	// "theme_overrides": {
+	// 	"Catppuccin Macchiato": {
+	// 		"title_bar.background": "#A40E4C",
+	// 		"status_bar.background": "#A40E4C",
+	// 		"title_bar.inactive_background": "#7e0b3b",
+	// 		"tab_bar.background": "#7e0b3b",
+	// 		"tab.inactive_background": "#7e0b3b",
+	// 		"panel.focused_border": "#7e0b3b",
+	// 		"border": "#7e0b3b",
+	// 	},
+	// },
 
 	// Profile 9 — Dark Olive
-	// "experimental.theme_overrides": {
-	// 	"title_bar.background": "#262A10",
-	// 	"status_bar.background": "#262A10",
-	// 	"title_bar.inactive_background": "#1c1f0b",
-	// 	"tab.inactive_background": "#1c1f0b",
-	// 	"panel.focused_border": "#1c1f0b",
-	// 	"border": "#1c1f0b"
-	// }
+	// "theme_overrides": {
+	// 	"Catppuccin Macchiato": {
+	// 		"title_bar.background": "#262A10",
+	// 		"status_bar.background": "#262A10",
+	// 		"title_bar.inactive_background": "#1c1f0b",
+	// 		"tab_bar.background": "#1c1f0b",
+	// 		"tab.inactive_background": "#1c1f0b",
+	// 		"panel.focused_border": "#1c1f0b",
+	// 		"border": "#1c1f0b",
+	// 	},
+	// },
 
 	// Profile 10 — Charcoal
-	// "experimental.theme_overrides": {
-	// 	"title_bar.background": "#464F51",
-	// 	"status_bar.background": "#464F51",
-	// 	"title_bar.inactive_background": "#363d3f",
-	// 	"tab.inactive_background": "#363d3f",
-	// 	"panel.focused_border": "#363d3f",
-	// 	"border": "#363d3f"
-	// }
+	// "theme_overrides": {
+	// 	"Catppuccin Macchiato": {
+	// 		"title_bar.background": "#464F51",
+	// 		"status_bar.background": "#464F51",
+	// 		"title_bar.inactive_background": "#363d3f",
+	// 		"tab_bar.background": "#363d3f",
+	// 		"tab.inactive_background": "#363d3f",
+	// 		"panel.focused_border": "#363d3f",
+	// 		"border": "#363d3f",
+	// 	},
+	// },
 
 	// Profile 11 — Electric Indigo
-	// "experimental.theme_overrides": {
-	// 	"title_bar.background": "#4B0082",
-	// 	"status_bar.background": "#4B0082",
-	// 	"title_bar.inactive_background": "#3a0066",
-	// 	"tab.inactive_background": "#3a0066",
-	// 	"panel.focused_border": "#3a0066",
-	// 	"border": "#3a0066",
+	// "theme_overrides": {
+	// 	"Catppuccin Macchiato": {
+	// 		"title_bar.background": "#4B0082",
+	// 		"status_bar.background": "#4B0082",
+	// 		"title_bar.inactive_background": "#3a0066",
+	// 		"tab_bar.background": "#3a0066",
+	// 		"tab.inactive_background": "#3a0066",
+	// 		"panel.focused_border": "#3a0066",
+	// 		"border": "#3a0066",
+	// 	},
 	// },
 
 	// Profile 12 — Hot Pink
-	// "experimental.theme_overrides": {
-	// 	"title_bar.background": "#C2185B",
-	// 	"status_bar.background": "#C2185B",
-	// 	"title_bar.inactive_background": "#9B1348",
-	// 	"tab.inactive_background": "#9B1348",
-	// 	"panel.focused_border": "#9B1348",
-	// 	"border": "#9B1348"
-	// }
+	// "theme_overrides": {
+	// 	"Catppuccin Macchiato": {
+	// 		"title_bar.background": "#C2185B",
+	// 		"status_bar.background": "#C2185B",
+	// 		"title_bar.inactive_background": "#9B1348",
+	// 		"tab_bar.background": "#9B1348",
+	// 		"tab.inactive_background": "#9B1348",
+	// 		"panel.focused_border": "#9B1348",
+	// 		"border": "#9B1348",
+	// 	},
+	// },
 
 	// Profile 13 — Cobalt Blue
-	// "experimental.theme_overrides": {
-	// 	"title_bar.background": "#0047AB",
-	// 	"status_bar.background": "#0047AB",
-	// 	"title_bar.inactive_background": "#003888",
-	// 	"tab.inactive_background": "#003888",
-	// 	"panel.focused_border": "#003888",
-	// 	"border": "#003888",
+	// "theme_overrides": {
+	// 	"Catppuccin Macchiato": {
+	// 		"title_bar.background": "#0047AB",
+	// 		"status_bar.background": "#0047AB",
+	// 		"title_bar.inactive_background": "#003888",
+	// 		"tab_bar.background": "#003888",
+	// 		"tab.inactive_background": "#003888",
+	// 		"panel.focused_border": "#003888",
+	// 		"border": "#003888",
+	// 	},
 	// },
 
 	// Profile 14 — Emerald
-	// "experimental.theme_overrides": {
-	// 	"title_bar.background": "#008B45",
-	// 	"status_bar.background": "#008B45",
-	// 	"title_bar.inactive_background": "#006C36",
-	// 	"tab.inactive_background": "#006C36",
-	// 	"panel.focused_border": "#006C36",
-	// 	"border": "#006C36",
+	// "theme_overrides": {
+	// 	"Catppuccin Macchiato": {
+	// 		"title_bar.background": "#008B45",
+	// 		"status_bar.background": "#008B45",
+	// 		"title_bar.inactive_background": "#006C36",
+	// 		"tab_bar.background": "#006C36",
+	// 		"tab.inactive_background": "#006C36",
+	// 		"panel.focused_border": "#006C36",
+	// 		"border": "#006C36",
+	// 	},
 	// },
 
 	// Profile 15 — Sunset Gold
-	// "experimental.theme_overrides": {
-	// 	"title_bar.background": "#B8860B",
-	// 	"status_bar.background": "#B8860B",
-	// 	"title_bar.inactive_background": "#926A09",
-	// 	"tab.inactive_background": "#926A09",
-	// 	"panel.focused_border": "#926A09",
-	// 	"border": "#926A09",
+	// "theme_overrides": {
+	// 	"Catppuccin Macchiato": {
+	// 		"title_bar.background": "#B8860B",
+	// 		"status_bar.background": "#B8860B",
+	// 		"title_bar.inactive_background": "#926A09",
+	// 		"tab_bar.background": "#926A09",
+	// 		"tab.inactive_background": "#926A09",
+	// 		"panel.focused_border": "#926A09",
+	// 		"border": "#926A09",
+	// 	},
 	// },
 
 	// Profile 16 — Coral Reef
-	// "experimental.theme_overrides": {
-	// 	"title_bar.background": "#E04040",
-	// 	"status_bar.background": "#E04040",
-	// 	"title_bar.inactive_background": "#B33333",
-	// 	"tab.inactive_background": "#B33333",
-	// 	"panel.focused_border": "#B33333",
-	// 	"border": "#B33333",
+	// "theme_overrides": {
+	// 	"Catppuccin Macchiato": {
+	// 		"title_bar.background": "#E04040",
+	// 		"status_bar.background": "#E04040",
+	// 		"title_bar.inactive_background": "#B33333",
+	// 		"tab_bar.background": "#B33333",
+	// 		"tab.inactive_background": "#B33333",
+	// 		"panel.focused_border": "#B33333",
+	// 		"border": "#B33333",
+	// 	},
 	// },
 
 	// Profile 17 — Sapphire
-	// "experimental.theme_overrides": {
-	// 	"title_bar.background": "#0F52BA",
-	// 	"status_bar.background": "#0F52BA",
-	// 	"title_bar.inactive_background": "#0C4196",
-	// 	"tab.inactive_background": "#0C4196",
-	// 	"panel.focused_border": "#0C4196",
-	// 	"border": "#0C4196",
+	// "theme_overrides": {
+	// 	"Catppuccin Macchiato": {
+	// 		"title_bar.background": "#0F52BA",
+	// 		"status_bar.background": "#0F52BA",
+	// 		"title_bar.inactive_background": "#0C4196",
+	// 		"tab_bar.background": "#0C4196",
+	// 		"tab.inactive_background": "#0C4196",
+	// 		"panel.focused_border": "#0C4196",
+	// 		"border": "#0C4196",
+	// 	},
 	// },
 
 	// Profile 18 — Plum
-	// "experimental.theme_overrides": {
-	// 	"title_bar.background": "#7B2D5F",
-	// 	"status_bar.background": "#7B2D5F",
-	// 	"title_bar.inactive_background": "#60234A",
-	// 	"tab.inactive_background": "#60234A",
-	// 	"panel.focused_border": "#60234A",
-	// 	"border": "#60234A",
+	// "theme_overrides": {
+	// 	"Catppuccin Macchiato": {
+	// 		"title_bar.background": "#7B2D5F",
+	// 		"status_bar.background": "#7B2D5F",
+	// 		"title_bar.inactive_background": "#60234A",
+	// 		"tab_bar.background": "#60234A",
+	// 		"tab.inactive_background": "#60234A",
+	// 		"panel.focused_border": "#60234A",
+	// 		"border": "#60234A",
+	// 	},
 	// },
 
 	// Profile 19 — Turquoise
-	// "experimental.theme_overrides": {
-	// 	"title_bar.background": "#00796B",
-	// 	"status_bar.background": "#00796B",
-	// 	"title_bar.inactive_background": "#005E54",
-	// 	"tab.inactive_background": "#005E54",
-	// 	"panel.focused_border": "#005E54",
-	// 	"border": "#005E54",
+	// "theme_overrides": {
+	// 	"Catppuccin Macchiato": {
+	// 		"title_bar.background": "#00796B",
+	// 		"status_bar.background": "#00796B",
+	// 		"title_bar.inactive_background": "#005E54",
+	// 		"tab_bar.background": "#005E54",
+	// 		"tab.inactive_background": "#005E54",
+	// 		"panel.focused_border": "#005E54",
+	// 		"border": "#005E54",
+	// 	},
 	// },
 
 	// Profile 20 — Amber
-	// "experimental.theme_overrides": {
-	// 	"title_bar.background": "#CC7A00",
-	// 	"status_bar.background": "#CC7A00",
-	// 	"title_bar.inactive_background": "#A36200",
-	// 	"tab.inactive_background": "#A36200",
-	// 	"panel.focused_border": "#A36200",
-	// 	"border": "#A36200",
+	// "theme_overrides": {
+	// 	"Catppuccin Macchiato": {
+	// 		"title_bar.background": "#CC7A00",
+	// 		"status_bar.background": "#CC7A00",
+	// 		"title_bar.inactive_background": "#A36200",
+	// 		"tab_bar.background": "#A36200",
+	// 		"tab.inactive_background": "#A36200",
+	// 		"panel.focused_border": "#A36200",
+	// 		"border": "#A36200",
+	// 	},
 	// },
+
+	// ============================================================================
+	// SETTINGS PROFILES — runtime swap (replaces A/B/C comment toggling)
+	// ============================================================================
+	// Activate via command palette: "settings profile selector: toggle"
+	// `base: "default"` ignores user settings; default `base: "user"` layers on top.
+	// ============================================================================
+	"profiles": {
+		"Presenting": {
+			"base": "default",
+			"settings": {
+				"theme": "One Light",
+				"ui_font_size": 18,
+				"buffer_font_size": 16,
+				"agent_ui_font_size": 18,
+			},
+		},
+		"UI-Inter": {
+			"settings": {
+				"ui_font_family": "Inter",
+				"markdown_preview_font_family": "Inter",
+			},
+		},
+		"UI-IBMPlex": {
+			"settings": {
+				"ui_font_family": "IBM Plex Sans",
+				"markdown_preview_font_family": "IBM Plex Sans",
+			},
+		},
+		"Markdown-Charter": {
+			"settings": {
+				"markdown_preview_font_family": "Charter",
+			},
+		},
+	},
 }
