@@ -60,10 +60,10 @@ export PROMPT_EOL_MARK="" # Disable Powerlevel10k instant prompt
 
 # --- Welcome Message Settings ---
 # ZSH_WELCOME: Controls environment overview display
-#   - "full"    : Complete multi-line overview (default for new terminals)
-#   - "minimal" : Single-line compact status (default for SSH/tmux)
+#   - "full"    : Complete multi-line overview (DEFAULT — used when unset)
+#   - "minimal" : Single-line compact status
 #   - "none"    : No overview displayed
-#   - ""        : Auto-detect based on context (recommended)
+# Override per-machine in ~/.zshrc.private if you want non-default verbosity.
 : ${ZSH_WELCOME:=""}
 
 # ZSH_WELCOME_QUICKREF: Controls quick reference display (independent of ZSH_WELCOME)
