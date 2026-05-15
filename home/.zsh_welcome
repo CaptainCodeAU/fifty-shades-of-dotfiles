@@ -278,7 +278,7 @@ _show_quickref_full() {
     echo "    Python:  python_new_project, python_setup, python_delete"
     echo "    uv CLI:  uv_tool_install_current_project, uv_tool_check_current_project"
     echo "    Node:    node_new_project, node_setup, node_clean"
-    echo "    Docker:  docker_help | Tmux: tdev, gs, gstatus"
+    echo "    Git/Docker: lg, lzd | Docker: docker_help | Tmux: tdev, gs, gstatus"
     echo "    Media:   yt --help"
 }
 
@@ -288,7 +288,7 @@ _show_quickref_full() {
 _show_quickref_minimal() {
     echo
     echo "${info}💡 Python: python_new_project | Node: node_new_project | Docker: docker_help${done}"
-    echo "   Tmux: tdev, gs | Media: yt --help"
+    echo "   Tmux: tdev, gs | Git/Docker: lg, lzd | Media: yt --help"
 }
 
 # ------------------------------------------------------------------------------

@@ -345,7 +345,9 @@ run_onboarding() {
         "neofetch" "neofetch" "neofetch" \
         "ffmpeg"  "ffmpeg"   "ffmpeg" \
         "yt-dlp"  "yt-dlp"   "yt-dlp" \
-        "aria2c"  "aria2"    "aria2"
+        "aria2c"  "aria2"    "aria2" \
+        "lazygit" "lazygit"  "lazygit" \
+        "lazydocker" "lazydocker" "lazydocker"
 
     # --- Dev managers (special handlers — not standard binaries) ---
     local nvm_ok=false uv_ok=false
