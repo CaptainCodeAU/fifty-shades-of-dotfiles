@@ -187,6 +187,8 @@ check_prerequisites() {
     check_command gh       "GitHub CLI (gh)" || ((missing++))
     check_command nvim     "neovim"   || true
     check_command glow     "glow"     || true
+    check_command lazygit  "lazygit"  || ((missing++))
+    check_command lazydocker "lazydocker" || ((missing++))
     if [[ "$(check_os)" == "macos" ]]; then
         check_command trash    "trash (macOS)"  || ((missing++))
     else
@@ -258,8 +260,6 @@ check_prerequisites() {
 
     echo -e "${BOLD}Optional:${RESET}"
     check_command_optional claude "Claude Code CLI" || true
-    check_command_optional lazygit  "lazygit"  || true
-    check_command_optional lazydocker "lazydocker" || true
     check_command_optional yazi     "yazi"     || true
     check_command_optional ffmpeg   "ffmpeg"   || true
     check_command_optional yt-dlp   "yt-dlp"   || true
@@ -432,8 +432,21 @@ install_macos_prerequisites() {
         success "Core formulae already installed"
     fi
 
+    # --- Required CLI tools (lazygit, lazydocker — installed unconditionally) ---
+    local -a required_cli=(lazygit lazydocker)
+    local req_install=()
+    for formula in "${required_cli[@]}"; do
+        brew list "$formula" &>/dev/null || req_install+=("$formula")
+    done
+    if (( ${#req_install[@]} > 0 )); then
+        info "Installing required CLI tools: ${req_install[*]}"
+        run_cmd brew install "${req_install[@]}"
+    else
+        success "lazygit + lazydocker already installed"
+    fi
+
     # --- Optional CLI tools ---
-    local -a optional=(ffmpeg yt-dlp aria2 tree neofetch lazygit lazydocker yazi)
+    local -a optional=(ffmpeg yt-dlp aria2 tree neofetch yazi)
     local opt_install=()
 
     for formula in "${optional[@]}"; do
@@ -511,59 +524,57 @@ install_linux_prerequisites() {
             esac
         fi
 
+        # --- lazygit (required — installed from latest GitHub release on all distros) ---
+        if command -v lazygit &>/dev/null; then
+            success "lazygit already installed"
+        else
+            info "Installing lazygit from GitHub release..."
+            local lg_arch=""
+            case "$(uname -m)" in
+                x86_64)  lg_arch="x86_64" ;;
+                aarch64) lg_arch="arm64"  ;;
+            esac
+            if [[ -z "$lg_arch" ]]; then
+                warn "Unsupported arch — see https://github.com/jesseduffield/lazygit#installation"
+            else
+                local lg_ver lg_tmp
+                lg_ver=$(curl -fsSL "https://api.github.com/repos/jesseduffield/lazygit/releases/latest" 2>/dev/null \
+                    | grep -Po '"tag_name": "v\K[^"]*' || true)
+                if [[ -z "$lg_ver" ]]; then
+                    warn "Could not detect lazygit latest version — see https://github.com/jesseduffield/lazygit#installation"
+                else
+                    lg_tmp=$(mktemp -d)
+                    if run_cmd curl -fsSL -o "$lg_tmp/lazygit.tar.gz" \
+                        "https://github.com/jesseduffield/lazygit/releases/download/v${lg_ver}/lazygit_${lg_ver}_Linux_${lg_arch}.tar.gz"; then
+                        run_cmd tar -xf "$lg_tmp/lazygit.tar.gz" -C "$lg_tmp" lazygit
+                        run_cmd sudo install "$lg_tmp/lazygit" -D -t /usr/local/bin/
+                        success "lazygit ${lg_ver} installed to /usr/local/bin"
+                    else
+                        warn "lazygit release download failed — see https://github.com/jesseduffield/lazygit#installation"
+                    fi
+                    rm -rf "$lg_tmp"
+                fi
+            fi
+        fi
+
+        # --- lazydocker (required — official install script → ~/.local/bin on all distros) ---
+        if command -v lazydocker &>/dev/null; then
+            success "lazydocker already installed"
+        else
+            info "Installing lazydocker via official install script..."
+            run_cmd bash -c 'curl -fsSL https://raw.githubusercontent.com/jesseduffield/lazydocker/master/scripts/install_update_linux.sh | DIR="$HOME/.local/bin" bash'
+        fi
+
         # --- Optional CLI tools ---
-        if confirm "Install optional CLI tools (ffmpeg, yt-dlp, aria2, tree, neofetch, lazygit, lazydocker, yazi)?"; then
+        if confirm "Install optional CLI tools (ffmpeg, yt-dlp, aria2, tree, neofetch, yazi)?"; then
             case "$pkg_mgr" in
-                apt)
-                        run_cmd sudo apt install -y ffmpeg aria2 tree neofetch
-
-                        # --- lazygit (no apt package on Debian/Ubuntu — fetch latest GitHub release) ---
-                        if command -v lazygit &>/dev/null; then
-                            success "lazygit already installed"
-                        else
-                            info "Installing lazygit from GitHub release..."
-                            local lg_arch=""
-                            case "$(dpkg --print-architecture)" in
-                                amd64) lg_arch="x86_64" ;;
-                                arm64) lg_arch="arm64"  ;;
-                            esac
-                            if [[ -z "$lg_arch" ]]; then
-                                warn "Unsupported arch — see https://github.com/jesseduffield/lazygit#installation"
-                            else
-                                local lg_ver lg_tmp
-                                lg_ver=$(curl -fsSL "https://api.github.com/repos/jesseduffield/lazygit/releases/latest" 2>/dev/null \
-                                    | grep -Po '"tag_name": "v\K[^"]*' || true)
-                                if [[ -z "$lg_ver" ]]; then
-                                    warn "Could not detect lazygit latest version — see https://github.com/jesseduffield/lazygit#installation"
-                                else
-                                    lg_tmp=$(mktemp -d)
-                                    if run_cmd curl -fsSL -o "$lg_tmp/lazygit.tar.gz" \
-                                        "https://github.com/jesseduffield/lazygit/releases/download/v${lg_ver}/lazygit_${lg_ver}_Linux_${lg_arch}.tar.gz"; then
-                                        run_cmd tar -xf "$lg_tmp/lazygit.tar.gz" -C "$lg_tmp" lazygit
-                                        run_cmd sudo install "$lg_tmp/lazygit" -D -t /usr/local/bin/
-                                        success "lazygit ${lg_ver} installed to /usr/local/bin"
-                                    else
-                                        warn "lazygit release download failed — see https://github.com/jesseduffield/lazygit#installation"
-                                    fi
-                                    rm -rf "$lg_tmp"
-                                fi
-                            fi
-                        fi
-
-                        # --- lazydocker (no apt package — official install script → ~/.local/bin) ---
-                        if command -v lazydocker &>/dev/null; then
-                            success "lazydocker already installed"
-                        else
-                            info "Installing lazydocker via official install script..."
-                            run_cmd bash -c 'curl -fsSL https://raw.githubusercontent.com/jesseduffield/lazydocker/master/scripts/install_update_linux.sh | DIR="$HOME/.local/bin" bash'
-                        fi
-
+                apt)    run_cmd sudo apt install -y ffmpeg aria2 tree neofetch
                         info "yt-dlp and yazi may need manual install on Debian/Ubuntu."
                         info "  yt-dlp: pip install yt-dlp  OR  https://github.com/yt-dlp/yt-dlp#installation"
                         info "  yazi:   installer offers a GitHub release download below; or see https://github.com/sxyazi/yazi#installation"
                         ;;
-                dnf)    run_cmd sudo dnf install -y ffmpeg aria2 tree neofetch yt-dlp lazygit yazi ;;
-                pacman) run_cmd sudo pacman -S --noconfirm ffmpeg aria2 tree neofetch yt-dlp lazygit yazi ;;
+                dnf)    run_cmd sudo dnf install -y ffmpeg aria2 tree neofetch yt-dlp yazi ;;
+                pacman) run_cmd sudo pacman -S --noconfirm ffmpeg aria2 tree neofetch yt-dlp yazi ;;
                 zypper) run_cmd sudo zypper install -y ffmpeg aria2 tree neofetch ;;
             esac
         fi
