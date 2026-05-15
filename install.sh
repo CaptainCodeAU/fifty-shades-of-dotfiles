@@ -512,14 +512,55 @@ install_linux_prerequisites() {
         fi
 
         # --- Optional CLI tools ---
-        if confirm "Install optional CLI tools (ffmpeg, yt-dlp, aria2, tree, neofetch, lazygit, yazi)?"; then
+        if confirm "Install optional CLI tools (ffmpeg, yt-dlp, aria2, tree, neofetch, lazygit, lazydocker, yazi)?"; then
             case "$pkg_mgr" in
-                apt)    run_cmd sudo apt install -y ffmpeg aria2 tree neofetch
-                        info "yt-dlp, lazygit, lazydocker, and yazi may need manual install on Debian/Ubuntu."
-                        info "  yt-dlp:     pip install yt-dlp  OR  https://github.com/yt-dlp/yt-dlp#installation"
-                        info "  lazygit:    https://github.com/jesseduffield/lazygit#installation"
-                        info "  lazydocker: https://github.com/jesseduffield/lazydocker#installation"
-                        info "  yazi:       installer offers a GitHub release download below; or see https://github.com/sxyazi/yazi#installation"
+                apt)
+                        run_cmd sudo apt install -y ffmpeg aria2 tree neofetch
+
+                        # --- lazygit (no apt package on Debian/Ubuntu — fetch latest GitHub release) ---
+                        if command -v lazygit &>/dev/null; then
+                            success "lazygit already installed"
+                        else
+                            info "Installing lazygit from GitHub release..."
+                            local lg_arch=""
+                            case "$(dpkg --print-architecture)" in
+                                amd64) lg_arch="x86_64" ;;
+                                arm64) lg_arch="arm64"  ;;
+                            esac
+                            if [[ -z "$lg_arch" ]]; then
+                                warn "Unsupported arch — see https://github.com/jesseduffield/lazygit#installation"
+                            else
+                                local lg_ver lg_tmp
+                                lg_ver=$(curl -fsSL "https://api.github.com/repos/jesseduffield/lazygit/releases/latest" 2>/dev/null \
+                                    | grep -Po '"tag_name": "v\K[^"]*' || true)
+                                if [[ -z "$lg_ver" ]]; then
+                                    warn "Could not detect lazygit latest version — see https://github.com/jesseduffield/lazygit#installation"
+                                else
+                                    lg_tmp=$(mktemp -d)
+                                    if run_cmd curl -fsSL -o "$lg_tmp/lazygit.tar.gz" \
+                                        "https://github.com/jesseduffield/lazygit/releases/download/v${lg_ver}/lazygit_${lg_ver}_Linux_${lg_arch}.tar.gz"; then
+                                        run_cmd tar -xf "$lg_tmp/lazygit.tar.gz" -C "$lg_tmp" lazygit
+                                        run_cmd sudo install "$lg_tmp/lazygit" -D -t /usr/local/bin/
+                                        success "lazygit ${lg_ver} installed to /usr/local/bin"
+                                    else
+                                        warn "lazygit release download failed — see https://github.com/jesseduffield/lazygit#installation"
+                                    fi
+                                    rm -rf "$lg_tmp"
+                                fi
+                            fi
+                        fi
+
+                        # --- lazydocker (no apt package — official install script → ~/.local/bin) ---
+                        if command -v lazydocker &>/dev/null; then
+                            success "lazydocker already installed"
+                        else
+                            info "Installing lazydocker via official install script..."
+                            run_cmd bash -c 'curl -fsSL https://raw.githubusercontent.com/jesseduffield/lazydocker/master/scripts/install_update_linux.sh | DIR="$HOME/.local/bin" bash'
+                        fi
+
+                        info "yt-dlp and yazi may need manual install on Debian/Ubuntu."
+                        info "  yt-dlp: pip install yt-dlp  OR  https://github.com/yt-dlp/yt-dlp#installation"
+                        info "  yazi:   installer offers a GitHub release download below; or see https://github.com/sxyazi/yazi#installation"
                         ;;
                 dnf)    run_cmd sudo dnf install -y ffmpeg aria2 tree neofetch yt-dlp lazygit yazi ;;
                 pacman) run_cmd sudo pacman -S --noconfirm ffmpeg aria2 tree neofetch yt-dlp lazygit yazi ;;
