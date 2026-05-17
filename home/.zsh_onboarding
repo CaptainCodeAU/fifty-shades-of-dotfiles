@@ -32,6 +32,69 @@ if [[ -z "$ok" ]]; then
 fi
 
 # ------------------------------------------------------------------------------
+# pnpm Version Policy & Cached Latest-Version Check
+# ------------------------------------------------------------------------------
+# Minimum acceptable pnpm. Below this, install.sh and the onboarding prompt
+# offer to upgrade rather than silently accepting the stale version.
+# Bumped manually; coordinate with install.sh's PNPM_MIN_VERSION.
+export PNPM_MIN_VERSION="${PNPM_MIN_VERSION:-11.1.2}"
+# How often to re-check the npm registry for the latest pnpm release.
+export PNPM_CHECK_TTL_DAYS="${PNPM_CHECK_TTL_DAYS:-7}"
+
+_pnpm_cache_file() {
+    local cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles"
+    [[ -d "$cache_dir" ]] || mkdir -p "$cache_dir" 2>/dev/null
+    echo "$cache_dir/pnpm_latest"
+}
+
+# Cache is fresh if mtime within PNPM_CHECK_TTL_DAYS.
+_pnpm_cache_fresh() {
+    local cache_file="$1" max_age now mtime
+    [[ -s "$cache_file" ]] || return 1
+    max_age=$((PNPM_CHECK_TTL_DAYS * 86400))
+    now=$(date +%s)
+    if [[ "$OSTYPE" == darwin* ]]; then
+        mtime=$(stat -f %m "$cache_file" 2>/dev/null)
+    else
+        mtime=$(stat -c %Y "$cache_file" 2>/dev/null)
+    fi
+    [[ -n "$mtime" ]] || return 1
+    (( now - mtime < max_age ))
+}
+
+# Background-refresh cache; never blocks the shell. `&!` is zsh-only —
+# disowns and detaches in one shot.
+_pnpm_refresh_latest_bg() {
+    local cache_file="$1"
+    (
+        local latest
+        latest=$(curl -fsSL --max-time 5 "https://registry.npmjs.org/pnpm/latest" 2>/dev/null \
+            | grep -oE '"version":"[^"]+"' | head -1 | sed 's/.*"\([^"]*\)"/\1/')
+        [[ -n "$latest" ]] && echo "$latest" > "$cache_file"
+    ) &!
+}
+
+# Echo the cached latest pnpm version. May be empty on very first call
+# before background refresh completes — that's expected; the next shell sees it.
+_pnpm_get_latest() {
+    local cache_file
+    cache_file=$(_pnpm_cache_file)
+    if ! _pnpm_cache_fresh "$cache_file"; then
+        _pnpm_refresh_latest_bg "$cache_file"
+    fi
+    [[ -f "$cache_file" ]] && cat "$cache_file" 2>/dev/null
+}
+
+# Compare two semver-ish versions. Echoes -1 (a<b), 0 (==), or 1 (a>b).
+_pnpm_vercmp() {
+    local a="$1" b="$2"
+    [[ "$a" == "$b" ]] && { echo 0; return; }
+    local lower
+    lower=$(printf '%s\n%s\n' "$a" "$b" | sort -V | head -1)
+    if [[ "$lower" == "$a" ]]; then echo -1; else echo 1; fi
+}
+
+# ------------------------------------------------------------------------------
 # Global Variables
 # ------------------------------------------------------------------------------
 _PKG_MANAGER_NAME=""
@@ -221,6 +284,52 @@ _ensure_uv() {
 }
 
 # ------------------------------------------------------------------------------
+# pnpm Below-Minimum Check — Special Handler
+# ------------------------------------------------------------------------------
+# Prompts to upgrade pnpm if installed version < PNPM_MIN_VERSION.
+# Soft (non-blocking) nudges for above-min-but-not-latest live in .zsh_welcome.
+# A daily marker file prevents re-prompting on every shell open.
+_ensure_pnpm_current() {
+    command -v pnpm &>/dev/null || return 0  # missing case handled by install.sh
+    [[ -t 1 ]] || return 0
+
+    local current latest cmp_min marker marker_dir
+    current=$(pnpm -v 2>/dev/null) || return 0
+    cmp_min=$(_pnpm_vercmp "$current" "$PNPM_MIN_VERSION")
+    [[ "$cmp_min" != "-1" ]] && return 0  # at or above minimum — silent
+
+    # Below minimum — prompt at most once per 24h
+    marker_dir="${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles"
+    marker="$marker_dir/pnpm_upgrade_prompted"
+    [[ -d "$marker_dir" ]] || mkdir -p "$marker_dir" 2>/dev/null
+    if [[ -f "$marker" ]]; then
+        local now mtime
+        now=$(date +%s)
+        if [[ "$OSTYPE" == darwin* ]]; then
+            mtime=$(stat -f %m "$marker" 2>/dev/null)
+        else
+            mtime=$(stat -c %Y "$marker" 2>/dev/null)
+        fi
+        [[ -n "$mtime" ]] && (( now - mtime < 86400 )) && return 0
+    fi
+
+    latest=$(_pnpm_get_latest 2>/dev/null)
+    echo "${err}pnpm ${current} is below required minimum ${PNPM_MIN_VERSION}${latest:+ (latest: ${latest})}.${done}"
+    read "REPLY?${info}    Run 'pnpm self-update' now? [y/N] ${done}"
+    : > "$marker"  # mark prompted regardless of answer
+    if [[ "$REPLY" =~ ^[Yy]$ ]]; then
+        echo "${info}    Updating pnpm...${done}"
+        if pnpm self-update; then
+            echo "${ok}    pnpm updated to $(pnpm -v 2>/dev/null).${done}"
+        else
+            echo "${err}    pnpm self-update failed.${done}"
+        fi
+    else
+        echo "${warn}    Skipping pnpm upgrade. Run 'pnpm_update' anytime.${done}"
+    fi
+}
+
+# ------------------------------------------------------------------------------
 # Docker — Guidance Only
 # ------------------------------------------------------------------------------
 _show_docker_guidance() {
@@ -350,16 +459,22 @@ run_onboarding() {
         "lazydocker" "lazydocker" "lazydocker"
 
     # --- Dev managers (special handlers — not standard binaries) ---
-    local nvm_ok=false uv_ok=false
+    local nvm_ok=false uv_ok=false pnpm_ok=false
     [[ -d "$HOME/.nvm" ]] && nvm_ok=true
     command -v uv &>/dev/null && uv_ok=true
+    if command -v pnpm &>/dev/null; then
+        local _pnpm_cur
+        _pnpm_cur=$(pnpm -v 2>/dev/null)
+        [[ -n "$_pnpm_cur" && "$(_pnpm_vercmp "$_pnpm_cur" "$PNPM_MIN_VERSION")" != "-1" ]] && pnpm_ok=true
+    fi
 
-    if [[ "$nvm_ok" == true && "$uv_ok" == true ]]; then
-        printf "  ${ok}✓${done} %-18s %s\n" "Dev managers" "nvm · uv"
+    if [[ "$nvm_ok" == true && "$uv_ok" == true && "$pnpm_ok" == true ]]; then
+        printf "  ${ok}✓${done} %-18s %s\n" "Dev managers" "nvm · uv · pnpm"
     else
-        printf "  ${warn}!${done} %-18s %s\n" "Dev managers" "nvm · uv"
+        printf "  ${warn}!${done} %-18s %s\n" "Dev managers" "nvm · uv · pnpm"
         [[ "$nvm_ok" == false ]] && _ensure_nvm
         [[ "$uv_ok" == false ]] && _ensure_uv
+        [[ "$pnpm_ok" == false ]] && _ensure_pnpm_current
     fi
 
     # --- Docker ---

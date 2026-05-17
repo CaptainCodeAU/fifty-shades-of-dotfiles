@@ -47,6 +47,11 @@ REPO_DIR="$SCRIPT_DIR"
 DRY_RUN=false
 VERBOSE=false
 
+# --- pnpm version policy ---
+# Minimum acceptable pnpm. If pnpm is missing OR below this, install/upgrade
+# is offered. Keep in sync with PNPM_MIN_VERSION in home/.zsh_onboarding.
+PNPM_MIN_VERSION="11.1.2"
+
 # --- Helpers ---
 info()    { echo -e "${CYAN}ℹ️  $*${RESET}"; }
 success() { echo -e "${GREEN}✅ $*${RESET}"; }
@@ -54,6 +59,24 @@ warn()    { echo -e "${YELLOW}⚠️  $*${RESET}"; }
 error()   { echo -e "${RED}❌ $*${RESET}" >&2; }
 step()    { echo -e "\n${BOLD}${MAGENTA}━━━ $* ━━━${RESET}"; }
 verbose() { [[ "$VERBOSE" == true ]] && echo -e "  ${DIM}$*${RESET}" || true; }
+
+# Compare two semver-ish versions. Prints -1 (a<b), 0 (==), or 1 (a>b).
+_vercmp() {
+    local a="$1" b="$2"
+    [[ "$a" == "$b" ]] && { echo 0; return; }
+    local lower
+    lower=$(printf '%s\n%s\n' "$a" "$b" | sort -V | head -1)
+    if [[ "$lower" == "$a" ]]; then echo -1; else echo 1; fi
+}
+
+# True (0) if pnpm is missing OR below PNPM_MIN_VERSION.
+_pnpm_needs_install_or_upgrade() {
+    command -v pnpm &>/dev/null || return 0
+    local v cmp
+    v=$(pnpm -v 2>/dev/null) || return 0
+    cmp=$(_vercmp "$v" "$PNPM_MIN_VERSION") || return 0
+    [[ "$cmp" == "-1" ]]
+}
 
 pretty_path() {
     echo "${1/#$HOME/~}"
@@ -464,9 +487,20 @@ install_macos_prerequisites() {
     fi
 
     # --- pnpm (standalone) ---
-    if ! command -v pnpm &>/dev/null; then
-        if confirm "pnpm not found. Install it (standalone)?"; then
-            run_cmd bash -c 'curl -fsSL https://get.pnpm.io/install.sh | sh -'
+    if _pnpm_needs_install_or_upgrade; then
+        local cur_pnpm="" prompt=""
+        if command -v pnpm &>/dev/null; then
+            cur_pnpm=$(pnpm -v 2>/dev/null || echo "unknown")
+            prompt="pnpm ${cur_pnpm} is below required ${PNPM_MIN_VERSION}. Run 'pnpm self-update' now?"
+        else
+            prompt="pnpm not found. Install it (standalone)?"
+        fi
+        if confirm "$prompt"; then
+            if [[ -n "$cur_pnpm" ]]; then
+                run_cmd pnpm self-update
+            else
+                run_cmd bash -c 'curl -fsSL https://get.pnpm.io/install.sh | sh -'
+            fi
             export PNPM_HOME="$HOME/Library/pnpm"
             export PATH="$PNPM_HOME:$PATH"
         fi
@@ -589,9 +623,20 @@ install_linux_prerequisites() {
     fi
 
     # --- pnpm (standalone) ---
-    if ! command -v pnpm &>/dev/null; then
-        if confirm "pnpm not found. Install it (standalone)?"; then
-            run_cmd bash -c 'curl -fsSL https://get.pnpm.io/install.sh | sh -'
+    if _pnpm_needs_install_or_upgrade; then
+        local cur_pnpm="" prompt=""
+        if command -v pnpm &>/dev/null; then
+            cur_pnpm=$(pnpm -v 2>/dev/null || echo "unknown")
+            prompt="pnpm ${cur_pnpm} is below required ${PNPM_MIN_VERSION}. Run 'pnpm self-update' now?"
+        else
+            prompt="pnpm not found. Install it (standalone)?"
+        fi
+        if confirm "$prompt"; then
+            if [[ -n "$cur_pnpm" ]]; then
+                run_cmd pnpm self-update
+            else
+                run_cmd bash -c 'curl -fsSL https://get.pnpm.io/install.sh | sh -'
+            fi
             export PNPM_HOME="$HOME/.local/share/pnpm"
             export PATH="$PNPM_HOME:$PATH"
         fi

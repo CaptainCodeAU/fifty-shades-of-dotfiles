@@ -127,8 +127,22 @@ _show_welcome_full() {
             echo "    Node: ${warn}None active${done} (default: ${default_node:-N/A})"
         else
             local pnpm_ver=$(pnpm -v 2>/dev/null || echo 'N/A')
+            local pnpm_display="$pnpm_ver"
+            # Soft staleness nudge — helpers defined in .zsh_onboarding (loaded earlier).
+            if [[ "$pnpm_ver" != "N/A" ]] && typeset -f _pnpm_get_latest &>/dev/null; then
+                local pnpm_latest
+                pnpm_latest=$(_pnpm_get_latest 2>/dev/null)
+                if [[ -n "$pnpm_latest" && "$pnpm_ver" != "$pnpm_latest" ]] \
+                   && [[ "$(_pnpm_vercmp "$pnpm_ver" "$pnpm_latest")" == "-1" ]]; then
+                    if [[ "$(_pnpm_vercmp "$pnpm_ver" "$PNPM_MIN_VERSION")" == "-1" ]]; then
+                        pnpm_display="${err}${pnpm_ver}${done} ${err}↑${pnpm_latest} (below min ${PNPM_MIN_VERSION} — run pnpm_update)${done}"
+                    else
+                        pnpm_display="${pnpm_ver} ${warn}↑${pnpm_latest} (run pnpm_update)${done}"
+                    fi
+                fi
+            fi
             local bun_ver=$(bun --version 2>/dev/null || echo 'N/A')
-            echo "    Node: ${ok}${active_node}${done} (pnpm: ${pnpm_ver}, bun: ${bun_ver})"
+            echo "    Node: ${ok}${active_node}${done} (pnpm: ${pnpm_display}, bun: ${bun_ver})"
         fi
     else
         echo "    Node: ${err}nvm not found${done}"

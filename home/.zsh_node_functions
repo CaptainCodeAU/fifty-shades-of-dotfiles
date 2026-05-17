@@ -73,6 +73,61 @@ _display_node_hints() {
 
 # --- Environment ---
 
+# Update pnpm to the latest version, with an extra confirm on major-version
+# bumps to avoid surprise breaks. Uses _pnpm_get_latest + _pnpm_vercmp from
+# .zsh_onboarding (sourced earlier in .zshrc).
+# Usage: pnpm_update
+pnpm_update() {
+    if ! command -v pnpm &>/dev/null; then
+        echo "${err}pnpm is not installed.${done}" >&2
+        return 1
+    fi
+
+    local current latest cmp current_major latest_major
+    current=$(pnpm -v 2>/dev/null)
+    latest=$(_pnpm_get_latest 2>/dev/null)
+
+    if [[ -z "$latest" ]]; then
+        echo "${warn}Could not determine latest pnpm version (network check failed or cache empty).${done}"
+        echo "${info}Current pnpm: ${current}. Running 'pnpm self-update' anyway.${done}"
+        pnpm self-update
+        return $?
+    fi
+
+    cmp=$(_pnpm_vercmp "$current" "$latest")
+    if [[ "$cmp" == "0" ]]; then
+        echo "${ok}pnpm ${current} is already the latest.${done}"
+        return 0
+    fi
+    if [[ "$cmp" == "1" ]]; then
+        echo "${warn}Local pnpm ${current} is newer than registry's latest (${latest}). Nothing to do.${done}"
+        return 0
+    fi
+
+    current_major="${current%%.*}"
+    latest_major="${latest%%.*}"
+    if [[ "$current_major" != "$latest_major" ]]; then
+        echo "${warn}Major version bump: pnpm ${current} → ${latest}.${done}"
+        echo "${warn}Major upgrades may introduce breaking changes in lockfiles, workspaces, or CLI flags.${done}"
+        if [[ -t 1 ]]; then
+            read "REPLY?${info}    Proceed with major-version upgrade? [y/N] ${done}"
+            if [[ ! "$REPLY" =~ ^[Yy]$ ]]; then
+                echo "${info}Skipping. To stay on major ${current_major}, run: pnpm self-update ${current_major}${done}"
+                return 0
+            fi
+        fi
+    else
+        echo "${info}Updating pnpm ${current} → ${latest}...${done}"
+    fi
+
+    if pnpm self-update; then
+        echo "${ok}pnpm updated to $(pnpm -v 2>/dev/null).${done}"
+    else
+        echo "${err}pnpm self-update failed.${done}" >&2
+        return 1
+    fi
+}
+
 # Check for a default NVM install and prompt if missing.
 nvm_check_and_install_lts() {
     if ! command -v nvm &>/dev/null || [[ "$(nvm version default)" != "N/A" ]]; then
