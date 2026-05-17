@@ -1,0 +1,31 @@
+# pnpm global configuration (pnpm 11+ only)
+# ------------------------------------------------------------------------------
+# Stow-managed; symlinked to ~/.config/pnpm/config.yaml.
+#
+# Per pnpm 11.x: this file holds non-auth, non-registry settings.
+# Auth + registry settings still live in ~/.npmrc. Per-project overrides go in
+# the project's pnpm-workspace.yaml.
+#
+# These keys are silently ignored by pnpm < 11.x, so the file is harmless on
+# any machine still running 10.x — it activates when PNPM_MIN_VERSION (11.1.2)
+# is satisfied.
+# ------------------------------------------------------------------------------
+
+# Refuse to install packages younger than N minutes.
+# pnpm 11 default: 1440 (1 day). We raise to 4320 (3 days) for tighter
+# protection against publish-and-grab supply-chain attacks (e.g. Mini
+# Shai-Hulud, the npm/PyPI/Packagist campaign that prompted these defaults).
+#
+# Bypass per-package for emergency fixes via `minimumReleaseAgeExclude` in a
+# project's pnpm-workspace.yaml. `pnpm audit --fix` also auto-adds patched
+# versions to that list so security patches aren't gated by this delay.
+minimumReleaseAge: 4320
+
+# Block transitive dependencies that resolve from non-standard sources
+# (git repos, direct tarball URLs) rather than the configured registry.
+# Top-level deps in package.json can still use exotic sources — this only
+# restricts what subdeps can pull in.
+#
+# pnpm 11 default: true. Set explicitly so the policy survives any future
+# default change and is documented as an intentional choice, not an accident.
+blockExoticSubdeps: true

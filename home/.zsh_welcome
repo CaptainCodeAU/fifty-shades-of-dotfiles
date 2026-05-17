@@ -149,7 +149,32 @@ _show_welcome_full() {
                 fi
             fi
         fi
-        echo "    pnpm: ${pnpm_display}"
+        # Supply-chain settings from ~/.config/pnpm/config.yaml (pnpm 11+ only).
+        # Direct file read — faster than `pnpm config get` and shows what's
+        # configured globally, ignoring per-project pnpm-workspace.yaml overrides.
+        local pnpm_settings=""
+        if [[ "$pnpm_ver" != "N/A" ]] && [[ "${pnpm_ver%%.*}" -ge 11 ]]; then
+            local cfg="${XDG_CONFIG_HOME:-$HOME/.config}/pnpm/config.yaml"
+            if [[ -f "$cfg" ]]; then
+                local min_age block_exotic age_human=""
+                min_age=$(grep -E '^minimumReleaseAge:' "$cfg" 2>/dev/null | awk '{print $2}')
+                block_exotic=$(grep -E '^blockExoticSubdeps:' "$cfg" 2>/dev/null | awk '{print $2}')
+                # Convert minutes to most-significant human unit.
+                if [[ -n "$min_age" ]]; then
+                    if   (( min_age == 0 ));    then age_human="off"
+                    elif (( min_age < 60 ));    then age_human="${min_age}m"
+                    elif (( min_age % 1440 == 0 )); then age_human="$((min_age / 1440))d"
+                    elif (( min_age % 60 == 0 ));   then age_human="$((min_age / 60))h"
+                    else age_human="${min_age}m"
+                    fi
+                fi
+                local -a parts=()
+                [[ -n "$age_human" ]]     && parts+=("minReleaseAge: ${age_human}")
+                [[ -n "$block_exotic" ]] && parts+=("blockExoticSubdeps: ${block_exotic}")
+                (( ${#parts[@]} > 0 )) && pnpm_settings=" ${info}(${(j:, :)parts})${done}"
+            fi
+        fi
+        echo "    pnpm: ${pnpm_display}${pnpm_settings}"
     else
         echo "    pnpm: ${err}Not Found${done}"
     fi
