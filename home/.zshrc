@@ -605,22 +605,52 @@ rm() {
 	for arg in "$@"; do
 		[[ "$arg" != -* ]] && targets+=("$arg")
 	done
+	# Platform-aware restore hint: trash-cli ships trash-restore on Linux; macOS uses Finder.
+	local restore_hint
+	if command -v trash-restore &>/dev/null; then
+		restore_hint="recover: trash-restore"
+	else
+		restore_hint="recover: Finder → Put Back"
+	fi
 	if command -v trash &>/dev/null; then
-		command trash "${targets[@]}"
+		command trash "${targets[@]}" && \
+			echo "${info}🗑️  Trashed: ${targets[*]}  (${restore_hint})${done}"
 	elif command -v trash-put &>/dev/null; then
-		command trash-put "${targets[@]}"
+		command trash-put "${targets[@]}" && \
+			echo "${info}🗑️  Trashed: ${targets[*]}  (${restore_hint})${done}"
 	else
 		echo "${err}❌  No trash tool found. Install 'trash' (macOS: brew install trash) or 'trash-cli' (Linux: apt install trash-cli).${done}" >&2
 		return 1
 	fi
 }
 
-# rmdir sends empty directories to trash rather than deleting permanently.
+# rmdir sends empty directories to trash. Mirrors rm()'s symlink warning so that
+# rmdir on a stow-symlinked dir (e.g. ~/.config/zed) prompts before nuking the link.
 rmdir() {
+	local symlinks=()
+	for arg in "$@"; do
+		[[ "$arg" != -* && -L "$arg" ]] && symlinks+=("$arg")
+	done
+	if (( ${#symlinks[@]} > 0 )); then
+		echo "${warn}⚠️  Symlink target(s) detected:${done}"
+		for s in "${symlinks[@]}"; do
+			echo "    $s → $(readlink "$s")"
+		done
+		read "REPLY?${warn}   Proceed? [y/N] ${done}"
+		[[ "$REPLY" =~ ^[Yy]$ ]] || return 1
+	fi
+	local restore_hint
+	if command -v trash-restore &>/dev/null; then
+		restore_hint="recover: trash-restore"
+	else
+		restore_hint="recover: Finder → Put Back"
+	fi
 	if command -v trash &>/dev/null; then
-		command trash "$@"
+		command trash "$@" && \
+			echo "${info}🗑️  Trashed: $*  (${restore_hint})${done}"
 	elif command -v trash-put &>/dev/null; then
-		command trash-put "$@"
+		command trash-put "$@" && \
+			echo "${info}🗑️  Trashed: $*  (${restore_hint})${done}"
 	else
 		echo "${err}❌  No trash tool found. Install 'trash' (macOS: brew install trash) or 'trash-cli' (Linux: apt install trash-cli).${done}" >&2
 		return 1
