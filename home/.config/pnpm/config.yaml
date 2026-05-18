@@ -1,31 +1,49 @@
-# pnpm global configuration (pnpm 11+ only)
+# pnpm global configuration (pnpm 11+)
 # ------------------------------------------------------------------------------
-# Stow-managed; symlinked to ~/.config/pnpm/config.yaml.
+# Stow-managed; symlinked to:
+#   Linux/WSL: ~/.config/pnpm/config.yaml         (pnpm's native XDG path)
+#   macOS:     ~/Library/Preferences/pnpm/config.yaml -> ~/.config/pnpm/config.yaml
+#              (the macOS bridge symlink is created by install.sh)
 #
-# Per pnpm 11.x: this file holds non-auth, non-registry settings.
-# Auth + registry settings still live in ~/.npmrc. Per-project overrides go in
-# the project's pnpm-workspace.yaml.
+# Format: YAML, camelCase keys. pnpm 11 reads non-auth, non-registry settings
+# from this file. Empirically verified: kebab-case keys are silently ignored
+# in YAML — only camelCase works in config.yaml. (Auth + registry settings
+# live in the sibling `rc` file, which DOES use kebab-case INI.)
 #
-# These keys are silently ignored by pnpm < 11.x, so the file is harmless on
-# any machine still running 10.x — it activates when PNPM_MIN_VERSION (11.1.2)
-# is satisfied.
+# Per-project overrides go in the project's pnpm-workspace.yaml.
 # ------------------------------------------------------------------------------
 
-# Refuse to install packages younger than N minutes.
-# pnpm 11 default: 1440 (1 day). We raise to 4320 (3 days) for tighter
-# protection against publish-and-grab supply-chain attacks (e.g. Mini
-# Shai-Hulud, the npm/PyPI/Packagist campaign that prompted these defaults).
-#
-# Bypass per-package for emergency fixes via `minimumReleaseAgeExclude` in a
-# project's pnpm-workspace.yaml. `pnpm audit --fix` also auto-adds patched
-# versions to that list so security patches aren't gated by this delay.
+# Refuse to install packages younger than N minutes. 4320 = 3 days.
+# Widens the detection window for publish-and-grab supply-chain attacks
+# (Mini Shai-Hulud being the prompt). Emergency bypass per-package via
+# `minimumReleaseAgeExclude` in pnpm-workspace.yaml. `pnpm audit --fix`
+# auto-adds patched versions to that exclude list.
+# pnpm 11 default: 1440 (1 day).
 minimumReleaseAge: 4320
 
 # Block transitive dependencies that resolve from non-standard sources
 # (git repos, direct tarball URLs) rather than the configured registry.
 # Top-level deps in package.json can still use exotic sources — this only
-# restricts what subdeps can pull in.
-#
-# pnpm 11 default: true. Set explicitly so the policy survives any future
-# default change and is documented as an intentional choice, not an accident.
+# restricts subdeps.
+# pnpm 11 default: true. Pinned explicitly to survive future default flips.
 blockExoticSubdeps: true
+
+# Validate the package store on each install. Catches corruption or
+# tampering of cached tarballs at install time rather than at runtime.
+# pnpm 11 default: false.
+verifyStoreIntegrity: true
+
+# Refuse to update pnpm-lock.yaml during `pnpm install` unless explicitly
+# asked (via `--no-frozen-lockfile`, `pnpm update`, or `pnpm add`).
+# Matches CI default — dev and CI now agree on what counts as a lockfile
+# change. Prevents accidental drift after a manual package.json edit.
+# pnpm 11 default: false in dev, true in CI.
+preferFrozenLockfile: true
+
+# NOTE: `manage-package-manager-versions` (the global flag that would stop
+# pnpm from auto-installing itself + @pnpm/exe as deps of every project
+# with a `devEngines.packageManager` block) CANNOT be set in this global
+# config.yaml — pnpm 11 explicitly rejects it. To disable per-project, add
+#     managePackageManagerVersions: false
+# to the project's `pnpm-workspace.yaml`. Or use pnpm 11 config dependencies
+# to share that setting across projects. See https://pnpm.io/11.x/config-dependencies

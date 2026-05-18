@@ -37,11 +37,13 @@ REPO_DIR="$SCRIPT_DIR"
 # --- Ensure tool paths are visible to bash ---
 # Tools installed via standalone installers (pnpm, bun, uv) land outside
 # /usr/bin and may not be on PATH in a bash login shell.
-[[ -d "$HOME/.local/bin" ]]           && export PATH="$HOME/.local/bin:$PATH"
-[[ -d "$HOME/.local/share/pnpm" ]]    && export PATH="$HOME/.local/share/pnpm:$PATH"
-[[ -d "$HOME/Library/pnpm" ]]         && export PATH="$HOME/Library/pnpm:$PATH"
-[[ -d "$HOME/.bun/bin" ]]             && export PATH="$HOME/.bun/bin:$PATH"
-[[ -d "$HOME/.cargo/bin" ]]           && export PATH="$HOME/.cargo/bin:$PATH"
+[[ -d "$HOME/.local/bin" ]]              && export PATH="$HOME/.local/bin:$PATH"
+[[ -d "$HOME/.local/share/pnpm" ]]       && export PATH="$HOME/.local/share/pnpm:$PATH"
+[[ -d "$HOME/.local/share/pnpm/bin" ]]   && export PATH="$HOME/.local/share/pnpm/bin:$PATH"
+[[ -d "$HOME/Library/pnpm" ]]            && export PATH="$HOME/Library/pnpm:$PATH"
+[[ -d "$HOME/Library/pnpm/bin" ]]        && export PATH="$HOME/Library/pnpm/bin:$PATH"
+[[ -d "$HOME/.bun/bin" ]]                && export PATH="$HOME/.bun/bin:$PATH"
+[[ -d "$HOME/.cargo/bin" ]]              && export PATH="$HOME/.cargo/bin:$PATH"
 
 # --- Mode flags ---
 DRY_RUN=false
@@ -502,9 +504,41 @@ install_macos_prerequisites() {
                 run_cmd bash -c 'curl -fsSL https://get.pnpm.io/install.sh | sh -'
             fi
             export PNPM_HOME="$HOME/Library/pnpm"
-            export PATH="$PNPM_HOME:$PATH"
+            export PATH="$PNPM_HOME/bin:$PNPM_HOME:$PATH"
+            # Regenerate zsh completion so .zshrc's `source "$PNPM_HOME/_pnpm"`
+            # picks up the just-installed pnpm version. Sourced at .zshrc:255.
+            if command -v pnpm &>/dev/null; then
+                pnpm completion zsh > "$PNPM_HOME/_pnpm" 2>/dev/null || true
+            fi
         fi
     fi
+
+    # --- pnpm config (macOS native path bridge) ---
+    # pnpm 11 reads global config from ~/Library/Preferences/pnpm/ on macOS
+    # (when XDG_CONFIG_HOME is unset). The repo stows config.yaml to
+    # ~/.config/pnpm/ — Linux-native. Bridge the macOS path to the stowed
+    # file so a single source of truth applies on both platforms.
+    # Source: pnpm.mjs getConfigDir().
+    local mac_pref_dir="$HOME/Library/Preferences/pnpm"
+    local mac_yaml="$mac_pref_dir/config.yaml"
+    local stow_yaml="$HOME/.config/pnpm/config.yaml"
+    if [[ -f "$stow_yaml" ]]; then
+        mkdir -p "$mac_pref_dir"
+        if [[ -L "$mac_yaml" ]]; then
+            local existing_target
+            existing_target=$(readlink "$mac_yaml")
+            if [[ "$existing_target" != "$stow_yaml" ]]; then
+                run_cmd ln -sfn "$stow_yaml" "$mac_yaml"
+            fi
+        elif [[ -f "$mac_yaml" ]]; then
+            run_cmd mv "$mac_yaml" "${mac_yaml}.pre-stow.$(date +%Y%m%d-%H%M%S).bak"
+            run_cmd ln -sfn "$stow_yaml" "$mac_yaml"
+        else
+            run_cmd ln -sfn "$stow_yaml" "$mac_yaml"
+        fi
+    fi
+    # NOTE: ~/Library/Preferences/pnpm/rc (kebab-INI) is a separate file pnpm
+    # writes for auth/registry/approve-builds defaults. Leave it alone.
 
     # --- Oh My Zsh ---
     if [[ ! -d "$HOME/.oh-my-zsh" ]]; then
@@ -638,7 +672,12 @@ install_linux_prerequisites() {
                 run_cmd bash -c 'curl -fsSL https://get.pnpm.io/install.sh | sh -'
             fi
             export PNPM_HOME="$HOME/.local/share/pnpm"
-            export PATH="$PNPM_HOME:$PATH"
+            export PATH="$PNPM_HOME/bin:$PNPM_HOME:$PATH"
+            # Regenerate zsh completion so .zshrc's `source "$PNPM_HOME/_pnpm"`
+            # picks up the just-installed pnpm version. Sourced at .zshrc:255.
+            if command -v pnpm &>/dev/null; then
+                pnpm completion zsh > "$PNPM_HOME/_pnpm" 2>/dev/null || true
+            fi
         fi
     fi
 
