@@ -378,6 +378,84 @@ ls "$PNPM_HOME/bin/"
 which <some-globally-installed-binary>  # should resolve to $PNPM_HOME/bin/
 ```
 
+### 3.5 If install fails with `EBADF` / `ERR_PNPM_META_FETCH_FAIL` — check per-binary firewalls FIRST
+
+Symptom:
+
+```
+[WARN] GET https://registry.npmjs.org/<pkg> error (EBADF). Will retry...
+[ERR_PNPM_META_FETCH_FAIL] GET https://registry.npmjs.org/<pkg>: fetch failed
+```
+
+NODE_DEBUG=undici trace shows `connecting ... using https:undefined` →
+`connection ... errored -` (empty error message after the dash) — the
+socket FD was killed before TLS handshake started.
+
+**Most common cause on macOS: a per-binary firewall (Little Snitch, LuLu,
+Murus) is silently dropping pnpm's connections** while letting `curl`,
+`node`, and `bun` through. The firewall's rule is keyed on the
+executable path (`$PNPM_HOME/pnpm`), so a permissive rule for `node`
+does NOT cover `pnpm` (and vice versa).
+
+#### 4-probe diagnostic — isolates in under 30 seconds
+
+```bash
+PKG='@scope/pkg-that-fails'
+
+# 1. curl (libcurl HTTP stack)
+curl -sI -m 5 "https://registry.npmjs.org/${PKG//\//%2F}" | head -3
+
+# 2. Node native fetch (Node's built-in undici)
+node -e "fetch('https://registry.npmjs.org/${PKG//\//%2F}').then(r=>console.log('node:',r.status)).catch(e=>console.error('node-fail:',e.code||e.cause?.code||e.message))"
+
+# 3. Bun (entirely different HTTP stack — not undici)
+bun add -g "$PKG"
+
+# 4. pnpm
+pnpm add -g "$PKG"
+```
+
+**If 1–3 pass and only 4 fails → it's a per-binary firewall.** The
+network, DNS, IPv6, TLS, Node fetch, and Cloudflare are all fine on this
+exact machine at this exact instant. Only pnpm's binary identity is
+being blocked.
+
+#### Fix
+
+1. **Little Snitch**: open Network Monitor → search rules for `pnpm` or
+   check the alert log for blocked connections to `registry.npmjs.org`.
+   Add an Allow rule for `pnpm` to `*.npmjs.org` (and probably
+   `*.cloudflare.com` for tarball CDN).
+2. **LuLu**: same pattern via its rules UI.
+3. **Tailscale exit node / Mullvad / WireGuard split-tunnel**: check
+   whether pnpm traffic is being routed through a tunnel that's not
+   reaching the registry.
+4. **Corporate MDM / Zscaler / Netskope**: contact IT; they typically
+   maintain per-binary allow-lists for development tools.
+
+#### Things that look like the cause but aren't
+
+The following will all FAIL to fix it (verified empirically) — don't
+waste time on them:
+
+- Changing `userAgent` via `pnpm_config_user_agent=...` — firewalls
+  match on binary, not UA
+- `pnpm_config_network_concurrency=1` — not a pool race
+- `NODE_OPTIONS='--dns-result-order=ipv4first --no-network-family-autoselection'`
+  — not Happy Eyeballs / IPv6
+- `sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder` — not
+  DNS cache
+- `exec zsh -l` for a fresh shell — not shell state
+- `pnpm store prune` — not local cache state
+- Disabling `minimumReleaseAge` or any other `config.yaml` setting —
+  policies run AFTER fetch; fetch is what's failing
+- `pnpm self-update` — also uses pnpm's HTTP stack, fails the same way
+
+If probes 1–3 also fail, the cause is genuinely network/DNS/registry
+side. Use standard network diagnostics. But if curl + node fetch + bun
+all succeed and pnpm specifically fails, **stop investigating other
+hypotheses and check your firewall.**
+
 ---
 
 ## 4. Set up clean from scratch (no prior pnpm)
