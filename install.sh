@@ -48,6 +48,7 @@ REPO_DIR="$SCRIPT_DIR"
 # --- Mode flags ---
 DRY_RUN=false
 VERBOSE=false
+SKIP_PREFLIGHT=false
 
 # --- pnpm version policy ---
 # Minimum acceptable pnpm. If pnpm is missing OR below this, install/upgrade
@@ -78,6 +79,212 @@ _pnpm_needs_install_or_upgrade() {
     v=$(pnpm -v 2>/dev/null) || return 0
     cmp=$(_vercmp "$v" "$PNPM_MIN_VERSION") || return 0
     [[ "$cmp" == "-1" ]]
+}
+
+# Pre-flight: detect existing pnpm setups that would conflict with the dotfiles
+# approach (standalone install at $PNPM_HOME, camelCase YAML config, no shell rc
+# appends from `pnpm setup`, no distro/brew/corepack pnpm). Each detection is
+# offered as an interactive fix via the `confirm` helper. User can decline any
+# individual fix and resolve manually. See docs/PNPM_SETUP_GUIDE.md for the full
+# mental model.
+_preflight_pnpm_check() {
+    if [[ "$SKIP_PREFLIGHT" == true ]]; then
+        info "Skipping pre-flight pnpm check (--skip-preflight)"
+        return 0
+    fi
+    step "Pre-flight pnpm conflict check"
+    local issues_found=0
+    local os
+    os=$(check_os)
+
+    # --- Cross-platform ---
+
+    # 1. Multiple pnpm binaries on PATH (brew + standalone + npm-global, etc.)
+    if command -v pnpm &>/dev/null; then
+        local pnpm_paths pnpm_count
+        pnpm_paths=$(which -a pnpm 2>/dev/null | sort -u)
+        pnpm_count=$(echo "$pnpm_paths" | wc -l | tr -d ' ')
+        if (( pnpm_count > 1 )); then
+            warn "Multiple pnpm binaries on PATH:"
+            echo "$pnpm_paths" | sed 's/^/    /'
+            warn "Shell uses the first match. Removed sources below; verify the survivor is your intended one."
+            ((issues_found++))
+        fi
+    fi
+
+    # 2. ~/.npmrc with registry override / auth (may shadow pnpm settings)
+    if [[ -f "$HOME/.npmrc" ]] && grep -qE '^(registry=|//|_auth)' "$HOME/.npmrc" 2>/dev/null; then
+        warn "~/.npmrc has registry/auth content:"
+        grep -E '^(registry=|//|_auth)' "$HOME/.npmrc" | sed 's/^/    /'
+        warn "Custom registry here will override pnpm's expected default."
+        if confirm "Back up and remove ~/.npmrc?"; then
+            run_cmd mv "$HOME/.npmrc" "$HOME/.npmrc.pre-stow.$(date +%Y%m%d-%H%M%S).bak"
+        fi
+        ((issues_found++))
+    fi
+
+    # 3. ~/.config/pnpm/config.yaml is a real file (not a stow symlink)
+    if [[ -f "$HOME/.config/pnpm/config.yaml" ]] && [[ ! -L "$HOME/.config/pnpm/config.yaml" ]]; then
+        warn "~/.config/pnpm/config.yaml is a real file, not a stow symlink."
+        warn "Stow will refuse to link the repo's config.yaml over it."
+        if confirm "Back up the real file so stow can link the repo version?"; then
+            run_cmd mv "$HOME/.config/pnpm/config.yaml" "$HOME/.config/pnpm/config.yaml.pre-stow.$(date +%Y%m%d-%H%M%S).bak"
+        fi
+        ((issues_found++))
+    fi
+
+    # 4. config.yaml with kebab-case keys (silently ignored by pnpm 11 in YAML)
+    local active_cfg=""
+    if [[ "$os" == "macos" ]] && [[ -e "$HOME/Library/Preferences/pnpm/config.yaml" ]]; then
+        active_cfg="$HOME/Library/Preferences/pnpm/config.yaml"
+    elif [[ -e "$HOME/.config/pnpm/config.yaml" ]]; then
+        active_cfg="$HOME/.config/pnpm/config.yaml"
+    fi
+    if [[ -n "$active_cfg" ]] && grep -qE '^[a-z]+(-[a-z]+)+:' "$active_cfg" 2>/dev/null; then
+        warn "Detected kebab-case keys in $(pretty_path "$active_cfg") — pnpm 11 silently ignores them in YAML."
+        warn "Settings keys must be camelCase. Examples found:"
+        grep -nE '^[a-z]+(-[a-z]+)+:' "$active_cfg" | head -5 | sed 's/^/    /'
+        warn "Edit the file to switch keys to camelCase (e.g. minimumReleaseAge), then re-run install.sh."
+        ((issues_found++))
+    fi
+
+    # 5. PNPM_HOME export in private/local rc files outside stow scope
+    local rcfile
+    for rcfile in "$HOME/.zshrc.local" "$HOME/.zshrc.private" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile"; do
+        if [[ -f "$rcfile" ]] && grep -qE '^export PNPM_HOME|^export PATH.*PNPM_HOME' "$rcfile" 2>/dev/null; then
+            warn "PNPM_HOME export found in $(pretty_path "$rcfile"):"
+            grep -nE 'PNPM_HOME' "$rcfile" | head -3 | sed 's/^/    /'
+            warn "The stowed .zshrc already exports PNPM_HOME. Manual exports double-up PATH or conflict."
+            warn "Edit $(pretty_path "$rcfile") to remove the pnpm lines."
+            ((issues_found++))
+        fi
+    done
+
+    # 6. Corepack-managed pnpm
+    if command -v corepack &>/dev/null && corepack ls 2>/dev/null | grep -q pnpm; then
+        warn "Corepack has pnpm enabled. May shadow the standalone install."
+        if confirm "Disable corepack-managed pnpm?"; then
+            run_cmd corepack disable pnpm
+        fi
+        ((issues_found++))
+    fi
+
+    # 7. Running pnpm daemons (may hold store locks)
+    if pgrep -x pnpm &>/dev/null; then
+        warn "Running pnpm processes detected:"
+        pgrep -lx pnpm | head -3 | sed 's/^/    /'
+        if confirm "Stop them with pkill?"; then
+            run_cmd pkill -x pnpm || true
+        fi
+        ((issues_found++))
+    fi
+
+    # --- macOS-only ---
+    if [[ "$os" == "macos" ]]; then
+        # 8. Homebrew pnpm collides with standalone
+        if command -v brew &>/dev/null && brew list pnpm &>/dev/null; then
+            warn "Homebrew has pnpm installed. Collides with the standalone installer."
+            if confirm "Run 'brew uninstall pnpm'?"; then
+                run_cmd brew uninstall pnpm
+            fi
+            ((issues_found++))
+        fi
+
+        # 9. Real file at ~/Library/Preferences/pnpm/config.yaml (not a symlink)
+        local mac_yaml="$HOME/Library/Preferences/pnpm/config.yaml"
+        if [[ -f "$mac_yaml" ]] && [[ ! -L "$mac_yaml" ]]; then
+            warn "$(pretty_path "$mac_yaml") is a real file, not a symlink."
+            warn "install.sh will symlink it to ~/.config/pnpm/config.yaml — needs the real file moved first."
+            if confirm "Back up the real file? (install.sh will then create the bridge symlink)"; then
+                run_cmd mv "$mac_yaml" "${mac_yaml}.pre-stow.$(date +%Y%m%d-%H%M%S).bak"
+            fi
+            ((issues_found++))
+        fi
+
+        # 10. v10 store leftover
+        if [[ -d "$HOME/Library/pnpm/store/v10" ]]; then
+            local v10_size
+            v10_size=$(du -sh "$HOME/Library/pnpm/store/v10" 2>/dev/null | awk '{print $1}')
+            warn "pnpm 10 store at ~/Library/pnpm/store/v10 (${v10_size:-unknown size})."
+            warn "Safe to 'pnpm store prune' once no projects pin pnpm@10.x."
+            ((issues_found++))
+        fi
+
+        # 11. Loose v10 globals layout
+        if [[ -d "$HOME/Library/pnpm/global/5" ]]; then
+            warn "Old pnpm 10 globals at ~/Library/pnpm/global/5."
+            warn "pnpm 11 puts globals in ~/Library/pnpm/global/v11 with shims in ~/Library/pnpm/bin/."
+            warn "Reinstall any still-needed globals via 'pnpm install -g <pkg>', then 'pnpm store prune'."
+            ((issues_found++))
+        fi
+    fi
+
+    # --- Linux/WSL ---
+    if [[ "$os" == "linux" || "$os" == "wsl" ]]; then
+        if command -v dpkg &>/dev/null && dpkg -l 2>/dev/null | grep -qE '^ii\s+pnpm\s'; then
+            warn "apt has pnpm installed. Distro packages lag the standalone version."
+            if confirm "Run 'sudo apt remove pnpm'?"; then
+                run_cmd sudo apt remove pnpm
+            fi
+            ((issues_found++))
+        fi
+        if command -v dnf &>/dev/null && dnf list installed 2>/dev/null | grep -q '^pnpm\.'; then
+            warn "dnf has pnpm installed. Distro packages lag the standalone version."
+            if confirm "Run 'sudo dnf remove pnpm'?"; then
+                run_cmd sudo dnf remove pnpm
+            fi
+            ((issues_found++))
+        fi
+        if command -v pacman &>/dev/null && pacman -Qs '^pnpm$' &>/dev/null; then
+            warn "pacman has pnpm installed. Distro packages lag the standalone version."
+            if confirm "Run 'sudo pacman -R pnpm'?"; then
+                run_cmd sudo pacman -R pnpm
+            fi
+            ((issues_found++))
+        fi
+        if command -v snap &>/dev/null && snap list pnpm &>/dev/null 2>&1; then
+            warn "Snap has pnpm installed. Sandboxing conflicts with standalone setup."
+            if confirm "Run 'snap remove pnpm'?"; then
+                run_cmd snap remove pnpm
+            fi
+            ((issues_found++))
+        fi
+        if [[ -d "$HOME/.local/share/pnpm/global/5" ]]; then
+            warn "Old pnpm 10 globals at ~/.local/share/pnpm/global/5."
+            warn "Reinstall any still-needed globals via 'pnpm install -g <pkg>', then 'pnpm store prune'."
+            ((issues_found++))
+        fi
+    fi
+
+    # --- WSL-only ---
+    if [[ "$os" == "wsl" ]]; then
+        if [[ -n "${PNPM_HOME:-}" ]] && [[ "$PNPM_HOME" == /mnt/[a-z]/* ]]; then
+            error "PNPM_HOME points to a Windows mount: $PNPM_HOME"
+            error "NTFS doesn't support symlinks under WSL2; pnpm will break."
+            error "Fix: export PNPM_HOME=\"\$HOME/.local/share/pnpm\" in your shell rc."
+            ((issues_found++))
+        fi
+        if command -v pnpm &>/dev/null; then
+            local pnpm_path
+            pnpm_path=$(command -v pnpm)
+            if [[ "$pnpm_path" == /mnt/[a-z]/* ]]; then
+                warn "pnpm in PATH is a Windows install: $pnpm_path"
+                warn "WSL and Windows pnpm have different node_modules semantics. Re-order PATH to put WSL pnpm first."
+                ((issues_found++))
+            fi
+        fi
+    fi
+
+    # --- Summary ---
+    echo
+    if (( issues_found > 0 )); then
+        warn "Pre-flight check found $issues_found issue(s)."
+        warn "Resolve them above, or re-run with --skip-preflight to bypass."
+        warn "See docs/PNPM_SETUP_GUIDE.md for detailed remediation guidance."
+    else
+        success "Pre-flight pnpm check: clean."
+    fi
+    return 0
 }
 
 pretty_path() {
@@ -422,6 +629,7 @@ install_yazi_release() {
 }
 
 install_macos_prerequisites() {
+    _preflight_pnpm_check
     # --- Homebrew ---
     if ! command -v brew &>/dev/null; then
         if confirm "Homebrew not found. Install it?"; then
@@ -549,6 +757,7 @@ install_macos_prerequisites() {
 }
 
 install_linux_prerequisites() {
+    _preflight_pnpm_check
     local pkg_mgr=""
     if command -v apt &>/dev/null; then pkg_mgr="apt";
     elif command -v dnf &>/dev/null; then pkg_mgr="dnf";
@@ -1346,6 +1555,7 @@ show_help() {
     echo -e "${BOLD}Modifiers (combinable with any action):${RESET}"
     echo -e "  --verbose, -v             Show detailed diagnostic output"
     echo -e "  --dry-run                 Preview what would be done (no changes)"
+    echo -e "  --skip-preflight          Skip pnpm conflict-detection step"
     echo
     echo -e "${BOLD}What it does:${RESET}"
     echo -e "  1. Checks and installs prerequisites (Homebrew, stow, uv, etc.)"
@@ -1428,6 +1638,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --verbose|-v)  VERBOSE=true; shift ;;
         --dry-run)     DRY_RUN=true; shift ;;
+        --skip-preflight) SKIP_PREFLIGHT=true; shift ;;
         --help|-h)     ACTION="help"; shift ;;
         --check)       ACTION="check"; shift ;;
         --stow-only)   ACTION="stow-only"; shift ;;
