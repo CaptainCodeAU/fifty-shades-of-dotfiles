@@ -126,6 +126,23 @@ pnpm_update() {
         echo "${err}pnpm self-update failed.${done}" >&2
         return 1
     fi
+
+    # Migrate v10 → v11 shim layout: pnpm 11 expects bins in $PNPM_HOME/bin/
+    # but standalone installs and v10 upgrades leave shims at $PNPM_HOME root.
+    # Moving them suppresses the "Detected a pnpm v10 installation layout"
+    # warning on future self-updates. Don't use `pnpm setup` — it appends
+    # PNPM_HOME/PATH to .zshrc which is stow-managed.
+    if [[ -n "$PNPM_HOME" && -f "$PNPM_HOME/pnpm" && ! -f "$PNPM_HOME/bin/pnpm" ]]; then
+        echo "${info}Migrating pnpm to v11 bin/ layout...${done}"
+        mkdir -p "$PNPM_HOME/bin"
+        if cp -p "$PNPM_HOME/pnpm" "$PNPM_HOME/bin/pnpm" && rm "$PNPM_HOME/pnpm"; then
+            [[ -f "$PNPM_HOME/pnpx" ]] && \
+                cp -p "$PNPM_HOME/pnpx" "$PNPM_HOME/bin/pnpx" && rm "$PNPM_HOME/pnpx"
+            echo "${ok}Shims moved to \$PNPM_HOME/bin/.${done}"
+        else
+            echo "${err}Layout migration failed — pnpm shim left at \$PNPM_HOME root.${done}" >&2
+        fi
+    fi
 }
 
 # Check for a default NVM install and prompt if missing.

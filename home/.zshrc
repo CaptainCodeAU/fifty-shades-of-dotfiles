@@ -192,7 +192,6 @@ fi
 if [[ "$IS_MAC" == "true" ]]; then
 	export PNPM_HOME="$HOME/Library/pnpm"
     path+=(
-		"$PNPM_HOME"     # pnpm root (legacy + user scripts)
 		"$PNPM_HOME/bin" # pnpm 11 global bin
 		"$HOME/.lmstudio/bin" # LM Studio CLI (lms)
     )
@@ -202,7 +201,6 @@ fi
 if [[ "$IS_LINUX" == "true" || "$IS_WSL" == "true" ]]; then
 	export PNPM_HOME="$HOME/.local/share/pnpm"
     path+=(
-		"$PNPM_HOME"     # pnpm root (legacy + user scripts)
 		"$PNPM_HOME/bin" # pnpm 11 global bin
     )
 fi
