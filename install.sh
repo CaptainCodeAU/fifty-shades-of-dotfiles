@@ -36,7 +36,9 @@ REPO_DIR="$SCRIPT_DIR"
 
 # --- Ensure tool paths are visible to bash ---
 # Tools installed via standalone installers (pnpm, bun, uv) land outside
-# /usr/bin and may not be on PATH in a bash login shell.
+# /usr/bin and may not be on PATH in a bash login shell. Root PNPM_HOME is
+# included here so install.sh can find a pre-migration v10-layout pnpm to
+# upgrade — the permanent PATH (in .zshrc) only includes bin/.
 [[ -d "$HOME/.local/bin" ]]              && export PATH="$HOME/.local/bin:$PATH"
 [[ -d "$HOME/.local/share/pnpm" ]]       && export PATH="$HOME/.local/share/pnpm:$PATH"
 [[ -d "$HOME/.local/share/pnpm/bin" ]]   && export PATH="$HOME/.local/share/pnpm/bin:$PATH"
@@ -53,7 +55,7 @@ SKIP_PREFLIGHT=false
 # --- pnpm version policy ---
 # Minimum acceptable pnpm. If pnpm is missing OR below this, install/upgrade
 # is offered. Keep in sync with PNPM_MIN_VERSION in home/.zsh_onboarding.
-PNPM_MIN_VERSION="11.1.2"
+PNPM_MIN_VERSION="11.2.2"
 
 # --- Helpers ---
 info()    { echo -e "${CYAN}ℹ️  $*${RESET}"; }
@@ -179,9 +181,16 @@ _preflight_pnpm_check() {
         ((issues_found++))
     fi
 
+    # 8. v10 shim layout (pnpm binary at root instead of bin/)
+    if [[ -n "${PNPM_HOME:-}" && -f "$PNPM_HOME/pnpm" && ! -f "$PNPM_HOME/bin/pnpm" ]]; then
+        warn "pnpm shim at \$PNPM_HOME root (v10 layout). v11 expects \$PNPM_HOME/bin/."
+        warn "Will be migrated automatically during install/upgrade."
+        ((issues_found++))
+    fi
+
     # --- macOS-only ---
     if [[ "$os" == "macos" ]]; then
-        # 8. Homebrew pnpm collides with standalone
+        # 9. Homebrew pnpm collides with standalone
         if command -v brew &>/dev/null && brew list pnpm &>/dev/null; then
             warn "Homebrew has pnpm installed. Collides with the standalone installer."
             if confirm "Run 'brew uninstall pnpm'?"; then
@@ -190,7 +199,7 @@ _preflight_pnpm_check() {
             ((issues_found++))
         fi
 
-        # 9. Real file at ~/Library/Preferences/pnpm/config.yaml (not a symlink)
+        # 10. Real file at ~/Library/Preferences/pnpm/config.yaml (not a symlink)
         local mac_yaml="$HOME/Library/Preferences/pnpm/config.yaml"
         if [[ -f "$mac_yaml" ]] && [[ ! -L "$mac_yaml" ]]; then
             warn "$(pretty_path "$mac_yaml") is a real file, not a symlink."
@@ -201,20 +210,24 @@ _preflight_pnpm_check() {
             ((issues_found++))
         fi
 
-        # 10. v10 store leftover
+        # 11. v10 store leftover — offer to delete (v10 is unsupported)
         if [[ -d "$HOME/Library/pnpm/store/v10" ]]; then
             local v10_size
             v10_size=$(du -sh "$HOME/Library/pnpm/store/v10" 2>/dev/null | awk '{print $1}')
             warn "pnpm 10 store at ~/Library/pnpm/store/v10 (${v10_size:-unknown size})."
-            warn "Safe to 'pnpm store prune' once no projects pin pnpm@10.x."
+            if confirm "Delete v10 store to reclaim disk?"; then
+                run_cmd rm -rf "$HOME/Library/pnpm/store/v10"
+            fi
             ((issues_found++))
         fi
 
-        # 11. Loose v10 globals layout
+        # 12. v10 globals layout — offer to delete (v10 is unsupported)
         if [[ -d "$HOME/Library/pnpm/global/5" ]]; then
             warn "Old pnpm 10 globals at ~/Library/pnpm/global/5."
-            warn "pnpm 11 puts globals in ~/Library/pnpm/global/v11 with shims in ~/Library/pnpm/bin/."
-            warn "Reinstall any still-needed globals via 'pnpm install -g <pkg>', then 'pnpm store prune'."
+            warn "Reinstall any still-needed globals via 'pnpm install -g <pkg>'."
+            if confirm "Delete v10 globals directory?"; then
+                run_cmd rm -rf "$HOME/Library/pnpm/global/5"
+            fi
             ((issues_found++))
         fi
     fi
@@ -251,7 +264,19 @@ _preflight_pnpm_check() {
         fi
         if [[ -d "$HOME/.local/share/pnpm/global/5" ]]; then
             warn "Old pnpm 10 globals at ~/.local/share/pnpm/global/5."
-            warn "Reinstall any still-needed globals via 'pnpm install -g <pkg>', then 'pnpm store prune'."
+            warn "Reinstall any still-needed globals via 'pnpm install -g <pkg>'."
+            if confirm "Delete v10 globals directory?"; then
+                run_cmd rm -rf "$HOME/.local/share/pnpm/global/5"
+            fi
+            ((issues_found++))
+        fi
+        if [[ -d "$HOME/.local/share/pnpm/store/v10" ]]; then
+            local v10_size
+            v10_size=$(du -sh "$HOME/.local/share/pnpm/store/v10" 2>/dev/null | awk '{print $1}')
+            warn "pnpm 10 store at ~/.local/share/pnpm/store/v10 (${v10_size:-unknown size})."
+            if confirm "Delete v10 store to reclaim disk?"; then
+                run_cmd rm -rf "$HOME/.local/share/pnpm/store/v10"
+            fi
             ((issues_found++))
         fi
     fi
@@ -712,11 +737,21 @@ install_macos_prerequisites() {
                 run_cmd bash -c 'curl -fsSL https://get.pnpm.io/install.sh | sh -'
             fi
             export PNPM_HOME="$HOME/Library/pnpm"
-            export PATH="$PNPM_HOME/bin:$PNPM_HOME:$PATH"
+            export PATH="$PNPM_HOME/bin:$PATH"
             # Regenerate zsh completion so .zshrc's `source "$PNPM_HOME/_pnpm"`
             # picks up the just-installed pnpm version. Sourced at .zshrc:255.
             if command -v pnpm &>/dev/null; then
                 pnpm completion zsh > "$PNPM_HOME/_pnpm" 2>/dev/null || true
+            fi
+            # Migrate v10 → v11 shim layout (standalone installs and v10
+            # upgrades leave shims at $PNPM_HOME root; v11 expects bin/).
+            if [[ -f "$PNPM_HOME/pnpm" && ! -f "$PNPM_HOME/bin/pnpm" ]]; then
+                mkdir -p "$PNPM_HOME/bin"
+                if cp -p "$PNPM_HOME/pnpm" "$PNPM_HOME/bin/pnpm" && rm "$PNPM_HOME/pnpm"; then
+                    [[ -f "$PNPM_HOME/pnpx" ]] && \
+                        cp -p "$PNPM_HOME/pnpx" "$PNPM_HOME/bin/pnpx" && rm "$PNPM_HOME/pnpx"
+                    info "pnpm shims migrated to \$PNPM_HOME/bin/."
+                fi
             fi
         fi
     fi
@@ -881,11 +916,21 @@ install_linux_prerequisites() {
                 run_cmd bash -c 'curl -fsSL https://get.pnpm.io/install.sh | sh -'
             fi
             export PNPM_HOME="$HOME/.local/share/pnpm"
-            export PATH="$PNPM_HOME/bin:$PNPM_HOME:$PATH"
+            export PATH="$PNPM_HOME/bin:$PATH"
             # Regenerate zsh completion so .zshrc's `source "$PNPM_HOME/_pnpm"`
             # picks up the just-installed pnpm version. Sourced at .zshrc:255.
             if command -v pnpm &>/dev/null; then
                 pnpm completion zsh > "$PNPM_HOME/_pnpm" 2>/dev/null || true
+            fi
+            # Migrate v10 → v11 shim layout (standalone installs and v10
+            # upgrades leave shims at $PNPM_HOME root; v11 expects bin/).
+            if [[ -f "$PNPM_HOME/pnpm" && ! -f "$PNPM_HOME/bin/pnpm" ]]; then
+                mkdir -p "$PNPM_HOME/bin"
+                if cp -p "$PNPM_HOME/pnpm" "$PNPM_HOME/bin/pnpm" && rm "$PNPM_HOME/pnpm"; then
+                    [[ -f "$PNPM_HOME/pnpx" ]] && \
+                        cp -p "$PNPM_HOME/pnpx" "$PNPM_HOME/bin/pnpx" && rm "$PNPM_HOME/pnpx"
+                    info "pnpm shims migrated to \$PNPM_HOME/bin/."
+                fi
             fi
         fi
     fi
