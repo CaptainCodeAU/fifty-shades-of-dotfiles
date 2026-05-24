@@ -66,11 +66,13 @@ The dotfiles enforce v11 exclusively — `$PNPM_HOME/bin` is the only pnpm
 PATH entry. Any v10 leftovers (`store/v10/`, `global/5/`, root-level shims)
 are detected by `install.sh` preflight checks and offered for deletion.
 
-**Automatic shim migration:** Both `pnpm_update` and `install.sh` detect if
-the pnpm shim sits at `$PNPM_HOME/` root (v10 layout) instead of
-`$PNPM_HOME/bin/` (v11 layout) and move it automatically. This suppresses
-the "Detected a pnpm v10 installation layout" warning without calling
-`pnpm setup` (which would append to the stow-managed `.zshrc`).
+**Automatic root-shim cleanup:** `pnpm self-update` always regenerates shims
+at BOTH `$PNPM_HOME/` root and `$PNPM_HOME/bin/`. Root shims trigger the
+"Detected a pnpm v10 installation layout" warning on every subsequent update.
+Both `pnpm_update` and `install.sh` unconditionally remove root-level shims
+(`pnpm`, `pnpx`, `pn`, `pnx`) after any install or upgrade — only
+`$PNPM_HOME/bin/` remains. Never call `pnpm setup` (appends to stow-managed
+`.zshrc`).
 
 **Global links:** `pnpm link --global` in v11 still drops shims at
 `$PNPM_HOME/` root due to an upstream bug. Since only `$PNPM_HOME/bin` is

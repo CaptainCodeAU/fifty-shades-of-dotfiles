@@ -127,21 +127,17 @@ pnpm_update() {
         return 1
     fi
 
-    # Migrate v10 → v11 shim layout: pnpm 11 expects bins in $PNPM_HOME/bin/
-    # but standalone installs and v10 upgrades leave shims at $PNPM_HOME root.
-    # Moving them suppresses the "Detected a pnpm v10 installation layout"
-    # warning on future self-updates. Don't use `pnpm setup` — it appends
-    # PNPM_HOME/PATH to .zshrc which is stow-managed.
-    if [[ -n "$PNPM_HOME" && -f "$PNPM_HOME/pnpm" && ! -f "$PNPM_HOME/bin/pnpm" ]]; then
-        echo "${info}Migrating pnpm to v11 bin/ layout...${done}"
-        mkdir -p "$PNPM_HOME/bin"
-        if cp -p "$PNPM_HOME/pnpm" "$PNPM_HOME/bin/pnpm" && rm "$PNPM_HOME/pnpm"; then
-            [[ -f "$PNPM_HOME/pnpx" ]] && \
-                cp -p "$PNPM_HOME/pnpx" "$PNPM_HOME/bin/pnpx" && rm "$PNPM_HOME/pnpx"
-            echo "${ok}Shims moved to \$PNPM_HOME/bin/.${done}"
-        else
-            echo "${err}Layout migration failed — pnpm shim left at \$PNPM_HOME root.${done}" >&2
-        fi
+    # pnpm self-update always regenerates shims at BOTH $PNPM_HOME root and
+    # $PNPM_HOME/bin/. Root shims trigger "Detected a pnpm v10 installation
+    # layout" on every future update. Remove them unconditionally — only bin/
+    # is on PATH. Don't use `pnpm setup` — it appends to stow-managed .zshrc.
+    if [[ -n "$PNPM_HOME" && -f "$PNPM_HOME/pnpm" ]]; then
+        echo "${info}Cleaning root-level shims (v11 uses \$PNPM_HOME/bin/ only)...${done}"
+        local shim
+        for shim in pnpm pnpx pn pnx; do
+            [[ -f "$PNPM_HOME/$shim" ]] && rm "$PNPM_HOME/$shim"
+        done
+        echo "${ok}Root shims removed.${done}"
     fi
 }
 
