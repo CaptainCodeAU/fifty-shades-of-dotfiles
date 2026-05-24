@@ -182,10 +182,17 @@ _preflight_pnpm_check() {
     fi
 
     # 8. v10 shim layout (pnpm binary at root instead of bin/)
-    if [[ -n "${PNPM_HOME:-}" && -f "$PNPM_HOME/pnpm" && ! -f "$PNPM_HOME/bin/pnpm" ]]; then
-        warn "pnpm shim at \$PNPM_HOME root (v10 layout). v11 expects \$PNPM_HOME/bin/."
-        warn "Will be migrated automatically during install/upgrade."
-        ((issues_found++))
+    if [[ -n "${PNPM_HOME:-}" && -f "$PNPM_HOME/pnpm" ]]; then
+        warn "pnpm shim at \$PNPM_HOME root (v10 layout). v11 expects \$PNPM_HOME/bin/ only."
+        if confirm "Remove root-level shims (pnpm, pnpx, pn, pnx)?"; then
+            local shim
+            for shim in pnpm pnpx pn pnx; do
+                [[ -f "$PNPM_HOME/$shim" ]] && rm "$PNPM_HOME/$shim"
+            done
+            info "Root shims removed."
+        else
+            ((issues_found++))
+        fi
     fi
 
     # --- macOS-only ---
@@ -743,15 +750,15 @@ install_macos_prerequisites() {
             if command -v pnpm &>/dev/null; then
                 pnpm completion zsh > "$PNPM_HOME/_pnpm" 2>/dev/null || true
             fi
-            # Migrate v10 → v11 shim layout (standalone installs and v10
-            # upgrades leave shims at $PNPM_HOME root; v11 expects bin/).
-            if [[ -f "$PNPM_HOME/pnpm" && ! -f "$PNPM_HOME/bin/pnpm" ]]; then
-                mkdir -p "$PNPM_HOME/bin"
-                if cp -p "$PNPM_HOME/pnpm" "$PNPM_HOME/bin/pnpm" && rm "$PNPM_HOME/pnpm"; then
-                    [[ -f "$PNPM_HOME/pnpx" ]] && \
-                        cp -p "$PNPM_HOME/pnpx" "$PNPM_HOME/bin/pnpx" && rm "$PNPM_HOME/pnpx"
-                    info "pnpm shims migrated to \$PNPM_HOME/bin/."
-                fi
+            # pnpm self-update always regenerates shims at BOTH root and bin/.
+            # Root shims trigger "Detected a pnpm v10 installation layout"
+            # warnings. Remove them — only $PNPM_HOME/bin is on PATH.
+            if [[ -f "$PNPM_HOME/pnpm" ]]; then
+                local shim
+                for shim in pnpm pnpx pn pnx; do
+                    [[ -f "$PNPM_HOME/$shim" ]] && rm "$PNPM_HOME/$shim"
+                done
+                info "Root-level shims removed (v11 layout: \$PNPM_HOME/bin/ only)."
             fi
         fi
     fi
@@ -922,15 +929,15 @@ install_linux_prerequisites() {
             if command -v pnpm &>/dev/null; then
                 pnpm completion zsh > "$PNPM_HOME/_pnpm" 2>/dev/null || true
             fi
-            # Migrate v10 → v11 shim layout (standalone installs and v10
-            # upgrades leave shims at $PNPM_HOME root; v11 expects bin/).
-            if [[ -f "$PNPM_HOME/pnpm" && ! -f "$PNPM_HOME/bin/pnpm" ]]; then
-                mkdir -p "$PNPM_HOME/bin"
-                if cp -p "$PNPM_HOME/pnpm" "$PNPM_HOME/bin/pnpm" && rm "$PNPM_HOME/pnpm"; then
-                    [[ -f "$PNPM_HOME/pnpx" ]] && \
-                        cp -p "$PNPM_HOME/pnpx" "$PNPM_HOME/bin/pnpx" && rm "$PNPM_HOME/pnpx"
-                    info "pnpm shims migrated to \$PNPM_HOME/bin/."
-                fi
+            # pnpm self-update always regenerates shims at BOTH root and bin/.
+            # Root shims trigger "Detected a pnpm v10 installation layout"
+            # warnings. Remove them — only $PNPM_HOME/bin is on PATH.
+            if [[ -f "$PNPM_HOME/pnpm" ]]; then
+                local shim
+                for shim in pnpm pnpx pn pnx; do
+                    [[ -f "$PNPM_HOME/$shim" ]] && rm "$PNPM_HOME/$shim"
+                done
+                info "Root-level shims removed (v11 layout: \$PNPM_HOME/bin/ only)."
             fi
         fi
     fi
