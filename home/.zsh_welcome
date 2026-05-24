@@ -165,7 +165,7 @@ _show_welcome_full() {
             fi
             if [[ -f "$cfg" ]]; then
                 local min_age block_exotic age_human=""
-                # Match both kebab-case (canonical) and camelCase (pnpm accepts both).
+                # Match camelCase (required) or kebab-case (repo may have either).
                 min_age=$(grep -E '^(minimum-release-age|minimumReleaseAge):' "$cfg" 2>/dev/null | awk '{print $2}' | head -1)
                 block_exotic=$(grep -E '^(block-exotic-subdeps|blockExoticSubdeps):' "$cfg" 2>/dev/null | awk '{print $2}' | head -1)
                 # Convert minutes to most-significant human unit.
