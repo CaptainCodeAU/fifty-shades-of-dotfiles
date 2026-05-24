@@ -57,22 +57,25 @@ Different fallback:
 The standalone installer (`curl get.pnpm.io/install.sh | sh -`) sets up
 PNPM_HOME and writes the `pnpm` binary inside it.
 
-### Store layout v10 vs v11
+### Store layout (v11 only)
 
-pnpm 11 uses an SQLite-backed store at `$PNPM_HOME/store/v11/`. pnpm 10
-used a different layout at `$PNPM_HOME/store/v10/`. They coexist — neither
-prunes the other. A machine that upgraded mid-flight will have BOTH.
+pnpm 11 uses an SQLite-backed store at `$PNPM_HOME/store/v11/`. Global
+packages live in `$PNPM_HOME/global/v11/` with shims in `$PNPM_HOME/bin/`.
 
-Global packages:
+The dotfiles enforce v11 exclusively — `$PNPM_HOME/bin` is the only pnpm
+PATH entry. Any v10 leftovers (`store/v10/`, `global/5/`, root-level shims)
+are detected by `install.sh` preflight checks and offered for deletion.
 
-- pnpm 11: shims in `$PNPM_HOME/bin/`, packages in `$PNPM_HOME/global/v11/`.
-- pnpm 10: loose shims directly in `$PNPM_HOME/` (root), packages in
-  `$PNPM_HOME/global/5/`. Old layout — pnpm 11 won't replace these
-  automatically.
+**Automatic shim migration:** Both `pnpm_update` and `install.sh` detect if
+the pnpm shim sits at `$PNPM_HOME/` root (v10 layout) instead of
+`$PNPM_HOME/bin/` (v11 layout) and move it automatically. This suppresses
+the "Detected a pnpm v10 installation layout" warning without calling
+`pnpm setup` (which would append to the stow-managed `.zshrc`).
 
-Both layouts may be present after an upgrade. Both will run, but the loose
-shims at root only resolve if `$PNPM_HOME` (not just `$PNPM_HOME/bin`) is
-on PATH.
+**Global links:** `pnpm link --global` in v11 still drops shims at
+`$PNPM_HOME/` root due to an upstream bug. Since only `$PNPM_HOME/bin` is
+on PATH, use `pnpm install -g` (from a published package or local tarball)
+instead of `pnpm link --global` to ensure shims land in `bin/`.
 
 ### Shell completion
 
@@ -162,11 +165,11 @@ if command -v corepack &>/dev/null && corepack ls 2>/dev/null | grep -q pnpm; th
     report "FAIL" "corepack has pnpm enabled — may shadow standalone"
 fi
 
-# 6. v10 leftovers
+# 6. v10 leftovers (unsupported — should be deleted)
 DATA_DIR="${PNPM_HOME:-$HOME/Library/pnpm}"
 [[ ! -d "$DATA_DIR" && -d "$HOME/.local/share/pnpm" ]] && DATA_DIR="$HOME/.local/share/pnpm"
-[[ -d "$DATA_DIR/store/v10" ]] && report "WARN" "pnpm 10 store still present at $DATA_DIR/store/v10"
-[[ -d "$DATA_DIR/global/5" ]] && report "WARN" "pnpm 10 globals layout at $DATA_DIR/global/5"
+[[ -d "$DATA_DIR/store/v10" ]] && report "FAIL" "pnpm 10 store at $DATA_DIR/store/v10 — delete it"
+[[ -d "$DATA_DIR/global/5" ]] && report "FAIL" "pnpm 10 globals at $DATA_DIR/global/5 — delete it"
 
 # 7. ~/.npmrc with auth/registry
 if [[ -f "$HOME/.npmrc" ]] && grep -qE '^(registry=|//|_auth)' "$HOME/.npmrc" 2>/dev/null; then
@@ -219,14 +222,7 @@ done
 
 ### 2.3 Remove v10 leftovers
 
-Only after confirming no projects on the machine still pin <pnpm@10.x> in
-their `packageManager` field. Check with:
-
-```bash
-grep -lR '"packageManager": "pnpm@10' ~/projects ~/Code ~/CODE 2>/dev/null | head
-```
-
-If clean:
+pnpm v10 is unsupported by the dotfiles. Delete all v10 artifacts:
 
 ```bash
 DATA_DIR="${PNPM_HOME:-$HOME/Library/pnpm}"
@@ -234,6 +230,8 @@ DATA_DIR="${PNPM_HOME:-$HOME/Library/pnpm}"
 rm -rf "$DATA_DIR/store/v10" "$DATA_DIR/global/5"
 pnpm store prune 2>/dev/null || true
 ```
+
+`install.sh` preflight checks detect and offer to delete these automatically.
 
 ### 2.4 Remove `pnpm setup` appends from shell rc
 
@@ -266,10 +264,8 @@ export PNPM_HOME="$HOME/Library/pnpm"
 # Linux/WSL
 # export PNPM_HOME="$HOME/.local/share/pnpm"
 
-# Both PNPM_HOME and PNPM_HOME/bin on PATH:
-# - PNPM_HOME itself: legacy pnpm 10 shims (if any survive)
-# - PNPM_HOME/bin:    pnpm 11 global package shims
-export PATH="$PNPM_HOME:$PNPM_HOME/bin:$PATH"
+# pnpm 11 global shims (v11-only — root dir is NOT on PATH)
+export PATH="$PNPM_HOME/bin:$PATH"
 
 # Shell completion (run once per machine to generate the file)
 [ -s "$PNPM_HOME/_pnpm" ] && source "$PNPM_HOME/_pnpm"
@@ -320,8 +316,7 @@ ln -sfn ~/.config/pnpm/config.yaml ~/Library/Preferences/pnpm/config.yaml
 
 ### 2.8 Reinstall any global packages
 
-Old loose shims at `$PNPM_HOME/` root were pnpm 10 layout. Reinstall under
-pnpm 11; new shims go to `$PNPM_HOME/bin/`:
+Reinstall globals under pnpm 11. Shims go to `$PNPM_HOME/bin/`:
 
 ```bash
 pnpm install -g <pkg1> <pkg2> ...
@@ -516,8 +511,8 @@ ls "$PNPM_HOME/bin/" 2>/dev/null   # ready for global installs
   should fail (e.g. one published in the last hour with
   `minimumReleaseAge: 4320` set). Don't trust `pnpm config get` for YAML
   values.
-- **Add both `$PNPM_HOME` and `$PNPM_HOME/bin`** to PATH. pnpm 11 global
-  shims go into `bin/`; legacy v10 shims (if any survive) sit at the root.
+- **Add only `$PNPM_HOME/bin`** to PATH. pnpm 11 puts all global shims
+  there. The root `$PNPM_HOME/` is NOT on PATH (v10 layout unsupported).
 
 ### DON'T
 
@@ -537,8 +532,8 @@ ls "$PNPM_HOME/bin/" 2>/dev/null   # ready for global installs
   into every new project, put `managePackageManagerVersions: false` in
   each project's `pnpm-workspace.yaml`, or use pnpm 11 config
   dependencies. There is no global escape.
-- **Don't delete `$PNPM_HOME/store/v10/` while pnpm 10–pinned projects
-  exist.** They need that store to satisfy their lockfiles.
+- **Don't keep `$PNPM_HOME/store/v10/`** — pnpm 10 is unsupported. Delete
+  it to reclaim disk. `install.sh` preflight offers to do this automatically.
 - **Don't export `XDG_CONFIG_HOME` globally just to unify pnpm's config
   path on macOS.** Many other tools respect that variable (helm, gh,
   kubectl, neovim, atuin, starship, zellij) and changing it shifts their
