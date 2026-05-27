@@ -729,8 +729,15 @@ node_link() {
     local current_node_version
     current_node_version=$(nvm current 2>/dev/null || node --version 2>/dev/null)
 
+    local link_cmd
+    if [[ "$pm" == "pnpm" ]]; then
+        link_cmd=("$pm" "install" "-g" ".")
+    else
+        link_cmd=("$pm" "link" "--global")
+    fi
+
     echo "${info}Linking '${ok}${project_name}${info}' globally via ${pm}...${done}"
-    if "$pm" link --global; then
+    if "${link_cmd[@]}"; then
         echo "${ok}Successfully linked '${project_name}' globally.${done}"
         echo "${warn}Note: Global links are tied to current nvm Node version (${current_node_version}).${done}"
         echo "${info}Usage: Run '${example}${project_name}${info}' from anywhere.${done}"
@@ -755,10 +762,18 @@ node_unlink() {
     local pm=$(_detect_pkg_manager)
 
     echo "${info}Unlinking '${ok}${project_name}${info}' from global scope via ${pm}...${done}"
-    if "$pm" unlink --global 2>/dev/null; then
-        echo "${ok}Successfully unlinked '${project_name}'.${done}"
+    if [[ "$pm" == "pnpm" ]]; then
+        if "$pm" uninstall -g "$project_name" 2>/dev/null; then
+            echo "${ok}Successfully unlinked '${project_name}'.${done}"
+        else
+            echo "${warn}'${project_name}' was not linked globally (nothing to unlink).${done}"
+        fi
     else
-        echo "${warn}'${project_name}' was not linked globally (nothing to unlink).${done}"
+        if "$pm" unlink --global 2>/dev/null; then
+            echo "${ok}Successfully unlinked '${project_name}'.${done}"
+        else
+            echo "${warn}'${project_name}' was not linked globally (nothing to unlink).${done}"
+        fi
     fi
 }
 

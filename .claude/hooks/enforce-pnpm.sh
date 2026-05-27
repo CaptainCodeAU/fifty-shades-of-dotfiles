@@ -52,4 +52,10 @@ if echo "$STRIPPED" | grep -qE '(^|[;&|]\s*)npx\s+'; then
   deny "Use 'pnpm dlx' or 'bunx' instead of npx"
 fi
 
+# Block pnpm link --global / -g (shims land at root, not bin/)
+if echo "$STRIPPED" | grep -qE '(^|[;&|]\s*)pnpm\s+(link|ln)\s+.*(-g|--global)'; then
+  log_blocked "pnpm link --global → pnpm install -g" "$COMMAND"
+  deny "Use 'pnpm install -g .' instead of 'pnpm link --global' (v11 shim layout bug)"
+fi
+
 exit 0
