@@ -446,9 +446,6 @@ pipx() {
 
 # Hijack npx/npm/yarn — none are used on this system.
 # pnpm and bun are the package managers; npx is replaced by pnpm dlx / bunx.
-# These wrappers enforce the policy at the interactive shell level; the Claude
-# Code hook at .claude/hooks/enforce-pnpm.sh enforces the same policy for
-# commands Claude runs via its Bash tool.
 npx() {
     echo "${warn}⚠️  npx is not used on this system. Use pnpm dlx or bunx instead.${done}"
     echo
