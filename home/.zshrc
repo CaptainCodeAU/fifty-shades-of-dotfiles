@@ -476,6 +476,32 @@ yarn() {
     return 1
 }
 
+# Guard pnpm link --global — shims land at $PNPM_HOME root (v10 layout),
+# not $PNPM_HOME/bin/ (v11 layout). Linked binaries are invisible on PATH.
+pnpm() {
+    if [[ "$1" == "link" || "$1" == "ln" ]]; then
+        local arg
+        for arg in "${@:2}"; do
+            case "$arg" in
+                -g|--global)
+                    echo "${err}BLOCKED: pnpm link --global${done}"
+                    echo
+                    echo "  ${warn}pnpm link --global drops shims at \$PNPM_HOME/ root (v10 layout),${done}"
+                    echo "  ${warn}not \$PNPM_HOME/bin/ (v11). Linked binaries won't be found.${done}"
+                    echo
+                    echo "  Instead of:  ${err}pnpm link --global${done}"
+                    echo "  Run:         ${ok}pnpm install -g .${done}"
+                    return 1
+                    ;;
+                --)
+                    break
+                    ;;
+            esac
+        done
+    fi
+    command pnpm "$@"
+}
+
 # Guard gh auth subcommands that re-add HTTPS credential helpers.
 # Blocks: login, setup-git, refresh (these undermine SSH-only auth).
 # Allows: status, token, switch, logout, and all non-auth gh commands.

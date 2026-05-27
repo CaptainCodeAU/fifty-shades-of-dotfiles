@@ -74,10 +74,11 @@ Both `pnpm_update` and `install.sh` unconditionally remove root-level shims
 `$PNPM_HOME/bin/` remains. Never call `pnpm setup` (appends to stow-managed
 `.zshrc`).
 
-**Global links:** `pnpm link --global` in v11 still drops shims at
-`$PNPM_HOME/` root due to an upstream bug. Since only `$PNPM_HOME/bin` is
-on PATH, use `pnpm install -g` (from a published package or local tarball)
-instead of `pnpm link --global` to ensure shims land in `bin/`.
+**Global links:** `pnpm link --global` is **blocked by a shell wrapper** --
+it drops shims at `$PNPM_HOME/` root (v10 layout), not `$PNPM_HOME/bin/`
+(v11). Use `pnpm install -g .` to link a local project globally, or
+`pnpm install -g <pkg>` for published packages. The `node_link` helper
+handles this automatically.
 
 ### Shell completion
 

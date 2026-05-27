@@ -452,7 +452,7 @@ The setup provides similar automation for Node.js projects, standardizing on `nv
 
 #### Global Node.js Package Management
 
-For CLI tools you're developing, use `node_link` / `node_unlink` / `node_check_global` to manage global symlinks. These auto-detect whether to use `pnpm link --global` or `bun link --global` based on the project's lockfile. Note that global links are tied to the current nvm Node version — switching nvm versions will lose access to the linked binary. For one-off tool execution, use `pnpm dlx` or `bunx` — neither requires global installation. (`npx` is intercepted and will suggest both alternatives.)
+For CLI tools you're developing, use `node_link` / `node_unlink` / `node_check_global` to manage global symlinks. For pnpm projects, `node_link` uses `pnpm install -g .` (not `pnpm link --global`, which is blocked due to a v11 shim layout bug). For bun projects, it uses `bun link --global`. Note that global links are tied to the current nvm Node version -- switching nvm versions will lose access to the linked binary. For one-off tool execution, use `pnpm dlx` or `bunx` -- neither requires global installation. (`npx` is intercepted and will suggest both alternatives.)
 
 ### Docker (`docker_*` functions & aliases)
 
@@ -1134,7 +1134,7 @@ For the full architecture, conventions, migration policy, and add-new-script wor
 | `node_setup`        | `(none)`                          | Sets up an existing project: switches Node version, installs deps, creates `.envrc`.                                                             |
 | `node_clean`        | `(none)`                          | Deletes `node_modules`, build artifacts, caches, and lockfiles.                                                                                  |
 | `node_info`         | `(none)`                          | Displays project dashboard: versions, `.nvmrc` status, scripts, global link status.                                                              |
-| `node_link`         | `(none)`                          | Links current project globally via `pnpm link --global`.                                                                                         |
+| `node_link`         | `(none)`                          | Links current project globally (`pnpm install -g .` for pnpm, `bun link --global` for bun).                                                      |
 | `node_unlink`       | `(none)`                          | Unlinks current project from global scope.                                                                                                       |
 | `node_check_global` | `(none)`                          | Checks if current project is linked globally (returns 0/1).                                                                                      |
 | `create_node_envrc` | `(none)`                          | Creates a rich `.envrc` with nvm auto-switch and project info box.                                                                               |

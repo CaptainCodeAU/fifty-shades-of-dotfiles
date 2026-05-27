@@ -47,3 +47,7 @@ preferFrozenLockfile: true
 #     managePackageManagerVersions: false
 # to the project's `pnpm-workspace.yaml`. Or use pnpm 11 config dependencies
 # to share that setting across projects. See https://pnpm.io/11.x/config-dependencies
+
+# NOTE: pnpm 11.3+ offers `trustLockfile: true` to skip supply-chain
+# verification of lockfile entries. Intentionally NOT set -- the default
+# (false) keeps minimumReleaseAge + trustPolicy lockfile validation active.
