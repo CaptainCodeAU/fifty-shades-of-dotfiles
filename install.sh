@@ -195,6 +195,19 @@ _preflight_pnpm_check() {
         fi
     fi
 
+    # 8b. v10 managed-binary residue. pnpm 11 stores self-managed versions under
+    #     .tools/@pnpm+exe/; the bare .tools/pnpm-exe/ dir holds only old pnpm 10
+    #     binaries (dead weight, not on PATH). Platform-agnostic via PNPM_HOME.
+    if [[ -n "${PNPM_HOME:-}" && -d "$PNPM_HOME/.tools/pnpm-exe" ]]; then
+        local v10_exe_size
+        v10_exe_size=$(du -sh "$PNPM_HOME/.tools/pnpm-exe" 2>/dev/null | awk '{print $1}')
+        warn "Old pnpm 10 managed binaries at \$PNPM_HOME/.tools/pnpm-exe (${v10_exe_size:-unknown size})."
+        if confirm "Delete v10 pnpm-exe binaries?"; then
+            run_cmd rm -rf "$PNPM_HOME/.tools/pnpm-exe"
+        fi
+        ((issues_found++))
+    fi
+
     # --- macOS-only ---
     if [[ "$os" == "macos" ]]; then
         # 9. Homebrew pnpm collides with standalone
