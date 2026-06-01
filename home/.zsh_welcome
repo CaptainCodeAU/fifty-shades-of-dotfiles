@@ -136,17 +136,23 @@ _show_welcome_full() {
     if command -v pnpm &>/dev/null; then
         local pnpm_ver=$(pnpm -v 2>/dev/null || echo 'N/A')
         local pnpm_display="${ok}${pnpm_ver}${done}"
-        # Soft staleness nudge — helpers defined in .zsh_onboarding (loaded earlier).
+        # Soft staleness nudge -- helpers defined in .zsh_onboarding (loaded earlier).
         if [[ "$pnpm_ver" != "N/A" ]] && typeset -f _pnpm_get_latest &>/dev/null; then
-            local pnpm_latest
-            pnpm_latest=$(_pnpm_get_latest 2>/dev/null)
-            if [[ -n "$pnpm_latest" && "$pnpm_ver" != "$pnpm_latest" ]] \
-               && [[ "$(_pnpm_vercmp "$pnpm_ver" "$pnpm_latest")" == "-1" ]]; then
+            local pnpm_latest pnpm_raw
+            pnpm_latest=$(_pnpm_get_latest 2>/dev/null)   # latest eligible (age-gated)
+            pnpm_raw=$(_pnpm_get_raw_latest 2>/dev/null)  # registry dist-tag latest
+            if [[ -n "$pnpm_latest" \
+                  && "$(_pnpm_vercmp "$pnpm_ver" "$pnpm_latest")" == "-1" ]]; then
+                # Behind an installable version -- actionable nag.
                 if [[ "$(_pnpm_vercmp "$pnpm_ver" "$PNPM_MIN_VERSION")" == "-1" ]]; then
-                    pnpm_display="${err}${pnpm_ver}${done} ${err}↑${pnpm_latest} (below min ${PNPM_MIN_VERSION} — run pnpm_update)${done}"
+                    pnpm_display="${err}${pnpm_ver}${done} ${err}↑${pnpm_latest} (below min ${PNPM_MIN_VERSION} -- run pnpm_update)${done}"
                 else
                     pnpm_display="${ok}${pnpm_ver}${done} ${warn}↑${pnpm_latest} (run pnpm_update)${done}"
                 fi
+            elif [[ -n "$pnpm_raw" && "$pnpm_raw" != "$pnpm_ver" \
+                    && "$(_pnpm_vercmp "$pnpm_ver" "$pnpm_raw")" == "-1" ]]; then
+                # At the latest eligible, but a newer version is held by the age gate.
+                pnpm_display="${ok}${pnpm_ver}${done} ${info}(latest eligible; ${pnpm_raw} pending release-age gate)${done}"
             fi
         fi
         # Supply-chain settings from ~/.config/pnpm/config.yaml (pnpm 11+ only).
