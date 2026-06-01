@@ -73,9 +73,12 @@ _display_node_hints() {
 
 # --- Environment ---
 
-# Update pnpm to the latest version, with an extra confirm on major-version
-# bumps to avoid surprise breaks. Uses _pnpm_get_latest + _pnpm_vercmp from
-# .zsh_onboarding (sourced earlier in .zshrc).
+# Update pnpm to the latest version that clears minimumReleaseAge (the same
+# gate `pnpm self-update` enforces), with an extra confirm on major-version
+# bumps to avoid surprise breaks. When a newer version exists but is still held
+# by the release-age gate, it reports that instead of pretending to update.
+# Uses _pnpm_get_latest / _pnpm_get_raw_latest / _pnpm_get_raw_eligible_at /
+# _pnpm_vercmp from .zsh_onboarding (sourced earlier in .zshrc).
 # Usage: pnpm_update
 pnpm_update() {
     if ! command -v pnpm &>/dev/null; then
@@ -83,31 +86,55 @@ pnpm_update() {
         return 1
     fi
 
-    local current latest cmp current_major latest_major
+    local current eligible raw raw_at now cmp current_major eligible_major post
     current=$(pnpm -v 2>/dev/null)
-    latest=$(_pnpm_get_latest 2>/dev/null)
+    eligible=$(_pnpm_get_latest 2>/dev/null)        # latest installable (age-gated)
+    raw=$(_pnpm_get_raw_latest 2>/dev/null)         # registry dist-tag latest
+    raw_at=$(_pnpm_get_raw_eligible_at 2>/dev/null) # epoch raw clears the gate
 
-    if [[ -z "$latest" ]]; then
-        echo "${warn}Could not determine latest pnpm version (network check failed or cache empty).${done}"
+    if [[ -z "$eligible" ]]; then
+        echo "${warn}Could not determine the latest eligible pnpm version (network check failed or cache empty).${done}"
         echo "${info}Current pnpm: ${current}. Running 'pnpm self-update' anyway.${done}"
         pnpm self-update
         return $?
     fi
 
-    cmp=$(_pnpm_vercmp "$current" "$latest")
-    if [[ "$cmp" == "0" ]]; then
-        echo "${ok}pnpm ${current} is already the latest.${done}"
-        return 0
-    fi
-    if [[ "$cmp" == "1" ]]; then
-        echo "${warn}Local pnpm ${current} is newer than registry's latest (${latest}). Nothing to do.${done}"
+    cmp=$(_pnpm_vercmp "$current" "$eligible")
+    if [[ "$cmp" != "-1" ]]; then
+        # Already at (or past) the newest installable version. Do NOT call
+        # self-update -- it would only produce a confusing "already latest" no-op.
+        if [[ "$cmp" == "1" ]]; then
+            echo "${warn}Local pnpm ${current} is newer than the latest eligible (${eligible}). Nothing to do.${done}"
+        else
+            echo "${ok}pnpm ${current} is the latest eligible version.${done}"
+        fi
+        # A newer version may exist but be held back by minimumReleaseAge.
+        if [[ -n "$raw" && "$raw" != "$eligible" \
+              && "$(_pnpm_vercmp "$eligible" "$raw")" == "-1" ]]; then
+            local eta=""
+            if [[ -n "$raw_at" && "$raw_at" =~ ^[0-9]+$ && "$raw_at" -gt 0 ]]; then
+                now=$(date +%s)
+                if (( raw_at > now )); then
+                    local mins=$(( (raw_at - now) / 60 ))
+                    if (( mins >= 60 )); then
+                        eta=" (eligible in ~$(( mins / 60 ))h)"
+                    else
+                        eta=" (eligible in ~${mins}m)"
+                    fi
+                else
+                    eta=" (now eligible; refresh pending)"
+                fi
+            fi
+            echo "${info}pnpm ${raw} is published but held by minimumReleaseAge${eta}.${done}"
+        fi
         return 0
     fi
 
+    # current < eligible: a real, installable update is available.
     current_major="${current%%.*}"
-    latest_major="${latest%%.*}"
-    if [[ "$current_major" != "$latest_major" ]]; then
-        echo "${warn}Major version bump: pnpm ${current} → ${latest}.${done}"
+    eligible_major="${eligible%%.*}"
+    if [[ "$current_major" != "$eligible_major" ]]; then
+        echo "${warn}Major version bump: pnpm ${current} -> ${eligible}.${done}"
         echo "${warn}Major upgrades may introduce breaking changes in lockfiles, workspaces, or CLI flags.${done}"
         if [[ -t 1 ]]; then
             read "REPLY?${info}    Proceed with major-version upgrade? [y/N] ${done}"
@@ -117,11 +144,17 @@ pnpm_update() {
             fi
         fi
     else
-        echo "${info}Updating pnpm ${current} → ${latest}...${done}"
+        echo "${info}Updating pnpm ${current} -> ${eligible}...${done}"
     fi
 
     if pnpm self-update; then
-        echo "${ok}pnpm updated to $(pnpm -v 2>/dev/null).${done}"
+        post=$(pnpm -v 2>/dev/null)
+        if [[ "$post" != "$current" ]]; then
+            echo "${ok}pnpm updated ${current} -> ${post}.${done}"
+        else
+            echo "${warn}pnpm self-update reported success but the version is unchanged (${current}).${done}"
+            echo "${warn}The target may be held by minimumReleaseAge or pinned elsewhere.${done}"
+        fi
     else
         echo "${err}pnpm self-update failed.${done}" >&2
         return 1

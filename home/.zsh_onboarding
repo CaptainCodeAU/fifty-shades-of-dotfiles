@@ -44,7 +44,7 @@ export PNPM_CHECK_TTL_DAYS="${PNPM_CHECK_TTL_DAYS:-7}"
 _pnpm_cache_file() {
     local cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles"
     [[ -d "$cache_dir" ]] || mkdir -p "$cache_dir" 2>/dev/null
-    echo "$cache_dir/pnpm_latest"
+    echo "$cache_dir/pnpm_latest2"
 }
 
 # Cache is fresh if mtime within PNPM_CHECK_TTL_DAYS.
@@ -67,22 +67,92 @@ _pnpm_cache_fresh() {
 _pnpm_refresh_latest_bg() {
     local cache_file="$1"
     (
-        local latest
-        latest=$(curl -fsSL --max-time 5 "https://registry.npmjs.org/pnpm/latest" 2>/dev/null \
+        # raw = registry dist-tag latest (cheap; always attempted first).
+        local raw eligible min_age now cutoff pkg raw_at raw_eligible_at
+        raw=$(curl -fsSL --max-time 5 "https://registry.npmjs.org/pnpm/latest" 2>/dev/null \
             | grep -oE '"version":"[^"]+"' | head -1 | sed 's/.*"\([^"]*\)"/\1/')
-        [[ -n "$latest" ]] && echo "$latest" > "$cache_file"
+        [[ -z "$raw" ]] && return  # network failed; keep any existing cache
+        eligible="$raw"
+        raw_eligible_at=0
+        # eligible = newest stable version old enough to clear minimumReleaseAge,
+        # i.e. what `pnpm self-update` will actually accept. Needs the full
+        # packument (publish times) + jq; degrade to the dist-tag latest otherwise.
+        min_age=$(_pnpm_min_release_age_min)
+        if [[ "$min_age" -gt 0 ]] && command -v jq &>/dev/null; then
+            pkg=$(curl -fsSL --max-time 8 "https://registry.npmjs.org/pnpm" 2>/dev/null)
+            if [[ -n "$pkg" ]]; then
+                now=$(date +%s)
+                cutoff=$(( now - min_age * 60 ))
+                eligible=$(printf '%s' "$pkg" | jq -r --argjson cutoff "$cutoff" '
+                    .time | to_entries
+                    | map(select(.key | test("^[0-9]+\\.[0-9]+\\.[0-9]+$")))
+                    | map(select((.value | sub("\\.[0-9]+Z$";"Z") | fromdateiso8601) <= $cutoff) | .key)
+                    | .[]' 2>/dev/null | sort -V | tail -1)
+                [[ -z "$eligible" ]] && eligible="$raw"
+                if [[ "$raw" != "$eligible" ]]; then
+                    raw_at=$(printf '%s' "$pkg" | jq -r --arg v "$raw" \
+                        '.time[$v] // empty | sub("\\.[0-9]+Z$";"Z") | fromdateiso8601' 2>/dev/null)
+                    [[ -n "$raw_at" ]] && raw_eligible_at=$(( raw_at + min_age * 60 ))
+                fi
+            fi
+        fi
+        {
+            echo "raw=$raw"
+            echo "eligible=$eligible"
+            echo "raw_eligible_at=$raw_eligible_at"
+        } > "$cache_file"
     ) &!
 }
 
-# Echo the cached latest pnpm version. May be empty on very first call
-# before background refresh completes — that's expected; the next shell sees it.
+# Echo the configured minimumReleaseAge in minutes (0 if unset or unreadable).
+# Reads the same config.yaml pnpm itself reads: the macOS Preferences bridge,
+# or the XDG path on Linux/WSL.
+_pnpm_min_release_age_min() {
+    local cfg v
+    if [[ "$OSTYPE" == darwin* && -f "$HOME/Library/Preferences/pnpm/config.yaml" ]]; then
+        cfg="$HOME/Library/Preferences/pnpm/config.yaml"
+    else
+        cfg="${XDG_CONFIG_HOME:-$HOME/.config}/pnpm/config.yaml"
+    fi
+    [[ -f "$cfg" ]] || { echo 0; return; }
+    v=$(grep -oE '^[[:space:]]*minimumReleaseAge[[:space:]]*:[[:space:]]*[0-9]+' "$cfg" 2>/dev/null \
+        | grep -oE '[0-9]+' | tail -1)
+    echo "${v:-0}"
+}
+
+# Read one key=value field from the cache. Tolerates the legacy single-line
+# format (a bare version string) by treating it as both raw and eligible.
+_pnpm_cache_get() {
+    local cache_file="$1" key="$2"
+    [[ -f "$cache_file" ]] || return
+    if grep -q '=' "$cache_file" 2>/dev/null; then
+        grep -E "^${key}=" "$cache_file" 2>/dev/null | head -1 | sed 's/^[^=]*=//'
+    elif [[ "$key" == "raw" || "$key" == "eligible" ]]; then
+        cat "$cache_file" 2>/dev/null
+    fi
+}
+
+# Latest INSTALLABLE pnpm version, honoring minimumReleaseAge -- this is what
+# `pnpm self-update` will actually accept. Triggers a background refresh when
+# the cache is stale. May be empty on the very first call before the refresh
+# completes; the next shell sees the populated value.
 _pnpm_get_latest() {
     local cache_file
     cache_file=$(_pnpm_cache_file)
-    if ! _pnpm_cache_fresh "$cache_file"; then
-        _pnpm_refresh_latest_bg "$cache_file"
-    fi
-    [[ -f "$cache_file" ]] && cat "$cache_file" 2>/dev/null
+    _pnpm_cache_fresh "$cache_file" || _pnpm_refresh_latest_bg "$cache_file"
+    _pnpm_cache_get "$cache_file" eligible
+}
+
+# Raw registry dist-tag latest, ignoring release age. May be newer than what
+# self-update will install (held by the minimumReleaseAge gate). Display only.
+_pnpm_get_raw_latest() {
+    _pnpm_cache_get "$(_pnpm_cache_file)" raw
+}
+
+# Epoch seconds when the raw dist-tag latest clears the release-age gate;
+# 0 when it is not gated or the time is unknown.
+_pnpm_get_raw_eligible_at() {
+    _pnpm_cache_get "$(_pnpm_cache_file)" raw_eligible_at
 }
 
 # Compare two semver-ish versions. Echoes -1 (a<b), 0 (==), or 1 (a>b).
