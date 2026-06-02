@@ -278,6 +278,30 @@ EOF
 }
 
 # =============================================================================
+# pnpm supply-chain on-cd check (opt-in, non-blocking)
+# =============================================================================
+# Defines pnpm_audit_oncd but does NOT run it globally. Enable per project by
+# adding a single line to that project's .envrc:
+#
+#     pnpm_audit_oncd
+#
+# It runs a fast, OFFLINE, NON-BLOCKING structural scan of the current project
+# (exotic sources / missing integrity / hygiene) and prints a one-line warning
+# via direnv's status line if anything moderate or worse is found. It never
+# blocks the shell and never touches the project. For a full network audit
+# (cooldown + advisories), run `pnpm-audit-tree .` manually.
+pnpm_audit_oncd() {
+    command -v pnpm-audit-tree >/dev/null 2>&1 || return 0
+    [[ -f package.json ]] || return 0
+    local out
+    out="$(pnpm-audit-tree "$PWD" --no-recursive --offline --quiet --no-report --fail-on moderate 2>/dev/null)"
+    if [[ -n "$out" ]]; then
+        log_status "pnpm-audit: ${out}  (run: pnpm-audit-tree $PWD)"
+    fi
+    return 0
+}
+
+# =============================================================================
 # Run Setup Hooks
 # =============================================================================
 _setup_vscode_machine_colors

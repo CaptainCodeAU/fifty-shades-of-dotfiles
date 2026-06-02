@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# ============================================================================
+#  pnpm-audit-hook -- git hook wrapper around pnpm-audit-tree
+# ============================================================================
+#
+# Blocks a commit/push when the repo has supply-chain findings at or above a
+# severity floor. Thin wrapper around `pnpm-audit-tree` (the real engine).
+#
+# INSTALL (per repo -- opt-in; symlink so updates propagate):
+#   ln -s "$(command -v pnpm-audit-hook)" .git/hooks/pre-commit   # fast, offline
+#   printf '#!/usr/bin/env bash\nexec pnpm-audit-hook full\n' > .git/hooks/pre-push
+#   chmod +x .git/hooks/pre-commit .git/hooks/pre-push
+#
+# Or globally for all repos (intrusive -- enable deliberately):
+#   git config --global core.hooksPath ~/.config/git/hooks
+#   # then place pre-commit/pre-push shims there.
+#
+# MODES:
+#   fast  (default)  offline structural scan: exotic / integrity / hygiene.
+#                    No network, so it does not slow commits.
+#   full             adds network checks: cooldown + pnpm audit advisories.
+#                    Best for pre-push.
+#
+# ENV:
+#   PNPM_AUDIT_FAILON   severity that blocks: low|moderate|high|critical (default high)
+#   PNPM_AUDIT_DISABLE  set to 1 to bypass entirely (or use `git commit --no-verify`)
+# ============================================================================
+set -uo pipefail
+
+[ "${PNPM_AUDIT_DISABLE:-0}" = "1" ] && exit 0
+
+mode="${1:-fast}"
+failon="${PNPM_AUDIT_FAILON:-high}"
+
+if ! command -v pnpm-audit-tree >/dev/null 2>&1; then
+    # Fail open: do not block commits just because the auditor is not installed.
+    echo "pnpm-audit-hook: pnpm-audit-tree not on PATH; skipping (not blocking)." >&2
+    exit 0
+fi
+
+root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+
+case "$mode" in
+    full) args=(--quiet --no-report --fail-on "$failon") ;;
+    *)    args=(--offline --quiet --no-report --fail-on "$failon") ;;
+esac
+
+if ! pnpm-audit-tree "$root" "${args[@]}"; then
+    echo "" >&2
+    echo "pnpm-audit-hook: supply-chain findings >= ${failon} blocked this ${mode} hook." >&2
+    echo "  Review:  pnpm-audit-tree \"$root\"" >&2
+    echo "  Bypass:  PNPM_AUDIT_DISABLE=1 <git cmd>   (or: git commit --no-verify)" >&2
+    exit 1
+fi
+exit 0
