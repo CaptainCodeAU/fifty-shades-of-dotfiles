@@ -147,7 +147,7 @@ _show_welcome_full() {
                 if [[ "$(_pnpm_vercmp "$pnpm_ver" "$PNPM_MIN_VERSION")" == "-1" ]]; then
                     pnpm_display="${err}${pnpm_ver}${done} ${err}↑${pnpm_latest} (below min ${PNPM_MIN_VERSION} -- run pnpm_update)${done}"
                 else
-                    pnpm_display="${ok}${pnpm_ver}${done} ${warn}↑${pnpm_latest} (run pnpm_update)${done}"
+                    pnpm_display="${warn}${pnpm_ver}${done} ${warn}↑${pnpm_latest} (run pnpm_update)${done}"
                 fi
             elif [[ -n "$pnpm_raw" && "$pnpm_raw" != "$pnpm_ver" \
                     && "$(_pnpm_vercmp "$pnpm_ver" "$pnpm_raw")" == "-1" ]]; then

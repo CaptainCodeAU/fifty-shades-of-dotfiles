@@ -47,7 +47,9 @@ _pnpm_cache_file() {
     echo "$cache_dir/pnpm_latest2"
 }
 
-# Cache is fresh if mtime within PNPM_CHECK_TTL_DAYS.
+# Cache is fresh if its mtime is within PNPM_CHECK_TTL_DAYS AND no version that
+# was held by minimumReleaseAge has since crossed the gate (else the cached
+# `eligible` is stale and must be recomputed before the TTL would expire).
 _pnpm_cache_fresh() {
     local cache_file="$1" max_age now mtime
     [[ -s "$cache_file" ]] || return 1
@@ -59,7 +61,21 @@ _pnpm_cache_fresh() {
         mtime=$(stat -c %Y "$cache_file" 2>/dev/null)
     fi
     [[ -n "$mtime" ]] || return 1
-    (( now - mtime < max_age ))
+    (( now - mtime < max_age )) || return 1   # past the TTL -> stale
+
+    # Within the TTL, still treat the cache as stale (force a refresh) if a raw
+    # version that was gated by minimumReleaseAge has since become eligible.
+    # Without this, `eligible` stays behind `raw` and the banner / pnpm_update
+    # keep reporting "pending" for a version that is actually installable until
+    # the TTL expires. Fields read inline (no helper-in-scope coupling).
+    local c_raw c_elig c_at
+    c_raw=$(grep -E '^raw=' "$cache_file" 2>/dev/null | head -1 | sed 's/^[^=]*=//')
+    c_elig=$(grep -E '^eligible=' "$cache_file" 2>/dev/null | head -1 | sed 's/^[^=]*=//')
+    c_at=$(grep -E '^raw_eligible_at=' "$cache_file" 2>/dev/null | head -1 | sed 's/^[^=]*=//')
+    if [[ -n "$c_raw" && "$c_raw" != "$c_elig" && "$c_at" == <-> ]] && (( c_at > 0 && now >= c_at )); then
+        return 1
+    fi
+    return 0
 }
 
 # Background-refresh cache; never blocks the shell. `&!` is zsh-only —
