@@ -21,6 +21,15 @@
 # pnpm 11 default: 1440 (1 day).
 minimumReleaseAge: 4320
 
+# Do NOT let a package with missing registry `time` metadata skip the cooldown.
+# The default (true) silently bypasses minimumReleaseAge for any version whose
+# packument lacks a publish time -- a metadata-shaped hole straight through the
+# 3-day wall. Set false: such a package is BLOCKED rather than waved through.
+# Paranoid posture (prefer false positives): a legit package with genuinely
+# missing time metadata will fail to install until added to an exclude list.
+# pnpm 11 default: true.
+minimumReleaseAgeIgnoreMissingTime: false
+
 # Block transitive dependencies that resolve from non-standard sources
 # (git repos, direct tarball URLs) rather than the configured registry.
 # Top-level deps in package.json can still use exotic sources — this only
@@ -39,6 +48,35 @@ verifyStoreIntegrity: true
 # change. Prevents accidental drift after a manual package.json edit.
 # pnpm 11 default: false in dev, true in CI.
 preferFrozenLockfile: true
+
+# Fail the install (non-zero exit) if any dependency ships unreviewed lifecycle
+# build scripts (preinstall/install/postinstall) -- the #1 malware delivery
+# vector (Rspack, nx, Shai-Hulud all used postinstall/preinstall). Approve
+# specific packages with `pnpm approve-builds`, which writes an `allowBuilds`
+# map into the project's pnpm-workspace.yaml.
+# Already the pnpm 11 default (true); pinned to survive future default flips --
+# same rationale as blockExoticSubdeps above.
+strictDepBuilds: true
+
+# Never auto-run ALL dependency build scripts. Setting this true reverts to the
+# dangerous pre-v10 behavior and disables the build-approval system entirely
+# (the "dangerously" in the name is the warning).
+# Already the pnpm 11 default (false); pinned defensively.
+dangerouslyAllowAllBuilds: false
+
+# Fail the install if a package's trust evidence has WEAKENED versus an earlier
+# version, ordered by publish date: trusted-publisher > provenance > nothing.
+# This is the only consumer-side install-time signal of weakening publish
+# authentication -- e.g. a package normally shipped from CI suddenly pushed from
+# a stolen-token laptop with no provenance (the nx / s1ngularity attack class).
+# minimumReleaseAge cannot catch that (a malicious version can age out); this can.
+# Aborts with ERR_PNPM_TRUST_DOWNGRADE.
+# Paranoid posture: enabled with NO trustPolicyIgnoreAfter and NO pre-emptive
+# excludes -- false positives are PREFERRED here. Add a specific `name@version`
+# to `trustPolicyExclude` ONLY after manually verifying a flagged version is clean.
+# pnpm default: off. Added v10.21.0; sharpened in-window by 11.4.0 (provenance
+# required before trusted-publisher) and 11.5.0 (staged-publish `approver` ranked top).
+trustPolicy: no-downgrade
 
 # NOTE: `manage-package-manager-versions` (the global flag that would stop
 # pnpm from auto-installing itself + @pnpm/exe as deps of every project
