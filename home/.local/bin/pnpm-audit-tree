@@ -1,0 +1,828 @@
+#!/usr/bin/env -S uv run python3
+# /// script
+# requires-python = ">=3.10"
+# dependencies = []
+# ///
+#
+# ============================================================================
+#  pnpm-audit-tree -- Recursive supply-chain auditor for pnpm/JS project trees
+# ============================================================================
+#
+# WHAT
+# ----
+# Walks a folder, finds every JS project (a directory with package.json,
+# pruning nested node_modules and VCS dirs), and reports each project's
+# dependencies -- and their transitive dependencies -- that violate the
+# supply-chain guardrails this dotfiles repo enforces. It is an AUDIT report,
+# not a pass/fail gate: it ranks findings by severity and rolls up the worst
+# offenders across the whole tree.
+#
+# Checks (paranoid posture -- flags aggressively, prefers false positives):
+#   * advisory       known vulnerabilities via `pnpm audit --json` (GHSA)
+#   * cooldown       dep versions younger than minimumReleaseAge (publish-grab)
+#   * exotic         git / remote-tarball / file: sources (direct AND transitive;
+#                    blockExoticSubdeps only blocks transitive ones)
+#   * integrity      lockfile entries missing an integrity hash
+#   * pm-pin         packageManager pinned to a version younger than the cooldown
+#                    (the `pnpm self-update` bug: it writes raw-latest, ungated)
+#   * hygiene        no lockfile (unpinned); stray package-lock.json / yarn.lock
+#
+# DEFERRED to pnpm's own install-time enforcement (documented in the report,
+# not reimplemented here): trust-downgrade detection (trustPolicy: no-downgrade)
+# and lifecycle-script approval (strictDepBuilds / allowBuilds). Those run when
+# pnpm installs; this tool does not install, so it cannot reproduce them faithfully.
+#
+# SAFETY
+# ------
+# Read-only on your projects. It NEVER runs dependency lifecycle scripts and
+# NEVER mutates a scanned project. The "deep" resolve (for projects with no
+# lockfile, or a stale one) is performed on a COPY in a temp directory with
+# --ignore-scripts --lockfile-only, so the real project is untouched. The only
+# network calls are npm registry metadata + the advisory endpoint -- no code
+# from the audited packages is ever executed. The auditor cannot be turned
+# into an attack surface by a malicious package.
+#
+# ZERO DEPENDENCIES
+# -----------------
+# Pure stdlib (dependencies = [] in the PEP 723 block above). Structured data
+# comes from pnpm's own JSON output (`pnpm audit --json`), the npm registry over
+# urllib, and a focused parser for the lockfile `packages:` block (no PyYAML).
+#
+# USAGE
+# -----
+#   pnpm-audit-tree [FOLDER] [options]
+#
+#   FOLDER                 root to scan. If omitted, falls back to the OS code
+#                          root (~/CODE on macOS, ~/repos on Linux/WSL) and
+#                          PROMPTS for confirmation before scanning everything.
+#   --no-recursive         audit only FOLDER itself, do not walk subdirectories
+#   --deep / --no-deep     dry-run resolve missing/stale lockfiles on a temp copy
+#                          (default: deep on)
+#   --offline              skip all network checks (no cooldown, no advisories)
+#   --min-release-age MIN  override minimumReleaseAge minutes (default: from pnpm config)
+#   --audit-level LEVEL    low|moderate|high|critical advisory floor (default: low)
+#   --fail-on SEVERITY     exit non-zero if any finding >= SEVERITY (for hooks)
+#   --json PATH            also write a JSON report to PATH
+#   --md PATH              write the markdown report to PATH (default: a dated file
+#                          under ~/.cache/dotfiles/pnpm-audit/)
+#   --quiet                minimal output (for direnv / hooks)
+#   --yes                  skip the default-root confirmation prompt (automation)
+#   --max-registry N       cap unique registry metadata lookups (default 2000)
+#
+# EXIT CODES
+#   0  no findings at/above --fail-on (or --fail-on unset)
+#   1  findings at/above --fail-on
+#   2  usage / environment error (no pnpm, bad folder, user declined prompt)
+# ============================================================================
+
+import argparse
+import json
+import os
+import platform
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.error
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass, field
+from pathlib import Path
+
+SEVERITY_ORDER = {"info": 0, "low": 1, "moderate": 2, "high": 3, "critical": 4}
+PRUNE_DIRS = {"node_modules", ".git", ".hg", ".svn", ".jj"}
+REGISTRY = "https://registry.npmjs.org"
+
+
+# --------------------------------------------------------------------------- #
+#  Terminal styling (honors NO_COLOR and non-tty)                             #
+# --------------------------------------------------------------------------- #
+def _supports_color() -> bool:
+    return sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
+
+
+class C:
+    enabled = _supports_color()
+
+    @staticmethod
+    def _w(code: str, s: str) -> str:
+        return f"\033[{code}m{s}\033[0m" if C.enabled else s
+
+    bold = staticmethod(lambda s: C._w("1", s))
+    dim = staticmethod(lambda s: C._w("2", s))
+    red = staticmethod(lambda s: C._w("31", s))
+    green = staticmethod(lambda s: C._w("32", s))
+    yellow = staticmethod(lambda s: C._w("33", s))
+    blue = staticmethod(lambda s: C._w("34", s))
+    magenta = staticmethod(lambda s: C._w("35", s))
+    cyan = staticmethod(lambda s: C._w("36", s))
+
+
+SEV_COLOR = {
+    "critical": C.red,
+    "high": C.red,
+    "moderate": C.yellow,
+    "low": C.cyan,
+    "info": C.dim,
+}
+
+
+def sev_label(sev: str) -> str:
+    return SEV_COLOR.get(sev, C.dim)(sev.upper())
+
+
+# --------------------------------------------------------------------------- #
+#  Finding model                                                              #
+# --------------------------------------------------------------------------- #
+@dataclass
+class Finding:
+    project: str
+    category: str  # advisory | cooldown | exotic | integrity | pm-pin | hygiene
+    severity: str
+    package: str
+    detail: str
+
+    def key(self):
+        return (self.project, self.category, self.package, self.detail)
+
+
+@dataclass
+class ProjectResult:
+    path: str
+    findings: list = field(default_factory=list)
+    notes: list = field(default_factory=list)  # non-finding info (e.g. skipped checks)
+    error: str | None = None
+
+
+# --------------------------------------------------------------------------- #
+#  Environment / config                                                       #
+# --------------------------------------------------------------------------- #
+def os_default_root() -> Path:
+    if platform.system() == "Darwin":
+        return Path.home() / "CODE"
+    return Path.home() / "repos"  # Linux / WSL2 / Ubuntu
+
+
+def pnpm_config_file() -> Path | None:
+    if platform.system() == "Darwin":
+        mac = Path.home() / "Library" / "Preferences" / "pnpm" / "config.yaml"
+        if mac.exists():
+            return mac
+    xdg = Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config"))
+    cfg = xdg / "pnpm" / "config.yaml"
+    return cfg if cfg.exists() else None
+
+
+def read_min_release_age() -> int:
+    """minimumReleaseAge in minutes, read from pnpm config.yaml. 0 if unset."""
+    cfg = pnpm_config_file()
+    if not cfg:
+        return 0
+    try:
+        for line in cfg.read_text().splitlines():
+            m = re.match(r"^\s*minimumReleaseAge\s*:\s*(\d+)", line)
+            if m:
+                return int(m.group(1))
+    except OSError:
+        pass
+    return 0
+
+
+def have_pnpm() -> bool:
+    return shutil.which("pnpm") is not None
+
+
+# --------------------------------------------------------------------------- #
+#  Project discovery                                                          #
+# --------------------------------------------------------------------------- #
+def discover_projects(root: Path, recursive: bool) -> list[Path]:
+    if not recursive:
+        return [root] if (root / "package.json").is_file() else []
+    found: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        # prune in-place so os.walk does not descend
+        dirnames[:] = [d for d in dirnames if d not in PRUNE_DIRS and not d.startswith(".git")]
+        if "package.json" in filenames:
+            found.append(Path(dirpath))
+    return sorted(found)
+
+
+def nearest_lockfile(project: Path, scan_root: Path) -> Path | None:
+    """pnpm-lock.yaml in the project dir, else walk up to scan_root (workspace root)."""
+    cur = project
+    while True:
+        lf = cur / "pnpm-lock.yaml"
+        if lf.is_file():
+            return lf
+        if cur == scan_root or cur == cur.parent:
+            return None
+        cur = cur.parent
+
+
+# --------------------------------------------------------------------------- #
+#  Lockfile parsing (focused stdlib scanner for pnpm-lock v9 `packages:`)     #
+# --------------------------------------------------------------------------- #
+@dataclass
+class Pkg:
+    name: str
+    version: str
+    raw_key: str
+    integrity: bool
+    source: str  # registry | git | tarball | file | unknown
+
+
+def _split_pkg_key(key: str) -> tuple[str, str]:
+    """'@scope/name@1.2.3(peer)' -> ('@scope/name', '1.2.3(peer)')."""
+    key = key.strip().strip("'\"")
+    if key.startswith("@"):
+        at = key.find("@", 1)
+    else:
+        at = key.find("@")
+    if at <= 0:
+        return key, ""
+    return key[:at], key[at + 1 :]
+
+
+GIT_HOSTS = ("codeload.github.com", "github.com", "gitlab.com", "bitbucket.org")
+
+
+def _classify_resolution(res: str, key: str) -> tuple[bool, str]:
+    """Return (has_integrity, source) for a resolution flow-map string.
+    source in {registry, git, tarball, file}. git-host tarballs count as git
+    (pnpm exempts git-host + file: tarballs from the integrity requirement)."""
+    has_integrity = "integrity:" in res
+    low = res.lower()
+    keyl = key.lower()
+    if ("type: git" in low or "type:git" in low or "repo:" in low or "commit:" in low
+            or "git+" in keyl or "git+" in low
+            or any(h in keyl for h in GIT_HOSTS) or any(h in low for h in GIT_HOSTS)):
+        return has_integrity, "git"
+    if "directory:" in low or "type: directory" in low or keyl.startswith("file:") or keyl.startswith("link:"):
+        return has_integrity, "file"
+    if "tarball:" in low:
+        # remote http(s) tarball dependency from a non-git host (no integrity = risk)
+        return has_integrity, "tarball"
+    return has_integrity, "registry"
+
+
+def parse_lockfile(text: str) -> dict:
+    """Parse the subset we need. Returns:
+    {lockfile_version, packages: [Pkg...], direct_names: set[str], parsed: bool}
+    """
+    out = {"lockfile_version": None, "packages": [], "direct_names": set(), "parsed": False}
+    m = re.search(r"^lockfileVersion:\s*'?([\d.]+)'?", text, re.M)
+    if m:
+        out["lockfile_version"] = m.group(1)
+
+    lines = text.splitlines()
+
+    # --- direct dependency names from importers: ---
+    in_importers = False
+    in_dep_block = False
+    for ln in lines:
+        if re.match(r"^importers:\s*$", ln):
+            in_importers = True
+            continue
+        if in_importers and re.match(r"^\S", ln):  # next top-level key
+            in_importers = False
+        if not in_importers:
+            continue
+        if re.match(r"^\s{4}(dependencies|devDependencies|optionalDependencies):\s*$", ln):
+            in_dep_block = True
+            continue
+        if re.match(r"^\s{4}\S", ln) and not re.match(r"^\s{6}", ln):
+            in_dep_block = False
+        if in_dep_block:
+            dm = re.match(r"^\s{6}('?[^:]+?'?):\s*$", ln) or re.match(r"^\s{6}('?[^:]+?'?):\s", ln)
+            if dm:
+                nm = dm.group(1).strip().strip("'\"")
+                if nm:
+                    out["direct_names"].add(nm)
+
+    # --- packages: block ---
+    try:
+        start = None
+        for i, ln in enumerate(lines):
+            if re.match(r"^packages:\s*$", ln):
+                start = i + 1
+                break
+        if start is None:
+            return out
+        i = start
+        n = len(lines)
+        cur_key = None
+        cur_res = None
+        while i < n:
+            ln = lines[i]
+            if re.match(r"^\S", ln):  # next top-level key ends packages:
+                break
+            km = re.match(r"^\s{2}('?[^ ].*?'?):\s*$", ln)
+            if km:
+                # flush previous
+                if cur_key is not None:
+                    _flush_pkg(out, cur_key, cur_res or "")
+                cur_key = km.group(1)
+                cur_res = None
+            else:
+                rm = re.match(r"^\s{4,}resolution:\s*(.*)$", ln)
+                if rm:
+                    cur_res = rm.group(1)
+            i += 1
+        if cur_key is not None:
+            _flush_pkg(out, cur_key, cur_res or "")
+        out["parsed"] = True
+    except Exception:
+        out["parsed"] = False
+    return out
+
+
+def _flush_pkg(out: dict, key: str, res: str) -> None:
+    name, version = _split_pkg_key(key)
+    has_int, source = _classify_resolution(res, key)
+    out["packages"].append(Pkg(name=name, version=version, raw_key=key.strip().strip("'\""),
+                               integrity=has_int, source=source))
+
+
+# --------------------------------------------------------------------------- #
+#  Registry publish-age (for cooldown), cached + threaded                     #
+# --------------------------------------------------------------------------- #
+class RegistryClient:
+    def __init__(self, timeout: float = 8.0, max_lookups: int = 2000):
+        self._cache: dict[str, dict] = {}  # name -> {version: epoch_published}
+        self._timeout = timeout
+        self._max = max_lookups
+        self._count = 0
+        self.capped = False
+
+    def _fetch(self, name: str) -> dict:
+        url = f"{REGISTRY}/{name.replace('/', '%2F') if name.startswith('@') else name}"
+        req = urllib.request.Request(url, headers={"User-Agent": "pnpm-audit-tree"})
+        try:
+            with urllib.request.urlopen(req, timeout=self._timeout) as r:
+                data = json.loads(r.read().decode("utf-8"))
+        except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, TimeoutError, OSError):
+            return {}
+        times = {}
+        for ver, iso in (data.get("time") or {}).items():
+            if ver in ("created", "modified"):
+                continue
+            ep = _iso_to_epoch(iso)
+            if ep is not None:
+                times[ver] = ep
+        return times
+
+    def published_epoch(self, name: str, version: str):
+        if name not in self._cache:
+            if self._count >= self._max:
+                self.capped = True
+                return None
+            self._count += 1
+            self._cache[name] = self._fetch(name)
+        return self._cache[name].get(version)
+
+    def warm(self, names: list[str], workers: int = 16) -> None:
+        todo = [n for n in dict.fromkeys(names) if n not in self._cache]
+        todo = todo[: max(0, self._max - self._count)]
+        if len(names) > len(todo) + len(self._cache):
+            self.capped = True
+        self._count += len(todo)
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futs = {ex.submit(self._fetch, n): n for n in todo}
+            for fut in as_completed(futs):
+                self._cache[futs[fut]] = fut.result()
+
+
+def _iso_to_epoch(iso: str):
+    iso = iso.strip()
+    iso = re.sub(r"\.\d+Z$", "Z", iso)
+    for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S%z"):
+        try:
+            return int(time.mktime(time.strptime(iso, fmt)) - time.timezone)
+        except (ValueError, OverflowError):
+            continue
+    return None
+
+
+# --------------------------------------------------------------------------- #
+#  pnpm audit + deep resolve                                                  #
+# --------------------------------------------------------------------------- #
+def run_pnpm_audit(project: Path, audit_level: str, timeout: float = 90.0):
+    """Return (advisories: list[dict] | None, note: str | None)."""
+    try:
+        proc = subprocess.run(
+            ["pnpm", "audit", "--json", "--audit-level", audit_level],
+            cwd=project, capture_output=True, text=True, timeout=timeout,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+        return None, f"audit skipped ({type(e).__name__})"
+    out = proc.stdout.strip()
+    if not out:
+        return [], None
+    advisories = []
+    # pnpm audit --json emits one JSON object (advisories keyed) -- be tolerant.
+    try:
+        data = json.loads(out)
+    except json.JSONDecodeError:
+        # NDJSON fallback
+        for line in out.splitlines():
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(obj, dict) and obj.get("title"):
+                advisories.append(obj)
+        return advisories, None
+    advs = data.get("advisories")
+    if isinstance(advs, dict):
+        advisories = list(advs.values())
+    elif isinstance(advs, list):
+        advisories = advs
+    return advisories, None
+
+
+def deep_resolve_lockfile(project: Path, timeout: float = 180.0) -> tuple[str | None, str | None]:
+    """Copy manifest to a temp dir and resolve a lockfile with --ignore-scripts
+    --lockfile-only. Returns (lockfile_text, note). Never touches the project."""
+    if not have_pnpm():
+        return None, "deep resolve skipped (no pnpm)"
+    try:
+        with tempfile.TemporaryDirectory(prefix="pnpm-audit-") as td:
+            tmp = Path(td)
+            shutil.copy2(project / "package.json", tmp / "package.json")
+            for extra in ("pnpm-workspace.yaml", "pnpm-lock.yaml", ".npmrc"):
+                src = project / extra
+                if src.is_file():
+                    shutil.copy2(src, tmp / extra)
+            proc = subprocess.run(
+                ["pnpm", "install", "--lockfile-only", "--ignore-scripts", "--silent",
+                 "--config.confirmModulesPurge=false"],
+                cwd=tmp, capture_output=True, text=True, timeout=timeout,
+            )
+            lf = tmp / "pnpm-lock.yaml"
+            if lf.is_file():
+                return lf.read_text(), None
+            return None, f"deep resolve produced no lockfile (rc={proc.returncode})"
+    except (subprocess.TimeoutExpired, OSError) as e:
+        return None, f"deep resolve failed ({type(e).__name__})"
+
+
+# --------------------------------------------------------------------------- #
+#  Per-project analysis                                                       #
+# --------------------------------------------------------------------------- #
+def analyze_project(project: Path, scan_root: Path, args, reg: RegistryClient,
+                    min_age_min: int) -> ProjectResult:
+    res = ProjectResult(path=str(project))
+    add = res.findings.append
+
+    # -- manifest --
+    try:
+        manifest = json.loads((project / "package.json").read_text())
+    except (OSError, json.JSONDecodeError) as e:
+        res.error = f"unreadable package.json ({type(e).__name__})"
+        return res
+
+    # -- hygiene: wrong-PM lockfiles --
+    if (project / "package-lock.json").is_file():
+        add(Finding(res.path, "hygiene", "moderate", "(npm)",
+                    "package-lock.json present -- repo policy is pnpm/bun, not npm"))
+    if (project / "yarn.lock").is_file():
+        add(Finding(res.path, "hygiene", "moderate", "(yarn)",
+                    "yarn.lock present -- repo policy is pnpm/bun, not yarn"))
+
+    # -- packageManager pin vs cooldown (the self-update bug) --
+    pm = manifest.get("packageManager")
+    if isinstance(pm, str) and pm.startswith("pnpm@") and min_age_min > 0 and not args.offline:
+        ver = pm.split("@", 1)[1].split("+", 1)[0]
+        ep = reg.published_epoch("pnpm", ver)
+        if ep is not None:
+            age_min = (time.time() - ep) / 60.0
+            if age_min < min_age_min:
+                add(Finding(res.path, "pm-pin", "high", f"pnpm@{ver}",
+                            f"packageManager pinned to pnpm {ver} published "
+                            f"{age_min/1440:.1f}d ago -- younger than your "
+                            f"{min_age_min/1440:.1f}d cooldown (self-update bypass)"))
+
+    # -- lockfile --
+    lf = nearest_lockfile(project, scan_root)
+    lock_text = None
+    if lf:
+        try:
+            lock_text = lf.read_text()
+        except OSError:
+            res.notes.append("lockfile unreadable")
+    elif args.deep:
+        lock_text, note = deep_resolve_lockfile(project)
+        if note:
+            res.notes.append(note)
+        if lock_text:
+            res.notes.append("lockfile dry-resolved on a temp copy (project untouched)")
+
+    if not lock_text:
+        add(Finding(res.path, "hygiene", "moderate", "(lockfile)",
+                    "no pnpm-lock.yaml -- dependencies are unpinned (no integrity floor)"))
+    else:
+        lock = parse_lockfile(lock_text)
+        if not lock["parsed"]:
+            res.notes.append("lockfile present but packages block could not be parsed")
+        direct = lock["direct_names"]
+        for p in lock["packages"]:
+            if not p.version:
+                continue
+            # exotic source
+            if p.source in ("git", "tarball", "file"):
+                is_direct = p.name in direct
+                sev = "moderate" if is_direct else "high"
+                where = "direct" if is_direct else "transitive"
+                add(Finding(res.path, "exotic", sev, f"{p.name}@{p.version}",
+                            f"{where} dependency from a non-registry source "
+                            f"({p.source}: {p.raw_key})"))
+            # missing integrity (registry/tarball must have it; git/file exempt)
+            if not p.integrity and p.source in ("registry", "tarball"):
+                add(Finding(res.path, "integrity", "high", f"{p.name}@{p.version}",
+                            "lockfile entry has no integrity hash (tamperable)"))
+
+        # cooldown (registry deps only)
+        if min_age_min > 0 and not args.offline:
+            reg_pkgs = [(p.name, p.version) for p in lock["packages"]
+                        if p.source == "registry" and p.version and re.match(r"^\d", p.version)]
+            reg.warm([n for n, _ in reg_pkgs])
+            now = time.time()
+            for name, version in reg_pkgs:
+                clean = version.split("(", 1)[0]
+                ep = reg.published_epoch(name, clean)
+                if ep is None:
+                    continue
+                age_min = (now - ep) / 60.0
+                if age_min < min_age_min:
+                    add(Finding(res.path, "cooldown", "high", f"{name}@{clean}",
+                                f"published {age_min/1440:.2f}d ago -- inside your "
+                                f"{min_age_min/1440:.1f}d cooldown window"))
+
+    # -- advisories --
+    if not args.offline:
+        advisories, note = run_pnpm_audit(project, args.audit_level)
+        if note:
+            res.notes.append(note)
+        for a in advisories or []:
+            sev = (a.get("severity") or "low").lower()
+            name = a.get("module_name") or a.get("name") or "(unknown)"
+            title = a.get("title") or a.get("url") or "known advisory"
+            vuln = a.get("vulnerable_versions") or ""
+            add(Finding(res.path, "advisory", sev, name,
+                        f"{title}{(' [' + vuln + ']') if vuln else ''}"))
+
+    return res
+
+
+# --------------------------------------------------------------------------- #
+#  Reporting                                                                  #
+# --------------------------------------------------------------------------- #
+def severity_rank(sev: str) -> int:
+    return SEVERITY_ORDER.get(sev.lower(), 0)
+
+
+def all_findings(results: list[ProjectResult]) -> list[Finding]:
+    out = []
+    for r in results:
+        out.extend(r.findings)
+    return out
+
+
+def print_terminal(results: list[ProjectResult], min_age_min: int, args, reg: RegistryClient) -> None:
+    findings = all_findings(results)
+    print()
+    print(C.bold(C.magenta("  pnpm-audit-tree  ")) + C.dim(f"-- {len(results)} project(s) scanned"))
+    print(C.dim(f"  minimumReleaseAge: {min_age_min} min ({min_age_min/1440:.1f}d)"
+                f"  |  deep={args.deep}  offline={args.offline}  audit-level={args.audit_level}"))
+    print()
+
+    if not findings:
+        print("  " + C.green("No guardrail violations found.") +
+              C.dim("  (coverage is partial -- see notes)"))
+    else:
+        # severity tally
+        tally = {}
+        for f in findings:
+            tally[f.severity] = tally.get(f.severity, 0) + 1
+        order = sorted(tally, key=severity_rank, reverse=True)
+        print("  " + C.bold("Findings: ") +
+              "  ".join(f"{sev_label(s)} {tally[s]}" for s in order))
+        print()
+        # per project, worst first
+        for r in sorted(results, key=lambda r: max([severity_rank(f.severity) for f in r.findings] or [-1]),
+                        reverse=True):
+            if not r.findings and not r.error:
+                continue
+            rel = r.path
+            print("  " + C.bold(C.blue(rel)))
+            if r.error:
+                print("    " + C.red(f"error: {r.error}"))
+            for f in sorted(r.findings, key=lambda f: severity_rank(f.severity), reverse=True):
+                print(f"    {sev_label(f.severity):<22} {C.cyan(f.category):<22} "
+                      f"{C.bold(f.package)}")
+                print(f"      {C.dim(f.detail)}")
+            for note in r.notes:
+                print("    " + C.dim(f"note: {note}"))
+            print()
+
+    if reg.capped:
+        print("  " + C.yellow(f"WARNING: registry lookups were capped at --max-registry "
+                              f"({args.max_registry}); cooldown coverage is incomplete."))
+    print(C.dim("  Coverage: advisory, cooldown, exotic, integrity, pm-pin, hygiene. "
+                "DEFERRED to pnpm install-time: trust-downgrade (trustPolicy) and "
+                "lifecycle-script approval (strictDepBuilds)."))
+    print()
+
+
+def build_markdown(results: list[ProjectResult], min_age_min: int, args, reg: RegistryClient) -> str:
+    findings = all_findings(results)
+    lines = []
+    lines.append("# pnpm supply-chain audit")
+    lines.append("")
+    lines.append(f"- projects scanned: **{len(results)}**")
+    lines.append(f"- total findings: **{len(findings)}**")
+    lines.append(f"- minimumReleaseAge: {min_age_min} min ({min_age_min/1440:.1f} days)")
+    lines.append(f"- mode: deep={args.deep}, offline={args.offline}, audit-level={args.audit_level}")
+    lines.append("")
+    tally = {}
+    for f in findings:
+        tally[f.severity] = tally.get(f.severity, 0) + 1
+    if tally:
+        lines.append("## Severity summary")
+        lines.append("")
+        lines.append("| Severity | Count |")
+        lines.append("|---|---|")
+        for s in sorted(tally, key=severity_rank, reverse=True):
+            lines.append(f"| {s} | {tally[s]} |")
+        lines.append("")
+    lines.append("## Findings by project")
+    lines.append("")
+    for r in sorted(results, key=lambda r: max([severity_rank(f.severity) for f in r.findings] or [-1]),
+                    reverse=True):
+        if not r.findings and not r.error and not r.notes:
+            continue
+        lines.append(f"### {r.path}")
+        lines.append("")
+        if r.error:
+            lines.append(f"- ERROR: {r.error}")
+        if r.findings:
+            lines.append("| Severity | Category | Package | Detail |")
+            lines.append("|---|---|---|---|")
+            for f in sorted(r.findings, key=lambda f: severity_rank(f.severity), reverse=True):
+                detail = f.detail.replace("|", "\\|")
+                lines.append(f"| {f.severity} | {f.category} | `{f.package}` | {detail} |")
+        for note in r.notes:
+            lines.append(f"- _note: {note}_")
+        lines.append("")
+    lines.append("## Coverage")
+    lines.append("")
+    lines.append("Implemented: advisory (pnpm audit), cooldown (minimumReleaseAge vs registry "
+                 "publish-age), exotic sources (git/tarball/file, direct and transitive), "
+                 "missing integrity, packageManager pin vs cooldown, hygiene (no lockfile / "
+                 "wrong-PM lockfile).")
+    lines.append("")
+    lines.append("Deferred to pnpm install-time enforcement (NOT reimplemented here): "
+                 "trust-downgrade detection (`trustPolicy: no-downgrade`) and lifecycle-script "
+                 "approval (`strictDepBuilds` / `allowBuilds`). Those fire when pnpm installs.")
+    if reg.capped:
+        lines.append("")
+        lines.append(f"> WARNING: registry lookups capped at {args.max_registry}; cooldown "
+                     "coverage incomplete.")
+    lines.append("")
+    return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------- #
+#  Main                                                                       #
+# --------------------------------------------------------------------------- #
+def parse_args(argv):
+    p = argparse.ArgumentParser(
+        prog="pnpm-audit-tree",
+        description="Recursive pnpm supply-chain auditor (read-only, paranoid posture).",
+    )
+    p.add_argument("folder", nargs="?", help="root folder to scan (default: OS code root, with prompt)")
+    p.add_argument("--no-recursive", dest="recursive", action="store_false", help="audit only FOLDER itself")
+    p.add_argument("--deep", dest="deep", action="store_true", default=True, help="dry-resolve missing lockfiles (default)")
+    p.add_argument("--no-deep", dest="deep", action="store_false", help="do not dry-resolve")
+    p.add_argument("--offline", action="store_true", help="skip all network checks")
+    p.add_argument("--min-release-age", type=int, default=None, help="override minimumReleaseAge minutes")
+    p.add_argument("--audit-level", default="low", choices=["low", "moderate", "high", "critical"])
+    p.add_argument("--fail-on", default=None, choices=["low", "moderate", "high", "critical"],
+                   help="exit non-zero if any finding >= this severity")
+    p.add_argument("--json", dest="json_path", help="also write a JSON report here")
+    p.add_argument("--md", dest="md_path", help="write the markdown report here")
+    p.add_argument("--no-report", dest="report", action="store_false", default=True,
+                   help="do not write the default markdown report (for hooks/direnv)")
+    p.add_argument("--quiet", action="store_true", help="minimal output (for hooks/direnv)")
+    p.add_argument("--yes", action="store_true", help="skip the default-root confirmation prompt")
+    p.add_argument("--max-registry", type=int, default=2000, help="cap unique registry lookups")
+    return p.parse_args(argv)
+
+
+def resolve_root(args) -> Path | None:
+    if args.folder:
+        root = Path(args.folder).expanduser()
+        if not root.is_dir():
+            print(C.red(f"error: not a directory: {root}"), file=sys.stderr)
+            return None
+        return root
+    root = os_default_root()
+    if not root.is_dir():
+        print(C.red(f"error: default code root does not exist: {root}"), file=sys.stderr)
+        return None
+    if args.yes or not sys.stdin.isatty():
+        if not args.yes:
+            print(C.red("error: no folder given and not interactive; pass a folder or --yes"),
+                  file=sys.stderr)
+            return None
+        return root
+    print(C.yellow(f"No folder given. This will scan EVERY project under {C.bold(str(root))}."))
+    try:
+        ans = input("  Proceed? [y/N] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return None
+    if ans not in ("y", "yes"):
+        print(C.dim("  Aborted."))
+        return None
+    return root
+
+
+def main(argv) -> int:
+    args = parse_args(argv)
+
+    if not have_pnpm():
+        print(C.red("error: pnpm not found on PATH"), file=sys.stderr)
+        return 2
+
+    root = resolve_root(args)
+    if root is None:
+        return 2
+
+    min_age_min = args.min_release_age if args.min_release_age is not None else read_min_release_age()
+
+    projects = discover_projects(root, args.recursive)
+    if not projects:
+        print(C.yellow(f"No JS projects (package.json) found under {root}."))
+        return 0
+
+    if not args.quiet:
+        print(C.dim(f"Scanning {len(projects)} project(s) under {root} ..."))
+
+    reg = RegistryClient(max_lookups=args.max_registry)
+    results = []
+    for proj in projects:
+        results.append(analyze_project(proj, root, args, reg, min_age_min))
+
+    if not args.quiet:
+        print_terminal(results, min_age_min, args, reg)
+
+    # markdown report (skipped under --no-report unless an explicit --md path is given)
+    if args.md_path or args.report:
+        md = build_markdown(results, min_age_min, args, reg)
+        md_path = Path(args.md_path).expanduser() if args.md_path else \
+            Path(os.environ.get("XDG_CACHE_HOME") or (Path.home() / ".cache")) / "dotfiles" / \
+            "pnpm-audit" / (time.strftime("audit-%Y%m%d-%H%M%S") + ".md")
+        try:
+            md_path.parent.mkdir(parents=True, exist_ok=True)
+            md_path.write_text(md)
+            if not args.quiet:
+                print(C.dim(f"  Markdown report: {md_path}"))
+        except OSError as e:
+            print(C.yellow(f"  could not write markdown report: {e}"), file=sys.stderr)
+
+    if args.json_path:
+        payload = {
+            "root": str(root),
+            "min_release_age_min": min_age_min,
+            "projects": [
+                {"path": r.path, "error": r.error, "notes": r.notes,
+                 "findings": [vars(f) for f in r.findings]}
+                for r in results
+            ],
+        }
+        try:
+            Path(args.json_path).expanduser().write_text(json.dumps(payload, indent=2))
+        except OSError as e:
+            print(C.yellow(f"  could not write json report: {e}"), file=sys.stderr)
+
+    # exit code
+    findings = all_findings(results)
+    if args.fail_on:
+        floor = severity_rank(args.fail_on)
+        if any(severity_rank(f.severity) >= floor for f in findings):
+            if args.quiet:
+                worst = max(findings, key=lambda f: severity_rank(f.severity))
+                print(f"{len(findings)} finding(s); worst={worst.severity}")
+            return 1
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except KeyboardInterrupt:
+        print()
+        sys.exit(130)
