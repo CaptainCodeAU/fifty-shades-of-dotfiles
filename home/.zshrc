@@ -558,6 +558,13 @@ export USE_BUILTIN_RIPGREP=0
 # Spins up a dedicated ssh-agent in a subshell so the GitHub key is never
 # loaded into macOS's system-wide launchd agent. The agent (and key) die
 # when Claude Code exits; a 4h timeout is a safety net for SIGKILL.
+#
+# Per-process telemetry exception: clears DISABLE_TELEMETRY and DO_NOT_TRACK
+# for the claude process ONLY (the global shell stays opt-out for every other
+# tool) so GrowthBook feature flags evaluate and Remote Control can start.
+# OTEL metrics (CLAUDE_CODE_ENABLE_TELEMETRY=0) and error reporting stay off.
+# Pairs with settings.json remoteControlAtStartup:true; also requires a
+# full-scope token from `claude auth login`.
 _claude_launch() {
   local key="$HOME/.ssh/captaincodeau"
 
@@ -567,6 +574,7 @@ _claude_launch() {
       trap 'ssh-agent -k >/dev/null 2>&1' EXIT INT TERM HUP
       ssh-add "$key"
       DISABLE_TELEMETRY= \
+        DO_NOT_TRACK= \
         CLAUDE_CODE_HIDE_ACCOUNT_INFO=1 \
         ENABLE_EXPERIMENTAL_MCP_CLI=1 \
         ENABLE_TOOL_SEARCH=1 \
@@ -574,6 +582,7 @@ _claude_launch() {
     )
   else
     DISABLE_TELEMETRY= \
+      DO_NOT_TRACK= \
       CLAUDE_CODE_HIDE_ACCOUNT_INFO=1 \
       ENABLE_EXPERIMENTAL_MCP_CLI=1 \
       ENABLE_TOOL_SEARCH=1 \
