@@ -232,6 +232,8 @@ _show_welcome_full() {
             _gdisp="${warn}status unknown${done}"
         fi
         echo "    GH API: ${_gdisp}"
+    else
+        echo "    GH API: ${info}pending (launch Claude once)${done}"
     fi
 
     # --- Docker ---
