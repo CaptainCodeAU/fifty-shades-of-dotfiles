@@ -145,6 +145,26 @@ ssh-add -l
 If the agent has identities you didn't load, something added them
 on your behalf. Investigate before pushing.
 
+## GitHub API access (read-only, separate from SSH)
+
+The strict posture above governs **git transport** (clone / fetch / push),
+which is SSH-only. The GitHub **REST API** (issues, pull requests, CI/Actions
+status) is a separate channel that needs a token, not an SSH key. To serve that
+without weakening the SSH posture:
+
+- A **fine-grained, read-only** Personal Access Token is held in the macOS
+  Keychain and exposed as `$GH_TOKEN` **only inside Claude Code sessions** (set
+  by the `_claude_launch` wrapper) - never in ordinary shells, never as a global
+  export. It grants read on issues / PRs / Actions / metadata and **no
+  `Contents`** (cannot read source); any write call returns HTTP 403.
+- `gh auth login` / `setup-git` / `refresh` remain **blocked** (a shell wrapper
+  plus a PreToolUse hook), so the read-only token never touches `~/.gitconfig`
+  and adds no HTTPS credential helper.
+
+Net: a leaked API token can read metadata - it cannot push, rewrite history, or
+read source - a deliberately smaller blast radius than the SSH key, and confined
+to Claude sessions.
+
 ## What this document is not
 
 This is not advocacy for everyone to adopt strict. It is a record
