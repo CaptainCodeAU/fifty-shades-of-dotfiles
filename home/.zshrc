@@ -582,7 +582,7 @@ _claude_launch() {
       ( mkdir -p "${_ghc:h}"
         _h=$(curl -s -o /dev/null -D - -H "Authorization: Bearer $gh_token" https://api.github.com/rate_limit 2>/dev/null)
         _c=$(printf '%s' "$_h" | awk 'NR==1{print $2}' | tr -d '\r')
-        _e=$(printf '%s' "$_h" | awk 'tolower($0) ~ /^x-github-authentication-token-expiration:/{sub(/^[^:]*: /,"");print}' | tr -d '\r')
+        _e=$(printf '%s' "$_h" | awk 'tolower($0) ~ /^(x-)?github-authentication-token-expiration:/{sub(/^[^:]*: /,"");print}' | tr -d '\r')
         if [[ "$_c" == 200 ]]; then _s=alive; elif [[ -n "$_c" ]]; then _s=dead; else _s=unknown; fi
         printf 'status=%s\nchecked=%s\nexpires=%s\n' "$_s" "$_ghn" "$_e" > "$_ghc" ) &!
     fi
