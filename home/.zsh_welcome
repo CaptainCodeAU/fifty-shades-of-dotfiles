@@ -202,6 +202,38 @@ _show_welcome_full() {
         echo "    bun:  ${err}Not Found${done}"
     fi
 
+    # --- GitHub API token (read-only) ---
+    # The status cache is written in the BACKGROUND by _claude_launch during
+    # Claude sessions (the only place $GH_TOKEN exists). The banner only reads
+    # it here - fast, and no token access in plain shells.
+    local gh_cache="${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles/gh_api_status"
+    if [[ -f "$gh_cache" ]]; then
+        local _gst=$(grep '^status=' "$gh_cache" 2>/dev/null | cut -d= -f2)
+        local _gexp=$(grep '^expires=' "$gh_cache" 2>/dev/null | cut -d= -f2-)
+        local _gdate="${_gexp%% *}" _gdisp
+        if [[ "$_gst" == "alive" ]]; then
+            local _gdays=""
+            if [[ -n "$_gdate" ]]; then
+                local _ge=$(date -j -f "%Y-%m-%d" "$_gdate" +%s 2>/dev/null || echo 0)
+                (( _ge > 0 )) && _gdays=$(( (_ge - $(date +%s)) / 86400 ))
+            fi
+            if [[ -n "$_gdays" ]] && (( _gdays < 0 )); then
+                _gdisp="${err}expired ${_gdate}${done}"
+            elif [[ -n "$_gdays" ]] && (( _gdays <= 30 )); then
+                _gdisp="${warn}read-only OK (exp ${_gdate}, ${_gdays}d left)${done}"
+            elif [[ -n "$_gdate" ]]; then
+                _gdisp="${ok}read-only OK${done} ${info}(exp ${_gdate})${done}"
+            else
+                _gdisp="${ok}read-only OK${done}"
+            fi
+        elif [[ "$_gst" == "dead" ]]; then
+            _gdisp="${err}token rejected - rotate it${done}"
+        else
+            _gdisp="${warn}status unknown${done}"
+        fi
+        echo "    GH API: ${_gdisp}"
+    fi
+
     # --- Docker ---
     if command -v docker &>/dev/null; then
         local docker_running=false

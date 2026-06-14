@@ -127,12 +127,13 @@ case "$(uname -s)" in
         ;;
 esac
 
-# --- Secrets from Keychain (macOS only) ---
-# Tokens stored in macOS Keychain — no plaintext secrets in config files.
-# To add a token: security add-generic-password -a "$USER" -s "github-pat" -w "YOUR_TOKEN"
-if [[ "$IS_MAC" == "true" ]]; then
-    export GITHUB_PERSONAL_ACCESS_TOKEN="$(security find-generic-password -a "$USER" -s github-pat -w 2>/dev/null)"
-fi
+# --- GitHub API token (read-only) ---
+# Stored in macOS Keychain as "github-api-readonly" (fine-grained, read-only:
+# issues / PRs / actions / checks / commit-statuses; NO source/contents). It is
+# NOT exported globally - it is read on demand and exposed as $GH_TOKEN only
+# inside _claude_launch() (Claude sessions), so it never sits in every shell.
+# To (re)store the token without leaking it to shell history:
+#   read -rs GH_PAT && security add-generic-password -U -a "$USER" -s github-api-readonly -w "$GH_PAT" && unset GH_PAT
 
 
 # ==============================================================================
@@ -567,6 +568,25 @@ export USE_BUILTIN_RIPGREP=0
 # full-scope token from `claude auth login`.
 _claude_launch() {
   local key="$HOME/.ssh/captaincodeau"
+  # Read-only GitHub API token (macOS Keychain) -> exposed as $GH_TOKEN for this
+  # Claude session and its Bash tool only. Empty on non-macOS; harmless (gh just
+  # stays unauthenticated). gh reads GH_TOKEN; never run `gh auth login`.
+  local gh_token="$(security find-generic-password -a "$USER" -s github-api-readonly -w 2>/dev/null)"
+
+  # Refresh the read-only GH API status cache that the welcome banner reads.
+  # Background, 6h-gated, uses the token we just read; never blocks the launch.
+  if [[ -n "$gh_token" ]]; then
+    local _ghc="${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles/gh_api_status" _ghn=$(date +%s) _ghl=0
+    [[ -f "$_ghc" ]] && _ghl=$(stat -f %m "$_ghc" 2>/dev/null || stat -c %Y "$_ghc" 2>/dev/null || echo 0)
+    if (( _ghn - _ghl > 21600 )); then
+      ( mkdir -p "${_ghc:h}"
+        _h=$(curl -s -o /dev/null -D - -H "Authorization: Bearer $gh_token" https://api.github.com/rate_limit 2>/dev/null)
+        _c=$(printf '%s' "$_h" | awk 'NR==1{print $2}' | tr -d '\r')
+        _e=$(printf '%s' "$_h" | awk 'tolower($0) ~ /^x-github-authentication-token-expiration:/{sub(/^[^:]*: /,"");print}' | tr -d '\r')
+        if [[ "$_c" == 200 ]]; then _s=alive; elif [[ -n "$_c" ]]; then _s=dead; else _s=unknown; fi
+        printf 'status=%s\nchecked=%s\nexpires=%s\n' "$_s" "$_ghn" "$_e" > "$_ghc" ) &!
+    fi
+  fi
 
   if [[ -f "$key" ]]; then
     (
@@ -575,6 +595,7 @@ _claude_launch() {
       ssh-add "$key"
       DISABLE_TELEMETRY= \
         DO_NOT_TRACK= \
+        GH_TOKEN="$gh_token" \
         CLAUDE_CODE_HIDE_ACCOUNT_INFO=1 \
         ENABLE_EXPERIMENTAL_MCP_CLI=1 \
         ENABLE_TOOL_SEARCH=1 \
@@ -583,6 +604,7 @@ _claude_launch() {
   else
     DISABLE_TELEMETRY= \
       DO_NOT_TRACK= \
+      GH_TOKEN="$gh_token" \
       CLAUDE_CODE_HIDE_ACCOUNT_INFO=1 \
       ENABLE_EXPERIMENTAL_MCP_CLI=1 \
       ENABLE_TOOL_SEARCH=1 \
