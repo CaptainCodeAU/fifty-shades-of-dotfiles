@@ -50,7 +50,7 @@ If you just want the shell functions without the full install, you can symlink i
 2. **Core Tools**: Install the essential technologies using Homebrew.
 
    ```bash
-   brew install stow uv direnv jq zoxide eza fzf tmux ripgrep fd gh git-lfs safe-rm neovim glow
+   brew install stow uv direnv jq zoxide eza fzf tmux ripgrep fd gh git-lfs neovim glow
    ```
 
    > **Note:** `stow` is used by the installer to symlink dotfiles from this repo into `~/`. `jq` is required by the direnv color profile system and the project settings scaffolding script, as well as Node.js scaffolding and onboarding checks. `zoxide` replaces `cd`, `eza` powers the `l`/`ll` aliases, `fzf` provides fuzzy finding, `tmux` powers session management, `ripgrep` (`rg`) enables fast code search, `fd` is a fast `find` alternative, `gh` is the GitHub CLI (for PRs, issues, and API; Git transport itself is SSH-only, not via gh), `git-lfs` enables Git Large File Storage, the `rm`/`rmdir` shell wrappers route deletions to the system Trash (recoverable via Finder / file manager), `neovim` is the default `$EDITOR` (with fallback to vim/vi), and `glow` renders Markdown files beautifully in the terminal.
@@ -220,7 +220,7 @@ run_onboarding
 
 | Category                 | Tools                                                  |
 | ------------------------ | ------------------------------------------------------ |
-| **Essential**            | git, curl, unzip, stow, safe-rm                        |
+| **Essential**            | git, curl, unzip, stow                                 |
 | **User Experience**      | eza, fzf, jq, direnv, zoxide, fd, yazi, glow           |
 | **CLI Tools**            | ripgrep, neovim, tree, neofetch, ffmpeg, yt-dlp, aria2 |
 | **Git**                  | gh, git-lfs                                            |
@@ -868,7 +868,6 @@ fifty-shades-of-dotfiles/
 │   ├── .vimrc                        # Vim config → ~/.vimrc
 │   │
 │   └── .config/                       # Files that go in ~/.config/
-│       ├── safe-rm                    # safe-rm protected paths → ~/.config/safe-rm
 │       ├── direnv/                    # direnv configs → ~/.config/direnv/
 │       │   ├── direnv.toml
 │       │   └── direnvrc              # Machine color profiles + env hooks
@@ -953,7 +952,6 @@ fifty-shades-of-dotfiles/
 - **`home/.zsh_onboarding`**: Cross-platform onboarding script that detects missing tools and offers to install them on any OS.
 - **`home/.zsh_welcome`**: Unified cross-platform welcome script with verbosity controls, auto-detection for SSH/tmux, and environment overview.
 - **`home/.vimrc`**: Lightweight Vim configuration with line numbers, search highlighting, tab settings, and sensible defaults.
-- **`home/.config/safe-rm`**: User-level safe-rm configuration listing protected paths (one per line). Acts as an additional protection layer against accidental deletion of critical system directories. The primary deletion safety comes from the `rm()` zsh wrapper which routes through OS-native trash tools.
 - **`home/.config/direnv/`**: direnv configuration files. `direnvrc` reads color profiles from `color-profiles.json` via `jq` and applies machine-specific colors to VSCode/Cursor title bars, status bars, and borders.
 - **`home/.config/zshrc/color-profiles.json`**: 10 named color profiles (single source of truth). Used by both direnvrc (machine-level) and `init-vscode-project-settings.sh` (project-level).
 - **`home/.config/zshrc/init-vscode-project-settings.sh`**: Scaffolds `.vscode/settings.json` with a color profile and font settings. Supports `--profile`, `--random`, and `--list` flags.
@@ -1099,7 +1097,7 @@ For the full architecture, conventions, migration policy, and add-new-script wor
 
 ### Special Functions
 
-- **`rm()` wrapper**: Two-layer deletion safety net. First warns before deleting symlinks (shows link target, prompts for confirmation). Then sends files to trash via `trash` (macOS, recoverable in Finder) or `trash-put` (Linux, recoverable in file manager). Refuses to proceed if neither trash tool is installed. The separate `~/.config/safe-rm` file provides an additional protection layer listing paths that should never be deleted.
+- **`rm()` wrapper**: Two-layer deletion safety net. First warns before deleting symlinks (shows link target, prompts for confirmation). Then sends files to trash via `trash` (macOS, recoverable in Finder) or `trash-put` (Linux, recoverable in file manager). Refuses to proceed if neither trash tool is installed.
 - **`cp()`/`mv()` wrappers**: Default to interactive overwrite protection (`-i`) so you are prompted before clobbering existing files. Explicit force flags (`-f`, e.g. `-rf`) bypass prompts when you intentionally want non-interactive overwrite behavior.
 - **`sudo()` wrapper**: Prevents accidental `sudo claude` commands and redirects appropriately
 - **`pip()` wrapper**: Intercepts `pip install` → `uv add` and `pip uninstall` → `uv remove`; passes through editable installs and read-only subcommands via `uv pip`
