@@ -558,7 +558,7 @@ export USE_BUILTIN_RIPGREP=0
 # Isolated ephemeral SSH agent per Claude Code session.
 # Spins up a dedicated ssh-agent in a subshell so the GitHub key is never
 # loaded into macOS's system-wide launchd agent. The agent (and key) die
-# when Claude Code exits; a 4h timeout is a safety net for SIGKILL.
+# when Claude Code exits; a 12h timeout is a safety net for SIGKILL.
 #
 # Per-process telemetry exception: clears DISABLE_TELEMETRY and DO_NOT_TRACK
 # for the claude process ONLY (the global shell stays opt-out for every other
@@ -590,7 +590,7 @@ _claude_launch() {
 
   if [[ -f "$key" ]]; then
     (
-      eval "$(ssh-agent -s -t 14400)" >/dev/null
+      eval "$(ssh-agent -s -t 43200)" >/dev/null
       trap 'ssh-agent -k >/dev/null 2>&1' EXIT INT TERM HUP
       ssh-add "$key"
       DISABLE_TELEMETRY= \
