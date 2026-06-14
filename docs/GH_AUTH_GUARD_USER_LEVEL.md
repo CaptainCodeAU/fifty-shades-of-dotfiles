@@ -26,7 +26,7 @@ Related pieces (all tracked in the dotfiles repo):
 
 - `home/.zshrc` `_claude_launch()` reads the token from Keychain, exports
   `$GH_TOKEN` for the Claude process, and refreshes the banner status cache.
-- `home/.zsh_welcome` shows a `GH API:` status line (reads the cache only).
+- `home/.zsh_welcome` shows a `GH API:` status line (reads the cache only; shows `pending (launch Claude once)` until the first launch populates the cache).
 - `.claude/hooks/export_transcript.sh` redacts `github_pat_`/`ghp_` patterns.
 - Token lives in macOS Keychain item `github-api-readonly` (fine-grained,
   read-only, no `Contents`/source).
