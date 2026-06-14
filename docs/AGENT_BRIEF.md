@@ -116,7 +116,7 @@ Recap from `README.md` §Security:
 1. **SSH config hardening** — strict `Host *` block above.
 2. **Scoped URL rewrites** — only the principal's own GitHub repos are rewritten to SSH via `~/.gitconfig.private`; third-party HTTPS pass through. A blanket `insteadOf` would break Homebrew taps; do not suggest it.
 3. **No credential helpers** — `~/.gitconfig` has zero `[credential]` sections. HTTPS auth fails closed rather than silently succeeding.
-4. **Claude Code SSH isolation** — the `_claude_launch` zsh function (in `home/.zshrc`) spawns an ephemeral `ssh-agent` scoped to the Claude Code process. The key dies when Claude exits; a 4-hour timeout is a SIGKILL safety net.
+4. **Claude Code SSH isolation** — the `_claude_launch` zsh function (in `home/.zshrc`) spawns an ephemeral `ssh-agent` scoped to the Claude Code process. The key dies when Claude exits; a 12-hour timeout is a SIGKILL safety net.
 5. **Per-host opt-in agent forwarding** — `~/.ssh/config.local` Host blocks may set `ForwardAgent yes` for trusted-LAN remotes. **Never set on `Host *`.** Lets VS Code / Cursor Remote-SSH (or plain `ssh`) reach back through the tunnel to the Mac's agent for GitHub auth on the remote — without copying private keys onto the remote.
 
 Full rationale, alternative postures considered (Pragmatic-strict / Pragmatic-default / Hardware-backed), and revisit triggers: `docs/SECURITY.md`.
@@ -125,7 +125,7 @@ Full rationale, alternative postures considered (Pragmatic-strict / Pragmatic-de
 
 A `gh()` shell wrapper in `home/.zshrc` blocks `gh auth login`, `gh auth setup-git`, and `gh auth refresh`. Reason: those commands silently inject `[credential "https://github.com"]` helpers into `~/.gitconfig`, creating an HTTPS fallback that defeats the SSH-only model.
 
-If your tool needs `gh` for API calls (PRs, issues, releases): the `GITHUB_PERSONAL_ACCESS_TOKEN` env var is exported from macOS Keychain by `home/.zshrc` and `gh` reads it automatically. **Never recommend `gh auth login`** to the principal — it will fail with an explanatory message anyway, but the recommendation itself is wrong.
+If your tool needs `gh` for API calls (PRs, issues, releases): a fine-grained **read-only** token is exported as `$GH_TOKEN` (the variable `gh` actually reads) by the `_claude_launch` wrapper in `home/.zshrc`, scoped to Claude Code sessions only - so `gh api` / `gh run` / `gh pr` / `gh issue` work read-only inside Claude (writes return 403). **Never recommend `gh auth login`** to the principal — it will fail with an explanatory message anyway, but the recommendation itself is wrong.
 
 ## Cross-agent etiquette
 
