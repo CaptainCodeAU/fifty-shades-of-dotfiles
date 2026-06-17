@@ -52,6 +52,11 @@ DRY_RUN=false
 VERBOSE=false
 SKIP_PREFLIGHT=false
 
+# Group-level confirm state. When a section is approved/declined as a whole, this
+# is set to "yes"/"no" so confirm() auto-answers the prompts inside it; "ask"
+# (the default) prompts normally. Always reset to "ask" after a section.
+SECTION_DECISION=ask
+
 # --- pnpm version policy ---
 # Minimum acceptable pnpm. If pnpm is missing OR below this, install/upgrade
 # is offered. Keep in sync with PNPM_MIN_VERSION in home/.zsh_onboarding.
@@ -395,7 +400,7 @@ _preflight_pnpm_check() {
     fi
 
     echo
-    warn "Planned pnpm changes (${#PLAN[@]}) — each is confirmed individually; decline any you want to keep:"
+    warn "Planned pnpm changes (${#PLAN[@]}) — review, then approve (or decline) the whole group below:"
     local i
     for i in "${!PLAN[@]}"; do
         printf "    ${BOLD}%2d.${RESET} %s\n" "$((i + 1))" "${PLAN[$i]}"
@@ -403,28 +408,25 @@ _preflight_pnpm_check() {
     echo
 
     if [[ "$DRY_RUN" == true ]]; then
-        info "[dry-run] No changes made. Re-run without --dry-run to apply (you confirm each step)."
+        info "[dry-run] No changes made. Re-run without --dry-run to apply (one yes applies them all)."
         return 0
     fi
 
-    if ! confirm "Review and apply these ${#PLAN[@]} change(s) now?" "y"; then
+    if ! confirm "Apply all ${#PLAN[@]} planned change(s)?" "y"; then
         warn "Skipped pnpm cleanup. Re-run install.sh when ready (or --skip-preflight to bypass)."
         return 0
     fi
 
-    # --- EXECUTE (per-item confirm) ------------------------------------------
-    local applied=0 declined=0
+    # --- EXECUTE (group-approved: apply all) ---------------------------------
+    local applied=0 failed=0
     for i in "${!ACT[@]}"; do
         echo
         info "${PLAN[$i]}"
-        if confirm "  Apply this change?"; then
-            if _pnpm_apply_action "${ACT[$i]}"; then
-                applied=$((applied + 1))
-            else
-                warn "  Action reported a problem; continuing with the rest."
-            fi
+        if _pnpm_apply_action "${ACT[$i]}"; then
+            applied=$((applied + 1))
         else
-            declined=$((declined + 1))
+            failed=$((failed + 1))
+            warn "  Action reported a problem; continuing with the rest."
         fi
     done
 
@@ -433,7 +435,7 @@ _preflight_pnpm_check() {
     hash -r 2>/dev/null || true
 
     echo
-    success "pnpm cleanup complete: $applied applied, $declined declined."
+    success "pnpm cleanup complete: $applied applied, $failed failed."
     return 0
 }
 
@@ -444,6 +446,12 @@ pretty_path() {
 confirm() {
     local prompt="$1"
     local default="${2:-n}"
+    # Group-level auto-answer: a section approved/declined as a whole answers its
+    # inner prompts here (echoed, so the user still sees what's covered).
+    case "${SECTION_DECISION:-ask}" in
+        yes) echo -e "  ${DIM}↳ ${prompt} → yes${RESET}"; return 0 ;;
+        no)  echo -e "  ${DIM}↳ ${prompt} → skipped${RESET}"; return 1 ;;
+    esac
     if [[ "$DRY_RUN" == true ]]; then
         echo -e "  ${DIM}[dry-run] Would ask: $prompt${RESET}"
         return 1
@@ -1074,7 +1082,7 @@ install_linux_prerequisites() {
 
     # --- Rust toolchain (rustup) — optional ---
     if ! command -v rustup &>/dev/null; then
-        if confirm "Install Rust toolchain (rustup)? Needed for cargo-binstall and other rust CLI tools."; then
+        if SECTION_DECISION=ask confirm "Install Rust toolchain (rustup)? Needed for cargo-binstall and other rust CLI tools."; then
             install_rust_toolchain
         fi
     fi
@@ -1107,6 +1115,21 @@ install_omz_plugins() {
     fi
 
     step "Oh My Zsh Plugins & Theme"
+
+    # One section-level decision: if anything is missing, ask once; the per-item
+    # confirms below are then auto-answered as a group.
+    local _omz_missing=false
+    [[ ! -d "$omz_custom/plugins/zsh-autosuggestions" ]] && _omz_missing=true
+    [[ ! -d "$omz_custom/plugins/zsh-syntax-highlighting" ]] && _omz_missing=true
+    [[ ! -d "$omz_custom/plugins/zsh-completions" ]] && _omz_missing=true
+    [[ ! -d "$omz_custom/themes/powerlevel10k" ]] && _omz_missing=true
+    if [[ "$_omz_missing" == true ]]; then
+        if confirm "Install missing Oh My Zsh plugins + Powerlevel10k theme?" "y"; then
+            SECTION_DECISION=yes
+        else
+            SECTION_DECISION=no
+        fi
+    fi
 
     local any_missing=false
 
@@ -1147,6 +1170,7 @@ install_omz_plugins() {
     if [[ "$any_missing" == false ]]; then
         success "All plugins and themes already installed"
     fi
+    SECTION_DECISION=ask
 }
 
 # ==============================================================================
@@ -1272,7 +1296,7 @@ check_conflicts() {
         echo -e "    3. ${CYAN}Manual${RESET}: Delete or move conflicting files yourself"
         echo
 
-        if confirm "Auto-backup conflicting files to ~/dotfiles-backup/?"; then
+        if confirm "Back up these ${conflicts} conflicting file(s) to ~/dotfiles-backup/ and continue?" "y"; then
             local backup_dir="$HOME/dotfiles-backup/$(date +%Y%m%d_%H%M%S)"
             run_cmd mkdir -p "$backup_dir"
             for f in "${conflict_files[@]}"; do
@@ -1400,6 +1424,16 @@ post_install() {
 
     local os
     os=$(check_os)
+
+    # One section-level decision for the optional post-install setup steps below
+    # (git identity, Python 3.13, nvm, bun, TPM, Nerd Font). git name/email, if
+    # needed, are still asked as values. This is the last confirm-bearing section,
+    # so SECTION_DECISION needn't be reset afterward.
+    if confirm "Run post-install setup (git identity, Python 3.13, nvm, bun, TPM, Nerd Font)?" "y"; then
+        SECTION_DECISION=yes
+    else
+        SECTION_DECISION=no
+    fi
 
     # --- Git identity (stored in ~/.gitconfig.private, included by .gitconfig) ---
     local git_private="$HOME/.gitconfig.private"
@@ -1778,8 +1812,10 @@ main() {
     # --- Install prerequisites ---
     if ! check_prerequisites; then
         echo
-        if confirm "Some prerequisites are missing. Attempt to install them?"; then
+        if confirm "Install all missing prerequisites (Homebrew, core + optional tools, pnpm, Oh My Zsh)?"; then
+            SECTION_DECISION=yes
             install_prerequisites
+            SECTION_DECISION=ask
             echo
             if ! check_prerequisites; then
                 error "Some prerequisites are still missing. Please install them manually."
@@ -1798,10 +1834,8 @@ main() {
     # --- Check for conflicts ---
     if ! check_conflicts; then
         echo
-        if ! confirm "Continue anyway (stow may fail)?"; then
-            info "Resolve conflicts and run again."
-            exit 0
-        fi
+        info "Resolve conflicts (or use ./install.sh --force) and run again."
+        exit 0
     fi
 
     # --- Stow ---
