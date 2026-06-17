@@ -58,7 +58,7 @@ If you just want the shell functions without the full install, you can symlink i
 3. **Recommended Tools**: These are optional but enhance the experience significantly.
 
    ```bash
-   brew install ffmpeg yt-dlp aria2 tree neofetch lazygit lazydocker yazi imagemagick
+   brew install ffmpeg yt-dlp aria2 tree fastfetch lazygit lazydocker yazi imagemagick
    ```
 
    > **Note:** `ffmpeg` and `aria2` are used by the `yt()` media download wrapper. `lazygit`/`lazydocker` power the `lg`/`lzd` aliases. `yazi` is a terminal file manager used by the `y()` function. `imagemagick` is required by the yazi zoom plugin for image resizing.
@@ -218,14 +218,14 @@ run_onboarding
 
 ### Tools Checked
 
-| Category                 | Tools                                                  |
-| ------------------------ | ------------------------------------------------------ |
-| **Essential**            | git, curl, unzip, stow                                 |
-| **User Experience**      | eza, fzf, jq, direnv, zoxide, fd, yazi, glow           |
-| **CLI Tools**            | ripgrep, neovim, tree, neofetch, ffmpeg, yt-dlp, aria2 |
-| **Git**                  | gh, git-lfs                                            |
-| **Development Managers** | nvm, uv, pnpm, bun                                     |
-| **Special**              | Docker (guidance only — requires manual installation)  |
+| Category                 | Tools                                                   |
+| ------------------------ | ------------------------------------------------------- |
+| **Essential**            | git, curl, unzip, stow                                  |
+| **User Experience**      | eza, fzf, jq, direnv, zoxide, fd, yazi, glow            |
+| **CLI Tools**            | ripgrep, neovim, tree, fastfetch, ffmpeg, yt-dlp, aria2 |
+| **Git**                  | gh, git-lfs                                             |
+| **Development Managers** | nvm, uv, pnpm, bun                                      |
+| **Special**              | Docker (guidance only — requires manual installation)   |
 
 ### Skipping Onboarding
 
