@@ -537,7 +537,7 @@ run_onboarding() {
         "rg"      "ripgrep"  "ripgrep" \
         "nvim"    "neovim"   "neovim" \
         "tree"    "tree"     "tree" \
-        "neofetch" "neofetch" "neofetch" \
+        "fastfetch" "fastfetch" "fastfetch" \
         "ffmpeg"  "ffmpeg"   "ffmpeg" \
         "yt-dlp"  "yt-dlp"   "yt-dlp" \
         "aria2c"  "aria2"    "aria2" \
