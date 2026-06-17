@@ -226,6 +226,21 @@ _pnpm_apply_action() {
             done
             true
             ;;
+        rm_v10_tools)
+            # Remove dead pnpm v10 managed binaries from .tools: the old-layout
+            # pnpm-exe/ dir (all v10) + any 10.* version inside the v11-layout
+            # @pnpm+* dirs (auto-downloaded by projects pinning pnpm@10.x). v11
+            # entries are left untouched. Safe: pnpm re-downloads on demand.
+            local home="$arg" d e
+            [[ -d "$home/.tools/pnpm-exe" ]] && run_cmd rm -rf "$home/.tools/pnpm-exe"
+            for d in "$home"/.tools/@pnpm+*; do
+                [[ -d "$d" ]] || continue
+                while IFS= read -r e; do
+                    [[ -n "$e" ]] && run_cmd rm -rf "$e"
+                done < <(find "$d" -mindepth 1 -maxdepth 1 -name '10.*' 2>/dev/null)
+            done
+            true
+            ;;
         rm_path)        run_cmd rm -rf "$arg" ;;
         brew_rm_pnpm)   run_cmd brew uninstall pnpm ;;
         apt_rm_pnpm)    run_cmd sudo apt remove -y pnpm ;;
@@ -336,10 +351,25 @@ _preflight_pnpm_check() {
         PLAN+=("Remove v10 store: $(pretty_path "$pnpm_home/store/v10") (${s10:-?})")
         ACT+=("rm_path|$pnpm_home/store/v10")
     fi
-    if [[ -d "$pnpm_home/.tools/pnpm-exe" ]]; then
-        local se; se=$(du -sh "$pnpm_home/.tools/pnpm-exe" 2>/dev/null | awk '{print $1}' || true)
-        PLAN+=("Remove v10 managed binaries: $(pretty_path "$pnpm_home/.tools/pnpm-exe") (${se:-?})")
-        ACT+=("rm_path|$pnpm_home/.tools/pnpm-exe")
+    # Dead pnpm v10 managed binaries in .tools: the old-layout pnpm-exe/ dir
+    # (all v10) PLUS any 10.* version inside the v11-layout @pnpm+* dirs
+    # (auto-downloaded by projects pinning pnpm@10.x). v11 entries are kept.
+    if [[ -d "$pnpm_home/.tools" ]]; then
+        local -a v10_tools=()
+        [[ -d "$pnpm_home/.tools/pnpm-exe" ]] && v10_tools+=("$pnpm_home/.tools/pnpm-exe")
+        local _d _e
+        for _d in "$pnpm_home"/.tools/@pnpm+*; do
+            [[ -d "$_d" ]] || continue
+            while IFS= read -r _e; do
+                [[ -n "$_e" ]] && v10_tools+=("$_e")
+            done < <(find "$_d" -mindepth 1 -maxdepth 1 -name '10.*' 2>/dev/null)
+        done
+        if (( ${#v10_tools[@]} > 0 )); then
+            local v10sz
+            v10sz=$(printf '%s\0' "${v10_tools[@]}" | xargs -0 du -ch 2>/dev/null | tail -1 | awk '{print $1}')
+            PLAN+=("Remove ${#v10_tools[@]} dead pnpm v10 managed-binary entries from $(pretty_path "$pnpm_home/.tools") (${v10sz:-?})")
+            ACT+=("rm_v10_tools|$pnpm_home")
+        fi
     fi
     # Root-level v10 launchers at $PNPM_HOME root: canonical pnpm shims + any
     # executable text launcher that points into global/5 (e.g. `wt`).
