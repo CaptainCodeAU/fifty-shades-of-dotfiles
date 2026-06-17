@@ -79,8 +79,10 @@ _vercmp() {
     if [[ "$lower" == "$a" ]]; then echo -1; else echo 1; fi
 }
 
-# OS-correct home of the standalone pnpm install (where get.pnpm.io installs):
-# ~/Library/pnpm on macOS, ~/.local/share/pnpm on Linux/WSL.
+# PNPM_HOME: where pnpm keeps its globals + store, and (on most platforms) where
+# the standalone binary installs. ~/Library/pnpm on macOS, ~/.local/share/pnpm on
+# Linux/WSL. Used for globals/residue on every platform — even on Intel macOS,
+# where the binary itself comes from Homebrew.
 _pnpm_standalone_home() {
     case "$(check_os)" in
         macos) echo "$HOME/Library/pnpm" ;;
@@ -88,10 +90,17 @@ _pnpm_standalone_home() {
     esac
 }
 
+# True (0) on Intel macOS, where pnpm's standalone executable is a Node.js SEA
+# binary that segfaults 100% of the time (upstream nodejs/node#62893 /
+# pnpm#11423). There, Homebrew is the supported pnpm provider instead of the
+# get.pnpm.io standalone installer. Apple Silicon / Linux / WSL use standalone.
+_pnpm_use_homebrew() {
+    [[ "$(check_os)" == "macos" && "$(uname -m)" == "x86_64" ]]
+}
+
 # True (0) if the active pnpm resolves to the standalone install (under its
 # PNPM_HOME), as opposed to a corepack shim or an npm-global pnpm. Those other
-# flavors can't be `pnpm self-update`d into the standalone layout, so the
-# installer must treat them as "no standalone present" and curl-install instead.
+# flavors can't be `pnpm self-update`d into the standalone layout.
 _pnpm_is_standalone() {
     local p home
     p=$(command -v pnpm 2>/dev/null) || return 1
@@ -99,12 +108,20 @@ _pnpm_is_standalone() {
     [[ "$p" == "$home"/* ]]
 }
 
-# True (0) if a *standalone* pnpm is missing OR below PNPM_MIN_VERSION. A pnpm
-# that exists only as a corepack shim / npm-global counts as "missing" here, so
-# the standalone install path runs (self-update can't convert those into one).
+# True (0) if pnpm comes from the *supported* provider for this platform: a
+# Homebrew install on Intel macOS, otherwise a standalone install. Anything else
+# (corepack shim, npm-global, or no pnpm) counts as unsupported → (re)install.
+_pnpm_is_supported() {
+    if _pnpm_use_homebrew; then
+        command -v brew &>/dev/null && brew list pnpm &>/dev/null
+    else
+        _pnpm_is_standalone
+    fi
+}
+
+# True (0) if the supported pnpm is missing OR below PNPM_MIN_VERSION.
 _pnpm_needs_install_or_upgrade() {
-    # No standalone pnpm (absent, or only corepack/npm-global present) → install.
-    _pnpm_is_standalone || return 0
+    _pnpm_is_supported || return 0
     local v cmp
     v=$(pnpm -v 2>/dev/null) || return 0
     cmp=$(_vercmp "$v" "$PNPM_MIN_VERSION") || return 0
@@ -280,8 +297,9 @@ _preflight_pnpm_check() {
         fi
     done < <(_pnpm_node_bindirs)
 
-    # Homebrew pnpm (collides with the standalone install).
-    if command -v brew &>/dev/null && brew list pnpm &>/dev/null; then
+    # Homebrew pnpm collides with the standalone install — except on Intel macOS,
+    # where Homebrew IS the supported provider (standalone is upstream-broken).
+    if ! _pnpm_use_homebrew && command -v brew &>/dev/null && brew list pnpm &>/dev/null; then
         PLAN+=("Uninstall Homebrew pnpm (brew uninstall pnpm)")
         ACT+=("brew_rm_pnpm|")
     fi
@@ -858,41 +876,64 @@ install_macos_prerequisites() {
         fi
     fi
 
-    # --- pnpm (standalone) ---
+    # --- pnpm ---
+    # macOS provider: standalone (get.pnpm.io) on Apple Silicon; Homebrew on
+    # Intel, where the standalone SEA binary segfaults (nodejs/node#62893).
     if _pnpm_needs_install_or_upgrade; then
-        local cur_pnpm="" prompt=""
-        command -v pnpm &>/dev/null && cur_pnpm=$(pnpm -v 2>/dev/null || echo "unknown")
-        if _pnpm_is_standalone; then
-            prompt="pnpm ${cur_pnpm} is below required ${PNPM_MIN_VERSION}. Run 'pnpm self-update' now?"
-        elif [[ -n "$cur_pnpm" ]]; then
-            prompt="Active pnpm ${cur_pnpm} is not the standalone install (corepack/npm-global). Install standalone pnpm now?"
-        else
-            prompt="pnpm not found. Install it (standalone)?"
-        fi
-        if confirm "$prompt"; then
-            # self-update only works on a real standalone; for a corepack shim or
-            # npm-global pnpm it can't create $PNPM_HOME/bin — curl-install instead.
-            if _pnpm_is_standalone; then
-                run_cmd pnpm self-update
-            else
-                run_cmd bash -c 'curl -fsSL https://get.pnpm.io/install.sh | sh -'
+        if _pnpm_use_homebrew; then
+            # Intel macOS: Homebrew is the supported pnpm provider.
+            local cur_pnpm=""
+            command -v pnpm &>/dev/null && cur_pnpm=$(pnpm -v 2>/dev/null || echo "unknown")
+            if brew list pnpm &>/dev/null; then
+                if confirm "pnpm ${cur_pnpm} is below ${PNPM_MIN_VERSION}. Run 'brew upgrade pnpm'?"; then
+                    run_cmd brew upgrade pnpm
+                fi
+            elif confirm "pnpm not found. Install it via Homebrew (standalone is broken on Intel macOS)?"; then
+                run_cmd brew install pnpm
             fi
+            hash -r 2>/dev/null || true
+            # Globals + completion still live under PNPM_HOME; the config bridge
+            # below applies regardless of provider, so supply-chain settings hold.
             export PNPM_HOME="$HOME/Library/pnpm"
-            export PATH="$PNPM_HOME/bin:$PATH"
-            # Regenerate zsh completion so .zshrc's `source "$PNPM_HOME/_pnpm"`
-            # picks up the just-installed pnpm version. Sourced at .zshrc:255.
             if command -v pnpm &>/dev/null; then
+                mkdir -p "$PNPM_HOME"
                 pnpm completion zsh > "$PNPM_HOME/_pnpm" 2>/dev/null || true
             fi
-            # pnpm self-update always regenerates shims at BOTH root and bin/.
-            # Root shims trigger "Detected a pnpm v10 installation layout"
-            # warnings. Remove them — only $PNPM_HOME/bin is on PATH.
-            if [[ -f "$PNPM_HOME/pnpm" ]]; then
-                local shim
-                for shim in pnpm pnpx pn pnx; do
-                    [[ -f "$PNPM_HOME/$shim" ]] && rm "$PNPM_HOME/$shim"
-                done
-                info "Root-level shims removed (v11 layout: \$PNPM_HOME/bin/ only)."
+        else
+            local cur_pnpm="" prompt=""
+            command -v pnpm &>/dev/null && cur_pnpm=$(pnpm -v 2>/dev/null || echo "unknown")
+            if _pnpm_is_standalone; then
+                prompt="pnpm ${cur_pnpm} is below required ${PNPM_MIN_VERSION}. Run 'pnpm self-update' now?"
+            elif [[ -n "$cur_pnpm" ]]; then
+                prompt="Active pnpm ${cur_pnpm} is not the standalone install (corepack/npm-global). Install standalone pnpm now?"
+            else
+                prompt="pnpm not found. Install it (standalone)?"
+            fi
+            if confirm "$prompt"; then
+                # self-update only works on a real standalone; for a corepack shim
+                # or npm-global pnpm it can't create $PNPM_HOME/bin — curl instead.
+                if _pnpm_is_standalone; then
+                    run_cmd pnpm self-update
+                else
+                    run_cmd bash -c 'curl -fsSL https://get.pnpm.io/install.sh | sh -'
+                fi
+                export PNPM_HOME="$HOME/Library/pnpm"
+                export PATH="$PNPM_HOME/bin:$PATH"
+                # Regenerate zsh completion so .zshrc's `source "$PNPM_HOME/_pnpm"`
+                # picks up the just-installed pnpm version. Sourced at .zshrc:255.
+                if command -v pnpm &>/dev/null; then
+                    pnpm completion zsh > "$PNPM_HOME/_pnpm" 2>/dev/null || true
+                fi
+                # pnpm self-update always regenerates shims at BOTH root and bin/.
+                # Root shims trigger "Detected a pnpm v10 installation layout"
+                # warnings. Remove them — only $PNPM_HOME/bin is on PATH.
+                if [[ -f "$PNPM_HOME/pnpm" ]]; then
+                    local shim
+                    for shim in pnpm pnpx pn pnx; do
+                        [[ -f "$PNPM_HOME/$shim" ]] && rm "$PNPM_HOME/$shim"
+                    done
+                    info "Root-level shims removed (v11 layout: \$PNPM_HOME/bin/ only)."
+                fi
             fi
         fi
     fi
