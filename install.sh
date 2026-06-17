@@ -74,9 +74,32 @@ _vercmp() {
     if [[ "$lower" == "$a" ]]; then echo -1; else echo 1; fi
 }
 
-# True (0) if pnpm is missing OR below PNPM_MIN_VERSION.
+# OS-correct home of the standalone pnpm install (where get.pnpm.io installs):
+# ~/Library/pnpm on macOS, ~/.local/share/pnpm on Linux/WSL.
+_pnpm_standalone_home() {
+    case "$(check_os)" in
+        macos) echo "$HOME/Library/pnpm" ;;
+        *)     echo "$HOME/.local/share/pnpm" ;;
+    esac
+}
+
+# True (0) if the active pnpm resolves to the standalone install (under its
+# PNPM_HOME), as opposed to a corepack shim or an npm-global pnpm. Those other
+# flavors can't be `pnpm self-update`d into the standalone layout, so the
+# installer must treat them as "no standalone present" and curl-install instead.
+_pnpm_is_standalone() {
+    local p home
+    p=$(command -v pnpm 2>/dev/null) || return 1
+    home=$(_pnpm_standalone_home)
+    [[ "$p" == "$home"/* ]]
+}
+
+# True (0) if a *standalone* pnpm is missing OR below PNPM_MIN_VERSION. A pnpm
+# that exists only as a corepack shim / npm-global counts as "missing" here, so
+# the standalone install path runs (self-update can't convert those into one).
 _pnpm_needs_install_or_upgrade() {
-    command -v pnpm &>/dev/null || return 0
+    # No standalone pnpm (absent, or only corepack/npm-global present) → install.
+    _pnpm_is_standalone || return 0
     local v cmp
     v=$(pnpm -v 2>/dev/null) || return 0
     cmp=$(_vercmp "$v" "$PNPM_MIN_VERSION") || return 0
@@ -744,14 +767,18 @@ install_macos_prerequisites() {
     # --- pnpm (standalone) ---
     if _pnpm_needs_install_or_upgrade; then
         local cur_pnpm="" prompt=""
-        if command -v pnpm &>/dev/null; then
-            cur_pnpm=$(pnpm -v 2>/dev/null || echo "unknown")
+        command -v pnpm &>/dev/null && cur_pnpm=$(pnpm -v 2>/dev/null || echo "unknown")
+        if _pnpm_is_standalone; then
             prompt="pnpm ${cur_pnpm} is below required ${PNPM_MIN_VERSION}. Run 'pnpm self-update' now?"
+        elif [[ -n "$cur_pnpm" ]]; then
+            prompt="Active pnpm ${cur_pnpm} is not the standalone install (corepack/npm-global). Install standalone pnpm now?"
         else
             prompt="pnpm not found. Install it (standalone)?"
         fi
         if confirm "$prompt"; then
-            if [[ -n "$cur_pnpm" ]]; then
+            # self-update only works on a real standalone; for a corepack shim or
+            # npm-global pnpm it can't create $PNPM_HOME/bin — curl-install instead.
+            if _pnpm_is_standalone; then
                 run_cmd pnpm self-update
             else
                 run_cmd bash -c 'curl -fsSL https://get.pnpm.io/install.sh | sh -'
@@ -923,14 +950,18 @@ install_linux_prerequisites() {
     # --- pnpm (standalone) ---
     if _pnpm_needs_install_or_upgrade; then
         local cur_pnpm="" prompt=""
-        if command -v pnpm &>/dev/null; then
-            cur_pnpm=$(pnpm -v 2>/dev/null || echo "unknown")
+        command -v pnpm &>/dev/null && cur_pnpm=$(pnpm -v 2>/dev/null || echo "unknown")
+        if _pnpm_is_standalone; then
             prompt="pnpm ${cur_pnpm} is below required ${PNPM_MIN_VERSION}. Run 'pnpm self-update' now?"
+        elif [[ -n "$cur_pnpm" ]]; then
+            prompt="Active pnpm ${cur_pnpm} is not the standalone install (corepack/npm-global). Install standalone pnpm now?"
         else
             prompt="pnpm not found. Install it (standalone)?"
         fi
         if confirm "$prompt"; then
-            if [[ -n "$cur_pnpm" ]]; then
+            # self-update only works on a real standalone; for a corepack shim or
+            # npm-global pnpm it can't create $PNPM_HOME/bin — curl-install instead.
+            if _pnpm_is_standalone; then
                 run_cmd pnpm self-update
             else
                 run_cmd bash -c 'curl -fsSL https://get.pnpm.io/install.sh | sh -'
