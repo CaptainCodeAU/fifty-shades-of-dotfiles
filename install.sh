@@ -828,7 +828,7 @@ install_macos_prerequisites() {
     fi
 
     # --- Optional CLI tools ---
-    local -a optional=(ffmpeg yt-dlp aria2 tree neofetch yazi)
+    local -a optional=(ffmpeg yt-dlp aria2 tree fastfetch yazi)
     local opt_install=()
 
     for formula in "${optional[@]}"; do
@@ -841,7 +841,12 @@ install_macos_prerequisites() {
         echo
         info "Optional CLI tools not yet installed: ${opt_install[*]}"
         if confirm "Install optional CLI tools (media, git UI, file manager)?"; then
-            run_cmd brew install "${opt_install[@]}"
+            # Install individually + non-fatal: a discontinued or renamed optional
+            # formula must never abort the whole install (these are non-essential).
+            local opt
+            for opt in "${opt_install[@]}"; do
+                run_cmd brew install "$opt" || warn "Optional '$opt' not installed (skipped)."
+            done
         fi
     fi
 
@@ -1005,16 +1010,17 @@ install_linux_prerequisites() {
         fi
 
         # --- Optional CLI tools ---
-        if confirm "Install optional CLI tools (ffmpeg, yt-dlp, aria2, tree, neofetch, yazi)?"; then
+        if confirm "Install optional CLI tools (ffmpeg, yt-dlp, aria2, tree, fastfetch, yazi)?"; then
+            # Non-fatal: a missing/renamed optional package must not abort the install.
             case "$pkg_mgr" in
-                apt)    run_cmd sudo apt install -y ffmpeg aria2 tree neofetch
+                apt)    run_cmd sudo apt install -y ffmpeg aria2 tree fastfetch || warn "Some optional tools not installed (skipped)."
                         info "yt-dlp and yazi may need manual install on Debian/Ubuntu."
                         info "  yt-dlp: pip install yt-dlp  OR  https://github.com/yt-dlp/yt-dlp#installation"
                         info "  yazi:   installer offers a GitHub release download below; or see https://github.com/sxyazi/yazi#installation"
                         ;;
-                dnf)    run_cmd sudo dnf install -y ffmpeg aria2 tree neofetch yt-dlp yazi ;;
-                pacman) run_cmd sudo pacman -S --noconfirm ffmpeg aria2 tree neofetch yt-dlp yazi ;;
-                zypper) run_cmd sudo zypper install -y ffmpeg aria2 tree neofetch ;;
+                dnf)    run_cmd sudo dnf install -y ffmpeg aria2 tree fastfetch yt-dlp yazi || warn "Some optional tools not installed (skipped)." ;;
+                pacman) run_cmd sudo pacman -S --noconfirm ffmpeg aria2 tree fastfetch yt-dlp yazi || warn "Some optional tools not installed (skipped)." ;;
+                zypper) run_cmd sudo zypper install -y ffmpeg aria2 tree fastfetch || warn "Some optional tools not installed (skipped)." ;;
             esac
         fi
     fi
