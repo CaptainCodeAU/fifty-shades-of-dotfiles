@@ -581,10 +581,10 @@ check_prerequisites() {
     local missing=0
 
     echo -e "${BOLD}Essential:${RESET}"
-    check_command git      "git"      || ((missing++))
-    check_command zsh      "zsh"      || ((missing++))
-    check_command stow     "GNU Stow" || ((missing++))
-    check_command jq       "jq"       || ((missing++))
+    check_command git      "git"      || missing=$((missing+1))
+    check_command zsh      "zsh"      || missing=$((missing+1))
+    check_command stow     "GNU Stow" || missing=$((missing+1))
+    check_command jq       "jq"       || missing=$((missing+1))
     echo
 
     echo -e "${BOLD}Shell Framework:${RESET}"
@@ -592,7 +592,7 @@ check_prerequisites() {
         echo -e "  ${GREEN}✓${RESET} Oh My Zsh ($HOME/.oh-my-zsh)"
     else
         echo -e "  ${RED}✗${RESET} Oh My Zsh — not installed"
-        ((missing++))
+        missing=$((missing+1))
     fi
 
     local omz_custom="${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}"
@@ -612,7 +612,7 @@ check_prerequisites() {
     echo
 
     echo -e "${BOLD}Core Tools:${RESET}"
-    check_command uv       "uv"       || ((missing++))
+    check_command uv       "uv"       || missing=$((missing+1))
     check_command direnv   "direnv"   || true
     check_command fzf      "fzf"      || true
     check_command eza      "eza"      || true
@@ -620,17 +620,17 @@ check_prerequisites() {
     check_command tmux     "tmux"     || true
     check_command rg       "ripgrep"  || true
     if ! check_command fd "fd"; then
-        check_command fdfind "fd (as fdfind)" || ((missing++))
+        check_command fdfind "fd (as fdfind)" || missing=$((missing+1))
     fi
-    check_command gh       "GitHub CLI (gh)" || ((missing++))
+    check_command gh       "GitHub CLI (gh)" || missing=$((missing+1))
     check_command nvim     "neovim"   || true
     check_command glow     "glow"     || true
-    check_command lazygit  "lazygit"  || ((missing++))
-    check_command lazydocker "lazydocker" || ((missing++))
+    check_command lazygit  "lazygit"  || missing=$((missing+1))
+    check_command lazydocker "lazydocker" || missing=$((missing+1))
     if [[ "$(check_os)" == "macos" ]]; then
-        check_command trash    "trash (macOS)"  || ((missing++))
+        check_command trash    "trash (macOS)"  || missing=$((missing+1))
     else
-        check_command trash-put "trash-cli (Linux)" || ((missing++))
+        check_command trash-put "trash-cli (Linux)" || missing=$((missing+1))
     fi
     echo
 
@@ -648,7 +648,7 @@ check_prerequisites() {
     else
         echo -e "  ${YELLOW}~${RESET} nvm — not installed"
     fi
-    check_command pnpm     "pnpm"     || ((missing++))
+    check_command pnpm     "pnpm"     || missing=$((missing+1))
     check_command_optional node "node" || true
     check_command_optional bun  "bun"  || true
     echo
@@ -661,7 +661,7 @@ check_prerequisites() {
             echo -e "  ${GREEN}✓${RESET} Python 3.13 available via uv"
         else
             echo -e "  ${RED}✗${RESET} Python 3.13 not installed — required (run: uv python install 3.13)"
-            ((missing++))
+            missing=$((missing+1))
         fi
     fi
     echo
@@ -1287,7 +1287,7 @@ _clean_stale_repo_links() {
             if [[ "$link_target" == *"fifty-shades-of-dotfiles"* ]]; then
                 verbose "Removing stale link: ~/$relative/ → $link_target"
                 run_cmd rm "$target"
-                ((cleaned++)) || true
+                cleaned=$((cleaned+1))
             fi
         fi
     done < <(find "$home_dir" -mindepth 1 -type d -print0)
@@ -1301,7 +1301,7 @@ _clean_stale_repo_links() {
             if [[ "$link_target" == *"fifty-shades-of-dotfiles"* ]]; then
                 verbose "Removing stale link: ~/$relative → $link_target"
                 run_cmd rm "$target"
-                ((cleaned++)) || true
+                cleaned=$((cleaned+1))
             fi
         fi
     done < <(find "$home_dir" -type f ! -name '.DS_Store' -print0)
@@ -1327,11 +1327,11 @@ check_conflicts() {
         if [[ -e "$target" && ! -L "$target" ]]; then
             if _is_stow_managed "$target"; then
                 echo -e "  ${DIM}✓ ~/$relative (stow-managed)${RESET}"
-                ((stow_managed++))
+                stow_managed=$((stow_managed+1))
             else
                 warn "Conflict: ~/$relative already exists (not a symlink)"
                 conflict_files+=("$target")
-                ((conflicts++))
+                conflicts=$((conflicts+1))
             fi
         elif [[ -L "$target" ]]; then
             local link_target
@@ -1339,9 +1339,9 @@ check_conflicts() {
             if [[ "$link_target" != *"fifty-shades-of-dotfiles"* ]]; then
                 warn "Conflict: ~/$relative is a symlink to something else: $link_target"
                 conflict_files+=("$target")
-                ((conflicts++))
+                conflicts=$((conflicts+1))
             else
-                ((repo_symlinks++))
+                repo_symlinks=$((repo_symlinks+1))
                 verbose "~/$relative → $link_target (existing stow symlink)"
             fi
         fi
@@ -1409,7 +1409,7 @@ stow_home() {
 
     local count=0
     while IFS= read -r -d '' file; do
-        ((count++))
+        count=$((count+1))
     done < <(find "$REPO_DIR/home" -type f ! -name '.DS_Store' -print0)
     info "Linked $count file(s) from home/ to ~/"
 }
