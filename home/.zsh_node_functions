@@ -86,6 +86,19 @@ pnpm_update() {
         return 1
     fi
 
+    # Intel macOS: pnpm is Homebrew-managed (standalone SEA binary segfaults --
+    # nodejs/node#62893). Update via brew; the registry/self-update path below is
+    # for the standalone install (Apple Silicon / Linux / WSL).
+    if [[ "$IS_MAC" == true && "$MAC_ARCH" == "x86_64" ]]; then
+        echo "${info}Intel macOS -- pnpm is managed by Homebrew (current: $(pnpm -v 2>/dev/null)).${done}"
+        if brew list pnpm &>/dev/null; then
+            brew upgrade pnpm
+        else
+            brew install pnpm
+        fi
+        return $?
+    fi
+
     local current eligible raw raw_at now cmp current_major eligible_major post
     current=$(pnpm -v 2>/dev/null)
     eligible=$(_pnpm_get_latest 2>/dev/null)        # latest installable (age-gated)
