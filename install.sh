@@ -106,252 +106,334 @@ _pnpm_needs_install_or_upgrade() {
     [[ "$cmp" == "-1" ]]
 }
 
-# Pre-flight: detect existing pnpm setups that would conflict with the dotfiles
-# approach (standalone install at $PNPM_HOME, camelCase YAML config, no shell rc
-# appends from `pnpm setup`, no distro/brew/corepack pnpm). Each detection is
-# offered as an interactive fix via the `confirm` helper. User can decline any
-# individual fix and resolve manually. See docs/PNPM_SETUP_GUIDE.md for the full
-# mental model.
+# --- pnpm conflict helpers (used by the pre-flight check) --------------------
+# These make no assumptions about how many Node installs exist or where pnpm
+# comes from. bash 3.2-safe: every array expansion is count-guarded.
+
+# Print every Node "bin" directory on this machine, one per line, de-duplicated:
+# each installed nvm version (~/.nvm/versions/node/*/bin) plus any node on PATH
+# (system / Homebrew / distro). Empty output is fine — callers guard.
+_pnpm_node_bindirs() {
+    local -a dirs=()
+    local d
+    local nvm_root="${NVM_DIR:-$HOME/.nvm}/versions/node"
+    if [[ -d "$nvm_root" ]]; then
+        for d in "$nvm_root"/*/bin; do
+            [[ -d "$d" ]] && dirs+=("$d")
+        done
+    fi
+    while IFS= read -r d; do
+        [[ -n "$d" ]] && dirs+=("$(dirname "$d")")
+    done < <(which -a node 2>/dev/null || true)
+    (( ${#dirs[@]} > 0 )) || return 0
+    printf '%s\n' "${dirs[@]}" | awk '!seen[$0]++'
+}
+
+# True (0) if the file at $1 is a corepack-managed shim: a symlink whose target
+# path contains "corepack".
+_pnpm_is_corepack_shim() {
+    local f="$1" tgt
+    [[ -L "$f" ]] || return 1
+    tgt=$(readlink "$f" 2>/dev/null) || return 1
+    [[ "$tgt" == *corepack* ]]
+}
+
+# Apply one planned cleanup action ("type|arg"). Called from inside an `if` in
+# the executor, so set -e is suppressed in this body — a failing step won't abort
+# the whole install; the executor reports it and moves on.
+_pnpm_apply_action() {
+    local spec="$1" type arg
+    type="${spec%%|*}"
+    arg="${spec#*|}"
+    case "$type" in
+        corepack_disable)
+            # Disable corepack in this Node's bin dir. PATH-prepend the Node so
+            # corepack's `env node` shebang resolves to it; --install-directory
+            # targets the exact dir. Fall back to removing any surviving shims.
+            if [[ -x "$arg/corepack" ]]; then
+                run_cmd env PATH="$arg:$PATH" "$arg/corepack" disable --install-directory "$arg" || true
+            elif command -v corepack &>/dev/null; then
+                run_cmd corepack disable --install-directory "$arg" || true
+            fi
+            local s
+            for s in pnpm pnpx yarn; do
+                if _pnpm_is_corepack_shim "$arg/$s"; then run_cmd rm -f "$arg/$s"; fi
+            done
+            true
+            ;;
+        npm_global_rm)
+            if [[ -x "$arg/npm" ]]; then
+                run_cmd env PATH="$arg:$PATH" "$arg/npm" rm -g pnpm
+            elif command -v npm &>/dev/null; then
+                run_cmd npm rm -g pnpm
+            else
+                run_cmd rm -rf "$arg/../lib/node_modules/pnpm"
+            fi
+            ;;
+        rm_v10_globals)
+            # Record what was installed globally under v10 so the user can
+            # reinstall under v11, then remove the v10 globals directory.
+            local manifest="$arg/global/5/package.json"
+            if [[ -f "$manifest" ]]; then
+                local deps=""
+                if command -v jq &>/dev/null; then
+                    deps=$(jq -r '.dependencies // {} | keys[]' "$manifest" 2>/dev/null || true)
+                else
+                    deps=$(grep -oE '"[^"]+"[[:space:]]*:[[:space:]]*"[^"]+"' "$manifest" 2>/dev/null \
+                        | sed -E 's/^"([^"]+)".*/\1/' | grep -vxE '(name|version|private)' || true)
+                fi
+                if [[ -n "$deps" ]]; then
+                    info "  v10 globals recorded — reinstall under v11 (after this install) with:"
+                    printf '%s\n' "$deps" | sed 's/^/      pnpm add -g /'
+                fi
+            fi
+            run_cmd rm -rf "$arg/global/5"
+            ;;
+        rm_root_launchers)
+            # Remove v10 root-level launchers at $PNPM_HOME root: the canonical
+            # pnpm shims plus any executable text launcher that points into
+            # global/5 (e.g. `wt`) — identified by content, not by guessing names.
+            local f base
+            for f in "$arg"/*; do
+                [[ -f "$f" && -x "$f" ]] || continue
+                base=$(basename "$f")
+                case "$base" in
+                    pnpm|pnpx|pn|pnx) run_cmd rm -f "$f" ;;
+                    *) if grep -Iq 'global/5' "$f" 2>/dev/null; then run_cmd rm -f "$f"; fi ;;
+                esac
+            done
+            true
+            ;;
+        rm_path)        run_cmd rm -rf "$arg" ;;
+        brew_rm_pnpm)   run_cmd brew uninstall pnpm ;;
+        apt_rm_pnpm)    run_cmd sudo apt remove -y pnpm ;;
+        dnf_rm_pnpm)    run_cmd sudo dnf remove -y pnpm ;;
+        pacman_rm_pnpm) run_cmd sudo pacman -R --noconfirm pnpm ;;
+        snap_rm_pnpm)   run_cmd snap remove pnpm ;;
+        pkill_pnpm)     run_cmd pkill -x pnpm || true ;;
+        backup_npmrc)   run_cmd mv "$HOME/.npmrc" "$HOME/.npmrc.pre-stow.$(date +%Y%m%d-%H%M%S).bak" ;;
+        backup_yaml)    run_cmd mv "$arg" "${arg}.pre-stow.$(date +%Y%m%d-%H%M%S).bak" ;;
+        *)              warn "  Unknown action: $type"; return 1 ;;
+    esac
+}
+
+# Pre-flight: detect existing pnpm setups that conflict with the dotfiles model
+# (a single standalone install at $PNPM_HOME/bin, camelCase YAML config, no
+# corepack/distro/brew/npm-global pnpm) and remediate them. Three phases:
+# DETECT (read-only; builds a plan) -> PLAN (numbered list) -> EXECUTE (confirm
+# each item individually; decline any). --dry-run prints the plan only.
+# See docs/PNPM_SETUP_GUIDE.md for the mental model.
 _preflight_pnpm_check() {
     if [[ "$SKIP_PREFLIGHT" == true ]]; then
         info "Skipping pre-flight pnpm check (--skip-preflight)"
         return 0
     fi
     step "Pre-flight pnpm conflict check"
-    local issues_found=0
-    local os
+
+    local os pnpm_home
     os=$(check_os)
+    pnpm_home=$(_pnpm_standalone_home)
 
-    # --- Cross-platform ---
+    # PLAN[] = human descriptions; ACT[] = parallel "type|arg" action specs.
+    # NOTES[] = informational findings with no automatic fix.
+    local -a PLAN=() ACT=() NOTES=()
+    local bindir shim
 
-    # 1. Multiple pnpm binaries on PATH (brew + standalone + npm-global, etc.)
+    # --- DETECT (read-only) ---------------------------------------------------
+
+    # Multiple pnpm on PATH (diagnostic; the cleanup below resolves it).
     if command -v pnpm &>/dev/null; then
-        local pnpm_paths pnpm_count
-        pnpm_paths=$(which -a pnpm 2>/dev/null | sort -u)
-        pnpm_count=$(echo "$pnpm_paths" | wc -l | tr -d ' ')
-        if (( pnpm_count > 1 )); then
-            warn "Multiple pnpm binaries on PATH:"
-            echo "$pnpm_paths" | sed 's/^/    /'
-            warn "Shell uses the first match. Removed sources below; verify the survivor is your intended one."
-            ((issues_found++))
+        local pcount
+        pcount=$(which -a pnpm 2>/dev/null | sort -u | grep -c . 2>/dev/null || true)
+        if [[ "${pcount:-0}" -gt 1 ]]; then
+            NOTES+=("Multiple pnpm on PATH (first wins) — resolved by the cleanup below.")
         fi
     fi
 
-    # 2. ~/.npmrc with registry override / auth (may shadow pnpm settings)
+    # Corepack-managed pnpm/pnpx/yarn shims in every Node.
+    while IFS= read -r bindir; do
+        [[ -n "$bindir" ]] || continue
+        local found_shims=()
+        for shim in pnpm pnpx yarn; do
+            if _pnpm_is_corepack_shim "$bindir/$shim"; then found_shims+=("$shim"); fi
+        done
+        if (( ${#found_shims[@]} > 0 )); then
+            PLAN+=("Disable corepack (${found_shims[*]}) in Node: $(pretty_path "$bindir")")
+            ACT+=("corepack_disable|$bindir")
+        fi
+    done < <(_pnpm_node_bindirs)
+
+    # Dormant npm-global pnpm in every Node.
+    while IFS= read -r bindir; do
+        [[ -n "$bindir" ]] || continue
+        if [[ -d "$bindir/../lib/node_modules/pnpm" ]]; then
+            local gv=""
+            gv=$(grep -m1 '"version"' "$bindir/../lib/node_modules/pnpm/package.json" 2>/dev/null \
+                | sed -E 's/.*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/' || true)
+            PLAN+=("Remove npm-global pnpm ${gv:-?} from Node: $(pretty_path "$bindir")")
+            ACT+=("npm_global_rm|$bindir")
+        fi
+    done < <(_pnpm_node_bindirs)
+
+    # Homebrew pnpm (collides with the standalone install).
+    if command -v brew &>/dev/null && brew list pnpm &>/dev/null; then
+        PLAN+=("Uninstall Homebrew pnpm (brew uninstall pnpm)")
+        ACT+=("brew_rm_pnpm|")
+    fi
+
+    # Distro pnpm (Linux/WSL).
+    if [[ "$os" == "linux" || "$os" == "wsl" ]]; then
+        if command -v dpkg &>/dev/null && dpkg -l 2>/dev/null | grep -qE '^ii[[:space:]]+pnpm[[:space:]]'; then
+            PLAN+=("Remove apt pnpm (sudo apt remove pnpm)"); ACT+=("apt_rm_pnpm|")
+        fi
+        if command -v dnf &>/dev/null && dnf list installed 2>/dev/null | grep -q '^pnpm\.'; then
+            PLAN+=("Remove dnf pnpm (sudo dnf remove pnpm)"); ACT+=("dnf_rm_pnpm|")
+        fi
+        if command -v pacman &>/dev/null && pacman -Qs '^pnpm$' &>/dev/null; then
+            PLAN+=("Remove pacman pnpm (sudo pacman -R pnpm)"); ACT+=("pacman_rm_pnpm|")
+        fi
+        if command -v snap &>/dev/null && snap list pnpm &>/dev/null 2>&1; then
+            PLAN+=("Remove snap pnpm (snap remove pnpm)"); ACT+=("snap_rm_pnpm|")
+        fi
+    fi
+
+    # Running pnpm daemons (may hold store locks).
+    if pgrep -x pnpm &>/dev/null; then
+        PLAN+=("Stop running pnpm processes (pkill -x pnpm)")
+        ACT+=("pkill_pnpm|")
+    fi
+
+    # v10 standalone residue under $PNPM_HOME (store/v3 + .tools/pnpm are kept).
+    if [[ -d "$pnpm_home/global/5" ]]; then
+        PLAN+=("Record + remove v10 globals: $(pretty_path "$pnpm_home/global/5") (you'll get reinstall commands)")
+        ACT+=("rm_v10_globals|$pnpm_home")
+    fi
+    if [[ -d "$pnpm_home/store/v10" ]]; then
+        local s10; s10=$(du -sh "$pnpm_home/store/v10" 2>/dev/null | awk '{print $1}' || true)
+        PLAN+=("Remove v10 store: $(pretty_path "$pnpm_home/store/v10") (${s10:-?})")
+        ACT+=("rm_path|$pnpm_home/store/v10")
+    fi
+    if [[ -d "$pnpm_home/.tools/pnpm-exe" ]]; then
+        local se; se=$(du -sh "$pnpm_home/.tools/pnpm-exe" 2>/dev/null | awk '{print $1}' || true)
+        PLAN+=("Remove v10 managed binaries: $(pretty_path "$pnpm_home/.tools/pnpm-exe") (${se:-?})")
+        ACT+=("rm_path|$pnpm_home/.tools/pnpm-exe")
+    fi
+    # Root-level v10 launchers at $PNPM_HOME root: canonical pnpm shims + any
+    # executable text launcher that points into global/5 (e.g. `wt`).
+    if [[ -d "$pnpm_home" ]]; then
+        local rootlaunchers=() f base
+        for f in "$pnpm_home"/*; do
+            [[ -f "$f" && -x "$f" ]] || continue
+            base=$(basename "$f")
+            case "$base" in
+                pnpm|pnpx|pn|pnx) rootlaunchers+=("$base") ;;
+                *) if grep -Iq 'global/5' "$f" 2>/dev/null; then rootlaunchers+=("$base"); fi ;;
+            esac
+        done
+        if (( ${#rootlaunchers[@]} > 0 )); then
+            PLAN+=("Remove v10 root-level launchers from $(pretty_path "$pnpm_home"): ${rootlaunchers[*]}")
+            ACT+=("rm_root_launchers|$pnpm_home")
+        fi
+    fi
+
+    # ~/.npmrc with registry/auth (can shadow pnpm's defaults).
     if [[ -f "$HOME/.npmrc" ]] && grep -qE '^(registry=|//|_auth)' "$HOME/.npmrc" 2>/dev/null; then
-        warn "~/.npmrc has registry/auth content:"
-        grep -E '^(registry=|//|_auth)' "$HOME/.npmrc" | sed 's/^/    /'
-        warn "Custom registry here will override pnpm's expected default."
-        if confirm "Back up and remove ~/.npmrc?"; then
-            run_cmd mv "$HOME/.npmrc" "$HOME/.npmrc.pre-stow.$(date +%Y%m%d-%H%M%S).bak"
-        fi
-        ((issues_found++))
+        PLAN+=("Back up + remove ~/.npmrc (registry/auth overrides pnpm)")
+        ACT+=("backup_npmrc|")
     fi
 
-    # 3. ~/.config/pnpm/config.yaml is a real file (not a stow symlink)
-    if [[ -f "$HOME/.config/pnpm/config.yaml" ]] && [[ ! -L "$HOME/.config/pnpm/config.yaml" ]]; then
-        warn "~/.config/pnpm/config.yaml is a real file, not a stow symlink."
-        warn "Stow will refuse to link the repo's config.yaml over it."
-        if confirm "Back up the real file so stow can link the repo version?"; then
-            run_cmd mv "$HOME/.config/pnpm/config.yaml" "$HOME/.config/pnpm/config.yaml.pre-stow.$(date +%Y%m%d-%H%M%S).bak"
-        fi
-        ((issues_found++))
+    # Real config.yaml file where a stow symlink belongs (Linux XDG path; both OSes).
+    if [[ -f "$HOME/.config/pnpm/config.yaml" && ! -L "$HOME/.config/pnpm/config.yaml" ]]; then
+        PLAN+=("Back up real ~/.config/pnpm/config.yaml so stow can link the repo version")
+        ACT+=("backup_yaml|$HOME/.config/pnpm/config.yaml")
+    fi
+    if [[ "$os" == "macos" && -f "$HOME/Library/Preferences/pnpm/config.yaml" && ! -L "$HOME/Library/Preferences/pnpm/config.yaml" ]]; then
+        PLAN+=("Back up real ~/Library/Preferences/pnpm/config.yaml (install bridges it to a symlink)")
+        ACT+=("backup_yaml|$HOME/Library/Preferences/pnpm/config.yaml")
     fi
 
-    # 4. config.yaml with kebab-case keys (silently ignored by pnpm 11 in YAML)
+    # --- informational NOTES (no automatic fix) ---
     local active_cfg=""
-    if [[ "$os" == "macos" ]] && [[ -e "$HOME/Library/Preferences/pnpm/config.yaml" ]]; then
+    if [[ "$os" == "macos" && -e "$HOME/Library/Preferences/pnpm/config.yaml" ]]; then
         active_cfg="$HOME/Library/Preferences/pnpm/config.yaml"
     elif [[ -e "$HOME/.config/pnpm/config.yaml" ]]; then
         active_cfg="$HOME/.config/pnpm/config.yaml"
     fi
     if [[ -n "$active_cfg" ]] && grep -qE '^[a-z]+(-[a-z]+)+:' "$active_cfg" 2>/dev/null; then
-        warn "Detected kebab-case keys in $(pretty_path "$active_cfg") — pnpm 11 silently ignores them in YAML."
-        warn "Settings keys must be camelCase. Examples found:"
-        grep -nE '^[a-z]+(-[a-z]+)+:' "$active_cfg" | head -5 | sed 's/^/    /'
-        warn "Edit the file to switch keys to camelCase (e.g. minimumReleaseAge), then re-run install.sh."
-        ((issues_found++))
+        NOTES+=("kebab-case keys in $(pretty_path "$active_cfg") are ignored by pnpm 11 (YAML needs camelCase). Edit manually.")
     fi
-
-    # 5. PNPM_HOME export in private/local rc files outside stow scope
     local rcfile
     for rcfile in "$HOME/.zshrc.local" "$HOME/.zshrc.private" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile"; do
         if [[ -f "$rcfile" ]] && grep -qE '^export PNPM_HOME|^export PATH.*PNPM_HOME' "$rcfile" 2>/dev/null; then
-            warn "PNPM_HOME export found in $(pretty_path "$rcfile"):"
-            grep -nE 'PNPM_HOME' "$rcfile" | head -3 | sed 's/^/    /'
-            warn "The stowed .zshrc already exports PNPM_HOME. Manual exports double-up PATH or conflict."
-            warn "Edit $(pretty_path "$rcfile") to remove the pnpm lines."
-            ((issues_found++))
+            NOTES+=("PNPM_HOME export in $(pretty_path "$rcfile") may double-up PATH (stowed .zshrc sets it). Edit manually.")
+        fi
+    done
+    if [[ "$os" == "wsl" ]]; then
+        if [[ -n "${PNPM_HOME:-}" && "$PNPM_HOME" == /mnt/[a-z]/* ]]; then
+            NOTES+=("PNPM_HOME points to a Windows mount ($PNPM_HOME) — NTFS breaks pnpm symlinks. Set it to \$HOME/.local/share/pnpm.")
+        fi
+        if command -v pnpm &>/dev/null; then
+            local pp; pp=$(command -v pnpm 2>/dev/null || true)
+            if [[ "$pp" == /mnt/[a-z]/* ]]; then
+                NOTES+=("Active pnpm is a Windows install ($pp) — reorder PATH to put the WSL pnpm first.")
+            fi
+        fi
+    fi
+
+    # --- PLAN (present findings) ---------------------------------------------
+    if (( ${#NOTES[@]} > 0 )); then
+        echo
+        warn "Findings (informational — no automatic change):"
+        local n
+        for n in "${NOTES[@]}"; do echo -e "    ${DIM}- ${n}${RESET}"; done
+    fi
+
+    if (( ${#PLAN[@]} == 0 )); then
+        echo
+        success "Pre-flight pnpm check: nothing to change."
+        return 0
+    fi
+
+    echo
+    warn "Planned pnpm changes (${#PLAN[@]}) — each is confirmed individually; decline any you want to keep:"
+    local i
+    for i in "${!PLAN[@]}"; do
+        printf "    ${BOLD}%2d.${RESET} %s\n" "$((i + 1))" "${PLAN[$i]}"
+    done
+    echo
+
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[dry-run] No changes made. Re-run without --dry-run to apply (you confirm each step)."
+        return 0
+    fi
+
+    if ! confirm "Review and apply these ${#PLAN[@]} change(s) now?" "y"; then
+        warn "Skipped pnpm cleanup. Re-run install.sh when ready (or --skip-preflight to bypass)."
+        return 0
+    fi
+
+    # --- EXECUTE (per-item confirm) ------------------------------------------
+    local applied=0 declined=0
+    for i in "${!ACT[@]}"; do
+        echo
+        info "${PLAN[$i]}"
+        if confirm "  Apply this change?"; then
+            if _pnpm_apply_action "${ACT[$i]}"; then
+                applied=$((applied + 1))
+            else
+                warn "  Action reported a problem; continuing with the rest."
+            fi
+        else
+            declined=$((declined + 1))
         fi
     done
 
-    # 6. Corepack-managed pnpm
-    if command -v corepack &>/dev/null && corepack ls 2>/dev/null | grep -q pnpm; then
-        warn "Corepack has pnpm enabled. May shadow the standalone install."
-        if confirm "Disable corepack-managed pnpm?"; then
-            run_cmd corepack disable pnpm
-        fi
-        ((issues_found++))
-    fi
+    # Clear bash's command-location cache so a just-removed shim isn't still
+    # reported by `command -v pnpm` in the standalone-install step that follows.
+    hash -r 2>/dev/null || true
 
-    # 7. Running pnpm daemons (may hold store locks)
-    if pgrep -x pnpm &>/dev/null; then
-        warn "Running pnpm processes detected:"
-        pgrep -lx pnpm | head -3 | sed 's/^/    /'
-        if confirm "Stop them with pkill?"; then
-            run_cmd pkill -x pnpm || true
-        fi
-        ((issues_found++))
-    fi
-
-    # 8. v10 shim layout (pnpm binary at root instead of bin/)
-    if [[ -n "${PNPM_HOME:-}" && -f "$PNPM_HOME/pnpm" ]]; then
-        warn "pnpm shim at \$PNPM_HOME root (v10 layout). v11 expects \$PNPM_HOME/bin/ only."
-        if confirm "Remove root-level shims (pnpm, pnpx, pn, pnx)?"; then
-            local shim
-            for shim in pnpm pnpx pn pnx; do
-                [[ -f "$PNPM_HOME/$shim" ]] && rm "$PNPM_HOME/$shim"
-            done
-            info "Root shims removed."
-        else
-            ((issues_found++))
-        fi
-    fi
-
-    # 8b. v10 managed-binary residue. pnpm 11 stores self-managed versions under
-    #     .tools/@pnpm+exe/; the bare .tools/pnpm-exe/ dir holds only old pnpm 10
-    #     binaries (dead weight, not on PATH). Platform-agnostic via PNPM_HOME.
-    if [[ -n "${PNPM_HOME:-}" && -d "$PNPM_HOME/.tools/pnpm-exe" ]]; then
-        local v10_exe_size
-        v10_exe_size=$(du -sh "$PNPM_HOME/.tools/pnpm-exe" 2>/dev/null | awk '{print $1}')
-        warn "Old pnpm 10 managed binaries at \$PNPM_HOME/.tools/pnpm-exe (${v10_exe_size:-unknown size})."
-        if confirm "Delete v10 pnpm-exe binaries?"; then
-            run_cmd rm -rf "$PNPM_HOME/.tools/pnpm-exe"
-        fi
-        ((issues_found++))
-    fi
-
-    # --- macOS-only ---
-    if [[ "$os" == "macos" ]]; then
-        # 9. Homebrew pnpm collides with standalone
-        if command -v brew &>/dev/null && brew list pnpm &>/dev/null; then
-            warn "Homebrew has pnpm installed. Collides with the standalone installer."
-            if confirm "Run 'brew uninstall pnpm'?"; then
-                run_cmd brew uninstall pnpm
-            fi
-            ((issues_found++))
-        fi
-
-        # 10. Real file at ~/Library/Preferences/pnpm/config.yaml (not a symlink)
-        local mac_yaml="$HOME/Library/Preferences/pnpm/config.yaml"
-        if [[ -f "$mac_yaml" ]] && [[ ! -L "$mac_yaml" ]]; then
-            warn "$(pretty_path "$mac_yaml") is a real file, not a symlink."
-            warn "install.sh will symlink it to ~/.config/pnpm/config.yaml — needs the real file moved first."
-            if confirm "Back up the real file? (install.sh will then create the bridge symlink)"; then
-                run_cmd mv "$mac_yaml" "${mac_yaml}.pre-stow.$(date +%Y%m%d-%H%M%S).bak"
-            fi
-            ((issues_found++))
-        fi
-
-        # 11. v10 store leftover — offer to delete (v10 is unsupported)
-        if [[ -d "$HOME/Library/pnpm/store/v10" ]]; then
-            local v10_size
-            v10_size=$(du -sh "$HOME/Library/pnpm/store/v10" 2>/dev/null | awk '{print $1}')
-            warn "pnpm 10 store at ~/Library/pnpm/store/v10 (${v10_size:-unknown size})."
-            if confirm "Delete v10 store to reclaim disk?"; then
-                run_cmd rm -rf "$HOME/Library/pnpm/store/v10"
-            fi
-            ((issues_found++))
-        fi
-
-        # 12. v10 globals layout — offer to delete (v10 is unsupported)
-        if [[ -d "$HOME/Library/pnpm/global/5" ]]; then
-            warn "Old pnpm 10 globals at ~/Library/pnpm/global/5."
-            warn "Reinstall any still-needed globals via 'pnpm install -g <pkg>'."
-            if confirm "Delete v10 globals directory?"; then
-                run_cmd rm -rf "$HOME/Library/pnpm/global/5"
-            fi
-            ((issues_found++))
-        fi
-    fi
-
-    # --- Linux/WSL ---
-    if [[ "$os" == "linux" || "$os" == "wsl" ]]; then
-        if command -v dpkg &>/dev/null && dpkg -l 2>/dev/null | grep -qE '^ii\s+pnpm\s'; then
-            warn "apt has pnpm installed. Distro packages lag the standalone version."
-            if confirm "Run 'sudo apt remove pnpm'?"; then
-                run_cmd sudo apt remove pnpm
-            fi
-            ((issues_found++))
-        fi
-        if command -v dnf &>/dev/null && dnf list installed 2>/dev/null | grep -q '^pnpm\.'; then
-            warn "dnf has pnpm installed. Distro packages lag the standalone version."
-            if confirm "Run 'sudo dnf remove pnpm'?"; then
-                run_cmd sudo dnf remove pnpm
-            fi
-            ((issues_found++))
-        fi
-        if command -v pacman &>/dev/null && pacman -Qs '^pnpm$' &>/dev/null; then
-            warn "pacman has pnpm installed. Distro packages lag the standalone version."
-            if confirm "Run 'sudo pacman -R pnpm'?"; then
-                run_cmd sudo pacman -R pnpm
-            fi
-            ((issues_found++))
-        fi
-        if command -v snap &>/dev/null && snap list pnpm &>/dev/null 2>&1; then
-            warn "Snap has pnpm installed. Sandboxing conflicts with standalone setup."
-            if confirm "Run 'snap remove pnpm'?"; then
-                run_cmd snap remove pnpm
-            fi
-            ((issues_found++))
-        fi
-        if [[ -d "$HOME/.local/share/pnpm/global/5" ]]; then
-            warn "Old pnpm 10 globals at ~/.local/share/pnpm/global/5."
-            warn "Reinstall any still-needed globals via 'pnpm install -g <pkg>'."
-            if confirm "Delete v10 globals directory?"; then
-                run_cmd rm -rf "$HOME/.local/share/pnpm/global/5"
-            fi
-            ((issues_found++))
-        fi
-        if [[ -d "$HOME/.local/share/pnpm/store/v10" ]]; then
-            local v10_size
-            v10_size=$(du -sh "$HOME/.local/share/pnpm/store/v10" 2>/dev/null | awk '{print $1}')
-            warn "pnpm 10 store at ~/.local/share/pnpm/store/v10 (${v10_size:-unknown size})."
-            if confirm "Delete v10 store to reclaim disk?"; then
-                run_cmd rm -rf "$HOME/.local/share/pnpm/store/v10"
-            fi
-            ((issues_found++))
-        fi
-    fi
-
-    # --- WSL-only ---
-    if [[ "$os" == "wsl" ]]; then
-        if [[ -n "${PNPM_HOME:-}" ]] && [[ "$PNPM_HOME" == /mnt/[a-z]/* ]]; then
-            error "PNPM_HOME points to a Windows mount: $PNPM_HOME"
-            error "NTFS doesn't support symlinks under WSL2; pnpm will break."
-            error "Fix: export PNPM_HOME=\"\$HOME/.local/share/pnpm\" in your shell rc."
-            ((issues_found++))
-        fi
-        if command -v pnpm &>/dev/null; then
-            local pnpm_path
-            pnpm_path=$(command -v pnpm)
-            if [[ "$pnpm_path" == /mnt/[a-z]/* ]]; then
-                warn "pnpm in PATH is a Windows install: $pnpm_path"
-                warn "WSL and Windows pnpm have different node_modules semantics. Re-order PATH to put WSL pnpm first."
-                ((issues_found++))
-            fi
-        fi
-    fi
-
-    # --- Summary ---
     echo
-    if (( issues_found > 0 )); then
-        warn "Pre-flight check found $issues_found issue(s)."
-        warn "Resolve them above, or re-run with --skip-preflight to bypass."
-        warn "See docs/PNPM_SETUP_GUIDE.md for detailed remediation guidance."
-    else
-        success "Pre-flight pnpm check: clean."
-    fi
+    success "pnpm cleanup complete: $applied applied, $declined declined."
     return 0
 }
 
