@@ -779,7 +779,6 @@ install_yazi_release() {
 }
 
 install_macos_prerequisites() {
-    _preflight_pnpm_check
     # --- Homebrew ---
     if ! command -v brew &>/dev/null; then
         if confirm "Homebrew not found. Install it?"; then
@@ -921,7 +920,6 @@ install_macos_prerequisites() {
 }
 
 install_linux_prerequisites() {
-    _preflight_pnpm_check
     local pkg_mgr=""
     if command -v apt &>/dev/null; then pkg_mgr="apt";
     elif command -v dnf &>/dev/null; then pkg_mgr="dnf";
@@ -1764,6 +1762,12 @@ main() {
         error "Cannot find 'home/' directory. Run this script from the repo root."
         exit 1
     fi
+
+    # --- pnpm conflict pre-flight (corepack/v10 cleanup) ---
+    # Run here (not inside install_prerequisites) so it executes on every run,
+    # shows up under --dry-run, and clears conflicting pnpm sources BEFORE the
+    # standalone-install step — even when all other prerequisites are present.
+    _preflight_pnpm_check
 
     # --- Install prerequisites ---
     if ! check_prerequisites; then
