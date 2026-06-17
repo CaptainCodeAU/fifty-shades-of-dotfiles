@@ -558,9 +558,21 @@ run_onboarding() {
     local nvm_ok=false uv_ok=false pnpm_ok=false
     [[ -d "$HOME/.nvm" ]] && nvm_ok=true
     command -v uv &>/dev/null && uv_ok=true
+    # Resolve pnpm even if $PNPM_HOME/bin isn't on PATH yet: onboarding runs in
+    # .zshrc section 4, BEFORE section 5 adds it. On Apple Silicon the standalone
+    # pnpm lives only at ~/Library/pnpm/bin, so `command -v pnpm` misses it here
+    # and would falsely flag Dev managers. Fall back to the known standalone path
+    # (Intel macOS uses brew pnpm, already on the default PATH).
+    local _pnpm_bin="" _pnpm_cur=""
     if command -v pnpm &>/dev/null; then
-        local _pnpm_cur
-        _pnpm_cur=$(pnpm -v 2>/dev/null)
+        _pnpm_bin=pnpm
+    elif [[ -x "$HOME/Library/pnpm/bin/pnpm" ]]; then
+        _pnpm_bin="$HOME/Library/pnpm/bin/pnpm"
+    elif [[ -x "$HOME/.local/share/pnpm/bin/pnpm" ]]; then
+        _pnpm_bin="$HOME/.local/share/pnpm/bin/pnpm"
+    fi
+    if [[ -n "$_pnpm_bin" ]]; then
+        _pnpm_cur=$("$_pnpm_bin" -v 2>/dev/null)
         [[ -n "$_pnpm_cur" && "$(_pnpm_vercmp "$_pnpm_cur" "$PNPM_MIN_VERSION")" != "-1" ]] && pnpm_ok=true
     fi
 
