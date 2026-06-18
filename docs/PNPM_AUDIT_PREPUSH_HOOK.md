@@ -51,7 +51,9 @@ unchanged (see "How it works").
 What it checks is exactly what `pnpm-audit-tree` checks (advisories, cooldown,
 exotic sources, missing integrity, the `packageManager` pin bypass, lockfile
 hygiene) -- see [`PNPM_AUDIT_TREE.md`](./PNPM_AUDIT_TREE.md). A repo with no
-`package.json` is a no-op (nothing to audit), so non-JS repos push normally.
+`package.json` is a no-op (nothing to audit), so non-JS repos push normally. That
+no-op stays silent by default; run `PNPM_AUDIT_VERBOSE=1 git push` to surface the
+"No JS projects found ..." confirmation when you want to see the guard fire.
 
 ---
 
@@ -148,12 +150,13 @@ use the default `.git/hooks` (or no hooks at all).
 
 ## Configuration
 
-Both are read from the environment at push time.
+These are read from the environment at push time.
 
-| Variable             | Default | Effect                                                                        |
-| -------------------- | ------- | ----------------------------------------------------------------------------- |
-| `PNPM_AUDIT_FAILON`  | `high`  | Minimum severity that blocks the push: `low`, `moderate`, `high`, `critical`. |
-| `PNPM_AUDIT_DISABLE` | (unset) | Set to `1` to skip the audit entirely for that command.                       |
+| Variable             | Default | Effect                                                                                                                                |
+| -------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `PNPM_AUDIT_FAILON`  | `high`  | Minimum severity that blocks the push: `low`, `moderate`, `high`, `critical`.                                                         |
+| `PNPM_AUDIT_DISABLE` | (unset) | Set to `1` to skip the audit entirely for that command.                                                                               |
+| `PNPM_AUDIT_VERBOSE` | (unset) | Set to `1` to print the "No JS projects found" no-op confirmation on a push; suppressed by default for non-JS (Python/Rust/Go) repos. |
 
 Examples:
 
