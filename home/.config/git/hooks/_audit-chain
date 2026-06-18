@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# ============================================================================
+#  _audit-chain -- generic git-hook chainer for a GLOBAL core.hooksPath
+# ============================================================================
+# When `git config --global core.hooksPath ~/.config/git/hooks` is set, git runs
+# hooks ONLY from that directory for EVERY repo -- a repo's own .git/hooks is
+# bypassed, because core.hooksPath REPLACES it (it is not additive). A repo that
+# sets its OWN core.hooksPath (e.g. husky) overrides the global one and is
+# unaffected.
+#
+# To avoid silently disabling repos' existing hooks, every standard client-side
+# hook name is symlinked to THIS script. When invoked it:
+#   1. Delegates to the repo's real .git/hooks/<name> if present + executable
+#      (args + stdin forwarded), so existing per-repo hooks still run.
+#   2. On pre-push ONLY, additionally runs `pnpm-audit-hook full` (network scan:
+#      cooldown + advisories) to block a push carrying supply-chain findings.
+#
+# Fails open if pnpm-audit-hook is not installed. Bypass an audit block with:
+#   PNPM_AUDIT_DISABLE=1 git push ...      (or: git push --no-verify)
+# ============================================================================
+set -uo pipefail
+
+# git invokes the hook by its path in core.hooksPath (e.g. .../hooks/pre-push),
+# so $0's basename is the hook name even though this file is reached via symlink.
+hook="$(basename "$0")"
+
+# 1. Delegate to the repo-local hook of the same name. core.hooksPath is global
+#    here, so resolve the repo's ACTUAL git dir explicitly rather than trusting
+#    the hooks dir git handed us.
+git_dir="$(git rev-parse --git-dir 2>/dev/null || true)"
+if [ -n "$git_dir" ]; then
+    local_hook="$git_dir/hooks/$hook"
+    if [ -x "$local_hook" ] && [ ! "$local_hook" -ef "$0" ]; then
+        "$local_hook" "$@" || exit $?
+    fi
+fi
+
+# 2. pnpm supply-chain audit -- pre-push only.
+if [ "$hook" = "pre-push" ] && command -v pnpm-audit-hook >/dev/null 2>&1; then
+    pnpm-audit-hook full || exit $?
+fi
+
+exit 0

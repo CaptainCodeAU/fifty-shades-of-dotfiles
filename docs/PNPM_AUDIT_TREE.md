@@ -117,6 +117,27 @@ On `cd` into the project it runs a fast offline structural scan and prints a
 one-line warning via direnv's status line if anything moderate or worse is found.
 It never blocks the shell.
 
+### 4. Global git pre-push hook via install.sh (opt-in, confirm-gated)
+
+`install.sh` offers (confirm-gated) to run the auditor on every `git push` across
+ALL repos by pointing global `core.hooksPath` at the stow-managed chainer in
+`home/.config/git/hooks` (-> `~/.config/git/hooks`). Because a global
+`core.hooksPath` REPLACES each repo's `.git/hooks` (it is not additive), the
+chainer (`_audit-chain`, symlinked from every standard client-side hook name)
+first delegates to the repo's own `.git/hooks/<name>` so existing hooks still run,
+then adds `pnpm-audit-hook full` on `pre-push` only. Repos that set their own
+`core.hooksPath` (husky, lefthook) override the global one and are unaffected.
+
+```sh
+./install.sh           # answer yes at "Enable the global pnpm-audit pre-push hook?"
+# or set it yourself:
+git config --global core.hooksPath ~/.config/git/hooks
+```
+
+install.sh never clobbers an existing non-matching global `core.hooksPath` -- it
+warns and skips. Disable with `git config --global --unset core.hooksPath`.
+Bypass once with `PNPM_AUDIT_DISABLE=1 git push` or `git push --no-verify`.
+
 ### Not built (yet)
 
 Scheduled full-tree sweep (launchd/cron) and CI integration -- easy to add later
