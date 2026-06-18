@@ -1867,6 +1867,47 @@ show_help() {
 # Main
 # ==============================================================================
 
+# ==============================================================================
+# pnpm supply-chain audit git hooks (opt-in, confirm-gated)
+# ==============================================================================
+# Optionally route git hooks through the stow-managed chainer at
+# ~/.config/git/hooks so pnpm-audit-hook runs on `git push` for every repo, while
+# preserving each repo's own hooks. A global core.hooksPath REPLACES per-repo
+# .git/hooks (a repo that sets its own core.hooksPath, e.g. husky, overrides this
+# and is unaffected), so the chainer delegates to each repo's real hook first and
+# only adds the audit on pre-push. Dormant until enabled here.
+setup_pnpm_audit_hooks() {
+    local hooks_dir="$HOME/.config/git/hooks"
+    # Need the stowed chainer present, and the auditor on PATH to be useful.
+    [[ -e "$hooks_dir/pre-push" ]] || return 0
+    command -v pnpm-audit-hook >/dev/null 2>&1 || return 0
+
+    local current
+    current=$(git config --global --get core.hooksPath 2>/dev/null || true)
+
+    if [[ "$current" == "$hooks_dir" ]]; then
+        verbose "pnpm-audit git hooks already wired (global core.hooksPath -> $hooks_dir)."
+        return 0
+    fi
+    if [[ -n "$current" ]]; then
+        warn "Global git core.hooksPath is set to '$current' (not the pnpm-audit chainer). Leaving it untouched."
+        info "To enable the pnpm-audit pre-push hook, point it at ${CYAN}$hooks_dir${RESET} yourself."
+        return 0
+    fi
+
+    echo
+    info "Optional: run the pnpm supply-chain auditor on every ${CYAN}git push${RESET} (all repos)."
+    info "  Sets global core.hooksPath -> ${CYAN}$hooks_dir${RESET} (preserves each repo's own hooks;"
+    info "  husky/lefthook repos that set their own hooksPath are unaffected)."
+    info "  Bypass once with ${CYAN}PNPM_AUDIT_DISABLE=1 git push${RESET} or ${CYAN}git push --no-verify${RESET}."
+    if confirm "Enable the global pnpm-audit pre-push hook?"; then
+        run_cmd git config --global core.hooksPath "$hooks_dir"
+        success "Global git hooks wired -> $hooks_dir (pnpm-audit runs on push)."
+    else
+        info "Skipped. Re-run ${CYAN}./install.sh${RESET} anytime to enable it."
+    fi
+}
+
 main() {
     echo
     echo -e "${BOLD}${MAGENTA}╔══════════════════════════════════════════════════════════════╗${RESET}"
@@ -1923,6 +1964,9 @@ main() {
 
     # --- Post-install ---
     post_install
+
+    # --- Optional: pnpm-audit git hooks (confirm-gated) ---
+    setup_pnpm_audit_hooks
 
     # --- Summary ---
     show_summary
