@@ -765,7 +765,14 @@ def main(argv) -> int:
 
     projects = discover_projects(root, args.recursive)
     if not projects:
-        print(C.yellow(f"No JS projects (package.json) found under {root}."))
+        # No-op confirmation. It is noise on every non-JS hook/direnv push
+        # (Python/Rust/Go repos) but useful on a manual run. Suppress it under
+        # --quiet (what hooks and direnv pass) UNLESS PNPM_AUDIT_VERBOSE is set,
+        # so pushes stay clean by default while `PNPM_AUDIT_VERBOSE=1 git push`
+        # still confirms the guard fired. Manual runs (no --quiet) always show it.
+        # Scoped to this branch only -- all JS-tree output is untouched.
+        if not args.quiet or os.environ.get("PNPM_AUDIT_VERBOSE"):
+            print(C.yellow(f"No JS projects (package.json) found under {root}."))
         return 0
 
     if not args.quiet:

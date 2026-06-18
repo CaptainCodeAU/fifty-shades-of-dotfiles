@@ -55,6 +55,12 @@ pnpm-audit-tree [FOLDER] [options]
 - `--no-report` -- skip writing the markdown report (used by hooks/direnv).
 - `--quiet` -- minimal output. `--yes` -- skip the default-root prompt. `--max-registry N` -- cap unique registry lookups.
 
+Environment: `PNPM_AUDIT_VERBOSE=1` re-enables the "No JS projects (package.json) found"
+no-op line under `--quiet` (which hooks and direnv pass), so a push can confirm the guard
+fired. Without it that one line is silent, keeping non-JS hook runs clean. Manual runs
+(no `--quiet`) always show it. Only that no-op notice is gated -- all findings and the
+clean-tree confirmation are unaffected.
+
 Examples:
 
 ```sh
