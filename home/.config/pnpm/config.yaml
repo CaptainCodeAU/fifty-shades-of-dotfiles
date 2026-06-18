@@ -78,6 +78,24 @@ dangerouslyAllowAllBuilds: false
 # required before trusted-publisher) and 11.5.0 (staged-publish `approver` ranked top).
 trustPolicy: no-downgrade
 
+# NOTE: `strictStorePkgContentCheck` (verify the NAMES/VERSIONS of store packages,
+# complementing verifyStoreIntegrity's file-content check) CANNOT be set in this
+# global config.yaml -- pnpm warns "cannot be set in the global config file ... were
+# ignored" and drops it (verified 2026-06-18, pnpm 11.7.0). It is already the pnpm 11
+# default (true), so the check still runs; to PIN it explicitly, set it per-project in
+# pnpm-workspace.yaml or via pnpm config dependencies. Left unset here to avoid a
+# WARN on every pnpm command.
+
+# Before running any package script (pnpm run / pnpm exec / lifecycle), confirm
+# node_modules matches the lockfile. The default `install` SILENTLY auto-installs
+# to reconcile drift; `error` instead REFUSES and exits, so a drifted or tampered
+# node_modules can never run scripts without an explicit, visible `pnpm install`.
+# Paranoid posture: fail closed rather than auto-mutate. Trade-off: a `pnpm run`
+# errors when deps are out of sync (run `pnpm install` first). Relax per-project
+# with `verifyDepsBeforeRun: install` in that project's pnpm-workspace.yaml.
+# pnpm 11 default: install.
+verifyDepsBeforeRun: error
+
 # NOTE: `manage-package-manager-versions` (the global flag that would stop
 # pnpm from auto-installing itself + @pnpm/exe as deps of every project
 # with a `devEngines.packageManager` block) CANNOT be set in this global
