@@ -1786,6 +1786,12 @@ show_summary() {
     if [[ -x "$HOME/.local/bin/watch-history-sync" ]]; then
         echo -e "  ${GREEN}✓${RESET} Standalone script command available: ${CYAN}watch-history-sync${RESET}"
     fi
+    if [[ -x "$HOME/.local/bin/pnpm-audit-tree" ]]; then
+        echo -e "  ${GREEN}✓${RESET} Standalone script command available: ${CYAN}pnpm-audit-tree${RESET} ${DIM}(recursive supply-chain auditor)${RESET}"
+    fi
+    if [[ -x "$HOME/.local/bin/pnpm-audit-hook" ]]; then
+        echo -e "  ${GREEN}✓${RESET} Standalone script command available: ${CYAN}pnpm-audit-hook${RESET} ${DIM}(opt-in git pre-commit/pre-push; see docs/PNPM_AUDIT_TREE.md)${RESET}"
+    fi
 
     # Show what's still missing
     echo
