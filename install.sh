@@ -1872,37 +1872,45 @@ show_help() {
 # ==============================================================================
 # Optionally route git hooks through the stow-managed chainer at
 # ~/.config/git/hooks so pnpm-audit-hook runs on `git push` for every repo, while
-# preserving each repo's own hooks. A global core.hooksPath REPLACES per-repo
+# preserving each repo's own hooks. A user-level core.hooksPath REPLACES per-repo
 # .git/hooks (a repo that sets its own core.hooksPath, e.g. husky, overrides this
 # and is unaffected), so the chainer delegates to each repo's real hook first and
-# only adds the audit on pre-push. Dormant until enabled here.
+# only adds the audit on pre-push. The setting is written to ~/.gitconfig.private
+# (a machine-local file the stowed ~/.gitconfig already [include]s), NOT via
+# `git config --global`: on these dotfiles ~/.gitconfig is a stow symlink into the
+# repo, so --global would write the change straight into the tracked home/.gitconfig
+# (repo pollution). Dormant until enabled here.
 setup_pnpm_audit_hooks() {
     local hooks_dir="$HOME/.config/git/hooks"
+    local priv="$HOME/.gitconfig.private"
     # Need the stowed chainer present, and the auditor on PATH to be useful.
     [[ -e "$hooks_dir/pre-push" ]] || return 0
     command -v pnpm-audit-hook >/dev/null 2>&1 || return 0
 
+    # Effective value: `git config --get` follows the [include] of ~/.gitconfig.private,
+    # so it sees an already-enabled hook. (`--global --get` does NOT follow includes.)
     local current
-    current=$(git config --global --get core.hooksPath 2>/dev/null || true)
+    current=$(git config --get core.hooksPath 2>/dev/null || true)
 
     if [[ "$current" == "$hooks_dir" ]]; then
-        verbose "pnpm-audit git hooks already wired (global core.hooksPath -> $hooks_dir)."
+        verbose "pnpm-audit git hooks already active (core.hooksPath -> $hooks_dir)."
         return 0
     fi
     if [[ -n "$current" ]]; then
-        warn "Global git core.hooksPath is set to '$current' (not the pnpm-audit chainer). Leaving it untouched."
-        info "To enable the pnpm-audit pre-push hook, point it at ${CYAN}$hooks_dir${RESET} yourself."
+        warn "git core.hooksPath is already set to '$current' (not the pnpm-audit chainer). Leaving it untouched."
+        info "To enable manually: ${CYAN}git config --file ~/.gitconfig.private core.hooksPath $hooks_dir${RESET}"
         return 0
     fi
 
     echo
     info "Optional: run the pnpm supply-chain auditor on every ${CYAN}git push${RESET} (all repos)."
-    info "  Sets global core.hooksPath -> ${CYAN}$hooks_dir${RESET} (preserves each repo's own hooks;"
-    info "  husky/lefthook repos that set their own hooksPath are unaffected)."
+    info "  Writes core.hooksPath -> ${CYAN}$hooks_dir${RESET} into ${CYAN}~/.gitconfig.private${RESET} (machine-local,"
+    info "  NOT the stowed ~/.gitconfig). Preserves each repo's own hooks; husky/lefthook"
+    info "  repos that set their own hooksPath are unaffected."
     info "  Bypass once with ${CYAN}PNPM_AUDIT_DISABLE=1 git push${RESET} or ${CYAN}git push --no-verify${RESET}."
-    if confirm "Enable the global pnpm-audit pre-push hook?"; then
-        run_cmd git config --global core.hooksPath "$hooks_dir"
-        success "Global git hooks wired -> $hooks_dir (pnpm-audit runs on push)."
+    if confirm "Enable the pnpm-audit pre-push hook (writes to ~/.gitconfig.private)?"; then
+        run_cmd git config --file "$priv" core.hooksPath "$hooks_dir"
+        success "pnpm-audit pre-push hook enabled via ~/.gitconfig.private (runs on push)."
     else
         info "Skipped. Re-run ${CYAN}./install.sh${RESET} anytime to enable it."
     fi

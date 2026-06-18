@@ -19,16 +19,16 @@ pulling these dotfiles.
 ```sh
 # Turn ON (either one):
 ./install.sh                                            # answer yes at the prompt
-git config --global core.hooksPath ~/.config/git/hooks  # or set it directly
+git config --file ~/.gitconfig.private core.hooksPath ~/.config/git/hooks  # or set it directly
 
 # Check it's on:
-git config --global --get core.hooksPath                # -> ~/.config/git/hooks
+git config --get core.hooksPath                # -> ~/.config/git/hooks
 
 # Bypass for ONE push:
 PNPM_AUDIT_DISABLE=1 git push        # or:  git push --no-verify
 
 # Turn OFF:
-git config --global --unset core.hooksPath
+git config --file ~/.gitconfig.private --unset core.hooksPath
 ```
 
 Severity that blocks defaults to `high`. Override with `PNPM_AUDIT_FAILON`
@@ -80,12 +80,12 @@ After stowing, it prompts:
 
 ```
 Optional: run the pnpm supply-chain auditor on every git push (all repos).
-  Sets global core.hooksPath -> ~/.config/git/hooks ...
-Enable the global pnpm-audit pre-push hook? [y/N]
+  Writes core.hooksPath -> ~/.config/git/hooks into ~/.gitconfig.private ...
+Enable the pnpm-audit pre-push hook (writes to ~/.gitconfig.private)? [y/N]
 ```
 
 Answer `y`. The step is **idempotent** (re-running is safe) and **never
-clobbers** an existing global `core.hooksPath` that points somewhere else -- in
+clobbers** an existing `core.hooksPath` that points somewhere else -- in
 that case it warns and skips, leaving your setup alone.
 
 > Note: the prompt only appears on the full `./install.sh` run, not on
@@ -94,10 +94,17 @@ that case it warns and skips, leaving your setup alone.
 ### Option B -- manually
 
 ```sh
-git config --global core.hooksPath ~/.config/git/hooks
+git config --file ~/.gitconfig.private core.hooksPath ~/.config/git/hooks
 ```
 
 Identical effect to answering yes in the installer.
+
+> Why `~/.gitconfig.private` and not `git config --global`? On these dotfiles,
+> `~/.gitconfig` is a stow symlink into the repo, so `--global` would write the
+> setting straight into the tracked `home/.gitconfig` (repo pollution). The stowed
+> `~/.gitconfig` already `[include]`s the machine-local, untracked
+> `~/.gitconfig.private`, so the hook still takes effect from there. Verify with
+> `git config --get core.hooksPath` -- it follows the include; `--global --get` does not.
 
 ---
 
@@ -187,7 +194,7 @@ repo-local pre-push hook. `--no-verify` skips everything.
 ## Turning it off
 
 ```sh
-git config --global --unset core.hooksPath
+git config --file ~/.gitconfig.private --unset core.hooksPath
 ```
 
 Git immediately falls back to per-repo `.git/hooks` everywhere. The chainer files
@@ -199,7 +206,7 @@ remain stowed (harmless) and can be re-enabled anytime.
 
 ```sh
 # 1. Is the global hooks path pointed at the chainer?
-git config --global --get core.hooksPath          # expect: ~/.config/git/hooks
+git config --get core.hooksPath          # expect: ~/.config/git/hooks
 
 # 2. Does the chainer resolve?
 ls -l ~/.config/git/hooks/pre-push                 # -> _audit-chain
@@ -214,7 +221,7 @@ command -v pnpm-audit-hook                          # on PATH?
 ## Troubleshooting
 
 **Pushes are not being audited.**
-Check `git config --global --get core.hooksPath` is `~/.config/git/hooks`. If the
+Check `git config --get core.hooksPath` is `~/.config/git/hooks`. If the
 repo sets its own `core.hooksPath` (husky/lefthook), the global hook is bypassed
 by design -- audit that repo manually with `pnpm-audit-tree .` or add the per-repo
 hook from [`PNPM_AUDIT_TREE.md`](./PNPM_AUDIT_TREE.md).

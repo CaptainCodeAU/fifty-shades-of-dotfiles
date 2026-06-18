@@ -135,14 +135,18 @@ then adds `pnpm-audit-hook full` on `pre-push` only. Repos that set their own
 `core.hooksPath` (husky, lefthook) override the global one and are unaffected.
 
 ```sh
-./install.sh           # answer yes at "Enable the global pnpm-audit pre-push hook?"
-# or set it yourself:
-git config --global core.hooksPath ~/.config/git/hooks
+./install.sh           # answer yes at the "Enable the pnpm-audit pre-push hook?" prompt
+# or set it yourself (machine-local include, NOT --global -- see note below):
+git config --file ~/.gitconfig.private core.hooksPath ~/.config/git/hooks
 ```
 
-install.sh never clobbers an existing non-matching global `core.hooksPath` -- it
-warns and skips. Disable with `git config --global --unset core.hooksPath`.
-Bypass once with `PNPM_AUDIT_DISABLE=1 git push` or `git push --no-verify`.
+The setting goes in `~/.gitconfig.private` (which the stowed `~/.gitconfig`
+already `[include]`s), not via `git config --global`: on these dotfiles
+`~/.gitconfig` is a stow symlink into the repo, so `--global` would write the
+change into the tracked `home/.gitconfig`. install.sh never clobbers an existing
+non-matching `core.hooksPath` -- it warns and skips. Disable with
+`git config --file ~/.gitconfig.private --unset core.hooksPath`. Bypass once with
+`PNPM_AUDIT_DISABLE=1 git push` or `git push --no-verify`.
 
 ### Not built (yet)
 
