@@ -1,59 +1,125 @@
 #!/usr/bin/env perl
-# md-hardbreak — append two trailing spaces (a CommonMark *hard break*) to prose
-# lines in Markdown, so a single newline renders as a line break in Markdown
-# previews (Zed, GitHub, Obsidian, ...) while the source stays one line per item.
-# Idempotent. Two modes:
+# md-hardbreak v3 — two transforms for Markdown so the source stays readable but
+# the PREVIEW shows line structure:
+#   (1) hard breaks: append two trailing spaces to prose lines (single newline
+#       renders as a line break).
+#   (2) gaps: a blank line BETWEEN TWO PLAIN PROSE PARAGRAPHS becomes a visible
+#       empty row, by inserting one U+2800 (braille blank) as its own paragraph.
 #
-#   md-hardbreak FILE [FILE ...]      edit each Markdown file in place
-#   md-hardbreak --stdin < in > out   filter mode: stdin -> stdout, no diagnostics
-#   md-hardbreak                      (no args) == --stdin
+# Conservative + idempotent. The gap is inserted ONLY when the blank run is
+# sandwiched between two ordinary prose lines, so it never disturbs:
+#   lists, blockquotes, tables, headings, fenced/indented code, YAML frontmatter,
+#   or an existing U+2800 gap.
 #
-# Filter mode is what Zed calls as an external formatter on save. File mode is
-# what the "Markdown: add 2-space line breaks" task / cmd-alt-b keybinding uses.
+# Hard breaks run ALWAYS; gaps run ONLY with --gaps. This lets on-save stay
+# hard-breaks-only (no invisible characters injected automatically) while the
+# gap insertion is a deliberate, manual action you trigger yourself.
 #
-# Never adds spaces "wherever NOT applicable" — it skips:
-#   - fenced code blocks (``` and ~~~)          - blank / whitespace-only lines
-#   - YAML frontmatter (leading --- ... ---)    - ATX headings (#, ##, ...)
-#   - lines already hard-broken (two trailing spaces or a trailing "\")
-#   - non-Markdown files (file mode only, by extension)
+# Modes:
+#   md-hardbreak FILE [FILE ...]            edit Markdown file(s) in place (hard breaks)
+#   md-hardbreak --gaps FILE [FILE ...]     also insert U+2800 paragraph gaps
+#   md-hardbreak --stdin [--gaps]           filter mode (Zed external formatter / tasks)
 
 use strict;
 use warnings;
 
-# Transform a list of lines in place. Returns the number of lines changed.
+my $GAP = "\x{2800}";   # U+2800 BRAILLE PATTERN BLANK
+
+sub is_blank { my $l = shift; return $l =~ /^[ \t]*$/; }
+
+# An ordinary paragraph line that may sit next to an inserted gap.
+sub is_plain_prose {
+    my $l = shift;
+    return 0 if $l =~ /^[ \t]*$/;                 # blank
+    return 0 if $l =~ /^\s{0,3}#{1,6}\s/;         # ATX heading
+    return 0 if $l =~ /^\s*([-*+]|\d+[.)])\s/;    # list item
+    return 0 if $l =~ /^\s*>/;                    # blockquote
+    return 0 if $l =~ /\|/;                       # table / pipe
+    return 0 if $l =~ /^\s*(```|~~~)/;            # code fence
+    return 0 if $l =~ /^ {4,}/ || $l =~ /^\t/;    # indented code
+    return 0 if $l =~ /^(-{3,}|\.{3}|={3,}|\*{3,}|_{3,})\s*$/; # hr/setext/frontmatter
+    return 0 if $l =~ /\x{2800}/;                 # already a gap line
+    return 1;
+}
+
+# transform an array of raw lines (each may carry its own EOL) in place.
 sub harden {
-    my ($lines) = @_;
-    my ($in_code, $in_front, $changed) = (0, 0, 0);
-    for my $i (0 .. $#$lines) {
-        my $line = $lines->[$i];
-        my $nl   = ($line =~ /(\R)\z/) ? $1 : "";
-        (my $body = $line) =~ s/\R\z//;
+    my ($lines_ref, $do_gaps) = @_;
+    my @raw = @$lines_ref;
+    my $n = scalar @raw;
+    my @body = map { my $x = $_; $x =~ s/\R\z//; $x } @raw;
+    my @eol  = map { ($_ =~ /(\R)\z/) ? $1 : "\n" } @raw;
 
-        if ($i == 0 && $body =~ /^---\s*$/) { $in_front = 1; next; }
-        if ($in_front) { $in_front = 0 if $body =~ /^(---|\.\.\.)\s*$/; next; }
-        if ($body =~ /^\s*(```|~~~)/) { $in_code = !$in_code; next; }
-        next if $in_code;
-
-        next if $body =~ /^\s*$/;        # blank / whitespace-only
-        next if $body =~ /^\s*#{1,6}\s/; # ATX heading
-        next if $body =~ /  $/;          # already two trailing spaces
-        next if $body =~ /\\$/;          # already a backslash hard break
-
-        $body =~ s/\s+$//;               # normalise any trailing whitespace
-        $nl = "\n" if $nl eq "";         # last line may lack a newline
-        $lines->[$i] = $body . "  " . $nl;
-        $changed++;
+    # mark code-fence and frontmatter regions over original lines
+    my (@incode, @infront);
+    my ($code, $front) = (0, 0);
+    for my $i (0 .. $n - 1) {
+        my $b = $body[$i];
+        if ($i == 0 && $b =~ /^---\s*$/) { $front = 1; $infront[$i] = 1; $incode[$i] = 0; next; }
+        if ($front) { $infront[$i] = 1; $incode[$i] = 0; $front = 0 if $b =~ /^(---|\.\.\.)\s*$/; next; }
+        $infront[$i] = 0;
+        if ($b =~ /^\s*(```|~~~)/) { $incode[$i] = 1; $code = !$code; next; }
+        $incode[$i] = $code ? 1 : 0;
     }
+
+    my @out;
+    my $changed = 0;
+    my $i = 0;
+    while ($i < $n) {
+        my $b = $body[$i];
+
+        # blank run, outside code/frontmatter -> maybe a gap
+        if (!$incode[$i] && !$infront[$i] && is_blank($b)) {
+            my $j = $i;
+            $j++ while ($j < $n && !$incode[$j] && !$infront[$j] && is_blank($body[$j]));
+            my $pnb;
+            for (my $k = $#out; $k >= 0; $k--) {
+                (my $bb = $out[$k]) =~ s/\R\z//;
+                if ($bb !~ /^[ \t]*$/) { $pnb = $bb; last; }
+            }
+            my $nnb = ($j < $n) ? $body[$j] : undef;
+            if ($do_gaps && defined $pnb && defined $nnb && is_plain_prose($pnb) && is_plain_prose($nnb)) {
+                push @out, "\n", $GAP . "\n", "\n";
+                $changed++;
+            } else {
+                push @out, ($raw[$_]) for ($i .. $j - 1);   # preserve original blanks
+            }
+            $i = $j;
+            next;
+        }
+
+        # non-blank, or inside code/frontmatter
+        my $e = $eol[$i];
+        if ($incode[$i] || $infront[$i]) {
+            push @out, $b . $e;
+        }
+        elsif ($b =~ /^\s*(```|~~~)/)   { push @out, $b . $e; }
+        elsif ($b =~ /^\s*#{1,6}\s/)    { push @out, $b . $e; }
+        elsif ($b =~ /  $/ || $b =~ /\\$/) { push @out, $b . $e; }
+        elsif ($b =~ /\x{2800}/)        { push @out, $b . $e; }   # leave gap marker line alone
+        else {
+            (my $nb = $b) =~ s/\s+$//;
+            my $line = $nb . "  " . $e;
+            push @out, $line;
+            $changed++ if $line ne ($b . $e);
+        }
+        $i++;
+    }
+
+    @$lines_ref = @out;
     return $changed;
 }
 
-my @files = grep { $_ ne '-' && $_ ne '--stdin' } @ARGV;
-my $stdin_mode = (!@ARGV) || grep { $_ eq '-' || $_ eq '--stdin' } @ARGV;
+my @files = grep { $_ ne '-' && $_ ne '--stdin' && $_ ne '--gaps' } @ARGV;
+my $do_gaps = grep { $_ eq '--gaps' } @ARGV;
+my $stdin_mode = (!@files && (grep({ $_ eq '-' || $_ eq '--stdin' } @ARGV) || !@ARGV));
 
-if ($stdin_mode && !@files) {
+if ($stdin_mode) {
+    binmode STDIN,  ':encoding(UTF-8)';
+    binmode STDOUT, ':encoding(UTF-8)';
     my @lines = <STDIN>;
-    harden(\@lines);
-    print @lines;          # only the content — no diagnostics on stdout
+    harden(\@lines, $do_gaps);
+    print @lines;
     exit 0;
 }
 
@@ -64,16 +130,15 @@ for my $file (@files) {
         warn "md-hardbreak: skipping non-Markdown file: $file\n";
         next;
     }
-    open(my $in, '<', $file) or do { warn "md-hardbreak: cannot read $file: $!\n"; next };
+    open(my $in, '<:encoding(UTF-8)', $file) or do { warn "md-hardbreak: cannot read $file: $!\n"; next };
     my @lines = <$in>;
     close $in;
-
-    my $changed = harden(\@lines);
+    my $changed = harden(\@lines, $do_gaps);
     if ($changed) {
-        open(my $out, '>', $file) or do { warn "md-hardbreak: cannot write $file: $!\n"; next };
+        open(my $out, '>:encoding(UTF-8)', $file) or do { warn "md-hardbreak: cannot write $file: $!\n"; next };
         print {$out} @lines;
         close $out;
-        print "md-hardbreak: $file — added hard breaks to $changed line(s)\n";
+        print "md-hardbreak: $file — $changed edit(s)\n";
     } else {
         print "md-hardbreak: $file — nothing to do\n";
     }
