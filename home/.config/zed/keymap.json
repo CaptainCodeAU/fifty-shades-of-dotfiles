@@ -1,0 +1,52 @@
+[
+  {
+    "context": "Terminal",
+    "bindings": {
+      "shift-enter": [
+        "terminal::SendText",
+        "\u001b\r"
+      ]
+    }
+  },
+  {
+    "context": "Workspace",
+    "unbind": {
+      "f5": "debugger::Rerun"
+    }
+  },
+  {
+    "context": "FileFinder || FileFinder > Picker > Editor || FileFinder > Picker > menu",
+    "bindings": {
+      "cmd-shift-j": "pane::SplitDown"
+    }
+  },
+  {
+    "context": "FileFinder || FileFinder > Picker > Editor || FileFinder > Picker > menu",
+    "unbind": {
+      "cmd-j": "pane::SplitDown"
+    }
+  },
+  {
+    "context": "Terminal",
+    "unbind": {
+      "cmd-k": "terminal::Clear"
+    }
+  },
+  {
+    "context": "Editor",
+    "bindings": {
+      "cmd-alt-b": [
+        "task::Spawn",
+        { "task_name": "Markdown: add 2-space line breaks" }
+      ],
+      "cmd-alt-g": [
+        "task::Spawn",
+        { "task_name": "Markdown: add line breaks + paragraph gaps" }
+      ],
+      "cmd-alt-u": [
+        "task::Spawn",
+        { "task_name": "Markdown: strip line breaks + gaps" }
+      ]
+    }
+  }
+]
