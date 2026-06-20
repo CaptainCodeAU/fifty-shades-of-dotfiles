@@ -1,23 +1,92 @@
 #!/usr/bin/env perl
-# md-hardbreak - on-demand Markdown formatting so the SOURCE stays readable while the
-# PREVIEW shows line structure. Composable feature flags; nothing runs on save.
+# =============================================================================
+# md-hardbreak - on-demand Markdown formatting for Zed (and any previewer)
+# =============================================================================
 #
-#   --breaks    hard breaks: two trailing spaces BETWEEN continuing lines of a block,
-#               so a single source newline renders as a line break.
-#   --gaps      paragraph gaps: one U+2800 (braille blank) empty paragraph at each
-#               blank-line block boundary, so a blank line renders as an empty row.
-#   --strip     the inverse: remove md-hardbreak's hard breaks + gaps -> clean source.
+# PURPOSE
+#   Keep a Markdown SOURCE file clean and readable while making its rendered
+#   PREVIEW show the line and paragraph structure you actually typed.
 #
-# Feature flags combine (e.g. `--breaks --gaps`). With NO feature flag the default is
-# --breaks (backward compatible). --strip ignores --breaks/--gaps.
+# WHY THIS EXISTS (verified against the zed-industries/zed source)
+#   Zed's markdown preview follows CommonMark, so by default:
+#     - a single newline inside a paragraph collapses to a SPACE (your separate
+#       lines run together onto one line), and
+#     - a blank line is only a paragraph break; the gap's size is hardcoded
+#       (mb_2 / line-height rems(1.3) in crates/markdown) with NO user setting.
+#   buffer_line_height only changes the scroll step; ui_font_size scales the
+#   whole UI. So the one real lever is the source markup itself - which is what
+#   this script edits, using characters that stay invisible (or nearly so) in
+#   the raw file but change what the renderer draws.
 #
-# Modes:
+# WHAT IT DOES - three composable feature flags
+#   --breaks   Append two trailing spaces BETWEEN continuing lines of a block,
+#              so a single source newline renders as a line break.
+#   --gaps     Insert one U+2800 (braille blank) empty paragraph at each
+#              blank-line block boundary, so a blank line renders as a visible
+#              empty row.
+#   --strip    The inverse: remove the breaks + gaps this tool added, returning
+#              clean source (also collapses runs of blank lines to a single one).
+#
+#   Flags combine. With NO feature flag the default is --breaks (backward
+#   compatible). --strip ignores --breaks/--gaps.
+#
+# MODES
 #   md-hardbreak [flags] FILE [FILE ...]   edit Markdown file(s) in place
-#   md-hardbreak [flags] --stdin           filter: stdin -> stdout (alias: -)
+#   md-hardbreak [flags] --stdin           filter: read stdin, write stdout
+#   md-hardbreak [flags] -                 same as --stdin
+#   md-hardbreak FILE                      no flag == --breaks
 #
-# Conservative + idempotent. Gaps never split a list or sit next to a heading / hr /
-# code fence / blockquote / frontmatter. A hard break is never left on a block's last
-# line (a no-op in Zed but an extra <br> in lenient previewers -> a doubled gap).
+# EXAMPLES
+#   md-hardbreak --breaks notes.md             # hard breaks only
+#   md-hardbreak --gaps notes.md               # gaps only
+#   md-hardbreak --breaks --gaps notes.md      # both
+#   md-hardbreak --strip notes.md              # undo -> clean source
+#   md-hardbreak --breaks --gaps a.md b.md     # several files at once
+#   pbpaste | md-hardbreak --breaks --gaps -   # pipe text through (to stdout)
+#
+# ZED KEY BINDINGS (in ~/.config/zed/keymap.json - LOCAL, not in the repo; they
+# spawn the tasks defined in home/.config/zed/tasks.json):
+#   cmd-alt-b   "Markdown: add 2-space line breaks"          -> --breaks
+#   cmd-alt-g   "Markdown: add line breaks + paragraph gaps" -> --breaks --gaps
+#   cmd-alt-u   "Markdown: strip line breaks + gaps"         -> --strip
+#   NOTE: after editing tasks.json or keymap.json, reload Zed so it sees them.
+#
+# RULES / DECISIONS / NUANCES
+#   - ON-DEMAND ONLY: there is no on-save trigger. Markdown format_on_save is
+#     "off" in Zed settings, so saving leaves the file exactly as typed. (It was
+#     "on" = Prettier-on-save before 2026-06-20, in place since 2026-05-03; we
+#     may revert, but only after tweaking Prettier so it stops indenting lazy
+#     list continuations first.)
+#   - IDEMPOTENT: running any mode a second time changes nothing.
+#   - A hard break is NEVER left on a block's LAST line. A trailing break there
+#     is a no-op in Zed but becomes an extra <br> in lenient previewers, which -
+#     combined with a gap paragraph - renders as a DOUBLE gap. So a break is only
+#     added between two continuing non-blank lines of the same block.
+#   - Gaps are CONSERVATIVE: a gap is inserted at a blank boundary UNLESS it
+#     would split a list (both neighbors are list items) or sits next to a
+#     heading, hr, code fence, blockquote, or an existing gap. Never inside a
+#     fenced code block or YAML frontmatter.
+#   - GAP CHARACTER = U+2800 (braille pattern blank). Why this one:
+#       * U+2800, U+200B (zero-width space) and U+2060 (word joiner) all render
+#         as a gap AND survive Prettier; U+00A0 (no-break space) and U+FEFF (BOM)
+#         get STRIPPED by Prettier, so they are unusable.
+#       * U+2800 is the least likely to trip security scanners / code review (it
+#         is a normal letter-like glyph with width), unlike the true zero-width
+#         characters - which are the same ones used for hidden-text / homograph
+#         attacks. The owner is deliberately wary of invisible characters as a
+#         blanket policy precedent, so U+2800 is the cautious choice.
+#   - A line jammed directly under a "- " bullet with NO blank line is a
+#     list-item CONTINUATION in Markdown; put blank lines around it to make it a
+#     standalone paragraph that can take its own gaps.
+#   - File mode only edits Markdown extensions (.md .markdown .mdx .mdown .mkd
+#     .mkdn); anything else is skipped with a warning.
+#   - The Zed settings.json that sets format_on_save off is skip-worktree, so
+#     that part is Mac-local and not committed.
+#
+# SEE ALSO
+#   ~/.config/zed/tasks.json   - the Zed tasks that invoke this script
+#   ~/.config/zed/keymap.json  - the cmd-alt-b / -g / -u bindings (local only)
+# =============================================================================
 
 use strict;
 use warnings;
