@@ -1,0 +1,67 @@
+#!/usr/bin/env perl
+# md-hardbreak — append two trailing spaces (a CommonMark *hard break*) to prose
+# lines in a Markdown file, so a single newline renders as a line break in
+# Markdown previews (Zed, GitHub, Obsidian, ...) while the source stays one line
+# per item. Edits files in place. Safe to run repeatedly (idempotent).
+#
+# Skips, so it never corrupts structure:
+#   - non-Markdown files (by extension)        - blank / whitespace-only lines
+#   - fenced code blocks (``` and ~~~)          - ATX headings (#, ##, ...)
+#   - YAML frontmatter (leading --- ... ---)    - lines already hard-broken
+#                                                 (two trailing spaces or "\")
+#
+# Usage: md-hardbreak FILE [FILE ...]
+# Zed task passes the current file as $ZED_FILE.
+
+use strict;
+use warnings;
+
+@ARGV or die "usage: md-hardbreak FILE [FILE ...]\n";
+
+for my $file (@ARGV) {
+    unless ($file =~ /\.(md|markdown|mdx|mdown|mkd|mkdn)$/i) {
+        warn "md-hardbreak: skipping non-Markdown file: $file\n";
+        next;
+    }
+
+    open(my $in, '<', $file) or do { warn "md-hardbreak: cannot read $file: $!\n"; next };
+    my @lines = <$in>;
+    close $in;
+
+    my $in_code  = 0;
+    my $in_front = 0;
+    my $changed  = 0;
+
+    for my $i (0 .. $#lines) {
+        my $line = $lines[$i];
+        my $nl   = ($line =~ /(\R)\z/) ? $1 : "";
+        (my $body = $line) =~ s/\R\z//;
+
+        # YAML frontmatter: only when the file's very first line is exactly ---
+        if ($i == 0 && $body =~ /^---\s*$/) { $in_front = 1; next; }
+        if ($in_front) { $in_front = 0 if $body =~ /^(---|\.\.\.)\s*$/; next; }
+
+        # fenced code block toggle (``` or ~~~, optionally indented)
+        if ($body =~ /^\s*(```|~~~)/) { $in_code = !$in_code; next; }
+        next if $in_code;
+
+        next if $body =~ /^\s*$/;        # blank / whitespace-only
+        next if $body =~ /^\s*#{1,6}\s/; # ATX heading
+        next if $body =~ /  $/;          # already two trailing spaces
+        next if $body =~ /\\$/;          # already a backslash hard break
+
+        $body =~ s/\s+$//;               # normalise any trailing whitespace
+        $nl = "\n" if $nl eq "";         # last line may lack a newline
+        $lines[$i] = $body . "  " . $nl;
+        $changed++;
+    }
+
+    if ($changed) {
+        open(my $out, '>', $file) or do { warn "md-hardbreak: cannot write $file: $!\n"; next };
+        print {$out} @lines;
+        close $out;
+        print "md-hardbreak: $file — added hard breaks to $changed line(s)\n";
+    } else {
+        print "md-hardbreak: $file — nothing to do\n";
+    }
+}
