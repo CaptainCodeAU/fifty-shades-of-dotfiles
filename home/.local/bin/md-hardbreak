@@ -11,14 +11,18 @@
 #   lists, blockquotes, tables, headings, fenced/indented code, YAML frontmatter,
 #   or an existing U+2800 gap.
 #
-# Hard breaks run ALWAYS; gaps run ONLY with --gaps. This lets on-save stay
-# hard-breaks-only (no invisible characters injected automatically) while the
-# gap insertion is a deliberate, manual action you trigger yourself.
+# Hard breaks run ALWAYS; gaps run ONLY with --gaps. Formatting is ON-DEMAND -
+# there is NO on-save trigger. Invoke via the Zed tasks (cmd-alt-b = hard breaks,
+# cmd-alt-g = hard breaks + gaps) or the CLI below. Saving leaves the file as typed.
+#
+# A hard break is added only BETWEEN two continuing lines of a block, never on a
+# block's last line (a trailing break there is a no-op in Zed but renders as an
+# extra <br> in lenient previewers, doubling the visible gap).
 #
 # Modes:
 #   md-hardbreak FILE [FILE ...]            edit Markdown file(s) in place (hard breaks)
 #   md-hardbreak --gaps FILE [FILE ...]     also insert U+2800 paragraph gaps
-#   md-hardbreak --stdin [--gaps]           filter mode (Zed external formatter / tasks)
+#   md-hardbreak --stdin [--gaps]           filter mode (stdin -> stdout, for piping)
 
 use strict;
 use warnings;
@@ -110,11 +114,17 @@ sub harden {
         }
         elsif ($b =~ /^\s*(```|~~~)/)   { push @out, $b . $e; }
         elsif ($b =~ /^\s*#{1,6}\s/)    { push @out, $b . $e; }
-        elsif ($b =~ /  $/ || $b =~ /\\$/) { push @out, $b . $e; }
-        elsif ($b =~ /\x{2800}/)        { push @out, $b . $e; }   # leave gap marker line alone
+        elsif ($b =~ /\\$/)             { push @out, $b . $e; }   # explicit backslash break - leave
+        elsif ($b =~ /\x{2800}/)        { push @out, $b . $e; }   # gap marker line - leave
         else {
-            (my $nb = $b) =~ s/\s+$//;
-            my $line = $nb . "  " . $e;
+            (my $nb = $b) =~ s/[ \t]+$//;                         # drop existing trailing ws
+            # A hard break only matters BETWEEN two non-blank lines of the same block.
+            # On a block's LAST line (next line blank / code / EOF) a trailing break is
+            # a no-op in Zed but becomes an extra <br> in lenient previewers, doubling
+            # the visible gap. So only add it when the next line actually continues.
+            my $next_continues = ($i + 1 < $n) && !is_blank($body[$i + 1])
+                                 && !$incode[$i + 1] && !$infront[$i + 1];
+            my $line = $next_continues ? $nb . "  " . $e : $nb . $e;
             push @out, $line;
             $changed++ if $line ne ($b . $e);
         }
