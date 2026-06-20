@@ -42,6 +42,19 @@ sub is_plain_prose {
     return 1;
 }
 
+sub is_list_item { my $l = shift; return $l =~ /^\s*([-*+]|\d+[.)])\s/; }
+
+# A neighbor next to which we must NOT insert a gap (own spacing, or unsafe).
+sub gap_blocked {
+    my $l = shift;
+    return 1 if $l =~ /^\s{0,3}#{1,6}\s/;                       # heading
+    return 1 if $l =~ /^(-{3,}|={3,}|\*{3,}|_{3,}|\.{3})\s*$/;  # hr / setext / frontmatter
+    return 1 if $l =~ /^\s*(```|~~~)/;                          # code fence
+    return 1 if $l =~ /^\s*>/;                                  # blockquote
+    return 1 if $l =~ /\x{2800}/;                               # already a gap line
+    return 0;
+}
+
 # transform an array of raw lines (each may carry its own EOL) in place.
 sub harden {
     my ($lines_ref, $do_gaps) = @_;
@@ -78,7 +91,9 @@ sub harden {
                 if ($bb !~ /^[ \t]*$/) { $pnb = $bb; last; }
             }
             my $nnb = ($j < $n) ? $body[$j] : undef;
-            if ($do_gaps && defined $pnb && defined $nnb && is_plain_prose($pnb) && is_plain_prose($nnb)) {
+            if ($do_gaps && defined $pnb && defined $nnb
+                && !gap_blocked($pnb) && !gap_blocked($nnb)
+                && !(is_list_item($pnb) && is_list_item($nnb))) {
                 push @out, "\n", $GAP . "\n", "\n";
                 $changed++;
             } else {
