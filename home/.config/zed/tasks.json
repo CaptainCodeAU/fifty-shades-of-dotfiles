@@ -1,7 +1,7 @@
 [
 	{
 		"label": "Markdown: add 2-space line breaks",
-		"command": "$HOME/.local/bin/md-hardbreak \"$ZED_FILE\"",
+		"command": "$HOME/.local/bin/md-hardbreak --breaks \"$ZED_FILE\"",
 		"reveal": "no_focus",
 		"hide": "on_success",
 		"use_new_terminal": false,
@@ -9,7 +9,15 @@
 	},
 	{
 		"label": "Markdown: add line breaks + paragraph gaps",
-		"command": "$HOME/.local/bin/md-hardbreak --gaps \"$ZED_FILE\"",
+		"command": "$HOME/.local/bin/md-hardbreak --breaks --gaps \"$ZED_FILE\"",
+		"reveal": "no_focus",
+		"hide": "on_success",
+		"use_new_terminal": false,
+		"allow_concurrent_runs": false
+	},
+	{
+		"label": "Markdown: strip line breaks + gaps",
+		"command": "$HOME/.local/bin/md-hardbreak --strip \"$ZED_FILE\"",
 		"reveal": "no_focus",
 		"hide": "on_success",
 		"use_new_terminal": false,
