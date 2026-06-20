@@ -52,8 +52,9 @@ It runs **on demand only** - there is no on-save trigger. Markdown `format_on_sa
 is `off` in Zed settings, so saving leaves the file exactly as typed.
 
 The tasks live in [`home/.config/zed/tasks.json`](../home/.config/zed/tasks.json)
-(committed); the key bindings live in `~/.config/zed/keymap.json` (local, not in the
-repo). After editing either, reload Zed so it picks them up.
+(committed); the key bindings live in [`home/.config/zed/keymap.json`](../home/.config/zed/keymap.json)
+(committed, stow-symlinked to `~/.config/zed/keymap.json`). After editing either, reload
+Zed so it picks them up.
 
 | Key binding | Zed task                                   | Command                        |
 | ----------- | ------------------------------------------ | ------------------------------ |
@@ -67,7 +68,7 @@ repo). After editing either, reload Zed so it picks them up.
 | --------------------- | -------------------------------- | ------------------------- |
 | Script                | `home/.local/bin/md-hardbreak`   | committed                 |
 | Zed tasks             | `home/.config/zed/tasks.json`    | committed                 |
-| Key bindings          | `~/.config/zed/keymap.json`      | local only                |
+| Key bindings          | `home/.config/zed/keymap.json`   | committed                 |
 | `format_on_save: off` | `home/.config/zed/settings.json` | skip-worktree (Mac-local) |
 
 ## Decisions and nuances

@@ -44,8 +44,8 @@
 #   md-hardbreak --breaks --gaps a.md b.md     # several files at once
 #   pbpaste | md-hardbreak --breaks --gaps -   # pipe text through (to stdout)
 #
-# ZED KEY BINDINGS (in ~/.config/zed/keymap.json - LOCAL, not in the repo; they
-# spawn the tasks defined in home/.config/zed/tasks.json):
+# ZED KEY BINDINGS (in home/.config/zed/keymap.json, stow-symlinked to
+# ~/.config/zed/keymap.json; they spawn the tasks in home/.config/zed/tasks.json):
 #   cmd-alt-b   "Markdown: add 2-space line breaks"          -> --breaks
 #   cmd-alt-g   "Markdown: add line breaks + paragraph gaps" -> --breaks --gaps
 #   cmd-alt-u   "Markdown: strip line breaks + gaps"         -> --strip
@@ -85,7 +85,7 @@
 #
 # SEE ALSO
 #   ~/.config/zed/tasks.json   - the Zed tasks that invoke this script
-#   ~/.config/zed/keymap.json  - the cmd-alt-b / -g / -u bindings (local only)
+#   home/.config/zed/keymap.json  - the cmd-alt-b / -g / -u bindings (committed)
 # =============================================================================
 
 use strict;
