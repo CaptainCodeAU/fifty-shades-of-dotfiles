@@ -1,47 +1,36 @@
 #!/usr/bin/env perl
 # md-hardbreak — append two trailing spaces (a CommonMark *hard break*) to prose
-# lines in a Markdown file, so a single newline renders as a line break in
-# Markdown previews (Zed, GitHub, Obsidian, ...) while the source stays one line
-# per item. Edits files in place. Safe to run repeatedly (idempotent).
+# lines in Markdown, so a single newline renders as a line break in Markdown
+# previews (Zed, GitHub, Obsidian, ...) while the source stays one line per item.
+# Idempotent. Two modes:
 #
-# Skips, so it never corrupts structure:
-#   - non-Markdown files (by extension)        - blank / whitespace-only lines
-#   - fenced code blocks (``` and ~~~)          - ATX headings (#, ##, ...)
-#   - YAML frontmatter (leading --- ... ---)    - lines already hard-broken
-#                                                 (two trailing spaces or "\")
+#   md-hardbreak FILE [FILE ...]      edit each Markdown file in place
+#   md-hardbreak --stdin < in > out   filter mode: stdin -> stdout, no diagnostics
+#   md-hardbreak                      (no args) == --stdin
 #
-# Usage: md-hardbreak FILE [FILE ...]
-# Zed task passes the current file as $ZED_FILE.
+# Filter mode is what Zed calls as an external formatter on save. File mode is
+# what the "Markdown: add 2-space line breaks" task / cmd-alt-b keybinding uses.
+#
+# Never adds spaces "wherever NOT applicable" — it skips:
+#   - fenced code blocks (``` and ~~~)          - blank / whitespace-only lines
+#   - YAML frontmatter (leading --- ... ---)    - ATX headings (#, ##, ...)
+#   - lines already hard-broken (two trailing spaces or a trailing "\")
+#   - non-Markdown files (file mode only, by extension)
 
 use strict;
 use warnings;
 
-@ARGV or die "usage: md-hardbreak FILE [FILE ...]\n";
-
-for my $file (@ARGV) {
-    unless ($file =~ /\.(md|markdown|mdx|mdown|mkd|mkdn)$/i) {
-        warn "md-hardbreak: skipping non-Markdown file: $file\n";
-        next;
-    }
-
-    open(my $in, '<', $file) or do { warn "md-hardbreak: cannot read $file: $!\n"; next };
-    my @lines = <$in>;
-    close $in;
-
-    my $in_code  = 0;
-    my $in_front = 0;
-    my $changed  = 0;
-
-    for my $i (0 .. $#lines) {
-        my $line = $lines[$i];
+# Transform a list of lines in place. Returns the number of lines changed.
+sub harden {
+    my ($lines) = @_;
+    my ($in_code, $in_front, $changed) = (0, 0, 0);
+    for my $i (0 .. $#$lines) {
+        my $line = $lines->[$i];
         my $nl   = ($line =~ /(\R)\z/) ? $1 : "";
         (my $body = $line) =~ s/\R\z//;
 
-        # YAML frontmatter: only when the file's very first line is exactly ---
         if ($i == 0 && $body =~ /^---\s*$/) { $in_front = 1; next; }
         if ($in_front) { $in_front = 0 if $body =~ /^(---|\.\.\.)\s*$/; next; }
-
-        # fenced code block toggle (``` or ~~~, optionally indented)
         if ($body =~ /^\s*(```|~~~)/) { $in_code = !$in_code; next; }
         next if $in_code;
 
@@ -52,10 +41,34 @@ for my $file (@ARGV) {
 
         $body =~ s/\s+$//;               # normalise any trailing whitespace
         $nl = "\n" if $nl eq "";         # last line may lack a newline
-        $lines[$i] = $body . "  " . $nl;
+        $lines->[$i] = $body . "  " . $nl;
         $changed++;
     }
+    return $changed;
+}
 
+my @files = grep { $_ ne '-' && $_ ne '--stdin' } @ARGV;
+my $stdin_mode = (!@ARGV) || grep { $_ eq '-' || $_ eq '--stdin' } @ARGV;
+
+if ($stdin_mode && !@files) {
+    my @lines = <STDIN>;
+    harden(\@lines);
+    print @lines;          # only the content — no diagnostics on stdout
+    exit 0;
+}
+
+@files or die "usage: md-hardbreak FILE [FILE ...]  |  md-hardbreak --stdin < in > out\n";
+
+for my $file (@files) {
+    unless ($file =~ /\.(md|markdown|mdx|mdown|mkd|mkdn)$/i) {
+        warn "md-hardbreak: skipping non-Markdown file: $file\n";
+        next;
+    }
+    open(my $in, '<', $file) or do { warn "md-hardbreak: cannot read $file: $!\n"; next };
+    my @lines = <$in>;
+    close $in;
+
+    my $changed = harden(\@lines);
     if ($changed) {
         open(my $out, '>', $file) or do { warn "md-hardbreak: cannot write $file: $!\n"; next };
         print {$out} @lines;
