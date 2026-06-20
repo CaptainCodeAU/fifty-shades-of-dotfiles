@@ -39,6 +39,14 @@
 [include]
 	path = ~/.gitconfig.private
 
+# Credential helpers: disabled on purpose. An empty helper value resets the
+# helper list, neutralising any inherited helper (e.g. osxkeychain from Xcode's
+# system gitconfig) so a stray HTTPS git auth can never silently cache a token
+# in the Keychain. Reinforces the SSH-only posture above (added 2026-06-20
+# after a leftover gho_ OAuth token was found cached by git-credential-osxkeychain).
+[credential]
+	helper =
+
 [color]
 	ui = auto
 
