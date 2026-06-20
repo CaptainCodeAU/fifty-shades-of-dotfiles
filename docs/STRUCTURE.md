@@ -89,6 +89,23 @@ yt-dlp configuration template.
 
 **Note**: The `yt()` function in `.zshrc` auto-generates this config file if it doesn't exist. This file serves as a template/reference.
 
+### `home/.local/bin/` - Standalone Commands
+
+Executable commands exposed on `PATH` via `~/.local/bin`. Two kinds:
+
+- **Direct** scripts live entirely in `home/.local/bin/<name>`.
+- **Wrapper** scripts are thin stubs that exec a source script in `home/.local/share/fifty-shades-of-dotfiles/scripts/<name>.sh` - see that directory's `README.md` for the wrapper architecture and the add-a-script workflow.
+
+| Command                   | Purpose                                                                                                                            | Kind    |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `md-hardbreak`            | On-demand Markdown formatting for Zed: hard breaks / paragraph gaps / strip (see `docs/ZED_MARKDOWN_FORMATTING.md`)                | direct  |
+| `migrate-claude-projects` | Rename Claude Code project dirs after the repo moves to a new path (see `docs/CODE_FOLDER_STRUCTURE.md`)                           | direct  |
+| `pnpm-audit-tree`         | Recursive supply-chain auditor for pnpm / JS project trees (see `docs/PNPM_AUDIT_TREE.md`)                                         | direct  |
+| `pnpm-audit-hook`         | Git pre-commit/pre-push hook that blocks on supply-chain findings; wraps `pnpm-audit-tree` (see `docs/PNPM_AUDIT_PREPUSH_HOOK.md`) | direct  |
+| `dirdiff`                 | Directory comparison tool (Left vs Right; size / content / by-type, JSON output)                                                   | wrapper |
+| `sysinfo`                 | Terminal system-information dashboard                                                                                              | wrapper |
+| `watch-history-sync`      | Export YouTube watch history to a local SQLite database                                                                            | wrapper |
+
 ### `platforms/` - Platform-Specific Files
 
 Files that are specific to certain operating systems or platforms.
@@ -129,6 +146,7 @@ Documentation and reference materials.
 | `AGENT_BRIEF.md`                   | Safe cross-agent interaction patterns and stow/branch-switching hazards for sibling-project agents |
 | `SECURITY.md`                      | Strict SSH posture rationale, alternative postures table, and drift-check commands                 |
 | `MEMENTO_vscode_machine_colors.md` | Complete guide for VSCode/Cursor machine-specific color setup                                      |
+| `ZED_MARKDOWN_FORMATTING.md`       | md-hardbreak: hard breaks / paragraph gaps / strip, Zed tasks + key bindings, and the rationale    |
 | `reference/colors.md`              | Color palette reference                                                                            |
 | `reference/mermaid_examples.md`    | Mermaid diagram examples                                                                           |
 | `reference/tmux_cheatsheet.md`     | Tmux quick reference guide                                                                         |
