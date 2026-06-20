@@ -1,0 +1,10 @@
+[
+	{
+		"label": "Markdown: add 2-space line breaks",
+		"command": "$HOME/.local/bin/md-hardbreak \"$ZED_FILE\"",
+		"reveal": "no_focus",
+		"hide": "on_success",
+		"use_new_terminal": false,
+		"allow_concurrent_runs": false
+	}
+]
