@@ -141,16 +141,17 @@ Application settings exported for reference and manual import. These are not aut
 
 Documentation and reference materials.
 
-| File/Directory                     | Purpose                                                                                            |
-| ---------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `AGENT_BRIEF.md`                   | Safe cross-agent interaction patterns and stow/branch-switching hazards for sibling-project agents |
-| `SECURITY.md`                      | Strict SSH posture rationale, alternative postures table, and drift-check commands                 |
-| `MEMENTO_vscode_machine_colors.md` | Complete guide for VSCode/Cursor machine-specific color setup                                      |
-| `ZED_MARKDOWN_FORMATTING.md`       | md-hardbreak: hard breaks / paragraph gaps / strip, Zed tasks + key bindings, and the rationale    |
-| `reference/colors.md`              | Color palette reference                                                                            |
-| `reference/mermaid_examples.md`    | Mermaid diagram examples                                                                           |
-| `reference/tmux_cheatsheet.md`     | Tmux quick reference guide                                                                         |
-| `reference/windows/`               | Historical Windows batch scripts (reference only, not for deployment)                              |
+| File/Directory                     | Purpose                                                                                                                                              |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AGENT_BRIEF.md`                   | Safe cross-agent interaction patterns and stow/branch-switching hazards for sibling-project agents                                                   |
+| `CLAUDE_SESSION_ATTRIBUTION.md`    | Auto-stamp commits with a Claude-Session trailer (SessionStart identity hook + \_audit-chain step); fresh-machine runbook, verification, and gotchas |
+| `SECURITY.md`                      | Strict SSH posture rationale, alternative postures table, and drift-check commands                                                                   |
+| `MEMENTO_vscode_machine_colors.md` | Complete guide for VSCode/Cursor machine-specific color setup                                                                                        |
+| `ZED_MARKDOWN_FORMATTING.md`       | md-hardbreak: hard breaks / paragraph gaps / strip, Zed tasks + key bindings, and the rationale                                                      |
+| `reference/colors.md`              | Color palette reference                                                                                                                              |
+| `reference/mermaid_examples.md`    | Mermaid diagram examples                                                                                                                             |
+| `reference/tmux_cheatsheet.md`     | Tmux quick reference guide                                                                                                                           |
+| `reference/windows/`               | Historical Windows batch scripts (reference only, not for deployment)                                                                                |
 
 #### `docs/reference/windows/`
 
