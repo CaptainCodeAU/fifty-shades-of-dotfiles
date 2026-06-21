@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# ============================================================================
+#  claude-session-env -- Claude Code SessionStart hook
+# ============================================================================
+# Lives alongside the git hooks (~/.config/git/hooks/claude-session-env) and is
+# referenced from ~/.claude/settings.json. It is NOT a git hook (its name is not
+# a git hook name), so git never invokes it.
+#
+# On every SessionStart, Claude Code pipes a JSON payload on stdin containing
+# `session_id` and, when the session is named, `session_title`. This script:
+#   1. Exports CLAUDE_SESSION_ID and CLAUDE_SESSION_NAME for the rest of the
+#      session via CLAUDE_ENV_FILE, so _audit-chain's prepare-commit-msg step
+#      can stamp the Claude-Session: trailer.
+#   2. Injects an identity line into the model's context so the fork knows its
+#      own name/id (used on the CROSS-SESSION ANNOUNCEMENT `FROM:` line).
+#
+# Fail-open: never exits non-zero. Requires jq; degrades quietly if missing.
+# ============================================================================
+set -uo pipefail
+
+input="$(cat 2>/dev/null || true)"
+
+sid=""
+name=""
+if [ -n "$input" ] && command -v jq >/dev/null 2>&1; then
+    sid="$(printf '%s' "$input"  | jq -r '.session_id // empty'    2>/dev/null || true)"
+    name="$(printf '%s' "$input" | jq -r '.session_title // empty' 2>/dev/null || true)"
+fi
+
+# 1. Persist identity for scripts + git hooks (sourced for the whole session).
+if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
+    {
+        [ -n "$sid" ]  && printf 'export CLAUDE_SESSION_ID=%q\n'   "$sid"
+        [ -n "$name" ] && printf 'export CLAUDE_SESSION_NAME=%q\n' "$name"
+    } >> "$CLAUDE_ENV_FILE" 2>/dev/null || true
+fi
+
+# 2. Inject identity into the model's context (documented JSON channel; falls
+#    back to plain stdout if jq is unavailable).
+if [ -n "$sid" ]; then
+    if [ -n "$name" ]; then
+        ctx="Session identity: you are session \"$name\" (id: $sid). Use \"$name\" on your CROSS-SESSION ANNOUNCEMENT FROM: line. Commits you make are auto-stamped with a Claude-Session trailer carrying this id and name -- do not add it by hand."
+    else
+        ctx="Session identity: this session is unnamed (id: $sid). Use this id on your CROSS-SESSION ANNOUNCEMENT FROM: line. Commits you make are auto-stamped with a Claude-Session trailer carrying this id -- do not add it by hand."
+    fi
+    if command -v jq >/dev/null 2>&1; then
+        jq -n --arg c "$ctx" '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:$c}}'
+    else
+        printf '%s\n' "$ctx"
+    fi
+fi
+
+exit 0

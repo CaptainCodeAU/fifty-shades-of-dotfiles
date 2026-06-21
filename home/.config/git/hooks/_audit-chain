@@ -40,4 +40,24 @@ if [ "$hook" = "pre-push" ] && command -v pnpm-audit-hook >/dev/null 2>&1; then
     pnpm-audit-hook full || exit $?
 fi
 
+# 3. Claude Code session attribution -- prepare-commit-msg only.
+#    Stamp a Claude-Session: trailer when this commit is made inside a Claude
+#    Code session (CLAUDE_SESSION_ID exported by the SessionStart hook). Skips
+#    if the trailer is already present (manual add / amend), so it never doubles.
+if [ "$hook" = "prepare-commit-msg" ] && [ -n "${CLAUDE_SESSION_ID:-}" ]; then
+    msg_file="${1:-}"
+    if [ -n "$msg_file" ] && [ -f "$msg_file" ] \
+        && ! grep -qi '^Claude-Session:' "$msg_file"; then
+        if [ -n "${CLAUDE_SESSION_NAME:-}" ]; then
+            trailer="Claude-Session: ${CLAUDE_SESSION_ID} (${CLAUDE_SESSION_NAME})"
+        else
+            trailer="Claude-Session: ${CLAUDE_SESSION_ID}"
+        fi
+        # git interpret-trailers places it in the trailer block correctly;
+        # fall back to a plain append if it's unavailable for any reason.
+        git interpret-trailers --trailer "$trailer" --in-place "$msg_file" 2>/dev/null \
+            || printf '\n%s\n' "$trailer" >> "$msg_file"
+    fi
+fi
+
 exit 0
