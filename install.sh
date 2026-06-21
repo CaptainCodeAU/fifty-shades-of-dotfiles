@@ -1887,10 +1887,14 @@ setup_pnpm_audit_hooks() {
     [[ -e "$hooks_dir/pre-push" ]] || return 0
     command -v pnpm-audit-hook >/dev/null 2>&1 || return 0
 
-    # Effective value: `git config --get` follows the [include] of ~/.gitconfig.private,
-    # so it sees an already-enabled hook. (`--global --get` does NOT follow includes.)
+    # Probe the value straight from ~/.gitconfig.private, where this setting is designed
+    # to live. A plain `git config --get` reads the MERGED effective value -- and since
+    # install.sh runs from inside this repo, a repo-local core.hooksPath (husky/lefthook,
+    # or a stray override) would shadow the global state and mislead the decision below.
+    # `--file "$priv"` reads only that file, immune to repo-local shadowing. (`--global
+    # --get` is wrong here: it does NOT follow the [include] of ~/.gitconfig.private.)
     local current
-    current=$(git config --get core.hooksPath 2>/dev/null || true)
+    current=$(git config --file "$priv" --get core.hooksPath 2>/dev/null || true)
 
     if [[ "$current" == "$hooks_dir" ]]; then
         verbose "pnpm-audit git hooks already active (core.hooksPath -> $hooks_dir)."
