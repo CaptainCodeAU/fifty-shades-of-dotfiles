@@ -40,6 +40,7 @@ If you just want the shell functions without the full install, you can symlink i
 - **🎨 Machine & Project Color Identity**: Automatic per-machine title bar/status bar colors via direnv (macOS ARM, Intel, WSL, Linux), plus a scaffolding script (`init-vscode-project-settings.sh`) to give each project its own visual identity. All colors come from 10 named profiles in `color-profiles.json`.
 - **📝 Editor Integration**: Automatic environment syncing between Cursor/VSCode terminals and tmux sessions.
 - **✍️ Zed Markdown Formatting**: On-demand `md-hardbreak` command (and Zed shortcuts `cmd-alt-b`/`cmd-alt-g`/`cmd-alt-u`) to render single-line breaks and paragraph gaps in Markdown preview without cluttering the source. See [`docs/ZED_MARKDOWN_FORMATTING.md`](docs/ZED_MARKDOWN_FORMATTING.md).
+- **🪪 Claude-Session Commit Attribution**: Commits made inside a Claude Code session are auto-stamped with a `Claude-Session:` trailer (session id + fork name) via a SessionStart identity hook plus the `_audit-chain` git chainer - global, idempotent, no per-repo setup. See [`docs/CLAUDE_SESSION_ATTRIBUTION.md`](docs/CLAUDE_SESSION_ATTRIBUTION.md).
 - **🎬 Media Tools**: Built-in `yt()` wrapper for yt-dlp with auto-generated configuration and quality presets.
 - **🔒 Private Configuration**: A built-in pattern for managing your secret keys and machine-specific settings in a `.zshrc.private` file, which is kept out of version control.
 
@@ -928,6 +929,7 @@ fifty-shades-of-dotfiles/
 │       └── wezterm.lua               # Full config (color scheme, keys, tabs, SSH detection)
 │
 └── docs/                              # Documentation
+    ├── CLAUDE_SESSION_ATTRIBUTION.md
     ├── MEMENTO_vscode_machine_colors.md
     ├── ZED_MARKDOWN_FORMATTING.md
     └── reference/                     # Reference materials
