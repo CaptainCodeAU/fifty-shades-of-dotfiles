@@ -81,7 +81,16 @@ documented=$(grep -oE 'ZED_PREVIEW_DOC_VERSION:[[:space:]]*[0-9]+\.[0-9]+\.[0-9]
 cache="${TMPDIR:-/tmp}/zed-preview-latest.cache"
 ttl=21600
 now=$(date +%s)
-mtime=$(stat -f %m "$cache" 2>/dev/null || stat -c %Y "$cache" 2>/dev/null || echo 0)
+# Portable mtime. Try GNU stat (-c %Y) FIRST, then BSD/macOS stat (-f %m). Order is load-
+# bearing: on Linux `-f` means --file-system (not "format"), so `stat -f %m "$cache"` runs in
+# FILESYSTEM mode and prints a multi-line block starting with `  File: "..."` to stdout. That
+# `File:` text lands in mtime (and if that stat also exits non-zero, the `||` fallback's number
+# is merely appended after it) -- either way mtime is non-numeric, which crashed
+# `$((now - mtime))` under `set -u` (bash re-evaluated the word `File` as an unset variable ->
+# "File: unbound variable"). GNU-first avoids the garbage path entirely; the numeric guard is
+# a backstop so the arithmetic below can never choke on any stat output.
+mtime=$(stat -c %Y "$cache" 2>/dev/null || stat -f %m "$cache" 2>/dev/null || echo 0)
+case "$mtime" in ''|*[!0-9]*) mtime=0;; esac
 latest=""
 if [ -s "$cache" ] && [ "$((now - mtime))" -lt "$ttl" ]; then
   latest=$(cat "$cache" 2>/dev/null)
