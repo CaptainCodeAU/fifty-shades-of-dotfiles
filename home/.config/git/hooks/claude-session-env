@@ -7,10 +7,13 @@
 # a git hook name), so git never invokes it.
 #
 # On every SessionStart, Claude Code pipes a JSON payload on stdin containing
-# `session_id` and, when the session is named, `session_title`. This script:
-#   1. Exports CLAUDE_SESSION_ID and CLAUDE_SESSION_NAME for the rest of the
-#      session via CLAUDE_ENV_FILE, so _audit-chain's prepare-commit-msg step
-#      can stamp the Claude-Session: trailer.
+# `session_id` (UUID), `transcript_path`, `cwd`, `source`, and `model`. NOTE
+# (verified 2026-06-22): the startup payload carries NO `session_title` (a /rename
+# happens after SessionStart fires) and NO claude.ai web id, so the name path is
+# usually inert and the web URL must be harvested downstream. This script:
+#   1. Exports CLAUDE_SESSION_ID (and CLAUDE_SESSION_NAME if a name is ever present,
+#      e.g. possibly on a future resume) via CLAUDE_ENV_FILE, so _audit-chain's
+#      prepare-commit-msg step can stamp the C-Sess-Id / C-Web-Id trailers.
 #   2. Injects an identity line into the model's context so the fork knows its
 #      own name/id (used on the CROSS-SESSION ANNOUNCEMENT `FROM:` line).
 #
@@ -39,9 +42,9 @@ fi
 #    back to plain stdout if jq is unavailable).
 if [ -n "$sid" ]; then
     if [ -n "$name" ]; then
-        ctx="Session identity: you are session \"$name\" (id: $sid). Use \"$name\" on your CROSS-SESSION ANNOUNCEMENT FROM: line. Commits you make are auto-stamped with a Claude-Session trailer carrying this id and name -- do not add it by hand."
+        ctx="Session identity: you are session \"$name\" (id: $sid). Use \"$name\" on your CROSS-SESSION ANNOUNCEMENT FROM: line. Commits you make are auto-stamped with C-Sess-Id: $sid plus C-Web-Id, C-Branch, C-Worktree, and C-Wt-Path (commit context). The hook fills C-Web-Id by harvesting the \"Claude-Session: <url>\" line the harness still has you append, so keep appending that line if asked -- but do NOT hand-add any C- trailer."
     else
-        ctx="Session identity: this session is unnamed (id: $sid). Use this id on your CROSS-SESSION ANNOUNCEMENT FROM: line. Commits you make are auto-stamped with a Claude-Session trailer carrying this id -- do not add it by hand."
+        ctx="Session identity: this session is unnamed (id: $sid). Use this id on your CROSS-SESSION ANNOUNCEMENT FROM: line. Commits you make are auto-stamped with C-Sess-Id: $sid plus C-Web-Id, C-Branch, C-Worktree, and C-Wt-Path (commit context). The hook fills C-Web-Id by harvesting the \"Claude-Session: <url>\" line the harness still has you append, so keep appending that line if asked -- but do NOT hand-add any C- trailer."
     fi
     if command -v jq >/dev/null 2>&1; then
         jq -n --arg c "$ctx" '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:$c}}'

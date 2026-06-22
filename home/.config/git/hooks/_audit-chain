@@ -41,22 +41,91 @@ if [ "$hook" = "pre-push" ] && command -v pnpm-audit-hook >/dev/null 2>&1; then
 fi
 
 # 3. Claude Code session attribution -- prepare-commit-msg only.
-#    Stamp a Claude-Session: trailer when this commit is made inside a Claude
-#    Code session (CLAUDE_SESSION_ID exported by the SessionStart hook). Skips
-#    if the trailer is already present (manual add / amend), so it never doubles.
-if [ "$hook" = "prepare-commit-msg" ] && [ -n "${CLAUDE_SESSION_ID:-}" ]; then
+#    Stamp two independent, machine-parseable trailers on commits made inside a
+#    Claude Code session:
+#      C-Sess-Id: <local UUID>    -- from $CLAUDE_SESSION_ID (set by the SessionStart
+#                                    hook); maps to the on-disk transcript.
+#      C-Web-Id:  <claude.ai URL> -- harvested from the harness-appended
+#                                    "Claude-Session: <url>" line (the only live source;
+#                                    the web id is exposed to no hook/env). Blank when
+#                                    unavailable -- downstream decides what blank means.
+#    Trailer tokens are [A-Za-z0-9-] only: underscores are NOT valid trailers (they
+#    render with a doubled separator and are invisible to interpret-trailers --parse),
+#    hence the hyphenated keys. The per-key grep guard provides idempotency --
+#    interpret-trailers alone re-adds (doubles) on --amend.
+#    Runs only when a Claude session id is set OR a Claude-Session: URL is present, so
+#    non-Claude commits stay untouched. We MIGRATE the retired Claude-Session: line into
+#    C-Web-Id going forward; existing history is left as-is (no rewrite).
+if [ "$hook" = "prepare-commit-msg" ]; then
     msg_file="${1:-}"
-    if [ -n "$msg_file" ] && [ -f "$msg_file" ] \
-        && ! grep -qi '^Claude-Session:' "$msg_file"; then
-        if [ -n "${CLAUDE_SESSION_NAME:-}" ]; then
-            trailer="Claude-Session: ${CLAUDE_SESSION_ID} (${CLAUDE_SESSION_NAME})"
-        else
-            trailer="Claude-Session: ${CLAUDE_SESSION_ID}"
+    if [ -n "$msg_file" ] && [ -f "$msg_file" ]; then
+        # Source the web URL: explicit env first (CLAUDE_WEB_URL is only set if a payload
+        # field ever exists -- none today, confirmed), else harvest the harness-appended
+        # Claude-Session: line. Strip ONLY the leading key + spaces so the URL's own ':'
+        # (https://) survives intact.
+        web="${CLAUDE_WEB_URL:-}"
+        if [ -z "$web" ] && grep -qi '^Claude-Session:' "$msg_file"; then
+            web="$(grep -i -m1 '^Claude-Session:' "$msg_file" \
+                | sed -E 's/^[Cc]laude-[Ss]ession:[[:space:]]*//')"
         fi
-        # git interpret-trailers places it in the trailer block correctly;
-        # fall back to a plain append if it's unavailable for any reason.
-        git interpret-trailers --trailer "$trailer" --in-place "$msg_file" 2>/dev/null \
-            || printf '\n%s\n' "$trailer" >> "$msg_file"
+        # Act only on Claude commits (id set) or when a URL was harvested.
+        if [ -n "${CLAUDE_SESSION_ID:-}" ] || [ -n "$web" ]; then
+            # Migrate: drop the retired single key so it does not persist alongside the
+            # new ones. Portable in-place delete (GNU sed: -i ; BSD/macOS sed: -i '').
+            if grep -qi '^Claude-Session:' "$msg_file"; then
+                if sed --version >/dev/null 2>&1; then
+                    sed -i -E '/^[Cc]laude-[Ss]ession:/d' "$msg_file"
+                else
+                    sed -i '' -E '/^[Cc]laude-[Ss]ession:/d' "$msg_file"
+                fi
+            fi
+            # Commit context: branch (blank on detached HEAD), worktree folder name,
+            # and worktree path. The path is recorded $HOME-relative (~/...) so a
+            # machine-local username/layout never lands in history; a path outside
+            # $HOME stays absolute. (bash 3.2-safe: no arrays, no nested-quote expansion.)
+            branch="$(git symbolic-ref --short -q HEAD 2>/dev/null || true)"
+            top="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+            wt_name=""; wt_path=""
+            if [ -n "$top" ]; then
+                wt_name="$(basename "$top")"
+                wt_path="$top"
+                if [ -n "${HOME:-}" ]; then
+                    case "$top" in
+                        "$HOME"/*) wt_path="~/${top#$HOME/}" ;;
+                        "$HOME")   wt_path="~" ;;
+                    esac
+                fi
+            fi
+            # Emit each key only if absent (idempotent across --amend). Empty values are
+            # intentional and survive on this git (2.50.1); on older git that strips empty
+            # trailers, the printf fallback still writes the key (also covers a missing
+            # interpret-trailers).
+            if ! grep -qi '^C-Sess-Id:' "$msg_file"; then
+                git interpret-trailers --trailer "C-Sess-Id: ${CLAUDE_SESSION_ID:-}" \
+                    --in-place "$msg_file" 2>/dev/null \
+                    || printf '\nC-Sess-Id: %s\n' "${CLAUDE_SESSION_ID:-}" >> "$msg_file"
+            fi
+            if ! grep -qi '^C-Web-Id:' "$msg_file"; then
+                git interpret-trailers --trailer "C-Web-Id: ${web}" \
+                    --in-place "$msg_file" 2>/dev/null \
+                    || printf 'C-Web-Id: %s\n' "${web}" >> "$msg_file"
+            fi
+            if ! grep -qi '^C-Branch:' "$msg_file"; then
+                git interpret-trailers --trailer "C-Branch: ${branch}" \
+                    --in-place "$msg_file" 2>/dev/null \
+                    || printf 'C-Branch: %s\n' "${branch}" >> "$msg_file"
+            fi
+            if ! grep -qi '^C-Worktree:' "$msg_file"; then
+                git interpret-trailers --trailer "C-Worktree: ${wt_name}" \
+                    --in-place "$msg_file" 2>/dev/null \
+                    || printf 'C-Worktree: %s\n' "${wt_name}" >> "$msg_file"
+            fi
+            if ! grep -qi '^C-Wt-Path:' "$msg_file"; then
+                git interpret-trailers --trailer "C-Wt-Path: ${wt_path}" \
+                    --in-place "$msg_file" 2>/dev/null \
+                    || printf 'C-Wt-Path: %s\n' "${wt_path}" >> "$msg_file"
+            fi
+        fi
     fi
 fi
 
