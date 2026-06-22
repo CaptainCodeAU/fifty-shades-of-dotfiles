@@ -1,13 +1,33 @@
-# Claude-Session commit attribution (auto-stamp, global)
+# Claude attribution commit trailers (auto-stamp, global)
 
-Automatically stamp every git commit made inside a Claude Code session with a
-`Claude-Session:` trailer identifying the originating session (and fork name),
-and hand each running session its own identity. Works in **every repo** with no
-per-repo setup, because it rides the same global git-hook chainer used by the
-pnpm-audit hook.
+Automatically stamp every git commit made inside a Claude Code session with five
+independent, machine-parseable trailers identifying the originating session and its
+commit context, and hand each running session its own identity. Works in **every
+repo** with no per-repo setup, because it rides the same global git-hook chainer used
+by the pnpm-audit hook.
 
-This is the hook-driven replacement for the old **manual** convention where the
-model appended a `Claude-Session:` trailer by hand per its commit instructions.
+```
+C-Sess-Id:  <local session UUID>                  # from $CLAUDE_SESSION_ID; maps to the on-disk transcript
+C-Web-Id:   https://claude.ai/code/session_<id>   # harvested from the harness-appended line; blank if unavailable
+C-Branch:   <branch>                              # commit's branch (blank on detached HEAD)
+C-Worktree: <folder name>                         # worktree directory name (distinguishes forks in separate worktrees)
+C-Wt-Path:  ~/path/to/worktree                    # worktree path, recorded $HOME-relative; absolute only outside $HOME
+```
+
+This is the hook-driven successor to the old **manual** convention where the model
+appended a single `Claude-Session: <url>` trailer by hand. That key is **retired
+going forward** -- the hook migrates it into `C-Web-Id`; existing history keeps its
+`Claude-Session:` lines (no rewrite).
+
+Why hyphens, not `C_Sess_ID`? git trailer tokens accept only `[A-Za-z0-9-]`; an
+underscore disqualifies the token, so git renders it with a doubled separator and
+`git interpret-trailers --parse` cannot see it. Hyphens keep the keys real, separable
+trailers. The web id and the local UUID are two different identifiers for the same
+session (the web id is exposed to no hook or env var -- only as text in the agent's
+system prompt -- hence the harvest), so they get distinct keys; the hook never
+collapses keys into each other or decides what a blank means. `C-Wt-Path` is recorded
+relative to `$HOME` (e.g. `~/CODE/...`) so a machine-local username/layout never lands
+in permanent, possibly-public history.
 
 Shares the hook substrate documented in
 [`PNPM_AUDIT_PREPUSH_HOOK.md`](./PNPM_AUDIT_PREPUSH_HOOK.md) and
@@ -59,11 +79,13 @@ share files and history live. That creates two gaps:
 
 This feature closes both gaps automatically, with no manual steps per commit:
 
-- A **`SessionStart` hook** captures the session id and name (from the hook
-  payload, which does contain them) and exposes them for the rest of the session.
+- A **`SessionStart` hook** captures the session id (the payload contains the local
+  UUID; a name only on a future resume, never at startup) and exposes it for the
+  rest of the session.
 - The existing **`_audit-chain`** git-hook chainer gains one `prepare-commit-msg`
-  step that stamps a `Claude-Session:` trailer on every commit made inside a
-  Claude session.
+  step that stamps `C-Sess-Id` (the local UUID) and `C-Web-Id` (the claude.ai URL,
+  harvested from the harness-appended `Claude-Session:` line) on every commit made
+  inside a Claude session.
 
 ---
 
@@ -74,23 +96,30 @@ Claude session starts
    |
    v
 SessionStart hook: ~/.config/git/hooks/claude-session-env   (registered in ~/.claude/settings.json)
-   | reads JSON on stdin: { session_id, session_title?, ... }
+   | reads JSON on stdin: { session_id, transcript_path, cwd, source, model }   (NO session_title at startup, NO web id)
    |-- writes  export CLAUDE_SESSION_ID=...     -> $CLAUDE_ENV_FILE
-   |   writes  export CLAUDE_SESSION_NAME=...   -> $CLAUDE_ENV_FILE   (only if named)
+   |   writes  export CLAUDE_SESSION_NAME=...   -> $CLAUDE_ENV_FILE   (only if a name is ever present, e.g. resume)
    |-- prints  {"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"Session identity: ..."}}
    v
 Claude Code sources $CLAUDE_ENV_FILE into every later Bash tool command this session
    |
    v
-git commit  (run by the Bash tool, so it inherits CLAUDE_SESSION_ID / CLAUDE_SESSION_NAME)
-   |
+git commit  (run by the Bash tool, so it inherits CLAUDE_SESSION_ID)
+   |   the agent may still append a "Claude-Session: <url>" line per its harness directive
    v
 git runs prepare-commit-msg from the GLOBAL core.hooksPath (~/.config/git/hooks)
    | that path is a symlink to _audit-chain
    v
-_audit-chain step 3 (prepare-commit-msg only):
-   if CLAUDE_SESSION_ID set and no existing "Claude-Session:" trailer:
-       append  "Claude-Session: <id> (<name>)"   (or "<id>" alone if unnamed)
+_audit-chain step 3 (prepare-commit-msg only), when CLAUDE_SESSION_ID is set OR a URL is present:
+   1. harvest the web URL from any "Claude-Session: <url>" line (strip only the key + spaces; the URL's ':' survives)
+   2. delete the old "Claude-Session:" line (migrate the format; existing history is NOT rewritten)
+   3. read commit context from git: branch (symbolic-ref), worktree name + $HOME-relative path (rev-parse)
+   4. stamp, idempotent per key (skip a key already present):
+          C-Sess-Id:  <CLAUDE_SESSION_ID, or blank>
+          C-Web-Id:   <harvested URL, or blank>
+          C-Branch:   <branch, or blank on detached HEAD>
+          C-Worktree: <worktree folder name>
+          C-Wt-Path:  <~/...-relative worktree path>
 ```
 
 Key dependency: the env handoff is `CLAUDE_ENV_FILE`. A SessionStart hook appends
@@ -119,9 +148,12 @@ A SessionStart hook (its name is deliberately **not** a git-hook name, so git
 never invokes it and `_audit-chain`'s basename dispatch ignores it). On stdin it
 receives the SessionStart JSON payload. It:
 
-- reads `session_id` and (when the session is named) `session_title` with `jq`;
-- appends `export CLAUDE_SESSION_ID=...` and `export CLAUDE_SESSION_NAME=...` to
-  `$CLAUDE_ENV_FILE`;
+- reads `session_id` (UUID) and `session_title` with `jq`. Verified 2026-06-22: the
+  startup payload has NO `session_title` (a `/rename` happens _after_ SessionStart
+  fires), so `CLAUDE_SESSION_NAME` is normally empty; the read is kept inert in case
+  a future `resume` payload ever carries it;
+- appends `export CLAUDE_SESSION_ID=...` (and `export CLAUDE_SESSION_NAME=...` only
+  when a name is present) to `$CLAUDE_ENV_FILE`;
 - prints a `hookSpecificOutput.additionalContext` line so the model learns its own
   name/id.
   Fail-open: it never exits non-zero. Requires `jq`; if `jq` is missing it degrades
@@ -131,11 +163,18 @@ receives the SessionStart JSON payload. It:
 ### 2. `_audit-chain` step 3
 
 An additive block in the existing chainer that runs **only** for
-`prepare-commit-msg`. If `CLAUDE_SESSION_ID` is set and the message does not
-already contain a `^Claude-Session:` line, it appends
-`Claude-Session: <id> (<name>)` (id-only when unnamed) using
-`git interpret-trailers --in-place` (falling back to a plain append). Steps 1
-(delegate to the repo's own hook) and 2 (pre-push pnpm audit) are unchanged.
+`prepare-commit-msg`, and only when `CLAUDE_SESSION_ID` is set OR a `Claude-Session:`
+URL is present (so non-Claude commits stay untouched). It: (1) **sources** the web
+URL -- from `$CLAUDE_WEB_URL` if ever set, else harvested from a `^Claude-Session:`
+line (stripping only the key + spaces so the URL's own `:` survives), else blank;
+(2) **migrates** by deleting any old `^Claude-Session:` line (portable in-place
+`sed`: GNU `-i`, BSD `-i ''`); (3) **reads commit context** from git (branch via
+`symbolic-ref`, worktree name + `$HOME`-relative path via `rev-parse`); (4) **stamps**
+`C-Sess-Id`, `C-Web-Id`, `C-Branch`, `C-Worktree`, `C-Wt-Path` with
+`git interpret-trailers --in-place` (plain-append fallback), each guarded by its own
+`^<key>:` grep so `--amend` never doubles. Empty values are emitted as-is
+(blank-tolerant). Steps 1 (delegate to the repo's own hook) and 2 (pre-push pnpm
+audit) are unchanged.
 
 ### 3. SessionStart registration in `~/.claude/settings.json`
 
@@ -177,20 +216,40 @@ merges additively, and keeps it valid JSON. If you hand-edit, validate after:
 
 ## Decisions (locked - do not re-litigate)
 
-- **Trailer key:** `Claude-Session:` (automates the existing manual convention; do
-  not invent a new key).
-- **Trailer value:** `<session-id> (<fork-name>)`; when unnamed, `<session-id>`
-  alone.
-- **Idempotent:** if a `Claude-Session:` trailer is already present (manual add /
-  amend / cherry-pick), do not add a second one.
-- **Identity source:** `CLAUDE_SESSION_ID` / `CLAUDE_SESSION_NAME`, exported by
-  the SessionStart hook via `CLAUDE_ENV_FILE`.
+- **Trailer keys (five):** `C-Sess-Id` (local UUID), `C-Web-Id` (claude.ai URL),
+  `C-Branch` (commit's branch), `C-Worktree` (worktree folder name), `C-Wt-Path`
+  (worktree path). Hyphens, never underscores: git trailer tokens are `[A-Za-z0-9-]`
+  only, so `C_Sess_ID` is not a valid trailer (doubled separator, invisible to
+  `git interpret-trailers --parse`). The retired `Claude-Session:` key is migrated
+  into `C-Web-Id` going forward.
+- **Trailer values:** `C-Sess-Id` = `$CLAUDE_SESSION_ID`; `C-Web-Id` = the harvested
+  claude.ai URL; `C-Branch` / `C-Worktree` / `C-Wt-Path` = git commit context read at
+  commit time. Any may be **blank** when unavailable (e.g. `C-Branch` on a detached
+  HEAD) -- the hook emits the key with an empty value and makes NO semantic decision
+  about what blank means (downstream decides). No fallback, no collapsing keys.
+- **Web id is harvested, not env-sourced.** The claude.ai web id is exposed to no
+  hook or env var (confirmed via the live SessionStart payload + Claude Code docs) --
+  it exists only as text in the agent's system prompt. So the hook harvests it from
+  the `Claude-Session: <url>` line the harness still has the agent append.
+- **Idempotent per key:** each of the five keys is re-added only if its own `^<key>:`
+  line is absent (`interpret-trailers` alone doubles on `--amend`; the per-key grep
+  guard is the real mechanism).
+- **`C-Wt-Path` is recorded `$HOME`-relative** (`~/CODE/...`), never the literal
+  absolute path. The feature is global (every repo, including public ones), and an
+  absolute path would write the local username + directory layout into permanent
+  history, linking the local account to the public one -- the same linkage we avoid
+  elsewhere. A path outside `$HOME` stays absolute. Context is read at commit time:
+  `C-Wt-Path`/`C-Worktree` from `git rev-parse --show-toplevel`, `C-Branch` from
+  `git symbolic-ref --short -q HEAD` (blank when detached).
+- **Empty-value trailers** survive on git 2.50.1 (verified) -- no trailing-space hack
+  needed; on older git that strips them, the `printf` fallback still writes the key.
+- **Identity source:** `CLAUDE_SESSION_ID` (and `CLAUDE_SESSION_NAME` when present),
+  exported by the SessionStart hook via `CLAUDE_ENV_FILE`.
 - **Fail-open:** the SessionStart hook never blocks a session from starting.
 - **`core.hooksPath` is not touched by this feature.** It lives in per-machine
   `~/.gitconfig.private` (managed by `install.sh setup_pnpm_audit_hooks`). Do not
   move it; never write it into a tracked/stowed file.
-- **ASCII only** in the script's display strings (the brief used Unicode em-dashes;
-  they are written as `--` here, the repo convention).
+- **ASCII only** in the script's display strings (`--`, not Unicode em-dashes).
 
 ---
 
@@ -235,12 +294,15 @@ the pre-push audit fires there. Diagnose + fix per the Gotchas below.
 
 ## Verification
 
-**Status: confirmed working 2026-06-21.** In a fresh (unnamed) session,
-`CLAUDE_SESSION_ID` was populated and a scratch-repo commit was auto-stamped
-`Claude-Session: <id>` (id-only) by the hook, with no manual add. Not yet
-exercised live: the named `<id> (<name>)` path (needs a named session) and
-fork-distinct ids (needs two forked sessions sharing one branch). Re-run the
-checks below on each new machine.
+**Status: five-key scheme verified 2026-06-22** (scratch-repo tests against the real
+hook). id-only commit -> `C-Sess-Id` + blank `C-Web-Id` + `C-Branch` / `C-Worktree` /
+`C-Wt-Path`; a harness `Claude-Session: <url>` line -> migrated into `C-Web-Id` (URL
+intact) with the old line removed; a linked worktree yields its own `C-Worktree` name
+and `C-Branch`; `C-Wt-Path` renders `$HOME`-relative (`~/...`); detached HEAD -> blank
+`C-Branch`; `--amend` does not double any key; a non-Claude commit is untouched;
+pre-push delegation + audit still fire. The live SessionStart payload was captured to
+confirm there is no web-id and no `session_title` field. Re-run the checks below on
+each new machine.
 
 ### Pre-checks you can run in the CURRENT session (no fresh session needed)
 
@@ -260,16 +322,31 @@ rm -f /tmp/cse.env
 #     prepare-commit-msg runs - a false-fail that looks like the trailer is broken
 #     when it never even got a chance to stamp.
 tmp="$(mktemp -d)"; git -C "$tmp" init -q
-CLAUDE_SESSION_ID=demo123 CLAUDE_SESSION_NAME=falcon \
+# id-only: no Claude-Session line -> C-Sess-Id filled, C-Web-Id blank
+CLAUDE_SESSION_ID=demo123 \
   git -C "$tmp" -c user.name="Test" -c user.email="test@example.com" \
-    commit -q --allow-empty -m "test: verify trailer"
-git -C "$tmp" log -1 --format='%(trailers:only,unfold)'   # -> Claude-Session: demo123 (falcon)
+    commit -q --allow-empty -m "test: id only"
+git -C "$tmp" log -1 --format='%(trailers:only,unfold)'   # -> C-Sess-Id: demo123 / C-Web-Id: (blank) / C-Branch / C-Worktree / C-Wt-Path
+# harvest: a harness Claude-Session: line is migrated into C-Web-Id, old line removed
+CLAUDE_SESSION_ID=demo123 \
+  git -C "$tmp" -c user.name="Test" -c user.email="test@example.com" \
+    commit -q --allow-empty -m "test: harvest
+
+Claude-Session: https://claude.ai/code/session_01ABC"
+git -C "$tmp" log -1 --format='%(trailers:only,unfold)'   # -> C-Web-Id now = https://claude.ai/code/session_01ABC (plus C-Sess-Id / C-Branch / C-Worktree / C-Wt-Path)
 rm -rf "$tmp"
 ```
 
-Expected matrix: named -> `Claude-Session: <id> (<name>)`; unnamed (no
-`CLAUDE_SESSION_NAME`) -> `Claude-Session: <id>`; no `CLAUDE_SESSION_ID` -> no
-trailer; message already carrying a `Claude-Session:` line -> not doubled.
+Note: in a `/tmp` scratch repo `C-Wt-Path` is absolute (the repo is outside `$HOME`);
+under `$HOME` it renders `~/...`. `C-Branch` reflects your `init.defaultBranch`.
+
+Expected matrix (Claude commits always also carry `C-Branch` / `C-Worktree` /
+`C-Wt-Path`): id set, no URL -> `C-Sess-Id: <id>` + blank `C-Web-Id:`; a
+`Claude-Session: <url>` line present -> that line removed and `C-Web-Id: <url>` (URL
+colons intact) plus `C-Sess-Id: <id>`; no `CLAUDE_SESSION_ID` and no `Claude-Session:`
+line -> no `C-` trailers (non-Claude commit untouched); detached HEAD -> blank
+`C-Branch`; linked worktree -> `C-Worktree` is its folder name; re-run / `--amend` ->
+no key doubled.
 
 Two output notes: (a) check (a)'s script also prints a `hookSpecificOutput` JSON
 block to stdout (the model-context injection - expected) in addition to the
@@ -285,7 +362,7 @@ Empty output here means "not enabled," not "broken."
 2. The session should be able to state its own name/id (proves `additionalContext`
    injection).
 3. Make a real commit and check `git log -1 --format='%(trailers:only,unfold)'` ->
-   the `Claude-Session:` trailer is present, in the trailer block.
+   `C-Sess-Id:` (and `C-Web-Id:`) are present, in the trailer block.
 
 ---
 
@@ -350,23 +427,27 @@ core.hooksPath`, never a bare `--get` from inside a repo (it merges repo-local
 
 - **Hooks activate in the NEXT session.** A SessionStart/settings.json change does
   nothing for the session that made it. In a session that predates the feature,
-  `CLAUDE_SESSION_ID` is empty, so step 3 correctly skips and commits stay
-  instruction-driven (the model still adds the manual trailer per its commit
-  instructions). Both can coexist - idempotency prevents doubling.
+  `CLAUDE_SESSION_ID` is empty, so step 3 runs only via the relaxed guard if the
+  agent's manual `Claude-Session:` line is present -- harvesting it into `C-Web-Id`
+  (and dropping the old line); otherwise the message is left untouched.
 
-- **Claude Code version.** `CLAUDE_ENV_FILE` (the load-bearing env handoff),
-  the SessionStart stdin fields (`session_id`, `session_title`), and
-  `hookSpecificOutput.additionalContext` are all documented Claude Code hook
-  features available in recent versions. If `echo "$CLAUDE_SESSION_ID"` is empty in
-  a fresh session on an old build, update Claude Code.
+- **Claude Code version.** `CLAUDE_ENV_FILE` (the load-bearing env handoff), the
+  SessionStart stdin `session_id`, and `hookSpecificOutput.additionalContext` are
+  documented Claude Code hook features in recent versions. Note: `session_title` is
+  NOT in the startup payload (a `/rename` is post-startup), and the claude.ai web id
+  is in no payload or env var at all -- which is why `C-Web-Id` is harvested. If
+  `echo "$CLAUDE_SESSION_ID"` is empty in a fresh session on an old build, update
+  Claude Code.
 
 - **A PostToolUse formatter may reformat `~/.claude/settings.json` after an edit.**
   Re-validate with `jq -e . ~/.claude/settings.json` and re-check the hook is still
   present after editing.
 
-- **Idempotency relies on the `^Claude-Session:` grep.** The check is
-  case-insensitive and anchored to line start; keep the trailer key exactly
-  `Claude-Session:` so manual and hook-driven trailers de-duplicate.
+- **Idempotency relies on per-key `^C-Sess-Id:` / `^C-Web-Id:` greps**
+  (case-insensitive, line-anchored) -- `interpret-trailers` alone re-adds on
+  `--amend`, so the grep guard is what prevents doubling. Separately, the
+  harvest+migrate step matches `^Claude-Session:` (case-insensitive) to pull the URL
+  and delete the retired line. Keep all three key spellings exact.
 
 ---
 
@@ -395,4 +476,7 @@ Run, in order:
 - Hook substrate / global routing: [`PNPM_AUDIT_PREPUSH_HOOK.md`](./PNPM_AUDIT_PREPUSH_HOOK.md), [`PNPM_AUDIT_TREE.md`](./PNPM_AUDIT_TREE.md)
 - Canonical code: `home/.config/git/hooks/claude-session-env`, `home/.config/git/hooks/_audit-chain`
 - core.hooksPath pollution rationale: `home/.gitconfig` comments + `install.sh` `setup_pnpm_audit_hooks`
-- Shipped: commit `64c9b76` (git-hooks half). The `~/.claude/settings.json` entry is per-machine and not in this repo.
+- Shipped: commit `64c9b76` introduced the single-key `Claude-Session:` hook; the
+  2026-06-22 migration replaced it with five keys (`C-Sess-Id`, `C-Web-Id`, `C-Branch`,
+  `C-Worktree`, `C-Wt-Path`; harvest + format migration). The `~/.claude/settings.json`
+  entry is per-machine and not in this repo.

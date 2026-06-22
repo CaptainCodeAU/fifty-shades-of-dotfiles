@@ -155,17 +155,17 @@ Established norm: good-faith collaborators surface after-the-fact when prior bri
 
 ## Where to find ground truth
 
-| Question                                     | Source                                                                             |
-| -------------------------------------------- | ---------------------------------------------------------------------------------- |
-| Why strict posture?                          | `docs/SECURITY.md` (in repo)                                                       |
-| Five defence-in-depth bullets                | `README.md` §Security                                                              |
-| Multi-account GitHub setup pattern           | `README.md` §Multiple GitHub Accounts                                              |
-| Stow conflict / install behaviour            | `README.md` §FAQ + `install.sh`                                                    |
-| What's actually committed under `home/.ssh/` | `git ls-tree HEAD home/.ssh/`                                                      |
-| Effective SSH config for an alias            | `ssh -G <alias>`                                                                   |
-| Which config files SSH actually reads        | `ssh -vvv -G <alias> 2>&1 \| grep "Reading configuration data"`                    |
-| Zed Markdown formatting (breaks/gaps/strip)  | `docs/ZED_MARKDOWN_FORMATTING.md` + the `home/.local/bin/md-hardbreak` header      |
-| Claude-Session commit attribution / setup    | `docs/CLAUDE_SESSION_ATTRIBUTION.md` + `home/.config/git/hooks/claude-session-env` |
+| Question                                          | Source                                                                             |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Why strict posture?                               | `docs/SECURITY.md` (in repo)                                                       |
+| Five defence-in-depth bullets                     | `README.md` §Security                                                              |
+| Multi-account GitHub setup pattern                | `README.md` §Multiple GitHub Accounts                                              |
+| Stow conflict / install behaviour                 | `README.md` §FAQ + `install.sh`                                                    |
+| What's actually committed under `home/.ssh/`      | `git ls-tree HEAD home/.ssh/`                                                      |
+| Effective SSH config for an alias                 | `ssh -G <alias>`                                                                   |
+| Which config files SSH actually reads             | `ssh -vvv -G <alias> 2>&1 \| grep "Reading configuration data"`                    |
+| Zed Markdown formatting (breaks/gaps/strip)       | `docs/ZED_MARKDOWN_FORMATTING.md` + the `home/.local/bin/md-hardbreak` header      |
+| Claude commit attribution (C-\* trailers) / setup | `docs/CLAUDE_SESSION_ATTRIBUTION.md` + `home/.config/git/hooks/claude-session-env` |
 
 If the live state contradicts this brief (`ssh -G` output, `git ls-tree`, file contents differ), trust the live state. Memory and documentation are point-in-time; the repo is authoritative. Surface contradictions to the principal so this brief can be updated.
 
