@@ -62,6 +62,19 @@ SECTION_DECISION=ask
 # is offered. Keep in sync with PNPM_MIN_VERSION in home/.zsh_onboarding.
 PNPM_MIN_VERSION="11.7.0"
 
+# --- nvm version policy ---
+# Minimum acceptable nvm. nvm <= 0.40.4 is vulnerable to CVE-2026-10796 (command
+# injection / RCE via a malicious Node mirror's version strings), fixed in 0.40.5.
+# If nvm is missing OR below this, install/upgrade is offered; the installer pins
+# exactly this tag. Keep in sync with NVM_MIN_VERSION in home/.zsh_onboarding.
+NVM_MIN_VERSION="0.40.5"
+
+# --- Node.js version policy ---
+# Lowest Node major still receiving security support. Node 20 reached end-of-life
+# 2026-04; 22 (Active LTS, EOL 2027-04) is the floor. Used to flag/offer-removal
+# of EOL Node versions. Keep in sync with NODE_MIN_MAJOR in home/.zsh_onboarding.
+NODE_MIN_MAJOR="22"
+
 # --- Helpers ---
 info()    { echo -e "${CYAN}ℹ️  $*${RESET}"; }
 success() { echo -e "${GREEN}✅ $*${RESET}"; }
@@ -125,6 +138,24 @@ _pnpm_needs_install_or_upgrade() {
     local v cmp
     v=$(pnpm -v 2>/dev/null) || return 0
     cmp=$(_vercmp "$v" "$PNPM_MIN_VERSION") || return 0
+    [[ "$cmp" == "-1" ]]
+}
+
+# Installed nvm version (e.g. "0.40.5"), or empty if nvm isn't present. install.sh
+# runs in bash where nvm isn't sourced, so source nvm.sh --no-use in a subshell.
+_nvm_installed_version() {
+    [[ -s "$HOME/.nvm/nvm.sh" ]] || return 1
+    ( export NVM_DIR="$HOME/.nvm"; \. "$NVM_DIR/nvm.sh" --no-use >/dev/null 2>&1; nvm --version 2>/dev/null )
+}
+
+# True (0) if nvm is installed but below NVM_MIN_VERSION (CVE-2026-10796 floor).
+# Missing nvm is handled separately (offered as a fresh install), so this is
+# false when nvm is absent.
+_nvm_needs_upgrade() {
+    local v cmp
+    v=$(_nvm_installed_version) || return 1
+    [[ -n "$v" ]] || return 1
+    cmp=$(_vercmp "$v" "$NVM_MIN_VERSION") || return 1
     [[ "$cmp" == "-1" ]]
 }
 
@@ -484,6 +515,43 @@ _preflight_pnpm_check() {
 
     echo
     success "pnpm cleanup complete: $applied applied, $failed failed."
+    return 0
+}
+
+# Pre-flight: offer to remove end-of-life Node majors installed under nvm. EOL
+# Node lines stop receiving security patches; NODE_MIN_MAJOR is the lowest still
+# in support. Detection is read-only; each removal is confirm-gated individually
+# and a version >= NODE_MIN_MAJOR is never touched. Honors --skip-preflight/--dry-run.
+_preflight_node_eol_check() {
+    [[ "$SKIP_PREFLIGHT" == true ]] && return 0
+    local node_root="${NVM_DIR:-$HOME/.nvm}/versions/node"
+    [[ -d "$node_root" ]] || return 0
+
+    local -a eol=()
+    local d base major
+    for d in "$node_root"/v*; do
+        [[ -d "$d" ]] || continue
+        base=$(basename "$d")          # e.g. v20.18.1
+        major=${base#v}; major=${major%%.*}
+        [[ "$major" =~ ^[0-9]+$ ]] || continue
+        (( major < NODE_MIN_MAJOR )) && eol+=("$d")
+    done
+    (( ${#eol[@]} > 0 )) || return 0
+
+    step "Pre-flight Node EOL check"
+    warn "End-of-life Node version(s) found (below Node ${NODE_MIN_MAJOR} — no security patches):"
+    local e
+    for e in "${eol[@]}"; do echo "    $(pretty_path "$e")"; done
+
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[dry-run] No changes made. Re-run without --dry-run to remove EOL Node versions."
+        return 0
+    fi
+    for e in "${eol[@]}"; do
+        if confirm "Remove EOL Node $(basename "$e")?"; then
+            run_cmd rm -rf "$e"
+        fi
+    done
     return 0
 }
 
@@ -1575,17 +1643,30 @@ GITEOF"
     fi
 
     # --- NVM ---
+    # Pin the exact, audited tag (v${NVM_MIN_VERSION}); nvm <= 0.40.4 is affected
+    # by CVE-2026-10796. The official installer is idempotent — re-running it
+    # upgrades an existing nvm in place.
     if [[ ! -d "$HOME/.nvm" ]]; then
-        if confirm "nvm not found. Install it for Node.js version management?"; then
-            run_cmd bash -c 'curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash'
+        if confirm "nvm not found. Install it (v${NVM_MIN_VERSION}) for Node.js version management?"; then
+            run_cmd bash -c "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v${NVM_MIN_VERSION}/install.sh | bash"
             # Activate in current session so subsequent steps and the user can
             # use nvm immediately without opening a new terminal.
             export NVM_DIR="$HOME/.nvm"
             [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-            success "nvm installed"
+            success "nvm installed (v${NVM_MIN_VERSION})"
+        fi
+    elif _nvm_needs_upgrade; then
+        local cur_nvm
+        cur_nvm=$(_nvm_installed_version)
+        warn "nvm ${cur_nvm:-?} is below ${NVM_MIN_VERSION} (CVE-2026-10796 affects nvm <= 0.40.4)."
+        if confirm "Upgrade nvm to v${NVM_MIN_VERSION}?"; then
+            run_cmd bash -c "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v${NVM_MIN_VERSION}/install.sh | bash"
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+            success "nvm upgraded to v${NVM_MIN_VERSION}"
         fi
     else
-        success "nvm installed"
+        success "nvm installed (v$(_nvm_installed_version))"
     fi
 
     # --- Bun ---
@@ -1938,6 +2019,9 @@ main() {
     # shows up under --dry-run, and clears conflicting pnpm sources BEFORE the
     # standalone-install step — even when all other prerequisites are present.
     _preflight_pnpm_check
+
+    # --- Node EOL pre-flight (offer to remove unsupported Node majors) ---
+    _preflight_node_eol_check
 
     # --- Install prerequisites ---
     if ! check_prerequisites; then
