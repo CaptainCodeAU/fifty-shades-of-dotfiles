@@ -41,6 +41,16 @@ export PNPM_MIN_VERSION="${PNPM_MIN_VERSION:-11.7.0}"
 # How often to re-check the npm registry for the latest pnpm release.
 export PNPM_CHECK_TTL_DAYS="${PNPM_CHECK_TTL_DAYS:-7}"
 
+# --- nvm / Node.js version policy ---
+# Minimum acceptable nvm. nvm <= 0.40.4 is vulnerable to CVE-2026-10796 (command
+# injection / RCE via a malicious Node mirror's version strings); fixed in 0.40.5.
+# Below this, the onboarding nudge + banner flag it. Coordinate with install.sh.
+export NVM_MIN_VERSION="${NVM_MIN_VERSION:-0.40.5}"
+# Lowest Node major still receiving security support: Node 20 reached EOL 2026-04;
+# 22 is Active LTS (EOL 2027-04). Below this, Node is flagged as end-of-life.
+# Coordinate with NODE_MIN_MAJOR in install.sh.
+export NODE_MIN_MAJOR="${NODE_MIN_MAJOR:-22}"
+
 _pnpm_cache_file() {
     local cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles"
     [[ -d "$cache_dir" ]] || mkdir -p "$cache_dir" 2>/dev/null
@@ -178,6 +188,56 @@ _pnpm_vercmp() {
     local lower
     lower=$(printf '%s\n%s\n' "$a" "$b" | sort -V | head -1)
     if [[ "$lower" == "$a" ]]; then echo -1; else echo 1; fi
+}
+
+# Generic semver compare (same contract as _pnpm_vercmp), used by the nvm/Node
+# checks so they don't couple to the pnpm-named helper.
+_semver_cmp() {
+    local a="$1" b="$2"
+    [[ "$a" == "$b" ]] && { echo 0; return; }
+    local lower
+    lower=$(printf '%s\n%s\n' "$a" "$b" | sort -V | head -1)
+    if [[ "$lower" == "$a" ]]; then echo -1; else echo 1; fi
+}
+
+# Installed nvm version (e.g. "0.40.5"), or empty. Works even before nvm.sh is
+# sourced: onboarding (.zshrc section 4) runs BEFORE nvm loads (section 7), so
+# fall back to sourcing nvm.sh --no-use in a subshell to read the version.
+_nvm_version_quiet() {
+    if command -v nvm &>/dev/null; then nvm --version 2>/dev/null; return; fi
+    [[ -s "$HOME/.nvm/nvm.sh" ]] || return 1
+    ( export NVM_DIR="$HOME/.nvm"; \. "$NVM_DIR/nvm.sh" --no-use >/dev/null 2>&1; nvm --version 2>/dev/null )
+}
+
+# Active Node version, falling back to the default alias; "" if none. Same
+# load-order safety as _nvm_version_quiet (subshell-source when nvm isn't live).
+_node_default_version() {
+    local v
+    if command -v nvm &>/dev/null; then
+        v=$(nvm current 2>/dev/null)
+        [[ -z "$v" || "$v" == "none" ]] && v=$(nvm version default 2>/dev/null)
+        [[ "$v" == "N/A" ]] && v=""
+        echo "$v"; return
+    fi
+    [[ -s "$HOME/.nvm/nvm.sh" ]] || return 1
+    v=$( export NVM_DIR="$HOME/.nvm"; \. "$NVM_DIR/nvm.sh" --no-use >/dev/null 2>&1; nvm version default 2>/dev/null )
+    [[ "$v" == "N/A" ]] && v=""
+    echo "$v"
+}
+
+# 0 if $1 exists and is younger than $2 seconds (default 86400). Centralizes the
+# BSD (stat -f) vs GNU (stat -c) split — a recurring portability footgun — for the
+# nvm/Node 24h-marker gates.
+_marker_fresh() {
+    local marker="$1" max_age="${2:-86400}" now mtime
+    [[ -f "$marker" ]] || return 1
+    now=$(date +%s)
+    if [[ "$OSTYPE" == darwin* ]]; then
+        mtime=$(stat -f %m "$marker" 2>/dev/null)
+    else
+        mtime=$(stat -c %Y "$marker" 2>/dev/null)
+    fi
+    [[ -n "$mtime" ]] && (( now - mtime < max_age ))
 }
 
 # ------------------------------------------------------------------------------
@@ -325,11 +385,12 @@ _ensure_nvm() {
 
     if [[ -t 1 ]]; then
         echo "${warn}Tool missing: 'nvm' (Node Version Manager) not found.${done}"
-        read "REPLY?${info}    Install nvm from the official source? [y/N] ${done}"
+        read "REPLY?${info}    Install nvm v${NVM_MIN_VERSION} from the official source? [y/N] ${done}"
         if [[ "$REPLY" =~ ^[Yy]$ ]]; then
-            echo "${info}    Downloading and installing nvm...${done}"
-            curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/master/install.sh | bash
-            if [[ $? -eq 0 ]]; then
+            echo "${info}    Downloading and installing nvm v${NVM_MIN_VERSION}...${done}"
+            # Pin the audited tag (nvm <= 0.40.4 is vulnerable to CVE-2026-10796),
+            # never 'master' — an unpinned, mutable ref.
+            if curl -fsSL "https://raw.githubusercontent.com/nvm-sh/nvm/v${NVM_MIN_VERSION}/install.sh" | bash; then
                 echo "${ok}    nvm installed successfully.${done}"
                 echo "${info}    Note: Restart your shell or run 'source ~/.zshrc' to use nvm.${done}"
             else
@@ -422,6 +483,86 @@ _ensure_pnpm_current() {
         fi
     else
         echo "${warn}    Skipping pnpm upgrade. Run 'pnpm_update' anytime.${done}"
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# nvm Below-Minimum Check — Special Handler
+# ------------------------------------------------------------------------------
+# Prompts to upgrade nvm when below NVM_MIN_VERSION (CVE-2026-10796 floor). The
+# official installer is idempotent — re-running it upgrades in place. A daily
+# marker prevents re-prompting on every shell open.
+_ensure_nvm_current() {
+    [[ -d "$HOME/.nvm" ]] || return 0          # missing case handled by _ensure_nvm
+    [[ -t 1 ]] || return 0
+
+    # Accept a pre-read version (run_onboarding already has it) to avoid a second
+    # subshell-source of nvm.sh; fall back to reading it when called standalone.
+    local current="${1:-$(_nvm_version_quiet 2>/dev/null)}" cmp_min marker marker_dir
+    [[ -n "$current" ]] || return 0
+    cmp_min=$(_semver_cmp "$current" "$NVM_MIN_VERSION")
+    [[ "$cmp_min" != "-1" ]] && return 0       # at or above minimum — silent
+
+    marker_dir="${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles"
+    marker="$marker_dir/nvm_upgrade_prompted"
+    [[ -d "$marker_dir" ]] || mkdir -p "$marker_dir" 2>/dev/null
+    _marker_fresh "$marker" && return 0        # already nudged within the last 24h
+
+    echo "${err}nvm ${current} is below ${NVM_MIN_VERSION} — CVE-2026-10796 (RCE via a malicious Node mirror) affects nvm <= 0.40.4.${done}"
+    read "REPLY?${info}    Upgrade nvm to v${NVM_MIN_VERSION} now? [y/N] ${done}"
+    : > "$marker"  # mark prompted regardless of answer
+    if [[ "$REPLY" =~ ^[Yy]$ ]]; then
+        echo "${info}    Upgrading nvm...${done}"
+        if curl -fsSL "https://raw.githubusercontent.com/nvm-sh/nvm/v${NVM_MIN_VERSION}/install.sh" | bash; then
+            echo "${ok}    nvm upgraded. Restart your shell or run 'source ~/.zshrc'.${done}"
+        else
+            echo "${err}    nvm upgrade failed.${done}"
+        fi
+    else
+        echo "${warn}    Skipping nvm upgrade.${done}"
+    fi
+}
+
+# ------------------------------------------------------------------------------
+# Node.js End-of-Life Check — Special Handler
+# ------------------------------------------------------------------------------
+# Prompts to move to current LTS when the active/default Node major is below
+# NODE_MIN_MAJOR (end-of-life — no security patches). Daily marker as above.
+_ensure_node_current() {
+    [[ -d "$HOME/.nvm" ]] || return 0
+    [[ -t 1 ]] || return 0
+
+    local active major marker marker_dir
+    active=$(_node_default_version 2>/dev/null) || return 0
+    [[ -n "$active" ]] || return 0
+    major=${active#v}; major=${major%%.*}
+    [[ "$major" =~ ^[0-9]+$ ]] || return 0
+    (( major >= NODE_MIN_MAJOR )) && return 0  # still in support — silent
+
+    marker_dir="${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles"
+    marker="$marker_dir/node_eol_prompted"
+    [[ -d "$marker_dir" ]] || mkdir -p "$marker_dir" 2>/dev/null
+    _marker_fresh "$marker" && return 0        # already nudged within the last 24h
+
+    echo "${err}Node ${active} is end-of-life (below Node ${NODE_MIN_MAJOR}) — no more security patches.${done}"
+    # nvm must be live to install; if onboarding ran before nvm loaded, defer to
+    # a later shell where 'nvm' is available.
+    if ! command -v nvm &>/dev/null; then
+        echo "${warn}    Run 'nvm install --lts && nvm alias default lts/*' in a new shell to upgrade.${done}"
+        : > "$marker"
+        return 0
+    fi
+    read "REPLY?${info}    Install the latest LTS and set it as default? [y/N] ${done}"
+    : > "$marker"
+    if [[ "$REPLY" =~ ^[Yy]$ ]]; then
+        echo "${info}    Installing Node LTS...${done}"
+        if nvm install --lts && nvm alias default 'lts/*'; then
+            echo "${ok}    Node LTS installed and set as default.${done}"
+        else
+            echo "${err}    Node LTS install failed.${done}"
+        fi
+    else
+        echo "${warn}    Skipping Node upgrade.${done}"
     fi
 }
 
@@ -556,7 +697,11 @@ run_onboarding() {
 
     # --- Dev managers (special handlers — not standard binaries) ---
     local nvm_ok=false uv_ok=false pnpm_ok=false
-    [[ -d "$HOME/.nvm" ]] && nvm_ok=true
+    # nvm_ok requires not just presence but a version at/above the CVE-2026-10796
+    # floor (read via subshell-source since nvm.sh loads after onboarding).
+    local _nvm_cur=""
+    _nvm_cur=$(_nvm_version_quiet 2>/dev/null)
+    [[ -n "$_nvm_cur" && "$(_semver_cmp "$_nvm_cur" "$NVM_MIN_VERSION")" != "-1" ]] && nvm_ok=true
     command -v uv &>/dev/null && uv_ok=true
     # Resolve pnpm even if $PNPM_HOME/bin isn't on PATH yet: onboarding runs in
     # .zshrc section 4, BEFORE section 5 adds it. On Apple Silicon the standalone
@@ -580,10 +725,16 @@ run_onboarding() {
         printf "  ${ok}✓${done} %-18s %s\n" "Dev managers" "nvm · uv · pnpm"
     else
         printf "  ${warn}!${done} %-18s %s\n" "Dev managers" "nvm · uv · pnpm"
-        [[ "$nvm_ok" == false ]] && _ensure_nvm
+        # _ensure_nvm handles a missing install; _ensure_nvm_current handles a
+        # present-but-below-floor nvm. Both self-gate, so calling both is safe.
+        [[ "$nvm_ok" == false ]] && { _ensure_nvm; _ensure_nvm_current "$_nvm_cur"; }
         [[ "$uv_ok" == false ]] && _ensure_uv
         [[ "$pnpm_ok" == false ]] && _ensure_pnpm_current
     fi
+
+    # Node EOL nudge — independent of nvm_ok (a current nvm can still default to an
+    # EOL Node). Self-gates on below-floor major + 24h marker + interactive shell.
+    _ensure_node_current
 
     # --- Docker ---
     if command -v docker &>/dev/null; then

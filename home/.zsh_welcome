@@ -126,10 +126,30 @@ _show_welcome_full() {
             local default_node=$(nvm version default 2>/dev/null)
             echo "    Node: ${warn}None active${done} (default: ${default_node:-N/A})"
         else
-            echo "    Node: ${ok}${active_node}${done}"
+            # Flag end-of-life Node majors (below NODE_MIN_MAJOR — no security patches).
+            local node_major=${active_node#v}; node_major=${node_major%%.*}
+            if [[ "$node_major" =~ ^[0-9]+$ ]] && [[ -n "$NODE_MIN_MAJOR" ]] \
+                 && (( node_major < NODE_MIN_MAJOR )); then
+                echo "    Node: ${err}${active_node}${done} ${err}(EOL — below Node ${NODE_MIN_MAJOR}; run nvm install --lts)${done}"
+            else
+                echo "    Node: ${ok}${active_node}${done}"
+            fi
         fi
     else
         echo "    Node: ${err}nvm not found${done}"
+    fi
+
+    # --- nvm (version floor; nvm <= 0.40.4 is vulnerable to CVE-2026-10796) ---
+    if command -v nvm &>/dev/null; then
+        local nvm_ver=$(nvm --version 2>/dev/null)
+        if [[ -z "$nvm_ver" ]]; then
+            echo "    nvm:  ${warn}unknown${done}"
+        elif typeset -f _semver_cmp &>/dev/null && [[ -n "$NVM_MIN_VERSION" ]] \
+               && [[ "$(_semver_cmp "$nvm_ver" "$NVM_MIN_VERSION")" == "-1" ]]; then
+            echo "    nvm:  ${err}${nvm_ver}${done} ${err}↑${NVM_MIN_VERSION} (below min — CVE-2026-10796; run_onboarding)${done}"
+        else
+            echo "    nvm:  ${ok}${nvm_ver}${done}"
+        fi
     fi
 
     # --- pnpm ---

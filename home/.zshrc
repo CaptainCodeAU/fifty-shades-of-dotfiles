@@ -264,6 +264,16 @@ command -v uv >/dev/null && eval "$(uv generate-shell-completion zsh)"
 # This snippet is based on the official NVM README for robustness and XDG compliance.
 export NVM_DIR="$([ -z "${XDG_CONFIG_HOME-}" ] && printf %s "${HOME}/.nvm" || printf %s "${XDG_CONFIG_HOME}/nvm")"
 
+# --- NVM mirror hardening (CVE-2026-10796) ---
+# A malicious Node mirror can inject shell commands via crafted version strings
+# (GHSA-3c52-35h2-gfmm, fixed in nvm 0.40.5). Pin the official HTTPS mirrors so a
+# stray or planted NVM_NODEJS_ORG_MIRROR can't redirect downloads. To use a custom
+# mirror (e.g. a corporate proxy), set NVM_ALLOW_CUSTOM_MIRROR=1 in ~/.zshrc.private.
+if [[ -z "$NVM_ALLOW_CUSTOM_MIRROR" ]]; then
+    export NVM_NODEJS_ORG_MIRROR="https://nodejs.org/dist"
+    export NVM_IOJS_ORG_MIRROR="https://iojs.org/dist"
+fi
+
 # If NVM is installed, load it but don't activate Node yet.
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh" --no-use
 
