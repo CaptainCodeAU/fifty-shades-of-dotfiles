@@ -1,0 +1,205 @@
+#!/usr/bin/env bash
+# nvm-verify-node — independently verify an nvm-installed Node against the
+# OFFICIAL nodejs.org release, bypassing any configured mirror.
+#
+# Why this exists
+#   nvm checks SHA256 by default, but it fetches SHASUMS256.txt from the SAME
+#   mirror it downloads Node from. A malicious mirror (the CVE-2026-10796 vector,
+#   GHSA-3c52-35h2-gfmm) can serve a tampered binary with matching checksums.
+#   nvm has NO native GPG verification. This tool closes that gap: it re-fetches
+#   the official tarball + GPG-signed SHASUMS256.txt directly from nodejs.org and
+#   compares the official `bin/node` to the one nvm installed. A match proves the
+#   installed binary is bit-identical to the signed official release.
+#
+# What it does, per version
+#   1. Download SHASUMS256.txt (+ .asc) from https://nodejs.org/dist/<ver>/ (official).
+#   2. Best-effort GPG-verify SHASUMS256.txt.asc against Node's release keys.
+#   3. Download the official tarball for this OS/arch; verify its sha256 is listed
+#      in the (signed) SHASUMS256.txt.
+#   4. Extract it and compare its bin/node to the installed bin/node (sha256).
+#
+# Opt-in: nothing runs this automatically. It downloads a full tarball per version.
+#
+# Usage
+#   nvm-verify-node                 # verify the active Node (nvm current)
+#   nvm-verify-node v22.20.0        # verify a specific installed version
+#   nvm-verify-node --all           # verify every version under ~/.nvm/versions/node
+#   nvm-verify-node --import-keys    # best-effort import of Node release GPG keys
+#   nvm-verify-node -h | --help
+#
+# Exit: 0 = all verified, 1 = a mismatch/failure, 2 = usage/environment error.
+
+set -euo pipefail
+
+NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+NODE_ROOT="$NVM_DIR/versions/node"
+OFFICIAL="https://nodejs.org/dist"   # hard-coded official source — never a mirror
+
+# Node release signing-key fingerprints (https://github.com/nodejs/release-keys).
+# Used only by --import-keys; verification itself uses whatever is in the keyring.
+NODE_RELEASE_KEYS=(
+  "4ED778F539E3634C779C87C6D7062848A1AB005C"
+  "141F07595B7B3FFE74309A937405533BE57C7D57"
+  "74F12602B6F1C4E913FAA37AD3A89613643B6201"
+  "DD792F5973C6DE52C432CBF6F7DA53E12B2E1F33"
+  "61FC681DFB92A079F1685E77973F295594EC4689"
+  "8FCCA13FEF1D0C2E91008E09770F7A9A5AE15600"
+  "C82FA3AE1CBEDC6BE46B9360C43CEC45C17AB93C"
+  "890C08DB8579162FEE0DF9DB8BEAB4DFCF555EF4"
+  "C0D6248439F1D5604AAFFB4021D900FFDB233756"
+  "108F52B48DB57BB0CC439B2997B01419BD92F80A"
+  "A363A499291CBBC940DD62E41F10027AF002F8B0"
+)
+
+c_red=$'\033[31m'; c_grn=$'\033[32m'; c_yel=$'\033[33m'; c_dim=$'\033[2m'; c_rst=$'\033[0m'
+[[ -t 1 ]] || { c_red=; c_grn=; c_yel=; c_dim=; c_rst=; }
+
+err()  { printf '%snvm-verify-node: %s%s\n' "$c_red" "$*" "$c_rst" >&2; }
+note() { printf '%s%s%s\n' "$c_dim" "$*" "$c_rst"; }
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# sha256 of a file -> bare hex digest.
+sha256_of() {
+  if have shasum;    then shasum -a 256 "$1" | awk '{print $1}'
+  elif have sha256sum; then sha256sum "$1" | awk '{print $1}'
+  else err "need shasum or sha256sum"; return 2; fi
+}
+
+detect_platform() {
+  local s m
+  s=$(uname -s); m=$(uname -m)
+  case "$s" in
+    Darwin) OS=darwin ;;
+    Linux)  OS=linux ;;
+    *) err "unsupported OS: $s"; return 2 ;;
+  esac
+  case "$m" in
+    arm64|aarch64) ARCH=arm64 ;;
+    x86_64)        ARCH=x64 ;;
+    *) err "unsupported arch: $m"; return 2 ;;
+  esac
+}
+
+import_keys() {
+  have gpg || { err "gpg not installed"; return 2; }
+  note "Importing Node release keys from keyserver (best-effort)..."
+  local k ok=0
+  for k in "${NODE_RELEASE_KEYS[@]}"; do
+    if gpg --keyserver hkps://keys.openpgp.org --recv-keys "$k" >/dev/null 2>&1 \
+       || gpg --keyserver hkps://keyserver.ubuntu.com --recv-keys "$k" >/dev/null 2>&1; then
+      ok=$((ok + 1))
+    fi
+  done
+  printf '%sImported %d/%d keys.%s\n' "$c_grn" "$ok" "${#NODE_RELEASE_KEYS[@]}" "$c_rst"
+  (( ok > 0 )) || { err "no keys imported (keyserver unreachable?); GPG checks will be skipped"; return 1; }
+}
+
+# Verify one installed version directory. Echoes a status; returns 0 on full pass.
+verify_version() {
+  local ver="$1"
+  [[ "$ver" == v* ]] || ver="v$ver"
+  local instdir="$NODE_ROOT/$ver"
+  if [[ ! -x "$instdir/bin/node" ]]; then
+    err "$ver: not installed under $NODE_ROOT"; return 1
+  fi
+
+  local tmp; tmp=$(mktemp -d "${TMPDIR:-/tmp}/nvm-verify.XXXXXX")
+  trap 'rm -rf "$tmp"' RETURN
+
+  local base="node-${ver}-${OS}-${ARCH}"
+  local tarball="${base}.tar.gz"
+  printf '\n%s== %s (%s-%s) ==%s\n' "$c_dim" "$ver" "$OS" "$ARCH" "$c_rst"
+
+  # 1. Official SHASUMS256.txt (+ signature).
+  if ! curl -fsSL "$OFFICIAL/$ver/SHASUMS256.txt" -o "$tmp/SHASUMS256.txt"; then
+    err "$ver: could not fetch official SHASUMS256.txt"; return 1
+  fi
+  curl -fsSL "$OFFICIAL/$ver/SHASUMS256.txt.asc" -o "$tmp/SHASUMS256.txt.asc" 2>/dev/null || true
+
+  # 2. GPG verify (best-effort).
+  local gpg_status="${c_yel}skipped (no gpg / keys not imported — run --import-keys)${c_rst}"
+  if have gpg && [[ -s "$tmp/SHASUMS256.txt.asc" ]]; then
+    if gpg --verify "$tmp/SHASUMS256.txt.asc" "$tmp/SHASUMS256.txt" >/dev/null 2>&1; then
+      gpg_status="${c_grn}verified (signed by a Node release key)${c_rst}"
+    else
+      gpg_status="${c_yel}could not verify signature (keys not imported?)${c_rst}"
+    fi
+  fi
+  printf '  GPG signature : %b\n' "$gpg_status"
+
+  # 3. Download official tarball; check its sha256 is in the (signed) SHASUMS.
+  if ! curl -fsSL "$OFFICIAL/$ver/$tarball" -o "$tmp/$tarball"; then
+    err "$ver: could not fetch official $tarball"; return 1
+  fi
+  local got want
+  got=$(sha256_of "$tmp/$tarball")
+  want=$(awk -v f="$tarball" '$2 == f {print $1}' "$tmp/SHASUMS256.txt")
+  if [[ -z "$want" ]]; then
+    err "$ver: $tarball not listed in SHASUMS256.txt"; return 1
+  fi
+  if [[ "$got" != "$want" ]]; then
+    printf '  Tarball sha256: %sMISMATCH%s (official SHASUMS disagree)\n' "$c_red" "$c_rst"; return 1
+  fi
+  printf '  Tarball sha256: %sok%s (matches official SHASUMS256.txt)\n' "$c_grn" "$c_rst"
+
+  # 4. Compare the official bin/node to the installed bin/node.
+  if ! tar -xzf "$tmp/$tarball" -C "$tmp" "${base}/bin/node" 2>/dev/null; then
+    err "$ver: could not extract bin/node from official tarball"; return 1
+  fi
+  local off_hash inst_hash
+  off_hash=$(sha256_of "$tmp/${base}/bin/node")
+  inst_hash=$(sha256_of "$instdir/bin/node")
+  if [[ "$off_hash" == "$inst_hash" ]]; then
+    printf '  Installed node: %sVERIFIED%s (bit-identical to official release)\n' "$c_grn" "$c_rst"
+    return 0
+  else
+    printf '  Installed node: %sMISMATCH%s (installed binary differs from official)\n' "$c_red" "$c_rst"
+    note "    (could be a source-compiled build, or tampering — investigate)"
+    return 1
+  fi
+}
+
+usage() { sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; }
+
+main() {
+  case "${1:-}" in
+    -h|--help) usage; exit 0 ;;
+    --import-keys) import_keys; exit $? ;;
+  esac
+
+  have curl || { err "curl is required"; exit 2; }
+  detect_platform || exit 2
+  [[ -d "$NODE_ROOT" ]] || { err "no nvm Node installs under $NODE_ROOT"; exit 2; }
+
+  local -a targets=()
+  if [[ "${1:-}" == "--all" ]]; then
+    local d
+    for d in "$NODE_ROOT"/v*; do [[ -d "$d" ]] && targets+=("$(basename "$d")"); done
+  elif [[ -n "${1:-}" ]]; then
+    targets+=("$1")
+  else
+    # Active version via nvm if live, else the symlink/most-recent install.
+    local cur=""
+    if command -v nvm >/dev/null 2>&1; then cur=$(nvm current 2>/dev/null); fi
+    [[ -z "$cur" || "$cur" == "none" ]] && cur=$(ls -1 "$NODE_ROOT" 2>/dev/null | sort -V | tail -1)
+    [[ -n "$cur" ]] || { err "could not determine active Node version"; exit 2; }
+    targets+=("$cur")
+  fi
+
+  (( ${#targets[@]} > 0 )) || { err "no Node versions to verify"; exit 2; }
+
+  local v rc=0
+  for v in "${targets[@]}"; do
+    verify_version "$v" || rc=1
+  done
+  echo
+  if (( rc == 0 )); then
+    printf '%sAll checked Node versions verified against official nodejs.org.%s\n' "$c_grn" "$c_rst"
+  else
+    printf '%sOne or more Node versions failed verification (see above).%s\n' "$c_red" "$c_rst"
+  fi
+  exit $rc
+}
+
+main "$@"
