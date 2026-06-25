@@ -19,7 +19,7 @@ The memory system is the answer to: _"I don't have an adequate and acceptable sh
 **What it is:** A directory of Markdown files at:
 
 ```
-~/.claude/projects/-Users-fonzarelli-CODE-Scaffoldings-fifty-shades-of-dotfiles/memory/
+~/.claude/projects/-Users-<username>-CODE-Scaffoldings-fifty-shades-of-dotfiles/memory/
 ```
 
 Each file stores one piece of persistent knowledge. There are four types:
@@ -156,5 +156,5 @@ Claude can also save proactively when it recognizes something non-obvious was ju
 
 1. **No automatic capture** — Claude must recognize the moment and save it. If Claude doesn't proactively write a memory, the knowledge is lost after the session.
 2. **Memories go stale** — a memory written today about a specific file may not reflect the file in 3 months. Always verify.
-3. **Index truncation** — `MEMORY.md` is capped at ~200 lines in the loaded context. If the index grows too large, older entries may not be visible at session start.
+3. **Index truncation** — `MEMORY.md` is capped at **200 lines OR 25KB, whichever comes first** in the loaded context — a hard limit in the Claude Code binary, not a PAI setting. A reminder is injected at >=80% of either cap, and content past 100% is dropped when the index loads. `CLAUDE_MEMORY_STORES` is the documented escape (a separate store with a configurable `promptIndexMaxBytes` and no line cap). Keep the index terse — older entries past the cap are not visible at session start.
 4. **Project-scoped** — memories in this directory are only loaded for this project. Cross-project knowledge needs to go in the global memory directory (`~/.claude/memory/`).

@@ -17,12 +17,12 @@ Update Log at the bottom. Mark each fact as **[official]** (from Anthropic docs)
 **[verified]** (checked against live code/behaviour this machine), or
 **[inferred]**.
 
-**Privacy:** local working notes, currently untracked (same convention as
-`CLAUDE_CODE_AND_PAI_INTERNALS.md`). The repo is public; if this is ever committed,
-scrub absolute user paths (use `~/`) and never include credentials, real LAN
-hosts, or secrets. The Claude Code findings below are generic and public-safe.
+**Privacy:** committed to the public repo (`451d8eb`), unlike the still-untracked
+`CLAUDE_CODE_AND_PAI_INTERNALS.md`. Keep it public-safe: scrub absolute user paths
+(use `~/`) and never include credentials, real LAN hosts, or secrets. The Claude Code
+findings below are generic and public-safe.
 
-**Last updated:** 2026-06-19
+**Last updated:** 2026-06-25
 
 ---
 
@@ -86,10 +86,24 @@ issues, and reading the local PAI hooks. For the PAI-specific event->hook table 
   - **#10373** (`OPEN`): "SessionStart hooks not working for new conversations." A
     latent risk; not currently observed (SessionStart hooks demonstrably fire).
 
+- **New hook events (2026-06) [official]:** `MessageDisplay` (v2.1.152, display-only),
+  `ConfigChange`, `CwdChanged`/`FileChanged`, `WorktreeCreate`/`WorktreeRemove`, and a
+  self-hosted-runner `post-session` hook (v2.1.169). `Stop`/`SubagentStop` can now
+  return `hookSpecificOutput.additionalContext` (v2.1.163) to feed Claude and continue
+  the turn; `SessionStart` can set `reloadSkills:true` and `sessionTitle` (v2.1.152).
+- **A hook can DENY but cannot force-ALLOW a protected path [official + verified 2026-06-25]:**
+  a `PreToolUse` hook returning an `allow` decision is honoured for ordinary files, but
+  writes to protected paths (`.zshrc`/`.zshenv`/`.envrc`/`.npmrc`/`.yarnrc`/`bunfig.toml`/
+  `.gitconfig`/`.mcp.json`/`.claude` etc.) are NEVER auto-approved by a hook OR by
+  `permissions.allow` -- only `bypassPermissions` skips that prompt. The guard runs before
+  allow-rules and hook decisions (verified vs docs + issue #41615). Upshot: hooks are
+  strong for blocking, powerless for granting protected-path writes -- so a malicious
+  repo-supplied hook cannot auto-approve edits to your dotfiles. See section 6.
+
 Determinism summary: only hooks give a hard guarantee, and only for tool-call
 gating (PreToolUse deny) or a structural string check on output (Stop-hook
-marker). No mechanism can deterministically guarantee the _meaning/quality_ of
-free-form prose.
+marker) -- and even a hook cannot force-approve a protected-path write. No mechanism
+can deterministically guarantee the _meaning/quality_ of free-form prose.
 
 ---
 
@@ -196,11 +210,51 @@ The plain-English restatement uses a fenced **`csharp`** block with a single
 
 ---
 
+## 6. Permission modes, protected paths & shell/mouse mechanics [official, 2026-06-25]
+
+Sources: Claude Code permission-modes, fullscreen, and interactive-mode docs (links in
+the Sources section). Verified against docs + the live CLI (v2.1.191) this session.
+
+- **Six permission modes** (`Shift+Tab` cycles the first three): `default` (reads only),
+  `acceptEdits` (edits + common FS commands in-scope), `plan` (read-only research),
+  **`auto`** (NEW, v2.1.83+ -- a Sonnet-4.6 classifier approves safe actions and blocks
+  risky ones; no longer needs opt-in consent as of v2.1.152), **`dontAsk`** (NEW --
+  CI-style: only pre-approved tools run, everything else is denied not prompted), and
+  `bypassPermissions` (skips everything; container/VM only).
+- **Protected paths** are never auto-approved except in `bypassPermissions` (and even
+  there `rm -rf /` and `~` still prompt). Per mode: default/acceptEdits/plan -> prompt;
+  `auto` -> classifier; `dontAsk` -> denied; `bypassPermissions` -> allowed. Neither
+  `permissions.allow` rules NOR `PreToolUse` allow-hooks can pre-approve them (section 2).
+  Guarded set includes `.git`, `.config/git`, `.claude`, `.cargo`, `.husky`, and the
+  files `.zshrc/.zshenv/.zprofile/.envrc/.bashrc`, `.npmrc/.yarnrc/bunfig.toml`,
+  `.gitconfig/.gitmodules`, `.mcp.json/.claude.json`. Full model in
+  `CLAUDE_CODE_SECURITY.md`.
+- **`!` shell mode (v2.1.186 behaviour change):** `! <cmd>` runs outside the model and
+  ALWAYS adds the command + output to context. Since v2.1.186 Claude also auto-responds
+  to that output (costs a normal prompt); `respondToBashCommands:false` reverts to
+  silent-but-still-ingested. The context ingestion is unconditional; only the
+  auto-response is toggle-able.
+- **Fullscreen renderer + mouse:** the opt-in fullscreen renderer (`/tui fullscreen`)
+  draws on the alternate screen and CAPTURES mouse events, breaking native click-drag
+  selection. Levers: hold a per-terminal modifier for a one-off native selection (Apple
+  Terminal `Fn`, iTerm2 `Option`, Kitty/most `Shift`); `CLAUDE_CODE_DISABLE_MOUSE=1` to
+  opt out of capture permanently (loses click-to-expand, `Cmd`+click URLs, in-app wheel
+  scroll; bug #62294 = wheel becomes full-page-only); or `/tui default` to drop
+  fullscreen entirely. Trialed + rejected on this machine 2026-06-25 (see auto-memory).
+
+---
+
 ## Update Log
 
 - **2026-06-19** - Initial version. Captured from the investigation into why a
   personal steering rule "wasn't loaded" (it was; compliance was the gap) and the
   follow-on work designing the grey `csharp #` plain-English style. Sections 1-5.
+- **2026-06-25** - Added section 6 (permission modes, protected paths, `!` shell mode,
+  fullscreen mouse) and, in section 2, the 2026-06 hook events plus the refinement that
+  a `PreToolUse` hook can DENY but cannot force-ALLOW a protected path (only
+  `bypassPermissions` can; verified vs issue #41615). From the 2026-06-25 deep
+  investigation of H1-2026 Claude Code changes; full cited report in
+  `~/.claude/MEMORY/WORK/20260625-110731_*`. New companion doc: `CLAUDE_CODE_SECURITY.md`.
 
 ---
 
@@ -209,6 +263,10 @@ The plain-English restatement uses a fenced **`csharp`** block with a single
 - Claude Code memory docs: https://code.claude.com/docs/en/memory
 - Claude Code hooks docs: https://code.claude.com/docs/en/hooks
 - Claude Code settings docs: https://code.claude.com/docs/en/settings
+- Claude Code permission-modes docs: https://code.claude.com/docs/en/permission-modes
+- Claude Code fullscreen / interactive-mode docs: https://code.claude.com/docs/en/fullscreen , https://code.claude.com/docs/en/interactive-mode
+- Issue #41615 (permissions.allow + PreToolUse hooks cannot override the protected-path prompt): https://github.com/anthropics/claude-code/issues/41615
+- Issue #62294 (CLAUDE_CODE_DISABLE_MOUSE makes the wheel full-page-only): https://github.com/anthropics/claude-code/issues/62294
 - Issue #16538 (plugin SessionStart additionalContext dropped, closed/not_planned):
   https://github.com/anthropics/claude-code/issues/16538
 - Issue #10373 (SessionStart hooks not working for new conversations, open):
