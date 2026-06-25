@@ -439,6 +439,14 @@ core.hooksPath`, never a bare `--get` from inside a repo (it merges repo-local
   `echo "$CLAUDE_SESSION_ID"` is empty in a fresh session on an old build, update
   Claude Code.
 
+- **Do NOT enable `attribution.sessionUrl` (Claude Code v2.1.183+).** That native
+  Claude Code setting omits the `Claude-Session: <url>` line from commits/PRs (it
+  targets web / Remote-Control sessions especially) -- but that line is exactly what
+  step 3 harvests into `C-Web-Id`. Turn it on and `C-Web-Id` silently goes blank while
+  the other four keys keep working. If a future commit shows a blank `C-Web-Id` where a
+  URL was expected, check this setting first. `C-Sess-Id` is unaffected -- it comes from
+  `CLAUDE_SESSION_ID`, not the harvested line.
+
 - **A PostToolUse formatter may reformat `~/.claude/settings.json` after an edit.**
   Re-validate with `jq -e . ~/.claude/settings.json` and re-check the hook is still
   present after editing.
