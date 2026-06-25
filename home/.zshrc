@@ -355,6 +355,18 @@ if command -v direnv &> /dev/null; then
     eval "$(direnv hook zsh)"
 fi
 
+# --- Keep an inherited active venv at the FRONT of PATH ---
+# macOS path_helper (run by /etc/zprofile on every login shell) rebuilds PATH
+# with /etc/paths + /etc/paths.d dirs first, sinking an already-active venv's
+# bin to the bottom. A fresh shell is fine -- direnv prepends .venv/bin -- but a
+# NESTED login shell (e.g. a tmux pane that inherited $VIRTUAL_ENV) makes direnv
+# skip re-activation, so /usr/bin/python3 would shadow the venv's python3.
+# Re-assert the venv at the front. No-op in fresh shells ($VIRTUAL_ENV is empty
+# until direnv loads). typeset -U path (Section 5) keeps the result de-duplicated.
+if [[ -n "$VIRTUAL_ENV" && -d "$VIRTUAL_ENV/bin" ]]; then
+    path=("$VIRTUAL_ENV/bin" ${path:#"$VIRTUAL_ENV/bin"})
+fi
+
 # Prevent "zsh: no matches found" error
 setopt nonomatch
 
@@ -607,6 +619,7 @@ _claude_launch() {
         DO_NOT_TRACK= \
         GH_TOKEN="$gh_token" \
         CLAUDE_CODE_HIDE_ACCOUNT_INFO=1 \
+        CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1 \
         ENABLE_EXPERIMENTAL_MCP_CLI=1 \
         ENABLE_TOOL_SEARCH=1 \
         "$@"
@@ -616,6 +629,7 @@ _claude_launch() {
       DO_NOT_TRACK= \
       GH_TOKEN="$gh_token" \
       CLAUDE_CODE_HIDE_ACCOUNT_INFO=1 \
+      CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1 \
       ENABLE_EXPERIMENTAL_MCP_CLI=1 \
       ENABLE_TOOL_SEARCH=1 \
       "$@"
