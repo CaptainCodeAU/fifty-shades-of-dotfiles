@@ -165,6 +165,16 @@ Net: a leaked API token can read metadata - it cannot push, rewrite history, or
 read source - a deliberately smaller blast radius than the SSH key, and confined
 to Claude sessions.
 
+## Claude Code's own security surface (separate doc)
+
+The posture above governs the **SSH** transport (clone / fetch / push). Claude Code —
+the agent that edits these files — has its own, separate security model: an OS-level
+Bash sandbox, six permission modes, and an un-bypassable protected-paths guard over your
+dotfiles (a `PreToolUse` hook or a `permissions.allow` rule cannot silence it — only
+`bypassPermissions` can), plus the 2026 CVE history. That surface, and the
+`sandbox.credentials` hardening recommendation, lives in
+[`CLAUDE_CODE_SECURITY.md`](./CLAUDE_CODE_SECURITY.md).
+
 ## What this document is not
 
 This is not advocacy for everyone to adopt strict. It is a record
