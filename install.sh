@@ -92,6 +92,17 @@ _vercmp() {
     if [[ "$lower" == "$a" ]]; then echo -1; else echo 1; fi
 }
 
+# Compare two settings.json files IGNORING the per-machine color lines that
+# direnvrc injects into "workbench.colorCustomizations" (titleBar/statusBar/
+# panel/sideBar/terminal keys — see home/.config/direnv/direnvrc). Returns 0
+# (same) when the ONLY difference is those machine colors, so the macOS settings
+# sync can skip a pointless backup+overwrite on a re-run. JSONC-safe: it strips
+# matching lines as TEXT, because the files carry // comments that jq can't parse.
+_settings_same_ignoring_colors() {
+    local re='"(titleBar\.(active|inactive)(Background|Foreground)|panel\.border|sideBar\.border|statusBar\.(background|foreground)|terminal\.(inactiveSelectionBackground|selectionBackground))"[[:space:]]*:'
+    cmp -s <(grep -Ev "$re" -- "$1") <(grep -Ev "$re" -- "$2")
+}
+
 # PNPM_HOME: where pnpm keeps its globals + store, and (on most platforms) where
 # the standalone binary installs. ~/Library/pnpm on macOS, ~/.local/share/pnpm on
 # Linux/WSL. Used for globals/residue on every platform — even on Intel macOS,
@@ -1507,13 +1518,17 @@ stow_platform() {
         local cursor_dst="$cursor_app_dir/User/settings.json"
         if [[ -f "$cursor_src" ]]; then
             if [[ -f "$cursor_dst" && ! -L "$cursor_dst" ]]; then
-                # Real file (direnvrc has injected machine colors) — back it up before overwriting.
-                # direnvrc will re-inject colors on next shell open (idempotent guard checks content).
-                local cursor_bak="${cursor_dst}.bak.$(date +%Y%m%d_%H%M%S)"
-                run_cmd cp "$cursor_dst" "$cursor_bak"
-                info "Cursor settings.json backed up → $(basename "$cursor_bak")"
-                run_cmd cp "$cursor_src" "$cursor_dst"
-                success "Cursor settings.json updated from repo"
+                if _settings_same_ignoring_colors "$cursor_src" "$cursor_dst"; then
+                    echo -e "  ${GREEN}✓${RESET} Cursor settings.json unchanged (only machine colors differ) — skipping"
+                else
+                    # Genuine change vs repo — back it up before overwriting.
+                    # direnvrc will re-inject machine colors on next shell open.
+                    local cursor_bak="${cursor_dst}.bak.$(date +%Y%m%d_%H%M%S)"
+                    run_cmd cp "$cursor_dst" "$cursor_bak"
+                    info "Cursor settings.json backed up → $(basename "$cursor_bak")"
+                    run_cmd cp "$cursor_src" "$cursor_dst"
+                    success "Cursor settings.json updated from repo"
+                fi
             elif [[ -L "$cursor_dst" ]]; then
                 echo -e "  ${GREEN}✓${RESET} Cursor settings.json is a symlink — leaving as-is"
             else
@@ -1534,12 +1549,17 @@ stow_platform() {
         local code_dst="$code_app_dir/User/settings.json"
         if [[ -f "$code_src" ]]; then
             if [[ -f "$code_dst" && ! -L "$code_dst" ]]; then
-                # Real file (direnvrc has injected machine colors) — back it up before overwriting.
-                local code_bak="${code_dst}.bak.$(date +%Y%m%d_%H%M%S)"
-                run_cmd cp "$code_dst" "$code_bak"
-                info "VSCode settings.json backed up → $(basename "$code_bak")"
-                run_cmd cp "$code_src" "$code_dst"
-                success "VSCode settings.json updated from repo"
+                if _settings_same_ignoring_colors "$code_src" "$code_dst"; then
+                    echo -e "  ${GREEN}✓${RESET} VSCode settings.json unchanged (only machine colors differ) — skipping"
+                else
+                    # Genuine change vs repo — back it up before overwriting.
+                    # direnvrc will re-inject machine colors on next shell open.
+                    local code_bak="${code_dst}.bak.$(date +%Y%m%d_%H%M%S)"
+                    run_cmd cp "$code_dst" "$code_bak"
+                    info "VSCode settings.json backed up → $(basename "$code_bak")"
+                    run_cmd cp "$code_src" "$code_dst"
+                    success "VSCode settings.json updated from repo"
+                fi
             elif [[ -L "$code_dst" ]]; then
                 echo -e "  ${GREEN}✓${RESET} VSCode settings.json is a symlink — leaving as-is"
             else
