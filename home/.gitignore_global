@@ -103,3 +103,5 @@ temp/
 
 Plans/
 MEMORY/
+
+**/.claude/settings.local.json
