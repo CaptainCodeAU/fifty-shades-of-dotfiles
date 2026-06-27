@@ -161,7 +161,7 @@ The installer will check prerequisites, install missing tools, set up Oh My Zsh 
 
    ```bash
    # nvm (Node Version Manager)
-   curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+   curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.5/install.sh | bash
 
    # pnpm (standalone install — used instead of Corepack)
    curl -fsSL https://get.pnpm.io/install.sh | sh -
