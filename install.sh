@@ -60,7 +60,7 @@ SECTION_DECISION=ask
 # --- pnpm version policy ---
 # Minimum acceptable pnpm. If pnpm is missing OR below this, install/upgrade
 # is offered. Keep in sync with PNPM_MIN_VERSION in home/.zsh_onboarding.
-PNPM_MIN_VERSION="11.7.0"
+PNPM_MIN_VERSION="11.9.0"
 
 # --- nvm version policy ---
 # Minimum acceptable nvm. nvm <= 0.40.4 is vulnerable to CVE-2026-10796 (command
