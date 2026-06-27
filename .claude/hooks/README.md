@@ -6,21 +6,23 @@ All hooks are registered in `.claude/settings.json`. Claude Code pipes JSON to s
 
 ## Overview
 
-| Script                  | Hook Event     | Matcher                            | Purpose                                                   |
-| ----------------------- | -------------- | ---------------------------------- | --------------------------------------------------------- |
-| `session-checks.sh`     | `SessionStart` | `startup\|resume`                  | Git status + `.env` encryption check                      |
-| _(inline echo)_         | `SessionStart` | `compact`                          | Re-inject project conventions after compaction            |
-| `validate-bash.sh`      | `PreToolUse`   | `Bash`                             | Block destructive commands (`rm -rf /`, force push, etc.) |
-| `pre-commit-check.sh`   | `PreToolUse`   | `Bash`                             | Lint/build gate before `git commit`                       |
-| `protect-files.sh`      | `PreToolUse`   | `Edit\|Write`                      | Block edits to `.env`, lockfiles, `.git/`                 |
-| `enforce-uv.sh`         | `PreToolUse`   | `Bash`                             | Block bare pip/python/pytest/ruff → enforce uv            |
-| `enforce-pnpm.sh`       | `PreToolUse`   | `Bash`                             | Block npm/yarn/npx → enforce pnpm or bun                  |
-| `enforce-no-cd.sh`      | `PreToolUse`   | `Bash`                             | Block bare cd → enforce absolute paths or git -C          |
-| `enforce-builtin.sh`    | `PreToolUse`   | `Bash`                             | Block `builtin` with non-builtins (git, swift, etc.)      |
-| `hook_runner.py`        | Multiple       | Various                            | Audio notifications (sound + speech)                      |
-| _(inline prettier)_     | `PostToolUse`  | `Edit\|Write`                      | Auto-format with prettier after file changes              |
-| _(inline markdownlint)_ | `PostToolUse`  | `Edit\|Write`                      | Auto-fix markdown lint issues on `.md` files              |
-| `export_transcript.sh`  | `SessionEnd`   | `prompt_input_exit\|logout\|other` | Export session transcript (skips `/clear`)                |
+| Script                   | Hook Event     | Matcher                            | Purpose                                                   |
+| ------------------------ | -------------- | ---------------------------------- | --------------------------------------------------------- |
+| `session-checks.sh`      | `SessionStart` | `startup\|resume`                  | Git status + `.env` encryption check                      |
+| `zed-version-check.sh`   | `SessionStart` | `startup\|resume`                  | Nudge to refresh Zed Preview changelog when newer release |
+| `toolchain-cve-check.sh` | `SessionStart` | `startup\|resume`                  | Flag CVE-exposed pinned/installed pnpm/nvm versions       |
+| _(inline echo)_          | `SessionStart` | `compact`                          | Re-inject project conventions after compaction            |
+| `validate-bash.sh`       | `PreToolUse`   | `Bash`                             | Block destructive commands (`rm -rf /`, force push, etc.) |
+| `pre-commit-check.sh`    | `PreToolUse`   | `Bash`                             | Lint/build gate before `git commit`                       |
+| `protect-files.sh`       | `PreToolUse`   | `Edit\|Write`                      | Block edits to `.env`, lockfiles, `.git/`                 |
+| `enforce-uv.sh`          | `PreToolUse`   | `Bash`                             | Block bare pip/python/pytest/ruff → enforce uv            |
+| `enforce-pnpm.sh`        | `PreToolUse`   | `Bash`                             | Block npm/yarn/npx → enforce pnpm or bun                  |
+| `enforce-no-cd.sh`       | `PreToolUse`   | `Bash`                             | Block bare cd → enforce absolute paths or git -C          |
+| `enforce-builtin.sh`     | `PreToolUse`   | `Bash`                             | Block `builtin` with non-builtins (git, swift, etc.)      |
+| `hook_runner.py`         | Multiple       | Various                            | Audio notifications (sound + speech)                      |
+| _(inline prettier)_      | `PostToolUse`  | `Edit\|Write`                      | Auto-format with prettier after file changes              |
+| _(inline markdownlint)_  | `PostToolUse`  | `Edit\|Write`                      | Auto-fix markdown lint issues on `.md` files              |
+| `export_transcript.sh`   | `SessionEnd`   | `prompt_input_exit\|logout\|other` | Export session transcript (skips `/clear`)                |
 
 ## Audio notification system
 
@@ -190,6 +192,8 @@ Subclasses override only the steps they need:
 ```
 .claude/hooks/
   session-checks.sh       # SessionStart — git status + .env encryption check
+  zed-version-check.sh    # SessionStart — nudge to refresh the Zed Preview changelog doc
+  toolchain-cve-check.sh  # SessionStart — flag CVE-exposed pnpm/nvm floors + installed
   pre-commit-check.sh     # PreToolUse Bash — lint/build gate before git commit
   validate-bash.sh        # PreToolUse Bash — block destructive commands
   protect-files.sh        # PreToolUse Edit|Write — block edits to protected files
@@ -234,6 +238,14 @@ Runs on `SessionStart` with matcher `startup|resume` (skips `compact` and `clear
 
 1. **Git status** — counts uncommitted changes and prints a one-line summary.
 2. **`.env` encryption** — checks if `dotenvx` is installed, whether `.env` files are encrypted, and whether `.env.keys` exists for decryption. Warns about unencrypted variants (`.env.local`, `.env.development`, etc.).
+
+### zed-version-check.sh
+
+Runs on `SessionStart` (`startup|resume`). Read-only Zed Preview changelog freshness check: compares the version recorded in `docs/ZED_PREVIEW_CHANGELOG.md` against the latest GitHub prerelease (6h-cached in `$TMPDIR`), and reports the merge status of watched upstream PRs. On a newer release or a merged PR it nudges the assistant to refresh that doc. Never edits anything; always exits 0.
+
+### toolchain-cve-check.sh
+
+Runs on `SessionStart` (`startup|resume`). Read-only CVE check of the pinned pnpm/nvm version floors (`PNPM_MIN_VERSION`, `NVM_MIN_VERSION`, read from `install.sh`) and the installed pnpm/nvm versions, via the standalone `toolchain-cve-check` tool (pnpm through OSV, nvm through GitHub's nvm-repo advisories — the latter needs `$GH_TOKEN`, so it skips gracefully without one). 6h-cached; prints a one-line all-clear or, on exposure, the offending version + advisory + a bump nudge. Never blocks; always exits 0. See [`docs/TOOLCHAIN_CVE_CHECK.md`](../../docs/TOOLCHAIN_CVE_CHECK.md).
 
 ### pre-commit-check.sh
 
