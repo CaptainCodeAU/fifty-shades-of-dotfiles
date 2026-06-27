@@ -102,3 +102,8 @@ is equivalent.
 | ----------------- | ------------------------------------ | ------------------------ |
 | `NVM_MIN_VERSION` | `install.sh`, `home/.zsh_onboarding` | new nvm security release |
 | `NODE_MIN_MAJOR`  | `install.sh`, `home/.zsh_onboarding` | an LTS line reaches EOL  |
+
+The `NVM_MIN_VERSION` floor (and the installed nvm) is monitored for newly-published
+advisories by [`toolchain-cve-check`](TOOLCHAIN_CVE_CHECK.md): if a pinned or installed
+version later lands inside a vulnerable range, a SessionStart check flags it and nudges
+a bump — so a floor that was clean when set does not silently rot.

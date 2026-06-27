@@ -158,3 +158,10 @@ on top of the manual command + `--json` / `--fail-on`.
 - `0` -- no findings at/above `--fail-on` (or `--fail-on` unset)
 - `1` -- findings at/above `--fail-on`
 - `2` -- usage/environment error (no pnpm, bad folder, declined prompt)
+
+## Related
+
+This audits a _project's dependencies_. To check whether the pnpm/nvm **tool
+versions** themselves -- the pinned floors (`PNPM_MIN_VERSION`, `NVM_MIN_VERSION`)
+and what's actually installed -- are sitting in a published vulnerable range, see
+[`toolchain-cve-check`](TOOLCHAIN_CVE_CHECK.md).
