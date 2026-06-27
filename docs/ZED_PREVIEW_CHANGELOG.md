@@ -1,7 +1,7 @@
 # Zed Preview — Changelog Tracker
 
-<!-- ZED_PREVIEW_DOC_VERSION: 1.8.0 -->
-<!-- LAST_UPDATED: 2026-06-18 -->
+<!-- ZED_PREVIEW_DOC_VERSION: 1.9.0 -->
+<!-- LAST_UPDATED: 2026-06-27 -->
 
 > **What this is.** A living record of notable **Zed Preview** changes, filtered to
 > what Gavin cares about: **user interface**, **configuration / settings**, and
@@ -25,10 +25,10 @@
 
 | Field                  | Value        |
 | ---------------------- | ------------ |
-| Latest Preview tracked | **1.8.0**    |
-| Release date           | 2026-06-17   |
-| GitHub tag             | `v1.8.0-pre` |
-| Doc last refreshed     | 2026-06-18   |
+| Latest Preview tracked | **1.9.0**    |
+| Release date           | 2026-06-24   |
+| GitHub tag             | `v1.9.0-pre` |
+| Doc last refreshed     | 2026-06-27   |
 
 ---
 
@@ -69,6 +69,49 @@ when it visibly affects the above or Gavin's known setup.
 ---
 
 ## Release log (newest first)
+
+### 1.9.0 — 2026-06-24
+
+**Theme / appearance**
+
+- _No theme, syntax-color, font, or icon-theme, or visual-styling changes this cycle._
+  - _In plain English:_ nothing changed about Zed's colors or themes in 1.9.0.
+
+**Configuration**
+
+- New `markdown_preview.limit_content_width` and `markdown_preview.max_width` — constrain and
+  center the Markdown preview content width.
+  - _In plain English:_ you can now cap how wide the Markdown preview gets so long lines don't
+    stretch edge-to-edge — directly relevant to your `md-hardbreak` preview workflow.
+- New `agent.sandbox_permissions.enabled` — toggle the agent terminal sandbox on/off.
+- New `git_panel.entry_primary_click_action` — set the default click behaviour on a Git Panel file.
+- **Changed/removed:** `git_panel.sort_by_path` is REPLACED by `git_panel.sort_by` (`path`/`name`)
+  plus `git_panel.group_by` (`none`/`status`).
+  - _In plain English:_ if you ever set the old git-panel sort key, it's renamed — the old name
+    silently stops working, so update it.
+
+**UI**
+
+- Picker modals (file finder etc.) gained draggable resizing and a side/below **preview** pane;
+  new text-finder picker as an alternative project-search UI (searches shared between views).
+- Named bookmarks; Agent Panel in-thread search (Ctrl/Cmd+F); quick "add remote MCP server".
+- Git Panel: split Stage-All/Unstage-All header button; git-blame toggle in the gutter context
+  menu; new View Options menu (list/tree, sort by path/name, group by status).
+- Terminal Vim paragraph navigation (`shift-{` / `shift-}`); Helix-mode debugger keybindings.
+- Fixes: Remote Projects modal is now keyboard-navigable; Git Panel selection visibility after a
+  post-commit removal; Vim `cw` with a count preserves whitespace.
+
+### 1.8.2 — 2026-06-22
+
+**UI**
+
+- Fix: the Copilot sign-in window no longer floats above all other applications — it's now
+  scoped to Zed.
+
+**Configuration / Theme**
+
+- _No configuration or theme changes._ (Other fixes were platform plumbing: case-insensitive
+  filesystem git-state sync, file-watcher performance on large worktrees, Cursor agent-mode compat.)
 
 ### 1.8.0 — 2026-06-17
 
@@ -122,14 +165,14 @@ when it visibly affects the above or Gavin's known setup.
 
 ## Standing watch-items (open threads)
 
-| Item                               | Status as of 2026-06-18               | Why it matters                |
+| Item                               | Status as of 2026-06-27               | Why it matters                |
 | ---------------------------------- | ------------------------------------- | ----------------------------- |
-| Per-project themes (zed#13300)     | **Open PR #58755** — not merged/1.8.0 | Gavin's color-per-window goal |
+| Per-project themes (zed#13300)     | **Open PR #58755** — not merged/1.9.0 | Gavin's color-per-window goal |
 | `theme_overrides` at project level | Still user-settings only              | PR #58755 sidesteps it (DB)   |
 | `detect_venv` default              | Still on by default                   | direnv double-activation      |
 
 **PR #58755 "Add per-window theme overrides"** (author 42piratas; opened 2026-06-06;
-open / not merged / not draft; last activity 2026-06-07; base `main`; no milestone;
+open / not merged / not draft; last activity 2026-06-23; base `main`; no milestone;
 9 files, +480/-39). Each window gets its own theme via new actions **`theme: project`**
 and **`theme: clear project`**; choices persist in a new `window_theme_overrides` DB
 table keyed by `WindowId` — **not** in `settings.json` or project files. That means it

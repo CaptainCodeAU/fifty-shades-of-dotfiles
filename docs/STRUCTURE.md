@@ -102,6 +102,8 @@ Executable commands exposed on `PATH` via `~/.local/bin`. Two kinds:
 | `migrate-claude-projects` | Rename Claude Code project dirs after the repo moves to a new path (see `docs/CODE_FOLDER_STRUCTURE.md`)                           | direct  |
 | `pnpm-audit-tree`         | Recursive supply-chain auditor for pnpm / JS project trees (see `docs/PNPM_AUDIT_TREE.md`)                                         | direct  |
 | `pnpm-audit-hook`         | Git pre-commit/pre-push hook that blocks on supply-chain findings; wraps `pnpm-audit-tree` (see `docs/PNPM_AUDIT_PREPUSH_HOOK.md`) | direct  |
+| `nvm-verify-node`         | Verify an nvm-installed Node against official GPG-signed nodejs.org releases, bypassing mirrors (see `docs/NVM_SECURITY.md`)       | direct  |
+| `toolchain-cve-check`     | Check pnpm/nvm version floors + installed versions against live CVE advisories (see `docs/TOOLCHAIN_CVE_CHECK.md`)                 | direct  |
 | `dirdiff`                 | Directory comparison tool (Left vs Right; size / content / by-type, JSON output)                                                   | wrapper |
 | `sysinfo`                 | Terminal system-information dashboard                                                                                              | wrapper |
 | `watch-history-sync`      | Export YouTube watch history to a local SQLite database                                                                            | wrapper |
