@@ -40,13 +40,22 @@ Key properties:
 - **Engine:** `home/.local/bin/ci-watch` (bash, stow-deployed to `~/.local/bin`).
   Read-only to your repos; the only writes are escalation state under
   `${XDG_STATE_HOME:-~/.local/state}/ci-watch/`. Queries `gh` live each session and
-  falls back to a per-target cache when offline. Always exits 0.
-- **SessionStart hook:** `.claude/hooks/ci-watch.sh` — a thin wrapper that locates the
-  engine and runs its render. Wired in `.claude/settings.json` next to the other
-  session-start watchers. Never blocks a session.
+  falls back to a per-target cache when offline. The render path always exits 0.
+- **Wiring (global, the active setup):** a `SessionStart` hook in **`~/.claude/settings.json`**
+  runs `~/.local/bin/ci-watch` (guarded: `test -x … && … || true`), so the dashboard appears
+  in **every** repo's session — not just this one. `~/.claude` is machine-local and untracked,
+  so this hook is a one-time manual add, not versioned here.
+- **Wiring (per-project, optional):** `.claude/hooks/ci-watch.sh` is a thin wrapper that
+  locates the engine and runs it; drop it into any project's `.claude/settings.json`
+  `SessionStart` if you want per-repo wiring instead of (or before) the global hook.
+- **Self-suggest:** in any repo that has `.github/workflows` but isn't on the watchlist, the
+  render adds one dim line — `untracked CI: <owner/repo> … add: ci-watch --add .` — so a
+  coverage gap surfaces itself instead of relying on anyone to remember.
 
 ```bash
 ci-watch                       # render the dashboard line (what the hook runs)
+ci-watch --add .               # add the CURRENT repo (derives owner/repo@branch)
+ci-watch --add <o/r@branch> "label"   # add a specific target
 ci-watch --snooze <repo> <d>   # deliberately silence a red target for <d> days
 ci-watch --list                # show the watchlist
 ci-watch --json                # machine-readable status per target
