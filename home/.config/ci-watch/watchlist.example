@@ -1,0 +1,26 @@
+# ci-watch watchlist -- which repos' CI to surface in the session dashboard.
+#
+# This .example is COMMITTED (the repo is public). Copy it to the REAL, gitignored
+# file and put your actual repos there:
+#
+#   cp ~/.config/ci-watch/watchlist.example ~/.config/ci-watch/watchlist
+#   $EDITOR ~/.config/ci-watch/watchlist
+#
+# NEVER put real owner/repo names in THIS .example file -- only in the gitignored
+# watchlist (the `home/.ssh/config.local` privacy pattern).
+#
+# One target per line:
+#   owner/repo@branch | optional label     watch a specific branch
+#   owner/repo                             omit @branch -> latest run on any branch
+# Lines starting with '#' are comments; blank lines are ignored.
+#
+# Examples (placeholders -- replace with your own):
+#   your-org/your-service@main | my service
+#   your-org/another-repo@develop
+#
+# A red target ESCALATES the longer it stays red and only clears when CI goes
+# green or you deliberately snooze it:
+#   ci-watch                          render now (what the session hook runs)
+#   ci-watch --snooze <repo> <days>   deliberately silence a red (never "by seeing")
+#   ci-watch --list
+#   ci-watch --json

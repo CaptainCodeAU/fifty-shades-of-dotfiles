@@ -1,0 +1,329 @@
+#!/usr/bin/env bash
+# ============================================================================
+#  ci-watch -- escalating, dismiss-only-by-fixing CI status for the welcome dash
+# ============================================================================
+# Why this exists: a red CI nobody notices is as bad as no CI. PASSIVE signals
+# (e.g. "workflow failed" emails) habituate -- they were empirically tuned out
+# here for a week while ~25 red runs piled up. This watcher lives in the
+# session-start dashboard (alongside the Zed-PR and toolchain-CVE watchers) and
+# is EXCEPTION-BASED so it cannot become wallpaper:
+#   - GREEN -> one dim, near-invisible line (no habituation surface)
+#   - RED   -> a banner that ESCALATES the longer it stays red, and that CANNOT
+#              be dismissed by being seen -- only by CI going green, or by a
+#              DELIBERATE `ci-watch --snooze`.
+#
+# Escalation tiers (days since first seen red):
+#   tier 1 (0-2d): red banner
+#   tier 2 (3-6d): louder boxed banner + spoken alert (varies by day count)
+#   tier 3 (7d+) : strongest banner + spoken alert every session
+# Voice also fires once on the green->red transition. Messages vary by day so
+# the audio itself does not become monotone wallpaper.
+#
+# Privacy: this generic engine is committed to a PUBLIC repo. The real repo list
+# lives ONLY in ~/.config/ci-watch/watchlist (gitignored). See watchlist.example.
+#
+# Guarantees (mirror zed-version-check.sh / toolchain-cve-check.sh):
+#   - read-only to your repos; the only writes are state under XDG_STATE_HOME
+#   - queries gh LIVE each session, falls back to a per-target cache when offline
+#   - never blocks: the render path always exits 0; fails open without gh/token
+#
+# Usage:
+#   ci-watch                       render the session readout (default)
+#   ci-watch --snooze <repo> <d>   silence a red target for <d> days (deliberate)
+#   ci-watch --list                show the watchlist
+#   ci-watch --json                machine-readable status per target
+#   ci-watch --help
+#
+# Env (mostly for testing):
+#   CI_WATCH_LIST, CI_WATCH_STATE, CI_WATCH_NOTIFY_URL, CI_WATCH_VOICE_ID
+#   CI_WATCH_FORCE=green|red|unknown   bypass the live query (self-test only)
+#   CI_WATCH_NOW=<epoch>               override "now" (self-test only)
+#   CI_WATCH_DEBUG=1                   echo "[voice] ..." to stderr
+# ============================================================================
+set -uo pipefail
+
+WATCHLIST="${CI_WATCH_LIST:-$HOME/.config/ci-watch/watchlist}"
+STATE_DIR="${CI_WATCH_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/ci-watch}"
+NOTIFY_URL="${CI_WATCH_NOTIFY_URL:-http://localhost:8888/notify}"
+# Empty default on purpose: do NOT ship a personal voice id in a public repo. The
+# VoiceServer speaks via macOS `say` and ignores voice_id anyway; set CI_WATCH_VOICE_ID
+# only if your server uses one.
+VOICE_ID="${CI_WATCH_VOICE_ID:-}"
+
+mkdir -p "$STATE_DIR" 2>/dev/null || true
+
+# Colors: honor NO_COLOR. Emitted unconditionally otherwise (the session readout
+# renders ANSI even though it is not a TTY -- matching the sibling hooks).
+if [ -n "${NO_COLOR:-}" ]; then
+  RED='' GREEN='' YELLOW='' DIM='' BOLD='' NC=''
+else
+  RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[1;33m'
+  DIM=$'\033[2m'; BOLD=$'\033[1m'; NC=$'\033[0m'
+fi
+
+have(){ command -v "$1" >/dev/null 2>&1; }
+now_epoch(){ printf '%s' "${CI_WATCH_NOW:-$(date +%s)}"; }
+trim(){ local s="$1"; s="${s#"${s%%[![:space:]]*}"}"; s="${s%"${s##*[![:space:]]}"}"; printf '%s' "$s"; }
+keyof(){ printf '%s' "$1" | tr '/@:.' '____' | tr -cd 'A-Za-z0-9_-'; }
+enc_branch(){ printf '%s' "$1" | sed 's#/#%2F#g'; }
+
+# parse query_ci's "eff|concl|sha|url" into globals Q_EFF Q_CONCL Q_SHA Q_URL
+parse_q(){ local q="$1"; Q_EFF="${q%%|*}"; q="${q#*|}"; Q_CONCL="${q%%|*}"; q="${q#*|}"; Q_SHA="${q%%|*}"; Q_URL="${q#*|}"; }
+# tier_for_days <days> -> sets TIER (1=0-2d, 2=3-6d, 3=7d+)
+tier_for_days(){ if [ "$1" -ge 7 ]; then TIER=3; elif [ "$1" -ge 3 ]; then TIER=2; else TIER=1; fi; }
+
+# ---- per-target state (last known state survives across sessions) -----------
+load_state(){ # -> S_LAST S_RED_SINCE S_SNOOZE
+  local f="$STATE_DIR/$1.state" k v
+  S_LAST=""; S_RED_SINCE=0; S_SNOOZE=0
+  if [ -f "$f" ]; then
+    while IFS='=' read -r k v; do
+      case "$k" in
+        last)         S_LAST="$v" ;;
+        red_since)    S_RED_SINCE="$v" ;;
+        snooze_until) S_SNOOZE="$v" ;;
+      esac
+    done < "$f"
+  fi
+  case "$S_RED_SINCE" in ''|*[!0-9]*) S_RED_SINCE=0;; esac
+  case "$S_SNOOZE" in ''|*[!0-9]*) S_SNOOZE=0;; esac
+}
+save_state(){ # save_state <key> <last> <red_since> <snooze>
+  { printf 'last=%s\n' "$2"; printf 'red_since=%s\n' "$3"; printf 'snooze_until=%s\n' "$4"; } \
+    >"$STATE_DIR/$1.state" 2>/dev/null || true
+}
+
+# ---- spoken alert (best-effort; never fails) -------------------------------
+# Primary path: POST to the PAI VoiceServer (it speaks via macOS `say`). Fallback:
+# call the `say` BINARY directly (explicit /usr/bin/say) so a red alert is never lost
+# when the server is down. Deliberately NOT named `say` -- a function named `say`
+# that calls `say` would recurse forever; the absolute path also bypasses any shell
+# `say` alias/function. CI_WATCH_DEBUG makes it a dry-run (print, no audio).
+voice_alert(){
+  local msg="${1//\"/}" body
+  [ -n "${CI_WATCH_DEBUG:-}" ] && { printf '[voice] %s\n' "$msg" >&2; return 0; }
+  if [ -n "$VOICE_ID" ]; then
+    body="$(printf '{"message": "%s", "voice_id": "%s", "voice_enabled": true}' "$msg" "$VOICE_ID")"
+  else
+    body="$(printf '{"message": "%s", "voice_enabled": true}' "$msg")"
+  fi
+  # Try the VoiceServer first; on any failure (down / non-2xx / timeout / no curl)...
+  if have curl && timeout 4 curl -fsS -X POST "$NOTIFY_URL" \
+       -H 'Content-Type: application/json' -d "$body" >/dev/null 2>&1; then
+    return 0
+  fi
+  # ...fall back to the macOS `say` binary directly (backgrounded so it never blocks
+  # the session; no-op on non-macOS where /usr/bin/say is absent).
+  [ -x /usr/bin/say ] && { /usr/bin/say "$msg" >/dev/null 2>&1 & }
+  return 0
+}
+
+# ---- query: latest CI conclusion for a repo[/branch] -----------------------
+# echoes "eff|conclusion|sha|url" ; eff = green|red|unknown
+query_ci(){
+  local repo="$1" branch="$2" key="$3" cache path out concl status sha url eff
+  cache="$STATE_DIR/${key}.cache"
+  if [ -n "${CI_WATCH_FORCE:-}" ]; then
+    printf '%s|forced|FORCED|' "$CI_WATCH_FORCE"; return 0
+  fi
+  if [ -n "$branch" ]; then
+    path="repos/${repo}/actions/runs?branch=$(enc_branch "$branch")&per_page=1"
+  else
+    path="repos/${repo}/actions/runs?per_page=1"
+  fi
+  out=""
+  if have gh; then
+    out=$(timeout 8 gh api "$path" \
+      --jq '.workflow_runs[0] | [(.conclusion // ""), (.status // ""), (.head_sha[0:7] // ""), (.html_url // "")] | join("\t")' \
+      2>/dev/null || true)
+  fi
+  if { [ -z "$out" ] || [ "$out" = $'\t\t\t' ]; } && have curl && have jq && [ -n "${GH_TOKEN:-}" ]; then
+    out=$(timeout 8 curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
+      "https://api.github.com/${path}" 2>/dev/null \
+      | jq -r '.workflow_runs[0] | [(.conclusion // ""), (.status // ""), (.head_sha[0:7] // ""), (.html_url // "")] | join("\t")' \
+      2>/dev/null || true)
+  fi
+  if [ -n "$out" ] && [ "$out" != $'\t\t\t' ]; then
+    printf '%s\n' "$out" >"$cache" 2>/dev/null || true
+  elif [ -s "$cache" ]; then
+    out="$(cat "$cache" 2>/dev/null)"
+  fi
+  IFS=$'\t' read -r concl status sha url <<<"${out:-}"
+  case "$concl" in
+    success)                            eff=green ;;
+    failure|timed_out|startup_failure)  eff=red ;;
+    *)                                  eff=unknown ;;  # cancelled/neutral/in-progress/empty
+  esac
+  printf '%s|%s|%s|%s' "$eff" "${concl:-}" "${sha:-}" "${url:-}"
+}
+
+# ---- banners ---------------------------------------------------------------
+red_banner(){ # red_banner <tier> <days> <label> <concl> <sha> <repo> <stale>
+  local tier="$1" days="$2" label="$3" concl="$4" sha="$5" repo="$6" stale="$7"
+  local snip="ci-watch --snooze ${repo} ${days:-3}"
+  local note=""; [ -n "$stale" ] && note=" ${DIM}(last known; offline)${NC}"
+  case "$tier" in
+    1)
+      printf '%b\n' "${RED}${BOLD}  CI RED -- ${label}${NC}${note}"
+      printf '%b\n' "${RED}     ${concl:-failure} . ${sha:-?} . red for ${days}d${NC}"
+      printf '%b\n' "${DIM}     fix it, or hush: ${snip}${NC}"
+      ;;
+    2)
+      printf '%b\n' "${RED}${BOLD}  +==================================================+${NC}"
+      printf '%b\n' "${RED}${BOLD}  |  CI RED for ${days} DAYS -- ${label}${NC}"
+      printf '%b\n' "${RED}${BOLD}  +==================================================+${NC}${note}"
+      printf '%b\n' "${RED}     ${concl:-failure} . ${sha:-?}${NC}"
+      printf '%b\n' "${DIM}     fix it, or hush: ${snip}${NC}"
+      ;;
+    *)
+      printf '\n'
+      printf '%b\n' "${RED}${BOLD}  ####################################################${NC}"
+      printf '%b\n' "${RED}${BOLD}  ###  CI RED ${days} DAYS  ###  ${label}${NC}"
+      printf '%b\n' "${RED}${BOLD}  ###  broken for over a week -- fix or snooze.    ###${NC}"
+      printf '%b\n' "${RED}${BOLD}  ####################################################${NC}${note}"
+      printf '%b\n' "${RED}     ${concl:-failure} . ${sha:-?}${NC}"
+      printf '%b\n' "${YELLOW}     FIX IT, or deliberately: ${snip}${NC}"
+      printf '\n'
+      ;;
+  esac
+}
+
+# ---- one target ------------------------------------------------------------
+process_target(){ # process_target <repo> <branch> <label>
+  local repo="$1" branch="$2" label="$3" key q eff concl sha url now days tier stale
+  key="$(keyof "${repo}@${branch}")"
+  load_state "$key"
+  parse_q "$(query_ci "$repo" "$branch" "$key")"
+  eff="$Q_EFF"; concl="$Q_CONCL"; sha="$Q_SHA"; url="$Q_URL"
+  now="$(now_epoch)"
+
+  case "$eff" in
+    green)
+      save_state "$key" green 0 0
+      printf '%b\n' "   ${GREEN}OK${NC} ${DIM}CI green -- ${label} (${sha:-?})${NC}"
+      ;;
+    red)
+      local transition=0
+      if [ "$S_RED_SINCE" -le 0 ]; then S_RED_SINCE="$now"; transition=1; fi
+      save_state "$key" red "$S_RED_SINCE" "$S_SNOOZE"
+      days=$(( (now - S_RED_SINCE) / 86400 ))
+      if [ "$S_SNOOZE" -gt "$now" ]; then
+        local left=$(( (S_SNOOZE - now + 86399) / 86400 ))
+        printf '%b\n' "   ${YELLOW}zzz${NC} ${DIM}CI red ${days}d but snoozed ${left}d -- ${label}${NC}"
+      else
+        tier_for_days "$days"; tier="$TIER"
+        red_banner "$tier" "$days" "$label" "$concl" "$sha" "${repo}@${branch}" ""
+        if [ "$transition" -eq 1 ]; then
+          voice_alert "Heads up. ${label} C I just went red."
+        elif [ "$tier" -ge 2 ]; then
+          voice_alert "Reminder. ${label} C I has been red for ${days} days."
+        fi
+      fi
+      ;;
+    *)
+      # unknown/offline: keep the streak; if last was red, KEEP showing the alarm
+      # (dismiss-only-by-fixing -- a transient outage must not silence red).
+      if [ "$S_LAST" = "red" ] && [ "$S_RED_SINCE" -gt 0 ]; then
+        days=$(( (now - S_RED_SINCE) / 86400 ))
+        if [ "$S_SNOOZE" -gt "$now" ]; then
+          printf '%b\n' "   ${YELLOW}zzz${NC} ${DIM}CI red ${days}d, snoozed, status stale -- ${label}${NC}"
+        else
+          tier_for_days "$days"; tier="$TIER"
+          red_banner "$tier" "$days" "$label" "${concl:-}" "${sha:-}" "${repo}@${branch}" "stale"
+        fi
+      else
+        printf '%b\n' "   ${DIM}.. CI unknown -- ${label} (no runs / offline)${NC}"
+      fi
+      ;;
+  esac
+}
+
+# ---- watchlist parsing -----------------------------------------------------
+# Format (one per line):  owner/repo[@branch] [| label]   ;  '#' = comment line
+each_entry(){ # calls a callback with repo branch label
+  local cb="$1" line target label repo branch
+  [ -f "$WATCHLIST" ] || return 1
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ''|\#*) continue;; esac
+    if [[ "$line" == *"|"* ]]; then target="${line%%|*}"; label="$(trim "${line#*|}")";
+    else target="$line"; label=""; fi
+    target="$(trim "$target")"
+    [ -z "$target" ] && continue
+    if [[ "$target" == *"@"* ]]; then repo="${target%@*}"; branch="${target#*@}";
+    else repo="$target"; branch=""; fi
+    [ -z "$label" ] && { label="$repo"; [ -n "$branch" ] && label="$repo@$branch"; }
+    "$cb" "$repo" "$branch" "$label"
+  done < "$WATCHLIST"
+}
+
+# ---- subcommands -----------------------------------------------------------
+cmd_render(){
+  if [ ! -f "$WATCHLIST" ]; then
+    printf '%b\n' "${DIM}CI watch: no watchlist (${WATCHLIST/#$HOME/~}) -- nothing to watch.${NC}"
+    return 0
+  fi
+  if ! have gh && [ -z "${GH_TOKEN:-}" ] && [ -z "${CI_WATCH_FORCE:-}" ]; then
+    printf '%b\n' "${DIM}CI watch: skipped (no gh / GH_TOKEN -- runs inside Claude sessions).${NC}"
+    # still fall through so a cached red alarm can persist
+  fi
+  printf '%b\n' "${BOLD}CI watch${NC} ${DIM}(live each session; red is sticky until fixed)${NC}"
+  each_entry process_target
+  return 0
+}
+
+cmd_snooze(){ # cmd_snooze <repo-substr> <days>
+  local match="${1:-}" days="${2:-}" hit=0 now until
+  case "$days" in ''|*[!0-9]*) printf 'usage: ci-watch --snooze <repo> <days>\n' >&2; return 2;; esac
+  [ -z "$match" ] && { printf 'usage: ci-watch --snooze <repo> <days>\n' >&2; return 2; }
+  now="$(now_epoch)"; until=$(( now + days * 86400 ))
+  _snooze_one(){
+    local repo="$1" branch="$2" label="$3" key
+    case "${repo}@${branch}" in
+      *"$match"*) ;;
+      *) return 0;;
+    esac
+    key="$(keyof "${repo}@${branch}")"
+    load_state "$key"
+    save_state "$key" "${S_LAST:-red}" "${S_RED_SINCE:-$now}" "$until"
+    printf 'snoozed %s for %s day(s)\n' "$label" "$days"
+    hit=1
+  }
+  each_entry _snooze_one || true
+  [ "$hit" -eq 1 ] || { printf 'no watchlist target matched "%s"\n' "$match" >&2; return 1; }
+}
+
+cmd_list(){
+  [ -f "$WATCHLIST" ] || { printf 'no watchlist at %s\n' "$WATCHLIST"; return 0; }
+  printf 'watchlist: %s\n' "$WATCHLIST"
+  _list_one(){ printf '  %-40s %s\n' "$1${2:+@$2}" "$3"; }
+  each_entry _list_one
+}
+
+cmd_json(){
+  [ -f "$WATCHLIST" ] || { printf '[]\n'; return 0; }
+  local first=1
+  printf '['
+  _json_one(){
+    local repo="$1" branch="$2" label="$3" key q eff concl sha url now days
+    key="$(keyof "${repo}@${branch}")"; load_state "$key"
+    parse_q "$(query_ci "$repo" "$branch" "$key")"
+    eff="$Q_EFF"; concl="$Q_CONCL"; sha="$Q_SHA"; url="$Q_URL"
+    now="$(now_epoch)"; days=0
+    [ "$S_RED_SINCE" -gt 0 ] && days=$(( (now - S_RED_SINCE) / 86400 ))
+    [ "$first" -eq 1 ] && first=0 || printf ','
+    printf '{"repo":"%s","branch":"%s","state":"%s","conclusion":"%s","sha":"%s","days_red":%s,"snoozed":%s}' \
+      "$repo" "$branch" "$eff" "$concl" "$sha" "$days" "$([ "$S_SNOOZE" -gt "$now" ] && echo true || echo false)"
+  }
+  each_entry _json_one
+  printf ']\n'
+}
+
+case "${1:-}" in
+  ''|check|--check|render)  cmd_render ;;
+  --snooze)                 shift; cmd_snooze "${1:-}" "${2:-}" ;;
+  --list|-l)                cmd_list ;;
+  --json)                   cmd_json ;;
+  -h|--help)                sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//' ;;
+  *) printf 'ci-watch: unknown arg "%s" (try --help)\n' "$1" >&2; exit 2 ;;
+esac
+exit 0

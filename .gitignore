@@ -41,6 +41,9 @@ node_modules/
 # Never commit local-only SSH overrides (private hosts, ForwardAgent, etc.)
 home/.ssh/config.local
 
+# Never commit the real CI-watch list (real owner/repo names); ship only the .example
+home/.config/ci-watch/watchlist
+
 # WSL-specific ComfyUI functions (private/local configuration)
 home/.zsh_wsl_comfyui_functions
 
