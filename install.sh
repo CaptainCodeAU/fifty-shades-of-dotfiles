@@ -566,6 +566,31 @@ _preflight_node_eol_check() {
     return 0
 }
 
+_preflight_pnpm_floor_check() {
+    [[ "$SKIP_PREFLIGHT" == true ]] && return 0
+    # Present-but-below-floor UPGRADE only. A MISSING pnpm is deliberately left to
+    # the prerequisite installer so it still passes check -> install -> re-check.
+    # Corepack/npm-global pnpm is handled by _preflight_pnpm_check.
+    command -v pnpm &>/dev/null || return 0
+    _pnpm_is_supported || return 0
+    _pnpm_needs_install_or_upgrade || return 0   # supported + present => below floor
+
+    local cur; cur=$(pnpm -v 2>/dev/null || echo "?")
+    step "Pre-flight pnpm floor check"
+    warn "pnpm ${cur} is below ${PNPM_MIN_VERSION} (security floor)."
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[dry-run] No changes made. Re-run without --dry-run to upgrade pnpm."
+        return 0
+    fi
+    if _pnpm_use_homebrew; then
+        confirm "Run 'brew upgrade pnpm'?" && run_cmd brew upgrade pnpm
+    elif _pnpm_is_standalone; then
+        confirm "Run 'pnpm self-update'?" && run_cmd pnpm self-update
+    fi
+    hash -r 2>/dev/null || true
+    return 0
+}
+
 pretty_path() {
     echo "${1/#$HOME/~}"
 }
@@ -2039,6 +2064,12 @@ main() {
     # shows up under --dry-run, and clears conflicting pnpm sources BEFORE the
     # standalone-install step — even when all other prerequisites are present.
     _preflight_pnpm_check
+
+    # --- pnpm floor pre-flight (upgrade a present-but-below-floor pnpm every run) ---
+    # The in-prereq block (install_macos_prerequisites) only runs when a tool is
+    # MISSING, so a fully-provisioned box never gets its pnpm floor enforced there.
+    # This closes that gap; a missing pnpm is still left to the prereq installer.
+    _preflight_pnpm_floor_check
 
     # --- Node EOL pre-flight (offer to remove unsupported Node majors) ---
     _preflight_node_eol_check
