@@ -27,9 +27,22 @@ hook="$(basename "$0")"
 # 1. Delegate to the repo-local hook of the same name. core.hooksPath is global
 #    here, so resolve the repo's ACTUAL git dir explicitly rather than trusting
 #    the hooks dir git handed us.
+#    Worktree fallback: in a linked worktree, --git-dir is .git/worktrees/<name>,
+#    whose own hooks/ dir is empty, so a hook installed in the MAIN checkout (the
+#    common dir) would be silently skipped. When the per-worktree hook is ABSENT,
+#    fall back to the common-dir hook so worktrees INHERIT an explicitly-installed
+#    hook. This only ever runs a hook that was deliberately installed -- it does NOT
+#    make the dispatcher pre-commit-aware (auto-running a repo's .pre-commit-config
+#    on commit would execute any cloned repo's hook code = supply-chain RCE).
 git_dir="$(git rev-parse --git-dir 2>/dev/null || true)"
 if [ -n "$git_dir" ]; then
     local_hook="$git_dir/hooks/$hook"
+    if [ ! -e "$local_hook" ]; then
+        common_dir="$(git rev-parse --git-common-dir 2>/dev/null || true)"
+        if [ -n "$common_dir" ] && [ ! "$common_dir" -ef "$git_dir" ]; then
+            local_hook="$common_dir/hooks/$hook"
+        fi
+    fi
     if [ -x "$local_hook" ] && [ ! "$local_hook" -ef "$0" ]; then
         "$local_hook" "$@" || exit $?
     fi
