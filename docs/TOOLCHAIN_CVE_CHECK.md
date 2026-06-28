@@ -121,3 +121,5 @@ toolchain-cve-check --nvm-floor 0.40.3    # -> nvm floor EXPOSED: CVE-2026-10796
 - [`docs/PNPM_AUDIT_TREE.md`](PNPM_AUDIT_TREE.md) — per-project pnpm dependency auditor (a
   different job: it audits a project's _dependencies_, not the pnpm/nvm tool versions).
 - [`docs/NVM_SECURITY.md`](NVM_SECURITY.md) — the layered nvm/Node hardening this complements.
+- [`docs/CI_WATCH.md`](CI_WATCH.md) — sibling session-start watcher: an escalating,
+  dismiss-only-by-fixing CI-status line for repos you flag.
