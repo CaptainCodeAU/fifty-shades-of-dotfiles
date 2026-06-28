@@ -29,6 +29,7 @@
 #
 # Usage:
 #   ci-watch                       render the session readout (default)
+#   ci-watch --add <repo|.> [lbl]  add a repo (or "." = the current repo) to the list
 #   ci-watch --snooze <repo> <d>   silence a red target for <d> days (deliberate)
 #   ci-watch --list                show the watchlist
 #   ci-watch --json                machine-readable status per target
@@ -257,17 +258,37 @@ each_entry(){ # calls a callback with repo branch label
 }
 
 # ---- subcommands -----------------------------------------------------------
+# Derive owner/repo from a git remote url: git-cc:o/r.git, git@host:o/r.git,
+# https://host/o/r[.git] all reduce to "o/r".
+remote_owner_repo(){ printf '%s' "$1" | sed -E 's#\.git$##; s#^.*[:/]([^/:]+/[^/:]+)$#\1#'; }
+
+# Nudge when the CURRENT repo has CI but is NOT on the watchlist. This is the
+# cross-repo "want me to watch this?" surfaced deterministically by the TOOL (it
+# runs in every repo via the global hook), not by anyone remembering.
+suggest_current_repo(){
+  local top remote owner_repo
+  top="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+  [ -n "$top" ] && [ -d "$top/.github/workflows" ] || return 0
+  remote="$(git remote get-url origin 2>/dev/null || true)"
+  [ -n "$remote" ] || return 0
+  owner_repo="$(remote_owner_repo "$remote")"
+  [ -n "$owner_repo" ] || return 0
+  if [ -f "$WATCHLIST" ] && grep -qiF "$owner_repo" "$WATCHLIST" 2>/dev/null; then
+    return 0   # already watched
+  fi
+  printf '%b\n' "   ${DIM}.. untracked CI: ${owner_repo} has workflows but isn't watched -- add: ci-watch --add .${NC}"
+}
+
 cmd_render(){
-  if [ ! -f "$WATCHLIST" ]; then
-    printf '%b\n' "${DIM}CI watch: no watchlist (${WATCHLIST/#$HOME/~}) -- nothing to watch.${NC}"
-    return 0
+  if [ -f "$WATCHLIST" ]; then
+    if ! have gh && [ -z "${GH_TOKEN:-}" ] && [ -z "${CI_WATCH_FORCE:-}" ]; then
+      printf '%b\n' "${DIM}CI watch: skipped (no gh / GH_TOKEN -- runs inside Claude sessions).${NC}"
+      # still fall through so a cached red alarm can persist
+    fi
+    printf '%b\n' "${BOLD}CI watch${NC} ${DIM}(live each session; red is sticky until fixed)${NC}"
+    each_entry process_target
   fi
-  if ! have gh && [ -z "${GH_TOKEN:-}" ] && [ -z "${CI_WATCH_FORCE:-}" ]; then
-    printf '%b\n' "${DIM}CI watch: skipped (no gh / GH_TOKEN -- runs inside Claude sessions).${NC}"
-    # still fall through so a cached red alarm can persist
-  fi
-  printf '%b\n' "${BOLD}CI watch${NC} ${DIM}(live each session; red is sticky until fixed)${NC}"
-  each_entry process_target
+  suggest_current_repo
   return 0
 }
 
@@ -290,6 +311,26 @@ cmd_snooze(){ # cmd_snooze <repo-substr> <days>
   }
   each_entry _snooze_one || true
   [ "$hit" -eq 1 ] || { printf 'no watchlist target matched "%s"\n' "$match" >&2; return 1; }
+}
+
+cmd_add(){ # cmd_add <owner/repo[@branch] | .> [label]
+  local target="${1:-.}" label="${2:-}" remote owner_repo branch
+  if [ "$target" = "." ]; then
+    remote="$(git remote get-url origin 2>/dev/null || true)"
+    [ -n "$remote" ] || { printf 'ci-watch --add .: not in a git repo with an origin remote\n' >&2; return 2; }
+    owner_repo="$(remote_owner_repo "$remote")"
+    branch="$(git symbolic-ref --short -q HEAD 2>/dev/null || true)"
+    [ -n "$branch" ] && target="${owner_repo}@${branch}" || target="$owner_repo"
+    [ -z "$label" ] && { label="$(basename "$owner_repo")"; [ -n "$branch" ] && label="$label $branch"; }
+  fi
+  [ -n "$target" ] || { printf 'usage: ci-watch --add <owner/repo[@branch] | .> [label]\n' >&2; return 2; }
+  mkdir -p "$(dirname "$WATCHLIST")" 2>/dev/null || true
+  if [ -f "$WATCHLIST" ] && grep -qiF "${target%%@*}" "$WATCHLIST" 2>/dev/null; then
+    printf 'already on the watchlist: %s\n' "${target%%@*}"; return 0
+  fi
+  if [ -n "$label" ]; then printf '%s | %s\n' "$target" "$label" >> "$WATCHLIST"
+  else printf '%s\n' "$target" >> "$WATCHLIST"; fi
+  printf 'added to watchlist: %s\n' "$target"
 }
 
 cmd_list(){
@@ -318,12 +359,16 @@ cmd_json(){
   printf ']\n'
 }
 
+# render MUST always exit 0 (it runs at session start and must never block); the
+# other subcommands are interactive CLI and propagate their real exit code.
+rc=0
 case "${1:-}" in
   ''|check|--check|render)  cmd_render ;;
-  --snooze)                 shift; cmd_snooze "${1:-}" "${2:-}" ;;
-  --list|-l)                cmd_list ;;
-  --json)                   cmd_json ;;
-  -h|--help)                sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//' ;;
+  --add)                    shift; cmd_add "${1:-}" "${2:-}" || rc=$? ;;
+  --snooze)                 shift; cmd_snooze "${1:-}" "${2:-}" || rc=$? ;;
+  --list|-l)                cmd_list || rc=$? ;;
+  --json)                   cmd_json || rc=$? ;;
+  -h|--help)                sed -n '2,42p' "$0" | sed 's/^# \{0,1\}//' ;;
   *) printf 'ci-watch: unknown arg "%s" (try --help)\n' "$1" >&2; exit 2 ;;
 esac
-exit 0
+exit "$rc"
