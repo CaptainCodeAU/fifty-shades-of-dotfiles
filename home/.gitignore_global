@@ -98,6 +98,10 @@ temp/
 .local/
 *.orig
 
+# === Git ===
+# git worktree directories (e.g. created by `git worktree add`), at any depth
+.worktree/
+
 # === Documentation Generators ===
 .prompts/
 
