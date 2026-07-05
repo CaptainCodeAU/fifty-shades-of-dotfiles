@@ -539,6 +539,9 @@ brew install markdownlint-cli
 
 # dotenvx — used by session-checks.sh to verify .env encryption
 brew install dotenvx/brew/dotenvx
+# Homebrew's tap-trust feature ignores third-party taps until trusted;
+# trust just this one formula (not the whole tap):
+brew trust --formula dotenvx/brew/dotenvx
 ```
 
 ### Permissions (`.claude/settings.local.json`)

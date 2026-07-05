@@ -1731,6 +1731,23 @@ GITEOF"
         success "bun installed"
     fi
 
+    # --- dotenvx (optional; Claude Code's session-checks.sh hook uses it for
+    #     .env encryption checks). It lives on the dotenvx/brew tap, which
+    #     Homebrew's tap-trust feature ignores until trusted -- so trust the
+    #     single formula (never the whole tap) per the narrow-trust posture.
+    #     brew-gated; its own confirm keeps it opt-in inside the group. ---
+    if command -v brew &>/dev/null; then
+        if command -v dotenvx &>/dev/null; then
+            success "dotenvx already installed"
+            run_cmd brew trust --formula dotenvx/brew/dotenvx || true
+        elif SECTION_DECISION=ask confirm "Install dotenvx (optional -- .env encryption check for Claude hooks)?"; then
+            if run_cmd brew install dotenvx/brew/dotenvx; then
+                run_cmd brew trust --formula dotenvx/brew/dotenvx \
+                    || warn "dotenvx installed but 'brew trust' failed -- run: brew trust --formula dotenvx/brew/dotenvx"
+            fi
+        fi
+    fi
+
     # --- TPM (Tmux Plugin Manager) ---
     if command -v tmux &>/dev/null; then
         if [[ ! -d "$HOME/.tmux/plugins/tpm" ]]; then
