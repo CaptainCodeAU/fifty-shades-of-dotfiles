@@ -170,11 +170,18 @@ typeset -U path
 
 # Prepend OS-specific paths
 if [[ "$IS_MAC" == "true" ]]; then
-    path+=(
+    # Prepend Homebrew AHEAD of the system paths (/usr/bin etc., which macOS
+    # path_helper seeds first via /etc/zprofile) so brew's newer git/openssl/jq
+    # win over Apple's copies. ~/.local/bin + ~/.docker/bin (Section 1) stay in
+    # front; typeset -U (above) de-dups, keeping the first occurrence.
+    path=(
+        "$HOME/.local/bin"
+        "$HOME/.docker/bin"
         "$HOMEBREW_PREFIX/bin"
         "$HOMEBREW_PREFIX/sbin"
-		# Add any opt-in paths for tools that Homebrew doesn't symlink automatically
+        # Add any opt-in paths for tools that Homebrew doesn't symlink automatically
         "$HOMEBREW_PREFIX/opt/libpq/bin"
+        $path
     )
 fi
 
