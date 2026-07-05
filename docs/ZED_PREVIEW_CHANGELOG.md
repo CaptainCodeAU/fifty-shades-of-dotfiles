@@ -1,7 +1,7 @@
 # Zed Preview — Changelog Tracker
 
-<!-- ZED_PREVIEW_DOC_VERSION: 1.9.0 -->
-<!-- LAST_UPDATED: 2026-06-27 -->
+<!-- ZED_PREVIEW_DOC_VERSION: 1.10.0 -->
+<!-- LAST_UPDATED: 2026-07-06 -->
 
 > **What this is.** A living record of notable **Zed Preview** changes, filtered to
 > what Gavin cares about: **user interface**, **configuration / settings**, and
@@ -23,12 +23,12 @@
 
 ## Current baseline
 
-| Field                  | Value        |
-| ---------------------- | ------------ |
-| Latest Preview tracked | **1.9.0**    |
-| Release date           | 2026-06-24   |
-| GitHub tag             | `v1.9.0-pre` |
-| Doc last refreshed     | 2026-06-27   |
+| Field                  | Value         |
+| ---------------------- | ------------- |
+| Latest Preview tracked | **1.10.0**    |
+| Release date           | 2026-07-01    |
+| GitHub tag             | `v1.10.0-pre` |
+| Doc last refreshed     | 2026-07-06    |
 
 ---
 
@@ -69,6 +69,32 @@ when it visibly affects the above or Gavin's known setup.
 ---
 
 ## Release log (newest first)
+
+### 1.10.0 — 2026-07-01
+
+**Theme / appearance**
+
+- _No theme, syntax-color, font, or icon-theme changes this cycle._
+  - _In plain English:_ nothing changed about Zed's colors or themes in 1.10.0.
+
+**Configuration**
+
+- **Format-on-save is now OFF by default** (except languages that ship an official formatter).
+  - _In plain English:_ Zed will stop auto-formatting most files on save unless you opt back in —
+    check your settings if you relied on it.
+- New `git.inline_blame.location` — render current-line git blame in the **status bar** instead of inline.
+- New `markdown_preview_font_size` (+ separate scale actions) — size the Markdown preview text
+  independently of the editor.
+  - _In plain English:_ another Markdown-preview knob, relevant to your `md-hardbreak` workflow.
+- New `agent.commit_message_include_project_rules` — exclude project rules from the commit-message prompt.
+- Key agent settings (LLM providers, external agents, MCP servers) moved into the settings-editor UI.
+
+**UI**
+
+- Diff view: solo diff shows changed hunks by default (full-file toggle); diff-hunk line numbers now
+  match version-control colors; Project Panel gained "Expand All" / "Collapse All".
+- Text finder opens files at the matched **column**, and seeds the last query + filters.
+- Helix mode: `z c` center-scroll, `alt-b`/`alt-e` syntax-node navigation, `*` search-selection.
 
 ### 1.9.0 — 2026-06-24
 
@@ -165,11 +191,11 @@ when it visibly affects the above or Gavin's known setup.
 
 ## Standing watch-items (open threads)
 
-| Item                               | Status as of 2026-06-27               | Why it matters                |
-| ---------------------------------- | ------------------------------------- | ----------------------------- |
-| Per-project themes (zed#13300)     | **Open PR #58755** — not merged/1.9.0 | Gavin's color-per-window goal |
-| `theme_overrides` at project level | Still user-settings only              | PR #58755 sidesteps it (DB)   |
-| `detect_venv` default              | Still on by default                   | direnv double-activation      |
+| Item                               | Status as of 2026-07-06                | Why it matters                |
+| ---------------------------------- | -------------------------------------- | ----------------------------- |
+| Per-project themes (zed#13300)     | **Open PR #58755** — not merged/1.10.0 | Gavin's color-per-window goal |
+| `theme_overrides` at project level | Still user-settings only               | PR #58755 sidesteps it (DB)   |
+| `detect_venv` default              | Still on by default                    | direnv double-activation      |
 
 **PR #58755 "Add per-window theme overrides"** (author 42piratas; opened 2026-06-06;
 open / not merged / not draft; last activity 2026-06-23; base `main`; no milestone;
