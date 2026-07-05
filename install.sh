@@ -39,6 +39,10 @@ REPO_DIR="$SCRIPT_DIR"
 # /usr/bin and may not be on PATH in a bash login shell. Root PNPM_HOME is
 # included here so install.sh can find a pre-migration v10-layout pnpm to
 # upgrade — the permanent PATH (in .zshrc) only includes bin/.
+# Apple Silicon Homebrew can be missing from a bare bash login PATH (brew's
+# shellenv runs from .zshrc/.zprofile, which this script does not source), so
+# `brew`/`stow`/etc. must be found even when install.sh is launched oddly.
+[[ -d "/opt/homebrew/bin" ]]             && export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:$PATH"
 [[ -d "$HOME/.local/bin" ]]              && export PATH="$HOME/.local/bin:$PATH"
 [[ -d "$HOME/.local/share/pnpm" ]]       && export PATH="$HOME/.local/share/pnpm:$PATH"
 [[ -d "$HOME/.local/share/pnpm/bin" ]]   && export PATH="$HOME/.local/share/pnpm/bin:$PATH"
