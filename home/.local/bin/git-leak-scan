@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# ============================================================================
+#  git-leak-scan -- pre-commit staged-diff scan for identity / secret leaks
+# ============================================================================
+# Scans ONLY the staged, added lines (git diff --cached), so untracked files are
+# ignored until you `git add` them. Read-only; never mutates. ASCII-only,
+# bash-3.2-safe (no arrays; the diff is read via process substitution so the
+# match vars survive the loop).
+#
+# BLOCK (exit 1 -- near-certain leak, rarely legitimate in a commit):
+#   - this machine's real username inside a /Users|/home path OR its -Users- encoding
+#   - API tokens: gh[pousr]_..., sk-..., AKIA..., xox[baprs]-...
+#   - a PEM private-key header (-----BEGIN ... PRIVATE KEY-----)
+# WARN (exit 0 -- surfaced, not blocked): private RFC1918 LAN IPs (configs/docs
+#   legitimately mention these, so a block would just train you to always bypass).
+#
+# Reports FILE + matched CATEGORY only -- the offending value is NEVER re-printed.
+# Invoked by ~/.config/git/hooks/_audit-chain on pre-commit; the chainer fails
+# open if this script is not on PATH. Bypass a block:
+#   LEAK_SCAN_DISABLE=1 git commit ...        (or: git commit --no-verify)
+# ============================================================================
+set -uo pipefail
+
+# Explicit, deliberate bypass.
+[ -n "${LEAK_SCAN_DISABLE:-}" ] && exit 0
+# Fail open outside a git repo.
+git rev-parse --git-dir >/dev/null 2>&1 || exit 0
+
+user="$(id -un 2>/dev/null || echo "${USER:-}")"
+
+# ERE fragments (used UNQUOTED with bash [[ =~ ]]). Usernames are [A-Za-z0-9._-];
+# a stray '.' would over-match slightly, which only makes the guard stricter.
+b_user="(/Users/${user}/|/home/${user}/|-Users-${user}-)"
+b_ghtok='gh[pousr]_[A-Za-z0-9]{20,}'
+b_sk='sk-[A-Za-z0-9]{20,}'
+b_aws='AKIA[0-9A-Z]{16}'
+b_slack='xox[baprs]-[A-Za-z0-9-]{10,}'
+b_pkey='-----BEGIN [A-Z ]*PRIVATE KEY-----'
+w_ip='(^|[^0-9.])(192\.168\.[0-9]{1,3}\.[0-9]{1,3}|10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]{1,3}\.[0-9]{1,3})([^0-9]|$)'
+
+block_hits=""
+warn_hits=""
+file="?"
+
+while IFS= read -r line; do
+    case "$line" in
+        "+++ b/"*) file="${line#+++ b/}" ;;
+        "+++ "*)   file="${line#+++ }" ;;
+        "+"*)
+            c="${line#+}"
+            cat=""
+            if [ -n "$user" ] && [[ $c =~ $b_user ]]; then cat="username-in-path"
+            elif [[ $c =~ $b_ghtok ]]; then cat="github-token"
+            elif [[ $c =~ $b_sk ]];    then cat="api-token(sk-)"
+            elif [[ $c =~ $b_aws ]];   then cat="aws-access-key"
+            elif [[ $c =~ $b_slack ]]; then cat="slack-token"
+            elif [[ $c =~ $b_pkey ]];  then cat="private-key"
+            fi
+            if [ -n "$cat" ]; then
+                block_hits="${block_hits}${file}: ${cat}
+"
+            fi
+            if [[ $c =~ $w_ip ]]; then
+                warn_hits="${warn_hits}${file}: private-LAN-IP
+"
+            fi
+            ;;
+    esac
+done < <(git diff --cached --no-color -U0 2>/dev/null)
+
+block_hits="$(printf '%s' "$block_hits" | grep -v '^$' | sort -u)"
+warn_hits="$(printf '%s' "$warn_hits" | grep -v '^$' | sort -u)"
+
+if [ -n "$warn_hits" ]; then
+    printf 'leak-scan WARNING -- private LAN IP in staged diff (allowed, not blocked):\n' >&2
+    printf '%s\n' "$warn_hits" | sed 's/^/  /' >&2
+fi
+
+if [ -n "$block_hits" ]; then
+    printf 'leak-scan BLOCKED -- possible identity/secret leak in staged diff:\n' >&2
+    printf '%s\n' "$block_hits" | sed 's/^/  /' >&2
+    printf 'value masked. Scrub it, or bypass:  LEAK_SCAN_DISABLE=1 git commit ...  (or git commit --no-verify)\n' >&2
+    exit 1
+fi
+
+exit 0

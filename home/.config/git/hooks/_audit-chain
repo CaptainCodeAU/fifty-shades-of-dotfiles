@@ -53,6 +53,14 @@ if [ "$hook" = "pre-push" ] && command -v pnpm-audit-hook >/dev/null 2>&1; then
     pnpm-audit-hook full || exit $?
 fi
 
+# 2b. Identity / secret leak scan -- pre-commit only (sibling of the pre-push
+#     audit above). Blocks a commit whose staged diff carries a real username
+#     path, an API token, or a private key. Separate tool; fails open if absent.
+#     Bypass: LEAK_SCAN_DISABLE=1 git commit ...  (or git commit --no-verify)
+if [ "$hook" = "pre-commit" ] && command -v git-leak-scan >/dev/null 2>&1; then
+    git-leak-scan || exit $?
+fi
+
 # 3. Claude Code session attribution -- prepare-commit-msg only.
 #    Stamp two independent, machine-parseable trailers on commits made inside a
 #    Claude Code session:
