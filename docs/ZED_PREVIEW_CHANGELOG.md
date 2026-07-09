@@ -1,7 +1,7 @@
 # Zed Preview — Changelog Tracker
 
-<!-- ZED_PREVIEW_DOC_VERSION: 1.10.0 -->
-<!-- LAST_UPDATED: 2026-07-06 -->
+<!-- ZED_PREVIEW_DOC_VERSION: 1.11.0 -->
+<!-- LAST_UPDATED: 2026-07-09 -->
 
 > **What this is.** A living record of notable **Zed Preview** changes, filtered to
 > what Gavin cares about: **user interface**, **configuration / settings**, and
@@ -25,10 +25,10 @@
 
 | Field                  | Value         |
 | ---------------------- | ------------- |
-| Latest Preview tracked | **1.10.0**    |
-| Release date           | 2026-07-01    |
-| GitHub tag             | `v1.10.0-pre` |
-| Doc last refreshed     | 2026-07-06    |
+| Latest Preview tracked | **1.11.0**    |
+| Release date           | 2026-07-08    |
+| GitHub tag             | `v1.11.0-pre` |
+| Doc last refreshed     | 2026-07-09    |
 
 ---
 
@@ -69,6 +69,44 @@ when it visibly affects the above or Gavin's known setup.
 ---
 
 ## Release log (newest first)
+
+### 1.11.0 — 2026-07-08
+
+**Theme / appearance**
+
+- **Improved bracket colorization** — now preserves the theme's accent colors and applies
+  targeted contrast fixes. First theme-facing change in three cycles (1.9.0 and 1.10.0 had none).
+  - _In plain English:_ matching-bracket colors now follow your theme better and are easier to
+    read — the first actual color/theme change Zed has shipped in a while.
+
+**Configuration**
+
+- New `terminal.open_links_in_mouse_mode` — when off, Cmd/Ctrl-click forwards the click to the
+  terminal app instead of opening the link (pairs with the terminal-link fix below).
+- **Changed:** `markdown_preview_font_size` now falls back to the **UI font size** when unset.
+  - _In plain English:_ another Markdown-preview knob relevant to your `md-hardbreak` workflow — if
+    you never set a preview font size, it now tracks the UI font instead of a fixed default.
+
+**UI**
+
+- **View menu** gains **Agent Panel** + **Git Panel** entries; agent terminal threads are
+  searchable (`cmd-f`); turn-end buttons became slash-commands in the message editor.
+- **Git Panel / graph:** commit-history tag labels; toggleable git-graph columns; full commit
+  message as Markdown in graph details; partially-staged commit multibuffers; diff-stat numbers.
+- **Editor:** project-symbols picker gained a preview pane; middle-click a project-panel file opens
+  it in a permanent (non-preview) tab; collapse per-file match groups in Text Finder; diff
+  multibuffer headers show per-file added/removed counts.
+- **Terminal:** Cmd/Ctrl-click opens links even with mouse reporting enabled.
+
+**Fixes Gavin may feel**
+
+- **Text Finder:** fixed a crash + high-memory-usage bug and a dismissal crash during workspace
+  actions — directly relevant since you lean on the finder.
+- Fixed: git-blame hover popover not appearing on first trigger; missing icons on non-terminal
+  tabs while dragging; drag overlay not clearing on external drag end; vim-mode symbol rename
+  dropping the last character.
+  - _In plain English:_ several editor annoyances (search crashes, blame hover, a vim rename bug)
+    are cleared this cycle.
 
 ### 1.10.0 — 2026-07-01
 
@@ -191,14 +229,14 @@ when it visibly affects the above or Gavin's known setup.
 
 ## Standing watch-items (open threads)
 
-| Item                               | Status as of 2026-07-06                | Why it matters                |
+| Item                               | Status as of 2026-07-09                | Why it matters                |
 | ---------------------------------- | -------------------------------------- | ----------------------------- |
-| Per-project themes (zed#13300)     | **Open PR #58755** — not merged/1.10.0 | Gavin's color-per-window goal |
+| Per-project themes (zed#13300)     | **Open PR #58755** — not merged/1.11.0 | Gavin's color-per-window goal |
 | `theme_overrides` at project level | Still user-settings only               | PR #58755 sidesteps it (DB)   |
 | `detect_venv` default              | Still on by default                    | direnv double-activation      |
 
 **PR #58755 "Add per-window theme overrides"** (author 42piratas; opened 2026-06-06;
-open / not merged / not draft; last activity 2026-06-23; base `main`; no milestone;
+open / not merged / not draft; last activity 2026-06-29; base `main`; no milestone;
 9 files, +480/-39). Each window gets its own theme via new actions **`theme: project`**
 and **`theme: clear project`**; choices persist in a new `window_theme_overrides` DB
 table keyed by `WindowId` — **not** in `settings.json` or project files. That means it
