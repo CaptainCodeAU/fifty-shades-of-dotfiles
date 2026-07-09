@@ -65,6 +65,34 @@ _check_gpu() {
 }
 
 # ------------------------------------------------------------------------------
+# Helper: GitHub agent-forwarding drift check (consumer boxes)
+# ------------------------------------------------------------------------------
+# Boxes that reach GitHub via SSH agent forwarding hold NO local github key, so
+# `ssh -G github.com` must resolve `identitiesonly no` for the forwarded key to be
+# offered. If a ~/.ssh/config.local edit drops github.com from the override, ssh
+# silently falls back to `Host * IdentitiesOnly yes` and every push fails with
+# "Permission denied (publickey)" even though the forwarded agent holds the key.
+# `ssh -G` only parses config (no network), so this is cheap enough for the banner.
+# Returns: ok | broken | n/a
+_check_github_forward_drift() {
+    command -v ssh &>/dev/null || { echo "n/a"; return; }
+    local cfg io f expanded
+    cfg=$(ssh -G github.com 2>/dev/null) || { echo "n/a"; return; }
+    io=$(printf '%s\n' "$cfg" | awk '$1=="identitiesonly"{print $2; exit}')
+    [[ -z "$io" ]] && { echo "n/a"; return; }
+    # identitiesonly no -> forwarded (or any) keys are offered -> healthy
+    [[ "$io" == "no" ]] && { echo "ok"; return; }
+    # identitiesonly yes -> only named IdentityFiles are offered; healthy ONLY if a
+    # real local key file exists (a box with its own local key). Otherwise the
+    # forwarded key is suppressed -> broken.
+    while IFS= read -r f; do
+        expanded=${f/#\~/$HOME}
+        [[ -f "$expanded" ]] && { echo "ok"; return; }
+    done < <(printf '%s\n' "$cfg" | awk '$1=="identityfile"{print $2}')
+    echo "broken"
+}
+
+# ------------------------------------------------------------------------------
 # Full Welcome Display
 # ------------------------------------------------------------------------------
 _show_welcome_full() {
@@ -312,6 +340,20 @@ _show_welcome_full() {
             echo "    GPU: ${warn}Not Detected${done}"
         fi
     fi
+
+    # --- GitHub agent-forwarding health (consumer boxes only) ---
+    # The Mac uses git-cc: URL rewrites with a local key, so bare github.com
+    # resolution does not apply there; only consumer boxes push to bare
+    # git@github.com over a forwarded key and need `identitiesonly no`.
+    if [[ "$IS_MAC" != "true" ]]; then
+        local _ghfwd=$(_check_github_forward_drift)
+        if [[ "$_ghfwd" == "broken" ]]; then
+            echo "    SSH github: ${err}BROKEN${done} ${warn}(identitiesonly=yes; forwarded pushes fail)${done}"
+            echo "    ${warn}  -> fix: restore 'Host github.com git-cc' in ~/.ssh/config.local${done}"
+        elif [[ "$_ghfwd" == "ok" ]]; then
+            echo "    SSH github: ${ok}OK${done} ${info}(forwarded, identitiesonly no)${done}"
+        fi
+    fi
 }
 
 # ------------------------------------------------------------------------------
@@ -376,6 +418,11 @@ _show_welcome_minimal() {
         if [[ "$(_check_gpu)" == "available" ]]; then
             parts+=("${ok}GPU ✓${done}")
         fi
+    fi
+
+    # GitHub forwarding drift (consumer boxes; surface only when broken)
+    if [[ "$IS_MAC" != "true" && "$(_check_github_forward_drift)" == "broken" ]]; then
+        parts+=("${err}github SSH ✗${done}")
     fi
 
     echo "🛡️  ${(j: | :)parts}"
