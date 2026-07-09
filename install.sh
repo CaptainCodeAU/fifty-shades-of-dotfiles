@@ -1674,7 +1674,7 @@ GITEOF"
             info "GitHub CLI (gh) is not authenticated."
             info "This setup uses SSH-only Git auth; ${CYAN}do not run gh auth login${RESET} or ${CYAN}gh auth setup-git${RESET}."
             info "Use SSH keys plus URL rewrites in ${CYAN}~/.gitconfig.private${RESET} (see README)."
-            info "For trusted LAN remotes, add private Host blocks with ${CYAN}ForwardAgent yes${RESET} to ${CYAN}~/.ssh/config.local${RESET} (loaded via ${CYAN}Include${RESET} from the stowed base config)."
+            info "For trusted LAN remotes that need agent forwarding, add private Host blocks with ${CYAN}ForwardAgent yes${RESET} to ${CYAN}~/.ssh/config.local${RESET} (loaded via ${CYAN}Include${RESET}). For sealed / untrusted boxes, keep ${CYAN}ForwardAgent no${RESET}."
         fi
     fi
 
