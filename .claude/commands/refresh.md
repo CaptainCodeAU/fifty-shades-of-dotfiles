@@ -104,6 +104,7 @@ Run only the lanes the selected mode needs. Weight the SECURITY lane first.
 6. **DATED-HISTORICAL version stamps are load-bearing - do NOT blind-bump.** `NEW (v2.1.83+)` / `sandbox.credentials (v2.1.187)` record WHEN a feature landed. AND a stamp tied to a DATE -- "captured in the 2026-06-25 investigation (host vX)", "re-checked <date>", "verified this session (vX)" -- is ALSO historical: bumping the version while keeping the date FABRICATES a verification. Leave both; a real update = re-investigate against the live version, then update date + version together. Only a truly live "current as of vX" claim with no investigation-date gets a mechanical bump.
 7. **Two memory stores + grouped detail files.** Reconcile the `~/.claude/...` per-project index; NEVER the repo `MEMORY/WORK/`. The strict 1:1 index check OVER-REPORTS: a topic file that is `[[wikilink]]`-referenced from an indexed memory (e.g. the 3 `*_episode_*` files under one "episodes" pointer, or a `*_pending`/detail file) is an INTENTIONAL grouping, not an orphan -- verify a flagged orphan is truly unreferenced before adding a pointer.
 8. **Never `git add -A`** - stage by name, split commits by concern (the owner commits, not this command).
+9. **`Plans/` is gitignored local scratch - scope the PLANS lane to dated specs.** The backlog is `Plans/20*.md` (+ any explicitly-named spec); the random-word-slug `.md` files are local saved-plan/session artifacts (gitignored, no repo impact). Audit `Status:` only on dated specs; do NOT flag the random-word artifacts as missing-Status specs.
 
 ---
 
