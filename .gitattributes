@@ -1,3 +1,46 @@
-
-# Use bd merge for beads JSONL files
-.beads/issues.jsonl merge=beads
+# ==============================================================================
+#  .gitattributes - per-path overrides for how Git treats files in this repo
+# ==============================================================================
+#  This file lets you change Git's behaviour for specific paths. Each rule is:
+#
+#       <pattern>   <attr> <attr> ...
+#
+#  (a glob on the left, one or more attributes on the right).
+#
+#  There are currently NO active rules. The file is kept - deliberately - as a
+#  documented placeholder so that next time you open it you remember what it is
+#  for and how to switch a feature on. Uncomment an example below to use it.
+#
+#  ------------------------------------------------------------------------------
+#  1. Line endings - normalise so a Windows/WSL checkout can't inject CRLF:
+#       * text=auto eol=lf          # store LF in the repo, check out native
+#       *.sh  text eol=lf           # shell scripts must stay LF
+#       *.bat text eol=crlf         # Windows batch files want CRLF
+#
+#  2. Force a path to be treated as binary (no diff, no EOL munging):
+#       *.png binary
+#       *.pdf binary
+#
+#  3. Custom MERGE driver - point a path at a driver defined in gitconfig
+#     (a `[merge "<name>"]` section with a `driver = ...` command). This is the
+#     mechanism a tool like a JSONL tracker uses for smart merges:
+#       path/to/file.jsonl merge=<driver-name>
+#
+#  4. Custom DIFF driver / language-aware hunk headers:
+#       *.md diff=markdown
+#
+#  5. Keep generated or vendored files out of GitHub language stats and diffs:
+#       dist/**    linguist-generated
+#       vendor/**  linguist-vendored
+#
+#  6. Exclude paths from `git archive` / release tarballs:
+#       .github/  export-ignore
+#       tests/    export-ignore
+#
+#  ------------------------------------------------------------------------------
+#  Note: Git LFS normally writes `filter=lfs` rules here (via `git lfs track`),
+#  but this setup configures LFS globally in ~/.gitconfig instead, so nothing
+#  LFS-related needs to live in this file.
+#
+#  Reference: https://git-scm.com/docs/gitattributes
+# ==============================================================================
