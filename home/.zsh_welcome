@@ -72,9 +72,11 @@ _check_gpu() {
 # offered. If a ~/.ssh/config.local edit drops github.com from the override, ssh
 # silently falls back to `Host * IdentitiesOnly yes` and every push fails with
 # "Permission denied (publickey)" even though the forwarded agent holds the key.
-# `ssh -G` only parses config (no network), so this is cheap enough for the banner.
-# Returns: ok | broken | n/a
-_check_github_forward_drift() {
+# _compute_* does the real `ssh -G` resolution; _check_* wraps it in an mtime-keyed
+# cache so the banner pays ~2 stats (not a subprocess) in steady state, yet
+# recomputes the instant either ssh config file changes -- so a drift is never
+# masked by a stale cached OK. Returns: ok | broken | n/a
+_compute_github_forward_drift() {
     command -v ssh &>/dev/null || { echo "n/a"; return; }
     local cfg io f expanded
     cfg=$(ssh -G github.com 2>/dev/null) || { echo "n/a"; return; }
@@ -90,6 +92,32 @@ _check_github_forward_drift() {
         [[ -f "$expanded" ]] && { echo "ok"; return; }
     done < <(printf '%s\n' "$cfg" | awk '$1=="identityfile"{print $2}')
     echo "broken"
+}
+
+# Cached wrapper: mtime-keyed on the two ssh config files that `ssh -G` reads
+# (following the config symlink to its stowed target). A drift edit bumps
+# config.local's mtime and invalidates the cache immediately, so the banner never
+# shows a stale OK after a real regression. Steady state = a couple of stats + one
+# file read, no subprocess (matches the "file-read over CLI in the banner" pref).
+_check_github_forward_drift() {
+    command -v ssh &>/dev/null || { echo "n/a"; return; }
+    local cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles"
+    local cache="$cache_dir/github_forward_status"
+    local f m sig=""
+    for f in "$HOME/.ssh/config" "$HOME/.ssh/config.local"; do
+        m=$(stat -L -c %Y "$f" 2>/dev/null || stat -L -f %m "$f" 2>/dev/null)
+        sig="${sig}:${m}"
+    done
+    if [[ -r "$cache" ]]; then
+        local cached_sig cached_result
+        IFS='|' read -r cached_sig cached_result < "$cache"
+        [[ "$cached_sig" == "$sig" ]] && { echo "$cached_result"; return; }
+    fi
+    local result
+    result=$(_compute_github_forward_drift)
+    [[ -d "$cache_dir" ]] || mkdir -p "$cache_dir" 2>/dev/null
+    print -r -- "${sig}|${result}" > "$cache" 2>/dev/null
+    echo "$result"
 }
 
 # ------------------------------------------------------------------------------
