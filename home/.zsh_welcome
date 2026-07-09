@@ -72,10 +72,13 @@ _check_gpu() {
 # offered. If a ~/.ssh/config.local edit drops github.com from the override, ssh
 # silently falls back to `Host * IdentitiesOnly yes` and every push fails with
 # "Permission denied (publickey)" even though the forwarded agent holds the key.
-# _compute_* does the real `ssh -G` resolution; _check_* wraps it in an mtime-keyed
-# cache so the banner pays ~2 stats (not a subprocess) in steady state, yet
-# recomputes the instant either ssh config file changes -- so a drift is never
-# masked by a stale cached OK. Returns: ok | broken | n/a
+# Three layers below: _compute_github_forward_drift does the raw `ssh -G` config
+# resolution; _github_config_status caches that on ssh-config mtimes (the banner
+# pays ~2 stats, not a subprocess, in steady state, yet recomputes the instant a
+# config file changes); _check_github_forward_drift adds a LIVE forwarded-agent-key
+# check on top -- because config can read OK while the agent carries no key, which
+# is exactly a "config fine but Permission denied (publickey)" push.
+# _compute_ returns: ok | broken | n/a
 _compute_github_forward_drift() {
     command -v ssh &>/dev/null || { echo "n/a"; return; }
     local cfg io f expanded
@@ -94,12 +97,12 @@ _compute_github_forward_drift() {
     echo "broken"
 }
 
-# Cached wrapper: mtime-keyed on the two ssh config files that `ssh -G` reads
+# Cached CONFIG status: mtime-keyed on the two ssh config files that `ssh -G` reads
 # (following the config symlink to its stowed target). A drift edit bumps
 # config.local's mtime and invalidates the cache immediately, so the banner never
 # shows a stale OK after a real regression. Steady state = a couple of stats + one
 # file read, no subprocess (matches the "file-read over CLI in the banner" pref).
-_check_github_forward_drift() {
+_github_config_status() {
     command -v ssh &>/dev/null || { echo "n/a"; return; }
     local cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles"
     local cache="$cache_dir/github_forward_status"
@@ -118,6 +121,26 @@ _check_github_forward_drift() {
     [[ -d "$cache_dir" ]] || mkdir -p "$cache_dir" 2>/dev/null
     print -r -- "${sig}|${result}" > "$cache" 2>/dev/null
     echo "$result"
+}
+
+# Full push-readiness: config must be OK (cached) AND a key must actually be
+# reachable in the forwarded agent. The agent half is LIVE, never cached -- agent
+# state is volatile (a key can vanish without touching any config file) and
+# `ssh-add -l` is a cheap agent round-trip. Config alone can read OK while the
+# forwarded agent is empty; that is precisely a "config fine but publickey denied"
+# push, which the config-only check silently reported as OK.
+# Returns: ok | broken | nokey | noagent | n/a
+_check_github_forward_drift() {
+    local cfg
+    cfg=$(_github_config_status)
+    [[ "$cfg" != "ok" ]] && { echo "$cfg"; return; }          # broken (config drift) or n/a
+    command -v ssh-add &>/dev/null || { echo "ok"; return; }  # cannot inspect agent -> trust config
+    ssh-add -l >/dev/null 2>&1
+    case $? in
+        0) echo "ok" ;;       # forwarded agent holds a key -> push will work
+        1) echo "nokey" ;;    # agent reachable but empty -> push fails despite good config
+        *) echo "noagent" ;;  # no agent socket / dead forward
+    esac
 }
 
 # ------------------------------------------------------------------------------
@@ -374,13 +397,18 @@ _show_welcome_full() {
     # resolution does not apply there; only consumer boxes push to bare
     # git@github.com over a forwarded key and need `identitiesonly no`.
     if [[ "$IS_MAC" != "true" ]]; then
-        local _ghfwd=$(_check_github_forward_drift)
-        if [[ "$_ghfwd" == "broken" ]]; then
-            echo "    SSH github: ${err}BROKEN${done} ${warn}(identitiesonly=yes; forwarded pushes fail)${done}"
-            echo "    ${warn}  -> fix: restore 'Host github.com git-cc' in ~/.ssh/config.local${done}"
-        elif [[ "$_ghfwd" == "ok" ]]; then
-            echo "    SSH github: ${ok}OK${done} ${info}(forwarded, identitiesonly no)${done}"
-        fi
+        case "$(_check_github_forward_drift)" in
+            ok)
+                echo "    SSH github: ${ok}OK${done} ${info}(forwarded key present, identitiesonly no)${done}" ;;
+            broken)
+                echo "    SSH github: ${err}BROKEN${done} ${warn}(identitiesonly=yes; forwarded pushes fail)${done}"
+                echo "    ${warn}  -> fix: restore 'Host github.com git-cc' in ~/.ssh/config.local${done}" ;;
+            nokey)
+                echo "    SSH github: ${err}NO KEY${done} ${warn}(config OK but forwarded agent is empty; pushes fail)${done}"
+                echo "    ${warn}  -> on the Mac: ssh-add ~/.ssh/captaincodeau, then reconnect${done}" ;;
+            noagent)
+                echo "    SSH github: ${warn}no agent forwarded${done} ${info}(ForwardAgent inactive this session)${done}" ;;
+        esac
     fi
 }
 
@@ -448,9 +476,11 @@ _show_welcome_minimal() {
         fi
     fi
 
-    # GitHub forwarding drift (consumer boxes; surface only when broken)
-    if [[ "$IS_MAC" != "true" && "$(_check_github_forward_drift)" == "broken" ]]; then
-        parts+=("${err}github SSH ✗${done}")
+    # GitHub forwarding health (consumer boxes; surface any non-OK state)
+    if [[ "$IS_MAC" != "true" ]]; then
+        case "$(_check_github_forward_drift)" in
+            broken|nokey|noagent) parts+=("${err}github SSH ✗${done}") ;;
+        esac
     fi
 
     echo "🛡️  ${(j: | :)parts}"
