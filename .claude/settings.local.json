@@ -210,7 +210,8 @@
         "~/.ssh/known_hosts",
         "~/.ssh/gitconfig-*",
         "~/.ssh/*.pub"
-      ]
+      ],
+      "allowWrite": ["~/.claude/MEMORY"]
     }
   }
 }
