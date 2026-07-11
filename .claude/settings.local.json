@@ -164,6 +164,7 @@
   },
   "sandbox": {
     "enabled": true,
+    "excludedCommands": ["git"],
     "credentials": {
       "files": [
         { "path": "~/.aws", "mode": "deny" },
