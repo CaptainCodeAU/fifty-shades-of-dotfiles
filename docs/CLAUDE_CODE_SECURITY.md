@@ -72,9 +72,23 @@ reports ~84% fewer prompts). Enable via `/sandbox` or `"sandbox.enabled": true`.
   vars for sandboxed commands. There is no built-in credential deny-list -- only what you
   list. The sandbox covers Bash only (Read/Write/Edit/Grep run with full perms).
 
-**Recommendation for this repo (NOT yet adopted):** given the strict SSH posture and
-Keychain-held tokens, enabling `sandbox.enabled` + `sandbox.credentials` closes the
-"a sandboxed command reads `~/.ssh`" gap at near-zero cost on macOS (Seatbelt, no deps).
+**Adopted as a scoped trial (this repo, 2026-07-11):** given the strict SSH posture and
+Keychain-held tokens, `sandbox.enabled` plus a `sandbox.credentials` + `filesystem` deny-list
+is now live in `.claude/settings.local.json` -- closing the "a sandboxed command reads
+`~/.ssh`" gap (SSH keys, `~/.aws`, `~/.gnupg`, `~/.zshrc.private`, password stores, and
+personal dirs like `~/Documents` / browser profiles / Keychains are all denied to sandboxed
+Bash). Scoped to THIS repo only; global `~/.claude/settings.json` stays unsandboxed. Three
+caveats surfaced live and are worth knowing before promoting it:
+
+- **git identity co-lives under `~/.ssh` + `~/.gitconfig.private`**, so a blanket deny breaks
+  `git`; a `filesystem.allowRead` carve-out (`~/.ssh/config`, `gitconfig-*`, `*.pub`) keeps
+  git working while the private keys stay denied.
+- **SSH `git push` / `fetch` fail inside the sandbox** (the network proxy cannot negotiate SSH
+  auth). `sandbox.excludedCommands: ["git"]` is the intended standing fix but is inert today
+  (upstream bug `anthropics/claude-code#53012`) -- use the per-call `dangerouslyDisableSandbox`
+  escape hatch meanwhile.
+- **Bash writes are limited to CWD + session temp**, which blocked PAI's `~/.claude/MEMORY`
+  bookkeeping; a narrow `filesystem.allowWrite: ["~/.claude/MEMORY"]` restores it.
 
 ## 4. 2026 CVEs -- all patched below the installed v2.1.191 [official]
 
