@@ -237,13 +237,20 @@ _show_welcome_full() {
         local pnpm_display="${ok}${pnpm_ver}${done}"
         # Soft staleness nudge -- helpers defined in .zsh_onboarding (loaded earlier).
         if [[ "$pnpm_ver" != "N/A" ]] && typeset -f _pnpm_get_latest &>/dev/null; then
-            local pnpm_latest pnpm_raw
+            local pnpm_latest pnpm_raw pnpm_elig_bin
             pnpm_latest=$(_pnpm_get_latest 2>/dev/null)   # latest eligible (age-gated)
             pnpm_raw=$(_pnpm_get_raw_latest 2>/dev/null)  # registry dist-tag latest
+            # Cached binary status of the eligible version (no network in the prompt).
+            pnpm_elig_bin=$(typeset -f _pnpm_get_eligible_binary &>/dev/null && _pnpm_get_eligible_binary 2>/dev/null)
             if [[ -n "$pnpm_latest" \
                   && "$(_pnpm_vercmp "$pnpm_ver" "$pnpm_latest")" == "-1" ]]; then
                 # Behind an installable version -- actionable nag.
-                if [[ "$(_pnpm_vercmp "$pnpm_ver" "$PNPM_MIN_VERSION")" == "-1" ]]; then
+                if [[ "$pnpm_elig_bin" == "missing" ]]; then
+                    # Newest eligible version was published WITHOUT a native binary
+                    # (upstream pnpm 11.12/11.13-class release bug). Do NOT nag to run
+                    # pnpm_update -- it would (correctly) refuse. Inform instead.
+                    pnpm_display="${ok}${pnpm_ver}${done} ${warn}(update to ${pnpm_latest} held: published without a binary -- upstream pnpm bug)${done}"
+                elif [[ "$(_pnpm_vercmp "$pnpm_ver" "$PNPM_MIN_VERSION")" == "-1" ]]; then
                     pnpm_display="${err}${pnpm_ver}${done} ${err}↑${pnpm_latest} (below min ${PNPM_MIN_VERSION} -- run pnpm_update)${done}"
                 else
                     pnpm_display="${warn}${pnpm_ver}${done} ${warn}↑${pnpm_latest} (run pnpm_update)${done}"

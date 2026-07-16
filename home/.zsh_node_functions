@@ -143,7 +143,26 @@ pnpm_update() {
         return 0
     fi
 
-    # current < eligible: a real, installable update is available.
+    # current < eligible: a real, installable update is available -- BUT guard the
+    # pnpm 11.12.0/11.13.0-class release bug first: some versions' @pnpm/<platform>
+    # artifact was published WITHOUT its native binary, so `pnpm self-update` exits
+    # 0 while leaving a dead placeholder. Verify the target ships a binary before
+    # touching a working install; refuse and inform if not. (Belt-and-suspenders
+    # with the post-update version check below.) Fail OPEN on 'unknown' (offline).
+    local elig_bin
+    elig_bin=$(_pnpm_version_has_binary "$eligible")
+    if [[ "$elig_bin" == "missing" ]]; then
+        echo "${err}pnpm ${eligible} was published WITHOUT a native binary for this platform${done}" >&2
+        echo "${err}-- a known upstream pnpm release bug (e.g. 11.12.0 / 11.13.0).${done}" >&2
+        echo "${warn}Refusing to update: it would replace your working pnpm ${current} with a${done}" >&2
+        echo "${warn}non-functional placeholder. Staying on ${current}; retry once a fixed release${done}" >&2
+        echo "${warn}(one that ships a binary) becomes the latest eligible version.${done}" >&2
+        return 1
+    elif [[ "$elig_bin" == "unknown" ]]; then
+        echo "${warn}Could not verify that pnpm ${eligible} ships a native binary (offline?).${done}"
+        echo "${warn}Proceeding; the post-update check will catch a non-functional result.${done}"
+    fi
+
     current_major="${current%%.*}"
     eligible_major="${eligible%%.*}"
     if [[ "$current_major" != "$eligible_major" ]]; then

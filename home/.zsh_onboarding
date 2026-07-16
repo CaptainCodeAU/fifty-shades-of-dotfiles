@@ -54,7 +54,9 @@ export NODE_MIN_MAJOR="${NODE_MIN_MAJOR:-22}"
 _pnpm_cache_file() {
     local cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles"
     [[ -d "$cache_dir" ]] || mkdir -p "$cache_dir" 2>/dev/null
-    echo "$cache_dir/pnpm_latest2"
+    # Bumped pnpm_latest2 -> pnpm_latest3 (2026-07-16) to force migration to the
+    # schema that adds the `eligible_binary` field (binary-less-release guard).
+    echo "$cache_dir/pnpm_latest3"
 }
 
 # Cache is fresh if its mtime is within PNPM_CHECK_TTL_DAYS AND no version that
@@ -88,13 +90,65 @@ _pnpm_cache_fresh() {
     return 0
 }
 
+# Map this machine's OS/arch to the @pnpm/<platform> artifact package that
+# carries the native pnpm binary (the package @pnpm/exe hardlinks its binary
+# from). Mirrors @pnpm/exe's platform-pkg-name.js. Echoes the package name, or
+# nothing when the platform is unknown (caller then treats the check as unknown).
+_pnpm_platform_pkg() {
+    local os arch
+    os=$(uname -s 2>/dev/null)
+    arch=$(uname -m 2>/dev/null)
+    case "$arch" in
+        arm64|aarch64) arch=arm64 ;;
+        x86_64|amd64)  arch=x64 ;;
+        *) return ;;
+    esac
+    case "$os" in
+        Darwin) echo "@pnpm/macos-${arch}" ;;
+        Linux)
+            # Alpine/musl uses the linuxstatic-* artifacts; glibc uses linux-*.
+            if [[ -e "/lib/ld-musl-x86_64.so.1" || -e "/lib/ld-musl-aarch64.so.1" ]] \
+               || { command -v ldd &>/dev/null && ldd --version 2>&1 | grep -qi musl; }; then
+                echo "@pnpm/linuxstatic-${arch}"
+            else
+                echo "@pnpm/linux-${arch}"
+            fi
+            ;;
+        *) return ;;   # Windows self-installs via its own path; not handled here.
+    esac
+}
+
+# Does pnpm version $1 actually ship a native binary for THIS platform? Detects
+# the pnpm 11.12.0 / 11.13.0-class release bug where the @pnpm/<platform> artifact
+# was published WITHOUT its ~141MB binary (a ~1955-byte metadata-only tarball), so
+# installing it yields a dead placeholder. One cheap metadata GET on dist.unpackedSize,
+# never the tarball. Echoes: ok | missing | unknown (unknown = platform/net/tool
+# could not decide; callers must fail OPEN on unknown, never block on it).
+_pnpm_version_has_binary() {
+    local ver="$1" pkg meta size
+    [[ -n "$ver" ]] || { echo unknown; return; }
+    pkg=$(_pnpm_platform_pkg)
+    [[ -n "$pkg" ]] || { echo unknown; return; }
+    meta=$(curl -fsSL --max-time 5 "https://registry.npmjs.org/${pkg}/${ver}" 2>/dev/null)
+    [[ -n "$meta" ]] || { echo unknown; return; }
+    if command -v jq &>/dev/null; then
+        size=$(printf '%s' "$meta" | jq -r '.dist.unpackedSize // empty' 2>/dev/null)
+    else
+        size=$(printf '%s' "$meta" | grep -oE '"unpackedSize":[0-9]+' | head -1 | grep -oE '[0-9]+')
+    fi
+    [[ "$size" == <-> ]] || { echo unknown; return; }
+    # Real binary ~141MB; broken metadata-only ~2KB. 1MB threshold sits safely
+    # between the two and tolerates size drift.
+    if (( size >= 1000000 )); then echo ok; else echo missing; fi
+}
+
 # Background-refresh cache; never blocks the shell. `&!` is zsh-only —
 # disowns and detaches in one shot.
 _pnpm_refresh_latest_bg() {
     local cache_file="$1"
     (
         # raw = registry dist-tag latest (cheap; always attempted first).
-        local raw eligible min_age now cutoff pkg raw_at raw_eligible_at
+        local raw eligible min_age now cutoff pkg raw_at raw_eligible_at eligible_binary
         raw=$(curl -fsSL --max-time 5 "https://registry.npmjs.org/pnpm/latest" 2>/dev/null \
             | grep -oE '"version":"[^"]+"' | head -1 | sed 's/.*"\([^"]*\)"/\1/')
         [[ -z "$raw" ]] && return  # network failed; keep any existing cache
@@ -122,10 +176,16 @@ _pnpm_refresh_latest_bg() {
                 fi
             fi
         fi
+        # Flag whether the eligible version actually ships a native binary for
+        # this platform -- guards the pnpm 11.12/11.13-class binary-less release
+        # bug so the banner and pnpm_update can refuse a broken update. Done here
+        # (in the background refresh) so the interactive shell never pays for it.
+        eligible_binary=$(_pnpm_version_has_binary "$eligible")
         {
             echo "raw=$raw"
             echo "eligible=$eligible"
             echo "raw_eligible_at=$raw_eligible_at"
+            echo "eligible_binary=$eligible_binary"
         } > "$cache_file"
     ) &!
 }
@@ -179,6 +239,14 @@ _pnpm_get_raw_latest() {
 # 0 when it is not gated or the time is unknown.
 _pnpm_get_raw_eligible_at() {
     _pnpm_cache_get "$(_pnpm_cache_file)" raw_eligible_at
+}
+
+# Cached binary status of the eligible version: ok | missing | unknown (empty on
+# a legacy/pre-migration cache). Written by the background refresh; read cheaply
+# here (no network) so the welcome banner can flag a binary-less release without
+# slowing the prompt. pnpm_update re-checks live via _pnpm_version_has_binary.
+_pnpm_get_eligible_binary() {
+    _pnpm_cache_get "$(_pnpm_cache_file)" eligible_binary
 }
 
 # Compare two semver-ish versions. Echoes -1 (a<b), 0 (==), or 1 (a>b).
