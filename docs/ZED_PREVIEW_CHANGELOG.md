@@ -1,7 +1,7 @@
 # Zed Preview — Changelog Tracker
 
-<!-- ZED_PREVIEW_DOC_VERSION: 1.11.0 -->
-<!-- LAST_UPDATED: 2026-07-09 -->
+<!-- ZED_PREVIEW_DOC_VERSION: 1.12.0 -->
+<!-- LAST_UPDATED: 2026-07-16 -->
 
 > **What this is.** A living record of notable **Zed Preview** changes, filtered to
 > what Gavin cares about: **user interface**, **configuration / settings**, and
@@ -25,10 +25,10 @@
 
 | Field                  | Value         |
 | ---------------------- | ------------- |
-| Latest Preview tracked | **1.11.0**    |
-| Release date           | 2026-07-08    |
-| GitHub tag             | `v1.11.0-pre` |
-| Doc last refreshed     | 2026-07-09    |
+| Latest Preview tracked | **1.12.0**    |
+| Release date           | 2026-07-15    |
+| GitHub tag             | `v1.12.0-pre` |
+| Doc last refreshed     | 2026-07-16    |
 
 ---
 
@@ -69,6 +69,57 @@ when it visibly affects the above or Gavin's known setup.
 ---
 
 ## Release log (newest first)
+
+### 1.12.0 — 2026-07-15
+
+**Theme / appearance**
+
+- **No theme, syntax, font, or visual-styling changes this cycle** (bracket colorization
+  unmentioned/unchanged). Movement stays confined to 1.11.0; the per-project-theme front is
+  still silent — PR #58755 remains unmerged (see watch-items).
+  - _In plain English:_ nothing changed about colors or fonts this release, and your
+    color-per-window goal still hangs on the unmerged PR.
+
+**Configuration**
+
+- New `format_on_save` options **`modifications`** / **`modifications_if_available`** — format
+  only the Git-changed lines instead of the whole file (also importable from VS Code's
+  `editor.formatOnSaveMode`).
+  - _In plain English:_ Zed can now auto-format just the lines you touched on save, not the
+    whole file — handy on large or legacy files.
+- `reduce_motion` now accepts the value **`on`** (not just a boolean) to cut animations.
+  - _In plain English:_ a stronger "reduce animations" setting — relevant to your
+    accessibility-first setup (you already force the classic renderer).
+- New `lsp_results_location` (global) + per-action `open_results_in` control where LSP result
+  pickers open; new `supports_fast_mode` for custom Anthropic models.
+  - _In plain English:_ minor knobs for where language-server results appear and for custom AI
+    model config — unlikely to affect you directly.
+
+**UI**
+
+- **Git Panel:** new **Staging grouping** (separate Staged / Unstaged sections); History tab
+  gains a Git-Graph context menu; Restore / Restore All buttons in the unstaged diff view; GPG
+  passphrase prompts for commit-signing keys.
+- **Finders:** multi-select in **File Finder and Text Finder** via cmd-click (macOS) + tab
+  selection + a multi-select button in the search bar — directly relevant since you lean on the
+  finder.
+- **Editor:** new `workspace: toggle editor zoom` (maximize the active pane); in-progress MCP
+  tool calls can now be expanded.
+- **Markdown preview:** `cmd-shift-v` now toggles between preview and source — a new shortcut in
+  your `md-hardbreak` workflow.
+  - _In plain English:_ git staging is easier to read, you can pick multiple files/results at
+    once, one key maximizes the editor, and Cmd-Shift-V flips Markdown preview/source.
+
+**Fixes Gavin may feel**
+
+- **Python venvs** now restore automatically when reopening a workspace (previously dropped) —
+  adjacent to your `detect_venv`/direnv setup, though `detect_venv` itself is unchanged.
+- Fixed: Agent Panel's sticky "awaiting confirmation" overlay covering the whole panel; selection
+  rendering over inlay hints; branch-picker menu failing under nested popovers; Git-Panel
+  filenames with newlines; focus following the mouse over blank Project-Panel space; Git Graph
+  showing "0 Changed Files" for submodule commits.
+  - _In plain English:_ a batch of Git-panel and agent-panel annoyances got cleared, and your
+    Python environments come back on reopen.
 
 ### 1.11.0 — 2026-07-08
 
@@ -229,9 +280,9 @@ when it visibly affects the above or Gavin's known setup.
 
 ## Standing watch-items (open threads)
 
-| Item                               | Status as of 2026-07-09                | Why it matters                |
+| Item                               | Status as of 2026-07-16                | Why it matters                |
 | ---------------------------------- | -------------------------------------- | ----------------------------- |
-| Per-project themes (zed#13300)     | **Open PR #58755** — not merged/1.11.0 | Gavin's color-per-window goal |
+| Per-project themes (zed#13300)     | **Open PR #58755** — not merged/1.12.0 | Gavin's color-per-window goal |
 | `theme_overrides` at project level | Still user-settings only               | PR #58755 sidesteps it (DB)   |
 | `detect_venv` default              | Still on by default                    | direnv double-activation      |
 
