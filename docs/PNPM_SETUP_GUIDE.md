@@ -454,6 +454,63 @@ side. Use standard network diagnostics. But if curl + node fetch + bun
 all succeed and pnpm specifically fails, **stop investigating other
 hypotheses and check your firewall.**
 
+### 3.6 If `pnpm -v` fails with `This: command not found` (exit 127) — a binary-less published release
+
+pnpm ships its native binary in a per-platform artifact package
+(`@pnpm/macos-arm64`, `@pnpm/linux-x64`, `@pnpm/linuxstatic-<arch>` for musl,
+`@pnpm/win-<arch>`, ...); `@pnpm/exe` hardlinks that binary over a placeholder
+at install time. Occasionally a release publishes the platform artifact
+WITHOUT its ~141 MB binary — a ~2 KB metadata-only tarball (observed:
+**11.12.0** and **11.13.0**, fixed in 11.13.1). Installing such a version
+leaves the 34-byte placeholder (`This file intentionally left blank`) in place,
+so every pnpm invocation execs a text file:
+
+```text
+.../@pnpm/exe/pnpm: line 1: This: command not found   # exit 127
+```
+
+`pnpm self-update` still exits 0 and prints "Successfully updated" — it
+faithfully installed a binary-less package — so the break is silent. The
+welcome banner then shows `pnpm: N/A` (the launcher is on PATH, but `pnpm -v`
+fails) rather than `Not Found`.
+
+**This is an UPSTREAM bug, not a local misconfig.** Do not blame `config.yaml`,
+the store, or `strictDepBuilds`. Confirm with one cheap metadata GET (no tarball
+download) — a real binary is ~141 MB, a broken one ~2 KB:
+
+```bash
+# substitute your platform pkg: macos-arm64 | linux-x64 | linuxstatic-x64 | ...
+curl -s https://registry.npmjs.org/@pnpm/macos-arm64/<version> \
+  | jq -r '.dist.unpackedSize'      # ~141421362 = ok ; ~1955 = binary-less
+# or list the tarball: a good one contains package/pnpm
+curl -s "$(curl -s https://registry.npmjs.org/@pnpm/macos-arm64/<version> | jq -r .dist.tarball)" \
+  | tar -tz | grep -q '^package/pnpm$' && echo HAS || echo MISSING
+```
+
+**Recover** — you cannot fix it by asking the broken pnpm to update itself
+(every `pnpm` call execs the placeholder):
+
+```bash
+# 1. Find a known-good binary already in the store (real Mach-O/ELF, not 34 bytes):
+find "$PNPM_HOME/store/v11/links/@pnpm/exe" -name pnpm -type f -exec sh -c \
+  'printf "%s %s\n" "$(wc -c <"$1")" "$1"' _ {} \; | sort -n | tail
+# 2. self-update to a KNOWN-GOOD version using that binary directly:
+"<path-to-good-store-binary>" self-update <good-version>
+# (self-update rebuilds $PNPM_HOME/bin/pnpm; note it may PRUNE older install dirs.)
+```
+
+If no good binary is in the store, download the platform artifact tarball from
+npm (integrity-verify against `.dist.integrity`) and place its `pnpm` file, or
+reinstall via the standalone installer (recipe 2.5), which pulls from GitHub
+releases.
+
+**Guarded automatically in this repo.** `pnpm_update` and the welcome banner now
+detect binary-less eligible versions (via the `dist.unpackedSize` check above)
+and REFUSE to update / flag `update ... held: published without a binary`
+instead of installing the dead release; `pnpm_update` also verifies that
+`pnpm -v` parses after any self-update. See `_pnpm_version_has_binary` in
+`home/.zsh_onboarding` and `pnpm_update` in `home/.zsh_node_functions`.
+
 ---
 
 ## 4. Set up clean from scratch (no prior pnpm)
@@ -559,6 +616,12 @@ ls "$PNPM_HOME/bin/" 2>/dev/null   # ready for global installs
   `<PNPM_HOME>/.tools/@pnpm+exe/<ver>_tmp_*/node_modules/@pnpm/exe/dist/pnpm.mjs`.
   Grepping the binary for `Library/Preferences` and `XDG_CONFIG_HOME`
   reveals the platform fallback chain.
+- Binary-less-release bug (11.12.0 / 11.13.0 platform artifacts published
+  without their native binary; see section 3.6) — upstream issues:
+  <https://github.com/pnpm/pnpm/issues/12955> (11.12.0 fails to install
+  from tarball), <https://github.com/pnpm/pnpm/issues/12962> (self-update
+  leaves a placeholder), <https://github.com/pnpm/pnpm/issues/13067>
+  (11.13.0 recurrence). Fixed in 11.13.1.
 
 ---
 
