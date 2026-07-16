@@ -161,8 +161,23 @@ pnpm_update() {
     fi
 
     if pnpm self-update; then
+        # Verify the new binary actually RUNS -- self-update can exit 0 while
+        # leaving a non-functional pnpm. Under strictDepBuilds, pnpm refuses to
+        # run @pnpm/exe's `preinstall` build script, so the ~141MB native binary
+        # is never materialized over the 34-byte placeholder shipped in the
+        # package tarball. `pnpm -v` then exits non-zero and $post is EMPTY --
+        # which the old "$post != $current" check misread as a successful bump
+        # (it printed "updated X -> ." with an empty target). Treat an empty or
+        # unparseable version as a hard failure and point at the one-time fix.
         post=$(pnpm -v 2>/dev/null)
-        if [[ "$post" != "$current" ]]; then
+        if [[ ! "$post" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+            echo "${err}pnpm self-update exited 0 but the new pnpm does not run (\`pnpm -v\` returned nothing).${done}" >&2
+            echo "${warn}Most likely @pnpm/exe's preinstall build was blocked by strictDepBuilds,${done}" >&2
+            echo "${warn}leaving a placeholder instead of the native binary. Approve it once, then retry:${done}" >&2
+            echo "${info}    pnpm approve-builds -g   # trust @pnpm/exe's build script${done}" >&2
+            echo "${info}    pnpm_update              # re-run this update${done}" >&2
+            return 1
+        elif [[ "$post" != "$current" ]]; then
             echo "${ok}pnpm updated ${current} -> ${post}.${done}"
         else
             echo "${warn}pnpm self-update reported success but the version is unchanged (${current}).${done}"
