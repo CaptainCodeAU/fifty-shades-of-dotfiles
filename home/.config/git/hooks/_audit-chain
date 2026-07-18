@@ -57,6 +57,8 @@ fi
 #     audit above). Blocks a commit whose staged diff carries a real username
 #     path, an API token, or a private key. Separate tool; fails open if absent.
 #     Bypass: LEAK_SCAN_DISABLE=1 git commit ...  (or git commit --no-verify)
+#     Per-repo opt-out (private repos): git config leakscan.disable true
+#     (machine-local .git/config knob; see the git-leak-scan header).
 if [ "$hook" = "pre-commit" ] && command -v git-leak-scan >/dev/null 2>&1; then
     git-leak-scan || exit $?
 fi
