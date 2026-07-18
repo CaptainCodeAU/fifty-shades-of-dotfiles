@@ -23,9 +23,8 @@
 #   git config leakscan.disable true          # this repo, this machine only
 # The knob lives in .git/config (never committed/pushed), so cloning the repo
 # elsewhere re-enables the scan by default. Revoke:  git config --unset leakscan.disable
-# Standing exceptions on this machine: Network_Plan (operator directive 2026-07-18 --
-# a private single-operator homelab hub whose docs/commands legitimately carry
-# machine paths; agent-side secrets discipline is unchanged, only this scan is off).
+# A skip is announced on stderr (one line) so a disabled gate is never silent;
+# which repos opt out is machine-local state -- recorded where set, never here.
 # ============================================================================
 set -uo pipefail
 
@@ -34,8 +33,12 @@ set -uo pipefail
 # Fail open outside a git repo.
 git rev-parse --git-dir >/dev/null 2>&1 || exit 0
 # Per-repo opt-out (see header): a truthy leakscan.disable in this repo's config
-# skips the scan entirely. --type=bool normalizes true/1/yes/on.
-[ "$(git config --type=bool --get leakscan.disable 2>/dev/null)" = "true" ] && exit 0
+# skips the scan entirely. --type=bool normalizes true/1/yes/on. Announce the
+# skip -- an enforced gate standing down must be observable, never silent.
+if [ "$(git config --type=bool --get leakscan.disable 2>/dev/null)" = "true" ]; then
+    echo "git-leak-scan: SKIPPED (leakscan.disable set for this repo)" >&2
+    exit 0
+fi
 
 user="$(id -un 2>/dev/null || echo "${USER:-}")"
 
