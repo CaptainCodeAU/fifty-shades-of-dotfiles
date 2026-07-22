@@ -52,8 +52,9 @@ This is the crux of the design, and it was verified against the live APIs, not a
   ```
 
   So the nvm half needs `gh`, and a small client-side membership test over each
-  advisory's `vulnerable_version_range` (e.g. `>= 0.40.0, <= 0.40.3`). The two nvm
+  advisory's `vulnerable_version_range` (e.g. `>= 0.40.0, <= 0.40.3`). The nvm
   advisories on record:
+  - `GHSA-4ghp-wxpw-rhpg` / CVE-2026-15921 (Low): `>= 0.32.1, <= 0.40.5`, fixed `0.40.6`
   - `GHSA-3c52-35h2-gfmm` / CVE-2026-10796 (High): `<= 0.40.4`, fixed `0.40.5`
   - `GHSA-4fc5-r4vr-8rp7` / CVE-2026-1665 (Medium): `>= 0.40.0, <= 0.40.3`, fixed `0.40.4`
 

@@ -42,10 +42,12 @@ export PNPM_MIN_VERSION="${PNPM_MIN_VERSION:-11.11.0}"
 export PNPM_CHECK_TTL_DAYS="${PNPM_CHECK_TTL_DAYS:-7}"
 
 # --- nvm / Node.js version policy ---
-# Minimum acceptable nvm. nvm <= 0.40.4 is vulnerable to CVE-2026-10796 (command
-# injection / RCE via a malicious Node mirror's version strings); fixed in 0.40.5.
-# Below this, the onboarding nudge + banner flag it. Coordinate with install.sh.
-export NVM_MIN_VERSION="${NVM_MIN_VERSION:-0.40.5}"
+# Minimum acceptable nvm. Two mirror-based CVEs set this floor: CVE-2026-10796
+# (RCE via a malicious mirror's version strings; affects <= 0.40.4, fixed 0.40.5)
+# and CVE-2026-15921 (startup-file overwrite via LTS-alias path traversal;
+# affects 0.32.1-0.40.5, fixed 0.40.6). Below this, the onboarding nudge + banner
+# flag it. Coordinate with install.sh.
+export NVM_MIN_VERSION="${NVM_MIN_VERSION:-0.40.6}"
 # Lowest Node major still receiving security support: Node 20 reached EOL 2026-04;
 # 22 is Active LTS (EOL 2027-04). Below this, Node is flagged as end-of-life.
 # Coordinate with NODE_MIN_MAJOR in install.sh.
@@ -557,7 +559,7 @@ _ensure_pnpm_current() {
 # ------------------------------------------------------------------------------
 # nvm Below-Minimum Check — Special Handler
 # ------------------------------------------------------------------------------
-# Prompts to upgrade nvm when below NVM_MIN_VERSION (CVE-2026-10796 floor). The
+# Prompts to upgrade nvm when below NVM_MIN_VERSION (nvm mirror-CVE floor). The
 # official installer is idempotent — re-running it upgrades in place. A daily
 # marker prevents re-prompting on every shell open.
 _ensure_nvm_current() {
@@ -576,7 +578,7 @@ _ensure_nvm_current() {
     [[ -d "$marker_dir" ]] || mkdir -p "$marker_dir" 2>/dev/null
     _marker_fresh "$marker" && return 0        # already nudged within the last 24h
 
-    echo "${err}nvm ${current} is below ${NVM_MIN_VERSION} — CVE-2026-10796 (RCE via a malicious Node mirror) affects nvm <= 0.40.4.${done}"
+    echo "${err}nvm ${current} is below ${NVM_MIN_VERSION} — CVE-2026-10796 (<= 0.40.4) + CVE-2026-15921 (<= 0.40.5) affect older nvm via a malicious Node mirror.${done}"
     read "REPLY?${info}    Upgrade nvm to v${NVM_MIN_VERSION} now? [y/N] ${done}"
     : > "$marker"  # mark prompted regardless of answer
     if [[ "$REPLY" =~ ^[Yy]$ ]]; then

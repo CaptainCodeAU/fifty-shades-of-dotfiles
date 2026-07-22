@@ -9,12 +9,12 @@ cooldown: delaying a runtime's security patches would be counterproductive.
 
 ## Threat model
 
-| Risk                                                                                                                                            | Mitigation here                                                            |
-| ----------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| **nvm itself is vulnerable** (CVE-2026-10796, High 7.5: RCE via a malicious Node mirror's version strings; affects nvm <= 0.40.4, fixed 0.40.5) | `NVM_MIN_VERSION` floor + pinned installer (Layer 1)                       |
-| **Malicious / planted download mirror** (the CVE vector)                                                                                        | Official-mirror pin (Layer 2) + independent verifier (Layer 5)             |
-| **Running an end-of-life Node** (no security patches)                                                                                           | `NODE_MIN_MAJOR` EOL guard (Layer 3) + preflight sweep (Layer 4)           |
-| **Tampered Node binary that passes nvm's own checksum** (mirror serves matching bad SHASUMS)                                                    | `nvm-verify-node` re-checks against official, GPG-signed SHASUMS (Layer 5) |
+| Risk                                                                                                                                                                                                                                                             | Mitigation here                                                            |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| **nvm itself is vulnerable** (CVE-2026-10796, High 7.5: RCE via a malicious Node mirror's version strings, affects <= 0.40.4, fixed 0.40.5; CVE-2026-15921, Low: shell startup-file overwrite via LTS-alias path traversal, affects 0.32.1-0.40.5, fixed 0.40.6) | `NVM_MIN_VERSION` floor + pinned installer (Layer 1)                       |
+| **Malicious / planted download mirror** (the CVE vector)                                                                                                                                                                                                         | Official-mirror pin (Layer 2) + independent verifier (Layer 5)             |
+| **Running an end-of-life Node** (no security patches)                                                                                                                                                                                                            | `NODE_MIN_MAJOR` EOL guard (Layer 3) + preflight sweep (Layer 4)           |
+| **Tampered Node binary that passes nvm's own checksum** (mirror serves matching bad SHASUMS)                                                                                                                                                                     | `nvm-verify-node` re-checks against official, GPG-signed SHASUMS (Layer 5) |
 
 `.nvmrc` auto-switching is **not** a vector here: `load-nvmrc` (in `.zshrc`) only runs
 `nvm use` for an already-installed version (`!= "N/A"`); walking into a cloned repo
@@ -22,7 +22,7 @@ never triggers an arbitrary Node download.
 
 ## Layer 1 — nvm version floor + pinned installer
 
-- `NVM_MIN_VERSION` (currently `0.40.5`) is defined in **both** `install.sh` and
+- `NVM_MIN_VERSION` (currently `0.40.6`) is defined in **both** `install.sh` and
   `home/.zsh_onboarding` (kept in sync, like `PNPM_MIN_VERSION`).
 - `install.sh` installs/upgrades nvm by pinning exactly `v${NVM_MIN_VERSION}` — never
   the mutable `master` ref the onboarding handler previously used. It now also
