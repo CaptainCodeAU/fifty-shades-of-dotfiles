@@ -33,6 +33,29 @@ never triggers an arbitrary Node download.
 
 Bump the floor by editing `NVM_MIN_VERSION` in both files (comments cross-reference).
 
+### Compatibility: nvm 0.40.6 and `setopt extendedglob`
+
+nvm 0.40.6 (the CVE-2026-15921 fix, which reworked LTS-alias handling) does **not**
+tolerate zsh's `extendedglob` option, which this repo enables globally. With
+`extendedglob` on, `nvm version lts/*` (and `lts/<codename>`) resolve to `N/A`, so a
+`default -> lts/*` alias cannot resolve: the startup `nvm use default` no-ops and
+`nvm_check_and_install_lts` (in `.zsh_node_functions`) false-prompts "No default
+Node.js version is set". Concrete / `node` / `stable` / numeric aliases are
+unaffected. nvm 0.40.5 tolerated `extendedglob`; 0.40.6 does not.
+
+`home/.zshrc` fixes this by wrapping the `nvm` function right after `nvm.sh` loads so
+its body always runs with `extendedglob` disabled (function-local via
+`LOCAL_OPTIONS`), leaving the global option untouched:
+
+```zsh
+if typeset -f nvm >/dev/null 2>&1 && ! typeset -f nvm_orig >/dev/null 2>&1; then
+    functions[nvm_orig]=$functions[nvm]
+    nvm() { setopt localoptions noextendedglob; nvm_orig "$@"; }
+fi
+```
+
+Remove this shim once upstream nvm resolves the incompatibility.
+
 ## Layer 2 — official mirror pin
 
 `home/.zshrc` exports `NVM_NODEJS_ORG_MIRROR` / `NVM_IOJS_ORG_MIRROR` to the official

@@ -284,6 +284,19 @@ fi
 # If NVM is installed, load it but don't activate Node yet.
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh" --no-use
 
+# --- nvm x extendedglob compatibility shim ---
+# nvm 0.40.6's LTS-alias resolution (part of the CVE-2026-15921 fix) misbehaves
+# under `setopt extendedglob` (set globally in this .zshrc): `nvm version lts/*`
+# returns N/A, so `default -> lts/*` can't resolve and the startup `nvm use
+# default` below silently no-ops, leaving Homebrew/system node active. Wrap nvm so
+# its body always runs with extendedglob disabled (function-local via
+# LOCAL_OPTIONS) without changing the global option. nvm 0.40.5 tolerated
+# extendedglob; 0.40.6 does not. See docs/NVM_SECURITY.md.
+if typeset -f nvm >/dev/null 2>&1 && ! typeset -f nvm_orig >/dev/null 2>&1; then
+    functions[nvm_orig]=$functions[nvm]
+    nvm() { setopt localoptions noextendedglob; nvm_orig "$@"; }
+fi
+
 # --- NVM Automatic Version Switching ---
 # This hook automatically runs 'nvm use' if an .nvmrc file is found in the
 # current directory or any parent directory. This avoids the need to manually
