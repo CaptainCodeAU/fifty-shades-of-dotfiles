@@ -311,6 +311,32 @@ _marker_fresh() {
 }
 
 # ------------------------------------------------------------------------------
+# Weekly pnpm store prune (background, never blocks the prompt)
+# ------------------------------------------------------------------------------
+# `pnpm store prune` drops content-addressable store entries that no installed
+# project references -- keeps the store lean without manual upkeep. Runs at most
+# once every 7 days, fully detached (`&!`), appending to a log in the cache dir;
+# silent on the prompt. The weekly slot is claimed UP-FRONT (marker touched before
+# the background job) so two shells opened at once never double-spawn a prune.
+# Marker: pnpm_store_prune_last. Bypass a single week by touching the marker; force
+# a run with `rm` of the marker + open a new shell (or run `pnpm store prune`).
+_pnpm_store_maintenance() {
+    [[ -o interactive ]] || return 0
+    command -v pnpm &>/dev/null || return 0
+    local marker_dir marker
+    marker_dir="${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles"
+    marker="$marker_dir/pnpm_store_prune_last"
+    _marker_fresh "$marker" 604800 && return 0   # pruned within the last 7 days
+    [[ -d "$marker_dir" ]] || mkdir -p "$marker_dir" 2>/dev/null
+    : > "$marker"                                # claim the weekly slot up-front
+    (
+        { echo "=== $(date '+%Y-%m-%d %H:%M:%S') : pnpm store prune ==="
+          pnpm store prune
+        } >>"$marker_dir/pnpm_store_prune.log" 2>&1
+    ) &!
+}
+
+# ------------------------------------------------------------------------------
 # Global Variables
 # ------------------------------------------------------------------------------
 _PKG_MANAGER_NAME=""
@@ -805,6 +831,9 @@ run_onboarding() {
     # Node EOL nudge — independent of nvm_ok (a current nvm can still default to an
     # EOL Node). Self-gates on below-floor major + 24h marker + interactive shell.
     _ensure_node_current
+
+    # Weekly background pnpm store prune (self-gates on a 7-day marker; silent).
+    _pnpm_store_maintenance
 
     # --- Docker ---
     if command -v docker &>/dev/null; then
