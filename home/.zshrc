@@ -593,6 +593,16 @@ alias lzd='lazydocker'
 alias lzg='lazygit'
 alias lg='lazygit'
 
+# markdownlint-cli + repomix run on-demand via `pnpm dlx`, NOT Homebrew: brew
+# packages these npm CLIs with their own node as a dependency, which lands an
+# unwanted second node runtime on the machine. dlx keeps the pnpm supply-chain
+# gate (minimumReleaseAge) fully intact -- `pnpm add -g` cannot, because npm's
+# abbreviated metadata omits the publish "time" and the gate fails closed
+# (ERR_PNPM_MISSING_TIME). Versions are pinned for reproducibility; bump them
+# deliberately (dlx otherwise floats to the newest release past the 3-day gate).
+alias markdownlint='pnpm dlx markdownlint-cli@0.49.1'
+alias repomix='pnpm dlx repomix@1.16.1'
+
 # ── Claude Code ──────────────────────────────────────────────────────
 # Use system ripgrep for Claude Code search (faster than bundled ripgrep).
 export USE_BUILTIN_RIPGREP=0
