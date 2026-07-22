@@ -25,8 +25,14 @@ minimumReleaseAge: 4320
 # The default (true) silently bypasses minimumReleaseAge for any version whose
 # packument lacks a publish time -- a metadata-shaped hole straight through the
 # 3-day wall. Set false: such a package is BLOCKED rather than waved through.
-# Paranoid posture (prefer false positives): a legit package with genuinely
-# missing time metadata will fail to install until added to an exclude list.
+# Paranoid posture (prefer false positives): a package whose FETCHED (abbreviated)
+# metadata genuinely lacks a publish time is BLOCKED with ERR_PNPM_MISSING_TIME.
+# NOTE: minimumReleaseAgeExclude does NOT rescue this -- the missing-time check fires
+# independently of the age check (VERIFIED 2026-07-22 with markdownlint-cli/repomix;
+# the exclude only bypasses the AGE comparison, not the missing-time hard-fail). To
+# install such a package, EITHER relax this to true (weakens the posture) OR use a
+# code path that fetches the FULL packument, which carries time -- e.g. `pnpm dlx`
+# succeeds where `pnpm add -g` fails on the same package.
 # pnpm 11 default: true.
 minimumReleaseAgeIgnoreMissingTime: false
 
