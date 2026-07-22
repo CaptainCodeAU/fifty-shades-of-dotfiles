@@ -586,6 +586,50 @@ gh() {
     fi
 }
 
+# brew wrapper: warn before an install pulls in a runtime managed elsewhere.
+# Homebrew packages some npm/PyPI CLIs with node/python as a dependency, silently
+# landing a second, unmanaged runtime (node -> nvm, python -> uv). Homebrew offers
+# no way to install a formula while skipping such a dep, so this guard is advisory:
+# on `brew install`, it lists the managed runtimes a formula would NEWLY install
+# (skipping any already present) and asks to confirm. Casks are exempt. Bypass by
+# answering y, or `HOMEBREW_ALLOW_MANAGED_RUNTIME=1 brew install ...`. Only guards
+# interactive `brew install`; every other brew subcommand passes straight through.
+brew() {
+    if [[ "$1" == "install" && -z "$HOMEBREW_ALLOW_MANAGED_RUNTIME" ]] \
+       && [[ -o interactive ]] && [[ " $* " != *" --cask "* ]]; then
+        local -a formulae=() hits=()
+        local arg
+        for arg in "${@:2}"; do
+            [[ "$arg" == -* ]] || formulae+=("$arg")
+        done
+        if (( ${#formulae} )); then
+            local -a managed=('node' 'python@*' 'deno' 'bun')
+            local deps installed d m
+            deps=$(command brew deps --union "${formulae[@]}" 2>/dev/null)
+            installed=$(command brew list --formula 2>/dev/null)
+            for d in ${(f)deps}; do
+                for m in $managed; do
+                    if [[ "$d" == ${~m} ]] && ! print -r -- "$installed" | grep -qx -- "$d"; then
+                        hits+=("$d")
+                    fi
+                done
+            done
+        fi
+        if (( ${#hits} )); then
+            print -ru2 -- ""
+            print -ru2 -- "WARNING: 'brew install ${formulae[*]}' would newly install a runtime you manage elsewhere:"
+            local h
+            for h in ${(u)hits}; do print -ru2 -- "        - $h"; done
+            print -ru2 -- "    node -> nvm, python -> uv. Prefer 'pnpm dlx' or a pnpm|bun global (JS), 'uv tool' (Python)."
+            print -ru2 -- "    Proceed anyway: answer y below, or  HOMEBREW_ALLOW_MANAGED_RUNTIME=1 brew install ..."
+            local reply
+            read "reply?    Proceed with this brew install? [y/N] "
+            [[ "$reply" == [Yy] ]] || { print -ru2 -- "    Aborted -- nothing installed."; return 1; }
+        fi
+    fi
+    command brew "$@"
+}
+
 alias chawan="cha"
 alias web="cha"
 alias www="cha"
