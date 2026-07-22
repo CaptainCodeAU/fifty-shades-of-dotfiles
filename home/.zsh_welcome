@@ -315,10 +315,15 @@ _show_welcome_full() {
         echo "    pnpm: ${err}Not Found${done}"
     fi
 
-    # --- bun ---
+    # --- bun (version floor for the ~/.bunfig.toml minimumReleaseAge cooldown) ---
     if command -v bun &>/dev/null; then
         local bun_ver=$(bun --version 2>/dev/null || echo 'N/A')
-        echo "    bun:  ${ok}${bun_ver}${done}"
+        if [[ "$bun_ver" != "N/A" ]] && typeset -f _semver_cmp &>/dev/null && [[ -n "$BUN_MIN_VERSION" ]] \
+             && [[ "$(_semver_cmp "$bun_ver" "$BUN_MIN_VERSION")" == "-1" ]]; then
+            echo "    bun:  ${err}${bun_ver}${done} ${err}↑${BUN_MIN_VERSION} (below min — .bunfig.toml cooldown ignored; run_onboarding)${done}"
+        else
+            echo "    bun:  ${ok}${bun_ver}${done}"
+        fi
     else
         echo "    bun:  ${err}Not Found${done}"
     fi

@@ -81,6 +81,14 @@ NVM_MIN_VERSION="0.40.6"
 # of EOL Node versions. Keep in sync with NODE_MIN_MAJOR in home/.zsh_onboarding.
 NODE_MIN_MAJOR="22"
 
+# --- bun version policy ---
+# Minimum acceptable bun. The bunfig `minimumReleaseAge` supply-chain cooldown
+# (home/.bunfig.toml, 3 days) is only honored by bun >= 1.3.0 (added 2025-10-10
+# via oven-sh/bun#22801); older bun silently ignores the key, so the cooldown is
+# a no-op until this floor is met. Keep in sync with BUN_MIN_VERSION in
+# home/.zsh_onboarding.
+BUN_MIN_VERSION="1.3.0"
+
 # --- Helpers ---
 info()    { echo -e "${CYAN}ℹ️  $*${RESET}"; }
 success() { echo -e "${GREEN}✅ $*${RESET}"; }
@@ -1721,16 +1729,28 @@ GITEOF"
     fi
 
     # --- Bun ---
+    # bun >= BUN_MIN_VERSION is required for the ~/.bunfig.toml minimumReleaseAge
+    # cooldown to apply; below it, bun silently ignores the key. `bun upgrade`
+    # moves to the latest stable (bun can't pin a version like nvm does).
     if ! command -v bun &>/dev/null; then
         if confirm "bun not found. Install it?"; then
             run_cmd bash -c 'curl -fsSL https://bun.sh/install | bash'
             # Activate in current session.
             export BUN_INSTALL="$HOME/.bun"
             export PATH="$BUN_INSTALL/bin:$PATH"
-            success "bun installed"
+            success "bun installed ($(bun --version 2>/dev/null || echo '?'))"
         fi
     else
-        success "bun installed"
+        local cur_bun; cur_bun=$(bun --version 2>/dev/null || echo "?")
+        if [[ "$cur_bun" != "?" && "$(_vercmp "$cur_bun" "$BUN_MIN_VERSION")" == "-1" ]]; then
+            warn "bun ${cur_bun} is below ${BUN_MIN_VERSION} — the ~/.bunfig.toml release-age cooldown is IGNORED until bun >= ${BUN_MIN_VERSION}."
+            if confirm "Run 'bun upgrade' now?"; then
+                run_cmd bun upgrade
+                success "bun upgraded ($(bun --version 2>/dev/null || echo '?'))"
+            fi
+        else
+            success "bun installed (${cur_bun})"
+        fi
     fi
 
     # --- dotenvx (optional; Claude Code's session-checks.sh hook uses it for

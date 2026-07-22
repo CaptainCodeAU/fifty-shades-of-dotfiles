@@ -53,6 +53,12 @@ export NVM_MIN_VERSION="${NVM_MIN_VERSION:-0.40.6}"
 # Coordinate with NODE_MIN_MAJOR in install.sh.
 export NODE_MIN_MAJOR="${NODE_MIN_MAJOR:-22}"
 
+# --- bun version policy ---
+# Minimum bun for the ~/.bunfig.toml minimumReleaseAge cooldown to apply (added in
+# bun 1.3.0, 2025-10-10). Below this, bun silently ignores the key; the onboarding
+# nudge + banner flag it. Coordinate with BUN_MIN_VERSION in install.sh.
+export BUN_MIN_VERSION="${BUN_MIN_VERSION:-1.3.0}"
+
 _pnpm_cache_file() {
     local cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles"
     [[ -d "$cache_dir" ]] || mkdir -p "$cache_dir" 2>/dev/null
@@ -620,6 +626,42 @@ _ensure_nvm_current() {
 }
 
 # ------------------------------------------------------------------------------
+# bun Below-Minimum Check — Special Handler
+# ------------------------------------------------------------------------------
+# Prompts to upgrade bun when below BUN_MIN_VERSION -- the floor for the
+# ~/.bunfig.toml minimumReleaseAge cooldown (bun < 1.3.0 ignores the key, so the
+# 3-day supply-chain gate is a no-op). `bun upgrade` moves to latest stable. A
+# daily marker prevents re-prompting on every shell open.
+_ensure_bun_current() {
+    command -v bun &>/dev/null || return 0
+    [[ -t 1 ]] || return 0
+    local current cmp_min marker marker_dir
+    current=$(bun --version 2>/dev/null)
+    [[ -n "$current" ]] || return 0
+    cmp_min=$(_semver_cmp "$current" "$BUN_MIN_VERSION")
+    [[ "$cmp_min" != "-1" ]] && return 0        # at or above minimum — silent
+
+    marker_dir="${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles"
+    marker="$marker_dir/bun_upgrade_prompted"
+    [[ -d "$marker_dir" ]] || mkdir -p "$marker_dir" 2>/dev/null
+    _marker_fresh "$marker" && return 0         # already nudged within the last 24h
+
+    echo "${err}bun ${current} is below ${BUN_MIN_VERSION} — the ~/.bunfig.toml release-age cooldown (minimumReleaseAge) is IGNORED until bun >= ${BUN_MIN_VERSION}.${done}"
+    read "REPLY?${info}    Upgrade bun now ('bun upgrade')? [y/N] ${done}"
+    : > "$marker"  # mark prompted regardless of answer
+    if [[ "$REPLY" =~ ^[Yy]$ ]]; then
+        echo "${info}    Upgrading bun...${done}"
+        if bun upgrade; then
+            echo "${ok}    bun upgraded. Restart your shell or run 'source ~/.zshrc'.${done}"
+        else
+            echo "${err}    bun upgrade failed.${done}"
+        fi
+    else
+        echo "${warn}    Skipping bun upgrade.${done}"
+    fi
+}
+
+# ------------------------------------------------------------------------------
 # Node.js End-of-Life Check — Special Handler
 # ------------------------------------------------------------------------------
 # Prompts to move to current LTS when the active/default Node major is below
@@ -831,6 +873,9 @@ run_onboarding() {
     # Node EOL nudge — independent of nvm_ok (a current nvm can still default to an
     # EOL Node). Self-gates on below-floor major + 24h marker + interactive shell.
     _ensure_node_current
+
+    # bun floor nudge — the ~/.bunfig.toml minimumReleaseAge cooldown needs bun >= 1.3.0.
+    _ensure_bun_current
 
     # Weekly background pnpm store prune (self-gates on a 7-day marker; silent).
     _pnpm_store_maintenance
