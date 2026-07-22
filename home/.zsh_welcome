@@ -231,6 +231,21 @@ _show_welcome_full() {
         fi
     fi
 
+    # --- Homebrew-managed-runtime tripwire (exception-based; silent when clean) ---
+    # brew node shadows the Node we manage via nvm and usually arrives as a transitive
+    # dep of a brew-packaged npm CLI (how it crept in via markdownlint-cli + repomix).
+    # Flag it so it never sits silently. python is intentionally NOT flagged (brew
+    # python is a common legit dependency -> too noisy). Fast opt/ glob check; no slow
+    # `brew` call in the banner.
+    if [[ -d /opt/homebrew || -d /usr/local/Homebrew || -d /home/linuxbrew ]]; then
+        local _hb="${HOMEBREW_PREFIX:-/opt/homebrew}"
+        local -a _brew_node=( "$_hb"/opt/node(N) "$_hb"/opt/node@*(N) )
+        if (( ${#_brew_node} )); then
+            echo "    nvm:  ${warn}! Homebrew 'node' is also installed${done} — it can shadow nvm's Node on PATH."
+            echo "          ${info}cause: brew uses --installed node · remove: brew uninstall <formula> && brew autoremove${done}"
+        fi
+    fi
+
     # --- pnpm ---
     if command -v pnpm &>/dev/null; then
         local pnpm_ver=$(pnpm -v 2>/dev/null || echo 'N/A')
