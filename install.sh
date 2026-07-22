@@ -64,7 +64,13 @@ SECTION_DECISION=ask
 # --- pnpm version policy ---
 # Minimum acceptable pnpm. If pnpm is missing OR below this, install/upgrade
 # is offered. Keep in sync with PNPM_MIN_VERSION in home/.zsh_onboarding.
-PNPM_MIN_VERSION="11.11.0"
+# 11.15.0 (2026-07-18): NO pnpm CVE over 11.11.0 (both OSV-clean), but carries a
+# bundled adm-zip HIGH DoS fix (GHSA-xcpc-8h2w-3j85, crafted-ZIP 4GB alloc;
+# invisible to OSV since it's a bundled dep) PLUS hardening of verify-deps,
+# tokenHelper timeout, self-update-can-run, lockfile-snippet leak, and a git
+# arg-injection fix. 11.15.1 exists but was still held by minimumReleaseAge (3d)
+# at bump time (eligible ~2026-07-22 22:30Z). SKIP 11.12.0/11.13.0 -- binary-less.
+PNPM_MIN_VERSION="11.15.0"
 
 # --- nvm version policy ---
 # Minimum acceptable nvm. Two mirror-based CVEs set this floor: CVE-2026-10796
