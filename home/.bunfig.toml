@@ -1,0 +1,16 @@
+# Global bun configuration (stow-managed; symlinks to ~/.bunfig.toml).
+# ------------------------------------------------------------------------------
+# Supply-chain release-age cooldown, matching the pnpm minimumReleaseAge gate
+# (home/.config/pnpm/config.yaml, 4320 min) and the uv exclude-newer cutoff
+# (home/.zshrc): refuse to install any package published less than 3 days ago
+# (259200 s = 3 days). Widens the window to catch publish-and-grab supply-chain
+# attacks before they reach the machine. bun 1.2+ enforces this natively (the
+# `--minimum-release-age` flag; verified honored from bunfig 2026-07-22).
+#
+# Scope: applies to `bun add` / `bun install`. A project-level bunfig.toml
+# overrides this file; per-package escape via `minimumReleaseAgeExcludes` below,
+# or a one-off `bun add --minimum-release-age=0 <pkg>`.
+# ------------------------------------------------------------------------------
+[install]
+minimumReleaseAge = 259200
+# minimumReleaseAgeExcludes = ["some-pkg"]   # per-package bypass, if ever needed

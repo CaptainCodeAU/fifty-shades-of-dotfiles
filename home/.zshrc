@@ -262,6 +262,21 @@ command -v uv >/dev/null && eval "$(uv generate-shell-completion zsh)"
 [ -s "$BUN_INSTALL/_bun" ] && source "$BUN_INSTALL/_bun"
 [ -s "$PNPM_HOME/_pnpm" ] && source "$PNPM_HOME/_pnpm"
 
+# --- uv supply-chain release-age cooldown (parity with pnpm + bun) ---
+# uv has no rolling-window setting, only a fixed --exclude-newer cutoff, so compute
+# "3 days ago" at shell startup and export it. Every uv resolution then refuses
+# distributions published in the last 72h -- matching pnpm's minimumReleaseAge
+# (config.yaml) and bun's minimumReleaseAge (.bunfig.toml). Only bites when uv
+# RESOLVES (uv add / pip install / tool install / a stale lock); installing an
+# already-current lock is unaffected. Opt out for one shell with UV_NO_COOLDOWN=1;
+# a pre-set UV_EXCLUDE_NEWER (explicit user/CI value) is never overridden. The
+# `date -v` (BSD) / `date -d` (GNU) fallback keeps it portable across macOS/Linux.
+if command -v uv >/dev/null 2>&1 && [[ -z "$UV_EXCLUDE_NEWER" && -z "$UV_NO_COOLDOWN" ]]; then
+    _uv_cutoff=$(date -u -v-3d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '3 days ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)
+    [[ -n "$_uv_cutoff" ]] && export UV_EXCLUDE_NEWER="$_uv_cutoff"
+    unset _uv_cutoff
+fi
+
 
 # ==============================================================================
 # 7. NVM (Node Version Manager)
