@@ -133,6 +133,13 @@ brew install herdr
 brew pin herdr
 ```
 
+On macOS this is now handled for you: `herdr` is part of the core formulae in
+`install.sh`, and the pin guard runs immediately after the install step so a
+freshly installed formula cannot sit unpinned. **Linux and WSL are deliberately
+manual** — there is no apt/dnf/pacman package, and the vendor installer verifies
+no checksum or signature, so the installer does not automate a supply chain it
+would otherwise reject. On those boxes herdr is reported as optional.
+
 Then close the phone-home half. The config is repo-managed at
 `home/.config/herdr/config.toml` and stow-linked to `~/.config/herdr/config.toml`,
 so it deploys with everything else — `stow -R --no-folding` creates the real
@@ -351,6 +358,36 @@ launching tmux and drive herdr for a couple of weeks instead. The tmux config
 costs nothing sitting on disk, and herdr is a young project — keep the retreat
 path intact. Prefixes do not collide (`ctrl+Space` vs `ctrl+b`) if you do end up
 nested, but layered multiplexers mangle keys and you will blame the wrong thing.
+
+## It installs hooks into your agent CLIs
+
+Worth knowing, because nothing announces it. herdr writes an executable
+state-reporting hook into each agent CLI it finds, so the sidebar can show
+working / idle / blocked and so sessions can be resumed by id. Check what is
+present with:
+
+```bash
+herdr integration status
+herdr integration uninstall <name>
+```
+
+On a machine with several agent CLIs installed this can be three or more files,
+each landing in that tool's own config directory — for Claude Code that means a
+hook inside `~/.claude/hooks/` plus a registration in `~/.claude/settings.json`.
+
+Two properties keep this defensible:
+
+- **They are inert outside herdr.** The Claude hook exits immediately unless
+  `HERDR_ENV`, `HERDR_SOCKET_PATH` and `HERDR_PANE_ID` are all set, so a normal
+  terminal session never executes its body.
+- **They land outside this repo.** `~/.claude/settings.json` is a real file
+  here, not a stow symlink, so the edit did not reach the dotfiles tree.
+
+One property that deserves attention: each file declares _"managed by herdr;
+reinstalling or updating the integration overwrites this file."_ Upgrading herdr
+therefore rewrites executable code in your agent config directories. The release
+cooldown governs when that happens — which is a reason the pin matters beyond
+the binary itself.
 
 ## Scope (and deliberate non-scope)
 

@@ -793,6 +793,37 @@ check_prerequisites() {
     else
         check_command trash-put "trash-cli (Linux)" || missing=$((missing+1))
     fi
+    # herdr counts as REQUIRED on macOS (Homebrew formula, checksummed bottle)
+    # and merely informational elsewhere -- no apt/dnf/pacman package exists and
+    # the vendor installer verifies nothing, so a Linux box is not held to a
+    # standard this installer refuses to meet on its behalf.
+    if [[ "$(check_os)" == "macos" ]]; then
+        check_command herdr "herdr" || missing=$((missing+1))
+    else
+        check_command_optional herdr "herdr (manual install on Linux)" || true
+    fi
+    # Where herdr exists, its guards ARE the policy and must be observable:
+    # the Homebrew pin enforces the release cooldown, config.toml keeps the two
+    # phone-home paths closed, and the LaunchAgent is what makes the session
+    # server survive a crash. Report all three rather than assuming a past run
+    # set them -- a lapsed pin looks identical to a healthy one until checked.
+    if command -v herdr &>/dev/null; then
+        if [[ -e "${HOMEBREW_PREFIX:-/opt/homebrew}/var/homebrew/pinned/herdr" ]]; then
+            echo -e "      ${GREEN}✓${RESET} pinned — ${HERDR_COOLDOWN_DAYS}-day release cooldown enforced"
+        else
+            echo -e "      ${YELLOW}~${RESET} not pinned — run ${CYAN}brew pin herdr${RESET} (cooldown NOT enforced)"
+        fi
+        if [[ -L "$HOME/.config/herdr/config.toml" ]]; then
+            echo -e "      ${GREEN}✓${RESET} config.toml stow-linked from the repo"
+        else
+            echo -e "      ${YELLOW}~${RESET} config.toml not stow-linked — re-run stow (phone-home may be live)"
+        fi
+        if [[ -f "$HOME/Library/LaunchAgents/homebrew.mxcl.herdr.plist" ]]; then
+            echo -e "      ${GREEN}✓${RESET} server managed by launchd (crash-restart + start at login)"
+        elif [[ "$(check_os)" == "macos" ]]; then
+            echo -e "      ${YELLOW}~${RESET} server not managed — ${CYAN}brew services start herdr${RESET} (stop any running server FIRST)"
+        fi
+    fi
     echo
 
     echo -e "${BOLD}Git Extras:${RESET}"
@@ -865,28 +896,6 @@ check_prerequisites() {
     check_command_optional rustup   "rustup"   || true
     check_command_optional cargo    "cargo"    || true
 
-    # herdr is optional and deliberately NOT auto-installed (it is a per-machine
-    # choice, not scaffolding). But WHERE it is present, its two guards are
-    # policy and must be observable: the Homebrew pin is what enforces the
-    # release cooldown, and config.toml is what keeps the two phone-home paths
-    # closed. Report both rather than assuming a past install.sh run set them.
-    if command -v herdr &>/dev/null; then
-        local herdr_ver
-        herdr_ver=$(herdr --version 2>/dev/null | awk '{print $NF}')
-        echo -e "  ${GREEN}✓${RESET} herdr (${herdr_ver:-unknown})"
-        if [[ -e "${HOMEBREW_PREFIX:-/opt/homebrew}/var/homebrew/pinned/herdr" ]]; then
-            echo -e "      ${GREEN}✓${RESET} pinned — ${HERDR_COOLDOWN_DAYS}-day release cooldown enforced"
-        else
-            echo -e "      ${YELLOW}~${RESET} not pinned — run ${CYAN}brew pin herdr${RESET} (cooldown NOT enforced)"
-        fi
-        if [[ -L "$HOME/.config/herdr/config.toml" ]]; then
-            echo -e "      ${GREEN}✓${RESET} config.toml stow-linked from the repo"
-        else
-            echo -e "      ${YELLOW}~${RESET} config.toml not stow-linked — re-run stow (phone-home may be live)"
-        fi
-    else
-        echo -e "  ${YELLOW}~${RESET} herdr — not installed (optional)"
-    fi
     echo
 
     if (( missing > 0 )); then
@@ -1036,7 +1045,11 @@ install_macos_prerequisites() {
     success "Homebrew ready"
 
     # --- Core formulae ---
-    local -a formulae=(stow uv direnv jq fzf eza zoxide neovim tmux ripgrep fd gh git-lfs glow trash)
+    # herdr is core on macOS only. It has no apt/dnf/pacman package, and its
+    # vendor installer performs NO checksum or signature verification, so the
+    # Linux path is deliberately left manual rather than automated around a
+    # supply chain we would not otherwise accept. See docs/HERDR.md.
+    local -a formulae=(stow uv direnv jq fzf eza zoxide neovim tmux ripgrep fd gh git-lfs glow trash herdr)
     local to_install=()
 
     for formula in "${formulae[@]}"; do
@@ -1053,6 +1066,12 @@ install_macos_prerequisites() {
     else
         success "Core formulae already installed"
     fi
+
+    # Pin herdr the moment it exists. The pre-flight guard runs BEFORE this
+    # point, so on a fresh box it finds no herdr and returns clean -- leaving a
+    # freshly installed, unpinned formula that the next `brew upgrade` could
+    # walk straight past the cooldown. Close that window here.
+    _preflight_herdr_pin_check
 
     # --- Required CLI tools (lazygit, lazydocker — installed unconditionally) ---
     local -a required_cli=(lazygit lazydocker)
