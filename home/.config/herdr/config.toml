@@ -1,3 +1,4 @@
+onboarding = false
 [update]
 version_check = false
 manifest_check = false
@@ -62,6 +63,42 @@ next_tab = "shift+right"
 # ctrl+v rectangle select in copy mode: no herdr equivalent.
 # shift+Enter: .tmux.conf had to reclaim it from tmux-tilit so Claude Code
 #   received newlines. herdr binds nothing to it, so no reclaim is needed.
+
+# =============================================================================
+#  Speak-selection replacement
+# =============================================================================
+# macOS "Speak selection" (Accessibility > Spoken Content) asks the FOCUSED APP
+# for its selected text over the accessibility API. Inside herdr there is
+# nothing to ask for: herdr captures the mouse, so a drag makes herdr's OWN
+# selection and the host terminal never has one. The accessibility hotkey is
+# still enabled system-wide -- it simply finds an empty selection and stays
+# quiet. Same root cause as cmd+C appearing to do nothing.
+#
+# The bridge is the clipboard. [ui] copy_on_select is true by default, so a
+# drag has ALREADY copied by the time you let go; these bindings just speak
+# what is there. Copy mode works identically: prefix+[ then v, y, then speak.
+#
+# Direct chords rather than prefix+ bindings, so speaking stays a single
+# keystroke like the native option+esc it replaces. ctrl+alt+letter is the
+# combination upstream calls most reliable for direct bindings.
+#
+# Alternative that needs no config at all: hold option while dragging to make a
+# native iTerm2 selection instead, which the real accessibility hotkey can then
+# read. Fine occasionally; awkward across split panes, since the host terminal
+# selects a rectangle over the whole grid and does not know pane borders exist.
+
+[[keys.command]]
+key = "ctrl+alt+s"
+type = "shell"
+command = "pbpaste | say"
+
+# Long clipboard, wrong clipboard, or simply changed your mind. `say` runs
+# detached, so without this there is no way to shut it up short of closing
+# things. pkill -x matches the executable exactly and hits nothing else.
+[[keys.command]]
+key = "ctrl+alt+x"
+type = "shell"
+command = "pkill -x say"
 
 [ui.toast]
 delivery = "system"

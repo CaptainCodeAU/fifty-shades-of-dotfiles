@@ -359,6 +359,45 @@ costs nothing sitting on disk, and herdr is a young project — keep the retreat
 path intact. Prefixes do not collide (`ctrl+Space` vs `ctrl+b`) if you do end up
 nested, but layered multiplexers mangle keys and you will blame the wrong thing.
 
+## Speak-selection stops working inside herdr
+
+macOS "Speak selection" (Accessibility > Spoken Content) asks the **focused
+application** for its selected text over the accessibility API. Inside herdr
+there is nothing to ask for: herdr captures the mouse, so a drag creates
+herdr's own internal selection and the host terminal never has one. The hotkey
+stays enabled system-wide, finds an empty selection, and says nothing. It is the
+same root cause as `cmd+C` appearing to do nothing — the selection is not where
+the OS is looking.
+
+The bridge is the clipboard, since `copy_on_select` means a drag has already
+copied by the time you release it:
+
+```toml
+[[keys.command]]
+key = "ctrl+alt+s"
+type = "shell"
+command = "pbpaste | say"
+
+[[keys.command]]
+key = "ctrl+alt+x"
+type = "shell"
+command = "pkill -x say"
+```
+
+Direct chords rather than `prefix+` bindings, so speaking stays a single
+keystroke like the `option+esc` it replaces. The stop binding is not optional
+comfort: `type = "shell"` runs detached, so a large clipboard otherwise talks
+until it finishes. Copy mode feeds it too — `prefix+[`, `v`, `y`, then speak —
+which matters when the text is a screen away from the pointer.
+
+Requires _"Applications in terminal may access clipboard"_ in iTerm2, without
+which the drag never reaches the clipboard and the key appears dead.
+
+The no-config alternative is to hold **option while dragging**, producing a
+native terminal selection the real accessibility hotkey can read. Fine
+occasionally, awkward across splits: the host terminal selects a rectangle over
+the whole grid and does not know pane borders exist.
+
 ## It installs hooks into your agent CLIs
 
 Worth knowing, because nothing announces it. herdr writes an executable
