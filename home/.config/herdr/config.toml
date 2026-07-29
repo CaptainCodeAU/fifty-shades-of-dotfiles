@@ -118,6 +118,15 @@ key = "prefix+a"
 type = "shell"
 command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --toggle'"
 
+# TEMPORARY control probe. Does ANY custom command fire on this setup? This one
+# only appends a timestamp, so if pressing it leaves no file the fault is
+# herdr's command execution rather than anything about speech, the clipboard, or
+# which key was chosen. Remove once the speech bindings are confirmed working.
+[[keys.command]]
+key = "prefix+t"
+type = "shell"
+command = "sh -c 'date -u +%FT%TZ >> \"$HOME/.local/state/herdr/keytest.log\"'"
+
 [ui.toast]
 delivery = "system"
 

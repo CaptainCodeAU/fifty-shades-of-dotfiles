@@ -53,7 +53,7 @@
 # ============================================================================
 set -uo pipefail
 
-rate="278"
+rate="420"
 voice=""
 mode="speak"
 
@@ -68,6 +68,17 @@ while [ $# -gt 0 ]; do
         *) echo "speak-clipboard: unknown option '$1'" >&2; exit 1 ;;
     esac
 done
+
+# Invocation trace. One line per run, no clipboard CONTENT ever written -- just
+# when it ran and in which mode. This exists because when a keybinding "does
+# nothing" there are two indistinguishable explanations: the key never reached
+# herdr, or it did and the command failed. A line here means the script ran, so
+# the fault is downstream; no line means the key or the spawn is at fault. Cheap
+# enough to leave on permanently, and it turns a guessing game into a lookup.
+_trace_dir="${XDG_STATE_HOME:-$HOME/.local/state}/herdr"
+mkdir -p "$_trace_dir" 2>/dev/null
+printf '%s mode=%s ppid=%s\n' "$(date -u +%FT%TZ)" "$mode" "${PPID:-?}" \
+    >>"$_trace_dir/speak-clipboard.log" 2>/dev/null || true
 
 # -x matches the executable name exactly, so this cannot hit anything whose
 # command line merely mentions "say".
