@@ -197,6 +197,40 @@ which loads in the GUI session at login. A LaunchDaemon would start earlier but 
 the wrong tool here: the server needs the user's `HOME`, `PATH`, ssh-agent and
 agent credentials.
 
+### Two machines: keep the versions in step
+
+Remote attach is not version-agnostic. Client and server negotiate a protocol,
+and `herdr status server` reports all three:
+
+```
+status: running
+version: 0.7.5
+protocol: 17
+compatible: yes
+```
+
+When the two ends diverge far enough to change that protocol, herdr prompts to
+stop and restart the old server to reconcile — which defeats the point of a
+session that was supposed to be sitting there waiting for you. For remote attach
+specifically, herdr prefers a matching binary already on the remote `PATH`, then
+checks the common direct, Homebrew, mise and Nix install locations. If it finds
+none, an interactive run offers to install one to `~/.local/bin/herdr`; a
+non-interactive run fails rather than modifying the host.
+
+**The consequence for the cooldown: it has to be applied on every machine that
+attaches, not just the server.** A laptop left on `brew upgrade` autopilot will
+drift ahead of a pinned server and start forcing restarts. So:
+
+- `brew pin herdr` on **both** ends, not only the machine hosting the sessions.
+- Upgrade them in the **same sitting** — unpin, upgrade, re-pin, on each box —
+  rather than whenever each happens to be in front of you.
+- `herdr-cooldown-check` is per-machine by design. Run it on the client too; it
+  reports that machine's own pin, version and phone-home state.
+
+This is the one place where the cooldown design needs a human to remember
+something, because nothing on either box can see the other's version until they
+try to talk.
+
 ## herdr and tmux
 
 Upstream positions herdr as a tmux-class multiplexer — the keyboard docs open with
