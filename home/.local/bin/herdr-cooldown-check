@@ -1,0 +1,277 @@
+#!/usr/bin/env -S uv run python3
+# /// script
+# requires-python = ">=3.10"
+# dependencies = []
+# ///
+#
+# ============================================================================
+#  herdr-cooldown-check -- is a herdr upgrade eligible under the 3-day cooldown?
+# ============================================================================
+#
+# WHY
+# ---
+# This estate never adopts a release on the day it ships: pnpm has
+# minimumReleaseAge, bun has .bunfig.toml minimumReleaseAge, uv has
+# UV_EXCLUDE_NEWER, GitHub Actions are SHA-pinned. herdr has no such knob --
+# it ships a self-updater (`herdr update`) plus TWO default-on background
+# calls to herdr.dev, so left alone it is the one tool in the estate that can
+# change underneath us with zero delay.
+#
+# This tool restores the 3-day gate for herdr the only way that works for a
+# Homebrew-managed binary: keep the formula PINNED, and report when the newest
+# upstream release has aged past the cooldown so the maintainer can unpin,
+# upgrade and re-pin deliberately.
+#
+# WHAT IT CHECKS (4 subjects)
+#   1. version     installed herdr vs newest upstream stable release
+#   2. cooldown    age of that release vs HERDR_COOLDOWN_DAYS (default 3)
+#   3. pin         is the Homebrew formula pinned (so `brew upgrade` can't take it)
+#   4. phone-home  are update.version_check / update.manifest_check disabled
+#
+# WHY PIN RATHER THAN TRUST THE CHANNEL
+#   herdr's own `update.channel` only gates stable-vs-preview, not age, and
+#   upstream states Homebrew installs ignore `herdr update` entirely. So the
+#   binary can only move when Homebrew moves it -- and `brew pin` is the single
+#   switch that stops a routine `brew upgrade` from doing that silently.
+#
+# WHY update.manifest_check MATTERS
+#   It is NOT a version check. It fetches agent-detection manifests from
+#   herdr.dev at runtime and reloads them into the RUNNING server -- remote
+#   behaviour change, no pin, no cooldown. Disable it and run
+#   `herdr server update-agent-manifests` deliberately instead.
+#
+# DATA SOURCE
+#   GitHub's releases/latest endpoint, which already excludes prereleases (so
+#   the daily `preview-*` tags can never be proposed):
+#     GET https://api.github.com/repos/ogulcancelik/herdr/releases/latest
+#   Unauthenticated (60 req/h/IP is ample at a 6h cache). $GH_TOKEN is used
+#   when present purely to raise that ceiling.
+#
+# SAFETY
+#   Read-only. Never installs, unpins, upgrades or edits config. It prints the
+#   command it thinks you want and stops. Any failure degrades to SKIPPED,
+#   never to a false ELIGIBLE.
+#
+# USAGE
+#   herdr-cooldown-check [options]
+#     --cooldown-days N  age gate in days (default: $HERDR_COOLDOWN_DAYS or 3)
+#     --timeout SEC      per-network-call timeout (default: 8)
+#     --quiet            print only actionable + SKIPPED lines
+#     --json             emit a JSON report instead of the table
+#
+# EXIT CODES
+#   0  nothing actionable (current, or held by cooldown, or skipped)
+#   1  an upgrade is ELIGIBLE, or a guard (pin / phone-home) is not in place
+# ============================================================================
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
+
+REPO = "ogulcancelik/herdr"
+LATEST_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
+CONFIG_PATH = os.path.expanduser("~/.config/herdr/config.toml")
+
+CLEAN, ACTION, SKIP = "OK", "ACTION", "SKIPPED"
+
+
+def run(cmd: list[str], timeout: int = 10) -> tuple[int, str]:
+    """Run a command, returning (rc, stdout). Never raises."""
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return p.returncode, (p.stdout or "").strip()
+    except (OSError, subprocess.SubprocessError):
+        return 127, ""
+
+
+def semver(text: str) -> tuple[int, ...] | None:
+    m = re.search(r"(\d+)\.(\d+)\.(\d+)", text or "")
+    return tuple(int(g) for g in m.groups()) if m else None
+
+
+def installed_version() -> tuple[tuple[int, ...] | None, str]:
+    """(parsed version, raw string). Absent herdr yields (None, '')."""
+    if not shutil.which("herdr"):
+        return None, ""
+    _, out = run(["herdr", "--version"])
+    return semver(out), out
+
+
+def install_method() -> str:
+    """'brew', 'direct' or 'absent' -- decides which advice is even valid."""
+    if not shutil.which("herdr"):
+        return "absent"
+    if shutil.which("brew"):
+        rc, out = run(["brew", "list", "--versions", "herdr"], timeout=20)
+        if rc == 0 and out:
+            return "brew"
+    return "direct"
+
+
+def brew_pinned() -> bool | None:
+    """True/False, or None when Homebrew cannot answer (never assume unpinned)."""
+    if not shutil.which("brew"):
+        return None
+    rc, out = run(["brew", "list", "--pinned"], timeout=20)
+    if rc != 0:
+        return None
+    return "herdr" in out.split()
+
+
+def phone_home_state() -> dict[str, bool | None]:
+    """Read update.* booleans out of config.toml. None = key absent (= upstream default true)."""
+    state: dict[str, bool | None] = {"version_check": None, "manifest_check": None}
+    try:
+        with open(CONFIG_PATH, encoding="utf-8") as fh:
+            body = fh.read()
+    except OSError:
+        return state
+    for key in state:
+        m = re.search(rf"^\s*{key}\s*=\s*(true|false)\s*$", body, re.M)
+        if m:
+            state[key] = m.group(1) == "true"
+    return state
+
+
+def latest_release(timeout: int) -> tuple[str, datetime] | None:
+    """Newest NON-prerelease tag and its publish time, or None on any failure."""
+    req = urllib.request.Request(
+        LATEST_URL,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "herdr-cooldown-check",
+        },
+    )
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError):
+        return None
+    tag = data.get("tag_name")
+    published = data.get("published_at")
+    if not tag or not published:
+        return None
+    try:
+        when = datetime.fromisoformat(published.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return tag, when
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(add_help=True)
+    ap.add_argument("--cooldown-days", type=float,
+                    default=float(os.environ.get("HERDR_COOLDOWN_DAYS", "3")))
+    ap.add_argument("--timeout", type=int, default=8)
+    ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--json", dest="as_json", action="store_true")
+    args = ap.parse_args()
+
+    method = install_method()
+    have, raw = installed_version()
+    report: dict[str, object] = {
+        "install_method": method,
+        "installed": ".".join(map(str, have)) if have else None,
+        "cooldown_days": args.cooldown_days,
+    }
+    rows: list[tuple[str, str, str]] = []
+    actionable = False
+
+    if method == "absent":
+        rows.append(("version", SKIP, "herdr is not installed — nothing to gate"))
+        report["subjects"] = [{"subject": "version", "state": SKIP}]
+        emit(args, rows, report)
+        return 0
+
+    rel = latest_release(args.timeout)
+    if rel is None:
+        rows.append(("version", SKIP, "could not reach the GitHub releases API"))
+    else:
+        tag, published = rel
+        want = semver(tag)
+        age_days = (datetime.now(timezone.utc) - published).total_seconds() / 86400
+        report["latest"] = tag
+        report["latest_published"] = published.isoformat()
+        report["latest_age_days"] = round(age_days, 2)
+
+        if want is None:
+            rows.append(("version", SKIP, f"could not parse upstream tag {tag!r}"))
+        elif have is None:
+            rows.append(("version", SKIP, f"could not parse `herdr --version` ({raw!r})"))
+        elif have >= want:
+            rows.append(("version", CLEAN,
+                         f"installed {'.'.join(map(str, have))} is current ({tag})"))
+        elif age_days < args.cooldown_days:
+            left = args.cooldown_days - age_days
+            rows.append(("cooldown", CLEAN,
+                         f"{tag} HELD by cooldown — {left:.1f}d of "
+                         f"{args.cooldown_days:g}d remaining"))
+        else:
+            actionable = True
+            if method == "brew":
+                fix = "brew unpin herdr && brew upgrade herdr && brew pin herdr"
+            else:
+                fix = (f"download {tag} from github.com/{REPO}/releases "
+                       f"(direct install — `herdr update` ignores the cooldown)")
+            rows.append(("cooldown", ACTION,
+                         f"{tag} ELIGIBLE — released {age_days:.1f}d ago — {fix}"))
+
+    if method == "brew":
+        pinned = brew_pinned()
+        report["brew_pinned"] = pinned
+        if pinned is None:
+            rows.append(("pin", SKIP, "Homebrew could not report pin state"))
+        elif pinned:
+            rows.append(("pin", CLEAN, "formula is pinned — `brew upgrade` cannot move it"))
+        else:
+            actionable = True
+            rows.append(("pin", ACTION,
+                         "formula NOT pinned — a routine `brew upgrade` bypasses "
+                         "the cooldown — run `brew pin herdr`"))
+
+    phone = phone_home_state()
+    report["phone_home"] = phone
+    for key, label in (("version_check", "background version check"),
+                       ("manifest_check", "remote agent-manifest fetch")):
+        val = phone[key]
+        if val is False:
+            rows.append(("phone-home", CLEAN, f"update.{key} = false ({label} off)"))
+        else:
+            actionable = True
+            shown = "unset (upstream default: true)" if val is None else "true"
+            rows.append(("phone-home", ACTION,
+                         f"update.{key} is {shown} — {label} still live — "
+                         f"set it to false in {CONFIG_PATH}"))
+
+    emit(args, rows, report)
+    return 1 if actionable else 0
+
+
+def emit(args, rows, report) -> None:
+    report["subjects"] = [{"subject": s, "state": st, "detail": d} for s, st, d in rows]
+    if args.as_json:
+        print(json.dumps(report, indent=2))
+        return
+    for subject, state, detail in rows:
+        if args.quiet and state == CLEAN:
+            continue
+        print(f"  {state:<7} {subject:<10} {detail}")
+    if not args.quiet:
+        n = sum(1 for _, st, _ in rows if st == ACTION)
+        print(f"  {'—' * 3} {n} actionable, {len(rows)} checked")
+
+
+if __name__ == "__main__":
+    sys.exit(main())

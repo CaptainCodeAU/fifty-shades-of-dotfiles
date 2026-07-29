@@ -95,6 +95,18 @@ NODE_MIN_MAJOR="22"
 # home/.zsh_onboarding.
 BUN_MIN_VERSION="1.3.0"
 
+# --- herdr release-cooldown policy ---
+# Days a herdr release must age before this estate adopts it. herdr has no
+# native cooldown knob (unlike pnpm minimumReleaseAge / bun minimumReleaseAge /
+# uv UV_EXCLUDE_NEWER), AND it ships a self-updater plus two default-on calls to
+# herdr.dev -- update.version_check, and update.manifest_check which reloads
+# remote agent-detection manifests into the RUNNING server. The gate is
+# therefore enforced externally: keep the Homebrew formula PINNED so a routine
+# `brew upgrade` cannot move it, and let `herdr-cooldown-check` report when a
+# release has aged past this many days. Upgrades are deliberate and three-step:
+#   brew unpin herdr && brew upgrade herdr && brew pin herdr
+HERDR_COOLDOWN_DAYS="3"
+
 # --- Helpers ---
 info()    { echo -e "${CYAN}ℹ️  $*${RESET}"; }
 success() { echo -e "${GREEN}✅ $*${RESET}"; }
@@ -608,6 +620,31 @@ _preflight_pnpm_floor_check() {
         confirm "Run 'pnpm self-update'?" && run_cmd pnpm self-update
     fi
     hash -r 2>/dev/null || true
+    return 0
+}
+
+_preflight_herdr_pin_check() {
+    [[ "$SKIP_PREFLIGHT" == true ]] && return 0
+    # herdr is only gated if it is actually installed AND managed by Homebrew --
+    # a direct install has no pin concept, and `herdr update` would bypass the
+    # cooldown anyway (that case is reported by `herdr-cooldown-check`, not here).
+    command -v herdr &>/dev/null || return 0
+    command -v brew &>/dev/null || return 0
+    brew list --versions herdr &>/dev/null || return 0
+    # Already pinned => the gate is intact, stay silent.
+    if brew list --pinned 2>/dev/null | grep -qx "herdr"; then
+        return 0
+    fi
+
+    step "Pre-flight herdr cooldown guard"
+    warn "herdr is NOT pinned — a routine 'brew upgrade' would adopt a same-day release."
+    info "The ${HERDR_COOLDOWN_DAYS}-day gate is enforced by pinning; upgrades stay deliberate:"
+    info "  brew unpin herdr && brew upgrade herdr && brew pin herdr"
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[dry-run] No changes made. Re-run without --dry-run to pin herdr."
+        return 0
+    fi
+    confirm "Run 'brew pin herdr'?" y && run_cmd brew pin herdr
     return 0
 }
 
@@ -2122,6 +2159,12 @@ main() {
 
     # --- Node EOL pre-flight (offer to remove unsupported Node majors) ---
     _preflight_node_eol_check
+
+    # --- herdr cooldown guard (re-pin a formula that lost its pin) ---
+    # A `brew unpin herdr` for a deliberate upgrade leaves the gate open if the
+    # re-pin is forgotten; every run re-asserts it. No-op unless herdr is present
+    # and Homebrew-managed.
+    _preflight_herdr_pin_check
 
     # --- Install prerequisites ---
     if ! check_prerequisites; then
