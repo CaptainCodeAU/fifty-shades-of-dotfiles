@@ -78,27 +78,34 @@ next_tab = "shift+right"
 # drag has ALREADY copied by the time you let go; these bindings just speak
 # what is there. Copy mode works identically: prefix+[ then v, y, then speak.
 #
-# Direct chords rather than prefix+ bindings, so speaking stays a single
-# keystroke like the native option+esc it replaces. ctrl+alt+letter is the
-# combination upstream calls most reliable for direct bindings.
+# FUNCTION KEYS, not ctrl+alt+letter. The first attempt used ctrl+alt+s and was
+# silent: 3 of the 5 iTerm2 profiles here set "Option Key Sends" to Normal, so
+# option composes a character instead of acting as a modifier and the chord
+# never reaches herdr as a chord. Upstream warns exactly this -- "Alt, Cmd/Super
+# ... depend on your terminal" -- and names function keys among the most
+# reliable direct bindings. f9/f10 sidestep the whole question.
 #
-# Alternative that needs no config at all: hold option while dragging to make a
-# native iTerm2 selection instead, which the real accessibility hotkey can then
-# read. Fine occasionally; awkward across split panes, since the host terminal
-# selects a rectangle over the whole grid and does not know pane borders exist.
+# `sh -c` is explicit so the pipeline inside the script is never at the mercy of
+# how herdr execs a command string, and "$HOME" is expanded by the shell rather
+# than hardcoded, so this config stays portable across machines.
+#
+# The script does the work: it strips ANSI escapes, box drawing, Nerd Font
+# glyphs and rule lines before speaking. That filtering is the whole reason to
+# route through the clipboard -- the native accessibility hotkey reads the raw
+# screen and will happily pronounce the pane borders and prompt decoration.
 
 [[keys.command]]
-key = "ctrl+alt+s"
+key = "f9"
 type = "shell"
-command = "pbpaste | say"
+command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\"'"
 
 # Long clipboard, wrong clipboard, or simply changed your mind. `say` runs
 # detached, so without this there is no way to shut it up short of closing
-# things. pkill -x matches the executable exactly and hits nothing else.
+# things.
 [[keys.command]]
-key = "ctrl+alt+x"
+key = "f10"
 type = "shell"
-command = "pkill -x say"
+command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --stop'"
 
 [ui.toast]
 delivery = "system"

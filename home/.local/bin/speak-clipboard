@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# ============================================================================
+#  speak-clipboard -- read the clipboard aloud, without reading the furniture
+# ============================================================================
+#
+# WHY
+# ---
+# macOS "Speak selection" cannot see a selection made inside herdr: herdr
+# captures the mouse, so the selection lives in its process memory and is never
+# published to the accessibility API. The clipboard is the only bridge, since
+# herdr's copy_on_select means a drag has already copied by the time you let go.
+#
+# But speaking the clipboard raw is unpleasant, because a terminal selection is
+# not prose. It carries pane borders, Powerlevel10k prompt decoration, Nerd Font
+# glyphs from the private use area, box drawing, and separator runs. A speech
+# engine pronounces those -- the reported symptom was "F" and "F dash" chanted
+# at the end of every line -- and the actual words get lost in the noise.
+#
+# So this strips the furniture before speaking. The native accessibility hotkey
+# CANNOT do this: it reads the raw screen, decoration and all. That asymmetry is
+# the main argument for going through the clipboard at all.
+#
+# WHAT IT STRIPS (and why each)
+#   * ANSI/OSC escape sequences  -- colour and title codes, never spoken content
+#   * anything outside printable ASCII -- box drawing, Nerd Font PUA glyphs,
+#     emoji, the middle dots p10k uses as separators
+#   * runs of punctuation used as rules or padding (----, ====, ....)
+#   * repeated blank lines and collapsed whitespace, which become dead air
+#
+# Deliberately NOT stripped: ordinary punctuation inside sentences, code
+# symbols, and paths. Those carry meaning when read aloud.
+#
+# USAGE
+#   speak-clipboard              speak the clipboard
+#   speak-clipboard --print      print what WOULD be spoken (no audio)
+#   speak-clipboard --stop       stop any speech in progress
+#   speak-clipboard --rate N     words per minute (default: system default)
+#   speak-clipboard --voice NAME voice to use (see `say -v '?'`)
+#
+# EXIT CODES
+#   0  spoke, printed, or stopped cleanly
+#   1  nothing to say (clipboard empty, or empty once cleaned)
+# ============================================================================
+set -uo pipefail
+
+rate=""
+voice=""
+mode="speak"
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --print) mode="print"; shift ;;
+        --stop)  mode="stop";  shift ;;
+        --rate)  rate="${2:-}"; shift 2 ;;
+        --voice) voice="${2:-}"; shift 2 ;;
+        -h|--help) sed -n '/^# USAGE/,/^# EXIT/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) echo "speak-clipboard: unknown option '$1'" >&2; exit 1 ;;
+    esac
+done
+
+if [ "$mode" = "stop" ]; then
+    # -x matches the executable name exactly, so this cannot hit anything whose
+    # command line merely mentions "say".
+    pkill -x say 2>/dev/null
+    exit 0
+fi
+
+clean() {
+    # 1. ANSI CSI + OSC escape sequences.
+    # 2. Everything outside tab/newline/printable-ASCII. This is the blunt one,
+    #    and the blunt one is correct here: every glyph a terminal draws for
+    #    decoration lives outside ASCII, and every word worth speaking does not.
+    # 3. Punctuation runs of 4+ used as horizontal rules or padding.
+    # 4. Whitespace collapse, then drop lines that are now empty.
+    sed -E $'s/\033\\[[0-9;?]*[ -\/]*[@-~]//g; s/\033\\][^\a]*(\a|\033\\\\)//g' \
+    | LC_ALL=C tr -cd '\11\12\15\40-\176' \
+    | sed -E 's/[-=_.~*#+]{4,}/ /g; s/[[:space:]]+/ /g; s/^ //; s/ $//' \
+    | grep -v '^$'
+}
+
+text="$(pbpaste 2>/dev/null | clean)"
+
+if [ -z "${text//[[:space:]]/}" ]; then
+    [ "$mode" = "print" ] && echo "(nothing to speak -- clipboard empty or all decoration)"
+    exit 1
+fi
+
+if [ "$mode" = "print" ]; then
+    printf '%s\n' "$text"
+    exit 0
+fi
+
+args=()
+[ -n "$voice" ] && args+=(-v "$voice")
+[ -n "$rate" ]  && args+=(-r "$rate")
+
+printf '%s' "$text" | say "${args[@]}"
