@@ -1,0 +1,18 @@
+# herdr writes its runtime state next to its config: session.json,
+# session-history.json, herdr.sock, and the client/server logs.
+#
+# session-history.json is the one that matters. With [experimental]
+# pane_history = true it holds recent pane scrollback in PLAIN TEXT, and
+# upstream warns that pane output "can include secrets, tokens, prompts, and
+# command output". It must never be committed.
+#
+# Today it cannot be: install.sh stows with `--no-folding`, so ~/.config/herdr
+# is a REAL directory and every runtime file lands outside this repo. This
+# allowlist makes that guarantee structural rather than incidental -- a
+# hand-run `stow` without --no-folding would fold this directory into a
+# symlink and drop all of it straight in here.
+#
+# Deny everything, then re-admit only what is genuinely ours.
+*
+!.gitignore
+!config.toml
