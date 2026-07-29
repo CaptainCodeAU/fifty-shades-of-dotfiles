@@ -30,27 +30,38 @@
 # Deliberately NOT stripped: ordinary punctuation inside sentences, code
 # symbols, and paths. Those carry meaning when read aloud.
 #
+# SPEED
+# ----
+# Default is 278 wpm, which is 1.5x. That number was MEASURED, not guessed:
+# `say` with no -r runs at 175 wpm (a fixed sample rendered identically with
+# `-r 175` and with no flag at all), and rendering the same sample across a
+# sweep of rates put 278 wpm at exactly 1.50x the baseline duration. Duration
+# is not perfectly inverse to rate -- there is fixed padding around phrases --
+# so 175 * 1.5 = 262 is measurably too slow, at 1.44x.
+#
 # USAGE
 #   speak-clipboard              speak the clipboard
+#   speak-clipboard --toggle     speak, or stop if already speaking
 #   speak-clipboard --print      print what WOULD be spoken (no audio)
 #   speak-clipboard --stop       stop any speech in progress
-#   speak-clipboard --rate N     words per minute (default: system default)
+#   speak-clipboard --rate N     words per minute (default: 278 = 1.5x)
 #   speak-clipboard --voice NAME voice to use (see `say -v '?'`)
 #
 # EXIT CODES
-#   0  spoke, printed, or stopped cleanly
+#   0  spoke, printed, stopped, or toggled cleanly
 #   1  nothing to say (clipboard empty, or empty once cleaned)
 # ============================================================================
 set -uo pipefail
 
-rate=""
+rate="278"
 voice=""
 mode="speak"
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --print) mode="print"; shift ;;
-        --stop)  mode="stop";  shift ;;
+        --print)  mode="print";  shift ;;
+        --stop)   mode="stop";   shift ;;
+        --toggle) mode="toggle"; shift ;;
         --rate)  rate="${2:-}"; shift 2 ;;
         --voice) voice="${2:-}"; shift 2 ;;
         -h|--help) sed -n '/^# USAGE/,/^# EXIT/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -58,11 +69,22 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+# -x matches the executable name exactly, so this cannot hit anything whose
+# command line merely mentions "say".
 if [ "$mode" = "stop" ]; then
-    # -x matches the executable name exactly, so this cannot hit anything whose
-    # command line merely mentions "say".
     pkill -x say 2>/dev/null
     exit 0
+fi
+
+# Toggle: the same key starts and stops, mirroring how the macOS Spoken Content
+# hotkey behaves. Speech is a detached `say` process, so "is it speaking?" is
+# simply "does one exist?" -- no state file to go stale.
+if [ "$mode" = "toggle" ]; then
+    if pgrep -x say >/dev/null 2>&1; then
+        pkill -x say 2>/dev/null
+        exit 0
+    fi
+    mode="speak"
 fi
 
 clean() {
