@@ -1,0 +1,4 @@
+[update]
+version_check = false
+manifest_check = false
+channel = "stable"

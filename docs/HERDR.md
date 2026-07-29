@@ -109,15 +109,24 @@ brew install herdr
 brew pin herdr
 ```
 
-Then close the phone-home half:
+Then close the phone-home half. The config is repo-managed at
+`home/.config/herdr/config.toml` and stow-linked to `~/.config/herdr/config.toml`,
+so it deploys with everything else — `stow -R --no-folding` creates the real
+directory and symlinks the file, the same shape as the other `~/.config` entries:
 
 ```toml
-# ~/.config/herdr/config.toml
+# home/.config/herdr/config.toml  ->  ~/.config/herdr/config.toml
 [update]
 version_check = false
 manifest_check = false
 channel = "stable"
 ```
+
+Both guards are surfaced rather than assumed. `install.sh --check` reports the
+pin and whether the config is stow-linked, and the shell welcome banner carries
+a `herdr:` line showing the version and pin state (read from a symlink under
+`$HOMEBREW_PREFIX`, so it costs no `brew` subprocess). An unpinned herdr is
+shown as an error, not a note — the pin _is_ the cooldown.
 
 Pull agent-detection manifests deliberately instead, when you want them:
 

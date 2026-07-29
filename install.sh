@@ -864,6 +864,29 @@ check_prerequisites() {
     check_command_optional yt-dlp   "yt-dlp"   || true
     check_command_optional rustup   "rustup"   || true
     check_command_optional cargo    "cargo"    || true
+
+    # herdr is optional and deliberately NOT auto-installed (it is a per-machine
+    # choice, not scaffolding). But WHERE it is present, its two guards are
+    # policy and must be observable: the Homebrew pin is what enforces the
+    # release cooldown, and config.toml is what keeps the two phone-home paths
+    # closed. Report both rather than assuming a past install.sh run set them.
+    if command -v herdr &>/dev/null; then
+        local herdr_ver
+        herdr_ver=$(herdr --version 2>/dev/null | awk '{print $NF}')
+        echo -e "  ${GREEN}✓${RESET} herdr (${herdr_ver:-unknown})"
+        if [[ -e "${HOMEBREW_PREFIX:-/opt/homebrew}/var/homebrew/pinned/herdr" ]]; then
+            echo -e "      ${GREEN}✓${RESET} pinned — ${HERDR_COOLDOWN_DAYS}-day release cooldown enforced"
+        else
+            echo -e "      ${YELLOW}~${RESET} not pinned — run ${CYAN}brew pin herdr${RESET} (cooldown NOT enforced)"
+        fi
+        if [[ -L "$HOME/.config/herdr/config.toml" ]]; then
+            echo -e "      ${GREEN}✓${RESET} config.toml stow-linked from the repo"
+        else
+            echo -e "      ${YELLOW}~${RESET} config.toml not stow-linked — re-run stow (phone-home may be live)"
+        fi
+    else
+        echo -e "  ${YELLOW}~${RESET} herdr — not installed (optional)"
+    fi
     echo
 
     if (( missing > 0 )); then

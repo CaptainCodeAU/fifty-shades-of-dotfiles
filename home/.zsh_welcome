@@ -328,6 +328,21 @@ _show_welcome_full() {
         echo "    bun:  ${err}Not Found${done}"
     fi
 
+    # --- herdr (the 3-day release cooldown is enforced by the Homebrew PIN) ---
+    # herdr has no native cooldown knob and ships a self-updater, so the pin IS
+    # the policy -- an unpinned herdr means a routine `brew upgrade` can adopt a
+    # same-day release. That is a lapse worth seeing, not a detail. Cheap to
+    # check: the pin is a symlink under $HOMEBREW_PREFIX, so no `brew`
+    # subprocess is needed. Silent when herdr is absent (it is optional).
+    if command -v herdr &>/dev/null; then
+        local herdr_ver=$(herdr --version 2>/dev/null | awk '{print $NF}' || echo 'N/A')
+        if [[ -e "${HOMEBREW_PREFIX:-/opt/homebrew}/var/homebrew/pinned/herdr" ]]; then
+            echo "    herdr: ${ok}${herdr_ver}${done} ${info}(pinned — cooldown enforced)${done}"
+        else
+            echo "    herdr: ${err}${herdr_ver} — NOT pinned; 'brew upgrade' would bypass the cooldown (run: brew pin herdr)${done}"
+        fi
+    fi
+
     # --- GitHub API token (read-only) ---
     # The status cache is written in the BACKGROUND by _claude_launch during
     # Claude sessions (the only place $GH_TOKEN exists). The banner only reads
