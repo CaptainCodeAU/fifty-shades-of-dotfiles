@@ -62,3 +62,14 @@ next_tab = "shift+right"
 # ctrl+v rectangle select in copy mode: no herdr equivalent.
 # shift+Enter: .tmux.conf had to reclaim it from tmux-tilit so Claude Code
 #   received newlines. herdr binds nothing to it, so no reclaim is needed.
+
+[ui.toast]
+delivery = "system"
+
+[experimental]
+switch_ascii_input_source_in_prefix = true
+pane_history = false
+
+[ui]
+agent_panel_sort = "priority"
+show_agent_labels_on_pane_borders = true
