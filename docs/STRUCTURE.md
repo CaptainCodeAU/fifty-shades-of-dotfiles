@@ -104,6 +104,7 @@ Executable commands exposed on `PATH` via `~/.local/bin`. Two kinds:
 | `pnpm-audit-hook`         | Git pre-commit/pre-push hook that blocks on supply-chain findings; wraps `pnpm-audit-tree` (see `docs/PNPM_AUDIT_PREPUSH_HOOK.md`) | direct  |
 | `nvm-verify-node`         | Verify an nvm-installed Node against official GPG-signed nodejs.org releases, bypassing mirrors (see `docs/NVM_SECURITY.md`)       | direct  |
 | `toolchain-cve-check`     | Check pnpm/nvm version floors + installed versions against live CVE advisories (see `docs/TOOLCHAIN_CVE_CHECK.md`)                 | direct  |
+| `herdr-cooldown-check`    | Enforce the 3-day release cooldown for herdr: version/age gate, brew pin, phone-home guards (see `docs/HERDR.md`)                  | direct  |
 | `git-leak-scan`           | Pre-commit scan of the staged diff for identity/secret leaks; invoked by the `_audit-chain` git-hook chainer                       | direct  |
 | `ci-watch`                | Escalating, exception-based CI-status dashboard surfaced at session start (see `docs/CI_WATCH.md`)                                 | direct  |
 | `dirdiff`                 | Directory comparison tool (Left vs Right; size / content / by-type, JSON output)                                                   | wrapper |
