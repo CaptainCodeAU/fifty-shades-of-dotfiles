@@ -87,6 +87,30 @@ Unauthenticated (`$GH_TOKEN` is used only to raise the rate ceiling).
   alert-design rule, a passive identical banner every session is exactly how an
   alert stops being read.
 
+### The self-test runs every time
+
+A guard that can only ever print OK is decoration. Rather than asking a human to
+periodically unpin the formula and eyeball the output, the checker proves its own
+detectors on every invocation, against the **same pure functions the real run
+uses** — `parse_phone_home`, `version_verdict`, `brew_pinned`:
+
+| Assertion                                                       | Guards against                     |
+| --------------------------------------------------------------- | ---------------------------------- |
+| `version_check = true` is read as enabled                       | a regex that stops matching        |
+| an **absent** key reads as unset, not false                     | silence being mistaken for consent |
+| a 1-day-old release is HELD, a 7-day-old is ELIGIBLE            | the cooldown rule inverting        |
+| a missing pin marker reads as UNPINNED, a present one as PINNED | the pin check going blind          |
+
+The pin assertions run against a synthetic Homebrew prefix in a temp directory,
+so both directions are proven without touching the real pin. Cost is
+microseconds: no network, no subprocess, no state changed.
+
+If any assertion fails the tool emits `DETECTOR BROKEN`, marks the run
+actionable, and says the checks below cannot be trusted — because a green report
+from a broken detector is worse than no report. Verified by sabotage: inverting
+the cooldown rule in a throwaway copy produced two `DETECTOR BROKEN` rows and
+exit 1.
+
 ### Exit codes
 
 | Code | Meaning                                                               |
@@ -196,6 +220,33 @@ Note also that `brew services start` without `sudo` installs a **LaunchAgent**,
 which loads in the GUI session at login. A LaunchDaemon would start earlier but is
 the wrong tool here: the server needs the user's `HOME`, `PATH`, ssh-agent and
 agent credentials.
+
+#### Hand over to launchd on an idle server, not a busy one
+
+Enabling the service while a hand-started server is already running produces a
+**respawn loop**, and nothing warns you. A second server refuses the socket:
+
+```
+$ herdr server
+error: herdr server is already running
+$ echo $?
+1
+```
+
+The formula sets `keep_alive true`, which restarts the job regardless of exit
+code — so launchd will relaunch it, it will exit 1 again, forever, throttled to
+roughly one attempt every ten seconds.
+
+The handover therefore has to happen while nothing holds the socket, and it is a
+one-time cost:
+
+```bash
+herdr server stop          # kills running panes and agents -- pick your moment
+brew services start herdr  # launchd owns it from here on
+```
+
+After that it is automatic: crash-restart via `keep_alive`, and start at console
+login. There is no way to skip the stop — the socket can only have one owner.
 
 ### Two machines: keep the versions in step
 

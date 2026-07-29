@@ -73,6 +73,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -117,8 +118,23 @@ def install_method() -> str:
     return "direct"
 
 
-def brew_pinned() -> bool | None:
-    """True/False, or None when Homebrew cannot answer (never assume unpinned)."""
+def pin_path(prefix: str | None = None) -> str:
+    """Where Homebrew records a pin. A symlink here means pinned."""
+    pre = prefix or os.environ.get("HOMEBREW_PREFIX") or "/opt/homebrew"
+    return os.path.join(pre, "var", "homebrew", "pinned", "herdr")
+
+
+def brew_pinned(prefix: str | None = None) -> bool | None:
+    """True/False, or None when the answer is genuinely unknown.
+
+    Reads the pin marker directly -- same path the welcome banner and
+    install.sh use, so all three surfaces agree and none pays for a `brew`
+    subprocess. Falls back to `brew list --pinned` only when the prefix
+    cannot be located at all.
+    """
+    pre = prefix or os.environ.get("HOMEBREW_PREFIX") or "/opt/homebrew"
+    if os.path.isdir(os.path.join(pre, "var", "homebrew")):
+        return os.path.lexists(pin_path(pre))
     if not shutil.which("brew"):
         return None
     rc, out = run(["brew", "list", "--pinned"], timeout=20)
@@ -127,19 +143,94 @@ def brew_pinned() -> bool | None:
     return "herdr" in out.split()
 
 
-def phone_home_state() -> dict[str, bool | None]:
-    """Read update.* booleans out of config.toml. None = key absent (= upstream default true)."""
+def parse_phone_home(body: str) -> dict[str, bool | None]:
+    """Pure: extract the update.* booleans from config text.
+
+    None means the key is absent, which is NOT the same as false -- the
+    upstream default is true, so silence must read as 'still enabled'.
+    """
     state: dict[str, bool | None] = {"version_check": None, "manifest_check": None}
-    try:
-        with open(CONFIG_PATH, encoding="utf-8") as fh:
-            body = fh.read()
-    except OSError:
-        return state
     for key in state:
         m = re.search(rf"^\s*{key}\s*=\s*(true|false)\s*$", body, re.M)
         if m:
             state[key] = m.group(1) == "true"
     return state
+
+
+def phone_home_state(path: str | None = None) -> dict[str, bool | None]:
+    try:
+        with open(path or CONFIG_PATH, encoding="utf-8") as fh:
+            return parse_phone_home(fh.read())
+    except OSError:
+        return parse_phone_home("")
+
+
+def version_verdict(have, want, age_days: float, gate: float) -> str:
+    """Pure: CURRENT | HELD | ELIGIBLE | UNKNOWN. The whole cooldown rule."""
+    if have is None or want is None:
+        return "UNKNOWN"
+    if have >= want:
+        return "CURRENT"
+    return "HELD" if age_days < gate else "ELIGIBLE"
+
+
+def self_test() -> list[str]:
+    """Prove the detectors still DETECT. Returns a list of failure descriptions.
+
+    WHY THIS RUNS EVERY TIME
+    ------------------------
+    A guard that can only ever print OK is decoration. The honest way to trust
+    a green result is to know the same code goes red when it should -- and the
+    only way to know that continuously is to check it continuously, rather than
+    asking a human to unpin the formula now and then and eyeball the output.
+
+    These assertions drive the SAME pure functions the real run uses
+    (`parse_phone_home`, `version_verdict`, `brew_pinned`), so a refactor that
+    breaks detection fails here instead of silently reporting all-clear
+    forever. Cost is microseconds: no network, no subprocess, no state touched.
+    """
+    fails: list[str] = []
+
+    def check(label: str, got, expected):
+        if got != expected:
+            fails.append(f"{label}: expected {expected!r}, got {got!r}")
+
+    # Phone-home detector: explicit false is the only safe state. A missing key
+    # must read as None (upstream default true), never as "fine".
+    check("phone-home reads false",
+          parse_phone_home("[update]\nversion_check = false\nmanifest_check = false\n"),
+          {"version_check": False, "manifest_check": False})
+    check("phone-home reads true",
+          parse_phone_home("[update]\nversion_check = true\nmanifest_check = true\n"),
+          {"version_check": True, "manifest_check": True})
+    check("phone-home treats absent as unset",
+          parse_phone_home("[update]\nchannel = \"stable\"\n"),
+          {"version_check": None, "manifest_check": None})
+
+    # Cooldown rule: the gate must hold a fresh release and release an aged one.
+    check("cooldown holds a fresh release",
+          version_verdict((0, 7, 0), (0, 7, 5), 1.0, 3.0), "HELD")
+    check("cooldown releases an aged one",
+          version_verdict((0, 7, 0), (0, 7, 5), 7.0, 3.0), "ELIGIBLE")
+    check("cooldown sees current as current",
+          version_verdict((0, 7, 5), (0, 7, 5), 7.0, 3.0), "CURRENT")
+    check("cooldown refuses to guess",
+          version_verdict(None, (0, 7, 5), 7.0, 3.0), "UNKNOWN")
+
+    # Pin detector: drive it against a synthetic Homebrew prefix, so we prove
+    # it goes BOTH ways without touching the real pin. This is the assertion
+    # that replaces unpinning the formula by hand and eyeballing the output.
+    with tempfile.TemporaryDirectory(prefix="herdr-selftest-") as tmp:
+        pinned_dir = os.path.join(tmp, "var", "homebrew", "pinned")
+        os.makedirs(pinned_dir, exist_ok=True)
+        check("pin detector reports UNPINNED when the marker is absent",
+              brew_pinned(prefix=tmp), False)
+        with open(os.path.join(pinned_dir, "herdr"), "w", encoding="utf-8") as fh:
+            fh.write("")
+        check("pin detector reports PINNED when the marker is present",
+              brew_pinned(prefix=tmp), True)
+
+    return fails
 
 
 def latest_release(timeout: int) -> tuple[str, datetime] | None:
@@ -189,11 +280,19 @@ def main() -> int:
     rows: list[tuple[str, str, str]] = []
     actionable = False
 
+    # Self-test FIRST. If the detectors no longer detect, every line below is
+    # worthless and a green report would be a lie -- so say so loudly instead.
+    broken = self_test()
+    report["self_test"] = "pass" if not broken else broken
+    for failure in broken:
+        actionable = True
+        rows.append(("self-test", ACTION,
+                     f"DETECTOR BROKEN — {failure} — the checks below cannot be trusted"))
+
     if method == "absent":
         rows.append(("version", SKIP, "herdr is not installed — nothing to gate"))
-        report["subjects"] = [{"subject": "version", "state": SKIP}]
         emit(args, rows, report)
-        return 0
+        return 1 if actionable else 0
 
     rel = latest_release(args.timeout)
     if rel is None:
@@ -206,14 +305,17 @@ def main() -> int:
         report["latest_published"] = published.isoformat()
         report["latest_age_days"] = round(age_days, 2)
 
+        verdict = version_verdict(have, want, age_days, args.cooldown_days)
+        report["verdict"] = verdict
+
         if want is None:
             rows.append(("version", SKIP, f"could not parse upstream tag {tag!r}"))
         elif have is None:
             rows.append(("version", SKIP, f"could not parse `herdr --version` ({raw!r})"))
-        elif have >= want:
+        elif verdict == "CURRENT":
             rows.append(("version", CLEAN,
                          f"installed {'.'.join(map(str, have))} is current ({tag})"))
-        elif age_days < args.cooldown_days:
+        elif verdict == "HELD":
             left = args.cooldown_days - age_days
             rows.append(("cooldown", CLEAN,
                          f"{tag} HELD by cooldown — {left:.1f}d of "
