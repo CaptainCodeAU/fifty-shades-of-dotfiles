@@ -94,6 +94,17 @@ next_tab = "shift+right"
 # route through the clipboard -- the native accessibility hotkey reads the raw
 # screen and will happily pronounce the pane borders and prompt decoration.
 
+# TWO keys per action, which built-in actions cannot do but custom commands can.
+# prefix+a always works. f9 is one keystroke instead of two, but this Mac has
+# com.apple.keyboard.fnState unset, so the function row sends media keys and f9
+# needs Fn held -- unless "Use F1, F2, etc. as standard function keys" is turned
+# on in System Settings > Keyboard. Both are bound so neither choice is forced.
+
+[[keys.command]]
+key = "prefix+a"
+type = "shell"
+command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\"'"
+
 [[keys.command]]
 key = "f9"
 type = "shell"
@@ -102,6 +113,11 @@ command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\"'"
 # Long clipboard, wrong clipboard, or simply changed your mind. `say` runs
 # detached, so without this there is no way to shut it up short of closing
 # things.
+[[keys.command]]
+key = "prefix+shift+a"
+type = "shell"
+command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --stop'"
+
 [[keys.command]]
 key = "f10"
 type = "shell"
