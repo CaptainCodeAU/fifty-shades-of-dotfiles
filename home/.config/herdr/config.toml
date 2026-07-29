@@ -2,3 +2,63 @@
 version_check = false
 manifest_check = false
 channel = "stable"
+
+# =============================================================================
+#  Keybindings - ported from home/.tmux.conf
+# =============================================================================
+# tmux is no longer launched (2026-07-29) but its config is kept on disk as a
+# retreat path. These bindings carry the muscle memory across.
+#
+# ONE BINDING PER ACTION. tmux allowed several keys for the same command
+# (splits were bound four ways: | Right % h). herdr takes a single string per
+# action, so each of those collapsed to the one that was actually used.
+#
+# Everything NOT listed here already matched tmux by default and is therefore
+# left alone: new_tab prefix+c, switch_tab prefix+1..9, zoom prefix+z,
+# close_pane prefix+x, copy_mode prefix+[, focus_pane_* prefix+h/j/k/l,
+# split_horizontal prefix+minus. Copy mode is already vi-style (v selects,
+# y copies, q/Esc leaves), matching the mode-keys vi setup in .tmux.conf.
+
+[keys]
+# Prefix: ctrl+Space, as in tmux (`unbind C-b; set -g prefix C-Space`).
+# Side benefit: it frees ctrl+b, which herdr otherwise consumes as the prefix,
+# for its normal copy-mode page-up.
+prefix = "ctrl+space"
+
+# Splits. tmux bound the right-hand split to | Right % and h; | was the one in
+# use ("Option 1: Pipe and Dash (most popular)"). The bottom split keeps minus,
+# which is already herdr's default, so both halves of the pair survive intact.
+# Note herdr's naming is the opposite of tmux's flag: split_vertical makes the
+# vertical divider, i.e. a pane on the RIGHT, same as tmux `split-window -h`.
+split_vertical = "prefix+|"
+split_horizontal = "prefix+minus"
+
+# Detach. tmux used prefix+d; herdr ships prefix+q.
+detach = "prefix+d"
+
+# Config reload on prefix+r, as in tmux (`bind r source-file ...`). herdr ships
+# r as resize_mode and shift+r as reload; those are swapped here because there
+# is no tmux resize muscle memory to preserve (tmux-tilit owned Alt+Arrow for
+# resizing and .tmux.conf reclaimed those keys for pane switching instead).
+reload_config = "prefix+r"
+resize_mode = "prefix+shift+r"
+
+# Tab switching without the prefix, matching tmux's `bind -n S-Left/S-Right`.
+# This replaces herdr's prefix+p / prefix+n rather than adding to it.
+previous_tab = "shift+left"
+next_tab = "shift+right"
+
+# --- Deliberately NOT ported ---
+# Alt+Arrow pane switching (`bind -n M-Left/M-Right/...`): herdr accepts
+#   alt+left etc, but focus_pane_* takes ONE key, so binding the arrows would
+#   remove prefix+h/j/k/l. The vim keys won on grounds of matching the tmux
+#   j/k/l bindings that were already there. To swap, replace the four
+#   focus_pane_* defaults with alt+left / alt+down / alt+up / alt+right.
+# prefix+b break-pane: no herdr equivalent. b stays toggle_sidebar.
+# prefix+h split-right: a .tmux.conf accident (line 77 silently overrode the
+#   select-pane -L on line 31). herdr keeps h as focus-pane-left, which is what
+#   the tmux config originally intended.
+# M-H / M-L tab switching: superseded by shift+left / shift+right above.
+# ctrl+v rectangle select in copy mode: no herdr equivalent.
+# shift+Enter: .tmux.conf had to reclaim it from tmux-tilit so Claude Code
+#   received newlines. herdr binds nothing to it, so no reclaim is needed.

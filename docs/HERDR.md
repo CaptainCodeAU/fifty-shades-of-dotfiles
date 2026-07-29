@@ -240,9 +240,26 @@ Measured against this repo's `home/.tmux.conf` and `home/.zsh_cursor_functions`:
 - **The `client-attached` hook** that broadcasts `source ~/.cache/cursor_env.zsh`
   to every pane (`.tmux.conf`, Cursor/VSCode env sync). Bespoke; would need
   re-solving. The `tmux()` wrapper in `.zsh_cursor_functions` goes dead with it.
-- **Unverified:** `.tmux.conf` reclaims `S-Enter` so Claude Code receives newlines
-  rather than a plugin action. Whether herdr binds `S-Enter` was not confirmed —
-  test it early, it would bite daily.
+- **`shift+Enter` — resolved, no action needed.** `.tmux.conf` had to reclaim it
+  from tmux-tilit so Claude Code received newlines. herdr's default keymap binds
+  nothing to it, so no reclaim is required.
+- **Copy mode — already equivalent.** herdr's copy mode is vi-style out of the
+  box (`v` selects, `y` copies, `q`/Esc leaves), matching the `mode-keys vi`
+  setup in `.tmux.conf`. Only `ctrl+v` rectangle-select has no counterpart.
+
+### The ported keymap
+
+`home/.config/herdr/config.toml` carries the tmux muscle memory across: the
+`ctrl+Space` prefix, `prefix+|` / `prefix+minus` splits, `prefix+d` to detach,
+`prefix+r` to reload config, and prefix-free `shift+left` / `shift+right` for
+tabs. Everything else already matched tmux by default.
+
+The one structural difference: **herdr takes a single key per action**, where
+tmux allowed several. `.tmux.conf` bound the right-hand split four ways
+(`|`, `Right`, `%`, `h`); only one survives. The same constraint means
+Alt+Arrow pane switching and `prefix+h/j/k/l` cannot both exist — the config
+keeps the vim keys and documents the swap. Validate any change with
+`herdr config check`.
 
 **Recommendation: do not nest them, and do not delete tmux either.** Stop
 launching tmux and drive herdr for a couple of weeks instead. The tmux config
