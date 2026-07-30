@@ -90,7 +90,28 @@ caveats surfaced live and are worth knowing before promoting it:
 - **Bash writes are limited to CWD + session temp**, which blocked PAI's `~/.claude/MEMORY`
   bookkeeping; a narrow `filesystem.allowWrite: ["~/.claude/MEMORY"]` restores it.
 
-## 4. 2026 CVEs -- all patched below the installed v2.1.191 [official]
+## 4. CVEs -- all patched well below the installed v2.1.220 [verified]
+
+**Re-checked live against OSV on 2026-07-30** (previously asserted against v2.1.191
+without a re-check): the npm package `@anthropic-ai/claude-code` has **28** recorded
+advisories, **every one of them has a fixed version**, and the **highest fix is 2.1.163**.
+An OSV version query for both 2.1.191 and 2.1.220 returns **zero** affecting advisories, so
+the installed host clears the newest fix by ~57 releases. Reproduce:
+
+```bash
+curl -s -X POST https://api.osv.dev/v1/query -H 'Content-Type: application/json' \
+  -d '{"version":"2.1.220","package":{"name":"@anthropic-ai/claude-code","ecosystem":"npm"}}'
+# -> {} (no "vulns" key) means nothing affects that version
+```
+
+The table below is a **selection of the notable ones, not the full 28** -- it exists to
+show the attack _shapes_ worth understanding, not as a registry. OSV is the authority for
+the complete list. The two newest high-severity ones (both fixed in 2.1.163, after this
+doc's original 2026-06-25 investigation) are worth knowing because they land squarely on
+this repo's habits: **GHSA-7835-87q9-rgvv** -- sandbox escape via _git worktree path
+confusion_, relevant given the worktree-based agent isolation used here; and
+**GHSA-fg94-h982-f3mm** -- out-of-band data exfiltration via a _pre-approved HuggingFace
+domain in WebFetch_, i.e. an allowlisted domain being the exfil channel.
 
 The host is past every patched version below; this is a "stay current" lesson, not a
 current exposure:
@@ -115,6 +136,7 @@ current (the protected-paths guard in section 2 is what neutered the malicious-h
 - Auto mode: <https://www.anthropic.com/engineering/claude-code-auto-mode>
 - Issue #41615 (allow-rules / PreToolUse hooks cannot override the protected-path prompt): <https://github.com/anthropics/claude-code/issues/41615>
 - CVEs: GHSA-jh7p-qr78-84p7 (CVE-2026-21852); NVD CVE-2026-25723; GHSA-66q4-vfjg-2qhh (CVE-2026-25722); Check Point Research (CVE-2025-59536); SentinelOne (CVE-2026-39861)
+- **Authoritative, complete advisory list** (28 as of 2026-07-30) — OSV for the npm package: <https://osv.dev/list?ecosystem=npm&q=%40anthropic-ai%2Fclaude-code>. Query a specific version via the POST example in section 4; that is the check to re-run rather than trusting this doc's table.
 - Full investigation report (local): `~/.claude/MEMORY/WORK/20260625-110731_claude-code-updates-investigation/PRD.md`
 
 ---
