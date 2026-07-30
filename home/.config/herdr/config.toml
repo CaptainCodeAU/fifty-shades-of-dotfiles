@@ -139,5 +139,5 @@ agent_panel_sort = "priority"
 show_agent_labels_on_pane_borders = true
 
 [theme]
-name = "catppuccin"
+name = "terminal"
 auto_switch = false
