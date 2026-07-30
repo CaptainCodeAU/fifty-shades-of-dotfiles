@@ -1,7 +1,7 @@
 # Zed Preview — Changelog Tracker
 
-<!-- ZED_PREVIEW_DOC_VERSION: 1.12.0 -->
-<!-- LAST_UPDATED: 2026-07-16 -->
+<!-- ZED_PREVIEW_DOC_VERSION: 1.14.1 -->
+<!-- LAST_UPDATED: 2026-07-30 -->
 
 > **What this is.** A living record of notable **Zed Preview** changes, filtered to
 > what Gavin cares about: **user interface**, **configuration / settings**, and
@@ -25,10 +25,10 @@
 
 | Field                  | Value         |
 | ---------------------- | ------------- |
-| Latest Preview tracked | **1.12.0**    |
-| Release date           | 2026-07-15    |
-| GitHub tag             | `v1.12.0-pre` |
-| Doc last refreshed     | 2026-07-16    |
+| Latest Preview tracked | **1.14.1**    |
+| Release date           | 2026-07-29    |
+| GitHub tag             | `v1.14.1-pre` |
+| Doc last refreshed     | 2026-07-30    |
 
 ---
 
@@ -69,6 +69,146 @@ when it visibly affects the above or Gavin's known setup.
 ---
 
 ## Release log (newest first)
+
+### 1.14.1 — 2026-07-29
+
+**Theme / appearance**
+
+- **No theme, syntax, font, or visual-styling changes this cycle.** The only font-adjacent
+  movement is two new Agent-Panel font keys (below). The per-project-theme front stays silent
+  across all three releases in this refresh — PR #58755 is still unmerged (see watch-items).
+  - _In plain English:_ no colour or theme movement again, and your colour-per-window goal
+    still hangs entirely on that one unmerged pull request.
+
+**Configuration**
+
+- **BREAKING: the default `base_keymap` changed from `VSCode` to `Zed`.** The inline assistant
+  moves to `cmd-i` (macOS) / `ctrl-i`, and `f5` starts the debugger. **You are unaffected** —
+  `home/.config/zed/settings.json` pins `"base_keymap": "VSCode"` explicitly.
+  - _In plain English:_ Zed changed the default shortcut set for anyone who never picked one;
+    you picked, so nothing moves for you.
+- New `agent_ui_font_family` and `agent_buffer_font_family` — set the Agent Panel's UI and
+  buffer fonts independently of the editor.
+- New `agent.compaction_model` — choose which model performs context compaction.
+  - _In plain English:_ the AI panel can now have its own fonts, and you can hand the
+    conversation-summarising job to a cheaper model.
+
+**UI**
+
+- **Git Panel: new "Skip Hooks" toggle in the commit-button menu — it skips `pre-commit` AND
+  `commit-msg` hooks.** Treat this as a footgun in your setup: committing from Zed's Git Panel
+  with it on bypasses `git-leak-scan` (the staged-diff identity/secret gate) and the
+  `_audit-chain` `commit-msg` trailer stamping. Leave it off; terminal commits are unaffected.
+  - _In plain English:_ Zed added a one-click way to commit while skipping your safety checks —
+    do not use it, or a secret could slip through unscanned.
+- **Git Panel:** the deleted-file context menu and confirmation prompt now say "Restore File"
+  instead of the misleading "Discard Changes".
+- **Project Panel:** file operations (create / rename / move / delete) are now undoable and
+  redoable.
+- **Markdown preview:** a link to another Markdown file opens a preview scrolled to the linked
+  heading; `alt`-click opens the raw source instead.
+- **Read-only tabs:** tooltips and context menu now say "Tab" rather than "File".
+- **Agent Panel:** reasoning-effort selector for Anthropic-compatible providers that support
+  adaptive thinking.
+  - _In plain English:_ clearer git wording, undo for file operations, smarter Markdown-preview
+    links, and a thinking-effort dial in the AI panel.
+
+**Fixes Gavin may feel**
+
+- **Git Panel going stale** after heavy filesystem activity made the file watcher lose events —
+  relevant given how much `install.sh` and stow churn this repo sees.
+- Fixed: crash when copying/pasting with multiple cursors; input lag in large files; the cursor
+  jumping to end-of-file when a language server formatted with CRLF; **wide Mermaid diagrams
+  squashed in Markdown preview**; workspace-relative links with line/column suffixes rendering
+  wrong; terminal processes surviving a closed terminal; keybindings swallowed by the git
+  repository selector.
+  - _In plain English:_ a stale git panel and a multi-cursor paste crash are both fixed, and
+    wide Mermaid diagrams render at full width again.
+
+> **There is no 1.14.0 preview.** The preview channel jumps 1.13.1 → 1.14.1; zed.dev serves no
+> `preview/1.14.0` page (checked 2026-07-30). Nothing was missed in this refresh.
+
+### 1.13.1 — 2026-07-27
+
+**Theme / appearance**
+
+- _No theme, syntax-colour, icon-theme, font, or visual-styling changes this cycle._
+
+**Configuration**
+
+- _No new, changed, or removed settings keys this cycle._
+
+**UI**
+
+- _No UI changes this cycle_ — a patch release only.
+  - _In plain English:_ a small bug-fix release that changed nothing you can see or configure.
+
+**Additions / fixes Gavin may feel**
+
+- **Claude Opus 5 support added** for the Anthropic and Amazon Bedrock BYOK providers — the
+  model you run Claude Code on is now selectable inside Zed's own agent panel.
+- Fixed: project search returning hits from nested repositories that the containing repo
+  excludes via `.git/info/exclude`; project settings failing to re-enable language servers;
+  hover documentation rendering with too many line breaks.
+  - _In plain English:_ Zed's built-in AI can now use Opus 5, and project search stops
+    returning results from nested repos you excluded.
+
+### 1.13.0 — 2026-07-23
+
+**Theme / appearance**
+
+- **New themeable `variable.parameter` syntax colour** — the first new theme colour slot in
+  several cycles.
+- Fixed: incorrect rainbow-bracket highlighting in some cases (a correctness follow-up to
+  1.11.0's bracket-colorization work); static images ignoring EXIF orientation (JPEGs
+  previewing rotated); Markdown emphasis delimiters dropped when joining lines.
+  - _In plain English:_ themes gained one new colour slot, and the bracket-colour feature from
+    two releases ago got a fix.
+
+**Configuration**
+
+- New `title_bar.show_worktree_name` (default `true`) — set `false` to hide the worktree-name
+  picker in the title bar. Worth noting for your per-project-identity goal: the title bar is
+  now growing real settings, though this one is visibility only — colour still lives in
+  `theme_overrides.title_bar.background`, which remains user-level, not per-project.
+- `file_finder::Toggle` keybindings now accept an `"include_ignored": true` argument.
+- Removed: three deprecated Mistral models; Fast Mode deprecated for Opus 4.6 / 4.7.
+  - _In plain English:_ you can hide the folder name in the title bar, and the file finder can
+    be told to include ignored files.
+
+**UI**
+
+- **BREAKING keybinding: `cmd-alt-f` (macOS) now opens the Text Finder** instead of the
+  replace / filter toggles. Safe for you — your `keymap.json` only claims `cmd-alt-b`,
+  `cmd-alt-g`, and `cmd-alt-u`, so none of your `md-hardbreak` bindings are displaced.
+- **Text Finder:** seeds its query from the focused item's selection (including the terminal)
+  and gained default bindings (`cmd-alt-f` / `ctrl-alt-f`).
+- **Git Panel:** better branch-picker filtering and grouping, branch-creation suggestions, and
+  remote-provider icons; History entries stay highlighted while their context menu is open;
+  solo diffs show the full file by default while keeping change indicators in the scrollbar.
+- **Editor:** runnable gutter controls show run statuses (with a "Clear Run Status" menu item);
+  buffer-symbols picker gained a preview pane; image-viewer zoom is editable from the toolbar.
+- **Markdown preview:** hovering a link shows its destination bottom-left; relative links like
+  `src/main.rs#L42` open at the referenced line (also in Agent responses).
+  - _In plain English:_ one Mac shortcut changed meaning (harmless for you), search now picks up
+    whatever you had selected, and the git branch picker is much easier to sift.
+
+**Fixes Gavin may feel**
+
+- **`commit-msg` hooks were being silently skipped — now fixed.** Load-bearing here: your
+  `_audit-chain` chainer stamps the `C-*` attribution trailers from a `commit-msg` hook, so any
+  commit you made through Zed's Git Panel before 1.13.0 could have landed without them
+  (terminal commits were never affected).
+- **Staging could corrupt the index with repeated diff lines**, staging/unstaging could apply to
+  the wrong hunks, and partially-staged diff stats were wrong — all fixed. Also fixed: GPG
+  signing prompting for the passphrase on every commit; ahead/behind counts not refreshing
+  after a fetch; changes not reappearing after an uncommit.
+- Fixed: the Zed window shrinking to the built-in display height after a screen lock on
+  multi-monitor macOS; selection boxes not rendering with the cursor offscreen; multibuffer
+  header clipping and text overlap in transparent themes; right-click menus intermittently
+  failing at certain scroll positions; cursors blinking in unfocused editors.
+  - _In plain English:_ the important one is that Zed's commit button was skipping git hooks —
+    so commits made that way may be missing your attribution trailers, and it is now repaired.
 
 ### 1.12.0 — 2026-07-15
 
@@ -280,11 +420,12 @@ when it visibly affects the above or Gavin's known setup.
 
 ## Standing watch-items (open threads)
 
-| Item                               | Status as of 2026-07-16                | Why it matters                |
+| Item                               | Status as of 2026-07-30                | Why it matters                |
 | ---------------------------------- | -------------------------------------- | ----------------------------- |
-| Per-project themes (zed#13300)     | **Open PR #58755** — not merged/1.12.0 | Gavin's color-per-window goal |
+| Per-project themes (zed#13300)     | **Open PR #58755** — not merged/1.14.1 | Gavin's color-per-window goal |
 | `theme_overrides` at project level | Still user-settings only               | PR #58755 sidesteps it (DB)   |
-| `detect_venv` default              | Still on by default                    | direnv double-activation      |
+| `detect_venv` default              | Still on by default (yours pins `off`) | direnv double-activation      |
+| Title-bar settings surface         | New `title_bar.show_worktree_name`     | Visibility only, not colour   |
 
 **PR #58755 "Add per-window theme overrides"** (author 42piratas; opened 2026-06-06;
 open / not merged / not draft; last activity 2026-06-29; base `main`; no milestone;
@@ -296,6 +437,12 @@ config. If merged, it obsoletes the `--user-data-dir` workaround. Gavin is on re
 backing this on accessibility grounds in **discussion #24010** (comment 17160732,
 2026-06-03). It's not the `title_bar.background` approach he proposed, but it meets the
 core goal. Watch for merge.
+
+**Re-checked 2026-07-30** (live, via the session-start PR poll): still open, still not merged,
+no new activity since 2026-06-29. None of 1.13.0, 1.13.1, or 1.14.1 shipped any per-window or
+per-project theme capability — 1.13.0's new `title_bar.show_worktree_name` is the only title-bar
+setting to appear, and it controls visibility, not colour. The `zed --user-data-dir` workaround
+remains the only route to a colour-per-window setup.
 
 When refreshing this doc, re-check each row against the new release.
 
