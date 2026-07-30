@@ -189,7 +189,7 @@ Subclasses override only the steps they need:
 
 ## File structure
 
-```
+```text
 .claude/hooks/
   session-checks.sh       # SessionStart — git status + .env encryption check
   zed-version-check.sh    # SessionStart — nudge to refresh the Zed Preview changelog doc
@@ -246,6 +246,14 @@ Runs on `SessionStart` (`startup|resume`). Read-only Zed Preview changelog fresh
 ### toolchain-cve-check.sh
 
 Runs on `SessionStart` (`startup|resume`). Read-only CVE check of the pinned pnpm/nvm version floors (`PNPM_MIN_VERSION`, `NVM_MIN_VERSION`, read from `install.sh`) and the installed pnpm/nvm versions, via the standalone `toolchain-cve-check` tool (pnpm through OSV, nvm through GitHub's nvm-repo advisories — the latter needs `$GH_TOKEN`, so it skips gracefully without one). 6h-cached; prints a one-line all-clear or, on exposure, the offending version + advisory + a bump nudge. Never blocks; always exits 0. See [`docs/TOOLCHAIN_CVE_CHECK.md`](../../docs/TOOLCHAIN_CVE_CHECK.md).
+
+### ci-watch.sh
+
+Runs on `SessionStart`, read-only. Thin wrapper: locates the `ci-watch` engine and runs its session render for the welcome dashboard. Read-only against your repos, queries `gh` live and falls back to a per-target cache when offline. A red that stays red **escalates**, and it cannot be dismissed by being seen — only by CI going green or a deliberate `ci-watch --snooze`. **Wired in `~/.claude/settings.json` (user level), not this project's `settings.json`**, so it runs in every project; look there if it seems to have stopped. See [`docs/CI_WATCH.md`](../../docs/CI_WATCH.md).
+
+### herdr-cooldown-check.sh
+
+Runs on `SessionStart`, read-only. Reports whether a herdr upgrade is eligible under the 3-day release cooldown, and whether the guards that enforce it are still in place. herdr is the one tool in this estate that can move on its own: it ships a self-updater plus two default-on background calls to `herdr.dev` (`update.version_check`, and `update.manifest_check`, which reloads remote agent-detection manifests into the _running_ server). Wired in this project's `settings.json`. See [`docs/HERDR.md`](../../docs/HERDR.md).
 
 ### pre-commit-check.sh
 
@@ -308,6 +316,10 @@ Runs on `PreToolUse` for `Bash` tools. Blocks `builtin` with non-builtins (from 
 
 Blocked commands are logged to `security.log`.
 
+### enforce-gh-ssh-only.sh
+
+Runs on `PreToolUse` for `Bash`. Blocks `gh auth login`, `gh auth setup-git` and `gh auth refresh` — each re-adds HTTPS credential helpers to `~/.gitconfig` and undermines the SSH-only GitHub auth model. Mirrors the interactive `gh()` wrapper in `.zshrc`, which does **not** apply to the non-interactive Bash tool, hence the hook. Wired in both this project's and the user-level `settings.json`.
+
 ### protect-files.sh
 
 Runs on `PreToolUse` for `Edit|Write` tools. Reads the stdin JSON and blocks edits to protected files via `hookSpecificOutput` JSON (`permissionDecision: "deny"`):
@@ -366,7 +378,7 @@ Both `validate-bash.sh` and `protect-files.sh` append a timestamped entry to `.c
 
 Format:
 
-```
+```text
 [2026-02-18T14:30:22Z] BLOCKED validate-bash "Force push to main/master" "git push --force main"
 [2026-02-18T14:31:05Z] BLOCKED protect-files "Secrets file" ".env.local"
 ```

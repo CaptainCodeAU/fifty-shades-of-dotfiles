@@ -156,11 +156,37 @@ Documentation and reference materials.
 | `SECURITY.md`                      | Strict SSH posture rationale, alternative postures table, and drift-check commands                                                                                                            |
 | `MEMENTO_vscode_machine_colors.md` | Complete guide for VSCode/Cursor machine-specific color setup                                                                                                                                 |
 | `ZED_MARKDOWN_FORMATTING.md`       | md-hardbreak: hard breaks / paragraph gaps / strip, Zed tasks + key bindings, and the rationale                                                                                               |
+| `ZED_PREVIEW_CHANGELOG.md`         | Living record of Zed Preview UI / configuration / theme changes, plus the standing watch-items; refreshed via the SessionStart version check                                                  |
+| `CLAUDE_CODE_SECURITY.md`          | Claude Code's own security surface — sandbox, permission modes, CVEs. Scope-stamped to a dated investigation; treat the version as history, not a currency claim                              |
+| `CLAUDE_CODE_AND_PAI_INTERNALS.md` | How `~/.claude/` is actually organised: the three-system model, project-path encoding, and the migration hazards when a repo moves                                                            |
+| `CLAUDE_CODE_RESEARCH_NOTES.md`    | Living notes on researched Claude Code behaviour and mechanics (hook loading, permission modes, interactive quirks)                                                                           |
+| `GH_AUTH_GUARD_USER_LEVEL.md`      | GitHub API read-only token plus the `gh` auth guard, user-level install                                                                                                                       |
+| `NVM_SECURITY.md`                  | nvm / Node.js hardening: mirror pin, version floor, EOL policy, and GPG signature verification                                                                                                |
+| `TOOLCHAIN_CVE_CHECK.md`           | `toolchain-cve-check`: are the pinned floors and the installed versions CVE-exposed? Cites historically vulnerable pins on purpose as negative controls                                       |
+| `PNPM_SETUP_GUIDE.md`              | pnpm setup: where pnpm reads config from, the kebab-case silent-failure trap, macOS vs XDG paths                                                                                              |
+| `PNPM_AUDIT_TREE.md`               | `pnpm-audit-tree`: recursive supply-chain auditor for pnpm / JS project trees                                                                                                                 |
+| `PNPM_AUDIT_PREPUSH_HOOK.md`       | The global, opt-in pnpm-audit pre-push git hook                                                                                                                                               |
+| `CI_WATCH.md`                      | `ci-watch`: the escalating, dismiss-only-by-fixing CI status line in the session dashboard                                                                                                    |
+| `HERDR.md`                         | herdr: the 3-day release cooldown, daemon persistence, speak-selection bindings, and the tmux comparison                                                                                      |
 | `comms/`                           | Dated outbound notes to peer agent projects (CONVENTION.md spec v1.15; read on-demand only — see `comms/README.md` for the index; contents are NOT enumerated here by design)                 |
 | `reference/colors.md`              | Color palette reference                                                                                                                                                                       |
 | `reference/mermaid_examples.md`    | Mermaid diagram examples                                                                                                                                                                      |
 | `reference/tmux_cheatsheet.md`     | Tmux quick reference guide                                                                                                                                                                    |
+| `reference/pai_memory_system.md`   | How Claude remembers across conversations, projects and sessions — the memory and persistence mechanisms, written as a read-at-leisure explainer                                              |
 | `reference/windows/`               | Historical Windows batch scripts (reference only, not for deployment)                                                                                                                         |
+
+**Hook documentation lives outside `docs/`** — two files, and knowing which is which matters:
+
+- [`.claude/hooks/README.md`](../.claude/hooks/README.md) — the **living inventory**. One
+  section per shell hook, and the doc the root README links to. Keep this one current.
+- [`.claude/docs/HOOKS_ARCHITECTURE.md`](../.claude/docs/HOOKS_ARCHITECTURE.md) — the
+  original deep architecture reference (TypeScript handler design, event flow). Much
+  larger, but last substantively updated 2026-02 and it covers only a subset of the
+  current hooks; read it for architecture, not for what is installed.
+
+**Files prefixed `_` are deliberately untracked** (`_CODE_FOLDER_STRUCTURE.md`,
+`_MLBOX_SEALED_DAY_TO_DAY.md`) — they carry real usernames or host detail. They are
+intentionally absent from the table above; do not "fix" that by indexing them.
 
 #### `docs/reference/windows/`
 
