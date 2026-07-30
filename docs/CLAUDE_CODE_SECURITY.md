@@ -108,10 +108,15 @@ The table below is a **selection of the notable ones, not the full 28** -- it ex
 show the attack _shapes_ worth understanding, not as a registry. OSV is the authority for
 the complete list. The two newest high-severity ones (both fixed in 2.1.163, after this
 doc's original 2026-06-25 investigation) are worth knowing because they land squarely on
-this repo's habits: **GHSA-7835-87q9-rgvv** -- sandbox escape via _git worktree path
-confusion_, relevant given the worktree-based agent isolation used here; and
-**GHSA-fg94-h982-f3mm** -- out-of-band data exfiltration via a _pre-approved HuggingFace
-domain in WebFetch_, i.e. an allowlisted domain being the exfil channel.
+this repo's habits: **GHSA-7835-87q9-rgvv / CVE-2026-55607** (HIGH) -- sandbox escape via
+_git worktree path confusion_, relevant given the worktree-based agent isolation used
+here; and **GHSA-fg94-h982-f3mm / CVE-2026-54316** (MODERATE) -- out-of-band data
+exfiltration via a _pre-approved HuggingFace domain in WebFetch_, i.e. an allowlisted
+domain being the exfil channel.
+
+Since 2026-07-30 this is no longer a manual check: `toolchain-cve-check` queries the
+installed Claude Code version against OSV at every session start, alongside the pnpm and
+nvm floors. See [`TOOLCHAIN_CVE_CHECK.md`](TOOLCHAIN_CVE_CHECK.md).
 
 The host is past every patched version below; this is a "stay current" lesson, not a
 current exposure:

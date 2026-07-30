@@ -245,7 +245,7 @@ Runs on `SessionStart` (`startup|resume`). Read-only Zed Preview changelog fresh
 
 ### toolchain-cve-check.sh
 
-Runs on `SessionStart` (`startup|resume`). Read-only CVE check of the pinned pnpm/nvm version floors (`PNPM_MIN_VERSION`, `NVM_MIN_VERSION`, read from `install.sh`) and the installed pnpm/nvm versions, via the standalone `toolchain-cve-check` tool (pnpm through OSV, nvm through GitHub's nvm-repo advisories — the latter needs `$GH_TOKEN`, so it skips gracefully without one). 6h-cached; prints a one-line all-clear or, on exposure, the offending version + advisory + a bump nudge. Never blocks; always exits 0. See [`docs/TOOLCHAIN_CVE_CHECK.md`](../../docs/TOOLCHAIN_CVE_CHECK.md).
+Runs on `SessionStart` (`startup|resume`). Read-only CVE check of the pinned pnpm/nvm version floors (`PNPM_MIN_VERSION`, `NVM_MIN_VERSION`, read from `install.sh`), the installed pnpm/nvm versions, **and the installed Claude Code version** (added 2026-07-30), via the standalone `toolchain-cve-check` tool (pnpm and Claude Code through OSV, nvm through GitHub's nvm-repo advisories — the latter needs `$GH_TOKEN`, so it skips gracefully without one). Claude Code has no floor to check, so only the installed version is examined, and an exposure there nudges `claude update` rather than a floor bump. 6h-cached; prints a one-line all-clear or, on exposure, the offending version + advisory + the right remediation. Never blocks; always exits 0. See [`docs/TOOLCHAIN_CVE_CHECK.md`](../../docs/TOOLCHAIN_CVE_CHECK.md).
 
 ### ci-watch.sh
 

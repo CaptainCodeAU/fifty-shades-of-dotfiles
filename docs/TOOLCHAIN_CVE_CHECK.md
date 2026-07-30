@@ -3,7 +3,9 @@
 A read-only monitor that answers one question on a schedule: **is a version we
 depend on sitting inside a published vulnerable range right now?** It watches both
 the security _floors_ this repo pins (`PNPM_MIN_VERSION`, `NVM_MIN_VERSION`) and the
-pnpm/nvm versions _actually installed_ on the machine.
+pnpm/nvm versions _actually installed_ on the machine — plus, since 2026-07-30, the
+installed **Claude Code** version, which is not pinned at all but is the most privileged
+tool here.
 
 ## Why it exists
 
@@ -37,7 +39,7 @@ This is the crux of the design, and it was verified against the live APIs, not a
   by exact version, **unauthenticated, from any shell**. OSV performs the semver-range
   match server-side, so there is **no client-side range parser** for pnpm.
 
-  ```
+  ```text
   POST https://api.osv.dev/v1/query
   {"package":{"name":"pnpm","ecosystem":"npm"},"version":"11.7.0"}  ->  GHSA-qrv3-253h-g69c
   {"package":{"name":"pnpm","ecosystem":"npm"},"version":"11.9.0"}  ->  (clean)
@@ -47,7 +49,7 @@ This is the crux of the design, and it was verified against the live APIs, not a
   OSV and from GitHub's _global_ advisory database**. They live **only** at the repo
   endpoint, which requires `gh` + a token:
 
-  ```
+  ```text
   gh api repos/nvm-sh/nvm/security-advisories
   ```
 
@@ -73,8 +75,9 @@ This is the crux of the design, and it was verified against the live APIs, not a
    dependencies, run via `uv`). Run it anytime:
 
    ```bash
-   toolchain-cve-check                       # uses $PNPM_MIN_VERSION / $NVM_MIN_VERSION
+   toolchain-cve-check                       # floors from env + installed pnpm/nvm/claude
    toolchain-cve-check --pnpm-floor 11.7.0    # ad-hoc: prove a version is exposed
+   toolchain-cve-check --claude-version 2.1.100  # ditto for Claude Code
    toolchain-cve-check --quiet                # only print exposures + a summary (hooks)
    toolchain-cve-check --json                 # machine-readable
    ```
@@ -107,8 +110,19 @@ toolchain-cve-check --nvm-floor 0.40.3    # -> nvm floor EXPOSED: CVE-2026-10796
 
 ## Scope (and deliberate non-scope)
 
-- **In scope:** the `pnpm` and `nvm` floors + their installed versions. These are the
-  only two version floors the repo pins.
+- **In scope:** the `pnpm` and `nvm` floors + their installed versions (the only two
+  version floors the repo pins), **plus the installed Claude Code version** (added
+  2026-07-30).
+- **Claude Code is checked differently, and deliberately so.** It ships as the npm package
+  `@anthropic-ai/claude-code`, so OSV covers it exactly like pnpm — but nothing _pins_ it,
+  so there is no floor to check and only the installed version is examined. It earns a
+  slot because it is the most privileged tool in the estate: 28 recorded advisories as of
+  2026-07-30, several of them sandbox escapes. Before this, the daily monitor watched two
+  package managers while the agent with filesystem and shell access was checked only when
+  somebody thought to look. Remediation also differs — there is no floor to bump, so an
+  exposure says `claude update`, and the tool prints that instead of the floor advice.
+  Ad-hoc: `toolchain-cve-check --claude-version 2.1.100` (a known-exposed version, useful
+  as a negative control).
 - **Out of scope, on purpose:**
   - `NODE_MIN_MAJOR` — an end-of-life _major_ guard, not a single CVE-pinnable version.
   - Hard-coded version pins inside docs/README (e.g. an install URL) — too noisy to
