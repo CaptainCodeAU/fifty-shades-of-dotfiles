@@ -182,7 +182,11 @@ def main():
 
     targets = args.profiles
     if not targets:
-        here = os.path.dirname(os.path.abspath(__file__))
+        # realpath, NOT abspath: this script is deployed as a stow SYMLINK at
+        # ~/.local/bin/, and abspath keeps the symlink path -- so the repo guess
+        # became /Users and every default-path run reported SKIPPED. realpath
+        # resolves into the repo's home/.local/bin, where ../../.. is the root.
+        here = os.path.dirname(os.path.realpath(__file__))
         repo = os.path.abspath(os.path.join(here, "..", "..", ".."))
         guess = [os.path.join(repo, "settings", "iterm2", "DynamicProfiles"),
                  os.path.join(repo, "settings", "iterm2", "profiles.json")]
