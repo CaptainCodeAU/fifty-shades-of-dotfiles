@@ -1,0 +1,213 @@
+#!/usr/bin/env bash
+# ============================================================================
+#  git-trailer-audit -- coverage audit for the five C-* Claude attribution keys
+# ============================================================================
+# Read-only history scan. Answers one question: since this repo started stamping
+# C-* attribution trailers, is every commit that SHOULD carry them actually
+# carrying the full key set?
+#
+# WHY THIS EXISTS (two failure classes, one fingerprint):
+#   1. A broken/half-run commit-msg hook leaves a PARTIAL stamp (some keys, not
+#      all). Zed Preview shipped exactly this bug: `commit-msg` hooks were
+#      silently skipped until Preview 1.13.0 (2026-07-23).
+#   2. Zed Preview 1.14.1 added a Git-Panel "Skip Hooks" toggle that skips
+#      pre-commit AND commit-msg. A commit made with it lands with NO C-* keys
+#      -- and, because it also skipped pre-commit, with NO git-leak-scan either.
+#      So an unstamped commit is the visible fingerprint of a bypassed gate.
+#
+# COMPUTE, DON'T TRUST -- nothing here is hardcoded:
+#   - The expected key set is read off the NEWEST commit that carries any C-*
+#     key, so adding a sixth key needs no edit to this script.
+#   - The audit window STARTS at the OLDEST commit carrying any C-* key, so
+#     pre-scheme history is never flagged.
+#
+# THE DELIBERATE NON-FINDING (guards against false positives):
+#   Per docs/CLAUDE_SESSION_ATTRIBUTION.md, the hook leaves a non-Claude commit
+#   untouched by design -- a hand commit made outside a Claude session correctly
+#   has zero C-* keys. Nothing in a commit distinguishes "hand-made" from
+#   "hooks skipped", so a bare commit is reported as AMBIGUOUS for the owner to
+#   eyeball, never asserted as a defect. Only a PARTIAL stamp is a hard failure.
+#   Same ceiling applies to `git commit --no-verify`: undetectable by design.
+#
+# USAGE
+#   git-trailer-audit [--since <rev|date>] [--list] [--quiet] [-h|--help]
+#     --since <rev|date>  Override the auto-detected start (e.g. HEAD~50, 2026-07-01)
+#     --list              Print a line per commit in the window (OK/PARTIAL/BARE)
+#     --quiet             Suppress all output; exit code only
+#   Honors NO_COLOR. Never writes, stages, or commits anything.
+#
+# EXIT CODES
+#   0  full coverage, or SKIPPED (not a git repo / repo never adopted the scheme)
+#   1  PARTIAL stamp(s) found -- a hook ran but did not finish: a real defect
+#   2  UNSTAMPED commit(s) only -- ambiguous, needs an eyeball, not a failure
+# ============================================================================
+set -uo pipefail
+
+PROG="git-trailer-audit"
+since=""
+list=0
+quiet=0
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --since)
+            [ $# -ge 2 ] || { echo "$PROG: --since needs a value" >&2; exit 64; }
+            since="$2"; shift 2 ;;
+        --since=*) since="${1#--since=}"; shift ;;
+        --list)  list=1;  shift ;;
+        --quiet) quiet=1; shift ;;
+        -h|--help)
+            sed -n '2,44p' "$0" | sed 's/^# \{0,1\}//'
+            exit 0 ;;
+        *) echo "$PROG: unknown argument: $1 (try --help)" >&2; exit 64 ;;
+    esac
+done
+
+say() { [ "$quiet" = 1 ] || printf '%s\n' "$*"; }
+
+# Print the report lines carrying a given prefix letter. The '|| [ -n "$l" ]'
+# guard is load-bearing: without it a final line lacking a trailing newline is
+# read into $l but read returns 1, so the loop body never runs and the LAST
+# finding is silently dropped.
+emit() {
+    printf '%s\n' "$report" | sed -n "s/^$1${US}//p" | while IFS= read -r l || [ -n "$l" ]; do say "$l"; done
+}
+
+# Not a git repo -> SKIPPED, exit 0 (degrade cleanly, never a false positive).
+git rev-parse --git-dir >/dev/null 2>&1 || { say "$PROG: SKIPPED (not a git repository)"; exit 0; }
+
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+    C_OK=$'\033[32m'; C_BAD=$'\033[31m'; C_WARN=$'\033[33m'; C_DIM=$'\033[2m'; C_OFF=$'\033[0m'
+else
+    C_OK=''; C_BAD=''; C_WARN=''; C_DIM=''; C_OFF=''
+fi
+
+# Field / record separators inside the git log format (ASCII US and RS).
+US=$'\037'
+RS=$'\036'
+
+range=""
+[ -n "$since" ] && range="$since..HEAD"
+
+# One git invocation, oldest-first. unfold=true keeps each commit on ONE line
+# even when a trailer value was wrapped.
+log_out=$(
+    git log --reverse --date=short --no-show-signature \
+        --format="%H${US}%ad${US}%an${US}%s${US}%(trailers:only=true,unfold=true,separator=${RS})" \
+        ${range:+"$range"} -- 2>/dev/null
+)
+rc=$?
+if [ $rc -ne 0 ]; then
+    say "$PROG: SKIPPED (git log failed${since:+ for range $range})"
+    exit 0
+fi
+if [ -z "$log_out" ]; then
+    say "$PROG: SKIPPED (no commits in range${since:+ $range})"
+    exit 0
+fi
+# Old git without the %(trailers:...) atom emits the format literally.
+case "$log_out" in
+    *'%(trailers'*) say "$PROG: SKIPPED (git too old for the %(trailers) format atom)"; exit 0 ;;
+esac
+
+report=$(
+    printf '%s\n' "$log_out" | awk -v US="$US" -v RS_="$RS" -v LIST="$list" \
+        -v C_OK="$C_OK" -v C_BAD="$C_BAD" -v C_WARN="$C_WARN" -v C_DIM="$C_DIM" -v C_OFF="$C_OFF" '
+    BEGIN { FS = US; n = 0 }
+    {
+        n++
+        hash[n] = substr($1, 1, 8); date[n] = $2; who[n] = $3; subj[n] = $4
+        # Collect the distinct C-* keys on this commit into a "|k1|k2|" signature.
+        cnt = 0; sig = "|"
+        m = split($5, tr, RS_)
+        for (i = 1; i <= m; i++) {
+            if (match(tr[i], /^C-[A-Za-z0-9_-]+:/)) {
+                k = substr(tr[i], 1, RLENGTH - 1)
+                if (index(sig, "|" k "|") == 0) { sig = sig k "|"; cnt++ }
+            }
+        }
+        keys[n] = sig; kcnt[n] = cnt
+        if (cnt > 0) { if (!first) first = n; last = n }
+    }
+    END {
+        if (!first) {
+            printf "SKIPPED%s", "\n"
+            exit
+        }
+        # Expected key set = the newest stamped commit s signature (order-independent
+        # membership test below, so a reordered stamp is not a false PARTIAL).
+        exp_sig = keys[last]; exp_n = kcnt[last]
+        ne = split(substr(exp_sig, 2, length(exp_sig) - 2), ek, "|")
+
+        checked = 0; nbare = 0; npart = 0; nl = 0
+        for (i = first; i <= n; i++) {
+            checked++
+            if (kcnt[i] == 0) {
+                nbare++
+                bare[nbare] = sprintf("  %s  %s  %s  %s", hash[i], date[i], who[i], subj[i])
+                if (LIST == 1) { nl++; lst[nl] = sprintf("%sBARE%s     %s  %s  %s", C_WARN, C_OFF, hash[i], date[i], subj[i]) }
+                continue
+            }
+            miss = ""
+            for (j = 1; j <= ne; j++) if (index(keys[i], "|" ek[j] "|") == 0) miss = miss (miss ? "," : "") ek[j]
+            if (miss != "") {
+                npart++
+                part[npart] = sprintf("  %s  %s  missing: %s  %s", hash[i], date[i], miss, subj[i])
+                if (LIST == 1) { nl++; lst[nl] = sprintf("%sPARTIAL%s  %s  %s  %s", C_BAD, C_OFF, hash[i], date[i], subj[i]) }
+            } else if (LIST == 1) {
+                nl++; lst[nl] = sprintf("%sOK%s       %s  %s  %s", C_OK, C_OFF, hash[i], date[i], subj[i])
+            }
+        }
+
+        expected = substr(exp_sig, 2, length(exp_sig) - 2)
+        gsub(/\|/, ",", expected)
+
+        # The status line MUST come first -- the shell reads it with head -1.
+        if (npart == 0 && nbare == 0) {
+            printf "CLEAN%s%d%s%d%s%s%s%s\n", US, checked, US, exp_n, US, hash[first], US, expected
+            for (i = 1; i <= nl; i++) printf "L%s%s\n", US, lst[i]
+            exit
+        }
+        printf "FINDINGS%s%d%s%d%s%d%s%s%s%s\n", US, checked, US, npart, US, nbare, US, hash[first], US, expected
+        for (i = 1; i <= nl; i++) printf "L%s%s\n", US, lst[i]
+        for (i = 1; i <= npart; i++) printf "P%s%s\n", US, part[i]
+        for (i = 1; i <= nbare; i++) printf "B%s%s\n", US, bare[i]
+    }'
+)
+
+head_line=$(printf '%s' "$report" | head -1)
+status=${head_line%%"$US"*}
+
+case "$status" in
+    SKIPPED)
+        say "$PROG: SKIPPED (this repo has never stamped a C-* trailer)"
+        exit 0 ;;
+    CLEAN)
+        IFS="$US" read -r _ checked expn firsth expected <<EOF
+$head_line
+EOF
+        say "${C_OK}$PROG: OK${C_OFF} -- ${checked}/${checked} commits since ${firsth} carry all ${expn} keys ${C_DIM}(${expected})${C_OFF}"
+        [ "$list" = 1 ] && emit L
+        exit 0 ;;
+    FINDINGS)
+        IFS="$US" read -r _ checked npart nbare firsth expected <<EOF
+$head_line
+EOF
+        [ "$list" = 1 ] && emit L
+        if [ "$npart" -gt 0 ]; then
+            say "${C_BAD}$PROG: ${npart} PARTIAL stamp(s)${C_OFF} in ${checked} commits since ${firsth} -- a commit-msg hook ran but did not finish (expected: ${expected})"
+            emit P
+        fi
+        if [ "$nbare" -gt 0 ]; then
+            say "${C_WARN}$PROG: ${nbare} UNSTAMPED commit(s)${C_OFF} in ${checked} commits since ${firsth} -- AMBIGUOUS by design:"
+            say "${C_DIM}  each is either a deliberate non-Claude/hand commit (correct - the hook leaves those alone)${C_OFF}"
+            say "${C_DIM}  or one whose hooks were skipped (Zed Git-Panel \"Skip Hooks\", or --no-verify), which also${C_OFF}"
+            say "${C_DIM}  means git-leak-scan did not run on it. Eyeball the list; no automatic verdict is possible.${C_OFF}"
+            emit B
+        fi
+        [ "$npart" -gt 0 ] && exit 1
+        exit 2 ;;
+    *)
+        say "$PROG: SKIPPED (unparseable scan result)"
+        exit 0 ;;
+esac

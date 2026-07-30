@@ -106,6 +106,7 @@ Executable commands exposed on `PATH` via `~/.local/bin`. Two kinds:
 | `toolchain-cve-check`     | Check pnpm/nvm version floors + installed versions against live CVE advisories (see `docs/TOOLCHAIN_CVE_CHECK.md`)                 | direct  |
 | `herdr-cooldown-check`    | Enforce the 3-day release cooldown for herdr: version/age gate, brew pin, phone-home guards (see `docs/HERDR.md`)                  | direct  |
 | `git-leak-scan`           | Pre-commit scan of the staged diff for identity/secret leaks; invoked by the `_audit-chain` git-hook chainer                       | direct  |
+| `git-trailer-audit`       | Audit `C-*` attribution-trailer coverage across history; partial stamps fail, unstamped commits are flagged ambiguous              | direct  |
 | `ci-watch`                | Escalating, exception-based CI-status dashboard surfaced at session start (see `docs/CI_WATCH.md`)                                 | direct  |
 | `dirdiff`                 | Directory comparison tool (Left vs Right; size / content / by-type, JSON output)                                                   | wrapper |
 | `sysinfo`                 | Terminal system-information dashboard                                                                                              | wrapper |

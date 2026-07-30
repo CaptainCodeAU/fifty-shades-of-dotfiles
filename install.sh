@@ -2046,6 +2046,9 @@ show_summary() {
     if [[ -x "$HOME/.local/bin/pnpm-audit-hook" ]]; then
         echo -e "  ${GREEN}✓${RESET} Standalone script command available: ${CYAN}pnpm-audit-hook${RESET} ${DIM}(opt-in git pre-commit/pre-push; see docs/PNPM_AUDIT_TREE.md)${RESET}"
     fi
+    if [[ -x "$HOME/.local/bin/git-trailer-audit" ]]; then
+        echo -e "  ${GREEN}✓${RESET} Standalone script command available: ${CYAN}git-trailer-audit${RESET} ${DIM}(C-* attribution coverage audit; see docs/CLAUDE_SESSION_ATTRIBUTION.md)${RESET}"
+    fi
 
     # Show what's still missing
     echo

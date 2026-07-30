@@ -304,6 +304,46 @@ pre-push delegation + audit still fire. The live SessionStart payload was captur
 confirm there is no web-id and no `session_title` field. Re-run the checks below on
 each new machine.
 
+### Coverage audit across history (`git-trailer-audit`)
+
+The checks below prove the stamp works **now**. `git-trailer-audit` answers the other
+question - did it work on **every** commit since the scheme started? Run it in any repo:
+
+```sh
+git-trailer-audit              # exception-based: one OK line when coverage is complete
+git-trailer-audit --list       # a row per commit in the window (OK / PARTIAL / BARE)
+git-trailer-audit --since HEAD~50
+```
+
+Nothing is hardcoded: the expected key set is read off the newest commit carrying any
+`C-*` key, and the audit window starts at the oldest one - so a sixth key, or a repo that
+adopted the scheme on a different date, needs no edit. A repo that never adopted it
+reports `SKIPPED` and exits 0.
+
+**Two result classes, and they are not equal:**
+
+| Class         | Meaning                                                                              | Exit |
+| ------------- | ------------------------------------------------------------------------------------ | ---- |
+| **PARTIAL**   | Some `C-*` keys but not the full set - a hook ran and did not finish. A real defect. | 1    |
+| **UNSTAMPED** | Zero `C-*` keys. **Ambiguous by construction** - see below.                          | 2    |
+
+An unstamped commit is **not** evidence of a fault: the hook leaves a non-Claude commit
+untouched by design (see the expected matrix above), so a hand commit made outside a
+Claude session correctly carries no trailers. Nothing inside a commit distinguishes that
+from hooks having been skipped - `git commit --no-verify`, or Zed Preview 1.14.1's
+Git-Panel **"Skip Hooks"** toggle, which skips `pre-commit` and `commit-msg` together and
+therefore also means `git-leak-scan` never scanned that diff. The tool lists unstamped
+commits for a human eyeball and asserts nothing.
+
+- _In plain English:_ this checks the whole history at once, and it is careful to say "have
+  a look at these" rather than "these are broken", because a commit you made by hand
+  without Claude is supposed to have no tracking lines.
+
+Historical note: Zed Preview silently skipped `commit-msg` hooks entirely until Preview
+**1.13.0** (2026-07-23), so unstamped Git-Panel commits predating that have a known
+innocent explanation. Baseline recorded 2026-07-30: this repo is **85/85** covered since
+`2eed38a5` (the commit that introduced the five-key scheme).
+
 ### Pre-checks you can run in the CURRENT session (no fresh session needed)
 
 Simulate the env the SessionStart hook would set, and exercise the real path.
