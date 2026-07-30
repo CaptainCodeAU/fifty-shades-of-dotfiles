@@ -183,8 +183,10 @@ Documentation and reference materials.
   **architecture only**: handler class hierarchy, event lifecycle, data flow, config
   schema, dedup/state model, audio pipeline. Its per-hook inventory was retired on
   2026-07-30 (it had fallen four months behind) and now points here instead, so the two
-  docs no longer compete. The architecture content itself dates from 2026-02 and has not
-  been re-verified against the current handler code.
+  docs no longer compete. The architecture content was **re-verified against the code on
+  2026-07-30** — classes, handler set, routing, override table, config schema, state API,
+  sound files and registered events all check out; see the doc's header for exactly what
+  was and was not traced.
 
 **Files prefixed `_` are deliberately untracked** (`_CODE_FOLDER_STRUCTURE.md`,
 `_MLBOX_SEALED_DAY_TO_DAY.md`) — they carry real usernames or host detail. They are

@@ -9,9 +9,22 @@
 > [`.claude/hooks/README.md`](../hooks/README.md), which the root README links to and
 > which is kept current.
 >
-> Last updated: July 30, 2026 (v4 — per-hook inventory retired to `hooks/README.md`;
-> the architecture content below is unchanged since the February 23, 2026 v3 revision
-> and has NOT been re-verified against the current handler code).
+> Last updated: July 30, 2026 (v5 — per-hook inventory retired to `hooks/README.md`, and
+> the architecture content **re-verified against the code** on 2026-07-30).
+>
+> What that re-verification actually checked, so a future reader knows its weight: every
+> class the doc names exists; all 11 handlers in `lib/handlers/` are documented and none is
+> missing in either direction; the Event → Handler Routing table matches `hook_runner.py`'s
+> dispatch exactly, including that `AskUserQuestion` is a `PostToolUse` sub-case keyed on
+> `tool_name` rather than an event of its own; every cell of the Handler Override Table
+> matches the methods the handlers really define; `config.yaml`'s 3 global keys and 11 hook
+> blocks are all documented with none undocumented; every `lib/` and `lib/handlers/` file
+> appears in File Purposes; `state.py`'s 6 public functions are documented (private
+> `_helpers` deliberately not); all 9 sound files named here exist on disk and are
+> referenced in `config.yaml`; and all 14 events registered in `settings.json` appear here.
+>
+> NOT re-verified line by line: the prose walkthroughs and ASCII timelines in sections 3,
+> 5 and 8 were checked for consistency with the code's structure, not traced call by call.
 
 ---
 
@@ -510,6 +523,9 @@ handle(data)
 ```
 
 ### Handler Override Table
+
+Covers the four interesting hooks only. Every concrete handler also overrides
+`hook_config` and `get_audio_settings` — universal, so they are not tabulated.
 
 | Handler                     |          `should_handle`          |         `_pre_message_hook`          |               `get_message`                |   `_resolve_audio_settings`   |
 | --------------------------- | :-------------------------------: | :----------------------------------: | :----------------------------------------: | :---------------------------: |
@@ -1211,9 +1227,21 @@ Config
 
 ### Available macOS Voices
 
-Common voices: `Victoria`, `Samantha`, `Alex`, `Daniel`, `Karen`, `Moira`, `Tessa`
+`say -v '?'` is the only authority — the installed set varies by macOS version and by which
+voices have actually been downloaded. Checked on this Mac 2026-07-30: `Samantha`, `Daniel`,
+`Karen`, `Moira` and `Tessa` are listed; **`Alex` is not, and neither is `Victoria`** — which
+is the voice `config.yaml` currently sets for every hook.
 
-List all: `say -v '?'`
+**`say` never errors on an unknown voice.** Verified 2026-07-30: a deliberately bogus
+`say -v ZZZNotARealVoice` exits 0, exactly like a valid name. So a mistyped or uninstalled
+voice degrades silently — you get speech in some other voice, with nothing in the logs to
+say so. If a hook sounds wrong, check the configured name against `say -v '?'` before
+looking anywhere else.
+
+> Not established: whether `Victoria` resolves to a real (merely unlisted) voice or is being
+> silently substituted. Rendering with `say -o` produced byte-identical output for
+> `Victoria`, `Samantha` and a nonsense name, so that method cannot tell them apart —
+> the only reliable test is listening.
 
 ---
 
