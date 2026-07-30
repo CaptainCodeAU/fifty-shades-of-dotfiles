@@ -66,3 +66,8 @@ MEMORY/
 !home/.local/share/fifty-shades-of-dotfiles/
 !home/.local/share/fifty-shades-of-dotfiles/scripts/
 !home/.local/share/fifty-shades-of-dotfiles/scripts/*
+
+# Local-only exception to the subsystem above: one-off Claude Code project-dir
+# migration helper. Deliberately never shipped by stow, never a commit candidate.
+# (Must stay AFTER the !home/.local/bin/* negation to take effect.)
+home/.local/bin/migrate-claude-projects

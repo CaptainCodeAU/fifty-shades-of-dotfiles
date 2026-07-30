@@ -99,7 +99,7 @@ Executable commands exposed on `PATH` via `~/.local/bin`. Two kinds:
 | Command                   | Purpose                                                                                                                            | Kind    |
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------- |
 | `md-hardbreak`            | On-demand Markdown formatting for Zed: hard breaks / paragraph gaps / strip (see `docs/ZED_MARKDOWN_FORMATTING.md`)                | direct  |
-| `migrate-claude-projects` | Rename Claude Code project dirs after the repo moves to a new path (see `docs/CODE_FOLDER_STRUCTURE.md`)                           | direct  |
+| `migrate-claude-projects` | **Local-only (gitignored 2026-07-30) - NOT shipped by stow.** Rename Claude Code project dirs after the repo moves to a new path   | direct  |
 | `pnpm-audit-tree`         | Recursive supply-chain auditor for pnpm / JS project trees (see `docs/PNPM_AUDIT_TREE.md`)                                         | direct  |
 | `pnpm-audit-hook`         | Git pre-commit/pre-push hook that blocks on supply-chain findings; wraps `pnpm-audit-tree` (see `docs/PNPM_AUDIT_PREPUSH_HOOK.md`) | direct  |
 | `nvm-verify-node`         | Verify an nvm-installed Node against official GPG-signed nodejs.org releases, bypassing mirrors (see `docs/NVM_SECURITY.md`)       | direct  |
