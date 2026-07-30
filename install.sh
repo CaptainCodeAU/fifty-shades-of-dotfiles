@@ -2049,6 +2049,9 @@ show_summary() {
     if [[ -x "$HOME/.local/bin/git-trailer-audit" ]]; then
         echo -e "  ${GREEN}✓${RESET} Standalone script command available: ${CYAN}git-trailer-audit${RESET} ${DIM}(C-* attribution coverage audit; see docs/CLAUDE_SESSION_ATTRIBUTION.md)${RESET}"
     fi
+    if [[ -x "$HOME/.local/bin/p10k-contrast-check" ]]; then
+        echo -e "  ${GREEN}✓${RESET} Standalone script command available: ${CYAN}p10k-contrast-check${RESET} ${DIM}(prompt contrast audit per iTerm2 profile)${RESET}"
+    fi
 
     # Show what's still missing
     echo

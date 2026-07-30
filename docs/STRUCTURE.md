@@ -108,6 +108,7 @@ Executable commands exposed on `PATH` via `~/.local/bin`. Two kinds:
 | `speak-clipboard`         | Speak the clipboard aloud with terminal furniture stripped (ANSI, PUA glyphs, rule runs); the a11y path herdr's mouse capture breaks (see `docs/HERDR.md`) | direct  |
 | `git-leak-scan`           | Pre-commit scan of the staged diff for identity/secret leaks; invoked by the `_audit-chain` git-hook chainer                                               | direct  |
 | `git-trailer-audit`       | Audit `C-*` attribution-trailer coverage across history; partial stamps fail, unstamped commits are flagged ambiguous                                      | direct  |
+| `p10k-contrast-check`     | WCAG contrast audit of every ENABLED p10k prompt segment against each iTerm2 profile's real palette; catches a theme swap making the prompt illegible      | direct  |
 | `ci-watch`                | Escalating, exception-based CI-status dashboard surfaced at session start (see `docs/CI_WATCH.md`)                                                         | direct  |
 | `dirdiff`                 | Directory comparison tool (Left vs Right; size / content / by-type, JSON output)                                                                           | wrapper |
 | `sysinfo`                 | Terminal system-information dashboard                                                                                                                      | wrapper |

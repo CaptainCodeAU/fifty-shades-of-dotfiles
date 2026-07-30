@@ -1,0 +1,268 @@
+#!/usr/bin/env python3
+# ============================================================================
+#  p10k-contrast-check -- WCAG contrast audit for every Powerlevel10k segment
+#                         colour pair, resolved against real iTerm2 profiles
+# ============================================================================
+# WHY
+# ---
+# p10k stores colours as 256-palette INDICES, not hex. Indices 0-15 resolve
+# against whatever the terminal profile defines, so the SAME p10k config can be
+# perfectly legible under one profile and invisible under another. Swapping a
+# terminal colour scheme silently re-colours every prompt segment.
+#
+# The concrete trap this was written for: stock p10k "rainbow" puts LIGHT text
+# (index 254) on the index-4 background, because it assumes ANSI 4 is the
+# classic DARK blue. A Catppuccin palette makes ANSI 4 a LIGHT pastel blue, so
+# light-on-light drops that segment to roughly 1.6:1 without any config change.
+#
+# WHAT IT DOES
+#   For each profile x each p10k segment that sets a background:
+#     resolve fg/bg indices -> hex, compute the WCAG 2.x contrast ratio, and
+#     flag anything under the thresholds.
+#   Indices 0-15 come from the profile's "Ansi N Color" keys; 16-231 from the
+#   standard xterm 6x6x6 cube; 232-255 from the xterm greyscale ramp (iTerm2
+#   does not let those be customised, so they are fixed).
+#
+# READ-ONLY. Parses files, writes nothing, never touches a live terminal.
+#
+# USAGE
+#   p10k-contrast-check [--p10k <path>] [--profiles <dir-or-file> ...]
+#                       [--min <ratio>] [--all] [--quiet]
+#     --p10k <path>      p10k config (default: ~/.p10k.zsh)
+#     --profiles <path>  iTerm2 profile JSON, or a directory of them. Repeatable.
+#                        Default: the repo's settings/iterm2 DynamicProfiles dir
+#                        plus settings/iterm2/profiles.json, if found.
+#     --min <ratio>      failure threshold (default 4.5, WCAG AA normal text)
+#     --all              list every pair, not just failures
+#     --all-segments     audit ALL defined segments, not only the rendered ones
+#     --quiet            exit code only
+#
+# EXIT CODES
+#   0  every segment pair clears the threshold in every profile (or nothing to check)
+#   1  at least one pair falls below --min
+#   2  a profile or the p10k config could not be read
+# ============================================================================
+
+import argparse
+import glob
+import json
+import os
+import re
+import sys
+
+PROG = "p10k-contrast-check"
+
+# p10k colour directives, tolerating the leading "typeset -g " that p10k's own
+# generated configs use. Commented-out lines are skipped -- p10k configs carry
+# hundreds of them as documentation, and counting those would drown the report.
+DIRECTIVE = re.compile(
+    r"^\s*(?:typeset\s+-g\s+)?POWERLEVEL9K_([A-Z0-9_]+?)_(FOREGROUND|BACKGROUND)=(\d{1,3})\s*$"
+)
+
+
+def xterm_hex(idx, ansi):
+    """Resolve a 256-palette index to #rrggbb for a given profile's ANSI map."""
+    if idx < 16:
+        return ansi.get(idx)
+    if idx < 232:
+        n = idx - 16
+        levels = (0, 95, 135, 175, 215, 255)
+        return "#%02x%02x%02x" % (levels[n // 36], levels[(n // 6) % 6], levels[n % 6])
+    v = 8 + 10 * (idx - 232)
+    return "#%02x%02x%02x" % (v, v, v)
+
+
+def luminance(hex_colour):
+    h = hex_colour.lstrip("#")
+    parts = [int(h[i:i + 2], 16) / 255 for i in (0, 2, 4)]
+    parts = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4 for c in parts]
+    return 0.2126 * parts[0] + 0.7152 * parts[1] + 0.0722 * parts[2]
+
+
+def contrast(a, b):
+    la, lb = luminance(a), luminance(b)
+    hi, lo = max(la, lb), min(la, lb)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+ELEMENTS = re.compile(
+    r"POWERLEVEL9K_(?:LEFT|RIGHT)_PROMPT_ELEMENTS=\((.*?)\)", re.S)
+
+
+def parse_p10k(path):
+    """-> {segment: {'FOREGROUND': idx, 'BACKGROUND': idx}} for uncommented lines."""
+    segs = {}
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            m = DIRECTIVE.match(line)
+            if m:
+                seg, role, idx = m.group(1), m.group(2), int(m.group(3))
+                segs.setdefault(seg, {})[role] = idx
+    return segs
+
+
+def enabled_segments(path):
+    """The prompt elements actually rendered, upper-cased. A config defines colours
+    for ~110 segments but renders only the handful listed in *_PROMPT_ELEMENTS --
+    auditing the rest reports failures you will never see, which is how a checker
+    becomes noise."""
+    text = open(path, encoding="utf-8", errors="replace").read()
+    names = set()
+    for block in ELEMENTS.findall(text):
+        for raw in block.splitlines():
+            # Split on whitespace as well as lines: p10k configs put several
+            # elements on one line ("os_icon context"), and a line-only split
+            # merges them into one bogus name, silently skipping both segments.
+            for item in raw.split("#")[0].split():
+                names.add(item.upper())
+    return names
+
+
+def is_enabled(segment, enabled):
+    """DIR matches DIR / DIR_WORK / DIR_ANCHOR but NOT DIRENV (a separate element),
+    hence the underscore boundary rather than a bare prefix test."""
+    return any(segment == e or segment.startswith(e + "_") for e in enabled)
+
+
+def load_profiles(paths):
+    """-> [(name, {ansi_index: hex}, default_fg_hex, default_bg_hex)]"""
+    out = []
+    for path in paths:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        for prof in data.get("Profiles", []):
+            ansi = {}
+            for i in range(16):
+                c = prof.get(f"Ansi {i} Color")
+                if c:
+                    ansi[i] = "#%02x%02x%02x" % tuple(
+                        round(c[k] * 255)
+                        for k in ("Red Component", "Green Component", "Blue Component")
+                    )
+            if len(ansi) < 16:
+                continue  # a profile that does not define a full palette (e.g. a
+                          # dynamic profile inheriting colours) cannot be judged
+            def rgb(key):
+                c = prof.get(key)
+                if not c:
+                    return None
+                return "#%02x%02x%02x" % tuple(
+                    round(c[k] * 255)
+                    for k in ("Red Component", "Green Component", "Blue Component")
+                )
+            out.append((prof.get("Name", os.path.basename(path)), ansi,
+                        rgb("Foreground Color"), rgb("Background Color")))
+    return out
+
+
+def main():
+    ap = argparse.ArgumentParser(add_help=True, prog=PROG)
+    ap.add_argument("--p10k", default=os.path.expanduser("~/.p10k.zsh"))
+    ap.add_argument("--profiles", action="append", default=[])
+    ap.add_argument("--min", type=float, default=4.5)
+    ap.add_argument("--all", action="store_true")
+    ap.add_argument("--all-segments", action="store_true",
+                    help="audit every defined segment, not just the enabled ones")
+    ap.add_argument("--quiet", action="store_true")
+    args = ap.parse_args()
+
+    def say(*a):
+        if not args.quiet:
+            print(*a)
+
+    if not os.path.exists(args.p10k):
+        say(f"{PROG}: SKIPPED (no p10k config at {args.p10k})")
+        return 2
+
+    targets = args.profiles
+    if not targets:
+        here = os.path.dirname(os.path.abspath(__file__))
+        repo = os.path.abspath(os.path.join(here, "..", "..", ".."))
+        guess = [os.path.join(repo, "settings", "iterm2", "DynamicProfiles"),
+                 os.path.join(repo, "settings", "iterm2", "profiles.json")]
+        targets = [p for p in guess if os.path.exists(p)]
+    if not targets:
+        say(f"{PROG}: SKIPPED (no iTerm2 profiles given or found; use --profiles)")
+        return 2
+
+    files = []
+    for t in targets:
+        if os.path.isdir(t):
+            files.extend(sorted(glob.glob(os.path.join(t, "*.json"))))
+        else:
+            files.append(t)
+
+    try:
+        profiles = load_profiles(files)
+    except (OSError, ValueError, KeyError) as exc:
+        say(f"{PROG}: SKIPPED (cannot read profiles: {exc})")
+        return 2
+    if not profiles:
+        say(f"{PROG}: SKIPPED (no profile defined a full 16-colour palette)")
+        return 2
+
+    segs = parse_p10k(args.p10k)
+    pairs = {s: v for s, v in segs.items() if "BACKGROUND" in v}
+    scope = "all segments"
+    if not args.all_segments:
+        enabled = enabled_segments(args.p10k)
+        if enabled:
+            pairs = {s: v for s, v in pairs.items() if is_enabled(s, enabled)}
+            scope = f"enabled only ({', '.join(sorted(enabled)).lower()})"
+        else:
+            scope = "all segments (no *_PROMPT_ELEMENTS found)"
+    say(f"{PROG}: {len(segs)} segments defined, {len(pairs)} auditable -- {scope}; "
+        f"{len(profiles)} profile(s); threshold {args.min}:1\n")
+
+    # Severity tiers. A powerline prompt is chrome, not body text, so a flat
+    # 4.5:1 pass/fail buries the signal: under a pastel palette almost every
+    # pair is sub-AA, which reads as "everything is broken" and trains you to
+    # ignore the report. Only UNREADABLE is treated as a failure.
+    UNREADABLE = 2.5   # dark-on-dark or light-on-light; genuinely illegible
+    total_unreadable = 0
+    for name, ansi, dfg, dbg in profiles:
+        rows = []
+        for seg in sorted(pairs):
+            bg_i = pairs[seg]["BACKGROUND"]
+            bg = xterm_hex(bg_i, ansi)
+            fg_i = pairs[seg].get("FOREGROUND")
+            if fg_i is None:
+                # No explicit foreground: p10k falls back to the terminal's default
+                # foreground, so judge against that rather than inventing an index.
+                fg, fg_label = dfg, "profile default"
+            else:
+                fg, fg_label = xterm_hex(fg_i, ansi), str(fg_i)
+            if not fg or not bg:
+                continue
+            rows.append((contrast(fg, bg), seg, fg_label, fg, bg_i, bg))
+
+        if not rows:
+            say(f"  {name}: nothing to check")
+            continue
+        rows.sort()
+        unreadable = [r for r in rows if r[0] < UNREADABLE]
+        sub_min = [r for r in rows if UNREADABLE <= r[0] < args.min]
+        total_unreadable += len(unreadable)
+        say(f"  {name}:  worst {rows[0][0]:.2f}:1   "
+            f"unreadable(<{UNREADABLE}) {len(unreadable)}   "
+            f"sub-{args.min} {len(sub_min)}   "
+            f"pass {len(rows) - len(unreadable) - len(sub_min)}   of {len(rows)}")
+        show = rows if args.all else unreadable[:12]
+        for ratio, seg, fg_label, fg, bg_i, bg in show:
+            mark = "UNREADABLE" if ratio < UNREADABLE else ("sub-AA" if ratio < args.min else "ok")
+            say(f"    {mark:<11}{ratio:5.2f}:1  {seg:<28} fg={fg_label:<16}{fg}  on  bg={bg_i} {bg}")
+        if not args.all and len(unreadable) > 12:
+            say(f"    ... and {len(unreadable) - 12} more unreadable (use --all)")
+        if show:
+            say("")
+
+    if total_unreadable:
+        say(f"{PROG}: {total_unreadable} unreadable pair(s) (<{UNREADABLE}:1) "
+            f"across {len(profiles)} profile(s)")
+        return 1
+    say(f"{PROG}: OK -- no unreadable pair (<{UNREADABLE}:1) in any profile")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
