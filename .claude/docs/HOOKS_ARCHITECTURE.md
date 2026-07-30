@@ -1,7 +1,17 @@
 # Claude Hooks Architecture
 
-> A comprehensive reference for the `.claude/hooks` notification and safety system.
-> Last updated: February 23, 2026 (v3)
+> A comprehensive reference for the **architecture** of the `.claude/hooks` notification
+> and safety system: handler class hierarchy, event lifecycle, data flow, configuration
+> schema, dedup/state model, and the audio pipeline.
+>
+> **This is not the hook inventory.** For what is actually installed — one section per
+> shell hook, with its event, matcher and wiring level — see
+> [`.claude/hooks/README.md`](../hooks/README.md), which the root README links to and
+> which is kept current.
+>
+> Last updated: July 30, 2026 (v4 — per-hook inventory retired to `hooks/README.md`;
+> the architecture content below is unchanged since the February 23, 2026 v3 revision
+> and has NOT been re-verified against the current handler code).
 
 ---
 
@@ -1412,62 +1422,16 @@ afplay's -v flag on the rendered .aiff file.
 
 ## 9. Shell Hook Scripts
 
-### session-checks.sh
-
-**Event:** `SessionStart` | **Matcher:** `startup|resume` | **Timeout:** 10s
-
-Runs on session startup and resume (skips `compact` and `clear`). Performs two
-checks:
-
-1. **Git status** — counts uncommitted changes and prints a one-line summary
-   with color-coded output (green if 0, yellow/dim based on count).
-2. **`.env` encryption** — checks if `dotenvx` is installed, whether `.env`
-   files are encrypted, and whether `.env.keys` exists for decryption. Warns
-   about unencrypted variants (`.env.local`, `.env.development`, etc.).
-
-### validate-bash.sh
-
-**Event:** `PreToolUse` | **Matcher:** `Bash` | **Timeout:** 10s
-
-Security guardrail that reads `tool_input.command` from stdin JSON and blocks
-destructive commands by exiting with code 2:
-
-- `rm -rf /` or `rm -rf ~` or `rm -rf $HOME` (root/home deletion)
-- `git push --force`, `--force-with-lease`, or `-f` to `main` or `master`
-- `git reset --hard` without an explicit ref
-- `git clean -fd` or `git clean -f -d` (removes untracked files)
-
-Blocked commands are logged to `security.log` with timestamps.
-
-### pre-commit-check.sh
-
-**Event:** `PreToolUse` | **Matcher:** `Bash` | **Timeout:** 30s
-
-Reads `tool_input.command` from stdin JSON. If the command contains
-`git commit`, runs a project-appropriate quality gate:
-
-- **Node.js** (`package.json` present): `pnpm run lint && pnpm run build`
-- **Python** (`pyproject.toml` present): `uv run ruff check . && uv run ruff format --check .`
-
-After the language-specific gate, **markdownlint** runs for all project
-types — it lints any staged `.md` files. Uses `pnpm dlx markdownlint-cli`
-with `.markdownlint.jsonc` config. This is a blocking gate (no `--fix`); if it
-fails, Claude sees the errors and fixes them.
-
-Non-commit Bash commands pass through with no effect.
-
-### protect-files.sh
-
-**Event:** `PreToolUse` | **Matcher:** `Edit|Write` | **Timeout:** 10s
-
-Reads `tool_input.file_path` from stdin JSON and blocks edits to protected
-files by exiting with code 2:
-
-- `.env`, `.env.keys`, `.env.local`, `.env.*` (except `.env.example`)
-- Lockfiles: `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`
-- `.git/` directory
-
-Blocked edits are logged to `security.log` with timestamps.
+> **The per-script inventory lives in [`.claude/hooks/README.md`](../hooks/README.md),
+> not here.** This section used to describe four scripts individually. There are now
+> **14**, and the duplicated copies here fell four months behind — so they were retired
+> on 2026-07-30 rather than maintained in two places. That file has one section per
+> hook, with its event, matcher, behaviour, and (importantly) whether it is wired at
+> project or user level.
+>
+> What remains below is architecture rather than inventory: how inline hooks differ from
+> script hooks, and how the audit log works. Both are stable regardless of which
+> individual hooks happen to be installed.
 
 ### Inline Hooks
 
@@ -1536,6 +1500,10 @@ blocked event.
 | `PreCompact`         | (none)                           | `PreCompactHandler`         | `blink.mp3`            | "Compacting context"                    |
 
 ### Shell Script Routing
+
+**Illustrative, not exhaustive** — this shows the event-to-script routing _pattern_ as of
+February 2026. The current set is larger (14 scripts); see
+[`.claude/hooks/README.md`](../hooks/README.md) for the live list.
 
 | Event          | Matcher                  | Script                 | Behavior                   |
 | -------------- | ------------------------ | ---------------------- | -------------------------- |

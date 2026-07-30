@@ -179,10 +179,12 @@ Documentation and reference materials.
 
 - [`.claude/hooks/README.md`](../.claude/hooks/README.md) — the **living inventory**. One
   section per shell hook, and the doc the root README links to. Keep this one current.
-- [`.claude/docs/HOOKS_ARCHITECTURE.md`](../.claude/docs/HOOKS_ARCHITECTURE.md) — the
-  original deep architecture reference (TypeScript handler design, event flow). Much
-  larger, but last substantively updated 2026-02 and it covers only a subset of the
-  current hooks; read it for architecture, not for what is installed.
+- [`.claude/docs/HOOKS_ARCHITECTURE.md`](../.claude/docs/HOOKS_ARCHITECTURE.md) —
+  **architecture only**: handler class hierarchy, event lifecycle, data flow, config
+  schema, dedup/state model, audio pipeline. Its per-hook inventory was retired on
+  2026-07-30 (it had fallen four months behind) and now points here instead, so the two
+  docs no longer compete. The architecture content itself dates from 2026-02 and has not
+  been re-verified against the current handler code.
 
 **Files prefixed `_` are deliberately untracked** (`_CODE_FOLDER_STRUCTURE.md`,
 `_MLBOX_SEALED_DAY_TO_DAY.md`) — they carry real usernames or host detail. They are
