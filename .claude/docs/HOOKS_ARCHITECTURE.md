@@ -1238,10 +1238,14 @@ voice degrades silently — you get speech in some other voice, with nothing in 
 say so. If a hook sounds wrong, check the configured name against `say -v '?'` before
 looking anywhere else.
 
-> Not established: whether `Victoria` resolves to a real (merely unlisted) voice or is being
-> silently substituted. Rendering with `say -o` produced byte-identical output for
-> `Victoria`, `Samantha` and a nonsense name, so that method cannot tell them apart —
-> the only reliable test is listening.
+> **Settled 2026-07-30, by ear (the owner — no tooling can do this):** the configured
+> `Victoria` does produce the intended voice in practice, most likely the system default
+> resolving through an unlisted name. It is deliberately left as `Victoria`; do not
+> "correct" it to a name from the list.
+>
+> The silent-fallback behaviour above still matters, though: because `say` never errors,
+> a genuinely mistyped voice would also sound plausible. Change voice names deliberately
+> and listen once afterwards — there is no log line to check.
 
 ---
 
