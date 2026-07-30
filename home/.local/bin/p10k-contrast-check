@@ -32,14 +32,17 @@
 #     --profiles <path>  iTerm2 profile JSON, or a directory of them. Repeatable.
 #                        Default: the repo's settings/iterm2 DynamicProfiles dir
 #                        plus settings/iterm2/profiles.json, if found.
-#     --min <ratio>      failure threshold (default 4.5, WCAG AA normal text)
+#     --min <ratio>      REPORTING threshold (default 4.5, WCAG AA normal text).
+#                        Pairs below it are listed as sub-AA. Does NOT fail the run.
+#     --fail-below <r>   FAILURE threshold (default 2.5). Only pairs below this are
+#                        treated as errors -- see the severity-tier note below.
 #     --all              list every pair, not just failures
 #     --all-segments     audit ALL defined segments, not only the rendered ones
 #     --quiet            exit code only
 #
 # EXIT CODES
-#   0  every segment pair clears the threshold in every profile (or nothing to check)
-#   1  at least one pair falls below --min
+#   0  no pair falls below --fail-below in any profile (or nothing to check)
+#   1  at least one pair falls below --fail-below
 #   2  a profile or the p10k config could not be read
 # ============================================================================
 
@@ -159,7 +162,10 @@ def main():
     ap = argparse.ArgumentParser(add_help=True, prog=PROG)
     ap.add_argument("--p10k", default=os.path.expanduser("~/.p10k.zsh"))
     ap.add_argument("--profiles", action="append", default=[])
-    ap.add_argument("--min", type=float, default=4.5)
+    ap.add_argument("--min", type=float, default=4.5,
+                    help="reporting threshold; listed as sub-AA but does not fail the run")
+    ap.add_argument("--fail-below", type=float, default=2.5,
+                    help="failure threshold; only pairs below this set exit status 1")
     ap.add_argument("--all", action="store_true")
     ap.add_argument("--all-segments", action="store_true",
                     help="audit every defined segment, not just the enabled ones")
@@ -218,7 +224,7 @@ def main():
     # 4.5:1 pass/fail buries the signal: under a pastel palette almost every
     # pair is sub-AA, which reads as "everything is broken" and trains you to
     # ignore the report. Only UNREADABLE is treated as a failure.
-    UNREADABLE = 2.5   # dark-on-dark or light-on-light; genuinely illegible
+    UNREADABLE = args.fail_below   # dark-on-dark / light-on-light; genuinely illegible
     total_unreadable = 0
     for name, ansi, dfg, dbg in profiles:
         rows = []
