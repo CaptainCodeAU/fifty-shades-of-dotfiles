@@ -96,21 +96,22 @@ Executable commands exposed on `PATH` via `~/.local/bin`. Two kinds:
 - **Direct** scripts live entirely in `home/.local/bin/<name>`.
 - **Wrapper** scripts are thin stubs that exec a source script in `home/.local/share/fifty-shades-of-dotfiles/scripts/<name>.sh` - see that directory's `README.md` for the wrapper architecture and the add-a-script workflow.
 
-| Command                   | Purpose                                                                                                                            | Kind    |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------- |
-| `md-hardbreak`            | On-demand Markdown formatting for Zed: hard breaks / paragraph gaps / strip (see `docs/ZED_MARKDOWN_FORMATTING.md`)                | direct  |
-| `migrate-claude-projects` | **Local-only (gitignored 2026-07-30) - NOT shipped by stow.** Rename Claude Code project dirs after the repo moves to a new path   | direct  |
-| `pnpm-audit-tree`         | Recursive supply-chain auditor for pnpm / JS project trees (see `docs/PNPM_AUDIT_TREE.md`)                                         | direct  |
-| `pnpm-audit-hook`         | Git pre-commit/pre-push hook that blocks on supply-chain findings; wraps `pnpm-audit-tree` (see `docs/PNPM_AUDIT_PREPUSH_HOOK.md`) | direct  |
-| `nvm-verify-node`         | Verify an nvm-installed Node against official GPG-signed nodejs.org releases, bypassing mirrors (see `docs/NVM_SECURITY.md`)       | direct  |
-| `toolchain-cve-check`     | Check pnpm/nvm version floors + installed versions against live CVE advisories (see `docs/TOOLCHAIN_CVE_CHECK.md`)                 | direct  |
-| `herdr-cooldown-check`    | Enforce the 3-day release cooldown for herdr: version/age gate, brew pin, phone-home guards (see `docs/HERDR.md`)                  | direct  |
-| `git-leak-scan`           | Pre-commit scan of the staged diff for identity/secret leaks; invoked by the `_audit-chain` git-hook chainer                       | direct  |
-| `git-trailer-audit`       | Audit `C-*` attribution-trailer coverage across history; partial stamps fail, unstamped commits are flagged ambiguous              | direct  |
-| `ci-watch`                | Escalating, exception-based CI-status dashboard surfaced at session start (see `docs/CI_WATCH.md`)                                 | direct  |
-| `dirdiff`                 | Directory comparison tool (Left vs Right; size / content / by-type, JSON output)                                                   | wrapper |
-| `sysinfo`                 | Terminal system-information dashboard                                                                                              | wrapper |
-| `watch-history-sync`      | Export YouTube watch history to a local SQLite database                                                                            | wrapper |
+| Command                   | Purpose                                                                                                                                                    | Kind    |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `md-hardbreak`            | On-demand Markdown formatting for Zed: hard breaks / paragraph gaps / strip (see `docs/ZED_MARKDOWN_FORMATTING.md`)                                        | direct  |
+| `migrate-claude-projects` | **Local-only (gitignored 2026-07-30) - NOT shipped by stow.** Rename Claude Code project dirs after the repo moves to a new path                           | direct  |
+| `pnpm-audit-tree`         | Recursive supply-chain auditor for pnpm / JS project trees (see `docs/PNPM_AUDIT_TREE.md`)                                                                 | direct  |
+| `pnpm-audit-hook`         | Git pre-commit/pre-push hook that blocks on supply-chain findings; wraps `pnpm-audit-tree` (see `docs/PNPM_AUDIT_PREPUSH_HOOK.md`)                         | direct  |
+| `nvm-verify-node`         | Verify an nvm-installed Node against official GPG-signed nodejs.org releases, bypassing mirrors (see `docs/NVM_SECURITY.md`)                               | direct  |
+| `toolchain-cve-check`     | Check pnpm/nvm version floors + installed versions against live CVE advisories (see `docs/TOOLCHAIN_CVE_CHECK.md`)                                         | direct  |
+| `herdr-cooldown-check`    | Enforce the 3-day release cooldown for herdr: version/age gate, brew pin, phone-home guards (see `docs/HERDR.md`)                                          | direct  |
+| `speak-clipboard`         | Speak the clipboard aloud with terminal furniture stripped (ANSI, PUA glyphs, rule runs); the a11y path herdr's mouse capture breaks (see `docs/HERDR.md`) | direct  |
+| `git-leak-scan`           | Pre-commit scan of the staged diff for identity/secret leaks; invoked by the `_audit-chain` git-hook chainer                                               | direct  |
+| `git-trailer-audit`       | Audit `C-*` attribution-trailer coverage across history; partial stamps fail, unstamped commits are flagged ambiguous                                      | direct  |
+| `ci-watch`                | Escalating, exception-based CI-status dashboard surfaced at session start (see `docs/CI_WATCH.md`)                                                         | direct  |
+| `dirdiff`                 | Directory comparison tool (Left vs Right; size / content / by-type, JSON output)                                                                           | wrapper |
+| `sysinfo`                 | Terminal system-information dashboard                                                                                                                      | wrapper |
+| `watch-history-sync`      | Export YouTube watch history to a local SQLite database                                                                                                    | wrapper |
 
 ### `platforms/` - Platform-Specific Files
 
