@@ -935,7 +935,11 @@ fifty-shades-of-dotfiles/
 │   │       ├── catppuccin-latte.json      # Latte (LIGHT)
 │   │       ├── catppuccin-frappe.json     # Frappe
 │   │       ├── catppuccin-macchiato.json  # Macchiato
-│   │       └── catppuccin-mocha.json      # Mocha (darkest)
+│   │       ├── catppuccin-mocha.json      # Mocha (darkest)
+│   │       └── custom-mocha-deep-blue.json # Mocha + ANSI 4 = #0525c8 (NOT upstream);
+│   │                                       #   restores prompt DIR contrast to 7.85:1
+│   │                                       #   (pastel ANSI 4 gave 1.66:1 under light text)
+│   │                                       #   verify with: p10k-contrast-check
 │   └── wezterm/                      # WezTerm terminal emulator
 │       └── wezterm.lua               # Full config (color scheme, keys, tabs, SSH detection)
 │
