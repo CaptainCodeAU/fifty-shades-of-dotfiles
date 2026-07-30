@@ -1,0 +1,46 @@
+# lazygit configuration
+#
+# Theme: Catppuccin Macchiato (blue accent) -- matches the Zed theme already set in
+# home/.config/zed/settings.json ("Catppuccin Macchiato"). Values copied verbatim from
+# https://github.com/catppuccin/lazygit -> themes-mergable/macchiato/blue.yml
+# To change accent, swap the hexes for another file in that directory (14 accents:
+# flamingo, green, lavender, maroon, mauve, peach, pink, red, rosewater, sapphire, sky,
+# teal, yellow). To change flavour, use themes-mergable/{latte,frappe,macchiato,mocha}/.
+#
+# WHERE LAZYGIT READS THIS -- the two platforms differ, so do not "simplify" this:
+#   macOS:  ~/Library/Application Support/lazygit/config.yml   (XDG_CONFIG_HOME is unset,
+#           so lazygit uses the native path -- confirmed via lazygit --print-config-dir).
+#           That path is SYMLINKED to this file by hand; stow does not reach it.
+#   Linux:  ~/.config/lazygit/config.yml -- stow deploys this file there directly.
+# One tracked file serves both; only the macOS link is manual.
+
+gui:
+  theme:
+    activeBorderColor:
+      - "#8aadf4"
+      - bold
+    inactiveBorderColor:
+      - "#a5adcb"
+    searchingActiveBorderColor:
+      - "#eed49f"
+    optionsTextColor:
+      - "#8aadf4"
+    selectedLineBgColor:
+      - "#363a4f"
+    inactiveViewSelectedLineBgColor:
+      - "#6e738d"
+    cherryPickedCommitFgColor:
+      - "#8aadf4"
+    cherryPickedCommitBgColor:
+      - "#494d64"
+    markedBaseCommitFgColor:
+      - "#8aadf4"
+    markedBaseCommitBgColor:
+      - "#eed49f"
+    unstagedChangesColor:
+      - "#ed8796"
+    defaultFgColor:
+      - "#cad3f5"
+
+  authorColors:
+    "*": "#b7bdf8"
