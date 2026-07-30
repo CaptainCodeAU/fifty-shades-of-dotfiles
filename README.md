@@ -927,7 +927,10 @@ fifty-shades-of-dotfiles/
 │
 ├── settings/                         # Exported app configs (reference/import)
 │   ├── iterm2/                       # iTerm2 terminal emulator
-│   │   └── profiles.json             # iTerm2 profiles (import via Profiles > Other Actions > Import)
+│   │   ├── profiles.json             # iTerm2 profiles (import via Profiles > Other Actions > Import)
+│   │   └── DynamicProfiles/          # Auto-loaded, NOT imported - symlink into
+│   │       │                         #   ~/Library/Application Support/iTerm2/DynamicProfiles/
+│   │       └── catppuccin-macchiato.json  # Macchiato colours; inherits "Captain Code (dark)"
 │   └── wezterm/                      # WezTerm terminal emulator
 │       └── wezterm.lua               # Full config (color scheme, keys, tabs, SSH detection)
 │
