@@ -936,10 +936,15 @@ fifty-shades-of-dotfiles/
 │   │       ├── catppuccin-frappe.json     # Frappe
 │   │       ├── catppuccin-macchiato.json  # Macchiato
 │   │       ├── catppuccin-mocha.json      # Mocha (darkest)
-│   │       └── custom-mocha-deep-blue.json # Mocha + ANSI 4 = #0525c8 (NOT upstream);
-│   │                                       #   restores prompt DIR contrast to 7.85:1
-│   │                                       #   (pastel ANSI 4 gave 1.66:1 under light text)
-│   │                                       #   verify with: p10k-contrast-check
+│   │       │                              # --- deep-blue variants: canonical flavour with
+│   │       │                              #     ANSI 4 = #0525c8 (NOT upstream). Restores the
+│   │       │                              #     prompt DIR segment to 7.85:1 in all four; the
+│   │       │                              #     pastel ANSI 4 gave 1.66-3.86:1 under p10k's
+│   │       │                              #     light text. Verify: p10k-contrast-check
+│   │       ├── custom-latte-deep-blue.json
+│   │       ├── custom-frappe-deep-blue.json
+│   │       ├── custom-macchiato-deep-blue.json
+│   │       └── custom-mocha-deep-blue.json
 │   └── wezterm/                      # WezTerm terminal emulator
 │       └── wezterm.lua               # Full config (color scheme, keys, tabs, SSH detection)
 │
