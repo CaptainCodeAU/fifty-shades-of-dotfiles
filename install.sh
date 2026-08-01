@@ -986,11 +986,30 @@ check_prerequisites() {
 
     # Deploy parity. A tool that was never linked stays invisible until the day
     # you reach for it -- which, for the guard scripts in home/.local/bin, is
-    # exactly the day it matters. Counts toward `missing` so --check exits 1.
+    # exactly the day it matters.
+    #
+    # It must NOT count toward `missing` during an install run. `missing` gates the
+    # prerequisite installer, and a non-zero count after that step aborts with
+    # "install them manually" -- BEFORE stow ever runs. Since stow is what deploys
+    # these files, folding parity into `missing` deadlocks the installer against
+    # itself: it refuses to run the step that fixes the thing it is complaining
+    # about, while printing "Fix: ./install.sh". Observed on the Intel MacBook
+    # 2026-08-02 after a pull brought in new files; introduced 2026-08-01.
+    #
+    # In --check (audit) mode there is no stow step to reach, so a parity failure
+    # SHOULD make the exit code non-zero -- that is the whole point of the audit.
     echo -e "${BOLD}Deploy Parity:${RESET}"
-    _check_deploy_parity || missing=$((missing+1))
+    local parity=0
+    _check_deploy_parity || parity=1
     # settings/ is outside the generic checker's home/ -> ~/ rule; the owner reports.
-    _iterm_profiles_sync check || missing=$((missing+1))
+    _iterm_profiles_sync check || parity=1
+    if (( parity )); then
+        if [[ "$ACTION" == "check" ]]; then
+            missing=$((missing+1))
+        else
+            info "The stow steps below deploy these -- continuing."
+        fi
+    fi
 
     echo
 
