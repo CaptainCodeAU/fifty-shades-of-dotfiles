@@ -343,6 +343,44 @@ _show_welcome_full() {
         fi
     fi
 
+    # --- Deploy parity (EXCEPTION-ONLY: silent unless something is undeployed) ---
+    # A tracked home/ file with no symlink in ~/ is invisible until the day you
+    # reach for it -- which, for the guard scripts in home/.local/bin, is exactly
+    # the day it matters. herdr-cooldown-check sat undeployed for three days in
+    # 2026-07 and nothing said a word: the shell reports "command not found" for
+    # a command nobody had typed yet, and the old drift probe only looked for
+    # DANGLING links, never absent ones.
+    #
+    # Repo path is resolved from the ~/.zshrc symlink (:A follows it) rather than
+    # hardcoded, so this works on the dev Mac and on consumer boxes alike.
+    # Measured at ~5ms -- the same order as the `herdr --version` call above --
+    # so no cache is warranted; a cached answer could also go stale across the
+    # very `install.sh` run that fixes it.
+    #
+    # SILENT WHEN CLEAN, by design. A line that prints "all good" every single
+    # session is a line that stops being read.
+    local _dotrc="${HOME}/.zshrc" _dotrepo
+    if [[ -L "$_dotrc" ]]; then
+        _dotrepo="${${_dotrc:A}:h:h}"
+        if [[ -d "$_dotrepo/.git" ]]; then
+            local _undeployed
+            _undeployed=$(git -C "$_dotrepo" ls-files home 2>/dev/null | sed 's#^home/##' | while read rel; do
+                case "$rel" in
+                    .gitignore|*/.gitignore|.gitmodules|*/.gitmodules) continue ;;
+                    .DS_Store|*/.DS_Store|.stow-local-ignore|*/.stow-local-ignore) continue ;;
+                    */__pycache__/*|*.pyc) continue ;;
+                esac
+                [[ -e "$HOME/$rel" || -L "$HOME/$rel" ]] || echo "$rel"
+            done)
+            if [[ -n "$_undeployed" ]]; then
+                local _n=$(echo "$_undeployed" | wc -l | tr -d ' ')
+                echo "    deploy: ${err}${_n} tracked file(s) NOT linked into ~/ — run ./install.sh --stow-only${done}"
+                echo "$_undeployed" | head -3 | sed "s|^|      ${err}✗${done} ~/|"
+                (( _n > 3 )) && echo "      ${info}...and $(( _n - 3 )) more (./install.sh --check lists all)${done}"
+            fi
+        fi
+    fi
+
     # --- GitHub API token (read-only) ---
     # The status cache is written in the BACKGROUND by _claude_launch during
     # Claude sessions (the only place $GH_TOKEN exists). The banner only reads
