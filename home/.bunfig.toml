@@ -11,6 +11,14 @@
 # overrides this file; per-package escape via `minimumReleaseAgeExcludes` below,
 # or a one-off `bun add --minimum-release-age=0 <pkg>`.
 # ------------------------------------------------------------------------------
+# Telemetry OFF, stated in the config rather than left to the environment.
+# `DO_NOT_TRACK=1` is exported from .zshrc and bun honours it (the binary
+# contains that string), but .zshrc only runs for INTERACTIVE shells -- a cron
+# job, a CI step, a script with #!/bin/sh, or a non-interactive Bash tool call
+# gets none of it. A config file applies everywhere the tool runs, so the file
+# is the durable half and the env var is the belt.
+telemetry = false
+
 [install]
 minimumReleaseAge = 259200
 # minimumReleaseAgeExcludes = ["some-pkg"]   # per-package bypass, if ever needed
