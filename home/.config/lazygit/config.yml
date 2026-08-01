@@ -14,6 +14,16 @@
 #   Linux:  ~/.config/lazygit/config.yml -- stow deploys this file there directly.
 # One tracked file serves both; only the macOS link is manual.
 
+# Upstream version check -- OFF. lazygit ships `update: {method: prompt, days: 14}`
+# (confirmed via `lazygit --config`), so out of the box it reaches the vendor every
+# fortnight and offers a same-day release. That is the same phone-home this estate
+# closes everywhere else, and the same auto-adopt the 3-day cooldown exists to
+# prevent: brew owns the version here, and upgrades stay deliberate.
+# Written explicitly rather than left to a default -- a default can change on
+# upgrade, and a missing key reads as ENABLED, not disabled.
+update:
+  method: never
+
 gui:
   theme:
     activeBorderColor:
