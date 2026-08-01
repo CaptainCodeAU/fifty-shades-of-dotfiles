@@ -128,6 +128,7 @@ Executable commands exposed on `PATH` via `~/.local/bin`. Two kinds:
 | `git-trailer-audit`       | Audit `C-*` attribution-trailer coverage across history; partial stamps fail, unstamped commits are flagged ambiguous                                      | direct  |
 | `p10k-contrast-check`     | WCAG contrast audit of every ENABLED p10k prompt segment against each iTerm2 profile's real palette; catches a theme swap making the prompt illegible      | direct  |
 | `ci-watch`                | Escalating, exception-based CI-status dashboard surfaced at session start (see `docs/CI_WATCH.md`)                                                         | direct  |
+| `deploy-parity-check`     | Is every git-tracked `home/` file actually symlinked into `~/`? Reports MISSING vs SHADOWED separately; self-tests its own detectors on every run          | direct  |
 | `dirdiff`                 | Directory comparison tool (Left vs Right; size / content / by-type, JSON output)                                                                           | wrapper |
 | `sysinfo`                 | Terminal system-information dashboard                                                                                                                      | wrapper |
 | `watch-history-sync`      | Export YouTube watch history to a local SQLite database                                                                                                    | wrapper |
