@@ -438,6 +438,15 @@ Measured against this repo's `home/.tmux.conf` and `home/.zsh_cursor_functions`:
 `prefix+r` to reload config, and prefix-free `shift+left` / `shift+right` for
 tabs. Everything else already matched tmux by default.
 
+One binding is **not** a tmux port: prefix-free `shift+up` / `shift+down` walk
+`previous_agent` / `next_agent`. herdr ships both actions as _"optional, unset by
+default"_, so out of the box there is no agent-switching key at all — moving
+between agents means moving between the panes and tabs they happen to live in.
+They complete the arrow cluster: left/right across tabs, up/down across agents.
+Scope is the whole session rather than the current workspace, and because
+`agent_panel_sort = "priority"` is set, they walk the sidebar's own order — next
+by which agent wants attention, not by position.
+
 The one structural difference: **herdr takes a single key per action**, where
 tmux allowed several. `.tmux.conf` bound the right-hand split four ways
 (`|`, `Right`, `%`, `h`); only one survives. The same constraint means
