@@ -19,7 +19,7 @@ mode had also left the README recommending a CVE-vulnerable nvm (`v0.40.3`).
 `toolchain-cve-check` closes that gap: the day a pin (or an installed version) lands
 in a published vulnerable range, it says so, and nudges the maintainer to bump.
 
-## What it checks (5 subjects)
+## What it checks (7 subjects)
 
 | #   | Subject        | Version source                       | Advisory source            |
 | --- | -------------- | ------------------------------------ | -------------------------- |
@@ -128,9 +128,9 @@ toolchain-cve-check --nvm-floor 0.40.3    # -> nvm floor EXPOSED: CVE-2026-10796
   - Hard-coded version pins inside docs/README (e.g. an install URL) — too noisy to
     CVE-scan reliably.
   - `uv` — no floor constant exists to check.
-  - `bun` — `BUN_MIN_VERSION` DOES exist (added 2026-07), but this tool does not
-    check it yet. A known gap, not an absence: bun ships on npm, so it belongs in
-    the same OSV lane as pnpm.
+  - `bun` — `BUN_MIN_VERSION` is checked, floor and installed, via OSV (wired
+    2026-08-01). Confirmed real coverage rather than an empty shelf: bun@1.0.0
+    returns GHSA-4j66-8f4r-3pjx and GHSA-v9mx-4pqq-h232.
   - **Auto-bumping** — this is a monitor and a nudge. Bumping a floor stays a deliberate,
     reviewed edit (in both `install.sh` and `home/.zsh_onboarding`), then a commit.
 

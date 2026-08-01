@@ -193,7 +193,7 @@ Subclasses override only the steps they need:
 .claude/hooks/
   session-checks.sh       # SessionStart — git status + .env encryption check
   zed-version-check.sh    # SessionStart — nudge to refresh the Zed Preview changelog doc
-  toolchain-cve-check.sh  # SessionStart — flag CVE-exposed pnpm/nvm floors + installed
+  toolchain-cve-check.sh  # SessionStart — flag CVE-exposed pnpm/nvm/bun floors + installed
   pre-commit-check.sh     # PreToolUse Bash — lint/build gate before git commit
   validate-bash.sh        # PreToolUse Bash — block destructive commands
   protect-files.sh        # PreToolUse Edit|Write — block edits to protected files
