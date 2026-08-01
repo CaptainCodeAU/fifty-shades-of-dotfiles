@@ -731,6 +731,74 @@ check_command_optional() {
     fi
 }
 
+# --- iTerm2 dynamic profiles: deploy, or report on, one mapping ------------
+#
+# These are NOT stow-managed: they live under settings/, not home/, because they
+# deploy into ~/Library and stow only maps home/ -> ~/. README documented the
+# symlinking as a MANUAL step, so a fresh box got none of them (found 2026-08-01,
+# the third file in two days added to the repo with its deploy left to memory).
+#
+# ONE function, TWO modes, deliberately. `deploy-parity-check` deliberately holds
+# no hardcoded paths and no OS branching -- its whole value is that home/X -> ~/X
+# is derivable. This mapping is NOT derivable, it is macOS-only, and it is
+# conditional on iTerm2 being installed. Teaching the generic checker all three
+# would give it the exception table its simplicity depends on not having. So the
+# code that OWNS the mapping reports on it instead.
+#
+#   apply  - create missing symlinks (stow_platform)
+#   check  - report only, create nothing; returns 1 if any are missing (--check)
+#
+# Symlinks, not copies: iTerm2 watches the directory and reloads on change, so a
+# link means editing the repo file updates the live profile with no reinstall.
+# A REAL file at a target is left alone in BOTH modes -- it may be a profile made
+# in the GUI, and replacing it would lose the owner's work.
+_iterm_profiles_sync() {
+    local mode="${1:-check}"
+    local src="$REPO_DIR/settings/iterm2/DynamicProfiles"
+    local dst="$HOME/Library/Application Support/iTerm2/DynamicProfiles"
+
+    [[ "$(check_os)" == "macos" ]] || { [[ "$mode" == "check" ]] && echo -e "  ${DIM}-${RESET} iTerm2 profiles — not macOS, N/A"; return 0; }
+    [[ -d "$src" ]] || return 0
+    if [[ ! -d "$HOME/Library/Application Support/iTerm2" ]]; then
+        [[ "$mode" == "check" ]] && echo -e "  ${DIM}-${RESET} iTerm2 profiles — iTerm2 not installed, N/A"
+        [[ "$mode" == "apply" ]] && info "iTerm2 not installed. Skipping dynamic profiles."
+        return 0
+    fi
+
+    local linked=0 already=0 blocked=0 missing=0
+    local f name target
+    [[ "$mode" == "apply" ]] && run_cmd mkdir -p "$dst"
+    for f in "$src"/*.json; do
+        [[ -e "$f" ]] || continue
+        name=$(basename "$f")
+        target="$dst/$name"
+        if [[ -L "$target" ]]; then
+            already=$((already+1))
+        elif [[ -e "$target" ]]; then
+            blocked=$((blocked+1))
+            [[ "$mode" == "apply" ]] && warn "iTerm2 profile ${name} exists as a REAL file - left as-is (move it aside to adopt the repo version)"
+            [[ "$mode" == "check" ]] && echo -e "  ${YELLOW}~${RESET} iTerm2 profile ${CYAN}${name}${RESET} — real file where a link belongs"
+        elif [[ "$mode" == "apply" ]]; then
+            run_cmd ln -s "$f" "$target"
+            linked=$((linked+1))
+        else
+            missing=$((missing+1))
+            echo -e "  ${RED}✗${RESET} iTerm2 profile not deployed — ${CYAN}${name}${RESET}"
+        fi
+    done
+
+    if [[ "$mode" == "apply" ]]; then
+        success "iTerm2 dynamic profiles: ${linked} linked, ${already} already linked, ${blocked} skipped"
+        return 0
+    fi
+    if (( missing == 0 && blocked == 0 )); then
+        echo -e "  ${GREEN}✓${RESET} iTerm2 profiles — all ${already} linked"
+        return 0
+    fi
+    (( missing > 0 )) && info "Fix: ${CYAN}./install.sh${RESET} (the platform step relinks them)"
+    return 1
+}
+
 # --- Deploy parity: delegated to the canonical checker -----------------------
 # The logic lives in home/.local/bin/deploy-parity-check, which self-tests its
 # own detectors on every run. It is called from the REPO path, not ~/.local/bin
@@ -921,6 +989,8 @@ check_prerequisites() {
     # exactly the day it matters. Counts toward `missing` so --check exits 1.
     echo -e "${BOLD}Deploy Parity:${RESET}"
     _check_deploy_parity || missing=$((missing+1))
+    # settings/ is outside the generic checker's home/ -> ~/ rule; the owner reports.
+    _iterm_profiles_sync check || missing=$((missing+1))
 
     echo
 
@@ -1723,45 +1793,7 @@ stow_platform() {
         info "VSCode not installed. Skipping."
     fi
 
-    # --- iTerm2 dynamic profiles ---
-    # These are NOT stow-managed: they live under settings/, not home/, because
-    # they deploy into ~/Library, and stow only maps home/ -> ~/. README documented
-    # "symlink each into ~/Library/Application Support/iTerm2/DynamicProfiles/" as a
-    # MANUAL step, so a fresh box got none of them -- found 2026-08-01.
-    #
-    # Symlink rather than copy, deliberately: iTerm2 watches this directory and
-    # reloads on change, so a link means editing the repo file updates the live
-    # profile with no reinstall. Verified iTerm2 follows them -- each loaded profile
-    # records `Dynamic Profile Filename` pointing back at the symlinked path.
-    #
-    # A real file at the target is left ALONE and reported: it may be a profile the
-    # owner made in the GUI, and silently replacing it would lose their work.
-    local iterm_src="$REPO_DIR/settings/iterm2/DynamicProfiles"
-    local iterm_dst="$HOME/Library/Application Support/iTerm2/DynamicProfiles"
-    if [[ -d "$HOME/Library/Application Support/iTerm2" ]]; then
-        if [[ -d "$iterm_src" ]]; then
-            run_cmd mkdir -p "$iterm_dst"
-            local linked=0 already=0 blocked=0
-            local f name dst
-            for f in "$iterm_src"/*.json; do
-                [[ -e "$f" ]] || continue
-                name=$(basename "$f")
-                dst="$iterm_dst/$name"
-                if [[ -L "$dst" ]]; then
-                    already=$((already+1))
-                elif [[ -e "$dst" ]]; then
-                    blocked=$((blocked+1))
-                    warn "iTerm2 profile ${name} exists as a REAL file - left as-is (move it aside to adopt the repo version)"
-                else
-                    run_cmd ln -s "$f" "$dst"
-                    linked=$((linked+1))
-                fi
-            done
-            success "iTerm2 dynamic profiles: ${linked} linked, ${already} already linked, ${blocked} skipped"
-        fi
-    else
-        info "iTerm2 not installed. Skipping dynamic profiles."
-    fi
+    _iterm_profiles_sync apply
 }
 
 # ==============================================================================
