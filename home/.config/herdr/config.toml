@@ -49,6 +49,27 @@ resize_mode = "prefix+shift+r"
 previous_tab = "shift+left"
 next_tab = "shift+right"
 
+# Agent switching without the prefix -- the vertical companion to the tab keys
+# above, so the whole arrow cluster moves you around: left/right across tabs,
+# up/down across agents.
+#
+# These ADD capability rather than replacing anything. herdr ships both actions
+# as "optional, unset by default", so there was no agent-switch key at all
+# before this; moving between agents meant moving between the panes and tabs
+# they happened to live in.
+#
+# Scope is the whole session, not the current workspace: the agent list spans
+# workspaces, so these walk every agent pane there is. With agent_panel_sort =
+# "priority" set under [ui] below, they walk it in the sidebar's own order --
+# i.e. next/previous by which agent wants attention, not by position.
+#
+# Direct chords, no prefix, exactly like the tab keys. Nothing in herdr's
+# defaults binds shift+up or shift+down (navigate mode uses BARE up/down for
+# navigate_workspace_*, which is a different, mode-local binding), so there is
+# no collision to resolve.
+previous_agent = "shift+up"
+next_agent = "shift+down"
+
 # --- Deliberately NOT ported ---
 # Alt+Arrow pane switching (`bind -n M-Left/M-Right/...`): herdr accepts
 #   alt+left etc, but focus_pane_* takes ONE key, so binding the arrows would
