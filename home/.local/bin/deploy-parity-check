@@ -1,0 +1,169 @@
+#!/usr/bin/env -S uv run python3
+# /// script
+# requires-python = ">=3.10"
+# dependencies = []
+# ///
+#
+# ============================================================================
+#  deploy-parity-check -- is every tracked home/ file actually linked into ~/ ?
+# ============================================================================
+#
+# WHY
+# ---
+# On 2026-08-01 `herdr-cooldown-check` was found undeployed. It had been that
+# way since 2026-07-29 and nothing said a word: the SessionStart hook falls
+# back to the repo copy, and a shell only reports "command not found" for a
+# command somebody actually types. A second file, home/.config/lazygit/
+# config.yml, turned out to have the same problem.
+#
+# The cause was not stow. Symlink birth times showed the bulk created
+# 2026-07-16 and each newer script linked individually on the day it was
+# written -- `stow -R` relinks EVERYTHING in one pass and would stamp them
+# identically. So deploying a new file is a manual step somebody has to
+# remember, it was forgotten twice, and there was no detector.
+#
+# WHY IT IS A SCRIPT AND NOT THREE COPIES
+# ---------------------------------------
+# The same logic was wanted in install.sh (--check), in /refresh (drift lane)
+# and in the shell welcome banner. Three inline copies drift apart, and the
+# /refresh command already declares "REUSE, don't reimplement" as a principle.
+# One implementation, three callers.
+#
+# THE SELF-TEST RUNS EVERY TIME
+# -----------------------------
+# A guard that can only ever print OK is decoration -- and this guard exists
+# BECAUSE a previous one, /refresh's drift probe, silently reported clean for
+# a condition it structurally could not detect (`[ -L "$t" ]` is false when
+# nothing is there at all, so the test short-circuited). Rather than trust
+# that this one is different, it proves its own detectors against synthetic
+# fixtures on every invocation, using the SAME function the real run uses.
+#
+# EXIT CODES
+#   0  every tracked file is deployed (or the repo could not be located)
+#   1  something is MISSING or SHADOWED, or a detector assertion failed
+# ============================================================================
+
+import os
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+# Mirrors home/.stow-local-ignore. KEEP IN SYNC: a pattern there without a
+# counterpart here makes this tool report files stow was never going to create.
+SKIP_NAMES = {".gitignore", ".gitmodules", ".DS_Store", ".stow-local-ignore",
+              ".Spotlight-V100", ".Trashes"}
+
+
+def is_ignored(rel: str) -> bool:
+    """True when stow would never deploy this path, so absence is correct."""
+    parts = Path(rel).parts
+    if any(p in SKIP_NAMES or p.startswith("._") for p in parts):
+        return True
+    return "__pycache__" in parts or rel.endswith(".pyc")
+
+
+def classify(rel: str, target_root: Path) -> str:
+    """OK | MISSING | SHADOWED -- the one detector both callers and the
+    self-test exercise. MISSING and SHADOWED need different fixes, so they
+    are never collapsed into one verdict."""
+    t = target_root / rel
+    if t.is_symlink():
+        return "OK"
+    if t.exists():
+        return "SHADOWED"
+    return "MISSING"
+
+
+def tracked_files(repo: Path) -> list[str]:
+    """git-TRACKED only -- the working tree would let build artefacts and
+    untracked scratch produce false positives."""
+    out = subprocess.run(["git", "-C", str(repo), "ls-files", "home/"],
+                         capture_output=True, text=True)
+    if out.returncode != 0:
+        return []
+    return [line[len("home/"):] for line in out.stdout.splitlines()
+            if line.startswith("home/")]
+
+
+def self_test() -> list[str]:
+    """Prove both detectors fire, in both directions, against a throwaway
+    tree. No network, no subprocess, nothing real touched."""
+    failures = []
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        (root / "sub").mkdir()
+        real = root / "sub" / "real.txt"
+        real.write_text("x")
+        link = root / "sub" / "link.txt"
+        link.symlink_to(real)
+
+        if classify("sub/link.txt", root) != "OK":
+            failures.append("a present symlink did not read as OK")
+        if classify("sub/real.txt", root) != "SHADOWED":
+            failures.append("a real file where a link belongs did not read as SHADOWED")
+        if classify("sub/absent.txt", root) != "MISSING":
+            failures.append("an absent path did not read as MISSING")
+
+        # The exact bug this tool was written to replace: a check that only
+        # asks "is it a dangling symlink?" scores an absent path as fine.
+        if classify("nothing/at/all", root) == "OK":
+            failures.append("an entirely absent path scored OK -- the 2026-08-01 blind spot is back")
+
+        if not is_ignored("some/__pycache__/x.pyc"):
+            failures.append("__pycache__ was not treated as never-deployed")
+        if not is_ignored(".stow-local-ignore"):
+            failures.append("stow's own control file was not treated as never-deployed")
+        if is_ignored(".local/bin/ci-watch"):
+            failures.append("an ordinary tracked file was wrongly treated as ignored")
+    return failures
+
+
+def main() -> int:
+    repo = os.environ.get("DOTFILES_REPO")
+    if repo:
+        repo_path = Path(repo)
+    else:
+        out = subprocess.run(["git", "rev-parse", "--show-toplevel"],
+                             capture_output=True, text=True,
+                             cwd=Path(__file__).resolve().parent)
+        if out.returncode != 0:
+            print("deploy parity: repo not located, skipped")
+            return 0
+        repo_path = Path(out.stdout.strip())
+
+    target_root = Path(os.environ.get("DEPLOY_TARGET", Path.home()))
+
+    broken = self_test()
+    for f in broken:
+        print(f"  DETECTOR BROKEN - {f}")
+    if broken:
+        print("  the parity result below cannot be trusted")
+
+    missing, shadowed = [], []
+    for rel in tracked_files(repo_path):
+        if is_ignored(rel):
+            continue
+        verdict = classify(rel, target_root)
+        if verdict == "MISSING":
+            missing.append(rel)
+        elif verdict == "SHADOWED":
+            shadowed.append(rel)
+
+    if not missing and not shadowed and not broken:
+        print(f"  deploy parity OK - every tracked home/ file is linked ({len(tracked_files(repo_path))} checked)")
+        return 0
+
+    for rel in missing:
+        print(f"  NOT DEPLOYED: ~/{rel}")
+    for rel in shadowed:
+        print(f"  SHADOWED (real file where a link belongs): ~/{rel}")
+    if missing:
+        print("  Fix: ./install.sh --stow-only")
+    if shadowed:
+        print("  Shadowed files need review first: ./install.sh --force adopts them into the repo.")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
