@@ -289,6 +289,54 @@ This is the one place where the cooldown design needs a human to remember
 something, because nothing on either box can see the other's version until they
 try to talk.
 
+### Two machines: the keymap drifts too
+
+Versions are not the only thing that has to match. **`herdr --remote` interprets
+keystrokes on the client**, and defaults to the client's own `config.toml`:
+
+```
+--remote-keybindings <local|server>   Choose local or server keybindings for remote attach
+```
+
+So a keybinding committed and stowed on the machine hosting the sessions is
+simply not in force for a `--remote` user. The config on the server is read for
+everything else; the keys come from the laptop.
+
+**The symptom is misleading.** Older bindings keep working — the client pulled
+those in some earlier deploy — while a newly added one does nothing. That reads
+as "the new binding is broken", and `herdr config check` on the server will
+cheerfully report `config: ok`, because it is validating a file that is not the
+one being consulted. Reloading with `prefix+r` does not help either: it reloads
+the client's config, and the server never logs a reload at all.
+
+**How to tell which machine is reading your keys** — `~/.config/herdr/herdr-client.log`
+records every local client's `app.startup` / `app.shutdown`. If the newest entry
+there is older than the live activity in `herdr-server.log`, the client driving
+the session is somewhere else, and its config is the one that matters.
+
+Two ways to close the gap:
+
+- **Deploy on the client too.** Pull and re-stow the dotfiles on every machine
+  that attaches, then reload. Keeps the default `local` keymap, which is what
+  bridges laptop-side desktop features such as image clipboard paste.
+- **Hand keymap ownership to the server**, so the tracked config here is the
+  single source of truth:
+
+  ```bash
+  herdr --remote ssh://<host> --remote-keybindings server
+  export HERDR_REMOTE_KEYBINDINGS=server   # same choice, without the flag
+  ```
+
+  This is the option that removes the failure class rather than re-fixing it per
+  machine: one file, one commit, no drift. The cost is that the client can no
+  longer hold keybindings of its own — which costs nothing when both ends stow
+  the same config anyway. There is no `[remote]` config key for this; the flag
+  and the environment variable are the only routes.
+
+Confirmed 2026-08-01 the hard way: `previous_agent` / `next_agent` were added
+here, validated, and reloaded, and did nothing on the laptop until the attach was
+re-made with `--remote-keybindings server`.
+
 ## herdr and tmux
 
 Upstream positions herdr as a tmux-class multiplexer — the keyboard docs open with
