@@ -89,6 +89,24 @@ yt-dlp configuration template.
 
 **Note**: The `yt()` function in `.zshrc` auto-generates this config file if it doesn't exist. This file serves as a template/reference.
 
+#### `home/.config/herdr/`
+
+herdr (agent multiplexer) configuration. Carries the ported tmux keymap and, more importantly, the two phone-home guards — `version_check` and `manifest_check` both `false`, since a missing key reads as enabled upstream. See `docs/HERDR.md`.
+
+| File          | Purpose                                                     | Deployed To                   |
+| ------------- | ----------------------------------------------------------- | ----------------------------- |
+| `config.toml` | Keymap, phone-home guards, speak-selection command bindings | `~/.config/herdr/config.toml` |
+
+**Note**: keybindings in this file only govern the machine running the herdr **client**. A `herdr --remote` session reads the client's own config unless launched with `--remote-keybindings server`.
+
+#### `home/.config/lazygit/`
+
+lazygit configuration, themed to match the terminal (Catppuccin Macchiato).
+
+| File         | Purpose                            | Deployed To                    |
+| ------------ | ---------------------------------- | ------------------------------ |
+| `config.yml` | lazygit settings and colour scheme | `~/.config/lazygit/config.yml` |
+
 ### `home/.local/bin/` - Standalone Commands
 
 Executable commands exposed on `PATH` via `~/.local/bin`. Two kinds:
@@ -233,6 +251,8 @@ When deploying files, use this quick reference:
 | `home/.config/yazi/`                                                    | `~/.config/yazi/`                                         |
 | `home/.config/zed/settings.json`                                        | `~/.config/zed/settings.json`                             |
 | `home/.config/yt-dlp/config`                                            | `~/.config/yt-dlp/config`                                 |
+| `home/.config/herdr/config.toml`                                        | `~/.config/herdr/config.toml`                             |
+| `home/.config/lazygit/config.yml`                                       | `~/.config/lazygit/config.yml`                            |
 | `platforms/macos/Library/Application Support/Cursor/User/settings.json` | `~/Library/Application Support/Cursor/User/settings.json` |
 | `platforms/macos/Library/Application Support/Code/User/settings.json`   | `~/Library/Application Support/Code/User/settings.json`   |
 | `settings/`                                                             | Manual import (not auto-deployed)                         |
