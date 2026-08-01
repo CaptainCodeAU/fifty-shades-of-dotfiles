@@ -64,7 +64,7 @@ if [ "$hook" = "pre-commit" ] && command -v git-leak-scan >/dev/null 2>&1; then
 fi
 
 # 3. Claude Code session attribution -- prepare-commit-msg only.
-#    Stamp two independent, machine-parseable trailers on commits made inside a
+#    Stamp five independent, machine-parseable trailers on commits made inside a
 #    Claude Code session:
 #      C-Sess-Id: <local UUID>    -- from $CLAUDE_SESSION_ID (set by the SessionStart
 #                                    hook); maps to the on-disk transcript.

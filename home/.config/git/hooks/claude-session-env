@@ -13,7 +13,8 @@
 # usually inert and the web URL must be harvested downstream. This script:
 #   1. Exports CLAUDE_SESSION_ID (and CLAUDE_SESSION_NAME if a name is ever present,
 #      e.g. possibly on a future resume) via CLAUDE_ENV_FILE, so _audit-chain's
-#      prepare-commit-msg step can stamp the C-Sess-Id / C-Web-Id trailers.
+#      prepare-commit-msg step can stamp the five C-* trailers (C-Sess-Id, C-Web-Id,
+#      C-Branch, C-Worktree, C-Wt-Path).
 #   2. Injects an identity line into the model's context so the fork knows its
 #      own name/id (used on the CROSS-SESSION ANNOUNCEMENT `FROM:` line).
 #
