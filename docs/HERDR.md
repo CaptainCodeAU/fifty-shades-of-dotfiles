@@ -255,6 +255,50 @@ brew services start herdr  # launchd owns it from here on
 After that it is automatic: crash-restart via `keep_alive`, and start at console
 login. There is no way to skip the stop — the socket can only have one owner.
 
+#### Once launchd owns it, nothing else can stop it
+
+`keep_alive true` is **unconditional** — launchd restarts the job on any exit,
+including a clean one. So every stop request loses:
+
+```
+$ herdr server stop        # succeeds, exits 0, prints nothing
+$ herdr server
+error: herdr server is already running
+```
+
+The server did stop. launchd started a new one within milliseconds. herdr's own
+restart flow then waits for the socket to disappear, which never happens:
+
+```
+error: shutdown was requested, but the old remote herdr server ... is still responding after 5 seconds
+error: remote server stop failed: server did not stop within 15000ms; sockets are still reachable
+```
+
+Nothing in that output names launchd, which is what makes it expensive to
+diagnose. `herdr --remote` produces it too, so it reads as a _remote_ problem
+when the cause is entirely local to the server box.
+
+Confirm it in one command — `runs` climbing with `last exit code = 0` is the
+signature, and the running process will have PPID 1:
+
+```bash
+launchctl print "gui/$(id -u)/homebrew.mxcl.herdr" | grep -E 'state|runs|last exit|properties'
+#   state = running
+#   runs = 6
+#   last exit code = 0
+#   properties = keepalive | runatload | inferred program
+```
+
+**The rule: while the service is enabled, restart through its owner.**
+
+```bash
+brew services restart herdr    # not `herdr server stop`, not herdr's restart prompt
+```
+
+That kills live panes and agents, so pick the moment. If you want herdr's own
+stop/restart to work again, hand the job back first with `brew services stop
+herdr` — and accept that you lose crash-restart and start-at-login with it.
+
 ### Two machines: keep the versions in step
 
 Remote attach is not version-agnostic. Client and server negotiate a protocol,
