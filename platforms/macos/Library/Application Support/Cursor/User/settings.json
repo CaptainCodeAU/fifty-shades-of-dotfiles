@@ -255,7 +255,6 @@
     "remote.SSH.remotePlatform": {
         "YOUR_HOSTNAME": "windows",
         "MLBOX1": "windows",
-        "192.168.1.56": "windows",
         "mlbox1.local": "windows",
         "MLbox": "windows",
         "codebox.lan": "linux",

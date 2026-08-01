@@ -49,27 +49,7 @@
 	"git_panel": {
 		"dock": "left"
 	},
-	"ssh_connections": [
-		{
-			"host": "mlbox-ubuntu",
-			"args": [],
-			"projects": [
-				{
-					"paths": ["/home/winadmin/repos/llmster-server-3090"]
-				}
-			]
-		},
-		{
-			"host": "192.168.1.101",
-			"username": "root",
-			"args": [],
-			"projects": [
-				{
-					"paths": ["/root/audit/./"]
-				}
-			]
-		}
-	],
+	"ssh_connections": [],
 	"when_closing_with_no_tabs": "platform_default",
 
 	// Session settings
