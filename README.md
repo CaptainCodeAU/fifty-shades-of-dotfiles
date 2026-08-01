@@ -929,8 +929,8 @@ fifty-shades-of-dotfiles/
 ├── settings/                         # Exported app configs (reference/import)
 │   ├── iterm2/                       # iTerm2 terminal emulator
 │   │   ├── profiles.json             # iTerm2 profiles (import via Profiles > Other Actions > Import)
-│   │   └── DynamicProfiles/          # Auto-loaded, NOT imported - symlink each into
-│   │       │                         #   ~/Library/Application Support/iTerm2/DynamicProfiles/
+│   │   └── DynamicProfiles/          # Auto-loaded, NOT imported - install.sh symlinks these
+│   │       │                         #   into ~/Library/Application Support/iTerm2/DynamicProfiles/
 │   │       │                         #   All four inherit "Captain Code (dark)" and override only
 │   │       │                         #   colours, so a tab can use any flavour (per-tab theming)
 │   │       ├── catppuccin-latte.json      # Latte (LIGHT)

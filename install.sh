@@ -1722,6 +1722,46 @@ stow_platform() {
     else
         info "VSCode not installed. Skipping."
     fi
+
+    # --- iTerm2 dynamic profiles ---
+    # These are NOT stow-managed: they live under settings/, not home/, because
+    # they deploy into ~/Library, and stow only maps home/ -> ~/. README documented
+    # "symlink each into ~/Library/Application Support/iTerm2/DynamicProfiles/" as a
+    # MANUAL step, so a fresh box got none of them -- found 2026-08-01.
+    #
+    # Symlink rather than copy, deliberately: iTerm2 watches this directory and
+    # reloads on change, so a link means editing the repo file updates the live
+    # profile with no reinstall. Verified iTerm2 follows them -- each loaded profile
+    # records `Dynamic Profile Filename` pointing back at the symlinked path.
+    #
+    # A real file at the target is left ALONE and reported: it may be a profile the
+    # owner made in the GUI, and silently replacing it would lose their work.
+    local iterm_src="$REPO_DIR/settings/iterm2/DynamicProfiles"
+    local iterm_dst="$HOME/Library/Application Support/iTerm2/DynamicProfiles"
+    if [[ -d "$HOME/Library/Application Support/iTerm2" ]]; then
+        if [[ -d "$iterm_src" ]]; then
+            run_cmd mkdir -p "$iterm_dst"
+            local linked=0 already=0 blocked=0
+            local f name dst
+            for f in "$iterm_src"/*.json; do
+                [[ -e "$f" ]] || continue
+                name=$(basename "$f")
+                dst="$iterm_dst/$name"
+                if [[ -L "$dst" ]]; then
+                    already=$((already+1))
+                elif [[ -e "$dst" ]]; then
+                    blocked=$((blocked+1))
+                    warn "iTerm2 profile ${name} exists as a REAL file - left as-is (move it aside to adopt the repo version)"
+                else
+                    run_cmd ln -s "$f" "$dst"
+                    linked=$((linked+1))
+                fi
+            done
+            success "iTerm2 dynamic profiles: ${linked} linked, ${already} already linked, ${blocked} skipped"
+        fi
+    else
+        info "iTerm2 not installed. Skipping dynamic profiles."
+    fi
 }
 
 # ==============================================================================

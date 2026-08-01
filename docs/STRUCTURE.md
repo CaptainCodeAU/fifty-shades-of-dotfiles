@@ -256,7 +256,8 @@ When deploying files, use this quick reference:
 | `home/.config/lazygit/config.yml`                                       | `~/.config/lazygit/config.yml`                            |
 | `platforms/macos/Library/Application Support/Cursor/User/settings.json` | `~/Library/Application Support/Cursor/User/settings.json` |
 | `platforms/macos/Library/Application Support/Code/User/settings.json`   | `~/Library/Application Support/Code/User/settings.json`   |
-| `settings/`                                                             | Manual import (not auto-deployed)                         |
+| `settings/iterm2/DynamicProfiles/`                                      | `~/Library/Application Support/iTerm2/DynamicProfiles/` (symlinked by `install.sh`) |
+| `settings/` (everything else)                                           | Manual import (not auto-deployed)                         |
 
 ## Benefits of This Structure
 
