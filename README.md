@@ -63,7 +63,7 @@ If you just want the shell functions without the full install, you can symlink i
    brew install ffmpeg yt-dlp aria2 tree fastfetch lazygit lazydocker yazi imagemagick
    ```
 
-   > **Note:** `ffmpeg` and `aria2` are used by the `yt()` media download wrapper. `lazygit`/`lazydocker` power the `lg`/`lzd` aliases. `yazi` is a terminal file manager used by the `y()` function. `imagemagick` is required by the yazi zoom plugin for image resizing.
+   > **Note:** `ffmpeg` and `aria2` are used by the `yt()` media download wrapper. `lazygit`/`lazydocker` power the `lg`/`lzd` aliases. `yazi` is a terminal file manager used by the `y()` function; it runs on stock defaults (this repo archived its yazi config on 2026-05-06). `imagemagick` is a general image utility.
 
 4. **Nerd Font**: Required for Powerlevel10k icons and glyphs.
 
@@ -146,7 +146,6 @@ The installer will check prerequisites, install missing tools, set up Oh My Zsh 
    ln -sf ~/fifty-shades-of-dotfiles/home/.config/zshrc/color-profiles.json ~/.config/zshrc/color-profiles.json
    ln -sf ~/fifty-shades-of-dotfiles/home/.config/zshrc/init-vscode-project-settings.sh ~/.config/zshrc/init-vscode-project-settings.sh
    ln -sf ~/fifty-shades-of-dotfiles/home/.config/yt-dlp/config ~/.config/yt-dlp/config
-   ln -sf ~/fifty-shades-of-dotfiles/home/.config/yazi ~/.config/yazi
 
    # Link platform-specific files (macOS only)
    # mkdir -p ~/Library/Application\ Support/Cursor/User
@@ -879,14 +878,6 @@ fifty-shades-of-dotfiles/
 │       ├── zshrc/                     # Shared shell data → ~/.config/zshrc/
 │       │   ├── color-profiles.json   # 10 named color profiles (single source of truth)
 │       │   └── init-vscode-project-settings.sh  # Project-level .vscode/settings.json scaffold
-│       ├── yazi/                      # Yazi file manager → ~/.config/yazi/
-│       │   ├── yazi.toml              # Main config (layout, openers, plugins)
-│       │   ├── keymap.toml            # Keybindings (vim-style + zoom)
-│       │   ├── theme.toml             # Theme (catppuccin-mocha flavor)
-│       │   ├── init.lua               # Init script (loads git plugin)
-│       │   ├── package.toml           # Plugin/flavor dependencies
-│       │   ├── plugins/               # Plugins (git status, zoom)
-│       │   └── flavors/               # Flavor themes (catppuccin-mocha)
 │       ├── nvim/                       # Neovim config → ~/.config/nvim/
 │       │   └── init.vim               # Neovim initialization
 │       ├── zed/                        # Zed editor → ~/.config/zed/
@@ -979,7 +970,6 @@ fifty-shades-of-dotfiles/
 - **`home/.config/direnv/`**: direnv configuration files. `direnvrc` reads color profiles from `color-profiles.json` via `jq` and applies machine-specific colors to VSCode/Cursor title bars, status bars, and borders.
 - **`home/.config/zshrc/color-profiles.json`**: 10 named color profiles (single source of truth). Used by both direnvrc (machine-level) and `init-vscode-project-settings.sh` (project-level).
 - **`home/.config/zshrc/init-vscode-project-settings.sh`**: Scaffolds `.vscode/settings.json` with a color profile and font settings. Supports `--profile`, `--random`, and `--list` flags.
-- **`home/.config/yazi/`**: Yazi terminal file manager configuration with catppuccin-mocha theme, vim-style keybindings, and plugins for git status indicators and image zoom. The zoom plugin requires ImageMagick (`brew install imagemagick`).
 - **`home/.config/nvim/init.vim`**: Neovim initialization config, deployed to `~/.config/nvim/init.vim` via stow.
 - **`home/.config/zed/settings.json`**: Zed editor settings. Only `settings.json` is managed; `prompts/` and `themes/` remain user-local.
 - **`home/.local/bin/md-hardbreak`**: On-demand Markdown formatter (hard breaks / paragraph gaps / strip) for the Zed preview; run via `cmd-alt-b`/`cmd-alt-g`/`cmd-alt-u` or the CLI. See [`docs/ZED_MARKDOWN_FORMATTING.md`](docs/ZED_MARKDOWN_FORMATTING.md).
