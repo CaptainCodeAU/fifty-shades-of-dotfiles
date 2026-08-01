@@ -4,7 +4,7 @@
 # ==============================================================================
 #  Usage:
 #    ./install.sh              # Full install (interactive)
-#    ./install.sh --check      # Check prerequisites only
+#    ./install.sh --check      # Check prerequisites + deploy parity (no changes)
 #    ./install.sh --stow-only  # Just run stow (skip prereqs)
 #    ./install.sh --uninstall  # Remove all symlinks
 #    ./install.sh --update     # Pull latest changes and restow
@@ -2180,7 +2180,7 @@ show_help() {
     echo
     echo -e "${BOLD}Usage:${RESET}"
     echo -e "  ./install.sh              Full interactive install"
-    echo -e "  ./install.sh --check      Check prerequisites only"
+    echo -e "  ./install.sh --check      Check prerequisites + deploy parity (no changes)"
     echo -e "  ./install.sh --stow-only  Just run stow (skip prereqs)"
     echo -e "  ./install.sh --uninstall  Remove all symlinks"
     echo -e "  ./install.sh --update     Pull latest changes and restow"
@@ -2202,6 +2202,7 @@ show_help() {
     echo -e "  7. Installs Python 3.13 via uv, nvm, pnpm, bun (standalone)"
     echo -e "  8. Installs TPM (Tmux Plugin Manager) and Nerd Fonts"
     echo -e "  9. Suggests creating ~/.zshrc.private for secrets"
+    echo -e " 10. Verifies deploy parity — every tracked home/ file is linked in ~/"
     echo
 }
 
