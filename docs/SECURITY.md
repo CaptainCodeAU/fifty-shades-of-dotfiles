@@ -91,13 +91,13 @@ The strict posture means you will run `ssh-add` explicitly. These
 four commands cover almost every interaction:
 
 ```sh
-ssh-add -t 8h ~/.ssh/<your-github-key>   # load for the day
+ssh-add -t 12h ~/.ssh/<your-github-key>  # load for the day
 ssh-add -l                                # list loaded keys
 ssh-add -d ~/.ssh/<your-github-key>      # remove one key
 ssh-add -D                                # remove all keys
 ```
 
-- **`ssh-add -t 8h <key>`** — at the start of a working session,
+- **`ssh-add -t 12h <key>`** — at the start of a working session,
   unlock the key once and keep it in the agent for 8 hours. After
   that, the agent forgets it and you'll be prompted again. Use
   this when you know you'll do many GitHub operations in a
