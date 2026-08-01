@@ -45,9 +45,14 @@ Key properties:
   runs `~/.local/bin/ci-watch` (guarded: `test -x … && … || true`), so the dashboard appears
   in **every** repo's session — not just this one. `~/.claude` is machine-local and untracked,
   so this hook is a one-time manual add, not versioned here.
-- **Wiring (per-project, optional):** `.claude/hooks/ci-watch.sh` is a thin wrapper that
-  locates the engine and runs it; drop it into any project's `.claude/settings.json`
-  `SessionStart` if you want per-repo wiring instead of (or before) the global hook.
+- **Wiring (per-project, optional):** call the engine directly from any project's
+  `.claude/settings.json` `SessionStart` if you want per-repo wiring instead of (or
+  before) the global hook:
+  `test -x "$HOME/.local/bin/ci-watch" && "$HOME/.local/bin/ci-watch" || true`.
+  A `.claude/hooks/ci-watch.sh` wrapper existed for this from 2026-06-28 (`7e39550`)
+  until 2026-08-01 (`9efc563`); it was removed once ci-watch went global, because its
+  repo-source fallback only ever resolved inside the dotfiles repo. Recover it from
+  git if per-repo wiring ever becomes the norm.
 - **Self-suggest:** in any repo that has `.github/workflows` but isn't on the watchlist, the
   render adds one dim line — `untracked CI: <owner/repo> … add: ci-watch --add .` — so a
   coverage gap surfaces itself instead of relying on anyone to remember.
