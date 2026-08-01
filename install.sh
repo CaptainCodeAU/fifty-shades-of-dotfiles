@@ -731,6 +731,80 @@ check_command_optional() {
     fi
 }
 
+# --- Deploy parity: does every tracked home/ file actually exist in $HOME? ----
+#
+# WHY THIS EXISTS. On 2026-08-01 `herdr-cooldown-check` was found undeployed --
+# the only one of 15 scripts in home/.local/bin missing from ~/.local/bin. It had
+# been that way since 2026-07-29 and nothing noticed, because the SessionStart
+# hook falls back to the repo copy and the shell simply reports "command not
+# found" for a command nobody had typed yet.
+#
+# The cause was not stow. Symlink birth times showed the bulk created 2026-07-16
+# and the newer scripts linked individually on the day each was written: `stow -R`
+# relinks EVERYTHING in one pass and would stamp them all identically. So the
+# deploy of a new file is a manual step somebody has to remember, and once it was
+# forgotten there was no detector. This is that detector.
+#
+# Enumerates git-TRACKED files (not the working tree) so build artefacts and
+# untracked scratch files can never produce a false positive. Reports two
+# distinct faults, because they need different fixes:
+#   MISSING  -- nothing at the target path        -> re-run stow
+#   SHADOWED -- a real file sits where a link belongs -> back it up, then stow
+#
+# Target dir is a parameter purely so the behaviour can be exercised against a
+# throwaway directory without touching the real $HOME.
+_check_deploy_parity() {
+    local target_root="${1:-$HOME}"
+    local missing=() shadowed=()
+
+    if ! git -C "$REPO_DIR" rev-parse --git-dir &>/dev/null; then
+        echo -e "  ${YELLOW}~${RESET} deploy parity — not a git repo, skipped"
+        return 0
+    fi
+
+    local rel target
+    while IFS= read -r rel; do
+        # Never deployed by design, so absence downstream is correct rather than
+        # a fault. KEEP IN SYNC WITH home/.stow-local-ignore -- every pattern
+        # there needs a counterpart here, or this check reports files stow was
+        # never going to create. Plus .stow-local-ignore itself, which is stow's
+        # own control file and stays inside the package.
+        case "$rel" in
+            */.gitignore|*/.gitmodules|*/.git) continue ;;
+            */.DS_Store|*/._*|*/.Spotlight-V100|*/.Trashes) continue ;;
+            */__pycache__/*|*.pyc|*/.stow-local-ignore) continue ;;
+        esac
+        target="$target_root/${rel#home/}"
+        if [[ -L "$target" ]]; then
+            continue
+        elif [[ -e "$target" ]]; then
+            shadowed+=("${rel#home/}")
+        else
+            missing+=("${rel#home/}")
+        fi
+    done < <(git -C "$REPO_DIR" ls-files home/)
+
+    if (( ${#missing[@]} == 0 && ${#shadowed[@]} == 0 )); then
+        echo -e "  ${GREEN}✓${RESET} deploy parity — every tracked home/ file is linked"
+        return 0
+    fi
+
+    local f
+    for f in "${missing[@]}"; do
+        echo -e "  ${RED}✗${RESET} not deployed — ${CYAN}~/$f${RESET}"
+    done
+    for f in "${shadowed[@]}"; do
+        echo -e "  ${YELLOW}~${RESET} real file where a link belongs — ${CYAN}~/$f${RESET}"
+    done
+    if (( ${#missing[@]} > 0 )); then
+        info "Fix: ${CYAN}./install.sh --stow-only${RESET}"
+    fi
+    if (( ${#shadowed[@]} > 0 )); then
+        info "Shadowed files need review first: ${CYAN}./install.sh --force${RESET} adopts them into the repo."
+    fi
+    return 1
+}
+
 check_prerequisites() {
     step "Checking Prerequisites"
 
@@ -895,6 +969,14 @@ check_prerequisites() {
     check_command_optional yt-dlp   "yt-dlp"   || true
     check_command_optional rustup   "rustup"   || true
     check_command_optional cargo    "cargo"    || true
+
+    echo
+
+    # Deploy parity. A tool that was never linked stays invisible until the day
+    # you reach for it -- which, for the guard scripts in home/.local/bin, is
+    # exactly the day it matters. Counts toward `missing` so --check exits 1.
+    echo -e "${BOLD}Deploy Parity:${RESET}"
+    _check_deploy_parity || missing=$((missing+1))
 
     echo
 
