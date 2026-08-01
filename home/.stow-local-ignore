@@ -10,3 +10,11 @@
 \._.*
 \.Spotlight-V100
 \.Trashes
+
+# Python bytecode. The PEP 723 scripts in home/.local/bin/ leave __pycache__
+# behind when run, and .gitignore:64's `!home/.local/bin/*` re-includes it, so
+# without this stow creates ~/.local/bin/__pycache__/ and symlinks every .pyc
+# into it. Confirmed by dry run 2026-08-01: MKDIR .local/bin/__pycache__ plus a
+# LINK per .pyc. Nothing should ever be deployed from a bytecode cache.
+__pycache__
+.*\.pyc
