@@ -145,6 +145,60 @@ ssh-add -l
 If the agent has identities you didn't load, something added them
 on your behalf. Investigate before pushing.
 
+## Telemetry and phone-home
+
+**Standing rule: an install is not finished until its phone-home is closed.** Not
+"eventually", not "when someone remembers" — checking and disabling a tool's
+reporting is part of installing it, the same way pinning a version is.
+
+Two things make this harder than it sounds, both learned by getting them wrong:
+
+**A global environment variable is not coverage.** `home/.zshrc` exports ~28
+opt-out variables including `DO_NOT_TRACK=1`. Homebrew ignores every one of them
+— it reads `HOMEBREW_NO_ANALYTICS`, which was missing, so the tool that installs
+every other tool was reporting for months while everything downstream looked
+covered. Confirm per tool which knob it actually reads; do not assume a blanket
+variable reached it.
+
+**`.zshrc` runs for INTERACTIVE shells only.** A cron job, a CI step, a
+`#!/bin/sh` script or a non-interactive agent call gets none of those exports. So
+where a tool has a config file, the setting belongs there — the file applies
+wherever the tool runs, and the environment variable is the belt, not the braces.
+
+Two corollaries worth stating:
+
+- **A missing key reads as ENABLED.** Upstream defaults are on, and a default can
+  flip on upgrade. State the opt-out explicitly rather than relying on absence.
+- **An upstream version check is phone-home.** herdr's `version_check` and
+  lazygit's `update.method: prompt` both reach the vendor on a timer, and both
+  collide with the release-cooldown posture — nothing here auto-adopts a
+  same-day release.
+
+### Current posture
+
+| Tool                | State | Enforced by                                        |
+| ------------------- | ----- | -------------------------------------------------- |
+| Homebrew            | off   | `brew analytics off` + `HOMEBREW_NO_ANALYTICS` in `.zshrc` |
+| bun                 | off   | `telemetry = false` in `home/.bunfig.toml`         |
+| lazygit             | off   | `update.method: never` (upstream default polls every 14 days) |
+| herdr               | off   | `version_check` + `manifest_check` false           |
+| Zed                 | off   | `telemetry.diagnostics` / `.metrics` false         |
+| VSCode / Cursor     | off   | `telemetry.telemetryLevel: "off"`                  |
+| Docker Desktop      | off   | `AnalyticsEnabled: false`                          |
+| Docker CLI          | off   | no OTLP endpoint configured — the CLI exports only when one exists; there is no opt-out key to write |
+| **Claude Code**     | **partial, deliberate** | `_claude_launch` clears `DO_NOT_TRACK` for that binary ONLY, so Remote Control works; OTEL metrics and error reporting stay off |
+
+The Claude Code line is a decision, not a gap. Any other exception needs the same
+explicit sign-off.
+
+### How it stays true
+
+`/refresh` has a **telemetry lane** that re-derives every row above live and
+prints `>>>` against anything reporting. It tests each file's *readability*
+before its value, so a file it cannot open is reported as SKIPPED rather than as
+a finding — an alert that cries wolf gets ignored, which costs more than the
+alert was worth.
+
 ## GitHub API access (read-only, separate from SSH)
 
 The strict posture above governs **git transport** (clone / fetch / push),
