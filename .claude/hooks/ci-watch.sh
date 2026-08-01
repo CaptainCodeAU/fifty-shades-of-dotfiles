@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 # SessionStart hook (read-only): escalating CI-status watch for the welcome dash.
 #
+# STATUS: NOT WIRED (as of 2026-08-01). ci-watch runs at USER level --
+# ~/.claude/settings.json calls the ~/.local/bin/ci-watch engine inline, so it
+# fires in every project. The three sibling hooks here are PROJECT-level, where
+# CLAUDE_PROJECT_DIR makes the repo-source fallback below meaningful; at user
+# level it does not, because $PROJECT_DIR is whatever repo you happen to be in.
+# Kept for the guarantees documented below and in case ci-watch ever becomes
+# project-scoped. Do not wire it globally without re-solving the fallback.
+#
 # Thin wrapper -- locates the `ci-watch` engine and runs its session render. The
 # engine is read-only to your repos, queries gh live (falls back to a per-target
 # cache when offline), escalates a red that stays red, and CANNOT be dismissed by
