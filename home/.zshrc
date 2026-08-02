@@ -136,6 +136,17 @@ esac
 # To (re)store the token without leaking it to shell history:
 #   read -rs GH_PAT && security add-generic-password -U -a "$USER" -s github-api-readonly -w "$GH_PAT" && unset GH_PAT
 
+# --- NVD API key (rate limit only, NOT a credential) ---
+# Stored in macOS Keychain as "nvd-api-key". It authorises nothing and reads
+# nothing private - it only lifts NVD's anonymous limit from 5 to 50 req/30s,
+# which is what makes toolchain-cve-check's 231-formula Homebrew sweep finish in
+# ~2min instead of ~20min. Free and instantly regenerable, so a leak is a
+# non-event: https://nvd.nist.gov/developers/request-an-api-key
+# Exposed as $NVD_API_KEY inside _claude_launch(); toolchain-cve-check also reads
+# the Keychain entry directly, so manual runs are authenticated too.
+# To (re)store it without leaking it to shell history:
+#   read -rs NVDK && security add-generic-password -U -a "$USER" -s nvd-api-key -w "$NVDK" && unset NVDK
+
 
 # ==============================================================================
 # 4. Onboarding & Dependency Checks
@@ -272,8 +283,19 @@ command -v uv >/dev/null && eval "$(uv generate-shell-completion zsh)"
 # already-current lock is unaffected. Opt out for one shell with UV_NO_COOLDOWN=1;
 # a pre-set UV_EXCLUDE_NEWER (explicit user/CI value) is never overridden. The
 # `date -v` (BSD) / `date -d` (GNU) fallback keeps it portable across macOS/Linux.
+#
+# ⚠ TRUNCATED TO MIDNIGHT UTC (2026-08-03) — load-bearing, not cosmetic. uv STAMPS this
+# cutoff into the resolved lockfile as `[options] exclude-newer`. Computed to the SECOND it
+# differed in every new shell, so every `uv run` REWROTE uv.lock: git dirty in every uv
+# project, pre-commit hooks tripping on a hook-modified file, and — the real problem — a
+# COMMITTED lock whose recorded cutoff depended on which shell happened to write it, so
+# `uv sync` could resolve differently on different days. Found via docbrain, where it
+# blocked commits outright. At DAY granularity the value is identical across shells and
+# across a whole day, so the lock stops churning. The control is unchanged in intent:
+# ±1 day on a 72h window is immaterial to a supply-chain cooldown, and the effective
+# window only ever gets LONGER (3–4 days), never shorter.
 if command -v uv >/dev/null 2>&1 && [[ -z "$UV_EXCLUDE_NEWER" && -z "$UV_NO_COOLDOWN" ]]; then
-    _uv_cutoff=$(date -u -v-3d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '3 days ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)
+    _uv_cutoff=$(date -u -v-3d +%Y-%m-%dT00:00:00Z 2>/dev/null || date -u -d '3 days ago' +%Y-%m-%dT00:00:00Z 2>/dev/null)
     [[ -n "$_uv_cutoff" ]] && export UV_EXCLUDE_NEWER="$_uv_cutoff"
     unset _uv_cutoff
 fi
@@ -684,6 +706,15 @@ _claude_launch() {
   # Claude session and its Bash tool only. Empty on non-macOS; harmless (gh just
   # stays unauthenticated). gh reads GH_TOKEN; never run `gh auth login`.
   local gh_token="$(security find-generic-password -a "$USER" -s github-api-readonly -w 2>/dev/null)"
+  # NVD API key (macOS Keychain) -> $NVD_API_KEY for this Claude session. UNLIKE
+  # $GH_TOKEN this is NOT a credential: it grants no access to anything and only
+  # lifts NVD's anonymous rate limit from 5 to 50 requests/30s, which is what makes
+  # a 231-formula Homebrew sweep ~2min instead of ~20min. Free + instantly
+  # regenerable at https://nvd.nist.gov/developers/request-an-api-key.
+  # toolchain-cve-check ALSO reads this same Keychain entry directly, so a manual
+  # run outside a Claude session is authenticated too; this export just saves it
+  # the `security` call. Empty on non-macOS -> the sweep degrades to slow, never wrong.
+  local nvd_key="$(security find-generic-password -a "$USER" -s nvd-api-key -w 2>/dev/null)"
 
   # Refresh the read-only GH API status cache that the welcome banner reads.
   # Background, 6h-gated, uses the token we just read; never blocks the launch.
@@ -708,6 +739,7 @@ _claude_launch() {
       DISABLE_TELEMETRY= \
         DO_NOT_TRACK= \
         GH_TOKEN="$gh_token" \
+        NVD_API_KEY="$nvd_key" \
         CLAUDE_CODE_HIDE_ACCOUNT_INFO=1 \
         CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1 \
         ENABLE_EXPERIMENTAL_MCP_CLI=1 \
@@ -718,6 +750,7 @@ _claude_launch() {
     DISABLE_TELEMETRY= \
       DO_NOT_TRACK= \
       GH_TOKEN="$gh_token" \
+      NVD_API_KEY="$nvd_key" \
       CLAUDE_CODE_HIDE_ACCOUNT_INFO=1 \
       CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1 \
       ENABLE_EXPERIMENTAL_MCP_CLI=1 \
