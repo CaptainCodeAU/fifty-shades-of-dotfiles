@@ -211,7 +211,7 @@
         "~/.ssh/gitconfig-*",
         "~/.ssh/*.pub"
       ],
-      "allowWrite": ["~/.claude/MEMORY"]
+      "allowWrite": ["~/.claude/MEMORY", "~/.config/herdr/herdr.sock"]
     }
   }
 }
