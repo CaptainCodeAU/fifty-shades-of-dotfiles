@@ -135,10 +135,39 @@ brew pin herdr
 
 On macOS this is now handled for you: `herdr` is part of the core formulae in
 `install.sh`, and the pin guard runs immediately after the install step so a
-freshly installed formula cannot sit unpinned. **Linux and WSL are deliberately
-manual** — there is no apt/dnf/pacman package, and the vendor installer verifies
-no checksum or signature, so the installer does not automate a supply chain it
-would otherwise reject. On those boxes herdr is reported as optional.
+freshly installed formula cannot sit unpinned.
+
+**Linux and WSL are handled too, by a different route.** They were manual until
+2026-08-02, on the reasoning that no verified supply chain existed: there is no
+apt/dnf/pacman package, homebrew-core publishes only an `arm64_tahoe` bottle,
+and every remaining method — the vendor's `curl … | sh`, `mise` (which resolves
+via aqua, whose registry entry for herdr is `type: github_release` /
+`format: raw` with no `checksum:` block), and a raw download — fetches the same
+GitHub asset. Upstream publishes **no `.sha256` and no `.sig`** beside it, so
+none of them verify anything.
+
+The fix is the gate used everywhere else in this estate: pin the artefact and
+assert it. `install.sh` carries `HERDR_VERSION` plus a sha256 per architecture,
+downloads that exact asset, and **refuses to install on mismatch**:
+
+```bash
+HERDR_VERSION="v0.7.5"
+HERDR_SHA256_LINUX_X86_64="3dc83288…59253"
+HERDR_SHA256_LINUX_AARCH64="32e763a1…a8b9"
+```
+
+It lands at `~/.local/bin/herdr`, needs no sudo, and skips its work when the
+installed version already matches the pin. Be clear about what this buys: it is
+trust-on-first-use, not upstream provenance — it cannot attest the binary was
+good originally. What it guarantees is that every box gets **byte-identical** to
+the artefact vetted here, and that a silently re-uploaded asset fails loudly.
+That is the same guarantee `brew pin` gives on macOS, which is why herdr is now
+counted as **required on both platforms** rather than optional on one.
+
+Bumping the Linux pin is deliberate and never automatic — the runbook is in the
+comment block above `HERDR_VERSION` in `install.sh`: confirm the cooldown has
+elapsed, re-hash both assets, update version and hashes in one commit, then
+re-run `./install.sh` on each box.
 
 Then close the phone-home half. The config is repo-managed at
 `home/.config/herdr/config.toml` and stow-linked to `~/.config/herdr/config.toml`,
