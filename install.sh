@@ -107,6 +107,35 @@ BUN_MIN_VERSION="1.3.0"
 #   brew unpin herdr && brew upgrade herdr && brew pin herdr
 HERDR_COOLDOWN_DAYS="3"
 
+# --- herdr pinned release (Linux/WSL only) ---
+# macOS gets herdr from Homebrew, whose formula hashes the SOURCE tarball and
+# ships a checksummed bottle. Linux has no such route: homebrew-core publishes
+# only an arm64_tahoe bottle, there is no apt/dnf/pacman package, and every
+# remaining method (vendor curl|sh, mise via aqua, raw download) fetches the
+# same GitHub release asset -- and upstream publishes NO .sha256 and NO .sig
+# alongside it, so none of them can verify anything.
+#
+# The gate is therefore the same one used everywhere else in this estate: pin
+# the exact artefact and assert it. These hashes were computed from the real
+# v0.7.5 assets. install.sh REFUSES to install on mismatch, so a silently
+# re-uploaded asset fails loudly instead of landing.
+#
+# This is trust-on-first-use, not upstream provenance -- it cannot tell you the
+# binary was good originally. What it does guarantee is that every box gets
+# BYTE-IDENTICAL to the artefact that was vetted here, which is exactly the
+# guarantee `brew pin` provides on macOS.
+#
+# To bump (deliberate, never automatic -- after the cooldown has elapsed):
+#   1. herdr-cooldown-check confirms the release has aged past HERDR_COOLDOWN_DAYS
+#   2. curl -fsSL -O https://github.com/herdrdev/herdr/releases/download/<tag>/herdr-linux-x86_64
+#      curl -fsSL -O https://github.com/herdrdev/herdr/releases/download/<tag>/herdr-linux-aarch64
+#   3. shasum -a 256 herdr-linux-*   (sha256sum on Linux)
+#   4. update HERDR_VERSION + both hashes below in ONE commit
+#   5. push, pull on each box, re-run ./install.sh
+HERDR_VERSION="v0.7.5"
+HERDR_SHA256_LINUX_X86_64="3dc83288073e4c2d3c679a30e7be97bcca9141c6fd17dbbb9219142e95c59253"
+HERDR_SHA256_LINUX_AARCH64="32e763a1499a6b694b1d708e4f062b743be1da9f34fcfa4d212d6db6fe09a8b9"
+
 # --- Helpers ---
 info()    { echo -e "${CYAN}ℹ️  $*${RESET}"; }
 success() { echo -e "${GREEN}✅ $*${RESET}"; }
@@ -879,25 +908,34 @@ check_prerequisites() {
     else
         check_command trash-put "trash-cli (Linux)" || missing=$((missing+1))
     fi
-    # herdr counts as REQUIRED on macOS (Homebrew formula, checksummed bottle)
-    # and merely informational elsewhere -- no apt/dnf/pacman package exists and
-    # the vendor installer verifies nothing, so a Linux box is not held to a
-    # standard this installer refuses to meet on its behalf.
-    if [[ "$(check_os)" == "macos" ]]; then
-        check_command herdr "herdr" || missing=$((missing+1))
-    else
-        check_command_optional herdr "herdr (manual install on Linux)" || true
-    fi
+    # herdr is REQUIRED on every platform. macOS gets it from Homebrew (formula
+    # hashes the source tarball, checksummed bottle); Linux/WSL gets the pinned
+    # release binary verified against HERDR_SHA256_* by install_herdr_release.
+    # Both routes refuse an unverified artefact, so neither box is held to a
+    # standard the other escapes.
+    check_command herdr "herdr" || missing=$((missing+1))
     # Where herdr exists, its guards ARE the policy and must be observable:
-    # the Homebrew pin enforces the release cooldown, config.toml keeps the two
+    # the pin enforces the release cooldown, config.toml keeps the two
     # phone-home paths closed, and the LaunchAgent is what makes the session
     # server survive a crash. Report all three rather than assuming a past run
     # set them -- a lapsed pin looks identical to a healthy one until checked.
     if command -v herdr &>/dev/null; then
-        if [[ -e "${HOMEBREW_PREFIX:-/opt/homebrew}/var/homebrew/pinned/herdr" ]]; then
-            echo -e "      ${GREEN}✓${RESET} pinned — ${HERDR_COOLDOWN_DAYS}-day release cooldown enforced"
+        if [[ "$(check_os)" == "macos" ]]; then
+            if [[ -e "${HOMEBREW_PREFIX:-/opt/homebrew}/var/homebrew/pinned/herdr" ]]; then
+                echo -e "      ${GREEN}✓${RESET} pinned — ${HERDR_COOLDOWN_DAYS}-day release cooldown enforced"
+            else
+                echo -e "      ${YELLOW}~${RESET} not pinned — run ${CYAN}brew pin herdr${RESET} (cooldown NOT enforced)"
+            fi
         else
-            echo -e "      ${YELLOW}~${RESET} not pinned — run ${CYAN}brew pin herdr${RESET} (cooldown NOT enforced)"
+            # On Linux the pin IS the version constant: install.sh will not
+            # deploy anything whose sha256 differs from the recorded hash.
+            local _herdr_have
+            _herdr_have=$(herdr --version 2>/dev/null | awk '{print $2}')
+            if [[ "$_herdr_have" == "${HERDR_VERSION#v}" ]]; then
+                echo -e "      ${GREEN}✓${RESET} pinned to ${HERDR_VERSION} — sha256-verified at install"
+            else
+                echo -e "      ${YELLOW}~${RESET} version ${_herdr_have:-unknown} != pinned ${HERDR_VERSION} — re-run ${CYAN}./install.sh${RESET}"
+            fi
         fi
         if [[ -L "$HOME/.config/herdr/config.toml" ]]; then
             echo -e "      ${GREEN}✓${RESET} config.toml stow-linked from the repo"
@@ -1139,6 +1177,90 @@ install_yazi_release() {
         success "yazi installed: $(yazi --version 2>/dev/null | head -1)"
     else
         warn "yazi install completed but not on PATH — ensure ~/.local/bin is on PATH"
+    fi
+}
+
+install_herdr_release() {
+    # Linux/WSL only. macOS takes the Homebrew path in install_macos_prerequisites.
+    #
+    # Deliberately unlike install_yazi_release(), which resolves "latest": herdr
+    # is version-PINNED and hash-VERIFIED. herdr ships a self-updater and two
+    # default-on calls to herdr.dev, so an unpinned install would walk itself
+    # past the cooldown. The pin here is what the Homebrew pin is on macOS.
+
+    local arch_key asset expected
+    case "$(uname -m)" in
+        x86_64)         arch_key="x86_64";  expected="$HERDR_SHA256_LINUX_X86_64" ;;
+        aarch64|arm64)  arch_key="aarch64"; expected="$HERDR_SHA256_LINUX_AARCH64" ;;
+        *) warn "Unsupported architecture for herdr release: $(uname -m)"; return 1 ;;
+    esac
+    asset="herdr-linux-${arch_key}"
+
+    # Already at the pinned version? Nothing to do. `herdr --version` prints
+    # "herdr 0.7.5"; HERDR_VERSION carries the leading v, so compare on the tail.
+    if command -v herdr &>/dev/null; then
+        local have want
+        have=$(herdr --version 2>/dev/null | awk '{print $2}')
+        want="${HERDR_VERSION#v}"
+        if [[ "$have" == "$want" ]]; then
+            success "herdr already at pinned ${HERDR_VERSION}"
+            return 0
+        fi
+        info "herdr ${have:-unknown} installed; pinned release is ${HERDR_VERSION}"
+    fi
+
+    if ! command -v shasum &>/dev/null && ! command -v sha256sum &>/dev/null; then
+        warn "Neither shasum nor sha256sum found — cannot verify herdr download. Refusing to install."
+        return 1
+    fi
+
+    local url tmp_dir
+    url="https://github.com/herdrdev/herdr/releases/download/${HERDR_VERSION}/${asset}"
+    tmp_dir=$(mktemp -d)
+
+    info "Downloading herdr ${HERDR_VERSION} (${asset})..."
+    if ! run_cmd curl -fL --proto '=https' --tlsv1.2 -o "$tmp_dir/$asset" "$url"; then
+        warn "herdr download failed from $url"
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+
+    # In dry-run nothing was downloaded, so there is nothing to verify.
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[dry-run] Would verify sha256 ${expected:0:16}... and install to ~/.local/bin/herdr"
+        rm -rf "$tmp_dir"
+        return 0
+    fi
+
+    local actual
+    if command -v sha256sum &>/dev/null; then
+        actual=$(sha256sum "$tmp_dir/$asset" | awk '{print $1}')
+    else
+        actual=$(shasum -a 256 "$tmp_dir/$asset" | awk '{print $1}')
+    fi
+
+    if [[ "$actual" != "$expected" ]]; then
+        error "herdr checksum MISMATCH — refusing to install."
+        warn  "  asset:    $asset (${HERDR_VERSION})"
+        warn  "  expected: $expected"
+        warn  "  actual:   $actual"
+        warn  "The pinned artefact does not match what this repo vetted. Do NOT"
+        warn  "work around this by loosening the pin. Either the release was"
+        warn  "re-uploaded, or the download was tampered with in transit."
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+    success "herdr checksum verified (sha256 ${actual:0:16}...)"
+
+    mkdir -p "$HOME/.local/bin"
+    run_cmd mv -f "$tmp_dir/$asset" "$HOME/.local/bin/herdr"
+    chmod +x "$HOME/.local/bin/herdr"
+    rm -rf "$tmp_dir"
+
+    if command -v herdr &>/dev/null; then
+        success "herdr installed: $(herdr --version 2>/dev/null | head -1)"
+    else
+        warn "herdr installed to ~/.local/bin but not on PATH — ensure ~/.local/bin is on PATH"
     fi
 }
 
@@ -1482,6 +1604,12 @@ install_linux_prerequisites() {
             install_yazi_release
         fi
     fi
+
+    # --- herdr (agent multiplexer) via PINNED + hash-verified GitHub release ---
+    # Not gated behind `command -v herdr` like yazi above: the function itself
+    # compares the installed version against HERDR_VERSION, so re-running
+    # install.sh after a deliberate version bump actually deploys the bump.
+    install_herdr_release || warn "herdr not installed — see docs/HERDR.md"
 
     # --- Oh My Zsh ---
     if [[ ! -d "$HOME/.oh-my-zsh" ]]; then
