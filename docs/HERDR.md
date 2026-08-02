@@ -537,7 +537,10 @@ the binary itself.
   human runs them. Automatic adoption is precisely what the cooldown exists to
   prevent.
 - **Not in scope:** the vendor's plugin marketplace. Plugins are a separate
-  supply-chain surface and are not covered by any of this.
+  supply-chain surface and none of the cooldown machinery covers them. The
+  standing rule is `herdr plugin link` against a locally authored directory,
+  never `herdr plugin install`, which clones a repo and executes its
+  `[[build]]` commands. See [`docs/HERDR_PLUGINS.md`](HERDR_PLUGINS.md) §1.
 
 ## Related
 
@@ -545,3 +548,15 @@ the binary itself.
 - [`docs/TOOLCHAIN_CVE_CHECK.md`](TOOLCHAIN_CVE_CHECK.md) — the sibling floor watcher
 - [`docs/CI_WATCH.md`](CI_WATCH.md) — the alert-design rules this hook follows
 - [`docs/reference/tmux_cheatsheet.md`](reference/tmux_cheatsheet.md) — the incumbent
+
+### Capability references (written for an AI agent, not a human)
+
+Verified against herdr 0.7.5 by executing every command, 2026-08-02.
+
+- [`docs/HERDR_AGENT_SKILL.md`](HERDR_AGENT_SKILL.md) — driving herdr from
+  inside a pane: split, run, `wait-output`, read. Includes the Claude-sandbox
+  socket block and the JSON-vs-plain-text output map.
+- [`docs/HERDR_AGENT_AUTOMATION.md`](HERDR_AGENT_AUTOMATION.md) — agent
+  lifecycle states, `blocked` detection, and why `interactive_ready` lies.
+- [`docs/HERDR_PLUGINS.md`](HERDR_PLUGINS.md) — manifest format, the
+  focused-pane context trap, and why `link` is the only safe registration path.
