@@ -189,7 +189,19 @@ Context-dependent extras (DOC, plus OBSERVED where noted):
 `HERDR_PLUGIN_ENTRYPOINT_ID` for pane commands (OBSERVED);
 `HERDR_PLUGIN_CLICKED_URL` and `HERDR_PLUGIN_LINK_HANDLER_ID` for link handlers.
 
-### Link handlers: the trigger is `ctrl+click`, on macOS too
+### Link handlers: the trigger is `ctrl+click`, on macOS too (OBSERVED 2026-08-03)
+
+CONFIRMED on herdr 0.7.5 + iTerm2 3.6.10 by a two-URL experiment -- one URL per
+gesture, so the log names the winner instead of relying on memory:
+
+| URL             | Gesture                 | Firings |
+| --------------- | ----------------------- | ------- |
+| `.../pull/1111` | ctrl + one-finger click | **2**   |
+| `.../pull/2222` | cmd + one-finger click  | **0**   |
+
+Control works. Command never reaches herdr at all. With that, all four plugin
+surfaces are verified on this machine: actions, panes, injected environment, and
+link handlers.
 
 Recorded 2026-08-03 after a failed test wasted a round trip. The modifier is
 **Control on every platform, including macOS** -- upstream's reason is that
