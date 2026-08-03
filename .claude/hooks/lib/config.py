@@ -132,7 +132,14 @@ class PreCompactHookConfig(HookConfig):
 class GlobalConfig:
     """Global configuration settings."""
 
-    debug: bool = True
+    # OFF by default (was True since 2026-01-19, commit 72c1de1). When on, the Stop
+    # handler copies the ENTIRE live transcript to Temp/transcript_dump.jsonl and the
+    # raw hook payload to Temp/hook_raw_input.json on every turn -- in the clear, with
+    # no redaction. That is a standing secret-exposure surface: on 2026-08-03 it
+    # captured an API key the moment it was pasted into the session, before anything
+    # could act on it. Debugging a hook is occasional; leaking a session is permanent.
+    # Turn it back on for a single run with HOOK_DEBUG=1 (see load_config below).
+    debug: bool = False
     debug_dir: str = "Temp"
     project_dir: str = ""
 

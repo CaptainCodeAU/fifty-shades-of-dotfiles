@@ -2,7 +2,13 @@
 # Each hook type can be enabled/disabled and configured independently
 
 global:
-  debug: true
+  # OFF as of 2026-08-03. When true, the Stop handler copies the ENTIRE live
+  # transcript to Temp/transcript_dump.jsonl and the raw hook payload to
+  # Temp/hook_raw_input.json on every turn, unredacted. It captured a pasted API
+  # key within seconds of it arriving. Turn on only for a single debugging run:
+  #   HOOK_DEBUG=1 <command>
+  # The audio/voice notifications below are UNAFFECTED by this flag.
+  debug: false
   debug_dir: "Temp"
   project_dir: ""
 
