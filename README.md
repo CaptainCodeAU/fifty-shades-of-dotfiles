@@ -297,6 +297,44 @@ uv_tool_uninstall_current_project
 uvx ruff check .
 ```
 
+#### Editable vs frozen (`--frozen`)
+
+Editable is the right default while you are working on a project, but it is the wrong
+default when something _outside your control_ runs the command — a git hook, a cron
+job, a background capture. In editable mode those callers execute whatever is in your
+checkout at that instant, so a half-saved file or a mid-refactor tree breaks them.
+
+Pass `--frozen` to copy the project into the tool environment instead of linking back
+to the checkout:
+
+```bash
+# Snapshot install: the installed command is pinned to the code as it is right now
+uv_tool_install_current_project --frozen cli
+
+# Editing the checkout no longer changes what runs -- update it explicitly:
+uv_tool_reinstall_current_project --frozen cli
+```
+
+**The mode is not sticky.** Omitting `--frozen` on a reinstall returns the tool to
+editable, so pass the same flag you installed with. A reinstall that changes the mode
+warns before it does so.
+
+Because the difference is invisible at the call site, the mode is reported everywhere
+it matters — `uv_tool_check_current_project` prints it, and the `.envrc` banner shows
+it on every `cd` into the project:
+
+```
+│     Tool:    ✓ Installed via uv tool (v0.1.0)
+│     Mode:    FROZEN - edits here do NOT change what runs
+│               uv_tool_reinstall_current_project --frozen to update it
+```
+
+| Mode       | Meaning                                                   | When                                               |
+| :--------- | :-------------------------------------------------------- | :------------------------------------------------- |
+| `EDITABLE` | Live link to this checkout; edits take effect immediately | Normal development (default)                       |
+| `FROZEN`   | Snapshot copy; edits are ignored until you reinstall      | Anything a hook, cron job or other automation runs |
+| `REGISTRY` | Installed from PyPI, not from this checkout               | `uv tool install <name>`                           |
+
 ### 4. Cleaning Up a Project
 
 To completely remove all generated artifacts and return the directory to a clean state, use `python_delete`. This is non-destructive to your source code.
@@ -415,9 +453,11 @@ graph TD
 
     subgraph "🌍 Global CLI Deployment (Optional)"
         C --> F["Run: `uv_tool_install_current_project cli`<br>to install with 'cli' extra (editable)"]
+        C --> K["Run: `uv_tool_install_current_project --frozen cli`<br>for a snapshot a hook or cron job can rely on"]
         F --> G["✅ `my-cli` is now available globally"]
+        K --> G
         G --> H["... make code changes ..."]
-        H --> I["Run: `uv_tool_reinstall_current_project cli`<br>to update (only if entry points change)"]
+        H --> I["Run: `uv_tool_reinstall_current_project cli`<br>editable: only if entry points change<br>frozen: after every change, with `--frozen`"]
         I --> J["Run: `uv_tool_uninstall_current_project`<br>to remove the global command"]
     end
 
@@ -426,7 +466,7 @@ graph TD
     classDef devLoop fill:#1abc9c,stroke:#16a085,stroke-width:2px,color:white;
     classDef result fill:#9b59b6,stroke:#8e44ad,stroke-width:2px,color:white;
 
-    class A,D,F,H,I,J userAction;
+    class A,D,F,H,I,J,K userAction;
     class B,E tool;
     class C devLoop;
     class G result;
@@ -853,7 +893,6 @@ TMUX="/tmp/test" zsh -i -c exit
 
 This repository uses a **one-to-one mapping** structure that mirrors actual deployment locations, making it clear where each file goes:
 
-
 > **`docs/STRUCTURE.md` is authoritative for the file map.** This tree is a
 > readable overview and is allowed to lag; when the two disagree, STRUCTURE.md
 > wins. Keeping two full maps in sync by hand is what let the herdr and lazygit
@@ -1141,15 +1180,15 @@ For the full architecture, conventions, migration policy, and add-new-script wor
 
 ### Python Functions
 
-| Function                            | Arguments                    | Description                                                                      |
-| :---------------------------------- | :--------------------------- | :------------------------------------------------------------------------------- |
-| `python_new_project`                | `<py_version>`               | Scaffolds a complete new Python project in the current directory.                |
-| `python_setup`                      | `<py_version> [extra1...]`   | Resets/creates the `.venv` and installs dependencies for an existing project.    |
-| `python_delete`                     | `(none)`                     | Deletes the `.venv`, `.envrc`, caches, and build artifacts.                      |
-| `uv_tool_install_current_project`   | `[extra1...] \| --no-extras` | Installs the current project as a global CLI tool via `uv tool` (editable mode). |
-| `uv_tool_reinstall_current_project` | `[extra1...] \| --no-extras` | Reinstalls the global CLI tool (needed when entry points change).                |
-| `uv_tool_uninstall_current_project` | `(none)`                     | Uninstalls the `uv tool`-managed CLI tool for the current project.               |
-| `uv_tool_check_current_project`     | `(none)`                     | Checks if the current project is installed via `uv tool`.                        |
+| Function                            | Arguments                               | Description                                                                                                                   |
+| :---------------------------------- | :-------------------------------------- | :---------------------------------------------------------------------------------------------------------------------------- |
+| `python_new_project`                | `<py_version>`                          | Scaffolds a complete new Python project in the current directory.                                                             |
+| `python_setup`                      | `<py_version> [extra1...]`              | Resets/creates the `.venv` and installs dependencies for an existing project.                                                 |
+| `python_delete`                     | `(none)`                                | Deletes the `.venv`, `.envrc`, caches, and build artifacts.                                                                   |
+| `uv_tool_install_current_project`   | `[--frozen] [extra1...] \| --no-extras` | Installs the current project as a global CLI tool via `uv tool`. Editable by default; `--frozen` installs a snapshot copy.    |
+| `uv_tool_reinstall_current_project` | `[--frozen] [extra1...] \| --no-extras` | Reinstalls the global CLI tool (needed when entry points change, or after every change when frozen). Warns if the mode flips. |
+| `uv_tool_uninstall_current_project` | `(none)`                                | Uninstalls the `uv tool`-managed CLI tool for the current project.                                                            |
+| `uv_tool_check_current_project`     | `(none)`                                | Checks if the current project is installed via `uv tool`, and reports EDITABLE / FROZEN / REGISTRY.                           |
 
 ### Node.js Functions
 
