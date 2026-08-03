@@ -381,6 +381,33 @@ _show_welcome_full() {
         fi
     fi
 
+    # --- Installed-package CVEs (EXCEPTION-ONLY: silent unless something is wrong) ---
+    # `vuln-scan --fast` is built for exactly this spot. The ordinary case -- nothing
+    # installed or upgraded since last login -- is one `brew list` and one SQLite
+    # read with NO network, so it costs a few hundred milliseconds and prints
+    # nothing. When packages HAVE changed it checks up to a dozen inline (a few
+    # seconds, and it says so first, because an unexplained pause in a login shell
+    # reads as a hang). A bigger backlog is detached to the background rather than
+    # blocking the prompt, which is what makes a cold database survivable: the very
+    # first run has 231 packages and would otherwise freeze the terminal for a
+    # quarter of an hour.
+    #
+    # SILENT WHEN CLEAN, like the deploy-parity check above. It speaks only for a
+    # HIGH/CRITICAL finding or an unverifiable package.
+    if command -v vuln-scan >/dev/null 2>&1; then
+        local _vuln
+        _vuln=$(NO_COLOR=1 vuln-scan --fast --no-progress 2>/dev/null)
+        if [[ -n "$_vuln" ]]; then
+            if printf '%s' "$_vuln" | grep -q 'EXPOSED'; then
+                echo "    cve: ${err}installed package(s) with known vulnerabilities${done}"
+                printf '%s\n' "$_vuln" | grep -A1 'EXPOSED' | head -8 | sed "s|^|      |"
+                echo "      ${info}full detail: vuln-scan   |   briefing: ~/.local/state/dotfiles/vuln-briefing.md${done}"
+            elif printf '%s' "$_vuln" | grep -qE 'need checking|already running'; then
+                printf '%s\n' "$_vuln" | sed "s|^|    cve: |"
+            fi
+        fi
+    fi
+
     # --- GitHub API token (read-only) ---
     # The status cache is written in the BACKGROUND by _claude_launch during
     # Claude sessions (the only place $GH_TOKEN exists). The banner only reads

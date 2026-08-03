@@ -1,0 +1,595 @@
+#!/usr/bin/env -S uv run --quiet python3
+# /// script
+# requires-python = ">=3.10"
+# dependencies = []
+# ///
+#
+# ============================================================================
+#  vuln-scan -- incremental CVE scan of what is actually installed
+# ============================================================================
+#
+# WHY THIS AND NOT toolchain-cve-check
+#   toolchain-cve-check answers "is this vulnerable?" from scratch every run. For
+#   231 Homebrew formulae that is ~15 minutes, which is fine for an ad-hoc audit
+#   and impossible for a shell prompt. This tool remembers what it has already
+#   checked, so the ordinary case -- nothing changed since last login -- costs one
+#   local `brew list` and one SQLite read, with NO network at all.
+#
+#   The cache key is (name, version, REVISION). The revision matters: Homebrew
+#   ships backported security patches as a revision bump while keeping the
+#   upstream version, so libssh2 1.11.1_3 and 1.11.1_4 are different things and
+#   the bump must force a rescan. Keying on version alone would mean a security
+#   update is never re-examined.
+#
+# THE THREE DOORS
+#   --fast        every new terminal tab. Silent + instant when nothing changed;
+#                 announces itself and shows progress when there is work to do.
+#   --background  Claude SessionStart. Detaches, writes a verdict + marker file.
+#   --report      writes a self-contained briefing for a context-free assistant.
+#
+# WHAT IT WILL NOT DO
+#   Report "clean" when it could not tell. Every uncertain path -- unresolvable
+#   CPE, rate limit, empty body, namesake collision -- lands on UNKNOWN. A tool
+#   that is trusted and silently wrong is worse than no tool.
+#
+# HOMEBREW-PATCHED FINDINGS
+#   NVD knows nothing about Homebrew revisions, so a formula whose fix has been
+#   backported still reports vulnerable. Where a CVE description names its fix
+#   commit and that commit is patched into the installed formula, the finding is
+#   downgraded to `patched` and kept out of the alarm. Telling someone to upgrade
+#   a package they just upgraded is how a security alert stops being read.
+#
+# EXIT CODES
+#   0  nothing actionable
+#   1  at least one un-acknowledged HIGH or CRITICAL finding
+#   2  scan could not run (no brew, no network on a cold database, etc.)
+# ============================================================================
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import time
+
+# Look for vulnlib.py beside BOTH the symlink and the real file. This tool is
+# deployed as a stow-style symlink into ~/.local/bin, so `abspath` finds the
+# deployed copy while `realpath` finds the repo source. Trying only one of them
+# means the tool dies with ImportError the first time the pair is half-deployed --
+# and a security check that fails to start is indistinguishable from one that
+# passed, which is the whole failure mode this project keeps designing against.
+for _d in (os.path.dirname(os.path.realpath(__file__)),
+           os.path.dirname(os.path.abspath(__file__))):
+    if _d not in sys.path:
+        sys.path.insert(0, _d)
+try:
+    import vulnlib as V  # noqa: E402
+except ImportError:  # pragma: no cover
+    sys.stderr.write("vuln-scan: cannot find vulnlib.py beside this script "
+                     "(deploy both, or run ./install.sh --stow-only)\n")
+    sys.exit(2)
+
+ACTION_THRESHOLD = 7.0          # CVSS at or above this becomes an action item
+SUBJECT = "brew"
+
+# How many packages --fast will check INLINE before refusing and detaching.
+# This is the guard that keeps the tool out of the "why is my terminal frozen"
+# category. A cold database has 231 packages to check at roughly 1-4s each; a
+# login shell that blocks for a quarter of an hour is a tool people delete.
+# A dozen changed formulae after a `brew upgrade` is a few seconds and fine.
+FAST_MAX_INLINE = 12
+
+
+# --------------------------------------------------------------------------- #
+#  Styling                                                                     #
+# --------------------------------------------------------------------------- #
+class C:
+    enabled = sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
+
+    @staticmethod
+    def _w(code, s):
+        return f"\033[{code}m{s}\033[0m" if C.enabled else s
+
+    bold = staticmethod(lambda s: C._w("1", s))
+    dim = staticmethod(lambda s: C._w("2", s))
+    red = staticmethod(lambda s: C._w("31", s))
+    green = staticmethod(lambda s: C._w("32", s))
+    yellow = staticmethod(lambda s: C._w("33", s))
+    cyan = staticmethod(lambda s: C._w("36", s))
+
+
+def sev_colour(sev, s):
+    return {"CRITICAL": C.red, "HIGH": C.red, "MEDIUM": C.yellow,
+            "LOW": C.dim, "UNRATED": C.yellow}.get(sev, C.dim)(s)
+
+
+# --------------------------------------------------------------------------- #
+#  Inventory                                                                   #
+# --------------------------------------------------------------------------- #
+def inventory():
+    """[(name, upstream_version, revision, raw_version)] or None if brew is absent."""
+    raw = V.brew_formulae()
+    if raw is None:
+        return None
+    return [(n, V.brew_version_for_cpe(rv), V.brew_revision(rv), rv) for n, rv in raw]
+
+
+# --------------------------------------------------------------------------- #
+#  Scanning one package                                                        #
+# --------------------------------------------------------------------------- #
+def scan_one(client, name, version, revision):
+    """(status, cpe, worst_score, findings). Never raises on network trouble."""
+    key = V.formula_key(name)
+
+    if key in V.CPE_NAMESAKE_BLOCK:
+        return ("unknown", None, None,
+                [{"note": f"namesake collision -- {V.CPE_NAMESAKE_BLOCK[key]}"}])
+    if not version:
+        return ("skipped", None, None, [{"note": "no parseable version"}])
+
+    target = V.FORMULA_CPE.get(name) or V.FORMULA_CPE.get(key)
+    if target is None:
+        target = client.resolve_cpe(key)
+    if target is None:
+        return ("unknown", None, None,
+                [{"note": "CPE resolution failed or throttled -- NOT verified clean"}])
+    if target is False:
+        if key in V.CPE_ABSENT_OK:
+            return ("skipped", None, None, [{"note": f"no CPE published for {key}"}])
+        return ("unknown", None, None,
+                [{"note": f"no CPE published for {key} -- NOT verified clean"}])
+
+    vendor, product = target
+    cpe = f"{vendor}:{product}"
+    found = client.cves_for(vendor, product, version)
+    if found is None:
+        return ("unknown", cpe, None,
+                [{"note": f"NVD lookup failed or throttled ({cpe})"}])
+
+    hits, truncated = found
+    if not hits:
+        return ("clean", cpe, None, [])
+
+    # Homebrew may already have backported the fix. Fetched once per formula, and
+    # only when there is something to check -- `brew cat` is not free.
+    patches = V.homebrew_patch_commits(name) if revision else None
+
+    findings = []
+    for h in hits:
+        patched = V.commit_is_patched(h.get("fix_commit"), patches)
+        findings.append({
+            "cve": h["id"],
+            "score": h.get("score"),
+            "severity": h.get("severity", "UNRATED"),
+            "unbounded": h.get("unbounded", False),
+            "patched_by_homebrew": patched,
+            "fix_commit": h.get("fix_commit"),
+            "description": (h.get("description") or "")[:300],
+        })
+    if truncated:
+        findings.append({"note": "NVD result page truncated -- more CVEs may exist"})
+
+    # Patches applied by Homebrew that no CVE description claimed. These are the
+    # honest edge of what a deterministic tool can decide: for libssh2 the leftover
+    # patch subjects ("publickey: fix multiplication overflow in 32-bit") plainly
+    # correspond to the leftover CVEs ("reads an attacker-controlled 32-bit
+    # attribute count from a publickey-subsystem response"), but matching prose to
+    # prose is judgement, not string comparison. Faking certainty here would be the
+    # same sin as a false all-clear, so the hashes are recorded and handed to the
+    # briefing for a human or an assistant to rule on.
+    if patches:
+        claimed = {f["fix_commit"] for f in findings
+                   if f.get("patched_by_homebrew") and f.get("fix_commit")}
+        unmatched = sorted(p for p in patches
+                           if not any(c in p or p.startswith(c) for c in claimed if c))
+        if unmatched:
+            findings.append({"unmatched_patches": [patches[p] for p in unmatched]})
+
+    live = [f for f in findings if f.get("cve")
+            and not f["patched_by_homebrew"] and not f["unbounded"]]
+    unfixed = [f for f in findings if f.get("cve")
+               and not f["patched_by_homebrew"] and f["unbounded"]]
+
+    scores = [f["score"] for f in live if isinstance(f.get("score"), (int, float))]
+    worst = max(scores) if scores else None
+
+    if live:
+        status = "exposed"
+    elif unfixed:
+        status = "unfixed"
+    elif findings:
+        status = "patched"      # every hit accounted for by a Homebrew backport
+    else:
+        status = "clean"
+    return (status, cpe, worst, findings)
+
+
+# --------------------------------------------------------------------------- #
+#  The scan                                                                    #
+# --------------------------------------------------------------------------- #
+def spawn_background(args) -> bool:
+    """Detach a full scan. Returns False if one is already running.
+
+    The lock is a DIRECTORY because mkdir is atomic -- two terminal tabs opened in
+    the same second must not both start a 15-minute sweep. A lock older than two
+    hours is reclaimed so a killed scan cannot wedge this forever."""
+    d = V.state_dir()
+    if not d:
+        return False
+    lock = os.path.join(d, "vuln-scan.lock")
+    try:
+        age = time.time() - os.path.getmtime(lock)
+        if age > 7200:
+            os.rmdir(lock)
+    except OSError:
+        pass
+    try:
+        os.mkdir(lock)
+    except OSError:
+        return False        # already running; leave it alone
+    cmd = [os.path.abspath(__file__), "--no-progress", "--quiet"]
+    if args.db:
+        cmd += ["--db", args.db]
+    log = os.path.join(d, "vuln-scan-background.log")
+    try:
+        with open(log, "w") as fh:
+            subprocess.Popen(
+                ["/bin/sh", "-c",
+                 f'{shlex_join(cmd)}; rmdir {shlex_quote(lock)} 2>/dev/null'],
+                stdout=fh, stderr=subprocess.STDOUT,
+                start_new_session=True, close_fds=True)
+        return True
+    except OSError:
+        try:
+            os.rmdir(lock)
+        except OSError:
+            pass
+        return False
+
+
+def shlex_quote(s):
+    return "'" + s.replace("'", "'\"'\"'") + "'"
+
+
+def shlex_join(parts):
+    return " ".join(shlex_quote(p) for p in parts)
+
+
+def run_scan(store, args, announce):
+    inv = inventory()
+    if inv is None:
+        return None, "brew not found or `brew list` failed"
+
+    if args.only:
+        wanted = set(args.only)
+        inv = [row for row in inv if row[0] in wanted or V.formula_key(row[0]) in wanted]
+        if not inv:
+            return None, f"no installed formula matches {', '.join(sorted(wanted))}"
+
+    live_keys = {(n, v, r) for n, v, r, _ in inv}
+    # Reaping compares against the FULL inventory, so a --only run must not
+    # conclude that the other 230 formulae have been uninstalled.
+    reaped = 0 if args.only else store.reap(SUBJECT, live_keys)
+
+    todo = []
+    for name, version, revision, _raw in inv:
+        if args.full or args.only or store.known(SUBJECT, name, version, revision) is None:
+            todo.append((name, version, revision))
+
+    if args.limit:
+        todo = todo[:args.limit]
+
+    # THE SHELL-SAFETY GUARD. In --fast mode a large backlog is never worked
+    # through inline: it is handed to a detached process and this run reports from
+    # whatever is already cached. Without this, the very first login on a new
+    # machine blocks for ~15 minutes with a progress bar, and the tool gets removed
+    # from .zshrc that same day.
+    if args.fast and len(todo) > FAST_MAX_INLINE:
+        spawned = spawn_background(args)
+        return ({"checked": 0, "total": len(inv), "reaped": reaped,
+                 "deferred": len(todo), "spawned": spawned}, None)
+
+    if todo:
+        announce(len(todo), len(inv))
+        client = V.NvdClient(V.nvd_api_key(), timeout=args.timeout)
+        for i, (name, version, revision) in enumerate(todo, 1):
+            if args.progress:
+                pkg = name[:26]
+                print(f"\r  checking {i}/{len(todo)}  {pkg} ".ljust(56),
+                      end="", file=sys.stderr, flush=True)
+            status, cpe, worst, findings = scan_one(client, name, version, revision)
+            store.record(SUBJECT, name, version, revision, cpe, status, worst, findings)
+            # Commit as we go: a shell that gets closed mid-scan should keep the
+            # work already paid for rather than start from nothing next time.
+            store.commit()
+        if args.progress:
+            print("\r".ljust(58) + "\r", end="", file=sys.stderr, flush=True)
+        store.set_meta("last_scan", int(time.time()))
+        store.commit()
+
+    return {"checked": len(todo), "total": len(inv), "reaped": reaped}, None
+
+
+# --------------------------------------------------------------------------- #
+#  Reporting                                                                   #
+# --------------------------------------------------------------------------- #
+def collect(store):
+    """Rows grouped by status, with acknowledged findings filtered out."""
+    groups = {"exposed": [], "unfixed": [], "unknown": [],
+              "patched": [], "clean": [], "skipped": []}
+    for row in store.all_rows(SUBJECT):
+        findings = json.loads(row["findings"] or "[]")
+        live = [f for f in findings
+                if f.get("cve") and not f.get("patched_by_homebrew")
+                and not f.get("unbounded")
+                and not store.acked(SUBJECT, row["name"], f["cve"])]
+        status = row["status"]
+        # An exposure whose every CVE has been acknowledged stops being an
+        # exposure until the acknowledgement expires -- then it comes straight back.
+        if status == "exposed" and not live:
+            status = "patched" if any(f.get("patched_by_homebrew") for f in findings) else "clean"
+        groups.setdefault(status, []).append({"row": row, "findings": findings, "live": live})
+    return groups
+
+
+def actionable(groups):
+    out = []
+    for item in groups["exposed"]:
+        hi = [f for f in item["live"]
+              if isinstance(f.get("score"), (int, float)) and f["score"] >= ACTION_THRESHOLD]
+        unrated = [f for f in item["live"] if f.get("score") is None]
+        # An unscored CVE is not a harmless one -- NVD simply has not analysed it
+        # yet. Treat it as actionable rather than silently dropping it.
+        if hi or unrated:
+            out.append({**item, "high": hi, "unrated": unrated})
+    return out
+
+
+def print_table(groups, stats, quiet=False):
+    exposed, unfixed = groups["exposed"], groups["unfixed"]
+    unknown, patched = groups["unknown"], groups["patched"]
+    clean, skipped = groups["clean"], groups["skipped"]
+    total = sum(len(v) for v in groups.values())
+
+    if not quiet:
+        head = C.bold(f"vuln-scan  {total} Homebrew formulae")
+        if stats and stats["checked"]:
+            head += C.dim(f"   ({stats['checked']} newly checked this run)")
+        elif stats:
+            head += C.dim("   (no changes since last scan)")
+        print(head)
+
+    if exposed:
+        print(C.red(f"  EXPOSED  {len(exposed)}"))
+        for item in sorted(exposed, key=lambda i: -(i["row"]["worst_score"] or 0)):
+            r = item["row"]
+            worst = max((f["score"] for f in item["live"]
+                         if isinstance(f.get("score"), (int, float))), default=None)
+            sev = next((f["severity"] for f in item["live"]
+                        if f.get("score") == worst), "UNRATED")
+            score_s = f"{worst:.1f}" if worst is not None else "  ?"
+            print(f"    {sev_colour(sev, score_s)}  {C.bold(r['name']):<22} "
+                  f"{r['version']}{'_' + str(r['revision']) if r['revision'] else ''}"
+                  + C.dim(f"   {len(item['live'])} CVE(s)  [{r['cpe']}]"))
+            print("        " + C.dim(", ".join(f["cve"] for f in item["live"][:8])
+                                     + (" …" if len(item["live"]) > 8 else "")))
+
+    if patched and not quiet:
+        names = ", ".join(i["row"]["name"] for i in patched[:6])
+        more = f" +{len(patched) - 6}" if len(patched) > 6 else ""
+        print(C.green(f"  PATCHED BY HOMEBREW  {len(patched)}")
+              + C.dim(f"  {names}{more}  (NVD still flags these; the fix is backported)"))
+
+    if unfixed and not quiet:
+        names = ", ".join(i["row"]["name"] for i in unfixed[:6])
+        more = f" +{len(unfixed) - 6}" if len(unfixed) > 6 else ""
+        print(C.dim(f"  ALL-VERSION, no fixed release  {len(unfixed)}  {names}{more}"))
+
+    if unknown:
+        # Always shown, even under --quiet: UNKNOWN is the state a silent bug also
+        # produces, so hiding it is exactly the false all-clear to avoid.
+        names = ", ".join(i["row"]["name"] for i in unknown[:8])
+        more = f" +{len(unknown) - 8} more" if len(unknown) > 8 else ""
+        print(C.yellow(f"  UNVERIFIED  {len(unknown)}") + C.dim(f"  {names}{more}"))
+
+    if not quiet:
+        print(C.dim(f"  clean {len(clean)}   skipped {len(skipped)}"))
+
+
+# --------------------------------------------------------------------------- #
+#  Briefing for a context-free assistant                                       #
+# --------------------------------------------------------------------------- #
+def write_briefing(groups, path):
+    """A self-contained handover. Deliberately carries NO machine identifiers,
+    usernames or absolute paths: it names installed software and versions, which
+    is a target list, so it must be safe to paste into a fresh session."""
+    acts = actionable(groups)
+    lines = [
+        "# Security briefing: installed packages with known vulnerabilities",
+        "",
+        f"Generated {time.strftime('%Y-%m-%d %H:%M %Z')} by `vuln-scan` on a macOS/Homebrew machine.",
+        "",
+        "## What this is, and what I need",
+        "",
+        "This file is a complete, self-contained problem statement. You have no",
+        "access to the machine it came from and do not need any.",
+        "",
+        "Each package below is INSTALLED and matches a published CVE for its exact",
+        "version in NVD. Findings already fixed by a Homebrew backport, already",
+        "acknowledged, or with no fixed release anywhere have been filtered out --",
+        "everything listed is believed live and unaddressed.",
+        "",
+        "Please help me with:",
+        "1. Which of these actually matter given how each package is typically used",
+        "   (a parsing library reachable from untrusted input is not the same as a",
+        "   local CLI I invoke by hand).",
+        "2. Concrete mitigations where no upgrade exists -- config changes, disabling",
+        "   a feature, replacing the tool, or accepting the risk with a reason.",
+        "3. What to do first, and what is safe to defer.",
+        "",
+        "Commands to verify or fix are run by me; give me exact ones where relevant.",
+        "",
+        f"## Findings ({len(acts)} package(s))",
+        "",
+    ]
+    if not acts:
+        lines += ["Nothing currently actionable.", ""]
+    for item in sorted(acts, key=lambda i: -(max(
+            (f["score"] for f in i["live"] if isinstance(f.get("score"), (int, float))),
+            default=0))):
+        r = item["row"]
+        ver = r["version"] + (f"_{r['revision']}" if r["revision"] else "")
+        lines += [f"### {r['name']} {ver}", ""]
+        lines.append(f"- CPE: `{r['cpe']}`")
+        lines.append(f"- Homebrew revision: {r['revision']}"
+                     + ("  (revision > 0 means Homebrew has applied patches; the CVEs"
+                        " below are the ones NOT matched to a backport)" if r["revision"] else ""))
+        lines.append("")
+        lines.append("| CVE | CVSS | Severity | Summary |")
+        lines.append("|---|---|---|---|")
+        for f in sorted(item["live"],
+                        key=lambda f: -(f["score"] if isinstance(f.get("score"), (int, float)) else 0)):
+            score = f"{f['score']:.1f}" if isinstance(f.get("score"), (int, float)) else "unscored"
+            desc = (f.get("description") or "").replace("\n", " ").replace("|", "\\|")[:180]
+            lines.append(f"| {f['cve']} | {score} | {f.get('severity', '?')} | {desc} |")
+        lines.append("")
+        unmatched = next((f["unmatched_patches"] for f in item["findings"]
+                          if f.get("unmatched_patches")), None)
+        if unmatched:
+            lines += [
+                f"**{len(unmatched)} Homebrew patch(es) applied to this formula could not be",
+                "matched to any CVE above.** Homebrew backports fixes without changing the",
+                "upstream version, so NVD keeps reporting the package vulnerable after it has",
+                "been fixed. Where a CVE description named its fix commit I matched it and",
+                "filtered that CVE out; these patches named no CVE, so I could not.",
+                "",
+                "**This is the most useful thing you can help with.** Please read these commits",
+                "and judge whether they already fix the CVEs listed above -- the subject lines",
+                "are usually enough:",
+                "",
+            ]
+            for url in unmatched:
+                lines.append(f"- {url}")
+            lines += ["", "If they do, these findings are already resolved on this machine and the",
+                      "correct action is to record that, not to upgrade anything.", ""]
+    lines += [
+        "## Context you may find useful",
+        "",
+        "- The scanner queries NVD by exact CPE and honours version ranges, so these",
+        "  are matches against the installed version, not a package's whole history.",
+        "- It excludes NVD `vulnerable: false` context matches (a CVE merely",
+        "  MENTIONING a package is not a CVE IN it).",
+        "- 'No fixed release' findings are excluded here; they exist but cannot be",
+        "  resolved by upgrading.",
+        "",
+    ]
+    try:
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(lines))
+        return path
+    except OSError:
+        return None
+
+
+# --------------------------------------------------------------------------- #
+#  Main                                                                        #
+# --------------------------------------------------------------------------- #
+def parse_args(argv):
+    p = argparse.ArgumentParser(
+        prog="vuln-scan",
+        description="Incremental CVE scan of installed Homebrew formulae.")
+    p.add_argument("--fast", action="store_true",
+                   help="shell-startup mode: silent when nothing changed")
+    p.add_argument("--full", action="store_true", help="rescan everything, ignoring the cache")
+    p.add_argument("--report", action="store_true", help="write the briefing file")
+    p.add_argument("--json", dest="as_json", action="store_true", help="machine-readable output")
+    p.add_argument("--quiet", action="store_true", help="only exposures and unknowns")
+    p.add_argument("--limit", type=int, default=0, help="check at most N packages (testing)")
+    p.add_argument("--only", action="append", default=[], metavar="NAME",
+                   help="restrict to this formula (repeatable); re-checks it even if cached")
+    p.add_argument("--timeout", type=float, default=25.0, help="per-call network timeout")
+    p.add_argument("--db", default=None, help="override the database path (testing)")
+    p.add_argument("--no-progress", dest="progress", action="store_false", default=None,
+                   help="suppress the stderr progress line")
+    p.add_argument("--ack", nargs=2, metavar=("NAME", "CVE"),
+                   help="acknowledge a finding for --ack-days")
+    p.add_argument("--ack-days", type=int, default=30, help="acknowledgement lifetime (default 30)")
+    p.add_argument("--ack-reason", default="", help="why it was acknowledged")
+    return p.parse_args(argv)
+
+
+def main(argv) -> int:
+    args = parse_args(argv)
+    if args.progress is None:
+        args.progress = sys.stderr.isatty()
+
+    store = V.ScanStore(args.db)
+    try:
+        if args.ack:
+            store.ack(SUBJECT, args.ack[0], args.ack[1].upper(), args.ack_days, args.ack_reason)
+            print(f"acknowledged {args.ack[1].upper()} for {args.ack[0]} "
+                  f"({args.ack_days}d)")
+            return 0
+
+        def announce(n, total):
+            if args.as_json:
+                return
+            # The whole point of the friendly line: a login shell that pauses with
+            # no explanation reads as a hang, and the next move is to kill it.
+            print(C.cyan(f"vuln-scan: {n} new or changed package(s) of {total} to check")
+                  + C.dim("  (cached results reused for the rest)"), flush=True)
+
+        stats, err = run_scan(store, args, announce)
+        if err:
+            if not args.fast:
+                print(C.yellow(f"vuln-scan: {err}"))
+            return 2
+
+        groups = collect(store)
+        acts = actionable(groups)
+
+        if args.as_json:
+            print(json.dumps({
+                "stats": stats,
+                "actionable": [{"name": i["row"]["name"],
+                                "version": i["row"]["version"],
+                                "revision": i["row"]["revision"],
+                                "cves": [f["cve"] for f in i["live"]]} for i in acts],
+                "counts": {k: len(v) for k, v in groups.items()},
+            }, indent=2))
+        elif stats.get("deferred"):
+            # Say exactly what is happening and why nothing is blocked. A silent
+            # deferral looks identical to a check that never ran.
+            n = stats["deferred"]
+            if stats.get("spawned"):
+                print(C.cyan(f"vuln-scan: {n} package(s) need checking -- running in the "
+                             f"background (~{max(1, n * 3 // 60)} min)")
+                      + C.dim("  your prompt is not waiting on it"))
+            else:
+                print(C.dim(f"vuln-scan: {n} package(s) pending; a scan is already running"))
+            if acts or groups["unknown"]:
+                print_table(groups, None, quiet=True)
+        elif args.fast and not acts and not groups["unknown"] and not stats["checked"]:
+            # Nothing changed and nothing wrong: one line, no noise.
+            print(C.dim(f"vuln-scan: {stats['total']} formulae, no known CVEs (cached)"))
+        else:
+            print_table(groups, stats, quiet=args.quiet)
+
+        if args.report or acts:
+            d = V.state_dir()
+            if d:
+                path = write_briefing(groups, os.path.join(d, "vuln-briefing.md"))
+                if path and not args.as_json and acts:
+                    print(C.dim(f"  briefing written: {path}"))
+
+        return 1 if acts else 0
+    finally:
+        store.close()
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except KeyboardInterrupt:
+        print()
+        sys.exit(130)
