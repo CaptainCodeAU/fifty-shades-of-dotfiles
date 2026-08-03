@@ -317,7 +317,37 @@ uv_tool_reinstall_current_project --frozen cli
 
 **The mode is not sticky.** Omitting `--frozen` on a reinstall returns the tool to
 editable, so pass the same flag you installed with. A reinstall that changes the mode
-warns before it does so.
+warns before it does so. If a project must always be frozen, pin it (below) rather
+than relying on remembering the flag.
+
+##### Pinning the mode in `pyproject.toml`
+
+A flag lives in whoever typed the last command. It does not survive a fresh machine or
+a `uv tool uninstall`. When a project _requires_ one mode, declare it in the project:
+
+```toml
+[tool.uv-tool]
+install-mode = "frozen"   # or "editable"
+```
+
+Both install and reinstall then use that mode when no `--frozen` / `--editable` is
+given, and say so:
+
+```
+📌 pyproject.toml pins this project to frozen installs.
+```
+
+An explicit flag still wins — the pin is a safe default, not a lock — but overriding it
+is loud:
+
+```
+⚠️  OVERRIDE: pyproject.toml pins this project to frozen, installing editable anyway.
+   The pin exists because something outside this shell runs this command.
+```
+
+> **`uv` itself does not read `[tool.uv-tool]`.** The key is honoured only by the
+> `uv_tool_*_current_project` functions in `home/.zsh_python_functions`. An
+> unrecognised value warns and is ignored rather than failing the install.
 
 Because the difference is invisible at the call site, the mode is reported everywhere
 it matters — `uv_tool_check_current_project` prints it, and the `.envrc` banner shows
@@ -334,6 +364,26 @@ it on every `cd` into the project:
 | `EDITABLE` | Live link to this checkout; edits take effect immediately | Normal development (default)                       |
 | `FROZEN`   | Snapshot copy; edits are ignored until you reinstall      | Anything a hook, cron job or other automation runs |
 | `REGISTRY` | Installed from PyPI, not from this checkout               | `uv tool install <name>`                           |
+
+##### Querying the mode from a script
+
+`uv_tool_mode` prints one word (`editable` / `frozen` / `registry` / `not-installed` /
+`unknown`) and nothing else, exiting 0 when it resolved a mode:
+
+```bash
+uv_tool_mode              # the project in $PWD
+uv_tool_mode ruff         # a named uv tool
+
+[[ "$(uv_tool_mode)" == frozen ]] || echo "refusing to run: not a frozen install"
+```
+
+Use it instead of re-deriving the answer. The underlying file is **four levels down**,
+at `<tool_env>/lib/python*/site-packages/<normalised-name>-*.dist-info/direct_url.json`
+— the name lowercased with `-` and `.` turned into `_`, and the `.dist-info` directory
+version-stamped. A shallow glob matches nothing, and "no match" reads as "no editable
+flag", which reports a **live install as frozen** — silently, and in exactly the place
+you were checking to avoid that assumption. Non-shell callers should replicate the full
+path pattern.
 
 ### 4. Cleaning Up a Project
 
@@ -1189,6 +1239,7 @@ For the full architecture, conventions, migration policy, and add-new-script wor
 | `uv_tool_reinstall_current_project` | `[--frozen] [extra1...] \| --no-extras` | Reinstalls the global CLI tool (needed when entry points change, or after every change when frozen). Warns if the mode flips. |
 | `uv_tool_uninstall_current_project` | `(none)`                                | Uninstalls the `uv tool`-managed CLI tool for the current project.                                                            |
 | `uv_tool_check_current_project`     | `(none)`                                | Checks if the current project is installed via `uv tool`, and reports EDITABLE / FROZEN / REGISTRY.                           |
+| `uv_tool_mode`                      | `[tool-name]`                           | Prints the install mode as one machine-readable word for scripts; exits 0 when resolved.                                      |
 
 ### Node.js Functions
 
