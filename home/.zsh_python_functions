@@ -1107,7 +1107,13 @@ _display_pyproject_hints() {
         # Surface --frozen here too: it is invisible in the argument list otherwise,
         # and it is the flag you want when a hook or cron job runs the command.
         if [[ "$command_name" == "uv_tool_"(install|reinstall)"_current_project" ]]; then
-            echo "${info}      For a snapshot that ignores later edits, add: ${example}--frozen${done}"
+            local pinned_mode
+            pinned_mode=$(_uv_tool_pinned_mode 2>/dev/null)
+            if [[ -n "$pinned_mode" ]]; then
+                echo "${info}      - 📌 Pinned by pyproject.toml to: ${ok}${pinned_mode}${info} installs (applied automatically).${done}"
+            else
+                echo "${info}      For a snapshot that ignores later edits, add: ${example}--frozen${done}"
+            fi
         fi
     fi
 }
@@ -1347,19 +1353,22 @@ python_delete() {
 # Recognises --frozen / --editable / --no-extras ANYWHERE in the argument list (the
 # old code only honoured --no-extras when it was $1, so `... dev --no-extras` silently
 # tried to install the extra literally named "--no-extras").
-# Sets three globals for the caller: _UVT_FROZEN, _UVT_NO_EXTRAS, _UVT_EXTRAS.
+# Sets four globals for the caller: _UVT_FROZEN, _UVT_NO_EXTRAS, _UVT_EXTRAS and
+# _UVT_MODE_EXPLICIT (true when --frozen or --editable was actually typed, which is
+# what lets a pyproject.toml pin apply only when the caller stayed silent).
 # An unrecognised --flag is a hard error rather than being passed through as an extra,
 # so a typo fails loudly instead of producing '.[--frozn]'.
 # Usage: _uv_tool_parse_flags "$@" || return 1
 _uv_tool_parse_flags() {
     typeset -g _UVT_FROZEN=false
     typeset -g _UVT_NO_EXTRAS=false
+    typeset -g _UVT_MODE_EXPLICIT=false
     typeset -ga _UVT_EXTRAS=()
     local arg
     for arg in "$@"; do
         case "$arg" in
-            --frozen)    _UVT_FROZEN=true ;;
-            --editable)  _UVT_FROZEN=false ;;
+            --frozen)    _UVT_FROZEN=true;  _UVT_MODE_EXPLICIT=true ;;
+            --editable)  _UVT_FROZEN=false; _UVT_MODE_EXPLICIT=true ;;
             --no-extras) _UVT_NO_EXTRAS=true ;;
             --)          ;;
             -*)
@@ -1371,6 +1380,67 @@ _uv_tool_parse_flags() {
         esac
     done
     [[ "$_UVT_NO_EXTRAS" == true ]] && _UVT_EXTRAS=()
+    return 0
+}
+
+# INTERNAL HELPER: read a project's declared install mode from pyproject.toml.
+# Echoes "frozen", "editable", or nothing when unpinned.
+#
+#   [tool.uv-tool]
+#   install-mode = "frozen"
+#
+# This puts the requirement with the PROJECT that needs it instead of with whoever
+# last typed a command. A project whose command is run by something outside the
+# developer's control -- a git hook, a cron job, a background capture -- is broken by
+# an editable install the moment a file is half-saved, and it should not depend on
+# remembering a flag, or survive only until the next `uv tool uninstall`.
+#
+# NOTE: uv itself does NOT read this key. It is honoured only by the
+# uv_tool_*_current_project functions in this file. An explicit --editable still wins,
+# with a warning, so the pin is a safe default rather than a lock.
+_uv_tool_pinned_mode() {
+    [[ -f pyproject.toml ]] || return 0
+    local mode
+    mode=$(awk '
+        /^[[:space:]]*\[tool\.uv-tool\][[:space:]]*$/ { f=1; next }
+        /^[[:space:]]*\[/                             { f=0 }
+        f && /^[[:space:]]*install-mode[[:space:]]*=/ {
+            sub(/^[^=]*=[[:space:]]*/, "")
+            sub(/[[:space:]]*#.*$/, "")
+            gsub(/[",'"'"'[:space:]]/, "")
+            print; exit
+        }' pyproject.toml)
+    case "${mode:l}" in
+        frozen|editable) echo "${mode:l}" ;;
+        "")              ;;
+        *)
+            echo "${warn}⚠️  Ignoring unknown [tool.uv-tool] install-mode: '${mode}' (expected 'frozen' or 'editable').${done}" >&2
+            ;;
+    esac
+    return 0
+}
+
+# INTERNAL HELPER: resolve the effective mode from the pin + what the caller typed.
+# Sets _UVT_FROZEN, and reports when the two disagree.
+_uv_tool_apply_pin() {
+    local pinned
+    pinned=$(_uv_tool_pinned_mode)
+    [[ -n "$pinned" ]] || return 0
+
+    if [[ "$_UVT_MODE_EXPLICIT" != true ]]; then
+        # Caller said nothing -- the project decides.
+        [[ "$pinned" == frozen ]] && _UVT_FROZEN=true || _UVT_FROZEN=false
+        echo "${info}📌 pyproject.toml pins this project to ${ok}${pinned}${info} installs.${done}"
+        return 0
+    fi
+
+    local asked=editable
+    [[ "$_UVT_FROZEN" == true ]] && asked=frozen
+    if [[ "$asked" != "$pinned" ]]; then
+        echo "${warn}⚠️  OVERRIDE: pyproject.toml pins this project to ${pinned}, installing ${asked} anyway.${done}"
+        [[ "$pinned" == frozen ]] && \
+            echo "${warn}   The pin exists because something outside this shell runs this command.${done}"
+    fi
     return 0
 }
 
@@ -1446,6 +1516,7 @@ uv_tool_install_current_project() {
     fi
 
     _uv_tool_parse_flags "$@" || return 1
+    _uv_tool_apply_pin
     local -a user_extras=("${_UVT_EXTRAS[@]}")
     local frozen="$_UVT_FROZEN"
     local project_name=$(awk -F'"' '/^name *=/ {gsub(/[[:space:]]/, "", $0); print $2; exit}' pyproject.toml)
@@ -1521,6 +1592,7 @@ uv_tool_reinstall_current_project() {
 
     # --- 3. Argument and Variable Setup ---
     _uv_tool_parse_flags "$@" || return 1
+    _uv_tool_apply_pin
     local -a user_extras=("${_UVT_EXTRAS[@]}")
     local frozen="$_UVT_FROZEN"
     local project_name=$(awk -F'"' '/^name *=/ {gsub(/[[:space:]]/, "", $0); print $2; exit}' pyproject.toml)
@@ -1701,6 +1773,44 @@ uv_tool_check_current_project() {
         echo "${info}   To install it, run: ${example}uv_tool_install_current_project${done}"
         return 1 # Represents "false"
     fi
+}
+
+
+# Report how a uv tool was installed -- machine readable, for scripts.
+# Echoes exactly one word on stdout and nothing else:
+#   editable | frozen | registry | not-installed | unknown
+# Exit status is 0 when a mode was determined, 1 when it was not.
+#
+# This is the SUPPORTED entry point for the PEP 610 check -- use it rather than
+# re-implementing the lookup. direct_url.json sits FOUR levels down, at
+#   <tool_env>/lib/python*/site-packages/<normalised-name>-*.dist-info/direct_url.json
+# (the name is lowercased with hyphens and dots turned into underscores, and the
+# dist-info directory is version-stamped). A shallow glob matches nothing, and
+# "no match" reads as "no editable flag" and therefore as frozen -- reporting a live
+# install as a snapshot, silently, which is the exact mistake this check exists to
+# prevent. Non-shell callers should replicate the full path pattern above.
+#
+# Usage: uv_tool_mode           # the project in $PWD (needs pyproject.toml)
+#        uv_tool_mode <name>    # a named uv tool
+#
+# Example:
+#   if [[ "$(uv_tool_mode)" != frozen ]]; then echo "refusing to run: not frozen"; fi
+uv_tool_mode() {
+    local pkg=$1
+    if [[ -z "$pkg" ]]; then
+        [[ -f pyproject.toml ]] || { echo unknown; return 1; }
+        pkg=$(awk -F'"' '/^name *=/ {gsub(/[[:space:]]/, "", $0); print $2; exit}' pyproject.toml)
+    fi
+    [[ -n "$pkg" ]] || { echo unknown; return 1; }
+
+    # uv tool list reports the hyphenated name; pyproject may use underscores.
+    local alt=${pkg//_/-} tool_line tool_env
+    tool_line=$(uv tool list --show-paths 2>/dev/null | awk -v p="${pkg:l}" -v q="${alt:l}" \
+        'tolower($1)==p || tolower($1)==q { print; exit }')
+    [[ -n "$tool_line" ]] || { echo not-installed; return 1; }
+
+    tool_env=$(echo "$tool_line" | sed -n 's/.*(\(.*\))$/\1/p')
+    _uv_tool_install_mode "$tool_env" "$pkg"
 }
 
 
