@@ -239,6 +239,20 @@ can be repointed at a "Run command..." action if you ever want cmd+click to do
 something bespoke -- but it can never drive herdr's `link_handlers`, because
 Command cannot be encoded in a terminal mouse report at all.
 
+**The hover underline stays on Command and cannot be moved.** iTerm2 highlights
+a URL under the cursor only while Command is held; `PTYTextView.m` gates the
+mouse-movement tracking on a hardcoded `NSEventModifierFlagCommand`, with no
+preference key behind it. So ctrl+click works but gives no hover affordance,
+and that is not something a setting can fix. Hold Command to _see_ that iTerm2
+recognises a URL; ctrl+click to route it through the plugin.
+
+**A working handler also needs the action to DO something.** herdr passes the URL
+in `$HERDR_PLUGIN_CLICKED_URL` and does nothing else with it -- no browser, no
+default. An action that only prints the variable makes a fully working intercept
+look like a dead click. `open "$HERDR_PLUGIN_CLICKED_URL"` is the minimum for
+"behaves like a link"; anything richer is the actual reason to use a handler
+rather than iTerm2's built-in cmd+click.
+
 Verify a handler fired by its side-effects, not by the browser staying shut:
 
 ```bash
