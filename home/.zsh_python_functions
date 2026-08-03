@@ -484,27 +484,44 @@ fi
 echo "│"
 echo "│  🔗 Global CLI Status:"
 echo "│  ────────────────────"
+# NOTE: direnv evaluates this file with bash, where `local` outside a function is an
+# error ("local: can only be used in a function") AND leaves the variable unset -- so
+# these are plain assignments with a _uvt_ prefix rather than `local`.
 if command -v uv &>/dev/null; then
-    local _cli_status
-    _cli_status=$(uv tool list 2>/dev/null | grep -iE "^PROJECT_NAME[[:space:]]|^PROJECT_CLI[[:space:]]" | head -n 1)
-    if [[ -n "$_cli_status" ]]; then
-        local _cli_version=$(echo "$_cli_status" | awk '{print $2}')
-        echo -e "│     Tool:    \033[32m✓ Installed via uv tool ($_cli_version)\033[0m"
+    _uvt_line=$(uv tool list --show-paths 2>/dev/null | grep -iE "^PROJECT_NAME[[:space:]]|^PROJECT_CLI[[:space:]]" | head -n 1)
+    if [[ -n "$_uvt_line" ]]; then
+        _uvt_version=$(echo "$_uvt_line" | awk '{print $2}')
+        _uvt_env=$(echo "$_uvt_line" | sed -n 's/.*(\(.*\))$/\1/p')
+        echo -e "│     Tool:    \033[32m✓ Installed via uv tool ($_uvt_version)\033[0m"
+
+        # Editable vs frozen, from PEP 610 direct_url.json. A frozen install ignores
+        # every edit made in this directory until it is reinstalled, so say so here
+        # rather than leave it to be discovered an hour into debugging.
+        _uvt_durl=$(find "$_uvt_env/lib" -maxdepth 4 -name direct_url.json 2>/dev/null | head -n 1)
+        if [[ -z "$_uvt_durl" ]]; then
+            echo -e "│     Mode:    \033[33mREGISTRY\033[0m - from PyPI, not from this checkout"
+        elif grep -q '"editable"[[:space:]]*:[[:space:]]*true' "$_uvt_durl"; then
+            echo -e "│     Mode:    \033[32mEDITABLE\033[0m - your edits take effect immediately"
+        else
+            echo -e "│     Mode:    \033[31mFROZEN\033[0m - edits here do NOT change what runs"
+            echo -e "│               \033[3;33muv_tool_reinstall_current_project --frozen\033[0m to update it"
+        fi
+
         # Show executable paths
-        local _in_tool=false
-        while IFS= read -r _line; do
-            if [[ "$_in_tool" == true ]]; then
-                if [[ "$_line" == -\ * ]]; then
-                    local _exec_name=$(echo "$_line" | sed 's/^- //')
-                    echo -e "│     Binary:  \033[36m~/.local/bin/$_exec_name\033[0m"
+        _uvt_in_tool=false
+        while IFS= read -r _uvt_row; do
+            if [[ "$_uvt_in_tool" == true ]]; then
+                if [[ "$_uvt_row" == -\ * ]]; then
+                    _uvt_exec=$(echo "$_uvt_row" | sed 's/^- //' | awk '{print $1}')
+                    echo -e "│     Binary:  \033[36m~/.local/bin/$_uvt_exec\033[0m"
                 else
                     break
                 fi
             fi
-            if echo "$_line" | grep -qiE "^PROJECT_NAME[[:space:]]|^PROJECT_CLI[[:space:]]"; then
-                _in_tool=true
+            if echo "$_uvt_row" | grep -qiE "^PROJECT_NAME[[:space:]]|^PROJECT_CLI[[:space:]]"; then
+                _uvt_in_tool=true
             fi
-        done <<< "$(uv tool list 2>/dev/null)"
+        done <<< "$(uv tool list --show-paths 2>/dev/null)"
     else
         echo -e "│     Tool:    \033[33m✗ Not installed globally\033[0m"
         echo -e "│     Hint:    \033[3;33muv_tool_install_current_project dev\033[0m"
@@ -1086,6 +1103,12 @@ _display_pyproject_hints() {
         if [[ "$command_name" == "uv_tool"* ]] && (( ${#detected_extras[@]} > 0 )); then
             echo "${info}      To install with no extras, run: ${example}$command_name --no-extras${done}"
         fi
+
+        # Surface --frozen here too: it is invisible in the argument list otherwise,
+        # and it is the flag you want when a hook or cron job runs the command.
+        if [[ "$command_name" == "uv_tool_"(install|reinstall)"_current_project" ]]; then
+            echo "${info}      For a snapshot that ignores later edits, add: ${example}--frozen${done}"
+        fi
     fi
 }
 
@@ -1320,10 +1343,89 @@ python_delete() {
 }
 
 
+# INTERNAL HELPER: parse the flags/extras shared by the uv_tool_* project functions.
+# Recognises --frozen / --editable / --no-extras ANYWHERE in the argument list (the
+# old code only honoured --no-extras when it was $1, so `... dev --no-extras` silently
+# tried to install the extra literally named "--no-extras").
+# Sets three globals for the caller: _UVT_FROZEN, _UVT_NO_EXTRAS, _UVT_EXTRAS.
+# An unrecognised --flag is a hard error rather than being passed through as an extra,
+# so a typo fails loudly instead of producing '.[--frozn]'.
+# Usage: _uv_tool_parse_flags "$@" || return 1
+_uv_tool_parse_flags() {
+    typeset -g _UVT_FROZEN=false
+    typeset -g _UVT_NO_EXTRAS=false
+    typeset -ga _UVT_EXTRAS=()
+    local arg
+    for arg in "$@"; do
+        case "$arg" in
+            --frozen)    _UVT_FROZEN=true ;;
+            --editable)  _UVT_FROZEN=false ;;
+            --no-extras) _UVT_NO_EXTRAS=true ;;
+            --)          ;;
+            -*)
+                echo "${err}❌ Unknown flag: ${arg}${done}" >&2
+                echo "${info}   Valid flags: ${example}--frozen${info} | ${example}--editable${info} | ${example}--no-extras${done}" >&2
+                return 1
+                ;;
+            *)           _UVT_EXTRAS+=("$arg") ;;
+        esac
+    done
+    [[ "$_UVT_NO_EXTRAS" == true ]] && _UVT_EXTRAS=()
+    return 0
+}
+
+# INTERNAL HELPER: report HOW a uv tool environment was installed.
+# Echoes exactly one word: editable | frozen | registry | unknown
+#
+# Reads PEP 610 direct_url.json inside the tool env, which is the authoritative
+# record of the install:
+#   {"url":"file:///…","dir_info":{"editable":true}}  -> editable  (live link to the checkout)
+#   {"url":"file:///…","dir_info":{}}                 -> frozen    (snapshot copied into the env)
+#   file absent                                       -> registry  (installed from PyPI)
+#
+# Do NOT sniff for *.pth files instead: uv writes `_editable_impl_<pkg>.pth` for some
+# projects and `<pkg>.pth` for others, and EVERY env carries an unrelated
+# `_virtualenv.pth`, so that heuristic misclassifies in both directions.
+# Usage: _uv_tool_install_mode <tool_env_path> <project_name>
+_uv_tool_install_mode() {
+    local tool_env=$1 pkg=$2
+    [[ -n "$tool_env" && -d "$tool_env" ]] || { echo unknown; return 1; }
+
+    local site
+    site=$(find "$tool_env/lib" -maxdepth 2 -type d -name site-packages 2>/dev/null | head -n 1)
+    [[ -n "$site" ]] || { echo unknown; return 1; }
+
+    # dist-info dirs use the normalised name (hyphens/dots -> underscores, lowercased)
+    local norm=${${pkg:l}//[-.]/_}
+    local du
+    du=$(find "$site" -maxdepth 2 -path "*/${norm}-*.dist-info/direct_url.json" 2>/dev/null | head -n 1)
+    # Fall back to any direct_url.json: deps installed from PyPI never have one, so in
+    # a single-project tool env the only match is the project itself.
+    [[ -n "$du" ]] || du=$(find "$site" -maxdepth 2 -name direct_url.json 2>/dev/null | head -n 1)
+
+    if [[ -z "$du" ]]; then
+        echo registry
+    elif grep -q '"editable"[[:space:]]*:[[:space:]]*true' "$du"; then
+        echo editable
+    else
+        echo frozen
+    fi
+    return 0
+}
+
 # Install current project as user-level CLI via uv tool, with optional extras.
-# Uses editable install (-e) so code changes are reflected immediately.
-# Usage: uv_tool_install_current_project [extra1] [extra2] ...
-#        uv_tool_install_current_project --no-extras
+#
+# Two install modes -- the difference is load-bearing, so it is reported everywhere:
+#   default    editable snapshot: the installed command imports straight from this
+#              checkout, so code edits take effect immediately.
+#   --frozen   real copy into the tool env: the installed command is pinned to the
+#              code as it was AT INSTALL TIME. Editing this checkout no longer changes
+#              what the installed command runs until you reinstall. Use this whenever
+#              something outside your control runs the command (a hook, a cron job, a
+#              background capture), where a half-saved file would otherwise break it.
+#
+# Usage: uv_tool_install_current_project [--frozen] [extra1] [extra2] ...
+#        uv_tool_install_current_project [--frozen] --no-extras
 uv_tool_install_current_project() {
     # --- 1. User Guidance for no arguments ---
     if [ "$#" -eq 0 ]; then
@@ -1343,29 +1445,40 @@ uv_tool_install_current_project() {
         echo "${err}❌ Error: No active virtual environment. Activate a venv to specify the Python version.${done}" >&2; return 1;
     fi
 
-    local user_extras=("${@}")
+    _uv_tool_parse_flags "$@" || return 1
+    local -a user_extras=("${_UVT_EXTRAS[@]}")
+    local frozen="$_UVT_FROZEN"
     local project_name=$(awk -F'"' '/^name *=/ {gsub(/[[:space:]]/, "", $0); print $2; exit}' pyproject.toml)
     local python_interpreter="$VIRTUAL_ENV/bin/python"
     local python_version=$("$python_interpreter" --version 2>&1 | awk '{print $2}' | cut -d. -f1,2)
 
     local install_source="."
-    # Check for the explicit --no-extras flag to perform a minimal install
-    if [[ "$1" == "--no-extras" ]]; then
-        user_extras=() # Empty the array
-    fi
-
     if (( ${#user_extras[@]} > 0 )); then
         local features_str=$(printf ",%s" "${user_extras[@]}")
         features_str=${features_str:1} # Remove leading comma
         install_source=".[${features_str}]"
     fi
 
-    echo "${info}🔗 Installing '$project_name' from source '${ok}${install_source}${info}' as a CLI via uv tool (editable)...${done}"
+    # --editable is the default; --frozen simply omits it, which makes uv copy the
+    # project into the tool env instead of linking back to this checkout.
+    local -a mode_flag=(--editable)
+    local mode_label="editable"
+    if [[ "$frozen" == true ]]; then
+        mode_flag=()
+        mode_label="frozen"
+    fi
+
+    echo "${info}🔗 Installing '$project_name' from source '${ok}${install_source}${info}' as a CLI via uv tool (${ok}${mode_label}${info})...${done}"
     echo "${info}   Using Python from active venv: $python_interpreter ($($python_interpreter --version))${done}"
 
-    if uv tool install --force --editable --python "$python_version" "$install_source"; then
-        echo "${ok}✅ '$project_name' CLI installed successfully (editable mode).${done}"
-        echo "${info}   💡 Code changes are reflected immediately. Reinstall only needed if pyproject.toml entry points change.${done}"
+    if uv tool install --force "${mode_flag[@]}" --python "$python_version" "$install_source"; then
+        echo "${ok}✅ '$project_name' CLI installed successfully (${mode_label} mode).${done}"
+        if [[ "$frozen" == true ]]; then
+            echo "${warn}   ⚠️  FROZEN: editing this checkout no longer changes what '$project_name' runs.${done}"
+            echo "${warn}      Re-run ${example}uv_tool_reinstall_current_project --frozen ${user_extras[*]}${warn} to pick up changes.${done}"
+        else
+            echo "${info}   💡 Code changes are reflected immediately. Reinstall only needed if pyproject.toml entry points change.${done}"
+        fi
         echo "--------------------------------------------------"
         uv_tool_check_current_project
     else
@@ -1377,8 +1490,16 @@ uv_tool_install_current_project() {
 
 # Reinstall the CLI for the current project from local source, with optional extras.
 # With uv tool, this is a single --force --reinstall operation (no uninstall-then-install needed).
-# Reinstalling is typically only needed when pyproject.toml entry points change.
-# Usage: uv_tool_reinstall_current_project [extra1] [extra2] ...
+#
+# For an EDITABLE install, reinstalling is typically only needed when pyproject.toml
+# entry points change. For a --frozen install it is needed after EVERY change you want
+# the installed command to see -- that is the whole point of freezing, and the reason
+# the mode is printed on every install and by uv_tool_check_current_project.
+#
+# NOTE: the mode is not sticky. Omitting --frozen here reinstalls as editable even if
+# the current install is frozen, so pass the same flag you installed with.
+#
+# Usage: uv_tool_reinstall_current_project [--frozen] [extra1] [extra2] ...
 uv_tool_reinstall_current_project() {
     # --- 1. User Guidance for no arguments ---
     if [ "$#" -eq 0 ]; then
@@ -1399,29 +1520,48 @@ uv_tool_reinstall_current_project() {
     fi
 
     # --- 3. Argument and Variable Setup ---
-    local user_extras=("${@}")
+    _uv_tool_parse_flags "$@" || return 1
+    local -a user_extras=("${_UVT_EXTRAS[@]}")
+    local frozen="$_UVT_FROZEN"
     local project_name=$(awk -F'"' '/^name *=/ {gsub(/[[:space:]]/, "", $0); print $2; exit}' pyproject.toml)
     local python_interpreter="$VIRTUAL_ENV/bin/python"
     local python_version=$("$python_interpreter" --version 2>&1 | awk '{print $2}' | cut -d. -f1,2)
 
     local install_source="."
-    if [[ "$1" == "--no-extras" ]]; then
-        user_extras=()
-    fi
-
     if (( ${#user_extras[@]} > 0 )); then
         local features_str=$(printf ",%s" "${user_extras[@]}")
         features_str=${features_str:1}
         install_source=".[${features_str}]"
     fi
 
-    echo "${info}♻️  Reinstalling '$project_name' from source '${ok}${install_source}${info}' via uv tool...${done}"
+    local -a mode_flag=(--editable)
+    local mode_label="editable"
+    if [[ "$frozen" == true ]]; then
+        mode_flag=()
+        mode_label="frozen"
+    fi
+
+    # Warn when this reinstall would silently flip the mode out from under the caller.
+    local prev_env prev_mode
+    prev_env=$(uv tool list --show-paths 2>/dev/null | awk -v p="$project_name" -v q="${project_name//_/-}" \
+        'tolower($1)==tolower(p) || tolower($1)==tolower(q) { if (match($0, /\(([^)]*)\)$/)) print substr($0, RSTART+1, RLENGTH-2); exit }')
+    if [[ -n "$prev_env" ]]; then
+        prev_mode=$(_uv_tool_install_mode "$prev_env" "$project_name")
+        if [[ "$prev_mode" == editable || "$prev_mode" == frozen ]] && [[ "$prev_mode" != "$mode_label" ]]; then
+            echo "${warn}⚠️  Mode change: currently ${prev_mode}, this reinstall makes it ${mode_label}.${done}"
+        fi
+    fi
+
+    echo "${info}♻️  Reinstalling '$project_name' from source '${ok}${install_source}${info}' via uv tool (${ok}${mode_label}${info})...${done}"
     echo "${info}   Using Python from active venv: $python_interpreter ($($python_interpreter --version))${done}"
 
     # uv tool install --force --reinstall handles this in a single step
     # (no need for the old uninstall-then-install dance that pipx required)
-    if uv tool install --force --reinstall --editable --python "$python_version" "$install_source"; then
-        echo "${ok}✅ '$project_name' CLI reinstalled successfully (editable mode).${done}"
+    if uv tool install --force --reinstall "${mode_flag[@]}" --python "$python_version" "$install_source"; then
+        echo "${ok}✅ '$project_name' CLI reinstalled successfully (${mode_label} mode).${done}"
+        if [[ "$frozen" == true ]]; then
+            echo "${warn}   ⚠️  FROZEN: this snapshot is what runs until the next --frozen reinstall.${done}"
+        fi
         echo "--------------------------------------------------"
         uv_tool_check_current_project
     else
@@ -1503,6 +1643,30 @@ uv_tool_check_current_project() {
             echo "${info}   Version: ${ok}${tool_version}${done}"
         fi
 
+        # Editable vs frozen is the single most consequential fact about this install
+        # and uv tool list does not report it, so surface it here -- unmissably, with
+        # its consequence spelled out. A frozen install that LOOKS live is exactly how
+        # an afternoon gets burned editing code that nothing is running.
+        local tool_env install_mode
+        tool_env=$(echo "$tool_line" | sed -n 's/.*(\(.*\))$/\1/p')
+        install_mode=$(_uv_tool_install_mode "$tool_env" "$project_name")
+        case "$install_mode" in
+            editable)
+                echo "${info}   Mode:    ${ok}EDITABLE${info} - tracks this checkout; edits take effect immediately.${done}"
+                ;;
+            frozen)
+                echo "${info}   Mode:    ${warn}FROZEN${info} - a snapshot copy.${done}"
+                echo "${warn}            ⚠️  Editing this checkout does NOT change what runs.${done}"
+                echo "${warn}            Run ${example}uv_tool_reinstall_current_project --frozen${warn} to update it.${done}"
+                ;;
+            registry)
+                echo "${info}   Mode:    ${warn}REGISTRY${info} - installed from PyPI, not from this checkout.${done}"
+                ;;
+            *)
+                echo "${info}   Mode:    ${warn}unknown${info} (could not read direct_url.json in the tool env).${done}"
+                ;;
+        esac
+
         # Extract executable paths (lines starting with "- " after the tool line)
         local -a executables
         local found_tool=false
@@ -1548,7 +1712,11 @@ uv_tool_check_current_project() {
 # and offers extras as completions, plus the --no-extras flag.
 _uv_tool_project_extras() {
     local -a extras
-    extras=("--no-extras:Install with no optional extras")
+    extras=(
+        "--no-extras:Install with no optional extras"
+        "--frozen:Snapshot copy -- installed command ignores later edits to this checkout"
+        "--editable:Live link to this checkout (the default)"
+    )
 
     if [[ -f "pyproject.toml" ]]; then
         local extras_list
