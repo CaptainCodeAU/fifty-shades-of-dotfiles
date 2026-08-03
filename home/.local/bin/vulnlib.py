@@ -89,14 +89,41 @@ CPE_NAMESAKE_BLOCK = {
 }
 
 
-def nvd_api_key():
-    """$NVD_API_KEY, else the macOS Keychain entry, else None.
+NVD_KEY_FILE = "~/.config/dotfiles/nvd-api-key"
 
-    Not a credential -- it authorises nothing and only lifts the anonymous
-    5 req/30s limit to 50. A miss is a slowdown, never a wrong answer."""
+
+def nvd_api_key():
+    """The NVD key, from the first source that has it, else None.
+
+      1. $NVD_API_KEY          -- exported by _claude_launch, or ~/.zshrc.private
+      2. ~/.config/dotfiles/nvd-api-key   -- the portable path (Linux/WSL)
+      3. macOS Keychain `nvd-api-key`     -- the Mac path, no file on disk
+
+    Three sources rather than one because the Mac has a Keychain and Linux does
+    not, and a Linux box silently falling back to anonymous means a 231-package
+    sweep takes 20 minutes instead of 4 -- slow enough that the tool gets
+    disabled, which is the real failure.
+
+    NOT a credential: it authorises nothing and only lifts the anonymous
+    5 req/30s limit to 50. A miss is a slowdown, never a wrong answer, which is
+    why every lookup here fails quietly to None."""
     env = (os.environ.get("NVD_API_KEY") or "").strip()
     if env:
         return env
+
+    path = os.path.expanduser(NVD_KEY_FILE)
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                # Tolerate `NVD_API_KEY=...` as well as a bare key, because both
+                # are what someone actually types into a file called this.
+                if not line or line.startswith("#"):
+                    continue
+                return line.split("=", 1)[1].strip().strip("'\"") if "=" in line else line
+    except OSError:
+        pass
+
     if sys.platform != "darwin" or not shutil.which("security"):
         return None
     try:

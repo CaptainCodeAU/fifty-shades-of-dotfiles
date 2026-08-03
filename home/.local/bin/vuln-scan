@@ -107,7 +107,21 @@ def sev_colour(sev, s):
 #  Inventory                                                                   #
 # --------------------------------------------------------------------------- #
 def inventory():
-    """[(name, upstream_version, revision, raw_version)] or None if brew is absent."""
+    """[(name, upstream_version, revision, raw_version)] or None if brew is absent.
+
+    HOMEBREW ONLY, DELIBERATELY. On a Debian/Ubuntu box this returns None and the
+    caller says so out loud rather than printing an all-clear, because "no
+    packages checked" and "no vulnerable packages" must never look the same.
+
+    apt is NOT simply a second inventory to bolt on here. Debian and Ubuntu
+    backport security fixes far more aggressively than Homebrew while keeping the
+    upstream version in the string (`1.11.1-1ubuntu0.2`), and unlike `brew cat`
+    there is no per-package list of applied patch commits to match against. Asking
+    NVD by CPE about a Debian version would therefore reproduce -- at several times
+    the scale -- exactly the false-positive class this tool exists to eliminate.
+    The correct source for those boxes is Ubuntu's own security tracker (USN/OVAL),
+    which understands `-1ubuntu0.2` as a patched build. That is a separate design,
+    not a flag."""
     raw = V.brew_formulae()
     if raw is None:
         return None
@@ -258,7 +272,14 @@ def shlex_join(parts):
 def run_scan(store, args, announce):
     inv = inventory()
     if inv is None:
-        return None, "brew not found or `brew list` failed"
+        import shutil as _sh
+        if not _sh.which("brew"):
+            # Say WHY nothing was checked. A silent no-op on a Linux box would be
+            # read as "scanned, all clear" -- the false all-clear in its purest form.
+            return None, ("no Homebrew on this machine, so nothing was scanned. "
+                          "This tool covers Homebrew only; apt/dpkg needs Ubuntu's "
+                          "security tracker, not NVD (see inventory() for why)")
+        return None, "`brew list` failed"
 
     if args.only:
         wanted = set(args.only)

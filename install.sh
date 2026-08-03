@@ -2386,6 +2386,50 @@ show_help() {
 # `git config --global`: on these dotfiles ~/.gitconfig is a stow symlink into the
 # repo, so --global would write the change straight into the tracked home/.gitconfig
 # (repo pollution). Dormant until enabled here.
+setup_vuln_scan() {
+    # vuln-scan checks INSTALLED Homebrew packages against NVD and is wired into
+    # both the shell banner and Claude's SessionStart. Deployment itself is handled
+    # by stow (both files live under home/.local/bin), so this step exists for the
+    # one thing stow cannot do: tell you the NVD API key is missing.
+    #
+    # WHY THAT MATTERS ENOUGH TO REPORT. The key is NOT a credential -- it grants
+    # no access and only lifts NVD's anonymous limit from 5 to 50 requests per 30s.
+    # But without it a first full scan takes ~20 minutes instead of ~4, and a
+    # security check that feels broken is a security check that gets switched off.
+    # So: never fatal, never prompts, never stores anything -- just says where to
+    # put it on THIS platform, because the answer differs.
+    command -v vuln-scan >/dev/null 2>&1 || return 0
+
+    # Homebrew-only by design; on a Debian/Ubuntu box the tool reports that itself
+    # rather than pretending to have scanned. Nothing to configure there yet.
+    command -v brew >/dev/null 2>&1 || return 0
+
+    local key_file="$HOME/.config/dotfiles/nvd-api-key"
+    local have_key=false
+    [[ -n "${NVD_API_KEY:-}" ]] && have_key=true
+    [[ -s "$key_file" ]] && have_key=true
+    if [[ "$IS_MAC" == true ]] && security find-generic-password -s nvd-api-key -w >/dev/null 2>&1; then
+        have_key=true
+    fi
+
+    if [[ "$have_key" == true ]]; then
+        info "vuln-scan: NVD API key found (full-speed scans)."
+        return 0
+    fi
+
+    warn "vuln-scan: no NVD API key -- scans will work but run ~5x slower."
+    info "  Get one free (no account value, instantly regenerable):"
+    info "    ${CYAN}https://nvd.nist.gov/developers/request-an-api-key${RESET}"
+    if [[ "$IS_MAC" == true ]]; then
+        info "  Then store it in the Keychain, without leaking it to shell history:"
+        info "    ${CYAN}read -rs NVDK && security add-generic-password -U -a \"\$USER\" -s nvd-api-key -w \"\$NVDK\" && unset NVDK${RESET}"
+    else
+        info "  Then store it in a file readable only by you (no Keychain on this platform):"
+        info "    ${CYAN}mkdir -p ~/.config/dotfiles && (umask 077; read -rs NVDK && printf '%s\\n' \"\$NVDK\" > ${key_file} && unset NVDK)${RESET}"
+        info "  Or export ${CYAN}NVD_API_KEY${RESET} from ${CYAN}~/.zshrc.private${RESET} -- either is read automatically."
+    fi
+}
+
 setup_pnpm_audit_hooks() {
     local hooks_dir="$HOME/.config/git/hooks"
     local priv="$HOME/.gitconfig.private"
@@ -2500,6 +2544,9 @@ main() {
 
     # --- Optional: pnpm-audit git hooks (confirm-gated) ---
     setup_pnpm_audit_hooks
+
+    # --- Report on the vuln-scan NVD key (never fatal, never prompts) ---
+    setup_vuln_scan
 
     # --- Summary ---
     show_summary

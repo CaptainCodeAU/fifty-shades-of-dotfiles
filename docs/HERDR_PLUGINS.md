@@ -1,7 +1,7 @@
 # herdr: Plugins (Group C)
 
 **Audience: an AI coding agent, not a human.** This replaces reading
-https://herdr.dev/docs/plugins/.
+<https://herdr.dev/docs/plugins/>.
 
 Verified against **herdr 0.7.5** on 2026-08-02 by authoring, linking, invoking
 and unlinking a real plugin. OBSERVED = produced by a real run. DOC = upstream
@@ -14,9 +14,9 @@ the sandbox trap and the output-format map apply here too.
 
 ## 1. Security posture -- decide this before anything else
 
-Upstream is explicit: *"A plugin is ordinary code that runs on your machine ...
-with your environment, and can call the full herdr CLI"*, and herdr *"does not
-review or sandbox what a plugin does."*
+Upstream is explicit: _"A plugin is ordinary code that runs on your machine ...
+with your environment, and can call the full herdr CLI"_, and herdr _"does not
+review or sandbox what a plugin does."_
 
 Three concrete escalation paths, all OBSERVED or structural:
 
@@ -74,6 +74,7 @@ id = "github-issue"
 title = "Inspect GitHub issue link"
 pattern = "^https://github\\.com/[^/]+/[^/]+/(issues|pull)/[0-9]+$"
 action = "hello"
+# TRIGGER IS ctrl+click -- ON macOS TOO. See "Link handlers" below before testing.
 
 # [[events]]
 # on = "worktree.created"
@@ -188,6 +189,32 @@ Context-dependent extras (DOC, plus OBSERVED where noted):
 `HERDR_PLUGIN_ENTRYPOINT_ID` for pane commands (OBSERVED);
 `HERDR_PLUGIN_CLICKED_URL` and `HERDR_PLUGIN_LINK_HANDLER_ID` for link handlers.
 
+### Link handlers: the trigger is `ctrl+click`, on macOS too
+
+Recorded 2026-08-03 after a failed test wasted a round trip. The modifier is
+**Control on every platform, including macOS** -- upstream's reason is that
+captured terminal mouse reports do not expose Command/Super separately from a
+plain click, so herdr cannot tell a `cmd+click` from an ordinary one.
+
+`cmd+click` therefore does NOT reach the plugin. On macOS it is worse than
+merely inert: iTerm2 binds `cmd+click` to "open URL", so the browser opens and
+the test _looks_ like herdr declining to intercept when herdr never saw the
+event at all. A negative result from `cmd+click` says nothing about the plugin.
+
+Verify a handler fired by its side-effects, not by the browser staying shut:
+
+```bash
+herdr plugin log list --limit 1     # a new entry, action = the handler's `action`
+```
+
+The action additionally receives `invocation_source = "link_click"`,
+`clicked_url` and `link_handler_id` inside `HERDR_PLUGIN_CONTEXT_JSON`; shell
+plugins can read `HERDR_PLUGIN_CLICKED_URL` / `HERDR_PLUGIN_LINK_HANDLER_ID`
+directly. Absence of `clicked_url` in a log entry means the action was invoked
+some other way. Handlers are tested in manifest order within a plugin, and
+`pattern` is a Rust regex matched against the whole URL -- the anchored example
+above will not match a URL with a trailing `)` or `.` picked up from prose.
+
 Note `HERDR_BIN_PATH` is the Cellar path, not the `/opt/homebrew/bin` symlink.
 Use the variable, never a hardcoded path.
 
@@ -210,11 +237,11 @@ herdr plugin pane open --plugin <id> --entrypoint <pane-id> \
 
 OBSERVED placement rules -- these are enforced and the errors are exact:
 
-| Placement | Requirement |
-|---|---|
+| Placement          | Requirement                                                                                                          |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------- |
 | `overlay`, `popup` | target the **active pane**; passing `--workspace` fails with `overlay and popup plugin panes target the active pane` |
-| `split`, `zoomed` | require `--target-pane`; else `split and zoomed plugin panes target an existing pane; use target_pane_id` |
-| `tab` | workspace-level |
+| `split`, `zoomed`  | require `--target-pane`; else `split and zoomed plugin panes target an existing pane; use target_pane_id`            |
+| `tab`              | workspace-level                                                                                                      |
 
 `popup` is a **manifest-only** value; the CLI `--placement` accepts only
 `overlay`, `split`, `tab`, `zoomed`.
@@ -231,7 +258,7 @@ herdr plugin pane open --plugin demo.hello --entrypoint clock \
 herdr pane focus "$BEFORE"
 ```
 
-Because `overlay` follows the *active* pane, opening one while a human is
+Because `overlay` follows the _active_ pane, opening one while a human is
 working elsewhere will cover **their** screen. Prefer `split --target-pane` for
 anything scripted.
 
