@@ -201,6 +201,32 @@ merely inert: iTerm2 binds `cmd+click` to "open URL", so the browser opens and
 the test _looks_ like herdr declining to intercept when herdr never saw the
 event at all. A negative result from `cmd+click` says nothing about the plugin.
 
+**iTerm2 swallows `ctrl+click` until you turn one setting on.** By default it
+opens its own context menu instead of reporting the click, so herdr never sees
+the event and the handler silently does not run. The exact toggle (verified on
+iTerm2 3.6.10, off by default):
+
+> **Settings -> Pointer -> General -> Mouse Reporting ->
+> `☑ ^-Click reported to apps, does not open menu`**
+
+The scope is narrow, which is why it is safe: it only applies where an app has
+mouse reporting switched on. Outside such apps `ctrl+click` still opens the
+menu, and inside herdr the context menu remains reachable by two-finger tap.
+Confirmed on this machine: `Profiles -> Terminal -> Mouse reporting` has
+"Enable mouse reporting" and "Report mouse clicks & drags" already on, so this
+checkbox is the only thing in the way.
+
+Trackpad users: the gesture is Control plus a **one-finger** click. Control plus
+a two-finger tap is a secondary click and matches nothing -- herdr's condition is
+`MouseButton::Left` + `KeyModifiers::CONTROL`, asserted upstream in
+`ctrl_click_url_invokes_plugin_link_handler_but_super_click_does_not`.
+
+Note `⌘-Click opens filename/URL (semantic history)` is a separate iTerm2
+feature on the same settings pane. It is why cmd+click opens a browser, and it
+can be repointed at a "Run command..." action if you ever want cmd+click to do
+something bespoke -- but it can never drive herdr's `link_handlers`, because
+Command cannot be encoded in a terminal mouse report at all.
+
 Verify a handler fired by its side-effects, not by the browser staying shut:
 
 ```bash
