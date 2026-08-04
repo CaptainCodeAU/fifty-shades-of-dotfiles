@@ -1107,11 +1107,18 @@ eval "$(zoxide init zsh --cmd cd)"
 
 # Hijack python/python3 to redirect users to uv run equivalents.
 # python/python3 should not be called directly — use uv run instead.
+#
+# All six of these `return 1`, matching npx/npm/yarn above. They used to print the
+# advice and exit 0, which is the dangerous direction: a refusal that reports SUCCESS.
+# `python build.py && deploy` would print a tip, do no work, and then deploy — and
+# nothing anywhere would report a failure, because as far as the shell was concerned
+# there wasn't one.
 python() {
     echo "${warn}⚠️  python is not used directly on this system. Use uv run instead.${done}"
     echo
     echo "  Instead of:  ${err}python $@${done}"
     echo "  Run:         ${ok}uv run python $@${done}"
+    return 1
 }
 
 python3() {
@@ -1119,6 +1126,7 @@ python3() {
     echo
     echo "  Instead of:  ${err}python3 $@${done}"
     echo "  Run:         ${ok}uv run python3 $@${done}"
+    return 1
 }
 
 py313() {
@@ -1126,6 +1134,7 @@ py313() {
     echo
     echo "  Instead of:  ${err}py313 $@${done}"
     echo "  Run:         ${ok}uv run --python 3.13 python $@${done}"
+    return 1
 }
 
 py312() {
@@ -1133,6 +1142,7 @@ py312() {
     echo
     echo "  Instead of:  ${err}py312 $@${done}"
     echo "  Run:         ${ok}uv run --python 3.12 python $@${done}"
+    return 1
 }
 
 py311() {
@@ -1140,6 +1150,7 @@ py311() {
     echo
     echo "  Instead of:  ${err}py311 $@${done}"
     echo "  Run:         ${ok}uv run --python 3.11 python $@${done}"
+    return 1
 }
 
 py310() {
@@ -1147,6 +1158,7 @@ py310() {
     echo
     echo "  Instead of:  ${err}py310 $@${done}"
     echo "  Run:         ${ok}uv run --python 3.10 python $@${done}"
+    return 1
 }
 
 # --- Node.js 'pnpm dlx' / 'bunx' Aliases ---
