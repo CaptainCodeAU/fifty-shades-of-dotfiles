@@ -1,6 +1,13 @@
 # ~/.zsh_python_functions
 # Source this file in ~/.zshrc
 
+# Fallback for the supported-Python pattern, used ONLY when this file is sourced
+# without .zshrc section 2 having run -- that section is the single source of truth.
+# Defined once here because the two call sites below each carried their own copy and
+# had drifted a full release behind it (3.13 vs 3.14), silently rejecting a version
+# the rest of the setup considered supported.
+: ${PYTHON_VERSION_PATTERN_FALLBACK:="^3\.(8|9|1[0-4])$"}
+
 # ==============================================================================
 # Helper Functions
 # ==============================================================================
@@ -339,9 +346,14 @@ Thumbs.db
 *.log
 logs/
 
-# uv cache/lock files
-uv.lock
+# uv cache
 .uv_cache/
+
+# uv.lock is deliberately NOT ignored. It records exactly what was installed, and
+# committing it is what makes `uv sync` reproducible on another machine or another
+# day. The shell's UV_EXCLUDE_NEWER cooldown is truncated to midnight UTC precisely
+# so this committed file stops churning between shells (see .zshrc section 6) --
+# gitignoring it throws away the thing that fix was protecting.
 
 # npm / node
 node_modules/
@@ -551,8 +563,14 @@ create_readme() {
 
     if [[ ! -f "./README.md" ]]; then
         echo "Creating README.md..."
+        # The delimiter stays QUOTED so the body is copied literally -- the direnv
+        # example below contains `$(basename \"\$PWD\")`, which must reach the README
+        # as text and must NOT run at scaffold time. Placeholders are substituted by
+        # sed after the fact, the same idiom create_envrc uses.
+        # (This function previously interpolated $project_name directly inside a quoted
+        # heredoc, so every generated README literally read "# $project_name".)
         cat <<-'EOF' > README.md
-# $project_name
+# PROJECT_NAME
 
 ## Description
 Brief description of your project.
@@ -562,15 +580,15 @@ Brief description of your project.
 1.  **Clone the Repository (if applicable)**
     ```bash
     git clone <repository_url>
-    cd $project_name
+    cd PROJECT_NAME
     ```
 
 2.  **Set up Python Environment:**
     *   Ensure you have [`uv`](https://github.com/astral-sh/uv) installed.
     *   Ensure you have [`direnv`](https://direnv.net/) installed and hooked into your shell.
-    *   Run the setup script (first time or to recreate environment). Choose the desired Python version (e.g., ${python_version}):
+    *   Run the setup script (first time or to recreate environment). Choose the desired Python version (e.g., PYTHON_VERSION):
     ```bash
-    python_setup ${python_version}
+    python_setup PYTHON_VERSION
     ```
     *(This creates/updates the `.venv` directory and installs dependencies)*
 
@@ -594,7 +612,7 @@ Brief description of your project.
 
 *   **Run the main script (Example):**
     ```bash
-    python src/$project_name/main.py
+    uv run python src/PROJECT_NAME/main.py
     ```
 
 *   **Run Tests:**
@@ -639,6 +657,18 @@ Brief description of your project.
     deactivate
     ```
 EOF
+        # `|` delimiter, not `/`, so a project name is never mistaken for a separator.
+        sed -i.bak -e "s|PROJECT_NAME|${project_name}|g" \
+                   -e "s|PYTHON_VERSION|${python_version}|g" README.md
+        # `command rm` deliberately: this is an internal temp artifact, so it should not
+        # go to the trash or print a "Trashed:" line at the user.
+        command rm -f README.md.bak
+        # Fail loudly rather than ship a README that still says PROJECT_NAME. This is
+        # the check whose absence let the old placeholder bug survive unnoticed.
+        if grep -q 'PROJECT_NAME\|PYTHON_VERSION' README.md; then
+            echo "${err}❌ README.md still contains unsubstituted placeholders.${done}" >&2
+            return 1
+        fi
     else
         echo "README.md already exists. (Skipping creation)"
     fi
@@ -669,9 +699,9 @@ python_new_project() {
 
     # --- Validate Python version format (using global vars from .zshrc) ---
     if [[ -z "$PYTHON_VERSION_PATTERN" ]]; then
-        echo "Warning: PYTHON_VERSION_PATTERN not defined. Using default: ^3\.(8|9|1[0-3])$" >&2
-        # PYTHON_VERSION_PATTERN="^3\.(1[0-3]|[7-9])(\.[0-9]+)?$" # Fallback
-        PYTHON_VERSION_PATTERN="^3\.(8|9|1[0-3])$" # Fallback (adjust range)
+        PYTHON_VERSION_PATTERN="$PYTHON_VERSION_PATTERN_FALLBACK"
+        # Message derives from the variable, so the two can never disagree again.
+        echo "Warning: PYTHON_VERSION_PATTERN not defined. Using default: ${PYTHON_VERSION_PATTERN}" >&2
     fi
     if [[ ! "${req_python_version}" =~ ${PYTHON_VERSION_PATTERN} ]]; then
         echo "Error: Invalid or unsupported Python version format: '${req_python_version}'." >&2
@@ -1155,12 +1185,12 @@ python_setup() {
     fi
 
     if [[ -z "$PYTHON_VERSION_PATTERN" ]]; then
-        echo "${warn}Warning: PYTHON_VERSION_PATTERN not defined. Using fallback pattern.${done}" >&2
-        PYTHON_VERSION_PATTERN="^3\.(8|9|1[0-3])$"
+        PYTHON_VERSION_PATTERN="$PYTHON_VERSION_PATTERN_FALLBACK"
+        echo "${warn}Warning: PYTHON_VERSION_PATTERN not defined. Using fallback: ${PYTHON_VERSION_PATTERN}${done}" >&2
     fi
     if [[ ! "${req_python_version}" =~ ${PYTHON_VERSION_PATTERN} ]]; then
         echo "${err}Error: Invalid or unsupported Python version format: '${req_python_version}'.${done}" >&2
-        echo "${err}Supported range is roughly: ${PYTHON_MIN_VERSION:-3.8}-${PYTHON_MAX_VERSION:-3.13}${done}" >&2
+        echo "${err}Supported range is roughly: ${PYTHON_MIN_VERSION:-3.8}-${PYTHON_MAX_VERSION:-3.14}${done}" >&2
         return 1
     fi
 
@@ -1307,10 +1337,13 @@ python_delete() {
 
     # --- PART 2: File Deletion ---
     echo "${info}Searching for and deleting project files...${done}"
+    # uv.lock is NOT in this list. create_gitignore now commits it deliberately (it is
+    # what makes `uv sync` reproducible), so deleting it here would delete a TRACKED
+    # file and show up as a git deletion -- teardown of generated artifacts should not
+    # touch source of record. Recreate it with `uv lock` if you really want it gone.
     local items_to_remove=(
         ".venv"
         ".envrc"
-        "uv.lock"
         ".pytest_cache"
         ".coverage"
         "htmlcov"
