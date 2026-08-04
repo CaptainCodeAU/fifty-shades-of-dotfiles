@@ -720,7 +720,13 @@ _claude_launch() {
   # Background, 6h-gated, uses the token we just read; never blocks the launch.
   if [[ -n "$gh_token" ]]; then
     local _ghc="${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles/gh_api_status" _ghn=$(date +%s) _ghl=0
-    [[ -f "$_ghc" ]] && _ghl=$(stat -f %m "$_ghc" 2>/dev/null || stat -c %Y "$_ghc" 2>/dev/null || echo 0)
+    # GNU `stat -c` FIRST, then BSD `-f`. The order is load-bearing, not style: on
+    # Linux `-f` means --file-system, so a BSD-first chain SUCCEEDS with a multi-line
+    # `File: "..."` block, never reaches the fallback, and feeds non-numeric garbage to
+    # the arithmetic below. Unreachable on Linux today ($gh_token only exists via the
+    # macOS Keychain), but every SessionStart hook orders it this way after that exact
+    # bug bit -- see .claude/hooks/zed-version-check.sh for the full account.
+    [[ -f "$_ghc" ]] && _ghl=$(stat -c %Y "$_ghc" 2>/dev/null || stat -f %m "$_ghc" 2>/dev/null || echo 0)
     if (( _ghn - _ghl > 21600 )); then
       ( mkdir -p "${_ghc:h}"
         _h=$(curl -s -o /dev/null -D - -H "Authorization: Bearer $gh_token" https://api.github.com/rate_limit 2>/dev/null)
