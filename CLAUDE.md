@@ -31,7 +31,16 @@ A non-zero exit from any Bash call cancels the other tool calls batched in the s
 
 ## Editing
 
-Before editing a file, run `grep -cP '\t' <file>` to detect tab indentation — match exactly or the Edit tool will fail.
+Before editing a file, count its tab-indented lines with `awk '/^\t/{n++} END{print n+0}' <file>` — match the file's existing indentation exactly or the Edit tool will fail.
+
+**Do not use `grep -P '\t'` for this.** `-P` is a GNU/PCRE extension that BSD grep does not have. On this Mac it _appears_ to work only because Claude Code shims `grep` to `ugrep` via a shell function; the same command against the real binary fails outright:
+
+```
+$ command grep -cP '\t' home/.zshrc
+grep: invalid option -- P
+```
+
+So any shell without that shim — a plain terminal, a script, a cron job, a non-Claude session, a Linux box whose grep lacks PCRE — silently loses the check, and the Edit tool then fails on indentation you never measured. `awk` is POSIX and behaves identically everywhere. Verified 2026-08-04: both forms report 77 tab-indented lines in `home/.zshrc`, and 0 in `home/.zsh_python_functions`.
 
 ## Deletion safety
 
