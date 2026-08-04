@@ -121,7 +121,7 @@ Executable commands exposed on `PATH` via `~/.local/bin`. Two kinds:
 | `pnpm-audit-tree`         | Recursive supply-chain auditor for pnpm / JS project trees (see `docs/PNPM_AUDIT_TREE.md`)                                                                 | direct  |
 | `pnpm-audit-hook`         | Git pre-commit/pre-push hook that blocks on supply-chain findings; wraps `pnpm-audit-tree` (see `docs/PNPM_AUDIT_PREPUSH_HOOK.md`)                         | direct  |
 | `nvm-verify-node`         | Verify an nvm-installed Node against official GPG-signed nodejs.org releases, bypassing mirrors (see `docs/NVM_SECURITY.md`)                               | direct  |
-| `toolchain-cve-check`     | Check pnpm/nvm/bun floors + installed versions + installed Claude Code against live CVE advisories (7 subjects) (see `docs/TOOLCHAIN_CVE_CHECK.md`)                                         | direct  |
+| `toolchain-cve-check`     | Check pnpm/nvm/bun floors + installed versions + installed Claude Code against live CVE advisories (7 subjects) (see `docs/TOOLCHAIN_CVE_CHECK.md`)        | direct  |
 | `herdr-cooldown-check`    | Enforce the 3-day release cooldown for herdr: version/age gate, brew pin, phone-home guards (see `docs/HERDR.md`)                                          | direct  |
 | `speak-clipboard`         | Speak the clipboard aloud with terminal furniture stripped (ANSI, PUA glyphs, rule runs); the a11y path herdr's mouse capture breaks (see `docs/HERDR.md`) | direct  |
 | `git-leak-scan`           | Pre-commit scan of the staged diff for identity/secret leaks; invoked by the `_audit-chain` git-hook chainer                                               | direct  |
@@ -129,6 +129,7 @@ Executable commands exposed on `PATH` via `~/.local/bin`. Two kinds:
 | `p10k-contrast-check`     | WCAG contrast audit of every ENABLED p10k prompt segment against each iTerm2 profile's real palette; catches a theme swap making the prompt illegible      | direct  |
 | `ci-watch`                | Escalating, exception-based CI-status dashboard surfaced at session start (see `docs/CI_WATCH.md`)                                                         | direct  |
 | `deploy-parity-check`     | Is every git-tracked `home/` file actually symlinked into `~/`? Reports MISSING vs SHADOWED separately; self-tests its own detectors on every run          | direct  |
+| `python-scaffold-check`   | Scaffolds a throwaway project and validates what the generators actually EMIT (README placeholders, `.envrc` runs clean under bash, `uv.lock` not ignored) | direct  |
 | `dirdiff`                 | Directory comparison tool (Left vs Right; size / content / by-type, JSON output)                                                                           | wrapper |
 | `sysinfo`                 | Terminal system-information dashboard                                                                                                                      | wrapper |
 | `watch-history-sync`      | Export YouTube watch history to a local SQLite database                                                                                                    | wrapper |
@@ -241,23 +242,23 @@ Reusable branch protection ruleset templates. Import via: Repository → Setting
 
 When deploying files, use this quick reference:
 
-| Repository Location                                                     | Deployment Location                                       |
-| ----------------------------------------------------------------------- | --------------------------------------------------------- |
-| `home/.zshrc`                                                           | `~/.zshrc`                                                |
-| `home/.zsh_*`                                                           | `~/.zsh_*`                                                |
-| `home/.tmux.conf`                                                       | `~/.tmux.conf`                                            |
-| `home/.p10k.zsh`                                                        | `~/.p10k.zsh`                                             |
-| `home/.config/direnv/direnv.toml`                                       | `~/.config/direnv/direnv.toml`                            |
-| `home/.config/direnv/direnvrc`                                          | `~/.config/direnv/direnvrc`                               |
-| `home/.config/yazi/`                                                    | `~/.config/yazi/`                                         |
-| `home/.config/zed/settings.json`                                        | `~/.config/zed/settings.json`                             |
-| `home/.config/yt-dlp/config`                                            | `~/.config/yt-dlp/config`                                 |
-| `home/.config/herdr/config.toml`                                        | `~/.config/herdr/config.toml`                             |
-| `home/.config/lazygit/config.yml`                                       | `~/.config/lazygit/config.yml`                            |
-| `platforms/macos/Library/Application Support/Cursor/User/settings.json` | `~/Library/Application Support/Cursor/User/settings.json` |
-| `platforms/macos/Library/Application Support/Code/User/settings.json`   | `~/Library/Application Support/Code/User/settings.json`   |
+| Repository Location                                                     | Deployment Location                                                                 |
+| ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| `home/.zshrc`                                                           | `~/.zshrc`                                                                          |
+| `home/.zsh_*`                                                           | `~/.zsh_*`                                                                          |
+| `home/.tmux.conf`                                                       | `~/.tmux.conf`                                                                      |
+| `home/.p10k.zsh`                                                        | `~/.p10k.zsh`                                                                       |
+| `home/.config/direnv/direnv.toml`                                       | `~/.config/direnv/direnv.toml`                                                      |
+| `home/.config/direnv/direnvrc`                                          | `~/.config/direnv/direnvrc`                                                         |
+| `home/.config/yazi/`                                                    | `~/.config/yazi/`                                                                   |
+| `home/.config/zed/settings.json`                                        | `~/.config/zed/settings.json`                                                       |
+| `home/.config/yt-dlp/config`                                            | `~/.config/yt-dlp/config`                                                           |
+| `home/.config/herdr/config.toml`                                        | `~/.config/herdr/config.toml`                                                       |
+| `home/.config/lazygit/config.yml`                                       | `~/.config/lazygit/config.yml`                                                      |
+| `platforms/macos/Library/Application Support/Cursor/User/settings.json` | `~/Library/Application Support/Cursor/User/settings.json`                           |
+| `platforms/macos/Library/Application Support/Code/User/settings.json`   | `~/Library/Application Support/Code/User/settings.json`                             |
 | `settings/iterm2/DynamicProfiles/`                                      | `~/Library/Application Support/iTerm2/DynamicProfiles/` (symlinked by `install.sh`) |
-| `settings/` (everything else)                                           | Manual import (not auto-deployed)                         |
+| `settings/` (everything else)                                           | Manual import (not auto-deployed)                                                   |
 
 ## Benefits of This Structure
 

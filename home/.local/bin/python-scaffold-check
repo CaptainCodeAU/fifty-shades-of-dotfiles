@@ -1,0 +1,121 @@
+#!/usr/bin/env zsh
+# python-scaffold-check -- validate what the Python scaffolder actually GENERATES.
+#
+# WHY THIS EXISTS
+#   Every bug this checks for shipped, and all of them shared one cause: a generated
+#   file was written but never once executed or read back afterwards.
+#     - create_readme used a QUOTED heredoc with $project_name inside, so every new
+#       project got a README literally titled "# $project_name".
+#     - create_envrc emitted `local` at the top level of a bash-evaluated file, which
+#       bash rejects and which left the banner's version and binary name blank.
+#     - create_gitignore ignored uv.lock, undoing the reason .zshrc truncates
+#       UV_EXCLUDE_NEWER to midnight UTC in the first place.
+#   None of these would survive one look at the output. So: generate, then look.
+#
+# SCOPE
+#   Deliberately only the generator functions -- no `uv venv`, no dependency install,
+#   no `git init`, no `direnv allow`. Those are slow, need the network, and mutate
+#   state outside the temp dir. The generators are what broke; this stays fast enough
+#   to run without thinking about it.
+#
+# USAGE
+#   python-scaffold-check           # quiet unless something fails
+#   python-scaffold-check -v        # show every assertion
+# EXIT
+#   0 all checks passed · 1 at least one failed · 2 could not run
+
+set -u
+emulate -L zsh
+setopt no_nomatch
+
+VERBOSE=0
+[[ "${1:-}" == "-v" || "${1:-}" == "--verbose" ]] && VERBOSE=1
+
+FUNCS="${ZSH_PYTHON_FUNCTIONS:-$HOME/.zsh_python_functions}"
+[[ -r "$FUNCS" ]] || { print -ru2 -- "python-scaffold-check: cannot read $FUNCS"; exit 2 }
+
+# The generators reference the colour vars .zshrc defines. Under `set -u` an unset one
+# would abort the function mid-write, so define them (empty is fine, we strip colour).
+autoload -U colors 2>/dev/null && colors 2>/dev/null
+ok=""; warn=""; err=""; info=""; example=""; done=""
+
+compdef() { : }                      # stub: the file ends with compdef registrations
+source "$FUNCS" >/dev/null 2>&1 || { print -ru2 -- "python-scaffold-check: failed to source $FUNCS"; exit 2 }
+
+PASS=0; FAIL=0
+pass() { PASS=$((PASS+1)); (( VERBOSE )) && print -r -- "  ok    $1" }
+fail() { FAIL=$((FAIL+1)); print -ru2 -- "  FAIL  $1"; [[ -n "${2:-}" ]] && print -ru2 -- "        $2" }
+check() { if eval "$1" >/dev/null 2>&1; then pass "$2"; else fail "$2" "${3:-}"; fi }
+
+WORK=$(mktemp -d "${TMPDIR:-/tmp}/scaffold-check.XXXXXX") || exit 2
+cleanup() { [[ -n "$WORK" && -d "$WORK" ]] && command rm -rf "$WORK" }
+trap cleanup EXIT INT TERM
+
+PROJ=scaffoldprobe
+mkdir -p "$WORK/$PROJ" && builtin cd "$WORK/$PROJ" || exit 2
+
+create_gitignore      >/dev/null 2>&1
+create_readme "$PROJ" "3.14" >/dev/null 2>&1
+create_envrc  "$PROJ" "$PROJ" "3.14" >/dev/null 2>&1
+update_vscode_settings >/dev/null 2>&1
+
+print -r -- "python-scaffold-check: generated files in a temp project"
+
+# --- README ---------------------------------------------------------------- #
+check '[[ -f README.md ]]' "README.md created"
+check 'grep -q "^# '"$PROJ"'$" README.md' \
+      "README title substituted" \
+      "expected '# $PROJ'; got: $(head -1 README.md 2>/dev/null)"
+check '! grep -qE "PROJECT_NAME|PYTHON_VERSION" README.md' \
+      "README has no unsubstituted placeholders" \
+      "$(grep -nE 'PROJECT_NAME|PYTHON_VERSION' README.md 2>/dev/null | head -3)"
+check '! grep -qE "\\\$project_name|\\\$\{python_version\}" README.md' \
+      "README has no raw shell variables" \
+      "$(grep -nE '\$project_name|\$\{python_version\}' README.md 2>/dev/null | head -3)"
+check 'grep -q "python_setup 3.14" README.md' "README python version substituted"
+# Regression guard for the FIX, not the bug: the direnv example must stay literal.
+# Naively un-quoting the heredoc to fix placeholders would execute this at scaffold
+# time and silently strip it from the README.
+check 'grep -q "basename" README.md' \
+      "README kept the literal \$(basename ...) direnv example" \
+      "heredoc delimiter may have been un-quoted -- it must stay quoted + sed'd"
+
+# --- .envrc ---------------------------------------------------------------- #
+check '[[ -f .envrc ]]' ".envrc created"
+check 'bash -n .envrc' ".envrc is syntactically valid bash"
+check '! grep -qE "^[[:space:]]*local " .envrc' \
+      ".envrc has no top-level 'local'" \
+      "bash rejects it outside a function AND leaves the variable unset"
+if command -v bash >/dev/null 2>&1; then
+    _out=$(bash ./.envrc 2>&1)
+    check '! print -r -- "$_out" | grep -qi "local:"' \
+          ".envrc runs under bash without 'local' errors" \
+          "$(print -r -- "$_out" | grep -i 'local:' | head -2)"
+fi
+
+# --- .gitignore ------------------------------------------------------------ #
+check '[[ -f .gitignore ]]' ".gitignore created"
+check '! grep -qx "uv.lock" .gitignore' \
+      ".gitignore does NOT ignore uv.lock" \
+      "a committed lock is what makes uv sync reproducible; .zshrc's midnight-UTC
+        UV_EXCLUDE_NEWER truncation exists to protect that committed file"
+check 'grep -qx ".venv" .gitignore' ".gitignore still ignores .venv"
+
+# --- VSCode settings ------------------------------------------------------- #
+# JSONC by design (it carries comments), so this is a key check, not a JSON parse.
+check '[[ -f .vscode/settings.json ]]' ".vscode/settings.json created"
+check 'grep -q "python.defaultInterpreterPath" .vscode/settings.json' \
+      ".vscode settings contain the interpreter path"
+
+# --- supported-version pattern --------------------------------------------- #
+check '[[ "3.14" =~ ${PYTHON_VERSION_PATTERN:-$PYTHON_VERSION_PATTERN_FALLBACK} ]]' \
+      "3.14 is accepted by the supported-version pattern" \
+      "pattern in use: ${PYTHON_VERSION_PATTERN:-$PYTHON_VERSION_PATTERN_FALLBACK}"
+
+print -r -- ""
+if (( FAIL )); then
+    print -ru2 -- "python-scaffold-check: $PASS passed, $FAIL FAILED"
+    exit 1
+fi
+print -r -- "python-scaffold-check: $PASS passed, 0 failed"
+exit 0
