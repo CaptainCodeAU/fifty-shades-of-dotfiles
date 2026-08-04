@@ -380,9 +380,22 @@ def print_table(groups, stats, quiet=False):
             head += C.dim("   (no changes since last scan)")
         print(head)
 
-    if exposed:
-        print(C.red(f"  EXPOSED  {len(exposed)}"))
-        for item in sorted(exposed, key=lambda i: -(i["row"]["worst_score"] or 0)):
+    # Split EXPOSED the same way the briefing does. Previously this printed all
+    # exposed formulae identically, so the banner shouted about 7 while the briefing
+    # could only act on 2 -- and the 5 sub-threshold rows never change from session to
+    # session. Identical unchanging alarm is how the whole block stops being read, and
+    # the ACTION NEEDED rows get skimmed along with it. Split, don't hide: everything
+    # below is still printed, still under --quiet, because these ARE live unfixed CVEs
+    # (they are NOT backported and NOT unfixable -- that is what PATCHED BY HOMEBREW
+    # and ALL-VERSION below are for). They are merely under the action threshold.
+    acts = actionable(groups)
+    act_names = {i["row"]["name"] for i in acts}
+    below = [i for i in exposed if i["row"]["name"] not in act_names]
+
+    if acts:
+        print(C.red(f"  ACTION NEEDED  {len(acts)}")
+              + C.dim(f"  (CVSS >= {ACTION_THRESHOLD:.1f} or unrated -- the briefing covers these)"))
+        for item in sorted(acts, key=lambda i: -(i["row"]["worst_score"] or 0)):
             r = item["row"]
             worst = max((f["score"] for f in item["live"]
                          if isinstance(f.get("score"), (int, float))), default=None)
@@ -394,6 +407,21 @@ def print_table(groups, stats, quiet=False):
                   + C.dim(f"   {len(item['live'])} CVE(s)  [{r['cpe']}]"))
             print("        " + C.dim(", ".join(f["cve"] for f in item["live"][:8])
                                      + (" …" if len(item["live"]) > 8 else "")))
+
+    if below:
+        # One line, names only. Deliberately not itemised: the point is that it stays
+        # visible and countable without competing with the block above.
+        names = ", ".join(i["row"]["name"] for i in below[:8])
+        more = f" +{len(below) - 8}" if len(below) > 8 else ""
+        worst = max((f["score"] for i in below for f in i["live"]
+                     if isinstance(f.get("score"), (int, float))), default=None)
+        worst_s = f", worst {worst:.1f}" if worst is not None else ""
+        cves = sum(len(i["live"]) for i in below)
+        print(C.yellow(f"  EXPOSED, BELOW ACTION THRESHOLD  {len(below)}")
+              + C.dim(f"  {names}{more}"))
+        print(C.dim(f"      {cves} live CVE(s), unfixed{worst_s} -- "
+                    f"under CVSS {ACTION_THRESHOLD:.1f}, so not in the briefing. "
+                    f"`vuln-scan --report` after lowering ACTION_THRESHOLD to see them."))
 
     if patched and not quiet:
         names = ", ".join(i["row"]["name"] for i in patched[:6])

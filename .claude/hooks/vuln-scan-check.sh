@@ -36,14 +36,22 @@ if printf '%s' "$out" | grep -qE 'need checking|already running'; then
   exit 0
 fi
 
-if [ "$rc" -eq 1 ] && printf '%s' "$out" | grep -q 'EXPOSED'; then
+# Gate on the EXIT CODE alone, never on a string in the output. rc=1 IS "something is
+# actionable" -- that is the tool's contract. The previous `grep -q 'EXPOSED'` broke the
+# moment vuln-scan split its banner into ACTION NEEDED + EXPOSED, BELOW ACTION THRESHOLD:
+# when everything actionable is high-severity there is no "EXPOSED" line at all, so the
+# grep failed and this whole guidance block silently vanished while rc was still 1.
+# A watcher keyed to wording dies the day the wording changes, and reports healthy.
+if [ "$rc" -eq 1 ]; then
   briefing="${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/vuln-briefing.md"
   echo "🔐 Installed packages with known vulnerabilities:"
   printf '%s\n' "$out" | grep -v '^vuln-scan:' | sed 's/^/   /'
   echo
   echo "    ASSISTANT — ACT ON THIS BEFORE OTHER WORK:"
-  echo "    1. Create a task for each EXPOSED package above so it survives the scroll."
+  echo "    1. Create a task for each ACTION NEEDED package above so it survives the scroll."
   echo "       Gavin has said he misses startup output; a printed line alone is not enough."
+  echo "       Anything under 'EXPOSED, BELOW ACTION THRESHOLD' is LIVE and UNFIXED too --"
+  echo "       it is merely under CVSS 7.0 and so absent from the briefing. Quieter, not safe."
   echo "    2. Read $briefing for CVSS scores, descriptions and blast radius."
   echo "    3. For a package whose Homebrew revision is > 0, the fix may ALREADY be applied:"
   echo "       Homebrew backports patches without changing the upstream version, so NVD"
