@@ -1840,6 +1840,13 @@ stow_home() {
 
     _clean_stale_repo_links
 
+    # NOTE for anyone running stow by hand under a restricted sandbox (e.g. a Claude
+    # Code session): reads under `home/.ssh` may be denied, and stow ABORTS there while
+    # walking the tree. A simulated run (`stow -n -R -v --no-folding -t ~ home`) then
+    # prints an unlink phase with no matching link phase -- observed as 59 UNLINK / 0
+    # LINK -- which reads as "tear down every stowed file and restore none". Unsandboxed
+    # the same command returns a symmetric 70 UNLINK / 71 LINK. Verify a dry run
+    # SUCCEEDED before trusting it; a truncated plan looks like a plan. See CLAUDE.md.
     local -a stow_args=(-R --no-folding -t "$HOME" home)
     [[ "$VERBOSE" == true ]] && stow_args=(-R --no-folding -v -t "$HOME" home)
 
@@ -2224,6 +2231,7 @@ update() {
 
     info "Restowing home/ → ~/"
     _clean_stale_repo_links
+    # Same sandbox caveat as stow_home() -- see the note there before trusting a dry run.
     local -a stow_args=(-R --no-folding -t "$HOME" home)
     [[ "$VERBOSE" == true ]] && stow_args=(-R --no-folding -v -t "$HOME" home)
     run_cmd stow "${stow_args[@]}"

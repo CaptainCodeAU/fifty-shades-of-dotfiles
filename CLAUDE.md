@@ -29,6 +29,17 @@ Never start a Bash command with `cd` — the harness hard-rejects any leading `c
 
 A non-zero exit from any Bash call cancels the other tool calls batched in the same message (Claude Code aborts parallel siblings on error). Never batch state-changing commands (`git add`/`commit`/`push`, file writes) in the same message as read-only probes — a probe that exits non-zero (e.g. `ls`/`grep`/`cat` on a missing path) silently cancels the mutation, so a commit can vanish with no error you'd notice. Sequence mutations as their own calls, and prefer `find -print` over `ls`/`grep` for existence checks (it exits 0 on an empty match — but only when the search root exists; for a possibly-missing path use `test -e` or append `|| true`, per the Shell-section caveat above).
 
+## Sandbox: `home/.ssh` breaks whole-tree sweeps
+
+The Claude sandbox denies reads under any `.ssh` directory (`**/.ssh` is in its deny list) and this repo has a real one at `home/.ssh`, so **any command that walks all of `home/` hits it**. Two consequences, and the second is the one that matters:
+
+- **Noise.** `rg`, `find` and friends print `Operation not permitted (os error 1)` and continue. Harmless in itself, but it means an empty result is not proof of absence.
+- **Partial failure.** A tool that ENUMERATES and then ACTS can die between the two phases. A sandboxed `stow -n -R --no-folding -t ~ home` returned **59 UNLINK and 0 LINK** before aborting on `home/.ssh` — a plan which, taken at face value, tears down every stowed file and restores none: `.gitconfig`, `.p10k.zsh`, `direnvrc`, all the git hooks, everything in `~/.local/bin`. Outside the sandbox the same command returned a correct, symmetric **70 UNLINK / 71 LINK**.
+
+(GNU stow builds its full task list before touching the filesystem, so a real run would most likely have aborted harmlessly at the same point. That was not tested and does not change the rule: the printed plan was wrong, and acting on a wrong plan to find out is not worth it.)
+
+**So for anything that sweeps `home/`: dry-run first, and verify the dry run itself SUCCEEDED** — not merely that it produced output. A truncated plan looks like a plan. If it aborts on `home/.ssh`, re-run with `dangerouslyDisableSandbox: true` and compare, rather than trusting the short version.
+
 ## Editing
 
 Before editing a file, count its tab-indented lines with `awk '/^\t/{n++} END{print n+0}' <file>` — match the file's existing indentation exactly or the Edit tool will fail.
