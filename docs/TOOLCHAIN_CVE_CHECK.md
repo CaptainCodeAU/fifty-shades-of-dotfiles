@@ -19,17 +19,39 @@ mode had also left the README recommending a CVE-vulnerable nvm (`v0.40.3`).
 `toolchain-cve-check` closes that gap: the day a pin (or an installed version) lands
 in a published vulnerable range, it says so, and nudges the maintainer to bump.
 
-## What it checks (7 subjects)
+## What it checks (7 core subjects, plus Homebrew on demand)
 
-| #   | Subject        | Version source                       | Advisory source            |
-| --- | -------------- | ------------------------------------ | -------------------------- |
-| 1   | pnpm floor     | `--pnpm-floor` / `$PNPM_MIN_VERSION` | OSV                        |
-| 2   | pnpm installed | `pnpm -v`                            | OSV                        |
-| 3   | nvm floor      | `--nvm-floor` / `$NVM_MIN_VERSION`   | GitHub nvm-repo advisories |
-| 4   | nvm installed  | `git -C ~/.nvm describe --tags`      | GitHub nvm-repo advisories |
+| #   | Subject             | Version source                       | Advisory source                   |
+| --- | ------------------- | ------------------------------------ | --------------------------------- |
+| 1   | pnpm floor          | `--pnpm-floor` / `$PNPM_MIN_VERSION` | OSV                               |
+| 2   | pnpm installed      | `pnpm -v`                            | OSV                               |
+| 3   | nvm floor           | `--nvm-floor` / `$NVM_MIN_VERSION`   | GitHub nvm-repo advisories        |
+| 4   | nvm installed       | `git -C ~/.nvm describe --tags`      | GitHub nvm-repo advisories        |
+| 5   | bun floor           | `--bun-floor` / `$BUN_MIN_VERSION`   | OSV                               |
+| 6   | bun installed       | `bun --version`                      | OSV                               |
+| 7   | Claude Code         | `claude --version`                   | OSV (`@anthropic-ai/claude-code`) |
+| 8   | Homebrew (`--brew`) | `brew list --versions`               | **NVD by CPE**                    |
 
 Each subject is reported independently as **OK** (clean), **EXPOSED** (in a vulnerable
-range — actionable), or **SKIPPED** (data unavailable; never a false positive).
+range — actionable), **UNKNOWN** (could not be determined — _not_ clean), or
+**SKIPPED** (data unavailable; never a false positive).
+
+### Subjects 1–7 vs subject 8: use the right tool
+
+Subjects 1–7 are a handful of API calls and belong in the SessionStart path.
+Subject 8 is a ~230-formula sweep taking roughly **15 minutes**, so it is opt-in
+behind `--brew` and never runs inline in a hook.
+
+**For day-to-day Homebrew coverage, use [`vuln-scan`](VULN_SCAN.md) instead.** It
+is the incremental, SQLite-backed version of subject 8: it only checks what has
+changed since last time, understands Homebrew revision bumps, and filters out
+CVEs that Homebrew has already backported a fix for. `toolchain-cve-check --brew`
+remains useful as a stateless one-shot audit.
+
+> **Duplication warning.** `toolchain-cve-check` currently carries its own copy of
+> the NVD/CPE/brew logic rather than importing `home/.local/bin/vulnlib.py`. A fix
+> applied to one will **not** reach the other until they are collapsed. See the
+> header of `vulnlib.py`.
 
 ## The data-source asymmetry (why pnpm and nvm differ)
 
