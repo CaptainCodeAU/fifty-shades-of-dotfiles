@@ -84,18 +84,32 @@
 # a denied grant surfaces here as error -1743.
 #
 # USAGE
-#   imsg <recipient> <message...>     send; message may be several words
-#   imsg --dry-run <recipient> <msg>  show exactly what would be sent, send nothing
-#   imsg --max N <recipient> <msg>    truncation cap in characters (default 1500)
-#   imsg --help                       this text
+#   imsg <recipient> <message...>      send; message may be several words
+#   imsg --dry-run <recipient> <msg>   show exactly what would be sent, send nothing
+#   imsg --resolve <recipient>         show which account WOULD send, and the
+#                                      fully-qualified target; sends nothing
+#   imsg --max N <recipient> <msg>     truncation cap in characters (default 1500)
+#   imsg --account <id> <recip> <msg>  pin the sending account explicitly
+#   imsg --help                        this text
 #
-#   <recipient> is an email address or a phone number, validated by shape so that
-#   reversing the argument order fails loudly instead of messaging a sentence.
+#   <recipient> is an email address, or a phone number in E.164 form (leading +
+#   and country code). It is normalised before use -- addresses are lowercased,
+#   and spaces / dashes / dots / brackets are stripped from numbers -- so one
+#   person always maps to one string. A local-format number is REFUSED, not
+#   guessed at: "0491 570 156" is a number plus an unstated assumption about
+#   which country you are in.
+#
+#   --dry-run touches nothing and works inside a sandbox. --resolve QUERIES
+#   Messages for your account list, so it needs Automation consent like a send.
 #
 # EXIT CODES
-#   0  handed to Messages (see caveat above)
+#   0  handed to Messages (see caveat above), or resolved/dry-run cleanly
 #   1  usage error: bad/missing recipient, empty message, or not macOS
-#   2  Messages or osascript refused the send
+#   2  Messages or osascript refused the send or the account lookup
+#
+# APPLESCRIPT ERROR NUMBERS RAISED BY THIS SCRIPT
+#   8001  no ENABLED iMessage account is signed in
+#   8002  several enabled iMessage accounts -- ambiguous, pin one with --account
 # ============================================================================
 set -uo pipefail
 
@@ -109,11 +123,15 @@ usage() { sed -n '/^# USAGE/,/^# ===*$/p' "$0" | sed 's/^# \{0,1\}//; $d'; }
 
 max=1500
 dry=0
+resolve=0
+acct=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --dry-run|-n) dry=1; shift ;;
+        --resolve)    resolve=1; shift ;;
         --max)        max="${2:-}"; shift 2 ;;
+        --account)    acct="${2:-}"; shift 2 ;;
         -h|--help)    usage; exit 0 ;;
         --)           shift; break ;;
         -*)           echo "imsg: unknown option '$1'" >&2; exit 1 ;;
@@ -136,16 +154,103 @@ if [ $# -lt 1 ]; then
     exit 1
 fi
 
-to="$1"; shift
+raw_to="$1"; shift
 
-# Shape check, not a validity check. Its job is to catch `imsg "some message"
-# addr@example.com` -- reversed arguments -- which would otherwise send your text
-# to a nonsense participant and fail in a confusing place. Deliberately loose:
-# anything with an @ and a dot, or a plausible phone number.
-if ! printf '%s' "$to" | grep -Eq '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$|^\+?[0-9][0-9 ().-]{5,}$'; then
-    echo "imsg: '$to' does not look like an email address or phone number." >&2
-    echo "      Recipient comes FIRST:  imsg <recipient> <message...>" >&2
-    exit 1
+# --- Recipient normalisation -------------------------------------------------
+# One human recipient must map to exactly ONE string, or the same person can be
+# addressed two ways and Messages is free to file them separately. Normalising
+# here costs nothing and removes a whole class of "why did that go elsewhere".
+#
+#   email : lowercased. Addresses are case-insensitive in the part that matters,
+#           but "A@X.com" and "a@x.com" are different STRINGS to everything
+#           downstream, and that difference is not one worth preserving.
+#   phone : punctuation stripped, then E.164 REQUIRED (leading + and digits).
+#           This is deliberately strict. "0491 570 156" is not a number, it is a
+#           number PLUS an unstated assumption about which country you are in.
+#           Refusing it removes the ambiguity rather than guessing at it.
+case "$raw_to" in
+    *@*)
+        to="$(printf '%s' "$raw_to" | tr '[:upper:]' '[:lower:]')"
+        if ! printf '%s' "$to" | grep -Eq '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$'; then
+            echo "imsg: '$raw_to' is not a usable email address." >&2
+            echo "      Recipient comes FIRST:  imsg <recipient> <message...>" >&2
+            exit 1
+        fi
+        ;;
+    *)
+        # NOTE the hyphen is LAST in this set, and must stay last. `' ()-.'`
+        # reads ')-.' as a RANGE (ASCII 41-46), which silently includes '+' --
+        # so the leading plus was stripped and every valid E.164 number was then
+        # rejected for not having one. Caught in testing; do not "tidy" the order.
+        to="$(printf '%s' "$raw_to" | tr -d ' ().-')"
+        if ! printf '%s' "$to" | grep -Eq '^\+[0-9]{6,15}$'; then
+            echo "imsg: '$raw_to' is not a usable recipient." >&2
+            echo "      Phone numbers must be E.164: a leading + and country code," >&2
+            echo "      e.g. +61491570156. A local-format number is ambiguous and is" >&2
+            echo "      refused rather than guessed at. Spaces, dashes, dots and" >&2
+            echo "      brackets are fine and will be stripped." >&2
+            echo "      Recipient comes FIRST:  imsg <recipient> <message...>" >&2
+            exit 1
+        fi
+        ;;
+esac
+
+# --- Account selection -------------------------------------------------------
+# The old selector was `1st account whose service type = iMessage`. `1st` is an
+# INDEX into a match list: correct only by luck when the list happens to hold one
+# entry, and silently arbitrary when it holds two. It also matched accounts that
+# are not `enabled`, which cannot send at all -- this Mac reports 6 accounts and
+# 1 active one, so the list it was indexing was mostly noise.
+#
+# Determinism does not come from guessing better. It comes from REFUSING to
+# guess: take every enabled iMessage account, and require the answer to be
+# unambiguous. Exactly one -> use it. Zero or several -> fail loudly, name the
+# candidates, and make the caller pin one with --account. A tool that stops is
+# recoverable; a tool that silently picks differently tomorrow is not.
+#
+# `connection status` is deliberately NOT part of the filter. It is transient
+# (connecting/disconnected happen in normal operation) so filtering on it would
+# make the tool flaky. It is reported in diagnostics instead.
+_select_account='
+    on pickAccount(wantId)
+        tell application "Messages"
+            if wantId is not "" then return account id wantId
+            set cands to (every account whose service type = iMessage and enabled is true)
+            if (count of cands) is 0 then
+                error "no ENABLED iMessage account on this Mac" number 8001
+            end if
+            if (count of cands) > 1 then
+                set ids to ""
+                repeat with a in cands
+                    set ids to ids & (id of a) & " [" & (description of a) & "] "
+                end repeat
+                error "ambiguous: " & (count of cands) & " enabled iMessage accounts -- " & ids number 8002
+            end if
+            return item 1 of cands
+        end tell
+    end pickAccount
+'
+
+if [ "$resolve" -eq 1 ]; then
+    osascript \
+        -e "$_select_account" \
+        -e 'on run argv' \
+        -e '    set a to pickAccount(item 2 of argv)' \
+        -e '    tell application "Messages"' \
+        -e '        set out to "account : " & (id of a) & linefeed' \
+        -e '        set out to out & "desc    : " & (description of a) & linefeed' \
+        -e '        set out to out & "status  : " & ((connection status of a) as text) & linefeed' \
+        -e '        set out to out & "target  : " & (id of a) & ":" & (item 1 of argv)' \
+        -e '        return out' \
+        -e '    end tell' \
+        -e 'end run' \
+        "$to" "$acct" || {
+            echo "imsg: could not resolve a send account (see the error above)." >&2
+            exit 2
+        }
+    printf 'handle  : %s\n' "$to"
+    [ "$raw_to" != "$to" ] && printf 'note    : normalised from %s\n' "$raw_to"
+    exit 0
 fi
 
 msg="$*"
@@ -169,6 +274,8 @@ fi
 if [ "$dry" -eq 1 ]; then
     printf 'imsg --dry-run (nothing sent)\n'
     printf '  to     : %s\n' "$to"
+    [ "$raw_to" != "$to" ] && printf '  note   : normalised from %s\n' "$raw_to"
+    [ -n "$acct" ] && printf '  account: %s (pinned)\n' "$acct"
     printf '  chars  : %s' "${#msg}"
     [ "$orig_len" -gt "$max" ] && printf ' (truncated from %s)' "$orig_len"
     printf '\n  payload: '
@@ -176,20 +283,25 @@ if [ "$dry" -eq 1 ]; then
     exit 0
 fi
 
-# argv order is (recipient, message): an address never starts with '-', so
-# osascript stops parsing options at it and a message MAY start with '-'.
+# argv order is (recipient, message, account): an address never starts with '-',
+# so osascript stops parsing options at it and a message MAY start with '-'.
 osascript \
+    -e "$_select_account" \
     -e 'on run argv' \
     -e '    set theTo to item 1 of argv' \
     -e '    set theMsg to item 2 of argv' \
+    -e '    set theAccount to pickAccount(item 3 of argv)' \
     -e '    tell application "Messages"' \
-    -e '        set theService to 1st account whose service type = iMessage' \
-    -e '        send theMsg to participant theTo of theService' \
+    -e '        send theMsg to participant theTo of theAccount' \
     -e '    end tell' \
     -e 'end run' \
-    "$to" "$msg" || {
+    "$to" "$msg" "$acct" || {
         echo "imsg: Messages refused the send (see the osascript error above)." >&2
-        echo "      -1743 means this app lacks Automation consent for Messages:" >&2
-        echo "      System Settings > Privacy & Security > Automation." >&2
+        echo "      8001 -- no enabled iMessage account is signed in." >&2
+        echo "      8002 -- several enabled iMessage accounts; pin one:" >&2
+        echo "              imsg --resolve <recipient>   to list them," >&2
+        echo "              imsg --account <id> <recipient> <message>" >&2
+        echo "      -1743 -- this app lacks Automation consent for Messages:" >&2
+        echo "              System Settings > Privacy & Security > Automation." >&2
         exit 2
     }

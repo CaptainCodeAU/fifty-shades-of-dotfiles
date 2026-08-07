@@ -50,14 +50,17 @@ footprint than the plugin, and no plugin-loading latency on every session.
 ## Usage
 
 ```bash
-imsg <recipient> <message...>          # send; the message may be several words
-imsg --dry-run <recipient> <message>   # show exactly what would be sent, send nothing
-imsg --max N <recipient> <message>     # truncation cap in characters (default 1500)
+imsg <recipient> <message...>            # send; the message may be several words
+imsg --dry-run <recipient> <message>     # show what would be sent, send nothing
+imsg --resolve <recipient>               # show which account would send; sends nothing
+imsg --max N <recipient> <message>       # truncation cap in characters (default 1500)
+imsg --account <id> <recip> <message>    # pin the sending account explicitly
 imsg --help
 ```
 
-`<recipient>` is an email address or phone number. The message is everything
-after it, joined with spaces, so quoting is optional for simple text:
+`<recipient>` is an email address, or a phone number in **E.164** form. The
+message is everything after it, joined with spaces, so quoting is optional for
+simple text:
 
 ```bash
 imsg you@example.com build finished
@@ -65,13 +68,24 @@ imsg you@example.com "$(git log -1 --oneline)"
 imsg +61400000000 "deploy failed - see CI"
 ```
 
+`--dry-run` formats strings only: it touches nothing, needs no permissions, and
+works inside a sandbox. `--resolve` **queries Messages** for your account list, so
+it needs Automation consent exactly like a send does and will not work sandboxed.
+
 ### Exit codes
 
 | Code | Meaning                                                            |
 | ---- | ------------------------------------------------------------------ |
 | `0`  | Handed to Messages. **Not** proof of delivery - see below          |
 | `1`  | Usage error: bad or missing recipient, empty message, or not macOS |
-| `2`  | Messages or `osascript` refused the send                           |
+| `2`  | Messages or `osascript` refused the send, or the account lookup    |
+
+AppleScript error numbers raised by this script:
+
+| Number | Meaning                                                             |
+| ------ | ------------------------------------------------------------------- |
+| `8001` | No **enabled** iMessage account is signed in                        |
+| `8002` | Several enabled iMessage accounts - ambiguous, pin with `--account` |
 
 ### Exit 0 means "handed to Messages", not "delivered"
 
@@ -81,9 +95,67 @@ caller. A zero exit means "queued successfully" and nothing more. There is no wa
 to get a delivery receipt out of the scripting interface, so do not build a
 retry-on-failure loop on top of this exit code - it will never fire.
 
-## Two design decisions worth knowing
+## Three design decisions worth knowing
 
-### 1. The message is passed as an argument, never interpolated
+### 1. Determinism comes from refusing to guess
+
+Apple's dictionary bounds this problem tightly: `send` accepts a `participant` or
+a `chat`, and nothing else. So the only places non-determinism can enter are
+**which account sends** and **what string identifies the recipient**. Both are
+now pinned.
+
+**Account.** The idiom everyone uses is:
+
+```applescript
+set theService to 1st account whose service type = iMessage
+```
+
+`1st` is an **index into a match list**. It is correct only by luck when the list
+holds one entry, and silently arbitrary when it holds two - a second Apple ID, or
+a work account added later, changes who sends with no error and no output.
+It also matches accounts that are not `enabled` and therefore cannot send at all.
+
+`imsg` asserts instead of indexing:
+
+```applescript
+set cands to (every account whose service type = iMessage and enabled is true)
+if (count of cands) is 0 then error "..." number 8001
+if (count of cands) > 1 then error "..." number 8002
+return item 1 of cands
+```
+
+Exactly one candidate is used. Zero or several **stops the send** and names the
+candidates so you can pin one with `--account <id>`. A tool that halts is
+recoverable; a tool that silently picks differently next month is not.
+
+`connection status` is reported by `--resolve` but deliberately **not** part of
+the filter - it is transient (`connecting` and `disconnected` occur in normal
+operation) and filtering on it would make sending flaky.
+
+**Recipient.** One person must map to exactly one string, or the same human can
+be addressed two ways and Messages is free to file them separately:
+
+| Input               | Normalised          |
+| ------------------- | ------------------- |
+| `+61 (491) 570-156` | `+61491570156`      |
+| `+61.491.570.156`   | `+61491570156`      |
+| `+61-491-570-156`   | `+61491570156`      |
+| `A.User@iCloud.COM` | `a.user@icloud.com` |
+
+(Numbers in this document come from the ACMA range reserved for fictional use,
+`+61 491 570 156` onwards. Never paste a real number into a public repo as an
+example - nothing in the commit gates checks for one.)
+
+Phone numbers must be **E.164** - a leading `+` and country code. A local-format
+number like `0491 570 156` is refused, not guessed at: it is a number _plus_ an
+unstated assumption about which country you are in, and guessing at that
+assumption is precisely the behaviour this section exists to remove.
+
+Use `--resolve` to see exactly what will happen before it happens - the account
+id that will send, its connection status, and the fully-qualified
+`<account-uuid>:<handle>` target.
+
+### 2. The message is passed as an argument, never interpolated
 
 The idiom found everywhere online splices the message into the AppleScript source:
 
@@ -105,7 +177,7 @@ No `--` separator is needed anywhere. The recipient comes first and an address
 never begins with `-`, so `osascript` stops option parsing there - which is exactly
 what allows a _message_ to begin with a dash.
 
-### 2. The recipient is an argument, not a constant
+### 3. The recipient is an argument, not a constant
 
 This repo is public, and `git-leak-scan` does not pattern-match email addresses. An
 address baked into a tracked file would be published permanently, in history, even
@@ -164,17 +236,22 @@ is broken upstream.) The failure is clean: exit `2`, nothing sent.
 Live-tested end to end on 2026-08-07, macOS 25.5, bash 5.3. Each row below was
 confirmed by reading the received message, not merely by a zero exit code:
 
-| Case                                             | Result                                                  |
-| ------------------------------------------------ | ------------------------------------------------------- |
-| Plain ASCII                                      | Delivered as sent                                       |
-| `'` `"` `\` `$HOME` `` `id` `` `&` `\|` `;` `<>` | Verbatim; nothing evaluated or parsed as script         |
-| Embedded newlines                                | Arrives as **one** message, not several                 |
-| Emoji, accents, umlauts, kanji                   | Round-trips intact                                      |
-| Message beginning with `--`                      | Sent as text; not parsed as a flag                      |
-| Over-length message                              | Truncated with a `...(truncated, N chars total)` marker |
-| Reversed arguments                               | Rejected, exit `1`, nothing sent                        |
-| Empty / whitespace-only message                  | Rejected, exit `1`, no empty bubble                     |
-| Invoked inside Claude's sandbox                  | Fails clean, exit `2`, nothing sent                     |
+| Case                                             | Result                                                                       |
+| ------------------------------------------------ | ---------------------------------------------------------------------------- |
+| Plain ASCII                                      | Delivered as sent                                                            |
+| `'` `"` `\` `$HOME` `` `id` `` `&` `\|` `;` `<>` | Verbatim; nothing evaluated or parsed as script                              |
+| Embedded newlines                                | Arrives as **one** message, not several                                      |
+| Emoji, accents, umlauts, kanji                   | Round-trips intact                                                           |
+| Message beginning with `--`                      | Sent as text; not parsed as a flag                                           |
+| Over-length message                              | Truncated with a `...(truncated, N chars total)` marker                      |
+| Reversed arguments                               | Rejected, exit `1`, nothing sent                                             |
+| Empty / whitespace-only message                  | Rejected, exit `1`, no empty bubble                                          |
+| Invoked inside Claude's sandbox                  | Fails clean, exit `2`, nothing sent                                          |
+| Account selection                                | Resolved to exactly one enabled account; send succeeded                      |
+| `--resolve`                                      | Printed account id, description, `connected`, and the fully-qualified target |
+| Phone normalisation                              | 5 formatting variants of one number collapsed to one string                  |
+| Local-format number (`0413 …`)                   | Refused, exit `1` - not guessed at                                           |
+| Email normalisation                              | Lowercased; the original is echoed as a `note` line                          |
 
 Truncation counts **characters, not bytes**, so a cap never splits an emoji. The
 script sets `LC_CTYPE` itself when the caller left it unset, because a
@@ -189,6 +266,11 @@ otherwise run under the `C` locale.
 - SMS fallback to a non-iMessage recipient. `imsg` always selects the iMessage
   service explicitly, so a green-bubble contact is expected to fail rather than
   silently downgrade.
+- **The `8002` ambiguity path has never fired.** The machine it was built on has
+  exactly one enabled iMessage account, so the multiple-account branch is
+  reasoned but unproven. If you ever sign a second Apple ID into Messages, expect
+  `imsg` to start refusing to send until you pass `--account` - that is the
+  intended behaviour, not a regression.
 
 **A wrong-but-well-formed address fails silently.** The shape check only proves an
 argument _looks_ like a handle; it cannot know whether it is the one you meant. A
