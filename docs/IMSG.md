@@ -65,7 +65,7 @@ simple text:
 ```bash
 imsg you@example.com build finished
 imsg you@example.com "$(git log -1 --oneline)"
-imsg +61400000000 "deploy failed - see CI"
+imsg +61491570156 "deploy failed - see CI"
 ```
 
 `--dry-run` formats strings only: it touches nothing, needs no permissions, and
