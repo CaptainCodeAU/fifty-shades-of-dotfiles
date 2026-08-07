@@ -1,0 +1,195 @@
+#!/usr/bin/env bash
+# ============================================================================
+#  imsg -- send one iMessage from the command line. Send only; never reads.
+# ============================================================================
+#
+# WHY
+# ---
+# An agent, a hook or a cron job sometimes needs to reach a phone: a long build
+# finished, CI went red, a scheduled sweep found something. The obvious route is
+# a Claude Code plugin, but every such plugin also wants to READ the message
+# history, which means Full Disk Access -- a permanent, machine-wide grant handed
+# over to buy a one-way notification. That trade is backwards.
+#
+# Sending needs none of it. AppleScript's Messages interface asks only for
+# Automation consent ("<app> wants to control Messages"), scoped to the calling
+# app, and it cannot read anything. chat.db is never opened here. So this is a
+# deliberately small script that does the one thing and stops.
+#
+# THE ESCAPING TRAP (the reason this file is longer than three lines)
+# ------------------------------------------------------------------
+# The idiom found everywhere online interpolates the message into the AppleScript
+# source:
+#
+#     osascript -e "tell application \"Messages\" to send \"$msg\" to ..."
+#
+# That is a code-injection hole wearing a quoting bug's clothing. A message
+# containing a double quote ends the AppleScript string early and the remainder
+# is parsed as CODE. An agent pasting a compiler error or a diff will hit this
+# within a day.
+#
+# Instead the text is passed as an ARGUMENT to an `on run argv` handler, so it
+# never transits an AppleScript string literal at all. Quotes, backslashes,
+# newlines and emoji all arrive verbatim, and nothing in a message can ever be
+# interpreted as script. No `--` separator is needed: the recipient comes first
+# and an address never begins with `-`, so osascript stops option parsing there,
+# which is what lets a MESSAGE safely begin with a dash.
+#
+# NEVER SEND ANYTHING SENSITIVE THROUGH THIS
+# ------------------------------------------
+# Messages' AppleScript layer can deliver to the wrong recipient. That is not a
+# defect in this script and no addressing form avoids it: Peter Lewis, the
+# Keyboard Maestro developer, reports the wrong-target behaviour persisting
+# whether the target is a phone number, an email address, or a UUID, and shipped
+# a change that settles for "either fails or goes to the correct person" rather
+# than guaranteeing correctness. Messages was rewritten in macOS 11 and its
+# scripting support has been unreliable since.
+#
+# Treat this as a channel for things you would be content to see arrive at the
+# wrong contact -- build alerts, CI status, "the sweep finished". Never
+# credentials, tokens, or anything private.
+#
+# The corollary bites the CALLER, not the script: a mistyped but well-formed
+# address returns exit 0 and delivers to whoever really owns it. The shape check
+# below proves an argument LOOKS like a handle, never that it is the one you
+# meant. Confirm a recipient before the first send -- above all when it was
+# produced by a script or copied out of a listing rather than typed on purpose.
+#
+# WHY THE RECIPIENT IS AN ARGUMENT, NOT A CONSTANT
+# ------------------------------------------------
+# This repo is public. An address baked into a tracked file is published forever,
+# in history, even if later removed -- and git-leak-scan does not match email
+# addresses, so no gate here would stop that commit. Taking the recipient as an
+# argument keeps every address out of the repo entirely.
+#
+# The corollary matters: whatever CALLS this must supply the address, so do not
+# hardcode one into a tracked hook, alias or crontab either -- that is the same
+# leak one level up. Keep it in ~/.zshrc.private or another untracked file.
+#
+# EXIT 0 MEANS "HANDED TO MESSAGES", NOT "DELIVERED"
+# --------------------------------------------------
+# osascript returns as soon as Messages accepts the send. Actual delivery is
+# asynchronous and Messages reports failures in its own UI, not to us. Treat a
+# zero exit as "queued successfully", never as proof a phone buzzed.
+#
+# RUNNING THIS FROM CLAUDE CODE
+# -----------------------------
+# Claude Code's Bash sandbox BLOCKS Apple Events -- the symptom is
+# "Connection Invalid error for service com.apple.hiservices-xpcservice" followed
+# by "Application isn't running. (-600)" even when Messages is plainly running.
+# Invoke with dangerouslyDisableSandbox when calling from an agent.
+#
+# The first run from any given parent app (Terminal, iTerm2, Claude, cron) raises
+# a one-time macOS Automation prompt for THAT app. It must be clicked by a human;
+# a denied grant surfaces here as error -1743.
+#
+# USAGE
+#   imsg <recipient> <message...>     send; message may be several words
+#   imsg --dry-run <recipient> <msg>  show exactly what would be sent, send nothing
+#   imsg --max N <recipient> <msg>    truncation cap in characters (default 1500)
+#   imsg --help                       this text
+#
+#   <recipient> is an email address or a phone number, validated by shape so that
+#   reversing the argument order fails loudly instead of messaging a sentence.
+#
+# EXIT CODES
+#   0  handed to Messages (see caveat above)
+#   1  usage error: bad/missing recipient, empty message, or not macOS
+#   2  Messages or osascript refused the send
+# ============================================================================
+set -uo pipefail
+
+# Multibyte-correct truncation needs a UTF-8 locale, or a cut can land mid-emoji.
+# Only set when the caller left it unset -- a non-interactive shell (Claude's Bash
+# tool, cron) inherits no .zshrc and would otherwise run under C. macOS always
+# ships this locale, and this script is macOS-only by construction.
+[ -z "${LC_ALL:-}" ] && [ -z "${LC_CTYPE:-}" ] && export LC_CTYPE="en_AU.UTF-8"
+
+usage() { sed -n '/^# USAGE/,/^# ===*$/p' "$0" | sed 's/^# \{0,1\}//; $d'; }
+
+max=1500
+dry=0
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --dry-run|-n) dry=1; shift ;;
+        --max)        max="${2:-}"; shift 2 ;;
+        -h|--help)    usage; exit 0 ;;
+        --)           shift; break ;;
+        -*)           echo "imsg: unknown option '$1'" >&2; exit 1 ;;
+        *)            break ;;
+    esac
+done
+
+if [ "$(uname -s)" != "Darwin" ]; then
+    echo "imsg: macOS only -- Messages.app and osascript do not exist here." >&2
+    exit 1
+fi
+
+case "$max" in
+    ''|*[!0-9]*) echo "imsg: --max needs a positive integer, got '$max'" >&2; exit 1 ;;
+    0)           echo "imsg: --max must be greater than zero" >&2; exit 1 ;;
+esac
+
+if [ $# -lt 1 ]; then
+    usage >&2
+    exit 1
+fi
+
+to="$1"; shift
+
+# Shape check, not a validity check. Its job is to catch `imsg "some message"
+# addr@example.com` -- reversed arguments -- which would otherwise send your text
+# to a nonsense participant and fail in a confusing place. Deliberately loose:
+# anything with an @ and a dot, or a plausible phone number.
+if ! printf '%s' "$to" | grep -Eq '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$|^\+?[0-9][0-9 ().-]{5,}$'; then
+    echo "imsg: '$to' does not look like an email address or phone number." >&2
+    echo "      Recipient comes FIRST:  imsg <recipient> <message...>" >&2
+    exit 1
+fi
+
+msg="$*"
+
+# A message that is empty, or only whitespace, would post an empty bubble. Refuse.
+if [ -z "${msg//[[:space:]]/}" ]; then
+    echo "imsg: refusing to send an empty message." >&2
+    exit 1
+fi
+
+# Truncate rather than let an agent pipe a 50KB log into a phone. The marker is
+# part of the sent text so a clipped message is never mistaken for a whole one.
+orig_len=${#msg}
+if [ "$orig_len" -gt "$max" ]; then
+    keep=$(( max - 40 ))
+    [ "$keep" -lt 1 ] && keep=1
+    msg="${msg:0:$keep}
+...(truncated, ${orig_len} chars total)"
+fi
+
+if [ "$dry" -eq 1 ]; then
+    printf 'imsg --dry-run (nothing sent)\n'
+    printf '  to     : %s\n' "$to"
+    printf '  chars  : %s' "${#msg}"
+    [ "$orig_len" -gt "$max" ] && printf ' (truncated from %s)' "$orig_len"
+    printf '\n  payload: '
+    printf '%s\n' "$msg"
+    exit 0
+fi
+
+# argv order is (recipient, message): an address never starts with '-', so
+# osascript stops parsing options at it and a message MAY start with '-'.
+osascript \
+    -e 'on run argv' \
+    -e '    set theTo to item 1 of argv' \
+    -e '    set theMsg to item 2 of argv' \
+    -e '    tell application "Messages"' \
+    -e '        set theService to 1st account whose service type = iMessage' \
+    -e '        send theMsg to participant theTo of theService' \
+    -e '    end tell' \
+    -e 'end run' \
+    "$to" "$msg" || {
+        echo "imsg: Messages refused the send (see the osascript error above)." >&2
+        echo "      -1743 means this app lacks Automation consent for Messages:" >&2
+        echo "      System Settings > Privacy & Security > Automation." >&2
+        exit 2
+    }
