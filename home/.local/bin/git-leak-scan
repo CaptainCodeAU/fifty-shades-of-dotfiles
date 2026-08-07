@@ -11,8 +11,13 @@
 #   - this machine's real username inside a /Users|/home path OR its -Users- encoding
 #   - API tokens: gh[pousr]_..., sk-..., AKIA..., xox[baprs]-...
 #   - a PEM private-key header (-----BEGIN ... PRIVATE KEY-----)
-# WARN (exit 0 -- surfaced, not blocked): private RFC1918 LAN IPs (configs/docs
-#   legitimately mention these, so a block would just train you to always bypass).
+#   - phone numbers in E.164 form (+ then 8-15 digits), excluding the ranges
+#     reserved for documentation and drama
+# WARN (exit 0 -- surfaced, not blocked):
+#   - private RFC1918 LAN IPs (configs/docs legitimately mention these, so a
+#     block would just train you to always bypass)
+#   - local-format AU mobile numbers (04x/05x), which collide with dates and ids
+#     often enough that blocking would cry wolf
 #
 # Reports FILE + matched CATEGORY only -- the offending value is NEVER re-printed.
 # Invoked by ~/.config/git/hooks/_audit-chain on pre-commit; the chainer fails
@@ -52,6 +57,68 @@ b_slack='xox[baprs]-[A-Za-z0-9-]{10,}'
 b_pkey='-----BEGIN [A-Z ]*PRIVATE KEY-----'
 w_ip='(^|[^0-9.])(192\.168\.[0-9]{1,3}\.[0-9]{1,3}|10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]{1,3}\.[0-9]{1,3})([^0-9]|$)'
 
+# --- Phone numbers ----------------------------------------------------------
+# Added after a real mobile number was nearly committed to this PUBLIC repo as a
+# worked example in documentation. Nothing here caught it: the scan matched
+# usernames, tokens and keys, and a phone number is none of those.
+#
+# BLOCK covers E.164 -- a leading '+' then 8-15 digits, separators allowed. That
+# shape is rarely anything but a real number, so blocking is safe and a false
+# positive is cheap to bypass.
+#
+# WARN covers local-format AU mobiles (04x/05x). Deliberately not a block: a bare
+# 10-digit run collides with dates, ids and hashes, and a gate that cries wolf is
+# a gate people learn to bypass.
+#
+# Numbers reserved for documentation and drama are exempt from BOTH, or this
+# scanner would flag the very examples that exist so real numbers are not used:
+#   AU (ACMA)  +61491570156 through +61491570165, local 0491570156 to 0491570165
+#   UK (Ofcom) +447700900000 upward, +442079460000 upward
+#   US (NANP)  555 01xx in any area code
+#
+# The separator run between digits is capped at TWO, and the exact number is
+# load-bearing at both ends.
+#
+# A flat class like '[0-9 ().-]{6,18}' looks equivalent and is not: on a line
+# reading "+61491570156 .. 165" it matches straight THROUGH the ellipsis and
+# yields a 15-digit string that is in no reserved range, so the scanner blocks
+# its own documentation. Found exactly that way -- this file failed to commit
+# itself.
+#
+# But capping at ONE is too tight: a bracketed number such as
+# "+61 (491) 570-156" needs two separators for " (" and again for ") ", so it
+# slips through unblocked. Two admits every real formatting convention while
+# still refusing to bridge across " .. " (four characters) or any prose gap.
+#
+# (Every number written in this file is from a reserved range -- this scanner
+# blocks its own source otherwise, which is how the ONE-separator bug surfaced.)
+b_phone='\+[0-9]([ ().-]{0,2}[0-9]){7,14}'
+w_phone_au='(^|[^0-9])0[45][0-9]{2}[ .-]?[0-9]{3}[ .-]?[0-9]{3}([^0-9]|$)'
+fiction='^\+?(61491570(15[6-9]|16[0-5])|0491570(15[6-9]|16[0-5])|447700900[0-9]{3}|442079460[0-9]{3}|1?[0-9]{3}55501[0-9]{2})$'
+
+# Is a matched number one of the reserved documentation ranges? Normalises with
+# pure parameter expansion -- no forks, so this stays cheap on a large diff.
+is_fiction() {
+    _n="$1"
+    _n="${_n// /}"; _n="${_n//(/}"; _n="${_n//)/}"; _n="${_n//-/}"; _n="${_n//./}"
+    [[ $_n =~ $fiction ]]
+}
+
+# Scan one line for a phone matching $2, skipping reserved ranges. Walks EVERY
+# match rather than testing only the first, so a line holding both an example
+# number and a real one is still caught. Both the block and the warn path use
+# this: exempting documentation numbers from the WARNING matters just as much,
+# or every commit touching these docs cries wolf.
+line_has_real_phone() {
+    _rest="$1"; _pat="$2"
+    while [ -n "$_rest" ] && [[ $_rest =~ $_pat ]]; do
+        _m="${BASH_REMATCH[0]}"
+        is_fiction "$_m" || return 0
+        _rest="${_rest#*"$_m"}"
+    done
+    return 1
+}
+
 block_hits=""
 warn_hits=""
 file="?"
@@ -69,6 +136,7 @@ while IFS= read -r line; do
             elif [[ $c =~ $b_aws ]];   then cat="aws-access-key"
             elif [[ $c =~ $b_slack ]]; then cat="slack-token"
             elif [[ $c =~ $b_pkey ]];  then cat="private-key"
+            elif line_has_real_phone "$c" "$b_phone"; then cat="phone-number(E.164)"
             fi
             if [ -n "$cat" ]; then
                 block_hits="${block_hits}${file}: ${cat}
@@ -76,6 +144,10 @@ while IFS= read -r line; do
             fi
             if [[ $c =~ $w_ip ]]; then
                 warn_hits="${warn_hits}${file}: private-LAN-IP
+"
+            fi
+            if line_has_real_phone "$c" "$w_phone_au"; then
+                warn_hits="${warn_hits}${file}: local-format-phone
 "
             fi
             ;;
@@ -86,7 +158,7 @@ block_hits="$(printf '%s' "$block_hits" | grep -v '^$' | sort -u)"
 warn_hits="$(printf '%s' "$warn_hits" | grep -v '^$' | sort -u)"
 
 if [ -n "$warn_hits" ]; then
-    printf 'leak-scan WARNING -- private LAN IP in staged diff (allowed, not blocked):\n' >&2
+    printf 'leak-scan WARNING -- surfaced in staged diff (allowed, not blocked):\n' >&2
     printf '%s\n' "$warn_hits" | sed 's/^/  /' >&2
 fi
 
