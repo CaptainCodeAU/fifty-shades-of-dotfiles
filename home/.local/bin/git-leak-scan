@@ -96,11 +96,16 @@ b_phone='\+[0-9]([ ().-]{0,2}[0-9]){7,14}'
 w_phone_au='(^|[^0-9])0[45][0-9]{2}[ .-]?[0-9]{3}[ .-]?[0-9]{3}([^0-9]|$)'
 fiction='^\+?(61491570(15[6-9]|16[0-5])|0491570(15[6-9]|16[0-5])|447700900[0-9]{3}|442079460[0-9]{3}|1?[0-9]{3}55501[0-9]{2})$'
 
-# Is a matched number one of the reserved documentation ranges? Normalises with
-# pure parameter expansion -- no forks, so this stays cheap on a large diff.
+# Is a matched number one of the reserved documentation ranges?
+#
+# Strips everything that is not a digit or '+', rather than a fixed list of
+# separators. The fixed list was wrong: w_phone_au's match deliberately includes
+# the surrounding non-digit character, so a number written inside quotes came
+# through as '"0491570156', failed the anchored fiction test, and warned about a
+# reserved number -- this scanner warned on its own source. Only runs when a
+# phone-shaped candidate was already found, so the fork is rare.
 is_fiction() {
-    _n="$1"
-    _n="${_n// /}"; _n="${_n//(/}"; _n="${_n//)/}"; _n="${_n//-/}"; _n="${_n//./}"
+    _n="$(printf '%s' "$1" | tr -cd '0-9+')"
     [[ $_n =~ $fiction ]]
 }
 
