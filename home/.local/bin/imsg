@@ -55,16 +55,28 @@
 # meant. Confirm a recipient before the first send -- above all when it was
 # produced by a script or copied out of a listing rather than typed on purpose.
 #
-# WHY THE RECIPIENT IS AN ARGUMENT, NOT A CONSTANT
-# ------------------------------------------------
-# This repo is public. An address baked into a tracked file is published forever,
-# in history, even if later removed -- and git-leak-scan does not match email
-# addresses, so no gate here would stop that commit. Taking the recipient as an
-# argument keeps every address out of the repo entirely.
+# WHO THIS CAN REACH
+# ------------------
+# One person: whoever $IMSG_TO names. The recipient is not a parameter, and the
+# omission is the feature.
 #
-# The corollary matters: whatever CALLS this must supply the address, so do not
-# hardcode one into a tracked hook, alias or crontab either -- that is the same
-# leak one level up. Keep it in ~/.zshrc.private or another untracked file.
+# An earlier version took the address as argv[1]. Under that design an address
+# was inferred from a data dump, assumed to belong to the owner, and six
+# unsolicited messages reached a stranger before anyone noticed. iMessage's
+# unsend window is two minutes and had long expired; nothing could be recalled.
+#
+# A tool that cannot be TOLD where to send cannot be told WRONGLY where to send.
+# No flag, no argument and no environment trick inside this script will redirect
+# it; changing the destination means editing ~/.zshrc.private by hand, which is a
+# deliberate act rather than a mistake something can make on your behalf. The
+# cost is that this is no longer a general iMessage sender -- to message anyone
+# else, open Messages.app. That trade was made on purpose.
+#
+# The address lives in ~/.zshrc.private because this repo is PUBLIC. An address
+# in a tracked file is published permanently, in history, even if later removed,
+# and git-leak-scan blocks phone numbers but cannot block every email address.
+# The same applies one level up: do not bake an address into a tracked hook,
+# alias or crontab either.
 #
 # EXIT 0 MEANS "HANDED TO MESSAGES", NOT "DELIVERED"
 # --------------------------------------------------
@@ -84,20 +96,27 @@
 # a denied grant surfaces here as error -1743.
 #
 # USAGE
-#   imsg <recipient> <message...>      send; message may be several words
-#   imsg --dry-run <recipient> <msg>   show exactly what would be sent, send nothing
-#   imsg --resolve <recipient>         show which account WOULD send, and the
-#                                      fully-qualified target; sends nothing
-#   imsg --max N <recipient> <msg>     truncation cap in characters (default 1500)
-#   imsg --account <id> <recip> <msg>  pin the sending account explicitly
-#   imsg --help                        this text
+#   imsg <message...>            send; the message may be several words
+#   imsg                         send the default heartbeat (host + time)
+#   imsg --dry-run <message>     show exactly what would be sent, send nothing
+#   imsg --resolve               show which account WOULD send; sends nothing
+#   imsg --max N <message>       truncation cap in characters (default 1500)
+#   imsg --account <id> <msg>    pin the sending account explicitly
+#   imsg --help                  this text
 #
-#   <recipient> is an email address, or a phone number in E.164 form (leading +
-#   and country code). It is normalised before use -- addresses are lowercased,
-#   and spaces / dashes / dots / brackets are stripped from numbers -- so one
-#   person always maps to one string. A local-format number is REFUSED, not
-#   guessed at: "0491 570 156" is a number plus an unstated assumption about
-#   which country you are in.
+#   THERE IS NO RECIPIENT ARGUMENT. The destination comes from $IMSG_TO and
+#   from nowhere else, so this tool cannot be pointed at anyone but you. See
+#   "WHO THIS CAN REACH" below -- that is a safety property, not a limitation.
+#
+#   A message beginning with '-' would otherwise be parsed as an option, so pass
+#   it after '--':   imsg -- --this-starts-with-dashes
+#   Flags are NOT silently treated as text: a mistyped '--dry-runn' is an error,
+#   not something your phone receives.
+#
+#   ENVIRONMENT
+#     IMSG_TO           REQUIRED. Email address or E.164 number. Set it in
+#                       ~/.zshrc.private, never in a repo file.
+#     IMSG_DEFAULT_MSG  Optional. Replaces the built-in heartbeat text.
 #
 #   --dry-run touches nothing and works inside a sandbox. --resolve QUERIES
 #   Messages for your account list, so it needs Automation consent like a send.
@@ -149,31 +168,59 @@ case "$max" in
     0)           echo "imsg: --max must be greater than zero" >&2; exit 1 ;;
 esac
 
-if [ $# -lt 1 ]; then
-    usage >&2
+# --- Recipient: environment ONLY, never an argument ---------------------------
+# The recipient CANNOT be passed on the command line. That is the entire point,
+# not an oversight, and it must stay that way.
+#
+# An earlier version took the address as argv[1]. Under that design a number was
+# inferred from a data dump, assumed to be the owner's, and six unsolicited
+# messages went to a stranger before anyone noticed. iMessage has a two-minute
+# unsend window; it had long passed. Nothing could be taken back.
+#
+# A tool that cannot be told where to send cannot be told WRONGLY where to send.
+# Reading the destination from the environment gives up generality -- this is no
+# longer an iMessage sender, it is a "message me" button -- and that trade is
+# deliberate. If you ever need to message someone else, use Messages.app.
+#
+# IMSG_TO lives in ~/.zshrc.private (untracked), never in this repo: the repo is
+# public and git-leak-scan blocks phone numbers but cannot block every address.
+#
+# NOT AVAILABLE IN A CLEAN ENVIRONMENT. Exports from ~/.zshrc.private reach
+# interactive shells, Claude Code sessions and anything launched from them, but
+# NOT cron or launchd, which start with an empty environment. Verified. The
+# failure below is loud and instructive for exactly that case -- a notifier that
+# quietly does nothing is worse than one that fails.
+raw_to="${IMSG_TO:-}"
+
+if [ -z "$raw_to" ]; then
+    echo "imsg: IMSG_TO is not set -- there is no one to send to." >&2
+    echo >&2
+    echo "  Add this line to ~/.zshrc.private (untracked; never to a repo file):" >&2
+    echo >&2
+    echo "      export IMSG_TO='you@example.com'      # or '+61491570156'" >&2
+    echo >&2
+    echo "  Then open a new shell, or: source ~/.zshrc.private" >&2
+    echo >&2
+    echo "  Under cron or launchd the environment is empty and this will always" >&2
+    echo "  fire. Set IMSG_TO explicitly in the job definition." >&2
     exit 1
 fi
 
-raw_to="$1"; shift
-
-# --- Recipient normalisation -------------------------------------------------
-# One human recipient must map to exactly ONE string, or the same person can be
-# addressed two ways and Messages is free to file them separately. Normalising
-# here costs nothing and removes a whole class of "why did that go elsewhere".
+# --- Recipient normalisation --------------------------------------------------
+# One human must map to exactly ONE string, or the same person is addressable two
+# ways and Messages is free to file them separately.
 #
-#   email : lowercased. Addresses are case-insensitive in the part that matters,
-#           but "A@X.com" and "a@x.com" are different STRINGS to everything
-#           downstream, and that difference is not one worth preserving.
-#   phone : punctuation stripped, then E.164 REQUIRED (leading + and digits).
-#           This is deliberately strict. "0491 570 156" is not a number, it is a
-#           number PLUS an unstated assumption about which country you are in.
-#           Refusing it removes the ambiguity rather than guessing at it.
+#   email : lowercased. "A@X.com" and "a@x.com" are the same mailbox but different
+#           STRINGS to everything downstream, and that difference is not worth
+#           preserving.
+#   phone : punctuation stripped, then E.164 REQUIRED. Deliberately strict:
+#           "0491 570 156" is not a number, it is a number PLUS an unstated
+#           assumption about which country you are in.
 case "$raw_to" in
     *@*)
         to="$(printf '%s' "$raw_to" | tr '[:upper:]' '[:lower:]')"
         if ! printf '%s' "$to" | grep -Eq '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$'; then
-            echo "imsg: '$raw_to' is not a usable email address." >&2
-            echo "      Recipient comes FIRST:  imsg <recipient> <message...>" >&2
+            echo "imsg: IMSG_TO ('$raw_to') is not a usable email address." >&2
             exit 1
         fi
         ;;
@@ -184,12 +231,10 @@ case "$raw_to" in
         # rejected for not having one. Caught in testing; do not "tidy" the order.
         to="$(printf '%s' "$raw_to" | tr -d ' ().-')"
         if ! printf '%s' "$to" | grep -Eq '^\+[0-9]{6,15}$'; then
-            echo "imsg: '$raw_to' is not a usable recipient." >&2
-            echo "      Phone numbers must be E.164: a leading + and country code," >&2
-            echo "      e.g. +61491570156. A local-format number is ambiguous and is" >&2
-            echo "      refused rather than guessed at. Spaces, dashes, dots and" >&2
-            echo "      brackets are fine and will be stripped." >&2
-            echo "      Recipient comes FIRST:  imsg <recipient> <message...>" >&2
+            echo "imsg: IMSG_TO ('$raw_to') is not a usable recipient." >&2
+            echo "      Use an email address, or a phone number in E.164 form -- a" >&2
+            echo "      leading + and country code, e.g. +61491570156. Spaces," >&2
+            echo "      dashes, dots and brackets are fine and will be stripped." >&2
             exit 1
         fi
         ;;
@@ -253,11 +298,22 @@ if [ "$resolve" -eq 1 ]; then
     exit 0
 fi
 
+# --- Message: optional, with a default ----------------------------------------
+# Bare `imsg` is a heartbeat: it proves the whole path works without making you
+# invent something to say. The default names the HOST and the TIME because those
+# are the two things you actually want to know when an unexpected ping arrives on
+# your phone -- "ping" alone tells you nothing about which machine sent it.
+# Override the default with IMSG_DEFAULT_MSG.
 msg="$*"
 
-# A message that is empty, or only whitespace, would post an empty bubble. Refuse.
 if [ -z "${msg//[[:space:]]/}" ]; then
-    echo "imsg: refusing to send an empty message." >&2
+    msg="${IMSG_DEFAULT_MSG:-[imsg] ping from $(hostname -s 2>/dev/null || echo mac) at $(date '+%H:%M:%S')}"
+fi
+
+# Still empty means IMSG_DEFAULT_MSG was deliberately set to whitespace. An empty
+# bubble is not a message; refuse rather than post one.
+if [ -z "${msg//[[:space:]]/}" ]; then
+    echo "imsg: IMSG_DEFAULT_MSG is empty -- refusing to send an empty message." >&2
     exit 1
 fi
 

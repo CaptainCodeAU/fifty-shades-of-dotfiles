@@ -49,28 +49,64 @@ footprint than the plugin, and no plugin-loading latency on every session.
 
 ## Usage
 
+### Setup - one line, once
+
+`imsg` reads its destination from `$IMSG_TO` and from nowhere else. Add this to
+**`~/.zshrc.private`** (untracked, machine-local - never to a file in this repo):
+
 ```bash
-imsg <recipient> <message...>            # send; the message may be several words
-imsg --dry-run <recipient> <message>     # show what would be sent, send nothing
-imsg --resolve <recipient>               # show which account would send; sends nothing
-imsg --max N <recipient> <message>       # truncation cap in characters (default 1500)
-imsg --account <id> <recip> <message>    # pin the sending account explicitly
+export IMSG_TO='you@example.com'          # or a number: '+61491570156'
+```
+
+Then open a new shell, or `source ~/.zshrc.private`.
+
+Optionally, to replace the built-in heartbeat text used by a bare `imsg`:
+
+```bash
+export IMSG_DEFAULT_MSG='[imsg] ping'
+```
+
+### Running it
+
+```bash
+imsg <message...>          # send; the message may be several words
+imsg                       # send the default heartbeat (host + time)
+imsg --dry-run <message>   # show what would be sent, send nothing
+imsg --resolve             # show which account would send; sends nothing
+imsg --max N <message>     # truncation cap in characters (default 1500)
+imsg --account <id> <msg>  # pin the sending account explicitly
 imsg --help
 ```
 
-`<recipient>` is an email address, or a phone number in **E.164** form. The
-message is everything after it, joined with spaces, so quoting is optional for
-simple text:
+**There is no recipient argument.** Quoting is optional for simple text:
 
 ```bash
-imsg you@example.com build finished
-imsg you@example.com "$(git log -1 --oneline)"
-imsg +61491570156 "deploy failed - see CI"
+imsg build finished
+imsg "$(git log -1 --oneline)"
+imsg deploy failed - see CI
 ```
+
+A message that begins with `-` would be read as an option, so pass it after `--`:
+
+```bash
+imsg -- --this-starts-with-dashes
+```
+
+Flags are **not** silently treated as message text - a mistyped `--dry-runn` is an
+error, not something your phone receives.
 
 `--dry-run` formats strings only: it touches nothing, needs no permissions, and
 works inside a sandbox. `--resolve` **queries Messages** for your account list, so
 it needs Automation consent exactly like a send does and will not work sandboxed.
+
+### `$IMSG_TO` is absent under cron and launchd
+
+Exports from `~/.zshrc.private` reach interactive shells, Claude Code sessions and
+anything launched from them. They do **not** reach `cron` or `launchd`, which
+start with an empty environment. Verified.
+
+There, `imsg` exits `1` with setup instructions rather than doing something
+surprising. Set `IMSG_TO` explicitly in the job definition if you need it.
 
 ### Exit codes
 
@@ -173,36 +209,34 @@ never transits an AppleScript string literal. Quotes, backslashes, dollar signs,
 backticks, newlines and emoji all arrive verbatim, and nothing inside a message can
 be interpreted as script.
 
-No `--` separator is needed anywhere. The recipient comes first and an address
-never begins with `-`, so `osascript` stops option parsing there - which is exactly
-what allows a _message_ to begin with a dash.
+No `--` separator is needed at the `osascript` boundary: the recipient is passed
+as `argv[1]` and an address never begins with `-`, so `osascript` stops option
+parsing there. (`imsg`'s own flag parser is a separate matter - a _message_
+starting with `-` still needs `--`, as shown under "Running it".)
 
-### 3. The recipient is an argument, not a constant
+### 3. The recipient cannot be passed in, and that is the point
 
-This repo is public, and `git-leak-scan` does not pattern-match email addresses. An
-address baked into a tracked file would be published permanently, in history, even
-if later removed - and no gate in this repo would stop that commit.
+`imsg` reads its destination from `$IMSG_TO` and nowhere else. There is no
+recipient flag and no recipient argument. **The omission is the feature.**
 
-**The corollary matters as much as the rule:** whatever calls `imsg` has to supply
-the address, so do not hardcode one into a tracked git hook, alias or crontab
-either. That is the same leak, one level up. Keep it in `~/.zshrc.private` or
-another untracked file:
+An earlier version took the address as `argv[1]`. Under that design an address was
+inferred from a data dump, assumed to belong to the owner, and **six unsolicited
+messages reached a stranger** before anyone noticed. iMessage's unsend window is
+two minutes and had long expired. Nothing could be recalled.
 
-```bash
-# ~/.zshrc.private
-export MY_IMSG=you@example.com
-alias pingme='imsg "$MY_IMSG"'
-```
+A tool that cannot be _told_ where to send cannot be told _wrongly_ where to send.
+No flag, argument or mistake inside a calling script can redirect it; changing the
+destination means editing `~/.zshrc.private` by hand, which is a deliberate act
+rather than something a program can do on your behalf by accident.
 
-Because the recipient is a plain argument, `imsg` is a general iMessage sender, not
-a send-to-me-only tool. Argument order is guarded by a shape check on the first
-argument, so the common slip fails loudly:
+The cost is real and was accepted: `imsg` is **not** a general iMessage sender. To
+message anyone else, open Messages.app.
 
-```
-$ imsg "build finished" you@example.com
-imsg: 'build finished' does not look like an email address or phone number.
-      Recipient comes FIRST:  imsg <recipient> <message...>
-```
+The address lives in `~/.zshrc.private` because this repo is public. An address in
+a tracked file is published permanently, in history, even if later removed.
+`git-leak-scan` blocks phone numbers but cannot block every email address. **The
+same applies one level up** - do not bake an address into a tracked git hook,
+alias or crontab either. That is the identical leak, displaced by one file.
 
 ## Permissions
 
@@ -242,15 +276,18 @@ confirmed by reading the received message, not merely by a zero exit code:
 | `'` `"` `\` `$HOME` `` `id` `` `&` `\|` `;` `<>` | Verbatim; nothing evaluated or parsed as script                              |
 | Embedded newlines                                | Arrives as **one** message, not several                                      |
 | Emoji, accents, umlauts, kanji                   | Round-trips intact                                                           |
-| Message beginning with `--`                      | Sent as text; not parsed as a flag                                           |
+| Message beginning with `--` (after `--`)         | Sent as text; not parsed as a flag                                           |
+| Mistyped flag (`--dry-runn`)                     | Rejected, exit `1` - never sent as message text                              |
 | Over-length message                              | Truncated with a `...(truncated, N chars total)` marker                      |
-| Reversed arguments                               | Rejected, exit `1`, nothing sent                                             |
-| Empty / whitespace-only message                  | Rejected, exit `1`, no empty bubble                                          |
+| Empty / whitespace-only message                  | Falls back to the default heartbeat                                          |
+| `IMSG_DEFAULT_MSG` set to whitespace             | Rejected, exit `1`, no empty bubble                                          |
+| `IMSG_TO` unset                                  | Rejected, exit `1`, with the setup line printed                              |
+| `IMSG_TO` malformed or local-format              | Rejected, exit `1` - not guessed at                                          |
+| Bare `imsg` with no arguments                    | Sends the host + time heartbeat                                              |
 | Invoked inside Claude's sandbox                  | Fails clean, exit `2`, nothing sent                                          |
 | Account selection                                | Resolved to exactly one enabled account; send succeeded                      |
 | `--resolve`                                      | Printed account id, description, `connected`, and the fully-qualified target |
 | Phone normalisation                              | 5 formatting variants of one number collapsed to one string                  |
-| Local-format number (`0413 …`)                   | Refused, exit `1` - not guessed at                                           |
 | Email normalisation                              | Lowercased; the original is echoed as a `note` line                          |
 
 Truncation counts **characters, not bytes**, so a cap never splits an emoji. The
@@ -272,19 +309,22 @@ otherwise run under the `C` locale.
   `imsg` to start refusing to send until you pass `--account` - that is the
   intended behaviour, not a regression.
 
-**A wrong-but-well-formed address fails silently.** The shape check only proves an
-argument _looks_ like a handle; it cannot know whether it is the one you meant. A
+**A wrong-but-well-formed `IMSG_TO` fails silently.** The shape check proves the
+value _looks_ like a handle; it cannot know whether it is the one you meant. A
 mistyped address returns exit `0`, opens a conversation nobody reads, and delivers
 nothing useful - or, worse, delivers to a real stranger who owns that address.
-There is no guard for this and there cannot be one. **Confirm the recipient before
-the first send, especially when it was produced by a script or copied from a
-listing rather than typed deliberately.**
+There is no guard for this and there cannot be one.
+
+Because `IMSG_TO` is set once by hand rather than supplied per call, the exposure
+is a single line typed deliberately instead of a value a script can get wrong on
+every run. **Check it once with `imsg --dry-run` after setting it.**
 
 ## Troubleshooting
 
-| Symptom                                    | Cause                                                    |
-| ------------------------------------------ | -------------------------------------------------------- |
-| `-1743`                                    | Automation consent denied for the calling app            |
-| `-600` + `hiservices-xpcservice`           | Running inside Claude Code's Bash sandbox                |
-| `-600` alone                               | Messages.app genuinely not running                       |
-| Recipient rejected as "does not look like" | Arguments reversed, or an address with no `@` and no dot |
+| Symptom                          | Cause                                                        |
+| -------------------------------- | ------------------------------------------------------------ |
+| `IMSG_TO is not set`             | New shell hasn't sourced `~/.zshrc.private`, or cron/launchd |
+| `-1743`                          | Automation consent denied for the calling app                |
+| `-600` + `hiservices-xpcservice` | Running inside Claude Code's Bash sandbox                    |
+| `-600` alone                     | Messages.app genuinely not running                           |
+| `IMSG_TO ... is not usable`      | Local-format number (needs `+` and country code), or no `@`  |
