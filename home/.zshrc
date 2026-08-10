@@ -148,6 +148,24 @@ esac
 #   read -rs NVDK && security add-generic-password -U -a "$USER" -s nvd-api-key -w "$NVDK" && unset NVDK
 
 
+# --- EARLY private overrides (settings the STARTUP GUARDS read) ---
+# ~/.zshrc.private is sourced at the very END of this file, and that is deliberate: its
+# whole contract is "private beats shared", which only holds when it is read last. But
+# several guards below are evaluated DURING startup and have already made their decision
+# by then, so a switch set in the late file cannot reach them. That is not a theoretical
+# gap -- two comments in this file used to tell you to set exactly such a switch in
+# ~/.zshrc.private, where it silently did nothing:
+#
+#   _ONBOARDING_COMPLETE       read in section 4  (~30 lines below)
+#   NVM_ALLOW_CUSTOM_MIRROR    read in section 7
+#   UV_EXCLUDE_NEWER           read in section 6  (UV_NO_COOLDOWN is now call-time, see there)
+#
+# So: anything a startup guard reads goes in ~/.zshrc.private.early; everything else stays
+# in ~/.zshrc.private. Keep this file's guards documented in the list above when adding one.
+# Optional -- absent on a fresh machine, and that is fine.
+[ -f ~/.zshrc.private.early ] && source ~/.zshrc.private.early
+
+
 # ==============================================================================
 # 4. Onboarding & Dependency Checks
 # ==============================================================================
@@ -275,35 +293,93 @@ command -v uv >/dev/null && eval "$(uv generate-shell-completion zsh)"
 [ -s "$PNPM_HOME/_pnpm" ] && source "$PNPM_HOME/_pnpm"
 
 # --- uv supply-chain release-age cooldown (parity with pnpm + bun) ---
-# uv has no rolling-window setting, only a fixed --exclude-newer cutoff, so compute
-# "3 days ago" at shell startup and export it. Every uv resolution then refuses
-# distributions published in the last 72h -- matching pnpm's minimumReleaseAge
-# (config.yaml) and bun's minimumReleaseAge (.bunfig.toml). Only bites when uv
-# RESOLVES (uv add / pip install / tool install / a stale lock); installing an
-# already-current lock is unaffected. Opt out per command with UV_NO_COOLDOWN=1 -- honoured
-# by the uv()/uvx() wrappers below, NOT by this block: this `if` is evaluated ONCE at shell
-# startup, and uv itself has never heard of UV_NO_COOLDOWN (it is this file's invention), so
-# setting it any later -- including in ~/.zshrc.private, which is sourced ~900 lines down --
-# cannot reach here. Without the wrappers the only working escape is
-# `env -u UV_EXCLUDE_NEWER uv ...`. A pre-set UV_EXCLUDE_NEWER (explicit user/CI value) is
-# never overridden. The `date -v` (BSD) / `date -d` (GNU) fallback keeps it portable across
-# macOS/Linux.
+# uv has no rolling-window setting, only a fixed --exclude-newer cutoff. That cutoff is
+# STORED, not computed: ~/.config/zshrc/uv-cooldown-cutoff holds one ISO-8601 UTC-midnight
+# timestamp, this block exports it as UV_EXCLUDE_NEWER, and it moves only when you run
+# `uv-cooldown-bump`. Every uv resolution then refuses distributions published after it --
+# the same intent as pnpm's minimumReleaseAge (config.yaml) and bun's (.bunfig.toml). Only
+# bites when uv RESOLVES (uv add / pip install / tool install / a stale lock); installing
+# an already-current lock is unaffected.
 #
-# ⚠ TRUNCATED TO MIDNIGHT UTC (2026-08-03) — load-bearing, not cosmetic. uv STAMPS this
-# cutoff into the resolved lockfile as `[options] exclude-newer`. Computed to the SECOND it
-# differed in every new shell, so every `uv run` REWROTE uv.lock: git dirty in every uv
-# project, pre-commit hooks tripping on a hook-modified file, and — the real problem — a
-# COMMITTED lock whose recorded cutoff depended on which shell happened to write it, so
-# `uv sync` could resolve differently on different days. Found via docbrain, where it
-# blocked commits outright. At DAY granularity the value is identical across shells and
-# across a whole day, so the lock stops churning. The control is unchanged in intent:
-# ±1 day on a 72h window is immaterial to a supply-chain cooldown, and the effective
-# window only ever gets LONGER (3–4 days), never shorter.
+# WHY STORED RATHER THAN ROLLING (2026-08-10) -- the whole point, do not "simplify" it back.
+# uv STAMPS this cutoff into the resolved lockfile as `[options] exclude-newer`, so a lock
+# is only as stable as the cutoff that produced it. Computed to the SECOND it differed in
+# every new shell, so every `uv run` REWROTE uv.lock: git dirty in every uv project,
+# pre-commit hooks tripping on a hook-modified file, and -- the real problem -- a COMMITTED
+# lock whose recorded cutoff depended on which shell happened to write it, so `uv sync`
+# could resolve differently on different days. Found via a sibling project, where it blocked
+# commits outright. Truncating to midnight UTC (2026-08-03) cut that from once-per-shell to
+# once-per-DAY, which was a large improvement and still not zero: EVERY repo with a
+# committed lock went dirty again at each UTC midnight, forever, and committing the lock
+# only bought one day. Storing the date ends it. It also buys something the rolling version
+# never had: this file is committed in the dotfiles repo, so every machine resolves against
+# the SAME cutoff and a lock reproduces across machines, not merely across shells.
+#
+# THE TRADE, STATED PLAINLY. A stored cutoff does not advance by itself, so the effective
+# window is "3 days or older" rather than exactly 3. That is the SAFE direction for a
+# supply-chain gate -- it only ever excludes MORE -- and it is the same reasoning the
+# midnight-UTC truncation already relied on. But a cutoff left alone for months resolves
+# `uv add` against a stale index, so the staleness warning below is load-bearing, not
+# decoration. Override the threshold with UV_COOLDOWN_STALE_DAYS.
+#
+# ESCAPE HATCHES. Per command: UV_NO_COOLDOWN=1, honoured by the uv()/uvx() wrappers below
+# (NOT by this block -- this `if` runs ONCE at startup, and uv has never heard of
+# UV_NO_COOLDOWN; it is this file's invention). Permanently: set UV_EXCLUDE_NEWER yourself
+# in ~/.zshrc.private.EARLY -- an explicit user/CI value is never overridden. Note the
+# .early file, not ~/.zshrc.private: that one is sourced ~900 lines below this `if`.
+: ${UV_COOLDOWN_FILE:="$HOME/.config/zshrc/uv-cooldown-cutoff"}
+: ${UV_COOLDOWN_STALE_DAYS:=30}
 if command -v uv >/dev/null 2>&1 && [[ -z "$UV_EXCLUDE_NEWER" && -z "$UV_NO_COOLDOWN" ]]; then
-    _uv_cutoff=$(date -u -v-3d +%Y-%m-%dT00:00:00Z 2>/dev/null || date -u -d '3 days ago' +%Y-%m-%dT00:00:00Z 2>/dev/null)
-    [[ -n "$_uv_cutoff" ]] && export UV_EXCLUDE_NEWER="$_uv_cutoff"
+    _uv_cutoff=""
+    [[ -r "$UV_COOLDOWN_FILE" ]] && _uv_cutoff=$(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' \
+        "$UV_COOLDOWN_FILE" 2>/dev/null | head -n 1 | tr -d '[:space:]')
+    if [[ "$_uv_cutoff" == [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T00:00:00Z ]]; then
+        export UV_EXCLUDE_NEWER="$_uv_cutoff"
+        # Exception-based: silent unless the pin has genuinely gone stale. ISO-8601 sorts
+        # lexically, so this needs no epoch maths and no BSD-vs-GNU date PARSING.
+        if [[ -t 2 ]]; then
+            _uv_stale=$(date -u -v-${UV_COOLDOWN_STALE_DAYS}d +%Y-%m-%dT00:00:00Z 2>/dev/null \
+                     || date -u -d "${UV_COOLDOWN_STALE_DAYS} days ago" +%Y-%m-%dT00:00:00Z 2>/dev/null)
+            [[ -n "$_uv_stale" && "$_uv_cutoff" < "$_uv_stale" ]] && print -ru2 -- \
+                "⚠️  uv cooldown cutoff ${_uv_cutoff} is older than ${UV_COOLDOWN_STALE_DAYS} days -- 'uv add' resolves against a stale index. Bump it: uv-cooldown-bump"
+            unset _uv_stale
+        fi
+    else
+        # Missing or malformed: fall back to the OLD rolling behaviour rather than running
+        # with no cooldown at all. Degrades to churn, never to unprotected -- and says so,
+        # because a silent fallback here is a supply-chain gate quietly turning itself off.
+        _uv_cutoff=$(date -u -v-3d +%Y-%m-%dT00:00:00Z 2>/dev/null || date -u -d '3 days ago' +%Y-%m-%dT00:00:00Z 2>/dev/null)
+        [[ -n "$_uv_cutoff" ]] && export UV_EXCLUDE_NEWER="$_uv_cutoff"
+        [[ -t 2 ]] && print -ru2 -- \
+            "⚠️  uv cooldown: ${UV_COOLDOWN_FILE} missing or malformed -- using a rolling now-3d cutoff, so uv.lock will churn daily. Fix: uv-cooldown-bump"
+    fi
     unset _uv_cutoff
 fi
+
+# Move the stored cutoff forward to (today - 3 days) at midnight UTC, and rewrite the file
+# with its header intact. Deliberately NOT automatic: advancing a supply-chain gate is a
+# decision, and making it a decision is what stops the lockfile churn this replaced.
+uv-cooldown-bump() {
+    local target new
+    target="${UV_COOLDOWN_FILE:-$HOME/.config/zshrc/uv-cooldown-cutoff}"
+    new=$(date -u -v-3d +%Y-%m-%dT00:00:00Z 2>/dev/null || date -u -d '3 days ago' +%Y-%m-%dT00:00:00Z 2>/dev/null)
+    [[ -n "$new" ]] || { print -ru2 -- "uv-cooldown-bump: could not compute a date"; return 1 }
+    # Writing THROUGH a stow symlink normally means you are polluting tracked source by
+    # accident. Here it is the intent -- the cutoff is a committed fact -- so say so loudly
+    # rather than let it look like the usual mistake.
+    [[ -L "$target" ]] && print -ru2 -- "note: ${target} is a stow symlink -- this edits tracked dotfiles source (intended; commit it)."
+    mkdir -p "${target:h}" || return 1
+    cat > "$target" <<EOF
+# uv supply-chain cooldown cutoff -- exported as UV_EXCLUDE_NEWER by ~/.zshrc section 6.
+# ONE ISO-8601 UTC-midnight timestamp. Stored, not computed: uv stamps this value into
+# uv.lock, so a moving cutoff makes every committed lock churn (daily, forever). Move it
+# with 'uv-cooldown-bump', commit the result, then run 'uv lock' wherever a lock is tracked.
+$new
+EOF
+    export UV_EXCLUDE_NEWER="$new"
+    print -r -- "uv cooldown cutoff -> ${new}  (this shell updated; other shells read the file)"
+    print -r -- "Next: commit the change, then 'uv lock' in any repo with a committed uv.lock."
+}
 
 # --- uv / uvx: make the UV_NO_COOLDOWN opt-out actually reachable ---
 # The guard above runs ONCE at startup, so `UV_NO_COOLDOWN=1 uv add foo` could never affect
@@ -342,7 +418,11 @@ export NVM_DIR="$([ -z "${XDG_CONFIG_HOME-}" ] && printf %s "${HOME}/.nvm" || pr
 # A malicious Node mirror can inject shell commands via crafted version strings
 # (GHSA-3c52-35h2-gfmm, fixed in nvm 0.40.5). Pin the official HTTPS mirrors so a
 # stray or planted NVM_NODEJS_ORG_MIRROR can't redirect downloads. To use a custom
-# mirror (e.g. a corporate proxy), set NVM_ALLOW_CUSTOM_MIRROR=1 in ~/.zshrc.private.
+# mirror (e.g. a corporate proxy), set NVM_ALLOW_CUSTOM_MIRROR=1 in
+# ~/.zshrc.private.EARLY (section 3) -- NOT ~/.zshrc.private, which is sourced ~900 lines
+# below this `if` and so could never have switched it off. That instruction stood here
+# wrong for months: a documented escape hatch on a SECURITY control that silently did
+# nothing, which is worse than having no escape hatch at all.
 if [[ -z "$NVM_ALLOW_CUSTOM_MIRROR" ]]; then
     export NVM_NODEJS_ORG_MIRROR="https://nodejs.org/dist"
     export NVM_IOJS_ORG_MIRROR="https://iojs.org/dist"

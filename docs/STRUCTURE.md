@@ -260,6 +260,9 @@ When deploying files, use this quick reference:
 | `home/.config/yt-dlp/config`                                            | `~/.config/yt-dlp/config`                                                           |
 | `home/.config/herdr/config.toml`                                        | `~/.config/herdr/config.toml`                                                       |
 | `home/.config/lazygit/config.yml`                                       | `~/.config/lazygit/config.yml`                                                      |
+| `home/.config/zshrc/color-profiles.json`                                | `~/.config/zshrc/color-profiles.json`                                               |
+| `home/.config/zshrc/init-vscode-project-settings.sh`                    | `~/.config/zshrc/init-vscode-project-settings.sh`                                   |
+| `home/.config/zshrc/uv-cooldown-cutoff`                                 | `~/.config/zshrc/uv-cooldown-cutoff`                                                |
 | `platforms/macos/Library/Application Support/Cursor/User/settings.json` | `~/Library/Application Support/Cursor/User/settings.json`                           |
 | `platforms/macos/Library/Application Support/Code/User/settings.json`   | `~/Library/Application Support/Code/User/settings.json`                             |
 | `settings/iterm2/DynamicProfiles/`                                      | `~/Library/Application Support/iTerm2/DynamicProfiles/` (symlinked by `install.sh`) |

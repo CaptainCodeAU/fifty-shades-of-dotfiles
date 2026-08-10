@@ -833,6 +833,34 @@ export PATH="/opt/custom-tool/bin:$PATH"
 alias my-server="ssh my-user@192.168.1.100"
 ```
 
+#### `~/.zshrc.private.early` — for settings the startup guards read
+
+`~/.zshrc.private` is sourced at the **very end** of `.zshrc`, and that is deliberate: its
+contract is "private beats shared", which only holds while it is read last. But several
+guards run **during** startup and have already decided by then, so a switch set in the late
+file cannot reach them — silently, with no error. Anything in that category goes in
+`~/.zshrc.private.early` instead, which is sourced right after OS detection:
+
+| Setting                   | Read by                       | Effect                                                 |
+| ------------------------- | ----------------------------- | ------------------------------------------------------ |
+| `NVM_ALLOW_CUSTOM_MIRROR` | nvm mirror pin (section 7)    | Allows a custom Node mirror (e.g. a corporate proxy)   |
+| `UV_EXCLUDE_NEWER`        | uv cooldown (section 6)       | Pins your own uv resolution cutoff; never overridden   |
+| `UV_COOLDOWN_STALE_DAYS`  | uv cooldown staleness warning | How old the stored cutoff may get before it warns (30) |
+| `_ONBOARDING_COMPLETE`    | onboarding (section 4)        | Skips the automatic first-run onboarding               |
+
+```zsh
+# ~/.zshrc.private.early — read BEFORE the startup guards. Keep it small.
+export NVM_ALLOW_CUSTOM_MIRROR=1
+export _ONBOARDING_COMPLETE=true
+```
+
+Everything else — API keys, PATH additions, aliases, functions — belongs in the regular
+`~/.zshrc.private`. Both files are untracked and protected by `.gitignore_global`.
+
+> **`UV_NO_COOLDOWN` is the exception and needs neither file.** The `uv()` / `uvx()` wrappers
+> check it at call time, so `UV_NO_COOLDOWN=1 uv add <pkg>` works as a one-off prefix, and
+> setting it in either private file works too.
+
 ---
 
 ## Additional macOS Tools
@@ -972,6 +1000,7 @@ fifty-shades-of-dotfiles/
 │       │   └── direnvrc              # Machine color profiles + env hooks
 │       ├── zshrc/                     # Shared shell data → ~/.config/zshrc/
 │       │   ├── color-profiles.json   # 10 named color profiles (single source of truth)
+│       │   ├── uv-cooldown-cutoff    # Stored uv supply-chain cutoff (uv-cooldown-bump)
 │       │   └── init-vscode-project-settings.sh  # Project-level .vscode/settings.json scaffold
 │       ├── nvim/                       # Neovim config → ~/.config/nvim/
 │       │   └── init.vim               # Neovim initialization
@@ -1068,6 +1097,7 @@ fifty-shades-of-dotfiles/
 - **`home/.vimrc`**: Lightweight Vim configuration with line numbers, search highlighting, tab settings, and sensible defaults.
 - **`home/.config/direnv/`**: direnv configuration files. `direnvrc` reads color profiles from `color-profiles.json` via `jq` and applies machine-specific colors to VSCode/Cursor title bars, status bars, and borders.
 - **`home/.config/zshrc/color-profiles.json`**: 10 named color profiles (single source of truth). Used by both direnvrc (machine-level) and `init-vscode-project-settings.sh` (project-level).
+- **`home/.config/zshrc/uv-cooldown-cutoff`**: one ISO-8601 date, exported as `UV_EXCLUDE_NEWER` by `.zshrc` section 6 — the uv half of the 3-day supply-chain cooldown. **Stored, not computed:** uv stamps this value into `uv.lock`, so a cutoff that moved on its own made every repo with a committed lock go dirty daily. Move it deliberately with `uv-cooldown-bump`, commit the result, then `uv lock` where a lock is tracked. The shell warns at startup once the cutoff is older than `UV_COOLDOWN_STALE_DAYS` (default 30); a missing or malformed file falls back to a rolling `now-3d` cutoff and says so, rather than silently dropping the cooldown.
 - **`home/.config/zshrc/init-vscode-project-settings.sh`**: Scaffolds `.vscode/settings.json` with a color profile and font settings. Supports `--profile`, `--random`, and `--list` flags.
 - **`home/.config/nvim/init.vim`**: Neovim initialization config, deployed to `~/.config/nvim/init.vim` via stow.
 - **`home/.config/zed/settings.json`**: Zed editor settings. Only `settings.json` is managed; `prompts/` and `themes/` remain user-local.

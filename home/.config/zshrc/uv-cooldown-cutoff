@@ -1,0 +1,5 @@
+# uv supply-chain cooldown cutoff -- exported as UV_EXCLUDE_NEWER by ~/.zshrc section 6.
+# ONE ISO-8601 UTC-midnight timestamp. Stored, not computed: uv stamps this value into
+# uv.lock, so a moving cutoff makes every committed lock churn (daily, forever). Move it
+# with 'uv-cooldown-bump', commit the result, then run 'uv lock' wherever a lock is tracked.
+2026-08-07T00:00:00Z
