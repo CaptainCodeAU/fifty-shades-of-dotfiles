@@ -438,6 +438,30 @@ Empty output here means "not enabled," not "broken."
 core.hooksPath`, never a bare `--get` from inside a repo (it merges repo-local
      and the local value wins, masking the global state).
 
+- **To turn stamping off for ONE repo, use `trailers.disable` - not `--no-verify`,
+  not a repo-local `core.hooksPath`.** Both of those switch off the entire chain,
+  so a repo that merely wants no session trailers would also lose `git-leak-scan`
+  and the pre-push audit. That is backwards: the repos most likely to want no
+  trailers (one going public, or one whose history was scrubbed and must STAY at
+  zero) are exactly the ones that need the secret scanner most.
+
+  ```bash
+  git config trailers.disable true    # this repo, this machine; .git/config, never committed
+  git config --unset trailers.disable # revoke
+  CLAUDE_TRAILERS_DISABLE=1 git commit ...   # one-off, no config change
+  ```
+
+  Sibling of `leakscan.disable` (step 2b) - same knob shape, same machine-local
+  home, so a fresh clone re-enables stamping by default. The two are independent:
+  verified that `pre-commit` still runs and still blocks with `trailers.disable`
+  set. A skip prints one line to stderr naming which mechanism fired; an unstamped
+  repo is invisible in the commit itself, so it has to be visible at commit time.
+
+  **The opt-out still strips the harness-appended `Claude-Session:` line.**
+  Suppressing the trailers but keeping that line would leave the session URL in the
+  message - opting out of attribution must not restore the one identifier the
+  migration removes.
+
 - **A repo-local `core.hooksPath` override silently disables this feature in that
   repo.** If a clone points git at its own `.git/hooks` (or husky/lefthook), the
   global chainer is bypassed -> no trailer, no pre-push audit there. To restore the

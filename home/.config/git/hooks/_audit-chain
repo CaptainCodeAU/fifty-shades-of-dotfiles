@@ -17,6 +17,13 @@
 #
 # Fails open if pnpm-audit-hook is not installed. Bypass an audit block with:
 #   PNPM_AUDIT_DISABLE=1 git push ...      (or: git push --no-verify)
+#
+# Each step has its OWN opt-out, deliberately. `--no-verify` and a repo-local
+# core.hooksPath switch off the WHOLE chain -- so a repo that wants no session
+# trailers would otherwise have to disable the leak scanner to get them, which is
+# backwards. Per-step knobs (all machine-local .git/config, never committed):
+#   git config leakscan.disable true       # step 2b -- no secret/identity scan
+#   git config trailers.disable true       # step 3  -- no C-* session trailers
 # ============================================================================
 set -uo pipefail
 
@@ -79,6 +86,18 @@ fi
 #    Runs only when a Claude session id is set OR a Claude-Session: URL is present, so
 #    non-Claude commits stay untouched. We MIGRATE the retired Claude-Session: line into
 #    C-Web-Id going forward; existing history is left as-is (no rewrite).
+#
+#    Bypass:          CLAUDE_TRAILERS_DISABLE=1 git commit ...
+#    Per-repo opt-out: git config trailers.disable true   # this repo, this machine only
+#    For a repo that must carry NO session identifiers (one destined to go public, or
+#    one whose history was scrubbed and has to STAY at zero). Sibling of
+#    leakscan.disable in step 2b: same knob shape, same .git/config home, so cloning
+#    the repo elsewhere re-enables stamping by default.
+#    NOTE the opt-out still strips the harness-appended Claude-Session: line. Skipping
+#    that too would leave the session URL sitting in the message -- opting out of
+#    attribution must not RESTORE the one identifier the migration removes.
+#    A skip is announced on stderr: which repos are unstamped is machine-local state,
+#    invisible in the commit itself, so it has to be visible at commit time.
 if [ "$hook" = "prepare-commit-msg" ]; then
     msg_file="${1:-}"
     if [ -n "$msg_file" ] && [ -f "$msg_file" ]; then
@@ -101,6 +120,22 @@ if [ "$hook" = "prepare-commit-msg" ]; then
                 else
                     sed -i '' -E '/^[Cc]laude-[Ss]ession:/d' "$msg_file"
                 fi
+            fi
+            # Opt-out gate. Placed AFTER the migration strip above so a disabled repo
+            # still loses the Claude-Session: line (see header). --type=bool normalizes
+            # true/1/yes/on. Exiting 0 here is equivalent to falling through: step 3 is
+            # the last step and the script's own final statement is `exit 0`.
+            # Name the mechanism that actually fired: "set for this repo" sends you
+            # hunting in .git/config for a knob that is not there when it was the env.
+            trailers_off=""
+            if [ -n "${CLAUDE_TRAILERS_DISABLE:-}" ]; then
+                trailers_off="CLAUDE_TRAILERS_DISABLE set in the environment"
+            elif [ "$(git config --type=bool --get trailers.disable 2>/dev/null)" = "true" ]; then
+                trailers_off="trailers.disable set for this repo"
+            fi
+            if [ -n "$trailers_off" ]; then
+                echo "_audit-chain: C-* trailers SKIPPED ($trailers_off)" >&2
+                exit 0
             fi
             # Commit context: branch (blank on detached HEAD), worktree folder name,
             # and worktree path. The path is recorded $HOME-relative (~/...) so a
