@@ -322,9 +322,15 @@ command -v uv >/dev/null && eval "$(uv generate-shell-completion zsh)"
 # which is the safe direction (it only ever excludes MORE), but it rots if ignored -- hence
 # the staleness warning below, which is load-bearing. Threshold: UV_COOLDOWN_STALE_DAYS.
 #
-# PRECEDENCE, measured: `--exclude-newer` CLI > UV_EXCLUDE_NEWER env > [tool.uv] in a
-# project's pyproject.toml / exclude-newer in this user uv.toml. A project may therefore pin
-# its own cutoff and win over this file, which is intended.
+# PRECEDENCE, measured on uv 0.12.1 (2026-08-10, both files present, env unset):
+#   `--exclude-newer` CLI  >  UV_EXCLUDE_NEWER env  >  a project's pyproject.toml [tool.uv]
+#   >  THIS user uv.toml
+# The last link is a strict ORDERING, not a tie -- an earlier version of this comment wrote
+# the two config files as equals, which would have made a project pin look optional. It is
+# not: a project pin genuinely beats the machine cutoff, and that is intended. It is how a
+# repo with a committed lock pins its own date and stays reproducible in CI regardless of
+# whose machine ran the resolve. Verified: pyproject 2023-06-01 resolved idna 3.4 while this
+# file said 2021-01-01; removing the project pin resolved 2.10.
 #
 # ESCAPE HATCH: UV_NO_COOLDOWN=1, honoured by the uv()/uvx() wrappers below. Note that its
 # MECHANISM changed with this move -- see the comment there before touching it.
