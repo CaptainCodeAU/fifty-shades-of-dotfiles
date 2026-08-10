@@ -1015,6 +1015,7 @@ fifty-shades-of-dotfiles/
 │   │
 │   └── .local/                        # User-level commands and shared script sources
 │       ├── bin/                       # Command entrypoints on PATH → ~/.local/bin/
+│       │   ├── safe-rm                # Delete to Trash; never unlinks (used by rm() + scripts)
 │       │   ├── dirdiff                # Wrapper command for directory diff script
 │       │   ├── sysinfo                # Wrapper command for system monitor script
 │       │   └── watch-history-sync     # Wrapper command for YouTube history exporter
@@ -1243,7 +1244,8 @@ For the full architecture, conventions, migration policy, and add-new-script wor
 
 ### Special Functions
 
-- **`rm()` wrapper**: Two-layer deletion safety net. First warns before deleting symlinks (shows link target, prompts for confirmation). Then sends files to trash via `trash` (macOS, recoverable in Finder) or `trash-put` (Linux, recoverable in file manager). Refuses to proceed if neither trash tool is installed.
+- **`rm()` wrapper**: Two-layer deletion safety net. First warns before deleting symlinks (shows link target, prompts for confirmation). Then hands off to **`safe-rm`** for the actual delete. There is deliberately no force/permanent mode — `rm -rf` still goes to the Trash, because the flags are stripped.
+- **`safe-rm` command**: the single owner of "how does this system delete something". Moves targets to the system Trash via `trash` (macOS) or `trash-put` (Linux) and **never unlinks**; if no trash tool is present it refuses and exits non-zero rather than falling back to `rm`, because a silent downgrade from recoverable to permanent is the one behaviour it must not have. It exists as a **command on `PATH`**, not a shell function, because a function only exists inside an interactive zsh — `install.sh` and the Claude hooks run under bash, never load `.zshrc`, and so were permanently deleting files (including your existing dotfiles, when resolving a stow conflict). Scripts call `safe-rm` for anything the user could care about; a script's own `mktemp` scratch still uses real `rm`, so the Trash stays a readable safety net instead of filling with machine noise.
 - **`cp()`/`mv()` wrappers**: Default to interactive overwrite protection (`-i`) so you are prompted before clobbering existing files. Explicit force flags (`-f`, e.g. `-rf`) bypass prompts when you intentionally want non-interactive overwrite behavior.
 - **`sudo()` wrapper**: Prevents accidental `sudo claude` commands and redirects appropriately
 - **`pip()` wrapper**: Intercepts `pip install` → `uv add` and `pip uninstall` → `uv remove`; passes through editable installs and read-only subcommands via `uv pip`

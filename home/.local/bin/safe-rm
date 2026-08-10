@@ -1,0 +1,103 @@
+#!/usr/bin/env sh
+# safe-rm -- delete by moving to the system Trash. It never unlinks anything.
+#
+# WHY THIS EXISTS
+# ---------------
+# ~/.zshrc defines rm()/rmdir() wrappers that route deletions to the Trash, but a shell
+# function only exists in an INTERACTIVE zsh. Every script in this repo runs under
+# `#!/usr/bin/env bash` or as a hook, never loads .zshrc, and therefore calls the real
+# /bin/rm. install.sh in particular deletes a user's EXISTING dotfiles when it resolves a
+# stow conflict -- permanently, with no recovery, today. That is the gap this closes: the
+# protection has to live in a command on PATH, not in a shell function, so that callers
+# outside an interactive shell get it too.
+#
+# SCOPE (deliberate, decided 2026-08-10)
+# --------------------------------------
+# Use safe-rm for anything the caller did NOT create itself in a temp directory: the user's
+# files, installed artifacts, generated trees inside their projects. Do NOT use it for a
+# script's own mktemp scratch -- routing that here would drop a scratch directory into the
+# Trash on every SessionStart hook run, and a Trash full of machine noise is one nobody
+# reads, which defeats the point of having a recoverable delete at all.
+#
+# USAGE
+#   safe-rm [-q|--quiet] [rm-style flags, accepted and ignored] [--] TARGET...
+#
+# rm-style flags (-r, -f, -rf, -i, ...) are accepted so existing call sites convert with a
+# one-word edit, and ignored because the Trash tools do not need them. There is deliberately
+# NO force/permanent mode: if you want one, you want /bin/rm, and you should have to say so.
+#
+# A target that does not exist is skipped silently (rm -f semantics). A DANGLING SYMLINK is
+# still trashed -- it exists as a link even though its target does not.
+#
+# If no trash tool is installed, this FAILS (exit 1) and deletes nothing. It never falls
+# back to rm; a silent downgrade from "recoverable" to "permanent" is the one behaviour this
+# command must not have.
+
+set -u
+
+quiet=0
+no_more_flags=0
+# POSIX sh has no arrays. Collect targets positionally: shift the option args off the front,
+# then re-append each target to the end of "$@" so what remains is exactly the target list.
+argc=$#
+i=0
+while [ "$i" -lt "$argc" ]; do
+	arg="$1"
+	shift
+	i=$((i + 1))
+	if [ "$no_more_flags" -eq 0 ]; then
+		case "$arg" in
+			--) no_more_flags=1; continue ;;
+			-q|--quiet) quiet=1; continue ;;
+			-*) continue ;;   # rm-style flag: accepted, ignored
+		esac
+	fi
+	set -- "$@" "$arg"
+done
+
+if [ $# -eq 0 ]; then
+	echo "safe-rm: no targets given" >&2
+	echo "usage: safe-rm [-q] [--] TARGET..." >&2
+	exit 1
+fi
+
+# Resolve a trash tool once. macOS: `trash` (-> ~/.Trash, Finder "Put Back").
+# Linux/WSL: `trash-put` from trash-cli (-> XDG trash, restore with trash-restore).
+if command -v trash >/dev/null 2>&1; then
+	trash_cmd=trash
+	restore_hint="recover: Finder -> Put Back"
+elif command -v trash-put >/dev/null 2>&1; then
+	trash_cmd=trash-put
+	restore_hint="recover: trash-restore"
+else
+	echo "safe-rm: no trash tool found -- refusing to delete anything." >&2
+	echo "         macOS: brew install trash    Linux: apt install trash-cli" >&2
+	echo "         (safe-rm never falls back to rm: that would turn a recoverable" >&2
+	echo "          delete into a permanent one without saying so.)" >&2
+	exit 1
+fi
+command -v trash-restore >/dev/null 2>&1 && restore_hint="recover: trash-restore"
+
+# Skip targets that are not there. -e is false for a dangling symlink, so test -L too.
+existing=0
+argc=$#
+i=0
+while [ "$i" -lt "$argc" ]; do
+	t="$1"
+	shift
+	i=$((i + 1))
+	if [ -e "$t" ] || [ -L "$t" ]; then
+		set -- "$@" "$t"
+		existing=$((existing + 1))
+	fi
+done
+
+[ "$existing" -eq 0 ] && exit 0
+
+if "$trash_cmd" "$@"; then
+	[ "$quiet" -eq 1 ] || echo "🗑️  Trashed: $*  (${restore_hint})"
+	exit 0
+fi
+
+echo "safe-rm: ${trash_cmd} failed -- nothing was deleted." >&2
+exit 1

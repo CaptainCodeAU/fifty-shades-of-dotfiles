@@ -550,10 +550,11 @@ EOF
     sed -i.bak "s/PROJECT_NAME/$project_name/g" .envrc
     sed -i.bak "s/PROJECT_CLI/$project_name_cli/g" .envrc
     sed -i.bak "s/PROJECT_DISPLAY/$project_name_cli/g" .envrc
-    # `command rm` deliberately, same as create_readme below: this is an internal temp
-    # artifact of the sed substitution, so it should not go to the trash or print a
-    # "Trashed: .envrc.bak" line at someone who is just scaffolding a project.
-    command rm -f .envrc.bak
+    # safe-rm, never `command rm`: nothing in this repo permanently unlinks a file that
+    # lives in the user's tree, and this .bak sits in their project directory. `-q` is what
+    # solves the original complaint -- it goes to the Trash, it just does not announce
+    # itself at someone who is only scaffolding a project.
+    safe-rm -q .envrc.bak
 
     echo ".envrc created successfully with rich format."
 }
@@ -663,9 +664,9 @@ EOF
         # `|` delimiter, not `/`, so a project name is never mistaken for a separator.
         sed -i.bak -e "s|PROJECT_NAME|${project_name}|g" \
                    -e "s|PYTHON_VERSION|${python_version}|g" README.md
-        # `command rm` deliberately: this is an internal temp artifact, so it should not
-        # go to the trash or print a "Trashed:" line at the user.
-        command rm -f README.md.bak
+        # safe-rm -q: recoverable like everything else in this repo, but silent -- this is
+        # an internal artifact of the sed substitution, not a deletion the user asked for.
+        safe-rm -q README.md.bak
         # Fail loudly rather than ship a README that still says PROJECT_NAME. This is
         # the check whose absence let the old placeholder bug survive unnoticed.
         if grep -q 'PROJECT_NAME\|PYTHON_VERSION' README.md; then
@@ -1363,8 +1364,10 @@ python_delete() {
         fi
     done
 
-    # Clean cache files quietly and efficiently
-    find . -type d -name "__pycache__" -print0 | xargs -0 rm -rf &>/dev/null
+    # Clean cache files quietly and efficiently. `xargs` execs a BINARY, so it never sees
+    # the rm() shell function -- piping to `rm` here permanently unlinked directories out of
+    # the user's project tree. safe-rm is a real command on PATH, so xargs can reach it.
+    find . -type d -name "__pycache__" -print0 | xargs -0 safe-rm -q 2>/dev/null
 
 
     # --- PART 3: Final Visual Cleanup ---

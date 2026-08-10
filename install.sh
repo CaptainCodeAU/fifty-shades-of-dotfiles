@@ -34,6 +34,17 @@ RESET='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$SCRIPT_DIR"
 
+# --- Deletions go to the Trash, never to /bin/rm ---
+# This script deletes things the user cares about: their EXISTING dotfiles when it resolves
+# a stow conflict, old pnpm installs, corepack shims. It runs under bash and never loads
+# .zshrc, so the interactive rm() wrapper cannot protect any of it -- every one of those was
+# a permanent, unrecoverable delete. Use the repo copy by PATH rather than the command name:
+# on a fresh machine this script runs BEFORE stow has put anything in ~/.local/bin.
+# safe-rm refuses (exit 1) when no trash tool is present rather than falling back to rm, and
+# a trash tool is already a checked prerequisite -- see check_command trash / trash-put.
+# A script's own mktemp scratch is deliberately NOT routed here; see safe-rm's header.
+SAFE_RM="$REPO_DIR/home/.local/bin/safe-rm"
+
 # --- Ensure tool paths are visible to bash ---
 # Tools installed via standalone installers (pnpm, bun, uv) land outside
 # /usr/bin and may not be on PATH in a bash login shell. Root PNPM_HOME is
@@ -282,7 +293,7 @@ _pnpm_apply_action() {
             fi
             local s
             for s in pnpm pnpx yarn; do
-                if _pnpm_is_corepack_shim "$arg/$s"; then run_cmd rm -f "$arg/$s"; fi
+                if _pnpm_is_corepack_shim "$arg/$s"; then run_cmd "$SAFE_RM" -f "$arg/$s"; fi
             done
             true
             ;;
@@ -292,7 +303,7 @@ _pnpm_apply_action() {
             elif command -v npm &>/dev/null; then
                 run_cmd npm rm -g pnpm
             else
-                run_cmd rm -rf "$arg/../lib/node_modules/pnpm"
+                run_cmd "$SAFE_RM" -rf "$arg/../lib/node_modules/pnpm"
             fi
             ;;
         rm_v10_globals)
@@ -312,7 +323,7 @@ _pnpm_apply_action() {
                     printf '%s\n' "$deps" | sed 's/^/      pnpm add -g /'
                 fi
             fi
-            run_cmd rm -rf "$arg/global/5"
+            run_cmd "$SAFE_RM" -rf "$arg/global/5"
             ;;
         rm_root_launchers)
             # Remove v10 root-level launchers at $PNPM_HOME root: the canonical
@@ -323,8 +334,8 @@ _pnpm_apply_action() {
                 [[ -f "$f" && -x "$f" ]] || continue
                 base=$(basename "$f")
                 case "$base" in
-                    pnpm|pnpx|pn|pnx) run_cmd rm -f "$f" ;;
-                    *) if grep -Iq 'global/5' "$f" 2>/dev/null; then run_cmd rm -f "$f"; fi ;;
+                    pnpm|pnpx|pn|pnx) run_cmd "$SAFE_RM" -f "$f" ;;
+                    *) if grep -Iq 'global/5' "$f" 2>/dev/null; then run_cmd "$SAFE_RM" -f "$f"; fi ;;
                 esac
             done
             true
@@ -335,16 +346,16 @@ _pnpm_apply_action() {
             # @pnpm+* dirs (auto-downloaded by projects pinning pnpm@10.x). v11
             # entries are left untouched. Safe: pnpm re-downloads on demand.
             local home="$arg" d e
-            [[ -d "$home/.tools/pnpm-exe" ]] && run_cmd rm -rf "$home/.tools/pnpm-exe"
+            [[ -d "$home/.tools/pnpm-exe" ]] && run_cmd "$SAFE_RM" -rf "$home/.tools/pnpm-exe"
             for d in "$home"/.tools/@pnpm+*; do
                 [[ -d "$d" ]] || continue
                 while IFS= read -r e; do
-                    [[ -n "$e" ]] && run_cmd rm -rf "$e"
+                    [[ -n "$e" ]] && run_cmd "$SAFE_RM" -rf "$e"
                 done < <(find "$d" -mindepth 1 -maxdepth 1 -name '10.*' 2>/dev/null)
             done
             true
             ;;
-        rm_path)        run_cmd rm -rf "$arg" ;;
+        rm_path)        run_cmd "$SAFE_RM" -rf "$arg" ;;
         brew_rm_pnpm)   run_cmd brew uninstall pnpm ;;
         apt_rm_pnpm)    run_cmd sudo apt remove -y pnpm ;;
         dnf_rm_pnpm)    run_cmd sudo dnf remove -y pnpm ;;
@@ -621,7 +632,7 @@ _preflight_node_eol_check() {
     fi
     for e in "${eol[@]}"; do
         if confirm "Remove EOL Node $(basename "$e")?"; then
-            run_cmd rm -rf "$e"
+            run_cmd "$SAFE_RM" -rf "$e"
         fi
     done
     return 0
@@ -1400,7 +1411,7 @@ install_macos_prerequisites() {
                 if [[ -f "$PNPM_HOME/pnpm" ]]; then
                     local shim
                     for shim in pnpm pnpx pn pnx; do
-                        [[ -f "$PNPM_HOME/$shim" ]] && rm "$PNPM_HOME/$shim"
+                        [[ -f "$PNPM_HOME/$shim" ]] && "$SAFE_RM" "$PNPM_HOME/$shim"
                     done
                     info "Root-level shims removed (v11 layout: \$PNPM_HOME/bin/ only)."
                 fi
@@ -1584,7 +1595,7 @@ install_linux_prerequisites() {
             if [[ -f "$PNPM_HOME/pnpm" ]]; then
                 local shim
                 for shim in pnpm pnpx pn pnx; do
-                    [[ -f "$PNPM_HOME/$shim" ]] && rm "$PNPM_HOME/$shim"
+                    [[ -f "$PNPM_HOME/$shim" ]] && "$SAFE_RM" "$PNPM_HOME/$shim"
                 done
                 info "Root-level shims removed (v11 layout: \$PNPM_HOME/bin/ only)."
             fi
@@ -1732,7 +1743,7 @@ _clean_stale_repo_links() {
             link_target=$(readlink "$target")
             if [[ "$link_target" == *"fifty-shades-of-dotfiles"* ]]; then
                 verbose "Removing stale link: ~/$relative/ → $link_target"
-                run_cmd rm "$target"
+                run_cmd "$SAFE_RM" "$target"
                 cleaned=$((cleaned+1))
             fi
         fi
@@ -1746,7 +1757,7 @@ _clean_stale_repo_links() {
             link_target=$(readlink "$target")
             if [[ "$link_target" == *"fifty-shades-of-dotfiles"* ]]; then
                 verbose "Removing stale link: ~/$relative → $link_target"
-                run_cmd rm "$target"
+                run_cmd "$SAFE_RM" "$target"
                 cleaned=$((cleaned+1))
             fi
         fi
@@ -2201,7 +2212,7 @@ uninstall() {
                 local target
                 target=$(readlink "$dst")
                 if [[ "$target" == *"fifty-shades-of-dotfiles"* ]]; then
-                    run_cmd rm "$dst"
+                    run_cmd "$SAFE_RM" "$dst"
                     success "Removed: $(pretty_path "$dst")"
                     if [[ -f "${dst}.bak" ]]; then
                         run_cmd mv "${dst}.bak" "$dst"

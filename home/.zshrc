@@ -922,28 +922,16 @@ rm() {
 		read "REPLY?${warn}   Proceed? [y/N] ${done}"
 		[[ "$REPLY" =~ ^[Yy]$ ]] || return 1
 	fi
-	# Strip rm flags — trash tools don't understand -rf etc.
-	local targets=()
-	for arg in "$@"; do
-		[[ "$arg" != -* ]] && targets+=("$arg")
-	done
-	# Platform-aware restore hint: trash-cli ships trash-restore on Linux; macOS uses Finder.
-	local restore_hint
-	if command -v trash-restore &>/dev/null; then
-		restore_hint="recover: trash-restore"
-	else
-		restore_hint="recover: Finder → Put Back"
-	fi
-	if command -v trash &>/dev/null; then
-		command trash "${targets[@]}" && \
-			echo "${info}🗑️  Trashed: ${targets[*]}  (${restore_hint})${done}"
-	elif command -v trash-put &>/dev/null; then
-		command trash-put "${targets[@]}" && \
-			echo "${info}🗑️  Trashed: ${targets[*]}  (${restore_hint})${done}"
-	else
-		echo "${err}❌  No trash tool found. Install 'trash' (macOS: brew install trash) or 'trash-cli' (Linux: apt install trash-cli).${done}" >&2
+	# Delegate to safe-rm: ONE owner for "how do we move something to the Trash", shared with
+	# every script in this repo. A shell function only exists in an interactive zsh, so
+	# install.sh and the hooks could never have used this one -- see safe-rm's header.
+	# It strips rm-style flags itself, so pass "$@" through untouched.
+	if ! command -v safe-rm &>/dev/null; then
+		echo "${err}❌  safe-rm not found on PATH — refusing to delete.${done}" >&2
+		echo "${info}   It ships in this dotfiles repo at ~/.local/bin/safe-rm; run ./install.sh.${done}" >&2
 		return 1
 	fi
+	safe-rm "$@"
 }
 
 # rmdir sends empty directories to trash. Mirrors rm()'s symlink warning so that
@@ -961,22 +949,12 @@ rmdir() {
 		read "REPLY?${warn}   Proceed? [y/N] ${done}"
 		[[ "$REPLY" =~ ^[Yy]$ ]] || return 1
 	fi
-	local restore_hint
-	if command -v trash-restore &>/dev/null; then
-		restore_hint="recover: trash-restore"
-	else
-		restore_hint="recover: Finder → Put Back"
-	fi
-	if command -v trash &>/dev/null; then
-		command trash "$@" && \
-			echo "${info}🗑️  Trashed: $*  (${restore_hint})${done}"
-	elif command -v trash-put &>/dev/null; then
-		command trash-put "$@" && \
-			echo "${info}🗑️  Trashed: $*  (${restore_hint})${done}"
-	else
-		echo "${err}❌  No trash tool found. Install 'trash' (macOS: brew install trash) or 'trash-cli' (Linux: apt install trash-cli).${done}" >&2
+	if ! command -v safe-rm &>/dev/null; then
+		echo "${err}❌  safe-rm not found on PATH — refusing to delete.${done}" >&2
+		echo "${info}   It ships in this dotfiles repo at ~/.local/bin/safe-rm; run ./install.sh.${done}" >&2
 		return 1
 	fi
+	safe-rm "$@"
 }
 
 # Prompt before overwriting files by default.

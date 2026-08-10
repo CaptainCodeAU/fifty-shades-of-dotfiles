@@ -48,6 +48,12 @@ fail() { FAIL=$((FAIL+1)); print -ru2 -- "  FAIL  $1"; [[ -n "${2:-}" ]] && prin
 check() { if eval "$1" >/dev/null 2>&1; then pass "$2"; else fail "$2" "${3:-}"; fi }
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/scaffold-check.XXXXXX") || exit 2
+# `command rm` here is a DOCUMENTED EXEMPTION from the trash-everything rule, not an
+# oversight: $WORK is this script's own mktemp scratch, and this runs from a SessionStart
+# hook. Routing it to safe-rm would drop a scratch directory into the Trash every single
+# session, and a Trash full of machine noise is one nobody reads -- which would cost us the
+# recoverable deletes that actually matter. The rule covers what the USER could care about;
+# see the SCOPE section in ~/.local/bin/safe-rm.
 cleanup() { [[ -n "$WORK" && -d "$WORK" ]] && command rm -rf "$WORK" }
 trap cleanup EXIT INT TERM
 
