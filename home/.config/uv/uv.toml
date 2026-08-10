@@ -1,0 +1,14 @@
+# uv user configuration.
+#
+# uv reads this file ITSELF -- no shell, no direnv, no prompt hook -- which is why the
+# supply-chain release-age cooldown lives here rather than in an environment variable
+# exported by ~/.zshrc. An exported variable only ever reached an interactive shell, so cron
+# jobs, CI runners, git hooks and agent tool-shells were resolving with no gate at all.
+#
+# exclude-newer: refuse distributions published after this instant. FIXED, not rolling --
+# uv stamps the value into uv.lock, so a date that moves on its own makes every committed
+# lockfile churn. Move it deliberately with `uv-cooldown-bump`, commit the result, then run
+# `uv lock` in any repo with a tracked lock.
+#
+# Full rationale, measurements and precedence: ~/.zshrc section 6.
+exclude-newer = "2026-08-07T00:00:00Z"

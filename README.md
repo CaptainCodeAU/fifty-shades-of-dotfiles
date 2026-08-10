@@ -1000,7 +1000,8 @@ fifty-shades-of-dotfiles/
 │       │   └── direnvrc              # Machine color profiles + env hooks
 │       ├── zshrc/                     # Shared shell data → ~/.config/zshrc/
 │       │   ├── color-profiles.json   # 10 named color profiles (single source of truth)
-│       │   ├── uv-cooldown-cutoff    # Stored uv supply-chain cutoff (uv-cooldown-bump)
+│       ├── uv/                        # uv user config → ~/.config/uv/
+│       │   └── uv.toml                # exclude-newer: the supply-chain cutoff uv reads itself
 │       │   └── init-vscode-project-settings.sh  # Project-level .vscode/settings.json scaffold
 │       ├── nvim/                       # Neovim config → ~/.config/nvim/
 │       │   └── init.vim               # Neovim initialization
@@ -1098,7 +1099,7 @@ fifty-shades-of-dotfiles/
 - **`home/.vimrc`**: Lightweight Vim configuration with line numbers, search highlighting, tab settings, and sensible defaults.
 - **`home/.config/direnv/`**: direnv configuration files. `direnvrc` reads color profiles from `color-profiles.json` via `jq` and applies machine-specific colors to VSCode/Cursor title bars, status bars, and borders.
 - **`home/.config/zshrc/color-profiles.json`**: 10 named color profiles (single source of truth). Used by both direnvrc (machine-level) and `init-vscode-project-settings.sh` (project-level).
-- **`home/.config/zshrc/uv-cooldown-cutoff`**: one ISO-8601 date, exported as `UV_EXCLUDE_NEWER` by `.zshrc` section 6 — the uv half of the 3-day supply-chain cooldown. **Stored, not computed:** uv stamps this value into `uv.lock`, so a cutoff that moved on its own made every repo with a committed lock go dirty daily. Move it deliberately with `uv-cooldown-bump`, commit the result, then `uv lock` where a lock is tracked. The shell warns at startup once the cutoff is older than `UV_COOLDOWN_STALE_DAYS` (default 30); a missing or malformed file falls back to a rolling `now-3d` cutoff and says so, rather than silently dropping the cooldown.
+- **`home/.config/uv/uv.toml`**: uv's user config, holding `exclude-newer` — the uv half of the 3-day supply-chain cooldown. **uv reads this file itself**, with no shell involved, so the gate also applies under cron, CI, git hooks and agent tool-shells; an exported environment variable only ever reached an interactive shell, which meant unattended automation resolved with no gate at all. **Fixed, not rolling:** uv stamps the value into `uv.lock`, so a date that moves on its own makes every committed lock churn. Move it deliberately with `uv-cooldown-bump`, commit, then `uv lock` where a lock is tracked. The shell warns once the cutoff is older than `UV_COOLDOWN_STALE_DAYS` (default 30), and warns loudly if the key is missing entirely. Opt out for one command with `UV_NO_COOLDOWN=1` — the `uv()`/`uvx()` wrappers pass a far-future `UV_EXCLUDE_NEWER`, since env outranks user config.
 - **`home/.config/zshrc/init-vscode-project-settings.sh`**: Scaffolds `.vscode/settings.json` with a color profile and font settings. Supports `--profile`, `--random`, and `--list` flags.
 - **`home/.config/nvim/init.vim`**: Neovim initialization config, deployed to `~/.config/nvim/init.vim` via stow.
 - **`home/.config/zed/settings.json`**: Zed editor settings. Only `settings.json` is managed; `prompts/` and `themes/` remain user-local.

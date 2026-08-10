@@ -293,65 +293,65 @@ command -v uv >/dev/null && eval "$(uv generate-shell-completion zsh)"
 [ -s "$PNPM_HOME/_pnpm" ] && source "$PNPM_HOME/_pnpm"
 
 # --- uv supply-chain release-age cooldown (parity with pnpm + bun) ---
-# uv has no rolling-window setting, only a fixed --exclude-newer cutoff. That cutoff is
-# STORED, not computed: ~/.config/zshrc/uv-cooldown-cutoff holds one ISO-8601 UTC-midnight
-# timestamp, this block exports it as UV_EXCLUDE_NEWER, and it moves only when you run
-# `uv-cooldown-bump`. Every uv resolution then refuses distributions published after it --
-# the same intent as pnpm's minimumReleaseAge (config.yaml) and bun's (.bunfig.toml). Only
-# bites when uv RESOLVES (uv add / pip install / tool install / a stale lock); installing
-# an already-current lock is unaffected.
+# The cutoff lives in ~/.config/uv/uv.toml as `exclude-newer`, and UV READS THAT FILE ITSELF.
+# Nothing here exports it. That is the entire point: a shell can only configure a shell, and
+# this is a supply-chain gate that has to hold everywhere. Same intent as pnpm's
+# minimumReleaseAge (config.yaml) and bun's (.bunfig.toml). Only bites when uv RESOLVES
+# (uv add / pip install / tool install / a stale lock); installing a current lock is unaffected.
 #
-# WHY STORED RATHER THAN ROLLING (2026-08-10) -- the whole point, do not "simplify" it back.
-# uv STAMPS this cutoff into the resolved lockfile as `[options] exclude-newer`, so a lock
-# is only as stable as the cutoff that produced it. Computed to the SECOND it differed in
-# every new shell, so every `uv run` REWROTE uv.lock: git dirty in every uv project,
-# pre-commit hooks tripping on a hook-modified file, and -- the real problem -- a COMMITTED
-# lock whose recorded cutoff depended on which shell happened to write it, so `uv sync`
-# could resolve differently on different days. Found via a sibling project, where it blocked
-# commits outright. Truncating to midnight UTC (2026-08-03) cut that from once-per-shell to
-# once-per-DAY, which was a large improvement and still not zero: EVERY repo with a
-# committed lock went dirty again at each UTC midnight, forever, and committing the lock
-# only bought one day. Storing the date ends it. It also buys something the rolling version
-# never had: this file is committed in the dotfiles repo, so every machine resolves against
-# the SAME cutoff and a lock reproduces across machines, not merely across shells.
+# HOW IT GOT HERE, so nobody "simplifies" it backwards:
+#  1. Rolling now-3d, exported at startup. uv STAMPS the cutoff into uv.lock, so the value
+#     differed in every shell and every `uv run` rewrote the lock -- git dirty everywhere,
+#     pre-commit hooks tripping, and a COMMITTED lock whose cutoff depended on which shell
+#     wrote it. Found via a sibling project, where it blocked commits outright.
+#  2. Truncated to midnight UTC (2026-08-03). Cut the churn from per-shell to per-DAY. Better,
+#     not fixed: every repo with a committed lock went dirty again at each UTC midnight.
+#  3. Stored in a file, still exported at startup (2026-08-10, morning). Ended the churn --
+#     but the export only ever happened in an INTERACTIVE shell, so cron, CI, git hooks and
+#     agent tool-shells resolved with NO cooldown at all. Measured: `zsh -c`, `zsh -lc` and
+#     `env -i` all reported UV_EXCLUDE_NEWER unset. A login shell was not enough either.
+#  4. This. uv's own user config, which uv reads in every context.
 #
-# THE TRADE, STATED PLAINLY. A stored cutoff does not advance by itself, so the effective
-# window is "3 days or older" rather than exactly 3. That is the SAFE direction for a
-# supply-chain gate -- it only ever excludes MORE -- and it is the same reasoning the
-# midnight-UTC truncation already relied on. But a cutoff left alone for months resolves
-# `uv add` against a stale index, so the staleness warning below is load-bearing, not
-# decoration. Override the threshold with UV_COOLDOWN_STALE_DAYS.
+# VERIFIED on uv 0.12.1 with an isolated XDG_CONFIG_HOME (2026-08-10): a cutoff of 2021-01-01
+# in uv.toml resolved idna 2.10 instead of 3.18, so it CONSTRAINS resolution rather than
+# merely being recorded. Independently measured by the sibling project on the same version.
 #
-# ESCAPE HATCHES. Per command: UV_NO_COOLDOWN=1, honoured by the uv()/uvx() wrappers below
-# (NOT by this block -- this `if` runs ONCE at startup, and uv has never heard of
-# UV_NO_COOLDOWN; it is this file's invention). Permanently: set UV_EXCLUDE_NEWER yourself
-# in ~/.zshrc.private.EARLY -- an explicit user/CI value is never overridden. Note the
-# .early file, not ~/.zshrc.private: that one is sourced ~900 lines below this `if`.
-: ${UV_COOLDOWN_FILE:="$HOME/.config/zshrc/uv-cooldown-cutoff"}
+# ROLLING AND A COMMITTED LOCKFILE CANNOT BOTH BE HAD -- any mechanism that recomputes the
+# date rewrites every committed lock, and from here it would reach CI too. So the date is
+# FIXED and moves only via `uv-cooldown-bump`. The window is therefore "3 days OR OLDER",
+# which is the safe direction (it only ever excludes MORE), but it rots if ignored -- hence
+# the staleness warning below, which is load-bearing. Threshold: UV_COOLDOWN_STALE_DAYS.
+#
+# PRECEDENCE, measured: `--exclude-newer` CLI > UV_EXCLUDE_NEWER env > [tool.uv] in a
+# project's pyproject.toml / exclude-newer in this user uv.toml. A project may therefore pin
+# its own cutoff and win over this file, which is intended.
+#
+# ESCAPE HATCH: UV_NO_COOLDOWN=1, honoured by the uv()/uvx() wrappers below. Note that its
+# MECHANISM changed with this move -- see the comment there before touching it.
+: ${UV_COOLDOWN_FILE:="$HOME/.config/uv/uv.toml"}
 : ${UV_COOLDOWN_STALE_DAYS:=30}
-if command -v uv >/dev/null 2>&1 && [[ -z "$UV_EXCLUDE_NEWER" && -z "$UV_NO_COOLDOWN" ]]; then
-    _uv_cutoff=""
-    [[ -r "$UV_COOLDOWN_FILE" ]] && _uv_cutoff=$(sed -e 's/#.*//' -e '/^[[:space:]]*$/d' \
-        "$UV_COOLDOWN_FILE" 2>/dev/null | head -n 1 | tr -d '[:space:]')
-    if [[ "$_uv_cutoff" == [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T00:00:00Z ]]; then
-        export UV_EXCLUDE_NEWER="$_uv_cutoff"
-        # Exception-based: silent unless the pin has genuinely gone stale. ISO-8601 sorts
-        # lexically, so this needs no epoch maths and no BSD-vs-GNU date PARSING.
-        if [[ -t 2 ]]; then
-            _uv_stale=$(date -u -v-${UV_COOLDOWN_STALE_DAYS}d +%Y-%m-%dT00:00:00Z 2>/dev/null \
-                     || date -u -d "${UV_COOLDOWN_STALE_DAYS} days ago" +%Y-%m-%dT00:00:00Z 2>/dev/null)
-            [[ -n "$_uv_stale" && "$_uv_cutoff" < "$_uv_stale" ]] && print -ru2 -- \
-                "⚠️  uv cooldown cutoff ${_uv_cutoff} is older than ${UV_COOLDOWN_STALE_DAYS} days -- 'uv add' resolves against a stale index. Bump it: uv-cooldown-bump"
-            unset _uv_stale
-        fi
+
+# NOTHING IS EXPORTED HERE, and that is the fix. uv reads uv.toml itself, so the control
+# holds under cron, CI, git hooks and agent tool-shells -- none of which load this file. This
+# block only ADVISES a human, so it is interactive-only and the gate does not depend on it
+# running at all.
+#
+# ONE SOURCE, DELIBERATELY. Do not also export UV_EXCLUDE_NEWER "for good measure": env
+# OUTRANKS uv.toml, so a second mechanism lets an interactive shell and a cron job resolve
+# against different dates. That brings the churn back as a context-dependent flip, which is
+# harder to diagnose than the daily drift this replaced.
+if [[ -t 2 ]] && command -v uv >/dev/null 2>&1; then
+    _uv_cutoff=$(sed -n 's/^[[:space:]]*exclude-newer[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' \
+        "$UV_COOLDOWN_FILE" 2>/dev/null | head -n 1)
+    if [[ -z "$_uv_cutoff" ]]; then
+        print -ru2 -- "⚠️  uv cooldown: no exclude-newer in ${UV_COOLDOWN_FILE} -- uv is resolving with NO release-age gate, in EVERY context. Fix: uv-cooldown-bump"
     else
-        # Missing or malformed: fall back to the OLD rolling behaviour rather than running
-        # with no cooldown at all. Degrades to churn, never to unprotected -- and says so,
-        # because a silent fallback here is a supply-chain gate quietly turning itself off.
-        _uv_cutoff=$(date -u -v-3d +%Y-%m-%dT00:00:00Z 2>/dev/null || date -u -d '3 days ago' +%Y-%m-%dT00:00:00Z 2>/dev/null)
-        [[ -n "$_uv_cutoff" ]] && export UV_EXCLUDE_NEWER="$_uv_cutoff"
-        [[ -t 2 ]] && print -ru2 -- \
-            "⚠️  uv cooldown: ${UV_COOLDOWN_FILE} missing or malformed -- using a rolling now-3d cutoff, so uv.lock will churn daily. Fix: uv-cooldown-bump"
+        # ISO-8601 sorts lexically, so this needs no epoch maths and no BSD-vs-GNU date PARSING.
+        _uv_stale=$(date -u -v-${UV_COOLDOWN_STALE_DAYS}d +%Y-%m-%dT00:00:00Z 2>/dev/null \
+                 || date -u -d "${UV_COOLDOWN_STALE_DAYS} days ago" +%Y-%m-%dT00:00:00Z 2>/dev/null)
+        [[ -n "$_uv_stale" && "$_uv_cutoff" < "$_uv_stale" ]] && print -ru2 -- \
+            "⚠️  uv cooldown cutoff ${_uv_cutoff} is older than ${UV_COOLDOWN_STALE_DAYS} days -- 'uv add' resolves against a stale index. Bump it: uv-cooldown-bump"
+        unset _uv_stale
     fi
     unset _uv_cutoff
 fi
@@ -360,8 +360,8 @@ fi
 # with its header intact. Deliberately NOT automatic: advancing a supply-chain gate is a
 # decision, and making it a decision is what stops the lockfile churn this replaced.
 uv-cooldown-bump() {
-    local target new
-    target="${UV_COOLDOWN_FILE:-$HOME/.config/zshrc/uv-cooldown-cutoff}"
+    local target new tmp
+    target="${UV_COOLDOWN_FILE:-$HOME/.config/uv/uv.toml}"
     new=$(date -u -v-3d +%Y-%m-%dT00:00:00Z 2>/dev/null || date -u -d '3 days ago' +%Y-%m-%dT00:00:00Z 2>/dev/null)
     [[ -n "$new" ]] || { print -ru2 -- "uv-cooldown-bump: could not compute a date"; return 1 }
     # Writing THROUGH a stow symlink normally means you are polluting tracked source by
@@ -369,29 +369,42 @@ uv-cooldown-bump() {
     # rather than let it look like the usual mistake.
     [[ -L "$target" ]] && print -ru2 -- "note: ${target} is a stow symlink -- this edits tracked dotfiles source (intended; commit it)."
     mkdir -p "${target:h}" || return 1
-    cat > "$target" <<EOF
-# uv supply-chain cooldown cutoff -- exported as UV_EXCLUDE_NEWER by ~/.zshrc section 6.
-# ONE ISO-8601 UTC-midnight timestamp. Stored, not computed: uv stamps this value into
-# uv.lock, so a moving cutoff makes every committed lock churn (daily, forever). Move it
-# with 'uv-cooldown-bump', commit the result, then run 'uv lock' wherever a lock is tracked.
-$new
-EOF
-    export UV_EXCLUDE_NEWER="$new"
-    print -r -- "uv cooldown cutoff -> ${new}  (this shell updated; other shells read the file)"
+    # Edit exclude-newer IN PLACE. This is uv's real config file now, so any OTHER uv setting
+    # in it has to survive a bump -- rewriting the whole file would silently eat them.
+    if [[ -f "$target" ]] && grep -q '^[[:space:]]*exclude-newer[[:space:]]*=' "$target" 2>/dev/null; then
+        tmp="${target}.bump.$$"
+        if sed "s|^[[:space:]]*exclude-newer[[:space:]]*=.*|exclude-newer = \"${new}\"|" "$target" > "$tmp"; then
+            cat "$tmp" > "$target"; command rm -f "$tmp"
+        else
+            command rm -f "$tmp"; return 1
+        fi
+    else
+        [[ -f "$target" ]] || cat > "$target" <<'HDR'
+# uv user configuration. uv reads this file ITSELF, in every context -- no shell, no direnv,
+# no prompt hook -- which is why the supply-chain cooldown lives here rather than in an
+# environment variable exported by ~/.zshrc. See .zshrc section 6 for the full rationale.
+HDR
+        printf 'exclude-newer = "%s"\n' "$new" >> "$target"
+    fi
+    print -r -- "uv cooldown cutoff -> ${new}"
     print -r -- "Next: commit the change, then 'uv lock' in any repo with a committed uv.lock."
 }
 
-# --- uv / uvx: make the UV_NO_COOLDOWN opt-out actually reachable ---
-# The guard above runs ONCE at startup, so `UV_NO_COOLDOWN=1 uv add foo` could never affect
-# it: UV_EXCLUDE_NEWER is already exported by the time you type anything, and uv does not
-# read UV_NO_COOLDOWN. The documented opt-out therefore did nothing AND reported success --
-# the same failure mode the python() wrapper comment in section 9 argues against, applied to
-# a supply-chain control instead of an interpreter. Moving the check to CALL time makes the
-# documented behaviour true, for a one-off prefix and for ~/.zshrc.private alike.
-# `env` execs the real binary directly, so the function is not re-entered (no recursion).
+# --- uv / uvx: the UV_NO_COOLDOWN opt-out ---
+# THE MECHANISM CHANGED when the cutoff moved into uv.toml, and the old one would have failed
+# SILENTLY. `env -u UV_EXCLUDE_NEWER` worked while the cutoff WAS that variable; against a
+# config file it unsets something that is no longer set, and the cutoff still applies -- a
+# bypass that reports success, which is precisely the bug this whole line of work started
+# with. Measured: with the cutoff in uv.toml, `env -u` resolved idna 2.10, identical to
+# baseline. Decorative.
+#
+# A far-future date is the surgical replacement: env OUTRANKS user config, and a cutoff in
+# 2999 excludes nothing. `--no-config` also works but discards ALL uv configuration rather
+# than just the cutoff. The far-future date additionally leaves an honest trace in any lock
+# it touches, so an accidental bypass shows up in a diff instead of vanishing.
 uv() {
     if [[ -n "$UV_NO_COOLDOWN" ]]; then
-        env -u UV_EXCLUDE_NEWER uv "$@"
+        UV_EXCLUDE_NEWER=2999-01-01T00:00:00Z command uv "$@"
     else
         command uv "$@"
     fi
@@ -399,7 +412,7 @@ uv() {
 
 uvx() {
     if [[ -n "$UV_NO_COOLDOWN" ]]; then
-        env -u UV_EXCLUDE_NEWER uvx "$@"
+        UV_EXCLUDE_NEWER=2999-01-01T00:00:00Z command uvx "$@"
     else
         command uvx "$@"
     fi
