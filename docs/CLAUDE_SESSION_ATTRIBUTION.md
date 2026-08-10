@@ -366,14 +366,14 @@ tmp="$(mktemp -d)"; git -C "$tmp" init -q
 CLAUDE_SESSION_ID=demo123 \
   git -C "$tmp" -c user.name="Test" -c user.email="test@example.com" \
     commit -q --allow-empty -m "test: id only"
-git -C "$tmp" log -1 --format='%(trailers:only,unfold)'   # -> C-Sess-Id: demo123 / C-Web-Id: (blank) / C-Branch / C-Worktree / C-Wt-Path
+git -C "$tmp" log -1 --format='%B' | grep -E '^C-'   # -> C-Sess-Id: demo123 / C-Web-Id: (blank) / C-Branch / C-Worktree / C-Wt-Path
 # harvest: a harness Claude-Session: line is migrated into C-Web-Id, old line removed
 CLAUDE_SESSION_ID=demo123 \
   git -C "$tmp" -c user.name="Test" -c user.email="test@example.com" \
     commit -q --allow-empty -m "test: harvest
 
 Claude-Session: https://claude.ai/code/session_01ABC"
-git -C "$tmp" log -1 --format='%(trailers:only,unfold)'   # -> C-Web-Id now = https://claude.ai/code/session_01ABC (plus C-Sess-Id / C-Branch / C-Worktree / C-Wt-Path)
+git -C "$tmp" log -1 --format='%B' | grep -E '^C-'   # -> C-Web-Id now = https://claude.ai/code/session_01ABC (plus C-Sess-Id / C-Branch / C-Worktree / C-Wt-Path)
 rm -rf "$tmp"
 ```
 
@@ -401,8 +401,11 @@ Empty output here means "not enabled," not "broken."
    reached the Bash environment; if empty, nothing downstream works).
 2. The session should be able to state its own name/id (proves `additionalContext`
    injection).
-3. Make a real commit and check `git log -1 --format='%(trailers:only,unfold)'` ->
-   `C-Sess-Id:` (and `C-Web-Id:`) are present, in the trailer block.
+3. Make a real commit and check `git log -1 --format='%B' | grep -E '^C-'` ->
+   `C-Sess-Id:` (and `C-Web-Id:`) are present, in the trailer block. Do NOT verify
+   with a bare `%(trailers:only)` here - on a REAL commit message that form reports
+   prose as trailers (see the gotcha below); these live checks are exactly where
+   that bites, because a real message is not the controlled one-liner used above.
 
 ---
 
@@ -437,6 +440,27 @@ Empty output here means "not enabled," not "broken."
      Always diagnose with `git config --show-origin --show-scope --get-all
 core.hooksPath`, never a bare `--get` from inside a repo (it merges repo-local
      and the local value wins, masking the global state).
+
+- **Never verify with a bare `%(trailers:only)` - it reports PROSE as trailers.**
+  Git treats the message's last paragraph as the trailer block, so any line that
+  happens to read `Word: value` is returned as a trailer. A commit ending
+  `Verified: 0 em-dashes, gates green` reports a trailer on a repo with stamping
+  DISABLED - which reads as "the opt-out is broken" when it is working perfectly.
+  Measured, on a commit carrying no `C-*` at all:
+
+  ```console
+  $ git log -1 --format='%(trailers:only,unfold)'      # WRONG - false positive
+  Verified: 0 em-dashes, gates green
+
+  $ git log -1 --format='%B' | grep -E '^C-'           # right - key-scoped
+  $ git log -1 --format='%(trailers:key=C-Sess-Id,unfold)'   # also right
+  ```
+
+  Use `--format='%B' | grep -E '^C-'` (simplest, and `grep -cE` gives a count), or
+  scope the atom with `key=`. This is why `git-trailer-audit` matches
+  `/^C-[A-Za-z0-9_-]+:/` in awk rather than trusting git's trailer list - the tool
+  was already immune; the runbook in this doc was not, until 2026-08-10.
+  Caught by the sibling project, which nearly reported the opt-out broken.
 
 - **To turn stamping off for ONE repo, use `trailers.disable` - not `--no-verify`,
   not a repo-local `core.hooksPath`.** Both of those switch off the entire chain,
