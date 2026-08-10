@@ -550,7 +550,10 @@ EOF
     sed -i.bak "s/PROJECT_NAME/$project_name/g" .envrc
     sed -i.bak "s/PROJECT_CLI/$project_name_cli/g" .envrc
     sed -i.bak "s/PROJECT_DISPLAY/$project_name_cli/g" .envrc
-    rm -f .envrc.bak
+    # `command rm` deliberately, same as create_readme below: this is an internal temp
+    # artifact of the sed substitution, so it should not go to the trash or print a
+    # "Trashed: .envrc.bak" line at someone who is just scaffolding a project.
+    command rm -f .envrc.bak
 
     echo ".envrc created successfully with rich format."
 }
