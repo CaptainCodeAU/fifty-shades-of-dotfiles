@@ -280,9 +280,14 @@ command -v uv >/dev/null && eval "$(uv generate-shell-completion zsh)"
 # distributions published in the last 72h -- matching pnpm's minimumReleaseAge
 # (config.yaml) and bun's minimumReleaseAge (.bunfig.toml). Only bites when uv
 # RESOLVES (uv add / pip install / tool install / a stale lock); installing an
-# already-current lock is unaffected. Opt out for one shell with UV_NO_COOLDOWN=1;
-# a pre-set UV_EXCLUDE_NEWER (explicit user/CI value) is never overridden. The
-# `date -v` (BSD) / `date -d` (GNU) fallback keeps it portable across macOS/Linux.
+# already-current lock is unaffected. Opt out per command with UV_NO_COOLDOWN=1 -- honoured
+# by the uv()/uvx() wrappers below, NOT by this block: this `if` is evaluated ONCE at shell
+# startup, and uv itself has never heard of UV_NO_COOLDOWN (it is this file's invention), so
+# setting it any later -- including in ~/.zshrc.private, which is sourced ~900 lines down --
+# cannot reach here. Without the wrappers the only working escape is
+# `env -u UV_EXCLUDE_NEWER uv ...`. A pre-set UV_EXCLUDE_NEWER (explicit user/CI value) is
+# never overridden. The `date -v` (BSD) / `date -d` (GNU) fallback keeps it portable across
+# macOS/Linux.
 #
 # ⚠ TRUNCATED TO MIDNIGHT UTC (2026-08-03) — load-bearing, not cosmetic. uv STAMPS this
 # cutoff into the resolved lockfile as `[options] exclude-newer`. Computed to the SECOND it
@@ -299,6 +304,30 @@ if command -v uv >/dev/null 2>&1 && [[ -z "$UV_EXCLUDE_NEWER" && -z "$UV_NO_COOL
     [[ -n "$_uv_cutoff" ]] && export UV_EXCLUDE_NEWER="$_uv_cutoff"
     unset _uv_cutoff
 fi
+
+# --- uv / uvx: make the UV_NO_COOLDOWN opt-out actually reachable ---
+# The guard above runs ONCE at startup, so `UV_NO_COOLDOWN=1 uv add foo` could never affect
+# it: UV_EXCLUDE_NEWER is already exported by the time you type anything, and uv does not
+# read UV_NO_COOLDOWN. The documented opt-out therefore did nothing AND reported success --
+# the same failure mode the python() wrapper comment in section 9 argues against, applied to
+# a supply-chain control instead of an interpreter. Moving the check to CALL time makes the
+# documented behaviour true, for a one-off prefix and for ~/.zshrc.private alike.
+# `env` execs the real binary directly, so the function is not re-entered (no recursion).
+uv() {
+    if [[ -n "$UV_NO_COOLDOWN" ]]; then
+        env -u UV_EXCLUDE_NEWER uv "$@"
+    else
+        command uv "$@"
+    fi
+}
+
+uvx() {
+    if [[ -n "$UV_NO_COOLDOWN" ]]; then
+        env -u UV_EXCLUDE_NEWER uvx "$@"
+    else
+        command uvx "$@"
+    fi
+}
 
 
 # ==============================================================================
@@ -468,12 +497,17 @@ pip() {
                 echo "  Instead of:  ${err}pip install ${@:2}${done}"
                 echo "  Run:         ${ok}uv add ${@:2}${done}"
             fi
+            # `return 1`, same reasoning as the python()/npx() wrappers: a refusal that
+            # reports SUCCESS is the dangerous direction. `pip install x && deploy` used to
+            # print this advice, install nothing, and then deploy.
+            return 1
             ;;
         uninstall)
             echo "${warn}⚠️  pip uninstall is not used on this system. Use uv remove instead.${done}"
             echo
             echo "  Instead of:  ${err}pip uninstall ${@:2}${done}"
             echo "  Run:         ${ok}uv remove ${@:2}${done}"
+            return 1
             ;;
         *)
             # Pass through read-only and other subcommands (list, show, freeze, check, etc.)
@@ -523,6 +557,9 @@ pipx() {
             echo "    ${example}uvx <package>${done}                # Run a tool without installing"
             ;;
     esac
+    # Every branch above only prints advice, so return non-zero for ALL of them -- otherwise
+    # `pipx install x && deploy` reports success and deploys. Same rule as pip()/python().
+    return 1
 }
 
 # Hijack npx/npm/yarn — none are used on this system.
