@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# ============================================================================
+#  hwt -- create a herdr-tracked git worktree inside THIS project's folder
+# ============================================================================
+#
+# WHY
+# ---
+# herdr's own default (and its sidebar "New worktree" button) puts every
+# project's checkouts under ONE shared folder: `[worktrees] directory`,
+# default `~/.herdr/worktrees`, laid out as `<directory>/<repo>/<branch>`.
+# There is no config key that makes that follow you into each project --
+# confirmed by reading herdr's own source (expand_tilde_absolute_path in
+# src/worktree.rs resolves a relative `directory` against the SERVER
+# process's cwd, not the repo you're working in).
+#
+# This estate's convention is the opposite: worktrees live in a `.worktree/`
+# folder INSIDE the project they belong to (already globally gitignored, see
+# ~/.gitignore_global). The only way to get herdr to do that is its
+# `worktree create --path` flag, which takes one absolute path and skips the
+# shared folder entirely. --path REJECTS a relative value outright (herdr
+# source: absolute_user_path in src/app/api/worktrees.rs), so this script
+# always builds a full path before calling herdr.
+#
+# USAGE
+#   hwt <branch-name> [herdr worktree create flags...]
+#     Run from anywhere inside the target git repo (or a subdirectory of it).
+#     Extra flags (--base REF, --label TEXT, --focus, --no-focus, ...) pass
+#     straight through to `herdr worktree create` -- see `herdr worktree`.
+#
+# EXIT CODES
+#   0  worktree created (or `herdr worktree create` reported its own result)
+#   1  not inside a git repository
+#   2  usage error (missing branch name)
+# ============================================================================
+set -uo pipefail
+
+if [ $# -lt 1 ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
+    sed -n '/^# USAGE/,/^# EXIT/p' "$0" | sed 's/^# \{0,1\}//'
+    exit 2
+fi
+
+branch="$1"
+shift
+
+repo_root="$(git rev-parse --show-toplevel 2>/dev/null)"
+if [ -z "$repo_root" ]; then
+    echo "hwt: not inside a git repository" >&2
+    exit 1
+fi
+
+exec herdr worktree create \
+    --branch "$branch" \
+    --cwd "$repo_root" \
+    --path "$repo_root/.worktree/$branch" \
+    "$@"
