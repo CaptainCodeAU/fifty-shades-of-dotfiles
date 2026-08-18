@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# ============================================================================
+#  ccw-watch -- escalating, exception-based capture status for the welcome dash
+# ============================================================================
+# Why this exists: on 2026-07-24 transcript capture stopped and nobody found out
+# for TEN DAYS. Every link looked healthy, and `ccw status` reads the catalog, so
+# a hook that never runs writes no row and raises no error. Silence and idleness
+# were the same shape. By the time it was noticed, 636 sessions and 1,426
+# sub-agent transcripts existed only in ~/.claude, which is scheduled for
+# deletion.
+#
+# Built to the same rules as ci-watch, for the same reason: a PASSIVE, repeated,
+# identical signal habituates and gets tuned out.
+#   - HEALTHY -> one dim line, no habituation surface
+#   - BROKEN  -> a banner whose NUMBER RISES on its own, because the uncaptured
+#                count grows with every session that ends. It cannot be
+#                dismissed by being seen; it clears when captures catch up.
+#
+# Escalation needs no stored state here, unlike ci-watch's day counter: the
+# figure escalates by itself. 636 uncaptured is a visibly worse line than 12,
+# and reaching 0 removes the banner entirely.
+#
+# Guarantees:
+#   - READ-ONLY. It runs `ccw doctor`, which is read-only by construction and
+#     proved so by snapshot tests; this script adds no writes of its own.
+#   - NEVER BLOCKS. Always exits 0. A watcher that can fail a session start is
+#     worse than no watcher.
+#   - FAILS OPEN AND SAYS SO. No ccw on PATH is itself worth reporting, because
+#     that is one of the ways capture breaks.
+#
+# Usage: ccw-watch            render the session readout (default)
+#        ccw-watch --quiet    suppress the healthy line, keep the banner
+# ============================================================================
+
+set -uo pipefail
+
+RED=$'\033[31m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'
+BOLD=$'\033[1m'; DIM=$'\033[2m'; NC=$'\033[0m'
+
+quiet=false
+[[ "${1:-}" == "--quiet" ]] && quiet=true
+
+# Absolute path first: a session-start hook does not reliably inherit an
+# interactive shell's PATH, and ~/.local/bin is exactly what it tends to miss.
+ccw=""
+for candidate in "$HOME/.local/bin/ccw" "$(command -v ccw 2>/dev/null || true)"; do
+    [[ -n "$candidate" && -x "$candidate" ]] && { ccw="$candidate"; break; }
+done
+
+printf '%b\n' "${BOLD}Capture watch${NC} ${DIM}(live each session; clears when captures catch up)${NC}"
+
+if [[ -z "$ccw" ]]; then
+    printf '%b\n' "   ${RED}${BOLD}RED${NC} ${RED}ccw is not installed -- NOTHING is being captured${NC}"
+    printf '%b\n' "${DIM}       fix: cd cc-warehouse && uv_tool_reinstall_current_project --no-extras${NC}"
+    exit 0
+fi
+
+report="$("$ccw" doctor 2>/dev/null)"
+status=$?
+
+if [[ $status -eq 0 ]]; then
+    $quiet && exit 0
+    gap="$(printf '%s' "$report" | sed -n 's/.*Uncaptured: \([0-9]*\) session.*/\1/p')"
+    printf '%b\n' "   ${GREEN}OK${NC} ${DIM}capture working -- ${gap:-0} session(s) pending${NC}"
+    exit 0
+fi
+
+# Broken. Print the failing checks verbatim: they already name what is wrong and
+# by how much, and re-wording them here would be a second place to keep true.
+printf '%b\n' "   ${RED}${BOLD}RED${NC} ${RED}${BOLD}capture is NOT working${NC}"
+printf '%s\n' "$report" | grep -E '^\s*FAIL' | while IFS= read -r line; do
+    printf '%b\n' "       ${RED}${line#*FAIL}${NC}"
+done
+printf '%b\n' "${DIM}       ccw doctor for the full picture; this clears when captures catch up${NC}"
+
+# A rising figure is the escalation. Call it out once it is large enough that
+# losing it would actually hurt.
+overdue="$(printf '%s' "$report" | sed -n 's/.*[^0-9]\([0-9]\+\) session(s) OVERDUE.*/\1/p')"
+if [[ -n "$overdue" && "$overdue" -ge 100 ]]; then
+    printf '%b\n' "   ${YELLOW}${BOLD}  ###  ${overdue} sessions overdue -- these exist only in ~/.claude  ###${NC}"
+fi
+
+exit 0
