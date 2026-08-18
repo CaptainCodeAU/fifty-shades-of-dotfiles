@@ -128,7 +128,7 @@ HERDR_COOLDOWN_DAYS="3"
 #
 # The gate is therefore the same one used everywhere else in this estate: pin
 # the exact artefact and assert it. These hashes were computed from the real
-# v0.7.5 assets. install.sh REFUSES to install on mismatch, so a silently
+# v0.8.0 assets. install.sh REFUSES to install on mismatch, so a silently
 # re-uploaded asset fails loudly instead of landing.
 #
 # This is trust-on-first-use, not upstream provenance -- it cannot tell you the
@@ -143,9 +143,9 @@ HERDR_COOLDOWN_DAYS="3"
 #   3. shasum -a 256 herdr-linux-*   (sha256sum on Linux)
 #   4. update HERDR_VERSION + both hashes below in ONE commit
 #   5. push, pull on each box, re-run ./install.sh
-HERDR_VERSION="v0.7.5"
-HERDR_SHA256_LINUX_X86_64="3dc83288073e4c2d3c679a30e7be97bcca9141c6fd17dbbb9219142e95c59253"
-HERDR_SHA256_LINUX_AARCH64="32e763a1499a6b694b1d708e4f062b743be1da9f34fcfa4d212d6db6fe09a8b9"
+HERDR_VERSION="v0.8.0"
+HERDR_SHA256_LINUX_X86_64="b872ea7e40fa2cb17e857ac9b62b1bf26db7b403c622f5d2f3f5b35f6e9acd28"
+HERDR_SHA256_LINUX_AARCH64="f647ac66468d9efbc642fe534fb284468f0aea60641606fc008dfc0d82a3ca87"
 
 # --- Helpers ---
 info()    { echo -e "${CYAN}ℹ️  $*${RESET}"; }
