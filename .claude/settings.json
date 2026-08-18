@@ -236,17 +236,6 @@
           }
         ]
       }
-    ],
-    "SessionEnd": [
-      {
-        "matcher": "prompt_input_exit|logout|other",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/export_transcript.sh"
-          }
-        ]
-      }
     ]
   }
 }
