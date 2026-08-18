@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-#  ccw-watch -- escalating, exception-based capture status for the welcome dash
+#  ccw-watch -- escalating, dismiss-only-by-fixing capture status for the dash
 # ============================================================================
 # Why this exists: on 2026-07-24 transcript capture stopped and nobody found out
 # for TEN DAYS. Every link looked healthy, and `ccw status` reads the catalog, so
@@ -9,36 +9,185 @@
 # sub-agent transcripts existed only in ~/.claude, which is scheduled for
 # deletion.
 #
-# Built to the same rules as ci-watch, for the same reason: a PASSIVE, repeated,
-# identical signal habituates and gets tuned out.
-#   - HEALTHY -> one dim line, no habituation surface
-#   - BROKEN  -> a banner whose NUMBER RISES on its own, because the uncaptured
-#                count grows with every session that ends. It cannot be
-#                dismissed by being seen; it clears when captures catch up.
+# ENGINE PORTED FROM ci-watch (found 2026-08-18: the original flat two-state
+# version didn't meet the standing alert-design rule -- a break from ten
+# minutes ago looked identical to one from two weeks ago). Same tiers, same
+# state shape, same dismiss-only-by-fixing rule -- a PASSIVE, repeated,
+# identical signal habituates and gets tuned out:
+#   - OK    -> one dim, near-invisible line (no habituation surface)
+#   - BROKEN -> a banner that ESCALATES the longer it stays broken, and that
+#               CANNOT be dismissed by being seen -- only by `ccw doctor`
+#               reporting healthy again, or a DELIBERATE --snooze.
 #
-# Escalation needs no stored state here, unlike ci-watch's day counter: the
-# figure escalates by itself. 636 uncaptured is a visibly worse line than 12,
-# and reaching 0 removes the banner entirely.
+# Escalation tiers (days since first seen broken), same cutoffs as ci-watch:
+#   tier 1 (0-2d): red banner
+#   tier 2 (3-6d): louder boxed banner + spoken alert
+#   tier 3 (7d+) : strongest banner + spoken alert every session
+# Voice also fires once on the ok->broken transition.
+#
+# "ccw not installed at all" feeds the SAME state machine as a broken result,
+# rather than being a separate always-print line -- so the tool disappearing
+# also escalates instead of becoming wallpaper if it lingers.
 #
 # Guarantees:
-#   - READ-ONLY. It runs `ccw doctor`, which is read-only by construction and
-#     proved so by snapshot tests; this script adds no writes of its own.
+#   - READ-ONLY to the warehouse. It runs `ccw doctor`, which is read-only by
+#     construction and proved so by snapshot tests. The only writes THIS
+#     script makes are its own state file under XDG_STATE_HOME (mirrors
+#     ci-watch).
 #   - NEVER BLOCKS. Always exits 0. A watcher that can fail a session start is
 #     worse than no watcher.
 #   - FAILS OPEN AND SAYS SO. No ccw on PATH is itself worth reporting, because
 #     that is one of the ways capture breaks.
 #
-# Usage: ccw-watch            render the session readout (default)
-#        ccw-watch --quiet    suppress the healthy line, keep the banner
+# Usage:
+#   ccw-watch                render the session readout (default)
+#   ccw-watch --quiet        suppress the healthy line, keep the banner
+#   ccw-watch --snooze <d>   silence a broken state for <d> days (deliberate)
+#   ccw-watch --help
+#
+# Env (mostly for testing, mirrors ci-watch):
+#   CCW_WATCH_STATE, CCW_WATCH_NOTIFY_URL, CCW_WATCH_VOICE_ID
+#   CCW_WATCH_NOW=<epoch>   override "now" (self-test only)
+#   CCW_WATCH_DEBUG=1       echo "[voice] ..." to stderr instead of speaking
 # ============================================================================
 
 set -uo pipefail
 
-RED=$'\033[31m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'
-BOLD=$'\033[1m'; DIM=$'\033[2m'; NC=$'\033[0m'
+STATE_DIR="${CCW_WATCH_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/ccw-watch}"
+STATE_FILE="$STATE_DIR/capture.state"
+NOTIFY_URL="${CCW_WATCH_NOTIFY_URL:-http://localhost:8888/notify}"
+VOICE_ID="${CCW_WATCH_VOICE_ID:-}"
+
+mkdir -p "$STATE_DIR" 2>/dev/null || true
+
+if [ -n "${NO_COLOR:-}" ]; then
+    RED='' GREEN='' YELLOW='' DIM='' BOLD='' NC=''
+else
+    RED=$'\033[31m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'
+    BOLD=$'\033[1m'; DIM=$'\033[2m'; NC=$'\033[0m'
+fi
+
+now_epoch(){ printf '%s' "${CCW_WATCH_NOW:-$(date +%s)}"; }
+have(){ command -v "$1" >/dev/null 2>&1; }
+
+# ---- state (last known state survives across sessions) --------------------
+load_state(){ # -> S_LAST S_RED_SINCE S_SNOOZE
+    local k v
+    S_LAST=""; S_RED_SINCE=0; S_SNOOZE=0
+    if [ -f "$STATE_FILE" ]; then
+        while IFS='=' read -r k v; do
+            case "$k" in
+                last)         S_LAST="$v" ;;
+                red_since)    S_RED_SINCE="$v" ;;
+                snooze_until) S_SNOOZE="$v" ;;
+            esac
+        done < "$STATE_FILE"
+    fi
+    case "$S_RED_SINCE" in ''|*[!0-9]*) S_RED_SINCE=0;; esac
+    case "$S_SNOOZE" in ''|*[!0-9]*) S_SNOOZE=0;; esac
+}
+save_state(){ # save_state <last> <red_since> <snooze>
+    { printf 'last=%s\n' "$1"; printf 'red_since=%s\n' "$2"; printf 'snooze_until=%s\n' "$3"; } \
+        >"$STATE_FILE" 2>/dev/null || true
+}
+
+# ---- spoken alert (best-effort; never fails) -------------------------------
+# Same two-path shape as ci-watch: PAI VoiceServer first, direct `say` binary
+# as a fallback so an alert is never lost when the server is down.
+voice_alert(){
+    local msg="${1//\"/}" body
+    [ -n "${CCW_WATCH_DEBUG:-}" ] && { printf '[voice] %s\n' "$msg" >&2; return 0; }
+    if [ -n "$VOICE_ID" ]; then
+        body="$(printf '{"message": "%s", "voice_id": "%s", "voice_enabled": true}' "$msg" "$VOICE_ID")"
+    else
+        body="$(printf '{"message": "%s", "voice_enabled": true}' "$msg")"
+    fi
+    if have curl && timeout 4 curl -fsS -X POST "$NOTIFY_URL" \
+         -H 'Content-Type: application/json' -d "$body" >/dev/null 2>&1; then
+        return 0
+    fi
+    [ -x /usr/bin/say ] && { /usr/bin/say "$msg" >/dev/null 2>&1 & }
+    return 0
+}
+
+tier_for_days(){ if [ "$1" -ge 7 ]; then TIER=3; elif [ "$1" -ge 3 ]; then TIER=2; else TIER=1; fi; }
+
+broken_banner(){ # broken_banner <tier> <days> <detail-lines>
+    local tier="$1" days="$2" detail="$3"
+    local snip="ccw-watch --snooze ${days:-3}"
+    case "$tier" in
+        1)
+            printf '%b\n' "   ${RED}${BOLD}RED${NC} ${RED}${BOLD}capture is NOT working -- ${days}d${NC}"
+            printf '%s\n' "$detail"
+            printf '%b\n' "${DIM}       fix it, or hush: ${snip}${NC}"
+            ;;
+        2)
+            printf '%b\n' "   ${RED}${BOLD}+==================================================+${NC}"
+            printf '%b\n' "   ${RED}${BOLD}|  CAPTURE BROKEN for ${days} DAYS${NC}"
+            printf '%b\n' "   ${RED}${BOLD}+==================================================+${NC}"
+            printf '%s\n' "$detail"
+            printf '%b\n' "${DIM}       fix it, or hush: ${snip}${NC}"
+            ;;
+        *)
+            printf '\n'
+            printf '%b\n' "   ${RED}${BOLD}####################################################${NC}"
+            printf '%b\n' "   ${RED}${BOLD}###  CAPTURE BROKEN ${days} DAYS                      ###${NC}"
+            printf '%b\n' "   ${RED}${BOLD}###  broken for over a week -- fix or snooze.     ###${NC}"
+            printf '%b\n' "   ${RED}${BOLD}####################################################${NC}"
+            printf '%s\n' "$detail"
+            printf '%b\n' "${YELLOW}       FIX IT, or deliberately: ${snip}${NC}"
+            printf '\n'
+            ;;
+    esac
+}
+
+# ---- one evaluation ---------------------------------------------------------
+handle_ok(){ # handle_ok <report>
+    save_state ok 0 0
+    $quiet && return 0
+    local gap
+    gap="$(printf '%s' "$1" | sed -n 's/.*Uncaptured: \([0-9]*\) session.*/\1/p')"
+    printf '%b\n' "   ${GREEN}OK${NC} ${DIM}capture working -- ${gap:-0} session(s) pending${NC}"
+}
+
+handle_broken(){ # handle_broken <detail-lines>
+    local detail="$1" now transition=0 days
+    load_state
+    now="$(now_epoch)"
+    if [ "$S_RED_SINCE" -le 0 ]; then S_RED_SINCE="$now"; transition=1; fi
+    save_state broken "$S_RED_SINCE" "$S_SNOOZE"
+    days=$(( (now - S_RED_SINCE) / 86400 ))
+    if [ "$S_SNOOZE" -gt "$now" ]; then
+        local left=$(( (S_SNOOZE - now + 86399) / 86400 ))
+        printf '%b\n' "   ${YELLOW}zzz${NC} ${DIM}capture broken ${days}d but snoozed ${left}d${NC}"
+        return 0
+    fi
+    tier_for_days "$days"
+    broken_banner "$TIER" "$days" "$detail"
+    if [ "$transition" -eq 1 ]; then
+        voice_alert "Heads up. Capture just broke."
+    elif [ "$TIER" -ge 2 ]; then
+        voice_alert "Reminder. Capture has been broken for ${days} days."
+    fi
+}
+
+cmd_snooze(){ # cmd_snooze <days>
+    local days="${1:-}" now
+    case "$days" in ''|*[!0-9]*) printf 'usage: ccw-watch --snooze <days>\n' >&2; return 2;; esac
+    load_state
+    now="$(now_epoch)"
+    save_state "${S_LAST:-broken}" "${S_RED_SINCE:-$now}" $(( now + days * 86400 ))
+    printf 'snoozed capture-watch for %s day(s)\n' "$days"
+}
 
 quiet=false
-[[ "${1:-}" == "--quiet" ]] && quiet=true
+case "${1:-}" in
+    --quiet) quiet=true ;;
+    --snooze) shift; cmd_snooze "${1:-}"; exit $? ;;
+    -h|--help) sed -n '3,51p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+esac
+
+printf '%b\n' "${BOLD}Capture watch${NC} ${DIM}(live each session; clears when fixed, not when seen)${NC}"
 
 # Absolute path first: a session-start hook does not reliably inherit an
 # interactive shell's PATH, and ~/.local/bin is exactly what it tends to miss.
@@ -47,11 +196,9 @@ for candidate in "$HOME/.local/bin/ccw" "$(command -v ccw 2>/dev/null || true)";
     [[ -n "$candidate" && -x "$candidate" ]] && { ccw="$candidate"; break; }
 done
 
-printf '%b\n' "${BOLD}Capture watch${NC} ${DIM}(live each session; clears when captures catch up)${NC}"
-
 if [[ -z "$ccw" ]]; then
-    printf '%b\n' "   ${RED}${BOLD}RED${NC} ${RED}ccw is not installed -- NOTHING is being captured${NC}"
-    printf '%b\n' "${DIM}       fix: cd cc-warehouse && uv_tool_reinstall_current_project --no-extras${NC}"
+    detail="$(printf '%b' "       ${RED}ccw is not installed -- NOTHING is being captured${NC}\n${DIM}       fix: cd cc-warehouse && uv_tool_reinstall_current_project --no-extras${NC}")"
+    handle_broken "$detail"
     exit 0
 fi
 
@@ -59,25 +206,15 @@ report="$("$ccw" doctor 2>/dev/null)"
 status=$?
 
 if [[ $status -eq 0 ]]; then
-    $quiet && exit 0
-    gap="$(printf '%s' "$report" | sed -n 's/.*Uncaptured: \([0-9]*\) session.*/\1/p')"
-    printf '%b\n' "   ${GREEN}OK${NC} ${DIM}capture working -- ${gap:-0} session(s) pending${NC}"
+    handle_ok "$report"
     exit 0
 fi
 
-# Broken. Print the failing checks verbatim: they already name what is wrong and
-# by how much, and re-wording them here would be a second place to keep true.
-printf '%b\n' "   ${RED}${BOLD}RED${NC} ${RED}${BOLD}capture is NOT working${NC}"
-printf '%s\n' "$report" | grep -E '^\s*FAIL' | while IFS= read -r line; do
+# Broken. Print the failing checks verbatim: they already name what is wrong
+# and by how much, and re-wording them here would be a second place to keep
+# true.
+detail="$(printf '%s\n' "$report" | grep -E '^\s*FAIL' | while IFS= read -r line; do
     printf '%b\n' "       ${RED}${line#*FAIL}${NC}"
-done
-printf '%b\n' "${DIM}       ccw doctor for the full picture; this clears when captures catch up${NC}"
-
-# A rising figure is the escalation. Call it out once it is large enough that
-# losing it would actually hurt.
-overdue="$(printf '%s' "$report" | sed -n 's/.*[^0-9]\([0-9]\+\) session(s) OVERDUE.*/\1/p')"
-if [[ -n "$overdue" && "$overdue" -ge 100 ]]; then
-    printf '%b\n' "   ${YELLOW}${BOLD}  ###  ${overdue} sessions overdue -- these exist only in ~/.claude  ###${NC}"
-fi
-
+done)"
+handle_broken "$detail"
 exit 0
