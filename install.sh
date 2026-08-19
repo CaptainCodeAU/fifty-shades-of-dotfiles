@@ -1973,6 +1973,26 @@ _clean_stale_repo_links() {
     fi
 }
 
+# Mirrors home/.stow-local-ignore (the file stow itself reads) and
+# deploy-parity-check's SKIP_NAMES/is_ignored(), which already carries the
+# same "mirrors .stow-local-ignore, keep in sync" comment. A pattern in one
+# without its counterpart here means this function reports a "conflict"
+# stow was never actually going to create -- confirmed live 2026-08-19: a
+# stale home/.local/bin/__pycache__/*.pyc (Python bytecode the PEP 723
+# scripts leave behind when run, gitignored, excluded in
+# .stow-local-ignore) was flagged as a real conflict requiring a backup
+# decision, even though stow itself would have silently skipped it.
+_conflict_check_ignored() {
+    local rel="$1"
+    case "$rel" in
+        *__pycache__*|*.pyc) return 0 ;;
+        .gitignore|.gitmodules|.stow-local-ignore) return 0 ;;
+        .DS_Store|*/.DS_Store|._*|*/._*) return 0 ;;
+        .Spotlight-V100|*/.Spotlight-V100|.Trashes|*/.Trashes) return 0 ;;
+    esac
+    return 1
+}
+
 check_conflicts() {
     step "Checking for Conflicts"
 
@@ -1984,6 +2004,7 @@ check_conflicts() {
 
     while IFS= read -r -d '' file; do
         local relative="${file#$home_dir/}"
+        _conflict_check_ignored "$relative" && continue
         local target="$HOME/$relative"
 
         if [[ -e "$target" && ! -L "$target" ]]; then
@@ -2078,6 +2099,8 @@ stow_home() {
 
     local count=0
     while IFS= read -r -d '' file; do
+        local relative="${file#$REPO_DIR/home/}"
+        _conflict_check_ignored "$relative" && continue
         count=$((count+1))
     done < <(find "$REPO_DIR/home" -type f ! -name '.DS_Store' -print0)
     info "Linked $count file(s) from home/ to ~/"
