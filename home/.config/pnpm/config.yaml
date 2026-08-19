@@ -36,6 +36,16 @@ minimumReleaseAge: 4320
 # pnpm 11 default: true.
 minimumReleaseAgeIgnoreMissingTime: false
 
+# Never let the resolver fall back to a version younger than minimumReleaseAge
+# through a loose-mode exception path (which would auto-record the exception
+# into minimumReleaseAgeExclude instead of simply refusing the version).
+# Verified 2026-08-19 against pnpm's source (createNpmResolutionVerifier.ts):
+# this already turns on automatically the instant minimumReleaseAge is set
+# (which we always do) -- pinned explicitly anyway so a future pnpm default
+# change can't quietly flip it, same rationale as the pins below.
+# pnpm 11 default: auto-true whenever minimumReleaseAge is explicitly set.
+minimumReleaseAgeStrict: true
+
 # Block transitive dependencies that resolve from non-standard sources
 # (git repos, direct tarball URLs) rather than the configured registry.
 # Top-level deps in package.json can still use exotic sources — this only
@@ -102,13 +112,16 @@ trustPolicy: no-downgrade
 # pnpm 11 default: install.
 verifyDepsBeforeRun: error
 
-# NOTE: `manage-package-manager-versions` (the global flag that would stop
-# pnpm from auto-installing itself + @pnpm/exe as deps of every project
-# with a `devEngines.packageManager` block) CANNOT be set in this global
-# config.yaml — pnpm 11 explicitly rejects it. To disable per-project, add
-#     managePackageManagerVersions: false
-# to the project's `pnpm-workspace.yaml`. Or use pnpm 11 config dependencies
-# to share that setting across projects. See https://pnpm.io/11.x/config-dependencies
+# NOTE: `pmOnFail` (the flag that controls pnpm auto-installing itself +
+# @pnpm/exe as deps of every project with a `devEngines.packageManager`
+# block; supersedes the removed `manage-package-manager-versions` key)
+# CANNOT be set in this global config.yaml — pnpm 11 explicitly rejects it
+# (verified against 11.15.1 source, same rejection as its predecessor).
+# To disable per-project, add
+#     pmOnFail: ignore
+# to the project's `pnpm-workspace.yaml`, or pass `--pm-on-fail=ignore` on
+# the command line. Or use pnpm 11 config dependencies to share that setting
+# across projects. See https://pnpm.io/11.x/config-dependencies
 
 # NOTE: pnpm 11.3+ offers `trustLockfile: true` to skip supply-chain
 # verification of lockfile entries. Intentionally NOT set -- the default
