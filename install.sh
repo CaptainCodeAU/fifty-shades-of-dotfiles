@@ -2475,7 +2475,14 @@ setup_vuln_scan() {
     local have_key=false
     [[ -n "${NVD_API_KEY:-}" ]] && have_key=true
     [[ -s "$key_file" ]] && have_key=true
-    if [[ "$IS_MAC" == true ]] && security find-generic-password -s nvd-api-key -w >/dev/null 2>&1; then
+    # check_os(), not $IS_MAC -- that variable belongs to home/.zshrc and is
+    # never assigned by install.sh itself. Under set -u it was an unbound-
+    # variable crash on any box whose calling shell hadn't already loaded this
+    # repo's dotfiles (a fresh machine, a friend's machine, plain `bash`) --
+    # masked here only because the owner's own shells always export it first.
+    local is_mac=false
+    [[ "$(check_os)" == "macos" ]] && is_mac=true
+    if [[ "$is_mac" == true ]] && security find-generic-password -s nvd-api-key -w >/dev/null 2>&1; then
         have_key=true
     fi
 
@@ -2487,7 +2494,7 @@ setup_vuln_scan() {
     warn "vuln-scan: no NVD API key -- scans will work but run ~5x slower."
     info "  Get one free (no account value, instantly regenerable):"
     info "    ${CYAN}https://nvd.nist.gov/developers/request-an-api-key${RESET}"
-    if [[ "$IS_MAC" == true ]]; then
+    if [[ "$is_mac" == true ]]; then
         info "  Then store it in the Keychain, without leaking it to shell history:"
         info "    ${CYAN}read -rs NVDK && security add-generic-password -U -a \"\$USER\" -s nvd-api-key -w \"\$NVDK\" && unset NVDK${RESET}"
     else
