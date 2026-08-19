@@ -1986,7 +1986,15 @@ _conflict_check_ignored() {
     local rel="$1"
     case "$rel" in
         *__pycache__*|*.pyc) return 0 ;;
-        .gitignore|.gitmodules|.stow-local-ignore) return 0 ;;
+        # .stow-local-ignore's own header: these are stow's built-in default
+        # ignores, matched by BASENAME at any depth -- not just top-level.
+        # Verified live 2026-08-20: home/.config/herdr/.gitignore (nested)
+        # was still being counted as "linked" by stow_home() even though
+        # stow itself has always skipped it, because this case only matched
+        # the bare top-level name. Same bug class as .DS_Store below, just
+        # missed for this group the first time.
+        .gitignore|*/.gitignore|.gitmodules|*/.gitmodules) return 0 ;;
+        .stow-local-ignore|*/.stow-local-ignore) return 0 ;;
         .DS_Store|*/.DS_Store|._*|*/._*) return 0 ;;
         .Spotlight-V100|*/.Spotlight-V100|.Trashes|*/.Trashes) return 0 ;;
     esac
