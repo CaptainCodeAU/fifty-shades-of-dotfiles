@@ -404,15 +404,33 @@ _show_welcome_full() {
     # first run has 231 packages and would otherwise freeze the terminal for a
     # quarter of an hour.
     #
-    # SILENT WHEN CLEAN, like the deploy-parity check above. It speaks only for a
-    # HIGH/CRITICAL finding or an unverifiable package.
+    # SILENT WHEN CLEAN, like the deploy-parity check above. It speaks only for an
+    # ACTIONABLE finding (CVSS >= 7.0 or unrated) -- gated on vuln-scan's OWN exit
+    # code (1 == actionable, 0 otherwise), not a text search.
+    #
+    # A grep for the word "EXPOSED" used to gate this instead, and was wrong two
+    # ways (confirmed live 2026-08-19): that word is ALSO the label of the
+    # sub-threshold "EXPOSED, BELOW ACTION THRESHOLD" bucket, which vuln-scan
+    # deliberately keeps OUT of its own alarm. So the grep (a) matched that
+    # sub-threshold bucket while a genuine ACTION NEEDED finding sat elsewhere in
+    # the same output and never made it past `head -8` -- python@3.14 CVSS 8.7
+    # simply never appeared here -- and (b) would have shown NOTHING for an
+    # actionable-only result with no below-threshold items: a silent false
+    # all-clear, the one failure this whole tool exists to prevent.
     if command -v vuln-scan >/dev/null 2>&1; then
-        local _vuln
+        local _vuln _vstatus
         _vuln=$(NO_COLOR=1 vuln-scan --fast --no-progress 2>/dev/null)
+        _vstatus=$?
         if [[ -n "$_vuln" ]]; then
-            if printf '%s' "$_vuln" | grep -q 'EXPOSED'; then
-                echo "    cve: ${err}installed package(s) with known vulnerabilities${done}"
-                printf '%s\n' "$_vuln" | grep -A1 'EXPOSED' | head -8 | sed "s|^|      |"
+            if (( _vstatus == 1 )); then
+                # N is printed in the "ACTION NEEDED  N" header; each item below it
+                # is exactly 2 lines, so -A(N*2) captures the whole block and
+                # nothing past it (the sub-threshold/patched/etc. buckets that
+                # follow are deliberately not shown here -- see vuln-scan for those).
+                local _n_act
+                _n_act=$(printf '%s\n' "$_vuln" | grep -oE 'ACTION NEEDED  [0-9]+' | grep -oE '[0-9]+' | head -1)
+                echo "    cve: ${err}installed package(s) need action (CVSS >= 7.0 or unrated)${done}"
+                printf '%s\n' "$_vuln" | grep -A "$(( ${_n_act:-1} * 2 ))" 'ACTION NEEDED' | head -20 | sed "s|^|      |"
                 echo "      ${info}full detail: vuln-scan   |   briefing: ~/.local/state/dotfiles/vuln-briefing.md${done}"
             elif printf '%s' "$_vuln" | grep -qE 'need checking|already running'; then
                 printf '%s\n' "$_vuln" | sed "s|^|    cve: |"
