@@ -911,11 +911,22 @@ alias cd_='_claude_launch claude --dangerously-skip-permissions --permission-mod
 alias cskip='_claude_launch SKIP_SESSION_END_HOOK=1 claude --dangerously-skip-permissions --permission-mode plan'  # Skip end hooks
 
 # Intercepting the use of a command like 'sudo claude update' :P
+# pnpm branch: pnpm keeps global packages/config in the invoking user's home
+# dir, not root's -- sudo would silently operate on root's home instead
+# (pnpm 11.21+ already warns about this itself; a future major version
+# refuses it outright). Re-runs through the pnpm() wrapper above (not
+# `command pnpm`) so its own guards (e.g. link --global) still apply.
 sudo() {
 	if [[ "$1" == "claude" ]]; then
 		echo "⚠️  Don't use sudo with claude commands!"
 		echo "Running: claude ${@:2}"
 		command claude "${@:2}"
+	elif [[ "$1" == "pnpm" ]]; then
+		echo "${err}⚠️  Don't run pnpm with sudo.${done}"
+		echo "  ${warn}pnpm keeps global packages/config in YOUR home dir --${done}"
+		echo "  ${warn}sudo would silently operate on root's home instead.${done}"
+		echo "Running: pnpm ${@:2}"
+		pnpm "${@:2}"
 	else
 		command sudo "$@"
 	fi
