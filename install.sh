@@ -2023,15 +2023,9 @@ post_install() {
     local os
     os=$(check_os)
 
-    # One section-level decision for the optional post-install setup steps below
-    # (git identity, Python 3.13, nvm, bun, TPM, Nerd Font). git name/email, if
-    # needed, are still asked as values. This is the last confirm-bearing section,
-    # so SECTION_DECISION needn't be reset afterward.
-    if confirm "Run post-install setup (git identity, Python 3.13, nvm, bun, TPM, Nerd Font)?" "y"; then
-        SECTION_DECISION=yes
-    else
-        SECTION_DECISION=no
-    fi
+    # No section-level gate here (deliberately -- see commit message). Each item
+    # below checks itself and only prompts if it actually has something to do,
+    # same shape as dotenvx already had. A fully set-up box asks nothing at all.
 
     # --- Git identity (stored in ~/.gitconfig.private, included by .gitconfig) ---
     local git_private="$HOME/.gitconfig.private"
@@ -2157,7 +2151,9 @@ GITEOF"
     #     .env encryption checks). It lives on the dotenvx/brew tap, which
     #     Homebrew's tap-trust feature ignores until trusted -- so trust the
     #     single formula (never the whole tap) per the narrow-trust posture.
-    #     brew-gated; its own confirm keeps it opt-in inside the group. ---
+    #     brew-gated; the SECTION_DECISION=ask override below is now a harmless
+    #     no-op (no group survives to override) but stays as defensive belt-
+    #     and-suspenders in case that ever changes. ---
     if command -v brew &>/dev/null; then
         if command -v dotenvx &>/dev/null; then
             success "dotenvx already installed"
