@@ -2524,6 +2524,12 @@ show_summary() {
     if [[ -x "$HOME/.local/bin/p10k-contrast-check" ]]; then
         echo -e "  ${GREEN}✓${RESET} Standalone script command available: ${CYAN}p10k-contrast-check${RESET} ${DIM}(prompt contrast audit per iTerm2 profile)${RESET}"
     fi
+    if [[ -x "$HOME/.local/bin/toolchain-stocktake" ]]; then
+        echo -e "  ${GREEN}✓${RESET} Standalone script command available: ${CYAN}toolchain-stocktake${RESET} ${DIM}(survey existing Python/Node toolchain; see docs/TOOLCHAIN_TAKEOVER_CONSENT.md)${RESET}"
+    fi
+    if [[ -x "$HOME/.local/bin/project-impact-scan" ]]; then
+        echo -e "  ${GREEN}✓${RESET} Standalone script command available: ${CYAN}project-impact-scan${RESET} ${DIM}(which projects break when npm/venv get blocked; see docs/TOOLCHAIN_TAKEOVER_CONSENT.md)${RESET}"
+    fi
 
     # Show what's still missing
     echo
@@ -2580,19 +2586,24 @@ show_help() {
     echo -e "${BOLD}Modifiers (combinable with any action):${RESET}"
     echo -e "  --verbose, -v             Show detailed diagnostic output"
     echo -e "  --dry-run                 Preview what would be done (no changes)"
-    echo -e "  --skip-preflight          Skip pnpm conflict-detection step"
+    echo -e "  --skip-preflight          Skip pnpm conflict-detection AND the toolchain-takeover"
+    echo -e "                            re-survey (does NOT skip consent itself -- see below)"
     echo
     echo -e "${BOLD}What it does:${RESET}"
     echo -e "  1. Checks and installs prerequisites (Homebrew, stow, uv, etc.)"
     echo -e "  2. Installs Oh My Zsh, plugins, and Powerlevel10k (if missing)"
     echo -e "  3. Checks for file conflicts in ~/ (with auto-backup option)"
-    echo -e "  4. Symlinks home/ → ~/ using GNU Stow"
-    echo -e "  5. Symlinks platform-specific files (macOS Cursor/VSCode settings)"
-    echo -e "  6. Sets up git identity, git-lfs, and SSH-only GitHub workflow guidance"
-    echo -e "  7. Installs Python 3.13 via uv, nvm, pnpm, bun (standalone)"
-    echo -e "  8. Installs TPM (Tmux Plugin Manager) and Nerd Fonts"
-    echo -e "  9. Suggests creating ~/.zshrc.private for secrets"
-    echo -e " 10. Verifies deploy parity — every tracked home/ file is linked in ~/"
+    echo -e "  4. Surveys the machine's existing Python/Node toolchain and asks -- with a"
+    echo -e "     real typed confirmation, not a bare-Enter default -- before Python is"
+    echo -e "     handed to uv or npm/npx/yarn are blocked. Silent on a clean box. See"
+    echo -e "     docs/TOOLCHAIN_TAKEOVER_CONSENT.md"
+    echo -e "  5. Symlinks home/ → ~/ using GNU Stow"
+    echo -e "  6. Symlinks platform-specific files (macOS Cursor/VSCode settings)"
+    echo -e "  7. Sets up git identity, git-lfs, and SSH-only GitHub workflow guidance"
+    echo -e "  8. Installs Python 3.13 via uv, nvm, pnpm, bun (standalone)"
+    echo -e "  9. Installs TPM (Tmux Plugin Manager) and Nerd Fonts"
+    echo -e " 10. Suggests creating ~/.zshrc.private for secrets"
+    echo -e " 11. Verifies deploy parity — every tracked home/ file is linked in ~/"
     echo
 }
 
