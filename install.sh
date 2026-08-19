@@ -75,13 +75,15 @@ SECTION_DECISION=ask
 # --- pnpm version policy ---
 # Minimum acceptable pnpm. If pnpm is missing OR below this, install/upgrade
 # is offered. Keep in sync with PNPM_MIN_VERSION in home/.zsh_onboarding.
-# 11.15.0 (2026-07-18): NO pnpm CVE over 11.11.0 (both OSV-clean), but carries a
-# bundled adm-zip HIGH DoS fix (GHSA-xcpc-8h2w-3j85, crafted-ZIP 4GB alloc;
-# invisible to OSV since it's a bundled dep) PLUS hardening of verify-deps,
-# tokenHelper timeout, self-update-can-run, lockfile-snippet leak, and a git
-# arg-injection fix. 11.15.1 exists but was still held by minimumReleaseAge (3d)
-# at bump time (eligible ~2026-07-22 22:30Z). SKIP 11.12.0/11.13.0 -- binary-less.
-PNPM_MIN_VERSION="11.15.0"
+# 11.21.0 (2026-08-19): full changelog review of 11.16.0-11.21.0. NO pnpm CVE
+# over 11.11.0 (OSV-clean at both 11.15.1 and 11.21.0). Bump is hardening, not
+# a required patch: 11.18.0 locks self-update against project-controlled
+# overrides of minimumReleaseAge/trustPolicy/registry; 11.20.0 fixes a
+# named-registry lockfile package-substitution bug (namedRegistries not used
+# here) plus a path-traversal fix in `pnpm rebuild`. Verified real ~141MB
+# macOS-arm64 binary at every version in range (no repeat of the 11.12/11.13
+# binary-less incident). SKIP 11.12.0/11.13.0 -- binary-less.
+PNPM_MIN_VERSION="11.21.0"
 
 # --- nvm version policy ---
 # Minimum acceptable nvm. Two mirror-based CVEs set this floor: CVE-2026-10796

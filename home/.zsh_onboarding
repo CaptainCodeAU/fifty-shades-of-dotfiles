@@ -37,10 +37,12 @@ fi
 # Minimum acceptable pnpm. Below this, install.sh and the onboarding prompt
 # offer to upgrade rather than silently accepting the stale version.
 # Bumped manually; coordinate with install.sh's PNPM_MIN_VERSION.
-# 11.15.0: bundled adm-zip HIGH DoS fix (GHSA-xcpc-8h2w-3j85) + verify-deps /
-# self-update hardening (no pnpm CVE over 11.11.0). 11.15.1 held by minReleaseAge
-# (3d) at bump time. Skip 11.12.0/11.13.0 (binary-less).
-export PNPM_MIN_VERSION="${PNPM_MIN_VERSION:-11.15.0}"
+# 11.21.0: full 11.16-11.21 changelog review, no pnpm CVE over 11.11.0 (OSV-clean
+# both ends). Self-update hardened against project-controlled overrides (11.18.0);
+# named-registry lockfile substitution fix + rebuild path-traversal fix (11.20.0,
+# namedRegistries unused here). Verified real binary at every version in range.
+# Skip 11.12.0/11.13.0 (binary-less).
+export PNPM_MIN_VERSION="${PNPM_MIN_VERSION:-11.21.0}"
 # How often to re-check the npm registry for the latest pnpm release.
 export PNPM_CHECK_TTL_DAYS="${PNPM_CHECK_TTL_DAYS:-7}"
 
