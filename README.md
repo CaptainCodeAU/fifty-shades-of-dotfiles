@@ -93,7 +93,7 @@ cd ~/fifty-shades-of-dotfiles
 ./install.sh
 ```
 
-The installer will check prerequisites, install missing tools, set up Oh My Zsh plugins, symlink dotfiles via GNU Stow, configure git identity, install TPM/nvm/pnpm/bun/Nerd Fonts, and more. Run `./install.sh --help` for all options including `--check`, `--dry-run`, `--update`, and `--force`.
+The installer will check prerequisites, install missing tools, set up Oh My Zsh plugins, survey your existing Python/Node setup and ask before taking either over (see [Will it also mess with my existing Python or Node setup?](#faq)), symlink dotfiles via GNU Stow, configure git identity, install TPM/nvm/pnpm/bun/Nerd Fonts, and more. Run `./install.sh --help` for all options including `--check`, `--dry-run`, `--update`, and `--force`.
 
 ### Manual Install
 
@@ -1381,6 +1381,10 @@ Yeah. Each function file (`.zsh_python_functions`, `.zsh_node_functions`, etc.) 
 **Will this nuke my existing dotfiles?**
 
 No. The installer is fully interactive and asks before every step. But it goes further than that: before stow even runs, it scans your home directory for conflicts. If it finds a real file where it wants to place a symlink, it stops and gives you three options: auto-backup the conflicting files to `~/dotfiles-backup/`, force-adopt them into the repo with `--force` (which uses `stow --adopt`, then you review with `git diff`), or handle it yourself. Stow itself also refuses to overwrite a real file with a symlink, so there are two layers of protection before anything gets touched.
+
+**Will it also mess with my existing Python or Node setup?**
+
+Not without asking, and not silently. This repo is opinionated: Python gets handed to `uv` and pnpm gets enforced (`npm`/`npx`/`yarn` are blocked). Before either of those lands, the installer surveys what's actually already on your machine (`toolchain-stocktake`) and scans your existing projects for what would actually break (`project-impact-scan`) — then, only if something real would be affected, it stops and asks. That confirmation requires typing a real word, not a bare Enter, and the two changes are asked about independently. Decline either one and it's a genuine opt-out, not just skipped for this run: `python`/`python3` or `npm`/`npx`/`yarn` keep working exactly as they did before. A clean machine (nothing foreign found) sees none of this — zero extra prompts. See [`docs/TOOLCHAIN_TAKEOVER_CONSENT.md`](docs/TOOLCHAIN_TAKEOVER_CONSENT.md).
 
 **Why GNU Stow instead of chezmoi / yadm / a bare git repo?**
 
