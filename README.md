@@ -841,12 +841,14 @@ guards run **during** startup and have already decided by then, so a switch set 
 file cannot reach them — silently, with no error. Anything in that category goes in
 `~/.zshrc.private.early` instead, which is sourced right after OS detection:
 
-| Setting                   | Read by                       | Effect                                                 |
-| ------------------------- | ----------------------------- | ------------------------------------------------------ |
-| `NVM_ALLOW_CUSTOM_MIRROR` | nvm mirror pin (section 7)    | Allows a custom Node mirror (e.g. a corporate proxy)   |
-| `UV_EXCLUDE_NEWER`        | uv cooldown (section 6)       | Pins your own uv resolution cutoff; never overridden   |
-| `UV_COOLDOWN_STALE_DAYS`  | uv cooldown staleness warning | How old the stored cutoff may get before it warns (30) |
-| `_ONBOARDING_COMPLETE`    | onboarding (section 4)        | Skips the automatic first-run onboarding               |
+| Setting                        | Read by                              | Effect                                                                         |
+| ------------------------------ | ------------------------------------ | ------------------------------------------------------------------------------ |
+| `NVM_ALLOW_CUSTOM_MIRROR`      | nvm mirror pin (section 7)           | Allows a custom Node mirror (e.g. a corporate proxy)                           |
+| `UV_EXCLUDE_NEWER`             | uv cooldown (section 6)              | Pins your own uv resolution cutoff; never overridden                           |
+| `UV_COOLDOWN_STALE_DAYS`       | uv cooldown staleness warning        | How old the stored cutoff may get before it warns (30)                         |
+| `_ONBOARDING_COMPLETE`         | onboarding (section 4)               | Skips the automatic first-run onboarding                                       |
+| `DOTFILES_ALLOW_NPM`           | npm/npx/yarn hijack                  | Written by install.sh's takeover gate on decline; disables the npm block       |
+| `DOTFILES_ALLOW_SYSTEM_PYTHON` | python/python3/pip/pipx/pyNNN hijack | Written by install.sh's takeover gate on decline; disables the Python takeover |
 
 ```zsh
 # ~/.zshrc.private.early — read BEFORE the startup guards. Keep it small.

@@ -159,6 +159,9 @@ esac
 #   _ONBOARDING_COMPLETE       read in section 4  (~30 lines below)
 #   NVM_ALLOW_CUSTOM_MIRROR    read in section 7
 #   UV_EXCLUDE_NEWER           read in section 6  (UV_NO_COOLDOWN is now call-time, see there)
+#   DOTFILES_ALLOW_NPM              read near the end of the python/node hijacks
+#   DOTFILES_ALLOW_SYSTEM_PYTHON    (install.sh's takeover gate writes these on decline;
+#                                    see docs/TOOLCHAIN_TAKEOVER_CONSENT.md)
 #
 # So: anything a startup guard reads goes in ~/.zshrc.private.early; everything else stays
 # in ~/.zshrc.private. Keep this file's guards documented in the list above when adding one.
@@ -1306,6 +1309,20 @@ py310() {
     echo "  Run:         ${ok}uv run --python 3.10 python $@${done}"
     return 1
 }
+
+# --- Toolchain-takeover consent opt-out -------------------------------------
+# install.sh's takeover gate (_gate_toolchain_takeover) writes these into
+# ~/.zshrc.private.early (machine-local, untracked, sourced above at line 166
+# -- BEFORE every hijack this unsets is even defined) when the operator
+# DECLINES one of the two big changes. Read here, never set here. See
+# docs/TOOLCHAIN_TAKEOVER_CONSENT.md. pnpm() (the `pnpm link --global` guard,
+# defined earlier) is a correctness fix, not a takeover -- never unset it.
+if [[ -n "$DOTFILES_ALLOW_NPM" ]]; then
+    unset -f npm npx yarn 2>/dev/null
+fi
+if [[ -n "$DOTFILES_ALLOW_SYSTEM_PYTHON" ]]; then
+    unset -f python python3 pip pipx py313 py312 py311 py310 2>/dev/null
+fi
 
 # --- Node.js 'pnpm dlx' / 'bunx' Aliases ---
 # Use pnpm dlx (or bunx) to run commands without installing them globally.

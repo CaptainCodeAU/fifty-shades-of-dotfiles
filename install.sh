@@ -757,6 +757,26 @@ confirm() {
     [[ "$yn" =~ ^[Yy]$ ]]
 }
 
+# A confirm for changes a re-run cannot undo (the toolchain-takeover gate).
+# Deliberately does NOT consult SECTION_DECISION -- a group "yes" answered
+# elsewhere in this run must never be able to answer this one. No bare-Enter
+# default; the word must be typed. Non-interactive stdin is a REFUSAL, never
+# a silent yes. The caller is responsible for handling DRY_RUN (this helper
+# doesn't, unlike confirm() -- a takeover gate declining under --dry-run and
+# an ordinary confirm declining under --dry-run mean different things: this
+# one must never be mistaken for "answered no" by code that then writes an
+# opt-out marker).
+confirm_typed() {
+    local word="$1" prompt="$2" ans
+    if [[ ! -t 0 ]]; then
+        warn "Not interactive -- '${prompt}' treated as DECLINED."
+        return 1
+    fi
+    echo -e "  ${DIM}(type ${BOLD}${word}${RESET}${DIM} to accept; anything else, including Enter, declines)${RESET}"
+    read -rp "$(echo -e "${YELLOW}${prompt} [type ${word}]: ${RESET}")" ans || return 1
+    [[ "$ans" == "$word" ]]
+}
+
 run_cmd() {
     if [[ "$DRY_RUN" == true ]]; then
         echo -e "  ${DIM}[dry-run] Would run: $*${RESET}"
