@@ -688,6 +688,35 @@ _preflight_herdr_pin_check() {
     return 0
 }
 
+_preflight_herdr_release_check() {
+    [[ "$SKIP_PREFLIGHT" == true ]] && return 0
+    # Linux/WSL only -- macOS herdr is Homebrew-managed, see _preflight_herdr_pin_check.
+    # install_herdr_release() is only reached from install_linux_prerequisites(), which
+    # main() calls solely when check_prerequisites() reports a MISSING required tool --
+    # a present-but-wrong-version herdr never counts as missing, so a box that already
+    # has herdr installed never picks up a pin bump. Same gap _preflight_pnpm_floor_check
+    # closes for pnpm; this closes it for herdr on Linux/WSL. Confirmed live 2026-08-19:
+    # re-running ./install.sh on an already-provisioned WSL box left herdr untouched at
+    # the old version despite the "re-run ./install.sh" hint in check_prerequisites.
+    local os; os="$(check_os)"
+    [[ "$os" == "linux" || "$os" == "wsl" ]] || return 0
+    command -v herdr &>/dev/null || return 0
+
+    local have want
+    have=$(herdr --version 2>/dev/null | awk '{print $2}')
+    want="${HERDR_VERSION#v}"
+    [[ "$have" == "$want" ]] && return 0
+
+    step "Pre-flight herdr release check"
+    info "herdr ${have:-unknown} installed; pinned release is ${HERDR_VERSION}"
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[dry-run] No changes made. Re-run without --dry-run to update herdr."
+        return 0
+    fi
+    install_herdr_release
+    return 0
+}
+
 pretty_path() {
     echo "${1/#$HOME/~}"
 }
@@ -2522,6 +2551,10 @@ main() {
     # re-pin is forgotten; every run re-asserts it. No-op unless herdr is present
     # and Homebrew-managed.
     _preflight_herdr_pin_check
+
+    # --- herdr release pre-flight (Linux/WSL): re-apply a pin bump on a box that
+    # already has herdr installed, since check_prerequisites never flags it "missing" ---
+    _preflight_herdr_release_check
 
     # --- Install prerequisites ---
     if ! check_prerequisites; then
