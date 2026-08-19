@@ -656,12 +656,22 @@ _preflight_pnpm_floor_check() {
         info "[dry-run] No changes made. Re-run without --dry-run to upgrade pnpm."
         return 0
     fi
+    # A security floor is not a suggestion -- upgrade unconditionally, no y/N.
+    # An install must never silently continue with a below-floor pnpm; that's
+    # exactly the known-vulnerable-range risk the floor exists to catch.
+    # --skip-preflight remains the one deliberate, explicit bypass.
+    info "This is a security floor, not optional -- upgrading now."
     if _pnpm_use_homebrew; then
-        confirm "Run 'brew upgrade pnpm'?" && run_cmd brew upgrade pnpm
+        run_cmd brew upgrade pnpm
     elif _pnpm_is_standalone; then
-        confirm "Run 'pnpm self-update'?" && run_cmd pnpm self-update
+        run_cmd pnpm self-update
     fi
     hash -r 2>/dev/null || true
+    if _pnpm_needs_install_or_upgrade; then
+        error "pnpm is still below ${PNPM_MIN_VERSION} after the upgrade attempt."
+        error "Refusing to continue with a below-floor pnpm. Fix manually and re-run."
+        exit 1
+    fi
     return 0
 }
 
@@ -1397,6 +1407,10 @@ install_macos_prerequisites() {
             local cur_pnpm=""
             command -v pnpm &>/dev/null && cur_pnpm=$(pnpm -v 2>/dev/null || echo "unknown")
             if brew list pnpm &>/dev/null; then
+                # Below-floor is enforced (not optional) by _preflight_pnpm_floor_check,
+                # which always runs earlier in main() and exits if it can't fix it -- so
+                # a below-floor pnpm never reaches this branch on a normal run. This
+                # confirm only still fires under --skip-preflight (a deliberate bypass).
                 if confirm "pnpm ${cur_pnpm} is below ${PNPM_MIN_VERSION}. Run 'brew upgrade pnpm'?"; then
                     run_cmd brew upgrade pnpm
                 fi
@@ -1415,6 +1429,9 @@ install_macos_prerequisites() {
             local cur_pnpm="" prompt=""
             command -v pnpm &>/dev/null && cur_pnpm=$(pnpm -v 2>/dev/null || echo "unknown")
             if _pnpm_is_standalone; then
+                # Below-floor is enforced (not optional) by _preflight_pnpm_floor_check,
+                # which always runs earlier in main() and exits if it can't fix it -- so
+                # this branch's confirm below only still fires under --skip-preflight.
                 prompt="pnpm ${cur_pnpm} is below required ${PNPM_MIN_VERSION}. Run 'pnpm self-update' now?"
             elif [[ -n "$cur_pnpm" ]]; then
                 prompt="Active pnpm ${cur_pnpm} is not the standalone install (corepack/npm-global). Install standalone pnpm now?"
@@ -1599,6 +1616,10 @@ install_linux_prerequisites() {
         local cur_pnpm="" prompt=""
         command -v pnpm &>/dev/null && cur_pnpm=$(pnpm -v 2>/dev/null || echo "unknown")
         if _pnpm_is_standalone; then
+            # Below-floor is enforced (not optional) by _preflight_pnpm_floor_check,
+            # which always runs earlier in main() and exits if it can't fix it -- so
+            # this branch's confirm below only still fires under --skip-preflight.
+            # Applies on every OS (Linux/WSL included) -- same shared function.
             prompt="pnpm ${cur_pnpm} is below required ${PNPM_MIN_VERSION}. Run 'pnpm self-update' now?"
         elif [[ -n "$cur_pnpm" ]]; then
             prompt="Active pnpm ${cur_pnpm} is not the standalone install (corepack/npm-global). Install standalone pnpm now?"
