@@ -1,7 +1,7 @@
 # Zed Preview — Changelog Tracker
 
-<!-- ZED_PREVIEW_DOC_VERSION: 1.14.1 -->
-<!-- LAST_UPDATED: 2026-07-30 -->
+<!-- ZED_PREVIEW_DOC_VERSION: 1.16.1 -->
+<!-- LAST_UPDATED: 2026-08-19 -->
 
 > **What this is.** A living record of notable **Zed Preview** changes, filtered to
 > what Gavin cares about: **user interface**, **configuration / settings**, and
@@ -25,10 +25,10 @@
 
 | Field                  | Value         |
 | ---------------------- | ------------- |
-| Latest Preview tracked | **1.14.1**    |
-| Release date           | 2026-07-29    |
-| GitHub tag             | `v1.14.1-pre` |
-| Doc last refreshed     | 2026-07-30    |
+| Latest Preview tracked | **1.16.1**    |
+| Release date           | 2026-08-18    |
+| GitHub tag             | `v1.16.1-pre` |
+| Doc last refreshed     | 2026-08-19    |
 
 ---
 
@@ -69,6 +69,129 @@ when it visibly affects the above or Gavin's known setup.
 ---
 
 ## Release log (newest first)
+
+### 1.16.1 — 2026-08-18
+
+**Theme / appearance**
+
+- _No theme, syntax, font, or visual-styling changes this cycle._
+
+**Configuration**
+
+- `git_gutter_width` (new in 1.15.0, below) is now exposed in the **Settings UI**, with two
+  choices: default (scales with font size) or a custom fixed pixel width. Not set in your
+  `settings.json`, so the default still applies.
+
+**UI**
+
+- Fixed a Cursor ACP agent startup failure. Not applicable — you run Claude Code, not Cursor.
+
+**Fixes Gavin may feel**
+
+- **GPG passphrase modal appearing repeatedly on commit — fixed, for users with a pinentry
+  tool configured (e.g. `pinentry-mac`).** This is a second pass at the same class of bug
+  1.13.0 fixed ("GPG signing prompting for the passphrase on every commit") — if you still saw
+  it after 1.13.0, this cycle is the fix that should stick.
+  - _In plain English:_ if Zed kept asking for your GPG password on every commit, that should
+    now stop for good.
+- Fixed: array merging for extensions; project search returning wrong results in non-Unicode
+  files.
+
+### 1.16.0 — 2026-08-12
+
+**Theme / appearance**
+
+- **New themeable `attribute.special` token** — highlights Python dunder variables
+  (`__init__`, `__name__`, etc.) as a distinct syntax color. Second new theme slot this
+  refresh window (after 1.13.0's `variable.parameter`).
+- Markdown preview scrollbar visibility now respects your `scrollbar.show` setting.
+  - _In plain English:_ Python's `__dunder__` names can now get their own theme color, and the
+    Markdown-preview scrollbar behaves like the rest of the editor's scrollbars.
+
+**Configuration**
+
+- New `terminal.starts_open` — controls whether the Terminal Panel opens automatically in new
+  workspaces. Not set in your `settings.json`, so the (unchanged) default applies.
+- Default OpenAI model changed for subscription users. Not relevant — your Agent Panel is
+  configured for Anthropic (Claude Opus 5, per the 1.13.1 entry above).
+  - _In plain English:_ a new setting to control whether the terminal auto-opens; the
+    OpenAI-model default change doesn't touch you since you use Claude in Zed.
+
+**UI**
+
+- **Mermaid diagrams in Markdown preview now support zooming and horizontal scrolling.**
+  Directly builds on 1.14.1's fix for wide Mermaid diagrams getting squashed — this cycle
+  gives you a way to navigate a wide diagram instead of just rendering it at full width.
+- **Wide Markdown tables now get a horizontal scrollbar** instead of overflowing or wrapping —
+  same family of fix as the Mermaid one, relevant to your `md-hardbreak` preview workflow.
+- Git Panel: grouped change sections are now collapsible; new "Copy Path" / "Copy Relative
+  Path" context-menu entries.
+- Agent Panel terminals shrink back down after being cleared; loading spinners now rotate in
+  sync; Text Finder highlights matches as regex when regex filtering is on; Helix mode gained
+  Tab / Shift-Tab navigation through the code-actions menu.
+  - _In plain English:_ wide Mermaid diagrams and wide tables in Markdown preview are both
+    navigable now instead of cramped or overflowing — the biggest item for your workflow this
+    cycle.
+
+**Fixes Gavin may feel**
+
+- None called out beyond the Markdown/Mermaid items above.
+
+### 1.15.0 — 2026-08-05
+
+**Theme / appearance**
+
+- _No theme, syntax-color, font, or icon-theme changes this cycle._
+
+**Configuration**
+
+- New `git.diff_base` — choose whether gutter/file-status colors and git diffs compare against
+  `"head"` (default) or `"default_branch"` (merge-base). Not set in your `settings.json`, so
+  the default (`"head"`) still applies.
+- New `gutter.git_gutter_width` — set the pixel width of the git-diff gutter indicators. Also
+  not set; later exposed in the Settings UI by 1.16.1 (above).
+  - _In plain English:_ two new knobs for how git changes are compared and drawn in the
+    gutter — you haven't touched either, so nothing changes for you yet.
+
+**UI**
+
+- Project switcher can now close the currently-selected project and auto-switches to a
+  neighboring project.
+- New `multiple_selections` key context — lets you bind different keys for when multiple
+  cursors/selections are active.
+- Linked editing and Emmet completions extended to JSX/TSX.
+- Files can be dragged from the Project Panel to external macOS apps (and external Linux
+  Wayland apps).
+- Extension listing shows provider-specific repo icons; dev extensions show their declared
+  features.
+- New "Diff Against Default Branch" option in the editor-controls menu — pairs with the new
+  `git.diff_base` setting above.
+  - _In plain English:_ closing a project tab is smarter about what it switches to, dragging
+    files out to other Mac apps now works, and there's a menu option to diff against your
+    default branch instead of HEAD.
+
+**Fixes Gavin may feel**
+
+- Fixed cursor placement after multi-key bindings in Vim/Helix mode; fixed misaligned Agent
+  sidebar headers on Linux (not applicable to your Mac setup).
+
+### 1.14.2 — 2026-08-02
+
+**Theme / appearance**
+
+- Fixed incorrect parameter colors in the Gruvbox theme. Not your theme — no effect.
+
+**Configuration**
+
+- Fixed the Zed Agent hanging when running `git` commands with a pager configured in system
+  git settings.
+  - _In plain English:_ if Zed's AI agent ever froze while running a git command, that was a
+    pager-related bug, now fixed.
+
+**UI**
+
+- Fixed Option+Left (word-left) stopping short of punctuation between words.
+- Fixed a crash when adding selections through tab-expanded column operations.
 
 ### 1.14.1 — 2026-07-29
 
@@ -420,9 +543,9 @@ when it visibly affects the above or Gavin's known setup.
 
 ## Standing watch-items (open threads)
 
-| Item                               | Status as of 2026-07-30                | Why it matters                |
+| Item                               | Status as of 2026-08-19                | Why it matters                |
 | ---------------------------------- | -------------------------------------- | ----------------------------- |
-| Per-project themes (zed#13300)     | **Open PR #58755** — not merged/1.14.1 | Gavin's color-per-window goal |
+| Per-project themes (zed#13300)     | **Open PR #58755** — not merged/1.16.1 | Gavin's color-per-window goal |
 | `theme_overrides` at project level | Still user-settings only               | PR #58755 sidesteps it (DB)   |
 | `detect_venv` default              | Still on by default (yours pins `off`) | direnv double-activation      |
 | Title-bar settings surface         | New `title_bar.show_worktree_name`     | Visibility only, not colour   |
@@ -438,11 +561,11 @@ backing this on accessibility grounds in **discussion #24010** (comment 17160732
 2026-06-03). It's not the `title_bar.background` approach he proposed, but it meets the
 core goal. Watch for merge.
 
-**Re-checked 2026-07-30** (live, via the session-start PR poll): still open, still not merged,
-no new activity since 2026-06-29. None of 1.13.0, 1.13.1, or 1.14.1 shipped any per-window or
-per-project theme capability — 1.13.0's new `title_bar.show_worktree_name` is the only title-bar
-setting to appear, and it controls visibility, not colour. The `zed --user-data-dir` workaround
-remains the only route to a colour-per-window setup.
+**Re-checked 2026-08-19** (live, via the session-start PR poll): still open, still not merged,
+no new activity since 2026-06-29. None of 1.14.2, 1.15.0, 1.16.0, or 1.16.1 shipped any
+per-window or per-project theme capability — 1.13.0's `title_bar.show_worktree_name` remains the
+only title-bar setting to appear, and it controls visibility, not colour. The
+`zed --user-data-dir` workaround remains the only route to a colour-per-window setup.
 
 When refreshing this doc, re-check each row against the new release.
 
