@@ -1,0 +1,600 @@
+#!/usr/bin/env -S uv run python3
+# /// script
+# requires-python = ">=3.10"
+# dependencies = []
+# ///
+#
+# ============================================================================
+#  project-impact-scan -- which of YOUR projects break when the takeover lands?
+# ============================================================================
+#
+# WHY
+# ---
+# install.sh enforces pnpm (hard-blocks npm/npx/yarn) and takes over Python
+# via uv (hard-blocks bare python/python3). toolchain-stocktake answers "what
+# tools are on this machine"; this answers the sharper question: which of the
+# person's ACTUAL PROJECTS still depend on the tools about to be blocked, and
+# what breaks. Detect and report only -- migrating a project (npm->pnpm,
+# venv->uv) is real, per-project judgment work, done later in a Claude Code
+# session, one project at a time. This tool's job stops at an accurate list.
+#
+# PATTERN, NOT SHARED CODE
+# -------------------------
+# home/.local/bin/pnpm-audit-tree already has os_default_root/
+# discover_projects/nearest_lockfile/resolve_root, doing almost this same
+# discovery. DELIBERATELY copied and adapted here, not extracted into a
+# shared module. pnpm-audit-tree is wired into core.hooksPath (runs on every
+# git push on the machine) -- refactoring its internals in the same change
+# that ships a brand-new tool is more risk than the ~50 duplicated lines are
+# worth. Extraction trigger, if this is ever revisited: a THIRD caller wanting
+# the same discovery shape, or the first discovery bug that has to be fixed
+# twice in both places.
+#
+# SAFETY
+# ------
+# Read-only. No network. No subprocess into npm/pnpm/git. Never mutates a
+# scanned project -- it only opens files to read them.
+#
+# EXIT CODES
+#   0  nothing at/above --fail-on (default: nothing "breaking" found)
+#   1  findings at/above --fail-on
+#   2  usage / environment error (bad folder, user declined the scan prompt)
+#
+# USAGE
+# -----
+#   project-impact-scan [FOLDER] [--no-recursive] [--md PATH] [--json PATH]
+#                       [--quiet] [--yes] [--max-depth N] [--dry-run]
+#                       [--fail-on {advisory,breaking}]
+#
+#   FOLDER    root to scan. Default: OS code root (~/CODE macOS, ~/repos
+#             else), with an interactive prompt before scanning it all.
+# ============================================================================
+
+import argparse
+import json
+import os
+import platform
+import sys
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+
+TOOL_VERSION = "1.0.0"
+WALK_BUDGET_S = 20  # wall-clock ceiling for the whole discovery walk
+
+
+# --------------------------------------------------------------------------- #
+#  Terminal styling (honors NO_COLOR and non-tty)                             #
+# --------------------------------------------------------------------------- #
+def _supports_color() -> bool:
+    return sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
+
+
+class C:
+    enabled = _supports_color()
+
+    @staticmethod
+    def _w(code: str, s: str) -> str:
+        return f"\033[{code}m{s}\033[0m" if C.enabled else s
+
+    bold = staticmethod(lambda s: C._w("1", s))
+    dim = staticmethod(lambda s: C._w("2", s))
+    red = staticmethod(lambda s: C._w("31", s))
+    green = staticmethod(lambda s: C._w("32", s))
+    yellow = staticmethod(lambda s: C._w("33", s))
+    cyan = staticmethod(lambda s: C._w("36", s))
+
+
+# --------------------------------------------------------------------------- #
+#  XDG paths -- matches vulnlib.py's state_dir()/cache_dir() exactly          #
+# --------------------------------------------------------------------------- #
+def state_dir() -> Path:
+    base = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
+    p = Path(base) / "dotfiles"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def cache_dir() -> Path:
+    base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+    p = Path(base) / "dotfiles" / "project-impact"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+# --------------------------------------------------------------------------- #
+#  Discovery -- adapted from pnpm-audit-tree, deliberately not shared         #
+#  (see header). Same os.walk + in-place prune shape, generalized marker set. #
+# --------------------------------------------------------------------------- #
+def os_default_root() -> Path:
+    if platform.system() == "Darwin":
+        return Path.home() / "CODE"
+    return Path.home() / "repos"  # Linux / WSL2 / Ubuntu
+
+
+PRUNE_DIRS = {
+    "node_modules", ".git", ".hg", ".svn", ".jj",
+    ".venv", "venv", "__pycache__", ".tox", ".mypy_cache",
+    "site-packages", "vendor", "target", ".next", "dist", "build",
+}
+
+NODE_MARKERS = {"package.json"}
+PY_MARKERS = {
+    "pyproject.toml", "requirements.txt", "requirements-dev.txt", "setup.py",
+    "setup.cfg", "Pipfile", "environment.yml", "environment.yaml",
+    ".python-version", "tox.ini", "poetry.lock", "uv.lock", "conda-lock.yml",
+}
+
+
+def _has_venv_marker(dirpath: Path, dirnames: list[str]) -> bool:
+    """A .venv/venv/env dir counts as a Python marker ONLY when it actually
+    contains pyvenv.cfg -- otherwise every unrelated env/ directory on the
+    machine gets flagged."""
+    for name in (".venv", "venv", "env"):
+        if name in dirnames and (dirpath / name / "pyvenv.cfg").is_file():
+            return True
+    return False
+
+
+@dataclass
+class WalkResult:
+    projects: list = field(default_factory=list)
+    truncated: bool = False
+
+
+def discover_projects(root: Path, recursive: bool, max_depth: int) -> WalkResult:
+    result = WalkResult()
+    if not recursive:
+        filenames = {p.name for p in root.iterdir()} if root.is_dir() else set()
+        dirnames = [p.name for p in root.iterdir() if p.is_dir()] if root.is_dir() else []
+        if (NODE_MARKERS | PY_MARKERS) & filenames or _has_venv_marker(root, dirnames):
+            result.projects.append(root)
+        return result
+
+    start = time.monotonic()
+    root_depth = len(root.parts)
+    for dirpath, dirnames, filenames in os.walk(root):
+        if time.monotonic() - start > WALK_BUDGET_S:
+            result.truncated = True
+            break
+        # depth 0 is root itself. max_depth=N must still CHECK a directory
+        # exactly at depth N -- only descending PAST it is pruned. (Verified
+        # live: the first version used ">=" here and silently found zero
+        # projects with --max-depth 1 against fixtures one level below root.)
+        depth = len(Path(dirpath).parts) - root_depth
+        if depth > max_depth:
+            dirnames[:] = []
+            continue
+        if depth == max_depth:
+            dirnames[:] = []  # check this level, but do not descend further
+        else:
+            dirnames[:] = [d for d in dirnames if d not in PRUNE_DIRS and not d.startswith(".git")]
+        fset = set(filenames)
+        dp = Path(dirpath)
+        if (NODE_MARKERS | PY_MARKERS) & fset or _has_venv_marker(dp, dirnames):
+            result.projects.append(dp)
+    result.projects.sort()
+    return result
+
+
+def nearest_marker(project: Path, scan_root: Path, names: set[str]) -> Path | None:
+    """A marker file in the project dir, else walk UP to scan_root (workspace
+    root). Stop condition kept verbatim from pnpm-audit-tree's
+    nearest_lockfile -- this is what prevents escaping the root or looping
+    forever at filesystem root."""
+    cur = project
+    while True:
+        for name in names:
+            f = cur / name
+            if f.is_file():
+                return f
+        if cur == scan_root or cur == cur.parent:
+            return None
+        cur = cur.parent
+
+
+def resolve_root(args) -> Path | None:
+    if args.folder:
+        root = Path(args.folder).expanduser()
+        if not root.is_dir():
+            print(C.red(f"error: not a directory: {root}"), file=sys.stderr)
+            return None
+        return root
+    root = os_default_root()
+    if not root.is_dir():
+        # A missing default root is NOT an error -- it just means "no
+        # projects to report" (a Mac user's code may live under
+        # ~/Documents, and this tool never widens the default to a
+        # candidate list -- see header). The caller treats an empty
+        # project list as normal, not a failure.
+        return root
+    if args.yes or not sys.stdin.isatty():
+        if not args.yes:
+            print(C.red("error: no folder given and not interactive; pass a folder or --yes"),
+                  file=sys.stderr)
+            return None
+        return root
+    print(C.yellow(f"No folder given. This will scan EVERY project under {C.bold(str(root))}."))
+    try:
+        ans = input("  Proceed? [y/N] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return None
+    if ans not in ("y", "yes"):
+        print(C.dim("  Aborted."))
+        return None
+    return root
+
+
+# --------------------------------------------------------------------------- #
+#  Impact classification                                                      #
+# --------------------------------------------------------------------------- #
+NPM_SCRIPT_MARKERS = ("npm run", "npm ci", "npm install", "npx ", "yarn ")
+
+
+@dataclass
+class ProjectImpact:
+    path: str
+    kind: str = "none"          # node | python | both | none
+    node_pm: str = "none"       # pnpm | npm | yarn | bun | none | ambiguous
+    node_evidence: list = field(default_factory=list)
+    py_runtime: str = "none"    # uv | venv | pyenv | conda | poetry | pipenv | system | none
+    py_evidence: list = field(default_factory=list)
+    impact: str = "none"        # none | advisory | breaking
+    actions: list = field(default_factory=list)
+
+
+def _read_json(path: Path) -> dict | None:
+    try:
+        return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _read_text(path: Path) -> str | None:
+    try:
+        return path.read_text(errors="replace")
+    except OSError:
+        return None
+
+
+def classify_node(project: Path, scan_root: Path) -> tuple[str, list, str]:
+    """Returns (node_pm, evidence, impact_hint)."""
+    evidence = []
+    breaking = False
+    pm = "none"
+
+    pkg_json = project / "package.json"
+    if not pkg_json.is_file():
+        return "none", evidence, "none"
+
+    pkg = _read_json(pkg_json) or {}
+    pkg_manager_field = str(pkg.get("packageManager", ""))
+    if pkg_manager_field.startswith("npm@"):
+        evidence.append(f"package.json packageManager pins npm ({pkg_manager_field})")
+        pm, breaking = "npm", True
+    elif pkg_manager_field.startswith("yarn@"):
+        evidence.append(f"package.json packageManager pins yarn ({pkg_manager_field})")
+        pm, breaking = "yarn", True
+    elif pkg_manager_field.startswith("pnpm@"):
+        evidence.append(f"package.json packageManager pins pnpm ({pkg_manager_field})")
+        pm = "pnpm"
+
+    if (project / "pnpm-lock.yaml").is_file() or nearest_marker(project, scan_root, {"pnpm-lock.yaml"}):
+        if pm == "none":
+            pm = "pnpm"
+        evidence.append("pnpm-lock.yaml present")
+    if (project / "bun.lockb").is_file():
+        if pm == "none":
+            pm = "bun"
+        evidence.append("bun.lockb present")
+    if (project / "package-lock.json").is_file():
+        evidence.append("package-lock.json present (npm)")
+        pm, breaking = ("npm" if pm in ("none",) else pm), True
+    if (project / "yarn.lock").is_file():
+        evidence.append("yarn.lock present (yarn)")
+        pm, breaking = ("yarn" if pm in ("none",) else pm), True
+
+    scripts = pkg.get("scripts", {}) or {}
+    hit_scripts = [
+        name for name, cmd in scripts.items()
+        if isinstance(cmd, str) and any(m in cmd for m in NPM_SCRIPT_MARKERS)
+    ]
+    if hit_scripts:
+        evidence.append(f"scripts still call npm/npx/yarn directly: {', '.join(hit_scripts)}")
+        breaking = True  # the highest-value check: this survives a lockfile-only migration
+
+    workflows_dir = project / ".github" / "workflows"
+    if workflows_dir.is_dir():
+        try:
+            for wf in workflows_dir.glob("*.y*ml"):
+                text = _read_text(wf) or ""
+                if "npm ci" in text or "npm install" in text:
+                    evidence.append(f"CI workflow uses npm: {wf.name}")
+                    breaking = True
+                    break
+        except OSError:
+            pass
+
+    if pm == "none" and not evidence:
+        return "none", evidence, "none"
+    if breaking:
+        return pm, evidence, "breaking"
+    return pm, evidence, "advisory"  # already pnpm/bun -- nothing to do
+
+
+def classify_python(project: Path) -> tuple[str, list, str]:
+    """Returns (py_runtime, evidence, impact_hint)."""
+    evidence = []
+
+    for venv_name in (".venv", "venv"):
+        cfg = project / venv_name / "pyvenv.cfg"
+        if cfg.is_file():
+            text = _read_text(cfg) or ""
+            if "uv" in text.lower():
+                evidence.append(f"{venv_name}/ is uv-managed")
+                return "uv", evidence, "advisory"
+            evidence.append(f"{venv_name}/ exists, not uv-managed")
+            return "venv", evidence, "breaking"
+
+    if (project / "environment.yml").is_file() or (project / "environment.yaml").is_file():
+        evidence.append("conda environment.yml present")
+        return "conda", evidence, "breaking"
+    if (project / "Pipfile").is_file():
+        evidence.append("Pipfile present (pipenv)")
+        return "pipenv", evidence, "breaking"
+    if (project / "poetry.lock").is_file():
+        evidence.append("poetry.lock present")
+        return "poetry", evidence, "breaking"
+
+    has_uv_lock = (project / "uv.lock").is_file()
+    has_pyproject = (project / "pyproject.toml").is_file()
+    if has_uv_lock and has_pyproject:
+        evidence.append("pyproject.toml + uv.lock present")
+        return "uv", evidence, "advisory"
+
+    has_requirements = (project / "requirements.txt").is_file()
+    if has_requirements and not has_uv_lock:
+        evidence.append("requirements.txt present, no uv.lock")
+        return "system", evidence, "breaking"
+
+    if (project / ".python-version").is_file():
+        if has_uv_lock:
+            evidence.append(".python-version present (advisory -- uv already reads this file)")
+            return "uv", evidence, "advisory"
+        evidence.append(".python-version present, no uv.lock")
+        return "pyenv", evidence, "breaking"
+
+    if has_pyproject:
+        evidence.append("pyproject.toml present, no uv.lock")
+        return "system", evidence, "breaking"
+
+    return "none", evidence, "none"
+
+
+def assess_project(project: Path, scan_root: Path) -> ProjectImpact:
+    node_pm, node_ev, node_impact = classify_node(project, scan_root)
+    py_runtime, py_ev, py_impact = classify_python(project)
+
+    kind = "none"
+    if node_pm != "none" and py_runtime != "none":
+        kind = "both"
+    elif node_pm != "none":
+        kind = "node"
+    elif py_runtime != "none":
+        kind = "python"
+
+    impact_rank = {"none": 0, "advisory": 1, "breaking": 2}
+    impact = max((node_impact, py_impact), key=lambda i: impact_rank[i])
+
+    actions = []
+    if node_impact == "breaking":
+        actions.append("pnpm import && rm -rf node_modules package-lock.json yarn.lock && pnpm install")
+    if py_impact == "breaking":
+        if py_runtime in ("pyenv", "system"):
+            actions.append("uv venv && uv pip install -r requirements.txt  # or: uv sync (if pyproject.toml)")
+        elif py_runtime == "poetry":
+            actions.append("uv init --bare (adopt pyproject.toml) && uv sync")
+        elif py_runtime == "conda":
+            actions.append("recreate the environment.yml dependency list under uv (manual review needed)")
+        elif py_runtime == "pipenv":
+            actions.append("uv pip install -r <(pipenv requirements) && drop the Pipfile")
+        elif py_runtime == "venv":
+            actions.append("uv venv (replace the existing venv) && uv pip install -r requirements.txt")
+
+    return ProjectImpact(
+        path=str(project), kind=kind,
+        node_pm=node_pm, node_evidence=node_ev,
+        py_runtime=py_runtime, py_evidence=py_ev,
+        impact=impact, actions=actions,
+    )
+
+
+# --------------------------------------------------------------------------- #
+#  Reporting                                                                   #
+# --------------------------------------------------------------------------- #
+def build_markdown(results: list, root: Path, truncated: bool, args) -> str:
+    breaking = [r for r in results if r.impact == "breaking"]
+    advisory = [r for r in results if r.impact == "advisory"]
+    lines = [
+        "# Project impact report",
+        "",
+        f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S %Z')}",
+        f"Scanned root: `{root}`",
+        f"Prune list: {', '.join(sorted(PRUNE_DIRS))}",
+        f"Truncated (walk budget/depth limit hit): {'YES' if truncated else 'no'}",
+        "",
+        "**Safety:** read-only. This scan never modified, ran a script in, or ",
+        "installed anything into any project it looked at. It only opened files ",
+        "to read them.",
+        "",
+        "## What this means for you",
+        "",
+    ]
+    if not breaking and not advisory:
+        lines.append("No Python or Node projects were found under the scanned root. Nothing to report.")
+    else:
+        lines.append(
+            f"After this install, typing `npm install` prints a message and does nothing "
+            f"(same for `python3 script.py` -- it redirects to `uv run`). "
+            f"**{len(breaking)}** of your **{len(results)}** project(s) still rely on a tool "
+            f"that's about to be blocked, and each needs one migration step below. "
+            f"**{len(advisory)}** already use the new setup -- nothing to do there. "
+            f"Nothing in any project has been changed by this scan."
+        )
+    lines += ["", "## Counts", ""]
+    lines.append("| Impact | Count |")
+    lines.append("|---|---|")
+    lines.append(f"| Breaking (needs migration) | {len(breaking)} |")
+    lines.append(f"| Advisory (already compliant) | {len(advisory)} |")
+    lines.append(f"| Total projects found | {len(results)} |")
+
+    if breaking:
+        lines += ["", "## Breaking -- needs one migration step", ""]
+        for r in breaking:
+            lines.append(f"### `{r.path}`")
+            lines.append(f"- Kind: {r.kind}  |  Node PM: {r.node_pm}  |  Python runtime: {r.py_runtime}")
+            for e in r.node_evidence + r.py_evidence:
+                lines.append(f"  - {e}")
+            for a in r.actions:
+                lines.append(f"  - **Migrate:** `{a}`")
+            lines.append("")
+
+    if advisory:
+        lines += ["## Advisory -- already compliant", ""]
+        for r in advisory:
+            lines.append(f"- `{r.path}` ({r.node_pm if r.node_pm != 'none' else r.py_runtime})")
+
+    lines += [
+        "",
+        "## Agent brief",
+        "",
+        "```",
+        "Read this file. Migrate ONE project at a time from the Breaking list,",
+        "starting from the top. For each project: confirm the migration command",
+        "works, run the project's own tests if it has any, and report back before",
+        "moving to the next one. Do NOT batch multiple projects in one pass -- each",
+        "one needs its own verification. Never delete a project's existing lockfile",
+        "or venv until the replacement is confirmed working.",
+        "```",
+        "",
+        "## Provenance",
+        f"- Tool: project-impact-scan v{TOOL_VERSION}",
+        f"- Flags: {' '.join(sys.argv[1:]) or '(none)'}",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def write_durable_report(md_text: str) -> Path:
+    out = state_dir() / "project-impact-report.md"
+    if out.is_file():
+        prev = state_dir() / "project-impact-report.prev.md"
+        try:
+            prev.write_bytes(out.read_bytes())
+        except OSError:
+            pass
+    out.write_text(md_text)
+    return out
+
+
+# --------------------------------------------------------------------------- #
+#  CLI                                                                         #
+# --------------------------------------------------------------------------- #
+def parse_args(argv):
+    p = argparse.ArgumentParser(
+        prog="project-impact-scan",
+        description="Which of your Python/Node projects break when npm/python3 get blocked? Read-only.",
+    )
+    p.add_argument("folder", nargs="?", help="root folder to scan (default: OS code root, with prompt)")
+    p.add_argument("--no-recursive", dest="recursive", action="store_false", default=True,
+                    help="scan only FOLDER itself")
+    p.add_argument("--md", dest="md_path", help="write the markdown report here (default: the durable state path)")
+    p.add_argument("--json", dest="json_path", help="also write a JSON snapshot here")
+    p.add_argument("--quiet", action="store_true", help="minimal output")
+    p.add_argument("--yes", action="store_true", help="skip the default-root confirmation prompt")
+    p.add_argument("--max-depth", type=int, default=6, help="max directory depth below root (default 6)")
+    p.add_argument("--dry-run", action="store_true", help="scan and print only -- write nothing")
+    p.add_argument("--fail-on", choices=["advisory", "breaking"], default="breaking",
+                    help="exit non-zero if any finding is at/above this (default: breaking)")
+    p.add_argument("--no-color", action="store_true", help="disable ANSI color regardless of tty")
+    return p.parse_args(argv)
+
+
+def print_terminal(results: list, root: Path, truncated: bool, quiet: bool) -> None:
+    breaking = [r for r in results if r.impact == "breaking"]
+    advisory = [r for r in results if r.impact == "advisory"]
+    if quiet:
+        print(f"project-impact-scan: {len(results)} project(s) under {root}, "
+              f"{len(breaking)} breaking, {len(advisory)} advisory"
+              f"{' (TRUNCATED)' if truncated else ''}")
+        return
+    print(C.dim(f"Scanned {len(results)} project(s) under {root}" + (" (TRUNCATED)" if truncated else "")))
+    if not results:
+        print(C.green("  nothing found -- no Python or Node projects here"))
+        return
+    for r in breaking:
+        print(C.yellow(f"  BREAKING  {r.path}"))
+        for a in r.actions:
+            print(C.dim(f"            migrate: {a}"))
+    for r in advisory:
+        print(C.green(f"  advisory  {r.path}  ({r.node_pm if r.node_pm != 'none' else r.py_runtime})"))
+
+
+def main(argv) -> int:
+    args = parse_args(argv)
+    if args.no_color:
+        C.enabled = False
+
+    root = resolve_root(args)
+    if root is None:
+        return 2
+    if not root.is_dir():
+        if not args.quiet:
+            print(C.dim(f"project-impact-scan: default root {root} does not exist -- nothing to scan"))
+        return 0
+
+    walk = discover_projects(root, args.recursive, args.max_depth)
+    results = [assess_project(p, root) for p in walk.projects]
+
+    print_terminal(results, root, walk.truncated, args.quiet)
+
+    if not args.dry_run:
+        md = build_markdown(results, root, walk.truncated, args)
+        if args.md_path:
+            try:
+                Path(args.md_path).expanduser().write_text(md)
+            except OSError as e:
+                print(C.yellow(f"  could not write markdown report: {e}"), file=sys.stderr)
+        else:
+            out_path = write_durable_report(md)
+            if not args.quiet:
+                print(C.dim(f"  Report: {out_path}"))
+
+        if args.json_path:
+            payload = {
+                "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "root": str(root), "truncated": walk.truncated,
+                "projects": [vars(r) for r in results],
+            }
+            try:
+                Path(args.json_path).expanduser().write_text(json.dumps(payload, indent=2))
+            except OSError as e:
+                print(C.yellow(f"  could not write json snapshot: {e}"), file=sys.stderr)
+        else:
+            snap = cache_dir() / (time.strftime("scan-%Y%m%d-%H%M%S") + ".json")
+            try:
+                snap.write_text(json.dumps(
+                    {"root": str(root), "truncated": walk.truncated,
+                     "projects": [vars(r) for r in results]}, indent=2))
+            except OSError:
+                pass
+
+    floor = {"advisory": 1, "breaking": 2}[args.fail_on]
+    rank = {"none": 0, "advisory": 1, "breaking": 2}
+    if any(rank[r.impact] >= floor for r in results):
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
