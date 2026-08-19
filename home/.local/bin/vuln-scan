@@ -662,6 +662,7 @@ def main(argv) -> int:
                 "actionable": [{"name": i["row"]["name"],
                                 "version": i["row"]["version"],
                                 "revision": i["row"]["revision"],
+                                "score": i["row"]["worst_score"],
                                 "cves": [f["cve"] for f in i["live"]]} for i in acts],
                 "counts": {k: len(v) for k, v in groups.items()},
             }, indent=2))

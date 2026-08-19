@@ -417,23 +417,57 @@ _show_welcome_full() {
     # simply never appeared here -- and (b) would have shown NOTHING for an
     # actionable-only result with no below-threshold items: a silent false
     # all-clear, the one failure this whole tool exists to prevent.
+    #
+    # Reads --json + jq instead of scraping the pretty-printed table: structured
+    # data means no regex guessing at column widths, and every actionable package
+    # is listed (never "+N more" -- ACTION NEEDED is rare by definition, CVSS >=
+    # 7.0 only, so there is no real volume to hide). Only the worst/first CVE per
+    # PACKAGE is shown when a single package carries several; that narrower
+    # truncation is deliberately kept, matching vuln-scan's own cap elsewhere.
+    # The "how do I get more" pointer lives in Quick Reference now, not repeated
+    # here every time.
     if command -v vuln-scan >/dev/null 2>&1; then
-        local _vuln _vstatus
-        _vuln=$(NO_COLOR=1 vuln-scan --fast --no-progress 2>/dev/null)
+        local _vjson _vstatus
+        _vjson=$(NO_COLOR=1 vuln-scan --fast --no-progress --json 2>/dev/null)
         _vstatus=$?
-        if [[ -n "$_vuln" ]]; then
+        if [[ -n "$_vjson" ]]; then
             if (( _vstatus == 1 )); then
-                # N is printed in the "ACTION NEEDED  N" header; each item below it
-                # is exactly 2 lines, so -A(N*2) captures the whole block and
-                # nothing past it (the sub-threshold/patched/etc. buckets that
-                # follow are deliberately not shown here -- see vuln-scan for those).
-                local _n_act
-                _n_act=$(printf '%s\n' "$_vuln" | grep -oE 'ACTION NEEDED  [0-9]+' | grep -oE '[0-9]+' | head -1)
-                echo "    cve: ${err}installed package(s) need action (CVSS >= 7.0 or unrated)${done}"
-                printf '%s\n' "$_vuln" | grep -A "$(( ${_n_act:-1} * 2 ))" 'ACTION NEEDED' | head -20 | sed "s|^|      |"
-                echo "      ${info}full detail: vuln-scan   |   briefing: ~/.local/state/dotfiles/vuln-briefing.md${done}"
-            elif printf '%s' "$_vuln" | grep -qE 'need checking|already running'; then
-                printf '%s\n' "$_vuln" | sed "s|^|    cve: |"
+                if command -v jq >/dev/null 2>&1; then
+                    local _rows _i=0 _score _name _cve
+                    _rows=$(printf '%s' "$_vjson" | jq -r '
+                        .actionable
+                        | sort_by(-(.score // 999))
+                        | .[]
+                        | [ (if .score then (((.score * 10 | round) / 10) | tostring) else "?" end),
+                            .name,
+                            ((.cves[0] // "?")
+                             + (if (.cves | length) > 1 then ", +\((.cves | length) - 1) more" else "" end)) ]
+                        | @tsv')
+                    while IFS=$'\t' read -r _score _name _cve; do
+                        if (( _i == 0 )); then
+                            printf "    ${err}cve:${done} %-4s  %-16s  %s\n" "$_score" "$_name" "$_cve"
+                        else
+                            printf "%9s%-4s  %-16s  %s\n" "" "$_score" "$_name" "$_cve"
+                        fi
+                        (( _i++ ))
+                    done <<< "$_rows"
+                else
+                    # No jq -- a real actionable finding must never go silent just
+                    # because the detail formatting can't run.
+                    echo "    cve: ${err}package(s) need action -- run \`vuln-scan\` (jq missing, can't list detail here)${done}"
+                fi
+            else
+                local _deferred
+                _deferred=$(printf '%s' "$_vjson" | jq -r '.stats.deferred // 0' 2>/dev/null)
+                if [[ -n "$_deferred" && "$_deferred" != "0" && "$_deferred" != "null" ]]; then
+                    local _spawned
+                    _spawned=$(printf '%s' "$_vjson" | jq -r '.stats.spawned // false' 2>/dev/null)
+                    if [[ "$_spawned" == "true" ]]; then
+                        echo "    cve: ${_deferred} package(s) need checking -- running in the background"
+                    else
+                        echo "    cve: ${_deferred} package(s) pending; a scan is already running"
+                    fi
+                fi
             fi
         fi
     fi
@@ -634,6 +668,7 @@ _show_quickref_full() {
     echo "    Node:    node_new_project, node_setup, node_clean"
     echo "    Git/Docker: lg, lzd | Docker: docker_help | Tmux: tdev, gs, gstatus"
     echo "    Media:   yt --help"
+    echo "    Security: vuln-scan (cve detail) | briefing: ~/.local/state/dotfiles/vuln-briefing.md"
 }
 
 # ------------------------------------------------------------------------------
