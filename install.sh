@@ -918,6 +918,128 @@ _check_deploy_parity() {
     DOTFILES_REPO="$REPO_DIR" "$checker"
 }
 
+# --- Toolchain takeover: survey, disclose, gate (must precede stow_home) ----
+# The two big changes this repo makes -- Python taken over by uv, pnpm
+# enforced with npm/npx/yarn hard-blocked -- are not conveniences: they break
+# commands a foreign machine's EXISTING projects may depend on
+# (home/.zshrc's python3()/npm() etc.). Called from the REPO path, same
+# reasoning as _check_deploy_parity above -- stow hasn't run yet on a fresh
+# box. See Plans/sorted-brewing-brooks.md and
+# docs/TOOLCHAIN_TAKEOVER_CONSENT.md. Idempotent by design: a clean box, or
+# a box already consented at an unchanged fingerprint, adds zero friction.
+_toolchain_consent_file() { echo "$HOME/.local/state/dotfiles/toolchain-consent.json"; }
+
+_sha256() {
+    if command -v sha256sum &>/dev/null; then
+        sha256sum | awk '{print $1}'
+    else
+        shasum -a 256 | awk '{print $1}'
+    fi
+}
+
+_gate_toolchain_takeover() {
+    local stock="$REPO_DIR/home/.local/bin/toolchain-stocktake"
+    command -v uv &>/dev/null || return 0
+    [[ -x "$stock" ]] || return 0
+
+    local consent_file; consent_file=$(_toolchain_consent_file)
+    local have_consent=false
+    [[ -s "$consent_file" ]] && command -v jq &>/dev/null && have_consent=true
+
+    if [[ "$SKIP_PREFLIGHT" == true ]]; then
+        if [[ "$have_consent" == true ]]; then
+            return 0   # already decided once; --skip-preflight just skips re-surveying
+        fi
+        warn "toolchain takeover: --skip-preflight given, but no prior consent record."
+        warn "  Surveying anyway -- consent cannot be skipped, only the routine re-check can."
+    fi
+
+    local py_rc=0 node_rc=0 py_out node_out
+    py_out=$("$stock" --verdict python --quiet 2>&1) || py_rc=$?
+    node_out=$("$stock" --verdict node --quiet 2>&1) || node_rc=$?
+    # exit 2 (could not determine) escalates to 1 -- an unrun survey is not a
+    # clean survey, same posture as toolchain-cve-check's false-all-clear guard.
+    [[ "$py_rc" == 2 ]] && py_rc=1
+    [[ "$node_rc" == 2 ]] && node_rc=1
+    local py_foreign=false node_foreign=false
+    [[ "$py_rc" == 1 ]] && py_foreign=true
+    [[ "$node_rc" == 1 ]] && node_foreign=true
+
+    if [[ "$py_foreign" == false && "$node_foreign" == false ]]; then
+        return 0
+    fi
+
+    local fingerprint; fingerprint=$(printf '%s\n%s' "$py_out" "$node_out" | _sha256)
+    if [[ "$have_consent" == true ]]; then
+        local prior_fp; prior_fp=$(jq -r '.stocktake_fingerprint // empty' "$consent_file" 2>/dev/null)
+        if [[ -n "$prior_fp" && "$prior_fp" == "$fingerprint" ]]; then
+            info "toolchain takeover: unchanged since last consent, not re-asking."
+            return 0
+        fi
+    fi
+
+    step "Toolchain takeover: what's already on this machine"
+    "$stock" --verdict any || true
+
+    local impact="$REPO_DIR/home/.local/bin/project-impact-scan"
+    local impact_report=""
+    if [[ -x "$impact" && "$DRY_RUN" != true ]]; then
+        if "$impact" --yes --quiet >/dev/null 2>&1; then :; fi
+        impact_report="$HOME/.local/state/dotfiles/project-impact-report.md"
+        [[ -f "$impact_report" ]] && info "Existing-project impact report: $(pretty_path "$impact_report")"
+    fi
+
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[dry-run] Would ask for consent here. No changes made, nothing written."
+        return 0
+    fi
+
+    local py_decision="unchanged" node_decision="unchanged"
+    local early_file="$HOME/.zshrc.private.early"
+
+    if [[ "$py_foreign" == true ]]; then
+        echo
+        warn "Python: this machine has its own setup (see above). install.sh normally"
+        warn "  takes Python over completely via uv -- bare python/python3 stop working."
+        if confirm_typed "UV" "Let uv take over Python on this machine?"; then
+            py_decision="accepted"
+            [[ -f "$early_file" ]] && sed -i.bak '/^export DOTFILES_ALLOW_SYSTEM_PYTHON=/d' "$early_file" 2>/dev/null && rm -f "$early_file.bak"
+        else
+            py_decision="declined"
+            echo "export DOTFILES_ALLOW_SYSTEM_PYTHON=1  # written by install.sh's takeover gate; see docs/TOOLCHAIN_TAKEOVER_CONSENT.md" >> "$early_file"
+            info "Declined -- your existing Python setup is left alone. python/python3 stay real."
+        fi
+    fi
+
+    if [[ "$node_foreign" == true ]]; then
+        echo
+        warn "Node: this machine has its own npm setup (see above). install.sh normally"
+        warn "  hard-blocks npm/npx/yarn -- they print a message and do nothing."
+        if confirm_typed "PNPM" "Let pnpm replace npm on this machine?"; then
+            node_decision="accepted"
+            [[ -f "$early_file" ]] && sed -i.bak '/^export DOTFILES_ALLOW_NPM=/d' "$early_file" 2>/dev/null && rm -f "$early_file.bak"
+        else
+            node_decision="declined"
+            echo "export DOTFILES_ALLOW_NPM=1  # written by install.sh's takeover gate; see docs/TOOLCHAIN_TAKEOVER_CONSENT.md" >> "$early_file"
+            info "Declined -- npm/npx/yarn keep working. pnpm is still installed alongside them."
+        fi
+    fi
+
+    if command -v jq &>/dev/null; then
+        mkdir -p "$(dirname "$consent_file")"
+        jq -n \
+            --arg decided_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg host "$(hostname 2>/dev/null || echo unknown)" \
+            --arg py "$py_decision" --arg node "$node_decision" \
+            --arg fp "$fingerprint" --arg report "$impact_report" \
+            '{schema: 1, decided_at: $decided_at, host: $host,
+              python_uv_takeover: $py, node_pnpm_enforcement: $node,
+              stocktake_fingerprint: $fp, impact_report: $report}' \
+            > "$consent_file" 2>/dev/null || warn "Could not write consent record to $consent_file"
+    fi
+    return 0
+}
+
 check_prerequisites() {
     step "Checking Prerequisites"
 
@@ -1122,6 +1244,17 @@ check_prerequisites() {
     fi
 
     echo
+
+    # Informational only -- a foreign Python/Node toolchain is disclosed, not
+    # something --check can or should fail on (unlike deploy parity above,
+    # which represents an actual, fixable deployment problem). Never touches
+    # $missing, in any ACTION.
+    local stock="$REPO_DIR/home/.local/bin/toolchain-stocktake"
+    if [[ -x "$stock" ]] && command -v uv &>/dev/null; then
+        echo -e "${BOLD}Toolchain (existing setup, informational):${RESET}"
+        "$stock" --verdict any --quiet || true
+        echo
+    fi
 
     if (( missing > 0 )); then
         warn "$missing required tool(s) missing"
@@ -2308,6 +2441,10 @@ update() {
     info "Pulling latest changes..."
     run_cmd git pull
 
+    # Bypasses main()'s flow entirely and restows on its own -- must not
+    # skip the gate main() would otherwise have run.
+    _gate_toolchain_takeover
+
     info "Restowing home/ → ~/"
     _clean_stale_repo_links
     # Same sandbox caveat as stow_home() -- see the note there before trusting a dry run.
@@ -2334,6 +2471,9 @@ force_adopt() {
     echo
 
     if confirm "Proceed with stow --adopt?"; then
+        # force_adopt also (re)applies the hijack functions -- same gate as
+        # every other path that stows home/.zshrc.
+        _gate_toolchain_takeover
         _clean_stale_repo_links
         local -a stow_args=(--adopt --no-folding -t "$HOME" home)
         [[ "$VERBOSE" == true ]] && stow_args=(--adopt --no-folding -v -t "$HOME" home)
@@ -2631,6 +2771,10 @@ main() {
         exit 0
     fi
 
+    # --- Toolchain takeover: survey, disclose, gate (MUST precede stow_home --
+    # see the function's own comment for why not earlier / not skipped) ---
+    _gate_toolchain_takeover
+
     # --- Stow ---
     stow_home
 
@@ -2673,7 +2817,7 @@ done
 case "${ACTION:-}" in
     help)       show_help ;;
     check)      check_prerequisites ;;
-    stow-only)  stow_home; stow_platform ;;
+    stow-only)  _gate_toolchain_takeover; stow_home; stow_platform ;;
     uninstall)  uninstall ;;
     update)     update ;;
     force)      force_adopt ;;
