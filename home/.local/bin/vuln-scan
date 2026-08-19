@@ -131,7 +131,7 @@ def inventory():
 # --------------------------------------------------------------------------- #
 #  Scanning one package                                                        #
 # --------------------------------------------------------------------------- #
-def scan_one(client, name, version, revision):
+def scan_one(client, name, version, revision, absent_names=frozenset()):
     """(status, cpe, worst_score, findings). Never raises on network trouble."""
     key = V.formula_key(name)
 
@@ -148,7 +148,10 @@ def scan_one(client, name, version, revision):
         return ("unknown", None, None,
                 [{"note": "CPE resolution failed or throttled -- NOT verified clean"}])
     if target is False:
-        if key in V.CPE_ABSENT_OK:
+        # CPE_ABSENT_OK is the hand-curated, in-source list; absent_names is the
+        # DB-backed one triage_unknowns() fills in -- see its docstring for why
+        # this is not just hand-curated in source too.
+        if key in V.CPE_ABSENT_OK or key in absent_names:
             return ("skipped", None, None, [{"note": f"no CPE published for {key}"}])
         return ("unknown", None, None,
                 [{"note": f"no CPE published for {key} -- NOT verified clean"}])
@@ -216,6 +219,46 @@ def scan_one(client, name, version, revision):
     else:
         status = "clean"
     return (status, cpe, worst, findings)
+
+
+def triage_unknowns(store, client):
+    """Re-probe every UNKNOWN row's CPE resolution once, live.
+
+    Most UNKNOWN formulae are not a coverage bug: NVD's CPE dictionary is built
+    around enterprise software, and modern single-purpose OSS tools are largely
+    just not in it -- measured 2026-08-03, six formulae sampled came back six for
+    six with no CPE published anywhere. resolve_cpe() already returns False,
+    never "unknown", for that case (see its docstring: "a hard 0 here is
+    meaningful and final") -- what was missing was somewhere durable to RECORD
+    that finality, so a permanently-absent product would stop being re-asked and
+    re-counted as an open question every single scan.
+
+    Namesake-blocked formulae (V.CPE_NAMESAKE_BLOCK) are never re-probed: their
+    CPE resolves just fine, to different software, which is exactly why they are
+    UNKNOWN. Re-probing would look like a fresh resolution and risk reclassifying
+    them, which is precisely the false positive the block exists to prevent.
+
+    Anything still ambiguous after the probe (throttled, or a real product that
+    genuinely could not be resolved this time) is left exactly where it is, per
+    the same never-invent-a-clean-verdict rule as everywhere else in this tool.
+
+    Returns (checked, confirmed)."""
+    checked = confirmed = 0
+    for row in store.all_rows(SUBJECT):
+        if row["status"] != "unknown":
+            continue
+        key = V.formula_key(row["name"])
+        if key in V.CPE_NAMESAKE_BLOCK:
+            continue
+        checked += 1
+        if client.resolve_cpe(key) is False:
+            store.confirm_absent(key)
+            store.record(SUBJECT, row["name"], row["version"], row["revision"], None,
+                        "skipped", None,
+                        [{"note": f"no CPE published for {key} (confirmed absent, triaged)"}])
+            confirmed += 1
+    store.commit()
+    return checked, confirmed
 
 
 # --------------------------------------------------------------------------- #
@@ -313,12 +356,13 @@ def run_scan(store, args, announce):
     if todo:
         announce(len(todo), len(inv))
         client = V.NvdClient(V.nvd_api_key(), timeout=args.timeout)
+        absent_names = store.absent_names()
         for i, (name, version, revision) in enumerate(todo, 1):
             if args.progress:
                 pkg = name[:26]
                 print(f"\r  checking {i}/{len(todo)}  {pkg} ".ljust(56),
                       end="", file=sys.stderr, flush=True)
-            status, cpe, worst, findings = scan_one(client, name, version, revision)
+            status, cpe, worst, findings = scan_one(client, name, version, revision, absent_names)
             store.record(SUBJECT, name, version, revision, cpe, status, worst, findings)
             # Commit as we go: a shell that gets closed mid-scan should keep the
             # work already paid for rather than start from nothing next time.
@@ -564,6 +608,9 @@ def parse_args(argv):
                    help="acknowledge a finding for --ack-days")
     p.add_argument("--ack-days", type=int, default=30, help="acknowledgement lifetime (default 30)")
     p.add_argument("--ack-reason", default="", help="why it was acknowledged")
+    p.add_argument("--triage-unknowns", action="store_true",
+                   help="re-probe every UNKNOWN row once; record confirmed CPE "
+                        "absences so they stop being counted as unknown")
     return p.parse_args(argv)
 
 
@@ -578,6 +625,18 @@ def main(argv) -> int:
             store.ack(SUBJECT, args.ack[0], args.ack[1].upper(), args.ack_days, args.ack_reason)
             print(f"acknowledged {args.ack[1].upper()} for {args.ack[0]} "
                   f"({args.ack_days}d)")
+            return 0
+
+        if args.triage_unknowns:
+            client = V.NvdClient(V.nvd_api_key(), timeout=args.timeout)
+            checked, confirmed = triage_unknowns(store, client)
+            print(f"vuln-scan: re-probed {checked} unknown formula(e), "
+                  f"confirmed {confirmed} as having no CPE published anywhere "
+                  f"(now skipped, not unknown)")
+            remaining = checked - confirmed
+            if remaining:
+                print(C.dim(f"  {remaining} left unknown -- still throttled/ambiguous, "
+                            f"or a namesake-blocked formula was excluded from re-probing"))
             return 0
 
         def announce(n, total):

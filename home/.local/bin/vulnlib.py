@@ -439,8 +439,16 @@ CREATE TABLE IF NOT EXISTS acks (
     reason  TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (subject, name, cve_id)
 );
+CREATE TABLE IF NOT EXISTS cpe_absent (
+    name       TEXT PRIMARY KEY,   -- formula_key(), confirmed to publish no CPE
+    checked_at INTEGER NOT NULL
+);
 CREATE INDEX IF NOT EXISTS scanned_status ON scanned(status);
 """
+# cpe_absent is additive: CREATE TABLE IF NOT EXISTS runs on every connection
+# regardless of SCHEMA_VERSION, so an existing database picks it up without a
+# migration or a version bump -- bumping SCHEMA_VERSION would WIPE the acks and
+# scan history a mismatch triggers a rebuild for (see ScanStore._connect).
 
 
 class ScanStore:
@@ -534,6 +542,20 @@ class ScanStore:
             "INSERT OR REPLACE INTO acks(subject,name,cve_id,until,reason) VALUES (?,?,?,?,?)",
             (subject, name, cve_id, int(time.time()) + days * 86400, reason))
         self.conn.commit()
+
+    def absent_names(self) -> set:
+        """Formula keys confirmed, by a live re-probe, to publish no CPE anywhere.
+        A dynamic, DB-backed extension of the source-level CPE_ABSENT_OK set --
+        see triage_unknowns() in vuln-scan for how a name gets in here. Kept in
+        the DB rather than hand-curated in source: ~90 such facts is too many to
+        maintain by hand without some of them going stale silently."""
+        cur = self.conn.execute("SELECT name FROM cpe_absent")
+        return {r["name"] for r in cur.fetchall()}
+
+    def confirm_absent(self, name):
+        self.conn.execute(
+            "INSERT OR REPLACE INTO cpe_absent(name, checked_at) VALUES (?, ?)",
+            (name, int(time.time())))
 
     def all_rows(self, subject=None):
         if subject:
