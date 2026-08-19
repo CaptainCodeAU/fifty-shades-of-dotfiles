@@ -1,0 +1,524 @@
+#!/usr/bin/env -S uv run python3
+# /// script
+# requires-python = ">=3.10"
+# dependencies = []
+# ///
+#
+# ============================================================================
+#  toolchain-stocktake -- what Python/Node toolchain is ALREADY on this box?
+# ============================================================================
+#
+# WHY
+# ---
+# install.sh takes over Python (via uv) and Node's package manager (enforcing
+# pnpm, hard-blocking npm/npx/yarn) unconditionally, with zero disclosure
+# first -- fine on a machine that already wants this, a real surprise on a
+# machine that doesn't. This tool answers, before anything changes: what is
+# actually here right now? install.sh uses the answer to decide whether the
+# two big changes need a real, typed confirmation instead of routine Y/n.
+#
+# WHAT IT CHECKS
+# --------------
+# Python: every python/python3 on PATH, classified by real origin (uv,
+# Homebrew, system, pyenv, conda, asdf, mise, Nix) -- plus pyenv/asdf/conda/
+# mise ROOTS even when nothing on PATH currently resolves to them, pipx tools
+# (the concrete list of CLIs that would stop working), user site-packages,
+# a live $VIRTUAL_ENV / $CONDA_DEFAULT_ENV, and uv's own presence.
+#
+# Node: node's real origin (nvm, Homebrew, system, volta, fnm, asdf, mise,
+# apt/NodeSource), npm's version and GLOBAL package list, yarn/pnpm/bun
+# presence and origin, and whether ~/.npmrc points at a non-default registry
+# (a strong "real npm infrastructure here" signal).
+#
+# SAFETY
+# ------
+# Read-only. No network. No mutation. The only subprocess calls are version/
+# listing queries (`node -v`, `npm ls -g --depth=0 --json`, `uv --version`),
+# each wrapped with a timeout so a hung or missing tool cannot hang this one.
+# Subprocess calls never use shell=True, so they always reach the REAL binary
+# directly -- never a shell function (this matters specifically for npm/
+# python3, which this repo's own .zshrc hard-blocks in an interactive shell).
+#
+# EXIT CODES
+#   0  nothing FOREIGN for the requested --verdict subject
+#   1  FOREIGN found for the requested --verdict subject
+#   2  could not determine (env/usage error) -- CALLERS MUST TREAT AS 1.
+#      An unrun survey is not a clean survey.
+#
+# USAGE
+# -----
+#   toolchain-stocktake [--verdict {python,node,any}] [--json] [--md PATH]
+#                       [--quiet] [--no-color]
+# ============================================================================
+
+import argparse
+import json
+import os
+import platform
+import shutil
+import subprocess
+import sys
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+
+TIMEOUT_S = 5
+
+
+# --------------------------------------------------------------------------- #
+#  Terminal styling (honors NO_COLOR and non-tty)                             #
+# --------------------------------------------------------------------------- #
+def _supports_color() -> bool:
+    return sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
+
+
+class C:
+    enabled = _supports_color()
+
+    @staticmethod
+    def _w(code: str, s: str) -> str:
+        return f"\033[{code}m{s}\033[0m" if C.enabled else s
+
+    bold = staticmethod(lambda s: C._w("1", s))
+    dim = staticmethod(lambda s: C._w("2", s))
+    red = staticmethod(lambda s: C._w("31", s))
+    green = staticmethod(lambda s: C._w("32", s))
+    yellow = staticmethod(lambda s: C._w("33", s))
+    cyan = staticmethod(lambda s: C._w("36", s))
+
+
+def _run(argv: list[str]) -> str | None:
+    """Best-effort subprocess capture. Never raises, never hangs, never
+    reaches a shell (no shell=True) -- so a hijacked npm/python3 shell
+    function is never in the path; the real binary always is."""
+    try:
+        out = subprocess.run(argv, capture_output=True, text=True, timeout=TIMEOUT_S)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return out.stdout.strip() if out.returncode == 0 else None
+
+
+def _realpath(p: str | None) -> Path | None:
+    if not p:
+        return None
+    try:
+        return Path(p).resolve()
+    except OSError:
+        return None
+
+
+# --------------------------------------------------------------------------- #
+#  Python detection                                                           #
+# --------------------------------------------------------------------------- #
+def classify_python_origin(path: Path) -> str:
+    s = str(path)
+    if "/uv/python" in s or "/.local/share/uv" in s:
+        return "uv"
+    if "/pyenv/" in s or "/.pyenv/" in s:
+        return "pyenv"
+    if "/miniconda3/" in s or "/anaconda3/" in s or "/conda/" in s or "/envs/" in s:
+        return "conda"
+    if "/.asdf/" in s:
+        return "asdf"
+    if "/mise/" in s or "/.local/share/mise" in s:
+        return "mise"
+    if "/nix/store/" in s:
+        return "nix"
+    if "/opt/homebrew/" in s or "/usr/local/Cellar/" in s or "/Cellar/python" in s:
+        return "homebrew"
+    if s.startswith("/usr/bin/") or s.startswith("/usr/local/bin/python"):
+        return "system"
+    return "unknown"
+
+
+def find_python_interpreters() -> dict[str, str]:
+    """{resolved_path: origin} for every python/python3 on PATH."""
+    found = {}
+    for name in ("python", "python3"):
+        p = shutil.which(name)
+        rp = _realpath(p)
+        if rp and str(rp) not in found:
+            found[str(rp)] = classify_python_origin(rp)
+    return found
+
+
+def pipx_tools() -> list[str]:
+    venvs = Path.home() / ".local" / "pipx" / "venvs"
+    if not venvs.is_dir():
+        return []
+    try:
+        return sorted(p.name for p in venvs.iterdir() if p.is_dir())
+    except OSError:
+        return []
+
+
+def user_site_packages_present() -> bool:
+    lib = Path.home() / ".local" / "lib"
+    if not lib.is_dir():
+        return False
+    try:
+        for d in lib.glob("python3.*/site-packages"):
+            if any(d.iterdir()):
+                return True
+    except OSError:
+        pass
+    return False
+
+
+@dataclass
+class PythonVerdict:
+    interpreters: dict = field(default_factory=dict)  # path -> origin
+    pyenv_present: bool = False
+    pyenv_version_count: int = 0
+    asdf_python: bool = False
+    conda_present: bool = False
+    mise_present: bool = False
+    pipx: list = field(default_factory=list)
+    user_site_packages: bool = False
+    live_venv: str | None = None
+    live_conda_env: str | None = None
+    uv_present: bool = False
+    uv_version: str | None = None
+    foreign: bool = False
+    evidence: list = field(default_factory=list)
+
+
+def assess_python() -> PythonVerdict:
+    v = PythonVerdict()
+    v.interpreters = find_python_interpreters()
+
+    pyenv_root = Path.home() / ".pyenv"
+    v.pyenv_present = pyenv_root.is_dir()
+    if v.pyenv_present:
+        try:
+            v.pyenv_version_count = sum(
+                1 for p in (pyenv_root / "versions").iterdir() if p.is_dir()
+            ) if (pyenv_root / "versions").is_dir() else 0
+        except OSError:
+            v.pyenv_version_count = 0
+
+    tool_versions = Path.home() / ".tool-versions"
+    if (Path.home() / ".asdf").is_dir() and tool_versions.is_file():
+        try:
+            v.asdf_python = any(
+                line.strip().startswith("python ") for line in tool_versions.read_text().splitlines()
+            )
+        except OSError:
+            pass
+
+    v.conda_present = any(
+        (Path.home() / name).is_dir() for name in ("miniconda3", "anaconda3", "miniforge3")
+    ) or bool(os.environ.get("CONDA_PREFIX"))
+
+    v.mise_present = shutil.which("mise") is not None or (Path.home() / ".local" / "share" / "mise").is_dir()
+
+    v.pipx = pipx_tools()
+    v.user_site_packages = user_site_packages_present()
+    v.live_venv = os.environ.get("VIRTUAL_ENV")
+    v.live_conda_env = os.environ.get("CONDA_DEFAULT_ENV")
+
+    uv_path = shutil.which("uv")
+    v.uv_present = uv_path is not None
+    if v.uv_present:
+        # "uv 0.12.5 (Homebrew 2026-08-14 aarch64-apple-darwin)" -- the
+        # version is the SECOND token, not the last (verified live; the
+        # last token is the build platform, in parens).
+        out = _run([uv_path, "--version"])
+        parts = out.split() if out else []
+        v.uv_version = parts[1] if len(parts) > 1 else None
+
+    if v.pyenv_present:
+        v.evidence.append(f"pyenv installed ({v.pyenv_version_count} version(s))")
+        v.foreign = True
+    if v.asdf_python:
+        v.evidence.append("asdf manages a python version")
+        v.foreign = True
+    if v.conda_present:
+        v.evidence.append("conda/miniconda/miniforge present")
+        v.foreign = True
+    if v.mise_present:
+        v.evidence.append("mise present")
+        v.foreign = True
+    if v.pipx:
+        v.evidence.append(f"pipx tools installed: {', '.join(v.pipx)}")
+        v.foreign = True
+    if v.user_site_packages:
+        v.evidence.append("packages installed to user site-packages (pip install --user)")
+        v.foreign = True
+
+    return v
+
+
+# --------------------------------------------------------------------------- #
+#  Node detection                                                             #
+# --------------------------------------------------------------------------- #
+def classify_node_origin(path: Path) -> str:
+    s = str(path)
+    if "/.nvm/" in s:
+        return "nvm"
+    if "/.volta/" in s:
+        return "volta"
+    if "/fnm/" in s or "/.fnm/" in s:
+        return "fnm"
+    if "/.asdf/" in s:
+        return "asdf"
+    if "/mise/" in s or "/.local/share/mise" in s:
+        return "mise"
+    if "/opt/homebrew/" in s or "/usr/local/Cellar/" in s or "/Cellar/node" in s:
+        return "homebrew"
+    if "/nix/store/" in s:
+        return "nix"
+    if s.startswith("/usr/bin/") or s.startswith("/usr/local/bin/node"):
+        return "system/apt"
+    return "unknown"
+
+
+def npmrc_registry() -> str | None:
+    npmrc = Path.home() / ".npmrc"
+    if not npmrc.is_file():
+        return None
+    try:
+        for line in npmrc.read_text().splitlines():
+            line = line.strip()
+            if line.startswith("registry="):
+                return line.split("=", 1)[1].strip()
+    except OSError:
+        pass
+    return None
+
+
+# Bundled with npm/Node itself since Node 16.9 -- present on EVERY install
+# regardless of whether the person ever used npm on purpose. Verified live
+# (`npm ls -g --depth=0 --json` on this Mac's nvm-managed node): both show
+# up unconditionally. Neither is a "real npm usage" signal on its own.
+NPM_BUNDLED = {"npm", "corepack"}
+
+
+def npm_global_packages(npm_path: str) -> list[str]:
+    out = _run([npm_path, "ls", "-g", "--depth=0", "--json"])
+    if not out:
+        return []
+    try:
+        data = json.loads(out)
+    except json.JSONDecodeError:
+        return []
+    deps = data.get("dependencies", {}) or {}
+    return sorted(name for name in deps if name not in NPM_BUNDLED)
+
+
+@dataclass
+class NodeVerdict:
+    node_path: str | None = None
+    node_origin: str | None = None
+    node_version: str | None = None
+    npm_version: str | None = None
+    npm_global_packages: list = field(default_factory=list)
+    yarn_present: bool = False
+    pnpm_present: bool = False
+    bun_present: bool = False
+    corepack_present: bool = False
+    npmrc_registry: str | None = None
+    foreign: bool = False
+    evidence: list = field(default_factory=list)
+
+
+DEFAULT_REGISTRY = "https://registry.npmjs.org/"
+
+
+def assess_node() -> NodeVerdict:
+    v = NodeVerdict()
+
+    node_path = shutil.which("node")
+    if node_path:
+        rp = _realpath(node_path)
+        v.node_path = str(rp) if rp else node_path
+        v.node_origin = classify_node_origin(rp) if rp else "unknown"
+        v.node_version = _run([node_path, "-v"])
+
+    npm_path = shutil.which("npm")
+    if npm_path:
+        v.npm_version = _run([npm_path, "-v"])
+        v.npm_global_packages = npm_global_packages(npm_path)
+
+    v.yarn_present = shutil.which("yarn") is not None
+    v.pnpm_present = shutil.which("pnpm") is not None
+    v.bun_present = shutil.which("bun") is not None
+    v.corepack_present = shutil.which("corepack") is not None
+    v.npmrc_registry = npmrc_registry()
+
+    if v.node_origin in ("volta", "fnm"):
+        v.evidence.append(f"node installed via {v.node_origin}")
+        v.foreign = True
+    if v.yarn_present:
+        v.evidence.append("yarn is on PATH")
+        v.foreign = True
+    if v.npm_global_packages:
+        v.evidence.append(f"npm global packages installed: {', '.join(v.npm_global_packages)}")
+        v.foreign = True
+    if v.npmrc_registry and v.npmrc_registry.rstrip("/") + "/" != DEFAULT_REGISTRY:
+        v.evidence.append(f"~/.npmrc points at a non-default registry: {v.npmrc_registry}")
+        v.foreign = True
+
+    return v
+
+
+# --------------------------------------------------------------------------- #
+#  Reporting                                                                  #
+# --------------------------------------------------------------------------- #
+def print_terminal(py: PythonVerdict, node: NodeVerdict, quiet: bool) -> None:
+    if quiet:
+        if py.foreign:
+            print(f"toolchain-stocktake: python FOREIGN -- {'; '.join(py.evidence)}")
+        if node.foreign:
+            print(f"toolchain-stocktake: node FOREIGN -- {'; '.join(node.evidence)}")
+        if not py.foreign and not node.foreign:
+            print("toolchain-stocktake: clean")
+        return
+
+    print(C.bold("Python:"))
+    if py.interpreters:
+        for path, origin in sorted(py.interpreters.items()):
+            print(f"  {path}  ({origin})")
+    else:
+        print(C.dim("  none found on PATH"))
+    if py.uv_present:
+        print(f"  uv: {py.uv_version or 'present'}")
+    if py.live_venv:
+        print(C.dim(f"  live \\$VIRTUAL_ENV: {py.live_venv}"))
+    if py.live_conda_env:
+        print(C.dim(f"  live \\$CONDA_DEFAULT_ENV: {py.live_conda_env}"))
+    if py.foreign:
+        print(C.yellow("  FOREIGN:"))
+        for e in py.evidence:
+            print(f"    - {e}")
+    else:
+        print(C.green("  clean (uv-managed or untouched system python only)"))
+
+    print()
+    print(C.bold("Node:"))
+    if node.node_path:
+        print(f"  node {node.node_version or '?'}  ({node.node_origin})  {node.node_path}")
+    else:
+        print(C.dim("  node not found on PATH"))
+    if node.npm_version:
+        print(f"  npm {node.npm_version}")
+    for tool, present in (("yarn", node.yarn_present), ("pnpm", node.pnpm_present), ("bun", node.bun_present)):
+        if present:
+            print(f"  {tool}: present")
+    if node.foreign:
+        print(C.yellow("  FOREIGN:"))
+        for e in node.evidence:
+            print(f"    - {e}")
+    else:
+        print(C.green("  clean (nvm/pnpm/bun only, or untouched)"))
+
+
+def to_json(py: PythonVerdict, node: NodeVerdict) -> dict:
+    return {
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "platform": platform.system(),
+        "python": {
+            "interpreters": py.interpreters,
+            "pyenv_present": py.pyenv_present,
+            "pyenv_version_count": py.pyenv_version_count,
+            "asdf_python": py.asdf_python,
+            "conda_present": py.conda_present,
+            "mise_present": py.mise_present,
+            "pipx": py.pipx,
+            "user_site_packages": py.user_site_packages,
+            "live_venv": py.live_venv,
+            "live_conda_env": py.live_conda_env,
+            "uv_present": py.uv_present,
+            "uv_version": py.uv_version,
+            "foreign": py.foreign,
+            "evidence": py.evidence,
+        },
+        "node": {
+            "node_path": node.node_path,
+            "node_origin": node.node_origin,
+            "node_version": node.node_version,
+            "npm_version": node.npm_version,
+            "npm_global_packages": node.npm_global_packages,
+            "yarn_present": node.yarn_present,
+            "pnpm_present": node.pnpm_present,
+            "bun_present": node.bun_present,
+            "corepack_present": node.corepack_present,
+            "npmrc_registry": node.npmrc_registry,
+            "foreign": node.foreign,
+            "evidence": node.evidence,
+        },
+    }
+
+
+# --------------------------------------------------------------------------- #
+#  CLI                                                                        #
+# --------------------------------------------------------------------------- #
+def parse_args(argv):
+    p = argparse.ArgumentParser(
+        prog="toolchain-stocktake",
+        description="Survey the machine's existing Python/Node toolchain before an opinionated takeover (read-only).",
+    )
+    p.add_argument("--verdict", choices=["python", "node", "any"], default="any",
+                    help="which subject's foreign-ness decides the exit code (default: any)")
+    p.add_argument("--json", dest="as_json", action="store_true", help="print JSON instead of the table")
+    p.add_argument("--md", dest="md_path", help="also write a markdown snapshot here")
+    p.add_argument("--quiet", action="store_true", help="minimal output (one line per foreign subject)")
+    p.add_argument("--no-color", action="store_true", help="disable ANSI color regardless of tty")
+    return p.parse_args(argv)
+
+
+def build_markdown(py: PythonVerdict, node: NodeVerdict) -> str:
+    lines = [
+        "# toolchain-stocktake snapshot",
+        "",
+        f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S %Z')}",
+        "",
+        "## Python",
+        f"- Interpreters: {py.interpreters or 'none found'}",
+        f"- uv: {'present (' + (py.uv_version or '?') + ')' if py.uv_present else 'absent'}",
+        f"- Foreign: {'YES' if py.foreign else 'no'}",
+    ]
+    lines += [f"  - {e}" for e in py.evidence]
+    lines += [
+        "",
+        "## Node",
+        f"- node: {node.node_origin or 'not found'} {node.node_version or ''}".rstrip(),
+        f"- npm global packages: {', '.join(node.npm_global_packages) or 'none'}",
+        f"- Foreign: {'YES' if node.foreign else 'no'}",
+    ]
+    lines += [f"  - {e}" for e in node.evidence]
+    return "\n".join(lines) + "\n"
+
+
+def main(argv) -> int:
+    args = parse_args(argv)
+    if args.no_color:
+        C.enabled = False
+
+    try:
+        py = assess_python()
+        node = assess_node()
+    except Exception as e:  # noqa: BLE001 -- an unrun survey must escalate, not vanish
+        print(C.red(f"toolchain-stocktake: could not complete survey: {e}"), file=sys.stderr)
+        return 2
+
+    if args.as_json:
+        print(json.dumps(to_json(py, node), indent=2))
+    else:
+        print_terminal(py, node, args.quiet)
+
+    if args.md_path:
+        try:
+            Path(args.md_path).expanduser().write_text(build_markdown(py, node))
+        except OSError as e:
+            print(C.yellow(f"  could not write markdown snapshot: {e}"), file=sys.stderr)
+
+    if args.verdict == "python":
+        return 1 if py.foreign else 0
+    if args.verdict == "node":
+        return 1 if node.foreign else 0
+    return 1 if (py.foreign or node.foreign) else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
