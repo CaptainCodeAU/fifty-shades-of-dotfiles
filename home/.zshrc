@@ -243,6 +243,21 @@ if [[ "$IS_LINUX" == "true" || "$IS_WSL" == "true" ]]; then
     )
 fi
 
+# Second, independent source for pnpm's minimumReleaseAge/trustPolicy, on top
+# of home/.config/pnpm/config.yaml. pnpm 11.18.0 hardened self-update to read
+# these ONLY from the built-in default, global config, a PNPM_CONFIG_* env
+# var, or a CLI flag (a project can no longer weaken them) -- but if
+# config.yaml or its platform path bridge is ever unreachable, self-update
+# would otherwise silently fall back to pnpm's own built-in defaults: 1 day
+# cooldown instead of 3, and trust-checking OFF instead of on. These two vars
+# close that gap. Verified against pnpm's Rust config source (env_overlay.rs)
+# 2026-08-19: read as PNPM_CONFIG_MINIMUM_RELEASE_AGE / PNPM_CONFIG_TRUST_POLICY,
+# same casing/values as config.yaml. Note: these apply to EVERY pnpm command,
+# not just self-update, and outrank a project's own pnpm-workspace.yaml --
+# intentional given this repo's posture, but worth knowing.
+export PNPM_CONFIG_MINIMUM_RELEASE_AGE="4320"
+export PNPM_CONFIG_TRUST_POLICY="no-downgrade"
+
 
 # ==============================================================================
 # 6. UI, Zsh, Oh My Zsh & Powerlevel10k
