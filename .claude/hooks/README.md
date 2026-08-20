@@ -253,7 +253,7 @@ Runs on `SessionStart` (`startup|resume`). Read-only CVE check of the pinned pnp
 
 ### herdr-cooldown-check.sh
 
-Runs on `SessionStart`, read-only. Reports whether a herdr upgrade is eligible under the 3-day release cooldown, and whether the guards that enforce it are still in place. herdr is the one tool in this estate that can move on its own: it ships a self-updater plus two default-on background calls to `herdr.dev` (`update.version_check`, and `update.manifest_check`, which reloads remote agent-detection manifests into the _running_ server). Wired in this project's `settings.json`. See [`docs/HERDR.md`](../../docs/HERDR.md).
+Runs on `SessionStart`, read-only. Reports whether a herdr upgrade is eligible under the 7-day release cooldown, and whether the guards that enforce it are still in place. herdr is the one tool in this estate that can move on its own: it ships a self-updater plus two default-on background calls to `herdr.dev` (`update.version_check`, and `update.manifest_check`, which reloads remote agent-detection manifests into the _running_ server). Wired in this project's `settings.json`. See [`docs/HERDR.md`](../../docs/HERDR.md).
 
 ### pre-commit-check.sh
 

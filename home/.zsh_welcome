@@ -329,7 +329,7 @@ _show_welcome_full() {
     fi
 
     # --- herdr (release cooldown enforcement differs by install method) ---
-    # macOS: herdr comes from Homebrew, so the 3-day cooldown is enforced by
+    # macOS: herdr comes from Homebrew, so the 7-day cooldown is enforced by
     # the Homebrew PIN -- an unpinned herdr means a routine `brew upgrade` can
     # adopt a same-day release. Cheap to check: the pin is a symlink under
     # $HOMEBREW_PREFIX, so no `brew` subprocess is needed.

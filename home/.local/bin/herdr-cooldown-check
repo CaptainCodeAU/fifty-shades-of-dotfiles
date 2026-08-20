@@ -5,7 +5,7 @@
 # ///
 #
 # ============================================================================
-#  herdr-cooldown-check -- is a herdr upgrade eligible under the 3-day cooldown?
+#  herdr-cooldown-check -- is a herdr upgrade eligible under the cooldown?
 # ============================================================================
 #
 # WHY
@@ -17,14 +17,16 @@
 # calls to herdr.dev, so left alone it is the one tool in the estate that can
 # change underneath us with zero delay.
 #
-# This tool restores the 3-day gate for herdr the only way that works for a
+# This tool restores the cooldown gate for herdr the only way that works for a
 # Homebrew-managed binary: keep the formula PINNED, and report when the newest
-# upstream release has aged past the cooldown so the maintainer can unpin,
-# upgrade and re-pin deliberately.
+# upstream release has aged past the cooldown. On macOS, install.sh's own
+# _preflight_herdr_bump_check reads this tool's --json output and performs the
+# unpin/upgrade/re-pin automatically once ELIGIBLE -- this tool itself stays
+# read-only regardless (see SAFETY below); it never acts on its own findings.
 #
 # WHAT IT CHECKS (4 subjects)
 #   1. version     installed herdr vs newest upstream stable release
-#   2. cooldown    age of that release vs HERDR_COOLDOWN_DAYS (default 3)
+#   2. cooldown    age of that release vs HERDR_COOLDOWN_DAYS (default 7)
 #   3. pin         is the Homebrew formula pinned (so `brew upgrade` can't take it)
 #   4. phone-home  are update.version_check / update.manifest_check disabled
 #
@@ -54,7 +56,7 @@
 #
 # USAGE
 #   herdr-cooldown-check [options]
-#     --cooldown-days N  age gate in days (default: $HERDR_COOLDOWN_DAYS or 3)
+#     --cooldown-days N  age gate in days (default: $HERDR_COOLDOWN_DAYS or 7)
 #     --timeout SEC      per-network-call timeout (default: 8)
 #     --quiet            print only actionable + SKIPPED lines
 #     --json             emit a JSON report instead of the table
@@ -264,7 +266,7 @@ def latest_release(timeout: int) -> tuple[str, datetime] | None:
 def main() -> int:
     ap = argparse.ArgumentParser(add_help=True)
     ap.add_argument("--cooldown-days", type=float,
-                    default=float(os.environ.get("HERDR_COOLDOWN_DAYS", "3")))
+                    default=float(os.environ.get("HERDR_COOLDOWN_DAYS", "7")))
     ap.add_argument("--timeout", type=int, default=8)
     ap.add_argument("--quiet", action="store_true")
     ap.add_argument("--json", dest="as_json", action="store_true")

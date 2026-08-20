@@ -123,7 +123,13 @@ BUN_MIN_VERSION="1.3.0"
 # you run. The commands below remain valid for a manual/ad-hoc check or bump:
 #   herdr-cooldown-check
 #   brew unpin herdr && brew upgrade herdr && brew pin herdr
-HERDR_COOLDOWN_DAYS="3"
+# Raised from 3 to 7 (2026-08-20) after checking herdr's actual disclosed-vuln
+# history: one real report took ~5.8 days to reach a shipped fix, and a second
+# was auto-closed by their triage bot in 8 seconds with no human ever seeing
+# it -- 3 days wasn't the right lever regardless, but 7 buys more of the
+# window that DOES sometimes work (community/maintainer response) without
+# pretending the gate alone solves a triage-process gap. See docs/HERDR.md.
+HERDR_COOLDOWN_DAYS="7"
 
 # --- herdr pinned release (Linux/WSL only) ---
 # macOS gets herdr from Homebrew, whose formula hashes the SOURCE tarball and

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SessionStart hook (read-only): is a herdr upgrade eligible under the 3-day
+# SessionStart hook (read-only): is a herdr upgrade eligible under the 7-day
 # release cooldown, and are the guards that enforce it still in place?
 #
 # Purpose: herdr is the one tool in this estate that can move on its own --
