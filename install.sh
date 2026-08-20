@@ -790,6 +790,48 @@ _preflight_herdr_bump_check() {
     return 0
 }
 
+# Distinct from _herdr_server_restart_status on purpose: that one guards an
+# ALREADY-running server (disruptive to touch, so it only ever warns). This
+# guards a server that is supposed to be running (its launchd plist exists)
+# but currently ISN'T -- a down server has no attached sessions to protect,
+# so starting it here is safe and needs no confirmation, same as any other
+# preflight fix in this script. Without this, a crashed-and-not-restarted
+# herdr (or one that didn't survive a reboot) shows a false green "server
+# managed by launchd" in the prerequisites summary and install.sh does
+# nothing to fix it -- confirmed live: the summary only checks the plist
+# FILE exists, never whether the service it describes is actually up.
+_preflight_herdr_service_health_check() {
+    [[ "$SKIP_PREFLIGHT" == true ]] && return 0
+    [[ "$(check_os)" == "macos" ]] || return 0
+    command -v herdr &>/dev/null || return 0
+    command -v brew &>/dev/null || return 0
+    command -v jq &>/dev/null || return 0
+    # Only relevant once someone opted into launchd management at all -- a box
+    # that never ran `brew services start herdr` isn't broken, it's just
+    # unmanaged (see the "~ server not managed" note in check_prerequisites).
+    [[ -f "$HOME/Library/LaunchAgents/homebrew.mxcl.herdr.plist" ]] || return 0
+
+    local svc_json=""
+    svc_json=$(brew services info herdr --json 2>/dev/null) || true
+    [[ -n "$svc_json" ]] || return 0
+    local running
+    running=$(jq -r '.[0].running // false' <<<"$svc_json" 2>/dev/null) || return 0
+    [[ "$running" == "true" ]] && return 0
+
+    step "Pre-flight herdr service health check"
+    warn "herdr is supposed to be managed by launchd but isn't running — no attached sessions to protect, starting it."
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[dry-run] No changes made. Re-run without --dry-run to start herdr."
+        return 0
+    fi
+    if run_cmd brew services restart herdr; then
+        success "herdr service restarted."
+    else
+        warn "brew services restart herdr failed — check ${CYAN}brew services info herdr${RESET} manually."
+    fi
+    return 0
+}
+
 _preflight_herdr_release_check() {
     [[ "$SKIP_PREFLIGHT" == true ]] && return 0
     # Linux/WSL only -- macOS herdr is Homebrew-managed, see _preflight_herdr_pin_check.
@@ -1227,7 +1269,25 @@ check_prerequisites() {
             echo -e "      ${YELLOW}~${RESET} config.toml not stow-linked — re-run stow (phone-home may be live)"
         fi
         if [[ -f "$HOME/Library/LaunchAgents/homebrew.mxcl.herdr.plist" ]]; then
-            echo -e "      ${GREEN}✓${RESET} server managed by launchd (crash-restart + start at login)"
+            # The plist existing only means launchd is SET UP to manage it, not that
+            # it's actually up right now (a crash, a reboot, or FileVault's pre-boot
+            # ceiling -- see docs/HERDR.md -- can all leave it down with the plist
+            # still present). _preflight_herdr_service_health_check runs earlier in
+            # this script and would already have restarted it if it were down and
+            # SKIP_PREFLIGHT wasn't set, but this line reports the real state rather
+            # than assume that ran.
+            local _herdr_svc_running=""
+            if command -v jq &>/dev/null; then
+                _herdr_svc_running=$(brew services info herdr --json 2>/dev/null \
+                    | jq -r '.[0].running // false' 2>/dev/null)
+            fi
+            if [[ "$_herdr_svc_running" == "true" ]]; then
+                echo -e "      ${GREEN}✓${RESET} server managed by launchd and running (crash-restart + start at login)"
+            elif [[ "$_herdr_svc_running" == "false" ]]; then
+                echo -e "      ${YELLOW}~${RESET} launchd plist present but server NOT running — ${CYAN}brew services restart herdr${RESET}"
+            else
+                echo -e "      ${GREEN}✓${RESET} server managed by launchd (crash-restart + start at login)"
+            fi
         elif [[ "$(check_os)" == "macos" ]]; then
             echo -e "      ${YELLOW}~${RESET} server not managed — ${CYAN}brew services start herdr${RESET} (stop any running server FIRST)"
         fi
@@ -2886,6 +2946,11 @@ main() {
     # above so it always starts from a known-pinned state. herdr-cooldown-check itself stays
     # read-only -- this just runs the same manual commands it recommends, automatically. ---
     _preflight_herdr_bump_check
+
+    # --- herdr service health (macOS): start it back up if launchd should be managing it
+    # but it's not actually running. Safe and unconditional -- a down server has no
+    # attached sessions to protect, unlike _herdr_server_restart_status above. ---
+    _preflight_herdr_service_health_check
 
     # --- herdr release pre-flight (Linux/WSL): re-apply a pin bump on a box that
     # already has herdr installed, since check_prerequisites never flags it "missing" ---
