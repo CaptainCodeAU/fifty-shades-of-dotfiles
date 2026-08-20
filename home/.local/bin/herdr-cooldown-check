@@ -24,11 +24,23 @@
 # unpin/upgrade/re-pin automatically once ELIGIBLE -- this tool itself stays
 # read-only regardless (see SAFETY below); it never acts on its own findings.
 #
-# WHAT IT CHECKS (4 subjects)
-#   1. version     installed herdr vs newest upstream stable release
-#   2. cooldown    age of that release vs HERDR_COOLDOWN_DAYS (default 7)
-#   3. pin         is the Homebrew formula pinned (so `brew upgrade` can't take it)
-#   4. phone-home  are update.version_check / update.manifest_check disabled
+# WHAT IT CHECKS (5 subjects)
+#   1. homebrew-lag informational only: is Homebrew's current formula version
+#                    behind GitHub's absolute newest tag? (see GATING CANDIDATE)
+#   2. version     installed herdr vs the gating candidate (see below)
+#   3. cooldown    age of the gating candidate vs HERDR_COOLDOWN_DAYS (default 7)
+#   4. pin         is the Homebrew formula pinned (so `brew upgrade` can't take it)
+#   5. phone-home  are update.version_check / update.manifest_check disabled
+#
+# GATING CANDIDATE -- the version cooldown is actually checked against
+#   For a brew install, this is whatever `brew upgrade herdr` would ACTUALLY
+#   install right now (`brew info herdr --json=v2`), not GitHub's absolute
+#   newest tag. Homebrew-core only moves the formula when a maintainer bumps
+#   it, which lags behind upstream releases by an unpredictable amount --
+#   gating against GitHub's latest instead of what Homebrew can deliver was a
+#   real bug: it held back an upgrade that would only ever fetch an OLDER,
+#   already-eligible version anyway. For a direct (Linux/WSL) install there is
+#   no such intermediary, so GitHub's absolute latest IS the candidate there.
 #
 # WHY PIN RATHER THAN TRUST THE CHANNEL
 #   herdr's own `update.channel` only gates stable-vs-preview, not age, and
@@ -43,9 +55,11 @@
 #   `herdr server update-agent-manifests` deliberately instead.
 #
 # DATA SOURCE
-#   GitHub's releases/latest endpoint, which already excludes prereleases (so
-#   the daily `preview-*` tags can never be proposed):
-#     GET https://api.github.com/repos/ogulcancelik/herdr/releases/latest
+#   GitHub's releases endpoints, which already exclude prereleases (so the
+#   daily `preview-*` tags can never be proposed):
+#     GET https://api.github.com/repos/herdrdev/herdr/releases/latest
+#     GET https://api.github.com/repos/herdrdev/herdr/releases/tags/<tag>
+#   plus `brew info herdr --json=v2` for brew installs (local, no network).
 #   Unauthenticated (60 req/h/IP is ample at a 6h cache). $GH_TOKEN is used
 #   when present purely to raise that ceiling.
 #
@@ -118,6 +132,25 @@ def install_method() -> str:
         if rc == 0 and out:
             return "brew"
     return "direct"
+
+
+def homebrew_stable_version(timeout: int) -> str | None:
+    """The version `brew upgrade herdr` would ACTUALLY install right now, or
+    None on any failure. This is NOT necessarily GitHub's newest release --
+    Homebrew-core only moves the herdr formula when a maintainer notices and
+    bumps it, which lags behind upstream releases by an unpredictable amount.
+    Gating cooldown against GitHub's /releases/latest instead of this was a
+    real bug: it can hold back a `brew upgrade` that would only ever fetch an
+    OLDER, long-since-eligible version anyway, because the version being
+    gated (GitHub's absolute latest) isn't even the one Homebrew can deliver."""
+    rc, out = run(["brew", "info", "herdr", "--json=v2"], timeout=timeout)
+    if rc != 0 or not out:
+        return None
+    try:
+        data = json.loads(out)
+        return data["formulae"][0]["versions"]["stable"]
+    except (ValueError, KeyError, IndexError, TypeError):
+        return None
 
 
 def pin_path(prefix: str | None = None) -> str:
@@ -263,6 +296,34 @@ def latest_release(timeout: int) -> tuple[str, datetime] | None:
     return tag, when
 
 
+def release_by_tag(tag: str, timeout: int) -> datetime | None:
+    """Publish time for one specific tag (e.g. "v0.8.0"), or None on failure.
+    Same shape as latest_release() but for a version we already know the name
+    of, instead of "whatever GitHub currently calls newest"."""
+    req = urllib.request.Request(
+        f"https://api.github.com/repos/{REPO}/releases/tags/{tag}",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "herdr-cooldown-check",
+        },
+    )
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError):
+        return None
+    published = data.get("published_at")
+    if not published:
+        return None
+    try:
+        return datetime.fromisoformat(published.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(add_help=True)
     ap.add_argument("--cooldown-days", type=float,
@@ -300,7 +361,29 @@ def main() -> int:
     if rel is None:
         rows.append(("version", SKIP, "could not reach the GitHub releases API"))
     else:
-        tag, published = rel
+        upstream_tag, upstream_published = rel
+        report["upstream_latest"] = upstream_tag
+        report["upstream_latest_published"] = upstream_published.isoformat()
+
+        # The GATING candidate: for brew, this is whatever `brew upgrade herdr`
+        # would ACTUALLY install right now, which can lag well behind GitHub's
+        # newest tag (Homebrew-core only moves when a maintainer bumps the
+        # formula). Gating against GitHub's absolute latest instead was a real
+        # bug -- it can hold back an upgrade that would only ever fetch an
+        # older, long-since-eligible version anyway. Non-brew installs have no
+        # such intermediary, so GitHub's latest IS the candidate there.
+        tag, published = upstream_tag, upstream_published
+        if method == "brew":
+            brew_ver = homebrew_stable_version(args.timeout)
+            if brew_ver is not None and semver(brew_ver) != semver(upstream_tag):
+                brew_tag = f"v{brew_ver}"
+                brew_published = release_by_tag(brew_tag, args.timeout)
+                if brew_published is not None:
+                    tag, published = brew_tag, brew_published
+                    rows.append(("homebrew-lag", SKIP,
+                                 f"Homebrew offers {brew_tag}; GitHub's newest is "
+                                 f"{upstream_tag} but isn't packaged yet"))
+
         want = semver(tag)
         age_days = (datetime.now(timezone.utc) - published).total_seconds() / 86400
         report["latest"] = tag

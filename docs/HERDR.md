@@ -63,22 +63,38 @@ checker's `--json` report and runs the three-step upgrade only when the `cooldow
 subject says `ACTION` (and only when the checker's own self-test passes — a broken
 detector skips instead of guessing). The checker stays fully usable standalone.
 
-## What the checker checks (4 subjects)
+## What the checker checks (5 subjects)
 
-| #   | Subject      | Question                                                         |
-| --- | ------------ | ---------------------------------------------------------------- |
-| 1   | `version`    | is the installed build behind the newest upstream stable?        |
-| 2   | `cooldown`   | has that release aged past `HERDR_COOLDOWN_DAYS`?                |
-| 3   | `pin`        | is the Homebrew formula still pinned?                            |
-| 4   | `phone-home` | are `update.version_check` and `update.manifest_check` disabled? |
+| #   | Subject        | Question                                                                                  |
+| --- | -------------- | ----------------------------------------------------------------------------------------- |
+| 1   | `homebrew-lag` | informational: is Homebrew's current formula version behind GitHub's absolute newest tag? |
+| 2   | `version`      | is the installed build behind the gating candidate (see below)?                           |
+| 3   | `cooldown`     | has the gating candidate aged past `HERDR_COOLDOWN_DAYS`?                                 |
+| 4   | `pin`          | is the Homebrew formula still pinned?                                                     |
+| 5   | `phone-home`   | are `update.version_check` and `update.manifest_check` disabled?                          |
 
-Subjects 3 and 4 exist because a gate nobody re-checks is a gate that quietly
+Subjects 4 and 5 exist because a gate nobody re-checks is a gate that quietly
 lapses. A missing config key is reported as **not** disabled — the upstream
 default is `true`, so silence is not consent.
 
-**Data source.** GitHub's `releases/latest` endpoint, which already excludes
-prereleases — so the vendor's near-daily `preview-*` tags can never be proposed.
-Unauthenticated (`$GH_TOKEN` is used only to raise the rate ceiling).
+**The gating candidate is not always GitHub's absolute newest tag.** For a
+brew install, it's whatever `brew upgrade herdr` would actually install right
+now (`brew info herdr --json=v2`) — Homebrew-core only moves the formula when
+a maintainer notices and bumps it, which lags behind upstream releases
+unpredictably. Gating cooldown against GitHub's `releases/latest` regardless
+was a real bug: found live on 2026-08-20, when GitHub's newest was v0.8.2 but
+Homebrew still only offered v0.8.0 (already 16+ days past cooldown) — the old
+logic held every Mac at v0.7.5, waiting on a release Homebrew couldn't even
+deliver yet, instead of upgrading to the older release that was genuinely
+safe and already installable. Non-brew (Linux/WSL) installs have no such
+intermediary, so GitHub's absolute latest is the candidate there, same as
+before.
+
+**Data source.** GitHub's `releases/latest` and `releases/tags/<tag>`
+endpoints, which already exclude prereleases — so the vendor's near-daily
+`preview-*` tags can never be proposed — plus `brew info herdr --json=v2` for
+brew installs (local, no network). Unauthenticated (`$GH_TOKEN` is used only
+to raise the rate ceiling).
 
 ## How it runs
 
@@ -213,7 +229,7 @@ Both guards are surfaced rather than assumed. `install.sh --check` reports the
 pin and whether the config is stow-linked, and the shell welcome banner carries
 a `herdr:` line showing the version and pin state (read from a symlink under
 `$HOMEBREW_PREFIX`, so it costs no `brew` subprocess). An unpinned herdr is
-shown as an error, not a note — the pin *is* the cooldown.
+shown as an error, not a note — the pin _is_ the cooldown.
 
 Pull agent-detection manifests deliberately instead, when you want them:
 
@@ -288,8 +304,8 @@ extra copy sits in system memory and, on supported hardware, the SMC); pair
 regular use with `sudo pmset -a destroyfvkeyonstandby 1`.
 
 **In practice this matters less than it first appears**, because herdr starts its
-own server on attach — upstream: *"connects over SSH, starts or attaches to the
-remote Herdr server."* After any reboot, the first attach brings the server up.
+own server on attach — upstream: _"connects over SSH, starts or attaches to the
+remote Herdr server."_ After any reboot, the first attach brings the server up.
 The service definition's real value is crash-restart, not cold start.
 
 Note also that `brew services start` without `sudo` installs a **LaunchAgent**,
@@ -344,7 +360,7 @@ error: remote server stop failed: server did not stop within 15000ms; sockets ar
 ```
 
 Nothing in that output names launchd, which is what makes it expensive to
-diagnose. `herdr --remote` produces it too, so it reads as a *remote* problem
+diagnose. `herdr --remote` produces it too, so it reads as a _remote_ problem
 when the cause is entirely local to the server box.
 
 Confirm it in one command — `runs` climbing with `last exit code = 0` is the
@@ -453,8 +469,8 @@ re-made with `--remote-keybindings server`.
 ## herdr and tmux
 
 Upstream positions herdr as a tmux-class multiplexer — the keyboard docs open with
-*"Coming from tmux or zellij? You already know this model"*, and the remote docs
-describe SSH-then-`herdr` as *"the tmux-style path"*. Panes are genuine terminals
+_"Coming from tmux or zellij? You already know this model"_, and the remote docs
+describe SSH-then-`herdr` as _"the tmux-style path"_. Panes are genuine terminals
 (it vendors libghostty-vt, the Ghostty VT engine) with splits, tabs, scrollback,
 copy mode, named sessions and detach/reattach.
 
@@ -508,8 +524,8 @@ Measured against this repo's `home/.tmux.conf` and `home/.zsh_cursor_functions`:
 tabs. Everything else already matched tmux by default.
 
 One binding is **not** a tmux port: prefix-free `shift+up` / `shift+down` walk
-`previous_agent` / `next_agent`. herdr ships both actions as *"optional, unset by
-default"*, so out of the box there is no agent-switching key at all — moving
+`previous_agent` / `next_agent`. herdr ships both actions as _"optional, unset by
+default"_, so out of the box there is no agent-switching key at all — moving
 between agents means moving between the panes and tabs they happen to live in.
 They complete the arrow cluster: left/right across tabs, up/down across agents.
 Scope is the whole session rather than the current workspace, and because
@@ -560,7 +576,7 @@ comfort: `type = "shell"` runs detached, so a large clipboard otherwise talks
 until it finishes. Copy mode feeds it too — `prefix+[`, `v`, `y`, then speak —
 which matters when the text is a screen away from the pointer.
 
-Requires *"Applications in terminal may access clipboard"* in iTerm2, without
+Requires _"Applications in terminal may access clipboard"_ in iTerm2, without
 which the drag never reaches the clipboard and the key appears dead.
 
 The no-config alternative is to hold **option while dragging**, producing a
@@ -592,8 +608,8 @@ Two properties keep this defensible:
 - **They land outside this repo.** `~/.claude/settings.json` is a real file
   here, not a stow symlink, so the edit did not reach the dotfiles tree.
 
-One property that deserves attention: each file declares *"managed by herdr;
-reinstalling or updating the integration overwrites this file."* Upgrading herdr
+One property that deserves attention: each file declares _"managed by herdr;
+reinstalling or updating the integration overwrites this file."_ Upgrading herdr
 therefore rewrites executable code in your agent config directories. The release
 cooldown governs when that happens — which is a reason the pin matters beyond
 the binary itself.
