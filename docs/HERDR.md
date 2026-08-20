@@ -38,21 +38,30 @@ So the gate has to be enforced from outside the tool.
 
 ## The design
 
-Three parts, each doing one thing:
+Four parts, each doing one thing:
 
-| Part                                  | Role                                                    |
-| ------------------------------------- | ------------------------------------------------------- |
-| `HERDR_COOLDOWN_DAYS` in `install.sh` | the canonical policy value (alongside the other floors) |
-| **Homebrew pin**                      | makes the binary immovable by a routine `brew upgrade`  |
-| `herdr-cooldown-check`                | reports when a release has aged past the gate           |
+| Part                                  | Role                                                            |
+| ------------------------------------- | --------------------------------------------------------------- |
+| `HERDR_COOLDOWN_DAYS` in `install.sh` | the canonical policy value (alongside the other floors)         |
+| **Homebrew pin**                      | makes the binary immovable by a routine `brew upgrade`          |
+| `herdr-cooldown-check`                | read-only: reports when a release has aged past the gate        |
+| `_preflight_herdr_bump_check` (macOS) | acts on that report: unpin/upgrade/re-pin once it says ELIGIBLE |
 
 **Why pin rather than trust a channel.** herdr's own `update.channel` only selects
 stable-vs-preview, not age. And upstream states that Homebrew installs ignore
 `herdr update` entirely — so on a brew-managed box the binary can only move when
 Homebrew moves it. `brew pin` is therefore the single switch that closes the door,
 and `_preflight_herdr_pin_check` in `install.sh` re-asserts it on every run (an
-unpin for a deliberate upgrade otherwise leaves the gate open if the re-pin is
-forgotten).
+unpin for an upgrade otherwise leaves the gate open if the re-pin is forgotten
+mid-sequence — `_preflight_herdr_bump_check` re-pins even when the upgrade step
+itself fails, for exactly that reason).
+
+**Checker vs actor stay separate.** `herdr-cooldown-check` never installs, unpins,
+upgrades or edits config — see its own header. That contract does not change.
+`_preflight_herdr_bump_check` is a second, separate piece of code that reads the
+checker's `--json` report and runs the three-step upgrade only when the `cooldown`
+subject says `ACTION` (and only when the checker's own self-test passes — a broken
+detector skips instead of guessing). The checker stays fully usable standalone.
 
 ## What the checker checks (4 subjects)
 
@@ -196,13 +205,26 @@ herdr server update-agent-manifests
 
 ### The upgrade runbook
 
-Upgrades are three-step and deliberate — never a bare `brew upgrade`:
+On macOS, `./install.sh` runs this automatically now: every run calls
+`herdr-cooldown-check`, and if the `cooldown` subject reports `ACTION` (the
+newest release has cleared `HERDR_COOLDOWN_DAYS`), `_preflight_herdr_bump_check`
+performs the same three-step upgrade below on its own, no confirmation prompt —
+same posture as the pnpm floor-check. There is still no bare `brew upgrade`:
+the pin is the only thing standing between herdr and a same-day release, and it
+comes straight back after the bump.
+
+Run the commands by hand only to force a check outside install.sh's own run, or
+to troubleshoot a bump that didn't take:
 
 ```bash
 herdr-cooldown-check                                    # confirm ELIGIBLE, not HELD
 brew unpin herdr && brew upgrade herdr && brew pin herdr
 herdr-cooldown-check                                    # confirm the pin is back
 ```
+
+Linux/WSL is unchanged — `_preflight_herdr_release_check` already applies pinned,
+hash-verified `HERDR_VERSION` bumps automatically; see the runbook above the
+`HERDR_VERSION` comment block in `install.sh` for that side.
 
 ## Running herdr as a persistent server
 

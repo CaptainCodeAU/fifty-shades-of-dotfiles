@@ -113,10 +113,15 @@ BUN_MIN_VERSION="1.3.0"
 # native cooldown knob (unlike pnpm minimumReleaseAge / bun minimumReleaseAge /
 # uv UV_EXCLUDE_NEWER), AND it ships a self-updater plus two default-on calls to
 # herdr.dev -- update.version_check, and update.manifest_check which reloads
-# remote agent-detection manifests into the RUNNING server. The gate is
-# therefore enforced externally: keep the Homebrew formula PINNED so a routine
-# `brew upgrade` cannot move it, and let `herdr-cooldown-check` report when a
-# release has aged past this many days. Upgrades are deliberate and three-step:
+# remote agent-detection manifests into the RUNNING server. Both risks stand
+# regardless of who runs the bump, so the gate is still enforced externally:
+# keep the Homebrew formula PINNED so a routine `brew upgrade` cannot move it,
+# and `herdr-cooldown-check` reports (read-only, self-tested) when a release
+# has aged past this many days. On macOS, _preflight_herdr_bump_check in this
+# script now runs that same three-step upgrade automatically once the report
+# says ELIGIBLE -- no separate script to remember, install.sh is the one thing
+# you run. The commands below remain valid for a manual/ad-hoc check or bump:
+#   herdr-cooldown-check
 #   brew unpin herdr && brew upgrade herdr && brew pin herdr
 HERDR_COOLDOWN_DAYS="3"
 
@@ -690,13 +695,65 @@ _preflight_herdr_pin_check() {
 
     step "Pre-flight herdr cooldown guard"
     warn "herdr is NOT pinned — a routine 'brew upgrade' would adopt a same-day release."
-    info "The ${HERDR_COOLDOWN_DAYS}-day gate is enforced by pinning; upgrades stay deliberate:"
-    info "  brew unpin herdr && brew upgrade herdr && brew pin herdr"
+    info "The ${HERDR_COOLDOWN_DAYS}-day gate is enforced by pinning; ${CYAN}./install.sh${RESET} bumps it"
+    info "automatically once a release clears cooldown (see _preflight_herdr_bump_check)."
     if [[ "$DRY_RUN" == true ]]; then
         info "[dry-run] No changes made. Re-run without --dry-run to pin herdr."
         return 0
     fi
     confirm "Run 'brew pin herdr'?" y && run_cmd brew pin herdr
+    return 0
+}
+
+_preflight_herdr_bump_check() {
+    [[ "$SKIP_PREFLIGHT" == true ]] && return 0
+    # macOS/Homebrew path only -- Linux/WSL bumps ship via _preflight_herdr_release_check.
+    # Mirrors _preflight_pnpm_floor_check: once the cooldown has genuinely elapsed, upgrade
+    # unconditionally, no y/N -- "lazy option", install.sh is the only thing you run.
+    # Reuses herdr-cooldown-check's own (self-tested) version/age math via --json instead of
+    # re-deriving it here in bash: one place decides ELIGIBLE, and its self-test gates this
+    # too (a broken detector never triggers a bump, it just skips).
+    command -v herdr &>/dev/null || return 0
+    command -v brew &>/dev/null || return 0
+    brew list --versions herdr &>/dev/null || return 0
+    command -v herdr-cooldown-check &>/dev/null || return 0
+    command -v jq &>/dev/null || return 0
+
+    local report=""
+    report=$(herdr-cooldown-check --json --cooldown-days "$HERDR_COOLDOWN_DAYS" 2>/dev/null) || true
+    [[ -n "$report" ]] || return 0
+
+    local self_test cooldown_state
+    self_test=$(jq -r '.self_test // ""' <<<"$report" 2>/dev/null) || return 0
+    [[ "$self_test" == "pass" ]] || return 0
+    cooldown_state=$(jq -r '.subjects[]? | select(.subject=="cooldown") | .state' <<<"$report" 2>/dev/null) || return 0
+    [[ "$cooldown_state" == "ACTION" ]] || return 0
+
+    local have latest
+    have=$(jq -r '.installed // "unknown"' <<<"$report" 2>/dev/null)
+    latest=$(jq -r '.latest // "the newest release"' <<<"$report" 2>/dev/null)
+
+    step "Pre-flight herdr cooldown bump"
+    info "herdr ${have} has cleared the ${HERDR_COOLDOWN_DAYS}-day cooldown — ${latest} is ELIGIBLE. Upgrading."
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[dry-run] No changes made. Re-run without --dry-run to upgrade herdr."
+        return 0
+    fi
+    # unpin/upgrade/pin as three separate checks (not a bare &&-chain): an upgrade failure
+    # must still re-pin whatever is currently installed, or a transient failure here would
+    # leave herdr permanently unguarded instead of merely behind.
+    if run_cmd brew unpin herdr; then
+        if ! run_cmd brew upgrade herdr; then
+            warn "brew upgrade herdr failed — re-pinning the current version; will retry next run."
+        fi
+        run_cmd brew pin herdr
+        hash -r 2>/dev/null || true
+        if command -v herdr &>/dev/null; then
+            success "herdr now $(herdr --version 2>/dev/null | awk '{print $2}') (pinned)"
+        fi
+    else
+        warn "brew unpin herdr failed — leaving the current pin in place."
+    fi
     return 0
 }
 
@@ -2779,6 +2836,12 @@ main() {
     # re-pin is forgotten; every run re-asserts it. No-op unless herdr is present
     # and Homebrew-managed.
     _preflight_herdr_pin_check
+
+    # --- herdr cooldown bump (macOS/Homebrew): unpin/upgrade/pin once herdr-cooldown-check
+    # reports the newest release has cleared HERDR_COOLDOWN_DAYS. Runs AFTER the pin-check
+    # above so it always starts from a known-pinned state. herdr-cooldown-check itself stays
+    # read-only -- this just runs the same manual commands it recommends, automatically. ---
+    _preflight_herdr_bump_check
 
     # --- herdr release pre-flight (Linux/WSL): re-apply a pin bump on a box that
     # already has herdr installed, since check_prerequisites never flags it "missing" ---
