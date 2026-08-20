@@ -705,6 +705,31 @@ _preflight_herdr_pin_check() {
     return 0
 }
 
+# herdr is server/client: replacing the binary on disk never touches an already
+# running server process (Unix keeps the old inode mapped) or restarts the
+# launchd service -- Homebrew's own herdr formula requires a manual `brew
+# services restart herdr` after an upgrade, and never does it for you. That's
+# deliberate: nobody should auto-restart a server other live sessions are
+# attached to. This just makes the resulting skew VISIBLE instead of silent,
+# using herdr's own restart_needed field (it already tracks protocol
+# compatibility between the running server and the installed binary) rather
+# than guessing from file paths. Never restarts anything itself.
+# Echoes "yes:<running-version>" (restart recommended), "no" (in sync), or
+# nothing (server not running / herdr or jq missing / status query failed).
+_herdr_server_restart_status() {
+    command -v herdr &>/dev/null || return 0
+    command -v jq &>/dev/null || return 0
+    local status_json=""
+    status_json=$(herdr status server --json 2>/dev/null) || true
+    [[ -n "$status_json" ]] || return 0
+    [[ "$(jq -r '.running // false' <<<"$status_json" 2>/dev/null)" == "true" ]] || return 0
+    if [[ "$(jq -r '.restart_needed // false' <<<"$status_json" 2>/dev/null)" == "true" ]]; then
+        echo "yes:$(jq -r '.version // "unknown"' <<<"$status_json" 2>/dev/null)"
+    else
+        echo "no"
+    fi
+}
+
 _preflight_herdr_bump_check() {
     [[ "$SKIP_PREFLIGHT" == true ]] && return 0
     # macOS/Homebrew path only -- Linux/WSL bumps ship via _preflight_herdr_release_check.
@@ -750,6 +775,14 @@ _preflight_herdr_bump_check() {
         hash -r 2>/dev/null || true
         if command -v herdr &>/dev/null; then
             success "herdr now $(herdr --version 2>/dev/null | awk '{print $2}') (pinned)"
+        fi
+        if [[ "$DRY_RUN" != true ]]; then
+            local _restart_status
+            _restart_status=$(_herdr_server_restart_status)
+            if [[ "$_restart_status" == yes:* ]]; then
+                warn "The running herdr server is still on ${_restart_status#yes:} — every attached session (including this one) would drop if restarted now."
+                info "This never restarts automatically. Restart it yourself when it's a good time: ${CYAN}brew services restart herdr${RESET}"
+            fi
         fi
     else
         warn "brew unpin herdr failed — leaving the current pin in place."
@@ -1197,6 +1230,17 @@ check_prerequisites() {
             echo -e "      ${GREEN}✓${RESET} server managed by launchd (crash-restart + start at login)"
         elif [[ "$(check_os)" == "macos" ]]; then
             echo -e "      ${YELLOW}~${RESET} server not managed — ${CYAN}brew services start herdr${RESET} (stop any running server FIRST)"
+        fi
+        # Surfaces skew from ANY upgrade path (this script's bump, a manual brew
+        # upgrade, the Linux release pin) -- not just one this run just performed.
+        # Never restarts anything; see _herdr_server_restart_status.
+        local _herdr_restart_status
+        _herdr_restart_status=$(_herdr_server_restart_status)
+        if [[ "$_herdr_restart_status" == yes:* ]]; then
+            echo -e "      ${YELLOW}~${RESET} server still running ${_herdr_restart_status#yes:} (installed build is newer) — restart when convenient:"
+            echo -e "        ${CYAN}brew services restart herdr${RESET} (disrupts every attached session; never automatic)"
+        elif [[ "$_herdr_restart_status" == "no" ]]; then
+            echo -e "      ${GREEN}✓${RESET} server running the currently installed build"
         fi
     fi
     echo
