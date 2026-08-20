@@ -1,0 +1,307 @@
+#!/usr/bin/env -S uv run python3
+# /// script
+# requires-python = ">=3.10"
+# dependencies = []
+# ///
+#
+# ============================================================================
+#  herdr-linux-pin-check -- should the Linux/WSL herdr pin follow macOS's?
+# ============================================================================
+#
+# WHY
+# ---
+# macOS and Linux/WSL each pin herdr independently. macOS's pin moves on its
+# own now (install.sh's _preflight_herdr_bump_check bumps it automatically
+# once herdr-cooldown-check reports the newest release cleared the cooldown).
+# Linux/WSL's pin (HERDR_VERSION in install.sh) only ever moves when a human
+# edits it -- deliberately, because Homebrew vets the SOURCE tarball for a
+# release, but the pre-built herdr-linux-x86_64/aarch64 assets on GitHub are
+# a SEPARATE artifact Homebrew never touches or vouches for. Trusting "macOS
+# adopted this tag" is not the same as trusting that specific Linux binary.
+#
+# What macOS's pin DOES give you: a real, already-cleared-cooldown target
+# version, instead of the two platforms drifting independently with nobody
+# tracking whether Linux is falling behind. This tool ties discovery to that
+# signal -- it computes the sha256 of the matching Linux assets for you --
+# but leaves the actual trust decision exactly where it already was: a human
+# reviews the hashes and commits them, same bar as every prior Linux bump.
+#
+# WHAT IT CHECKS
+#   1. Is herdr on THIS machine (must be macOS) installed via Homebrew and
+#      actually pinned? An unpinned herdr isn't a trustworthy signal -- see
+#      _preflight_herdr_pin_check in install.sh, run that first.
+#   2. Does that pinned version match or exceed HERDR_VERSION in install.sh?
+#
+# SAFETY
+#   Read-only with respect to the repo: never edits install.sh, never
+#   commits, never pushes. When Linux is behind, it downloads the matching
+#   Linux release assets ONLY to compute their sha256 for you to review --
+#   nothing is installed, nothing here ever runs on a Linux/WSL box.
+#
+# USAGE
+#   herdr-linux-pin-check [--json] [--timeout SEC]
+#
+# EXIT CODES
+#   0  in sync, or skipped (not on macOS, herdr absent/unpinned, repo not found)
+#   1  Linux's pinned version is behind macOS's already-cleared version
+# ============================================================================
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import platform
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+REPO = "herdrdev/herdr"
+RELEASE_BY_TAG_URL = f"https://api.github.com/repos/{REPO}/releases/tags/{{tag}}"
+LINUX_ASSETS = ("herdr-linux-x86_64", "herdr-linux-aarch64")
+
+CLEAN, ACTION, SKIP = "OK", "ACTION", "SKIPPED"
+
+
+def run(cmd: list[str], timeout: int = 15) -> tuple[int, str]:
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return p.returncode, (p.stdout or "").strip()
+    except (OSError, subprocess.SubprocessError):
+        return 127, ""
+
+
+def semver(text: str) -> tuple[int, ...] | None:
+    m = re.search(r"(\d+)\.(\d+)\.(\d+)", text or "")
+    return tuple(int(g) for g in m.groups()) if m else None
+
+
+def find_repo_root() -> Path | None:
+    """Resolve via this script's OWN location (a stow symlink into the repo),
+    not the caller's cwd -- so this works no matter where it's invoked from.
+    DOTFILES_REPO overrides for testing."""
+    override = os.environ.get("DOTFILES_REPO")
+    if override:
+        return Path(override)
+    try:
+        p = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=10,
+            cwd=Path(__file__).resolve().parent,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if p.returncode != 0:
+        return None
+    return Path(p.stdout.strip())
+
+
+def read_linux_pinned_version(install_sh: Path) -> tuple[str, tuple[int, ...] | None] | None:
+    """Pure-ish: parses install.sh's own HERDR_VERSION constant. Returns
+    (raw 'vX.Y.Z' string, parsed tuple) or None if unreadable/unparseable."""
+    try:
+        text = install_sh.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    m = re.search(r'^HERDR_VERSION="(v[0-9]+\.[0-9]+\.[0-9]+)"', text, re.M)
+    if not m:
+        return None
+    raw = m.group(1)
+    return raw, semver(raw)
+
+
+def mac_pinned_version() -> tuple[str, tuple[int, ...] | None] | None:
+    """The version Homebrew has PINNED on this Mac, or None if herdr is
+    absent, not Homebrew-managed, or not pinned. Unpinned means "not a
+    trustworthy signal" here, same as _preflight_herdr_pin_check treats it --
+    this tool refuses to propose a bump based on a version that could move
+    again via a routine `brew upgrade` tomorrow."""
+    if not shutil.which("herdr") or not shutil.which("brew"):
+        return None
+    rc, out = run(["brew", "list", "--versions", "herdr"], timeout=20)
+    if rc != 0 or not out:
+        return None
+    rc, pinned = run(["brew", "list", "--pinned"], timeout=20)
+    if rc != 0 or "herdr" not in pinned.split():
+        return None
+    _, out = run(["herdr", "--version"], timeout=10)
+    ver = semver(out)
+    if ver is None:
+        return None
+    # Normalize to the same "vX.Y.Z" shape as HERDR_VERSION and GitHub tags --
+    # `herdr --version` prints "herdr 0.8.0", not a bare or v-prefixed number,
+    # and that raw string must never be used as-is (a GitHub tag, a URL
+    # component, or the value install.sh expects).
+    return f"v{'.'.join(map(str, ver))}", ver
+
+
+def gap_verdict(mac: tuple[int, ...] | None, linux: tuple[int, ...] | None) -> str:
+    """Pure: CURRENT | ACTION | UNKNOWN. The whole comparison rule."""
+    if mac is None or linux is None:
+        return "UNKNOWN"
+    return "CURRENT" if linux >= mac else "ACTION"
+
+
+def self_test() -> list[str]:
+    """Same rationale as herdr-cooldown-check's self-test: prove the gate
+    still gates, both directions, before trusting it against real data."""
+    fails: list[str] = []
+
+    def check(label: str, got, expected):
+        if got != expected:
+            fails.append(f"{label}: expected {expected!r}, got {got!r}")
+
+    check("linux ahead or equal reads CURRENT",
+          gap_verdict((0, 8, 0), (0, 8, 0)), "CURRENT")
+    check("linux behind reads ACTION",
+          gap_verdict((0, 8, 2), (0, 7, 5)), "ACTION")
+    check("missing data refuses to guess",
+          gap_verdict(None, (0, 7, 5)), "UNKNOWN")
+    return fails
+
+
+def fetch_release_assets(tag: str, timeout: int) -> dict[str, str] | None:
+    """asset name -> browser_download_url for one tagged release, or None."""
+    req = urllib.request.Request(
+        RELEASE_BY_TAG_URL.format(tag=tag),
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "herdr-linux-pin-check",
+        },
+    )
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError, ValueError, json.JSONDecodeError):
+        return None
+    assets = data.get("assets") or []
+    return {a["name"]: a["browser_download_url"] for a in assets if "name" in a and "browser_download_url" in a}
+
+
+def sha256_of_url(url: str, timeout: int) -> str | None:
+    req = urllib.request.Request(url, headers={"User-Agent": "herdr-linux-pin-check"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            digest = hashlib.sha256()
+            with tempfile.NamedTemporaryFile() as tmp:
+                while True:
+                    chunk = resp.read(1 << 20)
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+                    tmp.write(chunk)
+        return digest.hexdigest()
+    except (urllib.error.URLError, OSError):
+        return None
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(add_help=True)
+    ap.add_argument("--timeout", type=int, default=20)
+    ap.add_argument("--json", dest="as_json", action="store_true")
+    args = ap.parse_args()
+
+    report: dict[str, object] = {}
+    rows: list[tuple[str, str, str]] = []
+    actionable = False
+
+    broken = self_test()
+    report["self_test"] = "pass" if not broken else broken
+    for failure in broken:
+        actionable = True
+        rows.append(("self-test", ACTION, f"DETECTOR BROKEN -- {failure}"))
+
+    if platform.system() != "Darwin":
+        rows.append(("platform", SKIP, "not macOS -- run this on the box that owns the Homebrew pin"))
+        emit(args, rows, report)
+        return 1 if actionable else 0
+
+    mac = mac_pinned_version()
+    if mac is None:
+        rows.append(("mac-pin", SKIP,
+                      "herdr not installed/pinned via Homebrew here -- nothing trustworthy to compare"))
+        emit(args, rows, report)
+        return 1 if actionable else 0
+    mac_raw, mac_ver = mac
+    report["mac_pinned"] = mac_raw
+
+    repo_root = find_repo_root()
+    if repo_root is None:
+        rows.append(("repo", SKIP, "dotfiles repo not located (run from within it, or set DOTFILES_REPO)"))
+        emit(args, rows, report)
+        return 1 if actionable else 0
+
+    linux = read_linux_pinned_version(repo_root / "install.sh")
+    if linux is None:
+        rows.append(("linux-pin", SKIP, "could not read HERDR_VERSION from install.sh"))
+        emit(args, rows, report)
+        return 1 if actionable else 0
+    linux_raw, linux_ver = linux
+    report["linux_pinned"] = linux_raw
+
+    verdict = gap_verdict(mac_ver, linux_ver)
+    report["verdict"] = verdict
+
+    if verdict == "UNKNOWN":
+        rows.append(("version", SKIP, f"could not parse mac ({mac_raw!r}) or Linux ({linux_raw!r}) version"))
+    elif verdict == "CURRENT":
+        rows.append(("version", CLEAN, f"Linux pin {linux_raw} already matches or leads macOS's cleared {mac_raw}"))
+    else:
+        actionable = True
+        rows.append(("version", ACTION,
+                      f"macOS cleared {mac_raw}; Linux is still pinned to {linux_raw}"))
+        assets = fetch_release_assets(mac_raw, args.timeout)
+        if assets is None:
+            rows.append(("assets", SKIP, f"could not reach GitHub for the {mac_raw} release"))
+        else:
+            missing = [name for name in LINUX_ASSETS if name not in assets]
+            if missing:
+                rows.append(("assets", SKIP, f"release {mac_raw} is missing: {', '.join(missing)}"))
+            else:
+                hashes: dict[str, str] = {}
+                for name in LINUX_ASSETS:
+                    digest = sha256_of_url(assets[name], args.timeout)
+                    if digest is None:
+                        rows.append(("assets", SKIP, f"could not download/hash {name}"))
+                        hashes = {}
+                        break
+                    hashes[name] = digest
+                if hashes:
+                    report["computed_sha256"] = hashes
+                    rows.append(("assets", ACTION,
+                                  "sha256 computed below -- review before committing, same as any prior bump"))
+
+    emit(args, rows, report)
+    return 1 if actionable else 0
+
+
+def emit(args, rows, report) -> None:
+    report["subjects"] = [{"subject": s, "state": st, "detail": d} for s, st, d in rows]
+    if args.as_json:
+        print(json.dumps(report, indent=2))
+        return
+    for subject, state, detail in rows:
+        print(f"  {state:<7} {subject:<10} {detail}")
+    hashes = report.get("computed_sha256")
+    if hashes:
+        tag = report.get("mac_pinned", "")
+        print()
+        print("  Computed just now -- review before committing (never auto-committed):")
+        print(f'    HERDR_VERSION="{tag}"')
+        print(f'    HERDR_SHA256_LINUX_X86_64="{hashes.get("herdr-linux-x86_64", "")}"')
+        print(f'    HERDR_SHA256_LINUX_AARCH64="{hashes.get("herdr-linux-aarch64", "")}"')
+    n = sum(1 for _, st, _ in rows if st == ACTION)
+    print(f"  --- {n} actionable, {len(rows)} checked")
+
+
+if __name__ == "__main__":
+    sys.exit(main())

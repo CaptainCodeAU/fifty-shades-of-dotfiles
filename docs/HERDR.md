@@ -178,6 +178,24 @@ comment block above `HERDR_VERSION` in `install.sh`: confirm the cooldown has
 elapsed, re-hash both assets, update version and hashes in one commit, then
 re-run `./install.sh` on each box.
 
+**`herdr-linux-pin-check`** ties the "confirm the cooldown has elapsed" step to
+a real signal instead of a separate manual check: it compares the current
+`HERDR_VERSION` against whatever version macOS's Homebrew pin has _already_
+cleared cooldown on. Run it from the dev Mac, inside the repo:
+
+```bash
+herdr-linux-pin-check
+```
+
+If Linux is behind, it downloads the matching `herdr-linux-x86_64` /
+`herdr-linux-aarch64` release assets, computes their sha256, and prints them
+ready to paste into the `HERDR_VERSION` / `HERDR_SHA256_LINUX_*` block above —
+it never edits `install.sh` and never commits. Homebrew vetting the _source_
+tarball for a tag is not the same as vetting that separately-built Linux
+binary, so the hash review stays a human decision, same bar as before this
+tool existed; it only removes the guesswork of "has macOS actually moved on
+without Linux noticing."
+
 Then close the phone-home half. The config is repo-managed at
 `home/.config/herdr/config.toml` and stow-linked to `~/.config/herdr/config.toml`,
 so it deploys with everything else — `stow -R --no-folding` creates the real
@@ -195,7 +213,7 @@ Both guards are surfaced rather than assumed. `install.sh --check` reports the
 pin and whether the config is stow-linked, and the shell welcome banner carries
 a `herdr:` line showing the version and pin state (read from a symlink under
 `$HOMEBREW_PREFIX`, so it costs no `brew` subprocess). An unpinned herdr is
-shown as an error, not a note — the pin _is_ the cooldown.
+shown as an error, not a note — the pin *is* the cooldown.
 
 Pull agent-detection manifests deliberately instead, when you want them:
 
@@ -270,8 +288,8 @@ extra copy sits in system memory and, on supported hardware, the SMC); pair
 regular use with `sudo pmset -a destroyfvkeyonstandby 1`.
 
 **In practice this matters less than it first appears**, because herdr starts its
-own server on attach — upstream: _"connects over SSH, starts or attaches to the
-remote Herdr server."_ After any reboot, the first attach brings the server up.
+own server on attach — upstream: *"connects over SSH, starts or attaches to the
+remote Herdr server."* After any reboot, the first attach brings the server up.
 The service definition's real value is crash-restart, not cold start.
 
 Note also that `brew services start` without `sudo` installs a **LaunchAgent**,
@@ -326,7 +344,7 @@ error: remote server stop failed: server did not stop within 15000ms; sockets ar
 ```
 
 Nothing in that output names launchd, which is what makes it expensive to
-diagnose. `herdr --remote` produces it too, so it reads as a _remote_ problem
+diagnose. `herdr --remote` produces it too, so it reads as a *remote* problem
 when the cause is entirely local to the server box.
 
 Confirm it in one command — `runs` climbing with `last exit code = 0` is the
@@ -435,8 +453,8 @@ re-made with `--remote-keybindings server`.
 ## herdr and tmux
 
 Upstream positions herdr as a tmux-class multiplexer — the keyboard docs open with
-_"Coming from tmux or zellij? You already know this model"_, and the remote docs
-describe SSH-then-`herdr` as _"the tmux-style path"_. Panes are genuine terminals
+*"Coming from tmux or zellij? You already know this model"*, and the remote docs
+describe SSH-then-`herdr` as *"the tmux-style path"*. Panes are genuine terminals
 (it vendors libghostty-vt, the Ghostty VT engine) with splits, tabs, scrollback,
 copy mode, named sessions and detach/reattach.
 
@@ -490,8 +508,8 @@ Measured against this repo's `home/.tmux.conf` and `home/.zsh_cursor_functions`:
 tabs. Everything else already matched tmux by default.
 
 One binding is **not** a tmux port: prefix-free `shift+up` / `shift+down` walk
-`previous_agent` / `next_agent`. herdr ships both actions as _"optional, unset by
-default"_, so out of the box there is no agent-switching key at all — moving
+`previous_agent` / `next_agent`. herdr ships both actions as *"optional, unset by
+default"*, so out of the box there is no agent-switching key at all — moving
 between agents means moving between the panes and tabs they happen to live in.
 They complete the arrow cluster: left/right across tabs, up/down across agents.
 Scope is the whole session rather than the current workspace, and because
@@ -542,7 +560,7 @@ comfort: `type = "shell"` runs detached, so a large clipboard otherwise talks
 until it finishes. Copy mode feeds it too — `prefix+[`, `v`, `y`, then speak —
 which matters when the text is a screen away from the pointer.
 
-Requires _"Applications in terminal may access clipboard"_ in iTerm2, without
+Requires *"Applications in terminal may access clipboard"* in iTerm2, without
 which the drag never reaches the clipboard and the key appears dead.
 
 The no-config alternative is to hold **option while dragging**, producing a
@@ -574,8 +592,8 @@ Two properties keep this defensible:
 - **They land outside this repo.** `~/.claude/settings.json` is a real file
   here, not a stow symlink, so the edit did not reach the dotfiles tree.
 
-One property that deserves attention: each file declares _"managed by herdr;
-reinstalling or updating the integration overwrites this file."_ Upgrading herdr
+One property that deserves attention: each file declares *"managed by herdr;
+reinstalling or updating the integration overwrites this file."* Upgrading herdr
 therefore rewrites executable code in your agent config directories. The release
 cooldown governs when that happens — which is a reason the pin matters beyond
 the binary itself.
