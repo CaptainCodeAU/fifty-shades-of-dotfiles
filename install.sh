@@ -1646,7 +1646,16 @@ install_herdr_release() {
 # download with no package manager involved, so a loose binary is the common
 # case there, not the exception. Only a system-Python pip install is left for
 # the user to remove by hand (never touch site-packages from this installer).
-_purge_system_ytdlp() {
+#
+# Called unconditionally from main() (like _preflight_herdr_release_check and
+# friends), NOT from inside install_macos_prerequisites/install_linux_prerequisites
+# -- those only run when check_prerequisites() finds a REQUIRED tool missing,
+# so a fully-provisioned box (the common case: aria2/ffmpeg already installed,
+# nothing else missing) would otherwise never reach the purge at all. Confirmed
+# live on mlbox-ubuntu 2026-08-21: a real apt-installed yt-dlp survived a full
+# `./install.sh` run untouched until this moved to the unconditional path.
+_preflight_purge_ytdlp() {
+    [[ "$SKIP_PREFLIGHT" == true ]] && return 0
     local removed=false
 
     if [[ "$(check_os)" == "macos" ]] && command -v brew &>/dev/null && brew list yt-dlp &>/dev/null; then
@@ -1765,9 +1774,6 @@ install_macos_prerequisites() {
     else
         success "Core formulae already installed"
     fi
-
-    # yt() now runs yt-dlp on demand via uvx -- purge any installed copy.
-    _purge_system_ytdlp
 
     # Pin herdr the moment it exists. The pre-flight guard runs BEFORE this
     # point, so on a fresh box it finds no herdr and returns clean -- leaving a
@@ -1958,9 +1964,6 @@ install_linux_prerequisites() {
                 zypper) run_cmd sudo zypper install -y stow jq fzf direnv zoxide tmux ripgrep fd git-lfs trash-cli glow neovim aria2 ffmpeg ;;
             esac
         fi
-
-        # yt() now runs yt-dlp on demand via uvx -- purge any installed copy.
-        _purge_system_ytdlp
 
         # --- lazygit (required — installed from latest GitHub release on all distros) ---
         if command -v lazygit &>/dev/null; then
@@ -3056,6 +3059,12 @@ main() {
     # --- herdr release pre-flight (Linux/WSL): re-apply a pin bump on a box that
     # already has herdr installed, since check_prerequisites never flags it "missing" ---
     _preflight_herdr_release_check
+
+    # --- yt-dlp purge: yt() now runs it on demand via uvx, so a box that still
+    # has it installed (package manager, or a loose Linux binary) is stale.
+    # Unconditional for the same reason as the release-check above -- a box
+    # missing nothing else would otherwise never reach it. ---
+    _preflight_purge_ytdlp
 
     # --- Install prerequisites ---
     if ! check_prerequisites; then
