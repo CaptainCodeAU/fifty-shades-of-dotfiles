@@ -1450,7 +1450,7 @@ check_prerequisites() {
 _ensure_python_313() {
     command -v uv &>/dev/null || return 0
     local has_python
-    has_python=$(uv python list 2>/dev/null | grep "cpython-3.13" | grep -v "download available" | head -1)
+    has_python=$(uv python list 2>/dev/null | grep "cpython-3.13" | grep -v "download available" | head -1 || true)
     if [[ -z "$has_python" ]]; then
         if confirm "Install Python 3.13 via uv?"; then
             run_cmd uv python install 3.13
