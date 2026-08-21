@@ -41,7 +41,7 @@ If you just want the shell functions without the full install, you can symlink i
 - **📝 Editor Integration**: Automatic environment syncing between Cursor/VSCode terminals and tmux sessions.
 - **✍️ Zed Markdown Formatting**: On-demand `md-hardbreak` command (and Zed shortcuts `cmd-alt-b`/`cmd-alt-g`/`cmd-alt-u`) to render single-line breaks and paragraph gaps in Markdown preview without cluttering the source. See [`docs/ZED_MARKDOWN_FORMATTING.md`](docs/ZED_MARKDOWN_FORMATTING.md).
 - **🪪 Claude Commit Attribution**: Commits made inside a Claude Code session are auto-stamped with five trailers - `C-Sess-Id` (local session UUID), `C-Web-Id` (claude.ai URL, harvested; blank if absent), and `C-Branch` / `C-Worktree` / `C-Wt-Path` (commit context; path recorded `$HOME`-relative) - via a SessionStart identity hook plus the `_audit-chain` git chainer; global, idempotent, no per-repo setup. See [`docs/CLAUDE_SESSION_ATTRIBUTION.md`](docs/CLAUDE_SESSION_ATTRIBUTION.md).
-- **🎬 Media Tools**: Built-in `yt()` wrapper for yt-dlp with auto-generated configuration and quality presets.
+- **🎬 Media Tools**: Built-in `yt()` wrapper that runs yt-dlp on demand via `uvx` (nothing installed, always current), with auto-generated configuration and quality presets.
 - **🔒 Private Configuration**: A built-in pattern for managing your secret keys and machine-specific settings in a `.zshrc.private` file, which is kept out of version control.
 
 ---
@@ -52,18 +52,18 @@ If you just want the shell functions without the full install, you can symlink i
 2. **Core Tools**: Install the essential technologies using Homebrew.
 
    ```bash
-   brew install stow uv direnv jq zoxide eza fzf tmux ripgrep fd gh git-lfs neovim glow
+   brew install stow uv direnv jq zoxide eza fzf tmux ripgrep fd gh git-lfs neovim glow aria2 ffmpeg
    ```
 
-   > **Note:** `stow` is used by the installer to symlink dotfiles from this repo into `~/`. `jq` is required by the direnv color profile system and the project settings scaffolding script, as well as Node.js scaffolding and onboarding checks. `zoxide` replaces `cd`, `eza` powers the `l`/`ll` aliases, `fzf` provides fuzzy finding, `tmux` powers session management, `ripgrep` (`rg`) enables fast code search, `fd` is a fast `find` alternative, `gh` is the GitHub CLI (for PRs, issues, and API; Git transport itself is SSH-only, not via gh), `git-lfs` enables Git Large File Storage, the `rm`/`rmdir` shell wrappers route deletions to the system Trash (recoverable via Finder / file manager), `neovim` is the default `$EDITOR` (with fallback to vim/vi), and `glow` renders Markdown files beautifully in the terminal.
+   > **Note:** `stow` is used by the installer to symlink dotfiles from this repo into `~/`. `jq` is required by the direnv color profile system and the project settings scaffolding script, as well as Node.js scaffolding and onboarding checks. `zoxide` replaces `cd`, `eza` powers the `l`/`ll` aliases, `fzf` provides fuzzy finding, `tmux` powers session management, `ripgrep` (`rg`) enables fast code search, `fd` is a fast `find` alternative, `gh` is the GitHub CLI (for PRs, issues, and API; Git transport itself is SSH-only, not via gh), `git-lfs` enables Git Large File Storage, the `rm`/`rmdir` shell wrappers route deletions to the system Trash (recoverable via Finder / file manager), `neovim` is the default `$EDITOR` (with fallback to vim/vi), `glow` renders Markdown files beautifully in the terminal, and `aria2`/`ffmpeg` are used by the `yt()` media download wrapper (which runs yt-dlp itself on demand via `uvx` — nothing to install for yt-dlp).
 
 3. **Recommended Tools**: These are optional but enhance the experience significantly.
 
    ```bash
-   brew install ffmpeg yt-dlp aria2 tree fastfetch lazygit lazydocker yazi imagemagick
+   brew install tree fastfetch lazygit lazydocker yazi imagemagick
    ```
 
-   > **Note:** `ffmpeg` and `aria2` are used by the `yt()` media download wrapper. `lazygit`/`lazydocker` power the `lg`/`lzd` aliases. `yazi` is a terminal file manager used by the `y()` function; it runs on stock defaults (this repo archived its yazi config on 2026-05-06). `imagemagick` is a general image utility.
+   > **Note:** `lazygit`/`lazydocker` power the `lg`/`lzd` aliases. `yazi` is a terminal file manager used by the `y()` function; it runs on stock defaults (this repo archived its yazi config on 2026-05-06). `imagemagick` is a general image utility.
 
 4. **Nerd Font**: Required for Powerlevel10k icons and glyphs.
 
@@ -219,14 +219,14 @@ run_onboarding
 
 ### Tools Checked
 
-| Category                 | Tools                                                   |
-| ------------------------ | ------------------------------------------------------- |
-| **Essential**            | git, curl, unzip, stow                                  |
-| **User Experience**      | eza, fzf, jq, direnv, zoxide, fd, yazi, glow            |
-| **CLI Tools**            | ripgrep, neovim, tree, fastfetch, ffmpeg, yt-dlp, aria2 |
-| **Git**                  | gh, git-lfs                                             |
-| **Development Managers** | nvm, uv, pnpm, bun                                      |
-| **Special**              | Docker (guidance only — requires manual installation)   |
+| Category                 | Tools                                                 |
+| ------------------------ | ----------------------------------------------------- |
+| **Essential**            | git, curl, unzip, stow                                |
+| **User Experience**      | eza, fzf, jq, direnv, zoxide, fd, yazi, glow          |
+| **CLI Tools**            | ripgrep, neovim, tree, fastfetch, ffmpeg, aria2       |
+| **Git**                  | gh, git-lfs                                           |
+| **Development Managers** | nvm, uv, pnpm, bun                                    |
+| **Special**              | Docker (guidance only — requires manual installation) |
 
 ### Skipping Onboarding
 
@@ -1200,7 +1200,7 @@ gstatus   # Full dashboard
 
 ### yt-dlp Wrapper (`yt()`)
 
-A comprehensive wrapper function for `yt-dlp` that auto-generates configuration and provides a user-friendly interface:
+A comprehensive wrapper function for `yt-dlp` that auto-generates configuration and provides a user-friendly interface. `yt-dlp` itself is never installed — the function runs it on demand via `uvx --prerelease allow yt-dlp`, so it is always the latest release:
 
 ```bash
 # Basic usage (1080p + best audio, default)
@@ -1209,6 +1209,7 @@ yt https://youtube.com/watch?v=dQw4w9WgXcQ
 # Quality presets
 yt --video https://youtube.com/watch?v=dQw4w9WgXcQ           # 1080p/720p
 yt --video-highest https://youtube.com/watch?v=dQw4w9WgXcQ   # Maximum resolution
+yt --best-video https://youtube.com/watch?v=dQw4w9WgXcQ      # Best mp4 video + m4a audio
 yt --audio-only https://youtube.com/watch?v=dQw4w9WgXcQ      # Extract audio
 
 # With subtitles
@@ -1216,13 +1217,14 @@ yt --video --subs https://youtube.com/watch?v=dQw4w9WgXcQ
 
 # Metadata bundles
 yt --bundle https://youtube.com/watch?v=dQw4w9WgXcQ          # Video + all metadata
+yt --best-bundle https://youtube.com/watch?v=dQw4w9WgXcQ     # Best mp4/m4a + all metadata
 yt --thumbnail https://youtube.com/watch?v=dQw4w9WgXcQ       # Thumbnail only
 
 # Help
 yt --help
 ```
 
-The function auto-generates a comprehensive `~/.config/yt-dlp/config` file on first use with sensible defaults (1080p video, aria2c downloader, embedded metadata, etc.).
+The function auto-generates a comprehensive `~/.config/yt-dlp/config` file on first use with sensible defaults (1080p video, aria2c downloader, embedded metadata, etc.). Requires `uv`, `ffmpeg`, and `aria2c` — all part of the core install.
 
 ### Other Useful Aliases
 

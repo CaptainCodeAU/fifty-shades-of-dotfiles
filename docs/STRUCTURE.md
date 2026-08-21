@@ -87,7 +87,7 @@ yt-dlp configuration template.
 | -------- | -------------------- | ------------------------- |
 | `config` | yt-dlp configuration | `~/.config/yt-dlp/config` |
 
-**Note**: The `yt()` function in `.zshrc` auto-generates this config file if it doesn't exist. This file serves as a template/reference.
+**Note**: The `yt()` function in `.zshrc` auto-generates this config file if it doesn't exist. This file serves as a template/reference. `yt-dlp` itself is never installed — `yt()` runs it on demand via `uvx --prerelease allow yt-dlp`.
 
 #### `home/.config/herdr/`
 

@@ -108,7 +108,7 @@ echo -e "${BOLD}${CYAN}=========================================================
 echo ""
 
 missing=0
-for cmd in yt-dlp uv sqlite3; do
+for cmd in uvx uv sqlite3; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     echo -e "  ${RED}[x]${RESET} ${BOLD}$cmd${RESET} not found. Please install it first."
     missing=1
@@ -358,7 +358,8 @@ if errors > 0:
 print(f"  {BOLD}------------------------------------{RESET}")
 PY
 
-yt_dlp_cmd=(yt-dlp --cookies-from-browser "$cookies_browser" --dump-json --skip-download)
+yt_dlp_cmd=(env UV_EXCLUDE_NEWER=2999-01-01T00:00:00Z uvx --prerelease allow yt-dlp \
+  --cookies-from-browser "$cookies_browser" --dump-json --skip-download)
 if [[ -n "$playlist_items" ]]; then
   yt_dlp_cmd+=(--playlist-items "$playlist_items")
 fi

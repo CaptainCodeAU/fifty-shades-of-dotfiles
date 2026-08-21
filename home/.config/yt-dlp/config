@@ -48,6 +48,9 @@
 # --video-highest: Maximum available resolution
 --alias video-highest "-f bestvideo+bestaudio/best"
 
+# --best-video: Best mp4 video + m4a audio (no metadata extras)
+--alias best-video "-f bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]"
+
 # -----------------------------------------------------------------------------
 # Aliases: Audio
 # -----------------------------------------------------------------------------
@@ -92,6 +95,9 @@
 
 # --bundle-high: Highest video + all metadata
 --alias bundle-high "-f bestvideo+bestaudio/best --write-subs --sub-format srt/ass/vtt --write-auto-subs --write-comments --no-write-info-json --print-to-file %(comments)#j %(upload_date)s-%(title)s-[%(id)s].comments.json --sub-langs live_chat --write-description --write-thumbnail"
+
+# --best-bundle: Best mp4/m4a video + all metadata
+--alias best-bundle "-f bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4] --write-subs --sub-format srt/ass/vtt --write-auto-subs --write-comments --no-write-info-json --print-to-file %(comments)#j %(upload_date)s-%(title)s-[%(id)s].comments.json --sub-langs live_chat --write-description --write-thumbnail"
 
 # -----------------------------------------------------------------------------
 # Aliases: Modifiers

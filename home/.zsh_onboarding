@@ -833,7 +833,6 @@ run_onboarding() {
         "tree"    "tree"     "tree" \
         "fastfetch" "fastfetch" "fastfetch" \
         "ffmpeg"  "ffmpeg"   "ffmpeg" \
-        "yt-dlp"  "yt-dlp"   "yt-dlp" \
         "aria2c"  "aria2"    "aria2" \
         "lazygit" "lazygit"  "lazygit" \
         "lazydocker" "lazydocker" "lazydocker"

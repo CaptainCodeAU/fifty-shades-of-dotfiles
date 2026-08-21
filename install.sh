@@ -1227,6 +1227,8 @@ check_prerequisites() {
     check_command zoxide   "zoxide"   || true
     check_command tmux     "tmux"     || true
     check_command rg       "ripgrep"  || true
+    check_command aria2c   "aria2c"   || true
+    check_command ffmpeg   "ffmpeg"   || true
     if ! check_command fd "fd"; then
         check_command fdfind "fd (as fdfind)" || missing=$((missing+1))
     fi
@@ -1376,8 +1378,6 @@ check_prerequisites() {
     echo -e "${BOLD}Optional:${RESET}"
     check_command_optional claude "Claude Code CLI" || true
     check_command_optional yazi     "yazi"     || true
-    check_command_optional ffmpeg   "ffmpeg"   || true
-    check_command_optional yt-dlp   "yt-dlp"   || true
     check_command_optional rustup   "rustup"   || true
     check_command_optional cargo    "cargo"    || true
 
@@ -1636,6 +1636,96 @@ install_herdr_release() {
     fi
 }
 
+# --- Purge an installed yt-dlp -----------------------------------------------
+#
+# yt() now runs yt-dlp on demand via `uvx` -- nothing is installed, so it is
+# always current. A yt-dlp left over from before this switch is stale and
+# redundant. Force-remove anything package-managed (trivially reinstallable).
+# On Linux, also force-remove any loose yt-dlp binary found on PATH -- yt-dlp's
+# own upstream install method is a raw curl-to-/usr/local/bin (or /usr/bin)
+# download with no package manager involved, so a loose binary is the common
+# case there, not the exception. Only a system-Python pip install is left for
+# the user to remove by hand (never touch site-packages from this installer).
+_purge_system_ytdlp() {
+    local removed=false
+
+    if [[ "$(check_os)" == "macos" ]] && command -v brew &>/dev/null && brew list yt-dlp &>/dev/null; then
+        info "Removing yt-dlp (installed via Homebrew) — yt() now runs it via uvx."
+        run_cmd brew uninstall --force yt-dlp
+        removed=true
+    fi
+
+    if command -v uv &>/dev/null && uv tool list 2>/dev/null | grep -q '^yt-dlp '; then
+        info "Removing yt-dlp (installed via uv tool) — yt() now runs it via uvx."
+        run_cmd uv tool uninstall yt-dlp
+        removed=true
+    fi
+
+    if command -v pipx &>/dev/null && pipx list --short 2>/dev/null | grep -q '^yt-dlp '; then
+        info "Removing yt-dlp (installed via pipx) — yt() now runs it via uvx."
+        run_cmd pipx uninstall yt-dlp
+        removed=true
+    fi
+
+    if [[ "$(check_os)" != "macos" ]]; then
+        if command -v dpkg &>/dev/null && dpkg -s yt-dlp &>/dev/null; then
+            info "Removing yt-dlp (installed via apt) — yt() now runs it via uvx."
+            run_cmd sudo apt remove -y yt-dlp
+            removed=true
+        elif command -v rpm &>/dev/null && rpm -q yt-dlp &>/dev/null; then
+            info "Removing yt-dlp (installed via dnf) — yt() now runs it via uvx."
+            run_cmd sudo dnf remove -y yt-dlp
+            removed=true
+        elif command -v pacman &>/dev/null && pacman -Q yt-dlp &>/dev/null; then
+            info "Removing yt-dlp (installed via pacman) — yt() now runs it via uvx."
+            run_cmd sudo pacman -R --noconfirm yt-dlp
+            removed=true
+        fi
+    fi
+
+    # Never touch a system Python's site-packages -- warn with the exact
+    # removal command instead.
+    if command -v pip &>/dev/null && pip show yt-dlp &>/dev/null; then
+        warn "yt-dlp is also installed via pip — yt() no longer needs it. Remove manually: pip uninstall yt-dlp"
+    fi
+
+    if [[ "$(check_os)" == "macos" ]]; then
+        # macOS: package managers above cover the normal case. A loose binary
+        # here is rare and its location unpredictable -- warn rather than guess.
+        if command -v yt-dlp &>/dev/null; then
+            warn "yt-dlp binary still on PATH at $(command -v yt-dlp) — yt() no longer needs it. Remove manually."
+        fi
+    else
+        # Linux: force-remove every loose yt-dlp found on PATH, not just the
+        # first `command -v` hit -- a duplicate like /usr/bin + /bin (often the
+        # same file via a symlinked dir, but not guaranteed) must not leave one
+        # behind. None of these are owned by a package manager (that case was
+        # already handled above), so this is the only place they get removed.
+        local -a loose_paths=()
+        local dir lp
+        local old_ifs="$IFS"
+        IFS=':'
+        for dir in $PATH; do
+            [[ -n "$dir" ]] || continue
+            lp="$dir/yt-dlp"
+            [[ -f "$lp" && -x "$lp" ]] || continue
+            loose_paths+=("$lp")
+        done
+        IFS="$old_ifs"
+
+        for lp in "${loose_paths[@]}"; do
+            [[ -e "$lp" ]] || continue   # already gone (e.g. same file via a symlinked dir)
+            info "Removing yt-dlp binary at $lp — yt() now runs it via uvx."
+            run_cmd sudo rm -f "$lp"
+            removed=true
+        done
+    fi
+
+    if [[ "$removed" == true ]]; then
+        success "System yt-dlp removed — yt() runs it via uvx from here on."
+    fi
+}
+
 install_macos_prerequisites() {
     # --- Homebrew ---
     if ! command -v brew &>/dev/null; then
@@ -1658,7 +1748,7 @@ install_macos_prerequisites() {
     # vendor installer performs NO checksum or signature verification, so the
     # Linux path is deliberately left manual rather than automated around a
     # supply chain we would not otherwise accept. See docs/HERDR.md.
-    local -a formulae=(stow uv direnv jq fzf eza zoxide neovim tmux ripgrep fd gh git-lfs glow trash herdr)
+    local -a formulae=(stow uv direnv jq fzf eza zoxide neovim tmux ripgrep fd gh git-lfs glow trash herdr aria2 ffmpeg)
     local to_install=()
 
     for formula in "${formulae[@]}"; do
@@ -1675,6 +1765,9 @@ install_macos_prerequisites() {
     else
         success "Core formulae already installed"
     fi
+
+    # yt() now runs yt-dlp on demand via uvx -- purge any installed copy.
+    _purge_system_ytdlp
 
     # Pin herdr the moment it exists. The pre-flight guard runs BEFORE this
     # point, so on a fresh box it finds no herdr and returns clean -- leaving a
@@ -1696,7 +1789,7 @@ install_macos_prerequisites() {
     fi
 
     # --- Optional CLI tools ---
-    local -a optional=(ffmpeg yt-dlp aria2 tree fastfetch yazi)
+    local -a optional=(tree fastfetch yazi)
     local opt_install=()
 
     for formula in "${optional[@]}"; do
@@ -1708,7 +1801,7 @@ install_macos_prerequisites() {
     if (( ${#opt_install[@]} > 0 )); then
         echo
         info "Optional CLI tools not yet installed: ${opt_install[*]}"
-        if confirm "Install optional CLI tools (media, git UI, file manager)?"; then
+        if confirm "Install optional CLI tools (tree, fastfetch, yazi)?"; then
             # Install individually + non-fatal: a discontinued or renamed optional
             # formula must never abort the whole install (these are non-essential).
             local opt
@@ -1836,11 +1929,11 @@ install_linux_prerequisites() {
         info "Detected package manager: $pkg_mgr"
 
         # --- Core tools ---
-        if confirm "Install core tools (stow, jq, fzf, direnv, eza, zoxide, tmux, ripgrep, fd, gh, git-lfs, trash-cli, neovim, glow)?"; then
+        if confirm "Install core tools (stow, jq, fzf, direnv, eza, zoxide, tmux, ripgrep, fd, gh, git-lfs, trash-cli, neovim, glow, aria2, ffmpeg)?"; then
             case "$pkg_mgr" in
                 apt)
                     run_cmd sudo apt update
-                    run_cmd sudo apt install -y stow jq fzf direnv zoxide tmux ripgrep fd-find git-lfs trash-cli glow neovim unzip
+                    run_cmd sudo apt install -y stow jq fzf direnv zoxide tmux ripgrep fd-find git-lfs trash-cli glow neovim unzip aria2 ffmpeg
                     # fd-find installs as fdfind on Debian/Ubuntu — symlink to fd
                     if command -v fdfind &>/dev/null && ! command -v fd &>/dev/null; then
                         run_cmd mkdir -p "$HOME/.local/bin"
@@ -1860,11 +1953,14 @@ install_linux_prerequisites() {
                         run_cmd sudo apt update && run_cmd sudo apt install -y gh
                     fi
                     ;;
-                dnf)    run_cmd sudo dnf install -y stow jq fzf direnv eza zoxide tmux ripgrep fd-find gh git-lfs trash-cli glow neovim ;;
-                pacman) run_cmd sudo pacman -S --noconfirm stow jq fzf direnv eza zoxide tmux ripgrep fd github-cli git-lfs trash-cli glow neovim ;;
-                zypper) run_cmd sudo zypper install -y stow jq fzf direnv zoxide tmux ripgrep fd git-lfs trash-cli glow neovim ;;
+                dnf)    run_cmd sudo dnf install -y stow jq fzf direnv eza zoxide tmux ripgrep fd-find gh git-lfs trash-cli glow neovim aria2 ffmpeg ;;
+                pacman) run_cmd sudo pacman -S --noconfirm stow jq fzf direnv eza zoxide tmux ripgrep fd github-cli git-lfs trash-cli glow neovim aria2 ffmpeg ;;
+                zypper) run_cmd sudo zypper install -y stow jq fzf direnv zoxide tmux ripgrep fd git-lfs trash-cli glow neovim aria2 ffmpeg ;;
             esac
         fi
+
+        # yt() now runs yt-dlp on demand via uvx -- purge any installed copy.
+        _purge_system_ytdlp
 
         # --- lazygit (required — installed from latest GitHub release on all distros) ---
         if command -v lazygit &>/dev/null; then
@@ -1908,17 +2004,16 @@ install_linux_prerequisites() {
         fi
 
         # --- Optional CLI tools ---
-        if confirm "Install optional CLI tools (ffmpeg, yt-dlp, aria2, tree, fastfetch, yazi)?"; then
+        if confirm "Install optional CLI tools (tree, fastfetch, yazi)?"; then
             # Non-fatal: a missing/renamed optional package must not abort the install.
             case "$pkg_mgr" in
-                apt)    run_cmd sudo apt install -y ffmpeg aria2 tree fastfetch || warn "Some optional tools not installed (skipped)."
-                        info "yt-dlp and yazi may need manual install on Debian/Ubuntu."
-                        info "  yt-dlp: pip install yt-dlp  OR  https://github.com/yt-dlp/yt-dlp#installation"
+                apt)    run_cmd sudo apt install -y tree fastfetch || warn "Some optional tools not installed (skipped)."
+                        info "yazi may need manual install on Debian/Ubuntu."
                         info "  yazi:   installer offers a GitHub release download below; or see https://github.com/sxyazi/yazi#installation"
                         ;;
-                dnf)    run_cmd sudo dnf install -y ffmpeg aria2 tree fastfetch yt-dlp yazi || warn "Some optional tools not installed (skipped)." ;;
-                pacman) run_cmd sudo pacman -S --noconfirm ffmpeg aria2 tree fastfetch yt-dlp yazi || warn "Some optional tools not installed (skipped)." ;;
-                zypper) run_cmd sudo zypper install -y ffmpeg aria2 tree fastfetch || warn "Some optional tools not installed (skipped)." ;;
+                dnf)    run_cmd sudo dnf install -y tree fastfetch yazi || warn "Some optional tools not installed (skipped)." ;;
+                pacman) run_cmd sudo pacman -S --noconfirm tree fastfetch yazi || warn "Some optional tools not installed (skipped)." ;;
+                zypper) run_cmd sudo zypper install -y tree fastfetch || warn "Some optional tools not installed (skipped)." ;;
             esac
         fi
     fi

@@ -1088,6 +1088,9 @@ yt() {
 # --video-highest: Maximum available resolution
 --alias video-highest "-f bestvideo+bestaudio/best"
 
+# --best-video: Best mp4 video + m4a audio (no metadata extras)
+--alias best-video "-f bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]"
+
 # -----------------------------------------------------------------------------
 # Aliases: Audio
 # -----------------------------------------------------------------------------
@@ -1133,6 +1136,9 @@ yt() {
 # --bundle-high: Highest video + all metadata
 --alias bundle-high "-f bestvideo+bestaudio/best --write-subs --sub-format srt/ass/vtt --write-auto-subs --write-comments --no-write-info-json --print-to-file %(comments)#j %(upload_date)s-%(title)s-[%(id)s].comments.json --sub-langs live_chat --write-description --write-thumbnail"
 
+# --best-bundle: Best mp4/m4a video + all metadata
+--alias best-bundle "-f bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4] --write-subs --sub-format srt/ass/vtt --write-auto-subs --write-comments --no-write-info-json --print-to-file %(comments)#j %(upload_date)s-%(title)s-[%(id)s].comments.json --sub-langs live_chat --write-description --write-thumbnail"
+
 # -----------------------------------------------------------------------------
 # Aliases: Modifiers
 # -----------------------------------------------------------------------------
@@ -1154,6 +1160,7 @@ ${fg[yellow]}VIDEO${reset_color}
   --video-low        Below 1080p (next tier down)
   --video-high       Above 1080p (next tier up)
   --video-highest    Highest available resolution
+  --best-video       Best mp4 video + m4a audio
 
 ${fg[yellow]}AUDIO${reset_color}
   --audio-only       Highest bitrate audio (extracts audio)
@@ -1173,6 +1180,7 @@ ${fg[yellow]}BUNDLES ${fg[white]}(video/audio + all metadata)${reset_color}
   --bundle-audio     Audio + subs, comments, chat, desc, thumb
   --bundle           Same as --bundle-video
   --bundle-high      Highest video + all metadata
+  --best-bundle      Best mp4/m4a + subs, comments, chat, desc, thumb
 
 ${fg[yellow]}MODIFIERS${reset_color}
   --overwrite        Force overwrite existing files
@@ -1184,6 +1192,7 @@ ${fg[yellow]}EXAMPLES${reset_color}
   ${fg[magenta]}yt --video-highest https://youtube.com/watch?v=dQw4w9WgXcQ${reset_color}   # max resolution
   ${fg[magenta]}yt --audio-only https://youtube.com/watch?v=dQw4w9WgXcQ${reset_color}      # extract audio
   ${fg[magenta]}yt --bundle https://youtube.com/watch?v=dQw4w9WgXcQ${reset_color}          # video + all metadata
+  ${fg[magenta]}yt --best-bundle https://youtube.com/watch?v=dQw4w9WgXcQ${reset_color}     # best mp4/m4a + all metadata
   ${fg[magenta]}yt --thumbnail https://youtube.com/watch?v=dQw4w9WgXcQ${reset_color}       # thumbnail only
   ${fg[magenta]}yt --overwrite https://youtube.com/watch?v=dQw4w9WgXcQ${reset_color}       # re-download, overwrite
 
@@ -1194,15 +1203,18 @@ ${fg[yellow]}DEFAULTS${reset_color}
   ${fg[white]}•${reset_color} Restricted filenames (safe characters only)
   ${fg[white]}•${reset_color} Intermediate files auto-deleted after merge
   ${fg[white]}•${reset_color} No overwrites (use --overwrite to force)
+  ${fg[white]}•${reset_color} Runs via uvx — yt-dlp is never installed, always current
 
 ${fg[yellow]}REQUIRES${reset_color}
+  ${fg[white]}•${reset_color} uv (runs yt-dlp via uvx)
+  ${fg[white]}•${reset_color} ffmpeg (merges video + audio)
   ${fg[white]}•${reset_color} aria2c (for faster downloads)
 
 ${fg[yellow]}CONFIG${reset_color}
   ${fg[cyan]}$config_file${reset_color}
 EOF
   else
-    yt-dlp "$@"
+    UV_EXCLUDE_NEWER=2999-01-01T00:00:00Z command uvx --prerelease allow yt-dlp "$@"
   fi
 }
 
