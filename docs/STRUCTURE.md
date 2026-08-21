@@ -158,13 +158,24 @@ macOS-specific configuration files.
 
 ### `settings/` - Exported App Configurations
 
-Application settings exported for reference and manual import. These are not auto-deployed by the installer.
+Application settings exported for reference and manual import. Most are not
+auto-deployed by the installer — `settings/iterm2/DynamicProfiles/` (symlinked)
+and `settings/iterm2/prefs/` (offered, confirm-gated) are the exceptions.
 
 #### `settings/iterm2/`
 
-| File            | Purpose                                                                      |
-| --------------- | ---------------------------------------------------------------------------- |
-| `profiles.json` | iTerm2 profiles (import via Profiles > Other Actions > Import JSON Profiles) |
+| File / Directory | Purpose                                                                                                                                                                                                                                                                                                                                     |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `profiles.json`  | Older, colors-only profile export (import via Profiles > Other Actions > Import JSON Profiles). Superseded by `prefs/` below, which already contains every profile plus everything else — kept for manual/partial import.                                                                                                                   |
+| `prefs/`         | Full portable iTerm2 preferences: every profile, color scheme, font, key binding, pointer/ctrl-click binding, the Hotkey Window, and general prefs — the entire `com.googlecode.iterm2` macOS preferences domain in one sanitized, public-safe file. See `settings/iterm2/prefs/NOTICE.md` for its adapted-from-upstream attribution (MIT). |
+
+`prefs/export.sh` (run manually, dev Mac only) captures this Mac's current
+settings, strips volatile/machine-specific fields, and **refuses to write**
+if it finds anything that still looks like a secret, token, or absolute home
+path — review the diff before committing, same discipline as `git-leak-scan`.
+`prefs/restore.sh` (standalone, or offered during `./install.sh` on macOS)
+backs up whatever is currently set, then imports the repo's version. Both
+require iTerm2 to be fully quit first.
 
 #### `settings/wezterm/`
 

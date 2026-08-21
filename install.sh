@@ -2489,6 +2489,24 @@ stow_platform() {
     fi
 
     _iterm_profiles_sync apply
+
+    # --- iTerm2 full preferences restore (profiles, key bindings, pointer/
+    # ctrl-click bindings, Hotkey Window, general prefs) -----------------------
+    # Deliberately NOT unconditional like _iterm_profiles_sync above: this
+    # REPLACES the live com.googlecode.iterm2 defaults domain wholesale, so it
+    # must stay an explicit, default-NO offer, never a silent "make it so"
+    # step -- a machine's settings may have been customized further since the
+    # repo snapshot, and importing would clobber that with no warning otherwise.
+    local iterm_prefs_restorer="$REPO_DIR/settings/iterm2/prefs/restore.sh"
+    local iterm_prefs_plist="$REPO_DIR/settings/iterm2/prefs/com.googlecode.iterm2.plist"
+    if [[ -x "$iterm_prefs_restorer" && -f "$iterm_prefs_plist" && -d "$HOME/Library/Application Support/iTerm2" ]]; then
+        echo
+        if pgrep -x iTerm2 >/dev/null 2>&1; then
+            info "iTerm2 is running — quit it first, then run ${CYAN}${iterm_prefs_restorer}${RESET} to restore full preferences (profiles, key bindings, pointer bindings, Hotkey Window)."
+        elif confirm "Restore full iTerm2 preferences from the repo? This REPLACES current settings (backed up first)."; then
+            run_cmd "$iterm_prefs_restorer" --yes
+        fi
+    fi
 }
 
 # ==============================================================================
