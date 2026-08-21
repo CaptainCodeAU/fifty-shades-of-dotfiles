@@ -166,7 +166,6 @@ and `settings/iterm2/prefs/` (offered, confirm-gated) are the exceptions.
 
 | File / Directory | Purpose                                                                                                                                                                                                                                                                                                                                     |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `profiles.json`  | Older, colors-only profile export (import via Profiles > Other Actions > Import JSON Profiles). Superseded by `prefs/` below, which already contains every profile plus everything else — kept for manual/partial import.                                                                                                                   |
 | `prefs/`         | Full portable iTerm2 preferences: every profile, color scheme, font, key binding, pointer/ctrl-click binding, the Hotkey Window, and general prefs — the entire `com.googlecode.iterm2` macOS preferences domain in one sanitized, public-safe file. See `settings/iterm2/prefs/NOTICE.md` for its adapted-from-upstream attribution (MIT). |
 
 `prefs/export.sh` (run manually, dev Mac only) captures this Mac's current
