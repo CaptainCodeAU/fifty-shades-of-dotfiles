@@ -1436,6 +1436,30 @@ check_prerequisites() {
 # Installation: Prerequisites
 # ==============================================================================
 
+# check_prerequisites() treats Python 3.13 as REQUIRED (missing it aborts the
+# whole install), but the only code that installed it used to live in
+# post_install() -- reached by main() only AFTER check_prerequisites() passes.
+# On a genuinely fresh box (uv just installed this same run, zero managed
+# Pythons) that is a dead end: the check can never pass on its own. Confirmed
+# live on a clean Mac 2026-08-21 -- install aborted at "Some prerequisites
+# are still missing" with Python 3.13 as the sole blocker, one step before
+# post_install() would have installed it. Extracted so install_prerequisites()
+# can provision it in the SAME pass that installs uv itself, before the
+# re-verification; post_install() still calls this too (idempotent, prints
+# "already available" the second time) as a harmless safety net.
+_ensure_python_313() {
+    command -v uv &>/dev/null || return 0
+    local has_python
+    has_python=$(uv python list 2>/dev/null | grep "cpython-3.13" | grep -v "download available" | head -1)
+    if [[ -z "$has_python" ]]; then
+        if confirm "Install Python 3.13 via uv?"; then
+            run_cmd uv python install 3.13
+        fi
+    else
+        success "Python 3.13 already available via uv"
+    fi
+}
+
 install_prerequisites() {
     local os
     os=$(check_os)
@@ -1450,6 +1474,11 @@ install_prerequisites() {
         error "Unsupported OS"
         return 1
     fi
+
+    # Provision Python 3.13 now, not only in post_install() -- see the
+    # function comment above for why this must happen before the
+    # check_prerequisites() re-verification that follows install_prerequisites().
+    _ensure_python_313
 }
 
 # Install rustup + stable Rust toolchain. Linux/WSL only — macOS users get
@@ -2532,17 +2561,7 @@ GITEOF"
     fi
 
     # --- Python via uv ---
-    if command -v uv &>/dev/null; then
-        local has_python
-        has_python=$(uv python list 2>/dev/null | grep "cpython-3.13" | grep -v "download available" | head -1)
-        if [[ -z "$has_python" ]]; then
-            if confirm "Install Python 3.13 via uv?"; then
-                run_cmd uv python install 3.13
-            fi
-        else
-            success "Python 3.13 already available via uv"
-        fi
-    fi
+    _ensure_python_313
 
     # --- NVM ---
     # Pin the exact, audited tag (v${NVM_MIN_VERSION}); older nvm is affected by
