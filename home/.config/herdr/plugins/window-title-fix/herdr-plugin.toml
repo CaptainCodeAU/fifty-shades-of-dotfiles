@@ -1,0 +1,28 @@
+id = "dotfiles.window-title-fix"
+name = "Window Title"
+version = "0.2.0"
+min_herdr_version = "0.8.2"
+description = "Keeps the outer terminal title accurate: works around herdr#3200 for plain workspaces, and shows live project/branch/agent-status instead of the buggy workspace label when an agent is focused"
+platforms = ["macos", "linux"]
+
+[[events]]
+on = "workspace.created"
+command = ["./fix-title.sh"]
+
+[[events]]
+on = "pane.agent_status_changed"
+command = ["./update-title.sh"]
+
+[[events]]
+on = "pane.agent_detected"
+command = ["./update-title.sh"]
+
+[[events]]
+on = "pane.focused"
+command = ["./update-title.sh"]
+
+[[actions]]
+id = "toggle-host"
+title = "Toggle hostname in window title"
+contexts = ["global"]
+command = ["./toggle-host.sh"]

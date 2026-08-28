@@ -150,6 +150,25 @@ pane_history = true
 agent_panel_sort = "priority"
 show_agent_labels_on_pane_borders = true
 
+# Which host (mini vs MacBook) and workspace the outer terminal title shows.
+# Renders on the herdr server, so {hostname} is always the machine the panes
+# actually run on, even when attached via `herdr --remote`.
+window_title = "{hostname}: {workspace}"
+
+# Status entry at the right edge of herdr's own (inner) tab bar: live GPU
+# reading for the mlbox-ubuntu 3090 box, over SSH. Shows "PC off" when it's
+# asleep/unreachable. Points at the repo path directly (same reason as the
+# plugin below: herdr's own runtime dir only ever gets config.toml stowed
+# into it, per home/.config/herdr/.gitignore) -- Mac-specific for now, since
+# the SSH access this depends on only exists from this Mac. Resolves $HOME
+# at runtime via the password database instead of a literal path, both
+# because herdr's daemon has no $HOME set (see gpu-status.sh) and so this
+# tracked file never has to hold a real username.
+tab_bar_right = [
+  { type = "command", command = "HOME=\"$(eval echo ~$(id -un))\"; \"$HOME/CODE/Scaffoldings/fifty-shades-of-dotfiles/home/.config/herdr/gpu-status.sh\"", interval_seconds = 5, timeout_seconds = 4 },
+]
+tab_bar_right_separator = " · "
+
 [theme]
 name = "terminal"
 auto_switch = false

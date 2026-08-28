@@ -16,3 +16,7 @@
 *
 !.gitignore
 !config.toml
+!gpu-status.sh
+!plugins/
+!plugins/window-title-fix/
+!plugins/window-title-fix/*
