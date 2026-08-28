@@ -1,13 +1,13 @@
 id = "dotfiles.window-title-fix"
 name = "Window Title"
-version = "0.2.0"
+version = "0.3.0"
 min_herdr_version = "0.8.2"
-description = "Keeps the outer terminal title accurate: works around herdr#3200 for plain workspaces, and shows live project/branch/agent-status instead of the buggy workspace label when an agent is focused"
+description = "Keeps the outer terminal title accurate: shows live project/branch/agent-status when an agent is focused, and falls back to the focused pane's real folder name otherwise -- works around herdr#3200 without ever renaming a workspace"
 platforms = ["macos", "linux"]
 
 [[events]]
 on = "workspace.created"
-command = ["./fix-title.sh"]
+command = ["./update-title.sh"]
 
 [[events]]
 on = "pane.agent_status_changed"
