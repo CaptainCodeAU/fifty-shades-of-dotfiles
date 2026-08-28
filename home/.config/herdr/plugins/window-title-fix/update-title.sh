@@ -17,6 +17,13 @@
 # group's icon comes first. A single space between groups, and one space
 # after each icon; names within one group joined by " | ".
 #
+# Whichever pane herdr currently has focused gets its name wrapped in
+# [brackets], in whichever status group it happens to be sitting in. Matched
+# by the pane's own `.focused` field, not by comparing name text -- two
+# panes can share a display name (same folder basename, different parent
+# path), and matching by pane identity is what keeps that from bracketing
+# the wrong one, or both.
+#
 # Only panes where agent == "claude" are counted -- this fleet is
 # Claude-only by design, and this filter makes that explicit rather than
 # incidentally true because every other agent field happens to be null.
@@ -54,12 +61,15 @@ snapshot=$("$HERDR_BIN_PATH" api snapshot)
 
 names_for_status() {
   # $1 = agent_status value; prints project names for every claude pane in
-  # that status, joined by NAME_JOIN, across the whole fleet.
+  # that status, joined by NAME_JOIN, across the whole fleet. The focused
+  # pane's own name comes back wrapped in [brackets] -- see the [brackets]
+  # note in the header comment above.
   printf '%s' "$snapshot" | jq -r --arg s "$1" --arg j "$NAME_JOIN" '
     [.result.snapshot.panes[]
      | select(.agent == "claude") | select(.agent_status == $s)
-     | ((.foreground_cwd // .cwd // "") | split("/") | last)
-     | select(length > 0)]
+     | {name: ((.foreground_cwd // .cwd // "") | split("/") | last), focused: .focused}
+     | select(.name | length > 0)
+     | if .focused then "[" + .name + "]" else .name end]
     | join($j)'
 }
 
@@ -84,10 +94,11 @@ groups=""
 # live cwd, until a human renames it. This keeps the title correct without
 # ever renaming (and therefore permanently pinning) the workspace.
 if [ -z "$groups" ]; then
-  groups=$(printf '%s' "$snapshot" | jq -r '
+  fallback_name=$(printf '%s' "$snapshot" | jq -r '
     [.result.snapshot.panes[] | select(.focused == true)
      | ((.foreground_cwd // .cwd // "") | split("/") | last)
      | select(length > 0)] | first // ""')
+  [ -n "$fallback_name" ] && groups="[${fallback_name}]"
 fi
 
 title="$groups"
