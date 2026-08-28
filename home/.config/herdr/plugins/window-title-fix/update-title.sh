@@ -1,7 +1,15 @@
 #!/bin/sh
 # Builds the outer terminal title from a fresh `herdr api snapshot` instead
-# of herdr's workspace label, which lags after a plain `cd` -- see
-# herdr#3200 and fix-title.sh, which only covers the no-agent case.
+# of herdr's workspace label, which lags after a plain `cd` -- see herdr#3200
+# (still open on 0.8.2). This script covers the no-agent case itself, via the
+# focused-pane-cwd fallback below -- there is no companion rename script.
+# Earlier this ran alongside fix-title.sh, which "fixed" herdr#3200 by calling
+# `herdr workspace rename` on every new workspace. That rename permanently
+# pins the workspace's sidebar label (writes session.json's custom_name,
+# which then always wins over the real, live-tracked cwd) -- it does not
+# self-clear, and there is no supported way to un-pin a workspace once
+# renamed (upstream herdr#3252, closed not_planned). That script pinned a
+# real workspace to the wrong name on 2026-08-28 and was deleted for it.
 #
 # Layout: "🔴 blocked...names 🔵 done...names 🟢 idle...names ⚪ unknown...names 🟡 working...names"
 # No leading project name: the previous "<focused project>" prefix was
@@ -68,11 +76,27 @@ groups=""
 [ -n "$unknown_names" ] && groups="${groups:+$groups }${UNKNOWN_ICON} ${unknown_names}"
 [ -n "$working_names" ] && groups="${groups:+$groups }${WORKING_ICON} ${working_names}"
 
+# No claude panes in any status (e.g. a plain shell workspace, or every agent
+# just exited) -- fall back to the focused pane's real project name instead
+# of clearing the title. Clearing would hand rendering back to herdr's own
+# window_title = "{hostname}: {workspace}" template, which is exactly
+# herdr#3200: it shows the directory the workspace was CREATED from, not its
+# live cwd, until a human renames it. This keeps the title correct without
+# ever renaming (and therefore permanently pinning) the workspace.
+if [ -z "$groups" ]; then
+  groups=$(printf '%s' "$snapshot" | jq -r '
+    [.result.snapshot.panes[] | select(.focused == true)
+     | ((.foreground_cwd // .cwd // "") | split("/") | last)
+     | select(length > 0)] | first // ""')
+fi
+
 title="$groups"
 if [ -n "$title" ] && [ -f "$HERDR_PLUGIN_STATE_DIR/show_host" ]; then
   title="$(hostname) $title"
 fi
 
+# Last resort: no panes at all (e.g. an empty workspace). Nothing to build a
+# title from, so clear it rather than show stale text.
 if [ -z "$title" ]; then
   "$HERDR_BIN_PATH" terminal title clear >/dev/null
   exit 0
