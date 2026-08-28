@@ -182,3 +182,8 @@ tab_bar_right_separator = " · "
 [theme]
 name = "terminal"
 auto_switch = false
+
+# Navigate-mode cursor row color in the sidebar, kept separate from the
+# active Space/Agent row highlight (theme.custom.active_row_bg, unset here).
+[theme.custom]
+selection_bg = "#313244"
