@@ -150,6 +150,16 @@ pane_history = true
 agent_panel_sort = "priority"
 show_agent_labels_on_pane_borders = true
 
+# Hold ctrl and right-click-DRAG to send the gesture straight to the app in
+# the pane instead of opening herdr's own pane menu. Per herdr's changelog
+# (#148) this only forwards hold/drag; a plain tap/click still opens herdr's
+# menu regardless of modifier -- for that, use the menu's own "Send
+# right-clicks to pane" (or `herdr pane input --right-click pane`), a
+# separate per-pane toggle added in 0.8.2. The link-handler plugin's
+# ctrl+click trigger only fires on the LEFT button (docs/HERDR_PLUGINS.md),
+# so ctrl+right-click here is a distinct, non-clashing gesture.
+right_click_passthrough_modifier = "ctrl"
+
 # Which host (mini vs MacBook) and workspace the outer terminal title shows.
 # Renders on the herdr server, so {hostname} is always the machine the panes
 # actually run on, even when attached via `herdr --remote`.
