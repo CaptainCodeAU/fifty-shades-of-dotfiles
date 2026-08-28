@@ -156,9 +156,9 @@ HERDR_COOLDOWN_DAYS="7"
 #   3. shasum -a 256 herdr-linux-*   (sha256sum on Linux)
 #   4. update HERDR_VERSION + both hashes below in ONE commit
 #   5. push, pull on each box, re-run ./install.sh
-HERDR_VERSION="v0.8.0"
-HERDR_SHA256_LINUX_X86_64="b872ea7e40fa2cb17e857ac9b62b1bf26db7b403c622f5d2f3f5b35f6e9acd28"
-HERDR_SHA256_LINUX_AARCH64="f647ac66468d9efbc642fe534fb284468f0aea60641606fc008dfc0d82a3ca87"
+HERDR_VERSION="v0.8.2"
+HERDR_SHA256_LINUX_X86_64="976150a14d490c94b243ea2e1a7eb2dfb67f12e36b182db90936f6728e6aecf4"
+HERDR_SHA256_LINUX_AARCH64="f55610658e1c2e0d2aaef730b4b2ab885f7f8ba00285ab372bfb14f2e3d5b40d"
 
 # --- Helpers ---
 info()    { echo -e "${CYAN}ℹ️  $*${RESET}"; }
