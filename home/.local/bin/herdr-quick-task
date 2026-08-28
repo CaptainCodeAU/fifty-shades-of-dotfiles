@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+# ============================================================================
+#  herdr-quick-task -- start a coding agent and hand it a task, in one shot
+# ============================================================================
+# Relies on herdr 0.8.2's `agent start` fix: it now blocks until the agent is
+# genuinely ready for input before returning, instead of racing ahead. Before
+# that fix, scripting this required polling `pane read` in a loop to guess
+# when it was safe to send the first prompt. This script needs none of that.
+#
+# Usage: herdr-quick-task <directory> "<task prompt>" [agent-kind]
+#   agent-kind defaults to "claude". Other kinds herdr supports: codex,
+#   gemini, cursor, and more -- see `herdr agent start` in the CLI reference.
+#
+# Creates a new background workspace at <directory>, starts the agent there,
+# sends it the task, waits for the agent to settle (idle, done, or blocked
+# on a question), then prints what happened and how to jump to it.
+
+set -euo pipefail
+
+if [ "$#" -lt 2 ]; then
+  echo "usage: herdr-quick-task <directory> \"<task prompt>\" [agent-kind]" >&2
+  exit 2
+fi
+
+dir=$1
+task=$2
+kind=${3:-claude}
+
+if [ ! -d "$dir" ]; then
+  echo "herdr-quick-task: no such directory: $dir" >&2
+  exit 1
+fi
+
+# Agent names must match [a-z][a-z0-9_-]{0,31} and be unique among live agents.
+base=$(basename "$dir" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | sed 's/-\+$//')
+name="${base:0:20}-$(date +%s | tail -c 6)"
+
+echo "Creating a background workspace at $dir ..." >&2
+ws_json=$(herdr workspace create --cwd "$dir" --label "$base" --no-focus)
+pane_id=$(echo "$ws_json" | jq -r '.result.root_pane.pane_id')
+
+# A pane's shell can take a moment to finish its own startup (motd, prompt
+# init, etc.) before herdr considers it "available". That's a different race
+# than the one `agent start` itself fixed -- retry a few times rather than
+# failing on a pane that will be ready one second later.
+echo "Starting $kind agent \"$name\" on pane $pane_id (waiting until it's actually ready for input) ..." >&2
+attempt=1
+max_attempts=10
+while true; do
+  if start_json=$(herdr agent start "$name" --kind "$kind" --pane "$pane_id" 2>&1); then
+    break
+  fi
+  code=$(echo "$start_json" | jq -r '.error.code // empty' 2>/dev/null || true)
+  if [ "$code" = "agent_pane_busy" ] && [ "$attempt" -lt "$max_attempts" ]; then
+    sleep 1
+    attempt=$((attempt + 1))
+    continue
+  fi
+  echo "herdr-quick-task: agent start failed: $start_json" >&2
+  exit 1
+done
+
+echo "Sending the task and waiting for it to settle ..." >&2
+herdr agent prompt "$name" "$task" --wait >/dev/null
+
+# Not `herdr agent get` here: herdr's status detector only settles on a
+# confident idle/done/blocked reading once a pane has actually been SEEN by
+# a focused client (documented for idle vs done, and observed here to apply
+# more broadly -- a --no-focus, never-viewed pane can sit at "unknown"
+# indefinitely no matter how long you poll). `agent prompt --wait` already
+# reliably confirms the task settled, so trust that instead of re-checking.
+echo "Task finished for agent \"$name\"."
+echo "Jump to it with: herdr agent focus $name"
