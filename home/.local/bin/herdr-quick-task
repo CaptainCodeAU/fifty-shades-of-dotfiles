@@ -63,11 +63,11 @@ done
 echo "Sending the task and waiting for it to settle ..." >&2
 herdr agent prompt "$name" "$task" --wait >/dev/null
 
-# Not `herdr agent get` here: herdr's status detector only settles on a
-# confident idle/done/blocked reading once a pane has actually been SEEN by
-# a focused client (documented for idle vs done, and observed here to apply
-# more broadly -- a --no-focus, never-viewed pane can sit at "unknown"
-# indefinitely no matter how long you poll). `agent prompt --wait` already
-# reliably confirms the task settled, so trust that instead of re-checking.
-echo "Task finished for agent \"$name\"."
+# NOTE: agent_status lives at .result.agent.agent_status, not
+# .result.agent_status -- `agent get`'s top-level result key is "agent"
+# (singular), unlike `agent list`'s "agents" array where agent_status sits
+# alongside "agent" instead of inside it. Confirmed live: this settles to a
+# real status without needing anyone to focus the pane; no focus required.
+status=$(herdr agent get "$name" | jq -r '.result.agent.agent_status // "unknown"')
+echo "Agent \"$name\" is now: $status"
 echo "Jump to it with: herdr agent focus $name"
