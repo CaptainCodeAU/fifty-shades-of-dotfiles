@@ -26,8 +26,24 @@
 // On startup this tries to CONNECT to its own socket path first. A successful
 // connect means another instance is already listening, so this one exits
 // immediately rather than fighting over the socket file.
+//
+// RENDER-THEN-PLAY, NOT LIVE SPEAKING (2026-09-01)
+// -------------------------------------------------
+// Reported: speech through this daemon sounded muffled, "like someone
+// blowing into the microphone" -- while the identical text/voice/rate
+// rendered to a FILE (via startSpeaking(_:to:)) sounded correct, confirmed
+// byte-identical to `say`'s own file output. So NSSpeechSynthesizer's LIVE
+// playback path specifically is where the artifact comes from -- most
+// likely the file is 22050 Hz and something in that live path is not
+// converting it cleanly to the real output device rate. Rather than debug
+// Apple's internal live-audio pipeline, this renders to a temp file (the
+// path already proven clean) and plays that file back with AVAudioPlayer,
+// which is a standard, well-tested API for exactly this kind of format/rate
+// negotiation. Each call uses a unique temp filename so a rapid second
+// press can never race the first press's still-in-use file.
 import Foundation
 import AppKit
+import AVFoundation
 import Darwin
 
 let defaultVoiceId = "com.apple.ttsbundle.gryphon-neuralAX_Aaron_en-US_premium"
@@ -101,13 +117,12 @@ guard listen(listenFd, 8) == 0 else { fatalError("listen() failed: \(String(cStr
 
 trace("start pid=\(ProcessInfo.processInfo.processIdentifier)")
 
-// Prevent App Nap. This process has no window and is not the foreground
-// app, which is exactly what macOS uses to decide a background process gets
-// reduced scheduling priority, throttled timers, and throttled I/O. That
-// throttling does not touch file rendering (no real-time deadline to miss),
-// but it lands squarely on live CoreAudio playback -- which matches a
-// reported "speech quality" regression that disappeared when the same voice
-// and rate were rendered to a file instead of played live (2026-09-01).
+// Prevent App Nap (reduced scheduling priority, throttled timers/I-O for a
+// windowless background process). Tried first as the fix for the muffled-
+// audio report below; confirmed via `pmset -g assertions` to be genuinely
+// active, and made no audible difference -- so App Nap was NOT the actual
+// cause. Left in place anyway since a daemon with degraded scheduling
+// priority is a bad idea regardless; the real fix is RENDER-THEN-PLAY above.
 // The returned token is deliberately never released -- it stays in effect
 // for the daemon's whole lifetime.
 let activityToken = ProcessInfo.processInfo.beginActivity(
@@ -115,8 +130,10 @@ let activityToken = ProcessInfo.processInfo.beginActivity(
     reason: "speech playback must not be throttled"
 )
 
-final class SpeechHandler: NSObject, NSSpeechSynthesizerDelegate {
+final class SpeechHandler: NSObject, NSSpeechSynthesizerDelegate, AVAudioPlayerDelegate {
     let synth: NSSpeechSynthesizer?
+    var player: AVAudioPlayer?
+    var renderPath: String?
 
     override init() {
         synth = NSSpeechSynthesizer(voice: NSSpeechSynthesizer.VoiceName(rawValue: defaultVoiceId))
@@ -130,15 +147,46 @@ final class SpeechHandler: NSObject, NSSpeechSynthesizerDelegate {
             synth?.setVoice(NSSpeechSynthesizer.VoiceName(rawValue: voice))
         }
         synth?.rate = rate ?? defaultRate
-        _ = synth?.startSpeaking(text)
+        let path = NSTemporaryDirectory() + "speak-daemon-\(UUID().uuidString).aiff"
+        renderPath = path
+        _ = synth?.startSpeaking(text, to: URL(fileURLWithPath: path))
+    }
+
+    // Fires when RENDERING (to file) finishes -- not when playback finishes.
+    // finishedSpeaking is false if stop() interrupted the render, in which
+    // case there is a partial/no file and nothing should be played.
+    func speechSynthesizer(_ sender: NSSpeechSynthesizer, didFinishSpeaking finishedSpeaking: Bool) {
+        guard finishedSpeaking, let path = renderPath else { return }
+        do {
+            let p = try AVAudioPlayer(contentsOf: URL(fileURLWithPath: path))
+            p.delegate = self
+            player = p
+            p.play()
+        } catch {
+            trace("playback failed: \(error)")
+        }
+    }
+
+    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        self.player = nil
+        if let path = renderPath {
+            try? FileManager.default.removeItem(atPath: path)
+        }
+        renderPath = nil
     }
 
     func stop() {
-        synth?.stopSpeaking()
+        synth?.stopSpeaking()   // interrupts a still-in-progress render
+        player?.stop()          // interrupts an already-playing utterance
+        player = nil
+        if let path = renderPath {
+            try? FileManager.default.removeItem(atPath: path)
+        }
+        renderPath = nil
     }
 
     var isSpeaking: Bool {
-        synth?.isSpeaking ?? false
+        (synth?.isSpeaking ?? false) || (player?.isPlaying ?? false)
     }
 }
 
