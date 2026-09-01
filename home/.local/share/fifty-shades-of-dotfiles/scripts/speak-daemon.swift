@@ -101,6 +101,20 @@ guard listen(listenFd, 8) == 0 else { fatalError("listen() failed: \(String(cStr
 
 trace("start pid=\(ProcessInfo.processInfo.processIdentifier)")
 
+// Prevent App Nap. This process has no window and is not the foreground
+// app, which is exactly what macOS uses to decide a background process gets
+// reduced scheduling priority, throttled timers, and throttled I/O. That
+// throttling does not touch file rendering (no real-time deadline to miss),
+// but it lands squarely on live CoreAudio playback -- which matches a
+// reported "speech quality" regression that disappeared when the same voice
+// and rate were rendered to a file instead of played live (2026-09-01).
+// The returned token is deliberately never released -- it stays in effect
+// for the daemon's whole lifetime.
+let activityToken = ProcessInfo.processInfo.beginActivity(
+    options: [.userInitiated, .latencyCritical],
+    reason: "speech playback must not be throttled"
+)
+
 final class SpeechHandler: NSObject, NSSpeechSynthesizerDelegate {
     let synth: NSSpeechSynthesizer?
 
