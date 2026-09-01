@@ -32,24 +32,56 @@
 #
 # SPEED
 # ----
-# Default is 278 wpm, which is 1.5x. That number was MEASURED, not guessed:
-# `say` with no -r runs at 175 wpm (a fixed sample rendered identically with
-# `-r 175` and with no flag at all), and rendering the same sample across a
-# sweep of rates put 278 wpm at exactly 1.50x the baseline duration. Duration
-# is not perfectly inverse to rate -- there is fixed padding around phrases --
-# so 175 * 1.5 = 262 is measurably too slow, at 1.44x.
+# Default is 420 wpm, set by hand after listening to 278 wpm (1.5x) and
+# finding it too slow. The 278 number was MEASURED, not guessed, and the
+# method still matters if you want to re-tune: `say` with no -r runs at
+# 175 wpm (a fixed sample rendered identically with `-r 175` and with no flag
+# at all), and rendering the same sample across a sweep of rates put 278 wpm
+# at exactly 1.50x the baseline duration. Duration is not perfectly inverse to
+# rate -- there is fixed padding around phrases -- so 175 * 1.5 = 262 is
+# measurably too slow, at 1.44x. 420 wpm lands around 2.4x baseline.
+#
+# VOLUME
+# ------
+# Not controlled here, and the speech engine has no volume flag at all -- it
+# plays through whatever output device is current, at the Mac's system
+# volume. Use the system volume keys or the menu-bar slider to change
+# loudness.
+#
+# WHY A BACKGROUND DAEMON (2026-09-01)
+# -------------------------------------
+# This used to shell out to `say` directly. Measured: `say` (and NSSpeechSynthesizer,
+# which it wraps) costs ~1.0-1.9s to speak even one word in a fresh process --
+# every single press. The current voice ("Voice 1" in `say -v '?'`, internally
+# named Aaron, a premium neural voice) is ONLY reachable through that legacy
+# engine; the fast modern engine (AVSpeechSynthesizer, ~30ms even cold) cannot
+# reach Aaron at all -- confirmed by direct identifier lookup, not just
+# absence from its voice list. So the fix is a small persistent helper
+# (speak-daemon, in ../share/fifty-shades-of-dotfiles/scripts/speak-daemon.swift)
+# that keeps ONE NSSpeechSynthesizer alive across presses: ~1.0s on its first
+# utterance ever, ~0.78s on every one after that, for as long as it stays
+# running. This script compiles it on first use if needed, starts it if it
+# is not already running, and talks to it over a Unix socket instead of
+# spawning `say`. The daemon starts lazily (first press each login), not at
+# login -- nothing runs in the background until you actually use this.
 #
 # USAGE
 #   speak-clipboard              speak the clipboard
 #   speak-clipboard --toggle     speak, or stop if already speaking
 #   speak-clipboard --print      print what WOULD be spoken (no audio)
 #   speak-clipboard --stop       stop any speech in progress
-#   speak-clipboard --rate N     words per minute (default: 278 = 1.5x)
-#   speak-clipboard --voice NAME voice to use (see `say -v '?'`)
+#   speak-clipboard --rate N     words per minute (default: 420)
+#   speak-clipboard --voice ID   voice IDENTIFIER, not display name (e.g.
+#                                com.apple.voice.compact.en-US.Samantha, not
+#                                "Samantha" -- the daemon passes this straight
+#                                to NSSpeechSynthesizer, which needs the full
+#                                identifier; `say -v '?'` shows display names,
+#                                not identifiers)
 #
 # EXIT CODES
 #   0  spoke, printed, stopped, or toggled cleanly
-#   1  nothing to say (clipboard empty, or empty once cleaned)
+#   1  nothing to say (clipboard empty, or empty once cleaned), or the daemon
+#      could not be started
 # ============================================================================
 set -uo pipefail
 
@@ -75,27 +107,60 @@ done
 # herdr, or it did and the command failed. A line here means the script ran, so
 # the fault is downstream; no line means the key or the spawn is at fault. Cheap
 # enough to leave on permanently, and it turns a guessing game into a lookup.
+#
+# Capped at 200 lines so it never grows without bound -- checked and trimmed
+# after every append, oldest lines dropped first.
 _trace_dir="${XDG_STATE_HOME:-$HOME/.local/state}/herdr"
+_trace_file="$_trace_dir/speak-clipboard.log"
+_trace_max=200
 mkdir -p "$_trace_dir" 2>/dev/null
 printf '%s mode=%s ppid=%s\n' "$(date -u +%FT%TZ)" "$mode" "${PPID:-?}" \
-    >>"$_trace_dir/speak-clipboard.log" 2>/dev/null || true
-
-# -x matches the executable name exactly, so this cannot hit anything whose
-# command line merely mentions "say".
-if [ "$mode" = "stop" ]; then
-    pkill -x say 2>/dev/null
-    exit 0
+    >>"$_trace_file" 2>/dev/null || true
+if [ "$(wc -l <"$_trace_file" 2>/dev/null || echo 0)" -gt "$_trace_max" ]; then
+    tail -n "$_trace_max" "$_trace_file" >"$_trace_file.tmp" 2>/dev/null \
+        && mv "$_trace_file.tmp" "$_trace_file" 2>/dev/null
 fi
 
-# Toggle: the same key starts and stops, mirroring how the macOS Spoken Content
-# hotkey behaves. Speech is a detached `say` process, so "is it speaking?" is
-# simply "does one exist?" -- no state file to go stale.
-if [ "$mode" = "toggle" ]; then
-    if pgrep -x say >/dev/null 2>&1; then
-        pkill -x say 2>/dev/null
-        exit 0
+# Daemon plumbing. See "WHY A BACKGROUND DAEMON" above for why this exists
+# instead of calling `say` directly.
+_state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/herdr"
+_daemon_source="$HOME/.local/share/fifty-shades-of-dotfiles/scripts/speak-daemon.swift"
+_daemon_bin="$_state_dir/speak-daemon"
+_socket="$_state_dir/speak-daemon.sock"
+
+# Compiles the daemon if missing or stale, starts it if not already running
+# (the daemon's own singleton check makes a redundant start harmless -- it
+# just connects, finds a live one, and exits), then waits briefly for the
+# socket to appear. A stale socket FILE from a crashed daemon is not proof of
+# a live daemon -- only the daemon's own connect-then-maybe-rebind logic can
+# tell, which is why this always attempts a start rather than trusting
+# `-S "$_socket"` alone.
+ensure_daemon() {
+    if [ ! -x "$_daemon_bin" ] || [ "$_daemon_source" -nt "$_daemon_bin" ]; then
+        mkdir -p "$_state_dir" 2>/dev/null
+        swiftc -O "$_daemon_source" -o "$_daemon_bin" 2>/dev/null
     fi
-    mode="speak"
+    [ -x "$_daemon_bin" ] || return 1
+    ( nohup "$_daemon_bin" >/dev/null 2>&1 & disown ) 2>/dev/null
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        [ -S "$_socket" ] && return 0
+        sleep 0.3
+    done
+    return 1
+}
+
+# mode / rate / voice / text on separate lines; the daemon reads until EOF
+# and closes immediately without waiting for speech to finish.
+send_daemon() {
+    printf '%s\n%s\n%s\n%s' "$1" "$rate" "$voice" "$2" | nc -U -w 2 "$_socket" 2>/dev/null
+}
+
+if [ "$mode" = "stop" ]; then
+    # Nothing to auto-start for a stop -- if the daemon is not running there
+    # is nothing speaking either. Silent no-op either way, matching the old
+    # pkill-finds-nothing behavior.
+    send_daemon STOP ""
+    exit 0
 fi
 
 clean() {
@@ -104,11 +169,21 @@ clean() {
     #    and the blunt one is correct here: every glyph a terminal draws for
     #    decoration lives outside ASCII, and every word worth speaking does not.
     # 3. Punctuation runs of 4+ used as horizontal rules or padding.
-    # 4. Whitespace collapse, then drop lines that are now empty.
+    # 4. A leading "- " or "* " list marker on its own line -- decoration, not
+    #    a word, and `say` gives a lone hyphen real pause time.
+    # 5. Whitespace collapse, then drop lines that are now empty.
+    # 6. Join everything left into one line. MEASURED: `say` treats every line
+    #    break like a sentence break and pauses on it -- the same 20 words
+    #    took 4.64s read as one line and 6.98s read as ten short lines, which
+    #    is the "slows down after a couple of list items" symptom. Collapsing
+    #    to one line removes that; it also means a genuine multi-paragraph
+    #    selection loses its paragraph pauses, which is the tradeoff.
     sed -E $'s/\033\\[[0-9;?]*[ -\/]*[@-~]//g; s/\033\\][^\a]*(\a|\033\\\\)//g' \
     | LC_ALL=C tr -cd '\11\12\15\40-\176' \
-    | sed -E 's/[-=_.~*#+]{4,}/ /g; s/[[:space:]]+/ /g; s/^ //; s/ $//' \
-    | grep -v '^$'
+    | sed -E 's/[-=_.~*#+]{4,}/ /g; s/^[-*] +//; s/[[:space:]]+/ /g; s/^ //; s/ $//' \
+    | grep -v '^$' \
+    | tr '\n' ' ' \
+    | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//'
 }
 
 text="$(pbpaste 2>/dev/null | clean)"
@@ -123,8 +198,11 @@ if [ "$mode" = "print" ]; then
     exit 0
 fi
 
-args=()
-[ -n "$voice" ] && args+=(-v "$voice")
-[ -n "$rate" ]  && args+=(-r "$rate")
+# TOGGLE is sent as-is; the daemon decides start-vs-stop from its own
+# isSpeaking state, mirroring how the old pgrep/pkill check worked but without
+# this script needing to know anything about the daemon's internals.
+daemon_mode="SPEAK"
+[ "$mode" = "toggle" ] && daemon_mode="TOGGLE"
 
-printf '%s' "$text" | say "${args[@]}"
+ensure_daemon || exit 1
+send_daemon "$daemon_mode" "$text"

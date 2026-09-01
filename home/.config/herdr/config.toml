@@ -115,27 +115,32 @@ next_agent = "shift+down"
 # route through the clipboard -- the native accessibility hotkey reads the raw
 # screen and will happily pronounce the pane borders and prompt decoration.
 
-# cmd+alt+backtick, matching the system-wide Spoken Content hotkey, so there is
-# one gesture to remember whether or not the text is inside herdr. Both start
-# and stop on the same key, which is how the system one behaves too.
+# ctrl+alt+backtick -- CONFIRMED WORKING on 2026-09-01, both as plain
+# ctrl+backtick and with +alt added on top. Earlier attempts, in order:
+# cmd+alt+backtick, cmd+alt+1, fn+ctrl+backquote -- all silent. Two of those
+# were a typo, not a real key problem: "backquote" is not a name herdr
+# recognizes (run `herdr config check` after any keybinding edit -- it
+# catches this instantly instead of a guessing game). The other two were
+# real: Cmd gets claimed by iTerm2 for its own shortcuts before herdr ever
+# sees it (see the fn+ctrl+backquote history below for how that was proven).
 #
-# CAVEAT, and it is a real one: macOS registers that combination GLOBALLY, and a
-# system hotkey is consumed before any application sees it. Evidence it is live:
-# com.apple.speech.voice.prefs records LastClientIDFromSpeakingHotkey pointing
-# at iTerm2, so it has fired here. If herdr never receives the key, the system
-# owns it -- change or disable the Spoken Content shortcut in System Settings >
-# Accessibility > Spoken Content to hand it over, or use prefix+a below.
+# Note ctrl+alt+s failed early in this same file for what looked like the
+# same class of problem (Option composing into a different character on most
+# profiles here -- see FUNCTION KEYS note above). ctrl+alt+backtick working
+# anyway means that risk did not apply here after all; kept as a caveat in
+# case it ever regresses, not as an open problem.
 #
-# prefix+a is bound to the same thing and cannot be intercepted by anything,
-# which is the point of keeping it.
+# Check ~/.local/state/herdr/speak-clipboard.log after pressing it: a new
+# line means the key reached herdr; no new line means it never arrived.
+# prefix+backtick below still works regardless of the result.
 
 [[keys.command]]
-key = "cmd+alt+backtick"
+key = "ctrl+alt+backtick"
 type = "shell"
 command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --toggle'"
 
 [[keys.command]]
-key = "prefix+a"
+key = "prefix+backtick"
 type = "shell"
 command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --toggle'"
 
