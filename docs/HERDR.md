@@ -1,6 +1,6 @@
 # herdr — release cooldown, daemon persistence, and the tmux question
 
-[herdr](https://github.com/ogulcancelik/herdr) is an agent multiplexer: a terminal
+[herdr](https://github.com/herdrdev/herdr) is an agent multiplexer: a terminal
 UI that runs several AI coding agents side by side in real panes, with a status
 column showing which are working, blocked or done. Single Rust binary, sessions
 detach and reattach, including over SSH.
