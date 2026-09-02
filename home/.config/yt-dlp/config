@@ -28,6 +28,13 @@
 --clean-info-json
 
 # -----------------------------------------------------------------------------
+# JavaScript Runtime (needed for YouTube's anti-scraping challenges)
+# -----------------------------------------------------------------------------
+# Node is already installed (via nvm, v22+) -- use it instead of the deno
+# default (not installed here) or bun (works, but deprecated upstream).
+--js-runtimes node
+
+# -----------------------------------------------------------------------------
 # Downloader
 # -----------------------------------------------------------------------------
 --downloader aria2c
@@ -80,6 +87,10 @@
 
 # --thumbnail: Download video thumbnail only
 --alias thumbnail "--write-thumbnail --skip-download"
+
+# --info / --formats: List available formats only, skip download (same as -F)
+--alias info "-F"
+--alias formats "-F"
 
 # -----------------------------------------------------------------------------
 # Aliases: Bundles (video/audio + all metadata)

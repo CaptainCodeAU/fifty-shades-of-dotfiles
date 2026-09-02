@@ -1068,6 +1068,13 @@ yt() {
 --clean-info-json
 
 # -----------------------------------------------------------------------------
+# JavaScript Runtime (needed for YouTube's anti-scraping challenges)
+# -----------------------------------------------------------------------------
+# Node is already installed (via nvm, v22+) -- use it instead of the deno
+# default (not installed here) or bun (works, but deprecated upstream).
+--js-runtimes node
+
+# -----------------------------------------------------------------------------
 # Downloader
 # -----------------------------------------------------------------------------
 --downloader aria2c
@@ -1120,6 +1127,10 @@ yt() {
 
 # --thumbnail: Download video thumbnail only
 --alias thumbnail "--write-thumbnail --skip-download"
+
+# --info / --formats: List available formats only, skip download (same as -F)
+--alias info "-F"
+--alias formats "-F"
 
 # -----------------------------------------------------------------------------
 # Aliases: Bundles (video/audio + all metadata)
@@ -1174,6 +1185,8 @@ ${fg[yellow]}METADATA ONLY ${fg[white]}(standalone, skips video)${reset_color}
   --livechat         Live chat only (livestreams/premieres)
   --description      Video description only
   --thumbnail        Video thumbnail only
+  --info             List available formats only (same as -F)
+  --formats          Same as --info
 
 ${fg[yellow]}BUNDLES ${fg[white]}(video/audio + all metadata)${reset_color}
   --bundle-video     1080p video + subs, comments, chat, desc, thumb
@@ -1214,7 +1227,7 @@ ${fg[yellow]}CONFIG${reset_color}
   ${fg[cyan]}$config_file${reset_color}
 EOF
   else
-    UV_EXCLUDE_NEWER=2999-01-01T00:00:00Z command uvx --prerelease allow yt-dlp "$@"
+    UV_EXCLUDE_NEWER=2999-01-01T00:00:00Z command uvx --prerelease allow 'yt-dlp[default]' "$@"
   fi
 }
 
