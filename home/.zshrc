@@ -1231,6 +1231,175 @@ EOF
   fi
 }
 
+# --- ffmpeg Re-encode Wrapper ---
+# Re-encode a local video file to H.264 (default) or AV1, audio copied untouched.
+conv() {
+  if [[ $# -eq 0 || "$1" == "--help" || "$1" == "-h" ]]; then
+    cat << EOF
+${fg[cyan]}conv${reset_color} - Re-encode video or audio with ffmpeg
+
+${fg[yellow]}USAGE${reset_color}
+  conv [OPTIONS] INPUT
+
+${fg[yellow]}AUTO-DETECTED${reset_color}
+  A file with no real video stream (plain audio, or audio with an embedded
+  thumbnail) converts to MP3 automatically -- no flags needed.
+  A file with a real video stream converts to H.264 by default.
+
+${fg[yellow]}VIDEO CODEC${reset_color}
+  --h264             Encode to H.264 / libx264 (default for video files)
+  --av1              Encode to AV1 / libsvtav1
+  --crf N            Override video quality (default: 18 for h264, 30 for av1)
+
+${fg[yellow]}AUDIO${reset_color}
+  --bitrate N        MP3 bitrate in kbps (default: matches the source's own
+                      bitrate, so it never invents quality that wasn't there)
+
+${fg[yellow]}OPTIONS${reset_color}
+  -o, --output PATH  Output file path (default: INPUT-CODEC.ext, same folder)
+
+${fg[yellow]}EXAMPLES${reset_color}
+  ${fg[magenta]}conv movie.mp4${reset_color}                        # H.264, crf 18 -> movie-h264.mp4
+  ${fg[magenta]}conv --av1 movie.mp4${reset_color}                  # AV1, crf 30 -> movie-av1.mp4
+  ${fg[magenta]}conv --av1 --crf 24 movie.mp4${reset_color}         # AV1, crf 24
+  ${fg[magenta]}conv song.opus${reset_color}                        # auto -> song-mp3.mp3, bitrate matched
+  ${fg[magenta]}conv song.opus --bitrate 320${reset_color}          # force 320kbps mp3
+  ${fg[magenta]}conv movie.mp4 -o clean.mp4${reset_color}           # custom output name
+  ${fg[magenta]}conv movie.mp4 -o ~/Movies/clean.mp4${reset_color}  # custom output path (relative or full)
+
+${fg[yellow]}DEFAULTS${reset_color}
+  ${fg[white]}•${reset_color} Video: audio stream copied untouched (-c:a copy)
+  ${fg[white]}•${reset_color} Video codec: H.264 unless --av1 is given
+  ${fg[white]}•${reset_color} Video CRF: 18 (h264) / 30 (av1) unless --crf overrides it
+  ${fg[white]}•${reset_color} Audio: MP3 bitrate matched to the source (clamped 32-320kbps),
+    falls back to high-quality VBR if the source bitrate can't be read
+  ${fg[white]}•${reset_color} A cover-art/thumbnail image embedded in an audio file does NOT
+    count as video -- it's still treated as an audio conversion
+  ${fg[white]}•${reset_color} Output auto-named INPUT-CODEC.ext (or INPUT-mp3.mp3) next to the input
+
+${fg[yellow]}REQUIRES${reset_color}
+  ${fg[white]}•${reset_color} ffmpeg
+  ${fg[white]}•${reset_color} ffprobe (ships with ffmpeg)
+EOF
+    return
+  fi
+
+  if ! command -v ffmpeg &>/dev/null; then
+    echo "${err}conv: ffmpeg not found on PATH.${done}"
+    return 1
+  fi
+  if ! command -v ffprobe &>/dev/null; then
+    echo "${err}conv: ffprobe not found on PATH.${done}"
+    return 1
+  fi
+
+  local codec="" crf="" bitrate="" output="" input=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --h264) codec="h264"; shift ;;
+      --av1)  codec="av1"; shift ;;
+      --crf)  crf="$2"; shift 2 ;;
+      --bitrate) bitrate="$2"; shift 2 ;;
+      -o|--output) output="$2"; shift 2 ;;
+      -*)
+        echo "${err}conv: unknown option '$1'${done}"
+        return 1
+        ;;
+      *)
+        if [[ -n "$input" ]]; then
+          echo "${err}conv: unexpected extra argument '$1'${done}"
+          return 1
+        fi
+        input="$1"
+        shift
+        ;;
+    esac
+  done
+
+  if [[ -z "$input" ]]; then
+    echo "${err}conv: no input file given. Run 'conv --help' for usage.${done}"
+    return 1
+  fi
+  if [[ ! -f "$input" ]]; then
+    echo "${err}conv: input file not found: $input${done}"
+    return 1
+  fi
+
+  # Detect a REAL video stream -- excludes an embedded cover-art/thumbnail
+  # image, which ffprobe also reports as a "video" stream (disposition:
+  # attached_pic). Without this, an audio file with a thumbnail (e.g. from
+  # `yt --audio-only`) would be wrongly treated as a video file.
+  local vinfo line has_video=""
+  vinfo=$(ffprobe -v error -select_streams v -show_entries "stream=codec_type:stream_disposition=attached_pic" -of csv=p=0 "$input" 2>/dev/null)
+  for line in ${(f)vinfo}; do
+    [[ "$line" == "video,0" ]] && has_video=1
+  done
+
+  if [[ -z "$has_video" ]]; then
+    if [[ "$codec" == "h264" || "$codec" == "av1" ]]; then
+      echo "${err}conv: '$input' has no real video stream -- can't encode it as $codec.${done}"
+      return 1
+    fi
+
+    local dir base
+    dir="${input:h}"
+    base="${input:t:r}"
+    [[ -z "$output" ]] && output="${dir}/${base}-mp3.mp3"
+
+    local abr
+    if [[ -n "$bitrate" ]]; then
+      abr="$bitrate"
+    else
+      # Match the source's own bitrate so this never invents quality that
+      # wasn't there. Stream-level bit_rate first, falling back to the
+      # container's overall bit_rate when the stream doesn't report one.
+      local raw
+      raw=$(ffprobe -v error -select_streams a:0 -show_entries stream=bit_rate -of default=noprint_wrappers=1:nokey=1 "$input" 2>/dev/null)
+      [[ -z "$raw" || "$raw" == "N/A" ]] && raw=$(ffprobe -v error -show_entries format=bit_rate -of default=noprint_wrappers=1:nokey=1 "$input" 2>/dev/null)
+      if [[ "$raw" == <-> ]]; then
+        abr=$(( raw / 1000 ))
+        (( abr < 32 )) && abr=32
+        (( abr > 320 )) && abr=320
+      fi
+    fi
+
+    if [[ -n "$abr" ]]; then
+      echo "${info}Encoding${done} ${fg[cyan]}$input${reset_color} ${info}->${done} ${fg[cyan]}$output${reset_color} ${info}(mp3, ${abr}kbps, matched to source)${done}"
+      ffmpeg -i "$input" -vn -c:a libmp3lame -b:a "${abr}k" "$output"
+    else
+      echo "${info}Encoding${done} ${fg[cyan]}$input${reset_color} ${info}->${done} ${fg[cyan]}$output${reset_color} ${info}(mp3, VBR q2 -- source bitrate unreadable)${done}"
+      ffmpeg -i "$input" -vn -c:a libmp3lame -q:a 2 "$output"
+    fi
+    return
+  fi
+
+  [[ -z "$codec" ]] && codec="h264"
+  local vcodec crf_default
+  if [[ "$codec" == "av1" ]]; then
+    vcodec="libsvtav1"
+    crf_default=30
+  else
+    vcodec="libx264"
+    crf_default=18
+  fi
+  [[ -z "$crf" ]] && crf="$crf_default"
+
+  if [[ -z "$output" ]]; then
+    local dir base ext
+    dir="${input:h}"
+    base="${input:t:r}"
+    ext="${input:e}"
+    if [[ -n "$ext" ]]; then
+      output="${dir}/${base}-${codec}.${ext}"
+    else
+      output="${dir}/${base}-${codec}"
+    fi
+  fi
+
+  echo "${info}Encoding${done} ${fg[cyan]}$input${reset_color} ${info}->${done} ${fg[cyan]}$output${reset_color} ${info}(codec: $vcodec, crf: $crf)${done}"
+  ffmpeg -i "$input" -c:v "$vcodec" -crf "$crf" -c:a copy "$output"
+}
+
 
 # --- OS Information Aliases ---
 if [[ "$IS_WSL" == "true" ]] || [[ "$IS_LINUX" == "true" ]]; then
