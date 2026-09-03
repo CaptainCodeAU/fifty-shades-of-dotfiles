@@ -556,25 +556,41 @@ same root cause as `cmd+C` appearing to do nothing — the selection is not wher
 the OS is looking.
 
 The bridge is the clipboard, since `copy_on_select` means a drag has already
-copied by the time you release it:
+copied by the time you release it. The bindings in `config.toml`
+(`ctrl+alt+backtick` and `prefix+backtick`) run `speak-clipboard --toggle`,
+which:
 
-```toml
-[[keys.command]]
-key = "ctrl+alt+s"
-type = "shell"
-command = "pbpaste | say"
+1. strips the terminal furniture before speaking — ANSI escapes, box drawing,
+   Nerd Font glyphs, rule runs — and maps curly quotes, dashes, and accented
+   letters to ASCII instead of dropping them. The raw accessibility hotkey
+   cannot do any of this: it reads the screen, borders and all;
+2. hands the cleaned text to one `speak-render` process per press
+   (`home/.local/share/fifty-shades-of-dotfiles/scripts/speak-render.swift`,
+   built by `install.sh` on macOS, or lazily on first use). It splits at
+   sentence ends, renders the first sentence to a temp file, starts playing it
+   within about a second, and renders each next sentence while the current one
+   plays. Rendering runs ~8x faster than speech, so playback never runs dry;
+3. applies the toggle rule: press on the **same** text while it speaks = stop;
+   press with **new** text while it speaks = stop the old, speak the new.
+   `speak-clipboard --stop` stops unconditionally. Text identity is a SHA-256
+   of the cleaned text kept in `~/.local/state/herdr/`. The text itself is
+   never logged and never passed on a command line; it reaches `speak-render`
+   through a pipe. The rendered audio goes to the per-user temp directory
+   (private, purged by the OS) and is deleted after playback, on stop, and by
+   a ten-minute stale sweep at the next start.
 
-[[keys.command]]
-key = "ctrl+alt+x"
-type = "shell"
-command = "pkill -x say"
-```
+Why one process per press and not a warm daemon: the daemon that briefly
+existed (2026-09-01 to 2026-09-03) saved about half a second per press, and in
+exchange rendered the whole selection before playing any of it — 10+ seconds of
+silence on a long selection, during which a second press was taken as "stop" —
+never exited, and held a power assertion that kept the Mac from idle-sleeping.
+With a per-press process, killing it is the entire stop mechanism and nothing
+runs between presses. `~/.local/state/herdr/speak-clipboard.log` keeps one
+metadata line per press (mode, outcome, character count): a new line means the
+key reached herdr; no line means the key or the spawn is at fault.
 
-Direct chords rather than `prefix+` bindings, so speaking stays a single
-keystroke like the `option+esc` it replaces. The stop binding is not optional
-comfort: `type = "shell"` runs detached, so a large clipboard otherwise talks
-until it finishes. Copy mode feeds it too — `prefix+[`, `v`, `y`, then speak —
-which matters when the text is a screen away from the pointer.
+Copy mode feeds it too — `prefix+[`, `v`, `y`, then speak — which matters when
+the text is a screen away from the pointer.
 
 Requires _"Applications in terminal may access clipboard"_ in iTerm2, without
 which the drag never reaches the clipboard and the key appears dead.
