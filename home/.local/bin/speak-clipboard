@@ -20,80 +20,115 @@
 # CANNOT do this: it reads the raw screen, decoration and all. That asymmetry is
 # the main argument for going through the clipboard at all.
 #
-# WHAT IT STRIPS (and why each)
-#   * ANSI/OSC escape sequences  -- colour and title codes, never spoken content
-#   * anything outside printable ASCII -- box drawing, Nerd Font PUA glyphs,
-#     emoji, the middle dots p10k uses as separators
+# WHAT THE CLEANER DOES (one perl pass, in this order, and why each)
+#   * ANSI/OSC escape sequences are removed -- colour and title codes, never
+#     spoken content
+#   * typographic punctuation is MAPPED, not dropped: curly quotes -> straight,
+#     every Unicode dash -> hyphen, ellipsis -> "...", every space separator ->
+#     space. Accented letters are decomposed and their marks removed, so "cafe"
+#     with an acute and "Dvorak" with a caron both survive. Without this, "I'm"
+#     with a curly apostrophe became "Im".
+#   * "[[" is split into "[ [" so clipboard text cannot smuggle embedded
+#     speech-engine commands like [[slnc 60000]] (a 60 s silence)
+#   * everything still outside printable ASCII is dropped -- box drawing, Nerd
+#     Font PUA glyphs, emoji, the middle dots p10k uses as separators
 #   * runs of punctuation used as rules or padding (----, ====, ....)
-#   * repeated blank lines and collapsed whitespace, which become dead air
+#   * leading "- " / "* " list markers, blank lines, and whitespace runs, which
+#     become dead air; everything is joined to one line because the engine
+#     pauses on every line break (MEASURED: 20 words took 4.64 s as one line
+#     and 6.98 s as ten short lines); speak-render splits at sentence ends itself
+#   * the result is capped at 8000 chars (~2 min of speech; stop is instant)
 #
 # Deliberately NOT stripped: ordinary punctuation inside sentences, code
 # symbols, and paths. Those carry meaning when read aloud.
 #
+# Why one perl pass and not sed | tr | grep: the old pipeline was seven forks
+# (~21 ms per press); this is one (~6 ms), and it also computes the SHA-256 the
+# toggle rule needs, so `shasum` (a 14 ms perl script of its own) is not spawned.
+# All three modules (Encode, Unicode::Normalize, Digest::SHA) are core perl.
+#
 # SPEED
 # ----
 # Default is 420 wpm, set by hand after listening to 278 wpm (1.5x) and
-# finding it too slow. The 278 number was MEASURED, not guessed, and the
-# method still matters if you want to re-tune: `say` with no -r runs at
-# 175 wpm (a fixed sample rendered identically with `-r 175` and with no flag
-# at all), and rendering the same sample across a sweep of rates put 278 wpm
-# at exactly 1.50x the baseline duration. Duration is not perfectly inverse to
-# rate -- there is fixed padding around phrases -- so 175 * 1.5 = 262 is
-# measurably too slow, at 1.44x. 420 wpm lands around 2.4x baseline.
+# finding it too slow. `say` with no -r runs at 175 wpm; 420 lands around
+# 2.4x that baseline. Re-tune by listening, not by arithmetic.
 #
 # VOLUME
 # ------
-# Not controlled here, and the speech engine has no volume flag at all -- it
-# plays through whatever output device is current, at the Mac's system
-# volume. Use the system volume keys or the menu-bar slider to change
-# loudness.
+# Not controlled here. Speech plays through the current output device at the
+# system volume. Use the volume keys or the menu-bar slider.
 #
-# WHY A BACKGROUND DAEMON (2026-09-01)
-# -------------------------------------
-# This used to shell out to `say` directly. Measured: `say` (and NSSpeechSynthesizer,
-# which it wraps) costs ~1.0-1.9s to speak even one word in a fresh process --
-# every single press. The current voice ("Voice 1" in `say -v '?'`, internally
-# named Aaron, a premium neural voice) is ONLY reachable through that legacy
-# engine; the fast modern engine (AVSpeechSynthesizer, ~30ms even cold) cannot
-# reach Aaron at all -- confirmed by direct identifier lookup, not just
-# absence from its voice list. So the fix is a small persistent helper
-# (speak-daemon, in ../share/fifty-shades-of-dotfiles/scripts/speak-daemon.swift)
-# that keeps ONE NSSpeechSynthesizer alive across presses: ~1.0s on its first
-# utterance ever, ~0.78s on every one after that, for as long as it stays
-# running. This script compiles it on first use if needed, starts it if it
-# is not already running, and talks to it over a Unix socket instead of
-# spawning `say`. The daemon starts lazily (first press each login), not at
-# login -- nothing runs in the background until you actually use this.
+# ONE PROCESS PER PRESS, CHUNKED (2026-09-03)
+# -------------------------------------------
+# History, so nobody rebuilds it: v1 shelled out to `say` (1 s before the first
+# word, every press). v2 kept a background daemon warm to save that second; it
+# saved ~0.5 s and brought a socket, a singleton race, a process that never
+# exited, a lock that stopped the Mac from sleeping, and a toggle that silently
+# cancelled long text because it rendered the WHOLE selection to a file before
+# playing any of it (10+ s of silence on a long selection, second press = stop).
+#
+# v3 (this) runs one `speak-render` process per press. It splits the text at
+# sentence ends, renders sentence 1 (~0.7 s), starts playing it, and renders
+# the next sentence while the current one plays. First audio in ~1 s on any
+# length of text, nothing left running between presses, and STOP is simply
+# killing that process. See speak-render.swift for the measurements.
+#
+# The toggle rule: press on the SAME text while it speaks = stop. Press with
+# NEW text while it speaks = stop the old one and speak the new one. Text
+# identity is a SHA-256 of the cleaned text, kept next to the pid file.
+#
+# PRIVACY: the text is never logged and never passed on a command line. It
+# travels to speak-render through a pipe. speak-render writes each sentence's
+# AUDIO to the per-user temp directory (0700, purged by the OS) and deletes it
+# after playback and on stop; it also sweeps stale files older than ten minutes
+# at start, so a crash or SIGKILL cannot leave a spoken copy behind for long.
+#
+# CONCURRENCY: key auto-repeat or a double tap runs this script twice within
+# a few ms. An atomic mkdir lock serialises the check-stop-start section; the
+# loser records outcome=busy and exits 0 (never queues -- N repeats would mean
+# N toggles). The pid file is trusted only if that pid is a live speak-render
+# (pids are recycled; a stale file must never kill a stranger).
 #
 # USAGE
-#   speak-clipboard              speak the clipboard
-#   speak-clipboard --toggle     speak, or stop if already speaking
-#   speak-clipboard --print      print what WOULD be spoken (no audio)
+#   speak-clipboard              speak the clipboard (replacing any current speech)
+#   speak-clipboard --toggle     same text: stop; new text: replace; idle: speak
 #   speak-clipboard --stop       stop any speech in progress
+#   speak-clipboard --print      print what WOULD be spoken (no audio)
+#   speak-clipboard --stdin      read text from stdin instead of the clipboard
+#                                (for tests; combine with --print/--toggle)
+#   speak-clipboard --build      build speak-render if missing or stale, then exit
+#                                (install.sh calls this on macOS)
 #   speak-clipboard --rate N     words per minute (default: 420)
 #   speak-clipboard --voice ID   voice IDENTIFIER, not display name (e.g.
-#                                com.apple.voice.compact.en-US.Samantha, not
-#                                "Samantha" -- the daemon passes this straight
-#                                to NSSpeechSynthesizer, which needs the full
-#                                identifier; `say -v '?'` shows display names,
-#                                not identifiers)
+#                                com.apple.voice.compact.en-US.Samantha)
 #
 # EXIT CODES
-#   0  spoke, printed, stopped, or toggled cleanly
-#   1  nothing to say (clipboard empty, or empty once cleaned), or the daemon
-#      could not be started
+#   0  spoke, stopped, replaced, printed, or built (or lost the lock: busy)
+#   1  nothing to say (clipboard empty, or empty once cleaned), or speak-render
+#      could not be built or started
+#   --build only: 0 built or up to date, 1 build failed, 2 no swiftc, 3 no source
+#
+# STATE (all under ~/.local/state/herdr/, nothing here ever contains text)
+#   speak-clipboard.log   one line per press: when, mode, ppid, outcome, chars
+#   speak-render.log      speak-render's timing lines and any build errors
+#   speak-render          the compiled helper
+#   speak-render.pid/.hash the current speaker and the hash of what it speaks
+#   speak-clipboard.lock/ the mkdir lock, held for one run of this script
 # ============================================================================
 set -uo pipefail
 
 rate="420"
 voice=""
 mode="speak"
+from_stdin=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --print)  mode="print";  shift ;;
         --stop)   mode="stop";   shift ;;
         --toggle) mode="toggle"; shift ;;
+        --build)  mode="build";  shift ;;
+        --stdin)  from_stdin=1;  shift ;;
         --rate)  rate="${2:-}"; shift 2 ;;
         --voice) voice="${2:-}"; shift 2 ;;
         -h|--help) sed -n '/^# USAGE/,/^# EXIT/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -101,108 +136,229 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# Invocation trace. One line per run, no clipboard CONTENT ever written -- just
-# when it ran and in which mode. This exists because when a keybinding "does
-# nothing" there are two indistinguishable explanations: the key never reached
-# herdr, or it did and the command failed. A line here means the script ran, so
-# the fault is downstream; no line means the key or the spawn is at fault. Cheap
-# enough to leave on permanently, and it turns a guessing game into a lookup.
-#
-# Capped at 200 lines so it never grows without bound -- checked and trimmed
-# after every append, oldest lines dropped first.
-_trace_dir="${XDG_STATE_HOME:-$HOME/.local/state}/herdr"
-_trace_file="$_trace_dir/speak-clipboard.log"
-_trace_max=200
-mkdir -p "$_trace_dir" 2>/dev/null
-printf '%s mode=%s ppid=%s\n' "$(date -u +%FT%TZ)" "$mode" "${PPID:-?}" \
-    >>"$_trace_file" 2>/dev/null || true
-if [ "$(wc -l <"$_trace_file" 2>/dev/null || echo 0)" -gt "$_trace_max" ]; then
-    tail -n "$_trace_max" "$_trace_file" >"$_trace_file.tmp" 2>/dev/null \
-        && mv "$_trace_file.tmp" "$_trace_file" 2>/dev/null
-fi
-
-# Daemon plumbing. See "WHY A BACKGROUND DAEMON" above for why this exists
-# instead of calling `say` directly.
 _state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/herdr"
-_daemon_source="$HOME/.local/share/fifty-shades-of-dotfiles/scripts/speak-daemon.swift"
-_daemon_bin="$_state_dir/speak-daemon"
-_socket="$_state_dir/speak-daemon.sock"
+_trace_file="$_state_dir/speak-clipboard.log"
+_render_source="$HOME/.local/share/fifty-shades-of-dotfiles/scripts/speak-render.swift"
+_render_bin="$_state_dir/speak-render"
+_render_log="$_state_dir/speak-render.log"
+_pid_file="$_state_dir/speak-render.pid"
+_hash_file="$_state_dir/speak-render.hash"
+_lock_dir="$_state_dir/speak-clipboard.lock"
+_max_chars=8000
+_have_lock=""
+[ -d "$_state_dir" ] || mkdir -p "$_state_dir" 2>/dev/null
 
-# Compiles the daemon if missing or stale, starts it if not already running
-# (the daemon's own singleton check makes a redundant start harmless -- it
-# just connects, finds a live one, and exits), then waits briefly for the
-# socket to appear. A stale socket FILE from a crashed daemon is not proof of
-# a live daemon -- only the daemon's own connect-then-maybe-rebind logic can
-# tell, which is why this always attempts a start rather than trusting
-# `-S "$_socket"` alone.
-ensure_daemon() {
-    if [ ! -x "$_daemon_bin" ] || [ "$_daemon_source" -nt "$_daemon_bin" ]; then
-        mkdir -p "$_state_dir" 2>/dev/null
-        swiftc -O "$_daemon_source" -o "$_daemon_bin" 2>/dev/null
+# One line per press. A line here means the key reached herdr and this script
+# ran; no line means the key or the spawn is at fault. Never any text.
+trace() {
+    local ts
+    if ((BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 2))); then
+        TZ=UTC printf -v ts '%(%FT%TZ)T' -1
+    else
+        ts="$(date -u +%FT%TZ)"
     fi
-    [ -x "$_daemon_bin" ] || return 1
-    ( nohup "$_daemon_bin" >/dev/null 2>&1 & disown ) 2>/dev/null
-    for _ in 1 2 3 4 5 6 7 8 9 10; do
-        [ -S "$_socket" ] && return 0
-        sleep 0.3
-    done
-    return 1
+    printf '%s mode=%s ppid=%s %s\n' "$ts" "$mode" "${PPID:-?}" "$*" >>"$_trace_file" 2>/dev/null
 }
 
-# mode / rate / voice / text on separate lines; the daemon reads until EOF
-# and closes immediately without waiting for speech to finish.
-send_daemon() {
-    printf '%s\n%s\n%s\n%s' "$1" "$rate" "$voice" "$2" | nc -U -w 2 "$_socket" 2>/dev/null
+# Log trimming and lock release run once, at exit, off the press path.
+_trim_log() {
+    local f="$1" max="$2" n
+    [ -f "$f" ] || return 0
+    n="$(wc -l <"$f" 2>/dev/null)" || return 0
+    [ "${n:-0}" -gt "$max" ] || return 0
+    tail -n "$max" "$f" >"$f.tmp" 2>/dev/null && command mv -f "$f.tmp" "$f" 2>/dev/null
+}
+_on_exit() {
+    [ -n "$_have_lock" ] && command rm -rf "$_lock_dir" 2>/dev/null
+    _trim_log "$_trace_file" 200
+    _trim_log "$_render_log" 400
+}
+trap _on_exit EXIT
+
+# mkdir is atomic, so two presses cannot both win. A lock whose owner pid is
+# dead is stale (a killed script) and is taken over. A lock with no pid file
+# yet belongs to a winner that is between mkdir and its echo: if the directory
+# is under three seconds old it is live, not stale.
+acquire_lock() {
+    local owner="" age=0
+    if ! mkdir "$_lock_dir" 2>/dev/null; then
+        { read -r owner <"$_lock_dir/pid"; } 2>/dev/null || true
+        if [ -n "$owner" ]; then
+            kill -0 "$owner" 2>/dev/null && return 1
+        else
+            age=$(( $(date +%s) - $(stat -f %m "$_lock_dir" 2>/dev/null || echo 0) ))
+            [ "$age" -lt 3 ] && return 1
+        fi
+        command rm -rf "$_lock_dir" 2>/dev/null
+        mkdir "$_lock_dir" 2>/dev/null || return 1
+    fi
+    echo $$ >"$_lock_dir/pid"
+    _have_lock=1
 }
 
-if [ "$mode" = "stop" ]; then
-    # Nothing to auto-start for a stop -- if the daemon is not running there
-    # is nothing speaking either. Silent no-op either way, matching the old
-    # pkill-finds-nothing behavior.
-    send_daemon STOP ""
-    exit 0
-fi
-
-clean() {
-    # 1. ANSI CSI + OSC escape sequences.
-    # 2. Everything outside tab/newline/printable-ASCII. This is the blunt one,
-    #    and the blunt one is correct here: every glyph a terminal draws for
-    #    decoration lives outside ASCII, and every word worth speaking does not.
-    # 3. Punctuation runs of 4+ used as horizontal rules or padding.
-    # 4. A leading "- " or "* " list marker on its own line -- decoration, not
-    #    a word, and `say` gives a lone hyphen real pause time.
-    # 5. Whitespace collapse, then drop lines that are now empty.
-    # 6. Join everything left into one line. MEASURED: `say` treats every line
-    #    break like a sentence break and pauses on it -- the same 20 words
-    #    took 4.64s read as one line and 6.98s read as ten short lines, which
-    #    is the "slows down after a couple of list items" symptom. Collapsing
-    #    to one line removes that; it also means a genuine multi-paragraph
-    #    selection loses its paragraph pauses, which is the tradeoff.
-    sed -E $'s/\033\\[[0-9;?]*[ -\/]*[@-~]//g; s/\033\\][^\a]*(\a|\033\\\\)//g' \
-    | LC_ALL=C tr -cd '\11\12\15\40-\176' \
-    | sed -E 's/[-=_.~*#+]{4,}/ /g; s/^[-*] +//; s/[[:space:]]+/ /g; s/^ //; s/ $//' \
-    | grep -v '^$' \
-    | tr '\n' ' ' \
-    | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//'
+# Sets _speaker to the pid of the live speak-render, or clears stale state and
+# returns 1. `kill -0` alone is not enough: pids are recycled, so the process
+# must also BE speak-render before anyone sends it a signal.
+speaker_alive() {
+    local p="" comm=""
+    _speaker=""
+    [ -f "$_pid_file" ] || return 1
+    { read -r p <"$_pid_file"; } 2>/dev/null || true
+    case "$p" in
+        ''|*[!0-9]*) command rm -f "$_pid_file" "$_hash_file" 2>/dev/null; return 1 ;;
+    esac
+    comm="$(ps -o comm= -p "$p" 2>/dev/null)"
+    if [ "${comm##*/}" != "speak-render" ]; then
+        command rm -f "$_pid_file" "$_hash_file" 2>/dev/null
+        return 1
+    fi
+    _speaker="$p"
 }
 
-text="$(pbpaste 2>/dev/null | clean)"
+# Returns 0 if something was actually stopped.
+stop_speaker() {
+    local rc=1
+    if speaker_alive; then
+        kill "$_speaker" 2>/dev/null && rc=0
+    fi
+    command rm -f "$_pid_file" "$_hash_file" 2>/dev/null
+    return $rc
+}
 
-if [ -z "${text//[[:space:]]/}" ]; then
-    [ "$mode" = "print" ] && echo "(nothing to speak -- clipboard empty or all decoration)"
-    exit 1
-fi
+# 0 = binary is fresh (built now, or already up to date), 1 = build failed,
+# 2 = no swiftc, 3 = no source. Sets _built=1 when it compiled.
+_built=""
+ensure_render() {
+    if [ -x "$_render_bin" ] && [ ! "$_render_source" -nt "$_render_bin" ]; then
+        return 0
+    fi
+    [ -f "$_render_source" ] || return 3
+    command -v swiftc >/dev/null 2>&1 || return 2
+    # -suppress-warnings: NSSpeechSynthesizer is deprecated since macOS 14 but
+    # is the only route to the premium "Aaron" voice; the warnings are noise.
+    swiftc -O -suppress-warnings "$_render_source" -o "$_render_bin" 2>>"$_render_log" || return 1
+    _built=1
+}
 
+# Text goes in over a pipe: never argv, never a here-string (bash 3.2 spools
+# those to a temp file). `trap '' HUP; exec` replaces nohup: the helper must
+# outlive this script, and exec keeps $! equal to the helper's own pid.
+start_speaker() {
+    local -a args=(--rate "$rate")
+    [ -n "$voice" ] && args+=(--voice "$voice")
+    printf '%s' "$text" | ( trap '' HUP; exec "$_render_bin" "${args[@]}" ) >/dev/null 2>>"$_render_log" &
+    echo $! >"$_pid_file"
+    echo "$hash" >"$_hash_file"
+}
+
+# ---------------------------------------------------------------------------
+# The cleaner. Prints four lines: sha256, truncated (0/1), chars, text.
+# ---------------------------------------------------------------------------
+read -r -d '' _clean_pl <<'PERL' || true
+use strict; use warnings;
+use Encode qw(decode);
+use Unicode::Normalize qw(NFD);
+use Digest::SHA qw(sha256_hex);
+my $max = $ARGV[0] || 8000;
+local $/;
+my $raw = <STDIN>;
+$raw = '' unless defined $raw;
+my $t = decode('UTF-8', $raw);                  # malformed bytes become U+FFFD, dropped below
+$t =~ s/\e\[[0-9;?]*[ -\/]*[@-~]//g;            # ANSI CSI
+$t =~ s/\e\][^\a]*(?:\a|\e\\)//g;               # OSC (titles, hyperlinks)
+$t =~ s/[\x{2018}\x{2019}\x{201A}\x{2032}]/'/g; # single curly quotes, prime
+$t =~ s/[\x{201C}\x{201D}\x{201E}\x{2033}]/"/g; # double curly quotes, double prime
+$t =~ s/\p{Pd}/-/g;                             # every dash
+$t =~ s/\x{2026}/.../g;                         # ellipsis
+$t =~ s/\p{Zs}/ /g;                             # every space separator (NBSP etc.)
+$t = NFD($t);                                   # split letters from their accents
+$t =~ s/\p{Mn}//g;                              # drop the accents, keep the letters
+# Letters with no decomposition: NFD cannot help, so map the common ones.
+$t =~ s/\x{0141}/L/g; $t =~ s/\x{0142}/l/g;     # L-stroke
+$t =~ s/\x{00D8}/O/g; $t =~ s/\x{00F8}/o/g;     # O-slash
+$t =~ s/\x{00C6}/AE/g; $t =~ s/\x{00E6}/ae/g;   # ash
+$t =~ s/\x{0152}/OE/g; $t =~ s/\x{0153}/oe/g;   # ethel
+$t =~ s/\x{00DF}/ss/g;                          # eszett
+$t =~ s/\x{0110}/D/g; $t =~ s/\x{0111}/d/g;     # D-stroke
+$t =~ s/\x{00DE}/Th/g; $t =~ s/\x{00FE}/th/g;   # thorn
+$t =~ s/\[\[/[ [/g;                             # no embedded speech commands
+$t =~ s/[^\t\n\r\x20-\x7e]//g;                  # everything else outside printable ASCII
+$t =~ s/[-=_.~*#+]{4,}/ /g;                     # rule runs and padding
+$t =~ s/^[-*] +//mg;                            # list markers
+$t =~ s/[ \t\r]+/ /g;                           # collapse spaces within lines
+$t =~ s/^ | $//mg;                              # trim each line
+$t =~ s/\n+/ /g;                                # join lines (drops blank lines)
+$t =~ s/ {2,}/ /g;
+$t =~ s/^ | $//g;
+my $orig = length $t;
+$t = substr($t, 0, $max) if $orig > $max;
+print sha256_hex($t), "\n", ($orig > $max ? 1 : 0), "\n", length($t), "\n", $t, "\n";
+PERL
+
+clean_input() {
+    if [ "$from_stdin" = 1 ]; then
+        perl -e "$_clean_pl" -- "$_max_chars" 2>/dev/null
+    else
+        pbpaste 2>/dev/null | perl -e "$_clean_pl" -- "$_max_chars" 2>/dev/null
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# Modes
+# ---------------------------------------------------------------------------
 if [ "$mode" = "print" ]; then
+    { IFS= read -r hash; IFS= read -r truncated; IFS= read -r chars; IFS= read -r text; } < <(clean_input)
+    if [ -z "${text:-}" ]; then
+        echo "(nothing to speak -- clipboard empty or all decoration)"
+        exit 1
+    fi
     printf '%s\n' "$text"
     exit 0
 fi
 
-# TOGGLE is sent as-is; the daemon decides start-vs-stop from its own
-# isSpeaking state, mirroring how the old pgrep/pkill check worked but without
-# this script needing to know anything about the daemon's internals.
-daemon_mode="SPEAK"
-[ "$mode" = "toggle" ] && daemon_mode="TOGGLE"
+acquire_lock || { trace "outcome=busy"; exit 0; }
 
-ensure_daemon || exit 1
-send_daemon "$daemon_mode" "$text"
+if [ "$mode" = "build" ]; then
+    ensure_render; rc=$?
+    case $rc in
+        0) [ -n "$_built" ] && echo "built" || echo "up to date" ;;
+        1) echo "speak-render: build failed (see $_render_log)" >&2 ;;
+        2) echo "speak-render: swiftc not found (Xcode Command Line Tools); will build on first use" >&2 ;;
+        3) echo "speak-render: source not found: $_render_source" >&2 ;;
+    esac
+    exit $rc
+fi
+
+if [ "$mode" = "stop" ]; then
+    if stop_speaker; then trace "outcome=stopped"; else trace "outcome=idle"; fi
+    exit 0
+fi
+
+{ IFS= read -r hash; IFS= read -r truncated; IFS= read -r chars; IFS= read -r text; } < <(clean_input)
+if [ -z "${text:-}" ]; then
+    trace "outcome=nothing"
+    exit 1
+fi
+
+# Toggle rule. Same hash while speaking: stop. Different hash: replace.
+# Plain speak mode always replaces.
+outcome="started"
+if speaker_alive; then
+    old_hash=""
+    { read -r old_hash <"$_hash_file"; } 2>/dev/null || true
+    stop_speaker
+    if [ "$mode" = "toggle" ] && [ "$old_hash" = "$hash" ]; then
+        trace "outcome=stopped chars=$chars"
+        exit 0
+    fi
+    outcome="replaced"
+fi
+
+ensure_render; rc=$?
+if [ "$rc" -ne 0 ]; then
+    trace "outcome=error reason=build rc=$rc"
+    exit 1
+fi
+start_speaker
+trace "outcome=$outcome chars=$chars truncated=$truncated"
+exit 0
