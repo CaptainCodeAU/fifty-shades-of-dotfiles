@@ -2509,6 +2509,36 @@ stow_platform() {
     fi
 }
 
+# ------------------------------------------------------------------------------
+# speak-render prebuild (macOS only)
+# ------------------------------------------------------------------------------
+# The herdr speak-clipboard key spawns one `speak-render` process per press
+# (home/.local/share/fifty-shades-of-dotfiles/scripts/speak-render.swift). The
+# script compiles it lazily on first use, but that first press then costs a
+# 10-20 s swiftc run with the key apparently dead. So post_install asks the
+# script to build it now, via its own `--build` mode: the source path, the
+# binary path, the staleness rule, and the compiler flags live in ONE place
+# (speak-clipboard), and this function only adds the macOS gate and the
+# installer's reporting. Runs after stow, so ~/.local/bin/speak-clipboard
+# exists. Silent no-op on Linux/WSL (the feature is macOS-only).
+_build_speak_render() {
+    [[ "$(check_os)" == "macos" ]] || return 0
+    local sc="$HOME/.local/bin/speak-clipboard"
+    [[ -x "$sc" ]] || return 0
+    if [[ "$DRY_RUN" == true ]]; then
+        run_cmd "$sc" --build
+        return 0
+    fi
+    local status rc
+    status=$("$sc" --build 2>&1); rc=$?
+    case "$rc" in
+        0) success "speak-render ${status:-ready} (herdr speak-clipboard backend)" ;;
+        2) info "speak-render: swiftc not found (Xcode Command Line Tools); speak-clipboard will build it on first use." ;;
+        *) warn "speak-render build failed (rc=$rc): ${status}. speak-clipboard will retry on first use." ;;
+    esac
+    return 0
+}
+
 # ==============================================================================
 # Post-Install
 # ==============================================================================
@@ -2565,6 +2595,9 @@ GITEOF"
         fi
         success "git-lfs configured"
     fi
+
+    # --- speak-render (herdr speak-clipboard backend, macOS only) ---
+    _build_speak_render
 
     # --- gh (SSH-only model) ---
     if command -v gh &>/dev/null; then
