@@ -180,33 +180,24 @@ def scan_one(client, name, version, revision, absent_names=frozenset()):
     if not hits:
         return ("clean", cpe, None, [])
 
-    # UNDETERMINED IS NOT A VERDICT, AND MUST NOT BE CACHED AS ONE. Deciding
-    # "already backported" needs Homebrew's answer; if the one `brew ruby` for
-    # this process did not come back, every CVE below would read as unpatched and
-    # `store.record` would freeze that into SQLite -- where, now that rows expire
-    # on a 7-day clock rather than never, it would be authoritative for a week.
-    # A background sweep is ONE process over the whole inventory, so a single
-    # failed subprocess would do this to all 231 formulae at once. UNKNOWN is a
-    # first-class outcome here precisely so this can say "I could not tell".
-    if V.homebrew_patch_data() is None:
+    # UNDETERMINED IS NOT A VERDICT, AND MUST NOT BE CACHED AS ONE. If the one
+    # `brew ruby` for this process did not come back, every CVE below would read
+    # as unpatched and `store.record` would freeze that into SQLite -- where, now
+    # that rows expire on a 7-day clock rather than never, it would be
+    # authoritative for a week. A background sweep is ONE process over the whole
+    # inventory, so a single failed subprocess would do this to all 231 formulae
+    # at once. UNKNOWN exists precisely so this can say "I could not tell".
+    annotated = V.annotate_hits(name, hits)
+    if annotated is None:
         return ("unknown", cpe, None,
                 [{"note": "Homebrew patch data unavailable -- NOT verified clean",
                   "no_cache": True}])
 
-    # Homebrew may already have backported the fix. Read once per formula and
-    # memoised; since 2026-09-04 this is a local keg file, not a `brew cat` fork.
-    #
-    # NOT gated on `revision`. That gate looked like a free cost saving -- revision
-    # 0 reads as "nothing backported" -- and it is measurably wrong: 12 of the 231
-    # formulae installed here carry `patch do` blocks at revision 0, openssl@3 and
-    # python@3.14 among them, because a formula that bumps its version and its
-    # patch set in one commit resets the revision to 0.
-    patches = V.homebrew_patch_commits(name)
+    patches = V.homebrew_patch_commits(name)     # memoised; annotate_hits read it too
 
     findings = []
-    for h in hits:
-        patched = V.is_patched_by_homebrew(
-            name, h["id"], h.get("fix_commit"), patches)
+    for h in annotated:
+        patched = h["patched"]
         findings.append({
             "cve": h["id"],
             "score": h.get("score"),
@@ -218,6 +209,17 @@ def scan_one(client, name, version, revision, absent_names=frozenset()):
         })
     if truncated:
         findings.append({"note": "NVD result page truncated -- more CVEs may exist"})
+
+    # Recorded HERE, where the answer is already in hand, so write_briefing does
+    # not have to ask again. It runs on the shell-startup path whenever there IS
+    # something actionable -- exactly the state the tool exists for -- and asking
+    # again there forked `brew ruby` for a measured +0.58s on every such login.
+    # `declared` is a COUNT or None: None means Homebrew was never reached, and
+    # the briefing must not render that as "the formula names no CVE".
+    declared = V.homebrew_resolved_cves(name)
+    findings.append({"patch_summary": {
+        "npatch": len(patches or {}),
+        "declared": None if declared is None else len(declared)}})
 
     # Patches Homebrew applied that NOTHING has explained: no CVE description
     # named their commit, and the formula attached no `resolves` to them. This is
@@ -599,8 +601,17 @@ def write_briefing(groups, path):
         # spot too: 12 of the 231 formulae installed on this machine carry patches
         # at revision 0, so the whole clause used to be omitted for exactly the
         # formulae whose backport context was least obvious.
-        npatch = len(V.homebrew_patch_commits(r["name"]) or {})
-        declared = V.homebrew_resolved_cves(r["name"])
+        # Read back what scan_one already worked out. A row written before this
+        # field existed has no summary, so fall back to asking -- correctness for
+        # an old row beats saving a fork on a path it will only take once.
+        summary = next((f["patch_summary"] for f in item["findings"]
+                        if isinstance(f, dict) and f.get("patch_summary")), None)
+        if summary is None:
+            npatch = len(V.homebrew_patch_commits(r["name"]) or {})
+            _d = V.homebrew_resolved_cves(r["name"])
+            declared = None if _d is None else len(_d)
+        else:
+            npatch, declared = summary["npatch"], summary["declared"]
         if npatch:
             note = f"  ({npatch} patch(es) applied"
             # None and set() must not render alike. One says Homebrew was asked and
@@ -609,7 +620,7 @@ def write_briefing(groups, path):
             if declared is None:
                 note += "; Homebrew could not be asked what they resolve)"
             elif declared:
-                note += (f"; the formula declares {len(declared)} CVE(s) resolved,"
+                note += (f"; the formula declares {declared} CVE(s) resolved,"
                          " and the ones below are not among them)")
             else:
                 note += "; the formula names no CVE for any of them)"

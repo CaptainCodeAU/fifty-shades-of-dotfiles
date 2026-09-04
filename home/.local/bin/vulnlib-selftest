@@ -269,6 +269,50 @@ check("...and it is genuinely the comment doing it, not a short-circuit",
 
 
 # --------------------------------------------------------------------------- #
+section("annotate_hits: one decision, shared by both scanners")
+# --------------------------------------------------------------------------- #
+# This block lived in both scanners and the copies diverged TWICE -- once in
+# August (toolchain-cve-check kept reporting backported formulae as EXPOSED for
+# weeks) and again on 2026-09-04, when vuln-scan gained the undetermined guard and
+# toolchain-cve-check did not. It is one function now, and these are its edges.
+install(pkg=[{"url": URL + ".patch", "resolves": sec(CVE)}])
+_hits = [{"id": CVE, "fix_commit": None}, {"id": "CVE-2026-99999", "fix_commit": None}]
+_out = V.annotate_hits("pkg", [dict(h) for h in _hits])
+check("a declared CVE is stamped patched", [h["patched"] for h in _out], [True, False])
+
+brew_says_nothing()
+check("Homebrew unreachable -> None, so the caller must say UNKNOWN",
+      V.annotate_hits("pkg", [dict(h) for h in _hits]), None)
+
+install(pkg=[{"url": URL + ".patch", "resolves": sec(CVE)}])
+_hyp = V.annotate_hits("pkg", [dict(h) for h in _hits], hypothetical=True)
+check("hypothetical: the installed formula does not answer at all",
+      [h["patched"] for h in _hyp], [False, False])
+check("hypothetical never returns None -- it is determined, just not suppressed",
+      _hyp is not None, True)
+check("no hits -> an empty list, not None", V.annotate_hits("pkg", []), [])
+
+
+# --------------------------------------------------------------------------- #
+section("backport_commits: prose is not a patch of this formula")
+# --------------------------------------------------------------------------- #
+# Scanning the whole keg text re-opened the scope error that deleting the hand
+# parser had removed. Measured over 231 formulae, a whole-file scan credited 7
+# commits belonging to OTHER projects -- ollama's 1f92170dc9 is a `patch do`
+# inside `resource "llama.cpp"`, i.e. a patch to a bundled dependency's source.
+V._FORMULA_CACHE["cited"] = (
+    "  # Backport of %s\n"
+    "  # bcrypt no longer truncates: https://github.com/pyca/bcrypt/commit/%s\n"
+    % (URL, "d" * 40))
+check("a `Backport of` line names this formula's commit",
+      sorted(V.backport_commits("cited")), ["3" * 40])
+check("a prose citation of another project is NOT credited",
+      "d" * 40 in V.backport_commits("cited"), False)
+V._FORMULA_CACHE["nocomment"] = "class F < Formula\nend\n"
+check("no attribution comments -> empty, not None", V.backport_commits("nocomment"), {})
+
+
+# --------------------------------------------------------------------------- #
 section("cache freshness: a row must not be trusted forever")
 # --------------------------------------------------------------------------- #
 # The cache had no time component, so `known()` reused a row for as long as the

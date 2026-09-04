@@ -582,17 +582,54 @@ def _commits_in(text: str):
             for url, sha in _PATCH_COMMIT_RE.findall(text or "")}
 
 
+def backport_commits(formula: str):
+    """{sha: url} for commits the keg formula ATTRIBUTES to a patch, or {}.
+
+    Only `# Backport of <url>` lines. A vendored `file` patch has no url of its
+    own, so that comment is the only place its upstream commit appears -- 6 of
+    libssh2's 10 are exactly that.
+
+    THE NARROWNESS IS THE POINT, and scanning the whole file instead re-opened
+    the very scope error that deleting the hand parser removed. Measured
+    2026-09-04 over 231 installed formulae, a whole-file scan added 13 commits
+    beyond Homebrew's own `url` fields: 6 legitimate `Backport of` lines (all
+    libssh2), and 7 that are not patches of the formula at all --
+
+        ansible      -> pyca/bcrypt d50ab05b2b     libunistring -> gnulib bab130878f
+        luajit       -> 7110b93567                 ollama       -> 0bb0925920
+        ollama       -> 1f92170dc9                 x264         -> b5bc5d69c5
+        zstd         -> db104f6e83
+
+    ollama's 1f92170dc9 is the sharp one: it is a `patch do` inside
+    `resource "llama.cpp"`, a patch to a BUNDLED DEPENDENCY's source.
+    `serialized_patches` correctly excludes it; a whole-file regex put it back."""
+    out = {}
+    for line in (formula_text(formula) or "").splitlines():
+        if _BACKPORT_OF_RE.search(line):
+            out.update(_commits_in(line))
+    return out
+
+
 def homebrew_patch_commits(formula: str):
     """{commit_sha: patch_url} for patches applied to the installed formula, or None.
 
     The URL is kept, not just the hash, so a report can link straight to the real
     upstream commit instead of asking the reader to go and find it.
 
-    Two sources, unioned. Homebrew's own `url` fields are exact. The keg formula
-    text is also scanned whole, because a patch applied from a vendored file names
-    its upstream commit only in the comment above it -- measured across 274 kegs, 7
-    patches have a `file` and no `resolves`, and that comment is the only thing
-    that could ever explain them."""
+    Two sources, unioned: Homebrew's own `url` fields, which are exact, and the
+    `# Backport of` attribution for vendored `file` patches -- see
+    `backport_commits` for why that second source is deliberately narrow.
+
+    A correction to what was recorded here on 2026-09-04: the population this
+    second source was said to serve does not exist. "62 patches, 7 with a `file`
+    and no `resolves`" double-counted the 43 alias entries in the keg map;
+    deduplicated over 231 installed formulae it is 49 patches, of which 5 have
+    neither url nor `resolves` (glib, lua, mlx-c, ollama, openldap) -- and NONE of
+    them names a commit anywhere in its formula. The scan's real yield is
+    libssh2's 6 attributed hashes, which `resolves` already covers. It still earns
+    its place: it pins the briefing's "N patch(es) applied" at libssh2's true 10
+    rather than 5, and it feeds `commit_is_patched` for any future patch that
+    carries an attribution but no `resolves`."""
     patches = homebrew_patches_for(formula)
     text = formula_text(formula)
     if patches is None and text is None:
@@ -600,7 +637,7 @@ def homebrew_patch_commits(formula: str):
     out = {}
     for p in (patches or []):
         out.update(_commits_in(p.get("url")))
-    out.update(_commits_in(text))
+    out.update(backport_commits(formula))
     return out
 
 
@@ -667,6 +704,40 @@ def is_patched_by_homebrew(formula, cve_id, fix_commit, patch_commits) -> bool:
     return bool(cve_id and resolved and cve_id.upper() in resolved)
 
 
+def annotate_hits(formula, hits, hypothetical=False):
+    """Stamp `patched` on every hit, or None if Homebrew could not be asked.
+
+    ONE implementation, because this exact block lived in both scanners before and
+    THE COPIES DIVERGED: every false-positive fix after 2026-08-05 went into
+    vulnlib only, so toolchain-cve-check kept reporting already-backported formulae
+    such as libssh2 as EXPOSED. It happened a second time on 2026-09-04 -- vuln-scan
+    gained the undetermined guard below and toolchain-cve-check did not, so one
+    failed `brew ruby` there would have turned every backported formula in a
+    231-formula sweep into EXPOSED. Twice is a pattern, so the decision lives here.
+
+    None means UNDETERMINED, and the caller must report UNKNOWN. It must never be
+    read as "not patched": a single failed subprocess covers the whole inventory,
+    and a cry-wolf storm is how an alert stops being read.
+
+    `hypothetical` is for a version that is NOT the one on disk (--brew-version).
+    The installed formula describes a different artifact, so it is not consulted at
+    all and every hit comes back unpatched -- the loud direction, and the only way a
+    negative control proves anything. Decided PER FORMULA by the caller: asking
+    about the version that IS installed is not hypothetical, and treating it so
+    would throw away real backport detection."""
+    if hypothetical:
+        for h in hits:
+            h["patched"] = False
+        return hits
+    if homebrew_patch_data() is None:
+        return None
+    patches = homebrew_patch_commits(formula)
+    for h in hits:
+        h["patched"] = is_patched_by_homebrew(
+            formula, h["id"], h.get("fix_commit"), patches)
+    return hits
+
+
 def unclaimed_patches(formula, patch_commits, claimed_commits):
     """Patch URLs nothing has explained -- neither a CVE's named fix commit nor
     Homebrew's own `resolves` -- sorted, for the briefing to hand to a human.
@@ -693,9 +764,7 @@ def unclaimed_patches(formula, patch_commits, claimed_commits):
     # unlabelled and send the briefing off to ask a human about patches the
     # formula has already explained, which is what this function exists to stop.
     if labelled_file_patch:
-        for line in (formula_text(formula) or "").splitlines():
-            if _BACKPORT_OF_RE.search(line):
-                labelled |= set(_commits_in(line))
+        labelled |= set(backport_commits(formula))
     claimed = {c for c in (claimed_commits or []) if c}
     return sorted(url for sha, url in patch_commits.items()
                   if sha not in labelled
