@@ -40,8 +40,31 @@ command -v jq >/dev/null 2>&1 || exit 0
 cmd="$(printf '%s' "$payload" | jq -r '.tool_input.command // ""' 2>/dev/null || true)"
 [ -n "$cmd" ] || exit 0
 
-# Only fire on an actual grep. `git grep` counts — same dialect, same case traps.
-case "$cmd" in *grep*) ;; *) exit 0 ;; esac
+# Only fire on an actual search. `git grep` counts — same dialect, same case traps.
+#
+# `rg` was MISSED for as long as this hook has existed, because the substring test below
+# looks for the letters "grep" and `rg` does not contain them. Measured 2026-09-04: a bare
+# `rg -c safe-rm README.md` produced no reminder at all, while `grep` produced one every
+# time. That is the wrong way round — ripgrep is the MORE trap-prone of the two here, since
+# it skips dotfiles unless `--hidden` is passed, so an empty `rg` in a dotfiles repo is not
+# a not-found. The reminder was firing on the safer tool and staying silent on the sharper one.
+#
+# `rg` needs a WORD BOUNDARY; a substring test would fire on merge, large, target, org,
+# argv and rgb. A reminder that fires on `git merge` is a reminder that gets ignored on
+# `rg`. Word characters here exclude `/` and `|` on purpose, so `/usr/bin/rg` and `… | rg`
+# both fire, while `rg.py` and `rgb` do not.
+# ripgrep is tested FIRST: "ripgrep" contains "grep", so the substring test would claim it
+# and the notice would open "a grep is about to run" over an rg. Name the tool that actually
+# ran — a notice that looks like a misfire stops being read.
+_search=0
+_tool="search"
+if [[ "$cmd" =~ (^|[^A-Za-z0-9_.-])(rg|ripgrep)([^A-Za-z0-9_.-]|$) ]]; then
+  _search=1
+  _tool="ripgrep"
+else
+  case "$cmd" in *grep*) _search=1; _tool="grep" ;; esac
+fi
+[ "$_search" -eq 1 ] || exit 0
 
 # Already corroborating? Say nothing. A reminder that fires when it is not needed is how a
 # reminder gets ignored when it is.
@@ -77,20 +100,21 @@ home/.claude/tools/census.py into place."
 fi
 
 read -r -d '' NOTE <<EOF
-⚠️ A grep is about to run. Before trusting a ZERO or a COUNT from it, corroborate:
+⚠️ A $_tool is about to run. Before trusting a ZERO or a COUNT from it, corroborate:
 
     $invocation
 
 The census tool refuses to report anything unless the control hits first, always prints the
 denominator AND how the population was drawn (git ls-files, or an explicit walk when the
-project is not a repo), and never truncates. grep does none of that.
+project is not a repo), and never truncates. Neither grep nor rg does any of that, and rg
+additionally SKIPS DOTFILES unless --hidden is passed, so an empty rg is not a not-found.
 
 Measured: five ad-hoc greps in one sitting were wrong — \`\\|\` used as alternation under -E,
 a dropped -i, an unquoted variable read as one filename, a regex complexity error, and a
 \`head\` that cut off the control row — while every purpose-built tool was right every time.
 
-⇒ A zero from grep is NOT evidence of absence. It is an unproven instrument until a control
-has hit in the same breath. Using grep to LOCATE is fine; using it to CONCLUDE is what keeps
+⇒ A zero from $_tool is NOT evidence of absence. It is an unproven instrument until a control
+has hit in the same breath. Using it to LOCATE is fine; using it to CONCLUDE is what keeps
 going wrong.$missing
 EOF
 
