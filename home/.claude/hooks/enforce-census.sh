@@ -71,6 +71,14 @@ cmd="$(printf '%s' "$payload" | jq -r '.tool_input.command // ""' 2>/dev/null ||
 #   2. this hook, fed {"tool_name":"Grep"}, fires with the right wording (truth table)
 #   3. the Grep matcher entry is present and schema-valid in ~/.claude/settings.json
 # Every link tested; only the tool itself is missing. If it ever appears, this fires.
+#
+# SUBAGENTS ARE COVERED — measured 2026-09-04, not assumed. A session was told to
+# delegate a search; the Explore subagent it spawned ran `grep -rn`, and this hook
+# fired FOUR times inside that subagent's own context. It went on to run
+# `census.py --help` and two real census invocations, so the --help pointer reaches
+# delegated work too. Subagent transcripts live one directory deeper than the
+# session's, under `<session-id>/subagents/`; a glob that misses that level finds no
+# search commands at all and reads exactly like proof of a gap.
 if [ "$tool_name" = "Grep" ]; then
   _search=1
   _tool="Grep-tool search"
