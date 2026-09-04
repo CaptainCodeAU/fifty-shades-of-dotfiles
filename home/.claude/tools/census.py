@@ -140,11 +140,28 @@ def inside(path, prefix):
     return path == prefix or path.startswith(prefix + "/")
 
 
-def collect(root, unders, excludes, force_walk):
+def classify(path):
+    """'text', 'binary' (NUL in the first 8 KB, the sniff git and grep use), or 'unreadable'.
+
+    read_text(errors='replace') will happily scan an mp3 and report hits inside it: not
+    readable, not triageable, and they inflate a number somebody will quote. Unreadable
+    is kept SEPARATE from binary rather than folded into it — a permission-denied file is
+    a hole in the population, and reporting it as "binary" would be its own quiet lie.
+    """
+    try:
+        with open(path, "rb") as fh:
+            return "binary" if b"\x00" in fh.read(8192) else "text"
+    except OSError:
+        return "unreadable"
+
+
+def collect(root, unders, excludes, force_walk, include_binary=False):
     """Return (files, mode, filters). mode is 'git' or 'walk' and is always reported.
 
     `filters` records what each --under/--exclude ACTUALLY did, so a prefix that matched
     nothing (a typo) and one that matched half the tree cannot look the same on screen.
+    Binary files are dropped from the POPULATION, not merely skipped while counting, so
+    the denominator stays the set actually searched.
     """
     files = None if force_walk else git_files(root)
     mode = "git"
@@ -163,6 +180,16 @@ def collect(root, unders, excludes, force_walk):
         n = sum(1 for f in files if inside(f, e))
         filters.append(("--exclude", e, n, "dropped"))
         files = [f for f in files if not inside(f, e)]
+
+    kinds = {f: classify(root / f) for f in files}
+    unreadable = [f for f in files if kinds[f] == "unreadable"]
+    binaries = [f for f in files if kinds[f] == "binary"]
+    if unreadable:
+        filters.append(("unreadable", "(could not be opened)", len(unreadable), "dropped"))
+    if binaries and not include_binary:
+        filters.append(("binary", "(NUL byte in first 8 KB)", len(binaries), "dropped"))
+    keep = {"text"} | ({"binary"} if include_binary else set())
+    files = [f for f in files if kinds[f] in keep]
     return files, mode, filters
 
 
@@ -216,6 +243,8 @@ def main() -> int:
     ap.add_argument("--case-sensitive", action="store_true")
     ap.add_argument("--walk", action="store_true")
     ap.add_argument("--no-color", "--no-colour", action="store_true", dest="no_color")
+    ap.add_argument("--binary", action="store_true",
+                    help="also search binary files (default: skipped, and the count printed)")
     ap.add_argument("patterns", nargs="+")
     a = ap.parse_args()
 
@@ -226,7 +255,7 @@ def main() -> int:
         print(f"{RED}✗ --root {root} is not a directory — no population, no count{OFF}")
         return 2
 
-    files, mode, filters = collect(root, a.under, a.exclude, a.walk)
+    files, mode, filters = collect(root, a.under, a.exclude, a.walk, a.binary)
 
     # ── THE CONTROL, ASSERTED BEFORE ANY RESULT IS SHOWN ──────────────────────────
     ctl_total, ctl_files = count(root, files, a.control, a.regex, a.case_sensitive)
