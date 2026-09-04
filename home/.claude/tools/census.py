@@ -319,11 +319,30 @@ def main() -> int:
     #
     # The test is the property, not a blacklist: compile it and ask whether it matches the
     # empty string. A control that can match nothing cannot prove anything.
-    try:
-        _ctl_rx = re.compile(effective(a.control, a.regex))
-    except re.error:
-        _ctl_rx = None                      # invalid regex is handled below
-    if _ctl_rx is not None and _ctl_rx.match("") is not None:
+    # ── EVERY EXPRESSION COMPILES BEFORE ANY OUTPUT LEAVES ────────────────────────
+    # An invalid regex used to raise from inside the result loop, so census printed a
+    # GREEN control, the population, and a real result row — and THEN a traceback. Those
+    # numbers were true but partial, and partial output with no TOTAL beneath it is a
+    # number that cannot be trusted: precisely what this tool exists to refuse.
+    # Compile the control and every pattern up front, and refuse the whole run.
+    bad = []
+    for label, p in [("--control", a.control)] + [("pattern", x) for x in a.patterns]:
+        try:
+            re.compile(effective(p, a.regex))
+        except re.error as e:
+            bad.append((label, p, str(e)))
+    if bad:
+        print(f"{RED}✗ {len(bad)} expression(s) are not valid regular expressions — "
+              f"nothing was counted.{OFF}")
+        for label, p, err in bad:
+            print(f"  {RED}{label} {p}{OFF}  {DIM}→ {err}{OFF}")
+        print(f"  {DIM}Refused whole rather than in part. A run that dies midway prints\n"
+              f"  real numbers with no TOTAL under them, and a partial count reads exactly\n"
+              f"  like a complete one.{OFF}")
+        return 2
+
+    _ctl_rx = re.compile(effective(a.control, a.regex))
+    if _ctl_rx.match("") is not None:
         print(f"{RED}✗ --control `{a.control}` can match the EMPTY STRING, so it hits "
               f"everywhere.{OFF}")
         print(f"  {DIM}A control that matches nothing cannot prove anything. Zero-width\n"
