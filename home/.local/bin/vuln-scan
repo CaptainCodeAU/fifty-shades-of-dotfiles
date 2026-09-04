@@ -167,13 +167,20 @@ def scan_one(client, name, version, revision, absent_names=frozenset()):
     if not hits:
         return ("clean", cpe, None, [])
 
-    # Homebrew may already have backported the fix. Fetched once per formula, and
-    # only when there is something to check -- `brew cat` is not free.
-    patches = V.homebrew_patch_commits(name) if revision else None
+    # Homebrew may already have backported the fix. Read once per formula and
+    # memoised; since 2026-09-04 this is a local keg file, not a `brew cat` fork.
+    #
+    # NOT gated on `revision`. That gate looked like a free cost saving -- revision
+    # 0 reads as "nothing backported" -- and it is measurably wrong: 12 of the 231
+    # formulae installed here carry `patch do` blocks at revision 0, openssl@3 and
+    # python@3.14 among them, because a formula that bumps its version and its
+    # patch set in one commit resets the revision to 0.
+    patches = V.homebrew_patch_commits(name)
 
     findings = []
     for h in hits:
-        patched = V.commit_is_patched(h.get("fix_commit"), patches)
+        patched = V.is_patched_by_homebrew(
+            name, h["id"], h.get("fix_commit"), patches)
         findings.append({
             "cve": h["id"],
             "score": h.get("score"),
@@ -186,21 +193,24 @@ def scan_one(client, name, version, revision, absent_names=frozenset()):
     if truncated:
         findings.append({"note": "NVD result page truncated -- more CVEs may exist"})
 
-    # Patches applied by Homebrew that no CVE description claimed. These are the
-    # honest edge of what a deterministic tool can decide: for libssh2 the leftover
-    # patch subjects ("publickey: fix multiplication overflow in 32-bit") plainly
-    # correspond to the leftover CVEs ("reads an attacker-controlled 32-bit
-    # attribute count from a publickey-subsystem response"), but matching prose to
+    # Patches Homebrew applied that NOTHING has explained: no CVE description
+    # named their commit, and the formula attached no `resolves` to them. This is
+    # the honest edge of what a deterministic tool can decide -- a leftover patch
+    # subject often plainly corresponds to a leftover CVE, but matching prose to
     # prose is judgement, not string comparison. Faking certainty here would be the
     # same sin as a false all-clear, so the hashes are recorded and handed to the
     # briefing for a human or an assistant to rule on.
+    #
+    # This list used to be longer than it had any right to be. libssh2's three
+    # reported CVEs each sat directly beside a `resolves` field the scanner never
+    # read, so all three arrived in the briefing as "please go read these commits"
+    # when the formula had already answered (2026-09-04).
     if patches:
         claimed = {f["fix_commit"] for f in findings
                    if f.get("patched_by_homebrew") and f.get("fix_commit")}
-        unmatched = sorted(p for p in patches
-                           if not any(c in p or p.startswith(c) for c in claimed if c))
+        unmatched = V.unclaimed_patches(name, patches, claimed)
         if unmatched:
-            findings.append({"unmatched_patches": [patches[p] for p in unmatched]})
+            findings.append({"unmatched_patches": unmatched})
 
     live = [f for f in findings if f.get("cve")
             and not f["patched_by_homebrew"] and not f["unbounded"]]
@@ -534,9 +544,23 @@ def write_briefing(groups, path):
         ver = r["version"] + (f"_{r['revision']}" if r["revision"] else "")
         lines += [f"### {r['name']} {ver}", ""]
         lines.append(f"- CPE: `{r['cpe']}`")
-        lines.append(f"- Homebrew revision: {r['revision']}"
-                     + ("  (revision > 0 means Homebrew has applied patches; the CVEs"
-                        " below are the ones NOT matched to a backport)" if r["revision"] else ""))
+        # Report what is actually known, not what the revision implies. The old
+        # wording here said "revision > 0 means Homebrew has applied patches" --
+        # the same false belief that was removed from the code on 2026-09-04, left
+        # standing in prose where a human would read it as fact. It has a blind
+        # spot too: 12 of the 231 formulae installed on this machine carry patches
+        # at revision 0, so the whole clause used to be omitted for exactly the
+        # formulae whose backport context was least obvious.
+        npatch = len(V.homebrew_patch_commits(r["name"]) or {})
+        declared = V.homebrew_resolved_cves(r["name"])
+        if npatch:
+            note = f"  ({npatch} patch(es) applied"
+            note += (f"; the formula declares {len(declared)} CVE(s) resolved, and"
+                     " the ones below are not among them)" if declared
+                     else "; the formula names no CVE for any of them)")
+        else:
+            note = "  (no patches applied to this formula)"
+        lines.append(f"- Homebrew revision: {r['revision']}{note}")
         lines.append("")
         lines.append("| CVE | CVSS | Severity | Summary |")
         lines.append("|---|---|---|---|")
