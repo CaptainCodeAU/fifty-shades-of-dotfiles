@@ -137,7 +137,8 @@
       "WebFetch(domain:www.npmjs.com)",
       "mcp__exa__web_search_exa",
       "WebSearch",
-      "Bash(git --no-pager log -1 --format='%\\(trailers:key=C-Sess-Id,key=C-Branch,key=C-Worktree\\)')"
+      "Bash(git --no-pager log -1 --format='%\\(trailers:key=C-Sess-Id,key=C-Branch,key=C-Worktree\\)')",
+      "Bash(git push *)"
     ],
     "deny": [
       "Read(**/.env)",
@@ -160,31 +161,17 @@
       "Read(**/passwords.txt)",
       "Read(**/secrets/**)"
     ],
-    "ask": ["Bash(git push *)", "Bash(git reset *)"]
+    "ask": [
+      "Bash(git reset *)"
+    ]
   },
   "sandbox": {
     "enabled": true,
-    "excludedCommands": ["git"],
-    "credentials": {
-      "files": [
-        { "path": "~/.aws", "mode": "deny" },
-        { "path": "~/.gnupg", "mode": "deny" },
-        { "path": "~/.zshrc.private", "mode": "deny" },
-        { "path": "~/.config/gh", "mode": "deny" },
-        { "path": "~/.netrc", "mode": "deny" },
-        { "path": "~/.docker/config.json", "mode": "deny" },
-        { "path": "~/.kube", "mode": "deny" },
-        { "path": "~/.config/gcloud", "mode": "deny" },
-        { "path": "~/.npmrc", "mode": "deny" },
-        { "path": "~/.password-store", "mode": "deny" },
-        {
-          "path": "~/Library/Group Containers/2BUA8C4S2C.com.1password",
-          "mode": "deny"
-        },
-        { "path": "~/Library/Application Support/1Password", "mode": "deny" }
-      ]
-    },
     "filesystem": {
+      "allowWrite": [
+        "~/.claude/MEMORY",
+        "~/.config/herdr/herdr.sock"
+      ],
       "denyRead": [
         "~/.ssh",
         "~/Downloads",
@@ -210,8 +197,62 @@
         "~/.ssh/known_hosts",
         "~/.ssh/gitconfig-*",
         "~/.ssh/*.pub"
-      ],
-      "allowWrite": ["~/.claude/MEMORY", "~/.config/herdr/herdr.sock"]
-    }
+      ]
+    },
+    "credentials": {
+      "files": [
+        {
+          "path": "~/.aws",
+          "mode": "deny"
+        },
+        {
+          "path": "~/.gnupg",
+          "mode": "deny"
+        },
+        {
+          "path": "~/.zshrc.private",
+          "mode": "deny"
+        },
+        {
+          "path": "~/.config/gh",
+          "mode": "deny"
+        },
+        {
+          "path": "~/.netrc",
+          "mode": "deny"
+        },
+        {
+          "path": "~/.docker/config.json",
+          "mode": "deny"
+        },
+        {
+          "path": "~/.kube",
+          "mode": "deny"
+        },
+        {
+          "path": "~/.config/gcloud",
+          "mode": "deny"
+        },
+        {
+          "path": "~/.npmrc",
+          "mode": "deny"
+        },
+        {
+          "path": "~/.password-store",
+          "mode": "deny"
+        },
+        {
+          "path": "~/Library/Group Containers/2BUA8C4S2C.com.1password",
+          "mode": "deny"
+        },
+        {
+          "path": "~/Library/Application Support/1Password",
+          "mode": "deny"
+        }
+      ]
+    },
+    "excludedCommands": [
+      "git"
+    ]
   }
 }
