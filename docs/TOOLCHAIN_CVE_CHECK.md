@@ -137,7 +137,7 @@ they cover -- neither is wired into CI, because there is no CI here.
 
 ```bash
 vulnlib-selftest                            # 58 checks: the shared library
-.claude/hooks/toolchain-cve-check-selftest  # 26 checks: the SessionStart banner
+.claude/hooks/toolchain-cve-check-selftest  # 28 checks: the SessionStart banner
 ```
 
 [`vulnlib-selftest`](../home/.local/bin/vulnlib-selftest) covers the backport-detection
