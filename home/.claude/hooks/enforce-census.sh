@@ -139,7 +139,13 @@ if [ -n "$_root" ] && [ -f "$_root/.claude/hooks/grep-census-reminder.sh" ]; the
 fi
 
 if [ -f "$TOOL" ]; then
-  invocation="uv run python3 \$HOME/.claude/tools/census.py --control <a-token-you-KNOW-is-present> [--under PATH] PATTERN..."
+  # The second line is the only discovery path a first-time reader has. Measured
+  # 2026-09-04: a fresh session solved a hidden-file case correctly using census, and
+  # never once ran --help — it learned --include-ignored from census's own output at
+  # the moment it mattered, and learned nothing about any other flag. One line here
+  # costs nothing and names the door.
+  invocation="uv run python3 \$HOME/.claude/tools/census.py --control <a-token-you-KNOW-is-present> [--under PATH] PATTERN...
+    \$HOME/.claude/tools/census.py --help   # every flag: hidden files, JSON, regex, case, scoping"
   missing=""
 else
   invocation="(THE CENSUS TOOL IS MISSING FROM THIS MACHINE — see below)"

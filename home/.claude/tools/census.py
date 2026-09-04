@@ -678,6 +678,7 @@ def main() -> int:
               f"  pattern is wrong, the file set is wrong, or both — the population above\n"
               f"  says which files were actually opened. A zero from an unproven instrument\n"
               f"  is indistinguishable from a finding.{OFF}")
+        print(f"  {DIM}census.py --help lists every flag and every refusal.{OFF}")
         if scope == "ignored":
             # The predictable way to hit this: carry the control over from a default run,
             # where it lived in a TRACKED file that this scope deliberately excludes. Say
@@ -735,8 +736,14 @@ def main() -> int:
             print(f"      {DIM}{n:>4}  {f}{OFF}")
     print(f"\n  {DIM}{'-' * 34}{OFF}\n  {'TOTAL':<28} {grand:>5}"
           f"   {DIM}across {len(files)} file(s){OFF}")
+    # The --help pointer rides on the EXISTING footer rather than adding a line of its
+    # own. Measured 2026-09-04: a first-time session used census correctly and never ran
+    # --help, learning --include-ignored only because the population line names it at the
+    # moment it matters. That exception-based hint works and must not be diluted; this is
+    # the standing pointer to everything the situation did not happen to surface.
     print(f"\n{DIM}  ⚠️ A hit is not a defect. Triage each one by reading it: a real run once\n"
-          f"     produced 6 hits for a retired name and all 6 were legitimate.{OFF}")
+          f"     produced 6 hits for a retired name and all 6 were legitimate.\n"
+          f"     census.py --help lists every flag — scoping, hidden files, regex, JSON.{OFF}")
     return 0
 
 

@@ -357,6 +357,20 @@ def main() -> int:
                 ok, why = False, f"not JSON: {e}"
             check(f"18e json: refusal {reason} is parseable JSON with exit 2", ok, why)
 
+        # ── 19 · a first-time reader is told the option list exists ─────────────────
+        # Measured: a fresh session solved a hidden-file case with census and never ran
+        # --help. It learned the one flag it needed from the population line; nothing
+        # told it the others were there.
+        _, _, plain = run(root, "--walk", "--control", "CONTROL", "NEEDLE")
+        check("19a discover: a successful run points at --help",
+              "--help" in plain, "no route to the option list")
+        _, _, plain = run(root, "--walk", "--control", "ABSENT-TOKEN", "NEEDLE")
+        check("19b discover: a refusal points at --help too",
+              "--help" in plain, "stuck, with no route to the options")
+        rc, raw, _ = run(root, "--walk", "--json", "--control", "CONTROL", "NEEDLE")
+        check("19c discover: the pointer never contaminates --json",
+              rc == 0 and "--help" not in raw, "prose leaked into the JSON")
+
         # ── the original guarantee must still hold ──────────────────────────────────
         rc, _, plain = run(root, "--walk", "--control", "ABSENT-TOKEN", "NEEDLE")
         check("8a control still refuses: exit 2 when the control misses", rc == 2)
