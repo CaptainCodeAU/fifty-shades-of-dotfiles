@@ -37,8 +37,22 @@ payload="$(cat 2>/dev/null || true)"
 [ -n "$payload" ] || exit 0
 command -v jq >/dev/null 2>&1 || exit 0
 
+tool_name="$(printf '%s' "$payload" | jq -r '.tool_name // ""' 2>/dev/null || true)"
 cmd="$(printf '%s' "$payload" | jq -r '.tool_input.command // ""' 2>/dev/null || true)"
-[ -n "$cmd" ] || exit 0
+
+# The BUILT-IN Grep tool carries no `.command`, so the old `[ -n "$cmd" ] || exit 0` dropped
+# it on the floor. It is ripgrep underneath and inherits every trap: it skips hidden files
+# and honours .gitignore by default, and it answers a miss with the bare words "No matches
+# found" — no denominator, no statement of what it searched. That is the most confident
+# nothing in the whole toolkit, and it was the one route this hook never covered.
+if [ "$tool_name" = "Grep" ]; then
+  _search=1
+  _tool="Grep-tool search"
+  _why="The Grep tool does none of that either: it skips hidden files and honours .gitignore
+by default, and answers a miss with the bare words \"No matches found\" — no denominator, no
+statement of what was actually searched."
+fi
+[ -n "$cmd" ] || [ "${_search:-0}" -eq 1 ] || exit 0
 
 # Only fire on an actual search. `git grep` counts — same dialect, same case traps.
 #
@@ -56,9 +70,11 @@ cmd="$(printf '%s' "$payload" | jq -r '.tool_input.command // ""' 2>/dev/null ||
 # ripgrep is tested FIRST: "ripgrep" contains "grep", so the substring test would claim it
 # and the notice would open "a grep is about to run" over an rg. Name the tool that actually
 # ran — a notice that looks like a misfire stops being read.
-_search=0
-_tool="search"
-if [[ "$cmd" =~ (^|[^A-Za-z0-9_.-])(rg|ripgrep)([^A-Za-z0-9_.-]|$) ]]; then
+_search="${_search:-0}"
+_tool="${_tool:-search}"
+if [ "$_search" -eq 1 ]; then
+  :                                      # already settled by the Grep-tool branch above
+elif [[ "$cmd" =~ (^|[^A-Za-z0-9_.-])(rg|ripgrep)([^A-Za-z0-9_.-]|$) ]]; then
   _search=1
   _tool="ripgrep"
 else
@@ -66,8 +82,16 @@ else
 fi
 [ "$_search" -eq 1 ] || exit 0
 
+# Why THIS instrument cannot be trusted for a zero. Set by the Grep-tool branch; this is the
+# shell-command wording.
+if [ -z "${_why:-}" ]; then
+  _why="Neither grep nor rg does any of that, and rg additionally SKIPS DOTFILES unless
+--hidden is passed, so an empty rg is not a not-found."
+fi
+
 # Already corroborating? Say nothing. A reminder that fires when it is not needed is how a
-# reminder gets ignored when it is.
+# reminder gets ignored when it is. (Empty for the Grep tool, which carries no command and
+# cannot invoke census itself.)
 case "$cmd" in *census.py*) exit 0 ;; esac
 
 # STAND DOWN where a project already carries its own census reminder. Some repos are governed
@@ -106,16 +130,16 @@ read -r -d '' NOTE <<EOF
 
 The census tool refuses to report anything unless the control hits first, always prints the
 denominator AND how the population was drawn (git ls-files, or an explicit walk when the
-project is not a repo), and never truncates. Neither grep nor rg does any of that, and rg
-additionally SKIPS DOTFILES unless --hidden is passed, so an empty rg is not a not-found.
+project is not a repo), and never truncates.
+$_why
 
 Measured: five ad-hoc greps in one sitting were wrong — \`\\|\` used as alternation under -E,
 a dropped -i, an unquoted variable read as one filename, a regex complexity error, and a
 \`head\` that cut off the control row — while every purpose-built tool was right every time.
 
-⇒ A zero from $_tool is NOT evidence of absence. It is an unproven instrument until a control
-has hit in the same breath. Using it to LOCATE is fine; using it to CONCLUDE is what keeps
-going wrong.$missing
+⇒ A zero from it is NOT evidence of absence. It is an unproven instrument until a control has
+hit in the same breath. Using it to LOCATE is fine; using it to CONCLUDE is what keeps going
+wrong.$missing
 EOF
 
 jq -n --arg ctx "$NOTE" \
