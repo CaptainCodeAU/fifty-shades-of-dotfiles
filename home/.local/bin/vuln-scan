@@ -607,8 +607,13 @@ def write_briefing(groups, path):
         summary = next((f["patch_summary"] for f in item["findings"]
                         if isinstance(f, dict) and f.get("patch_summary")), None)
         if summary is None:
+            # `homebrew_patch_commits` can return a real {} from the keg text alone
+            # while Homebrew itself never answered, so the count has to be checked
+            # against the SOURCE, not just against None -- otherwise a formula with
+            # ten patches renders as "no patches applied to this formula".
             _p = V.homebrew_patch_commits(r["name"])
-            npatch = None if _p is None else len(_p)
+            npatch = (None if _p is None or V.homebrew_patch_data() is None
+                      else len(_p))
             _d = V.homebrew_resolved_cves(r["name"])
             declared = None if _d is None else len(_d)
         else:
