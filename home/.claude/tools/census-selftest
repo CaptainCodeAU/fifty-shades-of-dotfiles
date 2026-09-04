@@ -169,6 +169,34 @@ def main() -> int:
             _, _, plain = run(git, "--control", "CONTROL", "NEEDLE")
             check("14c reach: the default run points at the flag",
                   "--include-ignored" in plain, "the blind spot names no way out")
+
+            # 17 · the three scopes PARTITION the repo, so tracked + ignored == all.
+            # Asserted as arithmetic rather than prose: if the two searches ever start
+            # to overlap or to miss a file between them, this is what notices.
+            def pop_and_total(*extra):
+                _, _, t = run(git, *extra, "--control", "NEEDLE", "NEEDLE")
+                pm = re.search(r"population: (\d+) file", t)
+                tm = re.search(r"^\s*TOTAL\s+(\d+)", t, re.M)
+                return (int(pm.group(1)) if pm else None,
+                        int(tm.group(1)) if tm else None)
+            d_pop, d_tot = pop_and_total()
+            i_pop, i_tot = pop_and_total("--ignored-only")
+            a_pop, a_tot = pop_and_total("--include-ignored")
+            check("17a scope: --ignored-only searches a non-empty complement",
+                  i_pop is not None and i_pop > 0, f"population={i_pop}")
+            check("17b scope: populations add — tracked + ignored == all",
+                  None not in (d_pop, i_pop, a_pop) and d_pop + i_pop == a_pop,
+                  f"{d_pop} + {i_pop} != {a_pop}")
+            check("17c scope: hit counts add too",
+                  None not in (d_tot, i_tot, a_tot) and d_tot + i_tot == a_tot,
+                  f"{d_tot} + {i_tot} != {a_tot}")
+            _, _, plain = run(git, "--ignored-only", "--control", "NEEDLE", "NEEDLE")
+            check("17d scope: --ignored-only says the tracked files were NOT searched",
+                  "SCOPE: the hidden files ONLY" in plain)
+            rc, _, plain = run(git, "--ignored-only", "--include-ignored",
+                               "--control", "NEEDLE", "NEEDLE")
+            check("17e scope: the two scope flags are mutually exclusive",
+                  rc != 0 and "not allowed with" in plain, f"rc={rc}")
         finally:
             shutil.rmtree(git, ignore_errors=True)
 

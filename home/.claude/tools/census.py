@@ -90,11 +90,23 @@ Usage
     --case-sensitive    default is case-insensitive.
     --walk              force the filesystem walk even inside a git repo.
     --binary            also search binary files (default: skipped, and the count shown).
-    --include-ignored   also search what is normally hidden: gitignored and untracked
-                        files in `git` mode, and the SKIP_DIRS (build/, dist/,
-                        node_modules/ ...) in `walk` mode. `.git` is never descended
-                        into. Use it whenever you must prove a name is GONE rather than
-                        merely absent from the tracked set.
+    --include-ignored   search the tracked files AND the hidden ones together.
+    --ignored-only      search ONLY the hidden ones — the exact complement.
+
+SCOPE — the three populations partition the project
+    default             tracked files (git ls-files), or the visible tree in walk mode
+    --ignored-only      the complement: gitignored + untracked, or the contents of
+                        SKIP_DIRS (build/, dist/, node_modules/ ...) in walk mode
+    --include-ignored   the union, so its counts are the SUM of the other two
+
+    A default run that returns 0 has not proved a name is gone; it has proved the name
+    is not in the tracked set. `--ignored-only` is the second search that finishes the
+    job, and `--include-ignored` is the single run that needs no footnote. `.git` is
+    never searched under any scope. The two flags are mutually exclusive.
+
+    Carrying a control across from a default run into `--ignored-only` usually fails,
+    and correctly so: a control living in a tracked file cannot prove an instrument
+    pointed at the hidden set. census says so and names the way out.
     --no-color          never emit ANSI. NO_COLOR is honoured too, and colour is off
                         automatically whenever stdout is not a terminal.
 
@@ -142,24 +154,33 @@ SKIP_DIRS = {
 }
 
 
-def git_files(root, include_ignored=False):
-    """Tracked files, complete by construction. Returns None if this is not a git repo.
+def git_files(root, scope="tracked"):
+    """The population for a scope. Returns None if this is not a git repo.
 
-    With include_ignored, the ignored and untracked files are added too, so the
-    population becomes everything on disk that git knows about. Reporting the size of
-    that blind spot was only half the fix: a rename that must be verified clean needs to
-    SEARCH those files, and until now census offered no way to do it at all.
+    The three scopes PARTITION the repository, and that is the point:
+
+        tracked   what `git ls-files` returns — complete by construction, blind to the rest
+        ignored   exactly the complement: gitignored plus untracked
+        all       the union, and therefore the sum of the other two
+
+    A default run reports the size of the blind spot but does not look inside it.
+    `ignored` is the missing half — the second search you run when the first said zero —
+    and `all` is the one number that needs no footnote.
     """
     def ls(args):
         r = subprocess.run(["git", "-C", str(root), "ls-files", *args],
                            capture_output=True, text=True)
         return None if r.returncode != 0 else [f for f in r.stdout.split("\n") if f.strip()]
-    files = ls([])
-    if files is None or not include_ignored:
-        return files
-    extra = ls(["--others", "--exclude-standard", "--ignored"]) or []
-    extra += ls(["--others", "--exclude-standard"]) or []
-    return sorted(set(files) | set(extra))
+    tracked = ls([])
+    if tracked is None:
+        return None
+    if scope == "tracked":
+        return tracked
+    hidden = (ls(["--others", "--exclude-standard", "--ignored"]) or []) \
+        + (ls(["--others", "--exclude-standard"]) or [])
+    if scope == "ignored":
+        return sorted(set(hidden))
+    return sorted(set(tracked) | set(hidden))
 
 
 def git_unsearched(root):
@@ -180,7 +201,7 @@ def git_unsearched(root):
     return n(["--ignored"]), n([])
 
 
-def walked_files(root, include_ignored=False):
+def walked_files(root, scope="tracked"):
     """(files, skipped) — everything under root minus SKIP_DIRS, and HOW MANY that cost.
 
     Naming the skipped directories was not enough. A retired token living in build/ made
@@ -189,9 +210,12 @@ def walked_files(root, include_ignored=False):
     … build …` and `2 file(s) inside skipped directories were NOT searched` land very
     differently, and only the second is a quantity you can act on.
     """
+    # Walk mode partitions the same way: the visible tree, the contents of SKIP_DIRS,
+    # and their union. `.git` is never descended into under any scope — it is an object
+    # store, not source, and searching it yields hits nobody can act on.
     out, skipped = [], 0
-    always = {".git"}          # never descend into the object store, ignored or not
-    prune = always if include_ignored else SKIP_DIRS
+    always = {".git"}
+    prune = always if scope in ("all", "ignored") else SKIP_DIRS
     for dirpath, dirnames, filenames in os.walk(root):
         pruned = [d for d in dirnames if d in prune]
         dirnames[:] = [d for d in dirnames if d not in prune]
@@ -232,7 +256,7 @@ def classify(path):
         return "unreadable"
 
 
-def collect(root, unders, excludes, force_walk, include_binary=False, include_ignored=False):
+def collect(root, unders, excludes, force_walk, include_binary=False, scope="tracked"):
     """Return (files, mode, filters). mode is 'git' or 'walk' and is always reported.
 
     `filters` records what each --under/--exclude ACTUALLY did, so a prefix that matched
@@ -240,11 +264,16 @@ def collect(root, unders, excludes, force_walk, include_binary=False, include_ig
     Binary files are dropped from the POPULATION, not merely skipped while counting, so
     the denominator stays the set actually searched.
     """
-    files = None if force_walk else git_files(root, include_ignored)
+    files = None if force_walk else git_files(root, scope)
     mode, skipped = "git", 0
     if files is None:
-        files, skipped = walked_files(root, include_ignored)
+        files, skipped = walked_files(root, scope)
         mode = "walk"
+        if scope == "ignored":
+            # walked_files returns the whole tree when nothing is pruned; the ignored
+            # scope is the COMPLEMENT of the default, so subtract the visible set.
+            visible, _ = walked_files(root, "tracked")
+            files = sorted(set(files) - set(visible))
 
     filters = []
     unders = [u.strip("/") for u in unders]
@@ -397,10 +426,17 @@ def build_parser():
     ap.add_argument("--no-color", "--no-colour", action="store_true", dest="no_color",
                     help="never emit ANSI. NO_COLOR is honoured too, and colour is off "
                          "automatically whenever stdout is not a terminal")
-    ap.add_argument("--include-ignored", action="store_true", dest="include_ignored",
-                    help="also search what is normally hidden: gitignored and untracked "
-                         "files in git mode, and build/ dist/ node_modules/ etc in walk "
-                         "mode. Use it to prove a name is GONE, not merely untracked")
+    scope_group = ap.add_mutually_exclusive_group()
+    scope_group.add_argument("--include-ignored", action="store_true", dest="include_ignored",
+                    help="search the tracked files AND the hidden ones together: "
+                         "gitignored plus untracked in git mode, build/ dist/ "
+                         "node_modules/ etc in walk mode. The union, so its count is the "
+                         "sum of a default run and an --ignored-only run")
+    scope_group.add_argument("--ignored-only", action="store_true", dest="ignored_only",
+                    help="search ONLY the hidden files - the exact complement of a "
+                         "default run. This is the second search you make when the first "
+                         "returned zero: it lists what a tracked-only census could not "
+                         "see. .git is never searched under any scope")
     ap.add_argument("--binary", action="store_true",
                     help="also search binary files (default: skipped, and the count "
                          "printed so the omission is never silent)")
@@ -481,8 +517,9 @@ def main() -> int:
         print(f"{RED}✗ --root {root} is not a directory — no population, no count{OFF}")
         return 2
 
+    scope = "ignored" if a.ignored_only else ("all" if a.include_ignored else "tracked")
     files, mode, filters, skipped = collect(root, a.under, a.exclude, a.walk, a.binary,
-                                           a.include_ignored)
+                                           scope)
 
     # ── the denominator AND how it was drawn, ON BOTH PATHS ───────────────────────
     # This block used to run only AFTER the control passed, so a CONTROL FAILED run
@@ -515,24 +552,35 @@ def main() -> int:
             ignored, untracked = git_unsearched(root)
             if ignored is not None:
                 hidden = ignored + untracked
-                if a.include_ignored:
-                    # They ARE in the population now, so saying "NOT searched" would be
-                    # the very lie this line exists to prevent.
+                # Say what this scope did and did not open. Each of the three has a
+                # different blind spot, and printing the wrong sentence would be the
+                # same lie the line exists to prevent.
+                if scope == "all":
                     print(f"{DIM}  ALSO searched: {ignored} ignored, {untracked} untracked "
-                          f"(--include-ignored){OFF}")
+                          f"(--include-ignored — tracked and hidden together){OFF}")
+                elif scope == "ignored":
+                    print(f"{YELLOW}  SCOPE: the hidden files ONLY — {ignored} ignored, "
+                          f"{untracked} untracked. The tracked files were NOT searched;\n"
+                          f"    this is the complement of a default run, not a whole "
+                          f"census.{OFF}")
                 else:
                     tone = YELLOW if hidden else DIM
                     print(f"{tone}  NOT searched: {ignored} ignored, {untracked} untracked"
                           f"{' — git mode covers tracked files only' if hidden else ''}"
-                          f"{'  ·  --include-ignored searches them' if hidden else ''}{OFF}")
+                          f"{'  ·  --ignored-only searches just those, --include-ignored both' if hidden else ''}{OFF}")
         if mode == "walk":
             # The COUNT first, then the names. A list of nineteen directory names is
             # scenery; "2 file(s) ... NOT searched" is a quantity, and a quantity is the
             # thing a reader weighs against a zero.
-            tone = YELLOW if skipped else DIM
-            print(f"{tone}  NOT searched: {skipped} file(s) inside skipped directories"
-                  f"{' — a hit could be in any of them' if skipped else ''}"
-                  f"{'  ·  --include-ignored descends into them' if skipped else ''}{OFF}")
+            if scope == "ignored":
+                print(f"{YELLOW}  SCOPE: the skipped directories ONLY. The visible tree "
+                      f"was NOT searched;\n    this is the complement of a default run, "
+                      f"not a whole census.{OFF}")
+            else:
+                tone = YELLOW if skipped else DIM
+                print(f"{tone}  NOT searched: {skipped} file(s) inside skipped directories"
+                      f"{' — a hit could be in any of them' if skipped else ''}"
+                      f"{'  ·  --ignored-only searches just those, --include-ignored both' if skipped else ''}{OFF}")
             print(f"{YELLOW}  ⚠ WALK mode — not a git repo (or --walk forced). This population is NOT\n"
                   f"    complete by construction: it skips {', '.join(sorted(SKIP_DIRS))}.\n"
                   f"    State that limit alongside any number you quote from this run.{OFF}")
@@ -547,6 +595,15 @@ def main() -> int:
               f"  pattern is wrong, the file set is wrong, or both — the population above\n"
               f"  says which files were actually opened. A zero from an unproven instrument\n"
               f"  is indistinguishable from a finding.{OFF}")
+        if scope == "ignored":
+            # The predictable way to hit this: carry the control over from a default run,
+            # where it lived in a TRACKED file that this scope deliberately excludes. Say
+            # so, rather than leaving the caller to infer it from the SCOPE line.
+            print(f"  {YELLOW}↳ --ignored-only searches ONLY the hidden files, so a "
+                  f"control that\n    lives in a tracked file cannot hit here. Either "
+                  f"pick a control you know is\n    in the hidden set, or use "
+                  f"--include-ignored, which searches both and\n    accepts the "
+                  f"control you already have.{OFF}")
         return 2
     print(f"{GREEN}✓ control{OFF} {DIM}`{a.control}` → {ctl_total} hit(s) in "
           f"{len(ctl_files)} file(s) — the instrument works{OFF}")
