@@ -725,6 +725,15 @@ def annotate_hits(formula, hits, hypothetical=False):
     negative control proves anything. Decided PER FORMULA by the caller: asking
     about the version that IS installed is not hypothetical, and treating it so
     would throw away real backport detection."""
+    # NO HITS, NO QUESTION. Consulting Homebrew first made a formula with zero
+    # CVEs depend on `brew ruby`, and the two scanners diverged on it AGAIN:
+    # vuln-scan returns "clean" before it ever calls this, while check_brew does
+    # not, so one failed subprocess turned all ~131 formulae that came back clean
+    # into UNKNOWN -- and the hook then advised adding a FORMULA_CPE entry for a
+    # CPE that had resolved perfectly well. It also paid a keg read and line scan
+    # per clean formula, the 8.4 ms/sweep the `not hits` guard used to save.
+    if not hits:
+        return hits
     if hypothetical:
         for h in hits:
             h["patched"] = False

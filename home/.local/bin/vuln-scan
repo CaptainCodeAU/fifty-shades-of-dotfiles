@@ -218,7 +218,7 @@ def scan_one(client, name, version, revision, absent_names=frozenset()):
     # the briefing must not render that as "the formula names no CVE".
     declared = V.homebrew_resolved_cves(name)
     findings.append({"patch_summary": {
-        "npatch": len(patches or {}),
+        "npatch": None if patches is None else len(patches),
         "declared": None if declared is None else len(declared)}})
 
     # Patches Homebrew applied that NOTHING has explained: no CVE description
@@ -607,12 +607,19 @@ def write_briefing(groups, path):
         summary = next((f["patch_summary"] for f in item["findings"]
                         if isinstance(f, dict) and f.get("patch_summary")), None)
         if summary is None:
-            npatch = len(V.homebrew_patch_commits(r["name"]) or {})
+            _p = V.homebrew_patch_commits(r["name"])
+            npatch = None if _p is None else len(_p)
             _d = V.homebrew_resolved_cves(r["name"])
             declared = None if _d is None else len(_d)
         else:
             npatch, declared = summary["npatch"], summary["declared"]
-        if npatch:
+        # Three states, not two. `None` means Homebrew could not be asked at all,
+        # and collapsing it into 0 printed "no patches applied to this formula"
+        # for libssh2, which has ten -- asserting a fact that was never
+        # established, the same sin the `declared` branch below guards against.
+        if npatch is None:
+            note = "  (Homebrew could not be asked what it applied)"
+        elif npatch:
             note = f"  ({npatch} patch(es) applied"
             # None and set() must not render alike. One says Homebrew was asked and
             # named nothing; the other says it was never reached. Printing the first

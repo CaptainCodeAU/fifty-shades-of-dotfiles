@@ -291,6 +291,15 @@ check("hypothetical: the installed formula does not answer at all",
 check("hypothetical never returns None -- it is determined, just not suppressed",
       _hyp is not None, True)
 check("no hits -> an empty list, not None", V.annotate_hits("pkg", []), [])
+# THE CASE THAT WAS WRONG. The check above passes under a working fixture whether
+# or not the `not hits` guard exists; only with Homebrew unreachable does it
+# distinguish them. Without the guard this returns None, and check_brew turns
+# every formula that came back with zero CVEs -- ~131 of 231 -- into UNKNOWN.
+brew_says_nothing()
+check("no hits -> still an empty list when Homebrew is unreachable",
+      V.annotate_hits("pkg", []), [])
+check("...and a real hit in the same state still says UNDETERMINED",
+      V.annotate_hits("pkg", [{"id": CVE, "fix_commit": None}]), None)
 
 
 # --------------------------------------------------------------------------- #
