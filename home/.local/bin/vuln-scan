@@ -180,6 +180,19 @@ def scan_one(client, name, version, revision, absent_names=frozenset()):
     if not hits:
         return ("clean", cpe, None, [])
 
+    # UNDETERMINED IS NOT A VERDICT, AND MUST NOT BE CACHED AS ONE. Deciding
+    # "already backported" needs Homebrew's answer; if the one `brew ruby` for
+    # this process did not come back, every CVE below would read as unpatched and
+    # `store.record` would freeze that into SQLite -- where, now that rows expire
+    # on a 7-day clock rather than never, it would be authoritative for a week.
+    # A background sweep is ONE process over the whole inventory, so a single
+    # failed subprocess would do this to all 231 formulae at once. UNKNOWN is a
+    # first-class outcome here precisely so this can say "I could not tell".
+    if V.homebrew_patch_data() is None:
+        return ("unknown", cpe, None,
+                [{"note": "Homebrew patch data unavailable -- NOT verified clean",
+                  "no_cache": True}])
+
     # Homebrew may already have backported the fix. Read once per formula and
     # memoised; since 2026-09-04 this is a local keg file, not a `brew cat` fork.
     #
@@ -307,7 +320,8 @@ def spawn_background(args) -> bool:
         os.mkdir(lock)
     except OSError:
         return False        # already running; leave it alone
-    cmd = [os.path.abspath(__file__), "--no-progress", "--quiet"]
+    cmd = [os.path.abspath(__file__), "--no-progress", "--quiet",
+           "--stale-days", str(args.stale_days)]
     if args.db:
         cmd += ["--db", args.db]
     log = os.path.join(d, "vuln-scan-background.log")
@@ -358,12 +372,20 @@ def run_scan(store, args, announce):
     # conclude that the other 230 formulae have been uninstalled.
     reaped = 0 if args.only else store.reap(SUBJECT, live_keys)
 
-    max_age = args.stale_days * 86400
-    todo = []
+    # A negative value would make `not max_age` false and every comparison fail,
+    # i.e. a silent alias for --full. Clamp rather than surprise.
+    max_age = max(0, args.stale_days) * 86400
+    fresh_todo, stale_todo = [], []
     for name, version, revision, _raw in inv:
-        if (args.full or args.only
-                or store.known(SUBJECT, name, version, revision, max_age) is None):
-            todo.append((name, version, revision))
+        if args.full or args.only:
+            fresh_todo.append((name, version, revision))
+            continue
+        row = store.known(SUBJECT, name, version, revision)
+        if row is None:
+            fresh_todo.append((name, version, revision))
+        elif max_age and (time.time() - row["scanned_at"]) > max_age:
+            stale_todo.append((name, version, revision))
+    todo = fresh_todo + stale_todo
 
     if args.limit:
         todo = todo[:args.limit]
@@ -373,7 +395,14 @@ def run_scan(store, args, announce):
     # whatever is already cached. Without this, the very first login on a new
     # machine blocks for ~15 minutes with a progress bar, and the tool gets removed
     # from .zshrc that same day.
-    if args.fast and len(todo) > FAST_MAX_INLINE:
+    # FAST_MAX_INLINE was calibrated for CHANGED formulae -- "a dozen after a brew
+    # upgrade is a few seconds and fine". Time-expired rows are a different
+    # population: they arrive on a clock, not on an install, and on a machine with
+    # no NVD API key a re-check costs ~6.5s, so twelve of them is ~156s against a
+    # SessionStart hook that gives this 90 seconds. The hook would be killed
+    # mid-sentence and print nothing, and silence reads as an all-clear. So a
+    # stale backlog ALWAYS goes to the background, whatever its size.
+    if args.fast and (stale_todo or len(todo) > FAST_MAX_INLINE):
         spawned = spawn_background(args)
         return ({"checked": 0, "total": len(inv), "reaped": reaped,
                  "deferred": len(todo), "spawned": spawned}, None)
@@ -388,7 +417,11 @@ def run_scan(store, args, announce):
                 print(f"\r  checking {i}/{len(todo)}  {pkg} ".ljust(56),
                       end="", file=sys.stderr, flush=True)
             status, cpe, worst, findings = scan_one(client, name, version, revision, absent_names)
-            store.record(SUBJECT, name, version, revision, cpe, status, worst, findings)
+            # `no_cache` marks a verdict reached without an answer we needed. Leave
+            # it a cache miss so the next run retries, rather than freezing "I could
+            # not tell" into the store for the life of the TTL.
+            if not any(f.get("no_cache") for f in findings):
+                store.record(SUBJECT, name, version, revision, cpe, status, worst, findings)
             # Commit as we go: a shell that gets closed mid-scan should keep the
             # work already paid for rather than start from nothing next time.
             store.commit()
@@ -570,9 +603,16 @@ def write_briefing(groups, path):
         declared = V.homebrew_resolved_cves(r["name"])
         if npatch:
             note = f"  ({npatch} patch(es) applied"
-            note += (f"; the formula declares {len(declared)} CVE(s) resolved, and"
-                     " the ones below are not among them)" if declared
-                     else "; the formula names no CVE for any of them)")
+            # None and set() must not render alike. One says Homebrew was asked and
+            # named nothing; the other says it was never reached. Printing the first
+            # sentence for the second case states a fact that was never established.
+            if declared is None:
+                note += "; Homebrew could not be asked what they resolve)"
+            elif declared:
+                note += (f"; the formula declares {len(declared)} CVE(s) resolved,"
+                         " and the ones below are not among them)")
+            else:
+                note += "; the formula names no CVE for any of them)"
         else:
             note = "  (no patches applied to this formula)"
         lines.append(f"- Homebrew revision: {r['revision']}{note}")

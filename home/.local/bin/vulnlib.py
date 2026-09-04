@@ -407,8 +407,45 @@ puts JSON.generate(out)
 """
 
 _PATCH_DATA = None
-_PATCH_DATA_TRIED = False
+# Separate from the value, because None IS a meaningful value here -- it is the
+# UNDETERMINED answer, and "we have not asked yet" must stay distinguishable from
+# "we asked and could not tell". It is also the seam the selftest injects at.
+_PATCH_DATA_FETCHED = False
+_PATCH_ATTEMPTS = 0
+_PATCH_MAX_ATTEMPTS = 2
+# Only a comment that ATTRIBUTES the patch counts as naming its commit. Measured
+# 2026-09-04 over 231 installed kegs: 12 comment lines cite a commit, and the
+# convention splits them exactly 6/6. The 6 `Backport of <url>` lines are all
+# libssh2 naming the upstream commit its vendored `file` patch carries -- the only
+# place that hash appears, since a `file` patch has no url of its own. The other 6
+# are prose citing a commit in a DIFFERENT project (ansible links pyca/bcrypt).
+_BACKPORT_OF_RE = re.compile(r"backport of\b", re.IGNORECASE)
 _FORMULA_CACHE = {}
+
+
+def _valid_patch_map(data) -> bool:
+    """Is this a whole-inventory answer we may act on?
+
+    A SEPARATE FUNCTION SO IT CAN BE CONTROLLED. Folded inline it was unreachable
+    from any test that did not fork a fake `brew`, and a validation nothing
+    exercises is indistinguishable from no validation.
+
+    An EMPTY MAP IS A FAILURE, NOT AN ANSWER. The Ruby wraps each keg in
+    `rescue Exception; next`, which is right for one broken formula and wrong for
+    a systemic break: rename `serialized_patches` upstream, or have the glob match
+    nothing, and EVERY keg is skipped, `{}` is printed, and the exit code is 0.
+    Accepting that would delete the resolves signal for the whole inventory with
+    no diagnostic anywhere. `serialized_patches` is Homebrew internal API with no
+    stability contract, so this is a when, not an if.
+
+    The per-patch shape is checked too. Without it a shape change raises out of
+    scan_one, and vuln-scan's __main__ catches only KeyboardInterrupt -- so a
+    login shell would get a traceback from a module whose whole design is that an
+    uncertain answer becomes UNDETERMINED."""
+    if not isinstance(data, dict) or not data:
+        return False
+    return all(isinstance(v, list) and all(isinstance(p, dict) for p in v)
+               for v in data.values())
 
 
 def homebrew_patch_data():
@@ -421,19 +458,27 @@ def homebrew_patch_data():
     actually reported a CVE.
 
     None means UNDETERMINED and must never be read as "no patches": brew missing,
-    the subprocess failing, or unparseable output all land here, and every caller
-    turns None into "cannot suppress" rather than "nothing was backported".
+    the subprocess failing, an empty map, an unexpected shape, or unparseable
+    output all land there, and every caller turns None into "cannot suppress"
+    rather than "nothing was backported".
 
-    Tried once per process even on a transient failure. That is the opposite of
-    the per-formula rule elsewhere in this module, and deliberately so: this is one
-    call for the whole inventory, so retrying it per CVE could add minutes to a
-    scan, and the failure direction is already the safe one."""
-    global _PATCH_DATA, _PATCH_DATA_TRIED
-    if _PATCH_DATA_TRIED:
+    Retried at most _PATCH_MAX_ATTEMPTS times per process, because one transient
+    failure here costs the resolves signal for the ENTIRE inventory -- a
+    background sweep is a single process covering all 231 formulae -- while an
+    uncapped retry could add minutes to that same sweep. A missing `brew` is
+    deterministic and is not retried at all.
+
+    Not on the shell-startup path in the ordinary case: `scan_one` only runs on a
+    cache miss and returns before here unless NVD reported a CVE. It IS reached at
+    startup when the briefing is rewritten, which happens only when there is
+    something actionable to write about."""
+    global _PATCH_DATA, _PATCH_DATA_FETCHED, _PATCH_ATTEMPTS
+    if _PATCH_DATA_FETCHED or _PATCH_ATTEMPTS >= _PATCH_MAX_ATTEMPTS:
         return _PATCH_DATA
-    _PATCH_DATA_TRIED = True
+    _PATCH_ATTEMPTS += 1
     brew = shutil.which("brew")
     if not brew:
+        _PATCH_DATA_FETCHED = True          # deterministic; do not retry
         return None
     try:
         proc = subprocess.run([brew, "ruby", "-e", _PATCH_RUBY],
@@ -446,7 +491,10 @@ def homebrew_patch_data():
         data = json.loads(proc.stdout)
     except ValueError:
         return None
-    _PATCH_DATA = data if isinstance(data, dict) else None
+    if not _valid_patch_map(data):
+        return None
+    _PATCH_DATA = data
+    _PATCH_DATA_FETCHED = True
     return _PATCH_DATA
 
 
@@ -631,13 +679,23 @@ def unclaimed_patches(formula, patch_commits, claimed_commits):
     if not patch_commits:
         return []
     patches = homebrew_patches_for(formula)
-    labelled = set()
-    if patches:
-        if all(_security_ids(p) for p in patches):
-            return []
-        for p in patches:
-            if _security_ids(p):
-                labelled |= set(_commits_in(p.get("url")))
+    labelled, labelled_file_patch = set(), False
+    for p in (patches or []):
+        if not _security_ids(p):
+            continue
+        if p.get("url"):
+            labelled |= set(_commits_in(p["url"]))
+        else:
+            labelled_file_patch = True
+    # A vendored `file` patch has no url, so the ONLY place its upstream commit
+    # appears is the `# Backport of <url>` comment above it -- 5 of libssh2's 10
+    # are exactly that. Reading Homebrew's answer alone would leave those hashes
+    # unlabelled and send the briefing off to ask a human about patches the
+    # formula has already explained, which is what this function exists to stop.
+    if labelled_file_patch:
+        for line in (formula_text(formula) or "").splitlines():
+            if _BACKPORT_OF_RE.search(line):
+                labelled |= set(_commits_in(line))
     claimed = {c for c in (claimed_commits or []) if c}
     return sorted(url for sha, url in patch_commits.items()
                   if sha not in labelled

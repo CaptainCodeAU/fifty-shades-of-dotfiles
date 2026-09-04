@@ -32,8 +32,10 @@ touches the network or a real database. The live section reads installed kegs
 read-only and skips itself if they are absent.
 """
 
+import atexit
 import importlib.util
 import os
+import shutil
 import sys
 import tempfile
 import time
@@ -99,18 +101,21 @@ def sec(*ids):
     return [{"type": "security", "id": i} for i in ids]
 
 
+def _seed(data):
+    V._PATCH_DATA = data
+    V._PATCH_DATA_FETCHED = True    # "the answer is final", separate from its value
+    V._PATCH_ATTEMPTS = 0
+    V._FORMULA_CACHE.clear()
+
+
 def install(**formulae):
     """Seed Homebrew's answer. Replaces the whole map, so each call is isolated."""
-    V._PATCH_DATA = dict(formulae)
-    V._PATCH_DATA_TRIED = True
-    V._FORMULA_CACHE.clear()
+    _seed(dict(formulae))
 
 
 def brew_says_nothing():
     """Homebrew could not be asked at all -- the UNDETERMINED case."""
-    V._PATCH_DATA = None
-    V._PATCH_DATA_TRIED = True
-    V._FORMULA_CACHE.clear()
+    _seed(None)
 
 
 # --------------------------------------------------------------------------- #
@@ -152,6 +157,23 @@ check("an installed formula with no patches -> empty set, a real fact",
       V.homebrew_resolved_cves("other"), set())
 check("patches_for distinguishes 'no patches' from 'never heard of it'",
       (V.homebrew_patches_for("other"), V.homebrew_patches_for("pkg")), ([], None))
+
+# What `brew ruby` produced must be validated BEFORE it is believed, and the
+# validator is controlled directly: folded inline it was unreachable without
+# forking a fake brew, and a validation nothing exercises is not a validation.
+# `{}` is the dangerous one -- the Ruby rescues each keg individually, so a
+# systemic break (serialized_patches renamed, the glob matching nothing) skips
+# every keg and still exits 0.
+for label, value, ok in [
+        ("a whole-inventory answer", {"libssh2": [{"file": "p"}], "jq": []}, True),
+        ("a formula with no patches", {"jq": []}, True),
+        ("an EMPTY map -- every keg was skipped", {}, False),
+        ("not a map at all", [], False),
+        ("None", None, False),
+        ("patches as strings, not dicts", {"jq": ["oops"]}, False),
+        ("a patch list that is not a list", {"jq": {"file": "p"}}, False)]:
+    check("validator accepts %s" % label if ok else "validator REJECTS %s" % label,
+          V._valid_patch_map(value), ok)
 
 
 # --------------------------------------------------------------------------- #
@@ -224,7 +246,26 @@ check("an unlabelled patch leaves its commit on the list",
 check("a commit already claimed by a CVE is not asked about",
       V.unclaimed_patches("partly", {"b" * 40: "https://e/commit/" + "b" * 40},
                           {"b" * 40}), [])
+# Must sit here, while `allknown` is still the installed fixture: install()
+# replaces the whole map, and against an UNINSTALLED name this check passes for
+# the wrong reason -- patches is None, so any short-circuit is skipped anyway.
+check("all patches labelled, but an unexplained commit still gets asked about",
+      V.unclaimed_patches("allknown", {"c" * 40: "https://e/commit/" + "c" * 40}, set()),
+      ["https://e/commit/" + "c" * 40])
 check("no patches -> empty list", V.unclaimed_patches("allknown", None, set()), [])
+
+# THE MIXED CASE. A vendored `file` patch has no url, so its commit lives only in
+# the `# Backport of` comment above it -- 5 of libssh2's 10 are exactly that. A
+# formula gaining one ordinary unlabelled patch (a build fix) must not turn those
+# five back into questions for a human.
+install(mixedfile=[{"file": "Patches/x/CVE-2026-58050.patch", "resolves": sec(CVE)},
+                   {"url": "https://github.com/x/y/commit/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.patch"}])
+V._FORMULA_CACHE["mixedfile"] = "  # Backport of https://github.com/libssh2/libssh2/commit/5555555555555555555555555555555555555555\n  patch do\n  end\n"
+_pc = {"5" * 40: "https://github.com/libssh2/libssh2/commit/5555555555555555555555555555555555555555", "b" * 40: "https://github.com/x/y/commit/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+check("a labelled FILE patch's comment-named commit is not asked about",
+      V.unclaimed_patches("mixedfile", _pc, set()), ["https://github.com/x/y/commit/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"])
+check("...and it is genuinely the comment doing it, not a short-circuit",
+      len(V.homebrew_patches_for("mixedfile")), 2)
 
 
 # --------------------------------------------------------------------------- #
@@ -236,7 +277,9 @@ section("cache freshness: a row must not be trusted forever")
 # CVE for 17 days; 97 of 231 rows were 32 days old. The false-NEGATIVE direction
 # is the same bug and worse -- a CVE published tomorrow against a version that
 # never moves would not be found at all.
-_db = os.path.join(tempfile.mkdtemp(prefix="vulnlib-selftest-"), "scan.db")
+_tmp = tempfile.mkdtemp(prefix="vulnlib-selftest-")
+atexit.register(shutil.rmtree, _tmp, True)   # ours, created this run, empty of anything else
+_db = os.path.join(_tmp, "scan.db")
 _store = V.ScanStore(_db)
 _store.record("brew", "fresh-pkg", "1.0", 0, "a:b", "clean", None, [])
 _store.record("brew", "stale-pkg", "1.0", 0, "a:b", "clean", None, [])
@@ -266,11 +309,23 @@ section("live kegs (read-only; skipped if not installed)")
 # `brew vulns`, which reported the same ten as "resolved by formula patches".
 # Asserting against another call into vulnlib would be tautological.
 V._PATCH_DATA = None
-V._PATCH_DATA_TRIED = False
+V._PATCH_DATA_FETCHED = False
+V._PATCH_ATTEMPTS = 0
 V._FORMULA_CACHE.clear()
 
-if V.homebrew_patch_data() is None:
+_live = V.homebrew_patch_data()
+if _live is None:
     skip("all live checks", "brew ruby did not answer")
+elif len(_live) < 50:
+    # A COLLAPSED MAP IS NOT AN EMPTY MACHINE. `{}` or a handful of keys means the
+    # Ruby skipped nearly every keg -- `serialized_patches` renamed, the glob
+    # matching nothing -- and every formula below would then report None and be
+    # SKIPPED as "not installed", turning the live section green while proving
+    # nothing. This box has 274 kegs; anything under 50 is a broken instrument,
+    # not a small machine, and it must fail rather than skip.
+    FAILURES.append("brew ruby returned only %d keg(s) -- the map collapsed" % len(_live))
+    print("  %sFAIL%s  brew ruby returned only %d keg(s); expected the whole inventory"
+          % (RED, OFF, len(_live)))
 else:
     got = V.homebrew_resolved_cves("libssh2")
     if got is None:
@@ -280,8 +335,14 @@ else:
             "CVE-2025-15661", "CVE-2026-7598", "CVE-2026-55199", "CVE-2026-55200",
             "CVE-2026-58050", "CVE-2026-58051", "CVE-2026-66032", "CVE-2026-66033",
             "CVE-2026-66034", "CVE-2026-66035"})
+        # Pin the denominator FIRST. unclaimed_patches returns [] for a falsy
+        # first argument, so without this the check below passes unchanged if
+        # homebrew_patch_commits regresses to None or {} -- a green tick for a
+        # signal that has disappeared.
+        _pc_live = V.homebrew_patch_commits("libssh2")
+        check("libssh2 exposes all ten of its patch commits", len(_pc_live or {}), 10)
         check("libssh2 has nothing left to ask a human about",
-              V.unclaimed_patches("libssh2", V.homebrew_patch_commits("libssh2"), set()), [])
+              V.unclaimed_patches("libssh2", _pc_live, set()), [])
 
     py = V.homebrew_resolved_cves("python@3.14")
     if py is None:
