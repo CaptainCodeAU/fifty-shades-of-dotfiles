@@ -311,6 +311,26 @@ def main() -> int:
                   f"and counts nothing.{OFF}")
             return 2
 
+    # ── NOR IS A CONTROL THAT CAN MATCH NOTHING AT ALL ────────────────────────────
+    # Blanking the control is only the crudest way to make it meaningless. `--regex
+    # --control 'x*'` is the same hole with a fig leaf: `x*` matches the empty string, so
+    # it hits at every position and "proves" an instrument that was never tested. Same for
+    # `a?`, `(?:)`, `^`, and anything else that can match zero characters.
+    #
+    # The test is the property, not a blacklist: compile it and ask whether it matches the
+    # empty string. A control that can match nothing cannot prove anything.
+    try:
+        _ctl_rx = re.compile(effective(a.control, a.regex))
+    except re.error:
+        _ctl_rx = None                      # invalid regex is handled below
+    if _ctl_rx is not None and _ctl_rx.match("") is not None:
+        print(f"{RED}✗ --control `{a.control}` can match the EMPTY STRING, so it hits "
+              f"everywhere.{OFF}")
+        print(f"  {DIM}A control that matches nothing cannot prove anything. Zero-width\n"
+              f"  patterns — x*, a?, ^, (?:) — pass against any corpus at all. Give a\n"
+              f"  control that must consume at least one character.{OFF}")
+        return 2
+
     root = Path(a.root).resolve()
     if not root.is_dir():
         print(f"{RED}✗ --root {root} is not a directory — no population, no count{OFF}")

@@ -190,6 +190,13 @@ def main() -> int:
         rc, _, _ = run(root, "--walk", "--control", "CONTROL", "")
         check("9d empty: an empty PATTERN exits 2", rc == 2, f"rc={rc}")
 
+        # ── 10 · a control that can match the empty string is refused ───────────────
+        for ctl in ("x*", "a?", "^", "(?:)"):
+            rc, _, _ = run(root, "--walk", "--regex", "--control", ctl, "NEEDLE")
+            check(f"10a zero-width: --regex --control {ctl!r} exits 2", rc == 2, f"rc={rc}")
+        rc, _, _ = run(root, "--walk", "--regex", "--control", "CONTR.L", "NEEDLE")
+        check("10b zero-width: a real regex control is still accepted", rc == 0, f"rc={rc}")
+
         # ── the original guarantee must still hold ──────────────────────────────────
         rc, _, plain = run(root, "--walk", "--control", "ABSENT-TOKEN", "NEEDLE")
         check("8a control still refuses: exit 2 when the control misses", rc == 2)
