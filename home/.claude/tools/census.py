@@ -327,22 +327,91 @@ def count(root, files, pattern, use_regex, case_sensitive):
     return total, per_file
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser(add_help=True)
-    ap.add_argument("--control", required=True)
-    ap.add_argument("--root", default=".")
-    ap.add_argument("--under", action="append", default=[])
-    ap.add_argument("--exclude", action="append", default=[])
-    ap.add_argument("--regex", action="store_true")
-    ap.add_argument("--case-sensitive", action="store_true")
-    ap.add_argument("--walk", action="store_true")
-    ap.add_argument("--no-color", "--no-colour", action="store_true", dest="no_color")
+DESCRIPTION = """\
+Count pattern hits across a project's files, and REFUSE to answer without a control.
+
+A control is a token you KNOW is present. It runs first; if it misses, you get an
+error and NO NUMBERS, because a number from an unproven instrument is worse than
+no number at all.
+
+What a green control proves:      --root is real, the filters left a population,
+                                  and those files were opened and searched.
+What it does NOT prove:           that your pattern means what you think it does.
+                                  Give the control the same syntax class as the
+                                  patterns - a literal control cannot vouch for a
+                                  regex pattern."""
+
+EPILOG = """\
+refused (exit 2, and nothing is counted):
+  the control matched nothing            an empty PATTERN
+  --control empty, or able to match      the control or a pattern is not valid
+    the empty string (x*, a?, ^)           regex - the run is refused WHOLE, since
+  --root is not a directory                a partial count reads like a full one
+
+always printed, so a count is never quoted bare:
+  the population and how it was drawn (git ls-files, or an explicit walk)
+  the matching mode, because literal-vs-regex and case are both silent defaults
+  what every filter removed, and what was never searched at all
+
+example:
+  census.py --control stow --under home SAFE_RM_OFF
+  census.py --regex --control 'CONTR.L' '66\\.226\\.144\\.185'
+
+a hit is not a defect. triage every one by reading it."""
+
+
+def build_parser():
+    """The parser, built apart from main() so the self-test can inspect it.
+
+    Every option carries help text. Nine of eleven had none: `--help` printed a bare
+    column of flag names while the reasoning sat in a docstring nobody running --help
+    ever sees. A tool whose whole value is a discipline has to explain the discipline
+    at the place people actually look.
+    """
+    ap = argparse.ArgumentParser(
+        add_help=True,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=DESCRIPTION,
+        epilog=EPILOG,
+    )
+    ap.add_argument("--control", required=True, metavar="TOKEN",
+                    help="REQUIRED. A token you KNOW is present. Asserted before any "
+                         "result is shown; zero hits ends the run with exit 2")
+    ap.add_argument("--root", default=".", metavar="PATH",
+                    help="project root to census (default: the current directory)")
+    ap.add_argument("--under", action="append", default=[], metavar="PREFIX",
+                    help="restrict to this path or anything beneath it, relative to "
+                         "root. Repeatable. Matched on PATH boundaries, so 'd' never "
+                         "means docs/, dist/ and data/ at once")
+    ap.add_argument("--exclude", action="append", default=[], metavar="PREFIX",
+                    help="drop this path and anything beneath it. Repeatable. Both "
+                         "filters print how many files they actually moved")
+    ap.add_argument("--regex", action="store_true",
+                    help="treat the control and patterns as regular expressions "
+                         "(default: literal, so metacharacters are escaped)")
+    ap.add_argument("--case-sensitive", action="store_true",
+                    help="match case exactly (default: case-insensitive)")
+    ap.add_argument("--walk", action="store_true",
+                    help="force the filesystem walk even inside a git repo. The walk is "
+                         "NOT complete by construction and says so")
+    ap.add_argument("--no-color", "--no-colour", action="store_true", dest="no_color",
+                    help="never emit ANSI. NO_COLOR is honoured too, and colour is off "
+                         "automatically whenever stdout is not a terminal")
     ap.add_argument("--include-ignored", action="store_true", dest="include_ignored",
-                    help="also search gitignored/untracked files (git mode) and descend "
-                         "into SKIP_DIRS (walk mode)")
+                    help="also search what is normally hidden: gitignored and untracked "
+                         "files in git mode, and build/ dist/ node_modules/ etc in walk "
+                         "mode. Use it to prove a name is GONE, not merely untracked")
     ap.add_argument("--binary", action="store_true",
-                    help="also search binary files (default: skipped, and the count printed)")
-    ap.add_argument("patterns", nargs="+")
+                    help="also search binary files (default: skipped, and the count "
+                         "printed so the omission is never silent)")
+    ap.add_argument("patterns", nargs="+", metavar="PATTERN",
+                    help="one or more things to count. Passed as argv and never through "
+                         "a shell variable, so they cannot collapse into one argument")
+    return ap
+
+
+def main() -> int:
+    ap = build_parser()
     a = ap.parse_args()
 
     init_colour(a.no_color)

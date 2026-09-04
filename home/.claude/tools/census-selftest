@@ -265,6 +265,31 @@ def main() -> int:
         check("15b wolf: a REAL typo still shouts",
               "check the spelling" in plain, "the warning went missing entirely")
 
+        # ── 16 · every option explains itself, in the place people actually look ────
+        # Structural, not per-flag: nine of eleven options once shipped with no help at
+        # all. Assert the property so the NEXT flag cannot ship bare either.
+        # A missing build_parser() must FAIL, not raise: an exception here would abort
+        # the suite and take every later check with it, and an aborted suite reports
+        # nothing at all — the silence-as-health failure this whole tool is against.
+        bare, why = None, ""
+        try:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("census_mod", CENSUS)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            parser = mod.build_parser()
+            bare = [a.dest for a in parser._actions
+                    if a.dest != "help" and not (a.help or "").strip()]
+        except Exception as e:
+            why = f"parser not introspectable: {e.__class__.__name__}: {e}"
+        check("16a help: every option and positional carries help text",
+              bare is not None and not bare, why or f"no help on: {bare}")
+        _, _, helptext = run(root, "--help")
+        check("16b help: --help carries the control's promise, not just flag names",
+              "does NOT prove" in helptext, "the reasoning never reaches --help")
+        check("16c help: --help lists what gets refused",
+              "refused" in helptext and "empty string" in helptext)
+
         # ── the original guarantee must still hold ──────────────────────────────────
         rc, _, plain = run(root, "--walk", "--control", "ABSENT-TOKEN", "NEEDLE")
         check("8a control still refuses: exit 2 when the control misses", rc == 2)
