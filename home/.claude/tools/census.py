@@ -290,6 +290,27 @@ def main() -> int:
 
     init_colour(a.no_color)
 
+    # ── AN EMPTY CONTROL IS NOT A CONTROL ─────────────────────────────────────────
+    # `--control ""` compiles to the empty pattern, which matches at every position, so
+    # it reported "the instrument works" over any corpus at all — the one gate this whole
+    # tool is built around, walked straight through.
+    #
+    # This is the tool's OWN founding accident, mirrored. census exists because an
+    # unquoted shell variable made grep return a false ZERO; `--control "$VAR"` with VAR
+    # unset makes census return a false PASS. Same slip, opposite direction.
+    if not a.control.strip():
+        print(f"{RED}✗ --control is empty — that is not a control, it is a blank cheque.{OFF}")
+        print(f"  {DIM}An empty pattern matches everywhere, so the control would 'pass'\n"
+              f"  against any corpus and prove nothing. If you wrote --control \"$VAR\",\n"
+              f"  the variable is unset or empty — the exact accident this tool exists to\n"
+              f"  catch, pointed at the control instead of the pattern.{OFF}")
+        return 2
+    for p in a.patterns:
+        if not p.strip():
+            print(f"{RED}✗ an empty PATTERN was given — it matches everywhere "
+                  f"and counts nothing.{OFF}")
+            return 2
+
     root = Path(a.root).resolve()
     if not root.is_dir():
         print(f"{RED}✗ --root {root} is not a directory — no population, no count{OFF}")

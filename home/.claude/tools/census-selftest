@@ -180,6 +180,16 @@ def main() -> int:
         check("7b binary: --binary accepted and puts them back",
               rc == 0 and "blob.bin" in plain, f"rc={rc}")
 
+        # ── 9 · an empty control is refused, not honoured ────────────────────────────
+        rc, _, plain = run(root, "--walk", "--control", "", "NEEDLE")
+        check("9a empty: --control '' exits 2", rc == 2, f"rc={rc}")
+        check("9b empty: no count is printed for an empty control",
+              "TOTAL" not in plain and "the instrument works" not in plain)
+        rc, _, _ = run(root, "--walk", "--control", "   ", "NEEDLE")
+        check("9c empty: a whitespace-only control exits 2", rc == 2, f"rc={rc}")
+        rc, _, _ = run(root, "--walk", "--control", "CONTROL", "")
+        check("9d empty: an empty PATTERN exits 2", rc == 2, f"rc={rc}")
+
         # ── the original guarantee must still hold ──────────────────────────────────
         rc, _, plain = run(root, "--walk", "--control", "ABSENT-TOKEN", "NEEDLE")
         check("8a control still refuses: exit 2 when the control misses", rc == 2)
