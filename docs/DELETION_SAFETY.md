@@ -93,6 +93,15 @@ Consequences to live with:
 | `SAFE_RM_OFF=1`     | Total bypass — exec `/bin/rm`. Permanent. Per command or exported. |
 | `SAFE_RM_VERBOSE=1` | Print each trashed path (drops `safe-rm -q`).                      |
 
+### The escape hatches are for humans only
+
+`CLAUDE.md` makes it **binding** that no agent, subagent, script or hook invokes the real
+deleter in any form — `/bin/rm`, `/bin/rm -P`, `/usr/bin/rm`, `SAFE_RM_OFF=1`, `unlink`,
+`find … -delete`, `truncate -s0`, `> file`, `shred`. All of them destroy data outside the
+Trash, and `-P` overwrites the bytes first so that no Trash, snapshot or backup can recover
+it. An agent that believes it needs a permanent delete must stop and ask; that call belongs
+to the operator.
+
 ## sudo rm
 
 `sudo` execs the real `/bin/rm`, so the `rm()` shell function never sees it. The `sudo()`

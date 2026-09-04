@@ -35,9 +35,14 @@
 # the Trash). Empty the Trash regularly, or set SAFE_RM_OFF=1 for a build. Do not "simplify"
 # this back to a conditional shim without re-reading docs/DELETION_SAFETY.md first.
 #
-# ESCAPE HATCHES
+# ESCAPE HATCHES -- FOR A HUMAN, DELIBERATELY, NEVER FOR AN AGENT OR A SCRIPT
 #   SAFE_RM_OFF=1 rm ...    real /bin/rm, permanent, for one command or one exported shell
 #   /bin/rm ...             absolute path, permanent
+#
+# CLAUDE.md makes this BINDING: no agent, subagent, script or hook may invoke the real deleter
+# in any form. Both doors above are permanent and unrecoverable -- `/bin/rm -P` additionally
+# OVERWRITES the bytes first, so no Trash, snapshot or backup can bring the file back. An agent
+# that thinks it needs one of these must stop and ask the user instead.
 #
 # NOTE that `command rm` and `\rm` are NO LONGER escape hatches. They bypass shell functions
 # and aliases, not PATH, so they now land here. That is intended; the documented doors are the

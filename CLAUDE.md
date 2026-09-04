@@ -55,6 +55,23 @@ So any shell without that shim — a plain terminal, a script, a cron job, a non
 
 ## Deletion safety
 
+### NEVER invoke the real deleter (BINDING — no exceptions, no judgement calls)
+
+No agent, subagent, script, hook, Makefile, or subprocess may EVER call the real `rm`, in any form:
+
+- `/bin/rm` — and every variation: `/usr/bin/rm`, `env rm`, `xargs /bin/rm`, `sh -c '/bin/rm …'`, an absolute path built from a variable, or any other spelling that reaches the binary directly.
+- **`/bin/rm -P`** — the worst one. `-P` OVERWRITES the file's contents before unlinking. Nothing recovers it: not the Trash, not an APFS snapshot, not Time Machine unless the last backup predates the delete. Never type it, never generate it, never suggest it.
+- `SAFE_RM_OFF=1 rm …` — the documented bypass. Still permanent. Reserved for a human.
+- Any other route that destroys data without passing through the Trash: `unlink`, `find … -delete`, `truncate -s0`, `> file`, `dd of=…`, `shred`, `srm`.
+
+**Always use bare `rm`.** It resolves to the Trash-routed wrapper — a zsh function when interactive, the `~/.local/bin/rm` PATH shim everywhere else (scripts, `xargs`, `make`, hooks). `command rm` and `\rm` are also safe now: they bypass shell functions, not PATH.
+
+**If you think you need a permanent delete, STOP and ask.** That decision belongs to the user, never to an agent. `/bin/rm` exists for a human's deliberate, informed choice — not for an agent's convenience, tidiness, or cleanup step. This rule outranks "it's only a temp file", "it's only build output", and "the disk is full".
+
+See [`docs/DELETION_SAFETY.md`](docs/DELETION_SAFETY.md) for the coverage table, the measured evidence, and the two escape hatches that exist for humans.
+
+### How the wrappers work
+
 `rm`, `cp`, and `mv` are shell-function wrappers with safety behavior (rm routes to trash; cp/mv default to `-i` overwrite prompts). These wrappers are usually ACTIVE in Bash tool calls — Claude Code snapshots the interactive shell's functions to `~/.claude/shell-snapshots/snapshot-zsh-*.sh` and sources that file before every command, so the rm-to-trash wrapper comes along even though `.zshrc` itself isn't read. Verified 2026-06-08: `type -a rm` reported the snapshot function and a delete printed `Trashed ... (recover: Finder, Put Back)`, recoverable via Finder or the `trash` CLI. Caveats: confirmed for `rm` only (cp/mv presumably share the mechanism, untested), and it depends on the snapshot having captured the function — not guaranteed on every machine/session, so run `type rm` before trusting reversibility. The discipline does NOT change: ALWAYS get explicit user confirmation before deleting or overwriting — treat Trash recovery as a safety net, never a license to delete freely.
 
 ## GitHub CLI (`gh`)

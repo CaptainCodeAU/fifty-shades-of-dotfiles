@@ -19,12 +19,18 @@
 # Trash on every SessionStart hook run, and a Trash full of machine noise is one nobody
 # reads, which defeats the point of having a recoverable delete at all.
 #
-# THAT RULE STILL STANDS FOR DIRECT CALLERS -- call /bin/rm for your own scratch, not safe-rm.
-# But it is no longer enforceable for a BARE `rm`, because ~/.local/bin/rm now shims every rm
-# on PATH straight to here and a shim cannot tell scratch from user data. The operator chose
-# total coverage over a quiet Trash on 2026-09-04, with the cost measured first. So: a script
-# that writes `rm -rf "$tmp"` WILL fill the Trash, and that is now expected rather than a bug.
-# To keep scratch out of it, write `/bin/rm -rf "$tmp"` or set SAFE_RM_OFF=1.
+# THAT RULE IS NO LONGER ENFORCEABLE, and the resolution went the other way. ~/.local/bin/rm
+# now shims every bare `rm` on PATH straight to here, and a shim cannot tell a script's
+# scratch from a user's files. The operator chose total coverage over a quiet Trash on
+# 2026-09-04, with the cost measured first. So a script that writes `rm -rf "$tmp"` WILL fill
+# the Trash, and that is now expected rather than a bug.
+#
+# DO NOT "fix" that by reaching for /bin/rm. CLAUDE.md makes it BINDING that no agent, script
+# or hook calls the real deleter in any form -- /bin/rm, /bin/rm -P, unlink, find -delete,
+# SAFE_RM_OFF=1. Those exist for a human's deliberate choice only. A script that wants its
+# scratch gone quietly should put it under $TMPDIR and simply leave it: the OS reaps that
+# directory, no delete call needed. If a temp dir genuinely must be removed inside a script,
+# route it here like everything else and let the Trash carry the noise.
 # See docs/DELETION_SAFETY.md.
 #
 # USAGE
