@@ -1,0 +1,240 @@
+#!/usr/bin/env bash
+# safe-rm-selftest -- regression suite for the Trash-routed deletion chain.
+#
+# WHY THIS EXISTS
+# ---------------
+# On 2026-09-04 a security review found FIVE defects in this chain in a single sitting, and
+# every one of them was in the same family: the code reported an outcome it had not verified.
+# Three of them were the dangerous direction -- a delete that happened, reported as one that
+# had not, so nobody would think to look in the Trash.
+#
+#   1. `safe-rm -- -v`               said "Trashed", deleted nothing (leading dash reached
+#                                    `trash` as an option; macOS `trash` exits 0 on those).
+#   2. `sudo -nu root rm -rf x`      reached /bin/rm; the guard's option scanner read `root`
+#                                    as the command. (Fixed in .zshrc, covered here anyway.)
+#   3. `rm -rf .`                    MOVED THE WHOLE TREE and printed "They are UNCHANGED.
+#                                    Nothing was deleted permanently."
+#   4. `safe-rm f ./f`               trashed f and printed "nothing was deleted".
+#   5. `safe-rm a locked/b`          exited 0 without touching locked/b, which existed but
+#                                    could not be stat'ed through a mode-000 parent.
+#
+# Ad-hoc testing found them; only a committed suite keeps them found. Run this after ANY
+# change to safe-rm, to home/.local/bin/rm, or to the rm()/sudo() wrappers in .zshrc.
+#
+# USAGE
+#   safe-rm-selftest            run everything, print a summary
+#   safe-rm-selftest -v         also print each command's output
+#
+# It works entirely inside its own mktemp directory and trashes only files it created there.
+# It never touches anything outside that directory.
+
+set -u
+
+VERBOSE=0
+[ "${1:-}" = "-v" ] && VERBOSE=1
+
+# Resolve the pair under test. Prefer the copies next to this script (the repo, via stow) so
+# the suite tests what is checked in rather than whatever happens to win on PATH.
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+SAFE_RM="$here/safe-rm"
+RM_SHIM="$here/rm"
+[ -x "$SAFE_RM" ] || { echo "safe-rm-selftest: no safe-rm next to $0" >&2; exit 1; }
+
+if ! command -v trash >/dev/null 2>&1 && ! command -v trash-put >/dev/null 2>&1; then
+	echo "safe-rm-selftest: no trash tool installed -- cannot test the real path." >&2
+	echo "  macOS: it ships at /usr/bin/trash.   Linux: apt install trash-cli" >&2
+	exit 1
+fi
+
+pass=0
+fail=0
+ROOT=$(mktemp -d "${TMPDIR:-/tmp}/safe-rm-selftest.XXXXXX") || exit 1
+cleanup() { chmod -R u+rwx "$ROOT" 2>/dev/null; /bin/rm -rf "$ROOT" 2>/dev/null; }
+trap cleanup EXIT INT TERM HUP
+
+ok()   { pass=$((pass + 1)); printf '  \033[32mok\033[0m   %s\n' "$1"; }
+bad()  { fail=$((fail + 1)); printf '  \033[31mFAIL\033[0m %s\n' "$1"; }
+say()  { [ "$VERBOSE" -eq 1 ] && printf '       | %s\n' "$1"; return 0; }
+
+# run <workdir> <command...> -- captures output in $OUT and status in $ST
+run() {
+	local wd="$1"; shift
+	OUT=$( (CDPATH= cd -- "$wd" && "$@") 2>&1 )
+	ST=$?
+	[ "$VERBOSE" -eq 1 ] && [ -n "$OUT" ] && say "$OUT"
+	return 0
+}
+
+newdir() { local d="$ROOT/$1"; /bin/rm -rf "$d" 2>/dev/null; mkdir -p "$d"; printf '%s' "$d"; }
+
+echo "safe-rm-selftest"
+echo "  under test: $SAFE_RM"
+echo
+
+# --------------------------------------------------------------------------------------
+echo "1. \".\" and \"..\" must be refused, exactly as /bin/rm refuses them"
+# Regression for defect 3. Reachable with no typo at all:
+#   find . -type d -exec rm -rf {} +      passes a literal "." as operand one.
+for form in . ./ .. ../ sub/.. .//; do
+	d=$(newdir "dot")
+	mkdir -p "$d/victim/sub"
+	: > "$d/victim/keep.txt"
+	run "$d/victim" "$SAFE_RM" -rf "$form"
+	if [ -e "$d/victim/keep.txt" ] && [ "$ST" -ne 0 ]; then
+		ok "refused '$form', tree intact"
+	else
+		bad "'$form' -- exit=$ST, keep.txt present=$([ -e "$d/victim/keep.txt" ] && echo yes || echo NO)"
+	fi
+done
+
+d=$(newdir "root")
+run "$d" "$SAFE_RM" -rf /
+[ "$ST" -ne 0 ] && ok "refused '/'" || bad "'/' was not refused (exit=$ST)"
+echo
+
+# --------------------------------------------------------------------------------------
+echo "2. A leading-dash target must really be trashed, not silently skipped"
+# Regression for defect 1. `trash` has no `--` convention and exits 0 on unknown options,
+# so safe-rm rewrites these to ./NAME.
+d=$(newdir "dash")
+: > "$d/-v"; : > "$d/real.txt"
+run "$d" "$SAFE_RM" -- -v real.txt
+if [ ! -e "$d/-v" ] && [ ! -e "$d/real.txt" ] && [ "$ST" -eq 0 ]; then
+	ok "'-v' and 'real.txt' both trashed"
+else
+	bad "leading dash -- exit=$ST, -v present=$([ -e "$d/-v" ] && echo YES || echo no)"
+fi
+
+d=$(newdir "dash2")
+: > "$d/-"; : > "$d/--weird"; : > "$d/ space.txt"
+run "$d" "$SAFE_RM" -- - --weird " space.txt"
+if [ ! -e "$d/-" ] && [ ! -e "$d/--weird" ] && [ ! -e "$d/ space.txt" ]; then
+	ok "'-', '--weird' and ' space.txt' trashed"
+else
+	bad "hostile names survived (exit=$ST)"
+fi
+
+d=$(newdir "dashdir")
+mkdir -p "$d/-dir"; : > "$d/-dir/f"
+run "$d" "$SAFE_RM" -rf -- -dir
+[ ! -e "$d/-dir" ] && ok "'-dir' directory trashed with --" || bad "'-dir' survived (exit=$ST)"
+echo
+
+# --------------------------------------------------------------------------------------
+echo "3. A delete that HAPPENED must never be reported as one that did not"
+# Regression for defect 4. Both shapes are everyday: a glob overlapping an explicit
+# argument, and a directory named alongside something inside it. `trash` fails on the
+# second operand (already gone with the first) and exits non-zero.
+d=$(newdir "dup")
+: > "$d/f"
+run "$d" "$SAFE_RM" f ./f
+if [ ! -e "$d/f" ] && [ "$ST" -eq 0 ]; then
+	ok "'f ./f' trashed and reported success"
+else
+	bad "'f ./f' -- exit=$ST, f present=$([ -e "$d/f" ] && echo YES || echo no)"
+fi
+case "$OUT" in
+	*"nothing was deleted"*) bad "'f ./f' still claims 'nothing was deleted'" ;;
+	*) ok "no false 'nothing was deleted' claim" ;;
+esac
+
+d=$(newdir "nested")
+mkdir -p "$d/build/cache"; : > "$d/build/app.bin"
+run "$d" "$SAFE_RM" -r build build/cache
+if [ ! -e "$d/build" ] && [ "$ST" -eq 0 ]; then
+	ok "'build build/cache' trashed and reported success"
+else
+	bad "'build build/cache' -- exit=$ST"
+fi
+echo
+
+# --------------------------------------------------------------------------------------
+echo "4. A file that cannot be seen must never be reported as deleted"
+# Regression for defect 5. `[ -e ]` and `[ -L ]` are both false when a parent is not
+# searchable, which is indistinguishable from "absent" -- so safe-rm refuses rather than
+# resolving the ambiguity toward silent success.
+d=$(newdir "perm")
+mkdir -p "$d/locked"; : > "$d/visible.txt"; : > "$d/locked/hidden.txt"
+chmod 000 "$d/locked"
+run "$d" "$SAFE_RM" visible.txt locked/hidden.txt
+chmod 755 "$d/locked" 2>/dev/null
+if [ "$ST" -ne 0 ] && [ -e "$d/locked/hidden.txt" ]; then
+	ok "refused an unstattable target instead of claiming success"
+else
+	bad "unstattable target -- exit=$ST (expected non-zero and a refusal)"
+fi
+echo
+
+# --------------------------------------------------------------------------------------
+echo "5. A trash tool that lies must be caught"
+# The general defence: every report comes from re-checking the targets, never from the
+# tool's exit status, which has now been measured wrong in both directions.
+d=$(newdir "liar")
+mkdir -p "$d/bin"
+printf '#!/bin/sh\nexit 0\n' > "$d/bin/trash"
+chmod +x "$d/bin/trash"
+: > "$d/x.txt"
+OUT=$( (CDPATH= cd -- "$d" && PATH="$d/bin:/usr/bin:/bin" "$SAFE_RM" x.txt) 2>&1 ); ST=$?
+[ "$VERBOSE" -eq 1 ] && say "$OUT"
+if [ "$ST" -ne 0 ] && [ -e "$d/x.txt" ]; then
+	ok "caught a trash tool that exits 0 without acting"
+else
+	bad "lying trash tool went undetected (exit=$ST)"
+fi
+echo
+
+# --------------------------------------------------------------------------------------
+echo "6. Ordinary deletes must still work, and rm -f semantics must hold"
+d=$(newdir "normal")
+: > "$d/file.txt"; mkdir -p "$d/dir/sub"; : > "$d/dir/sub/deep.txt"
+run "$d" "$SAFE_RM" file.txt
+[ ! -e "$d/file.txt" ] && [ "$ST" -eq 0 ] && ok "plain file trashed" || bad "plain file (exit=$ST)"
+run "$d" "$SAFE_RM" -rf dir
+[ ! -e "$d/dir" ] && [ "$ST" -eq 0 ] && ok "directory tree trashed" || bad "directory tree (exit=$ST)"
+run "$d" "$SAFE_RM" -f does-not-exist
+[ "$ST" -eq 0 ] && ok "missing target is a silent success (rm -f semantics)" \
+                || bad "missing target returned $ST, breaks every 'rm -f *.aux' in a Makefile"
+run "$d" "$SAFE_RM"
+[ "$ST" -ne 0 ] && ok "no arguments is a usage error" || bad "no arguments returned 0"
+echo
+
+# --------------------------------------------------------------------------------------
+if [ -x "$RM_SHIM" ]; then
+	echo "7. The PATH shim: scripts, and rm's own directory rule"
+	d=$(newdir "shim")
+	mkdir -p "$d/bin"
+	cp "$SAFE_RM" "$d/bin/safe-rm"
+	cp "$RM_SHIM" "$d/bin/rm"
+	mkdir -p "$d/tree/sub"; : > "$d/tree/f"
+
+	printf '#!/bin/bash\nrm -rf "$1"\n' > "$d/script.bash"
+	chmod +x "$d/script.bash"
+	PATH="$d/bin:/usr/bin:/bin" "$d/script.bash" "$d/tree" >/dev/null 2>&1
+	[ ! -e "$d/tree" ] && ok "a #!/bin/bash script's rm -rf reached the shim" \
+	                   || bad "shim not reached from a bash script"
+
+	# Real rm refuses a directory without -r. `trash` has no such rule, so the shim has to
+	# keep it -- otherwise a typo'd `rm build` takes the whole tree.
+	mkdir -p "$d/keepme"; : > "$d/keepme/x"
+	OUT=$(PATH="$d/bin:/usr/bin:/bin" "$d/bin/rm" "$d/keepme" 2>&1); ST=$?
+	[ "$VERBOSE" -eq 1 ] && say "$OUT"
+	[ -e "$d/keepme" ] && [ "$ST" -ne 0 ] && ok "shim refuses a directory without -r" \
+	                                      || bad "shim removed a directory without -r (exit=$ST)"
+
+	# --preserve-root contains an 'r' and must NOT be read as recursive.
+	mkdir -p "$d/keepme2"; : > "$d/keepme2/x"
+	OUT=$(PATH="$d/bin:/usr/bin:/bin" "$d/bin/rm" --preserve-root "$d/keepme2" 2>&1); ST=$?
+	[ -e "$d/keepme2" ] && ok "'--preserve-root' not mistaken for recursive" \
+	                    || bad "'--preserve-root' was read as recursive"
+
+	# The documented escape hatch must still work, and must be permanent.
+	: > "$d/perm.txt"
+	PATH="$d/bin:/usr/bin:/bin" SAFE_RM_OFF=1 "$d/bin/rm" -f "$d/perm.txt" >/dev/null 2>&1
+	[ ! -e "$d/perm.txt" ] && ok "SAFE_RM_OFF=1 reaches the real rm" \
+	                       || bad "SAFE_RM_OFF=1 did not delete"
+	echo
+fi
+
+# --------------------------------------------------------------------------------------
+printf 'pass=%d fail=%d\n' "$pass" "$fail"
+[ "$fail" -eq 0 ] || exit 1
