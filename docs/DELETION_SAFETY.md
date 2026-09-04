@@ -93,6 +93,41 @@ Consequences to live with:
 | `SAFE_RM_OFF=1`     | Total bypass — exec `/bin/rm`. Permanent. Per command or exported. |
 | `SAFE_RM_VERBOSE=1` | Print each trashed path (drops `safe-rm -q`).                      |
 
+## Catastrophic targets are refused outright
+
+Stock macOS refuses `rm -rf /` in some shells but happily accepts **`rm -rf ~`**, and `/bin/rm`
+has no objection at all. On a nearly-full disk that is worse than it sounds: the move cannot
+complete, leaving a half-moved home directory and no free space.
+
+`safe-rm` refuses these before the trash tool is invoked at all (verified with a stub `trash`
+that logs instead of deleting: it was never called):
+
+| Class                 | Members                                                                                                                                                                                     |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Your home             | `$HOME`, plus anything resolving to it                                                                                                                                                      |
+| Its top-level folders | `Library` `Documents` `Desktop` `Downloads` `Pictures` `Movies` `Music` `Public` `.ssh` `.gnupg`                                                                                            |
+| Anyone's home         | `/Users/*`, `/home/*`                                                                                                                                                                       |
+| System directories    | `/` `/Applications` `/Library` `/System` `/Users` `/Volumes` `/bin` `/cores` `/dev` `/etc` `/home` `/media` `/mnt` `/Network` `/opt` `/private` `/root` `/sbin` `/srv` `/tmp` `/usr` `/var` |
+| Whole mounted volumes | `/Volumes/*`, `/media/*`, `/mnt/*`                                                                                                                                                          |
+| `.` and `..`          | `.` `./` `..` `../` `sub/..` `.//`                                                                                                                                                          |
+
+**Containers, not contents.** `rm -rf ~/Downloads` is refused; `rm -rf ~/Downloads/*` is not,
+because each child is a separate target. This is deliberate — a guard that blocks ordinary work
+gets routed around, and a routed-around guard protects nothing. Override for a human who means
+it: `SAFE_RM_OFF=1` (permanent, no Trash). There is no second knob, on purpose.
+
+Two implementation details, each of which cost a bug:
+
+1. **Two paths are classified, not one.** `rp` is the fully resolved directory, which catches a
+   relative path landing on `$HOME` and a directory symlink followed with a trailing slash.
+   `ap` is the literal target made absolute _without_ resolving symlinks — needed because on
+   macOS `/etc`, `/var` and `/tmp` **are symlinks**. An earlier version skipped the guard
+   entirely for symlinks, on the reasoning that removing a link is harmless. True for a link you
+   made; catastrophically false for `/etc`. Caught by this repo's own selftest, which saw the
+   stub trash being called while the summary claimed nothing had been refused.
+2. **A symlink you created is still removable.** Its own absolute path is not on the list and it
+   is not resolved, so `rm mylink` still just removes the link.
+
 ### The escape hatches are for humans only
 
 `CLAUDE.md` makes it **binding** that no agent, subagent, script or hook invokes the real

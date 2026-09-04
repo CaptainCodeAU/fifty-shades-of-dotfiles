@@ -79,6 +79,38 @@ This was a deliberate trade: total coverage over a quiet Trash. It even override
 
 **If you do not want this, do not link `home/.local/bin/rm` into `~/.local/bin`.** Everything else in the repo works without it; you simply fall back to interactive-only protection.
 
+### It also refuses to delete things nothing else refuses
+
+Stock macOS will let you run `rm -rf ~` and it will do it. `/bin/rm` has no objection. On a
+nearly-full disk that is especially nasty: the move cannot complete, so you end up with a
+half-moved home directory _and_ no free space.
+
+`safe-rm` refuses a set of targets outright, before the trash tool is ever invoked:
+
+| Refused                | Examples                                                                                                                                                     |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Your home directory    | `~`, and any relative path or symlink that resolves to it                                                                                                    |
+| Its top-level folders  | `~/Documents`, `~/Desktop`, `~/Downloads`, `~/Library`, `~/Pictures`, `~/Movies`, `~/Music`, `~/Public`, `~/.ssh`, `~/.gnupg`                                |
+| Anyone's home          | `/Users/*`, `/home/*`                                                                                                                                        |
+| System directories     | `/`, `/Applications`, `/Library`, `/System`, `/usr`, `/etc`, `/var`, `/private`, `/bin`, `/sbin`, `/opt`, `/dev`, `/tmp`, `/root`, `/Volumes`, `/Network`, … |
+| A whole mounted volume | `/Volumes/*`, `/media/*`, `/mnt/*`                                                                                                                           |
+| `.` and `..`           | in every spelling: `.`, `./`, `..`, `../`, `sub/..`, `.//`                                                                                                   |
+
+**The rule is containers, not contents.** `rm -rf ~/Downloads` is refused; `rm -rf ~/Downloads/*`
+works exactly as before, because each child is its own target. Nothing you actually do day to
+day is blocked — only the single stroke that takes a whole container, which is never what you
+meant. A guard that blocks ordinary work is one people learn to route around, and a
+routed-around guard protects nothing.
+
+Two details worth knowing, both of which cost a bug to learn:
+
+- **Comparison is on the resolved path, not the string.** A relative path that happens to land
+  on `$HOME`, and a directory symlink followed with a trailing slash (`link/`), are both caught.
+- **The literal path is checked too, not only the resolved one.** On macOS `/etc`, `/var` and
+  `/tmp` are _symlinks_. An earlier version skipped the guard for symlinks — reasoning that
+  removing a link is harmless, which is true for a link you made and catastrophically false for
+  `/etc`. The selftest caught it. A symlink you created yourself is still removable.
+
 ### Getting out of it
 
 | Escape hatch             | Effect                                                                |
@@ -108,10 +140,10 @@ An adversarial review of this code found **five defects in a single sitting**, a
 
 The worst of them: `rm -rf .` moved an entire directory tree to the Trash while printing **"They are UNCHANGED. Nothing was deleted permanently."** Real `/bin/rm` refuses that command outright.
 
-All five are fixed. `safe-rm` now derives every message from re-checking the targets and does not trust the trash tool's exit code at all, because that tool has been caught lying in _both_ directions. And all five are pinned by [`safe-rm-selftest`](home/.local/bin/safe-rm-selftest) — 30 assertions you can run yourself, any time:
+All five are fixed. `safe-rm` now derives every message from re-checking the targets and does not trust the trash tool's exit code at all, because that tool has been caught lying in _both_ directions. And all five are pinned by [`safe-rm-selftest`](home/.local/bin/safe-rm-selftest) — 41 assertions you can run yourself, any time:
 
 ```bash
-safe-rm-selftest        # 30 assertions; works in its own temp dir, touches nothing else
+safe-rm-selftest        # 41 assertions; works in its own temp dir, touches nothing else
 ```
 
 Run it after any change to `safe-rm`, to the shim, or to the `rm()`/`sudo()` wrappers.
@@ -1332,7 +1364,7 @@ For the full architecture, conventions, migration policy, and add-new-script wor
 - **`rm()` wrapper**: Two-layer deletion safety net. First warns before deleting symlinks (shows link target, prompts for confirmation). Then hands off to **`safe-rm`** for the actual delete. There is deliberately no force/permanent mode — `rm -rf` still goes to the Trash, because the flags are stripped.
 - **`safe-rm` command**: the single owner of "how does this system delete something". Moves targets to the system Trash via `trash` (macOS) or `trash-put` (Linux) and **never unlinks**; if no trash tool is present it refuses and exits non-zero rather than falling back to `rm`, because a silent downgrade from recoverable to permanent is the one behaviour it must not have. It exists as a **command on `PATH`**, not a shell function, because a function only exists inside an interactive zsh — `install.sh` and the Claude hooks run under bash, never load `.zshrc`, and so were permanently deleting files (including your existing dotfiles, when resolving a stow conflict). Every message it prints is derived from re-checking the targets afterwards, never from the trash tool's exit code, which has been measured reporting success without acting _and_ reporting failure after acting. It refuses `.`, `..` and `/` exactly as `/bin/rm` does, rewrites a leading-dash target to `./NAME` so the trash tool cannot read it as a flag, and refuses outright rather than guessing when a target cannot be stat'ed through an unsearchable parent.
 - **`rm` PATH shim** (`home/.local/bin/rm`): what carries all of the above to scripts, `xargs`, `find -exec` and `make`. It preserves `rm`'s own rule that a directory needs `-r`, honours `SAFE_RM_OFF=1` as a deliberate bypass, and otherwise delegates. Note the consequence, which is intentional: a script's own `mktemp` scratch now reaches the Trash too, because a shim cannot tell scratch from your files. See [the heads-up section](#-heads-up-this-repo-changes-what-rm-means).
-- **`safe-rm-selftest`**: 30 assertions pinning all five defects an adversarial review found in this chain, plus ordinary behaviour. Run it after touching `safe-rm`, the shim, or the `rm()`/`sudo()` wrappers.
+- **`safe-rm-selftest`**: 41 assertions pinning all five defects an adversarial review found in this chain, plus ordinary behaviour. Run it after touching `safe-rm`, the shim, or the `rm()`/`sudo()` wrappers.
 - **`cp()`/`mv()` wrappers**: Default to interactive overwrite protection (`-i`) so you are prompted before clobbering existing files. Explicit force flags (`-f`, e.g. `-rf`) bypass prompts when you intentionally want non-interactive overwrite behavior.
 - **`sudo()` wrapper**: Prevents accidental `sudo claude` and `sudo pnpm` commands and redirects appropriately. Also intercepts **`sudo rm` / `sudo rmdir`** and re-runs the deletion **as you**, unprivileged, via `safe-rm` — moving a file needs write permission on its parent directory, not on the file, so this usually succeeds even on root-owned targets and lands them in _your_ `~/.Trash` where Finder's Put Back works. (`sudo safe-rm` would trash into `/var/root/.Trash`, mode 0750 and invisible to you: safe-looking, bad at recovering.) The command is located by scanning past sudo's own options rather than reading `$1`, so `sudo -u root rm -rf x` and the clustered form `sudo -nu root rm -rf x` are both caught. `sudo /bin/rm` is deliberately _not_ caught — that is the documented escape hatch.
 - **`pip()` wrapper**: Intercepts `pip install` → `uv add` and `pip uninstall` → `uv remove`; passes through editable installs and read-only subcommands via `uv pip`

@@ -152,6 +152,83 @@ while [ "$i" -lt "$argc" ]; do
 			;;
 	esac
 
+	# --- Catastrophic-target guard --------------------------------------------------------
+	# `rm -rf ~` is refused by NOTHING on macOS. Not /bin/rm, and until 2026-09-04 not this
+	# script either. It would move an entire home directory to the Trash -- and on a disk
+	# with little free space it would not even fit, leaving a half-moved home AND a full
+	# disk, which is worse than either alone.
+	#
+	# THE PRINCIPLE IS CONTAINERS, NOT CONTENTS. This refuses the directory itself;
+	# `rm -rf ~/Downloads/*` still works exactly as before, because each child is its own
+	# target and none of them is on the list. That is deliberate: a guard that blocks
+	# ordinary work is one people learn to route around, and a routed-around guard protects
+	# nothing. The only thing being taken away is the ability to remove a whole container in
+	# one stroke, which is never what you meant.
+	#
+	# The comparison runs on the RESOLVED path rather than the string, so a relative path
+	# that happens to land on $HOME, `rm -rf ../../..`, and a directory symlink followed
+	# with a trailing slash are all caught. A symlink itself is NOT resolved -- removing a
+	# link is harmless and must keep working -- hence the `! -L` test.
+	#
+	# Deliberate override for a human who really means it: SAFE_RM_OFF=1 (permanent, no
+	# Trash). No second knob, on purpose: one documented door is easier to reason about
+	# than two.
+	# TWO paths get classified, and both are needed.
+	#
+	#   ap  the literal target made absolute, symlinks NOT resolved. This exists because on
+	#       macOS /etc, /var and /tmp ARE SYMLINKS (-> private/etc and friends). An earlier
+	#       version skipped the whole guard for symlinks, reasoning that removing a link is
+	#       harmless -- true for a link you made, catastrophically false for /etc. Caught by
+	#       this script's own selftest: the stub trash logged a call for /etc, /var and /tmp
+	#       while the summary line claimed nothing had been refused.
+	#   rp  the fully resolved directory. Catches a relative path that lands somewhere
+	#       protected, and a directory symlink followed with a trailing slash.
+	#
+	# A link you made yourself is still removable: its own absolute path is not on the list,
+	# and it is not resolved.
+	case "$s" in
+		/*) ap="$s" ;;
+		*)  ap="${PWD}/$s" ;;
+	esac
+	rp=""
+	if [ -d "$t" ] && [ ! -L "$t" ]; then
+		rp=$(CDPATH= cd -P -- "$t" 2>/dev/null && pwd -P) || rp=""
+	fi
+	for cand in "$ap" "$rp"; do
+		[ -n "$cand" ] || continue
+		protected=""
+		case "$cand" in
+			/ | /Applications | /Library | /System | /Users | /Volumes | /bin | /cores \
+			| /dev | /etc | /home | /media | /mnt | /Network | /opt | /private | /root \
+			| /sbin | /srv | /tmp | /usr | /var)
+				protected="a system directory" ;;
+			/Users/*/* | /home/*/*) : ;;          # inside a home dir: ordinary work
+			/Users/* | /home/*) protected="somebody's entire home directory" ;;
+			/Volumes/*/* | /media/*/* | /mnt/*/*) : ;;   # inside a volume: ordinary work
+			/Volumes/* | /media/* | /mnt/*) protected="an entire mounted volume" ;;
+		esac
+		if [ -z "$protected" ] && [ -n "${HOME:-}" ]; then
+			hp=$(CDPATH= cd -P -- "$HOME" 2>/dev/null && pwd -P) || hp=""
+			if [ -n "$hp" ]; then
+				case "$cand" in
+					"$hp")
+						protected="your home directory" ;;
+					"$hp"/Library | "$hp"/Documents | "$hp"/Desktop | "$hp"/Downloads \
+					| "$hp"/Pictures | "$hp"/Movies | "$hp"/Music | "$hp"/Public \
+					| "$hp"/.ssh | "$hp"/.gnupg)
+						protected="a top-level folder of your home directory" ;;
+				esac
+			fi
+		fi
+		if [ -n "$protected" ]; then
+			echo "safe-rm: \"$t\" -> ${cand}" >&2
+			echo "         Refusing -- that is ${protected}." >&2
+			echo "         To empty it instead, target the contents: ${cand}/*" >&2
+			echo "         To override deliberately: SAFE_RM_OFF=1 rm ...  (PERMANENT, no Trash)" >&2
+			exit 1
+		fi
+	done
+
 	if [ -e "$t" ] || [ -L "$t" ]; then
 		case "$t" in
 			-*) t="./$t" ;;

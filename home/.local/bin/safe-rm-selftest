@@ -301,5 +301,66 @@ fi
 echo
 
 # --------------------------------------------------------------------------------------
+echo "9. Catastrophic targets must be refused, contents must stay deletable"
+# `rm -rf ~` is refused by nothing on stock macOS. These assertions run against a FAKE
+# \$HOME inside the temp directory -- never the real one -- so a regression in the guard
+# cannot destroy the machine while testing the guard.
+FH="$ROOT/fakehome"
+/bin/rm -rf "$FH" 2>/dev/null
+mkdir -p "$FH/Documents/keep" "$FH/CODE/proj/dist" "$FH/Downloads/folder"
+: > "$FH/Documents/keep/a.txt"
+: > "$FH/CODE/proj/dist/bundle.js"
+: > "$FH/Downloads/folder/x"
+ln -s "$FH" "$ROOT/homelink"
+
+blocked() { # blocked <label> <target>
+	OUT=$(HOME="$FH" "$SAFE_RM" -rf "$2" 2>&1); ST=$?
+	[ "$VERBOSE" -eq 1 ] && say "$OUT"
+	[ "$ST" -ne 0 ] && ok "refused $1" || bad "$1 was NOT refused (exit=$ST)"
+}
+allowed() { # allowed <label> <target>
+	OUT=$(HOME="$FH" "$SAFE_RM" -rf "$2" 2>&1); ST=$?
+	[ "$VERBOSE" -eq 1 ] && say "$OUT"
+	[ "$ST" -eq 0 ] && ok "still allows $1" || bad "$1 was wrongly refused (exit=$ST)"
+}
+
+blocked "\$HOME itself"                  "$FH"
+blocked "\$HOME with a trailing slash"   "$FH/"
+blocked "~/Documents"                    "$FH/Documents"
+blocked "~/Downloads"                    "$FH/Downloads"
+blocked "a relative path resolving to \$HOME" "$FH/CODE/../../fakehome"
+blocked "a symlink to \$HOME followed with /"  "$ROOT/homelink/"
+
+# The principle is containers, not contents. If these break, the guard is too aggressive
+# and people will route around it, which protects nothing.
+allowed "a deep project directory"       "$FH/CODE/proj/dist"
+allowed "a folder inside ~/Downloads"    "$FH/Downloads/folder"
+allowed "removing the symlink itself"    "$ROOT/homelink"
+
+if [ -d "$FH" ] && [ -e "$FH/Documents/keep/a.txt" ]; then
+	ok "fake home and its Documents survived every attempt"
+else
+	bad "the fake home was damaged -- the guard leaks"
+fi
+
+# The system list is absolute, so assert on the classification rather than by invoking
+# safe-rm at a real system path. A stub trash proves nothing ever reaches the tool.
+mkdir -p "$ROOT/stubbin"
+printf '#!/bin/sh\necho called >> "%s/stub.log"\nexit 0\n' "$ROOT" > "$ROOT/stubbin/trash"
+chmod +x "$ROOT/stubbin/trash"
+: > "$ROOT/stub.log"
+sysfail=""
+for p in / /Users /Applications /System /Library /usr /etc /var /Volumes; do
+	OUT=$(PATH="$ROOT/stubbin:/usr/bin:/bin" "$SAFE_RM" -rf "$p" 2>&1); ST=$?
+	[ "$ST" -eq 0 ] && sysfail="${sysfail} $p"
+done
+if [ -z "$sysfail" ] && [ ! -s "$ROOT/stub.log" ]; then
+	ok "system directories refused, and the trash tool was never invoked"
+else
+	bad "system directories not refused:${sysfail} (stub called: $([ -s "$ROOT/stub.log" ] && echo YES || echo no))"
+fi
+echo
+
+# --------------------------------------------------------------------------------------
 printf 'pass=%d fail=%d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
