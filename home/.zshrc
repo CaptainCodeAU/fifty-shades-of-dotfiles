@@ -946,6 +946,65 @@ sudo() {
 		echo "Running: pnpm ${@:2}"
 		pnpm "${@:2}"
 	else
+		# --- sudo rm / sudo rmdir: route to YOUR Trash, not root's ---------------
+		# `sudo rm -rf x` is the one deletion the rm() wrapper above can never see:
+		# sudo execs the real /bin/rm, so the shell function is not in the picture.
+		#
+		# WHY WE RE-RUN IT AS THE INVOKING USER rather than `sudo safe-rm`:
+		# moving a file needs write permission on its PARENT DIRECTORY, not on the
+		# file itself, so an unprivileged trash usually succeeds even on root-owned
+		# targets -- and it lands in ~/.Trash, where Finder's "Put Back" works.
+		# `sudo safe-rm` would instead trash into /var/root/.Trash, which is mode
+		# 0750 root:wheel and invisible to you. That looks safe and recovers badly,
+		# which is the worst of both.
+		#
+		# THE COMMAND IS FOUND BY SCANNING PAST SUDO'S OWN OPTIONS, not by reading
+		# "$1". A naive `[[ "$1" == rm ]]` is defeated by `sudo -u root rm -rf x`
+		# -- the same bug class the `pnpm link --global` guard above had to fix.
+		#
+		# DELIBERATELY NOT CAUGHT (these are the "I really mean it" doors):
+		#   sudo /bin/rm ...        absolute path, documented escape hatch
+		#   sudo sh -c 'rm -rf x'   the rm is inside a string; no wrapper can see it
+		# See docs/DELETION_SAFETY.md.
+		local -a _sudo_rest=()
+		local _sudo_cmd="" _sudo_skip=0 _sudo_seen=0 _sudo_arg
+		for _sudo_arg in "$@"; do
+			if (( _sudo_seen )); then _sudo_rest+=("$_sudo_arg"); continue; fi
+			if (( _sudo_skip )); then _sudo_skip=0; continue; fi
+			case "$_sudo_arg" in
+				# sudo options that consume the NEXT argument
+				-C|-D|-g|-h|-p|-R|-r|-t|-T|-U|-u|--chdir|--close-from|--group|--host|--prompt|--chroot|--role|--type|--command-timeout|--other-user|--user)
+					_sudo_skip=1 ;;
+				--|-*) ;;          # flag with no value, or the end-of-options marker
+				*=*) ;;            # VAR=value assignment, not the command
+				*) _sudo_cmd="$_sudo_arg"; _sudo_seen=1 ;;
+			esac
+		done
+
+		if [[ "$_sudo_cmd" == "rm" || "$_sudo_cmd" == "rmdir" ]]; then
+			echo "${warn}⚠️  sudo ${_sudo_cmd} intercepted — a root delete is permanent.${done}"
+			echo "  ${info}Retrying as you, so anything removed lands in YOUR Trash.${done}"
+			echo
+			if (( ${#_sudo_rest} == 0 )); then
+				echo "${err}  No targets given — nothing done.${done}" >&2
+				return 1
+			fi
+			if ! command -v safe-rm &>/dev/null; then
+				echo "${err}❌  safe-rm not found on PATH — refusing to delete.${done}" >&2
+				echo "${info}   It ships in this dotfiles repo at ~/.local/bin/safe-rm; run ./install.sh.${done}" >&2
+				return 1
+			fi
+			# safe-rm strips rm-style flags itself, so pass the tail through untouched.
+			if safe-rm "${_sudo_rest[@]}"; then
+				return 0
+			fi
+			echo
+			echo "  ${warn}That target needs real root privileges.${done}"
+			echo "  ${info}Deliberate override (PERMANENT — there is no Trash for this):${done}"
+			echo "    ${err}sudo /bin/${_sudo_cmd} ${_sudo_rest[*]}${done}"
+			return 1
+		fi
+
 		command sudo "$@"
 	fi
 }
