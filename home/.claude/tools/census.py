@@ -99,6 +99,24 @@ def git_files(root):
     return [f for f in r.stdout.split("\n") if f.strip()]
 
 
+def git_unsearched(root):
+    """(ignored, untracked) counts — files git KNOWS about that `ls-files` never returns.
+
+    `git` mode is complete over TRACKED files and silent about everything else. A rename
+    once verified clean at 0 stale references while ignored files still held the old
+    name. Returns (None, None) outside a repo.
+    """
+    def n(extra):
+        r = subprocess.run(
+            ["git", "-C", str(root), "ls-files", "--others", "--exclude-standard", *extra],
+            capture_output=True, text=True,
+        )
+        if r.returncode != 0:
+            return None
+        return len([f for f in r.stdout.split("\n") if f.strip()])
+    return n(["--ignored"]), n([])
+
+
 def walked_files(root):
     """Every readable file under root, minus SKIP_DIRS. NOT complete by construction."""
     out = []
@@ -209,6 +227,15 @@ def main() -> int:
     # returns 0 and looks exactly like a true finding; so does a case delta. Printing
     # the mode costs one line and removes the whole class.
     print(f"{DIM}  matching: {matching_mode(a.regex, a.case_sensitive)}{OFF}")
+    if mode == "git":
+        # Complete over TRACKED files, and mute about the rest. Say the size of the
+        # blind spot every run: a population is only honest with its exclusions beside it.
+        ignored, untracked = git_unsearched(root)
+        if ignored is not None:
+            hidden = ignored + untracked
+            tone = YELLOW if hidden else DIM
+            print(f"{tone}  NOT searched: {ignored} ignored, {untracked} untracked"
+                  f"{' — git mode covers tracked files only' if hidden else ''}{OFF}")
     if mode == "walk":
         print(f"{YELLOW}  ⚠ WALK mode — not a git repo (or --walk forced). This population is NOT\n"
               f"    complete by construction: it skips {', '.join(sorted(SKIP_DIRS))}.\n"
