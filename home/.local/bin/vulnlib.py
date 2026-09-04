@@ -366,52 +366,126 @@ def brew_formulae():
 
 
 _PATCH_COMMIT_RE = re.compile(r"(https://[^\s\"']*?/commit/([0-9a-f]{40}))")
-_RESOLVES_CVE_RE = re.compile(
-    r"^[ \t]*resolves[ \t]+[\"'](CVE-\d{4}-\d{4,})[\"']", re.MULTILINE)
-_END_RE = re.compile(r"^end\b")
-# Only a comment that ATTRIBUTES the patch counts as naming its commit. Measured
-# 2026-09-04 over 231 installed kegs: 12 comment lines cite a commit, and the
-# convention splits them exactly 6/6. The 6 `Backport of <url>` lines are all
-# libssh2 naming the upstream commit its vendored `file` patch carries -- the only
-# place that hash appears. The other 6 are explanatory prose citing a commit in a
-# DIFFERENT project (ansible's comment links pyca/bcrypt; also x264, gnulib, zstd,
-# ollama, LuaJIT). Crediting those to the formula records a patch it never applied.
-_BACKPORT_OF_RE = re.compile(r"backport of\b", re.IGNORECASE)
-_DO_BLOCK_RE = re.compile(r"^(\w+)\b.*?\bdo\b(?:[ \t]*\|[^|]*\|)?[ \t]*$")
-_KEYWORD_BLOCK_RE = re.compile(r"^(if|unless|case|begin|def|class|module|while|until)\b")
 
-# Blocks that do NOT narrow which build a patch belongs to. `class`/`module` are
-# just the formula file's own frame -- every patch is inside one, and omitting
-# them here silently stopped top-level patches from being detected at all, which
-# is the regression this module's selftest was written to catch. `stable do` is
-# the spec actually built when we scan an installed keg.
+# Ask Homebrew, in one process, what it actually applied to every installed keg.
 #
-# Everything else DOES narrow it -- `head do`, `on_linux do`, `on_intel do`, an
-# `if` guard, or a `resource "x" do` (which patches a VENDORED dependency, not
-# this formula) -- so a `resolves` under one of those is not trusted. Fail toward
-# reporting the CVE: a false alarm costs a minute, a false all-clear costs the
-# whole point of the tool.
-_APPLIES_ANYWAY = frozenset({"class", "module", "stable"})
+# THIS REPLACED A HAND-WRITTEN RUBY PARSER, and the parser was not merely
+# redundant -- it was measurably less accurate. It walked the formula text with a
+# block stack to guess which `patch do` blocks belonged to this build. Measured
+# 2026-09-04 against the answers below: bash has 15 patches and the parser saw 1;
+# ollama's `patch :DATA` has no `do` at all so it was invisible; `resolves` is
+# variadic (`def resolves(*cves)`) and only the first id was read; GHSA and OSV
+# advisory ids were dropped; and `on_macos do` was treated as not-applying when on
+# a Mac it plainly does. Every one of those errs toward reporting rather than
+# silence, so none was a live hole -- but they were all drift against an evaluator
+# that ships on the same machine and answers in 0.4s.
+#
+# `Formulary.factory` is pointed at the KEG's own copy, not the tap: `opt/<f>/.brew`
+# is what was built and installed, while the tap can be many revisions ahead.
+# `serialized_patches` is evaluated for the running OS and architecture, which is
+# where the scope question the parser fumbled gets answered properly.
+#
+# Keyed by BOTH the opt directory and the formula's own name: 43 of 274 opt entries
+# are alias symlinks whose `.brew` holds a differently-named file (`opt/openssl`
+# contains `openssl@3.rb`), and callers may hold either spelling.
+_PATCH_RUBY = r"""
+require "formulary"
+require "json"
+out = {}
+Dir.glob("#{HOMEBREW_PREFIX}/opt/*/.brew/*.rb").each do |path|
+  keg = path.split("/")[-3]
+  begin
+    f = Formulary.factory(path)
+    d = f.serialized_patches
+  rescue Exception
+    next
+  end
+  out[keg] = d
+  out[f.name] = d unless out.key?(f.name)
+end
+puts JSON.generate(out)
+"""
 
-_FORMULA_CACHE = {}   # formula -> (text|None, "keg"|"tap"|None)
-# Keyed on the formula TEXT, not its name. Both per-hit callers land on
-# homebrew_patch_blocks -- homebrew_resolved_cves and unclaimed_patches -- so a
-# formula with several CVE hits re-walks identical source once per hit (measured
-# 2026-09-04: 19 parses for 8 formulae on a full scan). Keying on the text rather
-# than the name means a re-read, or a test fixture swapped in under the same
-# name, gets a fresh parse instead of a stale one.
-_BLOCKS_CACHE = {}
+_PATCH_DATA = None
+_PATCH_DATA_TRIED = False
+_FORMULA_CACHE = {}
 
 
-def _commits_in(text: str):
-    """{sha: url} for every upstream commit URL in `text`.  One canonicalisation
-    of "lowercase the hash, strip the .patch suffix", used by every caller."""
-    return {sha.lower(): url.split(".patch")[0]
-            for url, sha in _PATCH_COMMIT_RE.findall(text)}
+def homebrew_patch_data():
+    """{keg_or_formula_name: [patch, ...]} for every installed keg, or None.
+
+    One `brew ruby` for the whole inventory, once per process: it costs ~0.4s to
+    boot Homebrew's Ruby and then answers for all 274 kegs at once, so asking per
+    formula would be absurd. Nothing on the shell-startup path reaches this --
+    `scan_one` is only called for a cache miss, and returns before here unless NVD
+    actually reported a CVE.
+
+    None means UNDETERMINED and must never be read as "no patches": brew missing,
+    the subprocess failing, or unparseable output all land here, and every caller
+    turns None into "cannot suppress" rather than "nothing was backported".
+
+    Tried once per process even on a transient failure. That is the opposite of
+    the per-formula rule elsewhere in this module, and deliberately so: this is one
+    call for the whole inventory, so retrying it per CVE could add minutes to a
+    scan, and the failure direction is already the safe one."""
+    global _PATCH_DATA, _PATCH_DATA_TRIED
+    if _PATCH_DATA_TRIED:
+        return _PATCH_DATA
+    _PATCH_DATA_TRIED = True
+    brew = shutil.which("brew")
+    if not brew:
+        return None
+    try:
+        proc = subprocess.run([brew, "ruby", "-e", _PATCH_RUBY],
+                              capture_output=True, text=True, timeout=180)
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        data = json.loads(proc.stdout)
+    except ValueError:
+        return None
+    _PATCH_DATA = data if isinstance(data, dict) else None
+    return _PATCH_DATA
+
+
+def homebrew_patches_for(formula: str):
+    """The installed patches for one formula, or None if Homebrew did not answer.
+
+    An installed formula with no patches returns `[]`. A formula Homebrew has never
+    heard of returns None -- the difference matters, because `[]` is a fact and
+    None is an absence of one, and only the fact may be used to silence a CVE."""
+    data = homebrew_patch_data()
+    if data is None:
+        return None
+    for key in (formula, formula.rsplit("/", 1)[-1]):
+        if key in data:
+            return data[key]
+    return None
+
+
+def _security_ids(patch) -> set:
+    """The advisory ids a patch declares it fixes.
+
+    Only `type == "security"` counts. Homebrew classifies CVE, GHSA and OSV ids as
+    security (`patch.rb` CVE_PATTERN / GHSA_PATTERN / OSV_PATTERN) and everything
+    else -- issue links, `defect` entries, bare bug numbers -- as not. Measured
+    across 274 installed kegs: 20 patches carry a `resolves`, split 10 security and
+    10 defect. Reading a defect id as an advisory id could only ever silence
+    something it does not describe."""
+    return {r["id"].upper() for r in (patch.get("resolves") or [])
+            if r.get("type") == "security" and r.get("id")}
 
 
 def _read_keg_formula(formula: str):
-    """The formula Ruby that Homebrew copied INTO the keg at install time, or None."""
+    """The formula Ruby that Homebrew copied INTO the keg at install time, or None.
+
+    The keg copy, and ONLY the keg copy. There is deliberately no `brew cat`
+    fallback: that prints whatever the tap holds right now, and 27 formulae on this
+    machine currently have a tap ahead of the installed keg. Crediting a patch the
+    tap has to a build that does not have it is a false all-clear, which is the one
+    outcome this module exists to prevent."""
     leaf = formula.rsplit("/", 1)[-1]
     # `HOMEBREW_PREFIX` first: it is set by `brew shellenv` and answers directly,
     # so the PATH walk in shutil.which() is only paid when it is absent.
@@ -435,13 +509,9 @@ def _read_keg_formula(formula: str):
     text = read(os.path.join(brew_dir, leaf + ".rb"))
     if text is not None:
         return text
-    # An alias keg holds the real formula under its canonical name: `opt/openssl`
-    # contains `openssl@3.rb`, `opt/python3` contains `python@3.14.rb`, `opt/rg`
-    # contains `ripgrep.rb` (43 of 274 opt entries on this machine are aliases).
-    # Only when there is exactly ONE candidate -- more than that is ambiguous, and
-    # guessing here would answer about the wrong package. Without this the alias
-    # falls through to `brew cat`, whose tap text is refused for suppression, so
-    # the answer would silently weaken for a keg whose formula was sitting there.
+    # An alias keg holds the real formula under its canonical name (`opt/openssl`
+    # contains `openssl@3.rb`). Only when there is exactly ONE candidate: more than
+    # that is ambiguous, and guessing would answer about the wrong package.
     try:
         found = [f for f in os.listdir(brew_dir) if f.endswith(".rb")]
     except OSError:
@@ -449,138 +519,19 @@ def _read_keg_formula(formula: str):
     return read(os.path.join(brew_dir, found[0])) if len(found) == 1 else None
 
 
-def _formula(formula: str):
-    """(ruby_text, source) where source is "keg", "tap" or None.  Memoised.
-
-    THE SOURCE IS PART OF THE ANSWER, not bookkeeping. The keg's own copy is what
-    was actually built and installed. `brew cat` prints whatever the tap holds
-    RIGHT NOW, which after any `brew update` can be a newer revision carrying
-    patches this machine does not have. Crediting those to the installed build is
-    a FALSE ALL-CLEAR, so callers that suppress a finding must check the source
-    and refuse to act on "tap" -- see homebrew_resolved_cves.
-
-    A transient `brew cat` failure is deliberately NOT memoised. Caching None
-    there would turn one timeout into "this formula has no patches" for the rest
-    of the run, and vuln-scan would persist that verdict to SQLite."""
-    if formula in _FORMULA_CACHE:
-        return _FORMULA_CACHE[formula]
-
-    text = _read_keg_formula(formula)
-    if text is not None:
-        result = (text, "keg")
-    else:
-        brew = shutil.which("brew")
-        if not brew:
-            result = (None, None)
-        else:
-            try:
-                proc = subprocess.run([brew, "cat", "--formula", formula],
-                                      capture_output=True, text=True, timeout=30)
-            except (subprocess.TimeoutExpired, OSError):
-                return (None, None)   # transient: the ONE path that does not cache
-            result = (proc.stdout, "tap") if proc.returncode == 0 else (None, None)
-    _FORMULA_CACHE[formula] = result
-    return result
-
-
 def formula_text(formula: str):
-    """The installed formula's Ruby source, or None.  See `_formula`."""
-    return _formula(formula)[0]
+    """The installed formula's Ruby source, memoised, or None.  See
+    `_read_keg_formula` for why the tap is never consulted."""
+    if formula not in _FORMULA_CACHE:
+        _FORMULA_CACHE[formula] = _read_keg_formula(formula)
+    return _FORMULA_CACHE[formula]
 
 
-def formula_source(formula: str):
-    """"keg", "tap" or None -- WHERE the text came from.  Named rather than reached
-    by index because the one line that must consult it decides whether a CVE is
-    allowed to be silenced; see `homebrew_resolved_cves`."""
-    return _formula(formula)[1]
-
-
-def _block_label(stripped: str):
-    """The kind of Ruby block this line opens, or None."""
-    m = _DO_BLOCK_RE.match(stripped) or _KEYWORD_BLOCK_RE.match(stripped)
-    return m.group(1) if m else None
-
-
-def _parse_patch_blocks(text: str):
-    """[(ancestors, header, body)] for every `patch do` in the formula.
-
-    `header` is the comment run directly above the patch, kept SEPARATE from the
-    body because prose is not evidence -- see `_BACKPORT_OF_RE`.
-
-    Line-based with an explicit block stack rather than one regex, because WHAT
-    ENCLOSES A PATCH DECIDES WHETHER IT APPLIES HERE and a regex cannot see that.
-    Measured 2026-09-04 across 231 installed formulae: 6 kegs already nest
-    `patch do` one level down -- llvm, libzen and ollama inside `stable do` (which
-    does apply), ansible inside `resource "passlib" do` (which patches a vendored
-    dependency, not ansible). A platform guard such as `on_linux do` would be the
-    same class and would be crediting a Linux-only patch to a macOS build.
-
-    The comment run directly above a patch is included in the returned source,
-    because a patch applied from a vendored file names its upstream commit ONLY
-    there:
-
-        # Backport of https://github.com/libssh2/libssh2/commit/3449752...
-        patch do
-          file "Patches/libssh2/CVE-2026-58050.patch"
-          resolves "CVE-2026-58050"
-        end
-    """
-    lines = text.splitlines(keepends=True)
-    stack, out, open_patch, comment_start = [], [], None, None
-    for i, raw in enumerate(lines):
-        s = raw.strip()
-        if not s:
-            comment_start = None
-            continue
-        if s.startswith("#"):
-            if comment_start is None:
-                comment_start = i
-            continue
-        if _END_RE.match(s):
-            if stack:
-                stack.pop()
-                if open_patch is not None and len(stack) == len(open_patch[0]):
-                    anc, hstart, bstart = open_patch
-                    out.append((anc, "".join(lines[hstart:bstart]),
-                                "".join(lines[bstart:i + 1])))
-                    open_patch = None
-            comment_start = None
-            continue
-        label = _block_label(s)
-        if label is not None:
-            if label == "patch" and open_patch is None:
-                start = comment_start if comment_start is not None else i
-                open_patch = (tuple(stack), start, i)
-            stack.append(label)
-        comment_start = None
-    return out
-
-
-def homebrew_patch_blocks(formula: str):
-    """[{"ancestors", "applies", "commits", "cves"}] per `patch do`, or None.
-
-    `applies` is False when the patch sits inside a block that may not have been
-    built here; such a block's `resolves` must not suppress anything."""
-    text = formula_text(formula)
-    if text is None:
-        return None
-    if text in _BLOCKS_CACHE:
-        return _BLOCKS_CACHE[text]
-    blocks = []
-    for ancestors, header, body in _parse_patch_blocks(text):
-        commits = _commits_in(body)
-        for line in header.splitlines():
-            if _BACKPORT_OF_RE.search(line):
-                for sha, url in _commits_in(line).items():
-                    commits.setdefault(sha, url)
-        blocks.append({
-            "ancestors": ancestors,
-            "applies": all(a in _APPLIES_ANYWAY for a in ancestors),
-            "commits": commits,
-            "cves": {c.upper() for c in _RESOLVES_CVE_RE.findall(body)},
-        })
-    _BLOCKS_CACHE[text] = blocks
-    return blocks
+def _commits_in(text: str):
+    """{sha: url} for every upstream commit URL in `text`.  One canonicalisation
+    of "lowercase the hash, strip the .patch suffix", used by every caller."""
+    return {sha.lower(): url.split(".patch")[0]
+            for url, sha in _PATCH_COMMIT_RE.findall(text or "")}
 
 
 def homebrew_patch_commits(formula: str):
@@ -589,50 +540,39 @@ def homebrew_patch_commits(formula: str):
     The URL is kept, not just the hash, so a report can link straight to the real
     upstream commit instead of asking the reader to go and find it.
 
-    THIS IS WHAT STOPS THE WORST FALSE POSITIVE THIS TOOL CAN PRODUCE.
-    Homebrew backports security fixes as a REVISION bump while keeping the
-    upstream version string, so NVD -- which knows nothing about Homebrew
-    revisions -- keeps reporting the package vulnerable after it has been fixed.
-    Measured 2026-08-03: libssh2 1.11.1_4 carries 10 upstream patches, and 6 of
-    the 9 CVEs NVD reports against 1.11.1 name a fix commit that is one of them.
-    Telling someone to upgrade a package they just upgraded is how a security
-    alert stops being read.
-
-    Scans the whole formula rather than just `patch do` blocks: that scan SCOPE is
-    unchanged from before 2026-09. The source did change, from `brew cat` to the
-    keg copy -- see `_formula`."""
+    Two sources, unioned. Homebrew's own `url` fields are exact. The keg formula
+    text is also scanned whole, because a patch applied from a vendored file names
+    its upstream commit only in the comment above it -- measured across 274 kegs, 7
+    patches have a `file` and no `resolves`, and that comment is the only thing
+    that could ever explain them."""
+    patches = homebrew_patches_for(formula)
     text = formula_text(formula)
-    if text is None:
+    if patches is None and text is None:
         return None
-    return _commits_in(text)
+    out = {}
+    for p in (patches or []):
+        out.update(_commits_in(p.get("url")))
+    out.update(_commits_in(text))
+    return out
 
 
 def homebrew_resolved_cves(formula: str):
-    """{CVE ids} the INSTALLED formula declares its applied patches resolve, or None.
+    """{advisory ids} Homebrew says its applied patches fix, or None.
 
     THIS IS HOMEBREW ANSWERING THE QUESTION DIRECTLY, and until 2026-09-04 it was
-    read past and thrown away. `commit_is_patched` scrapes a hash out of
-    hand-written NVD prose and matches it against patch URLs; that is inference,
-    and it missed all three CVEs reported against libssh2 1.11.1_4 even though the
-    formula said, on the line under each patch, `resolves "CVE-2026-7598"`,
-    `resolves "CVE-2026-58050"` and `resolves "CVE-2026-58051"`. Three HIGH false
-    positives in one banner, and a banner that cries wolf stops being read.
+    read past and thrown away. The scanner inferred backports by scraping a commit
+    hash out of hand-written NVD prose, which missed all three CVEs reported
+    against libssh2 1.11.1_4 even though the formula said, under each patch,
+    `resolves "CVE-2026-7598"`, `resolves "CVE-2026-58050"` and
+    `resolves "CVE-2026-58051"`. Three HIGH false positives in one banner, and a
+    banner that cries wolf stops being read.
 
-    Three guards, because this is the one function here that can SILENCE a real
-    finding:
-      1. tap-sourced text is refused outright (None), since the tap can be ahead
-         of what is installed;
-      2. only patches whose enclosing blocks all apply to this build count;
-      3. only quoted `CVE-YYYY-NNNN` values count -- `resolves` also carries
-         non-CVE references, python@3.14 has `resolves
-         "https://bugs.python.org/issue43976"`, and reading one of those as a CVE
-         match would suppress a real finding."""
-    if formula_source(formula) != "keg":
+    None, never an empty set, when Homebrew could not be asked -- see
+    `homebrew_patch_data`."""
+    patches = homebrew_patches_for(formula)
+    if patches is None:
         return None
-    blocks = homebrew_patch_blocks(formula)
-    if blocks is None:
-        return None
-    return {c for b in blocks if b["applies"] for c in b["cves"]}
+    return set().union(*[_security_ids(p) for p in patches]) if patches else set()
 
 
 def _commit_matches(claimed, full) -> bool:
@@ -660,21 +600,19 @@ def commit_is_patched(fix_commit, patch_commits) -> bool:
 def is_patched_by_homebrew(formula, cve_id, fix_commit, patch_commits) -> bool:
     """Has Homebrew already backported the fix for `cve_id`?  Two signals, ORed.
 
-    1. `resolves "CVE-..."` in the installed formula. AUTHORITATIVE: written by a
-       maintainer beside a patch that must apply cleanly or the build fails.
+    1. Homebrew's own `resolves`, evaluated against the installed keg for the
+       running platform. AUTHORITATIVE.
     2. the CVE description's fix-commit hash appearing among the patch URLs.
-       Best-effort, because it depends on NVD prose naming the hash at all.
+       Best-effort, and kept because 7 installed patches carry no `resolves` at
+       all, so signal 1 cannot speak for them.
 
-    Signal 1 was added 2026-09-04, after signal 2 alone reported three
-    already-patched libssh2 CVEs as live. Neither subsumes the other: a patch can
-    carry a commit URL and no `resolves`, or a `resolves` and no URL.
+    Neither subsumes the other and neither can invent a fix that is not installed:
+    both read the keg, never the tap.
 
     Do NOT gate this on the Homebrew revision. `revision > 0` looks like a proxy
-    for "something was backported", and it is wrong: measured 2026-09-04, 12 of
-    231 installed formulae carry `patch do` blocks at revision 0, openssl@3 and
-    python@3.14 among them. A formula that bumps its version and its patch set in
-    one commit resets the revision, and gating there would report exactly the
-    false positive this function exists to remove."""
+    for "something was backported" and is wrong in both directions: 12 of 231
+    installed formulae carry patches at revision 0, and ffmpeg carries revision 1
+    with no patches at all."""
     if commit_is_patched(fix_commit, patch_commits):
         return True
     resolved = homebrew_resolved_cves(formula)
@@ -682,19 +620,24 @@ def is_patched_by_homebrew(formula, cve_id, fix_commit, patch_commits) -> bool:
 
 
 def unclaimed_patches(formula, patch_commits, claimed_commits):
-    """Patch URLs nothing has explained -- neither a CVE's named fix commit nor the
-    formula's own `resolves` field -- sorted, for the briefing to hand to a human.
+    """Patch URLs nothing has explained -- neither a CVE's named fix commit nor
+    Homebrew's own `resolves` -- sorted, for the briefing to hand to a human.
 
-    A patch Homebrew HAS labelled must never appear here: printing it would ask
-    the reader to go and re-derive an answer the formula already gave them. A
-    patch in a block that does not apply to this build stays in the list, because
-    there the open question is real."""
+    A patch Homebrew HAS labelled must never appear here: printing it would ask the
+    reader to go and re-derive an answer the formula already gave them. When EVERY
+    installed patch carries a security `resolves`, nothing about the formula is
+    unexplained and the list is empty regardless of which hashes were matched --
+    that is libssh2, whose ten patches all declare their CVE."""
     if not patch_commits:
         return []
+    patches = homebrew_patches_for(formula)
     labelled = set()
-    for b in (homebrew_patch_blocks(formula) or []):
-        if b["cves"] and b["applies"]:
-            labelled |= set(b["commits"])
+    if patches:
+        if all(_security_ids(p) for p in patches):
+            return []
+        for p in patches:
+            if _security_ids(p):
+                labelled |= set(_commits_in(p.get("url")))
     claimed = {c for c in (claimed_commits or []) if c}
     return sorted(url for sha, url in patch_commits.items()
                   if sha not in labelled

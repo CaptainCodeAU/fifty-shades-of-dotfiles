@@ -1,51 +1,42 @@
 #!/usr/bin/env -S uv run --quiet python3
-"""vulnlib-selftest -- controls for the Homebrew backport-detection path.
+"""vulnlib-selftest -- controls for backport detection and cache freshness.
 
 WHY THIS EXISTS
 ---------------
 On 2026-09-04 the startup banner reported three HIGH CVEs against libssh2
-1.11.1_4 that the installed formula said, on the line under each patch, were
-already fixed:  `resolves "CVE-2026-7598"`, `resolves "CVE-2026-58050"`,
-`resolves "CVE-2026-58051"`.  The scanner had been reading past that field for
-its whole life, inferring backports instead by scraping a commit hash out of NVD
-prose.  Teaching it to read `resolves` fixed that -- and immediately introduced a
-FAR more dangerous bug than the one it fixed, because the new signal SUPPRESSES a
-finding on a single string match.  Two review passes found five ways to make it
-suppress a live CVE:
+1.11.1_4 that the installed formula said, under each patch, were already fixed:
+`resolves "CVE-2026-7598"`, `resolves "CVE-2026-58050"`,
+`resolves "CVE-2026-58051"`. The scanner had never read that field, inferring
+backports instead by scraping a commit hash out of NVD prose.
 
-  1. scope          a `resolves` inside `head do`, `on_linux do`, an `if` guard,
-                    or `resource "x" do` was credited to the installed macOS
-                    build.  HIGH: silent false all-clear, no diagnostic.
-  2. provenance     `brew cat` reads the TAP, not the keg.  With 27 formulae
-                    currently tap-ahead, a fix the machine does not have could
-                    suppress a CVE it does.
-  3. attribution    the comment run above a patch was scanned for commit hashes,
-                    so ansible's prose link to a pyca/bcrypt commit was recorded
-                    as a patch ansible had applied.
-  4. revision gate  `revision > 0` was used as a proxy for "something was
-                    backported".  12 of 231 installed formulae carry patches at
-                    revision 0.
-  5. controls       `--brew-version 1.11.1_1` was answered by the installed
-                    1.11.1_4 formula, so a negative control passed while proving
-                    nothing.
+Reading it introduced a FAR more dangerous bug than the one it fixed, because the
+new signal SILENCES a finding on a single string match. Review found five ways to
+make it silence a live CVE -- patch scope, tap-vs-keg provenance, comment
+attribution, the revision gate, and a negative control that passed while proving
+nothing. Fixing the first of those then broke detection entirely for every
+top-level patch, and this suite is what caught that.
 
-Every one of those is the same failure in a different costume: reporting an
-outcome that was not verified.  Ad-hoc testing found them; only a committed suite
-keeps them found.  Run this after ANY change to the brew section of vulnlib.py,
-or to the call sites in vuln-scan and toolchain-cve-check.
+The hand-written Ruby parser those bugs lived in is gone. Homebrew evaluates its
+own formulae, and `serialized_patches` answers for the installed keg on the
+running platform in ~0.4s for all 274 of them. What remains to control is the
+BOUNDARY: that an undetermined answer never reads as "nothing was backported",
+that only a security `resolves` can silence anything, and that a cached verdict
+does not outlive its usefulness.
 
 USAGE
   vulnlib-selftest        run everything, print a summary
   vulnlib-selftest -v     also print each check's values
 
-Synthetic fixtures are injected through vulnlib's own formula cache, so nothing
-here touches Homebrew, the network, or any database.  The live checks read the
-installed libssh2 and python@3.14 kegs read-only, and skip themselves if absent.
+Synthetic fixtures are injected through vulnlib's own caches, so nothing here
+touches the network or a real database. The live section reads installed kegs
+read-only and skips itself if they are absent.
 """
 
 import importlib.util
 import os
 import sys
+import tempfile
+import time
 
 VERBOSE = "-v" in sys.argv[1:]
 
@@ -100,182 +91,166 @@ def skip(label, why):
     print("  %sSKIP%s  %s  (%s)" % (YELLOW, OFF, label, why))
 
 
-def fixture(name, ruby, source="keg"):
-    """Seed vulnlib's formula cache so the parser can be driven off synthetic Ruby."""
-    V._FORMULA_CACHE[name] = (ruby, source)
-    return name
-
-
 CVE = "CVE-2026-58050"
 URL = "https://github.com/libssh2/libssh2/commit/" + "3" * 40
-PATCH = '''  patch do
-    url "%s.patch?full_index=1"
-    type :backport
-    resolves "%s"
-  end''' % (URL, CVE)
 
 
-def indent(text):
-    return "\n".join("  " + ln for ln in text.splitlines())
+def sec(*ids):
+    return [{"type": "security", "id": i} for i in ids]
 
 
-def nest(*openers, **kw):
-    """A formula whose single patch sits inside the given blocks, outermost first."""
-    body = kw.get("body", PATCH)
-    for opener in reversed(openers):
-        body = "%s\n%s\n%send" % (opener, indent(body), " " * (len(opener) - len(opener.lstrip())))
-    return "class F < Formula\n%s\nend\n" % indent(body)
+def install(**formulae):
+    """Seed Homebrew's answer. Replaces the whole map, so each call is isolated."""
+    V._PATCH_DATA = dict(formulae)
+    V._PATCH_DATA_TRIED = True
+    V._FORMULA_CACHE.clear()
 
 
-def wrap(opener, body=PATCH):
-    return nest(opener, body=body)
+def brew_says_nothing():
+    """Homebrew could not be asked at all -- the UNDETERMINED case."""
+    V._PATCH_DATA = None
+    V._PATCH_DATA_TRIED = True
+    V._FORMULA_CACHE.clear()
 
 
 # --------------------------------------------------------------------------- #
 # HARNESS CONTROL -- run before any assertion, as census-selftest and
 # enforce-census-selftest both do. A suite that cannot produce a PASS cannot
-# produce a meaningful FAIL either, and this suite has a specific way to go
-# quietly useless: every fixture is injected by writing the PRIVATE
-# `V._FORMULA_CACHE`. Rename that attribute or change its value shape and
-# `_formula` falls through to a real keg read for names like "fx-keg", finds
-# nothing, and returns None -- at which point every `check(..., False)` below
-# still passes, for entirely the wrong reason.
+# produce a meaningful FAIL either, and this one has a specific way to go quietly
+# useless: every fixture is injected by writing PRIVATE module state. Rename
+# `_PATCH_DATA` or change its shape and the fixtures stop taking, `homebrew_
+# resolved_cves` returns None for names like "pkg", and every `check(..., False)`
+# below still PASSES for entirely the wrong reason.
 # --------------------------------------------------------------------------- #
-_ctl_src = nest()
-_ctl = fixture("harness-control", _ctl_src)
-if V._formula(_ctl) != (_ctl_src, "keg"):
-    sys.exit("vulnlib-selftest: fixture injection is broken -- V._FORMULA_CACHE did "
-             "not take. Every negative check below would pass for the wrong reason.")
-if V.homebrew_resolved_cves(_ctl) != {CVE}:
+install(pkg=[{"url": URL + ".patch", "resolves": sec(CVE)}])
+if V.homebrew_patch_data() is not V._PATCH_DATA:
+    sys.exit("vulnlib-selftest: fixture injection is broken -- homebrew_patch_data() "
+             "did not return the injected map. Every negative check would pass "
+             "for the wrong reason.")
+if V.homebrew_resolved_cves("pkg") != {CVE}:
     sys.exit("vulnlib-selftest: the positive control does not fire -- an injected "
-             "top-level `resolves \"%s\"` was not read. Fix that before trusting "
-             "any FAIL from this suite." % CVE)
+             "security `resolves %s` was not read. Fix that before trusting any "
+             "FAIL from this suite." % CVE)
 print("harness control: fixture injection works, and a known `resolves` is read.")
 
 
 # --------------------------------------------------------------------------- #
-section("scope: a patch that may not be in THIS build must not suppress")
+section("undetermined is not the same as nothing")
 # --------------------------------------------------------------------------- #
-# The HIGH finding. Homebrew's `patch` DSL is legal inside all of these, and
-# `resolves` is legal on any of them, but only `stable do` is certainly built.
-for opener, applies in [("stable do", True),
-                        ("head do", False),
-                        ("on_linux do", False),
-                        ("on_intel do", False),
-                        ("on_macos do", False),
-                        ('resource "passlib" do', False),
-                        ("if build.head?", False)]:
-    f = fixture("fixture-" + opener.split()[0] + opener[-1], wrap(opener))
-    check("%-24s -> suppresses %s" % (opener, "YES" if applies else "no "),
-          V.is_patched_by_homebrew(f, CVE, None, None), applies)
+# The whole failure class in one idea. If `brew` is missing, the subprocess dies,
+# or the JSON will not parse, the answer is UNKNOWN -- and an UNKNOWN that reads
+# as "no patches were applied" is merely a false alarm, while an UNKNOWN that
+# reads as "nothing to worry about" is the false all-clear this module exists to
+# prevent. Every path below must produce None, never set().
+brew_says_nothing()
+check("brew unavailable -> None, not an empty set", V.homebrew_resolved_cves("pkg"), None)
+check("...so nothing can be suppressed",
+      V.is_patched_by_homebrew("pkg", CVE, None, None), False)
+check("an unknown formula -> None even when brew answered",
+      (install(other=[]) or V.homebrew_resolved_cves("pkg")), None)
+check("an installed formula with no patches -> empty set, a real fact",
+      V.homebrew_resolved_cves("other"), set())
+check("patches_for distinguishes 'no patches' from 'never heard of it'",
+      (V.homebrew_patches_for("other"), V.homebrew_patches_for("pkg")), ([], None))
 
-check("top-level patch            -> suppresses YES",
-      V.is_patched_by_homebrew(fixture("fx-top", nest()), CVE, None, None), True)
-check("two levels deep, both fine -> suppresses YES",
-      V.is_patched_by_homebrew(fixture("fx-nest2", nest("stable do", "stable do")),
-                               CVE, None, None), True)
-check("stable outside, head inside -> suppresses no ",
-      V.is_patched_by_homebrew(fixture("fx-mixed", nest("stable do", "head do")),
-                               CVE, None, None), False)
 
 # --------------------------------------------------------------------------- #
-section("provenance: the TAP is not what is installed")
+section("only a security resolves may silence a CVE")
 # --------------------------------------------------------------------------- #
-tap = fixture("fx-tap", nest(), source="tap")
-check("resolves from `brew cat` text is refused", V.homebrew_resolved_cves(tap), None)
-check("...so it cannot suppress", V.is_patched_by_homebrew(tap, CVE, None, None), False)
-check("the same text from the keg IS trusted",
-      V.homebrew_resolved_cves(fixture("fx-keg", nest())),
-      {CVE})
-check("unreadable formula -> None, not an empty set",
-      V.homebrew_resolved_cves(fixture("fx-none", None, source=None)), None)
-
-# --------------------------------------------------------------------------- #
-section("attribution: prose is not evidence")
-# --------------------------------------------------------------------------- #
-FOREIGN = "https://github.com/pyca/bcrypt/commit/" + "d" * 40
-backport = fixture("fx-backport", 'class F < Formula\n  # Backport of %s\n%s\nend\n'
-                   % (URL, PATCH.replace('url "%s.patch?full_index=1"' % URL,
-                                         'file "Patches/f/x.patch"')))
-prose = fixture("fx-prose", 'class F < Formula\n  # see also %s\n%s\nend\n' % (FOREIGN, PATCH))
-check("`# Backport of <url>` names the patch's commit",
-      URL[-40:] in V.homebrew_patch_blocks(backport)[0]["commits"], True)
-check("plain prose commit is NOT recorded as applied",
-      FOREIGN[-40:] in V.homebrew_patch_blocks(prose)[0]["commits"], False)
-
-# --------------------------------------------------------------------------- #
-section("parser: block boundaries")
-# --------------------------------------------------------------------------- #
-trail = fixture("fx-endcomment",
-                'class F < Formula\n%s # trailing\n%s\nend\n'
-                % (PATCH[:-3] + "  end", PATCH.replace(CVE, "CVE-2026-99999")))
-blocks = V.homebrew_patch_blocks(trail)
-check("`end # comment` does not merge two patch blocks", len(blocks), 2)
-check("no patch blocks -> empty list, not None",
-      V.homebrew_patch_blocks(fixture("fx-empty", "class F < Formula\nend\n")), [])
-
-# --------------------------------------------------------------------------- #
-section("values: only a quoted CVE id counts")
-# --------------------------------------------------------------------------- #
-url_res = fixture("fx-urlres", 'class F < Formula\n  patch do\n    file "p.patch"\n'
-                  '    resolves "https://bugs.python.org/issue43976"\n  end\nend\n')
-check("a non-CVE `resolves` value yields no CVE", V.homebrew_resolved_cves(url_res), set())
-check("a commented-out resolves is not read",
-      V.homebrew_resolved_cves(fixture("fx-comres",
-                                       'class F < Formula\n  patch do\n    file "p"\n'
-                                       '    # resolves "%s"\n  end\nend\n' % CVE)), set())
-check("empty cve id never matches", V.is_patched_by_homebrew("fx-keg", "", None, None), False)
+# Measured across 274 installed kegs: 20 patches carry a `resolves`, split exactly
+# 10 security / 10 defect. Homebrew classifies CVE, GHSA and OSV ids as security
+# and everything else -- issue links, bug numbers -- as defect. Reading a defect
+# id as an advisory id could only ever silence something it does not describe.
+install(pkg=[{"file": "p.patch", "resolves": sec(CVE)}],
+        defective=[{"file": "p.patch",
+                    "resolves": [{"type": "defect", "id": "https://bugs.example/1"}]}],
+        many=[{"file": "p.patch", "resolves": sec("CVE-2026-11111", "CVE-2026-22222")}],
+        advisories=[{"file": "p.patch",
+                     "resolves": sec("GHSA-qrv3-253h-g69c", "OSV-2025-433")}])
+check("a security resolves silences its CVE",
+      V.is_patched_by_homebrew("pkg", CVE, None, None), True)
+check("a defect resolves silences nothing", V.homebrew_resolved_cves("defective"), set())
+check("a variadic resolves captures EVERY id",
+      V.homebrew_resolved_cves("many"), {"CVE-2026-11111", "CVE-2026-22222"})
+check("GHSA and OSV advisory ids are captured",
+      V.homebrew_resolved_cves("advisories"),
+      {"GHSA-QRV3-253H-G69C", "OSV-2025-433"})
+check("an unrelated CVE is not silenced",
+      V.is_patched_by_homebrew("pkg", "CVE-2026-99999", None, None), False)
 check("case-insensitive id match",
-      V.is_patched_by_homebrew("fx-keg", CVE.lower(), None, None), True)
+      V.is_patched_by_homebrew("pkg", CVE.lower(), None, None), True)
+check("an empty cve id never matches", V.is_patched_by_homebrew("pkg", "", None, None), False)
+
 
 # --------------------------------------------------------------------------- #
-section("commit-hash signal: unchanged behaviour")
+section("commit-hash signal: the fallback for patches with no resolves")
 # --------------------------------------------------------------------------- #
+# Kept, not replaced: 7 of the 62 installed patches carry a `file` and no
+# `resolves` at all, so Homebrew's answer cannot speak for them.
 pc = {"a" * 40: "https://example/commit/" + "a" * 40}
 check("full sha matches", V.commit_is_patched("a" * 40, pc), True)
 check("7-char prefix matches", V.commit_is_patched("a" * 7, pc), True)
 check("6-char prefix rejected (collision-prone)", V.commit_is_patched("a" * 6, pc), False)
 check("unrelated sha rejected", V.commit_is_patched("b" * 40, pc), False)
 check("no patches -> False", V.commit_is_patched("a" * 40, None), False)
-check("hash signal alone still suppresses",
-      V.is_patched_by_homebrew("fx-empty", "CVE-0000-0000", "a" * 40, pc), True)
+check("the hash signal alone still suppresses, with no resolves involved",
+      V.is_patched_by_homebrew("other", "CVE-0000-0000", "a" * 40, pc), True)
+
+install(mixed=[{"url": URL + ".patch?full_index=1", "resolves": sec(CVE)},
+               {"file": "unexplained.patch"}])
+V._FORMULA_CACHE["mixed"] = None
+check("patch urls are read from Homebrew's own answer",
+      sorted(V.homebrew_patch_commits("mixed")), ["3" * 40])
+brew_says_nothing()
+V._FORMULA_CACHE["scan-me"] = "# Backport of %s\n" % URL
+check("the keg text is still scanned, for the file-patch case",
+      sorted(V.homebrew_patch_commits("scan-me")), ["3" * 40])
+V._FORMULA_CACHE["nothing"] = None
+check("no Homebrew answer and no keg text -> None",
+      V.homebrew_patch_commits("nothing"), None)
+
 
 # --------------------------------------------------------------------------- #
 section("unclaimed_patches: never re-ask what the formula answered")
 # --------------------------------------------------------------------------- #
-check("a labelled, applying patch is not asked about",
-      V.unclaimed_patches("fx-keg", {URL[-40:]: URL}, set()), [])
-check("the same patch under `head do` IS still asked about",
-      V.unclaimed_patches("fixture-heado", {URL[-40:]: URL}, set()), [URL])
-check("no patches -> empty list", V.unclaimed_patches("fx-keg", None, set()), [])
+install(allknown=[{"url": URL + ".patch", "resolves": sec(CVE)}],
+        partly=[{"url": URL + ".patch", "resolves": sec(CVE)},
+                {"file": "mystery.patch"}])
+check("every patch labelled -> nothing is unexplained",
+      V.unclaimed_patches("allknown", {URL[-40:]: URL}, set()), [])
+check("an unlabelled patch leaves its commit on the list",
+      V.unclaimed_patches("partly", {URL[-40:]: URL, "b" * 40: "https://e/commit/" + "b" * 40},
+                          set()), ["https://e/commit/" + "b" * 40])
+check("a commit already claimed by a CVE is not asked about",
+      V.unclaimed_patches("partly", {"b" * 40: "https://e/commit/" + "b" * 40},
+                          {"b" * 40}), [])
+check("no patches -> empty list", V.unclaimed_patches("allknown", None, set()), [])
+
 
 # --------------------------------------------------------------------------- #
 section("cache freshness: a row must not be trusted forever")
 # --------------------------------------------------------------------------- #
-# The cache had no time component at all, so `known()` reused a row for as long as
-# the installed version held. Measured 2026-09-04: the python@3.14 row was written
+# The cache had no time component, so `known()` reused a row for as long as the
+# installed version held. Measured 2026-09-04: the python@3.14 row was written
 # 2026-08-18, NVD bounded the CVE on 2026-08-20, and the banner reported a fixed
-# CVE for 17 days; 97 of 231 rows were 32 days old. The false-NEGATIVE direction is
-# the same bug and worse -- a CVE published tomorrow against a version that does
-# not change would never be found at all.
-import tempfile, time as _time
-
+# CVE for 17 days; 97 of 231 rows were 32 days old. The false-NEGATIVE direction
+# is the same bug and worse -- a CVE published tomorrow against a version that
+# never moves would not be found at all.
 _db = os.path.join(tempfile.mkdtemp(prefix="vulnlib-selftest-"), "scan.db")
 _store = V.ScanStore(_db)
 _store.record("brew", "fresh-pkg", "1.0", 0, "a:b", "clean", None, [])
 _store.record("brew", "stale-pkg", "1.0", 0, "a:b", "clean", None, [])
 _store.conn.execute("UPDATE scanned SET scanned_at=? WHERE name='stale-pkg'",
-                    (int(_time.time()) - 30 * 86400,))
+                    (int(time.time()) - 30 * 86400,))
 _store.commit()
-
-_args = ("brew", "fresh-pkg", "1.0", 0)
+_fresh = ("brew", "fresh-pkg", "1.0", 0)
 _stale = ("brew", "stale-pkg", "1.0", 0)
 check("no max_age: a 30-day-old row is still known (old behaviour)",
       _store.known(*_stale) is not None, True)
 check("max_age=7d: the 30-day-old row is NOT known",
       _store.known(*_stale, max_age=7 * 86400), None)
 check("max_age=7d: a row written just now IS known",
-      _store.known(*_args, max_age=7 * 86400) is not None, True)
+      _store.known(*_fresh, max_age=7 * 86400) is not None, True)
 check("max_age=0 disables expiry entirely",
       _store.known(*_stale, max_age=0) is not None, True)
 check("max_age=None disables expiry entirely",
@@ -287,16 +262,47 @@ check("an absent row is still None with a max_age",
 # --------------------------------------------------------------------------- #
 section("live kegs (read-only; skipped if not installed)")
 # --------------------------------------------------------------------------- #
-for name, want in [("libssh2", {"CVE-2026-7598", "CVE-2026-58050", "CVE-2026-58051"}),
-                   ("python@3.14", set())]:
-    V._FORMULA_CACHE.pop(name, None)
-    text, src = V._formula(name)
-    if text is None:
-        skip("%s" % name, "not installed")
-        continue
-    check("%s formula came from the keg" % name, src, "keg")
-    got = V.homebrew_resolved_cves(name)
-    check("%s declares the expected CVEs" % name, want & (got or set()), want)
+# Expected values are literals verified independently on 2026-09-04 against
+# `brew vulns`, which reported the same ten as "resolved by formula patches".
+# Asserting against another call into vulnlib would be tautological.
+V._PATCH_DATA = None
+V._PATCH_DATA_TRIED = False
+V._FORMULA_CACHE.clear()
+
+if V.homebrew_patch_data() is None:
+    skip("all live checks", "brew ruby did not answer")
+else:
+    got = V.homebrew_resolved_cves("libssh2")
+    if got is None:
+        skip("libssh2", "not installed")
+    else:
+        check("libssh2 resolves exactly its ten declared advisories", got, {
+            "CVE-2025-15661", "CVE-2026-7598", "CVE-2026-55199", "CVE-2026-55200",
+            "CVE-2026-58050", "CVE-2026-58051", "CVE-2026-66032", "CVE-2026-66033",
+            "CVE-2026-66034", "CVE-2026-66035"})
+        check("libssh2 has nothing left to ask a human about",
+              V.unclaimed_patches("libssh2", V.homebrew_patch_commits("libssh2"), set()), [])
+
+    py = V.homebrew_resolved_cves("python@3.14")
+    if py is None:
+        skip("python@3.14", "not installed")
+    else:
+        check("python@3.14 declares no security resolves", py, set())
+
+    # Both of these were WRONG under the hand parser: it saw 1 patch in bash where
+    # Homebrew sees 15, and could not see ollama's `patch :DATA` at all because it
+    # has no `do` for a block-stack parser to notice.
+    for name, why in [("bash", "a formula whose patches the old parser undercounted"),
+                      ("ollama", "a formula using `patch :DATA`, invisible to the old parser")]:
+        ps = V.homebrew_patches_for(name)
+        if ps is None:
+            skip(name, "not installed")
+        else:
+            check("%s: patches are seen at all (%s)" % (name, why), len(ps) >= 1, True)
+    bash = V.homebrew_patches_for("bash")
+    if bash is not None:
+        check("bash reports many patches, not the single block the parser found",
+              len(bash) > 1, True)
 
 print("\n%s%s%s  %d passed, %d failed, %d skipped"
       % (RED if FAILURES else GREEN, "FAIL" if FAILURES else "OK  ", OFF,
