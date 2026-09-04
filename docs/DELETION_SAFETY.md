@@ -111,10 +111,35 @@ that logs instead of deleting: it was never called):
 | Whole mounted volumes | `/Volumes/*`, `/media/*`, `/mnt/*`                                                                                                                                                          |
 | `.` and `..`          | `.` `./` `..` `../` `sub/..` `.//`                                                                                                                                                          |
 
-**Containers, not contents.** `rm -rf ~/Downloads` is refused; `rm -rf ~/Downloads/*` is not,
-because each child is a separate target. This is deliberate — a guard that blocks ordinary work
-gets routed around, and a routed-around guard protects nothing. Override for a human who means
-it: `SAFE_RM_OFF=1` (permanent, no Trash). There is no second knob, on purpose.
+**Containers, not contents** — with four named exceptions. For everything in the table above,
+the directory itself is refused while `dir/*` is not, because each child is a separate target.
+A guard that blocks ordinary work gets routed around, and a routed-around guard protects
+nothing. Override for a human who means it: `SAFE_RM_OFF=1` (permanent, no Trash). There is no
+second knob, on purpose.
+
+### The sweep guard
+
+`~/Downloads`, `~/Desktop`, `~/Documents` and `~/CODE` are additionally protected against being
+emptied: `rm -rf ~/Downloads/*` is refused, not just `rm -rf ~/Downloads`. Same loss, different
+route.
+
+**The glob never reaches this script.** The shell expands `~/Downloads/*` before `safe-rm` is
+executed, so what arrives is a plain list of children with no `*` anywhere. The sweep is
+therefore recognised from its _shape_: **two or more direct children of a guarded folder named
+in one call**. A side effect worth having — `rm -rf ~/CODE/one ~/CODE/two` typed by hand is
+caught too, which pattern-matching the glob would have missed.
+
+Two is the threshold because one is how you delete something deliberately.
+`rm ~/Downloads/installer.dmg` and `rm -rf ~/CODE/oldproject` are untouched. Deleting several
+one at a time still works; what is removed is the single stroke.
+
+Parents are compared as literal strings, not resolved per operand — this runs on every call,
+including `rm -rf node_modules` with tens of thousands of operands, and a fork per operand is
+not affordable. **Both spellings of `$HOME` are therefore on the list** (the raw value and the
+`pwd -P` resolution). That is a bug fix, not caution: with a home under `$TMPDIR`, `$HOME` is
+`/var/folders/…` while the resolved form is `/private/var/folders/…` because `/var` is a
+symlink, and every sweep slipped through until both were compared. Same class of mistake as the
+`/etc` one above, found the same way — by testing rather than by reasoning.
 
 Two implementation details, each of which cost a bug:
 

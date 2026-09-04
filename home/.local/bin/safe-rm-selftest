@@ -362,5 +362,46 @@ fi
 echo
 
 # --------------------------------------------------------------------------------------
+echo "10. Sweeping a guarded folder must be refused; single deletes must not"
+# `rm -rf ~/Downloads/*` is the same loss as `rm -rf ~/Downloads` by another route. The glob
+# never reaches safe-rm -- the shell expands it first -- so the sweep is recognised from its
+# shape: two or more direct children of a guarded folder in one call.
+SH="$ROOT/sweephome"
+seed_sweep() {
+	/bin/rm -rf "$SH" 2>/dev/null
+	for sd in Downloads Desktop Documents CODE Pictures; do mkdir -p "$SH/$sd"; done
+	for sd in Downloads Desktop Documents CODE; do
+		for nm in one two three; do mkdir -p "$SH/$sd/$nm"; : > "$SH/$sd/$nm/data.txt"; done
+	done
+	mkdir -p "$SH/CODE/proj/dist"; : > "$SH/CODE/proj/dist/a.js"; : > "$SH/CODE/proj/dist/b.js"
+	mkdir -p "$SH/Pictures/album"; : > "$SH/Pictures/album/p.jpg"
+}
+sweep() { # sweep BLOCK|ALLOW <label> <targets...>
+	local want="$1" label="$2"
+	shift 2
+	seed_sweep
+	OUT=$(HOME="$SH" "$SAFE_RM" -rf "$@" 2>&1); ST=$?
+	[ "$VERBOSE" -eq 1 ] && say "$OUT"
+	if [ "$want" = BLOCK ] && [ "$ST" -ne 0 ]; then ok "refuses $label"
+	elif [ "$want" = ALLOW ] && [ "$ST" -eq 0 ]; then ok "still allows $label"
+	else bad "$label -- want=$want got exit=$ST"; fi
+}
+
+seed_sweep
+sweep BLOCK "rm -rf ~/Downloads/*" "$SH"/Downloads/*
+sweep BLOCK "rm -rf ~/Desktop/*"   "$SH"/Desktop/*
+sweep BLOCK "rm -rf ~/Documents/*" "$SH"/Documents/*
+sweep BLOCK "rm -rf ~/CODE/*"      "$SH"/CODE/*
+sweep BLOCK "two children named explicitly" "$SH/CODE/one" "$SH/CODE/two"
+sweep BLOCK "the same sweep with trailing slashes" "$SH/Downloads/one/" "$SH/Downloads/two/"
+
+# Deleting ONE thing on purpose has to keep working, or the guard gets routed around.
+sweep ALLOW "a single file from ~/Downloads" "$SH/Downloads/one"
+sweep ALLOW "a single project in ~/CODE"     "$SH/CODE/one"
+sweep ALLOW "build output deeper inside ~/CODE" "$SH"/CODE/proj/dist/*
+sweep ALLOW "a sweep of an UNguarded folder"    "$SH"/Pictures/*
+echo
+
+# --------------------------------------------------------------------------------------
 printf 'pass=%d fail=%d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1

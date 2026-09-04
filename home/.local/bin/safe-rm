@@ -262,6 +262,87 @@ done
 
 [ "$existing" -eq 0 ] && exit 0
 
+# --- Sweep guard: no emptying these folders in one command -----------------------------
+# The container guard above refuses `rm -rf ~/Downloads`. This refuses `rm -rf ~/Downloads/*`,
+# which is the same loss by a different route.
+#
+# THE GLOB NEVER REACHES THIS SCRIPT. The shell expands `~/Downloads/*` before safe-rm is
+# executed, so what arrives is a plain list of children -- there is no `*` to match on. The
+# sweep therefore has to be recognised from its SHAPE: two or more direct children of a
+# guarded directory named in a single call.
+#
+# Two is the threshold because one is how you delete a file on purpose. `rm ~/Downloads/x.dmg`
+# keeps working, and so does `rm -rf ~/CODE/oneproject`; what stops is taking several at once,
+# which is the shape of a sweep and almost never the shape of an intention. Deleting them one
+# at a time still works, and that is fine -- the point is to remove the single stroke, not to
+# make the files immortal.
+#
+# Parents are compared as literal absolute strings rather than resolved with a subshell per
+# target: this runs on every call, including `rm -rf node_modules` with tens of thousands of
+# operands, and a fork per operand is not affordable. A deliberately obfuscated relative path
+# could slip past this particular check; the container guard above still holds, and this is a
+# guard against a slip, not against an adversary at your keyboard.
+# BOTH spellings of home go on the list, and that is not belt-and-braces -- it is a bug fix.
+# Operand parents are computed as literal strings (see above), so comparing them against a
+# RESOLVED home silently never matches whenever the path crosses a symlink. Measured: with a
+# home under $TMPDIR, `$HOME` is /var/folders/... while `pwd -P` gives /private/var/folders/...
+# because /var is a symlink on macOS, and every sweep sailed through. Same class of mistake as
+# the /etc one in the container guard, found the same way -- by testing rather than reasoning.
+sweep_dirs=""
+if [ -n "${HOME:-}" ]; then
+	hr="${HOME%/}"
+	hp=$(CDPATH= cd -P -- "$HOME" 2>/dev/null && pwd -P) || hp=""
+	for hbase in "$hr" "$hp"; do
+		[ -n "$hbase" ] || continue
+		sweep_dirs="${sweep_dirs}${hbase}/Downloads
+${hbase}/Desktop
+${hbase}/Documents
+${hbase}/CODE
+"
+	done
+fi
+
+if [ -n "$sweep_dirs" ]; then
+	# One pass over the operands, collecting each one's literal parent directory.
+	parents=""
+	argc=$#
+	i=0
+	while [ "$i" -lt "$argc" ]; do
+		t="$1"
+		shift
+		i=$((i + 1))
+		set -- "$@" "$t"
+		case "$t" in
+			/*) atp="$t" ;;
+			*)  atp="${PWD}/$t" ;;
+		esac
+		while [ "$atp" != "/" ] && [ "${atp%/}" != "$atp" ]; do atp="${atp%/}"; done
+		p="${atp%/*}"
+		[ -z "$p" ] && p="/"
+		parents="${parents}${p}
+"
+	done
+
+	OLDIFS=$IFS
+	IFS='
+'
+	for g in $sweep_dirs; do
+		IFS=$OLDIFS
+		[ -n "$g" ] || continue
+		n=$(printf '%s' "$parents" | grep -c -x -F -- "$g" 2>/dev/null) || n=0
+		if [ "$n" -ge 2 ]; then
+			echo "safe-rm: refusing to remove ${n} items at once from ${g}" >&2
+			echo "         That folder is protected against being emptied in one command." >&2
+			echo "         Delete them individually if you mean it, or move the folder aside." >&2
+			echo "         To override deliberately: SAFE_RM_OFF=1 rm ...  (PERMANENT, no Trash)" >&2
+			exit 1
+		fi
+		IFS='
+'
+	done
+	IFS=$OLDIFS
+fi
+
 # THE EXIT CODE IS ADVISORY ONLY. Every report below comes from re-checking the targets,
 # never from what the trash tool claimed, because it has now been measured lying in BOTH
 # directions:
