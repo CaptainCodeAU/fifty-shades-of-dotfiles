@@ -44,6 +44,79 @@ If you just want the shell functions without the full install, you can symlink i
 - **🎬 Media Tools**: Built-in `yt()` wrapper that runs yt-dlp on demand via `uvx` (nothing installed, always current), with auto-generated configuration and quality presets.
 - **🖲️ Portable iTerm2 Preferences**: `settings/iterm2/prefs/` captures and restores iTerm2's _entire_ settings domain in one file — profiles, colors, fonts, key bindings, pointer/ctrl-click bindings, the Hotkey Window, general prefs — not just color themes. `export.sh` sanitizes and refuses to write if anything secret-looking slips through; `restore.sh` backs up before importing, and is offered during `./install.sh` on macOS.
 - **🔒 Private Configuration**: A built-in pattern for managing your secret keys and machine-specific settings in a `.zshrc.private` file, which is kept out of version control.
+- **🗑️ Deletion Goes to the Trash — Everywhere**: `rm` is rerouted to the system Trash for your shell, your scripts, `xargs`, `make`, and `sudo`. This is the most opinionated thing in this repo. **[Read the section below before installing.](#-heads-up-this-repo-changes-what-rm-means)**
+
+---
+
+## 🗑️ Heads up: this repo changes what `rm` means
+
+**This is the most opinionated change in here, it affects your whole machine, and you should decide about it on purpose rather than discover it later.**
+
+On a normal Unix system `rm` unlinks a file and it is gone. On a machine running these dotfiles, `rm` moves it to the system Trash instead, and it is recoverable from Finder with **Put Back** (macOS) or `trash-restore` (Linux). That much is common enough.
+
+What is unusual is the **coverage**. Most "safe rm" setups are a shell alias or function, which means they only protect what _you_ type into an interactive shell. Everything else on your machine — every `#!/bin/bash` script, every `make clean`, every `xargs rm`, every `sudo rm -rf` — sails straight past and deletes permanently. That gap is not theoretical; it was measured on this repo's own machine, and `xargs rm` destroyed a test file while the "protection" was fully installed.
+
+So this repo closes it properly, with two pieces:
+
+| Piece                                                             | Covers                                                                                                                                           |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `rm()` / `rmdir()` shell functions in `.zshrc`                    | what you type interactively                                                                                                                      |
+| **`~/.local/bin/rm`** — a real command on `PATH`, ahead of `/bin` | **everything else**: bash and zsh scripts, `xargs`, `find -exec`, `make`, Homebrew formula post-install, Claude Code and other agent tool-shells |
+
+Plus a `sudo()` wrapper that catches `sudo rm` and re-runs it **as you**, unprivileged, so a root delete lands in _your_ Trash where Finder can restore it — rather than in `/var/root/.Trash`, which you cannot see.
+
+Both routes end at [`safe-rm`](home/.local/bin/safe-rm), which never unlinks anything, and which **refuses and exits non-zero** if no trash tool is installed. It does not fall back to `rm`. A silent downgrade from recoverable to permanent is the one behaviour a safety command must not have.
+
+### The price, stated plainly
+
+A `PATH` shim cannot tell your files from a build tree. It has no idea whether `rm -rf` is aimed at your thesis or at `node_modules`. So:
+
+- **Your Trash will fill up with build output.** Every `"prebuild": "rm -rf dist"`, every `make clean`, every temp directory a script cleans up after itself. Expect thousands of entries.
+- **Disk space is not reclaimed until you empty the Trash.** If you run tight on free space, this will bite you. Empty it regularly, or do not install this part.
+- **Deleting is slower** on very large trees, because moving is not the same as unlinking.
+
+This was a deliberate trade: total coverage over a quiet Trash. It even overrides an earlier rule in this very repo, which said a script's own scratch should use real `rm` — that rule is no longer enforceable once a shim owns every `rm`, and the trade was made knowingly rather than by accident.
+
+**If you do not want this, do not link `home/.local/bin/rm` into `~/.local/bin`.** Everything else in the repo works without it; you simply fall back to interactive-only protection.
+
+### Getting out of it
+
+| Escape hatch             | Effect                                                                |
+| ------------------------ | --------------------------------------------------------------------- |
+| `SAFE_RM_OFF=1 rm …`     | one command, or `export` it for one shell — real `/bin/rm`, permanent |
+| `/bin/rm …`              | absolute path, permanent                                              |
+| `SAFE_RM_VERBOSE=1 rm …` | not an escape hatch; just prints what got trashed                     |
+
+Note that `command rm` and `\rm` are **not** escape hatches here. They bypass shell functions and aliases, not `PATH`, so they still go to the Trash. Only the two above are real doors.
+
+### What this does NOT protect you from
+
+This is a delete wrapper. It is not a backup, and it should not be mistaken for one. None of these go anywhere near `rm`, and none of them are covered:
+
+```
+> file            git clean -fdx      rsync --delete     brew cleanup
+truncate -s0      git reset --hard    tar over a file    pnpm store prune
+unlink            git stash drop      install / ginstall  docker system prune
+find -delete      Finder Shift-Delete Python os.remove   a dying SSD
+```
+
+`/bin/rm` itself is also uncoverable, and not for lack of trying: it carries the SIP `restricted` flag, so `chmod`, `chflags` and ACLs all return "Operation not permitted" even for root, and an absolute path never consults `PATH` anyway. Both facts are measured and written up in [`docs/DELETION_SAFETY.md`](docs/DELETION_SAFETY.md).
+
+### Why you should trust it more than you'd expect, and less than you'd like
+
+An adversarial review of this code found **five defects in a single sitting**, and every one belonged to the same family: _the code reported an outcome it had never verified._ Three were in the dangerous direction — a delete that had happened, reported as one that had not.
+
+The worst of them: `rm -rf .` moved an entire directory tree to the Trash while printing **"They are UNCHANGED. Nothing was deleted permanently."** Real `/bin/rm` refuses that command outright.
+
+All five are fixed. `safe-rm` now derives every message from re-checking the targets and does not trust the trash tool's exit code at all, because that tool has been caught lying in _both_ directions. And all five are pinned by [`safe-rm-selftest`](home/.local/bin/safe-rm-selftest) — 23 assertions you can run yourself, any time:
+
+```bash
+safe-rm-selftest        # 23 assertions; works in its own temp dir, touches nothing else
+```
+
+Run it after any change to `safe-rm`, to the shim, or to the `rm()`/`sudo()` wrappers.
+
+The honest summary: this is a well-tested seatbelt with a known list of things it does not do. Keep real backups.
 
 ---
 
@@ -1257,9 +1330,11 @@ For the full architecture, conventions, migration policy, and add-new-script wor
 ### Special Functions
 
 - **`rm()` wrapper**: Two-layer deletion safety net. First warns before deleting symlinks (shows link target, prompts for confirmation). Then hands off to **`safe-rm`** for the actual delete. There is deliberately no force/permanent mode — `rm -rf` still goes to the Trash, because the flags are stripped.
-- **`safe-rm` command**: the single owner of "how does this system delete something". Moves targets to the system Trash via `trash` (macOS) or `trash-put` (Linux) and **never unlinks**; if no trash tool is present it refuses and exits non-zero rather than falling back to `rm`, because a silent downgrade from recoverable to permanent is the one behaviour it must not have. It exists as a **command on `PATH`**, not a shell function, because a function only exists inside an interactive zsh — `install.sh` and the Claude hooks run under bash, never load `.zshrc`, and so were permanently deleting files (including your existing dotfiles, when resolving a stow conflict). Scripts call `safe-rm` for anything the user could care about; a script's own `mktemp` scratch still uses real `rm`, so the Trash stays a readable safety net instead of filling with machine noise.
+- **`safe-rm` command**: the single owner of "how does this system delete something". Moves targets to the system Trash via `trash` (macOS) or `trash-put` (Linux) and **never unlinks**; if no trash tool is present it refuses and exits non-zero rather than falling back to `rm`, because a silent downgrade from recoverable to permanent is the one behaviour it must not have. It exists as a **command on `PATH`**, not a shell function, because a function only exists inside an interactive zsh — `install.sh` and the Claude hooks run under bash, never load `.zshrc`, and so were permanently deleting files (including your existing dotfiles, when resolving a stow conflict). Every message it prints is derived from re-checking the targets afterwards, never from the trash tool's exit code, which has been measured reporting success without acting _and_ reporting failure after acting. It refuses `.`, `..` and `/` exactly as `/bin/rm` does, rewrites a leading-dash target to `./NAME` so the trash tool cannot read it as a flag, and refuses outright rather than guessing when a target cannot be stat'ed through an unsearchable parent.
+- **`rm` PATH shim** (`home/.local/bin/rm`): what carries all of the above to scripts, `xargs`, `find -exec` and `make`. It preserves `rm`'s own rule that a directory needs `-r`, honours `SAFE_RM_OFF=1` as a deliberate bypass, and otherwise delegates. Note the consequence, which is intentional: a script's own `mktemp` scratch now reaches the Trash too, because a shim cannot tell scratch from your files. See [the heads-up section](#-heads-up-this-repo-changes-what-rm-means).
+- **`safe-rm-selftest`**: 23 assertions pinning all five defects an adversarial review found in this chain, plus ordinary behaviour. Run it after touching `safe-rm`, the shim, or the `rm()`/`sudo()` wrappers.
 - **`cp()`/`mv()` wrappers**: Default to interactive overwrite protection (`-i`) so you are prompted before clobbering existing files. Explicit force flags (`-f`, e.g. `-rf`) bypass prompts when you intentionally want non-interactive overwrite behavior.
-- **`sudo()` wrapper**: Prevents accidental `sudo claude` commands and redirects appropriately
+- **`sudo()` wrapper**: Prevents accidental `sudo claude` and `sudo pnpm` commands and redirects appropriately. Also intercepts **`sudo rm` / `sudo rmdir`** and re-runs the deletion **as you**, unprivileged, via `safe-rm` — moving a file needs write permission on its parent directory, not on the file, so this usually succeeds even on root-owned targets and lands them in _your_ `~/.Trash` where Finder's Put Back works. (`sudo safe-rm` would trash into `/var/root/.Trash`, mode 0750 and invisible to you: safe-looking, bad at recovering.) The command is located by scanning past sudo's own options rather than reading `$1`, so `sudo -u root rm -rf x` and the clustered form `sudo -nu root rm -rf x` are both caught. `sudo /bin/rm` is deliberately _not_ caught — that is the documented escape hatch.
 - **`pip()` wrapper**: Intercepts `pip install` → `uv add` and `pip uninstall` → `uv remove`; passes through editable installs and read-only subcommands via `uv pip`
 - **`pipx()` wrapper**: Intercepts `pipx` commands and shows the equivalent `uv tool` commands
 - **`npx()` wrapper**: Intercepts `npx` commands and shows the equivalent `pnpm dlx` commands
