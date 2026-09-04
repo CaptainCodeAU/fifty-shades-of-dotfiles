@@ -357,44 +357,54 @@ def main() -> int:
 
     files, mode, filters = collect(root, a.under, a.exclude, a.walk, a.binary)
 
+    # ── the denominator AND how it was drawn, ON BOTH PATHS ───────────────────────
+    # This block used to run only AFTER the control passed, so a CONTROL FAILED run
+    # withheld the population, the filters and the matching mode — the exact facts you
+    # need to work out WHY it failed. "matched NOTHING in 1 file(s)" while silently
+    # declining to mention that 30 binaries and 142 ignored files had been dropped is a
+    # riddle, not a diagnosis. The message says "the file set is wrong, or both"; it must
+    # therefore show the file set.
+    def show_population():
+        print(f"{DIM}  population: {len(files)} file(s) via {mode.upper()}{OFF}")
+        print(f"{DIM}  root: {root}{OFF}")
+        # Each filter with the number of files it moved. Naming a prefix is not the same
+        # as showing its effect, and a prefix matching 0 files is nearly always a typo.
+        for flag, prefix, n, verb in filters:
+            tone = YELLOW if n == 0 else DIM
+            tail = "  ← matched nothing; check the spelling" if n == 0 else ""
+            print(f"{tone}  {flag} {prefix} → {n} file(s) {verb}{tail}{OFF}")
+        # The two silent defaults, stated. A literal search that should have been a regex
+        # returns 0 and looks exactly like a true finding; so does a case delta. Printing
+        # the mode costs one line and removes the whole class.
+        print(f"{DIM}  matching: {matching_mode(a.regex, a.case_sensitive)}{OFF}")
+        if mode == "git":
+            # Complete over TRACKED files, and mute about the rest. Say the size of the
+            # blind spot every run: a population is only honest with its exclusions beside it.
+            ignored, untracked = git_unsearched(root)
+            if ignored is not None:
+                hidden = ignored + untracked
+                tone = YELLOW if hidden else DIM
+                print(f"{tone}  NOT searched: {ignored} ignored, {untracked} untracked"
+                      f"{' — git mode covers tracked files only' if hidden else ''}{OFF}")
+        if mode == "walk":
+            print(f"{YELLOW}  ⚠ WALK mode — not a git repo (or --walk forced). This population is NOT\n"
+                  f"    complete by construction: it skips {', '.join(sorted(SKIP_DIRS))}.\n"
+                  f"    State that limit alongside any number you quote from this run.{OFF}")
+
     # ── THE CONTROL, ASSERTED BEFORE ANY RESULT IS SHOWN ──────────────────────────
     ctl_total, ctl_files = count(root, files, a.control, a.regex, a.case_sensitive)
     if ctl_total == 0:
         print(f"{RED}✗ CONTROL FAILED — `{a.control}` matched NOTHING in "
               f"{len(files)} file(s) [{mode} mode].{OFF}")
+        show_population()
         print(f"  {DIM}The instrument is not proven, so no counts are reported. Either the\n"
-              f"  pattern is wrong, the file set is wrong, or both. Fix the control first —\n"
-              f"  a zero from an unproven instrument is indistinguishable from a finding.{OFF}")
+              f"  pattern is wrong, the file set is wrong, or both — the population above\n"
+              f"  says which files were actually opened. A zero from an unproven instrument\n"
+              f"  is indistinguishable from a finding.{OFF}")
         return 2
     print(f"{GREEN}✓ control{OFF} {DIM}`{a.control}` → {ctl_total} hit(s) in "
           f"{len(ctl_files)} file(s) — the instrument works{OFF}")
-
-    # ── the denominator AND how it was drawn, always ──────────────────────────────
-    print(f"{DIM}  population: {len(files)} file(s) via {mode.upper()}{OFF}")
-    print(f"{DIM}  root: {root}{OFF}")
-    # Each filter with the number of files it moved. Naming a prefix is not the same as
-    # showing its effect, and a prefix matching 0 files is nearly always a typo.
-    for flag, prefix, n, verb in filters:
-        tone = YELLOW if n == 0 else DIM
-        tail = "  ← matched nothing; check the spelling" if n == 0 else ""
-        print(f"{tone}  {flag} {prefix} → {n} file(s) {verb}{tail}{OFF}")
-    # The two silent defaults, stated. A literal search that should have been a regex
-    # returns 0 and looks exactly like a true finding; so does a case delta. Printing
-    # the mode costs one line and removes the whole class.
-    print(f"{DIM}  matching: {matching_mode(a.regex, a.case_sensitive)}{OFF}")
-    if mode == "git":
-        # Complete over TRACKED files, and mute about the rest. Say the size of the
-        # blind spot every run: a population is only honest with its exclusions beside it.
-        ignored, untracked = git_unsearched(root)
-        if ignored is not None:
-            hidden = ignored + untracked
-            tone = YELLOW if hidden else DIM
-            print(f"{tone}  NOT searched: {ignored} ignored, {untracked} untracked"
-                  f"{' — git mode covers tracked files only' if hidden else ''}{OFF}")
-    if mode == "walk":
-        print(f"{YELLOW}  ⚠ WALK mode — not a git repo (or --walk forced). This population is NOT\n"
-              f"    complete by construction: it skips {', '.join(sorted(SKIP_DIRS))}.\n"
-              f"    State that limit alongside any number you quote from this run.{OFF}")
+    show_population()
     print()
 
     grand = 0
