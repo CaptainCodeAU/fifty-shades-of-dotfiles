@@ -249,6 +249,17 @@ def main() -> int:
         check("14d reach: --include-ignored reaches dist/pruned.js in walk mode",
               "dist/pruned.js" in plain, "SKIP_DIRS still unreachable")
 
+        # ── 15 · a redundant --exclude is not accused of being a typo ───────────────
+        _, _, plain = run(root, "--walk", "--control", "CONTROL",
+                          "--exclude", "docs", "--exclude", "docs", "NEEDLE")
+        check("15a wolf: a repeated --exclude is called redundant, not misspelled",
+              "redundant, not a typo" in plain and plain.count("check the spelling") == 0,
+              "the second copy cried wolf")
+        _, _, plain = run(root, "--walk", "--control", "CONTROL",
+                          "--exclude", "nosuchdir", "NEEDLE")
+        check("15b wolf: a REAL typo still shouts",
+              "check the spelling" in plain, "the warning went missing entirely")
+
         # ── the original guarantee must still hold ──────────────────────────────────
         rc, _, plain = run(root, "--walk", "--control", "ABSENT-TOKEN", "NEEDLE")
         check("8a control still refuses: exit 2 when the control misses", rc == 2)

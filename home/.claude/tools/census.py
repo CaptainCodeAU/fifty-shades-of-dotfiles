@@ -237,20 +237,37 @@ def collect(root, unders, excludes, force_walk, include_binary=False, include_ig
     excludes = [e.strip("/") for e in excludes]
     if unders:
         for u in unders:
-            filters.append(("--under", u, sum(1 for f in files if inside(f, u)), "kept"))
+            n = sum(1 for f in files if inside(f, u))
+            filters.append(("--under", u, n, "kept", "typo" if n == 0 else "", n))
         files = [f for f in files if any(inside(f, u) for u in unders)]
+    # Each exclude is scored against the population as it stood BEFORE any exclude ran,
+    # not against the progressively shrinking one. Otherwise a filter that is merely
+    # REDUNDANT — `--exclude docs --exclude docs`, or a prefix already covered by an
+    # earlier one — scores 0 and gets accused of being a typo. That warning exists to
+    # catch a misspelling; firing it on a correct-but-redundant filter is how it becomes
+    # noise, and noise is how the real one gets ignored.
+    before_excludes = list(files)
     for e in excludes:
-        n = sum(1 for f in files if inside(f, e))
-        filters.append(("--exclude", e, n, "dropped"))
+        newly = sum(1 for f in files if inside(f, e))
+        matched = sum(1 for f in before_excludes if inside(f, e))
+        if matched == 0:
+            note = "typo"                       # matches nothing in the population at all
+        elif newly == 0:
+            note = "redundant"                  # a previous filter already removed these
+        else:
+            note = ""
+        filters.append(("--exclude", e, newly, "dropped", note, matched))
         files = [f for f in files if not inside(f, e)]
 
     kinds = {f: classify(root / f) for f in files}
     unreadable = [f for f in files if kinds[f] == "unreadable"]
     binaries = [f for f in files if kinds[f] == "binary"]
     if unreadable:
-        filters.append(("unreadable", "(could not be opened)", len(unreadable), "dropped"))
+        filters.append(("unreadable", "(could not be opened)", len(unreadable),
+                        "dropped", "", len(unreadable)))
     if binaries and not include_binary:
-        filters.append(("binary", "(NUL byte in first 8 KB)", len(binaries), "dropped"))
+        filters.append(("binary", "(NUL byte in first 8 KB)", len(binaries),
+                        "dropped", "", len(binaries)))
     keep = {"text"} | ({"binary"} if include_binary else set())
     files = [f for f in files if kinds[f] in keep]
     return files, mode, filters, skipped
@@ -396,9 +413,14 @@ def main() -> int:
         print(f"{DIM}  root: {root}{OFF}")
         # Each filter with the number of files it moved. Naming a prefix is not the same
         # as showing its effect, and a prefix matching 0 files is nearly always a typo.
-        for flag, prefix, n, verb in filters:
-            tone = YELLOW if n == 0 else DIM
-            tail = "  ← matched nothing; check the spelling" if n == 0 else ""
+        for flag, prefix, n, verb, note, matched in filters:
+            if note == "typo":
+                tone, tail = YELLOW, "  ← matched nothing; check the spelling"
+            elif note == "redundant":
+                tone = DIM
+                tail = f"  ({matched} already removed by an earlier filter — redundant, not a typo)"
+            else:
+                tone, tail = DIM, ""
             print(f"{tone}  {flag} {prefix} → {n} file(s) {verb}{tail}{OFF}")
         # The two silent defaults, stated. A literal search that should have been a regex
         # returns 0 and looks exactly like a true finding; so does a case delta. Printing
