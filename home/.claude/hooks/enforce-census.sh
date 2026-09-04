@@ -96,7 +96,14 @@ fi
 # word cannot reach the test from inside a string or after a `#` at all.
 _bare="${cmd//\\'*\\'/ }"                    # drop '...' single-quoted spans
 _bare="$(printf '%s' "$_bare" | sed -e 's/"[^"]*"/ /g' -e 's/#.*$//')"
-_cmdpos='(^|[|;&(`]|&&|\|\||\$\(|(^|[[:space:]])(xargs|time|sudo|command|env|exec|nohup)[[:space:]]+)[[:space:]]*([A-Za-z0-9_./-]*/)?(rg|ripgrep)([[:space:]]|$)'
+# A NEWLINE starts a command too, and leaving it out of the set below made the whole
+# reminder dead for multi-line commands — which is nearly all of them. Measured
+# 2026-09-04: `rg` on line 3 of a three-line command was SILENT while `grep` on line 3
+# fired, because the grep test is a plain substring and this one is anchored. Bash `=~`
+# has no multiline flag, so `^` means start-of-string, not start-of-line; the newline
+# has to be spliced into the character class by hand.
+_NL=$'\n'
+_cmdpos='(^|[|;&(`'"$_NL"']|&&|\|\||\$\(|(^|[[:space:]])(xargs|time|sudo|command|env|exec|nohup)[[:space:]]+)[[:space:]]*([A-Za-z0-9_./-]*/)?(rg|ripgrep)([[:space:]]|$)'
 
 _search="${_search:-0}"
 _tool="${_tool:-search}"

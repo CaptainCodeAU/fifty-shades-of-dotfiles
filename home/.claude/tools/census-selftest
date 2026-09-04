@@ -75,6 +75,9 @@ def corpus(base):
     # unsearched — a retired token hiding in build/ is the incident that made this matter.
     (base / "dist" / "pruned.js").write_text("CONTROL NEEDLE\n")
     (base / "blob.bin").write_bytes(b"\x00\x01NEEDLE\x00binary\xff\xfe")
+    # A name that exists only as a FILENAME, and a UTF-16 file: both were unsearchable.
+    (base / "NEEDLE_named_only.cfg").write_text("CONTROL but not the token itself\n")
+    (base / "utf16.txt").write_bytes("CONTROL NEEDLE in utf16\n".encode("utf-16"))
     return base
 
 
@@ -370,6 +373,19 @@ def main() -> int:
         rc, raw, _ = run(root, "--walk", "--json", "--control", "CONTROL", "NEEDLE")
         check("19c discover: the pointer never contaminates --json",
               rc == 0 and "--help" not in raw, "prose leaked into the JSON")
+
+        # ── 20 · edge cases found by attacking the tool a second time ───────────────
+        _, _, plain = run(root, "--walk", "--control", "CONTROL", "NEEDLE_named_only")
+        check("20a paths: a zero warns when the name lives in a PATH",
+              "PATH(S)" in plain and "NEEDLE_named_only.cfg" in plain,
+              "a filename-only survivor was reported as a clean zero")
+        _, _, plain = run(root, "--walk", "--case-sensitive", "--control", "CONTROL",
+                          "needle_named_only")
+        check("20b paths: the path check honours --case-sensitive",
+              "PATH(S)" not in plain, "it matched despite case-sensitive mode")
+        _, _, plain = run(root, "--walk", "--binary", "--control", "CONTROL", "NEEDLE")
+        check("20c utf16: --binary can actually read a UTF-16 file",
+              "utf16.txt" in plain, "--binary promised to search it and found nothing")
 
         # ── the original guarantee must still hold ──────────────────────────────────
         rc, _, plain = run(root, "--walk", "--control", "ABSENT-TOKEN", "NEEDLE")

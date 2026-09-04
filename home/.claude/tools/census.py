@@ -67,6 +67,20 @@ WHAT IT FIXES, BY CLASS
                                   honoured, because piping a painted row into grep
                                   returns a confident 0
 
+WHAT IT SEARCHES, AND WHAT IT DOES NOT
+    CONTENTS, never paths. A retired name surviving only in a FILENAME therefore counts
+    zero — on exactly the question this tool is most used for. A zero now checks the
+    paths too and says so when the name is sitting in one; it does not add path hits to
+    the count, because a filename and an occurrence are different facts.
+
+    Text, and UTF-16 when it carries a BOM. Everything else with a NUL byte in the first
+    8 KB is counted out as binary and named. `git ls-files -z` is used throughout, so a
+    filename with a space, a newline or non-ASCII characters is searched like any other;
+    such a name is escaped when printed so a result row can never span two lines.
+
+    Symlinks are followed. One pointing outside the root is read and reported under its
+    in-repo path, and a broken one is counted as unreadable rather than skipped quietly.
+
 WHAT IT DOES NOT FIX
     It cannot tell you a hit is a DEFECT. Triage is a human reading, always. A real run
     once produced six hits for a retired name and all six were legitimate.
@@ -175,9 +189,15 @@ def git_files(root, scope="tracked"):
     and `all` is the one number that needs no footnote.
     """
     def ls(args):
-        r = subprocess.run(["git", "-C", str(root), "ls-files", *args],
+        # -z, always. Without it `git ls-files` C-QUOTES any path with a non-ASCII or
+        # special character — `"caf\303\251-\342\230\225.txt"`, `"line\nbreak.txt"` —
+        # and census took the quoted spelling as the filename, failed to open it, and
+        # counted it as unreadable. Measured: 4 files in, 2 searched, 2 "unreadable",
+        # with the unicode and newline names dropped. -z emits paths verbatim, separated
+        # by NUL, so no name can be mangled and none can be split in half either.
+        r = subprocess.run(["git", "-C", str(root), "ls-files", "-z", *args],
                            capture_output=True, text=True)
-        return None if r.returncode != 0 else [f for f in r.stdout.split("\n") if f.strip()]
+        return None if r.returncode != 0 else [f for f in r.stdout.split("\0") if f]
     tracked = ls([])
     if tracked is None:
         return None
@@ -199,12 +219,13 @@ def git_unsearched(root):
     """
     def n(extra):
         r = subprocess.run(
-            ["git", "-C", str(root), "ls-files", "--others", "--exclude-standard", *extra],
+            ["git", "-C", str(root), "ls-files", "-z", "--others", "--exclude-standard",
+             *extra],
             capture_output=True, text=True,
         )
         if r.returncode != 0:
             return None
-        return len([f for f in r.stdout.split("\n") if f.strip()])
+        return len([f for f in r.stdout.split("\0") if f])
     return n(["--ignored"]), n([])
 
 
@@ -341,10 +362,30 @@ def effective(pattern, use_regex):
     return pattern if use_regex else re.escape(pattern)
 
 
+def show_path(path):
+    """A path safe to print on ONE line. Unremarkable names pass through untouched.
+
+    A filename may legally contain a newline. Printed raw it splits a result row in two,
+    so the report grows a line that carries no count and the file list stops being
+    parseable — a tool that promises never to truncate must also never smear one row
+    across two. Only names carrying control characters are escaped, so the common case
+    reads exactly as before.
+    """
+    if any(ord(c) < 0x20 or ord(c) == 0x7f for c in path):
+        return repr(path)
+    return path
+
+
 def matching_mode(use_regex, case_sensitive):
     """The two silent defaults, as a printable string. Never let a count leave without it."""
     return ("regex" if use_regex else "literal") + ", " + \
            ("case-sensitive" if case_sensitive else "case-insensitive")
+
+
+def rx_of(pattern, use_regex=False, case_sensitive=False):
+    """The compiled expression, so the path check and the content count cannot diverge."""
+    return re.compile(effective(pattern, use_regex),
+                      0 if case_sensitive else re.IGNORECASE)
 
 
 def count(root, files, pattern, use_regex, case_sensitive):
@@ -353,9 +394,18 @@ def count(root, files, pattern, use_regex, case_sensitive):
     per_file, total = {}, 0
     for f in files:
         try:
-            text = (root / f).read_text(encoding="utf-8", errors="replace")
+            raw = (root / f).read_bytes()
         except (OSError, IsADirectoryError):
             continue
+        # UTF-16 is full of NUL bytes, so classify() calls it binary and --binary is the
+        # only way to reach it — at which point read_text(utf-8) mangled every character
+        # and the search found nothing. A flag that says "also search these" and then
+        # cannot read them is a false promise, and a quiet zero inside a search the
+        # caller explicitly asked for. Honour the BOM; everything else stays UTF-8.
+        if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+            text = raw.decode("utf-16", errors="replace")
+        else:
+            text = raw.decode("utf-8", errors="replace")
         n = len(rx.findall(text))
         if n:
             per_file[f] = n
@@ -727,13 +777,31 @@ def main() -> int:
         # the control cannot catch: the control proves the FILES are reachable, never
         # that the QUESTION was asked. Fired only on a zero, so a run that produced an
         # answer stays quiet and this notice keeps its meaning.
+        # census reads CONTENTS, never paths. So a retired name surviving only in a
+        # FILENAME reports a clean zero — on the exact question the tool is most used
+        # for. Measured: `OLDNAME` returned 0 with OLDNAME_config.py sitting in the
+        # population. Fired only on a zero, where "gone" is about to be concluded, so a
+        # run that already found something stays quiet.
+        if total == 0:
+            # Same mode as the content search. Defaulting here would let the path
+            # check disagree with the count it is commenting on.
+            named = [f for f in files
+                     if rx_of(p, a.regex, a.case_sensitive).search(f)]
+            if named:
+                print(f"      {YELLOW}⚠ 0 in file CONTENTS, but the name appears in "
+                      f"{len(named)} PATH(S):{OFF}")
+                for f in named[:10]:
+                    print(f"          {YELLOW}{show_path(f)}{OFF}")
+                if len(named) > 10:
+                    print(f"          {YELLOW}… and {len(named) - 10} more{OFF}")
+                print(f"        {DIM}census searches contents only. This is not gone.{OFF}")
         if total == 0 and not a.regex and looks_like_regex(p):
             print(f"      {YELLOW}⚠ literal mode — compiled as  {effective(p, False)}\n"
                   f"        rather than as the regex  {p}\n"
                   f"        This zero may be the escaping, not a finding. "
                   f"Re-run with --regex.{OFF}")
         for f, n in sorted(per_file.items(), key=lambda kv: -kv[1]):
-            print(f"      {DIM}{n:>4}  {f}{OFF}")
+            print(f"      {DIM}{n:>4}  {show_path(f)}{OFF}")
     print(f"\n  {DIM}{'-' * 34}{OFF}\n  {'TOTAL':<28} {grand:>5}"
           f"   {DIM}across {len(files)} file(s){OFF}")
     # The --help pointer rides on the EXISTING footer rather than adding a line of its
