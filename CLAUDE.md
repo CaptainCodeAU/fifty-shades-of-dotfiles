@@ -42,6 +42,26 @@ The Claude sandbox denies reads under any `.ssh` directory (`**/.ssh` is in its 
 
 **So for anything that sweeps `home/`: dry-run first, and verify the dry run itself SUCCEEDED** — not merely that it produced output. A truncated plan looks like a plan. If it aborts on `home/.ssh`, re-run with `dangerouslyDisableSandbox: true` and compare, rather than trusting the short version.
 
+### `stow -n` PRINTS NOTHING AT DEFAULT VERBOSITY — always pass `-v2`
+
+The sibling trap, and the more dangerous one, because it has no error message at all. Measured 2026-09-04 with GNU Stow 2.4.1:
+
+```
+$ stow -n -R --no-folding -t ~ -d <repo> home        # 57 bytes, exit 0
+WARNING: in simulation mode so not modifying filesystem.
+
+$ stow -n -v2 -R --no-folding -t ~ -d <repo> home    # the actual plan
+95 UNLINK · 95 LINK (reverts previous action) · 1 LINK (genuinely new)
+```
+
+Same command, same moment. The default-verbosity run reports **zero actions and exits 0** while the real plan contains a file that is about to be linked for the first time. A newly added file under `home/` is invisible in exactly the run you would use to check whether it needs stowing.
+
+This is how `~/.claude/tools/enforce-census-selftest` sat unstowed after being committed: the file existed in the repo, the documented `~/.claude/tools/…` invocation did not work, and a default dry run said there was nothing to do. Another project's agent found it by running the documented command and getting "No such file". **An empty plan looks like a plan too** — that is the same sentence as the paragraph above, and both failure modes are silence.
+
+So: **`-v2` on every stow dry run**, and read the three counts. `UNLINK == LINK-that-reverts` means a symmetric restow with nothing new; a `LINK:` line WITHOUT `(reverts previous action)` is the only thing a restow actually adds. After a real run, verify the specific path you expected — `ls -la` the link and run the tool through its `~/` path, not its repo path.
+
+**Adding any file under `home/` is not finished until it is stowed and reached through `~/`.** A repo-path invocation proves nothing about what a fresh session, another project, or another machine can run.
+
 ## Editing
 
 Before editing a file, count its tab-indented lines with `awk '/^\t/{n++} END{print n+0}' <file>` — match the file's existing indentation exactly or the Edit tool will fail.
