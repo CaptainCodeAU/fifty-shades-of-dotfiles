@@ -66,6 +66,18 @@ from pathlib import Path
 
 RED, YELLOW, GREEN, DIM, OFF = "\033[1;31m", "\033[0;33m", "\033[0;32m", "\033[2m", "\033[0m"
 
+
+def init_colour(force_off):
+    """Paint only a terminal. Piped output is DATA, and an escape sequence is text.
+
+    Unconditional colour put a wrong zero one pipe away: `census … | grep -c '^  name'`
+    returned 0 because every result row began with an escape sequence, not with two
+    spaces. That is this tool's own failure mode, emitted by this tool.
+    """
+    global RED, YELLOW, GREEN, DIM, OFF
+    if force_off or os.environ.get("NO_COLOR") or not sys.stdout.isatty():
+        RED = YELLOW = GREEN = DIM = OFF = ""
+
 # Directories the walk never descends into. Printed on every walk run, because a
 # population trimmed by a list nobody can see is exactly the defect this tool exists
 # to remove.
@@ -163,8 +175,11 @@ def main() -> int:
     ap.add_argument("--regex", action="store_true")
     ap.add_argument("--case-sensitive", action="store_true")
     ap.add_argument("--walk", action="store_true")
+    ap.add_argument("--no-color", "--no-colour", action="store_true", dest="no_color")
     ap.add_argument("patterns", nargs="+")
     a = ap.parse_args()
+
+    init_colour(a.no_color)
 
     root = Path(a.root).resolve()
     if not root.is_dir():
