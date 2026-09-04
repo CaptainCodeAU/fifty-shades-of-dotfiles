@@ -35,7 +35,20 @@ TOOL="$HOME/.claude/tools/census.py"
 
 payload="$(cat 2>/dev/null || true)"
 [ -n "$payload" ] || exit 0
-command -v jq >/dev/null 2>&1 || exit 0
+
+# jq is this hook's SECOND instrument, and it used to fail the way the header above
+# condemns. `command -v jq || exit 0` is byte-for-byte the retired sibling's mistake:
+# lose jq and the reminder stops in every project, forever, with no signal — silence
+# read as a clean bill of health. The hook shouted about a missing census.py one screen
+# below while doing exactly the wrong thing for jq one line up.
+#
+# Shout instead, for the same reason and in the same words. The message is emitted by
+# hand here because building it needs the very tool that is missing.
+if ! command -v jq >/dev/null 2>&1; then
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"%s"},"suppressOutput":true}\n' \
+    "🔴 THE CENSUS REMINDER IS BROKEN: jq is not on PATH, so this hook cannot read the tool payload. It has been SILENT for every search in every project until now, and silence here is not a clean bill of health — it is a missing instrument. Install jq (brew install jq), then corroborate any count you already took. Do not treat a recent zero as evidence of absence."
+  exit 0
+fi
 
 tool_name="$(printf '%s' "$payload" | jq -r '.tool_name // ""' 2>/dev/null || true)"
 cmd="$(printf '%s' "$payload" | jq -r '.tool_input.command // ""' 2>/dev/null || true)"
