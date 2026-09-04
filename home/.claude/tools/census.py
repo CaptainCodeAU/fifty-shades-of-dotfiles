@@ -130,18 +130,40 @@ def walked_files(root):
     return sorted(out)
 
 
+def inside(path, prefix):
+    """True when `path` IS `prefix` or lies beneath it — on PATH boundaries, not letters.
+
+    A bare str.startswith made `--exclude d` swallow docs/, dist/ and data/ alike while
+    the header printed only `EXCLUDED: d`. The trim was silent, which is the same defect
+    as an unstated population.
+    """
+    return path == prefix or path.startswith(prefix + "/")
+
+
 def collect(root, unders, excludes, force_walk):
-    """Return (files, mode). mode is 'git' or 'walk' and is always reported."""
+    """Return (files, mode, filters). mode is 'git' or 'walk' and is always reported.
+
+    `filters` records what each --under/--exclude ACTUALLY did, so a prefix that matched
+    nothing (a typo) and one that matched half the tree cannot look the same on screen.
+    """
     files = None if force_walk else git_files(root)
     mode = "git"
     if files is None:
         files = walked_files(root)
         mode = "walk"
+
+    filters = []
+    unders = [u.strip("/") for u in unders]
+    excludes = [e.strip("/") for e in excludes]
     if unders:
-        files = [f for f in files if f.startswith(tuple(unders))]
-    if excludes:
-        files = [f for f in files if not f.startswith(tuple(excludes))]
-    return files, mode
+        for u in unders:
+            filters.append(("--under", u, sum(1 for f in files if inside(f, u)), "kept"))
+        files = [f for f in files if any(inside(f, u) for u in unders)]
+    for e in excludes:
+        n = sum(1 for f in files if inside(f, e))
+        filters.append(("--exclude", e, n, "dropped"))
+        files = [f for f in files if not inside(f, e)]
+    return files, mode, filters
 
 
 # Metacharacters whose presence in a LITERAL pattern almost always means the caller
@@ -204,7 +226,7 @@ def main() -> int:
         print(f"{RED}✗ --root {root} is not a directory — no population, no count{OFF}")
         return 2
 
-    files, mode = collect(root, a.under, a.exclude, a.walk)
+    files, mode, filters = collect(root, a.under, a.exclude, a.walk)
 
     # ── THE CONTROL, ASSERTED BEFORE ANY RESULT IS SHOWN ──────────────────────────
     ctl_total, ctl_files = count(root, files, a.control, a.regex, a.case_sensitive)
@@ -219,10 +241,14 @@ def main() -> int:
           f"{len(ctl_files)} file(s) — the instrument works{OFF}")
 
     # ── the denominator AND how it was drawn, always ──────────────────────────────
-    print(f"{DIM}  population: {len(files)} file(s) via {mode.upper()}"
-          f"{' under ' + ', '.join(a.under) if a.under else ''}"
-          f"{'  ·  EXCLUDED: ' + ', '.join(a.exclude) if a.exclude else ''}{OFF}")
+    print(f"{DIM}  population: {len(files)} file(s) via {mode.upper()}{OFF}")
     print(f"{DIM}  root: {root}{OFF}")
+    # Each filter with the number of files it moved. Naming a prefix is not the same as
+    # showing its effect, and a prefix matching 0 files is nearly always a typo.
+    for flag, prefix, n, verb in filters:
+        tone = YELLOW if n == 0 else DIM
+        tail = "  ← matched nothing; check the spelling" if n == 0 else ""
+        print(f"{tone}  {flag} {prefix} → {n} file(s) {verb}{tail}{OFF}")
     # The two silent defaults, stated. A literal search that should have been a regex
     # returns 0 and looks exactly like a true finding; so does a case delta. Printing
     # the mode costs one line and removes the whole class.
