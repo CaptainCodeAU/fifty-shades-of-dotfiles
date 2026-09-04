@@ -114,9 +114,33 @@ def collect(root, unders, excludes, force_walk):
     return files, mode
 
 
+# Metacharacters whose presence in a LITERAL pattern almost always means the caller
+# meant regex. `.` and `-` are deliberately absent: they appear in ordinary literal
+# searches (`foo.md`, `safe-rm`) and escaping them changes nothing a human cares about,
+# so including them would fire the notice on nearly every run — and a notice that always
+# fires is a notice nobody reads.
+REGEX_METACHARS = set("\\|()[]{}*+?^$")
+
+
+def looks_like_regex(pattern):
+    """True when a literal pattern carries syntax that only means something in regex mode."""
+    return any(c in REGEX_METACHARS for c in pattern)
+
+
+def effective(pattern, use_regex):
+    """The expression actually compiled. Printed whenever it is not what was typed."""
+    return pattern if use_regex else re.escape(pattern)
+
+
+def matching_mode(use_regex, case_sensitive):
+    """The two silent defaults, as a printable string. Never let a count leave without it."""
+    return ("regex" if use_regex else "literal") + ", " + \
+           ("case-sensitive" if case_sensitive else "case-insensitive")
+
+
 def count(root, files, pattern, use_regex, case_sensitive):
     flags = 0 if case_sensitive else re.IGNORECASE
-    rx = re.compile(pattern if use_regex else re.escape(pattern), flags)
+    rx = re.compile(effective(pattern, use_regex), flags)
     per_file, total = {}, 0
     for f in files:
         try:
@@ -166,6 +190,10 @@ def main() -> int:
           f"{' under ' + ', '.join(a.under) if a.under else ''}"
           f"{'  ·  EXCLUDED: ' + ', '.join(a.exclude) if a.exclude else ''}{OFF}")
     print(f"{DIM}  root: {root}{OFF}")
+    # The two silent defaults, stated. A literal search that should have been a regex
+    # returns 0 and looks exactly like a true finding; so does a case delta. Printing
+    # the mode costs one line and removes the whole class.
+    print(f"{DIM}  matching: {matching_mode(a.regex, a.case_sensitive)}{OFF}")
     if mode == "walk":
         print(f"{YELLOW}  ⚠ WALK mode — not a git repo (or --walk forced). This population is NOT\n"
               f"    complete by construction: it skips {', '.join(sorted(SKIP_DIRS))}.\n"
@@ -178,6 +206,15 @@ def main() -> int:
         grand += total
         colour = YELLOW if total else DIM
         print(f"  {colour}{p:<28}{OFF} {total:>5}")
+        # A zero from a pattern carrying regex syntax in LITERAL mode is the one case
+        # the control cannot catch: the control proves the FILES are reachable, never
+        # that the QUESTION was asked. Fired only on a zero, so a run that produced an
+        # answer stays quiet and this notice keeps its meaning.
+        if total == 0 and not a.regex and looks_like_regex(p):
+            print(f"      {YELLOW}⚠ literal mode — compiled as  {effective(p, False)}\n"
+                  f"        rather than as the regex  {p}\n"
+                  f"        This zero may be the escaping, not a finding. "
+                  f"Re-run with --regex.{OFF}")
         for f, n in sorted(per_file.items(), key=lambda kv: -kv[1]):
             print(f"      {DIM}{n:>4}  {f}{OFF}")
     print(f"\n  {DIM}{'-' * 34}{OFF}\n  {'TOTAL':<28} {grand:>5}"
