@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""census — count tokens across a project's files, and REFUSE to answer without a control.
+r"""census — count pattern hits across a project's files, and REFUSE to answer without a control.
 
 MACHINE-GLOBAL COPY. Deployed by stow to ~/.claude/tools/census.py, which is a SYMLINK
 back to this file, so the live copy and the master are the same bytes by construction.
@@ -28,6 +28,23 @@ WHY IT EXISTS — measured, not felt
       error and NO NUMBERS, because a number that cannot be trusted is worse than no
       number at all.
 
+WHAT THE CONTROL DOES AND DOES NOT PROVE (read this before quoting a zero)
+    The control and your patterns run through the SAME count(). So a green tick proves
+    the FILES ARE REACHABLE. It does not prove YOUR QUESTION WAS ASKED.
+
+      proven by the control  · --root points at a real directory
+                             · --under / --exclude left a non-empty population
+                             · those files are readable and were searched
+      NOT proven             · that your pattern means what you think it means
+
+    Measured: `--control stow '\.zshrc'` returned a GREEN control and 0 hits, while the
+    true count was 210. The control was a plain word, so it survived literal escaping;
+    the pattern was a regex, so it did not. One shared code path, two different fates.
+
+    Closed structurally, not by discipline: the header states the matching mode on every
+    run, and a pattern that returns ZERO while carrying regex syntax in literal mode
+    prints the expression actually compiled beside the one that was typed.
+
 WHAT IT FIXES, BY CLASS
     A · the unenforced control  → --control is REQUIRED and asserted before output
     C · shell word-splitting    → the file set comes from `git ls-files` (or an explicit
@@ -39,22 +56,45 @@ WHAT IT FIXES, BY CLASS
     · silent truncation         → nothing is ever headed or tailed
     · an unstated population    → the MODE is printed every run. `git` is complete by
                                   construction; `walk` is not, and says so.
+    · a silent default          → the matching mode (literal/regex, case) is printed
+                                  every run, because both defaults can turn a real
+                                  count into a zero that reads like a finding
+    · an invisible trim         → `git` mode prints how many files it never opened
+                                  (ignored, untracked); every --under/--exclude prints
+                                  how many files it actually moved, loudly at zero;
+                                  binary and unreadable files are counted out and named
+    · painted output            → colour only on a terminal. NO_COLOR and --no-color are
+                                  honoured, because piping a painted row into grep
+                                  returns a confident 0
 
 WHAT IT DOES NOT FIX
     It cannot tell you a hit is a DEFECT. Triage is a human reading, always. A real run
     once produced six hits for a retired name and all six were legitimate.
 
+    It cannot tell you your PATTERN was right — only that the files were searched. See
+    "WHAT THE CONTROL DOES AND DOES NOT PROVE" above.
+
 Usage
     uv run python3 ~/.claude/tools/census.py --control <token-known-present> PATTERN...
 
     --control TOKEN     required. A token you KNOW is present. Zero hits ⇒ exit 2.
+                        Give it the SAME syntax class as your patterns: a literal
+                        control cannot prove a regex pattern compiled as intended.
     --root PATH         project root to census (default: current directory).
-    --under PREFIX      restrict to files under this path, relative to root (repeatable).
-    --exclude PREFIX    drop files under this path (repeatable) — PRINTED, so the
-                        exclusion is always visible rather than silent.
+    --under PREFIX      restrict to this path or anything beneath it, relative to root
+                        (repeatable). Matched on PATH boundaries, so `d` never means
+                        docs/, dist/ and data/ at once.
+    --exclude PREFIX    drop this path and anything beneath it (repeatable). Both
+                        filters print the number of files they moved.
     --regex             treat patterns as regular expressions instead of literals.
     --case-sensitive    default is case-insensitive.
     --walk              force the filesystem walk even inside a git repo.
+    --binary            also search binary files (default: skipped, and the count shown).
+    --no-color          never emit ANSI. NO_COLOR is honoured too, and colour is off
+                        automatically whenever stdout is not a terminal.
+
+Exit codes
+    0  a count was produced      2  the control failed, or --root is not a directory
 """
 
 import argparse
