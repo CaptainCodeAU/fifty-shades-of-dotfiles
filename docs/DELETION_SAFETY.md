@@ -11,11 +11,19 @@ importantly — which ones **cannot** be, with the measurement that proves it.
 
 ## The chain
 
+There are two entry points, and which one runs depends only on whether a shell function is in
+scope. Both end at the same place.
+
 ```
-rm()  (home/.zshrc)  ->  safe-rm  ->  /usr/bin/trash   ->  ~/.Trash
-rmdir()              ->  safe-rm  ->  trash-put        ->  XDG trash   (Linux/WSL)
-sudo rm/rmdir        ->  safe-rm  (as the invoking user, NOT as root)
+interactive zsh   rm() / rmdir()  (home/.zshrc)   ->  safe-rm      ->  /usr/bin/trash  ->  ~/.Trash
+everything else   ~/.local/bin/rm  (PATH shim)    ->  safe-rm -q   ->  trash-put       ->  XDG trash (Linux/WSL)
+sudo rm / rmdir   sudo() (home/.zshrc)            ->  safe-rm      (as the invoking user, NOT as root)
 ```
+
+A zsh function takes precedence over `PATH`, so an interactive `rm` uses the function (which
+prints what it trashed) and a script's `rm` uses the shim (quiet, so it does not corrupt stdout
+that a caller may be parsing). Verified: `zsh -ic 'type rm'` reports the function while
+`/bin/sh -c 'command -v rm'` reports `~/.local/bin/rm`.
 
 `safe-rm` fails closed. If no trash tool is installed it exits 1 and deletes nothing; it never
 falls back to `rm`, because a silent downgrade from "recoverable" to "permanent" is the one
@@ -25,18 +33,65 @@ behaviour a safety command must not have.
 
 Measured 2026-09-04 on macOS 25.6 (Darwin), SIP enabled. Every row was run, not inferred.
 
-| Call path                       | Covered?          | Evidence                                                      |
-| ------------------------------- | ----------------- | ------------------------------------------------------------- |
-| Interactive zsh, `rm -rf dir`   | yes               | trashed to `~/.Trash/rmtest-victim`; `test -e` confirmed      |
-| Claude Code Bash tool           | yes               | `type rm` -> shell function from the session's shell snapshot |
-| `sudo rm` / `sudo rmdir`        | yes               | see below; 13-case behaviour test                             |
-| `sudo -u root rm -rf x`         | yes               | option scanner finds the command past sudo's own flags        |
-| `#!/bin/bash` script, bare `rm` | **no**            | `bash -c 'type rm'` -> `/bin/rm`                              |
-| `#!/bin/zsh` script, bare `rm`  | **no**            | `zsh -c 'type rm'` -> `/bin/rm`                               |
-| `xargs rm`, `find -exec rm`     | **no**            | test file was permanently removed                             |
-| `make clean`                    | **no**            | Makefile recipes run under `/bin/sh`                          |
-| cron / launchd / CI / git hooks | **no**            | none of them load `.zshrc`                                    |
-| `command rm`, `\rm`, `/bin/rm`  | **no, by design** | the deliberate "I really mean it" door                        |
+| Call path                       | Covered?          | Evidence                                                             |
+| ------------------------------- | ----------------- | -------------------------------------------------------------------- |
+| Interactive zsh, `rm -rf dir`   | yes               | trashed to `~/.Trash/rmtest-victim`; `test -e` confirmed             |
+| Claude Code Bash tool           | yes               | `type rm` -> shell function from the session's shell snapshot        |
+| `sudo rm` / `sudo rmdir`        | yes               | 13-case behaviour test, below                                        |
+| `sudo -u root rm -rf x`         | yes               | option scanner finds the command past sudo's own flags               |
+| `#!/bin/bash` script, bare `rm` | yes               | live: script's `rm -rf` landed in `~/.Trash/victim`                  |
+| `#!/bin/zsh` script, bare `rm`  | yes               | dummy-shim test hit the shim                                         |
+| `xargs rm`                      | yes               | live: `~/.Trash/xtarget.txt`                                         |
+| `make clean`                    | yes               | live: `~/.Trash/junk.o`, and a missing target did not break the rule |
+| `find -exec rm`                 | yes               | same PATH lookup as `xargs`                                          |
+| `command rm`, `\rm`             | yes               | these bypass functions and aliases, not `PATH`                       |
+| Homebrew formula post-install   | yes               | `formula.rb:1662` restores the user's PATH for that phase            |
+| cron / launchd / CI             | **no**            | minimal PATH; `~/.local/bin` absent                                  |
+| Homebrew internals              | **no**            | `bin/brew:308` hardcodes `PATH=/usr/bin:/bin:/usr/sbin:/sbin`        |
+| Docker `RUN rm -rf`             | **no**            | runs inside the image with its own `/bin/rm`                         |
+| `/bin/rm`                       | **no, cannot be** | absolute path never consults PATH; SIP `restricted`, see below       |
+| `SAFE_RM_OFF=1 rm ...`          | **no, by design** | the deliberate "I really mean it" door                               |
+
+## The PATH shim
+
+[`home/.local/bin/rm`](../home/.local/bin/rm) is the piece that reaches scripts. `~/.local/bin`
+is `$path[1]`, ahead of `/usr/bin` and `/bin`, so a bare `rm` resolves there first. It does three
+things and then hands off to `safe-rm`:
+
+1. Honours `SAFE_RM_OFF=1` by exec'ing `/bin/rm`, checked first so it works even if `safe-rm` is
+   broken.
+2. **Preserves rm's own directory rule.** Real `rm dir` refuses without `-r`; `trash` has no such
+   rule and takes a directory happily. Without this check the shim would quietly REMOVE a safety
+   net while claiming to add one, so a typo'd `rm build` would take the tree. Long options are
+   matched exactly, so `--preserve-root` is not mistaken for recursive because it contains an `r`.
+3. Refuses, rather than deleting, when `safe-rm` is not on PATH.
+
+Everything else is delegated deliberately. `safe-rm` already skips targets that do not exist
+(`trash` itself exits 5 on a missing path, which would break every `rm -f *.aux` in every
+Makefile), strips `--` (which `trash` mistakes for a filename), and ignores rm-style flags.
+
+### The cost, accepted knowingly
+
+`safe-rm`'s header says not to route a script's own `mktemp` scratch to the Trash, because a
+Trash full of machine noise is one nobody reads. **A PATH shim cannot tell scratch from user
+data.** Installing it therefore overrides that scope decision in exchange for total coverage.
+Measured before the choice was made: `install.sh` trashes its own temp dirs in 7 places (1564,
+1575, 1625, 1632, 1651, 1659, 2025); node/pnpm/bun lifecycle scripts get the full user PATH, so
+every `"prebuild": "rm -rf dist"` lands in the Trash; `git-filter-branch`, `git-subtree` and
+`git-mergetool` all use shell `rm` on temp checkouts.
+
+Consequences to live with:
+
+- **Empty the Trash regularly.** Space is not reclaimed until you do.
+- Repeated `dist`/`build`/`coverage` deletes become `dist 2`, `dist 3`, … in the Trash.
+- `SAFE_RM_OFF=1` before a big build if you do not want the churn.
+
+### Environment variables
+
+| Variable            | Effect                                                             |
+| ------------------- | ------------------------------------------------------------------ |
+| `SAFE_RM_OFF=1`     | Total bypass — exec `/bin/rm`. Permanent. Per command or exported. |
+| `SAFE_RM_VERBOSE=1` | Print each trashed path (drops `safe-rm -q`).                      |
 
 ## sudo rm
 

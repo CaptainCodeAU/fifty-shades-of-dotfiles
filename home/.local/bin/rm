@@ -1,0 +1,136 @@
+#!/usr/bin/env sh
+# rm -- PATH shim. Deletion goes to the Trash even when no shell function is in play.
+#
+# WHY THIS EXISTS
+# ---------------
+# ~/.zshrc defines an rm() function that routes to safe-rm, but a shell function only exists
+# inside an INTERACTIVE zsh. Measured 2026-09-04: `bash -c 'type rm'` and `zsh -c 'type rm'`
+# both report /bin/rm, and `xargs rm` permanently removed a test file. So every script, every
+# Makefile recipe, every `find -exec rm` and every `xargs rm` deleted permanently.
+#
+# This file closes that gap the only way it can be closed: as a real command on PATH.
+# ~/.local/bin is $path[1], ahead of /usr/bin and /bin, so a bare `rm` resolves here first.
+# Measured with a dummy shim: a #!/bin/bash script, a #!/bin/zsh script, `xargs rm` and
+# `make clean` all reached it.
+#
+# WHAT IT DOES NOT AND CANNOT COVER
+# ---------------------------------
+#   /bin/rm             absolute path never consults PATH. /bin/rm is SIP `restricted`, so it
+#                       can be neither replaced nor chmod'ed -- measured, see DELETION_SAFETY.md.
+#   sanitized PATH      Homebrew hardcodes PATH=/usr/bin:/bin:/usr/sbin:/sbin (bin/brew:308),
+#                       so brew's own internals never see this file. Formula post-install
+#                       scripts DO, because those run with the user's PATH.
+#   cron / launchd      minimal PATH, ~/.local/bin absent.
+#   Docker              `RUN rm -rf` executes inside the image with its own /bin/rm.
+#   everything non-rm   `> file`, git clean/reset --hard, rsync --delete, brew cleanup,
+#                       Python os.remove, Finder Shift-Delete. A delete wrapper is one door.
+#
+# SCOPE NOTE -- READ BEFORE "FIXING" THIS
+# ---------------------------------------
+# safe-rm's own header says not to route a script's own mktemp scratch to the Trash, because a
+# Trash full of machine noise is one nobody reads. A PATH shim CANNOT tell scratch from user
+# data, so installing this file knowingly overrides that scope decision in exchange for total
+# coverage. That trade was made deliberately on 2026-09-04 after the cost was measured
+# (install.sh trashes its own temp dirs in 7 places; every `"prebuild": "rm -rf dist"` lands in
+# the Trash). Empty the Trash regularly, or set SAFE_RM_OFF=1 for a build. Do not "simplify"
+# this back to a conditional shim without re-reading docs/DELETION_SAFETY.md first.
+#
+# ESCAPE HATCHES
+#   SAFE_RM_OFF=1 rm ...    real /bin/rm, permanent, for one command or one exported shell
+#   /bin/rm ...             absolute path, permanent
+#
+# NOTE that `command rm` and `\rm` are NO LONGER escape hatches. They bypass shell functions
+# and aliases, not PATH, so they now land here. That is intended; the documented doors are the
+# two above.
+#
+# OUTPUT is quiet by default (safe-rm -q). Scripts do not expect `rm` to print, and stdout
+# noise breaks callers that parse it. Set SAFE_RM_VERBOSE=1 to see each trashed path. An
+# interactive `rm` is unaffected either way -- the zsh function takes precedence over PATH and
+# prints its own line.
+
+set -u
+
+REAL_RM=/bin/rm
+
+# Total bypass, checked before anything else so it also works when safe-rm is broken.
+if [ "${SAFE_RM_OFF:-}" = "1" ]; then
+	exec "$REAL_RM" "$@"
+fi
+
+# Nothing to do. Match rm's own usage error rather than inventing one.
+if [ $# -eq 0 ]; then
+	echo "usage: rm [-f | -i] [-dIPRrvWx] file ..." >&2
+	echo "       (Trash shim -- see docs/DELETION_SAFETY.md)" >&2
+	exit 1
+fi
+
+# Walk argv ONCE, preserving order, while noting two things:
+#   recursive  -- was -r/-R/--recursive given?
+#   last_dir   -- a real directory named as a target
+# POSIX sh has no arrays: shift each arg off the front and re-append it to the end, so "$@"
+# comes out unchanged. Same technique as safe-rm.
+recursive=0
+no_more_flags=0
+last_dir=""
+argc=$#
+i=0
+while [ "$i" -lt "$argc" ]; do
+	arg="$1"
+	shift
+	i=$((i + 1))
+	set -- "$@" "$arg"
+
+	if [ "$no_more_flags" -eq 0 ]; then
+		case "$arg" in
+			--)
+				no_more_flags=1
+				continue
+				;;
+			--recursive)
+				recursive=1
+				continue
+				;;
+			-[!-]*)
+				# A short-flag cluster such as -rf. Match r/R only inside these, never
+				# inside a long option -- `--preserve-root` contains an r and must not
+				# count as recursive.
+				case "$arg" in
+					*r* | *R*) recursive=1 ;;
+				esac
+				continue
+				;;
+			--*)
+				continue
+				;;
+		esac
+	fi
+
+	# A target. Real rm REFUSES a directory without -r, and that is a genuine safety check:
+	# a typo'd `rm build` should not remove the tree. The Trash tools have no such rule --
+	# `trash` takes a directory happily -- so without this the shim would quietly DELETE a
+	# safety net while claiming to add one.
+	if [ -d "$arg" ] && [ ! -L "$arg" ]; then
+		last_dir="$arg"
+	fi
+done
+
+if [ "$recursive" -eq 0 ] && [ -n "$last_dir" ]; then
+	echo "rm: $last_dir: is a directory" >&2
+	exit 1
+fi
+
+# safe-rm is the single owner of "how do we move something to the Trash": it skips targets
+# that do not exist (rm -f semantics -- `trash` itself exits 5 on a missing path, which would
+# break every `rm -f *.aux` in every Makefile), strips `--` (which `trash` mistakes for a
+# filename), accepts and ignores rm-style flags, and NEVER falls back to a permanent delete.
+if ! command -v safe-rm >/dev/null 2>&1; then
+	echo "rm: safe-rm not found on PATH -- refusing to delete." >&2
+	echo "    It ships in this dotfiles repo at ~/.local/bin/safe-rm; run ./install.sh." >&2
+	echo "    Deliberate permanent delete: SAFE_RM_OFF=1 rm ...   or   /bin/rm ..." >&2
+	exit 1
+fi
+
+if [ "${SAFE_RM_VERBOSE:-}" = "1" ]; then
+	exec safe-rm "$@"
+fi
+exec safe-rm -q "$@"

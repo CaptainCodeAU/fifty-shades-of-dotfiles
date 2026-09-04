@@ -11,13 +11,21 @@
 # protection has to live in a command on PATH, not in a shell function, so that callers
 # outside an interactive shell get it too.
 #
-# SCOPE (deliberate, decided 2026-08-10)
-# --------------------------------------
+# SCOPE (deliberate, decided 2026-08-10; superseded in practice 2026-09-04 -- read on)
+# --------------------------------------------------------------------------------------
 # Use safe-rm for anything the caller did NOT create itself in a temp directory: the user's
 # files, installed artifacts, generated trees inside their projects. Do NOT use it for a
 # script's own mktemp scratch -- routing that here would drop a scratch directory into the
 # Trash on every SessionStart hook run, and a Trash full of machine noise is one nobody
 # reads, which defeats the point of having a recoverable delete at all.
+#
+# THAT RULE STILL STANDS FOR DIRECT CALLERS -- call /bin/rm for your own scratch, not safe-rm.
+# But it is no longer enforceable for a BARE `rm`, because ~/.local/bin/rm now shims every rm
+# on PATH straight to here and a shim cannot tell scratch from user data. The operator chose
+# total coverage over a quiet Trash on 2026-09-04, with the cost measured first. So: a script
+# that writes `rm -rf "$tmp"` WILL fill the Trash, and that is now expected rather than a bug.
+# To keep scratch out of it, write `/bin/rm -rf "$tmp"` or set SAFE_RM_OFF=1.
+# See docs/DELETION_SAFETY.md.
 #
 # USAGE
 #   safe-rm [-q|--quiet] [rm-style flags, accepted and ignored] [--] TARGET...
