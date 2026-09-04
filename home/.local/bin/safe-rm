@@ -225,8 +225,22 @@ done
 
 if [ -n "$still" ]; then
 	[ -n "$gone" ] && echo "safe-rm: PARTIAL -- these WERE trashed:${gone}" >&2
-	echo "safe-rm: these still exist and were NOT deleted:${still}" >&2
-	echo "         (${trash_cmd} exit ${trc}; nothing was deleted permanently)" >&2
+	# Deliberately worded as "still exist", NOT "were not deleted". Those are different
+	# claims and only the first one has been verified. A path can exist again because the
+	# trash call did nothing, or because something RECREATED it in the moment afterwards --
+	# a daemon re-binding its socket does exactly this, and there are three such sockets on
+	# this machine. Measured: with a trash that removes then recreates, safe-rm reported
+	# "still exist", which is true, where "were NOT deleted" would have been false.
+	#
+	# Telling the two apart would mean recording each target's inode before the call and
+	# comparing after. That is doable and was considered; it was rejected because it adds
+	# a stat-per-target and a BSD/GNU portability branch to the one script that must stay
+	# obviously correct, in exchange for sharpening a message that is already true. If this
+	# ever needs to be exact, that is the way to do it.
+	echo "safe-rm: these paths still exist after the trash call:${still}" >&2
+	echo "         Either they were not moved, or something recreated them. If a path was" >&2
+	echo "         recreated, the original is in the Trash. Nothing was deleted permanently." >&2
+	echo "         (${trash_cmd} exit ${trc})" >&2
 	exit 1
 fi
 

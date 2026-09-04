@@ -236,5 +236,70 @@ if [ -x "$RM_SHIM" ]; then
 fi
 
 # --------------------------------------------------------------------------------------
+echo "8. Hostile and awkward names must behave, and the guards must not over-fire"
+# The `.`/`..` guard is a pattern match, so the risk runs both ways: it must catch the real
+# thing and must NOT catch an ordinary dotfile. `.git` matching would be quietly disastrous.
+d=$(newdir "names")
+for n in .hidden ..foo .... .git a..b ...; do : > "$d/$n"; done
+overfired=""
+for n in .hidden ..foo .... .git a..b ...; do
+	run "$d" "$SAFE_RM" -q -- "$n"
+	[ -e "$d/$n" ] && overfired="${overfired} $n"
+done
+[ -z "$overfired" ] && ok "dot-guard does not over-fire on .hidden .git .... a..b" \
+                    || bad "dot-guard wrongly refused:${overfired}"
+
+# A name containing a newline is the classic way to break a shell script's bookkeeping.
+d=$(newdir "newline")
+printf 'x' > "$d/new
+line.txt"
+run "$d" "$SAFE_RM" -q -- "new
+line.txt"
+[ ! -e "$d/new
+line.txt" ] && ok "a filename containing a newline is trashed" \
+             || bad "newline filename survived"
+
+# Glob metacharacters as literal name characters, not as a pattern.
+d=$(newdir "globchars")
+: > "$d/star*.txt"; : > "$d/q?.txt"; : > "$d/br[ack].txt"
+run "$d" "$SAFE_RM" -q -- 'star*.txt' 'q?.txt' 'br[ack].txt'
+if [ ! -e "$d/star*.txt" ] && [ ! -e "$d/q?.txt" ] && [ ! -e "$d/br[ack].txt" ]; then
+	ok "glob metacharacters in a name are treated literally"
+else
+	bad "a name with * ? or [ ] survived"
+fi
+
+# argv is rotated through "$@" three times in this script. If that ever drops or reorders an
+# operand, it will show up at volume long before it shows up with two targets.
+d=$(newdir "many")
+n=0
+while [ "$n" -lt 200 ]; do n=$((n + 1)); : > "$d/f$n"; done
+( CDPATH= cd -- "$d" && "$SAFE_RM" -q -- f* ) >/dev/null 2>&1
+left=$(find "$d" -type f | wc -l | tr -d ' ')
+[ "$left" = "0" ] && ok "200 targets in one call, none dropped by argv rotation" \
+                  || bad "$left of 200 targets were dropped"
+
+# A file literally named `--`, and a dangling symlink (-e is false, -L is true).
+d=$(newdir "edge")
+: > "$d/--"
+ln -s /nonexistent-target-xyz "$d/dangling"
+run "$d" "$SAFE_RM" -q -- --
+[ ! -e "$d/--" ] && ok "a file named '--' is trashed" || bad "'--' survived"
+run "$d" "$SAFE_RM" -q dangling
+[ ! -L "$d/dangling" ] && ok "a dangling symlink is trashed" || bad "dangling symlink survived"
+
+# Removing a symlink must remove the LINK, never follow it into the directory.
+d=$(newdir "symdir")
+mkdir -p "$d/realdir"; : > "$d/realdir/inside.txt"
+ln -s realdir "$d/link"
+run "$d" "$SAFE_RM" -q link
+if [ -e "$d/realdir/inside.txt" ] && [ ! -L "$d/link" ]; then
+	ok "trashing a symlink-to-directory removes the link, not the target"
+else
+	bad "symlink-to-directory: target contents present=$([ -e "$d/realdir/inside.txt" ] && echo yes || echo NO)"
+fi
+echo
+
+# --------------------------------------------------------------------------------------
 printf 'pass=%d fail=%d\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
