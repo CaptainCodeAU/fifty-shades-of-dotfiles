@@ -78,6 +78,19 @@ SUBJECT = "brew"
 # login shell that blocks for a quarter of an hour is a tool people delete.
 # A dozen changed formulae after a `brew upgrade` is a few seconds and fine.
 FAST_MAX_INLINE = 12
+# How long a cached verdict stays trustworthy. THE CACHE KEY IS NOT ENOUGH: it is
+# (name, version, revision) with no time in it, and NVD is not a fixed function of
+# a version -- it re-analyses, corrects ranges, and publishes new CVEs against
+# versions that never move. Measured 2026-09-04: a python@3.14 row from 08-18
+# survived NVD bounding its CVE on 08-20 and the banner cried wolf for 17 days,
+# while 97 of 231 rows were 32 days old. The quiet direction is the dangerous one
+# -- a CVE published tomorrow against an unchanged version was undiscoverable.
+#
+# Seven days is affordable here because an NVD API key raises the rate limit to
+# 50 requests / 30s, making a whole-inventory sweep about five minutes. It runs
+# detached and lock-protected via spawn_background, so a stale backlog never
+# blocks a login -- see THE SHELL-SAFETY GUARD below.
+STALE_AFTER_DAYS = 7
 
 
 # --------------------------------------------------------------------------- #
@@ -345,9 +358,11 @@ def run_scan(store, args, announce):
     # conclude that the other 230 formulae have been uninstalled.
     reaped = 0 if args.only else store.reap(SUBJECT, live_keys)
 
+    max_age = args.stale_days * 86400
     todo = []
     for name, version, revision, _raw in inv:
-        if args.full or args.only or store.known(SUBJECT, name, version, revision) is None:
+        if (args.full or args.only
+                or store.known(SUBJECT, name, version, revision, max_age) is None):
             todo.append((name, version, revision))
 
     if args.limit:
@@ -618,6 +633,9 @@ def parse_args(argv):
     p.add_argument("--fast", action="store_true",
                    help="shell-startup mode: silent when nothing changed")
     p.add_argument("--full", action="store_true", help="rescan everything, ignoring the cache")
+    p.add_argument("--stale-days", type=int, default=STALE_AFTER_DAYS, metavar="N",
+                   help=f"re-check a cached verdict older than N days "
+                        f"(default {STALE_AFTER_DAYS}; 0 disables expiry)")
     p.add_argument("--report", action="store_true", help="write the briefing file")
     p.add_argument("--json", dest="as_json", action="store_true", help="machine-readable output")
     p.add_argument("--quiet", action="store_true", help="only exposures and unknowns")

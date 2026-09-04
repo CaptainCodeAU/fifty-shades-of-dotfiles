@@ -789,11 +789,33 @@ class ScanStore:
             self.path = ":memory:"
             return conn
 
-    def known(self, subject, name, version, revision):
+    def known(self, subject, name, version, revision, max_age=None):
+        """The cached row, or None if there is none -- or it is older than `max_age`.
+
+        `max_age` (seconds) exists because THE KEY IS NOT ENOUGH. It is
+        (subject, name, version, revision) with no time in it, so a row was reused
+        for as long as the installed version held, and NVD is not a fixed
+        function of a version: it re-analyses, corrects ranges, and publishes new
+        CVEs against versions that have not moved.
+
+        Measured 2026-09-04 on this machine: the python@3.14 row was written
+        2026-08-18; NVD bounded CVE-2026-15308 at `versionEndExcluding 3.14.7` on
+        2026-08-20; the banner went on reporting a fixed CVE as live for 17 days.
+        97 of 231 rows were from 2026-08-03. The false positive is what got
+        noticed, but the false NEGATIVE is the same bug and worse: a CVE published
+        tomorrow against libssh2 1.11.1_4 would never be found, because nothing
+        about that row changes. Without an age, this scanner can only discover a
+        CVE at the moment a package version changes.
+
+        None or 0 means never expire, which is the pre-2026-09-04 behaviour and is
+        what a caller that has its own freshness policy should pass."""
         cur = self.conn.execute(
             "SELECT * FROM scanned WHERE subject=? AND name=? AND version=? AND revision=?",
             (subject, name, version, revision))
-        return cur.fetchone()
+        row = cur.fetchone()
+        if row is None or not max_age:
+            return row
+        return row if (time.time() - row["scanned_at"]) <= max_age else None
 
     def record(self, subject, name, version, revision, cpe, status, worst_score, findings):
         self.conn.execute(

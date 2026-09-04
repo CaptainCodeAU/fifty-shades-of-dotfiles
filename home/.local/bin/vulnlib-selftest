@@ -250,6 +250,41 @@ check("the same patch under `head do` IS still asked about",
 check("no patches -> empty list", V.unclaimed_patches("fx-keg", None, set()), [])
 
 # --------------------------------------------------------------------------- #
+section("cache freshness: a row must not be trusted forever")
+# --------------------------------------------------------------------------- #
+# The cache had no time component at all, so `known()` reused a row for as long as
+# the installed version held. Measured 2026-09-04: the python@3.14 row was written
+# 2026-08-18, NVD bounded the CVE on 2026-08-20, and the banner reported a fixed
+# CVE for 17 days; 97 of 231 rows were 32 days old. The false-NEGATIVE direction is
+# the same bug and worse -- a CVE published tomorrow against a version that does
+# not change would never be found at all.
+import tempfile, time as _time
+
+_db = os.path.join(tempfile.mkdtemp(prefix="vulnlib-selftest-"), "scan.db")
+_store = V.ScanStore(_db)
+_store.record("brew", "fresh-pkg", "1.0", 0, "a:b", "clean", None, [])
+_store.record("brew", "stale-pkg", "1.0", 0, "a:b", "clean", None, [])
+_store.conn.execute("UPDATE scanned SET scanned_at=? WHERE name='stale-pkg'",
+                    (int(_time.time()) - 30 * 86400,))
+_store.commit()
+
+_args = ("brew", "fresh-pkg", "1.0", 0)
+_stale = ("brew", "stale-pkg", "1.0", 0)
+check("no max_age: a 30-day-old row is still known (old behaviour)",
+      _store.known(*_stale) is not None, True)
+check("max_age=7d: the 30-day-old row is NOT known",
+      _store.known(*_stale, max_age=7 * 86400), None)
+check("max_age=7d: a row written just now IS known",
+      _store.known(*_args, max_age=7 * 86400) is not None, True)
+check("max_age=0 disables expiry entirely",
+      _store.known(*_stale, max_age=0) is not None, True)
+check("max_age=None disables expiry entirely",
+      _store.known(*_stale, max_age=None) is not None, True)
+check("an absent row is still None with a max_age",
+      _store.known("brew", "no-such-pkg", "1.0", 0, max_age=7 * 86400), None)
+
+
+# --------------------------------------------------------------------------- #
 section("live kegs (read-only; skipped if not installed)")
 # --------------------------------------------------------------------------- #
 for name, want in [("libssh2", {"CVE-2026-7598", "CVE-2026-58050", "CVE-2026-58051"}),
