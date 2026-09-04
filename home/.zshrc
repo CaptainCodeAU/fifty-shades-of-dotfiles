@@ -967,15 +967,38 @@ sudo() {
 		#   sudo sh -c 'rm -rf x'   the rm is inside a string; no wrapper can see it
 		# See docs/DELETION_SAFETY.md.
 		local -a _sudo_rest=()
-		local _sudo_cmd="" _sudo_skip=0 _sudo_seen=0 _sudo_arg
+		local _sudo_cmd="" _sudo_skip=0 _sudo_seen=0 _sudo_arg _sudo_c _sudo_tail
 		for _sudo_arg in "$@"; do
 			if (( _sudo_seen )); then _sudo_rest+=("$_sudo_arg"); continue; fi
 			if (( _sudo_skip )); then _sudo_skip=0; continue; fi
 			case "$_sudo_arg" in
-				# sudo options that consume the NEXT argument
-				-C|-D|-g|-h|-p|-R|-r|-t|-T|-U|-u|--chdir|--close-from|--group|--host|--prompt|--chroot|--role|--type|--command-timeout|--other-user|--user)
+				# Long options that consume the NEXT argument. The --opt=value form
+				# carries its own value, so it falls to the catch-all below instead.
+				--chdir|--close-from|--group|--host|--prompt|--chroot|--role|--type|--command-timeout|--other-user|--user)
 					_sudo_skip=1 ;;
-				--|-*) ;;          # flag with no value, or the end-of-options marker
+				-[!-]*)
+					# A short-flag CLUSTER. getopt lets you write `-nu root`, so whether
+					# a value follows depends on where the value-taking letter sits, not
+					# on the first letter. Walk the cluster: the first value-taking
+					# letter swallows the REST of the cluster if there is any (`-uroot`),
+					# otherwise it swallows the NEXT argument (`-nu root`).
+					#
+					# Getting this wrong is not cosmetic. Measured 2026-09-04, before the
+					# fix: `sudo -nu root rm -rf /x` read `root` as the command and handed
+					# the whole line to real sudo -- a guard that reports protection and
+					# provides none, which is the exact failure this repo keeps hitting.
+					_sudo_tail="${_sudo_arg#-}"
+					while [[ -n "$_sudo_tail" ]]; do
+						_sudo_c="${_sudo_tail[1]}"
+						_sudo_tail="${_sudo_tail[2,-1]}"
+						case "$_sudo_c" in
+							C|D|g|h|p|R|r|t|T|U|u)
+								[[ -z "$_sudo_tail" ]] && _sudo_skip=1
+								_sudo_tail="" ;;
+						esac
+					done
+					;;
+				--|-*) ;;          # end-of-options marker, or a long flag with no value
 				*=*) ;;            # VAR=value assignment, not the command
 				*) _sudo_cmd="$_sudo_arg"; _sudo_seen=1 ;;
 			esac
