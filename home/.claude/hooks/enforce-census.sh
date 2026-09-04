@@ -58,6 +58,19 @@ cmd="$(printf '%s' "$payload" | jq -r '.tool_input.command // ""' 2>/dev/null ||
 # and honours .gitignore by default, and it answers a miss with the bare words "No matches
 # found" — no denominator, no statement of what it searched. That is the most confident
 # nothing in the whole toolkit, and it was the one route this hook never covered.
+# STATUS OF THIS BRANCH, so nobody re-litigates it. The built-in Grep tool does not
+# exist in Claude Code sessions on this machine — measured 2026-09-04 in a default-mode
+# session that listed its own toolset: 13 live tools, 36 deferred, "Neither Grep nor Glob
+# is in that list", with `Grep` and `Glob` sitting in permissions.allow the whole time.
+# It is absent from the build, not permission-gated, so NO flag restores it.
+#
+# The branch is therefore correct but unexercised, and was proven by mechanism instead:
+#   1. a settings.json matcher for a NON-Bash tool does route real calls to a hook —
+#      a throwaway repo with a `Read` matcher logged "FIRED for tool_name=Read" from a
+#      genuine Read tool call, with the right tool_name in the payload
+#   2. this hook, fed {"tool_name":"Grep"}, fires with the right wording (truth table)
+#   3. the Grep matcher entry is present and schema-valid in ~/.claude/settings.json
+# Every link tested; only the tool itself is missing. If it ever appears, this fires.
 if [ "$tool_name" = "Grep" ]; then
   _search=1
   _tool="Grep-tool search"
