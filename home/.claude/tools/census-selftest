@@ -1,0 +1,203 @@
+#!/usr/bin/env python3
+r"""census-selftest — prove census.py still refuses to answer confidently and wrongly.
+
+Every check here is a REGRESSION TEST for a defect that was live in census.py and was
+measured, not imagined. Five were reported by another project's agent; two were found
+while re-measuring their report.
+
+    1  colour   ANSI in piped output made `census … | grep '^  name'` return 0
+    2  control  a literal control passed while a regex pattern silently returned 0
+    3  mode     literal + case-insensitive were never printed
+    4  case     311 vs 289 hits for the same word, with nothing saying which ran
+    5  hidden   142 ignored files never searched and never mentioned
+    6  prefix   `--exclude d` swallowed docs/, dist/ and data/ together
+    7  binary   an mp3 was scanned and contributed a hit nobody could triage
+
+THE HARNESS PROVES ITSELF FIRST. Before any assertion runs, a positive control checks
+that census can be invoked at all and produces a known non-zero count. Without it a
+broken runner reports seven passes, or seven failures, and both are meaningless — the
+exact failure census exists to prevent, in the tool that tests census.
+
+    uv run python3 ~/.claude/tools/census-selftest
+"""
+
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+CENSUS = Path(__file__).resolve().parent / "census.py"
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+GREEN, RED, YELLOW, DIM, OFF = "\033[0;32m", "\033[1;31m", "\033[0;33m", "\033[2m", "\033[0m"
+if not sys.stdout.isatty() or os.environ.get("NO_COLOR"):
+    GREEN = RED = YELLOW = DIM = OFF = ""
+
+failures = []
+
+
+def run(root, *args, env=None):
+    """Invoke census. Returns (returncode, stdout+stderr as written, plain text)."""
+    e = dict(os.environ)
+    e.pop("NO_COLOR", None)
+    if env:
+        e.update(env)
+    r = subprocess.run(
+        [sys.executable, str(CENSUS), "--root", str(root), *args],
+        capture_output=True, text=True, env=e,
+    )
+    raw = r.stdout + r.stderr
+    return r.returncode, raw, ANSI.sub("", raw)
+
+
+def check(name, ok, detail=""):
+    if ok:
+        print(f"  {GREEN}PASS{OFF}  {name}")
+    else:
+        print(f"  {RED}FAIL{OFF}  {name}{DIM}{('  — ' + detail) if detail else ''}{OFF}")
+        failures.append(name)
+    return ok
+
+
+def corpus(base):
+    """A tree with one file of every shape the checks need."""
+    for d in ("docs", "dist", "data", "sub"):
+        (base / d).mkdir(parents=True, exist_ok=True)
+    (base / "docs" / "a.md").write_text("CONTROL NEEDLE and .zshrc here\n")
+    (base / "data" / "c.txt").write_text("NEEDLE .zshrc\n")
+    (base / "sub" / "d.txt").write_text("CONTROL NEEDLE needle\n")   # casing differs
+    (base / "keep.txt").write_text("CONTROL NEEDLE\n")
+    (base / "blob.bin").write_bytes(b"\x00\x01NEEDLE\x00binary\xff\xfe")
+    return base
+
+
+def main() -> int:
+    if not CENSUS.is_file():
+        print(f"{RED}census.py not found next to this script at {CENSUS}{OFF}")
+        return 2
+
+    tmp = Path(tempfile.mkdtemp(prefix="census-selftest-"))
+    try:
+        root = corpus(tmp)
+        W = ("--walk", "--control", "CONTROL")
+
+        # ── HARNESS CONTROL — no assertion runs until census is proven callable ──────
+        rc, _, plain = run(root, *W, "NEEDLE")
+        m = re.search(r"^\s*NEEDLE\s+(\d+)\s*$", plain, re.M)
+        if rc != 0 or not m or int(m.group(1)) == 0:
+            print(f"{RED}✗ HARNESS CONTROL FAILED — census did not produce a known "
+                  f"non-zero count (rc={rc}).{OFF}")
+            print(f"  {DIM}No checks were run. A suite that cannot produce a PASS cannot\n"
+                  f"  produce a meaningful FAIL either.{OFF}\n{plain}")
+            return 2
+        print(f"{GREEN}✓ harness{OFF} {DIM}census callable, NEEDLE → {m.group(1)} "
+              f"hit(s) — the runner works{OFF}\n")
+
+        # ── 1 · colour never reaches a pipe, and NO_COLOR/--no-color are honoured ────
+        # Every check demands rc == 0. "No ANSI" is trivially true of a run that
+        # crashed and printed nothing — a version lacking --no-color entirely would
+        # otherwise PASS 1c by rejecting the flag.
+        rc, raw, _ = run(root, *W, "NEEDLE")
+        check("1a colour: no ANSI when stdout is a pipe", rc == 0 and "\x1b[" not in raw)
+        rc, raw, _ = run(root, *W, "NEEDLE", env={"NO_COLOR": "1"})
+        check("1b colour: NO_COLOR honoured", rc == 0 and "\x1b[" not in raw)
+        rc, raw, _ = run(root, "--no-color", *W, "NEEDLE")
+        check("1c colour: --no-color accepted and honoured",
+              rc == 0 and "\x1b[" not in raw, f"rc={rc}")
+        rc, _, plain = run(root, *W, "NEEDLE")
+        check("1d colour: a result row survives a naive grep",
+              rc == 0 and any(l.startswith("  NEEDLE") for l in plain.splitlines()))
+
+        # ── 2 · a zero caused by literal escaping is called out, not reported clean ──
+        _, _, plain = run(root, *W, r"\.zshrc")
+        zero = re.search(r"^\s*\\\.zshrc\s+0\s*$", plain, re.M)
+        check("2a control: literal-mode zero is flagged, not silent",
+              bool(zero) and "literal mode" in plain and "--regex" in plain,
+              "a regex pattern returned 0 with no warning")
+        _, _, plain = run(root, "--regex", *W, r"\.zshrc")
+        m = re.search(r"^\s*\\\.zshrc\s+(\d+)\s*$", plain, re.M)
+        check("2b control: --regex finds what literal mode could not",
+              bool(m) and int(m.group(1)) == 2, "expected 2 hits for .zshrc")
+        _, _, plain = run(root, *W, "NEEDLE")
+        check("2c control: a clean run stays quiet about literal mode",
+              "literal mode —" not in plain, "the notice fires when it should not")
+
+        # ── 3+4 · both silent defaults are stated on every run ───────────────────────
+        _, _, plain = run(root, *W, "NEEDLE")
+        check("3 mode: matching mode printed by default",
+              "matching: literal, case-insensitive" in plain)
+        _, _, plain = run(root, "--regex", "--case-sensitive", *W, "NEEDLE")
+        check("4a case: --case-sensitive reflected in the header",
+              "matching: regex, case-sensitive" in plain)
+        _, _, ins = run(root, *W, "needle")
+        _, _, sen = run(root, "--case-sensitive", *W, "needle")
+        gi = re.search(r"^\s*needle\s+(\d+)\s*$", ins, re.M)
+        gs = re.search(r"^\s*needle\s+(\d+)\s*$", sen, re.M)
+        check("4b case: the two modes really do differ",
+              bool(gi) and bool(gs) and int(gi.group(1)) > int(gs.group(1)),
+              f"insensitive={gi and gi.group(1)} sensitive={gs and gs.group(1)}")
+
+        # ── 5 · git mode names the files it never opened ─────────────────────────────
+        git = Path(tempfile.mkdtemp(prefix="census-selftest-git-"))
+        try:
+            corpus(git)
+            (git / ".gitignore").write_text("secret/\n")
+            (git / "secret").mkdir()
+            (git / "secret" / "hidden.txt").write_text("CONTROL NEEDLE\n")
+            for cmd in (["init", "-q"], ["add", "-A"]):
+                subprocess.run(["git", "-C", str(git), *cmd], check=True,
+                               capture_output=True)
+            _, _, plain = run(git, "--control", "CONTROL", "NEEDLE")
+            check("5a hidden: git mode reports ignored files it never searched",
+                  re.search(r"NOT searched: [1-9]\d* ignored", plain) is not None)
+            check("5b hidden: the ignored file is genuinely absent from the count",
+                  "secret/hidden.txt" not in plain)
+        finally:
+            shutil.rmtree(git, ignore_errors=True)
+
+        # ── 6 · filters match path boundaries, and their effect is visible ───────────
+        _, _, full = run(root, *W, "NEEDLE")
+        _, _, part = run(root, "--exclude", "docs", *W, "NEEDLE")
+        _, _, typo = run(root, "--exclude", "d", *W, "NEEDLE")
+        pop = lambda t: int(re.search(r"population: (\d+) file", t).group(1))
+        check("6a prefix: --exclude docs drops exactly docs/",
+              pop(part) == pop(full) - 1, f"{pop(full)} → {pop(part)}")
+        check("6b prefix: --exclude d does NOT swallow docs/ data/",
+              pop(typo) == pop(full), f"{pop(full)} → {pop(typo)}")
+        check("6c prefix: a filter matching nothing says so",
+              "matched nothing" in typo)
+        check("6d prefix: a filter that worked reports its count",
+              "--exclude docs → 1 file(s) dropped" in part)
+
+        # ── 7 · binaries are counted out, and named ──────────────────────────────────
+        rc, _, plain = run(root, *W, "NEEDLE")
+        check("7a binary: binary files excluded by default",
+              rc == 0 and "blob.bin" not in plain and "binary" in plain)
+        rc, _, plain = run(root, "--binary", *W, "NEEDLE")
+        check("7b binary: --binary accepted and puts them back",
+              rc == 0 and "blob.bin" in plain, f"rc={rc}")
+
+        # ── the original guarantee must still hold ──────────────────────────────────
+        rc, _, plain = run(root, "--walk", "--control", "ABSENT-TOKEN", "NEEDLE")
+        check("8a control still refuses: exit 2 when the control misses", rc == 2)
+        check("8b control still refuses: no numbers are printed",
+              "CONTROL FAILED" in plain and "TOTAL" not in plain)
+        rc, _, _ = run(root / "does-not-exist", *W, "NEEDLE")
+        check("8c control still refuses: a bad --root exits 2", rc == 2)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    print()
+    if failures:
+        print(f"{RED}✗ {len(failures)} check(s) FAILED:{OFF} " + ", ".join(failures))
+        return 1
+    print(f"{GREEN}✓ all checks passed{OFF} {DIM}— census still refuses to answer "
+          f"confidently when it cannot answer correctly{OFF}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
