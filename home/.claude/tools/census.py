@@ -158,16 +158,28 @@ def git_unsearched(root):
 
 
 def walked_files(root):
-    """Every readable file under root, minus SKIP_DIRS. NOT complete by construction."""
-    out = []
+    """(files, skipped) — everything under root minus SKIP_DIRS, and HOW MANY that cost.
+
+    Naming the skipped directories was not enough. A retired token living in build/ made
+    a real session read `0` from walk mode and start to call it gone; the list of skipped
+    names was on screen, in a wall of nineteen entries, and carried no number. `it skips
+    … build …` and `2 file(s) inside skipped directories were NOT searched` land very
+    differently, and only the second is a quantity you can act on.
+    """
+    out, skipped = [], 0
     for dirpath, dirnames, filenames in os.walk(root):
+        pruned = [d for d in dirnames if d in SKIP_DIRS]
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        for d in pruned:                       # count what the prune actually cost
+            for _, _, fs in os.walk(os.path.join(dirpath, d)):
+                skipped += len(fs)
         for name in filenames:
             if name in SKIP_DIRS:
+                skipped += 1
                 continue
             rel = os.path.relpath(os.path.join(dirpath, name), root)
             out.append(rel)
-    return sorted(out)
+    return sorted(out), skipped
 
 
 def inside(path, prefix):
@@ -204,9 +216,9 @@ def collect(root, unders, excludes, force_walk, include_binary=False):
     the denominator stays the set actually searched.
     """
     files = None if force_walk else git_files(root)
-    mode = "git"
+    mode, skipped = "git", 0
     if files is None:
-        files = walked_files(root)
+        files, skipped = walked_files(root)
         mode = "walk"
 
     filters = []
@@ -230,7 +242,7 @@ def collect(root, unders, excludes, force_walk, include_binary=False):
         filters.append(("binary", "(NUL byte in first 8 KB)", len(binaries), "dropped"))
     keep = {"text"} | ({"binary"} if include_binary else set())
     files = [f for f in files if kinds[f] in keep]
-    return files, mode, filters
+    return files, mode, filters, skipped
 
 
 # Metacharacters whose presence in a LITERAL pattern almost always means the caller
@@ -355,7 +367,7 @@ def main() -> int:
         print(f"{RED}✗ --root {root} is not a directory — no population, no count{OFF}")
         return 2
 
-    files, mode, filters = collect(root, a.under, a.exclude, a.walk, a.binary)
+    files, mode, filters, skipped = collect(root, a.under, a.exclude, a.walk, a.binary)
 
     # ── the denominator AND how it was drawn, ON BOTH PATHS ───────────────────────
     # This block used to run only AFTER the control passed, so a CONTROL FAILED run
@@ -387,6 +399,12 @@ def main() -> int:
                 print(f"{tone}  NOT searched: {ignored} ignored, {untracked} untracked"
                       f"{' — git mode covers tracked files only' if hidden else ''}{OFF}")
         if mode == "walk":
+            # The COUNT first, then the names. A list of nineteen directory names is
+            # scenery; "2 file(s) ... NOT searched" is a quantity, and a quantity is the
+            # thing a reader weighs against a zero.
+            tone = YELLOW if skipped else DIM
+            print(f"{tone}  NOT searched: {skipped} file(s) inside skipped directories"
+                  f"{' — a hit could be in any of them' if skipped else ''}{OFF}")
             print(f"{YELLOW}  ⚠ WALK mode — not a git repo (or --walk forced). This population is NOT\n"
                   f"    complete by construction: it skips {', '.join(sorted(SKIP_DIRS))}.\n"
                   f"    State that limit alongside any number you quote from this run.{OFF}")
