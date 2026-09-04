@@ -128,15 +128,24 @@ SKIP_DIRS = {
 }
 
 
-def git_files(root):
-    """Tracked files, complete by construction. Returns None if this is not a git repo."""
-    r = subprocess.run(
-        ["git", "-C", str(root), "ls-files"],
-        capture_output=True, text=True,
-    )
-    if r.returncode != 0:
-        return None
-    return [f for f in r.stdout.split("\n") if f.strip()]
+def git_files(root, include_ignored=False):
+    """Tracked files, complete by construction. Returns None if this is not a git repo.
+
+    With include_ignored, the ignored and untracked files are added too, so the
+    population becomes everything on disk that git knows about. Reporting the size of
+    that blind spot was only half the fix: a rename that must be verified clean needs to
+    SEARCH those files, and until now census offered no way to do it at all.
+    """
+    def ls(args):
+        r = subprocess.run(["git", "-C", str(root), "ls-files", *args],
+                           capture_output=True, text=True)
+        return None if r.returncode != 0 else [f for f in r.stdout.split("\n") if f.strip()]
+    files = ls([])
+    if files is None or not include_ignored:
+        return files
+    extra = ls(["--others", "--exclude-standard", "--ignored"]) or []
+    extra += ls(["--others", "--exclude-standard"]) or []
+    return sorted(set(files) | set(extra))
 
 
 def git_unsearched(root):
@@ -157,7 +166,7 @@ def git_unsearched(root):
     return n(["--ignored"]), n([])
 
 
-def walked_files(root):
+def walked_files(root, include_ignored=False):
     """(files, skipped) — everything under root minus SKIP_DIRS, and HOW MANY that cost.
 
     Naming the skipped directories was not enough. A retired token living in build/ made
@@ -167,14 +176,16 @@ def walked_files(root):
     differently, and only the second is a quantity you can act on.
     """
     out, skipped = [], 0
+    always = {".git"}          # never descend into the object store, ignored or not
+    prune = always if include_ignored else SKIP_DIRS
     for dirpath, dirnames, filenames in os.walk(root):
-        pruned = [d for d in dirnames if d in SKIP_DIRS]
-        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
+        pruned = [d for d in dirnames if d in prune]
+        dirnames[:] = [d for d in dirnames if d not in prune]
         for d in pruned:                       # count what the prune actually cost
             for _, _, fs in os.walk(os.path.join(dirpath, d)):
                 skipped += len(fs)
         for name in filenames:
-            if name in SKIP_DIRS:
+            if name in prune:
                 skipped += 1
                 continue
             rel = os.path.relpath(os.path.join(dirpath, name), root)
@@ -207,7 +218,7 @@ def classify(path):
         return "unreadable"
 
 
-def collect(root, unders, excludes, force_walk, include_binary=False):
+def collect(root, unders, excludes, force_walk, include_binary=False, include_ignored=False):
     """Return (files, mode, filters). mode is 'git' or 'walk' and is always reported.
 
     `filters` records what each --under/--exclude ACTUALLY did, so a prefix that matched
@@ -215,10 +226,10 @@ def collect(root, unders, excludes, force_walk, include_binary=False):
     Binary files are dropped from the POPULATION, not merely skipped while counting, so
     the denominator stays the set actually searched.
     """
-    files = None if force_walk else git_files(root)
+    files = None if force_walk else git_files(root, include_ignored)
     mode, skipped = "git", 0
     if files is None:
-        files, skipped = walked_files(root)
+        files, skipped = walked_files(root, include_ignored)
         mode = "walk"
 
     filters = []
@@ -295,6 +306,9 @@ def main() -> int:
     ap.add_argument("--case-sensitive", action="store_true")
     ap.add_argument("--walk", action="store_true")
     ap.add_argument("--no-color", "--no-colour", action="store_true", dest="no_color")
+    ap.add_argument("--include-ignored", action="store_true", dest="include_ignored",
+                    help="also search gitignored/untracked files (git mode) and descend "
+                         "into SKIP_DIRS (walk mode)")
     ap.add_argument("--binary", action="store_true",
                     help="also search binary files (default: skipped, and the count printed)")
     ap.add_argument("patterns", nargs="+")
@@ -367,7 +381,8 @@ def main() -> int:
         print(f"{RED}✗ --root {root} is not a directory — no population, no count{OFF}")
         return 2
 
-    files, mode, filters, skipped = collect(root, a.under, a.exclude, a.walk, a.binary)
+    files, mode, filters, skipped = collect(root, a.under, a.exclude, a.walk, a.binary,
+                                           a.include_ignored)
 
     # ── the denominator AND how it was drawn, ON BOTH PATHS ───────────────────────
     # This block used to run only AFTER the control passed, so a CONTROL FAILED run
@@ -395,16 +410,24 @@ def main() -> int:
             ignored, untracked = git_unsearched(root)
             if ignored is not None:
                 hidden = ignored + untracked
-                tone = YELLOW if hidden else DIM
-                print(f"{tone}  NOT searched: {ignored} ignored, {untracked} untracked"
-                      f"{' — git mode covers tracked files only' if hidden else ''}{OFF}")
+                if a.include_ignored:
+                    # They ARE in the population now, so saying "NOT searched" would be
+                    # the very lie this line exists to prevent.
+                    print(f"{DIM}  ALSO searched: {ignored} ignored, {untracked} untracked "
+                          f"(--include-ignored){OFF}")
+                else:
+                    tone = YELLOW if hidden else DIM
+                    print(f"{tone}  NOT searched: {ignored} ignored, {untracked} untracked"
+                          f"{' — git mode covers tracked files only' if hidden else ''}"
+                          f"{'  ·  --include-ignored searches them' if hidden else ''}{OFF}")
         if mode == "walk":
             # The COUNT first, then the names. A list of nineteen directory names is
             # scenery; "2 file(s) ... NOT searched" is a quantity, and a quantity is the
             # thing a reader weighs against a zero.
             tone = YELLOW if skipped else DIM
             print(f"{tone}  NOT searched: {skipped} file(s) inside skipped directories"
-                  f"{' — a hit could be in any of them' if skipped else ''}{OFF}")
+                  f"{' — a hit could be in any of them' if skipped else ''}"
+                  f"{'  ·  --include-ignored descends into them' if skipped else ''}{OFF}")
             print(f"{YELLOW}  ⚠ WALK mode — not a git repo (or --walk forced). This population is NOT\n"
                   f"    complete by construction: it skips {', '.join(sorted(SKIP_DIRS))}.\n"
                   f"    State that limit alongside any number you quote from this run.{OFF}")

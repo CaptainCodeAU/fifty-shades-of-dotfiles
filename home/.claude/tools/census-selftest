@@ -158,6 +158,17 @@ def main() -> int:
                   re.search(r"NOT searched: [1-9]\d* ignored", plain) is not None)
             check("5b hidden: the ignored file is genuinely absent from the count",
                   "secret/hidden.txt" not in plain)
+            # 14 · and --include-ignored can actually reach it. Reporting the blind spot
+            # was only half a fix; the rename incident needed to SEARCH those files.
+            rc, _, plain = run(git, "--include-ignored", "--control", "CONTROL", "NEEDLE")
+            check("14a reach: --include-ignored searches the ignored file",
+                  rc == 0 and "secret/hidden.txt" in plain,
+                  "the ignored file is still unreachable")
+            check("14b reach: the header stops claiming those files were NOT searched",
+                  "ALSO searched:" in plain and "NOT searched: 1 ignored" not in plain)
+            _, _, plain = run(git, "--control", "CONTROL", "NEEDLE")
+            check("14c reach: the default run points at the flag",
+                  "--include-ignored" in plain, "the blind spot names no way out")
         finally:
             shutil.rmtree(git, ignore_errors=True)
 
@@ -232,6 +243,11 @@ def main() -> int:
               m is not None, "only the directory names were shown")
         check("13b skipped: the count is non-zero when a skipped dir has files",
               bool(m) and int(m.group(1)) >= 1, f"got {m and m.group(1)}")
+
+        # ── 14d · walk mode: --include-ignored descends into SKIP_DIRS ──────────────
+        _, _, plain = run(root, "--walk", "--include-ignored", "--control", "CONTROL", "NEEDLE")
+        check("14d reach: --include-ignored reaches dist/pruned.js in walk mode",
+              "dist/pruned.js" in plain, "SKIP_DIRS still unreachable")
 
         # ── the original guarantee must still hold ──────────────────────────────────
         rc, _, plain = run(root, "--walk", "--control", "ABSENT-TOKEN", "NEEDLE")
