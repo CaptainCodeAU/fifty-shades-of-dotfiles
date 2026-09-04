@@ -90,11 +90,25 @@ Usage
     --case-sensitive    default is case-insensitive.
     --walk              force the filesystem walk even inside a git repo.
     --binary            also search binary files (default: skipped, and the count shown).
+    --include-ignored   also search what is normally hidden: gitignored and untracked
+                        files in `git` mode, and the SKIP_DIRS (build/, dist/,
+                        node_modules/ ...) in `walk` mode. `.git` is never descended
+                        into. Use it whenever you must prove a name is GONE rather than
+                        merely absent from the tracked set.
     --no-color          never emit ANSI. NO_COLOR is honoured too, and colour is off
                         automatically whenever stdout is not a terminal.
 
+REFUSALS (exit 2, no numbers printed)
+    · the control matched nothing
+    · --control is empty, or can match the empty string (x*, a?, ^, ...) — such a
+      control "passes" against any corpus at all and proves nothing
+    · a PATTERN is empty
+    · the control or any pattern is not a valid regular expression — the run is refused
+      WHOLE, because a partial count with no TOTAL beneath it reads like a complete one
+    · --root is not a directory
+
 Exit codes
-    0  a count was produced      2  the control failed, or --root is not a directory
+    0  a count was produced      2  refused (see REFUSALS above)
 """
 
 import argparse

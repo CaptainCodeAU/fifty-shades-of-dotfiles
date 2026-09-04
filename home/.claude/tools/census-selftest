@@ -199,8 +199,13 @@ def main() -> int:
         check("9a empty: --control '' exits 2", rc == 2, f"rc={rc}")
         check("9b empty: no count is printed for an empty control",
               "TOTAL" not in plain and "the instrument works" not in plain)
-        rc, _, _ = run(root, "--walk", "--control", "   ", "NEEDLE")
-        check("9c empty: a whitespace-only control exits 2", rc == 2, f"rc={rc}")
+        # Assert the REASON, not just the exit code: the old census also exited 2 here,
+        # by searching for three literal spaces and finding none. Same number, wrong
+        # cause — a check that cannot tell those apart is not testing this fix.
+        rc, _, plain = run(root, "--walk", "--control", "   ", "NEEDLE")
+        check("9c empty: a whitespace-only control is refused AS EMPTY",
+              rc == 2 and "is empty" in plain,
+              "exited 2 for some other reason (e.g. it searched for spaces and missed)")
         rc, _, _ = run(root, "--walk", "--control", "CONTROL", "")
         check("9d empty: an empty PATTERN exits 2", rc == 2, f"rc={rc}")
 
