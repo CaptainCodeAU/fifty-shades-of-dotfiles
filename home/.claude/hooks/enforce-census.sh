@@ -115,8 +115,17 @@ fi
 # runner such as xargs/time/sudo/command/env/exec. An optional /path/to/ prefix is
 # allowed so /usr/bin/rg still fires. Quotes and comments are stripped first, so the
 # word cannot reach the test from inside a string or after a `#` at all.
-_bare="${cmd//\\'*\\'/ }"                    # drop '...' single-quoted spans
-_bare="$(printf '%s' "$_bare" | sed -e 's/"[^"]*"/ /g' -e 's/#.*$//')"
+#
+# THE SINGLE-QUOTE STRIPPER WAS DEAD CODE. `${cmd//\'*\'/ }` returned the string
+# untouched — measured 2026-09-04 by printing _bare at each stage: `echo 'rg here' and
+# "rg there" # and rg comment` came out of that line byte-identical, and only the sed
+# below ever removed anything. The escaping never produced the pattern it reads as.
+# `rg` survived the defect because the command-position anchor rejects a word that
+# merely follows a quote character; `grep` would NOT have, the moment it was handed the
+# same _bare — `echo 'ls | grep foo'` carries `| grep` in command position inside the
+# string. So the stripper had to actually work before grep could use it. Both span
+# kinds are now removed by one sed, and a case asserts the single-quoted one.
+_bare="$(printf '%s' "$cmd" | sed -e "s/'[^']*'/ /g" -e 's/"[^"]*"/ /g' -e 's/#.*$//')"
 # A NEWLINE starts a command too, and leaving it out of the set below made the whole
 # reminder dead for multi-line commands — which is nearly all of them. Measured
 # 2026-09-04: `rg` on line 3 of a three-line command was SILENT while `grep` on line 3
@@ -126,6 +135,34 @@ _bare="$(printf '%s' "$_bare" | sed -e 's/"[^"]*"/ /g' -e 's/#.*$//')"
 _NL=$'\n'
 _cmdpos='(^|[|;&(`'"$_NL"']|&&|\|\||\$\(|(^|[[:space:]])(xargs|time|sudo|command|env|exec|nohup)[[:space:]]+)[[:space:]]*([A-Za-z0-9_./-]*/)?(rg|ripgrep)([[:space:]]|$)'
 
+# `grep` GOT NONE OF THAT GUARD, and it was the noisier half of the traffic. Its test was
+# `case "$cmd" in *grep*)` — the RAW command, a bare substring, no command position, no
+# word boundary, no quote or comment stripping. Reported by another project's agent, who
+# had it fire twice in one session on a `mkdir`. Re-measured here 2026-09-04 against the
+# unfixed hook: SIX false fires, and not one search among them.
+#   echo "the word telegrep as prose only"    grep inside a double-quoted string
+#   echo 'ls | grep foo'                      grep inside a single-quoted string
+#   cat CHANGELOG.md # mentions grep          grep after a comment marker
+#   mkdir grep-vs-census-decision             grep inside a directory NAME
+#   touch notes-about-grep.md                 grep inside a FILENAME
+#   bash -c "echo grep"                       grep inside a quoted -c argument
+# The guard three screens up was written for `rg` and never applied to the tool sitting
+# beside it. "Firing on prose is how a reminder becomes wallpaper" is this hook's own
+# sentence, written while the other branch did exactly that on every command that
+# happened to carry the letters.
+#
+# The family is spelled `[A-Za-z]*grep`, so egrep/fgrep/rgrep/zgrep/ugrep/pcregrep/bzgrep
+# all fire; `git` joins the runner list so `git grep` still does. The matched binary names
+# itself in the notice — a notice that calls a ugrep "a grep" is a notice that looks like
+# a misfire, and one of those stops being read.
+#
+# KNOWN AND DELIBERATE: a search hidden inside a quoted argument — `bash -c "grep foo ."` —
+# is now silent, exactly as `sh -c "rg foo ."` already was. Deleting the span is what kills
+# the five prose cases; merely blanking the quote characters instead brings the
+# single-quoted false fire straight back (measured both ways). A miss on a wrapped search
+# is the cheaper error of the two, and it is the trade `rg` has been making all along.
+_greppos='(^|[|;&(`'"$_NL"']|&&|\|\||\$\(|(^|[[:space:]])(xargs|time|sudo|command|env|exec|nohup|git)[[:space:]]+)[[:space:]]*([A-Za-z0-9_./-]*/)?([A-Za-z]*grep)([[:space:]]|$)'
+
 _search="${_search:-0}"
 _tool="${_tool:-search}"
 if [ "$_search" -eq 1 ]; then
@@ -133,8 +170,9 @@ if [ "$_search" -eq 1 ]; then
 elif [[ "$_bare" =~ $_cmdpos ]]; then
   _search=1
   _tool="ripgrep"
-else
-  case "$cmd" in *grep*) _search=1; _tool="grep" ;; esac
+elif [[ "$_bare" =~ $_greppos ]]; then
+  _search=1
+  _tool="${BASH_REMATCH[5]:-grep}"
 fi
 [ "$_search" -eq 1 ] || exit 0
 
