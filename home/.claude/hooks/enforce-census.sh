@@ -83,11 +83,26 @@ fi
 # ripgrep is tested FIRST: "ripgrep" contains "grep", so the substring test would claim it
 # and the notice would open "a grep is about to run" over an rg. Name the tool that actually
 # ran — a notice that looks like a misfire stops being read.
+#
+# A word boundary alone was still too loose. `rg` is two letters, so it turns up inside
+# ordinary English the moment a command carries any: measured false fires on
+# `echo "the large rg thing"` and `cat CHANGELOG.md # mentions rg`. Firing on prose is
+# how a reminder becomes wallpaper.
+#
+# So `rg` must appear in COMMAND POSITION — at the start, or straight after something
+# that starts a new command: a pipe, a semicolon, && or ||, a subshell, a backtick, or a
+# runner such as xargs/time/sudo/command/env/exec. An optional /path/to/ prefix is
+# allowed so /usr/bin/rg still fires. Quotes and comments are stripped first, so the
+# word cannot reach the test from inside a string or after a `#` at all.
+_bare="${cmd//\\'*\\'/ }"                    # drop '...' single-quoted spans
+_bare="$(printf '%s' "$_bare" | sed -e 's/"[^"]*"/ /g' -e 's/#.*$//')"
+_cmdpos='(^|[|;&(`]|&&|\|\||\$\(|(^|[[:space:]])(xargs|time|sudo|command|env|exec|nohup)[[:space:]]+)[[:space:]]*([A-Za-z0-9_./-]*/)?(rg|ripgrep)([[:space:]]|$)'
+
 _search="${_search:-0}"
 _tool="${_tool:-search}"
 if [ "$_search" -eq 1 ]; then
   :                                      # already settled by the Grep-tool branch above
-elif [[ "$cmd" =~ (^|[^A-Za-z0-9_.-])(rg|ripgrep)([^A-Za-z0-9_.-]|$) ]]; then
+elif [[ "$_bare" =~ $_cmdpos ]]; then
   _search=1
   _tool="ripgrep"
 else
