@@ -107,6 +107,12 @@ SCOPE — the three populations partition the project
     Carrying a control across from a default run into `--ignored-only` usually fails,
     and correctly so: a control living in a tracked file cannot prove an instrument
     pointed at the hidden set. census says so and names the way out.
+    --json              one JSON object on stdout instead of the text report, carrying
+                        every fact the text carries. EVERY refusal is JSON too -
+                        including argparse's own usage errors - so a script never has to
+                        scrape prose to learn it was refused. Implies --no-color.
+                        Success: {ok:true, control, population, patterns[], total}
+                        Refusal: {ok:false, refused:"<reason>", ...}  exit 2
     --no-color          never emit ANSI. NO_COLOR is honoured too, and colour is off
                         automatically whenever stdout is not a terminal.
 
@@ -124,6 +130,7 @@ Exit codes
 """
 
 import argparse
+import json
 import os
 import re
 import subprocess
@@ -389,6 +396,23 @@ example:
 a hit is not a defect. triage every one by reading it."""
 
 
+class _JsonAwareParser(argparse.ArgumentParser):
+    """Emit argparse's own errors as JSON when --json was asked for.
+
+    A missing PATTERN or a bad flag exited 2 with prose on stderr, so a script running
+    with --json still had to scrape English to learn what went wrong. Every other refusal
+    speaks JSON; this one is not allowed to be the exception. --json is read straight from
+    argv because the failure happens before parsing finishes.
+    """
+
+    def error(self, message):
+        if "--json" in sys.argv[1:]:
+            print(json.dumps({"ok": False, "refused": "bad_arguments",
+                              "error": message}, indent=2))
+            raise SystemExit(2)
+        super().error(message)
+
+
 def build_parser():
     """The parser, built apart from main() so the self-test can inspect it.
 
@@ -397,7 +421,7 @@ def build_parser():
     ever sees. A tool whose whole value is a discipline has to explain the discipline
     at the place people actually look.
     """
-    ap = argparse.ArgumentParser(
+    ap = _JsonAwareParser(
         add_help=True,
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=DESCRIPTION,
@@ -437,6 +461,11 @@ def build_parser():
                          "default run. This is the second search you make when the first "
                          "returned zero: it lists what a tracked-only census could not "
                          "see. .git is never searched under any scope")
+    ap.add_argument("--json", action="store_true",
+                    help="emit one JSON object on stdout instead of the text report, "
+                         "carrying every fact the text carries. REFUSALS are JSON too, "
+                         "so a script never has to scrape prose to learn it was refused. "
+                         "Implies --no-color")
     ap.add_argument("--binary", action="store_true",
                     help="also search binary files (default: skipped, and the count "
                          "printed so the omission is never silent)")
@@ -450,7 +479,16 @@ def main() -> int:
     ap = build_parser()
     a = ap.parse_args()
 
-    init_colour(a.no_color)
+    init_colour(a.no_color or a.json)
+
+    def refused(reason, **extra):
+        """In JSON mode print the machine answer and stop; otherwise fall through to the
+        human text below. A refusal a script cannot parse forces it back to scraping
+        prose, which is the class of failure this whole tool exists to end."""
+        if a.json:
+            print(json.dumps({"ok": False, "refused": reason, **extra}, indent=2))
+            return True
+        return False
 
     # ── AN EMPTY CONTROL IS NOT A CONTROL ─────────────────────────────────────────
     # `--control ""` compiles to the empty pattern, which matches at every position, so
@@ -461,6 +499,8 @@ def main() -> int:
     # unquoted shell variable made grep return a false ZERO; `--control "$VAR"` with VAR
     # unset makes census return a false PASS. Same slip, opposite direction.
     if not a.control.strip():
+        if refused("empty_control", control=a.control):
+            return 2
         print(f"{RED}✗ --control is empty — that is not a control, it is a blank cheque.{OFF}")
         print(f"  {DIM}An empty pattern matches everywhere, so the control would 'pass'\n"
               f"  against any corpus and prove nothing. If you wrote --control \"$VAR\",\n"
@@ -469,6 +509,8 @@ def main() -> int:
         return 2
     for p in a.patterns:
         if not p.strip():
+            if refused("empty_pattern"):
+                return 2
             print(f"{RED}✗ an empty PATTERN was given — it matches everywhere "
                   f"and counts nothing.{OFF}")
             return 2
@@ -494,6 +536,10 @@ def main() -> int:
         except re.error as e:
             bad.append((label, p, str(e)))
     if bad:
+        if refused("invalid_regex",
+                   invalid=[{"what": lbl, "expression": pat, "error": err}
+                            for lbl, pat, err in bad]):
+            return 2
         print(f"{RED}✗ {len(bad)} expression(s) are not valid regular expressions — "
               f"nothing was counted.{OFF}")
         for label, p, err in bad:
@@ -505,6 +551,8 @@ def main() -> int:
 
     _ctl_rx = re.compile(effective(a.control, a.regex))
     if _ctl_rx.match("") is not None:
+        if refused("zero_width_control", control=a.control):
+            return 2
         print(f"{RED}✗ --control `{a.control}` can match the EMPTY STRING, so it hits "
               f"everywhere.{OFF}")
         print(f"  {DIM}A control that matches nothing cannot prove anything. Zero-width\n"
@@ -514,6 +562,8 @@ def main() -> int:
 
     root = Path(a.root).resolve()
     if not root.is_dir():
+        if refused("root_not_a_directory", root=str(root)):
+            return 2
         print(f"{RED}✗ --root {root} is not a directory — no population, no count{OFF}")
         return 2
 
@@ -585,9 +635,42 @@ def main() -> int:
                   f"    complete by construction: it skips {', '.join(sorted(SKIP_DIRS))}.\n"
                   f"    State that limit alongside any number you quote from this run.{OFF}")
 
+    def population_report():
+        """The same facts show_population() prints, as data. Built from the same values
+        so the JSON and the text can never disagree about what was searched."""
+        ignored, untracked = git_unsearched(root) if mode == "git" else (None, None)
+        # not_searched must describe THIS run, not the default one. Reporting
+        # "ignored: 3" under scope "all" would have the JSON contradict the text, which
+        # says ALSO searched for the very same files — and a machine reader has no
+        # prose to correct it with.
+        if scope == "all":
+            gap = {"tracked": 0, "ignored": 0, "untracked": 0, "in_skipped_dirs": 0}
+        elif scope == "ignored":
+            tracked = git_files(root, "tracked") if mode == "git" else None
+            gap = {"tracked": len(tracked) if tracked is not None else None,
+                   "ignored": 0, "untracked": 0, "in_skipped_dirs": 0}
+        else:
+            gap = {"tracked": 0, "ignored": ignored, "untracked": untracked,
+                   "in_skipped_dirs": skipped if mode == "walk" else None}
+        return {
+            "root": str(root),
+            "mode": mode,
+            "scope": scope,
+            "searched": len(files),
+            "matching": {"regex": bool(a.regex), "case_sensitive": bool(a.case_sensitive)},
+            "filters": [{"flag": f, "prefix": pre, "files": n, "action": verb,
+                         "note": note or None, "matched": matched}
+                        for f, pre, n, verb, note, matched in filters],
+            "not_searched": gap,
+        }
+
     # ── THE CONTROL, ASSERTED BEFORE ANY RESULT IS SHOWN ──────────────────────────
     ctl_total, ctl_files = count(root, files, a.control, a.regex, a.case_sensitive)
     if ctl_total == 0:
+        if refused("control_failed",
+                   control={"pattern": a.control, "hits": 0, "files": 0},
+                   population=population_report()):
+            return 2
         print(f"{RED}✗ CONTROL FAILED — `{a.control}` matched NOTHING in "
               f"{len(files)} file(s) [{mode} mode].{OFF}")
         show_population()
@@ -605,6 +688,29 @@ def main() -> int:
                   f"--include-ignored, which searches both and\n    accepts the "
                   f"control you already have.{OFF}")
         return 2
+    if a.json:
+        results, grand = [], 0
+        for p in a.patterns:
+            total, per_file = count(root, files, p, a.regex, a.case_sensitive)
+            grand += total
+            results.append({
+                "pattern": p,
+                "compiled": effective(p, a.regex),
+                "total": total,
+                # The same caveat the text prints, as a field a script can branch on.
+                "literal_mode_zero_may_be_escaping":
+                    total == 0 and not a.regex and looks_like_regex(p),
+                "files": dict(sorted(per_file.items(), key=lambda kv: -kv[1])),
+            })
+        print(json.dumps({
+            "ok": True,
+            "control": {"pattern": a.control, "hits": ctl_total, "files": len(ctl_files)},
+            "population": population_report(),
+            "patterns": results,
+            "total": grand,
+        }, indent=2))
+        return 0
+
     print(f"{GREEN}✓ control{OFF} {DIM}`{a.control}` → {ctl_total} hit(s) in "
           f"{len(ctl_files)} file(s) — the instrument works{OFF}")
     show_population()

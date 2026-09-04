@@ -21,6 +21,7 @@ exact failure census exists to prevent, in the tool that tests census.
     uv run python3 ~/.claude/tools/census-selftest
 """
 
+import json
 import os
 import re
 import shutil
@@ -317,6 +318,44 @@ def main() -> int:
               "does NOT prove" in helptext, "the reasoning never reaches --help")
         check("16c help: --help lists what gets refused",
               "refused" in helptext and "empty string" in helptext)
+
+        # ── 18 · --json: machine output, including for every refusal ────────────────
+        rc, raw, _ = run(root, "--walk", "--json", "--control", "CONTROL", "NEEDLE")
+        try:
+            doc = json.loads(raw)
+        except Exception as e:
+            doc = None
+            check("18a json: a successful run emits parseable JSON", False, str(e))
+        if doc is not None:
+            check("18a json: a successful run emits parseable JSON", rc == 0 and doc["ok"])
+            check("18b json: no ANSI ever, even on a tty-less pipe", "\x1b[" not in raw)
+            check("18c json: carries the control, the population and the total",
+                  doc["control"]["hits"] > 0
+                  and doc["population"]["searched"] > 0
+                  and "total" in doc)
+            check("18d json: the text and the JSON agree on the total",
+                  str(doc["total"]) in run(root, "--walk", "--control", "CONTROL",
+                                           "NEEDLE")[2])
+        # A refusal a script cannot parse sends it back to scraping prose.
+        # Full argument lists, not a clever rule for appending PATTERN. The first
+        # version guessed, passed no pattern for the empty-control case, and measured
+        # argparse's usage error instead of the refusal it meant to test.
+        for args, reason in [
+            (("--control", "", "NEEDLE"), "empty_control"),
+            (("--control", "CONTROL", ""), "empty_pattern"),
+            (("--regex", "--control", "x*", "NEEDLE"), "zero_width_control"),
+            (("--regex", "--control", "CONTROL", "("), "invalid_regex"),
+            (("--control", "ABSENT-TOKEN", "NEEDLE"), "control_failed"),
+            (("--control", "CONTROL"), "bad_arguments"),
+        ]:
+            rc, raw, _ = run(root, "--walk", "--json", *args)
+            try:
+                d = json.loads(raw)
+                ok = rc == 2 and d.get("ok") is False and d.get("refused") == reason
+                why = "" if ok else f"rc={rc} doc={d}"
+            except Exception as e:
+                ok, why = False, f"not JSON: {e}"
+            check(f"18e json: refusal {reason} is parseable JSON with exit 2", ok, why)
 
         # ── the original guarantee must still hold ──────────────────────────────────
         rc, _, plain = run(root, "--walk", "--control", "ABSENT-TOKEN", "NEEDLE")
