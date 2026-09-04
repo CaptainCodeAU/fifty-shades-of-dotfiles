@@ -87,6 +87,19 @@ fi
 command -v trash-restore >/dev/null 2>&1 && restore_hint="recover: trash-restore"
 
 # Skip targets that are not there. -e is false for a dangling symlink, so test -L too.
+#
+# A target whose name starts with `-` is ALSO rewritten to ./NAME here. The trash tools have
+# no `--` convention -- we strip ours above, and passing it through would not have helped --
+# so a leading dash arrives as an OPTION. Worse, macOS `trash` exits 0 on an argument it does
+# not recognise, printing only "# Un-recognized argument". Measured 2026-09-04:
+#
+#   $ safe-rm -- -v real.txt
+#   🗑️  Trashed: -v real.txt      <- reported success, exit 0
+#   $ ls
+#   -v                            <- still there; only real.txt was trashed
+#
+# That is precisely the behaviour this command exists to not have. ./-v names the same file
+# in a form no argument parser can mistake for a flag.
 existing=0
 argc=$#
 i=0
@@ -95,6 +108,9 @@ while [ "$i" -lt "$argc" ]; do
 	shift
 	i=$((i + 1))
 	if [ -e "$t" ] || [ -L "$t" ]; then
+		case "$t" in
+			-*) t="./$t" ;;
+		esac
 		set -- "$@" "$t"
 		existing=$((existing + 1))
 	fi
@@ -103,6 +119,28 @@ done
 [ "$existing" -eq 0 ] && exit 0
 
 if "$trash_cmd" "$@"; then
+	# Do NOT take the exit code's word for it. The leading-dash case above proved that
+	# `trash` returns 0 for arguments it quietly ignored, so a zero exit is not evidence
+	# that anything moved. The only trustworthy evidence that a target is gone is that the
+	# target is gone. This re-check is the general form of that fix: it also catches any
+	# future input the trash tool skips without saying so.
+	still=""
+	argc=$#
+	i=0
+	while [ "$i" -lt "$argc" ]; do
+		t="$1"
+		shift
+		i=$((i + 1))
+		set -- "$@" "$t"
+		if [ -e "$t" ] || [ -L "$t" ]; then
+			still="${still} ${t}"
+		fi
+	done
+	if [ -n "$still" ]; then
+		echo "safe-rm: ${trash_cmd} reported success but these still exist:${still}" >&2
+		echo "         They are UNCHANGED. Nothing was deleted permanently." >&2
+		exit 1
+	fi
 	[ "$quiet" -eq 1 ] || echo "🗑️  Trashed: $*  (${restore_hint})"
 	exit 0
 fi
