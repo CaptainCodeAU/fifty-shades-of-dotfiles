@@ -125,7 +125,33 @@ fi
 # same _bare — `echo 'ls | grep foo'` carries `| grep` in command position inside the
 # string. So the stripper had to actually work before grep could use it. Both span
 # kinds are now removed by one sed, and a case asserts the single-quoted one.
-_bare="$(printf '%s' "$cmd" | sed -e "s/'[^']*'/ /g" -e 's/"[^"]*"/ /g' -e 's/#.*$//')"
+#
+# A HEREDOC BODY IS DATA, NOT COMMANDS, and it was being read as commands. Once a
+# NEWLINE was added to the command-position set, every line of a heredoc became a
+# command start — so any line of prose beginning with the letters `rg ` fired the
+# reminder. Measured 2026-09-04, and not by looking for it: the commit that fixed the
+# grep branch was written with `git commit -F - <<EOF`, its body contained a line
+# starting "rg survived that because…", and the hook fired "A ripgrep is about to run"
+# over a commit. That is the most common multi-line command in this repo by a wide
+# margin, which makes it the most expensive possible place to be wrong.
+#
+# So heredoc bodies are dropped before anything else looks at the text. The introducer
+# LINE is kept, because a real search can live on it (`grep foo <<EOF`). `<<<` here-
+# strings and `$((1<<3))` arithmetic are left alone — the tag must start with a letter
+# or underscore, and neither of those does. `<<-` and an indented terminator are
+# handled. Same accepted trade as the quoted-argument case above: a search written
+# INSIDE a heredoc (`bash <<EOF` … `grep foo` … `EOF`) is now missed. Prose in a commit
+# message outnumbers that by orders of magnitude.
+_hd='BEGIN{inhd=0}
+inhd==0{
+  if (match($0, /<<-?[ \t]*["\047]?[A-Za-z_][A-Za-z0-9_]*["\047]?/)) {
+    tag=substr($0,RSTART,RLENGTH); sub(/^<<-?[ \t]*/,"",tag); gsub(/["\047]/,"",tag)
+    inhd=1; hd=tag
+  }
+  print; next
+}
+{ t=$0; sub(/^[ \t]+/,"",t); if (t==hd) { inhd=0; hd="" } ; next }'
+_bare="$(printf '%s' "$cmd" | awk "$_hd" | sed -e "s/'[^']*'/ /g" -e 's/"[^"]*"/ /g' -e 's/#.*$//')"
 # A NEWLINE starts a command too, and leaving it out of the set below made the whole
 # reminder dead for multi-line commands — which is nearly all of them. Measured
 # 2026-09-04: `rg` on line 3 of a three-line command was SILENT while `grep` on line 3

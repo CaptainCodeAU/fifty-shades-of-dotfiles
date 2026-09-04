@@ -118,6 +118,10 @@ MUST_FIRE = [
     ("f15 rg",                    "rg -c foo README.md"),
     ("f16 rg absolute path",      "/usr/bin/rg foo ."),
     ("f17 rg on line 3",          "cat a.txt\nls -la\nrg foo b.txt"),
+    ("f18 search on a heredoc line", f"{G} foo <<EOF\nbody text\nEOF"),
+    ("f19 herestring is not a heredoc", 'rg foo <<< "some text"'),
+    ("f20 arithmetic shift is not a heredoc", "echo $((1<<3)) ; rg foo x"),
+    ("f21 search after a heredoc closes", f"cat <<EOF\nbody\nEOF\n{G} foo x"),
 ]
 
 # Commands where NO SEARCH RUNS. A reminder here is noise, and noise is how the
@@ -135,6 +139,16 @@ MUST_BE_SILENT = [
     ("s10 rg after a comment",    "cat CHANGELOG.md # mentions rg"),
     ("s11 no search word at all", 'echo "no search word here at all"'),
     ("s12 merge is not rg",       "git merge --no-ff feature/large-target"),
+    # The commit that fixed the grep branch fired the reminder on ITSELF: written with
+    # `git commit -F - <<EOF`, its message body carried a line starting "rg survived
+    # that because...", and a newline is a command start. A heredoc body is data.
+    ("s13 rg at heredoc line start",
+     "git commit -F - <<'EOF'\nrg survived that because its anchor rejects it\nEOF"),
+    ("s14 grep at heredoc line start",
+     f"git commit -F - <<'EOF'\n{G} is mentioned at line start here\nEOF"),
+    ("s15 unquoted heredoc tag",   "cat <<EOF\nrg here in the body\nEOF"),
+    ("s16 dash heredoc, indented terminator",
+     f"cat <<-END\n\t{G} here in the body\n\tEND"),
 ]
 
 
