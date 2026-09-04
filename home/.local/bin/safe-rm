@@ -113,6 +113,45 @@ while [ "$i" -lt "$argc" ]; do
 	t="$1"
 	shift
 	i=$((i + 1))
+
+	# Match /bin/rm's rule: "." and ".." may not be removed. The trash tools have no such
+	# rule, and the consequence was the worst failure this script has had. Measured
+	# 2026-09-04, before this check:
+	#
+	#   $ cd victim && rm -rf .
+	#   safe-rm: trash reported success but these still exist: .
+	#            They are UNCHANGED. Nothing was deleted permanently.
+	#   $ ls ..
+	#                                  <- victim/ was GONE, secret.txt with it
+	#
+	# The whole tree moved to the Trash while the message said nothing had happened. The
+	# survivor re-check below cannot catch this one: `[ -e . ]` re-resolves against the
+	# process's cwd every time, so it stays true after the directory itself has moved. A
+	# SUCCESS REPORTING REFUSAL is worse than the reverse -- nobody goes hunting in the
+	# Trash for a file they were just told was never touched, and a calling script reads
+	# the exit 1 as "cleanup failed" and may retry.
+	#
+	# This is reachable without a typo: `find . -type d -exec rm -rf {} +` hands over a
+	# literal `.` as its first operand.
+	#
+	# Trailing slashes are stripped first so `./`, `../`, `foo/.` and `foo/..` are caught
+	# as well as the bare forms.
+	s="$t"
+	while [ "$s" != "/" ] && [ "${s%/}" != "$s" ]; do s="${s%/}"; done
+	case "$s" in
+		. | .. | */. | */..)
+			echo "safe-rm: \"$t\": \".\" and \"..\" may not be removed" >&2
+			exit 1
+			;;
+		/)
+			# Defence in depth, and deliberately NOT tested against /bin/rm's own
+			# behaviour: refusing costs nothing, and being wrong about this one costs
+			# the machine.
+			echo "safe-rm: \"/\": refusing to trash the root directory" >&2
+			exit 1
+			;;
+	esac
+
 	if [ -e "$t" ] || [ -L "$t" ]; then
 		case "$t" in
 			-*) t="./$t" ;;
