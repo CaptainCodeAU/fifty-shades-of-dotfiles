@@ -142,10 +142,22 @@ controls. **Until then, a change to one must be mirrored in the other.**
 | ------------------------------------------ | --------------------------------------------- |
 | `home/.local/bin/vuln-scan`                | the tool                                      |
 | `home/.local/bin/vulnlib.py`               | shared NVD/CPE/brew/store library             |
+| `home/.local/bin/vulnlib-selftest`         | 58 controls for that library (run it)         |
 | `.claude/hooks/vuln-scan-check.sh`         | SessionStart hook — turns findings into tasks |
 | `home/.zsh_welcome`                        | shell banner block (exception-only)           |
 | `~/.local/state/dotfiles/vuln-scan.db`     | scan state (not in the repo)                  |
 | `~/.local/state/dotfiles/vuln-briefing.md` | the handover file (not in the repo)           |
+
+## Before you trust a change to this
+
+```bash
+vulnlib-selftest        # 58 checks, hermetic: no network, no brew, no database
+```
+
+It refuses to start if its fixture injection is broken, because a suite that cannot
+produce a PASS cannot produce a meaningful FAIL either. See
+[TOOLCHAIN_CVE_CHECK.md](TOOLCHAIN_CVE_CHECK.md#regression-suites) for what it and the
+banner suite each cover.
 
 Related: [TOOLCHAIN_CVE_CHECK.md](TOOLCHAIN_CVE_CHECK.md),
 [PNPM_AUDIT_TREE.md](PNPM_AUDIT_TREE.md), [SECURITY.md](SECURITY.md).

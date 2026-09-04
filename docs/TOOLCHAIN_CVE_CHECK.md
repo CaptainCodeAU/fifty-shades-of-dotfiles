@@ -130,6 +130,36 @@ toolchain-cve-check --pnpm-floor 11.7.0   # -> pnpm floor EXPOSED: GHSA-qrv3-253
 toolchain-cve-check --nvm-floor 0.40.3    # -> nvm floor EXPOSED: CVE-2026-10796 + CVE-2026-1665, exit 1
 ```
 
+## Regression suites
+
+Two committed suites, both hermetic and offline. Run them after touching anything
+they cover -- neither is wired into CI, because there is no CI here.
+
+```bash
+vulnlib-selftest                            # 58 checks: the shared library
+.claude/hooks/toolchain-cve-check-selftest  # 26 checks: the SessionStart banner
+```
+
+[`vulnlib-selftest`](../home/.local/bin/vulnlib-selftest) covers the backport-detection
+path in `vulnlib.py` -- whether an UNDETERMINED answer can ever read as "nothing was
+backported", which `resolves` entries may silence a CVE, and whether a cached verdict
+expires. Fixtures are injected through the module's own caches, so it never runs `brew`
+or touches a database.
+
+[`toolchain-cve-check-selftest`](../.claude/hooks/toolchain-cve-check-selftest) covers the
+banner itself, and exists because the shell script deciding what you READ at login had no
+controls at all while the Python behind it had 58. Three defects lived there in one
+sitting on 2026-09-04, every one making the alert quieter: a count that included the
+tool's own footer line (so every "N formulae UNVERIFIED" ever printed was one too high,
+and a gate written to suppress wrong advice could never fire), a `grep -c` idiom that
+printed `[: 0\n0: integer expected` into a security banner, and one piece of advice for
+two causes that need opposite actions. It feeds the hook fixtures via `TMPDIR` and
+`XDG_CACHE_HOME`, so your real caches are untouched.
+
+Both open with a harness control that refuses to run if fixture injection is not working,
+and both are mutation-tested: re-introduce any defect they claim to cover and they fail,
+naming the check that caught it.
+
 ## Scope (and deliberate non-scope)
 
 - **In scope:** the `pnpm` and `nvm` floors + their installed versions (the only two
