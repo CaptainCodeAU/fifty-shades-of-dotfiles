@@ -68,6 +68,10 @@ DRY_RUN=false
 # offer a source-build sweep to a machine that cannot compile C++. Declared here
 # so `set -u` cannot bite when the check is skipped (Linux, or --skip-preflight).
 CC_TOOLCHAIN_OK=true
+# Filled in by the C++ pre-flight so the closing summary can state the operator's
+# actual numbers instead of telling them to go and look them up.
+CC_CLANG_MAJOR=""
+CC_SDK_VER=""
 VERBOSE=false
 SKIP_PREFLIGHT=false
 
@@ -1745,6 +1749,13 @@ _preflight_cc_toolchain_check() {
            | sed -n '/#include <...> search starts here/,/End of search list/p' \
            | grep -m1 'c++/v1' | sed 's/^[[:space:]]*//') || true
 
+    # Kept for the closing summary, which repeats the manual step long after
+    # these locals have gone out of scope. Printing facts the script already
+    # knows is the difference between "match your macOS version" (a lookup the
+    # operator has to perform) and a line they can act on directly.
+    CC_CLANG_MAJOR=$(printf '%s' "$cc_ver" | grep -oE 'version [0-9]+' | grep -oE '[0-9]+') || true
+    CC_SDK_VER="$sdk_ver"
+
     [[ -n "$cc_ver"   ]] && echo -e "      compiler: ${CYAN}${cc_ver}${RESET}"
     [[ -n "$sdk_ver"  ]] && echo -e "      SDK:      ${CYAN}${sdk_ver}${RESET}  ${DIM}${sdk_path}${RESET}"
     if [[ -n "$want" ]]; then
@@ -1874,12 +1885,18 @@ _offer_clt_install() {
     fi
 
     _clt_marker_cleanup "$created" "$marker"
-    info "The standalone package is behind an Apple ID login, so no script can fetch it:"
-    echo -e "    ${CYAN}https://developer.apple.com/download/all${RESET}"
-    echo -e "  ${DIM}Search 'Command Line Tools for Xcode', match your macOS version, run the .dmg.${RESET}"
+    info "The standalone package is behind an Apple ID login, so no script can fetch it."
+    local _os_ver="" _os_major=""
+    _os_ver=$(sw_vers -productVersion 2>/dev/null) || true
+    _os_major="${_os_ver%%.*}"
+    echo -e "  ${DIM}This machine: macOS ${_os_ver:-unknown}${cc_ver:+, ${cc_ver}}${RESET}"
+    echo -e "  Take the ${BOLD}newest${RESET} \"Command Line Tools for Xcode\" listed for macOS ${_os_major:-your version}."
     echo -e "  ${DIM}It installs over the top -- nothing needs deleting first.${RESET}"
-    if command -v open &>/dev/null && confirm "Open that download page in your browser?"; then
-        run_cmd open "https://developer.apple.com/download/all" || true
+    # Default YES. Opening a page is free and reversible, and it is what the
+    # operator is going to do next anyway -- making them type 'y' to reach the
+    # only remaining route is friction with no safety value.
+    if command -v open &>/dev/null && confirm "Open the download page now?" y; then
+        run_cmd open "https://developer.apple.com/download/all/?q=command+line+tools" || true
     fi
     return 0
 }
@@ -3279,13 +3296,35 @@ show_summary() {
     # Gated on the flag, not on Intel: a compiler/SDK mismatch is not
     # architecture-specific, it just happened to surface on an Intel machine.
     if [[ "${CC_TOOLCHAIN_OK:-true}" != true ]]; then
+        # STATE THE NUMBERS, do not ask for a lookup. "Match your macOS version"
+        # makes the operator go and find three facts this script already holds.
+        # Every one of them is printed below, so the only thing left to decide on
+        # Apple's page is which row to click.
+        local _os_ver=""
+        _os_ver=$(sw_vers -productVersion 2>/dev/null) || true
+        local _os_major="${_os_ver%%.*}"
+        # No codename: `sw_vers -productName` returns plain "macOS", and guessing
+        # marketing names ("Sequoia", "Tahoe") is how a helpful line becomes a
+        # wrong one. Apple's download page lists version numbers anyway.
+
         echo -e "  ${RED}!${RESET} ${BOLD}C++ toolchain is still broken${RESET} -- Homebrew cannot build from source."
-        echo -e "     Download the ${BOLD}newest${RESET} 'Command Line Tools for Xcode' for your macOS:"
-        echo -e "       ${CYAN}https://developer.apple.com/download/all${RESET}"
-        echo -e "     ${DIM}Take the newest one. Software Update may offer an OLDER release, which${RESET}"
-        echo -e "     ${DIM}is a downgrade and fails with 'No such update'. The .dmg installs over${RESET}"
-        echo -e "     ${DIM}the top -- nothing needs deleting first.${RESET}"
-        echo -e "     ${DIM}Then re-test:${RESET} ${CYAN}echo '#include <string>' | clang++ -x c++ -fsyntax-only -${RESET}"
+        echo
+        echo -e "     ${BOLD}This machine:${RESET}  macOS ${CYAN}${_os_ver:-unknown}${RESET}\
+${CC_CLANG_MAJOR:+  ·  clang ${CYAN}${CC_CLANG_MAJOR}${RESET}}\
+${CC_SDK_VER:+  ·  SDK ${CYAN}${CC_SDK_VER}${RESET}}"
+        if [[ -n "$CC_CLANG_MAJOR" ]]; then
+            echo -e "     ${BOLD}You need:${RESET}      Command Line Tools shipping clang ${BOLD}newer than ${CC_CLANG_MAJOR}${RESET}"
+        else
+            echo -e "     ${BOLD}You need:${RESET}      the newest Command Line Tools for macOS ${_os_major:-your version}"
+        fi
+        echo
+        echo -e "     ${BOLD}1.${RESET} Open  ${CYAN}https://developer.apple.com/download/all/?q=command+line+tools${RESET}"
+        echo -e "     ${BOLD}2.${RESET} Take the ${BOLD}newest${RESET} \"Command Line Tools for Xcode\"${_os_major:+ listed for macOS ${_os_major}}"
+        echo -e "     ${BOLD}3.${RESET} Run the .dmg ${DIM}(installs over the top -- nothing needs deleting)${RESET}"
+        echo -e "     ${BOLD}4.${RESET} Re-test  ${CYAN}echo '#include <string>' | clang++ -x c++ -fsyntax-only -${RESET}"
+        echo
+        echo -e "     ${DIM}Do NOT take an older release. Software Update may offer one; it is a${RESET}"
+        echo -e "     ${DIM}downgrade and fails with \"No such update\".${RESET}"
         all_good=false
     fi
 
