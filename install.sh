@@ -3271,11 +3271,31 @@ show_summary() {
     echo -e "${BOLD}Still needed (if not done above):${RESET}"
     local all_good=true
 
+    # REPEATED HERE ON PURPOSE. The C++ pre-flight runs first, and on a re-install
+    # roughly two hundred lines of stow output scroll past before the run ends --
+    # so the one thing the operator actually has to go and do by hand is the one
+    # thing they can no longer see. Said again at the point they stop reading.
+    #
+    # Gated on the flag, not on Intel: a compiler/SDK mismatch is not
+    # architecture-specific, it just happened to surface on an Intel machine.
+    if [[ "${CC_TOOLCHAIN_OK:-true}" != true ]]; then
+        echo -e "  ${RED}!${RESET} ${BOLD}C++ toolchain is still broken${RESET} -- Homebrew cannot build from source."
+        echo -e "     Download the ${BOLD}newest${RESET} 'Command Line Tools for Xcode' for your macOS:"
+        echo -e "       ${CYAN}https://developer.apple.com/download/all${RESET}"
+        echo -e "     ${DIM}Take the newest one. Software Update may offer an OLDER release, which${RESET}"
+        echo -e "     ${DIM}is a downgrade and fails with 'No such update'. The .dmg installs over${RESET}"
+        echo -e "     ${DIM}the top -- nothing needs deleting first.${RESET}"
+        echo -e "     ${DIM}Then re-test:${RESET} ${CYAN}echo '#include <string>' | clang++ -x c++ -fsyntax-only -${RESET}"
+        all_good=false
+    fi
+
     if ! command -v gh &>/dev/null; then
         echo -e "  ${YELLOW}~${RESET} Install GitHub CLI (${CYAN}gh${RESET}) if you need GitHub API/PR commands"
+        all_good=false
     elif ! gh auth status &>/dev/null 2>&1; then
         echo -e "  ${YELLOW}~${RESET} ${CYAN}gh${RESET} is not authenticated (optional for API/PR usage)."
         echo -e "     ${DIM}Git transport here is SSH-only; avoid gh auth login/setup-git.${RESET}"
+        all_good=false
     fi
     if [[ -d "$HOME/.tmux/plugins/tpm" ]] && command -v tmux &>/dev/null; then
         echo -e "  ${YELLOW}~${RESET} Start tmux and press ${CYAN}prefix + I${RESET} to install tmux plugins"

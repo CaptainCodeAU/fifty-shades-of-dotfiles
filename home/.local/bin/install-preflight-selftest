@@ -227,6 +227,22 @@ else bad "brew upgrade sits behind a confirm" "may run unattended"; fi
 if grep -q 'n == 0' <<<"$swp"; then ok "the brew sweep is silent when nothing is outdated"
 else bad "the brew sweep is silent when nothing is outdated" "no zero-case guard"; fi
 
+# --- 11. the manual step is repeated in the closing summary -----------------
+# The pre-flight runs first, and a re-install scrolls ~200 lines of stow output
+# past it. The one thing the operator must do by hand is the one thing they can
+# no longer see by the time the run ends.
+sums=$(sed -n '/^show_summary() {/,/^}/p' "$INSTALL_SH")
+if grep -q 'CC_TOOLCHAIN_OK' <<<"$sums"; then
+    ok "the closing summary repeats the C++ manual step"
+else bad "the closing summary repeats the C++ manual step" "guidance only appears at the top"; fi
+if grep -q 'developer.apple.com/download/all' <<<"$sums"; then
+    ok "the closing summary carries the download URL"
+else bad "the closing summary carries the download URL" "no actionable link at the end"; fi
+# It must stay exception-based: a healthy machine gets no extra noise.
+if grep -qE 'CC_TOOLCHAIN_OK:-true\}" != true' <<<"$sums"; then
+    ok "the summary line is silent on a healthy toolchain"
+else bad "the summary line is silent on a healthy toolchain" "may print unconditionally"; fi
+
 echo
 echo "  $PASS passed, $FAIL failed"
 (( FAIL == 0 ))
