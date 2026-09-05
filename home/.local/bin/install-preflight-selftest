@@ -174,10 +174,33 @@ if grep -q '_run_limited [0-9]* softwareupdate' <<<"$clt"; then
     ok "softwareupdate --list is time-limited"
 else bad "softwareupdate --list is time-limited" "unbounded network call"; fi
 
-# The marker makes macOS believe a CLT install is in progress. Ours must go.
-if grep -q 'created" == true' <<<"$clt" && grep -q 'rm -f "\$marker"' <<<"$clt"; then
+# The marker makes macOS believe a CLT install is in progress. Ours must go --
+# but ONLY after the install, never before it.
+cln=$(sed -n '/^_clt_marker_cleanup() {/,/^}/p' "$INSTALL_SH")
+if grep -q 'created" == true' <<<"$cln" && grep -q 'rm -f "\$marker"' <<<"$cln"; then
     ok "the installondemand marker is removed again"
 else bad "the installondemand marker is removed again" "marker may be left behind"; fi
+
+# THE BUG THE LAPTOP FOUND. The marker must still EXIST while --install runs.
+# v1 removed it immediately after --list, and the install then failed with
+# "No such update" on the very label the listing had just produced.
+clt_code=$(grep -v '^[[:space:]]*#' <<<"$clt")
+list_ln=$(grep -n 'softwareupdate --list' <<<"$clt_code" | head -1 | cut -d: -f1)
+inst_ln=$(grep -n 'softwareupdate --install' <<<"$clt_code" | head -1 | cut -d: -f1)
+clean_ln=$(grep -n '_clt_marker_cleanup' <<<"$clt_code" | head -1 | cut -d: -f1)
+if [[ -n "$list_ln" && -n "$inst_ln" && -n "$clean_ln" ]] && (( clean_ln > inst_ln )); then
+    ok "the marker outlives --list and survives into --install"
+else
+    bad "the marker outlives --list and survives into --install" \
+        "cleanup at line ${clean_ln:-?} precedes install at ${inst_ln:-?}"
+fi
+
+# An offer OLDER than the installed clang is a downgrade, and softwareupdate
+# answers "No such update" -- observed on the Intel MacBook with a 16.2 offer
+# against clang 17. Do not send the operator into a sudo prompt for that.
+if grep -q 'offer_major < cc_major' <<<"$clt"; then
+    ok "a downgrade offer is detected and not installed"
+else bad "a downgrade offer is detected and not installed" "no version comparison"; fi
 
 # A failed redirect is reported by the shell BEFORE the redirection applies, so
 # `: > f 2>/dev/null` still leaks "Operation not permitted".

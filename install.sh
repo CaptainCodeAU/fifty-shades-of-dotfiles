@@ -1766,7 +1766,7 @@ _preflight_cc_toolchain_check() {
     # run past twenty minutes -- not a decision an installer gets to make while
     # the operator is away.
     if confirm "Look for a Command Line Tools update now?"; then
-        _offer_clt_install
+        _offer_clt_install "$cc_ver"
     else
         info "Skipped. To fix later:  softwareupdate --list"
     fi
@@ -1802,7 +1802,18 @@ _run_limited() {
 # development machine -- the sandbox refused to create the marker -- so it is
 # written to fail soft: if no CLT item appears, the operator gets the download
 # page instead, which is exactly where they were headed anyway.
+# Remove the installondemand marker, but ONLY if we were the ones who made it.
+# Leaving it behind makes macOS believe a Command Line Tools install is in
+# progress; removing someone else's would break whatever put it there.
+_clt_marker_cleanup() {
+    local created="$1" marker="$2"
+    [[ "$created" == true ]] && rm -f "$marker" 2>/dev/null
+    return 0
+}
+
+# $1 (optional) = the clang version line, used to spot a downgrade offer.
 _offer_clt_install() {
+    local cc_ver="${1:-}"
     local marker="/tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress"
     local created=false list="" label=""
 
@@ -1817,28 +1828,52 @@ _offer_clt_install() {
     info "Asking Software Update (up to 90s)..."
     list=$(_run_limited 90 softwareupdate --list 2>&1) || true
 
-    # Remove OUR marker, whatever happened. Leaving it behind makes macOS believe
-    # a CLT install is in progress.
-    if [[ "$created" == true ]]; then rm -f "$marker" 2>/dev/null || true; fi
-
     label=$(printf '%s\n' "$list" \
             | grep -iE '^\s*\*\s*Label:.*Command Line Tools' \
             | head -1 | sed 's/^[^:]*:[[:space:]]*//') || true
 
     if [[ -n "$label" ]]; then
         success "Software Update is offering: ${label}"
-        echo -e "  ${DIM}This needs sudo and can take a long time. It will not run unattended.${RESET}"
-        if confirm "Install it now with softwareupdate (requires sudo)?"; then
-            run_cmd sudo softwareupdate --install "$label" || \
-                warn "The install did not complete. Try the download page below."
-            return 0
+
+        # WARN WHEN THE OFFER IS OLDER THAN WHAT IS INSTALLED. Measured on the
+        # Intel MacBook 2026-09-05: with clang 17 already present, the marker
+        # surfaced "Command Line Tools for Xcode-16.2" -- an OLDER release --
+        # and `--install` then answered "No such update". An offer that would
+        # downgrade the compiler is not the fix for a compiler that is too old
+        # for its SDK, so say so rather than let it look like the answer.
+        local offer_major="" cc_major=""
+        offer_major=$(printf '%s' "$label" | grep -oE '[0-9]+' | head -1) || true
+        cc_major=$(printf '%s' "${cc_ver:-}" | grep -oE 'version [0-9]+' | grep -oE '[0-9]+') || true
+        if [[ -n "$offer_major" && -n "$cc_major" ]] && (( offer_major < cc_major )); then
+            warn "That offer (Xcode-${offer_major}) is OLDER than your installed clang ${cc_major}."
+            echo -e "  ${DIM}Installing it would be a downgrade, and Software Update often refuses${RESET}"
+            echo -e "  ${DIM}such an offer with 'No such update'. The download page below is the${RESET}"
+            echo -e "  ${DIM}reliable route -- pick the newest Command Line Tools for your macOS.${RESET}"
+        else
+            echo -e "  ${DIM}This needs sudo and can take a long time. It will not run unattended.${RESET}"
+            if confirm "Install it now with softwareupdate (requires sudo)?"; then
+                # The installondemand marker must still EXIST while --install runs.
+                # It was removed right after --list in the first version of this
+                # function, and the install then failed with "No such update" on the
+                # very label the listing had just produced. Cleanup happens below,
+                # after the attempt, on every path.
+                if run_cmd sudo softwareupdate --install "$label"; then
+                    _clt_marker_cleanup "$created" "$marker"
+                    return 0
+                fi
+                warn "The install did not complete. Falling back to the download page."
+            else
+                info "Skipped. To install later:"
+                echo -e "    ${CYAN}sudo softwareupdate --install \"${label}\"${RESET}"
+                _clt_marker_cleanup "$created" "$marker"
+                return 0
+            fi
         fi
-        info "Skipped. To install later:"
-        echo -e "    ${CYAN}sudo softwareupdate --install \"${label}\"${RESET}"
-        return 0
+    else
+        warn "Software Update is not offering Command Line Tools on this machine."
     fi
 
-    warn "Software Update is not offering Command Line Tools on this machine."
+    _clt_marker_cleanup "$created" "$marker"
     info "The standalone package is behind an Apple ID login, so no script can fetch it:"
     echo -e "    ${CYAN}https://developer.apple.com/download/all${RESET}"
     echo -e "  ${DIM}Search 'Command Line Tools for Xcode', match your macOS version, run the .dmg.${RESET}"
