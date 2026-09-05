@@ -1402,6 +1402,10 @@ check_prerequisites() {
     _check_deploy_parity || parity=1
     # settings/ is outside the generic checker's home/ -> ~/ rule; the owner reports.
     _iterm_profiles_sync check || parity=1
+    # A hook script that IS linked but is not registered in settings.json is just
+    # as undeployed as one that was never linked -- it does nothing either way.
+    # Same reporting path, for the same reason. Read-only; writes nothing.
+    _claude_hooks_sync check || parity=1
     if (( parity )); then
         if [[ "$ACTION" == "check" ]]; then
             missing=$((missing+1))
@@ -2990,6 +2994,59 @@ show_help() {
 # `git config --global`: on these dotfiles ~/.gitconfig is a stow symlink into the
 # repo, so --global would write the change straight into the tracked home/.gitconfig
 # (repo pollution). Dormant until enabled here.
+# ==============================================================================
+# Claude Code hook registration
+# ==============================================================================
+# Stow deploys the hook SCRIPTS to ~/.claude/hooks/. A script there does NOTHING
+# until ~/.claude/settings.json REGISTERS it -- and settings.json can never be
+# stowed, because it is machine-local (the model, MCP servers, voice, permissions
+# and the entire PAI hook set live in the same file).
+#
+# Until 2026-09-05 nothing here closed that gap: `grep -n '\.claude' install.sh`
+# returned ZERO matches, so a newly added hook was stowed-but-inert on every
+# machine until someone hand-edited 44KB of JSON. The Intel MacBook made it
+# visible -- three hook files stowed, none registered, nothing saying so.
+#
+# The merge itself lives in home/.local/bin/claude-hooks-sync (add-only; it never
+# removes or edits an existing entry) with its own selftest, matching how
+# safe-rm, vuln-scan and deploy-parity-check are built. This is only the caller.
+# See docs/CLAUDE_HOOKS.md.
+#
+# NEVER FATAL. A box with no jq, or with no settings.json yet, is a box with no
+# hooks registered -- an install that is incomplete, not one that failed. The
+# tool prints its own reason in every such case; exit 2 means "could not run".
+_claude_hooks_sync() {
+    local mode="${1:-install}" rc=0
+    local tool="$REPO_DIR/home/.local/bin/claude-hooks-sync"
+    local manifest="$REPO_DIR/settings/claude/hooks.json"
+
+    [[ -x "$tool" ]]     || return 0
+    [[ -f "$manifest" ]] || return 0
+
+    local -a args=("--$mode")
+    # --dry-run reaches the tool so a dry install.sh run stays a dry run all the
+    # way down; check mode never writes anyway.
+    [[ "$mode" == "install" && "$DRY_RUN" == true ]] && args+=(--dry-run)
+
+    CLAUDE_HOOKS_MANIFEST="$manifest" "$tool" "${args[@]}" || rc=$?
+
+    case "$mode" in
+        check)
+            # 1 = registrations pending: a real, fixable deployment gap, so let it
+            # count against --check exactly like a missing symlink does.
+            # 2 = could not run (no jq / no settings.json). Not a deployment
+            # problem and not something ./install.sh can fix, so it must not fail
+            # the audit -- the tool has already said why.
+            (( rc == 1 )) && return 1
+            return 0
+            ;;
+        *)
+            (( rc != 0 )) && warn "Claude hook registration did not complete (exit $rc) -- continuing."
+            return 0
+            ;;
+    esac
+}
+
 setup_vuln_scan() {
     # vuln-scan checks INSTALLED Homebrew packages against NVD and is wired into
     # both the shell banner and Claude's SessionStart. Deployment itself is handled
@@ -3178,6 +3235,11 @@ main() {
     # --- Post-install ---
     post_install
 
+    # --- Register the Claude Code hooks stow just deployed ---
+    # Must run AFTER stow_home: the tool refuses to register a hook whose script
+    # is not on disk, so running it earlier would skip every hook on a fresh box.
+    _claude_hooks_sync install
+
     # --- Optional: pnpm-audit git hooks (confirm-gated) ---
     setup_pnpm_audit_hooks
 
@@ -3211,7 +3273,11 @@ done
 case "${ACTION:-}" in
     help)       show_help ;;
     check)      check_prerequisites ;;
-    stow-only)  _gate_toolchain_takeover; stow_home; stow_platform ;;
+    # --stow-only is what a consumer box runs after a pull, so it must also
+    # register the hooks it just deployed -- otherwise the exact command the
+    # welcome banner recommends leaves them stowed and inert, which is the
+    # original bug wearing a different hat.
+    stow-only)  _gate_toolchain_takeover; stow_home; stow_platform; _claude_hooks_sync install ;;
     uninstall)  uninstall ;;
     update)     update ;;
     force)      force_adopt ;;

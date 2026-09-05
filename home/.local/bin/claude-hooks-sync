@@ -1,0 +1,307 @@
+#!/usr/bin/env bash
+# claude-hooks-sync -- register this repo's Claude Code hooks in ~/.claude/settings.json.
+#
+# WHAT PROBLEM THIS SOLVES
+#   Stow deploys the hook SCRIPTS into ~/.claude/hooks/. A script there does
+#   NOTHING until settings.json registers it. Until 2026-09-05 nothing in this
+#   repo did that -- `grep -n '\.claude' install.sh` returned zero matches -- so
+#   every new hook had to be hand-wired into a 44KB machine-local JSON file on
+#   each machine, and in practice was not. The Intel MacBook surfaced it: three
+#   hook files stowed, none registered, and no message anywhere saying so.
+#
+# WHAT IT WILL NOT DO (deliberate, chosen 2026-09-05)
+#   ADD ONLY. It never removes an entry and never edits one. A registration that
+#   points at a hook this repo has retired is left alone for a human. The reason
+#   is blast radius: settings.json is not ours -- it also holds the model, MCP
+#   servers, voice, permissions and the whole PAI hook set -- and an installer
+#   that can delete from it is an installer that can lose all of that.
+#
+# WHY jq IS SAFE ON THAT FILE (measured, not assumed, 2026-09-05)
+#   `jq '.' ~/.claude/settings.json` came back BYTE-IDENTICAL: 44335 bytes in,
+#   44335 out, cmp silent, 51 keys both sides. It is strict JSON with no //
+#   comments (unlike the Cursor/VSCode settings install.sh has to text-match) and
+#   it is 2-space indented, which is jq's default. So a round-trip changes only
+#   what we intend to change. Re-check that if the file ever gains comments.
+#
+# TEST SEAM
+#   Every path is env-overridable so claude-hooks-sync-selftest can run the whole
+#   thing against a throwaway tree. That is also the ONLY way the requires-gate
+#   gets exercised on the dev Mac, which HAS ~/.claude/skills/herdr and would
+#   otherwise pass that gate every time and ship it untested.
+#
+# Usage:
+#   claude-hooks-sync --check     report what is unregistered; write nothing
+#   claude-hooks-sync --install   register what is missing
+#   claude-hooks-sync --install --dry-run
+#
+# Exit codes:
+#   0  --check: nothing pending.  --install: succeeded (added, or nothing to do).
+#   1  --check: registrations are pending.  --install: a write failed.
+#   2  cannot run: no jq, no manifest, no settings file, or malformed settings.
+
+set -uo pipefail
+
+# --- colours (off when not a tty, and honouring NO_COLOR) -------------------
+if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+    R=$'\033[31m'; G=$'\033[32m'; Y=$'\033[33m'; C=$'\033[36m'; D=$'\033[2m'; N=$'\033[0m'
+else
+    R=""; G=""; Y=""; C=""; D=""; N=""
+fi
+
+MODE=""
+DRY_RUN=false
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --check)   MODE="check";   shift ;;
+        --install) MODE="install"; shift ;;
+        --dry-run) DRY_RUN=true;   shift ;;
+        -h|--help) sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) printf '%sclaude-hooks-sync: unknown option %s%s\n' "$R" "$1" "$N" >&2; exit 2 ;;
+    esac
+done
+[[ -z "$MODE" ]] && MODE="check"
+
+# --- Where things live -------------------------------------------------------
+# The manifest lives in the REPO (settings/claude/hooks.json), not under home/,
+# so it is not stowed and this tool cannot simply look next to itself. Resolve
+# the repo the way .zsh_welcome does: follow the ~/.zshrc symlink back to its
+# target and go up two levels. install.sh passes CLAUDE_HOOKS_MANIFEST directly,
+# so that path is only the fallback for a by-hand run.
+_resolve_repo_manifest() {
+    local rc="$HOME/.zshrc" target repo
+    [[ -L "$rc" ]] || return 1
+    if command -v readlink >/dev/null 2>&1; then
+        target=$(readlink "$rc") || return 1
+        # A relative link resolves against ~/.
+        [[ "$target" != /* ]] && target="$HOME/$target"
+    else
+        return 1
+    fi
+    repo="$(cd -- "$(dirname -- "$(dirname -- "$target")")" 2>/dev/null && pwd)" || return 1
+    [[ -f "$repo/settings/claude/hooks.json" ]] || return 1
+    printf '%s\n' "$repo/settings/claude/hooks.json"
+}
+
+MANIFEST="${CLAUDE_HOOKS_MANIFEST:-}"
+if [[ -z "$MANIFEST" ]]; then
+    MANIFEST="$(_resolve_repo_manifest 2>/dev/null || true)"
+fi
+SETTINGS="${CLAUDE_SETTINGS_FILE:-$HOME/.claude/settings.json}"
+HOOKS_DIR="${CLAUDE_HOOKS_DIR:-$HOME/.claude/hooks}"
+# What "$HOME" expands to when checking a `requires` path. Overridable so the
+# selftest can point the gate at a temp tree.
+REQ_ROOT="${CLAUDE_REQUIRES_ROOT:-$HOME}"
+
+# --- Preconditions. Each one is a "cannot run" (2), never a silent pass. ------
+if ! command -v jq >/dev/null 2>&1; then
+    printf '%s! claude-hooks-sync: jq is not installed -- cannot read or write JSON safely.%s\n' "$Y" "$N" >&2
+    printf '  %sInstall jq (it is in the onboarding UX-tools set), then re-run.%s\n' "$D" "$N" >&2
+    exit 2
+fi
+if [[ -z "$MANIFEST" || ! -f "$MANIFEST" ]]; then
+    printf '%s! claude-hooks-sync: hook manifest not found%s\n' "$Y" "$N" >&2
+    printf '  %sExpected <repo>/settings/claude/hooks.json, or set CLAUDE_HOOKS_MANIFEST.%s\n' "$D" "$N" >&2
+    exit 2
+fi
+if ! jq empty "$MANIFEST" 2>/dev/null; then
+    printf '%s! claude-hooks-sync: %s is not valid JSON.%s\n' "$R" "$MANIFEST" "$N" >&2
+    exit 2
+fi
+if [[ ! -f "$SETTINGS" ]]; then
+    printf '%s! claude-hooks-sync: %s does not exist -- nothing to register into.%s\n' "$Y" "$SETTINGS" "$N" >&2
+    printf '  %sStart Claude Code once to create it, then re-run.%s\n' "$D" "$N" >&2
+    exit 2
+fi
+# Refuse BEFORE touching a settings file we cannot parse. A malformed
+# settings.json silently disables every setting in it; overwriting one would
+# turn a bad day into a lost configuration.
+if ! jq empty "$SETTINGS" 2>/dev/null; then
+    printf '%s! claude-hooks-sync: %s is not valid JSON -- refusing to touch it.%s\n' "$R" "$SETTINGS" "$N" >&2
+    printf '  %sFix the file first (a malformed settings.json disables ALL of its settings).%s\n' "$D" "$N" >&2
+    exit 2
+fi
+
+# --- Walk the manifest -------------------------------------------------------
+# One row per entry: event, matcher, script, requires (space separated), command,
+# why, entry-as-compact-JSON.
+#
+# Fields are joined with US (U+001F), NOT tab, and that is load-bearing rather
+# than fussy. TAB IS AN IFS WHITESPACE CHARACTER, so `IFS=$'\t' read` COLLAPSES a
+# run of tabs into one delimiter and drops empty fields. An entry with no
+# `requires` emits two adjacent tabs, every later field shifts left by one, and
+# `cmd` silently receives the `why` text -- so nothing ever looks registered and
+# every run appends a duplicate. Measured exactly that on 2026-09-05 before this
+# was changed: `already-there.sh` reached count=2 after one --install.
+# US is not whitespace, so adjacent separators keep their empty field.
+SEP=$'\037'
+manifest_rows() {
+    jq -r '
+      .hooks[]
+      | [ .event,
+          .matcher,
+          .script,
+          ((.requires // []) | join(" ")),
+          .entry.command,
+          .why,
+          (.entry | tojson)
+        ] | join("\u001f")' "$MANIFEST"
+}
+
+# Is (event, matcher, command) already present? Identity is the TRIPLE: the same
+# script is legitimately registered under more than one matcher, and matching the
+# whole hook object instead would treat a "timeout" tweak as unregistered and add
+# a second copy.
+is_registered() {
+    local ev="$1" m="$2" cmd="$3" n
+    n=$(jq --arg ev "$ev" --arg m "$m" --arg c "$cmd" '
+          [ (.hooks // {})[$ev][]?
+            | select((.matcher // "") == $m)
+            | .hooks[]?
+            | select((.command // "") == $c) ] | length' "$SETTINGS" 2>/dev/null) || return 1
+    [[ "${n:-0}" != "0" ]]
+}
+
+PENDING=()      # rows we intend to add
+SKIPPED=()      # human-readable "why not"
+ALREADY=0
+
+while IFS="$SEP" read -r ev matcher script requires cmd why entry; do
+    [[ -z "${ev:-}" ]] && continue
+
+    # Gate 1: the script must exist. Registering a hook whose file is missing
+    # turns every matching tool call into an error -- worse than not registering.
+    if [[ ! -e "$HOOKS_DIR/$script" ]]; then
+        SKIPPED+=("$script -- not deployed to $HOOKS_DIR (run ./install.sh --stow-only)")
+        continue
+    fi
+
+    # Gate 2: every `requires` path must exist. This is the one that keeps a box
+    # without ~/.claude/skills/herdr from having herdr blocked forever.
+    missing_req=""
+    if [[ -n "$requires" ]]; then
+        for req in $requires; do
+            expanded="${req/\$HOME/$REQ_ROOT}"
+            expanded="${expanded/#\~/$REQ_ROOT}"
+            [[ -e "$expanded" ]] || missing_req="$req"
+        done
+    fi
+    if [[ -n "$missing_req" ]]; then
+        SKIPPED+=("$script -- skipped: needs $missing_req, which is not on this machine")
+        continue
+    fi
+
+    if is_registered "$ev" "$matcher" "$cmd"; then
+        ALREADY=$(( ALREADY + 1 ))
+    else
+        PENDING+=("$ev$SEP$matcher$SEP$script$SEP$entry$SEP$why")
+    fi
+done < <(manifest_rows)
+
+# --- Report ------------------------------------------------------------------
+report_skips() {
+    local s
+    for s in ${SKIPPED+"${SKIPPED[@]}"}; do
+        printf '  %s~%s %s\n' "$Y" "$N" "$s"
+    done
+}
+
+if [[ "$MODE" == "check" ]]; then
+    if (( ${#PENDING[@]} == 0 )); then
+        printf '  %s+%s Claude hooks: %d registered' "$G" "$N" "$ALREADY"
+        (( ${#SKIPPED[@]} > 0 )) && printf ', %d skipped' "${#SKIPPED[@]}"
+        printf '\n'
+        report_skips
+        exit 0
+    fi
+    printf '  %s!%s Claude hooks: %d NOT registered in %s\n' "$Y" "$N" "${#PENDING[@]}" "$SETTINGS"
+    for row in "${PENDING[@]}"; do
+        IFS="$SEP" read -r ev matcher script _entry why <<<"$row"
+        printf '      %s%s%s  %s/%s  %s%s%s\n' "$C" "$script" "$N" "$ev" "$matcher" "$D" "$why" "$N"
+    done
+    report_skips
+    printf '      %sFix: ./install.sh   (or: claude-hooks-sync --install)%s\n' "$D" "$N"
+    exit 1
+fi
+
+# --- Install -----------------------------------------------------------------
+report_skips
+
+if (( ${#PENDING[@]} == 0 )); then
+    printf '  %s+%s Claude hooks: all %d already registered -- nothing to do.\n' "$G" "$N" "$ALREADY"
+    exit 0
+fi
+
+if [[ "$DRY_RUN" == true ]]; then
+    printf '  %s[dry-run]%s would register %d Claude hook(s):\n' "$D" "$N" "${#PENDING[@]}"
+    for row in "${PENDING[@]}"; do
+        IFS="$SEP" read -r ev matcher script _entry _why <<<"$row"
+        printf '      + %s  ->  %s/%s\n' "$script" "$ev" "$matcher"
+    done
+    exit 0
+fi
+
+# Build the whole new document in a temp file, then move it over in one step.
+# Never edit in place: a half-written settings.json disables every setting in it.
+TMP="$(mktemp "${SETTINGS}.tmp.XXXXXX")" || {
+    printf '%s! claude-hooks-sync: could not create a temp file next to %s%s\n' "$R" "$SETTINGS" "$N" >&2
+    exit 1
+}
+trap '[[ -n "${TMP:-}" && -e "$TMP" ]] && command rm -f "$TMP"' EXIT
+
+cp "$SETTINGS" "$TMP" || { printf '%s! claude-hooks-sync: could not stage a copy.%s\n' "$R" "$N" >&2; exit 1; }
+
+# Add one entry. Group choice (measured on the real file, which has TWO groups
+# with matcher "Bash" -- PAI's SecurityValidator, and ours): prefer a group that
+# already holds a $HOME/.claude/hooks/ command, so ours stay together and a
+# foreign group is never edited. Otherwise append a brand-new group.
+JQ_ADD='
+  .hooks //= {}
+  | .hooks[$ev] //= []
+  | ( [ .hooks[$ev] | to_entries[]
+        | select((.value.matcher // "") == $m)
+        | select( [ .value.hooks[]?
+                    | select((.command // "") | startswith("$HOME/.claude/hooks/")) ] | length > 0 )
+        | .key ] | first ) as $idx
+  | if $idx == null
+    then .hooks[$ev] += [ { matcher: $m, hooks: [ $entry ] } ]
+    else .hooks[$ev][$idx].hooks += [ $entry ]
+    end
+'
+
+added=0
+for row in "${PENDING[@]}"; do
+    IFS="$SEP" read -r ev matcher script entry why <<<"$row"
+    if jq --arg ev "$ev" --arg m "$matcher" --argjson entry "$entry" "$JQ_ADD" "$TMP" > "$TMP.next" 2>/dev/null \
+       && [[ -s "$TMP.next" ]] && jq empty "$TMP.next" 2>/dev/null; then
+        command mv "$TMP.next" "$TMP"
+        printf '  %s+%s registered %s%s%s  ->  %s/%s\n' "$G" "$N" "$C" "$script" "$N" "$ev" "$matcher"
+        added=$(( added + 1 ))
+    else
+        command rm -f "$TMP.next"
+        printf '%s! claude-hooks-sync: failed to add %s -- leaving settings.json unchanged.%s\n' "$R" "$script" "$N" >&2
+        exit 1
+    fi
+done
+
+# Nothing actually changed? Then take no backup and do not touch the file. A
+# backup per run would bury the one that matters under a pile of identical ones.
+if cmp -s "$SETTINGS" "$TMP"; then
+    printf '  %s+%s Claude hooks: no change needed.\n' "$G" "$N"
+    exit 0
+fi
+
+BACKUP="${SETTINGS}.bak.$(date +%Y%m%d_%H%M%S)"
+if ! cp "$SETTINGS" "$BACKUP"; then
+    printf '%s! claude-hooks-sync: could not write a backup -- refusing to change settings.json.%s\n' "$R" "$N" >&2
+    exit 1
+fi
+if ! command mv "$TMP" "$SETTINGS"; then
+    printf '%s! claude-hooks-sync: the write failed. Your settings are intact; backup at %s%s\n' "$R" "$BACKUP" "$N" >&2
+    exit 1
+fi
+TMP=""   # moved, so the EXIT trap must not chase it
+
+printf '  %s+%s %d Claude hook(s) registered. Backup: %s%s%s\n' "$G" "$N" "$added" "$D" "$BACKUP" "$N"
+printf '      %sRestart Claude Code (or open /hooks) to load them.%s\n' "$D" "$N"
+exit 0

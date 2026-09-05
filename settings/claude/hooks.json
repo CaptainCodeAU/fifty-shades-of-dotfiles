@@ -1,0 +1,96 @@
+{
+  "_comment": [
+    "Claude Code hook registrations this repo OWNS. install.sh merges these into",
+    "~/.claude/settings.json (add-only: never removes, never edits an existing entry).",
+    "",
+    "WHY THIS FILE EXISTS. Stow deploys the hook SCRIPTS into ~/.claude/hooks/, but a",
+    "script there is inert until settings.json REGISTERS it. Before 2026-09-05 nothing",
+    "did that -- install.sh had zero mentions of .claude -- so every new hook had to be",
+    "hand-wired into a 44KB machine-local JSON file on each machine, and in practice was",
+    "not. Surfaced when the Intel MacBook showed enforce-herdr-skill.sh unlinked.",
+    "",
+    "WHY IT IS NOT UNDER home/. settings.json is machine-local (model, MCP servers, voice,",
+    "PAI config) and can never be stowed wholesale. settings/ is this repo's established",
+    "home for installer-driven, NOT-stow-managed config -- same as settings/iterm2 and",
+    "settings/wezterm. Keeping it out of home/ also stops stow from linking a manifest",
+    "into ~/.claude/hooks/ where Claude Code would see a stray file.",
+    "",
+    "SCHEMA of each entry in \"hooks\":",
+    "  event    required. A Claude Code hook event (PreToolUse, PostToolUse, ...).",
+    "  matcher  required. Tool name to match, e.g. Bash, Grep, Skill.",
+    "  script   required. Basename under ~/.claude/hooks/. Gate: if the file is not",
+    "           on disk the entry is SKIPPED -- registering a hook whose script is",
+    "           missing turns every matching tool call into an error.",
+    "  entry    required. Written into settings.json verbatim. Must use $HOME, never a",
+    "           literal username, so the same JSON works on every machine.",
+    "  requires optional. Paths that must exist before the entry is registered. THIS IS",
+    "           A SAFETY GATE, not decoration -- see enforce-herdr-skill below.",
+    "  why      required. One line, printed when the entry is skipped.",
+    "",
+    "MATCH RULE (install.sh): an entry counts as already registered when the triple",
+    "(event, matcher, entry.command) matches something already present. Never the",
+    "command alone -- the same script legitimately appears under several matchers."
+  ],
+
+  "hooks": [
+    {
+      "event": "PreToolUse",
+      "matcher": "Bash",
+      "script": "enforce-census.sh",
+      "entry": {
+        "type": "command",
+        "command": "$HOME/.claude/hooks/enforce-census.sh",
+        "timeout": 5
+      },
+      "why": "Shouts when a grep/rg is used to CONCLUDE instead of census.py"
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "Grep",
+      "script": "enforce-census.sh",
+      "entry": {
+        "type": "command",
+        "command": "$HOME/.claude/hooks/enforce-census.sh",
+        "timeout": 5
+      },
+      "why": "Same guard on the Grep tool, not just shell greps"
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "Bash",
+      "script": "enforce-herdr-skill.sh",
+      "entry": {
+        "type": "command",
+        "command": "$HOME/.claude/hooks/enforce-herdr-skill.sh"
+      },
+      "requires": ["$HOME/.claude/skills/herdr"],
+      "why": "Blocks herdr commands until the herdr skill is read this session"
+    },
+    {
+      "event": "PostToolUse",
+      "matcher": "Skill",
+      "script": "mark-herdr-skill-read.sh",
+      "entry": {
+        "type": "command",
+        "command": "$HOME/.claude/hooks/mark-herdr-skill-read.sh"
+      },
+      "requires": ["$HOME/.claude/skills/herdr"],
+      "why": "Lifts the block above; pointless without the skill it watches for"
+    }
+  ],
+
+  "_requires_note": [
+    "The requires gate on enforce-herdr-skill.sh is load-bearing, and it is the reason",
+    "this manifest has a requires field at all.",
+    "",
+    "That hook DENIES every `herdr` Bash command until the herdr skill is invoked in the",
+    "session. The only thing that lifts the block is the sibling PostToolUse hook seeing",
+    "the herdr skill actually run. ~/.claude/skills/herdr is a symlink into ~/.agents/,",
+    "is NOT tracked by this repo, and nothing deploys it.",
+    "",
+    "So on a machine with the hook registered and no skill installed, herdr is blocked",
+    "PERMANENTLY inside Claude, with no way to unlock it. The laptop is exactly the box",
+    "that drives herdr against the mini, which is how this was caught before shipping",
+    "rather than after."
+  ]
+}
