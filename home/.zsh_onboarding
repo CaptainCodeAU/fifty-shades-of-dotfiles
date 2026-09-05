@@ -867,6 +867,42 @@ run_onboarding() {
         printf "  ${ok}✓${done} %-18s %s\n" "Dev managers" "nvm · uv · pnpm"
     else
         printf "  ${warn}!${done} %-18s %s\n" "Dev managers" "nvm · uv · pnpm"
+
+        # SAY WHICH ONE, AND WHAT WAS READ.
+        #
+        # This line used to print a bare "!" and nothing else, and it cost real
+        # time: it showed on the Intel MacBook across several sessions in
+        # 2026-09 while nvm 0.40.6, uv 0.12.9 and pnpm 11.22.0 were all present
+        # and all above their floors, and install.sh's own checks found all
+        # three. Two separate theories were argued from the code and BOTH were
+        # wrong, because the one machine that could answer was never asked.
+        #
+        # Worse, two of the three failure modes are SILENT. _ensure_nvm returns
+        # early when ~/.nvm exists, _ensure_nvm_current returns early when the
+        # version reads empty, and _ensure_pnpm_current returns early when pnpm
+        # is not yet on PATH -- so nvm and pnpm can each flip the flag and then
+        # print nothing at all. Only a missing uv actually prompts.
+        #
+        # The values below are ALREADY COMPUTED three lines up. Printing them
+        # costs nothing and turns this from an alarm into a diagnosis. An alert
+        # that fires every login without saying why is one you stop reading,
+        # which is the real defect here.
+        if [[ "$nvm_ok" == false ]]; then
+            printf "      ${warn}nvm${done}  %s\n" \
+                "${_nvm_cur:-could not read a version from ~/.nvm/nvm.sh} (need >= ${NVM_MIN_VERSION})"
+        fi
+        if [[ "$uv_ok" == false ]]; then
+            printf "      ${warn}uv${done}   %s\n" "not found on PATH"
+        fi
+        if [[ "$pnpm_ok" == false ]]; then
+            if [[ -z "$_pnpm_bin" ]]; then
+                printf "      ${warn}pnpm${done} %s\n" "not found on PATH yet (onboarding runs before section 5 adds \$PNPM_HOME)"
+            else
+                printf "      ${warn}pnpm${done} %s\n" \
+                    "${_pnpm_cur:-version unreadable} from ${_pnpm_bin} (need >= ${PNPM_MIN_VERSION})"
+            fi
+        fi
+
         # _ensure_nvm handles a missing install; _ensure_nvm_current handles a
         # present-but-below-floor nvm. Both self-gate, so calling both is safe.
         [[ "$nvm_ok" == false ]] && { _ensure_nvm; _ensure_nvm_current "$_nvm_cur"; }

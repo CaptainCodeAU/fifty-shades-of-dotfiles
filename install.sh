@@ -1687,6 +1687,198 @@ install_herdr_release() {
 # nothing else missing) would otherwise never reach the purge at all. Confirmed
 # live on mlbox-ubuntu 2026-08-21: a real apt-installed yt-dlp survived a full
 # `./install.sh` run untouched until this moved to the unconditional path.
+# ==============================================================================
+# Pre-flight: is the C/C++ toolchain actually usable?
+# ==============================================================================
+# WHY THIS EXISTS. On 2026-09-05 the Intel MacBook failed to build ten Homebrew
+# formulae -- aom, libde265, libheif, simdjson, sevenzip, ffmpegthumbnailer,
+# pandoc, gcc, fonttools, pnpm -- every one of them dying on a missing C++
+# header ('string', 'algorithm', 'new', 'cstddef' file not found). Homebrew
+# blamed Intel in a footer it prints after EVERY failure, which is not a
+# diagnosis, and finding the real cause took most of a session by hand.
+#
+# The real cause: clang 17 searched
+#   /Library/Developer/CommandLineTools/usr/include/c++/v1        <- absent
+# while the 193 C++ headers sat in the SDK instead. C headers WERE on the search
+# path, which is exactly why C formulae built fine and C++ formulae did not --
+# the split that made the Intel warning look plausible when it was irrelevant.
+#
+# THE PROBE IS A COMPILE, NOT A VERSION COMPARISON. Comparing clang and SDK
+# versions would need a table of which pairings Apple considers valid. Asking
+# the compiler to compile something asks the same question Homebrew asks, and
+# cannot be fooled. Measured at ~440ms -- nothing beside the brew work above.
+#
+# NEVER BLOCKS. A broken compiler does not stop stow, hook registration or
+# anything else this installer does. An installer that refused to do the work it
+# CAN do would be worse than the bug it is reporting. Always returns 0.
+_preflight_cc_toolchain_check() {
+    [[ "${SKIP_PREFLIGHT:-false}" == true ]] && return 0
+    [[ "$(check_os)" == "macos" ]] || return 0
+    command -v clang++ &>/dev/null || return 0
+
+    if printf '#include <string>\nint main(){return 0;}\n' \
+         | clang++ -x c++ -fsyntax-only - 2>/dev/null; then
+        return 0        # healthy -- say nothing, like every other parity check
+    fi
+
+    echo
+    echo -e "${BOLD}━━━ Pre-flight C++ toolchain check ━━━${RESET}"
+    warn "The C++ toolchain cannot compile a one-line program."
+
+    # Gather the three facts that actually identify the fault. Each guarded:
+    # a diagnostic that aborts the installer is a worse bug than the one it reports.
+    local cc_ver="" sdk_path="" sdk_ver="" want=""
+    cc_ver=$(clang++ --version 2>/dev/null | head -1) || true
+    sdk_path=$(xcrun --show-sdk-path 2>/dev/null | tail -1) || true
+    sdk_ver=$(xcrun --show-sdk-version 2>/dev/null | tail -1) || true
+    # The C++ include directory clang actually searches, straight out of -v.
+    # One pipeline: the intermediate search-list was only ever read once.
+    want=$(printf '#include <string>\n' | clang++ -x c++ -fsyntax-only -v - 2>&1 \
+           | sed -n '/#include <...> search starts here/,/End of search list/p' \
+           | grep -m1 'c++/v1' | sed 's/^[[:space:]]*//') || true
+
+    [[ -n "$cc_ver"   ]] && echo -e "      compiler: ${CYAN}${cc_ver}${RESET}"
+    [[ -n "$sdk_ver"  ]] && echo -e "      SDK:      ${CYAN}${sdk_ver}${RESET}  ${DIM}${sdk_path}${RESET}"
+    if [[ -n "$want" ]]; then
+        if [[ -d "$want" ]]; then
+            echo -e "      C++ headers: ${DIM}${want}${RESET} (exists -- fault is elsewhere)"
+        else
+            echo -e "      ${RED}MISSING${RESET}  ${want}"
+            echo -e "      ${DIM}clang looks there for C++ headers; the directory is not present.${RESET}"
+        fi
+    fi
+    echo -e "      ${DIM}C compiles, C++ does not -- typically a compiler and SDK from${RESET}"
+    echo -e "      ${DIM}different Command Line Tools releases.${RESET}"
+    echo
+    echo -e "  ${YELLOW}Effect:${RESET} Homebrew cannot build anything from source that uses C++."
+    echo -e "  ${DIM}Bottled formulae still install fine, so this stays invisible until a build.${RESET}"
+    echo
+
+    # OFFERED, never automatic. Installing Command Line Tools needs sudo, can run
+    # past twenty minutes, and is not a decision an installer gets to make while
+    # the operator is away. `softwareupdate --list` is read-only, so the confirm
+    # guards a listing, and the install itself stays a human keystroke.
+    if confirm "Run 'softwareupdate --list' now to see if a Command Line Tools update is offered?"; then
+        run_cmd softwareupdate --list || true
+        echo
+        info "If a 'Command Line Tools' item is listed, install it with:"
+        echo -e "    ${CYAN}softwareupdate --install \"<the item name>\"${RESET}"
+        info "If nothing is offered, download 'Command Line Tools for Xcode' from:"
+        echo -e "    ${CYAN}https://developer.apple.com/download/all${RESET}"
+    else
+        info "Skipped. To fix later:  softwareupdate --list"
+    fi
+    info "Re-test with:  echo '#include <string>' | clang++ -x c++ -fsyntax-only -"
+    echo
+    return 0    # never fatal
+}
+
+# ==============================================================================
+# Pre-flight: is another Homebrew already running?
+# ==============================================================================
+# WHY. On 2026-09-05 two terminals ran at once: one `./install.sh`, one
+# `brew upgrade`. The installer's herdr upgrade died twice on
+# "A `brew upgrade herdr` process has already locked /usr/local/Cellar/cmake",
+# and its yt-dlp removal was undone by the other tab reinstalling yt-dlp over
+# nineteen minutes. Both wasted, and neither message said "something else is
+# running" in a way that pointed at the real cause.
+#
+# LOCK FILES ARE NOT A LIVENESS SIGNAL -- measured, and this is the trap.
+# $(brew --prefix)/var/homebrew/locks on this machine holds ~100 lock files
+# including aom.formula.lock dated 31 August, with no brew running at all.
+# Homebrew leaves them behind and re-uses them via flock; presence means
+# "was locked once", never "is locked now". So this looks for a live PROCESS.
+_preflight_brew_busy_check() {
+    [[ "${SKIP_PREFLIGHT:-false}" == true ]] && return 0
+    [[ "$(check_os)" == "macos" ]] || return 0
+    command -v brew &>/dev/null || return 0
+    command -v pgrep &>/dev/null || return 0
+
+    # Match the real work, not any brew invocation: `brew list` in a prompt hook
+    # is harmless and must not trip this. Our own subprocesses are excluded by
+    # checking against this script's process group.
+    local busy=""
+    busy=$(pgrep -fl 'brew (install|upgrade|uninstall|reinstall|autoremove)' 2>/dev/null \
+           | grep -v "^$$ " || true)
+    [[ -z "$busy" ]] && return 0
+
+    echo
+    echo -e "${BOLD}━━━ Pre-flight Homebrew concurrency check ━━━${RESET}"
+    warn "Another Homebrew job is running right now:"
+    printf '      %s\n' "${busy}" | head -3
+    echo
+    echo -e "  ${DIM}Two brew runs fight: one takes a formula lock the other needs, and each${RESET}"
+    echo -e "  ${DIM}can undo the other's work. Observed 2026-09-05 -- a herdr upgrade failed${RESET}"
+    echo -e "  ${DIM}twice on a cmake lock while the other tab rebuilt a package this script${RESET}"
+    echo -e "  ${DIM}had just removed.${RESET}"
+    echo
+    if confirm "Continue anyway (brew steps will probably fail)?"; then
+        warn "Continuing with a concurrent brew. Expect lock errors."
+        return 0
+    fi
+    error "Stopped. Let the other Homebrew job finish, then re-run ./install.sh"
+    exit 1
+}
+
+# ==============================================================================
+# Pre-flight: untrusted Homebrew taps
+# ==============================================================================
+# Homebrew now IGNORES formulae from untrusted taps. That is silent in the sense
+# that matters: a formula you believe is installed simply stops being offered.
+#
+# PER-FORMULA ONLY, DELIBERATELY. `brew trust <tap>` trusts every current AND
+# FUTURE formula, cask and command from that tap -- a standing grant to a third
+# party. `brew trust --formula <tap>/<name>` grants exactly one. This repo's
+# standing policy is the narrow one, and this function must never print the
+# broad form even though `brew` itself offers it.
+_preflight_brew_tap_trust_check() {
+    [[ "${SKIP_PREFLIGHT:-false}" == true ]] && return 0
+    [[ "$(check_os)" == "macos" ]] || return 0
+    command -v brew &>/dev/null || return 0
+
+    # `brew tap-info --json` carries NO trust field -- checked 2026-09-05, the key
+    # simply is not there. The only machine-readable signal Homebrew gives is the
+    # warning it prints, so parse that. `brew tap` costs 16ms here, which is the
+    # cheapest command that still emits it.
+    local out="" taps="" narrow=""
+    out=$(brew tap 2>&1) || true
+    printf '%s\n' "$out" | grep -q "The following taps are not trusted:" || return 0
+
+    taps=$(printf '%s\n' "$out" \
+           | sed -n '/The following taps are not trusted:/,/^$/p' \
+           | sed '1d;/^$/d;s/^[[:space:]]*//') || true
+    [[ -z "$taps" ]] && return 0
+
+    # Surface Homebrew's OWN per-formula suggestions rather than inventing them --
+    # brew already knows which formula from each tap is actually installed, and
+    # guessing that mapping ourselves would be wrong the moment it changes.
+    narrow=$(printf '%s\n' "$out" \
+             | grep -E '^[[:space:]]*brew trust --(formula|cask) ' \
+             | sed 's/^[[:space:]]*//') || true
+
+    echo
+    echo -e "${BOLD}━━━ Pre-flight Homebrew tap trust ━━━${RESET}"
+    warn "$(printf '%s\n' "$taps" | grep -c .) tap(s) untrusted -- Homebrew is IGNORING their formulae."
+    # Indent with sed rather than an unquoted printf. Unquoted expansion would
+    # word-split AND glob-expand each line; tap names are owner/name so nothing
+    # would break today, but a name is data and data should not reach a glob.
+    printf '%s\n' "$taps" | sed 's/^/      /'
+    echo
+    if [[ -n "$narrow" ]]; then
+        info "Trust only what you actually use, one at a time:"
+        printf '%s\n' "$narrow" | sed "s/^/    ${CYAN}/;s/\$/${RESET}/"
+    else
+        info "Trust only what you actually use:  brew trust --formula <tap>/<formula>"
+    fi
+    # Homebrew's own output ALSO offers `brew trust <tap>` (whole-tap). That form is
+    # deliberately filtered out above and must never be echoed here: it is standing
+    # trust for every CURRENT AND FUTURE formula, cask and command from a third
+    # party. The narrow grant is this repo's standing policy.
+    echo -e "  ${DIM}Not 'brew trust <tap>' -- that trusts every future formula from it too.${RESET}"
+    echo
+    return 0
+}
+
 _preflight_purge_ytdlp() {
     [[ "$SKIP_PREFLIGHT" == true ]] && return 0
     local removed=false
@@ -3150,6 +3342,18 @@ main() {
         error "Cannot find 'home/' directory. Run this script from the repo root."
         exit 1
     fi
+
+    # --- Concurrent Homebrew guard (FIRST, before anything touches brew) ---
+    # Ordering is the whole point: every brew step below fails in a confusing way
+    # when another brew holds a formula lock, and the operator sees a lock error
+    # about an unrelated package instead of "something else is running".
+    _preflight_brew_busy_check
+
+    # --- C/C++ toolchain health (warns, never blocks) ---
+    _preflight_cc_toolchain_check
+
+    # --- Untrusted Homebrew taps (their formulae are being ignored) ---
+    _preflight_brew_tap_trust_check
 
     # --- pnpm conflict pre-flight (corepack/v10 cleanup) ---
     # Run here (not inside install_prerequisites) so it executes on every run,

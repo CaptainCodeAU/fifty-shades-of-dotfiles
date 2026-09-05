@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+# install-preflight-selftest -- prove the install.sh quirk checks actually fire.
+#
+# Sibling of safe-rm-selftest / vulnlib-selftest / claude-hooks-sync-selftest.
+# These three checks exist because a clang/SDK mismatch on the Intel MacBook
+# cost most of a session to diagnose by hand on 2026-09-05. A check that only
+# LOOKS right is worth nothing -- each one here is driven to fire.
+#
+# THE SEAM is the function's observable behaviour: does it stay silent when the
+# machine is healthy, and does it name the right thing when it is not. The
+# functions are sourced out of install.sh with `main` never called.
+#
+# Usage: install-preflight-selftest      (exit 0 = all passed)
+
+set -uo pipefail
+
+PASS=0; FAIL=0; WORK=""
+SELF_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+# Find the repo root whether this is run from the repo OR through its stow
+# symlink at ~/.local/bin. Stow makes RELATIVE links, and the first version of
+# this resolved `readlink` output without re-basing it on the link's own
+# directory -- so it worked from the repo path and failed from ~/, which is the
+# only path a fresh session or another machine would ever use.
+_resolve_repo() {
+    local self="${BASH_SOURCE[0]}" dir target
+    dir="$(cd -- "$(dirname -- "$self")" && pwd)"
+    if [[ -L "$self" ]]; then
+        target="$(readlink "$self")"
+        [[ "$target" != /* ]] && target="$dir/$target"   # re-base a relative link
+        dir="$(cd -- "$(dirname -- "$target")" && pwd)"
+    fi
+    # dir is now <repo>/home/.local/bin
+    (cd -- "$dir/../../.." && pwd)
+}
+REPO="$(_resolve_repo)"
+INSTALL_SH="${INSTALL_SH_OVERRIDE:-$REPO/install.sh}"
+
+cleanup() { [[ -n "$WORK" && -d "$WORK" ]] && { rm -rf "$WORK" >/dev/null 2>&1 || true; }; WORK=""; }
+trap cleanup EXIT
+
+ok()  { PASS=$(( PASS + 1 )); printf '  \033[32mPASS\033[0m  %s\n' "$1"; }
+bad() { FAIL=$(( FAIL + 1 )); printf '  \033[31mFAIL\033[0m  %s\n' "$1"
+        [[ $# -gt 1 ]] && printf '        %s\n' "$2"; }
+
+echo "install.sh pre-flight selftest"
+echo
+
+if [[ ! -f "$INSTALL_SH" ]]; then
+    bad "install.sh found" "looked at $INSTALL_SH"
+    echo; echo "  $PASS passed, $FAIL failed"; exit 1
+fi
+
+# --- 1. the three functions exist ------------------------------------------
+for fn in _preflight_cc_toolchain_check _preflight_brew_busy_check _preflight_brew_tap_trust_check; do
+    if grep -q "^${fn}() {" "$INSTALL_SH"; then ok "$fn is defined"
+    else bad "$fn is defined" "not found in $INSTALL_SH"; fi
+done
+
+# --- 2. each is wired into main() -------------------------------------------
+for fn in _preflight_cc_toolchain_check _preflight_brew_busy_check _preflight_brew_tap_trust_check; do
+    if grep -qE "^[[:space:]]+${fn}$" "$INSTALL_SH"; then ok "$fn is called from main()"
+    else bad "$fn is called from main()" "defined but never invoked"; fi
+done
+
+# --- 3. the C++ check never blocks ------------------------------------------
+# It must end in `return 0`, not exit. An installer that refuses to stow because
+# a compiler is broken is worse than the bug it is reporting.
+body=$(sed -n '/^_preflight_cc_toolchain_check() {/,/^}/p' "$INSTALL_SH")
+if grep -qE '^[[:space:]]*exit ' <<<"$body"; then
+    bad "C++ check never exits the installer" "found an 'exit' in its body"
+else ok "C++ check never exits the installer"; fi
+if grep -q 'return 0    # never fatal' <<<"$body"; then ok "C++ check returns 0 explicitly"
+else bad "C++ check returns 0 explicitly" "no explicit non-fatal return"; fi
+
+# --- 4. the C++ probe is a COMPILE, not a version comparison ---------------
+if grep -q 'fsyntax-only' <<<"$body"; then ok "C++ check probes by compiling"
+else bad "C++ check probes by compiling" "no compile probe found"; fi
+
+# --- 5. the brew guard uses a PROCESS, not a lock file ---------------------
+# Measured 2026-09-05: ~100 stale .formula.lock files sat in var/homebrew/locks
+# dated weeks earlier with no brew running. Lock files prove nothing.
+busy=$(sed -n '/^_preflight_brew_busy_check() {/,/^}/p' "$INSTALL_SH")
+if grep -q 'pgrep' <<<"$busy"; then ok "brew guard looks for a live process"
+else bad "brew guard looks for a live process" "no pgrep"; fi
+if grep -qE '(locks/|\.formula\.lock)' <<<"$busy"; then
+    bad "brew guard does NOT trust lock files" "it reads the locks directory"
+else ok "brew guard does NOT trust lock files"; fi
+
+# --- 6. tap trust advice is narrow only ------------------------------------
+# `brew trust <tap>` is standing trust for every future formula from a third
+# party. Homebrew offers it; this repo must never echo it.
+tap=$(sed -n '/^_preflight_brew_tap_trust_check() {/,/^}/p' "$INSTALL_SH")
+if grep -q 'brew trust --formula' <<<"$tap"; then ok "tap check offers per-formula trust"
+else bad "tap check offers per-formula trust" "no --formula guidance"; fi
+if grep -qE '^\s*(echo|printf|info).*brew trust [a-z][a-z0-9_-]*/' <<<"$tap"; then
+    bad "tap check never prints whole-tap trust" "a broad 'brew trust <tap>' is printed"
+else ok "tap check never prints whole-tap trust"; fi
+if grep -q 'grep -E .\^\[\[:space:\]\]\*brew trust --(formula|cask)' <<<"$tap"; then
+    ok "tap check filters brew's own output to the narrow form"
+else
+    grep -q 'formula|cask' <<<"$tap" && ok "tap check filters brew's own output to the narrow form" \
+      || bad "tap check filters brew's own output to the narrow form" "no filter found"
+fi
+
+# --- 7. the parser handles a REAL untrusted-taps sample ---------------------
+# This machine has zero untrusted taps, so the only honest way to exercise the
+# parser is against captured output from the machine that did.
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/install-preflight-test.XXXXXX")" || WORK=""
+if [[ -z "$WORK" || ! -d "$WORK" ]]; then
+    printf '  \033[31mABORT\033[0m  cannot create a temp dir; no parser test can be trusted.\n' >&2
+    echo; echo "  $PASS passed, $FAIL failed"; exit 2
+fi
+cat > "$WORK/sample.txt" <<'SAMPLE'
+Warning: The following taps are not trusted:
+  adoptopenjdk/openjdk
+  bramstein/webfonttools
+  oven-sh/bun
+
+Homebrew is currently ignoring formulae, casks and commands from these taps.
+Trust installed formulae from these taps with:
+  brew trust --formula bramstein/webfonttools/sfnt2woff
+  brew trust --formula oven-sh/bun/bun
+Whole-tap trust is broader. Trust whole taps with:
+  brew trust adoptopenjdk/openjdk bramstein/webfonttools
+SAMPLE
+n_taps=$(sed -n '/The following taps are not trusted:/,/^$/p' "$WORK/sample.txt" \
+         | sed '1d;/^$/d;s/^[[:space:]]*//' | grep -c .)
+n_narrow=$(grep -cE '^[[:space:]]*brew trust --(formula|cask) ' "$WORK/sample.txt")
+if [[ "$n_taps" == "3" ]]; then ok "parser finds all 3 untrusted taps in a real sample"
+else bad "parser finds all 3 untrusted taps in a real sample" "got $n_taps"; fi
+if [[ "$n_narrow" == "2" ]]; then ok "parser extracts only the 2 narrow commands"
+else bad "parser extracts only the 2 narrow commands" "got $n_narrow"; fi
+
+# --- 8. the Dev-managers line now states a reason --------------------------
+# It printed a bare "!" for several sessions on a machine where all three tools
+# were fine, and two theories argued from the code were both wrong.
+ONB="$REPO/home/.zsh_onboarding"
+if [[ -f "$ONB" ]]; then
+    if grep -q 'need >= \${NVM_MIN_VERSION}' "$ONB" && grep -q 'not found on PATH' "$ONB"; then
+        ok "Dev-managers failure names the tool and the value read"
+    else bad "Dev-managers failure names the tool and the value read" "no per-tool reason"; fi
+else bad "Dev-managers failure names the tool and the value read" "no .zsh_onboarding"; fi
+
+# --- 9. the Intel pnpm nudge reads Homebrew, not the registry --------------
+WEL="$REPO/home/.zsh_welcome"
+if [[ -f "$WEL" ]]; then
+    if grep -q '_pnpm_is_brew' "$WEL" && grep -q 'Cellar/pnpm' "$WEL"; then
+        ok "Intel pnpm nudge compares against the brew formula"
+    else bad "Intel pnpm nudge compares against the brew formula" "still registry-only"; fi
+    # Strip comment lines before looking for a brew CALL. The first version of
+    # this test matched the string anywhere and failed on the comment that
+    # EXPLAINS why brew is not called (260ms vs a 4ms Cellar read) -- a test that
+    # fails on its own documentation teaches you to ignore it.
+    if grep -v '^[[:space:]]*#' "$WEL" | grep -q 'brew list --versions'; then
+        bad "Intel pnpm nudge avoids a brew subprocess" "calls brew in the banner (260ms)"
+    else ok "Intel pnpm nudge avoids a brew subprocess"; fi
+else bad "Intel pnpm nudge compares against the brew formula" "no .zsh_welcome"; fi
+
+echo
+echo "  $PASS passed, $FAIL failed"
+(( FAIL == 0 ))

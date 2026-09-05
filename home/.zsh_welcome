@@ -250,8 +250,40 @@ _show_welcome_full() {
     if command -v pnpm &>/dev/null; then
         local pnpm_ver=$(pnpm -v 2>/dev/null || echo 'N/A')
         local pnpm_display="${ok}${pnpm_ver}${done}"
+        # --- Intel macOS: compare against HOMEBREW, not the npm registry --------
+        # On Intel macOS pnpm is a Homebrew formula (the standalone SEA binary
+        # segfaults -- nodejs/node#62893), and pnpm_update on that platform runs
+        # `brew upgrade pnpm`. Comparing against the npm registry there advertises
+        # a version that install method will never produce.
+        #
+        # Observed 2026-09-05 on the Intel MacBook: the banner said
+        #     pnpm: 11.22.0 ↑12.2.1 (run pnpm_update)
+        # while Homebrew's formula was 11.25.0. So the nudge named a MAJOR version
+        # that pnpm_update could not have installed, on a box where the v12 jump had
+        # been deliberately deferred. A nag that points at the wrong version is worse
+        # than no nag: it burns trust in every other line on this banner.
+        #
+        # Read the Cellar directory rather than asking brew: measured 4ms vs 260ms
+        # for `brew list --versions`, and this runs on every single login. Same
+        # file-over-CLI rule as the pnpm config read further down.
+        local _pnpm_is_brew=false
+        if [[ "$IS_MAC" == "true" && "$MAC_ARCH" == "x86_64" ]]; then
+            local -a _brew_pnpm=( "${HOMEBREW_PREFIX:-/usr/local}"/Cellar/pnpm/*(N/) )
+            if (( ${#_brew_pnpm} )); then
+                _pnpm_is_brew=true
+                local _brew_pnpm_ver="${_brew_pnpm[-1]:t}"
+                if [[ -n "$_brew_pnpm_ver" && "$_brew_pnpm_ver" != "$pnpm_ver" ]] \
+                     && [[ "$(_pnpm_vercmp "$pnpm_ver" "$_brew_pnpm_ver")" == "-1" ]]; then
+                    pnpm_display="${warn}${pnpm_ver}${done} ${warn}↑${_brew_pnpm_ver} (brew formula -- run pnpm_update)${done}"
+                fi
+            fi
+        fi
+
         # Soft staleness nudge -- helpers defined in .zsh_onboarding (loaded earlier).
-        if [[ "$pnpm_ver" != "N/A" ]] && typeset -f _pnpm_get_latest &>/dev/null; then
+        # Skipped entirely on a Homebrew-managed pnpm: the registry is not the
+        # source of truth for that install method (see the block above).
+        if [[ "$_pnpm_is_brew" == false ]] \
+             && [[ "$pnpm_ver" != "N/A" ]] && typeset -f _pnpm_get_latest &>/dev/null; then
             local pnpm_latest pnpm_raw pnpm_elig_bin
             pnpm_latest=$(_pnpm_get_latest 2>/dev/null)   # latest eligible (age-gated)
             pnpm_raw=$(_pnpm_get_raw_latest 2>/dev/null)  # registry dist-tag latest
