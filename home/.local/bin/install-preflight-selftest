@@ -157,6 +157,53 @@ if [[ -f "$WEL" ]]; then
     else ok "Intel pnpm nudge avoids a brew subprocess"; fi
 else bad "Intel pnpm nudge compares against the brew formula" "no .zsh_welcome"; fi
 
+# --- 10. CLT offer + brew sweep ---------------------------------------------
+clt=$(sed -n '/^_offer_clt_install() {/,/^}/p' "$INSTALL_SH")
+swp=$(sed -n '/^_offer_brew_sweep() {/,/^}/p' "$INSTALL_SH")
+lim=$(sed -n '/^_run_limited() {/,/^}/p' "$INSTALL_SH")
+
+# `timeout` is coreutils, NOT stock macOS -- /usr/bin/timeout does not exist. A
+# bare call would break the machines this targets.
+if grep -q 'command -v timeout' <<<"$lim" && grep -q 'else "\$@"' <<<"$lim"; then
+    ok "_run_limited degrades when timeout is absent"
+else bad "_run_limited degrades when timeout is absent" "no fallback path"; fi
+
+# softwareupdate --list sat for over ten minutes during development. Unbounded
+# network calls in an installer teach people to kill it.
+if grep -q '_run_limited [0-9]* softwareupdate' <<<"$clt"; then
+    ok "softwareupdate --list is time-limited"
+else bad "softwareupdate --list is time-limited" "unbounded network call"; fi
+
+# The marker makes macOS believe a CLT install is in progress. Ours must go.
+if grep -q 'created" == true' <<<"$clt" && grep -q 'rm -f "\$marker"' <<<"$clt"; then
+    ok "the installondemand marker is removed again"
+else bad "the installondemand marker is removed again" "marker may be left behind"; fi
+
+# A failed redirect is reported by the shell BEFORE the redirection applies, so
+# `: > f 2>/dev/null` still leaks "Operation not permitted".
+# Strip comments first. The comment EXPLAINING this trap contains the very
+# pattern being searched for, so a naive match fails on its own documentation --
+# the second time that happened while writing this suite.
+if grep -v '^[[:space:]]*#' <<<"$clt" | grep -qE ':[[:space:]]*>[[:space:]]*"\$marker"'; then
+    bad "marker creation cannot leak a redirect error" "uses ': >' instead of touch"
+else ok "marker creation cannot leak a redirect error"; fi
+
+# sudo is a human decision; it must sit behind a confirm, never run bare.
+if grep -q 'confirm "Install it now with softwareupdate' <<<"$clt"; then
+    ok "the sudo install sits behind a confirm"
+else bad "the sudo install sits behind a confirm" "sudo may run unprompted"; fi
+
+# Offering a source-build sweep to a machine that cannot compile C++ guarantees
+# a wasted evening -- it is exactly the ten failures that started this thread.
+if grep -q 'CC_TOOLCHAIN_OK' <<<"$swp"; then
+    ok "the brew sweep is gated on a working compiler"
+else bad "the brew sweep is gated on a working compiler" "would offer on a broken box"; fi
+if grep -q 'confirm "Run .brew upgrade' <<<"$swp"; then
+    ok "brew upgrade sits behind a confirm"
+else bad "brew upgrade sits behind a confirm" "may run unattended"; fi
+if grep -q 'n == 0' <<<"$swp"; then ok "the brew sweep is silent when nothing is outdated"
+else bad "the brew sweep is silent when nothing is outdated" "no zero-case guard"; fi
+
 echo
 echo "  $PASS passed, $FAIL failed"
 (( FAIL == 0 ))

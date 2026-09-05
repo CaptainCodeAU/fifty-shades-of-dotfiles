@@ -64,6 +64,10 @@ SAFE_RM="$REPO_DIR/home/.local/bin/safe-rm"
 
 # --- Mode flags ---
 DRY_RUN=false
+# Set by _preflight_cc_toolchain_check; read by _offer_brew_sweep, which must not
+# offer a source-build sweep to a machine that cannot compile C++. Declared here
+# so `set -u` cannot bite when the check is skipped (Linux, or --skip-preflight).
+CC_TOOLCHAIN_OK=true
 VERBOSE=false
 SKIP_PREFLIGHT=false
 
@@ -1718,8 +1722,12 @@ _preflight_cc_toolchain_check() {
 
     if printf '#include <string>\nint main(){return 0;}\n' \
          | clang++ -x c++ -fsyntax-only - 2>/dev/null; then
+        CC_TOOLCHAIN_OK=true
         return 0        # healthy -- say nothing, like every other parity check
     fi
+    # Recorded so _offer_brew_sweep can refuse to offer a source-build sweep on a
+    # machine that provably cannot compile C++.
+    CC_TOOLCHAIN_OK=false
 
     echo
     echo -e "${BOLD}━━━ Pre-flight C++ toolchain check ━━━${RESET}"
@@ -1754,23 +1762,153 @@ _preflight_cc_toolchain_check() {
     echo -e "  ${DIM}Bottled formulae still install fine, so this stays invisible until a build.${RESET}"
     echo
 
-    # OFFERED, never automatic. Installing Command Line Tools needs sudo, can run
-    # past twenty minutes, and is not a decision an installer gets to make while
-    # the operator is away. `softwareupdate --list` is read-only, so the confirm
-    # guards a listing, and the install itself stays a human keystroke.
-    if confirm "Run 'softwareupdate --list' now to see if a Command Line Tools update is offered?"; then
-        run_cmd softwareupdate --list || true
-        echo
-        info "If a 'Command Line Tools' item is listed, install it with:"
-        echo -e "    ${CYAN}softwareupdate --install \"<the item name>\"${RESET}"
-        info "If nothing is offered, download 'Command Line Tools for Xcode' from:"
-        echo -e "    ${CYAN}https://developer.apple.com/download/all${RESET}"
+    # OFFERED, never automatic. Installing Command Line Tools needs sudo and can
+    # run past twenty minutes -- not a decision an installer gets to make while
+    # the operator is away.
+    if confirm "Look for a Command Line Tools update now?"; then
+        _offer_clt_install
     else
         info "Skipped. To fix later:  softwareupdate --list"
     fi
     info "Re-test with:  echo '#include <string>' | clang++ -x c++ -fsyntax-only -"
     echo
     return 0    # never fatal
+}
+
+# Run a command with a wall-clock limit, degrading to no limit when `timeout` is
+# absent. `timeout` is coreutils, NOT stock macOS (/usr/bin/timeout does not
+# exist), so a bare call would break the very machines this script targets.
+# Written after `softwareupdate --list` sat for over ten minutes during
+# development -- an installer that can hang forever on a network call is an
+# installer people learn to kill.
+_run_limited() {
+    local secs="$1"; shift
+    if command -v timeout &>/dev/null; then timeout "$secs" "$@"
+    elif command -v gtimeout &>/dev/null; then gtimeout "$secs" "$@"
+    else "$@"
+    fi
+}
+
+# Find and offer a Command Line Tools install.
+#
+# WHAT CANNOT BE AUTOMATED, and why this is an offer rather than a fix:
+# the standalone package on developer.apple.com is behind an Apple ID login, so
+# no script can fetch it. That leaves `softwareupdate`, which on the affected
+# Intel MacBook listed NO Command Line Tools item at all (verified there
+# 2026-09-05: it offered only Safari and macOS 15.7.9).
+#
+# The `installondemand` marker below is the documented way to make softwareupdate
+# surface the CLT package when it otherwise will not. It was NOT verifiable on the
+# development machine -- the sandbox refused to create the marker -- so it is
+# written to fail soft: if no CLT item appears, the operator gets the download
+# page instead, which is exactly where they were headed anyway.
+_offer_clt_install() {
+    local marker="/tmp/.com.apple.dt.CommandLineTools.installondemand.in-progress"
+    local created=false list="" label=""
+
+    if [[ ! -e "$marker" ]]; then
+        # `touch`, not `: > "$marker" 2>/dev/null`. A FAILED REDIRECT is reported by
+        # the shell itself, before the redirection it was asked to apply, so the
+        # 2>/dev/null does not suppress it and "Operation not permitted" leaks into
+        # the output of a check whose whole job is to be readable.
+        if touch "$marker" 2>/dev/null; then created=true; fi
+    fi
+
+    info "Asking Software Update (up to 90s)..."
+    list=$(_run_limited 90 softwareupdate --list 2>&1) || true
+
+    # Remove OUR marker, whatever happened. Leaving it behind makes macOS believe
+    # a CLT install is in progress.
+    if [[ "$created" == true ]]; then rm -f "$marker" 2>/dev/null || true; fi
+
+    label=$(printf '%s\n' "$list" \
+            | grep -iE '^\s*\*\s*Label:.*Command Line Tools' \
+            | head -1 | sed 's/^[^:]*:[[:space:]]*//') || true
+
+    if [[ -n "$label" ]]; then
+        success "Software Update is offering: ${label}"
+        echo -e "  ${DIM}This needs sudo and can take a long time. It will not run unattended.${RESET}"
+        if confirm "Install it now with softwareupdate (requires sudo)?"; then
+            run_cmd sudo softwareupdate --install "$label" || \
+                warn "The install did not complete. Try the download page below."
+            return 0
+        fi
+        info "Skipped. To install later:"
+        echo -e "    ${CYAN}sudo softwareupdate --install \"${label}\"${RESET}"
+        return 0
+    fi
+
+    warn "Software Update is not offering Command Line Tools on this machine."
+    info "The standalone package is behind an Apple ID login, so no script can fetch it:"
+    echo -e "    ${CYAN}https://developer.apple.com/download/all${RESET}"
+    echo -e "  ${DIM}Search 'Command Line Tools for Xcode', match your macOS version, run the .dmg.${RESET}"
+    echo -e "  ${DIM}It installs over the top -- nothing needs deleting first.${RESET}"
+    if command -v open &>/dev/null && confirm "Open that download page in your browser?"; then
+        run_cmd open "https://developer.apple.com/download/all" || true
+    fi
+    return 0
+}
+
+# ==============================================================================
+# Offer to sweep up outdated Homebrew formulae
+# ==============================================================================
+# DELIBERATELY NOT AUTOMATIC, and deliberately gated on the compiler.
+#
+# A blanket `brew upgrade` is not a dotfiles concern and is not cheap: the Intel
+# MacBook had 76 outdated packages, several of which build from source for
+# tens of minutes each. Wiring that into every ./install.sh would make an
+# ordinary restow occasionally take hours, which is how people stop running the
+# installer at all.
+#
+# It is ALSO gated on the C++ toolchain being healthy. Offering the sweep on a
+# machine whose compiler is broken would simply reproduce the same ten build
+# failures that started this whole thread -- an offer that is guaranteed to
+# waste the operator's evening is worse than no offer.
+_offer_brew_sweep() {
+    [[ "${SKIP_PREFLIGHT:-false}" == true ]] && return 0
+    [[ "$(check_os)" == "macos" ]] || return 0
+    command -v brew &>/dev/null || return 0
+    # Only when the compiler works. CC_TOOLCHAIN_OK is set by the C++ pre-flight.
+    [[ "${CC_TOOLCHAIN_OK:-true}" == true ]] || {
+        info "Skipping the Homebrew sweep -- the C++ toolchain is broken, so source builds would fail again."
+        return 0
+    }
+
+    # ASK AT MOST ONCE A WEEK. There are almost always SOME outdated formulae, so
+    # an unconditional offer would appear on every single run -- identical every
+    # time, which is precisely how a prompt stops being read and starts being
+    # dismissed reflexively. Same 7-day marker shape as the pnpm store prune.
+    local marker_dir="${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles"
+    local marker="$marker_dir/brew_sweep_offered"
+    if [[ -f "$marker" ]]; then
+        local now mtime age
+        now=$(date +%s)
+        mtime=$(stat -c %Y "$marker" 2>/dev/null || stat -f %m "$marker" 2>/dev/null) || mtime=""
+        if [[ -n "$mtime" ]]; then
+            age=$(( now - mtime ))
+            (( age < 604800 )) && return 0
+        fi
+    fi
+
+    local n=0
+    n=$( { _run_limited 30 brew outdated --formula 2>/dev/null || true; } | grep -c . ) || true
+    (( n == 0 )) && return 0
+
+    # Claim the weekly slot BEFORE asking, so declining does not re-ask tomorrow.
+    [[ -d "$marker_dir" ]] || mkdir -p "$marker_dir" 2>/dev/null || true
+    touch "$marker" 2>/dev/null || true
+
+    echo
+    echo -e "${BOLD}━━━ Outdated Homebrew formulae ━━━${RESET}"
+    info "${n} formula(e) are outdated."
+    echo -e "  ${DIM}A full upgrade can run for a long time -- some formulae build from source.${RESET}"
+    if confirm "Run 'brew upgrade' now?"; then
+        run_cmd brew upgrade || warn "brew upgrade did not finish cleanly; re-run it when convenient."
+    else
+        info "Skipped. Run it yourself anytime:  brew upgrade"
+    fi
+    echo
+    return 0
 }
 
 # ==============================================================================
@@ -3449,6 +3587,12 @@ main() {
 
     # --- Report on the vuln-scan NVD key (never fatal, never prompts) ---
     setup_vuln_scan
+
+    # --- Offer to sweep outdated Homebrew formulae (LAST, and confirm-gated) ---
+    # Runs at the very end on purpose: everything this script actually owns is
+    # already done by here, so declining the sweep -- or having it fail -- costs
+    # the operator nothing. Gated on the C++ toolchain being healthy.
+    _offer_brew_sweep
 
     # --- Summary ---
     show_summary
