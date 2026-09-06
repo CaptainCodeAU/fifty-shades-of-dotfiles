@@ -142,12 +142,13 @@ broken_banner(){ # broken_banner <tier> <days> <detail-lines>
 }
 
 # ---- one evaluation ---------------------------------------------------------
-handle_ok(){ # handle_ok <report>
+# Takes the COUNT, not the report. Parsing moved to the single call site below,
+# because a parse that fails has to change the verdict -- and a verdict cannot
+# be decided inside the function named handle_ok.
+handle_ok(){ # handle_ok <pending-count>
     save_state ok 0 0
     $quiet && return 0
-    local gap
-    gap="$(printf '%s' "$1" | sed -n 's/.*Uncaptured: \([0-9]*\) session.*/\1/p')"
-    printf '%b\n' "   ${GREEN}OK${NC} ${DIM}capture working -- ${gap:-0} session(s) pending${NC}"
+    printf '%b\n' "   ${GREEN}OK${NC} ${DIM}capture working -- $1 session(s) pending${NC}"
 }
 
 handle_broken(){ # handle_broken <detail-lines>
@@ -206,7 +207,35 @@ report="$("$ccw" doctor 2>/dev/null)"
 status=$?
 
 if [[ $status -eq 0 ]]; then
-    handle_ok "$report"
+    # A ZERO EXIT IS NOT ENOUGH -- THE REPORT HAS TO BE READABLE TOO.
+    #
+    # This used to be `${gap:-0}` inside handle_ok. When the sed found nothing
+    # it printed "capture working -- 0 session(s) pending": a confident, healthy
+    # number, invented from a failed parse, in the one tool whose entire purpose
+    # is to stop a broken thing looking healthy. A backlog of any size rendered
+    # as a clean zero and nobody would ever have looked twice.
+    #
+    # A doctor that exits 0 in a shape we cannot read has CHANGED UNDER US.
+    # That is the same reasoning already applied to a MISSING ccw above -- a tool
+    # that disappears escalates rather than getting its own polite line -- and a
+    # tool that silently changes output shape is the same class of event.
+    #
+    # It escalates rather than printing a quiet "unknown" because an unverifiable
+    # capture is not a verified-working capture, and the whole file exists on the
+    # principle that silence and health must never look the same. The detail says
+    # exactly what is and is not known, so this can never be mistaken for a claim
+    # that capture has actually stopped.
+    gap="$(printf '%s' "$report" | sed -n 's/.*Uncaptured: \([0-9]*\) session.*/\1/p')"
+    if [[ -z "$gap" ]]; then
+        detail="$(printf '%b' \
+"       ${RED}ccw doctor exited 0 but its output has no readable pending count${NC}\n\
+${DIM}       capture may well be fine -- this watcher can no longer PROVE it${NC}\n\
+${DIM}       fix: compare \`ccw doctor\` against this parser, or ask cc-warehouse${NC}\n\
+${DIM}            for \`ccw doctor --json\` and read that instead${NC}")"
+        handle_broken "$detail"
+        exit 0
+    fi
+    handle_ok "$gap"
     exit 0
 fi
 
