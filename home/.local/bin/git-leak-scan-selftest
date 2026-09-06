@@ -423,6 +423,103 @@ if [[ "$(scan_rc)" == "1" ]]; then ok "the spoof does not stop the leak being BL
 else bad "the spoof does not stop the leak being BLOCKED" "exit was $(scan_rc)"; fi
 cleanup
 
+# ===========================================================================
+# RANGE-MODE SUMMARY -- silence must not be able to mean "did not run"
+# ===========================================================================
+# A clean range printed NOTHING and exited 0, so a wrap-up report could not tell
+# "scanned 9 commits, clean" from "never ran". Three separate projects each grew
+# their own `git rev-list --count` to print a denominator next to the verdict --
+# three counts that can each drift from the one the scanner actually used.
+#
+# HOOK MODE STAYS SILENT. The same binary runs on every commit on this machine;
+# unconditional output would be noise forever. The summary belongs only where
+# somebody ASKED a question.
+# ---------------------------------------------------------------------------
+
+# --- 30. a clean range says what it scanned --------------------------------
+fixture
+stage "harmless one"
+git -C "$REPO" -c core.hooksPath="$WORK/nohooks" commit -q -m one --no-verify
+base="$(git -C "$REPO" rev-parse HEAD)"
+stage "harmless two"
+git -C "$REPO" -c core.hooksPath="$WORK/nohooks" commit -q -m two --no-verify
+stage "harmless three"
+git -C "$REPO" -c core.hooksPath="$WORK/nohooks" commit -q -m three --no-verify
+out="$(scan --since "$base")"
+if [[ "$(scan_rc --since "$base")" == "0" ]]; then ok "summary: a clean range is still exit 0"
+else bad "summary: a clean range is still exit 0" "$out"; fi
+if grep -qi "scanned" <<<"$out"; then ok "summary: a clean range is NOT silent"
+else bad "summary: a clean range is NOT silent" "silence is indistinguishable from 'did not run'"; fi
+if grep -q "2 commit" <<<"$out"; then ok "summary: it reports the commit count (2)"
+else bad "summary: it reports the commit count (2)" "$out"; fi
+
+# --- 31. the summary appears on a BLOCKED range too ------------------------
+# A verdict without a denominator is half a report, whichever the verdict is.
+stage "token = \"$GH_TOKEN\""
+git -C "$REPO" -c core.hooksPath="$WORK/nohooks" commit -q -m leak --no-verify
+out="$(scan --since "$base")"
+if grep -qi "scanned" <<<"$out" && grep -qi "BLOCKED" <<<"$out"; then
+    ok "summary: printed alongside a BLOCKED verdict"
+else bad "summary: printed alongside a BLOCKED verdict" "$out"; fi
+cleanup
+
+# --- 32. HOOK MODE STAYS SILENT --------------------------------------------
+fixture
+stage "harmless"
+out="$(scan)"
+if [[ -z "$out" ]]; then ok "summary: hook mode prints nothing on a clean scan"
+else bad "summary: hook mode prints nothing on a clean scan" "this runs on EVERY commit: $out"; fi
+cleanup
+
+# ===========================================================================
+# RULE-SELECTIVE OPT-OUT -- leakscan.skip
+# ===========================================================================
+# leakscan.disable is all-or-nothing. A repo that legitimately carries real
+# user-home paths (Network_Plan carries ~58) had to disable EVERYTHING to stop
+# the username rule crying wolf -- which silently disarmed the token, private-key
+# and phone rules too, none of which would ever false-alarm there. The cost was
+# a PARALLEL SCANNER that project now maintains, with its own exit codes to keep
+# aligned. That is a worse outcome for everyone than a slightly bigger knob.
+# ---------------------------------------------------------------------------
+
+# --- 33. skipping one rule leaves every other rule armed -------------------
+fixture
+git -C "$REPO" config leakscan.skip "username-path"
+stage "path = \"/Users/$(id -un)/thing\""
+if [[ "$(scan_rc)" == "0" ]]; then ok "skip: the named rule no longer blocks"
+else bad "skip: the named rule no longer blocks" "$(scan)"; fi
+stage "token = \"$GH_TOKEN\""
+if [[ "$(scan_rc)" == "1" ]]; then ok "skip: EVERY OTHER rule is still armed"
+else bad "skip: EVERY OTHER rule is still armed" "a token got through: $(scan)"; fi
+out="$(scan)"
+if grep -qi "skip" <<<"$out" && grep -q "username-path" <<<"$out"; then
+    ok "skip: a disarmed rule ANNOUNCES itself, every run"
+else bad "skip: a disarmed rule ANNOUNCES itself, every run" "$out"; fi
+cleanup
+
+# --- 34. an unknown rule id fails SAFE, and says so ------------------------
+# A typo must never silently disarm nothing while the operator believes it did,
+# nor silently disarm something else. Failing safe here means MORE strict: every
+# rule stays armed, and the unknown id is called out.
+fixture
+git -C "$REPO" config leakscan.skip "usrname-path"
+stage "path = \"/Users/$(id -un)/thing\""
+out="$(scan)"
+if [[ "$(scan_rc)" == "1" ]]; then ok "unknown rule id: the rule stays ARMED (fails safe)"
+else bad "unknown rule id: the rule stays ARMED (fails safe)" "a typo disarmed something: $out"; fi
+if grep -qi "unknown" <<<"$out"; then ok "unknown rule id: it is called out by name"
+else bad "unknown rule id: it is called out by name" "$out"; fi
+cleanup
+
+# --- 35. leakscan.disable is unchanged, and still beats skip ---------------
+fixture
+git -C "$REPO" config leakscan.skip "username-path"
+git -C "$REPO" config leakscan.disable true
+stage "token = \"$GH_TOKEN\""
+if [[ "$(scan_rc)" == "0" ]]; then ok "disable still disables everything (hook mode, exit 0)"
+else bad "disable still disables everything (hook mode, exit 0)" "$(scan)"; fi
+cleanup
+
 echo
 echo "  $PASS passed, $FAIL failed"
 (( FAIL == 0 ))
