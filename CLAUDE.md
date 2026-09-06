@@ -73,7 +73,23 @@ $ command grep -cP '\t' home/.zshrc
 grep: invalid option -- P
 ```
 
-So any shell without that shim — a plain terminal, a script, a cron job, a non-Claude session, a Linux box whose grep lacks PCRE — silently loses the check, and the Edit tool then fails on indentation you never measured. `awk` is POSIX and behaves identically everywhere. Verified 2026-08-04: both forms report 77 tab-indented lines in `home/.zshrc`, and 0 in `home/.zsh_python_functions`.
+So any shell without that shim — a plain terminal, a script, a cron job, a non-Claude session, a Linux box whose grep lacks PCRE — silently loses the check, and the Edit tool then fails on indentation you never measured. `awk` is POSIX and behaves identically everywhere.
+
+**No count is quoted here on purpose.** An earlier version of this line recorded "77 tab-indented lines in `home/.zshrc`" as of 2026-08-04; on 2026-09-06 the same command returned **141**, because the file grew. The number was never wrong — it stopped reproducing, which is worse, because a figure that fails to reproduce reads as a broken instrument rather than a moved target. **Run the command; do not trust a number written in a document about a file that changes.** (Verified 2026-09-06 that the two forms still agree with each other, which is the property that actually matters.)
+
+## End-of-stage leak audit
+
+**Never hand-type `git diff --cached | grep …` as an end-of-stage or end-of-session leak check. Run `git-leak-scan --since <ref>`.**
+
+This repo commits constantly, so by the end of a stage **nothing is staged** — a `--cached` audit then scans zero bytes and satisfies its own "must return empty" test. It cannot fail. A scan that quietly checks nothing is worse than no scan, because it looks like a pass. (The broken form is still written in `Plans/i-have-an-approved-kind-horizon.md`, deliberately unpatched: fixing one historical document would leave the pattern free to reappear.)
+
+**Read the exit code, never the text.** `0` clean · `1` a leak is in committed history (scrubbing needs a rewrite, not a bypass) · **`2` REFUSED — it scanned nothing, and that is NOT a pass.** Exit 2 covers an empty range, a bad revision, and a scan skipped by `leakscan.disable` / `LEAK_SCAN_DISABLE`. Every refusal announces on stderr and every one exits non-zero, because an automated `… && echo PASS` reads only the code.
+
+`git-leak-scan --control` proves every armed rule still fires. **A green control is not a clean repo** — it proves the instrument, not the scope. Pair them: `git-leak-scan --control && git-leak-scan --since <ref>`.
+
+Known limits, all measured: commit messages and annotated tag messages are invisible to any diff-based scan; so is binary content; removed lines are deliberately not scanned, so a secret added _before_ a range and removed inside it stays invisible. **A range scan certifies the RANGE, never the repo.**
+
+Prefer `git config leakscan.skip "<rule-ids>"` over `leakscan.disable` when one rule is noisy — the blunt knob switches off tokens and private keys as collateral.
 
 ## Deletion safety
 
@@ -94,7 +110,22 @@ See [`docs/DELETION_SAFETY.md`](docs/DELETION_SAFETY.md) for the coverage table,
 
 ### How the wrappers work
 
-`rm`, `cp`, and `mv` are shell-function wrappers with safety behavior (rm routes to trash; cp/mv default to `-i` overwrite prompts). These wrappers are usually ACTIVE in Bash tool calls — Claude Code snapshots the interactive shell's functions to `~/.claude/shell-snapshots/snapshot-zsh-*.sh` and sources that file before every command, so the rm-to-trash wrapper comes along even though `.zshrc` itself isn't read. Verified 2026-06-08: `type -a rm` reported the snapshot function and a delete printed `Trashed ... (recover: Finder, Put Back)`, recoverable via Finder or the `trash` CLI. Caveats: confirmed for `rm` only (cp/mv presumably share the mechanism, untested), and it depends on the snapshot having captured the function — not guaranteed on every machine/session, so run `type rm` before trusting reversibility. The discipline does NOT change: ALWAYS get explicit user confirmation before deleting or overwriting — treat Trash recovery as a safety net, never a license to delete freely.
+`rm`, `cp`, and `mv` are shell-function wrappers with safety behavior (rm routes to trash; cp/mv default to `-i` overwrite prompts). These wrappers are usually ACTIVE in Bash tool calls — Claude Code snapshots the interactive shell's functions to `~/.claude/shell-snapshots/snapshot-zsh-*.sh` and sources that file before every command, so the rm-to-trash wrapper comes along even though `.zshrc` itself isn't read. Verified 2026-06-08: `type -a rm` reported the snapshot function and a delete printed `Trashed ... (recover: Finder, Put Back)`, recoverable via Finder or the `trash` CLI. Caveats: confirmed for `rm` only (cp/mv presumably share the mechanism, untested).
+
+**`type rm` REPORTING THE WRAPPER DOES NOT MEAN THE DELETE WILL SUCCEED — measured 2026-09-06, twice.** The wrapper was correctly in place and the trash call still FAILED, leaving the file exactly where it was:
+
+```
+trash[...]: Error attempting to move <path in this repo> to the trash folder …
+  "couldn't be moved to the trash because you don't have permission to access it"
+  Error Domain=NSOSStatusErrorDomain Code=-5000 "afpAccessDenied"
+safe-rm: these paths still exist after the trash call: <path>
+```
+
+So a Bash-tool `rm` has **three** outcomes, not two: trashed, or refused-and-left-in-place, or (never, by design) permanently deleted. `safe-rm` is behaving correctly — it will not silently fall back to the real deleter — but **the file is neither gone nor in the Trash.** Hit twice on 2026-09-06 on paths inside this repo; a stray `.bak` had to be moved out by hand afterwards.
+
+**Therefore: after any `rm` you depend on, CHECK. `test -e <path>` — do not assume.** Especially before reporting a cleanup as done, and especially for a path under `home/`, where a leftover file can be picked up by stow. To relocate rather than delete, `command mv` it to the scratchpad; that always works.
+
+The discipline does NOT change: ALWAYS get explicit user confirmation before deleting or overwriting — treat Trash recovery as a safety net, never a license to delete freely.
 
 ## GitHub CLI (`gh`)
 
