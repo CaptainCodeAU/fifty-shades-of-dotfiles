@@ -110,6 +110,55 @@ voice_alert(){
     return 0
 }
 
+# ---- ask the doctor, but never wait forever --------------------------------
+# This file promises "NEVER BLOCKS. Always exits 0. A watcher that can fail a
+# session start is worse than no watcher." A HANG is worse than a failure: there
+# is no exit code to fail with, the session start simply stops.
+#
+# Until 2026-09-06 `report="$("$ccw" doctor)"` had no timeout at all. The only
+# thing between a wedged doctor and a wedged session start was `timeout: 30`
+# typed into ~/.claude/settings.json -- a number in a config file, on one
+# machine, that nothing verifies and that a hand-registered copy elsewhere may
+# not carry. Run from a shell there was no protection whatsoever.
+#
+# `timeout` is NOT on a stock macOS: it arrives with Homebrew coreutils (as
+# `timeout` or `gtimeout`). So the fallback is a plain-shell watchdog, because
+# "protected only if coreutils happens to be installed" is the same shape of
+# promise as the settings.json number this replaces.
+#
+# The watchdog's own stdout MUST be redirected. Command substitution waits for
+# every writer to close the pipe, so a `sleep` subshell inheriting stdout would
+# hold the substitution open for the full timeout even after doctor returned --
+# turning the fix into the bug.
+DOCTOR_TIMEOUT="${CCW_WATCH_DOCTOR_TIMEOUT:-20}"
+doctor_report(){
+    local pid wd rc
+    if have timeout;  then timeout  "$DOCTOR_TIMEOUT" "$ccw" doctor 2>/dev/null; return $?; fi
+    if have gtimeout; then gtimeout "$DOCTOR_TIMEOUT" "$ccw" doctor 2>/dev/null; return $?; fi
+    # KILL THE PROCESS GROUP, NOT THE PROCESS. Measured 2026-09-06: killing the
+    # pid alone reaped `ccw doctor` itself but left its CHILDREN alive, and a
+    # surviving grandchild still holds the command-substitution pipe open -- so
+    # the caller waited the full 300s of the stub's sleep even though the
+    # watchdog had fired on time. The timeout fired; the hang did not end.
+    #
+    # `set -m` makes the background job a process-group leader (pgid == pid), so
+    # `kill -- -$pid` reaches the whole tree. The plain-pid kill is kept as a
+    # fallback for a shell that refuses job control.
+    #
+    # THIS IS THE PATH THAT MATTERS. `timeout` is not on a stock macOS, so a box
+    # without Homebrew coreutils lands here -- and the selftest's narrowed PATH
+    # forces this branch on purpose, which is the only reason the bug was seen.
+    set -m 2>/dev/null || true
+    "$ccw" doctor 2>/dev/null &
+    pid=$!
+    ( sleep "$DOCTOR_TIMEOUT"
+      kill -TERM -"$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null ) >/dev/null 2>&1 &
+    wd=$!
+    wait "$pid"; rc=$?
+    kill "$wd" 2>/dev/null
+    return $rc
+}
+
 tier_for_days(){ if [ "$1" -ge 7 ]; then TIER=3; elif [ "$1" -ge 3 ]; then TIER=2; else TIER=1; fi; }
 
 broken_banner(){ # broken_banner <tier> <days> <detail-lines>
@@ -203,8 +252,19 @@ if [[ -z "$ccw" ]]; then
     exit 0
 fi
 
-report="$("$ccw" doctor 2>/dev/null)"
+report="$(doctor_report)"
 status=$?
+
+# A doctor that never answered is not a doctor that said "fine". 124 is GNU
+# timeout's code; 143 is 128+SIGTERM from the shell watchdog above.
+if [ "$status" -eq 124 ] || [ "$status" -eq 143 ]; then
+    detail="$(printf '%b' \
+"       ${RED}ccw doctor did not respond within ${DOCTOR_TIMEOUT}s -- timed out${NC}\n\
+${DIM}       capture may well be fine -- this watcher could not get an answer${NC}\n\
+${DIM}       fix: run \`ccw doctor\` by hand and see what it is waiting on${NC}")"
+    handle_broken "$detail"
+    exit 0
+fi
 
 if [[ $status -eq 0 ]]; then
     # A ZERO EXIT IS NOT ENOUGH -- THE REPORT HAS TO BE READABLE TOO.
@@ -226,6 +286,23 @@ if [[ $status -eq 0 ]]; then
     # exactly what is and is not known, so this can never be mistaken for a claim
     # that capture has actually stopped.
     gap="$(printf '%s' "$report" | sed -n 's/.*Uncaptured: \([0-9]*\) session.*/\1/p')"
+
+    # TWO COUNTS IS NOT ONE COUNT. Found by red-teaming 2026-09-06: a doctor
+    # emitting two "Uncaptured: N" lines had the first silently taken and the
+    # rest dropped, and the embedded newline mangled the output line. Picking one
+    # reading of an ambiguous report without saying so is the same defect as
+    # inventing a zero from an unreadable one -- a confident answer the tool
+    # cannot support. So it joins the unreadable case rather than guessing.
+    gap_lines="$(printf '%s\n' "$gap" | grep -c '[0-9]')"
+    if [[ -n "$gap" && "$gap_lines" -gt 1 ]]; then
+        detail="$(printf '%b' \
+"       ${RED}ccw doctor reported ${gap_lines} different pending counts${NC}\n\
+${DIM}       this watcher cannot tell which is true, so it will not pick one${NC}\n\
+${DIM}       fix: check \`ccw doctor\` output; its shape has changed${NC}")"
+        handle_broken "$detail"
+        exit 0
+    fi
+
     if [[ -z "$gap" ]]; then
         detail="$(printf '%b' \
 "       ${RED}ccw doctor exited 0 but its output has no readable pending count${NC}\n\
