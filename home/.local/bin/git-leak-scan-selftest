@@ -1,0 +1,291 @@
+#!/usr/bin/env bash
+# ============================================================================
+#  git-leak-scan-selftest -- prove the global pre-commit gate still bites
+# ============================================================================
+# git-leak-scan is the highest-blast-radius script in this repo: it runs on
+# EVERY commit in EVERY repo on this machine via ~/.config/git/hooks. A mistake
+# in it either blocks every commit, or -- far worse -- silently stops blocking
+# and nothing tells you. It had no test until 2026-09-06.
+#
+# THE SEAM under test is the CLI plus a real throwaway git repo: stage content,
+# run the scanner, assert on exit code and on what it printed. Never the regex
+# internals -- rewriting those is free, these cases only move if the BEHAVIOUR
+# moves.
+#
+# ---------------------------------------------------------------------------
+# EVERY SECRET BELOW IS ASSEMBLED AT RUNTIME. DO NOT "TIDY" THEM INTO LITERALS.
+# ---------------------------------------------------------------------------
+# git-leak-scan scans the staged diff of THIS repo too. A literal `ghp_` plus
+# twenty characters written in this file would block the commit that adds this
+# file -- the scanner would refuse its own test suite. The header of
+# git-leak-scan records the same thing happening to its own source twice, with
+# phone numbers. So each pattern is built from pieces that individually match
+# nothing. Every phone number written literally here is from a reserved
+# documentation range, for the same reason.
+#
+# Usage: git-leak-scan-selftest        (exit 0 = all passed)
+# ============================================================================
+
+set -uo pipefail
+
+SELF_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+TOOL="${GIT_LEAK_SCAN_BIN:-$SELF_DIR/git-leak-scan}"
+
+PASS=0
+FAIL=0
+WORK=""
+
+cleanup() {
+    [[ -n "$WORK" && -d "$WORK" ]] || return 0
+    rm -rf "$WORK" >/dev/null 2>&1 || true
+    WORK=""
+}
+trap cleanup EXIT
+
+ok()  { PASS=$(( PASS + 1 )); printf '  \033[32mPASS\033[0m  %s\n' "$1"; }
+bad() { FAIL=$(( FAIL + 1 )); printf '  \033[31mFAIL\033[0m  %s\n' "$1"
+        [[ $# -gt 1 ]] && printf '        %s\n' "$2"; }
+
+# --- assembled patterns (see the header; never inline these) ----------------
+A36="$(printf 'A%.0s' 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6)"
+GH_TOKEN="gh${_p:-}p_${A36}"
+SK_TOKEN="sk${_p:-}-${A36}"
+AWS_KEY="AK${_p:-}IA0123456789ABCDEF"
+SLACK_TOKEN="xo${_p:-}xb-0123456789-abcdefghij"
+PEM_HEADER="$(printf -- '-----%s RSA PRIVATE KEY-----' 'BEGIN')"
+REAL_E164="+12125550142"            # NANP 555-01xx IS reserved for fiction, so
+                                    # it is safe to write literally -- the
+                                    # scanner exempts it. Verified by case 12.
+# The next three are assembled, and this is not paranoia -- it is measured.
+# Written literally, NOT_FICTION_E164 blocked the commit that adds this very
+# file: it is a real-shaped E.164 in no reserved range, which is precisely what
+# makes it a valid test input and precisely what makes the gate reject it. The
+# two WARN inputs are assembled for the milder version of the same problem --
+# literals would make every future commit touching this file cry wolf.
+NOT_FICTION_E164="+6${_p:-}1390001234"   # real-shaped, unreserved -- must BLOCK
+DOC_AU_LOCAL="0491570156"           # ACMA reserved -- must NOT even warn
+LAN_IP="192.16${_p:-}8.1.50"
+REAL_AU_LOCAL="04${_p:-}12345678"   # not reserved -- must WARN, never block
+
+# ---------------------------------------------------------------------------
+# A throwaway git repo. core.hooksPath is pointed at an empty dir so the real
+# hook chain can never fire inside a fixture -- this suite calls the scanner
+# DIRECTLY and must not be at the mercy of whatever else is chained in.
+# ---------------------------------------------------------------------------
+fixture() {
+    WORK="$(mktemp -d "${TMPDIR:-/tmp}/git-leak-scan-test.XXXXXX")" || WORK=""
+    if [[ -z "$WORK" || ! -d "$WORK" ]]; then
+        printf '  \033[31mABORT\033[0m  cannot create a temp dir under %s -- no test can be trusted.\n' \
+               "${TMPDIR:-/tmp}" >&2
+        exit 2
+    fi
+    REPO="$WORK/repo"
+    mkdir -p "$REPO" "$WORK/nohooks"
+    git -C "$REPO" init -q
+    git -C "$REPO" config core.hooksPath "$WORK/nohooks"
+    git -C "$REPO" config user.email selftest@example.invalid
+    git -C "$REPO" config user.name selftest
+    git -C "$REPO" config commit.gpgsign false
+}
+
+# stage <content> -- write it to a file and git add it
+stage() { printf '%s\n' "$1" > "$REPO/sample.txt"; git -C "$REPO" add sample.txt; }
+
+# run the scanner inside the fixture repo; stderr folded in, exit code captured
+scan() { ( cd "$REPO" && "$TOOL" "$@" 2>&1 ); }
+scan_rc() { ( cd "$REPO" && "$TOOL" "$@" >/dev/null 2>&1; echo $? ); }
+
+echo "git-leak-scan selftest"
+echo
+
+if [[ ! -x "$TOOL" ]]; then
+    bad "git-leak-scan is executable at $TOOL" "not found or not executable"
+    echo; echo "  $PASS passed, $FAIL failed"; exit 1
+fi
+
+# --- 1. clean content passes -------------------------------------------------
+fixture
+stage "just an ordinary line of text"
+if [[ "$(scan_rc)" == "0" ]]; then ok "clean staged content exits 0"
+else bad "clean staged content exits 0" "$(scan)"; fi
+if [[ -z "$(scan)" ]]; then ok "clean staged content prints nothing"
+else bad "clean staged content prints nothing" "$(scan)"; fi
+cleanup
+
+# --- 2-7. each BLOCK category actually blocks --------------------------------
+check_block() { # check_block <label> <content> <expected-category>
+    fixture
+    stage "$2"
+    local out rc
+    out="$(scan)"; rc="$(scan_rc)"
+    if [[ "$rc" == "1" ]]; then ok "BLOCK: $1 exits 1"
+    else bad "BLOCK: $1 exits 1" "exit was $rc -- THE GATE IS OPEN for this category"; fi
+    if grep -q "$3" <<<"$out"; then ok "BLOCK: $1 names the category ($3)"
+    else bad "BLOCK: $1 names the category ($3)" "$out"; fi
+    cleanup
+}
+check_block "github token"  "token = \"$GH_TOKEN\""      "github-token"
+check_block "sk- token"     "key = \"$SK_TOKEN\""        "api-token"
+check_block "aws key"       "id = \"$AWS_KEY\""          "aws-access-key"
+check_block "slack token"   "hook = \"$SLACK_TOKEN\""    "slack-token"
+check_block "private key"   "$PEM_HEADER"                "private-key"
+check_block "E.164 phone"   "call $NOT_FICTION_E164 now" "phone-number"
+
+# --- 8. this machine's username inside a path blocks -------------------------
+# Built from id -un at runtime; no username literal is ever written to this file.
+fixture
+stage "path = \"/Users/$(id -un)/secret/thing\""
+if [[ "$(scan_rc)" == "1" ]]; then ok "BLOCK: username-in-path exits 1"
+else bad "BLOCK: username-in-path exits 1" "$(scan)"; fi
+cleanup
+
+# --- 9. THE VALUE IS NEVER RE-PRINTED ---------------------------------------
+# The scanner's whole promise: it reports FILE + CATEGORY, never the secret. A
+# gate that echoes the secret into a terminal, a CI log or an agent transcript
+# has leaked it a second time while claiming to prevent leaks.
+fixture
+stage "token = \"$GH_TOKEN\""
+out="$(scan)"
+if ! grep -qF "$GH_TOKEN" <<<"$out"; then ok "the matched value is NEVER echoed back"
+else bad "the matched value is NEVER echoed back" "the secret appeared in the scanner's own output"; fi
+if ! grep -qF "$A36" <<<"$out"; then ok "not even the value's body leaks into output"
+else bad "not even the value's body leaks into output" "$out"; fi
+cleanup
+
+# --- 10-11. WARN categories surface but do NOT block -------------------------
+check_warn() { # check_warn <label> <content> <expected-category>
+    fixture
+    stage "$2"
+    local out rc
+    out="$(scan)"; rc="$(scan_rc)"
+    if [[ "$rc" == "0" ]]; then ok "WARN: $1 does not block (exit 0)"
+    else bad "WARN: $1 does not block (exit 0)" "exit was $rc -- a warn became a block"; fi
+    if grep -q "$3" <<<"$out"; then ok "WARN: $1 is still surfaced ($3)"
+    else bad "WARN: $1 is still surfaced ($3)" "$out"; fi
+    cleanup
+}
+check_warn "private LAN IP"     "server at $LAN_IP"      "private-LAN-IP"
+check_warn "local AU mobile"    "call $REAL_AU_LOCAL"    "local-format-phone"
+
+# --- 12. reserved documentation numbers are exempt from BOTH ----------------
+# Without this the scanner flags the very examples that exist so real numbers
+# are not used -- and its own source, which is how two real bugs were found.
+fixture
+stage "example only: $DOC_AU_LOCAL and $REAL_E164"
+out="$(scan)"
+if [[ "$(scan_rc)" == "0" && -z "$out" ]]; then
+    ok "reserved documentation numbers are neither blocked nor warned"
+else bad "reserved documentation numbers are neither blocked nor warned" "$out"; fi
+cleanup
+
+# --- 13. a mixed line still catches the real number --------------------------
+fixture
+stage "docs say $DOC_AU_LOCAL but the real one is $NOT_FICTION_E164"
+if [[ "$(scan_rc)" == "1" ]]; then ok "a reserved number on the line does not mask a real one"
+else bad "a reserved number on the line does not mask a real one" "$(scan)"; fi
+cleanup
+
+# --- 14. only ADDED lines are scanned ---------------------------------------
+# A removal is not a leak; blocking one would make deleting a leak impossible.
+fixture
+stage "token = \"$GH_TOKEN\""
+git -C "$REPO" -c core.hooksPath="$WORK/nohooks" commit -q -m base --no-verify
+stage "cleaned up"
+if [[ "$(scan_rc)" == "0" ]]; then ok "REMOVING a secret is not itself blocked"
+else bad "REMOVING a secret is not itself blocked" "$(scan)"; fi
+cleanup
+
+# --- 15-16. the two documented bypasses, and both must ANNOUNCE themselves ---
+fixture
+stage "token = \"$GH_TOKEN\""
+rc="$( cd "$REPO" && LEAK_SCAN_DISABLE=1 "$TOOL" >/dev/null 2>&1; echo $? )"
+if [[ "$rc" == "0" ]]; then ok "LEAK_SCAN_DISABLE=1 bypasses the gate"
+else bad "LEAK_SCAN_DISABLE=1 bypasses the gate" "exit was $rc"; fi
+
+git -C "$REPO" config leakscan.disable true
+out="$(scan)"
+if [[ "$(scan_rc)" == "0" ]]; then ok "leakscan.disable skips the scan"
+else bad "leakscan.disable skips the scan" "exit was $(scan_rc)"; fi
+if grep -qi "skipped" <<<"$out"; then
+    ok "a disabled gate ANNOUNCES itself -- never silently stands down"
+else bad "a disabled gate ANNOUNCES itself -- never silently stands down" "$out"; fi
+cleanup
+
+# --- 17. fails open outside a git repo --------------------------------------
+fixture
+rc="$( cd "$WORK" && "$TOOL" >/dev/null 2>&1; echo $? )"
+if [[ "$rc" == "0" ]]; then ok "outside a git repo it fails open, not closed"
+else bad "outside a git repo it fails open, not closed" "exit was $rc"; fi
+cleanup
+
+# ===========================================================================
+# THE DEFECT THIS SUITE WAS WRITTEN FOR
+# ===========================================================================
+# The gate itself is sound: as a pre-commit hook it runs DURING `git commit`,
+# when the staging area is full by definition. But the same command is written
+# into this project's own plan documents as an end-of-stage audit --
+# `git diff --cached | grep ...` -- and this project's standing habit is to
+# commit constantly. At the end of a stage NOTHING IS STAGED, so that audit
+# scans zero bytes and reports clean. It cannot fail. A scan that quietly
+# checks nothing is worse than no scan, because it looks like a pass.
+#
+# The fix is not to patch the grep in one historical document. It is to give
+# the real scanner a range mode, so an audit can point at committed work -- and
+# to make an EMPTY range a refusal rather than a pass, exactly as census.py
+# refuses to report anything until its control token has hit.
+#
+# The hook path (bare / --cached) deliberately keeps exit 0 on an empty staged
+# diff: `git commit --allow-empty` is legitimate and must not be broken by a
+# linter. Zero change in blast radius on the global gate. But it must not be
+# SILENT about it either -- silence is the whole defect.
+# ---------------------------------------------------------------------------
+
+# --- 18. bare invocation with nothing staged says so ------------------------
+fixture
+stage "anything at all"
+git -C "$REPO" -c core.hooksPath="$WORK/nohooks" commit -q -m base --no-verify
+out="$(scan)"
+if [[ "$(scan_rc)" == "0" ]]; then ok "empty staged diff still exits 0 (--allow-empty must work)"
+else bad "empty staged diff still exits 0 (--allow-empty must work)" "exit was $(scan_rc)"; fi
+if grep -qi "nothing staged\|scanned nothing" <<<"$out"; then
+    ok "empty staged diff SAYS it scanned nothing"
+else bad "empty staged diff SAYS it scanned nothing" "silent clean exit -- indistinguishable from a real pass: $out"; fi
+cleanup
+
+# --- 19. --range scans committed work ---------------------------------------
+fixture
+stage "harmless base"
+git -C "$REPO" -c core.hooksPath="$WORK/nohooks" commit -q -m base --no-verify
+base="$(git -C "$REPO" rev-parse HEAD)"
+stage "token = \"$GH_TOKEN\""
+git -C "$REPO" -c core.hooksPath="$WORK/nohooks" commit -q -m leak --no-verify
+if [[ "$(scan_rc --range "$base..HEAD")" == "1" ]]; then
+    ok "--range finds a leak in ALREADY COMMITTED work"
+else bad "--range finds a leak in ALREADY COMMITTED work" "$(scan --range "$base..HEAD")"; fi
+
+# --- 20. --since is the ergonomic form of the same thing --------------------
+if [[ "$(scan_rc --since "$base")" == "1" ]]; then ok "--since <ref> finds the same leak"
+else bad "--since <ref> finds the same leak" "$(scan --since "$base")"; fi
+
+# --- 21. THE REFUSAL: an empty range is NOT a pass --------------------------
+out="$(scan --range "HEAD..HEAD")"
+rc="$(scan_rc --range "HEAD..HEAD")"
+if [[ "$rc" == "2" ]]; then ok "an EMPTY range REFUSES (exit 2), it does not pass"
+else bad "an EMPTY range REFUSES (exit 2), it does not pass" "exit was $rc -- an empty audit reported success"; fi
+if grep -qi "scanned nothing\|refus" <<<"$out"; then
+    ok "the refusal says plainly that nothing was scanned"
+else bad "the refusal says plainly that nothing was scanned" "$out"; fi
+
+# --- 22. a clean NON-empty range is a genuine pass --------------------------
+# The refusal must not be so eager that real clean work cannot pass.
+stage "still harmless"
+git -C "$REPO" -c core.hooksPath="$WORK/nohooks" commit -q -m clean --no-verify
+prev="$(git -C "$REPO" rev-parse HEAD~1)"
+if [[ "$(scan_rc --range "$prev..HEAD")" == "0" ]]; then
+    ok "a clean non-empty range is a real pass (exit 0)"
+else bad "a clean non-empty range is a real pass (exit 0)" "$(scan --range "$prev..HEAD")"; fi
+cleanup
+
+echo
+echo "  $PASS passed, $FAIL failed"
+(( FAIL == 0 ))
