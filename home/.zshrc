@@ -976,6 +976,40 @@ _claude_launch() {
 
 alias c='_claude_launch claude --dangerously-skip-permissions --permission-mode plan'       # Standard launch
 alias ct='_claude_launch CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 claude --dangerously-skip-permissions --permission-mode plan --teammate-mode tmux'  # Tmux agent teams
+
+# Clean-room Claude for measuring front-loaded context (CLAUDE.md, memory,
+# skills, MCP) one piece at a time. Measured 2026-09-06 (Claude Code 2.1.263):
+#   --bare            : the official minimal mode, but it never reads OAuth or
+#                       the keychain -> "Not logged in" on a Max account.
+#   CLAUDE_CONFIG_DIR : a fresh config dir is logged out for the same reason.
+#   THIS              : login intact. An EMPTY cwd means no project CLAUDE.md
+#                       and no auto-memory (both keyed by folder); empty
+#                       --setting-sources drops user/project/local settings,
+#                       and with them hooks, loadAtStartup files and even the
+#                       global ~/.claude/CLAUDE.md; --strict-mcp-config with no
+#                       --mcp-config means zero MCP servers. A fresh session
+#                       launched this way reported: no PAI, no CLAUDE.md from
+#                       any path, no memory, 0 MCP tools.
+# Not routed through _claude_launch on purpose: that injects $GH_TOKEN and
+# $NVD_API_KEY, which is exactly the kind of ambient context this exists to
+# exclude. No permission flags either -- default mode prompts before acting,
+# which is the safe default for an untrusted-by-design scratch folder; add
+# --dangerously-skip-permissions yourself when a test needs to act.
+#
+# Usage: claude-clean [extra claude flags...]
+#   claude-clean --append-system-prompt-file ~/draft-CLAUDE.md
+#   claude-clean --disable-slash-commands      # also drop the built-in skills
+# Inside: /context shows the token breakdown per source -- the measuring stick.
+# Each run gets its own empty folder under ~/.cache/claude-clean/; drop a
+# CLAUDE.md in there and relaunch WITHOUT --setting-sources '' to test a
+# project CLAUDE.md the way a real project injects it. Folders are yours to
+# delete; nothing else references them.
+claude-clean() {
+    local dir="$HOME/.cache/claude-clean/$(date +%Y%m%d-%H%M%S)"
+    mkdir -p "$dir" || return 1
+    echo "clean-room cwd: $dir" >&2
+    ( builtin cd "$dir" && command claude --setting-sources '' --strict-mcp-config "$@" )
+}
 alias cb='_claude_launch claude'                                                            # Bare (full control)
 alias cr='_claude_launch claude --dangerously-skip-permissions --resume'                    # Resume last session
 alias ci='_claude_launch claude --dangerously-skip-permissions -p'                          # Non-interactive / piped
