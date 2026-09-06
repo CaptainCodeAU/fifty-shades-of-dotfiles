@@ -520,6 +520,78 @@ if [[ "$(scan_rc)" == "0" ]]; then ok "disable still disables everything (hook m
 else bad "disable still disables everything (hook mode, exit 0)" "$(scan)"; fi
 cleanup
 
+# ===========================================================================
+# A TWO-DOT DIFF IS A NET DIFF -- add-then-remove cancelled out
+# ===========================================================================
+# `--range` read `git diff A..B`, which is the NET result. A secret added in one
+# commit and removed in a LATER commit inside the same range cancels to nothing,
+# so the audit read zero occurrences of a token that is sitting in history.
+#
+# Measured before the fix, and it is the worst version of the failure this whole
+# file is about, because the summary line makes it CONFIDENT:
+#
+#     git log -p <range>  -> 2 occurrences of the token
+#     git diff <range>    -> 0 occurrences
+#     git-leak-scan --since <base>
+#       "scanned 2 commit(s), 1 added line(s)"   exit 0
+#
+# An honest denominator next to a wrong verdict. cc-warehouse proved the case is
+# live for anyone who pushes per commit: a leak-then-fix pair is briefly PUBLIC
+# and no net-diff scan can see it afterwards.
+#
+# Audit mode now reads `git log -p` -- per-commit patches -- so each commit's
+# added lines are scanned as they were actually committed. Hook mode is
+# untouched: a staged diff is inherently per-commit already.
+# ---------------------------------------------------------------------------
+
+# --- 36. add-then-remove inside the range is CAUGHT ------------------------
+fixture
+stage "start"
+git -C "$REPO" -c core.hooksPath="$WORK/nohooks" commit -q -m base --no-verify
+base="$(git -C "$REPO" rev-parse HEAD)"
+stage "key = \"$GH_TOKEN\""
+git -C "$REPO" -c core.hooksPath="$WORK/nohooks" commit -q -m oops --no-verify
+stage "scrubbed"
+git -C "$REPO" -c core.hooksPath="$WORK/nohooks" commit -q -m fix --no-verify
+out="$(scan --since "$base")"
+if [[ "$(scan_rc --since "$base")" == "1" ]]; then
+    ok "add-then-remove inside a range is BLOCKED, not cancelled out"
+else bad "add-then-remove inside a range is BLOCKED, not cancelled out" "exit $(scan_rc --since "$base") -- a token in history read as clean: $out"; fi
+if grep -q "github-token" <<<"$out"; then ok "add-then-remove: the category is named"
+else bad "add-then-remove: the category is named" "$out"; fi
+
+# --- 37. the denominator reflects per-commit lines, not the net -------------
+# The net diff for that range is one line. The audit actually read more, and the
+# summary must report what was READ or it is the same lie in a smaller font.
+if grep -qE "scanned 2 commit\(s\), [2-9][0-9]* added line" <<<"$out"; then
+    ok "the summary counts per-commit added lines, not the net"
+else bad "the summary counts per-commit added lines, not the net" "$out"; fi
+cleanup
+
+# --- 38. THE LIMIT I AM CHOOSING TO KEEP -----------------------------------
+# A secret added BEFORE the range and removed INSIDE it stays invisible, because
+# only ADDED lines are scanned. That is deliberate, not an oversight: scanning
+# removals would make every scrub-forward commit block forever, and a gate that
+# fires on the act of cleaning up is a gate people learn to bypass -- the same
+# anti-habituation reasoning that keeps LAN IPs a warning rather than a block.
+#
+# The consequence must therefore be stated wherever this tool is relied on:
+# A RANGE SCAN CERTIFIES THE RANGE, NEVER THE REPO. If you need "is this repo
+# clean", that is a full-history audit, not this.
+#
+# This case exists so the limit is a decision on the record rather than a
+# surprise someone rediscovers later.
+fixture
+stage "key = \"$GH_TOKEN\""
+git -C "$REPO" -c core.hooksPath="$WORK/nohooks" commit -q -m "leak lands here" --no-verify
+base="$(git -C "$REPO" rev-parse HEAD)"
+stage "scrubbed"
+git -C "$REPO" -c core.hooksPath="$WORK/nohooks" commit -q -m "scrub" --no-verify
+if [[ "$(scan_rc --since "$base")" == "0" ]]; then
+    ok "a secret added BEFORE the range is not resurfaced by its removal (by design)"
+else bad "a secret added BEFORE the range is not resurfaced by its removal (by design)" "removals are being scanned; scrubbing now blocks forever"; fi
+cleanup
+
 echo
 echo "  $PASS passed, $FAIL failed"
 (( FAIL == 0 ))
