@@ -185,6 +185,42 @@ line_has_real_phone() {
 # Collect the diff FIRST, so its emptiness can be judged before it is scanned.
 # Reading it straight into the loop is what made "nothing to scan" and "nothing
 # found" the same observable outcome.
+# VALIDATE THE RANGE BEFORE HANDING IT TO git diff.
+#
+# Red-teamed 2026-09-06: the value was passed through unchecked, and git is
+# happy to read it as an option or a pathspec. `--range --stat` and
+# `--range sample.txt` both scanned the UNSTAGED WORKING TREE while the report
+# said "range --stat". Had the working tree been clean, that is an exit 0 and a
+# caller believing a range was audited. Same defect class as the empty scan: it
+# looked at something other than what was asked and nothing said so.
+#
+# Shell injection was tested and is NOT possible -- the value is quoted
+# throughout, and `--range '; echo PWNED'` never executes. This is a
+# correctness and trust problem, not a code-execution one.
+_valid_rev() { git rev-parse --verify --quiet "${1}^{commit}" >/dev/null 2>&1; }
+if [ "$MODE" = "range" ]; then
+    _bad=""
+    case "$RANGE" in
+        -*) _bad="it starts with '-', so git would read it as an option" ;;
+    esac
+    if [ -z "$_bad" ]; then
+        _lhs="${RANGE%%..*}"
+        _rhs="${RANGE##*..}"
+        if [ "$RANGE" = "$_lhs" ]; then
+            _valid_rev "$RANGE" || _bad="'$RANGE' is not a valid revision"
+        else
+            _valid_rev "$_lhs" || _bad="'$_lhs' is not a valid revision"
+            [ -z "$_bad" ] && { _valid_rev "$_rhs" || _bad="'$_rhs' is not a valid revision"; }
+        fi
+    fi
+    if [ -n "$_bad" ]; then
+        printf 'git-leak-scan: REFUSING -- %s.\n' "$_bad" >&2
+        printf '  Nothing was scanned. Pass a revision range such as <ref>..HEAD;\n' >&2
+        printf '  a path or an option here would silently scan the working tree.\n' >&2
+        exit 2
+    fi
+fi
+
 WHAT="staged diff"
 [ "$MODE" = "range" ] && WHAT="range $RANGE"
 
@@ -212,10 +248,37 @@ block_hits=""
 warn_hits=""
 file="?"
 
+# A "+++ " LINE IS ONLY A FILE HEADER IF A "--- " LINE CAME IMMEDIATELY BEFORE.
+#
+# Red-teamed 2026-09-06. Without that check, file CONTENT could rename the file
+# in the report: a line reading "++ b/INNOCENT.txt" gains git's own '+' prefix,
+# arrives as "+++ b/INNOCENT.txt", and every later hit was attributed to a file
+# that does not exist. The leak was still BLOCKED -- the gate held -- but the
+# report sent you to scrub the wrong file, which on a security tool is its own
+# kind of failure.
+#
+# This is not merely an adversarial case: any document containing a diff
+# snippet does it by accident, and this repo's docs are full of them.
+# In real `git diff` output a "+++ b/x" header is always preceded by "--- a/x"
+# (or "--- /dev/null" for a new file), and a content line never is.
+prev_minus=0
 while IFS= read -r line; do
     case "$line" in
-        "+++ b/"*) file="${line#+++ b/}" ;;
-        "+++ "*)   file="${line#+++ }" ;;
+        "--- "*) prev_minus=1; continue ;;
+    esac
+    # Only HERE is a "+++ " line a real header. A spoofed one must fall through
+    # to the content scan below rather than being consumed -- swallowing it
+    # would let a line be skipped entirely, which is a worse bug than the
+    # mislabelling this fixes.
+    if [ "$prev_minus" = 1 ]; then
+        prev_minus=0
+        case "$line" in
+            "+++ b/"*) file="${line#+++ b/}"; continue ;;
+            "+++ "*)   file="${line#+++ }";   continue ;;
+        esac
+    fi
+    prev_minus=0
+    case "$line" in
         "+"*)
             c="${line#+}"
             cat=""
