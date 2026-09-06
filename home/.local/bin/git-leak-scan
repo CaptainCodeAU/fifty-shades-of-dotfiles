@@ -68,23 +68,40 @@ if [ "$MODE" = "range" ] && { [ -z "$RANGE" ] || [ "$RANGE" = "..HEAD" ]; }; the
     exit 2
 fi
 
-# Explicit, deliberate bypass. ANNOUNCED, not silent: the config-knob bypass
-# below already says when it stands down, and this one being quiet was the same
-# defect in miniature -- an audit run with the gate switched off would have
-# exited 0 with nothing to distinguish it from a clean result.
-if [ -n "${LEAK_SCAN_DISABLE:-}" ]; then
-    echo "git-leak-scan: SKIPPED (LEAK_SCAN_DISABLE set) -- scanned nothing" >&2
+# A SKIP IS NOT A PASS WHEN SOMEBODY ASKED A QUESTION.
+#
+# Reported 2026-09-06 by another project's session within an hour of --since
+# shipping, and reproduced here before being accepted: `git-leak-scan --since
+# HEAD~7` in a repo carrying leakscan.disable announced the skip on stderr and
+# exited 0 -- over a range containing a real token. An automated `... && echo
+# PASS` reads the EXIT CODE, not the message. That is exactly the defect
+# --since was written to kill, one commit later, in the same file.
+#
+# The split is the same as for an empty input, for the same reason:
+#   HOOK path (bare/--cached): a disabled repo must stay committable, so a skip
+#     is exit 0. Nobody asked this invocation a question; git did.
+#   AUDIT path (--range/--since): the caller asked. "I did not look" is not the
+#     answer "clean", so it refuses with exit 2.
+skip_or_refuse() { # skip_or_refuse <reason>
+    if [ "$MODE" = "range" ]; then
+        printf 'git-leak-scan: REFUSING -- %s, so this audit scanned nothing.\n' "$1" >&2
+        printf '  An empty scan is NOT a pass. Use a repo-appropriate scanner, or\n' >&2
+        printf '  lift the opt-out for this audit if the block reasons do not apply.\n' >&2
+        exit 2
+    fi
+    printf 'git-leak-scan: SKIPPED (%s)\n' "$1" >&2
     exit 0
-fi
+}
+
+# Explicit, deliberate bypass. ANNOUNCED, not silent.
+[ -n "${LEAK_SCAN_DISABLE:-}" ] && skip_or_refuse "LEAK_SCAN_DISABLE set"
 # Fail open outside a git repo.
 git rev-parse --git-dir >/dev/null 2>&1 || exit 0
 # Per-repo opt-out (see header): a truthy leakscan.disable in this repo's config
 # skips the scan entirely. --type=bool normalizes true/1/yes/on. Announce the
 # skip -- an enforced gate standing down must be observable, never silent.
-if [ "$(git config --type=bool --get leakscan.disable 2>/dev/null)" = "true" ]; then
-    echo "git-leak-scan: SKIPPED (leakscan.disable set for this repo)" >&2
-    exit 0
-fi
+[ "$(git config --type=bool --get leakscan.disable 2>/dev/null)" = "true" ] \
+    && skip_or_refuse "leakscan.disable set for this repo"
 
 user="$(id -un 2>/dev/null || echo "${USER:-}")"
 
@@ -168,6 +185,9 @@ line_has_real_phone() {
 # Collect the diff FIRST, so its emptiness can be judged before it is scanned.
 # Reading it straight into the loop is what made "nothing to scan" and "nothing
 # found" the same observable outcome.
+WHAT="staged diff"
+[ "$MODE" = "range" ] && WHAT="range $RANGE"
+
 if [ "$MODE" = "range" ]; then
     diff_text="$(git diff --no-color -U0 "$RANGE" 2>/dev/null)"
 else
@@ -227,14 +247,18 @@ block_hits="$(printf '%s' "$block_hits" | grep -v '^$' | sort -u)"
 warn_hits="$(printf '%s' "$warn_hits" | grep -v '^$' | sort -u)"
 
 if [ -n "$warn_hits" ]; then
-    printf 'leak-scan WARNING -- surfaced in staged diff (allowed, not blocked):\n' >&2
+    printf 'leak-scan WARNING -- surfaced in %s (allowed, not blocked):\n' "$WHAT" >&2
     printf '%s\n' "$warn_hits" | sed 's/^/  /' >&2
 fi
 
 if [ -n "$block_hits" ]; then
-    printf 'leak-scan BLOCKED -- possible identity/secret leak in staged diff:\n' >&2
+    printf 'leak-scan BLOCKED -- possible identity/secret leak in %s:\n' "$WHAT" >&2
     printf '%s\n' "$block_hits" | sed 's/^/  /' >&2
-    printf 'value masked. Scrub it, or bypass:  LEAK_SCAN_DISABLE=1 git commit ...  (or git commit --no-verify)\n' >&2
+    if [ "$MODE" = "range" ]; then
+        printf 'value masked. This is committed history -- scrubbing needs a rewrite, not a bypass.\n' >&2
+    else
+        printf 'value masked. Scrub it, or bypass:  LEAK_SCAN_DISABLE=1 git commit ...  (or git commit --no-verify)\n' >&2
+    fi
     exit 1
 fi
 
