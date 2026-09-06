@@ -46,31 +46,31 @@ export HOME
 
 set -eu
 
-if [ -f "$BACKOFF_FILE" ]; then
-  last_fail=$(cat "$BACKOFF_FILE" 2>/dev/null || echo 0)
-  now=$(date +%s)
-  age=$((now - last_fail))
-  if [ "$age" -lt "$BACKOFF_SECONDS" ]; then
-    printf 'PC off'
-    exit 0
-  fi
-fi
-
 NVSMI=/usr/lib/wsl/lib/nvidia-smi
-QUERY="$NVSMI --query-gpu=utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits; free -m | grep '^Swap:'"
+NVSMI_ARGS="--query-gpu=utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits"
 
 if [ -x "$NVSMI" ]; then
-  # Local branch: this IS the GPU box. No backoff file needed -- there is no
-  # network to wait on, and a failure here means the driver, not the LAN.
-  output=$(sh -c "$QUERY" 2>/dev/null) || { printf 'GPU ?'; exit 0; }
+  # Local branch: this IS the GPU box. No network, so no backoff file and no
+  # "PC off" -- an empty result here means the driver, not the LAN.
+  output=$({ "$NVSMI" $NVSMI_ARGS; free -m | grep '^Swap:'; } 2>/dev/null) || output=""
+  [ -n "$output" ] || { printf 'GPU ?'; exit 0; }
 else
-  output=$(ssh -o ConnectTimeout=1 -o BatchMode=yes mlbox-ubuntu "$QUERY" \
-    2>/dev/null) || { date +%s > "$BACKOFF_FILE" 2>/dev/null || true; printf 'PC off'; exit 0; }
+  if [ -f "$BACKOFF_FILE" ]; then
+    last_fail=$(cat "$BACKOFF_FILE" 2>/dev/null || echo 0)
+    now=$(date +%s)
+    age=$((now - last_fail))
+    if [ "$age" -lt "$BACKOFF_SECONDS" ]; then
+      printf 'PC off'
+      exit 0
+    fi
+  fi
+
+  output=$(ssh -o ConnectTimeout=1 -o BatchMode=yes mlbox-ubuntu \
+    "$NVSMI $NVSMI_ARGS; free -m | grep '^Swap:'" 2>/dev/null) || output=""
+  [ -n "$output" ] || { date +%s > "$BACKOFF_FILE" 2>/dev/null || true; printf 'PC off'; exit 0; }
+
+  [ -e "$BACKOFF_FILE" ] && { rm -f "$BACKOFF_FILE" 2>/dev/null || true; }
 fi
-
-[ -n "$output" ] || { date +%s > "$BACKOFF_FILE" 2>/dev/null || true; printf 'PC off'; exit 0; }
-
-rm -f "$BACKOFF_FILE" 2>/dev/null || true
 
 gpu_line=$(printf '%s\n' "$output" | sed -n '1p' | tr -d ',')
 swap_line=$(printf '%s\n' "$output" | sed -n '2p')

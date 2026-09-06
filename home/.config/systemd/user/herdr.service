@@ -4,17 +4,19 @@
 # ~/.config/systemd/user/herdr.service; install.sh enables it (see
 # _post_stow_herdr_systemd_service) and reports it in the prerequisites summary.
 #
-# Why a service at all: every hand-started `herdr server` inherits the launching
-# shell's environment. That shell had already shown the dotfiles welcome banner
-# and exported the once-only flags (_ONBOARDING_COMPLETE, _WELCOME_MESSAGE_SHOWN),
-# so every pane the server spawned skipped the banner. A foreground server also
-# dies with the SSH session that started it. systemd gives a clean environment,
-# crash-restart, and (with `loginctl enable-linger`) survival across logout.
+# Why a service at all: crash-restart, and (with `loginctl enable-linger`)
+# survival across logout -- a foreground `herdr server` dies with the SSH
+# session that started it. The clean environment is a bonus that happened to
+# be the visible symptom: a hand-started server inherits the launching shell's
+# exported once-only banner flags (_ONBOARDING_COMPLETE, _WELCOME_MESSAGE_SHOWN
+# in home/.zshrc), so every pane it spawned skipped the welcome banner. The
+# deeper fix for THAT is scoping those flags per-tty instead of exporting them
+# for life; this unit does not attempt it.
 #
 # PATH is set explicitly because the user manager's default PATH has no
-# ~/.local/bin (where install.sh puts the pinned binary) and no /usr/lib/wsl/lib
-# (where WSL keeps nvidia-smi, used by the tab-bar GPU status command that runs
-# inside this server).
+# ~/.local/bin, which is where install.sh puts the pinned binary. (The tab-bar
+# GPU status command that runs inside this server calls nvidia-smi by absolute
+# path, so /usr/lib/wsl/lib is deliberately NOT needed here.)
 #
 # Restart=on-failure plus a start limit: a second server refuses the socket and
 # exits 1 ("herdr server is already running"). A bare `Restart=always` would
@@ -24,7 +26,6 @@
 [Unit]
 Description=herdr headless terminal server
 Documentation=https://herdr.dev/llms.txt
-After=default.target
 StartLimitIntervalSec=120
 StartLimitBurst=5
 
@@ -32,7 +33,7 @@ StartLimitBurst=5
 Type=simple
 ExecStart=%h/.local/bin/herdr server
 ExecReload=%h/.local/bin/herdr server reload-config
-Environment=PATH=%h/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/lib/wsl/lib
+Environment=PATH=%h/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=HOME=%h
 Restart=on-failure
 RestartSec=10

@@ -846,15 +846,30 @@ _preflight_herdr_service_health_check() {
     return 0
 }
 
+# Linux/WSL probes shared by _post_stow_herdr_systemd_service and the
+# prerequisites summary, so both print the same answer for the same fact.
+# _herdr_unit_state: systemctl's own word (active / inactive / failed / ...),
+# or "unavailable" when the user manager cannot even be reached.
+_herdr_unit_state() {
+    local st
+    st=$(systemctl --user is-active herdr.service 2>/dev/null) || true
+    echo "${st:-unavailable}"
+}
+_herdr_linger() {
+    local l
+    l=$(loginctl show-user "$USER" -p Linger --value 2>/dev/null) || true
+    echo "${l:-?}"
+}
+
 # Linux/WSL counterpart of the launchd management above. The unit file is
 # stowed from home/.config/systemd/user/herdr.service; this enables it, and
 # turns on linger so the server outlives the SSH session that ran install.sh.
 #
-# Why this exists: on the Linux box every herdr server had been hand-started
-# from an SSH shell, so it inherited that shell's environment (including the
-# dotfiles' exported once-only banner flags -- every pane then skipped the
-# welcome banner) and died with the session. systemd --user gives a clean
-# environment, crash-restart, and survival across logout. Measured 2026-09-06.
+# Why this exists: crash-restart and survival across logout -- on the Linux
+# box every herdr server had been hand-started from an SSH shell and died with
+# it. The clean environment is a side benefit that fixed the visible symptom
+# (the inherited once-only banner flags from home/.zshrc made every pane skip
+# the welcome banner). Measured 2026-09-06.
 #
 # Must run AFTER stow_home: it keys off the stowed symlink, and a unit that is
 # not on disk cannot be enabled. Never touches a server that is already
@@ -890,46 +905,30 @@ _post_stow_herdr_systemd_service() {
 
     # Refuse to enable over an unmanaged running server. A hand-started server
     # owns the socket; the unit's first start would exit 1 and Restart= would
-    # keep retrying until the start limit. Detect: server up, unit not active.
-    local unit_active="inactive"
-    unit_active=$(systemctl --user is-active herdr.service 2>/dev/null) || true
-    if [[ "$unit_active" != "active" ]] && command -v jq &>/dev/null; then
-        local st_json running=""
-        st_json=$(herdr status server --json 2>/dev/null) || true
-        [[ -n "$st_json" ]] && running=$(jq -r '.running // false' <<<"$st_json" 2>/dev/null)
-        if [[ "$running" == "true" ]]; then
-            warn "A herdr server is already running outside systemd — NOT enabling the unit over it (would respawn-loop on the socket)."
-            info "When no session needs it: ${CYAN}herdr server stop && systemctl --user enable --now herdr.service${RESET}"
-            return 0
-        fi
+    # keep retrying until the start limit. _herdr_server_restart_status echoes
+    # nothing when no server answers, so any output means one is running.
+    local unit_state
+    unit_state=$(_herdr_unit_state)
+    if [[ "$unit_state" != "active" && -n "$(_herdr_server_restart_status)" ]]; then
+        warn "A herdr server is already running outside systemd — NOT enabling the unit over it (would respawn-loop on the socket)."
+        info "When no session needs it: ${CYAN}herdr server stop && systemctl --user enable --now herdr.service${RESET}"
+        return 0
     fi
 
+    # enable --now is idempotent: already enabled + active is a silent no-op.
     run_cmd systemctl --user daemon-reload || true
-
-    if [[ "$unit_active" == "active" ]]; then
-        # Already ours. Make sure it is also enabled (survives a reboot), quietly.
-        if ! systemctl --user is-enabled herdr.service &>/dev/null; then
-            run_cmd systemctl --user enable herdr.service \
-                && success "herdr.service enabled (was running but not enabled)."
-        else
-            success "herdr.service already enabled and running."
-        fi
+    if run_cmd systemctl --user enable --now herdr.service; then
+        success "herdr.service enabled and running (clean environment; restarts on crash)."
     else
-        if run_cmd systemctl --user enable --now herdr.service; then
-            success "herdr.service enabled and started (clean environment; restarts on crash)."
-        else
-            warn "systemctl --user enable --now herdr.service failed — see ${CYAN}journalctl --user -u herdr.service${RESET}"
-            return 0
-        fi
+        warn "systemctl --user enable --now herdr.service failed — see ${CYAN}journalctl --user -u herdr.service${RESET}"
+        return 0
     fi
 
     # Linger: without it the user manager -- and this service -- stops when the
     # last session for the user ends, which is every SSH logout on a headless
     # box. `loginctl enable-linger` for one's OWN user goes through polkit and
     # normally needs no sudo; if it does, say so rather than fail the install.
-    local linger
-    linger=$(loginctl show-user "$USER" -p Linger --value 2>/dev/null) || linger=""
-    if [[ "$linger" == "yes" ]]; then
+    if [[ "$(_herdr_linger)" == "yes" ]]; then
         success "linger already on for $USER (server survives logout)."
     elif run_cmd loginctl enable-linger "$USER" 2>/dev/null; then
         success "linger enabled for $USER (server survives logout)."
@@ -1402,14 +1401,12 @@ check_prerequisites() {
         elif command -v systemctl &>/dev/null; then
             # Linux/WSL: the stowed user unit. Report the real state, not the
             # file's presence -- same reasoning as the launchd branch above.
-            local _herdr_unit_state
-            _herdr_unit_state=$(systemctl --user is-active herdr.service 2>/dev/null) || _herdr_unit_state="${_herdr_unit_state:-unavailable}"
-            local _herdr_linger
-            _herdr_linger=$(loginctl show-user "$USER" -p Linger --value 2>/dev/null) || _herdr_linger="?"
-            if [[ "$_herdr_unit_state" == "active" ]]; then
-                echo -e "      ${GREEN}✓${RESET} server managed by systemd --user and running (crash-restart; linger=${_herdr_linger})"
+            local _unit_state
+            _unit_state=$(_herdr_unit_state)
+            if [[ "$_unit_state" == "active" ]]; then
+                echo -e "      ${GREEN}✓${RESET} server managed by systemd --user and running (crash-restart; linger=$(_herdr_linger))"
             elif [[ -L "$HOME/.config/systemd/user/herdr.service" ]]; then
-                echo -e "      ${YELLOW}~${RESET} herdr.service stowed but ${_herdr_unit_state} — ${CYAN}systemctl --user enable --now herdr.service${RESET} (stop any hand-started server FIRST)"
+                echo -e "      ${YELLOW}~${RESET} herdr.service stowed but ${_unit_state} — ${CYAN}systemctl --user enable --now herdr.service${RESET} (stop any hand-started server FIRST)"
             else
                 echo -e "      ${YELLOW}~${RESET} server not managed — re-run ${CYAN}./install.sh${RESET} to stow + enable herdr.service"
             fi

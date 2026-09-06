@@ -507,9 +507,15 @@ opened skipped the banner -- measured 2026-09-06 with
 foreground server also died with the SSH session. systemd gives a clean
 environment, crash-restart, and (with linger) survival across logout.
 
-The unit sets `PATH` explicitly: the user manager's default has neither
-`~/.local/bin` (where install.sh puts the pinned binary) nor `/usr/lib/wsl/lib`
-(where WSL keeps `nvidia-smi`, which the tab-bar GPU status command needs).
+The unit sets `PATH` explicitly because the user manager's default has no
+`~/.local/bin`, which is where install.sh puts the pinned binary. It does not
+add `/usr/lib/wsl/lib`: `gpu-status.sh` calls `nvidia-smi` by absolute path.
+
+The service fixes the banner symptom, not its cause. The cause is that
+`home/.zshrc` exports the two once-only flags for the life of every child
+process. Scoping them per-tty would make any child -- a tmux server, a
+hand-started herdr on the Mac -- show the banner too. That is a separate
+change, not made here.
 
 **The GPU status command runs wherever the server runs.** `config.toml`'s
 `tab_bar_right` used to point at the Mac's repo checkout by absolute path. On
