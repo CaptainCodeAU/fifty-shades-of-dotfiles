@@ -16,11 +16,26 @@
     "into ~/.claude/hooks/ where Claude Code would see a stray file.",
     "",
     "SCHEMA of each entry in \"hooks\":",
-    "  event    required. A Claude Code hook event (PreToolUse, PostToolUse, ...).",
-    "  matcher  required. Tool name to match, e.g. Bash, Grep, Skill.",
-    "  script   required. Basename under ~/.claude/hooks/. Gate: if the file is not",
-    "           on disk the entry is SKIPPED -- registering a hook whose script is",
-    "           missing turns every matching tool call into an error.",
+    "  event    required. A Claude Code hook event (PreToolUse, PostToolUse,",
+    "           SessionStart, ...).",
+    "  matcher  OPTIONAL. Tool name to match, e.g. Bash, Grep, Skill. OMIT IT for",
+    "           events that have no tool to match on -- SessionStart's real groups",
+    "           in settings.json carry no matcher key, and inventing one would be a",
+    "           shape Claude Code has never been handed. Omitting it also widens the",
+    "           already-registered test from (event, matcher, command) to (event,",
+    "           command) across ALL groups, which is the correct question for this",
+    "           class: two copies of a session-start hook is never right, it is the",
+    "           watcher running twice.",
+    "  script   required. Display name, and the basename looked for under",
+    "           ~/.claude/hooks/ unless script_path overrides that. Gate: if the",
+    "           file is not on disk the entry is SKIPPED -- registering a hook whose",
+    "           script is missing turns every matching tool call into an error.",
+    "  script_path  OPTIONAL. Where the file ACTUALLY lives, when it is not in",
+    "           ~/.claude/hooks/. May use $HOME. The session-start watchers are",
+    "           ordinary CLI tools stowed to ~/.local/bin -- they are run BY a hook",
+    "           entry, they are not hook scripts. Without this they were skipped",
+    "           forever, on every machine, with a 'not deployed' reason that was",
+    "           simply untrue.",
     "  entry    required. Written into settings.json verbatim. Must use $HOME, never a",
     "           literal username, so the same JSON works on every machine.",
     "  requires optional. Paths that must exist before the entry is registered. THIS IS",
@@ -76,7 +91,53 @@
       },
       "requires": ["$HOME/.claude/skills/herdr"],
       "why": "Lifts the block above; pointless without the skill it watches for"
+    },
+    {
+      "event": "SessionStart",
+      "script": "ci-watch",
+      "script_path": "$HOME/.local/bin/ci-watch",
+      "entry": {
+        "type": "command",
+        "command": "test -x \"$HOME/.local/bin/ci-watch\" && \"$HOME/.local/bin/ci-watch\" || true",
+        "timeout": 30
+      },
+      "why": "Escalating CI-red alarm on the session dashboard"
+    },
+    {
+      "event": "SessionStart",
+      "script": "ccw-watch",
+      "script_path": "$HOME/.local/bin/ccw-watch",
+      "entry": {
+        "type": "command",
+        "command": "test -x \"$HOME/.local/bin/ccw-watch\" && \"$HOME/.local/bin/ccw-watch\" || true",
+        "timeout": 30
+      },
+      "why": "Escalating capture-broken alarm; capture died silently for ten days once"
     }
+  ],
+
+  "_sessionstart_note": [
+    "THE COMMAND STRINGS ABOVE ARE COPIED BYTE-FOR-BYTE FROM THE LIVE settings.json.",
+    "That is not fussiness. is_registered() compares the command EXACTLY, so a",
+    "cosmetic difference -- dropping the test -x guard, unquoting the path, changing",
+    "the timeout -- reads as 'not registered' and appends a SECOND copy. On this Mac",
+    "that would mean ci-watch and ccw-watch running twice at every session start.",
+    "If you ever reword one of these, reword it in settings.json first and copy it",
+    "back, never the other way round.",
+    "",
+    "NO requires GATE, DELIBERATELY. These commands self-gate: `test -x <path> && ...",
+    "|| true` is a no-op returning success when the tool is absent. Gate 1 already",
+    "refuses to register them when the file is missing; the command shape means even",
+    "a stale registration on a machine that later loses the tool costs nothing.",
+    "",
+    "WHY THESE TWO WERE MISSING UNTIL 2026-09-06. They were hand-wired into this",
+    "Mac's settings.json on 2026-08-18 (commit 1ec3d66 says so in its own message:",
+    "'outside this repo'), and the manifest shipped on 2026-09-05 had no SessionStart",
+    "entry of any kind. So the whole ALARM class was stowed-but-unregistered while",
+    "the GUARD class was automated -- the wrong half. A missing guard fails toward",
+    "'something was not blocked', which shows up in behaviour. A missing alarm fails",
+    "toward silence, and silence is indistinguishable from health. That is the exact",
+    "failure ccw-watch exists to catch, and it was happening to ccw-watch."
   ],
 
   "_requires_note": [
