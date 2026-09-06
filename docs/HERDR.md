@@ -525,6 +525,30 @@ looked. It now runs `~/.config/herdr/gpu-status.sh` (stowed, same path on every
 box), and the script reads `nvidia-smi` locally when it finds the WSL binary,
 over SSH otherwise.
 
+### The `herdr()` shell guard: hand starts are refused
+
+Added 2026-09-06, tag `herdr-guard-v1`. A `herdr()` function in `home/.zshrc`
+(next to the `gh()` guard, same shape) sits in front of the binary. It acts
+only where a service manages the server, detected by the file the service
+leaves behind: the stowed unit symlink on Linux, the brew plist on macOS. A
+box with neither is untouched.
+
+| You type | What happens | Why |
+| --- | --- | --- |
+| `herdr server` | **Refused.** Prints `systemctl --user start herdr.service` (Linux) or `brew services start herdr` (macOS). | A hand-started server inherits the shell's environment and dies with the session -- the whole reason the service exists. On the Mac it also exits 1 on the socket and `keep_alive` respawns it forever. |
+| `herdr server stop`, `reload-config`, ... | Pass through. | Only the bare form starts a server. |
+| `herdr` (attach), Linux, unit down | Starts the unit first, then attaches. | Upstream attach "starts or attaches to" a server: with the unit down it would spawn the same hand-started server with no visible command. |
+| Anything inside a herdr pane (`HERDR_ENV=1`) | No check at all. | The server is by definition running; agents call the CLI constantly and should pay nothing. |
+
+Its notices go to stderr, so `herdr status server --json | jq` keeps working
+(the first live test broke exactly that).
+
+**Limit, stated plainly.** It is a shell function: it covers a prompt and
+Claude's Bash tool (which loads the snapshotted functions), not a script that
+calls the binary by full path. Nothing in this repo does that, and while the
+unit is running a second server cannot take the socket anyway -- the guard is
+the polite refusal, the socket is the hard one.
+
 Useful on the box:
 
 ```bash
