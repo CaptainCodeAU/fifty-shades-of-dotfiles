@@ -123,6 +123,17 @@ safe-rm: these paths still exist after the trash call: <path>
 
 So a Bash-tool `rm` has **three** outcomes, not two: trashed, or refused-and-left-in-place, or (never, by design) permanently deleted. `safe-rm` is behaving correctly — it will not silently fall back to the real deleter — but **the file is neither gone nor in the Trash.** Hit twice on 2026-09-06 on paths inside this repo; a stray `.bak` had to be moved out by hand afterwards.
 
+**THE CAUSE IS THE SANDBOX, isolated 2026-09-06** — same path, same wrapper, same session, one variable changed:
+
+```
+sandboxed (the default)          → afpAccessDenied, file REMAINS
+dangerouslyDisableSandbox: true  → "Trashed: … (recover: Finder → Put Back)", file gone
+```
+
+A sibling project could not reproduce the failure at all; their session runs in bypass mode, which is exactly the passing half of that table. So **"the wrapper is installed" and "the wrapper works here" are two different facts, and only the second matters at the moment you need it.**
+
+**And `type rm` cannot tell them apart** — it reported the wrapper in the failing case AND the passing one. _A check that returns the same answer either way is not a check_ (their phrasing; it is the all-cases-identical rule from `reference_measurement_harness_traps` applied to a check this file used to recommend).
+
 **Therefore: after any `rm` you depend on, CHECK. `test -e <path>` — do not assume.** Especially before reporting a cleanup as done, and especially for a path under `home/`, where a leftover file can be picked up by stow. To relocate rather than delete, `command mv` it to the scratchpad; that always works.
 
 The discipline does NOT change: ALWAYS get explicit user confirmation before deleting or overwriting — treat Trash recovery as a safety net, never a license to delete freely.
