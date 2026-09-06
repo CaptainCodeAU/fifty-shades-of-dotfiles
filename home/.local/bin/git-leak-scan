@@ -24,7 +24,17 @@
 # open if this script is not on PATH. Bypass a block:
 #   LEAK_SCAN_DISABLE=1 git commit ...        (or: git commit --no-verify)
 #
-# PER-REPO OPT-OUT (private repos where identity paths are legitimate content):
+# RULE-SELECTIVE OPT-OUT (prefer this over the blunt one below):
+#   git config leakscan.skip "username-path"  # space-separated rule ids
+# Ids: username-path github-token sk-token aws-key slack-token private-key
+#      phone lan-ip local-phone
+# Disarms ONLY the named rules; everything else stays armed, and the disarmed
+# list is announced every run. An unknown id fails SAFE (that rule stays armed)
+# and is called out, so a typo can never quietly disarm nothing -- or something
+# else. Use this when one rule is noisy in a repo; reaching for leakscan.disable
+# instead switches off tokens and private keys as collateral.
+#
+# PER-REPO OPT-OUT, the blunt instrument (whole scan off):
 #   git config leakscan.disable true          # this repo, this machine only
 # The knob lives in .git/config (never committed/pushed), so cloning the repo
 # elsewhere re-enables the scan by default. Revoke:  git config --unset leakscan.disable
@@ -102,6 +112,37 @@ git rev-parse --git-dir >/dev/null 2>&1 || exit 0
 # skip -- an enforced gate standing down must be observable, never silent.
 [ "$(git config --type=bool --get leakscan.disable 2>/dev/null)" = "true" ] \
     && skip_or_refuse "leakscan.disable set for this repo"
+
+# ---- rule-selective opt-out: leakscan.skip ---------------------------------
+# `leakscan.disable` is all-or-nothing, and that shape had a cost nobody chose:
+# a repo legitimately carrying real user-home paths (a sibling project carries
+# ~58) had to disable EVERYTHING to stop the username rule crying wolf, which
+# silently disarmed the token, private-key and phone rules too -- none of which
+# would ever false-alarm there. The result was a PARALLEL SCANNER that project
+# now maintains, with its own exit codes to keep aligned with these. A slightly
+# bigger knob is a much better outcome than a second tool.
+#
+#   git config leakscan.skip "username-path"        # space separated ids
+#
+# An UNKNOWN id fails SAFE, meaning MORE strict: the rule list is untouched and
+# the typo is called out. A typo must never leave an operator believing they
+# disarmed one rule while they disarmed none -- or, worse, a different one.
+KNOWN_RULES="username-path github-token sk-token aws-key slack-token private-key phone lan-ip local-phone"
+SKIP_RULES=""
+_requested_skip="$(git config --get leakscan.skip 2>/dev/null || true)"
+if [ -n "$_requested_skip" ]; then
+    for _r in $_requested_skip; do
+        case " $KNOWN_RULES " in
+            *" $_r "*) SKIP_RULES="$SKIP_RULES $_r" ;;
+            *) printf 'git-leak-scan: UNKNOWN rule id in leakscan.skip: %s -- ignored, that rule stays ARMED\n' "$_r" >&2
+               printf '  known ids: %s\n' "$KNOWN_RULES" >&2 ;;
+        esac
+    done
+    if [ -n "$SKIP_RULES" ]; then
+        printf 'git-leak-scan: rule(s) DISARMED for this repo (leakscan.skip):%s\n' "$SKIP_RULES" >&2
+    fi
+fi
+rule_off() { case " $SKIP_RULES " in *" $1 "*) return 0 ;; esac; return 1; }
 
 user="$(id -un 2>/dev/null || echo "${USER:-}")"
 
@@ -247,6 +288,7 @@ fi
 block_hits=""
 warn_hits=""
 file="?"
+added=0
 
 # A "+++ " LINE IS ONLY A FILE HEADER IF A "--- " LINE CAME IMMEDIATELY BEFORE.
 #
@@ -282,23 +324,27 @@ while IFS= read -r line; do
         "+"*)
             c="${line#+}"
             cat=""
-            if [ -n "$user" ] && [[ $c =~ $b_user ]]; then cat="username-in-path"
-            elif [[ $c =~ $b_ghtok ]]; then cat="github-token"
-            elif [[ $c =~ $b_sk ]];    then cat="api-token(sk-)"
-            elif [[ $c =~ $b_aws ]];   then cat="aws-access-key"
-            elif [[ $c =~ $b_slack ]]; then cat="slack-token"
-            elif [[ $c =~ $b_pkey ]];  then cat="private-key"
-            elif line_has_real_phone "$c" "$b_phone"; then cat="phone-number(E.164)"
+            added=$(( added + 1 ))
+            # Each rule is gated by rule_off so a disarmed one FALLS THROUGH to
+            # the next test rather than ending the chain -- a skipped rule must
+            # not mask a different rule that would have matched the same line.
+            if   ! rule_off username-path && [ -n "$user" ] && [[ $c =~ $b_user ]]; then cat="username-in-path"
+            elif ! rule_off github-token && [[ $c =~ $b_ghtok ]]; then cat="github-token"
+            elif ! rule_off sk-token     && [[ $c =~ $b_sk ]];    then cat="api-token(sk-)"
+            elif ! rule_off aws-key      && [[ $c =~ $b_aws ]];   then cat="aws-access-key"
+            elif ! rule_off slack-token  && [[ $c =~ $b_slack ]]; then cat="slack-token"
+            elif ! rule_off private-key  && [[ $c =~ $b_pkey ]];  then cat="private-key"
+            elif ! rule_off phone && line_has_real_phone "$c" "$b_phone"; then cat="phone-number(E.164)"
             fi
             if [ -n "$cat" ]; then
                 block_hits="${block_hits}${file}: ${cat}
 "
             fi
-            if [[ $c =~ $w_ip ]]; then
+            if ! rule_off lan-ip && [[ $c =~ $w_ip ]]; then
                 warn_hits="${warn_hits}${file}: private-LAN-IP
 "
             fi
-            if line_has_real_phone "$c" "$w_phone_au"; then
+            if ! rule_off local-phone && line_has_real_phone "$c" "$w_phone_au"; then
                 warn_hits="${warn_hits}${file}: local-format-phone
 "
             fi
@@ -308,6 +354,17 @@ done < <(printf '%s\n' "$diff_text")
 
 block_hits="$(printf '%s' "$block_hits" | grep -v '^$' | sort -u)"
 warn_hits="$(printf '%s' "$warn_hits" | grep -v '^$' | sort -u)"
+
+# RANGE-MODE SUMMARY. A clean range printed nothing and exited 0, so a report
+# could not tell "scanned 9 commits, clean" from "never ran" -- and three
+# separate projects each grew their own `git rev-list --count` to supply the
+# denominator, three counts that can drift from the one actually scanned.
+# HOOK MODE STAYS SILENT: the same binary runs on every commit on this machine.
+if [ "$MODE" = "range" ]; then
+    n_commits="$(git rev-list --count "$RANGE" 2>/dev/null || echo '?')"
+    printf 'git-leak-scan: scanned %s commit(s), %s added line(s) in %s\n' \
+           "$n_commits" "$added" "$RANGE" >&2
+fi
 
 if [ -n "$warn_hits" ]; then
     printf 'leak-scan WARNING -- surfaced in %s (allowed, not blocked):\n' "$WHAT" >&2
