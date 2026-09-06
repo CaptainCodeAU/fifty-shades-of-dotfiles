@@ -781,8 +781,9 @@ herdr() {
     fi
     if [[ -z "${HERDR_ENV:-}" && "$1" != "server" && -L "$_unit" ]] && command -v systemctl &>/dev/null; then
         if [[ "$(systemctl --user is-active herdr.service 2>/dev/null)" != "active" ]]; then
-            echo "${warn}herdr.service is not running; starting it so attach does not spawn a hand-started server${done}"
-            systemctl --user start herdr.service || echo "${err}systemctl --user start herdr.service failed -- see journalctl --user -u herdr.service${done}"
+            # stderr: stdout may be a pipe (`herdr status server --json | jq`).
+            echo "${warn}herdr.service is not running; starting it so attach does not spawn a hand-started server${done}" >&2
+            systemctl --user start herdr.service || echo "${err}systemctl --user start herdr.service failed -- see journalctl --user -u herdr.service${done}" >&2
         fi
     fi
     command herdr "$@"
