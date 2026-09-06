@@ -846,6 +846,99 @@ _preflight_herdr_service_health_check() {
     return 0
 }
 
+# Linux/WSL counterpart of the launchd management above. The unit file is
+# stowed from home/.config/systemd/user/herdr.service; this enables it, and
+# turns on linger so the server outlives the SSH session that ran install.sh.
+#
+# Why this exists: on the Linux box every herdr server had been hand-started
+# from an SSH shell, so it inherited that shell's environment (including the
+# dotfiles' exported once-only banner flags -- every pane then skipped the
+# welcome banner) and died with the session. systemd --user gives a clean
+# environment, crash-restart, and survival across logout. Measured 2026-09-06.
+#
+# Must run AFTER stow_home: it keys off the stowed symlink, and a unit that is
+# not on disk cannot be enabled. Never touches a server that is already
+# running -- an unmanaged server holds the socket, a second one exits 1, and
+# Restart= would then loop (see docs/HERDR.md, "respawn loop"). That case is
+# reported and left for the user, exactly like the macOS "stop any running
+# server FIRST" hint.
+_post_stow_herdr_systemd_service() {
+    local os
+    os=$(check_os)
+    [[ "$os" == "linux" || "$os" == "wsl" ]] || return 0
+    command -v herdr &>/dev/null || return 0
+    command -v systemctl &>/dev/null || return 0
+
+    local unit="$HOME/.config/systemd/user/herdr.service"
+    [[ -L "$unit" ]] || return 0
+
+    # `is-system-running` for the USER manager: "running" or "degraded" both
+    # mean it is up (degraded = some unrelated unit failed). Anything else --
+    # including the "Failed to connect to bus" WSL gives when /etc/wsl.conf
+    # lacks [boot] systemd=true -- means there is nothing to enable into.
+    local mgr_state
+    mgr_state=$(systemctl --user is-system-running 2>/dev/null) || true
+    case "$mgr_state" in
+        running|degraded) ;;
+        *)
+            warn "systemd user manager not available (state: ${mgr_state:-unknown}) — herdr.service not enabled."
+            info "On WSL: set ${CYAN}[boot] systemd=true${RESET} in /etc/wsl.conf, then ${CYAN}wsl --shutdown${RESET} from Windows."
+            return 0 ;;
+    esac
+
+    step "herdr systemd user service"
+
+    # Refuse to enable over an unmanaged running server. A hand-started server
+    # owns the socket; the unit's first start would exit 1 and Restart= would
+    # keep retrying until the start limit. Detect: server up, unit not active.
+    local unit_active="inactive"
+    unit_active=$(systemctl --user is-active herdr.service 2>/dev/null) || true
+    if [[ "$unit_active" != "active" ]] && command -v jq &>/dev/null; then
+        local st_json running=""
+        st_json=$(herdr status server --json 2>/dev/null) || true
+        [[ -n "$st_json" ]] && running=$(jq -r '.running // false' <<<"$st_json" 2>/dev/null)
+        if [[ "$running" == "true" ]]; then
+            warn "A herdr server is already running outside systemd — NOT enabling the unit over it (would respawn-loop on the socket)."
+            info "When no session needs it: ${CYAN}herdr server stop && systemctl --user enable --now herdr.service${RESET}"
+            return 0
+        fi
+    fi
+
+    run_cmd systemctl --user daemon-reload || true
+
+    if [[ "$unit_active" == "active" ]]; then
+        # Already ours. Make sure it is also enabled (survives a reboot), quietly.
+        if ! systemctl --user is-enabled herdr.service &>/dev/null; then
+            run_cmd systemctl --user enable herdr.service \
+                && success "herdr.service enabled (was running but not enabled)."
+        else
+            success "herdr.service already enabled and running."
+        fi
+    else
+        if run_cmd systemctl --user enable --now herdr.service; then
+            success "herdr.service enabled and started (clean environment; restarts on crash)."
+        else
+            warn "systemctl --user enable --now herdr.service failed — see ${CYAN}journalctl --user -u herdr.service${RESET}"
+            return 0
+        fi
+    fi
+
+    # Linger: without it the user manager -- and this service -- stops when the
+    # last session for the user ends, which is every SSH logout on a headless
+    # box. `loginctl enable-linger` for one's OWN user goes through polkit and
+    # normally needs no sudo; if it does, say so rather than fail the install.
+    local linger
+    linger=$(loginctl show-user "$USER" -p Linger --value 2>/dev/null) || linger=""
+    if [[ "$linger" == "yes" ]]; then
+        success "linger already on for $USER (server survives logout)."
+    elif run_cmd loginctl enable-linger "$USER" 2>/dev/null; then
+        success "linger enabled for $USER (server survives logout)."
+    else
+        warn "Could not enable linger — server will stop at your last logout. Run: ${CYAN}sudo loginctl enable-linger $USER${RESET}"
+    fi
+    return 0
+}
+
 _preflight_herdr_release_check() {
     [[ "$SKIP_PREFLIGHT" == true ]] && return 0
     # Linux/WSL only -- macOS herdr is Homebrew-managed, see _preflight_herdr_pin_check.
@@ -1306,6 +1399,20 @@ check_prerequisites() {
             fi
         elif [[ "$(check_os)" == "macos" ]]; then
             echo -e "      ${YELLOW}~${RESET} server not managed — ${CYAN}brew services start herdr${RESET} (stop any running server FIRST)"
+        elif command -v systemctl &>/dev/null; then
+            # Linux/WSL: the stowed user unit. Report the real state, not the
+            # file's presence -- same reasoning as the launchd branch above.
+            local _herdr_unit_state
+            _herdr_unit_state=$(systemctl --user is-active herdr.service 2>/dev/null) || _herdr_unit_state="${_herdr_unit_state:-unavailable}"
+            local _herdr_linger
+            _herdr_linger=$(loginctl show-user "$USER" -p Linger --value 2>/dev/null) || _herdr_linger="?"
+            if [[ "$_herdr_unit_state" == "active" ]]; then
+                echo -e "      ${GREEN}✓${RESET} server managed by systemd --user and running (crash-restart; linger=${_herdr_linger})"
+            elif [[ -L "$HOME/.config/systemd/user/herdr.service" ]]; then
+                echo -e "      ${YELLOW}~${RESET} herdr.service stowed but ${_herdr_unit_state} — ${CYAN}systemctl --user enable --now herdr.service${RESET} (stop any hand-started server FIRST)"
+            else
+                echo -e "      ${YELLOW}~${RESET} server not managed — re-run ${CYAN}./install.sh${RESET} to stow + enable herdr.service"
+            fi
         fi
         # Surfaces skew from ANY upgrade path (this script's bump, a manual brew
         # upgrade, the Linux release pin) -- not just one this run just performed.
@@ -3670,6 +3777,11 @@ main() {
 
     # --- Post-install ---
     post_install
+
+    # --- herdr systemd user service (Linux/WSL): enable the unit stow just
+    # placed. Must run AFTER stow_home; refuses to enable over a hand-started
+    # server (respawn loop). The launchd equivalent is in preflight. ---
+    _post_stow_herdr_systemd_service
 
     # --- Register the Claude Code hooks stow just deployed ---
     # Must run AFTER stow_home: the tool refuses to register a hook whose script

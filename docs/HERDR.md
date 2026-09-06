@@ -466,6 +466,67 @@ Confirmed 2026-08-01 the hard way: `previous_agent` / `next_agent` were added
 here, validated, and reloaded, and did nothing on the laptop until the attach was
 re-made with `--remote-keybindings server`.
 
+### Linux / WSL: the systemd user service
+
+Added 2026-09-06. The Linux counterpart of `brew services start herdr`.
+`home/.config/systemd/user/herdr.service` is stowed like everything else (it
+lands on the Mac too, where it is inert: macOS has no systemd), and
+`install.sh` enables it in `_post_stow_herdr_systemd_service`, which runs after
+`stow_home` because the unit has to be on disk first.
+
+What it does on a Linux/WSL box, in order:
+
+1. Skips silently unless herdr is installed, `systemctl` exists, and the stowed
+   unit symlink is present.
+2. Checks `systemctl --user is-system-running`. Only `running` or `degraded`
+   count. On WSL the user manager only exists when `/etc/wsl.conf` has
+   `[boot] systemd=true`; otherwise install.sh says so and stops.
+3. **Refuses to enable over a hand-started server.** `herdr status server --json`
+   reporting `running: true` while the unit is not active means someone ran
+   `herdr server` by hand and owns the socket. Enabling the unit then would
+   start a second server that exits 1, and `Restart=` would retry it -- the
+   same respawn loop the Homebrew `keep_alive` section above describes. The
+   unit caps that at five tries in two minutes, but install.sh does not get
+   there: it prints the two-command fix and leaves the running server alone.
+4. `daemon-reload`, then `enable --now`.
+5. `loginctl enable-linger $USER`. Without linger the user manager, and this
+   service with it, stops at the last logout -- which on a headless box is
+   every SSH disconnect. Enabling linger for your own user goes through polkit
+   and needs no sudo on Ubuntu 24.04; if it fails, install.sh prints the sudo
+   form instead of aborting.
+
+The prerequisites summary reports the real state (`is-active`, plus linger),
+not whether the unit file exists.
+
+**Why a service and not a hand start.** Every hand-started `herdr server`
+inherits the shell it was started from. On the 3090 box that shell had already
+shown the dotfiles welcome banner and exported the once-only flags
+(`_ONBOARDING_COMPLETE`, `_WELCOME_MESSAGE_SHOWN`), so every pane the server
+opened skipped the banner -- measured 2026-09-06 with
+`echo $_ONBOARDING_COMPLETE` inside a fresh pane returning `true`. The
+foreground server also died with the SSH session. systemd gives a clean
+environment, crash-restart, and (with linger) survival across logout.
+
+The unit sets `PATH` explicitly: the user manager's default has neither
+`~/.local/bin` (where install.sh puts the pinned binary) nor `/usr/lib/wsl/lib`
+(where WSL keeps `nvidia-smi`, which the tab-bar GPU status command needs).
+
+**The GPU status command runs wherever the server runs.** `config.toml`'s
+`tab_bar_right` used to point at the Mac's repo checkout by absolute path. On
+the Linux box that path does not exist, so the server logged one exit-127
+warning every five seconds -- 12188 of 12641 lines in a 3 MB log before anyone
+looked. It now runs `~/.config/herdr/gpu-status.sh` (stowed, same path on every
+box), and the script reads `nvidia-smi` locally when it finds the WSL binary,
+over SSH otherwise.
+
+Useful on the box:
+
+```bash
+systemctl --user status herdr.service
+journalctl --user -u herdr.service -n 50
+systemctl --user restart herdr.service   # drops every attached session
+```
+
 ## herdr and tmux
 
 Upstream positions herdr as a tmux-class multiplexer — the keyboard docs open with

@@ -1,13 +1,18 @@
 #!/bin/sh
 # GPU + swap status for the mlbox-ubuntu 3090 box, shown in herdr's tab bar
-# via a `command` status entry. Runs on the herdr server (the mini),
-# reaches the GPU box over SSH on the LAN.
+# via a `command` status entry. Runs on whichever host the herdr server is on:
 #
-# Absolute path to nvidia-smi is required: on that WSL box, /usr/lib/wsl/lib
-# only lands on PATH through the box's own interactive zsh profile, which a
-# plain non-interactive `ssh host "command"` never sources -- confirmed
-# live 2026-08-28 (`ssh mlbox-ubuntu nvidia-smi` fails with "command not
-# found", but the absolute path works).
+#   - on the 3090 box itself (WSL2, herdr under systemd --user): reads
+#     nvidia-smi LOCALLY. SSH-ing to itself would be pointless and, under
+#     systemd, has no agent to authenticate with anyway.
+#   - anywhere else (the mini): reaches the GPU box over SSH on the LAN.
+#
+# The switch is the presence of the WSL nvidia-smi at its absolute path.
+# Absolute path to nvidia-smi is required in BOTH branches: on that WSL box,
+# /usr/lib/wsl/lib only lands on PATH through the box's own interactive zsh
+# profile, which neither a plain non-interactive `ssh host "command"` nor a
+# systemd service ever sources -- confirmed live 2026-08-28 (`ssh mlbox-ubuntu
+# nvidia-smi` fails with "command not found", but the absolute path works).
 #
 # Kept deliberately short: herdr hides the whole tab_bar_right status area
 # when the tab row is too narrow to fit it alongside the tabs, so a long
@@ -51,9 +56,17 @@ if [ -f "$BACKOFF_FILE" ]; then
   fi
 fi
 
-output=$(ssh -o ConnectTimeout=1 -o BatchMode=yes mlbox-ubuntu \
-  "/usr/lib/wsl/lib/nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits; free -m | grep '^Swap:'" \
-  2>/dev/null) || { date +%s > "$BACKOFF_FILE" 2>/dev/null || true; printf 'PC off'; exit 0; }
+NVSMI=/usr/lib/wsl/lib/nvidia-smi
+QUERY="$NVSMI --query-gpu=utilization.gpu,memory.used,memory.total --format=csv,noheader,nounits; free -m | grep '^Swap:'"
+
+if [ -x "$NVSMI" ]; then
+  # Local branch: this IS the GPU box. No backoff file needed -- there is no
+  # network to wait on, and a failure here means the driver, not the LAN.
+  output=$(sh -c "$QUERY" 2>/dev/null) || { printf 'GPU ?'; exit 0; }
+else
+  output=$(ssh -o ConnectTimeout=1 -o BatchMode=yes mlbox-ubuntu "$QUERY" \
+    2>/dev/null) || { date +%s > "$BACKOFF_FILE" 2>/dev/null || true; printf 'PC off'; exit 0; }
+fi
 
 [ -n "$output" ] || { date +%s > "$BACKOFF_FILE" 2>/dev/null || true; printf 'PC off'; exit 0; }
 

@@ -171,16 +171,22 @@ right_click_passthrough_modifier = "ctrl"
 window_title = "{hostname}: {workspace}"
 
 # Status entry at the right edge of herdr's own (inner) tab bar: live GPU
-# reading for the mlbox-ubuntu 3090 box, over SSH. Shows "PC off" when it's
-# asleep/unreachable. Points at the repo path directly (same reason as the
-# plugin below: herdr's own runtime dir only ever gets config.toml stowed
-# into it, per home/.config/herdr/.gitignore) -- Mac-specific for now, since
-# the SSH access this depends on only exists from this Mac. Resolves $HOME
-# at runtime via the password database instead of a literal path, both
-# because herdr's daemon has no $HOME set (see gpu-status.sh) and so this
-# tracked file never has to hold a real username.
+# reading for the 3090 box. Shows "PC off" when it's asleep/unreachable.
+#
+# Runs on whichever host the herdr server is on. gpu-status.sh decides how to
+# read the GPU: locally when it finds the WSL nvidia-smi on this machine (the
+# 3090 box itself), over SSH otherwise (the Mac). The script is stowed into
+# ~/.config/herdr next to this file (allow-listed in home/.config/herdr/
+# .gitignore), so the path below is the same on every box. An earlier version
+# pointed at the Mac's repo checkout directly; on the Linux box that path does
+# not exist, and the server logged an exit-127 warning every 5 seconds -- 96%
+# of a 3 MB log before it was noticed (2026-09-06).
+#
+# Resolves $HOME at runtime via the password database instead of a literal
+# path, both because herdr's daemon has no $HOME set (see gpu-status.sh) and
+# so this tracked file never has to hold a real username.
 tab_bar_right = [
-  { type = "command", command = "HOME=\"$(eval echo ~$(id -un))\"; \"$HOME/CODE/Scaffoldings/fifty-shades-of-dotfiles/home/.config/herdr/gpu-status.sh\"", interval_seconds = 5, timeout_seconds = 4 },
+  { type = "command", command = "HOME=\"$(eval echo ~$(id -un))\"; \"$HOME/.config/herdr/gpu-status.sh\"", interval_seconds = 5, timeout_seconds = 4 },
 ]
 tab_bar_right_separator = " · "
 
