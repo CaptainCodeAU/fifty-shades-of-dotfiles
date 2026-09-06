@@ -286,6 +286,86 @@ if [[ "$(scan_rc --range "$prev..HEAD")" == "0" ]]; then
 else bad "a clean non-empty range is a real pass (exit 0)" "$(scan --range "$prev..HEAD")"; fi
 cleanup
 
+# ===========================================================================
+# THE SAME DEFECT, ONE LINE AWAY FROM THE FIX FOR IT
+# ===========================================================================
+# Reported 2026-09-06 by another project's session, within an hour of --since
+# shipping, and reproduced here before being accepted. They ran
+# `git-leak-scan --since HEAD~7` in a repo carrying leakscan.disable and got:
+#
+#     git-leak-scan: SKIPPED (leakscan.disable set for this repo)
+#     exit=0
+#
+# The skip is announced -- but an automated `... && echo PASS` reads the EXIT
+# CODE, not the message. So an audit over a range containing a real leak
+# reported success. That is precisely the defect --since was built to kill,
+# reproduced inside the same file, one commit later.
+#
+# The lesson that came with it, and it is the more valuable half: WRITING THE
+# GUARD DOES NOT MAKE YOU IMMUNE TO THE FAILURE THE GUARD IS ABOUT. Their own
+# secrets tool had the identical bug one day old. Test the new guard against
+# its own defect, every time.
+#
+# The split stays the same as for an empty input, for the same reason:
+#   - HOOK path (bare/--cached): a disabled repo must still be able to commit,
+#     so a skip is exit 0. Its input was never the thing being audited.
+#   - AUDIT path (--range/--since): the caller ASKED a question. "I did not
+#     look" is not the answer "clean", so it refuses with exit 2.
+# ---------------------------------------------------------------------------
+
+# --- 23. leakscan.disable in AUDIT mode refuses, it does not pass -----------
+fixture
+stage "harmless base"
+git -C "$REPO" -c core.hooksPath="$WORK/nohooks" commit -q -m base --no-verify
+base="$(git -C "$REPO" rev-parse HEAD)"
+stage "token = \"$GH_TOKEN\""
+git -C "$REPO" -c core.hooksPath="$WORK/nohooks" commit -q -m leak --no-verify
+git -C "$REPO" config leakscan.disable true
+out="$(scan --since "$base")"
+rc="$(scan_rc --since "$base")"
+if [[ "$rc" == "2" ]]; then ok "AUDIT + leakscan.disable REFUSES (exit 2)"
+else bad "AUDIT + leakscan.disable REFUSES (exit 2)" "exit was $rc -- an audit over a REAL LEAK reported success"; fi
+if grep -qi "refus\|scanned nothing" <<<"$out"; then
+    ok "AUDIT + leakscan.disable says it scanned nothing"
+else bad "AUDIT + leakscan.disable says it scanned nothing" "$out"; fi
+
+# --- 24. the hook path with the same knob still exits 0 --------------------
+# A disabled repo must remain committable. This is the line that stops the fix
+# above from turning an opt-out into a broken repo.
+if [[ "$(scan_rc)" == "0" ]]; then ok "HOOK path + leakscan.disable still exits 0 (repo stays committable)"
+else bad "HOOK path + leakscan.disable still exits 0 (repo stays committable)" "exit was $(scan_rc) -- a disabled repo can no longer commit"; fi
+cleanup
+
+# --- 25. the env-var bypass behaves identically ----------------------------
+fixture
+stage "harmless base"
+git -C "$REPO" -c core.hooksPath="$WORK/nohooks" commit -q -m base --no-verify
+base="$(git -C "$REPO" rev-parse HEAD)"
+stage "token = \"$GH_TOKEN\""
+git -C "$REPO" -c core.hooksPath="$WORK/nohooks" commit -q -m leak --no-verify
+rc="$( cd "$REPO" && LEAK_SCAN_DISABLE=1 "$TOOL" --since "$base" >/dev/null 2>&1; echo $? )"
+if [[ "$rc" == "2" ]]; then ok "AUDIT + LEAK_SCAN_DISABLE REFUSES (exit 2)"
+else bad "AUDIT + LEAK_SCAN_DISABLE REFUSES (exit 2)" "exit was $rc"; fi
+rc="$( cd "$REPO" && LEAK_SCAN_DISABLE=1 "$TOOL" >/dev/null 2>&1; echo $? )"
+if [[ "$rc" == "0" ]]; then ok "HOOK path + LEAK_SCAN_DISABLE still exits 0"
+else bad "HOOK path + LEAK_SCAN_DISABLE still exits 0" "exit was $rc"; fi
+cleanup
+
+# --- 26. the report names what was ACTUALLY scanned ------------------------
+# In range mode the old wording still said "staged diff", which is not what was
+# read. A security message that misdescribes its own input teaches the reader
+# to look in the wrong place.
+fixture
+stage "harmless base"
+git -C "$REPO" -c core.hooksPath="$WORK/nohooks" commit -q -m base --no-verify
+base="$(git -C "$REPO" rev-parse HEAD)"
+stage "token = \"$GH_TOKEN\""
+git -C "$REPO" -c core.hooksPath="$WORK/nohooks" commit -q -m leak --no-verify
+out="$(scan --since "$base")"
+if ! grep -q "staged diff" <<<"$out"; then ok "a range scan does not call its input the staged diff"
+else bad "a range scan does not call its input the staged diff" "$out"; fi
+cleanup
+
 echo
 echo "  $PASS passed, $FAIL failed"
 (( FAIL == 0 ))
