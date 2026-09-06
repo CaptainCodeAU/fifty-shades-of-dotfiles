@@ -21,7 +21,7 @@ cp -RL ~/.claude/adopt-kit /path/to/the/project/_adopt
 ### ⚠️ `-L` is load-bearing
 
 On a machine where this kit is deployed by stow, `~/.claude/adopt-kit` is a **symlink**. A plain
-`cp -R` copies the *link*, not the contents:
+`cp -R` copies the _link_, not the contents:
 
 - on another machine the link dangles and the kit is empty
 - on this machine, editing inside the copy edits the master
@@ -37,17 +37,19 @@ copy that waits forever for an overwrite prompt, or a delete that reports a warn
 nothing.
 
 - `\cp` escapes an **alias**. It does **not** escape a shell **function**.
-- Use the absolute path when you mean it: `/bin/cp`, `/bin/rm`.
+- For a copy, use the absolute path when you mean it: `/bin/cp`.
+- For the delete, you (the human) choose the tool. An agent never runs `/bin/rm`; if the
+  Trash-routed `rm` refuses, the agent reports it and leaves the delete to you.
 - `type rm` tells you which you are dealing with.
 
 ## What travels, and what does not
 
-| Travels | Does not |
-|---|---|
-| how to write to the operator, and how to present a decision | any product, project or domain content |
-| the working contract — sequencing, ownership, pushing back | any particular harness's modes, banners or voice |
-| the verification discipline, and the discovery rule | machine facts — branches, package managers, paths |
-| the SHAPE of a memory store and the rules for writing into it | seeded memories — see below |
+| Travels                                                       | Does not                                          |
+| ------------------------------------------------------------- | ------------------------------------------------- |
+| how to write to the operator, and how to present a decision   | any product, project or domain content            |
+| the working contract — sequencing, ownership, pushing back    | any particular harness's modes, banners or voice  |
+| the verification discipline, and the discovery rule           | machine facts — branches, package managers, paths |
+| the SHAPE of a memory store and the rules for writing into it | seeded memories — see below                       |
 
 **It seeds no memories on purpose.** The rules live in the project's instruction file, because a
 rule stored only in memory is consulted rather than obeyed. Writing them into memory as well

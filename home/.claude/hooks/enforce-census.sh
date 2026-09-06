@@ -254,18 +254,10 @@ read -r -d '' NOTE <<EOF
 
     $invocation
 
-The census tool refuses to report anything unless the control hits first, always prints the
-denominator AND how the population was drawn (git ls-files, or an explicit walk when the
-project is not a repo), and never truncates.
-$_why
-
-Measured: five ad-hoc greps in one sitting were wrong — \`\\|\` used as alternation under -E,
-a dropped -i, an unquoted variable read as one filename, a regex complexity error, and a
-\`head\` that cut off the control row — while every purpose-built tool was right every time.
-
-⇒ A zero from it is NOT evidence of absence. It is an unproven instrument until a control has
-hit in the same breath. Using it to LOCATE is fine; using it to CONCLUDE is what keeps going
-wrong.$missing
+Census requires a control hit first, prints the denominator and how the population was drawn,
+and never truncates. $_why
+A zero from a search is not evidence of absence until a control has hit in the same breath.
+Use the search to LOCATE; use census to CONCLUDE.$missing
 EOF
 
 jq -n --arg ctx "$NOTE" \
