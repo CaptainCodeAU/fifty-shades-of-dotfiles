@@ -734,6 +734,60 @@ pnpm() {
     command pnpm "$@"
 }
 
+# Guard against hand-starting the herdr server where a service manages it.
+#
+# A hand-started `herdr server` inherits this shell's environment -- including
+# the exported once-only banner flags from section 4 and 10, so every pane it
+# spawns skips the welcome banner -- and dies with the SSH session. On Linux
+# the server is a systemd --user unit (home/.config/systemd/user/herdr.service,
+# enabled by install.sh); on macOS it is a brew-services LaunchAgent. Both are
+# detected by the file they leave behind, so a box with no service is unaffected.
+#
+# Two vectors, both covered:
+#   1. `herdr server` with NO subcommand. Blocked; the service command is printed.
+#      `herdr server stop|reload-config|...` pass straight through.
+#   2. Bare `herdr` (attach). Upstream: "starts or attaches to the remote Herdr
+#      server" -- when the service is down, attaching quietly spawns the very
+#      hand-started server this guard exists to prevent. So on Linux the unit is
+#      started first. Skipped inside a herdr pane (HERDR_ENV=1: the server is
+#      by definition running) so agents' frequent CLI calls pay nothing.
+#
+# A shell function only guards interactive use and Claude's Bash tool (which
+# sources the snapshotted functions). Scripts calling the binary by path are
+# not covered; none in this estate start a server. Measured 2026-09-06.
+herdr() {
+    local _unit="$HOME/.config/systemd/user/herdr.service"
+    local _plist="$HOME/Library/LaunchAgents/homebrew.mxcl.herdr.plist"
+    if [[ "$1" == "server" && -z "$2" ]]; then
+        if [[ -L "$_unit" ]] && command -v systemctl &>/dev/null; then
+            echo "${err}BLOCKED: herdr server${done}"
+            echo
+            echo "  herdr is managed by systemd --user on this box. A hand-started server"
+            echo "  ${warn}inherits this shell's environment and dies with this session.${done}"
+            echo
+            echo "  Use:   systemctl --user start herdr.service"
+            echo "  State: systemctl --user status herdr.service"
+            return 1
+        elif [[ -f "$_plist" ]]; then
+            echo "${err}BLOCKED: herdr server${done}"
+            echo
+            echo "  herdr is managed by launchd (brew services) on this Mac. A second server"
+            echo "  ${warn}exits 1 on the socket and keep_alive respawns it forever.${done}"
+            echo
+            echo "  Use:   brew services start herdr"
+            echo "  State: brew services info herdr"
+            return 1
+        fi
+    fi
+    if [[ -z "${HERDR_ENV:-}" && "$1" != "server" && -L "$_unit" ]] && command -v systemctl &>/dev/null; then
+        if [[ "$(systemctl --user is-active herdr.service 2>/dev/null)" != "active" ]]; then
+            echo "${warn}herdr.service is not running; starting it so attach does not spawn a hand-started server${done}"
+            systemctl --user start herdr.service || echo "${err}systemctl --user start herdr.service failed -- see journalctl --user -u herdr.service${done}"
+        fi
+    fi
+    command herdr "$@"
+}
+
 # Guard gh auth subcommands that re-add HTTPS credential helpers.
 # Blocks: login, setup-git, refresh (these undermine SSH-only auth).
 # Allows: status, token, switch, logout, and all non-auth gh commands.
