@@ -53,6 +53,8 @@ T0=1750000000        # a fixed "now"; every tier below is T0 + n days
 #   broken       exit 1, with FAIL lines
 #   reshaped     exit 0, but NO parseable count -- the doctor changed shape
 #   absent       no ccw on disk at all
+#   hang         never returns -- the failure mode with no exit code at all
+#   double       exit 0, but TWO parseable counts -- which one is true?
 # ---------------------------------------------------------------------------
 fixture() {
     local mode="$1"
@@ -90,6 +92,12 @@ case "$mode" in
     echo "  FAIL session-end hook has not fired since 2026-07-24"
     echo "  FAIL 636 session(s) exist only in ~/.claude"
     exit 1 ;;
+  double)
+    echo "  OK   Uncaptured: 7 session(s) pending"
+    echo "  OK   Uncaptured: 3 session(s) pending"
+    exit 0 ;;
+  hang)
+    sleep 300 ;;
 esac
 STUB
     chmod +x "$FAKE_HOME/.local/bin/ccw"
@@ -116,6 +124,7 @@ run_at() { # run_at <epoch> [args...]
     CCW_WATCH_STATE="$STATE" \
     CCW_WATCH_NOW="$now" \
     CCW_WATCH_DEBUG=1 \
+    CCW_WATCH_DOCTOR_TIMEOUT="${DOCTOR_TIMEOUT:-20}" \
     NO_COLOR=1 \
     "$TOOL" "$@" 2>&1
 }
@@ -280,6 +289,56 @@ out=$(run_at "$T0")
 if grep -q "capture working" <<<"$out" && ! grep -qi "BROKEN\|NOT working" <<<"$out"; then
     ok "a genuine zero is still reported healthy"
 else bad "a genuine zero is still reported healthy" "$out"; fi
+cleanup
+
+# ===========================================================================
+# RED-TEAM FINDINGS, 2026-09-06
+# ===========================================================================
+
+# --- 13. A HANGING DOCTOR MUST NOT HANG THE SESSION ------------------------
+# This file's own header promises: "NEVER BLOCKS. Always exits 0. A watcher that
+# can fail a session start is worse than no watcher." A HANG is worse than a
+# failure -- there is no exit code to fail with, the session start just stops.
+#
+# `report="$("$ccw" doctor)"` had no timeout. The only thing standing between a
+# wedged doctor and a wedged session start was `timeout: 30` typed into
+# ~/.claude/settings.json -- a number in a config file, on one machine, that
+# nothing verifies and that a hand-registered copy elsewhere may not have. Run
+# from a shell there was no protection at all.
+fixture hang
+DOCTOR_TIMEOUT=2
+started="$(date +%s)"
+out=$(run_at "$T0"); rc=$?
+elapsed=$(( $(date +%s) - started ))
+unset DOCTOR_TIMEOUT
+if (( elapsed < 15 )); then ok "a hanging doctor is cut off (${elapsed}s, not 300)"
+else bad "a hanging doctor is cut off" "took ${elapsed}s -- the session start would have hung"; fi
+if (( rc == 0 )); then ok "a hanging doctor still exits 0 (never blocks)"
+else bad "a hanging doctor still exits 0 (never blocks)" "exit was $rc"; fi
+if grep -qi "timed out\|not respond" <<<"$out"; then
+    ok "a hanging doctor SAYS it timed out"
+else bad "a hanging doctor SAYS it timed out" "$out"; fi
+if [[ "$(state_field last)" == "broken" ]]; then
+    ok "a hanging doctor escalates like any other unprovable state"
+else bad "a hanging doctor escalates like any other unprovable state" "last=$(state_field last)"; fi
+cleanup
+
+# --- 14. TWO COUNTS IS NOT ONE COUNT ---------------------------------------
+# Found by red-teaming: a doctor emitting two "Uncaptured: N" lines had the
+# first silently taken and the rest dropped, and the output line was mangled by
+# the embedded newline. Picking one reading of an ambiguous report without
+# saying so is the same defect as inventing a zero from an unreadable one --
+# it is a confident answer the tool cannot actually support.
+fixture double
+out=$(run_at "$T0"); rc=$?
+if (( rc == 0 )); then ok "an ambiguous report still exits 0"
+else bad "an ambiguous report still exits 0" "exit was $rc"; fi
+if ! grep -q "capture working" <<<"$out"; then
+    ok "two counts are NOT reported as a healthy single count"
+else bad "two counts are NOT reported as a healthy single count" "it picked one and said nothing: $out"; fi
+if [[ "$(state_field last)" == "broken" ]]; then
+    ok "an ambiguous report escalates, like an unreadable one"
+else bad "an ambiguous report escalates, like an unreadable one" "last=$(state_field last)"; fi
 cleanup
 
 echo
