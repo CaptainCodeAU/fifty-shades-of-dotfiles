@@ -592,6 +592,85 @@ if [[ "$(scan_rc --since "$base")" == "0" ]]; then
 else bad "a secret added BEFORE the range is not resurfaced by its removal (by design)" "removals are being scanned; scrubbing now blocks forever"; fi
 cleanup
 
+# ===========================================================================
+# --control -- the one defence a scanner cannot give itself
+# ===========================================================================
+# The summary line reports what the tool READ. Nothing reported whether it can
+# still MATCH. A pattern that silently stopped firing -- an edit, a regex-engine
+# difference, a rule disarmed by accident -- produces "0 leaks" over real content
+# with a real denominator, and every visible signal says pass.
+#
+# Proposed by the Network_Plan session after they hit the adjacent failure: a
+# fired control, 10,677 bytes scanned, and a WRONG ANSWER, because the SCOPE was
+# wrong. Their one-line form is the keeper and is quoted in the tool:
+# A CONTROL PROVES THE INSTRUMENT, NOT THE SCOPE.
+# ---------------------------------------------------------------------------
+
+# --- 39. every armed rule fires, and the count states its own scope --------
+fixture
+out="$(scan --control)"
+if [[ "$(scan_rc --control)" == "0" ]]; then ok "control: all armed rules fire, exit 0"
+else bad "control: all armed rules fire, exit 0" "$out"; fi
+if grep -qE "tested 9 of 9 rules, 0 disarmed" <<<"$out"; then
+    ok "control: states its own scope (9 of 9, 0 disarmed)"
+else bad "control: states its own scope (9 of 9, 0 disarmed)" "$out"; fi
+for r in username-path github-token sk-token aws-key slack-token private-key phone lan-ip local-phone; do
+    if grep -qE "^ *ARMED +$r +FIRED" <<<"$out"; then ok "control: $r FIRED"
+    else bad "control: $r FIRED" "$out"; fi
+done
+cleanup
+
+# --- 40. a disarmed rule reads NOT TESTED, never ok and never nothing ------
+# This is what makes it compose with leakscan.skip instead of fighting it: a run
+# where somebody disarmed eight rules must be VISIBLY a weak control, not green.
+fixture
+git -C "$REPO" config leakscan.skip "username-path"
+out="$(scan --control)"
+if [[ "$(scan_rc --control)" == "0" ]]; then ok "control: still exit 0 with a rule disarmed"
+else bad "control: still exit 0 with a rule disarmed" "$out"; fi
+if grep -qE "tested 8 of 9 rules, 1 disarmed" <<<"$out"; then
+    ok "control: the disarmed rule is counted out of scope"
+else bad "control: the disarmed rule is counted out of scope" "$out"; fi
+if grep -qE "^ *DISARMED +username-path +NOT TESTED" <<<"$out"; then
+    ok "control: a disarmed rule reads NOT TESTED"
+else bad "control: a disarmed rule reads NOT TESTED" "$out"; fi
+cleanup
+
+# --- 41. THE CASE THAT PROVES THE CONTROL CAN FAIL -------------------------
+# A control that cannot fail is decoration. Sabotage one pattern in a COPY of
+# the tool and assert it is caught and named. Without this case, every other
+# assertion here would pass against a --control that printed FIRED
+# unconditionally.
+fixture
+BROKEN="$WORK/git-leak-scan-broken"
+sed 's/^b_ghtok=.*/b_ghtok='"'"'THIS_PATTERN_MATCHES_NOTHING_XYZZY'"'"'/' "$TOOL" > "$BROKEN"
+chmod +x "$BROKEN"
+out="$( cd "$REPO" && "$BROKEN" --control 2>&1 )"
+rc="$( cd "$REPO" && "$BROKEN" --control >/dev/null 2>&1; echo $? )"
+if [[ "$rc" == "1" ]]; then ok "control: a broken pattern makes the control FAIL (exit 1)"
+else bad "control: a broken pattern makes the control FAIL (exit 1)" "exit was $rc -- the control cannot fail, so it proves nothing"; fi
+if grep -qE "github-token +DID NOT FIRE" <<<"$out"; then
+    ok "control: the broken rule is named"
+else bad "control: the broken rule is named" "$out"; fi
+if grep -qi "broken\|do not trust" <<<"$out"; then
+    ok "control: failure says the tool is broken, not that the repo is dirty"
+else bad "control: failure says the tool is broken, not that the repo is dirty" "$out"; fi
+cleanup
+
+# --- 42. nothing armed means nothing to prove ------------------------------
+fixture
+git -C "$REPO" config leakscan.skip "username-path github-token sk-token aws-key slack-token private-key phone lan-ip local-phone"
+if [[ "$(scan_rc --control)" == "2" ]]; then ok "control: every rule disarmed REFUSES (exit 2)"
+else bad "control: every rule disarmed REFUSES (exit 2)" "$(scan --control)"; fi
+cleanup
+
+# --- 43. a disabled repo has nothing to prove either -----------------------
+fixture
+git -C "$REPO" config leakscan.disable true
+if [[ "$(scan_rc --control)" == "2" ]]; then ok "control: leakscan.disable REFUSES (exit 2)"
+else bad "control: leakscan.disable REFUSES (exit 2)" "$(scan --control)"; fi
+cleanup
+
 echo
 echo "  $PASS passed, $FAIL failed"
 (( FAIL == 0 ))
