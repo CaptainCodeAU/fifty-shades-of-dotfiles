@@ -60,6 +60,7 @@ RANGE=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --cached) MODE="cached"; shift ;;
+        --control) MODE="control"; shift ;;
         --range)  MODE="range"; RANGE="${2:-}"; shift 2 || shift ;;
         --since)  MODE="range"; RANGE="${2:-}..HEAD"; shift 2 || shift ;;
         -h|--help)
@@ -68,7 +69,14 @@ while [ $# -gt 0 ]; do
             printf '  git-leak-scan                 scan the staged diff (the pre-commit path)\n'
             printf '  git-leak-scan --since <ref>   audit everything committed since <ref>\n'
             printf '  git-leak-scan --range A..B    audit an explicit range\n'
+            printf '  git-leak-scan --control       prove every ARMED rule still fires\n'
             printf '\nExit: 0 clean  1 blocked  2 refused (nothing to scan, or bad usage)\n'
+            printf '      --control: 0 all armed rules fire  1 THE TOOL IS BROKEN\n'
+            printf '                 2 refused (nothing armed, so nothing to prove)\n'
+            printf '\nA GREEN CONTROL IS NOT A CLEAN REPO. It proves the INSTRUMENT still\n'
+            printf 'matches; it says nothing about the SCOPE you pointed it at. A wrong\n'
+            printf 'range with a fired control and a real byte count still reads as a pass.\n'
+            printf 'Pair them:  git-leak-scan --control && git-leak-scan --since <ref>\n'
             exit 0 ;;
         *) printf 'git-leak-scan: unknown option %s (try --help)\n' "$1" >&2; exit 2 ;;
     esac
@@ -93,6 +101,10 @@ fi
 #   AUDIT path (--range/--since): the caller asked. "I did not look" is not the
 #     answer "clean", so it refuses with exit 2.
 skip_or_refuse() { # skip_or_refuse <reason>
+    if [ "$MODE" = "control" ]; then
+        printf 'git-leak-scan: REFUSING -- %s, so there is nothing to prove.\n' "$1" >&2
+        exit 2
+    fi
     if [ "$MODE" = "range" ]; then
         printf 'git-leak-scan: REFUSING -- %s, so this audit scanned nothing.\n' "$1" >&2
         printf '  An empty scan is NOT a pass. Use a repo-appropriate scanner, or\n' >&2
@@ -265,6 +277,124 @@ fi
 WHAT="staged diff"
 [ "$MODE" = "range" ] && WHAT="range $RANGE"
 
+# ---- the one matching path, shared by the scan and by --control -----------
+# EXTRACTED so --control exercises THIS code rather than a copy of the patterns.
+# A control that tests its own private copy of the regexes proves only that the
+# copy still works, which is not the question anyone is asking.
+#
+# Each rule is gated by rule_off so a disarmed one FALLS THROUGH to the next test
+# rather than ending the chain -- a skipped rule must not mask a different rule
+# that would have matched the same line.
+classify() { # classify <line>  -> sets CAT (block category, or empty) and WARN_CATS
+    local c="$1"
+    CAT=""; WARN_CATS=""
+    if   ! rule_off username-path && [ -n "$user" ] && [[ $c =~ $b_user ]]; then CAT="username-in-path"
+    elif ! rule_off github-token && [[ $c =~ $b_ghtok ]]; then CAT="github-token"
+    elif ! rule_off sk-token     && [[ $c =~ $b_sk ]];    then CAT="api-token(sk-)"
+    elif ! rule_off aws-key      && [[ $c =~ $b_aws ]];   then CAT="aws-access-key"
+    elif ! rule_off slack-token  && [[ $c =~ $b_slack ]]; then CAT="slack-token"
+    elif ! rule_off private-key  && [[ $c =~ $b_pkey ]];  then CAT="private-key"
+    elif ! rule_off phone && line_has_real_phone "$c" "$b_phone"; then CAT="phone-number(E.164)"
+    fi
+    if ! rule_off lan-ip && [[ $c =~ $w_ip ]]; then
+        WARN_CATS="${WARN_CATS}private-LAN-IP
+"
+    fi
+    if ! rule_off local-phone && line_has_real_phone "$c" "$w_phone_au"; then
+        WARN_CATS="${WARN_CATS}local-format-phone
+"
+    fi
+}
+
+# ---- --control: prove the patterns still FIRE ------------------------------
+# The summary line reports what the tool READ. Nothing reported whether it can
+# still MATCH. A pattern that silently stopped firing -- an edit, a regex-engine
+# difference, a rule disarmed by accident -- produces "0 leaks" over real content
+# with a real denominator, and every visible signal says pass.
+#
+# Proposed by the Network_Plan session, who hit the adjacent failure the same
+# day: a fired control, 10,677 bytes scanned, and a wrong answer, because the
+# SCOPE was wrong. Their one-line form is the thing to remember:
+#
+#     A CONTROL PROVES THE INSTRUMENT, NOT THE SCOPE.
+#
+# So `tested N of M rules, K disarmed` is not decoration. Without it this ships a
+# control that cannot say it only checked half the rules -- and a run where
+# somebody disarmed eight rules must read as a WEAK control, not a green one.
+# A disarmed rule prints NOT TESTED: never ok, never nothing.
+#
+# EVERY SYNTHETIC VALUE IS ASSEMBLED AT RUNTIME. A control corpus is by
+# construction the most likely thing in this repo to fail to commit itself --
+# measured twice already, with a token and with a phone number. Do not tidy
+# these into literals; the tool will start blocking its own improvement.
+run_control() {
+    local rid syn expect got armed=0 disarmed=0 total=0 failed=0 out="" A36 u
+    A36="$(printf 'A%.0s' 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6)"
+    u="$user"
+    for rid in $KNOWN_RULES; do
+        total=$(( total + 1 ))
+        if rule_off "$rid"; then
+            disarmed=$(( disarmed + 1 ))
+            out="$out$(printf '  DISARMED %-14s NOT TESTED (leakscan.skip)' "$rid")
+"
+            continue
+        fi
+        case "$rid" in
+            username-path) syn="path = \"/Users/$u/x\"";          expect="username-in-path" ;;
+            github-token)  syn="t = \"gh${_z:-}p_${A36}\"";       expect="github-token" ;;
+            sk-token)      syn="t = \"sk${_z:-}-${A36}\"";        expect="api-token(sk-)" ;;
+            aws-key)       syn="t = \"AK${_z:-}IA0123456789ABCDEF\""; expect="aws-access-key" ;;
+            slack-token)   syn="t = \"xo${_z:-}xb-0123456789-abcdefghij\""; expect="slack-token" ;;
+            private-key)   syn="$(printf -- '-----%s RSA PRIVATE KEY-----' 'BEGIN')"; expect="private-key" ;;
+            phone)         syn="call +6${_z:-}1390001234 now";      expect="phone-number(E.164)" ;;
+            lan-ip)        syn="host 192.16${_z:-}8.1.50";          expect="private-LAN-IP" ;;
+            local-phone)   syn="call 04${_z:-}12345678";            expect="local-format-phone" ;;
+        esac
+        # username-path cannot fire when the username is unknown; that is a real
+        # gap in the instrument on this machine, not a pass.
+        if [ "$rid" = "username-path" ] && [ -z "$u" ]; then
+            armed=$(( armed + 1 )); failed=$(( failed + 1 ))
+            out="$out$(printf '  ARMED    %-14s DID NOT FIRE (no username resolved)' "$rid")
+"
+            continue
+        fi
+        armed=$(( armed + 1 ))
+        classify "$syn"
+        got="$CAT
+$WARN_CATS"
+        case "$got" in
+            *"$expect"*) out="$out$(printf '  ARMED    %-14s FIRED' "$rid")
+" ;;
+            *) failed=$(( failed + 1 ))
+               out="$out$(printf '  ARMED    %-14s DID NOT FIRE' "$rid")
+" ;;
+        esac
+    done
+
+    printf 'git-leak-scan --control\n' >&2
+    printf '  tested %s of %s rules, %s disarmed\n' "$armed" "$total" "$disarmed" >&2
+    printf '%s' "$out" >&2
+
+    if [ "$armed" -eq 0 ]; then
+        printf '== REFUSING: every rule is disarmed, so there is nothing to prove ==\n' >&2
+        exit 2
+    fi
+    if [ "$failed" -gt 0 ]; then
+        printf '== %s of %s armed rules DID NOT FIRE -- THE TOOL IS BROKEN ==\n' "$failed" "$armed" >&2
+        printf '   Do not trust any recent clean verdict from it.\n' >&2
+        exit 1
+    fi
+    printf '== %s of %s armed rules fire ==\n' "$armed" "$armed" >&2
+    printf '   A green control proves the INSTRUMENT, not the SCOPE -- it says\n' >&2
+    printf '   nothing about whether you pointed it at the right commits.\n' >&2
+    exit 0
+}
+
+# --control needs the rules and classify(), but NOT a diff -- dispatch here,
+# before any diff is collected. Placed after the collection first time round,
+# it fell through to a staged scan and reported "nothing staged".
+[ "$MODE" = "control" ] && run_control
+
 if [ "$MODE" = "range" ]; then
     # PER-COMMIT PATCHES, NOT A NET DIFF.
     #
@@ -348,29 +478,17 @@ while IFS= read -r line; do
             c="${line#+}"
             cat=""
             added=$(( added + 1 ))
-            # Each rule is gated by rule_off so a disarmed one FALLS THROUGH to
-            # the next test rather than ending the chain -- a skipped rule must
-            # not mask a different rule that would have matched the same line.
-            if   ! rule_off username-path && [ -n "$user" ] && [[ $c =~ $b_user ]]; then cat="username-in-path"
-            elif ! rule_off github-token && [[ $c =~ $b_ghtok ]]; then cat="github-token"
-            elif ! rule_off sk-token     && [[ $c =~ $b_sk ]];    then cat="api-token(sk-)"
-            elif ! rule_off aws-key      && [[ $c =~ $b_aws ]];   then cat="aws-access-key"
-            elif ! rule_off slack-token  && [[ $c =~ $b_slack ]]; then cat="slack-token"
-            elif ! rule_off private-key  && [[ $c =~ $b_pkey ]];  then cat="private-key"
-            elif ! rule_off phone && line_has_real_phone "$c" "$b_phone"; then cat="phone-number(E.164)"
-            fi
-            if [ -n "$cat" ]; then
-                block_hits="${block_hits}${file}: ${cat}
+            classify "$c"
+            if [ -n "$CAT" ]; then
+                block_hits="${block_hits}${file}: ${CAT}
 "
             fi
-            if ! rule_off lan-ip && [[ $c =~ $w_ip ]]; then
-                warn_hits="${warn_hits}${file}: private-LAN-IP
+            while IFS= read -r _w; do
+                [ -n "$_w" ] && warn_hits="${warn_hits}${file}: ${_w}
 "
-            fi
-            if ! rule_off local-phone && line_has_real_phone "$c" "$w_phone_au"; then
-                warn_hits="${warn_hits}${file}: local-format-phone
-"
-            fi
+            done <<EOF
+$WARN_CATS
+EOF
             ;;
     esac
 done < <(printf '%s\n' "$diff_text")
