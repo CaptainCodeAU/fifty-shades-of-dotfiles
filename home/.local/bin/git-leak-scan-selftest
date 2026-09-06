@@ -23,6 +23,39 @@
 # nothing. Every phone number written literally here is from a reserved
 # documentation range, for the same reason.
 #
+# ---------------------------------------------------------------------------
+# PROVEN-FAILING LEDGER -- what each batch scored against the UNFIXED tool
+# ---------------------------------------------------------------------------
+# A test that has never been OBSERVED failing proves nothing about the code. So
+# every batch below was written first and run against the tool as it then stood,
+# and the score recorded. Idea taken from the Network_Plan session, 2026-09-06.
+#
+#   what the batch targeted                            score vs unfixed tool
+#   ------------------------------------------------   ---------------------
+#   --range/--since; empty range must refuse             30 passed,  5 failed
+#   a SKIP in audit mode must refuse, not exit 0         37 passed,  4 failed
+#   red team: range validation, filename spoofing        42 passed,  6 failed
+#   leakscan.skip; range-mode summary line               53 passed,  6 failed
+#   net diff cancels an add-then-remove in range         60 passed,  3 failed
+#   --control                                            NOT MEASURABLE this way
+#
+# --control has no honest number: the flag did not exist, so its cases ERRORED
+# rather than failed, which is a different thing and must not be written down as
+# if it were the same. Its failure path is proved instead by case 41, which
+# sabotages b_ghtok in a COPY of the tool and asserts the control catches it,
+# names it, and exits 1. Without that case the whole --control block would pass
+# against a control that printed FIRED unconditionally.
+#
+# PROVENANCE, because writing down a number you never watched is the very
+# failure this file is about: each score above was recorded in its own commit
+# message at the time, from live output. Spot-checked 2026-09-06 by re-running
+# the suite as it stood at 89df7ff against the tool at that same commit -- the
+# recorded "30 passed, 5 failed" reproduced exactly.
+#
+# IF A ROW EVER SCORES 0 FAILED when re-derived, the assertion has ROTTED: it is
+# no longer testing what its name claims. That is the signal to read it, not to
+# celebrate it.
+#
 # Usage: git-leak-scan-selftest        (exit 0 = all passed)
 # ============================================================================
 
