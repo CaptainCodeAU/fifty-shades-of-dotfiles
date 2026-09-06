@@ -139,8 +139,9 @@ manifest_rows() {
     jq -r '
       .hooks[]
       | [ .event,
-          .matcher,
+          (.matcher // ""),
           .script,
+          (.script_path // ""),
           ((.requires // []) | join(" ")),
           .entry.command,
           .why,
@@ -152,11 +153,22 @@ manifest_rows() {
 # script is legitimately registered under more than one matcher, and matching the
 # whole hook object instead would treat a "timeout" tweak as unregistered and add
 # a second copy.
+#
+# MATCHERLESS EVENTS (empty $m) WIDEN THAT TO THE PAIR (event, command), ON PURPOSE.
+# SessionStart has no tool to match on, so its real groups carry no "matcher" key at
+# all -- and a command registered there runs once per group it appears in. The
+# "legitimately under several matchers" argument that justifies the triple simply
+# does not exist for this class: two copies is never right, it is ccw-watch running
+# twice. So when the manifest omits a matcher we ask the honest question -- does this
+# command already run at this event, in ANY group -- rather than the narrow one.
+# Measured 2026-09-06 on the real settings.json: the live SessionStart array holds a
+# matcherless group AND a "matcher": "*" group, so a group-scoped check would have
+# missed an entry someone later moved between them and added a duplicate.
 is_registered() {
     local ev="$1" m="$2" cmd="$3" n
     n=$(jq --arg ev "$ev" --arg m "$m" --arg c "$cmd" '
           [ (.hooks // {})[$ev][]?
-            | select((.matcher // "") == $m)
+            | select( if $m == "" then true else ((.matcher // "") == $m) end )
             | .hooks[]?
             | select((.command // "") == $c) ] | length' "$SETTINGS" 2>/dev/null) || return 1
     [[ "${n:-0}" != "0" ]]
@@ -166,13 +178,26 @@ PENDING=()      # rows we intend to add
 SKIPPED=()      # human-readable "why not"
 ALREADY=0
 
-while IFS="$SEP" read -r ev matcher script requires cmd why entry; do
+while IFS="$SEP" read -r ev matcher script script_path requires cmd why entry; do
     [[ -z "${ev:-}" ]] && continue
 
     # Gate 1: the script must exist. Registering a hook whose file is missing
     # turns every matching tool call into an error -- worse than not registering.
-    if [[ ! -e "$HOOKS_DIR/$script" ]]; then
-        SKIPPED+=("$script -- not deployed to $HOOKS_DIR (run ./install.sh --stow-only)")
+    #
+    # NOT EVERY HOOK LIVES IN ~/.claude/hooks/. The session-start watchers
+    # (ci-watch, ccw-watch) are ordinary CLI tools stowed to ~/.local/bin -- they
+    # are run BY a hook entry, they are not hook scripts. Hard-coding $HOOKS_DIR
+    # here meant every such entry was skipped forever, on every machine, with a
+    # "not deployed" reason that was simply untrue. An optional script_path (which
+    # may use $HOME, expanded the same way `requires` is) says where to actually
+    # look; `script` stays the display name either way.
+    local_script_file="$HOOKS_DIR/$script"
+    if [[ -n "$script_path" ]]; then
+        local_script_file="${script_path/\$HOME/$REQ_ROOT}"
+        local_script_file="${local_script_file/#\~/$REQ_ROOT}"
+    fi
+    if [[ ! -e "$local_script_file" ]]; then
+        SKIPPED+=("$script -- not deployed to $(dirname "$local_script_file") (run ./install.sh --stow-only)")
         continue
     fi
 
@@ -253,18 +278,37 @@ cp "$SETTINGS" "$TMP" || { printf '%s! claude-hooks-sync: could not stage a copy
 
 # Add one entry. Group choice (measured on the real file, which has TWO groups
 # with matcher "Bash" -- PAI's SecurityValidator, and ours): prefer a group that
-# already holds a $HOME/.claude/hooks/ command, so ours stay together and a
-# foreign group is never edited. Otherwise append a brand-new group.
+# already holds one of OUR commands, so ours stay together and a foreign group is
+# never edited. Otherwise append a brand-new group.
+#
+# TWO CORRECTIONS, both measured against the real settings.json on 2026-09-06:
+#
+#   startswith -> contains. Live commands are not bare paths. They are written
+#   "$HOME/.claude/hooks/MemoryRootGuard.sh" (leading quote character) and
+#   test -x "$HOME/.local/bin/ccw-watch" && ... || true. startswith() is false for
+#   both, so the rule found no group of ours and appended a new one every time --
+#   silently scattering our entries instead of keeping them together. contains()
+#   still cannot match PAI's ${PAI_DIR}/hooks/... so the foreign group stays safe.
+#
+#   ~/.local/bin counts as ours too, for the same reason Gate 1 above had to learn
+#   about it: the session-start watchers live there.
+#
+# A MATCHERLESS ENTRY MUST STAY MATCHERLESS. SessionStart groups in the real file
+# carry no "matcher" key; writing matcher: "" would invent a shape Claude Code has
+# never been given, in the one file we least want to experiment on.
 JQ_ADD='
   .hooks //= {}
   | .hooks[$ev] //= []
   | ( [ .hooks[$ev] | to_entries[]
-        | select((.value.matcher // "") == $m)
+        | select( if $m == "" then (.value | has("matcher") | not)
+                  else ((.value.matcher // "") == $m) end )
         | select( [ .value.hooks[]?
-                    | select((.command // "") | startswith("$HOME/.claude/hooks/")) ] | length > 0 )
+                    | select( ((.command // "") | contains("$HOME/.claude/hooks/"))
+                           or ((.command // "") | contains("$HOME/.local/bin/")) ) ] | length > 0 )
         | .key ] | first ) as $idx
   | if $idx == null
-    then .hooks[$ev] += [ { matcher: $m, hooks: [ $entry ] } ]
+    then .hooks[$ev] += [ ( if $m == "" then { hooks: [ $entry ] }
+                            else { matcher: $m, hooks: [ $entry ] } end ) ]
     else .hooks[$ev][$idx].hooks += [ $entry ]
     end
 '
