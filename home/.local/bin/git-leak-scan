@@ -266,7 +266,30 @@ WHAT="staged diff"
 [ "$MODE" = "range" ] && WHAT="range $RANGE"
 
 if [ "$MODE" = "range" ]; then
-    diff_text="$(git diff --no-color -U0 "$RANGE" 2>/dev/null)"
+    # PER-COMMIT PATCHES, NOT A NET DIFF.
+    #
+    # This read `git diff A..B`, which is the NET result of the range. A secret
+    # added in one commit and removed in a LATER commit inside the same range
+    # cancels to nothing, so the audit saw zero occurrences of a token that is
+    # sitting in history. Measured 2026-09-06:
+    #
+    #   git log -p <range>  -> 2 occurrences of the token
+    #   git diff <range>    -> 0 occurrences
+    #   "scanned 2 commit(s), 1 added line(s)"   exit 0
+    #
+    # An honest denominator next to a wrong verdict -- the worst shape, because
+    # the summary makes it confident. A sibling project reproduced the identical
+    # hole in their own scanner and their scanned volume went from ~145 KB to
+    # 298,714 bytes on switching, which is the measure of what a net diff
+    # swallows. The case is live for anyone who pushes per commit: a
+    # leak-then-fix pair is briefly PUBLIC and no net-diff scan sees it after.
+    #
+    # --diff-merges=first-parent so content introduced only in a merge
+    # resolution is still read; plain `git log -p` shows nothing for merges,
+    # which would trade one silent gap for another.
+    #
+    # Hook mode is untouched: a staged diff is inherently per-commit already.
+    diff_text="$(git log -p --no-color -U0 --diff-merges=first-parent "$RANGE" 2>/dev/null)"
 else
     diff_text="$(git diff --cached --no-color -U0 2>/dev/null)"
 fi
