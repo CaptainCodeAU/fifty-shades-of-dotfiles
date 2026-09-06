@@ -366,6 +366,63 @@ if ! grep -q "staged diff" <<<"$out"; then ok "a range scan does not call its in
 else bad "a range scan does not call its input the staged diff" "$out"; fi
 cleanup
 
+# ===========================================================================
+# RED-TEAM FINDINGS, 2026-09-06 -- attacking the tool rather than re-reading it
+# ===========================================================================
+# Shell injection was tested and NOT found: `--range '; echo PWNED'` is quoted
+# correctly and never executes. These are the three that did land.
+# ---------------------------------------------------------------------------
+
+# --- 27. --range must REFUSE anything that is not a revision range ----------
+# FOUND: `--range --stat` and `--range a.txt` were passed to `git diff`
+# unvalidated. git happily accepted them as an option and a pathspec, so the
+# tool scanned the UNSTAGED WORKING TREE while reporting "range --stat". Had
+# that been clean it would have exited 0 and the caller would believe a range
+# was audited. Same defect class as the empty scan: it looked at something
+# other than what was asked, and nothing said so.
+#
+# THE FIXTURE MUST LEAVE AN UNSTAGED LEAK, or this case passes for the wrong
+# reason. First attempt had a clean working tree: `git diff --stat` returned
+# nothing, the tool refused because the result was EMPTY, and the assertion
+# went green while the bug was still there. A vacuous pass is the same failure
+# this whole file is about, so the fixture below is load-bearing.
+fixture
+stage "harmless"
+git -C "$REPO" -c core.hooksPath="$WORK/nohooks" commit -q -m base --no-verify
+printf 'token = "%s"\n' "$GH_TOKEN" > "$REPO/sample.txt"   # unstaged, and a real leak
+for bad in "--stat" "sample.txt" "-p"; do
+    rc="$(scan_rc --range "$bad")"
+    if [[ "$rc" == "2" ]]; then ok "--range refuses a non-revision: $bad"
+    else bad "--range refuses a non-revision: $bad" "exit was $rc -- it scanned the WORKING TREE and called it '$bad'"; fi
+done
+git -C "$REPO" checkout -q -- sample.txt 2>/dev/null
+
+# --- 28. a nonexistent ref says WHY, not "the range is empty" --------------
+out="$(scan --since "no-such-ref-xyz")"
+if grep -qi "not a valid\|unknown revision\|cannot resolve" <<<"$out"; then
+    ok "a bad revision is reported as a bad revision"
+else bad "a bad revision is reported as a bad revision" "blamed an empty range instead: $out"; fi
+cleanup
+
+# --- 29. file CONTENT must not be able to spoof the reported filename ------
+# FOUND: a line reading "++ b/INNOCENT.txt" inside a file becomes "+++ b/..."
+# once git adds its own + prefix, and the parser took it as a new file header.
+# Every later hit was then attributed to INNOCENT.txt. The leak was still
+# BLOCKED -- the gate held -- but the report sent you to scrub the wrong file.
+# Not even adversarial: any document containing a diff snippet does this, and
+# this repo's docs are full of them.
+fixture
+printf '++ b/INNOCENT.txt\ntoken = "%s"\n' "$GH_TOKEN" > "$REPO/REAL-FILE.txt"
+git -C "$REPO" add REAL-FILE.txt
+out="$(scan)"
+if grep -q "REAL-FILE.txt" <<<"$out"; then ok "the reported filename is the REAL file"
+else bad "the reported filename is the REAL file" "content spoofed it: $out"; fi
+if ! grep -q "INNOCENT.txt" <<<"$out"; then ok "a spoofed header in content is ignored"
+else bad "a spoofed header in content is ignored" "$out"; fi
+if [[ "$(scan_rc)" == "1" ]]; then ok "the spoof does not stop the leak being BLOCKED"
+else bad "the spoof does not stop the leak being BLOCKED" "exit was $(scan_rc)"; fi
+cleanup
+
 echo
 echo "  $PASS passed, $FAIL failed"
 (( FAIL == 0 ))
