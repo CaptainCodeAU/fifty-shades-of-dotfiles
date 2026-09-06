@@ -281,6 +281,181 @@ if (( rc == 2 )); then ok "absent settings.json exits 2 without crashing"
 else bad "absent settings.json exits 2 without crashing" "exit was $rc"; fi
 cleanup
 
+# ===========================================================================
+# SessionStart: the ALARM class, which has a different shape to everything above
+# ===========================================================================
+# Every case up to here uses PreToolUse with a matcher and a script in
+# ~/.claude/hooks/. The real SessionStart block looks nothing like that, and the
+# three differences are exactly why ci-watch and ccw-watch could not be expressed
+# in the manifest at all until 2026-09-06:
+#
+#   1. its group carries NO "matcher" key
+#   2. the tools live in ~/.local/bin, not ~/.claude/hooks
+#   3. the command is a self-gating one-liner, not a bare path
+#
+# The fixture below is copied from the real settings.json rather than tidied,
+# because a tidy fixture is what let the duplicate-registration guard (case 4)
+# pass while the same bug was live on the actual machine.
+# ---------------------------------------------------------------------------
+fixture_sessionstart() {
+    local want_tool="$1"   # with-tool | no-tool
+    WORK="$(mktemp -d "${TMPDIR:-/tmp}/claude-hooks-sync-ss.XXXXXX")" || WORK=""
+    if [[ -z "$WORK" || ! -d "$WORK" ]]; then
+        printf '  \033[31mABORT\033[0m  cannot create a temp dir under %s -- no test can be trusted.\n' \
+               "${TMPDIR:-/tmp}" >&2
+        exit 2
+    fi
+    REQ_ROOT="$WORK/home"
+    HOOKS_DIR="$REQ_ROOT/.claude/hooks"
+    SETTINGS="$REQ_ROOT/.claude/settings.json"
+    MANIFEST="$WORK/hooks.json"
+    mkdir -p "$HOOKS_DIR" "$REQ_ROOT/.local/bin"
+
+    # Shape copied from the live file: a matcherless group holding a QUOTED
+    # ~/.claude/hooks command and an already-live watcher, plus a sibling group
+    # that does carry a matcher.
+    cat > "$SETTINGS" <<'JSON'
+{
+  "model": "opus",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$HOME/.claude/hooks/MemoryRootGuard.sh\"",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "test -x \"$HOME/.local/bin/live-watch\" && \"$HOME/.local/bin/live-watch\" || true",
+            "timeout": 30
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash '/somewhere/foreign/herdr-agent-state.sh' session",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  },
+  "theme": "dark"
+}
+JSON
+
+    : > "$HOOKS_DIR/MemoryRootGuard.sh"
+    if [[ "$want_tool" == "with-tool" ]]; then
+        : > "$REQ_ROOT/.local/bin/live-watch"
+        : > "$REQ_ROOT/.local/bin/new-watch"
+    fi
+
+    cat > "$MANIFEST" <<'JSON'
+{
+  "hooks": [
+    {
+      "event": "SessionStart",
+      "script": "live-watch",
+      "script_path": "$HOME/.local/bin/live-watch",
+      "entry": {
+        "type": "command",
+        "command": "test -x \"$HOME/.local/bin/live-watch\" && \"$HOME/.local/bin/live-watch\" || true",
+        "timeout": 30
+      },
+      "why": "fixture: already registered, byte-identical"
+    },
+    {
+      "event": "SessionStart",
+      "script": "new-watch",
+      "script_path": "$HOME/.local/bin/new-watch",
+      "entry": {
+        "type": "command",
+        "command": "test -x \"$HOME/.local/bin/new-watch\" && \"$HOME/.local/bin/new-watch\" || true",
+        "timeout": 30
+      },
+      "why": "fixture: the pending one"
+    }
+  ]
+}
+JSON
+}
+
+# How many times does $1 appear anywhere under SessionStart, across ALL groups?
+count_ss() {
+    jq --arg c "$1" '[ .hooks.SessionStart[]? | .hooks[]?
+                       | select(.command == $c) ] | length' "$SETTINGS"
+}
+n_ss_groups() { jq '.hooks.SessionStart | length' "$SETTINGS"; }
+
+LIVE_CMD='test -x "$HOME/.local/bin/live-watch" && "$HOME/.local/bin/live-watch" || true'
+NEW_CMD='test -x "$HOME/.local/bin/new-watch" && "$HOME/.local/bin/new-watch" || true'
+
+# --- 17. BLOCKER 1: a tool outside ~/.claude/hooks is not skipped -----------
+fixture_sessionstart with-tool
+out=$(run_tool --check)
+if ! grep -qi "not deployed" <<<"$out"; then
+    ok "script_path: a hook tool in ~/.local/bin is not reported undeployed"
+else bad "script_path: a hook tool in ~/.local/bin is not reported undeployed" "$out"; fi
+
+# --- 18. BLOCKER 3: the byte-identical live entry reads as REGISTERED -------
+# The duplication hazard in one assertion. If this fails, --install would add a
+# second copy and the watcher would run twice at every session start.
+if ! grep -q "live-watch" <<<"$out"; then
+    ok "matcherless: an already-live command is NOT reported pending"
+else bad "matcherless: an already-live command is NOT reported pending" "$out"; fi
+if grep -q "new-watch" <<<"$out"; then
+    ok "matcherless: the genuinely missing command IS reported pending"
+else bad "matcherless: the genuinely missing command IS reported pending" "$out"; fi
+cleanup
+
+# --- 19. --install adds the pending one exactly once, duplicates nothing ----
+fixture_sessionstart with-tool
+run_tool --install >/dev/null; rc=$?
+if (( rc == 0 )); then ok "SessionStart --install exits 0"
+else bad "SessionStart --install exits 0" "exit was $rc"; fi
+if [[ "$(count_ss "$LIVE_CMD")" == "1" ]]; then
+    ok "the already-live watcher is still registered exactly ONCE"
+else bad "the already-live watcher is still registered exactly ONCE" "count=$(count_ss "$LIVE_CMD") -- it would run that many times per session"; fi
+if [[ "$(count_ss "$NEW_CMD")" == "1" ]]; then
+    ok "the pending watcher was added exactly once"
+else bad "the pending watcher was added exactly once" "count=$(count_ss "$NEW_CMD")"; fi
+
+# --- 20. BLOCKER 2/4: it joined the existing group, made no new one ---------
+if [[ "$(n_ss_groups)" == "2" ]]; then ok "no new SessionStart group was spawned"
+else bad "no new SessionStart group was spawned" "groups=$(n_ss_groups)"; fi
+if [[ "$(jq '.hooks.SessionStart[0] | has("matcher")' "$SETTINGS")" == "false" ]]; then
+    ok "the matcherless group stayed matcherless"
+else bad "the matcherless group stayed matcherless" "a matcher key was invented"; fi
+
+# --- 21. the sibling group that DOES have a matcher is untouched ------------
+if [[ "$(jq -r '.hooks.SessionStart[1].hooks | length' "$SETTINGS")" == "1" \
+   && "$(jq -r '.hooks.SessionStart[1].matcher' "$SETTINGS")" == "*" ]]; then
+    ok "the \"*\" sibling group is left alone"
+else bad "the \"*\" sibling group is left alone" "it was modified"; fi
+
+# --- 22. a second --install is still a byte-identical no-op -----------------
+before=$(shasum "$SETTINGS" | awk '{print $1}')
+run_tool --install >/dev/null
+after=$(shasum "$SETTINGS" | awk '{print $1}')
+if [[ "$before" == "$after" ]]; then ok "SessionStart: a second --install changes nothing"
+else bad "SessionStart: a second --install changes nothing" "hash moved -- it is duplicating"; fi
+cleanup
+
+# --- 23. the script-exists gate still bites when the tool is absent ---------
+fixture_sessionstart no-tool
+out=$(run_tool --install); rc=$?
+if [[ "$(count_ss "$NEW_CMD")" == "0" ]]; then
+    ok "script_path gate: an absent tool is NOT registered"
+else bad "script_path gate: an absent tool is NOT registered" "it was added anyway"; fi
+if (( rc == 0 )); then ok "script_path gate: a skip is not an error"
+else bad "script_path gate: a skip is not an error" "exit was $rc"; fi
+cleanup
+
 echo
 echo "  $PASS passed, $FAIL failed"
 (( FAIL == 0 ))
