@@ -33,8 +33,49 @@
 # ============================================================================
 set -uo pipefail
 
-# Explicit, deliberate bypass.
-[ -n "${LEAK_SCAN_DISABLE:-}" ] && exit 0
+# --- what to scan -----------------------------------------------------------
+# Bare / --cached is the HOOK path and its behaviour is unchanged: scan the
+# staged diff, and an empty one still exits 0 because `git commit --allow-empty`
+# is legitimate and a linter must not break it.
+#
+# --range / --since exist because the SAME command was written into this
+# project's plan documents as an end-of-stage audit, and this project's standing
+# habit is to commit constantly. At the end of a stage nothing is staged, so
+# `git diff --cached | grep ...` scanned zero bytes and reported clean. It could
+# not fail. A scan that quietly checks nothing is worse than no scan, because it
+# looks like a pass -- so an empty RANGE is a refusal (exit 2), not a pass, the
+# same way census.py refuses to report until its control token has hit.
+MODE="cached"
+RANGE=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --cached) MODE="cached"; shift ;;
+        --range)  MODE="range"; RANGE="${2:-}"; shift 2 || shift ;;
+        --since)  MODE="range"; RANGE="${2:-}..HEAD"; shift 2 || shift ;;
+        -h|--help)
+            sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'
+            printf '\nUsage:\n'
+            printf '  git-leak-scan                 scan the staged diff (the pre-commit path)\n'
+            printf '  git-leak-scan --since <ref>   audit everything committed since <ref>\n'
+            printf '  git-leak-scan --range A..B    audit an explicit range\n'
+            printf '\nExit: 0 clean  1 blocked  2 refused (nothing to scan, or bad usage)\n'
+            exit 0 ;;
+        *) printf 'git-leak-scan: unknown option %s (try --help)\n' "$1" >&2; exit 2 ;;
+    esac
+done
+if [ "$MODE" = "range" ] && { [ -z "$RANGE" ] || [ "$RANGE" = "..HEAD" ]; }; then
+    printf 'git-leak-scan: --range/--since needs a revision (try --help)\n' >&2
+    exit 2
+fi
+
+# Explicit, deliberate bypass. ANNOUNCED, not silent: the config-knob bypass
+# below already says when it stands down, and this one being quiet was the same
+# defect in miniature -- an audit run with the gate switched off would have
+# exited 0 with nothing to distinguish it from a clean result.
+if [ -n "${LEAK_SCAN_DISABLE:-}" ]; then
+    echo "git-leak-scan: SKIPPED (LEAK_SCAN_DISABLE set) -- scanned nothing" >&2
+    exit 0
+fi
 # Fail open outside a git repo.
 git rev-parse --git-dir >/dev/null 2>&1 || exit 0
 # Per-repo opt-out (see header): a truthy leakscan.disable in this repo's config
@@ -124,6 +165,29 @@ line_has_real_phone() {
     return 1
 }
 
+# Collect the diff FIRST, so its emptiness can be judged before it is scanned.
+# Reading it straight into the loop is what made "nothing to scan" and "nothing
+# found" the same observable outcome.
+if [ "$MODE" = "range" ]; then
+    diff_text="$(git diff --no-color -U0 "$RANGE" 2>/dev/null)"
+else
+    diff_text="$(git diff --cached --no-color -U0 2>/dev/null)"
+fi
+
+if [ -z "$diff_text" ]; then
+    if [ "$MODE" = "range" ]; then
+        printf 'git-leak-scan: REFUSING -- range %s is empty, so this scanned nothing.\n' "$RANGE" >&2
+        printf '  An empty scan is NOT a pass. Check the revision, or the work may be\n' >&2
+        printf '  somewhere else (unstaged? a different branch? already scanned?).\n' >&2
+        exit 2
+    fi
+    # Hook path: an empty staged diff is legitimate (--allow-empty), so this
+    # stays exit 0 -- but it must never be SILENT about having checked nothing.
+    printf 'git-leak-scan: nothing staged -- scanned nothing (this is not an audit).\n' >&2
+    printf '  To audit committed work: git-leak-scan --since <ref>\n' >&2
+    exit 0
+fi
+
 block_hits=""
 warn_hits=""
 file="?"
@@ -157,7 +221,7 @@ while IFS= read -r line; do
             fi
             ;;
     esac
-done < <(git diff --cached --no-color -U0 2>/dev/null)
+done < <(printf '%s\n' "$diff_text")
 
 block_hits="$(printf '%s' "$block_hits" | grep -v '^$' | sort -u)"
 warn_hits="$(printf '%s' "$warn_hits" | grep -v '^$' | sort -u)"
