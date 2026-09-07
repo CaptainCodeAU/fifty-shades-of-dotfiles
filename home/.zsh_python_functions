@@ -1483,19 +1483,6 @@ _uv_tool_apply_pin() {
     return 0
 }
 
-# INTERNAL HELPER: report HOW a uv tool environment was installed.
-# Echoes exactly one word: editable | frozen | registry | unknown
-#
-# Reads PEP 610 direct_url.json inside the tool env, which is the authoritative
-# record of the install:
-#   {"url":"file:///…","dir_info":{"editable":true}}  -> editable  (live link to the checkout)
-#   {"url":"file:///…","dir_info":{}}                 -> frozen    (snapshot copied into the env)
-#   file absent                                       -> registry  (installed from PyPI)
-#
-# Do NOT sniff for *.pth files instead: uv writes `_editable_impl_<pkg>.pth` for some
-# projects and `<pkg>.pth` for others, and EVERY env carries an unrelated
-# `_virtualenv.pth`, so that heuristic misclassifies in both directions.
-# Usage: _uv_tool_install_mode <tool_env_path> <project_name>
 # INTERNAL HELPER: normalise a package name the way the packaging ecosystem does.
 # PEP 503: lowercase, and collapse every run of - _ . into a single hyphen.
 #   my.tool -> my-tool     My_Tool -> my-tool     a..__--b -> a-b
@@ -1523,6 +1510,19 @@ _uv_tool_normalize_name() {
     print -r -- "${n//[._-]##/-}"
 }
 
+# INTERNAL HELPER: report HOW a uv tool environment was installed.
+# Echoes exactly one word: editable | frozen | registry | unknown
+#
+# Reads PEP 610 direct_url.json inside the tool env, which is the authoritative
+# record of the install:
+#   {"url":"file:///…","dir_info":{"editable":true}}  -> editable  (live link to the checkout)
+#   {"url":"file:///…","dir_info":{}}                 -> frozen    (snapshot copied into the env)
+#   file absent                                       -> registry  (installed from PyPI)
+#
+# Do NOT sniff for *.pth files instead: uv writes `_editable_impl_<pkg>.pth` for some
+# projects and `<pkg>.pth` for others, and EVERY env carries an unrelated
+# `_virtualenv.pth`, so that heuristic misclassifies in both directions.
+# Usage: _uv_tool_install_mode <tool_env_path> <project_name>
 _uv_tool_install_mode() {
     local tool_env=$1 pkg=$2
     [[ -n "$tool_env" && -d "$tool_env" ]] || { echo unknown; return 1; }
@@ -1531,8 +1531,14 @@ _uv_tool_install_mode() {
     site=$(find "$tool_env/lib" -maxdepth 2 -type d -name site-packages 2>/dev/null | head -n 1)
     [[ -n "$site" ]] || { echo unknown; return 1; }
 
-    # dist-info dirs use the normalised name (hyphens/dots -> underscores, lowercased)
-    local norm=${${pkg:l}//[-.]/_}
+    # dist-info dirs use the PEP 503 name with its hyphens turned into underscores, so
+    # normalise FIRST and swap after. The old `${${pkg:l}//[-.]/_}` substituted character
+    # by character and never collapsed runs, so `my..tool` produced `my__tool` while the
+    # real directory is `my_tool-0.3.0.dist-info` -- measured 2026-09-07 against a real
+    # install. The targeted find then missed, and the function fell through to the
+    # fallback below: `unknown` at best, and in an env with a git/URL dep, the DEP's mode
+    # reported as the project's.
+    local norm=${$(_uv_tool_normalize_name "$pkg")//-/_}
     local du
     du=$(find "$site" -maxdepth 2 -path "*/${norm}-*.dist-info/direct_url.json" 2>/dev/null | head -n 1)
     # Fall back to any direct_url.json -- but only when there is exactly ONE.
@@ -1712,9 +1718,17 @@ uv_tool_reinstall_current_project() {
     fi
 
     # Warn when this reinstall would silently flip the mode out from under the caller.
-    local prev_env prev_mode
-    prev_env=$(uv tool list --show-paths 2>/dev/null | awk -v p="$project_name" -v q="${project_name//_/-}" \
-        'tolower($1)==tolower(p) || tolower($1)==tolower(q) { if (match($0, /\(([^)]*)\)$/)) print substr($0, RSTART+1, RLENGTH-2); exit }')
+    #
+    # PEP 503 normalised, like every other name lookup in this file. `${project_name//_/-}`
+    # handled underscores but not dots, so for a project named `my..tool` this found
+    # nothing, prev_mode was never read, and a frozen -> editable reinstall printed NO
+    # warning at all -- measured 2026-09-07. A silent mode flip is precisely what this
+    # block exists to prevent, so its own name matching failing quietly was the worst
+    # possible way for it to break.
+    local prev_env prev_mode prev_norm
+    prev_norm=$(_uv_tool_normalize_name "$project_name")
+    prev_env=$(uv tool list --show-paths 2>/dev/null | awk -v p="$prev_norm" \
+        '{ n=tolower($1); gsub(/[._-]+/,"-",n); if (n==p) { if (match($0, /\(([^)]*)\)$/)) print substr($0, RSTART+1, RLENGTH-2); exit } }')
     if [[ -n "$prev_env" ]]; then
         prev_mode=$(_uv_tool_install_mode "$prev_env" "$project_name")
         if [[ "$prev_mode" == editable || "$prev_mode" == frozen ]] && [[ "$prev_mode" != "$mode_label" ]]; then
