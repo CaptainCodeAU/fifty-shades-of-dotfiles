@@ -499,8 +499,20 @@ echo "│  ────────────────────"
 # NOTE: direnv evaluates this file with bash, where `local` outside a function is an
 # error ("local: can only be used in a function") AND leaves the variable unset -- so
 # these are plain assignments with a _uvt_ prefix rather than `local`.
+#
+# NAME MATCHING IS PEP 503 NORMALISED, and done with tr+sed rather than ${var,,}
+# because macOS ships bash 3.2, where that expansion does not exist.
+# `uv tool list` prints the normalised name, never what pyproject.toml says: a project
+# declaring `name = "my.tool"` is listed as `my-tool`. The old `grep -iE "^NAME"` put
+# the substituted name straight into a regex, so the dot matched the hyphen BY ACCIDENT
+# while equally matching a `myXtool` row -- this banner could describe a different
+# installed tool's version, mode and binaries as yours. A name with an underscore or a
+# doubled separator missed entirely and reported "Not installed globally" for a working
+# install. Both are fixed by normalising each side and comparing as strings.
 if command -v uv &>/dev/null; then
-    _uvt_line=$(uv tool list --show-paths 2>/dev/null | grep -iE "^PROJECT_NAME[[:space:]]|^PROJECT_CLI[[:space:]]" | head -n 1)
+    _uvt_norm=$(printf '%s' "PROJECT_NAME" | tr '[:upper:]' '[:lower:]' | sed -E 's/[._-]+/-/g')
+    _uvt_line=$(uv tool list --show-paths 2>/dev/null | awk -v p="$_uvt_norm" \
+        '{ n=tolower($1); gsub(/[._-]+/,"-",n); if (n==p) { print; exit } }')
     if [[ -n "$_uvt_line" ]]; then
         _uvt_version=$(echo "$_uvt_line" | awk '{print $2}')
         _uvt_env=$(echo "$_uvt_line" | sed -n 's/.*(\(.*\))$/\1/p')
@@ -509,7 +521,15 @@ if command -v uv &>/dev/null; then
         # Editable vs frozen, from PEP 610 direct_url.json. A frozen install ignores
         # every edit made in this directory until it is reinstalled, so say so here
         # rather than leave it to be discovered an hour into debugging.
-        _uvt_durl=$(find "$_uvt_env/lib" -maxdepth 4 -name direct_url.json 2>/dev/null | head -n 1)
+        #
+        # TARGETED at THIS project's dist-info, which is the normalised name with its
+        # hyphens turned into underscores. A bare `-name direct_url.json | head -n 1`
+        # took whatever it found first: PEP 610 writes that file for git and URL deps
+        # too, so `uv tool install pkg --with git+https://…` left the DEP's file as the
+        # only one, and this banner reported FROZEN for an install that came from PyPI.
+        # No match now means the project genuinely has none, which is exactly REGISTRY.
+        _uvt_dist=$(printf '%s' "$_uvt_norm" | tr '-' '_')
+        _uvt_durl=$(find "$_uvt_env/lib" -maxdepth 4 -path "*/${_uvt_dist}-*.dist-info/direct_url.json" 2>/dev/null | head -n 1)
         if [[ -z "$_uvt_durl" ]]; then
             echo -e "│     Mode:    \033[33mREGISTRY\033[0m - from PyPI, not from this checkout"
         elif grep -q '"editable"[[:space:]]*:[[:space:]]*true' "$_uvt_durl"; then
@@ -530,7 +550,10 @@ if command -v uv &>/dev/null; then
                     break
                 fi
             fi
-            if echo "$_uvt_row" | grep -qiE "^PROJECT_NAME[[:space:]]|^PROJECT_CLI[[:space:]]"; then
+            # Normalised compare, same as the lookup above. An executable row starts
+            # with "- ", whose first field is "-" and cannot equal a project name.
+            _uvt_rowname=$(printf '%s' "$_uvt_row" | awk '{print tolower($1)}' | sed -E 's/[._-]+/-/g')
+            if [[ "$_uvt_rowname" == "$_uvt_norm" ]]; then
                 _uvt_in_tool=true
             fi
         done <<< "$(uv tool list --show-paths 2>/dev/null)"
@@ -1556,11 +1579,26 @@ _uv_tool_install_mode() {
     if [[ -z "$du" ]]; then
         local -a all_du
         all_du=(${(f)"$(find "$site" -maxdepth 2 -name direct_url.json 2>/dev/null)"})
-        if (( ${#all_du} == 1 )); then
-            du="${all_du[1]}"
-        elif (( ${#all_du} > 1 )); then
+        if (( ${#all_du} > 1 )); then
             echo unknown
             return 1
+        elif (( ${#all_du} == 1 )); then
+            # ONE match is not proof it is OURS. A project installed from the index has no
+            # direct_url.json at all, so `uv tool install some-pypi-pkg --with git+https://…`
+            # leaves exactly one -- the GIT DEP'S -- and reading it reports `frozen` for an
+            # install that is genuinely `registry`. That is the same misattribution the >1
+            # branch above rejects, and an earlier version of this comment wrongly claimed
+            # the single case was covered.
+            #
+            # So check the owning dist-info actually normalises to our package. This is NOT
+            # the targeted find repeated: that one matches the directory name literally,
+            # while this tolerates a differently-spelled separator run and still refuses a
+            # different package. No match means the project really has no direct_url.json,
+            # which IS registry -- fall through with $du empty and let the branch below say so.
+            local du_dir=${all_du[1]:h:t}                 # <name>-<version>.dist-info
+            local du_pkg=${${du_dir%.dist-info}%-*}       # strip .dist-info, then the version
+            [[ "$(_uv_tool_normalize_name "$du_pkg")" == "$(_uv_tool_normalize_name "$pkg")" ]] \
+                && du="${all_du[1]}"
         fi
     fi
 
