@@ -1,0 +1,346 @@
+#!/usr/bin/env bash
+# ============================================================================
+#  ccw-watch-selftest -- prove ccw-watch escalates, and never lies quietly
+# ============================================================================
+# Sibling of safe-rm-selftest / vulnlib-selftest / claude-hooks-sync-selftest.
+# ccw-watch runs at every session start on more than one machine and it DECIDES
+# things: whether to escalate, whether to speak, whether a snooze still holds.
+# Everything else in this repo that decides has a selftest. Until 2026-09-06
+# this did not, which is its own small version of the joke -- the tool that
+# exists to stop a broken thing looking healthy was itself unwatched.
+#
+# THE SEAM under test is the CLI plus a stubbed `ccw`, never the internals.
+# ccw-watch resolves the tool as "$HOME/.local/bin/ccw" BEFORE consulting PATH,
+# so pointing HOME at a throwaway tree is the whole harness -- no code change,
+# no test-only flag, and it exercises the same resolution order a real session
+# start uses. CCW_WATCH_STATE keeps the real state file untouched,
+# CCW_WATCH_NOW makes the escalation tiers testable without waiting a week, and
+# CCW_WATCH_DEBUG turns a spoken alert into a line on stderr.
+#
+# NOTHING HERE TOUCHES THE REAL WAREHOUSE. The stub never captures anything and
+# the real ~/.local/state/ccw-watch is never opened.
+#
+# Usage: ccw-watch-selftest        (exit 0 = all passed)
+# ============================================================================
+
+set -uo pipefail
+
+SELF_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+TOOL="${CCW_WATCH_BIN:-$SELF_DIR/ccw-watch}"
+
+PASS=0
+FAIL=0
+WORK=""
+
+cleanup() {
+    [[ -n "$WORK" && -d "$WORK" ]] || return 0
+    rm -rf "$WORK" >/dev/null 2>&1 || true
+    WORK=""
+}
+trap cleanup EXIT
+
+ok()  { PASS=$(( PASS + 1 )); printf '  \033[32mPASS\033[0m  %s\n' "$1"; }
+bad() { FAIL=$(( FAIL + 1 )); printf '  \033[31mFAIL\033[0m  %s\n' "$1"
+        [[ $# -gt 1 ]] && printf '        %s\n' "$2"; }
+
+DAY=86400
+T0=1750000000        # a fixed "now"; every tier below is T0 + n days
+
+# ---------------------------------------------------------------------------
+# Fixture. $1 = the stub's behaviour:
+#   healthy      exit 0, a report with a parseable "Uncaptured: N session(s)"
+#   healthy-0    exit 0, parseable, zero pending
+#   broken       exit 1, with FAIL lines
+#   reshaped     exit 0, but NO parseable count -- the doctor changed shape
+#   absent       no ccw on disk at all
+#   hang         never returns -- the failure mode with no exit code at all
+#   double       exit 0, but TWO parseable counts -- which one is true?
+# ---------------------------------------------------------------------------
+fixture() {
+    local mode="$1"
+    # ALWAYS give mktemp an explicit template: bare `mktemp -d` on BSD ignores
+    # $TMPDIR and uses a /var/folders path that is not writable everywhere.
+    WORK="$(mktemp -d "${TMPDIR:-/tmp}/ccw-watch-test.XXXXXX")" || WORK=""
+    if [[ -z "$WORK" || ! -d "$WORK" ]]; then
+        printf '  \033[31mABORT\033[0m  cannot create a temp dir under %s -- no test can be trusted.\n' \
+               "${TMPDIR:-/tmp}" >&2
+        exit 2
+    fi
+    FAKE_HOME="$WORK/home"
+    STATE="$WORK/state"
+    mkdir -p "$FAKE_HOME/.local/bin" "$STATE"
+
+    [[ "$mode" == "absent" ]] && return 0
+
+    cat > "$FAKE_HOME/.local/bin/ccw" <<STUB
+#!/usr/bin/env bash
+# stub ccw -- answers \`doctor\` and nothing else
+[[ "\${1:-}" == "doctor" ]] || exit 64
+case "$mode" in
+  healthy)
+    echo "  OK   archive reachable"
+    echo "  OK   Uncaptured: 7 session(s) pending"
+    exit 0 ;;
+  healthy-0)
+    echo "  OK   Uncaptured: 0 session(s) pending"
+    exit 0 ;;
+  reshaped)
+    echo "  OK   archive reachable"
+    echo "  OK   pending_sessions=7"
+    exit 0 ;;
+  broken)
+    echo "  FAIL session-end hook has not fired since 2026-07-24"
+    echo "  FAIL 636 session(s) exist only in ~/.claude"
+    exit 1 ;;
+  double)
+    echo "  OK   Uncaptured: 7 session(s) pending"
+    echo "  OK   Uncaptured: 3 session(s) pending"
+    exit 0 ;;
+  hang)
+    sleep 300 ;;
+esac
+STUB
+    chmod +x "$FAKE_HOME/.local/bin/ccw"
+}
+
+# Run ccw-watch against the fixture at a given epoch. Stderr is folded in so a
+# [voice] line can be asserted on.
+#
+# PATH IS NARROWED ON PURPOSE, and this was NOT obvious. ccw-watch resolves the
+# tool as "$HOME/.local/bin/ccw" first and `command -v ccw` second. Overriding
+# HOME alone therefore only covers the FIRST branch: the "absent" fixture fell
+# through to the operator's REAL ccw on PATH and ran a real `ccw doctor`
+# against a fake HOME, which duly reported "capture has NEVER fired on this
+# machine". The case failed for a reason that had nothing to do with the code
+# under test, and -- worse -- a test that reaches the real warehouse is not a
+# test. Caught on the first run, 2026-09-06.
+#
+# /usr/bin:/bin is enough for everything ccw-watch calls (date, sed, grep,
+# curl, say). The stub, when there is one, is the only ccw reachable.
+run_at() { # run_at <epoch> [args...]
+    local now="$1"; shift
+    HOME="$FAKE_HOME" \
+    PATH="$FAKE_HOME/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin" \
+    CCW_WATCH_STATE="$STATE" \
+    CCW_WATCH_NOW="$now" \
+    CCW_WATCH_DEBUG=1 \
+    CCW_WATCH_DOCTOR_TIMEOUT="${DOCTOR_TIMEOUT:-20}" \
+    NO_COLOR=1 \
+    "$TOOL" "$@" 2>&1
+}
+
+state_field() { # state_field <key>
+    sed -n "s/^$1=\(.*\)/\1/p" "$STATE/capture.state" 2>/dev/null
+}
+
+echo "ccw-watch selftest"
+echo
+
+if [[ ! -x "$TOOL" ]]; then
+    bad "ccw-watch is executable at $TOOL" "not found or not executable"
+    echo; echo "  $PASS passed, $FAIL failed"; exit 1
+fi
+
+# --- 1. healthy: one dim line, exit 0, state recorded ok --------------------
+fixture healthy
+out=$(run_at "$T0"); rc=$?
+if (( rc == 0 )); then ok "healthy: exits 0"
+else bad "healthy: exits 0" "exit was $rc"; fi
+if grep -q "capture working" <<<"$out" && grep -q "7 session" <<<"$out"; then
+    ok "healthy: prints the real pending count"
+else bad "healthy: prints the real pending count" "$out"; fi
+if ! grep -qi "RED\|BROKEN" <<<"$out"; then ok "healthy: no banner"
+else bad "healthy: no banner" "$out"; fi
+if [[ "$(state_field last)" == "ok" ]]; then ok "healthy: state recorded as ok"
+else bad "healthy: state recorded as ok" "last=$(state_field last)"; fi
+if ! grep -q "\[voice\]" <<<"$out"; then ok "healthy: stays silent"
+else bad "healthy: stays silent" "it spoke"; fi
+cleanup
+
+# --- 2. --quiet drops the healthy line ---------------------------------------
+fixture healthy
+out=$(run_at "$T0" --quiet)
+if ! grep -q "capture working" <<<"$out"; then ok "--quiet suppresses the healthy line"
+else bad "--quiet suppresses the healthy line" "$out"; fi
+cleanup
+
+# --- 3. ok -> broken: tier 1, and it speaks exactly once ---------------------
+fixture broken
+out=$(run_at "$T0"); rc=$?
+if (( rc == 0 )); then ok "broken: still exits 0 (never blocks a session)"
+else bad "broken: still exits 0 (never blocks a session)" "exit was $rc"; fi
+if grep -q "capture is NOT working" <<<"$out"; then ok "tier 1: red banner on day 0"
+else bad "tier 1: red banner on day 0" "$out"; fi
+if grep -q "session-end hook has not fired" <<<"$out"; then
+    ok "tier 1: the doctor's FAIL lines are shown verbatim"
+else bad "tier 1: the doctor's FAIL lines are shown verbatim" "$out"; fi
+if grep -q "\[voice\] Heads up" <<<"$out"; then ok "transition ok->broken speaks once"
+else bad "transition ok->broken speaks once" "$out"; fi
+if [[ "$(state_field red_since)" == "$T0" ]]; then ok "broken: red_since is stamped"
+else bad "broken: red_since is stamped" "red_since=$(state_field red_since)"; fi
+
+# --- 4. DISMISS-ONLY-BY-FIXING: seeing it again does not reset the clock ----
+out=$(run_at $(( T0 + DAY )))
+if [[ "$(state_field red_since)" == "$T0" ]]; then
+    ok "dismiss-only-by-fixing: red_since survives a second look"
+else bad "dismiss-only-by-fixing: red_since survives a second look" "clock was reset -- it can never escalate"; fi
+if ! grep -q "\[voice\] Heads up" <<<"$out"; then
+    ok "the transition alert does not repeat on day 1"
+else bad "the transition alert does not repeat on day 1" "$out"; fi
+
+# --- 5. tier 2 at 3 days: louder banner + a spoken reminder -----------------
+out=$(run_at $(( T0 + 3 * DAY )))
+if grep -q "CAPTURE BROKEN for 3 DAYS" <<<"$out"; then ok "tier 2: boxed banner at 3 days"
+else bad "tier 2: boxed banner at 3 days" "$out"; fi
+if grep -q "\[voice\] Reminder" <<<"$out"; then ok "tier 2: speaks a reminder"
+else bad "tier 2: speaks a reminder" "$out"; fi
+
+# --- 6. tier 3 at 7 days: strongest banner ----------------------------------
+out=$(run_at $(( T0 + 7 * DAY )))
+if grep -q "###" <<<"$out" && grep -q "CAPTURE BROKEN 7 DAYS" <<<"$out"; then
+    ok "tier 3: strongest banner at 7 days"
+else bad "tier 3: strongest banner at 7 days" "$out"; fi
+if grep -q "\[voice\] Reminder" <<<"$out"; then ok "tier 3: speaks every session"
+else bad "tier 3: speaks every session" "$out"; fi
+cleanup
+
+# --- 7. broken -> ok clears the state, and ONLY that clears it --------------
+fixture broken
+run_at "$T0" >/dev/null
+saved_state="$STATE"; saved_home="$FAKE_HOME"
+# swap the stub to healthy in place: same machine, capture genuinely fixed
+cat > "$saved_home/.local/bin/ccw" <<'STUB'
+#!/usr/bin/env bash
+[[ "${1:-}" == "doctor" ]] || exit 64
+echo "  OK   Uncaptured: 0 session(s) pending"
+exit 0
+STUB
+chmod +x "$saved_home/.local/bin/ccw"
+out=$(run_at $(( T0 + 2 * DAY )))
+if [[ "$(state_field last)" == "ok" ]]; then ok "a genuine fix clears the broken state"
+else bad "a genuine fix clears the broken state" "last=$(state_field last)"; fi
+if ! grep -qi "BROKEN" <<<"$out"; then ok "a genuine fix removes the banner"
+else bad "a genuine fix removes the banner" "$out"; fi
+cleanup
+
+# --- 8. snooze silences it; expiry brings it back ---------------------------
+fixture broken
+run_at "$T0" >/dev/null
+run_at "$T0" --snooze 3 >/dev/null
+out=$(run_at $(( T0 + DAY )))
+if grep -q "snoozed" <<<"$out" && ! grep -q "capture is NOT working" <<<"$out"; then
+    ok "snooze: a deliberate hush suppresses the banner"
+else bad "snooze: a deliberate hush suppresses the banner" "$out"; fi
+out=$(run_at $(( T0 + 5 * DAY )))
+if grep -qi "BROKEN\|NOT working" <<<"$out"; then ok "snooze: it comes back when the hush expires"
+else bad "snooze: it comes back when the hush expires" "$out"; fi
+cleanup
+
+# --- 9. a malformed snooze is refused, not guessed at -----------------------
+fixture broken
+out=$(run_at "$T0" --snooze notanumber); rc=$?
+if (( rc == 2 )); then ok "snooze: non-numeric input exits 2"
+else bad "snooze: non-numeric input exits 2" "exit was $rc"; fi
+cleanup
+
+# --- 10. ccw absent feeds the SAME state machine ----------------------------
+# Not a separate always-print line: a tool that disappears is one of the ways
+# capture breaks, so it has to escalate too or it becomes wallpaper.
+fixture absent
+out=$(run_at "$T0"); rc=$?
+if (( rc == 0 )); then ok "absent ccw: still exits 0"
+else bad "absent ccw: still exits 0" "exit was $rc"; fi
+if grep -q "ccw is not installed" <<<"$out" && grep -qi "NOT working" <<<"$out"; then
+    ok "absent ccw: escalates through the broken path"
+else bad "absent ccw: escalates through the broken path" "$out"; fi
+if [[ "$(state_field last)" == "broken" ]]; then ok "absent ccw: recorded as broken, so it can escalate"
+else bad "absent ccw: recorded as broken, so it can escalate" "last=$(state_field last)"; fi
+cleanup
+
+# --- 11. THE ONE THIS FILE WAS WRITTEN FOR ----------------------------------
+# `ccw doctor` exits 0 but its output no longer carries a parseable count. The
+# old code ran sed, got nothing, and printed ${gap:-0} -- "capture working --
+# 0 session(s) pending". A backlog of any size rendered as a clean, healthy
+# zero. That is not a degraded reading, it is a confident wrong one, in the one
+# tool whose whole job is to stop a broken thing looking healthy.
+#
+# A doctor that exits 0 in a shape we cannot read has CHANGED UNDER US, which is
+# exactly the reasoning already applied to a missing ccw above. So it escalates.
+fixture reshaped
+out=$(run_at "$T0"); rc=$?
+if (( rc == 0 )); then ok "reshaped report: still exits 0"
+else bad "reshaped report: still exits 0" "exit was $rc"; fi
+if ! grep -q "0 session(s) pending" <<<"$out"; then
+    ok "reshaped report: does NOT invent a healthy zero"
+else bad "reshaped report: does NOT invent a healthy zero" "it printed a confident wrong number: $out"; fi
+if grep -qi "NOT working\|unreadable\|changed shape" <<<"$out"; then
+    ok "reshaped report: escalates instead of reassuring"
+else bad "reshaped report: escalates instead of reassuring" "$out"; fi
+if [[ "$(state_field last)" == "broken" ]]; then
+    ok "reshaped report: recorded as broken, so it escalates over days"
+else bad "reshaped report: recorded as broken, so it escalates over days" "last=$(state_field last)"; fi
+cleanup
+
+# --- 12. a healthy ZERO is still healthy ------------------------------------
+# The guard above must not be so eager that a genuine, parseable 0 gets treated
+# as unreadable. "0 pending" is the normal state of a working machine.
+fixture healthy-0
+out=$(run_at "$T0")
+if grep -q "capture working" <<<"$out" && ! grep -qi "BROKEN\|NOT working" <<<"$out"; then
+    ok "a genuine zero is still reported healthy"
+else bad "a genuine zero is still reported healthy" "$out"; fi
+cleanup
+
+# ===========================================================================
+# RED-TEAM FINDINGS, 2026-09-06
+# ===========================================================================
+
+# --- 13. A HANGING DOCTOR MUST NOT HANG THE SESSION ------------------------
+# This file's own header promises: "NEVER BLOCKS. Always exits 0. A watcher that
+# can fail a session start is worse than no watcher." A HANG is worse than a
+# failure -- there is no exit code to fail with, the session start just stops.
+#
+# `report="$("$ccw" doctor)"` had no timeout. The only thing standing between a
+# wedged doctor and a wedged session start was `timeout: 30` typed into
+# ~/.claude/settings.json -- a number in a config file, on one machine, that
+# nothing verifies and that a hand-registered copy elsewhere may not have. Run
+# from a shell there was no protection at all.
+fixture hang
+DOCTOR_TIMEOUT=2
+started="$(date +%s)"
+out=$(run_at "$T0"); rc=$?
+elapsed=$(( $(date +%s) - started ))
+unset DOCTOR_TIMEOUT
+if (( elapsed < 15 )); then ok "a hanging doctor is cut off (${elapsed}s, not 300)"
+else bad "a hanging doctor is cut off" "took ${elapsed}s -- the session start would have hung"; fi
+if (( rc == 0 )); then ok "a hanging doctor still exits 0 (never blocks)"
+else bad "a hanging doctor still exits 0 (never blocks)" "exit was $rc"; fi
+if grep -qi "timed out\|not respond" <<<"$out"; then
+    ok "a hanging doctor SAYS it timed out"
+else bad "a hanging doctor SAYS it timed out" "$out"; fi
+if [[ "$(state_field last)" == "broken" ]]; then
+    ok "a hanging doctor escalates like any other unprovable state"
+else bad "a hanging doctor escalates like any other unprovable state" "last=$(state_field last)"; fi
+cleanup
+
+# --- 14. TWO COUNTS IS NOT ONE COUNT ---------------------------------------
+# Found by red-teaming: a doctor emitting two "Uncaptured: N" lines had the
+# first silently taken and the rest dropped, and the output line was mangled by
+# the embedded newline. Picking one reading of an ambiguous report without
+# saying so is the same defect as inventing a zero from an unreadable one --
+# it is a confident answer the tool cannot actually support.
+fixture double
+out=$(run_at "$T0"); rc=$?
+if (( rc == 0 )); then ok "an ambiguous report still exits 0"
+else bad "an ambiguous report still exits 0" "exit was $rc"; fi
+if ! grep -q "capture working" <<<"$out"; then
+    ok "two counts are NOT reported as a healthy single count"
+else bad "two counts are NOT reported as a healthy single count" "it picked one and said nothing: $out"; fi
+if [[ "$(state_field last)" == "broken" ]]; then
+    ok "an ambiguous report escalates, like an unreadable one"
+else bad "an ambiguous report escalates, like an unreadable one" "last=$(state_field last)"; fi
+cleanup
+
+echo
+echo "  $PASS passed, $FAIL failed"
+(( FAIL == 0 ))

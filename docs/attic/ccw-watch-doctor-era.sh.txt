@@ -1,0 +1,326 @@
+#!/usr/bin/env bash
+# ============================================================================
+#  ccw-watch -- escalating, dismiss-only-by-fixing capture status for the dash
+# ============================================================================
+# Why this exists: on 2026-07-24 transcript capture stopped and nobody found out
+# for TEN DAYS. Every link looked healthy, and `ccw status` reads the catalog, so
+# a hook that never runs writes no row and raises no error. Silence and idleness
+# were the same shape. By the time it was noticed, 636 sessions and 1,426
+# sub-agent transcripts existed only in ~/.claude, which is scheduled for
+# deletion.
+#
+# ENGINE PORTED FROM ci-watch (found 2026-08-18: the original flat two-state
+# version didn't meet the standing alert-design rule -- a break from ten
+# minutes ago looked identical to one from two weeks ago). Same tiers, same
+# state shape, same dismiss-only-by-fixing rule -- a PASSIVE, repeated,
+# identical signal habituates and gets tuned out:
+#   - OK    -> one dim, near-invisible line (no habituation surface)
+#   - BROKEN -> a banner that ESCALATES the longer it stays broken, and that
+#               CANNOT be dismissed by being seen -- only by `ccw doctor`
+#               reporting healthy again, or a DELIBERATE --snooze.
+#
+# Escalation tiers (days since first seen broken), same cutoffs as ci-watch:
+#   tier 1 (0-2d): red banner
+#   tier 2 (3-6d): louder boxed banner + spoken alert
+#   tier 3 (7d+) : strongest banner + spoken alert every session
+# Voice also fires once on the ok->broken transition.
+#
+# "ccw not installed at all" feeds the SAME state machine as a broken result,
+# rather than being a separate always-print line -- so the tool disappearing
+# also escalates instead of becoming wallpaper if it lingers.
+#
+# Guarantees:
+#   - READ-ONLY to the warehouse. It runs `ccw doctor`, which is read-only by
+#     construction and proved so by snapshot tests. The only writes THIS
+#     script makes are its own state file under XDG_STATE_HOME (mirrors
+#     ci-watch).
+#   - NEVER BLOCKS. Always exits 0. A watcher that can fail a session start is
+#     worse than no watcher.
+#   - FAILS OPEN AND SAYS SO. No ccw on PATH is itself worth reporting, because
+#     that is one of the ways capture breaks.
+#
+# Usage:
+#   ccw-watch                render the session readout (default)
+#   ccw-watch --quiet        suppress the healthy line, keep the banner
+#   ccw-watch --snooze <d>   silence a broken state for <d> days (deliberate)
+#   ccw-watch --help
+#
+# Env (mostly for testing, mirrors ci-watch):
+#   CCW_WATCH_STATE, CCW_WATCH_NOTIFY_URL, CCW_WATCH_VOICE_ID
+#   CCW_WATCH_NOW=<epoch>   override "now" (self-test only)
+#   CCW_WATCH_DEBUG=1       echo "[voice] ..." to stderr instead of speaking
+# ============================================================================
+
+set -uo pipefail
+
+STATE_DIR="${CCW_WATCH_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/ccw-watch}"
+STATE_FILE="$STATE_DIR/capture.state"
+NOTIFY_URL="${CCW_WATCH_NOTIFY_URL:-http://localhost:8888/notify}"
+VOICE_ID="${CCW_WATCH_VOICE_ID:-}"
+
+mkdir -p "$STATE_DIR" 2>/dev/null || true
+
+if [ -n "${NO_COLOR:-}" ]; then
+    RED='' GREEN='' YELLOW='' DIM='' BOLD='' NC=''
+else
+    RED=$'\033[31m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'
+    BOLD=$'\033[1m'; DIM=$'\033[2m'; NC=$'\033[0m'
+fi
+
+now_epoch(){ printf '%s' "${CCW_WATCH_NOW:-$(date +%s)}"; }
+have(){ command -v "$1" >/dev/null 2>&1; }
+
+# ---- state (last known state survives across sessions) --------------------
+load_state(){ # -> S_LAST S_RED_SINCE S_SNOOZE
+    local k v
+    S_LAST=""; S_RED_SINCE=0; S_SNOOZE=0
+    if [ -f "$STATE_FILE" ]; then
+        while IFS='=' read -r k v; do
+            case "$k" in
+                last)         S_LAST="$v" ;;
+                red_since)    S_RED_SINCE="$v" ;;
+                snooze_until) S_SNOOZE="$v" ;;
+            esac
+        done < "$STATE_FILE"
+    fi
+    case "$S_RED_SINCE" in ''|*[!0-9]*) S_RED_SINCE=0;; esac
+    case "$S_SNOOZE" in ''|*[!0-9]*) S_SNOOZE=0;; esac
+}
+save_state(){ # save_state <last> <red_since> <snooze>
+    { printf 'last=%s\n' "$1"; printf 'red_since=%s\n' "$2"; printf 'snooze_until=%s\n' "$3"; } \
+        >"$STATE_FILE" 2>/dev/null || true
+}
+
+# ---- spoken alert (best-effort; never fails) -------------------------------
+# Same two-path shape as ci-watch: PAI VoiceServer first, direct `say` binary
+# as a fallback so an alert is never lost when the server is down.
+voice_alert(){
+    local msg="${1//\"/}" body
+    [ -n "${CCW_WATCH_DEBUG:-}" ] && { printf '[voice] %s\n' "$msg" >&2; return 0; }
+    if [ -n "$VOICE_ID" ]; then
+        body="$(printf '{"message": "%s", "voice_id": "%s", "voice_enabled": true}' "$msg" "$VOICE_ID")"
+    else
+        body="$(printf '{"message": "%s", "voice_enabled": true}' "$msg")"
+    fi
+    if have curl && timeout 4 curl -fsS -X POST "$NOTIFY_URL" \
+         -H 'Content-Type: application/json' -d "$body" >/dev/null 2>&1; then
+        return 0
+    fi
+    [ -x /usr/bin/say ] && { /usr/bin/say "$msg" >/dev/null 2>&1 & }
+    return 0
+}
+
+# ---- ask the doctor, but never wait forever --------------------------------
+# This file promises "NEVER BLOCKS. Always exits 0. A watcher that can fail a
+# session start is worse than no watcher." A HANG is worse than a failure: there
+# is no exit code to fail with, the session start simply stops.
+#
+# Until 2026-09-06 `report="$("$ccw" doctor)"` had no timeout at all. The only
+# thing between a wedged doctor and a wedged session start was `timeout: 30`
+# typed into ~/.claude/settings.json -- a number in a config file, on one
+# machine, that nothing verifies and that a hand-registered copy elsewhere may
+# not carry. Run from a shell there was no protection whatsoever.
+#
+# `timeout` is NOT on a stock macOS: it arrives with Homebrew coreutils (as
+# `timeout` or `gtimeout`). So the fallback is a plain-shell watchdog, because
+# "protected only if coreutils happens to be installed" is the same shape of
+# promise as the settings.json number this replaces.
+#
+# The watchdog's own stdout MUST be redirected. Command substitution waits for
+# every writer to close the pipe, so a `sleep` subshell inheriting stdout would
+# hold the substitution open for the full timeout even after doctor returned --
+# turning the fix into the bug.
+DOCTOR_TIMEOUT="${CCW_WATCH_DOCTOR_TIMEOUT:-20}"
+doctor_report(){
+    local pid wd rc
+    if have timeout;  then timeout  "$DOCTOR_TIMEOUT" "$ccw" doctor 2>/dev/null; return $?; fi
+    if have gtimeout; then gtimeout "$DOCTOR_TIMEOUT" "$ccw" doctor 2>/dev/null; return $?; fi
+    # KILL THE PROCESS GROUP, NOT THE PROCESS. Measured 2026-09-06: killing the
+    # pid alone reaped `ccw doctor` itself but left its CHILDREN alive, and a
+    # surviving grandchild still holds the command-substitution pipe open -- so
+    # the caller waited the full 300s of the stub's sleep even though the
+    # watchdog had fired on time. The timeout fired; the hang did not end.
+    #
+    # `set -m` makes the background job a process-group leader (pgid == pid), so
+    # `kill -- -$pid` reaches the whole tree. The plain-pid kill is kept as a
+    # fallback for a shell that refuses job control.
+    #
+    # THIS IS THE PATH THAT MATTERS. `timeout` is not on a stock macOS, so a box
+    # without Homebrew coreutils lands here -- and the selftest's narrowed PATH
+    # forces this branch on purpose, which is the only reason the bug was seen.
+    set -m 2>/dev/null || true
+    "$ccw" doctor 2>/dev/null &
+    pid=$!
+    ( sleep "$DOCTOR_TIMEOUT"
+      kill -TERM -"$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null ) >/dev/null 2>&1 &
+    wd=$!
+    wait "$pid"; rc=$?
+    kill "$wd" 2>/dev/null
+    return $rc
+}
+
+tier_for_days(){ if [ "$1" -ge 7 ]; then TIER=3; elif [ "$1" -ge 3 ]; then TIER=2; else TIER=1; fi; }
+
+broken_banner(){ # broken_banner <tier> <days> <detail-lines>
+    local tier="$1" days="$2" detail="$3"
+    local snip="ccw-watch --snooze ${days:-3}"
+    case "$tier" in
+        1)
+            printf '%b\n' "   ${RED}${BOLD}RED${NC} ${RED}${BOLD}capture is NOT working -- ${days}d${NC}"
+            printf '%s\n' "$detail"
+            printf '%b\n' "${DIM}       fix it, or hush: ${snip}${NC}"
+            ;;
+        2)
+            printf '%b\n' "   ${RED}${BOLD}+==================================================+${NC}"
+            printf '%b\n' "   ${RED}${BOLD}|  CAPTURE BROKEN for ${days} DAYS${NC}"
+            printf '%b\n' "   ${RED}${BOLD}+==================================================+${NC}"
+            printf '%s\n' "$detail"
+            printf '%b\n' "${DIM}       fix it, or hush: ${snip}${NC}"
+            ;;
+        *)
+            printf '\n'
+            printf '%b\n' "   ${RED}${BOLD}####################################################${NC}"
+            printf '%b\n' "   ${RED}${BOLD}###  CAPTURE BROKEN ${days} DAYS                      ###${NC}"
+            printf '%b\n' "   ${RED}${BOLD}###  broken for over a week -- fix or snooze.     ###${NC}"
+            printf '%b\n' "   ${RED}${BOLD}####################################################${NC}"
+            printf '%s\n' "$detail"
+            printf '%b\n' "${YELLOW}       FIX IT, or deliberately: ${snip}${NC}"
+            printf '\n'
+            ;;
+    esac
+}
+
+# ---- one evaluation ---------------------------------------------------------
+# Takes the COUNT, not the report. Parsing moved to the single call site below,
+# because a parse that fails has to change the verdict -- and a verdict cannot
+# be decided inside the function named handle_ok.
+handle_ok(){ # handle_ok <pending-count>
+    save_state ok 0 0
+    $quiet && return 0
+    printf '%b\n' "   ${GREEN}OK${NC} ${DIM}capture working -- $1 session(s) pending${NC}"
+}
+
+handle_broken(){ # handle_broken <detail-lines>
+    local detail="$1" now transition=0 days
+    load_state
+    now="$(now_epoch)"
+    if [ "$S_RED_SINCE" -le 0 ]; then S_RED_SINCE="$now"; transition=1; fi
+    save_state broken "$S_RED_SINCE" "$S_SNOOZE"
+    days=$(( (now - S_RED_SINCE) / 86400 ))
+    if [ "$S_SNOOZE" -gt "$now" ]; then
+        local left=$(( (S_SNOOZE - now + 86399) / 86400 ))
+        printf '%b\n' "   ${YELLOW}zzz${NC} ${DIM}capture broken ${days}d but snoozed ${left}d${NC}"
+        return 0
+    fi
+    tier_for_days "$days"
+    broken_banner "$TIER" "$days" "$detail"
+    if [ "$transition" -eq 1 ]; then
+        voice_alert "Heads up. Capture just broke."
+    elif [ "$TIER" -ge 2 ]; then
+        voice_alert "Reminder. Capture has been broken for ${days} days."
+    fi
+}
+
+cmd_snooze(){ # cmd_snooze <days>
+    local days="${1:-}" now
+    case "$days" in ''|*[!0-9]*) printf 'usage: ccw-watch --snooze <days>\n' >&2; return 2;; esac
+    load_state
+    now="$(now_epoch)"
+    save_state "${S_LAST:-broken}" "${S_RED_SINCE:-$now}" $(( now + days * 86400 ))
+    printf 'snoozed capture-watch for %s day(s)\n' "$days"
+}
+
+quiet=false
+case "${1:-}" in
+    --quiet) quiet=true ;;
+    --snooze) shift; cmd_snooze "${1:-}"; exit $? ;;
+    -h|--help) sed -n '3,51p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+esac
+
+printf '%b\n' "${BOLD}Capture watch${NC} ${DIM}(live each session; clears when fixed, not when seen)${NC}"
+
+# Absolute path first: a session-start hook does not reliably inherit an
+# interactive shell's PATH, and ~/.local/bin is exactly what it tends to miss.
+ccw=""
+for candidate in "$HOME/.local/bin/ccw" "$(command -v ccw 2>/dev/null || true)"; do
+    [[ -n "$candidate" && -x "$candidate" ]] && { ccw="$candidate"; break; }
+done
+
+if [[ -z "$ccw" ]]; then
+    detail="$(printf '%b' "       ${RED}ccw is not installed -- NOTHING is being captured${NC}\n${DIM}       fix: cd cc-warehouse && uv_tool_reinstall_current_project --no-extras${NC}")"
+    handle_broken "$detail"
+    exit 0
+fi
+
+report="$(doctor_report)"
+status=$?
+
+# A doctor that never answered is not a doctor that said "fine". 124 is GNU
+# timeout's code; 143 is 128+SIGTERM from the shell watchdog above.
+if [ "$status" -eq 124 ] || [ "$status" -eq 143 ]; then
+    detail="$(printf '%b' \
+"       ${RED}ccw doctor did not respond within ${DOCTOR_TIMEOUT}s -- timed out${NC}\n\
+${DIM}       capture may well be fine -- this watcher could not get an answer${NC}\n\
+${DIM}       fix: run \`ccw doctor\` by hand and see what it is waiting on${NC}")"
+    handle_broken "$detail"
+    exit 0
+fi
+
+if [[ $status -eq 0 ]]; then
+    # A ZERO EXIT IS NOT ENOUGH -- THE REPORT HAS TO BE READABLE TOO.
+    #
+    # This used to be `${gap:-0}` inside handle_ok. When the sed found nothing
+    # it printed "capture working -- 0 session(s) pending": a confident, healthy
+    # number, invented from a failed parse, in the one tool whose entire purpose
+    # is to stop a broken thing looking healthy. A backlog of any size rendered
+    # as a clean zero and nobody would ever have looked twice.
+    #
+    # A doctor that exits 0 in a shape we cannot read has CHANGED UNDER US.
+    # That is the same reasoning already applied to a MISSING ccw above -- a tool
+    # that disappears escalates rather than getting its own polite line -- and a
+    # tool that silently changes output shape is the same class of event.
+    #
+    # It escalates rather than printing a quiet "unknown" because an unverifiable
+    # capture is not a verified-working capture, and the whole file exists on the
+    # principle that silence and health must never look the same. The detail says
+    # exactly what is and is not known, so this can never be mistaken for a claim
+    # that capture has actually stopped.
+    gap="$(printf '%s' "$report" | sed -n 's/.*Uncaptured: \([0-9]*\) session.*/\1/p')"
+
+    # TWO COUNTS IS NOT ONE COUNT. Found by red-teaming 2026-09-06: a doctor
+    # emitting two "Uncaptured: N" lines had the first silently taken and the
+    # rest dropped, and the embedded newline mangled the output line. Picking one
+    # reading of an ambiguous report without saying so is the same defect as
+    # inventing a zero from an unreadable one -- a confident answer the tool
+    # cannot support. So it joins the unreadable case rather than guessing.
+    gap_lines="$(printf '%s\n' "$gap" | grep -c '[0-9]')"
+    if [[ -n "$gap" && "$gap_lines" -gt 1 ]]; then
+        detail="$(printf '%b' \
+"       ${RED}ccw doctor reported ${gap_lines} different pending counts${NC}\n\
+${DIM}       this watcher cannot tell which is true, so it will not pick one${NC}\n\
+${DIM}       fix: check \`ccw doctor\` output; its shape has changed${NC}")"
+        handle_broken "$detail"
+        exit 0
+    fi
+
+    if [[ -z "$gap" ]]; then
+        detail="$(printf '%b' \
+"       ${RED}ccw doctor exited 0 but its output has no readable pending count${NC}\n\
+${DIM}       capture may well be fine -- this watcher can no longer PROVE it${NC}\n\
+${DIM}       fix: compare \`ccw doctor\` against this parser, or ask cc-warehouse${NC}\n\
+${DIM}            for \`ccw doctor --json\` and read that instead${NC}")"
+        handle_broken "$detail"
+        exit 0
+    fi
+    handle_ok "$gap"
+    exit 0
+fi
+
+# Broken. Print the failing checks verbatim: they already name what is wrong
+# and by how much, and re-wording them here would be a second place to keep
+# true.
+detail="$(printf '%s\n' "$report" | grep -E '^\s*FAIL' | while IFS= read -r line; do
+    printf '%b\n' "       ${RED}${line#*FAIL}${NC}"
+done)"
+handle_broken "$detail"
+exit 0
