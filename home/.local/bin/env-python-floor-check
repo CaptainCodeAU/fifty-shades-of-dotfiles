@@ -102,7 +102,16 @@ if [[ "${1:-}" == "--control" ]]; then
     # A file that is valid on 3.10+ and a SyntaxError on 3.9: match statements and the
     # X | None annotation form both qualify. If the floor accepts this, the floor is not
     # what we think it is and every green result below is meaningless.
-    tmp="$(mktemp "${TMPDIR:-/tmp}/floorctl.XXXXXX.py")" || { printf '%s! control REFUSED: mktemp failed%s\n' "$Y" "$N" >&2; exit 2; }
+    # NO `.py` SUFFIX. BSD mktemp only substitutes a TRAILING run of Xs, so
+    # `floorctl.XXXXXX.py` produces a file literally named with six X characters --
+    # a fixed, predictable name. Measured: the first call creates it, the SECOND fails
+    # with "File exists". Any run that dies between mktemp and the rm (Ctrl-C, or the
+    # sandboxed-trash failure this repo documents) therefore leaves the file behind and
+    # --control refuses FOREVER after that. A control that permanently cannot run is the
+    # same defect as one that can never fail. With TMPDIR unset it also lands on a fixed
+    # name in world-writable /tmp, where the `>` below would follow a planted symlink.
+    # py_compile does not need the extension -- three of the files it checks have none.
+    tmp="$(mktemp "${TMPDIR:-/tmp}/floorctl.XXXXXX")" || { printf '%s! control REFUSED: mktemp failed%s\n' "$Y" "$N" >&2; exit 2; }
     printf 'def f(x: int | None) -> None:\n    match x:\n        case None: pass\n' > "$tmp"
     out="$(compile_one "$tmp")"; rc=$?
     rm -f "$tmp" 2>/dev/null || true
@@ -118,10 +127,18 @@ fi
 # Enumerate by SHEBANG CONTENT, never by a hand-maintained list or a filename pattern:
 # a new tool added tomorrow must be covered without anyone remembering this file exists.
 # (Filename would also be wrong -- 3 of the 4 current files have no .py extension.)
+# READ THEN MATCH, rather than `head -1 | grep -q`. `set -o pipefail` is on and grep -q
+# exits the instant it matches; if head is still writing it takes SIGPIPE, the pipeline
+# reports non-zero, and the `&&` never appends -- silently dropping a file from the
+# population. Rare on a one-line read, but a shrunken denominator with no message is
+# precisely the failure this tool exists to argue against.
 files=()
 while IFS= read -r f; do
     [[ -f "$REPO/$f" ]] || continue
-    head -1 "$REPO/$f" 2>/dev/null | grep -q 'env python3' && files+=("$f")
+    first="$(head -1 "$REPO/$f" 2>/dev/null)" || first=""
+    case "$first" in
+        *"env python3"*) files+=("$f") ;;
+    esac
 done < <(git -C "$REPO" ls-files 2>/dev/null)
 
 if (( ${#files[@]} == 0 )); then

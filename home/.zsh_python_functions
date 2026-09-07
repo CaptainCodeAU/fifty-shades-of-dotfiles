@@ -59,6 +59,15 @@ get_uv_python_path() {
     python_path=$(uv python list 2>/dev/null | \
         awk -v prefix="cpython-${version_prefix}." -v home="$HOME" -v uvdir="$uv_python_dir" \
             '$1 ~ "^" prefix && $2 ~ /^[\/\.]/ {
+                # SKIP VARIANT BUILDS (+freethreaded, and anything else after a "+").
+                # sort -V ranks "3.14.7+freethreaded" ABOVE "3.14.7", so a single
+                # `uv python install 3.14t` would silently become the basis of every
+                # new venv -- and many wheels have no free-threaded binary. The old
+                # path-string sort happened to avoid this ("+" sorts before "-" in the
+                # path), so sorting by version correctly REINTRODUCED it. Verified
+                # against real `uv python list` rows 2026-09-07.
+                # Ask for a variant explicitly with uv; this helper picks the plain build.
+                if ($1 ~ /\+/) { next }
                 path = $2
                 # uv may print a home-relative path (.local/...) -- make it absolute.
                 if (substr(path, 1, 1) == ".") { path = home "/" path }
