@@ -11,4 +11,4 @@
 # `uv lock` in any repo with a tracked lock.
 #
 # Full rationale, measurements and precedence: ~/.zshrc section 6.
-exclude-newer = "2026-08-07T00:00:00Z"
+exclude-newer = "2026-09-04T00:00:00Z"
