@@ -1496,6 +1496,33 @@ _uv_tool_apply_pin() {
 # projects and `<pkg>.pth` for others, and EVERY env carries an unrelated
 # `_virtualenv.pth`, so that heuristic misclassifies in both directions.
 # Usage: _uv_tool_install_mode <tool_env_path> <project_name>
+# INTERNAL HELPER: normalise a package name the way the packaging ecosystem does.
+# PEP 503: lowercase, and collapse every run of - _ . into a single hyphen.
+#   my.tool -> my-tool     My_Tool -> my-tool     a..__--b -> a-b
+#
+# THIS EXISTS BECAUSE COMPARING THE RAW pyproject NAME IS WRONG, IN BOTH DIRECTIONS.
+# `uv tool list` prints the NORMALISED name, never what pyproject.toml says. A project
+# declaring `name = "my.tool"` is listed as `my-tool` -- measured 2026-09-07 against a
+# real install. So:
+#   - An exact compare against the raw name FAILS to find a tool that IS installed.
+#     Shipped in cd0ae9f, caught in review the same day. uv_tool_check_current_project
+#     printed "Not Found" and returned 1 for a live, working install.
+#   - The `grep -iE "^${name}"` it replaced only worked here BY ACCIDENT: the dot in
+#     `my.tool` is a regex wildcard, so it happened to match the hyphen in `my-tool`
+#     while also matching `myXtool`. Right answer, wrong reason -- which is why the
+#     fix is to normalise, not to put the regex back.
+# Normalise BOTH sides and compare as strings. Idempotent, so normalising an
+# already-normalised name is harmless.
+#
+# `localoptions extendedglob` is deliberate: `##` (one-or-more) needs EXTENDED_GLOB, and
+# .zshrc sets it globally -- but a function that only works because of a caller's setopt
+# breaks in `zsh -f`, in hooks, and in scripts. Verified working with EXTENDED_GLOB off.
+_uv_tool_normalize_name() {
+    setopt localoptions extendedglob
+    local n="${1:l}"
+    print -r -- "${n//[._-]##/-}"
+}
+
 _uv_tool_install_mode() {
     local tool_env=$1 pkg=$2
     [[ -n "$tool_env" && -d "$tool_env" ]] || { echo unknown; return 1; }
@@ -1772,19 +1799,20 @@ uv_tool_check_current_project() {
     local tool_output
     tool_output=$(uv tool list --show-paths 2>/dev/null)
 
-    # Normalize project name for matching (uv normalizes underscores to hyphens)
-    local project_name_normalized=$(echo "$project_name" | tr '_' '-')
+    # Normalise the project name the way uv prints it (PEP 503 -- see
+    # _uv_tool_normalize_name). `tr '_' '-'` was not enough: it leaves the dot in
+    # `my.tool` alone, while uv lists that project as `my-tool`.
+    local project_name_normalized=$(_uv_tool_normalize_name "$project_name")
 
-    # Check if the project appears in the tool list (match either underscore or hyphen form).
+    # Check if the project appears in the tool list.
     #
-    # awk FIELD COMPARE, not grep -E: the project name came out of pyproject.toml and was
+    # FIELD COMPARE, not grep -E: the project name came out of pyproject.toml and was
     # being interpolated straight into a regex, where its characters kept their regex
-    # meaning. Dots are legal in package names, so a project called `my.tool` matched a
-    # line for `myXtool` -- measured 2026-09-07. `uv_tool_mode` further down this file
-    # already did it this way; this is that same comparison, not a new idea.
+    # meaning -- so `my.tool` also matched a line for `myXtool`. Both sides are
+    # normalised here, so the comparison is exact without being literal.
     local tool_line
-    tool_line=$(echo "$tool_output" | awk -v p="${project_name:l}" -v q="${project_name_normalized:l}" \
-        'tolower($1)==p || tolower($1)==q { print; exit }')
+    tool_line=$(echo "$tool_output" | awk -v p="$project_name_normalized" \
+        '{ n=tolower($1); gsub(/[._-]+/,"-",n); if (n==p) { print; exit } }')
 
     if [[ -n "$tool_line" ]]; then
         echo "${ok}✅ Found: Project '$project_name' is installed via uv tool.${done}"
@@ -1836,10 +1864,13 @@ uv_tool_check_current_project() {
                 fi
             fi
             # Match the tool line to start collecting executables. First whitespace field,
-            # compared as a STRING -- same reasoning as the tool_line lookup above, and the
-            # same bug was here: this loop could start collecting another tool's binaries.
-            local line_name="${line%%[[:space:]]*}"
-            if [[ "${line_name:l}" == "${project_name:l}" || "${line_name:l}" == "${project_name_normalized:l}" ]]; then
+            # NORMALISED then compared as a string -- same reasoning as the tool_line lookup
+            # above, and the same two bugs were both here: the old regex could start
+            # collecting another tool's binaries, and a raw compare missed a dotted name
+            # entirely. An executable row starts with "- ", which normalises to "-" and can
+            # never equal a project name, so those rows cannot false-match.
+            local line_name=$(_uv_tool_normalize_name "${line%%[[:space:]]*}")
+            if [[ "$line_name" == "$project_name_normalized" ]]; then
                 found_tool=true
             fi
         done <<< "$tool_output"
@@ -1888,10 +1919,14 @@ uv_tool_mode() {
     fi
     [[ -n "$pkg" ]] || { echo unknown; return 1; }
 
-    # uv tool list reports the hyphenated name; pyproject may use underscores.
-    local alt=${pkg//_/-} tool_line tool_env
-    tool_line=$(uv tool list --show-paths 2>/dev/null | awk -v p="${pkg:l}" -v q="${alt:l}" \
-        'tolower($1)==p || tolower($1)==q { print; exit }')
+    # uv tool list reports the PEP 503 name; pyproject may use underscores OR dots.
+    # `${pkg//_/-}` handled only underscores, so `uv_tool_mode` reported `not-installed`
+    # for a live `my.tool` -- measured 2026-09-07, and pre-dating the cd0ae9f change that
+    # cited this function as its model. Normalise both sides, same as everywhere else.
+    local alt tool_line tool_env
+    alt=$(_uv_tool_normalize_name "$pkg")
+    tool_line=$(uv tool list --show-paths 2>/dev/null | awk -v p="$alt" \
+        '{ n=tolower($1); gsub(/[._-]+/,"-",n); if (n==p) { print; exit } }')
     [[ -n "$tool_line" ]] || { echo not-installed; return 1; }
 
     tool_env=$(echo "$tool_line" | sed -n 's/.*(\(.*\))$/\1/p')
