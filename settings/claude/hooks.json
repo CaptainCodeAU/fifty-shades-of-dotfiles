@@ -112,7 +112,7 @@
         "command": "test -x \"$HOME/.local/bin/ccw-watch\" && \"$HOME/.local/bin/ccw-watch\" || true",
         "timeout": 30
       },
-      "why": "Escalating capture-broken alarm; capture died silently for ten days once"
+      "why": "Escalating capture-PRESENCE alarm (narrowed 2026-09-07: no ccw doctor call). Is ccw installed, at/above floor, plugin enabled, plugin copy on disk. Capture died silently for ten days once"
     }
   ],
 
