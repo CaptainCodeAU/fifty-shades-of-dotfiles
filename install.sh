@@ -626,6 +626,38 @@ _preflight_pnpm_check() {
 # Node lines stop receiving security patches; NODE_MIN_MAJOR is the lowest still
 # in support. Detection is read-only; each removal is confirm-gated individually
 # and a version >= NODE_MIN_MAJOR is never touched. Honors --skip-preflight/--dry-run.
+# Warn when a repo tool with a `#!/usr/bin/env python3` shebang would break on the
+# oldest python3 the bare name can resolve to (Apple's 3.9.6 on macOS, which cannot be
+# removed and which a login non-interactive shell already picks TODAY -- measured
+# 2026-09-07). Such a script dies WHILE BEING PARSED, above its own error handling: no
+# log line, no alert. A sibling project lost its capture hook for ten days to exactly
+# that. census.py is one of these files, and it is the instrument this repo uses to
+# decide what is true, so a silent death there is expensive.
+#
+# ADVISORY, never blocking: the check's own exit 2 means "could not check", which is not
+# a pass and not a failure either -- reported as such rather than folded into either.
+# The real gate is the tool itself; this just makes sure someone runs it.
+_preflight_env_python_floor_check() {
+    local tool="$REPO_DIR/home/.local/bin/env-python-floor-check"
+    [[ -x "$tool" ]] || return 0
+    local out rc
+    out="$("$tool" 2>&1)"; rc=$?
+    case "$rc" in
+        0) return 0 ;;
+        2)  warn "env-python3 floor check could not run -- nothing was verified (not a pass)."
+            printf '%s\n' "$out" | sed 's/^/    /' >&2 ;;
+        *)  warn "A repo tool will NOT run on the oldest python3 the bare name resolves to."
+            printf '%s\n' "$out" | sed 's/^/    /' >&2
+            # `warn` only, deliberately. NOTES is `local -a` inside _preflight_pnpm_check;
+            # this function is called from main(), where that array does not exist -- so a
+            # NOTES+=() here would create a global nobody ever prints and the warning would
+            # vanish. The sibling checks at this call site (_preflight_node_eol_check) use
+            # warn/info for the same reason.
+            ;;
+    esac
+    return 0
+}
+
 _preflight_node_eol_check() {
     [[ "$SKIP_PREFLIGHT" == true ]] && return 0
     local node_root="${NVM_DIR:-$HOME/.nvm}/versions/node"
@@ -3705,6 +3737,9 @@ main() {
 
     # --- Node EOL pre-flight (offer to remove unsupported Node majors) ---
     _preflight_node_eol_check
+
+    # --- env-python3 floor pre-flight ---
+    _preflight_env_python_floor_check
 
     # --- herdr cooldown guard (re-pin a formula that lost its pin) ---
     # A `brew unpin herdr` for a deliberate upgrade leaves the gate open if the

@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+# env-python-floor-check -- prove every `#!/usr/bin/env python3` tool in this repo
+# still runs on the OLDEST python3 the name can resolve to.
+#
+# WHY THIS EXISTS
+# ---------------
+# A script with `#!/usr/bin/env python3` does not choose its interpreter. It gets
+# whatever the name `python3` happens to mean in the context that launched it, and on
+# macOS that is frequently /usr/bin/python3 -- Apple's 3.9.6, which cannot be removed.
+# Measured on this Mac 2026-09-07, one machine, one minute:
+#
+#   zsh -c   (inherits an interactive PATH)  -> /opt/homebrew/bin/python3   3.14.7
+#   zsh -lc  (login, non-interactive)        -> /usr/bin/python3            3.9.6
+#   env -i /bin/sh -c                        -> /usr/bin/python3            3.9.6
+#
+# A login non-interactive shell already answers 3.9.6 TODAY. So these tools are not
+# "running on 3.14" -- they are running on whatever answered, and nothing records which.
+#
+# THE FAILURE THIS PREVENTS IS SILENT AND UPSTREAM OF ERROR HANDLING. A sibling project
+# (cc-warehouse) lost its capture hook for TEN DAYS to exactly this: the hook used 3.10+
+# syntax, hit 3.9, and died WHILE BEING PARSED -- above its own try/except, so no log
+# line, no alert, and their doctor still reported the hook as fine. A wrong interpreter
+# was invisible in every instrument they had.
+#
+# We are one `match` statement away from the same thing, and census.py is the instrument
+# this whole repo uses to decide what is true. An instrument that dies silently is worse
+# than no instrument.
+#
+# WHY NOT JUST PIN THE SHEBANGS
+# -----------------------------
+# Because a uv interpreter path contains the user's home directory, and this repo is
+# provably free of those: census reports 0 hits for an absolute home path across 212
+# tracked files, against a control of 1725. That property is what lets someone clone this
+# to any layout and have stow work (stow computes relative links from wherever the repo
+# sits). Pinning would trade a portable repo for a fixed one. So the code stays
+# version-agnostic and THIS proves it, which is the same choice cc-warehouse landed on.
+#
+# EXIT CODES -- read the code, never the text (same discipline as git-leak-scan):
+#   0  every file compiles on the floor interpreter
+#   1  at least one file does NOT -- a context that resolves to the floor will break
+#   2  REFUSED: could not check. NOT a pass. No floor interpreter, or no files found.
+#
+# `--control` compiles a file that is deliberately 3.10-only and REQUIRES it to be
+# rejected. A check that cannot fail is not a check; this repo has shipped two of those
+# in one day, so the control is not optional decoration.
+#
+# Usage:
+#   env-python-floor-check              # check the repo this script lives in
+#   env-python-floor-check --control    # prove the instrument can detect a failure
+#   FLOOR_PYTHON=/path/to/python3 env-python-floor-check
+set -uo pipefail
+
+R=$'\033[31m'; G=$'\033[32m'; Y=$'\033[33m'; D=$'\033[2m'; N=$'\033[0m'
+
+# The floor: the oldest python3 the bare name can resolve to here. /usr/bin/python3 is
+# the right default on macOS because it ships with the OS and cannot be uninstalled.
+FLOOR="${FLOOR_PYTHON:-/usr/bin/python3}"
+
+# Repo root from this script's own location -- never a recorded absolute path, so the
+# repo stays clone-anywhere.
+#
+# THE SYMLINK LOOP IS LOAD-BEARING, and it was added after this failed on its first real
+# invocation. install.sh can use a bare `cd "$(dirname "${BASH_SOURCE[0]}")"` because it
+# is always run from inside the repo. This file is different: stow links it to
+# ~/.local/bin/, so when invoked by its PATH name BASH_SOURCE is the LINK, dirname is
+# ~/.local/bin, and ../../.. is /Users -- not the repo. Measured exactly that.
+#
+# Following the link chain by hand rather than with `readlink -f`, which is GNU; BSD
+# readlink has no -f on older macOS. Relative link targets are resolved against the
+# directory the link lives in, which is what stow writes (../../CODE/...).
+_src="${BASH_SOURCE[0]}"
+while [[ -L "$_src" ]]; do
+    _dir="$(cd -P "$(dirname "$_src")" && pwd)"
+    _src="$(readlink "$_src")"
+    [[ "$_src" != /* ]] && _src="$_dir/$_src"
+done
+SELF="$(cd -P "$(dirname "$_src")" && pwd)"
+REPO="$(cd "$SELF/../../.." && pwd)"
+
+if [[ ! -x "$FLOOR" ]]; then
+    printf '%s! env-python-floor-check REFUSED: no floor interpreter at %s%s\n' "$Y" "$FLOOR" "$N" >&2
+    printf '  %sNothing was checked. This is not a pass. Set FLOOR_PYTHON to override.%s\n' "$D" "$N" >&2
+    exit 2
+fi
+FLOOR_VER="$("$FLOOR" -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])' 2>/dev/null)" || FLOOR_VER="?"
+
+compile_one() {  # <file> -> 0 ok, 1 rejected
+    "$FLOOR" -c 'import sys, py_compile, tempfile, os
+src = sys.argv[1]
+fd, out = tempfile.mkstemp(suffix=".pyc"); os.close(fd)
+try:
+    py_compile.compile(src, cfile=out, doraise=True)
+except Exception as e:
+    sys.stderr.write(str(e) + "\n"); sys.exit(1)
+finally:
+    try: os.unlink(out)
+    except OSError: pass
+' "$1" 2>&1
+}
+
+if [[ "${1:-}" == "--control" ]]; then
+    # A file that is valid on 3.10+ and a SyntaxError on 3.9: match statements and the
+    # X | None annotation form both qualify. If the floor accepts this, the floor is not
+    # what we think it is and every green result below is meaningless.
+    tmp="$(mktemp "${TMPDIR:-/tmp}/floorctl.XXXXXX.py")" || { printf '%s! control REFUSED: mktemp failed%s\n' "$Y" "$N" >&2; exit 2; }
+    printf 'def f(x: int | None) -> None:\n    match x:\n        case None: pass\n' > "$tmp"
+    out="$(compile_one "$tmp")"; rc=$?
+    rm -f "$tmp" 2>/dev/null || true
+    if (( rc == 0 )); then
+        printf '%s! CONTROL FAILED: floor %s (%s) ACCEPTED 3.10-only syntax.%s\n' "$R" "$FLOOR" "$FLOOR_VER" "$N" >&2
+        printf '  %sThe instrument proves nothing -- a green run would be meaningless.%s\n' "$D" "$N" >&2
+        exit 2
+    fi
+    printf '%s+%s control: floor %s (%s) correctly REJECTED 3.10-only syntax -- the instrument works\n' "$G" "$N" "$FLOOR" "$FLOOR_VER"
+    exit 0
+fi
+
+# Enumerate by SHEBANG CONTENT, never by a hand-maintained list or a filename pattern:
+# a new tool added tomorrow must be covered without anyone remembering this file exists.
+# (Filename would also be wrong -- 3 of the 4 current files have no .py extension.)
+files=()
+while IFS= read -r f; do
+    [[ -f "$REPO/$f" ]] || continue
+    head -1 "$REPO/$f" 2>/dev/null | grep -q 'env python3' && files+=("$f")
+done < <(git -C "$REPO" ls-files 2>/dev/null)
+
+if (( ${#files[@]} == 0 )); then
+    printf '%s! env-python-floor-check REFUSED: found no env-python3 files in %s%s\n' "$Y" "$REPO" "$N" >&2
+    printf '  %sExpected at least one. An empty population is not a clean result.%s\n' "$D" "$N" >&2
+    exit 2
+fi
+
+printf '%sFloor: %s (%s) -- %d file(s)%s\n' "$D" "$FLOOR" "$FLOOR_VER" "${#files[@]}" "$N"
+fail=0
+for f in "${files[@]}"; do
+    if err="$(compile_one "$REPO/$f")"; then
+        printf '  %s+%s %s\n' "$G" "$N" "$f"
+    else
+        fail=$((fail + 1))
+        printf '  %sx%s %s\n' "$R" "$N" "$f"
+        printf '      %s%s%s\n' "$D" "$(printf '%s' "$err" | head -2 | tr '\n' ' ')" "$N"
+    fi
+done
+
+if (( fail > 0 )); then
+    printf '%s! %d file(s) will NOT run on %s%s\n' "$R" "$fail" "$FLOOR_VER" "$N" >&2
+    printf '  %sThey die WHILE BEING PARSED, above their own error handling -- no log, no alert.%s\n' "$D" "$N" >&2
+    printf '  %sFix the syntax, or pin that file to an interpreter it can rely on.%s\n' "$D" "$N" >&2
+    exit 1
+fi
+printf '%s+%s all %d file(s) run on the floor (%s)\n' "$G" "$N" "${#files[@]}" "$FLOOR_VER"
+exit 0

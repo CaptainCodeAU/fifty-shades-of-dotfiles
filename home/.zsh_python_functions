@@ -24,22 +24,54 @@ get_uv_python_path() {
         return 1
     fi
 
-    # Use 'uv python list' and parse the output robustly
-    # Find the *latest installed patch version* for the requested major.minor
-    # Ignores lines indicating only "download available"
-    # Uses awk for cleaner parsing than multiple greps/tails
-    # Note: uv may list paths as relative (.local/...) or absolute (/home/...)
+    # Find the latest installed patch for the requested major.minor, PREFERRING a
+    # uv-managed interpreter. Ignores rows that are only "<download available>".
+    #
+    # TWO BUGS WERE HERE, and they compounded. Measured 2026-09-07:
+    #
+    #  1. IT SORTED THE PATH STRING, NOT THE VERSION. The old pipeline printed only $2
+    #     and did `sort -V | tail -n 1`, so the winner was decided by where the file sat
+    #     on disk. `/U` (85) sorts before `/o` (111), which meant /opt/homebrew ALWAYS
+    #     beat a path under the user's home, regardless of version.
+    #
+    #  2. SO HOMEBREW'S PYTHON WON WHENEVER BREW HAD THAT VERSION. `get_uv_python_path
+    #     3.14` returned /opt/homebrew/bin/python3.14. It returned uv's build for 3.12
+    #     and 3.13 only because Homebrew does not have those installed -- an accident,
+    #     not a rule.
+    #
+    # WHY THAT MATTERED MORE THAN IT LOOKS. `uv python list` reports every interpreter it
+    # can SEE, including Homebrew's and Apple's -- it is a discovery list, not a list of
+    # things uv manages. Homebrew's python@3.14 here is `installed_on_request: false`: it
+    # arrived as a dependency of ansible, fonttools, mlx, mlx-c, nmap and ollama. Nobody
+    # chose it. This function feeds python_setup and python_new_project, so an unchosen
+    # interpreter became the basis of new project venvs -- and since uv_tool_install_
+    # current_project now passes the venv's interpreter PATH to --python (rather than a
+    # re-resolvable version string), it would carry on into the tool environment too.
+    #
+    # Sort by the VERSION out of column 1 (`cpython-3.14.7-macos-aarch64-none`), and
+    # prefer anything under `uv python dir`. uv is ASKED for that directory rather than
+    # assuming ~/.local/share/uv/python, because it is XDG-dependent on Linux and this
+    # repo records no absolute home paths anywhere (census: 0 hits in 212 tracked files).
+    # Falls back to a non-uv interpreter when uv manages none for the requested version,
+    # so a machine without a uv build for 3.11 still works exactly as before.
+    local uv_python_dir
+    uv_python_dir=$(uv python dir 2>/dev/null)
     python_path=$(uv python list 2>/dev/null | \
-        awk -v prefix="cpython-${version_prefix}." -v home="$HOME" \
+        awk -v prefix="cpython-${version_prefix}." -v home="$HOME" -v uvdir="$uv_python_dir" \
             '$1 ~ "^" prefix && $2 ~ /^[\/\.]/ {
                 path = $2
-                # Convert relative paths (starting with .) to absolute paths
-                # .local/... -> $HOME/.local/...
+                # uv may print a home-relative path (.local/...) -- make it absolute.
                 if (substr(path, 1, 1) == ".") { path = home "/" path }
-                print path
+                split($1, a, "-")
+                version = a[2]
+                # 1 = uv-managed, 0 = anything else. Printed first so sort -V ranks
+                # every uv build above every non-uv one, then by version within each.
+                managed = (uvdir != "" && index(path, uvdir) == 1) ? 1 : 0
+                print managed "\t" version "\t" path
             }' | \
         sort -V | \
-        tail -n 1)
+        tail -n 1 | \
+        cut -f3)
 
     # Check if we found a path
     if [[ -z "$python_path" ]]; then
