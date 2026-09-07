@@ -1764,10 +1764,3 @@ fi
 # End profiling
 [[ -n "$ZPROF" ]] && zprof
 [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
-
-# PAI alias
-# $HOME, not a hardcoded path: this file is stowed to Linux and WSL boxes where the literal
-# /Users/<name>/ path does not exist, and an absolute home path also puts the Mac username
-# into a tracked file. Single-quoted so $HOME expands when the alias RUNS, not when it is
-# defined.
-alias pai='bun "$HOME/.claude/PAI/Tools/pai.ts"'
