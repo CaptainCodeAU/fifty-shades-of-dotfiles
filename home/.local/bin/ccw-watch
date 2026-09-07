@@ -473,6 +473,29 @@ fi
 # cached clone, not the repo. Four stale cache folders sit beside the live one
 # on this Mac, so "a cache directory exists" proves nothing either. If the
 # RECORDED path is gone, the flag stays true and capture is dead.
+#
+# DO NOT DELETE THIS CHECK AS "DUPLICATING ccw doctor". IT DOES NOT.
+# Confirmed 2026-09-07 by the cc-warehouse session, by execution, in their own
+# source: `_mentions_ccw` has two paths and only the SECOND touches the
+# filesystem. The first returns True as soon as the command STRING contains
+# "ccw" or "cc-warehouse" -- and their registration is
+# `python3 ${CLAUDE_PLUGIN_ROOT}/hooks/ccw-hook.py`, where "ccw" is a substring
+# of the FILENAME. So the string path fires and returns before the is_file()
+# check is ever reached, and `ccw doctor` prints
+#   ok  hook  SessionEnd capture hook found via cc-capture@cc-warehouse
+# for a plugin directory that has been DELETED. A wrong answer, not a missing
+# one.
+#
+# SO THE REDUNDANCY HERE IS CURRENTLY ZERO. This block is the only thing on
+# this machine that catches a deleted plugin cache. Their fix is filed
+# (contract/PROPOSALS/doctor-checks-the-hook-can-execute.md, 13315a8/663bd2e)
+# but NOT built: the obvious version would break a legitimate bare `ccw hook`
+# registration that names no script path at all, and it would move doctor's
+# exit code, which their own freshness hook escalates on. That is the
+# operator's call to scope, not an agent's.
+#
+# If an `installPath` field ever ships in `ccw doctor`, this becomes a
+# defer-or-duplicate question. Until then, removing it removes the check.
 if [ "${live:-0}" -eq 0 ]; then
     handle_bad broken "$(detail \
 "       ${RED}the installed plugin copy is MISSING from disk${NC}\n\
