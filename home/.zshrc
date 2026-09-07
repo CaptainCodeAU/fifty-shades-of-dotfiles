@@ -1764,3 +1764,7 @@ fi
 # End profiling
 [[ -n "$ZPROF" ]] && zprof
 [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
+
+# LifeOS launch command — without this, LifeOS Core is installed but launches
+# un-constituted (plain `claude`, no mode banner / verification / security layer).
+alias lifeos='bun "$HOME/.claude/LIFEOS/TOOLS/lifeos.ts" -s "$HOME/.claude/LIFEOS/LIFEOS_SYSTEM_PROMPT.md"'
