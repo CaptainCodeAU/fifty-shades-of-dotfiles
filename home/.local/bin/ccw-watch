@@ -1,60 +1,98 @@
 #!/usr/bin/env bash
 # ============================================================================
-#  ccw-watch -- escalating, dismiss-only-by-fixing capture status for the dash
+#  ccw-watch -- escalating, dismiss-only-by-fixing CAPTURE PRESENCE check
 # ============================================================================
 # Why this exists: on 2026-07-24 transcript capture stopped and nobody found out
-# for TEN DAYS. Every link looked healthy, and `ccw status` reads the catalog, so
-# a hook that never runs writes no row and raises no error. Silence and idleness
-# were the same shape. By the time it was noticed, 636 sessions and 1,426
-# sub-agent transcripts existed only in ~/.claude, which is scheduled for
-# deletion.
+# for TEN DAYS. Every link looked healthy, and a hook that never runs writes no
+# row and raises no error. Silence and idleness were the same shape. By the time
+# it was noticed, 636 sessions and 1,426 sub-agent transcripts existed only in
+# ~/.claude, which is scheduled for deletion.
 #
-# ENGINE PORTED FROM ci-watch (found 2026-08-18: the original flat two-state
-# version didn't meet the standing alert-design rule -- a break from ten
-# minutes ago looked identical to one from two weeks ago). Same tiers, same
-# state shape, same dismiss-only-by-fixing rule -- a PASSIVE, repeated,
-# identical signal habituates and gets tuned out:
-#   - OK    -> one dim, near-invisible line (no habituation surface)
-#   - BROKEN -> a banner that ESCALATES the longer it stays broken, and that
-#               CANNOT be dismissed by being seen -- only by `ccw doctor`
-#               reporting healthy again, or a DELIBERATE --snooze.
+# NARROWED 2026-09-07. IT NO LONGER ASKS `ccw doctor` ANYTHING.
+# The cc-warehouse plugin now runs its own SessionStart freshness check, which
+# owns capture HEALTH from inside the tool that owns the data. Two tools asking
+# the same question gave two escalating spoken alarms that could DISAGREE: their
+# budget for `doctor` is 45s, ours was 20s, so a legitimately slow doctor -- a
+# cold walk of 27,277 files right after an archive sweep, which really happened
+# -- went red here and stayed quiet there. Narrowing deleted the disagreement
+# instead of negotiating it, and took the prose parser, the doctor timeout and
+# the budget-alignment problem with it. The retired code is readable at
+# docs/attic/ccw-watch-doctor-era.sh.txt in the dotfiles repo.
 #
-# Escalation tiers (days since first seen broken), same cutoffs as ci-watch:
+# WHAT THIS TOOL NOW ANSWERS, and it is the one question nothing else can:
+# IS CAPTURE INSTALLED AND SWITCHED ON. Their hook cannot report its own
+# absence -- if the plugin is missing, disabled, or never registers, it does not
+# run, and a thing that does not run raises no error. That silence is exactly
+# how capture died for ten days.
+#
+# WHAT THIS TOOL DELIBERATELY NO LONGER WATCHES: the capture BACKLOG. If ccw is
+# present, current and enabled but silently falling behind, nothing here will
+# say so -- that is cc-warehouse's freshness hook's job now. Do not re-add a
+# doctor call here without re-reading why it went.
+#
+# THREE OUTCOMES, NEVER TWO. This is the rule the 2026-09-06 `${gap:-0}` bug
+# bought, and it survives the narrowing:
+#   WORKING     -- verified installed, at/above floor, enabled, copy on disk
+#   NOT WORKING -- something is provably wrong; capture is not happening
+#   UNVERIFIED  -- a file we do not own could not be read or has changed shape.
+#                  This ESCALATES on the same clock, because an unverifiable
+#                  capture is not a verified-working one -- but it says plainly
+#                  that it is NOT claiming capture stopped. `settings.json` and
+#                  `installed_plugins.json` belong to Claude Code, not to us; a
+#                  renamed key must never render as a confident red.
+#
+# Escalation tiers (days since first seen not-good), same cutoffs as ci-watch:
 #   tier 1 (0-2d): red banner
 #   tier 2 (3-6d): louder boxed banner + spoken alert
 #   tier 3 (7d+) : strongest banner + spoken alert every session
-# Voice also fires once on the ok->broken transition.
-#
-# "ccw not installed at all" feeds the SAME state machine as a broken result,
-# rather than being a separate always-print line -- so the tool disappearing
-# also escalates instead of becoming wallpaper if it lingers.
+# Voice also fires once on the good->bad transition.
 #
 # Guarantees:
-#   - READ-ONLY to the warehouse. It runs `ccw doctor`, which is read-only by
-#     construction and proved so by snapshot tests. The only writes THIS
-#     script makes are its own state file under XDG_STATE_HOME (mirrors
-#     ci-watch).
+#   - READ-ONLY. Three file reads and one `ccw --version` (71ms measured). No
+#     walk of the warehouse, ever. The only write is this script's own state
+#     file under XDG_STATE_HOME.
 #   - NEVER BLOCKS. Always exits 0. A watcher that can fail a session start is
-#     worse than no watcher.
-#   - FAILS OPEN AND SAYS SO. No ccw on PATH is itself worth reporting, because
-#     that is one of the ways capture breaks.
+#     worse than no watcher. `ccw --version` still gets a timeout, because a
+#     wedged binary is a wedged binary -- but that number has nothing to align
+#     with, since no other tool calls --version.
 #
 # Usage:
 #   ccw-watch                render the session readout (default)
 #   ccw-watch --quiet        suppress the healthy line, keep the banner
-#   ccw-watch --snooze <d>   silence a broken state for <d> days (deliberate)
+#   ccw-watch --snooze <d>   silence a bad state for <d> days (deliberate)
 #   ccw-watch --help
 #
-# Env (mostly for testing, mirrors ci-watch):
+# Env (mostly for testing):
 #   CCW_WATCH_STATE, CCW_WATCH_NOTIFY_URL, CCW_WATCH_VOICE_ID
-#   CCW_WATCH_NOW=<epoch>   override "now" (self-test only)
-#   CCW_WATCH_DEBUG=1       echo "[voice] ..." to stderr instead of speaking
+#   CCW_WATCH_SETTINGS, CCW_WATCH_REGISTRY, CCW_WATCH_FLOOR
+#   CCW_WATCH_VERSION_TIMEOUT=<s>   default 10
+#   CCW_WATCH_NOW=<epoch>           override "now" (self-test only)
+#   CCW_WATCH_DEBUG=1               echo "[voice] ..." to stderr, do not speak
 # ============================================================================
 
 set -uo pipefail
 
+# The pinned floor. 0.1.2 is not a taste; it is a floor OUR OWN TOOLING creates
+# the need for. Before 0.1.2, `ccw doctor`'s hook check walked every event key
+# and labelled whichever command it found FIRST containing the substring "ccw"
+# -- and cc-warehouse's own changelog names `ccw-watch` as the example. So on a
+# pre-0.1.2 box, THIS script is what makes doctor report a false green that
+# survives the real capture hook being removed entirely.
+FLOOR="${CCW_WATCH_FLOOR:-0.1.2}"
+
+# Owned by cc-warehouse, not by us. If they rename it, this becomes a permanent
+# false red -- which is why an id that is absent from a registry we CAN read is
+# "not installed", but a registry we CANNOT read is UNVERIFIED.
+# Last confirmed against their marketplace: 2026-09-07.
+PLUGIN_ID="cc-capture@cc-warehouse"
+
+SETTINGS="${CCW_WATCH_SETTINGS:-$HOME/.claude/settings.json}"
+REGISTRY="${CCW_WATCH_REGISTRY:-$HOME/.claude/plugins/installed_plugins.json}"
+VERSION_TIMEOUT="${CCW_WATCH_VERSION_TIMEOUT:-10}"
+
 STATE_DIR="${CCW_WATCH_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/ccw-watch}"
 STATE_FILE="$STATE_DIR/capture.state"
+STATE_SCHEMA=2
 NOTIFY_URL="${CCW_WATCH_NOTIFY_URL:-http://localhost:8888/notify}"
 VOICE_ID="${CCW_WATCH_VOICE_ID:-}"
 
@@ -70,30 +108,45 @@ fi
 now_epoch(){ printf '%s' "${CCW_WATCH_NOW:-$(date +%s)}"; }
 have(){ command -v "$1" >/dev/null 2>&1; }
 
-# ---- state (last known state survives across sessions) --------------------
-load_state(){ # -> S_LAST S_RED_SINCE S_SNOOZE
-    local k v
-    S_LAST=""; S_RED_SINCE=0; S_SNOOZE=0
+# ---- state ------------------------------------------------------------------
+# SCHEMA VERSIONED as of the narrowing. "Bad" used to mean "doctor said so"; it
+# now means "not installed or not switched on". A red_since written under the
+# old meaning would carry an escalation clock whose meaning changed underneath
+# it -- a machine could arrive at tier 3 ("broken over a week, speak every
+# session") on the first run of the new tool. So a state file without the
+# current schema line is reset, once, out loud.
+load_state(){ # -> S_LAST S_RED_SINCE S_SNOOZE S_RESET
+    local k v schema=0
+    S_LAST=""; S_RED_SINCE=0; S_SNOOZE=0; S_RESET=0
     if [ -f "$STATE_FILE" ]; then
         while IFS='=' read -r k v; do
             case "$k" in
+                schema)       schema="$v" ;;
                 last)         S_LAST="$v" ;;
                 red_since)    S_RED_SINCE="$v" ;;
                 snooze_until) S_SNOOZE="$v" ;;
             esac
         done < "$STATE_FILE"
+        if [ "$schema" != "$STATE_SCHEMA" ]; then
+            S_LAST=""; S_RED_SINCE=0; S_SNOOZE=0; S_RESET=1
+        fi
     fi
     case "$S_RED_SINCE" in ''|*[!0-9]*) S_RED_SINCE=0;; esac
-    case "$S_SNOOZE" in ''|*[!0-9]*) S_SNOOZE=0;; esac
+    case "$S_SNOOZE"    in ''|*[!0-9]*) S_SNOOZE=0;;    esac
 }
 save_state(){ # save_state <last> <red_since> <snooze>
-    { printf 'last=%s\n' "$1"; printf 'red_since=%s\n' "$2"; printf 'snooze_until=%s\n' "$3"; } \
-        >"$STATE_FILE" 2>/dev/null || true
+    # The SUBSHELL is the point. `{ ...; } >"$file" 2>/dev/null` silences the
+    # commands but NOT the shell's own "Operation not permitted" when the
+    # redirection itself fails -- which leaked a raw error line into the session
+    # dashboard the first time this ran somewhere it could not write its state.
+    # A watcher against silent failure must not itself fail loudly and wrongly.
+    ( { printf 'schema=%s\n' "$STATE_SCHEMA"
+        printf 'last=%s\n' "$1"
+        printf 'red_since=%s\n' "$2"
+        printf 'snooze_until=%s\n' "$3"; } >"$STATE_FILE" ) 2>/dev/null || true
 }
 
-# ---- spoken alert (best-effort; never fails) -------------------------------
-# Same two-path shape as ci-watch: PAI VoiceServer first, direct `say` binary
-# as a fallback so an alert is never lost when the server is down.
+# ---- spoken alert (best-effort; never fails) --------------------------------
 voice_alert(){
     local msg="${1//\"/}" body
     [ -n "${CCW_WATCH_DEBUG:-}" ] && { printf '[voice] %s\n' "$msg" >&2; return 0; }
@@ -110,48 +163,34 @@ voice_alert(){
     return 0
 }
 
-# ---- ask the doctor, but never wait forever --------------------------------
-# This file promises "NEVER BLOCKS. Always exits 0. A watcher that can fail a
-# session start is worse than no watcher." A HANG is worse than a failure: there
-# is no exit code to fail with, the session start simply stops.
-#
-# Until 2026-09-06 `report="$("$ccw" doctor)"` had no timeout at all. The only
-# thing between a wedged doctor and a wedged session start was `timeout: 30`
-# typed into ~/.claude/settings.json -- a number in a config file, on one
-# machine, that nothing verifies and that a hand-registered copy elsewhere may
-# not carry. Run from a shell there was no protection whatsoever.
-#
-# `timeout` is NOT on a stock macOS: it arrives with Homebrew coreutils (as
-# `timeout` or `gtimeout`). So the fallback is a plain-shell watchdog, because
-# "protected only if coreutils happens to be installed" is the same shape of
-# promise as the settings.json number this replaces.
-#
-# The watchdog's own stdout MUST be redirected. Command substitution waits for
-# every writer to close the pipe, so a `sleep` subshell inheriting stdout would
-# hold the substitution open for the full timeout even after doctor returned --
-# turning the fix into the bug.
-DOCTOR_TIMEOUT="${CCW_WATCH_DOCTOR_TIMEOUT:-20}"
-doctor_report(){
+# ---- `ccw --version`, but never wait forever --------------------------------
+# The doctor-era watchdog is kept verbatim because it was earned: killing the
+# pid alone reaped the child but left ITS children alive, and a surviving
+# grandchild holds the command-substitution pipe open -- the watchdog fired on
+# time and the caller still waited the full 300s. `set -m` makes the job a
+# process-group leader so `kill -- -$pid` reaches the whole tree.
+# `timeout` is NOT on a stock macOS, so the fallback is the branch that matters.
+# NO TEMP FILE. The first version of this narrowed tool wrote the child's output
+# to `mktemp`, which failed outright where /tmp is not writable and TMPDIR is
+# unset -- and an unwritable temp file made a HEALTHY ccw render as "will not
+# run". The doctor-era shape below needs no temp file at all, and it was already
+# proven; rewriting working code was the whole mistake. Its own comment about
+# redirecting the watchdog's stdout is the load-bearing part: command
+# substitution waits for EVERY writer to close the pipe, so a `sleep` subshell
+# inheriting stdout holds the substitution open for the full timeout even after
+# the child returns -- turning the fix into the bug.
+ccw_version_raw(){
     local pid wd rc
-    if have timeout;  then timeout  "$DOCTOR_TIMEOUT" "$ccw" doctor 2>/dev/null; return $?; fi
-    if have gtimeout; then gtimeout "$DOCTOR_TIMEOUT" "$ccw" doctor 2>/dev/null; return $?; fi
+    if have timeout;  then timeout  "$VERSION_TIMEOUT" "$ccw" --version 2>/dev/null; return $?; fi
+    if have gtimeout; then gtimeout "$VERSION_TIMEOUT" "$ccw" --version 2>/dev/null; return $?; fi
     # KILL THE PROCESS GROUP, NOT THE PROCESS. Measured 2026-09-06: killing the
-    # pid alone reaped `ccw doctor` itself but left its CHILDREN alive, and a
-    # surviving grandchild still holds the command-substitution pipe open -- so
-    # the caller waited the full 300s of the stub's sleep even though the
-    # watchdog had fired on time. The timeout fired; the hang did not end.
-    #
-    # `set -m` makes the background job a process-group leader (pgid == pid), so
-    # `kill -- -$pid` reaches the whole tree. The plain-pid kill is kept as a
-    # fallback for a shell that refuses job control.
-    #
-    # THIS IS THE PATH THAT MATTERS. `timeout` is not on a stock macOS, so a box
-    # without Homebrew coreutils lands here -- and the selftest's narrowed PATH
-    # forces this branch on purpose, which is the only reason the bug was seen.
+    # pid alone reaped the child but left ITS children alive, and a surviving
+    # grandchild still held the command-substitution pipe open -- the watchdog
+    # fired on time and the caller still waited the full 300s.
     set -m 2>/dev/null || true
-    "$ccw" doctor 2>/dev/null &
+    "$ccw" --version 2>/dev/null &
     pid=$!
-    ( sleep "$DOCTOR_TIMEOUT"
+    ( sleep "$VERSION_TIMEOUT"
       kill -TERM -"$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null ) >/dev/null 2>&1 &
     wd=$!
     wait "$pid"; rc=$?
@@ -159,20 +198,105 @@ doctor_report(){
     return $rc
 }
 
+# ---- version comparison -----------------------------------------------------
+ver_key(){ # 0.1.2 -> 000000001000002   (empty input -> empty output)
+    local v="$1" maj min pat
+    v="$(printf '%s' "$v" | sed -n 's/.*[^0-9]\{0,\}\([0-9][0-9]*\.[0-9][0-9]*\(\.[0-9][0-9]*\)\{0,1\}\).*/\1/p' | head -1)"
+    [ -z "$v" ] && return 1
+    IFS=. read -r maj min pat <<<"$v"
+    printf '%06d%06d%06d' "${maj:-0}" "${min:-0}" "${pat:-0}"
+}
+
+# ---- the two JSON files, read by something that actually parses JSON --------
+# Deliberately NOT hand-rolled. Swapping a prose parser for a bespoke JSON
+# scraper would inherit the same bug class the narrowing exists to delete. The
+# key is searched for at ANY depth, so a change to the file's outer shape
+# degrades to UNVERIFIED rather than to a confident false red.
+probe_json(){
+    have python3 || { printf 'reader=none\n'; return 0; }
+    python3 - "$SETTINGS" "$REGISTRY" "$PLUGIN_ID" <<'PY' 2>/dev/null || printf 'reader=broken\n'
+import json, os, sys
+
+settings_path, registry_path, key = sys.argv[1], sys.argv[2], sys.argv[3]
+out = []
+
+def load(p):
+    with open(p) as fh:
+        return json.load(fh)
+
+def find_key(node, want):
+    """Return the first value stored under `want` at any depth."""
+    if isinstance(node, dict):
+        if want in node:
+            return node[want]
+        for v in node.values():
+            got = find_key(v, want)
+            if got is not None:
+                return got
+    elif isinstance(node, list):
+        for v in node:
+            got = find_key(v, want)
+            if got is not None:
+                return got
+    return None
+
+try:
+    data = load(settings_path)
+except Exception:
+    out.append("settings=unreadable")
+else:
+    out.append("settings=ok")
+    enabled = find_key(data, "enabledPlugins")
+    if not isinstance(enabled, dict):
+        out.append("enabled=absent")
+    elif key not in enabled:
+        out.append("enabled=absent")
+    else:
+        out.append("enabled=true" if enabled[key] is True else "enabled=false")
+
+try:
+    data = load(registry_path)
+except Exception:
+    out.append("registry=unreadable")
+else:
+    out.append("registry=ok")
+    entries = find_key(data, key)
+    if entries is None:
+        out.append("entries=0")
+    else:
+        if isinstance(entries, dict):
+            entries = [entries]
+        paths = [e.get("installPath") for e in entries
+                 if isinstance(e, dict) and e.get("installPath")]
+        out.append("entries=%d" % len(paths))
+        live = [p for p in paths if os.path.isdir(p)]
+        out.append("live=%d" % len(live))
+        if live:
+            out.append("path=%s" % live[0])
+
+print("reader=python3")
+print("\n".join(out))
+PY
+}
+
+# ---- rendering --------------------------------------------------------------
 tier_for_days(){ if [ "$1" -ge 7 ]; then TIER=3; elif [ "$1" -ge 3 ]; then TIER=2; else TIER=1; fi; }
 
-broken_banner(){ # broken_banner <tier> <days> <detail-lines>
-    local tier="$1" days="$2" detail="$3"
+bad_banner(){ # bad_banner <tier> <days> <headline> <detail>
+    local tier="$1" days="$2" head="$3" detail="$4"
     local snip="ccw-watch --snooze ${days:-3}"
+    # `tr`, not ${HEAD} -- macOS ships bash 3.2, which has no case modifiers,
+    # and `bash -n` does not catch it. The selftest did, on the tier-2 banner.
+    local HEAD; HEAD="$(printf '%s' "$head" | tr '[:lower:]' '[:upper:]')"
     case "$tier" in
         1)
-            printf '%b\n' "   ${RED}${BOLD}RED${NC} ${RED}${BOLD}capture is NOT working -- ${days}d${NC}"
+            printf '%b\n' "   ${RED}${BOLD}RED${NC} ${RED}${BOLD}${head} -- ${days}d${NC}"
             printf '%s\n' "$detail"
             printf '%b\n' "${DIM}       fix it, or hush: ${snip}${NC}"
             ;;
         2)
             printf '%b\n' "   ${RED}${BOLD}+==================================================+${NC}"
-            printf '%b\n' "   ${RED}${BOLD}|  CAPTURE BROKEN for ${days} DAYS${NC}"
+            printf '%b\n' "   ${RED}${BOLD}|  ${HEAD} -- ${days} DAYS${NC}"
             printf '%b\n' "   ${RED}${BOLD}+==================================================+${NC}"
             printf '%s\n' "$detail"
             printf '%b\n' "${DIM}       fix it, or hush: ${snip}${NC}"
@@ -180,8 +304,8 @@ broken_banner(){ # broken_banner <tier> <days> <detail-lines>
         *)
             printf '\n'
             printf '%b\n' "   ${RED}${BOLD}####################################################${NC}"
-            printf '%b\n' "   ${RED}${BOLD}###  CAPTURE BROKEN ${days} DAYS                      ###${NC}"
-            printf '%b\n' "   ${RED}${BOLD}###  broken for over a week -- fix or snooze.     ###${NC}"
+            printf '%b\n' "   ${RED}${BOLD}###  ${HEAD} -- ${days} DAYS${NC}"
+            printf '%b\n' "   ${RED}${BOLD}###  unresolved for over a week -- fix or snooze. ###${NC}"
             printf '%b\n' "   ${RED}${BOLD}####################################################${NC}"
             printf '%s\n' "$detail"
             printf '%b\n' "${YELLOW}       FIX IT, or deliberately: ${snip}${NC}"
@@ -190,43 +314,48 @@ broken_banner(){ # broken_banner <tier> <days> <detail-lines>
     esac
 }
 
-# ---- one evaluation ---------------------------------------------------------
-# Takes the COUNT, not the report. Parsing moved to the single call site below,
-# because a parse that fails has to change the verdict -- and a verdict cannot
-# be decided inside the function named handle_ok.
-handle_ok(){ # handle_ok <pending-count>
+handle_ok(){ # handle_ok <summary>
     save_state ok 0 0
     $quiet && return 0
-    printf '%b\n' "   ${GREEN}OK${NC} ${DIM}capture working -- $1 session(s) pending${NC}"
+    printf '%b\n' "   ${GREEN}OK${NC} ${DIM}capture installed -- $1${NC}"
 }
 
-handle_broken(){ # handle_broken <detail-lines>
-    local detail="$1" now transition=0 days
+# kind is "broken" (provably wrong) or "unverified" (cannot tell). They share
+# ONE escalation clock -- neither is a verified-working capture -- but they must
+# never share a headline, because a renamed key in someone else's file is not
+# evidence that capture stopped.
+handle_bad(){ # handle_bad <kind> <detail-lines>
+    local kind="$1" detail="$2" now transition=0 days head
     load_state
     now="$(now_epoch)"
+    [ "$S_RESET" -eq 1 ] && printf '%b\n' \
+        "${DIM}       (state written by an older ccw-watch -- escalation clock reset)${NC}"
     if [ "$S_RED_SINCE" -le 0 ]; then S_RED_SINCE="$now"; transition=1; fi
-    save_state broken "$S_RED_SINCE" "$S_SNOOZE"
+    save_state bad "$S_RED_SINCE" "$S_SNOOZE"
     days=$(( (now - S_RED_SINCE) / 86400 ))
     if [ "$S_SNOOZE" -gt "$now" ]; then
         local left=$(( (S_SNOOZE - now + 86399) / 86400 ))
-        printf '%b\n' "   ${YELLOW}zzz${NC} ${DIM}capture broken ${days}d but snoozed ${left}d${NC}"
+        printf '%b\n' "   ${YELLOW}zzz${NC} ${DIM}capture bad ${days}d but snoozed ${left}d${NC}"
         return 0
     fi
+    if [ "$kind" = unverified ]; then head="capture is UNVERIFIED"; else head="capture is NOT working"; fi
     tier_for_days "$days"
-    broken_banner "$TIER" "$days" "$detail"
+    bad_banner "$TIER" "$days" "$head" "$detail"
     if [ "$transition" -eq 1 ]; then
-        voice_alert "Heads up. Capture just broke."
+        voice_alert "Heads up. Capture cannot be confirmed."
     elif [ "$TIER" -ge 2 ]; then
-        voice_alert "Reminder. Capture has been broken for ${days} days."
+        voice_alert "Reminder. Capture has been unconfirmed for ${days} days."
     fi
 }
+
+detail(){ printf '%b' "$*"; }
 
 cmd_snooze(){ # cmd_snooze <days>
     local days="${1:-}" now
     case "$days" in ''|*[!0-9]*) printf 'usage: ccw-watch --snooze <days>\n' >&2; return 2;; esac
     load_state
     now="$(now_epoch)"
-    save_state "${S_LAST:-broken}" "${S_RED_SINCE:-$now}" $(( now + days * 86400 ))
+    save_state "${S_LAST:-bad}" "${S_RED_SINCE:-$now}" $(( now + days * 86400 ))
     printf 'snoozed capture-watch for %s day(s)\n' "$days"
 }
 
@@ -234,93 +363,125 @@ quiet=false
 case "${1:-}" in
     --quiet) quiet=true ;;
     --snooze) shift; cmd_snooze "${1:-}"; exit $? ;;
-    -h|--help) sed -n '3,51p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '3,70p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 esac
 
 printf '%b\n' "${BOLD}Capture watch${NC} ${DIM}(live each session; clears when fixed, not when seen)${NC}"
 
+# ---- 1. is the binary there and does it run --------------------------------
 # Absolute path first: a session-start hook does not reliably inherit an
 # interactive shell's PATH, and ~/.local/bin is exactly what it tends to miss.
+# NOTE FOR TESTS: this is why overriding HOME alone does not isolate a fixture.
 ccw=""
 for candidate in "$HOME/.local/bin/ccw" "$(command -v ccw 2>/dev/null || true)"; do
-    [[ -n "$candidate" && -x "$candidate" ]] && { ccw="$candidate"; break; }
+    [ -n "$candidate" ] && [ -x "$candidate" ] && { ccw="$candidate"; break; }
 done
 
-if [[ -z "$ccw" ]]; then
-    detail="$(printf '%b' "       ${RED}ccw is not installed -- NOTHING is being captured${NC}\n${DIM}       fix: cd cc-warehouse && uv_tool_reinstall_current_project --no-extras${NC}")"
-    handle_broken "$detail"
+if [ -z "$ccw" ]; then
+    handle_bad broken "$(detail \
+"       ${RED}ccw is not installed -- NOTHING is being captured${NC}\n\
+${DIM}       fix: uv tool install cc-warehouse==${FLOOR}   (or newer)${NC}")"
     exit 0
 fi
 
-report="$(doctor_report)"
-status=$?
+raw="$(ccw_version_raw)"; vstatus=$?
 
-# A doctor that never answered is not a doctor that said "fine". 124 is GNU
-# timeout's code; 143 is 128+SIGTERM from the shell watchdog above.
-if [ "$status" -eq 124 ] || [ "$status" -eq 143 ]; then
-    detail="$(printf '%b' \
-"       ${RED}ccw doctor did not respond within ${DOCTOR_TIMEOUT}s -- timed out${NC}\n\
+# 124 is GNU timeout's code; 143 is 128+SIGTERM from the shell watchdog.
+if [ "$vstatus" -eq 124 ] || [ "$vstatus" -eq 143 ]; then
+    handle_bad unverified "$(detail \
+"       ${RED}\`ccw --version\` did not respond within ${VERSION_TIMEOUT}s${NC}\n\
 ${DIM}       capture may well be fine -- this watcher could not get an answer${NC}\n\
-${DIM}       fix: run \`ccw doctor\` by hand and see what it is waiting on${NC}")"
-    handle_broken "$detail"
+${DIM}       fix: run \`ccw --version\` by hand and see what it is waiting on${NC}")"
     exit 0
 fi
 
-if [[ $status -eq 0 ]]; then
-    # A ZERO EXIT IS NOT ENOUGH -- THE REPORT HAS TO BE READABLE TOO.
-    #
-    # This used to be `${gap:-0}` inside handle_ok. When the sed found nothing
-    # it printed "capture working -- 0 session(s) pending": a confident, healthy
-    # number, invented from a failed parse, in the one tool whose entire purpose
-    # is to stop a broken thing looking healthy. A backlog of any size rendered
-    # as a clean zero and nobody would ever have looked twice.
-    #
-    # A doctor that exits 0 in a shape we cannot read has CHANGED UNDER US.
-    # That is the same reasoning already applied to a MISSING ccw above -- a tool
-    # that disappears escalates rather than getting its own polite line -- and a
-    # tool that silently changes output shape is the same class of event.
-    #
-    # It escalates rather than printing a quiet "unknown" because an unverifiable
-    # capture is not a verified-working capture, and the whole file exists on the
-    # principle that silence and health must never look the same. The detail says
-    # exactly what is and is not known, so this can never be mistaken for a claim
-    # that capture has actually stopped.
-    gap="$(printf '%s' "$report" | sed -n 's/.*Uncaptured: \([0-9]*\) session.*/\1/p')"
+if [ "$vstatus" -ne 0 ]; then
+    handle_bad broken "$(detail \
+"       ${RED}ccw is installed but will not run (exit ${vstatus})${NC}\n\
+${DIM}       a file on PATH is not a working tool${NC}\n\
+${DIM}       fix: uv tool install --reinstall cc-warehouse==${FLOOR}${NC}")"
+    exit 0
+fi
 
-    # TWO COUNTS IS NOT ONE COUNT. Found by red-teaming 2026-09-06: a doctor
-    # emitting two "Uncaptured: N" lines had the first silently taken and the
-    # rest dropped, and the embedded newline mangled the output line. Picking one
-    # reading of an ambiguous report without saying so is the same defect as
-    # inventing a zero from an unreadable one -- a confident answer the tool
-    # cannot support. So it joins the unreadable case rather than guessing.
-    gap_lines="$(printf '%s\n' "$gap" | grep -c '[0-9]')"
-    if [[ -n "$gap" && "$gap_lines" -gt 1 ]]; then
-        detail="$(printf '%b' \
-"       ${RED}ccw doctor reported ${gap_lines} different pending counts${NC}\n\
-${DIM}       this watcher cannot tell which is true, so it will not pick one${NC}\n\
-${DIM}       fix: check \`ccw doctor\` output; its shape has changed${NC}")"
-        handle_broken "$detail"
-        exit 0
-    fi
-
-    if [[ -z "$gap" ]]; then
-        detail="$(printf '%b' \
-"       ${RED}ccw doctor exited 0 but its output has no readable pending count${NC}\n\
+version="$(printf '%s' "$raw" | tr -d '\r' | head -1)"
+vkey="$(ver_key "$version")"
+if [ -z "$vkey" ]; then
+    handle_bad unverified "$(detail \
+"       ${RED}\`ccw --version\` printed nothing this watcher can read as a version${NC}\n\
 ${DIM}       capture may well be fine -- this watcher can no longer PROVE it${NC}\n\
-${DIM}       fix: compare \`ccw doctor\` against this parser, or ask cc-warehouse${NC}\n\
-${DIM}            for \`ccw doctor --json\` and read that instead${NC}")"
-        handle_broken "$detail"
-        exit 0
-    fi
-    handle_ok "$gap"
+${DIM}       its output shape has changed; ask cc-warehouse what it is now${NC}")"
     exit 0
 fi
 
-# Broken. Print the failing checks verbatim: they already name what is wrong
-# and by how much, and re-wording them here would be a second place to keep
-# true.
-detail="$(printf '%s\n' "$report" | grep -E '^\s*FAIL' | while IFS= read -r line; do
-    printf '%b\n' "       ${RED}${line#*FAIL}${NC}"
-done)"
-handle_broken "$detail"
+fkey="$(ver_key "$FLOOR")"
+if [ "$vkey" -lt "$fkey" ]; then
+    handle_bad broken "$(detail \
+"       ${RED}ccw ${version} is below the pinned floor ${FLOOR}${NC}\n\
+${DIM}       pre-${FLOOR} doctor mislabels the hook when a command named${NC}\n\
+${DIM}       'ccw-watch' exists -- i.e. this script makes it report a false green${NC}\n\
+${DIM}       fix: uv tool install --reinstall cc-warehouse==${FLOOR}${NC}")"
+    exit 0
+fi
+
+# ---- 2 + 3. is the plugin switched on, and is the copy actually on disk -----
+probe="$(probe_json)"
+val(){ printf '%s\n' "$probe" | sed -n "s/^$1=//p" | head -1; }
+
+if [ "$(val reader)" != python3 ]; then
+    handle_bad unverified "$(detail \
+"       ${RED}no python3 available to read Claude Code's JSON${NC}\n\
+${DIM}       capture may well be fine -- this watcher cannot check the plugin${NC}\n\
+${DIM}       fix: install the Command Line Tools, or Homebrew python${NC}")"
+    exit 0
+fi
+
+if [ "$(val settings)" != ok ]; then
+    handle_bad unverified "$(detail \
+"       ${RED}cannot read ${SETTINGS}${NC}\n\
+${DIM}       capture may well be fine -- this watcher cannot check the plugin${NC}\n\
+${DIM}       the file is missing or is not valid JSON${NC}")"
+    exit 0
+fi
+
+if [ "$(val enabled)" != true ]; then
+    handle_bad broken "$(detail \
+"       ${RED}the cc-capture plugin is not enabled -- NOTHING is being captured${NC}\n\
+${DIM}       ${PLUGIN_ID} is absent or false in enabledPlugins${NC}\n\
+${DIM}       fix: claude plugin install ${PLUGIN_ID}${NC}")"
+    exit 0
+fi
+
+if [ "$(val registry)" != ok ]; then
+    handle_bad unverified "$(detail \
+"       ${RED}cannot read ${REGISTRY}${NC}\n\
+${DIM}       capture may well be fine -- this watcher cannot confirm the copy${NC}\n\
+${DIM}       the file is missing or is not valid JSON${NC}")"
+    exit 0
+fi
+
+entries="$(val entries)"; live="$(val live)"
+if [ "${entries:-0}" -eq 0 ]; then
+    handle_bad broken "$(detail \
+"       ${RED}the cc-capture plugin is enabled but not installed${NC}\n\
+${DIM}       no entry for ${PLUGIN_ID} in the plugin registry${NC}\n\
+${DIM}       fix: claude plugin install ${PLUGIN_ID}${NC}")"
+    exit 0
+fi
+
+# THE HOLE THE RED TEAM FOUND (R1). enabledPlugins says true and the registry
+# has an entry, but the code that RUNS lives at the recorded installPath -- a
+# cached clone, not the repo. Four stale cache folders sit beside the live one
+# on this Mac, so "a cache directory exists" proves nothing either. If the
+# RECORDED path is gone, the flag stays true and capture is dead.
+if [ "${live:-0}" -eq 0 ]; then
+    handle_bad broken "$(detail \
+"       ${RED}the installed plugin copy is MISSING from disk${NC}\n\
+${DIM}       ${entries} registered path(s), none of them exist${NC}\n\
+${DIM}       enabledPlugins still says true, so nothing else will notice${NC}\n\
+${DIM}       fix: claude plugin install ${PLUGIN_ID}${NC}")"
+    exit 0
+fi
+
+sha="$(basename "$(val path)")"
+handle_ok "ccw ${version}, plugin ${sha}"
 exit 0
