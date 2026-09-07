@@ -1508,9 +1508,28 @@ _uv_tool_install_mode() {
     local norm=${${pkg:l}//[-.]/_}
     local du
     du=$(find "$site" -maxdepth 2 -path "*/${norm}-*.dist-info/direct_url.json" 2>/dev/null | head -n 1)
-    # Fall back to any direct_url.json: deps installed from PyPI never have one, so in
-    # a single-project tool env the only match is the project itself.
-    [[ -n "$du" ]] || du=$(find "$site" -maxdepth 2 -name direct_url.json 2>/dev/null | head -n 1)
+    # Fall back to any direct_url.json -- but only when there is exactly ONE.
+    #
+    # The old comment claimed deps "installed from PyPI never have one", and used that to
+    # conclude the single match must be the project itself. That is true only of INDEX
+    # installs. PEP 610 writes direct_url.json for every direct reference, including
+    # `vcs_info` (a git dep) and `archive_info` (a URL dep), so a tool installed with
+    # `--with git+https://...` has two, and picking the first would report the DEP's mode
+    # as the project's. Measured 2026-09-07: no tool env on this machine has more than
+    # one, so this was latent rather than live -- which is exactly when to fix it.
+    #
+    # Ambiguity resolves to `unknown`, never to a guess. A wrong editable/frozen answer
+    # is the failure this whole function exists to prevent; "I could not tell" is not.
+    if [[ -z "$du" ]]; then
+        local -a all_du
+        all_du=(${(f)"$(find "$site" -maxdepth 2 -name direct_url.json 2>/dev/null)"})
+        if (( ${#all_du} == 1 )); then
+            du="${all_du[1]}"
+        elif (( ${#all_du} > 1 )); then
+            echo unknown
+            return 1
+        fi
+    fi
 
     if [[ -z "$du" ]]; then
         echo registry
@@ -1560,7 +1579,6 @@ uv_tool_install_current_project() {
     local frozen="$_UVT_FROZEN"
     local project_name=$(awk -F'"' '/^name *=/ {gsub(/[[:space:]]/, "", $0); print $2; exit}' pyproject.toml)
     local python_interpreter="$VIRTUAL_ENV/bin/python"
-    local python_version=$("$python_interpreter" --version 2>&1 | awk '{print $2}' | cut -d. -f1,2)
 
     local install_source="."
     if (( ${#user_extras[@]} > 0 )); then
@@ -1581,7 +1599,14 @@ uv_tool_install_current_project() {
     echo "${info}🔗 Installing '$project_name' from source '${ok}${install_source}${info}' as a CLI via uv tool (${ok}${mode_label}${info})...${done}"
     echo "${info}   Using Python from active venv: $python_interpreter ($($python_interpreter --version))${done}"
 
-    if uv tool install --force "${mode_flag[@]}" --python "$python_version" "$install_source"; then
+    # --python takes the venv's interpreter PATH, not a "3.14"-style version request.
+    # This used to pass major.minor, cut from the venv's own --version output. uv then
+    # RE-RESOLVED that string against its own discovery order and could land somewhere
+    # else entirely: measured 2026-09-07 on this Mac, `uv python find 3.14` returns the
+    # uv-managed 3.14.3 while the venv here was built from Homebrew's 3.14.7. So the
+    # line above announced one interpreter and the install used another -- a message
+    # that reassures you about something it did not do. A path cannot be re-resolved.
+    if uv tool install --force "${mode_flag[@]}" --python "$python_interpreter" "$install_source"; then
         echo "${ok}✅ '$project_name' CLI installed successfully (${mode_label} mode).${done}"
         if [[ "$frozen" == true ]]; then
             echo "${warn}   ⚠️  FROZEN: editing this checkout no longer changes what '$project_name' runs.${done}"
@@ -1591,6 +1616,14 @@ uv_tool_install_current_project() {
         fi
         echo "--------------------------------------------------"
         uv_tool_check_current_project
+        # EXPLICIT, because uv_tool_check_current_project returns 1 for "not installed"
+        # and it is the LAST command in this branch -- so its status became the status of
+        # a successful install. `uv_tool_install_current_project dev && deploy` then
+        # printed the green tick and never ran deploy. This repo already forbids the
+        # mirror image of this (a refusal that reports success, which is why every
+        # pip/python/npm hijack in .zshrc returns 1); a success that reports failure is
+        # the same defect pointing the other way.
+        return 0
     else
         echo "${err}❌ Failed to install '$project_name' via uv tool. Please check errors above.${done}"
         return 1
@@ -1636,7 +1669,6 @@ uv_tool_reinstall_current_project() {
     local frozen="$_UVT_FROZEN"
     local project_name=$(awk -F'"' '/^name *=/ {gsub(/[[:space:]]/, "", $0); print $2; exit}' pyproject.toml)
     local python_interpreter="$VIRTUAL_ENV/bin/python"
-    local python_version=$("$python_interpreter" --version 2>&1 | awk '{print $2}' | cut -d. -f1,2)
 
     local install_source="."
     if (( ${#user_extras[@]} > 0 )); then
@@ -1668,13 +1700,17 @@ uv_tool_reinstall_current_project() {
 
     # uv tool install --force --reinstall handles this in a single step
     # (no need for the old uninstall-then-install dance that pipx required)
-    if uv tool install --force --reinstall "${mode_flag[@]}" --python "$python_version" "$install_source"; then
+    # --python is the venv's interpreter PATH -- see the note in
+    # uv_tool_install_current_project for why a major.minor string was wrong here.
+    if uv tool install --force --reinstall "${mode_flag[@]}" --python "$python_interpreter" "$install_source"; then
         echo "${ok}✅ '$project_name' CLI reinstalled successfully (${mode_label} mode).${done}"
         if [[ "$frozen" == true ]]; then
             echo "${warn}   ⚠️  FROZEN: this snapshot is what runs until the next --frozen reinstall.${done}"
         fi
         echo "--------------------------------------------------"
         uv_tool_check_current_project
+        # Explicit -- see the matching note in uv_tool_install_current_project.
+        return 0
     else
         echo "${err}❌ Failed to reinstall '$project_name' via uv tool. Please check errors above.${done}"
         return 1
@@ -1739,9 +1775,16 @@ uv_tool_check_current_project() {
     # Normalize project name for matching (uv normalizes underscores to hyphens)
     local project_name_normalized=$(echo "$project_name" | tr '_' '-')
 
-    # Check if the project appears in the tool list (match either underscore or hyphen form)
+    # Check if the project appears in the tool list (match either underscore or hyphen form).
+    #
+    # awk FIELD COMPARE, not grep -E: the project name came out of pyproject.toml and was
+    # being interpolated straight into a regex, where its characters kept their regex
+    # meaning. Dots are legal in package names, so a project called `my.tool` matched a
+    # line for `myXtool` -- measured 2026-09-07. `uv_tool_mode` further down this file
+    # already did it this way; this is that same comparison, not a new idea.
     local tool_line
-    tool_line=$(echo "$tool_output" | grep -iE "^${project_name}[[:space:]]|^${project_name_normalized}[[:space:]]" | head -n 1)
+    tool_line=$(echo "$tool_output" | awk -v p="${project_name:l}" -v q="${project_name_normalized:l}" \
+        'tolower($1)==p || tolower($1)==q { print; exit }')
 
     if [[ -n "$tool_line" ]]; then
         echo "${ok}✅ Found: Project '$project_name' is installed via uv tool.${done}"
@@ -1792,8 +1835,11 @@ uv_tool_check_current_project() {
                     break
                 fi
             fi
-            # Match the tool line to start collecting executables
-            if echo "$line" | grep -qiE "^${project_name}[[:space:]]|^${project_name_normalized}[[:space:]]"; then
+            # Match the tool line to start collecting executables. First whitespace field,
+            # compared as a STRING -- same reasoning as the tool_line lookup above, and the
+            # same bug was here: this loop could start collecting another tool's binaries.
+            local line_name="${line%%[[:space:]]*}"
+            if [[ "${line_name:l}" == "${project_name:l}" || "${line_name:l}" == "${project_name_normalized:l}" ]]; then
                 found_tool=true
             fi
         done <<< "$tool_output"
