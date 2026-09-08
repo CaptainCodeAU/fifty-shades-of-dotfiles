@@ -123,12 +123,19 @@ else
     report "FAIL" "pnpm not installed"
 fi
 
-# 2. Multiple pnpm binaries
+# 2. Multiple pnpm binaries on PATH (a shell wrapper function named
+#    `pnpm` is fine and intentional -- only count real executable files,
+#    or `which -a`/`type -a` will misreport the wrapper's body as extra hits)
 if command -v pnpm &>/dev/null; then
-    N=$(which -a pnpm 2>/dev/null | sort -u | wc -l | tr -d ' ')
+    PNPM_BINS=()
+    IFS=: read -ra PATH_DIRS <<< "$PATH"
+    for d in "${PATH_DIRS[@]}"; do
+        [[ -n "$d" && -x "$d/pnpm" && ! -d "$d/pnpm" ]] && PNPM_BINS+=("$d/pnpm")
+    done
+    N=$(printf '%s\n' "${PNPM_BINS[@]}" | sort -u | wc -l | tr -d ' ')
     if (( N > 1 )); then
-        report "FAIL" "Multiple pnpm binaries — first match wins:"
-        which -a pnpm | sort -u | sed 's/^/         /'
+        report "FAIL" "Multiple pnpm binaries on PATH — first match wins:"
+        printf '%s\n' "${PNPM_BINS[@]}" | sort -u | sed 's/^/         /'
     fi
 fi
 
