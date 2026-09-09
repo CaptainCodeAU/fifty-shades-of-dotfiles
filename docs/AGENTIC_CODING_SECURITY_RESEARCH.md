@@ -962,3 +962,38 @@ setup-git` specifically stays blocked or is never run afterward.
   manager itself (its host, its build/update pipeline, its network exposure)
   to be treated with the same seriousness as anything it protects, which is
   a standing operational commitment, not a one-time setup task.
+
+---
+
+## 11. Decisions made, and deferred follow-ups not to lose track of
+
+**Decided (direction locked in, implementation pending):**
+
+- Agent GitHub write access: a dedicated GitHub App issuing short-lived
+  installation tokens, not a raw personal access token.
+- Credential storage/fetch: a self-hosted secrets manager (direct-pull), not
+  a broker/proxy — this workflow does not ingest untrusted external content,
+  so the untrusted-agent threat model the broker pattern targets does not
+  apply here (see the open decision point above).
+- Cross-machine rollout: provision each machine (macOS + a Linux VM/
+  container) independently first; defer a shared reproducible environment
+  (e.g. a devcontainer) until the credential model itself is working and
+  tested on both.
+
+**Deferred on purpose (explicitly not forgotten, revisit later, not now to
+avoid scope creep on the current work):**
+
+1. **Hard, non-bypassable approval gate before destructive/irreversible
+   agent actions.** Directly addresses both real incidents in §8.3.
+2. **Restrict agent-driven pushes to a dedicated branch prefix with a
+   required PR**, never a direct push to the main branch — the same pattern
+   GitHub Copilot and Cursor both already ship.
+3. **An audit of which MCP tools/servers are actually trusted and in active
+   use**, given the MCP-specific findings in §7.
+4. **Migrate secrets currently sitting in the macOS Keychain and in any
+   `.env`-style files over to the centralized secrets manager**, once the
+   GitHub App + direct-pull setup is built and tested — intended to cover
+   all use cases relying on locally-stored secrets, not just GitHub access.
+
+None of the four above block the current work; they are the next round of
+hardening once the credential architecture above is live.
