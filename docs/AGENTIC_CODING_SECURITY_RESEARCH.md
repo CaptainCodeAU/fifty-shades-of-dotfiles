@@ -1098,3 +1098,29 @@ tell agent-made changes from human-made ones at a glance) and may be worth
 revisiting for any future case where that at-a-glance distinction matters
 more than a unified identity — for example, a shared or public repository,
 or one where other people also review the history.
+
+### 11.3 Kill switch tested and confirmed; first build closed out
+
+The incident-response step (suspending the GitHub App's installation on a
+given repository) was tested directly, not assumed: with the installation
+suspended, a real push attempt failed cleanly with GitHub's own 403
+response ("This installation has been suspended"), confirming no new
+installation token can be minted while suspended. Unsuspending restored
+normal function immediately, verified with a subsequent successful push.
+
+**"Definition of done" status for the first (throwaway-repo) build, per
+the criteria agreed before starting:**
+
+| Criterion                                                         | Status                                                                                                        |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| A real push/commit goes through end to end                        | Confirmed                                                                                                     |
+| Kill-switch step tested at least once                             | Confirmed                                                                                                     |
+| Credential helper correctly picks the right project automatically | Confirmed for this one project; proving _correct selection among several_ needs a second project              |
+| Token expiry (natural 1-hour lifetime)                            | Deliberately not tested — accepted as GitHub's own documented, fixed behavior rather than waiting out an hour |
+
+This closes out the first build. The credential architecture from §11 is
+now proven working end to end on a real (if low-stakes) repository, not
+just designed. The next natural step — not started, a deliberate choice
+rather than an oversight — is applying this same, now-proven pattern to a
+real project, which would also be the first real test of "correct
+selection among several" above.
