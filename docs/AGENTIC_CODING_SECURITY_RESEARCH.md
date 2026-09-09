@@ -1069,3 +1069,32 @@ unaffected by any of this**: it is architecturally a personal access token,
 not a GitHub App, since opening issues on repositories one does not own
 cannot go through the App-installation mechanism at all. It is stored
 directly as a static secret and used as-is, no exchange step needed.
+
+### 11.2 Confirmed by a real end-to-end test, and one preference decision
+
+A first live project was built and tested against this architecture:
+GitHub App registered and installed on one repository only, private key
+stored as a static secret, a machine identity scoped via Additional
+Privileges to read only that one secret, and a small local script
+performing the key-to-token exchange as a git credential helper (scoped to
+that one repository's local git config only, not global). A real
+commit/push succeeded end to end on the first real attempt.
+
+**Commit attribution is a separate, independent choice from the credential
+mechanism itself, confirmed by direct test**: which credential authorizes
+a push and what identity a commit is recorded under are two unrelated
+settings. Pushing with the GitHub App's token works identically regardless
+of whether the repo's local `user.name`/`user.email` are left as the
+principal's own identity or overridden to the App's bot-style identity
+(`<name>[bot]`, with a `users.noreply.github.com` email keyed to the bot's
+GitHub user ID) — tested both ways against the same live repo, same
+credential, only the commit's recorded author changed.
+
+**Decision: default to the principal's own identity, not a bot identity**,
+for commits on the principal's own private repositories. The bot-identity
+option remains available (it is a real, standard GitHub Apps feature,
+and the pattern GitHub Copilot/Cursor use specifically so a reviewer can
+tell agent-made changes from human-made ones at a glance) and may be worth
+revisiting for any future case where that at-a-glance distinction matters
+more than a unified identity — for example, a shared or public repository,
+or one where other people also review the history.
