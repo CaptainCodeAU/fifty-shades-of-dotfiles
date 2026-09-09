@@ -979,6 +979,37 @@ setup-git` specifically stays blocked or is never run afterward.
   container) independently first; defer a shared reproducible environment
   (e.g. a devcontainer) until the credential model itself is working and
   tested on both.
+- **App/identity granularity: one GitHub App, and one matching Infisical
+  machine identity, per project**, not one shared App/identity covering many
+  repos. The App's own private key (not just its install list) determines
+  blast radius on compromise, so per-project registration gives real
+  isolation rather than only a narrower install list.
+- **App permissions**: contents, issues, and pull requests, all read/write.
+- **Fetch mechanism**: an on-demand git/gh credential helper that requests a
+  fresh token from the secrets manager only at the moment git/gh actually
+  needs one. Which project's identity to use is selected automatically by
+  which repository/folder the command is running in — the same
+  directory-based selection already used for per-account SSH identity — not
+  pre-loaded into the whole session and never chosen by the agent itself.
+- **Token reuse scope**: one fetch per distinct task, freely reused for that
+  task's own burst of related actions (e.g. commit, push, tag push), not
+  re-fetched per individual command and not held for an entire session.
+- **A second, separate token type for general/public GitHub use**: read
+  access to public content (session-scoped, low risk), plus — only paired
+  with a mandatory human yes/no before anything actually posts — the ability
+  to open issues on repositories not owned by the account. The write path
+  here is never automated-approval-only.
+- **Registry**: track the growing list of per-project Apps/identities inside
+  the existing project-routing document rather than a new, separate file.
+- **Scope**: apply this same per-project pattern across every GitHub account
+  in use, not only the primary one, as real work moves onto each.
+- **First real build target**: a small, low-stakes, throwaway repository,
+  not a live/important one, to work out rough edges before touching
+  anything that matters.
+- **The existing read-only, session-scoped token** (already in use today for
+  lightweight reads inside agent sessions, e.g. `gh pr view`/`gh issue
+list`) stays exactly as-is, running alongside the new write-capable
+  system, for now.
 
 **Deferred on purpose (explicitly not forgotten, revisit later, not now to
 avoid scope creep on the current work):**
@@ -994,6 +1025,10 @@ avoid scope creep on the current work):**
    `.env`-style files over to the centralized secrets manager**, once the
    GitHub App + direct-pull setup is built and tested — intended to cover
    all use cases relying on locally-stored secrets, not just GitHub access.
+5. **Eventually unify the existing read-only session-scoped token into the
+   same new system too**, once confidence in the new system is established.
+   Explicitly gradual by design — not a single cutover, and not blocking
+   anything above.
 
-None of the four above block the current work; they are the next round of
+None of the five above block the current work; they are the next round of
 hardening once the credential architecture above is live.
