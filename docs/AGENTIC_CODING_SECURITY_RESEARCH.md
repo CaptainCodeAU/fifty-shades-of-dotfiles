@@ -1032,3 +1032,40 @@ avoid scope creep on the current work):**
 
 None of the five above block the current work; they are the next round of
 hardening once the credential architecture above is live.
+
+### 11.1 Correction found during implementation: Dynamic Secrets is a paid
+
+tier feature on self-hosted Infisical
+
+Tonight's research (§6) confirmed Infisical's GitHub dynamic-secret feature
+exists, but did not catch that it sits behind Infisical's **Enterprise**
+tier on a self-hosted instance — verified directly against a real Free-tier
+instance during implementation, not assumed. No public price exists for
+self-hosted Enterprise; it is a custom quote. The published cloud Pro tier
+is $18/identity/month, but the dynamic-secret capability specifically
+appears to sit in Enterprise, not Pro, so that number does not reliably
+indicate the real cost of unlocking this one feature.
+
+**Chosen workaround (free, equivalent security, adopted going forward):**
+store each GitHub App's private key as an ordinary static secret (a
+core, always-free Infisical capability, already in active use for other
+purposes on this instance), and have a small locally-run script perform the
+key-to-token exchange itself — a standard, publicly documented GitHub
+mechanism (sign a short-lived proof with the private key, exchange it with
+GitHub for the real 1-hour installation token) — rather than asking
+Infisical's paid feature to perform that exchange internally. The security
+properties are equivalent either way: the private key is retrieved only by
+its narrowly-scoped machine identity, and the token handed to the agent is
+the same real, short-lived GitHub token regardless of which system performs
+the exchange step.
+
+This workaround is fully compatible with the per-project isolation decided
+above — per-project separation of App, private key, and machine identity
+was never dependent on the paid feature; only the automatic exchange
+convenience was.
+
+**The separate general/public GitHub token (§11's second token type) is
+unaffected by any of this**: it is architecturally a personal access token,
+not a GitHub App, since opening issues on repositories one does not own
+cannot go through the App-installation mechanism at all. It is stored
+directly as a static secret and used as-is, no exchange step needed.
