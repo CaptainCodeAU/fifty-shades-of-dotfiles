@@ -533,12 +533,12 @@ only where a service manages the server, detected by the file the service
 leaves behind: the stowed unit symlink on Linux, the brew plist on macOS. A
 box with neither is untouched.
 
-| You type | What happens | Why |
-| --- | --- | --- |
-| `herdr server` | **Refused.** Prints `systemctl --user start herdr.service` (Linux) or `brew services start herdr` (macOS). | A hand-started server inherits the shell's environment and dies with the session -- the whole reason the service exists. On the Mac it also exits 1 on the socket and `keep_alive` respawns it forever. |
-| `herdr server stop`, `reload-config`, ... | Pass through. | Only the bare form starts a server. |
-| `herdr` (attach), Linux, unit down | Starts the unit first, then attaches. | Upstream attach "starts or attaches to" a server: with the unit down it would spawn the same hand-started server with no visible command. |
-| Anything inside a herdr pane (`HERDR_ENV=1`) | No check at all. | The server is by definition running; agents call the CLI constantly and should pay nothing. |
+| You type                                     | What happens                                                                                               | Why                                                                                                                                                                                                     |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `herdr server`                               | **Refused.** Prints `systemctl --user start herdr.service` (Linux) or `brew services start herdr` (macOS). | A hand-started server inherits the shell's environment and dies with the session -- the whole reason the service exists. On the Mac it also exits 1 on the socket and `keep_alive` respawns it forever. |
+| `herdr server stop`, `reload-config`, ...    | Pass through.                                                                                              | Only the bare form starts a server.                                                                                                                                                                     |
+| `herdr` (attach), Linux, unit down           | Starts the unit first, then attaches.                                                                      | Upstream attach "starts or attaches to" a server: with the unit down it would spawn the same hand-started server with no visible command.                                                               |
+| Anything inside a herdr pane (`HERDR_ENV=1`) | No check at all.                                                                                           | The server is by definition running; agents call the CLI constantly and should pay nothing.                                                                                                             |
 
 Its notices go to stderr, so `herdr status server --json | jq` keeps working
 (the first live test broke exactly that).
@@ -655,30 +655,34 @@ which:
    Nerd Font glyphs, rule runs — and maps curly quotes, dashes, and accented
    letters to ASCII instead of dropping them. The raw accessibility hotkey
    cannot do any of this: it reads the screen, borders and all;
-2. hands the cleaned text to one `speak-render` process per press
-   (`home/.local/share/fifty-shades-of-dotfiles/scripts/speak-render.swift`,
-   built by `install.sh` on macOS, or lazily on first use). It splits at
-   sentence ends, renders the first sentence to a temp file, starts playing it
-   within about a second, and renders each next sentence while the current one
-   plays. Rendering runs ~8x faster than speech, so playback never runs dry;
+2. hands the cleaned text to one `say2 synthesize` process per press
+   (`say2`, <https://github.com/CaptainCodeAU/say2> -- a real Siri "natural" tier
+   neural voice, Aaron by default), fed over a pipe and played straight to the
+   default audio device. say2 streams internally, so speech starts almost
+   immediately regardless of selection length (MEASURED 2026-09-10: a 16 s
+   paragraph started talking with only ~0.65 s of overhead around it);
 3. applies the toggle rule: press on the **same** text while it speaks = stop;
    press with **new** text while it speaks = stop the old, speak the new.
    `speak-clipboard --stop` stops unconditionally. Text identity is a SHA-256
    of the cleaned text kept in `~/.local/state/herdr/`. The text itself is
-   never logged and never passed on a command line; it reaches `speak-render`
-   through a pipe. The rendered audio goes to the per-user temp directory
-   (private, purged by the OS) and is deleted after playback, on stop, and by
-   a ten-minute stale sweep at the next start.
+   never logged and never passed on a command line; it reaches `say2` through
+   a pipe (say2's own documented stdin form), never on the command line, so it
+   never shows up in `ps` output either.
 
 Why one process per press and not a warm daemon: the daemon that briefly
 existed (2026-09-01 to 2026-09-03) saved about half a second per press, and in
 exchange rendered the whole selection before playing any of it — 10+ seconds of
 silence on a long selection, during which a second press was taken as "stop" —
 never exited, and held a power assertion that kept the Mac from idle-sleeping.
-With a per-press process, killing it is the entire stop mechanism and nothing
-runs between presses. `~/.local/state/herdr/speak-clipboard.log` keeps one
-metadata line per press (mode, outcome, character count): a new line means the
-key reached herdr; no line means the key or the spawn is at fault.
+That whole problem turned out to be specific to the old render engine: say2
+already streams playback on its own, so a 2026-09-03 through 2026-09-10 era
+also built a hand-rolled Swift chunker (`speak-render.swift`) to fake the same
+effect on top of the slower engine of the time; it was deleted once say2's own
+streaming was measured to make it redundant. With a per-press process, killing
+it is the entire stop mechanism and nothing runs between presses.
+`~/.local/state/herdr/speak-clipboard.log` keeps one metadata line per press
+(mode, outcome, character count): a new line means the key reached herdr; no
+line means the key or the spawn is at fault.
 
 Copy mode feeds it too — `prefix+[`, `v`, `y`, then speak — which matters when
 the text is a screen away from the pointer.

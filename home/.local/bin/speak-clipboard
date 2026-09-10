@@ -36,7 +36,7 @@
 #   * leading "- " / "* " list markers, blank lines, and whitespace runs, which
 #     become dead air; everything is joined to one line because the engine
 #     pauses on every line break (MEASURED: 20 words took 4.64 s as one line
-#     and 6.98 s as ten short lines); speak-render splits at sentence ends itself
+#     and 6.98 s as ten short lines); joining here means say2 gets one clean run
 #   * the result is capped at 8000 chars (~2 min of speech; stop is instant)
 #
 # Deliberately NOT stripped: ordinary punctuation inside sentences, code
@@ -51,42 +51,98 @@
 # ----
 # Default is 420 wpm, set by hand after listening to 278 wpm (1.5x) and
 # finding it too slow. `say` with no -r runs at 175 wpm; 420 lands around
-# 2.4x that baseline. Re-tune by listening, not by arithmetic.
+# 2.4x that baseline. Re-tune by listening, not by arithmetic. say2's `-r` is
+# documented as the same say-compatible WPM scale, so the number carried over
+# unchanged across the engine switch below.
 #
 # VOLUME
 # ------
 # Not controlled here. Speech plays through the current output device at the
-# system volume. Use the volume keys or the menu-bar slider.
+# system volume. Use the volume keys or the menu-bar slider. (say2's own
+# --volume flag is a documented no-op on the siri engine anyway.)
 #
-# ONE PROCESS PER PRESS, CHUNKED (2026-09-03)
-# -------------------------------------------
-# History, so nobody rebuilds it: v1 shelled out to `say` (1 s before the first
-# word, every press). v2 kept a background daemon warm to save that second; it
-# saved ~0.5 s and brought a socket, a singleton race, a process that never
-# exited, a lock that stopped the Mac from sleeping, and a toggle that silently
-# cancelled long text because it rendered the WHOLE selection to a file before
-# playing any of it (10+ s of silence on a long selection, second press = stop).
+# ONE PROCESS PER PRESS, DIRECT TO say2 (v4, 2026-09-10)
+# --------------------------------------------------------
+# History, so nobody rebuilds any of this: v1 shelled out to `say` (1 s before
+# the first word, every press). v2 kept a background daemon warm to save that
+# second; it saved ~0.5 s and brought a socket, a singleton race, a process
+# that never exited, a lock that stopped the Mac from sleeping, and a toggle
+# that silently cancelled long text because it rendered the WHOLE selection to
+# a file before playing any of it (10+ s of silence on a long selection).
+# v3 fixed that by hand-building a chunked pipeline in Swift
+# (speak-render.swift, since deleted): split text at sentence ends, render
+# sentence 1 via NSSpeechSynthesizer (~0.7 s), start playing it, render the
+# rest while it plays.
 #
-# v3 (this) runs one `speak-render` process per press. It splits the text at
-# sentence ends, renders sentence 1 (~0.7 s), starts playing it, and renders
-# the next sentence while the current one plays. First audio in ~1 s on any
-# length of text, nothing left running between presses, and STOP is simply
-# killing that process. See speak-render.swift for the measurements.
+# v4 (this) deletes that pipeline. `say2` (https://github.com/CaptainCodeAU/say2)
+# reaches the same premium Aaron voice (now the "natural" tier,
+# en-US:natural:male:Aaron:premium:5030 -- a better tier than NSSpeechSynthesizer
+# could even reach) and already streams internally: MEASURED on this Mac
+# 2026-09-10, direct playback of a 16.1 s / ~120-word paragraph
+# (`say2 -v ... "$text"`, no -o) took 16.7 s wall-clock total -- about 0.65 s of
+# overhead before/around the speech, not 0.65 s PLUS a multi-second render-first
+# wait. Rendering that same paragraph to a file first (`-o`, the old chunked
+# design's approach) took 5.0 s before any audio could start -- proof the old
+# problem is real, but proof say2's own direct-play mode already solves it, so
+# building a second chunker on top of it would just be solving it twice.
+# So: one `say2` process per press, playing straight to the default audio
+# device. STOP is killing that process (MEASURED: kill-to-exit was ~15 ms in
+# testing -- audio stops with the process).
+#
+# v4.1 (2026-09-10, same day): two corrections after Gavin reported the real
+# hotkey taking 2-3 s to start speaking, which the numbers above did not
+# predict.
+#
+# First, `say2 synthesize` (the subcommand) is measurably slower than the bare
+# `say2 -v ... TEXT` form REGARDLESS of how text reaches it -- MEASURED both
+# ways, repeated, ~2-4 s of overhead on `synthesize` either via stdin or argv,
+# vs ~0.6-0.7 s on the bare form. Switched to the bare form and, since that
+# form only reliably streams fast with TEXT as a normal argument (not stdin,
+# not `-f FILE` -- both measured slower too), text now goes on argv. That is a
+# deliberate reversal of this file's original "never argv" privacy design:
+# Gavin chose speed after seeing the actual trade-off (text briefly visible in
+# `ps` output while speaking, on his own single-user Mac).
+#
+# Second, and this is the part argv did NOT fix: paired testing (same command,
+# run twice) showed the SAME command is slow (~1-2.6 s of overhead, noisy)
+# on the first call after any real pause, and fast (~0.6 s) on a second call
+# fired immediately after. That is the actual 2-3 s Gavin was hearing --
+# selecting text, then pressing the key, is always a "first call". Tried
+# feeding it a silent warm-up ping beforehand (both `--no-output` and `-o
+# FILE`, ~0.3 s / ~30 MB each, genuinely cheap) and MEASURED that neither
+# changes the real call's timing at all -- the cold cost is not in the
+# synthesis engine, which is already fast every time. Best-evidenced guess:
+# it is the audio OUTPUT device (not the voice model) waking from idle, which
+# a silent-only ping does not touch. A ping that reliably fixed this would
+# have to make a real (if quiet) sound every few minutes -- Gavin decided
+# against building that (uncertain payoff, adds a periodic background noise)
+# on 2026-09-10. So: this delay is accepted as a trait of the voice pipeline,
+# not something this script tries to hide.
+#
+# FALLBACK (2026-09-10): say2 reaches a private Apple framework that a macOS
+# update can remove or rename without warning (it exits 69 for exactly that
+# case), and a fresh machine may have say2 installed but not the premium Siri
+# voice downloaded. Neither should mean silence. resolve_engine() picks Aaron,
+# then Simone (the two premium Siri "natural" voices), then the always-present
+# `say` binary with voice Samantha, in that order -- checked once and cached
+# for a day (see resolve_engine's own comment) so a normal press costs a file
+# read, not a live probe. `--voice` bypasses all of this and goes straight to
+# say2 with the given key, trusting an explicit override as-is.
 #
 # The toggle rule: press on the SAME text while it speaks = stop. Press with
 # NEW text while it speaks = stop the old one and speak the new one. Text
 # identity is a SHA-256 of the cleaned text, kept next to the pid file.
 #
-# PRIVACY: the text is never logged and never passed on a command line. It
-# travels to speak-render through a pipe. speak-render writes each sentence's
-# AUDIO to the per-user temp directory (0700, purged by the OS) and deletes it
-# after playback and on stop; it also sweeps stale files older than ten minutes
-# at start, so a crash or SIGKILL cannot leave a spoken copy behind for long.
+# PRIVACY: the text is never logged. It DOES pass on the command line as of
+# v4.1 above (a deliberate speed-over-privacy trade, see that note) -- it is
+# visible in `ps` output to anyone with shell access on this Mac for as long
+# as the utterance is speaking, which the original v1-v4 design specifically
+# avoided. Their stderr is still captured for diagnostics, never the text.
 #
 # CONCURRENCY: key auto-repeat or a double tap runs this script twice within
 # a few ms. An atomic mkdir lock serialises the check-stop-start section; the
 # loser records outcome=busy and exits 0 (never queues -- N repeats would mean
-# N toggles). The pid file is trusted only if that pid is a live speak-render
+# N toggles). The pid file is trusted only if that pid is a live say2/say
 # (pids are recycled; a stale file must never kill a stranger).
 #
 # USAGE
@@ -96,27 +152,33 @@
 #   speak-clipboard --print      print what WOULD be spoken (no audio)
 #   speak-clipboard --stdin      read text from stdin instead of the clipboard
 #                                (for tests; combine with --print/--toggle)
-#   speak-clipboard --build      build speak-render if missing or stale, then exit
-#                                (install.sh calls this on macOS)
 #   speak-clipboard --rate N     words per minute (default: 420)
-#   speak-clipboard --voice ID   voice IDENTIFIER, not display name (e.g.
-#                                com.apple.voice.compact.en-US.Samantha)
+#   speak-clipboard --voice KEY  say2 voice asset key or display name -- bypasses
+#                                the Aaron/Simone/say fallback chain entirely
+#                                (default when omitted: en-US:natural:male:Aaron:premium:5030,
+#                                falling back through Simone to `say`/Samantha)
 #
 # EXIT CODES
-#   0  spoke, stopped, replaced, printed, or built (or lost the lock: busy)
-#   1  nothing to say (clipboard empty, or empty once cleaned), or speak-render
-#      could not be built or started
-#   --build only: 0 built or up to date, 1 build failed, 2 no swiftc, 3 no source
+#   0  spoke, stopped, replaced, or printed (or lost the lock: busy)
+#   1  nothing to say (clipboard empty, or empty once cleaned)
 #
 # STATE (all under ~/.local/state/herdr/, nothing here ever contains text)
-#   speak-clipboard.log   one line per press: when, mode, ppid, outcome, chars
-#   speak-render.log      speak-render's timing lines and any build errors
-#   speak-render          the compiled helper
-#   speak-render.pid/.hash the current speaker and the hash of what it speaks
-#   speak-clipboard.lock/ the mkdir lock, held for one run of this script
+#   speak-clipboard.log    one line per press: when, mode, ppid, outcome, chars
+#   speak-render.log       the speaker's stderr, for diagnostics only
+#   speak-render.pid/.hash the current speaker's pid and the hash of what it speaks
+#   speak-engine.cache     resolve_engine()'s cached choice, refreshed daily
+#   speak-clipboard.lock/  the mkdir lock, held for one run of this script
 # ============================================================================
 set -uo pipefail
 
+# The two premium Siri "natural" voices (Apple's own "Voice 1" / "Voice 2" in
+# System Settings > Accessibility > Spoken Content). Aaron first, Simone as a
+# second try before giving up on say2 entirely -- either is a real improvement
+# over the `say` fallback. `say` itself is always present on macOS, so it is
+# the last resort, not a "might also be missing" case.
+_default_voice="en-US:natural:male:Aaron:premium:5030"
+_secondary_voice="en-US:natural:female:Simone:premium:5029"
+_say_fallback_voice="Samantha"
 rate="420"
 voice=""
 mode="speak"
@@ -127,7 +189,6 @@ while [ $# -gt 0 ]; do
         --print)  mode="print";  shift ;;
         --stop)   mode="stop";   shift ;;
         --toggle) mode="toggle"; shift ;;
-        --build)  mode="build";  shift ;;
         --stdin)  from_stdin=1;  shift ;;
         --rate)  rate="${2:-}"; shift 2 ;;
         --voice) voice="${2:-}"; shift 2 ;;
@@ -138,15 +199,49 @@ done
 
 _state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/herdr"
 _trace_file="$_state_dir/speak-clipboard.log"
-_render_source="$HOME/.local/share/fifty-shades-of-dotfiles/scripts/speak-render.swift"
-_render_bin="$_state_dir/speak-render"
 _render_log="$_state_dir/speak-render.log"
 _pid_file="$_state_dir/speak-render.pid"
 _hash_file="$_state_dir/speak-render.hash"
 _lock_dir="$_state_dir/speak-clipboard.lock"
+_engine_cache="$_state_dir/speak-engine.cache"
+_engine_cache_ttl=86400
 _max_chars=8000
 _have_lock=""
 [ -d "$_state_dir" ] || mkdir -p "$_state_dir" 2>/dev/null
+
+# Decide which engine+voice a plain press actually uses, and cache the answer
+# for a day so a normal press costs one file read, not a live say2 probe
+# (`say2 voices --status` alone measured ~0.1-0.3s -- fine once, not on every
+# keystroke). A 24h TTL means a macOS update that silently removes the Siri
+# voice heals itself within a day instead of failing forever. Sets _engine
+# (say2 or say) and _engine_voice. Skipped entirely when --voice overrides the
+# default: an explicit voice is trusted as-is, straight to say2, no fallback.
+resolve_engine() {
+    if [ -n "$voice" ]; then
+        _engine="say2"; _engine_voice="$voice"
+        return
+    fi
+    local now cached_at cached_engine cached_voice
+    now="$(date +%s)"
+    if [ -f "$_engine_cache" ]; then
+        { IFS='|' read -r cached_at cached_engine cached_voice <"$_engine_cache"; } 2>/dev/null || true
+        if [ -n "${cached_at:-}" ] && [ $((now - cached_at)) -lt "$_engine_cache_ttl" ]; then
+            _engine="$cached_engine"; _engine_voice="$cached_voice"
+            return
+        fi
+    fi
+    _engine="say"; _engine_voice="$_say_fallback_voice"
+    if command -v say2 >/dev/null 2>&1; then
+        local v
+        for v in "$_default_voice" "$_secondary_voice"; do
+            if say2 voices --status "$v" --json 2>/dev/null | grep -q '"state" *: *"installed"'; then
+                _engine="say2"; _engine_voice="$v"
+                break
+            fi
+        done
+    fi
+    printf '%s|%s|%s\n' "$now" "$_engine" "$_engine_voice" >"$_engine_cache" 2>/dev/null || true
+}
 
 # One line per press. A line here means the key reached herdr and this script
 # ran; no line means the key or the spawn is at fault. Never any text.
@@ -196,9 +291,10 @@ acquire_lock() {
     _have_lock=1
 }
 
-# Sets _speaker to the pid of the live speak-render, or clears stale state and
-# returns 1. `kill -0` alone is not enough: pids are recycled, so the process
-# must also BE speak-render before anyone sends it a signal.
+# Sets _speaker to the pid of the live speaker (say2 or its `say` fallback),
+# or clears stale state and returns 1. `kill -0` alone is not enough: pids are
+# recycled, so the process must also BE one of our two engines before anyone
+# sends it a signal.
 speaker_alive() {
     local p="" comm=""
     _speaker=""
@@ -208,10 +304,10 @@ speaker_alive() {
         ''|*[!0-9]*) command rm -f "$_pid_file" "$_hash_file" 2>/dev/null; return 1 ;;
     esac
     comm="$(ps -o comm= -p "$p" 2>/dev/null)"
-    if [ "${comm##*/}" != "speak-render" ]; then
-        command rm -f "$_pid_file" "$_hash_file" 2>/dev/null
-        return 1
-    fi
+    case "${comm##*/}" in
+        say2|say) ;;
+        *) command rm -f "$_pid_file" "$_hash_file" 2>/dev/null; return 1 ;;
+    esac
     _speaker="$p"
 }
 
@@ -225,28 +321,22 @@ stop_speaker() {
     return $rc
 }
 
-# 0 = binary is fresh (built now, or already up to date), 1 = build failed,
-# 2 = no swiftc, 3 = no source. Sets _built=1 when it compiled.
-_built=""
-ensure_render() {
-    if [ -x "$_render_bin" ] && [ ! "$_render_source" -nt "$_render_bin" ]; then
-        return 0
-    fi
-    [ -f "$_render_source" ] || return 3
-    command -v swiftc >/dev/null 2>&1 || return 2
-    # -suppress-warnings: NSSpeechSynthesizer is deprecated since macOS 14 but
-    # is the only route to the premium "Aaron" voice; the warnings are noise.
-    swiftc -O -suppress-warnings "$_render_source" -o "$_render_bin" 2>>"$_render_log" || return 1
-    _built=1
-}
-
-# Text goes in over a pipe: never argv, never a here-string (bash 3.2 spools
-# those to a temp file). `trap '' HUP; exec` replaces nohup: the helper must
-# outlive this script, and exec keeps $! equal to the helper's own pid.
+# Text goes in as an argv element (2026-09-10, see the v4.1 note up top --
+# reversed from the original "never argv" design on purpose, traded away for
+# speed). `trap '' HUP; exec` replaces nohup: the speaker must outlive this
+# script, and exec keeps $! equal to its own pid (see speaker_alive: it checks
+# the live process really is say2 or say before anyone signals it). say2 MUST
+# be invoked as the bare `say2 -v ... TEXT` form, never `say2 synthesize` --
+# synthesize is the slow path regardless of how text reaches it (MEASURED).
 start_speaker() {
-    local -a args=(--rate "$rate")
-    [ -n "$voice" ] && args+=(--voice "$voice")
-    printf '%s' "$text" | ( trap '' HUP; exec "$_render_bin" "${args[@]}" ) >/dev/null 2>>"$_render_log" &
+    resolve_engine
+    if [ "$_engine" = "say2" ]; then
+        ( trap '' HUP; exec say2 -v "$_engine_voice" -r "$rate" "$text" ) \
+            >/dev/null 2>>"$_render_log" &
+    else
+        ( trap '' HUP; exec say -v "$_engine_voice" -r "$rate" "$text" ) \
+            >/dev/null 2>>"$_render_log" &
+    fi
     echo $! >"$_pid_file"
     echo "$hash" >"$_hash_file"
 }
@@ -318,17 +408,6 @@ fi
 
 acquire_lock || { trace "outcome=busy"; exit 0; }
 
-if [ "$mode" = "build" ]; then
-    ensure_render; rc=$?
-    case $rc in
-        0) [ -n "$_built" ] && echo "built" || echo "up to date" ;;
-        1) echo "speak-render: build failed (see $_render_log)" >&2 ;;
-        2) echo "speak-render: swiftc not found (Xcode Command Line Tools); will build on first use" >&2 ;;
-        3) echo "speak-render: source not found: $_render_source" >&2 ;;
-    esac
-    exit $rc
-fi
-
 if [ "$mode" = "stop" ]; then
     if stop_speaker; then trace "outcome=stopped"; else trace "outcome=idle"; fi
     exit 0
@@ -354,11 +433,6 @@ if speaker_alive; then
     outcome="replaced"
 fi
 
-ensure_render; rc=$?
-if [ "$rc" -ne 0 ]; then
-    trace "outcome=error reason=build rc=$rc"
-    exit 1
-fi
 start_speaker
 trace "outcome=$outcome chars=$chars truncated=$truncated"
 exit 0
