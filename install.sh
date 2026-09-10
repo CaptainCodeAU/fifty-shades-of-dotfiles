@@ -3037,32 +3037,42 @@ stow_platform() {
 }
 
 # ------------------------------------------------------------------------------
-# speak-render prebuild (macOS only)
+# speak-clipboard backend check (macOS only)
 # ------------------------------------------------------------------------------
-# The herdr speak-clipboard key spawns one `speak-render` process per press
-# (home/.local/share/fifty-shades-of-dotfiles/scripts/speak-render.swift). The
-# script compiles it lazily on first use, but that first press then costs a
-# 10-20 s swiftc run with the key apparently dead. So post_install asks the
-# script to build it now, via its own `--build` mode: the source path, the
-# binary path, the staleness rule, and the compiler flags live in ONE place
-# (speak-clipboard), and this function only adds the macOS gate and the
-# installer's reporting. Runs after stow, so ~/.local/bin/speak-clipboard
-# exists. Silent no-op on Linux/WSL (the feature is macOS-only).
-_build_speak_render() {
+# The herdr speak-clipboard key shells out to `say2` directly, one process per
+# press (see home/.local/bin/speak-clipboard's own header for why, and for the
+# 2026-09-10 measurements that retired the old compiled Swift renderer this
+# function used to prebuild -- say2 already streams playback internally, so
+# there is no longer anything to compile ahead of time).
+#
+# Two things can be missing on a fresh Mac, independently: say2 itself (not a
+# Homebrew dependency of this repo, install separately), and the premium Siri
+# "natural" tier voice it needs (Aaron/Voice 1 or Simone/Voice 2 in Apple's own
+# picker -- System Settings > Accessibility > Spoken Content > System Voice).
+# speak-clipboard itself already falls back to the built-in `say` voice at
+# runtime if neither is available (see its own header), so this check is
+# purely informational: it tells the installer which case it's in, and gives
+# the exact command to fix the voice gap, rather than leaving that to be
+# discovered the first time the hotkey sounds wrong.
+_check_speak_clipboard_backend() {
     [[ "$(check_os)" == "macos" ]] || return 0
     local sc="$HOME/.local/bin/speak-clipboard"
     [[ -x "$sc" ]] || return 0
-    if [[ "$DRY_RUN" == true ]]; then
-        run_cmd "$sc" --build
+    if ! command -v say2 &>/dev/null; then
+        info "say2 not found -- herdr speak-clipboard will fall back to the built-in \`say\` voice until it's installed (https://github.com/CaptainCodeAU/say2)."
         return 0
     fi
-    local status rc
-    status=$("$sc" --build 2>&1); rc=$?
-    case "$rc" in
-        0) success "speak-render ${status:-ready} (herdr speak-clipboard backend)" ;;
-        2) info "speak-render: swiftc not found (Xcode Command Line Tools); speak-clipboard will build it on first use." ;;
-        *) warn "speak-render build failed (rc=$rc): ${status}. speak-clipboard will retry on first use." ;;
-    esac
+    if say2 voices --json 2>/dev/null | jq -e '
+        .voices[]? | select(.installed==true) |
+        select(.assetKey=="en-US:natural:male:Aaron:premium:5030"
+            or .assetKey=="en-US:natural:female:Simone:premium:5029")
+    ' >/dev/null 2>&1; then
+        success "say2 found, premium Siri voice installed (herdr speak-clipboard backend)"
+    else
+        warn "say2 is installed, but neither premium Siri voice (Aaron/Voice 1 or Simone/Voice 2) is downloaded."
+        info "Install one: ${CYAN}say2 voices --install \"en-US:natural:male:Aaron:premium:5030\"${RESET}"
+        info "herdr speak-clipboard will use the built-in \`say\` voice until then."
+    fi
     return 0
 }
 
@@ -3123,8 +3133,8 @@ GITEOF"
         success "git-lfs configured"
     fi
 
-    # --- speak-render (herdr speak-clipboard backend, macOS only) ---
-    _build_speak_render
+    # --- speak-clipboard backend (herdr, macOS only) ---
+    _check_speak_clipboard_backend
 
     # --- gh (SSH-only model) ---
     if command -v gh &>/dev/null; then
