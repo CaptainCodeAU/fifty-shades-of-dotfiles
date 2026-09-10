@@ -116,6 +116,13 @@ fi
 # allowed so /usr/bin/rg still fires. Quotes and comments are stripped first, so the
 # word cannot reach the test from inside a string or after a `#` at all.
 #
+# `find ... -exec grep ... \;` WAS ANOTHER MISS OF THE SAME SHAPE. `-exec`/`-execdir`
+# are find(1) flags, not shell runner words, so they were not in the runner list, and
+# the leading `-` meant they could never match a bare word there anyway. Measured
+# 2026-09-10: `find /tmp -name "*.txt" -exec grep -l "foo" {} \;` produced no reminder
+# at all, while the piped equivalent (`find ... | xargs grep ...`) fired correctly.
+# Adding `-exec`/`-execdir` as runner words closes it for both `rg` and `grep`.
+#
 # THE SINGLE-QUOTE STRIPPER WAS DEAD CODE. `${cmd//\'*\'/ }` returned the string
 # untouched — measured 2026-09-04 by printing _bare at each stage: `echo 'rg here' and
 # "rg there" # and rg comment` came out of that line byte-identical, and only the sed
@@ -159,7 +166,7 @@ _bare="$(printf '%s' "$cmd" | awk "$_hd" | sed -e "s/'[^']*'/ /g" -e 's/"[^"]*"/
 # has no multiline flag, so `^` means start-of-string, not start-of-line; the newline
 # has to be spliced into the character class by hand.
 _NL=$'\n'
-_cmdpos='(^|[|;&(`'"$_NL"']|&&|\|\||\$\(|(^|[[:space:]])(xargs|time|sudo|command|env|exec|nohup)[[:space:]]+)[[:space:]]*([A-Za-z0-9_./-]*/)?(rg|ripgrep)([[:space:]]|$)'
+_cmdpos='(^|[|;&(`'"$_NL"']|&&|\|\||\$\(|(^|[[:space:]])(xargs|time|sudo|command|env|exec|nohup|-exec|-execdir)[[:space:]]+)[[:space:]]*([A-Za-z0-9_./-]*/)?(rg|ripgrep)([[:space:]]|$)'
 
 # `grep` GOT NONE OF THAT GUARD, and it was the noisier half of the traffic. Its test was
 # `case "$cmd" in *grep*)` — the RAW command, a bare substring, no command position, no
@@ -187,7 +194,7 @@ _cmdpos='(^|[|;&(`'"$_NL"']|&&|\|\||\$\(|(^|[[:space:]])(xargs|time|sudo|command
 # the five prose cases; merely blanking the quote characters instead brings the
 # single-quoted false fire straight back (measured both ways). A miss on a wrapped search
 # is the cheaper error of the two, and it is the trade `rg` has been making all along.
-_greppos='(^|[|;&(`'"$_NL"']|&&|\|\||\$\(|(^|[[:space:]])(xargs|time|sudo|command|env|exec|nohup|git)[[:space:]]+)[[:space:]]*([A-Za-z0-9_./-]*/)?([A-Za-z]*grep)([[:space:]]|$)'
+_greppos='(^|[|;&(`'"$_NL"']|&&|\|\||\$\(|(^|[[:space:]])(xargs|time|sudo|command|env|exec|nohup|git|-exec|-execdir)[[:space:]]+)[[:space:]]*([A-Za-z0-9_./-]*/)?([A-Za-z]*grep)([[:space:]]|$)'
 
 _search="${_search:-0}"
 _tool="${_tool:-search}"
