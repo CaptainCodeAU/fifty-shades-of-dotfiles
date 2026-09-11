@@ -21,4 +21,10 @@ telemetry = false
 
 [install]
 minimumReleaseAge = 259200
-# minimumReleaseAgeExcludes = ["some-pkg"]   # per-package bypass, if ever needed
+# Codex is a self-updating CLI you upgrade on purpose, not a dependency pulled
+# in silently -- excluded so its own self-updater can't get stuck in an
+# infinite "update available" loop against a cooldown meant for the opposite
+# threat (a package quietly resolved in as part of an install). See
+# bun-cooldown-check for the general warning when this happens to something
+# NOT on this list.
+minimumReleaseAgeExcludes = ["@openai/codex"]

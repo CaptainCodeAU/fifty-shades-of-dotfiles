@@ -6,23 +6,25 @@ All hooks are registered in `.claude/settings.json`. Claude Code pipes JSON to s
 
 ## Overview
 
-| Script                   | Hook Event     | Matcher                            | Purpose                                                   |
-| ------------------------ | -------------- | ---------------------------------- | --------------------------------------------------------- |
-| `session-checks.sh`      | `SessionStart` | `startup\|resume`                  | Git status + `.env` encryption check                      |
-| `zed-version-check.sh`   | `SessionStart` | `startup\|resume`                  | Nudge to refresh Zed Preview changelog when newer release |
-| `toolchain-cve-check.sh` | `SessionStart` | `startup\|resume`                  | Flag CVE-exposed pinned/installed pnpm/nvm versions       |
-| _(inline echo)_          | `SessionStart` | `compact`                          | Re-inject project conventions after compaction            |
-| `validate-bash.sh`       | `PreToolUse`   | `Bash`                             | Block destructive commands (`rm -rf /`, force push, etc.) |
-| `pre-commit-check.sh`    | `PreToolUse`   | `Bash`                             | Lint/build gate before `git commit`                       |
-| `protect-files.sh`       | `PreToolUse`   | `Edit\|Write`                      | Block edits to `.env`, lockfiles, `.git/`                 |
-| `enforce-uv.sh`          | `PreToolUse`   | `Bash`                             | Block bare pip/python/pytest/ruff → enforce uv            |
-| `enforce-pnpm.sh`        | `PreToolUse`   | `Bash`                             | Block npm/yarn/npx → enforce pnpm or bun                  |
-| `enforce-no-cd.sh`       | `PreToolUse`   | `Bash`                             | Block bare cd → enforce absolute paths or git -C          |
-| `enforce-builtin.sh`     | `PreToolUse`   | `Bash`                             | Block `builtin` with non-builtins (git, swift, etc.)      |
-| `hook_runner.py`         | Multiple       | Various                            | Audio notifications (sound + speech)                      |
-| _(inline prettier)_      | `PostToolUse`  | `Edit\|Write`                      | Auto-format with prettier after file changes              |
-| _(inline markdownlint)_  | `PostToolUse`  | `Edit\|Write`                      | Auto-fix markdown lint issues on `.md` files              |
-| `export_transcript.sh`   | `SessionEnd`   | `prompt_input_exit\|logout\|other` | Export session transcript (skips `/clear`)                |
+| Script                    | Hook Event     | Matcher                            | Purpose                                                                      |
+| ------------------------- | -------------- | ---------------------------------- | ---------------------------------------------------------------------------- |
+| `session-checks.sh`       | `SessionStart` | `startup\|resume`                  | Git status + `.env` encryption check                                         |
+| `zed-version-check.sh`    | `SessionStart` | `startup\|resume`                  | Nudge to refresh Zed Preview changelog when newer release                    |
+| `toolchain-cve-check.sh`  | `SessionStart` | `startup\|resume`                  | Flag CVE-exposed pinned/installed pnpm/nvm versions                          |
+| `herdr-cooldown-check.sh` | `SessionStart` | `startup\|resume`                  | Report herdr release-cooldown eligibility                                    |
+| `bun-cooldown-check.sh`   | `SessionStart` | `startup\|resume`                  | Flag a global bun package silently blocked by the minimumReleaseAge cooldown |
+| _(inline echo)_           | `SessionStart` | `compact`                          | Re-inject project conventions after compaction                               |
+| `validate-bash.sh`        | `PreToolUse`   | `Bash`                             | Block destructive commands (`rm -rf /`, force push, etc.)                    |
+| `pre-commit-check.sh`     | `PreToolUse`   | `Bash`                             | Lint/build gate before `git commit`                                          |
+| `protect-files.sh`        | `PreToolUse`   | `Edit\|Write`                      | Block edits to `.env`, lockfiles, `.git/`                                    |
+| `enforce-uv.sh`           | `PreToolUse`   | `Bash`                             | Block bare pip/python/pytest/ruff → enforce uv                               |
+| `enforce-pnpm.sh`         | `PreToolUse`   | `Bash`                             | Block npm/yarn/npx → enforce pnpm or bun                                     |
+| `enforce-no-cd.sh`        | `PreToolUse`   | `Bash`                             | Block bare cd → enforce absolute paths or git -C                             |
+| `enforce-builtin.sh`      | `PreToolUse`   | `Bash`                             | Block `builtin` with non-builtins (git, swift, etc.)                         |
+| `hook_runner.py`          | Multiple       | Various                            | Audio notifications (sound + speech)                                         |
+| _(inline prettier)_       | `PostToolUse`  | `Edit\|Write`                      | Auto-format with prettier after file changes                                 |
+| _(inline markdownlint)_   | `PostToolUse`  | `Edit\|Write`                      | Auto-fix markdown lint issues on `.md` files                                 |
+| `export_transcript.sh`    | `SessionEnd`   | `prompt_input_exit\|logout\|other` | Export session transcript (skips `/clear`)                                   |
 
 ## Audio notification system
 
@@ -194,6 +196,7 @@ Subclasses override only the steps they need:
   session-checks.sh       # SessionStart — git status + .env encryption check
   zed-version-check.sh    # SessionStart — nudge to refresh the Zed Preview changelog doc
   toolchain-cve-check.sh  # SessionStart — flag CVE-exposed pnpm/nvm/bun floors + installed
+  bun-cooldown-check.sh   # SessionStart — flag a global bun package blocked by minimumReleaseAge
   pre-commit-check.sh     # PreToolUse Bash — lint/build gate before git commit
   validate-bash.sh        # PreToolUse Bash — block destructive commands
   protect-files.sh        # PreToolUse Edit|Write — block edits to protected files
@@ -246,6 +249,10 @@ Runs on `SessionStart` (`startup|resume`). Read-only Zed Preview changelog fresh
 ### toolchain-cve-check.sh
 
 Runs on `SessionStart` (`startup|resume`). Read-only CVE check of the pinned pnpm/nvm version floors (`PNPM_MIN_VERSION`, `NVM_MIN_VERSION`, read from `install.sh`), the installed pnpm/nvm versions, **and the installed Claude Code version** (added 2026-07-30), via the standalone `toolchain-cve-check` tool (pnpm and Claude Code through OSV, nvm through GitHub's nvm-repo advisories — the latter needs `$GH_TOKEN`, so it skips gracefully without one). Claude Code has no floor to check, so only the installed version is examined, and an exposure there nudges `claude update` rather than a floor bump. 6h-cached; prints a one-line all-clear or, on exposure, the offending version + advisory + the right remediation. Never blocks; always exits 0. See [`docs/TOOLCHAIN_CVE_CHECK.md`](../../docs/TOOLCHAIN_CVE_CHECK.md).
+
+### bun-cooldown-check.sh
+
+Runs on `SessionStart` (`startup|resume`). Read-only check of whether a globally-installed bun package (e.g. `@openai/codex`) is silently stuck behind the `~/.bunfig.toml` `minimumReleaseAge` cooldown — bun's own `install`/`add` output reports success even when it quietly kept the old version because the new one is too fresh, which can leave a tool's self-updater looping forever. Via the standalone `bun-cooldown-check` tool (reads `$BUN_INSTALL/install/global/package.json` + the npm registry; zero subprocess calls to bun itself). 6h-cached; silent on the all-clear case beyond a one-line confirmation, loud (with the ready date and a "do not exclude it yourself" note) when something is actually blocked. Never blocks; always exits 0.
 
 ### ci-watch — no hook file here, by design
 

@@ -1,0 +1,256 @@
+#!/usr/bin/env -S uv run python3
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+#
+# ============================================================================
+#  bun-cooldown-check -- is a global bun package silently stuck behind the
+#  minimumReleaseAge supply-chain cooldown?
+# ============================================================================
+#
+# WHY
+# ---
+# ~/.bunfig.toml sets [install] minimumReleaseAge = 259200 (3 days): bun will
+# not resolve to any npm version published more recently than that. This is
+# correct and intentional -- but bun's own `install`/`add` output does not say
+# so. When a tool's OWN self-updater calls `bun install -g <pkg>` and the
+# latest version is still inside the cooldown window, bun silently re-resolves
+# to the version already installed, finishes in milliseconds, and prints
+# nothing that looks like a warning -- so the updater reports "success" and the
+# tool keeps nagging that an update is available forever, because the update
+# never actually happened.
+#
+# Confirmed 2026-09-11 with @openai/codex 0.154.0: `codex` sees the update,
+# runs `bun install -g @openai/codex` itself (not through an interactive
+# shell), prints "Update ran successfully!", and still offers the same update
+# on the next launch -- an infinite loop until the 3-day window passes on its
+# own. `bun add -g --verbose` surfaces the real reason
+# (`[minimum-release-age] ... selected 0.153.4 instead of 0.154.0`), but
+# nothing non-verbose ever does.
+#
+# WHAT THIS TOOL DOES
+#   Reads the packages actually installed globally via bun (from
+#   $BUN_INSTALL/install/global/package.json, NOT `bun pm ls -g` -- that needs
+#   a live project/lockfile context bun does not always have; verified
+#   2026-09-11 it fails with PermissionDenied run non-interactively), looks up
+#   each one's real "latest" on the npm registry, and reports any package
+#   where a newer version exists AND is still younger than the cooldown --
+#   exactly the case bun's own success message hides.
+#
+# WHAT THIS TOOL DOES NOT DO
+#   It never installs, upgrades, or excludes anything. It only reads
+#   ~/.bunfig.toml and the npm registry and prints what it found. Excluding a
+#   package from the cooldown is a separate, deliberate decision -- see
+#   minimumReleaseAgeExcludes in ~/.bunfig.toml.
+#
+# CONTROLS (no live network/timing dependency)
+#   --pkg codex --installed-version 0.153.4 --latest-version 0.154.0 \
+#     --published 2026-09-09T22:40:10Z --min-age 259200
+#       -> BLOCKED (ready ~2026-09-12 22:40 UTC)
+#   ...same, plus --exclude codex
+#       -> EXCLUDED, not reported as blocked
+#   ...same, but --min-age 0
+#       -> update available, not blocked
+#
+# EXIT CODES
+#   0  nothing blocked (clean, nothing to check, or a lookup failed)
+#   1  at least one package is blocked by the cooldown
+# ============================================================================
+
+import argparse
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
+
+try:
+    import tomllib
+except ImportError:
+    tomllib = None
+
+
+def read_bunfig(path):
+    """(min_age_seconds:int, excludes:set[str]). Missing file/key -> 0 / empty
+    -- fail toward "nothing is blocked" rather than inventing a cooldown that
+    was never configured."""
+    if tomllib is None or not os.path.isfile(path):
+        return 0, set()
+    try:
+        with open(path, "rb") as fh:
+            data = tomllib.load(fh)
+    except (OSError, tomllib.TOMLDecodeError):
+        return 0, set()
+    install = data.get("install") or {}
+    age = install.get("minimumReleaseAge")
+    excludes = install.get("minimumReleaseAgeExcludes") or []
+    age = int(age) if isinstance(age, (int, float)) else 0
+    return age, {str(x) for x in excludes}
+
+
+def global_packages(bun_install):
+    """[(name, installed_version)] for every TOP-LEVEL global bun package,
+    read straight off disk rather than shelling out to `bun pm ls -g`."""
+    manifest = os.path.join(bun_install, "install", "global", "package.json")
+    try:
+        with open(manifest, "r", encoding="utf-8") as fh:
+            top = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return []
+    names = list((top.get("dependencies") or {}).keys())
+    names += list((top.get("devDependencies") or {}).keys())
+    out = []
+    for name in names:
+        pkg_json = os.path.join(bun_install, "install", "global", "node_modules",
+                                 name, "package.json")
+        try:
+            with open(pkg_json, "r", encoding="utf-8") as fh:
+                version = json.load(fh).get("version")
+        except (OSError, json.JSONDecodeError):
+            version = None
+        if version:
+            out.append((name, version))
+    return out
+
+
+def registry_latest(name, timeout):
+    """(latest_version, published_iso, note). note is None on success; a
+    failed/incomplete lookup returns (None, None, reason) -- never a guess."""
+    url = "https://registry.npmjs.org/" + name.replace("/", "%2f")
+    req = urllib.request.Request(url, headers={"User-Agent": "bun-cooldown-check"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            data = json.loads(r.read().decode("utf-8"))
+    except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError,
+            TimeoutError, OSError) as e:
+        return None, None, f"registry lookup failed ({type(e).__name__})"
+    latest = (data.get("dist-tags") or {}).get("latest")
+    published = (data.get("time") or {}).get(latest) if latest else None
+    if not latest or not published:
+        return None, None, "no latest/time in registry response"
+    return latest, published, None
+
+
+def parse_iso(ts):
+    return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+
+
+class Subject:
+    def __init__(self, name, installed):
+        self.name = name
+        self.installed = installed
+        self.latest = None
+        self.status = "current"  # current | blocked | available | excluded | unknown
+        self.ready_at = None     # epoch seconds, only set when blocked
+        self.note = ""
+
+
+def unknown(name, installed, note):
+    s = Subject(name, installed)
+    s.status, s.note = "unknown", note
+    return s
+
+
+def evaluate(name, installed, latest, published, min_age, excludes, now):
+    s = Subject(name, installed)
+    s.latest = latest
+    if latest == installed:
+        s.status = "current"
+        return s
+    if name in excludes:
+        s.status = "excluded"
+        return s
+    age = (now - parse_iso(published)).total_seconds()
+    if age < min_age:
+        s.status = "blocked"
+        s.ready_at = parse_iso(published).timestamp() + min_age
+    else:
+        s.status = "available"
+    return s
+
+
+def print_report(subjects, quiet):
+    if not subjects:
+        if not quiet:
+            print("bun-cooldown-check: no global bun packages found.")
+        return
+    blocked = [s for s in subjects if s.status == "blocked"]
+    if blocked:
+        for s in blocked:
+            ready = datetime.fromtimestamp(s.ready_at, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+            print(f"bun-cooldown-check: {s.name} {s.latest} blocked by the minimumReleaseAge "
+                  f"cooldown (installed {s.installed}, ready ~{ready}).")
+        return
+    if quiet:
+        return
+    print(f"bun-cooldown-check: {len(subjects)} global bun package(s) checked -- "
+          "none blocked by the minimumReleaseAge cooldown.")
+    available = [s for s in subjects if s.status == "available"]
+    if available:
+        names = ", ".join(f"{s.name} {s.installed} -> {s.latest}" for s in available)
+        print(f"  update available (not cooldown-blocked): {names}")
+    unknowns = [s for s in subjects if s.status == "unknown"]
+    if unknowns:
+        names = ", ".join(f"{s.name} ({s.note})" for s in unknowns)
+        print(f"  could not check: {names}")
+
+
+def parse_args(argv):
+    p = argparse.ArgumentParser(
+        prog="bun-cooldown-check",
+        description="Report global bun packages silently stuck behind minimumReleaseAge.",
+    )
+    p.add_argument("--bunfig", default=os.path.expanduser("~/.bunfig.toml"))
+    p.add_argument("--bun-install", default=os.environ.get("BUN_INSTALL", os.path.expanduser("~/.bun")))
+    p.add_argument("--timeout", type=float, default=8.0)
+    p.add_argument("--quiet", action="store_true", help="print only blocked packages, nothing on all-clear")
+    p.add_argument("--json", dest="as_json", action="store_true")
+    # Deterministic single-package control, bypassing disk + network reads --
+    # see the header CONTROLS block.
+    p.add_argument("--pkg", help="check just this package instead of the full global list")
+    p.add_argument("--installed-version")
+    p.add_argument("--latest-version", help="override the registry lookup (control only)")
+    p.add_argument("--published", help="ISO8601 publish time of --latest-version (control only)")
+    p.add_argument("--min-age", type=int, help="override minimumReleaseAge in seconds (control only)")
+    p.add_argument("--exclude", action="append", default=[],
+                   help="treat this package name as excluded (control only)")
+    return p.parse_args(argv)
+
+
+def main(argv) -> int:
+    args = parse_args(argv)
+    min_age, excludes = read_bunfig(args.bunfig)
+    if args.min_age is not None:
+        min_age = args.min_age
+    excludes |= set(args.exclude)
+    now = datetime.now(timezone.utc)
+
+    pkgs = [(args.pkg, args.installed_version)] if args.pkg else global_packages(args.bun_install)
+
+    subjects = []
+    for name, installed in pkgs:
+        if args.pkg and args.latest_version:
+            latest, published, note = args.latest_version, args.published, None
+        else:
+            latest, published, note = registry_latest(name, args.timeout)
+        subjects.append(unknown(name, installed, note) if note else
+                         evaluate(name, installed, latest, published, min_age, excludes, now))
+
+    if args.as_json:
+        print(json.dumps([{"name": s.name, "installed": s.installed, "latest": s.latest,
+                            "status": s.status, "ready_at": s.ready_at, "note": s.note}
+                           for s in subjects], indent=2))
+    else:
+        print_report(subjects, args.quiet)
+
+    return 1 if any(s.status == "blocked" for s in subjects) else 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except KeyboardInterrupt:
+        print()
+        sys.exit(130)
