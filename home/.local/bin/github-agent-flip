@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# github-agent-flip: converts one repo's 'origin' remote from its current
+# SSH-based URL over to the shared GitHub App system's plain HTTPS URL.
+#
+# That's the ONLY thing this does. github-agent-token is registered as
+# git's credential helper ONCE, globally, for all of https://github.com
+# (see ~/.gitconfig-githubagent) -- git only ever invokes a credential
+# helper for an http(s) remote, so an untouched SSH repo never triggers it,
+# and a flipped repo needs no per-repo config beyond its remote URL.
+#
+# Usage: github-agent-flip [-y|--yes] [path-to-repo]   (repo defaults to the
+#        current directory)
+# Idempotent: re-running on an already-flipped repo just reports it and exits.
+#
+# By default this asks before changing anything, meant to be run by a human,
+# live, in their own terminal, watching the prompt. -y/--yes skips that
+# prompt for the one case where that's appropriate: an agent running it after
+# the human has ALREADY said go-ahead earlier in the same conversation --
+# the before/after values below still print either way, so there is always a
+# real, visible record of exactly what changed, even without the live prompt.
+
+set -euo pipefail
+
+auto_yes=false
+repo_dir="."
+for arg in "$@"; do
+	case "$arg" in
+	-y | --yes) auto_yes=true ;;
+	*) repo_dir="$arg" ;;
+	esac
+done
+
+if ! git -C "$repo_dir" rev-parse --git-dir &>/dev/null; then
+	echo "github-agent-flip: '$repo_dir' is not a git repository" >&2
+	exit 1
+fi
+
+current_url="$(git -C "$repo_dir" remote get-url origin)"
+
+if [[ "$current_url" == https://x-access-token@github.com/* ]]; then
+	echo "github-agent-flip: already flipped, nothing to do."
+	echo "  origin: $current_url"
+	exit 0
+fi
+
+url_no_git="${current_url%.git}"
+
+# Extract OWNER/REPO regardless of transport: https://github.com/OWNER/REPO,
+# git@github.com:OWNER/REPO, or a local SSH alias like git-cc:OWNER/REPO.
+if [[ "$url_no_git" == *"://"* ]]; then
+	path="${url_no_git#*://}"
+	path="${path#*/}" # drop the host
+else
+	path="${url_no_git#*:}" # scp-like [user@]host:OWNER/REPO
+fi
+
+owner="${path%%/*}"
+repo="${path#*/}"
+
+if [[ -z "$owner" || -z "$repo" || "$owner" == "$repo" ]]; then
+	echo "github-agent-flip: could not parse OWNER/REPO out of origin '$current_url'" >&2
+	exit 1
+fi
+
+new_url="https://x-access-token@github.com/${owner}/${repo}.git"
+
+echo "About to flip ${owner}/${repo}:"
+echo "  before:  $current_url"
+echo "  after:   $new_url"
+
+if [[ "$auto_yes" == false ]]; then
+	read -r -p "Proceed? [y/N] " confirm
+	if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+		echo "Aborted, nothing changed."
+		exit 1
+	fi
+else
+	echo "  (--yes given, proceeding without an interactive prompt)"
+fi
+
+git -C "$repo_dir" remote set-url origin "$new_url"
+
+# Don't just trust the command succeeded -- read it back and prove it.
+actual_url="$(git -C "$repo_dir" remote get-url origin)"
+if [[ "$actual_url" != "$new_url" ]]; then
+	echo "github-agent-flip: set the remote but the read-back doesn't match -- got '$actual_url'" >&2
+	exit 1
+fi
+
+echo "Done, verified by reading it back:"
+echo "  before:  $current_url"
+echo "  after:   $actual_url"
+echo "Its old SSH-based remote is gone; nothing else on this machine was touched."

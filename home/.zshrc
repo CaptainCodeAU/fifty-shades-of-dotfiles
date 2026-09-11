@@ -790,21 +790,33 @@ herdr() {
 }
 
 # Guard gh auth subcommands that re-add HTTPS credential helpers.
-# Blocks: login, setup-git, refresh (these undermine SSH-only auth).
-# Allows: status, token, switch, logout, and all non-auth gh commands.
+# Blocks: login (unless --git-protocol ssh), setup-git, refresh.
+# Allows: status, token, switch, logout, login --git-protocol ssh, and all
+# non-auth gh commands.
 gh() {
     if [[ "$1" == "auth" ]]; then
         case "$2" in
             login)
-                echo "${err}BLOCKED: gh auth login${done}"
-                echo
-                echo "  This system uses SSH-only authentication for GitHub."
-                echo "  ${warn}gh auth login re-adds HTTPS credential helpers to ~/.gitconfig${done}"
-                echo "  which bypasses the SSH lockdown."
-                echo
-                echo "  To authenticate, configure your SSH keys in ~/.ssh/config"
-                echo "  and add URL rewrites in ~/.gitconfig.private instead."
-                return 1
+                # The ONE verified-safe form: --git-protocol ssh never adds
+                # an HTTPS credential helper. Confirmed by reading gh's own
+                # source (cli/cli pkg/cmd/auth/shared/login_flow.go): the
+                # credential-helper prompt is gated behind
+                # `opts.Interactive && gitProtocol == "https"`, so this
+                # branch of gh auth login never runs it. Every other form
+                # (bare, or --git-protocol https) stays blocked.
+                if [[ "$*" == *"--git-protocol ssh"* || "$*" == *"--git-protocol=ssh"* ]]; then
+                    command gh "$@"
+                else
+                    echo "${err}BLOCKED: gh auth login${done}"
+                    echo
+                    echo "  This system uses SSH-only authentication for GitHub."
+                    echo "  ${warn}gh auth login re-adds HTTPS credential helpers to ~/.gitconfig${done}"
+                    echo "  which bypasses the SSH lockdown -- UNLESS you pass --git-protocol ssh"
+                    echo "  (verified safe: never touches git's credential config)."
+                    echo
+                    echo "  Try instead: gh auth login --git-protocol ssh"
+                    return 1
+                fi
                 ;;
             setup-git)
                 echo "${err}BLOCKED: gh auth setup-git${done}"
@@ -828,8 +840,22 @@ gh() {
                 ;;
         esac
     else
-        # All non-auth commands pass through unchanged
-        command gh "$@"
+        # gh doesn't consult git's own credential.helper (that's a git-only
+        # mechanism), so a repo flipped onto the shared/dedicated GitHub App
+        # system (github-agent-flip rewrites 'origin' to this exact URL
+        # shape) needs its own hook here too. Mint a fresh, repo-scoped,
+        # 1-hour token and use it for just this one call -- never exported
+        # into the shell's real environment.
+        if [[ "$(git remote get-url origin 2>/dev/null)" == https://x-access-token@github.com/* ]]; then
+            local _gh_token
+            if ! _gh_token="$(github-agent-token token)"; then
+                echo "${err}github-agent-token failed, see above${done}" >&2
+                return 1
+            fi
+            GH_TOKEN="$_gh_token" command gh "$@"
+        else
+            command gh "$@"
+        fi
     fi
 }
 

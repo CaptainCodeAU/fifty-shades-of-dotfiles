@@ -1,0 +1,262 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#   "requests",
+#   "pyjwt[crypto]",
+# ]
+# ///
+#
+# github-agent-token: mints a fresh, 1-hour, single-repo-scoped GitHub App
+# installation token, sourced from Infisical, for whichever repo the caller
+# is standing in. Serves two callers:
+#
+#   - git itself, as a credential helper (git calls it with "get", "store",
+#     or "erase" -- only "get" produces output; the other two are no-ops
+#     since nothing here ever persists a credential to disk).
+#   - the `gh` wrapper in .zshrc, via `github-agent-token token`, which
+#     prints just the raw token so it can be exported as GH_TOKEN for one
+#     command.
+#
+# This is registered as git's credential helper ONCE, GLOBALLY (the normal,
+# documented way -- see gitcredentials(7)), not per repo. A repo "opts in"
+# simply by having an https://github.com remote; git only ever calls a
+# credential helper for an http(s) remote in the first place, so an
+# untouched SSH-based repo never triggers this at all. Which exact repo is
+# being asked about comes from git's own credential protocol -- the
+# 'host='/'path=' lines it feeds this script on stdin (requires
+# credential.https://github.com.useHttpPath=true, set once alongside the
+# helper) -- never by re-deriving it from 'git remote get-url origin',
+# which would also fail during a fresh 'git clone' before a local repo
+# even exists yet.
+#
+# Shared settings (App ID, Infisical path, etc.) live in GLOBAL git config
+# under a [githubagent] section (~/.gitconfig-githubagent, included from
+# ~/.gitconfig.private). A repo later promoted to its own dedicated GitHub
+# App overrides whichever [githubagent] keys it needs in its OWN local
+# config -- git's normal "local beats global" resolution does the rest;
+# this script never needs to know a repo's promotion status, it just reads
+# whatever config resolves for the repo it's standing in.
+#
+# The GitHub App's private key never touches disk here and is never printed.
+# It lives in this process's memory for the few seconds it takes to sign one
+# JWT, then it's discarded. Only the resulting 1-hour token is ever handed
+# back to the caller, and it's deliberately scoped (via the `repositories`
+# parameter on GitHub's own token-mint endpoint) to just the one repo in play,
+# even though the App itself may be installed on many.
+
+import platform
+import stat
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+import jwt
+import requests
+
+
+def fail(message: str) -> None:
+    print(f"github-agent-token: {message}", file=sys.stderr)
+    sys.exit(1)
+
+
+def git_config(key: str) -> str:
+    result = subprocess.run(["git", "config", "--get", key], capture_output=True, text=True)
+    value = result.stdout.strip()
+    if result.returncode != 0 or not value:
+        fail(
+            f"missing git config '{key}' -- set it globally in ~/.gitconfig-githubagent, "
+            "or locally in this repo to override the shared default"
+        )
+    return value
+
+
+def read_git_credential_stdin() -> dict[str, str]:
+    # The documented gitcredentials(7) protocol: git feeds a 'get' request
+    # as key=value lines on stdin (protocol=, host=, path=, username=, ...).
+    attrs: dict[str, str] = {}
+    for line in sys.stdin:
+        line = line.strip()
+        if not line or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        attrs[key] = value
+    return attrs
+
+
+def owner_and_repo_from_git_stdin(attrs: dict[str, str]) -> tuple[str, str]:
+    host = attrs.get("host", "")
+    path = attrs.get("path", "")
+    if "github.com" not in host:
+        fail(f"unexpected host '{host}' -- this helper only serves github.com")
+    if path.endswith(".git"):
+        path = path[: -len(".git")]
+    parts = [p for p in path.split("/") if p]
+    if len(parts) != 2:
+        fail(
+            f"could not read OWNER/REPO from git's request (path='{path}'); "
+            "is credential.https://github.com.useHttpPath set to true?"
+        )
+    return parts[0], parts[1]
+
+
+def owner_and_repo_from_local_repo() -> tuple[str, str]:
+    # Used by "token" mode only (the gh wrapper), which always runs inside
+    # an already-cloned repo, so its own 'origin' remote is reliable here
+    # in a way it is NOT during a fresh 'git clone' (see module docstring).
+    result = subprocess.run(["git", "remote", "get-url", "origin"], capture_output=True, text=True)
+    if result.returncode != 0:
+        fail("could not read this repo's 'origin' remote")
+    url = result.stdout.strip()
+    if url.endswith(".git"):
+        url = url[: -len(".git")]
+    if "github.com" not in url:
+        fail(f"origin remote '{url}' isn't a github.com URL")
+    tail = url.split("github.com", 1)[1].lstrip(":/")
+    parts = tail.split("/")
+    if len(parts) != 2:
+        fail(f"could not parse OWNER/REPO out of origin remote '{url}'")
+    return parts[0], parts[1]
+
+
+def get_bootstrap_secret(keychain_service: str) -> str:
+    # This is the ONLY thing that needs OS-specific storage. It's a small
+    # login credential for Infisical itself, not the GitHub App's private
+    # key -- that stays in Infisical regardless of which OS is asking.
+    if platform.system() == "Darwin":
+        result = subprocess.run(
+            ["security", "find-generic-password", "-s", keychain_service, "-w"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            fail(f"could not read '{keychain_service}' from macOS Keychain: {result.stderr.strip()}")
+        return result.stdout.strip()
+
+    # Headless Linux (e.g. a Proxmox VM with no GUI keyring running): the
+    # accepted, standard pattern is an owner-only-readable file, the same
+    # way most CI/deploy systems store a bootstrap secret on a server.
+    path = Path.home() / ".config" / "github-agent" / f"{keychain_service}.secret"
+    if not path.exists():
+        fail(f"bootstrap secret file not found: {path}")
+    mode = path.stat().st_mode
+    if mode & (stat.S_IRWXG | stat.S_IRWXO):
+        fail(f"{path} is readable by group/other -- chmod 600 it before using it")
+    return path.read_text().strip()
+
+
+def infisical_login(base_url: str, client_id: str, client_secret: str) -> str:
+    resp = requests.post(
+        f"{base_url}/api/v1/auth/universal-auth/login",
+        json={"clientId": client_id, "clientSecret": client_secret},
+        timeout=15,
+    )
+    if resp.status_code != 200:
+        fail(f"Infisical login failed ({resp.status_code}): {resp.text}")
+    return resp.json()["accessToken"]
+
+
+def fetch_private_key(
+    base_url: str,
+    infisical_token: str,
+    project_slug: str,
+    environment: str,
+    secret_path: str,
+    secret_name: str,
+) -> str:
+    resp = requests.get(
+        f"{base_url}/api/v3/secrets/raw/{secret_name}",
+        params={"workspaceSlug": project_slug, "environment": environment, "secretPath": secret_path},
+        headers={"Authorization": f"Bearer {infisical_token}"},
+        timeout=15,
+    )
+    if resp.status_code != 200:
+        fail(f"could not fetch secret from Infisical ({resp.status_code}): {resp.text}")
+    return resp.json()["secret"]["secretValue"]
+
+
+def build_app_jwt(app_id: str, private_key_pem: str) -> str:
+    now = int(time.time())
+    payload = {
+        "iat": now - 60,  # allow for clock drift
+        "exp": now + (9 * 60),  # GitHub caps this at 10 minutes
+        "iss": app_id,
+    }
+    return jwt.encode(payload, private_key_pem, algorithm="RS256")
+
+
+def get_installation_token(app_jwt: str, owner: str, repo: str) -> str:
+    headers = {"Authorization": f"Bearer {app_jwt}", "Accept": "application/vnd.github+json"}
+
+    installation_resp = requests.get(
+        f"https://api.github.com/repos/{owner}/{repo}/installation",
+        headers=headers,
+        timeout=15,
+    )
+    if installation_resp.status_code != 200:
+        fail(
+            f"this GitHub App isn't installed on {owner}/{repo} "
+            f"({installation_resp.status_code}): {installation_resp.text}"
+        )
+    installation_id = installation_resp.json()["id"]
+
+    # Scope the minted pass down to just this one repo, even if the App's
+    # install covers many -- confirmed against GitHub's own REST docs
+    # (Create an installation access token for an app, `repositories` param).
+    token_resp = requests.post(
+        f"https://api.github.com/app/installations/{installation_id}/access_tokens",
+        headers=headers,
+        json={"repositories": [repo]},
+        timeout=15,
+    )
+    if token_resp.status_code != 201:
+        fail(f"could not mint installation token ({token_resp.status_code}): {token_resp.text}")
+    return token_resp.json()["token"]
+
+
+def mint_token(owner: str, repo: str) -> str:
+    base_url = git_config("githubagent.infisicalBaseUrl")
+    client_id = git_config("githubagent.infisicalClientId")
+    project_slug = git_config("githubagent.infisicalProjectSlug")
+    environment = git_config("githubagent.infisicalEnvironment")
+    secret_path = git_config("githubagent.infisicalSecretPath")
+    secret_name = git_config("githubagent.infisicalSecretName")
+    app_id = git_config("githubagent.appId")
+    keychain_service = git_config("githubagent.keychainService")
+
+    client_secret = get_bootstrap_secret(keychain_service)
+    infisical_token = infisical_login(base_url, client_id, client_secret)
+    private_key_pem = fetch_private_key(
+        base_url, infisical_token, project_slug, environment, secret_path, secret_name
+    )
+    app_jwt = build_app_jwt(app_id, private_key_pem)
+    return get_installation_token(app_jwt, owner, repo)
+
+
+def main() -> None:
+    if len(sys.argv) < 2:
+        fail("usage: github-agent-token {get|token}  (git itself also calls this with store/erase)")
+
+    mode = sys.argv[1]
+
+    if mode == "get":
+        attrs = read_git_credential_stdin()
+        owner, repo = owner_and_repo_from_git_stdin(attrs)
+        token = mint_token(owner, repo)
+        print("username=x-access-token")
+        print(f"password={token}")
+    elif mode == "token":
+        owner, repo = owner_and_repo_from_local_repo()
+        print(mint_token(owner, repo))
+    elif mode in ("store", "erase"):
+        # git still writes attributes to stdin for these; drain it so git
+        # doesn't see a broken pipe. Nothing here ever persists a
+        # credential, so both are otherwise a no-op.
+        sys.stdin.read()
+    else:
+        fail(f"unrecognized mode '{mode}'")
+
+
+if __name__ == "__main__":
+    main()

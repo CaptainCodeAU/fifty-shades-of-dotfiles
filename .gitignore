@@ -38,6 +38,10 @@ node_modules/
 # Do not share your private .zshrc file
 .zshrc.private
 
+# Never commit private planning docs (internal infra hostnames, account
+# names, local paths) -- same .private convention as .zshrc.private above
+docs/*.private.md
+
 # Never commit local-only SSH overrides (private hosts, ForwardAgent, etc.)
 home/.ssh/config.local
 
