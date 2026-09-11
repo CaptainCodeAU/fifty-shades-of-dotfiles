@@ -242,6 +242,14 @@ def main() -> None:
 
     if mode == "get":
         attrs = read_git_credential_stdin()
+        # This helper is registered globally for all of https://github.com, so it
+        # sees every tool's plain HTTPS github.com request, not just our own -- a
+        # repo flipped by github-agent-flip always embeds x-access-token as the
+        # remote's username, which git then echoes back here as an attribute. Any
+        # request without that exact username isn't one of ours; decline silently
+        # (no output, clean exit) rather than attempting a mint for it.
+        if attrs.get("username") != "x-access-token":
+            return
         owner, repo = owner_and_repo_from_git_stdin(attrs)
         token = mint_token(owner, repo)
         print("username=x-access-token")
