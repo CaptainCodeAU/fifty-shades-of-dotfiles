@@ -1,0 +1,455 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#   "requests",
+# ]
+# ///
+#
+# github-agent-create-app: registers a new GitHub App via GitHub's "manifest
+# flow" -- build a manifest, get one confirm-click from a human in a real
+# logged-in browser, and GitHub hands back the App ID, private key, and
+# webhook secret automatically in one API call. No public server needed; the
+# callback lands on a small listener this script runs on 127.0.0.1.
+#
+# Meant to be run by a HUMAN, in their own terminal -- never by an agent.
+# The private key this produces is a real secret; keeping this script
+# human-run means it never has to pass through anything else's process or
+# transcript. Nothing here ever prints the key, client secret, or webhook
+# secret -- they're written to one restricted file, and only non-secret
+# facts (App ID, slug, a fingerprint of the key) are ever printed. Storing
+# the key in Infisical is a separate, later, manual step this script only
+# gives you the instructions for -- it never touches Infisical itself.
+#
+# Usage:
+#   github-agent-create-app --tier high-value        (shared tier-pool App)
+#   github-agent-create-app --repo my-project         (single dedicated-repo App)
+#   github-agent-create-app --name gap-cc-test-thing  (raw name, e.g. for a one-off test)
+#   github-agent-create-app                           (no flag -- asks interactively)
+
+import argparse
+import hashlib
+import html
+import json
+import os
+import secrets
+import sys
+import time
+import urllib.parse
+import webbrowser
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
+
+import requests
+
+DEFAULT_URL = "https://github.com/CaptainCodeAU/fifty-shades-of-dotfiles"
+DEFAULT_DESCRIPTION = (
+    "Installation-token-only GitHub App (no webhook); "
+    "created via github-agent-create-app."
+)
+TIER_CHOICES = ("high-value", "medium-value", "low-value")
+
+# Color is opt-out, not opt-in: real terminals get it, piped/redirected output
+# and NO_COLOR=1 (https://no-color.org) both silently fall back to plain text.
+USE_COLOR = sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
+
+
+def _style(code: str, text: str) -> str:
+    return f"\033[{code}m{text}\033[0m" if USE_COLOR else text
+
+
+def bold(text: str) -> str:
+    return _style("1", text)
+
+
+def dim(text: str) -> str:
+    return _style("2", text)
+
+
+def ok(text: str) -> str:
+    return _style("1;32", text)
+
+
+def bad(text: str) -> str:
+    return _style("1;31", text)
+
+
+def warn(text: str) -> str:
+    return _style("1;33", text)
+
+
+def heading(text: str) -> str:
+    return _style("1;36", text)
+
+
+def ident(text: str) -> str:
+    # A distinct colour reserved for the actual name/value being discussed --
+    # separate from status colours (green/red/yellow) and structural cyan.
+    return _style("1;34", text)
+
+
+def fail(message: str) -> None:
+    print(f"{bad('[FAIL]')} github-agent-create-app: {message}", file=sys.stderr)
+    sys.exit(1)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Create a GitHub App via GitHub's manifest flow: one browser click, "
+            "and GitHub hands back the App ID and private key automatically."
+        )
+    )
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "--tier",
+        choices=TIER_CHOICES,
+        help="Create a shared tier-pool App (gap-cc-<tier>-shared).",
+    )
+    group.add_argument(
+        "--repo",
+        help="Create a single dedicated-repo App (gap-cc-<repo>).",
+    )
+    group.add_argument(
+        "--name",
+        help="Create an App with this exact raw name (e.g. for a one-off test).",
+    )
+    parser.add_argument(
+        "--org",
+        default=None,
+        help="Create the App under this GitHub organization instead of your personal account.",
+    )
+    parser.add_argument(
+        "--url",
+        default=None,
+        help=f"The App's homepage URL (manifest 'url' field). Default: {DEFAULT_URL}",
+    )
+    parser.add_argument(
+        "--description",
+        default=None,
+        help="The App's description. Defaults to a fixed internal-tooling description.",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8934,
+        help="Local port for the callback listener (default: 8934). Use 0 for an OS-assigned port.",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=300,
+        help="Seconds to wait for GitHub's redirect before giving up (default: 300).",
+    )
+    return parser.parse_args()
+
+
+def _identity(kind: str, value: str) -> tuple[str, str, str]:
+    if kind == "tier":
+        name = f"gap-cc-{value}-shared"
+        flag = f"--tier {value}"
+    elif kind == "repo":
+        name = f"gap-cc-{value}"
+        flag = f"--repo {value}"
+    else:
+        name = value
+        flag = f"--name {value}"
+    infisical_path = f"/github-agent-apps/{value}"
+    return name, infisical_path, flag
+
+
+def prompt_for_identity() -> tuple[str, str, str]:
+    print("Which kind of GitHub App is this?")
+    print("  1) Shared tier pool (covers many repos)")
+    print("  2) Single dedicated repo")
+    choice = input("> ").strip()
+    if choice == "1":
+        tier = input("Which tier? (high-value/medium-value/low-value) ").strip()
+        if tier not in TIER_CHOICES:
+            fail(f"unrecognized tier '{tier}'")
+        return _identity("tier", tier)
+    if choice == "2":
+        repo = input("Which repo? (bare name, no owner) ").strip()
+        if not repo:
+            fail("repo name can't be empty")
+        return _identity("repo", repo)
+    fail(f"unrecognized choice '{choice}'")
+
+
+def resolve_identity(args: argparse.Namespace) -> tuple[str, str, str]:
+    if args.tier:
+        name, path, flag = _identity("tier", args.tier)
+    elif args.repo:
+        name, path, flag = _identity("repo", args.repo)
+    elif args.name:
+        name, path, flag = _identity("name", args.name)
+    else:
+        name, path, flag = prompt_for_identity()
+    if len(name) > 34:
+        fail(f"App name '{name}' is {len(name)} characters -- GitHub's hard limit is 34")
+    return name, path, flag
+
+
+def submission_url(org: str | None, state: str) -> str:
+    if org:
+        base = f"https://github.com/organizations/{org}/settings/apps/new"
+    else:
+        base = "https://github.com/settings/apps/new"
+    return f"{base}?state={state}"
+
+
+def build_manifest(name: str, url: str, description: str, redirect_url: str) -> dict:
+    return {
+        "name": name,
+        "url": url,
+        "description": description,
+        "public": False,
+        "default_permissions": {
+            "contents": "write",
+            "issues": "write",
+            "pull_requests": "write",
+        },
+        "default_events": [],
+        "redirect_url": redirect_url,
+    }
+
+
+def write_autosubmit_html(app_name: str, sub_url: str, manifest: dict) -> Path:
+    tmp_root = Path(os.environ.get("TMPDIR", "/tmp")) / "github-agent-create-app"
+    os.makedirs(tmp_root, mode=0o700, exist_ok=True)
+    os.chmod(tmp_root, 0o700)
+    path = tmp_root / f"{app_name}-submit.html"
+    manifest_json = json.dumps(manifest)
+    body = (
+        "<!doctype html>\n"
+        '<html><head><meta charset="utf-8"><title>Creating GitHub App</title></head>\n'
+        '<body onload="document.forms[0].submit()">\n'
+        "<p>Submitting the App manifest to GitHub...</p>\n"
+        f'<form method="post" action="{html.escape(sub_url, quote=True)}">\n'
+        f'<input type="hidden" name="manifest" value="{html.escape(manifest_json, quote=True)}">\n'
+        '<noscript><button type="submit">Continue to GitHub</button></noscript>\n'
+        "</form></body></html>\n"
+    )
+    old_umask = os.umask(0o177)
+    try:
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(body)
+    finally:
+        os.umask(old_umask)
+    return path
+
+
+def open_browser_or_fallback(html_path: Path) -> None:
+    uri = html_path.as_uri()
+    try:
+        opened = webbrowser.open(uri)
+    except webbrowser.Error:
+        opened = False
+    if not opened:
+        print(
+            f"  {warn('[warn]')} could not open a browser automatically. "
+            f"Open this file yourself to continue: {html_path}",
+            file=sys.stderr,
+        )
+
+
+class _CallbackHandler(BaseHTTPRequestHandler):
+    expected_state: str = ""
+    result: dict | None = None
+
+    def do_GET(self) -> None:
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path != "/callback":
+            self.send_response(404)
+            self.end_headers()
+            return
+        params = urllib.parse.parse_qs(parsed.query)
+        state = params.get("state", [None])[0]
+        if state != type(self).expected_state:
+            self.send_response(400)
+            self.end_headers()
+            self.wfile.write(b"Unexpected request, ignoring.")
+            print(
+                f"  {warn('[warn]')} received a callback with an unexpected state "
+                "token, ignoring",
+                file=sys.stderr,
+            )
+            return
+        if "error" in params:
+            type(self).result = {
+                "error": params["error"][0],
+                "error_description": params.get("error_description", [""])[0],
+            }
+        else:
+            code = params.get("code", [None])[0]
+            if not code:
+                self.send_response(400)
+                self.end_headers()
+                return
+            type(self).result = {"code": code}
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.end_headers()
+        self.wfile.write(
+            b"<html><body>GitHub accepted the request. "
+            b"You can close this tab; finishing setup in your terminal.</body></html>"
+        )
+
+    def log_message(self, format: str, *args) -> None:  # noqa: A002 -- stdlib signature
+        pass
+
+
+def bind_listener(port: int) -> HTTPServer:
+    try:
+        return HTTPServer(("127.0.0.1", port), _CallbackHandler)
+    except OSError as e:
+        fail(
+            f"could not bind to 127.0.0.1:{port} ({e}) -- pick a different --port, "
+            "or --port 0 for an OS-assigned one"
+        )
+
+
+def wait_for_callback(server: HTTPServer, expected_state: str, timeout_seconds: int) -> str:
+    _CallbackHandler.expected_state = expected_state
+    _CallbackHandler.result = None
+    server.timeout = 1.0
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline and _CallbackHandler.result is None:
+        server.handle_request()
+    server.server_close()
+    if _CallbackHandler.result is None:
+        fail(
+            f"timed out after {timeout_seconds}s waiting for GitHub's redirect -- "
+            "redo the whole browser step and try again"
+        )
+    result = _CallbackHandler.result
+    if "error" in result:
+        fail(
+            f"GitHub sent back an error instead of a code: {result['error']} "
+            f"({result.get('error_description') or 'no description'})"
+        )
+    return result["code"]
+
+
+def exchange_code(code: str) -> dict:
+    resp = requests.post(
+        f"https://api.github.com/app-manifests/{code}/conversions",
+        headers={"Accept": "application/vnd.github+json"},
+        timeout=15,
+    )
+    if resp.status_code != 201:
+        fail(
+            f"GitHub rejected the manifest conversion ({resp.status_code}): {resp.text}\n"
+            "The code is single-use and is now burned -- redo the whole browser step to try again."
+        )
+    return resp.json()
+
+
+def stage_secrets_file(app_name: str, response: dict) -> Path:
+    tmp_root = Path(os.environ.get("TMPDIR", "/tmp")) / "github-agent-create-app"
+    os.makedirs(tmp_root, mode=0o700, exist_ok=True)
+    os.chmod(tmp_root, 0o700)
+    path = tmp_root / f"{app_name}.json"
+    payload = {
+        "id": response.get("id"),
+        "slug": response.get("slug"),
+        "name": response.get("name"),
+        "html_url": response.get("html_url"),
+        "owner": (response.get("owner") or {}).get("login"),
+        "client_id": response.get("client_id"),
+        "client_secret": response.get("client_secret"),
+        "pem": response.get("pem"),
+        "webhook_secret": response.get("webhook_secret"),
+    }
+    data = json.dumps(payload, indent=2).encode("utf-8")
+    old_umask = os.umask(0o177)
+    try:
+        try:
+            fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            fail(
+                f"{path} already exists -- consume it (move its secret into Infisical) "
+                "and permanently shred it first (rm -P on macOS), then re-run"
+            )
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+    finally:
+        os.umask(old_umask)
+    return path
+
+
+def render_receipt(
+    app_name: str, response: dict, secrets_path: Path, infisical_path: str, verify_flag: str
+) -> None:
+    pem = response.get("pem") or ""
+    fingerprint = hashlib.sha256(pem.encode("utf-8")).hexdigest() if pem else None
+    quoted_app_name = f"'{app_name}'"
+    print()
+    print(f"  {ok('✓')} {dim('created GitHub App')} {ident(quoted_app_name)}")
+    print()
+    print(f"    {bold('id:')}        {response.get('id')}")
+    print(f"    {bold('slug:')}      {response.get('slug')}")
+    print(f"    {bold('html_url:')}  {response.get('html_url')}")
+    print(f"    {bold('owner:')}     {(response.get('owner') or {}).get('login')}")
+    if fingerprint:
+        print(f"    {bold('pem:')}       {dim(f'sha256={fingerprint}')}  ({len(pem)} bytes)")
+    else:
+        print(f"    {bold('pem:')}       {warn('none received -- unexpected, check the staged file')}")
+    print(f"    {bold('secrets staged at:')} {secrets_path}  {dim('(mode 0600)')}")
+    print()
+    print(heading("  Next steps -- all yours, in your own terminal, this script stops here:"))
+    print(f"    {bold('1.')} Store the private key in Infisical:")
+    print(f"         path:  {infisical_path}")
+    print("         key:   GITHUB_APP_PRIVATE_KEY")
+    print(f'         value: the "pem" field inside {secrets_path}')
+    print(f"    {bold('2.')} Once it's stored, check the whole chain actually works:")
+    print(
+        f"         github-agent-verify-app {verify_flag} "
+        "--infisical-client-id <the-one-Infisical-gave-you>"
+    )
+    print(f"    {bold('3.')} Only after that check passes, permanently destroy the staged file")
+    print("         (a real delete, not the usual Trash-routed one):")
+    print(f"         /bin/rm -P {secrets_path}")
+    print()
+
+
+def main() -> None:
+    args = parse_args()
+
+    print()
+    print(heading("===  github-agent-create-app  ==="))
+    print(dim("    Before continuing, this assumes:"))
+    print(dim("      - you're logged into github.com as the right account, in your normal browser"))
+    print(dim("      - that browser is available on this machine right now (not headless)"))
+    print()
+
+    name, infisical_path, verify_flag = resolve_identity(args)
+    url = args.url or DEFAULT_URL
+    description = args.description or DEFAULT_DESCRIPTION
+
+    server = bind_listener(args.port)
+    bound_port = server.server_address[1]
+    redirect_url = f"http://127.0.0.1:{bound_port}/callback"
+
+    manifest = build_manifest(name, url, description, redirect_url)
+    state = secrets.token_urlsafe(32)
+    sub_url = submission_url(args.org, state)
+
+    html_path = write_autosubmit_html(name, sub_url, manifest)
+    quoted_name = f"'{name}'"
+    print(f"  opening your browser to review and create {ident(quoted_name)} ...")
+    open_browser_or_fallback(html_path)
+
+    print(f"  waiting up to {args.timeout}s for GitHub's redirect ...")
+    code = wait_for_callback(server, state, args.timeout)
+
+    print("  exchanging the one-time code with GitHub ...")
+    response = exchange_code(code)
+
+    secrets_path = stage_secrets_file(name, response)
+    render_receipt(name, response, secrets_path, infisical_path, verify_flag)
+
+
+if __name__ == "__main__":
+    main()

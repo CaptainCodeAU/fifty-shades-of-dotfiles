@@ -1,0 +1,445 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#   "requests",
+#   "pyjwt[crypto]",
+# ]
+# ///
+#
+# github-agent-verify-app: checks that a GitHub App created by
+# github-agent-create-app is actually wired up correctly, end to end --
+# its private key is really in Infisical, the key is valid, and a real
+# GitHub installation token can be minted with it.
+#
+# Meant to be run by a HUMAN, in their own terminal -- never by an agent --
+# for the same reason as github-agent-create-app: it necessarily holds the
+# real private key in memory to prove the chain works, even though it never
+# prints it. Run this AFTER storing the key in Infisical (github-agent-create-app
+# tells you the exact command), and BEFORE permanently shredding the staged
+# secrets file it left behind -- this script reads that file for the App's
+# numeric ID unless you pass --app-id yourself.
+#
+# Usage:
+#   github-agent-verify-app --tier high-value --infisical-client-id <id>
+#   github-agent-verify-app --repo my-project  --infisical-client-id <id>
+#   github-agent-verify-app --name gap-cc-test-thing --infisical-client-id <id> --app-id 123456
+#   github-agent-verify-app --tier high-value --infisical-client-id <id> --staged-file ./moved/gap-cc-high-value-shared.json
+#   github-agent-verify-app --tier high-value --infisical-client-id <id> --check-repo someowner/some-repo
+#   github-agent-verify-app --tier high-value --infisical-client-id <id> --check-repo owner/repo-a,owner/repo-b
+#
+# Beyond the 4 numbered checks, two "[extra]" checks go past the positive
+# case: an out-of-scope ACTION on an installed repo is always tried (once an
+# installation exists) and should be refused; and if --check-repo is given,
+# it reports the plain true/false answer for that repo -- use a repo you
+# expect NOT to have access to (proves the boundary), or one you expect TO
+# have (confirms an installation actually took).
+
+import argparse
+import json
+import os
+import platform
+import stat
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+import jwt
+import requests
+
+INFISICAL_BASE_URL = "https://REDACTED-INFISICAL-HOST"
+INFISICAL_PROJECT_SLUG = "REDACTED-INFISICAL-PROJECT"
+INFISICAL_ENVIRONMENT = "prod"
+SECRET_NAME = "GITHUB_APP_PRIVATE_KEY"
+TIER_CHOICES = ("high-value", "medium-value", "low-value")
+
+# Color is opt-out, not opt-in: real terminals get it, piped/redirected output
+# and NO_COLOR=1 (https://no-color.org) both silently fall back to plain text.
+USE_COLOR = sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
+
+
+def _style(code: str, text: str) -> str:
+    return f"\033[{code}m{text}\033[0m" if USE_COLOR else text
+
+
+def bold(text: str) -> str:
+    return _style("1", text)
+
+
+def dim(text: str) -> str:
+    return _style("2", text)
+
+
+def ok(text: str) -> str:
+    return _style("1;32", text)
+
+
+def bad(text: str) -> str:
+    return _style("1;31", text)
+
+
+def warn(text: str) -> str:
+    return _style("1;33", text)
+
+
+def heading(text: str) -> str:
+    return _style("1;36", text)
+
+
+def ident(text: str) -> str:
+    # A distinct colour reserved for the actual name/value being discussed --
+    # separate from status colours (green/red/yellow) and structural cyan.
+    return _style("1;34", text)
+
+
+def fail(message: str) -> None:
+    print(f"{bad('[FAIL]')} github-agent-verify-app: {message}", file=sys.stderr)
+    sys.exit(1)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Check that a GitHub App created by github-agent-create-app is fully "
+            "wired up: its key is in Infisical, and a real installation token can "
+            "be minted end to end."
+        ),
+        epilog=(
+            "Two separate IDs are needed, from two separate places:\n"
+            "  --infisical-client-id  ALWAYS required. The Universal Auth Client ID\n"
+            "                         for this App's Infisical machine identity\n"
+            "                         (Infisical showed you this when you created it).\n"
+            "  --app-id / --staged-file / (neither)\n"
+            "                         This App's numeric GitHub ID, resolved in this order:\n"
+            "                           1. --app-id, if you pass it directly.\n"
+            "                           2. --staged-file <path>, reading the \"id\" field out\n"
+            "                              of that JSON file (relative or absolute path).\n"
+            "                           3. Otherwise, the default scratch location\n"
+            "                              github-agent-create-app staged it to, if it's\n"
+            "                              still there and you haven't moved it.\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--tier", choices=TIER_CHOICES, help="Check a shared tier-pool App.")
+    group.add_argument("--repo", help="Check a single dedicated-repo App (gap-cc-<repo>).")
+    group.add_argument("--name", help="Check an App by its exact raw name.")
+    parser.add_argument(
+        "--infisical-client-id",
+        required=True,
+        dest="infisical_client_id",
+        help="Universal Auth Client ID for this App's Infisical machine identity.",
+    )
+    parser.add_argument(
+        "--app-id",
+        type=int,
+        default=None,
+        dest="app_id",
+        help=(
+            "This App's numeric GitHub ID. Defaults to reading it from the file "
+            "github-agent-create-app staged, if it still exists."
+        ),
+    )
+    parser.add_argument(
+        "--staged-file",
+        default=None,
+        dest="staged_file",
+        help=(
+            "Path to the JSON file github-agent-create-app staged, if you moved it "
+            "from the default scratch location. Relative or absolute both work."
+        ),
+    )
+    parser.add_argument(
+        "--check-repo",
+        default=None,
+        dest="check_repo",
+        metavar="OWNER/REPO[,OWNER/REPO,...]",
+        help=(
+            "Report whether this App genuinely has access to one or more repos -- "
+            "yes or no, checked individually. Comma-separate several. Use it either "
+            "way round: name a repo you expect it NOT to have (to prove the "
+            "boundary is real) or one you expect it TO have (to double-check an "
+            "installation actually took)."
+        ),
+    )
+    return parser.parse_args()
+
+
+def resolve_identity(args: argparse.Namespace) -> tuple[str, str, str]:
+    if args.tier:
+        value, name = args.tier, f"gap-cc-{args.tier}-shared"
+    elif args.repo:
+        value, name = args.repo, f"gap-cc-{args.repo}"
+    else:
+        value, name = args.name, args.name
+    infisical_path = f"/github-agent-apps/{value}"
+    keychain_service = f"infisical-{name}"
+    return name, infisical_path, keychain_service
+
+
+def resolve_app_id(args: argparse.Namespace, app_name: str) -> str:
+    if args.app_id:
+        return str(args.app_id)
+    if args.staged_file:
+        # expanduser() handles a leading ~, resolve() handles both relative
+        # (against the current directory) and absolute paths.
+        staged = Path(args.staged_file).expanduser().resolve()
+    else:
+        staged = Path(os.environ.get("TMPDIR", "/tmp")) / "github-agent-create-app" / f"{app_name}.json"
+    if staged.exists():
+        try:
+            data = json.loads(staged.read_text())
+        except (json.JSONDecodeError, OSError):
+            data = {}
+        app_id = data.get("id")
+        if app_id:
+            return str(app_id)
+    fail(
+        "don't know this App's numeric ID -- pass --app-id explicitly, or point at the "
+        f"staged file with --staged-file (looked at: {staged})"
+    )
+
+
+def get_bootstrap_secret(keychain_service: str) -> str:
+    if platform.system() == "Darwin":
+        result = subprocess.run(
+            ["security", "find-generic-password", "-s", keychain_service, "-w"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            fail(f"could not read '{keychain_service}' from macOS Keychain: {result.stderr.strip()}")
+        return result.stdout.strip()
+
+    path = Path.home() / ".config" / "github-agent" / f"{keychain_service}.secret"
+    if not path.exists():
+        fail(f"bootstrap secret file not found: {path}")
+    mode = path.stat().st_mode
+    if mode & (stat.S_IRWXG | stat.S_IRWXO):
+        fail(f"{path} is readable by group/other -- chmod 600 it before using it")
+    return path.read_text().strip()
+
+
+def infisical_login(client_id: str, client_secret: str) -> str:
+    resp = requests.post(
+        f"{INFISICAL_BASE_URL}/api/v1/auth/universal-auth/login",
+        json={"clientId": client_id, "clientSecret": client_secret},
+        timeout=15,
+    )
+    if resp.status_code != 200:
+        fail(f"Infisical login failed ({resp.status_code}): {resp.text}")
+    return resp.json()["accessToken"]
+
+
+def fetch_private_key(infisical_token: str, secret_path: str) -> str:
+    resp = requests.get(
+        f"{INFISICAL_BASE_URL}/api/v3/secrets/raw/{SECRET_NAME}",
+        params={
+            "workspaceSlug": INFISICAL_PROJECT_SLUG,
+            "environment": INFISICAL_ENVIRONMENT,
+            "secretPath": secret_path,
+        },
+        headers={"Authorization": f"Bearer {infisical_token}"},
+        timeout=15,
+    )
+    if resp.status_code != 200:
+        fail(f"could not fetch secret from Infisical ({resp.status_code}): {resp.text}")
+    return resp.json()["secret"]["secretValue"]
+
+
+def build_app_jwt(app_id: str, private_key_pem: str) -> str:
+    now = int(time.time())
+    payload = {"iat": now - 60, "exp": now + (9 * 60), "iss": app_id}
+    try:
+        return jwt.encode(payload, private_key_pem, algorithm="RS256")
+    except jwt.exceptions.InvalidKeyError:
+        # Never print the key itself -- these checks only look at its shape,
+        # to turn a raw crypto-library traceback into an actionable diagnosis.
+        has_real_newlines = "\n" in private_key_pem.strip("\n")
+        has_escaped_newlines = "\\n" in private_key_pem
+        if has_escaped_newlines and not has_real_newlines:
+            fail(
+                "the key fetched from Infisical looks flattened onto one line -- it "
+                "contains literal backslash-n text instead of real line breaks. This "
+                "usually means it got stored wrong (Infisical's multiline handling). "
+                "Re-open the secret in Infisical, delete the value, and paste it again "
+                "making sure it lands as real multiple lines, not one long line."
+            )
+        if not private_key_pem.strip().startswith("-----BEGIN"):
+            fail(
+                "the value fetched from Infisical doesn't start with '-----BEGIN' -- "
+                "something other than the key may have ended up in that field. "
+                "Double-check the stored value in Infisical."
+            )
+        fail(
+            "GitHub's crypto library couldn't parse the key fetched from Infisical -- "
+            "it may be truncated or corrupted. Compare its length against the original "
+            "staged file's \"pem\" field."
+        )
+
+
+def get_app_info(app_jwt: str) -> dict:
+    resp = requests.get(
+        "https://api.github.com/app",
+        headers={"Authorization": f"Bearer {app_jwt}", "Accept": "application/vnd.github+json"},
+        timeout=15,
+    )
+    if resp.status_code != 200:
+        fail(f"GitHub rejected the App-level JWT ({resp.status_code}): {resp.text}")
+    return resp.json()
+
+
+def list_installations(app_jwt: str) -> list[dict]:
+    resp = requests.get(
+        "https://api.github.com/app/installations",
+        headers={"Authorization": f"Bearer {app_jwt}", "Accept": "application/vnd.github+json"},
+        timeout=15,
+    )
+    if resp.status_code != 200:
+        fail(f"could not list installations ({resp.status_code}): {resp.text}")
+    return resp.json()
+
+
+def mint_installation_token(app_jwt: str, installation_id: int) -> str:
+    resp = requests.post(
+        f"https://api.github.com/app/installations/{installation_id}/access_tokens",
+        headers={"Authorization": f"Bearer {app_jwt}", "Accept": "application/vnd.github+json"},
+        timeout=15,
+    )
+    if resp.status_code != 201:
+        fail(f"could not mint an installation token ({resp.status_code}): {resp.text}")
+    # Used internally for the permission-boundary check below; never printed.
+    return resp.json()["token"]
+
+
+def list_installation_repos(installation_token: str) -> list[dict]:
+    resp = requests.get(
+        "https://api.github.com/installation/repositories",
+        headers={"Authorization": f"token {installation_token}", "Accept": "application/vnd.github+json"},
+        timeout=15,
+    )
+    if resp.status_code != 200:
+        fail(f"could not list this installation's repos ({resp.status_code}): {resp.text}")
+    return resp.json().get("repositories", [])
+
+
+def check_permission_boundary(installation_token: str, owner: str, repo: str) -> None:
+    # Listing Actions secrets needs a permission (Secrets) this App was never
+    # granted -- a safe, read-only way to prove the boundary is real, not just
+    # configured. A 403 here is the PASS; a 200 would mean the App has more
+    # access than it's supposed to.
+    resp = requests.get(
+        f"https://api.github.com/repos/{owner}/{repo}/actions/secrets",
+        headers={"Authorization": f"token {installation_token}", "Accept": "application/vnd.github+json"},
+        timeout=15,
+    )
+    if resp.status_code == 403:
+        return
+    if resp.status_code == 200:
+        fail(
+            f"UNEXPECTED: this token could list Actions secrets on {owner}/{repo} -- "
+            "that needs a permission this App was never granted. The permission "
+            "boundary isn't as narrow as it should be."
+        )
+    fail(f"unexpected response checking the permission boundary ({resp.status_code}): {resp.text}")
+
+
+def check_repo_access(app_jwt: str, owner: str, repo: str) -> bool:
+    # The exact same lookup github-agent-token itself does before minting.
+    # This just reports the true answer -- whether that's the outcome you
+    # wanted is for you to judge, the same lookup works either way round.
+    # Note: GitHub returns 404 here both for "not installed" and for "repo
+    # doesn't exist at all" -- a typo'd repo name will read as a cross too.
+    resp = requests.get(
+        f"https://api.github.com/repos/{owner}/{repo}/installation",
+        headers={"Authorization": f"Bearer {app_jwt}", "Accept": "application/vnd.github+json"},
+        timeout=15,
+    )
+    if resp.status_code == 200:
+        return True
+    if resp.status_code == 404:
+        return False
+    fail(f"unexpected response checking {owner}/{repo} ({resp.status_code}): {resp.text}")
+
+
+def _step(label: str, n: str = "") -> None:
+    # Bold is reserved for short values (a name, a number) -- a whole
+    # multi-word phrase in bold reads as a wall of harsh white text instead.
+    prefix = f"  {dim(n)} " if n else "  "
+    print(f"{prefix}{label} ... ", end="", flush=True)
+
+
+def _pass(detail: str = "") -> None:
+    tail = f"  {dim(detail)}" if detail else ""
+    print(f"{ok('✓')}{tail}")
+
+
+def main() -> None:
+    args = parse_args()
+    name, infisical_path, keychain_service = resolve_identity(args)
+    app_id = resolve_app_id(args, name)
+
+    print()
+    print(f"{dim('===')}  {dim('github-agent-verify-app:')} {ident(name)}  {dim('===')}")
+    print(dim(f"    App ID {app_id}"))
+    print(dim("    Assumes: this App's key is already in Infisical, and its"))
+    print(dim("    Universal Auth bootstrap secret is already in Keychain."))
+    print()
+
+    _step("Infisical login", "[1/4]")
+    client_secret = get_bootstrap_secret(keychain_service)
+    infisical_token = infisical_login(args.infisical_client_id, client_secret)
+    _pass()
+
+    _step("fetch the private key", "[2/4]")
+    pem = fetch_private_key(infisical_token, infisical_path)
+    _pass(f"({len(pem)} bytes)")
+
+    _step("authenticate as the App", "[3/4]")
+    app_jwt = build_app_jwt(app_id, pem)
+    app_info = get_app_info(app_jwt)
+    _pass(f"(GitHub confirms this is '{app_info.get('name')}')")
+
+    _step("mint a real installation token", "[4/4]")
+    installations = list_installations(app_jwt)
+    if not installations:
+        print(warn("SKIPPED"))
+        print(dim("        this App isn't installed on any repo yet -- install it on"))
+        print(dim("        at least one, then re-run this check."))
+    else:
+        token = mint_installation_token(app_jwt, installations[0]["id"])
+        account = (installations[0].get("account") or {}).get("login")
+        _pass(f"(minted a real token for the installation on {account})")
+
+        repos = list_installation_repos(token)
+        if repos:
+            r_owner, r_name = repos[0]["owner"]["login"], repos[0]["name"]
+            _step("try something outside its granted permissions", "[extra]")
+            check_permission_boundary(token, r_owner, r_name)
+            _pass("(GitHub genuinely blocked it)")
+
+    if args.check_repo:
+        specs = [s.strip() for s in args.check_repo.split(",") if s.strip()]
+        if not specs:
+            fail(f"--check-repo got nothing usable out of '{args.check_repo}'")
+        for spec in specs:
+            other_owner, sep, other_repo = spec.partition("/")
+            if not sep or not other_owner or not other_repo:
+                fail(f"--check-repo entries must be OWNER/REPO, got '{spec}'")
+            _step(f"checking real access to {spec}", "[extra]")
+            has_access = check_repo_access(app_jwt, other_owner, other_repo)
+            print(ok("✓") if has_access else bad("✘"))
+
+    print()
+    if installations:
+        print(f"  {ok('✓')} {ident(name)} {dim('is fully wired up and working.')}")
+    else:
+        tail = dim("'s key and identity check out;")
+        print(f"  {warn('!')} {ident(name)}{tail}")
+        print(dim("    install it on a repo, then re-run this to finish verifying."))
+    print()
+
+
+if __name__ == "__main__":
+    main()
