@@ -119,7 +119,22 @@ tier_description() {
 # ---------------------------------------------------------------------------
 # Current state
 # ---------------------------------------------------------------------------
-current_url="$(git -C "$repo_dir" remote get-url origin)"
+# A repo with NO origin cannot be flipped: this tool works out owner/repo from
+# the existing remote URL, it does not invent one. Say so plainly rather than
+# letting git's bare "No such remote" surface -- a brand new repo hits this, and
+# the fix (add any form of origin first, this rewrites it anyway) is not obvious
+# from git's own message. Raised 2026-09-13 by another session setting up a
+# fresh repo from Recipe 1.
+if ! current_url="$(git -C "$repo_dir" remote get-url origin 2>/dev/null)"; then
+	die "this repo has no 'origin' remote, and nothing here invents one.
+
+  The tier Apps are keyed to OWNER/REPO, which this tool reads off the existing
+  origin URL. Add one first -- any form works, since the flip rewrites it:
+
+      git -C $repo_dir remote add origin git@github.com:OWNER/REPO.git
+
+  then re-run this command."
+fi
 current_tier="$(git -C "$repo_dir" config --local --get githubagent.tier 2>/dev/null || true)"
 
 already_flipped=false
