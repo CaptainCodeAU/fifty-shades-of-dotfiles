@@ -1,0 +1,545 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#   "requests",
+# ]
+# ///
+#
+# github-agent-public-post: the deliberately-not-silent one. Opens an issue, or
+# posts a comment on an existing issue/PR, on a PUBLIC repo you don't own --
+# using pat-cc-public-write-thirdparty, the only credential in this system that
+# can write somewhere outside your own account.
+#
+# THE WHOLE POINT IS THAT IT SHOWS ITS WORKING. Nothing posts until the exact
+# text, the exact target, and the exact identity it will post under have all
+# been printed. That holds even with --yes: the draft still prints, so a
+# session transcript always carries a record of what went out.
+#
+# Why this script exists at all, rather than just handing out the token:
+# github-agent-token has NO print mode for the public-write PAT, on purpose.
+# This script fetches that token into its own memory, hands it straight to
+# GitHub, and never prints it. So the only route to posting is the route that
+# shows you the draft first -- you cannot bypass a print command that was
+# never built. (Gavin, 2026-09-12.)
+#
+# Usage:
+#   github-agent-public-post issue   --repo owner/repo --title "..." --body-file draft.md
+#   github-agent-public-post comment --repo owner/repo --number 123   --body-file reply.md
+#   ... --body "short text instead of a file"
+#   ... --dry-run          show the draft and STOP. Fetches no token at all.
+#   ... --yes / -y         skip the typed confirmation (draft still prints)
+#   ... --allow-own-repo   permit a target you own (normally refused, see below)
+#
+# Own repos are refused by default because that is what the three tier GitHub
+# Apps are for -- they are scoped, short-lived and revocable per repo, where
+# this PAT is a permanent string. If this tool starts being used on your own
+# repos, the tiers have been bypassed. --allow-own-repo exists for the
+# genuine exception, and says so out loud when used.
+
+import argparse
+import os
+import platform
+import stat
+import subprocess
+import sys
+from pathlib import Path
+
+import requests
+
+PROFILE = "public-write"
+GITHUB_API = "https://api.github.com"
+GITHUB_MAX_BODY = 65536
+
+# Color is opt-out, not opt-in: real terminals get it, piped/redirected output
+# and NO_COLOR=1 (https://no-color.org) both silently fall back to plain text.
+USE_COLOR = sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
+
+
+def _style(code: str, text: str) -> str:
+    return f"\033[{code}m{text}\033[0m" if USE_COLOR else text
+
+
+def bold(text: str) -> str:
+    return _style("1", text)
+
+
+def dim(text: str) -> str:
+    return _style("2", text)
+
+
+def ok(text: str) -> str:
+    return _style("1;32", text)
+
+
+def bad(text: str) -> str:
+    return _style("1;31", text)
+
+
+def warn(text: str) -> str:
+    return _style("1;33", text)
+
+
+def heading(text: str) -> str:
+    return _style("1;36", text)
+
+
+def ident(text: str) -> str:
+    # A distinct colour reserved for the actual name/value being discussed --
+    # separate from status colours (green/red/yellow) and structural cyan.
+    return _style("1;34", text)
+
+
+def fail(message: str) -> None:
+    # Flush first: stdout is block-buffered when piped while stderr isn't, so
+    # without this the error jumps ahead of the draft it refers to.
+    sys.stdout.flush()
+    print(f"{bad('[FAIL]')} github-agent-public-post: {message}", file=sys.stderr)
+    sys.stderr.flush()
+    sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
+# Credential plumbing.
+#
+# Deliberately a copy of the same three steps github-agent-token and
+# github-agent-verify-app each carry their own copy of (Keychain -> Infisical
+# login -> fetch one secret). Three copies is the point at which this should
+# become a shared module; noted 2026-09-12, not done here, because doing it
+# mid-build would mean a new stow target and a new failure mode in the same
+# change as the security-load-bearing part.
+# ---------------------------------------------------------------------------
+
+
+def git_config(key: str) -> str:
+    result = subprocess.run(["git", "config", "--get", key], capture_output=True, text=True)
+    value = result.stdout.strip()
+    if result.returncode != 0 or not value:
+        fail(
+            f"missing git config 'githubagent.{PROFILE}.{key.rsplit('.', 1)[-1]}' -- "
+            "is the [githubagent \"public-write\"] block present in "
+            "~/.gitconfig-githubagent?"
+        )
+    return value
+
+
+def profile_config(key: str) -> str:
+    # Same lookup order as github-agent-token: the named profile block first,
+    # then the flat [githubagent] block, which holds only the three values
+    # every profile shares (instance URL, project, environment).
+    result = subprocess.run(
+        ["git", "config", "--get", f"githubagent.{PROFILE}.{key}"], capture_output=True, text=True
+    )
+    value = result.stdout.strip()
+    if result.returncode == 0 and value:
+        return value
+    return git_config(f"githubagent.{key}")
+
+
+def get_bootstrap_secret(keychain_service: str) -> str:
+    if platform.system() == "Darwin":
+        result = subprocess.run(
+            ["security", "find-generic-password", "-s", keychain_service, "-w"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            fail(f"could not read '{keychain_service}' from macOS Keychain: {result.stderr.strip()}")
+        return result.stdout.strip()
+
+    path = Path.home() / ".config" / "github-agent" / f"{keychain_service}.secret"
+    if not path.exists():
+        fail(f"bootstrap secret file not found: {path}")
+    if path.stat().st_mode & (stat.S_IRWXG | stat.S_IRWXO):
+        fail(f"{path} is readable by group/other -- chmod 600 it before using it")
+    return path.read_text().strip()
+
+
+def fetch_write_pat() -> str:
+    """Fetch the public-write PAT into memory. Never printed, never returned to a shell."""
+    base_url = profile_config("infisicalBaseUrl")
+    client_id = profile_config("infisicalClientId")
+    project_slug = profile_config("infisicalProjectSlug")
+    environment = profile_config("infisicalEnvironment")
+    secret_path = profile_config("infisicalSecretPath")
+    secret_name = profile_config("infisicalSecretName")
+    keychain_service = profile_config("keychainService")
+
+    client_secret = get_bootstrap_secret(keychain_service)
+
+    login = requests.post(
+        f"{base_url}/api/v1/auth/universal-auth/login",
+        json={"clientId": client_id, "clientSecret": client_secret},
+        timeout=15,
+    )
+    if login.status_code != 200:
+        fail(f"Infisical login failed ({login.status_code}): {login.text}")
+
+    resp = requests.get(
+        f"{base_url}/api/v3/secrets/raw/{secret_name}",
+        params={
+            "workspaceSlug": project_slug,
+            "environment": environment,
+            "secretPath": secret_path,
+        },
+        headers={"Authorization": f"Bearer {login.json()['accessToken']}"},
+        timeout=15,
+    )
+    if resp.status_code != 200:
+        fail(f"could not fetch the public-write PAT from Infisical ({resp.status_code}): {resp.text}")
+    return resp.json()["secret"]["secretValue"]
+
+
+# ---------------------------------------------------------------------------
+# GitHub
+# ---------------------------------------------------------------------------
+
+
+def gh(token: str, method: str, path: str, **kwargs) -> requests.Response:
+    return requests.request(
+        method,
+        f"{GITHUB_API}{path}",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+        timeout=20,
+        **kwargs,
+    )
+
+
+def explain_http(resp: requests.Response, what: str) -> None:
+    hints = {
+        403: (
+            "forbidden. The PAT is classic with the `public_repo` scope only, so this "
+            "is expected on a private repo, an org with token restrictions, or a repo "
+            "you're blocked from."
+        ),
+        404: (
+            "not found. Either it genuinely doesn't exist, or it's private -- a "
+            "`public_repo`-scoped token cannot see private repos at all, so both look "
+            "identical from here."
+        ),
+        410: "gone. Issues are disabled on this repo.",
+        422: "GitHub rejected the content itself (validation).",
+    }
+    detail = hints.get(resp.status_code, "")
+    fail(f"{what} -- HTTP {resp.status_code}. {detail}\n\n  GitHub said: {resp.text[:600]}")
+
+
+# ---------------------------------------------------------------------------
+# Draft rendering
+# ---------------------------------------------------------------------------
+
+
+def render_body(body: str) -> None:
+    # A left gutter on every line, including blank ones, so the exact extent of
+    # the text is visible -- trailing blank lines and stray indentation are the
+    # things you most want to catch before something goes out under your name.
+    print(dim("  ┌" + "─" * 72))
+    for line in body.split("\n"):
+        print(dim("  │ ") + line)
+    print(dim("  └" + "─" * 72))
+
+
+def print_draft(
+    action: str,
+    target_desc: str,
+    target_url: str,
+    posting_as: str,
+    title: str | None,
+    body: str,
+    extra_notes: list[str],
+) -> None:
+    print()
+    print(heading("════ DRAFT — nothing has been posted yet ════"))
+    print()
+    print(f"  {bold('Action'):<22} {ident(action)}")
+    print(f"  {bold('Target'):<22} {ident(target_desc)}")
+    print(f"  {bold('Lands at'):<22} {target_url}")
+    print(f"  {bold('Posts publicly as'):<22} {ident(posting_as)}")
+    print(f"  {bold('Credential'):<22} {ident('pat-cc-public-write-thirdparty')} {dim('(classic, public_repo scope)')}")
+    for note in extra_notes:
+        print(f"  {warn('note')}                   {note}")
+    print()
+    if title is not None:
+        print(f"  {bold('Title')}")
+        print(dim("  ┌" + "─" * 72))
+        print(dim("  │ ") + title)
+        print(dim("  └" + "─" * 72))
+        print()
+    print(f"  {bold('Body')} {dim(f'({len(body)} chars, {body.count(chr(10)) + 1} lines)')}")
+    render_body(body)
+    print()
+
+
+def confirm(auto_yes: bool) -> None:
+    if auto_yes:
+        print(warn("  --yes given: posting without an interactive prompt."))
+        print(dim("  The draft above is the record of what went out."))
+        print()
+        return
+    if not sys.stdin.isatty():
+        fail(
+            "no terminal attached to ask for confirmation, and --yes wasn't given.\n\n"
+            "  Nothing was posted. Either run this in a real terminal, or pass --yes\n"
+            "  (which still prints the draft above, so the record survives either way)."
+        )
+    answer = input(f"  Type {bold('post')} to publish this, anything else to abort: ")
+    if answer.strip() != "post":
+        print(ok("  Aborted. Nothing was posted."))
+        sys.exit(1)
+    print()
+
+
+# ---------------------------------------------------------------------------
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog="github-agent-public-post",
+        description=(
+            "Open an issue or post a comment on a PUBLIC repo you don't own, "
+            "showing the full draft first. Never prints the token it uses."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Examples:\n"
+            "  github-agent-public-post issue   --repo golang/go --title 'typo in docs' \\\n"
+            "                                   --body-file draft.md --dry-run\n"
+            "  github-agent-public-post comment --repo golang/go --number 12345 \\\n"
+            "                                   --body 'Confirmed on macOS 15.'\n"
+        ),
+    )
+    parser.add_argument(
+        "action",
+        choices=("issue", "comment", "check"),
+        help="issue = open one; comment = reply on one; check = prove the token's scope and stop",
+    )
+    parser.add_argument("--repo", metavar="OWNER/REPO", help="target repository (not used by 'check')")
+    parser.add_argument("--title", help="issue title (required for 'issue', ignored for 'comment')")
+    parser.add_argument("--number", type=int, help="issue or PR number (required for 'comment')")
+    body = parser.add_mutually_exclusive_group()
+    body.add_argument("--body", help="the text, inline")
+    body.add_argument("--body-file", help="path to a file holding the text")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="show the draft and stop. No token is fetched and no network call to GitHub is made.",
+    )
+    parser.add_argument(
+        "-y", "--yes", action="store_true", help="skip the typed confirmation (draft still prints)"
+    )
+    parser.add_argument(
+        "--allow-own-repo",
+        action="store_true",
+        help="permit a target owned by this account (normally refused; use the tier Apps instead)",
+    )
+    args = parser.parse_args()
+
+    if args.action == "check":
+        return args
+    if not args.repo:
+        parser.error(f"--repo is required for '{args.action}'")
+    if args.body is None and args.body_file is None:
+        parser.error("one of --body or --body-file is required")
+    if args.action == "issue" and not args.title:
+        parser.error("--title is required for 'issue'")
+    if args.action == "comment" and args.number is None:
+        parser.error("--number is required for 'comment'")
+    if args.repo.count("/") != 1:
+        parser.error(f"--repo must be OWNER/REPO, got '{args.repo}'")
+    return args
+
+
+def read_body(args: argparse.Namespace) -> str:
+    if args.body is not None:
+        return args.body
+    path = Path(args.body_file).expanduser()
+    if not path.exists():
+        fail(f"--body-file not found: {path}")
+    text = path.read_text()
+    if not text.strip():
+        fail(f"--body-file is empty: {path}")
+    return text
+
+
+def run_check() -> None:
+    """Prove what the public-write PAT can and cannot do, without printing it.
+
+    Same spirit as github-agent-verify-app: a positive case AND a negative
+    control, in the real execution context. The token is fetched into memory
+    and every fact below is read back off GitHub's own responses.
+    """
+    print(heading("════ Checking pat-cc-public-write-thirdparty ════"))
+    print()
+    token = fetch_write_pat()
+    print(f"{ok('[1/4]')} Fetched from Infisical via Keychain. {dim('(never printed)')}")
+
+    me = gh(token, "GET", "/user")
+    if me.status_code != 200:
+        explain_http(me, "could not identify who this token belongs to")
+    login = me.json()["login"]
+    print(f"{ok('[2/4]')} GitHub accepts it. Posts publicly as {ident(login)}.")
+
+    scopes = (me.headers.get("x-oauth-scopes") or "").strip()
+    granted = [s.strip() for s in scopes.split(",") if s.strip()]
+    expiry = me.headers.get("github-authentication-token-expiration", "(none set)")
+    if granted == ["public_repo"]:
+        print(f"{ok('[3/4]')} Scope is exactly {ident('public_repo')} — the narrow one. Expires: {ident(expiry)}")
+    elif "repo" in granted:
+        print(f"{bad('[3/4]')} Scope includes {ident('repo')} — the BROAD scope, covering PRIVATE repos.")
+        print(f"       Granted: {granted}")
+        print(warn("       This token is over-scoped. Recreate it with public_repo only."))
+    else:
+        print(f"{warn('[3/4]')} Unexpected scopes: {granted or '(none reported)'}. Expires: {expiry}")
+
+    private = gh(token, "GET", "/user/repos", params={"visibility": "private", "per_page": 100})
+    if private.status_code == 200 and isinstance(private.json(), list):
+        count = len([r for r in private.json() if r.get("private")])
+        if count == 0:
+            print(f"{ok('[4/4]')} Negative control: it can see {ident('0')} private repos. Boundary holds.")
+        else:
+            print(f"{bad('[4/4]')} Negative control FAILED: it can see {ident(str(count))} private repos.")
+    else:
+        print(f"{ok('[4/4]')} Negative control: private-repo listing refused (HTTP {private.status_code}).")
+
+    print()
+    print(dim("  Nothing was posted. No token was printed at any point."))
+
+
+def main() -> None:
+    args = parse_args()
+
+    if args.action == "check":
+        run_check()
+        return
+
+    owner, repo = args.repo.split("/")
+    body = read_body(args)
+
+    if len(body) > GITHUB_MAX_BODY:
+        fail(f"body is {len(body)} chars; GitHub's limit is {GITHUB_MAX_BODY}.")
+
+    if args.action == "issue":
+        target_desc = f"{owner}/{repo} — a NEW issue"
+        target_url = f"https://github.com/{owner}/{repo}/issues"
+    else:
+        target_desc = f"{owner}/{repo} #{args.number} — a comment"
+        target_url = f"https://github.com/{owner}/{repo}/issues/{args.number}"
+
+    # --dry-run stops before any credential is touched. That is what makes it
+    # safe for an agent to run freely: there is nothing to leak, because
+    # nothing was fetched.
+    if args.dry_run:
+        print_draft(
+            action=("open an issue" if args.action == "issue" else "post a comment"),
+            target_desc=target_desc,
+            target_url=target_url,
+            posting_as="(not checked — dry run fetches no credential)",
+            title=args.title if args.action == "issue" else None,
+            body=body,
+            extra_notes=[],
+        )
+        print(ok("  DRY RUN — nothing was fetched, nothing was posted."))
+        print(dim("  Re-run the identical command without --dry-run to post it."))
+        return
+
+    token = fetch_write_pat()
+
+    # --- preflight reads, so the draft can state facts rather than assumptions ---
+    me = gh(token, "GET", "/user")
+    if me.status_code != 200:
+        explain_http(me, "could not identify who this token belongs to")
+    login = me.json()["login"]
+
+    repo_resp = gh(token, "GET", f"/repos/{owner}/{repo}")
+    if repo_resp.status_code != 200:
+        explain_http(repo_resp, f"could not read {owner}/{repo}")
+    repo_data = repo_resp.json()
+    canonical = repo_data["full_name"]
+    repo_owner_login = repo_data["owner"]["login"]
+
+    notes: list[str] = []
+
+    if repo_data.get("private"):
+        fail(
+            f"{canonical} is private. This tool is for PUBLIC third-party repos only.\n\n"
+            "  A public_repo-scoped PAT cannot write to a private repo anyway."
+        )
+
+    if repo_owner_login.lower() == login.lower():
+        if not args.allow_own_repo:
+            fail(
+                f"{canonical} is owned by {login} — that's your own account.\n\n"
+                "  Your own repos belong on the tier GitHub Apps (scoped, 1-hour, revocable\n"
+                "  per repo), not on this permanent PAT. Use github-agent-flip on the repo\n"
+                "  and then `gh`, or pass --allow-own-repo if this really is the exception."
+            )
+        notes.append(warn(f"--allow-own-repo used: {canonical} is YOUR repo, not a third party's"))
+
+    if repo_data.get("archived"):
+        notes.append(warn("this repo is ARCHIVED — GitHub will refuse the write"))
+    if args.action == "issue" and not repo_data.get("has_issues", True):
+        notes.append(warn("issues are DISABLED on this repo — GitHub will refuse the write"))
+
+    if args.action == "comment":
+        issue = gh(token, "GET", f"/repos/{owner}/{repo}/issues/{args.number}")
+        if issue.status_code != 200:
+            explain_http(issue, f"could not read {canonical} #{args.number}")
+        issue_data = issue.json()
+        kind = "pull request" if "pull_request" in issue_data else "issue"
+        target_desc = (
+            f"{canonical} #{args.number} — comment on a {issue_data['state']} {kind}: "
+            f"\"{issue_data['title']}\""
+        )
+        target_url = issue_data["html_url"]
+        if issue_data["state"] == "closed":
+            notes.append(warn("that issue is CLOSED — a comment on it may go unread"))
+        if issue_data.get("locked"):
+            notes.append(warn("that issue is LOCKED — GitHub will refuse the comment"))
+    else:
+        target_desc = f"{canonical} — a NEW issue"
+        target_url = f"https://github.com/{canonical}/issues"
+
+    print_draft(
+        action=("open an issue" if args.action == "issue" else "post a comment"),
+        target_desc=target_desc,
+        target_url=target_url,
+        posting_as=login,
+        title=args.title if args.action == "issue" else None,
+        body=body,
+        extra_notes=notes,
+    )
+
+    confirm(args.yes)
+
+    if args.action == "issue":
+        resp = gh(
+            token,
+            "POST",
+            f"/repos/{owner}/{repo}/issues",
+            json={"title": args.title, "body": body},
+        )
+        expected = 201
+    else:
+        resp = gh(
+            token,
+            "POST",
+            f"/repos/{owner}/{repo}/issues/{args.number}/comments",
+            json={"body": body},
+        )
+        expected = 201
+
+    if resp.status_code != expected:
+        explain_http(resp, "the post itself failed")
+
+    posted = resp.json()
+    print(f"{ok('[OK]')} Posted as {ident(login)}.")
+    print(f"  {bold('Live at')} {posted['html_url']}")
+    print(dim("  Nothing was cached and no token was printed at any point."))
+
+
+if __name__ == "__main__":
+    main()

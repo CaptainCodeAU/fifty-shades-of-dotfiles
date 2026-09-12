@@ -17,6 +17,15 @@
 #   - the `gh` wrapper in .zshrc, via `github-agent-token token`, which
 #     prints just the raw token so it can be exported as GH_TOKEN for one
 #     command.
+#   - a human or agent wanting the stored read-only public-browsing PAT, via
+#     `github-agent-token pat public-read`. That mode mints nothing -- it just
+#     fetches a stored token value out of Infisical and prints it.
+#
+# There is deliberately NO print mode for the public-WRITE PAT. That token can
+# open issues and post comments on any public repo as the principal, so nothing
+# here will put it on a screen; the only way to use it is github-agent-public-post,
+# which fetches it internally, shows the full draft first, and never prints the
+# token itself. You cannot bypass a print command that was never built.
 #
 # This is registered as git's credential helper ONCE, GLOBALLY (the normal,
 # documented way -- see gitcredentials(7)), not per repo. A repo "opts in"
@@ -30,12 +39,29 @@
 # which would also fail during a fresh 'git clone' before a local repo
 # even exists yet.
 #
-# Shared settings (App ID, Infisical path, etc.) live in GLOBAL git config
-# under a [githubagent] section (~/.gitconfig-githubagent, included from
-# ~/.gitconfig.private). A repo later promoted to its own dedicated GitHub
-# App overrides whichever [githubagent] keys it needs in its OWN local
-# config -- git's normal "local beats global" resolution does the rest;
-# this script never needs to know a repo's promotion status, it just reads
+# Which of the shared tier Apps a repo belongs to is the repo's OWN business:
+# github-agent-flip writes a single key, `githubagent.tier`, into that repo's
+# local .git/config. Everything else -- App ID, Infisical path, client ID,
+# Keychain service -- lives once per tier in GLOBAL git config, under a named
+# subsection: [githubagent "high-value"], [githubagent "medium-value"], and so
+# on (~/.gitconfig-githubagent, included from ~/.gitconfig.private). So
+# rotating a tier's credentials is one edit in one file, not an edit per repo.
+#
+# Nothing here guesses a tier. A flipped repo with no `githubagent.tier` set
+# is refused with instructions rather than silently falling back to some
+# default App (Gavin, 2026-09-12) -- the one case where that bites is a fresh
+# `git clone`, which has no repo on disk yet to read the key from, and the
+# explicit form covers it:
+#
+#     git -c githubagent.tier=high-value clone https://x-access-token@github.com/o/r.git
+#
+# (`git -c` reaches this script because git exports those settings to child
+# processes via GIT_CONFIG_PARAMETERS -- measured, not assumed, 2026-09-12.)
+#
+# A repo later promoted off the shared pool onto its OWN dedicated GitHub App
+# skips tiers entirely: it sets the flat [githubagent] keys (appId, client ID,
+# secret path, Keychain service) in its own local config and no tier at all.
+# This script never needs to know a repo's promotion status -- it reads
 # whatever config resolves for the repo it's standing in.
 #
 # The GitHub App's private key never touches disk here and is never printed.
@@ -61,15 +87,95 @@ def fail(message: str) -> None:
     sys.exit(1)
 
 
-def git_config(key: str) -> str:
+def git_config_optional(key: str) -> str | None:
+    # `git config --get` searches local -> global -> system, so a repo's own
+    # .git/config beats ~/.gitconfig-githubagent, and a `git -c key=value` on
+    # the parent git command beats both (git exports those to child processes
+    # via GIT_CONFIG_PARAMETERS, which this subprocess inherits).
     result = subprocess.run(["git", "config", "--get", key], capture_output=True, text=True)
     value = result.stdout.strip()
-    if result.returncode != 0 or not value:
-        fail(
-            f"missing git config '{key}' -- set it globally in ~/.gitconfig-githubagent, "
-            "or locally in this repo to override the shared default"
-        )
-    return value
+    return value if result.returncode == 0 and value else None
+
+
+def configured_tiers() -> list[str]:
+    # Read the tier names out of config rather than hardcoding them here, so
+    # adding a fourth tier later is a config edit and nothing else. git
+    # lowercases section and key names in --get-regexp output; the quoted
+    # subsection name in the middle keeps its original case.
+    result = subprocess.run(
+        ["git", "config", "--get-regexp", r"^githubagent\..+\.appid$"],
+        capture_output=True,
+        text=True,
+    )
+    tiers = []
+    for line in result.stdout.splitlines():
+        fields = line.split()
+        if not fields:
+            continue
+        parts = fields[0].split(".")
+        if len(parts) == 3:
+            tiers.append(parts[1])
+    return sorted(set(tiers))
+
+
+def resolve_profile() -> str | None:
+    """Which credential profile does the repo we're standing in use?
+
+    Returns a tier name (e.g. "high-value"), or None meaning "this repo carries
+    a full flat [githubagent] block of its own" -- the shape a repo takes once
+    it's promoted off the shared pool onto its own dedicated App. Refuses
+    rather than guessing when it's neither.
+    """
+    tier = git_config_optional("githubagent.tier")
+    if tier:
+        if not git_config_optional(f"githubagent.{tier}.appId"):
+            known = ", ".join(configured_tiers()) or "(none configured)"
+            fail(
+                f"githubagent.tier is set to '{tier}', but there is no "
+                f'[githubagent "{tier}"] block in your git config.\n\n'
+                f"  Tiers that ARE configured: {known}"
+            )
+        return tier
+
+    if git_config_optional("githubagent.appId"):
+        return None
+
+    known = ", ".join(configured_tiers()) or "high-value, medium-value, low-value"
+    fail(
+        "this repo has no GitHub App tier set, and nothing here guesses one.\n\n"
+        "  Set it one of these ways:\n"
+        "    github-agent-flip <path-to-repo>       -- asks you, then sets it\n"
+        "    git config githubagent.tier <tier>     -- from inside the repo\n"
+        "    git -c githubagent.tier=<tier> clone https://...\n"
+        "                                           -- for a fresh clone, where no\n"
+        "                                              repo exists yet to read it from\n\n"
+        f"  Tiers: {known}"
+    )
+    raise SystemExit(1)  # unreachable: fail() exits. Present so the type is honest.
+
+
+def profile_config(profile: str | None, key: str) -> str:
+    """Read one key for a profile, falling back to the shared flat defaults.
+
+    Lookup order: [githubagent "<profile>"] <key>, then a flat [githubagent]
+    <key>. The flat block in ~/.gitconfig-githubagent deliberately holds ONLY
+    the three values every profile shares (instance URL, project, environment)
+    and never a secret path, client ID or App ID -- so a mistyped profile name
+    can never quietly fall through onto some other credential's settings.
+    """
+    if profile is not None:
+        value = git_config_optional(f"githubagent.{profile}.{key}")
+        if value:
+            return value
+    value = git_config_optional(f"githubagent.{key}")
+    if value:
+        return value
+    where = f'[githubagent "{profile}"]' if profile else "[githubagent]"
+    fail(
+        f"missing git config '{key}' for {where} -- set it in "
+        "~/.gitconfig-githubagent, or locally in this repo to override it"
+    )
+    raise SystemExit(1)  # unreachable: fail() exits. Present so the type is honest.
 
 
 def read_git_credential_stdin() -> dict[str, str]:
@@ -157,7 +263,7 @@ def infisical_login(base_url: str, client_id: str, client_secret: str) -> str:
     return resp.json()["accessToken"]
 
 
-def fetch_private_key(
+def fetch_secret(
     base_url: str,
     infisical_token: str,
     project_slug: str,
@@ -216,27 +322,61 @@ def get_installation_token(app_jwt: str, owner: str, repo: str) -> str:
 
 
 def mint_token(owner: str, repo: str) -> str:
-    base_url = git_config("githubagent.infisicalBaseUrl")
-    client_id = git_config("githubagent.infisicalClientId")
-    project_slug = git_config("githubagent.infisicalProjectSlug")
-    environment = git_config("githubagent.infisicalEnvironment")
-    secret_path = git_config("githubagent.infisicalSecretPath")
-    secret_name = git_config("githubagent.infisicalSecretName")
-    app_id = git_config("githubagent.appId")
-    keychain_service = git_config("githubagent.keychainService")
+    profile = resolve_profile()
+    base_url = profile_config(profile, "infisicalBaseUrl")
+    client_id = profile_config(profile, "infisicalClientId")
+    project_slug = profile_config(profile, "infisicalProjectSlug")
+    environment = profile_config(profile, "infisicalEnvironment")
+    secret_path = profile_config(profile, "infisicalSecretPath")
+    secret_name = profile_config(profile, "infisicalSecretName")
+    app_id = profile_config(profile, "appId")
+    keychain_service = profile_config(profile, "keychainService")
 
     client_secret = get_bootstrap_secret(keychain_service)
     infisical_token = infisical_login(base_url, client_id, client_secret)
-    private_key_pem = fetch_private_key(
+    private_key_pem = fetch_secret(
         base_url, infisical_token, project_slug, environment, secret_path, secret_name
     )
     app_jwt = build_app_jwt(app_id, private_key_pem)
     return get_installation_token(app_jwt, owner, repo)
 
 
+# Only the read-only browsing PAT is printable. See the module docstring for
+# why public-write deliberately has no print mode at all.
+PRINTABLE_PAT_PROFILES = ("public-read",)
+
+NO_PRINT_PAT_PROFILES = ("public-write",)
+
+
+def fetch_pat(profile: str) -> str:
+    """Fetch a stored PAT value out of Infisical. Mints nothing, signs nothing.
+
+    Unlike the GitHub App path there is no JWT and no exchange with GitHub --
+    a PAT is one fixed string that lives in Infisical until its expiry date,
+    so this is a plain read.
+    """
+    base_url = profile_config(profile, "infisicalBaseUrl")
+    client_id = profile_config(profile, "infisicalClientId")
+    project_slug = profile_config(profile, "infisicalProjectSlug")
+    environment = profile_config(profile, "infisicalEnvironment")
+    secret_path = profile_config(profile, "infisicalSecretPath")
+    secret_name = profile_config(profile, "infisicalSecretName")
+    keychain_service = profile_config(profile, "keychainService")
+
+    client_secret = get_bootstrap_secret(keychain_service)
+    infisical_token = infisical_login(base_url, client_id, client_secret)
+    return fetch_secret(
+        base_url, infisical_token, project_slug, environment, secret_path, secret_name
+    )
+
+
 def main() -> None:
     if len(sys.argv) < 2:
-        fail("usage: github-agent-token {get|token}  (git itself also calls this with store/erase)")
+        fail(
+            "usage: github-agent-token {get|token|pat <profile>}\n"
+            "  (git itself also calls this with store/erase)\n\n"
+            f"  printable pat profiles: {', '.join(PRINTABLE_PAT_PROFILES)}"
+        )
 
     mode = sys.argv[1]
 
@@ -257,6 +397,33 @@ def main() -> None:
     elif mode == "token":
         owner, repo = owner_and_repo_from_local_repo()
         print(mint_token(owner, repo))
+    elif mode == "pat":
+        if len(sys.argv) < 3:
+            fail(
+                "usage: github-agent-token pat <profile>\n\n"
+                f"  profiles: {', '.join(PRINTABLE_PAT_PROFILES)}"
+            )
+        profile = sys.argv[2]
+        if profile in NO_PRINT_PAT_PROFILES:
+            fail(
+                f"there is deliberately no print mode for the '{profile}' PAT.\n\n"
+                "  That token can open issues and post comments on any public repo\n"
+                "  as you, so nothing on this machine prints it to a screen. The only\n"
+                "  way to use it is github-agent-public-post, which fetches it\n"
+                "  internally, shows you the full draft, waits, and never prints the\n"
+                "  token itself.\n\n"
+                "  If you genuinely need the raw value (rotating it, inspecting it),\n"
+                "  read it from Infisical's own web UI."
+            )
+        if profile not in PRINTABLE_PAT_PROFILES:
+            fail(
+                f"unknown pat profile '{profile}' -- "
+                f"printable profiles: {', '.join(PRINTABLE_PAT_PROFILES)}"
+            )
+        # Deliberately outside any repo's config: a PAT is not repo-scoped, so
+        # this reads the global [githubagent "<profile>"] block wherever you
+        # happen to be standing, including outside a git repo entirely.
+        print(fetch_pat(profile))
     elif mode in ("store", "erase"):
         # git still writes attributes to stdin for these; drain it so git
         # doesn't see a broken pipe. Nothing here ever persists a
