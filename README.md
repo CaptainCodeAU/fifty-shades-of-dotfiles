@@ -947,8 +947,8 @@ Machine-specific shell settings, API keys, and personal aliases go in `~/.zshrc.
 # Private and machine-specific settings for this computer.
 
 # Secret API Keys
-export OPENAI_API_KEY="sk-xxxxxxxxxxxxxxxxxxxx"
-export GITHUB_TOKEN="ghp_xxxxxxxxxxxxxxxxxxxx"
+export OPENAI_API_KEY="<your-openai-key>"
+export GITHUB_TOKEN="<your-github-token>"
 
 # PATH for a tool installed in a non-standard location on this machine
 export PATH="/opt/custom-tool/bin:$PATH"

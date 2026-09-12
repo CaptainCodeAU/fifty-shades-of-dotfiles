@@ -220,7 +220,17 @@ def main() -> None:
     show("WILL FLIP", G, todo, lambda r: f"{r[2]:<13} {r[1]}  {D}{r[0]}{X}")
     show("AMBIGUOUS -- in several tiers, SKIPPED", R, ambiguous,
          lambda r: f"{','.join(r[2]):<28} {r[1]}")
-    show("NO TIER ON GITHUB -- SKIPPED", Y, untiered, lambda r: f"{r[1]}  {D}{r[0]}{X}")
+    # WORDING MATTERS HERE. With --only-tier, a repo missing from the ONE tier we
+    # queried is not untiered -- it is simply in a different tier. Calling that
+    # "NO TIER ON GITHUB" would send you off to install Apps that are already
+    # installed. Only the full run can conclude a repo has no tier at all.
+    untiered_label = (
+        f"NOT IN '{args.only_tier}' -- SKIPPED (they may well be in another tier; "
+        "re-run without --only-tier to know)"
+        if args.only_tier else
+        "NO TIER ON GITHUB -- SKIPPED (install a tier App on these first)"
+    )
+    show(untiered_label, Y, untiered, lambda r: f"{r[1]}  {D}{r[0]}{X}")
     show("WORKTREES -- SKIPPED (they share their main repo's config)", D,
          worktrees, lambda r: f"{r}")
     show("OTHER ACCOUNTS -- SKIPPED", D, foreign, lambda r: f"{r[1]}")
