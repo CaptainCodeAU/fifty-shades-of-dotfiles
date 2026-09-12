@@ -22,7 +22,17 @@
 # core.hooksPath switch off the WHOLE chain -- so a repo that wants no session
 # trailers would otherwise have to disable the leak scanner to get them, which is
 # backwards. Per-step knobs (all machine-local .git/config, never committed):
-#   git config leakscan.disable true       # step 2b -- no secret/identity scan
+#   git config leakscan.skip "<rule-ids>"  # step 2b -- PREFER THIS. Silences only
+#                                          #   the named rules; the ids are printed
+#                                          #   in [brackets] whenever a scan blocks,
+#                                          #   ready to paste. Everything else stays
+#                                          #   armed.
+#   git config leakscan.disable true       # step 2b -- LAST RESORT. No secret or
+#                                          #   identity scan AT ALL, private-key and
+#                                          #   every token rule included. Listing it
+#                                          #   here as the only knob is how a session
+#                                          #   reached for it on 2026-09-12 when one
+#                                          #   noisy rule was the actual problem.
 #   git config trailers.disable true       # step 3  -- no C-* session trailers
 # ============================================================================
 set -uo pipefail
