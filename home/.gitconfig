@@ -36,16 +36,29 @@
 # The [include] below loads it automatically. The file is protected by
 # .gitignore_global so it will never be accidentally committed.
 
-[include]
-	path = ~/.gitconfig.private
-
 # Credential helpers: disabled on purpose. An empty helper value resets the
 # helper list, neutralising any inherited helper (e.g. osxkeychain from Xcode's
 # system gitconfig) so a stray HTTPS git auth can never silently cache a token
 # in the Keychain. Reinforces the SSH-only posture above (added 2026-06-20
 # after a leftover gho_ OAuth token was found cached by git-credential-osxkeychain).
+#
+# ORDER IS LOAD-BEARING: this reset MUST stay ABOVE the [include] below.
+# git reads config top to bottom, and a blank helper value clears every helper
+# collected so far -- INCLUDING url-scoped ones like [credential
+# "https://github.com"]. ~/.gitconfig.private pulls in ~/.gitconfig-githubagent,
+# which registers the GitHub App credential helper for https://github.com. While
+# this block sat BELOW the include, that helper was silently wiped and git fell
+# back to prompting for a password on every push (hit 2026-09-13 on a real push
+# to CaptainCodeAU/say2). Proved with a marker helper: it ran with the reset
+# above it, and never ran with the reset below it. Same helper, one variable.
+# `git config --get-all credential.https://github.com.helper` still PRINTS the
+# helper in the broken order, so that command cannot detect this -- only an
+# actual credential fill can.
 [credential]
 	helper =
+
+[include]
+	path = ~/.gitconfig.private
 
 [color]
 	ui = auto
