@@ -1,0 +1,262 @@
+#!/usr/bin/env -S uv run --quiet --script
+# /// script
+# requires-python = ">=3.11"
+# ///
+"""github-agent-flip-all: move EVERY local clone of one GitHub account onto the
+shared GitHub App system, in one deterministic pass.
+
+WHY THIS EXISTS. github-agent-flip handles one repo and asks which tier it
+belongs to. Answering that 59 times from memory is exactly the kind of task a
+human gets wrong. But the answer is already on GitHub: whichever tier App is
+installed on a repo IS that repo's tier. So this tool asks GitHub, never you.
+
+WHAT IT DOES
+  1. Walks a root directory (default ~/CODE) for every git repo, at any depth.
+  2. Reads each one's `origin` and works out owner/repo from the URL, NOT from
+     where the folder happens to sit -- a repo in the "wrong" folder is still
+     matched correctly, and moving folders later changes nothing.
+  3. Asks each tier App which repos it covers (one JSON call per tier, via
+     `github-agent-verify-app --list-repos`, so the Infisical/JWT chain is not
+     re-implemented here).
+  4. Classifies every repo, then flips only the unambiguous ones.
+
+WHAT IT REFUSES TO DO, AND WHY
+  - A repo covered by ZERO tier Apps is skipped. Nothing guesses a tier.
+  - A repo covered by MORE THAN ONE tier App is skipped as ambiguous. Picking
+    one would silently downgrade or upgrade that repo's blast radius.
+  - Anything under an --exclude path is skipped. The MLBOX gateway repos are
+    excluded by default: publish-mlbox/refresh-mlbox push to an SSH `github`
+    remote, and flipping them breaks both functions.
+  - Repos owned by a different account are skipped. Flip one account at a time.
+  - A repo with no origin, or a non-GitHub origin, is skipped.
+
+DRY RUN IS THE DEFAULT. Nothing is written without --apply.
+
+USAGE
+  github-agent-flip-all                          # dry run, ~/CODE, CaptainCodeAU
+  github-agent-flip-all --apply                  # actually flip
+  github-agent-flip-all --owner CodeWithGavin    # a different account
+  github-agent-flip-all --root ~/work --apply
+  github-agent-flip-all --only-tier low-value --apply     # one tier at a time
+  github-agent-flip-all --exclude ~/CODE/foo --exclude ~/CODE/bar
+"""
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+TIERS = ["high-value", "medium-value", "low-value"]
+DEFAULT_EXCLUDES = ["~/CODE/CaptainCodeAU/GATEWAYS"]
+
+G, R, Y, B, D, X = "\033[32m", "\033[31m", "\033[33m", "\033[34m", "\033[2m", "\033[0m"
+if not sys.stdout.isatty() or os.environ.get("NO_COLOR"):
+    G = R = Y = B = D = X = ""
+
+
+def die(msg: str) -> None:
+    print(f"{R}github-agent-flip-all:{X} {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def git(repo: Path, *args: str) -> str | None:
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(repo), *args],
+            capture_output=True, text=True, timeout=20,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return out.stdout.strip() if out.returncode == 0 else None
+
+
+def slug_from_url(url: str) -> str | None:
+    """owner/repo from any GitHub remote form we use, or None if not GitHub.
+
+    Handles: git@github.com:o/r.git, alias:o/r.git (SSH host aliases like
+    git-cc:), https://github.com/o/r, https://x-access-token@github.com/o/r.git
+    """
+    u = url.strip()
+    for prefix in ("https://", "http://", "ssh://"):
+        if u.startswith(prefix):
+            u = u[len(prefix):]
+            u = u.split("@", 1)[-1]          # drop any userinfo
+            if not u.startswith("github.com/"):
+                return None
+            u = u[len("github.com/"):]
+            break
+    else:
+        if ":" not in u:
+            return None
+        host, u = u.split(":", 1)
+        # An SSH host alias (git-cc, git-and, ...) resolves to github.com via
+        # ~/.ssh/config. We cannot see that mapping here, so we accept any alias
+        # and let the owner filter below decide what is actually ours.
+        if host.endswith("github.com") is False and "/" not in host:
+            pass
+    u = u.removesuffix(".git").strip("/")
+    return u if u.count("/") == 1 and all(u.split("/")) else None
+
+
+def discover(root: Path, excludes: list[Path]) -> list[tuple[Path, str | None, str | None, str | None]]:
+    """(path, origin_url, slug, current_tier) for every git repo under root."""
+    found = []
+    for dot in sorted(root.rglob(".git")):
+        repo = dot.parent
+        if any(str(repo).startswith(str(e)) for e in excludes):
+            continue
+        # SKIP GIT WORKTREES. A worktree is a second checkout of the SAME repo:
+        # its .git is a FILE (not a directory) pointing at the main repo, and it
+        # SHARES that repo's config. Flipping it would write githubagent.tier a
+        # second time into the same config and rewrite the same origin, so the
+        # main clone is the only thing that should ever be flipped. Found by a
+        # dry run 2026-09-13, which listed four (.worktree-web, .worktrees/…,
+        # .worktree/…) alongside their real repos.
+        if dot.is_file():
+            continue
+        url = git(repo, "remote", "get-url", "origin")
+        slug = slug_from_url(url) if url else None
+        tier = git(repo, "config", "--local", "--get", "githubagent.tier")
+        found.append((repo, url, slug, tier or None))
+    return found
+
+
+def tier_coverage(only_tier: str | None) -> dict[str, set[str]]:
+    """{tier: {owner/repo, ...}} straight from GitHub, via verify-app."""
+    cov: dict[str, set[str]] = {}
+    for tier in TIERS:
+        if only_tier and tier != only_tier:
+            continue
+        cid = git(Path.cwd(), "config", "--get", f"githubagent.{tier}.infisicalClientId")
+        app = git(Path.cwd(), "config", "--get", f"githubagent.{tier}.appId")
+        if not cid or not app:
+            die(f"no [githubagent \"{tier}\"] block in git config (need infisicalClientId + appId)")
+        print(f"{D}  asking GitHub which repos '{tier}' covers ...{X}", file=sys.stderr, end="", flush=True)
+        proc = subprocess.run(
+            ["github-agent-verify-app", "--tier", tier,
+             "--infisical-client-id", cid, "--app-id", app, "--list-repos"],
+            capture_output=True, text=True,
+        )
+        if proc.returncode != 0:
+            print(f" {R}failed{X}", file=sys.stderr)
+            die(f"could not read tier '{tier}':\n{proc.stderr.strip()}")
+        try:
+            repos = json.loads(proc.stdout)["repos"]
+        except (json.JSONDecodeError, KeyError) as e:
+            print(f" {R}failed{X}", file=sys.stderr)
+            die(f"tier '{tier}' returned unparseable output ({e})")
+        cov[tier] = set(repos)
+        print(f" {G}{len(repos)}{X}", file=sys.stderr)
+    return cov
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(
+        description="Flip every local clone of one GitHub account onto the App system.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="Dry run unless --apply. Nothing guesses a tier; GitHub is the source of truth.",
+    )
+    ap.add_argument("--root", default="~/CODE", help="where to look for repos (default ~/CODE)")
+    ap.add_argument("--owner", default="CaptainCodeAU", help="GitHub account to flip (default CaptainCodeAU)")
+    ap.add_argument("--apply", action="store_true", help="actually flip; without this it is a dry run")
+    ap.add_argument("--only-tier", choices=TIERS, help="restrict to one tier")
+    ap.add_argument("--exclude", action="append", default=[], metavar="PATH",
+                    help="skip anything under PATH (repeatable; MLBOX gateways excluded by default)")
+    ap.add_argument("--no-default-excludes", action="store_true",
+                    help="drop the built-in MLBOX gateway exclusion (you almost never want this)")
+    args = ap.parse_args()
+
+    root = Path(args.root).expanduser().resolve()
+    if not root.is_dir():
+        die(f"root {root} is not a directory")
+    ex_raw = list(args.exclude) + ([] if args.no_default_excludes else DEFAULT_EXCLUDES)
+    excludes = [Path(e).expanduser().resolve() for e in ex_raw]
+
+    print(f"\n{D}===  github-agent-flip-all  ==={X}")
+    print(f"{D}    root   {X}{root}")
+    print(f"{D}    owner  {X}{args.owner}")
+    print(f"{D}    mode   {X}" + (f"{R}APPLY (will write){X}" if args.apply else f"{G}dry run{X}"))
+    for e in excludes:
+        print(f"{D}    skip   {X}{e}")
+    print()
+
+    cov = tier_coverage(args.only_tier)
+    print()
+
+    repos = discover(root, excludes)
+    worktrees = sorted(
+        d.parent for d in root.rglob(".git")
+        if d.is_file() and not any(str(d.parent).startswith(str(e)) for e in excludes)
+    )
+    todo, done, ambiguous, untiered, foreign, noremote = [], [], [], [], [], []
+    for repo, url, slug, tier in repos:
+        if not url or not slug:
+            noremote.append((repo, url))
+            continue
+        if not slug.startswith(f"{args.owner}/"):
+            foreign.append((repo, slug))
+            continue
+        hits = [t for t, s in cov.items() if slug in s]
+        if tier and url.startswith("https://x-access-token@"):
+            done.append((repo, slug, tier))
+        elif len(hits) == 1:
+            todo.append((repo, slug, hits[0]))
+        elif len(hits) > 1:
+            ambiguous.append((repo, slug, hits))
+        else:
+            untiered.append((repo, slug))
+
+    def show(title: str, colour: str, rows: list, fmt) -> None:
+        if not rows:
+            return
+        print(f"{colour}{title} ({len(rows)}){X}")
+        for r in rows:
+            print(f"    {fmt(r)}")
+        print()
+
+    show("ALREADY ON THE SYSTEM", D, done, lambda r: f"{r[2]:<13} {r[1]}")
+    show("WILL FLIP", G, todo, lambda r: f"{r[2]:<13} {r[1]}  {D}{r[0]}{X}")
+    show("AMBIGUOUS -- in several tiers, SKIPPED", R, ambiguous,
+         lambda r: f"{','.join(r[2]):<28} {r[1]}")
+    show("NO TIER ON GITHUB -- SKIPPED", Y, untiered, lambda r: f"{r[1]}  {D}{r[0]}{X}")
+    show("WORKTREES -- SKIPPED (they share their main repo's config)", D,
+         worktrees, lambda r: f"{r}")
+    show("OTHER ACCOUNTS -- SKIPPED", D, foreign, lambda r: f"{r[1]}")
+    show("NO GITHUB ORIGIN -- SKIPPED", D, noremote, lambda r: f"{r[0]}  {D}{r[1] or '(no origin)'}{X}")
+
+    if not todo:
+        print(f"{G}Nothing to flip.{X}\n")
+        return
+    if not args.apply:
+        print(f"{Y}Dry run. Re-run with --apply to flip the {len(todo)} repo(s) above.{X}\n")
+        return
+
+    print(f"{D}--- flipping {len(todo)} repo(s) ---{X}\n")
+    failed = []
+    for repo, slug, tier in todo:
+        # -y implies --no-verify by design: verifying mints a token, which pulls
+        # the App's private key into this process. The post-flip health check is
+        # a separate, deliberate step (see the runbook).
+        proc = subprocess.run(
+            ["github-agent-flip", "-y", "--tier", tier, str(repo)],
+            capture_output=True, text=True,
+        )
+        if proc.returncode == 0:
+            print(f"  {G}OK{X}   {tier:<13} {slug}")
+        else:
+            failed.append((slug, proc.stderr.strip() or proc.stdout.strip()))
+            print(f"  {R}FAIL{X} {tier:<13} {slug}")
+
+    print()
+    if failed:
+        print(f"{R}{len(failed)} repo(s) failed:{X}")
+        for slug, err in failed:
+            print(f"  {slug}: {err.splitlines()[0] if err else '(no message)'}")
+        sys.exit(1)
+    print(f"{G}All {len(todo)} flipped.{X} Verify with a real push, not just this exit code.\n")
+
+
+if __name__ == "__main__":
+    main()

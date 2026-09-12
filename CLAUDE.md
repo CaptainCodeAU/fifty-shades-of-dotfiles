@@ -138,6 +138,30 @@ A sibling project could not reproduce the failure at all; their session runs in 
 
 The discipline does NOT change: ALWAYS get explicit user confirmation before deleting or overwriting — treat Trash recovery as a safety net, never a license to delete freely.
 
-## GitHub CLI (`gh`)
+## Git & GitHub auth
 
-Never run `gh auth login` / `gh auth setup-git` / `gh auth refresh` - they re-add HTTPS credential helpers and break SSH-only auth (a `gh()` shell wrapper and a PreToolUse hook block them). For GitHub API reads use `gh api` / `gh run` / `gh pr` / `gh issue` (or `curl` with `$GH_TOKEN`); a fine-grained read-only token is provided as `$GH_TOKEN` in Claude sessions, so any write call returns 403.
+Two systems run side by side. Which one a repo uses is decided by its `origin` URL, nothing else.
+
+| `origin` looks like | Auth used | Notes |
+|---|---|---|
+| `git-cc:owner/repo` (or any `git@`/alias form) | SSH key `~/.ssh/captaincodeau` | The legacy path. Still the majority. |
+| `https://x-access-token@github.com/owner/repo.git` | GitHub App, short-lived token | The new path. A repo joins ONLY via `github-agent-flip`. |
+| plain `https://github.com/...` | nothing | The helper sees it and declines by design (no `x-access-token` username). |
+
+Git invokes a credential helper only for an HTTPS remote, so an untouched SSH repo never touches the new system. Nothing migrates on its own.
+
+**Flipped repos.** `github-agent-flip [--tier <tier>] <path>` rewrites `origin` to the HTTPS form and writes ONE key, `githubagent.tier`, into that repo's `.git/config`. Nothing guesses a tier — a flipped repo with no tier is refused with instructions. Tier App must already be installed on that repo on GitHub, or the flip's live check fails. Full reference: `docs/GITHUB_AGENT_USAGE.md`.
+
+**Config order in `~/.gitconfig` is load-bearing.** A blank `[credential] helper =` clears every helper collected so far, url-scoped ones included, so it MUST stay ABOVE `[include] path = ~/.gitconfig.private`. With it below, the App helper is registered and then wiped, and every push falls back to a password prompt (hit 2026-09-13). `git config --get-all credential.https://github.com.helper` still PRINTS the helper when it is broken, so that command cannot detect this — only a real credential fill or `GIT_TRACE=1` can.
+
+**In a Claude session, commits and tags work; pushes from a flipped repo do NOT.** The Bash sandbox blocks the login Keychain, and the helper's first step reads a bootstrap secret from there. Measured: a known-present entry returns exit 44 sandboxed, exit 0 unsandboxed. It fails cleanly, it does not hang. Push yourself, or run that one command with the sandbox off.
+
+**`gh` does not use the credential helper.** It has its own auth and prefers `$GH_TOKEN` over everything. Consequences:
+
+- `_claude_launch` exports a read-only fine-grained PAT as `$GH_TOKEN` in every Claude session, so reads work and writes return 403.
+- Outside a Claude session, `gh` falls through to its own keyring, which currently holds a broad `gho_` OAuth token with `repo` scope. Any `gh` test run that way proves nothing about the App system.
+- To exercise the App path, pass it in explicitly: `GH_TOKEN="$(github-agent-token token)" gh <cmd>` (run from inside a flipped repo). An App token is an installation, not a user, so `/user/repos` correctly 403s; `/installation/repositories` is its endpoint.
+- Read-only public browsing: `GH_TOKEN="$(github-agent-token pat public-read)" gh api ...`.
+- Posting to a public repo you do not own goes through `github-agent-public-post`. There is deliberately no print mode for that token.
+
+**Never run `gh auth login` / `gh auth setup-git` / `gh auth refresh`** — they re-add HTTPS credential helpers and break SSH-only auth (a `gh()` shell wrapper and a PreToolUse hook block them).

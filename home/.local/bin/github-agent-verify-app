@@ -173,6 +173,15 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--list-repos",
+        action="store_true",
+        help="Machine-readable mode: print JSON of every repo this App can "
+             "reach, then exit. No human ceremony, no permission-boundary "
+             "probe. Built for github-agent-flip-all, which needs the full "
+             "tier map without re-implementing the Infisical/JWT chain a "
+             "fourth time.",
+    )
+    parser.add_argument(
         "--check-repo",
         default=None,
         dest="check_repo",
@@ -336,14 +345,29 @@ def mint_installation_token(app_jwt: str, installation_id: int) -> str:
 
 
 def list_installation_repos(installation_token: str) -> list[dict]:
-    resp = requests.get(
-        "https://api.github.com/installation/repositories",
-        headers={"Authorization": f"token {installation_token}", "Accept": "application/vnd.github+json"},
-        timeout=15,
-    )
-    if resp.status_code != 200:
-        fail(f"could not list this installation's repos ({resp.status_code}): {resp.text}")
-    return resp.json().get("repositories", [])
+    # PAGINATES. GitHub defaults to 30 per page, and an App installed on more
+    # than 30 repos silently returned a truncated list before 2026-09-13 --
+    # which reads as "this App doesn't cover that repo" rather than as an error.
+    # Anything deciding coverage from this list MUST see all of it.
+    out: list[dict] = []
+    page = 1
+    while True:
+        resp = requests.get(
+            "https://api.github.com/installation/repositories",
+            headers={"Authorization": f"token {installation_token}", "Accept": "application/vnd.github+json"},
+            params={"per_page": 100, "page": page},
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            fail(f"could not list this installation's repos ({resp.status_code}): {resp.text}")
+        body = resp.json()
+        batch = body.get("repositories", [])
+        out.extend(batch)
+        total = body.get("total_count")
+        if not batch or (total is not None and len(out) >= total) or len(batch) < 100:
+            break
+        page += 1
+    return out
 
 
 def check_permission_boundary(installation_token: str, owner: str, repo: str) -> None:
@@ -399,6 +423,14 @@ def _pass(detail: str = "") -> None:
 
 def main() -> None:
     args = parse_args()
+
+    # In --list-repos mode stdout must carry JSON and NOTHING else, or a caller
+    # parsing it chokes on the progress banner. Point every human-facing print
+    # at stderr for the duration; the JSON below goes to the real stdout. Errors
+    # still reach the terminal, they just don't contaminate the parsed stream.
+    _real_stdout = sys.stdout
+    if args.list_repos:
+        sys.stdout = sys.stderr
     name, infisical_path, keychain_service = resolve_identity(args)
     app_id = resolve_app_id(args, name)
 
@@ -422,6 +454,21 @@ def main() -> None:
     app_jwt = build_app_jwt(app_id, pem)
     app_info = get_app_info(app_jwt)
     _pass(f"(GitHub confirms this is '{app_info.get('name')}')")
+
+    if args.list_repos:
+        # Machine-readable exit. Everything above still ran, so a broken chain
+        # still fails loudly here rather than emitting empty JSON that a caller
+        # would read as "this App covers nothing".
+        names: list[str] = []
+        for inst in list_installations(app_jwt):
+            tok = mint_installation_token(app_jwt, inst["id"])
+            names.extend(r["full_name"] for r in list_installation_repos(tok))
+        print(json.dumps({
+            "app": app_info.get("name"),
+            "app_id": app_id,
+            "repos": sorted(set(names)),
+        }, indent=2), file=_real_stdout)
+        sys.exit(0)
 
     _step("mint a real installation token", "[4/4]")
     installations = list_installations(app_jwt)
