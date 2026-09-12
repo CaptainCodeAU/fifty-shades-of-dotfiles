@@ -288,20 +288,20 @@ WHAT="staged diff"
 classify() { # classify <line>  -> sets CAT (block category, or empty) and WARN_CATS
     local c="$1"
     CAT=""; WARN_CATS=""
-    if   ! rule_off username-path && [ -n "$user" ] && [[ $c =~ $b_user ]]; then CAT="username-in-path"
-    elif ! rule_off github-token && [[ $c =~ $b_ghtok ]]; then CAT="github-token"
-    elif ! rule_off sk-token     && [[ $c =~ $b_sk ]];    then CAT="api-token(sk-)"
-    elif ! rule_off aws-key      && [[ $c =~ $b_aws ]];   then CAT="aws-access-key"
-    elif ! rule_off slack-token  && [[ $c =~ $b_slack ]]; then CAT="slack-token"
-    elif ! rule_off private-key  && [[ $c =~ $b_pkey ]];  then CAT="private-key"
-    elif ! rule_off phone && line_has_real_phone "$c" "$b_phone"; then CAT="phone-number(E.164)"
+    if   ! rule_off username-path && [ -n "$user" ] && [[ $c =~ $b_user ]]; then CAT="username-in-path [username-path]"
+    elif ! rule_off github-token && [[ $c =~ $b_ghtok ]]; then CAT="github-token [github-token]"
+    elif ! rule_off sk-token     && [[ $c =~ $b_sk ]];    then CAT="api-token(sk-) [sk-token]"
+    elif ! rule_off aws-key      && [[ $c =~ $b_aws ]];   then CAT="aws-access-key [aws-key]"
+    elif ! rule_off slack-token  && [[ $c =~ $b_slack ]]; then CAT="slack-token [slack-token]"
+    elif ! rule_off private-key  && [[ $c =~ $b_pkey ]];  then CAT="private-key [private-key]"
+    elif ! rule_off phone && line_has_real_phone "$c" "$b_phone"; then CAT="phone-number(E.164) [phone]"
     fi
     if ! rule_off lan-ip && [[ $c =~ $w_ip ]]; then
-        WARN_CATS="${WARN_CATS}private-LAN-IP
+        WARN_CATS="${WARN_CATS}private-LAN-IP [lan-ip]
 "
     fi
     if ! rule_off local-phone && line_has_real_phone "$c" "$w_phone_au"; then
-        WARN_CATS="${WARN_CATS}local-format-phone
+        WARN_CATS="${WARN_CATS}local-format-phone [local-phone]
 "
     fi
 }
@@ -510,15 +510,49 @@ fi
 if [ -n "$warn_hits" ]; then
     printf 'leak-scan WARNING -- surfaced in %s (allowed, not blocked):\n' "$WHAT" >&2
     printf '%s\n' "$warn_hits" | sed 's/^/  /' >&2
+    printf '  (silence a noisy one by its [bracketed] id: git config leakscan.skip "<id> ...")\n' >&2
 fi
 
 if [ -n "$block_hits" ]; then
     printf 'leak-scan BLOCKED -- possible identity/secret leak in %s:\n' "$WHAT" >&2
     printf '%s\n' "$block_hits" | sed 's/^/  /' >&2
+
+    # WHY THIS MESSAGE LISTS THREE OPTIONS AND NOT ONE.
+    #
+    # It used to offer exactly two ways out -- LEAK_SCAN_DISABLE=1 and
+    # --no-verify -- and never mentioned leakscan.skip, which lives in this
+    # file's header where nobody looks while staring at a block. Worse, the
+    # category printed above did not match the id leakscan.skip accepts
+    # ("aws-access-key" vs "aws-key"), so even someone who knew about skip
+    # would have typed an id the parser rejects.
+    #
+    # Measured consequence, 2026-09-12: a session hit a block in a private
+    # repo full of legitimate names and LAN addresses, followed the only
+    # advice on screen, and set leakscan.disable -- turning off private-key
+    # and every token rule for every future commit in that repo. It did what
+    # the tool told it to. That was a message defect, not a judgement failure,
+    # so the fix belongs here.
+    #
+    # Rule ids are now printed in [brackets] above and pasted into option 2
+    # ready to run.
+    _fired="$(printf '%s\n' "$block_hits" | sed -n 's/.*\[\([a-z-]*\)\]$/\1/p' | sort -u | tr '\n' ' ')"
+    _fired="${_fired% }"
     if [ "$MODE" = "range" ]; then
-        printf 'value masked. This is committed history -- scrubbing needs a rewrite, not a bypass.\n' >&2
+        printf '\nvalue masked. This is committed history -- scrubbing needs a rewrite, not a bypass.\n' >&2
+        printf 'If the rule is merely noisy for this repo, `git config leakscan.skip "%s"` stops\n' "$_fired" >&2
+        printf 'FUTURE commits tripping on it. It does nothing for what is already committed.\n' >&2
     else
-        printf 'value masked. Scrub it, or bypass:  LEAK_SCAN_DISABLE=1 git commit ...  (or git commit --no-verify)\n' >&2
+        printf '\nvalue masked. Three ways out, best first:\n\n' >&2
+        printf '  1. Scrub the value out of the change.   <- the right answer almost every time\n\n' >&2
+        printf '  2. If that rule is simply NOISY here (a private repo legitimately full of\n' >&2
+        printf '     your own names, paths and LAN addresses), disarm only that rule, by id:\n' >&2
+        printf '        git config leakscan.skip "%s"\n' "$_fired" >&2
+        printf '     Every other rule stays armed.\n\n' >&2
+        printf '  3. LAST RESORT. Each of these turns off ALL rules, private-key and every\n' >&2
+        printf '     token rule included. Prefer 2 unless you genuinely mean all of them:\n' >&2
+        printf '        git config leakscan.disable true      (this repo, every future commit)\n' >&2
+        printf '        LEAK_SCAN_DISABLE=1 git commit ...    (one commit)\n' >&2
+        printf '        git commit --no-verify                (one commit)\n' >&2
     fi
     exit 1
 fi
