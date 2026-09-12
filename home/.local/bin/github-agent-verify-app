@@ -48,9 +48,16 @@ from pathlib import Path
 import jwt
 import requests
 
-INFISICAL_BASE_URL = "https://REDACTED-INFISICAL-HOST"
-INFISICAL_PROJECT_SLUG = "REDACTED-INFISICAL-PROJECT"
-INFISICAL_ENVIRONMENT = "prod"
+# Read from git config, not hardcoded here. Two reasons, and the second is the
+# one that bit: github-agent-token, github-agent-public-post and this script
+# all need the same three values, so a single source beats three copies going
+# out of sync; and this file is tracked in a PUBLIC repo, where a hardcoded
+# internal hostname is exactly the class ~/.gitignore_global and .gitignore
+# line 41 exist to keep out. It sat here in the clear until 2026-09-12.
+#
+# These live in the FLAT [githubagent] block of ~/.gitconfig-githubagent --
+# the three values every credential profile shares -- so they resolve even
+# when verifying a brand-new App that has no named block of its own yet.
 SECRET_NAME = "GITHUB_APP_PRIVATE_KEY"
 TIER_CHOICES = ("high-value", "medium-value", "low-value")
 
@@ -96,6 +103,21 @@ def ident(text: str) -> str:
 def fail(message: str) -> None:
     print(f"{bad('[FAIL]')} github-agent-verify-app: {message}", file=sys.stderr)
     sys.exit(1)
+
+
+def git_config(key: str) -> str:
+    """Read one shared setting out of the flat [githubagent] block."""
+    result = subprocess.run(
+        ["git", "config", "--get", f"githubagent.{key}"], capture_output=True, text=True
+    )
+    value = result.stdout.strip()
+    if result.returncode != 0 or not value:
+        fail(
+            f"missing git config 'githubagent.{key}'.\n\n"
+            "  It belongs in the flat [githubagent] block of ~/.gitconfig-githubagent,\n"
+            "  alongside infisicalBaseUrl, infisicalProjectSlug and infisicalEnvironment."
+        )
+    return value
 
 
 def parse_args() -> argparse.Namespace:
@@ -223,7 +245,7 @@ def get_bootstrap_secret(keychain_service: str) -> str:
 
 def infisical_login(client_id: str, client_secret: str) -> str:
     resp = requests.post(
-        f"{INFISICAL_BASE_URL}/api/v1/auth/universal-auth/login",
+        f"{git_config('infisicalBaseUrl')}/api/v1/auth/universal-auth/login",
         json={"clientId": client_id, "clientSecret": client_secret},
         timeout=15,
     )
@@ -234,10 +256,10 @@ def infisical_login(client_id: str, client_secret: str) -> str:
 
 def fetch_private_key(infisical_token: str, secret_path: str) -> str:
     resp = requests.get(
-        f"{INFISICAL_BASE_URL}/api/v3/secrets/raw/{SECRET_NAME}",
+        f"{git_config('infisicalBaseUrl')}/api/v3/secrets/raw/{SECRET_NAME}",
         params={
-            "workspaceSlug": INFISICAL_PROJECT_SLUG,
-            "environment": INFISICAL_ENVIRONMENT,
+            "workspaceSlug": git_config("infisicalProjectSlug"),
+            "environment": git_config("infisicalEnvironment"),
             "secretPath": secret_path,
         },
         headers={"Authorization": f"Bearer {infisical_token}"},

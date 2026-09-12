@@ -1,169 +1,50 @@
 # GitHub Agent Credential System — Usage Guide
 
-Started early (during the medium/low-value build) instead of waiting until the
-whole rollout is finished, since the exact command sequence is freshest right
-after actually running it once for real (`gap-cc-high-value-shared`). This
-doc is the living reference — update it as new tiers/repos get added.
+> **The real values are not in this file.** It is tracked in a public repo,
+> so the credential table, the Infisical instance and paths, the App IDs and
+> the Keychain service names all live in `docs/GITHUB_AGENT_USAGE.private.md`
+> instead, alongside the machine's own `~/.gitconfig-githubagent`. This file
+> covers how the system works and how to drive it, which is the useful half
+> and gives nothing away.
 
-## The credential table
+## The shape of it
 
-Shared by every row: Infisical instance `https://REDACTED-INFISICAL-HOST`,
-project `REDACTED-INFISICAL-PROJECT`, environment `prod`.
+Five credentials, in two families.
 
-| Tier/PAT                         | Type             | Covers                            | Permissions                     | Infisical Path                    | Secret Key Name          | Infisical Identity Name     | Keychain Service Name                      | Status                      |
-| -------------------------------- | ---------------- | --------------------------------- | ------------------------------- | --------------------------------- | ------------------------ | --------------------------- | ------------------------------------------ | --------------------------- |
-| `gap-cc-high-value-shared`       | GitHub App       | Most important repos, pooled      | Contents/Issues/PRs, read+write | `/github-agent-apps/high-value`   | `GITHUB_APP_PRIVATE_KEY` | `REDACTED-IDENTITY`   | `REDACTED-KEYCHAIN-gap-high-value-shared`       | **Done** — App ID `REDACTED-APP-ID` |
-| `gap-cc-medium-value-shared`     | GitHub App       | Everyday active repos, pooled     | Same                            | `/github-agent-apps/medium-value` | `GITHUB_APP_PRIVATE_KEY` | `REDACTED-IDENTITY` | `REDACTED-KEYCHAIN-gap-medium-value-shared`     | **Done** — verified         |
-| `gap-cc-low-value-shared`        | GitHub App       | Old/low-stakes repos, pooled      | Same                            | `/github-agent-apps/low-value`    | `GITHUB_APP_PRIVATE_KEY` | `REDACTED-IDENTITY`    | `REDACTED-KEYCHAIN-gap-low-value-shared`        | **Done** — verified         |
-| `pat-cc-public-read-browse`      | Fine-grained PAT | Reading public GitHub content     | Public Repositories, read-only  | `/github-agent-apps/public-read`  | `PAT_VALUE`              | `REDACTED-IDENTITY`  | `REDACTED-KEYCHAIN-pat-public-read-browse`      | **Done**                    |
-| `pat-cc-public-write-thirdparty` | Classic PAT      | Issues/PRs on repos you don't own | `public_repo` scope only        | `/github-agent-apps/public-write` | `PAT_VALUE`              | `REDACTED-IDENTITY` | `REDACTED-KEYCHAIN-pat-public-write-thirdparty` | **Done**                    |
+**Three pooled GitHub Apps**, one per tier: `high-value`, `medium-value`,
+`low-value`. All three hold identical permissions (Contents, Issues, Pull
+requests, read and write). The tier decides only which repos are pooled
+behind one App, so a compromise is contained to that pool rather than to
+everything. Each mints a fresh 1-hour, single-repo-scoped token on every
+single git or `gh` call, and GitHub itself enforces the expiry.
 
-## Creating and wiring up one tier App — full command sequence
+**Two Personal Access Tokens**, for public GitHub, where a repo-installed
+App cannot reach:
 
-Worked example below uses `high-value` throughout (the one already done).
-For `medium-value` / `low-value`, swap the tier name everywhere it appears —
-same commands, same order, nothing else changes.
+- a fine-grained, read-only one for browsing public repos
+- a classic one holding the narrow `public_repo` scope and never the broad
+  `repo` scope, for opening issues and comments on repos you do not own
 
-**1. Create the App** (you run this, one browser click when GitHub asks):
+Unlike the App tokens these mint nothing: each is one fixed string stored in
+Infisical until its expiry date, so their rotation is manual. GitHub will not
+force it the way it does for the App tokens.
 
-```
-github-agent-create-app --tier high-value
-```
+A repo can also be promoted off the shared pool onto its own dedicated App
+later. It then carries the flat `[githubagent]` keys in its own local config
+and no tier at all; nothing in the code needs to know a repo's status.
 
-Note the printed App ID and the "secrets staged at" file path from the receipt.
+## Setting a new credential up
 
-**2. Copy the private key onto your clipboard** (real line breaks, not the
-file's escaped ones):
+The full command sequences — creating a tier App through the manifest flow,
+storing its key, creating the Infisical machine identity, saving the
+bootstrap secret to the Keychain, installing the App and verifying the whole
+chain — are in `docs/GITHUB_AGENT_USAGE.private.md`, because every step of
+them names a real path or identity.
 
-```
-python3 -c "import json; print(json.load(open('<path-from-step-1>'))['pem'], end='')" | pbcopy
-```
-
-**3. Paste it into Infisical** (manual, in your browser):
-
-- Project `REDACTED-INFISICAL-PROJECT`, environment `prod`
-- Folder `github-agent-apps / high-value`
-- Secret name `GITHUB_APP_PRIVATE_KEY`
-- Value: paste from clipboard (check for an expand/resize icon on the value
-  field first — pasting into the tiny collapsed box has previously flattened
-  the key onto one line and broken it)
-
-**4. Create the Infisical Machine Identity** (manual, in Infisical's UI):
-
-- Auth method: Universal Auth
-- Identity name: `REDACTED-IDENTITY`
-- Access: No Access by default, then one Additional Privilege:
-  - Privilege name: `read-high-value-key`
-  - Scope: read-only on `/github-agent-apps/high-value`, environment `prod`
-- Client Secret Description: `REDACTED-IDENTITY-client-secret`
-- Note down the **Client ID** (not secret) and the **Client Secret** (shown once)
-
-**5. Save the Client Secret to macOS Keychain** (copy the Client Secret to
-your clipboard first):
-
-```
-security add-generic-password -a "$(whoami)" -s "REDACTED-KEYCHAIN-gap-high-value-shared" -w "$(pbpaste)" && pbcopy < /dev/null
-```
-
-**6. (Optional) confirm it landed:**
-
-```
-security find-generic-password -s "REDACTED-KEYCHAIN-gap-high-value-shared"
-```
-
-**7. Install the App on at least one repo** (manual, in your browser):
-`https://github.com/settings/apps/gap-cc-high-value-shared/installations` ->
-Install -> pick specific repo(s), never "All repositories".
-
-**8. Verify the whole chain actually works:**
-
-```
-github-agent-verify-app --tier high-value --infisical-client-id <client-id-from-step-4> --app-id <app-id-from-step-1>
-```
-
-Add `--staged-file <path>` only if you moved the file from where step 1 put
-it. Add `--check-repo owner/repo1,owner/repo2` to also confirm specific repos
-one at a time (comma-separated) — use a repo it should have, one it shouldn't,
-or both.
-
-**9. Shred the staged secrets file** (only after step 8 passes):
-
-```
-/bin/rm -P <path-from-step-1>
-```
-
-## Creating and storing the two PATs — full command sequence
-
-Unlike the GitHub Apps, these are made by hand on GitHub's website directly —
-no manifest tool, no browser-click-and-listen flow. There is currently no
-`github-agent-verify-app`-style check for these two (the code that would
-consume them, `github-agent-token`'s PAT-fetch mode and
-`github-agent-public-post`, hasn't been built yet — that's still ahead).
-
-### `pat-cc-public-read-browse`
-
-**1. Create it** (manual, in your browser):
-`https://github.com/settings/personal-access-tokens/new`
-
-- Name: `pat-cc-public-read-browse`, set a real expiration date
-- Repository access → **Public Repositories (read-only)**
-- Generate, then copy the value GitHub shows you (its own copy button)
-
-**2. Paste it into Infisical** (manual):
-
-- Folder `github-agent-apps / public-read`, secret name `PAT_VALUE`
-
-**3. Create the Infisical Machine Identity** (manual):
-
-- Identity name: `REDACTED-IDENTITY`
-- One Additional Privilege, read-only on `/github-agent-apps/public-read`,
-  environment `prod`
-- Client Secret Description: `REDACTED-IDENTITY-client-secret`
-
-**4. Save the Client Secret to Keychain** (copy it to your clipboard first):
-
-```
-security add-generic-password -a "$(whoami)" -s "REDACTED-KEYCHAIN-pat-public-read-browse" -w "$(pbpaste)" && pbcopy < /dev/null
-```
-
-**5. (Optional) confirm it landed:**
-
-```
-security find-generic-password -s "REDACTED-KEYCHAIN-pat-public-read-browse"
-```
-
-### `pat-cc-public-write-thirdparty`
-
-**1. Create it** (manual, in your browser):
-`https://github.com/settings/tokens/new` (the **classic** token page, not
-fine-grained)
-
-- Name: `pat-cc-public-write-thirdparty`, set a real expiration date
-- Check **only** the `public_repo` scope — never the broader `repo` scope
-- Generate, then copy the value
-
-**2. Paste it into Infisical** (manual):
-
-- Folder `github-agent-apps / public-write`, secret name `PAT_VALUE`
-
-**3. Create the Infisical Machine Identity** (manual):
-
-- Identity name: `REDACTED-IDENTITY`
-- One Additional Privilege, read-only on `/github-agent-apps/public-write`,
-  environment `prod`
-- Client Secret Description: `REDACTED-IDENTITY-client-secret`
-
-**4. Save the Client Secret to Keychain** (copy it to your clipboard first):
-
-```
-security add-generic-password -a "$(whoami)" -s "REDACTED-KEYCHAIN-pat-public-write-thirdparty" -w "$(pbpaste)" && pbcopy < /dev/null
-```
-
-**5. (Optional) confirm it landed:**
-
-```
-security find-generic-password -s "REDACTED-KEYCHAIN-pat-public-write-thirdparty"
-```
+The tools themselves are `github-agent-create-app` and
+`github-agent-verify-app`, and both are run by the principal in his own
+terminal, never by an agent, so a real private key never passes through an
+agent's process.
 
 ## The 1-hour token expiry — how "renewal" actually works
 
@@ -173,3 +54,170 @@ There is no renewal step and nothing runs in the background. Every single
 private key on the spot, uses it once, and discards it. Nothing is ever
 cached or reused, so there's nothing to manually refresh — the next call,
 whenever it happens, just repeats the same mint from scratch.
+
+## Day-to-day usage (built and tested 2026-09-12)
+
+### Putting a repo on the system
+
+```
+github-agent-flip ~/code/some-repo
+```
+
+It asks which tier the repo belongs to, shows you the before/after, changes
+two things, reads both back, then mints one real token and throws it away
+just to prove the App really is installed on that repo.
+
+The two things it changes:
+
+1. `origin` becomes `https://x-access-token@github.com/OWNER/REPO.git`
+2. one key, `githubagent.tier`, lands in that repo's own `.git/config`
+
+That second key is the whole tier mechanism. Everything else about a tier —
+App ID, Infisical path, client ID, Keychain service — lives once per tier in
+`~/.gitconfig-githubagent`, never per repo, so rotating a tier's credentials
+is one edit in one file.
+
+Useful flags:
+
+| Flag | Effect |
+| --- | --- |
+| `--tier medium-value` | say the tier up front instead of being asked |
+| `-y` / `--yes` | no prompts (agent use, after you've said go-ahead) |
+| `--no-verify` | skip the live mint check |
+| `--verify` | force the live check on, even with `-y` |
+
+`-y` implies `--no-verify` on purpose: minting pulls the App's private key
+into the running process, which isn't something an agent's process should
+hold. `--verify` alongside `-y` overrides that deliberately.
+
+Re-running `github-agent-flip` on a repo that's already correct doesn't
+change anything, but **does** still run the live check — so it doubles as
+"is this still working?", which is the question you actually have when you
+re-run it.
+
+### Nothing guesses a tier
+
+A flipped repo with no `githubagent.tier` is refused with instructions, not
+quietly pointed at some default App. The one place that bites is a fresh
+`git clone`, which has no repo on disk yet to read the key from. Say it
+explicitly:
+
+```
+git -c githubagent.tier=high-value clone https://x-access-token@github.com/OWNER/REPO.git
+```
+
+(That works because git exports `-c` settings to child processes via
+`GIT_CONFIG_PARAMETERS`, which the credential helper inherits — measured
+2026-09-12, not assumed.)
+
+One edge worth knowing: git runs the credential helper from your **current
+directory**. Cloning while standing inside another flipped repo reads *that*
+repo's tier. It fails cleanly (wrong App, refused by GitHub) rather than
+doing anything dangerous, but the error will look confusing if you don't
+know why.
+
+### After a flip, `git` and `gh` just work
+
+Every `git push`/`pull` runs `github-agent-token` as git's credential helper,
+which mints a brand-new 1-hour, single-repo-scoped token on the spot. `gh`
+doesn't consult git's credential helper, so the `gh` wrapper in `.zshrc`
+covers it separately via `github-agent-token token`. Nothing is cached and
+there is nothing to refresh.
+
+### The two PATs
+
+```
+GH_TOKEN="$(github-agent-token pat public-read)" gh api /repos/golang/go
+```
+
+That's the read-only browsing token. It is printable on purpose — it can
+read public repos and nothing else.
+
+**There is deliberately no print mode for the public-write PAT.** That token
+can open issues and post comments on any public repo as you, so nothing on
+this machine puts it on a screen:
+
+```
+$ github-agent-token pat public-write
+[FAIL] there is deliberately no print mode for the 'public-write' PAT.
+```
+
+The only way to use it is `github-agent-public-post`, which fetches it
+internally and never prints it. You cannot bypass a print command that was
+never built. If you need the raw value to rotate it, read it from
+Infisical's own web UI.
+
+### Posting to someone else's public repo
+
+```
+github-agent-public-post issue   --repo owner/repo --title "..." --body-file draft.md --dry-run
+github-agent-public-post comment --repo owner/repo --number 123   --body-file reply.md
+github-agent-public-post check
+```
+
+The flow is draft → show → confirm → post, and the draft prints **every
+time**, including under `-y`, so a session transcript always carries a record
+of exactly what went out.
+
+| Flag | Effect |
+| --- | --- |
+| `--dry-run` | show the draft and stop. **Fetches no token at all** — safe for an agent to run freely |
+| `-y` / `--yes` | skip the typed confirmation. Draft still prints |
+| `--allow-own-repo` | permit a target you own (refused by default) |
+
+Without `-y` it asks you to type `post`. If there's no terminal attached and
+`-y` wasn't given, it refuses rather than hanging.
+
+Guards that fire before anything is written:
+
+- **Your own repos are refused.** They belong on the tier Apps — scoped,
+  1-hour, revocable per repo — not on a permanent PAT. `--allow-own-repo`
+  exists for the genuine exception and says so out loud in the draft.
+- Private repos are refused (a `public_repo` PAT can't write there anyway).
+- Archived repos, disabled issues, closed and locked issues are all flagged
+  in the draft before you confirm.
+
+`github-agent-public-post check` proves the token's scope without printing
+it — verified 2026-09-12:
+
+```
+[1/4] Fetched from Infisical via Keychain. (never printed)
+[2/4] GitHub accepts it. Posts publicly as CaptainCodeAU.
+[3/4] Scope is exactly public_repo — the narrow one. Expires: 2027-01-31 13:00:00 UTC
+[4/4] Negative control: it can see 0 private repos. Boundary holds.
+```
+
+## What `~/.gitconfig-githubagent` looks like now
+
+Filled in 2026-09-12. Structure, not values:
+
+```
+[credential "https://github.com"]
+	helper = !~/.local/bin/github-agent-token   # real config uses the absolute path
+	useHttpPath = true
+
+[githubagent]                          # ONLY the 3 values every profile shares
+	infisicalBaseUrl = ...
+	infisicalProjectSlug = ...
+	infisicalEnvironment = ...
+
+[githubagent "high-value"]             # x3 tiers: appId, clientId, secret path,
+	appId = ...                        #   secret name, keychain service, description
+	...
+
+[githubagent "public-read"]            # x2 PATs: same minus appId
+	...
+```
+
+The flat block is deliberately tiny. A secret path, client ID, App ID or
+Keychain service is never put there, so a mistyped tier name can't quietly
+fall through onto some other credential's settings — it errors instead.
+
+Nothing in that file is a secret. App IDs and Infisical Client IDs are
+identifiers; each identity's Client **Secret** lives only in the macOS
+Keychain.
+
+A repo promoted off the shared pool onto its own dedicated App skips tiers
+entirely: it sets the flat keys (`appId`, `infisicalClientId`,
+`infisicalSecretPath`, `infisicalSecretName`, `keychainService`) in its own
+local config and no tier at all.
