@@ -7,6 +7,13 @@
 > covers how the system works and how to drive it, which is the useful half
 > and gives nothing away.
 
+> **Looking for step-by-step instructions rather than a reference?**
+> `GITHUB_AGENT_RECIPES.md` is the recipe book: new repo, freshly cloned repo,
+> bulk-flip a whole account, push asks for a password, check where a repo stands,
+> read public repos, post to someone else's public repo. Each says when to use
+> it, the exact commands, how you know it worked, and what to do when it doesn't.
+> This file answers "what does this flag do"; that one answers "what do I type".
+
 ## The shape of it
 
 Five credentials, in two families.
