@@ -41,7 +41,23 @@ three separate lessons:
 - `stow -n` prints nothing and exits 0 at default verbosity, so an empty plan
   and a real plan look the same; hence `-v2` on every dry run (Sandbox, below).
 
-Measured 2026-09-13: six errors across two sessions in one evening, every one
+**A tool REFUSING to answer is not the tool answering "no".** A refusal reads
+like a finding, exactly the way a zero does, and it is the same failure wearing
+different clothes. Two from 2026-09-13:
+
+- `git ls-files --error-unmatch <path>` on a path that crosses a symlink returns
+  `fatal: pathspec ... is beyond a symbolic link`. That means "this repo does
+  not follow the link", NOT "the file is untracked". Read as the latter, it
+  produced a confident report that a doctrine file had no version control, when
+  it was tracked in a different repo the whole time. One `readlink -f` would
+  have shown the real path.
+- `git check-ignore -v <path>` exits **0 on a NEGATION match too**, printing
+  `!path`. So its exit code cannot tell you whether a file is ignored or
+  explicitly allowlisted. `git add --dry-run` answers that directly, and gives
+  both arms cheaply: an admitted file adds, an unadmitted sibling is refused by
+  name.
+
+Measured 2026-09-13: eight errors across two sessions in one evening, every one
 this shape. An invocation count that read `2` on a working helper AND on one
 that died instantly. A cache-containment test whose three rows were identical
 because the cache was empty the whole time. Two timeout tests invalidated by an
