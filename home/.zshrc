@@ -1000,8 +1000,18 @@ _claude_launch() {
   fi
 }
 
-alias c='_claude_launch claude --dangerously-skip-permissions --permission-mode plan'       # Standard launch
-alias ct='_claude_launch CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 claude --dangerously-skip-permissions --permission-mode plan --teammate-mode tmux'  # Tmux agent teams
+# LifeOS "Layer 2": the constitutional system prompt (output format, verification
+# gate, security protocol, ~/.claude privacy rule). Layer 1 -- global CLAUDE.md,
+# hooks, skills, memory -- loads in EVERY session regardless; this flag is the
+# only thing that adds the constitution, and only `lifeos` passed it before.
+# Array, not a scalar: zsh does NOT word-split an unquoted parameter, so
+# `claude $_LIFEOS_SP` would pass flag+path as ONE argv entry and fail.
+# Deliberately NOT applied to `ci` (piped -p: the banner format would pollute
+# script stdout) or `claude-clean` (unconstituted by design).
+_LIFEOS_SP=(--append-system-prompt-file "$HOME/.claude/LIFEOS/LIFEOS_SYSTEM_PROMPT.md")
+
+alias c='_claude_launch claude "${_LIFEOS_SP[@]}" --dangerously-skip-permissions --permission-mode plan'       # Standard launch
+alias ct='_claude_launch CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 claude "${_LIFEOS_SP[@]}" --dangerously-skip-permissions --permission-mode plan --teammate-mode tmux'  # Tmux agent teams
 
 # Clean-room Claude for measuring front-loaded context (CLAUDE.md, memory,
 # skills, MCP) one piece at a time. Measured 2026-09-06 (Claude Code 2.1.263):
@@ -1036,12 +1046,12 @@ claude-clean() {
     echo "clean-room cwd: $dir" >&2
     ( builtin cd "$dir" && command claude --setting-sources '' --strict-mcp-config "$@" )
 }
-alias cb='_claude_launch claude'                                                            # Bare (full control)
-alias cr='_claude_launch claude --dangerously-skip-permissions --resume'                    # Resume last session
-alias ci='_claude_launch claude --dangerously-skip-permissions -p'                          # Non-interactive / piped
-alias cpr='_claude_launch claude --dangerously-skip-permissions --from-pr'                  # Resume session from PR
-alias cd_='_claude_launch claude --dangerously-skip-permissions --permission-mode plan --verbose --debug "api,hooks,mcp,statsig"'               # Debug (verbose logging)
-alias cskip='_claude_launch SKIP_SESSION_END_HOOK=1 claude --dangerously-skip-permissions --permission-mode plan'  # Skip end hooks
+alias cb='_claude_launch claude "${_LIFEOS_SP[@]}"'                                          # Bare (full control)
+alias cr='_claude_launch claude "${_LIFEOS_SP[@]}" --dangerously-skip-permissions --resume'  # Resume last session
+alias ci='_claude_launch claude --dangerously-skip-permissions -p'                          # Non-interactive / piped (NO Layer 2: banner would pollute stdout)
+alias cpr='_claude_launch claude "${_LIFEOS_SP[@]}" --dangerously-skip-permissions --from-pr'  # Resume session from PR
+alias cd_='_claude_launch claude "${_LIFEOS_SP[@]}" --dangerously-skip-permissions --permission-mode plan --verbose --debug "api,hooks,mcp,statsig"'               # Debug (verbose logging)
+alias cskip='_claude_launch SKIP_SESSION_END_HOOK=1 claude "${_LIFEOS_SP[@]}" --dangerously-skip-permissions --permission-mode plan'  # Skip end hooks
 
 # Intercepting the use of a command like 'sudo claude update' :P
 # pnpm branch: pnpm keeps global packages/config in the invoking user's home
