@@ -55,12 +55,15 @@ agent's process.
 
 ## The 1-hour token expiry — how "renewal" actually works
 
-There is no renewal step and nothing runs in the background. Every single
-`git push`/`pull` or `gh` command on a flipped repo triggers
-`github-agent-token`, which mints a brand-new 1-hour token from the permanent
-private key on the spot, uses it once, and discards it. Nothing is ever
-cached or reused, so there's nothing to manually refresh — the next call,
-whenever it happens, just repeats the same mint from scratch.
+There is no renewal step and nothing runs in the background. A `git push`/`pull`
+or `gh` command on a flipped repo triggers `github-agent-token`, which mints a
+brand-new 1-hour token from the permanent private key on the spot. There is
+nothing to manually refresh.
+
+**Changed 2026-09-13: tokens ARE now cached, in memory, for 50 minutes.** An
+earlier version of this section said "nothing is ever cached or reused". That
+has not been true since the token cache went in — see **The token cache** below
+for why, how, and what it does and does not cost.
 
 ## Day-to-day usage (built and tested 2026-09-12)
 
@@ -125,11 +128,12 @@ know why.
 
 ### After a flip, `git` and `gh` just work
 
-Every `git push`/`pull` runs `github-agent-token` as git's credential helper,
-which mints a brand-new 1-hour, single-repo-scoped token on the spot. `gh`
-doesn't consult git's credential helper, so the `gh` wrapper in `.zshrc`
-covers it separately via `github-agent-token token`. Nothing is cached and
-there is nothing to refresh.
+Every `git push`/`pull` goes through git's credential helper chain, which mints
+a 1-hour, single-repo-scoped token on the first call and then serves it from
+memory for 50 minutes (**The token cache**, below). `gh` doesn't consult git's
+credential helper at all, so the `gh` wrapper in `.zshrc` covers it separately
+via `github-agent-token token` — and that path is NOT cached, it mints every
+time.
 
 ### The two PATs
 
@@ -193,6 +197,89 @@ it — verified 2026-09-12:
 [3/4] Scope is exactly public_repo — the narrow one. Expires: 2027-01-31 13:00:00 UTC
 [4/4] Negative control: it can see 0 private repos. Boundary holds.
 ```
+
+## The token cache (added 2026-09-13)
+
+`~/.gitconfig-githubagent` chains git's built-in `cache` helper **in front of**
+the minting helper:
+
+```
+[credential "https://github.com"]
+	helper = cache --timeout=3000
+	helper = !"$HOME"/.local/bin/github-agent-token
+	useHttpPath = true
+```
+
+Order is load-bearing. Git queries helpers in order and stops at the first
+answer, so the cache is asked first. The first git operation mints; every
+operation for the next 50 minutes is served from the cache daemon's memory and
+never touches GitHub's token endpoint.
+
+### Why it exists
+
+On 2026-09-13 GitHub's installation-token endpoint returned 500/502 on **6 of
+10** consecutive calls, across two different tier Apps, while
+githubstatus.com reported "All Systems Operational". A bounded retry with
+jitter went into `github-agent-token` first and absorbs it, but not minting at
+all is strictly better than retrying. Octokit's own `auth-app.js`, GitHub's
+reference library, caches installation tokens the same way — minting fresh per
+operation was the odd one out, not the cautious choice.
+
+### What it costs, honestly
+
+| Property | Status |
+|---|---|
+| Anything written to disk | **No.** The credential lives in the memory of a short-lived daemon; the socket is not the secret |
+| Reachable from a sandboxed Claude session | **No.** A sandboxed fill gets `unable to connect to cache daemon: Operation not permitted`. Measured against a live daemon holding a real token, with a Keychain control (exit 44) in the same breath |
+| Blast radius if the socket block ever failed | **Bounded.** The cache is keyed per repo (`useHttpPath = true`), so a token cached for one repo is never served for another. Measured: same-repo fill 0 mint invocations, two other repos 2 each |
+| Detection lost | **Zero.** GitHub has no per-token mint event at all. Verified against an exported personal Security log: 945 events, App actions are installation lifecycle only (`integration.*`, `integration_installation.*`). A same-window control confirmed the log was live and writing while dozens of tokens were minted |
+| Reach gained by an attacker | **None.** In an unsandboxed session a process could always run the helper and mint on demand anyway |
+| **The one real cost** | **Security now rests on TWO sandbox blocks where it rested on one:** the login Keychain, and now the cache socket. Only one has to quietly stop being blocked |
+
+### The timeout is honoured, and a retracted claim
+
+`--timeout=3000` is 50 minutes, chosen to sit under the token's 1-hour life so
+a stale token is never served. Measured with an isolated config carrying
+exactly one cache helper at `--timeout=5`, a dummy credential, and 20 seconds
+of elapsed wall clock by epoch subtraction: served at t+0, **not** served
+after. git 2.55.0.
+
+A claim that the timeout was **not** honoured briefly went into a committed
+file and was retracted. That test used a busy-wait loop forking `date`
+thousands of times; the best hypothesis, recorded as a hypothesis and not a
+finding, is that the fork storm starved the poll-driven daemon it was timing.
+The retraction is kept visible in the config file's own comments rather than
+quietly deleted, because the retracted version was the scarier of the two.
+
+### Never use a custom `--socket` path
+
+A custom `--socket` path **silently starts no daemon**. Every fill then falls
+through to minting, which looks exactly like the cache working while doing
+nothing at all. Only the default `~/.cache/git/credential/socket` works. This
+cost a debugging cycle on the day it went in.
+
+### Checking and clearing it
+
+```
+pgrep -f 'credential-cache--daemon'      # is it running? (run this UNSANDBOXED,
+                                         #  pgrep returns 0 inside the sandbox
+                                         #  whether or not the process exists)
+ls -la ~/.cache/git/credential/socket    # the socket
+git credential-cache exit                # drop everything cached, now
+```
+
+To prove it is actually working, count helper invocations cold vs warm rather
+than trusting that it looks right:
+
+```
+git credential-cache exit
+GIT_TRACE=1 git push --dry-run origin master 2>&1 >/dev/null | grep -c 'github-agent-token get'   # cold: 2
+GIT_TRACE=1 git push --dry-run origin master 2>&1 >/dev/null | grep -c 'github-agent-token get'   # warm: 0
+```
+
+The cold reading is the positive arm. Without it, a warm `0` is
+indistinguishable from a helper that never ran at all — see the
+`COUNT or ABSENCE` rule in the repo's `CLAUDE.md`.
 
 ## What `~/.gitconfig-githubagent` looks like now
 

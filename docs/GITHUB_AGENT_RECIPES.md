@@ -159,6 +159,48 @@ route to it.
 
 ---
 
+## Recipe 8 — The token cache: check it, clear it, prove it
+
+**When:** pushes suddenly feel slow, or you want to know whether the cache is
+doing anything, or you want a token gone from memory right now.
+
+Since 2026-09-13 the first git operation mints a token and the next 50 minutes
+are served from memory. Full detail in `GITHUB_AGENT_USAGE.md`.
+
+**Is it running?** Run this UNSANDBOXED. Inside the Claude sandbox `pgrep`
+returns 0 whether or not the process exists:
+
+```
+pgrep -f 'credential-cache--daemon'
+ls -la ~/.cache/git/credential/socket
+```
+
+**Clear it now** (after rotating a credential, or if you just want it gone):
+
+```
+git credential-cache exit
+```
+
+**Prove it is actually working.** Count helper invocations cold versus warm.
+The cold reading is the positive arm, and without it a warm `0` looks exactly
+like a helper that never ran:
+
+```
+git credential-cache exit
+GIT_TRACE=1 git push --dry-run origin master 2>&1 >/dev/null | grep -c 'github-agent-token get'   # cold: 2
+GIT_TRACE=1 git push --dry-run origin master 2>&1 >/dev/null | grep -c 'github-agent-token get'   # warm: 0
+```
+
+**If both readings are 2**, the cache is not engaging. Check helper order in
+`~/.gitconfig-githubagent`: `cache` must come ABOVE the minting helper, because
+git stops at the first helper that answers.
+
+```
+git config --get-all credential.https://github.com.helper
+```
+
+---
+
 ## Things that will trip you up
 
 | Symptom | Cause |
@@ -169,3 +211,8 @@ route to it.
 | A flip "succeeded" but push fails | The flip's own check mints through its own code path and never exercises git's credential path. Only a real push proves a real push. |
 | A repo in the wrong folder | Doesn't matter. Matching is by origin URL. Move folders whenever you like. |
 | `git clone` of a flipped repo | Arrives with no tier. Either flip it after, or clone with `git -c githubagent.tier=<tier> clone ...`. |
+| A push works, then "stops using" the helper | Correct and expected. The token cache serves the next 50 minutes from memory, so `github-agent-token` is not invoked again. 0 invocations on a warm repeat is the cache working, not a broken helper. |
+| The cache seems to do nothing | Two usual causes. Helper ORDER: `cache` must sit above the minting helper in `~/.gitconfig-githubagent`. Or someone set a custom `--socket` path, which silently starts no daemon at all and falls through to minting every time. Only the default `~/.cache/git/credential/socket` works. |
+| `pgrep` says the cache daemon is not running | Not evidence. Inside the Claude sandbox `pgrep` fails with "Cannot get process list" and the count reads 0 either way. Check it unsandboxed. |
+| A push fails 403 "denied to gap-cc-...[bot]" | Do NOT conclude the App lost write access from one 403. Seen 2026-09-13 during a GitHub wobble while the installation record read `contents: write` and the next push succeeded. Retry first. `GET /installation/repositories` also reported `permissions.push: false` three times while real pushes worked, so that field is not a reliable indicator either. |
+| Mint fails with a 500 or 502 | GitHub's token endpoint, not you. Measured 6 failures in 10 calls on 2026-09-13 with githubstatus.com showing all green. `github-agent-token` retries 5xx six times with jitter and says so on stderr; a 4xx still fails instantly. |
