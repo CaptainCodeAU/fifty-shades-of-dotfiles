@@ -35,6 +35,27 @@ decides it. Folder location is irrelevant.
 
 **Shortcut if you already know the tier:** `github-agent-flip --tier medium-value <path>`
 
+**Running it from an agent session, or any non-TTY.** The flip is INTERACTIVE.
+Without `-y` it prints the preview, gets no answer from a non-TTY, and exits
+leaving `origin` UNCHANGED. That reads as a soft no-op and is easy to misreport
+as done:
+
+```
+github-agent-flip -y --tier <tier> <path>
+```
+
+`-y` deliberately implies `--no-verify`, because the verification step mints a
+token and minting pulls the App's private key into the running process, which
+is not something an agent's process should hold. So `-y` on its own will NOT
+print the `[OK] A real token minted for this repo` line, and its absence is
+expected rather than a failure.
+
+`-y --verify` overrides that and restores the line, but only do it knowingly:
+it puts the private key in the agent's process, which is the thing the default
+is avoiding. **Prefer `-y` alone and then prove it with a real push** — the
+recipe book's own rule is that only a real push proves a real push, and that is
+a stronger check than the flip's internal mint anyway.
+
 **If step 5 fails** with "this GitHub App isn't installed on ...", you skipped
 or mis-picked step 2. Fix it on GitHub and re-run the flip; it is idempotent.
 
