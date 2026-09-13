@@ -87,6 +87,66 @@ def fail(message: str) -> None:
     sys.exit(1)
 
 
+# ---------------------------------------------------------------------------
+# Transient-failure retry.
+#
+# Measured 2026-09-13: GitHub's installation-token endpoint returned 500 or 502
+# on 6 of 10 consecutive calls, across two different Apps, while
+# githubstatus.com reported "All Systems Operational" and the unauthenticated
+# API answered 200. With no retry, one unlucky 500 is indistinguishable from a
+# real credential failure: it reads as "auth is broken" and sends you hunting
+# through config. It did exactly that for three tool calls that day before
+# anyone measured the failure rate.
+#
+# Retries ONLY transient classes: 5xx, and connection/timeout errors. A 401,
+# 403 or 404 is a real answer from a healthy server and still fails instantly,
+# so a genuinely broken or revoked credential is never smoothed over by this.
+#
+# Every retry announces itself on STDERR. NEVER stdout: in `get` mode stdout is
+# git's credential protocol channel, and anything extra written there corrupts
+# the reply git parses.
+# ---------------------------------------------------------------------------
+
+RETRY_STATUSES = frozenset({500, 502, 503, 504})
+# 6 attempts, not 4. Measured 2026-09-13 during the outage that prompted this:
+# roughly 60% of calls returned 5xx, so 4 attempts still lose ~13% of the time
+# (0.6 ** 4) while 6 attempts lose ~5% (0.6 ** 6). Worst case grows from ~5s to
+# ~18s, and only when the upstream is genuinely broken -- a healthy call still
+# returns on the first try with no sleep at all.
+RETRY_ATTEMPTS = 6
+RETRY_BACKOFF = (0.5, 1.5, 3.0, 5.0, 8.0)  # one shorter than RETRY_ATTEMPTS; the last try never sleeps
+
+
+def request_with_retry(method: str, url: str, *, what: str, **kwargs):
+    """requests.request, retried on transient upstream failures only."""
+    for attempt in range(1, RETRY_ATTEMPTS + 1):
+        resp = None
+        exc = None
+        try:
+            resp = requests.request(method, url, **kwargs)
+        except (requests.ConnectionError, requests.Timeout) as e:
+            exc = e
+
+        # A non-retryable status (including every 4xx) is the answer. Return it
+        # and let the caller's own error handling explain it.
+        if resp is not None and resp.status_code not in RETRY_STATUSES:
+            return resp
+
+        if attempt == RETRY_ATTEMPTS:
+            if resp is not None:
+                return resp
+            fail(f"{what} unreachable after {RETRY_ATTEMPTS} attempts: {type(exc).__name__}: {exc}")
+
+        detail = f"HTTP {resp.status_code}" if resp is not None else type(exc).__name__
+        delay = RETRY_BACKOFF[attempt - 1]
+        print(
+            f"github-agent-token: {what} returned {detail} "
+            f"(attempt {attempt} of {RETRY_ATTEMPTS}); retrying in {delay}s",
+            file=sys.stderr,
+        )
+        time.sleep(delay)
+
+
 def git_config_optional(key: str) -> str | None:
     # `git config --get` searches local -> global -> system, so a repo's own
     # .git/config beats ~/.gitconfig-githubagent, and a `git -c key=value` on
@@ -253,8 +313,10 @@ def get_bootstrap_secret(keychain_service: str) -> str:
 
 
 def infisical_login(base_url: str, client_id: str, client_secret: str) -> str:
-    resp = requests.post(
+    resp = request_with_retry(
+        "POST",
         f"{base_url}/api/v1/auth/universal-auth/login",
+        what="Infisical login",
         json={"clientId": client_id, "clientSecret": client_secret},
         timeout=15,
     )
@@ -271,8 +333,10 @@ def fetch_secret(
     secret_path: str,
     secret_name: str,
 ) -> str:
-    resp = requests.get(
+    resp = request_with_retry(
+        "GET",
         f"{base_url}/api/v3/secrets/raw/{secret_name}",
+        what="Infisical secret fetch",
         params={"workspaceSlug": project_slug, "environment": environment, "secretPath": secret_path},
         headers={"Authorization": f"Bearer {infisical_token}"},
         timeout=15,
@@ -295,8 +359,10 @@ def build_app_jwt(app_id: str, private_key_pem: str) -> str:
 def get_installation_token(app_jwt: str, owner: str, repo: str) -> str:
     headers = {"Authorization": f"Bearer {app_jwt}", "Accept": "application/vnd.github+json"}
 
-    installation_resp = requests.get(
+    installation_resp = request_with_retry(
+        "GET",
         f"https://api.github.com/repos/{owner}/{repo}/installation",
+        what="GitHub installation lookup",
         headers=headers,
         timeout=15,
     )
@@ -310,8 +376,10 @@ def get_installation_token(app_jwt: str, owner: str, repo: str) -> str:
     # Scope the minted pass down to just this one repo, even if the App's
     # install covers many -- confirmed against GitHub's own REST docs
     # (Create an installation access token for an app, `repositories` param).
-    token_resp = requests.post(
+    token_resp = request_with_retry(
+        "POST",
         f"https://api.github.com/app/installations/{installation_id}/access_tokens",
+        what="GitHub token mint",
         headers=headers,
         json={"repositories": [repo]},
         timeout=15,
