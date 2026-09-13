@@ -232,7 +232,7 @@ operation was the odd one out, not the cautious choice.
 | Anything written to disk | **No.** The credential lives in the memory of a short-lived daemon; the socket is not the secret |
 | Reachable from a sandboxed Claude session | **No.** A sandboxed fill gets `unable to connect to cache daemon: Operation not permitted`. Measured against a live daemon holding a real token, with a Keychain control (exit 44) in the same breath |
 | Blast radius if the socket block ever failed | **Bounded.** The cache is keyed per repo (`useHttpPath = true`), so a token cached for one repo is never served for another. Measured: same-repo fill 0 mint invocations, two other repos 2 each |
-| Detection lost | **Zero.** GitHub has no per-token mint event at all. Verified against an exported personal Security log: 945 events, App actions are installation lifecycle only (`integration.*`, `integration_installation.*`). A same-window control confirmed the log was live and writing while dozens of tokens were minted |
+| Detection lost | **Zero.** GitHub's account Security log has no per-token mint event type at all: App entries are installation lifecycle only (`integration.*`, `integration_installation.*`). So minting was never visible to the account owner either, and caching removes no signal that existed. Verified against a real exported log with a same-window positive control; the measurements are recorded privately, not here |
 | Reach gained by an attacker | **None.** In an unsandboxed session a process could always run the helper and mint on demand anyway |
 | **The one real cost** | **Security now rests on TWO sandbox blocks where it rested on one:** the login Keychain, and now the cache socket. Only one has to quietly stop being blocked |
 
