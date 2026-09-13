@@ -20,6 +20,36 @@ Never use `npm` or `yarn`. Use `pnpm` (or `bun`). Pick by lockfile:
 
 Emit only ASCII punctuation in source code: straight quotes (`"` `'`), straight apostrophes, and hyphen-minus (`-`). Never write Unicode smart quotes (`“ ” ‘ ’`), en/em dashes (`– —`), or other Unicode punctuation into code files — they pass type-checks but break the build at transform time (the JS/TS build rejects them), and hunting them down afterward wastes a session. Unicode is fine in comments, docs, and string literals meant for display; never in identifiers, keys, or code tokens.
 
+## Verifying: a COUNT or an ABSENCE needs a positive arm
+
+**Any check whose answer is a count or an absence must be paired with something
+you KNOW is present, run in the same breath.** Those are exactly the two answers
+that look identical when the check never actually ran. A check returning a real
+VALUE usually fails loudly on its own; a check returning `0`, "none", or the
+same number in every arm cannot distinguish "the mechanism works" from "the test
+did not happen". Before trusting one, ask: *what would this print if the thing
+never ran at all?* If the answer is "the same", it is not a check.
+
+Three traps already in this file are that one rule written out three times, not
+three separate lessons:
+
+- [`census`](home/.claude/tools/census.py) refuses to report anything until its
+  `--control` token hits first (Shell, below).
+- `git config --get-all credential.https://github.com.helper` prints the helper
+  even when the helper is broken, so only a real credential fill detects it
+  (Git & GitHub auth, below).
+- `stow -n` prints nothing and exits 0 at default verbosity, so an empty plan
+  and a real plan look the same; hence `-v2` on every dry run (Sandbox, below).
+
+Measured 2026-09-13: six errors across two sessions in one evening, every one
+this shape. An invocation count that read `2` on a working helper AND on one
+that died instantly. A cache-containment test whose three rows were identical
+because the cache was empty the whole time. Two timeout tests invalidated by an
+included config silently contributing its own helper. A sandbox negative control
+run in a session that was never sandboxed. A wait that never waited. Not one was
+caught by re-reading the code; each was caught by running the arm that should
+have succeeded.
+
 ## Shell
 
 Shell has `NULL_GLOB` + `nonomatch` — use `find -print` (not `ls glob*`) for file existence checks. Caveat: `find -print` exits 0 on an empty match only when the search root EXISTS; pointed at a missing path it still exits non-zero (1 on this BSD `find`). For a path that may not exist, use `test -e`/`test -d` (exits 0 either way, reports via its echo) or append `|| true` — otherwise the non-zero exit cancels batched siblings (see batching paragraph below).
