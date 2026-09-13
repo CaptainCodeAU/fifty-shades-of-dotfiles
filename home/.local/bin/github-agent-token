@@ -72,6 +72,7 @@
 # even though the App itself may be installed on many.
 
 import platform
+import random
 import stat
 import subprocess
 import sys
@@ -138,7 +139,14 @@ def request_with_retry(method: str, url: str, *, what: str, **kwargs):
             fail(f"{what} unreachable after {RETRY_ATTEMPTS} attempts: {type(exc).__name__}: {exc}")
 
         detail = f"HTTP {resp.status_code}" if resp is not None else type(exc).__name__
-        delay = RETRY_BACKOFF[attempt - 1]
+        # Full jitter on the backoff. Without it every client that hit the same
+        # outage retries in lockstep and the retries themselves become the load
+        # that keeps the service down -- GitHub partially DISABLED
+        # authentication-token retries to recover from its 2026-08-17 outage for
+        # exactly that reason. Randomising across [0, delay] is the standard
+        # answer (AWS "Exponential Backoff and Jitter"; Microsoft MSAL uses
+        # exponential backoff with jitter for the same class of call).
+        delay = round(random.uniform(0, RETRY_BACKOFF[attempt - 1]), 2)
         print(
             f"github-agent-token: {what} returned {detail} "
             f"(attempt {attempt} of {RETRY_ATTEMPTS}); retrying in {delay}s",
