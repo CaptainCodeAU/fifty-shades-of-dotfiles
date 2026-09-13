@@ -2,7 +2,7 @@
 
 > **The real values are not in this file.** It is tracked in a public repo,
 > so the credential table, the Infisical instance and paths, the App IDs and
-> the Keychain service names all live in `docs/GITHUB_AGENT_USAGE.private.md`
+> the Keychain service names all live in a private companion document, kept in a private repo outside this one
 > instead, alongside the machine's own `~/.gitconfig-githubagent`. This file
 > covers how the system works and how to drive it, which is the useful half
 > and gives nothing away.
@@ -45,7 +45,7 @@ and no tier at all; nothing in the code needs to know a repo's status.
 The full command sequences — creating a tier App through the manifest flow,
 storing its key, creating the Infisical machine identity, saving the
 bootstrap secret to the Keychain, installing the App and verifying the whole
-chain — are in `docs/GITHUB_AGENT_USAGE.private.md`, because every step of
+chain — are in a private companion document, kept in a private repo outside this one, because every step of
 them names a real path or identity.
 
 The tools themselves are `github-agent-create-app` and
