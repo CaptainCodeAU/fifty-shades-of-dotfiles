@@ -445,6 +445,104 @@ run_watch CI_WATCH_NOW=1000518500
 want   C35 "TWIN a real green DOES clear the red" "$GREENGLYPH" "$OUT"
 wanteq C35 "TWIN green zeroes the streak"          "0" "$(field red_since)"
 
+# C36 AUDIT-FOUND (2026-09-15): THE PARSER TRUNCATED AT THE FIRST BRACE.
+# `${rest%\}*}` cut the run object at the first `}`. GitHub orders the object
+# id, name, ..., display_title, ..., status, conclusion -- so a commit title
+# containing a brace ("fix: handle {} in the parser") or a workflow named
+# "Build {matrix}" cut it BEFORE the fields being read, and both a green and a
+# red run rendered `.. CI running`. Combined with the alarm bug that meant a
+# COMMIT MESSAGE could dismiss a CI alarm. C33 missed it only because its
+# fixture put the decoy fields AFTER the ones being read; this one uses the
+# real key order, which is the whole point.
+new_case
+stub_runs 200 '{"total_count":1,"workflow_runs":[{"id":1,"name":"CI","node_id":"x","head_branch":"main","head_sha":"1234567cafe","path":".github/workflows/ci.yml","display_title":"fix: handle {} in the parser","run_number":5,"event":"push","status":"completed","conclusion":"success","html_url":"u","actor":{"login":"a","html_url":"z"},"head_commit":{"message":"plain","id":"abc"},"repository":{"full_name":"o/r","html_url":"nested"}}]}'
+run_watch
+want C36 "braced title: a green run still renders green" "$GREENGLYPH" "$OUT"
+new_case
+stub_runs 200 '{"total_count":1,"workflow_runs":[{"id":1,"name":"CI","node_id":"x","head_branch":"main","head_sha":"deadbee1234","path":".github/workflows/ci.yml","display_title":"fix: handle {} in the parser","run_number":5,"event":"push","status":"completed","conclusion":"failure","html_url":"u","actor":{"login":"a","html_url":"z"},"head_commit":{"message":"plain","id":"abc"},"repository":{"full_name":"o/r","html_url":"nested"}}]}'
+run_watch
+want C36 "braced title: a red run still renders RED" "RED" "$OUT"
+# CONTROL: the same payloads with a plain title must behave identically, or the
+# fixture is testing the title rather than the parser.
+new_case
+stub_runs 200 '{"total_count":1,"workflow_runs":[{"id":1,"name":"CI","node_id":"x","head_branch":"main","head_sha":"deadbee1234","path":".github/workflows/ci.yml","display_title":"a plain title","run_number":5,"event":"push","status":"completed","conclusion":"failure","html_url":"u","actor":{"login":"a","html_url":"z"},"head_commit":{"message":"plain","id":"abc"},"repository":{"full_name":"o/r","html_url":"nested"}}]}'
+run_watch
+want C36 "CONTROL plain title still renders RED" "RED" "$OUT"
+# And an escaped quote in the title must not let prose spoof a field.
+new_case
+stub_runs 200 '{"total_count":1,"workflow_runs":[{"id":1,"name":"CI","node_id":"x","head_branch":"main","head_sha":"deadbee1234","path":".github/workflows/ci.yml","display_title":"title with \\"conclusion\\": \\"success\\" inside","run_number":5,"event":"push","status":"completed","conclusion":"failure","html_url":"u","actor":{"login":"a","html_url":"z"},"head_commit":{"message":"plain","id":"abc"},"repository":{"full_name":"o/r","html_url":"nested"}}]}'
+run_watch
+wantnot C36 "a title quoting a conclusion cannot spoof it" "$GREENGLYPH" "$OUT"
+
+# C37 AUDIT-FOUND: every GitHub 5xx fired the LOUD magenta banner. GitHub
+# incidents are routine, so that is precisely the habituation BLIND exists to
+# prevent -- the loud channel has to stay rare to stay worth anything.
+new_case
+run_watch                                     # observe green first
+stub_runs 503 '<html>GitHub is having a bad day</html>'
+run_watch
+wantnot C37 "a 5xx is not BLIND"        "BLIND" "$OUT"
+want    C37 "a 5xx still says stale"    "stale" "$OUT"
+# TWIN: a permission refusal MUST still be loud, or the register is just dead.
+new_case
+run_watch
+stub_runs 403 '{"message":"Resource not accessible by integration","status":"403"}'
+run_watch
+want C37 "TWIN a 403 is still BLIND" "BLIND" "$OUT"
+
+# C38 AUDIT-FOUND: TRANSITION was a GLOBAL, and the branch-gone early return
+# skipped the reset that the normal render path does -- so a target going red
+# for the first time, whose branch is also dead, left the flag set, and the NEXT
+# target in the watchlist spoke "just went red" about a red that was days old.
+#
+# MY FIRST VERSION OF THIS CASE WAS HOLLOW. It rendered two fresh reds and then
+# two known reds, which behaves identically with and without the bug -- it
+# passed against the unfixed binary. The leak needs the branch-gone EARLY RETURN
+# specifically, so the fixture now serves a dead branch for the first target.
+# (This is the audit's own lesson turned on the audit's own test.)
+new_case
+printf 'o/r@main | GONE\no/r2@main | SECOND\n' > "$LIST"
+cat > "$D/http-stub" <<'STUBEOF'
+#!/usr/bin/env bash
+case "$1" in
+  repos/o/r/branches/trunk)  printf '200\n{"name":"trunk"}' ;;          # control HITS
+  repos/o/r/branches/*)      printf '404\n{"message":"Not Found","status":"404"}' ;;
+  repos/o/r2/branches/*)     printf '200\n{"name":"main"}' ;;
+  repos/o/r)                 printf '200\n{"default_branch":"trunk"}' ;;
+  repos/o/r2)                printf '200\n{"default_branch":"main"}' ;;
+  repos/o/r/actions/*)       cat "$CI_WATCH_SELFTEST_STUB" ;;
+  repos/o/r2/actions/*)      cat "$CI_WATCH_SELFTEST_STUB2" ;;
+  *)                         printf '200\n{}' ;;
+esac
+STUBEOF
+chmod +x "$D/http-stub"
+GREENP='{"total_count":1,"workflow_runs":[{"conclusion":"success","status":"completed","head_sha":"1234567cafe","html_url":"u"}]}'
+REDP='{"total_count":1,"workflow_runs":[{"conclusion":"failure","status":"completed","head_sha":"deadbee1234","html_url":"u"}]}'
+voices_at(){ # voices_at <now> -> count of transition alerts
+    local out
+    out="$(env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" CI_WATCH_HTTP_STUB="$D/http-stub" \
+            CI_WATCH_SELFTEST_STUB="$STUB" CI_WATCH_SELFTEST_STUB2="$D/runs2.stub" \
+            CI_WATCH_DEBUG=1 CI_WATCH_NOW="$1" "$TOOL" 2>&1)"
+    [ "$VERBOSE" -eq 1 ] && printf '       | %s\n' "$out"
+    printf '%s' "$out" | grep -c 'Heads up' || true
+}
+# Day 0: GONE is green, SECOND goes red -> exactly one legitimate alert.
+printf '200\n%s' "$GREENP" > "$STUB"; printf '200\n%s' "$REDP" > "$D/runs2.stub"
+v="$(voices_at 1000000000 | head -1)"
+wanteq C38 "one fresh red speaks one transition" "1" "$v"
+# Day 1: GONE goes red for the FIRST time and its branch is dead (early return).
+# SECOND's red is a day old and must stay silent.
+printf '200\n%s' "$REDP" > "$STUB"
+v="$(voices_at 1000086400 | head -1)"
+wanteq C38 "a branch-gone target does not speak for the NEXT target" "0" "$v"
+
+# C39 AUDIT-FOUND: snoozing a never-observed target wrote observed_state=red,
+# so --json reported a red for something that had never been seen once.
+new_case
+env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" CI_WATCH_NOW=1000000000 \
+    "$TOOL" --snooze o/r 3 >/dev/null 2>&1
+wantnot C39 "a snooze does not invent an observation" "red" "$(field observed_state)x"
+
 # C26: corrupt state and cache degrade, never crash.
 new_case
 printf 'schema=2\nlast_outcome=' > "$(statefile)"     # truncated mid-record
@@ -571,7 +669,7 @@ want "AntiC23" "red survives being seen twice" "RED" "$OUT"
 # C32 -- coverage map. Printed, cross-checkable, never self-asserted.
 # ===========================================================================
 printf '\ncoverage map (C32)\n'
-EXPECT="C1 C2 C3 C4 C5 C6 C7 C8 C9 C10 C11 C12 C13 C14 C15 C16 C17 C18 C19 C20 C24 C25 C26 C27 C28 C29 C30 C31 C33 C34 C35 AntiC22 AntiC23"
+EXPECT="C1 C2 C3 C4 C5 C6 C7 C8 C9 C10 C11 C12 C13 C14 C15 C16 C17 C18 C19 C20 C24 C25 C26 C27 C28 C29 C30 C31 C33 C34 C35 C36 C37 C38 C39 AntiC22 AntiC23"
 missing=""
 for c in $EXPECT; do
     hit=0

@@ -152,6 +152,11 @@ mkdir -p "$STATE_DIR" 2>/dev/null || true
 ERR_SINK=/dev/null
 if [ -n "${TMPDIR:-}" ] && ( : >"${TMPDIR%/}/ci-watch.$$.err" ) 2>/dev/null; then
   ERR_SINK="${TMPDIR%/}/ci-watch.$$.err"
+  # One file per invocation, and this runs at EVERY session start. An audit of
+  # this tool left 487 of them behind in a single afternoon. Clean up on the way
+  # out; `command rm` skips any shell function but still reaches the PATH shim,
+  # and a scratch file we created this run is ours to remove.
+  trap 'command rm -f "$ERR_SINK" 2>/dev/null' EXIT INT TERM
 fi
 
 if [ -n "${NO_COLOR:-}" ]; then
@@ -210,13 +215,34 @@ json_status_code(){
   [[ "$body" =~ \"status\"[[:space:]]*:[[:space:]]*\"([0-9]{3})\" ]] && printf '%s' "${BASH_REMATCH[1]}"
 }
 is_runs_payload(){ case "$1" in *'"workflow_runs"'*) return 0 ;; *) return 1 ;; esac; }
-first_run_obj(){ # the first {...} inside "workflow_runs":[ ... ]
+# The runs slice -- everything from "workflow_runs" onward. It used to be
+# truncated at the first `}`, which is WRONG for a real payload: GitHub orders
+# the run object id, name, ..., display_title, ..., status, conclusion, so a
+# commit title containing a brace ("fix: handle {} in the parser") or a workflow
+# named "Build {matrix}" cut the object BEFORE the fields that matter. Verified
+# 2026-09-15: both a green and a red run rendered `.. CI running`, and with the
+# old alarm-clearing bug that ALSO zeroed a red streak. A commit message could
+# silently dismiss a CI alarm. With per_page=1 there is exactly one run object,
+# so no truncation is needed at all -- first-match-wins is correct because every
+# run-level key precedes its nested namesakes (run html_url before actor and
+# repository html_url).
+runs_slice(){
   local body="$1" rest
   rest="${body#*\"workflow_runs\"}"
   [ "$rest" = "$body" ] && return 1
-  rest="${rest#*\[}"
-  case "$rest" in \{*) ;; *) return 1 ;; esac
-  printf '%s' "${rest%%\}*}}"
+  printf '%s' "$rest"
+}
+# `conclusion` and `status` are CLOSED ENUMS. Matching against the enum instead
+# of "any quoted string" means a crafted commit title cannot spoof them by
+# embedding an escaped \"conclusion\": pair -- it would have to name a real
+# value, in your own repo, on purpose.
+json_enum(){ # json_enum <body> <key> <allowed-alternation>
+  local body="$1" key="$2" allow="$3"
+  [[ "$body" =~ \"$key\"[[:space:]]*:[[:space:]]*\"($allow)\" ]] && printf '%s' "${BASH_REMATCH[1]}"
+}
+json_sha(){ # a head_sha is hex, which a prose title is not
+  local body="$1"
+  [[ "$body" =~ \"head_sha\"[[:space:]]*:[[:space:]]*\"([0-9a-fA-F]{7,40})\" ]] && printf '%s' "${BASH_REMATCH[1]}"
 }
 
 # ---- transport -------------------------------------------------------------
@@ -250,7 +276,12 @@ http_get(){
       elif [ "$rc" -eq 0 ]; then H_CODE=200
       else H_RC=6; fi   # gh failed without a parseable status body: see O_DETAIL
     fi
-    return 0
+    # Only a usable answer ends the attempt. The rewrite had `return 0` here
+    # unconditionally, which DELETED the old tool's curl fall-through -- and in
+    # a Claude session, where gh is wrapped by a credential helper that can fail
+    # while GH_TOKEN is exported and perfectly usable, that meant a quiet
+    # ".. CI stale" every session forever. Restored.
+    [ "$H_RC" -eq 0 ] && return 0
   fi
 
   if have curl && [ -n "${GH_TOKEN:-}" ]; then
@@ -268,6 +299,7 @@ http_get(){
     return 0
   fi
 
+  [ "$H_RC" -ne 0 ] && return 0   # keep gh's failure if curl was not available
   H_RC=99   # no gh, no curl+token: cannot observe anything, and we say so
   return 0
 }
@@ -302,10 +334,10 @@ classify(){
       if [ "$(numor0 "$total")" -eq 0 ]; then
         O_TOKEN=empty_ok; O_DETAIL='no workflow runs recorded'; return 0
       fi
-      obj="$(first_run_obj "$body")" || { O_TOKEN=parse_error; O_DETAIL='runs array unreadable'; return 0; }
-      O_CONCL="$(json_str "$obj" conclusion)"
-      O_STATUS="$(json_str "$obj" status)"
-      O_SHA="$(json_str "$obj" head_sha)"; O_SHA="${O_SHA:0:7}"
+      obj="$(runs_slice "$body")" || { O_TOKEN=parse_error; O_DETAIL='runs array unreadable'; return 0; }
+      O_CONCL="$(json_enum "$obj" conclusion 'success|failure|neutral|cancelled|skipped|timed_out|action_required|stale|startup_failure')"
+      O_STATUS="$(json_enum "$obj" status 'completed|in_progress|queued|requested|waiting|pending|action_required')"
+      O_SHA="$(json_sha "$obj")"; O_SHA="${O_SHA:0:7}"
       O_URL="$(json_str "$obj" html_url)"
       O_TOKEN=ok; return 0 ;;
     401)
@@ -313,7 +345,7 @@ classify(){
     403)
       # A rate-limit 403 and a permission 403 share a status code.
       case "$msg" in
-        *"rate limit"*|*"Rate limit"*|*"secondary rate"*)
+        *"rate limit"*|*"Rate limit"*|*"secondary rate"*|*"abuse detection"*|*"abuse-detection"*)
           O_TOKEN=rate_limited; O_DETAIL='rate limited'; return 0 ;;
       esac
       O_TOKEN=perm_denied
@@ -337,7 +369,14 @@ classify(){
       return 0 ;;
     429)
       O_TOKEN=rate_limited; O_DETAIL='rate limited'; return 0 ;;
+    5??)
+      # GitHub incidents are routine. Firing the magenta banner on every watched
+      # repo during one is exactly the habituation BLIND exists to avoid, so a
+      # server error is transient news, not a broken watch.
+      O_TOKEN=server_error; O_DETAIL="GitHub returned HTTP ${H_CODE}"; return 0 ;;
     *)
+      # Unknown statuses stay QUIET too: being loud about something we do not
+      # understand spends the alarm channel on our own ignorance.
       O_TOKEN=http_other; O_DETAIL="HTTP ${H_CODE}${msg:+: $msg}"; return 0 ;;
   esac
 }
@@ -468,6 +507,9 @@ blind_banner(){ # label detail lastline
 # ---- one target ------------------------------------------------------------
 process_target(){ # repo branch label
   local repo="$1" branch="$2" label="$3" key now days tier
+  TRANSITION=0   # per-target: it used to be global and the branch-gone early
+                 # return skipped its reset, so one target's fresh red spoke a
+                 # "just went red" alert about a DIFFERENT, already-known red.
   local fetched checked red_since snooze balive bchecked
   local obs concl sha url outcome detail age lastline
   key="$(keyof "${repo}@${branch}")"
@@ -655,7 +697,7 @@ process_target(){ # repo branch label
   fi
 
   case "$outcome" in
-    perm_denied|unauthorized|not_found|http_other)
+    perm_denied|unauthorized|not_found)
       # We COULD see this and now cannot. Something regressed. Loud.
       blind_banner "$label" "$detail" "$lastline" ;;
     *)
@@ -733,7 +775,11 @@ cmd_snooze(){
     case "${repo}@${branch}" in *"$match"*) ;; *) return 0;; esac
     key="$(keyof "${repo}@${branch}")"
     load_state "$key"
-    save_state "$key" "${S_OUTCOME:-}" "${S_OBS:-red}" "$S_CONCL" "$S_SHA" "$S_URL" \
+    # NOT "${S_OBS:-red}": snoozing a never-observed target used to write
+    # observed_state=red into the record, so --json reported a red for something
+    # that had never been seen. A snooze is a decision about noise, not an
+    # observation.
+    save_state "$key" "${S_OUTCOME:-}" "$S_OBS" "$S_CONCL" "$S_SHA" "$S_URL" \
                "$S_FETCHED" "$S_CHECKED" "${S_RED_SINCE:-$now}" "$until" \
                "$S_BRANCH_ALIVE" "$S_BRANCH_CHECKED"
     printf 'snoozed %s for %s day(s)\n' "$label" "$days"
@@ -794,9 +840,9 @@ cmd_json(){
     [ "$S_RED_SINCE" -gt 0 ] && days=$(( (now - S_RED_SINCE) / 86400 ))
     age=-1; [ "$S_FETCHED" -gt 0 ] && age=$(( now - S_FETCHED ))
     [ "$first" -eq 1 ] && first=0 || printf ','
-    printf '{"repo":"%s","branch":"%s","last_outcome":"%s","observed_state":"%s","conclusion":"%s","sha":"%s","age_seconds":%s,"days_red":%s,"snoozed":%s,"branch_alive":"%s"}' \
+    printf '{"repo":"%s","branch":"%s","last_outcome":"%s","observed_state":"%s","conclusion":"%s","sha":"%s","age_seconds":%s,"checked_at":%s,"days_red":%s,"snoozed":%s,"branch_alive":"%s"}' \
       "$repo" "$branch" "${S_OUTCOME:-never}" "${S_OBS:-}" "$S_CONCL" "$S_SHA" \
-      "$age" "$days" "$([ "$S_SNOOZE" -gt "$now" ] && echo true || echo false)" "$S_BRANCH_ALIVE"
+      "$age" "$S_CHECKED" "$days" "$([ "$S_SNOOZE" -gt "$now" ] && echo true || echo false)" "$S_BRANCH_ALIVE"
   }
   each_entry _json_one
   printf ']\n'
