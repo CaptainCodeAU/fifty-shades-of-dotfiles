@@ -1,0 +1,558 @@
+#!/usr/bin/env bash
+# ============================================================================
+#  ci-watch-selftest -- proves ci-watch cannot render a cached result as live
+# ============================================================================
+# WRITTEN BEFORE THE REWRITE IT TESTS, 2026-09-15, in the same spirit as
+# ccw-watch-selftest. The bug being fixed is a FALSE GREEN: when the GitHub
+# query failed, ci-watch fell back to a per-target cache and rendered the
+# cached `success` through the ordinary green path, with no staleness marker.
+# A repo that went green and then lost Actions access rendered
+#     OK CI green -- <label> (deadbee)
+# forever. Reproduced by execution on 2026-09-15, two runs of one command with
+# one variable changed (a planted cache), before a line of the fix was written.
+#
+# WHY THE CASES CAME FIRST. Every assertion here is about an ABSENCE -- "no
+# green glyph", "fetched_at unchanged", "no red escape code". Absences are the
+# outputs that read identically whether the mechanism worked or the test never
+# ran, so every failure-path case below ships with its success-path TWIN that
+# asserts the same marker is PRESENT. A case without its twin proves nothing.
+#
+# THE STUB IS THE TEST SEAM. ci-watch honours CI_WATCH_HTTP_STUB: an executable
+# called INSTEAD of gh/curl, given the API path as $1, printing the HTTP status
+# on line 1 and the response body on the rest. Its own exit code simulates
+# transport failure (7) and timeout (28). That makes all nine fetch outcomes
+# deterministic with no network, no token, and no sandbox interaction -- the
+# real gh binary on this machine is wrapped by github-agent-token, which needs
+# a uv cache the Claude sandbox denies, so a network-dependent suite could not
+# run here at all.
+#
+# Usage:  ci-watch-selftest            run every case
+#         ci-watch-selftest -v         also print each rendered line
+#         CI_WATCH_TOOL=/path/to/ci-watch ci-watch-selftest
+# Exit:   0 all passed  |  1 a case failed  |  2 could not run (invalid trial)
+# ============================================================================
+
+set -uo pipefail
+
+TOOL="${CI_WATCH_TOOL:-$(dirname "$0")/ci-watch}"
+[ -x "$TOOL" ] || { printf 'selftest: cannot find ci-watch at %s\n' "$TOOL" >&2; exit 2; }
+
+VERBOSE=0; [ "${1:-}" = "-v" ] && VERBOSE=1
+
+PASS=0; FAIL=0
+declare -a COVERED=()          # claim ids touched, for the C32 coverage map
+
+ROOT="$(mktemp -d "${TMPDIR:-/tmp}/ci-watch-selftest.XXXXXX")" || {
+    printf 'selftest: mktemp failed -- INVALID TRIAL, not a pass\n' >&2; exit 2; }
+# Deliberately NOT removed: `rm` here routes through the Trash wrapper and would
+# fill the Trash with fixture trees on every run. The OS reaps TMPDIR. The path
+# is printed at the end so a failing case can be opened.
+
+ok(){  PASS=$((PASS+1)); COVERED+=("$1"); printf '  ok   %-7s %s\n' "$1" "$2"; }
+bad(){ FAIL=$((FAIL+1)); COVERED+=("$1")
+       printf '  FAIL %-7s %s\n       want: %s\n       got : %s\n' \
+              "$1" "$2" "$3" "$(printf '%s' "$4" | tr '\n' '|')"; }
+
+want(){    case "$4" in *"$3"*) ok "$1" "$2";; *) bad "$1" "$2" "contains: $3" "$4";; esac; }
+wantnot(){ case "$4" in *"$3"*) bad "$1" "$2" "must NOT contain: $3" "$4";; *) ok "$1" "$2";; esac; }
+wanteq(){  [ "$3" = "$4" ] && ok "$1" "$2" || bad "$1" "$2" "$3" "$4"; }
+
+# ---- fixture plumbing ------------------------------------------------------
+# A case gets its own state dir, watchlist and stub payloads.
+CASE=0
+new_case(){                      # new_case -> sets D, LIST, STATE, STUB, BSTUB
+    CASE=$((CASE+1))
+    D="$ROOT/case$CASE"; mkdir -p "$D/state"
+    LIST="$D/watchlist"; STATE="$D/state"
+    STUB="$D/runs.stub"; BSTUB="$D/branch.stub"
+    RSTUB="$D/repo.stub"; DSTUB="$D/default.stub"
+    printf 'o/r@main | TESTTARGET\n' > "$LIST"
+    stub_runs 200 '{"total_count":1,"workflow_runs":[{"conclusion":"success","status":"completed","head_sha":"1234567cafe","html_url":"https://example.invalid/run"}]}'
+    stub_branch 200 '{"name":"main"}'
+    # The repo's default branch is "trunk" so the watched branch ("main") and the
+    # control branch are distinguishable in the stub.
+    stub_repo    200 '{"default_branch":"trunk"}'
+    stub_default 200 '{"name":"trunk"}'
+    cat > "$D/http-stub" <<'STUBEOF'
+#!/usr/bin/env bash
+# $1 = api path. Emits: line 1 = HTTP status, rest = body. Exit != 0 = transport.
+case "$1" in
+  */branches/trunk) f="$CI_WATCH_SELFTEST_DSTUB" ;;   # the positive control ref
+  */branches/*)     f="$CI_WATCH_SELFTEST_BSTUB" ;;   # the watched ref
+  */actions/runs*)  f="$CI_WATCH_SELFTEST_STUB"  ;;
+  *)                f="$CI_WATCH_SELFTEST_RSTUB" ;;   # bare repo -> default_branch
+esac
+[ -f "$f" ] || { printf '000\n'; exit 7; }
+code="$(head -1 "$f")"
+case "$code" in
+  TIMEOUT)   exit 28 ;;
+  TRANSPORT) exit 7  ;;
+esac
+cat "$f"
+STUBEOF
+    chmod +x "$D/http-stub"
+}
+stub_runs(){   { printf '%s\n' "$1"; printf '%s' "$2"; } > "$STUB"; }
+stub_branch(){  { printf '%s\n' "$1"; printf '%s' "$2"; } > "$BSTUB"; }
+stub_repo(){    { printf '%s\n' "$1"; printf '%s' "$2"; } > "$RSTUB"; }
+stub_default(){ { printf '%s\n' "$1"; printf '%s' "$2"; } > "$DSTUB"; }
+
+run_watch(){                     # run_watch [extra env assignments...] -> OUT / RC
+    OUT="$(env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" \
+               CI_WATCH_HTTP_STUB="$D/http-stub" \
+               CI_WATCH_SELFTEST_STUB="$STUB" CI_WATCH_SELFTEST_BSTUB="$BSTUB" \
+               CI_WATCH_SELFTEST_RSTUB="$RSTUB" CI_WATCH_SELFTEST_DSTUB="$DSTUB" \
+               NO_COLOR="${NO_COLOR_OVERRIDE:-}" \
+               "$@" "$TOOL" 2>&1)"
+    RC=$?
+    [ "$VERBOSE" -eq 1 ] && printf '       | %s\n' "$OUT"
+    return 0
+}
+statefile(){ printf '%s/%s.state' "$STATE" "$(printf '%s' 'o/r@main' | tr '/@:.' '____' | tr -cd 'A-Za-z0-9_-')"; }
+field(){ grep -E "^$1=" "$(statefile)" 2>/dev/null | head -1 | cut -d= -f2-; }
+
+GREENGLYPH='CI green'
+REDCODE=$'\033[0;31m'
+
+printf '\nci-watch-selftest -- fixtures in %s\n\n' "$ROOT"
+
+# ===========================================================================
+# F1 -- honest fetch classification
+# ===========================================================================
+printf 'F1  honest fetch classification\n'
+
+# C1 static: the evidence-destroying construct is gone from the fetch paths.
+# Scope to the fetch/classify functions -- the claim is about the FETCH path, not
+# about `mkdir -p ... || true` housekeeping elsewhere in the file.
+c1_region="$(sed -n '/^http_get()/,/^}/p;/^classify()/,/^}/p' "$TOOL")"
+c1_hits="$(printf '%s' "$c1_region" | grep -c '2>/dev/null || true' || true)"
+c1_hits="$(printf '%s' "$c1_hits" | head -1)"
+# POSITIVE ARM: the grep itself must be able to find something in this file,
+# otherwise a 0 means "grep did not run", not "the construct is absent".
+c1_control="$(printf '%s' "$c1_region" | grep -c 'H_CODE' || true)"
+c1_control="$(printf '%s' "$c1_control" | head -1)"
+if [ "$c1_control" -eq 0 ]; then
+    bad C1 "fetch-path grep" "control token present" "control missed -- INVALID TRIAL, not a pass"
+else
+    wanteq C1 "no 2>/dev/null-plus-true in the tool" "0" "$c1_hits"
+fi
+
+# C2: every outcome token, one fixture each.
+for spec in "200:ok" "403perm:perm_denied" "404:not_found" "401:unauthorized" \
+            "403rate:rate_limited" "TIMEOUT:timeout" "TRANSPORT:transport" \
+            "200empty:empty_ok" "200garbage:parse_error"; do
+    code="${spec%%:*}"; expect="${spec#*:}"
+    new_case
+    case "$code" in
+      200)        : ;;  # default fixture is a healthy success
+      200empty)   stub_runs 200 '{"total_count":0,"workflow_runs":[]}' ;;
+      200garbage) stub_runs 200 '<html>503 maintenance</html>' ;;
+      403perm)    stub_runs 403 '{"message":"Resource not accessible by integration","status":"403"}' ;;
+      403rate)    stub_runs 403 '{"message":"API rate limit exceeded","status":"403"}' ;;
+      404)        stub_runs 404 '{"message":"Not Found","status":"404"}' ;;
+      401)        stub_runs 401 '{"message":"Bad credentials","status":"401"}' ;;
+      TIMEOUT)    stub_runs TIMEOUT '' ;;
+      TRANSPORT)  stub_runs TRANSPORT '' ;;
+    esac
+    run_watch
+    wanteq C2 "outcome token for $code" "$expect" "$(field last_outcome)"
+done
+
+# C3: an HTTP error body must never become a CI value.
+new_case
+stub_runs 403 '{"message":"Resource not accessible by integration","documentation_url":"https://docs.github.com/rest/actions/workflow-runs#list-workflow-runs-for-a-repository","status":"403"}'
+run_watch
+wantnot C3 "403 body yields no green" "$GREENGLYPH" "$OUT"
+wantnot C3 "403 body yields no sha"   "1234567"     "$OUT"
+# TWIN: the same assertion must FAIL to hold on a real success, or it proves nothing.
+new_case; run_watch
+want C3 "TWIN success does render green" "$GREENGLYPH" "$OUT"
+
+# C4: the two 403 message strings name different token families.
+new_case; stub_runs 403 '{"message":"Resource not accessible by integration","status":"403"}'
+run_watch; app_out="$OUT"
+new_case; stub_runs 403 '{"message":"Resource not accessible by personal access token","status":"403"}'
+run_watch; pat_out="$OUT"
+if [ "$app_out" = "$pat_out" ]; then
+    bad C4 "403 token family named" "distinct remedies" "$app_out"
+else
+    ok C4 "403 token family named distinctly"
+fi
+want C4 "remedy names Actions: read" "Actions: read" "$app_out"
+
+# C5: a 404 must not assert non-existence as fact.
+new_case; stub_runs 404 '{"message":"Not Found","status":"404"}'
+run_watch
+want    C5 "404 names both possibilities" "cannot see it" "$OUT"
+wantnot C5 "404 does not assert deletion" "no longer exists" "$OUT"
+
+# ===========================================================================
+# F2 -- success-only freshness stamp
+# ===========================================================================
+printf 'F2  success-only freshness stamp\n'
+
+# C6: a failing fetch must not move fetched_at. THE CORE INVARIANT.
+new_case
+run_watch                                  # arm 1: success stamps the clock
+t1="$(field fetched_at)"
+[ -n "$t1" ] && ok C6 "success writes fetched_at" || bad C6 "success writes fetched_at" "non-empty" "$t1"
+stub_runs 403 '{"message":"Resource not accessible by integration","status":"403"}'
+run_watch CI_WATCH_NOW=9999999999          # arm 2: refusal, far in the future
+t2="$(field fetched_at)"
+wanteq C6 "failure leaves fetched_at byte-identical" "$t1" "$t2"
+# TWIN: a later SUCCESS must move it, or the field is simply frozen and the
+# assertion above would pass even if the tool never wrote it again.
+new_case; run_watch; t3="$(field fetched_at)"
+run_watch CI_WATCH_NOW=9999999999; t4="$(field fetched_at)"
+if [ "$t3" = "$t4" ]; then bad C6 "TWIN success DOES move fetched_at" "changed" "$t4"
+else ok C6 "TWIN success does move fetched_at"; fi
+
+# C7: health and result are separate fields.
+new_case; run_watch
+[ -n "$(field last_outcome)" ] && [ -n "$(field observed_state)" ] \
+    && ok C7 "health and result stored separately" \
+    || bad C7 "health and result stored separately" "both fields" "$(cat "$(statefile)" 2>&1)"
+
+# C8: a failing fetch must not reset red_since or the snooze.
+new_case
+stub_runs 200 '{"total_count":1,"workflow_runs":[{"conclusion":"failure","status":"completed","head_sha":"bbbbbbb2222","html_url":"u"}]}'
+run_watch CI_WATCH_NOW=1000000000
+rs1="$(field red_since)"
+stub_runs 403 '{"message":"Resource not accessible by integration","status":"403"}'
+run_watch CI_WATCH_NOW=1000432000          # +5 days, now blind
+wanteq C8 "blind does not reset red_since" "$rs1" "$(field red_since)"
+
+# ===========================================================================
+# F3 -- four-state render, no cached green
+# ===========================================================================
+printf 'F3  four-state render\n'
+
+# C9: THE REGRESSION TEST. The exact 2026-09-15 reproduction, both arms.
+new_case
+run_watch                                   # observe green for real
+want C9 "ARM 1 live success renders green" "$GREENGLYPH" "$OUT"
+stub_runs 403 '{"message":"Resource not accessible by integration","status":"403"}'
+run_watch                                   # same target, now refused
+wantnot C9 "ARM 2 cached success never renders green" "$GREENGLYPH" "$OUT"
+
+# C10: a rendered cached value carries its age.
+new_case
+run_watch CI_WATCH_NOW=1000000000
+stub_runs TIMEOUT ''
+run_watch CI_WATCH_NOW=1000021600           # +6h
+want C10 "stale render shows an age" "6h" "$OUT"
+
+# C11: four visually distinct states.
+seen=""
+new_case; run_watch; seen="$seen|$(printf '%s' "$OUT" | grep -o 'CI [a-z]*' | head -1)"
+new_case; stub_runs 200 '{"total_count":1,"workflow_runs":[{"conclusion":"failure","status":"completed","head_sha":"c","html_url":"u"}]}'
+run_watch; seen="$seen|$(printf '%s' "$OUT" | grep -oE 'CI (RED|red)' | head -1)"
+new_case; stub_runs 403 '{"message":"Resource not accessible by integration","status":"403"}'
+run_watch; blind_never="$OUT"
+new_case; run_watch >/dev/null; stub_runs 403 '{"message":"Resource not accessible by integration","status":"403"}'
+run_watch; blind_after="$OUT"
+if [ "$blind_never" = "$blind_after" ]; then
+    bad C11 "BLIND distinct from UNOBSERVABLE" "different lines" "$blind_never"
+else
+    ok C11 "BLIND distinct from UNOBSERVABLE"
+fi
+want C11 "never-observed target says unobservable" "never" "$blind_never"
+want C11 "previously-observed refusal says BLIND"  "BLIND" "$blind_after"
+
+# C12: BLIND self-clears on the next success, no manual step.
+new_case
+run_watch
+stub_runs 403 '{"message":"Resource not accessible by integration","status":"403"}'
+run_watch
+want C12 "went blind" "BLIND" "$OUT"
+stub_runs 200 '{"total_count":1,"workflow_runs":[{"conclusion":"success","status":"completed","head_sha":"1234567cafe","html_url":"u"}]}'
+run_watch
+want    C12 "access returns -> green immediately" "$GREENGLYPH" "$OUT"
+wantnot C12 "no BLIND residue"                    "BLIND"       "$OUT"
+
+# C13: past the hard TTL, no value at all -- only the reason.
+new_case
+run_watch CI_WATCH_NOW=1000000000
+stub_runs TIMEOUT ''
+run_watch CI_WATCH_NOW=1001728000           # +20 days
+wantnot C13 "expired cache shows no sha"   "1234567" "$OUT"
+wantnot C13 "expired cache shows no green" "$GREENGLYPH" "$OUT"
+# TWIN: inside the TTL the sha IS shown, so the assertion above is not vacuous.
+new_case
+run_watch CI_WATCH_NOW=1000000000
+stub_runs TIMEOUT ''
+run_watch CI_WATCH_NOW=1000086400           # +1 day
+want C13 "TWIN inside TTL still shows the sha" "1234567" "$OUT"
+
+# ===========================================================================
+# F4 -- branch liveness
+# ===========================================================================
+printf 'F4  branch liveness\n'
+
+# C14: a deleted branch is its own state, not unknown and not a stale green.
+new_case
+stub_branch 404 '{"message":"Not Found","status":"404"}'
+stub_default 200 '{"name":"trunk"}'        # CONTROL HITS: the token can read branches
+run_watch
+want    C14 "dead ref named"        "no longer exists" "$OUT"
+wantnot C14 "dead ref is not green" "$GREENGLYPH"      "$OUT"
+# TWIN: a live branch must NOT produce the dead-ref line.
+new_case; run_watch
+wantnot C14 "TWIN live branch has no dead-ref line" "no longer exists" "$OUT"
+
+# C15: the liveness call is cached -- two renders inside the TTL, one call.
+new_case
+CALLLOG="$D/branchcalls"; : > "$CALLLOG"
+cat > "$D/http-stub" <<'STUBEOF'
+#!/usr/bin/env bash
+case "$1" in
+  */branches/*) printf 'B\n' >> "$CI_WATCH_SELFTEST_CALLLOG"; f="$CI_WATCH_SELFTEST_BSTUB" ;;
+  *)            f="$CI_WATCH_SELFTEST_STUB" ;;
+esac
+code="$(head -1 "$f")"
+case "$code" in TIMEOUT) exit 28;; TRANSPORT) exit 7;; esac
+cat "$f"
+STUBEOF
+chmod +x "$D/http-stub"
+run_watch CI_WATCH_SELFTEST_CALLLOG="$CALLLOG" CI_WATCH_NOW=1000000000
+run_watch CI_WATCH_SELFTEST_CALLLOG="$CALLLOG" CI_WATCH_NOW=1000003600
+wanteq C15 "branch liveness cached inside TTL" "1" "$(wc -l < "$CALLLOG" | tr -d ' ')"
+
+# C34 (live-found 2026-09-15): a 404 from /branches/ is NOT proof of deletion.
+# Measured against the real API: a live watched branch returned 404 while
+# being demonstrably alive and green, because the token reads Actions but not
+# Contents and GitHub 404s rather than confirming a private resource exists.
+# So the 404 path carries a positive control, and when the CONTROL ALSO MISSES
+# the honest answer is "cannot confirm", never "gone".
+new_case
+stub_branch  404 '{"message":"Not Found","status":"404"}'
+stub_default 404 '{"message":"Not Found","status":"404"}'   # CONTROL MISSES
+run_watch
+wantnot C34 "blind instrument never claims the branch is gone" "no longer exists" "$OUT"
+want    C34 "and the CI result is still reported"             "$GREENGLYPH"      "$OUT"
+
+# ===========================================================================
+# F5 -- the control arm
+# ===========================================================================
+printf 'F5  the control arm\n'
+
+# C16: --control must fail loudly if the classifier ever calls a refusal green.
+new_case
+OUT="$(env CI_WATCH_STATE="$STATE" CI_WATCH_LIST="$LIST" "$TOOL" --control 2>&1)"; RC=$?
+wanteq C16 "--control passes on a healthy tool" "0" "$RC"
+# NEGATIVE ARM: force every classification to green and the control MUST fail.
+OUT="$(env CI_WATCH_STATE="$STATE" CI_WATCH_LIST="$LIST" CI_WATCH_FORCE=green "$TOOL" --control 2>&1)"; RC=$?
+if [ "$RC" -eq 0 ]; then
+    bad C16 "--control catches a forced-green classifier" "exit != 0" "exit 0: $OUT"
+else
+    ok C16 "--control catches a forced-green classifier"
+fi
+
+# C17: the selftest is reachable through ~/.local/bin, not only from the repo.
+if [ -x "$HOME/.local/bin/ci-watch-selftest" ] && [ -x "$HOME/.local/bin/ci-watch" ]; then
+    ok C17 "stow-deployed and reachable via ~/.local/bin"
+else
+    bad C17 "stow-deployed and reachable via ~/.local/bin" "both executable" \
+        "$(ls -l "$HOME/.local/bin/ci-watch"* 2>&1 | tr '\n' ';')"
+fi
+
+# ===========================================================================
+# F6 -- --add ergonomics
+# ===========================================================================
+printf 'F6  --add ergonomics\n'
+
+# C18: adding from a non-default branch warns and names the re-point command.
+new_case
+REPO="$D/repo"; mkdir -p "$REPO"
+git -C "$REPO" init -q 2>/dev/null
+git -C "$REPO" remote add origin "https://github.com/o/r.git" 2>/dev/null
+git -C "$REPO" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init 2>/dev/null
+git -C "$REPO" checkout -q -b feature/thing 2>/dev/null
+: > "$D/addlist"
+OUT="$(env CI_WATCH_LIST="$D/addlist" CI_WATCH_STATE="$STATE" \
+          git -C "$REPO" rev-parse --show-toplevel >/dev/null 2>&1; \
+      cd_out=$(env CI_WATCH_LIST="$D/addlist" CI_WATCH_STATE="$STATE" \
+          bash -c "builtin cd '$REPO' && '$TOOL' --add . 2>&1"); printf '%s' "$cd_out")"
+want C18 "--add warns on a feature branch" "re-point" "$OUT"
+# TWIN: adding from the default branch must NOT warn.
+git -C "$REPO" checkout -q master 2>/dev/null || git -C "$REPO" checkout -q main 2>/dev/null
+: > "$D/addlist"
+OUT="$(bash -c "builtin cd '$REPO' && CI_WATCH_LIST='$D/addlist' CI_WATCH_STATE='$STATE' '$TOOL' --add . 2>&1")"
+wantnot C18 "TWIN default branch does not warn" "re-point" "$OUT"
+
+# ===========================================================================
+# F7 -- edge cases and coverage
+# ===========================================================================
+printf 'F7  edge cases and coverage\n'
+
+# C24: an IN-PROGRESS run was observed. It must never read as unobservable.
+new_case
+stub_runs 200 '{"total_count":1,"workflow_runs":[{"conclusion":null,"status":"in_progress","head_sha":"ddddddd4444","html_url":"u"}]}'
+run_watch
+wantnot C24 "in_progress is not BLIND"        "BLIND" "$OUT"
+wantnot C24 "in_progress is not unobservable" "never" "$OUT"
+want    C24 "in_progress is named"            "running" "$OUT"
+
+# C33 REGRESSION (live-found 2026-09-15, invisible to every stub until now): a
+# REAL runs payload contains "status":"completed" on the run and a "message" on
+# head_commit. Reading those as an HTTP status and an API error message turned a
+# healthy 200 into `HTTP completed: <the whole commit message>` and rendered the
+# repo unobservable. Minimal stubs never carried the decoy fields.
+new_case
+stub_runs 200 '{"total_count":1,"workflow_runs":[{"conclusion":"success","status":"completed","head_sha":"1234567cafe","html_url":"u","head_commit":{"message":"docs: order the args table\n\nC-Branch: main","id":"abc"},"repository":{"full_name":"o/r"}}]}'
+run_watch
+want    C33 "realistic payload renders green"      "$GREENGLYPH" "$OUT"
+wantnot C33 "commit message never leaks as detail" "C-Branch"    "$OUT"
+wantnot C33 "run status never read as HTTP status" "HTTP completed" "$OUT"
+
+# C25: every conclusion GitHub can return maps to a named state.
+for concl in cancelled neutral skipped action_required stale timed_out startup_failure; do
+    new_case
+    stub_runs 200 "{\"total_count\":1,\"workflow_runs\":[{\"conclusion\":\"$concl\",\"status\":\"completed\",\"head_sha\":\"eeeeeee5555\",\"html_url\":\"u\"}]}"
+    run_watch
+    wantnot C25 "$concl is not unobservable" "never" "$OUT"
+done
+
+# C26: corrupt state and cache degrade, never crash.
+new_case
+printf 'schema=2\nlast_outcome=' > "$(statefile)"     # truncated mid-record
+stub_runs 403 '{"message":"Resource not accessible by integration","status":"403"}'
+run_watch
+wanteq  C26 "truncated state still exits 0" "0" "$RC"
+wantnot C26 "truncated state renders no fragment green" "$GREENGLYPH" "$OUT"
+new_case
+printf 'not a state file at all\n\x00\x01binary' > "$(statefile)" 2>/dev/null
+run_watch
+wanteq C26 "garbage state still exits 0" "0" "$RC"
+
+# C27: concurrent renders must not corrupt the state file.
+new_case
+for _ in 1 2 3 4 5 6; do
+    env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" CI_WATCH_HTTP_STUB="$D/http-stub" \
+        CI_WATCH_SELFTEST_STUB="$STUB" CI_WATCH_SELFTEST_BSTUB="$BSTUB" CI_WATCH_SELFTEST_RSTUB="$RSTUB" CI_WATCH_SELFTEST_DSTUB="$DSTUB" "$TOOL" >/dev/null 2>&1 &
+done
+wait
+bad_lines="$(grep -cvE '^[a-z_]+=.*$' "$(statefile)" 2>/dev/null || true)"
+bad_lines="$(printf '%s' "${bad_lines:-0}" | head -1)"
+# POSITIVE ARM: the state file must exist and have real lines, or a 0 above means
+# "nothing was scanned" rather than "nothing was malformed".
+good_lines="$(grep -cE '^schema=2$' "$(statefile)" 2>/dev/null || true)"
+good_lines="$(printf '%s' "${good_lines:-0}" | head -1)"
+[ "$good_lines" -ge 1 ] || bad C27 "state file scanned at all" "schema=2 present" "INVALID TRIAL"
+wanteq C27 "concurrent renders leave a parseable state file" "0" "$bad_lines"
+
+# C28: five watchlist shapes.
+new_case; rm -f "$LIST" 2>/dev/null; run_watch
+wanteq C28 "missing watchlist exits 0" "0" "$RC"
+new_case; : > "$LIST"; run_watch
+wanteq C28 "empty watchlist exits 0" "0" "$RC"
+new_case; printf '# only a comment\n\n' > "$LIST"; run_watch
+wanteq C28 "comments-only watchlist exits 0" "0" "$RC"
+new_case; printf 'o/r@main | A\no/r@main | A\n' > "$LIST"; run_watch
+wanteq C28 "duplicated target exits 0" "0" "$RC"
+new_case; printf 'o/r@feature/nested/name | SLASHY\n' > "$LIST"; run_watch
+wanteq  C28 "slash in branch name exits 0" "0" "$RC"
+want    C28 "slash branch still renders its label" "SLASHY" "$OUT"
+
+# C29: no gh, no token, no curl, no jq -- a skip, never a green.
+new_case
+OUT="$(env -i HOME="$HOME" PATH=/nonexistent TMPDIR="${TMPDIR:-/tmp}" \
+        CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" \
+        /bin/bash "$TOOL" 2>&1)"; RC=$?
+wantnot C29 "stripped PATH never renders green" "$GREENGLYPH" "$OUT"
+wanteq  C29 "stripped PATH still exits 0"       "0"           "$RC"
+
+# C30: the documented env overrides still work.
+new_case
+OUT="$(env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" NO_COLOR=1 \
+        CI_WATCH_HTTP_STUB="$D/http-stub" CI_WATCH_SELFTEST_STUB="$STUB" \
+        CI_WATCH_SELFTEST_BSTUB="$BSTUB" CI_WATCH_SELFTEST_RSTUB="$RSTUB" \
+        CI_WATCH_SELFTEST_DSTUB="$DSTUB" "$TOOL" 2>&1)"
+wantnot C30 "NO_COLOR suppresses ANSI" $'\033[' "$OUT"
+new_case
+OUT="$(env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" CI_WATCH_FORCE=red "$TOOL" 2>&1)"
+want C30 "CI_WATCH_FORCE still forces" "RED" "$OUT"
+new_case
+run_watch CI_WATCH_NOW=1000000000
+wanteq C30 "CI_WATCH_NOW still overrides the clock" "1000000000" "$(field checked_at)"
+
+# C31: the snooze boundary is exact.
+new_case
+stub_runs 200 '{"total_count":1,"workflow_runs":[{"conclusion":"failure","status":"completed","head_sha":"fff","html_url":"u"}]}'
+run_watch CI_WATCH_NOW=1000000000
+env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" CI_WATCH_NOW=1000000000 \
+    "$TOOL" --snooze o/r 1 >/dev/null 2>&1
+run_watch CI_WATCH_NOW=1000086399        # one second before expiry
+want    C31 "snoozed at T-1"  "snoozed" "$OUT"
+run_watch CI_WATCH_NOW=1000086400        # exactly at expiry
+wantnot C31 "expired exactly at T" "snoozed" "$OUT"
+
+# C19/C20 cross-cutting
+printf 'F0  cross-cutting\n'
+new_case
+c19_bad=0
+for code in 200 403 404 401 TIMEOUT TRANSPORT; do
+    case "$code" in
+      403) stub_runs 403 '{"message":"Resource not accessible by integration","status":"403"}' ;;
+      404) stub_runs 404 '{"message":"Not Found","status":"404"}' ;;
+      401) stub_runs 401 '{"message":"Bad credentials","status":"401"}' ;;
+      TIMEOUT|TRANSPORT) stub_runs "$code" '' ;;
+      *) : ;;
+    esac
+    run_watch
+    [ "$RC" -eq 0 ] || c19_bad=$((c19_bad+1))
+done
+wanteq C19 "render exits 0 under every fetch outcome" "0" "$c19_bad"
+
+new_case                                   # C20: an OLD-format state/cache pair
+printf 'last=green\nred_since=0\nsnooze_until=0\n' > "$(statefile)"
+printf 'success\tcompleted\tdeadbee\thttps://example.invalid\n' > "$STATE/o_r_main.cache"
+stub_runs 403 '{"message":"Resource not accessible by integration","status":"403"}'
+run_watch
+wanteq  C20 "old-format state exits 0"            "0"           "$RC"
+wantnot C20 "old-format cache never renders green" "$GREENGLYPH" "$OUT"
+
+# Anti-C22: BLIND and UNOBSERVABLE must never wear the red alarm's colour.
+new_case
+NO_COLOR_OVERRIDE=""
+OUT="$(env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" CI_WATCH_HTTP_STUB="$D/http-stub" \
+        CI_WATCH_SELFTEST_STUB="$STUB" CI_WATCH_SELFTEST_BSTUB="$BSTUB" CI_WATCH_SELFTEST_RSTUB="$RSTUB" CI_WATCH_SELFTEST_DSTUB="$DSTUB" "$TOOL" 2>&1)"
+stub_runs 403 '{"message":"Resource not accessible by integration","status":"403"}'
+OUT="$(env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" CI_WATCH_HTTP_STUB="$D/http-stub" \
+        CI_WATCH_SELFTEST_STUB="$STUB" CI_WATCH_SELFTEST_BSTUB="$BSTUB" CI_WATCH_SELFTEST_RSTUB="$RSTUB" CI_WATCH_SELFTEST_DSTUB="$DSTUB" "$TOOL" 2>&1)"
+wantnot "AntiC22" "BLIND does not use the red escape code" "$REDCODE" "$OUT"
+# TWIN: a real red MUST use it, or the assertion is vacuous.
+new_case
+stub_runs 200 '{"total_count":1,"workflow_runs":[{"conclusion":"failure","status":"completed","head_sha":"f","html_url":"u"}]}'
+OUT="$(env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" CI_WATCH_HTTP_STUB="$D/http-stub" \
+        CI_WATCH_SELFTEST_STUB="$STUB" CI_WATCH_SELFTEST_BSTUB="$BSTUB" CI_WATCH_SELFTEST_RSTUB="$RSTUB" CI_WATCH_SELFTEST_DSTUB="$DSTUB" "$TOOL" 2>&1)"
+want "AntiC22" "TWIN a real red DOES use the red escape code" "$REDCODE" "$OUT"
+
+# Anti-C23: seeing a red never clears it.
+new_case
+stub_runs 200 '{"total_count":1,"workflow_runs":[{"conclusion":"failure","status":"completed","head_sha":"f","html_url":"u"}]}'
+run_watch CI_WATCH_NOW=1000000000
+run_watch CI_WATCH_NOW=1000000060
+want "AntiC23" "red survives being seen twice" "RED" "$OUT"
+
+# ===========================================================================
+# C32 -- coverage map. Printed, cross-checkable, never self-asserted.
+# ===========================================================================
+printf '\ncoverage map (C32)\n'
+EXPECT="C1 C2 C3 C4 C5 C6 C7 C8 C9 C10 C11 C12 C13 C14 C15 C16 C17 C18 C19 C20 C24 C25 C26 C27 C28 C29 C30 C31 C33 C34 AntiC22 AntiC23"
+missing=""
+for c in $EXPECT; do
+    hit=0
+    for seen in "${COVERED[@]}"; do [ "$seen" = "$c" ] && { hit=1; break; }; done
+    [ "$hit" -eq 1 ] || missing="$missing $c"
+done
+if [ -n "$missing" ]; then
+    printf '  FAIL C32     claims with no case:%s\n' "$missing"; FAIL=$((FAIL+1))
+else
+    printf '  ok   C32     all %s claims have at least one case\n' "$(printf '%s\n' $EXPECT | wc -l | tr -d ' ')"
+    PASS=$((PASS+1))
+fi
+
+printf '\n%s passed, %s failed   (fixtures: %s)\n' "$PASS" "$FAIL" "$ROOT"
+[ "$FAIL" -eq 0 ] || exit 1
+exit 0

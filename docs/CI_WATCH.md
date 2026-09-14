@@ -16,14 +16,19 @@ when broken), **escalating** (louder the longer it stays broken), and
 
 ## What it does
 
-| State                                     | Surface                                                 |
-| ----------------------------------------- | ------------------------------------------------------- |
-| **green**                                 | one dim, near-invisible line — no habituation surface   |
-| **red, day 0–2** (tier 1)                 | a red banner                                            |
-| **red, day 3–6** (tier 2)                 | a louder boxed banner **+ a spoken alert**              |
-| **red, day 7+** (tier 3)                  | the strongest banner + a spoken alert every session     |
-| **snoozed**                               | a single dim "snoozed Nd" line (deliberate, time-boxed) |
-| **offline / unknown, but last-known red** | the banner persists (stale-flagged)                     |
+| State | Meaning | Surface |
+| --- | --- | --- |
+| **green** | asked GitHub just now, it said success | one dim, near-invisible line |
+| **red, day 0-2** (tier 1) | asked just now, it said failure | a red banner |
+| **red, day 3-6** (tier 2) | as above, longer | a louder boxed banner **+ a spoken alert** |
+| **red, day 7+** (tier 3) | as above, longest | the strongest banner + a spoken alert every session |
+| **running / inconclusive** | observed, but the run is in progress, cancelled, skipped or neutral | one dim line naming the conclusion |
+| **no runs yet** | observed, the repo has never run a workflow | one dim line |
+| **STALE** | a transient failure (timeout, network); showing the last observation **with its age** | one dim line, value + age + reason |
+| **BLIND** | it used to be observable and is now **refused** (403/404/401) | a loud magenta banner + the remedy; **self-clears** on the next success |
+| **UNOBSERVABLE** | never successfully observed; the setup is incomplete | one quiet dim line |
+| **branch gone** | the watched branch no longer exists **and a positive control proved the token can read branches** | a loud magenta banner + the re-point command |
+| **snoozed** | deliberate, time-boxed | a single dim "snoozed Nd" line |
 
 Key properties:
 
@@ -34,6 +39,62 @@ Key properties:
   transition, so the audio itself doesn't become monotone wallpaper.
 - **Offline-sticky.** A transient network/`gh` outage does not silence a known red —
   the last-known-red banner persists, flagged stale, until a definite green clears it.
+- **A cached value can never render as a live green** (rewritten 2026-09-15 — see below).
+  Only a successful fetch writes the freshness stamp, so a failed refresh is
+  structurally incapable of marking data fresh; any value shown from cache carries
+  its age; past `CI_WATCH_HARD_TTL` (7d) no value is shown at all, only the reason.
+- **The promise is proven every run, not asserted.** `ci-watch --control` renders a
+  target that must not come out green, and exits non-zero if it does.
+
+## The false green this was rewritten to kill (2026-09-15)
+
+The original query path ended both fetch attempts in `2>/dev/null || true`. That
+destroys the evidence three times over: `2>/dev/null` deletes the diagnosis,
+`$(...)` collapses any failure into an empty string, and `|| true` forces a zero
+exit. A 403, a 404, a timeout, a malformed body and a genuinely empty result all
+arrived as the same empty string and became `unknown`.
+
+Worse, an empty result fell back to the per-target cache and the **green** render
+path threaded no staleness marker — so a repo that went green and then lost
+Actions access rendered `OK CI green -- <label> (<sha>)` **forever**, identical to
+a live green. Reproduced by execution before any fix was written: the same command
+twice against a target whose fetch fails, one variable changed (a planted cache).
+
+```
+no cache planted  ->  .. CI unknown -- REPRO-403-target (no runs / offline)
+cache planted     ->  OK CI green  -- REPRO-403-target (deadbee)
+```
+
+The doc used to promise "a skip is never a false green". It was wrong.
+
+**What the fix borrows, and from whom.** Ubuntu's `apt` update notifier writes its
+freshness stamp from a **success-only** hook, which is why `fetched_at` moves on
+`ok`/`empty_ok` and on nothing else. Prometheus writes scrape health (`up`) as a
+series separate from the payload and, since 2.0, marks a stale series explicitly
+rather than carrying the last value forward — Prometheus 1.x had this exact bug.
+RFC 5861 says a stale response SHOULD be "visibly stale"; RFC 9111 raised the age
+marking to a MUST. Nagios/Icinga carry a fourth state because "the check could not
+decide" is not "the thing is bad" and is really not "the thing is fine".
+
+**Two traps found by running it against the real API, which no stub had caught:**
+
+1. A real runs payload contains `"status":"completed"` on the run and a `"message"`
+   on `head_commit`. Reading those as an HTTP status and an API error turned a
+   healthy 200 into `HTTP completed: <the whole commit message>`.
+2. **A 404 from `/branches/{b}` is not proof the branch is gone.** Measured: the
+   endpoint returned 404 for a branch that was alive and green in the same breath,
+   because the token can read Actions but not Contents and GitHub 404s rather than
+   confirm a private resource exists. Shipping "branch gone" on a bare 404 would
+   have invented a new false alarm to replace the false green. So the 404 path now
+   runs a **positive control** against the repo's default branch: control hits, the
+   404 is real; control misses, the honest answer is "cannot confirm".
+
+**Testing.** `ci-watch-selftest` (82 assertions) was written BEFORE the rewrite and
+run red against the old tool first. Every failure-path case ships with its
+success-path twin, because every assertion here is about an absence and an absence
+reads identically whether the mechanism worked or the test never ran. The suite's
+own negative control is the old binary: `CI_WATCH_TOOL=$(git show <pre-fix>:...)`
+must still fail (it does, 36 cases).
 
 ## How it runs
 
@@ -64,6 +125,8 @@ ci-watch --add <o/r@branch> "label"   # add a specific target
 ci-watch --snooze <repo> <d>   # deliberately silence a red target for <d> days
 ci-watch --list                # show the watchlist
 ci-watch --json                # machine-readable status per target
+ci-watch --control             # prove the watcher cannot report a false green
+ci-watch-selftest              # the full suite (82 assertions, no network)
 ```
 
 `gh` advisory: the live query needs `gh` + `$GH_TOKEN`, which are present **inside
