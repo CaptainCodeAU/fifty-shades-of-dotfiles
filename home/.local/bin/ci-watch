@@ -84,9 +84,12 @@
 # GitHub API facts this depends on, all doc-cited or measured 2026-09-15:
 #   - GET /repos/{o}/{r}/actions/runs needs the "Actions" repo permission (read)
 #     for Apps and fine-grained tokens; classic PATs need `repo`.
-#   - 403 "Resource not accessible by integration"        = a GitHub App token
-#     403 "Resource not accessible by personal access token" = fine-grained PAT
-#     The message names the token family. Free discriminator.
+#   - 403 wording is NOT a reliable token-family discriminator. GitHub's docs
+#     imply "...by integration" means a GitHub App and "...by personal access
+#     token" means a fine-grained PAT, but MEASURED 2026-09-15: a fine-grained
+#     PAT (github_pat_ prefix) received the "by integration" wording. So the
+#     remedy leads with the permission, which is the same either way, and the
+#     wording is reported as an aside rather than used to route the reader.
 #   - A token that cannot SEE a private repo gets 404, not 403 -- deliberate, so
 #     GitHub never confirms a private repo exists. So a 404 CANNOT distinguish
 #     "no such repo" from "no access", and we must not claim it does.
@@ -269,16 +272,18 @@ classify_gh_error(){
           O_TOKEN=rate_limited; O_DETAIL='rate limited'; return 0 ;;
       esac
       O_TOKEN=perm_denied
-      # The message names the token family, which is the only cheap way to tell
-      # someone WHERE to fix it. The 403's own documentation_url points at a page
-      # that never mentions the permission you are missing.
+      # "Resource not accessible by integration" is NOT a reliable marker of a
+      # GitHub App. Measured 2026-09-15: a fine-grained PAT (github_pat_ prefix)
+      # got exactly that wording from /user. GitHub's own troubleshooting page
+      # implies the two token families get distinct strings -- they do not, at
+      # least not consistently -- so keying a remedy off the wording sent the
+      # reader to App settings for a PAT problem. Lead with the PERMISSION, which
+      # is the same fix either way, and name both places to check without
+      # asserting which kind of token is in play.
+      O_DETAIL='token lacks the Actions permission (read) for this repo. Fine-grained token: add Actions:read AND confirm the repo is in its selected-repositories list. GitHub App: grant Actions:read, have the installation owner accept the prompt, then mint a FRESH token -- old ones keep old permissions'
       case "$err" in
-        *"personal access token"*)
-          O_DETAIL='fine-grained token lacks the Actions: read permission (also check this repo is in its selected-repositories list)' ;;
-        *"integration"*)
-          O_DETAIL='GitHub App token lacks Actions: read -- grant it, have the installation owner accept the prompt, then mint a FRESH token (old tokens keep old permissions)' ;;
-        *)
-          O_DETAIL='token lacks Actions: read for this repo' ;;
+        *"personal access token"*) O_DETAIL="${O_DETAIL} [GitHub says: personal access token]" ;;
+        *"integration"*)           O_DETAIL="${O_DETAIL} [GitHub says: integration -- note this wording is NOT proof it is an App]" ;;
       esac
       return 0 ;;
     404)

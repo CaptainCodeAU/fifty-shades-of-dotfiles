@@ -215,12 +215,14 @@ new_case; stub_runs 403 '{"message":"Resource not accessible by integration","st
 run_watch; app_out="$OUT"
 new_case; stub_runs 403 '{"message":"Resource not accessible by personal access token","status":"403"}'
 run_watch; pat_out="$OUT"
-if [ "$app_out" = "$pat_out" ]; then
-    bad C4 "403 token family named" "distinct remedies" "$app_out"
-else
-    ok C4 "403 token family named distinctly"
-fi
-want C4 "remedy names Actions: read" "Actions: read" "$app_out"
+# The two wordings may still be reported, but the REMEDY must not depend on them:
+# measured 2026-09-15, a fine-grained PAT received the "by integration" wording,
+# so routing the reader to App settings on that string sends them to the wrong
+# settings page. Both messages must carry the same core fix.
+want C4 "integration wording names the permission"    "Actions permission (read)" "$app_out"
+want C4 "PAT wording names the same permission"       "Actions permission (read)" "$pat_out"
+want C4 "integration remedy still mentions PATs too"  "Fine-grained token"        "$app_out"
+want C4 "the wording is flagged as NOT proof"         "NOT proof"                 "$app_out"
 
 # C5: a 404 must not assert non-existence as fact.
 new_case; stub_runs 404 '{"message":"Not Found","status":"404"}'
