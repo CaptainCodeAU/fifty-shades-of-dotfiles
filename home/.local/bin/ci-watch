@@ -180,7 +180,21 @@ now_epoch(){
 trim(){ local s="$1"; s="${s#"${s%%[![:space:]]*}"}"; s="${s%"${s##*[![:space:]]}"}"; printf '%s' "$s"; }
 keyof(){ printf '%s' "$1" | tr '/@:.' '____' 2>/dev/null | tr -cd 'A-Za-z0-9_-' 2>/dev/null; }
 enc_branch(){ printf '%s' "$1" | sed 's#/#%2F#g' 2>/dev/null || printf '%s' "$1"; }
-numor0(){ case "${1:-}" in ''|*[!0-9]*) printf '0' ;; *) printf '%s' "$1" ;; esac; }
+# All-digit is NOT the same as safe-in-arithmetic. Bash reads a leading zero as
+# OCTAL, so `08` is an invalid expression -- and an invalid arithmetic expansion
+# ABORTS THE SCRIPT. With one `fetched_at=08` in one state file, the render died
+# mid-loop and every target after it silently vanished from the dashboard, at
+# exit 0. A single garbage byte was a global mute button that reported success,
+# which is the worst failure this tool can have. Strip the zeros here, and every
+# arithmetic site that reads state also forces base 10.
+numor0(){
+  local s="${1:-}"
+  case "$s" in ''|*[!0-9]*) printf '0'; return 0 ;; esac
+  while [ "${#s}" -gt 1 ]; do
+    case "$s" in 0*) s="${s#0}" ;; *) break ;; esac
+  done
+  printf '%s' "$s"
+}
 
 # Humanised age. Bands are coarse on purpose -- the reader needs "is this recent
 # or ancient", not a duration to the second.
@@ -558,7 +572,7 @@ process_target(){ # repo branch label
   # and the honest answer is "cannot confirm", never "gone".
   balive="$S_BRANCH_ALIVE"; bchecked="$S_BRANCH_CHECKED"
   if [ -n "$branch" ] && [ -z "${CI_WATCH_FORCE:-}" ] \
-     && [ $(( now - bchecked )) -ge "$BRANCH_TTL" ]; then
+     && [ $(( 10#$now - 10#$bchecked )) -ge "$BRANCH_TTL" ]; then
     http_get "repos/${repo}/branches/$(enc_branch "$branch")"
     if [ "$H_RC" -eq 0 ]; then
       case "$H_CODE" in
@@ -622,7 +636,7 @@ process_target(){ # repo branch label
     return 0
   fi
 
-  age=$(( now - fetched )); [ "$fetched" -le 0 ] && age=-1
+  age=$(( 10#$now - 10#$fetched )); [ "$fetched" -le 0 ] && age=-1
 
   # --- LIVE observation --------------------------------------------------
   if [ "$outcome" = ok ] || [ "$outcome" = empty_ok ]; then
@@ -630,7 +644,7 @@ process_target(){ # repo branch label
     # red_since in the file but rendering `.. CI cancelled` would still hide the
     # alarm for the session, which is the same dismissal wearing a quieter coat.
     if [ "$obs" != green ] && [ "$obs" != red ] && [ "$red_since" -gt 0 ]; then
-      days=$(( (now - red_since) / 86400 ))
+      days=$(( (10#$now - 10#$red_since) / 86400 ))
       if [ "$snooze" -gt "$now" ]; then
         printf '%b\n' "   ${YELLOW}zzz${NC} ${DIM}CI red ${days}d but snoozed -- ${label}${NC}"
       else
@@ -645,7 +659,7 @@ process_target(){ # repo branch label
       green)
         printf '%b\n' "   ${GREEN}OK${NC} ${DIM}CI green -- ${label} (${sha:-?})${NC}" ;;
       red)
-        days=$(( (now - red_since) / 86400 ))
+        days=$(( (10#$now - 10#$red_since) / 86400 ))
         if [ "$snooze" -gt "$now" ]; then
           printf '%b\n' "   ${YELLOW}zzz${NC} ${DIM}CI red ${days}d but snoozed -- ${label}${NC}"
         else
@@ -671,7 +685,7 @@ process_target(){ # repo branch label
   # --- COULD NOT OBSERVE --------------------------------------------------
   # A known red is never silenced by an outage: dismiss-only-by-fixing.
   if [ "$S_OBS" = red ] && [ "$red_since" -gt 0 ]; then
-    days=$(( (now - red_since) / 86400 ))
+    days=$(( (10#$now - 10#$red_since) / 86400 ))
     if [ "$snooze" -gt "$now" ]; then
       printf '%b\n' "   ${YELLOW}zzz${NC} ${DIM}CI red ${days}d, snoozed, status stale -- ${label}${NC}"
     else
@@ -751,6 +765,10 @@ suggest_current_repo(){
   printf '%b\n' "   ${DIM}.. untracked CI: ${owner_repo} has workflows but isn't watched -- add: ci-watch --add .${NC}"
 }
 
+# One row must never be able to take the dashboard down with it: a target that
+# dies renders nothing, and every other row still gets its line.
+render_target(){ ( process_target "$@" ) || true; }
+
 cmd_render(){
   TRANSITION=0
   if [ -f "$WATCHLIST" ]; then
@@ -759,7 +777,7 @@ cmd_render(){
       printf '%b\n' "${DIM}CI watch: skipped (no gh / GH_TOKEN -- runs inside Claude sessions).${NC}"
     fi
     printf '%b\n' "${BOLD}CI watch${NC} ${DIM}(live each session; red is sticky until fixed)${NC}"
-    each_entry process_target
+    each_entry render_target
   fi
   suggest_current_repo
   return 0
@@ -768,8 +786,9 @@ cmd_render(){
 cmd_snooze(){
   local match="${1:-}" days="${2:-}" hit=0 now until
   case "$days" in ''|*[!0-9]*) printf 'usage: ci-watch --snooze <repo> <days>\n' >&2; return 2;; esac
+  days="$(numor0 "$days")"          # `08` is all-digit AND invalid octal
   [ -z "$match" ] && { printf 'usage: ci-watch --snooze <repo> <days>\n' >&2; return 2; }
-  now="$(now_epoch)"; until=$(( now + days * 86400 ))
+  now="$(now_epoch)"; until=$(( 10#$now + 10#$days * 86400 ))
   _snooze_one(){
     local repo="$1" branch="$2" label="$3" key
     case "${repo}@${branch}" in *"$match"*) ;; *) return 0;; esac
@@ -837,8 +856,8 @@ cmd_json(){
     local repo="$1" branch="$2" key now days age
     key="$(keyof "${repo}@${branch}")"; load_state "$key"
     now="$(now_epoch)"; days=0
-    [ "$S_RED_SINCE" -gt 0 ] && days=$(( (now - S_RED_SINCE) / 86400 ))
-    age=-1; [ "$S_FETCHED" -gt 0 ] && age=$(( now - S_FETCHED ))
+    [ "$S_RED_SINCE" -gt 0 ] && days=$(( (10#$now - 10#$S_RED_SINCE) / 86400 ))
+    age=-1; [ "$S_FETCHED" -gt 0 ] && age=$(( 10#$now - 10#$S_FETCHED ))
     [ "$first" -eq 1 ] && first=0 || printf ','
     printf '{"repo":"%s","branch":"%s","last_outcome":"%s","observed_state":"%s","conclusion":"%s","sha":"%s","age_seconds":%s,"checked_at":%s,"days_red":%s,"snoozed":%s,"branch_alive":"%s"}' \
       "$repo" "$branch" "${S_OUTCOME:-never}" "${S_OBS:-}" "$S_CONCL" "$S_SHA" \

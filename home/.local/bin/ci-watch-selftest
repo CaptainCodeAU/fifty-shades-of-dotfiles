@@ -543,6 +543,41 @@ env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" CI_WATCH_NOW=1000000000 \
     "$TOOL" --snooze o/r 3 >/dev/null 2>&1
 wantnot C39 "a snooze does not invent an observation" "red" "$(field observed_state)x"
 
+# C40 AUDIT-FOUND (cross-vendor, 2026-09-15): ONE BAD BYTE MUTED THE DASHBOARD.
+# `numor0` accepted any all-digit string, but bash reads a leading zero as OCTAL,
+# so `fetched_at=08` is an invalid arithmetic expression -- and an invalid
+# arithmetic expansion ABORTS THE SCRIPT. The render died mid-loop and every
+# target after the corrupt one silently vanished, at exit 0. A live RED on the
+# second row was never printed. The trigger needs a FAILING fetch, because a
+# successful one overwrites fetched_at before the subtraction.
+new_case
+printf 'o/r@main | CORRUPT-FIRST\nx/y@main | MUST-STILL-RENDER\n' > "$LIST"
+cat > "$D/http-stub" <<'STUBEOF'
+#!/usr/bin/env bash
+case "$1" in
+  */branches/*)          printf '200\n{"name":"main"}' ;;
+  repos/o/r/actions/*)   printf '408\n{"message":"timeout","status":"408"}' ;;
+  repos/x/y/actions/*)   printf '200\n{"total_count":1,"workflow_runs":[{"conclusion":"failure","status":"completed","head_sha":"deadbee1234","html_url":"u"}]}' ;;
+  *)                     printf '200\n{"default_branch":"main"}' ;;
+esac
+STUBEOF
+chmod +x "$D/http-stub"
+mkstate(){ printf 'schema=2\nlast_outcome=ok\nobserved_state=green\nobserved_concl=success\nobserved_sha=abc1234\nobserved_url=u\nfetched_at=%s\nchecked_at=0\nred_since=0\nsnooze_until=0\nbranch_alive=1\nbranch_checked=0\n' "$1" > "$(statefile)"; }
+mkstate 08
+run_watch CI_WATCH_NOW=1000000000
+want   C40 "a leading-zero state value does not mute later targets" "MUST-STILL-RENDER" "$OUT"
+wanteq C40 "and the render still exits 0" "0" "$RC"
+# CONTROL: the same fixture with a valid number must render both rows too, or the
+# assertion above could pass for reasons unrelated to the octal fix.
+mkstate 8
+run_watch CI_WATCH_NOW=1000000000
+want C40 "CONTROL valid value renders both rows" "MUST-STILL-RENDER" "$OUT"
+# And the same class through the CLI: `08` is all-digit and invalid octal.
+OUT="$(env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" CI_WATCH_NOW=1000000000 \
+        "$TOOL" --snooze o/r 08 2>&1)"; RC=$?
+wanteq C40 "--snooze with a leading-zero day count succeeds" "0" "$RC"
+want   C40 "and snoozes for 8 days, not 0"                   "8 day" "$OUT"
+
 # C26: corrupt state and cache degrade, never crash.
 new_case
 printf 'schema=2\nlast_outcome=' > "$(statefile)"     # truncated mid-record
@@ -669,7 +704,7 @@ want "AntiC23" "red survives being seen twice" "RED" "$OUT"
 # C32 -- coverage map. Printed, cross-checkable, never self-asserted.
 # ===========================================================================
 printf '\ncoverage map (C32)\n'
-EXPECT="C1 C2 C3 C4 C5 C6 C7 C8 C9 C10 C11 C12 C13 C14 C15 C16 C17 C18 C19 C20 C24 C25 C26 C27 C28 C29 C30 C31 C33 C34 C35 C36 C37 C38 C39 AntiC22 AntiC23"
+EXPECT="C1 C2 C3 C4 C5 C6 C7 C8 C9 C10 C11 C12 C13 C14 C15 C16 C17 C18 C19 C20 C24 C25 C26 C27 C28 C29 C30 C31 C33 C34 C35 C36 C37 C38 C39 C40 AntiC22 AntiC23"
 missing=""
 for c in $EXPECT; do
     hit=0
