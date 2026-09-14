@@ -661,6 +661,63 @@ wanteq C41 "5xx stays quiet"                  "server_error" \
 wanteq C41 "CONTROL no code at all is transport" "transport" \
     "$(c41_probe 'failed to get runs: dial tcp: connection refused')"
 
+# C42: WHOSE CREDENTIAL ANSWERED. ci-watch inherits the caller's GH_TOKEN, so its
+# output depends on who invokes it -- run from Gavin's terminal it gets one token,
+# run inside a Claude session it gets another. Two sessions spent a day
+# confidently disagreeing about the same repo for exactly this reason. The fix is
+# to say which credential was in play, ON THE LINE.
+#
+# Deliberately NOT a fallback: the peer session first proposed retrying with
+# GH_TOKEN unset on a 403 and then withdrew it, because that path lands on a
+# keyring token carrying `repo` scope -- silently upgrading a status line to full
+# source read across every owned repo. A watcher that cannot see must say so, not
+# go looking for a bigger key.
+new_case
+stub_runs 403 '{"message":"Resource not accessible by integration","status":"403"}'
+OUT="$(env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" CI_WATCH_GH="$D/http-stub" \
+        CI_WATCH_SELFTEST_STUB="$STUB" CI_WATCH_SELFTEST_BSTUB="$BSTUB" \
+        CI_WATCH_SELFTEST_RSTUB="$RSTUB" CI_WATCH_SELFTEST_DSTUB="$DSTUB" \
+        GH_TOKEN=pretend "$TOOL" 2>&1)"
+want C42 "403 remedy names the credential in use" "credential: GH_TOKEN from the environment" "$OUT"
+OUT="$(env -u GH_TOKEN -u GITHUB_TOKEN CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" \
+        CI_WATCH_GH="$D/http-stub" CI_WATCH_SELFTEST_STUB="$STUB" \
+        CI_WATCH_SELFTEST_BSTUB="$BSTUB" CI_WATCH_SELFTEST_RSTUB="$RSTUB" \
+        CI_WATCH_SELFTEST_DSTUB="$DSTUB" "$TOOL" 2>&1)"
+want C42 "and names gh's own auth when no env token" "credential: gh's own stored auth" "$OUT"
+# TWIN: the two must differ, or the line is decoration rather than information.
+wantnot C42 "TWIN the two credentials render differently" "GH_TOKEN from the environment" "$OUT"
+# It must never silently retry with the env token removed -- that is an escalation.
+wantnot C42 "a refusal never becomes a green by dropping the token" "$GREENGLYPH" "$OUT"
+
+# C43: the gh binary must be resolved from PATH, never from a shell function. In
+# an interactive session here `gh` IS a function that injects its own token, so
+# `GH_TOKEN=x gh api ...` does not use the token passed. `command -v` is NOT
+# enough: given a function named gh it returns the string "gh". `type -P` searches
+# PATH only. Both arms below run the real resolution line out of the tool.
+# Run the tool's real resolution line in a child bash, once with a hostile `gh`
+# function defined and once without. A helper FILE, not nested quoting -- the
+# first version of this case used three levels of nesting, produced an empty
+# string in both arms, and its control compared empty to empty and PASSED. A
+# control that cannot fail is not a control.
+cat > "$ROOT/ghres.sh" <<'GHRES'
+#!/usr/bin/env bash
+[ "${1:-}" = wrapped ] && eval 'gh(){ echo WRAPPER; }'
+source <(sed -n '/^GH=/,/^have_gh/p' "$2")
+printf '%s' "$GH"
+GHRES
+chmod +x "$ROOT/ghres.sh"
+r_wrapped="$(bash "$ROOT/ghres.sh" wrapped "$TOOL")"
+r_clean="$(bash "$ROOT/ghres.sh" clean   "$TOOL")"
+case "$r_clean" in
+  /*) ok C43 "CONTROL resolution yields a real path at all" ;;
+  *)  bad C43 "CONTROL resolution yields a real path at all" "an absolute path" "$r_clean -- INVALID TRIAL" ;;
+esac
+case "$r_wrapped" in
+  /*) ok C43 "resolves to a real path even with a gh function in scope" ;;
+  *)  bad C43 "resolves to a real path even with a gh function in scope" "an absolute path" "$r_wrapped" ;;
+esac
+wanteq C43 "wrapper cannot change the answer" "$r_clean" "$r_wrapped"
+
 # C26: corrupt state and cache degrade, never crash.
 new_case
 printf 'schema=2\nlast_outcome=' > "$(statefile)"     # truncated mid-record
@@ -787,7 +844,7 @@ want "AntiC23" "red survives being seen twice" "RED" "$OUT"
 # C32 -- coverage map. Printed, cross-checkable, never self-asserted.
 # ===========================================================================
 printf '\ncoverage map (C32)\n'
-EXPECT="C1 C2 C3 C4 C5 C6 C7 C8 C9 C10 C11 C12 C13 C14 C15 C16 C17 C18 C19 C20 C24 C25 C26 C27 C28 C29 C30 C31 C33 C34 C35 C36 C37 C38 C39 C40 C41 AntiC22 AntiC23"
+EXPECT="C1 C2 C3 C4 C5 C6 C7 C8 C9 C10 C11 C12 C13 C14 C15 C16 C17 C18 C19 C20 C24 C25 C26 C27 C28 C29 C30 C31 C33 C34 C35 C36 C37 C38 C39 C40 C41 C42 C43 AntiC22 AntiC23"
 missing=""
 for c in $EXPECT; do
     hit=0

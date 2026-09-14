@@ -257,15 +257,38 @@ tier_for_days(){ if [ "$1" -ge 7 ]; then TIER=3; elif [ "$1" -ge 3 ]; then TIER=
 # escaping and no user-controlled field to collide with -- but it IS a string
 # match against another tool's wording, so an unrecognised message degrades to
 # the quiet register rather than guessing.
-GH="${CI_WATCH_GH:-gh}"
-have_gh(){ command -v "$GH" >/dev/null 2>&1 || [ -x "$GH" ]; }
+# Resolve the real BINARY, never a shell function. In an interactive session here
+# `gh` is a function sourced from ~/.claude/shell-snapshots/ that injects its own
+# token, so `GH_TOKEN=x gh api ...` does NOT use the token you passed -- measured
+# 2026-09-15, and it is the complete explanation for two sessions confidently
+# disagreeing about the same repo all day. Functions are not inherited by a child
+# process, so a script is normally safe; resolving through `command -v` makes that
+# guarantee explicit instead of accidental.
+# `type -P` searches PATH ONLY. `command -v` does not do the job: given a shell
+# function named gh it happily returns the string "gh", i.e. the function. Caught
+# by the test written for this very line, which is the point of writing it.
+GH="${CI_WATCH_GH:-$(type -P gh 2>/dev/null || printf 'gh')}"
+have_gh(){ [ -x "$GH" ] || type -P "$GH" >/dev/null 2>&1; }
+
+# WHICH credential answered. A watcher whose output depends on the caller's
+# environment must say so ON THE LINE, or reconstructing a disagreement costs two
+# sessions and a day. (Suggested by a peer session after we spent
+# exactly that.) Deliberately NOT a fallback: when the configured credential is
+# refused, this tool says it cannot see. It never goes looking for a bigger key --
+# unsetting GH_TOKEN here would land on a keyring token carrying `repo` scope,
+# silently upgrading a status line to full source read across every owned repo.
+cred_source(){
+  if [ -n "${GH_TOKEN:-}" ];        then printf 'GH_TOKEN from the environment'
+  elif [ -n "${GITHUB_TOKEN:-}" ];  then printf 'GITHUB_TOKEN from the environment'
+  else                                   printf "gh's own stored auth"; fi
+}
 
 # classify_gh_error <stderr-text> -> sets O_TOKEN / O_DETAIL
 classify_gh_error(){
   local err="$1" code=''
   [[ "$err" =~ HTTP[[:space:]]+([0-9]{3}) ]] && code="${BASH_REMATCH[1]}"
   case "$code" in
-    401) O_TOKEN=unauthorized; O_DETAIL='token invalid or expired'; return 0 ;;
+    401) O_TOKEN=unauthorized; O_DETAIL="[credential: $(cred_source)] token invalid or expired"; return 0 ;;
     403)
       case "$err" in
         *"rate limit"*|*"Rate limit"*|*"secondary rate"*|*"abuse detection"*|*"abuse-detection"*)
@@ -280,7 +303,7 @@ classify_gh_error(){
       # reader to App settings for a PAT problem. Lead with the PERMISSION, which
       # is the same fix either way, and name both places to check without
       # asserting which kind of token is in play.
-      O_DETAIL='token lacks the Actions permission (read) for this repo. Fine-grained token: add Actions:read AND confirm the repo is in its selected-repositories list. GitHub App: grant Actions:read, have the installation owner accept the prompt, then mint a FRESH token -- old ones keep old permissions'
+      O_DETAIL="[credential: $(cred_source)] token lacks the Actions permission (read) for this repo. Fine-grained token: add Actions:read AND confirm the repo is in its selected-repositories list. GitHub App: grant Actions:read, have the installation owner accept the prompt, then mint a FRESH token -- old ones keep old permissions"
       case "$err" in
         *"personal access token"*) O_DETAIL="${O_DETAIL} [GitHub says: personal access token]" ;;
         *"integration"*)           O_DETAIL="${O_DETAIL} [GitHub says: integration -- note this wording is NOT proof it is an App]" ;;
@@ -290,7 +313,7 @@ classify_gh_error(){
       # GitHub returns 404 rather than 403 so it never confirms a private repo
       # exists. We genuinely cannot tell these apart and must not pretend to.
       O_TOKEN=not_found
-      O_DETAIL='repo not found, OR this token cannot see it -- GitHub will not say which'
+      O_DETAIL="[credential: $(cred_source)] repo not found, OR this token cannot see it -- GitHub will not say which"
       return 0 ;;
     429) O_TOKEN=rate_limited; O_DETAIL='rate limited'; return 0 ;;
     5??) O_TOKEN=server_error; O_DETAIL="GitHub returned HTTP ${code}"; return 0 ;;
@@ -820,9 +843,9 @@ cmd_json(){
     [ "$S_RED_SINCE" -gt 0 ] && days=$(( (10#$now - 10#$S_RED_SINCE) / 86400 ))
     age=-1; [ "$S_FETCHED" -gt 0 ] && age=$(( 10#$now - 10#$S_FETCHED ))
     [ "$first" -eq 1 ] && first=0 || printf ','
-    printf '{"repo":"%s","branch":"%s","last_outcome":"%s","observed_state":"%s","conclusion":"%s","sha":"%s","age_seconds":%s,"checked_at":%s,"days_red":%s,"snoozed":%s,"branch_alive":"%s"}' \
+    printf '{"repo":"%s","branch":"%s","last_outcome":"%s","observed_state":"%s","conclusion":"%s","sha":"%s","age_seconds":%s,"checked_at":%s,"days_red":%s,"snoozed":%s,"branch_alive":"%s","credential":"%s"}' \
       "$repo" "$branch" "${S_OUTCOME:-never}" "${S_OBS:-}" "$S_CONCL" "$S_SHA" \
-      "$age" "$S_CHECKED" "$days" "$([ "$S_SNOOZE" -gt "$now" ] && echo true || echo false)" "$S_BRANCH_ALIVE"
+      "$age" "$S_CHECKED" "$days" "$([ "$S_SNOOZE" -gt "$now" ] && echo true || echo false)" "$S_BRANCH_ALIVE" "$(cred_source)"
   }
   each_entry _json_one
   printf ']\n'
