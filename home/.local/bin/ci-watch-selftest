@@ -413,6 +413,38 @@ for concl in cancelled neutral skipped action_required stale timed_out startup_f
     wantnot C25 "$concl is not unobservable" "never" "$OUT"
 done
 
+# C35 AUDIT-FOUND (2026-09-15, independent review): DISMISS-BY-CANCEL. Every
+# non-conclusive observation used to zero red_since and snooze, so cancelling a
+# run cleared a multi-day red alarm and the next failure restarted at "0d",
+# tier 1. C8 and Anti-C23 both PASSED while this was live -- C8 only exercised
+# the blind path and Anti-C23 only rendered red twice in a row, so neither ever
+# put a non-red OBSERVATION between two reds. That gap is the lesson.
+for mid in cancelled neutral skipped action_required stale; do
+    new_case
+    stub_runs 200 '{"total_count":1,"workflow_runs":[{"conclusion":"failure","status":"completed","head_sha":"deadbee1","html_url":"u"}]}'
+    run_watch CI_WATCH_NOW=1000000000
+    run_watch CI_WATCH_NOW=1000518400                      # +6 days, still red
+    stub_runs 200 "{\"total_count\":1,\"workflow_runs\":[{\"conclusion\":\"$mid\",\"status\":\"completed\",\"head_sha\":\"cafe0001\",\"html_url\":\"u\"}]}"
+    run_watch CI_WATCH_NOW=1000518500                      # a $mid run appears
+    want   C35 "$mid does not hide the red alarm" "RED" "$OUT"
+    wanteq C35 "$mid does not reset the streak" "1000000000" "$(field red_since)"
+done
+# in_progress is the same class: a running build is not a fixed build.
+new_case
+stub_runs 200 '{"total_count":1,"workflow_runs":[{"conclusion":"failure","status":"completed","head_sha":"deadbee1","html_url":"u"}]}'
+run_watch CI_WATCH_NOW=1000000000
+stub_runs 200 '{"total_count":1,"workflow_runs":[{"conclusion":null,"status":"in_progress","head_sha":"cafe0001","html_url":"u"}]}'
+run_watch CI_WATCH_NOW=1000518500
+want C35 "a running build does not clear the red" "RED" "$OUT"
+# TWIN: an actual GREEN must still clear it, or the fix has simply frozen the alarm on.
+new_case
+stub_runs 200 '{"total_count":1,"workflow_runs":[{"conclusion":"failure","status":"completed","head_sha":"deadbee1","html_url":"u"}]}'
+run_watch CI_WATCH_NOW=1000000000
+stub_runs 200 '{"total_count":1,"workflow_runs":[{"conclusion":"success","status":"completed","head_sha":"1234567cafe","html_url":"u"}]}'
+run_watch CI_WATCH_NOW=1000518500
+want   C35 "TWIN a real green DOES clear the red" "$GREENGLYPH" "$OUT"
+wanteq C35 "TWIN green zeroes the streak"          "0" "$(field red_since)"
+
 # C26: corrupt state and cache degrade, never crash.
 new_case
 printf 'schema=2\nlast_outcome=' > "$(statefile)"     # truncated mid-record
@@ -539,7 +571,7 @@ want "AntiC23" "red survives being seen twice" "RED" "$OUT"
 # C32 -- coverage map. Printed, cross-checkable, never self-asserted.
 # ===========================================================================
 printf '\ncoverage map (C32)\n'
-EXPECT="C1 C2 C3 C4 C5 C6 C7 C8 C9 C10 C11 C12 C13 C14 C15 C16 C17 C18 C19 C20 C24 C25 C26 C27 C28 C29 C30 C31 C33 C34 AntiC22 AntiC23"
+EXPECT="C1 C2 C3 C4 C5 C6 C7 C8 C9 C10 C11 C12 C13 C14 C15 C16 C17 C18 C19 C20 C24 C25 C26 C27 C28 C29 C30 C31 C33 C34 C35 AntiC22 AntiC23"
 missing=""
 for c in $EXPECT; do
     hit=0

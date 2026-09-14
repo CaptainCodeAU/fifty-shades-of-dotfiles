@@ -548,11 +548,22 @@ process_target(){ # repo branch label
   checked="$now"
   if [ "$outcome" = ok ] || [ "$outcome" = empty_ok ]; then
     fetched="$now"
-    if [ "$obs" = red ]; then
-      [ "$red_since" -le 0 ] && { red_since="$now"; TRANSITION=1; }
-    else
-      red_since=0; snooze=0        # a real green/inconclusive clears the alarm
-    fi
+    # ONLY A GREEN CLEARS THE ALARM. This used to read `else red_since=0`, which
+    # let `running`, `cancelled`, `neutral`, `skipped` and `no runs` wipe a red
+    # streak -- so cancelling a workflow DISMISSED the alarm, and the next real
+    # failure came back as "red for 0d" at tier 1 with a fresh transition voice.
+    # Reproduced 2026-09-15: red for 6 days at tier 2, one cancelled run, alarm
+    # gone. That is dismiss-by-cancel, the exact thing this tool exists to
+    # prevent, and it was introduced by the four-state rewrite: the OLD tool
+    # mapped all of those to `unknown`, whose branch never wrote state at all.
+    # An inconclusive observation is news about a RUN, never proof the build was
+    # fixed. Found by an independent audit (Max), not by the 82-case suite --
+    # C8 and Anti-C23 both passed while this was live.
+    case "$obs" in
+      red)   [ "$red_since" -le 0 ] && { red_since="$now"; TRANSITION=1; } ;;
+      green) red_since=0; snooze=0 ;;
+      *)     : ;;
+    esac
   else
     # Failure: keep the previous observation verbatim, and keep the red history.
     obs="$S_OBS"; concl="$S_CONCL"; sha="$S_SHA"; url="$S_URL"
@@ -573,6 +584,21 @@ process_target(){ # repo branch label
 
   # --- LIVE observation --------------------------------------------------
   if [ "$outcome" = ok ] || [ "$outcome" = empty_ok ]; then
+    # An unfixed red outranks a newer non-conclusive observation. Keeping
+    # red_since in the file but rendering `.. CI cancelled` would still hide the
+    # alarm for the session, which is the same dismissal wearing a quieter coat.
+    if [ "$obs" != green ] && [ "$obs" != red ] && [ "$red_since" -gt 0 ]; then
+      days=$(( (now - red_since) / 86400 ))
+      if [ "$snooze" -gt "$now" ]; then
+        printf '%b\n' "   ${YELLOW}zzz${NC} ${DIM}CI red ${days}d but snoozed -- ${label}${NC}"
+      else
+        tier_for_days "$days"; tier="$TIER"
+        red_banner "$tier" "$days" "$label" "$concl" "$sha" "${repo}@${branch}" \
+                   "newest run: ${obs}${O_CONCL:+ / $O_CONCL} -- not a fix"
+      fi
+      TRANSITION=0
+      return 0
+    fi
     case "$obs" in
       green)
         printf '%b\n' "   ${GREEN}OK${NC} ${DIM}CI green -- ${label} (${sha:-?})${NC}" ;;
