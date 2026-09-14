@@ -630,6 +630,35 @@ OUT="$(env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" CI_WATCH_NOW=1000000000
 wanteq C40 "--snooze with a leading-zero day count succeeds" "0" "$RC"
 want   C40 "and snoozes for 8 days, not 0"                   "8 day" "$OUT"
 
+# C41: the classifier reads a status code out of gh's PROSE, so it is pinned to
+# go-gh's formatter. `HTTPError.Error()` has THREE branches and only two carry a
+# colon after the code (source: cli/go-gh pkg/api/errors.go):
+#     "HTTP %d: %s (%s)\n%s"   multi-line message
+#     "HTTP %d: %s (%s)"       single-line message
+#     "HTTP %d (%s)"           empty message -- NO COLON
+# A classifier anchored on "HTTP 403:" would silently miss the third and drop a
+# real refusal into the quiet register. Flagged by the research agent; verified
+# here by running all three shapes rather than by re-reading the regex.
+c41_probe(){ # c41_probe <stderr-text> -> the token
+    ( O_TOKEN=''; O_DETAIL=''
+      source <(sed -n '/^classify_gh_error()/,/^}/p' "$TOOL")
+      classify_gh_error "$1"; printf '%s' "$O_TOKEN" )
+}
+wanteq C41 "single-line message, with colon" "perm_denied" \
+    "$(c41_probe 'failed to get runs: HTTP 403: Resource not accessible by integration (https://api.github.com/x)')"
+wanteq C41 "EMPTY message, NO COLON"          "perm_denied" \
+    "$(c41_probe 'failed to get runs: HTTP 403 (https://api.github.com/x)')"
+wanteq C41 "multi-line message"               "perm_denied" \
+    "$(c41_probe "$(printf 'failed to get runs: HTTP 403: Resource not accessible by personal access token (https://x)\nsecond line')")"
+wanteq C41 "404 without a colon"              "not_found" \
+    "$(c41_probe 'failed to get runs: HTTP 404 (https://x)')"
+wanteq C41 "5xx stays quiet"                  "server_error" \
+    "$(c41_probe 'failed to get runs: HTTP 503 (https://x)')"
+# CONTROL: a message with NO status code must NOT come back as a refusal, or the
+# assertions above would pass for a classifier that simply answers perm_denied.
+wanteq C41 "CONTROL no code at all is transport" "transport" \
+    "$(c41_probe 'failed to get runs: dial tcp: connection refused')"
+
 # C26: corrupt state and cache degrade, never crash.
 new_case
 printf 'schema=2\nlast_outcome=' > "$(statefile)"     # truncated mid-record
@@ -756,7 +785,7 @@ want "AntiC23" "red survives being seen twice" "RED" "$OUT"
 # C32 -- coverage map. Printed, cross-checkable, never self-asserted.
 # ===========================================================================
 printf '\ncoverage map (C32)\n'
-EXPECT="C1 C2 C3 C4 C5 C6 C7 C8 C9 C10 C11 C12 C13 C14 C15 C16 C17 C18 C19 C20 C24 C25 C26 C27 C28 C29 C30 C31 C33 C34 C35 C36 C37 C38 C39 C40 AntiC22 AntiC23"
+EXPECT="C1 C2 C3 C4 C5 C6 C7 C8 C9 C10 C11 C12 C13 C14 C15 C16 C17 C18 C19 C20 C24 C25 C26 C27 C28 C29 C30 C31 C33 C34 C35 C36 C37 C38 C39 C40 C41 AntiC22 AntiC23"
 missing=""
 for c in $EXPECT; do
     hit=0
