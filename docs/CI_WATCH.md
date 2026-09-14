@@ -89,7 +89,31 @@ decide" is not "the thing is bad" and is really not "the thing is fine".
    runs a **positive control** against the repo's default branch: control hits, the
    404 is real; control misses, the honest answer is "cannot confirm".
 
-**Testing.** `ci-watch-selftest` (82 assertions) was written BEFORE the rewrite and
+**The parser is gone (2026-09-15, same day).** Three of the day's bugs came from
+one cause: a hand-rolled bash-regex JSON reader. It read `"status":"completed"`
+off a run object as an HTTP status, it truncated the run object at the first `}`
+so a commit titled `fix: handle {} in the parser` turned a RED build into a quiet
+"running", and its numeric guard let a leading-zero value abort the whole render.
+
+`gh run list --json` already has the contract the rewrite spent a day
+hand-building (measured against the real API, gh 2.98.0):
+
+```
+failure (404 / 401 / network)  ->  exit 1, stdout EMPTY, reason on stderr
+no matching runs               ->  exit 0, stdout []
+real runs                      ->  exit 0, stdout [{...}]
+```
+
+Failure and "nothing to report" can never be confused. So the fetch layer now
+calls `gh run list --json conclusion,status,headSha,url --jq ...` and gh owns the
+JSON. This adds no dependency: `gh --jq` embeds a Go jq and works with an emptied
+PATH, and `gh` was already required to reach the API at all. What is lost is the
+structured error body -- gh reports the reason as prose on stderr -- so the
+classifier reads a status code out of prose, which is a far safer regex surface
+(no nesting, no escaping, no user-controlled field), and an unrecognised message
+degrades to the quiet register rather than guessing.
+
+**Testing.** `ci-watch-selftest` (110 assertions) was written BEFORE the rewrite and
 run red against the old tool first. Every failure-path case ships with its
 success-path twin, because every assertion here is about an absence and an absence
 reads identically whether the mechanism worked or the test never ran. The suite's
@@ -126,7 +150,7 @@ ci-watch --snooze <repo> <d>   # deliberately silence a red target for <d> days
 ci-watch --list                # show the watchlist
 ci-watch --json                # machine-readable status per target
 ci-watch --control             # prove the watcher cannot report a false green
-ci-watch-selftest              # the full suite (82 assertions, no network)
+ci-watch-selftest              # the full suite (110 assertions, no network)
 ```
 
 `gh` advisory: the live query needs `gh` + `$GH_TOKEN`, which are present **inside

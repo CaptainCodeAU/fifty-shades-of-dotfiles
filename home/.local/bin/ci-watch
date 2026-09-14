@@ -93,14 +93,18 @@
 #   - `documentation_url` is BYTE-IDENTICAL on the 403 and the 404. Useless.
 #   - A rate-limit 403 and a permission 403 share a status code; separate them
 #     by `x-ratelimit-remaining: 0` or the message text.
-#   - `gh api` exits 1 for EVERY failure, HTTP and network alike, and even the
-#     documented auth-specific code 4 is unreliable (cli/cli#9338). NEVER branch
-#     on its exit code -- classify from the HTTP status and the message body.
-#   - `gh api --jq '.total_count // 0'` prints 0 on a 403, because the ERROR
-#     body reaches jq. That is the count-and-absence trap; we never do it.
+#   - `gh api` writes the ERROR BODY TO STDOUT and exits 1 for every failure
+#     alike, so `gh api --jq '.total_count // 0'` yields a plausible-looking
+#     answer on a 403. That is the count-and-absence trap, and it is why the
+#     runs query uses `gh run list` instead: that command writes NOTHING to
+#     stdout on failure (verified against the real API), so failure and "no
+#     runs" cannot be confused. `gh api` survives here only for the branch
+#     checks, where the exit code alone is the answer.
 #
-# Portability: macOS ships no `timeout(1)`, so fetch deadlines use curl's own
-# --max-time. Written for bash 3.2 (stock macOS): no associative arrays.
+# Portability: written for bash 3.2 (stock macOS): no associative arrays. There
+# is no jq dependency -- `gh --jq` embeds its own Go implementation and works
+# with an emptied PATH (verified). macOS 26 also ships /usr/bin/jq now, but this
+# tool does not rely on it.
 #
 # Privacy: this generic engine is committed to a PUBLIC repo. The real repo list
 # lives ONLY in ~/.config/ci-watch/watchlist (gitignored). See watchlist.example.
@@ -124,10 +128,10 @@
 #   CI_WATCH_LIST, CI_WATCH_STATE, CI_WATCH_NOTIFY_URL, CI_WATCH_VOICE_ID
 #   CI_WATCH_FORCE=green|red|unknown   bypass the live query (self-test only)
 #   CI_WATCH_NOW=<epoch>               override "now" (self-test only)
-#   CI_WATCH_HTTP_STUB=<exe>           called instead of gh/curl; $1 = api path;
-#                                      prints HTTP status on line 1, body after;
-#                                      its exit code simulates transport (7) and
-#                                      timeout (28). The selftest seam.
+#   CI_WATCH_GH=<path>                 the gh binary to use. The selftest points
+#                                      this at a shim that impersonates gh, so
+#                                      every outcome is deterministic with no
+#                                      network and no token.
 #   CI_WATCH_DEBUG=1                   echo "[voice] ..." to stderr
 # ============================================================================
 set -uo pipefail
@@ -179,7 +183,22 @@ now_epoch(){
 }
 trim(){ local s="$1"; s="${s#"${s%%[![:space:]]*}"}"; s="${s%"${s##*[![:space:]]}"}"; printf '%s' "$s"; }
 keyof(){ printf '%s' "$1" | tr '/@:.' '____' 2>/dev/null | tr -cd 'A-Za-z0-9_-' 2>/dev/null; }
-enc_branch(){ printf '%s' "$1" | sed 's#/#%2F#g' 2>/dev/null || printf '%s' "$1"; }
+# Percent-encode every character that is reserved in a URL PATH segment, not
+# just `/`. Encoding only the slash meant a branch called `feat/#42` truncated at
+# the fragment marker and 404'd, which the liveness check then read as a deleted
+# branch -- a confident false alarm about a branch that was alive. (`%` must be
+# first or it double-encodes the escapes added after it.)
+enc_branch(){
+  local s="$1" out='' c i
+  for (( i=0; i<${#s}; i++ )); do
+    c="${s:i:1}"
+    case "$c" in
+      [A-Za-z0-9._~-]) out="$out$c" ;;
+      *) out="$out$(printf '%%%02X' "'$c")" ;;
+    esac
+  done
+  printf '%s' "$out"
+}
 # All-digit is NOT the same as safe-in-arithmetic. Bash reads a leading zero as
 # OCTAL, so `08` is an invalid expression -- and an invalid arithmetic expansion
 # ABORTS THE SCRIPT. With one `fetched_at=08` in one state file, the render died
@@ -208,165 +227,52 @@ age_str(){
 
 tier_for_days(){ if [ "$1" -ge 7 ]; then TIER=3; elif [ "$1" -ge 3 ]; then TIER=2; else TIER=1; fi; }
 
-# ---- JSON field extraction -------------------------------------------------
-# Deliberately NOT jq. Three reasons: jq is absent on a stripped PATH (a case the
-# selftest exercises); `jq -r '.x // 0'` on an ERROR body silently yields the
-# fallback, which is precisely the count-and-absence trap this rewrite exists to
-# kill; and these are flat scalar fields on a known shape. bash 3.2 has =~.
-json_str(){ # json_str <body> <key> -> the string value, or empty
-  local body="$1" key="$2"
-  [[ "$body" =~ \"$key\"[[:space:]]*:[[:space:]]*\"([^\"]*)\" ]] && printf '%s' "${BASH_REMATCH[1]}"
-}
-json_num(){ # json_num <body> <key> -> the numeric value, or empty
-  local body="$1" key="$2"
-  [[ "$body" =~ \"$key\"[[:space:]]*:[[:space:]]*([0-9]+) ]] && printf '%s' "${BASH_REMATCH[1]}"
-}
-# GitHub error bodies carry "status":"403" -- a quoted string of DIGITS. A
-# workflow run carries "status":"completed". Only the first is an HTTP status,
-# so demand digits; anything else is a field that merely shares the name.
-json_status_code(){
-  local body="$1"
-  [[ "$body" =~ \"status\"[[:space:]]*:[[:space:]]*\"([0-9]{3})\" ]] && printf '%s' "${BASH_REMATCH[1]}"
-}
-is_runs_payload(){ case "$1" in *'"workflow_runs"'*) return 0 ;; *) return 1 ;; esac; }
-# The runs slice -- everything from "workflow_runs" onward. It used to be
-# truncated at the first `}`, which is WRONG for a real payload: GitHub orders
-# the run object id, name, ..., display_title, ..., status, conclusion, so a
-# commit title containing a brace ("fix: handle {} in the parser") or a workflow
-# named "Build {matrix}" cut the object BEFORE the fields that matter. Verified
-# 2026-09-15: both a green and a red run rendered `.. CI running`, and with the
-# old alarm-clearing bug that ALSO zeroed a red streak. A commit message could
-# silently dismiss a CI alarm. With per_page=1 there is exactly one run object,
-# so no truncation is needed at all -- first-match-wins is correct because every
-# run-level key precedes its nested namesakes (run html_url before actor and
-# repository html_url).
-runs_slice(){
-  local body="$1" rest
-  rest="${body#*\"workflow_runs\"}"
-  [ "$rest" = "$body" ] && return 1
-  printf '%s' "$rest"
-}
-# `conclusion` and `status` are CLOSED ENUMS. Matching against the enum instead
-# of "any quoted string" means a crafted commit title cannot spoof them by
-# embedding an escaped \"conclusion\": pair -- it would have to name a real
-# value, in your own repo, on purpose.
-json_enum(){ # json_enum <body> <key> <allowed-alternation>
-  local body="$1" key="$2" allow="$3"
-  [[ "$body" =~ \"$key\"[[:space:]]*:[[:space:]]*\"($allow)\" ]] && printf '%s' "${BASH_REMATCH[1]}"
-}
-json_sha(){ # a head_sha is hex, which a prose title is not
-  local body="$1"
-  [[ "$body" =~ \"head_sha\"[[:space:]]*:[[:space:]]*\"([0-9a-fA-F]{7,40})\" ]] && printf '%s' "${BASH_REMATCH[1]}"
-}
+# ---- transport: gh owns the JSON, and gh owns the error shape ---------------
+# The hand-rolled bash-regex JSON reader that used to live here produced THREE
+# wrong answers in one day: it read `"status":"completed"` off a run object as an
+# HTTP status; it truncated the run object at the first `}` so a commit titled
+# `fix: handle {} in the parser` turned a RED build into a quiet "running"; and
+# its numeric guard let `08` abort the whole render. Parsing JSON with regex is
+# a known-bad idea and this file is the evidence.
+#
+# `gh run list --json` already has the exact contract this tool spent a day
+# hand-building (measured against the real API, gh 2.98.0):
+#
+#     failure (404 / 401 / network)  ->  exit 1, stdout EMPTY, reason on stderr
+#     no matching runs               ->  exit 0, stdout []
+#     real runs                      ->  exit 0, stdout [{...}]
+#
+# Failure and "nothing to report" can never be confused, which is the entire bug
+# class. And `gh --jq` does NOT need the jq binary -- gh embeds a Go jq, proven
+# with an emptied PATH -- so leaning on it adds no runtime dependency beyond the
+# gh this tool already needs to reach the API at all.
+#
+# What is LOST by moving off `gh api`: the structured error body. gh reports the
+# reason as PROSE on stderr ("failed to get runs: HTTP 403: Resource not
+# accessible by integration"). So the classifier now reads a status code out of
+# prose. That is a far safer regex surface than JSON -- there is no nesting, no
+# escaping and no user-controlled field to collide with -- but it IS a string
+# match against another tool's wording, so an unrecognised message degrades to
+# the quiet register rather than guessing.
+GH="${CI_WATCH_GH:-gh}"
+have_gh(){ command -v "$GH" >/dev/null 2>&1 || [ -x "$GH" ]; }
 
-# ---- transport -------------------------------------------------------------
-# Sets H_CODE (HTTP status or 000), H_BODY, H_RC (0 ok / 28 timeout / other
-# transport / 99 no transport available at all). NOTHING here discards an exit
-# code or a stderr stream -- that line was the whole bug.
-http_get(){
-  local path="$1" out rc
-  H_CODE=000; H_BODY=''; H_RC=0
-
-  if [ -n "${CI_WATCH_HTTP_STUB:-}" ] && [ -x "${CI_WATCH_HTTP_STUB}" ]; then
-    out="$("$CI_WATCH_HTTP_STUB" "$path" 2>"$ERR_SINK")"; rc=$?
-    if [ "$rc" -ne 0 ]; then H_RC="$rc"; return 0; fi
-    H_CODE="$(printf '%s' "$out" | head -1)"
-    H_BODY="$(printf '%s' "$out" | tail -n +2)"
-    return 0
-  fi
-
-  if have gh; then
-    # gh puts the JSON ERROR body on stdout and its own `gh: ...` line on stderr,
-    # and exits 1 for every failure alike. So: read the status out of the BODY
-    # (GitHub error bodies carry "status":"403"), never out of $?.
-    out="$(gh api "$path" 2>"$ERR_SINK")"; rc=$?
-    H_BODY="$out"
-    local st
-    if is_runs_payload "$out"; then
-      H_CODE=200                       # a real payload settles it; look no further
-    else
-      st="$(json_status_code "$out")"
-      if [ -n "$st" ]; then H_CODE="$st"
-      elif [ "$rc" -eq 0 ]; then H_CODE=200
-      else H_RC=6; fi   # gh failed without a parseable status body: see O_DETAIL
-    fi
-    # Only a usable answer ends the attempt. The rewrite had `return 0` here
-    # unconditionally, which DELETED the old tool's curl fall-through -- and in
-    # a Claude session, where gh is wrapped by a credential helper that can fail
-    # while GH_TOKEN is exported and perfectly usable, that meant a quiet
-    # ".. CI stale" every session forever. Restored.
-    [ "$H_RC" -eq 0 ] && return 0
-  fi
-
-  if have curl && [ -n "${GH_TOKEN:-}" ]; then
-    # --max-time, not timeout(1): stock macOS has no timeout binary.
-    # No -f: --fail suppresses the error BODY, and the body is where the
-    # discriminating message lives. Status comes back out-of-band via -w.
-    out="$(curl -sS --max-time 8 -w $'\n%{http_code}' \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            -H 'Accept: application/vnd.github+json' \
-            "https://api.github.com/${path}" 2>"$ERR_SINK")"; rc=$?
-    if [ "$rc" -ne 0 ]; then H_RC="$rc"; return 0; fi
-    H_CODE="$(printf '%s' "$out" | tail -1)"
-    H_BODY="$(printf '%s' "$out" | sed '$d')"
-    case "$H_CODE" in ''|*[!0-9]*) H_CODE=000; H_RC=6 ;; esac
-    return 0
-  fi
-
-  [ "$H_RC" -ne 0 ] && return 0   # keep gh's failure if curl was not available
-  H_RC=99   # no gh, no curl+token: cannot observe anything, and we say so
-  return 0
-}
-
-# ---- classification --------------------------------------------------------
-# Exactly one token out, from a closed set. `empty_ok` and every failure are
-# different values -- collapsing them was the original defect.
-#   ok | empty_ok | perm_denied | not_found | unauthorized | rate_limited
-#   | timeout | transport | parse_error | no_transport | http_other
-classify(){
-  O_TOKEN=''; O_DETAIL=''; O_CONCL=''; O_STATUS=''; O_SHA=''; O_URL=''
-  local body="$H_BODY" msg obj
-
-  case "$H_RC" in
-    0)  ;;
-    28) O_TOKEN=timeout;      O_DETAIL='request timed out';            return 0 ;;
-    99) O_TOKEN=no_transport; O_DETAIL='no gh and no GH_TOKEN';        return 0 ;;
-    6)  O_TOKEN=transport
-        O_DETAIL='gh ran but returned no readable response (auth wrapper, network, or non-JSON error)'
-        return 0 ;;
-    *)  O_TOKEN=transport;    O_DETAIL="network or transport error (rc=$H_RC)"; return 0 ;;
-  esac
-
-  msg=''
-  is_runs_payload "$body" || msg="$(json_str "$body" message)"
-  case "$H_CODE" in
-    200)
-      if ! printf '%s' "$body" | grep -q '"workflow_runs"' 2>/dev/null; then
-        O_TOKEN=parse_error; O_DETAIL='response was not a runs payload'; return 0
-      fi
-      local total; total="$(json_num "$body" total_count)"
-      if [ "$(numor0 "$total")" -eq 0 ]; then
-        O_TOKEN=empty_ok; O_DETAIL='no workflow runs recorded'; return 0
-      fi
-      obj="$(runs_slice "$body")" || { O_TOKEN=parse_error; O_DETAIL='runs array unreadable'; return 0; }
-      O_CONCL="$(json_enum "$obj" conclusion 'success|failure|neutral|cancelled|skipped|timed_out|action_required|stale|startup_failure')"
-      O_STATUS="$(json_enum "$obj" status 'completed|in_progress|queued|requested|waiting|pending|action_required')"
-      O_SHA="$(json_sha "$obj")"; O_SHA="${O_SHA:0:7}"
-      O_URL="$(json_str "$obj" html_url)"
-      O_TOKEN=ok; return 0 ;;
-    401)
-      O_TOKEN=unauthorized; O_DETAIL='token invalid or expired'; return 0 ;;
+# classify_gh_error <stderr-text> -> sets O_TOKEN / O_DETAIL
+classify_gh_error(){
+  local err="$1" code=''
+  [[ "$err" =~ HTTP[[:space:]]+([0-9]{3}) ]] && code="${BASH_REMATCH[1]}"
+  case "$code" in
+    401) O_TOKEN=unauthorized; O_DETAIL='token invalid or expired'; return 0 ;;
     403)
-      # A rate-limit 403 and a permission 403 share a status code.
-      case "$msg" in
+      case "$err" in
         *"rate limit"*|*"Rate limit"*|*"secondary rate"*|*"abuse detection"*|*"abuse-detection"*)
           O_TOKEN=rate_limited; O_DETAIL='rate limited'; return 0 ;;
       esac
       O_TOKEN=perm_denied
-      # The message names the token family. Say which, and name the remedy --
-      # the 403's own documentation_url points at a page that never mentions
-      # the permission you are missing, which is why this error misroutes people.
-      case "$msg" in
+      # The message names the token family, which is the only cheap way to tell
+      # someone WHERE to fix it. The 403's own documentation_url points at a page
+      # that never mentions the permission you are missing.
+      case "$err" in
         *"personal access token"*)
           O_DETAIL='fine-grained token lacks the Actions: read permission (also check this repo is in its selected-repositories list)' ;;
         *"integration"*)
@@ -377,22 +283,82 @@ classify(){
       return 0 ;;
     404)
       # GitHub returns 404 rather than 403 so it never confirms a private repo
-      # exists. So we genuinely cannot tell these apart, and must not pretend to.
+      # exists. We genuinely cannot tell these apart and must not pretend to.
       O_TOKEN=not_found
       O_DETAIL='repo not found, OR this token cannot see it -- GitHub will not say which'
       return 0 ;;
-    429)
-      O_TOKEN=rate_limited; O_DETAIL='rate limited'; return 0 ;;
-    5??)
-      # GitHub incidents are routine. Firing the magenta banner on every watched
-      # repo during one is exactly the habituation BLIND exists to avoid, so a
-      # server error is transient news, not a broken watch.
-      O_TOKEN=server_error; O_DETAIL="GitHub returned HTTP ${H_CODE}"; return 0 ;;
-    *)
-      # Unknown statuses stay QUIET too: being loud about something we do not
-      # understand spends the alarm channel on our own ignorance.
-      O_TOKEN=http_other; O_DETAIL="HTTP ${H_CODE}${msg:+: $msg}"; return 0 ;;
+    429) O_TOKEN=rate_limited; O_DETAIL='rate limited'; return 0 ;;
+    5??) O_TOKEN=server_error; O_DETAIL="GitHub returned HTTP ${code}"; return 0 ;;
+    '')
+      # No HTTP code in the message at all: a transport failure, a TLS problem, a
+      # credential helper that died. Quiet -- being loud about something we did
+      # not understand spends the alarm channel on our own ignorance.
+      case "$err" in
+        *"timeout"*|*"timed out"*|*"deadline exceeded"*)
+          O_TOKEN=timeout; O_DETAIL='request timed out' ;;
+        *) O_TOKEN=transport
+           O_DETAIL="gh could not reach the API${err:+ (${err%%$'\n'*})}" ;;
+      esac
+      return 0 ;;
+    *)   O_TOKEN=http_other; O_DETAIL="HTTP ${code}"; return 0 ;;
   esac
+}
+
+# fetch_runs <repo> <branch> -> O_TOKEN O_DETAIL O_CONCL O_STATUS O_SHA O_URL
+fetch_runs(){
+  local repo="$1" branch="$2" out rc err
+  O_TOKEN=''; O_DETAIL=''; O_CONCL=''; O_STATUS=''; O_SHA=''; O_URL=''
+
+  if [ -n "${CI_WATCH_FORCE:-}" ]; then O_TOKEN=forced; return 0; fi
+  if ! have_gh; then
+    O_TOKEN=no_transport; O_DETAIL='gh is not installed -- nothing can be observed'
+    return 0
+  fi
+
+  : >"$ERR_SINK" 2>/dev/null
+  if [ -n "$branch" ]; then
+    out="$("$GH" run list --repo "$repo" --branch "$branch" --limit 1 \
+             --json conclusion,status,headSha,url \
+             --jq '(.[0] // {}) | [(.conclusion // ""),(.status // ""),(.headSha // ""),(.url // "")] | @tsv' \
+             2>"$ERR_SINK")"
+  else
+    out="$("$GH" run list --repo "$repo" --limit 1 \
+             --json conclusion,status,headSha,url \
+             --jq '(.[0] // {}) | [(.conclusion // ""),(.status // ""),(.headSha // ""),(.url // "")] | @tsv' \
+             2>"$ERR_SINK")"
+  fi
+  rc=$?
+
+  if [ "$rc" -ne 0 ]; then
+    err="$(cat "$ERR_SINK" 2>/dev/null)"
+    classify_gh_error "$err"
+    return 0
+  fi
+
+  # exit 0. Either real fields, or every field empty, which is gh's honest way of
+  # saying "no runs matched" -- and it can never be confused with a failure,
+  # because a failure never gets here.
+  IFS=$'\t' read -r O_CONCL O_STATUS O_SHA O_URL <<<"$out"
+  if [ -z "${O_CONCL}${O_STATUS}${O_SHA}" ]; then
+    O_TOKEN=empty_ok; O_DETAIL='no workflow runs recorded'; return 0
+  fi
+  O_SHA="${O_SHA:0:7}"
+  O_TOKEN=ok
+  return 0
+}
+
+# gh_api_ok <path> -> 0 if the call succeeded; sets GA_OUT and GA_CODE otherwise
+gh_api_ok(){
+  local path="$1" out rc err code=''
+  GA_OUT=''; GA_CODE=''
+  have_gh || return 2
+  : >"$ERR_SINK" 2>/dev/null
+  out="$("$GH" api "$path" 2>"$ERR_SINK")"; rc=$?
+  if [ "$rc" -eq 0 ]; then GA_OUT="$out"; GA_CODE=200; return 0; fi
+  err="$(cat "$ERR_SINK" 2>/dev/null)"
+  [[ "$err" =~ HTTP[[:space:]]+([0-9]{3}) ]] && code="${BASH_REMATCH[1]}"
+  GA_CODE="$code"
+  return 1
 }
 
 # A SUCCESSFUL observation still has to be mapped to what it means. Note that
@@ -541,12 +507,7 @@ process_target(){ # repo branch label
     esac
     url=''
   else
-    if [ -n "$branch" ]; then
-      http_get "repos/${repo}/actions/runs?branch=$(enc_branch "$branch")&per_page=1"
-    else
-      http_get "repos/${repo}/actions/runs?per_page=1"
-    fi
-    classify
+    fetch_runs "$repo" "$branch"
     outcome="$O_TOKEN"; detail="$O_DETAIL"
     concl="$O_CONCL"; sha="$O_SHA"; url="$O_URL"
     obs=''
@@ -573,28 +534,23 @@ process_target(){ # repo branch label
   balive="$S_BRANCH_ALIVE"; bchecked="$S_BRANCH_CHECKED"
   if [ -n "$branch" ] && [ -z "${CI_WATCH_FORCE:-}" ] \
      && [ $(( 10#$now - 10#$bchecked )) -ge "$BRANCH_TTL" ]; then
-    http_get "repos/${repo}/branches/$(enc_branch "$branch")"
-    if [ "$H_RC" -eq 0 ]; then
-      case "$H_CODE" in
-        200) balive=1; bchecked="$now" ;;
-        404)
-          local dflt
-          http_get "repos/${repo}"
-          dflt=''
-          [ "$H_RC" -eq 0 ] && [ "$H_CODE" = 200 ] && dflt="$(json_str "$H_BODY" default_branch)"
-          if [ -n "$dflt" ] && [ "$dflt" != "$branch" ]; then
-            http_get "repos/${repo}/branches/$(enc_branch "$dflt")"
-            if [ "$H_RC" -eq 0 ] && [ "$H_CODE" = 200 ]; then
-              balive=0; bchecked="$now"     # control hit: the 404 is real
-            else
-              balive='?'; bchecked="$now"   # control missed: INVALID TRIAL
-            fi
-          else
-            balive='?'; bchecked="$now"
-          fi ;;
-        *)   : ;;                       # a refusal tells us nothing about the ref
-      esac
+    if gh_api_ok "repos/${repo}/branches/$(enc_branch "$branch")"; then
+      balive=1; bchecked="$now"
+    elif [ "$GA_CODE" = 404 ]; then
+      local dflt
+      dflt=''
+      gh_api_ok "repos/${repo}" && dflt="$(printf '%s' "$GA_OUT" | tr ',' '\n' \
+                                            | grep '"default_branch"' | head -1 \
+                                            | sed 's/.*"default_branch"[[:space:]]*:[[:space:]]*"//; s/".*//')"
+      if [ -n "$dflt" ] && [ "$dflt" != "$branch" ] \
+         && gh_api_ok "repos/${repo}/branches/$(enc_branch "$dflt")"; then
+        balive=0; bchecked="$now"       # control HIT: the 404 is real
+      else
+        balive='?'; bchecked="$now"     # control MISSED: invalid trial, say nothing
+      fi
     fi
+    # Any other failure tells us nothing about the ref, so we leave the previous
+    # answer alone rather than inventing one.
   fi
 
   # --- fold the outcome into the record. THE INVARIANT: fetched_at moves only

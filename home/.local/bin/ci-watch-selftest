@@ -75,20 +75,62 @@ new_case(){                      # new_case -> sets D, LIST, STATE, STUB, BSTUB
     stub_default 200 '{"name":"trunk"}'
     cat > "$D/http-stub" <<'STUBEOF'
 #!/usr/bin/env bash
-# $1 = api path. Emits: line 1 = HTTP status, rest = body. Exit != 0 = transport.
-case "$1" in
-  */branches/trunk) f="$CI_WATCH_SELFTEST_DSTUB" ;;   # the positive control ref
-  */branches/*)     f="$CI_WATCH_SELFTEST_BSTUB" ;;   # the watched ref
-  */actions/runs*)  f="$CI_WATCH_SELFTEST_STUB"  ;;
-  *)                f="$CI_WATCH_SELFTEST_RSTUB" ;;   # bare repo -> default_branch
-esac
-[ -f "$f" ] || { printf '000\n'; exit 7; }
-code="$(head -1 "$f")"
-case "$code" in
-  TIMEOUT)   exit 28 ;;
-  TRANSPORT) exit 7  ;;
-esac
-cat "$f"
+# A `gh` IMPERSONATOR, not an HTTP stub. ci-watch now speaks to gh, so the test
+# double has to speak gh's contract -- which is the point: the contract is the
+# thing worth testing. Fixtures stay in the old (HTTP status + body) shape and
+# this shim translates, so one translation lives here instead of in every case.
+#   run list ...   -> exit 0 + TSV on stdout, or exit 1 + prose on stderr
+#   api <path>     -> exit 0 + body, or exit 1 + "gh: <msg> (HTTP <code>)"
+sub="$1"; shift
+fixture_for_repo(){   # per-repo override, else the default fixture
+  case "$1" in
+    o/r2|x/y) [ -n "${CI_WATCH_SELFTEST_STUB2:-}" ] && { printf '%s' "$CI_WATCH_SELFTEST_STUB2"; return; } ;;
+  esac
+  printf '%s' "$CI_WATCH_SELFTEST_STUB"
+}
+if [ "$sub" = run ]; then
+  shift                                  # drop "list"
+  repo=''; branch=''
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --repo)   repo="$2"; shift 2 ;;
+      --branch) branch="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  f="$(fixture_for_repo "$repo")"
+  [ -f "$f" ] || { printf 'failed to get runs: no fixture\n' >&2; exit 1; }
+  code="$(head -1 "$f")"
+  case "$code" in
+    TIMEOUT)   printf 'failed to get runs: context deadline exceeded\n' >&2; exit 1 ;;
+    TRANSPORT) printf 'failed to get runs: dial tcp: connection refused\n' >&2; exit 1 ;;
+  esac
+  body="$(tail -n +2 "$f")"
+  if [ "$code" = 200 ]; then
+    printf '%s' "$body" | jq -r '(.workflow_runs[0] // {}) | [(.conclusion // ""),(.status // ""),(.head_sha // ""),(.html_url // "")] | @tsv' 2>/dev/null \
+      || { printf 'failed to get runs: invalid character in response\n' >&2; exit 1; }
+    exit 0
+  fi
+  msg="$(printf '%s' "$body" | jq -r '.message // ""' 2>/dev/null)"
+  printf 'failed to get runs: HTTP %s: %s (https://api.github.com/repos/%s/actions/runs)\n' "$code" "$msg" "$repo" >&2
+  exit 1
+fi
+if [ "$sub" = api ]; then
+  path="$1"
+  case "$path" in
+    */branches/trunk|*/branches/main2) f="$CI_WATCH_SELFTEST_DSTUB" ;;
+    */branches/*)                      f="$CI_WATCH_SELFTEST_BSTUB" ;;
+    *)                                 f="$CI_WATCH_SELFTEST_RSTUB" ;;
+  esac
+  [ -f "$f" ] || { printf 'gh: Not Found (HTTP 404)\n' >&2; exit 1; }
+  code="$(head -1 "$f")"; body="$(tail -n +2 "$f")"
+  if [ "$code" = 200 ]; then printf '%s\n' "$body"; exit 0; fi
+  msg="$(printf '%s' "$body" | jq -r '.message // "error"' 2>/dev/null)"
+  printf 'gh: %s (HTTP %s)\n' "$msg" "$code" >&2
+  exit 1
+fi
+printf 'gh: unsupported in the selftest shim: %s\n' "$sub" >&2
+exit 2
 STUBEOF
     chmod +x "$D/http-stub"
 }
@@ -99,7 +141,7 @@ stub_default(){ { printf '%s\n' "$1"; printf '%s' "$2"; } > "$DSTUB"; }
 
 run_watch(){                     # run_watch [extra env assignments...] -> OUT / RC
     OUT="$(env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" \
-               CI_WATCH_HTTP_STUB="$D/http-stub" \
+               CI_WATCH_GH="$D/http-stub" \
                CI_WATCH_SELFTEST_STUB="$STUB" CI_WATCH_SELFTEST_BSTUB="$BSTUB" \
                CI_WATCH_SELFTEST_RSTUB="$RSTUB" CI_WATCH_SELFTEST_DSTUB="$DSTUB" \
                NO_COLOR="${NO_COLOR_OVERRIDE:-}" \
@@ -124,12 +166,12 @@ printf 'F1  honest fetch classification\n'
 # C1 static: the evidence-destroying construct is gone from the fetch paths.
 # Scope to the fetch/classify functions -- the claim is about the FETCH path, not
 # about `mkdir -p ... || true` housekeeping elsewhere in the file.
-c1_region="$(sed -n '/^http_get()/,/^}/p;/^classify()/,/^}/p' "$TOOL")"
+c1_region="$(sed -n '/^fetch_runs()/,/^}/p;/^classify_gh_error()/,/^}/p;/^gh_api_ok()/,/^}/p' "$TOOL")"
 c1_hits="$(printf '%s' "$c1_region" | grep -c '2>/dev/null || true' || true)"
 c1_hits="$(printf '%s' "$c1_hits" | head -1)"
 # POSITIVE ARM: the grep itself must be able to find something in this file,
 # otherwise a 0 means "grep did not run", not "the construct is absent".
-c1_control="$(printf '%s' "$c1_region" | grep -c 'H_CODE' || true)"
+c1_control="$(printf '%s' "$c1_region" | grep -c 'O_TOKEN' || true)"
 c1_control="$(printf '%s' "$c1_control" | head -1)"
 if [ "$c1_control" -eq 0 ]; then
     bad C1 "fetch-path grep" "control token present" "control missed -- INVALID TRIAL, not a pass"
@@ -140,7 +182,7 @@ fi
 # C2: every outcome token, one fixture each.
 for spec in "200:ok" "403perm:perm_denied" "404:not_found" "401:unauthorized" \
             "403rate:rate_limited" "TIMEOUT:timeout" "TRANSPORT:transport" \
-            "200empty:empty_ok" "200garbage:parse_error"; do
+            "200empty:empty_ok" "200garbage:transport"; do
     code="${spec%%:*}"; expect="${spec#*:}"
     new_case
     case "$code" in
@@ -305,13 +347,13 @@ new_case
 CALLLOG="$D/branchcalls"; : > "$CALLLOG"
 cat > "$D/http-stub" <<'STUBEOF'
 #!/usr/bin/env bash
-case "$1" in
-  */branches/*) printf 'B\n' >> "$CI_WATCH_SELFTEST_CALLLOG"; f="$CI_WATCH_SELFTEST_BSTUB" ;;
-  *)            f="$CI_WATCH_SELFTEST_STUB" ;;
-esac
-code="$(head -1 "$f")"
-case "$code" in TIMEOUT) exit 28;; TRANSPORT) exit 7;; esac
-cat "$f"
+sub="$1"; shift
+if [ "$sub" = api ]; then
+  case "$1" in */branches/*) printf 'B\n' >> "$CI_WATCH_SELFTEST_CALLLOG" ;; esac
+  printf '{"name":"main","default_branch":"main"}\n'; exit 0
+fi
+printf '%s\t%s\t%s\t%s\n' success completed 1234567cafe u
+exit 0
 STUBEOF
 chmod +x "$D/http-stub"
 run_watch CI_WATCH_SELFTEST_CALLLOG="$CALLLOG" CI_WATCH_NOW=1000000000
@@ -504,23 +546,33 @@ new_case
 printf 'o/r@main | GONE\no/r2@main | SECOND\n' > "$LIST"
 cat > "$D/http-stub" <<'STUBEOF'
 #!/usr/bin/env bash
-case "$1" in
-  repos/o/r/branches/trunk)  printf '200\n{"name":"trunk"}' ;;          # control HITS
-  repos/o/r/branches/*)      printf '404\n{"message":"Not Found","status":"404"}' ;;
-  repos/o/r2/branches/*)     printf '200\n{"name":"main"}' ;;
-  repos/o/r)                 printf '200\n{"default_branch":"trunk"}' ;;
-  repos/o/r2)                printf '200\n{"default_branch":"main"}' ;;
-  repos/o/r/actions/*)       cat "$CI_WATCH_SELFTEST_STUB" ;;
-  repos/o/r2/actions/*)      cat "$CI_WATCH_SELFTEST_STUB2" ;;
-  *)                         printf '200\n{}' ;;
+sub="$1"; shift
+if [ "$sub" = api ]; then
+  case "$1" in
+    repos/o/r/branches/trunk) printf '{"name":"trunk"}\n'; exit 0 ;;        # control HITS
+    repos/o/r/branches/*)     printf 'gh: Not Found (HTTP 404)\n' >&2; exit 1 ;;
+    repos/o/r2/branches/*)    printf '{"name":"main"}\n'; exit 0 ;;
+    repos/o/r)                printf '{"default_branch":"trunk"}\n'; exit 0 ;;
+    repos/o/r2)               printf '{"default_branch":"main"}\n'; exit 0 ;;
+  esac
+  printf '{}\n'; exit 0
+fi
+repo=''
+while [ $# -gt 0 ]; do case "$1" in --repo) repo="$2"; shift 2 ;; *) shift ;; esac; done
+case "$repo" in
+  o/r)  f="$CI_WATCH_SELFTEST_STUB" ;;
+  o/r2) f="$CI_WATCH_SELFTEST_STUB2" ;;
+  *)    f="$CI_WATCH_SELFTEST_STUB" ;;
 esac
+tail -n +2 "$f" | jq -r '(.workflow_runs[0] // {}) | [(.conclusion // ""),(.status // ""),(.head_sha // ""),(.html_url // "")] | @tsv'
+exit 0
 STUBEOF
 chmod +x "$D/http-stub"
 GREENP='{"total_count":1,"workflow_runs":[{"conclusion":"success","status":"completed","head_sha":"1234567cafe","html_url":"u"}]}'
 REDP='{"total_count":1,"workflow_runs":[{"conclusion":"failure","status":"completed","head_sha":"deadbee1234","html_url":"u"}]}'
 voices_at(){ # voices_at <now> -> count of transition alerts
     local out
-    out="$(env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" CI_WATCH_HTTP_STUB="$D/http-stub" \
+    out="$(env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" CI_WATCH_GH="$D/http-stub" \
             CI_WATCH_SELFTEST_STUB="$STUB" CI_WATCH_SELFTEST_STUB2="$D/runs2.stub" \
             CI_WATCH_DEBUG=1 CI_WATCH_NOW="$1" "$TOOL" 2>&1)"
     [ "$VERBOSE" -eq 1 ] && printf '       | %s\n' "$out"
@@ -593,7 +645,7 @@ wanteq C26 "garbage state still exits 0" "0" "$RC"
 # C27: concurrent renders must not corrupt the state file.
 new_case
 for _ in 1 2 3 4 5 6; do
-    env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" CI_WATCH_HTTP_STUB="$D/http-stub" \
+    env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" CI_WATCH_GH="$D/http-stub" \
         CI_WATCH_SELFTEST_STUB="$STUB" CI_WATCH_SELFTEST_BSTUB="$BSTUB" CI_WATCH_SELFTEST_RSTUB="$RSTUB" CI_WATCH_SELFTEST_DSTUB="$DSTUB" "$TOOL" >/dev/null 2>&1 &
 done
 wait
@@ -630,7 +682,7 @@ wanteq  C29 "stripped PATH still exits 0"       "0"           "$RC"
 # C30: the documented env overrides still work.
 new_case
 OUT="$(env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" NO_COLOR=1 \
-        CI_WATCH_HTTP_STUB="$D/http-stub" CI_WATCH_SELFTEST_STUB="$STUB" \
+        CI_WATCH_GH="$D/http-stub" CI_WATCH_SELFTEST_STUB="$STUB" \
         CI_WATCH_SELFTEST_BSTUB="$BSTUB" CI_WATCH_SELFTEST_RSTUB="$RSTUB" \
         CI_WATCH_SELFTEST_DSTUB="$DSTUB" "$TOOL" 2>&1)"
 wantnot C30 "NO_COLOR suppresses ANSI" $'\033[' "$OUT"
@@ -680,16 +732,16 @@ wantnot C20 "old-format cache never renders green" "$GREENGLYPH" "$OUT"
 # Anti-C22: BLIND and UNOBSERVABLE must never wear the red alarm's colour.
 new_case
 NO_COLOR_OVERRIDE=""
-OUT="$(env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" CI_WATCH_HTTP_STUB="$D/http-stub" \
+OUT="$(env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" CI_WATCH_GH="$D/http-stub" \
         CI_WATCH_SELFTEST_STUB="$STUB" CI_WATCH_SELFTEST_BSTUB="$BSTUB" CI_WATCH_SELFTEST_RSTUB="$RSTUB" CI_WATCH_SELFTEST_DSTUB="$DSTUB" "$TOOL" 2>&1)"
 stub_runs 403 '{"message":"Resource not accessible by integration","status":"403"}'
-OUT="$(env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" CI_WATCH_HTTP_STUB="$D/http-stub" \
+OUT="$(env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" CI_WATCH_GH="$D/http-stub" \
         CI_WATCH_SELFTEST_STUB="$STUB" CI_WATCH_SELFTEST_BSTUB="$BSTUB" CI_WATCH_SELFTEST_RSTUB="$RSTUB" CI_WATCH_SELFTEST_DSTUB="$DSTUB" "$TOOL" 2>&1)"
 wantnot "AntiC22" "BLIND does not use the red escape code" "$REDCODE" "$OUT"
 # TWIN: a real red MUST use it, or the assertion is vacuous.
 new_case
 stub_runs 200 '{"total_count":1,"workflow_runs":[{"conclusion":"failure","status":"completed","head_sha":"f","html_url":"u"}]}'
-OUT="$(env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" CI_WATCH_HTTP_STUB="$D/http-stub" \
+OUT="$(env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" CI_WATCH_GH="$D/http-stub" \
         CI_WATCH_SELFTEST_STUB="$STUB" CI_WATCH_SELFTEST_BSTUB="$BSTUB" CI_WATCH_SELFTEST_RSTUB="$RSTUB" CI_WATCH_SELFTEST_DSTUB="$DSTUB" "$TOOL" 2>&1)"
 want "AntiC22" "TWIN a real red DOES use the red escape code" "$REDCODE" "$OUT"
 
