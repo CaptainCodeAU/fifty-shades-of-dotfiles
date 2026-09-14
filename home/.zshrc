@@ -936,6 +936,18 @@ export USE_BUILTIN_RIPGREP=0
 # Pairs with settings.json remoteControlAtStartup:true; also requires a
 # full-scope token from `claude auth login`.
 _claude_launch() {
+  # Print what the last commit touched, on screen, before Claude takes over the terminal.
+  # WHY HERE AND NOT IN A HOOK: hooks/LastCommitFiles.sh is wired to SessionStart and feeds the
+  # AGENT, but Claude Code stores SessionStart stdout as a context ATTACHMENT and never prints it,
+  # and it spawns hooks with NO controlling terminal, so the hook cannot write to /dev/tty either.
+  # Both measured 2026-09-15: a probe inside the hook logged `w_test=yes real_write=FAIL`, i.e.
+  # `[ -w /dev/tty ]` passes while the open() fails. The shell, unlike the hook, owns the terminal.
+  # Writing to /dev/tty rather than stdout is deliberate: it can never pollute a pipe, so `ci`
+  # (piped -p) stays clean with no flag sniffing. Fails silently when there is no tty.
+  if [[ -x "$HOME/.claude/hooks/LastCommitFiles.sh" ]]; then
+    { "$HOME/.claude/hooks/LastCommitFiles.sh" </dev/null > /dev/tty; } 2>/dev/null || true
+  fi
+
   local key="$HOME/.ssh/captaincodeau"
   # Read-only GitHub API token (macOS Keychain) -> exposed as $GH_TOKEN for this
   # Claude session and its Bash tool only. Empty on non-macOS; harmless (gh just
