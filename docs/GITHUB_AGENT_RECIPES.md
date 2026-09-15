@@ -258,19 +258,27 @@ sandbox is constraining that session, which nobody was checking. A reader who
 gets exit 0 and concludes the caveat is stale will delete it and go straight back
 to unsetting the variable; that nearly happened the day this was written.
 
-**Am I sandboxed right now?** Attach this to the question, not to a paragraph
-elsewhere — a reader who gets exit 0 above will reach for exactly this:
+**Am I sandboxed right now?** Use `security list-keychains`. It probes the same
+subsystem the caveat is about rather than a proxy for it, has no side effects, and
+needs no cleanup line that a copier can drop:
 
 ```bash
-printf x > ~/Desktop/.probe_$$ && echo "not sandboxed" || echo "sandboxed"
-rm -f ~/Desktop/.probe_$$
+security list-keychains
+#   sandboxed   -> ONLY /Library/Keychains/System.keychain
+#   unsandboxed -> ALSO /Users/<you>/Library/Keychains/login.keychain-db
 ```
 
-Measured 2026-09-15 in a session known to be sandboxed: writes to `/tmp` **and**
-`~/Desktop` were both refused, while `$TMPDIR` and the working directory both
-succeeded. So the sandbox permits its own scratchpad and the project, and nothing
-else — which is why `$TMPDIR` is a useless discriminator and a bare `/tmp` write
-is a valid one. If you test this yourself, pick a path outside both.
+Measured 2026-09-15 as a controlled pair: the same command, in the same session,
+with the sandbox as the only variable, three consecutive runs per arm. Sandboxed
+returned System.keychain alone every time with the credential fetch at exit 44;
+unsandboxed returned both keychains every time with the fetch at exit 0. The link
+between the sandbox and the 44 is therefore causal, not coincidental.
+
+Do NOT use a write test for this. `$TMPDIR` and the working directory are writable
+in **both** conditions, so a probe there reports "not sandboxed" either way — an
+answer that cannot separate the two cases it exists to separate. A write to `/tmp`
+or `~/Desktop` does discriminate (both were refused under the sandbox, measured),
+but it needs a cleanup line, and a cleanup line is the part a copier drops.
 
 The principle this implements lives in `OPERATIONAL_RULES.md` § Engineering
 discipline ("supply the correct narrow credential explicitly; never remove a
