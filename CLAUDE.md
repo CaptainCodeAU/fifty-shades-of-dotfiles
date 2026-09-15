@@ -7,10 +7,12 @@ Default branch is `master`.
 > outstanding, and every item points at a folder that already holds its research,
 > measurements and trade-offs, so nothing needs rediscovering.
 >
-> Two items need only a decision from him and nothing built: **the SSH key in
+> **Eight items.** Three need only a decision and nothing built: **the SSH key in
 > `_claude_launch`** (which also decides whether `ci-watch` can ever detect a
-> deleted branch — four options costed, recommendation A), and **whether the Herdr
-> spawn finding is worth chasing.**
+> deleted branch — four options costed, recommendation A), **whether open items
+> should be scoped per project** rather than sharing one machine-wide drawer
+> (four options, recommendation A, plus a "do not build it yet" argument), and
+> **whether the Herdr spawn finding is worth chasing.**
 >
 > The highest-value work item is finding **what writes `GH_TOKEN` into transcripts**
 > — 12 files, oldest 14 Jun, token rotated but the cause unfixed, so the
