@@ -1,28 +1,31 @@
 Default branch is `master`.
 
-> ## OPEN — ci-watch work is unfinished (opened 2026-09-15)
+> ## OPEN WORK — show Gavin the menu (opened 2026-09-15)
 >
-> **Read `~/.claude/MEMORY/WORK/ci-watch-observability/NEXT.md` before touching
-> `ci-watch`, `ci-watch-selftest`, or anything about GitHub credentials.** It is a
-> standalone brief: it assumes no memory of 2026-09-15 and carries the findings,
-> the measurements, and what was deliberately NOT done and why.
+> **`~/.claude/MEMORY/WORK/OPEN.md` is a one-screen list of open items.** Offer it
+> to him early rather than waiting to be asked; he has said he forgets what is
+> outstanding, and every item points at a folder that already holds its research,
+> measurements and trade-offs, so nothing needs rediscovering.
 >
-> Open, in rough priority: the `GH_TOKEN`-into-transcripts leak (cause unfixed —
-> rotation reset the clock, it did not stop it) · the GitHub App migration, with
-> three measured obstacles already written up · 7 audit findings, worst being a
-> `--snooze` silently lost when it races a render · 8 assertions a cross-vendor
-> audit called hollow · swapping branch-liveness to `git ls-remote`, because the
-> API check is inert on private repos. · **removing the SSH-key step from
-> `_claude_launch` (`home/.zshrc:989-991`) — relayed from Gavin, needs his direct
-> confirmation first, and it interacts with the `git ls-remote` item above.**
+> Two items need only a decision from him and nothing built: **the SSH key in
+> `_claude_launch`** (which also decides whether `ci-watch` can ever detect a
+> deleted branch — four options costed, recommendation A), and **whether the Herdr
+> spawn finding is worth chasing.**
+>
+> The highest-value work item is finding **what writes `GH_TOKEN` into transcripts**
+> — 12 files, oldest 14 Jun, token rotated but the cause unfixed, so the
+> replacement leaks the same way.
+>
+> Also open here: the GitHub App migration, 7 `ci-watch` audit findings, 8
+> assertions a cross-vendor audit called hollow, and a branch-liveness swap blocked
+> on the SSH decision.
 >
 > Origin session: `https://claude.ai/code/session_012CxnkHV7eGiJxy3taKLx4b`
-> Design record: `~/.claude/MEMORY/WORK/ci-watch-observability/ISA.md` (`phase: climbing`)
 >
 > **Clearing condition, so this cannot become wallpaper:** delete this block when
-> `NEXT.md`'s open list is empty, and not before. Do not soften it, do not let it
-> sit here "seen". That is the exact habituation `ci-watch` exists to prevent, and
-> a stale banner in a file that loads every session is worse than none.
+> `OPEN.md` has no items left, and not before. Do not soften it and do not let it
+> sit here "seen" — that is the exact habituation `ci-watch` exists to prevent, and
+> a stale banner in an always-loaded file is worse than none.
 
 ## Python
 
