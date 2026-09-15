@@ -1,5 +1,27 @@
 Default branch is `master`.
 
+> ## OPEN — ci-watch work is unfinished (opened 2026-09-15)
+>
+> **Read `~/.claude/MEMORY/WORK/ci-watch-observability/NEXT.md` before touching
+> `ci-watch`, `ci-watch-selftest`, or anything about GitHub credentials.** It is a
+> standalone brief: it assumes no memory of 2026-09-15 and carries the findings,
+> the measurements, and what was deliberately NOT done and why.
+>
+> Open, in rough priority: the `GH_TOKEN`-into-transcripts leak (cause unfixed —
+> rotation reset the clock, it did not stop it) · the GitHub App migration, with
+> three measured obstacles already written up · 7 audit findings, worst being a
+> `--snooze` silently lost when it races a render · 8 assertions a cross-vendor
+> audit called hollow · swapping branch-liveness to `git ls-remote`, because the
+> API check is inert on private repos.
+>
+> Origin session: `https://claude.ai/code/session_012CxnkHV7eGiJxy3taKLx4b`
+> Design record: `~/.claude/MEMORY/WORK/ci-watch-observability/ISA.md` (`phase: climbing`)
+>
+> **Clearing condition, so this cannot become wallpaper:** delete this block when
+> `NEXT.md`'s open list is empty, and not before. Do not soften it, do not let it
+> sit here "seen". That is the exact habituation `ci-watch` exists to prevent, and
+> a stale banner in a file that loads every session is worse than none.
+
 ## Python
 
 Use `uv run python3` instead of calling `python3` directly. (A shell wrapper intercepts bare `python`/`python3` and version-specific calls like `py313`/`py312` and redirects to `uv run` — but invoke `uv run` directly rather than relying on the wrapper, since non-interactive Bash-tool shells skip `.zshrc` and the wrapper is absent there.)
