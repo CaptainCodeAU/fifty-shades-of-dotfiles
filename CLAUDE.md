@@ -243,6 +243,33 @@ Consequences, all measured:
 Same family as the refusal-is-not-an-answer rule above: the tool answered, it
 just answered about something other than what was asked.
 
+### Dating a credential change from the status codes alone
+
+A useful diagnostic, learned 2026-09-15 when a token was regenerated mid-session
+and two sessions spent an afternoon disagreeing about the same repository.
+
+**A token does not move from "valid but insufficient" to "unauthenticated" on its
+own.** So on ONE endpoint, over time:
+
+```
+403 "Resource not accessible by integration"   -> the token is valid, the
+                                                  permission is missing
+401                                            -> the token itself is no longer
+                                                  accepted: revoked, regenerated,
+                                                  or expired
+```
+
+A **403 -> 401 transition on the same URL dates a credential rotation** to
+somewhere between the two measurements. Both readings were correct when taken;
+what changed was the world, not the instrument.
+
+The practical consequence: **a session launched before a rotation carries the
+revoked secret until it is restarted**, because the token is read from the
+Keychain once at launch. Restart the session; do not file the bad output under
+"it always looks wrong in here". That phrasing converts a transient, fixable
+failure into background noise, which is the same habituation the session-start
+watchers exist to prevent, just relocated to the human.
+
 ### NEVER wire a "retry with GH_TOKEN unset" fallback into any tool
 
 Proposed as a usability fix on 2026-09-15 and withdrawn once the consequence was
