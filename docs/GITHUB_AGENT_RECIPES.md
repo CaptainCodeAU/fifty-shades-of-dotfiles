@@ -222,6 +222,66 @@ git config --get-all credential.https://github.com.helper
 
 ---
 
+## Recipe 9 — Probe the API from a session whose token is stale or revoked
+
+You are inside a session, a GitHub call fails, and you suspect the token the
+session was launched with is no longer good. **The obvious move is wrong.**
+
+```bash
+# DO THIS — supply the correct narrow credential explicitly
+GH_TOKEN="$(security find-generic-password -a "$USER" -s github-api-readonly -w)" ci-watch
+
+# If this returns exit 44, that is the sandbox denying ~/Library/Keychains, NOT a missing
+# credential. Lift the sandbox for that single command. Never unset GH_TOKEN instead.
+# Exit 0 does not mean this is wrong; it means this session is not sandboxed.
+```
+
+```bash
+# NOT THIS — it looks like reducing privilege and does the opposite
+env -u GH_TOKEN gh api ...
+```
+
+**Why the obvious move is backwards.** Unsetting a token feels like dropping to
+fewer permissions. It is not: `gh` then falls through to whatever it finds next,
+which here is its own keyring holding a broad OAuth token with **`repo` scope** —
+full source read across every repository the account owns. The fine-grained
+`github-api-readonly` PAT deliberately has **no contents access at all**. So the
+"safer-looking" command quietly hands the tool far more authority than the one it
+replaced, and nothing in the output says so.
+
+**Why both exit codes are written above.** Three sessions measured this on
+2026-09-15 and got two different answers. One sandboxed session returned exit 44,
+with `security list-keychains` seeing only `System.keychain` and a write outside
+the project refused. Two unsandboxed sessions returned exit 0 with both keychains
+visible. All three results were correct — the variable is simply whether the Bash
+sandbox is constraining that session, which nobody was checking. A reader who
+gets exit 0 and concludes the caveat is stale will delete it and go straight back
+to unsetting the variable; that nearly happened the day this was written.
+
+**Am I sandboxed right now?** Attach this to the question, not to a paragraph
+elsewhere — a reader who gets exit 0 above will reach for exactly this:
+
+```bash
+printf x > ~/Desktop/.probe_$$ && echo "not sandboxed" || echo "sandboxed"
+rm -f ~/Desktop/.probe_$$
+```
+
+Measured 2026-09-15 in a session known to be sandboxed: writes to `/tmp` **and**
+`~/Desktop` were both refused, while `$TMPDIR` and the working directory both
+succeeded. So the sandbox permits its own scratchpad and the project, and nothing
+else — which is why `$TMPDIR` is a useless discriminator and a bare `/tmp` write
+is a valid one. If you test this yourself, pick a path outside both.
+
+The principle this implements lives in `OPERATIONAL_RULES.md` § Engineering
+discipline ("supply the correct narrow credential explicitly; never remove a
+credential in order to fall through to a broader one"). **This entry deliberately
+does not restate it** — the rule is the doctrine, this is the invocation.
+Background: `INC-20260915-ci-watch-observability`.
+
+**A related trap, same family.** A launcher that never supplies the narrow
+credential produces the same escalation without anyone choosing it. See
+`INC-20260915-herdr-spawn-bypasses-credential-path`.
+
 ## Things that will trip you up
 
 | Symptom | Cause |
