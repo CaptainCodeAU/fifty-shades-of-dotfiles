@@ -266,6 +266,8 @@ needs no cleanup line that a copier can drop:
 security list-keychains
 #   sandboxed   -> ONLY /Library/Keychains/System.keychain
 #   unsandboxed -> ALSO /Users/<you>/Library/Keychains/login.keychain-db
+#   NEITHER     -> INVALID TRIAL. If System.keychain is missing too, `security`
+#                  itself did not answer, and the result says nothing either way.
 ```
 
 Measured 2026-09-15 as a controlled pair: the same command, in the same session,
@@ -273,6 +275,11 @@ with the sandbox as the only variable, three consecutive runs per arm. Sandboxed
 returned System.keychain alone every time with the credential fetch at exit 44;
 unsandboxed returned both keychains every time with the fetch at exit 0. The link
 between the sandbox and the 44 is therefore causal, not coincidental.
+
+That third line is not padding. "Sandboxed shows only System.keychain" treats a
+SHORT LIST as proof, and a short list reads identically whether the sandbox
+trimmed it or `security` failed outright. The presence of System.keychain is what
+makes a short answer a finding rather than a silence.
 
 Do NOT use a write test for this. `$TMPDIR` and the working directory are writable
 in **both** conditions, so a probe there reports "not sandboxed" either way — an
