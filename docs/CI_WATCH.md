@@ -113,7 +113,45 @@ classifier reads a status code out of prose, which is a far safer regex surface
 (no nesting, no escaping, no user-controlled field), and an unrecognised message
 degrades to the quiet register rather than guessing.
 
-**Testing.** `ci-watch-selftest` (110 assertions) was written BEFORE the rewrite and
+**Four more defects, all found AFTER the first fix looked finished.** Two
+independent audits and one live run produced these, in the order they were fixed:
+
+1. **Dismiss-by-cancel.** The rewrite folded every successful observation through
+   one branch: if it is not red, clear the alarm. That `else` also caught
+   `cancelled`, `neutral`, `skipped`, `in_progress` and "no runs" — so cancelling
+   a workflow wiped a multi-day red alarm and the next real failure restarted at
+   "red for 0d". Only a **green** clears the alarm now, and an unfixed red keeps
+   its banner on screen even when the newest run is inconclusive.
+2. **A brace in a commit title hid a red build.** The run object was grabbed by
+   cutting at the first `}`, and GitHub orders the object with the commit title
+   BEFORE the status fields, so `fix: handle {} in the parser` truncated it and a
+   RED build rendered as a quiet "running". Combined with (1), a commit message
+   could dismiss a CI alarm.
+3. **One bad byte muted the whole dashboard.** bash reads a leading zero as octal,
+   so a state value of `08` is an invalid arithmetic expression — and that aborts
+   the script. Every target after the corrupt one silently vanished, at exit 0.
+   Fixed three ways: strip leading zeros, force `10#` at every site reading stored
+   input, and render each target in a subshell so no future bad row can end the
+   loop.
+4. **The branch-liveness check is silently inert on private repositories.**
+   `/repos/{o}/{r}/branches/{b}` requires **Contents: read**, which a deliberately
+   source-free token does not have, so it returns 403 on every private repo and
+   the check never fires (`--json` shows `branch_alive:"?"`). `git ls-remote
+   --heads <remote> refs/heads/<branch>` answers the same question instantly over
+   SSH, and finding this turned up a real watch pointed at a branch that had been
+   deleted while the API still served its runs. Replacing the API check with
+   `git ls-remote` is recorded as follow-up work.
+
+**Whose credential answered.** The tool inherits the caller's `GH_TOKEN`, so its
+output depends on who runs it — and in an interactive shell here `gh` is a
+function that injects a different token again (see CLAUDE.md § Git & GitHub auth).
+Every refusal line and the `--json` output now name the credential in use, because
+"no Actions scope" is useless advice if it sends you to fix a token that was never
+the one being used. The tool deliberately does **not** retry with `GH_TOKEN`
+unset: that path lands on a broader credential, and a watcher must report that it
+cannot see rather than reach for a bigger key.
+
+**Testing.** `ci-watch-selftest` (125 assertions) was written BEFORE the rewrite and
 run red against the old tool first. Every failure-path case ships with its
 success-path twin, because every assertion here is about an absence and an absence
 reads identically whether the mechanism worked or the test never ran. The suite's
@@ -150,7 +188,7 @@ ci-watch --snooze <repo> <d>   # deliberately silence a red target for <d> days
 ci-watch --list                # show the watchlist
 ci-watch --json                # machine-readable status per target
 ci-watch --control             # prove the watcher cannot report a false green
-ci-watch-selftest              # the full suite (110 assertions, no network)
+ci-watch-selftest              # the full suite (125 assertions, no network)
 ```
 
 `gh` advisory: the live query needs `gh` + `$GH_TOKEN`, which are present **inside

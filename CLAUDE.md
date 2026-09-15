@@ -206,8 +206,57 @@ Git invokes a credential helper only for an HTTPS remote, so an untouched SSH re
 
 - `_claude_launch` exports a read-only fine-grained PAT as `$GH_TOKEN` in every Claude session, so reads work and writes return 403.
 - Outside a Claude session, `gh` falls through to its own keyring, which currently holds a broad `gho_` OAuth token with `repo` scope. Any `gh` test run that way proves nothing about the App system.
-- To exercise the App path, pass it in explicitly: `GH_TOKEN="$(github-agent-token token)" gh <cmd>` (run from inside a flipped repo). An App token is an installation, not a user, so `/user/repos` correctly 403s; `/installation/repositories` is its endpoint.
-- Read-only public browsing: `GH_TOKEN="$(github-agent-token pat public-read)" gh api ...`.
+- To exercise the App path, pass it in explicitly **to the real binary**: `GH_TOKEN="$(github-agent-token token)" "$(type -P gh)" <cmd>` (run from inside a flipped repo). An App token is an installation, not a user, so `/user/repos` correctly 403s; `/installation/repositories` is its endpoint. **The bare `gh` form of this line was wrong and is corrected here (2026-09-15):** interactively `gh` is a shell function that injects its own token, so `GH_TOKEN=... gh ...` silently tests the wrapper's credential instead of the one you passed — see the next section.
+- Read-only public browsing: `GH_TOKEN="$(github-agent-token pat public-read)" "$(type -P gh)" api ...`.
 - Posting to a public repo you do not own goes through `github-agent-public-post`. There is deliberately no print mode for that token.
+
+### `gh` IS A SHELL FUNCTION HERE, AND IT SHADOWS THE TOKEN YOU PASS
+
+Measured 2026-09-15, and it cost two sessions a full day of confidently
+disagreeing about the same repository.
+
+```
+$ type gh
+gh is a shell function from ~/.claude/shell-snapshots/snapshot-zsh-*.sh
+```
+
+That function injects its own token. So **`GH_TOKEN=<something> gh api ...` does
+NOT use the token you passed** — the wrapper replaces it. Raw `curl` with an
+explicit `Authorization` header against the same URL returned 200 while the same
+token "through" `gh` returned 404. Two people running what they believed was the
+same command got different answers, and neither could see why.
+
+Consequences, all measured:
+
+- **`gh auth status` describes the WRAPPER's world, not a script's.** A script
+  gets the real binary via PATH; an interactive shell gets the function. They can
+  disagree completely about which credential is active.
+- **`command -v gh` is NOT a safe resolver.** Given a shell function named `gh` it
+  returns the string `gh`, i.e. the function. Use **`type -P gh`**, which searches
+  PATH only. This exact substitution was caught by a test written for the line.
+- A correct probe is one of:
+  ```bash
+  env -u GH_TOKEN -u GITHUB_TOKEN "$(type -P gh)" api <path>
+  curl -s -H "Authorization: Bearer $TOKEN" "https://api.github.com/<path>"
+  ```
+
+Same family as the refusal-is-not-an-answer rule above: the tool answered, it
+just answered about something other than what was asked.
+
+### NEVER wire a "retry with GH_TOKEN unset" fallback into any tool
+
+Proposed as a usability fix on 2026-09-15 and withdrawn once the consequence was
+named. It is a **privilege escalation dressed as a retry**.
+
+Unsetting `GH_TOKEN` does not mean "no credential" — it means gh falls through to
+its own keyring, which here holds a broad OAuth token carrying **`repo` scope**:
+full source read across every repository the account owns. The fine-grained PAT a
+read-only tool is meant to use deliberately has **no contents access at all**.
+
+So a status-line tool that retries without `GH_TOKEN` whenever it sees a 403 would
+silently upgrade itself to reading all your source, and the upgrade would be
+invisible in its output. **A watcher that cannot see must say so, not go looking
+for a bigger key.** The correct fix is to NAME the credential that answered, so a
+disagreement is one line of output instead of two sessions of archaeology.
 
 **Never run `gh auth login` / `gh auth setup-git` / `gh auth refresh`** — they re-add HTTPS credential helpers and break SSH-only auth (a `gh()` shell wrapper and a PreToolUse hook block them).
