@@ -39,6 +39,14 @@ TOOL="${CI_WATCH_TOOL:-$(dirname "$0")/ci-watch}"
 
 VERBOSE=0; [ "${1:-}" = "-v" ] && VERBOSE=1
 
+# THE SUITE MUST NEVER SPEAK. 13 fixture cases drive a real green->red transition,
+# and each one used to raise a live voice alert -- through a dead endpoint, then
+# out of a backgrounded `say`, unserialised. Running the suite a dozen times today
+# put roughly a hundred spoken alerts onto the machine with fixture labels like
+# "TESTTARGET". CI_WATCH_DEBUG short-circuits voice_alert to stderr; it is exported
+# here so no individual case can forget it.
+export CI_WATCH_DEBUG=1
+
 PASS=0; FAIL=0
 declare -a COVERED=()          # claim ids touched, for the C32 coverage map
 
@@ -140,7 +148,7 @@ stub_repo(){    { printf '%s\n' "$1"; printf '%s' "$2"; } > "$RSTUB"; }
 stub_default(){ { printf '%s\n' "$1"; printf '%s' "$2"; } > "$DSTUB"; }
 
 run_watch(){                     # run_watch [extra env assignments...] -> OUT / RC
-    OUT="$(env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" \
+    OUT="$(env CI_WATCH_DEBUG=1 CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" \
                CI_WATCH_GH="$D/http-stub" \
                CI_WATCH_SELFTEST_STUB="$STUB" CI_WATCH_SELFTEST_BSTUB="$BSTUB" \
                CI_WATCH_SELFTEST_RSTUB="$RSTUB" CI_WATCH_SELFTEST_DSTUB="$DSTUB" \

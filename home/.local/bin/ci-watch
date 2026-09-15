@@ -141,7 +141,13 @@ set -uo pipefail
 
 WATCHLIST="${CI_WATCH_LIST:-$HOME/.config/ci-watch/watchlist}"
 STATE_DIR="${CI_WATCH_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/ci-watch}"
-NOTIFY_URL="${CI_WATCH_NOTIFY_URL:-http://localhost:8888/notify}"
+# Port 8888 has been dead for some time; the notification daemon serves /notify on
+# 31337 (verified 2026-09-15: 8888 -> no listener, 31337 -> HTTP 200, with a
+# control port confirming the probe itself worked). Every voice alert this tool
+# has raised therefore failed its POST and fell through to the local fallback
+# below, unserialised and unlogged. Kept as an override so a LAN voice server can
+# be dropped in later without editing code.
+NOTIFY_URL="${CI_WATCH_NOTIFY_URL:-http://localhost:31337/notify}"
 VOICE_ID="${CI_WATCH_VOICE_ID:-}"
 
 # Age bands. HARD_TTL is where a cached value stops being shown AT ALL and only
@@ -474,7 +480,12 @@ voice_alert(){
        -H 'Content-Type: application/json' -d "$body" >/dev/null 2>&1; then
     return 0
   fi
-  [ -x /usr/bin/say ] && { /usr/bin/say "$msg" >/dev/null 2>&1 & }
+  # NO LOCAL FALLBACK, deliberately. This used to background `/usr/bin/say`, which
+  # was wrong three ways: it bypassed the daemon's single-playback queue so alerts
+  # spoke ON TOP of each other; nothing logged it, so a voice event left no trace
+  # anywhere; and it used `say` when this machine renders everything through
+  # `say2`. A silent miss beats an unlogged, unserialised shout in the wrong voice
+  # -- the banner is on screen either way, and the banner is the primary signal.
   return 0
 }
 
