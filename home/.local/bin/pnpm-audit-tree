@@ -154,6 +154,9 @@ class ProjectResult:
     findings: list = field(default_factory=list)
     notes: list = field(default_factory=list)  # non-finding info (e.g. skipped checks)
     error: str | None = None
+    real_lockfile: bool = False   # an on-disk pnpm-lock.yaml was found (not dry-resolved)
+    net_cooldown: bool = False    # registry publish-age lookups actually ran
+    net_advisory: bool = False    # `pnpm audit` actually ran
 
 
 # --------------------------------------------------------------------------- #
@@ -419,7 +422,15 @@ def run_pnpm_audit(project: Path, audit_level: str, timeout: float = 90.0):
         return None, f"audit skipped ({type(e).__name__})"
     out = proc.stdout.strip()
     if not out:
-        return [], None
+        # Empty stdout is NOT "no advisories". pnpm exits non-zero with empty
+        # stdout whenever it cannot audit at all -- ERR_PNPM_AUDIT_NO_LOCKFILE
+        # (measured: every project without a pnpm-lock.yaml), a network failure,
+        # a registry refusal. Returning [] here reported a CLEAN RESULT for a
+        # check that never ran, so the gate failed open and silently. None means
+        # "could not check" and the caller must surface it as a finding.
+        err = [ln.strip() for ln in (proc.stderr or "").splitlines() if ln.strip()]
+        reason = err[0][:120] if err else f"empty output (rc={proc.returncode})"
+        return None, f"advisory check did not run: {reason}"
     advisories = []
     # pnpm audit --json emits one JSON object (advisories keyed) -- be tolerant.
     try:
@@ -434,6 +445,11 @@ def run_pnpm_audit(project: Path, audit_level: str, timeout: float = 90.0):
             if isinstance(obj, dict) and obj.get("title"):
                 advisories.append(obj)
         return advisories, None
+    if not isinstance(data, dict) or "metadata" not in data:
+        # A real pnpm audit payload always carries metadata.vulnerabilities
+        # (measured on a repo with a genuine pnpm-lock.yaml). Anything else is
+        # an unknown shape, which is unknown coverage -- never a clean pass.
+        return None, "advisory check did not run: unrecognised pnpm audit output"
     advs = data.get("advisories")
     if isinstance(advs, dict):
         advisories = list(advs.values())
@@ -506,6 +522,7 @@ def analyze_project(project: Path, scan_root: Path, args, reg: RegistryClient,
 
     # -- lockfile --
     lf = nearest_lockfile(project, scan_root)
+    res.real_lockfile = lf is not None
     lock_text = None
     if lf:
         try:
@@ -544,7 +561,15 @@ def analyze_project(project: Path, scan_root: Path, args, reg: RegistryClient,
                             "lockfile entry has no integrity hash (tamperable)"))
 
         # cooldown (registry deps only)
-        if min_age_min > 0 and not args.offline:
+        #
+        # Only for a project with a REAL on-disk pnpm-lock.yaml. Where the
+        # lockfile was dry-resolved on a temp copy (lf is None), these registry
+        # lookups measured ~40s of a 46s scan on ~/.claude and yielded 2
+        # moderate findings -- below the hook's own `high` floor, so they could
+        # never block a push. The offline structural checks above (exotic,
+        # integrity) still run on the resolved lockfile and keep every finding.
+        if min_age_min > 0 and not args.offline and lf is not None:
+            res.net_cooldown = True
             reg_pkgs = [(p.name, p.version) for p in lock["packages"]
                         if p.source == "registry" and p.version and re.match(r"^\d", p.version)]
             reg.warm([n for n, _ in reg_pkgs])
@@ -561,9 +586,28 @@ def analyze_project(project: Path, scan_root: Path, args, reg: RegistryClient,
                                 f"{min_age_min/1440:.1f}d cooldown window"))
 
     # -- advisories --
-    if not args.offline:
+    if not args.offline and lf is None:
+        # Measured: `pnpm audit` exits 1 with empty stdout
+        # (ERR_PNPM_AUDIT_NO_LOCKFILE) for every project without a real on-disk
+        # pnpm-lock.yaml. The subprocess cannot produce a verdict, so report the
+        # coverage gap directly instead of paying for it and parsing nothing.
+        add(Finding(res.path, "advisory", "moderate", "(advisory check)",
+                    "no pnpm-lock.yaml -- pnpm audit cannot run, advisory coverage is zero"))
+    elif not args.offline:
+        res.net_advisory = True
         advisories, note = run_pnpm_audit(project, args.audit_level)
-        if note:
+        if advisories is None:
+            # Coverage gap, not a clean result. Notes are dropped under --quiet
+            # (the hook passes it), so this has to be a Finding to be visible.
+            # Severity depends on whether this project could have been audited
+            # at all: one WITH a pnpm-lock.yaml that fails to audit is a real
+            # gate failure (high); one without is already reported by the
+            # hygiene finding above, so flagging it high would block every push
+            # on a bun/npm repo and train the operator to disable the gate.
+            add(Finding(res.path, "advisory", "high" if lf else "moderate",
+                        "(advisory check)",
+                        note or "advisory check could not run -- coverage unknown"))
+        elif note:
             res.notes.append(note)
         for a in advisories or []:
             sev = (a.get("severity") or "low").lower()
@@ -780,8 +824,26 @@ def main(argv) -> int:
 
     reg = RegistryClient(max_lookups=args.max_registry)
     results = []
+    _t0 = time.time()
     for proj in projects:
         results.append(analyze_project(proj, root, args, reg, min_age_min))
+
+    # Always-on one-line summary, including on clean runs, printed to stderr so
+    # it survives --quiet and --no-report (both of which the git hook passes).
+    # It carries denominators and names which checks did NOT run, so a fast or
+    # silent push is attributable rather than reassuring.
+    _f = all_findings(results)
+    _worst = max((severity_rank(x.severity) for x in _f), default=0)
+    _worst_name = next((k for k, v in SEVERITY_ORDER.items() if v == _worst), "none")
+    _n = len(results)
+    print(
+        f"pnpm-audit: {_n} proj | {sum(1 for r in results if r.real_lockfile)} with pnpm-lock | "
+        f"net cooldown {sum(1 for r in results if r.net_cooldown)}/{_n}, "
+        f"advisories {sum(1 for r in results if r.net_advisory)}/{_n} | "
+        f"{len(_f)} findings (worst: {_worst_name if _f else 'none'}) | "
+        f"{time.time() - _t0:.1f}s",
+        file=sys.stderr,
+    )
 
     if not args.quiet:
         print_terminal(results, min_age_min, args, reg)
