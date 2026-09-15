@@ -12,7 +12,9 @@ Default branch is `master`.
 > three measured obstacles already written up · 7 audit findings, worst being a
 > `--snooze` silently lost when it races a render · 8 assertions a cross-vendor
 > audit called hollow · swapping branch-liveness to `git ls-remote`, because the
-> API check is inert on private repos.
+> API check is inert on private repos. · **removing the SSH-key step from
+> `_claude_launch` (`home/.zshrc:989-991`) — relayed from Gavin, needs his direct
+> confirmation first, and it interacts with the `git ls-remote` item above.**
 >
 > Origin session: `https://claude.ai/code/session_012CxnkHV7eGiJxy3taKLx4b`
 > Design record: `~/.claude/MEMORY/WORK/ci-watch-observability/ISA.md` (`phase: climbing`)
