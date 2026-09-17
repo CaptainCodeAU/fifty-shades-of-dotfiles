@@ -1,0 +1,145 @@
+#!/usr/bin/env bash
+# gh-cred-matrix -- what can each GitHub credential on this machine actually DO?
+#
+# Every cell is measured, never inferred. Writes only ever touch the throwaway
+# repo named in TESTBED and the script refuses to run if that is changed to
+# anything else. Read cells are safe everywhere.
+#
+# Output: a table on stdout and a JSON record, so the result is an artifact
+# rather than a transcript.
+set -uo pipefail
+
+# THE TARGET MUST BE A THROWAWAY, AND IT MUST HAVE ONE SPECIFIC PROPERTY.
+#
+# Write cells create real issues, so the target is named explicitly and this
+# script refuses any repo whose name does not end in -cred-testbed. That is a
+# guard against a stray write landing somewhere real, not a naming preference.
+#
+# THE PROPERTY, which is the part worth preserving if the repo ever goes:
+# the target must be PRIVATE and have NO GitHub App installed on any tier.
+# That combination is the only control that separates three failures which are
+# otherwise indistinguishable:
+#     "the App cannot do X"        vs  "the App is not installed here"
+#     "the narrow PAT cannot do X" vs  "the repo is invisible to it"
+#     "private read works"         vs  "public read works"
+# Every flipped repo in this estate is App-installed, so none of them can
+# produce the not-installed arm. Measured 2026-09-17: every App cell against a
+# non-installed private repo returned Not Found, which measured the missing
+# installation and nothing about the App's capability -- and reading those as
+# capability findings would have been wrong in a way nothing in the output says.
+#
+# Recreating the repo is two minutes in the GitHub web UI: private, add a
+# README, install no App on it. Set TESTBED to it and re-run.
+TESTBED="${GH_CRED_MATRIX_REPO:-CaptainCodeAU/gh-cred-testbed}"
+case "$TESTBED" in
+  *-cred-testbed) ;;
+  *) echo "refusing: '$TESTBED' is not a *-cred-testbed throwaway repo." >&2
+     echo "  Write cells create real issues. See the header for the property the target needs." >&2
+     exit 2 ;;
+esac
+
+# The REAL binary. Interactively `gh` is a shell function that injects its own
+# token, so a wrapper run would measure the wrapper's credential and not the one
+# under test -- the exact confusion that cost two sessions a day on 2026-09-15.
+GH="$(whence -p gh 2>/dev/null || type -P gh 2>/dev/null || echo /opt/homebrew/bin/gh)"
+[ -x "$GH" ] || { echo "refusing: real gh binary not found" >&2; exit 2; }
+
+OUT="${1:-./gh-cred-matrix.json}"
+: > "$OUT.tmp"
+
+# --- credentials under test ------------------------------------------------
+kc_pat="$(security find-generic-password -a "$USER" -s github-api-readonly -w 2>/dev/null || true)"
+app_tok="$(cd ~/CODE/Scaffoldings/fifty-shades-of-dotfiles 2>/dev/null && github-agent-token token 2>/dev/null || true)"
+SENTINEL="INVALID-claude-shim-no-keychain-do-not-fall-back"
+
+creds=(keychain-pat gh-keyring app-token sentinel)
+
+cred_env() {   # echoes the env assignment for a credential name
+  case "$1" in
+    keychain-pat) [ -n "$kc_pat" ]  && printf 'GH_TOKEN=%s' "$kc_pat"  || echo SKIP ;;
+    app-token)    [ -n "$app_tok" ] && printf 'GH_TOKEN=%s' "$app_tok" || echo SKIP ;;
+    sentinel)     printf 'GH_TOKEN=%s' "$SENTINEL" ;;
+    gh-keyring)   printf 'UNSET' ;;   # deliberately no GH_TOKEN -> gh's own store
+  esac
+}
+
+# --- operations ------------------------------------------------------------
+# name|description|argv
+ops=(
+  "api-user|identity (/user)|api user --jq .login"
+  "read-public|public repo metadata|api repos/cli/cli --jq .name"
+  "read-private|PRIVATE repo metadata|api repos/$TESTBED --jq .name"
+  "read-contents|PRIVATE repo SOURCE (the escalation)|api repos/$TESTBED/contents/README.md --jq .name"
+  "actions-read|Actions runs (what ci-watch needs)|api repos/$TESTBED/actions/runs --jq .total_count"
+  "list-issues|issue list|issue list --repo $TESTBED --limit 1"
+)
+write_ops=(
+  "create-issue|CREATE an issue (write)|issue create --repo $TESTBED --title GH-CRED-MATRIX-PROBE --body automated-probe-safe-to-close"
+)
+
+run_cell() {
+  local cred="$1" opname="$2" argv="$3" assign out rc
+  assign="$(cred_env "$cred")"
+  [ "$assign" = "SKIP" ] && { printf '%s|%s|SKIP|credential unavailable\n' "$cred" "$opname"; return; }
+  if [ "$assign" = "UNSET" ]; then
+    out=$(env -u GH_TOKEN -u GITHUB_TOKEN "$GH" $argv 2>&1); rc=$?
+  else
+    # `env` needs its OPTIONS before any assignment; the reverse order makes it
+    # treat "-u" as a program name. First run failed every non-keyring cell that
+    # way, identically, which is a void trial and not a credential finding.
+    out=$(env -u GITHUB_TOKEN "$assign" "$GH" $argv 2>&1); rc=$?
+  fi
+  out="${out//$'\n'/ }"
+  # Never let a token value reach the output, whatever GitHub echoes back.
+  [ -n "$kc_pat" ]  && out="${out//$kc_pat/[REDACTED]}"
+  [ -n "$app_tok" ] && out="${out//$app_tok/[REDACTED]}"
+  if [ $rc -eq 0 ]; then printf '%s|%s|OK|%.90s\n' "$cred" "$opname" "$out"
+  else                   printf '%s|%s|FAIL|%.90s\n' "$cred" "$opname" "$out"; fi
+}
+
+echo "gh binary: $GH"
+echo "testbed:   $TESTBED"
+echo "creds:     ${creds[*]}"
+echo
+printf '%-14s %-16s %-6s %s\n' CREDENTIAL OPERATION RESULT DETAIL
+printf '%-14s %-16s %-6s %s\n' -------------- ---------------- ------ ------
+
+for spec in "${ops[@]}"; do
+  IFS='|' read -r opname desc argv <<< "$spec"
+  for c in "${creds[@]}"; do
+    line=$(run_cell "$c" "$opname" "$argv")
+    IFS='|' read -r rc ro rr rd <<< "$line"
+    printf '%-14s %-16s %-6s %s\n' "$rc" "$ro" "$rr" "$rd"
+    printf '%s\n' "$line" >> "$OUT.tmp"
+  done
+done
+
+if [ "${1:-}" = "--with-writes" ] || [ "${GH_MATRIX_WRITES:-}" = "1" ]; then
+  echo; echo "--- WRITE CELLS (throwaway repo only) ---"
+  for spec in "${write_ops[@]}"; do
+    IFS='|' read -r opname desc argv <<< "$spec"
+    for c in "${creds[@]}"; do
+      line=$(run_cell "$c" "$opname" "$argv")
+      IFS='|' read -r rc ro rr rd <<< "$line"
+      printf '%-14s %-16s %-6s %s\n' "$rc" "$ro" "$rr" "$rd"
+      printf '%s\n' "$line" >> "$OUT.tmp"
+    done
+  done
+else
+  echo; echo "(write cells skipped -- pass --with-writes to include them)"
+fi
+
+# JSON artifact
+uv run python3 - "$OUT.tmp" "$OUT" <<'PY'
+import sys, json, pathlib, datetime
+rows=[]
+for line in pathlib.Path(sys.argv[1]).read_text().splitlines():
+    if not line.strip(): continue
+    c,o,r,d = (line.split("|",3)+["","","",""])[:4]
+    rows.append({"credential":c,"operation":o,"result":r,"detail":d})
+pathlib.Path(sys.argv[2]).write_text(json.dumps(
+    {"measured_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+     "cells": rows}, indent=2)+"\n")
+print(f"\nwrote {len(rows)} cells to {sys.argv[2]}")
+PY
+rm -f "$OUT.tmp"
