@@ -797,3 +797,42 @@ the asker and merely completed by the answer.
 Nobody was careless in either instance. That is the third time this record has had to say
 so, and it remains the point: the defence has to be structural, because every non-structural
 one has now been tried and has failed while the people involved were paying attention.
+
+### The finished shape: three layers, found one each, in the order they should be applied
+
+Settled 2026-09-18. The ownership question was finally answered by asking with FOUR NAMED
+OPTIONS -- all three sessions listed separately, plus "nobody yet" -- and it produced an
+unambiguous answer first time, with no pronoun generated anywhere in the exchange.
+
+The failure has three layers. They were found in reverse order, which is why it took two
+instances and three sessions to see the whole thing:
+
+1. **Ask with named options, so no pronoun is ever created.** This is the earliest and
+   cheapest layer, and it sits one step BEFORE the relay, where nobody was looking. The
+   question "me, or the session already building it?" invites "the other one" the instant a
+   third session exists. A question naming every candidate cannot be answered with a
+   pronoun, so there is nothing to misresolve downstream.
+
+2. **Do not resolve an ambiguous pronoun that does arrive. Send it back.** The earlier
+   write-up's fix was to LABEL an inference as an inference. That is insufficient, and this
+   session proved it by doing exactly that and still sending the job to the wrong place.
+   **A label protects the sender, not the receiver.** A labelled inference still travels,
+   still arrives, and still gets acted on, and the receiver cannot un-resolve a pronoun that
+   has already been resolved for them. Pass the words and the ambiguity together, or re-ask.
+
+3. **A correct report with an inference appended inherits the authority of the sentence
+   beside it.** The original finding, and the weakest of the three, because it describes the
+   damage rather than preventing it.
+
+Apply them in that order. Layer 1 prevents the problem, layer 2 contains it, layer 3 only
+names it after the fact.
+
+**One procedural note that held up under pressure.** When the contradiction appeared, two
+sessions had reason to ask Gavin. Only one did. Two channels for one question is how two
+sessions end up with two answers, which is the same failure one level up. The session that
+had already asked kept the channel; the other explicitly declined to race it.
+
+**And the write-up itself was not duplicated**, for the reason the register already states:
+two accounts of one thing drift, and the reader gets whichever their phrasing happens to
+hit. The session that contributed layer 3 declined to write its own version. That is the
+same discipline that merged two D-20260918-02 blocks into one earlier the same night.
