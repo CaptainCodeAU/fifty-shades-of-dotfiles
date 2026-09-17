@@ -1,7 +1,22 @@
 # GitHub credentials in this estate: what exists, what each can do, and what is still open
 
 Written 2026-09-17 at the close of a long two-session investigation, so that
-nobody has to rediscover any of it. Everything below marked MEASURED was run on
+nobody has to rediscover any of it.
+
+**The other half of the record lives in LifeOS**, at
+`LIFEOS/MEMORY/LEARNING/INCIDENTS/INC-20260917-gh-credential-fallback-escalation.md`
+(commit 62dd38a). It holds that side's internals: its fetcher's four fail-closed
+sources, which of its five consumers uses which credential lane, and the
+read/write asymmetry reasoning. Read both; neither is complete alone.
+
+*A correction worth keeping, because the first version of this line got it
+wrong in exactly the way this estate keeps getting things wrong.* This document
+is here because it is this repo's tooling and this repo's operators read it --
+NOT, as first written, because "LifeOS memory is not backed up". `~/.claude/MEMORY`
+is gitignored and backed up nowhere; `~/.claude/LIFEOS/MEMORY` is a symlink into
+the `lifeos-private` repo and IS version controlled and pushed. Two paths one
+segment apart, different stores, different durability, and reading one as the
+other is the same mistake as every other confident zero in section 7. Everything below marked MEASURED was run on
 this machine on that date, most of it against a throwaway private repo with no
 GitHub App installed. Everything not marked as measured is flagged as such.
 
@@ -116,6 +131,11 @@ Rejected, and why, so nobody re-proposes them cold:
   `git_protocol = ssh`, which **21 of the 94 repos on this machine still use**.
 - **Deleting the keyring token.** Not done, not authorised, and it would break
   every consumer until they self-fetch.
+- **`gh auth refresh` to narrow the existing token's scopes.** MEASURED by the
+  peer session: two attempts both COMPLETED and changed nothing. The scopes were
+  unchanged afterwards. So the CLI route to narrowing what gh already holds is
+  closed, and a success exit code there means nothing. Recorded because it is an
+  obvious thing to try and it looks like it worked.
 
 ### Shipped in this repo
 
