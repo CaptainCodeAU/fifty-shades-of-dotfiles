@@ -31,6 +31,11 @@
           },
           {
             "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/herdr-skill-drift-check.sh",
+            "timeout": 30
+          },
+          {
+            "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/bun-cooldown-check.sh",
             "timeout": 25
           }
