@@ -71,23 +71,39 @@ previous_agent = "shift+up"
 next_agent = "shift+down"
 
 # Pane resize without entering resize mode (herdr 0.8.2, #2558). Unset by
-# default. This reclaims the Alt+Arrow cluster that tmux-tilit used to own for
-# exactly this job: .tmux.conf took those keys back for pane SWITCHING, and
-# then the vim keys won that argument above, so alt+arrow has been free ever
-# since with nothing bound to it. Nothing in herdr's defaults uses it either.
-# prefix+shift+r resize_mode above is untouched and still works.
-resize_pane_left = "alt+left"
-resize_pane_down = "alt+down"
-resize_pane_up = "alt+up"
-resize_pane_right = "alt+right"
+# default. prefix+shift+r resize_mode above is untouched and still works.
+#
+# PREFIX, NOT ALT, AND THIS IS NOT A STYLE CHOICE. These were first bound to
+# bare alt+arrow -- upstream's own suggested shape, free in herdr's defaults,
+# and free here too since .tmux.conf took the Alt+Arrow cluster back from
+# tmux-tilit and then the vim keys won that argument. They would still have been
+# DEAD KEYS. Measured 2026-09-17 straight out of
+# ~/Library/Preferences/com.googlecode.iterm2.plist: 11 of 14 iTerm2 profiles
+# here set "Option Key Sends" to Normal, including every "Captain Code" profile,
+# which means Option composes a character instead of acting as a modifier and
+# the chord never reaches herdr at all. Only Captain Code (small), Default (old)
+# and Default (old) red would have worked.
+#
+# `herdr config check` returned "config: ok" for the alt bindings, because it
+# validates key NAMES, not whether a chord can arrive. It cannot catch this.
+# The FUNCTION KEYS note further down this file is the same finding from 2026-09,
+# reached the same way.
+#
+# prefix is ctrl+space, which reaches herdr on every profile. Costs one extra
+# keypress; nothing in herdr's defaults binds prefix+arrow (navigate mode uses
+# BARE arrows, a different namespace).
+resize_pane_left = "prefix+left"
+resize_pane_down = "prefix+down"
+resize_pane_up = "prefix+up"
+resize_pane_right = "prefix+right"
 
 # Reorder the active tab in place, wrapping at either end (herdr 0.8.2, #2561).
-# Unset by default, and there was no way to do this at all before. Deliberately
-# alt+SHIFT+arrow, one modifier away from the shift+left/right that SWITCHES
-# tabs: same axis, same direction, "with alt" means move the tab rather than
-# move to it. Note they are easy to mix up until the habit forms.
-move_tab_previous = "alt+shift+left"
-move_tab_next = "alt+shift+right"
+# Unset by default, and there was no way to do this at all before. prefix+SHIFT
+# +arrow for the same Option reason as above, and it reads as the deliberate
+# cousin of the bare shift+left/right that SWITCHES tabs: same axis, same
+# direction, prefix means move the tab rather than move to it.
+move_tab_previous = "prefix+shift+left"
+move_tab_next = "prefix+shift+right"
 
 # --- Deliberately NOT ported ---
 # Alt+Arrow pane switching (`bind -n M-Left/M-Right/...`): herdr accepts
