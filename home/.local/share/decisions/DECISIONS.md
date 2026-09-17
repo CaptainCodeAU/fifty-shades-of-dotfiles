@@ -79,8 +79,10 @@ byte-identical with `git_protocol: ssh` intact, and both git lanes (21 ssh origi
 App-flipped) still resolving real refs. Logging out stays available as the stricter
 endpoint once LifeOS's consumers are done.
 
-The old `gho_` token is out of the keyring but NOT revoked at GitHub. That is a manual
-step for Gavin at github.com/settings/applications.
+The old `gho_` token was REVOKED by Gavin at github.com/settings/applications the same
+evening, so the grant is dead on every machine, not merely unplugged from this one.
+Re-verified afterwards with controls: gh authenticates, both git lanes resolve, nothing
+on this machine depended on it.
 
 ## D-20260917-05 -- A guard that anchors a command to start-of-line is not a guard
 

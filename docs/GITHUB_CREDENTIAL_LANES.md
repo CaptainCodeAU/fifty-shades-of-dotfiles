@@ -33,10 +33,14 @@ lying around.**
 | 1 | **GitHub App installation token** | Infisical (`/github-agent-apps/{high,medium,low}-value`, `GITHUB_APP_PRIVATE_KEY`) | `github-agent-token token`, minted per repo, ~1 hour |
 | 2 | **Narrow read-only PAT** | macOS Keychain, item `github-api-readonly` | `github-api-token`, and `_claude_launch` exports it as `$GH_TOKEN` |
 | 3 | **Public-browsing PATs** | Infisical (`/github-agent-apps/public-read`, `public-write`, `PAT_VALUE`) | `github-agent-token pat public-read`; public-write has no print mode by design |
-| 4 | **gh's own keyring token** | gh's internal keyring, a classic `gho_` OAuth token | nothing asks for it; gh uses it when nothing else is supplied |
+| 4 | ~~**gh's own keyring token**~~ **RESOLVED 2026-09-17, see section 9.** The keyring now holds credential 2, the narrow read-only PAT. The classic `gho_` OAuth token was replaced and then REVOKED at GitHub. | gh's internal keyring | nothing asks for it; gh uses it when nothing else is supplied -- which is now harmless, because what it lands on is the credential it should have had |
 
-Number 4 is the problem. Nobody chose it, nothing names it, and it is what every
-unsupplied `gh` call silently lands on.
+Number 4 WAS the problem. Nobody chose it, nothing named it, and it was what every
+unsupplied `gh` call silently landed on. Closed 2026-09-17: the keyring was repointed
+at credential 2 and the old OAuth grant revoked. **The sentence is kept rather than
+rewritten** because it states the failure shape this whole document exists to record,
+and a shape does not stop being true just because one instance of it was fixed. The
+unsupplied call still happens; it simply no longer gains anything by happening.
 
 ### What each can actually do (MEASURED, 38 cells)
 
@@ -437,10 +441,20 @@ covers. Both are needed, and only the first was ever run here.
 
 ### Still open after this pass
 
-- **The old `gho_` token is out of the keyring but NOT revoked at GitHub.** It remains
-  a live credential with `repo` scope until Gavin revokes it at
-  `github.com/settings/applications`. This matters more than usual given section 7
-  item 6: `GH_TOKEN` has been leaking into transcripts since June.
+- ~~**The old `gho_` token is out of the keyring but NOT revoked at GitHub.**~~
+  **REVOKED by Gavin, 2026-09-17 evening**, via Authorized OAuth Apps -> GitHub CLI ->
+  Revoke. That kills every token that grant ever issued, on every machine, not just
+  this one. Verified immediately afterwards with controls in the same commands: gh
+  still authenticates from the keyring as the PAT, public and private-metadata reads
+  both answer, `rate_limit` returns 5000 as the positive arm, and both git lanes still
+  resolve real refs against a bogus remote failing with rc=128. **Nothing on this
+  machine depended on it**, which is the point: it had been a standing grant with
+  `repo` scope that no tool asked for and every unsupplied call could reach.
+
+  This closes the loop on section 7 item 6 as well, in one direction only. `GH_TOKEN`
+  has been leaking into transcripts since June, so any copy of THIS token captured
+  there is now inert. The leak itself is untouched, and the PAT that replaced it leaks
+  by the same route.
 - **Unexporting `GH_TOKEN` is now unblocked** by D-20260917-03's ordering rule, since
   the keyring no longer holds anything broad. Not done, not proposed, not costed.
 - **Section 7 items 2 to 6 are untouched by this pass** and all still stand.
