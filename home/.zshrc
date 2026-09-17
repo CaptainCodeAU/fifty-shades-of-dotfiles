@@ -1007,7 +1007,18 @@ __claude_launch() {
     (
       eval "$(ssh-agent -s -t 43200)" >/dev/null
       trap 'ssh-agent -k >/dev/null 2>&1' EXIT INT TERM HUP
-      ssh-add "$key"
+      # --apple-use-keychain reads the passphrase from the login keychain instead of
+      # prompting. It is REQUIRED here and the ssh_config UseKeychain setting does NOT
+      # cover it: `UseKeychain yes` lives in a `Host git-cc` block, and `ssh-add` on a
+      # FILE PATH has no host context, so no Host block ever applies to it. Measured
+      # 2026-09-18 in a live pane: plain `ssh-add` prompted for the passphrase even
+      # with the keychain populated and the config in place, while the flagged form
+      # returned rc=0 silently and loaded the key. Two earlier "verifications" missed
+      # this because they tested `ssh -G git-cc` (connections, not ssh-add) and
+      # `--apple-load-keychain` (a different command).
+      # The fallback keeps this portable: the flag is macOS-only, so a non-macOS box
+      # fails the first form and runs the original.
+      ssh-add --apple-use-keychain "$key" 2>/dev/null || ssh-add "$key"
       # GH_TOKEN REMOVED 2026-09-18. It used to be injected here as:
       #     GH_TOKEN="$gh_token" \
       # To revert, restore that line into the chain below (NOT as a comment inside it:
