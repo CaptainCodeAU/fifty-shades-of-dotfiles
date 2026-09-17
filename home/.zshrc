@@ -786,6 +786,25 @@ herdr() {
             systemctl --user start herdr.service || echo "${err}systemctl --user start herdr.service failed -- see journalctl --user -u herdr.service${done}" >&2
         fi
     fi
+    # herdr ships its own updater. `herdr update` downloads and installs a
+    # release directly, and `herdr channel set preview` repoints it at preview
+    # builds. Either one walks straight around Homebrew, `brew pin`, and the
+    # whole HERDR_COOLDOWN_DAYS gate -- the release-cooldown posture in
+    # docs/SECURITY.md is that nothing ships into this estate on the day it is
+    # published, and a self-updater is exactly the hole that posture exists to
+    # close. install.sh already bumps herdr on its own once the cooldown has
+    # genuinely elapsed (_preflight_herdr_bump_check), so there is nothing the
+    # blocked commands would give you that waiting does not.
+    if [[ "$1" == "update" ]] || [[ "$1" == "channel" && "$2" == "set" && "$3" == "preview" ]]; then
+        echo "${err}BLOCKED: herdr $1${2:+ $2}${3:+ $3}${done}"
+        echo
+        echo "  This bypasses Homebrew, the pin and the ${warn}${HERDR_COOLDOWN_DAYS:-7}-day release cooldown${done}."
+        echo
+        echo "  Check state:  herdr-cooldown-check"
+        echo "  Upgrade:      ./install.sh   (bumps automatically once the cooldown has elapsed)"
+        echo "  By hand:      brew unpin herdr && brew upgrade herdr && brew pin herdr"
+        return 1
+    fi
     command herdr "$@"
 }
 

@@ -975,6 +975,90 @@ _post_stow_herdr_systemd_service() {
     return 0
 }
 
+# Everything herdr needs AFTER stow that stow itself cannot do. Three jobs,
+# all idempotent, none fatal -- a herdr problem must never fail the install.
+#
+# 1. PLUGIN REGISTRATION. home/.config/herdr/plugins/window-title-fix is stowed,
+#    but herdr only knows a plugin exists once `herdr plugin link` has recorded
+#    it in ~/.config/herdr/plugins.json -- machine-local state this repo does
+#    NOT track (it holds absolute paths, and tracking it would put a real
+#    username in a committed file). So on a fresh box the plugin FILES arrive
+#    and the window title silently stays broken. This closes that gap.
+#    `link`, never `install`: link points at a local directory and skips
+#    [[build]] entirely, so no third-party code runs (docs/HERDR_PLUGINS.md).
+#
+# 2. THE AGENT SKILL, SHARED. Codex discovers ~/.agents/skills as a skill root
+#    by convention -- no config entry, nothing to grep for. Measured 2026-09-17:
+#    its session log listed `r0 = ~/.agents/skills` and loaded herdr/SKILL.md
+#    from it, while Claude read the stowed copy, and the two had already drifted
+#    apart by two behaviours. One symlink keeps both agents on the file in git.
+#
+# 3. CONFIG VALIDATION. 0.8.2 made `herdr config check` report unknown built-in
+#    theme names instead of silently accepting them, which makes it worth running
+#    at install time: a bad config.toml becomes a loud line here rather than a
+#    quiet oddity at runtime. Reported, never repaired -- config.toml is a
+#    tracked file and an installer that edits it is an installer that can lose
+#    your keybindings.
+_post_stow_herdr_plugins_and_skill() {
+    command -v herdr &>/dev/null || return 0
+
+    local plugin_dir="$HOME/.config/herdr/plugins/window-title-fix"
+    local skill_src="$REPO_DIR/home/.claude/skills/herdr/SKILL.md"
+    local agents_skill="$HOME/.agents/skills/herdr/SKILL.md"
+    local did_step=false
+
+    # --- 1. plugin ---
+    # Only when stow actually placed it; a missing manifest means link would
+    # fail, and a failure here should never look like a herdr problem.
+    if [[ -e "$plugin_dir/herdr-plugin.toml" ]]; then
+        # `plugin list` is PLAIN TEXT, not JSON (docs/HERDR_PLUGINS.md) -- grep it.
+        if herdr plugin list 2>/dev/null | grep -q "dotfiles.window-title-fix"; then
+            verbose "herdr plugin dotfiles.window-title-fix already registered"
+        else
+            step "herdr plugin registration"
+            did_step=true
+            if run_cmd herdr plugin link "$plugin_dir" --enabled; then
+                success "window-title-fix linked and enabled"
+            else
+                warn "herdr plugin link failed — is the herdr server running? Retry: ${CYAN}herdr plugin link $plugin_dir --enabled${RESET}"
+            fi
+        fi
+    fi
+
+    # --- 2. shared skill ---
+    if [[ -f "$skill_src" ]]; then
+        if [[ -L "$agents_skill" && "$(readlink "$agents_skill")" == "$skill_src" ]]; then
+            verbose "Codex skill root already points at the repo skill"
+        else
+            [[ "$did_step" == true ]] || { step "herdr agent skill (shared with Codex)"; did_step=true; }
+            run_cmd mkdir -p "$(dirname "$agents_skill")"
+            # A REAL file there is someone's copy (or a `skills` CLI reinstall).
+            # Back it up rather than overwrite: it may hold edits this repo has
+            # never seen, and losing those is the whole failure we are fixing.
+            if [[ -f "$agents_skill" && ! -L "$agents_skill" ]]; then
+                run_cmd mv "$agents_skill" "${agents_skill}.pre-stow.$(date +%Y%m%d-%H%M%S).bak"
+                warn "Backed up a real ~/.agents herdr skill — diff it against the repo copy before discarding."
+            fi
+            run_cmd ln -sfn "$skill_src" "$agents_skill"
+            success "Codex and Claude now read the same herdr skill"
+        fi
+    fi
+
+    # --- 3. config check ---
+    if [[ -e "$HOME/.config/herdr/config.toml" ]]; then
+        local check_out
+        if check_out=$(herdr config check 2>&1); then
+            verbose "herdr config check clean"
+        else
+            [[ "$did_step" == true ]] || step "herdr config check"
+            warn "herdr config check reported a problem:"
+            echo "$check_out" | sed 's/^/    /'
+            info "Fix it in ${CYAN}home/.config/herdr/config.toml${RESET} and re-run — nothing here edits that file."
+        fi
+    fi
+    return 0
+}
+
 _preflight_herdr_release_check() {
     [[ "$SKIP_PREFLIGHT" == true ]] && return 0
     # Linux/WSL only -- macOS herdr is Homebrew-managed, see _preflight_herdr_pin_check.
@@ -3829,6 +3913,10 @@ main() {
     # placed. Must run AFTER stow_home; refuses to enable over a hand-started
     # server (respawn loop). The launchd equivalent is in preflight. ---
     _post_stow_herdr_systemd_service
+
+    # --- herdr: register the plugin stow just placed, share the agent skill
+    # with Codex, and validate config.toml. Must run AFTER stow_home. ---
+    _post_stow_herdr_plugins_and_skill
 
     # --- Register the Claude Code hooks stow just deployed ---
     # Must run AFTER stow_home: the tool refuses to register a hook whose script
