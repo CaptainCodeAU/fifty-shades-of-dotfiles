@@ -281,8 +281,8 @@ Git invokes a credential helper only for an HTTPS remote, so an untouched SSH re
 
 - `_claude_launch` exports a read-only fine-grained PAT as `$GH_TOKEN` in every Claude session, so reads work and writes return 403.
 - Outside a Claude session, `gh` falls through to its own keyring, which currently holds a broad `gho_` OAuth token with `repo` scope. Any `gh` test run that way proves nothing about the App system.
-- To exercise the App path, pass it in explicitly **to the real binary**: `GH_TOKEN="$(github-agent-token token)" "$(type -P gh)" <cmd>` (run from inside a flipped repo). An App token is an installation, not a user, so `/user/repos` correctly 403s; `/installation/repositories` is its endpoint. **The bare `gh` form of this line was wrong and is corrected here (2026-09-15):** interactively `gh` is a shell function that injects its own token, so `GH_TOKEN=... gh ...` silently tests the wrapper's credential instead of the one you passed — see the next section.
-- Read-only public browsing: `GH_TOKEN="$(github-agent-token pat public-read)" "$(type -P gh)" api ...`.
+- To exercise the App path, pass it in explicitly **to the real binary**: `GH_TOKEN="$(github-agent-token token)" "$(whence -p gh)" <cmd>`, run from inside a flipped repo (zsh form; `type -P gh` in bash). An App token is an installation, not a user, so `/user/repos` correctly 403s; `/installation/repositories` is its endpoint. **The bare `gh` form of this line was wrong and is corrected here (2026-09-15):** interactively `gh` is a shell function that injects its own token, so `GH_TOKEN=... gh ...` silently tests the wrapper's credential instead of the one you passed — see the next section.
+- Read-only public browsing: `GH_TOKEN="$(github-agent-token pat public-read)" "$(whence -p gh)" api ...` (zsh; `type -P gh` in bash).
 - Posting to a public repo you do not own goes through `github-agent-public-post`. There is deliberately no print mode for that token.
 
 ### `gh` IS A SHELL FUNCTION HERE, AND IT SHADOWS THE TOKEN YOU PASS
@@ -319,11 +319,27 @@ Consequences, all measured:
   gets the real binary via PATH; an interactive shell gets the function. They can
   disagree completely about which credential is active.
 - **`command -v gh` is NOT a safe resolver.** Given a shell function named `gh` it
-  returns the string `gh`, i.e. the function. Use **`type -P gh`**, which searches
-  PATH only. This exact substitution was caught by a test written for the line.
+  returns the string `gh`, i.e. the function. Use **`whence -p gh`** in zsh or
+  **`type -P gh`** in bash; both search PATH only. This exact substitution was
+  caught by a test written for the line.
+- **AND THE RESOLVER ITSELF IS SHELL-SPECIFIC, which this file got wrong until
+  2026-09-17.** `type -P` is a **bash builtin flag**. zsh does not have it:
+  `type -P gh` there fails with `zsh:type:<line>: bad option: -P` (re-measured
+  2026-09-17, rc=1; that number is the invocation's line number, so never match on
+  it). zsh is this
+  machine's interactive shell, so the line recommended to stop you measuring the
+  wrong credential did not run where you type it -- and a failed resolver in a
+  command substitution yields an EMPTY string, so `"$(type -P gh)" api ...` becomes
+  `"" api ...` rather than announcing itself. Same shape as everything else in this
+  section: the defence failed quietly and looked like the defence working.
 - A correct probe is one of:
   ```bash
+  # zsh (this machine's interactive shell)
+  env -u GH_TOKEN -u GITHUB_TOKEN "$(whence -p gh)" api <path>
+  # bash (scripts, CI)
   env -u GH_TOKEN -u GITHUB_TOKEN "$(type -P gh)" api <path>
+  # shell-agnostic, when you cannot be sure which one you are in
+  env -u GH_TOKEN -u GITHUB_TOKEN "$(env -i PATH="$PATH" sh -c 'command -v gh')" api <path>
   curl -s -H "Authorization: Bearer $TOKEN" "https://api.github.com/<path>"
   ```
 
