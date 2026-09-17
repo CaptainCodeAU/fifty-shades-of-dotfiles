@@ -836,3 +836,44 @@ had already asked kept the channel; the other explicitly declined to race it.
 two accounts of one thing drift, and the reader gets whichever their phrasing happens to
 hit. The session that contributed layer 3 declined to write its own version. That is the
 same discipline that merged two D-20260918-02 blocks into one earlier the same night.
+
+### Three honest accounts, three different gaps
+
+The night's last finding, and the one with the widest reach. **The operative rule is NOT
+repeated here** -- it lives in this repo's `CLAUDE.md`, next to the count-and-absence traps,
+because that file loads and this one does not. What follows is the instance.
+
+Three sessions were writing to one shared directory. Before snapshotting it, one asked the
+others what they had touched. Every answer was given in good faith and every answer was
+incomplete, in a different way:
+
+| Account | What it missed |
+|---|---|
+| This session listed FOUR changed files | Correct, and only because one of the four was its own |
+| A peer listed THREE | Its own writes, accurately. It could not see the fourth, which was mine |
+| The asking session concluded two sessions were quiet | A third was starting work at that moment |
+
+**Nobody was careless and nobody was less than honest.** The gap is in what each party can
+SEE, not in what it is willing to say, which is why asking cannot close it. A hash manifest
+closed it: re-verified against the live directory, 2 files had changed since the snapshot and
+a third was missing from it entirely, 3 of 12 wrong.
+
+**The same shape then bit the thing built to prevent it.** The restructure moved `OPEN.md`,
+and for a while the path named as the FIRST INSTRUCTION of a session-opening prompt pointed
+at nothing. It was found by the manifest reporting `./OPEN.md: FAILED open or read` against
+11 OK -- not by anyone noticing. That risk had been raised in advance, in writing, before
+anyone had built anything, and it happened anyway.
+
+**The fix chosen for it is worth more than the bug.** A sweep for consumers of that filename
+returned 54,098 hits across 276,918 files, which proves the search works and settles nothing
+about who actually reads it. Since the callers cannot be enumerated, repointing the two
+references anyone happened to know about would have left every unknown reference broken AND
+LOOKING FIXED. So the file was restored at its old path as a pointer to the new layout.
+**When you cannot list the callers, leave the door where they expect it.** That is the same
+reasoning as the count-and-absence rule arriving at a migration: an unenumerable population
+cannot be verified, so do not act as though it has been.
+
+**Three sessions, three accounts, and none of them wrote this up but one.** Both peers
+explicitly declined to write their own version, for the reason already recorded twice in this
+file: two accounts of one thing drift, and `decided` hands the reader whichever their
+phrasing happens to hit.
