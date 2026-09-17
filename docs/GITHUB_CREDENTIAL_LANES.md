@@ -279,3 +279,95 @@ case the defence was not care, it was a CONTROL run in the same command.
 
 That rule is now in this repo's `CLAUDE.md` as the general form of its four
 worked traps, with `peek` as the tool for the truncation variant.
+
+---
+
+## 8. Second pass, 2026-09-17 evening: the shell-layer fix, attacked and dropped
+
+A later session re-opened the spawn gap without reading this document first, and
+proposed the one thing section 4 had already rejected in a different costume: an
+`alias claude='_claude_launch claude ...'` in `home/.zshrc`. Two read-only audits
+(one cross-vendor) and eight measurements later it was dropped. **The re-derivation
+is itself the finding** — the ruling in section 4 lived here while a commit message
+from the same day (`69de6c9`) said the alias route had been picked. When the record
+disagrees with itself, the later, fuller document wins, and this section is the tie
+being broken in writing so it is not broken again by guesswork.
+
+### What was measured that section 4 did not know
+
+All in throwaway herdr panes, since closed. Each has its control named.
+
+| # | Finding | Basis |
+|---|---|---|
+| 1 | A shell-layer fix WOULD work. A sentinel alias fired on herdr's typed line: herdr echoed bare `claude`, the pane printed `ALIASFIRED_7f3q`. Sentinel assembled at runtime so it could not match the echoed definition. | MEASURED |
+| 2 | `agent start` reports `argv: ["claude"]` with NO arguments, so an alias would supply every flag. | MEASURED |
+| 3 | The `LastCommitFiles.sh` banner is a NON-ISSUE for agent detection. Control arm (no alias) detected Claude in 4s; banner arm detected in 4s, with both the banner text and `Claude Code v2.1.274` in the pane read. | MEASURED |
+| 4 | `_claude_launch` BLOCKS in a pty. With the alias in place, `agent start` timed out at 45s and the pane sat at `Enter passphrase for ~/.ssh/captaincodeau`, banner above it proving the wrapper had run. | MEASURED |
+| 5 | herdr then reports `timed out waiting for agent startup`. Nothing in that error names ssh. Same family as the auth-error rule: the symptom names the surface, never the layer. | MEASURED |
+| 6 | zsh BAKES an alias into every function defined after it, permanently, at parse time. `myfunc_before` kept `claude bar`; `myfunc_after` became `_wrap claude --SKIP-PERMS foo`. The source file still reads `claude`; only `functions <name>` shows the truth. Baseline scan of the live shell: `baked=1 scanned=2031`, the single hit being `_claude_launch`'s own body. | MEASURED |
+| 7 | The Claude Code Bash tool sources `~/.claude/shell-snapshots/snapshot-zsh-*.sh`, so **310 aliases are live inside every Bash call**. `whence -w c` returns `c: alias`; control `whence -w notanalias_zz` returns `none`, rc=1. An alias would therefore fire estate-wide, not just in herdr panes. | MEASURED |
+| 8 | A plain `zsh -c` sources neither `.zshrc` nor the snapshot, so it has NO aliases: `whence -w claude` returns `command`, and `GH=0 NVD=0 HOME=17` (the 17 is the control). A `claude -p` spawned from there reported its own env as `GH_TOKEN` 0 bytes, `NVD_API_KEY` 0 bytes, `HOME` 18 bytes. | MEASURED |
+
+Rows 7 and 8 look contradictory and are not. **The difference is who sourced what**,
+not whether zsh expands aliases non-interactively. Record both together or the next
+reader will think one of them is wrong.
+
+Row 7 is the strongest argument against any shell-layer fix, and it is stronger than
+the inheritance argument in section 4: an alias does not merely fail to reach other
+launch paths, it silently reaches a path nobody intended. Had the alias mirrored `c`,
+every herdr-spawned agent would have gained `--dangerously-skip-permissions`, turning
+a broad READ token into an agent that can WRITE without prompting. That is a bigger
+privilege change than the one being fixed, in the opposite direction.
+
+### Sizing what deleting the keyring token would cost (section 7, item 1)
+
+Census of every git repo under `~/CODE` and `~/.claude`, `find -maxdepth 4`:
+
+| Population | Count |
+|---|---|
+| repos total | 94 |
+| flipped to the App (`githubagent.tier` set) | 44 |
+| not flipped | 50 |
+| ...of those, YOURS with a GitHub origin | **2** (`cc-warehouse`, the `captaincodeau` marketplace, both plugin clones) |
+| ...third-party clones | 30 |
+| ...no remote at all | 18 |
+
+The three unflipped rows sum to 50, which is the control against the total. So the
+browsing cost of losing credential (4) falls on 30 third-party clones and 2 plugin
+marketplaces, all read-only work that `github-agent-token pat public-read` already
+serves. The 18 local-only repos need no credential. This does not by itself authorise
+the deletion — section 7 item 1 still stands — but it sizes it.
+
+Re-verified the same evening, in the non-flipped `cc-warehouse` with `GH_TOKEN` and
+`GITHUB_TOKEN` both unset: `gh` answered as `CaptainCodeAU` from `(keyring)`, token
+`gho_`, scopes `gist, read:org, repo`, with `HTTP/2.0 200 OK` returned in the same
+command as the control. Unchanged from section 1. MEASURED.
+
+### The ordering rule, which is the part that would have bitten
+
+**Delete or replace the keyring token BEFORE you stop exporting `GH_TOKEN`, never
+the other way round.** The moment `GH_TOKEN` is unset, `gh` falls through to its
+keyring by design. If the broad token is still there, unexporting converts a
+launcher gap into an estate-wide default, by the same mechanism as the banned
+"retry with `GH_TOKEN` unset" fallback, arriving as a migration step instead of a
+retry. REASONED, and it is the reason the two steps are not interchangeable.
+
+### A documentation defect found on the way
+
+`CLAUDE.md` recommends `type -P gh` as the resolver that sees past the shell
+wrapper. **`type -P` is a bash builtin flag.** In zsh it fails: `zsh:type:8: bad
+option: -P`. The zsh form is `whence -p`. That line exists specifically to stop
+someone measuring the wrong credential, so it failing in the estate's default
+interactive shell is worth correcting. Not corrected in this pass. MEASURED.
+
+### Still open after this pass
+
+- Whether `ssh-add` blocks or fails fast with **no tty at all** (a Bash tool, cron).
+  Row 4 measured the pty case only. The probe is
+  `SSH_ASKPASS= DISPLAY= timeout 8 ssh-add ~/.ssh/captaincodeau </dev/null`, where
+  `rc=124` means it hung.
+- A `SIGKILL` skips `_claude_launch`'s `trap`, leaving a 12-hour `ssh-agent`
+  holding an unlocked key. Today that is once per session; under any
+  per-invocation wrapper it would be once per call. REASONED.
+- Taking ssh out of `_claude_launch` entirely would remove rows 4, 5 and most of
+  the process-tree question in one move. Not proposed formally, not costed.
