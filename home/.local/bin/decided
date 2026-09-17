@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+# decided -- has this already been settled? Query the decisions register by topic.
+#
+# WHY THIS EXISTS. 2026-09-17: an evening was spent re-deriving a ruling that was
+# already written down, because the document being read did not point at the one
+# holding the decision. The rule "check the record first" existed and did not fire.
+# This repo's answer to a rule that keeps being broken is a tool, not a fourth
+# restatement -- see census and peek.
+#
+# THE DESIGN POINT, borrowed from census: an empty result is the answer that lies.
+# "No decision found" reads identically to "the register was never searched". So
+# this NEVER prints a bare nothing: every run states the denominator, and a miss
+# says out loud that a miss is not the same as "not decided".
+#
+# Usage:
+#   decided <words...>     all words must appear in a decision block (case-insensitive)
+#   decided --list         every decision, titles only
+#   decided --selftest     prove both arms before trusting it
+#   decided --help
+#
+# Exit: 0 match  ·  1 no match (not an error)  ·  2 REFUSED -- register missing or
+# empty, which is NOT a pass.
+
+set -uo pipefail
+
+REGISTER="${DECISIONS_FILE:-$HOME/.local/share/decisions/DECISIONS.md}"
+
+die_refused() { printf 'decided: REFUSED -- %s\n' "$1" >&2; exit 2; }
+
+count_decisions() { grep -c '^## D-' "$REGISTER" 2>/dev/null || echo 0; }
+
+usage() { sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; }
+
+list_all() {
+  local n; n=$(count_decisions)
+  grep '^## D-' "$REGISTER" | sed 's/^## /  /'
+  printf '\ndecided: %s decision(s) in the register.\n' "$n"
+}
+
+# Print every block whose text contains ALL the given words.
+# One awk pass, no \x01 record separator: BSD awk (this machine's) does not honour
+# \x escapes, so the two-stage version silently matched nothing. Caught by --selftest
+# arm 1 before it ever ran against the real register, which is the entire argument for
+# writing the selftest first.
+search() {
+  local n hits rc
+  n=$(count_decisions)
+  hits=$(awk -v words="$*" '
+    function test_and_print(b,   lower, ok, i, cnt, w) {
+      if (b == "") return
+      lower = tolower(b); ok = 1
+      cnt = split(tolower(words), w, " ")
+      for (i = 1; i <= cnt; i++) if (w[i] != "" && index(lower, w[i]) == 0) { ok = 0; break }
+      if (ok) { printf "%s", b; matched++ }
+    }
+    /^## D-/ { test_and_print(block); block = $0 "\n"; next }
+    { if (block != "") block = block $0 "\n" }
+    END { test_and_print(block); exit (matched > 0 ? 0 : 1) }
+  ' "$REGISTER")
+  rc=$?
+
+  if [[ $rc -eq 0 ]]; then
+    printf '%s' "$hits"
+    printf 'decided: matched in %s decision(s) searched.\n' "$n"
+    return 0
+  fi
+
+  printf 'decided: NO decision recorded matching: %s\n' "$*" >&2
+  printf 'decided: %s decision(s) searched -- and a miss is NOT the same as "not decided".\n' "$n" >&2
+  printf 'decided: it means nothing is written down, so decide it and add a block.\n' >&2
+  return 1
+}
+
+selftest() {
+  local rc fails=0
+  # No cleanup trap on purpose: it referenced a `local` that is gone by EXIT time, which
+  # `set -u` turned into an error AFTER the report had printed. $TMPDIR is the OS's to
+  # reap, and this repo's deletion rules make a scripted rm the wrong reflex anyway.
+  local tmp; tmp=$(mktemp -d)
+
+  cat > "$tmp/reg.md" <<'FIXTURE'
+# fixture
+## D-19990101-01 -- A settled thing
+topic: alpha bravo charlie
+status: standing
+Body mentioning delta.
+## D-19990101-02 -- Another settled thing
+topic: echo foxtrot
+status: standing
+FIXTURE
+
+  # arm 1: a word that IS present must hit
+  DECISIONS_FILE="$tmp/reg.md" "$0" bravo >/dev/null 2>&1; rc=$?
+  [[ $rc -eq 0 ]] && echo "  ok   present word hits (rc=0)" || { echo "  FAIL present word missed (rc=$rc)"; fails=1; }
+
+  # arm 2: a word that is NOT present must miss, and miss is rc=1 not rc=0
+  DECISIONS_FILE="$tmp/reg.md" "$0" zulu >/dev/null 2>&1; rc=$?
+  [[ $rc -eq 1 ]] && echo "  ok   absent word misses (rc=1)" || { echo "  FAIL absent word did not miss (rc=$rc)"; fails=1; }
+
+  # arm 3: AND semantics -- two words in DIFFERENT blocks must not match either
+  DECISIONS_FILE="$tmp/reg.md" "$0" bravo foxtrot >/dev/null 2>&1; rc=$?
+  [[ $rc -eq 1 ]] && echo "  ok   words spanning two blocks do not match (rc=1)" || { echo "  FAIL cross-block match (rc=$rc)"; fails=1; }
+
+  # arm 4: body text is searchable, not just the topic line
+  DECISIONS_FILE="$tmp/reg.md" "$0" delta >/dev/null 2>&1; rc=$?
+  [[ $rc -eq 0 ]] && echo "  ok   body text is searchable (rc=0)" || { echo "  FAIL body text not searched (rc=$rc)"; fails=1; }
+
+  # arm 5: a missing register must REFUSE (2), never read as "no decisions"
+  DECISIONS_FILE="$tmp/nope.md" "$0" bravo >/dev/null 2>&1; rc=$?
+  [[ $rc -eq 2 ]] && echo "  ok   missing register refuses (rc=2)" || { echo "  FAIL missing register did not refuse (rc=$rc)"; fails=1; }
+
+  # arm 6: an EMPTY register must also refuse, not report a clean zero
+  : > "$tmp/empty.md"
+  DECISIONS_FILE="$tmp/empty.md" "$0" bravo >/dev/null 2>&1; rc=$?
+  [[ $rc -eq 2 ]] && echo "  ok   empty register refuses (rc=2)" || { echo "  FAIL empty register read as a clean miss (rc=$rc)"; fails=1; }
+
+  if [[ $fails -eq 0 ]]; then echo "decided --selftest: all 6 arms pass"; return 0; fi
+  echo "decided --selftest: FAILURES above"; return 1
+}
+
+case "${1:-}" in
+  --selftest) selftest; exit $? ;;
+  --help|-h|"") usage; exit 0 ;;
+esac
+
+[[ -f "$REGISTER" ]] || die_refused "no register at $REGISTER (this is not 'no decisions')"
+[[ "$(count_decisions)" -gt 0 ]] || die_refused "register at $REGISTER holds no decision blocks (this is not 'no decisions')"
+
+case "$1" in
+  --list) list_all; exit 0 ;;
+  *) search "$@"; exit $? ;;
+esac

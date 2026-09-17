@@ -29,6 +29,21 @@ Default branch is `master`.
 > sit here "seen" — that is the exact habituation `ci-watch` exists to prevent, and
 > a stale banner in an always-loaded file is worse than none.
 
+## Before proposing a fix, ask whether it is already decided
+
+`decided <words>` searches the decisions register (`~/.local/share/decisions/DECISIONS.md`)
+and prints the ruling plus the document that holds the reasoning. `decided --list` shows
+everything; `decided --selftest` proves all six arms.
+
+It never answers with a bare nothing: a miss states how many decisions were searched and
+says out loud that a miss is not the same as "not decided". Same discipline as `census`,
+for the same reason -- an empty result and an unasked question look identical.
+
+**A decision recorded only in a commit message does not exist.** Commit messages are not
+greppable by topic and nobody reads them before proposing. Put the decision in a document,
+add a block to the register, and have the commit point at the document. Commit `69de6c9`
+announced a ruling no document held, and an evening was spent re-deriving it on 2026-09-17.
+
 ## Python
 
 Use `uv run python3` instead of calling `python3` directly. (A shell wrapper intercepts bare `python`/`python3` and version-specific calls like `py313`/`py312` and redirects to `uv run` — but invoke `uv run` directly rather than relying on the wrapper, since non-interactive Bash-tool shells skip `.zshrc` and the wrapper is absent there.)

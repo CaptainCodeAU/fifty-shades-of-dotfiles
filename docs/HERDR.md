@@ -317,6 +317,14 @@ Nothing about this is herdr-specific: `_claude_launch` is reachable only through
 zsh aliases, which no spawned process inherits. Incident:
 `INC-20260915-herdr-spawn-bypasses-credential-path.md` in lifeos-private.
 
+**THE FIX IS ALREADY RULED ON, AND IT IS NOT A HERDR CHANGE.** See
+`docs/GITHUB_CREDENTIAL_LANES.md` sections 4 and 8: fix the consumers, not the
+launcher. A shell-layer fix (alias, `claude()` function, PATH shim) was costed
+and dropped on measurements, twice. This cross-reference exists because the
+second time happened entirely because this paragraph did not carry it -- the
+ruling was one hop away from where anyone stands when the question comes up.
+`decided herdr spawn credential` prints it without the reading.
+
 `herdr-skill-drift-check` reports 3, 4 and 6-9 with no thinking required: it
 compares the live `herdr --skill` to the stored snapshot, the snapshot's version
 to the binary, and every doc stamp to the binary. Items 1, 2, 10 and 11 are
