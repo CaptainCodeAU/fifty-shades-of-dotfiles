@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# ============================================================================
+#  peek -- a `head` that tells you what it hid
+# ============================================================================
+#
+# WHY
+# ---
+# `head -N` truncates SILENTLY. It prints no marker, changes no exit code, and
+# the shortened output looks exactly like complete output. So a listing you cut
+# short reads as a listing that ended, and an absence in the hidden part reads
+# as an absence from the whole thing.
+#
+# That is the same failure as trusting a zero, which this repo's CLAUDE.md
+# already covers three ways (census's --control, `git ls-files` refusals,
+# `stow -n` silence). Self-truncation was never named as a member of that
+# family, and on 2026-09-17 it cost a wrong claim committed to a doc:
+# `herdr agent | grep -E 'explain|read|get|wait' | head -8` cut the output two
+# lines above `agent explain`, and the missing lines were reported as a command
+# missing from herdr. Gavin caught it by running the listing himself.
+#
+# WHAT IT DOES
+#   Prints the first N lines, then ALWAYS says what happened, on stderr:
+#       peek: showed 8 of 214 lines -- 206 HIDDEN
+#       peek: showed all 6 lines (nothing hidden)
+#   The second form is the point. A tool that only speaks up when it truncates
+#   still leaves you guessing on the runs where it stays quiet; this one states
+#   completeness positively, so "I saw everything" is something you READ rather
+#   than something you assume.
+#
+#   stdout carries only the lines, so `cmd | peek | jq` still works.
+#
+# USAGE
+#   <command> | peek [N]        # default N=40
+#   <command> | peek --all      # no truncation, still reports the count
+#   peek --selftest             # prove both arms
+#
+# EXIT CODES
+#   0  ran (a pipeline's own exit status is upstream's business, not ours)
+#   2  bad usage, or a self-test failure
+# ============================================================================
+
+set -uo pipefail
+
+_peek_run() {
+    local n="$1"
+    awk -v n="$n" '
+        { total++ ; if (n < 0 || total <= n) print }
+        END {
+            hidden = (n < 0 || total <= n) ? 0 : total - n
+            if (hidden > 0)
+                printf("peek: showed %d of %d lines -- %d HIDDEN\n", n, total, hidden) > "/dev/stderr"
+            else
+                printf("peek: showed all %d lines (nothing hidden)\n", total) > "/dev/stderr"
+        }
+    '
+}
+
+_peek_selftest() {
+    local fails=0
+    local out err
+
+    # ARM 1: more input than the limit -- must report HIDDEN with real numbers.
+    err=$(seq 1 100 | _peek_run 3 2>&1 >/dev/null)
+    [[ "$err" == "peek: showed 3 of 100 lines -- 97 HIDDEN" ]] || {
+        echo "FAIL truncating arm: got '$err'"; fails=$((fails+1)); }
+    out=$(seq 1 100 | _peek_run 3 2>/dev/null | tr '\n' ' ')
+    [[ "$out" == "1 2 3 " ]] || { echo "FAIL truncating stdout: got '$out'"; fails=$((fails+1)); }
+
+    # ARM 2: less input than the limit -- must state completeness POSITIVELY.
+    # Without this arm a quiet run is ambiguous, which is the bug being fixed.
+    err=$(seq 1 4 | _peek_run 40 2>&1 >/dev/null)
+    [[ "$err" == "peek: showed all 4 lines (nothing hidden)" ]] || {
+        echo "FAIL complete arm: got '$err'"; fails=$((fails+1)); }
+
+    # ARM 3: empty input is its own answer, and must not look like arm 2.
+    err=$(printf '' | _peek_run 40 2>&1 >/dev/null)
+    [[ "$err" == "peek: showed all 0 lines (nothing hidden)" ]] || {
+        echo "FAIL empty arm: got '$err'"; fails=$((fails+1)); }
+
+    # ARM 4: --all must never hide anything, however much it is given.
+    err=$(seq 1 500 | _peek_run -1 2>&1 >/dev/null)
+    [[ "$err" == "peek: showed all 500 lines (nothing hidden)" ]] || {
+        echo "FAIL --all arm: got '$err'"; fails=$((fails+1)); }
+
+    if (( fails )); then echo "peek --selftest: $fails FAILURE(S)"; return 2; fi
+    echo "peek --selftest: 4 of 4 arms pass (truncating, complete, empty, --all)"
+    return 0
+}
+
+case "${1:-}" in
+    --selftest) _peek_selftest; exit $? ;;
+    --all)      _peek_run -1; exit 0 ;;
+    -h|--help)  sed -n '2,45p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    "")         _peek_run 40; exit 0 ;;
+    *[!0-9]*)   echo "peek: expected a line count, --all or --selftest; got '$1'" >&2; exit 2 ;;
+    *)          _peek_run "$1"; exit 0 ;;
+esac

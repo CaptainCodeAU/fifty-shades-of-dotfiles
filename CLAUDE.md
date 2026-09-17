@@ -59,8 +59,8 @@ same number in every arm cannot distinguish "the mechanism works" from "the test
 did not happen". Before trusting one, ask: *what would this print if the thing
 never ran at all?* If the answer is "the same", it is not a check.
 
-Three traps already in this file are that one rule written out three times, not
-three separate lessons:
+Four traps already in this file are that one rule written out four times, not
+four separate lessons:
 
 - [`census`](home/.claude/tools/census.py) refuses to report anything until its
   `--control` token hits first (Shell, below).
@@ -69,6 +69,29 @@ three separate lessons:
   (Git & GitHub auth, below).
 - `stow -n` prints nothing and exits 0 at default verbosity, so an empty plan
   and a real plan look the same; hence `-v2` on every dry run (Sandbox, below).
+- **`head -N` truncates silently**, so a listing you cut short is
+  indistinguishable from a listing that ended. Pipe into
+  [`peek`](home/.local/bin/peek) instead: it prints the same lines and then
+  always says `showed 8 of 214 lines -- 206 HIDDEN`, or, just as importantly,
+  `showed all 6 lines (nothing hidden)`.
+
+**YOU CAN BE THE ONE WHO HIDES THE EVIDENCE.** The first three traps are all
+something else staying quiet -- a tool, a formatter, a refusal. This fourth one
+is different and worth naming separately: *you* narrowed the output, and then
+read the narrowed version as the whole. `head`, `tail`, `cut`, `--lines N` and
+`| head -20` all feel like FORMATTING rather than measurement, which is exactly
+why the count-and-absence rule does not fire in your head when you type one.
+
+Measured 2026-09-17, and it reached a committed doc before a human caught it:
+`herdr agent | grep -E 'explain|read|get|wait' | head -8` cut the output two
+lines above `agent explain`, and that absence was written up as a command
+missing from herdr. It was there the whole time. The same command ending in
+`| peek 8` prints `peek: showed 8 of 11 lines -- 3 HIDDEN`.
+
+`peek --selftest` proves all four of its arms (truncating, complete, empty,
+`--all`). Note that it states completeness POSITIVELY: a tool that only speaks
+up when it truncates still leaves every quiet run ambiguous, which is the bug,
+not the fix.
 
 **A tool REFUSING to answer is not the tool answering "no".** A refusal reads
 like a finding, exactly the way a zero does, and it is the same failure wearing
@@ -100,7 +123,11 @@ have succeeded.
 Shell has `NULL_GLOB` + `nonomatch` — use `find -print` (not `ls glob*`) for file existence checks. Caveat: `find -print` exits 0 on an empty match only when the search root EXISTS; pointed at a missing path it still exits non-zero (1 on this BSD `find`). For a path that may not exist, use `test -e`/`test -d` (exits 0 either way, reports via its echo) or append `|| true` — otherwise the non-zero exit cancels batched siblings (see batching paragraph below).
 For port listing use the `ports` function (OS-aware: `lsof` on macOS, `ss`/`netstat` on Linux/WSL) rather than calling those tools directly.
 
-Before you state a COUNT or a "none anywhere", corroborate it with [`census`](home/.claude/tools/census.py) — `uv run python3 ~/.claude/tools/census.py --control <a-token-you-KNOW-is-present> PATTERN...` (`--help` for the rest; `--include-ignored` also searches gitignored files, `--ignored-only` searches just those, `--json` for scripts). It refuses to report anything unless the control hits first, always prints the denominator and how the population was drawn, and never truncates — none of which `grep` or `rg` do. Using a grep to LOCATE is fine; using one to CONCLUDE is what keeps going wrong. Deployed machine-globally by stow from `home/.claude/tools/`, so it is present in every project on this box but not on a machine without these dotfiles.
+Before you state a COUNT or a "none anywhere", corroborate it with [`census`](home/.claude/tools/census.py) — `uv run python3 ~/.claude/tools/census.py --control <a-token-you-KNOW-is-present> PATTERN...` (`--help` for the rest; `--include-ignored` also searches gitignored files, `--ignored-only` searches just those, `--json` for scripts). It refuses to report anything unless the control hits first, always prints the denominator and how the population was drawn, and never truncates — none of which `grep` or `rg` do. Using a grep to LOCATE is fine; using one to CONCLUDE is what keeps going wrong.
+
+Deployed machine-globally by stow from `home/.claude/tools/`, so it is present in every project on this box but not on a machine without these dotfiles.
+
+Same division for reading output: `head` to GLANCE, [`peek`](home/.local/bin/peek) before you CONCLUDE. `<cmd> | peek [N]` (default 40, `--all` for no limit) prints the lines on stdout and the denominator on stderr, so `cmd | peek | jq` still works. Stowed the same way, from `home/.local/bin/`.
 
 Never start a Bash command with `cd` — the harness hard-rejects any leading `cd` (it tells you to use `git -C <path>`, an absolute path, or `builtin cd`). This is a built-in Claude Code guard, not a repo hook. Treat the rejection as a signal to change the command _shape_ (reach for `git -C`/absolute paths), not to retry the same `cd`-prefixed command. A rejected `cd` exits non-zero, so if it was batched with sibling calls it cancels all of them (see next paragraph) — which reads as a "stuck loop" but is really one repeated mistake.
 
