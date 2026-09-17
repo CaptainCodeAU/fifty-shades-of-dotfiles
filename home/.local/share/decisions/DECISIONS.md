@@ -228,3 +228,41 @@ rather than failing -- the second told you to install a tool already installed a
 frozen. 52 helpers renamed to `__name`; single underscore is now reserved for the two
 real `compdef` functions. Enforced by `zsh-helper-namespace-check`, whose `--selftest`
 proves it can fail and that an empty scan REFUSES rather than reporting clean.
+
+## D-20260918-01 -- ci-watch keeps the fine-grained PAT; the GitHub App is NOT adopted
+
+topic: ci-watch github app github-agent installation token PAT fine-grained credential migration contents read actions read one hour lifetime minting per repo branch liveness
+
+decided: 2026-09-18
+status: standing
+holds-in: ~/.claude/MEMORY/WORK/ci-watch-observability/APP-MIGRATION-DECISION.md
+
+Asked for on 2026-09-15 after the PAT was found in 12 transcripts, oldest 14 June. Measured
+2026-09-18 and declined by Gavin the same day, on four grounds, each with a control.
+
+The motivating leak is closed at source, not by rotation: a PreToolUse hook blocks the three
+env-printing probe shapes that wrote it, `__claude_launch` no longer exports GH_TOKEN at all,
+and the broad keyring token is replaced and revoked. The App would shorten a fuse that is no
+longer lit.
+
+Installing the App on a repo grants it Contents: read -- measured 200 on /branches/master for
+the one repo it IS installed on. The PAT deliberately has none. That is option C of
+D-20260917-09, already costed there and called "the one to avoid", arriving by another door.
+A status line should be the last thing able to read source.
+
+`github-agent-token` cannot mint for a repo you are not standing in: it derives owner/repo
+from git's credential stdin or the cwd's origin, and reads the tier from that repo's own
+.git/config. Measured from /tmp: rc=1, "could not read this repo's 'origin' remote". ci-watch
+is multi-repo and runs from wherever the session is, so adoption needs a new
+`--repo owner/name --tier` mode, not a config change. NEXT.md's "mints from any directory:
+yes" row is WRONG and is superseded.
+
+The sandbox objection is a wash, not a reason either way. The PAT path is equally dead inside
+a sandboxed Bash call (security exit 44, ci-watch reports NONE and fails closed), and it does
+not matter, because ci-watch's real execution context is the SessionStart hook, which is not
+sandboxed -- proven by a live green render at session start in the same session where the
+sandboxed probe failed.
+
+Also settled here so it is not re-derived: the App's 404 on private repos was never a missing
+permission. `/installation/repositories` returns total_count 1, and Actions:read answers 200
+on that repo. The App is simply not installed on the watched ones.
