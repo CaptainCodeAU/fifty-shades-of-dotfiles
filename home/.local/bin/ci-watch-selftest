@@ -73,7 +73,7 @@ new_case(){                      # new_case -> sets D, LIST, STATE, STUB, BSTUB
     D="$ROOT/case$CASE"; mkdir -p "$D/state"
     LIST="$D/watchlist"; STATE="$D/state"
     STUB="$D/runs.stub"; BSTUB="$D/branch.stub"
-    RSTUB="$D/repo.stub"; DSTUB="$D/default.stub"
+    RSTUB="$D/repo.stub"; DSTUB="$D/default.stub"; HEADS="$D/heads"
     printf 'o/r@main | TESTTARGET\n' > "$LIST"
     stub_runs 200 '{"total_count":1,"workflow_runs":[{"conclusion":"success","status":"completed","head_sha":"1234567cafe","html_url":"https://example.invalid/run"}]}'
     stub_branch 200 '{"name":"main"}'
@@ -141,6 +141,45 @@ printf 'gh: unsupported in the selftest shim: %s\n' "$sub" >&2
 exit 2
 STUBEOF
     chmod +x "$D/http-stub"
+    # A `git` impersonator for branch-liveness. ci-watch now answers "does this
+    # branch still exist" with `git ls-remote --heads`, not the API, so the suite
+    # needs a seam for git as well -- and needs one BADLY: with no stub the ~40
+    # cases each made a real network call and the suite ran past a 600-second
+    # timeout (measured 2026-09-18, which is how the production hang was found).
+    cat > "$D/git-stub" <<'GSTUBEOF'
+#!/usr/bin/env bash
+# Only `ls-remote` is implemented; anything else is a loud failure rather than a
+# quiet success, so a future caller cannot be silently unstubbed the way the
+# --control arm was.
+for a in "$@"; do [ "$a" = ls-remote ] && { found=1; break; }; done
+[ "${found:-0}" = 1 ] || { printf 'git-stub: only ls-remote is stubbed: %s\n' "$*" >&2; exit 2; }
+[ -n "${CI_WATCH_SELFTEST_GITLOG:-}" ] && printf 'L\n' >> "$CI_WATCH_SELFTEST_GITLOG"
+# Per-repo override, same shape as the gh stub's fixture_for_repo, so a multi-row
+# case can give one repo a dead branch and another a live one.
+f="${CI_WATCH_SELFTEST_HEADS:-}"
+for a in "$@"; do
+  case "$a" in
+    */o/r2|*/x/y) [ -n "${CI_WATCH_SELFTEST_HEADS2:-}" ] && f="$CI_WATCH_SELFTEST_HEADS2" ;;
+  esac
+done
+[ -f "$f" ] || { printf 'git-stub: no heads fixture\n' >&2; exit 128; }
+case "$(head -1 "$f")" in
+  RCFAIL) printf 'fatal: could not read from remote repository\n' >&2; exit 128 ;;
+  EMPTY)  exit 0 ;;
+esac
+cat "$f"
+GSTUBEOF
+    chmod +x "$D/git-stub"
+    stub_heads main trunk
+}
+# stub_heads <branch...>  |  stub_heads RCFAIL  |  stub_heads EMPTY
+stub_heads(){
+    case "${1:-}" in
+      RCFAIL|EMPTY) printf '%s\n' "$1" > "$HEADS"; return 0 ;;
+    esac
+    : > "$HEADS"
+    local b i=1
+    for b in "$@"; do printf '%040d\trefs/heads/%s\n' "$i" "$b" >> "$HEADS"; i=$((i+1)); done
 }
 stub_runs(){   { printf '%s\n' "$1"; printf '%s' "$2"; } > "$STUB"; }
 stub_branch(){  { printf '%s\n' "$1"; printf '%s' "$2"; } > "$BSTUB"; }
@@ -149,9 +188,9 @@ stub_default(){ { printf '%s\n' "$1"; printf '%s' "$2"; } > "$DSTUB"; }
 
 run_watch(){                     # run_watch [extra env assignments...] -> OUT / RC
     OUT="$(env CI_WATCH_DEBUG=1 CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" \
-               CI_WATCH_GH="$D/http-stub" \
+               CI_WATCH_GH="$D/http-stub" CI_WATCH_GIT="$D/git-stub" \
                CI_WATCH_SELFTEST_STUB="$STUB" CI_WATCH_SELFTEST_BSTUB="$BSTUB" \
-               CI_WATCH_SELFTEST_RSTUB="$RSTUB" CI_WATCH_SELFTEST_DSTUB="$DSTUB" \
+               CI_WATCH_SELFTEST_RSTUB="$RSTUB" CI_WATCH_SELFTEST_DSTUB="$DSTUB" CI_WATCH_GIT="$D/git-stub" CI_WATCH_SELFTEST_HEADS="$HEADS" \
                NO_COLOR="${NO_COLOR_OVERRIDE:-}" \
                "$@" "$TOOL" 2>&1)"
     RC=$?
@@ -341,10 +380,17 @@ want C13 "TWIN inside TTL still shows the sha" "1234567" "$OUT"
 # ===========================================================================
 printf 'F4  branch liveness\n'
 
+# REWRITTEN 2026-09-18 for `git ls-remote`. Liveness used to ask the API's
+# /branches/{b} endpoint, which needs the Contents permission this tool's token
+# deliberately lacks, so on every private repo it 404'd and the feature was
+# silently inert on exactly the repos that matter. The whole shape of these cases
+# changes with it: there is no 404 to disambiguate and no default-branch control
+# call, because the control is now IN the listing -- a repo always has at least
+# one head, so zero heads means the instrument failed, never "the branch is gone".
+
 # C14: a deleted branch is its own state, not unknown and not a stale green.
 new_case
-stub_branch 404 '{"message":"Not Found","status":"404"}'
-stub_default 200 '{"name":"trunk"}'        # CONTROL HITS: the token can read branches
+stub_heads trunk benchmarking          # the watched branch "main" is NOT in the listing
 run_watch
 want    C14 "dead ref named"        "no longer exists" "$OUT"
 wantnot C14 "dead ref is not green" "$GREENGLYPH"      "$OUT"
@@ -352,36 +398,72 @@ wantnot C14 "dead ref is not green" "$GREENGLYPH"      "$OUT"
 new_case; run_watch
 wantnot C14 "TWIN live branch has no dead-ref line" "no longer exists" "$OUT"
 
+# C14 PREFIX TRAP (new): "main" must not be considered alive because "main2" is in
+# the listing. A substring test passes here while being wrong, which is the kind of
+# near-miss that made the OLD liveness check's positive control useless.
+new_case
+stub_heads main2 trunk
+run_watch
+want    C14 "a prefix of another branch is still gone" "no longer exists" "$OUT"
+# TWIN: the same listing WITH the real ref present must be alive.
+new_case
+stub_heads main2 main trunk
+run_watch
+wantnot C14 "TWIN exact ref in the same listing is alive" "no longer exists" "$OUT"
+
 # C15: the liveness call is cached -- two renders inside the TTL, one call.
 new_case
-CALLLOG="$D/branchcalls"; : > "$CALLLOG"
-cat > "$D/http-stub" <<'STUBEOF'
-#!/usr/bin/env bash
-sub="$1"; shift
-if [ "$sub" = api ]; then
-  case "$1" in */branches/*) printf 'B\n' >> "$CI_WATCH_SELFTEST_CALLLOG" ;; esac
-  printf '{"name":"main","default_branch":"main"}\n'; exit 0
-fi
-printf '%s\t%s\t%s\t%s\n' success completed 1234567cafe u
-exit 0
-STUBEOF
-chmod +x "$D/http-stub"
-run_watch CI_WATCH_SELFTEST_CALLLOG="$CALLLOG" CI_WATCH_NOW=1000000000
-run_watch CI_WATCH_SELFTEST_CALLLOG="$CALLLOG" CI_WATCH_NOW=1000003600
+CALLLOG="$D/gitcalls"; : > "$CALLLOG"
+run_watch CI_WATCH_SELFTEST_GITLOG="$CALLLOG" CI_WATCH_NOW=1000000000
+run_watch CI_WATCH_SELFTEST_GITLOG="$CALLLOG" CI_WATCH_NOW=1000003600
 wanteq C15 "branch liveness cached inside TTL" "1" "$(wc -l < "$CALLLOG" | tr -d ' ')"
-
-# C34 (live-found 2026-09-15): a 404 from /branches/ is NOT proof of deletion.
-# Measured against the real API: a live watched branch returned 404 while
-# being demonstrably alive and green, because the token reads Actions but not
-# Contents and GitHub 404s rather than confirming a private resource exists.
-# So the 404 path carries a positive control, and when the CONTROL ALSO MISSES
-# the honest answer is "cannot confirm", never "gone".
+# TWIN: past the TTL it asks again, so the "1" above is caching and not a stub
+# that simply never ran.
 new_case
-stub_branch  404 '{"message":"Not Found","status":"404"}'
-stub_default 404 '{"message":"Not Found","status":"404"}'   # CONTROL MISSES
+CALLLOG="$D/gitcalls"; : > "$CALLLOG"
+run_watch CI_WATCH_SELFTEST_GITLOG="$CALLLOG" CI_WATCH_NOW=1000000000
+run_watch CI_WATCH_SELFTEST_GITLOG="$CALLLOG" CI_WATCH_NOW=1000200000
+wanteq C15 "TWIN past the TTL it asks again" "2" "$(wc -l < "$CALLLOG" | tr -d ' ')"
+
+# C34 (live-found 2026-09-15, re-aimed at the new mechanism): AN INSTRUMENT THAT
+# COULD NOT LOOK MUST NEVER SAY "GONE". Two ways to fail, and both have to land on
+# "cannot confirm": the command fails outright, or it succeeds and returns nothing.
+# The second is the one that reads like a finding -- an empty listing looks exactly
+# like a repo whose branches were all deleted -- which is why the count is checked
+# against a control rather than believed.
+new_case
+stub_heads RCFAIL
 run_watch
 wantnot C34 "blind instrument never claims the branch is gone" "no longer exists" "$OUT"
 want    C34 "and the CI result is still reported"             "$GREENGLYPH"      "$OUT"
+new_case
+stub_heads EMPTY
+run_watch
+wantnot C34 "an EMPTY listing is an invalid trial, not a deletion" "no longer exists" "$OUT"
+want    C34 "and the CI result is still reported (empty arm)"     "$GREENGLYPH"      "$OUT"
+# TWIN: the same code path with a GOOD listing that lacks the ref does say gone,
+# so the two wantnots above are the mechanism working, not the case never running.
+new_case
+stub_heads trunk
+run_watch
+want    C34 "TWIN a good listing without the ref DOES say gone" "no longer exists" "$OUT"
+
+# C44 (new): a '?' answer must not be cached. Caching "cannot confirm" for the full
+# BRANCH_TTL turns one bad moment -- no network, no key loaded yet -- into a day of
+# not asking, and the render would keep showing the last definite answer.
+new_case
+CALLLOG="$D/gitcalls"; : > "$CALLLOG"
+stub_heads RCFAIL
+run_watch CI_WATCH_SELFTEST_GITLOG="$CALLLOG" CI_WATCH_NOW=1000000000
+run_watch CI_WATCH_SELFTEST_GITLOG="$CALLLOG" CI_WATCH_NOW=1000003600
+wanteq C44 "an inconclusive liveness answer is not cached" "2" "$(wc -l < "$CALLLOG" | tr -d ' ')"
+# TWIN: the identical pair of runs with a GOOD listing caches, proving the "2"
+# above is the no-cache rule and not two runs that always re-ask.
+new_case
+CALLLOG="$D/gitcalls"; : > "$CALLLOG"
+run_watch CI_WATCH_SELFTEST_GITLOG="$CALLLOG" CI_WATCH_NOW=1000000000
+run_watch CI_WATCH_SELFTEST_GITLOG="$CALLLOG" CI_WATCH_NOW=1000003600
+wanteq C44 "TWIN a definite answer IS cached" "1" "$(wc -l < "$CALLLOG" | tr -d ' ')"
 
 # ===========================================================================
 # F5 -- the control arm
@@ -580,10 +662,14 @@ STUBEOF
 chmod +x "$D/http-stub"
 GREENP='{"total_count":1,"workflow_runs":[{"conclusion":"success","status":"completed","head_sha":"1234567cafe","html_url":"u"}]}'
 REDP='{"total_count":1,"workflow_runs":[{"conclusion":"failure","status":"completed","head_sha":"deadbee1234","html_url":"u"}]}'
+# o/r's branch is DEAD (the listing is good and simply lacks "main"); o/r2's is alive.
+printf '%040d\trefs/heads/trunk\n' 1 > "$D/heads-gone"
 voices_at(){ # voices_at <now> -> count of transition alerts
     local out
     out="$(env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" CI_WATCH_GH="$D/http-stub" \
             CI_WATCH_SELFTEST_STUB="$STUB" CI_WATCH_SELFTEST_STUB2="$D/runs2.stub" \
+            CI_WATCH_GIT="$D/git-stub" \
+            CI_WATCH_SELFTEST_HEADS="$D/heads-gone" CI_WATCH_SELFTEST_HEADS2="$HEADS" \
             CI_WATCH_DEBUG=1 CI_WATCH_NOW="$1" "$TOOL" 2>&1)"
     [ "$VERBOSE" -eq 1 ] && printf '       | %s\n' "$out"
     printf '%s' "$out" | grep -c 'Heads up' || true
@@ -684,13 +770,25 @@ new_case
 stub_runs 403 '{"message":"Resource not accessible by integration","status":"403"}'
 OUT="$(env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" CI_WATCH_GH="$D/http-stub" \
         CI_WATCH_SELFTEST_STUB="$STUB" CI_WATCH_SELFTEST_BSTUB="$BSTUB" \
-        CI_WATCH_SELFTEST_RSTUB="$RSTUB" CI_WATCH_SELFTEST_DSTUB="$DSTUB" \
+        CI_WATCH_SELFTEST_RSTUB="$RSTUB" CI_WATCH_SELFTEST_DSTUB="$DSTUB" CI_WATCH_GIT="$D/git-stub" CI_WATCH_SELFTEST_HEADS="$HEADS" \
         GH_TOKEN=pretend "$TOOL" 2>&1)"
 want C42 "403 remedy names the credential in use" "credential: GH_TOKEN from the environment" "$OUT"
-OUT="$(env -u GH_TOKEN -u GITHUB_TOKEN CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" \
+# STUB THE KEYCHAIN FETCH. This arm used to call the REAL `github-api-token`, so
+# the case passed or failed on whether the machine could reach the login Keychain
+# -- which a sandboxed session cannot (measured: `security` exits 44 there). The
+# assertion is about what ci-watch SAYS when the fetch succeeds, so the fetch has
+# to be a fixture like everything else, or the suite is not hermetic and the
+# header's "no network, no token, no sandbox interaction" claim is false.
+# It goes in its OWN directory, not in $D. The fail-closed arm below hides the
+# fetcher by setting PATH="$D:/usr/bin:/bin", so a stub sitting in $D would make
+# that arm succeed and quietly delete the only test of the fail-closed path.
+mkdir -p "$D/bin"
+printf '#!/usr/bin/env bash\nprintf %%s FAKE-NARROW-PAT-FOR-SELFTEST\n' > "$D/bin/github-api-token"
+chmod +x "$D/bin/github-api-token"
+OUT="$(env -u GH_TOKEN -u GITHUB_TOKEN PATH="$D/bin:$PATH" CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" \
         CI_WATCH_GH="$D/http-stub" CI_WATCH_SELFTEST_STUB="$STUB" \
         CI_WATCH_SELFTEST_BSTUB="$BSTUB" CI_WATCH_SELFTEST_RSTUB="$RSTUB" \
-        CI_WATCH_SELFTEST_DSTUB="$DSTUB" "$TOOL" 2>&1)"
+        CI_WATCH_SELFTEST_DSTUB="$DSTUB" CI_WATCH_GIT="$D/git-stub" CI_WATCH_SELFTEST_HEADS="$HEADS" "$TOOL" 2>&1)"
 # CHANGED 2026-09-17. This used to assert "gh's own stored auth" with no env
 # token, which documented the very behaviour we then measured as a silent
 # privilege escalation: an unset GH_TOKEN is not "no credential", it is gh
@@ -706,7 +804,7 @@ want C42 "and names the Keychain PAT it fetched when no env token" \
 OUT="$(env -u GH_TOKEN -u GITHUB_TOKEN PATH="$D:/usr/bin:/bin" CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" \
         CI_WATCH_GH="$D/http-stub" CI_WATCH_SELFTEST_STUB="$STUB" \
         CI_WATCH_SELFTEST_BSTUB="$BSTUB" CI_WATCH_SELFTEST_RSTUB="$RSTUB" \
-        CI_WATCH_SELFTEST_DSTUB="$DSTUB" "$TOOL" 2>&1)"
+        CI_WATCH_SELFTEST_DSTUB="$DSTUB" CI_WATCH_GIT="$D/git-stub" CI_WATCH_SELFTEST_HEADS="$HEADS" "$TOOL" 2>&1)"
 # CHANGED AGAIN, same day, and the change is the point. The first version of the
 # fetch left GH_TOKEN unset when it failed, so gh fell through to its keyring --
 # "silently broad", which is worse than no fetch at all. ci-watch now sets a
@@ -755,16 +853,32 @@ stub_runs 403 '{"message":"Resource not accessible by integration","status":"403
 run_watch
 wanteq  C26 "truncated state still exits 0" "0" "$RC"
 wantnot C26 "truncated state renders no fragment green" "$GREENGLYPH" "$OUT"
+# AUDIT-NAMED HOLLOW: "still exits 0" passes against a tool that rendered NOTHING.
+# That is not hypothetical -- an invalid arithmetic expansion used to abort the
+# render mid-loop AT EXIT 0, silently dropping every remaining target including
+# live reds, and this assertion sat there green through all of it. Exit code plus
+# absence-of-green cannot tell a working render from no render; only presence can.
+want C26 "truncated state STILL RENDERS the target (the exit-0 arm alone is blind)" \
+     "TESTTARGET" "$OUT"
 new_case
 printf 'not a state file at all\n\x00\x01binary' > "$(statefile)" 2>/dev/null
 run_watch
 wanteq C26 "garbage state still exits 0" "0" "$RC"
+want   C26 "garbage state STILL RENDERS the target" "TESTTARGET" "$OUT"
+# And the same shape across MORE THAN ONE ROW, which is where the real bug bit: a
+# bad byte in row one must not remove row two from the dashboard.
+new_case
+printf 'o/r@main | FIRSTROW\nx/y@dev | SECONDROW\n' > "$LIST"
+printf 'schema=2\nfetched_at=08\nchecked_at=08\n' > "$(statefile)"
+run_watch
+want C26 "a corrupt first row does not mute the second" "SECONDROW" "$OUT"
+want C26 "and the corrupt row still renders too"        "FIRSTROW"  "$OUT"
 
 # C27: concurrent renders must not corrupt the state file.
 new_case
 for _ in 1 2 3 4 5 6; do
     env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" CI_WATCH_GH="$D/http-stub" \
-        CI_WATCH_SELFTEST_STUB="$STUB" CI_WATCH_SELFTEST_BSTUB="$BSTUB" CI_WATCH_SELFTEST_RSTUB="$RSTUB" CI_WATCH_SELFTEST_DSTUB="$DSTUB" "$TOOL" >/dev/null 2>&1 &
+        CI_WATCH_SELFTEST_STUB="$STUB" CI_WATCH_SELFTEST_BSTUB="$BSTUB" CI_WATCH_SELFTEST_RSTUB="$RSTUB" CI_WATCH_SELFTEST_DSTUB="$DSTUB" CI_WATCH_GIT="$D/git-stub" CI_WATCH_SELFTEST_HEADS="$HEADS" "$TOOL" >/dev/null 2>&1 &
 done
 wait
 bad_lines="$(grep -cvE '^[a-z_]+=.*$' "$(statefile)" 2>/dev/null || true)"
@@ -775,6 +889,51 @@ good_lines="$(grep -cE '^schema=2$' "$(statefile)" 2>/dev/null || true)"
 good_lines="$(printf '%s' "${good_lines:-0}" | head -1)"
 [ "$good_lines" -ge 1 ] || bad C27 "state file scanned at all" "schema=2 present" "INVALID TRIAL"
 wanteq C27 "concurrent renders leave a parseable state file" "0" "$bad_lines"
+# AUDIT-NAMED HOLLOW: `grep -cvE '^[a-z_]+=.*$'` cannot see the corruptions that
+# actually happen. A DOUBLED record (two concatenated schema=2 blocks) and a torn
+# trailing line both score bad_lines=0, and the good_lines control passes on the
+# doubled file too -- every line matches the shape; there are simply twice as many.
+# So count the record instead: exactly 12 lines, each key exactly once.
+tot="$(wc -l < "$(statefile)" | tr -d ' ')"
+uniq_keys="$(cut -d= -f1 < "$(statefile)" | sort -u | wc -l | tr -d ' ')"
+wanteq C27 "the record is exactly 12 lines (a doubled record scores 24)" "12" "$tot"
+wanteq C27 "and each key appears exactly once"                           "12" "$uniq_keys"
+
+# C27 THE RACE THAT ACTUALLY LOSES DATA, and the one the old case never ran.
+# Concurrent RENDERS are the benign case: they compute the same answer from the
+# same fixture, so last-writer-wins converges. A render racing a --snooze does
+# not -- they write different fields from different starting points, and the
+# render's pre-snooze copy used to win. The user hushed a red, was told it
+# worked, exit 0, and the banner was back next session with no error anywhere.
+new_case
+slow="$D/slow-stub"
+cat > "$slow" <<'SLOWEOF'
+#!/usr/bin/env bash
+# Hold open for a moment so a --snooze can land inside the load->save window.
+sleep 1
+printf '%s\t%s\t%s\t%s\n' failure completed deadbee1234 u
+exit 0
+SLOWEOF
+chmod +x "$slow"
+env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" CI_WATCH_GH="$slow" \
+    CI_WATCH_GIT="$D/git-stub" CI_WATCH_SELFTEST_HEADS="$HEADS" \
+    CI_WATCH_DEBUG=1 "$TOOL" >/dev/null 2>&1 &
+render_pid=$!
+env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" CI_WATCH_GH="$D/http-stub" \
+    CI_WATCH_GIT="$D/git-stub" CI_WATCH_SELFTEST_HEADS="$HEADS" \
+    CI_WATCH_SELFTEST_STUB="$STUB" CI_WATCH_DEBUG=1 \
+    "$TOOL" --snooze o/r 5 >/dev/null 2>&1
+snooze_rc=$?
+wait "$render_pid"
+snooze_after="$(field snooze_until)"
+wanteq C27 "a --snooze racing a render reports its real outcome" "0" "$snooze_rc"
+# The POSITIVE assertion: the snooze is still in the file after the render lands.
+if [ "${snooze_after:-0}" -gt 0 ] 2>/dev/null; then
+    ok C27 "a --snooze survives a render that was already in flight"
+else
+    bad C27 "a --snooze survives a render that was already in flight" \
+        "snooze_until > 0" "snooze_until=${snooze_after:-<missing>}"
+fi
 
 # C28: five watchlist shapes.
 new_case; rm -f "$LIST" 2>/dev/null; run_watch
@@ -802,7 +961,7 @@ new_case
 OUT="$(env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" NO_COLOR=1 \
         CI_WATCH_GH="$D/http-stub" CI_WATCH_SELFTEST_STUB="$STUB" \
         CI_WATCH_SELFTEST_BSTUB="$BSTUB" CI_WATCH_SELFTEST_RSTUB="$RSTUB" \
-        CI_WATCH_SELFTEST_DSTUB="$DSTUB" "$TOOL" 2>&1)"
+        CI_WATCH_SELFTEST_DSTUB="$DSTUB" CI_WATCH_GIT="$D/git-stub" CI_WATCH_SELFTEST_HEADS="$HEADS" "$TOOL" 2>&1)"
 wantnot C30 "NO_COLOR suppresses ANSI" $'\033[' "$OUT"
 new_case
 OUT="$(env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" CI_WATCH_FORCE=red "$TOOL" 2>&1)"
@@ -821,6 +980,148 @@ run_watch CI_WATCH_NOW=1000086399        # one second before expiry
 want    C31 "snoozed at T-1"  "snoozed" "$OUT"
 run_watch CI_WATCH_NOW=1000086400        # exactly at expiry
 wantnot C31 "expired exactly at T" "snoozed" "$OUT"
+
+# ===========================================================================
+# F6 -- the audit's remaining findings, each with its own positive arm
+# ===========================================================================
+# Added 2026-09-18 from `audit-forge.md` findings 6 to 12 and the eight
+# assertions its `suite_verdict` named hollow. Every case here is paired: the
+# thing that must happen, and a twin proving the case would notice if it did not.
+printf 'F6  audit findings 6-12\n'
+
+# C45 (finding 6): --json had NO coverage at all, and the C32 map could not
+# notice because --json had no claim id. It was a pure state dump with no TTL, so
+# a consumer reading `observed_state` got a month-old green from a target that had
+# been refused for a month, while the render path pointedly refused to show it.
+new_case
+printf 'schema=2\nlast_outcome=perm_denied\nobserved_state=green\nobserved_concl=success\nobserved_sha=deadbee\nobserved_url=u\nfetched_at=1000000000\nchecked_at=1000000000\nred_since=0\nsnooze_until=0\nbranch_alive=1\nbranch_checked=1000000000\n' > "$(statefile)"
+J="$(env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" CI_WATCH_GH="$D/http-stub" \
+      CI_WATCH_GIT="$D/git-stub" CI_WATCH_SELFTEST_HEADS="$HEADS" \
+      CI_WATCH_NOW=1002592000 "$TOOL" --json 2>&1)"     # +30 days, well past HARD_TTL
+wantnot C45 "--json withholds a green that is past HARD_TTL" '"observed_state":"green"' "$J"
+want    C45 "--json says plainly that it is not observable" '"observable":false'        "$J"
+# TWIN: inside the TTL the same record IS shown, so the blanking above is the TTL
+# working and not --json being broken or the case never running.
+J="$(env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" CI_WATCH_GH="$D/http-stub" \
+      CI_WATCH_GIT="$D/git-stub" CI_WATCH_SELFTEST_HEADS="$HEADS" \
+      CI_WATCH_NOW=1000003600 "$TOOL" --json 2>&1)"     # +1 hour
+want C45 "TWIN inside the TTL --json still shows the value" '"observed_state":"green"' "$J"
+
+# C46 (finding 7): a state dir that cannot be written made a red target speak
+# "just went red" ALOUD on every session start, forever -- red_since never
+# persisted, so every run believed the red was brand new. The one line reserved
+# for saying something exactly once became the thing it said every time, which is
+# the fastest available way to make the operator tune the voice channel out.
+new_case
+stub_runs 200 '{"total_count":1,"workflow_runs":[{"conclusion":"failure","status":"completed","head_sha":"deadbee1234","html_url":"u"}]}'
+chmod 555 "$STATE"
+voices=0
+for n in 1000000000 1000086400 1000172800; do
+    run_watch CI_WATCH_NOW="$n"
+    case "$OUT" in *'just went red'*) voices=$((voices+1)) ;; esac
+done
+chmod 755 "$STATE"
+wanteq C46 "an unwritable state dir does not re-speak the transition every session" "0" "$voices"
+want   C46 "and it says so on screen instead" "cannot write its state" "$OUT"
+# TWIN: with a writable dir the same three renders speak EXACTLY ONCE, so the 0
+# above is the gate working rather than the alert being broken outright.
+new_case
+stub_runs 200 '{"total_count":1,"workflow_runs":[{"conclusion":"failure","status":"completed","head_sha":"deadbee1234","html_url":"u"}]}'
+voices=0
+for n in 1000000000 1000086400 1000172800; do
+    run_watch CI_WATCH_NOW="$n"
+    case "$OUT" in *'just went red'*) voices=$((voices+1)) ;; esac
+done
+wanteq C46 "TWIN a writable state dir speaks the transition exactly once" "1" "$voices"
+
+# C47 (finding 9): with no `date` on PATH, now_epoch degrades to 0 -- and 0 was
+# then used as a TIMESTAMP. fetched_at=0 was written on a SUCCESS, after which the
+# banner read "red for -20710d" and offered `--snooze o/r@main -20710`, a command
+# cmd_snooze's own digit check rejects. The tool printed a remedy that cannot run.
+new_case
+printf '#!/usr/bin/env bash\nexit 1\n' > "$D/date"; chmod +x "$D/date"
+stub_runs 200 '{"total_count":1,"workflow_runs":[{"conclusion":"failure","status":"completed","head_sha":"deadbee1234","html_url":"u"}]}'
+printf 'schema=2\nlast_outcome=ok\nobserved_state=red\nobserved_concl=failure\nobserved_sha=deadbee\nobserved_url=u\nfetched_at=1000000000\nchecked_at=1000000000\nred_since=1000000000\nsnooze_until=0\nbranch_alive=1\nbranch_checked=9999999999\n' > "$(statefile)"
+OUT="$(env -u CI_WATCH_NOW PATH="$D:/usr/bin:/bin" CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" \
+        CI_WATCH_GH="$D/http-stub" CI_WATCH_SELFTEST_STUB="$STUB" \
+        CI_WATCH_GIT="$D/git-stub" CI_WATCH_SELFTEST_HEADS="$HEADS" \
+        CI_WATCH_DEBUG=1 NO_COLOR=1 "$TOOL" 2>&1)"
+wantnot C47 "no clock never prints a negative red streak" "red for -" "$OUT"
+# THE REMEDY IT OFFERS MUST BE RUNNABLE. The banner used to print
+# `ci-watch --snooze o/r@main -20710`, which cmd_snooze's own digit check rejects.
+wantnot C47 "and never offers a snooze command that cannot run" "--snooze o/r@main -" "$OUT"
+want    C47 "and it says the clock is unavailable"        "clock unavailable" "$OUT"
+wanteq  C47 "and it does NOT overwrite the real fetched_at with 0" "1000000000" "$(field fetched_at)"
+# TWIN: with a working clock the same fixture prints a real streak, so the
+# absence of "red for -" above is not the absence of a red banner altogether.
+new_case
+stub_runs 200 '{"total_count":1,"workflow_runs":[{"conclusion":"failure","status":"completed","head_sha":"deadbee1234","html_url":"u"}]}'
+printf 'schema=2\nlast_outcome=ok\nobserved_state=red\nobserved_concl=failure\nobserved_sha=deadbee\nobserved_url=u\nfetched_at=1000000000\nchecked_at=1000000000\nred_since=1000000000\nsnooze_until=0\nbranch_alive=1\nbranch_checked=9999999999\n' > "$(statefile)"
+run_watch CI_WATCH_NOW=1000432000 NO_COLOR=1
+want C47 "TWIN a working clock prints a real red streak"        "RED for 5 DAYS" "$OUT"
+want C47 "TWIN and the snooze it offers is a runnable command"  "--snooze o/r@main 5" "$OUT"
+
+# C48 (finding 10): --add refused ANY second branch of an already-watched repo,
+# because the duplicate check was a case-insensitive substring match of the repo
+# part against the WHOLE FILE, labels and comments included. That silently broke
+# the tool's own printed remedy -- the branch-gone banner says
+# `re-point it: ci-watch --add . from the branch you actually want`.
+new_case
+printf 'o/r@main | TESTTARGET\n' > "$LIST"
+A="$(env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" "$TOOL" --add o/r@release 2>&1)"; a_rc=$?
+wantnot C48 "--add does not claim an exact duplicate for a different branch" "already on the watchlist" "$A"
+want    C48 "--add explains how to re-point instead"                         "Drop or edit that row"     "$A"
+wanteq  C48 "--add reports the refusal in its exit code"                     "1" "$a_rc"
+# TWIN: a genuine exact duplicate IS still refused as one, at exit 0.
+A="$(env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" "$TOOL" --add o/r@main 2>&1)"; a_rc=$?
+want   C48 "TWIN an exact duplicate is still named as one" "already on the watchlist: o/r@main" "$A"
+wanteq C48 "TWIN and an exact duplicate is not an error"   "0" "$a_rc"
+# And a LABEL must never be mistaken for a target.
+new_case
+printf '# o/r is watched elsewhere\nq/z@main | mentions o/r in its label\n' > "$LIST"
+A="$(env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" "$TOOL" --add o/r@main 2>&1)"
+want C48 "a comment or label never counts as a watched target" "added to watchlist" "$A"
+
+# C49 (finding 11): keyof piped through `tr` twice with 2>/dev/null, so on a
+# stripped PATH both pipes failed, the key came back EMPTY, and every target
+# collapsed onto ONE state file -- one repo's observation overwriting another's.
+# C29 asserted only "never renders green", which passes against a tool that has
+# lost all state identity, cannot read its own clock, and rendered nothing useful.
+new_case
+printf 'o/r@main | FIRST\nx/y@dev | SECOND\n' > "$LIST"
+# `tr` IS THE THING BEING REMOVED, not the whole PATH. A fully stripped PATH also
+# removes `mv`, so NOTHING persists and the state-file count is 0 for a reason
+# that has nothing to do with the key -- a zero that would have read as a pass for
+# the wrong question. So break exactly one binary and leave the rest working.
+mkdir -p "$D/bin2"
+printf '#!/bin/bash\nexit 1\n' > "$D/bin2/tr"; chmod +x "$D/bin2/tr"
+OUT="$(env PATH="$D/bin2:$PATH" CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" \
+        CI_WATCH_GH="$D/http-stub" CI_WATCH_SELFTEST_STUB="$STUB" \
+        CI_WATCH_GIT="$D/git-stub" CI_WATCH_SELFTEST_HEADS="$HEADS" \
+        CI_WATCH_DEBUG=1 CI_WATCH_NOW=1000000000 "$TOOL" 2>&1)"
+nstate="$(find "$STATE" -name '*.state' -print 2>/dev/null | wc -l | tr -d ' ')"
+wanteq C49 "two targets keep two distinct state files with \`tr\` broken" "2" "$nstate"
+want C49 "both rows still render with \`tr\` broken (FIRST)"  "FIRST"  "$OUT"
+want C49 "both rows still render with \`tr\` broken (SECOND)" "SECOND" "$OUT"
+# TWIN for the count: with `tr` working the answer is the same 2, so the count is
+# measuring key identity and not the broken binary.
+new_case
+printf 'o/r@main | FIRST\nx/y@dev | SECOND\n' > "$LIST"
+run_watch CI_WATCH_NOW=1000000000
+nstate="$(find "$STATE" -name '*.state' -print 2>/dev/null | wc -l | tr -d ' ')"
+wanteq C49 "TWIN two distinct state files with a normal PATH too" "2" "$nstate"
+
+# C50 (finding 8): --control's "rendered nothing at all (invalid trial)" arm was
+# UNREACHABLE. cmd_render always prints its header when a watchlist exists, and
+# cmd_control always writes one, so `out` could never be empty. The guard written
+# to catch "the check never executed" was itself a check that could not execute.
+# Worse, the arm asserted only the ABSENCE of 'CI green', so a regression that
+# rendered a refused target as the quiet stale line still passed.
+CTL="$("$TOOL" --control 2>&1)"; ctl_rc=$?
+wanteq C50 "--control passes"                       "0" "$ctl_rc"
+want   C50 "--control counts its rendered targets"  "2 targets rendered" "$CTL"
+want   C50 "--control asserts the BLIND register"   "one BLIND"          "$CTL"
+want   C50 "--control asserts the unobservable one" "one unobservable"   "$CTL"
 
 # C19/C20 cross-cutting
 printf 'F0  cross-cutting\n'
@@ -851,16 +1152,16 @@ wantnot C20 "old-format cache never renders green" "$GREENGLYPH" "$OUT"
 new_case
 NO_COLOR_OVERRIDE=""
 OUT="$(env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" CI_WATCH_GH="$D/http-stub" \
-        CI_WATCH_SELFTEST_STUB="$STUB" CI_WATCH_SELFTEST_BSTUB="$BSTUB" CI_WATCH_SELFTEST_RSTUB="$RSTUB" CI_WATCH_SELFTEST_DSTUB="$DSTUB" "$TOOL" 2>&1)"
+        CI_WATCH_SELFTEST_STUB="$STUB" CI_WATCH_SELFTEST_BSTUB="$BSTUB" CI_WATCH_SELFTEST_RSTUB="$RSTUB" CI_WATCH_SELFTEST_DSTUB="$DSTUB" CI_WATCH_GIT="$D/git-stub" CI_WATCH_SELFTEST_HEADS="$HEADS" "$TOOL" 2>&1)"
 stub_runs 403 '{"message":"Resource not accessible by integration","status":"403"}'
 OUT="$(env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" CI_WATCH_GH="$D/http-stub" \
-        CI_WATCH_SELFTEST_STUB="$STUB" CI_WATCH_SELFTEST_BSTUB="$BSTUB" CI_WATCH_SELFTEST_RSTUB="$RSTUB" CI_WATCH_SELFTEST_DSTUB="$DSTUB" "$TOOL" 2>&1)"
+        CI_WATCH_SELFTEST_STUB="$STUB" CI_WATCH_SELFTEST_BSTUB="$BSTUB" CI_WATCH_SELFTEST_RSTUB="$RSTUB" CI_WATCH_SELFTEST_DSTUB="$DSTUB" CI_WATCH_GIT="$D/git-stub" CI_WATCH_SELFTEST_HEADS="$HEADS" "$TOOL" 2>&1)"
 wantnot "AntiC22" "BLIND does not use the red escape code" "$REDCODE" "$OUT"
 # TWIN: a real red MUST use it, or the assertion is vacuous.
 new_case
 stub_runs 200 '{"total_count":1,"workflow_runs":[{"conclusion":"failure","status":"completed","head_sha":"f","html_url":"u"}]}'
 OUT="$(env CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" CI_WATCH_GH="$D/http-stub" \
-        CI_WATCH_SELFTEST_STUB="$STUB" CI_WATCH_SELFTEST_BSTUB="$BSTUB" CI_WATCH_SELFTEST_RSTUB="$RSTUB" CI_WATCH_SELFTEST_DSTUB="$DSTUB" "$TOOL" 2>&1)"
+        CI_WATCH_SELFTEST_STUB="$STUB" CI_WATCH_SELFTEST_BSTUB="$BSTUB" CI_WATCH_SELFTEST_RSTUB="$RSTUB" CI_WATCH_SELFTEST_DSTUB="$DSTUB" CI_WATCH_GIT="$D/git-stub" CI_WATCH_SELFTEST_HEADS="$HEADS" "$TOOL" 2>&1)"
 want "AntiC22" "TWIN a real red DOES use the red escape code" "$REDCODE" "$OUT"
 
 # Anti-C23: seeing a red never clears it.
@@ -874,7 +1175,7 @@ want "AntiC23" "red survives being seen twice" "RED" "$OUT"
 # C32 -- coverage map. Printed, cross-checkable, never self-asserted.
 # ===========================================================================
 printf '\ncoverage map (C32)\n'
-EXPECT="C1 C2 C3 C4 C5 C6 C7 C8 C9 C10 C11 C12 C13 C14 C15 C16 C17 C18 C19 C20 C24 C25 C26 C27 C28 C29 C30 C31 C33 C34 C35 C36 C37 C38 C39 C40 C41 C42 C43 AntiC22 AntiC23"
+EXPECT="C1 C2 C3 C4 C5 C6 C7 C8 C9 C10 C11 C12 C13 C14 C15 C16 C17 C18 C19 C20 C24 C25 C26 C27 C28 C29 C30 C31 C33 C34 C35 C36 C37 C38 C39 C40 C41 C42 C43 C44 C45 C46 C47 C48 C49 C50 AntiC22 AntiC23"
 missing=""
 for c in $EXPECT; do
     hit=0

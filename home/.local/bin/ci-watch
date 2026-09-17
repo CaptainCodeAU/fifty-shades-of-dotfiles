@@ -184,30 +184,34 @@ else
 fi
 
 have(){ command -v "$1" >/dev/null 2>&1; }
+# NO `date` ON PATH MEANS WE DO NOT KNOW THE TIME -- and 0 is a SENTINEL for that,
+# never a timestamp. Treating it as one wrote `fetched_at=0` on a SUCCESSFUL
+# observation, after which the red banner read `red for -20710d` and offered
+# `ci-watch --snooze o/r@main -20710`, a command cmd_snooze's own digit check
+# rejects. The tool printed a remedy that cannot run. A later 403 on the same
+# target then rendered `(last known; <1m old)`, because age_str ran the negative
+# age through numor0 and got 0 -- a freshness stamp of literally zero presented as
+# under a minute. Callers test `clock_ok "$now"` and skip every time-derived fact.
 now_epoch(){
   if [ -n "${CI_WATCH_NOW:-}" ]; then printf '%s' "$CI_WATCH_NOW"; return 0; fi
   local n; n="$(date +%s 2>/dev/null)"
   case "$n" in ''|*[!0-9]*) n=0 ;; esac   # no `date` on a stripped PATH: degrade
   printf '%s' "$n"
 }
+# now_epoch runs in a command substitution, so it CANNOT set a flag its caller can
+# see. The test has to live in the caller, and this is it.
+clock_ok(){ [ "$(numor0 "${1:-0}")" -gt 0 ]; }
 trim(){ local s="$1"; s="${s#"${s%%[![:space:]]*}"}"; s="${s%"${s##*[![:space:]]}"}"; printf '%s' "$s"; }
-keyof(){ printf '%s' "$1" | tr '/@:.' '____' 2>/dev/null | tr -cd 'A-Za-z0-9_-' 2>/dev/null; }
-# Percent-encode every character that is reserved in a URL PATH segment, not
-# just `/`. Encoding only the slash meant a branch called `feat/#42` truncated at
-# the fragment marker and 404'd, which the liveness check then read as a deleted
-# branch -- a confident false alarm about a branch that was alive. (`%` must be
-# first or it double-encodes the escapes added after it.)
-enc_branch(){
-  local s="$1" out='' c i
-  for (( i=0; i<${#s}; i++ )); do
-    c="${s:i:1}"
-    case "$c" in
-      [A-Za-z0-9._~-]) out="$out$c" ;;
-      *) out="$out$(printf '%%%02X' "'$c")" ;;
-    esac
-  done
-  printf '%s' "$out"
-}
+# Pure bash on purpose. This used to pipe through `tr` twice with `2>/dev/null`, so
+# on a stripped PATH both pipes failed, the function returned EMPTY, and every
+# watched target collapsed onto a single `.state` file -- one repo's observation
+# silently overwriting another's. A parameter expansion cannot be missing from the
+# PATH, which removes the collapse-to-empty case rather than detecting it.
+keyof(){ local k="${1//[^A-Za-z0-9_-]/_}"; printf '%s' "$k"; }
+# (`enc_branch` lived here. It percent-encoded a branch name into a /branches/{b}
+# URL, and was deleted with the API liveness path it served -- `git ls-remote`
+# takes a refname, not a URL, so there is nothing left to encode wrongly. See
+# `branch_liveness` for the whole story.)
 # All-digit is NOT the same as safe-in-arithmetic. Bash reads a leading zero as
 # OCTAL, so `08` is an invalid expression -- and an invalid arithmetic expansion
 # ABORTS THE SCRIPT. With one `fetched_at=08` in one state file, the render died
@@ -227,6 +231,10 @@ numor0(){
 # Humanised age. Bands are coarse on purpose -- the reader needs "is this recent
 # or ancient", not a duration to the second.
 age_str(){
+  # A NEGATIVE OR UNPARSEABLE AGE IS NOT "BRAND NEW". numor0 turns `-1` into 0,
+  # which rendered a value with no freshness stamp at all as `<1m old`. An age we
+  # cannot compute has to say so; that is the whole point of marking staleness.
+  case "${1:-}" in ''|*[!0-9]*) printf '?'; return 0 ;; esac
   local s; s="$(numor0 "${1:-0}")"
   if   [ "$s" -lt 60 ];    then printf '<1m'
   elif [ "$s" -lt 3600 ];  then printf '%sm' $(( s / 60 ))
@@ -235,6 +243,19 @@ age_str(){
 }
 
 tier_for_days(){ if [ "$1" -ge 7 ]; then TIER=3; elif [ "$1" -ge 3 ]; then TIER=2; else TIER=1; fi; }
+
+# Whole days between two stamps, never negative. With no clock `now` is 0, and the
+# unclamped subtraction printed `red for -20710d` next to a snooze command
+# (`--snooze o/r@main -20710`) that cmd_snooze's own digit check rejects -- the
+# banner instructing the operator to run something that cannot work.
+days_between(){
+  local a b d
+  a="$(numor0 "${1:-0}")"; b="$(numor0 "${2:-0}")"
+  if [ "$a" -le 0 ] || [ "$b" -le 0 ]; then printf '0'; return 0; fi
+  d=$(( (10#$a - 10#$b) / 86400 ))
+  [ "$d" -lt 0 ] && d=0
+  printf '%s' "$d"
+}
 
 # ---- transport: gh owns the JSON, and gh owns the error shape ---------------
 # The hand-rolled bash-regex JSON reader that used to live here produced THREE
@@ -432,18 +453,79 @@ fetch_runs(){
   return 0
 }
 
-# gh_api_ok <path> -> 0 if the call succeeded; sets GA_OUT and GA_CODE otherwise
-gh_api_ok(){
-  local path="$1" out rc err code=''
-  GA_OUT=''; GA_CODE=''
-  have_gh || return 2
-  : >"$ERR_SINK" 2>/dev/null
-  out="$("$GH" api "$path" 2>"$ERR_SINK")"; rc=$?
-  if [ "$rc" -eq 0 ]; then GA_OUT="$out"; GA_CODE=200; return 0; fi
-  err="$(cat "$ERR_SINK" 2>/dev/null)"
-  [[ "$err" =~ HTTP[[:space:]]+([0-9]{3}) ]] && code="${BASH_REMATCH[1]}"
-  GA_CODE="$code"
-  return 1
+# ---- branch liveness, over git rather than over the API ---------------------
+# THIS REPLACED THREE API CALLS AND A CONTROL DANCE WITH ONE COMMAND, and the
+# reason is not tidiness -- the API path could not answer the question at all on
+# the repos that matter.
+#
+# The old path asked GET /repos/{o}/{r}/branches/{b}. That endpoint needs the
+# CONTENTS permission, which this tool's read-only PAT deliberately does not have,
+# so on every private repo it returned 404 -- and GitHub returns 404 rather than
+# 403 precisely so it never confirms a private resource exists. A bare 404 was
+# therefore indistinguishable from "branch deleted", so the code asked a SECOND
+# question as a positive control (the repo's own default branch, which must
+# exist): control answers 200 -> our 404 is real; control also 404s -> the
+# instrument is blind, say nothing. Correct, and still useless here, because on
+# Gavin's private repos the control ALWAYS missed. Liveness was silently inert on
+# exactly the repos he cares about -- `--json` reported `branch_alive:"?"` forever.
+#
+# Worse, the control had a blind spot of its own that shipped as a false alarm:
+# the URL was built by percent-encoding only '/', so a branch containing '#' or
+# '%' (both legal in a refname) produced a malformed request, a genuine 404, and a
+# control that PASSED -- because the default branch is a plain name and does not
+# share the property that broke the request. A control only validates the
+# instrument for the failure it was built to catch. That whole class disappears
+# here: there is no URL to malform.
+#
+# `git ls-remote --heads` answers directly, over the SSH key (D-20260917-09 made
+# that key keychain-backed, so it loads unattended), and the HTTPS form is what we
+# ask for so git's own `insteadOf` rules decide the transport rather than this tool
+# guessing. THE CONTROL IS IN THE SAME COMMAND: a repo always has at least one
+# head, so "zero heads came back" means the instrument failed, never "the branch is
+# gone". Only a listing that contains other branches but not ours is evidence.
+#
+#   1  the ref is there          0  the listing is good and our ref is absent
+#   ?  we could not look (no git, no key, no network, empty repo)
+#
+# NEVER PROMPT. This runs at session start; a credential or passphrase prompt here
+# would hang the shell before the user sees anything. BatchMode and
+# GIT_TERMINAL_PROMPT=0 turn every such case into a fast, honest '?'.
+#
+# AND IT IS HARD-BOUNDED IN WALL TIME. This runs at session start, so an
+# unbounded network call here is a hang in the user's face before they see a
+# prompt -- and `ls-remote` has several ways to take a long time that no git
+# option covers: DNS with no resolver, a TCP connect to a black hole, an SSH
+# handshake waiting on an agent. Measured the hard way 2026-09-18: pointing the
+# selftest's ~40 cases at the real `git` with no stub ran past a 600-second
+# timeout. `ConnectTimeout` and `http.lowSpeedTime` cover two of those paths;
+# `timeout` covers all of them, and its absence just means we fall back to the
+# two that are covered.
+GIT_BIN="${CI_WATCH_GIT:-git}"
+branch_liveness(){ # <owner/repo> <branch> -> 1 | 0 | ?
+  local repo="$1" branch="$2" out rc heads
+  # Stock macOS has neither `timeout` nor bash 4. Hence `gtimeout` as the second
+  # name, and `${a[@]+"${a[@]}"}` rather than a bare `"${a[@]}"`, which bash 3.2
+  # treats as an UNBOUND VARIABLE when the array is empty and `set -u` is on --
+  # so the no-timeout machine would have aborted here instead of degrading.
+  local -a tmo=()
+  command -v "$GIT_BIN" >/dev/null 2>&1 || { printf '?'; return 0; }
+  if   have timeout;  then tmo=(timeout 8)
+  elif have gtimeout; then tmo=(gtimeout 8)
+  fi
+  out="$(GIT_TERMINAL_PROMPT=0 \
+         GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh} -o BatchMode=yes -o ConnectTimeout=5" \
+         ${tmo[@]+"${tmo[@]}"} "$GIT_BIN" -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=10 \
+              ls-remote --heads "https://github.com/${repo}" 2>/dev/null)"
+  rc=$?
+  heads="$(printf '%s\n' "$out" | grep -c 'refs/heads/' 2>/dev/null)"
+  heads="$(numor0 "$(printf '%s' "$heads" | head -1 | tr -cd '0-9')")"
+  # The control and the reading, in one breath. Both must hold before we are
+  # willing to say a branch is gone.
+  if [ "$rc" -ne 0 ] || [ "$heads" -lt 1 ]; then printf '?'; return 0; fi
+  case "$out" in
+    *"	refs/heads/${branch}"$'\n'*|*"	refs/heads/${branch}") printf '1' ;;
+    *) printf '0' ;;
+  esac
 }
 
 # A SUCCESSFUL observation still has to be mapped to what it means. Note that
@@ -500,9 +582,21 @@ load_state(){
 
 # Atomic: write to a temp file, then rename. Two sessions starting at once must
 # never interleave into a half-written record.
+#
+# IT NOW RETURNS A STATUS, AND THE CALLER IS EXPECTED TO READ IT. The old version
+# ended `|| true`, so a state dir that could not be written failed in complete
+# silence. That is not a cosmetic problem in THIS tool: red_since never persisted,
+# so every session re-read red_since=0, re-took the "this just went red" branch and
+# SPOKE THE TRANSITION ALERT AGAIN -- the one line reserved for saying something
+# exactly once became a thing it said forever. Reproduced with `chmod 555` on the
+# state dir: three consecutive renders, three spoken alerts. The fastest available
+# way to train the operator to ignore the voice channel.
+#
+# A failed write also used to leave its `.tmp` behind, one per target per session,
+# reaped by nothing.
 save_state(){
   local f="$STATE_DIR/$1.state" t="$STATE_DIR/$1.state.$$.tmp"
-  ( {
+  if ( {
       printf 'schema=2\n'
       printf 'last_outcome=%s\n'   "$2"
       printf 'observed_state=%s\n' "$3"
@@ -515,7 +609,69 @@ save_state(){
       printf 'snooze_until=%s\n'   "${10}"
       printf 'branch_alive=%s\n'   "${11}"
       printf 'branch_checked=%s\n' "${12}"
-    } >"$t" ) 2>/dev/null && mv -f "$t" "$f" 2>/dev/null || true
+    } >"$t" ) 2>/dev/null && mv -f "$t" "$f" 2>/dev/null; then
+    return 0
+  fi
+  command rm -f "$t" 2>/dev/null || true
+  return 1
+}
+
+# ---- the per-target lock ---------------------------------------------------
+# WHY A LOCK AT ALL, when `mv -f` already makes each write atomic. Because the
+# atomic thing is the WRITE, and the unsafe thing is the READ-MODIFY-WRITE around
+# it. Every caller did load_state -> compute -> save_state with no lock and no
+# version check, so the last writer won with whatever it read at the START.
+# Reproduced: run a render against a slow endpoint, then `ci-watch --snooze o/r 5`
+# while it is in flight. The snooze prints `snoozed A for 5 day(s)`, exits 0, and
+# is then overwritten by the render writing back the snooze_until it loaded BEFORE
+# the snooze existed. The user hushed a red, was told it worked, and the banner is
+# back next session with no error anywhere -- the tool's only dismissal mechanism
+# failing silently, in a window exactly as long as one HTTP fetch, which is the
+# normal case at session start.
+#
+# `mkdir` is the lock because it is atomic on every POSIX filesystem: two processes
+# cannot both create the same directory, and unlike a flag file there is no
+# test-then-create gap to lose. The timestamp goes in a file INSIDE the lock rather
+# than being read off the directory's mtime, because `stat` spells that differently
+# on BSD and GNU and this tool must not care.
+#
+# THE FETCH HAPPENS OUTSIDE THE LOCK, deliberately. Holding it across an HTTP round
+# trip would make `--snooze` wait on the network, which is the thing it is usually
+# racing. Only the re-read-and-write is inside, which is microseconds.
+# THE LOCK IS AN EMPTY DIRECTORY AND STAYS EMPTY, which is a deliberate constraint
+# rather than minimalism. A first version stored the acquire time in a file INSIDE
+# the lock and removed it with `rm` on release. On this machine `rm` -- including
+# `command rm`, which skips shell functions but not the PATH shim -- routes to the
+# Trash, and the Claude sandbox refuses that with `afpAccessDenied`. So the file
+# survived, `rmdir` then failed because the directory was not empty, and THE LOCK
+# WAS NEVER RELEASED: every later target spun out its full retry budget before
+# giving up. Measured 2026-09-18 -- the selftest went from seconds to past a
+# 300-second timeout, which is how this was found.
+#
+# Staleness therefore comes from the directory's own mtime via `find -mmin`, which
+# is POSIX and spelled the same on BSD and GNU, unlike `stat`. Nothing here ever
+# deletes a file, so nothing here can be blocked by a deletion policy.
+LOCK_DIR=''
+lock_acquire(){   # <key> -> 0 held (LOCK_DIR set), 1 not held
+  local l="$STATE_DIR/$1.lock" tries=0
+  LOCK_DIR=''
+  while [ "$tries" -lt 5 ]; do
+    if mkdir "$l" 2>/dev/null; then LOCK_DIR="$l"; return 0; fi
+    # A run that died holding the lock must not wedge every future session. Two
+    # minutes is far longer than any render and far shorter than a session gap.
+    if [ -n "$(find "$l" -maxdepth 0 -mmin +2 -print 2>/dev/null)" ]; then
+      rmdir "$l" 2>/dev/null || true
+      continue
+    fi
+    tries=$(( tries + 1 ))
+    have sleep && sleep 0.1 2>/dev/null || break
+  done
+  return 1
+}
+lock_release(){
+  [ -n "$LOCK_DIR" ] || return 0
+  rmdir "$LOCK_DIR" 2>/dev/null || true
+  LOCK_DIR=''
 }
 
 # ---- spoken alert (best-effort; never fails) -------------------------------
@@ -582,6 +738,7 @@ process_target(){ # repo branch label
                  # "just went red" alert about a DIFFERENT, already-known red.
   local fetched checked red_since snooze balive bchecked
   local obs concl sha url outcome detail age lastline
+  local SAVE_FAILED=0 LOCK_MISSED=0
   key="$(keyof "${repo}@${branch}")"
   load_state "$key"
   now="$(now_epoch)"
@@ -605,51 +762,40 @@ process_target(){ # repo branch label
     [ "$outcome" = empty_ok ] && obs=norun
   fi
 
-  # --- branch liveness. The runs endpoint CANNOT see a deleted branch (it keeps
-  # serving its historical runs), so this second call is the only discriminator.
-  # Cached for BRANCH_TTL to keep it to roughly one extra call per target per day.
-  # A 404 HERE IS NOT PROOF THE BRANCH IS GONE. Measured live 2026-09-15: the
-  # branches endpoint returned 404 for a watched branch
-  # that is alive and whose CI was green in the same breath -- because this
-  # token can read Actions on that repo but not Contents, and GitHub returns 404
-  # rather than 403 so it never confirms a private resource exists. Shipping
-  # "branch gone" on a bare 404 would have invented a NEW false alarm to replace
-  # the false green, which is not a trade worth making.
-  #
-  # So a 404 gets a POSITIVE CONTROL in the same breath, exactly as this repo's
-  # own count-and-absence rule demands: ask for a branch that MUST exist (the
-  # repo's default). If that one answers 200 the token can clearly read branches,
-  # so our 404 means genuinely deleted. If it 404s too, the instrument is blind
-  # and the honest answer is "cannot confirm", never "gone".
+  # --- branch liveness, cached for BRANCH_TTL (roughly one extra call per target
+  # per day). The runs endpoint CANNOT see a deleted branch: it keeps serving that
+  # branch's historical runs forever, so a watch pinned to a merged-and-deleted
+  # branch looks permanently healthy. Measured on cli/cli 2026-09-15: three
+  # merged-and-deleted branches still returned 4-9 runs each.
   balive="$S_BRANCH_ALIVE"; bchecked="$S_BRANCH_CHECKED"
-  if [ -n "$branch" ] && [ -z "${CI_WATCH_FORCE:-}" ] \
+  if [ -n "$branch" ] && [ -z "${CI_WATCH_FORCE:-}" ] && clock_ok "$now" \
      && [ $(( 10#$now - 10#$bchecked )) -ge "$BRANCH_TTL" ]; then
-    if gh_api_ok "repos/${repo}/branches/$(enc_branch "$branch")"; then
-      balive=1; bchecked="$now"
-    elif [ "$GA_CODE" = 404 ]; then
-      local dflt
-      dflt=''
-      gh_api_ok "repos/${repo}" && dflt="$(printf '%s' "$GA_OUT" | tr ',' '\n' \
-                                            | grep '"default_branch"' | head -1 \
-                                            | sed 's/.*"default_branch"[[:space:]]*:[[:space:]]*"//; s/".*//')"
-      if [ -n "$dflt" ] && [ "$dflt" != "$branch" ] \
-         && gh_api_ok "repos/${repo}/branches/$(enc_branch "$dflt")"; then
-        balive=0; bchecked="$now"       # control HIT: the 404 is real
-      else
-        balive='?'; bchecked="$now"     # control MISSED: invalid trial, say nothing
-      fi
-    fi
-    # Any other failure tells us nothing about the ref, so we leave the previous
-    # answer alone rather than inventing one.
+    local bans; bans="$(branch_liveness "$repo" "$branch")"
+    # ONLY A DEFINITE ANSWER STAMPS THE CACHE. Caching a '?' for a day would turn
+    # one bad moment (no network, no key loaded yet) into 24 hours of not asking.
+    case "$bans" in
+      0|1) balive="$bans"; bchecked="$now" ;;
+      *)   : ;;
+    esac
   fi
 
   # --- fold the outcome into the record. THE INVARIANT: fetched_at moves only
   # on a successful observation. Everything else about a failed fetch is
   # recorded, but the freshness stamp is untouchable.
+  #
+  # RE-READ INSIDE THE LOCK. The load_state at the top of this function happened
+  # before a network round trip; the record on disk may have moved since (a
+  # `--snooze` is the case that matters). Taking the fields we do NOT own from the
+  # fresh copy is what stops this write from silently undoing someone else's.
+  lock_acquire "$key" || LOCK_MISSED=1
+  load_state "$key"
   fetched="$S_FETCHED"; red_since="$S_RED_SINCE"; snooze="$S_SNOOZE"
   checked="$now"
   if [ "$outcome" = ok ] || [ "$outcome" = empty_ok ]; then
-    fetched="$now"
+    # WITH NO CLOCK WE DO NOT STAMP. Writing fetched_at=0 on a success is how the
+    # banner came to read "red for -20710d"; 0 means "unknown", so leave the last
+    # real stamp alone rather than replacing it with a fiction.
+    clock_ok "$now" && fetched="$now"
     # ONLY A GREEN CLEARS THE ALARM. This used to read `else red_since=0`, which
     # let `running`, `cancelled`, `neutral`, `skipped` and `no runs` wipe a red
     # streak -- so cancelling a workflow DISMISSED the alarm, and the next real
@@ -662,7 +808,8 @@ process_target(){ # repo branch label
     # fixed. Found by an independent audit (Max), not by the 82-case suite --
     # C8 and Anti-C23 both passed while this was live.
     case "$obs" in
-      red)   [ "$red_since" -le 0 ] && { red_since="$now"; TRANSITION=1; } ;;
+      red)   [ "$red_since" -le 0 ] && clock_ok "$now" \
+               && { red_since="$now"; TRANSITION=1; } ;;
       green) red_since=0; snooze=0 ;;
       *)     : ;;
     esac
@@ -670,8 +817,19 @@ process_target(){ # repo branch label
     # Failure: keep the previous observation verbatim, and keep the red history.
     obs="$S_OBS"; concl="$S_CONCL"; sha="$S_SHA"; url="$S_URL"
   fi
-  save_state "$key" "$outcome" "$obs" "$concl" "$sha" "$url" \
-             "$fetched" "$checked" "$red_since" "$snooze" "$balive" "$bchecked"
+  if save_state "$key" "$outcome" "$obs" "$concl" "$sha" "$url" \
+                "$fetched" "$checked" "$red_since" "$snooze" "$balive" "$bchecked"; then
+    :
+  else
+    # THE WRITE FAILED, AND THE TRANSITION ALERT IS GATED ON IT. If red_since did
+    # not persist, the next session will believe this red is brand new all over
+    # again; speaking now guarantees the alert repeats forever. Show the breakage
+    # instead -- on screen once per target, where it can be fixed.
+    SAVE_FAILED=1; TRANSITION=0
+    printf '%b\n' "${MAGENTA}  !! CI watch cannot write its state -- ${label}${NC}"
+    printf '%b\n' "${DIM}     ${STATE_DIR} is not writable, so red history and snoozes cannot persist${NC}"
+  fi
+  lock_release
 
   # --- a dead ref outranks everything: the watch can never fire again as pinned.
   if [ "$balive" = 0 ]; then
@@ -682,7 +840,15 @@ process_target(){ # repo branch label
     return 0
   fi
 
-  age=$(( 10#$now - 10#$fetched )); [ "$fetched" -le 0 ] && age=-1
+  # A negative or unknowable age must stay NEGATIVE all the way to age_str, which
+  # now prints '?' for it. Clamping it to 0 here is what produced "<1m old" for a
+  # record whose freshness stamp was never written.
+  age=-1
+  clock_ok "$now" && [ "$fetched" -gt 0 ] && age=$(( 10#$now - 10#$fetched ))
+  [ "$age" -lt 0 ] && age=-1
+  if ! clock_ok "$now"; then
+    printf '%b\n' "${DIM}     clock unavailable (no working \`date\`) -- ages and red-streak days are not shown${NC}"
+  fi
 
   # --- LIVE observation --------------------------------------------------
   if [ "$outcome" = ok ] || [ "$outcome" = empty_ok ]; then
@@ -690,7 +856,7 @@ process_target(){ # repo branch label
     # red_since in the file but rendering `.. CI cancelled` would still hide the
     # alarm for the session, which is the same dismissal wearing a quieter coat.
     if [ "$obs" != green ] && [ "$obs" != red ] && [ "$red_since" -gt 0 ]; then
-      days=$(( (10#$now - 10#$red_since) / 86400 ))
+      days="$(days_between "$now" "$red_since")"
       if [ "$snooze" -gt "$now" ]; then
         printf '%b\n' "   ${YELLOW}zzz${NC} ${DIM}CI red ${days}d but snoozed -- ${label}${NC}"
       else
@@ -705,7 +871,7 @@ process_target(){ # repo branch label
       green)
         printf '%b\n' "   ${GREEN}OK${NC} ${DIM}CI green -- ${label} (${sha:-?})${NC}" ;;
       red)
-        days=$(( (10#$now - 10#$red_since) / 86400 ))
+        days="$(days_between "$now" "$red_since")"
         if [ "$snooze" -gt "$now" ]; then
           printf '%b\n' "   ${YELLOW}zzz${NC} ${DIM}CI red ${days}d but snoozed -- ${label}${NC}"
         else
@@ -731,7 +897,7 @@ process_target(){ # repo branch label
   # --- COULD NOT OBSERVE --------------------------------------------------
   # A known red is never silenced by an outage: dismiss-only-by-fixing.
   if [ "$S_OBS" = red ] && [ "$red_since" -gt 0 ]; then
-    days=$(( (10#$now - 10#$red_since) / 86400 ))
+    days="$(days_between "$now" "$red_since")"
     if [ "$snooze" -gt "$now" ]; then
       printf '%b\n' "   ${YELLOW}zzz${NC} ${DIM}CI red ${days}d, snoozed, status stale -- ${label}${NC}"
     else
@@ -786,6 +952,23 @@ each_entry(){
 
 remote_owner_repo(){ printf '%s' "$1" | sed -E 's#\.git$##; s#^.*[:/]([^/:]+/[^/:]+)$#\1#'; }
 
+# watchlist_match <owner/repo[@branch]> -> exact | other-branch | none
+# Reads only the TARGET field of each row, so a label or a comment can never
+# match, and compares whole values rather than substrings.
+watchlist_match(){
+  local want="$1" line t seen_repo=0
+  [ -f "$WATCHLIST" ] || { printf 'none'; return 0; }
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ''|\#*) continue ;; esac
+    t="$(trim "${line%%|*}")"
+    [ -n "$t" ] || continue
+    [ "$t" = "$want" ] && { printf 'exact'; return 0; }
+    [ "${t%%@*}" = "${want%%@*}" ] && seen_repo=1
+  done < "$WATCHLIST"
+  [ "$seen_repo" -eq 1 ] && { printf 'other-branch'; return 0; }
+  printf 'none'
+}
+
 default_branch_of(){ # best effort; origin/HEAD when set, else the usual names
   local d
   d="$(git symbolic-ref --short -q refs/remotes/origin/HEAD 2>/dev/null)"
@@ -805,9 +988,9 @@ suggest_current_repo(){
   [ -n "$remote" ] || return 0
   owner_repo="$(remote_owner_repo "$remote")"
   [ -n "$owner_repo" ] || return 0
-  if [ -f "$WATCHLIST" ] && grep -qiF "$owner_repo" "$WATCHLIST" 2>/dev/null; then
-    return 0
-  fi
+  # Same whole-field comparison as cmd_add, for the same reason: a substring grep
+  # over the whole file matched labels and comments too.
+  case "$(watchlist_match "$owner_repo")" in exact|other-branch) return 0 ;; esac
   printf '%b\n' "   ${DIM}.. untracked CI: ${owner_repo} has workflows but isn't watched -- add: ci-watch --add .${NC}"
 }
 
@@ -819,7 +1002,7 @@ cmd_render(){
   TRANSITION=0
   if [ -f "$WATCHLIST" ]; then
     if ! have gh && [ -z "${GH_TOKEN:-}" ] && [ -z "${CI_WATCH_FORCE:-}" ] \
-       && [ -z "${CI_WATCH_HTTP_STUB:-}" ]; then
+       && [ -z "${CI_WATCH_GH:-}" ]; then
       printf '%b\n' "${DIM}CI watch: skipped (no gh / GH_TOKEN -- runs inside Claude sessions).${NC}"
     fi
     printf '%b\n' "${BOLD}CI watch${NC} ${DIM}(live each session; red is sticky until fixed)${NC}"
@@ -830,7 +1013,7 @@ cmd_render(){
 }
 
 cmd_snooze(){
-  local match="${1:-}" days="${2:-}" hit=0 now until
+  local match="${1:-}" days="${2:-}" hit=0 failed=0 now until
   case "$days" in ''|*[!0-9]*) printf 'usage: ci-watch --snooze <repo> <days>\n' >&2; return 2;; esac
   days="$(numor0 "$days")"          # `08` is all-digit AND invalid octal
   [ -z "$match" ] && { printf 'usage: ci-watch --snooze <repo> <days>\n' >&2; return 2; }
@@ -839,19 +1022,39 @@ cmd_snooze(){
     local repo="$1" branch="$2" label="$3" key
     case "${repo}@${branch}" in *"$match"*) ;; *) return 0;; esac
     key="$(keyof "${repo}@${branch}")"
+    # UNDER THE LOCK, AND VERIFIED AFTERWARDS. This is the tool's only dismissal
+    # mechanism, and it used to fail silently: a render already in flight would
+    # finish and write back the snooze_until it had loaded BEFORE this ran, so the
+    # user hushed a red, saw `snoozed ... for 5 day(s)`, got exit 0, and the banner
+    # came back next session with no error anywhere. A write path that reports
+    # success without checking is the same shape as the false green this whole
+    # rewrite exists to kill.
+    lock_acquire "$key" || true
     load_state "$key"
     # NOT "${S_OBS:-red}": snoozing a never-observed target used to write
     # observed_state=red into the record, so --json reported a red for something
     # that had never been seen. A snooze is a decision about noise, not an
     # observation.
-    save_state "$key" "${S_OUTCOME:-}" "$S_OBS" "$S_CONCL" "$S_SHA" "$S_URL" \
+    if ! save_state "$key" "${S_OUTCOME:-}" "$S_OBS" "$S_CONCL" "$S_SHA" "$S_URL" \
                "$S_FETCHED" "$S_CHECKED" "${S_RED_SINCE:-$now}" "$until" \
-               "$S_BRANCH_ALIVE" "$S_BRANCH_CHECKED"
+               "$S_BRANCH_ALIVE" "$S_BRANCH_CHECKED"; then
+      lock_release
+      printf 'ci-watch: could not write state for %s -- NOT snoozed\n' "$label" >&2
+      failed=1; return 0
+    fi
+    load_state "$key"
+    lock_release
+    if [ "$S_SNOOZE" != "$until" ]; then
+      printf 'ci-watch: the snooze for %s did not stick (wanted %s, file has %s) -- NOT snoozed\n' \
+             "$label" "$until" "$S_SNOOZE" >&2
+      failed=1; return 0
+    fi
     printf 'snoozed %s for %s day(s)\n' "$label" "$days"
     hit=1
   }
   each_entry _snooze_one || true
   [ "$hit" -eq 1 ] || { printf 'no watchlist target matched "%s"\n' "$match" >&2; return 1; }
+  [ "$failed" -eq 0 ] || return 1
 }
 
 cmd_add(){
@@ -866,9 +1069,24 @@ cmd_add(){
   fi
   [ -n "$target" ] || { printf 'usage: ci-watch --add <owner/repo[@branch] | .> [label]\n' >&2; return 2; }
   mkdir -p "$(dirname "$WATCHLIST")" 2>/dev/null || true
-  if [ -f "$WATCHLIST" ] && grep -qiF "${target%%@*}" "$WATCHLIST" 2>/dev/null; then
-    printf 'already on the watchlist: %s\n' "${target%%@*}"; return 0
-  fi
+  # MATCH THE WHOLE TARGET, ANCHORED TO THE TARGET FIELD. This used to be a
+  # case-insensitive SUBSTRING match of the repo part against the entire file,
+  # labels and comment lines included, so `--add o/r@release` was refused as
+  # "already on the watchlist: o/r" when o/r@main was listed. That broke the tool's
+  # OWN printed remedy: the branch-gone banner says `re-point it: ci-watch --add .
+  # from the branch you actually want`, and that command silently did nothing.
+  # One branch per repo is a deliberate scope decision; the bug was that the guard
+  # and the advice disagreed, and the guard lost quietly.
+  case "$(watchlist_match "$target")" in
+    exact)
+      printf 'already on the watchlist: %s\n' "$target"; return 0 ;;
+    other-branch)
+      printf 'a different branch of %s is already watched.\n' "${target%%@*}" >&2
+      printf 'ci-watch watches one branch per repo. Drop or edit that row in\n' >&2
+      printf '  %s\n' "$WATCHLIST" >&2
+      printf 'then re-run this command.\n' >&2
+      return 1 ;;
+  esac
   if [ -n "$label" ]; then printf '%s | %s\n' "$target" "$label" >> "$WATCHLIST"
   else printf '%s\n' "$target" >> "$WATCHLIST"; fi
   printf 'added to watchlist: %s\n' "$target"
@@ -898,15 +1116,31 @@ cmd_json(){
   [ -f "$WATCHLIST" ] || { printf '[]\n'; return 0; }
   local first=1
   printf '['
+  # THE MACHINE SURFACE OBEYS THE SAME TTL AS THE SCREEN. It used to be a pure
+  # state dump: no HARD_TTL, no refresh. Reproduced with a planted record
+  # (last_outcome=perm_denied, observed_state=green, fetched_at 30 days old) and
+  # the clock moved forward 30 days -- `--json` happily emitted
+  # `"observed_state":"green"` for a target that had been refused for a month.
+  # A consumer reading the obvious field got a month-old green while the render
+  # path pointedly refused to show the same value, which made the whole
+  # never-a-false-green doctrine a property of one code path rather than of the
+  # tool. `observable` is added so the honest read is also the easy one.
   _json_one(){
-    local repo="$1" branch="$2" key now days age
+    local repo="$1" branch="$2" key now days age obs concl sha observable
     key="$(keyof "${repo}@${branch}")"; load_state "$key"
     now="$(now_epoch)"; days=0
-    [ "$S_RED_SINCE" -gt 0 ] && days=$(( (10#$now - 10#$S_RED_SINCE) / 86400 ))
-    age=-1; [ "$S_FETCHED" -gt 0 ] && age=$(( 10#$now - 10#$S_FETCHED ))
+    [ "$S_RED_SINCE" -gt 0 ] && days="$(days_between "$now" "$S_RED_SINCE")"
+    age=-1
+    clock_ok "$now" && [ "$S_FETCHED" -gt 0 ] && age=$(( 10#$now - 10#$S_FETCHED ))
+    [ "$age" -lt 0 ] && age=-1
+    obs="${S_OBS:-}"; concl="$S_CONCL"; sha="$S_SHA"
+    case "${S_OUTCOME:-}" in ok|empty_ok) observable=true ;; *) observable=false ;; esac
+    # Withheld exactly where the render withholds it: an age we cannot compute is
+    # as disqualifying as one that is too old.
+    if [ "$age" -lt 0 ] || [ "$age" -ge "$HARD_TTL" ]; then obs=''; concl=''; sha=''; fi
     [ "$first" -eq 1 ] && first=0 || printf ','
-    printf '{"repo":"%s","branch":"%s","last_outcome":"%s","observed_state":"%s","conclusion":"%s","sha":"%s","age_seconds":%s,"checked_at":%s,"days_red":%s,"snoozed":%s,"branch_alive":"%s","credential":"%s"}' \
-      "$repo" "$branch" "${S_OUTCOME:-never}" "${S_OBS:-}" "$S_CONCL" "$S_SHA" \
+    printf '{"repo":"%s","branch":"%s","last_outcome":"%s","observable":%s,"observed_state":"%s","conclusion":"%s","sha":"%s","age_seconds":%s,"checked_at":%s,"days_red":%s,"snoozed":%s,"branch_alive":"%s","credential":"%s"}' \
+      "$repo" "$branch" "${S_OUTCOME:-never}" "$observable" "$obs" "$concl" "$sha" \
       "$age" "$S_CHECKED" "$days" "$([ "$S_SNOOZE" -gt "$now" ] && echo true || echo false)" "$S_BRANCH_ALIVE" "$(cred_source)"
   }
   each_entry _json_one
@@ -920,34 +1154,80 @@ cmd_json(){
 # two targets that must not come out green: one never observed, one with a
 # planted success that is then refused. Exit 1 if either shows the green glyph.
 cmd_control(){
-  local d stub list out rc=0
+  local d stub gstub list out rc=0
   d="$(mktemp -d "${TMPDIR:-/tmp}/ci-watch-control.XXXXXX")" || {
     printf 'ci-watch --control: mktemp failed -- INVALID TRIAL, not a pass\n' >&2; return 2; }
   mkdir -p "$d/state"
   printf 'ci-watch-control/never-observable@main | CONTROL never observed\n'  > "$d/list"
   printf 'ci-watch-control/was-green@main | CONTROL was green, now refused\n' >> "$d/list"
+  # THE STUB HAD STOPPED BEING A STUB. This block used to pass `CI_WATCH_HTTP_STUB`,
+  # which was the seam before the rewrite that handed JSON parsing to `gh`; after
+  # that change NOTHING READ THE VARIABLE. So the tool's own dead-man's-switch had
+  # been running against the LIVE network, and it still reported ok -- because the
+  # two fictional repos below genuinely 404, so the assertion held for a reason
+  # that had nothing to do with the mechanism it was testing. Exactly the shape
+  # this arm exists to catch, found in the arm itself. The seam is `CI_WATCH_GH`
+  # now, and `CI_WATCH_GIT` keeps branch-liveness off the network too.
   stub="$d/stub"
   cat > "$stub" <<'CSTUB'
 #!/usr/bin/env bash
-printf '403\n{"message":"Resource not accessible by integration","status":"403"}'
+# gh impersonator: refuse everything, in gh's own error shape (stderr + exit 1).
+printf 'failed to get runs: HTTP 403: Resource not accessible by integration\n' >&2
+exit 1
 CSTUB
   chmod +x "$stub"
+  gstub="$d/gitstub"
+  cat > "$gstub" <<'GSTUB'
+#!/usr/bin/env bash
+# git impersonator: a listing that succeeds and contains the watched ref, so
+# branch-liveness says "alive" and cannot mask the render we are asserting on.
+printf '1111111111111111111111111111111111111111\trefs/heads/main\n'
+exit 0
+GSTUB
+  chmod +x "$gstub"
   # Plant a success for the second target so the cache-fallback path is armed.
   printf 'schema=2\nlast_outcome=ok\nobserved_state=green\nobserved_concl=success\nobserved_sha=deadbee\nobserved_url=u\nfetched_at=1\nchecked_at=1\nred_since=0\nsnooze_until=0\nbranch_alive=1\nbranch_checked=99999999999\n' \
     > "$d/state/$(keyof 'ci-watch-control/was-green@main').state"
 
-  out="$(CI_WATCH_LIST="$d/list" CI_WATCH_STATE="$d/state" CI_WATCH_HTTP_STUB="$stub" \
+  out="$(CI_WATCH_LIST="$d/list" CI_WATCH_STATE="$d/state" \
+         CI_WATCH_GH="$stub" CI_WATCH_GIT="$gstub" \
          NO_COLOR=1 "$0" 2>&1)"
+
+  # THIS ARM ASSERTS PRESENCE, NOT JUST ABSENCE. It used to check only that
+  # 'CI green' was missing, plus an `elif [ -z "$out" ]` emptiness guard that was
+  # UNREACHABLE DEAD CODE: cmd_render unconditionally prints its header whenever a
+  # watchlist exists, and this function always writes one, so `out` was never
+  # empty. The guard written to catch "the check never executed" was itself a check
+  # that could not execute -- the exact count-and-absence shape this tool cites the
+  # repo's own rules about, sitting inside the arm meant to enforce them.
+  #
+  # And absence alone was too weak to be worth much: a regression that rendered a
+  # refused target as the quiet `.. CI stale` line, or that dropped both target
+  # lines and kept the header, passed. So both expected REGISTERS must appear, and
+  # the two target lines must actually be counted -- which makes the emptiness
+  # check redundant rather than dead.
+  local want_blind=0 want_unobs=0 lines=0
+  printf '%s\n' "$out" | grep -q 'CI BLIND'        && want_blind=1
+  printf '%s\n' "$out" | grep -q 'CI unobservable' && want_unobs=1
+  lines="$(printf '%s\n' "$out" | grep -c 'CONTROL ' 2>/dev/null)"
+  lines="$(numor0 "$(printf '%s' "$lines" | head -1 | tr -cd '0-9')")"
+
   if printf '%s' "$out" | grep -q 'CI green'; then
     printf 'ci-watch --control: FAILED -- a refused target rendered GREEN.\n' >&2
-    printf '%s\n' "$out" >&2
     rc=1
-  elif [ -z "$out" ]; then
-    printf 'ci-watch --control: FAILED -- rendered nothing at all (invalid trial).\n' >&2
+  elif [ "$lines" -ne 2 ]; then
+    printf 'ci-watch --control: FAILED -- expected 2 rendered target lines, saw %s (INVALID TRIAL, not a pass).\n' "$lines" >&2
+    rc=1
+  elif [ "$want_blind" -ne 1 ]; then
+    printf 'ci-watch --control: FAILED -- the observed-then-refused target did not render BLIND.\n' >&2
+    rc=1
+  elif [ "$want_unobs" -ne 1 ]; then
+    printf 'ci-watch --control: FAILED -- the never-observed target did not render unobservable.\n' >&2
     rc=1
   else
-    printf 'ci-watch --control: ok -- a refused target cannot render green.\n'
+    printf 'ci-watch --control: ok -- 2 targets rendered, one BLIND, one unobservable, neither green.\n'
   fi
+  [ "$rc" -eq 0 ] || printf '%s\n' "$out" >&2
   return "$rc"
 }
 
