@@ -110,6 +110,36 @@ of prose (allowed) versus a heredoc feeding a real invocation (blocked). The gen
 undetectable case, a path assembled in a variable, is documented in the hook rather
 than pretended away.
 
+## D-20260917-07 -- Two sessions share ONE checkout; the pathspec form is a MITIGATION
+
+topic: shared checkout worktree index race git add commit pathspec two sessions concurrent collision staging
+decided: 2026-09-17
+status: standing
+holds-in: fifty-shades-of-dotfiles/docs/GITHUB_CREDENTIAL_LANES.md section 10
+
+Gavin's call, from four options. Sessions stay in the one checkout of this repo and both
+use `git add <paths> && git commit -F msg -- <paths>` AS ONE SHELL COMMAND. Separate
+worktrees were recommended by both sessions and declined.
+
+**It is a mitigation, not a fix, and it must keep being called that.** The failure it
+addresses happens in the gap between a single session's own tool calls: on 2026-09-17 a
+staging check reported zero foreign files staged, and two calls later a bare `git commit`
+swept 7 files a peer had staged in the interval, then pushed them under the wrong message
+(eb9880f). No discipline reaches inside that window, which is why a convention here
+guards a race rather than removing it. Keeping the add and the commit in ONE tool call
+shrinks the window to near zero; it does not close it.
+
+Two consequences worth having written down rather than rediscovered:
+
+- A pathspec commit REFUSES a path git does not yet track, so a NEW file needs the add
+  and the commit joined as one command anyway. "Use a pathspec" alone does not cover it,
+  and that gap is exactly when someone reaches for a bare commit again.
+- zsh does NOT word-split an unquoted variable, so a path list held in a shell variable
+  collapses into one nonexistent path. Write the paths out literally, or use an array.
+
+Revisit if a second collision happens. The first one cost a wrong-authored pushed commit
+and about forty minutes across two sessions.
+
 ## D-20260913-01 -- Lift the sandbox per command for pushes; never allow-list the keychain
 
 topic: sandbox keychain push github app credential helper allow-list standing grant bash
