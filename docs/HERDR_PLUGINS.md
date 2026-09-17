@@ -3,7 +3,12 @@
 **Audience: an AI coding agent, not a human.** This replaces reading
 <https://herdr.dev/docs/plugins/>.
 
-Verified against **herdr 0.7.5** on 2026-08-02 by authoring, linking, invoking
+herdr-verified: 0.8.2
+
+Re-verified against **herdr 0.8.2** on 2026-09-17 by re-probing every claim that
+a release since 0.7.5 could have changed; the `herdr-verified:` line is
+machine-read by `herdr-skill-drift-check`. Originally written against **0.7.5**
+on 2026-08-02 by authoring, linking, invoking
 and unlinking a real plugin. OBSERVED = produced by a real run. DOC = upstream
 claim not confirmed here.
 
@@ -87,7 +92,9 @@ action = "hello"
 # command = ["bash", "startup.sh"] # runs on EVERY server start, unattended
 ```
 
-`command` paths are relative to `HERDR_PLUGIN_ROOT`. Scripts must be `chmod +x`
+`command` paths are relative to `HERDR_PLUGIN_ROOT` -- and since 0.8.0 that is
+actually enforced: "relative plugin commands now resolve from the plugin root"
+(#1949). Scripts must be `chmod +x`
 or invoked through an explicit interpreter as above.
 
 DOC: `worktree.created` is the only event name upstream documents. The full
@@ -152,7 +159,9 @@ HERDR_PLUGIN_CONTEXT_JSON={"workspace_id":"wR","workspace_label":"Network_Plan",
 ```
 
 `herdr plugin action invoke --help` offers **only** `--plugin`. There is no flag
-to pin the context. So:
+to pin the context. STILL TRUE ON 0.8.2, re-probed 2026-09-17: the help shows
+one option and it is `--plugin`. (Contrast gotcha 4, which 0.8.2 did fix -- this
+one is unchanged, not merely unchecked.) So:
 
 - A plugin action written to "operate on the current project" will operate on
   whatever workspace the user has focused, which may be a completely different
@@ -284,7 +293,7 @@ env | grep '^HERDR_' | sort
 herdr plugin pane open --plugin <id> --entrypoint <pane-id> \
   --placement <overlay|split|tab|zoomed> \
   [--workspace <id>] [--target-pane <pane>] [--direction right|down] \
-  [--cwd <path>] [--env KEY=VALUE] [--focus]
+  [--cwd <path>] [--env KEY=VALUE] [--focus|--no-focus]
 ```
 
 OBSERVED placement rules -- these are enforced and the errors are exact:
@@ -376,8 +385,13 @@ Manifest changes need a re-`link`; script body changes do not.
 2. Action stdout goes to `plugin log list`, not the terminal.
 3. CLI-invoked actions get the **focused** pane's context, not the caller's,
    and it cannot be pinned.
-4. `plugin pane open` steals focus; no `--no-focus` exists.
-5. `overlay`/`popup` cannot be pinned to a workspace; `split`/`zoomed` require
+4. ~~`plugin pane open` steals focus; no `--no-focus` exists.~~ **FIXED by
+   0.8.2**: `plugin pane open` now takes both `--focus` and `--no-focus`.
+   Re-probed 2026-09-17. Use `--no-focus` for anything a human did not ask
+   to be shown, the same rule as `pane split`.
+5. `--placement` now accepts `overlay`, `split`, `tab`, `zoomed` (`tab` is new
+   since this doc was written; `popup` is still manifest-only, gotcha 6).
+   `overlay`/`popup` cannot be pinned to a workspace; `split`/`zoomed` require
    `--target-pane`.
 6. `popup` is manifest-only, not a CLI placement.
 7. `action list` ignores enabled state; `invoke` does not.
