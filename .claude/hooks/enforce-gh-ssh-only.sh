@@ -88,7 +88,7 @@ GH_AUTH_RE='(^|[;&|(])[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:
 
 if echo "$STRIPPED" | grep -qE "$GH_AUTH_RE"; then
   echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] BLOCKED enforce-gh-ssh-only \"$COMMAND\"" >> "$LOG_FILE"
-  deny "Blocked: 'gh auth login/setup-git/refresh' re-add HTTPS credential helpers and break SSH-only GitHub auth. For API reads, use the read-only \$GH_TOKEN already set in Claude sessions (e.g. 'gh run list', 'gh pr list', 'gh api ...')."
+  deny "Blocked: 'gh auth login/setup-git/refresh' re-add HTTPS credential helpers and break SSH-only GitHub auth. For API reads, fetch the narrow credential yourself: GH_TOKEN=\"\$(github-api-token)\" gh api ... . As of 2026-09-18 the launcher no longer exports \$GH_TOKEN into sessions, so there is nothing ambient to rely on."
 fi
 
 exit 0

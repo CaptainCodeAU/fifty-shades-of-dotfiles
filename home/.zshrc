@@ -1008,9 +1008,20 @@ __claude_launch() {
       eval "$(ssh-agent -s -t 43200)" >/dev/null
       trap 'ssh-agent -k >/dev/null 2>&1' EXIT INT TERM HUP
       ssh-add "$key"
+      # GH_TOKEN REMOVED 2026-09-18. It used to be injected here as:
+      #     GH_TOKEN="$gh_token" \
+      # To revert, restore that line into the chain below (NOT as a comment inside it:
+      # the chain is backslash-continued, so a '#' line would swallow the rest).
+      # Why it went: every session started with a GitHub key in its environment, where
+      # any command could read it and any transcript could record it. That is the route
+      # by which tokens reached transcripts from June 2026. All consumers now fetch
+      # their own credential and fail closed (toolchain-cve-check, ci-watch,
+      # zed-version-check, and LifeOS's five), so nothing needed it here.
+      # $gh_token is still read above and still used for the local status-cache curl.
+      # Ordering rule D-20260917-03 is satisfied: the keyring was repointed at the
+      # narrow PAT and the old broad token revoked BEFORE this line was removed.
       DISABLE_TELEMETRY= \
         DO_NOT_TRACK= \
-        GH_TOKEN="$gh_token" \
         NVD_API_KEY="$nvd_key" \
         CLAUDE_CODE_HIDE_ACCOUNT_INFO=1 \
         CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1 \
@@ -1019,9 +1030,20 @@ __claude_launch() {
         "$@"
     )
   else
+    # GH_TOKEN REMOVED 2026-09-18. It used to be injected here as:
+    #     GH_TOKEN="$gh_token" \
+    # To revert, restore that line into the chain below (NOT as a comment inside it:
+    # the chain is backslash-continued, so a '#' line would swallow the rest).
+    # Why it went: every session started with a GitHub key in its environment, where
+    # any command could read it and any transcript could record it. That is the route
+    # by which tokens reached transcripts from June 2026. All consumers now fetch
+    # their own credential and fail closed (toolchain-cve-check, ci-watch,
+    # zed-version-check, and LifeOS's five), so nothing needed it here.
+    # $gh_token is still read above and still used for the local status-cache curl.
+    # Ordering rule D-20260917-03 is satisfied: the keyring was repointed at the
+    # narrow PAT and the old broad token revoked BEFORE this line was removed.
     DISABLE_TELEMETRY= \
       DO_NOT_TRACK= \
-      GH_TOKEN="$gh_token" \
       NVD_API_KEY="$nvd_key" \
       CLAUDE_CODE_HIDE_ACCOUNT_INFO=1 \
       CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1 \
