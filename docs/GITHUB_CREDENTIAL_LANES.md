@@ -757,3 +757,43 @@ state a direction, and the inference slipped through unexamined.
 **Recorded because both sessions behaved well and it still nearly happened.** The lesson is
 not that agents are untrustworthy. It is that a relay is a lossy channel even between
 careful parties, and the defence has to be structural.
+
+### Second instance, within the hour, from the session that wrote the first one up
+
+The paragraphs above were committed. Then this session did the same thing.
+
+Asked who should build a restructure, this session put a question to Gavin offering TWO
+options -- itself, or a named peer. He replied, in full: **"the other one does it"**. Four
+words, one pronoun, and a third session existed that the question had not listed. This
+session read the pronoun as the named peer, relayed it as such, and said explicitly that it
+was a reading rather than a quotation.
+
+It was the wrong reading. Gavin told the third session directly, in its own session and in
+his own words, "you do it". Two sessions then held contradictory instructions, one relayed
+and one direct, and nothing was recoverable except by all three stopping.
+
+**Why this pair is worth more than either instance alone.** The second came from the session
+that had just written up the first, had just praised the rule for catching it, and shipped
+the same shape anyway within the hour. One example reads as a slip. Two, with the second
+committed by the author of the first, reads as the shape it actually is. Knowing the rule,
+having just applied it successfully, and having just documented it, were all insufficient.
+
+**THE REFINEMENT, because "flag your inference" is NOT ENOUGH.** The first write-up's
+implicit fix was to label an inference as an inference. This session did exactly that and
+the job still went to the wrong place, because a labelled inference still travels and still
+gets acted on. The receiving session cannot un-resolve a pronoun that has already been
+resolved for it.
+
+So: **an ambiguous pronoun in an instruction is not something to resolve and label. It is
+something to send back unresolved.** Pass the four words and the ambiguity together, or ask
+the principal again naming every candidate explicitly. Do not answer the question on their
+behalf and mark your working.
+
+**And part of the fault was upstream, in the question.** "Me, or the session already
+building it?" invites a two-way pronoun the instant a third party exists. A question that
+names every session cannot be answered with "the other one". The ambiguity was created by
+the asker and merely completed by the answer.
+
+Nobody was careless in either instance. That is the third time this record has had to say
+so, and it remains the point: the defence has to be structural, because every non-structural
+one has now been tried and has failed while the people involved were paying attention.
