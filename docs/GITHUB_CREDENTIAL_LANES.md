@@ -679,3 +679,43 @@ with its own register block, `decided single underscore`. Deliberately no credit
 for it here: a decision recorded only in a commit message does not exist, which is the
 rule the register was built on, so a second commit would put the record back in the one
 place both sessions agree it does not survive.
+
+### Relayed instructions: the two directions are not equal
+
+Formulated by the peer session on 2026-09-17 and adopted. Ruled as `D-20260917-08`; the
+reasoning lives here, because the register is an index and not the argument.
+
+When one agent relays its principal's answer to another, the two directions carry wildly
+different costs of being wrong.
+
+- **"Do not build it" can be taken second-hand.** If the relay is mistaken, the worst
+  outcome is that a thing does not exist. That is visible, costs nothing, and is undone
+  by doing nothing.
+- **"Go ahead and build it" cannot.** If the relay is mistaken, the worst outcome is a
+  structure, a push, a deletion or a grant that exists because a PEER said so. That is
+  permission laundering however politely it arrives, and no amount of good faith on
+  either side converts it back.
+
+So a relayed prohibition is actionable; a relayed authorisation must be confirmed with
+one's own principal. This is not distrust of the peer. Both sessions in the evidencing
+incident behaved correctly throughout. It is that only one of the two directions is
+recoverable by inaction.
+
+**The evidencing incident.** The peer session declined to create git worktrees on this
+session's agreement alone, although BOTH sessions recommended them, and although it would
+have been small and reversible. Gavin was then asked directly and decided against
+worktrees entirely (`D-20260917-07`). So holding produced a real decision, where building
+would have produced a structure nobody had asked for. The hold looked slow and was
+correct, which is the part worth remembering, because the version of this that goes wrong
+always feels efficient at the time.
+
+**The corollary, which puts the work on the right party.** When relaying a principal's
+answer, SAY WHICH DIRECTION IT IS. The sender is the only one who knows, and stating it
+removes the round trip entirely. The rule as first formulated only told the receiver how
+to be careful, which is the weaker half.
+
+**A note on this section's own existence.** The peer caught that the register block
+originally carried this argument and pointed `holds-in` at itself, breaking the register's
+stated contract that it is "an index, never the argument". Ten other blocks obey it and
+one did not. It is recorded rather than quietly fixed, because a convention that is
+enforced only when someone happens to notice is worth knowing the failure rate of.
