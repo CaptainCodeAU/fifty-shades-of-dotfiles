@@ -147,10 +147,15 @@ herdr is NOT uniformly JSON. OBSERVED, per command:
 
 If a command returns nothing through `jq`, try it raw before assuming failure.
 
-RE-CHECKED 0.8.2: every row above still holds. One caveat worth knowing --
-`agent explain` is NOT listed by `herdr agent`, and it still exists
-(`usage: herdr agent explain <target> [--json]`). **The group listing is not
-exhaustive**, so "it is not in the help" is not evidence a command was removed.
+RE-CHECKED 0.8.2: every row above still holds, `agent explain` included.
+
+A caution about checking, not about herdr. An earlier version of this line
+claimed `agent explain` was missing from `herdr agent`. It is not: both `herdr
+agent` and `herdr agent --help` list it, and the bare form prints two usage
+lines for it. The claim came from piping that listing through `head -8`, which
+cut the output two lines above the answer. **A truncated listing read as an
+absence** -- the same failure as trusting a zero, wearing different clothes.
+Do not conclude a command is gone from a listing you did not see all of.
 
 **Exit codes** (OBSERVED, measured without a pipe):
 
