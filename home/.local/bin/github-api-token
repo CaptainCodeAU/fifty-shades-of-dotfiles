@@ -30,9 +30,23 @@
 # commit statuses. NO contents access, so it cannot read source. Stored as
 # Keychain item `github-api-readonly`.
 #
-# USAGE
-#   GH_TOKEN="$(github-api-token)" gh api ...          # explicit, preferred
-#   : "${GH_TOKEN:=$(github-api-token 2>/dev/null)}"   # respect a caller's own
+# USAGE -- AND THE OBVIOUS FORM IS A TRAP
+#   Do NOT write `GH_TOKEN="$(github-api-token)" gh api ...`. On a failed fetch
+#   that expands to GH_TOKEN="" and gh treats an EMPTY value as "not set", then
+#   falls through to its own keyring: a classic OAuth token with `repo` scope.
+#   MEASURED 2026-09-17 on a source read only the broad token can serve --
+#   GH_TOKEN='' returned a real commit SHA; the same call with this token 403s;
+#   the same call with stored auth removed fails outright, which is the control
+#   that makes the first arm mean anything. So the convenient one-liner degrades
+#   to "silently broad", which is worse than not fetching at all.
+#
+#   Use both guards, never either alone -- exit status and emptiness can diverge:
+#     tok="$(github-api-token)" || { echo "cannot authenticate" >&2; exit 1; }
+#     [ -n "$tok" ]             || { echo "cannot authenticate" >&2; exit 1; }
+#     GH_TOKEN="$tok" gh api ...
+#
+#   A tool that must keep running instead of exiting should set a deliberately
+#   INVALID GH_TOKEN so gh fails closed, which is what ci-watch does.
 #
 # EXIT CODES
 #   0  token printed

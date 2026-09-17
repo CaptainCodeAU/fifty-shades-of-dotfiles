@@ -707,7 +707,13 @@ OUT="$(env -u GH_TOKEN -u GITHUB_TOKEN PATH="$D:/usr/bin:/bin" CI_WATCH_LIST="$L
         CI_WATCH_GH="$D/http-stub" CI_WATCH_SELFTEST_STUB="$STUB" \
         CI_WATCH_SELFTEST_BSTUB="$BSTUB" CI_WATCH_SELFTEST_RSTUB="$RSTUB" \
         CI_WATCH_SELFTEST_DSTUB="$DSTUB" "$TOOL" 2>&1)"
-want C42 "names the BROAD fallback loudly when the fetch cannot run" "BROAD" "$OUT"
+# CHANGED AGAIN, same day, and the change is the point. The first version of the
+# fetch left GH_TOKEN unset when it failed, so gh fell through to its keyring --
+# "silently broad", which is worse than no fetch at all. ci-watch now sets a
+# deliberately invalid token instead, so a failed fetch fails CLOSED. This arm
+# asserts that the run says it could not authenticate AND names why, rather than
+# quietly succeeding on a credential nobody chose.
+want C42 "fails CLOSED and says so when the fetch cannot run" "failed CLOSED" "$OUT"
 # TWIN: the two must differ, or the line is decoration rather than information.
 wantnot C42 "TWIN the two credentials render differently" "GH_TOKEN from the environment" "$OUT"
 # It must never silently retry with the env token removed -- that is an escalation.
