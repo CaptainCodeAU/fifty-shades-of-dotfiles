@@ -491,3 +491,96 @@ covers. Both are needed, and only the first was ever run here.
   `enforce-census.sh` is the exception and the reference implementation. It already
   strips heredocs and already carries a comment about anchoring, so somebody met this
   class there first and the knowledge did not travel.
+
+---
+
+## 10. Fourth pass, same evening: the sweep finished, and the two guard layers disagree
+
+Three jobs Gavin green-lit after section 9: sweep the untracked files, defuse Pulse, fix
+the five hooks. Two were already done by someone else, which is itself the finding.
+
+### The untracked sweep (section 7 item 3) -- CLOSED, and it was nearly the wrong sweep
+
+The item said "untracked files were never swept". That framing was too narrow. Untracked
+files across the three repos number **3**. The population nobody had ever looked at is
+**IGNORED** files: 152 here, 861 in `lifeos-private`, and **272,731** in `dot-claude`.
+
+Swept 30,992 candidate files after excluding `node_modules` and friends. 966 matched a
+`gh` invocation. The breakdown is the whole answer:
+
+| Surface | Hits | Can it execute? |
+|---|---|---|
+| `.claude/file-history/` | 962 | No. Saved copies of edited files. |
+| `.claude/debug/` | 1 | No. A log. |
+| `.claude/plugins/` | 2 | A skill template and an official plugin hook; neither calls `gh` unsupplied at runtime. |
+| `.claude/hooks/` | 1 | `enforce-secret-probe.sh`, and its only match is inside its own test suite. |
+
+So: **no unsupplied `gh` caller was hiding in untracked or ignored files.** The control
+for that zero is that the same pattern hits `ci-watch`, a file known to call `gh`.
+
+One thing the sweep found that was not being looked for: **`enforce-secret-probe.sh` is
+UNTRACKED.** A live PreToolUse security hook, wired into `settings.json`, existing only
+on this disk and pushed nowhere.
+
+### Pulse (section 7 item 4) -- ALREADY FIXED, the item was stale
+
+`LIFEOS/PULSE/modules/work.ts` already calls `ghCredential("read")`, passes the token
+explicitly into `Bun.spawn`'s env, and logs "failing closed rather than falling back".
+Its comment names the exact reasoning this document spent two sessions deriving: a
+launchd daemon inherits no shell function, so without this it would reach for the broad
+token unattended.
+
+Verified rather than taken from the comment: every failure path in
+`LIFEOS/TOOLS/GithubCredential.ts` returns a `FAIL_CLOSED_TOKEN` sentinel with
+`ok: false`. Only the success path returns a real token, and it never returns an empty
+string, because gh reads empty as unset and falls back to exactly the token being
+avoided.
+
+### The five hooks -- FIXED, 31 cases
+
+`enforce-uv`, `enforce-pnpm`, `enforce-no-cd`, `enforce-builtin` and
+`enforce-herdr-skill` all carried the identical anchor, and all five shared a
+byte-identical normalisation line. Both defects fixed in each: heredoc bodies stripped,
+anchor widened to any whitespace plus an optional path segment.
+
+**Widening exposed a latent bug, which is the argument for doing it.** `enforce-uv`'s
+`pip install` rule had NO `uv pip` exemption. It never needed one, because the old
+anchor meant `uv pip install` never reached that rule at all. Widening the anchor
+blocked a correct command, and only then was the missing exemption visible. A rule that
+widens must re-check its own exemptions.
+
+**A second, more embarrassing measurement.** Patching these files broke `enforce-uv`
+with a shell syntax error, and because it is a PreToolUse hook on Bash, that locked the
+Bash tool out of this entire project until it was repaired with a non-Bash editor. **A
+guard that fails to PARSE does not fail open or closed; it fails the tool.** Anyone
+editing a live hook should keep a non-Bash edit path in reach.
+
+### THE TWO GUARD LAYERS DISAGREE, and nobody noticed
+
+The sweep turned this up by accident. The interactive `gh()` shell wrapper does NOT
+block `gh auth login` outright. It contains a deliberate carve-out:
+
+    (login) if [[ "$*" == *"--git-protocol ssh"* || "$*" == *"--git-protocol=ssh"* ]]
+            then command gh "$@"      # allowed
+            else BLOCKED
+
+with its own comment calling that form *"verified safe: never touches git's credential
+config"* -- independently reaching the same conclusion this document reached in section
+9 by measuring `~/.gitconfig` before and after.
+
+**The PreToolUse hook has no such carve-out.** It blocks every `gh auth login`,
+including the form the wrapper explicitly permits. So the estate holds two guards with
+the same name and two different policies, and the hook is now the stricter of the two.
+
+This also corrects section 9. It said an `env` prefix "defeated both layers at once".
+For the general case that is true. For the specific command that ran the swap, which
+carried `--git-protocol ssh`, the wrapper would have ALLOWED it anyway -- so only one
+layer was actually evaded. The `env` bypass is real; the claim that it was what got that
+particular command through is not.
+
+**Not resolved here, deliberately.** Aligning them means either loosening the hook to
+match the wrapper, or tightening the wrapper to match the hook. The first is a security
+gate getting weaker, and the measurement supporting it covers `--with-token
+--git-protocol ssh` only, not the interactive or web flows the wrapper would also let
+through. That is Gavin's call, not a cleanup.
+

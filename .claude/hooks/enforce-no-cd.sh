@@ -27,12 +27,35 @@ fi
 
 # Strip $(...) subshells, "..." strings, and '...' strings
 # This avoids false positives on $(cd ...) patterns used in scripts
-STRIPPED=$(echo "$COMMAND" | sed -E 's/\$\([^)]*\)//g; s/"[^"]*"//g; s/'"'"'[^'"'"']*'"'"'//g')
+# Strip heredoc BODIES first, keeping the line that opens them (that line is a real
+# command and must still be scanned). Without this, the command name written as PROSE
+# inside a heredoc matches, and writing documentation about this guard gets blocked.
+# Measured 2026-09-17: that exact false positive refused a commit message.
+NOHEREDOC=$(printf '%s\n' "$COMMAND" | awk '
+  BEGIN { in_h = 0; term = "" }
+  {
+    if (in_h) {
+      stripped = $0
+      sub(/^[ \t]+/, "", stripped)
+      if ($0 == term || stripped == term) { in_h = 0 }
+      next
+    }
+    if (match($0, /<<-?[ \t]*["\047]?[A-Za-z_][A-Za-z0-9_]*["\047]?/)) {
+      t = substr($0, RSTART, RLENGTH)
+      sub(/^<<-?[ \t]*/, "", t)
+      gsub(/["\047]/, "", t)
+      term = t
+      in_h = 1
+    }
+    print
+  }')
+
+STRIPPED=$(echo "$NOHEREDOC" | sed -E 's/\$\([^)]*\)//g; s/"[^"]*"//g; s/'"'"'[^'"'"']*'"'"'//g')
 
 # Block bare cd but allow "builtin cd"
-if echo "$STRIPPED" | grep -qE '(^|[;&|]\s*)cd\s+'; then
+if echo "$STRIPPED" | grep -qE '(^|[;&|(]|[[:space:]])([A-Za-z0-9_./-]*/)?cd\s+'; then
   # Allow "builtin cd"
-  if echo "$STRIPPED" | grep -qE '(^|[;&|]\s*)builtin\s+cd\s+'; then
+  if echo "$STRIPPED" | grep -qE '(^|[;&|(]|[[:space:]])([A-Za-z0-9_./-]*/)?builtin\s+cd\s+'; then
     : # allowed
   else
     log_blocked "bare cd → absolute paths" "$COMMAND"

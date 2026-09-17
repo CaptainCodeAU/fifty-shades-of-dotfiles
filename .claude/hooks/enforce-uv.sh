@@ -27,24 +27,53 @@ fi
 
 # Strip subshells and quoted strings to avoid false positives
 # This removes $(...) blocks, "..." strings, and '...' strings
-STRIPPED=$(echo "$COMMAND" | sed -E 's/\$\([^)]*\)//g; s/"[^"]*"//g; s/'"'"'[^'"'"']*'"'"'//g')
+# Strip heredoc BODIES first, keeping the line that opens them (that line is a real
+# command and must still be scanned). Without this, the command name written as PROSE
+# inside a heredoc matches, and writing documentation about this guard gets blocked.
+# Measured 2026-09-17: that exact false positive refused a commit message.
+NOHEREDOC=$(printf '%s\n' "$COMMAND" | awk '
+  BEGIN { in_h = 0; term = "" }
+  {
+    if (in_h) {
+      stripped = $0
+      sub(/^[ \t]+/, "", stripped)
+      if ($0 == term || stripped == term) { in_h = 0 }
+      next
+    }
+    if (match($0, /<<-?[ \t]*["\047]?[A-Za-z_][A-Za-z0-9_]*["\047]?/)) {
+      t = substr($0, RSTART, RLENGTH)
+      sub(/^<<-?[ \t]*/, "", t)
+      gsub(/["\047]/, "", t)
+      term = t
+      in_h = 1
+    }
+    print
+  }')
 
-# Block pip install / pip3 install → suggest uv add
-if echo "$STRIPPED" | grep -qE '(^|[;&|]\s*)pip3?\s+install\b'; then
+STRIPPED=$(echo "$NOHEREDOC" | sed -E 's/\$\([^)]*\)//g; s/"[^"]*"//g; s/'"'"'[^'"'"']*'"'"'//g')
+
+# Block pip install / pip3 install → suggest uv add.
+# The 'uv pip' exemption below is NOT decoration. Before 2026-09-17 this rule
+# anchored to start-of-line, so 'uv pip install' never reached it and the missing
+# exemption was invisible. Widening the anchor exposed it by blocking a correct
+# command. Any rule that widens must re-check its own exemptions.
+if echo "$STRIPPED" | grep -qE '(^|[;&|(]|[[:space:]])([A-Za-z0-9_./-]*/)?pip3?\s+install\b' &&
+   ! echo "$STRIPPED" | grep -qE '(^|[;&|(]|[[:space:]])([A-Za-z0-9_./-]*/)?uv\s+pip\s+'; then
   log_blocked "pip install → uv add" "$COMMAND"
   deny "Use 'uv add <package>' instead of pip install"
 fi
 
 # Block pip uninstall / pip3 uninstall → suggest uv remove
-if echo "$STRIPPED" | grep -qE '(^|[;&|]\s*)pip3?\s+uninstall\b'; then
+if echo "$STRIPPED" | grep -qE '(^|[;&|(]|[[:space:]])([A-Za-z0-9_./-]*/)?pip3?\s+uninstall\b' &&
+   ! echo "$STRIPPED" | grep -qE '(^|[;&|(]|[[:space:]])([A-Za-z0-9_./-]*/)?uv\s+pip\s+'; then
   log_blocked "pip uninstall → uv remove" "$COMMAND"
   deny "Use 'uv remove <package>' instead of pip uninstall"
 fi
 
 # Block other bare pip commands (pip list, pip show, pip freeze, etc.)
-if echo "$STRIPPED" | grep -qE '(^|[;&|]\s*)pip3?\s+'; then
+if echo "$STRIPPED" | grep -qE '(^|[;&|(]|[[:space:]])([A-Za-z0-9_./-]*/)?pip3?\s+'; then
   # Allow uv pip (uv's own pip interface)
-  if echo "$STRIPPED" | grep -qE '(^|[;&|]\s*)uv\s+pip\s+'; then
+  if echo "$STRIPPED" | grep -qE '(^|[;&|(]|[[:space:]])([A-Za-z0-9_./-]*/)?uv\s+pip\s+'; then
     : # allowed
   else
     log_blocked "bare pip → uv" "$COMMAND"
@@ -53,9 +82,9 @@ if echo "$STRIPPED" | grep -qE '(^|[;&|]\s*)pip3?\s+'; then
 fi
 
 # Block bare python/python3 → suggest uv run python
-if echo "$STRIPPED" | grep -qE '(^|[;&|]\s*)python3?\s+'; then
+if echo "$STRIPPED" | grep -qE '(^|[;&|(]|[[:space:]])([A-Za-z0-9_./-]*/)?python3?\s+'; then
   # Allow if preceded by "uv run"
-  if echo "$STRIPPED" | grep -qE '(^|[;&|]\s*)uv\s+run\s+python3?\s+'; then
+  if echo "$STRIPPED" | grep -qE '(^|[;&|(]|[[:space:]])([A-Za-z0-9_./-]*/)?uv\s+run\s+python3?\s+'; then
     : # allowed
   else
     log_blocked "bare python → uv run python" "$COMMAND"
@@ -64,8 +93,8 @@ if echo "$STRIPPED" | grep -qE '(^|[;&|]\s*)python3?\s+'; then
 fi
 
 # Block bare pytest → suggest uv run pytest
-if echo "$STRIPPED" | grep -qE '(^|[;&|]\s*)pytest\b'; then
-  if echo "$STRIPPED" | grep -qE '(^|[;&|]\s*)uv\s+run\s+pytest\b'; then
+if echo "$STRIPPED" | grep -qE '(^|[;&|(]|[[:space:]])([A-Za-z0-9_./-]*/)?pytest\b'; then
+  if echo "$STRIPPED" | grep -qE '(^|[;&|(]|[[:space:]])([A-Za-z0-9_./-]*/)?uv\s+run\s+pytest\b'; then
     : # allowed
   else
     log_blocked "bare pytest → uv run pytest" "$COMMAND"
@@ -74,8 +103,8 @@ if echo "$STRIPPED" | grep -qE '(^|[;&|]\s*)pytest\b'; then
 fi
 
 # Block bare ruff → suggest uv run ruff
-if echo "$STRIPPED" | grep -qE '(^|[;&|]\s*)ruff\b'; then
-  if echo "$STRIPPED" | grep -qE '(^|[;&|]\s*)uv\s+run\s+ruff\b'; then
+if echo "$STRIPPED" | grep -qE '(^|[;&|(]|[[:space:]])([A-Za-z0-9_./-]*/)?ruff\b'; then
+  if echo "$STRIPPED" | grep -qE '(^|[;&|(]|[[:space:]])([A-Za-z0-9_./-]*/)?uv\s+run\s+ruff\b'; then
     : # allowed
   else
     log_blocked "bare ruff → uv run ruff" "$COMMAND"
