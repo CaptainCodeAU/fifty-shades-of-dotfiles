@@ -225,11 +225,13 @@ nothing at all.
 
 Nothing here is blocked on this repo.
 
-1. **The keyring token still exists and is still write-capable.** It becomes
-   deletable once LifeOS's five consumers are done. **No ruling has been made on
-   deleting it, and "all consumers fixed" is not implicit permission.** When it
-   is time, `gh auth logout` is the mechanism, and everything in section 4 about
-   the guard applies.
+1. ~~**The keyring token still exists and is still write-capable.**~~
+   **CLOSED 2026-09-17 evening, see section 9.** It was REPLACED with the narrow
+   read-only PAT rather than deleted, on Gavin's explicit pick. The token now in
+   the keyring cannot read private file contents and cannot write. Logging out
+   remains available as the stricter endpoint later. What this item got wrong:
+   it assumed deletion was the only mechanism, and replacement is strictly
+   better for the reason section 9 gives.
 2. **`gh-cred-testbed` can be deleted from 2026-09-18.** Keep-for-a-day was the
    peer's request, for an arm they may not need. The property that made it
    useful is preserved in `gh-cred-matrix`'s header, so the repo is disposable
@@ -358,16 +360,93 @@ retry. REASONED, and it is the reason the two steps are not interchangeable.
 wrapper. **`type -P` is a bash builtin flag.** In zsh it fails: `zsh:type:8: bad
 option: -P`. The zsh form is `whence -p`. That line exists specifically to stop
 someone measuring the wrong credential, so it failing in the estate's default
-interactive shell is worth correcting. Not corrected in this pass. MEASURED.
+interactive shell is worth correcting. MEASURED. **Since corrected**: `CLAUDE.md`
+now carries both forms and the reason the wrong one fails silently. This sentence
+is left in place, amended rather than deleted, because a record that quietly
+erases its own open items cannot be trusted about the ones still listed.
 
 ### Still open after this pass
 
-- Whether `ssh-add` blocks or fails fast with **no tty at all** (a Bash tool, cron).
-  Row 4 measured the pty case only. The probe is
-  `SSH_ASKPASS= DISPLAY= timeout 8 ssh-add ~/.ssh/captaincodeau </dev/null`, where
-  `rc=124` means it hung.
+- ~~Whether `ssh-add` blocks or fails fast with **no tty at all**.~~ **ANSWERED
+  2026-09-17 evening: it FAILS FAST, it does not hang.** The probe returned
+  `rc=1`, not `124`, from a context where `tty` reported `not a tty`, with
+  `timeout 2 sleep 30` returning `124` in the same run as the control proving the
+  instrument detects a real hang. It prints the passphrase prompt, gets EOF, and
+  gives up at once. So the blocking behaviour in row 4 is specific to a pty, and
+  Bash-tool and cron contexts were never at risk of hanging on this. MEASURED.
 - A `SIGKILL` skips `_claude_launch`'s `trap`, leaving a 12-hour `ssh-agent`
   holding an unlocked key. Today that is once per session; under any
   per-invocation wrapper it would be once per call. REASONED.
 - Taking ssh out of `_claude_launch` entirely would remove rows 4, 5 and most of
   the process-tree question in one move. Not proposed formally, not costed.
+
+---
+
+## 9. Third pass, 2026-09-17 evening: the swap, executed
+
+Gavin picked **replace, not delete**, from four costed options. Done and verified.
+
+### The argument that decided it, which the first two passes missed
+
+Sections 7 and 8 both framed this as *how much authority do we take away*. That
+framing makes deletion look like the ideal and replacement like a compromise. It is
+backwards. **After the swap the fallback credential and the intended credential are
+the SAME token.** A herdr-spawned agent now has identical authority to a
+`_claude_launch` one, so the spawn gap in
+`INC-20260915-herdr-spawn-bypasses-credential-path` stops being a privilege
+difference at all. Deleting the token makes the gap loud; replacing it makes the gap
+harmless. Loud is worth less than harmless in contexts nobody is watching, and the
+unattended ones are exactly where section 7 item 4 says the risk lives.
+
+### What was measured, each with a control in the same command
+
+| # | Finding | Basis |
+|---|---|---|
+| 1 | **`--with-token` does NOT touch `~/.gitconfig`.** sha1 `d38fa65e...` identical before and after a real login. The guard's premise applies to the interactive flow and `setup-git`, not to this. This closes the section 7 "not explored at all" item, and the 21 ssh repos were never at risk from it. | MEASURED |
+| 2 | **The broad token really could read private source.** It listed 19 root entries of the private `dot-claude` and read `CLAUDE.md` at 7293 bytes. The narrow PAT returns 403 on that exact path, while both read a public file at 6262 bytes as the control. The incident's central claim is now first-hand, not relayed. | MEASURED |
+| 3 | **The PAT works through gh despite gh's own warning.** `gh auth login --help` discourages fine-grained PATs with `--with-token` and asks for classic `repo, read:org, gist`. It was accepted anyway, rc=0. The warning is about confusing behaviour, not refusal. | MEASURED |
+| 4 | **`git_protocol: ssh` survived.** `hosts.yml` and `config.yml` both byte-identical after the swap. `--git-protocol ssh --skip-ssh-key` were passed rather than trusted to default. A fresh config shows `https`, so this was a real risk, not a theoretical one. | MEASURED |
+| 5 | **Both git lanes still work.** Census of all 94 repos reproduced the record exactly: 21 ssh origins, 55 https, 18 with no remote, summing to 94 as its own control. One repo from each lane returned real refs; a bogus remote returned rc=128 as the negative control. | MEASURED |
+| 6 | **Post-swap behaviour of the keyring token:** public read 6262, private contents 403, write 403, `rate_limit` 5000 as the positive arm in the same breath. | MEASURED |
+
+### The defect found by accident, which is the bigger finding
+
+**The guard did not fire.** The authorised swap ran, and `security.log` recorded
+nothing. `enforce-gh-ssh-only.sh` anchored the binary name to start-of-string or a
+`[;&|]` separator, so an `env` prefix walked straight past it. So did an absolute
+path, a `sudo` prefix, and a leading variable assignment. The bare form blocked
+correctly as the positive control, which is precisely why nobody noticed: the guard
+passed every test anyone thought to run.
+
+Worse, an `env` prefix defeats the interactive shell wrapper too, because `env` execs
+the binary and never consults shell functions. **One ordinary word defeated both
+layers of the same guard at once**, and neither layer said so.
+
+Fixing the anchor then produced the mirror-image defect, which is worth as much: the
+widened pattern began matching the command name written as PROSE inside a heredoc, so
+the first attempt to document this section was blocked by the guard it describes. A
+guard that blocks people from documenting it is a guard that gets switched off.
+Heredoc bodies are now stripped before matching. Proven with 17 cases, 9 must-block
+and 8 must-allow, including the fine distinction between a heredoc of prose (allowed)
+and a heredoc feeding a real invocation (blocked).
+
+This is the same shape as the method note at the end of section 7, arriving from a new
+direction: **a guard that passes its positive control can still be open in every
+direction nobody tested.** The control proves the mechanism fires, never that it
+covers. Both are needed, and only the first was ever run here.
+
+### Still open after this pass
+
+- **The old `gho_` token is out of the keyring but NOT revoked at GitHub.** It remains
+  a live credential with `repo` scope until Gavin revokes it at
+  `github.com/settings/applications`. This matters more than usual given section 7
+  item 6: `GH_TOKEN` has been leaking into transcripts since June.
+- **Unexporting `GH_TOKEN` is now unblocked** by D-20260917-03's ordering rule, since
+  the keyring no longer holds anything broad. Not done, not proposed, not costed.
+- **Section 7 items 2 to 6 are untouched by this pass** and all still stand.
+- **Taking ssh out of `_claude_launch`** is still uncosted. The no-tty measurement
+  above shrinks the case for it slightly: the fast-fail path was never the problem,
+  only the pty path is.
+- **Whether other guards in this estate share the anchor defect** was not swept. The
+  bypass class is a regex anchor, not anything specific to gh, so any hook matching a
+  command name at start-of-line is a candidate.

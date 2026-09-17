@@ -59,18 +59,54 @@ The two steps are not interchangeable. Unexporting first makes `gh` fall through
 keyring by design, turning one launcher gap into an estate-wide default: the banned
 "retry with GH_TOKEN unset" escalation arriving as a migration step.
 
-## D-20260917-04 -- Keyring token replacement: authorised in principle, deferred
+## D-20260917-04 -- Keyring token REPLACED with the read-only PAT, not deleted
 
-topic: keyring gho token delete replace gh auth logout public-read PAT broad repo scope
+topic: keyring gho token delete replace swap logout with-token public-read PAT broad repo scope fallback
 decided: 2026-09-17
-status: deferred
-holds-in: fifty-shades-of-dotfiles/docs/GITHUB_CREDENTIAL_LANES.md sections 7 and 8
+status: standing
+holds-in: fifty-shades-of-dotfiles/docs/GITHUB_CREDENTIAL_LANES.md sections 7, 8 and 9
 
-Gavin's call: write up first, replace next session. Sized but not executed. The cost is
-read-only browsing across 30 third-party clones and 2 plugin marketplaces, which
-`github-agent-token pat public-read` already serves; 18 local-only repos need no
-credential and 44 flipped repos mint their own. Section 7 item 1 still stands: "all
-consumers fixed" is not implicit permission.
+EXECUTED 2026-09-17 evening, on Gavin's pick of option A from four. The broad `gho_`
+token was REPLACED with the narrow read-only PAT rather than deleted. Replacing beats
+deleting for a reason the earlier write-ups missed: the fallback and the intended
+credential then become the SAME token, so a herdr-spawned agent has identical authority
+to a `_claude_launch` one and the spawn gap stops being a privilege difference at all.
+Deleting merely makes the gap loud; replacing makes it harmless.
+
+Measured after the swap, each with a control in the same command: private file contents
+403, writes 403, public reads fine, `~/.gitconfig` byte-identical, `hosts.yml`
+byte-identical with `git_protocol: ssh` intact, and both git lanes (21 ssh origins, 44
+App-flipped) still resolving real refs. Logging out stays available as the stricter
+endpoint once LifeOS's consumers are done.
+
+The old `gho_` token is out of the keyring but NOT revoked at GitHub. That is a manual
+step for Gavin at github.com/settings/applications.
+
+## D-20260917-05 -- A guard that anchors a command to start-of-line is not a guard
+
+topic: hook guard bypass regex env sudo absolute path prefix anchor enforce-gh-ssh-only shell function heredoc false positive
+decided: 2026-09-17
+status: standing
+holds-in: fifty-shades-of-dotfiles/.claude/hooks/enforce-gh-ssh-only.sh header
+
+`enforce-gh-ssh-only.sh` anchored the binary name to start-of-string or a `[;&|]`
+separator, so an `env` prefix, an absolute path, a `sudo` prefix and a leading variable
+assignment all walked past it while the bare form blocked correctly as the positive
+control. Found by accident: the authorised keyring swap ran behind an `env` prefix and
+was never logged.
+
+That prefix defeats the interactive shell wrapper too, because `env` execs the binary
+and never consults shell functions. One ordinary word defeated both layers of the same
+guard at once.
+
+Widening the anchor then introduced the opposite defect, which is worth as much as the
+first: the pattern began matching the command name written as PROSE inside a heredoc,
+so documenting the guard was blocked on the first attempt. A guard that blocks people
+from documenting it is a guard that gets switched off. Heredoc bodies are now stripped
+before matching. Proven with 17 cases: 9 must-block, 8 must-allow, including a heredoc
+of prose (allowed) versus a heredoc feeding a real invocation (blocked). The genuinely
+undetectable case, a path assembled in a variable, is documented in the hook rather
+than pretended away.
 
 ## D-20260913-01 -- Lift the sandbox per command for pushes; never allow-list the keychain
 
