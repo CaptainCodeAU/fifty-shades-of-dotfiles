@@ -236,14 +236,14 @@ Nothing here is blocked on this repo.
    remains available as the stricter endpoint later. What this item got wrong:
    it assumed deletion was the only mechanism, and replacement is strictly
    better for the reason section 9 gives.
-2. **`gh-cred-testbed` can be deleted from 2026-09-18.** Keep-for-a-day was the
+2. ~~**`gh-cred-testbed` can be deleted from 2026-09-18.**~~ **DELETED 2026-09-18 by Gavin.** This session could not: the read-only credential cannot even edit the repo description (403), which is the design working rather than a gap. Confirmed gone with a 404 against a control repo that still resolves. Original note follows. Keep-for-a-day was the
    peer's request, for an arm they may not need. The property that made it
    useful is preserved in `gh-cred-matrix`'s header, so the repo is disposable
    once that is read.
-3. **Untracked files were never swept.** The peer's census ran in git mode:
+3. ~~**Untracked files were never swept.**~~ **SWEPT 2026-09-18, and the framing was too narrow — see section 10.** Untracked files numbered 3; the population nobody had looked at was IGNORED files, 272,731 in dot-claude alone. No unsupplied caller was hiding. Original note follows. The peer's census ran in git mode:
    2 untracked in `dot-claude`, 4 in `lifeos-private`, 1 here. An untracked
    script calling `gh` would not have appeared and would still run.
-4. **Pulse is a LATENT instance.** `com.lifeos.pulse` is a live launchd daemon
+4. ~~**Pulse is a LATENT instance.**~~ **ALREADY FIXED; this item was stale when written — see section 10.** `work.ts` fetches its own credential, passes it explicitly, and every failure path returns a fail-closed sentinel. Original note follows. `com.lifeos.pulse` is a live launchd daemon
    whose work module spawns bare `gh issue list`, but `WORK.REPO` is unset so it
    returns before reaching that line. **The day a work repo is configured, an
    unattended daemon starts calling bare `gh`.** Fix it before configuring it.
@@ -255,7 +255,7 @@ Nothing here is blocked on this repo.
    `~/.config/github-agent/<service>.secret`, which **does not exist on this
    machine**. Creating it means a long-lived client secret on disk: a real trade,
    not a free win.
-6. **`GH_TOKEN` is still leaking into transcripts** — 12 files, oldest 14 June,
+6. ~~**`GH_TOKEN` is still leaking into transcripts**~~ **RESOLVED 2026-09-18 on both halves.** The cause was agents typing probes that print the environment, now blocked by `enforce-secret-probe.sh`; both leaked tokens were verified dead. And as of 2026-09-18 the launcher no longer exports `$GH_TOKEN` at all, so the route itself is closed rather than merely guarded. Original note follows: — 12 files, oldest 14 June,
    token rotated but the cause unfixed. Pre-existing, `OPEN.md` item 4, and
    directly relevant: it is the argument against passing tokens on command
    lines, and the reason tools fetching internally is the better shape.
