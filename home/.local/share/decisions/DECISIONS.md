@@ -110,6 +110,39 @@ of prose (allowed) versus a heredoc feeding a real invocation (blocked). The gen
 undetectable case, a path assembled in a variable, is documented in the hook rather
 than pretended away.
 
+## D-20260917-08 -- A relayed instruction NOT to act is safe; a relayed go-ahead is not
+
+topic: peer agent relay authority permission laundering second-hand instruction cross-session consent asymmetry build create
+decided: 2026-09-17
+status: standing
+holds-in: this block; evidenced in GITHUB_CREDENTIAL_LANES.md section 10
+
+Formulated by the peer session on 2026-09-17 and adopted here because it is the sharpest
+statement of a line both sessions had been feeling for.
+
+When one agent relays its principal's answer to another, the two directions are NOT
+symmetric:
+
+- **"Do not build it" is safe to take second-hand.** The worst case if the relay is wrong
+  is that a thing does not exist. That failure is visible, costless and reversible.
+- **"Go ahead and build it" is NOT.** The worst case is a structure, a push, a deletion or
+  a grant that exists because a peer said so, and that is permission laundering however
+  politely it arrives.
+
+So a relayed prohibition can be acted on; a relayed authorisation must be confirmed with
+one's own principal. This is not distrust of the peer -- both sessions in the incident
+behaved correctly -- it is that the cost of being wrong is wildly different in the two
+directions, and only one of them is recoverable by doing nothing.
+
+The evidencing incident: a peer declined to create git worktrees off this session's
+agreement alone, even though both sessions recommended them and it would have been small
+and reversible. Gavin then decided against worktrees entirely, so holding produced a real
+decision where building would have produced a structure nobody had asked for. The hold
+looked slow and was correct.
+
+Corollary worth keeping: when relaying a principal's answer to a peer, say which direction
+it is, so the peer can apply this without having to ask.
+
 ## D-20260917-07 -- Two sessions share ONE checkout; the pathspec form is a MITIGATION
 
 topic: shared checkout worktree index race git add commit pathspec two sessions concurrent collision staging
