@@ -110,6 +110,33 @@ of prose (allowed) versus a heredoc feeding a real invocation (blocked). The gen
 undetectable case, a path assembled in a variable, is documented in the hook rather
 than pretended away.
 
+## D-20260918-02 -- Open items are scoped per project; every item names its owner
+
+topic: open items scope per project MEMORY WORK drawer shared machine-wide OPEN.md ownership routing
+decided: 2026-09-18
+status: standing
+holds-in: this block until the scoped layout exists; then the scoped index
+
+Gavin's ruling, closing OPEN.md item 2, which had sat costed-but-undecided since
+2026-09-15 while a peer session was already building the scoped layout. Open items belong
+to their project. Each item must name the project that owns it; a machine-wide index is
+derived from the per-project lists by script, never maintained by hand, because a hand
+copy drifts the first time someone closes an item.
+
+THE HONEST CAVEAT, recorded so nobody reads this as a bigger win than it is. At the moment
+of the ruling the drawer held TWO live items, and one of them was this question. The
+original argument for scoping -- "other projects' items will start showing up in every
+session" -- describes a pressure that is not currently being felt, because thirteen items
+were closed in the preceding two days.
+
+That is an argument FOR doing it now rather than against. Restructuring a drawer holding
+two items is nearly free; restructuring one holding twenty is the kind of job that never
+gets done and quietly justifies itself forever. The decision is right for the state this
+drawer will be in again, not for the state it is in tonight.
+
+Gavin also offered to weigh in on individual items' ownership rather than have it inferred,
+so a routing that is not obvious is a question for him, not a guess.
+
 ## D-20260917-09 -- The SSH key stays, keychain-backed, scoped to one Host block
 
 topic: ssh key passphrase keychain AddKeysToAgent UseKeychain claude launch agent expiry branch liveness ci-watch unattended
