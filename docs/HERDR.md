@@ -295,6 +295,27 @@ These are ours, and nothing upstream will do them for you:
 | 10 | `home/.config/herdr/config.toml` | only when a release retires or adds a key -- run `herdr config check` |
 | 11 | `home/.config/herdr/plugins/*/herdr-plugin.toml` | `min_herdr_version`, and the plugin API if it moved |
 | 12 | `home/.config/systemd/user/herdr.service` | only if service flags change |
+| 13 | `~/.claude/hooks/herdr-agent-state.sh` + its `~/.claude/settings.json` registration | **rewritten BY herdr on upgrade, not by you** |
+
+Item 13 is the odd one and the reason this table is not only a to-do list. herdr
+installs a state-reporting hook into each agent CLI it finds, each file declaring
+itself "managed by herdr; reinstalling or updating the integration overwrites
+this file". So a bump rewrites EXECUTABLE CODE inside your Claude config, in
+real files that are not stow symlinks and so are not restored by a restow.
+`herdr integration status` lists what is present. The section further down,
+"It installs hooks into your agent CLIs", has the full account; it is repeated
+here because a checklist that lists only what you must do hides the one thing
+that happens whether you act or not.
+
+**And the herdr spawn path does NOT run our credential wrapper.** Measured
+2026-09-17 in a throwaway workspace: `herdr agent start --kind claude` echoes
+the bare command `claude` into the pane, not the `c` alias, so `_claude_launch`
+never runs. That session came up with `GH_TOKEN` of length 0 and `NVD_API_KEY`
+unset (control: `${#HOME}` was 17 in the same command, so the probe did run).
+`gh` then falls through to its own keyring, which holds a `repo`-scoped token.
+Nothing about this is herdr-specific: `_claude_launch` is reachable only through
+zsh aliases, which no spawned process inherits. Incident:
+`INC-20260915-herdr-spawn-bypasses-credential-path.md` in lifeos-private.
 
 `herdr-skill-drift-check` reports 3, 4 and 6-9 with no thinking required: it
 compares the live `herdr --skill` to the stored snapshot, the snapshot's version
