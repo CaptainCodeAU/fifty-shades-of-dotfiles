@@ -447,6 +447,33 @@ covers. Both are needed, and only the first was ever run here.
 - **Taking ssh out of `_claude_launch`** is still uncosted. The no-tty measurement
   above shrinks the case for it slightly: the fast-fail path was never the problem,
   only the pty path is.
-- **Whether other guards in this estate share the anchor defect** was not swept. The
-  bypass class is a regex anchor, not anything specific to gh, so any hook matching a
-  command name at start-of-line is a candidate.
+- ~~**Whether other guards in this estate share the anchor defect** was not swept.~~
+  **SWEPT the same evening. They do, and there were two copies of this guard.**
+
+  First, the guard itself existed TWICE: the repo copy at `.claude/hooks/` and a
+  separate real file at `~/.claude/hooks/`, wired globally in `~/.claude/settings.json`
+  and therefore live in every project on this machine. Fixing the repo copy fixed the
+  narrower of the two. Both now carry the fix and both pass the regression suite. The
+  lesson is its own instance of the class: *a fix applied to the copy you happened to
+  open is not a fix.*
+
+  Second, five more hooks share the identical `(^|[;&|]\s*)` anchor. Measured, each with
+  its bare form blocking as the positive control in the same run:
+
+  | Hook | Bare form | Prefixed form |
+  |---|---|---|
+  | `enforce-uv.sh` | BLOCKED | `env python3 ...` ALLOWED, `/usr/bin/python3 ...` ALLOWED, `sudo pip install ...` ALLOWED |
+  | `enforce-pnpm.sh` | BLOCKED | `env npm install ...` ALLOWED |
+  | `enforce-no-cd.sh` | BLOCKED | `time cd /tmp` ALLOWED |
+  | `enforce-builtin.sh` | same anchor, not probed | -- |
+  | `enforce-herdr-skill.sh` | same anchor, not probed | -- |
+
+  These are style and workflow guards, not security boundaries, so the blast radius is
+  nuisance rather than privilege. They are NOT fixed, deliberately: each needs its own
+  must-block and must-allow suite before its pattern is widened, because widening is
+  exactly what produced the heredoc false positive above. Left as a named open item
+  rather than a silent one.
+
+  `enforce-census.sh` is the exception and the reference implementation. It already
+  strips heredocs and already carries a comment about anchoring, so somebody met this
+  class there first and the knowledge did not travel.

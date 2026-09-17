@@ -75,3 +75,14 @@ MEMORY/
 # migration helper. Deliberately never shipped by stow, never a commit candidate.
 # (Must stay AFTER the !home/.local/bin/* negation to take effect.)
 home/.local/bin/migrate-claude-projects
+
+# macOS cruft, re-ignored for the same reason and with the same ordering rule.
+# The negations above re-include EVERYTHING in those directories, which silently
+# undoes the global .DS_Store rule at the top of this file -- but only there.
+# Measured 2026-09-17: home/.local/bin/.DS_Store showed up as an untracked commit
+# candidate while the identical file in home/.claude/ was correctly ignored. The
+# difference was invisible until both were checked side by side. A negation is
+# never scoped to the files you had in mind when you wrote it.
+home/.local/bin/.DS_Store
+home/.local/**/.DS_Store
+home/.local/share/fifty-shades-of-dotfiles/scripts/.DS_Store
