@@ -1,0 +1,271 @@
+#!/usr/bin/env -S uv run python3
+# /// script
+# requires-python = ">=3.10"
+# dependencies = []
+# ///
+#
+# ============================================================================
+#  herdr-skill-drift-check -- has a herdr upgrade moved the skill under us?
+# ============================================================================
+#
+# WHY
+# ---
+# ~/.claude/skills/herdr/SKILL.md is OURS: upstream's agent skill with a lot of
+# locally measured findings written into it (the zsh `status` trap, the nested
+# TUI false-idle, the wait-output echo match, the clean-room Claude recipe).
+#
+# herdr ships its own copy of that skill INSIDE the binary -- `herdr --skill`,
+# added in 0.8.0 -- and revises it. 0.8.2 refreshed it wholesale to match the
+# current CLI (#2847). So every upgrade can silently move upstream's version
+# while ours stays where it was, and nothing anywhere says so. Two ways that
+# goes wrong: our skill quietly describes a CLI that no longer behaves that
+# way, or a later wholesale re-copy throws away the local findings.
+#
+# The fix is a stored merge base. home/.claude/skills/herdr/UPSTREAM.md is a
+# verbatim `herdr --skill` capture at the version we last merged from, and
+# UPSTREAM.version records that version. This tool is the alarm on it.
+#
+# WHAT IT CHECKS
+#   1. skill-drift   `herdr --skill` today vs the stored UPSTREAM.md.
+#                    Differs => upstream moved, there is a merge to do.
+#   2. base-version  UPSTREAM.version vs the installed herdr version.
+#                    Differs => the snapshot is from an older binary.
+#   3. deployed      ~/.claude/skills/herdr/SKILL.md really resolves into the
+#                    repo. A plain file there means stow was undone, or the
+#                    `skills` CLI reinstalled over the top of us.
+#   4. doc-stamp     each docs/HERDR*.md carries `herdr-verified: X.Y.Z` and it
+#                    matches the installed binary. Replaces six hand-typed
+#                    version mentions that went stale without anyone noticing.
+#
+# SAFETY
+#   Read-only, and deliberately so. It never merges, never writes a snapshot,
+#   never edits a doc, never runs a herdr subcommand that touches the socket.
+#   `herdr --skill` and `herdr --version` both print and exit. Any failure
+#   degrades to SKIPPED, never to a false OK -- same contract as its sibling
+#   herdr-cooldown-check, which acts on cooldown; this one only reports.
+#
+# USAGE
+#   herdr-skill-drift-check [options]
+#     --repo PATH   dotfiles repo (default: resolved from the stow symlink)
+#     --quiet       print only actionable + SKIPPED lines
+#     --json        emit a JSON report instead of the table
+#
+# EXIT CODES
+#   0  nothing actionable
+#   1  drift found, or a guard is not in place
+# ============================================================================
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+
+CLEAN, ACTION, SKIP = "OK", "ACTION", "SKIPPED"
+
+SKILL_LINK = os.path.expanduser("~/.claude/skills/herdr/SKILL.md")
+REL_SKILL_DIR = "home/.claude/skills/herdr"
+STAMP_RE = re.compile(r"^herdr-verified:\s*([0-9]+\.[0-9]+\.[0-9]+)\s*$", re.M)
+
+
+def run(cmd: list[str], timeout: int = 10) -> tuple[int, str]:
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return p.returncode, (p.stdout or "") + (p.stderr or "")
+    except Exception:
+        return 127, ""
+
+
+# --- pure functions (the self-test drives these, both ways) -----------------
+
+def drift_verdict(current: str | None, stored: str | None) -> str:
+    """CLEAN | DRIFTED | UNKNOWN. Refuses to guess when either side is missing."""
+    if current is None or stored is None:
+        return "UNKNOWN"
+    return "CLEAN" if current.strip() == stored.strip() else "DRIFTED"
+
+
+def parse_stamp(body: str) -> str | None:
+    """Pull `herdr-verified: X.Y.Z` out of a doc. None when absent."""
+    m = STAMP_RE.search(body)
+    return m.group(1) if m else None
+
+
+def installed_version() -> str | None:
+    rc, out = run(["herdr", "--version"])
+    if rc != 0:
+        return None
+    m = re.search(r"([0-9]+\.[0-9]+\.[0-9]+)", out)
+    return m.group(1) if m else None
+
+
+def bundled_skill() -> str | None:
+    rc, out = run(["herdr", "--skill"], timeout=20)
+    return out if rc == 0 and out.strip() else None
+
+
+def resolve_repo(explicit: str | None, link: str = SKILL_LINK) -> tuple[str | None, str]:
+    """Find the dotfiles repo via the stow symlink. Returns (path, how).
+
+    `link` is injectable ONLY so the self-test can drive both arms against a
+    temporary symlink -- the real run never passes it. A resolver that can only
+    ever be observed succeeding is the same decoration problem as a guard that
+    can only print OK.
+    """
+    if explicit:
+        return os.path.abspath(os.path.expanduser(explicit)), "flag"
+    if os.path.islink(link):
+        target = os.path.realpath(link)
+        marker = os.sep + REL_SKILL_DIR.replace("/", os.sep) + os.sep
+        if marker in target + os.sep:
+            return target.split(marker)[0], "stow symlink"
+    return None, "not found"
+
+
+def self_test() -> list[str]:
+    """Prove the detectors still DETECT.
+
+    Same reasoning as herdr-cooldown-check's: a guard that can only print OK is
+    decoration. Both arms of every comparison run here, every time, for free.
+    """
+    fails: list[str] = []
+
+    def check(label, got, expected):
+        if got != expected:
+            fails.append(f"{label}: expected {expected!r}, got {got!r}")
+
+    check("drift sees identical text as clean", drift_verdict("a\nb\n", "a\nb"), "CLEAN")
+    check("drift sees changed text as drifted", drift_verdict("a\nb\n", "a\nc\n"), "DRIFTED")
+    check("drift refuses to guess", drift_verdict(None, "a"), "UNKNOWN")
+    check("stamp is read", parse_stamp("# Doc\n\nherdr-verified: 0.8.2\n"), "0.8.2")
+    check("absent stamp reads as None", parse_stamp("# Doc\n\nnothing here\n"), None)
+    check("a mention is not a stamp", parse_stamp("verified against herdr 0.8.2 by hand\n"), None)
+
+    # Repo resolver: prove it finds a repo through a symlink AND reports
+    # "not found" when the path is a real file instead of a link -- the case
+    # that means stow was undone or something reinstalled over the top of us.
+    with tempfile.TemporaryDirectory(prefix="herdr-drift-selftest-") as tmp:
+        repo = os.path.join(tmp, "repo")
+        real = os.path.join(repo, REL_SKILL_DIR, "SKILL.md")
+        os.makedirs(os.path.dirname(real), exist_ok=True)
+        open(real, "w").close()
+        link = os.path.join(tmp, "SKILL.md")
+        os.symlink(real, link)
+        # realpath() also resolves /var -> /private/var on macOS, so compare
+        # against the resolved form; the real repo path is not symlinked.
+        check("resolver follows the stow symlink home",
+              resolve_repo(None, link=link)[0], os.path.realpath(repo))
+        plain = os.path.join(tmp, "plain.md")
+        open(plain, "w").close()
+        check("resolver reports a real file as not found", resolve_repo(None, link=plain)[0], None)
+
+    return fails
+
+
+# --- report -----------------------------------------------------------------
+
+def main() -> int:
+    ap = argparse.ArgumentParser(add_help=True)
+    ap.add_argument("--repo", default=None)
+    ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--json", dest="as_json", action="store_true")
+    args = ap.parse_args()
+
+    rows: list[tuple[str, str, str]] = []
+    fails = self_test()
+    if fails:
+        rows.append(("self-test", SKIP, "DETECTOR BROKEN: " + "; ".join(fails)))
+        return emit(args, rows, {"self_test": "fail", "subjects": []})
+
+    repo, how = resolve_repo(args.repo)
+    have = installed_version()
+
+    if repo is None:
+        rows.append(("deployed", ACTION,
+                     f"{SKILL_LINK} does not resolve into the repo ({how}) -- "
+                     "re-run ./install.sh to restow, and check nothing overwrote it"))
+    else:
+        rows.append(("deployed", CLEAN, f"skill resolves into {repo} (via {how})"))
+
+    skill_dir = os.path.join(repo, REL_SKILL_DIR) if repo else None
+    stored_txt = stored_ver = None
+    if skill_dir:
+        try:
+            with open(os.path.join(skill_dir, "UPSTREAM.md"), encoding="utf-8") as fh:
+                stored_txt = fh.read()
+        except OSError:
+            pass
+        try:
+            with open(os.path.join(skill_dir, "UPSTREAM.version"), encoding="utf-8") as fh:
+                stored_ver = fh.read().strip()
+        except OSError:
+            pass
+
+    current = bundled_skill()
+    verdict = drift_verdict(current, stored_txt)
+    if verdict == "DRIFTED":
+        rows.append(("skill-drift", ACTION,
+                     "`herdr --skill` no longer matches UPSTREAM.md -- upstream revised the "
+                     "skill. Merge: diff the stored snapshot against the new capture, apply "
+                     "what herdr changed, replace the snapshot, commit together"))
+    elif verdict == "CLEAN":
+        rows.append(("skill-drift", CLEAN, "bundled skill matches the stored merge base"))
+    else:
+        rows.append(("skill-drift", SKIP,
+                     "could not compare (no `herdr --skill` output, or no UPSTREAM.md)"))
+
+    if stored_ver and have:
+        state = CLEAN if stored_ver == have else ACTION
+        note = (f"merge base captured at {stored_ver}, binary is {have}"
+                if state is CLEAN else
+                f"merge base is from {stored_ver} but herdr is now {have} -- recapture")
+        rows.append(("base-version", state, note))
+    else:
+        rows.append(("base-version", SKIP, "no UPSTREAM.version, or herdr --version unreadable"))
+
+    if repo and have:
+        docs_dir = os.path.join(repo, "docs")
+        names = sorted(n for n in os.listdir(docs_dir)) if os.path.isdir(docs_dir) else []
+        for name in [n for n in names if n.startswith("HERDR") and n.endswith(".md")]:
+            try:
+                with open(os.path.join(docs_dir, name), encoding="utf-8") as fh:
+                    stamp = parse_stamp(fh.read())
+            except OSError:
+                continue
+            if stamp is None:
+                rows.append((f"doc:{name}", ACTION, "no `herdr-verified:` line"))
+            elif stamp != have:
+                rows.append((f"doc:{name}", ACTION, f"verified against {stamp}, herdr is {have}"))
+            elif not args.quiet:
+                rows.append((f"doc:{name}", CLEAN, f"verified against {stamp}"))
+
+    report = {
+        "self_test": "pass",
+        "installed": have,
+        "base_version": stored_ver,
+        "drift": verdict,
+        "repo": repo,
+        "subjects": [{"subject": s, "state": st, "note": n} for s, st, n in rows],
+    }
+    return emit(args, rows, report)
+
+
+def emit(args, rows, report) -> int:
+    actionable = any(state == ACTION or state == SKIP and "DETECTOR" in note
+                     for _, state, note in rows)
+    if args.as_json:
+        print(json.dumps(report, indent=2))
+    else:
+        for subject, state, note in rows:
+            if args.quiet and state == CLEAN:
+                continue
+            print(f"{state:<8} {subject:<28} {note}")
+    return 1 if actionable else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
