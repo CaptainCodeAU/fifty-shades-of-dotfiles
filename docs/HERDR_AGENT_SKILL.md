@@ -3,10 +3,18 @@
 **Audience: an AI coding agent, not a human.** Read this before issuing any
 `herdr` command. It replaces reading https://herdr.dev/docs/agent-skill/.
 
-Verified against **herdr 0.7.5** (Homebrew, macOS arm64) on 2026-08-02 by
-executing every command listed. Statements marked OBSERVED were produced by a
-real run; statements marked DOC come from upstream docs and were not
-independently confirmed.
+herdr-verified: 0.8.2
+
+Re-verified against **herdr 0.8.2** (Homebrew, macOS arm64) on 2026-09-17;
+originally written against 0.7.5 on 2026-08-02 by executing every command
+listed. Statements marked OBSERVED were produced by a real run; statements
+marked DOC come from upstream docs and were not independently confirmed.
+
+The `herdr-verified:` line above is machine-read by `herdr-skill-drift-check`,
+which compares it to the installed binary and reports every doc that has fallen
+behind. Six hand-typed version mentions used to do that job and all six went
+stale without anyone noticing. Move the line only when the doc has actually
+been re-checked -- a stamp is a claim, not decoration.
 
 ---
 
@@ -17,21 +25,61 @@ executable code. It teaches you to drive the `herdr` CLI from inside a
 herdr-managed pane so you can give yourself a side terminal: split a pane, run
 a command there, read its output, and block until something appears.
 
-Installed at `~/.claude/skills/herdr/SKILL.md` (user level, all projects).
+### Where it lives (2026-09-17)
 
-**Install without npx and without tracking `master`:**
+The file is **ours**: upstream's skill with a lot of locally measured findings
+written into it. It lives in this repo at
+`home/.claude/skills/herdr/SKILL.md`, and two symlinks point at it:
+
+| Path | Read by |
+|---|---|
+| `~/.claude/skills/herdr/SKILL.md` | Claude Code (stowed) |
+| `~/.agents/skills/herdr/SKILL.md` | Codex (skill root `r0`, discovered by convention) |
+
+Codex finds `~/.agents/skills` on its own -- no config entry, nothing to grep
+for. Before 2026-09-17 that copy was a separate file and the two had already
+drifted apart by two behaviours. `install.sh` now creates both links.
+
+### Getting upstream's copy (the old fetch recipe is retired)
+
+**herdr 0.8.0 added `herdr --skill`**, which prints the skill bundled inside the
+running binary. That is the merge base: offline, version-exact, no network, no
+`npx skills add` pulling an unpinned `master`, no blob sha to chase. The old
+`gh api ... | base64 -d` recipe that used to be here is gone because this
+replaces it entirely.
 
 ```bash
-gh api repos/herdrdev/herdr/contents/skills/herdr/SKILL.md --jq '.content' \
-  | base64 -d > ~/.claude/skills/herdr/SKILL.md
-git hash-object ~/.claude/skills/herdr/SKILL.md   # compare to the blob sha from the API
+herdr --skill > /tmp/upstream-new.md
 ```
 
-OBSERVED: blob sha `fafea549c0c46b87bac6c7ae4ad22ef7ac635a5e` at tag v0.7.5,
-10140 bytes. Verifying the sha is worthwhile; it is a cheap integrity check.
+### The merge runbook
 
-The upstream-documented `npx skills add herdrdev/herdr --skill herdr -g` pulls
-from `master` unpinned. Do not use it in this environment.
+Two files beside the skill hold the base:
+
+```
+home/.claude/skills/herdr/UPSTREAM.md         verbatim `herdr --skill` at the version last merged from
+home/.claude/skills/herdr/UPSTREAM.version    the tag that capture came from
+```
+
+Our own edits are always recoverable as `diff UPSTREAM.md SKILL.md`. On a bump:
+
+1. `herdr-skill-drift-check` reports `skill-drift ACTION` (it compares the live
+   `herdr --skill` to the stored `UPSTREAM.md`).
+2. Capture the new one, and diff it against the **stored** snapshot. That shows
+   what herdr changed, which is the only question -- a diff against SKILL.md
+   just shows everything we rewrote.
+3. Merge those changes into SKILL.md in our own voice, beside the local findings.
+4. Replace `UPSTREAM.md` and `UPSTREAM.version`, and commit all of it together.
+
+Do not verify a merge by line count. After the 0.8.2 merge a line-level diff
+still reported five upstream lines "missing", because those sentences were
+rewritten rather than dropped. Verify by checking the FACTS are present.
+
+0.8.2 refreshed the bundled skill wholesale to match the current CLI (#2847),
+and that merge recovered two behaviours ours had lost: `agent start` keeps the
+agent NAME usable after an `agent_not_ready`, and `agent prompt` refuses an
+agent sitting at an approval dialog with `agent_blocked`. The second is a
+safety rule. That is what the base snapshot exists to catch.
 
 ---
 
@@ -99,6 +147,11 @@ herdr is NOT uniformly JSON. OBSERVED, per command:
 
 If a command returns nothing through `jq`, try it raw before assuming failure.
 
+RE-CHECKED 0.8.2: every row above still holds. One caveat worth knowing --
+`agent explain` is NOT listed by `herdr agent`, and it still exists
+(`usage: herdr agent explain <target> [--json]`). **The group listing is not
+exhaustive**, so "it is not in the help" is not evidence a command was removed.
+
 **Exit codes** (OBSERVED, measured without a pipe):
 
 | Code | Meaning |
@@ -153,24 +206,39 @@ subcommand by omitting arguments; `herdr workspace create` executes on defaults.
 
 Sources: `visible`, `recent`, `recent-unwrapped`, `detection`.
 
-OBSERVED, same pane, same moment:
+**THE 0.7.5 TRAP NO LONGER REPRODUCES. Re-measured on 0.8.2, 2026-09-17**, one
+pane running `seq 1 300`, every read taken at the same moment:
 
-| Invocation | Bytes returned |
-|---|---|
-| `--source recent-unwrapped --lines 400` | 3209 |
-| `--source recent-unwrapped` (no `--lines`) | 2666 |
-| **`--source recent-unwrapped --lines 15`** | **0** |
-| `--source visible --lines 15` | works |
+| Invocation | 0.7.5 (2026-08-02) | 0.8.2 (2026-09-17) |
+|---|---|---|
+| `recent-unwrapped --lines 400` | 3209 | 3318 |
+| `recent-unwrapped` (no `--lines`) | 2666 | 585 |
+| `recent-unwrapped --lines 50` | not measured | 465 |
+| **`recent-unwrapped --lines 15`** | **0** | **325** |
+| `recent-unwrapped --lines 5` | not measured | 285 |
+| `visible --lines 15` | works | 326 |
+| `visible --lines 400` | not measured | 422 |
 
-**A `--lines` value that is too small returns NOTHING, not a truncated tail.**
-This looks exactly like "the command produced no output" and will send you
-debugging the wrong thing. Default to `--lines 400` and filter locally.
+A small `--lines` now returns a **truncated tail**, degrading smoothly, instead
+of nothing. The old warning -- that too small a value returns NOTHING and looks
+exactly like "no output" -- is kept above only so nobody re-derives it from an
+old transcript. It was true; it stopped being true.
 
-DOC says prefer `recent-unwrapped` for transcripts. OBSERVED: on a shell with a
-heavy prompt, `recent` and `recent-unwrapped` frequently return empty at small
-line counts while `visible` and `detection` work. Prefer `visible` first, then
-`detection`; treat `recent-unwrapped` as the thing to try when `visible` is
-truncated.
+Two consequences of the new numbers:
+
+- `--lines 400` is still the right default, but now because it returns MORE, not
+  because smaller values break.
+- The old advice to prefer `visible` over `recent-unwrapped` is withdrawn.
+  At `--lines 400`, `recent-unwrapped` returned 3318 bytes against `visible`'s
+  422 -- eight times more. Upstream's own advice (prefer `recent-unwrapped` for
+  logs and transcripts) is the correct one again.
+
+METHOD, because the first attempt at this measurement was void: a pane read
+immediately after `workspace create` returned 0 bytes from EVERY source,
+including ones known to work. All-arms-identical is not a finding, it is a
+trial that did not happen -- the shell had not finished starting. The numbers
+above come from a second run with an 18-second settle, where the sources
+disagree with each other, which is what a real measurement looks like.
 
 Use `--format ansi` only when colours are evidence.
 
