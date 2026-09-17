@@ -90,6 +90,24 @@ four separate lessons:
   always says `showed 8 of 214 lines -- 206 HIDDEN`, or, just as importantly,
   `showed all 6 lines (nothing hidden)`.
 
+**A LIST ASSEMBLED FROM WHAT EACH PARTY KNOWS CANNOT BE TRUSTED AS COMPLETE.** Measured
+2026-09-18, and it is the same family aimed at people rather than tools. A session asked two
+others which files they had changed in a shared directory before snapshotting it. One
+answered three files, the other answered four. Both answered honestly about their own
+writes; the combined list was still short, because neither could see the other's. The
+snapshot was then verified by hash against the live directory: two files had changed since
+it was taken and a third was missing from it entirely -- 3 of 12 wrong.
+
+Nobody lied and nobody was careless. Self-report is STRUCTURALLY incomplete in a
+multi-party system, however careful every party is, and no amount of asking fixes it because
+the gap is in what each party can see rather than in what they are willing to say.
+
+**So the completeness check has to come from somewhere neither party controls.** Hashing
+found it; asking did not. Whenever you are about to act on a list of "what changed",
+"who touched this" or "is anything else outstanding" that was assembled by asking, get the
+answer from the filesystem, the index, or a manifest instead -- and treat the asked-for
+version as a courtesy, not as evidence.
+
 **AND THE SEARCH TOOL ITSELF CAN GO SILENT.** Measured 2026-09-17: `grep` here is a
 shell function sourced from a shell snapshot, and on a file with very long lines it
 returns an EMPTY count where `command grep` and `rg` both return 13. The file was plain
