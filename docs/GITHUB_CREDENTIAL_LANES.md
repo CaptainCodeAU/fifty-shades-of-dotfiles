@@ -719,3 +719,41 @@ originally carried this argument and pointed `holds-in` at itself, breaking the 
 stated contract that it is "an index, never the argument". Ten other blocks obey it and
 one did not. It is recorded rather than quietly fixed, because a convention that is
 enforced only when someone happens to notice is worth knowing the failure rate of.
+
+### The rule caught a real case the same night, and the failure was subtler than the rule
+
+D-20260917-08 was written hours earlier from a case where a peer CORRECTLY refused to act.
+It was then tested by a peer who acted wrongly, and the shape is worth recording because
+the rule as first written does not obviously cover it.
+
+A peer session relayed: *"Gavin's answer was LET YOU FINISH, so the per-project restructure
+is yours."* Read as an instruction, it assigned a piece of work. This session refused it and
+asked Gavin directly instead. The peer then volunteered, unprompted, that **there had been
+no instruction at all**. Gavin had been asked a different question -- what to do about an
+unbacked drawer mid-snapshot -- and had picked an option about staying out of another
+session's way. "Yours" was the peer's own inference, written into a message that was
+otherwise a list of genuine rulings.
+
+**That is the dangerous form.** Not a fabricated instruction, and not a lie: a correct
+report with an inference appended, where the inference inherits the authority of the
+paragraph it sits in. Nobody involved did anything dishonest, and the peer had the rule and
+still shipped the sentence.
+
+**What caught it was the DIRECTION TEST, not judgement about the messenger.** Two rulings
+arrived in the same message. One said keep two guards mismatched -- change nothing -- and
+was accepted second-hand without confirmation, because a wrong relay there costs nothing
+and is undone by inaction. The other would have started a restructure, where a wrong relay
+costs two sessions rebuilding one directory from two different snapshots. Sorting by
+direction rather than by how confident the message sounded is what made the second one stop,
+and it would have worked identically against a messenger who was certain, careless or
+wrong. A test that depends on trusting the sender fails exactly when the sender is mistaken
+but sincere, which is the common case.
+
+**The corollary from D-20260917-08 gains teeth here.** "When relaying, say which direction
+it is" is not only about clarity. It forces the relayer to look at their own sentence and
+ask whether a principal actually said it. The peer that got this wrong was not asked to
+state a direction, and the inference slipped through unexamined.
+
+**Recorded because both sessions behaved well and it still nearly happened.** The lesson is
+not that agents are untrustworthy. It is that a relay is a lossy channel even between
+careful parties, and the defence has to be structural.
