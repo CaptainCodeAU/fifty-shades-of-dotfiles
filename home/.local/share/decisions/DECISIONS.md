@@ -110,6 +110,25 @@ of prose (allowed) versus a heredoc feeding a real invocation (blocked). The gen
 undetectable case, a path assembled in a variable, is documented in the hook rather
 than pretended away.
 
+## D-20260917-09 -- The SSH key stays, keychain-backed, scoped to one Host block
+
+topic: ssh key passphrase keychain AddKeysToAgent UseKeychain claude launch agent expiry branch liveness ci-watch unattended
+decided: 2026-09-17
+status: standing
+holds-in: ~/.claude/MEMORY/WORK/ssh-key-and-branch-liveness/DECISION.md
+
+Option A of four. The key is NOT removed from the launcher; its passphrase moves into the
+login keychain, so unattended starts stop blocking and the 12-hour agent expiry stops
+mattering, while the read-only token stays narrow and ci-watch keeps branch-liveness.
+
+The scoping is the part to preserve: `AddKeysToAgent yes` and `UseKeychain yes` went into
+the `Host git-cc` block in `~/.ssh/config.local`, never into `Host *`, which also governs
+proxmox, codebox, mlbox, bl-2, adminmbp and hermes-o. It takes effect because the Include
+sits above the global defaults and ssh keeps the FIRST value it obtains per keyword.
+Verified: git-cc resolves true, nine other hosts still resolve false.
+
+Unblocks the ci-watch branch-liveness swap, which was waiting on this and nothing else.
+
 ## D-20260917-08 -- A relayed instruction NOT to act is safe; a relayed go-ahead is not
 
 topic: peer agent relay authority permission laundering second-hand instruction cross-session consent build create prohibition authorisation
