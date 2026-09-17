@@ -70,6 +70,25 @@ next_tab = "shift+right"
 previous_agent = "shift+up"
 next_agent = "shift+down"
 
+# Pane resize without entering resize mode (herdr 0.8.2, #2558). Unset by
+# default. This reclaims the Alt+Arrow cluster that tmux-tilit used to own for
+# exactly this job: .tmux.conf took those keys back for pane SWITCHING, and
+# then the vim keys won that argument above, so alt+arrow has been free ever
+# since with nothing bound to it. Nothing in herdr's defaults uses it either.
+# prefix+shift+r resize_mode above is untouched and still works.
+resize_pane_left = "alt+left"
+resize_pane_down = "alt+down"
+resize_pane_up = "alt+up"
+resize_pane_right = "alt+right"
+
+# Reorder the active tab in place, wrapping at either end (herdr 0.8.2, #2561).
+# Unset by default, and there was no way to do this at all before. Deliberately
+# alt+SHIFT+arrow, one modifier away from the shift+left/right that SWITCHES
+# tabs: same axis, same direction, "with alt" means move the tab rather than
+# move to it. Note they are easy to mix up until the habit forms.
+move_tab_previous = "alt+shift+left"
+move_tab_next = "alt+shift+right"
+
 # --- Deliberately NOT ported ---
 # Alt+Arrow pane switching (`bind -n M-Left/M-Right/...`): herdr accepts
 #   alt+left etc, but focus_pane_* takes ONE key, so binding the arrows would
@@ -153,6 +172,11 @@ pane_history = true
 
 [ui]
 agent_panel_sort = "priority"
+
+# Agent state as distinct static SHAPES rather than dots that differ only by
+# colour (herdr 0.8.2, #2260). blocked / working / done / idle / unknown stay
+# apart at a glance and without relying on colour perception. Default is "dots".
+status_indicators = "symbols"
 show_agent_labels_on_pane_borders = true
 
 # Hold ctrl and right-click-DRAG to send the gesture straight to the app in
@@ -189,6 +213,23 @@ tab_bar_right = [
   { type = "command", command = "HOME=\"$(eval echo ~$(id -un))\"; \"$HOME/.config/herdr/gpu-status.sh\"", interval_seconds = 5, timeout_seconds = 4 },
 ]
 tab_bar_right_separator = " · "
+
+# Size of the virtual terminal a headless server gives a pane when no client is
+# attached. Attached clients always use their own terminal size. 0.8.2 changed
+# the default from 80x24 to 120x40 (#2828); these two lines are that same
+# default written down on purpose, so the width is OURS rather than inherited.
+# Agent automation reads pane output at it -- every `pane read` in the herdr
+# skill, herdr-quick-task, and any wrapped line in a background agent's
+# transcript -- so a future change to the upstream default must not be able to
+# narrow it silently. Costs nothing today; the trade is that a BETTER upstream
+# default would not reach us either.
+#
+# These are [server] keys, not [ui] keys. Putting them under [ui] parses fine
+# and is silently ignored: `herdr config check` said "unknown config key
+# ui.headless_cols; ignoring key" and that is the only reason it was caught.
+[server]
+headless_cols = 120
+headless_rows = 40
 
 [theme]
 name = "terminal"

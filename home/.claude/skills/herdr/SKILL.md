@@ -238,6 +238,8 @@ Use `--format ansi` when colors and terminal styling are evidence. Otherwise use
 
 `--lines` asks Herdr for more rows from the pane's available screen and host scrollback. If increasing it does not reveal more of a completed response, the pane is probably running the agent on the terminal's alternate screen. Rows that leave the alternate screen do not enter Herdr's host scrollback, so a larger line count cannot recover them.
 
+Herdr itself knows when it dropped rows: `PaneReadResult` carries a `truncated` field (herdr 0.8.0, #1717), confirmed 2026-09-17 in `herdr api schema --json` under both `success_response` and `subscription_event`. The plain CLI read prints pane text, not JSON, so that field is not visible in normal use; `pane read --raw` is the likely way to see it, NOT verified here (the throwaway pane used to test it produced no output yet, so the trial was void rather than negative). Treat the flag as a real signal to look for, not as a recipe.
+
 After that failed read, ask the agent to write its complete response as Markdown in a temporary directory and reply only with the file path, then read the file directly. Use this only as a fallback; do not request file output in the initial prompt.
 
 ## Wait for completion without polling
