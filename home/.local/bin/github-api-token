@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# ============================================================================
+#  github-api-token -- print the narrow read-only GitHub API token
+# ============================================================================
+#
+# WHY THIS EXISTS
+#   Every gh-calling tool in this estate used to take whatever credential
+#   happened to be in the environment. When GH_TOKEN was set (inside a Claude
+#   session started by the shell aliases) that was the narrow read-only PAT.
+#   When it was NOT set -- a herdr-spawned Claude, cron, launchd, a plain
+#   terminal -- gh silently helped itself to its own keyring entry, a classic
+#   OAuth token with `repo` scope. MEASURED 2026-09-17 against a throwaway
+#   private repo: that keyring token reads private repo SOURCE and CREATES
+#   ISSUES. The narrow PAT can do neither. Identical on everything else.
+#
+#   OPERATIONAL_RULES already had the rule: "supply the correct narrow
+#   credential EXPLICITLY; never REMOVE a credential in order to fall through
+#   to a broader one." Every consumer broke the first half of it. This is the
+#   one-line fix they can each call.
+#
+# WHY NOT `github-agent-token pat <profile>`
+#   That tool fetches PATs out of INFISICAL and mints GitHub App tokens. This
+#   PAT lives in the macOS Keychain, a different store, and moving it would be a
+#   decision about where a credential lives rather than a fix to how tools read
+#   it. `toolchain-cve-check` already reads its own Keychain item directly for
+#   `nvd-api-key`; this is that same pattern, factored out so the item name
+#   lives in one place.
+#
+# WHAT THE TOKEN IS: fine-grained, read-only -- issues, PRs, actions, checks,
+# commit statuses. NO contents access, so it cannot read source. Stored as
+# Keychain item `github-api-readonly`.
+#
+# USAGE
+#   GH_TOKEN="$(github-api-token)" gh api ...          # explicit, preferred
+#   : "${GH_TOKEN:=$(github-api-token 2>/dev/null)}"   # respect a caller's own
+#
+# EXIT CODES
+#   0  token printed
+#   1  Keychain item not found or unreadable -- prints nothing to stdout, so a
+#      caller substituting it gets an EMPTY value rather than a wrong one.
+#      Say "I cannot see" loudly; never fall through to a bigger key.
+# ============================================================================
+set -uo pipefail
+
+ITEM="github-api-readonly"
+
+tok="$(security find-generic-password -a "$USER" -s "$ITEM" -w 2>/dev/null)" || true
+
+if [ -z "$tok" ]; then
+    echo "github-api-token: Keychain item '$ITEM' not found or unreadable." >&2
+    echo "  A launchd/cron context often cannot reach the login Keychain at all." >&2
+    echo "  Re-store it without leaking to shell history:" >&2
+    echo "  read -rs GH_PAT && security add-generic-password -U -a \"\$USER\" -s $ITEM -w \"\$GH_PAT\" && unset GH_PAT" >&2
+    exit 1
+fi
+
+printf '%s\n' "$tok"

@@ -276,6 +276,25 @@ tier_for_days(){ if [ "$1" -ge 7 ]; then TIER=3; elif [ "$1" -ge 3 ]; then TIER=
 GH="${CI_WATCH_GH:-$(type -P gh 2>/dev/null || printf 'gh')}"
 have_gh(){ [ -x "$GH" ] || type -P "$GH" >/dev/null 2>&1; }
 
+# FETCH THE NARROW CREDENTIAL RATHER THAN INHERITING WHATEVER IS AROUND.
+# Without this, an unset GH_TOKEN is not "no credential" -- gh quietly uses its
+# OWN keyring entry, a classic OAuth token with `repo` scope. MEASURED
+# 2026-09-17 against a throwaway private repo: that token reads private repo
+# SOURCE and CREATES ISSUES; the narrow PAT can do neither and is identical on
+# everything this tool needs, Actions runs included. So a ci-watch run outside a
+# Claude session was silently a full-source-read credential doing a status line.
+#
+# A caller's own GH_TOKEN still wins, which is what makes this a default and not
+# a policy: `:=` only assigns when unset or empty. If the Keychain cannot be
+# reached (a launchd or cron context often cannot) this stays empty and the tool
+# reports that it cannot see -- it never falls through to the bigger key. That
+# is OPERATIONAL_RULES' rule stated as code: supply the narrow credential
+# EXPLICITLY, never remove one to fall through to something broader.
+if [ -z "${GH_TOKEN:-}" ] && [ -z "${GITHUB_TOKEN:-}" ] && command -v github-api-token >/dev/null 2>&1; then
+  GH_TOKEN="$(github-api-token 2>/dev/null || true)"
+  [ -n "$GH_TOKEN" ] && export GH_TOKEN CI_WATCH_TOKEN_FETCHED=1
+fi
+
 # WHICH credential answered. A watcher whose output depends on the caller's
 # environment must say so ON THE LINE, or reconstructing a disagreement costs two
 # sessions and a day. (Suggested by a peer session after we spent
@@ -284,9 +303,10 @@ have_gh(){ [ -x "$GH" ] || type -P "$GH" >/dev/null 2>&1; }
 # unsetting GH_TOKEN here would land on a keyring token carrying `repo` scope,
 # silently upgrading a status line to full source read across every owned repo.
 cred_source(){
-  if [ -n "${GH_TOKEN:-}" ];        then printf 'GH_TOKEN from the environment'
+  if [ -n "${CI_WATCH_TOKEN_FETCHED:-}" ]; then printf 'narrow read-only PAT, fetched from the Keychain by this tool'
+  elif [ -n "${GH_TOKEN:-}" ];      then printf 'GH_TOKEN from the environment'
   elif [ -n "${GITHUB_TOKEN:-}" ];  then printf 'GITHUB_TOKEN from the environment'
-  else                                   printf "gh's own stored auth"; fi
+  else                                   printf "gh's own stored auth (BROAD -- the Keychain fetch did not run or failed)"; fi
 }
 
 # classify_gh_error <stderr-text> -> sets O_TOKEN / O_DETAIL

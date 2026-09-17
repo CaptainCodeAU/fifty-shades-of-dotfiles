@@ -691,7 +691,23 @@ OUT="$(env -u GH_TOKEN -u GITHUB_TOKEN CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$ST
         CI_WATCH_GH="$D/http-stub" CI_WATCH_SELFTEST_STUB="$STUB" \
         CI_WATCH_SELFTEST_BSTUB="$BSTUB" CI_WATCH_SELFTEST_RSTUB="$RSTUB" \
         CI_WATCH_SELFTEST_DSTUB="$DSTUB" "$TOOL" 2>&1)"
-want C42 "and names gh's own auth when no env token" "credential: gh's own stored auth" "$OUT"
+# CHANGED 2026-09-17. This used to assert "gh's own stored auth" with no env
+# token, which documented the very behaviour we then measured as a silent
+# privilege escalation: an unset GH_TOKEN is not "no credential", it is gh
+# helping itself to a keyring token with `repo` scope, which reads private
+# SOURCE and CREATES ISSUES. ci-watch now fetches the narrow read-only PAT
+# itself, so the no-env-token case must name THAT.
+want C42 "and names the Keychain PAT it fetched when no env token" \
+    "credential: narrow read-only PAT, fetched from the Keychain by this tool" "$OUT"
+# THE ARM THAT NOW MATTERS MOST: when the fetch CANNOT run, the broad fallback
+# must still be named, and named loudly. Forced by hiding github-api-token from
+# PATH. Without this the suite would only ever exercise the happy path, and a
+# silently-broken fetch would read as success.
+OUT="$(env -u GH_TOKEN -u GITHUB_TOKEN PATH="$D:/usr/bin:/bin" CI_WATCH_LIST="$LIST" CI_WATCH_STATE="$STATE" \
+        CI_WATCH_GH="$D/http-stub" CI_WATCH_SELFTEST_STUB="$STUB" \
+        CI_WATCH_SELFTEST_BSTUB="$BSTUB" CI_WATCH_SELFTEST_RSTUB="$RSTUB" \
+        CI_WATCH_SELFTEST_DSTUB="$DSTUB" "$TOOL" 2>&1)"
+want C42 "names the BROAD fallback loudly when the fetch cannot run" "BROAD" "$OUT"
 # TWIN: the two must differ, or the line is decoration rather than information.
 wantnot C42 "TWIN the two credentials render differently" "GH_TOKEN from the environment" "$OUT"
 # It must never silently retry with the env token removed -- that is an escalation.
