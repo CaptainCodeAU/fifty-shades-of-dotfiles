@@ -1,0 +1,235 @@
+#!/usr/bin/env bash
+# open-items -- what is still open, scoped to the project you are standing in.
+#
+# WHY THIS EXISTS. `~/.claude/MEMORY/WORK/` was ONE drawer for the whole machine, so
+# every session saw every project's items. Gavin ruled it per-project on 2026-09-18
+# (D-20260918-02). The ruling has three parts and this tool implements two of them:
+# items live under their project, every item NAMES its project, and the machine-wide
+# index is DERIVED by script and never maintained by hand -- because a hand-copied
+# index drifts the first time someone closes an item and updates only one of the two
+# places.
+#
+# WHY A TOOL AND NOT JUST A FOLDER LAYOUT. The rejected alternative was a flat drawer
+# with a `project:` tag and a command to filter it. It loses on the only thing that
+# matters: what gets an item IN FRONT of Gavin is the SessionStart hook, not the file.
+# A list he has to remember to type is a list he will not see, which is the same
+# habituation failure `ci-watch` exists to prevent. So this tool is the query layer,
+# and `session-open-items` beside it is the surface that actually speaks.
+#
+# THE BLOCK FORMAT IS BORROWED, NOT INVENTED. It is DECISIONS.md's shape, which
+# `decided` already parses with one awk pass. Naming the source matters: a convention
+# you cannot cite is a convention you have not looked up, and the last time a file
+# format was copied from a peer session's artifact rather than from our own records,
+# it was the wrong format (2026-09-15, `NEXT.md`).
+#
+# THE DESIGN POINT, borrowed from census and decided: AN EMPTY RESULT IS THE ANSWER
+# THAT LIES. "No open items" reads identically to "the drawer was never found" and to
+# "this project has no folder yet". Those are three different facts and this tool
+# says which one it means, every time, with the denominator attached.
+#
+# Item format -- one block per item:
+#
+#   ## W-20260918-01 -- short title
+#
+#   project: fifty-shades-of-dotfiles
+#   status: open
+#   size: small
+#   holds-in: ci-watch-observability/NEXT.md
+#
+#   Body prose. Everything until the next `## W-` heading.
+#
+# `status:` is open | done | decided | dropped. Only `open` is reported by default.
+#
+# Usage:
+#   open-items                    open items for the CURRENT project
+#   open-items --all              open items for every project
+#   open-items --project <name>   a named project
+#   open-items --closed           include done/decided/dropped as well
+#   open-items --projects         list the projects that have a drawer
+#   open-items --index            regenerate INDEX.md from the per-project files
+#   open-items --selftest         prove every arm before trusting it
+#   open-items --help
+#
+# Exit: 0 items found  ·  1 none found (not an error)  ·  2 REFUSED -- the drawer is
+# missing or unreadable, which is NOT "nothing is open".
+
+set -uo pipefail
+
+WORK="${OPEN_ITEMS_DIR:-$HOME/.claude/MEMORY/WORK}"
+INDEX="$WORK/INDEX.md"
+
+refuse(){ printf 'open-items: REFUSED -- %s\n' "$1" >&2; exit 2; }
+usage(){ sed -n '2,52p' "$0" | sed 's/^# \{0,1\}//'; }
+
+# The project you are standing in. Basename of the git toplevel, which is how every
+# other per-project thing on this machine is keyed. NOT the cwd basename: that is a
+# subdirectory half the time and would silently key items to `src`.
+current_project(){
+  local top
+  top="$(git rev-parse --show-toplevel 2>/dev/null)" || return 1
+  [ -n "$top" ] || return 1
+  basename "$top"
+}
+
+projects_with_drawers(){
+  find "$WORK" -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null \
+    | while IFS= read -r d; do [ -f "$d/OPEN.md" ] && basename "$d"; done | sort
+}
+
+# Count blocks across every project file. This is the DENOMINATOR, and it is printed
+# on every path including the misses, so a zero can never be mistaken for "the tool
+# looked and the drawer was full of nothing".
+count_all_blocks(){
+  local n=0 f
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    n=$(( n + $(grep -c '^## W-' "$f" 2>/dev/null || echo 0) ))
+  done < <(find "$WORK" -mindepth 2 -maxdepth 2 -name OPEN.md -print 2>/dev/null)
+  printf '%s' "$n"
+}
+
+# Print blocks from one file, filtered by status. One awk pass, and deliberately NO
+# \x01 record separator: BSD awk (this machine's) does not honour \x escapes, which
+# silently matched nothing when `decided` first tried it. Same awk, same trap avoided.
+blocks_from(){
+  local f="$1" want_closed="$2"
+  [ -f "$f" ] || return 1
+  awk -v want_closed="$want_closed" '
+    function flush(b,   st) {
+      if (b == "") return
+      st = "open"
+      if (match(b, /\nstatus:[ \t]*[A-Za-z]+/))
+        { st = substr(b, RSTART, RLENGTH); sub(/.*status:[ \t]*/, "", st) }
+      if (want_closed == "1" || st == "open") { printf "%s", b; matched++ }
+    }
+    /^## W-/ { flush(block); block = $0 "\n"; next }
+    { if (block != "") block = block $0 "\n" }
+    END { flush(block); exit (matched > 0 ? 0 : 1) }
+  ' "$f"
+}
+
+report(){                       # report <label> <file...>
+  local label="$1"; shift
+  local total hits any=1 f
+  total="$(count_all_blocks)"
+  for f in "$@"; do
+    hits="$(blocks_from "$f" "$WANT_CLOSED")" && { printf '%s' "$hits"; any=0; }
+  done
+  if [ "$any" -eq 0 ]; then
+    printf '\nopen-items: %s. %s item(s) exist across %s project drawer(s).\n' \
+           "$label" "$total" "$(projects_with_drawers | wc -l | tr -d ' ')"
+    return 0
+  fi
+  # THE MISS PATH SAYS WHAT IT LOOKED AT. A bare "none" here would read identically
+  # to a drawer that was never opened, which is the whole failure this tool guards.
+  printf 'open-items: nothing open for %s.\n' "$label" >&2
+  printf 'open-items: searched %s item(s) across %s project drawer(s): %s\n' \
+         "$total" "$(projects_with_drawers | wc -l | tr -d ' ')" \
+         "$(projects_with_drawers | tr '\n' ' ')" >&2
+  printf 'open-items: a miss is not the same as "nothing is open" -- it can also mean this project has no drawer yet.\n' >&2
+  return 1
+}
+
+# INDEX.md is DERIVED. It carries a do-not-edit banner because the ruling's whole
+# point is that a hand-maintained index drifts the first time someone closes an item
+# in one place and not the other.
+regenerate_index(){
+  [ -d "$WORK" ] || refuse "no drawer at $WORK"
+  local p f n tmp
+  tmp="$WORK/.INDEX.md.$$.tmp"
+  {
+    printf '# INDEX -- every open item on this machine, by project\n\n'
+    printf '> DERIVED FILE. Do not edit. Regenerate with `open-items --index`.\n'
+    printf '> The per-project `OPEN.md` files are the source of truth; this is a view of\n'
+    printf '> them. It exists so one place can answer "what is open anywhere", without\n'
+    printf '> anyone hand-copying items into it -- a hand copy drifts the first time an\n'
+    printf '> item is closed in one file and not the other (D-20260918-02).\n\n'
+    printf 'Generated: %s\n\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || printf 'unknown')"
+    while IFS= read -r p; do
+      [ -n "$p" ] || continue
+      f="$WORK/$p/OPEN.md"
+      # `grep -c` prints 0 AND exits 1 when it matches nothing, so a `|| printf 0`
+      # fallback appends a SECOND zero and the index reads "00 open". Caught by the
+      # selftest's own index arm on its first run. Take grep's own number and only
+      # substitute when the whole thing produced nothing at all.
+      n="$(blocks_from "$f" 0 | grep -c '^## W-' 2>/dev/null | head -1 | tr -cd '0-9')"
+      [ -n "$n" ] || n=0
+      printf '## %s -- %s open\n\n' "$p" "$n"
+      if [ "$n" -gt 0 ]; then
+        blocks_from "$f" 0 | grep '^## W-' | sed 's/^## /  - /'
+        printf '\n'
+      else
+        printf '  (none)\n\n'
+      fi
+    done < <(projects_with_drawers)
+  } > "$tmp" 2>/dev/null || { command rm -f "$tmp" 2>/dev/null; refuse "could not write $INDEX"; }
+  mv -f "$tmp" "$INDEX" 2>/dev/null || { command rm -f "$tmp" 2>/dev/null; refuse "could not replace $INDEX"; }
+  printf 'open-items: regenerated %s from %s project drawer(s).\n' \
+         "$INDEX" "$(projects_with_drawers | wc -l | tr -d ' ')"
+}
+
+WANT_CLOSED=0
+ARGS=()
+for a in "$@"; do
+  case "$a" in
+    --closed) WANT_CLOSED=1 ;;
+    *) ARGS+=("$a") ;;
+  esac
+done
+set -- ${ARGS[@]+"${ARGS[@]}"}      # bash 3.2: a bare "${a[@]}" on an empty array is unbound under set -u
+
+case "${1:-}" in
+  -h|--help)  usage; exit 0 ;;
+  --selftest) exec "$(dirname "$0")/open-items-selftest" ;;
+esac
+
+# `--session` is EXEMPT from this guard, deliberately. Every other entry point should
+# refuse loudly when the drawer is missing, because silence there would report the
+# absence of a filesystem as the absence of work. The session surface is the one place
+# where that trade flips: it runs before the user sees a prompt, so a refusal there is
+# noise in their face at the worst moment, and `open-items` proper is one word away.
+# Caught by the selftest on its first run -- the guard sat above the case statement, so
+# a missing drawer made the session surface exit 2 and print a refusal at every start.
+[ -d "$WORK" ] || [ "${1:-}" = --session ] \
+  || refuse "no drawer at $WORK (set OPEN_ITEMS_DIR to point elsewhere)"
+
+case "${1:-}" in
+  # THE SESSION-START SURFACE. Deliberately SILENT when there is nothing open, and
+  # deliberately not a separate script: one less thing to keep in step. Silence here
+  # is not the count-and-absence trap, it is the opposite of it -- a line that prints
+  # every session regardless becomes wallpaper, which is the failure `ci-watch`'s
+  # whole exception-based design exists to avoid. Anyone who wants the denominator
+  # runs `open-items`, which always states it.
+  #
+  # It exits 0 on EVERY path including a missing drawer. A session start must never
+  # be blocked or noisied by this; if something is wrong, the full command says so.
+  --session)
+    proj="$(current_project)" || exit 0
+    f="$WORK/$proj/OPEN.md"
+    [ -f "$f" ] || exit 0
+    titles="$(blocks_from "$f" 0 2>/dev/null | grep '^## W-' | sed 's/^## [^ ]* -- /   · /')"
+    [ -n "$titles" ] || exit 0
+    n="$(printf '%s\n' "$titles" | wc -l | tr -d ' ')"
+    printf '\033[1mOpen items\033[0m \033[2m(%s in %s -- `open-items` for detail)\033[0m\n' "$n" "$proj"
+    printf '\033[2m%s\033[0m\n' "$titles"
+    exit 0 ;;
+  --index)    regenerate_index ;;
+  --projects)
+    p="$(projects_with_drawers)"
+    [ -n "$p" ] || { printf 'open-items: no project drawers under %s\n' "$WORK" >&2; exit 1; }
+    printf '%s\n' "$p"
+    printf '\nopen-items: %s drawer(s), %s item(s) total.\n' \
+           "$(printf '%s\n' "$p" | wc -l | tr -d ' ')" "$(count_all_blocks)" ;;
+  --all)
+    files=(); while IFS= read -r f; do files+=("$f"); done \
+      < <(find "$WORK" -mindepth 2 -maxdepth 2 -name OPEN.md -print 2>/dev/null | sort)
+    [ "${#files[@]}" -gt 0 ] || refuse "no project drawers under $WORK -- nothing could have been searched"
+    report "every project" "${files[@]}" ;;
+  --project)
+    [ -n "${2:-}" ] || { printf 'usage: open-items --project <name>\n' >&2; exit 2; }
+    report "$2" "$WORK/$2/OPEN.md" ;;
+  '')
+    proj="$(current_project)" || refuse "not inside a git repo, so there is no current project -- use --project <name> or --all"
+    report "$proj" "$WORK/$proj/OPEN.md" ;;
+  *) printf 'open-items: unknown arg "%s" (try --help)\n' "$1" >&2; exit 2 ;;
+esac
