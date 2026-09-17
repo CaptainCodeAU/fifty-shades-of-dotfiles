@@ -144,3 +144,22 @@ holds-in: skills/herdr/SKILL.md, Create a worktree
 Every worktree goes to `<repo>/.worktree/<branch>` via the `hwt` wrapper. Not
 `~/.herdr/worktrees`, and not the sidebar "New worktree" button, which uses that shared
 default too. `herdr worktree create` without `--path` silently uses the shared folder.
+
+## D-20260917-06 -- Private shell helpers are named __double_underscore
+
+topic: zsh helper function naming single underscore double underscore snapshot Claude Code filtered completion compdef uv_tool_mode run_onboarding broken helper not found silent wrong answer
+
+decided: 2026-09-17
+status: standing
+holds-in: fifty-shades-of-dotfiles/docs/ZSH_HELPER_NAMESPACE.md
+
+Claude Code drops every function whose name starts with a SINGLE underscore from the
+shell snapshot it sources before each Bash tool call, because that namespace holds
+zsh's ~1,500 completion functions. Measured: `^_[^_]` is 1563 in a real interactive
+zsh and 0 in a Claude shell, with `^__` at 18 vs 16 as the control. So 54 private
+helpers vanished while the 17 public functions calling them survived and failed, and
+`uv_tool_mode` / `uv_tool_check_current_project` returned a confident WRONG answer
+rather than failing -- the second told you to install a tool already installed and
+frozen. 52 helpers renamed to `__name`; single underscore is now reserved for the two
+real `compdef` functions. Enforced by `zsh-helper-namespace-check`, whose `--selftest`
+proves it can fail and that an empty scan REFUSES rather than reporting clean.
