@@ -163,6 +163,23 @@ Deployed machine-globally by stow from `home/.claude/tools/`, so it is present i
 
 Same division for reading output: `head` to GLANCE, [`peek`](home/.local/bin/peek) before you CONCLUDE. `<cmd> | peek [N]` (default 40, `--all` for no limit) prints the lines on stdout and the denominator on stderr, so `cmd | peek | jq` still works. Stowed the same way, from `home/.local/bin/`.
 
+### Printing a secret is BLOCKED, including the probe that looks careful
+
+[`enforce-secret-probe.sh`](home/.claude/hooks/enforce-secret-probe.sh) is a
+PreToolUse hook that DENIES a Bash command which would expand a credential-named
+variable into the transcript. It blocks three shapes, all measured in real leaked
+transcripts on 2026-09-17: `${V:-word}` on a secret var, a piped `env`/`printenv`
+dump, and a bare secret var inside `echo`/`printf`.
+
+The one worth knowing is `echo "set? ${V:+yes}${V:-no}"`, which prints
+`yes<the whole token>`. `${V:-word}` means "use word only if V is empty", so when V
+is set it expands to the VALUE. It reads as a redaction and is an expansion.
+
+Print a fact about the secret instead: `${#V}` for length, a `shasum` prefix to
+compare two, or `env | cut -d= -f1` for names. `--selftest` proves all 14 arms,
+positive and negative. The reasoning lives in `OPERATIONAL_RULES.md`; this is a
+pointer, not a second copy.
+
 Never start a Bash command with `cd` — the harness hard-rejects any leading `cd` (it tells you to use `git -C <path>`, an absolute path, or `builtin cd`). This is a built-in Claude Code guard, not a repo hook. Treat the rejection as a signal to change the command _shape_ (reach for `git -C`/absolute paths), not to retry the same `cd`-prefixed command. A rejected `cd` exits non-zero, so if it was batched with sibling calls it cancels all of them (see next paragraph) — which reads as a "stuck loop" but is really one repeated mistake.
 
 A non-zero exit from any Bash call cancels the other tool calls batched in the same message (Claude Code aborts parallel siblings on error). Never batch state-changing commands (`git add`/`commit`/`push`, file writes) in the same message as read-only probes — a probe that exits non-zero (e.g. `ls`/`grep`/`cat` on a missing path) silently cancels the mutation, so a commit can vanish with no error you'd notice. Sequence mutations as their own calls, and prefer `find -print` over `ls`/`grep` for existence checks (it exits 0 on an empty match — but only when the search root exists; for a possibly-missing path use `test -e` or append `|| true`, per the Shell-section caveat above).
