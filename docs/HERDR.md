@@ -1,5 +1,13 @@
 # herdr — release cooldown, daemon persistence, and the tmux question
 
+herdr-verified: 0.8.2
+
+Re-verified 2026-09-17 against the installed 0.8.2. The `herdr-verified:`
+line is machine-read by `herdr-skill-drift-check`, which reports every
+`docs/HERDR*.md` that has fallen behind the binary. It replaced six
+hand-typed version mentions across four docs, all six of which had gone
+stale without anyone noticing. Move it only after actually re-checking.
+
 [herdr](https://github.com/herdrdev/herdr) is an agent multiplexer: a terminal
 UI that runs several AI coding agents side by side in real panes, with a status
 column showing which are working, blocked or done. Single Rust binary, sessions
@@ -176,7 +184,7 @@ assert it. `install.sh` carries `HERDR_VERSION` plus a sha256 per architecture,
 downloads that exact asset, and **refuses to install on mismatch**:
 
 ```bash
-HERDR_VERSION="v0.7.5"
+HERDR_VERSION="v0.7.5"   # illustrative -- install.sh holds the current pin
 HERDR_SHA256_LINUX_X86_64="3dc83288…59253"
 HERDR_SHA256_LINUX_AARCH64="32e763a1…a8b9"
 ```
@@ -259,6 +267,60 @@ herdr-cooldown-check                                    # confirm the pin is bac
 Linux/WSL is unchanged — `_preflight_herdr_release_check` already applies pinned,
 hash-verified `HERDR_VERSION` bumps automatically; see the runbook above the
 `HERDR_VERSION` comment block in `install.sh` for that side.
+
+#### What a bump actually touches
+
+Asked on 2026-09-17 and worth writing down, because most of the list is ours,
+not Homebrew's.
+
+Homebrew does these on its own:
+
+| Path | What happens |
+|---|---|
+| `$(brew --prefix)/Cellar/herdr/<new>/` | new tree: `bin/herdr`, `CHANGELOG.md`, `sbom.spdx.json`, the plist, `INSTALL_RECEIPT.json`, `.brew/herdr.rb` |
+| `$(brew --prefix)/bin/herdr`, `opt/herdr` | symlinks repointed |
+| `$(brew --prefix)/var/homebrew/pinned/herdr` | removed by `brew unpin`, recreated by `brew pin` |
+| the 6h cache in `$TMPDIR` | `herdr-cooldown-check`'s verdict goes stale |
+
+These are ours, and nothing upstream will do them for you:
+
+| # | File | Version-bound thing |
+|---|---|---|
+| 1 | `install.sh` | `HERDR_VERSION` (Linux pin) |
+| 2 | `install.sh` | both `HERDR_SHA256_LINUX_*` hashes |
+| 3 | `home/.claude/skills/herdr/UPSTREAM.md` | the skill merge base -- 0.8.2 revised the bundled skill wholesale (#2847) |
+| 4 | `home/.claude/skills/herdr/UPSTREAM.version` | the tag that capture came from |
+| 5 | `home/.claude/skills/herdr/SKILL.md` | whatever the merge pulls in |
+| 6-9 | `docs/HERDR*.md` | one `herdr-verified:` line each |
+| 10 | `home/.config/herdr/config.toml` | only when a release retires or adds a key -- run `herdr config check` |
+| 11 | `home/.config/herdr/plugins/*/herdr-plugin.toml` | `min_herdr_version`, and the plugin API if it moved |
+| 12 | `home/.config/systemd/user/herdr.service` | only if service flags change |
+
+`herdr-skill-drift-check` reports 3, 4 and 6-9 with no thinking required: it
+compares the live `herdr --skill` to the stored snapshot, the snapshot's version
+to the binary, and every doc stamp to the binary. Items 1, 2, 10 and 11 are
+still a human's job. `herdr-linux-pin-check` covers 1 and 2.
+
+#### What install.sh does after stow
+
+`_post_stow_herdr_plugins_and_skill` (added 2026-09-17) closes three gaps
+between "stow put the files there" and "herdr actually works here":
+
+- **`herdr plugin link`** for `window-title-fix`. Stow deploys the plugin FILES,
+  but herdr only knows a plugin exists once it is in `~/.config/herdr/plugins.json`
+  -- machine-local state this repo does not track, because it holds absolute
+  paths. Before this, a fresh box got the files and a silently broken window
+  title. `link`, never `install`: see `HERDR_PLUGINS.md` section 1.
+- **The `~/.agents` skill symlink.** Codex discovers `~/.agents/skills` as a
+  skill root by convention, with no config entry and nothing to grep for. Until
+  2026-09-17 that was a separate copy of the herdr skill and it had drifted from
+  Claude's. Both now point at the one file in this repo. A REAL file found there
+  is backed up, not overwritten.
+- **`herdr config check`.** 0.8.2 made it report unknown built-in theme names
+  instead of accepting them silently (#2452). It reports; it never repairs.
+  `config.toml` is tracked, and an installer that edits it can lose your
+  keybindings. It earned its place the day it was added, catching two settings
+  written under `[ui]` that belong under `[server]`.
 
 ## Running herdr as a persistent server
 
@@ -537,6 +599,8 @@ box with neither is untouched.
 | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `herdr server`                               | **Refused.** Prints `systemctl --user start herdr.service` (Linux) or `brew services start herdr` (macOS). | A hand-started server inherits the shell's environment and dies with the session -- the whole reason the service exists. On the Mac it also exits 1 on the socket and `keep_alive` respawns it forever. |
 | `herdr server stop`, `reload-config`, ...    | Pass through.                                                                                              | Only the bare form starts a server.                                                                                                                                                                     |
+| `herdr update`                               | **Refused** (2026-09-17). Prints `herdr-cooldown-check` and `./install.sh`.                                 | herdr ships its own updater. It downloads and installs a release directly, walking around Homebrew, `brew pin` and the whole `HERDR_COOLDOWN_DAYS` gate in one command.                                 |
+| `herdr channel set preview`                  | **Refused** (2026-09-17).                                                                                   | Same hole by another route: it repoints that updater at preview builds. `channel set stable` passes through.                                                                                            |
 | `herdr` (attach), Linux, unit down           | Starts the unit first, then attaches.                                                                      | Upstream attach "starts or attaches to" a server: with the unit down it would spawn the same hand-started server with no visible command.                                                               |
 | Anything inside a herdr pane (`HERDR_ENV=1`) | No check at all.                                                                                           | The server is by definition running; agents call the CLI constantly and should pay nothing.                                                                                                             |
 
@@ -747,7 +811,11 @@ the binary itself.
 
 ### Capability references (written for an AI agent, not a human)
 
-Verified against herdr 0.7.5 by executing every command, 2026-08-02.
+Written against herdr 0.7.5 by executing every command, 2026-08-02; all three
+re-verified against 0.8.2 on 2026-09-17, and each carries its own
+`herdr-verified:` stamp. The re-verify corrected real things -- a read trap that
+had been fixed upstream, a plugin gotcha that no longer applies, and a fetch
+recipe made obsolete by `herdr --skill`.
 
 - [`docs/HERDR_AGENT_SKILL.md`](HERDR_AGENT_SKILL.md) — driving herdr from
   inside a pane: split, run, `wait-output`, read. Includes the Claude-sandbox
