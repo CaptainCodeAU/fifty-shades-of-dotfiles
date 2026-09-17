@@ -3,7 +3,16 @@
 **Audience: an AI coding agent, not a human.** This replaces reading
 https://herdr.dev/docs/preview/agent-automation/.
 
-Verified against **herdr 0.7.5** on 2026-08-02 by executing every command.
+herdr-verified: 0.8.2
+
+Written against **herdr 0.7.5** on 2026-08-02 by executing every command.
+Reviewed against **0.8.2** on 2026-09-17. What that review did and did not do is
+stated at each claim: several traps here are about agent STARTUP, which 0.8.2
+reworked, and re-running them means starting real agents in the user's live
+session. Where a claim was not re-run it says so rather than carrying a stamp it
+has not earned.
+
+The `herdr-verified:` line is machine-read by `herdr-skill-drift-check`.
 OBSERVED = produced by a real run. DOC = upstream claim, not confirmed here.
 
 **The upstream page is labelled "preview / unreleased `master` work". That
@@ -123,6 +132,14 @@ OBSERVED immediately after `pane split`. The pane exists but the shell is still
 executing its rc file (a heavy `.zshrc` banner takes seconds). An "available
 shell pane" means at an interactive prompt with no foreground command.
 
+STILL REAL ON 0.8.2, but smaller. 0.8.2 made `agent start` wait for new pane
+shells and first-run agent prompts instead of racing them (#2410, #2537, #2773,
+#2774). It did not remove `agent_pane_busy`: a pane mid-startup still refuses,
+and `herdr-quick-task` in this repo keeps a bounded retry loop for exactly that.
+The retry below is still the right shape. NOT re-run on 0.8.2 -- reproducing it
+means starting real agents in a live session, so this is upstream's account plus
+our own script's behaviour, not a fresh measurement.
+
 Fix -- wait for the prompt, then retry with backoff:
 
 ```bash
@@ -150,6 +167,18 @@ cost moved to `$0.096`.
 prompt. Confirm the answer actually arrived by grepping for expected content --
 never trust `--wait` returning as proof that work happened.
 
+0.8.2 CLAIMS THIS EXACT BUG IS FIXED: "`agent start` now waits for new pane
+shells and first-run agent prompts to become ready instead of racing them or
+**reporting premature readiness**" (#2773, #2774). That is this trap by name.
+
+Kept anyway, and deliberately. It is NOT re-verified here, and the failure mode
+is a silently swallowed prompt that raises no error -- the original was only
+caught because cost telemetry stayed at $0. Deleting a warning of that shape on
+the strength of a changelog line is a bad trade: if upstream is right you lose
+nothing by still confirming the answer arrived, and if it is not you lose work
+silently. The last sentence of the mitigation is the durable part and does not
+depend on this bug at all.
+
 ---
 
 ## 5. Reading a reply
@@ -167,8 +196,13 @@ enter herdr's host scrollback and cannot be recovered. Fallback: ask the agent
 to write its response to a temp file and reply only with the path, then read
 the file. Use only as a fallback.
 
-Sources as in `HERDR_AGENT_SKILL.md` section 6; the small-`--lines`-returns-zero
-trap applies here identically.
+Sources as in `HERDR_AGENT_SKILL.md` section 6. **The small-`--lines`-returns-zero
+trap this used to point at no longer reproduces**: re-measured on 0.8.2,
+2026-09-17, `--lines 15` returns a truncated tail (325 bytes) rather than
+nothing, and degrades smoothly down to `--lines 5`. The numbers for both
+versions are in that section. The advice that followed from it is also
+withdrawn there: prefer `recent-unwrapped` for transcripts again, since at
+`--lines 400` it returned eight times more than `visible`.
 
 ---
 
@@ -182,6 +216,12 @@ trap applies here identically.
   hanging.
 - The wait tracks lifecycle state, not an individual turn. If the agent was
   already working, completion of the *previous* turn satisfies it.
+- **0.8.2: `agent prompt` now REFUSES an agent already waiting at an approval or
+  question dialog**, returning `agent_blocked` without sending text or Enter
+  (#2788). herdr now enforces at the CLI what sections 7 and 8 argue for on
+  policy grounds: automation detects `blocked` and reports it, a human answers
+  it. Your script should still check, because a refusal you ignore is a prompt
+  that never ran.
 
 ---
 
@@ -222,6 +262,12 @@ herdr agent send-keys <name> bogus-key  # -> {"error":{"code":"invalid_key",...}
 
 OBSERVED: herdr validates the key name **before writing any bytes**, so a typo
 cannot send garbage into a live agent.
+
+0.8.2 ADDED REACH HERE: `pane send-keys` and `agent send-keys` now preserve
+Shift when sending `shift+tab`, specifically so agent permission modes can be
+cycled programmatically (#1561). Read that as the hazard growing, not shrinking
+-- permission mode is the setting that decides what an agent may do without
+asking, and it is now scriptable.
 
 That safety does not extend to semantics. `send-keys` is exactly the primitive
 that can dismiss or answer an approval prompt. **Automation should detect
