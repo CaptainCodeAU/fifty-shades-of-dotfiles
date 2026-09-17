@@ -137,6 +137,20 @@ drawer will be in again, not for the state it is in tonight.
 Gavin also offered to weigh in on individual items' ownership rather than have it inferred,
 so a routing that is not obvious is a question for him, not a guess.
 
+ADDED 2026-09-18 by the ci-watch session, which was asked the same question independently and
+gave the same answer. Two points from that pass, folded in here rather than filed as a second
+block -- one decision must have one record, or the two drift.
+
+WHY A HOOK RATHER THAN A COMMAND. The rejected alternative was a flat drawer with a `project:`
+tag and an `open` command that filters by current repo. It loses on the thing that actually
+matters: the mechanism that gets an item IN FRONT of Gavin is a SessionStart hook, not a file.
+A list he has to remember to type is a list he will not see, which is the same habituation
+failure ci-watch exists to prevent.
+
+RULED OUT EXPLICITLY, so it is not revisited: items living in the project repo as
+`.claude/OPEN.md`. fifty-shades-of-dotfiles is PUBLIC, and private open items must never sit
+in a repo that can be pushed publicly. Version control is not worth that trade.
+
 ## D-20260917-09 -- The SSH key stays, keychain-backed, scoped to one Host block
 
 topic: ssh key passphrase keychain AddKeysToAgent UseKeychain claude launch agent expiry branch liveness ci-watch unattended
@@ -293,3 +307,25 @@ sandboxed probe failed.
 Also settled here so it is not re-derived: the App's 404 on private repos was never a missing
 permission. `/installation/repositories` returns total_count 1, and Actions:read answers 200
 on that repo. The App is simply not installed on the watched ones.
+
+## D-20260918-03 -- The two gh guards stay deliberately mismatched
+
+topic: gh auth login git-protocol ssh zshrc wrapper PreToolUse hook guard mismatch carve-out verified safe
+
+decided: 2026-09-18
+status: standing
+holds-in: fifty-shades-of-dotfiles/docs/GITHUB_CREDENTIAL_LANES.md section 10
+
+The `.zshrc` wrapper ALLOWS `gh auth login --git-protocol ssh`, calling it verified safe; the
+PreToolUse hook BLOCKS every form. They disagree, and they stay that way.
+
+Nothing is broken and no gate weakens, which is the whole argument. Tightening the wrapper
+would delete a carve-out another author built and tested, on no new evidence. Loosening the
+hook would relax a safety catch on evidence covering ONE of the three ways that command can
+run: the token-on-stdin form is measured harmless, while the interactive and browser flows
+are NOT measured and cannot be from inside a Claude session -- they need Gavin at a terminal.
+
+The general shape, and the reason this is written down rather than left as a nagging
+inconsistency: two guards disagreeing is not itself a defect. Reconciling them by moving
+EITHER one costs something real, and an unmeasured case is not evidence for relaxing a gate.
+Revisit only if someone measures the interactive and browser flows.
