@@ -90,6 +90,15 @@ four separate lessons:
   always says `showed 8 of 214 lines -- 206 HIDDEN`, or, just as importantly,
   `showed all 6 lines (nothing hidden)`.
 
+**AND THE SEARCH TOOL ITSELF CAN GO SILENT.** Measured 2026-09-17: `grep` here is a
+shell function sourced from a shell snapshot, and on a file with very long lines it
+returns an EMPTY count where `command grep` and `rg` both return 13. The file was plain
+UTF-8. Two readings in one session were wrong before it was noticed, and the tell both
+times was that every arm came back empty INCLUDING the control. This is the same rule
+as the four traps above, aimed at the instrument instead of the experiment, and it is
+the reason [`census`](home/.claude/tools/census.py) reads files itself in Python rather
+than shelling out to a grep.
+
 **YOU CAN BE THE ONE WHO HIDES THE EVIDENCE.** The first three traps are all
 something else staying quiet -- a tool, a formatter, a refusal. This fourth one
 is different and worth naming separately: *you* narrowed the output, and then

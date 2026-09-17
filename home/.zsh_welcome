@@ -19,7 +19,7 @@
 # ------------------------------------------------------------------------------
 # Verbosity Resolution
 # ------------------------------------------------------------------------------
-_resolve_welcome_verbosity() {
+__resolve_welcome_verbosity() {
     # Explicit setting wins; otherwise default to full. SSH/tmux no longer
     # force minimal — those are places you typically want MORE info, not less.
     if [[ -n "$ZSH_WELCOME" ]]; then
@@ -30,14 +30,14 @@ _resolve_welcome_verbosity() {
 }
 
 # Store resolved verbosity
-_WELCOME_VERBOSITY=$(_resolve_welcome_verbosity)
+_WELCOME_VERBOSITY=$(__resolve_welcome_verbosity)
 : ${ZSH_WELCOME_QUICKREF:="full"}
 : ${ZSH_WELCOME_DISK_WARN:=90}
 
 # ------------------------------------------------------------------------------
 # Helper: Get Disk Usage
 # ------------------------------------------------------------------------------
-_get_disk_usage() {
+__get_disk_usage() {
     local usage_pct free_space
 
     if [[ "$IS_MAC" == "true" ]]; then
@@ -56,7 +56,7 @@ _get_disk_usage() {
 # ------------------------------------------------------------------------------
 # Helper: Check GPU Availability (WSL/Linux only)
 # ------------------------------------------------------------------------------
-_check_gpu() {
+__check_gpu() {
     if command -v nvidia-smi &>/dev/null && nvidia-smi &>/dev/null; then
         echo "available"
     else
@@ -72,14 +72,14 @@ _check_gpu() {
 # offered. If a ~/.ssh/config.local edit drops github.com from the override, ssh
 # silently falls back to `Host * IdentitiesOnly yes` and every push fails with
 # "Permission denied (publickey)" even though the forwarded agent holds the key.
-# Three layers below: _compute_github_forward_drift does the raw `ssh -G` config
-# resolution; _github_config_status caches that on ssh-config mtimes (the banner
+# Three layers below: __compute_github_forward_drift does the raw `ssh -G` config
+# resolution; __github_config_status caches that on ssh-config mtimes (the banner
 # pays ~2 stats, not a subprocess, in steady state, yet recomputes the instant a
-# config file changes); _check_github_forward_drift adds a LIVE forwarded-agent-key
+# config file changes); __check_github_forward_drift adds a LIVE forwarded-agent-key
 # check on top -- because config can read OK while the agent carries no key, which
 # is exactly a "config fine but Permission denied (publickey)" push.
 # _compute_ returns: ok | broken | n/a
-_compute_github_forward_drift() {
+__compute_github_forward_drift() {
     command -v ssh &>/dev/null || { echo "n/a"; return; }
     local cfg io f expanded
     cfg=$(ssh -G github.com 2>/dev/null) || { echo "n/a"; return; }
@@ -102,7 +102,7 @@ _compute_github_forward_drift() {
 # config.local's mtime and invalidates the cache immediately, so the banner never
 # shows a stale OK after a real regression. Steady state = a couple of stats + one
 # file read, no subprocess (matches the "file-read over CLI in the banner" pref).
-_github_config_status() {
+__github_config_status() {
     command -v ssh &>/dev/null || { echo "n/a"; return; }
     local cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles"
     local cache="$cache_dir/github_forward_status"
@@ -117,7 +117,7 @@ _github_config_status() {
         [[ "$cached_sig" == "$sig" ]] && { echo "$cached_result"; return; }
     fi
     local result
-    result=$(_compute_github_forward_drift)
+    result=$(__compute_github_forward_drift)
     [[ -d "$cache_dir" ]] || mkdir -p "$cache_dir" 2>/dev/null
     print -r -- "${sig}|${result}" > "$cache" 2>/dev/null
     echo "$result"
@@ -130,9 +130,9 @@ _github_config_status() {
 # forwarded agent is empty; that is precisely a "config fine but publickey denied"
 # push, which the config-only check silently reported as OK.
 # Returns: ok | broken | nokey | noagent | n/a
-_check_github_forward_drift() {
+__check_github_forward_drift() {
     local cfg
-    cfg=$(_github_config_status)
+    cfg=$(__github_config_status)
     [[ "$cfg" != "ok" ]] && { echo "$cfg"; return; }          # broken (config drift) or n/a
     command -v ssh-add &>/dev/null || { echo "ok"; return; }  # cannot inspect agent -> trust config
     ssh-add -l >/dev/null 2>&1
@@ -146,7 +146,7 @@ _check_github_forward_drift() {
 # ------------------------------------------------------------------------------
 # Full Welcome Display
 # ------------------------------------------------------------------------------
-_show_welcome_full() {
+__show_welcome_full() {
     echo
 
     # --- OS Header ---
@@ -171,7 +171,7 @@ _show_welcome_full() {
     echo "    Shell: zsh ${ZSH_VERSION} | bash ${bash_ver}"
 
     # --- Disk Space ---
-    local disk_info=$(_get_disk_usage)
+    local disk_info=$(__get_disk_usage)
     local disk_pct="${disk_info%%:*}"
     local disk_free="${disk_info##*:}"
 
@@ -223,8 +223,8 @@ _show_welcome_full() {
         local nvm_ver=$(nvm --version 2>/dev/null)
         if [[ -z "$nvm_ver" ]]; then
             echo "    nvm:  ${warn}unknown${done}"
-        elif typeset -f _semver_cmp &>/dev/null && [[ -n "$NVM_MIN_VERSION" ]] \
-               && [[ "$(_semver_cmp "$nvm_ver" "$NVM_MIN_VERSION")" == "-1" ]]; then
+        elif typeset -f __semver_cmp &>/dev/null && [[ -n "$NVM_MIN_VERSION" ]] \
+               && [[ "$(__semver_cmp "$nvm_ver" "$NVM_MIN_VERSION")" == "-1" ]]; then
             echo "    nvm:  ${err}${nvm_ver}${done} ${err}↑${NVM_MIN_VERSION} (below min — CVE-2026-10796; run_onboarding)${done}"
         else
             echo "    nvm:  ${ok}${nvm_ver}${done}"
@@ -273,7 +273,7 @@ _show_welcome_full() {
                 _pnpm_is_brew=true
                 local _brew_pnpm_ver="${_brew_pnpm[-1]:t}"
                 if [[ -n "$_brew_pnpm_ver" && "$_brew_pnpm_ver" != "$pnpm_ver" ]] \
-                     && [[ "$(_pnpm_vercmp "$pnpm_ver" "$_brew_pnpm_ver")" == "-1" ]]; then
+                     && [[ "$(__pnpm_vercmp "$pnpm_ver" "$_brew_pnpm_ver")" == "-1" ]]; then
                     pnpm_display="${warn}${pnpm_ver}${done} ${warn}↑${_brew_pnpm_ver} (brew formula -- run pnpm_update)${done}"
                 fi
             fi
@@ -283,27 +283,27 @@ _show_welcome_full() {
         # Skipped entirely on a Homebrew-managed pnpm: the registry is not the
         # source of truth for that install method (see the block above).
         if [[ "$_pnpm_is_brew" == false ]] \
-             && [[ "$pnpm_ver" != "N/A" ]] && typeset -f _pnpm_get_latest &>/dev/null; then
+             && [[ "$pnpm_ver" != "N/A" ]] && typeset -f __pnpm_get_latest &>/dev/null; then
             local pnpm_latest pnpm_raw pnpm_elig_bin
-            pnpm_latest=$(_pnpm_get_latest 2>/dev/null)   # latest eligible (age-gated)
-            pnpm_raw=$(_pnpm_get_raw_latest 2>/dev/null)  # registry dist-tag latest
+            pnpm_latest=$(__pnpm_get_latest 2>/dev/null)   # latest eligible (age-gated)
+            pnpm_raw=$(__pnpm_get_raw_latest 2>/dev/null)  # registry dist-tag latest
             # Cached binary status of the eligible version (no network in the prompt).
-            pnpm_elig_bin=$(typeset -f _pnpm_get_eligible_binary &>/dev/null && _pnpm_get_eligible_binary 2>/dev/null)
+            pnpm_elig_bin=$(typeset -f __pnpm_get_eligible_binary &>/dev/null && __pnpm_get_eligible_binary 2>/dev/null)
             if [[ -n "$pnpm_latest" \
-                  && "$(_pnpm_vercmp "$pnpm_ver" "$pnpm_latest")" == "-1" ]]; then
+                  && "$(__pnpm_vercmp "$pnpm_ver" "$pnpm_latest")" == "-1" ]]; then
                 # Behind an installable version -- actionable nag.
                 if [[ "$pnpm_elig_bin" == "missing" ]]; then
                     # Newest eligible version was published WITHOUT a native binary
                     # (upstream pnpm 11.12/11.13-class release bug). Do NOT nag to run
                     # pnpm_update -- it would (correctly) refuse. Inform instead.
                     pnpm_display="${ok}${pnpm_ver}${done} ${warn}(update to ${pnpm_latest} held: published without a binary -- upstream pnpm bug)${done}"
-                elif [[ "$(_pnpm_vercmp "$pnpm_ver" "$PNPM_MIN_VERSION")" == "-1" ]]; then
+                elif [[ "$(__pnpm_vercmp "$pnpm_ver" "$PNPM_MIN_VERSION")" == "-1" ]]; then
                     pnpm_display="${err}${pnpm_ver}${done} ${err}↑${pnpm_latest} (below min ${PNPM_MIN_VERSION} -- run pnpm_update)${done}"
                 else
                     pnpm_display="${warn}${pnpm_ver}${done} ${warn}↑${pnpm_latest} (run pnpm_update)${done}"
                 fi
             elif [[ -n "$pnpm_raw" && "$pnpm_raw" != "$pnpm_ver" \
-                    && "$(_pnpm_vercmp "$pnpm_ver" "$pnpm_raw")" == "-1" ]]; then
+                    && "$(__pnpm_vercmp "$pnpm_ver" "$pnpm_raw")" == "-1" ]]; then
                 # At the latest eligible, but a newer version is held by the age gate.
                 pnpm_display="${ok}${pnpm_ver}${done} ${info}(latest eligible; ${pnpm_raw} pending release-age gate)${done}"
             fi
@@ -350,8 +350,8 @@ _show_welcome_full() {
     # --- bun (version floor for the ~/.bunfig.toml minimumReleaseAge cooldown) ---
     if command -v bun &>/dev/null; then
         local bun_ver=$(bun --version 2>/dev/null || echo 'N/A')
-        if [[ "$bun_ver" != "N/A" ]] && typeset -f _semver_cmp &>/dev/null && [[ -n "$BUN_MIN_VERSION" ]] \
-             && [[ "$(_semver_cmp "$bun_ver" "$BUN_MIN_VERSION")" == "-1" ]]; then
+        if [[ "$bun_ver" != "N/A" ]] && typeset -f __semver_cmp &>/dev/null && [[ -n "$BUN_MIN_VERSION" ]] \
+             && [[ "$(__semver_cmp "$bun_ver" "$BUN_MIN_VERSION")" == "-1" ]]; then
             echo "    bun:  ${err}${bun_ver}${done} ${err}↑${BUN_MIN_VERSION} (below min — .bunfig.toml cooldown ignored; run_onboarding)${done}"
         else
             echo "    bun:  ${ok}${bun_ver}${done}"
@@ -505,7 +505,7 @@ _show_welcome_full() {
     fi
 
     # --- GitHub API token (read-only) ---
-    # The status cache is written in the BACKGROUND by _claude_launch during
+    # The status cache is written in the BACKGROUND by __claude_launch during
     # Claude sessions (the only place $GH_TOKEN exists). The banner only reads
     # it here - fast, and no token access in plain shells.
     local gh_cache="${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles/gh_api_status"
@@ -587,7 +587,7 @@ _show_welcome_full() {
 
     # --- GPU (WSL/Linux only) ---
     if [[ "$IS_WSL" == "true" || "$IS_LINUX" == "true" ]]; then
-        local gpu_status=$(_check_gpu)
+        local gpu_status=$(__check_gpu)
         if [[ "$gpu_status" == "available" ]]; then
             echo "    GPU: ${ok}NVIDIA Available${done}"
         else
@@ -600,7 +600,7 @@ _show_welcome_full() {
     # resolution does not apply there; only consumer boxes push to bare
     # git@github.com over a forwarded key and need `identitiesonly no`.
     if [[ "$IS_MAC" != "true" ]]; then
-        case "$(_check_github_forward_drift)" in
+        case "$(__check_github_forward_drift)" in
             ok)
                 echo "    SSH github: ${ok}OK${done} ${info}(forwarded key present, identitiesonly no)${done}" ;;
             broken)
@@ -618,7 +618,7 @@ _show_welcome_full() {
 # ------------------------------------------------------------------------------
 # Minimal Welcome Display (Single Line)
 # ------------------------------------------------------------------------------
-_show_welcome_minimal() {
+__show_welcome_minimal() {
     local parts=()
 
     # OS
@@ -631,7 +631,7 @@ _show_welcome_minimal() {
     fi
 
     # Disk
-    local disk_info=$(_get_disk_usage)
+    local disk_info=$(__get_disk_usage)
     local disk_pct="${disk_info%%:*}"
     if [[ "$disk_pct" -ge "$ZSH_WELCOME_DISK_WARN" ]]; then
         parts+=("${warn}Disk ${disk_pct}%${done}")
@@ -674,14 +674,14 @@ _show_welcome_minimal() {
 
     # GPU (WSL/Linux only)
     if [[ "$IS_WSL" == "true" || "$IS_LINUX" == "true" ]]; then
-        if [[ "$(_check_gpu)" == "available" ]]; then
+        if [[ "$(__check_gpu)" == "available" ]]; then
             parts+=("${ok}GPU ✓${done}")
         fi
     fi
 
     # GitHub forwarding health (consumer boxes; surface any non-OK state)
     if [[ "$IS_MAC" != "true" ]]; then
-        case "$(_check_github_forward_drift)" in
+        case "$(__check_github_forward_drift)" in
             broken|nokey|noagent) parts+=("${err}github SSH ✗${done}") ;;
         esac
     fi
@@ -692,7 +692,7 @@ _show_welcome_minimal() {
 # ------------------------------------------------------------------------------
 # Quick Reference — Full
 # ------------------------------------------------------------------------------
-_show_quickref_full() {
+__show_quickref_full() {
     echo
     echo "${info}🚀  Quick Reference:${done}"
     echo "    Python:  python_new_project, python_setup, python_delete"
@@ -706,7 +706,7 @@ _show_quickref_full() {
 # ------------------------------------------------------------------------------
 # Quick Reference — Minimal (Compact 2 Lines)
 # ------------------------------------------------------------------------------
-_show_quickref_minimal() {
+__show_quickref_minimal() {
     echo
     echo "${info}💡 Python: python_new_project | Node: node_new_project | Docker: docker_help${done}"
     echo "   Tmux: tdev, gs | Git/Docker: lg, lzd | Media: yt --help"
@@ -719,10 +719,10 @@ _show_quickref_minimal() {
 # Show welcome based on verbosity
 case "$_WELCOME_VERBOSITY" in
     full)
-        _show_welcome_full
+        __show_welcome_full
         ;;
     minimal)
-        _show_welcome_minimal
+        __show_welcome_minimal
         ;;
     none|"")
         # No welcome output
@@ -734,10 +734,10 @@ esac
 if [[ "$_WELCOME_VERBOSITY" != "none" ]]; then
     case "$ZSH_WELCOME_QUICKREF" in
         full)
-            _show_quickref_full
+            __show_quickref_full
             ;;
         minimal)
-            _show_quickref_minimal
+            __show_quickref_minimal
             ;;
         none|"")
             # No quick reference output

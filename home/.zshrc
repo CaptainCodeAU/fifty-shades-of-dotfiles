@@ -132,7 +132,7 @@ esac
 # Stored in macOS Keychain as "github-api-readonly" (fine-grained, read-only:
 # issues / PRs / actions / checks / commit-statuses; NO source/contents). It is
 # NOT exported globally - it is read on demand and exposed as $GH_TOKEN only
-# inside _claude_launch() (Claude sessions), so it never sits in every shell.
+# inside __claude_launch() (Claude sessions), so it never sits in every shell.
 # To (re)store the token without leaking it to shell history:
 #   read -rs GH_PAT && security add-generic-password -U -a "$USER" -s github-api-readonly -w "$GH_PAT" && unset GH_PAT
 
@@ -142,7 +142,7 @@ esac
 # which is what makes toolchain-cve-check's 231-formula Homebrew sweep finish in
 # ~2min instead of ~20min. Free and instantly regenerable, so a leak is a
 # non-event: https://nvd.nist.gov/developers/request-an-api-key
-# Exposed as $NVD_API_KEY inside _claude_launch(); toolchain-cve-check also reads
+# Exposed as $NVD_API_KEY inside __claude_launch(); toolchain-cve-check also reads
 # the Keychain entry directly, so manual runs are authenticated too.
 # To (re)store it without leaking it to shell history:
 #   read -rs NVDK && security add-generic-password -U -a "$USER" -s nvd-api-key -w "$NVDK" && unset NVDK
@@ -954,7 +954,7 @@ export USE_BUILTIN_RIPGREP=0
 # OTEL metrics (CLAUDE_CODE_ENABLE_TELEMETRY=0) and error reporting stay off.
 # Pairs with settings.json remoteControlAtStartup:true; also requires a
 # full-scope token from `claude auth login`.
-_claude_launch() {
+__claude_launch() {
   # Print what the last commit touched, on screen, before Claude takes over the terminal.
   # WHY HERE AND NOT IN A HOOK: hooks/LastCommitFiles.sh is wired to SessionStart and feeds the
   # AGENT, but Claude Code stores SessionStart stdout as a context ATTACHMENT and never prints it,
@@ -1041,8 +1041,8 @@ _claude_launch() {
 # script stdout) or `claude-clean` (unconstituted by design).
 _LIFEOS_SP=(--append-system-prompt-file "$HOME/.claude/LIFEOS/LIFEOS_SYSTEM_PROMPT.md")
 
-alias c='_claude_launch claude "${_LIFEOS_SP[@]}" --dangerously-skip-permissions --permission-mode plan'       # Standard launch
-alias ct='_claude_launch CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 claude "${_LIFEOS_SP[@]}" --dangerously-skip-permissions --permission-mode plan --teammate-mode tmux'  # Tmux agent teams
+alias c='__claude_launch claude "${_LIFEOS_SP[@]}" --dangerously-skip-permissions --permission-mode plan'       # Standard launch
+alias ct='__claude_launch CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 claude "${_LIFEOS_SP[@]}" --dangerously-skip-permissions --permission-mode plan --teammate-mode tmux'  # Tmux agent teams
 
 # Clean-room Claude for measuring front-loaded context (CLAUDE.md, memory,
 # skills, MCP) one piece at a time. Measured 2026-09-06 (Claude Code 2.1.263):
@@ -1057,7 +1057,7 @@ alias ct='_claude_launch CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 claude "${_LIFEO
 #                       --mcp-config means zero MCP servers. A fresh session
 #                       launched this way reported: no PAI, no CLAUDE.md from
 #                       any path, no memory, 0 MCP tools.
-# Not routed through _claude_launch on purpose: that injects $GH_TOKEN and
+# Not routed through __claude_launch on purpose: that injects $GH_TOKEN and
 # $NVD_API_KEY, which is exactly the kind of ambient context this exists to
 # exclude. No permission flags either -- default mode prompts before acting,
 # which is the safe default for an untrusted-by-design scratch folder; add
@@ -1077,12 +1077,12 @@ claude-clean() {
     echo "clean-room cwd: $dir" >&2
     ( builtin cd "$dir" && command claude --setting-sources '' --strict-mcp-config "$@" )
 }
-alias cb='_claude_launch claude "${_LIFEOS_SP[@]}"'                                          # Bare (full control)
-alias cr='_claude_launch claude "${_LIFEOS_SP[@]}" --dangerously-skip-permissions --resume'  # Resume last session
-alias ci='_claude_launch claude --dangerously-skip-permissions -p'                          # Non-interactive / piped (NO Layer 2: banner would pollute stdout)
-alias cpr='_claude_launch claude "${_LIFEOS_SP[@]}" --dangerously-skip-permissions --from-pr'  # Resume session from PR
-alias cd_='_claude_launch claude "${_LIFEOS_SP[@]}" --dangerously-skip-permissions --permission-mode plan --verbose --debug "api,hooks,mcp,statsig"'               # Debug (verbose logging)
-alias cskip='_claude_launch SKIP_SESSION_END_HOOK=1 claude "${_LIFEOS_SP[@]}" --dangerously-skip-permissions --permission-mode plan'  # Skip end hooks
+alias cb='__claude_launch claude "${_LIFEOS_SP[@]}"'                                          # Bare (full control)
+alias cr='__claude_launch claude "${_LIFEOS_SP[@]}" --dangerously-skip-permissions --resume'  # Resume last session
+alias ci='__claude_launch claude --dangerously-skip-permissions -p'                          # Non-interactive / piped (NO Layer 2: banner would pollute stdout)
+alias cpr='__claude_launch claude "${_LIFEOS_SP[@]}" --dangerously-skip-permissions --from-pr'  # Resume session from PR
+alias cd_='__claude_launch claude "${_LIFEOS_SP[@]}" --dangerously-skip-permissions --permission-mode plan --verbose --debug "api,hooks,mcp,statsig"'               # Debug (verbose logging)
+alias cskip='__claude_launch SKIP_SESSION_END_HOOK=1 claude "${_LIFEOS_SP[@]}" --dangerously-skip-permissions --permission-mode plan'  # Skip end hooks
 
 # Intercepting the use of a command like 'sudo claude update' :P
 # pnpm branch: pnpm keeps global packages/config in the invoking user's home

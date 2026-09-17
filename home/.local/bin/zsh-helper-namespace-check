@@ -1,0 +1,203 @@
+#!/usr/bin/env zsh
+# zsh-helper-namespace-check -- prove no PUBLIC shell function depends on a
+# private helper that Claude Code deletes.
+#
+# THE DEFECT THIS GUARDS, measured 2026-09-17.
+# Claude Code snapshots the interactive shell's functions and sources that
+# snapshot before every Bash tool call. It DROPS every function whose name
+# begins with a SINGLE underscore, because in zsh that namespace holds the
+# completion system (~1,500 functions) and dumping it into a file is absurd.
+# Double-underscore names are not filtered. Measured, same machine, same moment:
+#
+#     functions matching ^_[^_]    real interactive zsh 1563   Claude shell 0
+#     functions matching ^__       real interactive zsh 18     Claude shell 16   <- control
+#
+# Our private helpers used single-underscore names. They vanished. The public
+# functions that call them survived, and then failed. 17 public functions were
+# broken, and TWO of them did not fail loudly -- they returned a confident wrong
+# answer. uv_tool_check_current_project told you to install a tool that was
+# already installed and frozen. That is the failure mode worth a standing check:
+# an error on stderr and a wrong word on stdout, which anything reading
+# $(uv_tool_mode ...) believes.
+#
+# Helpers are therefore named __like_this. This check exists so the next helper
+# added in a hurry cannot quietly reintroduce the whole class.
+#
+# WHY IT SIMULATES RATHER THAN INSPECTS. Reading the files with grep would test
+# a regex. This sources them, asks ZSH ITSELF which functions exist, applies the
+# real filter by unfunction-ing the single-underscore ones, and then asks which
+# surviving public function still references a name that just disappeared. The
+# seam under test is the shell's own parser, so reformatting the dotfiles is free
+# and only a genuine behaviour change moves this.
+#
+# EXIT CODES, read the code and never the text:
+#   0  clean -- no public function depends on a filtered helper
+#   1  VIOLATION -- at least one does; it is broken inside every Claude session
+#   2  REFUSED -- the check scanned nothing, or a control did not hit.
+#      NOT a pass. An empty population and a clean population look identical,
+#      which is the exact trap docs/ and CLAUDE.md are about.
+#
+# Usage:
+#   zsh-helper-namespace-check              check the deployed ~/.zsh* files
+#   zsh-helper-namespace-check --selftest   prove BOTH arms, clean and dirty
+#   zsh-helper-namespace-check --verbose    list every helper that was filtered
+
+emulate -L zsh
+setopt no_unset pipe_fail
+
+FILES=(
+  ~/.zsh_python_functions
+  ~/.zsh_node_functions
+  ~/.zsh_docker_functions
+  ~/.zsh_cursor_functions
+  ~/.zsh_onboarding
+  ~/.zsh_welcome
+  ~/.zsh_tmux
+)
+
+# A public function we KNOW these files define. If it is absent after sourcing,
+# nothing was loaded and every later count is meaningless -- refuse rather than
+# report a reassuring zero. This is the positive arm the repo's own rule demands
+# of any check whose answer is a count or an absence.
+CONTROL_FUNC=uv_tool_mode
+
+VERBOSE=0
+SELFTEST=0
+for arg in "$@"; do
+  case "$arg" in
+    --verbose|-v)  VERBOSE=1 ;;
+    --selftest)    SELFTEST=1 ;;
+    --help|-h)     sed -n '2,48p' "$0"; exit 0 ;;
+    *) print -ru2 -- "zsh-helper-namespace-check: unknown option: $arg"; exit 2 ;;
+  esac
+done
+
+# ---------------------------------------------------------------------------
+# The scan, run in a CLEAN child zsh (-f: no rc files) so the result describes
+# the FILES, not whatever the invoking shell happened to have loaded.
+# $1 = optional extra zsh source text, used only by --selftest to inject a
+# deliberately broken function and prove this check can fail.
+# ---------------------------------------------------------------------------
+run_scan() {
+  local inject=${1:-}
+  local files_str="${FILES[*]}"
+  zsh -f -c '
+    files=(${=1})
+    inject=$2
+    loaded=0
+    for f in $files; do
+      [[ -f $f ]] || continue
+      source $f >/dev/null 2>&1
+      loaded=$(( loaded + 1 ))
+    done
+    [[ -n $inject ]] && eval $inject
+    print -r -- "LOADED=$loaded"
+    print -r -- "CONTROL_PRESENT=${+functions[$3]}"
+    victims=(${(k)functions[(I)_[^_]*]})
+    print -r -- "FILTERED=${#victims}"
+    for v in $victims; do print -r -- "VICTIM=$v"; done
+    # Apply the real Claude Code filter.
+    for v in $victims; do unfunction $v 2>/dev/null; done
+    for fn in ${(k)functions}; do
+      [[ $fn == _* ]] && continue
+      for v in $victims; do
+        if [[ ${functions[$fn]} == *[^A-Za-z0-9_]${v}[^A-Za-z0-9_]* ]]; then
+          print -r -- "BROKEN=$fn NEEDS=$v"
+        fi
+      done
+    done
+  ' -- "$files_str" "$inject" "$CONTROL_FUNC" 2>/dev/null
+}
+
+evaluate() {
+  local out=$1 label=$2
+  local loaded control filtered
+  loaded=${${(M)${(f)out}:#LOADED=*}#LOADED=}
+  control=${${(M)${(f)out}:#CONTROL_PRESENT=*}#CONTROL_PRESENT=}
+  filtered=${${(M)${(f)out}:#FILTERED=*}#FILTERED=}
+  local -a broken
+  broken=(${${(M)${(f)out}:#BROKEN=*}#BROKEN=})
+
+  if [[ -z $loaded || $loaded == 0 ]]; then
+    print -ru2 -- "REFUSED: sourced 0 function files -- nothing was scanned. This is not a pass."
+    return 2
+  fi
+  if [[ $control != 1 ]]; then
+    print -ru2 -- "REFUSED: control function '$CONTROL_FUNC' is not defined after sourcing $loaded file(s)."
+    print -ru2 -- "         The files loaded but did not define what they should. Invalid trial, not a clean run."
+    return 2
+  fi
+
+  print -r -- "$label: sourced $loaded file(s); control '$CONTROL_FUNC' present; ${filtered} single-underscore function(s) would be filtered."
+  if (( VERBOSE )); then
+    local v
+    for v in ${${(M)${(f)out}:#VICTIM=*}#VICTIM=}; do print -r -- "    filtered: $v"; done
+  fi
+
+  if (( ${#broken} )); then
+    print -r -- ""
+    print -r -- "VIOLATION: ${#broken} public function(s) depend on a filtered helper."
+    print -r -- "They are broken inside every Claude Code session, and may return a WRONG answer rather than failing:"
+    local b
+    for b in $broken; do print -r -- "    ${b/ NEEDS=/  ->  }"; done
+    print -r -- ""
+    print -r -- "Fix: rename the helper to a double underscore (__name) at its definition AND every call site."
+    return 1
+  fi
+
+  print -r -- "OK: no public function depends on a filtered helper."
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+if (( SELFTEST )); then
+  fails=0
+
+  # ARM 1 -- the dirty case MUST be caught. Without this arm a check that never
+  # fires is indistinguishable from a check that is broken.
+  inject='__ns_selftest_helper() { print ok }
+_ns_selftest_helper() { print ok }
+ns_selftest_public() { _ns_selftest_helper; print done }'
+  out=$(run_scan "$inject")
+  if print -r -- "$out" | command grep -q '^BROKEN=ns_selftest_public NEEDS=_ns_selftest_helper$'; then
+    print -r -- "PASS  arm 1: a public function calling a single-underscore helper IS flagged"
+  else
+    print -r -- "FAIL  arm 1: injected breakage was NOT detected -- this check cannot fail, so it is not a check"
+    fails=$(( fails + 1 ))
+  fi
+
+  # ARM 2 -- the clean case must NOT be flagged (no false positive).
+  inject='__ns_selftest_helper() { print ok }
+ns_selftest_public() { __ns_selftest_helper; print done }'
+  out=$(run_scan "$inject")
+  if print -r -- "$out" | command grep -q '^BROKEN=ns_selftest_public'; then
+    print -r -- "FAIL  arm 2: a double-underscore helper was wrongly flagged"
+    fails=$(( fails + 1 ))
+  else
+    print -r -- "PASS  arm 2: a public function calling a double-underscore helper is NOT flagged"
+  fi
+
+  # ARM 3 -- refusal must be reachable. Point it at nothing and it must exit 2,
+  # not print a clean bill of health for an empty scan.
+  FILES=( /nonexistent/zsh_file_that_does_not_exist )
+  out=$(run_scan)
+  evaluate "$out" "selftest arm 3" >/dev/null 2>&1
+  if (( $? == 2 )); then
+    print -r -- "PASS  arm 3: an empty scan REFUSES (exit 2) instead of reporting clean"
+  else
+    print -r -- "FAIL  arm 3: an empty scan did not refuse"
+    fails=$(( fails + 1 ))
+  fi
+
+  print -r -- ""
+  if (( fails )); then
+    print -r -- "SELFTEST FAILED: $fails arm(s)"
+    exit 1
+  fi
+  print -r -- "SELFTEST PASSED: 3/3 arms (catches breakage, no false positive, refuses an empty scan)"
+  exit 0
+fi
+
+out=$(run_scan)
+evaluate "$out" "zsh-helper-namespace-check"
+exit $?

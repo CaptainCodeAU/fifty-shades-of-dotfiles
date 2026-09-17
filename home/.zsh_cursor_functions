@@ -16,7 +16,7 @@ CURSOR_ENV_FILE="$HOME/.cache/cursor_env.zsh"
 # ==============================================================================
 
 # Silently captures the latest environment from a working Cursor terminal.
-_save_cursor_env_silent() {
+__save_cursor_env_silent() {
     # Only save if we are in a Cursor/VSCode terminal.
     if [[ -n "$VSCODE_INJECTION" || -n "$VSCODE_IPC_HOOK_CLI" ]]; then
         mkdir -p "$(dirname "$CURSOR_ENV_FILE")"
@@ -29,7 +29,7 @@ _save_cursor_env_silent() {
 }
 
 # Silently loads the saved environment into the current shell.
-_load_cursor_env_silent() {
+__load_cursor_env_silent() {
     if [[ -f "$CURSOR_ENV_FILE" ]]; then
         source "$CURSOR_ENV_FILE"
     fi
@@ -45,7 +45,7 @@ tmux() {
     # Check if the first argument is 'attach', 'attach-session', or 'a'.
     if [[ "$1" == "attach" || "$1" == "attach-session" || "$1" == "a" ]]; then
         # Silently save the up-to-date environment from the client shell.
-        _save_cursor_env_silent
+        __save_cursor_env_silent
     fi
     
     # Execute the actual tmux command, passing all arguments to it.
@@ -62,9 +62,9 @@ tmux() {
 # This logic runs every time a new zsh shell is initialized.
 if [[ -n "$TMUX" ]]; then
     # We are inside a NEW tmux pane. LOAD the environment silently.
-    _load_cursor_env_silent
+    __load_cursor_env_silent
 elif [[ -n "$VSCODE_INJECTION" || -n "$VSCODE_IPC_HOOK_CLI" ]]; then
     # We are in a main Cursor/VSCode terminal. SAVE the environment silently.
     # This is a fallback to ensure the cache is fresh.
-    _save_cursor_env_silent
+    __save_cursor_env_silent
 fi

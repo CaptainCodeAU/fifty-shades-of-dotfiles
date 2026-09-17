@@ -237,8 +237,8 @@ EOF
 
 # Function to find and display runnable console scripts from pyproject.toml
 # and report on the global uv tool installation status.
-# Usage: _display_project_scripts
-_display_project_scripts() {
+# Usage: __display_project_scripts
+__display_project_scripts() {
     # Ensure pyproject.toml exists
     if [[ ! -f "pyproject.toml" ]]; then
         return 0
@@ -1132,7 +1132,7 @@ EOF
     echo "✅ Virtual environment is active (for this session)."
     echo "✅ Dependencies installed (attempted)."
     # Use helper function to display runnable console scripts
-    _display_project_scripts
+    __display_project_scripts
     echo "--------------------------------------------------"
     echo "Next steps:"
     echo "  - Edit 'pyproject.toml' authors/URLs and 'README.md' with your project details."
@@ -1150,8 +1150,8 @@ EOF
 
 # INTERNAL HELPER: Displays user-friendly hints based on pyproject.toml content.
 # It intelligently formats an example command based on the calling function's name.
-# Usage: _display_pyproject_hints <calling_command_name>
-_display_pyproject_hints() {
+# Usage: __display_pyproject_hints <calling_command_name>
+__display_pyproject_hints() {
     if [[ ! -f "pyproject.toml" ]]; then return 1; fi
 
     # The command to feature in the example usage text
@@ -1206,7 +1206,7 @@ _display_pyproject_hints() {
         # and it is the flag you want when a hook or cron job runs the command.
         if [[ "$command_name" == "uv_tool_"(install|reinstall)"_current_project" ]]; then
             local pinned_mode
-            pinned_mode=$(_uv_tool_pinned_mode 2>/dev/null)
+            pinned_mode=$(__uv_tool_pinned_mode 2>/dev/null)
             if [[ -n "$pinned_mode" ]]; then
                 echo "${info}      - 📌 Pinned by pyproject.toml to: ${ok}${pinned_mode}${info} installs (applied automatically).${done}"
             else
@@ -1235,7 +1235,7 @@ python_setup() {
             fi
         fi
         # Hint 2: Call the centralized helper for pyproject.toml hints
-        _display_pyproject_hints "python_setup"
+        __display_pyproject_hints "python_setup"
 
         return 1
     fi
@@ -1359,7 +1359,7 @@ python_setup() {
     # --- 8. Final Summary ---
     echo "--------------------------------------------------"
     echo "${ok}✅ Project '${project_name}' setup complete!${done}"
-    _display_project_scripts
+    __display_project_scripts
     echo "--------------------------------------------------"
     return 0
 }
@@ -1461,8 +1461,8 @@ python_delete() {
 # what lets a pyproject.toml pin apply only when the caller stayed silent).
 # An unrecognised --flag is a hard error rather than being passed through as an extra,
 # so a typo fails loudly instead of producing '.[--frozn]'.
-# Usage: _uv_tool_parse_flags "$@" || return 1
-_uv_tool_parse_flags() {
+# Usage: __uv_tool_parse_flags "$@" || return 1
+__uv_tool_parse_flags() {
     typeset -g _UVT_FROZEN=false
     typeset -g _UVT_NO_EXTRAS=false
     typeset -g _UVT_MODE_EXPLICIT=false
@@ -1501,7 +1501,7 @@ _uv_tool_parse_flags() {
 # NOTE: uv itself does NOT read this key. It is honoured only by the
 # uv_tool_*_current_project functions in this file. An explicit --editable still wins,
 # with a warning, so the pin is a safe default rather than a lock.
-_uv_tool_pinned_mode() {
+__uv_tool_pinned_mode() {
     [[ -f pyproject.toml ]] || return 0
     local mode
     mode=$(awk '
@@ -1525,9 +1525,9 @@ _uv_tool_pinned_mode() {
 
 # INTERNAL HELPER: resolve the effective mode from the pin + what the caller typed.
 # Sets _UVT_FROZEN, and reports when the two disagree.
-_uv_tool_apply_pin() {
+__uv_tool_apply_pin() {
     local pinned
-    pinned=$(_uv_tool_pinned_mode)
+    pinned=$(__uv_tool_pinned_mode)
     [[ -n "$pinned" ]] || return 0
 
     if [[ "$_UVT_MODE_EXPLICIT" != true ]]; then
@@ -1568,7 +1568,7 @@ _uv_tool_apply_pin() {
 # `localoptions extendedglob` is deliberate: `##` (one-or-more) needs EXTENDED_GLOB, and
 # .zshrc sets it globally -- but a function that only works because of a caller's setopt
 # breaks in `zsh -f`, in hooks, and in scripts. Verified working with EXTENDED_GLOB off.
-_uv_tool_normalize_name() {
+__uv_tool_normalize_name() {
     setopt localoptions extendedglob
     local n="${1:l}"
     print -r -- "${n//[._-]##/-}"
@@ -1586,8 +1586,8 @@ _uv_tool_normalize_name() {
 # Do NOT sniff for *.pth files instead: uv writes `_editable_impl_<pkg>.pth` for some
 # projects and `<pkg>.pth` for others, and EVERY env carries an unrelated
 # `_virtualenv.pth`, so that heuristic misclassifies in both directions.
-# Usage: _uv_tool_install_mode <tool_env_path> <project_name>
-_uv_tool_install_mode() {
+# Usage: __uv_tool_install_mode <tool_env_path> <project_name>
+__uv_tool_install_mode() {
     local tool_env=$1 pkg=$2
     [[ -n "$tool_env" && -d "$tool_env" ]] || { echo unknown; return 1; }
 
@@ -1602,7 +1602,7 @@ _uv_tool_install_mode() {
     # install. The targeted find then missed, and the function fell through to the
     # fallback below: `unknown` at best, and in an env with a git/URL dep, the DEP's mode
     # reported as the project's.
-    local norm=${$(_uv_tool_normalize_name "$pkg")//-/_}
+    local norm=${$(__uv_tool_normalize_name "$pkg")//-/_}
     local du
     du=$(find "$site" -maxdepth 2 -path "*/${norm}-*.dist-info/direct_url.json" 2>/dev/null | head -n 1)
     # Fall back to any direct_url.json -- but only when there is exactly ONE.
@@ -1638,7 +1638,7 @@ _uv_tool_install_mode() {
             # which IS registry -- fall through with $du empty and let the branch below say so.
             local du_dir=${all_du[1]:h:t}                 # <name>-<version>.dist-info
             local du_pkg=${${du_dir%.dist-info}%-*}       # strip .dist-info, then the version
-            [[ "$(_uv_tool_normalize_name "$du_pkg")" == "$(_uv_tool_normalize_name "$pkg")" ]] \
+            [[ "$(__uv_tool_normalize_name "$du_pkg")" == "$(__uv_tool_normalize_name "$pkg")" ]] \
                 && du="${all_du[1]}"
         fi
     fi
@@ -1673,7 +1673,7 @@ uv_tool_install_current_project() {
         echo "This function installs the project with optional features." >&2; echo
 
         # Call the centralized helper for pyproject.toml hints
-        _display_pyproject_hints "uv_tool_install_current_project"
+        __display_pyproject_hints "uv_tool_install_current_project"
         return 1
     fi
 
@@ -1685,8 +1685,8 @@ uv_tool_install_current_project() {
         echo "${err}❌ Error: No active virtual environment. Activate a venv to specify the Python version.${done}" >&2; return 1;
     fi
 
-    _uv_tool_parse_flags "$@" || return 1
-    _uv_tool_apply_pin
+    __uv_tool_parse_flags "$@" || return 1
+    __uv_tool_apply_pin
     local -a user_extras=("${_UVT_EXTRAS[@]}")
     local frozen="$_UVT_FROZEN"
     local project_name=$(awk -F'"' '/^name *=/ {gsub(/[[:space:]]/, "", $0); print $2; exit}' pyproject.toml)
@@ -1762,7 +1762,7 @@ uv_tool_reinstall_current_project() {
         echo "This function reinstalls the project with optional features." >&2; echo
 
         # Call the centralized helper for pyproject.toml hints
-        _display_pyproject_hints "uv_tool_reinstall_current_project"
+        __display_pyproject_hints "uv_tool_reinstall_current_project"
         return 1
     fi
 
@@ -1775,8 +1775,8 @@ uv_tool_reinstall_current_project() {
     fi
 
     # --- 3. Argument and Variable Setup ---
-    _uv_tool_parse_flags "$@" || return 1
-    _uv_tool_apply_pin
+    __uv_tool_parse_flags "$@" || return 1
+    __uv_tool_apply_pin
     local -a user_extras=("${_UVT_EXTRAS[@]}")
     local frozen="$_UVT_FROZEN"
     local project_name=$(awk -F'"' '/^name *=/ {gsub(/[[:space:]]/, "", $0); print $2; exit}' pyproject.toml)
@@ -1805,11 +1805,11 @@ uv_tool_reinstall_current_project() {
     # block exists to prevent, so its own name matching failing quietly was the worst
     # possible way for it to break.
     local prev_env prev_mode prev_norm
-    prev_norm=$(_uv_tool_normalize_name "$project_name")
+    prev_norm=$(__uv_tool_normalize_name "$project_name")
     prev_env=$(uv tool list --show-paths 2>/dev/null | awk -v p="$prev_norm" \
         '{ n=tolower($1); gsub(/[._-]+/,"-",n); if (n==p) { if (match($0, /\(([^)]*)\)$/)) print substr($0, RSTART+1, RLENGTH-2); exit } }')
     if [[ -n "$prev_env" ]]; then
-        prev_mode=$(_uv_tool_install_mode "$prev_env" "$project_name")
+        prev_mode=$(__uv_tool_install_mode "$prev_env" "$project_name")
         if [[ "$prev_mode" == editable || "$prev_mode" == frozen ]] && [[ "$prev_mode" != "$mode_label" ]]; then
             echo "${warn}⚠️  Mode change: currently ${prev_mode}, this reinstall makes it ${mode_label}.${done}"
         fi
@@ -1893,9 +1893,9 @@ uv_tool_check_current_project() {
     tool_output=$(uv tool list --show-paths 2>/dev/null)
 
     # Normalise the project name the way uv prints it (PEP 503 -- see
-    # _uv_tool_normalize_name). `tr '_' '-'` was not enough: it leaves the dot in
+    # __uv_tool_normalize_name). `tr '_' '-'` was not enough: it leaves the dot in
     # `my.tool` alone, while uv lists that project as `my-tool`.
-    local project_name_normalized=$(_uv_tool_normalize_name "$project_name")
+    local project_name_normalized=$(__uv_tool_normalize_name "$project_name")
 
     # Check if the project appears in the tool list.
     #
@@ -1924,7 +1924,7 @@ uv_tool_check_current_project() {
         # an afternoon gets burned editing code that nothing is running.
         local tool_env install_mode
         tool_env=$(echo "$tool_line" | sed -n 's/.*(\(.*\))$/\1/p')
-        install_mode=$(_uv_tool_install_mode "$tool_env" "$project_name")
+        install_mode=$(__uv_tool_install_mode "$tool_env" "$project_name")
         case "$install_mode" in
             editable)
                 echo "${info}   Mode:    ${ok}EDITABLE${info} - tracks this checkout; edits take effect immediately.${done}"
@@ -1962,7 +1962,7 @@ uv_tool_check_current_project() {
             # collecting another tool's binaries, and a raw compare missed a dotted name
             # entirely. An executable row starts with "- ", which normalises to "-" and can
             # never equal a project name, so those rows cannot false-match.
-            local line_name=$(_uv_tool_normalize_name "${line%%[[:space:]]*}")
+            local line_name=$(__uv_tool_normalize_name "${line%%[[:space:]]*}")
             if [[ "$line_name" == "$project_name_normalized" ]]; then
                 found_tool=true
             fi
@@ -2017,13 +2017,13 @@ uv_tool_mode() {
     # for a live `my.tool` -- measured 2026-09-07, and pre-dating the cd0ae9f change that
     # cited this function as its model. Normalise both sides, same as everywhere else.
     local alt tool_line tool_env
-    alt=$(_uv_tool_normalize_name "$pkg")
+    alt=$(__uv_tool_normalize_name "$pkg")
     tool_line=$(uv tool list --show-paths 2>/dev/null | awk -v p="$alt" \
         '{ n=tolower($1); gsub(/[._-]+/,"-",n); if (n==p) { print; exit } }')
     [[ -n "$tool_line" ]] || { echo not-installed; return 1; }
 
     tool_env=$(echo "$tool_line" | sed -n 's/.*(\(.*\))$/\1/p')
-    _uv_tool_install_mode "$tool_env" "$pkg"
+    __uv_tool_install_mode "$tool_env" "$pkg"
 }
 
 

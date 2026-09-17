@@ -64,7 +64,7 @@ export NODE_MIN_MAJOR="${NODE_MIN_MAJOR:-22}"
 # nudge + banner flag it. Coordinate with BUN_MIN_VERSION in install.sh.
 export BUN_MIN_VERSION="${BUN_MIN_VERSION:-1.3.0}"
 
-_pnpm_cache_file() {
+__pnpm_cache_file() {
     local cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles"
     [[ -d "$cache_dir" ]] || mkdir -p "$cache_dir" 2>/dev/null
     # Bumped pnpm_latest2 -> pnpm_latest3 (2026-07-16) to force migration to the
@@ -75,7 +75,7 @@ _pnpm_cache_file() {
 # Cache is fresh if its mtime is within PNPM_CHECK_TTL_DAYS AND no version that
 # was held by minimumReleaseAge has since crossed the gate (else the cached
 # `eligible` is stale and must be recomputed before the TTL would expire).
-_pnpm_cache_fresh() {
+__pnpm_cache_fresh() {
     local cache_file="$1" max_age now mtime
     [[ -s "$cache_file" ]] || return 1
     max_age=$((PNPM_CHECK_TTL_DAYS * 86400))
@@ -107,7 +107,7 @@ _pnpm_cache_fresh() {
 # carries the native pnpm binary (the package @pnpm/exe hardlinks its binary
 # from). Mirrors @pnpm/exe's platform-pkg-name.js. Echoes the package name, or
 # nothing when the platform is unknown (caller then treats the check as unknown).
-_pnpm_platform_pkg() {
+__pnpm_platform_pkg() {
     local os arch
     os=$(uname -s 2>/dev/null)
     arch=$(uname -m 2>/dev/null)
@@ -137,10 +137,10 @@ _pnpm_platform_pkg() {
 # installing it yields a dead placeholder. One cheap metadata GET on dist.unpackedSize,
 # never the tarball. Echoes: ok | missing | unknown (unknown = platform/net/tool
 # could not decide; callers must fail OPEN on unknown, never block on it).
-_pnpm_version_has_binary() {
+__pnpm_version_has_binary() {
     local ver="$1" pkg meta size
     [[ -n "$ver" ]] || { echo unknown; return; }
-    pkg=$(_pnpm_platform_pkg)
+    pkg=$(__pnpm_platform_pkg)
     [[ -n "$pkg" ]] || { echo unknown; return; }
     meta=$(curl -fsSL --max-time 5 "https://registry.npmjs.org/${pkg}/${ver}" 2>/dev/null)
     [[ -n "$meta" ]] || { echo unknown; return; }
@@ -157,7 +157,7 @@ _pnpm_version_has_binary() {
 
 # Background-refresh cache; never blocks the shell. `&!` is zsh-only —
 # disowns and detaches in one shot.
-_pnpm_refresh_latest_bg() {
+__pnpm_refresh_latest_bg() {
     local cache_file="$1"
     (
         # raw = registry dist-tag latest (cheap; always attempted first).
@@ -170,7 +170,7 @@ _pnpm_refresh_latest_bg() {
         # eligible = newest stable version old enough to clear minimumReleaseAge,
         # i.e. what `pnpm self-update` will actually accept. Needs the full
         # packument (publish times) + jq; degrade to the dist-tag latest otherwise.
-        min_age=$(_pnpm_min_release_age_min)
+        min_age=$(__pnpm_min_release_age_min)
         if [[ "$min_age" -gt 0 ]] && command -v jq &>/dev/null; then
             pkg=$(curl -fsSL --max-time 8 "https://registry.npmjs.org/pnpm" 2>/dev/null)
             if [[ -n "$pkg" ]]; then
@@ -193,7 +193,7 @@ _pnpm_refresh_latest_bg() {
         # this platform -- guards the pnpm 11.12/11.13-class binary-less release
         # bug so the banner and pnpm_update can refuse a broken update. Done here
         # (in the background refresh) so the interactive shell never pays for it.
-        eligible_binary=$(_pnpm_version_has_binary "$eligible")
+        eligible_binary=$(__pnpm_version_has_binary "$eligible")
         {
             echo "raw=$raw"
             echo "eligible=$eligible"
@@ -206,7 +206,7 @@ _pnpm_refresh_latest_bg() {
 # Echo the configured minimumReleaseAge in minutes (0 if unset or unreadable).
 # Reads the same config.yaml pnpm itself reads: the macOS Preferences bridge,
 # or the XDG path on Linux/WSL.
-_pnpm_min_release_age_min() {
+__pnpm_min_release_age_min() {
     local cfg v
     if [[ "$OSTYPE" == darwin* && -f "$HOME/Library/Preferences/pnpm/config.yaml" ]]; then
         cfg="$HOME/Library/Preferences/pnpm/config.yaml"
@@ -221,7 +221,7 @@ _pnpm_min_release_age_min() {
 
 # Read one key=value field from the cache. Tolerates the legacy single-line
 # format (a bare version string) by treating it as both raw and eligible.
-_pnpm_cache_get() {
+__pnpm_cache_get() {
     local cache_file="$1" key="$2"
     [[ -f "$cache_file" ]] || return
     if grep -q '=' "$cache_file" 2>/dev/null; then
@@ -235,35 +235,35 @@ _pnpm_cache_get() {
 # `pnpm self-update` will actually accept. Triggers a background refresh when
 # the cache is stale. May be empty on the very first call before the refresh
 # completes; the next shell sees the populated value.
-_pnpm_get_latest() {
+__pnpm_get_latest() {
     local cache_file
-    cache_file=$(_pnpm_cache_file)
-    _pnpm_cache_fresh "$cache_file" || _pnpm_refresh_latest_bg "$cache_file"
-    _pnpm_cache_get "$cache_file" eligible
+    cache_file=$(__pnpm_cache_file)
+    __pnpm_cache_fresh "$cache_file" || __pnpm_refresh_latest_bg "$cache_file"
+    __pnpm_cache_get "$cache_file" eligible
 }
 
 # Raw registry dist-tag latest, ignoring release age. May be newer than what
 # self-update will install (held by the minimumReleaseAge gate). Display only.
-_pnpm_get_raw_latest() {
-    _pnpm_cache_get "$(_pnpm_cache_file)" raw
+__pnpm_get_raw_latest() {
+    __pnpm_cache_get "$(__pnpm_cache_file)" raw
 }
 
 # Epoch seconds when the raw dist-tag latest clears the release-age gate;
 # 0 when it is not gated or the time is unknown.
-_pnpm_get_raw_eligible_at() {
-    _pnpm_cache_get "$(_pnpm_cache_file)" raw_eligible_at
+__pnpm_get_raw_eligible_at() {
+    __pnpm_cache_get "$(__pnpm_cache_file)" raw_eligible_at
 }
 
 # Cached binary status of the eligible version: ok | missing | unknown (empty on
 # a legacy/pre-migration cache). Written by the background refresh; read cheaply
 # here (no network) so the welcome banner can flag a binary-less release without
-# slowing the prompt. pnpm_update re-checks live via _pnpm_version_has_binary.
-_pnpm_get_eligible_binary() {
-    _pnpm_cache_get "$(_pnpm_cache_file)" eligible_binary
+# slowing the prompt. pnpm_update re-checks live via __pnpm_version_has_binary.
+__pnpm_get_eligible_binary() {
+    __pnpm_cache_get "$(__pnpm_cache_file)" eligible_binary
 }
 
 # Compare two semver-ish versions. Echoes -1 (a<b), 0 (==), or 1 (a>b).
-_pnpm_vercmp() {
+__pnpm_vercmp() {
     local a="$1" b="$2"
     [[ "$a" == "$b" ]] && { echo 0; return; }
     local lower
@@ -271,9 +271,9 @@ _pnpm_vercmp() {
     if [[ "$lower" == "$a" ]]; then echo -1; else echo 1; fi
 }
 
-# Generic semver compare (same contract as _pnpm_vercmp), used by the nvm/Node
+# Generic semver compare (same contract as __pnpm_vercmp), used by the nvm/Node
 # checks so they don't couple to the pnpm-named helper.
-_semver_cmp() {
+__semver_cmp() {
     local a="$1" b="$2"
     [[ "$a" == "$b" ]] && { echo 0; return; }
     local lower
@@ -284,15 +284,15 @@ _semver_cmp() {
 # Installed nvm version (e.g. "0.40.5"), or empty. Works even before nvm.sh is
 # sourced: onboarding (.zshrc section 4) runs BEFORE nvm loads (section 7), so
 # fall back to sourcing nvm.sh --no-use in a subshell to read the version.
-_nvm_version_quiet() {
+__nvm_version_quiet() {
     if command -v nvm &>/dev/null; then nvm --version 2>/dev/null; return; fi
     [[ -s "$HOME/.nvm/nvm.sh" ]] || return 1
     ( export NVM_DIR="$HOME/.nvm"; \. "$NVM_DIR/nvm.sh" --no-use >/dev/null 2>&1; nvm --version 2>/dev/null )
 }
 
 # Active Node version, falling back to the default alias; "" if none. Same
-# load-order safety as _nvm_version_quiet (subshell-source when nvm isn't live).
-_node_default_version() {
+# load-order safety as __nvm_version_quiet (subshell-source when nvm isn't live).
+__node_default_version() {
     local v
     if command -v nvm &>/dev/null; then
         v=$(nvm current 2>/dev/null)
@@ -309,7 +309,7 @@ _node_default_version() {
 # 0 if $1 exists and is younger than $2 seconds (default 86400). Centralizes the
 # BSD (stat -f) vs GNU (stat -c) split — a recurring portability footgun — for the
 # nvm/Node 24h-marker gates.
-_marker_fresh() {
+__marker_fresh() {
     local marker="$1" max_age="${2:-86400}" now mtime
     [[ -f "$marker" ]] || return 1
     now=$(date +%s)
@@ -331,13 +331,13 @@ _marker_fresh() {
 # the background job) so two shells opened at once never double-spawn a prune.
 # Marker: pnpm_store_prune_last. Bypass a single week by touching the marker; force
 # a run with `rm` of the marker + open a new shell (or run `pnpm store prune`).
-_pnpm_store_maintenance() {
+__pnpm_store_maintenance() {
     [[ -o interactive ]] || return 0
     command -v pnpm &>/dev/null || return 0
     local marker_dir marker
     marker_dir="${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles"
     marker="$marker_dir/pnpm_store_prune_last"
-    _marker_fresh "$marker" 604800 && return 0   # pruned within the last 7 days
+    __marker_fresh "$marker" 604800 && return 0   # pruned within the last 7 days
     [[ -d "$marker_dir" ]] || mkdir -p "$marker_dir" 2>/dev/null
     : > "$marker"                                # claim the weekly slot up-front
     (
@@ -357,7 +357,7 @@ _PKG_MANAGER_CHECK=""
 # ------------------------------------------------------------------------------
 # Package Manager Detection
 # ------------------------------------------------------------------------------
-_detect_package_manager() {
+__detect_package_manager() {
     _PKG_MANAGER_NAME=""
     _PKG_MANAGER_CMD=""
     _PKG_MANAGER_CHECK=""
@@ -397,7 +397,7 @@ _detect_package_manager() {
 # ------------------------------------------------------------------------------
 # Homebrew Bootstrap (macOS only)
 # ------------------------------------------------------------------------------
-_ensure_homebrew() {
+__ensure_homebrew() {
     if [[ "$IS_MAC" != "true" ]]; then
         return 0
     fi
@@ -424,7 +424,7 @@ _ensure_homebrew() {
                     eval "$(/usr/local/bin/brew shellenv)"
                 fi
                 # Re-detect package manager
-                _detect_package_manager
+                __detect_package_manager
             else
                 echo "${err}    Homebrew installation failed.${done}"
                 return 1
@@ -439,9 +439,9 @@ _ensure_homebrew() {
 # ------------------------------------------------------------------------------
 # Generic Command Checker
 # ------------------------------------------------------------------------------
-# Usage: _ensure_command <command_to_check> <package_name_brew> <package_name_apt>
+# Usage: __ensure_command <command_to_check> <package_name_brew> <package_name_apt>
 # If only one package name provided, it's used for all package managers.
-_ensure_command() {
+__ensure_command() {
     local cmd_to_check="$1"
     local pkg_brew="${2:-$1}"
     local pkg_apt="${3:-$pkg_brew}"
@@ -484,7 +484,7 @@ _ensure_command() {
 # ------------------------------------------------------------------------------
 # NVM (Node Version Manager) — Special Handler
 # ------------------------------------------------------------------------------
-_ensure_nvm() {
+__ensure_nvm() {
     # NVM is a shell function, not a binary — check for its directory
     if [[ -d "$HOME/.nvm" ]]; then
         return 0
@@ -512,7 +512,7 @@ _ensure_nvm() {
 # ------------------------------------------------------------------------------
 # uv (Python Package Manager) — Special Handler
 # ------------------------------------------------------------------------------
-_ensure_uv() {
+__ensure_uv() {
     if command -v uv &>/dev/null; then
         return 0
     fi
@@ -543,13 +543,13 @@ _ensure_uv() {
 # Prompts to upgrade pnpm if installed version < PNPM_MIN_VERSION.
 # Soft (non-blocking) nudges for above-min-but-not-latest live in .zsh_welcome.
 # A daily marker file prevents re-prompting on every shell open.
-_ensure_pnpm_current() {
+__ensure_pnpm_current() {
     command -v pnpm &>/dev/null || return 0  # missing case handled by install.sh
     [[ -t 1 ]] || return 0
 
     local current latest cmp_min marker marker_dir
     current=$(pnpm -v 2>/dev/null) || return 0
-    cmp_min=$(_pnpm_vercmp "$current" "$PNPM_MIN_VERSION")
+    cmp_min=$(__pnpm_vercmp "$current" "$PNPM_MIN_VERSION")
     [[ "$cmp_min" != "-1" ]] && return 0  # at or above minimum — silent
 
     # Below minimum — prompt at most once per 24h
@@ -567,7 +567,7 @@ _ensure_pnpm_current() {
         [[ -n "$mtime" ]] && (( now - mtime < 86400 )) && return 0
     fi
 
-    latest=$(_pnpm_get_latest 2>/dev/null)
+    latest=$(__pnpm_get_latest 2>/dev/null)
     echo "${err}pnpm ${current} is below required minimum ${PNPM_MIN_VERSION}${latest:+ (latest: ${latest})}.${done}"
     # Intel macOS: pnpm is Homebrew-managed (standalone SEA binary segfaults --
     # nodejs/node#62893), so upgrade via brew, not pnpm self-update.
@@ -599,21 +599,21 @@ _ensure_pnpm_current() {
 # Prompts to upgrade nvm when below NVM_MIN_VERSION (nvm mirror-CVE floor). The
 # official installer is idempotent — re-running it upgrades in place. A daily
 # marker prevents re-prompting on every shell open.
-_ensure_nvm_current() {
-    [[ -d "$HOME/.nvm" ]] || return 0          # missing case handled by _ensure_nvm
+__ensure_nvm_current() {
+    [[ -d "$HOME/.nvm" ]] || return 0          # missing case handled by __ensure_nvm
     [[ -t 1 ]] || return 0
 
     # Accept a pre-read version (run_onboarding already has it) to avoid a second
     # subshell-source of nvm.sh; fall back to reading it when called standalone.
-    local current="${1:-$(_nvm_version_quiet 2>/dev/null)}" cmp_min marker marker_dir
+    local current="${1:-$(__nvm_version_quiet 2>/dev/null)}" cmp_min marker marker_dir
     [[ -n "$current" ]] || return 0
-    cmp_min=$(_semver_cmp "$current" "$NVM_MIN_VERSION")
+    cmp_min=$(__semver_cmp "$current" "$NVM_MIN_VERSION")
     [[ "$cmp_min" != "-1" ]] && return 0       # at or above minimum — silent
 
     marker_dir="${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles"
     marker="$marker_dir/nvm_upgrade_prompted"
     [[ -d "$marker_dir" ]] || mkdir -p "$marker_dir" 2>/dev/null
-    _marker_fresh "$marker" && return 0        # already nudged within the last 24h
+    __marker_fresh "$marker" && return 0        # already nudged within the last 24h
 
     echo "${err}nvm ${current} is below ${NVM_MIN_VERSION} — CVE-2026-10796 (<= 0.40.4) + CVE-2026-15921 (<= 0.40.5) affect older nvm via a malicious Node mirror.${done}"
     read "REPLY?${info}    Upgrade nvm to v${NVM_MIN_VERSION} now? [y/N] ${done}"
@@ -637,19 +637,19 @@ _ensure_nvm_current() {
 # ~/.bunfig.toml minimumReleaseAge cooldown (bun < 1.3.0 ignores the key, so the
 # 3-day supply-chain gate is a no-op). `bun upgrade` moves to latest stable. A
 # daily marker prevents re-prompting on every shell open.
-_ensure_bun_current() {
+__ensure_bun_current() {
     command -v bun &>/dev/null || return 0
     [[ -t 1 ]] || return 0
     local current cmp_min marker marker_dir
     current=$(bun --version 2>/dev/null)
     [[ -n "$current" ]] || return 0
-    cmp_min=$(_semver_cmp "$current" "$BUN_MIN_VERSION")
+    cmp_min=$(__semver_cmp "$current" "$BUN_MIN_VERSION")
     [[ "$cmp_min" != "-1" ]] && return 0        # at or above minimum — silent
 
     marker_dir="${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles"
     marker="$marker_dir/bun_upgrade_prompted"
     [[ -d "$marker_dir" ]] || mkdir -p "$marker_dir" 2>/dev/null
-    _marker_fresh "$marker" && return 0         # already nudged within the last 24h
+    __marker_fresh "$marker" && return 0         # already nudged within the last 24h
 
     echo "${err}bun ${current} is below ${BUN_MIN_VERSION} — the ~/.bunfig.toml release-age cooldown (minimumReleaseAge) is IGNORED until bun >= ${BUN_MIN_VERSION}.${done}"
     read "REPLY?${info}    Upgrade bun now ('bun upgrade')? [y/N] ${done}"
@@ -671,12 +671,12 @@ _ensure_bun_current() {
 # ------------------------------------------------------------------------------
 # Prompts to move to current LTS when the active/default Node major is below
 # NODE_MIN_MAJOR (end-of-life — no security patches). Daily marker as above.
-_ensure_node_current() {
+__ensure_node_current() {
     [[ -d "$HOME/.nvm" ]] || return 0
     [[ -t 1 ]] || return 0
 
     local active major marker marker_dir
-    active=$(_node_default_version 2>/dev/null) || return 0
+    active=$(__node_default_version 2>/dev/null) || return 0
     [[ -n "$active" ]] || return 0
     major=${active#v}; major=${major%%.*}
     [[ "$major" =~ ^[0-9]+$ ]] || return 0
@@ -685,7 +685,7 @@ _ensure_node_current() {
     marker_dir="${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles"
     marker="$marker_dir/node_eol_prompted"
     [[ -d "$marker_dir" ]] || mkdir -p "$marker_dir" 2>/dev/null
-    _marker_fresh "$marker" && return 0        # already nudged within the last 24h
+    __marker_fresh "$marker" && return 0        # already nudged within the last 24h
 
     echo "${err}Node ${active} is end-of-life (below Node ${NODE_MIN_MAJOR}) — no more security patches.${done}"
     # nvm must be live to install; if onboarding ran before nvm loaded, defer to
@@ -712,7 +712,7 @@ _ensure_node_current() {
 # ------------------------------------------------------------------------------
 # Docker — Guidance Only
 # ------------------------------------------------------------------------------
-_show_docker_guidance() {
+__show_docker_guidance() {
     if command -v docker &>/dev/null; then
         return 0
     fi
@@ -732,10 +732,10 @@ _show_docker_guidance() {
 # ------------------------------------------------------------------------------
 # Section Runner — compact display (A+B merged)
 # ------------------------------------------------------------------------------
-# Usage: _run_section NAME cmd1 brew1 apt1 [cmd2 brew2 apt2 ...]
+# Usage: __run_section NAME cmd1 brew1 apt1 [cmd2 brew2 apt2 ...]
 # When all tools present: prints a single ✓ line with all names.
 # When any missing: prints ! line and prompts for each missing tool.
-_run_section() {
+__run_section() {
     local section_name="$1"
     shift
     local -a all_names=()
@@ -761,7 +761,7 @@ _run_section() {
         printf "  ${warn}!${done} %-18s %s\n" "$section_name" "$tool_list"
         local i=1
         while (( i <= ${#miss_cmds[@]} )); do
-            _ensure_command "${miss_cmds[$i]}" "${miss_brew[$i]}" "${miss_apt[$i]}"
+            __ensure_command "${miss_cmds[$i]}" "${miss_brew[$i]}" "${miss_apt[$i]}"
             (( i++ ))
         done
     fi
@@ -791,11 +791,11 @@ run_onboarding() {
 
     # --- Homebrew (macOS): silent if present, prompts only if missing ---
     if [[ "$IS_MAC" == "true" ]]; then
-        _ensure_homebrew
+        __ensure_homebrew
     fi
 
     # --- Package manager ---
-    _detect_package_manager
+    __detect_package_manager
     if [[ -n "$_PKG_MANAGER_NAME" ]]; then
         printf "  ${ok}✓${done} %-18s %s\n" "Package manager" "$_PKG_MANAGER_NAME"
     else
@@ -804,13 +804,13 @@ run_onboarding() {
 
     # --- Essential tools ---
     if [[ "$(uname -s)" == "Darwin" ]]; then
-        _run_section "Essential" \
+        __run_section "Essential" \
             "git"   "git"   "git" \
             "curl"  "curl"  "curl" \
             "unzip" "unzip" "unzip" \
             "trash" "trash" "trash"
     else
-        _run_section "Essential" \
+        __run_section "Essential" \
             "git"       "git"       "git" \
             "curl"      "curl"      "curl" \
             "unzip"     "unzip"     "unzip" \
@@ -818,7 +818,7 @@ run_onboarding() {
     fi
 
     # --- UX tools ---
-    _run_section "UX tools" \
+    __run_section "UX tools" \
         "eza"    "eza"    "eza" \
         "fzf"    "fzf"    "fzf" \
         "jq"     "jq"     "jq" \
@@ -827,7 +827,7 @@ run_onboarding() {
         "glow"   "glow"   "glow"
 
     # --- CLI tools ---
-    _run_section "CLI tools" \
+    __run_section "CLI tools" \
         "rg"      "ripgrep"  "ripgrep" \
         "nvim"    "neovim"   "neovim" \
         "tree"    "tree"     "tree" \
@@ -842,8 +842,8 @@ run_onboarding() {
     # nvm_ok requires not just presence but a version at/above the CVE-2026-10796
     # floor (read via subshell-source since nvm.sh loads after onboarding).
     local _nvm_cur=""
-    _nvm_cur=$(_nvm_version_quiet 2>/dev/null)
-    [[ -n "$_nvm_cur" && "$(_semver_cmp "$_nvm_cur" "$NVM_MIN_VERSION")" != "-1" ]] && nvm_ok=true
+    _nvm_cur=$(__nvm_version_quiet 2>/dev/null)
+    [[ -n "$_nvm_cur" && "$(__semver_cmp "$_nvm_cur" "$NVM_MIN_VERSION")" != "-1" ]] && nvm_ok=true
     command -v uv &>/dev/null && uv_ok=true
     # Resolve pnpm even if $PNPM_HOME/bin isn't on PATH yet: onboarding runs in
     # .zshrc section 4, BEFORE section 5 adds it. On Apple Silicon the standalone
@@ -860,7 +860,7 @@ run_onboarding() {
     fi
     if [[ -n "$_pnpm_bin" ]]; then
         _pnpm_cur=$("$_pnpm_bin" -v 2>/dev/null)
-        [[ -n "$_pnpm_cur" && "$(_pnpm_vercmp "$_pnpm_cur" "$PNPM_MIN_VERSION")" != "-1" ]] && pnpm_ok=true
+        [[ -n "$_pnpm_cur" && "$(__pnpm_vercmp "$_pnpm_cur" "$PNPM_MIN_VERSION")" != "-1" ]] && pnpm_ok=true
     fi
 
     if [[ "$nvm_ok" == true && "$uv_ok" == true && "$pnpm_ok" == true ]]; then
@@ -877,9 +877,9 @@ run_onboarding() {
         # three. Two separate theories were argued from the code and BOTH were
         # wrong, because the one machine that could answer was never asked.
         #
-        # Worse, two of the three failure modes are SILENT. _ensure_nvm returns
-        # early when ~/.nvm exists, _ensure_nvm_current returns early when the
-        # version reads empty, and _ensure_pnpm_current returns early when pnpm
+        # Worse, two of the three failure modes are SILENT. __ensure_nvm returns
+        # early when ~/.nvm exists, __ensure_nvm_current returns early when the
+        # version reads empty, and __ensure_pnpm_current returns early when pnpm
         # is not yet on PATH -- so nvm and pnpm can each flip the flag and then
         # print nothing at all. Only a missing uv actually prompts.
         #
@@ -903,22 +903,22 @@ run_onboarding() {
             fi
         fi
 
-        # _ensure_nvm handles a missing install; _ensure_nvm_current handles a
+        # __ensure_nvm handles a missing install; __ensure_nvm_current handles a
         # present-but-below-floor nvm. Both self-gate, so calling both is safe.
-        [[ "$nvm_ok" == false ]] && { _ensure_nvm; _ensure_nvm_current "$_nvm_cur"; }
-        [[ "$uv_ok" == false ]] && _ensure_uv
-        [[ "$pnpm_ok" == false ]] && _ensure_pnpm_current
+        [[ "$nvm_ok" == false ]] && { __ensure_nvm; __ensure_nvm_current "$_nvm_cur"; }
+        [[ "$uv_ok" == false ]] && __ensure_uv
+        [[ "$pnpm_ok" == false ]] && __ensure_pnpm_current
     fi
 
     # Node EOL nudge — independent of nvm_ok (a current nvm can still default to an
     # EOL Node). Self-gates on below-floor major + 24h marker + interactive shell.
-    _ensure_node_current
+    __ensure_node_current
 
     # bun floor nudge — the ~/.bunfig.toml minimumReleaseAge cooldown needs bun >= 1.3.0.
-    _ensure_bun_current
+    __ensure_bun_current
 
     # Weekly background pnpm store prune (self-gates on a 7-day marker; silent).
-    _pnpm_store_maintenance
+    __pnpm_store_maintenance
 
     # --- Docker ---
     if command -v docker &>/dev/null; then
@@ -929,7 +929,7 @@ run_onboarding() {
         fi
     else
         printf "  ${warn}!${done} %-18s\n" "Docker"
-        _show_docker_guidance
+        __show_docker_guidance
     fi
 
     # Pre-create nvim XDG state dirs as the current user to prevent

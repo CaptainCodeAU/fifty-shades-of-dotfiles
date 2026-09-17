@@ -518,9 +518,27 @@ Swept 30,992 candidate files after excluding `node_modules` and friends. 966 mat
 So: **no unsupplied `gh` caller was hiding in untracked or ignored files.** The control
 for that zero is that the same pattern hits `ci-watch`, a file known to call `gh`.
 
-One thing the sweep found that was not being looked for: **`enforce-secret-probe.sh` is
-UNTRACKED.** A live PreToolUse security hook, wired into `settings.json`, existing only
-on this disk and pushed nowhere.
+One thing the sweep found that was not being looked for: `enforce-secret-probe.sh`
+showed as UNTRACKED in `dot-claude`, and this document said it was "a live PreToolUse
+security hook existing only on this disk and pushed nowhere".
+
+**That was WRONG, and the correction is more useful than the claim.** The file in
+`~/.claude/hooks/` is a SYMLINK into this repo. The real file lives at
+`home/.claude/hooks/enforce-secret-probe.sh`, is tracked with mode 100755, and is
+present in `origin/master`. It was backed up the whole time. What was untracked was the
+symlink, and a symlink is not its target.
+
+This is the exact trap `OPERATIONAL_RULES.md` already records -- git reporting about a
+path that crosses a symlink is answering a different question than the one asked -- and
+it was walked into anyway, with the rule loaded in context. Worth stating plainly: the
+rule did not fire because `git status` did not REFUSE this time, it answered, correctly,
+about the link. A refusal is legible; a correct answer to the wrong question is not.
+
+Three hooks, three different storage shapes, which is why this was confusing:
+`enforce-gh-ssh-only.sh` is a REAL file in `dot-claude` AND a separate real file here
+(two copies, both needed fixing); `enforce-herdr-skill.sh` and
+`enforce-secret-probe.sh` are symlinks from `dot-claude` into this repo (one copy).
+Never infer the shape from the directory.
 
 ### Pulse (section 7 item 4) -- ALREADY FIXED, the item was stale
 
@@ -549,11 +567,19 @@ anchor meant `uv pip install` never reached that rule at all. Widening the ancho
 blocked a correct command, and only then was the missing exemption visible. A rule that
 widens must re-check its own exemptions.
 
-**A second, more embarrassing measurement.** Patching these files broke `enforce-uv`
-with a shell syntax error, and because it is a PreToolUse hook on Bash, that locked the
-Bash tool out of this entire project until it was repaired with a non-Bash editor. **A
-guard that fails to PARSE does not fail open or closed; it fails the tool.** Anyone
-editing a live hook should keep a non-Bash edit path in reach.
+**A second, more embarrassing measurement, and a peer made it worse.** Patching these
+files broke `enforce-uv` with a shell syntax error, and because it is a PreToolUse hook
+on Bash, that locked the Bash tool out of this entire project until it was repaired with
+a non-Bash editor. **A guard that fails to PARSE does not fail open or closed; it fails
+the tool.** Anyone editing a live hook should keep a non-Bash edit path in reach.
+
+That was written up as "locks this project". **A concurrent session then reported the
+same error blocking TWO of its own Bash calls at 22:17:32**, quoting the syntax error
+verbatim. So the true statement is wider: *a half-saved PreToolUse hook blocks every
+session working in that repo, not only the one doing the editing.* The editing session
+is the one place the damage is visible and explicable; everyone else just sees a guard
+they did not touch rejecting commands they did not write. Credit to that session for the
+measurement -- it is not one this session could have made about itself.
 
 ### THE TWO GUARD LAYERS DISAGREE, and nobody noticed
 
@@ -584,3 +610,29 @@ gate getting weaker, and the measurement supporting it covers `--with-token
 --git-protocol ssh` only, not the interactive or web flows the wrapper would also let
 through. That is Gavin's call, not a cleanup.
 
+### The tool this whole document leans on can return a silent zero
+
+Found while checking that peer's separate finding, and it is the worst instance of the
+count-and-absence class in this record, because it is in the instrument rather than the
+experiment.
+
+**`grep` is a shell function here, sourced from a shell snapshot, and on a long-line file
+it returns EMPTY instead of a count.** Same file, same moment:
+
+    grep -c 'unalias' <snapshot>          -> ''      (empty, and WRONG)
+    command grep -c 'unalias' <snapshot>  -> 13
+    rg -c 'unalias' <snapshot>            -> 13
+
+`file` calls it plain UTF-8 text "with very long lines (358)". `type grep` reports a
+shell function sourced from an OLDER snapshot than the live one.
+
+It cost two wrong readings in this session before it was caught, and both times the tell
+was the same: **every arm returned empty, including the control.** A broken instrument
+and a true absence produce identical output, which is the rule this repo already states,
+arriving from the one direction nobody guards against. Earlier in the evening a control
+for `_claude_launch` was dismissed as "my pattern must be wrong"; it was not, the tool
+was silent.
+
+`census` is unaffected -- it is Python and does its own reading. That is not a lucky
+coincidence, it is the reason it exists, and this is the strongest argument yet for the
+existing rule: use a search to LOCATE, use `census` to CONCLUDE.

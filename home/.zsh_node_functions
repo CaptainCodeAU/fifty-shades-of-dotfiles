@@ -8,14 +8,14 @@
 # --- Internal Helpers ---
 
 # Get project name from package.json (requires jq)
-_get_node_project_name() {
+__get_node_project_name() {
     if [[ ! -f "package.json" ]]; then return 1; fi
     jq -r '.name // ""' package.json 2>/dev/null
 }
 
 # Detect package manager from lockfile.
 # Returns "bun" or "pnpm" (pnpm is the default fallback).
-_detect_pkg_manager() {
+__detect_pkg_manager() {
     if [[ -f "bun.lockb" ]] || [[ -f "bun.lock" ]]; then echo "bun"
     elif [[ -f "pnpm-lock.yaml" ]]; then echo "pnpm"
     else echo "pnpm"
@@ -24,7 +24,7 @@ _detect_pkg_manager() {
 
 # Display runnable scripts from package.json
 # Returns silently if no package.json or no jq
-_display_node_scripts() {
+__display_node_scripts() {
     if [[ ! -f "package.json" ]] || ! command -v jq &>/dev/null; then
         return 0
     fi
@@ -33,7 +33,7 @@ _display_node_scripts() {
     script_names=("${(@f)$(jq -r '.scripts // {} | keys[]' package.json 2>/dev/null)}")
 
     if (( ${#script_names[@]} > 0 )); then
-        local pm=$(_detect_pkg_manager)
+        local pm=$(__detect_pkg_manager)
         echo "--------------------------------------------------"
         echo "${info}Found ${ok}${#script_names[@]}${info} script(s) in package.json:${done}"
         for name in "${script_names[@]}"; do
@@ -45,7 +45,7 @@ _display_node_scripts() {
 }
 
 # Display hints about the current Node.js project
-_display_node_hints() {
+__display_node_hints() {
     echo "${info}Hint: Project environment details:${done}"
 
     # .nvmrc content
@@ -65,10 +65,10 @@ _display_node_hints() {
     fi
 
     # Detected package manager from lockfile
-    echo "${info}      - Package manager: ${ok}$(_detect_pkg_manager)${done}"
+    echo "${info}      - Package manager: ${ok}$(__detect_pkg_manager)${done}"
 
     # Available scripts
-    _display_node_scripts
+    __display_node_scripts
 }
 
 # --- Environment ---
@@ -77,8 +77,8 @@ _display_node_hints() {
 # gate `pnpm self-update` enforces), with an extra confirm on major-version
 # bumps to avoid surprise breaks. When a newer version exists but is still held
 # by the release-age gate, it reports that instead of pretending to update.
-# Uses _pnpm_get_latest / _pnpm_get_raw_latest / _pnpm_get_raw_eligible_at /
-# _pnpm_vercmp from .zsh_onboarding (sourced earlier in .zshrc).
+# Uses __pnpm_get_latest / __pnpm_get_raw_latest / __pnpm_get_raw_eligible_at /
+# __pnpm_vercmp from .zsh_onboarding (sourced earlier in .zshrc).
 # Usage: pnpm_update
 pnpm_update() {
     if ! command -v pnpm &>/dev/null; then
@@ -101,9 +101,9 @@ pnpm_update() {
 
     local current eligible raw raw_at now cmp current_major eligible_major post
     current=$(pnpm -v 2>/dev/null)
-    eligible=$(_pnpm_get_latest 2>/dev/null)        # latest installable (age-gated)
-    raw=$(_pnpm_get_raw_latest 2>/dev/null)         # registry dist-tag latest
-    raw_at=$(_pnpm_get_raw_eligible_at 2>/dev/null) # epoch raw clears the gate
+    eligible=$(__pnpm_get_latest 2>/dev/null)        # latest installable (age-gated)
+    raw=$(__pnpm_get_raw_latest 2>/dev/null)         # registry dist-tag latest
+    raw_at=$(__pnpm_get_raw_eligible_at 2>/dev/null) # epoch raw clears the gate
 
     if [[ -z "$eligible" ]]; then
         echo "${warn}Could not determine the latest eligible pnpm version (network check failed or cache empty).${done}"
@@ -112,7 +112,7 @@ pnpm_update() {
         return $?
     fi
 
-    cmp=$(_pnpm_vercmp "$current" "$eligible")
+    cmp=$(__pnpm_vercmp "$current" "$eligible")
     if [[ "$cmp" != "-1" ]]; then
         # Already at (or past) the newest installable version. Do NOT call
         # self-update -- it would only produce a confusing "already latest" no-op.
@@ -123,7 +123,7 @@ pnpm_update() {
         fi
         # A newer version may exist but be held back by minimumReleaseAge.
         if [[ -n "$raw" && "$raw" != "$eligible" \
-              && "$(_pnpm_vercmp "$eligible" "$raw")" == "-1" ]]; then
+              && "$(__pnpm_vercmp "$eligible" "$raw")" == "-1" ]]; then
             local eta=""
             if [[ -n "$raw_at" && "$raw_at" =~ ^[0-9]+$ && "$raw_at" -gt 0 ]]; then
                 now=$(date +%s)
@@ -150,7 +150,7 @@ pnpm_update() {
     # touching a working install; refuse and inform if not. (Belt-and-suspenders
     # with the post-update version check below.) Fail OPEN on 'unknown' (offline).
     local elig_bin
-    elig_bin=$(_pnpm_version_has_binary "$eligible")
+    elig_bin=$(__pnpm_version_has_binary "$eligible")
     if [[ "$elig_bin" == "missing" ]]; then
         echo "${err}pnpm ${eligible} was published WITHOUT a native binary for this platform${done}" >&2
         echo "${err}-- a known upstream pnpm release bug (e.g. 11.12.0 / 11.13.0).${done}" >&2
@@ -245,9 +245,9 @@ nvm_check_and_install_lts() {
 # Usage: create_node_envrc [pnpm|bun]
 create_node_envrc() {
     local project_name
-    project_name=$(_get_node_project_name 2>/dev/null)
+    project_name=$(__get_node_project_name 2>/dev/null)
     project_name=${project_name:-$(basename "$PWD")}
-    local pm="${1:-$(_detect_pkg_manager)}"
+    local pm="${1:-$(__detect_pkg_manager)}"
 
     if [[ -f ".envrc" ]]; then
         echo "${info}.envrc already exists. (Skipping creation)${done}"
@@ -459,7 +459,7 @@ PKGEOF
     fi
 
     # Update project_name from package.json now that it exists
-    project_name=$(_get_node_project_name 2>/dev/null)
+    project_name=$(__get_node_project_name 2>/dev/null)
     project_name=${project_name:-$(basename "$PWD" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/_/g')}
 
     # --- 2. Create standard project structure ---
@@ -627,7 +627,7 @@ EOF
     echo "${ok}Project '${project_name}' setup complete! (${pkg_manager})${done}"
     echo "--------------------------------------------------"
 
-    _display_node_scripts
+    __display_node_scripts
 }
 
 # Set up an existing Node.js project.
@@ -635,12 +635,12 @@ EOF
 node_setup() {
     if [[ ! -f "package.json" ]]; then
         echo "${err}Error: 'package.json' not found. This does not appear to be a Node.js project.${done}" >&2
-        _display_node_hints
+        __display_node_hints
         return 1
     fi
 
     local project_name
-    project_name=$(_get_node_project_name 2>/dev/null)
+    project_name=$(__get_node_project_name 2>/dev/null)
     project_name=${project_name:-$(basename "$PWD")}
 
     echo "--------------------------------------------------"
@@ -662,7 +662,7 @@ node_setup() {
     fi
 
     # --- 2. Install dependencies ---
-    local pm=$(_detect_pkg_manager)
+    local pm=$(__detect_pkg_manager)
     if ! command -v "$pm" &>/dev/null; then
         echo "${err}Error: '${pm}' not found. Cannot install dependencies.${done}" >&2
         return 1
@@ -684,14 +684,14 @@ node_setup() {
     echo "${ok}Project setup complete.${done}"
     echo "--------------------------------------------------"
 
-    _display_node_scripts
+    __display_node_scripts
 }
 
 # Clean up Node.js project artifacts.
 # Usage: node_clean
 node_clean() {
     local project_name
-    project_name=$(_get_node_project_name 2>/dev/null)
+    project_name=$(__get_node_project_name 2>/dev/null)
     project_name=${project_name:-$(basename "$PWD")}
 
     echo "--------------------------------------------------"
@@ -737,7 +737,7 @@ node_clean() {
 # Usage: node_info
 node_info() {
     local project_name
-    project_name=$(_get_node_project_name 2>/dev/null)
+    project_name=$(__get_node_project_name 2>/dev/null)
 
     echo "--------------------------------------------------"
     echo "${info}Node.js Environment Info${done}"
@@ -779,7 +779,7 @@ node_info() {
     echo "--------------------------------------------------"
 
     # Scripts
-    _display_node_scripts
+    __display_node_scripts
 
     # Global link status
     if [[ -n "$project_name" ]]; then
@@ -802,10 +802,10 @@ node_link() {
     fi
 
     local project_name
-    project_name=$(_get_node_project_name 2>/dev/null)
+    project_name=$(__get_node_project_name 2>/dev/null)
     project_name=${project_name:-$(basename "$PWD")}
 
-    local pm=$(_detect_pkg_manager)
+    local pm=$(__detect_pkg_manager)
     local current_node_version
     current_node_version=$(nvm current 2>/dev/null || node --version 2>/dev/null)
 
@@ -836,10 +836,10 @@ node_unlink() {
     fi
 
     local project_name
-    project_name=$(_get_node_project_name 2>/dev/null)
+    project_name=$(__get_node_project_name 2>/dev/null)
     project_name=${project_name:-$(basename "$PWD")}
 
-    local pm=$(_detect_pkg_manager)
+    local pm=$(__detect_pkg_manager)
 
     echo "${info}Unlinking '${ok}${project_name}${info}' from global scope via ${pm}...${done}"
     if [[ "$pm" == "pnpm" ]]; then
@@ -862,14 +862,14 @@ node_unlink() {
 # Returns 0 if linked, 1 if not.
 node_check_global() {
     local project_name
-    project_name=$(_get_node_project_name 2>/dev/null)
+    project_name=$(__get_node_project_name 2>/dev/null)
 
     if [[ -z "$project_name" ]]; then
         echo "${warn}  No package.json found — cannot check global link.${done}"
         return 1
     fi
 
-    local pm=$(_detect_pkg_manager)
+    local pm=$(__detect_pkg_manager)
     local current_node_version
     current_node_version=$(nvm current 2>/dev/null || node --version 2>/dev/null)
 
