@@ -63,7 +63,7 @@ STRIPPED=$(echo "$NOHEREDOC" | sed -E 's/\$\([^)]*\)//g; s/"[^"]*"//g; s/'"'"'[^
 
 # Only fire when `herdr` is the actual command being invoked, at the start
 # or right after a chain operator -- not a substring of some other word.
-echo "$STRIPPED" | grep -qE '(^|[;&|(]|[[:space:]])([A-Za-z0-9_./-]*/)?herdr(\s|$)' || exit 0
+echo "$STRIPPED" | grep -qE '(^|[;&|(])[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+|(env|sudo|command|nohup|time|exec|doas|xargs)([[:space:]]+(-[^[:space:]]+|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*|[A-Za-z_][A-Za-z0-9_]*))*[[:space:]]+)*([A-Za-z0-9_./-]*/)?herdr(\s|$)' || exit 0
 
 MARKER="/tmp/.claude-herdr-skill-read-${SESSION_ID}"
 [ -f "$MARKER" ] && exit 0

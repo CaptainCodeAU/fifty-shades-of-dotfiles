@@ -75,12 +75,16 @@ NOHEREDOC=$(printf '%s\n' "$COMMAND" | awk '
 # Strip subshells and quoted strings to avoid further false positives.
 STRIPPED=$(echo "$NOHEREDOC" | sed -E 's/\$\([^)]*\)//g; s/"[^"]*"//g; s/'"'"'[^'"'"']*'"'"'//g')
 
-# Match the blocked subcommands wherever a command can begin: at the start,
-# after a separator, or after ANY whitespace (which is what covers env
-# assignments, `env`, `sudo`, `command`, and friends). An optional leading path
-# segment covers an absolute path to the binary. The trailing boundary keeps
-# a longer word starting with the same prefix from matching.
-GH_AUTH_RE='(^|[;&|(]|[[:space:]])([A-Za-z0-9_./-]*/)?gh[[:space:]]+auth[[:space:]]+(login|setup-git|refresh)([[:space:]]|$)'
+# Match the blocked subcommands only in COMMAND POSITION: at the start, after a
+# separator, or after a bounded set of command prefixes (env/sudo/command/time/
+# ... with their own flags, and VAR=value assignments), plus an optional path.
+#
+# 2026-09-17, defect 3 -- NOT "after any whitespace", which is what the first fix
+# for defect 1 used. That matched the command name as an ARGUMENT or as prose:
+# `rg -n <name> docs/X.md` and a commit message merely mentioning the tool were
+# both refused. A peer session lost a commit attempt to it. Command position is
+# the property that was always meant; whitespace was a lazy proxy for it.
+GH_AUTH_RE='(^|[;&|(])[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+|(env|sudo|command|nohup|time|exec|doas|xargs)([[:space:]]+(-[^[:space:]]+|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*|[A-Za-z_][A-Za-z0-9_]*))*[[:space:]]+)*([A-Za-z0-9_./-]*/)?gh[[:space:]]+auth[[:space:]]+(login|setup-git|refresh)([[:space:]]|$)'
 
 if echo "$STRIPPED" | grep -qE "$GH_AUTH_RE"; then
   echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] BLOCKED enforce-gh-ssh-only \"$COMMAND\"" >> "$LOG_FILE"

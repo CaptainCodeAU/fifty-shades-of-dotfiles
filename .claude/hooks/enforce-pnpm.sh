@@ -52,31 +52,31 @@ NOHEREDOC=$(printf '%s\n' "$COMMAND" | awk '
 STRIPPED=$(echo "$NOHEREDOC" | sed -E 's/\$\([^)]*\)//g; s/"[^"]*"//g; s/'"'"'[^'"'"']*'"'"'//g')
 
 # Block npm commands → suggest pnpm or bun
-if echo "$STRIPPED" | grep -qE '(^|[;&|(]|[[:space:]])([A-Za-z0-9_./-]*/)?npm\s+'; then
+if echo "$STRIPPED" | grep -qE '(^|[;&|(])[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+|(env|sudo|command|nohup|time|exec|doas|xargs)([[:space:]]+(-[^[:space:]]+|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*|[A-Za-z_][A-Za-z0-9_]*))*[[:space:]]+)*([A-Za-z0-9_./-]*/)?npm\s+'; then
   log_blocked "npm → pnpm/bun" "$COMMAND"
   deny "Use 'pnpm' or 'bun' instead of npm"
 fi
 
 # Block yarn commands → suggest pnpm or bun
-if echo "$STRIPPED" | grep -qE '(^|[;&|(]|[[:space:]])([A-Za-z0-9_./-]*/)?yarn\s+'; then
+if echo "$STRIPPED" | grep -qE '(^|[;&|(])[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+|(env|sudo|command|nohup|time|exec|doas|xargs)([[:space:]]+(-[^[:space:]]+|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*|[A-Za-z_][A-Za-z0-9_]*))*[[:space:]]+)*([A-Za-z0-9_./-]*/)?yarn\s+'; then
   log_blocked "yarn → pnpm/bun" "$COMMAND"
   deny "Use 'pnpm' or 'bun' instead of yarn"
 fi
 
 # Block bare yarn (no args = yarn install)
-if echo "$STRIPPED" | grep -qE '(^|[;&|(]|[[:space:]])([A-Za-z0-9_./-]*/)?yarn\s*$'; then
+if echo "$STRIPPED" | grep -qE '(^|[;&|(])[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+|(env|sudo|command|nohup|time|exec|doas|xargs)([[:space:]]+(-[^[:space:]]+|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*|[A-Za-z_][A-Za-z0-9_]*))*[[:space:]]+)*([A-Za-z0-9_./-]*/)?yarn\s*$'; then
   log_blocked "yarn → pnpm install/bun install" "$COMMAND"
   deny "Use 'pnpm install' or 'bun install' instead of yarn"
 fi
 
 # Block npx → suggest pnpm dlx or bunx
-if echo "$STRIPPED" | grep -qE '(^|[;&|(]|[[:space:]])([A-Za-z0-9_./-]*/)?npx\s+'; then
+if echo "$STRIPPED" | grep -qE '(^|[;&|(])[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+|(env|sudo|command|nohup|time|exec|doas|xargs)([[:space:]]+(-[^[:space:]]+|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*|[A-Za-z_][A-Za-z0-9_]*))*[[:space:]]+)*([A-Za-z0-9_./-]*/)?npx\s+'; then
   log_blocked "npx → pnpm dlx/bunx" "$COMMAND"
   deny "Use 'pnpm dlx' or 'bunx' instead of npx"
 fi
 
 # Block pnpm link --global / -g (shims land at root, not bin/)
-if echo "$STRIPPED" | grep -qE '(^|[;&|(]|[[:space:]])([A-Za-z0-9_./-]*/)?pnpm\s+(link|ln)\s+.*(-g|--global)'; then
+if echo "$STRIPPED" | grep -qE '(^|[;&|(])[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+|(env|sudo|command|nohup|time|exec|doas|xargs)([[:space:]]+(-[^[:space:]]+|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*|[A-Za-z_][A-Za-z0-9_]*))*[[:space:]]+)*([A-Za-z0-9_./-]*/)?pnpm\s+(link|ln)\s+.*(-g|--global)'; then
   log_blocked "pnpm link --global → pnpm install -g" "$COMMAND"
   deny "Use 'pnpm install -g .' instead of 'pnpm link --global' (v11 shim layout bug)"
 fi

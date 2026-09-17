@@ -636,3 +636,46 @@ was silent.
 `census` is unaffected -- it is Python and does its own reading. That is not a lucky
 coincidence, it is the reason it exists, and this is the strongest argument yet for the
 existing rule: use a search to LOCATE, use `census` to CONCLUDE.
+
+### Defect 3, and the shape of all three
+
+A peer session hit the next one within the hour: `enforce-herdr-skill.sh` refused
+
+    git commit -q -m "...describes eb9880f as a herdr hook fix..." -- <paths>
+
+It was running `git`, not the tool named in the message. Also refused: `rg -n <name>
+docs/X.md`, and `echo see <name> docs`. So the guard blocked reading its own
+documentation, grepping for it, and writing a commit about it. It cost that session a
+commit attempt.
+
+The cause is the fix for defect 1. "After any whitespace" is not "in command position";
+it is a lazy proxy that also matches an ARGUMENT and prose. The anchor is now: start of
+string, a separator, or a BOUNDED set of command prefixes (`env`, `sudo`, `command`,
+`nohup`, `time`, `exec`, `doas`, `xargs`, with their own flags) and `VAR=value`
+assignments, plus an optional path. Applied to all six guards. 32 cases pass: every
+former bypass still blocks, every correct form still runs, and the tool name as prose or
+as an argument is free.
+
+**Three defects, one guard, one evening, and they are the same mistake at three
+amplitudes.** Too narrow (start-of-line only) let every prefixed invocation through. Too
+wide (any whitespace) blocked prose. The middle is a real property of the string --
+command position -- rather than a cheap stand-in for it. Reaching for the proxy is what
+went wrong twice, in opposite directions.
+
+### A pathspec edge worth knowing, from the same peer
+
+`git commit -- <paths>` is the fix for a shared index, but it REFUSES a path git does not
+yet track:
+
+    error: pathspec 'docs/NEW_FILE.md' did not match any file(s) known to git
+
+So for a new file the safe form is `git add <paths> && git commit -F msg -- <paths>` as
+ONE shell command, which keeps the shared-index window inside a single tool call instead
+of spanning several. "Use a pathspec" alone does not cover the new-file case, and that is
+exactly the moment someone reaches for a bare commit again.
+
+The rename work that collided with this is written up in `docs/ZSH_HELPER_NAMESPACE.md`
+with its own register block, `decided single underscore`. Deliberately no credit commit
+for it here: a decision recorded only in a commit message does not exist, which is the
+rule the register was built on, so a second commit would put the record back in the one
+place both sessions agree it does not survive.

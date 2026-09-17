@@ -52,9 +52,9 @@ NOHEREDOC=$(printf '%s\n' "$COMMAND" | awk '
 STRIPPED=$(echo "$NOHEREDOC" | sed -E 's/\$\([^)]*\)//g; s/"[^"]*"//g; s/'"'"'[^'"'"']*'"'"'//g')
 
 # Check for "builtin <word>" usage
-if echo "$STRIPPED" | grep -qE '(^|[;&|(]|[[:space:]])([A-Za-z0-9_./-]*/)?builtin\s+'; then
+if echo "$STRIPPED" | grep -qE '(^|[;&|(])[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+|(env|sudo|command|nohup|time|exec|doas|xargs)([[:space:]]+(-[^[:space:]]+|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*|[A-Za-z_][A-Za-z0-9_]*))*[[:space:]]+)*([A-Za-z0-9_./-]*/)?builtin\s+'; then
   # Extract the word after "builtin"
-  BUILTIN_ARG=$(echo "$STRIPPED" | grep -oE '(^|[;&|(]|[[:space:]])([A-Za-z0-9_./-]*/)?builtin\s+\S+' | head -1 | sed -E 's/.*builtin[[:space:]]+//')
+  BUILTIN_ARG=$(echo "$STRIPPED" | grep -oE '(^|[;&|(])[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+|(env|sudo|command|nohup|time|exec|doas|xargs)([[:space:]]+(-[^[:space:]]+|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*|[A-Za-z_][A-Za-z0-9_]*))*[[:space:]]+)*([A-Za-z0-9_./-]*/)?builtin\s+\S+' | head -1 | sed -E 's/.*builtin[[:space:]]+//')
 
   # Allowed zsh builtins
   case "$BUILTIN_ARG" in
