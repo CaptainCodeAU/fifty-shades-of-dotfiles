@@ -15,6 +15,27 @@
 #   - never blocks: always exits 0; degrades cleanly when offline or tools missing
 set -uo pipefail
 
+# SUPPLY THE NARROW CREDENTIAL, OR ONE THAT FAILS CLOSED.
+# Both gh calls below read the PUBLIC zed-industries/zed repo, and both already
+# degrade to unauthenticated curl, so the only thing a token buys here is rate
+# limit. That makes the status quo worse rather than better: an unset GH_TOKEN
+# is not "no credential" to gh, it falls through to gh's own keyring entry -- a
+# classic OAuth token with `repo` scope -- so this hook was reading PUBLIC
+# release notes with a credential that can read all your private source.
+# Measured 2026-09-17 on a sibling tool: no env token meant the keyring served
+# the call, and it only failed once stored auth was removed too.
+#
+# A caller's own token still wins. An invalid value rather than an empty one,
+# because empty means "not set" to gh and lands back on the fallback; invalid
+# means gh returns nothing and the curl path below takes over, which is exactly
+# the degradation this hook already handles.
+if [ -z "${GH_TOKEN:-}" ] && [ -z "${GITHUB_TOKEN:-}" ]; then
+  _zed_tok=""
+  command -v github-api-token >/dev/null 2>&1 && _zed_tok="$(github-api-token 2>/dev/null)" || _zed_tok=""
+  export GH_TOKEN="${_zed_tok:-INVALID-zed-version-check-no-narrow-token-do-not-fall-back}"
+  unset _zed_tok
+fi
+
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 DOC="$PROJECT_DIR/docs/ZED_PREVIEW_CHANGELOG.md"
 ZED_REPO="zed-industries/zed"

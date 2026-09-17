@@ -93,6 +93,25 @@ missing from herdr. It was there the whole time. The same command ending in
 up when it truncates still leaves every quiet run ambiguous, which is the bug,
 not the fix.
 
+**THE GENERAL FORM: A PROPERTY THAT IS TRUE IN BOTH WORLDS CANNOT DECIDE
+BETWEEN THEM.** The traps above are four instances; this is the rule they are
+instances of. Before acting on an observation, ask what it would look like in
+the case you do NOT want — if the answer is "the same", the observation is not
+evidence, however true it is.
+
+Measured 2026-09-17, one command away from deleting the wrong thing. Two herdr
+plugin config directories were to be deleted because they were EMPTY. Listing
+the LIVE plugin's directory in the same command showed it was also empty — a
+running plugin simply keeps no config. So "it is empty" was true of the dead
+ones and the live one alike, and reasoning from it would have justified deleting
+a directory belonging to something in use. The real criterion was never
+emptiness; it was that those two plugins had been unlinked.
+
+Same shape as a count that reads `0` whether the mechanism worked or never ran,
+and as `stow -n` printing nothing for an empty plan and a real one. The defence
+is not care, it is a CONTROL: include the case you know is different in the same
+command, and check the property actually separates them.
+
 **A tool REFUSING to answer is not the tool answering "no".** A refusal reads
 like a finding, exactly the way a zero does, and it is the same failure wearing
 different clothes. Two from 2026-09-13:
@@ -277,7 +296,19 @@ gh is a shell function from ~/.claude/shell-snapshots/snapshot-zsh-*.sh
 ```
 
 That function injects its own token. So **`GH_TOKEN=<something> gh api ...` does
-NOT use the token you passed** — the wrapper replaces it. Raw `curl` with an
+NOT use the token you passed** — the wrapper replaces it.
+
+**THE MECHANISM, because the error message points at the wrong credential.**
+Inside a repo flipped onto the GitHub App, the wrapper MINTS an App installation
+token and overrides yours with an assignment prefix: `GH_TOKEN="$_gh_token"
+command gh "$@"`. So a measurement taken in a flipped repo measures the App, and
+App failures say *"Resource not accessible by integration"*. A fine-grained PAT
+says *"not accessible by personal access token"*. Those are different strings for
+different credential families, and reading the first one while believing you
+passed a PAT sends you after the wrong thing entirely — measured 2026-09-17, it
+cost a peer session a wrong conclusion about what PATs can do, which then nearly
+became a design decision. `whence -p gh` (zsh) or `type -P gh` (bash) is the
+defence, and THIS is the reason rather than mere tidiness. Raw `curl` with an
 explicit `Authorization` header against the same URL returned 200 while the same
 token "through" `gh` returned 404. Two people running what they believed was the
 same command got different answers, and neither could see why.
