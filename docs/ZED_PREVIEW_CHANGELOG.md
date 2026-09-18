@@ -648,14 +648,19 @@ that key drives nothing else — the link background is explicitly nulled on the
 So a Claude-Code-style "blue highlight, grey body" is achievable only via `text.accent`
 on links, plus the inline code chip.
 
-**The `markdown_preview.theme` trap.** Setting that key costs you live tuning.
-`markdown_preview_view.rs` → `resolve_preview_theme()` fetches the theme with
+**The `markdown_preview.theme` trade.** Setting that key costs you live tuning for the
+preview. `markdown_preview_view.rs` → `resolve_preview_theme()` fetches the theme with
 `ThemeRegistry::global(cx).get(name)` and **never calls `apply_theme_overrides()`**, so
-while the key is set, `experimental.theme_overrides` cannot reach the preview. Leave it
-**unset**: the preview then falls back to the active theme, which does get overrides.
+while the key is set **neither** override form reaches the preview — not
+`experimental.theme_overrides` and not the per-theme `theme_overrides` map. It was left
+unset for months for exactly that reason.
 
-- _In plain English:_ pinning the preview to its own theme blocks live colour edits.
-  Leave it unpinned.
+**As of 2026-09-18 the trade is taken deliberately**, because a separate preview
+background is not obtainable any other way. See "Giving the preview its own background"
+below for what was gained and what was given up.
+
+- _In plain English:_ pinning the preview to its own theme blocks live colour edits, and
+  we accepted that in exchange for a preview that does not look like the editor.
 
 **What is live and what is not.** `settings.json` edits apply **on save**, verified
 repeatedly. Theme-file edits under `~/.config/zed/themes/` do **not**; they need a
@@ -713,6 +718,60 @@ in the source buffer.
 
 - _In plain English:_ the file you type in and the preview beside it are styled by two
   different systems. Keys ending in `.markup` only affect markdown.
+
+### The hover bar down the left of each block cannot be turned off
+
+Hovering a block in the preview paints a 4px full-height bar at its left edge.
+`markdown.rs` → `pop_root_block()` adds an absolutely positioned `div().w(px(4.0))` at
+`left_0`, filled on `group_hover("markdown-root-block")`. There is **no setting**:
+`markdown_preview_view.rs` calls `.show_root_block_markers()` unconditionally.
+
+Only its colour is reachable, and it is shared:
+
+| Bar state | Key | What else that key does |
+| --- | --- | --- |
+| Hovered | `border.variant` | code block border, h1/h2 bottom rule |
+| Active block (follows the cursor in the source) | `border` | horizontal rules, table cell borders |
+
+So making the hover bar disappear also removes the code block outline, and code blocks
+cannot be distinguished by fill because the page and the block share `editor.background`.
+That is a genuine trade, not an oversight to be worked around.
+
+- _In plain English:_ the bar and the code block outline are the same colour setting.
+  Hide one and you hide the other.
+
+### Giving the preview its own background: the only route, and what it costs
+
+The preview pane and the editor both read `colors.editor_background`, so the only way to
+separate them is `markdown_preview.theme`. `markdown_preview_view.rs` → `render()` takes
+the **preview theme's** `editor_background` when that key is set, and the active theme's
+when it is not.
+
+**The cost is bigger than this doc previously said.** `resolve_preview_theme()` calls
+`ThemeRegistry::global(cx).get()` and never calls `apply_theme_overrides()`. That function
+(`crates/theme_settings/src/settings.rs`) is the single funnel for **both** override forms:
+the `experimental.theme_overrides` block **and** the per-theme `theme_overrides` map. So
+pinning a preview theme blocks **both**, not just the experimental one. There is no
+"named override" escape hatch. Preview colour changes then mean editing the theme file and
+restarting Zed.
+
+Taken deliberately on 2026-09-18: `markdown_preview.theme` is now `"CC Markdown Preview"`,
+a second entry in `themes/vscode-dark-modern.json`. The upside beyond the background is
+that the editor and the preview no longer have to agree on `border.variant`, so the editor
+keeps crisp code block borders while the preview's hover bar is set near-invisible.
+
+**The key is nested.** `markdown_preview: { "theme": ... }`. A top-level
+`"markdown_preview_theme"` is **not** a real setting and is silently ignored.
+
+### Body line spacing cannot be increased
+
+`with_preview_overrides()` assigns `base_text_style.line_height = relative(1.5)` and
+`paragraph_line_height = relative(1.5)` outright, and paragraph spacing is `px(16.)`. No
+setting and no theme key reaches any of them. Because the line height is **relative** to
+font size, the only way to get more air between lines is to raise
+`markdown_preview.font_size`, which enlarges the text at the same time. Code blocks are the
+exception: their line height follows the `buffer_line_height` setting, which is shared with
+every editor buffer.
 
 > **Note on the version markers.** `ZED_PREVIEW_DOC_VERSION` is deliberately still
 > `1.16.1` as of this refresh, even though 1.21.0 is installed. Releases 1.17 → 1.21 have
