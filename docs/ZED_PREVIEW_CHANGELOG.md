@@ -1,7 +1,7 @@
 # Zed Preview — Changelog Tracker
 
 <!-- ZED_PREVIEW_DOC_VERSION: 1.16.1 -->
-<!-- LAST_UPDATED: 2026-08-19 -->
+<!-- LAST_UPDATED: 2026-09-18 -->
 
 > **What this is.** A living record of notable **Zed Preview** changes, filtered to
 > what Gavin cares about: **user interface**, **configuration / settings**, and
@@ -10,7 +10,9 @@
 > **How it stays current.** `.claude/hooks/zed-version-check.sh` runs at session start
 > and does two checks: it compares the version recorded above (`ZED_PREVIEW_DOC_VERSION`)
 > against the latest Zed Preview release on GitHub, and it polls the merge status of
-> watched upstream PRs (currently **#58755**, per-window themes) live every session. If a
+> watched upstream PRs (**#58755**, per-window themes) live every session. **That PR was
+> closed unmerged on 2026-09-07**, so this particular watch is spent; the hook will now
+> report it closed every session until the row below is retired or replaced. If a
 > newer release exists, or a watched PR merges/closes, it nudges the assistant to refresh
 > this file. The hook only _detects_; the assistant does the _update_ (see
 > [Update runbook](#update-runbook)).
@@ -42,12 +44,14 @@ rather than buried. (Cross-references are auto-memory slugs.)
   Settings-**UI** changes in Zed don't touch this — only the JSON schema would.
   - _In plain English:_ Gavin's Zed settings file on the Mac is deliberately hidden
     from git because it holds private server info — leave it alone.
-- **Per-project themes are wanted; now an open PR** (`project_zed_per_project_theme`).
-  Tracked upstream at **zed#13300**; **PR #58755** (open, not merged) implements
-  per-window themes, stored in Zed's DB rather than `settings.json`. Until it merges,
-  the workaround is `zed --user-data-dir <path>`. (See standing watch-items below.)
-  - _In plain English:_ Gavin wants a different color per open window; someone has now
-    built it (PR #58755) and it's awaiting merge — watch for it landing.
+- **Per-project themes are wanted; the PR that would have delivered it was ABANDONED**
+  (`project_zed_per_project_theme`). Tracked upstream at **zed#13300** (still open);
+  **PR #58755 was closed WITHOUT merge on 2026-09-07**, verified live 2026-09-18 against
+  the GitHub API with a known-merged PR as a control. It stored per-window themes in
+  Zed's DB rather than `settings.json`. Nothing replaced it, so `zed --user-data-dir
+  <path>` is now the only route and should be treated as permanent, not a stopgap.
+  - _In plain English:_ someone built the colour-per-window feature and then it was
+    dropped without going in. The workaround is what you have from now on.
 - **`detect_venv` double-activates with direnv** (`zed-detect-venv`). Zed auto-runs
   `source .venv/bin/activate` in its terminal; the `.envrc` chain does too. Fix is
   `"terminal": { "detect_venv": "off" }`.
@@ -543,10 +547,10 @@ when it visibly affects the above or Gavin's known setup.
 
 ## Standing watch-items (open threads)
 
-| Item                               | Status as of 2026-08-19                | Why it matters                |
+| Item                               | Status as of 2026-09-18                | Why it matters                |
 | ---------------------------------- | -------------------------------------- | ----------------------------- |
-| Per-project themes (zed#13300)     | **Open PR #58755** — not merged/1.16.1 | Gavin's color-per-window goal |
-| `theme_overrides` at project level | Still user-settings only               | PR #58755 sidesteps it (DB)   |
+| Per-project themes (zed#13300)     | **PR #58755 CLOSED unmerged 2026-09-07** | Gavin's color-per-window goal |
+| `theme_overrides` at project level | Still user-settings only; no fix coming | zed#13300 open, nothing building it |
 | `detect_venv` default              | Still on by default (yours pins `off`) | direnv double-activation      |
 | Title-bar settings surface         | New `title_bar.show_worktree_name`     | Visibility only, not colour   |
 
@@ -567,7 +571,105 @@ per-window or per-project theme capability — 1.13.0's `title_bar.show_worktree
 only title-bar setting to appear, and it controls visibility, not colour. The
 `zed --user-data-dir` workaround remains the only route to a colour-per-window setup.
 
+**Re-checked 2026-09-18** (live, via the GitHub API, not the session poll alone):
+**PR #58755 is CLOSED and was never merged** — `state=closed`, `merged=false`,
+`closed_at=2026-09-07T18:38:00Z`. A known-merged PR was queried in the same breath as a
+control and correctly reported `merged=true`, so the reading is not an artefact of the
+instrument. Issue **zed#13300 remains open** with nothing building against it. The two
+dated mentions in the 1.14.1 and 1.12.0 release-log entries above were accurate when
+written and are deliberately left alone; this section carries current status.
+
+The consequence for Gavin's goal: there is no upstream per-window or per-project theme
+capability and none in progress. `zed --user-data-dir <path>` is the answer, and the
+markdown-preview work below was designed around that permanence rather than waiting.
+
+- _In plain English:_ the feature is not coming. Stop waiting for it.
+
 When refreshing this doc, re-check each row against the new release.
+
+---
+
+## Markdown preview theming — what is actually possible (verified 2026-09-18)
+
+Read from Zed's source at the **exact installed build**, tag `v1.21.0-pre`, sha
+`808200ff7cc78214bb9a6040b52a4d6b35e80c78`. Not from docs, not from memory. Re-verify
+against the binary or source before adding any key; a wrong key is accepted silently.
+
+**The preview ignores `syntax.*` for markdown elements.** `syntax.*` reaches code blocks
+only. Every markdown element colour comes from `colors.*`, in
+`crates/markdown/src/markdown.rs` → `MarkdownStyle::themed_with_overrides()`.
+
+| Preview element | The key that drives it |
+| --- | --- |
+| Body text **and every heading** | `text` — one key for both, they cannot differ |
+| Page background **and** code block fill | `editor.background` — one key for both |
+| Link text + underline | `text.accent` |
+| Blockquote text | `text.muted` |
+| Horizontal rules, table borders | `border` |
+| Code block border | `border.variant` |
+| Inline code background (8% opacity) | `editor.foreground` (also the editor's text colour) |
+| GitHub alert blockquote borders | `status.info` / `success` / `warning` / `error` |
+
+- _In plain English:_ the preview only looks at about eight colour settings. Anything you
+  put in the syntax section is only used inside code blocks.
+
+**Hardcoded in the renderer — no key reaches these.** Heading sizes, heading weight
+(`SEMIBOLD`), paragraph line height (`rems(1.3)`, i.e. relative to font size), paragraph
+spacing, list spacing, code block padding and margins, link underline thickness, and
+table cell padding (`point(px(4.), px(2.))`). This is also why the
+`markdown_preview` keys for `line_height`, `paragraph_spacing` and `headings` do not
+exist: the values they would set are compiled in.
+
+**There is no table header styling and no zebra striping.** The full `MarkdownStyle`
+struct has exactly one table field, `table_cell_padding`. To make a table header stand
+out, bold it in the markdown source (`| **Header** |`) — bold weight does work, though
+bold takes no colour.
+
+**Bold and inline-code text take no colour.** Bold gets `FontWeight::SEMIBOLD` and
+nothing else; inline code sets a background tint but inherits the base text colour.
+A Claude-Code-style "blue highlight, grey body" is therefore only achievable via
+`text.accent` on links.
+
+**The `markdown_preview.theme` trap.** Setting that key costs you live tuning.
+`markdown_preview_view.rs` → `resolve_preview_theme()` fetches the theme with
+`ThemeRegistry::global(cx).get(name)` and **never calls `apply_theme_overrides()`**, so
+while the key is set, `experimental.theme_overrides` cannot reach the preview. Leave it
+**unset**: the preview then falls back to the active theme, which does get overrides.
+
+- _In plain English:_ pinning the preview to its own theme blocks live colour edits.
+  Leave it unpinned.
+
+**What is live and what is not.** `settings.json` edits apply **on save**, verified
+repeatedly. Theme-file edits under `~/.config/zed/themes/` do **not**; they need a
+restart. That asymmetry is the whole reason colours live in
+`experimental.theme_overrides` (JSON key is dotted — from `#[serde(rename)]`) rather than
+in the theme file. Cost of that choice: overrides apply to the **active** theme, so they
+change the editor too. There is no preview-only *and* live option in this build.
+
+**Font families must be REGISTERED, not merely present on disk.** `New York` and
+`Iowan Old Style` have font files in `/System/Library/Fonts` but are **not** registered
+families, so Zed silently falls back with no error. Check with
+`system_profiler SPFontsDataType` and grep for `Family: <name>`, always with a
+known-present family as a control. Registered serifs here: Charter, Georgia, Palatino,
+Baskerville, Hoefler Text. Avoid Baskerville and Hoefler Text on dark backgrounds —
+their hairlines thin out.
+
+- _In plain English:_ a font file existing does not mean Zed can use it. Check the name
+  first, or you change a setting and nothing happens.
+
+**Only seven `markdown_preview` keys exist:** `theme`, `font_family`,
+`code_font_family`, `font_size`, `limit_content_width`, `max_width`,
+`open_markdown_files_in_preview`. `limit_content_width` **must** be `true` or `max_width`
+is ignored and text renders edge to edge (`max_width` is `Option<Pixels>`; `None` means
+edge to edge). Keys from discussion 43384 — `zoom`, `line_height`, `paragraph_spacing`,
+`list_item_spacing`, `code_block_font_size_ratio`, `headings`, `table`, `inline_code`,
+`link`, and every `*_ratio` / border / zebra key — **do not exist** and are silently
+ignored. Do not re-propose them.
+
+> **Note on the version markers.** `ZED_PREVIEW_DOC_VERSION` is deliberately still
+> `1.16.1` as of this refresh, even though 1.21.0 is installed. Releases 1.17 → 1.21 have
+> **not** been written up yet. Bumping the marker would silence the session-start hook
+> and the gap would never be noticed again.
 
 ---
 
