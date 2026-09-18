@@ -329,3 +329,31 @@ The general shape, and the reason this is written down rather than left as a nag
 inconsistency: two guards disagreeing is not itself a defect. Reconciling them by moving
 EITHER one costs something real, and an unmeasured case is not evidence for relaxing a gate.
 Revisit only if someone measures the interactive and browser flows.
+
+## D-20260919-01 -- The CLAUDE.md OPEN WORK banner is retired; `open-items` replaces it
+
+topic: open work banner CLAUDE.md OPEN.md clearing condition wallpaper habituation session start hook open-items index per-project drawer stale banner
+
+decided: 2026-09-19
+status: standing
+holds-in: fifty-shades-of-dotfiles/CLAUDE.md line 3
+
+The banner opened 2026-09-15 carried its own clearing condition: delete it only when
+`OPEN.md` has no items left, and not before, explicitly "do not soften it". It was replaced
+on 2026-09-19 by the one-liner `Open items: run open-items --all` while two items were still
+open (W-20260918-01, W-20260918-02). Gavin ruled the override directly, having been shown the
+conflict first.
+
+Why the condition no longer binds. It was written to stop open work going unseen, and at that
+time a static banner in an always-loaded file was the only surface that could do it. The
+`session-open-items` SessionStart hook now prints the live per-project list at the top of every
+session, derived from the per-project files by `open-items --index` rather than maintained by
+hand (D-20260918-02). So the banner had become the WEAKER of two surfaces and the one that
+could go stale -- and it had: it advertised eight items, named the GH_TOKEN leak cause as the
+highest-value open work when D-20260918-01 had already closed it at source, and called branch
+liveness "blocked on the SSH decision" after `a6e734b` had shipped it.
+
+The general shape, which is why this is recorded rather than left as a quiet deletion: a
+clearing condition protects a mechanism, not a file. When something better takes over the job,
+honouring the condition literally preserves the exact failure it was written to prevent --
+a stale banner that everyone has learned to read past.

@@ -1,33 +1,6 @@
 Default branch is `master`.
 
-> ## OPEN WORK — show Gavin the menu (opened 2026-09-15)
->
-> **`~/.claude/MEMORY/WORK/OPEN.md` is a one-screen list of open items.** Offer it
-> to him early rather than waiting to be asked; he has said he forgets what is
-> outstanding, and every item points at a folder that already holds its research,
-> measurements and trade-offs, so nothing needs rediscovering.
->
-> **Eight items.** Three need only a decision and nothing built: **the SSH key in
-> `_claude_launch`** (which also decides whether `ci-watch` can ever detect a
-> deleted branch — four options costed, recommendation A), **whether open items
-> should be scoped per project** rather than sharing one machine-wide drawer
-> (four options, recommendation A, plus a "do not build it yet" argument), and
-> **whether the Herdr spawn finding is worth chasing.**
->
-> The highest-value work item is finding **what writes `GH_TOKEN` into transcripts**
-> — 12 files, oldest 14 Jun, token rotated but the cause unfixed, so the
-> replacement leaks the same way.
->
-> Also open here: the GitHub App migration, 7 `ci-watch` audit findings, 8
-> assertions a cross-vendor audit called hollow, and a branch-liveness swap blocked
-> on the SSH decision.
->
-> Origin session: `https://claude.ai/code/session_012CxnkHV7eGiJxy3taKLx4b`
->
-> **Clearing condition, so this cannot become wallpaper:** delete this block when
-> `OPEN.md` has no items left, and not before. Do not soften it and do not let it
-> sit here "seen" — that is the exact habituation `ci-watch` exists to prevent, and
-> a stale banner in an always-loaded file is worse than none.
+Open items: run `open-items --all`.
 
 ## Before proposing a fix, ask whether it is already decided
 
