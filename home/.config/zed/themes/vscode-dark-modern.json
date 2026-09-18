@@ -199,8 +199,18 @@
             "font_style": "italic",
             "font_weight": null
           },
+          "emphasis.markup": {
+            "color": "#bbbbbb",
+            "font_style": "italic",
+            "font_weight": null
+          },
           "emphasis.strong": {
             "color": "#569CD6",
+            "font_style": null,
+            "font_weight": 700
+          },
+          "emphasis.strong.markup": {
+            "color": "#e2e8f5",
             "font_style": null,
             "font_weight": 700
           },
@@ -234,8 +244,18 @@
             "font_style": "italic",
             "font_weight": null
           },
+          "link_text.markup": {
+            "color": "#7aa2f7",
+            "font_style": null,
+            "font_weight": null
+          },
           "link_uri": {
             "color": "#0078D4",
+            "font_style": null,
+            "font_weight": null
+          },
+          "link_uri.markup": {
+            "color": "#6b7f9e",
             "font_style": null,
             "font_weight": null
           },
@@ -284,13 +304,33 @@
             "font_style": null,
             "font_weight": null
           },
+          "punctuation.embedded.markup": {
+            "color": "#6b7f9e",
+            "font_style": null,
+            "font_weight": null
+          },
           "punctuation.list_marker": {
             "color": "#6796E6",
             "font_style": null,
             "font_weight": null
           },
+          "punctuation.list_marker.markup": {
+            "color": "#7aa2f7",
+            "font_style": null,
+            "font_weight": null
+          },
+          "punctuation.markup": {
+            "color": "#4a5568",
+            "font_style": null,
+            "font_weight": null
+          },
           "punctuation.special": {
             "color": "#C586C0",
+            "font_style": null,
+            "font_weight": null
+          },
+          "strikethrough": {
+            "color": "#6b7280",
             "font_style": null,
             "font_weight": null
           },
@@ -329,8 +369,19 @@
             "font_style": null,
             "font_weight": null
           },
+          "text.literal.markup": {
+            "color": "#CE9178",
+            "background_color": "#1a1f2e",
+            "font_style": null,
+            "font_weight": null
+          },
           "title": {
             "color": "#6796E6",
+            "font_style": null,
+            "font_weight": 700
+          },
+          "title.markup": {
+            "color": "#7aa2f7",
             "font_style": null,
             "font_weight": 700
           },

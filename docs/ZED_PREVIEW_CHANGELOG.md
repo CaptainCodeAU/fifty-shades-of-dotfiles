@@ -601,34 +601,52 @@ only. Every markdown element colour comes from `colors.*`, in
 
 | Preview element | The key that drives it |
 | --- | --- |
-| Body text **and every heading** | `text` — one key for both, they cannot differ |
+| Body text **and h1-h5** | `text` — one key for all of them, they cannot differ |
+| **h6** | `text.muted` — the one heading level that is separate |
 | Page background **and** code block fill | `editor.background` — one key for both |
 | Link text + underline | `text.accent` |
 | Blockquote text | `text.muted` |
-| Horizontal rules, table borders | `border` |
-| Code block border | `border.variant` |
+| Horizontal rules, table cell borders, quote border | `border` |
+| Code block border **and the h1/h2 bottom rule** | `border.variant` — one key for both |
+| **Table header row background** | `title_bar.background` (also the real title bar) |
+| **Table zebra stripe, odd body rows** | `panel.background` (also the real panels) |
 | Inline code background (8% opacity) | `editor.foreground` (also the editor's text colour) |
 | GitHub alert blockquote borders | `status.info` / `success` / `warning` / `error` |
 
-- _In plain English:_ the preview only looks at about eight colour settings. Anything you
+- _In plain English:_ the preview only looks at about ten colour settings. Anything you
   put in the syntax section is only used inside code blocks.
 
-**Hardcoded in the renderer — no key reaches these.** Heading sizes, heading weight
-(`SEMIBOLD`), paragraph line height (`rems(1.3)`, i.e. relative to font size), paragraph
-spacing, list spacing, code block padding and margins, link underline thickness, and
-table cell padding (`point(px(4.), px(2.))`). This is also why the
-`markdown_preview` keys for `line_height`, `paragraph_spacing` and `headings` do not
-exist: the values they would set are compiled in.
+**Hardcoded in the renderer — no key reaches these.** Heading sizes (h1 `1.75rem`, h2
+`1.4`, h3 `1.2`, h4 `1.0`, h5 `0.875`, h6 `0.85`), heading weight `SEMIBOLD`, heading line
+height `1.25`, body line height `1.5`, paragraph spacing `16px`, list spacing `12px`,
+table cell padding `point(px(10.), px(4.))`, code block padding `12px` with `16px` margins
+and a `6px` corner radius, link underline thickness `1px`, and inline code font size
+`0.875rem`. This is also why the `markdown_preview` keys for `line_height`,
+`paragraph_spacing` and `headings` do not exist: the values they would set are compiled
+in.
 
-**There is no table header styling and no zebra striping.** The full `MarkdownStyle`
-struct has exactly one table field, `table_cell_padding`. To make a table header stand
-out, bold it in the markdown source (`| **Header** |`) — bold weight does work, though
-bold takes no colour.
+> **Correction, 2026-09-18 (same day).** An earlier version of this section said table
+> cell padding was `point(px(4.), px(2.))` and paragraph line height `rems(1.3)`. Those
+> are the `MarkdownStyle::default()` values. The preview runs
+> `with_preview_overrides()` afterwards, which replaces both. Read the override function,
+> not just the constructor.
 
-**Bold and inline-code text take no colour.** Bold gets `FontWeight::SEMIBOLD` and
-nothing else; inline code sets a background tint but inherits the base text colour.
-A Claude-Code-style "blue highlight, grey body" is therefore only achievable via
-`text.accent` on links.
+**Tables DO have a header fill and zebra striping, contrary to what this section said
+first.** `markdown.rs` paints header cells with `colors.title_bar_background` and every
+odd body row with `colors.panel_background`, keyed off `builder.table.in_head` and
+`row_index % 2 == 1`. The earlier claim came from reading the `MarkdownStyle` struct,
+which has only `table_cell_padding` — but the table colours never pass through that
+struct, they are read from the theme at render time. **A struct listing its fields is not
+a list of what the renderer reads.**
+
+**Bold takes no colour; inline code text takes no colour of its own.** Bold gets
+`FontWeight::SEMIBOLD` and nothing else. Inline code is more specific than "inherits":
+`with_preview_overrides()` explicitly assigns `self.inline_code.color = Some(colors.text)`,
+so it is *forced* to body colour and cannot be separated from it. What inline code CAN
+have is its own background chip, via `editor.foreground` at 8% opacity, and in the preview
+that key drives nothing else — the link background is explicitly nulled on the next line.
+So a Claude-Code-style "blue highlight, grey body" is achievable only via `text.accent`
+on links, plus the inline code chip.
 
 **The `markdown_preview.theme` trap.** Setting that key costs you live tuning.
 `markdown_preview_view.rs` → `resolve_preview_theme()` fetches the theme with
@@ -665,6 +683,36 @@ edge to edge). Keys from discussion 43384 — `zoom`, `line_height`, `paragraph_
 `list_item_spacing`, `code_block_font_size_ratio`, `headings`, `table`, `inline_code`,
 `link`, and every `*_ratio` / border / zebra key — **do not exist** and are silently
 ignored. Do not re-propose them.
+
+### The editor buffer is a different story: `syntax.*` DOES reach markdown there
+
+Everything above is about the **preview pane**. The markdown **source** you type in is
+highlighted by the normal Tree-sitter path, and that one reads `syntax.*` exactly as any
+other language does. Two facts make it work, both verified 2026-09-18:
+
+1. **The captures carry a `.markup` suffix.** `crates/grammars/src/markdown/highlights.scm`
+   and `markdown-inline/highlights.scm` emit `@title.markup`, `@emphasis.markup`,
+   `@emphasis.strong.markup`, `@text.literal.markup`, `@link_text.markup`,
+   `@link_uri.markup`, `@punctuation.markup`, `@punctuation.embedded.markup`,
+   `@punctuation.list_marker.markup` and `@strikethrough.markup`. Not the bare names.
+2. **Dot-boundary prefix fallback resolves them anyway.**
+   `crates/syntax_theme/src/syntax_theme.rs` → `highlight_id()` searches the theme's keys
+   from the first dotted segment up to the full capture name and takes the **most specific
+   key that matches on a dot boundary**. So `title.markup` finds a plain `title`, and
+   `emphasis.strong.markup` correctly prefers `emphasis.strong` over `emphasis`.
+
+The practical consequence: a `.markup` key styles **markdown only**, while the bare key
+styles that capture in **every** language. That is the lever for making markdown source
+look different from code without touching any other grammar.
+
+**A syntax key accepts exactly four fields** — `color`, `background_color`, `font_style`,
+`font_weight` (`crates/settings_content/src/theme.rs` → `HighlightStyleContent`). There is
+**no** strikethrough or underline field, so `~~struck~~` can only be muted by colour, never
+drawn with a line. `background_color` is real and usable: it is how inline code gets a chip
+in the source buffer.
+
+- _In plain English:_ the file you type in and the preview beside it are styled by two
+  different systems. Keys ending in `.markup` only affect markdown.
 
 > **Note on the version markers.** `ZED_PREVIEW_DOC_VERSION` is deliberately still
 > `1.16.1` as of this refresh, even though 1.21.0 is installed. Releases 1.17 → 1.21 have
