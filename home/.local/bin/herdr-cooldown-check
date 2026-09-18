@@ -24,7 +24,10 @@
 # unpin/upgrade/re-pin automatically once ELIGIBLE -- this tool itself stays
 # read-only regardless (see SAFETY below); it never acts on its own findings.
 #
-# WHAT IT CHECKS (5 subjects)
+# WHAT IT CHECKS (6 subjects)
+#   0. brew        can Homebrew answer AT ALL? A brew that errors is reported as
+#                  BROKEN, never quietly downgraded to "not a brew install" --
+#                  see classify_install() for the 2026-09-18 measurement.
 #   1. homebrew-lag informational only: is Homebrew's current formula version
 #                    behind GitHub's absolute newest tag? (see GATING CANDIDATE)
 #   2. version     installed herdr vs the gating candidate (see below)
@@ -101,13 +104,19 @@ CONFIG_PATH = os.path.expanduser("~/.config/herdr/config.toml")
 CLEAN, ACTION, SKIP = "OK", "ACTION", "SKIPPED"
 
 
-def run(cmd: list[str], timeout: int = 10) -> tuple[int, str]:
-    """Run a command, returning (rc, stdout). Never raises."""
+def run(cmd: list[str], timeout: int = 10) -> tuple[int, str, str]:
+    """Run a command, returning (rc, stdout, stderr). Never raises.
+
+    stderr is RETURNED rather than discarded because that is the only place a
+    broken Homebrew says why it failed. An exit code alone cannot tell
+    "the formula is not installed" (rc=1, no output) from "Homebrew itself
+    could not run" (rc=1, message on stderr) -- measured 2026-09-18, both.
+    """
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        return p.returncode, (p.stdout or "").strip()
+        return p.returncode, (p.stdout or "").strip(), (p.stderr or "").strip()
     except (OSError, subprocess.SubprocessError):
-        return 127, ""
+        return 127, "", "could not execute"
 
 
 def semver(text: str) -> tuple[int, ...] | None:
@@ -119,19 +128,61 @@ def installed_version() -> tuple[tuple[int, ...] | None, str]:
     """(parsed version, raw string). Absent herdr yields (None, '')."""
     if not shutil.which("herdr"):
         return None, ""
-    _, out = run(["herdr", "--version"])
+    _, out, _err = run(["herdr", "--version"])
     return semver(out), out
 
 
-def install_method() -> str:
-    """'brew', 'direct' or 'absent' -- decides which advice is even valid."""
-    if not shutil.which("herdr"):
+BREW_BROKEN = "brew-broken"
+
+
+def classify_install(has_herdr: bool, has_brew: bool,
+                     roster_rc: int, roster: str) -> str:
+    """Pure: 'absent' | 'direct' | 'brew' | 'brew-broken'.
+
+    Split out of install_method() so self_test can prove it goes EVERY way
+    without having to break a real Homebrew on purpose.
+
+    `roster` is the output of `brew list --formula`, chosen because it is
+    SELF-CONTROLLING: a non-empty roster is itself proof that Homebrew can
+    answer, so "herdr is not in it" genuinely means herdr is not brew-managed.
+    An empty or failed roster proves nothing and must read as UNKNOWN.
+
+    The previous probe, `brew list --versions herdr`, could not support that
+    conclusion. Measured 2026-09-18: it exits 1 with EMPTY stdout BOTH when
+    the formula is genuinely absent AND when Homebrew is broken (here, an
+    unaccepted Xcode licence after an Xcode 27 update). Reading the second as
+    the first made this tool report a clean `direct` install for a formula
+    that was in fact brew-managed and pinned -- which silently dropped the pin
+    subject from the report entirely (not even a SKIPPED line) and printed a
+    download-from-GitHub fix that would have been the wrong thing to do.
+    """
+    if not has_herdr:
         return "absent"
-    if shutil.which("brew"):
-        rc, out = run(["brew", "list", "--versions", "herdr"], timeout=20)
-        if rc == 0 and out:
-            return "brew"
-    return "direct"
+    if not has_brew:
+        return "direct"
+    if roster_rc != 0 or not roster.strip():
+        return BREW_BROKEN
+    return "brew" if "herdr" in roster.split() else "direct"
+
+
+def install_method() -> tuple[str, str]:
+    """(method, detail) -- decides which advice is even valid.
+
+    'brew-broken' is NOT 'direct': it means Homebrew could not answer, so the
+    pin guard still has to run (brew_pinned() reads the marker directly and
+    needs no brew) and the brew-shaped fix is still the right advice.
+    """
+    has_herdr = bool(shutil.which("herdr"))
+    has_brew = bool(shutil.which("brew"))
+    roster_rc, roster, err = 0, "", ""
+    if has_herdr and has_brew:
+        roster_rc, roster, err = run(["brew", "list", "--formula"], timeout=45)
+    method = classify_install(has_herdr, has_brew, roster_rc, roster)
+    detail = ""
+    if method == BREW_BROKEN:
+        detail = (err or f"`brew list --formula` exited {roster_rc}")
+        detail = detail.splitlines()[0][:160] if detail.splitlines() else detail
+    return method, detail
 
 
 def homebrew_stable_version(timeout: int) -> str | None:
@@ -143,7 +194,7 @@ def homebrew_stable_version(timeout: int) -> str | None:
     real bug: it can hold back a `brew upgrade` that would only ever fetch an
     OLDER, long-since-eligible version anyway, because the version being
     gated (GitHub's absolute latest) isn't even the one Homebrew can deliver."""
-    rc, out = run(["brew", "info", "herdr", "--json=v2"], timeout=timeout)
+    rc, out, _err = run(["brew", "info", "herdr", "--json=v2"], timeout=timeout)
     if rc != 0 or not out:
         return None
     try:
@@ -172,7 +223,7 @@ def brew_pinned(prefix: str | None = None) -> bool | None:
         return os.path.lexists(pin_path(pre))
     if not shutil.which("brew"):
         return None
-    rc, out = run(["brew", "list", "--pinned"], timeout=20)
+    rc, out, _err = run(["brew", "list", "--pinned"], timeout=20)
     if rc != 0:
         return None
     return "herdr" in out.split()
@@ -251,6 +302,22 @@ def self_test() -> list[str]:
           version_verdict((0, 7, 5), (0, 7, 5), 7.0, 3.0), "CURRENT")
     check("cooldown refuses to guess",
           version_verdict(None, (0, 7, 5), 7.0, 3.0), "UNKNOWN")
+
+    # Install-method detector. The whole point of this one is that a Homebrew
+    # which CANNOT ANSWER must never be read as "herdr is not brew-managed" --
+    # that misreading is what silently deletes the pin row from the report.
+    check("install: no herdr at all",
+          classify_install(False, True, 0, "herdr\njq\n"), "absent")
+    check("install: no brew at all is a direct install",
+          classify_install(True, False, 0, ""), "direct")
+    check("install: herdr in a healthy roster is brew-managed",
+          classify_install(True, True, 0, "jq\nherdr\nrust\n"), "brew")
+    check("install: healthy roster without herdr is a direct install",
+          classify_install(True, True, 0, "jq\nrust\n"), "direct")
+    check("install: a FAILED roster is BROKEN, not 'direct'",
+          classify_install(True, True, 1, ""), BREW_BROKEN)
+    check("install: an EMPTY roster proves nothing, so BROKEN not 'direct'",
+          classify_install(True, True, 0, ""), BREW_BROKEN)
 
     # Pin detector: drive it against a synthetic Homebrew prefix, so we prove
     # it goes BOTH ways without touching the real pin. This is the assertion
@@ -333,10 +400,11 @@ def main() -> int:
     ap.add_argument("--json", dest="as_json", action="store_true")
     args = ap.parse_args()
 
-    method = install_method()
+    method, method_detail = install_method()
     have, raw = installed_version()
     report: dict[str, object] = {
         "install_method": method,
+        "install_method_detail": method_detail or None,
         "installed": ".".join(map(str, have)) if have else None,
         "cooldown_days": args.cooldown_days,
     }
@@ -357,6 +425,18 @@ def main() -> int:
         emit(args, rows, report)
         return 1 if actionable else 0
 
+    # A Homebrew that cannot ANSWER is not a Homebrew that said "no". Say so
+    # out loud: every brew-shaped check below is degraded while this holds,
+    # and install.sh's auto-bump refuses to run at all, so an upgrade that has
+    # genuinely cleared the cooldown will simply never happen and nothing else
+    # would ever mention it.
+    if method == BREW_BROKEN:
+        actionable = True
+        rows.append(("brew", ACTION,
+                     f"Homebrew is present but CANNOT ANSWER — {method_detail} — "
+                     "assuming herdr is still brew-managed; install.sh's auto-bump "
+                     "SKIPS silently until this is fixed"))
+
     rel = latest_release(args.timeout)
     if rel is None:
         rows.append(("version", SKIP, "could not reach the GitHub releases API"))
@@ -373,9 +453,14 @@ def main() -> int:
         # older, long-since-eligible version anyway. Non-brew installs have no
         # such intermediary, so GitHub's latest IS the candidate there.
         tag, published = upstream_tag, upstream_published
-        if method == "brew":
+        if method in ("brew", BREW_BROKEN):
             brew_ver = homebrew_stable_version(args.timeout)
-            if brew_ver is not None and semver(brew_ver) != semver(upstream_tag):
+            if brew_ver is None:
+                rows.append(("homebrew-lag", SKIP,
+                             "could not read the Homebrew formula version — gating "
+                             f"against GitHub's newest ({upstream_tag}) instead, which "
+                             "may not be the version `brew upgrade` would install"))
+            elif semver(brew_ver) != semver(upstream_tag):
                 brew_tag = f"v{brew_ver}"
                 brew_published = release_by_tag(brew_tag, args.timeout)
                 if brew_published is not None:
@@ -407,7 +492,7 @@ def main() -> int:
                          f"{args.cooldown_days:g}d remaining"))
         else:
             actionable = True
-            if method == "brew":
+            if method in ("brew", BREW_BROKEN):
                 fix = "brew unpin herdr && brew upgrade herdr && brew pin herdr"
             else:
                 fix = (f"download {tag} from github.com/{REPO}/releases "
@@ -415,7 +500,10 @@ def main() -> int:
             rows.append(("cooldown", ACTION,
                          f"{tag} ELIGIBLE — released {age_days:.1f}d ago — {fix}"))
 
-    if method == "brew":
+    # Deliberately also runs under BREW_BROKEN: brew_pinned() reads the pin
+    # marker off disk and needs no working brew, so the guard that matters most
+    # is exactly the one that must NOT disappear when Homebrew is unwell.
+    if method in ("brew", BREW_BROKEN):
         pinned = brew_pinned()
         report["brew_pinned"] = pinned
         if pinned is None:

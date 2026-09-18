@@ -731,14 +731,82 @@ _preflight_pnpm_floor_check() {
     return 0
 }
 
+# --- Homebrew health: "cannot answer" is NOT "no" -----------------------------
+# Measured 2026-09-18. An Xcode 27 update left its licence unaccepted, so EVERY
+# brew command exited 1 with its message on stderr. The three herdr pre-flights
+# below each began with:
+#
+#     brew list --versions herdr &>/dev/null || return 0
+#
+# and `brew list --versions <formula>` exits 1 with EMPTY stdout in BOTH of
+# these cases: the formula genuinely is not installed, and Homebrew is broken.
+# So that line could not tell them apart, `&>/dev/null` threw away the only
+# evidence that could, and all three guards switched themselves off in silence:
+# no pin check, no cooldown auto-bump, not one line of output saying so.
+#
+# `brew list --formula` is used instead because it is SELF-CONTROLLING: a
+# non-empty roster is itself proof that brew can answer, so "herdr is not in
+# the roster" is a conclusion the probe actually supports.
+#
+# Returns: 0 brew is healthy (roster in $_BREW_ROSTER)
+#          1 brew is absent -- genuinely nothing to check
+#          2 brew EXISTS but FAILED -- unknown, and must be reported LOUDLY
+_BREW_ROSTER=""
+_BREW_HEALTH_DETAIL=""
+_BREW_UNUSABLE_REPORTED=""
+_brew_health() {
+    _BREW_ROSTER=""; _BREW_HEALTH_DETAIL=""
+    command -v brew &>/dev/null || return 1
+    local out="" rc=0
+    out=$(brew list --formula 2>&1) || rc=$?
+    if [[ $rc -eq 0 && -n "$out" ]]; then
+        _BREW_ROSTER="$out"
+        return 0
+    fi
+    _BREW_HEALTH_DETAIL="${out%%$'\n'*}"
+    [[ -n "$_BREW_HEALTH_DETAIL" ]] || \
+        _BREW_HEALTH_DETAIL="\`brew list --formula\` exited ${rc} with no output"
+    return 2
+}
+
+# Is $1 in the roster? Only meaningful after _brew_health returned 0.
+_brew_has() {
+    local f
+    for f in $_BREW_ROSTER; do
+        if [[ "$f" == "$1" ]]; then return 0; fi
+    done
+    return 1
+}
+
+# Say it once in full, then briefly for each further guard that had to skip.
+_warn_brew_unusable() {
+    if [[ -n "$_BREW_UNUSABLE_REPORTED" ]]; then
+        warn "${1} also SKIPPED — Homebrew is still unusable."
+        return 0
+    fi
+    _BREW_UNUSABLE_REPORTED=1
+    warn "Homebrew is installed but CANNOT ANSWER — ${1} SKIPPED."
+    warn "  ${_BREW_HEALTH_DETAIL}"
+    info "This is NOT the same as 'herdr is not managed by Homebrew'. While it lasts,"
+    info "the herdr pin guard and the ${HERDR_COOLDOWN_DAYS}-day cooldown auto-bump both do nothing —"
+    info "a release that has genuinely cleared the cooldown will never be adopted."
+    info "Check with ${CYAN}brew list --formula${RESET}, then re-run ${CYAN}./install.sh${RESET}."
+}
+
 _preflight_herdr_pin_check() {
     [[ "$SKIP_PREFLIGHT" == true ]] && return 0
     # herdr is only gated if it is actually installed AND managed by Homebrew --
     # a direct install has no pin concept, and `herdr update` would bypass the
     # cooldown anyway (that case is reported by `herdr-cooldown-check`, not here).
     command -v herdr &>/dev/null || return 0
-    command -v brew &>/dev/null || return 0
-    brew list --versions herdr &>/dev/null || return 0
+    local _bh=0; _brew_health || _bh=$?
+    if [[ $_bh -eq 1 ]]; then return 0; fi
+    if [[ $_bh -eq 2 ]]; then
+        step "Pre-flight herdr cooldown guard"
+        _warn_brew_unusable "herdr pin check"
+        return 0
+    fi
+    _brew_has herdr || return 0
     # Already pinned => the gate is intact, stay silent.
     if brew list --pinned 2>/dev/null | grep -qx "herdr"; then
         return 0
@@ -790,8 +858,14 @@ _preflight_herdr_bump_check() {
     # re-deriving it here in bash: one place decides ELIGIBLE, and its self-test gates this
     # too (a broken detector never triggers a bump, it just skips).
     command -v herdr &>/dev/null || return 0
-    command -v brew &>/dev/null || return 0
-    brew list --versions herdr &>/dev/null || return 0
+    local _bh=0; _brew_health || _bh=$?
+    if [[ $_bh -eq 1 ]]; then return 0; fi
+    if [[ $_bh -eq 2 ]]; then
+        step "Pre-flight herdr cooldown bump"
+        _warn_brew_unusable "herdr cooldown auto-bump"
+        return 0
+    fi
+    _brew_has herdr || return 0
     command -v herdr-cooldown-check &>/dev/null || return 0
     command -v jq &>/dev/null || return 0
 
@@ -855,7 +929,13 @@ _preflight_herdr_service_health_check() {
     [[ "$SKIP_PREFLIGHT" == true ]] && return 0
     [[ "$(check_os)" == "macos" ]] || return 0
     command -v herdr &>/dev/null || return 0
-    command -v brew &>/dev/null || return 0
+    local _bh=0; _brew_health || _bh=$?
+    if [[ $_bh -eq 1 ]]; then return 0; fi
+    if [[ $_bh -eq 2 ]]; then
+        step "Pre-flight herdr service health check"
+        _warn_brew_unusable "herdr service health check"
+        return 0
+    fi
     command -v jq &>/dev/null || return 0
     # Only relevant once someone opted into launchd management at all -- a box
     # that never ran `brew services start herdr` isn't broken, it's just

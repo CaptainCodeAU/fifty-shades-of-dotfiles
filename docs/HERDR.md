@@ -71,10 +71,11 @@ checker's `--json` report and runs the three-step upgrade only when the `cooldow
 subject says `ACTION` (and only when the checker's own self-test passes — a broken
 detector skips instead of guessing). The checker stays fully usable standalone.
 
-## What the checker checks (5 subjects)
+## What the checker checks (6 subjects)
 
 | #   | Subject        | Question                                                                                  |
 | --- | -------------- | ----------------------------------------------------------------------------------------- |
+| 0   | `brew`         | can Homebrew answer **at all**? (see "A broken brew is not a direct install")             |
 | 1   | `homebrew-lag` | informational: is Homebrew's current formula version behind GitHub's absolute newest tag? |
 | 2   | `version`      | is the installed build behind the gating candidate (see below)?                           |
 | 3   | `cooldown`     | has the gating candidate aged past `HERDR_COOLDOWN_DAYS`?                                 |
@@ -97,6 +98,40 @@ deliver yet, instead of upgrading to the older release that was genuinely
 safe and already installable. Non-brew (Linux/WSL) installs have no such
 intermediary, so GitHub's absolute latest is the candidate there, same as
 before.
+
+### A broken brew is not a direct install
+
+**Measured 2026-09-18, and it had silently disabled three guards.** An Xcode 27
+update left its licence unaccepted, so every `brew` command on the Mac exited 1
+with its message on stderr. Four separate places then read that failure as
+*"herdr is not managed by Homebrew"*:
+
+| Place | The line | What it did |
+| --- | --- | --- |
+| `herdr-cooldown-check` | `install_method()` probing `brew list --versions herdr` | reported `install_method: "direct"`, which **removed the `pin` row from the report entirely** — not a `SKIPPED` line, gone — and printed a download-from-GitHub fix for a brew-managed, pinned install |
+| `_preflight_herdr_pin_check` | `brew list --versions herdr &>/dev/null \|\| return 0` | pin guard off, no output |
+| `_preflight_herdr_bump_check` | same line | **cooldown auto-bump off, no output** — an eligible release would simply never have been adopted |
+| `_preflight_herdr_service_health_check` | `command -v brew` then an unchecked `brew services info` | service check off, no output |
+
+The root cause is one fact: **`brew list --versions <formula>` exits 1 with
+EMPTY stdout both when the formula is genuinely absent and when Homebrew is
+broken.** It cannot distinguish them, and `&>/dev/null` discarded the stderr
+that could. This is the count-and-absence rule in `CLAUDE.md` wearing a
+different hat — a refusal to answer is not an answer of "no".
+
+**The fix is a self-controlling probe.** `brew list --formula` is used instead,
+because a non-empty roster is itself proof that Homebrew can answer; only then
+does "herdr is not in the roster" support a conclusion. A failed *or empty*
+roster yields a third state, `brew-broken`, which is reported **loudly** and
+still runs the pin check (the pin marker is read off disk and needs no working
+brew). `install.sh` gained `_brew_health` / `_brew_has` / `_warn_brew_unusable`
+for the same three-way answer, and says once, in full, that its guards are
+degraded.
+
+Both detectors are self-tested in both directions on every run:
+`classify_install()` has six arms (including "a FAILED roster is BROKEN, not
+`direct`" and "an EMPTY roster proves nothing"), and the installer helpers were
+driven against a fake `brew` that replays the exact Xcode error.
 
 **Data source.** GitHub's `releases/latest` and `releases/tags/<tag>`
 endpoints, which already exclude prereleases — so the vendor's near-daily
@@ -267,6 +302,55 @@ herdr-cooldown-check                                    # confirm the pin is bac
 Linux/WSL is unchanged — `_preflight_herdr_release_check` already applies pinned,
 hash-verified `HERDR_VERSION` bumps automatically; see the runbook above the
 `HERDR_VERSION` comment block in `install.sh` for that side.
+
+#### When the aged release is one Homebrew no longer offers
+
+**The gate weighs exactly ONE candidate: whatever `brew upgrade herdr` would
+install right now.** That is deliberate (gating against a version Homebrew
+cannot deliver was the 2026-08-20 bug above), but it has a consequence nobody
+had written down: when upstream ships faster than the cooldown, the release
+that HAS aged out can be one Homebrew has already moved past, and there is then
+no supported `brew` route to it.
+
+Measured 2026-09-18, on a Mac sitting at 0.8.2:
+
+| Release | Age | Status |
+| --- | --- | --- |
+| v0.9.0 | 11 days | past the 7-day gate, but the formula had already moved on |
+| v0.9.1 | 1.4 days | what `brew upgrade` offers, and HELD by the gate |
+
+So the gate correctly reported `HELD`, and the only genuinely-aged release was
+unobtainable. This is not a defect to fix; it is the gate preferring "wait a
+few more days" over "leave the pin". Usually waiting is right, and the newer
+release is strictly better anyway.
+
+If a specific superseded version really is wanted, this route keeps Homebrew's
+checksum guarantee rather than reaching for the unvetted GitHub binary. Find
+the homebrew-core commit that shipped it, take the bottle sha for this
+platform out of that formula, and pull the bottle from ghcr by that digest:
+
+```bash
+# 1. the commit that bottled the version you want
+curl -s "https://api.github.com/repos/Homebrew/homebrew-core/commits?path=Formula/h/herdr.rb&per_page=10" \
+  | grep -E '"(sha|message)"'
+# 2. that formula's bottle block -> the sha256 for your platform (e.g. arm64_tahoe)
+curl -sL "https://raw.githubusercontent.com/Homebrew/homebrew-core/<commit>/Formula/h/herdr.rb"
+# 3. the bottle IS that sha256, as a ghcr blob digest
+TOK=$(curl -s "https://ghcr.io/token?service=ghcr.io&scope=repository:homebrew/core/herdr:pull" | jq -r .token)
+curl -sL -H "Authorization: Bearer $TOK" \
+  "https://ghcr.io/v2/homebrew/core/herdr/blobs/sha256:<bottle-sha>" -o bottle.tar.gz
+shasum -a 256 bottle.tar.gz   # MUST equal <bottle-sha>, or stop
+```
+
+**Verified 2026-09-18 for v0.9.0/arm64_tahoe** (formula commit `3015bef7f7b4`,
+bottle `c9c87784...41242f5`): the blob downloads and its sha256 matches the
+formula exactly. **Not verified: that `brew install` accepts the local bottle
+without falling back to a source build** (herdr needs rust + `zig@0.15`).
+
+Two caveats before using it at all. The keg lands outside the
+`unpin/upgrade/pin` path the auto-bump assumes. And the auto-bump will replace
+it with the newer release as soon as that clears the cooldown, so this buys a
+few days, not a resting place.
 
 #### What a bump actually touches
 
