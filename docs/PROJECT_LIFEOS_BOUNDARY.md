@@ -129,6 +129,10 @@ No split into a project rules file.
 
 1. `open-items`: resolve the drawer per repo, keep the loud refusal, add a cross-repo
    enumeration for `--all`. Self-test both arms.
+   **The drawer holds TWO project drawers, not one** (measured 2026-09-19): this repo's
+   and `dot-claude`'s, whose repo is `~/.claude`. Step 1 must resolve a drawer for both,
+   `--all` must find both, and `open-items-selftest` needs an arm per repo. Move the
+   `dot-claude` folder into its own harness memory dir in the same step as this repo's.
 2. Move the dotfiles folders into the harness memory dir under `WORK/`; commit in
    `dot-claude`; verify from a fresh clone.
 3. Move `per-project-work-scoping/DECISION.md` to lifeos-private; commit and push there.
