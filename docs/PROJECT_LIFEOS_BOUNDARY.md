@@ -216,7 +216,18 @@ both cite a 2026-06-25 investigation folder under the old tree that exists nowhe
 machine (checked both WORK trees, with the moved ci-watch folder as control). The old
 drawer's own `README.md` and `OPEN.md` pointer are not repointed; they go at step 6.
 
-**Step 5: PENDING** (confirm before deleting).
+**Step 5: DONE 2026-09-19.** Content-hash gate run against a universe of the live drawer,
+every tracked file in this repo, and all of lifeos-private outside the candidates (control:
+the moved ci-watch ISA hash present in the universe). `SCOPES/dotfiles/` (10 files, 9
+contents: 6 shared, 3 superseded snapshots) and `MEMORY/WORK/ci-watch-observability/` (10 of
+10 shared) were `git rm -r`'d in lifeos-private, `5b2002e`, pushed. **D3 as written named two
+more folders, and the gate REFUSED them:** `github-credential-lanes/HANDOFF.md` and
+`memory-store-separation/FINDINGS.md` are each unique content, so they stay. That is the
+ruling's own condition ("nothing unique remains") doing its job, not a deviation from it.
+Open for LifeOS: `scopes.json`'s `dotfiles` entry now points at a removed store, and the
+kept HANDOFF cites the old drawer path.
+
+**Step 6: PENDING** (confirm before deleting).
 
 ## Follow-ups that belong to LifeOS, not this repo
 
