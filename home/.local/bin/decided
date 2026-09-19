@@ -76,7 +76,13 @@ selftest() {
   # No cleanup trap on purpose: it referenced a `local` that is gone by EXIT time, which
   # `set -u` turned into an error AFTER the report had printed. $TMPDIR is the OS's to
   # reap, and this repo's deletion rules make a scripted rm the wrong reflex anyway.
-  local tmp; tmp=$(mktemp -d)
+  # An explicit $TMPDIR template, not a bare `mktemp -d`: the bare form lands in the OS
+  # temp root, which the Claude Bash sandbox cannot write, so every arm REFUSED (rc=2)
+  # and the selftest reported failure for a tool that was fine. Measured 2026-09-19;
+  # open-items-selftest already did this. A selftest that fails only in the sandbox
+  # trains people to read "FAILURES" as noise.
+  local tmp; tmp=$(mktemp -d "${TMPDIR:-/tmp}/decided-selftest.XXXXXX") || {
+    echo "decided --selftest: mktemp failed -- INVALID TRIAL, not a pass" >&2; return 2; }
 
   cat > "$tmp/reg.md" <<'FIXTURE'
 # fixture
