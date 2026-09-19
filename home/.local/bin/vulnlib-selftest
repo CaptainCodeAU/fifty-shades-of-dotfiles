@@ -35,7 +35,9 @@ read-only and skips itself if they are absent.
 import atexit
 import importlib.util
 import os
+import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -356,11 +358,47 @@ check("an absent row is still None with a max_age",
 
 
 # --------------------------------------------------------------------------- #
+def brew_vulns_resolved(formula):
+    """What `brew vulns` says this formula's patches resolve, or None.
+
+    INDEPENDENT ON PURPOSE. Asserting vulnlib against another call into vulnlib
+    would be tautological, so the expectation comes from Homebrew's own command,
+    which reaches the same kegs by a different code path. That was always the
+    method here -- it was simply done by hand on 2026-09-04 and then frozen as a
+    literal, which is the part that broke.
+
+    WHY THE LITERALS ARE GONE. The arm asserted ten advisories and ten patch
+    commits. Homebrew backported two more (OSV-2025-90, OSV-2025-92) and the
+    suite went red while vulnlib was answering perfectly correctly -- a figure
+    that stops reproducing reads as a broken instrument rather than a moved
+    target, which is exactly the trap CLAUDE.md warns about for the tab-count in
+    .zshrc. Derive it, do not freeze it.
+
+    Parses the block `brew vulns` prints at the end:
+
+        12 resolved by formula patches (not counted; ...):
+          libssh2: CVE-..., OSV-...
+    """
+    if not shutil.which("brew"):
+        return None
+    try:
+        p = subprocess.run(["brew", "vulns", formula],
+                           capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if p.returncode not in (0, 1):      # brew exits 1 when it finds anything
+        return None
+    m = re.search(r"^\s*%s:\s*(.+)$" % re.escape(formula), p.stdout, re.MULTILINE)
+    if not m:
+        return None
+    ids = {t.strip() for t in m.group(1).split(",") if t.strip()}
+    return ids or None
+
+
 section("live kegs (read-only; skipped if not installed)")
 # --------------------------------------------------------------------------- #
-# Expected values are literals verified independently on 2026-09-04 against
-# `brew vulns`, which reported the same ten as "resolved by formula patches".
-# Asserting against another call into vulnlib would be tautological.
+# The expectation is DERIVED from `brew vulns` on every run, never frozen. See
+# brew_vulns_resolved above for why the frozen version broke.
 V._PATCH_DATA = None
 V._PATCH_DATA_FETCHED = False
 V._PATCH_ATTEMPTS = 0
@@ -384,16 +422,44 @@ else:
     if got is None:
         skip("libssh2", "not installed")
     else:
-        check("libssh2 resolves exactly its ten declared advisories", got, {
-            "CVE-2025-15661", "CVE-2026-7598", "CVE-2026-55199", "CVE-2026-55200",
-            "CVE-2026-58050", "CVE-2026-58051", "CVE-2026-66032", "CVE-2026-66033",
-            "CVE-2026-66034", "CVE-2026-66035"})
+        want = brew_vulns_resolved("libssh2")
+        if want is None:
+            skip("libssh2 resolves exactly what `brew vulns` says",
+                 "brew vulns unavailable or unparseable -- NOT a pass")
+        elif len(want) < 10:
+            # THE CONTROL ON THE INDEPENDENT SOURCE. If the parse silently
+            # returned a near-empty set, comparing two empty sets would pass and
+            # prove nothing. libssh2 has carried at least ten since 2026-09-04
+            # and Homebrew does not un-patch, so anything smaller means the
+            # parser broke, not that the formula shrank.
+            FAILURES.append("brew vulns returned only %d id(s) for libssh2" % len(want))
+            print("  %sFAIL%s  brew vulns returned only %d id(s) for libssh2 -- "
+                  "the independent source is not answering" % (RED, OFF, len(want)))
+        else:
+            check("libssh2 resolves exactly what `brew vulns` says", got, want)
         # Pin the denominator FIRST. unclaimed_patches returns [] for a falsy
         # first argument, so without this the check below passes unchanged if
         # homebrew_patch_commits regresses to None or {} -- a green tick for a
         # signal that has disappeared.
         _pc_live = V.homebrew_patch_commits("libssh2")
-        check("libssh2 exposes all ten of its patch commits", len(_pc_live or {}), 10)
+        # NO FROZEN COUNT HERE EITHER -- it was ten, Homebrew made it eleven. The
+        # job of this arm is to PIN THE DENOMINATOR so the unclaimed_patches
+        # check below cannot pass vacuously: that function returns [] for a falsy
+        # first argument, so a regression to None or {} would otherwise earn a
+        # green tick for a signal that had disappeared. A floor plus a shape
+        # check does that without going stale on the next backport.
+        check("libssh2 still exposes a real set of patch commits (denominator pinned)",
+              len(_pc_live or {}) >= 10, True)
+        # The map is {commit_sha: patch_url}, so the SHAS ARE THE KEYS. Checking
+        # .values() here instead was my own wrong assumption about the contract,
+        # and this arm caught it on 2026-09-19 -- which is the argument for
+        # asserting shape at all rather than only counting.
+        check("...and every one of them is keyed by a real commit sha",
+              all(re.fullmatch(r"[0-9a-f]{7,40}", str(c or "").lower())
+                  for c in (_pc_live or {})) if _pc_live else False, True)
+        check("...and every one carries the upstream URL that names that sha",
+              all(str(c) in str(u or "") for c, u in (_pc_live or {}).items())
+              if _pc_live else False, True)
         check("libssh2 has nothing left to ask a human about",
               V.unclaimed_patches("libssh2", _pc_live, set()), [])
 
