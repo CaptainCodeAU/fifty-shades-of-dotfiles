@@ -593,6 +593,36 @@ else bad "targets: with no env override, project resolves to settings.project.js
          "proj=$(count_in "$BOTH_NAME" "$PROJ_SETTINGS") user=$(count_in "$BOTH_NAME" "$SETTINGS")"; fi
 cleanup
 
+# --- 30. an override that is SET but EMPTY is refused, not silently replaced --
+# `${CLAUDE_REQUIRES_ROOT:-$HOME}` reads "" as unset, so a selftest exporting an
+# empty root would have the requires gate checked against the real ~ and pass
+# while proving nothing (the renderer shipped that bug on 2026-09-19). Arm one:
+# empty override exits 2 and writes nothing. Control: the same command with the
+# override UNSET runs and registers, so the refusal is the guard and not a
+# broken fixture.
+fixture with-skill with-script
+before=$(cat "$SETTINGS")
+out=$(CLAUDE_SETTINGS_FILE="$SETTINGS" \
+      CLAUDE_HOOKS_DIR="$HOOKS_DIR" \
+      CLAUDE_HOOKS_MANIFEST="$MANIFEST" \
+      CLAUDE_REQUIRES_ROOT="" \
+      "$TOOL" --install 2>&1); rc=$?
+after=$(cat "$SETTINGS")
+if (( rc == 2 )) && [[ "$out" == *"CLAUDE_REQUIRES_ROOT is set but EMPTY"* ]]; then
+    ok "empty override: CLAUDE_REQUIRES_ROOT=\"\" exits 2 and names the variable"
+else bad "empty override: CLAUDE_REQUIRES_ROOT=\"\" exits 2 and names the variable" "exit was $rc: $out"; fi
+if [[ "$before" == "$after" ]]; then ok "empty override: writes nothing"
+else bad "empty override: writes nothing" "the settings file changed"; fi
+out=$(CLAUDE_SETTINGS_FILE="$SETTINGS" \
+      CLAUDE_HOOKS_DIR="$HOOKS_DIR" \
+      CLAUDE_HOOKS_MANIFEST="$MANIFEST" \
+      CLAUDE_REQUIRES_ROOT="$REQ_ROOT" \
+      "$TOOL" --install 2>&1); rc=$?
+if (( rc == 0 )) && [[ "$(cat "$SETTINGS")" != "$before" ]]; then
+    ok "empty override control: a real CLAUDE_REQUIRES_ROOT runs and registers"
+else bad "empty override control: a real CLAUDE_REQUIRES_ROOT runs and registers" "exit was $rc"; fi
+cleanup
+
 echo
 echo "  $PASS passed, $FAIL failed"
 (( FAIL == 0 ))

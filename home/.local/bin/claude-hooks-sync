@@ -103,6 +103,23 @@ _resolve_repo_manifest() {
     printf '%s\n' "$repo/settings/claude/hooks.json"
 }
 
+# An override that is SET but EMPTY is refused, never quietly replaced. The
+# `${VAR:-default}` seams below treat "" as unset, so a caller (a selftest most
+# of all) that exports CLAUDE_REQUIRES_ROOT="" would have the requires gate
+# checked against the REAL ~ and pass while proving nothing. Measured 2026-09-19
+# in claude-project-settings-render, whose renderer shipped root-relative paths
+# through exactly this shape before its own selftest caught it. Same rule as a
+# fixture that fails to build: abort, never continue on a stand-in.
+for _ov in CLAUDE_SETTINGS_FILE CLAUDE_HOOKS_DIR CLAUDE_REQUIRES_ROOT CLAUDE_HOOKS_MANIFEST; do
+    if [[ -n "${!_ov+set}" && -z "${!_ov}" ]]; then
+        printf '%s! claude-hooks-sync: %s is set but EMPTY -- refusing to fall back to the real path.%s\n' \
+               "$R" "$_ov" "$N" >&2
+        printf '  %sUnset it to use the default, or point it at a real path.%s\n' "$D" "$N" >&2
+        exit 2
+    fi
+done
+unset _ov
+
 MANIFEST="${CLAUDE_HOOKS_MANIFEST:-}"
 if [[ -z "$MANIFEST" ]]; then
     MANIFEST="$(_resolve_repo_manifest 2>/dev/null || true)"
