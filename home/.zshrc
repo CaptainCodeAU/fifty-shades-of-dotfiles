@@ -1077,6 +1077,12 @@ _LIFEOS_SP=(--append-system-prompt-file "$HOME/.claude/LIFEOS/LIFEOS_SYSTEM_PROM
 alias c='__claude_launch claude "${_LIFEOS_SP[@]}" --dangerously-skip-permissions --permission-mode plan'       # Standard launch
 alias ct='__claude_launch CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 claude "${_LIFEOS_SP[@]}" --dangerously-skip-permissions --permission-mode plan --teammate-mode tmux'  # Tmux agent teams
 
+# pj - light project launcher (TRIAL, added 2026-09-19).
+# Claude Code + OPERATIONAL_RULES + the project's own CLAUDE.md and notes. No LifeOS prompt,
+# no global CLAUDE.md, no global hooks/skills. Settings live in ~/.claude/settings.project.json.
+# herdr and AgentRelay are loaded as single-skill plugins. Remove this block to end the trial.
+alias pj='__claude_launch claude --setting-sources project,local --settings ~/.claude/settings.project.json --append-system-prompt-file ~/.claude/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md --plugin-dir ~/.claude/skills/herdr --plugin-dir ~/.claude/skills/AgentRelay --dangerously-skip-permissions --effort high'
+
 # Clean-room Claude for measuring front-loaded context (CLAUDE.md, memory,
 # skills, MCP) one piece at a time. Measured 2026-09-06 (Claude Code 2.1.263):
 #   --bare            : the official minimal mode, but it never reads OAuth or
