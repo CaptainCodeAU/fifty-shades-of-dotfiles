@@ -707,3 +707,28 @@ Reinstalling dependencies replaces the vulnerable shims. It clears the 3-day coo
 is the next `pnpm_update` target. `12.5.0`/`12.5.1` (Sep 18) add a Python ecosystem,
 `supportedArchitectures` platform names, `concurrencyGroups` and a `tools` block; one day
 old and a large surface, not a target yet.
+
+### 7.1 Hardening round two (approved 2026-09-19, landed 2026-09-20, rulings D-20260919-08 to -11)
+
+Four items approved in one round the evening 12.4.1 went live. Each has its own register
+block and its own commit. Everything below was measured on 12.4.1; `pnpm config get` reads
+several of these keys back as `undefined`, so each key names the POSITIVE arm that proved
+acceptance. Two facts about the 12.x config parser that the probes turned up:
+
+- **Unknown keys are silently accepted** (`bogusKeyXyz: banana` -> `pnpm --version` exits 0).
+  "No warning" therefore proves nothing about a key.
+- **Known keys are typed.** A wrong type fails EVERY pnpm command with `load configuration ...
+  invalid boolean` (or `did not match any variant of untagged enum`). A typed rejection is a
+  positive arm: the schema knows the key.
+
+**Platform and ecosystem pins (D-20260919-08).**
+
+| Key                      | Value                     | Arm                                                                                                             |
+| ------------------------ | ------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `supportedArchitectures` | `{os,cpu,libc: [current]}` | Typed (`os: banana` rejected); behaviour: os:[linux] pin installed `@esbuild/linux-x64` only, `current` installed `@esbuild/darwin-arm64` |
+| `python.enabled`         | `false`                   | Typed (`enabled: banana` -> invalid boolean) on 12.4.1, before the 12.5 Python ecosystem exists                  |
+| `cargo.enabled`          | `false`                   | Typed, same probe                                                                                                |
+
+The 12.5.0 platform-list form (`- darwin-arm64`) is REJECTED by 12.4.1 at parse time and
+would break every pnpm command on this box, so the object form stays until the floor passes
+12.5. The literal `current` is what keeps one stowed file correct on macOS, Linux and WSL.

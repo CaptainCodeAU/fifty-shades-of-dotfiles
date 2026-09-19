@@ -136,3 +136,39 @@ verifyDepsBeforeRun: error
 # PNPM_SHIM_BYPASS=1. Gavin took pnpm 12 (12.4.1) by hand on 2026-09-19 via
 # pnpm_update; this was the one prerequisite still open (D-20260919-06).
 globalShims: false
+
+# pnpm 12: install optional dependencies for THIS machine only. The object form
+# with the literal `current` resolves at install time, so the one stowed file is
+# right on macOS arm64, Linux x64 and WSL alike (never hard-code darwin-arm64
+# here: Linux boxes stow the same file). 12.5.0 added a platform-list form
+# (`- darwin-arm64`); 12.4.1 REJECTS it at parse time ("load configuration" error
+# on every pnpm command), so the object form stays until the floor passes 12.5.
+# Measured 2026-09-20 on 12.4.1: `os: banana` is rejected, the object form is
+# accepted, `pnpm config get` reads it back as undefined (read-back gap, as with
+# blockExoticSubdeps). Behaviour arm: a project pin of os:[linux] cpu:[x64]
+# installed @esbuild/linux-x64 only; `current` installed @esbuild/darwin-arm64.
+# Effect on an existing project: none, `current` is the default value. A project
+# that prepares other platforms overrides this in its pnpm-workspace.yaml.
+# Ruling D-20260919-08.
+# pnpm 12 default: current on every axis.
+supportedArchitectures:
+  os: [current]
+  cpu: [current]
+  libc: [current]
+
+# pnpm 12: never let `pnpm install` resolve or download Python or Cargo
+# toolchains. 12.4.0 added a Cargo ecosystem (cargo.enabled); 12.5.0 a Python
+# one (python.enabled) that installs an interpreter from python-build-standalone
+# when none on the machine fits. Both default false today; pinned so an upstream
+# default flip cannot start pulling interpreters through pnpm (uv owns Python on
+# this box). Measured 2026-09-20 on 12.4.1: both keys are typed (`enabled: banana`
+# fails parse with "invalid boolean"; an unknown key with the same bad value
+# passes), so the schema knows both even before 12.5; `pnpm config get` reads
+# both back as undefined. Effect on an existing project: none unless it has a
+# pyproject or Cargo.toml AND opted in per project, which nothing here does.
+# Ruling D-20260919-08.
+# pnpm 12 default: false (both).
+python:
+  enabled: false
+cargo:
+  enabled: false

@@ -457,3 +457,23 @@ Supersedes the 2026-09-04 deferral (11.25.0 by choice). Gavin took 12.4.1 by han
 `pnpm_update`. `globalShims: false` is set in the stowed config so nvm keeps `node`; the
 SSH url rewrites were already in place. Floor is 12.3.2 in install.sh and .zsh_onboarding
 (12.3.0 breaks global node/npm/yarn; 12.3.2 fixes the npm wrapper). Never land on 12.3.0.
+
+## D-20260919-08 -- pnpm: supportedArchitectures pinned to `current`; python and cargo ecosystems off
+
+topic: pnpm 12 supportedArchitectures current darwin-arm64 platform list os cpu libc optional dependencies python.enabled cargo.enabled ecosystem interpreter download config.yaml stow linux wsl
+decided: 2026-09-19
+status: standing
+holds-in: fifty-shades-of-dotfiles/docs/PNPM_SETUP_GUIDE.md section 7.1
+
+Approved 2026-09-19 with D-20260919-09 to -11 in one round; measured and landed 2026-09-20
+on pnpm 12.4.1. The one stowed `config.yaml` serves macOS, Linux and WSL, so the platform
+pin is the literal `current` on every axis (object form: os, cpu, libc), never a hard-coded
+`darwin-arm64`. The 12.5.0 platform-list form is REJECTED by the 12.4.1 parser on every
+pnpm command ("load configuration"), so the object form stays until the floor passes 12.5.
+`python.enabled` and `cargo.enabled` are pinned false: uv owns Python here and pnpm must not
+start fetching interpreters on a default flip. Arms used, since `pnpm config get` reads all
+three back as undefined: typed rejection (`enabled: banana` and `os: banana` fail parse,
+an unknown key with the same bad value passes) and, for supportedArchitectures, a scratch
+install of esbuild that landed only `@esbuild/linux-x64` under an os:[linux] pin and only
+`@esbuild/darwin-arm64` under `current`. Existing projects see no change: `current` is the
+default value.
