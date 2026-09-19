@@ -1,8 +1,8 @@
 # Project / LifeOS boundary for this repo
 
-**Status:** DECIDED 2026-09-19, NOT EXECUTED. Four rulings (D-20260919-02 to -05 in the
-decisions register). No file has been moved, deleted or symlinked as a result of this
-document yet. The sequencing section says what execution would involve and in what order.
+**Status:** DECIDED 2026-09-19, EXECUTION IN PROGRESS. Four rulings (D-20260919-02 to -05
+in the decisions register). The "Execution log" section at the end records each gate as it
+lands; everything above it is the plan as decided, with corrections marked AMENDED inline.
 
 **Written to stand alone.** Assume no memory of the session that produced it.
 
@@ -49,14 +49,14 @@ session took their reports as given.
 
 **Where dotfiles material sits inside LifeOS today:**
 
-| Location                                    | What                                                                     | Versioned |
-| ------------------------------------------- | ------------------------------------------------------------------------ | --------- |
-| `lifeos-private/SCOPES/dotfiles/notes/`     | 11 files, a 2026-09-18 copy of the drawer                                | yes       |
-| `lifeos-private/MEMORY/WORK/`               | ci-watch-observability, github-credential-lanes, memory-store-separation | yes       |
-| `lifeos-private/MEMORY/LEARNING/INCIDENTS/` | 3 incidents drawn from dotfiles work                                     | yes       |
-| `lifeos-private/MEMORY/UPGRADES/records/`   | 13 records mentioning this repo                                          | yes       |
-| `~/.claude/MEMORY/WORK/`                    | 18 files, the live drawer `open-items` reads                             | NO        |
-| `OPERATIONAL_RULES.md`                      | one line citing a dotfiles doc                                           | yes       |
+| Location                                    | What                                                                                        | Versioned |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------- | --------- |
+| `lifeos-private/SCOPES/dotfiles/notes/`     | 10 files (AMENDED: was written as 11), a 2026-09-18 copy of the drawer, filenames FLATTENED | yes       |
+| `lifeos-private/MEMORY/WORK/`               | ci-watch-observability, github-credential-lanes, memory-store-separation                    | yes       |
+| `lifeos-private/MEMORY/LEARNING/INCIDENTS/` | 3 incidents drawn from dotfiles work                                                        | yes       |
+| `lifeos-private/MEMORY/UPGRADES/records/`   | 13 records mentioning this repo                                                             | yes       |
+| `~/.claude/MEMORY/WORK/`                    | 18 files, the live drawer `open-items` reads                                                | NO        |
+| `OPERATIONAL_RULES.md`                      | one line citing a dotfiles doc                                                              | yes       |
 
 ## The finding that reframes it
 
@@ -92,9 +92,16 @@ repo's harness memory dir. The one LifeOS-owned file there
 (`per-project-work-scoping/DECISION.md`) moves to lifeos-private. `open-items` is taught to
 resolve the drawer per repo BEFORE anything moves.
 
-- **Why.** The drawer is the only unbacked project material on the machine. LifeOS's own
-  `KnowledgeHarvester.ts` already walks `projects/<key>/memory/WORK`, so the destination is a
-  path LifeOS recognises rather than a new convention.
+- **Why.** The drawer is the only unbacked project material on the machine. The destination
+  is a path LifeOS's harvester already walks and deliberately ignores: it opens only
+  `<slug>/ISA.md` at phase complete or learn, so the drawer is recognised as territory and
+  never harvested as content (AMENDED 2026-09-19 after `c-dotfiles` measured the harvester;
+  the earlier wording implied an integration that does not exist). LifeOS's own
+  `SystemUserBoundary.md` already calls `~/.claude/MEMORY/` a "root-level orphan; migrate",
+  so step 6 is consistent with LifeOS doctrine, not a dotfiles-only cleanup. Two placement
+  rules from the same measurement: never a drawer file loose in `memory/` itself (that level
+  IS scanned flat and `type:` frontmatter gets staged as knowledge), never `memory/MEMORY/WORK/`
+  (the global `MEMORY/` ignore rule would un-version it).
 - **Trade-offs.** `open-items --all` needs a way to enumerate repos instead of one flat
   directory. The public `CLAUDE.md` must keep saying "run open-items" with no path, so no
   private layout is committed to a public repo.
@@ -136,12 +143,42 @@ No split into a project rules file.
 2. Move the dotfiles folders into the harness memory dir under `WORK/`; commit in
    `dot-claude`; verify from a fresh clone.
 3. Move `per-project-work-scoping/DECISION.md` to lifeos-private; commit and push there.
+   AMENDED 2026-09-19: this is an OVERWRITE, not a move. `SCOPES/lifeos/notes/` already holds
+   `per-project-work-scoping-DECISION.md`, the stale PARKED version; the live drawer copy says
+   DECIDED. Replace it, never add a third copy. That directory is also the `dot-claude` harness
+   memory dir (a symlink), so the `dot-claude` drawer from step 1 lands beside it and is
+   committed in lifeos-private, not in `dot-claude`.
 4. Repoint the seven known pointers (this repo's `CLAUDE.md`, four docs, `refresh.md`,
    `OPERATIONAL_RULES.md`). Public files carry no path.
 5. Hash-compare, then delete the lifeos-private copies (D3). Trash-routed, confirmed first.
+   AMENDED 2026-09-19: the SCOPES copy's filenames are flattened, so compare by CONTENT hash
+   with `sort -u` on both sides (a duplicate content on one side miscounts under plain `comm`,
+   measured by `c-dotfiles`). Measured before execution: 3 of 9 SCOPES hashes are unique, all
+   older snapshots of live files (`INDEX.md` a day older; `fifty-shades-of-dotfiles-OPEN.md`
+   with W-20260918-01 still open; `ci-watch-observability-NEXT.md` predating D-20260918-01).
+   The gate is "every hash shared or classified superseded", never a bare zero. Also:
+   `ci-watch-observability/` exists byte-identical in lifeos-private's own `MEMORY/WORK/`,
+   so after step 2 it is in three places until this step.
 6. Delete `~/.claude/MEMORY/WORK` last, after `open-items` no longer reads it.
 
-Each step is its own gate. None has been started.
+Each step is its own gate.
+
+## Execution log
+
+**Step 1, tool: DONE 2026-09-19.** `open-items` resolves the drawer per repo as
+`~/.claude/projects/<key>/memory/WORK/OPEN.md`, key = toplevel path with `/`, `.`, `_` to
+`-`, main worktree via `--git-common-dir`. Layout inside `WORK/` is FLAT (Gavin chose A over
+nested `WORK/<project>/`): `OPEN.md` at the WORK root, research folders beside it, so every
+`holds-in:` stays valid. `--all` and `--projects` enumerate `projects/*/memory/WORK/OPEN.md`
+through a glob so a symlinked memory dir (dot-claude's) is followed; names come from each
+file's `project:` field because keys are lossy. `--index` DROPPED (Gavin chose 2; register
+amended). New `--where`. Refusals: missing projects root, or a repo whose harness memory dir
+does not exist (key wrong or never a session); a memory dir with no drawer is an ordinary
+miss. Selftest 45 arms, one per fixture repo including a dot-named one like `~/.claude`, a
+linked worktree, and a symlinked memory dir. Between this step and step 2 the live tool
+refuses on `--all` and misses on the current repo, by design: nothing has moved yet.
+
+**Step 1, dot-claude move: PENDING** (confirm before moving).
 
 ## Follow-ups that belong to LifeOS, not this repo
 

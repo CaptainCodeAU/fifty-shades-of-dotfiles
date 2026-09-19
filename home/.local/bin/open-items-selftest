@@ -1,19 +1,25 @@
 #!/usr/bin/env bash
-# open-items-selftest -- proves open-items can tell three different kinds of "nothing".
+# open-items-selftest -- proves open-items can tell three different kinds of "nothing",
+# and that it finds the RIGHT drawer for the repo you are standing in.
 #
 # THE CLAIM UNDER TEST is not "it lists items". Listing is the easy half and it fails
-# loudly. The claim is that these three are never confused, because they look
-# identical in any tool that just prints its results:
+# loudly. The claim is that these are never confused, because they look identical in
+# any tool that just prints its results:
 #
-#   a) the drawer is MISSING          -> REFUSED, rc=2, and that is NOT a pass
-#   b) this project has NO DRAWER     -> rc=1, and it must say which projects do
-#   c) this project has a drawer and  -> rc=1, but a genuinely empty one
-#      genuinely nothing open
+#   a) the projects root is MISSING   -> REFUSED, rc=2, and that is NOT a pass
+#   b) this repo has NO MEMORY DIR    -> REFUSED, rc=2 (key wrong, or never a session)
+#   c) this project has NO DRAWER     -> rc=1, and it must say which projects do
+#   d) a drawer with nothing open     -> rc=1, but a genuinely empty one
+#
+# And, since 2026-09-19, that the drawer is resolved PER REPO from the harness key:
+#
+#   e) two fixture repos each resolve to their OWN drawer, and `--all` finds both.
+#      One repo has a plain name; the other has a DOT in its name, like `~/.claude`,
+#      because `.` -> `-` is the half of the encoding most likely to be got wrong.
 #
 # Every one of those prints little or nothing on stdout. So every case below asserts
 # on the EXIT CODE and on the text, and each "must not appear" arm is twinned with a
-# case where the same marker MUST appear. An assertion with no twin proves nothing --
-# the house rule from ci-watch-selftest, which learned it the expensive way.
+# case where the same marker MUST appear. An assertion with no twin proves nothing.
 #
 # Exit: 0 all passed  |  1 a case failed  |  2 could not run (invalid trial)
 
@@ -25,6 +31,9 @@ TOOL="${OPEN_ITEMS_TOOL:-$(dirname "$0")/open-items}"
 PASS=0; FAIL=0
 ROOT="$(mktemp -d "${TMPDIR:-/tmp}/open-items-selftest.XXXXXX")" || {
     printf 'selftest: mktemp failed -- INVALID TRIAL, not a pass\n' >&2; exit 2; }
+# git prints the REAL path of a toplevel (macOS: /tmp -> /private/tmp), and the key
+# is computed from that, so the fixture must be keyed from the same resolved path.
+ROOT="$(cd "$ROOT" && pwd -P)"
 
 ok(){  PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
 bad(){ FAIL=$((FAIL+1)); printf '  FAIL %s\n       want: %s\n       got : %s\n' \
@@ -33,13 +42,22 @@ want(){    case "$3" in *"$2"*) ok "$1";; *) bad "$1" "contains: $2" "$3";; esac
 wantnot(){ case "$3" in *"$2"*) bad "$1" "must NOT contain: $2" "$3";; *) ok "$1";; esac; }
 wanteq(){  [ "$2" = "$3" ] && ok "$1" || bad "$1" "$2" "$3"; }
 
-# A drawer with two projects: one with an open item and a done item, one with only a
-# done item. The second is case (c) -- a real drawer that is genuinely empty of open
-# work, which must not read like the project having no drawer at all.
-mk_drawer(){
-    D="$ROOT/case$((++N))"; W="$D/WORK"
-    mkdir -p "$W/alpha" "$W/beta"
-    cat > "$W/alpha/OPEN.md" <<'EOF'
+# The same encoding the tool uses. Duplicated on purpose: the arm below proves the
+# tool's forward match agrees with a key built independently from the repo path.
+key(){ printf '%s' "$1" | sed 's#[/._]#-#g'; }
+
+# A fixture: a projects root with two repos, `alpha` (plain name, one open + one done
+# item) and `.beta` (dot in the name, one decided item -- case (d): a real drawer
+# that is genuinely empty of open work, which must not read like having no drawer).
+N=0
+mk_fixture(){
+    D="$ROOT/case$((++N))"; P="$D/projects"; mkdir -p "$P"
+    ALPHA="$D/alpha"; BETA="$D/.beta"
+    mkdir -p "$ALPHA/deep/sub" "$BETA"
+    git -C "$ALPHA" init -q 2>/dev/null; git -C "$BETA" init -q 2>/dev/null
+    AW="$P/$(key "$ALPHA")/memory/WORK"; BW="$P/$(key "$BETA")/memory/WORK"
+    mkdir -p "$AW" "$BW"
+    cat > "$AW/OPEN.md" <<'EOF'
 # alpha -- open items
 
 ## W-20260918-01 -- the live one
@@ -47,7 +65,7 @@ mk_drawer(){
 project: alpha
 status: open
 size: small
-holds-in: alpha/research
+holds-in: research/NEXT.md
 
 Body of the live item.
 
@@ -56,11 +74,10 @@ Body of the live item.
 project: alpha
 status: done
 size: small
-holds-in: alpha/research
 
 Body of the finished item.
 EOF
-    cat > "$W/beta/OPEN.md" <<'EOF'
+    cat > "$BW/OPEN.md" <<'EOF'
 # beta -- open items
 
 ## W-20260918-03 -- beta's only item, already decided
@@ -72,121 +89,122 @@ size: decision
 Body.
 EOF
 }
-N=0
-run(){ OUT="$(OPEN_ITEMS_DIR="$W" "$TOOL" "$@" 2>&1)"; RC=$?; return 0; }
+run(){    OUT="$(OPEN_ITEMS_PROJECTS_DIR="$P" "$TOOL" "$@" 2>&1)"; RC=$?; return 0; }
+run_in(){ local d="$1"; shift; OUT="$(cd "$d" 2>/dev/null && OPEN_ITEMS_PROJECTS_DIR="$P" "$TOOL" "$@" 2>&1)"; RC=$?; return 0; }
 
 printf '\nopen-items-selftest -- fixtures in %s\n\n' "$ROOT"
 
-# ---- the three kinds of nothing -------------------------------------------
-printf 'A  the three kinds of nothing\n'
+# ---- the kinds of nothing ----------------------------------------------------
+printf 'A  the kinds of nothing\n'
+mk_fixture
 
-# (a) MISSING DRAWER must REFUSE. This is the arm that matters most: a tool that
-# printed "nothing open" here would be reporting the absence of a filesystem as the
-# absence of work.
-mk_drawer
-OUT="$(OPEN_ITEMS_DIR="$ROOT/nope/WORK" "$TOOL" --all 2>&1)"; RC=$?
-wanteq "a missing drawer REFUSES (rc=2), it does not report 'nothing open'" "2" "$RC"
+# (a) MISSING PROJECTS ROOT must REFUSE. A tool that printed "nothing open" here
+# would be reporting the absence of a filesystem as the absence of work.
+OUT="$(OPEN_ITEMS_PROJECTS_DIR="$ROOT/nope" "$TOOL" --all 2>&1)"; RC=$?
+wanteq "a missing projects root REFUSES (rc=2), it does not report 'nothing open'" "2" "$RC"
 want   "and says REFUSED out loud" "REFUSED" "$OUT"
 
-# (b) NO DRAWER FOR THIS PROJECT: rc=1, and it must name the projects that DO have
+# (b) A REPO WITH NO MEMORY DIR AT ALL must REFUSE: the key resolved to nothing the
+# harness ever wrote, which is either "never had a session" or "key computed wrong",
+# and both deserve a loud answer rather than a quiet miss.
+GAMMA="$D/gamma"; mkdir -p "$GAMMA"; git -C "$GAMMA" init -q 2>/dev/null
+run_in "$GAMMA"
+wanteq "a repo with no harness memory dir REFUSES (rc=2)" "2" "$RC"
+want   "and names the memory dir it expected" "$(key "$GAMMA")/memory" "$OUT"
+
+# (c) NO DRAWER FOR THIS PROJECT: rc=1, and it must name the projects that DO have
 # one, so the reader can see the search was real.
 run --project gamma
-wanteq "an unknown project misses (rc=1)" "1" "$RC"
+wanteq "an unknown project name misses (rc=1)" "1" "$RC"
 want   "and names the drawers it did search" "alpha" "$OUT"
 want   "and states the denominator"          "searched" "$OUT"
 want   "and says a miss is not 'nothing is open'" "not the same as" "$OUT"
+# Same fact reached from inside a repo whose memory dir exists but holds no drawer.
+DELTA="$D/delta"; mkdir -p "$DELTA" "$P/$(key "$DELTA")/memory"; git -C "$DELTA" init -q 2>/dev/null
+run_in "$DELTA"
+wanteq "a repo with a memory dir but no drawer misses (rc=1), it does not refuse" "1" "$RC"
+want   "and still states the denominator" "searched" "$OUT"
 
-# (c) A REAL DRAWER WITH NOTHING OPEN. Same rc as (b) by design -- both are "no open
-# items" -- but it must not be reachable by accident, so the twin below proves the
-# tool can tell beta's decided item from alpha's open one.
+# (d) A REAL DRAWER WITH NOTHING OPEN. Same rc as (c) by design, but the twin proves
+# the tool can tell beta's decided item from alpha's open one.
 run --project beta
 wanteq "a drawer with only closed items misses (rc=1)" "1" "$RC"
-# TWIN: the SAME item appears once closed items are asked for. Without this, the miss
-# above could mean the file was never read.
 run --closed --project beta
 wanteq "TWIN --closed finds it (rc=0), so the miss above was a filter not a failure" "0" "$RC"
 want   "TWIN and prints the decided item" "W-20260918-03" "$OUT"
 
-# ---- filtering -------------------------------------------------------------
+# ---- filtering ---------------------------------------------------------------
 printf 'B  status filtering\n'
 run --project alpha
 wanteq "a project with an open item succeeds (rc=0)" "0" "$RC"
 want    "prints the open item"         "W-20260918-01" "$OUT"
 wantnot "hides the done item"          "W-20260918-02" "$OUT"
-# TWIN: --closed shows both, so the hiding above is a filter and not a parse failure
-# that dropped the second block.
 run --closed --project alpha
 want "TWIN --closed shows the open item too"  "W-20260918-01" "$OUT"
 want "TWIN --closed shows the done item"      "W-20260918-02" "$OUT"
 
-# ---- scope -----------------------------------------------------------------
-printf 'C  scope\n'
+# ---- per-repo resolution: one arm per fixture repo -------------------------------
+printf 'C  per-repo resolution (plain name, and a dot in the name)\n'
+run_in "$ALPHA/deep/sub"
+wanteq "alpha: standing in a SUBDIRECTORY resolves the repo's own drawer (rc=0)" "0" "$RC"
+want   "alpha: and finds alpha's item"        "W-20260918-01" "$OUT"
+wantnot "alpha: and NOT beta's item"          "W-20260918-03" "$OUT"
+run_in "$BETA" --closed
+wanteq ".beta: a repo with a DOT in its name resolves its own drawer (rc=0)" "0" "$RC"
+want   ".beta: and finds beta's item"         "W-20260918-03" "$OUT"
+wantnot ".beta: and NOT alpha's item"         "W-20260918-01" "$OUT"
+run_in "$BETA" --where
+want   ".beta: --where prints the dash-encoded key, dot included" "$(key "$BETA")/memory/WORK/OPEN.md" "$OUT"
+# TWIN: outside any git repo it REFUSES rather than guessing a project from the cwd.
+run_in "$ROOT"
+wanteq "TWIN outside a git repo it refuses rather than guessing (rc=2)" "2" "$RC"
+# Linked worktrees resolve to the MAIN repo's drawer, not their own (empty) key.
+WT="$D/alpha-wt"; git -C "$ALPHA" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init 2>/dev/null
+git -C "$ALPHA" worktree add -q "$WT" -b wt 2>/dev/null
+run_in "$WT"
+wanteq "a linked worktree resolves the MAIN repo's drawer (rc=0)" "0" "$RC"
+want   "and finds alpha's item from inside the worktree" "W-20260918-01" "$OUT"
+
+# ---- scope -------------------------------------------------------------------
+printf 'D  scope\n'
 run --all
-wanteq "--all succeeds when any project has open work" "0" "$RC"
-want    "--all reaches alpha" "W-20260918-01" "$OUT"
-wantnot "--all still respects the status filter" "W-20260918-03" "$OUT"
+wanteq "--all succeeds when any drawer has open work" "0" "$RC"
+want    "--all reaches alpha"                      "W-20260918-01" "$OUT"
+wantnot "--all still respects the status filter"   "W-20260918-03" "$OUT"
+run --closed --all
+want    "TWIN --all --closed reaches beta too"     "W-20260918-03" "$OUT"
 run --projects
 want "--projects lists alpha" "alpha" "$OUT"
 want "--projects lists beta"  "beta"  "$OUT"
 want "--projects states the item total" "item(s) total" "$OUT"
+want "--projects states 2 drawers" "2 drawer(s)" "$OUT"
+# A memory dir that is a SYMLINK (dot-claude's is) must still be found by --all.
+EPS="$D/eps"; mkdir -p "$EPS" "$D/elsewhere/WORK"; git -C "$EPS" init -q 2>/dev/null
+mkdir -p "$P/$(key "$EPS")"; ln -s "$D/elsewhere" "$P/$(key "$EPS")/memory"
+printf '# eps -- open items\n\n## W-20260918-09 -- through a symlink\n\nproject: eps\nstatus: open\n\nBody.\n' > "$D/elsewhere/WORK/OPEN.md"
+run --all
+want "--all follows a SYMLINKED memory dir" "W-20260918-09" "$OUT"
+run_in "$EPS"
+wanteq "and the symlinked repo resolves its own drawer (rc=0)" "0" "$RC"
 
-# THE PROJECT KEY IS THE GIT TOPLEVEL, NOT THE CWD. Keying off the cwd basename would
-# silently file items under `src` or `home` half the time. Proven by standing in a
-# SUBDIRECTORY whose name is not the repo's.
-printf 'D  the project key\n'
-mk_drawer
-repo="$D/alpha"; mkdir -p "$repo/deep/sub"
-git -C "$repo" init -q 2>/dev/null
-mv "$W/alpha/OPEN.md" "$W/alpha/OPEN.md.keep" 2>/dev/null
-mkdir -p "$W/alpha"; mv "$W/alpha/OPEN.md.keep" "$W/alpha/OPEN.md" 2>/dev/null
-OUT="$(cd "$repo/deep/sub" 2>/dev/null && OPEN_ITEMS_DIR="$W" "$TOOL" 2>&1)"; RC=$?
-wanteq "standing in a subdirectory still resolves the repo's project (rc=0)" "0" "$RC"
-want   "and finds that project's item" "W-20260918-01" "$OUT"
-# TWIN: outside any git repo it REFUSES rather than guessing a project from the cwd.
-OUT="$(cd "$ROOT" 2>/dev/null && OPEN_ITEMS_DIR="$W" "$TOOL" 2>&1)"; RC=$?
-wanteq "TWIN outside a git repo it refuses rather than guessing (rc=2)" "2" "$RC"
-
-# ---- the derived index -----------------------------------------------------
-printf 'E  the derived index\n'
-mk_drawer
-run --index
-wanteq "--index succeeds (rc=0)" "0" "$RC"
-IDX="$(cat "$W/INDEX.md" 2>/dev/null)"
-want "the index warns it is derived"    "Do not edit" "$IDX"
-want "the index counts alpha's open item" "alpha -- 1 open" "$IDX"
-want "the index shows beta as empty"      "beta -- 0 open"  "$IDX"
-# TWIN AND THE POINT OF THE WHOLE FILE: close alpha's item, regenerate, and the index
-# must FOLLOW. An index that did not change would be the hand-maintained copy the
-# ruling exists to prevent, and it would look identical to a correct one on any single
-# reading.
-sed -i '' 's/^status: open$/status: done/' "$W/alpha/OPEN.md" 2>/dev/null \
-  || sed -i 's/^status: open$/status: done/' "$W/alpha/OPEN.md" 2>/dev/null
-run --index
-IDX="$(cat "$W/INDEX.md" 2>/dev/null)"
-want "TWIN closing an item moves the index to 0" "alpha -- 0 open" "$IDX"
-
-# ---- the session surface ---------------------------------------------------
+# ---- the session surface -------------------------------------------------------
 # It must be SILENT when there is nothing open and LOUD when there is. Silence is the
 # whole point (a line that prints every session becomes wallpaper), which is exactly
 # why it needs the twin: silence is also what a completely broken surface produces.
-printf 'F  the session surface\n'
-mk_drawer
-repo="$D/alpha"; mkdir -p "$repo"; git -C "$repo" init -q 2>/dev/null
-OUT="$(cd "$repo" && OPEN_ITEMS_DIR="$W" "$TOOL" --session 2>&1)"; RC=$?
+printf 'E  the session surface\n'
+mk_fixture
+run_in "$ALPHA" --session
 wanteq "--session exits 0 when there IS open work" "0" "$RC"
 want   "--session names the open item"  "the live one" "$OUT"
 wantnot "--session hides the done item" "the finished one" "$OUT"
-# TWIN: close everything and it must go completely silent, still at exit 0.
-sed -i '' 's/^status: open$/status: done/' "$W/alpha/OPEN.md" 2>/dev/null \
-  || sed -i 's/^status: open$/status: done/' "$W/alpha/OPEN.md" 2>/dev/null
-OUT="$(cd "$repo" && OPEN_ITEMS_DIR="$W" "$TOOL" --session 2>&1)"; RC=$?
+sed -i '' 's/^status: open$/status: done/' "$AW/OPEN.md" 2>/dev/null \
+  || sed -i 's/^status: open$/status: done/' "$AW/OPEN.md" 2>/dev/null
+run_in "$ALPHA" --session
 wanteq "TWIN with nothing open it is silent, and still exits 0" "0" "$RC"
 wanteq "TWIN and prints literally nothing" "" "$OUT"
-# A MISSING DRAWER MUST ALSO BE SILENT AND EXIT 0 HERE, unlike every other arm. A
-# session start must never be blocked or noisied; `open-items` proper is where a
-# missing drawer REFUSES loudly.
-OUT="$(cd "$repo" && OPEN_ITEMS_DIR="$ROOT/nope" "$TOOL" --session 2>&1)"; RC=$?
-wanteq "a missing drawer does not break a session start (rc=0)" "0" "$RC"
+# A MISSING ROOT MUST ALSO BE SILENT AND EXIT 0 HERE, unlike every other arm.
+OUT="$(cd "$ALPHA" && OPEN_ITEMS_PROJECTS_DIR="$ROOT/nope" "$TOOL" --session 2>&1)"; RC=$?
+wanteq "a missing projects root does not break a session start (rc=0)" "0" "$RC"
 wanteq "and says nothing there either" "" "$OUT"
 
 printf '\n%s passed, %s failed   (fixtures: %s)\n' "$PASS" "$FAIL" "$ROOT"

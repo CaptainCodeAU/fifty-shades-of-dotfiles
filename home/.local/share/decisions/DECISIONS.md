@@ -151,6 +151,12 @@ RULED OUT EXPLICITLY, so it is not revisited: items living in the project repo a
 `.claude/OPEN.md`. fifty-shades-of-dotfiles is PUBLIC, and private open items must never sit
 in a repo that can be pushed publicly. Version control is not worth that trade.
 
+AMENDED 2026-09-19, executing D-20260919-03 step 1. The "machine-wide index derived by
+script" is `open-items --all`, computed live on every call. The derived `INDEX.md` FILE
+is dropped: census over the repo, user settings, hooks and OPERATIONAL_RULES.md found no
+reader but the tool that wrote it, and a file regenerated only by hand is exactly the stale
+surface D-20260919-01 retired. Same ruling, one fewer thing that can lie.
+
 ## D-20260917-09 -- The SSH key stays, keychain-backed, scoped to one Host block
 
 topic: ssh key passphrase keychain AddKeysToAgent UseKeychain claude launch agent expiry branch liveness ci-watch unattended
@@ -394,7 +400,10 @@ decided: 2026-09-19
 status: standing
 holds-in: fifty-shades-of-dotfiles/docs/PROJECT_LIFEOS_BOUNDARY.md section D3
 
-After D-20260919-03 lands and a hash comparison shows nothing unique remains: delete
+After D-20260919-03 lands and a hash comparison shows nothing unique remains (AMENDED
+2026-09-19 before execution: measured, 3 of the SCOPES copy's 9 content hashes are unique,
+all older snapshots of live files; the gate is "every hash is shared OR classified
+superseded", never a bare zero): delete
 `SCOPES/dotfiles/` and the dotfiles folders under `MEMORY/WORK/` in lifeos-private.
 Keep the LEARNING incidents, the UPGRADES records and the one citation in
 `OPERATIONAL_RULES.md`; those are LifeOS's own lessons, and deleting evidence to tidy a
