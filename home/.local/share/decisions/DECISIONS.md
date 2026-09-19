@@ -420,3 +420,40 @@ Measured 2026-09-19: the file is global doctrine with one citation of this repo.
 copy would be a second source of the same rules, which drifts. Accepted cost: `pj` depends
 on lifeos-private existing at that path, and LifeOS-only sections cost tokens in `pj`.
 Reversible later without touching D-20260919-02 to -04.
+
+## D-20260919-07 -- CLAUDE_MEMORY_STORES stays off; keep MEMORY.md thin by hand
+
+topic: memory index cap MEMORY.md 24.4KB 25000 bytes 200 lines CLAUDE_MEMORY_STORES promptIndexMaxBytes memory stores sync watcher binary patch codesign compact prune
+decided: 2026-09-19
+status: standing
+holds-in: fifty-shades-of-dotfiles/docs/MEMORY_INDEX_CAP.md
+
+Re-measured against binary 2.1.278 on 2026-09-19 (parked since 2026-06-23 against
+2.1.186; every stable string survived, negative control clean). The variable does raise
+a store index's cap and drops the line cap -- and the same code path starts a sync
+subsystem (`personal_memory_sync_watcher_start`, `memory_store_pull_ms`, "backend
+sweep", `/v1/code/local/memory/mounts`) and silently disables org memory. Whether a
+purely local scope:"user" store reaches that backend is NOT established by reading
+strings, and guessing wrong sends personal memory off the machine. It would also be a
+migration rather than a config change, since promptIndexMaxBytes is store-scoped and
+the per-project MEMORY.md stays capped either way. Binary patching is rejected
+separately: resets every update, needs re-signing, breaks silently on a rename.
+
+Two corrections the doc carries: individual topic files now DO have a recall surface
+limit, so "push detail into topic files" needs a size check; and compaction shortens
+hooks rather than dropping entries, because several entries exist only to stop a past
+rejection being re-proposed.
+
+Revisit only when the index hits 100% of a cap, or Anthropic documents local-store sync.
+
+## D-20260919-06 -- pnpm 12 is live; globalShims off; floor 12.3.2
+
+topic: pnpm 12 major upgrade globalShims nvm node shim PNPM_MIN_VERSION floor 12.3.2 12.3.0 trap pnpm_update deferral lifted
+decided: 2026-09-19
+status: standing
+holds-in: fifty-shades-of-dotfiles/docs/PNPM_SETUP_GUIDE.md section 7
+
+Supersedes the 2026-09-04 deferral (11.25.0 by choice). Gavin took 12.4.1 by hand via
+`pnpm_update`. `globalShims: false` is set in the stowed config so nvm keeps `node`; the
+SSH url rewrites were already in place. Floor is 12.3.2 in install.sh and .zsh_onboarding
+(12.3.0 breaks global node/npm/yarn; 12.3.2 fixes the npm wrapper). Never land on 12.3.0.
