@@ -1081,7 +1081,7 @@ alias ct='__claude_launch CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 claude "${_LIFE
 # Claude Code + OPERATIONAL_RULES + the project's own CLAUDE.md and notes. No LifeOS prompt,
 # no global CLAUDE.md, no global hooks/skills. Settings live in ~/.claude/settings.project.json.
 # herdr and AgentRelay are loaded as single-skill plugins. Remove this block to end the trial.
-alias pj='__claude_launch claude --setting-sources project,local --settings ~/.claude/settings.project.json --append-system-prompt-file ~/.claude/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md --plugin-dir ~/.claude/skills/herdr --plugin-dir ~/.claude/skills/AgentRelay --dangerously-skip-permissions --effort high'
+alias pj='__claude_launch claude --setting-sources project,local --settings ~/.claude/settings.project.json --append-system-prompt-file ~/.claude/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md --plugin-dir ~/.claude/skills/herdr --plugin-dir ~/.claude/skills/AgentRelay --plugin-dir ~/.claude/skills/ISA --plugin-dir ~/.claude/pj-voice --dangerously-skip-permissions --effort high'
 
 # Clean-room Claude for measuring front-loaded context (CLAUDE.md, memory,
 # skills, MCP) one piece at a time. Measured 2026-09-06 (Claude Code 2.1.263):
