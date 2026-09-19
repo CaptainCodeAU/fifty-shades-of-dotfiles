@@ -30,6 +30,7 @@ THE FALSE ALL-CLEAR (the failure mode neither tool may ever have)
 ZERO DEPENDENCIES -- pure stdlib (urllib, sqlite3, subprocess).
 """
 
+import http.client
 import json
 import os
 import re
@@ -168,6 +169,103 @@ def _unbounded(match: dict) -> bool:
     return len(parts) > 5 and parts[5] == "*"
 
 
+_PLAIN_VERSION = re.compile(r"^[0-9]+(?:\.[0-9]+)*$")
+
+
+def _vtuple(v: str):
+    """A comparable tuple for a plain dotted-numeric version, else None.
+
+    DELIBERATELY NARROW. Anything carrying a suffix -- 10.48-rc1, 1.2.3a,
+    2.0beta -- returns None, and every caller reads None as "cannot decide" and
+    KEEPS the finding. A comparator that guesses at an exotic version string errs
+    towards SILENCE, and a silenced CVE is the one failure this file exists to
+    prevent."""
+    if not v or not _PLAIN_VERSION.match(v):
+        return None
+    return tuple(int(p) for p in v.split("."))
+
+
+def _vcmp(a: tuple, b: tuple) -> int:
+    """-1 / 0 / 1, padding the shorter tuple with zeros so 1.2 == 1.2.0."""
+    n = max(len(a), len(b))
+    a += (0,) * (n - len(a))
+    b += (0,) * (n - len(b))
+    return (a > b) - (a < b)
+
+
+_BOUNDS = (
+    ("versionStartIncluding", lambda c: c >= 0),
+    ("versionStartExcluding", lambda c: c > 0),
+    ("versionEndIncluding", lambda c: c <= 0),
+    ("versionEndExcluding", lambda c: c < 0),
+)
+
+
+def covers(match: dict, version: str) -> bool:
+    """True when this NVD cpeMatch actually applies to `version`.
+
+    THE BUG THIS EXISTS FOR, measured 2026-09-19. NVD bounded the six pcre2 CVEs
+    at `versionEndExcluding 10.48`, correctly EXCLUDING the installed 10.48, and
+    carried a SECOND entry pinned at `10.48:rc1` -- the release candidate. Our
+    query sends `*` in the update field, `*` matches `rc1`, so NVD returned all
+    six CVEs for a machine running the FIXED release. Nothing downstream checked
+    the version, so the banner reported 6 CVEs and one CVSS 7.4 as ACTION NEEDED
+    against a package that was already patched.
+
+    THE CONTROL THAT NAMES IT: the same cpeName query returns the same six CVEs
+    for 10.47, which IS vulnerable, and for 10.48, which is the fix. A property
+    true in both worlds cannot decide between them, so the query alone was never
+    evidence and this function is the arm that separates them.
+
+    FAILS TOWARDS THE FINDING, ALWAYS. Malformed criteria, an unparseable
+    version, an exotic bound -- every undecidable path returns True and the CVE
+    stays visible. Erring the other way would hide a live CVE to spare a false
+    positive, which is the wrong trade in a security scanner."""
+    parts = (match.get("criteria") or "").split(":")
+    if len(parts) < 7:
+        return True                      # malformed CPE; cannot decide, keep it
+    crit_version, crit_update = parts[5], parts[6]
+
+    if crit_version != "*":
+        # A PINNED CPE applies to exactly that version. Both sides go through
+        # _vtuple so this branch obeys the same fail-towards-the-finding contract
+        # as the range branch below.
+        #
+        # REVIEW CAUGHT THIS ON 2026-09-19, and it was the first draft of this
+        # very function silently breaking its own docstring. A raw
+        # `crit_version == version` string compare answered False -- CVE DROPPED
+        # -- for `10.48.0` against `10.48`, for `10.48` against `10.48.0`, for a
+        # criteria version of `-` (NVD's "not applicable"), and for an escaped
+        # CPE version like `1.0.2\.a`. Every one of those is UNDECIDABLE being
+        # resolved as "not vulnerable", which is the exact direction this file
+        # exists to prevent, wearing the clothes of the fix for it.
+        have = _vtuple(version)
+        pinned = _vtuple(crit_version)
+        if have is None or pinned is None:
+            return True                  # cannot compare, keep it
+        if _vcmp(pinned, have) != 0:
+            return False                 # a genuinely different version
+        # Same numeric version, so only the update field can still separate them:
+        # `10.48:rc1` is a different release from `10.48`, and conflating the two
+        # is precisely the pcre2 bug this function was written for.
+        return crit_update in ("*", "-")
+
+    have = _vtuple(version)
+    if have is None:
+        return True                      # cannot compare, keep it
+
+    for key, in_range in _BOUNDS:
+        bound = match.get(key)
+        if not bound:
+            continue
+        limit = _vtuple(bound)
+        if limit is None:
+            return True                  # cannot compare, keep it
+        if not in_range(_vcmp(have, limit)):
+            return False
+    return True
+
+
 class NvdClient:
     """Throttled NVD reader.
 
@@ -198,7 +296,20 @@ class NvdClient:
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as r:
                 raw = r.read().decode("utf-8")
-        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError):
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError,
+                OSError, http.client.HTTPException, UnicodeDecodeError):
+            # TWO WAYS THE SAME TRUNCATED RESPONSE KILLS A SCAN, and the first
+            # fix here only caught one of them.
+            #   1. http.client.IncompleteRead is an HTTPException, NOT an
+            #      OSError, so read() slipped past this handler entirely. Hit for
+            #      real on 2026-09-19 at 13668 of 15375 bytes.
+            #   2. decode("utf-8") on a body cut mid-sequence raises
+            #      UnicodeDecodeError, a ValueError -- neither OSError nor
+            #      HTTPException. NVD descriptions carry non-ASCII, so this is a
+            #      live path, and review caught it the same evening.
+            # A security scan that dies partway reports FEWER findings than it
+            # should, which is the quiet direction, and the class docstring two
+            # screens up promises None on any doubt.
             self._last = time.monotonic()
             self.requests += 1
             self.failures += 1
@@ -278,7 +389,9 @@ class NvdClient:
                           for c in (cve.get("configurations") or [])
                           for n in (c.get("nodes") or [])
                           for m in (n.get("cpeMatch") or [])
-                          if marker in (m.get("criteria") or "") and m.get("vulnerable")]
+                          if marker in (m.get("criteria") or "")
+                          and m.get("vulnerable")
+                          and covers(m, version)]
             if not applicable:
                 continue
             desc = next((d.get("value", "") for d in cve.get("descriptions", [])
@@ -785,6 +898,23 @@ def unclaimed_patches(formula, patch_commits, claimed_commits):
 # --------------------------------------------------------------------------- #
 SCHEMA_VERSION = 1
 
+# BUMP THIS WHENEVER THE MATCHING LOGIC CHANGES ITS MIND ABOUT AN UNCHANGED
+# PACKAGE. The cache key is (subject, name, version, revision) with no notion of
+# the code that produced the row, so a corrected matcher would go on serving its
+# own old mistakes until the staleness window expired -- for up to a week, on
+# exactly the finding the correction was written for.
+#
+# Measured 2026-09-19: covers() turned pcre2 10.48 from 6 CVEs (one CVSS 7.4,
+# ACTION NEEDED at every session start) into 0, and nothing about pcre2's name,
+# version or revision changed, so without this the banner would have kept crying
+# wolf after the bug was fixed. SCHEMA_VERSION is the wrong lever for that: a
+# bump there WIPES the acks table, and an accepted risk is a human decision this
+# has no business discarding.
+#
+#   1 = pre-2026-09-19, no version check on an NVD cpeMatch
+#   2 = covers() applies version bounds and the CPE update field
+MATCHER_VERSION = 2
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
@@ -851,7 +981,8 @@ class ScanStore:
                 conn.execute("INSERT INTO meta(key,value) VALUES('schema_version',?)",
                              (str(SCHEMA_VERSION),))
                 conn.commit()
-            elif int(row["value"]) != SCHEMA_VERSION:
+            self._invalidate_stale_logic(conn)
+            if row is not None and int(row["value"]) != SCHEMA_VERSION:
                 # Schema moved on. Rebuild rather than guess at a migration: the
                 # data is a cache of a re-derivable fact, and a shell that cannot
                 # start because of a stale database is a far worse outcome.
@@ -867,6 +998,28 @@ class ScanStore:
             conn.executescript(_SCHEMA)
             self.path = ":memory:"
             return conn
+
+    @staticmethod
+    def _invalidate_stale_logic(conn):
+        """Drop cached VERDICTS when the matching logic has moved on, keeping acks.
+
+        Rows are a cache of a derived fact. When the deriving code changes its
+        answer for an unchanged package, every row it produced is stale no matter
+        how recently it was written -- and `scanned_at` cannot see that, because
+        the row is young and wrong. See MATCHER_VERSION for the measurement."""
+        try:
+            cur = conn.execute("SELECT value FROM meta WHERE key='matcher_version'")
+            row = cur.fetchone()
+            if row is not None and int(row["value"]) == MATCHER_VERSION:
+                return
+            conn.execute("DELETE FROM scanned")
+            conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('matcher_version',?)",
+                         (str(MATCHER_VERSION),))
+            conn.commit()
+        except (sqlite3.DatabaseError, ValueError, TypeError):
+            # Never fatal. A cache that cannot be invalidated is a slow scan, not
+            # a broken shell, and the next --full run clears it anyway.
+            pass
 
     def known(self, subject, name, version, revision, max_age=None):
         """The cached row, or None if there is none -- or it is older than `max_age`.

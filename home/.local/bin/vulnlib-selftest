@@ -418,6 +418,186 @@ else:
         check("bash reports many patches, not the single block the parser found",
               len(bash) > 1, True)
 
+section("covers(): mentioning your version is not covering it")
+
+# THE FIXTURE IS REAL. Both dicts below are copied verbatim out of the live NVD
+# response for `cpeName=cpe:2.3:a:pcre:pcre2:10.48:*:*:*:*:*:*:*`, fetched
+# 2026-09-19 (15375 bytes, totalResults 6). Nothing here is invented, because an
+# invented cpeMatch would only test that this file agrees with itself.
+#
+# WHAT WENT WRONG. cves_for() had ZERO controls in this suite, and the bug lived
+# in the gap. NVD bounds all six pcre2 CVEs at `versionEndExcluding 10.48`, which
+# correctly EXCLUDES the installed 10.48, then carries a SECOND entry pinned at
+# `10.48:rc1`. The query sends `*` in the update field and `*` matches `rc1`, so
+# a machine on the FIXED release was told it had 6 CVEs, one of them CVSS 7.4,
+# at every single session start.
+#
+# THE CONTROL THAT NAMES IT is the 10.47 row: NVD returns the SAME SIX for 10.47,
+# which really is vulnerable, and for 10.48, which is the fix. A property true in
+# both worlds decides nothing, so these arms must always be run as a pair.
+RANGE = {"criteria": "cpe:2.3:a:pcre:pcre2:*:*:*:*:*:*:*:*",
+         "vulnerable": True, "versionEndExcluding": "10.48"}
+RC1 = {"criteria": "cpe:2.3:a:pcre:pcre2:10.48:rc1:*:*:*:*:*:*", "vulnerable": True}
+
+check("the fixed release is NOT covered by endExcluding itself",
+      V.covers(RANGE, "10.48"), False)
+check("the vulnerable release IS still covered (the arm that must not go quiet)",
+      V.covers(RANGE, "10.47"), True)
+check("a release candidate CPE does not cover the final release",
+      V.covers(RC1, "10.48"), False)
+check("a pinned CPE covers its own exact version",
+      V.covers({"criteria": "cpe:2.3:a:pcre:pcre2:10.48:*:*:*:*:*:*:*",
+                "vulnerable": True}, "10.48"), True)
+check("a pinned CPE does not cover a different version",
+      V.covers({"criteria": "cpe:2.3:a:pcre:pcre2:10.48:*:*:*:*:*:*:*",
+                "vulnerable": True}, "10.47"), False)
+check("an unbounded all-versions CPE still covers everything",
+      V.covers({"criteria": "cpe:2.3:a:pcre:pcre2:*:*:*:*:*:*:*:*",
+                "vulnerable": True}, "10.48"), True)
+
+# EVERY UNDECIDABLE PATH MUST KEEP THE FINDING. These three are the reason this
+# function is safe to add at all: a comparator that guessed would hide live CVEs
+# to spare a false positive, which is the wrong trade in a security scanner.
+check("an unparseable BOUND keeps the finding",
+      V.covers({"criteria": "cpe:2.3:a:pcre:pcre2:*:*:*:*:*:*:*:*", "vulnerable": True,
+                "versionEndExcluding": "10.48-beta2"}, "10.48"), True)
+check("malformed criteria keeps the finding",
+      V.covers({"criteria": "garbage", "vulnerable": True}, "10.48"), True)
+check("an unparseable INSTALLED version keeps the finding",
+      V.covers(RANGE, "10.48rc1"), True)
+
+# Bounds arithmetic, both directions, so an off-by-one cannot pass unnoticed.
+check("versionEndIncluding INCLUDES its own bound",
+      V.covers({"criteria": "cpe:2.3:a:pcre:pcre2:*:*:*:*:*:*:*:*", "vulnerable": True,
+                "versionEndIncluding": "10.48"}, "10.48"), True)
+check("versionStartIncluding excludes everything below it",
+      V.covers({"criteria": "cpe:2.3:a:pcre:pcre2:*:*:*:*:*:*:*:*", "vulnerable": True,
+                "versionStartIncluding": "10.40"}, "10.39"), False)
+check("a short version is padded, not mis-ranked (10.5 < 10.48)",
+      V.covers({"criteria": "cpe:2.3:a:pcre:pcre2:*:*:*:*:*:*:*:*", "vulnerable": True,
+                "versionEndExcluding": "10.48"}, "10.5"), True)
+
+
+# THE PINNED BRANCH, every case review measured as wrongly silenced on
+# 2026-09-19. A raw string compare answered False -- CVE DROPPED -- for all four,
+# and every one of them is an UNDECIDABLE comparison, not a decided one. They
+# live here so the fix cannot quietly come undone.
+def _crit(ver, upd="*"):
+    return {"criteria": "cpe:2.3:a:pcre:pcre2:%s:%s:*:*:*:*:*:*" % (ver, upd),
+            "vulnerable": True}
+
+
+check("a trailing .0 in the CPE is padded, not treated as a mismatch",
+      V.covers(_crit("10.48.0"), "10.48"), True)
+check("a trailing .0 in the INSTALLED version is padded too",
+      V.covers(_crit("10.48"), "10.48.0"), True)
+check("NVD's '-' version means not-applicable, so the finding is kept",
+      V.covers(_crit("-"), "10.48"), True)
+check("an escaped CPE version is undecidable, so the finding is kept",
+      V.covers(_crit("1.0.2\\.a"), "1.0.2.a"), True)
+check("...and the rc1 case still does NOT cover the final release",
+      V.covers(_crit("10.48", "rc1"), "10.48"), False)
+
+
+section("the cache must not outlive the logic that filled it")
+
+# A CORRECTED MATCHER THAT CANNOT REACH ITS OWN OLD MISTAKES HAS NOT FIXED THEM.
+# The cache key is (subject, name, version, revision) with no notion of the code
+# that produced the row, so nothing about pcre2 changed when covers() landed and
+# the six false CVEs would have kept being served for up to a full staleness
+# window -- on exactly the finding the fix was written for. Review caught this on
+# 2026-09-19. MATCHER_VERSION is the lever; SCHEMA_VERSION is not, because a bump
+# there wipes the acks table and an accepted risk is a human decision.
+import tempfile as _tempfile
+
+_dbpath = os.path.join(_tempfile.mkdtemp(prefix="vulnlib-selftest-"), "t.db")
+_s = V.ScanStore(_dbpath)
+_s.record("brew", "pcre2", "10.48", 0, "cpe:x", "EXPOSED", 7.4, [{"id": "CVE-2026-89161"}])
+_s.conn.execute("INSERT OR REPLACE INTO meta(key,value) VALUES('matcher_version','1')")
+_s.commit()
+_s.close()
+
+_s = V.ScanStore(_dbpath)            # reopened under the CURRENT MATCHER_VERSION
+check("a row written by an older matcher is dropped on open",
+      _s.known("brew", "pcre2", "10.48", 0), None)
+check("the stored matcher version is stamped forward",
+      _s.conn.execute("SELECT value FROM meta WHERE key='matcher_version'"
+                      ).fetchone()["value"], str(V.MATCHER_VERSION))
+
+# THE CONTROL. Without this, "the row is gone" would pass just as well if the
+# code wiped the table on EVERY open, which would silently disable the cache.
+_s.record("brew", "jq", "1.8.2", 0, "cpe:y", "EXPOSED", 6.9, [{"id": "CVE-X"}])
+_s.commit()
+_s.close()
+_s = V.ScanStore(_dbpath)
+check("CONTROL: an UNCHANGED matcher keeps its rows (the cache still works)",
+      _s.known("brew", "jq", "1.8.2", 0) is not None, True)
+_s.close()
+
+
+section("cves_for(): the wiring, not just the decision")
+
+# THE TWELVE ARMS ABOVE PROVE covers() DECIDES CORRECTLY. None of them proves it
+# is CONNECTED. Delete `and covers(m, version)` from the comprehension in
+# cves_for and every one of them still passes -- and that comprehension is
+# exactly where the bug lived, so a suite that cannot see it has not closed the
+# gap it was written to close. Review caught this on 2026-09-19, in the first
+# draft of the section above.
+#
+# REAL DATA, DEDUPLICATED. All six pcre2 CVEs in the live 15375-byte response
+# carry the IDENTICAL pair of cpeMatch entries, verified against it on
+# 2026-09-19, so the pair is written once and reused rather than pasted six
+# times. The ids and the criteria strings are verbatim.
+PCRE2_IDS = ["CVE-2026-89156", "CVE-2026-89157", "CVE-2026-89158",
+             "CVE-2026-89160", "CVE-2026-89161", "CVE-2026-89162"]
+PCRE2_MATCHES = [
+    {"criteria": "cpe:2.3:a:pcre:pcre2:*:*:*:*:*:*:*:*",
+     "vulnerable": True, "versionEndExcluding": "10.48"},
+    {"criteria": "cpe:2.3:a:pcre:pcre2:10.48:rc1:*:*:*:*:*:*",
+     "vulnerable": True},
+]
+
+
+def _pcre2_payload():
+    return {"totalResults": len(PCRE2_IDS), "vulnerabilities": [
+        {"cve": {"id": cid,
+                 "descriptions": [{"lang": "en",
+                                   "value": "PCRE2 before 10.48 has an issue."}],
+                 "metrics": {},
+                 "configurations": [{"nodes": [{"cpeMatch": PCRE2_MATCHES}]}]}}
+        for cid in PCRE2_IDS]}
+
+
+class _FixtureClient(V.NvdClient):
+    """The REAL cves_for(), with only the socket replaced. Never sleeps, never
+    reaches the network, and exercises every line between the payload and the
+    returned hits."""
+
+    def __init__(self):
+        super().__init__(None, timeout=1.0)
+        self.delay = 0.0
+
+    def _get(self, url, params):
+        return _pcre2_payload()
+
+
+_fc = _FixtureClient()
+_fixed = _fc.cves_for("pcre", "pcre2", "10.48")
+_vuln = _fc.cves_for("pcre", "pcre2", "10.47")
+check("cves_for returns a result at all for the fixed release",
+      _fixed is not None, True)
+check("cves_for returns a result at all for the vulnerable release",
+      _vuln is not None, True)
+if _fixed is not None and _vuln is not None:
+    # THE PAIR IS THE POINT. Before the fix BOTH arms returned six, so six alone
+    # was never evidence of anything. Run together, they separate the two worlds.
+    check("cves_for: the FIXED release reports no CVEs", len(_fixed[0]), 0)
+    check("cves_for: the VULNERABLE release still reports all six",
+          sorted(h["id"] for h in _vuln[0]), PCRE2_IDS)
+    check("cves_for: an unparseable installed version keeps every finding",
+          len(_fc.cves_for("pcre", "pcre2", "10.48rc1")[0]), 6)
+
+
 print("\n%s%s%s  %d passed, %d failed, %d skipped"
       % (RED if FAILURES else GREEN, "FAIL" if FAILURES else "OK  ", OFF,
          PASS, len(FAILURES), SKIP))
