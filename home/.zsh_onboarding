@@ -42,7 +42,7 @@ fi
 # named-registry lockfile substitution fix + rebuild path-traversal fix (11.20.0,
 # namedRegistries unused here). Verified real binary at every version in range.
 # Skip 11.12.0/11.13.0 (binary-less).
-export PNPM_MIN_VERSION="${PNPM_MIN_VERSION:-11.21.0}"
+export PNPM_MIN_VERSION="${PNPM_MIN_VERSION:-12.3.2}"
 # How often to re-check the npm registry for the latest pnpm release.
 export PNPM_CHECK_TTL_DAYS="${PNPM_CHECK_TTL_DAYS:-7}"
 

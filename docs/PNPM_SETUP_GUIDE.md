@@ -663,3 +663,47 @@ Keys NOT to put here (will be rejected or silently ignored by pnpm 11):
 - `managePackageManagerVersions` — rejected from global config; use per-project `pnpm-workspace.yaml`.
 - Anything in kebab-case — silently ignored; use camelCase.
 - `registry`, auth tokens, `_auth`, `//` — those go in `rc` (INI), not here.
+
+## 7. pnpm 12 on this box (2026-09-19, ruling D-20260919-06)
+
+The v12 jump was deliberately deferred on 2026-09-04 (11.25.0 taken, major skipped) until
+two prerequisites were met. On 2026-09-19 Gavin took **12.4.1** by hand with `pnpm_update`,
+and the records were brought in line afterwards. State as measured that evening:
+
+| Prerequisite                                     | State                                                                                     |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------- |
+| `globalShims: false` (nvm owns `node`)           | Was UNSET (default on). Now set in `home/.config/pnpm/config.yaml`; pnpm reports `false`. |
+| HTTPS -> SSH url rewrites (SSH-only box)         | Already present: four per-organisation `url.<alias>.insteadOf` entries in git config.     |
+| No unknown keys in project `pnpm-workspace.yaml` | Not re-audited. A project pinning a pnpm version fails loudly on one, so it self-reports. |
+
+**Floor: `12.3.2`**, in `install.sh` and `home/.zsh_onboarding`, and they must agree. It is the
+lowest SANE v12, not the lowest v12:
+
+- `12.3.0` breaks global `node`/`npm`/`yarn` after self-update (`unexpected argument '--shim'`); `12.3.1` fixes it. Never land on 12.3.0.
+- `12.3.2` fixed the npm wrapper so a v11 install can reach v12 through the version store.
+
+**Why `globalShims: false` rather than testing the interaction.** Inside any project that pins
+a runtime via `devEngines.runtime` or `engines.runtime`, the default makes `node` run pnpm's
+own downloaded Node instead of nvm's. Three class projects under `~/CODE` pin engines today.
+Two systems answering one command name is the failure class this repo keeps meeting
+(shell function vs PATH shim, `gh` wrapper vs binary); one owner per name, and nvm was here
+first. A project that wants pnpm-managed Node opts in per-project.
+
+**The comments in `config.yaml` that say "pnpm 11 default" are kept as history.** Measured
+under 12.4.1 with `pnpm config get` on all 11 keys: 10 read back their configured value and
+`pnpm --version` prints no warning. **One does not: `blockExoticSubdeps` reads `undefined`
+and is absent from `pnpm config list`** (control: `trustPolicy` present). Resolved the same
+evening from the docs, not from a probe: the setting was added in v10.26.0 and its DEFAULT is
+`true` in v12 (pnpm.io/settings/dependency-resolution), so the guard is in force whether or
+not the explicit pin is honoured, and the `undefined` is a read-back gap in `pnpm config get`,
+not a removed key. There is no per-package exception (pnpm discussions #10413); the workarounds
+are `overrides` or a pnpmfile. Strength: "in force by default per docs". Nobody has run an
+install with an exotic subdep against 12.4.1 on this box; do that if it ever matters.
+
+**12.x after the upgrade (researched 2026-09-19).** `12.4.2` (Sep 15) is a SECURITY patch:
+dependency executables could take over another package's POSIX bin shim through its shell
+helpers, and GitHub Actions links could leak server credentials. No CVE id was published.
+Reinstalling dependencies replaces the vulnerable shims. It clears the 3-day cooldown, so it
+is the next `pnpm_update` target. `12.5.0`/`12.5.1` (Sep 18) add a Python ecosystem,
+`supportedArchitectures` platform names, `concurrencyGroups` and a `tools` block; one day
+old and a large surface, not a target yet.

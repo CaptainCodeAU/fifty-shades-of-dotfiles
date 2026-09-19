@@ -126,3 +126,13 @@ verifyDepsBeforeRun: error
 # NOTE: pnpm 11.3+ offers `trustLockfile: true` to skip supply-chain
 # verification of lockfile entries. Intentionally NOT set -- the default
 # (false) keeps minimumReleaseAge + trustPolicy lockfile validation active.
+
+# pnpm 12: keep the `node` command with nvm. pnpm 12 added globalShims, default
+# { node: true, deno: true, bun: true }: inside a project that pins a runtime
+# (devEngines.runtime / engines.runtime), typing `node` runs pnpm's own downloaded
+# Node instead of the shell's. This box runs nvm, and the two would compete for the
+# same command name. Set explicitly to false so nvm always answers; a project that
+# really wants pnpm-managed Node can opt in per-project. Bypass one invocation with
+# PNPM_SHIM_BYPASS=1. Gavin took pnpm 12 (12.4.1) by hand on 2026-09-19 via
+# pnpm_update; this was the one prerequisite still open (D-20260919-06).
+globalShims: false

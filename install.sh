@@ -91,7 +91,14 @@ SECTION_DECISION=ask
 # here) plus a path-traversal fix in `pnpm rebuild`. Verified real ~141MB
 # macOS-arm64 binary at every version in range (no repeat of the 11.12/11.13
 # binary-less incident). SKIP 11.12.0/11.13.0 -- binary-less.
-PNPM_MIN_VERSION="11.21.0"
+# 12.3.2 (2026-09-19): Gavin took pnpm 12 by hand (12.4.1 via pnpm_update). The
+# floor is the lowest SANE v12, not the lowest v12: 12.3.0 breaks global
+# node/npm/yarn after self-update (`unexpected argument '--shim'`, fixed 12.3.1)
+# and 12.3.2 fixed the npm wrapper so v11 can install v12 through the version
+# store. Prerequisites: globalShims:false in home/.config/pnpm/config.yaml (nvm
+# owns `node`), and the HTTPS->SSH url rewrites already in git config.
+# Ruling D-20260919-06; reasoning in docs/PNPM_SETUP_GUIDE.md section 7.
+PNPM_MIN_VERSION="12.3.2"
 
 # --- nvm version policy ---
 # Minimum acceptable nvm. Two mirror-based CVEs set this floor: CVE-2026-10796
