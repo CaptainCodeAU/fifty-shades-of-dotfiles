@@ -1,0 +1,217 @@
+#!/usr/bin/env bash
+# claude-project-settings-render-selftest -- controls for the pj settings render.
+#
+# WHY THIS EXISTS
+#   This renderer writes the settings file the `pj` launcher reads, and it runs
+#   on every ./install.sh. Two of its behaviours are the kind that fail SILENTLY:
+#
+#   1. THE HOOKS MERGE. claude-hooks-sync registers ci-watch INTO the rendered
+#      file. A renderer that overwrote instead of merging would un-register the
+#      CI alarm on every install, and the symptom would be an alarm that says
+#      nothing -- which is also what a healthy alarm says. Case 9 is the whole
+#      reason this file exists, and case 10 is its control: without proving the
+#      template change actually landed, "the hook is still there" would pass just
+#      as well if no render had happened at all.
+#
+#   2. THE SUBSTITUTION. A surviving __HOME__ produces a path that does not
+#      exist, and nothing checks an env var for plausibility -- which is exactly
+#      how PROJECTS_DIR sat broken, holding the literal string
+#      ${HOME}/CODE/CaptainCodeAU, until it was measured on 2026-09-19.
+#
+# HERMETIC. Every path is redirected through the tool's env seams, so this never
+# reads or writes a real settings file and never touches the network.
+#
+# Usage: claude-project-settings-render-selftest
+
+set -uo pipefail
+export NO_COLOR=1
+
+TOOL="${CLAUDE_RENDER_TOOL:-$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/claude-project-settings-render}"
+PASS=0; FAIL=0
+ok()  { PASS=$(( PASS + 1 )); printf '  \033[32mPASS\033[0m  %s\n' "$1"; }
+bad() { FAIL=$(( FAIL + 1 )); printf '  \033[31mFAIL\033[0m  %s\n' "$1"
+        [[ -n "${2:-}" ]] && printf '        %s\n' "$2"; }
+
+WORK=""
+# stderr is discarded on purpose: a temp-dir cleanup that cannot delete (the
+# Claude sandbox refuses the trash call) is not a test result, and its error
+# would bury real ones. Nothing here READS the outcome, so nothing is hidden.
+cleanup() { [[ -n "$WORK" && -d "$WORK" ]] && command rm -rf "$WORK" 2>/dev/null; WORK=""; }
+trap cleanup EXIT
+
+FAKE_HOME="/home/selftest-user"
+
+fixture() {
+    WORK="$(mktemp -d "${TMPDIR:-/tmp}/cpsr.XXXXXX")" || WORK=""
+    if [[ -z "$WORK" || ! -d "$WORK" ]]; then
+        printf '  \033[31mABORT\033[0m  cannot create a temp dir under %s.\n' "${TMPDIR:-/tmp}" >&2
+        exit 2
+    fi
+    TPL="$WORK/template.json"
+    TGT="$WORK/settings.project.json"
+    cat > "$TPL" <<'JSON'
+{
+  "_comment": ["documentation that must never reach the rendered file"],
+  "cleanupPeriodDays": 1825,
+  "claudeMdExcludes": ["__HOME__/.claude/CLAUDE.md"],
+  "env": {
+    "LIFEOS_DIR": "__HOME__/.claude/LIFEOS",
+    "PROJECTS_DIR": "__HOME__/CODE/Somewhere",
+    "PLAIN": "no-substitution-here"
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "bash \"$HOME/.claude/statusline-command.sh\""
+  }
+}
+JSON
+}
+
+run() {
+    CLAUDE_PROJECT_SETTINGS_TEMPLATE="${TPL_OVERRIDE:-$TPL}" \
+    CLAUDE_PROJECT_SETTINGS_FILE="$TGT" \
+    CLAUDE_RENDER_HOME="$FAKE_HOME" \
+    "$TOOL" "$@" 2>&1
+}
+
+echo "claude-project-settings-render selftest"
+echo
+if [[ ! -x "$TOOL" ]]; then
+    bad "tool is executable at $TOOL" "not found or not executable"
+    echo; echo "  $PASS passed, $FAIL failed"; exit 1
+fi
+command -v jq >/dev/null 2>&1 || { echo "  jq is required." >&2; exit 2; }
+
+# --- 1. a missing target is pending, not current ----------------------------
+fixture
+out=$(run --check); rc=$?
+if (( rc == 1 )); then ok "--check on a missing target exits 1"
+else bad "--check on a missing target exits 1" "exit was $rc: $out"; fi
+if [[ ! -e "$TGT" ]]; then ok "--check writes nothing"
+else bad "--check writes nothing" "the file appeared"; fi
+
+# --- 2. --install creates it -------------------------------------------------
+out=$(run --install); rc=$?
+if (( rc == 0 )) && [[ -f "$TGT" ]]; then ok "--install creates the target"
+else bad "--install creates the target" "exit $rc: $out"; fi
+
+# --- 3. no placeholder survives ---------------------------------------------
+if ! grep -q '__HOME__' "$TGT"; then ok "no __HOME__ survives the render"
+else bad "no __HOME__ survives the render" "the substitution did not happen"; fi
+
+# --- 4. THE MEASURED BUG: an env path is absolute ---------------------------
+got=$(jq -r '.env.PROJECTS_DIR' "$TGT")
+if [[ "$got" == "$FAKE_HOME/CODE/Somewhere" ]]; then
+    ok "an env value is rendered ABSOLUTE (Claude Code does not expand \$HOME there)"
+else bad "an env value is rendered ABSOLUTE" "got $got"; fi
+
+# --- 5. ...but a COMMAND string keeps its $HOME -----------------------------
+got=$(jq -r '.statusLine.command' "$TGT")
+if [[ "$got" == *'$HOME'* ]]; then ok "a command string keeps \$HOME (a shell expands that one)"
+else bad "a command string keeps \$HOME" "got $got"; fi
+
+# --- 6. documentation keys are stripped -------------------------------------
+if [[ "$(jq 'has("_comment")' "$TGT")" == "false" ]]; then ok "_-prefixed keys are stripped"
+else bad "_-prefixed keys are stripped" "_comment reached the rendered file"; fi
+
+# --- 7. CONTROL: a value with no placeholder is untouched -------------------
+# Without this, case 3 would pass just as well if the renderer emptied every
+# string it touched.
+if [[ "$(jq -r '.env.PLAIN' "$TGT")" == "no-substitution-here" ]]; then
+    ok "CONTROL: a string with no placeholder is passed through unchanged"
+else bad "CONTROL: a string with no placeholder is passed through unchanged" \
+         "got $(jq -r '.env.PLAIN' "$TGT")"; fi
+
+# --- 8. it is now current, and a second install is a no-op ------------------
+out=$(run --check); rc=$?
+if (( rc == 0 )); then ok "--check on a rendered target exits 0"
+else bad "--check on a rendered target exits 0" "exit $rc: $out"; fi
+before=$(shasum "$TGT" | awk '{print $1}')
+nbak_before=$(find "$WORK" -name 'settings.project.json.bak.*' | wc -l | tr -d ' ')
+run --install >/dev/null
+after=$(shasum "$TGT" | awk '{print $1}')
+nbak_after=$(find "$WORK" -name 'settings.project.json.bak.*' | wc -l | tr -d ' ')
+if [[ "$before" == "$after" ]]; then ok "a second --install changes nothing"
+else bad "a second --install changes nothing" "hash moved"; fi
+if [[ "$nbak_before" == "$nbak_after" ]]; then ok "an unchanged render takes NO backup"
+else bad "an unchanged render takes NO backup" "backups went $nbak_before -> $nbak_after"; fi
+
+# --- 9. THE ARM THIS FILE EXISTS FOR: a re-render keeps registered hooks ----
+CMD='test -x "$HOME/.local/bin/ci-watch" && "$HOME/.local/bin/ci-watch" || true'
+jq --arg c "$CMD" '.hooks = {SessionStart: [{hooks: [{type: "command", command: $c, timeout: 30}]}]}' \
+   "$TGT" > "$TGT.withhooks" && command mv "$TGT.withhooks" "$TGT"
+jq '.cleanupPeriodDays = 1826' "$TPL" > "$WORK/template2.json"
+TPL_OVERRIDE="$WORK/template2.json" run --install >/dev/null
+n=$(jq '[.hooks.SessionStart[]?.hooks[]? | select((.command // "") | contains("ci-watch"))] | length' "$TGT")
+if [[ "$n" == "1" ]]; then ok "a re-render PRESERVES a registered hook"
+else bad "a re-render PRESERVES a registered hook" "found $n copies -- the CI alarm would go silent"; fi
+
+# --- 10. CONTROL for 9: the re-render really happened -----------------------
+if [[ "$(jq '.cleanupPeriodDays' "$TGT")" == "1826" ]]; then
+    ok "CONTROL: the template change landed, so case 9 measured a real re-render"
+else bad "CONTROL: the template change landed" \
+         "cleanupPeriodDays is $(jq '.cleanupPeriodDays' "$TGT") -- nothing was re-rendered, so case 9 proved nothing"; fi
+cleanup
+
+# --- 11. a template carrying hooks is refused -------------------------------
+fixture
+jq '.hooks = {SessionStart: []}' "$TPL" > "$WORK/bad-template.json"
+out=$(TPL_OVERRIDE="$WORK/bad-template.json" run --install); rc=$?
+if (( rc == 2 )); then ok "a template with a hooks key exits 2"
+else bad "a template with a hooks key exits 2" "exit $rc: $out"; fi
+if [[ ! -e "$TGT" ]]; then ok "...and writes nothing"
+else bad "...and writes nothing" "it rendered anyway"; fi
+cleanup
+
+# --- 12. a malformed EXISTING target is never overwritten -------------------
+fixture
+printf '{ this is not json' > "$TGT"
+before=$(shasum "$TGT" | awk '{print $1}')
+out=$(run --install); rc=$?
+after=$(shasum "$TGT" | awk '{print $1}')
+if (( rc == 2 )); then ok "a malformed existing target exits 2"
+else bad "a malformed existing target exits 2" "exit $rc: $out"; fi
+if [[ "$before" == "$after" ]]; then ok "...and the malformed file is left untouched"
+else bad "...and the malformed file is left untouched" "it was overwritten"; fi
+cleanup
+
+# --- 13. --dry-run writes nothing -------------------------------------------
+fixture
+out=$(run --install --dry-run); rc=$?
+if (( rc == 0 )) && [[ ! -e "$TGT" ]]; then ok "--dry-run writes nothing"
+else bad "--dry-run writes nothing" "exit $rc, file exists: $([[ -e $TGT ]] && echo yes || echo no)"; fi
+cleanup
+
+# --- 14. AN EMPTY HOME IS REFUSED, NOT SUBSTITUTED -------------------------
+# THIS CASE FOUND A REAL BUG on 2026-09-19, which is why it is worded this way.
+# It was first written to check that a surviving __HOME__ is refused. With the
+# home empty, nothing survives: "__HOME__/CODE/x" renders as "/CODE/x", the
+# placeholder guard is satisfied, and a file full of paths to nowhere ships
+# clean. Same shape as the PROJECTS_DIR bug the renderer exists to fix -- a
+# well-formed wrong value that nothing downstream inspects.
+fixture
+out=$(CLAUDE_PROJECT_SETTINGS_TEMPLATE="$TPL" CLAUDE_PROJECT_SETTINGS_FILE="$TGT" \
+      CLAUDE_RENDER_HOME="" "$TOOL" --install 2>&1); rc=$?
+if (( rc == 2 )); then ok "an EMPTY home is refused (it would substitute cleanly and be wrong)"
+else bad "an EMPTY home is refused" "exit $rc: $out"; fi
+if [[ ! -e "$TGT" ]]; then ok "...and nothing is written"
+else bad "...and nothing is written" "it rendered paths rooted at /"; fi
+
+# --- 15. a RELATIVE home is refused too -------------------------------------
+out=$(CLAUDE_PROJECT_SETTINGS_TEMPLATE="$TPL" CLAUDE_PROJECT_SETTINGS_FILE="$TGT" \
+      CLAUDE_RENDER_HOME="relative/path" "$TOOL" --install 2>&1); rc=$?
+if (( rc == 2 )); then ok "a RELATIVE home is refused"
+else bad "a RELATIVE home is refused" "exit $rc: $out"; fi
+
+# --- 16. CONTROL: the same fixture DOES render with a good home -------------
+# Without this, cases 14 and 15 would pass just as well if the tool were broken
+# and refused everything.
+out=$(run --install); rc=$?
+if (( rc == 0 )) && [[ -f "$TGT" ]]; then
+    ok "CONTROL: the same template renders fine with an absolute home"
+else bad "CONTROL: the same template renders fine with an absolute home" "exit $rc: $out"; fi
+cleanup
+
+echo
+echo "  $PASS passed, $FAIL failed"
+(( FAIL == 0 ))

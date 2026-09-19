@@ -1,0 +1,225 @@
+#!/usr/bin/env bash
+# claude-project-settings-render -- render ~/.claude/settings.project.json from
+# the repo's template, without ever dropping the hooks registered into it.
+#
+# WHAT PROBLEM THIS SOLVES
+#   `pj` (home/.zshrc) launches Claude Code with
+#   --settings ~/.claude/settings.project.json. Until 2026-09-19 that file was
+#   tracked by NOTHING: not this repo, not a stow symlink, not dot-claude. It
+#   existed in one place, on one machine, backed up nowhere, and a rebuilt box
+#   would have started pj bare with no record of what it used to hold.
+#
+# WHY IT CANNOT SIMPLY BE STOWED
+#   The real file must carry ABSOLUTE paths, so a committed copy would put a
+#   username in a public repo and the pre-commit leak gate blocks that, rightly.
+#   The template carries __HOME__ instead and this renders it at install time.
+#
+# WHY ABSOLUTE PATHS AT ALL -- THE MEASUREMENT
+#   Claude Code does NOT expand ${HOME} inside settings `env` values. Measured
+#   2026-09-19 against a live session's own process environment: the file said
+#   PROJECTS_DIR=${HOME}/CODE/CaptainCodeAU and the process received that string
+#   LITERALLY. It had gone unnoticed because nothing ever checks an env var for
+#   plausibility -- a wrong value and a right one look identical until something
+#   uses it. A "$HOME" inside a COMMAND string is different: a shell expands it,
+#   so statusLine.command is deliberately left alone.
+#
+# THE HOOKS MERGE IS THE WHOLE POINT OF THE ORDERING
+#   claude-hooks-sync --target project registers ci-watch INTO this file. A
+#   renderer that simply overwrote would delete it on the next install, and the
+#   CI alarm would go quiet again -- silently, which is the exact failure the
+#   hook was added to fix. So: any existing .hooks is merged back before the
+#   write, AND install.sh runs this BEFORE the sync, never after.
+#
+# ADD-ONLY IN SPIRIT, LIKE claude-hooks-sync. It rewrites the keys the template
+# owns and preserves .hooks. It does not try to preserve anything else a human
+# added by hand, because the template is meant to be the record of what this file
+# should contain -- but it always backs up first, and it never writes when the
+# result would be byte-identical.
+#
+# Usage:
+#   claude-project-settings-render --check     report drift; write nothing
+#   claude-project-settings-render --install   render it
+#   claude-project-settings-render --install --dry-run
+#
+# Exit codes:
+#   0  --check: already current.  --install: succeeded (written, or no change).
+#   1  --check: a render is pending.  --install: a write failed.
+#   2  cannot run: no jq, no template, unreadable or malformed JSON, or the
+#      target is not writable (the Claude Bash sandbox write-denies both Claude
+#      settings files -- run this from a terminal or via ./install.sh).
+
+set -uo pipefail
+
+if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+    RD=$'\033[31m'; GR=$'\033[32m'; YL=$'\033[33m'; DM=$'\033[2m'; NC=$'\033[0m'
+else
+    RD=""; GR=""; YL=""; DM=""; NC=""
+fi
+
+MODE="check"
+DRY_RUN=false
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --check)   MODE="check";   shift ;;
+        --install) MODE="install"; shift ;;
+        --dry-run) DRY_RUN=true;   shift ;;
+        -h|--help) sed -n '2,50p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) printf '%sclaude-project-settings-render: unknown option %s%s\n' "$RD" "$1" "$NC" >&2; exit 2 ;;
+    esac
+done
+
+# --- Where things live. Every path is env-overridable so the selftest can run
+# --- the whole thing against a throwaway tree.
+_resolve_repo_template() {
+    local zr target repo
+    zr="$HOME/.zshrc"
+    [[ -L "$zr" ]] || return 1
+    target="$(readlink -f "$zr" 2>/dev/null || readlink "$zr")" || return 1
+    repo="$(dirname "$(dirname "$target")")"
+    [[ -f "$repo/settings/claude/settings.project.json.template" ]] || return 1
+    printf '%s\n' "$repo/settings/claude/settings.project.json.template"
+}
+
+TEMPLATE="${CLAUDE_PROJECT_SETTINGS_TEMPLATE:-}"
+if [[ -z "$TEMPLATE" ]]; then
+    TEMPLATE="$(_resolve_repo_template 2>/dev/null || true)"
+fi
+TARGET="${CLAUDE_PROJECT_SETTINGS_FILE:-$HOME/.claude/settings.project.json}"
+# `-` NOT `:-`, deliberately. With `:-`, an override set to the EMPTY string
+# falls back to the real $HOME, so the validation below can never see it and the
+# seam silently lies to its own test. Only an UNSET override takes the default.
+RENDER_HOME="${CLAUDE_RENDER_HOME-$HOME}"
+
+# --- Preconditions. Each is a "cannot run" (2), never a silent pass. ---------
+# AN EMPTY $HOME SUBSTITUTES CLEANLY AND PRODUCES GARBAGE. Caught by this
+# tool's own selftest on 2026-09-19: with the home empty, "__HOME__/CODE/x"
+# renders as "/CODE/x", no placeholder survives, every other check passes, and
+# the file ships paths that point nowhere. It is the PROJECTS_DIR bug again in a
+# new costume -- a value that is well-formed and wrong, which nothing downstream
+# inspects. So the home is validated BEFORE anything is rendered.
+if [[ -z "$RENDER_HOME" || "$RENDER_HOME" != /* ]]; then
+    printf '%s! claude-project-settings-render: home is %s -- must be an absolute path.%s\n' \
+           "$RD" "${RENDER_HOME:-<empty>}" "$NC" >&2
+    printf '  %sSet HOME, or CLAUDE_RENDER_HOME for a test run.%s\n' "$DM" "$NC" >&2
+    exit 2
+fi
+
+if ! command -v jq >/dev/null 2>&1; then
+    printf '%s! claude-project-settings-render: jq is not installed.%s\n' "$YL" "$NC" >&2
+    exit 2
+fi
+if [[ -z "$TEMPLATE" || ! -f "$TEMPLATE" ]]; then
+    printf '%s! claude-project-settings-render: template not found.%s\n' "$YL" "$NC" >&2
+    printf '  %sExpected <repo>/settings/claude/settings.project.json.template,%s\n' "$DM" "$NC" >&2
+    printf '  %sor set CLAUDE_PROJECT_SETTINGS_TEMPLATE.%s\n' "$DM" "$NC" >&2
+    exit 2
+fi
+if ! jq empty "$TEMPLATE" 2>/dev/null; then
+    printf '%s! claude-project-settings-render: %s is not valid JSON.%s\n' "$RD" "$TEMPLATE" "$NC" >&2
+    exit 2
+fi
+# A template that carries hooks would fight the merge below and win silently.
+if jq -e 'has("hooks")' "$TEMPLATE" >/dev/null 2>&1; then
+    printf '%s! claude-project-settings-render: the template has a "hooks" key.%s\n' "$RD" "$NC" >&2
+    printf '  %sHooks belong in settings/claude/hooks.json, registered by%s\n' "$DM" "$NC" >&2
+    printf '  %sclaude-hooks-sync --target project. Refusing to render.%s\n' "$DM" "$NC" >&2
+    exit 2
+fi
+# Refuse BEFORE touching an existing file we cannot parse: overwriting a
+# malformed settings file would turn a bad day into a lost configuration.
+if [[ -e "$TARGET" ]] && ! jq empty "$TARGET" 2>/dev/null; then
+    printf '%s! claude-project-settings-render: %s is not valid JSON -- refusing to touch it.%s\n' \
+           "$RD" "$TARGET" "$NC" >&2
+    exit 2
+fi
+
+# --- Render ------------------------------------------------------------------
+# Strip the _-prefixed documentation keys, then substitute __HOME__ everywhere.
+# The PATTERN is a literal token, so the regex side is safe; the replacement is a
+# filesystem path, which on macOS and Linux carries no backslash.
+RENDERED="$(jq --arg home "$RENDER_HOME" '
+      with_entries(select(.key | startswith("_") | not))
+    | walk(if type == "string" then gsub("__HOME__"; $home) else . end)
+  ' "$TEMPLATE" 2>/dev/null)" || RENDERED=""
+if [[ -z "$RENDERED" ]]; then
+    printf '%s! claude-project-settings-render: the render produced nothing.%s\n' "$RD" "$NC" >&2
+    exit 2
+fi
+
+# THE MERGE. Anything claude-hooks-sync registered into the live file is carried
+# forward. Without this, every install would silently un-register ci-watch.
+if [[ -e "$TARGET" ]]; then
+    MERGED="$(printf '%s' "$RENDERED" | jq -s --slurpfile old "$TARGET" '
+          .[0] + (if ($old[0] | has("hooks")) then {hooks: $old[0].hooks} else {} end)
+      ' 2>/dev/null)" || MERGED=""
+    [[ -n "$MERGED" ]] && RENDERED="$MERGED"
+fi
+
+# A leftover __HOME__ means the substitution silently failed. Never ship one.
+if printf '%s' "$RENDERED" | grep -q '__HOME__'; then
+    printf '%s! claude-project-settings-render: __HOME__ survived the render -- refusing to write.%s\n' \
+           "$RD" "$NC" >&2
+    exit 2
+fi
+
+CURRENT=""
+[[ -e "$TARGET" ]] && CURRENT="$(cat "$TARGET" 2>/dev/null)"
+
+if [[ "$CURRENT" == "$RENDERED"$'\n' || "$CURRENT" == "$RENDERED" ]]; then
+    printf '  %s+%s pj settings: already current.\n' "$GR" "$NC"
+    exit 0
+fi
+
+if [[ "$MODE" == "check" ]]; then
+    if [[ -e "$TARGET" ]]; then
+        printf '  %s!%s pj settings: %s differs from the repo template\n' "$YL" "$NC" "$TARGET"
+    else
+        printf '  %s!%s pj settings: %s does not exist yet\n' "$YL" "$NC" "$TARGET"
+    fi
+    printf '      %sFix: ./install.sh   (or: claude-project-settings-render --install)%s\n' "$DM" "$NC"
+    exit 1
+fi
+
+if [[ "$DRY_RUN" == true ]]; then
+    printf '  %s[dry-run]%s would render %s\n' "$DM" "$NC" "$TARGET"
+    exit 0
+fi
+
+mkdir -p "$(dirname "$TARGET")" 2>/dev/null
+if [[ -e "$TARGET" && ! -w "$TARGET" ]] || [[ ! -e "$TARGET" && ! -w "$(dirname "$TARGET")" ]]; then
+    printf '%s! claude-project-settings-render: %s is not writable from here.%s\n' "$YL" "$TARGET" "$NC" >&2
+    printf '  %sBoth Claude settings files are write-denied inside the Claude Bash sandbox.%s\n' "$DM" "$NC" >&2
+    printf '  %sRun this in a terminal, or via ./install.sh.%s\n' "$DM" "$NC" >&2
+    exit 2
+fi
+
+TMP="$(mktemp "${TARGET}.tmp.XXXXXX")" || {
+    printf '%s! claude-project-settings-render: could not create a temp file.%s\n' "$RD" "$NC" >&2
+    exit 1
+}
+trap '[[ -n "${TMP:-}" && -e "$TMP" ]] && command rm -f "$TMP"' EXIT
+
+printf '%s\n' "$RENDERED" > "$TMP" || { printf '%s! write failed.%s\n' "$RD" "$NC" >&2; exit 1; }
+jq empty "$TMP" 2>/dev/null || { printf '%s! the rendered file is not valid JSON -- not installing it.%s\n' "$RD" "$NC" >&2; exit 1; }
+
+BACKUP=""
+if [[ -e "$TARGET" ]]; then
+    BACKUP="${TARGET}.bak.$(date +%Y%m%d_%H%M%S)"
+    cp "$TARGET" "$BACKUP" || {
+        printf '%s! could not write a backup -- refusing to change %s%s\n' "$RD" "$TARGET" "$NC" >&2
+        exit 1
+    }
+fi
+if ! command mv "$TMP" "$TARGET"; then
+    printf '%s! the write failed. Your settings are intact%s\n' "$RD" "$NC" >&2
+    [[ -n "$BACKUP" ]] && printf '  %sbackup at %s%s\n' "$DM" "$BACKUP" "$NC" >&2
+    exit 1
+fi
+TMP=""
+
+if [[ -n "$BACKUP" ]]; then
+    printf '  %s+%s pj settings rendered. Backup: %s%s%s\n' "$GR" "$NC" "$DM" "$BACKUP" "$NC"
+else
+    printf '  %s+%s pj settings created at %s\n' "$GR" "$NC" "$TARGET"
+fi
+exit 0

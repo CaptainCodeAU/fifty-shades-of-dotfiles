@@ -1718,6 +1718,9 @@ check_prerequisites() {
     # A hook script that IS linked but is not registered in settings.json is just
     # as undeployed as one that was never linked -- it does nothing either way.
     # Same reporting path, for the same reason. Read-only; writes nothing.
+    # The pj settings file is in the same class: present but out of date with the
+    # repo is as undeployed as absent, and nothing else would ever say so.
+    _render_project_settings check || parity=1
     _claude_hooks_sync check || parity=1
     if (( parity )); then
         if [[ "$ACTION" == "check" ]]; then
@@ -3754,6 +3757,51 @@ show_help() {
 # NEVER FATAL. A box with no jq, or with no settings.json yet, is a box with no
 # hooks registered -- an install that is incomplete, not one that failed. The
 # tool prints its own reason in every such case; exit 2 means "could not run".
+# Render ~/.claude/settings.project.json, the settings file `pj` reads.
+#
+# WHY THIS EXISTS. Until 2026-09-19 that file was tracked by NOTHING -- not this
+# repo, not a stow symlink, not dot-claude. It held the pj launcher's whole
+# configuration in one place, on one machine, backed up nowhere. It cannot simply
+# be stowed because it must carry ABSOLUTE paths (Claude Code does not expand
+# ${HOME} in settings env values -- measured), and a committed copy of those
+# would put a username in a public repo, which the pre-commit leak gate blocks.
+#
+# ORDER IS LOAD-BEARING: THIS RUNS BEFORE _claude_hooks_sync. The sync registers
+# ci-watch INTO this file. The renderer merges any existing hooks forward, so
+# either order preserves them on a second run -- but on a FIRST run, rendering
+# after the sync would write the file before the hook was ever added, and the
+# alarm would not appear until the next install. Render, then register.
+#
+# NEVER FATAL, same contract as _claude_hooks_sync: a box with no jq or no
+# template is a box without pj settings, not a failed install.
+_render_project_settings() {
+    local mode="${1:-install}" rc=0
+    local tool="$REPO_DIR/home/.local/bin/claude-project-settings-render"
+    local template="$REPO_DIR/settings/claude/settings.project.json.template"
+
+    [[ -x "$tool" ]]       || return 0
+    [[ -f "$template" ]]   || return 0
+
+    local -a args=("--$mode")
+    [[ "$mode" == "install" && "$DRY_RUN" == true ]] && args+=(--dry-run)
+
+    CLAUDE_PROJECT_SETTINGS_TEMPLATE="$template" "$tool" "${args[@]}" || rc=$?
+
+    case "$mode" in
+        check)
+            # 1 = a render is pending: a real, fixable gap, so it counts against
+            # --check like a missing symlink. 2 = could not run, which the tool
+            # has already explained and install.sh cannot fix.
+            (( rc == 1 )) && return 1
+            return 0
+            ;;
+        *)
+            (( rc != 0 )) && warn "pj settings render did not complete (exit $rc) -- continuing."
+            return 0
+            ;;
+    esac
+}
+
 _claude_hooks_sync() {
     local mode="${1:-install}" rc=0
     local tool="$REPO_DIR/home/.local/bin/claude-hooks-sync"
@@ -4021,9 +4069,11 @@ main() {
     # with Codex, and validate config.toml. Must run AFTER stow_home. ---
     _post_stow_herdr_plugins_and_skill
 
-    # --- Register the Claude Code hooks stow just deployed ---
+    # --- Render the pj settings file, THEN register hooks into it ---
     # Must run AFTER stow_home: the tool refuses to register a hook whose script
     # is not on disk, so running it earlier would skip every hook on a fresh box.
+    # Render first, so a first-ever install ends with the hook actually present.
+    _render_project_settings install
     _claude_hooks_sync install
 
     # --- Optional: pnpm-audit git hooks (confirm-gated) ---
@@ -4069,7 +4119,7 @@ case "${ACTION:-}" in
     # register the hooks it just deployed -- otherwise the exact command the
     # welcome banner recommends leaves them stowed and inert, which is the
     # original bug wearing a different hat.
-    stow-only)  _gate_toolchain_takeover; stow_home; stow_platform; _claude_hooks_sync install ;;
+    stow-only)  _gate_toolchain_takeover; stow_home; stow_platform; _render_project_settings install; _claude_hooks_sync install ;;
     uninstall)  uninstall ;;
     update)     update ;;
     force)      force_adopt ;;

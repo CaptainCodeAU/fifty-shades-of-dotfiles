@@ -1,0 +1,107 @@
+{
+  "_comment": [
+    "TEMPLATE for ~/.claude/settings.project.json, the settings file the `pj`",
+    "launcher reads (home/.zshrc passes --settings at it).",
+    "",
+    "WHY A TEMPLATE AND NOT A STOWED FILE. The real file has to carry ABSOLUTE",
+    "paths -- see below -- so a stowed copy would commit a username to a public",
+    "repo, and the pre-commit leak gate blocks that, correctly. Rendering at",
+    "install time keeps the repo username-free and still versions the content.",
+    "Before 2026-09-19 this file was tracked by NOTHING: not this repo, not a stow",
+    "symlink, not dot-claude. A rebuilt machine would have started pj bare.",
+    "",
+    "__HOME__ IS REPLACED WITH $HOME AT RENDER TIME by",
+    "claude-project-settings-render, which install.sh runs.",
+    "",
+    "WHY NOT JUST WRITE ${HOME} AND LET CLAUDE CODE EXPAND IT. Because it does",
+    "not. Measured 2026-09-19 against a live session's own process environment:",
+    "the file said PROJECTS_DIR=${HOME}/CODE/CaptainCodeAU and the process",
+    "received the LITERAL string ${HOME}/CODE/CaptainCodeAU. Anything reading that",
+    "variable directly got a path that does not exist. It had been that way",
+    "unnoticed because nothing checks an env var for plausibility.",
+    "",
+    "THE EXCEPTION IS A COMMAND STRING. statusLine.command runs through a shell,",
+    "so its \"$HOME\" expands properly and is deliberately NOT templated. The rule:",
+    "$HOME works where a shell will see it, never in an env value or a path list.",
+    "",
+    "NO hooks KEY HERE, EVER. Hooks are declared once in settings/claude/hooks.json",
+    "and registered by claude-hooks-sync --target project. The renderer MERGES any",
+    "existing hooks back before it writes, so a re-render cannot drop them -- but a",
+    "hooks key in this template would fight that mechanism and win silently.",
+    "",
+    "Top-level keys beginning with _ are stripped at render time; this note is one."
+  ],
+  "cleanupPeriodDays": 1825,
+  "claudeMdExcludes": [
+    "__HOME__/.claude/CLAUDE.md"
+  ],
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  },
+  "includeGitInstructions": false,
+  "env": {
+    "BASH_DEFAULT_TIMEOUT_MS": "600000",
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "80000",
+    "LIFEOS_DIR": "__HOME__/.claude/LIFEOS",
+    "API_TIMEOUT_MS": "1800000",
+    "LIFEOS_CONFIG_DIR": "__HOME__/.config/LIFEOS",
+    "CLAUDE_CODE_FORK_SUBAGENT": "1",
+    "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS": "20",
+    "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH": "3",
+    "PROJECTS_DIR": "__HOME__/CODE/CaptainCodeAU",
+    "ENABLE_CLAUDEAI_MCP_SERVERS": "false"
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "bash \"$HOME/.claude/statusline-command.sh\""
+  },
+  "enabledPlugins": {
+    "cc-capture@cc-warehouse": true,
+    "cc-skills@captaincodeau": true,
+    "chrome-devtools-mcp@claude-plugins-official": false,
+    "imessage@claude-plugins-official": false,
+    "design@synced": false,
+    "operations@synced": false,
+    "engineering@synced": false,
+    "legal@synced": false,
+    "sales@synced": false,
+    "small-business@synced": false,
+    "product-management@synced": false,
+    "marketing@synced": false,
+    "productivity@synced": false,
+    "finance@synced": false,
+    "data@synced": false,
+    "customer-support@synced": false,
+    "cowork-plugin-management@synced": false
+  },
+  "extraKnownMarketplaces": {
+    "apache-hamilton": {
+      "source": {
+        "source": "github",
+        "repo": "apache/hamilton"
+      }
+    },
+    "captaincodeau": {
+      "source": {
+        "source": "github",
+        "repo": "CaptainCodeAU/mattpocock-skills"
+      }
+    },
+    "cc-warehouse": {
+      "source": {
+        "source": "git",
+        "url": "https://github.com/CaptainCodeAU/cc-warehouse.git"
+      }
+    },
+    "claude-plugins-official": {
+      "source": {
+        "source": "github",
+        "repo": "anthropics/claude-plugins-official"
+      }
+    }
+  },
+  "disableClaudeAiConnectors": true,
+  "outputStyle": "pj-voice:pj-voice"
+}
