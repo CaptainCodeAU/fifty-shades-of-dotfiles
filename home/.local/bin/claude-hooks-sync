@@ -33,6 +33,17 @@
 #   claude-hooks-sync --check     report what is unregistered; write nothing
 #   claude-hooks-sync --install   register what is missing
 #   claude-hooks-sync --install --dry-run
+#   claude-hooks-sync --target project --check
+#
+# TARGETS
+#   --target user     (default) ~/.claude/settings.json
+#   --target project            ~/.claude/settings.project.json
+#
+#   An entry is considered for a target only when its manifest `targets` array
+#   names it; omitting `targets` means ["user"], which is what every entry did
+#   before 2026-09-19. The pj launcher passes --setting-sources project,local, so
+#   the USER source never loads there and a user-only hook simply does not run --
+#   which for an ALARM is indistinguishable from the alarm being happy.
 #
 # Exit codes:
 #   0  --check: nothing pending.  --install: succeeded (added, or nothing to do).
@@ -50,12 +61,21 @@ fi
 
 MODE=""
 DRY_RUN=false
+TARGET="user"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --check)   MODE="check";   shift ;;
         --install) MODE="install"; shift ;;
         --dry-run) DRY_RUN=true;   shift ;;
+        --target)
+            TARGET="${2:-}"
+            case "$TARGET" in
+                user|project) ;;
+                *) printf '%sclaude-hooks-sync: --target must be user or project (got %s)%s\n' \
+                          "$R" "${TARGET:-<empty>}" "$N" >&2; exit 2 ;;
+            esac
+            shift 2 ;;
         -h|--help) sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) printf '%sclaude-hooks-sync: unknown option %s%s\n' "$R" "$1" "$N" >&2; exit 2 ;;
     esac
@@ -87,7 +107,14 @@ MANIFEST="${CLAUDE_HOOKS_MANIFEST:-}"
 if [[ -z "$MANIFEST" ]]; then
     MANIFEST="$(_resolve_repo_manifest 2>/dev/null || true)"
 fi
-SETTINGS="${CLAUDE_SETTINGS_FILE:-$HOME/.claude/settings.json}"
+# ONE resolution path, a target-dependent DEFAULT. CLAUDE_SETTINGS_FILE still
+# wins for either target, because the selftest's whole method is pointing this at
+# a throwaway tree and a second resolution path would leave that seam behind.
+if [[ "$TARGET" == "project" ]]; then
+    SETTINGS="${CLAUDE_SETTINGS_FILE:-$HOME/.claude/settings.project.json}"
+else
+    SETTINGS="${CLAUDE_SETTINGS_FILE:-$HOME/.claude/settings.json}"
+fi
 HOOKS_DIR="${CLAUDE_HOOKS_DIR:-$HOME/.claude/hooks}"
 # What "$HOME" expands to when checking a `requires` path. Overridable so the
 # selftest can point the gate at a temp tree.
@@ -111,6 +138,18 @@ fi
 if [[ ! -f "$SETTINGS" ]]; then
     printf '%s! claude-hooks-sync: %s does not exist -- nothing to register into.%s\n' "$Y" "$SETTINGS" "$N" >&2
     printf '  %sStart Claude Code once to create it, then re-run.%s\n' "$D" "$N" >&2
+    printf '  %s(--target project expects install.sh to have rendered it first.)%s\n' "$D" "$N" >&2
+    exit 2
+fi
+
+# BOTH settings files are in the Claude Code Bash sandbox's write-deny list, so a
+# sandboxed agent run cannot write either one however correct its jq is. It fails
+# cleanly rather than silently, but the error points at permissions and not at the
+# cause, so say the cause here. Run this from a terminal, or from install.sh.
+if [[ ! -w "$SETTINGS" ]]; then
+    printf '%s! claude-hooks-sync: %s is not writable from here.%s\n' "$Y" "$SETTINGS" "$N" >&2
+    printf '  %sBoth Claude settings files are write-denied inside the Claude Bash sandbox.%s\n' "$D" "$N" >&2
+    printf '  %sRun this in a terminal, or via ./install.sh.%s\n' "$D" "$N" >&2
     exit 2
 fi
 # Refuse BEFORE touching a settings file we cannot parse. A malformed
@@ -136,8 +175,9 @@ fi
 # US is not whitespace, so adjacent separators keep their empty field.
 SEP=$'\037'
 manifest_rows() {
-    jq -r '
+    jq -r --arg target "$TARGET" '
       .hooks[]
+      | select( ((.targets // ["user"]) | index($target)) != null )
       | [ .event,
           (.matcher // ""),
           .script,

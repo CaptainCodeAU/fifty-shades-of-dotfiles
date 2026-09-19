@@ -3762,28 +3762,51 @@ _claude_hooks_sync() {
     [[ -x "$tool" ]]     || return 0
     [[ -f "$manifest" ]] || return 0
 
-    local -a args=("--$mode")
-    # --dry-run reaches the tool so a dry install.sh run stays a dry run all the
-    # way down; check mode never writes anyway.
-    [[ "$mode" == "install" && "$DRY_RUN" == true ]] && args+=(--dry-run)
+    # TWO TARGETS, ONE MANIFEST. ~/.claude/settings.json is what an ordinary
+    # launch reads; ~/.claude/settings.project.json is what `pj` reads, because
+    # pj passes --setting-sources project,local and so never loads the user
+    # source at all. An entry reaches the second file only when its manifest
+    # `targets` array names "project" -- today that is ci-watch alone.
+    #
+    # WHY THE PROJECT TARGET IS GATED ON THE FILE EXISTING. A machine that has
+    # never run pj has no settings.project.json, and the tool would correctly
+    # exit 2 ("nothing to register into") on every install. That is a true
+    # statement nobody needs to read on every run, and an installer that prints
+    # a harmless warning every time teaches you to skip its output.
+    #
+    # ORDER MATTERS IF A RENDER STEP IS EVER ADDED. Registration must run AFTER
+    # anything that writes settings.project.json wholesale, or the render
+    # silently drops the hooks this just registered.
+    local -a targets=(user)
+    [[ -f "$HOME/.claude/settings.project.json" ]] && targets+=(project)
 
-    CLAUDE_HOOKS_MANIFEST="$manifest" "$tool" "${args[@]}" || rc=$?
+    local t pending=0
+    for t in "${targets[@]}"; do
+        local -a args=("--$mode" --target "$t")
+        # --dry-run reaches the tool so a dry install.sh run stays a dry run all
+        # the way down; check mode never writes anyway.
+        [[ "$mode" == "install" && "$DRY_RUN" == true ]] && args+=(--dry-run)
 
-    case "$mode" in
-        check)
-            # 1 = registrations pending: a real, fixable deployment gap, so let it
-            # count against --check exactly like a missing symlink does.
-            # 2 = could not run (no jq / no settings.json). Not a deployment
-            # problem and not something ./install.sh can fix, so it must not fail
-            # the audit -- the tool has already said why.
-            (( rc == 1 )) && return 1
-            return 0
-            ;;
-        *)
-            (( rc != 0 )) && warn "Claude hook registration did not complete (exit $rc) -- continuing."
-            return 0
-            ;;
-    esac
+        rc=0
+        CLAUDE_HOOKS_MANIFEST="$manifest" "$tool" "${args[@]}" || rc=$?
+
+        case "$mode" in
+            check)
+                # 1 = registrations pending: a real, fixable deployment gap, so
+                # let it count against --check exactly like a missing symlink.
+                # 2 = could not run (no jq / no settings file). Not a deployment
+                # problem and not something ./install.sh can fix, so it must not
+                # fail the audit -- the tool has already said why.
+                (( rc == 1 )) && pending=1
+                ;;
+            *)
+                (( rc != 0 )) && warn "Claude hook registration ($t) did not complete (exit $rc) -- continuing."
+                ;;
+        esac
+    done
+
+    [[ "$mode" == "check" ]] && return "$pending"
+    return 0
 }
 
 setup_vuln_scan() {

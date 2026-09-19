@@ -456,6 +456,143 @@ if (( rc == 0 )); then ok "script_path gate: a skip is not an error"
 else bad "script_path gate: a skip is not an error" "exit was $rc"; fi
 cleanup
 
+# ---------------------------------------------------------------------------
+#  TARGETS -- which settings file an entry is registered into
+#
+#  WHY THIS SECTION EXISTS. The pj launcher passes --setting-sources
+#  project,local, so ~/.claude/settings.json never loads and none of its
+#  SessionStart hooks register. ci-watch is the escalating CI-red alarm, so under
+#  the daily launcher the alarm was simply silent -- and silence is exactly what
+#  a healthy alarm looks like, which is why it went unnoticed.
+#
+#  THE ARM THAT MATTERS IS THE NEGATIVE ONE. "ci-watch reached the project file"
+#  passes just as well if the filter were ignored and EVERYTHING were written to
+#  both files. Only "an entry with no targets key did NOT reach the project file"
+#  can tell a working filter from no filter at all.
+# ---------------------------------------------------------------------------
+fixture_targets() {
+    WORK="$(mktemp -d "${TMPDIR:-/tmp}/claude-hooks-sync-tg.XXXXXX")" || WORK=""
+    if [[ -z "$WORK" || ! -d "$WORK" ]]; then
+        printf '  \033[31mABORT\033[0m  cannot create a temp dir under %s.\n' "${TMPDIR:-/tmp}" >&2
+        exit 2
+    fi
+    REQ_ROOT="$WORK/home"
+    HOOKS_DIR="$REQ_ROOT/.claude/hooks"
+    SETTINGS="$REQ_ROOT/.claude/settings.json"
+    PROJ_SETTINGS="$REQ_ROOT/.claude/settings.project.json"
+    MANIFEST="$WORK/hooks.json"
+    mkdir -p "$HOOKS_DIR" "$REQ_ROOT/.local/bin"
+    printf '{}\n' > "$SETTINGS"
+    printf '{}\n' > "$PROJ_SETTINGS"
+    : > "$REQ_ROOT/.local/bin/both-watch"
+    : > "$REQ_ROOT/.local/bin/user-watch"
+
+    cat > "$MANIFEST" <<'JSON'
+{
+  "hooks": [
+    {
+      "event": "SessionStart",
+      "script": "both-watch",
+      "script_path": "$HOME/.local/bin/both-watch",
+      "targets": ["user", "project"],
+      "entry": {
+        "type": "command",
+        "command": "test -x \"$HOME/.local/bin/both-watch\" && \"$HOME/.local/bin/both-watch\" || true",
+        "timeout": 30
+      },
+      "why": "fixture: belongs in both settings files"
+    },
+    {
+      "event": "SessionStart",
+      "script": "user-watch",
+      "script_path": "$HOME/.local/bin/user-watch",
+      "entry": {
+        "type": "command",
+        "command": "test -x \"$HOME/.local/bin/user-watch\" && \"$HOME/.local/bin/user-watch\" || true",
+        "timeout": 30
+      },
+      "why": "fixture: NO targets key, so user only"
+    }
+  ]
+}
+JSON
+}
+
+# Run against an explicit settings file and target.
+run_target() {
+    local t="$1" s="$2"; shift 2
+    CLAUDE_SETTINGS_FILE="$s" \
+    CLAUDE_HOOKS_DIR="$HOOKS_DIR" \
+    CLAUDE_HOOKS_MANIFEST="$MANIFEST" \
+    CLAUDE_REQUIRES_ROOT="$REQ_ROOT" \
+    "$TOOL" --target "$t" "$@" 2>&1
+}
+
+count_in() {   # $1 = command substring, $2 = settings file
+    jq --arg c "$1" '[ .hooks.SessionStart[]? | .hooks[]?
+                       | select((.command // "") | contains($c)) ] | length' "$2"
+}
+
+BOTH_NAME="both-watch"
+USER_NAME="user-watch"
+
+# --- 24. an entry naming `project` reaches the project file -----------------
+fixture_targets
+run_target project "$PROJ_SETTINGS" --install >/dev/null
+if [[ "$(count_in "$BOTH_NAME" "$PROJ_SETTINGS")" == "1" ]]; then
+    ok "targets: an entry naming project is written to settings.project.json"
+else bad "targets: an entry naming project is written to settings.project.json" \
+         "got $(count_in "$BOTH_NAME" "$PROJ_SETTINGS")"; fi
+
+# --- 25. THE NEGATIVE ARM: no targets key means user only -------------------
+if [[ "$(count_in "$USER_NAME" "$PROJ_SETTINGS")" == "0" ]]; then
+    ok "targets: an entry with NO targets key does NOT reach the project file"
+else bad "targets: an entry with NO targets key does NOT reach the project file" \
+         "it was written anyway -- the filter is not filtering"; fi
+
+# --- 26. CONTROL: the user target still takes BOTH entries ------------------
+# Without this, case 25 would pass just as well if the manifest were unreadable
+# and NOTHING were ever registered anywhere.
+run_target user "$SETTINGS" --install >/dev/null
+if [[ "$(count_in "$BOTH_NAME" "$SETTINGS")" == "1" && "$(count_in "$USER_NAME" "$SETTINGS")" == "1" ]]; then
+    ok "CONTROL: the user target registers both entries (the fixture is live)"
+else bad "CONTROL: the user target registers both entries (the fixture is live)" \
+         "both=$(count_in "$BOTH_NAME" "$SETTINGS") user=$(count_in "$USER_NAME" "$SETTINGS")"; fi
+
+# --- 27. a second project install is a byte-identical no-op -----------------
+before=$(shasum "$PROJ_SETTINGS" | awk '{print $1}')
+run_target project "$PROJ_SETTINGS" --install >/dev/null
+after=$(shasum "$PROJ_SETTINGS" | awk '{print $1}')
+if [[ "$before" == "$after" ]]; then ok "targets: a second project --install changes nothing"
+else bad "targets: a second project --install changes nothing" "hash moved -- it is duplicating"; fi
+
+# --- 28. an unknown target refuses, and writes nothing ----------------------
+before=$(shasum "$PROJ_SETTINGS" | awk '{print $1}')
+out=$(run_target banana "$PROJ_SETTINGS" --install); rc=$?
+after=$(shasum "$PROJ_SETTINGS" | awk '{print $1}')
+if (( rc == 2 )); then ok "targets: an unknown --target exits 2"
+else bad "targets: an unknown --target exits 2" "exit was $rc"; fi
+if [[ "$before" == "$after" ]]; then ok "targets: an unknown --target writes nothing"
+else bad "targets: an unknown --target writes nothing" "the file changed"; fi
+
+# --- 29. the DEFAULT path is target-dependent, not just the env override ----
+# Every case above passes CLAUDE_SETTINGS_FILE explicitly, so none of them would
+# notice if --target project quietly fell back to settings.json. This one drops
+# the override and checks where the tool goes on its own.
+cleanup
+fixture_targets
+out=$(HOME="$REQ_ROOT" \
+      CLAUDE_HOOKS_DIR="$HOOKS_DIR" \
+      CLAUDE_HOOKS_MANIFEST="$MANIFEST" \
+      CLAUDE_REQUIRES_ROOT="$REQ_ROOT" \
+      "$TOOL" --target project --install 2>&1)
+if [[ "$(count_in "$BOTH_NAME" "$PROJ_SETTINGS")" == "1" \
+   && "$(count_in "$BOTH_NAME" "$SETTINGS")" == "0" ]]; then
+    ok "targets: with no env override, project resolves to settings.project.json"
+else bad "targets: with no env override, project resolves to settings.project.json" \
+         "proj=$(count_in "$BOTH_NAME" "$PROJ_SETTINGS") user=$(count_in "$BOTH_NAME" "$SETTINGS")"; fi
+cleanup
+
 echo
 echo "  $PASS passed, $FAIL failed"
 (( FAIL == 0 ))
