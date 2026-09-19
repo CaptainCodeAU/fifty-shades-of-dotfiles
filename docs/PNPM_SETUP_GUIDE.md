@@ -732,3 +732,16 @@ acceptance. Two facts about the 12.x config parser that the probes turned up:
 The 12.5.0 platform-list form (`- darwin-arm64`) is REJECTED by 12.4.1 at parse time and
 would break every pnpm command on this box, so the object form stays until the floor passes
 12.5. The literal `current` is what keeps one stowed file correct on macOS, Linux and WSL.
+
+**Policy knobs (D-20260919-09).** All four read back through `pnpm config get`.
+
+| Key                       | Value                              | What changes for `pnpm install` in an existing project                                                                                  |
+| ------------------------- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `trustPolicyExcludePrune` | `true`                             | After a lockfile rewrite, `trustPolicyExclude` name@version entries no longer in the lockfile are dropped (`@scope/*` patterns kept). |
+| `audit.ignorePrune`       | `true`                             | Nothing on install; `pnpm audit --fix` drops `audit.ignore` entries no longer reported.                                                  |
+| `sideEffectsCache`        | `read: true, write: true, remote: null` | Nothing; local build cache as before, no pnpr server. `remote: false` is rejected by the parser, `null` accepted.                  |
+| `engineStrict`            | `true`                             | **Can fail.** A dependency whose `engines` excludes the running Node aborts with `ERR_PNPM_UNSUPPORTED_ENGINE` instead of a warning. Per-project relief: `engineStrict: false` in `pnpm-workspace.yaml`. |
+
+The engineStrict behaviour arm: a `file:` dependency declaring `engines.node: "<1"` installed
+with the key unset and failed with the key set. `--config.engineStrict=true` on the command
+line did nothing; `--engine-strict` and the file key both work.

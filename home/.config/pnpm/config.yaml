@@ -172,3 +172,51 @@ python:
   enabled: false
 cargo:
   enabled: false
+
+# pnpm 12.4: when install / add / update / remove / dedupe rewrites the lockfile,
+# drop `trustPolicyExclude` entries (name@version) the new lockfile no longer
+# contains; `@scope/*` patterns are kept. A hand-approved trust exception must
+# not outlive the version it was approved for. Effect on an existing project:
+# only its pnpm-workspace.yaml exclude list can shrink, and only after a lockfile
+# rewrite; the cleanup is skipped when the lockfile does not cover the whole
+# workspace. Reads back via `pnpm config get` (measured 2026-09-20, 12.4.1).
+# Ruling D-20260919-09.
+# pnpm 12 default: false.
+trustPolicyExcludePrune: true
+
+# pnpm 12.0: `pnpm audit --fix` also removes `audit.ignore` entries for GHSA
+# advisories that no longer appear in the report, so the tolerated list cannot
+# accumulate dead entries. Touches nothing on `pnpm install`; only `audit --fix`.
+# Reads back (12.4.1). Ruling D-20260919-09.
+# pnpm 12 default: false.
+audit:
+  ignorePrune: true
+
+# pnpm 12.0 split sideEffectsCache into read / write / remote. read + write keep
+# the LOCAL build-output cache (the default, unchanged). `remote` is the pnpr
+# server object (org, packages) that restores signed build artifacts produced on
+# another machine; null means no build output ever comes from off this box.
+# `remote: false` is REJECTED by the 12.4.1 parser ("did not match any variant of
+# untagged enum SideEffectsCacheSetting"); `remote: null` is accepted and reads
+# back as {read: true, write: true, remote: null}. Measured 2026-09-20.
+# Effect on an existing project: none. Ruling D-20260919-09.
+# pnpm 12 default: read true, write true, remote unset.
+sideEffectsCache:
+  read: true
+  write: true
+  remote: null
+
+# Refuse to install any dependency whose `engines` field excludes the running
+# Node; off, pnpm only warns. 12.0 tightened the rule: a package reached through
+# a regular dependency edge fails the install even when it also sits under an
+# optionalDependencies edge; only packages reachable solely by optional edges
+# are still skipped. EFFECT ON AN EXISTING PROJECT: `pnpm install` can now FAIL
+# with ERR_PNPM_UNSUPPORTED_ENGINE where it used to warn, typically after
+# `nvm install --lts` moves Node past a dependency's upper bound. Fix the Node
+# version, or set `engineStrict: false` in that project's pnpm-workspace.yaml.
+# Behaviour arm (12.4.1, 2026-09-20): a file: dep with engines.node "<1"
+# installed with this unset and failed ERR_PNPM_UNSUPPORTED_ENGINE with it set.
+# `--config.engineStrict=true` on the command line did NOTHING in the probe;
+# `--engine-strict` and this key both work. Reads back. Ruling D-20260919-09.
+# pnpm 12 default: false.
+engineStrict: true

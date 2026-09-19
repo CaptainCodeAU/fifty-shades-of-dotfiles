@@ -477,3 +477,25 @@ an unknown key with the same bad value passes) and, for supportedArchitectures, 
 install of esbuild that landed only `@esbuild/linux-x64` under an os:[linux] pin and only
 `@esbuild/darwin-arm64` under `current`. Existing projects see no change: `current` is the
 default value.
+
+## D-20260919-09 -- pnpm: prune stale exclusions, keep build cache local, enforce engines
+
+topic: pnpm 12 trustPolicyExcludePrune audit.ignorePrune audit ignore prune sideEffectsCache read write remote pnpr engineStrict engines ERR_PNPM_UNSUPPORTED_ENGINE optionalDependencies install fails config.yaml
+decided: 2026-09-19
+status: standing
+holds-in: fifty-shades-of-dotfiles/docs/PNPM_SETUP_GUIDE.md section 7.1
+
+Four policy knobs in the stowed config.yaml, all measured on 12.4.1 on 2026-09-20 and all
+four read back through `pnpm config get`. `trustPolicyExcludePrune: true` (12.4.0) drops
+`trustPolicyExclude` name@version entries that a rewritten lockfile no longer contains, so a
+hand-approved exception dies with the version it was approved for. `audit.ignorePrune: true`
+(12.0) does the same to `audit.ignore` on `pnpm audit --fix`. `sideEffectsCache` is spelled
+out as read true, write true, remote null: `remote` is the pnpr server object that restores
+build output from other machines, and it stays unset; `remote: false` is REJECTED by the
+parser, `null` accepted. `engineStrict: true` makes `pnpm install` REFUSE a dependency whose
+engines exclude the running Node instead of warning (behaviour arm: a file: dep with
+engines.node "<1" installed with the key unset and failed ERR_PNPM_UNSUPPORTED_ENGINE with it
+set). Accepted cost: an existing project can start failing to install after Node moves past a
+dependency's upper bound; the fix is the Node version, or `engineStrict: false` in that
+project's pnpm-workspace.yaml. Note `--config.engineStrict=true` on the command line did
+nothing in the probe; `--engine-strict` and the file key both work.
