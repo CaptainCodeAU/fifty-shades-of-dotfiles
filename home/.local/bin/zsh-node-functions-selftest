@@ -1,0 +1,143 @@
+#!/usr/bin/env zsh
+# zsh-node-functions-selftest -- prove pnpm_update's deny list actually refuses.
+#
+# Sibling of install-preflight-selftest / safe-rm-selftest. The deny list exists
+# because 12.3.0 broke global node/npm/yarn after self-update (Ruling
+# D-20260919-10), and nothing in pnpm_update would have refused it. A gate that
+# only LOOKS wired is worth nothing -- every arm here is driven to fire.
+#
+# THE SEAM is pnpm_update's observable behaviour with the network and the real
+# pnpm stubbed out: does it refuse a denied version and say why, does it still
+# update to an allowed one, does an empty list deny nothing, and does the blind
+# fallback path notice where it landed. The REAL ~/.zsh_node_functions is
+# sourced; nothing is copied into a fixture, so the test sees today's code.
+#
+# Written in zsh because the function is zsh (print -r, ${(@f)...}); the Bash
+# tool is zsh too but does not source .zshrc, so this file sources explicitly.
+#
+# Usage: zsh-node-functions-selftest      (exit 0 = all passed)
+
+setopt no_unset pipe_fail 2>/dev/null
+
+PASS=0; FAIL=0
+
+_resolve_repo() {
+    local self="${(%):-%x}" dir target
+    dir="$(cd -- "$(dirname -- "$self")" && pwd)"
+    if [[ -L "$self" ]]; then
+        target="$(readlink "$self")"
+        [[ "$target" != /* ]] && target="$dir/$target"   # re-base a relative stow link
+        dir="$(cd -- "$(dirname -- "$target")" && pwd)"
+    fi
+    (cd -- "$dir/../../.." && pwd)                      # <repo>/home/.local/bin -> <repo>
+}
+REPO="$(_resolve_repo)"
+FUNCS="${NODE_FUNCS_OVERRIDE:-$REPO/home/.zsh_node_functions}"
+
+ok()  { PASS=$(( PASS + 1 )); printf '  \033[32mPASS\033[0m  %s\n' "$1"; }
+bad() { FAIL=$(( FAIL + 1 )); printf '  \033[31mFAIL\033[0m  %s\n' "$1"
+        [[ $# -gt 1 ]] && printf '        %s\n' "$2"; }
+code_of() { grep -v '^[[:space:]]*#' <<<"$1"; }
+
+echo "zsh_node_functions selftest (pnpm_update deny list)"
+echo
+
+if [[ ! -f "$FUNCS" ]]; then
+    bad ".zsh_node_functions found" "looked at $FUNCS"
+    echo; echo "  $PASS passed, $FAIL failed"; exit 1
+fi
+
+# --- 1. static: the list and the gate exist and are wired -------------------
+body=$(sed -n '/^pnpm_update() {/,/^}/p' "$FUNCS")
+if grep -q '^PNPM_DENY_VERSIONS=(' "$FUNCS"; then ok "PNPM_DENY_VERSIONS is defined"
+else bad "PNPM_DENY_VERSIONS is defined"; fi
+if grep -q '^__pnpm_version_denied() {' "$FUNCS"; then ok "__pnpm_version_denied is defined"
+else bad "__pnpm_version_denied is defined"; fi
+n=$(code_of "$body" | grep -c '__pnpm_version_denied')
+if (( n >= 2 )); then ok "pnpm_update consults the deny list at both landing points ($n call sites)"
+else bad "pnpm_update consults the deny list at both landing points" "found $n call site(s), need 2"; fi
+
+# --- 2. the real function, with the world stubbed ---------------------------
+# Colours empty, macOS arm64 (the standalone path, not the Homebrew one), no
+# an EMPTY PNPM_HOME so the shim cleanup finds nothing. The stub pnpm answers -v from
+# STUB_VER and records every self-update in STUB_LOG.
+export IS_MAC=true MAC_ARCH=arm64
+PNPM_HOME="$(mktemp -d)"   # empty: the root-shim cleanup finds nothing and stays quiet
+compdef() { :; }           # the file registers completions; not under test
+# zsh keeps functions and variables in separate namespaces, so the colour
+# variable $ok and this file's ok() helper do not collide.
+ok=""; warn=""; err=""; info=""; done=""
+source "$FUNCS"
+
+typeset -g STUB_VER STUB_AFTER STUB_LOG
+pnpm() {
+    case "$1" in
+        -v|--version) print -r -- "$STUB_VER" ;;
+        self-update)  print -r -- "self-update" >> "$STUB_LOG"; STUB_VER="$STUB_AFTER"; return 0 ;;
+        *) return 0 ;;
+    esac
+}
+__pnpm_get_raw_latest()      { print -r -- ""; }
+__pnpm_get_raw_eligible_at() { print -r -- ""; }
+__pnpm_version_has_binary()  { print -r -- ok; }
+__pnpm_vercmp() {
+    local a="$1" b="$2"; [[ "$a" == "$b" ]] && { echo 0; return; }
+    local lower; lower=$(printf '%s\n%s\n' "$a" "$b" | sort -V | head -1)
+    if [[ "$lower" == "$a" ]]; then echo -1; else echo 1; fi
+}
+typeset -g STUB_ELIGIBLE
+__pnpm_get_latest() { print -r -- "$STUB_ELIGIBLE"; }
+
+run_update() {   # $1 current  $2 eligible  $3 version after self-update
+    STUB_VER="$1"; STUB_ELIGIBLE="$2"; STUB_AFTER="$3"
+    STUB_LOG="$(mktemp)"
+    OUT="$(pnpm_update 2>&1)"; RC=$?
+    CALLS=$(grep -c self-update "$STUB_LOG")   # prints 0 (and exits 1) on no match
+    rm -f -- "$STUB_LOG"
+}
+
+# 2a. the helper itself: denied prints the reason, allowed is silent (control)
+why=$(__pnpm_version_denied 12.3.0); rc=$?
+if (( rc == 0 )) && [[ "$why" == *"12.3.1"* ]]; then ok "helper: 12.3.0 is denied and the reason names the fix (12.3.1)"
+else bad "helper: 12.3.0 is denied" "rc=$rc why='$why'"; fi
+why=$(__pnpm_version_denied 12.3.1); rc=$?
+if (( rc == 1 )) && [[ -z "$why" ]]; then ok "helper control: 12.3.1 is not denied, no output"
+else bad "helper control: 12.3.1 is not denied" "rc=$rc why='$why'"; fi
+
+# 2b. denied eligible version: refused, reason printed, self-update NOT called
+run_update 12.2.0 12.3.0 12.3.0
+if (( RC == 1 )) && [[ "$OUT" == *"Refusing to update pnpm 12.2.0 -> 12.3.0"* ]] \
+   && [[ "$OUT" == *"fixed in 12.3.1"* ]] && (( CALLS == 0 )); then
+    ok "denied version refused with the reason; self-update never ran"
+else bad "denied version refused with the reason; self-update never ran" "rc=$RC calls=$CALLS out='$OUT'"; fi
+
+# 2c. allowed version passes and self-update runs
+run_update 12.2.0 12.3.2 12.3.2
+if (( RC == 0 )) && (( CALLS == 1 )) && [[ "$OUT" == *"updated 12.2.0 -> 12.3.2"* ]]; then
+    ok "allowed version passes; self-update ran once"
+else bad "allowed version passes; self-update ran once" "rc=$RC calls=$CALLS out='$OUT'"; fi
+
+# 2d. empty list denies nothing (the control for 2b)
+saved=("${PNPM_DENY_VERSIONS[@]}"); PNPM_DENY_VERSIONS=()
+run_update 12.2.0 12.3.0 12.3.0
+if (( RC == 0 )) && (( CALLS == 1 )) && [[ "$OUT" == *"updated 12.2.0 -> 12.3.0"* ]]; then
+    ok "empty deny list: 12.3.0 passes (control)"
+else bad "empty deny list: 12.3.0 passes (control)" "rc=$RC calls=$CALLS out='$OUT'"; fi
+PNPM_DENY_VERSIONS=("${saved[@]}")
+
+# 2e. blind fallback (eligible unknown) lands on a denied version: loud, rc 1
+run_update 12.2.0 "" 12.3.0
+if (( RC == 1 )) && (( CALLS == 1 )) && [[ "$OUT" == *"landed on 12.3.0, a DENIED version"* ]] \
+   && [[ "$OUT" == *"pnpm self-update 12.2.0"* ]]; then
+    ok "fallback path: landing on a denied version is reported with the roll-back command"
+else bad "fallback path: landing on a denied version is reported" "rc=$RC calls=$CALLS out='$OUT'"; fi
+
+# 2f. blind fallback landing on an allowed version stays quiet (control for 2e)
+run_update 12.2.0 "" 12.3.2
+if (( RC == 0 )) && (( CALLS == 1 )) && [[ "$OUT" != *"DENIED"* ]]; then
+    ok "fallback path control: allowed landing passes"
+else bad "fallback path control: allowed landing passes" "rc=$RC calls=$CALLS out='$OUT'"; fi
+
+rmdir -- "$PNPM_HOME" 2>/dev/null
+echo; echo "  $PASS passed, $FAIL failed"
+(( FAIL == 0 ))

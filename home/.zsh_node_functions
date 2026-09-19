@@ -80,6 +80,24 @@ __display_node_hints() {
 # Uses __pnpm_get_latest / __pnpm_get_raw_latest / __pnpm_get_raw_eligible_at /
 # __pnpm_vercmp from .zsh_onboarding (sourced earlier in .zshrc).
 # Usage: pnpm_update
+# Versions pnpm_update must never land on, checked beside the PNPM_MIN_VERSION
+# floor. A floor says "not below"; it cannot say "never this one". One entry per
+# line, "version|reason". Consulted before the eligible-version download and
+# after the blind fallback self-update. Ruling D-20260919-10.
+PNPM_DENY_VERSIONS=(
+    "12.3.0|breaks global node/npm/yarn after self-update (unexpected argument \x27--shim\x27); fixed in 12.3.1"
+)
+
+# Is $1 on the deny list? Prints the reason and returns 0 when it is; silent and
+# returns 1 otherwise. An empty list denies nothing.
+__pnpm_version_denied() {
+    local v="$1" entry
+    for entry in "${PNPM_DENY_VERSIONS[@]}"; do
+        [[ -n "$entry" && "${entry%%|*}" == "$v" ]] && { print -r -- "${entry#*|}"; return 0; }
+    done
+    return 1
+}
+
 pnpm_update() {
     if ! command -v pnpm &>/dev/null; then
         echo "${err}pnpm is not installed.${done}" >&2
@@ -108,8 +126,16 @@ pnpm_update() {
     if [[ -z "$eligible" ]]; then
         echo "${warn}Could not determine the latest eligible pnpm version (network check failed or cache empty).${done}"
         echo "${info}Current pnpm: ${current}. Running 'pnpm self-update' anyway.${done}"
-        pnpm self-update
-        return $?
+        pnpm self-update || return $?
+        # The target could not be checked beforehand; check where it landed.
+        post=$(pnpm -v 2>/dev/null)
+        local landed_why
+        if landed_why=$(__pnpm_version_denied "$post"); then
+            echo "${err}pnpm self-update landed on ${post}, a DENIED version: ${landed_why}${done}" >&2
+            echo "${warn}Roll back now:  pnpm self-update ${current}${done}" >&2
+            return 1
+        fi
+        return 0
     fi
 
     cmp=$(__pnpm_vercmp "$current" "$eligible")
@@ -141,6 +167,15 @@ pnpm_update() {
             echo "${info}pnpm ${raw} is published but held by minimumReleaseAge${eta}.${done}"
         fi
         return 0
+    fi
+
+    # Deny-list gate (Ruling D-20260919-10): checked before any download. Refuse
+    # and name the reason; the floor cannot express "this one version is broken".
+    local deny_why
+    if deny_why=$(__pnpm_version_denied "$eligible"); then
+        echo "${err}Refusing to update pnpm ${current} -> ${eligible}: ${deny_why}${done}" >&2
+        echo "${warn}Staying on ${current}; retry once a later version is the latest eligible.${done}" >&2
+        return 1
     fi
 
     # current < eligible: a real, installable update is available -- BUT guard the

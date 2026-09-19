@@ -499,3 +499,21 @@ set). Accepted cost: an existing project can start failing to install after Node
 dependency's upper bound; the fix is the Node version, or `engineStrict: false` in that
 project's pnpm-workspace.yaml. Note `--config.engineStrict=true` on the command line did
 nothing in the probe; `--engine-strict` and the file key both work.
+
+## D-20260919-10 -- pnpm_update carries a version deny list beside the floor
+
+topic: pnpm_update deny list denylist refuse version 12.3.0 PNPM_DENY_VERSIONS floor PNPM_MIN_VERSION self-update eligible zsh_node_functions selftest
+decided: 2026-09-19
+status: standing
+holds-in: fifty-shades-of-dotfiles/docs/PNPM_SETUP_GUIDE.md section 7.1
+
+A floor says "not below"; it cannot say "never this one". 12.3.0 broke global node/npm/yarn
+after self-update and was fixed in 12.3.1, and nothing in `pnpm_update` would have stopped a
+box on 12.2.x taking it while it was the latest eligible. `PNPM_DENY_VERSIONS` in
+`home/.zsh_node_functions` holds "version|reason" entries, starting with 12.3.0, consulted at
+both places the function can land on a version: before the eligible-version download (refuse,
+print the reason, exit 1, no self-update) and after the blind fallback self-update that runs
+when the eligible version is unknown (the target cannot be checked beforehand, so the landed
+version is checked and a roll-back command printed). `zsh-node-functions-selftest` sources
+the real file with stubbed network and pnpm and drives denied, allowed, empty-list and
+fallback arms. The floor stays where it is; the deny list is not a second floor.

@@ -745,3 +745,18 @@ would break every pnpm command on this box, so the object form stays until the f
 The engineStrict behaviour arm: a `file:` dependency declaring `engines.node: "<1"` installed
 with the key unset and failed with the key set. `--config.engineStrict=true` on the command
 line did nothing; `--engine-strict` and the file key both work.
+
+**`pnpm_update` deny list (D-20260919-10).** A floor says "not below"; it cannot say "never
+this one". `PNPM_DENY_VERSIONS` in `home/.zsh_node_functions` holds `version|reason` entries
+(first: `12.3.0`, the global node/npm/yarn breakage fixed in 12.3.1) and is consulted at both
+places the function can land on a version: before the eligible-version download (refuse, print
+the reason, exit 1, no `self-update`) and after the blind fallback `self-update` that runs when
+the eligible version is unknown (the landed version is checked and a roll-back command printed).
+The floor is unchanged. Selftest:
+
+```bash
+zsh-node-functions-selftest   # 10 checks: denied refused, allowed passes, empty list passes, fallback arms
+```
+
+It sources the real file with pnpm and the network stubbed; a mutant with the gates
+disconnected fails 3 of 10.
