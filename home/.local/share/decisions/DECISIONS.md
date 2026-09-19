@@ -357,3 +357,57 @@ The general shape, which is why this is recorded rather than left as a quiet del
 clearing condition protects a mechanism, not a file. When something better takes over the job,
 honouring the condition literally preserves the exact failure it was written to prevent --
 a stale banner that everyone has learned to read past.
+
+## D-20260919-02 -- Project memory lives in the harness dir, not in lifeos-private SCOPES
+
+topic: memory home harness projects dir dot-claude lifeos-private SCOPES scopes.json pj c launcher auto-memory separation resolver symlink
+decided: 2026-09-19
+status: standing
+holds-in: fifty-shades-of-dotfiles/docs/PROJECT_LIFEOS_BOUNDARY.md section D1
+supersedes: steps b-e of lifeos-private/MEMORY/WORK/memory-store-separation/FINDINGS.md
+
+`~/.claude/projects/<encoded-repo-path>/memory/` is the single source for this project's
+notes. Measured 2026-09-19: a `pj` session has auto-memory ON and reads and writes it
+natively; a `c` session never loads it. The separation already exists at the launcher
+level, so moving notes into LifeOS's private store would add the coupling being removed.
+The SCOPES registry has a writer and no reader, and the LoadContext leak the earlier plan
+was built on does not occur today.
+
+## D-20260919-03 -- The unversioned work drawer moves under the harness memory dir
+
+topic: open items drawer MEMORY WORK unversioned gitignored move harness memory WORK folder open-items OPEN_ITEMS_DIR per repo enumerate
+decided: 2026-09-19
+status: standing
+holds-in: fifty-shades-of-dotfiles/docs/PROJECT_LIFEOS_BOUNDARY.md section D2
+
+Dotfiles-owned folders in `~/.claude/MEMORY/WORK/` move to a `WORK/` folder inside this
+repo's harness memory dir, which is versioned in `dot-claude` and already a path LifeOS's
+harvester recognises. The one LifeOS-owned decision file moves to lifeos-private.
+`open-items` must resolve per repo BEFORE the move; today it refuses loudly (exit 2) on a
+missing drawer, which is the safe failure. Public files keep saying "run open-items" with
+no path. NOT EXECUTED at the time of recording.
+
+## D-20260919-04 -- Delete the dotfiles copies in lifeos-private, keep the learning
+
+topic: lifeos-private residue SCOPES dotfiles copy MEMORY WORK ci-watch-observability github-credential-lanes incidents upgrades delete keep hash check
+decided: 2026-09-19
+status: standing
+holds-in: fifty-shades-of-dotfiles/docs/PROJECT_LIFEOS_BOUNDARY.md section D3
+
+After D-20260919-03 lands and a hash comparison shows nothing unique remains: delete
+`SCOPES/dotfiles/` and the dotfiles folders under `MEMORY/WORK/` in lifeos-private.
+Keep the LEARNING incidents, the UPGRADES records and the one citation in
+`OPERATIONAL_RULES.md`; those are LifeOS's own lessons, and deleting evidence to tidy a
+boundary is the wrong trade. Gated on the hash check, never on a date. NOT EXECUTED.
+
+## D-20260919-05 -- pj keeps appending the whole OPERATIONAL_RULES.md; no split
+
+topic: pj launcher OPERATIONAL_RULES append-system-prompt-file project rules split drift doctrine global lifeos-private
+decided: 2026-09-19
+status: standing
+holds-in: fifty-shades-of-dotfiles/docs/PROJECT_LIFEOS_BOUNDARY.md section D4
+
+Measured 2026-09-19: the file is global doctrine with one citation of this repo. A project
+copy would be a second source of the same rules, which drifts. Accepted cost: `pj` depends
+on lifeos-private existing at that path, and LifeOS-only sections cost tokens in `pj`.
+Reversible later without touching D-20260919-02 to -04.
