@@ -87,6 +87,11 @@ def main() -> int:
         return 2
 
     tmp = Path(tempfile.mkdtemp(prefix="census-selftest-"))
+    # Check 21 needs a root containing a symlink, and check 21c needs one containing
+    # NONE. They cannot share a tree: the first version nested the link fixture inside
+    # the corpus and 21c failed, correctly, because the corpus was no longer link-free.
+    # Two roots, so neither arm can contaminate the other.
+    tmp_link = Path(tempfile.mkdtemp(prefix="census-selftest-link-"))
     try:
         root = corpus(tmp)
         W = ("--walk", "--control", "CONTROL")
@@ -387,6 +392,64 @@ def main() -> int:
         check("20c utf16: --binary can actually read a UTF-16 file",
               "utf16.txt" in plain, "--binary promised to search it and found nothing")
 
+        # ── 21 · a tree behind a symlinked directory is NAMED, not silently absent ──
+        # Measured 2026-09-19. `find <dir> -type f` returns ZERO files when <dir> is a
+        # symlink, control included, and os.walk does the same for a symlinked subdir:
+        #     os.walk(root)                   -> 1 file, the needle invisible
+        #     os.walk(root, followlinks=True) -> 2 files
+        # A session read that zero off `find ~/.claude/LIFEOS/USER -type f` and only its
+        # control exposed it. The link is still not followed — followlinks=True loops
+        # forever on a self-referential link — so the guarantee is that the omission is
+        # STATED. The fixture is the measurement, built the same way it was measured.
+        # It gets its own root: adding a link to corpus() would move counts other arms
+        # assert on, and an arm that edits its neighbours' fixtures is its own defect.
+        link_base = tmp_link
+        (link_base / "real" / "inner").mkdir(parents=True, exist_ok=True)
+        (link_base / "real" / "inner" / "hidden.txt").write_text("CONTROL NEEDLE hidden\n")
+        (link_base / "root").mkdir(parents=True, exist_ok=True)
+        (link_base / "root" / "plain.txt").write_text("CONTROL NEEDLE in plain sight\n")
+        os.symlink(link_base / "real", link_base / "root" / "linkdir")
+        link_root, link_target = link_base / "root", link_base / "real"
+
+        rc, _, plain = run(link_root, *W, "NEEDLE")
+        check("21a symlink: the tree behind the link is outside the population",
+              rc == 0 and "population: 1 file(s) via WALK" in plain,
+              "expected plain.txt alone to be searched")
+        check("21b symlink: the directory it never entered is NAMED",
+              "NOT FOLLOWED: 1 symlinked director" in plain and "linkdir" in plain,
+              "a whole subtree was omitted with nothing said")
+        # Positive statement of completeness, the peek rule: a warning that fires only
+        # when something is hidden leaves every quiet run ambiguous, which is the bug.
+        _, _, plain = run(root, *W, "NEEDLE")
+        check("21c symlink: a link-free walk says so POSITIVELY",
+              "not followed: 0 symlinked directories" in plain,
+              "silence cannot distinguish 'no links' from 'never checked'")
+        # The advice the message gives has to actually work.
+        rc, _, plain = run(link_target, *W, "NEEDLE")
+        check("21d symlink: the target IS searchable as its own --root",
+              rc == 0 and "hidden.txt" in plain,
+              "the re-run instruction printed above does not find the file")
+        # The machine reader gets the same fact, as a list. Never a count: the files
+        # behind a link were never enumerated, so any number would be invented.
+        rc, raw, _ = run(link_root, "--walk", "--json", "--control", "CONTROL", "NEEDLE")
+        try:
+            d = json.loads(raw)
+            ok = (rc == 0
+                  and d["population"]["unfollowed_symlinked_dirs"] == ["linkdir"])
+            why = "" if ok else f"rc={rc} value={d.get('population', {}).get('unfollowed_symlinked_dirs')}"
+        except Exception as e:
+            ok, why = False, f"not JSON: {e}"
+        check("21e symlink: --json carries the unfollowed directories as a list", ok, why)
+        rc, raw, _ = run(root, "--walk", "--json", "--control", "CONTROL", "NEEDLE")
+        try:
+            d = json.loads(raw)
+            ok = rc == 0 and d["population"]["unfollowed_symlinked_dirs"] == []
+            why = "" if ok else f"rc={rc} value={d.get('population', {}).get('unfollowed_symlinked_dirs')}"
+        except Exception as e:
+            ok, why = False, f"not JSON: {e}"
+        check("21f symlink: --json says [] rather than nothing when none were hidden",
+              ok, why)
+
         # ── the original guarantee must still hold ──────────────────────────────────
         rc, _, plain = run(root, "--walk", "--control", "ABSENT-TOKEN", "NEEDLE")
         check("8a control still refuses: exit 2 when the control misses", rc == 2)
@@ -396,6 +459,7 @@ def main() -> int:
         check("8c control still refuses: a bad --root exits 2", rc == 2)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+        shutil.rmtree(tmp_link, ignore_errors=True)
 
     print()
     if failures:

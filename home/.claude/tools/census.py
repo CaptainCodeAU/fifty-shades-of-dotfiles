@@ -78,8 +78,16 @@ WHAT IT SEARCHES, AND WHAT IT DOES NOT
     filename with a space, a newline or non-ASCII characters is searched like any other;
     such a name is escaped when printed so a result row can never span two lines.
 
-    Symlinks are followed. One pointing outside the root is read and reported under its
-    in-repo path, and a broken one is counted as unreadable rather than skipped quietly.
+    In GIT mode, symlinks are followed. One pointing outside the root is read and
+    reported under its in-repo path, and a broken one is counted as unreadable rather
+    than skipped quietly.
+
+    In WALK mode, a symlinked DIRECTORY is NOT descended, so the tree behind it is not
+    in the population at all. Every walk therefore names how many such directories it
+    declined to enter, and which — positively, including when the answer is none. The
+    link is not followed on purpose: `os.walk(followlinks=True)` loops forever on a
+    self-referential link and this tool keeps no visited set. Re-run with the link's
+    target as `--root` to search behind one.
 
 WHAT IT DOES NOT FIX
     It cannot tell you a hit is a DEFECT. Triage is a human reading, always. A real run
@@ -230,18 +238,33 @@ def git_unsearched(root):
 
 
 def walked_files(root, scope="tracked"):
-    """(files, skipped) — everything under root minus SKIP_DIRS, and HOW MANY that cost.
+    """(files, skipped, unfollowed) — everything under root minus SKIP_DIRS, HOW MANY
+    that cost, and the symlinked directories the walk handed back but never entered.
 
     Naming the skipped directories was not enough. A retired token living in build/ made
     a real session read `0` from walk mode and start to call it gone; the list of skipped
     names was on screen, in a wall of nineteen entries, and carried no number. `it skips
     … build …` and `2 file(s) inside skipped directories were NOT searched` land very
     differently, and only the second is a quantity you can act on.
+
+    The third value is that same lesson aimed at symlinks, measured 2026-09-19. `os.walk`
+    does not descend a symlinked DIRECTORY: followlinks defaults to False, and turning it
+    on invites an endless loop on a self-referential link, which this tool has no visited
+    set to survive. So a tree reachable only through a link contributes nothing to the
+    population — and, until this change, nothing to the denominator either. Measured on a
+    scratch root holding plain.txt beside linkdir -> a directory containing hidden.txt:
+
+        os.walk(root)                    -> 1 file, hidden.txt invisible
+        os.walk(root, followlinks=True)  -> 2 files
+
+    A session hit the same wall with `find ~/.claude/LIFEOS/USER -type f`, which returns
+    ZERO files, control included, because USER is a symlink. The fix is not to follow the
+    link; it is to stop the omission being SILENT, which is the whole census contract.
     """
     # Walk mode partitions the same way: the visible tree, the contents of SKIP_DIRS,
     # and their union. `.git` is never descended into under any scope — it is an object
     # store, not source, and searching it yields hits nobody can act on.
-    out, skipped = [], 0
+    out, skipped, unfollowed = [], 0, []
     always = {".git"}
     prune = always if scope in ("all", "ignored") else SKIP_DIRS
     for dirpath, dirnames, filenames in os.walk(root):
@@ -250,13 +273,20 @@ def walked_files(root, scope="tracked"):
         for d in pruned:                       # count what the prune actually cost
             for _, _, fs in os.walk(os.path.join(dirpath, d)):
                 skipped += len(fs)
+        # A symlinked directory survives the prune and is then quietly not entered.
+        # Name it, so the reader can re-run with the link's target as --root instead of
+        # reading a zero that a real hit and an unvisited tree produce alike.
+        for d in dirnames:
+            full = os.path.join(dirpath, d)
+            if os.path.islink(full):
+                unfollowed.append(os.path.relpath(full, root))
         for name in filenames:
             if name in prune:
                 skipped += 1
                 continue
             rel = os.path.relpath(os.path.join(dirpath, name), root)
             out.append(rel)
-    return sorted(out), skipped
+    return sorted(out), skipped, sorted(unfollowed)
 
 
 def inside(path, prefix):
@@ -293,14 +323,14 @@ def collect(root, unders, excludes, force_walk, include_binary=False, scope="tra
     the denominator stays the set actually searched.
     """
     files = None if force_walk else git_files(root, scope)
-    mode, skipped = "git", 0
+    mode, skipped, unfollowed = "git", 0, []
     if files is None:
-        files, skipped = walked_files(root, scope)
+        files, skipped, unfollowed = walked_files(root, scope)
         mode = "walk"
         if scope == "ignored":
             # walked_files returns the whole tree when nothing is pruned; the ignored
             # scope is the COMPLEMENT of the default, so subtract the visible set.
-            visible, _ = walked_files(root, "tracked")
+            visible, _, _ = walked_files(root, "tracked")
             files = sorted(set(files) - set(visible))
 
     filters = []
@@ -341,7 +371,7 @@ def collect(root, unders, excludes, force_walk, include_binary=False, scope="tra
                         "dropped", "", len(binaries)))
     keep = {"text"} | ({"binary"} if include_binary else set())
     files = [f for f in files if kinds[f] in keep]
-    return files, mode, filters, skipped
+    return files, mode, filters, skipped, unfollowed
 
 
 # Metacharacters whose presence in a LITERAL pattern almost always means the caller
@@ -618,8 +648,8 @@ def main() -> int:
         return 2
 
     scope = "ignored" if a.ignored_only else ("all" if a.include_ignored else "tracked")
-    files, mode, filters, skipped = collect(root, a.under, a.exclude, a.walk, a.binary,
-                                           scope)
+    files, mode, filters, skipped, unfollowed = collect(root, a.under, a.exclude, a.walk,
+                                                        a.binary, scope)
 
     # ── the denominator AND how it was drawn, ON BOTH PATHS ───────────────────────
     # This block used to run only AFTER the control passed, so a CONTROL FAILED run
@@ -681,6 +711,19 @@ def main() -> int:
                 print(f"{tone}  NOT searched: {skipped} file(s) inside skipped directories"
                       f"{' — a hit could be in any of them' if skipped else ''}"
                       f"{'  ·  --ignored-only searches just those, --include-ignored both' if skipped else ''}{OFF}")
+            # A symlinked directory is not entered, and the files behind it are not in
+            # the count above either — they were never enumerated to be counted. State
+            # it POSITIVELY on every walk, the way peek states completeness: a line that
+            # appears only when something is hidden leaves every quiet run ambiguous.
+            if unfollowed:
+                print(f"{YELLOW}  NOT FOLLOWED: {len(unfollowed)} symlinked "
+                      f"director{'y' if len(unfollowed) == 1 else 'ies'} — the tree behind "
+                      f"each is absent from the count above, not counted as skipped:\n"
+                      f"    {', '.join(unfollowed)}\n"
+                      f"    Re-run with the link's TARGET as --root to search it.{OFF}")
+            else:
+                print(f"{DIM}  not followed: 0 symlinked directories (nothing hidden "
+                      f"behind a link){OFF}")
             print(f"{YELLOW}  ⚠ WALK mode — not a git repo (or --walk forced). This population is NOT\n"
                   f"    complete by construction: it skips {', '.join(sorted(SKIP_DIRS))}.\n"
                   f"    State that limit alongside any number you quote from this run.{OFF}")
@@ -712,6 +755,11 @@ def main() -> int:
                          "note": note or None, "matched": matched}
                         for f, pre, n, verb, note, matched in filters],
             "not_searched": gap,
+            # The symlinked directories the walk never entered, by path. Deliberately a
+            # LIST and not a count: the files behind a link were never enumerated, so
+            # any number here would be invented. `[]` means the walk hid nothing behind
+            # a link; `null` means the question does not apply (git mode).
+            "unfollowed_symlinked_dirs": unfollowed if mode == "walk" else None,
         }
 
     # ── THE CONTROL, ASSERTED BEFORE ANY RESULT IS SHOWN ──────────────────────────

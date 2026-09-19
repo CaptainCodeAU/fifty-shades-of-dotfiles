@@ -129,7 +129,7 @@ command, and check the property actually separates them.
 
 **A tool REFUSING to answer is not the tool answering "no".** A refusal reads
 like a finding, exactly the way a zero does, and it is the same failure wearing
-different clothes. Two from 2026-09-13:
+different clothes. Two from 2026-09-13, and a quieter one from 2026-09-19:
 
 - `git ls-files --error-unmatch <path>` on a path that crosses a symlink returns
   `fatal: pathspec ... is beyond a symbolic link`. That means "this repo does
@@ -142,6 +142,15 @@ different clothes. Two from 2026-09-13:
   explicitly allowlisted. `git add --dry-run` answers that directly, and gives
   both arms cheaply: an admitted file adds, an unadmitted sibling is refused by
   name.
+- `find <dir> -type f` returns **ZERO files, control included**, when `<dir>` is
+  a symlink to a directory: find does not follow a symlinked root or subdir
+  without `-L`. `~/.claude/LIFEOS/USER` is one, and on 2026-09-19 that zero was
+  read as an empty tree; only the control in the same command exposed it.
+  `find -L <dir> -type f` returns the real contents. This one is quieter than
+  the two above, which is what makes it worse: they at least print `fatal:`,
+  while find exits **0** and says nothing at all. `census` walk mode now names
+  every symlinked directory it declined to enter, positively on every run, so
+  the omission is stated instead of inferred.
 
 Measured 2026-09-13: eight errors across two sessions in one evening, every one
 this shape. An invocation count that read `2` on a working helper AND on one
