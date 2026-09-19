@@ -254,7 +254,7 @@ the Sources section). Verified against docs + the live CLI (v2.1.191) this sessi
   a `PreToolUse` hook can DENY but cannot force-ALLOW a protected path (only
   `bypassPermissions` can; verified vs issue #41615). From the 2026-06-25 deep
   investigation of H1-2026 Claude Code changes; full cited report in
-  `~/.claude/MEMORY/WORK/20260625-110731_*`. New companion doc: `CLAUDE_CODE_SECURITY.md`.
+  `~/.claude/MEMORY/WORK/20260625-110731_*` (no longer present as of 2026-09-19; tree retired by D-20260919-03). New companion doc: `CLAUDE_CODE_SECURITY.md`.
 
 ---
 

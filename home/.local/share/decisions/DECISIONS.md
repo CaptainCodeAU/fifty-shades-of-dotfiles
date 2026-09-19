@@ -162,7 +162,7 @@ surface D-20260919-01 retired. Same ruling, one fewer thing that can lie.
 topic: ssh key passphrase keychain AddKeysToAgent UseKeychain claude launch agent expiry branch liveness ci-watch unattended
 decided: 2026-09-17
 status: standing
-holds-in: ~/.claude/MEMORY/WORK/ssh-key-and-branch-liveness/DECISION.md
+holds-in: ssh-key-and-branch-liveness/DECISION.md in this repo's open-items drawer (`open-items --where`; moved 2026-09-19, D-20260919-03)
 
 Option A of four. The key is NOT removed from the launcher; its passphrase moves into the
 login keychain, so unattended starts stop blocking and the 12-hour agent expiry stops
@@ -282,7 +282,7 @@ topic: ci-watch github app github-agent installation token PAT fine-grained cred
 
 decided: 2026-09-18
 status: standing
-holds-in: ~/.claude/MEMORY/WORK/ci-watch-observability/APP-MIGRATION-DECISION.md
+holds-in: ci-watch-observability/APP-MIGRATION-DECISION.md in this repo's open-items drawer (`open-items --where`; moved 2026-09-19, D-20260919-03)
 
 Asked for on 2026-09-15 after the PAT was found in 12 transcripts, oldest 14 June. Measured
 2026-09-18 and declined by Gavin the same day, on four grounds, each with a control.

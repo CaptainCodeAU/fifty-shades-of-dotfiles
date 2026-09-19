@@ -198,7 +198,25 @@ W-20260918-03 ("the drawer is still not version controlled") closed in the `dot-
 drawer. Left in the old tree for steps 3 and 6: `per-project-work-scoping/DECISION.md`,
 `README.md`, the `OPEN.md` pointer, `INDEX.md`, two empty project folders.
 
-**Step 3: PENDING** (confirm before overwriting).
+**Step 3: DONE 2026-09-19.** Gavin chose the move over an in-place overwrite. The DECIDED
+`DECISION.md` moved with `mv` (hash identical) to `WORK/per-project-work-scoping/` beside the
+`dot-claude` drawer, exactly where that item's `holds-in:` points (verified to resolve, with
+a bogus path as control). The stale PARKED twin `per-project-work-scoping-DECISION.md` was
+`git rm`'d, so it stays in lifeos-private history. Committed and pushed as `b49b0e0`.
+
+**Step 4: DONE 2026-09-19.** Census over 242 tracked files (control `open-items`, 54 hits)
+for `MEMORY/WORK` and the three folder names. Of the "seven known pointers": `CLAUDE.md`
+was already path-free (D-20260919-01); `refresh.md` names the repo-root PAI store as a thing
+to avoid, still true; `OPERATIONAL_RULES.md` cites `GITHUB_AGENT_RECIPES.md`, not the drawer;
+`GITHUB_AGENT_RECIPES.md` cites an incident name. Repointed: two `holds-in:` lines in
+`DECISIONS.md` (the ssh-key-and-branch-liveness decision and the ci-watch App-migration
+decision) now say "in this repo's open-items drawer (`open-items --where`)", no path.
+Annotated as no longer present: `CLAUDE_CODE_SECURITY.md` and `CLAUDE_CODE_RESEARCH_NOTES.md`
+both cite a 2026-06-25 investigation folder under the old tree that exists nowhere on this
+machine (checked both WORK trees, with the moved ci-watch folder as control). The old
+drawer's own `README.md` and `OPEN.md` pointer are not repointed; they go at step 6.
+
+**Step 5: PENDING** (confirm before deleting).
 
 ## Follow-ups that belong to LifeOS, not this repo
 

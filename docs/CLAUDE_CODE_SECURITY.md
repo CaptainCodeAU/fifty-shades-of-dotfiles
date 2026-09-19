@@ -142,7 +142,7 @@ current (the protected-paths guard in section 2 is what neutered the malicious-h
 - Issue #41615 (allow-rules / PreToolUse hooks cannot override the protected-path prompt): <https://github.com/anthropics/claude-code/issues/41615>
 - CVEs: GHSA-jh7p-qr78-84p7 (CVE-2026-21852); NVD CVE-2026-25723; GHSA-66q4-vfjg-2qhh (CVE-2026-25722); Check Point Research (CVE-2025-59536); SentinelOne (CVE-2026-39861)
 - **Authoritative, complete advisory list** (28 as of 2026-07-30) — OSV for the npm package: <https://osv.dev/list?ecosystem=npm&q=%40anthropic-ai%2Fclaude-code>. Query a specific version via the POST example in section 4; that is the check to re-run rather than trusting this doc's table.
-- Full investigation report (local): `~/.claude/MEMORY/WORK/20260625-110731_claude-code-updates-investigation/PRD.md`
+- Full investigation report (local): `~/.claude/MEMORY/WORK/20260625-110731_claude-code-updates-investigation/PRD.md` (NO LONGER PRESENT, checked 2026-09-19: that tree held nothing by this name and is retired by D-20260919-03; the pointer is kept as provenance, not as a path to follow)
 
 ---
 
