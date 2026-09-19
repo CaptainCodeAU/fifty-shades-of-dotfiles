@@ -187,7 +187,18 @@ finds 1 item across 1 drawer, `--all` finds it, `--session` prints it. Sandbox n
 Bash sandbox's write list does not include lifeos-private, so the `mv` and the commit each
 needed one unsandboxed call; the sandboxed attempt failed cleanly with nothing moved.
 
-**Step 2: PENDING** (confirm before moving).
+**Step 2: DONE 2026-09-19.** `OPEN.md` (flat), `ci-watch-observability/` and
+`ssh-key-and-branch-liveness/` moved with `mv` into this repo's harness memory dir under
+`WORK/`; 12 files, content hashes identical before and after. Committed in `dot-claude` as
+`f4c5137` and pushed. Verified from a fresh sparse clone of `dot-claude` into the scratchpad:
+12 files, hashes identical to live, a file outside the sparse set absent as control, and
+`open-items --all` run against the clone as its projects root finds the drawer. Live tool
+back at baseline: 3 items across 2 drawers, `--session` prints this repo's one open item.
+W-20260918-03 ("the drawer is still not version controlled") closed in the `dot-claude`
+drawer. Left in the old tree for steps 3 and 6: `per-project-work-scoping/DECISION.md`,
+`README.md`, the `OPEN.md` pointer, `INDEX.md`, two empty project folders.
+
+**Step 3: PENDING** (confirm before overwriting).
 
 ## Follow-ups that belong to LifeOS, not this repo
 
