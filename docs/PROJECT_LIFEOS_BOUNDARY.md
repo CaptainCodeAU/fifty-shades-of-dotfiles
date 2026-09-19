@@ -1,8 +1,9 @@
 # Project / LifeOS boundary for this repo
 
-**Status:** DECIDED 2026-09-19, EXECUTION IN PROGRESS. Four rulings (D-20260919-02 to -05
-in the decisions register). The "Execution log" section at the end records each gate as it
-lands; everything above it is the plan as decided, with corrections marked AMENDED inline.
+**Status:** DECIDED 2026-09-19, EXECUTED 2026-09-19, all six steps. Four rulings
+(D-20260919-02 to -05 in the decisions register). The "Execution log" section at the end
+records each gate as it landed; everything above it is the plan as decided, with
+corrections marked AMENDED inline where execution found the plan wrong.
 
 **Written to stand alone.** Assume no memory of the session that produced it.
 
@@ -227,7 +228,23 @@ ruling's own condition ("nothing unique remains") doing its job, not a deviation
 Open for LifeOS: `scopes.json`'s `dotfiles` entry now points at a removed store, and the
 kept HANDOFF cites the old drawer path.
 
-**Step 6: PENDING** (confirm before deleting).
+**Step 6: DONE 2026-09-19.** `~/.claude/MEMORY/` (by then only `WORK/` with the old
+`README.md`, `OPEN.md` pointer, retired `INDEX.md`, three empty folders and two `.DS_Store`)
+sent to the Trash with the Trash-routed `rm -r`, one unsandboxed call, `test -e` confirms it
+is gone, `LIFEOS/MEMORY` still present as control. Recoverable by Finder Put Back. The whole
+orphan tree rather than just `WORK/`, per LifeOS's own `SystemUserBoundary.md`. End state:
+`open-items --all` 3 items across 2 drawers, `--session` prints this repo's one open item
+and is silent in `~/.claude` (its item closed), both selftests pass. Readers checked first:
+`open-items` no longer references the path outside comments; `LoadContext` scans it behind
+an existence check; the settings file names `MEMORY/WORK` only in prose for LifeOS's central
+tree. One pointer nobody on disk owns: the old stub said a session-opening prompt read
+`~/.claude/MEMORY/WORK/OPEN.md` first; that prompt is not a file anywhere searched, so if
+it is pasted text it should now say `open-items`.
+
+**Left for LifeOS (raised with `c-dotfiles`, not written by this session):** `FINDINGS.md`
+supersession stamp; the shipped `LoadContext` copy still advertising the orphan tree;
+`scopes.json`'s `dotfiles` entry pointing at a removed store; the kept HANDOFF citing the old
+path.
 
 ## Follow-ups that belong to LifeOS, not this repo
 
