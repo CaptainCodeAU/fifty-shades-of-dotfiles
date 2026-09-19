@@ -54,6 +54,36 @@ __get_disk_usage() {
 }
 
 # ------------------------------------------------------------------------------
+# Helper: pnpm-vs-nvm PATH order (Ruling D-20260919-11)
+# ------------------------------------------------------------------------------
+# pnpm 12 ships `globalShims`, set false in the stowed config so nvm keeps the
+# `node` command. That holds only while nvm's bin precedes $PNPM_HOME/bin on
+# PATH. Exception-based: silent when the order is right, one red line when pnpm
+# comes first or when no nvm bin is on PATH at all (a green "PATH ok" line every
+# shell would habituate). Args: PATH string (default $PATH), pnpm bin dir
+# (default $PNPM_HOME/bin, falling back to ~/Library/pnpm/bin). Returns 1 on a
+# warning so the selftest can read it. Tested by zsh-welcome-selftest.
+__welcome_pnpm_path_check() {
+    local path_str="${1-$PATH}" pnpm_bin="${2:-${PNPM_HOME:-$HOME/Library/pnpm}/bin}"
+    local -a parts
+    parts=("${(@s/:/)path_str}")
+    local i nvm_idx=0 pnpm_idx=0
+    for (( i = 1; i <= ${#parts}; i++ )); do
+        [[ $nvm_idx -eq 0 && "${parts[i]}" == */.nvm/versions/node/*/bin ]] && nvm_idx=$i
+        [[ $pnpm_idx -eq 0 && "${parts[i]}" == "$pnpm_bin" ]] && pnpm_idx=$i
+    done
+    if (( nvm_idx == 0 )); then
+        echo "    PATH: ${err}no nvm bin on PATH${done} ${err}(globalShims is off; nothing owns 'node'. Run: nvm use default)${done}"
+        return 1
+    fi
+    if (( pnpm_idx > 0 && pnpm_idx < nvm_idx )); then
+        echo "    PATH: ${err}${pnpm_bin} precedes nvm's bin${done} ${err}(entry ${pnpm_idx} vs ${nvm_idx}; pnpm could shadow 'node'. Fix the order in .zshrc)${done}"
+        return 1
+    fi
+    return 0
+}
+
+# ------------------------------------------------------------------------------
 # Helper: Check GPU Availability (WSL/Linux only)
 # ------------------------------------------------------------------------------
 __check_gpu() {
@@ -216,6 +246,11 @@ __show_welcome_full() {
         fi
     else
         echo "    Node: ${err}nvm not found${done}"
+    fi
+
+    # --- PATH order: nvm's bin must precede pnpm's (silent when right) ---
+    if command -v nvm &>/dev/null; then
+        __welcome_pnpm_path_check
     fi
 
     # --- nvm (version floor; nvm <= 0.40.4 is vulnerable to CVE-2026-10796) ---

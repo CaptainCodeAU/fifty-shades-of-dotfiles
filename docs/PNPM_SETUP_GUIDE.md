@@ -760,3 +760,16 @@ zsh-node-functions-selftest   # 10 checks: denied refused, allowed passes, empty
 
 It sources the real file with pnpm and the network stubbed; a mutant with the gates
 disconnected fails 3 of 10.
+
+**PATH-order banner check (D-20260919-11).** `globalShims: false` keeps `node` with nvm only
+while nvm's bin precedes `$PNPM_HOME/bin` on PATH (entry 1 versus entry 22 in a login shell
+on 2026-09-19). `__welcome_pnpm_path_check` in `home/.zsh_welcome` runs beside the nvm block
+of the full banner and is exception-based: nothing when the order is right, one red line when
+pnpm's bin comes first, one red line when no nvm bin is on PATH at all. Selftest:
+
+```bash
+zsh-welcome-selftest          # 8 checks: correct order silent, reversed warns, nvm missing warns, Linux bin dir
+```
+
+It extracts the real function from the file by name (the file runs the banner at source time)
+and drives it with fixture PATH strings.

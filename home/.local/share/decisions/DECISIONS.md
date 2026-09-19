@@ -517,3 +517,18 @@ when the eligible version is unknown (the target cannot be checked beforehand, s
 version is checked and a roll-back command printed). `zsh-node-functions-selftest` sources
 the real file with stubbed network and pnpm and drives denied, allowed, empty-list and
 fallback arms. The floor stays where it is; the deny list is not a second floor.
+
+## D-20260919-11 -- Welcome banner warns when pnpm's bin precedes nvm's on PATH
+
+topic: zsh_welcome PATH order nvm bin Library/pnpm/bin PNPM_HOME globalShims node owner banner warning exception-based silent selftest
+decided: 2026-09-19
+status: standing
+holds-in: fifty-shades-of-dotfiles/docs/PNPM_SETUP_GUIDE.md section 7.1
+
+`globalShims: false` (D-20260919-06) keeps `node` with nvm only while nvm's bin precedes
+`$PNPM_HOME/bin` on PATH (measured 2026-09-19: entry 1 versus entry 22 in a login shell).
+Nothing watched that order. `__welcome_pnpm_path_check` in `home/.zsh_welcome` runs beside
+the nvm block and is exception-based: silent when nvm's bin comes first, one red line when
+`$PNPM_HOME/bin` precedes it, one red line when no nvm bin is on PATH at all. No green "PATH
+ok" line, because a passive identical alert habituates. `zsh-welcome-selftest` extracts the
+real function from the file and drives all three arms with fixture PATH strings.

@@ -1,0 +1,103 @@
+#!/usr/bin/env zsh
+# zsh-welcome-selftest -- prove the welcome banner's pnpm-vs-nvm PATH check fires.
+#
+# Sibling of zsh-node-functions-selftest. The check exists because pnpm 12's
+# globalShims:false (Ruling D-20260919-06) keeps `node` with nvm only while nvm's
+# bin precedes $PNPM_HOME/bin on PATH, and nothing watched that order (Ruling
+# D-20260919-11). It is exception-based: silent when right, loud when not. Both
+# halves are driven here -- a check that is always silent looks identical to one
+# that is always right.
+#
+# THE SEAM is __welcome_pnpm_path_check's output and exit code for a given PATH
+# string. The function is EXTRACTED from the real ~/.zsh_welcome by name (the
+# file runs the banner at source time, so it cannot simply be sourced), so the
+# test sees today's code, not a copy.
+#
+# Usage: zsh-welcome-selftest      (exit 0 = all passed)
+
+setopt no_unset pipe_fail 2>/dev/null
+
+PASS=0; FAIL=0
+
+_resolve_repo() {
+    local self="${(%):-%x}" dir target
+    dir="$(cd -- "$(dirname -- "$self")" && pwd)"
+    if [[ -L "$self" ]]; then
+        target="$(readlink "$self")"
+        [[ "$target" != /* ]] && target="$dir/$target"   # re-base a relative stow link
+        dir="$(cd -- "$(dirname -- "$target")" && pwd)"
+    fi
+    (cd -- "$dir/../../.." && pwd)                      # <repo>/home/.local/bin -> <repo>
+}
+REPO="$(_resolve_repo)"
+WELCOME="${WELCOME_OVERRIDE:-$REPO/home/.zsh_welcome}"
+
+ok()  { PASS=$(( PASS + 1 )); printf '  \033[32mPASS\033[0m  %s\n' "$1"; }
+bad() { FAIL=$(( FAIL + 1 )); printf '  \033[31mFAIL\033[0m  %s\n' "$1"
+        [[ $# -gt 1 ]] && printf '        %s\n' "$2"; }
+code_of() { grep -v '^[[:space:]]*#' <<<"$1"; }
+
+echo "zsh_welcome selftest (pnpm-vs-nvm PATH order)"
+echo
+
+if [[ ! -f "$WELCOME" ]]; then
+    bad ".zsh_welcome found" "looked at $WELCOME"
+    echo; echo "  $PASS passed, $FAIL failed"; exit 1
+fi
+
+# --- 1. static: defined, and called from the full banner ---------------------
+fn_src=$(sed -n '/^__welcome_pnpm_path_check() {/,/^}/p' "$WELCOME")
+if [[ -n "$fn_src" ]]; then ok "__welcome_pnpm_path_check is defined"
+else bad "__welcome_pnpm_path_check is defined" "not found in $WELCOME"
+     echo; echo "  $PASS passed, $FAIL failed"; exit 1; fi
+full_src=$(sed -n '/^__show_welcome_full() {/,/^}/p' "$WELCOME")
+if code_of "$full_src" | grep -qE '^[[:space:]]+__welcome_pnpm_path_check$'; then
+    ok "called from __show_welcome_full"
+else bad "called from __show_welcome_full" "defined but never invoked from the banner"; fi
+
+# --- 2. behaviour: the real function, fixture PATH strings -------------------
+eval "$fn_src"
+ok=""; err=""; done=""; warn=""
+export HOME="${HOME}"
+NVM_BIN="$HOME/.nvm/versions/node/v24.0.0/bin"
+PNPM_BIN="$HOME/Library/pnpm/bin"
+unset PNPM_HOME 2>/dev/null; PNPM_HOME=""
+
+run_check() { OUT="$(__welcome_pnpm_path_check "$1" "$PNPM_BIN" 2>&1)"; RC=$?; }
+
+# 2a. correct order: silent, exit 0
+run_check "$NVM_BIN:/usr/local/bin:/usr/bin:/bin:$PNPM_BIN"
+if (( RC == 0 )) && [[ -z "$OUT" ]]; then ok "correct order (nvm first): silent, exit 0"
+else bad "correct order (nvm first): silent, exit 0" "rc=$RC out='$OUT'"; fi
+
+# 2b. nvm present, pnpm bin absent entirely: still silent (nothing to shadow)
+run_check "$NVM_BIN:/usr/local/bin:/usr/bin:/bin"
+if (( RC == 0 )) && [[ -z "$OUT" ]]; then ok "nvm first, no pnpm bin at all: silent"
+else bad "nvm first, no pnpm bin at all: silent" "rc=$RC out='$OUT'"; fi
+
+# 2c. reversed order: warns, names pnpm's bin, exit 1
+run_check "/usr/local/bin:$PNPM_BIN:/usr/bin:$NVM_BIN:/bin"
+if (( RC == 1 )) && [[ "$OUT" == *"precedes nvm's bin"* ]] && [[ "$OUT" == *"$PNPM_BIN"* ]]; then
+    ok "reversed order (pnpm first): warns and names the pnpm bin, exit 1"
+else bad "reversed order (pnpm first): warns, exit 1" "rc=$RC out='$OUT'"; fi
+
+# 2d. nvm missing from PATH: warns, exit 1
+run_check "/usr/local/bin:$PNPM_BIN:/usr/bin:/bin"
+if (( RC == 1 )) && [[ "$OUT" == *"no nvm bin on PATH"* ]]; then
+    ok "nvm bin absent: warns, exit 1"
+else bad "nvm bin absent: warns, exit 1" "rc=$RC out='$OUT'"; fi
+
+# 2e. Linux layout: PNPM_HOME/bin is what is matched, not a macOS literal
+PNPM_BIN="$HOME/.local/share/pnpm/bin"
+run_check "$PNPM_BIN:$NVM_BIN:/usr/bin"
+if (( RC == 1 )) && [[ "$OUT" == *"$PNPM_BIN"* ]]; then ok "Linux pnpm bin (\$PNPM_HOME/bin) is matched too"
+else bad "Linux pnpm bin is matched too" "rc=$RC out='$OUT'"; fi
+
+# 2f. default pnpm bin comes from PNPM_HOME when set (second arg omitted)
+PNPM_HOME="$HOME/.local/share/pnpm"
+OUT="$(__welcome_pnpm_path_check "$PNPM_HOME/bin:$NVM_BIN" 2>&1)"; RC=$?
+if (( RC == 1 )) && [[ "$OUT" == *"$PNPM_HOME/bin"* ]]; then ok "default pnpm bin is derived from PNPM_HOME"
+else bad "default pnpm bin is derived from PNPM_HOME" "rc=$RC out='$OUT'"; fi
+
+echo; echo "  $PASS passed, $FAIL failed"
+(( FAIL == 0 ))
