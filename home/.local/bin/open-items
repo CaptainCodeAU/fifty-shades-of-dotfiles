@@ -245,6 +245,10 @@ case "${1:-}" in
     # had a session, or the key was computed wrong. The second is an ordinary miss.
     [ -d "$(dirname "$(dirname "$f")")" ] \
       || refuse "no harness memory dir for $repo at $(dirname "$(dirname "$f")") -- the key may be wrong, or this repo has never had a session"
-    report "$(basename "$repo")" "$f" ;;
+    # Label by the drawer's own project: field when it exists (the key is lossy and the
+    # basename of ~/.claude is `.claude`, but its drawer says `dot-claude`); fall back
+    # to the basename only when there is no file to ask.
+    if [ -f "$f" ]; then label="$(name_of "$f")"; else label="$(basename "$repo")"; fi
+    report "$label" "$f" ;;
   *) printf 'open-items: unknown arg "%s" (try --help)\n' "$1" >&2; exit 2 ;;
 esac

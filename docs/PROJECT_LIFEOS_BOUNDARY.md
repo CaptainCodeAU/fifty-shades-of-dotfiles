@@ -178,7 +178,16 @@ miss. Selftest 45 arms, one per fixture repo including a dot-named one like `~/.
 linked worktree, and a symlinked memory dir. Between this step and step 2 the live tool
 refuses on `--all` and misses on the current repo, by design: nothing has moved yet.
 
-**Step 1, dot-claude move: PENDING** (confirm before moving).
+**Step 1, dot-claude move: DONE 2026-09-19.** `OPEN.md` and the CLOSED file moved with
+`mv` from `~/.claude/MEMORY/WORK/dot-claude/` (now empty, deleted at step 6) into
+`~/.claude/projects/<key of ~/.claude>/memory/WORK/`, which is the symlink into
+`lifeos-private/SCOPES/lifeos/notes/`. Committed and pushed there as `f6d3835`, not in
+`dot-claude`. Verified: `check-ignore` rc 1 (not ignored); from `~/.claude`, `open-items`
+finds 1 item across 1 drawer, `--all` finds it, `--session` prints it. Sandbox note: the
+Bash sandbox's write list does not include lifeos-private, so the `mv` and the commit each
+needed one unsandboxed call; the sandboxed attempt failed cleanly with nothing moved.
+
+**Step 2: PENDING** (confirm before moving).
 
 ## Follow-ups that belong to LifeOS, not this repo
 
