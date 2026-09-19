@@ -119,6 +119,19 @@ pnpm_update() {
 
     local current eligible raw raw_at now cmp current_major eligible_major post
     current=$(pnpm -v 2>/dev/null)
+    # Live dist-tag check (Ruling D-20260920-01): the cache is trusted for
+    # PNPM_CHECK_TTL_DAYS, which hid 12.4.2 (a security patch) behind a cache
+    # written hours before it shipped. One cheap registry call; when it
+    # disagrees with the cached raw, refresh in the FOREGROUND before choosing
+    # a target. Offline (empty) changes nothing: the cache is still used.
+    local live_raw cached_raw
+    live_raw=$(__pnpm_live_dist_tag 2>/dev/null)
+    cached_raw=$(__pnpm_get_raw_latest 2>/dev/null)
+    if [[ -n "$live_raw" && "$live_raw" != "$cached_raw" ]]; then
+        echo "${info}Registry latest is ${live_raw}; cache said ${cached_raw:-nothing}. Refreshing...${done}"
+        __pnpm_refresh_latest_sync "$(__pnpm_cache_file)"
+    fi
+
     eligible=$(__pnpm_get_latest 2>/dev/null)        # latest installable (age-gated)
     raw=$(__pnpm_get_raw_latest 2>/dev/null)         # registry dist-tag latest
     raw_at=$(__pnpm_get_raw_eligible_at 2>/dev/null) # epoch raw clears the gate

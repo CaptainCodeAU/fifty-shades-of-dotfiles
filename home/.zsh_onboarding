@@ -108,7 +108,13 @@ __pnpm_cache_fresh() {
 # from). Mirrors @pnpm/exe's platform-pkg-name.js. Echoes the package name, or
 # nothing when the platform is unknown (caller then treats the check as unknown).
 __pnpm_platform_pkg() {
-    local os arch
+    # $1 = target pnpm version. pnpm 12 renamed the per-platform artifacts from
+    # @pnpm/{macos,linux,linuxstatic}-<arch> to @pnpm/exe.<os>-<arch>[-musl]; the
+    # old names 404 for v12 and the binary guard then failed OPEN ("unknown").
+    # Ruling D-20260920-01. No version given: assume the current major.
+    local ver="${1:-$(pnpm -v 2>/dev/null)}" major os arch musl=0
+    major="${ver%%.*}"
+    [[ "$major" == <-> ]] || major=12
     os=$(uname -s 2>/dev/null)
     arch=$(uname -m 2>/dev/null)
     case "$arch" in
@@ -116,19 +122,26 @@ __pnpm_platform_pkg() {
         x86_64|amd64)  arch=x64 ;;
         *) return ;;
     esac
-    case "$os" in
-        Darwin) echo "@pnpm/macos-${arch}" ;;
-        Linux)
-            # Alpine/musl uses the linuxstatic-* artifacts; glibc uses linux-*.
-            if [[ -e "/lib/ld-musl-x86_64.so.1" || -e "/lib/ld-musl-aarch64.so.1" ]] \
-               || { command -v ldd &>/dev/null && ldd --version 2>&1 | grep -qi musl; }; then
-                echo "@pnpm/linuxstatic-${arch}"
-            else
-                echo "@pnpm/linux-${arch}"
-            fi
-            ;;
-        *) return ;;   # Windows self-installs via its own path; not handled here.
-    esac
+    if [[ "$os" == Linux ]]; then
+        # Alpine/musl uses the static artifacts; glibc uses the plain ones.
+        if [[ -e "/lib/ld-musl-x86_64.so.1" || -e "/lib/ld-musl-aarch64.so.1" ]] \
+           || { command -v ldd &>/dev/null && ldd --version 2>&1 | grep -qi musl; }; then
+            musl=1
+        fi
+    fi
+    if (( major >= 12 )); then
+        case "$os" in
+            Darwin) echo "@pnpm/exe.darwin-${arch}" ;;
+            Linux)  (( musl )) && echo "@pnpm/exe.linux-${arch}-musl" || echo "@pnpm/exe.linux-${arch}" ;;
+            *) return ;;   # Windows self-installs via its own path; not handled here.
+        esac
+    else
+        case "$os" in
+            Darwin) echo "@pnpm/macos-${arch}" ;;
+            Linux)  (( musl )) && echo "@pnpm/linuxstatic-${arch}" || echo "@pnpm/linux-${arch}" ;;
+            *) return ;;
+        esac
+    fi
 }
 
 # Does pnpm version $1 actually ship a native binary for THIS platform? Detects
@@ -140,7 +153,7 @@ __pnpm_platform_pkg() {
 __pnpm_version_has_binary() {
     local ver="$1" pkg meta size
     [[ -n "$ver" ]] || { echo unknown; return; }
-    pkg=$(__pnpm_platform_pkg)
+    pkg=$(__pnpm_platform_pkg "$ver")
     [[ -n "$pkg" ]] || { echo unknown; return; }
     meta=$(curl -fsSL --max-time 5 "https://registry.npmjs.org/${pkg}/${ver}" 2>/dev/null)
     [[ -n "$meta" ]] || { echo unknown; return; }
@@ -155,11 +168,27 @@ __pnpm_version_has_binary() {
     if (( size >= 1000000 )); then echo ok; else echo missing; fi
 }
 
+# Registry dist-tag latest, live, one cheap call (5s cap). Empty when offline.
+# Used by pnpm_update to notice a release the TTL-trusted cache has not seen
+# (Ruling D-20260920-01: 12.4.2 hid behind a cache written hours before it).
+__pnpm_live_dist_tag() {
+    curl -fsSL --max-time 5 "https://registry.npmjs.org/pnpm/latest" 2>/dev/null \
+        | grep -oE '"version":"[^"]+"' | head -1 | sed 's/.*"\([^"]*\)"/\1/'
+}
+
+# Foreground refresh: same work as __pnpm_refresh_latest_bg, but the caller
+# waits for the cache to be written. pnpm_update uses it when the live dist-tag
+# disagrees with the cache; the banner never calls it (keeps the prompt fast).
+__pnpm_refresh_latest_sync() {
+    local cache_file="$1"
+    __pnpm_refresh_latest_body "$cache_file"
+}
+
 # Background-refresh cache; never blocks the shell. `&!` is zsh-only —
 # disowns and detaches in one shot.
-__pnpm_refresh_latest_bg() {
+__pnpm_refresh_latest_body() {
     local cache_file="$1"
-    (
+    {
         # raw = registry dist-tag latest (cheap; always attempted first).
         local raw eligible min_age now cutoff pkg raw_at raw_eligible_at eligible_binary
         raw=$(curl -fsSL --max-time 5 "https://registry.npmjs.org/pnpm/latest" 2>/dev/null \
@@ -200,7 +229,11 @@ __pnpm_refresh_latest_bg() {
             echo "raw_eligible_at=$raw_eligible_at"
             echo "eligible_binary=$eligible_binary"
         } > "$cache_file"
-    ) &!
+    }
+}
+
+__pnpm_refresh_latest_bg() {
+    ( __pnpm_refresh_latest_body "$1" ) &!
 }
 
 # Echo the configured minimumReleaseAge in minutes (0 if unset or unreadable).

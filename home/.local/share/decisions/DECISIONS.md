@@ -532,3 +532,22 @@ the nvm block and is exception-based: silent when nvm's bin comes first, one red
 `$PNPM_HOME/bin` precedes it, one red line when no nvm bin is on PATH at all. No green "PATH
 ok" line, because a passive identical alert habituates. `zsh-welcome-selftest` extracts the
 real function from the file and drives all three arms with fixture PATH strings.
+
+## D-20260920-01 -- pnpm_update asks the registry every run; the binary guard knows pnpm 12 package names
+
+topic: pnpm_update cache TTL PNPM_CHECK_TTL_DAYS stale dist-tag 12.4.2 security patch hidden __pnpm_platform_pkg @pnpm/exe.darwin-arm64 @pnpm/macos-arm64 binary-less guard fails open v12 naming selftest
+decided: 2026-09-20
+status: standing
+holds-in: fifty-shades-of-dotfiles/docs/PNPM_SETUP_GUIDE.md section 7.2
+
+Two blind spots found while taking the 12.4.2 security patch, both measured. (1) The
+version cache is trusted for PNPM_CHECK_TTL_DAYS (7). It was written on 2026-09-15 hours
+before 12.4.2 was published, so `pnpm_update` answered "already latest" twice and never asked
+the registry; a security patch can hide for a week. Fix: every `pnpm_update` run fetches the
+registry dist-tag (one 5-second call) and, when it differs from the cached raw, refreshes the
+cache in the FOREGROUND before choosing a target. The banner keeps the cheap cached path.
+(2) `__pnpm_platform_pkg` returned the pnpm 11 artifact name (`@pnpm/macos-arm64`); pnpm 12
+ships `@pnpm/exe.<os>-<arch>[-musl]`. The lookup 404'd, `__pnpm_version_has_binary` answered
+"unknown" and the 11.12-class binary-less guard failed OPEN on every v12 update. Fix: the
+helper takes the target version and picks the naming by major. Both arms are in
+`zsh-node-functions-selftest`. Fail-open on "unknown" stays: offline must not block.

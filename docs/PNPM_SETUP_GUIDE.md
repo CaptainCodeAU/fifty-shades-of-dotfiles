@@ -755,7 +755,7 @@ the eligible version is unknown (the landed version is checked and a roll-back c
 The floor is unchanged. Selftest:
 
 ```bash
-zsh-node-functions-selftest   # 10 checks: denied refused, allowed passes, empty list passes, fallback arms
+zsh-node-functions-selftest   # 17 checks; the deny-list arms: denied refused, allowed passes, empty list passes, fallback
 ```
 
 It sources the real file with pnpm and the network stubbed; a mutant with the gates
@@ -773,3 +773,22 @@ zsh-welcome-selftest          # 8 checks: correct order silent, reversed warns, 
 
 It extracts the real function from the file by name (the file runs the banner at source time)
 and drives it with fixture PATH strings.
+
+
+### 7.2 Two blind spots in `pnpm_update`, found taking 12.4.2 (2026-09-20, ruling D-20260920-01)
+
+`pnpm_update` said "12.4.1 is the latest eligible version" twice while 12.4.2, a security
+patch, had been on the registry for four days. Both causes were measured and fixed the same
+night; both have arms in `zsh-node-functions-selftest`.
+
+| Blind spot                                                                                                                                                                                                        | Fix                                                                                                                                                                                                                            |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| The version cache (`~/.cache/dotfiles/pnpm_latest3`) is trusted for `PNPM_CHECK_TTL_DAYS` (7). It was written on 15 Sep, hours before 12.4.2 shipped, so nothing asked the registry again.                    | `pnpm_update` now calls `__pnpm_live_dist_tag` (one 5-second registry call) every run and, when it disagrees with the cached raw, runs `__pnpm_refresh_latest_sync` in the FOREGROUND before choosing a target. The banner keeps the cheap cached path. Offline: the cache still answers. |
+| `__pnpm_platform_pkg` returned the pnpm 11 artifact name (`@pnpm/macos-arm64`). pnpm 12 ships `@pnpm/exe.<os>-<arch>[-musl]`. The metadata GET 404'd, the guard answered `unknown`, and unknown fails OPEN. | The helper takes the target version and picks the naming by major: `@pnpm/exe.darwin-arm64` for 12.x, `@pnpm/macos-arm64` for 11.x (both verified live: binary=ok). Fail-open on `unknown` stays; offline must not block an update. |
+
+The refresh body is now one function (`__pnpm_refresh_latest_body`) with a background wrapper
+(`&!`) and a foreground wrapper, so the two paths cannot drift.
+
+```bash
+zsh-node-functions-selftest   # 17 checks: deny list, live dist-tag gate (stale / agrees / offline), platform names v12 vs v11
+```

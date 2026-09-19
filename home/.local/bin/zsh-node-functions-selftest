@@ -80,6 +80,8 @@ pnpm() {
 __pnpm_get_raw_latest()      { print -r -- ""; }
 __pnpm_get_raw_eligible_at() { print -r -- ""; }
 __pnpm_version_has_binary()  { print -r -- ok; }
+__pnpm_live_dist_tag()      { print -r -- ""; }   # section 3 replaces this
+__pnpm_refresh_latest_sync() { :; }
 __pnpm_vercmp() {
     local a="$1" b="$2"; [[ "$a" == "$b" ]] && { echo 0; return; }
     local lower; lower=$(printf '%s\n%s\n' "$a" "$b" | sort -V | head -1)
@@ -137,6 +139,68 @@ run_update 12.2.0 "" 12.3.2
 if (( RC == 0 )) && (( CALLS == 1 )) && [[ "$OUT" != *"DENIED"* ]]; then
     ok "fallback path control: allowed landing passes"
 else bad "fallback path control: allowed landing passes" "rc=$RC calls=$CALLS out='$OUT'"; fi
+
+# --- 3. live dist-tag gate (Ruling D-20260920-01) --------------------------
+# The cache is trusted for a week; 12.4.2 hid behind it. pnpm_update must ask
+# the registry once per run and refresh in the foreground when they disagree.
+typeset -g STUB_LIVE STUB_RAW REFRESH_LOG
+__pnpm_live_dist_tag()     { print -r -- "$STUB_LIVE"; }
+__pnpm_cache_file()        { print -r -- "/dev/null"; }
+__pnpm_refresh_latest_sync() { print -r -- "refresh" >> "$REFRESH_LOG"; STUB_ELIGIBLE="$STUB_LIVE"; }
+run_gate() {   # $1 current  $2 cached raw/eligible  $3 live dist-tag
+    STUB_VER="$1"; STUB_ELIGIBLE="$2"; STUB_AFTER="$3"; STUB_LIVE="$3"; STUB_RAW="$2"
+    __pnpm_get_raw_latest() { print -r -- "$STUB_RAW"; }
+    REFRESH_LOG="$(mktemp)"; STUB_LOG="$(mktemp)"
+    OUT="$(pnpm_update 2>&1)"; RC=$?
+    REFRESHES=$(grep -c refresh "$REFRESH_LOG"); CALLS=$(grep -c self-update "$STUB_LOG")
+    rm -f -- "$REFRESH_LOG" "$STUB_LOG"
+}
+n=$(code_of "$body" | grep -c '__pnpm_live_dist_tag')
+if (( n >= 1 )); then ok "pnpm_update consults the live dist-tag"
+else bad "pnpm_update consults the live dist-tag" "no call site in the function body"; fi
+
+# 3a. cache stale (says 12.4.1), registry says 12.4.2: refresh runs, then update
+run_gate 12.4.1 12.4.1 12.4.2
+if (( REFRESHES == 1 )) && (( CALLS == 1 )) && [[ "$OUT" == *"Registry latest is 12.4.2"* ]] \
+   && [[ "$OUT" == *"updated 12.4.1 -> 12.4.2"* ]]; then
+    ok "stale cache: live dist-tag differs, foreground refresh, then the update runs"
+else bad "stale cache: live dist-tag differs, foreground refresh, then the update runs" "refreshes=$REFRESHES calls=$CALLS out='$OUT'"; fi
+
+# 3b. cache agrees with the registry: no refresh (control)
+run_gate 12.4.1 12.4.2 12.4.2
+if (( REFRESHES == 0 )) && (( CALLS == 1 )); then ok "cache agrees with registry: no refresh (control)"
+else bad "cache agrees with registry: no refresh (control)" "refreshes=$REFRESHES calls=$CALLS out='$OUT'"; fi
+
+# 3c. offline (empty dist-tag): no refresh, cache still used
+STUB_LIVE=""; run_gate 12.4.1 12.4.1 ""; STUB_LIVE=""
+if (( REFRESHES == 0 )) && [[ "$OUT" == *"is the latest eligible version"* ]]; then ok "offline: no refresh, cached answer stands"
+else bad "offline: no refresh, cached answer stands" "refreshes=$REFRESHES out='$OUT'"; fi
+
+# --- 4. platform artifact name follows the target major ---------------------
+# pnpm 12 renamed the per-platform packages; the old names 404 and the
+# binary-less guard failed open. The real helper is extracted from
+# ~/.zsh_onboarding by name and driven with a stubbed uname.
+ONBOARD="${ONBOARDING_OVERRIDE:-$REPO/home/.zsh_onboarding}"
+pp_src=$(sed -n '/^__pnpm_platform_pkg() {/,/^}/p' "$ONBOARD")
+if [[ -n "$pp_src" ]]; then
+    eval "$pp_src"
+    typeset -g STUB_OS STUB_ARCH
+    uname() { case "$1" in -s) print -r -- "$STUB_OS" ;; -m) print -r -- "$STUB_ARCH" ;; esac; }
+    STUB_OS=Darwin; STUB_ARCH=arm64
+    got=$(__pnpm_platform_pkg 12.4.2)
+    if [[ "$got" == "@pnpm/exe.darwin-arm64" ]]; then ok "platform pkg: v12 on Darwin arm64 -> @pnpm/exe.darwin-arm64"
+    else bad "platform pkg: v12 on Darwin arm64" "got '$got'"; fi
+    got=$(__pnpm_platform_pkg 11.25.0)
+    if [[ "$got" == "@pnpm/macos-arm64" ]]; then ok "platform pkg: v11 on Darwin arm64 -> @pnpm/macos-arm64 (control)"
+    else bad "platform pkg: v11 on Darwin arm64 (control)" "got '$got'"; fi
+    STUB_OS=Linux; STUB_ARCH=x86_64
+    got=$(__pnpm_platform_pkg 12.4.2)
+    if [[ "$got" == "@pnpm/exe.linux-x64" || "$got" == "@pnpm/exe.linux-x64-musl" ]]; then ok "platform pkg: v12 on Linux x86_64 -> @pnpm/exe.linux-x64[-musl]"
+    else bad "platform pkg: v12 on Linux x86_64" "got '$got'"; fi
+    unfunction uname
+else
+    bad "__pnpm_platform_pkg extracted from .zsh_onboarding" "not found in $ONBOARD"
+fi
 
 rmdir -- "$PNPM_HOME" 2>/dev/null
 echo; echo "  $PASS passed, $FAIL failed"
