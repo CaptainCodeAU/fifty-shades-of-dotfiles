@@ -1079,8 +1079,18 @@ alias ct='__claude_launch CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 claude "${_LIFE
 
 # pj - light project launcher (TRIAL, added 2026-09-19).
 # Claude Code + OPERATIONAL_RULES + the project's own CLAUDE.md and notes. No LifeOS prompt,
-# no global CLAUDE.md, no global hooks/skills. Settings live in ~/.claude/settings.project.json.
-# herdr and AgentRelay are loaded as single-skill plugins. Remove this block to end the trial.
+# no global CLAUDE.md. Settings live in ~/.claude/settings.project.json.
+# herdr, AgentRelay, ISA and pj-voice are loaded as single-skill plugins.
+#
+# HOOKS: --setting-sources project,local means ~/.claude/settings.json is never
+# read, so none of its 14 SessionStart hooks register here. That was silent until
+# 2026-09-19, when ci-watch -- the escalating CI-red alarm -- was found never to
+# run under the launcher used most, and a silent alarm looks exactly like a happy
+# one. ci-watch is now registered into settings.project.json as well, via the
+# `targets` field in settings/claude/hooks.json. So pj DOES have one global hook,
+# on purpose; it is not a leak. Add another by naming "project" in that manifest,
+# never by hand-editing settings.project.json.
+# Remove this block to end the trial.
 alias pj='__claude_launch claude --setting-sources project,local --settings ~/.claude/settings.project.json --append-system-prompt-file ~/.claude/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md --plugin-dir ~/.claude/skills/herdr --plugin-dir ~/.claude/skills/AgentRelay --plugin-dir ~/.claude/skills/ISA --plugin-dir ~/.claude/pj-voice --dangerously-skip-permissions --effort high'
 
 # Clean-room Claude for measuring front-loaded context (CLAUDE.md, memory,
