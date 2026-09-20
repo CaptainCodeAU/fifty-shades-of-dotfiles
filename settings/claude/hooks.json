@@ -168,13 +168,62 @@
       "event": "SessionStart",
       "script": "ccw-watch",
       "script_path": "$HOME/.local/bin/ccw-watch",
+      "targets": ["user", "project"],
       "entry": {
         "type": "command",
         "command": "test -x \"$HOME/.local/bin/ccw-watch\" && \"$HOME/.local/bin/ccw-watch\" || true",
         "timeout": 30
       },
-      "why": "Escalating capture-PRESENCE alarm (narrowed 2026-09-07: no ccw doctor call). Is ccw installed, at/above floor, plugin enabled, plugin copy on disk. Capture died silently for ten days once"
+      "why": "Escalating capture-PRESENCE alarm (narrowed 2026-09-07: no ccw doctor call). Is ccw installed, at/above floor, plugin enabled, plugin copy on disk. Capture died silently for ten days once. Project target added 2026-09-21 (P5.6): cc-capture runs under pj, so its alarm must too"
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "Bash",
+      "script": "validate-bash.sh",
+      "targets": ["project"],
+      "entry": {
+        "type": "command",
+        "command": "test -x \"$HOME/.claude/hooks/validate-bash.sh\" && \"$HOME/.claude/hooks/validate-bash.sh\" || true",
+        "timeout": 10
+      },
+      "why": "DENIES rm -rf / or ~, force push to main/master, bare git reset --hard, git clean -fd. Moved from the dotfiles project settings 2026-09-21 (P5.6): the rule is OPERATIONAL_RULES Deletion, machine-wide. Project target only: c sessions keep LifeOS's own set"
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "Bash",
+      "script": "enforce-uv.sh",
+      "targets": ["project"],
+      "entry": {
+        "type": "command",
+        "command": "test -x \"$HOME/.claude/hooks/enforce-uv.sh\" && \"$HOME/.claude/hooks/enforce-uv.sh\" || true",
+        "timeout": 10
+      },
+      "why": "DENIES bare pip/python/pytest/ruff in favour of uv. Moved 2026-09-21 (P5.6): the rule is OPERATIONAL_RULES Environment and every project CLAUDE.md. 0 of 51 and 1 of 245 recent commands elsewhere would have been denied, the 1 correctly"
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "Bash",
+      "script": "enforce-pnpm.sh",
+      "targets": ["project"],
+      "entry": {
+        "type": "command",
+        "command": "test -x \"$HOME/.claude/hooks/enforce-pnpm.sh\" && \"$HOME/.claude/hooks/enforce-pnpm.sh\" || true",
+        "timeout": 10
+      },
+      "why": "DENIES npm/yarn/npx in favour of pnpm or bun. Moved 2026-09-21 (P5.6): the package-manager policy is machine-wide (.zshrc wrappers block the same in every shell). 0 would-denies in 296 recent commands elsewhere"
     }
+  ],
+
+  "_traveller_note": [
+    "THE test -x ... || true SHAPE ON A PreToolUse GUARD IS DELIBERATE. A deny is JSON on",
+    "stdout under exit 0, so the guard still denies through it; and a registration that",
+    "outlives its script (this tool is add-only) costs nothing instead of turning every",
+    "Bash call into a hook error. That is also what makes a rollback safe: restore the",
+    "manifest and the scripts, and any entry left behind in the rendered file self-gates.",
+    "",
+    "PROJECT-ONLY TRAVELLERS LEAVE THIS REPO'S .claude/settings.json. One firing per",
+    "session, not two. A c session in this repo therefore no longer has them; LifeOS can",
+    "register the stowed path itself if it wants them under c (note in the P5.6 report)."
   ],
 
   "_sessionstart_note": [

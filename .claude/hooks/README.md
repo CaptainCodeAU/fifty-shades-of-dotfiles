@@ -1,30 +1,59 @@
-# Claude Code Hooks
+# Claude Code hooks this repo owns
 
-Hook scripts for Claude Code. Includes an audio notification system (`hook_runner.py`), session lifecycle scripts, code quality gates, and safety guardrails.
+Current as of P5.6 (2026-09-21). Every hook the dotfiles repo owns, at every wiring level, is in the first table. Claude Code pipes JSON to stdin on every hook event; scripts read it to inspect tool names, file paths and commands.
 
-All hooks are registered in `.claude/settings.json`. Claude Code pipes JSON to stdin on every hook event — scripts read this JSON to inspect tool names, file paths, commands, and other context.
+## Wiring levels
 
-## Overview
+Three ways a hook this repo owns reaches a session, and they do not overlap:
 
-| Script                              | Hook Event     | Matcher           | Purpose                                                                      |
-| ----------------------------------- | -------------- | ----------------- | ---------------------------------------------------------------------------- |
-| `session-checks.sh`                 | `SessionStart` | `startup\|resume` | Git status + `.env` encryption check                                         |
-| `zed-version-check.sh`              | `SessionStart` | `startup\|resume` | Nudge to refresh Zed Preview changelog when newer release                    |
-| `toolchain-cve-check.sh`            | `SessionStart` | `startup\|resume` | Flag CVE-exposed pinned/installed pnpm/nvm versions                          |
-| `herdr-cooldown-check.sh`           | `SessionStart` | `startup\|resume` | Report herdr release-cooldown eligibility                                    |
-| `bun-cooldown-check.sh`             | `SessionStart` | `startup\|resume` | Flag a global bun package silently blocked by the minimumReleaseAge cooldown |
-| _(inline echo)_                     | `SessionStart` | `compact`         | Re-inject project conventions after compaction                               |
-| `validate-bash.sh`                  | `PreToolUse`   | `Bash`            | Block destructive commands (`rm -rf /`, force push, etc.)                    |
-| `pre-commit-check.sh`               | `PreToolUse`   | `Bash`            | Lint/build gate before `git commit`                                          |
-| `protect-files.sh`                  | `PreToolUse`   | `Edit\|Write`     | Block edits to `.env`, lockfiles, `.git/`                                    |
-| `enforce-uv.sh`                     | `PreToolUse`   | `Bash`            | Block bare pip/python/pytest/ruff → enforce uv                               |
-| `enforce-pnpm.sh`                   | `PreToolUse`   | `Bash`            | Block npm/yarn/npx → enforce pnpm or bun                                     |
-| `enforce-no-cd.sh`                  | `PreToolUse`   | `Bash`            | Block bare cd → enforce absolute paths or git -C                             |
-| `enforce-builtin.sh`                | `PreToolUse`   | `Bash`            | Block `builtin` with non-builtins (git, swift, etc.)                         |
-| `hook_runner.py`                    | Multiple       | Various           | Audio notifications (sound + speech)                                         |
-| _(inline prettier)_                 | `PostToolUse`  | `Edit\|Write`     | Auto-format with prettier after file changes                                 |
-| _(inline markdownlint)_             | `PostToolUse`  | `Edit\|Write`     | Auto-fix markdown lint issues on `.md` files                                 |
-| _(retired: `export_transcript.sh`)_ | `SessionEnd`   | --                | RETIRED 2026-08-18 (`cca4a6f`), duplicated cc-capture. Do not re-add         |
+| level                       | file that registers it                                                                                                                                    | who loads it                                  |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| **project**                 | `.claude/settings.json` in this repo                                                                                                                      | any session opened in this repo (`c` or `pj`) |
+| **manifest `project`**      | [`settings/claude/hooks.json`](../../settings/claude/hooks.json), rendered by `claude-hooks-sync --target project` into `~/.claude/settings.project.json` | every `pj` session, in every folder           |
+| **manifest `user,project`** | same manifest, rendered into both `~/.claude/settings.json` and `~/.claude/settings.project.json`                                                         | every session, either launcher                |
+
+`pj` passes `--setting-sources project,local`, so the user file never loads there. A hook meant for every `pj` session is declared ONCE in the manifest with `targets` and never hand-wired into either settings file (D-20260920-09, F1). A manifest traveller's script lives in `home/.claude/hooks/` and is stowed to `~/.claude/hooks/`; the entry uses `test -x <path> && <path> || true`, so a registration that outlives its script costs nothing and a deny still works (JSON on stdout under exit 0).
+
+## Every hook
+
+| script                       | event          | matcher           | level                                           | one line                                                                                    | selftest                       |
+| ---------------------------- | -------------- | ----------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------ |
+| `session-checks.sh`          | `SessionStart` | `startup\|resume` | project                                         | git status count; unencrypted `.env` variants                                               | no                             |
+| `vuln-scan-check.sh`         | `SessionStart` | `startup\|resume` | project                                         | installed packages vs NVD via `vuln-scan --fast`                                            | no                             |
+| `zed-version-check.sh`       | `SessionStart` | `startup\|resume` | project                                         | Zed Preview doc freshness, watched PRs                                                      | no                             |
+| `toolchain-cve-check.sh`     | `SessionStart` | `startup\|resume` | project                                         | pnpm/nvm/bun floors, Claude Code, brew vs OSV/GHSA/NVD                                      | `toolchain-cve-check-selftest` |
+| `herdr-cooldown-check.sh`    | `SessionStart` | `startup\|resume` | project                                         | herdr upgrade eligibility and guards                                                        | no                             |
+| `herdr-skill-drift-check.sh` | `SessionStart` | `startup\|resume` | project                                         | herdr skill merge base vs `docs/HERDR*.md`                                                  | no                             |
+| `bun-cooldown-check.sh`      | `SessionStart` | `startup\|resume` | project                                         | global bun packages vs `minimumReleaseAge`                                                  | no                             |
+| _(inline echo)_              | `SessionStart` | `compact`         | project                                         | uv/pnpm reminder after compaction                                                           | n/a                            |
+| `enforce-no-cd.sh`           | `PreToolUse`   | `Bash`            | project                                         | deny a leading `cd` (see the note below)                                                    | no                             |
+| `enforce-builtin.sh`         | `PreToolUse`   | `Bash`            | project                                         | deny `builtin <non-builtin>`                                                                | no                             |
+| `enforce-gh-ssh-only.sh`     | `PreToolUse`   | `Bash`            | project, plus a LifeOS user-level twin          | deny `gh auth login\|setup-git\|refresh`                                                    | no                             |
+| `protect-files.sh`           | `PreToolUse`   | `Edit\|Write`     | project                                         | deny edits to `.env*`, lockfiles, `.git/`                                                   | no                             |
+| `hook_runner.py`             | 11 events      | various           | project                                         | audio notifications (sound + speech), see below                                             | pytest on `lib/`               |
+| _(inline prettier)_          | `PostToolUse`  | `Edit\|Write`     | project                                         | `pnpm dlx prettier --write` on the edited file                                              | n/a                            |
+| _(inline markdownlint)_      | `PostToolUse`  | `Edit\|Write`     | project                                         | `markdownlint-cli --fix` on `.md`                                                           | n/a                            |
+| `validate-bash.sh`           | `PreToolUse`   | `Bash`            | manifest `project` (`home/.claude/hooks/`)      | deny `rm -rf /`, force push to main/master, bare `git reset --hard`, `git clean -fd`        | `--selftest`                   |
+| `enforce-uv.sh`              | `PreToolUse`   | `Bash`            | manifest `project` (`home/.claude/hooks/`)      | deny bare pip/python/pytest/ruff                                                            | `--selftest`                   |
+| `enforce-pnpm.sh`            | `PreToolUse`   | `Bash`            | manifest `project` (`home/.claude/hooks/`)      | deny npm/yarn/npx, `pnpm link --global`                                                     | `--selftest`                   |
+| `pj-start-card`              | `SessionStart` | none              | manifest `project` (`home/.local/bin/`)         | the 20-line start card: open items, wrap-up warning, handoff pointer (D-20260920-04)        | `pj-start-card --selftest`     |
+| `pj-session-end`             | `SessionEnd`   | none              | manifest `project` (`home/.local/bin/`)         | writes the no-wrap-up flag the next start card reads (D-20260920-03)                        | `pj-session-end --selftest`    |
+| `enforce-secret-probe.sh`    | `PreToolUse`   | `Bash`            | manifest `user,project` (`home/.claude/hooks/`) | deny printing a credential-named variable                                                   | `--selftest`                   |
+| `enforce-census.sh`          | `PreToolUse`   | `Bash`, `Grep`    | manifest `user,project` (`home/.claude/hooks/`) | nudge a grep toward `census.py` (Grep tool is absent under `pj`; that entry is inert there) | no                             |
+| `enforce-herdr-skill.sh`     | `PreToolUse`   | `Bash`            | manifest `user,project` (`home/.claude/hooks/`) | deny `herdr` until the skill is read                                                        | no                             |
+| `mark-herdr-skill-read.sh`   | `PostToolUse`  | `Skill`           | manifest `user,project` (`home/.claude/hooks/`) | lift the herdr gate (`herdr` or `herdr:herdr`)                                              | no                             |
+| `ci-watch`                   | `SessionStart` | none              | manifest `user,project` (`home/.local/bin/`)    | escalating CI-red alarm                                                                     | no (`--help` only)             |
+| `ccw-watch`                  | `SessionStart` | none              | manifest `user,project` (`home/.local/bin/`)    | capture-presence alarm for cc-capture (project target since 2026-09-21)                     | `ccw-watch-selftest`           |
+
+Not ours, for orientation: the `cc-capture@cc-warehouse` plugin registers its own `SessionStart` freshness check and `SessionEnd` archive; they fire under both launchers. LifeOS's user-level hooks fire under `c` only.
+
+**What a `c` session in this repo gets on top of LifeOS's set:** every project-level row above plus the manifest `user,project` rows. It does NOT get the manifest `project` rows (`validate-bash`, `enforce-uv`, `enforce-pnpm`, `pj-start-card`, `pj-session-end`): those are `pj` machinery. Before 2026-09-21 the three guards were project-level and fired here under `c`; LifeOS can register the stowed paths itself if it wants them back under `c`.
+
+**What a `pj` session in this repo gets:** every project-level row plus every manifest row. The three moved guards fire ONCE (manifest), not twice; proven in the P5.6 report.
+
+### The leading-`cd` rule is this repo's hook, not the harness
+
+This repo's CLAUDE.md, and the copies of that paragraph in other projects, say the harness hard-rejects a leading `cd`. Measured 2026-09-21: in the last 20 transcripts of two other projects, 123 commands began with `cd` and every one executed without error. The rejection is `enforce-no-cd.sh`, project-level, and it would have denied 46 percent of one project's real commands, which is why it did not travel (P5.6). Correcting the sentence is W-20260921-09.
 
 ## Audio notification system
 
@@ -44,7 +73,7 @@ All hooks are registered in `.claude/settings.json`. Claude Code pipes JSON to s
 | `UserPromptSubmit`              | `UserPromptSubmitHandler`   | User submits a prompt (disabled by default)     |
 | `PreCompact`                    | `PreCompactHandler`         | Context is about to be compacted                |
 
-Each handler can play a **sound effect** (via `afplay`) and/or **speak a message** (via `say` rendered to file, then `afplay` for playback). Both are independently configurable.
+Each handler can play a **sound effect** (via `afplay`) and/or **speak a message** (via `say` rendered to file, then `afplay` for playback). Both are independently configurable. It is project-level: every path it reads (`config.yaml` beside the script, `.claude/sounds/` relative to the project, `lib/`) is repo-relative, so it does not travel yet. Making it travel is W-20260921-06. Under `c` in this repo it plays alongside LifeOS's own `VoiceCompletion` on Stop.
 
 ### Hook event flow
 
@@ -68,23 +97,14 @@ global:
   project_dir: "" # Resolved automatically (see below)
 ```
 
-`project_dir` is resolved in order: (1) value from `config.yaml`, (2) `$HOOK_PROJECT_DIR` env var, (3) current working directory. Claude Code sets the hook's CWD to the project root, so leaving `project_dir: ""` in the config works out of the box — no env var needed. Sound file paths, debug output, and transcript fallback all resolve relative to this directory.
+`project_dir` is resolved in order: (1) value from `config.yaml`, (2) `$HOOK_PROJECT_DIR` env var, (3) current working directory. Claude Code sets the hook's CWD to the project root, so leaving `project_dir: ""` in the config works out of the box. Sound file paths, debug output, and transcript fallback all resolve relative to this directory.
 
 ### Per-hook settings
 
 Each hook has:
 
-- **sound** — play an audio file
-  - `enabled`: toggle on/off
-  - `file`: path to sound file (relative to project_dir or absolute)
-  - `volume`: 0.0 to 1.0
-  - `delay_ms`: pause before speech starts (if both sound and voice are enabled)
-
-- **voice** — text-to-speech
-  - `enabled`: toggle on/off
-  - `name`: macOS voice (e.g. "Victoria", "Samantha", "Daniel")
-  - `volume`: 0.0 to 1.0 (controls `afplay -v`, no system volume changes)
-  - `rate`: words per minute
+- **sound**: play an audio file (`enabled`, `file` relative to project_dir or absolute, `volume` 0.0 to 1.0, `delay_ms` pause before speech when both are enabled)
+- **voice**: text-to-speech (`enabled`, `name` macOS voice, `volume` controls `afplay -v` only, `rate` words per minute)
 
 ### Stop hook extras
 
@@ -96,279 +116,144 @@ summary:
   start: "action" # "action" finds first action verb, "beginning" starts from top
 ```
 
-The stop handler reads Claude's transcript, extracts a summary of what it did, and speaks it. It also detects if Claude is waiting for input (question or permission) and uses the appropriate voice/sound settings for that case.
+The stop handler reads Claude's transcript, extracts a summary of what it did, and speaks it. It also detects if Claude is waiting for input (question or permission) and uses the appropriate voice/sound settings for that case. When text ends with `?`, the handler uses input-waiting audio settings but prioritizes speaking the action summary over the trailing question; if no action summary is found, it speaks the question itself.
 
-When text ends with `?`, the handler uses input-waiting audio settings but prioritizes speaking the action summary over the trailing question. For example, "Committed as 034f960. Want me to push?" speaks the commit summary, not the follow-up question. If no action summary is found (the text is purely a question like "Should I continue?"), it falls back to speaking the question itself.
+### Other handler extras
 
-### Ask user question hook extras
-
-```yaml
-message_mode: "extract" # "extract" pulls actual question text, "generic" uses default
-default_message: "Claude has a question for you"
-```
-
-### Permission request hook extras
-
-```yaml
-message_template: "Approve {tool_name}?" # {tool_name} is replaced with the tool name
-```
-
-### Notification hook extras
-
-```yaml
-idle_message: "Claude is idle" # Spoken for idle_prompt notifications
-auth_message: "Auth successful" # Spoken for auth_success notifications
-default_message: "Notification" # Fallback for unrecognized notification types
-```
-
-### Subagent hooks extras
-
-```yaml
-# subagent_start / subagent_stop
-message_template: "Subagent {agent_type} started" # {agent_type} is replaced
-```
-
-### Teammate idle hook extras
-
-```yaml
-message_template: "{teammate_name} is idle" # {teammate_name} is replaced
-```
-
-### Task completed hook extras
-
-```yaml
-message_template: "Task completed: {task_subject}" # {task_subject} is replaced
-max_subject_length: 80 # Truncates long subjects with "..."
-```
-
-### Post tool use failure hook extras
-
-```yaml
-message_template: "{tool_name} failed" # {tool_name} is replaced
-```
-
-The handler skips events where `is_interrupt` is `true` (user-caused interruptions, not real failures).
-
-### User prompt submit hook
-
-Disabled by default (`enabled: false`). Playing audio on your own input is redundant. Exists as a skeleton for future use — `get_message()` returns `None`.
-
-### Pre-compact hook extras
-
-```yaml
-message: "Compacting context" # Static message spoken before compaction
-```
-
-The permission handler resolves the spoken message in priority order:
-
-1. **AskUserQuestion**: extracts the actual question text from `tool_input`.
-2. **Transcript text**: reads the transcript to find the most recent assistant message with text content, then summarizes it using the stop handler's `summary` config. This handles the common case where Claude writes a detailed explanation and then calls a tool — you hear the summary instead of "Approve Bash?". If the same summary was already spoken (e.g., during a burst of tool calls in one turn), it falls back to the template instead of repeating itself.
-3. **Template fallback**: uses `message_template` only when no text is available (e.g., the assistant message was purely tool calls with no prose), or when the transcript summary was already spoken.
+- ask_user_question: `message_mode` (`extract` or `generic`), `default_message`
+- permission_request: `message_template` with `{tool_name}`; resolves AskUserQuestion text first, then a transcript summary (falling back to the template when the same summary was already spoken this turn), then the template
+- notification: `idle_message`, `auth_message`, `default_message`
+- subagent_start / subagent_stop: `message_template` with `{agent_type}`
+- teammate_idle: `message_template` with `{teammate_name}`
+- task_completed: `message_template` with `{task_subject}`, `max_subject_length`
+- post_tool_use_failure: `message_template` with `{tool_name}`; skips `is_interrupt`
+- user_prompt_submit: disabled by default; `get_message()` returns `None`
+- pre_compact: static `message`
 
 ## Handler architecture
 
-`BaseHandler.handle()` implements a Template Method that all handlers share:
+`BaseHandler.handle()` implements a Template Method that all handlers share: log, `should_handle(data)`, `_pre_message_hook(data)`, `get_message(data)`, `_resolve_audio_settings(data)`, `play_notification()`, debug log.
 
-1. Log handler name, hook event, tool name
-2. `should_handle(data)` — gate (abstract)
-3. `_pre_message_hook(data)` — optional pre-processing (no-op by default)
-4. `get_message(data)` — extract the message to speak (abstract)
-5. `_resolve_audio_settings(data)` — pick audio settings (defaults to `get_audio_settings()`)
-6. `play_notification()` — play sound and/or speak
-7. Write debug log
-
-Subclasses override only the steps they need:
-
-| Handler                     | Overrides                            | Why                                                                                                 |
-| --------------------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------- |
-| `AskUserQuestionHandler`    | `_pre_message_hook`                  | Calls `mark_handled()` before message extraction for dedup                                          |
-| `PermissionRequestHandler`  | `_pre_message_hook`, `get_message`   | Marks permission as handled; reads transcript for text summary before falling back to template      |
-| `StopHandler`               | `_resolve_audio_settings`            | Selects input-waiting vs. task-completion audio settings based on a flag set during `get_message()` |
-| `NotificationHandler`       | `_pre_message_hook`                  | Marks `notification_idle` for Stop dedup when type is `idle_prompt`                                 |
-| `SubagentStopHandler`       | `_pre_message_hook`                  | Marks `subagent_stop` for Stop dedup                                                                |
-| `PostToolUseFailureHandler` | `should_handle`, `_pre_message_hook` | Skips user interruptions (`is_interrupt`); marks `tool_failure` for Stop dedup                      |
-| `UserPromptSubmitHandler`   | `get_message`                        | Returns `None` — silent skeleton (disabled by default)                                              |
+| Handler                     | Overrides                            | Why                                                                                                |
+| --------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------- |
+| `AskUserQuestionHandler`    | `_pre_message_hook`                  | Calls `mark_handled()` before message extraction for dedup                                         |
+| `PermissionRequestHandler`  | `_pre_message_hook`, `get_message`   | Marks permission as handled; reads transcript for text summary before falling back to template     |
+| `StopHandler`               | `_resolve_audio_settings`            | Selects input-waiting vs task-completion audio settings based on a flag set during `get_message()` |
+| `NotificationHandler`       | `_pre_message_hook`                  | Marks `notification_idle` for Stop dedup when type is `idle_prompt`                                |
+| `SubagentStopHandler`       | `_pre_message_hook`                  | Marks `subagent_stop` for Stop dedup                                                               |
+| `PostToolUseFailureHandler` | `should_handle`, `_pre_message_hook` | Skips user interruptions (`is_interrupt`); marks `tool_failure` for Stop dedup                     |
+| `UserPromptSubmitHandler`   | `get_message`                        | Returns `None`: silent skeleton (disabled by default)                                              |
 
 ## File structure
 
 ```text
-.claude/hooks/
-  session-checks.sh       # SessionStart — git status + .env encryption check
-  zed-version-check.sh    # SessionStart — nudge to refresh the Zed Preview changelog doc
-  toolchain-cve-check.sh  # SessionStart — flag CVE-exposed pnpm/nvm/bun floors + installed
-  bun-cooldown-check.sh   # SessionStart — flag a global bun package blocked by minimumReleaseAge
-  pre-commit-check.sh     # PreToolUse Bash — lint/build gate before git commit
-  validate-bash.sh        # PreToolUse Bash — block destructive commands
-  protect-files.sh        # PreToolUse Edit|Write — block edits to protected files
-  enforce-uv.sh           # PreToolUse Bash — block bare pip/python/pytest/ruff
-  enforce-pnpm.sh         # PreToolUse Bash — block npm/yarn/npx → pnpm or bun
-  enforce-no-cd.sh        # PreToolUse Bash — block bare cd
-  enforce-builtin.sh      # PreToolUse Bash — block builtin with non-builtins
-  hook_runner.py          # Audio entrypoint — reads stdin, routes to handler
-  config.yaml             # Audio notification configuration
-  security.log            # Audit log of blocked commands/edits (created on first block)
-  lib/
-    audio.py              # play_sound(), speak(), play_notification()
-    config.py             # YAML loading, dataclass definitions
-    summary.py            # Text summarization (sentence extraction, action verb detection)
-    transcript.py         # Transcript JSONL parsing, file discovery, text extraction
-    state.py              # Deduplication state (prevents double notifications)
-    handlers/
-      base.py             # BaseHandler ABC — Template Method in handle()
-      stop.py             # StopHandler — overrides _resolve_audio_settings()
-      ask_user.py         # AskUserQuestionHandler — overrides _pre_message_hook()
-      permission.py       # PermissionRequestHandler — transcript summary + dedup
-      notification.py     # NotificationHandler — idle/auth notifications + dedup
-      subagent_start.py   # SubagentStartHandler — subagent launch
-      subagent_stop.py    # SubagentStopHandler — subagent completion + dedup
-      teammate_idle.py    # TeammateIdleHandler — teammate went idle
-      task_completed.py   # TaskCompletedHandler — task completion with subject truncation
-      tool_failure.py     # PostToolUseFailureHandler — tool failures + dedup
-      user_prompt_submit.py # UserPromptSubmitHandler — silent skeleton (disabled)
-      pre_compact.py      # PreCompactHandler — context compaction
-  tests/
-    test_state.py         # Dedup state machine tests
-    test_summary.py       # Text extraction tests
-    test_transcript.py    # JSONL parsing tests
+.claude/hooks/                      project-level (this directory)
+  session-checks.sh                 SessionStart: git status + .env encryption check
+  vuln-scan-check.sh                SessionStart: installed packages vs NVD
+  zed-version-check.sh              SessionStart: Zed Preview changelog freshness
+  toolchain-cve-check.sh            SessionStart: pnpm/nvm/bun floors + installed vs advisories
+  toolchain-cve-check-selftest      controls for the banner above
+  herdr-cooldown-check.sh           SessionStart: herdr release cooldown + guards
+  herdr-skill-drift-check.sh        SessionStart: herdr skill vs docs
+  bun-cooldown-check.sh             SessionStart: global bun packages vs cooldown
+  enforce-no-cd.sh                  PreToolUse Bash: block a leading cd
+  enforce-builtin.sh                PreToolUse Bash: block builtin with non-builtins
+  enforce-gh-ssh-only.sh            PreToolUse Bash: block gh auth login/setup-git/refresh
+  protect-files.sh                  PreToolUse Edit|Write: block edits to protected files
+  hook_runner.py                    audio entrypoint, routes to lib/handlers
+  config.yaml                       audio configuration
+  security.log                      audit log of the project-level blockers (gitignored)
+  lib/                              audio.py, config.py, summary.py, transcript.py, state.py, handlers/
+  tests/                            pytest for state, summary, transcript
+
+home/.claude/hooks/                 stowed to ~/.claude/hooks/, registered by the manifest
+  validate-bash.sh                  manifest project: destructive git and rm
+  enforce-uv.sh                     manifest project: uv over bare Python tooling
+  enforce-pnpm.sh                   manifest project: pnpm or bun over npm/yarn/npx
+  enforce-secret-probe.sh           manifest user,project: no credential printing
+  enforce-census.sh                 manifest user,project: grep nudge
+  enforce-herdr-skill.sh            manifest user,project: herdr gate
+  mark-herdr-skill-read.sh          manifest user,project: herdr gate release
+
+home/.local/bin/                    stowed to ~/.local/bin/, run BY a manifest entry
+  ci-watch  ccw-watch  pj-start-card  pj-session-end
 ```
 
-## Shell hook scripts
+## Shell hook scripts, project level
 
 ### session-checks.sh
 
-Runs on `SessionStart` with matcher `startup|resume` (skips `compact` and `clear`). Performs two checks:
+Runs on `SessionStart` with matcher `startup|resume` (skips `compact` and `clear`). Counts uncommitted changes and prints a one-line summary; checks whether `dotenvx` is installed, whether `.env` files are encrypted, and warns about unencrypted variants (`.env.local`, `.env.development`, and so on).
 
-1. **Git status** — counts uncommitted changes and prints a one-line summary.
-2. **`.env` encryption** — checks if `dotenvx` is installed, whether `.env` files are encrypted, and whether `.env.keys` exists for decryption. Warns about unencrypted variants (`.env.local`, `.env.development`, etc.).
+### vuln-scan-check.sh
+
+Runs on `SessionStart`, read-only. `vuln-scan --fast --no-progress`; gates on the exit code, never on a string. On a HIGH or CRITICAL finding it instructs the assistant to raise a tracked task before anything else, because startup text is skimmed. See [`docs/VULN_SCAN.md`](../../docs/VULN_SCAN.md).
 
 ### zed-version-check.sh
 
-Runs on `SessionStart` (`startup|resume`). Read-only Zed Preview changelog freshness check: compares the version recorded in `docs/ZED_PREVIEW_CHANGELOG.md` against the latest GitHub prerelease (6h-cached in `$TMPDIR`), and reports the merge status of watched upstream PRs. On a newer release or a merged PR it nudges the assistant to refresh that doc. Never edits anything; always exits 0.
+Runs on `SessionStart`, read-only. Compares the version recorded in `docs/ZED_PREVIEW_CHANGELOG.md` against the latest GitHub prerelease (6h-cached in `$TMPDIR`) and reports the merge status of watched upstream PRs. Nudges the assistant to refresh that doc. Never edits anything; always exits 0.
 
 ### toolchain-cve-check.sh
 
-Runs on `SessionStart` (`startup|resume`). Read-only CVE check of the pinned pnpm/nvm version floors (`PNPM_MIN_VERSION`, `NVM_MIN_VERSION`, read from `install.sh`), the installed pnpm/nvm versions, **and the installed Claude Code version** (added 2026-07-30), via the standalone `toolchain-cve-check` tool (pnpm and Claude Code through OSV, nvm through GitHub's nvm-repo advisories — the latter needs `$GH_TOKEN`, so it skips gracefully without one). Claude Code has no floor to check, so only the installed version is examined, and an exposure there nudges `claude update` rather than a floor bump. 6h-cached; prints a one-line all-clear or, on exposure, the offending version + advisory + the right remediation. Never blocks; always exits 0. See [`docs/TOOLCHAIN_CVE_CHECK.md`](../../docs/TOOLCHAIN_CVE_CHECK.md).
+Runs on `SessionStart`, read-only. CVE check of the pinned pnpm/nvm/bun floors (read from `install.sh`), the installed versions, the installed Claude Code, and (from a 24h background verdict) the Homebrew formulae, via the standalone `toolchain-cve-check` tool. 6h-cached. Never blocks. `toolchain-cve-check-selftest` proves the banner wording. See [`docs/TOOLCHAIN_CVE_CHECK.md`](../../docs/TOOLCHAIN_CVE_CHECK.md). The brew arm does not escalate: W-20260920-05.
+
+### herdr-cooldown-check.sh and herdr-skill-drift-check.sh
+
+Both `SessionStart`, read-only, silent when herdr is not installed. The first reports whether a herdr upgrade is eligible under the 7-day cooldown and whether the guards enforcing it are in place. The second reports whether a herdr upgrade moved the agent skill or left a `docs/HERDR*.md` behind (deliberately uncached: no network call). See [`docs/HERDR.md`](../../docs/HERDR.md).
 
 ### bun-cooldown-check.sh
 
-Runs on `SessionStart` (`startup|resume`). Read-only check of whether a globally-installed bun package (e.g. `@openai/codex`) is silently stuck behind the `~/.bunfig.toml` `minimumReleaseAge` cooldown — bun's own `install`/`add` output reports success even when it quietly kept the old version because the new one is too fresh, which can leave a tool's self-updater looping forever. Via the standalone `bun-cooldown-check` tool (reads `$BUN_INSTALL/install/global/package.json` + the npm registry; zero subprocess calls to bun itself). 6h-cached; silent on the all-clear case beyond a one-line confirmation, loud (with the ready date and a "do not exclude it yourself" note) when something is actually blocked. Never blocks; always exits 0.
-
-### ci-watch — no hook file here, by design
-
-`ci-watch` runs at **USER level**: `~/.claude/settings.json` calls the `~/.local/bin/ci-watch` engine inline, so it fires in **every project**, not just this one. Look there if it seems to have stopped — there is deliberately no `ci-watch.sh` in this directory. A thin wrapper did live here from 2026-06-28 (`7e39550`) until 2026-08-01 (`9efc563`), while ci-watch was briefly project-scoped; promoting it to global the same day orphaned the wrapper, and its repo-source fallback (`$PROJECT_DIR/home/.local/bin/ci-watch`) only ever resolved inside this repo, so re-wiring it globally would buy nothing. Recover it from git if ci-watch ever becomes project-scoped again. See [`docs/CI_WATCH.md`](../../docs/CI_WATCH.md).
-
-### The four stowed guards — no hook files here, by design
-
-`enforce-secret-probe.sh`, `enforce-census.sh`, `enforce-herdr-skill.sh` and its partner `mark-herdr-skill-read.sh` live in `home/.claude/hooks/` and are stowed to `~/.claude/hooks/`, not kept in this directory. They are machine-wide safety, not dotfiles-specific, so they are declared once in [`settings/claude/hooks.json`](../../settings/claude/hooks.json) with `targets: ["user", "project"]` and registered by `claude-hooks-sync` into **both** `~/.claude/settings.json` (the `c` launcher) and `~/.claude/settings.project.json` (the `pj` launcher). Until 2026-09-20 they were user-only, so no `pj` session was guarded; measured in a fresh `pj` pane before and after (`<drawer>/pj-session-framework/reports/F1-guards.md`). One `pj`-specific fact: the herdr skill loads there as a plugin, so the Skill parameter is `herdr:herdr`, and the mark hook accepts exactly `herdr` or `herdr:herdr`, nothing wider.
-
-### herdr-cooldown-check.sh
-
-Runs on `SessionStart`, read-only. Reports whether a herdr upgrade is eligible under the 7-day release cooldown, and whether the guards that enforce it are still in place. herdr is the one tool in this estate that can move on its own: it ships a self-updater plus two default-on background calls to `herdr.dev` (`update.version_check`, and `update.manifest_check`, which reloads remote agent-detection manifests into the _running_ server). Wired in this project's `settings.json`. See [`docs/HERDR.md`](../../docs/HERDR.md).
-
-### pre-commit-check.sh
-
-Runs on `PreToolUse` for `Bash` tools. Reads the stdin JSON and extracts `tool_input.command`. If the command contains `git commit`, runs a project-appropriate quality gate:
-
-- **Node.js** (`package.json`): `pnpm run lint && pnpm run build`
-- **Python** (`pyproject.toml`): `uv run ruff check . && uv run ruff format --check .`
-
-After the language-specific gate, **markdownlint** runs for all project types — it lints any staged `.md` files (`git diff --cached --name-only --diff-filter=ACM -- '*.md'`). No `--fix` here; this is a blocking gate. If it fails, Claude sees the errors and fixes them. Uses `pnpm dlx markdownlint-cli` consistently. Configuration lives in `.markdownlint.jsonc` at the repo root.
-
-Non-commit Bash commands pass through with no effect.
-
-### validate-bash.sh
-
-Runs on `PreToolUse` for `Bash` tools. Reads the stdin JSON and blocks destructive commands via `hookSpecificOutput` JSON (`permissionDecision: "deny"`):
-
-- `rm -rf /` or `rm -rf ~` (root/home deletion)
-- `git push --force`, `git push --force-with-lease`, or `git push -f` to `main` or `master`
-- `git reset --hard` without a ref
-- `git clean -fd` or `git clean -f -d` (removes untracked files)
-
-Blocked commands are logged to `security.log` (see [Audit logging](#audit-logging)).
-
-### enforce-uv.sh
-
-Runs on `PreToolUse` for `Bash` tools. Enforces `uv` for all Python commands (from CLAUDE.md conventions):
-
-- `pip install` / `pip3 install` → use `uv add`
-- `pip uninstall` / `pip3 uninstall` → use `uv remove`
-- Bare `python` / `python3` → use `uv run python`
-- Bare `pytest` → use `uv run pytest`
-- Bare `ruff` → use `uv run ruff`
-
-Allows `uv run`, `uv pip`, and commands inside subshells or quoted strings. Blocked commands are logged to `security.log`.
-
-### enforce-pnpm.sh
-
-Runs on `PreToolUse` for `Bash` tools. Enforces `pnpm` or `bun` for all Node.js commands (from CLAUDE.md conventions):
-
-- `npm` → use `pnpm` or `bun`
-- `yarn` → use `pnpm` or `bun`
-- `npx` → use `pnpm dlx` or `bunx`
-
-Allows commands inside subshells or quoted strings. Blocked commands are logged to `security.log`.
+Runs on `SessionStart`, read-only. Whether a globally installed bun package is silently held behind `~/.bunfig.toml` `minimumReleaseAge`, via the standalone `bun-cooldown-check` tool. 6h-cached. Loud only when something is blocked.
 
 ### enforce-no-cd.sh
 
-Runs on `PreToolUse` for `Bash` tools. Blocks bare `cd` (from CLAUDE.md conventions — zoxide overrides `cd`):
-
-- `cd /path` → use absolute paths, `git -C <path>`, or `builtin cd`
-
-Allows `builtin cd` and `cd` inside `$(...)` subshells or quoted strings. Blocked commands are logged to `security.log`.
+Runs on `PreToolUse` for `Bash`. Blocks a leading `cd`: use absolute paths, `git -C <path>`, or `builtin cd`. Strips heredoc bodies, `$(...)` and quoted strings first. Project-level on purpose; see the note above and W-20260921-07 (shadow-mode traveller).
 
 ### enforce-builtin.sh
 
-Runs on `PreToolUse` for `Bash` tools. Blocks `builtin` with non-builtins (from CLAUDE.md conventions — zsh rejects `builtin git`, `builtin swift`, etc.):
-
-- `builtin git`, `builtin swift`, `builtin DEVELOPER_DIR=...` → remove `builtin` prefix
-- Allows actual zsh builtins: `cd`, `echo`, `printf`, `print`, `pushd`, `popd`, `pwd`, `read`, `set`, `export`, `local`, `return`, `exit`, `source`, `eval`, `exec`, etc.
-
-Blocked commands are logged to `security.log`.
+Runs on `PreToolUse` for `Bash`. Blocks `builtin` with non-builtins (`builtin git`, `builtin swift`), which zsh rejects anyway; allows real builtins (`cd`, `echo`, `printf`, `pushd`, `export`, and so on). Companion of `enforce-no-cd.sh`.
 
 ### enforce-gh-ssh-only.sh
 
-Runs on `PreToolUse` for `Bash`. Blocks `gh auth login`, `gh auth setup-git` and `gh auth refresh` — each re-adds HTTPS credential helpers to `~/.gitconfig` and undermines the SSH-only GitHub auth model. Mirrors the interactive `gh()` wrapper in `.zshrc`, which does **not** apply to the non-interactive Bash tool, hence the hook. Wired in both this project's and the user-level `settings.json`.
+Runs on `PreToolUse` for `Bash`. Blocks `gh auth login`, `gh auth setup-git` and `gh auth refresh`, which re-add HTTPS credential helpers and undermine the SSH-only auth model. Mirrors the interactive `gh()` wrapper, which does not apply to the non-interactive Bash tool. A byte-identical copy is a REAL file at `~/.claude/hooks/enforce-gh-ssh-only.sh`, tracked in dot-claude and registered in the user settings (LifeOS's), so under `c` in this repo it fires twice and under `pj` elsewhere not at all. Folding the two into one stowed copy needs LifeOS to yield its file first; noted for LifeOS in the P5.6 report.
 
 ### protect-files.sh
 
-Runs on `PreToolUse` for `Edit|Write` tools. Reads the stdin JSON and blocks edits to protected files via `hookSpecificOutput` JSON (`permissionDecision: "deny"`):
+Runs on `PreToolUse` for `Edit|Write`. Blocks edits to `.env`, `.env.keys`, `.env.*` (except `.env.example`), `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, and anything under `.git/`.
 
-- `.env`, `.env.keys`, `.env.local`, `.env.*` (except `.env.example`)
-- Lockfiles: `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`
-- `.git/` directory
+### PostToolUse prettier and markdownlint (inline)
 
-Blocked edits are logged to `security.log` (see [Audit logging](#audit-logging)).
-
-### export_transcript.sh -- RETIRED 2026-08-18
-
-Deleted in `cca4a6f`. It ran on `SessionEnd`, read `transcript_path` from stdin JSON and exported it via `claude-code-transcripts` into `~/CODE/claude-code-transcripts`.
-
-**Do not re-add it.** It was a SECOND exporter running alongside cc-capture's own capture and archive, and a real session was confirmed captured by both at once. The tool it called is also the name collision that caused the ten-day capture outage on 2026-07-24. Capture now belongs to the `cc-capture@cc-warehouse` plugin, enabled in user-level settings, which registers its own `SessionStart` and `SessionEnd` hooks (verified 2026-09-20).
-
-It also scrubbed `github_pat_`/`gh[posru]_` patterns out of the files it wrote. **That scrubbing went with it**, so do not cite it as a control anywhere; `docs/GH_AUTH_GUARD_USER_LEVEL.md` used to and has been corrected.
-
-**Measured 2026-09-20: cc-capture does NOT scrub on the way in, by design, and does not need to.** Zero redaction terms anywhere in its capture path (`cc-capture` hook, `capture.py`, `archive.py`), against a control confirming those files exist and are substantial. The archive is kept at full fidelity on purpose (their R4). Redaction lives in `ccw share`, the one outward-facing command, where it runs on copies and where a secret-shaped string **aborts the share** rather than being silently rewritten. Do not add scrubbing to the capture path: it would corrupt the archive to no benefit, since the retired hook scrubbed at the weaker end. See `W-20260920-04` (`open-items`).
-
-### PostToolUse prettier (inline)
-
-Runs on `PostToolUse` for `Edit|Write` tools. Reads `tool_input.file_path` from stdin JSON and runs `pnpm dlx prettier --write` on the file. Failures are silently ignored (`|| true`) to avoid blocking Claude.
-
-### PostToolUse markdownlint (inline)
-
-Runs on `PostToolUse` for `Edit|Write` tools. Reads `tool_input.file_path` from stdin JSON and runs `pnpm dlx markdownlint-cli --fix` on the file, but only if it ends in `.md` (filtered via a `case` shell pattern). Failures are silently ignored (`|| true`, `2>/dev/null`) to avoid blocking Claude. Configuration lives in `.markdownlint.jsonc` at the repo root.
+Both on `PostToolUse` for `Edit|Write`, both `|| true`. prettier rewrites the edited file; markdownlint `--fix` runs on `.md` only. Configuration lives in `.markdownlint.jsonc` at the repo root. These REWRITE files after every edit, which moves another session's `git diff` under it (W-20260920-07).
 
 ### SessionStart compact (inline)
 
-Runs on `SessionStart` with matcher `compact`. Echoes a reminder of project conventions (uv for Python, pnpm for Node.js) so Claude retains context after compaction.
+Matcher `compact`. Echoes a reminder of project conventions (uv for Python, pnpm for Node.js) so Claude retains them after compaction.
+
+## Shell hook scripts, manifest travellers
+
+### validate-bash.sh, enforce-uv.sh, enforce-pnpm.sh
+
+Moved from this directory to `home/.claude/hooks/` on 2026-09-21 (P5.6) and declared in the manifest with `targets: ["project"]`, so every `pj` session in every folder has them and this repo's `.claude/settings.json` no longer does. Before the move their match logic was run over every Bash command in the last 20 transcripts of two other projects (51 and 245 commands): 0, 0 and 1 would-denies for validate-bash, enforce-pnpm and enforce-uv, the 1 being a real bare `python3 -c`. Each has `--selftest` with positive and negative arms; run it through `~/.claude/hooks/<name> --selftest`, not the repo path, so the stow is proven too. `validate-bash.sh` gained the heredoc-and-quote stripping its siblings had: before that, a commit message mentioning `git clean -fd` was denied.
+
+### enforce-secret-probe.sh, enforce-census.sh, enforce-herdr-skill.sh, mark-herdr-skill-read.sh
+
+Machine-wide safety, declared with `targets: ["user", "project"]` and registered by `claude-hooks-sync` into both settings files. Until 2026-09-20 they were user-only, so no `pj` session was guarded (F1). Under `pj` the herdr skill loads as a plugin, so the Skill parameter is `herdr:herdr`; the mark hook accepts exactly `herdr` or `herdr:herdr`.
+
+### ci-watch, ccw-watch, pj-start-card, pj-session-end
+
+Ordinary CLI tools stowed to `~/.local/bin/`, run BY a manifest entry (`script_path` in the manifest). `ci-watch` and `ccw-watch` are `user,project`; the two `pj-*` are `project` only because `pj` is the launcher they serve. There is deliberately no wrapper script for any of them in this directory. See [`docs/CI_WATCH.md`](../../docs/CI_WATCH.md), [`docs/OPEN_ITEMS.md`](../../docs/OPEN_ITEMS.md).
+
+## Retired
+
+| hook                   | when                   | why                                                                                                                                                                                                                                                            |
+| ---------------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pre-commit-check.sh`  | 2026-09-21 (P5.6)      | Ran lint/build/markdownlint on `git commit` but never exited 2, so under the hook contract a failure reached only the transcript view and the commit proceeded; its README claim that Claude would see the errors was false. Nothing executable referenced it. |
+| `peer-reply-check.sh`  | 2026-09-21 (P5.6)      | Printed "PEER REPLY OWED" on Stop with exit 0; a Stop hook reaches the model only through `{"decision":"block"}`, so the model never saw a line of it. A fixed, travelling version is W-20260921-08.                                                           |
+| `export_transcript.sh` | 2026-08-18 (`cca4a6f`) | A second exporter beside cc-capture. Do not re-add. Its `github_pat_`/`gh[posru]_` scrubbing went with it; cc-capture keeps the archive at full fidelity by design and blocks secrets at `ccw share` instead (W-20260920-04).                                  |
 
 ## Deduplication
 
-Several hooks fire _before_ the `Stop` hook. Without deduplication, you'd hear the same notification twice — the earlier hook speaks the prompt, then the stop handler detects the same state and tries to speak it again.
-
-The state module (`lib/state.py`) writes a short-lived marker to `/tmp/claude-hooks/` when an event is handled. The stop handler checks for these markers **only when it detects that Claude is waiting for input** (pending tool_use, text ending with `?`, or AskUserQuestion tool). If a marker exists, the input-waiting notification is suppressed.
-
-Dedup markers checked by the stop handler:
+Several hooks fire before the `Stop` hook. The state module (`lib/state.py`) writes a short-lived marker to `/tmp/claude-hooks/` when an event is handled. The stop handler checks for these markers only when it detects that Claude is waiting for input (pending tool_use, text ending with `?`, or AskUserQuestion). If a marker exists, the input-waiting notification is suppressed.
 
 | Marker              | Set by                              | Prevents                               |
 | ------------------- | ----------------------------------- | -------------------------------------- |
@@ -378,63 +263,45 @@ Dedup markers checked by the stop handler:
 | `tool_failure`      | `PostToolUseFailureHandler`         | Stop re-announcing a failure           |
 | `subagent_stop`     | `SubagentStopHandler`               | Stop re-announcing subagent completion |
 
-Task-completion summaries (the normal "Claude finished work" path) **never consult dedup state**. This is intentional: when a permission or question hook fires and Claude then continues working and eventually stops, the stop is a genuinely new event — the task-completion summary should always play through.
-
-### Repeated summary dedup
-
-During a burst of tool calls in the same turn (e.g., 4 parallel `Edit` calls), the transcript text doesn't change between calls — so the permission handler would speak the same summary repeatedly. To prevent this, `state.py` stores an MD5 hash of the last spoken summary. Before speaking a transcript summary, the permission handler checks if it matches the stored hash. If it does, it falls back to the template ("Approve {tool_name}?") instead of repeating the same sentence.
-
-The hash is stored in the same per-session state file as the dedup markers, so it shares the same 60-second expiry. This means stale hashes from a previous turn won't suppress a new summary.
-
-State files auto-expire after 60 seconds.
+Task-completion summaries never consult dedup state. During a burst of tool calls in one turn, `state.py` also stores an MD5 of the last spoken summary so the permission handler falls back to the template instead of repeating itself. State files auto-expire after 60 seconds.
 
 ## Audit logging
 
-Both `validate-bash.sh` and `protect-files.sh` append a timestamped entry to `.claude/hooks/security.log` whenever a command or file edit is blocked. The log is append-only and never truncated by the hooks themselves.
+Two logs, by wiring level:
 
-Format:
+- Project-level blockers (`enforce-no-cd`, `enforce-builtin`, `enforce-gh-ssh-only`, `protect-files`) append to `.claude/hooks/security.log` beside the scripts (gitignored).
+- Manifest travellers (`validate-bash`, `enforce-uv`, `enforce-pnpm`) append to `${XDG_STATE_HOME:-~/.local/state}/dotfiles/hooks-security.log`, the same state home `vuln-scan` uses, because they run in every folder and must not write beside a stowed symlink.
+
+Format, both:
 
 ```text
-[2026-02-18T14:30:22Z] BLOCKED validate-bash "Force push to main/master" "git push --force main"
+[2026-02-18T14:30:22Z] BLOCKED validate-bash "Force push to main/master is not allowed" "git push --force main"
 [2026-02-18T14:31:05Z] BLOCKED protect-files "Secrets file" ".env.local"
 ```
 
-The log file is created on first blocked event. It lives alongside the hook scripts so it's easy to find and review.
+Append-only; the hooks never truncate them.
 
 ## Testing
 
-Unit tests cover the Python library modules (`state.py`, `summary.py`, `transcript.py`).
-
-Run tests:
-
 ```bash
-PYTHONPATH=.claude/hooks uv run --with pytest pytest .claude/hooks/tests/ -v
+PYTHONPATH=.claude/hooks uv run --with pytest pytest .claude/hooks/tests/ -v   # audio lib
+~/.claude/hooks/validate-bash.sh --selftest
+~/.claude/hooks/enforce-uv.sh --selftest
+~/.claude/hooks/enforce-pnpm.sh --selftest
+~/.claude/hooks/enforce-secret-probe.sh --selftest
+.claude/hooks/toolchain-cve-check-selftest
+claude-hooks-sync-selftest && claude-hooks-sync --target project --check
 ```
-
-Test files:
-
-| File                 | Covers                                                                                            |
-| -------------------- | ------------------------------------------------------------------------------------------------- |
-| `test_state.py`      | Dedup state machine: mark/check roundtrips, expiry, session isolation, corrupted files, cleanup   |
-| `test_summary.py`    | Text extraction: action verb detection, sentence/character modes, question extraction, edge cases |
-| `test_transcript.py` | JSONL parsing: text extraction, tool use detection, malformed input handling                      |
 
 ## Debugging
 
-Set `global.debug: true` in `config.yaml` (or `HOOK_DEBUG=1` env var). Debug output goes to `{project_dir}/{debug_dir}/`:
-
-- `hook_debug.log` — handler execution trace
-- `hook_raw_input.json` — raw stdin data (stop handler only)
-- `transcript_dump.jsonl` — copy of the transcript file (stop handler only)
+Set `global.debug: true` in `config.yaml` (or `HOOK_DEBUG=1`). Debug output goes to `{project_dir}/{debug_dir}/`: `hook_debug.log`, `hook_raw_input.json` and `transcript_dump.jsonl` (stop handler only, unredacted, so keep it off).
 
 ## Dependencies
 
-- macOS (uses `say` and `afplay` for audio)
-- Python 3.11+ (for `hook_runner.py`)
-- PyYAML (declared via PEP 723 inline metadata in `hook_runner.py`)
-- `jq` (used by shell hooks to parse stdin JSON)
-- `pnpm` (used by prettier formatting and Node.js pre-commit checks)
-- `uv` (used by Python pre-commit checks and `hook_runner.py` execution)
-- `markdownlint-cli` (used via `pnpm dlx` — markdown linting in PostToolUse and pre-commit gate)
-- `dotenvx` (optional — `.env` encryption check in `session-checks.sh`)
-- ~~`claude-code-transcripts` (optional — transcript export in `export_transcript.sh`)~~ no longer a dependency: that hook was retired 2026-08-18 (`cca4a6f`), and that tool name is the 2026-07-24 capture-outage collision
+- macOS (`say`, `afplay`) for the audio system
+- Python 3.11+ and PyYAML (PEP 723 metadata in `hook_runner.py`), run through `uv`
+- `jq` (every shell hook parses stdin JSON with it)
+- `pnpm` (prettier and markdownlint via `pnpm dlx`)
+- `dotenvx` (optional: `.env` encryption check in `session-checks.sh`)
+- GNU Stow and `claude-hooks-sync` (via `install.sh`) for the manifest travellers
