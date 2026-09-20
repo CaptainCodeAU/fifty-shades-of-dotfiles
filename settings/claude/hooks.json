@@ -71,7 +71,20 @@
     {
       "event": "PreToolUse",
       "matcher": "Bash",
+      "script": "enforce-secret-probe.sh",
+      "targets": ["user", "project"],
+      "entry": {
+        "type": "command",
+        "command": "$HOME/.claude/hooks/enforce-secret-probe.sh",
+        "timeout": 5
+      },
+      "why": "DENIES a Bash command that would print a credential-named variable into the transcript (the ${V:-word} probe, env dumps, bare echo). Was hand-wired into settings.json until 2026-09-20; this entry matches that command byte-for-byte"
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "Bash",
       "script": "enforce-census.sh",
+      "targets": ["user", "project"],
       "entry": {
         "type": "command",
         "command": "$HOME/.claude/hooks/enforce-census.sh",
@@ -83,6 +96,7 @@
       "event": "PreToolUse",
       "matcher": "Grep",
       "script": "enforce-census.sh",
+      "targets": ["user", "project"],
       "entry": {
         "type": "command",
         "command": "$HOME/.claude/hooks/enforce-census.sh",
@@ -94,6 +108,7 @@
       "event": "PreToolUse",
       "matcher": "Bash",
       "script": "enforce-herdr-skill.sh",
+      "targets": ["user", "project"],
       "entry": {
         "type": "command",
         "command": "$HOME/.claude/hooks/enforce-herdr-skill.sh"
@@ -105,6 +120,7 @@
       "event": "PostToolUse",
       "matcher": "Skill",
       "script": "mark-herdr-skill-read.sh",
+      "targets": ["user", "project"],
       "entry": {
         "type": "command",
         "command": "$HOME/.claude/hooks/mark-herdr-skill-read.sh"
