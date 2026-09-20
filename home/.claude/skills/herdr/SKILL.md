@@ -239,6 +239,8 @@ Use the read source that matches the task:
 - `recent-unwrapped`: recent output with soft wraps joined; prefer it for logs and transcripts.
 - `detection`: the plain-text bottom-buffer snapshot used for agent detection.
 
+**`visible` FOLLOWS THE USER'S SCROLL POSITION; `recent` DOES NOT.** Measured 2026-09-20 with both sources read at the same instant on a pane scrolled up 177 rows: `visible` returned the scrolled-to region from the middle of the history, `recent` returned the newest rows. So a `visible` read of a scrolled pane hands you an OLD screen, and nothing in the output says so -- the read looks completely normal, it is just answering about a different moment. Check `.result.pane.scroll.offset_from_bottom` from `pane get` (0 means pinned to the bottom), or use `herdr-pane-read`, which reads that field and says on stderr when a pane is scrolled and whether the chosen source cares.
+
 **A SMALL `--lines` RETURNS NOTHING WHEN THE CONTENT DOES NOT REACH THE BOTTOM OF THE PANE.** `--lines N` counts N rows up from the bottom of the terminal GRID, not from the bottom of the CONTENT. A pane whose program fills only the top of its screen has blank rows below; those blank rows fill your N and are trimmed before you see them, so a pane full of text reads as empty. The floor is `viewport_rows - content_rows + 1`, and any N below it returns zero bytes.
 
 Measured 2026-09-20 on herdr 0.8.2, three panes, each with a failing arm and a passing arm in the same command:

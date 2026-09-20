@@ -209,6 +209,23 @@ case "$back" in ''|*[!0-9]*) back=0 ;; esac
 ask=$((rows + back + MARGIN))
 [ "$ask" -ge "$FLOOR" ] || ask=$FLOOR
 
+# --- scroll position: only `visible` follows it ----------------------------
+# Measured 2026-09-20, both sources read at the same instant on a pane scrolled
+# up 177 rows: `visible` returned the scrolled-to region, `recent` returned the
+# newest rows. So a `visible` read of a scrolled pane hands you an OLD screen
+# with nothing in the output saying so. Said out loud here, only when it applies.
+off=$(printf '%s' "$geom" | jq -r '.result.pane.scroll.offset_from_bottom // 0' 2>/dev/null)
+case "$off" in ''|*[!0-9]*) off=0 ;; esac
+if [ "$off" -gt 0 ] && [ "$QUIET" -eq 0 ]; then
+	if [ "$SOURCE" = visible ]; then
+		printf '%s: WARNING -- pane %s is scrolled UP %s rows and source '\''visible'\'' follows\n    that scroll, so what follows is the screen the user is looking at, NOT the\n    newest output. Use --source recent for the newest output.\n' \
+			"$PROG" "$PANE" "$off" >&2
+	else
+		printf '%s: note -- pane %s is scrolled up %s rows; source '\''%s'\'' is pinned to the\n    newest output, so this read is unaffected.\n' \
+			"$PROG" "$PANE" "$off" "$SOURCE" >&2
+	fi
+fi
+
 # --- the read --------------------------------------------------------------
 raw=$(herdr pane read "$PANE" --source "$SOURCE" --lines "$ask" ${EXTRA+"${EXTRA[@]}"} 2>&1)
 rrc=$?
