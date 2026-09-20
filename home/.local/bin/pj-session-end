@@ -43,8 +43,8 @@
 #              no-wrap-up/handled/. Several sessions can end unwrapped before the next
 #              wrap-up and no transcript pointer is lost.
 #
-# Outside a git repo, with no session id, with no transcript, or when jq is missing:
-# nothing is written. Selftest: pj-session-end-selftest. Rulings: D-20260920-03, -04.
+# Outside a git repo, with no session id, with no transcript, when jq is missing, or when
+# jq cannot parse the transcript (a broken line): nothing is written. Silence over a guess. Selftest: pj-session-end-selftest. Rulings: D-20260920-03, -04.
 
 set -u
 [ "${1:-}" = "--selftest" ] && exec "$(dirname "$0")/pj-session-end-selftest"
