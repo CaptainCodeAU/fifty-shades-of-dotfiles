@@ -551,3 +551,14 @@ ships `@pnpm/exe.<os>-<arch>[-musl]`. The lookup 404'd, `__pnpm_version_has_bina
 "unknown" and the 11.12-class binary-less guard failed OPEN on every v12 update. Fix: the
 helper takes the target version and picks the naming by major. Both arms are in
 `zsh-node-functions-selftest`. Fail-open on "unknown" stays: offline must not block.
+
+## D-20260920-11 -- pj session framework rulings R0 to R8
+
+topic: pj session framework rulings R0 R1 R2 R3 R4 R5 R6 R7 R8 start routine wrap-up item model homes machine-wide rules concurrent sessions machinery travels register home pj-global pointer
+decided: 2026-09-20
+status: standing
+holds-in: ~/.claude/pj-global/decisions/ (D-20260920-02 to D-20260920-10, one file per ruling)
+
+Pointer only. Nine rulings made on 2026-09-20 for the pj session framework programme are
+recorded machine-wide, outside this repo, under D-20260920-10 (R8). This block exists so
+`decided` can find them until it learns to search that folder. No ruling text here.
