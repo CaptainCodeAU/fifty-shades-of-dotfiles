@@ -25,7 +25,7 @@
 
 set -uo pipefail
 
-TOOL="${OPEN_ITEMS_TOOL:-$(dirname "$0")/open-items}"
+TOOL="${OPEN_ITEMS_TOOL:-$(dirname "$0")/$(basename "$0" | sed "s/-selftest//")}"
 [ -x "$TOOL" ] || { printf 'selftest: cannot find open-items at %s\n' "$TOOL" >&2; exit 2; }
 
 PASS=0; FAIL=0
@@ -206,6 +206,271 @@ wanteq "TWIN and prints literally nothing" "" "$OUT"
 OUT="$(cd "$ALPHA" && OPEN_ITEMS_PROJECTS_DIR="$ROOT/nope" "$TOOL" --session 2>&1)"; RC=$?
 wanteq "a missing projects root does not break a session start (rc=0)" "0" "$RC"
 wanteq "and says nothing there either" "" "$OUT"
+
+
+# ==============================================================================
+# The items/ layout (P5.1, D-20260920-05 and -08): every command, atomic IDs,
+# commits by explicit path, the drawer that must NOT be committed, a failed commit
+# that must not lose the write, hand-edit rescue, migration, and a mixed machine.
+# ==============================================================================
+# A fixture "dot-claude": a git repo whose projects/ is the projects root, so a
+# drawer inside it is committable and one symlinked elsewhere is not.
+mk_dotclaude(){
+    D="$ROOT/case$((++N))"; DC="$D/dotclaude"; P="$DC/projects"; mkdir -p "$P"
+    git -C "$DC" init -q 2>/dev/null
+    git -C "$DC" config user.email t@t; git -C "$DC" config user.name t
+    # Mirror the real dot-claude .gitignore: the global MEMORY/ rule would otherwise
+    # swallow memory/ (core.ignorecase), and a commit of nothing would look like success.
+    printf 'projects/*\n!projects/*/\nprojects/*/*\n!projects/*/memory/\n!projects/*/memory\n' > "$DC/.gitignore"
+    git -C "$DC" add .gitignore
+    git -C "$DC" -c commit.gpgsign=false commit -q --allow-empty -m init 2>/dev/null
+    ZETA="$D/zeta"; mkdir -p "$ZETA"; git -C "$ZETA" init -q 2>/dev/null
+    ZW="$P/$(key "$ZETA")/memory/WORK"; mkdir -p "$ZW"
+}
+runw(){ local d="$1"; shift; OUT="$(cd "$d" 2>/dev/null && OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" CLAUDE_SESSION_ID=sess-test "$TOOL" "$@" 2>&1)"; RC=$?; return 0; }
+TODAY="$(date +%Y%m%d)"
+committed(){ [ -z "$(git -C "$DC" status --porcelain -- "$1" 2>/dev/null)" ] && git -C "$DC" ls-files --error-unmatch -- "$1" >/dev/null 2>&1; }
+
+printf 'F  commands on the items/ layout\n'
+mk_dotclaude
+runw "$ZETA" add "no drawer yet" --done-when x
+wanteq "add before init REFUSES (rc=2): a project with no items/ is never written" "2" "$RC"
+runw "$ZETA" init
+wanteq "init creates items/ and commits (rc=0)" "0" "$RC"
+wanteq "init: OPEN.md generated" "1" "$([ -f "$ZW/OPEN.md" ] && echo 1)"
+want   "init: OPEN.md carries the do-not-edit header" "DO NOT EDIT" "$(cat "$ZW/OPEN.md")"
+runw "$ZETA" add "first thing" --done-when "it is done" --size small --holds-in repo:README.md --body "Body text."
+wanteq "add succeeds (rc=0)" "0" "$RC"
+want   "add prints the new ID" "W-$TODAY-01" "$OUT"
+F1="$ZW/items/open/W-$TODAY-01.md"
+wanteq "add: the file lands in items/open/" "1" "$([ -f "$F1" ] && echo 1)"
+want   "add: status open written"      "status: open"          "$(cat "$F1")"
+want   "add: kind defaults to do"      "kind: do"              "$(cat "$F1")"
+want   "add: done-when written"        "done-when: it is done" "$(cat "$F1")"
+want   "add: raised filled by the tool with date and session" "raised: $(date +%Y-%m-%d) (session sess-test)" "$(cat "$F1")"
+want   "add: body kept"                "Body text."            "$(cat "$F1")"
+wanteq "add: the item file is COMMITTED" "1" "$(committed "projects/$(key "$ZETA")/memory/WORK/items/open/W-$TODAY-01.md" && echo 1)"
+want   "add: the commit names the item by explicit path" "items/open/W-$TODAY-01.md" "$(git -C "$DC" show --stat --name-only HEAD)"
+want   "add: OPEN.md regenerated with the item" "first thing" "$(cat "$ZW/OPEN.md")"
+runw "$ZETA" add "second thing" --done-when y --kind decide
+want   "add: the next ID is -02" "W-$TODAY-02" "$OUT"
+# THE REQUIRED-FIELD REFUSAL, with the passing control right above it.
+runw "$ZETA" add "no finish line"
+wanteq "add WITHOUT --done-when REFUSES (rc=2)" "2" "$RC"
+want   "and says which field" "done-when" "$OUT"
+wanteq "and creates NO file (control: -01 and -02 exist)" "2" "$(ls "$ZW/items/open" | grep -c '^W-')"
+runw "$ZETA" add "bad size" --done-when z --kind decide --size small
+wanteq "add: --size on a decide item REFUSES (rc=2)" "2" "$RC"
+runw "$ZETA" add "bad root" --done-when z --holds-in docs/x.md
+wanteq "add: holds-in without a root marker REFUSES (rc=2)" "2" "$RC"
+want   "and names the markers" "repo:" "$OUT"
+runw "$ZETA" close "W-$TODAY-01" "finished it"
+wanteq "close succeeds (rc=0)" "0" "$RC"
+wanteq "close: file moved to items/closed/" "1" "$([ -f "$ZW/items/closed/W-$TODAY-01.md" ] && [ ! -f "$F1" ] && echo 1)"
+want   "close: status done"   "status: done" "$(cat "$ZW/items/closed/W-$TODAY-01.md")"
+want   "close: note appended" "finished it"  "$(cat "$ZW/items/closed/W-$TODAY-01.md")"
+wanteq "close: committed (old path gone from the index too)" "0" "$(git -C "$DC" status --porcelain | wc -l | tr -d ' ')"
+runw "$ZETA" park "W-$TODAY-02"
+wanteq "park: file in items/parked/ with status parked" "1" "$(grep -q '^status: parked$' "$ZW/items/parked/W-$TODAY-02.md" && echo 1)"
+runw "$ZETA" reopen "W-$TODAY-02"
+wanteq "reopen: back in items/open/ with status open" "1" "$(grep -q '^status: open$' "$ZW/items/open/W-$TODAY-02.md" && echo 1)"
+runw "$ZETA" decline "W-$TODAY-02" "not doing it"
+wanteq "decline: in items/closed/ with status declined" "1" "$(grep -q '^status: declined$' "$ZW/items/closed/W-$TODAY-02.md" && echo 1)"
+runw "$ZETA" add "third thing" --done-when q
+runw "$ZETA" set "W-$TODAY-03" done-when "a better finish line"
+wanteq "set replaces a field (rc=0)" "0" "$RC"
+want   "set: new value present" "done-when: a better finish line" "$(cat "$ZW/items/open/W-$TODAY-03.md")"
+wanteq "set: old value gone" "1" "$(grep -c '^done-when:' "$ZW/items/open/W-$TODAY-03.md")"
+runw "$ZETA" set "W-$TODAY-03" next "run the thing"
+want   "set adds a field that was absent, inside the header" "next: run the thing" "$(sed -n '2,12p' "$ZW/items/open/W-$TODAY-03.md")"
+runw "$ZETA" set "W-$TODAY-03" status done
+wanteq "set status REFUSES (rc=2); status moves through close/park/decline/reopen" "2" "$RC"
+runw "$ZETA" close "W-$TODAY-99"
+wanteq "close of an unknown ID REFUSES (rc=2)" "2" "$RC"
+runw "$ZETA" --closed
+want   "listing --closed shows done, declined and open together" "W-$TODAY-01" "$OUT"
+want   "  ..." "W-$TODAY-03" "$OUT"
+runw "$ZETA" --status declined
+want    "--status declined shows the declined one" "W-$TODAY-02" "$OUT"
+wantnot "and not the open one" "W-$TODAY-03" "$OUT"
+runw "$ZETA"
+wanteq "default listing shows only open (rc=0)" "0" "$RC"
+wantnot "default hides the declined item" "W-$TODAY-02" "$OUT"
+runw "$ZETA" --session
+want   "--session on items/ layout names the open item" "third thing" "$OUT"
+runw "$ZETA" park "W-$TODAY-03"
+runw "$ZETA" --session
+want   "--session with only a parked item prints the parked count" "parked: 1" "$OUT"
+wantnot "and no title" "third thing" "$OUT"
+runw "$ZETA" --help
+wanteq "--help opens with usage in under 25 lines (was 71)" "1" "$([ "$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')" -lt 25 ] && echo 1)"
+want   "--help lists add" "open-items add" "$OUT"
+want   "--help points at the doc" "docs/OPEN_ITEMS.md" "$OUT"
+
+printf 'G  two writers at once\n'
+mk_dotclaude
+runw "$ZETA" init
+i=0; while [ $i -lt 20 ]; do i=$((i+1))
+  ( cd "$ZETA" && OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" "$TOOL" add "parallel $i" --done-when x >/dev/null 2>&1 ) &
+done; wait
+IDS="$(ls "$ZW/items/open" | grep '^W-' | sort -u | wc -l | tr -d ' ')"
+wanteq "20 concurrent adds produce 20 DISTINCT IDs (files)" "20" "$IDS"
+wanteq "and 20 distinct titles survived (no file overwritten)" "20" "$(cat "$ZW/items/open"/W-*.md | grep -c '^## W-.* -- parallel ')"
+wanteq "and every one of the 20 is COMMITTED (clean tree under the drawer)" "0" "$(git -C "$DC" status --porcelain -- "projects/$(key "$ZETA")" | wc -l | tr -d ' ')"
+wanteq "and all 20 are in the index" "20" "$(git -C "$DC" ls-files -- "projects/$(key "$ZETA")/memory/WORK/items/open" | wc -l | tr -d ' ')"
+wanteq "and the lock was released" "1" "$([ ! -e "$ZW/items/.lock" ] && echo 1)"
+
+printf 'H  a mixed machine: one legacy drawer, one items/ drawer\n'
+mk_dotclaude
+LEG="$D/legacy"; mkdir -p "$LEG"; git -C "$LEG" init -q 2>/dev/null
+LW="$P/$(key "$LEG")/memory/WORK"; mkdir -p "$LW"
+printf '# legacy -- open items\n\n## W-20260918-05 -- the legacy one\n\nproject: legacy\nstatus: open\nsize: small\n\nBody.\n' > "$LW/OPEN.md"
+runw "$ZETA" init; runw "$ZETA" add "the new one" --done-when x
+runw "$ZETA" --all
+want   "--all reaches the legacy drawer"  "the legacy one" "$OUT"
+want   "--all reaches the items/ drawer"  "the new one"    "$OUT"
+want   "--all counts both"                "2 drawer(s)"    "$OUT"
+runw "$ZETA" --projects
+want   "--projects labels the legacy layout" "legacy	$LW/OPEN.md	legacy" "$OUT"
+want   "--projects labels the items layout"  "	items" "$OUT"
+runw "$LEG"
+wanteq "standing in the legacy repo reads its OPEN.md unchanged (rc=0)" "0" "$RC"
+want   "  and finds its item" "W-20260918-05" "$OUT"
+runw "$LEG" --session
+want   "legacy --session still prints the title" "the legacy one" "$OUT"
+runw "$LEG" add "into a legacy drawer" --done-when x
+wanteq "add into a LEGACY drawer REFUSES (rc=2): it stays as it is" "2" "$RC"
+want   "  and says why" "legacy" "$OUT"
+wanteq "  and the legacy OPEN.md is byte-identical (control: zeta's changed)" "1" "$(grep -q 'into a legacy' "$LW/OPEN.md" || echo 1)"
+
+printf 'I  the symlinked drawer that must NOT be committed\n'
+mk_dotclaude
+ETA="$D/eta"; mkdir -p "$ETA" "$D/elsewhere/WORK"; git -C "$ETA" init -q 2>/dev/null
+mkdir -p "$P/$(key "$ETA")"; ln -s "$D/elsewhere" "$P/$(key "$ETA")/memory"
+runw "$ETA" init
+wanteq "init through a symlink OUTSIDE dot-claude: written, NOT committed (rc=3)" "3" "$RC"
+want   "  and says so out loud" "NOT COMMITTED, outside dot-claude" "$OUT"
+runw "$ETA" add "outside" --done-when x
+wanteq "add there: rc=3" "3" "$RC"
+wanteq "  the file IS written" "1" "$([ -f "$D/elsewhere/WORK/items/open/W-$TODAY-01.md" ] && echo 1)"
+wanteq "  and dot-claude got NO commit for it (control: zeta's add commits)" "0" "$(git -C "$DC" log --oneline | grep -c 'add W-')"
+runw "$ZETA" init; runw "$ZETA" add "inside" --done-when x
+wanteq "  control: the in-tree drawer's add IS committed" "1" "$(git -C "$DC" log --oneline | grep -c 'add W-')"
+
+printf 'J  a failed commit never loses the write\n'
+mk_dotclaude
+runw "$ZETA" init
+printf '#!/bin/sh\nexit 1\n' > "$DC/.git/hooks/pre-commit"; chmod +x "$DC/.git/hooks/pre-commit"
+runw "$ZETA" add "survives" --done-when x
+wanteq "commit refused by a hook: rc=3, not 0 and not 2" "3" "$RC"
+want   "  and says COMMIT FAILED" "COMMIT FAILED" "$OUT"
+wanteq "  the item file is on disk" "1" "$([ -f "$ZW/items/open/W-$TODAY-01.md" ] && echo 1)"
+wanteq "  and OPEN.md was still regenerated" "1" "$(grep -q survives "$ZW/OPEN.md" && echo 1)"
+mv "$DC/.git/hooks/pre-commit" "$DC/.git/hooks/pre-commit.off"
+runw "$ZETA" add "next write" --done-when x
+wanteq "the next write commits (rc=0)" "0" "$RC"
+wanteq "  and carries the earlier uncommitted item with it" "2" "$(git -C "$DC" ls-files -- "projects/$(key "$ZETA")/memory/WORK/items/open" | wc -l | tr -d ' ')"
+# (2a) a stale index.lock is retried, not fatal.
+touch "$DC/.git/index.lock"; ( sleep 1; rmdir "$DC/.git/index.lock" 2>/dev/null || command mv "$DC/.git/index.lock" "$DC/.git/index.lock.gone" ) &
+runw "$ZETA" add "through a lock" --done-when x
+wanteq "a transient index.lock is waited out (rc=0)" "0" "$RC"
+wait
+
+printf 'K  hand edits are rescued, never discarded\n'
+mk_dotclaude
+runw "$ZETA" init; runw "$ZETA" add "one" --done-when x
+printf '\n## W-20260920-77 -- typed straight into OPEN.md\n\nproject: zeta\nstatus: open\n\nhand text\n' >> "$ZW/OPEN.md"
+runw "$ZETA" add "two" --done-when x
+want   "a hand-edited OPEN.md triggers a WARNING naming the rescue file" "hand-edit-rescued" "$OUT"
+RES="$(ls "$ZW/items/notes"/*hand-edit-rescued.md 2>/dev/null | head -1)"
+wanteq "  the rescue file exists" "1" "$([ -n "$RES" ] && [ -f "$RES" ] && echo 1)"
+want   "  and holds the hand-typed text" "hand text" "$(cat "${RES:-/nonexistent}" 2>/dev/null)"
+wantnot "  and OPEN.md was regenerated without the hand block as an item" "typed straight into OPEN.md\n\nproject" "$(sed -n '1,12p' "$ZW/OPEN.md")"
+wanteq "  and the rescue file is committed" "1" "$(committed "projects/$(key "$ZETA")/memory/WORK/items/notes/$(basename "$RES")" && echo 1)"
+NRES="$(ls "$ZW/items/notes" | grep -c rescued)"
+runw "$ZETA" add "three" --done-when x
+wantnot "CONTROL: an untouched OPEN.md raises no warning" "hand-edit-rescued" "$OUT"
+wanteq  "CONTROL: and no new rescue file" "$NRES" "$(ls "$ZW/items/notes" | grep -c rescued)"
+want   "regen: OPEN.md lists every item" "three" "$(cat "$ZW/OPEN.md")"
+wanteq "regen: exactly one generated header" "1" "$(grep -c 'GENERATED by open-items' "$ZW/OPEN.md")"
+printf 'stale\n' > "$ZW/OPEN.md"
+runw "$ZETA" regen
+wanteq "regen rebuilds a stale OPEN.md (rc=0)" "0" "$RC"
+want   "  which now holds the items again" "W-$TODAY-03" "$(cat "$ZW/OPEN.md")"
+wanteq "  control: the stale text is gone" "0" "$(grep -c '^stale$' "$ZW/OPEN.md")"
+
+printf 'L  migrate: legacy OPEN.md -> items/\n'
+mk_dotclaude
+cat > "$ZW/OPEN.md" <<'EOF'
+# zeta -- open items
+
+> old header line
+
+## W-20260901-01 -- a done task
+
+project: zeta
+status: done
+size: small
+holds-in: sub/NOTE.md
+
+Done body.
+
+## Re-verification pass -- not an item
+
+Free text here.
+
+## W-20260902-01 -- a decision with a finish line
+
+project: zeta
+status: open
+size: decision
+holds-in: README.md (top)
+
+Body one.
+
+**Done when:** the ruling is recorded
+and this item is closed.
+
+Trailing paragraph.
+
+## W-20260903-01 -- a programme, parked
+
+project: zeta
+status: open
+size: programme
+
+Body three.
+EOF
+mkdir -p "$ZW/sub"; touch "$ZW/sub/NOTE.md" "$ZETA/README.md"
+SCR="$D/scratch"
+runw "$ZETA" migrate --dry-run --into "$SCR" --park W-20260903-01
+wanteq "migrate --dry-run succeeds (rc=0)" "0" "$RC"
+wanteq "  and leaves the drawer legacy (no items/)" "1" "$([ ! -d "$ZW/items" ] && echo 1)"
+wanteq "  and commits nothing" "1" "$(git -C "$DC" log --oneline | wc -l | tr -d ' ')"
+wanteq "  scratch: done item in closed/" "1" "$([ -f "$SCR/items/closed/W-20260901-01.md" ] && echo 1)"
+wanteq "  scratch: parked item in parked/" "1" "$([ -f "$SCR/items/parked/W-20260903-01.md" ] && echo 1)"
+want   "  scratch: size decision -> kind decide" "kind: decide" "$(cat "$SCR/items/open/W-20260902-01.md")"
+wanteq "  scratch: and no size on it" "0" "$(grep -c '^size:' "$SCR/items/open/W-20260902-01.md")"
+want   "  scratch: programme -> large" "size: large" "$(cat "$SCR/items/parked/W-20260903-01.md")"
+want   "  scratch: Done when paragraph lifted, joined" "done-when: the ruling is recorded and this item is closed." "$(cat "$SCR/items/open/W-20260902-01.md")"
+want   "  scratch: legacy done-when marked, not invented" "done-when: not stated (legacy)" "$(cat "$SCR/items/closed/W-20260901-01.md")"
+want   "  scratch: raised from the ID date, not today" "raised: 2026-09-01 (legacy" "$(cat "$SCR/items/closed/W-20260901-01.md")"
+want   "  scratch: holds-in resolved to drawer:" "holds-in: drawer:sub/NOTE.md" "$(cat "$SCR/items/closed/W-20260901-01.md")"
+want   "  scratch: holds-in resolved to repo:, suffix kept" "holds-in: repo:README.md (top)" "$(cat "$SCR/items/open/W-20260902-01.md")"
+want   "  scratch: body kept verbatim" "Trailing paragraph." "$(cat "$SCR/items/open/W-20260902-01.md")"
+wanteq "  scratch: non-block section became a note" "1" "$(ls "$SCR/items/notes" | grep -c 're-verification')"
+want   "  scratch: preamble preserved as a note" "old header line" "$(cat "$SCR/items/notes/legacy-OPEN-header.md")"
+runw "$ZETA" migrate --park W-20260903-01
+wanteq "migrate for real (rc=0)" "0" "$RC"
+wanteq "  items/ now exists and OPEN.md is generated" "1" "$([ -d "$ZW/items/open" ] && grep -q 'GENERATED' "$ZW/OPEN.md" && echo 1)"
+want   "  the generated view still carries every block" "W-20260903-01" "$(cat "$ZW/OPEN.md")"
+wanteq "  and it is committed (items/ and OPEN.md clean)" "0" "$(git -C "$DC" status --porcelain -- "projects/$(key "$ZETA")/memory/WORK/items" "projects/$(key "$ZETA")/memory/WORK/OPEN.md" | wc -l | tr -d ' ')"
+runw "$ZETA" migrate
+wanteq "migrate twice REFUSES (rc=2)" "2" "$RC"
+wanteq "migrate does not rescue its own source as a hand edit (control: arm K rescues)" "0" "$(ls "$ZW/items/notes" | grep -c rescued)"
+runw "$ZETA" --session
+want   "--session after migrate: open title" "a decision with a finish line" "$OUT"
+want   "  and parked count" "parked: 1" "$OUT"
 
 printf '\n%s passed, %s failed   (fixtures: %s)\n' "$PASS" "$FAIL" "$ROOT"
 [ "$FAIL" -eq 0 ] || { printf 'open-items-selftest: FAILURES above\n' >&2; exit 1; }

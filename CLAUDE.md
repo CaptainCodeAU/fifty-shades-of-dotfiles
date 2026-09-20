@@ -1,6 +1,6 @@
 Default branch is `master`.
 
-Open items: run `open-items --all`.
+Open items: `open-items` (this project), `open-items --all` (every project). File one with `open-items add "title" --done-when "..."`; move one with `close`, `park`, `decline`, `reopen`; `--help` for the rest. Never hand-edit `OPEN.md`, it is generated.
 
 ## Before proposing a fix, ask whether it is already decided
 
