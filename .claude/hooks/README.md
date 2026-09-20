@@ -6,25 +6,25 @@ All hooks are registered in `.claude/settings.json`. Claude Code pipes JSON to s
 
 ## Overview
 
-| Script                    | Hook Event     | Matcher                            | Purpose                                                                      |
-| ------------------------- | -------------- | ---------------------------------- | ---------------------------------------------------------------------------- |
-| `session-checks.sh`       | `SessionStart` | `startup\|resume`                  | Git status + `.env` encryption check                                         |
-| `zed-version-check.sh`    | `SessionStart` | `startup\|resume`                  | Nudge to refresh Zed Preview changelog when newer release                    |
-| `toolchain-cve-check.sh`  | `SessionStart` | `startup\|resume`                  | Flag CVE-exposed pinned/installed pnpm/nvm versions                          |
-| `herdr-cooldown-check.sh` | `SessionStart` | `startup\|resume`                  | Report herdr release-cooldown eligibility                                    |
-| `bun-cooldown-check.sh`   | `SessionStart` | `startup\|resume`                  | Flag a global bun package silently blocked by the minimumReleaseAge cooldown |
-| _(inline echo)_           | `SessionStart` | `compact`                          | Re-inject project conventions after compaction                               |
-| `validate-bash.sh`        | `PreToolUse`   | `Bash`                             | Block destructive commands (`rm -rf /`, force push, etc.)                    |
-| `pre-commit-check.sh`     | `PreToolUse`   | `Bash`                             | Lint/build gate before `git commit`                                          |
-| `protect-files.sh`        | `PreToolUse`   | `Edit\|Write`                      | Block edits to `.env`, lockfiles, `.git/`                                    |
-| `enforce-uv.sh`           | `PreToolUse`   | `Bash`                             | Block bare pip/python/pytest/ruff → enforce uv                               |
-| `enforce-pnpm.sh`         | `PreToolUse`   | `Bash`                             | Block npm/yarn/npx → enforce pnpm or bun                                     |
-| `enforce-no-cd.sh`        | `PreToolUse`   | `Bash`                             | Block bare cd → enforce absolute paths or git -C                             |
-| `enforce-builtin.sh`      | `PreToolUse`   | `Bash`                             | Block `builtin` with non-builtins (git, swift, etc.)                         |
-| `hook_runner.py`          | Multiple       | Various                            | Audio notifications (sound + speech)                                         |
-| _(inline prettier)_       | `PostToolUse`  | `Edit\|Write`                      | Auto-format with prettier after file changes                                 |
-| _(inline markdownlint)_   | `PostToolUse`  | `Edit\|Write`                      | Auto-fix markdown lint issues on `.md` files                                 |
-| `export_transcript.sh`    | `SessionEnd`   | `prompt_input_exit\|logout\|other` | Export session transcript (skips `/clear`)                                   |
+| Script                              | Hook Event     | Matcher           | Purpose                                                                      |
+| ----------------------------------- | -------------- | ----------------- | ---------------------------------------------------------------------------- |
+| `session-checks.sh`                 | `SessionStart` | `startup\|resume` | Git status + `.env` encryption check                                         |
+| `zed-version-check.sh`              | `SessionStart` | `startup\|resume` | Nudge to refresh Zed Preview changelog when newer release                    |
+| `toolchain-cve-check.sh`            | `SessionStart` | `startup\|resume` | Flag CVE-exposed pinned/installed pnpm/nvm versions                          |
+| `herdr-cooldown-check.sh`           | `SessionStart` | `startup\|resume` | Report herdr release-cooldown eligibility                                    |
+| `bun-cooldown-check.sh`             | `SessionStart` | `startup\|resume` | Flag a global bun package silently blocked by the minimumReleaseAge cooldown |
+| _(inline echo)_                     | `SessionStart` | `compact`         | Re-inject project conventions after compaction                               |
+| `validate-bash.sh`                  | `PreToolUse`   | `Bash`            | Block destructive commands (`rm -rf /`, force push, etc.)                    |
+| `pre-commit-check.sh`               | `PreToolUse`   | `Bash`            | Lint/build gate before `git commit`                                          |
+| `protect-files.sh`                  | `PreToolUse`   | `Edit\|Write`     | Block edits to `.env`, lockfiles, `.git/`                                    |
+| `enforce-uv.sh`                     | `PreToolUse`   | `Bash`            | Block bare pip/python/pytest/ruff → enforce uv                               |
+| `enforce-pnpm.sh`                   | `PreToolUse`   | `Bash`            | Block npm/yarn/npx → enforce pnpm or bun                                     |
+| `enforce-no-cd.sh`                  | `PreToolUse`   | `Bash`            | Block bare cd → enforce absolute paths or git -C                             |
+| `enforce-builtin.sh`                | `PreToolUse`   | `Bash`            | Block `builtin` with non-builtins (git, swift, etc.)                         |
+| `hook_runner.py`                    | Multiple       | Various           | Audio notifications (sound + speech)                                         |
+| _(inline prettier)_                 | `PostToolUse`  | `Edit\|Write`     | Auto-format with prettier after file changes                                 |
+| _(inline markdownlint)_             | `PostToolUse`  | `Edit\|Write`     | Auto-fix markdown lint issues on `.md` files                                 |
+| _(retired: `export_transcript.sh`)_ | `SessionEnd`   | --                | RETIRED 2026-08-18 (`cca4a6f`), duplicated cc-capture. Do not re-add         |
 
 ## Audio notification system
 
@@ -204,7 +204,6 @@ Subclasses override only the steps they need:
   enforce-pnpm.sh         # PreToolUse Bash — block npm/yarn/npx → pnpm or bun
   enforce-no-cd.sh        # PreToolUse Bash — block bare cd
   enforce-builtin.sh      # PreToolUse Bash — block builtin with non-builtins
-  export_transcript.sh    # SessionEnd — export session transcript
   hook_runner.py          # Audio entrypoint — reads stdin, routes to handler
   config.yaml             # Audio notification configuration
   security.log            # Audit log of blocked commands/edits (created on first block)
@@ -337,9 +336,13 @@ Runs on `PreToolUse` for `Edit|Write` tools. Reads the stdin JSON and blocks edi
 
 Blocked edits are logged to `security.log` (see [Audit logging](#audit-logging)).
 
-### export_transcript.sh
+### export_transcript.sh -- RETIRED 2026-08-18
 
-Runs on `SessionEnd` with matcher `prompt_input_exit|logout|other` (skips `/clear`). Reads `transcript_path` from stdin JSON and exports it via `claude-code-transcripts`. Respects `SKIP_SESSION_END_HOOK=1` to disable.
+Deleted in `cca4a6f`. It ran on `SessionEnd`, read `transcript_path` from stdin JSON and exported it via `claude-code-transcripts` into `~/CODE/claude-code-transcripts`.
+
+**Do not re-add it.** It was a SECOND exporter running alongside cc-capture's own capture and archive, and a real session was confirmed captured by both at once. The tool it called is also the name collision that caused the ten-day capture outage on 2026-07-24. Capture now belongs to the `cc-capture@cc-warehouse` plugin, enabled in user-level settings, which registers its own `SessionStart` and `SessionEnd` hooks (verified 2026-09-20).
+
+It also scrubbed `github_pat_`/`gh[posru]_` patterns out of the files it wrote. **That scrubbing went with it**, so do not cite it as a control anywhere; `docs/GH_AUTH_GUARD_USER_LEVEL.md` used to and has been corrected.
 
 ### PostToolUse prettier (inline)
 
@@ -428,4 +431,4 @@ Set `global.debug: true` in `config.yaml` (or `HOOK_DEBUG=1` env var). Debug out
 - `uv` (used by Python pre-commit checks and `hook_runner.py` execution)
 - `markdownlint-cli` (used via `pnpm dlx` — markdown linting in PostToolUse and pre-commit gate)
 - `dotenvx` (optional — `.env` encryption check in `session-checks.sh`)
-- `claude-code-transcripts` (optional — transcript export in `export_transcript.sh`)
+- ~~`claude-code-transcripts` (optional — transcript export in `export_transcript.sh`)~~ no longer a dependency: that hook was retired 2026-08-18 (`cca4a6f`), and that tool name is the 2026-07-24 capture-outage collision

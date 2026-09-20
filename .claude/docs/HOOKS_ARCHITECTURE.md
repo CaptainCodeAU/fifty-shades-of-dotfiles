@@ -148,7 +148,6 @@ inline hooks registered directly in `settings.json`.
 │   ├── validate-bash.sh       # PreToolUse Bash — block destructive commands
 │   ├── pre-commit-check.sh    # PreToolUse Bash — lint/build gate before git commit
 │   ├── protect-files.sh       # PreToolUse Edit|Write — block edits to protected files
-│   ├── export_transcript.sh   # SessionEnd — export session transcript
 │   ├── security.log           # Audit log of blocked commands/edits (append-only)
 │   │
 │   ├── lib/                   # Python library modules
@@ -185,23 +184,23 @@ inline hooks registered directly in `settings.json`.
 
 ### File Purposes
 
-| File                   | Type    | Purpose                                                                                           |
-| ---------------------- | ------- | ------------------------------------------------------------------------------------------------- |
-| `settings.json`        | Config  | Maps Claude events to hook commands with matchers and timeouts                                    |
-| `config.yaml`          | Config  | Sound files, voice settings, message templates for all 12 hooks                                   |
-| `hook_runner.py`       | Entry   | Reads stdin JSON, routes to 1 of 11 active handlers                                               |
-| `config.py`            | Lib     | Loads YAML into typed dataclasses; env var overrides; CWD fallback                                |
-| `state.py`             | Lib     | Dedup markers, last-spoken hash, 60-second auto-expiry                                            |
-| `audio.py`             | Lib     | `afplay` (sound) and `say -o` → `.aiff` → `afplay -v` (voice)                                     |
-| `summary.py`           | Lib     | Sentence splitting, action verb detection, character/sentence limits                              |
-| `transcript.py`        | Lib     | Parses JSONL transcripts; finds text, tool_use, AskUserQuestion                                   |
-| `base.py`              | Handler | Abstract base — Template Method: should_handle → pre_message → get_message → resolve_audio → play |
-| `session-checks.sh`    | Shell   | Git status count + `.env` encryption check on session start                                       |
-| `validate-bash.sh`     | Shell   | Blocks `rm -rf /`, force push to main/master, hard reset, `git clean`                             |
-| `pre-commit-check.sh`  | Shell   | Runs lint + build (Node.js or Python) + markdownlint before `git commit`                          |
-| `protect-files.sh`     | Shell   | Blocks edits to `.env*`, lockfiles, `.git/`                                                       |
-| `export_transcript.sh` | Shell   | Exports transcript via `claude-code-transcripts` on session end                                   |
-| `security.log`         | Log     | Append-only audit trail of blocked commands and edits                                             |
+| File                               | Type    | Purpose                                                                                           |
+| ---------------------------------- | ------- | ------------------------------------------------------------------------------------------------- |
+| `settings.json`                    | Config  | Maps Claude events to hook commands with matchers and timeouts                                    |
+| `config.yaml`                      | Config  | Sound files, voice settings, message templates for all 12 hooks                                   |
+| `hook_runner.py`                   | Entry   | Reads stdin JSON, routes to 1 of 11 active handlers                                               |
+| `config.py`                        | Lib     | Loads YAML into typed dataclasses; env var overrides; CWD fallback                                |
+| `state.py`                         | Lib     | Dedup markers, last-spoken hash, 60-second auto-expiry                                            |
+| `audio.py`                         | Lib     | `afplay` (sound) and `say -o` → `.aiff` → `afplay -v` (voice)                                     |
+| `summary.py`                       | Lib     | Sentence splitting, action verb detection, character/sentence limits                              |
+| `transcript.py`                    | Lib     | Parses JSONL transcripts; finds text, tool_use, AskUserQuestion                                   |
+| `base.py`                          | Handler | Abstract base — Template Method: should_handle → pre_message → get_message → resolve_audio → play |
+| `session-checks.sh`                | Shell   | Git status count + `.env` encryption check on session start                                       |
+| `validate-bash.sh`                 | Shell   | Blocks `rm -rf /`, force push to main/master, hard reset, `git clean`                             |
+| `pre-commit-check.sh`              | Shell   | Runs lint + build (Node.js or Python) + markdownlint before `git commit`                          |
+| `protect-files.sh`                 | Shell   | Blocks edits to `.env*`, lockfiles, `.git/`                                                       |
+| _(retired)_ `export_transcript.sh` | Shell   | RETIRED 2026-08-18 (`cca4a6f`) -- duplicated cc-capture; do not re-add                            |
+| `security.log`                     | Log     | Append-only audit trail of blocked commands and edits                                             |
 
 ---
 
@@ -209,25 +208,25 @@ inline hooks registered directly in `settings.json`.
 
 ### Event Types
 
-| Event                | When Fired                | Matcher                                                            | Handler / Script                             | Timeout   |
-| -------------------- | ------------------------- | ------------------------------------------------------------------ | -------------------------------------------- | --------- |
-| `SessionStart`       | Session starts or resumes | `startup\|resume`                                                  | `session-checks.sh`                          | 10s       |
-| `SessionStart`       | Context compacted         | `compact`                                                          | Inline echo (conventions reminder)           | 5s        |
-| `PreToolUse`         | Before Bash tool          | `Bash`                                                             | `validate-bash.sh` + `pre-commit-check.sh`   | 10s / 30s |
-| `PreToolUse`         | Before Edit/Write tool    | `Edit\|Write`                                                      | `protect-files.sh`                           | 10s       |
-| `PostToolUse`        | After AskUserQuestion     | `AskUserQuestion`                                                  | `hook_runner.py` → AskUserQuestionHandler    | 5s        |
-| `PostToolUse`        | After Edit/Write          | `Edit\|Write`                                                      | Inline prettier + inline markdownlint        | 10s       |
-| `Stop`               | Claude stops responding   | (none)                                                             | `hook_runner.py` → StopHandler               | 5s        |
-| `PermissionRequest`  | Tool needs approval       | (none)                                                             | `hook_runner.py` → PermissionRequestHandler  | 5s        |
-| `Notification`       | System notification       | `idle_prompt\|auth_success\|permission_prompt\|elicitation_dialog` | `hook_runner.py` → NotificationHandler       | 5s        |
-| `SubagentStart`      | Subagent launched         | (none)                                                             | `hook_runner.py` → SubagentStartHandler      | 5s        |
-| `SubagentStop`       | Subagent finished         | (none)                                                             | `hook_runner.py` → SubagentStopHandler       | 5s        |
-| `TeammateIdle`       | Teammate goes idle        | (none)                                                             | `hook_runner.py` → TeammateIdleHandler       | 5s        |
-| `TaskCompleted`      | Task completed            | (none)                                                             | `hook_runner.py` → TaskCompletedHandler      | 5s        |
-| `PostToolUseFailure` | Tool use fails            | (none)                                                             | `hook_runner.py` → PostToolUseFailureHandler | 5s        |
-| `UserPromptSubmit`   | User submits prompt       | (none)                                                             | `hook_runner.py` → UserPromptSubmitHandler   | 5s        |
-| `PreCompact`         | Before context compaction | (none)                                                             | `hook_runner.py` → PreCompactHandler         | 5s        |
-| `SessionEnd`         | Session terminates        | `prompt_input_exit\|logout\|other`                                 | `export_transcript.sh`                       | (none)    |
+| Event                | When Fired                | Matcher                                                            | Handler / Script                                                   | Timeout   |
+| -------------------- | ------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------ | --------- |
+| `SessionStart`       | Session starts or resumes | `startup\|resume`                                                  | `session-checks.sh`                                                | 10s       |
+| `SessionStart`       | Context compacted         | `compact`                                                          | Inline echo (conventions reminder)                                 | 5s        |
+| `PreToolUse`         | Before Bash tool          | `Bash`                                                             | `validate-bash.sh` + `pre-commit-check.sh`                         | 10s / 30s |
+| `PreToolUse`         | Before Edit/Write tool    | `Edit\|Write`                                                      | `protect-files.sh`                                                 | 10s       |
+| `PostToolUse`        | After AskUserQuestion     | `AskUserQuestion`                                                  | `hook_runner.py` → AskUserQuestionHandler                          | 5s        |
+| `PostToolUse`        | After Edit/Write          | `Edit\|Write`                                                      | Inline prettier + inline markdownlint                              | 10s       |
+| `Stop`               | Claude stops responding   | (none)                                                             | `hook_runner.py` → StopHandler                                     | 5s        |
+| `PermissionRequest`  | Tool needs approval       | (none)                                                             | `hook_runner.py` → PermissionRequestHandler                        | 5s        |
+| `Notification`       | System notification       | `idle_prompt\|auth_success\|permission_prompt\|elicitation_dialog` | `hook_runner.py` → NotificationHandler                             | 5s        |
+| `SubagentStart`      | Subagent launched         | (none)                                                             | `hook_runner.py` → SubagentStartHandler                            | 5s        |
+| `SubagentStop`       | Subagent finished         | (none)                                                             | `hook_runner.py` → SubagentStopHandler                             | 5s        |
+| `TeammateIdle`       | Teammate goes idle        | (none)                                                             | `hook_runner.py` → TeammateIdleHandler                             | 5s        |
+| `TaskCompleted`      | Task completed            | (none)                                                             | `hook_runner.py` → TaskCompletedHandler                            | 5s        |
+| `PostToolUseFailure` | Tool use fails            | (none)                                                             | `hook_runner.py` → PostToolUseFailureHandler                       | 5s        |
+| `UserPromptSubmit`   | User submits prompt       | (none)                                                             | `hook_runner.py` → UserPromptSubmitHandler                         | 5s        |
+| `PreCompact`         | Before context compaction | (none)                                                             | `hook_runner.py` → PreCompactHandler                               | 5s        |
+| `SessionEnd`         | Session terminates        | (none here)                                                        | none in this repo -- `cc-capture@cc-warehouse` owns it, user-level | (none)    |
 
 ### Timeline: AskUserQuestion Flow
 
@@ -921,17 +920,6 @@ Full current version — all hooks use `$CLAUDE_PROJECT_DIR` for paths:
           }
         ]
       }
-    ],
-    "SessionEnd": [
-      {
-        "matcher": "prompt_input_exit|logout|other",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/export_transcript.sh"
-          }
-        ]
-      }
     ]
   }
 }
@@ -1537,16 +1525,16 @@ blocked event.
 February 2026. The current set is larger (14 scripts); see
 [`.claude/hooks/README.md`](../hooks/README.md) for the live list.
 
-| Event          | Matcher                  | Script                 | Behavior                   |
-| -------------- | ------------------------ | ---------------------- | -------------------------- |
-| `SessionStart` | `startup\|resume`        | `session-checks.sh`    | Git status + .env check    |
-| `SessionStart` | `compact`                | (inline echo)          | Conventions reminder       |
-| `PreToolUse`   | `Bash`                   | `validate-bash.sh`     | Block destructive commands |
-| `PreToolUse`   | `Bash`                   | `pre-commit-check.sh`  | Lint/build before commit   |
-| `PreToolUse`   | `Edit\|Write`            | `protect-files.sh`     | Block protected file edits |
-| `PostToolUse`  | `Edit\|Write`            | (inline prettier)      | Auto-format                |
-| `PostToolUse`  | `Edit\|Write`            | (inline markdownlint)  | Auto-fix .md files         |
-| `SessionEnd`   | `prompt_input_exit\|...` | `export_transcript.sh` | Export transcript          |
+| Event          | Matcher           | Script                | Behavior                   |
+| -------------- | ----------------- | --------------------- | -------------------------- |
+| `SessionStart` | `startup\|resume` | `session-checks.sh`   | Git status + .env check    |
+| `SessionStart` | `compact`         | (inline echo)         | Conventions reminder       |
+| `PreToolUse`   | `Bash`            | `validate-bash.sh`    | Block destructive commands |
+| `PreToolUse`   | `Bash`            | `pre-commit-check.sh` | Lint/build before commit   |
+| `PreToolUse`   | `Edit\|Write`     | `protect-files.sh`    | Block protected file edits |
+| `PostToolUse`  | `Edit\|Write`     | (inline prettier)     | Auto-format                |
+| `PostToolUse`  | `Edit\|Write`     | (inline markdownlint) | Auto-fix .md files         |
+| `SessionEnd`   | (none here)       | none in this repo     | cc-capture owns it now     |
 
 ### Debug Mode
 
@@ -1606,7 +1594,7 @@ Output files:
 - `uv` (used by Python pre-commit checks and `hook_runner.py` execution)
 - `markdownlint-cli` (used via `pnpm dlx`)
 - `dotenvx` (optional — `.env` encryption check in `session-checks.sh`)
-- `claude-code-transcripts` (optional — transcript export in `export_transcript.sh`)
+- ~~`claude-code-transcripts`~~ no longer used: its hook was retired 2026-08-18 (`cca4a6f`), and that tool name is the 2026-07-24 capture-outage collision
 
 ### Testing
 

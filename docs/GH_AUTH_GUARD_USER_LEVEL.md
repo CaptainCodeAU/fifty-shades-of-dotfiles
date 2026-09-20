@@ -27,7 +27,13 @@ Related pieces (all tracked in the dotfiles repo):
 - `home/.zshrc` `_claude_launch()` reads the token from Keychain, exports
   `$GH_TOKEN` for the Claude process, and refreshes the banner status cache.
 - `home/.zsh_welcome` shows a `GH API:` status line (reads the cache only; shows `pending (launch Claude once)` until the first launch populates the cache).
-- `.claude/hooks/export_transcript.sh` redacts `github_pat_`/`ghp_` patterns.
+- ~~`.claude/hooks/export_transcript.sh` redacts `github_pat_`/`ghp_` patterns.~~
+  **WITHDRAWN 2026-08-18 (`cca4a6f`): that hook was retired and no longer exists,
+  so this redaction no longer happens anywhere.** It only ever scrubbed the
+  files that hook itself wrote; Claude Code's own `~/.claude/projects/**/*.jsonl`
+  were always out of scope, and cc-capture's archive is not covered by it. Do
+  not count this as a control when reasoning about token exposure in captured
+  sessions.
 - Token lives in macOS Keychain item `github-api-readonly` (fine-grained,
   read-only, no `Contents`/source).
 
