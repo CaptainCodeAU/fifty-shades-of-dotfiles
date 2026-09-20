@@ -344,6 +344,8 @@ Deleted in `cca4a6f`. It ran on `SessionEnd`, read `transcript_path` from stdin 
 
 It also scrubbed `github_pat_`/`gh[posru]_` patterns out of the files it wrote. **That scrubbing went with it**, so do not cite it as a control anywhere; `docs/GH_AUTH_GUARD_USER_LEVEL.md` used to and has been corrected.
 
+**Whether cc-capture redacts anything of its own has NOT been measured, in either direction** (as of 2026-09-20). "The old control is gone" and "the archive is unscrubbed" are different claims, and only the first is measured. Tracked as `W-20260920-04` (`open-items`); do not build a replacement before taking that measurement, and do not assume one is needed.
+
 ### PostToolUse prettier (inline)
 
 Runs on `PostToolUse` for `Edit|Write` tools. Reads `tool_input.file_path` from stdin JSON and runs `pnpm dlx prettier --write` on the file. Failures are silently ignored (`|| true`) to avoid blocking Claude.

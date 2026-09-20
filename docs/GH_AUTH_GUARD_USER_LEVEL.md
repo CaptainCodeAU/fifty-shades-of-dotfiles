@@ -29,11 +29,21 @@ Related pieces (all tracked in the dotfiles repo):
 - `home/.zsh_welcome` shows a `GH API:` status line (reads the cache only; shows `pending (launch Claude once)` until the first launch populates the cache).
 - ~~`.claude/hooks/export_transcript.sh` redacts `github_pat_`/`ghp_` patterns.~~
   **WITHDRAWN 2026-08-18 (`cca4a6f`): that hook was retired and no longer exists,
-  so this redaction no longer happens anywhere.** It only ever scrubbed the
-  files that hook itself wrote; Claude Code's own `~/.claude/projects/**/*.jsonl`
-  were always out of scope, and cc-capture's archive is not covered by it. Do
-  not count this as a control when reasoning about token exposure in captured
-  sessions.
+  so THIS redaction no longer happens.** It only ever scrubbed the files that hook
+  itself wrote; Claude Code's own `~/.claude/projects/**/*.jsonl` were always out
+  of scope. Do not count it as a control when reasoning about token exposure in
+  captured sessions.
+
+  **AND NOBODY HAS MEASURED WHAT, IF ANYTHING, REPLACED IT.** Capture now belongs
+  to the `cc-capture@cc-warehouse` plugin (verified live 2026-09-20: enabled in
+  user-level settings, binary at `~/.local/bin/cc-warehouse`, its own `hooks.json`
+  declares `SessionStart` and `SessionEnd`). Whether that plugin redacts anything
+  of its own has NOT been checked, in either direction. Stated here rather than
+  left silent, because "the old control is gone" and "the archive is unscrubbed"
+  are different claims and only the first one is measured. Tracked as
+  `W-20260920-04` (`open-items`), where the three honest outcomes are written out;
+  doing nothing on purpose is one of them.
+
 - Token lives in macOS Keychain item `github-api-readonly` (fine-grained,
   read-only, no `Contents`/source).
 
