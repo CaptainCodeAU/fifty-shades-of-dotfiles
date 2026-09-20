@@ -229,6 +229,9 @@ mk_dotclaude(){
 }
 runw(){ local d="$1"; shift; OUT="$(cd "$d" 2>/dev/null && OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" CLAUDE_CODE_SESSION_ID=sess-test CLAUDE_SESSION_ID=sess-test "$TOOL" "$@" 2>&1)"; RC=$?; return 0; }
 TODAY="$(date +%Y%m%d)"
+# IDs come from pj-id (P5.5). Point it at an ABSENT machine file so this box's real
+# range (~/.config/pj/machine) never shifts the -01/-02 numbers these arms expect.
+export PJ_MACHINE_FILE="$D/no-machine-file"
 committed(){ [ -z "$(git -C "$DC" status --porcelain -- "$1" 2>/dev/null)" ] && git -C "$DC" ls-files --error-unmatch -- "$1" >/dev/null 2>&1; }
 
 printf 'F  commands on the items/ layout\n'
@@ -254,11 +257,15 @@ want   "add: the commit names the item by explicit path" "items/open/W-$TODAY-01
 want   "add: OPEN.md regenerated with the item" "first thing" "$(cat "$ZW/OPEN.md")"
 runw "$ZETA" add "second thing" --done-when y --kind decide
 want   "add: the next ID is -02" "W-$TODAY-02" "$OUT"
+printf 'name: other-box\nrange: 50-99\n' > "$D/machine-50"
+PJ_MACHINE_FILE="$D/machine-50" runw "$ZETA" add "from the other machine" --done-when z
+want   "add: a machine file with range 50-99 claims -50, not -03 (cross-machine IDs, P5.5)" "W-$TODAY-50" "$OUT"
+wanteq "add: the -50 item file exists" "1" "$([ -f "$ZW/items/open/W-$TODAY-50.md" ] && echo 1)"
 # THE REQUIRED-FIELD REFUSAL, with the passing control right above it.
 runw "$ZETA" add "no finish line"
 wanteq "add WITHOUT --done-when REFUSES (rc=2)" "2" "$RC"
 want   "and says which field" "done-when" "$OUT"
-wanteq "and creates NO file (control: -01 and -02 exist)" "2" "$(ls "$ZW/items/open" | grep -c '^W-')"
+wanteq "and creates NO file (control: -01, -02 and -50 exist)" "3" "$(ls "$ZW/items/open" | grep -c '^W-')"
 runw "$ZETA" add "bad size" --done-when z --kind decide --size small
 wanteq "add: --size on a decide item REFUSES (rc=2)" "2" "$RC"
 runw "$ZETA" add "bad root" --done-when z --holds-in docs/x.md

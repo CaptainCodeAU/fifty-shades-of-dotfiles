@@ -3809,6 +3809,34 @@ _render_project_settings() {
     esac
 }
 
+# The pj ID allocator (home/.local/bin/pj-id) gives each machine its own slice of
+# the NN in W-YYYYMMDD-NN and D-YYYYMMDD-NN, so two clones never claim the same ID
+# on the same day (P5.5, W-20260921-01). The slice lives in ~/.config/pj/machine:
+#   name: <hostname>
+#   range: 01-49        (or 50-99 on the second machine)
+# WRITTEN ONCE. An existing file is never touched: IDs already claimed under a
+# range must keep that range. An absent file means 01-49 to every tool, so a box
+# that never ran this step still works; the question here is only which slice.
+_write_pj_machine_file() {
+    local f="${XDG_CONFIG_HOME:-$HOME/.config}/pj/machine" name range="01-49"
+    if [[ -f "$f" ]]; then
+        info "pj machine file present: $f ($(sed -n 's/^name:[[:space:]]*//p' "$f" | head -1), range $(sed -n 's/^range:[[:space:]]*//p' "$f" | head -1)). Left as is."
+        return 0
+    fi
+    name="$(hostname -s 2>/dev/null || hostname)"
+    if [[ "$DRY_RUN" == true ]]; then
+        echo -e "  ${DIM}[dry-run] Would write $f (name: $name, range: 01-49 unless another box already has it)${RESET}"
+        return 0
+    fi
+    warn "No pj machine file yet. Each machine needs its own ID range; two machines on one range can claim the same W-/D- ID on the same day."
+    if confirm "Is another machine already using the primary range 01-49? (answer y to take 50-99 here)" n; then
+        range="50-99"
+    fi
+    mkdir -p "$(dirname "$f")" || { warn "could not create $(dirname "$f"); pj-id will use the default range 01-49"; return 0; }
+    printf 'name: %s\nrange: %s\n' "$name" "$range" > "$f" || { warn "could not write $f"; return 0; }
+    success "pj machine file written: $f (name: $name, range: $range)"
+}
+
 _claude_hooks_sync() {
     local mode="${1:-install}" rc=0
     local tool="$REPO_DIR/home/.local/bin/claude-hooks-sync"
@@ -4082,6 +4110,9 @@ main() {
     # Render first, so a first-ever install ends with the hook actually present.
     _render_project_settings install
     _claude_hooks_sync install
+
+    # --- pj: this machine's ID range (written once, never rewritten) ---
+    _write_pj_machine_file
 
     # --- Optional: pnpm-audit git hooks (confirm-gated) ---
     setup_pnpm_audit_hooks

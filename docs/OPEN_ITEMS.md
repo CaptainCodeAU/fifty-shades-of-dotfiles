@@ -68,8 +68,8 @@ parked-by-Gavin and decision-withheld. `closed/` holds both `done` and `declined
 `add`, `close`, `park`, `decline`, `reopen`, `set`, `init`, `regen`, `migrate` each:
 
 1. take a per-drawer lock (`items/.lock`, a directory; a dead holder is taken over),
-2. write the item file (an ID is claimed by creating the file with `noclobber`, next
-   number on a clash),
+2. write the item file (the NN comes from `pj-id`, which hands out this machine's slice
+   of 01-99; the file is claimed with `noclobber`, next free number on a clash),
 3. regenerate `OPEN.md`,
 4. commit by explicit pathspec: this project's `items/` and `OPEN.md`, nothing else in
    dot-claude. A write left uncommitted by an earlier failure rides along with the next.
@@ -98,11 +98,16 @@ on it at push time. `pj-wrap push` (P5.3) handles exactly that: on a conflict on
 `OPEN.md` or `items/.generated.sha256` it takes origin's copy and regenerates the view
 with `open-items regen`, never merges it.
 
-**Item IDs can collide ACROSS machines** (measured by `pj-wrap-selftest` on 2026-09-20):
-the ID is claimed by creating the file, which is atomic on one machine and blind to a
-clone that claimed the same `W-YYYYMMDD-NN` the same day. Two such files conflict at push
-time as an add/add on the same path, and `pj-wrap push` STOPS and names it rather than
-guess; the fix is by hand (rename one file, `open-items regen`). Not solved.
+**Item IDs used to collide ACROSS machines** (measured by `pj-wrap-selftest` on
+2026-09-20, W-20260921-01): the ID was claimed by creating the file, atomic on one machine
+and blind to a clone that claimed the same `W-YYYYMMDD-NN` the same day. Since P5.5
+(2026-09-21) the NN comes from `pj-id`, which reads `~/.config/pj/machine` (`name:` and
+`range: 01-49` or `50-99`, written once by `install.sh`; an absent file means 01-49) and
+refuses loudly when the range is exhausted. Measured before choosing 49: the most IDs
+claimed in one day on this machine were 9 W and 11 D. The same allocator serves `decided
+add`. `pj-wrap push` keeps its add/add collision STOP as the second line of defence; a
+box that never wrote its machine file still sits on 01-49, so two such boxes can still
+collide, and the stop is what catches that.
 
 ## The design point, borrowed from census and decided
 

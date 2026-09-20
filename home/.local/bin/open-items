@@ -282,13 +282,14 @@ writable_drawer(){
   printf '%s' "$w"
 }
 next_id(){                      # claim W-<today>-NN atomically; retry on a clash
-  local w="$1" day n=1 f
-  day="$(date +%Y%m%d)"
+  # The NN comes from pj-id, which knows this machine's slice of 01-99 (P5.5,
+  # W-20260921-01): two clones no longer claim the same ID on the same day. pj-id
+  # searches the whole items/ tree (open, parked, closed) for an ID already taken.
+  local w="$1" id f
   while :; do
-    f="$w/items/open/$(printf 'W-%s-%02d' "$day" "$n").md"
-    if [ ! -e "$w/items/parked/$(basename "$f")" ] && [ ! -e "$w/items/closed/$(basename "$f")" ] \
-       && ( set -C; : > "$f" ) 2>/dev/null; then printf '%s' "$f"; return 0; fi
-    n=$((n+1)); [ "$n" -lt 100 ] || refuse "no free ID left for $day"
+    id="$(pj-id next W "$w/items")" || refuse "no ID allocated (pj-id refused, see above)"
+    f="$w/items/open/$id.md"
+    ( set -C; : > "$f" ) 2>/dev/null && { printf '%s' "$f"; return 0; }
   done
 }
 finish_write(){                 # finish_write <work> <msg>: regen + commit, rc 0 or 3

@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+# pj-id -- the one ID allocator behind `open-items add` and `decided add` (P5.5, W-20260921-01).
+#
+# Usage:
+#   pj-id range                         print "NAME LO HI" for this machine
+#   pj-id next <D|W> <store>...         lowest free NN of today in this machine's range,
+#                                       given every store an ID of that kind could sit in
+#                                       (a folder is searched recursively for <ID>*.md, a
+#                                       file for a "## <ID> " header). Prints the full ID.
+#   pj-id --selftest                    prove the arms
+#
+# WHY. W- and D- IDs are claimed locally by creating a file, which is atomic on one
+# machine and blind to another clone: two machines claimed the same W-YYYYMMDD-NN on one
+# day (pj-wrap-selftest, 2026-09-20). Fix: each machine owns a slice of NN. The format
+# stays `X-YYYYMMDD-NN`, so no parser changes and no existing ID moves.
+#
+# THE MACHINE FILE  ${PJ_MACHINE_FILE:-~/.config/pj/machine}, written once by install.sh:
+#   name: mini
+#   range: 01-49
+# Absent file = the primary range 01-49, so nothing breaks on a box that has not run the
+# installer. A second machine takes 50-99. Measured before choosing 49: the most IDs ever
+# claimed in one day on this machine were 9 W and 11 D (2026-09-21 census), so 49 is over
+# four times the observed peak. An exhausted range REFUSES loudly (rc 2); it never wraps
+# and never borrows from the other range. `pj-wrap push` keeps its add/add collision stop
+# as the second line of defence.
+#
+# Exit: 0 printed · 2 REFUSED (bad args, unreadable machine file, range exhausted).
+
+set -uo pipefail
+
+MACHINE_FILE="${PJ_MACHINE_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/pj/machine}"
+DEFAULT_LO=1; DEFAULT_HI=49
+
+refuse(){ printf 'pj-id: REFUSED -- %s\n' "$1" >&2; exit 2; }
+usage(){ sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; }
+
+# read_range -> "NAME LO HI" (numbers without leading zeros)
+read_range(){
+  local name range lo hi
+  if [ ! -f "$MACHINE_FILE" ]; then printf 'default %s %s\n' "$DEFAULT_LO" "$DEFAULT_HI"; return 0; fi
+  name="$(sed -n 's/^name:[[:space:]]*//p' "$MACHINE_FILE" | head -1 | sed 's/[[:space:]]*$//')"
+  range="$(sed -n 's/^range:[[:space:]]*//p' "$MACHINE_FILE" | head -1 | sed 's/[[:space:]]*$//')"
+  [ -n "$name" ] || refuse "$MACHINE_FILE has no 'name:' line"
+  case "$range" in
+    [0-9][0-9]-[0-9][0-9]) ;;
+    *) refuse "$MACHINE_FILE 'range:' must look like 01-49 or 50-99 (got '${range:-nothing}')" ;;
+  esac
+  lo=$((10#${range%-*})); hi=$((10#${range#*-}))
+  [ "$lo" -ge 1 ] && [ "$hi" -le 99 ] && [ "$lo" -le "$hi" ] || refuse "range $range is not inside 01-99 or is reversed"
+  printf '%s %s %s\n' "$name" "$lo" "$hi"
+}
+
+# taken <ID> <store>... -> 0 when any store already holds that ID
+taken(){
+  local id="$1" s; shift
+  for s in "$@"; do
+    if [ -d "$s" ]; then
+      [ -n "$(find "$s" -name "$id*.md" -print -quit 2>/dev/null)" ] && return 0
+    elif [ -f "$s" ]; then
+      grep -q "^## $id " "$s" 2>/dev/null && return 0
+    fi
+  done
+  return 1
+}
+
+cmd_next(){
+  local kind="${1:-}" day n id name lo hi; shift || true
+  case "$kind" in D|W) ;; *) refuse "next: kind must be D or W" ;; esac
+  [ $# -gt 0 ] || refuse "next: name at least one store to check"
+  read -r name lo hi <<<"$(read_range)" || exit 2
+  day="$(date +%Y%m%d)"
+  n=$lo
+  while [ "$n" -le "$hi" ]; do
+    id="$(printf '%s-%s-%02d' "$kind" "$day" "$n")"
+    taken "$id" "$@" || { printf '%s\n' "$id"; return 0; }
+    n=$((n+1))
+  done
+  refuse "no free $kind ID left for $day in this machine's range $(printf '%02d-%02d' "$lo" "$hi") (machine: $name). The range is exhausted, not wrapped; widen it in $MACHINE_FILE or wait for tomorrow."
+}
+
+selftest(){
+  local tmp fails=0 out rc a b
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/pj-id-selftest.XXXXXX") || { echo "pj-id --selftest: mktemp failed -- INVALID TRIAL" >&2; return 2; }
+  local day; day="$(date +%Y%m%d)"
+  ok(){ echo "  ok   $1"; }; fail(){ echo "  FAIL $1"; fails=1; }
+
+  # arm 1: absent machine file means the primary range
+  out="$(PJ_MACHINE_FILE="$tmp/none" "$0" range)"; [ "$out" = "default 1 49" ] && ok "absent file -> default 01-49" || fail "absent file gave '$out'"
+  mkdir -p "$tmp/s"
+  out="$(PJ_MACHINE_FILE="$tmp/none" "$0" next W "$tmp/s")"; [ "$out" = "W-$day-01" ] && ok "absent file: first W is -01" || fail "first W was '$out'"
+
+  # arm 2: two ranges never overlap -- claim every ID in each and intersect
+  printf 'name: one\nrange: 01-49\n' > "$tmp/m1"; printf 'name: two\nrange: 50-99\n' > "$tmp/m2"
+  mkdir -p "$tmp/one" "$tmp/two"
+  for i in $(seq 1 49); do id="$(PJ_MACHINE_FILE="$tmp/m1" "$0" next D "$tmp/one")" || break; : > "$tmp/one/$id.md"; done
+  for i in $(seq 1 50); do id="$(PJ_MACHINE_FILE="$tmp/m2" "$0" next D "$tmp/two")" || break; : > "$tmp/two/$id.md"; done
+  a="$(ls "$tmp/one" | wc -l | tr -d ' ')"; b="$(ls "$tmp/two" | wc -l | tr -d ' ')"
+  [ "$a" = 49 ] && [ "$b" = 50 ] && ok "range one claimed 49, range two claimed 50" || fail "claimed $a and $b"
+  out="$(comm -12 <(ls "$tmp/one" | sort) <(ls "$tmp/two" | sort) | wc -l | tr -d ' ')"
+  [ "$out" = 0 ] && ok "the two ranges share no ID (control: 49 + 50 = 99 distinct)" || fail "$out IDs overlap"
+  out="$(cat "$tmp/one"/*.md "$tmp/two"/*.md 2>/dev/null; ls "$tmp/one" "$tmp/two" | grep -c "^D-$day-")"; [ "$out" = 99 ] && ok "99 distinct IDs exist (positive arm)" || fail "expected 99 IDs, found $out"
+
+  # arm 3: an exhausted range refuses loudly, rc 2, and does not wrap into the other range
+  out="$(PJ_MACHINE_FILE="$tmp/m1" "$0" next D "$tmp/one" 2>&1)"; rc=$?
+  [ "$rc" -eq 2 ] && case "$out" in *exhausted*) ok "exhausted range refuses (rc=2, says exhausted)";; *) fail "rc=2 but message was '$out'";; esac || fail "exhausted range gave rc=$rc: $out"
+
+  # arm 4: a store that is a single FILE with headers counts as taken; a folder searched recursively
+  printf '## D-%s-01 -- x\n' "$day" > "$tmp/legacy.md"; mkdir -p "$tmp/deep/open"; : > "$tmp/deep/open/D-$day-02-slug.md"
+  out="$(PJ_MACHINE_FILE="$tmp/none" "$0" next D "$tmp/legacy.md" "$tmp/deep")"; [ "$out" = "D-$day-03" ] && ok "file header and nested file both count as taken -> -03" || fail "got '$out'"
+
+  # arm 5: bad range refuses
+  printf 'name: x\nrange: 5-9\n' > "$tmp/m3"
+  PJ_MACHINE_FILE="$tmp/m3" "$0" next D "$tmp/s" >/dev/null 2>&1; rc=$?; [ "$rc" -eq 2 ] && ok "malformed range refuses (rc=2)" || fail "malformed range rc=$rc"
+  PJ_MACHINE_FILE="$tmp/m1" "$0" next Q "$tmp/s" >/dev/null 2>&1; rc=$?; [ "$rc" -eq 2 ] && ok "unknown kind refuses (rc=2)" || fail "unknown kind rc=$rc"
+
+  if [ "$fails" -eq 0 ]; then echo "pj-id --selftest: all arms pass"; return 0; fi
+  echo "pj-id --selftest: FAILURES above"; return 1
+}
+
+case "${1:-}" in
+  --selftest) selftest; exit $? ;;
+  --help|-h|"") usage; exit 0 ;;
+  range) read_range; exit $? ;;
+  next) shift; cmd_next "$@"; exit $? ;;
+  *) refuse "unknown command $1 (range | next | --selftest)" ;;
+esac

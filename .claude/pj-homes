@@ -4,4 +4,3 @@
 records: private
 handoff: drawer:OPENING-PROMPT.md
 decisions: drawer:decisions/
-# until the D-20260920-10 split, the register still sits at repo:home/.local/share/decisions/DECISIONS.md

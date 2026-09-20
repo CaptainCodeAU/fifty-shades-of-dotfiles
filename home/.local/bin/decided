@@ -1,138 +1,315 @@
 #!/usr/bin/env bash
 # decided -- has this already been settled? Query the decisions register by topic.
 #
-# WHY THIS EXISTS. 2026-09-17: an evening was spent re-deriving a ruling that was
-# already written down, because the document being read did not point at the one
-# holding the decision. The rule "check the record first" existed and did not fire.
-# This repo's answer to a rule that keeps being broken is a tool, not a fourth
-# restatement -- see census and peek.
-#
-# THE DESIGN POINT, borrowed from census: an empty result is the answer that lies.
-# "No decision found" reads identically to "the register was never searched". So
-# this NEVER prints a bare nothing: every run states the denominator, and a miss
-# says out loud that a miss is not the same as "not decided".
-#
 # Usage:
-#   decided <words...>     all words must appear in a decision block (case-insensitive)
-#   decided --list         every decision, titles only
-#   decided --selftest     prove both arms before trusting it
-#   decided --help
+#   decided <words...>        every word must appear in one block (case-insensitive)
+#   decided D-YYYYMMDD-NN     one block by ID (header match); found outside scope, says where
+#   decided --all <words...>  search every home on the machine, not just this project's
+#   decided --list [--all]    titles only, with the home each block sits in
+#   decided --homes           the homes this call would search, and why
+#   decided add "title" --topic "words" --holds-in "<doc>" (--global | --project)
+#                             [--body "..."] [--ruled-by "..."] [--status standing]
+#   decided withdraw <ID> "reason"      status -> withdrawn; the ID stays claimed
+#   decided --selftest        prove every arm (runs decided-selftest)
 #
-# Exit: 0 match  ·  1 no match (not an error)  ·  2 REFUSED -- register missing or
-# empty, which is NOT a pass.
+# WHERE IT LOOKS (D-20260920-10). Default scope = this project's store + machine-wide.
+#   machine-wide  ~/.claude/pj-global/decisions/   one file per block
+#   this project  `decisions:` in .claude/pj-homes (repo: | drawer: | ~/), default
+#                 repo:docs/decisions/, or drawer:decisions/ when `records: private`
+#   --all         plus every drawer's decisions/ and the legacy single-file register
+#   outside a git repo: machine-wide only, and it says so.
+# A store it cannot read (not a folder of D-*.md files, not a file of "## D-" blocks)
+# is named as "unsupported format, not searched", never silently skipped.
+#
+# Exit: 0 match/written  ·  1 no match (not an error)  ·  2 REFUSED (no readable home,
+# bad args)  ·  3 written but NOT committed. A miss always prints the denominator: a
+# miss is NOT the same as "not decided". Reasoning: docs/DECIDED.md in the dotfiles repo.
 
 set -uo pipefail
 
-REGISTER="${DECISIONS_FILE:-$HOME/.local/share/decisions/DECISIONS.md}"
+GLOBAL_DIR="${DECIDED_GLOBAL_DIR:-$HOME/.claude/pj-global/decisions}"
+LEGACY="${DECISIONS_FILE:-$HOME/.local/share/decisions/DECISIONS.md}"
+PROJECTS="${OPEN_ITEMS_PROJECTS_DIR:-$HOME/.claude/projects}"
+DOTCLAUDE="${OPEN_ITEMS_DOTCLAUDE:-$HOME/.claude}"
 
-die_refused() { printf 'decided: REFUSED -- %s\n' "$1" >&2; exit 2; }
+die_refused(){ printf 'decided: REFUSED -- %s\n' "$1" >&2; exit 2; }
+loud(){ printf 'decided: %s\n' "$1" >&2; }
+usage(){ sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; }
+today(){ date +%Y-%m-%d; }
+realdir(){ (cd "$1" 2>/dev/null && pwd -P); }
+tilde(){ printf '%s' "${1/#$HOME/\~}"; }
 
-count_decisions() { grep -c '^## D-' "$REGISTER" 2>/dev/null || echo 0; }
+# ---------------------------------------------------------------- homes ----
+# A home is "label<TAB>kind<TAB>path". kind: folder | file | missing | unsupported.
+# Label is what the denominator prints; path is what gets read.
+HOMES=()
+NOTES=()          # one-line explanations printed with --homes and on a miss
+kind_of(){        # kind_of <path> -> folder | file | missing | unsupported
+  local p="$1"
+  [ -e "$p" ] || { printf 'missing'; return; }
+  if [ -d "$p" ]; then
+    # a folder of D-*.md files, or an empty folder (a store just declared) -- readable
+    if [ -n "$(find "$p" -maxdepth 1 -name 'D-*.md' -print -quit 2>/dev/null)" ] || [ -z "$(ls -A "$p" 2>/dev/null)" ]; then printf 'folder'; else printf 'unsupported'; fi
+  elif [ -f "$p" ]; then
+    case "$p" in *.md) grep -q '^## D-' "$p" 2>/dev/null && printf 'file' || printf 'unsupported' ;; *) printf 'unsupported' ;; esac
+  else printf 'unsupported'; fi
+}
+add_home(){ HOMES+=("$1	$(kind_of "$3")	$3	$2"); }   # add_home <label> <marker-or-note> <path>
 
-usage() { sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; }
-
-list_all() {
-  local n; n=$(count_decisions)
-  grep '^## D-' "$REGISTER" | sed 's/^## /  /'
-  printf '\ndecided: %s decision(s) in the register.\n' "$n"
+repo_top(){
+  local g; g="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+  [ -n "$g" ] || return 1; dirname "$g"
+}
+decl_get(){ [ -f "$1" ] || return 0; sed -n "s/^$2:[[:space:]]*//p" "$1" | head -1 | sed 's/[[:space:]]*$//'; }
+drawer_dir(){ local w; w="$(open-items --where 2>/dev/null)"; [ -n "$w" ] || return 1; dirname "$w"; }
+resolve(){        # resolve <marked> <top> -> path, or rc 1 for an unknown marker
+  case "$1" in
+    repo:*)   printf '%s/%s' "$2" "${1#repo:}" ;;
+    drawer:*) local d; d="$(drawer_dir)" || return 2; printf '%s/%s' "$d" "${1#drawer:}" ;;
+    '~/'*)    printf '%s/%s' "$HOME" "${1#\~/}" ;;
+    *)        return 1 ;;
+  esac
 }
 
-# Print every block whose text contains ALL the given words.
-# One awk pass, no \x01 record separator: BSD awk (this machine's) does not honour
-# \x escapes, so the two-stage version silently matched nothing. Caught by --selftest
-# arm 1 before it ever ran against the real register, which is the entire argument for
-# writing the selftest first.
-search() {
-  local n hits rc
-  n=$(count_decisions)
-  hits=$(awk -v words="$*" '
-    function test_and_print(b,   lower, ok, i, cnt, w) {
+# The project store: declaration, or the D-20260920-06 default.
+PROJECT_STORE=""; PROJECT_MARK=""; PROJECT_NOTE=""
+project_store(){
+  local top="$1" decl mark rec p rc
+  decl="$top/.claude/pj-homes"
+  mark="$(decl_get "$decl" decisions)"
+  if [ -z "$mark" ]; then
+    rec="$(decl_get "$decl" records)"
+    if [ "$rec" = private ]; then mark="drawer:decisions/"; else mark="repo:docs/decisions/"; fi
+    [ -f "$decl" ] && PROJECT_NOTE="no decisions: line in .claude/pj-homes, default $mark" || PROJECT_NOTE="no .claude/pj-homes, default $mark"
+  else PROJECT_NOTE="declared in .claude/pj-homes"; fi
+  PROJECT_MARK="${mark%/}"
+  p="$(resolve "$mark" "$top")"; rc=$?
+  case "$rc" in
+    1) PROJECT_NOTE="decisions: '$mark' has no known root marker (repo:, drawer:, ~/)"; return 1 ;;
+    2) PROJECT_NOTE="decisions: '$mark' names the drawer and this project has no drawer yet"; return 1 ;;
+  esac
+  PROJECT_STORE="${p%/}"
+}
+
+build_scope(){    # build_scope <all:0|1>
+  local all="$1" top w d seen=""
+  add_home "machine-wide" "$(tilde "$GLOBAL_DIR")" "$GLOBAL_DIR"
+  if top="$(repo_top)"; then
+    if project_store "$top"; then
+      add_home "project ($PROJECT_MARK)" "$PROJECT_NOTE" "$PROJECT_STORE"
+      seen="$(realdir "$PROJECT_STORE" 2>/dev/null || printf '%s' "$PROJECT_STORE")"
+    else
+      NOTES+=("project store not searched: $PROJECT_NOTE")
+    fi
+  else
+    NOTES+=("not inside a git repo: machine-wide only")
+  fi
+  if [ "$all" -eq 1 ]; then
+    for w in "$PROJECTS"/*/memory/WORK/decisions; do
+      [ -d "$w" ] || continue
+      d="$(realdir "$w")"; [ "$d" = "$seen" ] && continue
+      add_home "drawer $(basename "$(dirname "$(dirname "$(dirname "$w")")")")" "every drawer (--all)" "$w"
+    done
+    [ -e "$LEGACY" ] && add_home "legacy file" "$(tilde "$LEGACY")" "$LEGACY"
+  fi
+}
+
+# blocks_of <path> <kind>: the raw block stream of one home
+blocks_of(){
+  local p="$1" k="$2" f
+  case "$k" in
+    folder) for f in "$p"/D-*.md; do [ -f "$f" ] && { cat "$f"; printf '\n'; }; done ;;
+    file)   cat "$p" ;;
+  esac
+}
+count_in(){ blocks_of "$1" "$2" | grep -c '^## D-' 2>/dev/null || true; }
+
+# ---------------------------------------------------------------- search ----
+# One awk pass per home. BSD awk: no \x escapes, so no record separator tricks.
+search_stream(){  # search_stream <mode:words|id> <query> -> prints hits, rc 0 hit / 1 miss
+  awk -v mode="$1" -v q="$2" '
+    function test_and_print(b,   lower, ok, i, cnt, w, first) {
       if (b == "") return
-      lower = tolower(b); ok = 1
-      cnt = split(tolower(words), w, " ")
-      for (i = 1; i <= cnt; i++) if (w[i] != "" && index(lower, w[i]) == 0) { ok = 0; break }
+      if (mode == "id") { first = substr(b, 1, index(b, "\n") - 1); ok = (index(first, "## " q " ") == 1) }
+      else {
+        lower = tolower(b); ok = 1
+        cnt = split(tolower(q), w, " ")
+        for (i = 1; i <= cnt; i++) if (w[i] != "" && index(lower, w[i]) == 0) { ok = 0; break }
+      }
       if (ok) { printf "%s", b; matched++ }
     }
     /^## D-/ { test_and_print(block); block = $0 "\n"; next }
     { if (block != "") block = block $0 "\n" }
     END { test_and_print(block); exit (matched > 0 ? 0 : 1) }
-  ' "$REGISTER")
-  rc=$?
+  '
+}
 
-  if [[ $rc -eq 0 ]]; then
-    printf '%s' "$hits"
-    printf 'decided: matched in %s decision(s) searched.\n' "$n"
-    return 0
+denominator(){    # sets DEN="N decision(s) searched (label a, label b)" and TOTAL
+  local h label kind path n parts="" ; TOTAL=0
+  for h in "${HOMES[@]}"; do
+    IFS=$'\t' read -r label kind path _ <<<"$h"
+    case "$kind" in folder|file) n="$(count_in "$path" "$kind")"; TOTAL=$((TOTAL+n)); parts="$parts, $label $n" ;; esac
+  done
+  DEN="$(printf '%s decision(s) searched (%s)' "$TOTAL" "${parts#, }")"
+}
+readable_homes(){ local h kind; for h in "${HOMES[@]}"; do IFS=$'\t' read -r _ kind _ _ <<<"$h"; case "$kind" in folder|file) return 0;; esac; done; return 1; }
+print_home_notes(){
+  local h label kind path note
+  for h in "${HOMES[@]}"; do
+    IFS=$'\t' read -r label kind path note <<<"$h"
+    case "$kind" in
+      unsupported) loud "$label: declared store in an unsupported format, not searched ($(tilde "$path"))" ;;
+      missing)     loud "$label: not present, nothing to search ($(tilde "$path")); $note" ;;
+    esac
+  done
+  for note in "${NOTES[@]}"; do loud "$note"; done
+}
+
+run_search(){     # run_search <all> <mode> <query>
+  local all="$1" mode="$2" q="$3" h label kind path rc=1 hits den
+  build_scope "$all"
+  readable_homes || { print_home_notes; die_refused "no readable register in scope (this is not 'no decisions')"; }
+  denominator; den="$DEN"
+  [ "$TOTAL" -gt 0 ] || { print_home_notes; die_refused "the homes in scope hold no decision blocks ($den) -- this is not 'no decisions'"; }
+  for h in "${HOMES[@]}"; do
+    IFS=$'\t' read -r label kind path _ <<<"$h"
+    case "$kind" in folder|file) ;; *) continue ;; esac
+    hits="$(blocks_of "$path" "$kind" | search_stream "$mode" "$q")" && { printf '%s' "$hits"; printf '  [in %s]\n\n' "$label"; rc=0; }
+  done
+  if [ "$rc" -eq 0 ]; then printf 'decided: matched in %s.\n' "$den"; print_home_notes; return 0; fi
+  # an ID not in scope: look everywhere once and say where it is, so a citation never dangles
+  if [ "$mode" = id ] && [ "$all" -eq 0 ]; then
+    HOMES=(); NOTES=(); build_scope 1
+    for h in "${HOMES[@]}"; do
+      IFS=$'\t' read -r label kind path _ <<<"$h"
+      case "$kind" in folder|file) ;; *) continue ;; esac
+      hits="$(blocks_of "$path" "$kind" | search_stream id "$q")" && { printf '%s' "$hits"; printf '  [in %s -- OUTSIDE this project'"'"'s default scope; seen because you asked by ID]\n\n' "$label"; rc=0; }
+    done
+    [ "$rc" -eq 0 ] && { denominator; printf 'decided: %s found outside the default scope (%s).\n' "$q" "$DEN"; return 0; }
   fi
-
-  printf 'decided: NO decision recorded matching: %s\n' "$*" >&2
-  printf 'decided: %s decision(s) searched -- and a miss is NOT the same as "not decided".\n' "$n" >&2
-  printf 'decided: it means nothing is written down, so decide it and add a block.\n' >&2
+  printf 'decided: NO decision recorded matching: %s\n' "$q" >&2
+  printf 'decided: %s -- and a miss is NOT the same as "not decided".\n' "$den" >&2
+  printf 'decided: it means nothing is written down, so decide it and add a block (decided add).\n' >&2
+  print_home_notes
   return 1
 }
 
-selftest() {
-  local rc fails=0
-  # No cleanup trap on purpose: it referenced a `local` that is gone by EXIT time, which
-  # `set -u` turned into an error AFTER the report had printed. $TMPDIR is the OS's to
-  # reap, and this repo's deletion rules make a scripted rm the wrong reflex anyway.
-  # An explicit $TMPDIR template, not a bare `mktemp -d`: the bare form lands in the OS
-  # temp root, which the Claude Bash sandbox cannot write, so every arm REFUSED (rc=2)
-  # and the selftest reported failure for a tool that was fine. Measured 2026-09-19;
-  # open-items-selftest already did this. A selftest that fails only in the sandbox
-  # trains people to read "FAILURES" as noise.
-  local tmp; tmp=$(mktemp -d "${TMPDIR:-/tmp}/decided-selftest.XXXXXX") || {
-    echo "decided --selftest: mktemp failed -- INVALID TRIAL, not a pass" >&2; return 2; }
-
-  cat > "$tmp/reg.md" <<'FIXTURE'
-# fixture
-## D-19990101-01 -- A settled thing
-topic: alpha bravo charlie
-status: standing
-Body mentioning delta.
-## D-19990101-02 -- Another settled thing
-topic: echo foxtrot
-status: standing
-FIXTURE
-
-  # arm 1: a word that IS present must hit
-  DECISIONS_FILE="$tmp/reg.md" "$0" bravo >/dev/null 2>&1; rc=$?
-  [[ $rc -eq 0 ]] && echo "  ok   present word hits (rc=0)" || { echo "  FAIL present word missed (rc=$rc)"; fails=1; }
-
-  # arm 2: a word that is NOT present must miss, and miss is rc=1 not rc=0
-  DECISIONS_FILE="$tmp/reg.md" "$0" zulu >/dev/null 2>&1; rc=$?
-  [[ $rc -eq 1 ]] && echo "  ok   absent word misses (rc=1)" || { echo "  FAIL absent word did not miss (rc=$rc)"; fails=1; }
-
-  # arm 3: AND semantics -- two words in DIFFERENT blocks must not match either
-  DECISIONS_FILE="$tmp/reg.md" "$0" bravo foxtrot >/dev/null 2>&1; rc=$?
-  [[ $rc -eq 1 ]] && echo "  ok   words spanning two blocks do not match (rc=1)" || { echo "  FAIL cross-block match (rc=$rc)"; fails=1; }
-
-  # arm 4: body text is searchable, not just the topic line
-  DECISIONS_FILE="$tmp/reg.md" "$0" delta >/dev/null 2>&1; rc=$?
-  [[ $rc -eq 0 ]] && echo "  ok   body text is searchable (rc=0)" || { echo "  FAIL body text not searched (rc=$rc)"; fails=1; }
-
-  # arm 5: a missing register must REFUSE (2), never read as "no decisions"
-  DECISIONS_FILE="$tmp/nope.md" "$0" bravo >/dev/null 2>&1; rc=$?
-  [[ $rc -eq 2 ]] && echo "  ok   missing register refuses (rc=2)" || { echo "  FAIL missing register did not refuse (rc=$rc)"; fails=1; }
-
-  # arm 6: an EMPTY register must also refuse, not report a clean zero
-  : > "$tmp/empty.md"
-  DECISIONS_FILE="$tmp/empty.md" "$0" bravo >/dev/null 2>&1; rc=$?
-  [[ $rc -eq 2 ]] && echo "  ok   empty register refuses (rc=2)" || { echo "  FAIL empty register read as a clean miss (rc=$rc)"; fails=1; }
-
-  if [[ $fails -eq 0 ]]; then echo "decided --selftest: all 6 arms pass"; return 0; fi
-  echo "decided --selftest: FAILURES above"; return 1
+list_all(){       # list_all <all>
+  local h label kind path
+  build_scope "$1"
+  readable_homes || { print_home_notes; die_refused "no readable register in scope"; }
+  for h in "${HOMES[@]}"; do
+    IFS=$'\t' read -r label kind path _ <<<"$h"
+    case "$kind" in folder|file) ;; *) continue ;; esac
+    blocks_of "$path" "$kind" | grep '^## D-' | sed "s/^## /  /; s/\$/   [$label]/"
+  done
+  denominator; printf '\ndecided: %s.\n' "$DEN"
+  print_home_notes
+}
+show_homes(){
+  local h label kind path note
+  build_scope "$1"
+  for h in "${HOMES[@]}"; do IFS=$'\t' read -r label kind path note <<<"$h"; printf '%-28s %-12s %s   (%s)\n' "$label" "$kind" "$(tilde "$path")" "$note"; done
+  for note in "${NOTES[@]}"; do printf '%s\n' "$note"; done
 }
 
+# ---------------------------------------------------------------- writes ----
+slug(){ printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]\{1,\}/-/g; s/^-//; s/-$//' | awk '{ s=$0; if (length(s) > 48) { s=substr(s,1,48); sub(/-[^-]*$/, "", s) } print s }'; }
+all_d_stores(){   # every place a D ID could already exist on this machine
+  local w; printf '%s\n' "$GLOBAL_DIR"; [ -n "$PROJECT_STORE" ] && printf '%s\n' "$PROJECT_STORE"
+  for w in "$PROJECTS"/*/memory/WORK/decisions; do [ -d "$w" ] && printf '%s\n' "$w"; done
+  [ -e "$LEGACY" ] && printf '%s\n' "$LEGACY"; return 0
+}
+commit_path(){    # commit_path <file> <msg> -> 0 committed | 3 not committed
+  local f="$1" msg="$2" top real rel out rc try=0
+  top="$(git -C "$DOTCLAUDE" rev-parse --show-toplevel 2>/dev/null)" || { loud "NOT COMMITTED, $(tilde "$DOTCLAUDE") is not a git repo"; return 3; }
+  top="$(realdir "$top")"; real="$(realdir "$(dirname "$f")")/$(basename "$f")"
+  case "$real" in "$top"/*) rel="${real#"$top"/}" ;; *) loud "NOT COMMITTED, outside dot-claude: $(tilde "$real"). Commit it in its own repo."; return 3 ;; esac
+  while :; do
+    out="$(git -C "$top" add -- "$rel" 2>&1 && git -C "$top" commit -q -m "$msg" -- "$rel" 2>&1)"; rc=$?
+    [ "$rc" -eq 0 ] && { loud "committed in dot-claude: $rel"; return 0; }
+    case "$out" in *index.lock*|*"Unable to create"*|*"could not lock"*) try=$((try+1)); [ "$try" -lt 20 ] && { sleep 0.3; continue; } ;; esac
+    break
+  done
+  loud "COMMIT FAILED (rc=$rc) -- the file is on disk at $(tilde "$real")"; printf '%s\n' "$out" | sed 's/^/decided:   /' >&2; return 3
+}
+
+cmd_add(){
+  local title="" topic="" holds="" body="" ruled="" status="standing" where="" home id f top stores=() s
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --topic) topic="${2:-}"; shift 2 ;;
+      --holds-in) holds="${2:-}"; shift 2 ;;
+      --body) body="${2:-}"; shift 2 ;;
+      --ruled-by) ruled="${2:-}"; shift 2 ;;
+      --status) status="${2:-}"; shift 2 ;;
+      --global) where=global; shift ;;
+      --project) where=project; shift ;;
+      --*) die_refused "add: unknown flag $1" ;;
+      *) [ -z "$title" ] && title="$1" || die_refused "add: one title only (quote it)"; shift ;;
+    esac
+  done
+  [ -n "$title" ] || die_refused "add: a title is required"
+  [ -n "$topic" ] || die_refused "add: --topic is required (the words someone would type to find this)"
+  [ -n "$holds" ] || die_refused "add: --holds-in is required (the document that carries the reasoning)"
+  [ -n "$where" ] || die_refused "add: say --global (machine-wide) or --project (this project's store)"
+  case "$status" in standing|deferred|superseded) ;; *) die_refused "add: --status must be standing, deferred or superseded" ;; esac
+  if [ "$where" = global ]; then home="$GLOBAL_DIR"
+  else
+    top="$(repo_top)" || die_refused "add --project: not inside a git repo"
+    project_store "$top" || die_refused "add --project: $PROJECT_NOTE"
+    home="$PROJECT_STORE"
+    case "$(kind_of "$home")" in folder|missing) ;; *) die_refused "add --project: the declared store is not a folder of blocks ($(tilde "$home"))" ;; esac
+  fi
+  mkdir -p "$home" || die_refused "add: cannot create $(tilde "$home")"
+  while IFS= read -r s; do stores+=("$s"); done < <(all_d_stores)
+  while :; do
+    id="$(pj-id next D "${stores[@]}")" || exit 2
+    f="$home/$id-$(slug "$title").md"
+    ( set -C; : > "$f" ) 2>/dev/null && break
+  done
+  {
+    printf '## %s -- %s\n\ntopic: %s\ndecided: %s\nstatus: %s\nholds-in: %s\n' "$id" "$title" "$topic" "$(today)" "$status" "$holds"
+    [ -n "$ruled" ] && printf 'ruled-by: %s\n' "$ruled"
+    [ -n "$body" ] && printf '\n%s\n' "$body"
+  } > "$f"
+  printf '%s\n' "$id"
+  loud "written: $(tilde "$f")"
+  commit_path "$f" "decided: add $id -- $title"
+}
+
+cmd_withdraw(){
+  local id="${1:-}" reason="${2:-}" top h label kind path f tmp
+  case "$id" in D-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9]) ;; *) die_refused "withdraw: give a D-YYYYMMDD-NN id" ;; esac
+  [ -n "$reason" ] || die_refused "withdraw: a reason is required"
+  build_scope 0
+  for h in "${HOMES[@]}"; do
+    IFS=$'\t' read -r label kind path _ <<<"$h"
+    [ "$kind" = folder ] || continue
+    f="$(grep -l "^## $id " "$path"/D-*.md 2>/dev/null | head -1)"; [ -n "$f" ] && break
+  done
+  [ -n "$f" ] || die_refused "withdraw: $id is not in a folder home in scope (legacy single-file blocks are not edited by this tool)"
+  grep -q '^status: withdrawn' "$f" && die_refused "withdraw: $id is already withdrawn"
+  tmp="$f.tmp"
+  awk -v d="$(today)" -v r="$reason" '/^status: /{ print "status: withdrawn"; print "withdrawn: " d " -- " r; next } { print }' "$f" > "$tmp" && mv "$tmp" "$f"
+  loud "withdrawn: $id ($(tilde "$f"))"
+  commit_path "$f" "decided: withdraw $id -- $reason"
+}
+
+# ---------------------------------------------------------------- main ----
+ALL=0
 case "${1:-}" in
-  --selftest) selftest; exit $? ;;
+  --selftest) exec decided-selftest ;;
   --help|-h|"") usage; exit 0 ;;
 esac
-
-[[ -f "$REGISTER" ]] || die_refused "no register at $REGISTER (this is not 'no decisions')"
-[[ "$(count_decisions)" -gt 0 ]] || die_refused "register at $REGISTER holds no decision blocks (this is not 'no decisions')"
-
-case "$1" in
-  --list) list_all; exit 0 ;;
-  *) search "$@"; exit $? ;;
+[ "${1:-}" = --all ] && { ALL=1; shift; }
+case "${1:-}" in
+  --list) shift; [ "${1:-}" = --all ] && ALL=1; list_all "$ALL"; exit 0 ;;
+  --homes) shift; [ "${1:-}" = --all ] && ALL=1; show_homes "$ALL"; exit 0 ;;
+  --all) ALL=1; shift ;;
+  add) shift; cmd_add "$@"; exit $? ;;
+  withdraw) shift; cmd_withdraw "$@"; exit $? ;;
+  "") usage; exit 0 ;;
 esac
+if [ $# -eq 1 ]; then case "$1" in D-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9]) run_search "$ALL" id "$1"; exit $? ;; esac; fi
+run_search "$ALL" words "$*"; exit $?

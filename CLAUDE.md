@@ -4,9 +4,12 @@ Open items arrive on the start card at the top of every `pj` session (count, tit
 
 ## Before proposing a fix, ask whether it is already decided
 
-`decided <words>` searches the decisions register (`~/.local/share/decisions/DECISIONS.md`)
-and prints the ruling plus the document that holds the reasoning. `decided --list` shows
-everything; `decided --selftest` proves all six arms.
+`decided <words>` searches the decisions register (this project's rulings plus the
+machine-wide ones; `--all` reaches every project on the machine) and prints the ruling
+plus the document that holds the reasoning. `decided --list` shows everything in scope;
+`decided --selftest` proves its arms. Record a ruling with `decided add "title" --topic
+"..." --holds-in "<doc>" --project` (or `--global`): the tool allocates the ID and commits.
+Where this project's rulings live: `.claude/pj-homes`. Design and scope rules: `docs/DECIDED.md`.
 
 It never answers with a bare nothing: a miss states how many decisions were searched and
 says out loud that a miss is not the same as "not decided". Same discipline as `census`,

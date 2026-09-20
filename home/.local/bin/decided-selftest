@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# decided-selftest -- prove every arm of `decided` before trusting it (P5.5, D-20260920-10).
+#
+# Runs against a fixture: two fixture repos, a fixture dot-claude holding the machine-wide
+# home and two drawers, and a legacy single-file register. Nothing real is read or written.
+# DECIDED=<path> tests a candidate binary instead of the one on PATH.
+#
+# Exit 0 all arms pass, 1 failures, 2 invalid trial (fixture could not be built).
+
+set -uo pipefail
+
+DECIDED="${DECIDED:-$(command -v decided)}"
+[ -x "$DECIDED" ] || { echo "decided-selftest: no decided binary ($DECIDED) -- INVALID TRIAL" >&2; exit 2; }
+BIN="$(cd "$(dirname "$DECIDED")" && pwd -P)"; export PATH="$BIN:$PATH"
+command -v pj-id >/dev/null || { echo "decided-selftest: pj-id not on PATH -- INVALID TRIAL" >&2; exit 2; }
+
+T=$(mktemp -d "${TMPDIR:-/tmp}/decided-selftest.XXXXXX") || { echo "decided-selftest: mktemp failed -- INVALID TRIAL" >&2; exit 2; }
+TODAY="$(date +%Y%m%d)"
+PASS=0; FAIL=0
+ok(){ PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
+bad(){ FAIL=$((FAIL+1)); printf '  FAIL %s\n       got: %s\n' "$1" "$(printf '%s' "$2" | head -3 | tr '\n' '|')"; }
+want(){ case "$3" in *"$2"*) ok "$1";; *) bad "$1 (wanted '$2')" "$3";; esac; }
+wantnot(){ case "$3" in *"$2"*) bad "$1 (must NOT contain '$2')" "$3";; *) ok "$1";; esac; }
+wantrc(){ [ "$2" -eq "$3" ] && ok "$1 (rc=$2)" || bad "$1 (wanted rc=$2, got $3)" ""; }
+encode_key(){ printf '%s' "$1" | sed 's#[/._]#-#g'; }
+
+# ---- fixture ---------------------------------------------------------------
+DC="$T/dot-claude"; mkdir -p "$DC"; git -C "$DC" init -q; git -C "$DC" config user.email t@t; git -C "$DC" config user.name t; git -C "$DC" config core.hooksPath "$T/nohooks"; mkdir -p "$T/nohooks"
+printf "!projects/*/memory/\n" > "$DC/.gitignore"   # as real dot-claude: re-include memory/ under the global MEMORY/ rule
+git -C "$DC" add .gitignore; git -C "$DC" commit -q -m init
+G="$DC/pj-global/decisions"; mkdir -p "$G"
+cat > "$G/D-19990101-01-alpha.md" <<'EOF'
+## D-19990101-01 -- A machine-wide thing
+
+topic: alpha bravo charlie
+status: standing
+Body mentioning delta.
+EOF
+cat > "$G/D-19990101-02-echo.md" <<'EOF'
+## D-19990101-02 -- Another machine-wide thing
+
+topic: echo foxtrot
+status: standing
+EOF
+mkrepo(){ mkdir -p "$1"; git -C "$1" init -q; git -C "$1" config core.hooksPath "$T/nohooks"; git -C "$1" commit -q --allow-empty -m init; }
+R1="$T/repo-private"; mkrepo "$R1"; mkdir -p "$R1/.claude"; printf 'records: private\ndecisions: drawer:decisions/\n' > "$R1/.claude/pj-homes"
+W1="$DC/projects/$(encode_key "$(cd "$R1" && pwd -P)")/memory/WORK"; mkdir -p "$W1/items/open" "$W1/decisions"
+printf '## W-19990101-01 -- x\n\nproject: repo-private\nstatus: open\nkind: do\ndone-when: y\nraised: 1999-01-01\n' > "$W1/items/open/W-19990101-01.md"
+cat > "$W1/decisions/D-19990102-01-golf.md" <<'EOF'
+## D-19990102-01 -- A project thing
+
+topic: golf hotel bravo
+status: standing
+EOF
+R2="$T/repo-default"; mkrepo "$R2"                       # no pj-homes at all
+R3="$T/repo-jsonl"; mkrepo "$R3"; mkdir -p "$R3/.claude"; printf 'decisions: repo:ledger.jsonl\n' > "$R3/.claude/pj-homes"; printf '{"id":"x"}\n' > "$R3/ledger.jsonl"
+R4="$T/repo-docs"; mkrepo "$R4"; mkdir -p "$R4/docs/decisions"   # default repo: store, present, empty
+W5="$DC/projects/-other-project/memory/WORK"; mkdir -p "$W5/items/open" "$W5/decisions"   # another drawer, for --all
+printf '## D-19990103-01 -- Other drawer thing\n\ntopic: india\nstatus: standing\n' > "$W5/decisions/D-19990103-01-india.md"
+LEG="$T/legacy.md"; printf '# legacy\n\n## D-19990104-01 -- Legacy thing\n\ntopic: juliet\nstatus: standing\n' > "$LEG"
+git -C "$DC" add -A >/dev/null && git -C "$DC" commit -q -m fixture
+export DECIDED_GLOBAL_DIR="$G" OPEN_ITEMS_PROJECTS_DIR="$DC/projects" OPEN_ITEMS_DOTCLAUDE="$DC" DECISIONS_FILE="$LEG" PJ_MACHINE_FILE="$T/no-machine-file"
+run(){ local d="$1"; shift; OUT="$( (builtin cd "$d" && "$DECIDED" "$@") 2>&1)"; RC=$?; }
+
+echo "-- the six original arms (from repo-private: project + machine-wide)"
+run "$R1" bravo;   wantrc "present word hits" 0 "$RC"; want "  both homes hit" "[in machine-wide]" "$OUT"; want "  including the project block" "[in project (drawer:decisions)]" "$OUT"
+run "$R1" zulu;    wantrc "absent word misses" 1 "$RC"; want "  miss states the denominator" "3 decision(s) searched" "$OUT"; want "  miss says a miss is not not-decided" 'NOT the same as "not decided"' "$OUT"
+run "$R1" bravo foxtrot; wantrc "words spanning two blocks do not match" 1 "$RC"
+run "$R1" delta;   wantrc "body text is searchable" 0 "$RC"
+DECIDED_GLOBAL_DIR="$T/nope" run "$T" bravo; wantrc "no readable home anywhere refuses" 2 "$RC"; want "  refusal says it is not 'no decisions'" "not 'no decisions'" "$OUT"
+mkdir -p "$T/emptyhome"; DECIDED_GLOBAL_DIR="$T/emptyhome" run "$T" bravo; wantrc "an empty home (zero blocks) refuses" 2 "$RC"
+
+echo "-- scope rules"
+run "$R1" golf;    wantrc "project-only word hits from its own repo" 0 "$RC"; want "  labelled with the drawer marker" "project (drawer:decisions)" "$OUT"
+run "$R2" golf;    wantrc "project-only word is NOT found from another repo" 1 "$RC"
+run "$R2" alpha;   wantrc "machine-wide word found from any repo" 0 "$RC"
+run "$R2" --homes; want "no declaration: default repo:docs/decisions is named" "no .claude/pj-homes, default repo:docs/decisions/" "$OUT"; want "  and marked missing" "missing" "$OUT"
+run "$R2" zulu;    want "the miss names the missing default store" "not present, nothing to search" "$OUT"
+run "$R3" zulu;    want "unsupported format is named, not silently skipped" "declared store in an unsupported format, not searched" "$OUT"; want "  with its path" "ledger.jsonl" "$OUT"
+run "$R1" zulu;    wantnot "control: the private repo prints no unsupported line" "unsupported format" "$OUT"
+run "$R4" alpha;   want "a present but empty repo: store is searched as 0" "project (repo:docs/decisions) 0" "$OUT"
+run "$T" alpha;    wantrc "outside a repo: machine-wide still answers" 0 "$RC"; want "  and says machine-wide only" "not inside a git repo: machine-wide only" "$OUT"; wantnot "  and searched no project" "project (" "$OUT"
+
+echo "-- ID form and --all"
+run "$R1" D-19990102-01; wantrc "ID form finds the project block" 0 "$RC"; want "  header match" "## D-19990102-01 -- A project thing" "$OUT"
+run "$R1" D-19990104-01; wantrc "an ID outside scope is still found" 0 "$RC"; want "  and says it is outside the default scope" "OUTSIDE this project's default scope" "$OUT"; want "  naming the legacy file" "[in legacy file" "$OUT"
+run "$R1" D-19990109-09; wantrc "an unknown ID misses" 1 "$RC"
+run "$R1" --list;        want "--list shows titles with homes" "A project thing   [project (drawer:decisions)]" "$OUT"; wantnot "  and not the other drawer" "Other drawer" "$OUT"
+run "$R1" --all juliet;  wantrc "--all reaches the legacy file" 0 "$RC"
+run "$R1" --all india;   wantrc "--all reaches another drawer" 0 "$RC"; want "  labelled by its project key" "[in drawer -other-project]" "$OUT"
+run "$R1" --list --all;  want "--all denominator counts every home" "5 decision(s) searched (machine-wide 2, project (drawer:decisions) 1, drawer -other-project 1, legacy file 1)" "$OUT"
+run "$R1" --all zulu;    want "control: --all miss states the same denominator" "5 decision(s) searched" "$OUT"
+
+echo "-- add"
+run "$R1" add "No topic" --holds-in x --global; wantrc "add without --topic refuses" 2 "$RC"
+run "$R1" add "No holds" --topic x --global;    wantrc "add without --holds-in refuses" 2 "$RC"
+run "$R1" add "No home" --topic x --holds-in y; wantrc "add without --global/--project refuses" 2 "$RC"
+[ -z "$(ls "$G" | grep -c "$TODAY")" ] || [ "$(ls "$G" | grep -c "$TODAY")" = 0 ] && ok "  refusals wrote nothing" || bad "  a refusal wrote a file" "$(ls "$G")"
+run "$R1" add "Kilo ruling" --topic "kilo lima" --holds-in "docs/K.md" --global --body "The body."
+wantrc "add --global writes" 0 "$RC"; want "  prints the new ID" "D-$TODAY-01" "$OUT"; want "  committed" "committed in dot-claude: pj-global/decisions/D-$TODAY-01-kilo-ruling.md" "$OUT"
+want "  block shape" "topic: kilo lima" "$(cat "$G/D-$TODAY-01-kilo-ruling.md")"; want "  body written" "The body." "$(cat "$G/D-$TODAY-01-kilo-ruling.md")"
+want "  the commit names only that path" "pj-global/decisions/D-$TODAY-01-kilo-ruling.md" "$(git -C "$DC" show --stat --name-only HEAD)"
+wanteq_n="$(git -C "$DC" show --name-only --pretty=format: HEAD | grep -c .)"; [ "$wanteq_n" = 1 ] && ok "  and nothing else (1 path)" || bad "  commit carried $wanteq_n paths" ""
+run "$R1" add "Mike ruling" --topic "mike" --holds-in "docs/M.md" --project
+wantrc "add --project writes" 0 "$RC"; [ "$RC" -eq 0 ] || printf "       %s\n" "$OUT"; want "  next ID skips the one the other home took" "D-$TODAY-02" "$OUT"; [ -f "$W1/decisions/D-$TODAY-02-mike-ruling.md" ] && ok "  file in the drawer store" || bad "  file missing in drawer" "$(ls "$W1/decisions")"
+run "$R1" kilo; wantrc "the added block is found" 0 "$RC"
+run "$R4" add "November" --topic n --holds-in n --project; wantrc "add --project into a repo: store is written but NOT committed" 3 "$RC"; want "  says so" "NOT COMMITTED, outside dot-claude" "$OUT"; [ -f "$R4/docs/decisions/D-$TODAY-03-november.md" ] && ok "  file is on disk" || bad "  file missing" "$(ls "$R4/docs/decisions")"
+[ -z "$(git -C "$DC" status --porcelain)" ] && ok "fixture dot-claude tree clean after adds" || bad "dot-claude dirty" "$(git -C "$DC" status --porcelain)"
+
+echo "-- withdraw"
+run "$R1" withdraw "D-$TODAY-01" "probe only"; wantrc "withdraw" 0 "$RC"; want "  status line replaced" "status: withdrawn" "$(cat "$G/D-$TODAY-01-kilo-ruling.md")"; want "  reason recorded" "withdrawn: $(date +%Y-%m-%d) -- probe only" "$(cat "$G/D-$TODAY-01-kilo-ruling.md")"; want "  committed" "committed in dot-claude" "$OUT"
+run "$R1" withdraw "D-$TODAY-01" "again"; wantrc "withdrawing twice refuses" 2 "$RC"
+run "$R1" withdraw "D-19990104-01" "legacy"; wantrc "a legacy-file block cannot be withdrawn" 2 "$RC"
+
+printf '\ndecided-selftest: %s passed, %s failed\n' "$PASS" "$FAIL"
+[ "$FAIL" -eq 0 ]
