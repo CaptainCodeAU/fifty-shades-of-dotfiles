@@ -1093,6 +1093,8 @@ alias ct='__claude_launch CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 claude "${_LIFE
 # PLUGINS: ~/.claude/pj is the pj plugin (stowed from this repo, home/.claude/pj):
 # /pj:wrap-up, the end-of-session pass (D-20260920-03). A project's own /wrap-up
 # keeps the plain name; the pj: prefix always reaches this one (verified 2026-09-20).
+# It ships as a SKILL (skills/wrap-up/SKILL.md), not a command: the plugin command
+# loader ignores stow's file symlinks, the skill loader follows them (measured 2026-09-21).
 # Remove this block to end the trial.
 alias pj='__claude_launch claude --setting-sources project,local --settings ~/.claude/settings.project.json --append-system-prompt-file ~/.claude/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md --plugin-dir ~/.claude/skills/herdr --plugin-dir ~/.claude/skills/AgentRelay --plugin-dir ~/.claude/skills/ISA --plugin-dir ~/.claude/pj-voice --plugin-dir ~/.claude/pj --dangerously-skip-permissions --effort high'
 
