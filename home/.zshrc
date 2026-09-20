@@ -1095,8 +1095,14 @@ alias ct='__claude_launch CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 claude "${_LIFE
 # keeps the plain name; the pj: prefix always reaches this one (verified 2026-09-20).
 # It ships as a SKILL (skills/wrap-up/SKILL.md), not a command: the plugin command
 # loader ignores stow's file symlinks, the skill loader follows them (measured 2026-09-21).
+# SYSTEM PROMPT: two files must land there, OPERATIONAL_RULES.md (LifeOS) and
+# ~/.claude/pj-global/RULES.md (machine-wide pj rules, D-20260920-07). Claude Code keeps
+# only the LAST --append-system-prompt-file and refuses to mix it with the text flag
+# (both measured 2026-09-21), so `pj-prompt-file` (home/.local/bin) glues them into
+# ~/.cache/dotfiles/pj-system-prompt.md at every launch and the alias passes that path.
+# The alias carries paths only; the content stays in lifeos-private and dot-claude.
 # Remove this block to end the trial.
-alias pj='__claude_launch claude --setting-sources project,local --settings ~/.claude/settings.project.json --append-system-prompt-file ~/.claude/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md --plugin-dir ~/.claude/skills/herdr --plugin-dir ~/.claude/skills/AgentRelay --plugin-dir ~/.claude/skills/ISA --plugin-dir ~/.claude/pj-voice --plugin-dir ~/.claude/pj --dangerously-skip-permissions --effort high'
+alias pj='__claude_launch claude --setting-sources project,local --settings ~/.claude/settings.project.json --append-system-prompt-file "$(pj-prompt-file)" --plugin-dir ~/.claude/skills/herdr --plugin-dir ~/.claude/skills/AgentRelay --plugin-dir ~/.claude/skills/ISA --plugin-dir ~/.claude/pj-voice --plugin-dir ~/.claude/pj --dangerously-skip-permissions --effort high'
 
 # Clean-room Claude for measuring front-loaded context (CLAUDE.md, memory,
 # skills, MCP) one piece at a time. Measured 2026-09-06 (Claude Code 2.1.263):

@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+# pj-prompt-file -- build the ONE system-prompt file the pj launcher appends, and print its path.
+#
+# Claude Code accepts a single --append-system-prompt-file: given twice, only the LAST file
+# lands, and mixing it with --append-system-prompt is refused outright (both measured
+# 2026-09-21 with canary files, Claude Code 2.1.278). pj needs two files in the system
+# prompt: LifeOS's OPERATIONAL_RULES.md and the pj-owned ~/.claude/pj-global/RULES.md
+# (D-20260920-07). So the alias runs this at every launch:
+#
+#     --append-system-prompt-file "$(pj-prompt-file)"
+#
+# It concatenates the sources IN ORDER with one newline between them into a cache file
+# and prints that path. Neither source is edited or copied into a repo; the output is a
+# scratch file under ~/.cache. The first source lands byte-for-byte as the prefix, which is
+# what the P5.4 prompt-snapshot check compares against.
+#
+# Degrades, never breaks the launch: a missing source is skipped with a warning on stderr;
+# an unwritable output falls back to printing the first readable source alone (today's
+# behaviour before RULES.md existed). Only when NO source is readable does it print nothing
+# and exit 1.
+#
+# Env: PJ_PROMPT_SOURCES  colon-separated source list (default: the two files above)
+#      PJ_PROMPT_OUT      output path (default: ${XDG_CACHE_HOME:-~/.cache}/dotfiles/pj-system-prompt.md)
+# Flags: --selftest  prove every arm against throwaway fixtures; --help.
+set -u
+
+usage() {
+	sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'
+}
+
+build() {
+	local sources_str="$1" out="$2" tmp dir first="" n=0 s
+	local IFS=':'
+	local -a sources
+	read -r -a sources <<<"$sources_str"
+	unset IFS
+	dir="$(dirname "$out")"
+	mkdir -p "$dir" 2>/dev/null
+	tmp="$(mktemp "$dir/.pj-system-prompt.XXXXXX" 2>/dev/null)" || tmp=""
+	for s in "${sources[@]}"; do
+		[ -n "$s" ] || continue
+		if [ -r "$s" ] && [ -f "$s" ]; then
+			[ -n "$first" ] || first="$s"
+			if [ -n "$tmp" ]; then
+				[ "$n" -eq 0 ] || printf '\n' >>"$tmp"
+				cat "$s" >>"$tmp"
+			fi
+			n=$((n + 1))
+		else
+			printf 'pj-prompt-file: source missing, skipped: %s\n' "$s" >&2
+		fi
+	done
+	if [ "$n" -eq 0 ]; then
+		[ -n "$tmp" ] && rm -f "$tmp" 2>/dev/null
+		printf 'pj-prompt-file: no readable source; nothing to append\n' >&2
+		return 1
+	fi
+	if [ -z "$tmp" ] || ! mv -f "$tmp" "$out" 2>/dev/null; then
+		printf 'pj-prompt-file: cannot write %s; falling back to %s alone\n' "$out" "$first" >&2
+		printf '%s\n' "$first"
+		return 0
+	fi
+	printf '%s\n' "$out"
+	return 0
+}
+
+selftest() {
+	local root a b out pass=0 fail=0 got rc err
+	root="$(mktemp -d "${TMPDIR:-/tmp}/pj-prompt-file-selftest.XXXXXX")" || exit 1
+	a="$root/a.md"; b="$root/b.md"; out="$root/cache/combined.md"
+	printf 'alpha rules\nsecond line\n' >"$a"
+	printf 'beta rules\n' >"$b"
+	ok() { pass=$((pass + 1)); printf '  ok   %s\n' "$1"; }
+	bad() { fail=$((fail + 1)); printf '  FAIL %s\n       got: %s\n' "$1" "$2"; }
+	echo "pj-prompt-file selftest in $root"
+
+	# 1. both sources: combined == a + newline + b, path printed, rc 0
+	got="$(PJ_PROMPT_SOURCES="$a:$b" PJ_PROMPT_OUT="$out" "$0" 2>"$root/err1")"; rc=$?
+	if [ "$rc" -eq 0 ] && [ "$got" = "$out" ]; then ok "1 both sources -> prints the cache path, rc 0"; else bad "1 both sources" "rc=$rc got=$got"; fi
+	if cmp -s "$out" <(cat "$a"; printf '\n'; cat "$b"); then ok "1 combined == a + newline + b"; else bad "1 combined bytes" "$(cat "$out" | tr '\n' '|')"; fi
+	if cmp -s "$out" "$a"; then bad "1 control: combined must differ from a alone" "identical"; else ok "1 control: combined differs from a alone"; fi
+	if [ ! -s "$root/err1" ]; then ok "1 no warning on stderr"; else bad "1 stderr should be empty" "$(cat "$root/err1")"; fi
+
+	# 2. second source missing: warning names it, output == a, rc 0
+	got="$(PJ_PROMPT_SOURCES="$a:$root/nope.md" PJ_PROMPT_OUT="$out" "$0" 2>"$root/err2")"; rc=$?
+	err="$(cat "$root/err2")"
+	if [ "$rc" -eq 0 ] && cmp -s "$out" "$a"; then ok "2 missing second source -> output == a, rc 0"; else bad "2 missing second" "rc=$rc"; fi
+	case "$err" in *"skipped: $root/nope.md"*) ok "2 warning names the missing file" ;; *) bad "2 warning" "$err" ;; esac
+
+	# 3. no readable source: prints nothing, rc 1
+	got="$(PJ_PROMPT_SOURCES="$root/x.md:$root/y.md" PJ_PROMPT_OUT="$out" "$0" 2>"$root/err3")"; rc=$?
+	if [ "$rc" -eq 1 ] && [ -z "$got" ]; then ok "3 no source -> nothing printed, rc 1"; else bad "3 no source" "rc=$rc got=$got"; fi
+
+	# 4. unwritable output: falls back to the first source's path, rc 0, warns
+	mkdir -p "$root/ro" && chmod 500 "$root/ro"
+	got="$(PJ_PROMPT_SOURCES="$a:$b" PJ_PROMPT_OUT="$root/ro/sub/combined.md" "$0" 2>"$root/err4")"; rc=$?
+	err="$(cat "$root/err4")"
+	if [ "$rc" -eq 0 ] && [ "$got" = "$a" ]; then ok "4 unwritable output -> falls back to source a, rc 0"; else bad "4 fallback" "rc=$rc got=$got err=$err"; fi
+	case "$err" in *"falling back"*) ok "4 fallback is announced" ;; *) bad "4 fallback warning" "$err" ;; esac
+	chmod 700 "$root/ro"
+
+	# 5. real defaults: the two shipped paths exist here (informational, not a failure elsewhere)
+	if [ -r "$HOME/.claude/pj-global/RULES.md" ] && [ -r "$HOME/.claude/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md" ]; then
+		ok "5 both default sources are readable on this machine"
+	else
+		printf '  info 5 default sources not both present here (fine on a consumer box)\n'
+	fi
+
+	printf 'pj-prompt-file selftest: %d passed, %d failed\n' "$pass" "$fail"
+	[ "$fail" -eq 0 ]
+}
+
+case "${1:-}" in
+--help | -h) usage; exit 0 ;;
+--selftest) selftest; exit $? ;;
+"") ;;
+*) printf 'pj-prompt-file: unknown argument %s\n' "$1" >&2; usage >&2; exit 2 ;;
+esac
+
+SOURCES="${PJ_PROMPT_SOURCES:-$HOME/.claude/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md:$HOME/.claude/pj-global/RULES.md}"
+OUT="${PJ_PROMPT_OUT:-${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles/pj-system-prompt.md}"
+build "$SOURCES" "$OUT"
