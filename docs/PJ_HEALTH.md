@@ -1,0 +1,106 @@
+# pj-health: is the pj framework wired on this machine?
+
+`pj-health` is the on-demand check ruled in D-20260920-09 (c). It runs from any folder,
+finishes in about a second, writes nothing, and prints one row per check:
+
+```
+STATE         name               detail
+```
+
+Four states, and the fourth is the point:
+
+| State | Means |
+|---|---|
+| `PASS` | measured, wired as expected |
+| `WARN` | measured, not a wiring fault (a pending hand edit to the items view, a fat first turn) |
+| `FAIL` | measured, wired wrong. The detail ends with the command that fixes it. `pj-health` never runs it. |
+| `NOT MEASURED` | the check could not reach its target, and the detail says why. Never a pass. |
+
+Exit 0 with no FAIL, 1 with any FAIL, 2 when it refused to run (bad flag, no `jq`).
+The shape is borrowed from a sibling project's session-start battery: a grader that
+cannot reach its box is reported as unreachable, never as an outage and never as green,
+because the two used to be misread for each other.
+
+## Flags
+
+| Flag | Effect |
+|---|---|
+| (none) | machine checks, the project checks for the repo you stand in, the evidence checks from that repo's newest interactive pj transcript |
+| `--full` | also run every framework selftest and quote each one's own pass line |
+| `--live` | also launch ONE headless `pj -p` probe (an API call, haiku) and read its transcript |
+| `--quiet` | print only FAIL and NOT MEASURED rows, plus the summary |
+| `--json` | one object: `project`, `rows[]`, `summary`, `exit` |
+| `--selftest` | prove every arm against fixtures (`pj-health-selftest`, 141 arms) |
+
+`/pj:health` inside a pj session runs it and pastes the rows.
+
+## The rows
+
+Machine level, always:
+
+| Row | PASS when | FAIL when | NOT MEASURED when |
+|---|---|---|---|
+| `alias` | the live shell's `pj` alias carries `--setting-sources project,local`, the project settings file, `--append-system-prompt-file "$(pj-prompt-file)"` and the five `--plugin-dir`s | any piece is missing (named) | no alias could be read |
+| `output-style` | the project settings file sets `pj-voice:pj-voice` and the style file exists | either is wrong | the settings file is unreadable |
+| `plugin-dirs` | each plugin dir holds a plugin manifest, a skill or an output style | one is missing or empty | |
+| `prompt-file` | `pj-prompt-file` builds and its cache equals its sources joined by one newline, byte for byte | it differs or the tool fails | a source is missing, or the tool fell back to a source because the cache was not writable (a sandbox) |
+| `rules-cap` | the machine-wide rules file is within 60 lines | over | absent |
+| `settings-render` | `claude-project-settings-render --check` reports current | drift | tool absent |
+| `hooks-sync` | every manifest entry targeted at `project` is registered in the project settings file (same event, matcher and command triple the sync tool uses) | one is not | manifest or settings unreadable. The sync tool refuses `--check` inside a sandbox, so the comparison is done directly and the refusal is noted |
+| `hook-orphans` | every registered command resolves to an executable | an orphan (named, with the `jq` line that would remove it, printed and not run: the sync tools are add-only, so this is the only way an orphan is ever seen) | settings unreadable |
+| `hook-single-fire` | no command sits in both the project settings file and the repo's own `.claude/settings.json` | one does (named) | outside a repo, or the repo has no `.claude/settings.json` |
+| `stow-links` | every framework tool, hook script and pj plugin file under `~` is a link into the dotfiles checkout | a link is dangling, absent, or a real file | no dotfiles checkout found |
+| `machine-file` | the ID-range file holds `01-49` or `50-99` and a name | malformed | absent: the default range is in use, and that is allowed |
+| `pj-global` | the machine-wide home has its rules file, decisions folder and notes index, and `decided --list` from outside any repo returns the machine-wide count | a file missing, or `decided` refuses | `decided` not on PATH |
+| `no-wrap-up` | always: how many projects have sessions that ended without wrap-up, and how many records | never | the flag folder is unreadable |
+| `selftests` | every framework selftest exists; under `--full`, every one exits 0 and its pass line is quoted | one missing, or one fails | |
+
+Project level, inside a repo:
+
+| Row | PASS | FAIL | WARN | NOT MEASURED |
+|---|---|---|---|---|
+| `pj-homes` | the declaration parses, `records` is `repo` or `private`, every declared store exists | unknown key, bad value, or a declared store missing | a marker the tools do not resolve | outside a repo, or no declaration (defaults in use) |
+| `drawer` | the items folder exists and the generated view matches its stamp | `open-items --where` prints nothing | the view differs from its stamp (a hand edit; `open-items regen` rescues it), or the legacy single-file layout | no drawer yet (`open-items init`) |
+| `decided-store` | `decided --homes` finds the project store | the store is declared in a format `decided` cannot read | outside a repo, or the store is not present |
+
+Evidence, read from the newest interactive pj transcript for the repo (the one whose
+output style is pj-voice; headless `-p` probes are skipped):
+
+| Row | PASS | FAIL | NOT MEASURED |
+|---|---|---|---|
+| `evidence-card` | the start card hook printed exactly once | 0 or more | no transcript |
+| `evidence-ci-watch` | the CI watch hook printed exactly once | 0 or more | no transcript |
+| `evidence-rules` | the machine-wide rules file's header is in the prompt snapshot | absent (a shell opened before the alias changed launches without it: open a new shell) | no snapshot record |
+| `evidence-plugins` | the four skills and the output style are named in the transcript | one absent | no transcript |
+| `evidence-tokens` | the first API call's input tokens are within budget | never: over budget is WARN, a long first message is not a wiring fault | no usage record, or no baseline |
+
+The budget: for the dotfiles repo a header constant of 70,000 plus 15 percent (from the
+P5.4 measurement of a one-word first turn); for any other repo the median of its last five
+interactive pj transcripts plus 15 percent, needing at least three. The script header
+carries the numbers.
+
+Live, `--live` only:
+
+| Row | PASS | FAIL | NOT MEASURED |
+|---|---|---|---|
+| `live-probe` | the probe's transcript shows the start card once and the dummy `${DUMMY_TOKEN:-no}` line was denied by the secret-probe guard | the dummy line ran, or the card did not print once | without the flag; outside a repo; the launcher returned nothing |
+
+The probe never carries a real secret. Its token figure is printed labelled as an
+under-read: headless runs report fewer tokens than an interactive session for the same
+prompt (measured in P5.4).
+
+## Reading it
+
+- A FAIL row is a wiring fault. Run the command in its detail from a terminal, then
+  `pj-health` again.
+- A NOT MEASURED row is not a pass. Read the reason. Most are expected in a given place:
+  outside a repo the project rows say so; a project without a drawer says so.
+- `--quiet` in a script: the exit code is the answer, the rows are the reasons.
+- Inside a Claude session's sandbox two rows go NOT MEASURED on their own (`prompt-file`,
+  because the cache is not writable there; and the sync tool's own `--check` refuses, so
+  `hooks-sync` says it compared directly). Run from a terminal for the full picture.
+
+## Test seams
+
+The selftest drives every arm through environment overrides, one per real path. They are
+listed in the script header. Nothing else should set them.

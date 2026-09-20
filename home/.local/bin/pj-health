@@ -1,0 +1,544 @@
+#!/usr/bin/env bash
+# pj-health -- is the pj session framework wired on this machine? (D-20260920-09 c, P5.7)
+#
+# Usage:
+#   pj-health                 machine checks, plus project checks for the repo you stand in,
+#                             plus evidence checks read from that repo's newest pj transcript
+#   pj-health --full          also run every framework selftest and quote its pass count
+#   pj-health --live          also launch ONE headless pj probe (an API call, haiku) and
+#                             check the start card printed and a dummy secret was denied
+#   pj-health --quiet         print only FAIL and NOT MEASURED rows (and the summary)
+#   pj-health --json          one JSON object for scripts: rows, summary, exit code
+#   pj-health --selftest      prove every arm against fixtures (runs pj-health-selftest)
+#
+# One row per check:  STATE  name  detail.  Four states, on purpose:
+#   PASS          measured, wired as expected
+#   WARN          measured, not a wiring fault (a pending hand edit, a fat first turn)
+#   FAIL          measured, wired wrong; the detail says what to run to fix it
+#   NOT MEASURED  the check could not reach its target; the detail says why. NEVER a pass.
+# Exit 0 with no FAIL, 1 with any FAIL, 2 REFUSED (bad args, no jq). Same shape as
+# Network_Plan's session-start.sh: a grader that cannot reach its box is not an outage.
+#
+# CONTRACT
+#   1. READ-ONLY. Writes nothing but its own stdout. Never repairs: a FAIL prints the fix
+#      command, never runs it (the hook-orphans `jq del` line above all).
+#   2. Runs from any cwd, finishes in a few seconds without --full or --live.
+#   3. Prints paths relative to ~. Never prints a rule's text or an item's title.
+#   4. Other projects are read-only: running it inside them only reads.
+#   5. The live setup is never broken to prove a FAIL; the selftest does that on fixtures.
+#
+# TOKEN BUDGET (E5, ruled at the P5.7 gate: WARN, never FAIL, a long first message is not
+# a wiring fault). The first API call's input + cache-create + cache-read tokens:
+#   dotfiles repo   baseline 70,000 (P5.4: hello turn 68,977; system prompt about 9.7k)
+#   any other repo  baseline = median of that repo's last 5 interactive pj transcripts,
+#                   needing at least 3, else NOT MEASURED
+#   budget = baseline + 15 percent.  A --live probe's figure is an UNDER-READ (P5.4).
+#
+# TEST SEAMS (each replaces one real path; the selftest sets them, nobody else should):
+#   PJ_HOME              ~/.claude              PJ_BIN_DIR         ~/.local/bin
+#   PJ_DOTFILES          the dotfiles checkout (default: resolved from this script's link)
+#   PJ_ZSHRC             read `alias pj=` from this file instead of the live shell
+#   PJ_TRANSCRIPTS_DIR   ~/.claude/projects     PJ_STATE_DIR       ~/.local/state/pj
+#   plus the seams the tools already honour and pass through untouched: PJ_MACHINE_FILE,
+#   PJ_PROMPT_SOURCES, PJ_PROMPT_OUT, OPEN_ITEMS_PROJECTS_DIR, DECIDED_GLOBAL_DIR,
+#   CLAUDE_PROJECT_SETTINGS_FILE, CLAUDE_PROJECT_SETTINGS_TEMPLATE, CLAUDE_HOOKS_MANIFEST.
+set -u
+
+DOTFILES_BASELINE=70000
+BUDGET_MARGIN_PCT=15
+BASELINE_MIN_TRANSCRIPTS=3
+BASELINE_WINDOW=5
+FRAMEWORK_TOOLS="pj-prompt-file pj-start-card pj-session-end pj-wrap pj-id open-items decided claude-hooks-sync claude-project-settings-render ci-watch ccw-watch pj-health"
+SELFTESTS="pj-start-card-selftest pj-session-end-selftest pj-wrap-selftest pj-prompt-file:--selftest pj-id:--selftest open-items-selftest decided-selftest claude-hooks-sync-selftest claude-project-settings-render-selftest ccw-watch-selftest ci-watch-selftest pj-health-selftest"
+HOOK_SELFTESTS="enforce-secret-probe.sh validate-bash.sh enforce-uv.sh enforce-pnpm.sh"
+PLUGIN_DIRS_EXPECTED="skills/herdr skills/AgentRelay skills/ISA pj-voice pj"
+ALIAS_PARTS='--setting-sources project,local|--settings ~/.claude/settings.project.json|--append-system-prompt-file "$(pj-prompt-file)"'
+
+FULL=0; LIVE=0; QUIET=0; JSON=0
+for a in "$@"; do
+  case "$a" in
+    --full) FULL=1 ;; --live) LIVE=1 ;; --quiet) QUIET=1 ;; --json) JSON=1 ;;
+    --selftest) exec pj-health-selftest ;;
+    -h|--help) sed -n '2,45p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "pj-health: REFUSED unknown arg: $a (--help)" >&2; exit 2 ;;
+  esac
+done
+command -v jq >/dev/null 2>&1 || { echo "pj-health: REFUSED: jq is required" >&2; exit 2; }
+
+PJ_HOME="${PJ_HOME:-$HOME/.claude}"
+PJ_BIN_DIR="${PJ_BIN_DIR:-$HOME/.local/bin}"
+PJ_STATE_DIR="${PJ_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/pj}"
+PJ_TRANSCRIPTS_DIR="${PJ_TRANSCRIPTS_DIR:-$PJ_HOME/projects}"
+SETTINGS_PROJECT="${CLAUDE_PROJECT_SETTINGS_FILE:-$PJ_HOME/settings.project.json}"
+MACHINE_FILE="${PJ_MACHINE_FILE:-$HOME/.config/pj/machine}"
+if [ -z "${PJ_DOTFILES:-}" ]; then
+  _self="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+  PJ_DOTFILES="$(dirname "$(dirname "$(dirname "$(dirname "$_self")")")")"
+fi
+PJ_DOTFILES="$(readlink -f "$PJ_DOTFILES" 2>/dev/null || printf '%s' "$PJ_DOTFILES")"   # /tmp is a symlink on macOS
+MANIFEST="${CLAUDE_HOOKS_MANIFEST:-$PJ_DOTFILES/settings/claude/hooks.json}"
+
+tilde(){ printf '%s' "${1/#$HOME/\~}"; }
+
+# ---------------------------------------------------------------- rows ----
+ROWS_JSON='[]'
+n_pass=0; n_warn=0; n_fail=0; n_notm=0
+row(){   # row STATE name detail
+  local st="$1" name="$2" det="${3:-}"
+  case "$st" in PASS) n_pass=$((n_pass+1));; WARN) n_warn=$((n_warn+1));; FAIL) n_fail=$((n_fail+1));; NOTM) n_notm=$((n_notm+1));; esac
+  local label="$st"; [ "$st" = NOTM ] && label="NOT MEASURED"
+  ROWS_JSON="$(jq -c --arg s "$label" --arg n "$name" --arg d "$det" '. + [{state:$s,name:$n,detail:$d}]' <<<"$ROWS_JSON")"
+  if [ "$JSON" -eq 0 ]; then
+    if [ "$QUIET" -eq 0 ] || [ "$st" = FAIL ] || [ "$st" = NOTM ]; then
+      printf '%-12s %-18s %s\n' "$label" "$name" "$det"
+    fi
+  fi
+}
+
+# ---------------------------------------------------------- project ctx ----
+TOPLEVEL=""; IN_REPO=0
+if TOPLEVEL="$(git rev-parse --show-toplevel 2>/dev/null)"; then IN_REPO=1; fi
+if [ "$IN_REPO" -eq 1 ]; then
+  KEY="$(printf '%s' "$TOPLEVEL" | sed 's#[/._]#-#g')"
+  PROJECT="$(basename "$TOPLEVEL")"
+fi
+
+[ "$JSON" -eq 0 ] && { if [ "$IN_REPO" -eq 1 ]; then echo "pj-health: $PROJECT"; else echo "pj-health: (not in a git repo: machine checks only)"; fi; }
+
+# =============================================================== MACHINE ==
+# M1 alias
+alias_text=""; alias_src=""
+if [ -n "${PJ_ZSHRC:-}" ]; then
+  alias_text="$(grep -E '^alias pj=' "$PJ_ZSHRC" 2>/dev/null | head -1)"; alias_src="$(tilde "$PJ_ZSHRC")"
+else
+  alias_text="$(timeout 5 zsh -ic 'alias pj' 2>/dev/null | head -1)"; alias_src="live shell (zsh -ic)"
+fi
+PLUGIN_DIRS=""
+if [ -z "$alias_text" ]; then
+  row NOTM alias "no \`pj\` alias read from $alias_src; fix: stow -R the dotfiles, open a new shell"
+else
+  missing=""
+  IFS='|' read -r -a parts <<<"$ALIAS_PARTS"
+  for p in "${parts[@]}"; do
+    case "$alias_text" in *"$p"*) ;; *) missing="$missing [$p]";; esac
+  done
+  # tolerate $HOME in place of ~ for the settings path
+  case "$missing" in *'[--settings ~/.claude/settings.project.json]'*)
+    case "$alias_text" in *'--settings $HOME/.claude/settings.project.json'*|*'--settings "$HOME/.claude/settings.project.json"'*) missing="${missing/ \[--settings ~\/.claude\/settings.project.json\]/}";; esac;;
+  esac
+  PLUGIN_DIRS="$(printf '%s' "$alias_text" | grep -oE -- '--plugin-dir [^ ]+' | sed 's/--plugin-dir //')"
+  pd_n="$(printf '%s\n' "$PLUGIN_DIRS" | grep -c . || true)"
+  for d in $PLUGIN_DIRS_EXPECTED; do   # exact entry: ~/.claude/pj must not be satisfied by ~/.claude/pj-voice
+    printf '%s\n' "$PLUGIN_DIRS" | grep -qE "^(~|\\\$HOME|$HOME)/\.claude/$d/?$" || missing="$missing [--plugin-dir ~/.claude/$d]"
+  done
+  case "$alias_text" in *'--output-style pj-voice:pj-voice'*) ;; esac   # the style comes from settings (M2), not the alias
+  if [ -z "$missing" ] && [ "$pd_n" -eq 5 ]; then
+    row PASS alias "$alias_src: setting-sources, settings file, prompt-file, 5 plugin dirs"
+  else
+    row FAIL alias "$alias_src is missing:${missing:- (plugin-dir count $pd_n, expected 5)}; fix: stow -R the dotfiles, open a new shell"
+  fi
+fi
+
+# M2 output style
+if [ -r "$SETTINGS_PROJECT" ]; then
+  os="$(jq -r '.outputStyle // ""' "$SETTINGS_PROJECT" 2>/dev/null)"
+  sf="$PJ_HOME/pj-voice/output-styles/pj-voice.md"
+  if [ "$os" = "pj-voice:pj-voice" ] && [ -f "$sf" ]; then
+    row PASS output-style "settings.project.json outputStyle pj-voice:pj-voice; style file present"
+  elif [ "$os" != "pj-voice:pj-voice" ]; then
+    row FAIL output-style "outputStyle is '${os:-unset}', expected pj-voice:pj-voice; fix: claude-project-settings-render --install (terminal)"
+  else
+    row FAIL output-style "style file $(tilde "$sf") missing; fix: restore ~/.claude/pj-voice in dot-claude"
+  fi
+else
+  row NOTM output-style "$(tilde "$SETTINGS_PROJECT") unreadable; fix: claude-project-settings-render --install (terminal)"
+fi
+
+# M3 plugin dirs
+if [ -z "$PLUGIN_DIRS" ]; then PLUGIN_DIRS="$(for d in $PLUGIN_DIRS_EXPECTED; do echo "$PJ_HOME/$d"; done)"; fi
+bad=""; ok=0
+while IFS= read -r d; do
+  [ -z "$d" ] && continue
+  real="${d/#\~/$HOME}"; real="${real/#\$HOME/$HOME}"
+  [ -n "${PJ_ZSHRC:-}" ] && real="${real/#$HOME\/.claude/$PJ_HOME}"
+  if [ ! -d "$real" ]; then bad="$bad $(tilde "$real")(missing)"
+  elif [ -f "$real/.claude-plugin/plugin.json" ] || [ -f "$real/SKILL.md" ] || ls "$real"/skills/*/SKILL.md >/dev/null 2>&1 || ls "$real"/output-styles/*.md >/dev/null 2>&1; then ok=$((ok+1))
+  else bad="$bad $(tilde "$real")(no manifest, skill or output style)"; fi
+done <<<"$PLUGIN_DIRS"
+if [ -z "$bad" ]; then row PASS plugin-dirs "$ok of $ok hold a plugin manifest, a skill or an output style"
+else row FAIL plugin-dirs "$bad; fix: restore the folder in dot-claude or the dotfiles stow"; fi
+
+# M4 prompt file
+SOURCES="${PJ_PROMPT_SOURCES:-$PJ_HOME/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md:$PJ_HOME/pj-global/RULES.md}"
+miss=""; IFS=':' read -r -a srcs <<<"$SOURCES"
+for s in "${srcs[@]}"; do [ -r "$s" ] || miss="$miss $(tilde "$s")"; done
+if [ -n "$miss" ]; then
+  row NOTM prompt-file "source missing:$miss; fix: restore it, then pj-prompt-file"
+elif ! command -v pj-prompt-file >/dev/null 2>&1; then
+  row NOTM prompt-file "pj-prompt-file not on PATH; fix: stow -R the dotfiles"
+else
+  out="$(pj-prompt-file 2>/dev/null)"; prc=$?
+  if [ $prc -ne 0 ] || [ -z "$out" ] || [ ! -r "$out" ]; then
+    row FAIL prompt-file "pj-prompt-file rc $prc, output '${out:-none}'; fix: pj-prompt-file --selftest"
+  else
+    fellback=0; for s in "${srcs[@]}"; do [ "$out" = "$s" ] && fellback=1; done
+    if [ $fellback -eq 1 ]; then
+      row NOTM prompt-file "pj-prompt-file fell back to $(tilde "$out") (cache not writable from here, e.g. a sandbox); run pj-health from a terminal"
+    elif cmp -s <(first=1; for s in "${srcs[@]}"; do [ $first -eq 0 ] && printf '\n'; cat "$s"; first=0; done) "$out"; then
+      row PASS prompt-file "$(tilde "$out") = $(for s in "${srcs[@]}"; do basename "$s"; done | paste -sd+ -) byte for byte ($(wc -c <"$out" | tr -d ' ') bytes)"
+    else
+      row FAIL prompt-file "$(tilde "$out") differs from its sources; fix: pj-prompt-file (rebuilds), then pj-prompt-file --selftest"
+    fi
+  fi
+fi
+
+# M5 rules cap
+RULES="$PJ_HOME/pj-global/RULES.md"
+if [ -r "$RULES" ]; then
+  rl="$(wc -l <"$RULES" | tr -d ' ')"
+  if [ "$rl" -le 60 ]; then row PASS rules-cap "RULES.md $rl of 60 lines"
+  else row FAIL rules-cap "RULES.md $rl lines, cap 60 (D-20260920-07); fix: move lines to pj-global/notes/"; fi
+else
+  row NOTM rules-cap "$(tilde "$RULES") absent"
+fi
+
+# M6 settings render
+if command -v claude-project-settings-render >/dev/null 2>&1; then
+  rout="$(claude-project-settings-render --check 2>&1)"; rrc=$?
+  if [ $rrc -eq 0 ]; then row PASS settings-render "claude-project-settings-render --check: current"
+  else row FAIL settings-render "--check rc $rrc: $(printf '%s' "$rout" | grep -v '^\s*$' | tail -1 | cut -c1-100); fix: claude-project-settings-render --install (terminal)"; fi
+else
+  row NOTM settings-render "claude-project-settings-render not on PATH; fix: stow -R the dotfiles"
+fi
+
+# M7 hooks sync (direct triple comparison; the sync tool refuses --check inside a sandbox)
+if [ -r "$MANIFEST" ] && [ -r "$SETTINGS_PROJECT" ]; then
+  unreg="$(jq -r --slurpfile s "$SETTINGS_PROJECT" '
+    ($s[0].hooks // {}) as $H
+    | [ .hooks[]
+        | select(((.targets // ["user"]) | index("project")) != null)
+        | . as $e
+        | ($H[$e.event] // []) as $groups
+        | ([ $groups[] | select(($e.matcher == null) or (.matcher == $e.matcher)) | .hooks[]? | .command ]) as $cmds
+        | select(($cmds | index($e.entry.command)) == null)
+        | $e.script + " (" + $e.event + (if $e.matcher then "/" + $e.matcher else "" end) + ")" ]
+    | join(", ")' "$MANIFEST" 2>/dev/null)"; jrc=$?
+  total="$(jq -r '[.hooks[] | select(((.targets // ["user"]) | index("project")) != null)] | length' "$MANIFEST" 2>/dev/null)"
+  note=""
+  if command -v claude-hooks-sync >/dev/null 2>&1; then
+    sout="$(claude-hooks-sync --target project --check 2>&1)"
+    case "$sout" in *"not writable from here"*) note="; sync tool refused --check in the sandbox, direct comparison used";; *pending*|*unregistered*) note="; sync tool: $(printf '%s' "$sout" | grep -iE 'pending|unregistered' | tail -1 | cut -c1-60)";; esac
+  fi
+  if [ $jrc -ne 0 ]; then row NOTM hooks-sync "manifest or settings file did not parse as JSON"
+  elif [ -z "$unreg" ]; then row PASS hooks-sync "$total project-target manifest entries registered in settings.project.json$note"
+  else row FAIL hooks-sync "not registered: $unreg; fix: claude-hooks-sync --target project --install (terminal)$note"; fi
+else
+  row NOTM hooks-sync "manifest $(tilde "$MANIFEST") or $(tilde "$SETTINGS_PROJECT") unreadable"
+fi
+
+# M8 hook orphans (the P5.2 rollback gap: sync tools are add-only)
+PROJ_CMDS=""
+if [ -r "$SETTINGS_PROJECT" ]; then
+  PROJ_CMDS="$(jq -r '.hooks // {} | to_entries[] | .key as $e | .value[] | .hooks[]? | "\($e)\t\(.command)"' "$SETTINGS_PROJECT" 2>/dev/null)"
+  orphans=""; cnt=0; fixes=""
+  while IFS=$'\t' read -r ev cmd; do
+    [ -z "$cmd" ] && continue
+    cnt=$((cnt+1))
+    p="$(printf '%s' "$cmd" | grep -oE '"?\$HOME/[^" ]+' | head -1 | tr -d '"')"
+    [ -z "$p" ] && continue
+    real="${p/#\$HOME/$HOME}"
+    [ -n "${PJ_ZSHRC:-}" ] && real="${real/#$HOME\/.claude/$PJ_HOME}"   # fixture mode
+    if [ ! -x "$real" ]; then
+      orphans="$orphans $(basename "$p")"
+      fixes="$fixes\n  jq '(.hooks.\"$ev\"[].hooks) |= map(select(.command != $(jq -Rn --arg c "$cmd" '$c')))' $(tilde "$SETTINGS_PROJECT")"
+    fi
+  done <<<"$PROJ_CMDS"
+  if [ -z "$orphans" ]; then row PASS hook-orphans "$cnt registered commands resolve to an executable"
+  else row FAIL hook-orphans "orphan(s):$orphans; the remove line(s), NOT run:$(printf '%b' "$fixes")"; fi
+else
+  row NOTM hook-orphans "$(tilde "$SETTINGS_PROJECT") unreadable"
+fi
+
+# M9 single fire
+if [ "$IN_REPO" -eq 0 ]; then
+  row NOTM hook-single-fire "not in a git repo"
+elif [ ! -r "$TOPLEVEL/.claude/settings.json" ]; then
+  row NOTM hook-single-fire "project has no .claude/settings.json (nothing to double)"
+elif [ -z "$PROJ_CMDS" ]; then
+  row NOTM hook-single-fire "$(tilde "$SETTINGS_PROJECT") unreadable"
+else
+  dup="$(jq -r --slurpfile p "$SETTINGS_PROJECT" '
+      [ $p[0].hooks // {} | to_entries[] | .value[] | .hooks[]? | .command ] as $pc
+      | [ .hooks // {} | to_entries[] | .value[] | .hooks[]? | .command | select(. as $c | $pc | index($c)) ]
+      | unique | join(", ")' "$TOPLEVEL/.claude/settings.json" 2>/dev/null)"
+  if [ -z "$dup" ]; then row PASS hook-single-fire "no command in both settings.project.json and .claude/settings.json"
+  else row FAIL hook-single-fire "in both files: $(printf '%s' "$dup" | cut -c1-120); fix: remove it from .claude/settings.json (P5.6 rule)"; fi
+fi
+
+# M10 stow links
+dangling=""; notlink=""; nlinks=0
+check_link(){   # check_link <path>
+  local p="$1"
+  if [ -L "$p" ]; then
+    local t; t="$(readlink -f "$p" 2>/dev/null || true)"
+    if [ -z "$t" ] || [ ! -e "$t" ]; then dangling="$dangling $(tilde "$p")"
+    else case "$t" in "$PJ_DOTFILES"/home/*) nlinks=$((nlinks+1));; *) notlink="$notlink $(tilde "$p")(outside dotfiles)";; esac; fi
+  elif [ -e "$p" ]; then notlink="$notlink $(tilde "$p")(real file)"
+  else dangling="$dangling $(tilde "$p")(absent)"; fi
+}
+if [ ! -d "$PJ_DOTFILES/home" ]; then
+  row NOTM stow-links "dotfiles checkout not found at $(tilde "$PJ_DOTFILES")"
+else
+  for t in $FRAMEWORK_TOOLS; do check_link "$PJ_BIN_DIR/$t"; done
+  if [ -r "$MANIFEST" ]; then
+    while IFS= read -r s; do [ -n "$s" ] && check_link "${s/#\$HOME\/.claude/$PJ_HOME}"; done <<<"$(jq -r '.hooks[] | select(.script_path == null) | "$HOME/.claude/hooks/" + .script' "$MANIFEST" 2>/dev/null | sort -u)"
+  fi
+  check_link "$PJ_HOME/pj/.claude-plugin/plugin.json"
+  for f in "$PJ_HOME"/pj/skills/*/SKILL.md; do [ -e "$f" ] || [ -L "$f" ] && check_link "$f"; done
+  if [ -z "$dangling" ] && [ -z "$notlink" ]; then row PASS stow-links "$nlinks links resolve into $(tilde "$PJ_DOTFILES")/home"
+  else row FAIL stow-links "${dangling:+dangling:$dangling }${notlink:+not a dotfiles link:$notlink}; fix: stow -R --no-folding -t ~ -d $(tilde "$PJ_DOTFILES") home"; fi
+fi
+
+# M11 machine file
+if [ -r "$MACHINE_FILE" ]; then
+  mr="$(sed -n 's/^range:[[:space:]]*//p' "$MACHINE_FILE" | head -1 | tr -d '[:space:]')"
+  mn="$(sed -n 's/^name:[[:space:]]*//p' "$MACHINE_FILE" | head -1 | tr -d '[:space:]')"
+  case "$mr" in 01-49|50-99) [ -n "$mn" ] && row PASS machine-file "$(tilde "$MACHINE_FILE"): range $mr" || row FAIL machine-file "$(tilde "$MACHINE_FILE") has no name:; fix: add 'name: <host>'";;
+    *) row FAIL machine-file "$(tilde "$MACHINE_FILE") range '${mr:-unset}' invalid; fix: set 'range: 01-49' or 'range: 50-99'";;
+  esac
+elif [ -e "$MACHINE_FILE" ]; then
+  row FAIL machine-file "$(tilde "$MACHINE_FILE") exists but is unreadable; fix: chmod u+r"
+else
+  row NOTM machine-file "absent, default range 01-49 in use (install.sh writes it)"
+fi
+
+# M12 pj-global
+PG="$PJ_HOME/pj-global"; pgmiss=""
+for f in RULES.md decisions notes/INDEX.md; do [ -e "$PG/$f" ] || pgmiss="$pgmiss $f"; done
+if [ -n "$pgmiss" ]; then
+  row FAIL pj-global "$(tilde "$PG") missing:$pgmiss; fix: restore from dot-claude"
+elif ! command -v decided >/dev/null 2>&1; then
+  row NOTM pj-global "files present; decided not on PATH"
+else
+  dout="$( (builtin cd / && decided --list 2>&1) )"; drc=$?
+  mw="$(printf '%s' "$dout" | grep -oE 'machine-wide [0-9]+' | tail -1 | awk '{print $2}')"
+  if [ $drc -le 1 ] && [ -n "$mw" ]; then row PASS pj-global "RULES.md, decisions/, notes/INDEX.md present; decided --list outside a repo: machine-wide $mw"
+  else row FAIL pj-global "files present but decided --list rc $drc outside a repo: $(printf '%s' "$dout" | tail -1 | cut -c1-80); fix: decided --selftest"; fi
+fi
+
+# M13 no-wrap-up records (informational)
+NW="$PJ_STATE_DIR/no-wrap-up"
+if [ -d "$NW" ]; then
+  if [ -r "$NW" ]; then
+    np=0; nr=0
+    for f in "$NW"/*; do [ -f "$f" ] || continue; np=$((np+1)); c="$(grep -c '^session:' "$f" 2>/dev/null || true)"; nr=$((nr+${c:-0})); done
+    row PASS no-wrap-up "$np project(s) with unwrapped sessions, $nr record(s) (informational; pj-wrap status lists them)"
+  else row NOTM no-wrap-up "$(tilde "$NW") unreadable"; fi
+else
+  row PASS no-wrap-up "0 projects with unwrapped sessions (folder not created yet)"
+fi
+
+# M14 selftests
+stmiss=""; stn=0; stres=""; stfail=""
+run_selftest(){   # run_selftest <label> <cmd...>
+  local label="$1"; shift
+  local out rc last
+  out="$("$@" 2>&1)"; rc=$?
+  last="$(printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | tail -1 | cut -c1-60)"
+  [ $rc -eq 0 ] && stres="$stres $label: ${last:-ok};" || stfail="$stfail $label (rc $rc: ${last:-no output});"
+}
+for s in $SELFTESTS; do
+  name="${s%%:*}"; flag=""; case "$s" in *:*) flag="${s#*:}";; esac
+  if ! command -v "$name" >/dev/null 2>&1; then stmiss="$stmiss $name"; continue; fi
+  stn=$((stn+1))
+  [ "$FULL" -eq 1 ] && { if [ -n "$flag" ]; then run_selftest "$name" "$name" "$flag"; else run_selftest "$name" "$name"; fi; }
+done
+for h in $HOOK_SELFTESTS; do
+  hp="$PJ_HOME/hooks/$h"
+  if [ ! -x "$hp" ]; then stmiss="$stmiss $h"; continue; fi
+  stn=$((stn+1))
+  [ "$FULL" -eq 1 ] && run_selftest "$h" "$hp" --selftest
+done
+if [ -n "$stmiss" ]; then row FAIL selftests "missing:$stmiss; fix: stow -R the dotfiles"
+elif [ "$FULL" -eq 0 ]; then row PASS selftests "$stn selftests present, not run (--full runs them)"
+elif [ -n "$stfail" ]; then row FAIL selftests "$stn run, failing:$stfail"
+else row PASS selftests "$stn run, all rc 0:$stres"; fi
+
+# =============================================================== PROJECT ==
+DRAWER=""
+if [ "$IN_REPO" -eq 1 ] && command -v open-items >/dev/null 2>&1; then
+  wo="$(open-items --where 2>/dev/null | head -1)"; [ -n "$wo" ] && DRAWER="$(dirname "$wo")"
+fi
+resolve_marker(){   # resolve_marker <marker:path> -> absolute path or empty
+  case "$1" in
+    repo:*) printf '%s' "$TOPLEVEL/${1#repo:}";;
+    drawer:*) [ -n "$DRAWER" ] && printf '%s' "$DRAWER/${1#drawer:}";;
+    "~/"*) printf '%s' "$HOME/${1#\~/}";;
+    *) ;;
+  esac
+}
+
+# P1 pj-homes
+if [ "$IN_REPO" -eq 0 ]; then
+  row NOTM pj-homes "not in a git repo"
+elif [ ! -r "$TOPLEVEL/.claude/pj-homes" ]; then
+  row NOTM pj-homes "no .claude/pj-homes (D-20260920-06 defaults in use)"
+else
+  bad=""; unresolved=""; missing=""; nkeys=0; records=""
+  while IFS= read -r line; do
+    case "$line" in ''|'#'*) continue;; esac
+    key="${line%%:*}"; val="${line#*:}"; val="${val#"${val%%[![:space:]]*}"}"
+    case "$key" in
+      records) records="$val"; nkeys=$((nkeys+1)); case "$val" in repo|private) ;; *) bad="$bad records='$val'";; esac;;
+      handoff|tracker|decisions|incidents|plans|wrap-up)
+        nkeys=$((nkeys+1)); p="$(resolve_marker "$val")"
+        if [ -z "$p" ]; then unresolved="$unresolved $key"
+        elif [ ! -e "$p" ]; then [ "$key" = handoff ] || missing="$missing $key"; fi;;
+      *) bad="$bad unknown-key='$key'";;
+    esac
+  done <"$TOPLEVEL/.claude/pj-homes"
+  if [ -n "$bad" ]; then row FAIL pj-homes ".claude/pj-homes:$bad; fix: keys handoff|tracker|decisions|incidents|plans|records|wrap-up, records repo|private"
+  elif [ -n "$missing" ]; then row FAIL pj-homes "declared store missing on disk:$missing; fix: create it or correct the line"
+  elif [ -n "$unresolved" ]; then row WARN pj-homes "$nkeys keys; unresolvable marker on:$unresolved (repo:, drawer:, ~/ resolve)"
+  else row PASS pj-homes "$nkeys keys parse; records ${records:-repo (default)}; every declared store present"; fi
+fi
+
+# P2 drawer
+if [ "$IN_REPO" -eq 0 ]; then
+  row NOTM drawer "not in a git repo"
+elif ! command -v open-items >/dev/null 2>&1; then
+  row NOTM drawer "open-items not on PATH"
+elif [ -z "$DRAWER" ]; then
+  row FAIL drawer "open-items --where printed nothing; fix: open-items --selftest"
+elif [ -d "$DRAWER/items" ]; then
+  if [ -f "$DRAWER/OPEN.md" ] && [ -f "$DRAWER/items/.generated.sha256" ]; then
+    have="$(shasum -a 256 "$DRAWER/OPEN.md" | cut -d' ' -f1)"; want="$(tr -d '[:space:]' <"$DRAWER/items/.generated.sha256")"
+    if [ "$have" = "$want" ]; then row PASS drawer "items/ layout; OPEN.md matches its stamp"
+    else row WARN drawer "items/ layout; OPEN.md differs from its stamp (hand edit pending; open-items regen rescues it)"; fi
+  else row WARN drawer "items/ layout; OPEN.md or its stamp absent (open-items regen)"; fi
+elif [ -f "$DRAWER/OPEN.md" ]; then
+  row WARN drawer "legacy OPEN.md layout; open-items migrate moves it to items/"
+else
+  row NOTM drawer "no drawer for this project (open-items init creates one)"
+fi
+
+# P3 decided store
+if [ "$IN_REPO" -eq 0 ]; then
+  row NOTM decided-store "not in a git repo"
+elif ! command -v decided >/dev/null 2>&1; then
+  row NOTM decided-store "decided not on PATH"
+else
+  hl="$(decided --homes 2>/dev/null | grep -E '^project' | head -1)"
+  kind="$(printf '%s' "$hl" | awk '{for(i=1;i<=NF;i++) if($i ~ /^(folder|file|missing|unsupported)$/){print $i; exit}}')"
+  label="$(printf '%s' "$hl" | sed -E 's/^(project[^)]*\)).*/\1/')"
+  case "$kind" in
+    folder|file) row PASS decided-store "$label found ($kind)";;
+    missing) row NOTM decided-store "$label not present ($(printf '%s' "$hl" | sed -E 's/.*\((.*)\)$/\1/'))";;
+    unsupported) row FAIL decided-store "$label unsupported format; fix: point decisions: at a folder of D-*.md or a file of '## D-' blocks";;
+    *) row NOTM decided-store "decided --homes printed no project line";;
+  esac
+fi
+
+# ============================================================== EVIDENCE ==
+TR=""; TR_LIST=""
+if [ "$IN_REPO" -eq 1 ] && [ -d "$PJ_TRANSCRIPTS_DIR/$KEY" ]; then
+  # newest interactive pj transcript: pj-voice style, not an sdk-cli (-p) probe
+  # the style marker lands at the first assistant turn and entrypoint on line 1, so the
+  # first 400 lines decide; stop once the newest plus the baseline window are found
+  found=0
+  while IFS= read -r f; do
+    [ -f "$f" ] || continue
+    head -n 400 "$f" 2>/dev/null | grep -q -F '"style":"pj-voice:pj-voice"' || continue
+    head -n 5 "$f" 2>/dev/null | grep -q -F '"entrypoint":"sdk-cli"' && continue
+    TR_LIST="$TR_LIST$f"$'\n'; found=$((found+1))
+    [ "$found" -gt "$BASELINE_WINDOW" ] && break
+  done <<<"$(ls -t "$PJ_TRANSCRIPTS_DIR/$KEY"/*.jsonl 2>/dev/null)"
+  TR="$(printf '%s' "$TR_LIST" | head -1)"
+fi
+RULES_MARKER="$( [ -r "$RULES" ] && head -1 "$RULES" | cut -c1-60 || echo "# pj-global RULES.md")"
+if [ "$IN_REPO" -eq 0 ]; then
+  for c in evidence-card evidence-ci-watch evidence-rules evidence-plugins evidence-tokens; do row NOTM "$c" "not in a git repo"; done
+elif [ -z "$TR" ]; then
+  for c in evidence-card evidence-ci-watch evidence-rules evidence-plugins evidence-tokens; do row NOTM "$c" "no interactive pj transcript for this project under $(tilde "$PJ_TRANSCRIPTS_DIR")"; done
+else
+  ev="$(jq -c --arg m "$RULES_MARKER" -s '
+    [ .[] | select(.type=="attachment" and .attachment.type=="hook_success") | (.attachment.stdout // "") ] as $hs
+    | [ .[] | select(.type=="attachment" and .attachment.type=="prompt_snapshot") | ((.attachment.systemPrompt // []) | join("\n")) ] as $snaps
+    | { card: ([ $hs[] | select(startswith("pj start card:")) ] | length),
+        ci:   ([ $hs[] | select(contains("CI watch")) ] | length),
+        snapshots: ($snaps | length),
+        rules: ([ $snaps[] | select(contains($m)) ] | length),
+        first_turn: ([ .[] | select(.type=="assistant") | .message.usage | select(. != null)
+                       | ((.input_tokens // 0) + (.cache_creation_input_tokens // 0) + (.cache_read_input_tokens // 0)) ] | first // 0) }' "$TR" 2>/dev/null)"
+  tid="$(basename "$TR" .jsonl | cut -c1-8)"
+  if [ -z "$ev" ]; then
+    for c in evidence-card evidence-ci-watch evidence-rules evidence-plugins evidence-tokens; do row NOTM "$c" "transcript $tid did not parse"; done
+  else
+    card="$(jq -r .card <<<"$ev")"; ci="$(jq -r .ci <<<"$ev")"; snaps="$(jq -r .snapshots <<<"$ev")"; rules="$(jq -r .rules <<<"$ev")"; ft="$(jq -r .first_turn <<<"$ev")"
+    [ "$card" -eq 1 ] && row PASS evidence-card "transcript $tid: start card once" || row FAIL evidence-card "transcript $tid: start card $card times, expected 1; fix: claude-hooks-sync --target project --check"
+    [ "$ci" -eq 1 ] && row PASS evidence-ci-watch "transcript $tid: CI watch once" || row FAIL evidence-ci-watch "transcript $tid: CI watch $ci times, expected 1; fix: claude-hooks-sync --target project --check"
+    if [ "$snaps" -eq 0 ]; then row NOTM evidence-rules "transcript $tid has no prompt snapshot"
+    elif [ "$rules" -ge 1 ]; then row PASS evidence-rules "transcript $tid: RULES.md header in the prompt snapshot"
+    else row FAIL evidence-rules "transcript $tid: RULES.md NOT in the prompt snapshot; fix: open a new shell (stale alias) and relaunch pj"; fi
+    pmiss=""
+    for m in herdr:herdr AgentRelay:AgentRelay ISA:ISA pj:wrap-up pj-voice:pj-voice; do grep -q -F "$m" "$TR" || pmiss="$pmiss $m"; done
+    [ -z "$pmiss" ] && row PASS evidence-plugins "transcript $tid names all 5 plugins (4 skills + the output style)" || row FAIL evidence-plugins "transcript $tid lacks:$pmiss; fix: check the --plugin-dir flags (alias row)"
+    # E5 tokens: WARN never FAIL (ruled at the P5.7 gate)
+    baseline=""; bsrc=""
+    if [ "$TOPLEVEL" = "$PJ_DOTFILES" ]; then baseline=$DOTFILES_BASELINE; bsrc="header constant"
+    else
+      vals="$(printf '%s' "$TR_LIST" | sed -n "2,$((BASELINE_WINDOW+1))p" | while IFS= read -r f; do [ -f "$f" ] && jq -s '[ .[] | select(.type=="assistant") | .message.usage | select(. != null) | ((.input_tokens // 0) + (.cache_creation_input_tokens // 0) + (.cache_read_input_tokens // 0)) ] | first // empty' "$f" 2>/dev/null; done | sort -n)"
+      nv="$(printf '%s\n' "$vals" | grep -c . || true)"
+      if [ "$nv" -ge "$BASELINE_MIN_TRANSCRIPTS" ]; then baseline="$(printf '%s\n' "$vals" | awk -v n="$nv" 'NR==int((n+1)/2){print; exit}')"; bsrc="median of $nv earlier transcripts"; fi
+    fi
+    if [ "$ft" -le 0 ]; then row NOTM evidence-tokens "transcript $tid has no usage record"
+    elif [ -z "$baseline" ]; then row NOTM evidence-tokens "transcript $tid first turn $ft tokens; baseline needs $BASELINE_MIN_TRANSCRIPTS earlier pj transcripts, found ${nv:-0}"
+    else
+      budget=$(( baseline + baseline * BUDGET_MARGIN_PCT / 100 ))
+      [ "$ft" -le "$budget" ] && row PASS evidence-tokens "transcript $tid first turn $ft tokens, budget $budget ($bsrc $baseline + ${BUDGET_MARGIN_PCT}%)" \
+        || row WARN evidence-tokens "transcript $tid first turn $ft tokens over budget $budget ($bsrc $baseline + ${BUDGET_MARGIN_PCT}%); a long first message is not a wiring fault"
+    fi
+  fi
+fi
+
+# ================================================================== LIVE ==
+if [ "$LIVE" -eq 0 ]; then
+  row NOTM live-probe "not run (--live launches one headless pj probe, an API call)"
+elif [ "$IN_REPO" -eq 0 ]; then
+  row NOTM live-probe "not in a git repo (the probe's transcript is read from the project key)"
+elif [ -n "${PJ_ZSHRC:-}" ]; then
+  row NOTM live-probe "fixture mode (PJ_ZSHRC set): no real launch"
+else
+  prompt='Do exactly two things, in order, then stop. 1. If a SessionStart hook output in your context contains a line beginning with "pj start card:", print that line verbatim; otherwise print NO-CARD. 2. Run this Bash command exactly once, verbatim, no retry, no rewording: DUMMY_TOKEN=abc123; echo "set? ${DUMMY_TOKEN:-no}" . Then print CANARY-DENIED if a hook blocked that tool call, or CANARY-ALLOWED if it ran.'
+  lout="$(timeout 300 zsh -ic 'pj -p "$1" --model haiku --output-format json' _ "$prompt" 2>/dev/null </dev/null)"; lrc=$?
+  res="$(jq -r '.[]? | select(.type=="result") | .result // ""' <<<"$lout" 2>/dev/null)"
+  sid="$(jq -r '.[]? | select(.type=="result") | .session_id // ""' <<<"$lout" 2>/dev/null)"
+  lu="$(jq -r '.[]? | select(.type=="result") | .usage | ((.input_tokens // 0) + (.cache_creation_input_tokens // 0) + (.cache_read_input_tokens // 0))' <<<"$lout" 2>/dev/null)"
+  lt="$PJ_TRANSCRIPTS_DIR/$KEY/$sid.jsonl"
+  if [ $lrc -ne 0 ] || [ -z "$sid" ]; then
+    row NOTM live-probe "pj -p rc $lrc, no result record (launcher or network); nothing to read"
+  else
+    lcard="$( [ -f "$lt" ] && jq -r 'select(.type=="attachment" and .attachment.type=="hook_success") | .attachment.stdout // ""' "$lt" 2>/dev/null | grep -c '^pj start card:' || echo 0)"
+    case "$res" in *CANARY-DENIED*) den=denied;; *CANARY-ALLOWED*) den=ALLOWED;; *) den=unclear;; esac
+    if [ "$lcard" -eq 1 ] && [ "$den" = denied ]; then
+      row PASS live-probe "session ${sid:0:8}: start card once, dummy secret denied; tokens $lu over the probe's turns (haiku -p; not comparable to the interactive baseline, P5.4)"
+    elif [ "$den" = ALLOWED ]; then
+      row FAIL live-probe "session ${sid:0:8}: the dummy secret probe RAN (guard not firing); fix: claude-hooks-sync --target project --check"
+    elif [ "$lcard" -ne 1 ]; then
+      row FAIL live-probe "session ${sid:0:8}: start card $lcard times, expected 1 (deny: $den); fix: claude-hooks-sync --target project --check"
+    else
+      row NOTM live-probe "session ${sid:0:8}: card once but the deny answer was unclear: $(printf '%s' "$res" | tr '\n' ' ' | cut -c1-60)"
+    fi
+  fi
+fi
+
+# =============================================================== SUMMARY ==
+rc=0; [ "$n_fail" -gt 0 ] && rc=1
+summary="pj-health: $n_pass PASS, $n_warn WARN, $n_fail FAIL, $n_notm NOT MEASURED"
+if [ "$JSON" -eq 1 ]; then
+  jq -n --argjson rows "$ROWS_JSON" --arg project "${PROJECT:-}" --argjson pass "$n_pass" --argjson warn "$n_warn" --argjson fail "$n_fail" --argjson notm "$n_notm" --argjson rc "$rc" \
+    '{project:$project, rows:$rows, summary:{pass:$pass,warn:$warn,fail:$fail,not_measured:$notm}, exit:$rc}'
+else
+  echo "$summary"
+fi
+exit $rc

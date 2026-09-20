@@ -1,0 +1,301 @@
+#!/usr/bin/env bash
+# pj-health-selftest -- prove every pj-health arm against a throwaway fixture tree.
+#
+# Every check gets a PASS fixture, at least one FAIL fixture where a FAIL exists, and every
+# NOT MEASURED reason. The live setup is never touched: every path pj-health reads is
+# redirected through its test seams (PJ_HOME, PJ_BIN_DIR, PJ_DOTFILES, PJ_ZSHRC,
+# PJ_TRANSCRIPTS_DIR, PJ_STATE_DIR) and the seams the other tools already honour
+# (PJ_MACHINE_FILE, PJ_PROMPT_SOURCES, PJ_PROMPT_OUT, CLAUDE_PROJECT_SETTINGS_FILE,
+# CLAUDE_HOOKS_MANIFEST). Tools pj-health shells out to are FAKES on a PATH prefix, except
+# pj-prompt-file, which is the real one (it honours its own seams). The no-write arm
+# hashes the fixture tree before and after, with a control that a real write changes it.
+#
+# Fixture paths are `pwd -P` real paths: /tmp is a symlink on macOS and git's toplevel is
+# the real path (P5.2 lesson). Exit 0 all green, 1 otherwise. Nothing under ~ is read.
+set -u
+
+PASS=0; FAIL=0
+ok(){ PASS=$((PASS+1)); }
+bad(){ FAIL=$((FAIL+1)); echo "  FAIL: $*" >&2; }
+arm(){   # arm "label" <shell test...>
+  local label="$1"; shift
+  if "$@"; then ok; else bad "$label"; fi
+}
+
+T="$(mktemp -d "${TMPDIR:-/tmp}/pj-health-selftest.XXXXXX")"; T="$(builtin cd "$T" && pwd -P)"
+mkdir -p "$T/gone"; GN=0
+gone(){ GN=$((GN+1)); command mv "$1" "$T/gone/$GN"; }   # never rm: the Trash wrapper refuses inside a sandbox
+REAL_HEALTH="$(readlink -f "$(command -v pj-health)" 2>/dev/null || command -v pj-health)"
+REAL_PROMPT="$(readlink -f "$(command -v pj-prompt-file)" 2>/dev/null || command -v pj-prompt-file)"
+[ -x "$REAL_HEALTH" ] || { echo "pj-health not on PATH"; exit 1; }
+
+# ----------------------------------------------------------------- fixture ----
+DF="$T/dotfiles"; H="$T/home-claude"; BIN="$T/bin"; STATE="$T/state"; PROJ="$T/proj"
+mkdir -p "$DF/home/.local/bin" "$DF/home/.claude/hooks" "$DF/home/.claude/pj/.claude-plugin" "$DF/home/.claude/pj/skills/wrap-up" "$DF/settings/claude" \
+         "$H/pj-voice/output-styles" "$H/skills/herdr" "$H/skills/AgentRelay" "$H/skills/ISA" "$H/pj/.claude-plugin" "$H/pj/skills/wrap-up" "$H/hooks" \
+         "$H/pj-global/decisions" "$H/pj-global/notes" "$H/LIFEOS/USER/CONFIG" "$H/projects" "$BIN" "$STATE/no-wrap-up" "$PROJ/.claude" "$T/cache" "$T/drawer/items"
+
+fake(){   # fake <path> <body>   an executable that runs <body> with "$@"
+  printf '#!/usr/bin/env bash\n%s\n' "$2" >"$1"; chmod +x "$1"
+}
+TOOLS="pj-prompt-file pj-start-card pj-session-end pj-wrap pj-id open-items decided claude-hooks-sync claude-project-settings-render ci-watch ccw-watch pj-health"
+for t in $TOOLS; do fake "$DF/home/.local/bin/$t" 'exit 0'; done
+cp "$REAL_HEALTH" "$DF/home/.local/bin/pj-health"; cp "$REAL_PROMPT" "$DF/home/.local/bin/pj-prompt-file"; chmod +x "$DF/home/.local/bin/pj-health" "$DF/home/.local/bin/pj-prompt-file"
+fake "$DF/home/.local/bin/open-items" 'case "$1" in --where) cat "$OI_WHERE_FILE" 2>/dev/null; exit 0;; esac; exit 0'
+fake "$DF/home/.local/bin/decided" 'case "$1" in --list) cat "$DECIDED_LIST_FILE"; exit $(cat "$DECIDED_LIST_RC");; --homes) cat "$DECIDED_HOMES_FILE"; exit 0;; esac; exit 0'
+fake "$DF/home/.local/bin/claude-hooks-sync" 'cat "$SYNC_OUT_FILE"; exit 0'
+fake "$DF/home/.local/bin/claude-project-settings-render" 'cat "$RENDER_OUT_FILE"; exit $(cat "$RENDER_RC_FILE")'
+for s in pj-start-card-selftest pj-session-end-selftest pj-wrap-selftest open-items-selftest decided-selftest claude-hooks-sync-selftest claude-project-settings-render-selftest ccw-watch-selftest ci-watch-selftest pj-health-selftest; do
+  fake "$DF/home/.local/bin/$s" 'echo "7 passed, 0 failed"; exit 0'
+done
+fake "$DF/home/.local/bin/pj-id" 'echo "all 9 arms pass"; exit 0'
+for h in enforce-secret-probe.sh enforce-census.sh enforce-herdr-skill.sh mark-herdr-skill-read.sh validate-bash.sh enforce-uv.sh enforce-pnpm.sh; do
+  fake "$DF/home/.claude/hooks/$h" 'echo "ALL ARMS PASS"; exit 0'
+done
+echo '{"name":"pj","version":"0.1.0"}' >"$DF/home/.claude/pj/.claude-plugin/plugin.json"
+printf -- '---\nname: wrap-up\n---\n# wrap-up\n' >"$DF/home/.claude/pj/skills/wrap-up/SKILL.md"
+for t in $TOOLS pj-start-card-selftest pj-session-end-selftest pj-wrap-selftest open-items-selftest decided-selftest claude-hooks-sync-selftest claude-project-settings-render-selftest ccw-watch-selftest ci-watch-selftest pj-health-selftest; do
+  ln -s "$DF/home/.local/bin/$t" "$BIN/$t"
+done
+for h in enforce-secret-probe.sh enforce-census.sh enforce-herdr-skill.sh mark-herdr-skill-read.sh validate-bash.sh enforce-uv.sh enforce-pnpm.sh; do ln -s "$DF/home/.claude/hooks/$h" "$H/hooks/$h"; done
+ln -s "$DF/home/.claude/pj/.claude-plugin/plugin.json" "$H/pj/.claude-plugin/plugin.json"
+ln -s "$DF/home/.claude/pj/skills/wrap-up/SKILL.md" "$H/pj/skills/wrap-up/SKILL.md"
+echo "# style" >"$H/pj-voice/output-styles/pj-voice.md"
+for s in herdr AgentRelay ISA; do echo "# $s" >"$H/skills/$s/SKILL.md"; done
+OR="$H/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md"; RULES="$H/pj-global/RULES.md"
+printf '# OPERATIONAL_RULES.md fixture\n- rule one\n' >"$OR"
+{ echo "# pj-global RULES.md: fixture header line"; for i in $(seq 1 20); do echo "- pinned $i"; done; } >"$RULES"
+echo "- [x](y): z" >"$H/pj-global/notes/INDEX.md"; echo "## D-20260101-01 -- x" >"$H/pj-global/decisions/D-20260101-01-x.md"
+printf 'name: fixture\nrange: 01-49\n' >"$T/machine"
+printf 'project: p\nrepo: r\nended: t\nsession: s1\ntranscript: x\n\nproject: p\nrepo: r\nended: t\nsession: s2\ntranscript: y\n' >"$STATE/no-wrap-up/-tmp-proj"
+ALIAS='alias pj='"'"'__claude_launch claude --setting-sources project,local --settings ~/.claude/settings.project.json --append-system-prompt-file "$(pj-prompt-file)" --plugin-dir ~/.claude/skills/herdr --plugin-dir ~/.claude/skills/AgentRelay --plugin-dir ~/.claude/skills/ISA --plugin-dir ~/.claude/pj-voice --plugin-dir ~/.claude/pj --dangerously-skip-permissions --effort high'"'"
+echo "$ALIAS" >"$T/zshrc"
+cat >"$DF/settings/claude/hooks.json" <<'EOF'
+{"hooks":[
+ {"event":"PreToolUse","matcher":"Bash","script":"enforce-secret-probe.sh","targets":["user","project"],"entry":{"type":"command","command":"$HOME/.claude/hooks/enforce-secret-probe.sh"}},
+ {"event":"PreToolUse","matcher":"Bash","script":"enforce-census.sh","targets":["user","project"],"entry":{"type":"command","command":"$HOME/.claude/hooks/enforce-census.sh"}},
+ {"event":"PreToolUse","matcher":"Grep","script":"enforce-census.sh","targets":["user","project"],"entry":{"type":"command","command":"$HOME/.claude/hooks/enforce-census.sh"}},
+ {"event":"PreToolUse","matcher":"Bash","script":"enforce-herdr-skill.sh","targets":["user","project"],"entry":{"type":"command","command":"$HOME/.claude/hooks/enforce-herdr-skill.sh"}},
+ {"event":"PostToolUse","matcher":"Skill","script":"mark-herdr-skill-read.sh","targets":["user","project"],"entry":{"type":"command","command":"$HOME/.claude/hooks/mark-herdr-skill-read.sh"}},
+ {"event":"SessionStart","script":"ci-watch","script_path":"$HOME/.local/bin/ci-watch","targets":["user","project"],"entry":{"type":"command","command":"test -x \"$HOME/.local/bin/ci-watch\" && \"$HOME/.local/bin/ci-watch\" || true"}},
+ {"event":"SessionStart","script":"pj-start-card","script_path":"$HOME/.local/bin/pj-start-card","targets":["project"],"entry":{"type":"command","command":"test -x \"$HOME/.local/bin/pj-start-card\" && \"$HOME/.local/bin/pj-start-card\" || true"}},
+ {"event":"SessionEnd","script":"pj-session-end","script_path":"$HOME/.local/bin/pj-session-end","targets":["project"],"entry":{"type":"command","command":"test -x \"$HOME/.local/bin/pj-session-end\" && \"$HOME/.local/bin/pj-session-end\" || true"}},
+ {"event":"PreToolUse","matcher":"Bash","script":"validate-bash.sh","targets":["project"],"entry":{"type":"command","command":"test -x \"$HOME/.claude/hooks/validate-bash.sh\" && \"$HOME/.claude/hooks/validate-bash.sh\" || true"}},
+ {"event":"SessionStart","script":"only-user","script_path":"$HOME/.local/bin/nowhere","entry":{"type":"command","command":"$HOME/.local/bin/nowhere"}}
+]}
+EOF
+# settings.project.json: $HOME paths point at the fixture hooks through the PJ_ZSHRC fixture-mode rewrite
+write_settings(){   # write_settings [extra-jq-filter]
+  jq -n '{outputStyle:"pj-voice:pj-voice", hooks:{
+    PreToolUse:[{matcher:"Bash",hooks:[{type:"command",command:"$HOME/.claude/hooks/enforce-secret-probe.sh"},{type:"command",command:"$HOME/.claude/hooks/enforce-census.sh"},{type:"command",command:"$HOME/.claude/hooks/enforce-herdr-skill.sh"},{type:"command",command:"test -x \"$HOME/.claude/hooks/validate-bash.sh\" && \"$HOME/.claude/hooks/validate-bash.sh\" || true"}]},{matcher:"Grep",hooks:[{type:"command",command:"$HOME/.claude/hooks/enforce-census.sh"}]}],
+    PostToolUse:[{matcher:"Skill",hooks:[{type:"command",command:"$HOME/.claude/hooks/mark-herdr-skill-read.sh"}]}],
+    SessionStart:[{hooks:[{type:"command",command:"test -x \"$HOME/.local/bin/ci-watch\" && \"$HOME/.local/bin/ci-watch\" || true"},{type:"command",command:"test -x \"$HOME/.local/bin/pj-start-card\" && \"$HOME/.local/bin/pj-start-card\" || true"}]}],
+    SessionEnd:[{hooks:[{type:"command",command:"test -x \"$HOME/.local/bin/pj-session-end\" && \"$HOME/.local/bin/pj-session-end\" || true"}]}]}}' \
+  | jq "${1:-.}" >"$H/settings.project.json"
+}
+write_settings
+# project repo
+git -C "$PROJ" init -q 2>/dev/null; git -C "$PROJ" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init 2>/dev/null
+TOP="$(git -C "$PROJ" rev-parse --show-toplevel)"; KEY="$(printf '%s' "$TOP" | sed 's#[/._]#-#g')"
+mkdir -p "$H/projects/$KEY"
+printf 'records: private\nhandoff: drawer:OPENING-PROMPT.md\ndecisions: drawer:decisions/\ntracker: repo:TRACK.md\n' >"$PROJ/.claude/pj-homes"
+echo "# track" >"$PROJ/TRACK.md"; mkdir -p "$T/drawer/decisions"
+echo '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/local.sh"}]}]}}' >"$PROJ/.claude/settings.json"
+echo "$T/drawer/OPEN.md" >"$T/oi-where"
+echo "# view" >"$T/drawer/OPEN.md"; shasum -a 256 "$T/drawer/OPEN.md" | cut -d' ' -f1 >"$T/drawer/items/.generated.sha256"
+echo "decided: 1 decision(s) searched (machine-wide 1)." >"$T/decided-list"; echo 0 >"$T/decided-list-rc"
+printf 'machine-wide   folder   ~/x/decisions   (~/x)\nproject (drawer:decisions)   folder   ~/y   (declared in .claude/pj-homes)\n' >"$T/decided-homes"
+printf '  + pj settings: already current.\n' >"$T/render-out"; echo 0 >"$T/render-rc"
+printf '! claude-hooks-sync: x is not writable from here.\n' >"$T/sync-out"
+# transcripts: newest a (interactive), then b, c, d (baseline window), plus e (sdk-cli, newest of all, must be skipped)
+mk_transcript(){   # mk_transcript <file> <first_turn_tokens> [card_n] [ci_n] [rules 0|1] [plugins 0|1] [entrypoint] [snapshot 0|1]
+  local f="$1" tok="$2" card="${3:-1}" ci="${4:-1}" rules="${5:-1}" plug="${6:-1}" ep="${7:-cli}" snap="${8:-1}"
+  local marker; marker="$(head -1 "$RULES" | cut -c1-60)"; [ "$rules" -eq 1 ] || marker="no rules here"
+  {
+    echo "{\"type\":\"user\",\"entrypoint\":\"$ep\",\"message\":{\"role\":\"user\",\"content\":\"hello\"}}"
+    [ "$plug" -eq 1 ] && echo '{"type":"attachment","attachment":{"type":"skill_listing","text":"herdr:herdr AgentRelay:AgentRelay ISA:ISA pj:wrap-up"}}'
+    for i in $(seq 1 "$card"); do echo '{"type":"attachment","attachment":{"type":"hook_success","hookName":"SessionStart:startup","stdout":"pj start card: proj\nOpen items: 0\n"}}'; done
+    for i in $(seq 1 "$ci"); do echo '{"type":"attachment","attachment":{"type":"hook_success","hookName":"SessionStart:startup","stdout":"CI watch (live)\n"}}'; done
+    echo '{"type":"attachment","attachment":{"type":"output_style","style":"pj-voice:pj-voice"}}'
+    [ "$snap" -eq 1 ] && jq -nc --arg m "$marker" '{type:"attachment",attachment:{type:"prompt_snapshot",systemPrompt:["harness","# OPERATIONAL_RULES.md\n- rule one\n"+$m+"\n- pinned 1"]}}'
+    jq -nc --argjson t "$tok" '{type:"assistant",message:{usage:{input_tokens:2,cache_creation_input_tokens:$t,cache_read_input_tokens:0,output_tokens:10}}}'
+  } >"$f"
+}
+mk_transcript "$H/projects/$KEY/d.jsonl" 50000; sleep 0.01
+mk_transcript "$H/projects/$KEY/c.jsonl" 52000; sleep 0.01
+mk_transcript "$H/projects/$KEY/b.jsonl" 54000; sleep 0.01
+mk_transcript "$H/projects/$KEY/a.jsonl" 55000; sleep 0.01
+mk_transcript "$H/projects/$KEY/e.jsonl" 999999 1 1 1 1 sdk-cli   # -p probe: newest, must be skipped
+
+# ------------------------------------------------------------------ runner ----
+OUT=""
+run(){   # run [dir] [args...]  -> OUT holds the JSON; RC the exit code
+  local dir="${1:-$PROJ}"; shift || true
+  OUT="$( (builtin cd "$dir" && PATH="$BIN:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" PJ_HOME="$H" PJ_BIN_DIR="$BIN" PJ_DOTFILES="$DF" PJ_ZSHRC="$T/zshrc" PJ_TRANSCRIPTS_DIR="$H/projects" PJ_STATE_DIR="$STATE" \
+      PJ_MACHINE_FILE="$T/machine" PJ_PROMPT_SOURCES="$OR:$RULES" PJ_PROMPT_OUT="$T/cache/prompt.md" \
+      OI_WHERE_FILE="$T/oi-where" DECIDED_LIST_FILE="$T/decided-list" DECIDED_LIST_RC="$T/decided-list-rc" DECIDED_HOMES_FILE="$T/decided-homes" \
+      RENDER_OUT_FILE="$T/render-out" RENDER_RC_FILE="$T/render-rc" SYNC_OUT_FILE="$T/sync-out" \
+      pj-health --json "$@" 2>"$T/stderr") )"; RC=$?
+}
+st(){ jq -r --arg n "$1" '.rows[] | select(.name==$n) | .state' <<<"$OUT"; }
+dt(){ jq -r --arg n "$1" '.rows[] | select(.name==$n) | .detail' <<<"$OUT"; }
+has(){ case "$(dt "$1")" in *"$2"*) return 0;; *) return 1;; esac; }
+is(){ [ "$(st "$1")" = "$2" ]; }
+NM="NOT MEASURED"
+
+# ------------------------------------------------------------------- arms ----
+echo "pj-health-selftest: fixture $T"
+# 0. baseline: all PASS except the live row
+run
+arm "baseline parses as JSON" jq -e '.rows|length>0' <<<"$OUT" >/dev/null
+for n in alias output-style plugin-dirs prompt-file rules-cap settings-render hooks-sync hook-orphans hook-single-fire stow-links machine-file pj-global no-wrap-up selftests pj-homes drawer decided-store evidence-card evidence-ci-watch evidence-rules evidence-plugins evidence-tokens; do
+  arm "baseline $n PASS (got $(st "$n"): $(dt "$n" | cut -c1-80))" is "$n" PASS
+done
+arm "baseline live-probe NOT MEASURED without --live" is live-probe "$NM"
+arm "baseline exit 0" [ "$RC" -eq 0 ]
+arm "hooks-sync notes the sandbox refusal" has hooks-sync "refused --check"
+arm "no-wrap-up counts 1 project 2 records" has no-wrap-up "1 project(s) with unwrapped sessions, 2 record(s)"
+arm "evidence-tokens used the median of 3 earlier transcripts" has evidence-tokens "median of 3 earlier transcripts 52002"
+arm "evidence picked a.jsonl not the sdk-cli probe" has evidence-card "transcript a:"
+arm "selftests present, not run" has selftests "not run"
+
+# 1. alias
+sed 's/ --plugin-dir ~\/.claude\/pj / /' "$T/zshrc" >"$T/zshrc.bad"; cp "$T/zshrc" "$T/zshrc.ok"; cp "$T/zshrc.bad" "$T/zshrc"; run
+arm "alias FAIL when a plugin-dir is missing" is alias FAIL; arm "alias FAIL names the dir" has alias "plugin-dir ~/.claude/pj]"
+: >"$T/zshrc"; run; arm "alias NOT MEASURED when no alias line" is alias "$NM"; cp "$T/zshrc.ok" "$T/zshrc"
+
+# 2. output style
+write_settings '.outputStyle="default"'; run; arm "output-style FAIL on wrong style" is output-style FAIL; write_settings
+mv "$H/pj-voice/output-styles/pj-voice.md" "$T/style.bak"; run; arm "output-style FAIL when the style file is missing" is output-style FAIL; mv "$T/style.bak" "$H/pj-voice/output-styles/pj-voice.md"
+mv "$H/settings.project.json" "$T/sp.bak"; run; arm "output-style NOT MEASURED when settings file absent" is output-style "$NM"; arm "hooks-sync NOT MEASURED when settings file absent" is hooks-sync "$NM"; arm "hook-orphans NOT MEASURED when settings file absent" is hook-orphans "$NM"; mv "$T/sp.bak" "$H/settings.project.json"
+
+# 3. plugin dirs
+mv "$H/skills/ISA/SKILL.md" "$T/isa.bak"; run; arm "plugin-dirs FAIL on an empty plugin dir" is plugin-dirs FAIL; arm "plugin-dirs names it" has plugin-dirs "skills/ISA"; mv "$T/isa.bak" "$H/skills/ISA/SKILL.md"
+
+# 4. prompt file
+mv "$OR" "$T/or.bak"; run; arm "prompt-file NOT MEASURED when a source is missing" is prompt-file "$NM"; arm "rules-cap still PASS" is rules-cap PASS; mv "$T/or.bak" "$OR"
+fake "$DF/home/.local/bin/pj-prompt-file" 'printf "%s" "${PJ_PROMPT_SOURCES%%:*}"'; run; arm "prompt-file NOT MEASURED on the fallback-to-source path" is prompt-file "$NM"
+fake "$DF/home/.local/bin/pj-prompt-file" 'echo wrong >"$PJ_PROMPT_OUT"; echo "$PJ_PROMPT_OUT"'; run; arm "prompt-file FAIL when the cache differs" is prompt-file FAIL
+cp "$REAL_PROMPT" "$DF/home/.local/bin/pj-prompt-file"; chmod +x "$DF/home/.local/bin/pj-prompt-file"
+
+# 5. rules cap
+cp "$RULES" "$T/rules.bak"; for i in $(seq 1 45); do echo "- extra $i"; done >>"$RULES"; run; arm "rules-cap FAIL over 60 lines" is rules-cap FAIL; cp "$T/rules.bak" "$RULES"
+mv "$RULES" "$T/rules.bak"; run; arm "rules-cap NOT MEASURED when absent" is rules-cap "$NM"; mv "$T/rules.bak" "$RULES"
+
+# 6. settings render
+echo 1 >"$T/render-rc"; echo "drift: env.X" >"$T/render-out"; run; arm "settings-render FAIL on drift" is settings-render FAIL; arm "settings-render FAIL quotes the fix" has settings-render "--install"; echo 0 >"$T/render-rc"
+gone "$BIN/claude-project-settings-render"; run; arm "settings-render NOT MEASURED when the tool is absent" is settings-render "$NM"; ln -s "$DF/home/.local/bin/claude-project-settings-render" "$BIN/claude-project-settings-render"
+
+# 7. hooks sync
+write_settings 'del(.hooks.SessionEnd)'; run; arm "hooks-sync FAIL when a project entry is unregistered" is hooks-sync FAIL; arm "hooks-sync names the entry" has hooks-sync "pj-session-end (SessionEnd)"; write_settings
+run; arm "hooks-sync ignores a user-only entry (baseline again)" is hooks-sync PASS
+mv "$DF/settings/claude/hooks.json" "$T/m.bak"; run; arm "hooks-sync NOT MEASURED when the manifest is unreadable" is hooks-sync "$NM"; mv "$T/m.bak" "$DF/settings/claude/hooks.json"
+
+# 8. orphans
+write_settings '.hooks.PreToolUse[0].hooks += [{type:"command",command:"test -x \"$HOME/.claude/hooks/gone.sh\" && \"$HOME/.claude/hooks/gone.sh\" || true"}]'; run
+arm "hook-orphans FAIL on a command whose script is gone" is hook-orphans FAIL; arm "hook-orphans names it" has hook-orphans "gone.sh"; arm "hook-orphans prints a jq del line" has hook-orphans "jq '(.hooks.\"PreToolUse\"[].hooks) |= map(select(.command != "
+arm "hook-orphans did not remove it (read-only)" jq -e '[.hooks.PreToolUse[0].hooks[].command] | index("test -x \"$HOME/.claude/hooks/gone.sh\" && \"$HOME/.claude/hooks/gone.sh\" || true")' "$H/settings.project.json" >/dev/null
+write_settings
+
+# 9. single fire
+echo '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"$HOME/.claude/hooks/enforce-census.sh"}]}]}}' >"$PROJ/.claude/settings.json"; run
+arm "hook-single-fire FAIL on a command in both files" is hook-single-fire FAIL; arm "hook-single-fire names it" has hook-single-fire "enforce-census.sh"
+mv "$PROJ/.claude/settings.json" "$T/ps.bak"; run; arm "hook-single-fire NOT MEASURED without a project settings file" is hook-single-fire "$NM"
+echo '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/local.sh"}]}]}}' >"$PROJ/.claude/settings.json"
+
+# 10. stow links
+gone "$BIN/pj-wrap"; run; arm "stow-links FAIL on an absent tool link" is stow-links FAIL; arm "stow-links names it" has stow-links "pj-wrap(absent)"; ln -s "$DF/home/.local/bin/pj-wrap" "$BIN/pj-wrap"
+gone "$BIN/pj-id"; echo x >"$BIN/pj-id"; chmod +x "$BIN/pj-id"; run; arm "stow-links FAIL on a real file where a link belongs" has stow-links "pj-id(real file)"; gone "$BIN/pj-id"; ln -s "$DF/home/.local/bin/pj-id" "$BIN/pj-id"
+gone "$H/hooks/validate-bash.sh"; ln -s "$T/nowhere" "$H/hooks/validate-bash.sh"; run; arm "stow-links FAIL on a dangling hook link" has stow-links "hooks/validate-bash.sh"; gone "$H/hooks/validate-bash.sh"; ln -s "$DF/home/.claude/hooks/validate-bash.sh" "$H/hooks/validate-bash.sh"
+run; arm "stow-links PASS restored" is stow-links PASS
+mkdir -p "$T/empty"; DF_SAVE="$DF"; DF="$T/empty"; run; arm "stow-links NOT MEASURED without a dotfiles checkout" is stow-links "$NM"; DF="$DF_SAVE"
+
+# 11. machine file
+printf 'name: x\nrange: 10-20\n' >"$T/machine"; run; arm "machine-file FAIL on a bad range" is machine-file FAIL
+printf 'range: 50-99\n' >"$T/machine"; run; arm "machine-file FAIL without a name" is machine-file FAIL
+mv "$T/machine" "$T/machine.bak"; run; arm "machine-file NOT MEASURED when absent" is machine-file "$NM"; arm "machine-file absent says default range" has machine-file "default range 01-49"; mv "$T/machine.bak" "$T/machine"; printf 'name: fixture\nrange: 01-49\n' >"$T/machine"
+
+# 12. pj-global
+mv "$H/pj-global/notes/INDEX.md" "$T/idx.bak"; run; arm "pj-global FAIL when INDEX.md is missing" is pj-global FAIL; mv "$T/idx.bak" "$H/pj-global/notes/INDEX.md"
+echo 2 >"$T/decided-list-rc"; echo "decided: REFUSED" >"$T/decided-list"; run; arm "pj-global FAIL when decided refuses outside a repo" is pj-global FAIL
+echo 0 >"$T/decided-list-rc"; echo "decided: 1 decision(s) searched (machine-wide 1)." >"$T/decided-list"
+gone "$BIN/decided"; run; arm "pj-global NOT MEASURED when decided is absent" is pj-global "$NM"; arm "decided-store NOT MEASURED when decided is absent" is decided-store "$NM"; ln -s "$DF/home/.local/bin/decided" "$BIN/decided"
+
+# 13. no-wrap-up
+mv "$STATE/no-wrap-up" "$T/nw.bak"; run; arm "no-wrap-up PASS with 0 when the folder does not exist" has no-wrap-up "0 projects"; mv "$T/nw.bak" "$STATE/no-wrap-up"
+
+# 14. selftests
+gone "$BIN/decided-selftest"; run; arm "selftests FAIL when one is missing" is selftests FAIL; arm "selftests names it" has selftests "decided-selftest"; ln -s "$DF/home/.local/bin/decided-selftest" "$BIN/decided-selftest"
+run "$PROJ" --full; arm "--full runs them all PASS" is selftests PASS; arm "--full quotes a pass count" has selftests "7 passed, 0 failed"; arm "--full quotes the hook selftests" has selftests "validate-bash.sh: ALL ARMS PASS"
+fake "$DF/home/.local/bin/pj-wrap-selftest" 'echo "3 passed, 1 failed"; exit 1'; run "$PROJ" --full; arm "--full FAIL when one selftest fails" is selftests FAIL; arm "--full names the failing one" has selftests "pj-wrap-selftest (rc 1"
+fake "$DF/home/.local/bin/pj-wrap-selftest" 'echo "7 passed, 0 failed"; exit 0'
+
+# P1 pj-homes
+cp "$PROJ/.claude/pj-homes" "$T/ph.bak"
+echo "bogus: 1" >>"$PROJ/.claude/pj-homes"; run; arm "pj-homes FAIL on an unknown key" is pj-homes FAIL; cp "$T/ph.bak" "$PROJ/.claude/pj-homes"
+sed -i.bak 's/^records: private/records: shared/' "$PROJ/.claude/pj-homes"; run; arm "pj-homes FAIL on a bad records value" is pj-homes FAIL; cp "$T/ph.bak" "$PROJ/.claude/pj-homes"
+mv "$PROJ/TRACK.md" "$T/track.bak"; run; arm "pj-homes FAIL when a declared tracker is missing" is pj-homes FAIL; arm "pj-homes names the key" has pj-homes "tracker"; mv "$T/track.bak" "$PROJ/TRACK.md"
+echo "plans: elsewhere:x" >>"$PROJ/.claude/pj-homes"; run; arm "pj-homes WARN on an unresolvable marker" is pj-homes WARN; cp "$T/ph.bak" "$PROJ/.claude/pj-homes"
+mv "$PROJ/.claude/pj-homes" "$T/ph2.bak"; run; arm "pj-homes NOT MEASURED without the file" is pj-homes "$NM"; arm "pj-homes absent says defaults" has pj-homes "defaults in use"; mv "$T/ph2.bak" "$PROJ/.claude/pj-homes"
+run; arm "pj-homes handoff missing is still PASS" is pj-homes PASS
+
+# P2 drawer
+echo "# edited by hand" >>"$T/drawer/OPEN.md"; run; arm "drawer WARN on a stamp mismatch" is drawer WARN; arm "drawer WARN says regen" has drawer "regen"
+echo "# view" >"$T/drawer/OPEN.md"; shasum -a 256 "$T/drawer/OPEN.md" | cut -d' ' -f1 >"$T/drawer/items/.generated.sha256"
+mv "$T/drawer/items" "$T/items.bak"; run; arm "drawer WARN on the legacy layout" is drawer WARN; arm "drawer legacy says migrate" has drawer "migrate"
+mv "$T/drawer/OPEN.md" "$T/open.bak"; run; arm "drawer NOT MEASURED with no drawer" is drawer "$NM"; arm "drawer absent says init" has drawer "open-items init"
+mv "$T/open.bak" "$T/drawer/OPEN.md"; mv "$T/items.bak" "$T/drawer/items"
+: >"$T/oi-where"; run; arm "drawer FAIL when open-items --where prints nothing" is drawer FAIL; echo "$T/drawer/OPEN.md" >"$T/oi-where"
+
+# P3 decided store
+printf 'machine-wide   folder   ~/x   (~/x)\nproject (repo:docs/decisions)   missing   ~/y/docs/decisions   (no .claude/pj-homes, default repo:docs/decisions/)\n' >"$T/decided-homes"; run
+arm "decided-store NOT MEASURED when the store is missing" is decided-store "$NM"; arm "decided-store missing quotes the reason" has decided-store "no .claude/pj-homes"
+printf 'machine-wide   folder   ~/x   (~/x)\nproject (repo:common/x.md)   unsupported   ~/y   (declared)\n' >"$T/decided-homes"; run; arm "decided-store FAIL on an unsupported format" is decided-store FAIL
+printf 'machine-wide   folder   ~/x   (~/x)\nproject (drawer:decisions)   folder   ~/y   (declared in .claude/pj-homes)\n' >"$T/decided-homes"
+
+# E1..E5 evidence
+mk_transcript "$H/projects/$KEY/a.jsonl" 55000 2; run; arm "evidence-card FAIL when the card printed twice" is evidence-card FAIL
+mk_transcript "$H/projects/$KEY/a.jsonl" 55000 1 0; run; arm "evidence-ci-watch FAIL when CI watch never printed" is evidence-ci-watch FAIL
+mk_transcript "$H/projects/$KEY/a.jsonl" 55000 1 1 0; run; arm "evidence-rules FAIL when RULES.md is not in the snapshot" is evidence-rules FAIL; arm "evidence-rules FAIL names the stale-shell fix" has evidence-rules "new shell"
+mk_transcript "$H/projects/$KEY/a.jsonl" 55000 1 1 1 1 cli 0; run; arm "evidence-rules NOT MEASURED without a prompt snapshot" is evidence-rules "$NM"
+mk_transcript "$H/projects/$KEY/a.jsonl" 55000 1 1 1 0; run; arm "evidence-plugins FAIL when a plugin name is absent" is evidence-plugins FAIL; arm "evidence-plugins names the missing ones" has evidence-plugins "herdr:herdr"
+mk_transcript "$H/projects/$KEY/a.jsonl" 70000; run; arm "evidence-tokens WARN over budget (never FAIL)" is evidence-tokens WARN; arm "evidence-tokens WARN says not a wiring fault" has evidence-tokens "not a wiring fault"
+mk_transcript "$H/projects/$KEY/a.jsonl" 55000
+mv "$H/projects/$KEY/d.jsonl" "$T/d.bak"; run; arm "evidence-tokens NOT MEASURED with fewer than 3 earlier transcripts" is evidence-tokens "$NM"; arm "evidence-tokens says how many were found" has evidence-tokens "found 2"; mv "$T/d.bak" "$H/projects/$KEY/d.jsonl"
+mv "$H/projects/$KEY" "$T/tr.bak"; run; for n in evidence-card evidence-ci-watch evidence-rules evidence-plugins evidence-tokens; do arm "$n NOT MEASURED with no transcript" is "$n" "$NM"; done; mv "$T/tr.bak" "$H/projects/$KEY"
+# header-constant budget: the dotfiles checkout itself as the project
+git -C "$DF" init -q 2>/dev/null; git -C "$DF" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init 2>/dev/null
+DKEY="$(git -C "$DF" rev-parse --show-toplevel | sed 's#[/._]#-#g')"; mkdir -p "$H/projects/$DKEY"
+mk_transcript "$H/projects/$DKEY/a.jsonl" 75000; run "$DF"; arm "evidence-tokens PASS under the header budget in the dotfiles repo" is evidence-tokens PASS; arm "evidence-tokens quotes the header constant" has evidence-tokens "header constant 70000"
+mk_transcript "$H/projects/$DKEY/a.jsonl" 90000; run "$DF"; arm "evidence-tokens WARN over the header budget" is evidence-tokens WARN
+
+# L1 live
+run "$PROJ" --live; arm "--live in fixture mode is NOT MEASURED, never a launch" is live-probe "$NM"; arm "--live fixture reason names the seam" has live-probe "PJ_ZSHRC"
+
+# outside any repo
+run "$T"; arm "outside a repo: pj-homes NOT MEASURED" is pj-homes "$NM"; arm "outside a repo: reason" has pj-homes "not in a git repo"; arm "outside a repo: hook-single-fire NOT MEASURED" is hook-single-fire "$NM"; arm "outside a repo: evidence NOT MEASURED" is evidence-card "$NM"; arm "outside a repo: machine checks still PASS" is alias PASS; arm "outside a repo: project field empty" [ "$(jq -r .project <<<"$OUT")" = "" ]
+
+# output shape, exit codes, quiet, line cap
+run; arm "exit 0 when no FAIL" [ "$RC" -eq 0 ]
+arm "json exit field 0" [ "$(jq -r .exit <<<"$OUT")" = 0 ]
+write_settings '.outputStyle="default"'; run; arm "exit 1 with a FAIL" [ "$RC" -eq 1 ]; arm "json exit field 1" [ "$(jq -r .exit <<<"$OUT")" = 1 ]
+QOUT="$( (builtin cd "$PROJ" && PATH="$BIN:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" PJ_HOME="$H" PJ_BIN_DIR="$BIN" PJ_DOTFILES="$DF" PJ_ZSHRC="$T/zshrc" PJ_TRANSCRIPTS_DIR="$H/projects" PJ_STATE_DIR="$STATE" PJ_MACHINE_FILE="$T/machine" PJ_PROMPT_SOURCES="$OR:$RULES" PJ_PROMPT_OUT="$T/cache/prompt.md" OI_WHERE_FILE="$T/oi-where" DECIDED_LIST_FILE="$T/decided-list" DECIDED_LIST_RC="$T/decided-list-rc" DECIDED_HOMES_FILE="$T/decided-homes" RENDER_OUT_FILE="$T/render-out" RENDER_RC_FILE="$T/render-rc" SYNC_OUT_FILE="$T/sync-out" pj-health --quiet 2>/dev/null) )"
+arm "--quiet prints the FAIL row" grep -q '^FAIL  *output-style' <<<"$QOUT"
+arm "--quiet prints the NOT MEASURED row" grep -q '^NOT MEASURED live-probe' <<<"$QOUT"
+arm "--quiet hides PASS rows" bash -c '! grep -q "^PASS" <<<"$1"' _ "$QOUT"
+arm "--quiet keeps the summary line" grep -q '^pj-health: .* FAIL, ' <<<"$QOUT"
+write_settings
+FOUT="$( (builtin cd "$PROJ" && PATH="$BIN:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" PJ_HOME="$H" PJ_BIN_DIR="$BIN" PJ_DOTFILES="$DF" PJ_ZSHRC="$T/zshrc" PJ_TRANSCRIPTS_DIR="$H/projects" PJ_STATE_DIR="$STATE" PJ_MACHINE_FILE="$T/machine" PJ_PROMPT_SOURCES="$OR:$RULES" PJ_PROMPT_OUT="$T/cache/prompt.md" OI_WHERE_FILE="$T/oi-where" DECIDED_LIST_FILE="$T/decided-list" DECIDED_LIST_RC="$T/decided-list-rc" DECIDED_HOMES_FILE="$T/decided-homes" RENDER_OUT_FILE="$T/render-out" RENDER_RC_FILE="$T/render-rc" SYNC_OUT_FILE="$T/sync-out" pj-health 2>/dev/null) )"
+arm "normal output under 40 lines ($(wc -l <<<"$FOUT" | tr -d ' '))" [ "$(wc -l <<<"$FOUT" | tr -d ' ')" -lt 40 ]
+arm "normal output has one row per check (23)" [ "$(grep -cE '^(PASS|WARN|FAIL|NOT MEASURED) ' <<<"$FOUT")" -eq 23 ]
+arm "unknown arg REFUSED rc 2" bash -c 'PATH="$1:$PATH" pj-health --bogus >/dev/null 2>&1; [ $? -eq 2 ]' _ "$BIN"
+arm "--help exits 0" bash -c 'PATH="$1:$PATH" pj-health --help >/dev/null 2>&1' _ "$BIN"
+
+# no-write arm, with a control that a real write changes the hash
+tree_hash(){ (builtin cd "$T" && find . -type f -not -path './stderr' -not -path './cache/*' -not -path './gone/*' -print0 | sort -z | xargs -0 shasum -a 256 | shasum -a 256 | cut -c1-16); }
+before="$(tree_hash)"; run; run "$PROJ" --full; run "$T"; after="$(tree_hash)"
+arm "pj-health wrote nothing into the fixture tree ($before)" [ "$before" = "$after" ]
+echo control >"$T/proj/control.txt"; ctl="$(tree_hash)"; arm "control: a real write changes the tree hash" [ "$ctl" != "$after" ]
+
+echo "pj-health-selftest: $PASS passed, $FAIL failed   (fixtures: $T)"
+[ "$FAIL" -eq 0 ]
