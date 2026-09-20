@@ -29,6 +29,18 @@
     "existing hooks back before it writes, so a re-render cannot drop them -- but a",
     "hooks key in this template would fight that mechanism and win silently.",
     "",
+    "WHY verbose IS HERE. --setting-sources project,local means ~/.claude/settings.json",
+    "is never read, so every key it holds is dropped unless this file restores it.",
+    "verbose:true lives there, and its absence is why a pj footer shows no token count",
+    "while a `c` footer does. Proven 2026-09-20 in one throwaway pane, same alias, one",
+    "flag changed: `pj --verbose` rendered \"0 tokens\", plain `pj` rendered it nowhere",
+    "in any of the pane's 19 content rows. The indicators are a STACK, not a list, so",
+    "the missing slot closes up and \"high · /effort\" moves up a row -- which is why",
+    "this read as a DIFFERENT item rather than a missing one.",
+    "",
+    "48 OTHER user keys are still dropped this way, theme:dark-daltonized among them.",
+    "Restoring them one at a time is the failure mode; see the open item for the audit.",
+    "",
     "Top-level keys beginning with _ are stripped at render time; this note is one."
   ],
   "cleanupPeriodDays": 1825,
@@ -103,5 +115,6 @@
     }
   },
   "disableClaudeAiConnectors": true,
-  "outputStyle": "pj-voice:pj-voice"
+  "outputStyle": "pj-voice:pj-voice",
+  "verbose": true
 }
