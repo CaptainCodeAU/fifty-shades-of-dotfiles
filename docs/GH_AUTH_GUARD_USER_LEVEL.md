@@ -34,15 +34,22 @@ Related pieces (all tracked in the dotfiles repo):
   of scope. Do not count it as a control when reasoning about token exposure in
   captured sessions.
 
-  **AND NOBODY HAS MEASURED WHAT, IF ANYTHING, REPLACED IT.** Capture now belongs
-  to the `cc-capture@cc-warehouse` plugin (verified live 2026-09-20: enabled in
-  user-level settings, binary at `~/.local/bin/cc-warehouse`, its own `hooks.json`
-  declares `SessionStart` and `SessionEnd`). Whether that plugin redacts anything
-  of its own has NOT been checked, in either direction. Stated here rather than
-  left silent, because "the old control is gone" and "the archive is unscrubbed"
-  are different claims and only the first one is measured. Tracked as
-  `W-20260920-04` (`open-items`), where the three honest outcomes are written out;
-  doing nothing on purpose is one of them.
+  **WHAT REPLACED IT, MEASURED 2026-09-20.** Capture belongs to the
+  `cc-capture@cc-warehouse` plugin (enabled in user-level settings, binary at
+  `~/.local/bin/cc-warehouse`, its own `hooks.json` declares `SessionStart` and
+  `SessionEnd`). Its posture is deliberately different from the retired hook's,
+  and better at the point that matters:
+
+  | Path                                                                | What happens to a secret                                                                                                                                                 |
+  | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+  | Capture and archive (`cc-capture` hook, `capture.py`, `archive.py`) | **Nothing. Stored at full fidelity, on purpose (their R4).** Zero redaction terms in that whole path, against a control confirming those files exist and are substantial |
+  | `ccw share` (the one outward-facing command)                        | Sanitizes **copies** at share time, on the json-decoded content so an escaped or non-ASCII secret cannot slip past                                                       |
+  | A secret-shaped string inside a share                               | **Detected, never auto-redacted: the share ABORTS** unless `--allow-findings`, because mangling a token inside a conversation _about_ tokens would corrupt real content  |
+
+  So the local archive is intentionally unscrubbed, and the boundary where a secret
+  could actually escape refuses to publish rather than silently rewriting. The
+  retired hook scrubbed on the way IN, which is the weaker place to do it. Full
+  reasoning in `W-20260920-04` (`open-items`).
 
 - Token lives in macOS Keychain item `github-api-readonly` (fine-grained,
   read-only, no `Contents`/source).

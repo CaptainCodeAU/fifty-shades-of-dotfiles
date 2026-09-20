@@ -344,7 +344,7 @@ Deleted in `cca4a6f`. It ran on `SessionEnd`, read `transcript_path` from stdin 
 
 It also scrubbed `github_pat_`/`gh[posru]_` patterns out of the files it wrote. **That scrubbing went with it**, so do not cite it as a control anywhere; `docs/GH_AUTH_GUARD_USER_LEVEL.md` used to and has been corrected.
 
-**Whether cc-capture redacts anything of its own has NOT been measured, in either direction** (as of 2026-09-20). "The old control is gone" and "the archive is unscrubbed" are different claims, and only the first is measured. Tracked as `W-20260920-04` (`open-items`); do not build a replacement before taking that measurement, and do not assume one is needed.
+**Measured 2026-09-20: cc-capture does NOT scrub on the way in, by design, and does not need to.** Zero redaction terms anywhere in its capture path (`cc-capture` hook, `capture.py`, `archive.py`), against a control confirming those files exist and are substantial. The archive is kept at full fidelity on purpose (their R4). Redaction lives in `ccw share`, the one outward-facing command, where it runs on copies and where a secret-shaped string **aborts the share** rather than being silently rewritten. Do not add scrubbing to the capture path: it would corrupt the archive to no benefit, since the retired hook scrubbed at the weaker end. See `W-20260920-04` (`open-items`).
 
 ### PostToolUse prettier (inline)
 
