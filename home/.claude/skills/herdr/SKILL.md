@@ -77,7 +77,14 @@ Herdr injects the caller's context into each managed pane:
 printf '%s\n' "$HERDR_WORKSPACE_ID" "$HERDR_TAB_ID" "$HERDR_PANE_ID"
 ```
 
-Prefer `--current` when a pane command should target the calling pane. Omitting a target may use the UI-focused pane, which can belong to the user or another client.
+**Only three `pane` subcommands accept a target FLAG at all.** For those three, prefer `--current` when the target is the calling pane, because omitting a target may use the UI-focused pane, which can belong to the user or another client. Every other `pane` subcommand takes the pane id as a BARE POSITIONAL argument and rejects both flags with `unknown option` and exit 2. Measured 2026-09-20 against herdr 0.8.2 by reading each subcommand's `--help`:
+
+| subcommand                                                                               | how to name the target                                              |
+| ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `pane layout`, `pane current`, `pane split`                                              | `--current` or `--pane <id>` (`split` also accepts a positional id) |
+| `pane read`, `pane run`, `pane send-keys`, `pane wait-output`, `pane close`, `pane move` | positional `<PANE_ID>` only                                         |
+
+So the calling pane is `herdr pane read "$HERDR_PANE_ID"`, NOT `herdr pane read --current`. This split is written out rather than left to "prefer" because an earlier version of this line said only "prefer `--current`", and a session reading it spent two round trips on `--pane` then `--current` before running `pane read --help` (2026-09-20). A rejected flag prints one short line with no usage block, so it reads like a Herdr fault rather than the syntax error it is.
 
 Discover live state with:
 
@@ -271,7 +278,7 @@ If a stale title/label needs correcting without renaming, rebuild the display va
 - Parse IDs from JSON responses. Do not derive them from sidebar order or examples.
 - Do not close workspaces, tabs, panes, or sessions you did not create unless the user explicitly asked.
 - Never close a pane, workspace, tab, or session on `agent_status: idle` alone. Confirm the actual expected output is present first -- a direct `pane read`/`agent read`, not just the status field. `idle` can be reported early on a nested-TUI pane (see above); closing on a false idle kills whatever was still genuinely running, and that work is not recoverable, not merely delayed.
-- `pane close` takes the pane ID as a bare positional argument (`herdr pane close <pane_id>`), unlike most other `pane` subcommands which accept a `--pane` flag. `herdr pane close --pane <id>` is a syntax error (exit 2). `workspace close <workspace_id>` is the same shape and returns `{"result":{"type":"ok"}}` (verified 2026-09-06).
+- `pane close` takes the pane ID as a bare positional argument (`herdr pane close <pane_id>`), and so do most other `pane` subcommands -- only `layout`, `current` and `split` accept `--pane`/`--current` (see the target-form table above; the earlier claim here that a `--pane` flag was the norm was measured false on 2026-09-20). `herdr pane close --pane <id>` is a syntax error (exit 2). `workspace close <workspace_id>` is the same shape and returns `{"result":{"type":"ok"}}` (verified 2026-09-06).
 - Never run `herdr server stop` from an active session unless the user explicitly intends to stop the server and its pane processes.
 - Never run bare `herdr server` either. The server is service-managed on every box in this estate: `systemctl --user {start,restart,status} herdr.service` on Linux/WSL, `brew services {start,restart} herdr` on macOS. A hand-started server inherits the launching shell's environment (which made every pane skip the dotfiles welcome banner on the Linux box, 2026-09-06) and dies with that session. A `herdr()` function in `.zshrc` refuses the bare form and prints the service command; on Linux it also starts the unit before an attach, because attach silently spawns its own server when none is running. Why and how: `docs/HERDR.md` in the dotfiles repo.
 - `herdr status server --json` is the canonical "is a server running" probe: `.running` (bool) and `.restart_needed` (true when the binary on disk is newer than the running server). It works with no server up (`"status":"not_running"`) and never starts one.

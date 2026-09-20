@@ -31,9 +31,9 @@ The file is **ours**: upstream's skill with a lot of locally measured findings
 written into it. It lives in this repo at
 `home/.claude/skills/herdr/SKILL.md`, and two symlinks point at it:
 
-| Path | Read by |
-|---|---|
-| `~/.claude/skills/herdr/SKILL.md` | Claude Code (stowed) |
+| Path                              | Read by                                           |
+| --------------------------------- | ------------------------------------------------- |
+| `~/.claude/skills/herdr/SKILL.md` | Claude Code (stowed)                              |
 | `~/.agents/skills/herdr/SKILL.md` | Codex (skill root `r0`, discovered by convention) |
 
 Codex finds `~/.agents/skills` on its own -- no config entry, nothing to grep
@@ -130,20 +130,20 @@ thinking: on a stow-managed dotfiles setup `~/.config/herdr/config.toml` is a
 
 herdr is NOT uniformly JSON. OBSERVED, per command:
 
-| Command | Output |
-|---|---|
-| `pane split` | JSON -> `.result.pane.pane_id` |
-| `pane list`, `agent list`, `workspace list`, `tab list` | JSON |
-| `pane wait-output` | JSON, with an embedded `.result.read.text` |
-| `agent start`, `agent get`, `agent wait` | JSON -> `.result.agent` |
-| `agent send-keys` | JSON `{"result":{"type":"ok"}}` |
-| `plugin action list`, `plugin action invoke`, `plugin log list` | JSON |
-| `plugin pane open` | JSON -> `.result.plugin_pane.pane` (NOT `.result.pane`) |
-| **`pane read`** | **PLAIN TEXT** -- piping to `jq` yields nothing |
-| **`agent read`** | **PLAIN TEXT** |
-| **`agent explain`** | **PLAIN TEXT** by default; add `--json` |
-| **`plugin list`** | **PLAIN TEXT** |
-| **`pane run`** | **EMPTY** on success, exit 0 |
+| Command                                                         | Output                                                  |
+| --------------------------------------------------------------- | ------------------------------------------------------- |
+| `pane split`                                                    | JSON -> `.result.pane.pane_id`                          |
+| `pane list`, `agent list`, `workspace list`, `tab list`         | JSON                                                    |
+| `pane wait-output`                                              | JSON, with an embedded `.result.read.text`              |
+| `agent start`, `agent get`, `agent wait`                        | JSON -> `.result.agent`                                 |
+| `agent send-keys`                                               | JSON `{"result":{"type":"ok"}}`                         |
+| `plugin action list`, `plugin action invoke`, `plugin log list` | JSON                                                    |
+| `plugin pane open`                                              | JSON -> `.result.plugin_pane.pane` (NOT `.result.pane`) |
+| **`pane read`**                                                 | **PLAIN TEXT** -- piping to `jq` yields nothing         |
+| **`agent read`**                                                | **PLAIN TEXT**                                          |
+| **`agent explain`**                                             | **PLAIN TEXT** by default; add `--json`                 |
+| **`plugin list`**                                               | **PLAIN TEXT**                                          |
+| **`pane run`**                                                  | **EMPTY** on success, exit 0                            |
 
 If a command returns nothing through `jq`, try it raw before assuming failure.
 
@@ -159,11 +159,11 @@ Do not conclude a command is gone from a listing you did not see all of.
 
 **Exit codes** (OBSERVED, measured without a pipe):
 
-| Code | Meaning |
-|---|---|
-| 0 | success |
-| 1 | server error, JSON error object emitted |
-| 2 | CLI syntax error |
+| Code | Meaning                                 |
+| ---- | --------------------------------------- |
+| 0    | success                                 |
+| 1    | server error, JSON error object emitted |
+| 2    | CLI syntax error                        |
 
 Measure exit codes without a pipe. `herdr ... | head` reports `head`'s status.
 
@@ -214,15 +214,15 @@ Sources: `visible`, `recent`, `recent-unwrapped`, `detection`.
 **THE 0.7.5 TRAP NO LONGER REPRODUCES. Re-measured on 0.8.2, 2026-09-17**, one
 pane running `seq 1 300`, every read taken at the same moment:
 
-| Invocation | 0.7.5 (2026-08-02) | 0.8.2 (2026-09-17) |
-|---|---|---|
-| `recent-unwrapped --lines 400` | 3209 | 3318 |
-| `recent-unwrapped` (no `--lines`) | 2666 | 585 |
-| `recent-unwrapped --lines 50` | not measured | 465 |
-| **`recent-unwrapped --lines 15`** | **0** | **325** |
-| `recent-unwrapped --lines 5` | not measured | 285 |
-| `visible --lines 15` | works | 326 |
-| `visible --lines 400` | not measured | 422 |
+| Invocation                        | 0.7.5 (2026-08-02) | 0.8.2 (2026-09-17) |
+| --------------------------------- | ------------------ | ------------------ |
+| `recent-unwrapped --lines 400`    | 3209               | 3318               |
+| `recent-unwrapped` (no `--lines`) | 2666               | 585                |
+| `recent-unwrapped --lines 50`     | not measured       | 465                |
+| **`recent-unwrapped --lines 15`** | **0**              | **325**            |
+| `recent-unwrapped --lines 5`      | not measured       | 285                |
+| `visible --lines 15`              | works              | 326                |
+| `visible --lines 400`             | not measured       | 422                |
 
 A small `--lines` now returns a **truncated tail**, degrading smoothly, instead
 of nothing. The old warning -- that too small a value returns NOTHING and looks
@@ -298,7 +298,15 @@ always pass one.
 - Parse IDs out of JSON responses. Never guess them, never derive them from
   sidebar order.
 - Prefer `--current` or an explicit pane ID. Omitting a target may hit the
-  UI-focused pane, which can belong to the user or another client.
+  UI-focused pane, which can belong to the user or another client. **But only
+  `pane layout`, `pane current` and `pane split` accept `--current`/`--pane` at
+  all.** `pane read`, `run`, `send-keys`, `wait-output`, `close` and `move` take
+  the id as a bare positional argument and reject both flags with
+  `unknown option` and exit 2 -- one short line, no usage block, so it reads
+  like a server fault rather than a syntax error. The calling pane is
+  `herdr pane read "$HERDR_PANE_ID"`, never `herdr pane read --current`.
+  Measured 2026-09-20 against herdr 0.8.2 from each subcommand's `--help`,
+  after a session burned two round trips on the flag forms.
 - Closed tab and pane IDs are never reused. After `pane move`, continue with
   `.result.move_result.pane.pane_id`.
 
