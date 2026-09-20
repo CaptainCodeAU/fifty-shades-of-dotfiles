@@ -197,7 +197,8 @@ Herdr validates all keys before writing any bytes. Read the result through the r
 
 ```bash
 herdr agent get reviewer
-herdr agent read reviewer --source recent-unwrapped --lines 120
+herdr-pane-read reviewer -n 120
+herdr agent read reviewer --source recent-unwrapped --lines 120   # raw form: pass a GENEROUS --lines
 ```
 
 `agent get`'s result key is `agent` (singular, one object) -- the status field is `.result.agent.agent_status`, not `.result.agent_status`. This differs from `agent list`, whose `.result.agents[]` array has `agent_status` as a sibling of `agent`, not nested under it. Confirmed cause of a wasted debugging session: a script checking the wrong (shallower) path saw `null` on every call, foreground and background alike, and that false signal was briefly mistaken for a real Herdr behavior. Verify any status-reading jq filter against a real `agent get` response before trusting it.
@@ -227,7 +228,8 @@ Read the new pane ID from `.result.pane.pane_id`, then run and inspect the comma
 ```bash
 herdr pane run <returned-pane-id> "just test"
 herdr pane wait-output <returned-pane-id> --match "test result" --timeout 120000
-herdr pane read <returned-pane-id> --source recent-unwrapped --lines 120
+herdr-pane-read <returned-pane-id> -n 120
+herdr pane read <returned-pane-id> --source recent-unwrapped --lines 120   # raw form: pass a GENEROUS --lines
 ```
 
 `pane run` atomically sends command text and Enter. `pane wait-output` searches the selected snapshot immediately, so output that already exists can match. Use `--match <text>` for a literal substring or `--regex <pattern>` for a Rust regular expression. Omitting `--timeout` allows an indefinite wait.
@@ -291,7 +293,8 @@ If a stale title/label needs correcting without renaming, rebuild the display va
 - Use `--current`, an explicit pane ID, or a unique agent name. Do not rely on another client's focused pane.
 - Parse IDs from JSON responses. Do not derive them from sidebar order or examples.
 - Do not close workspaces, tabs, panes, or sessions you did not create unless the user explicitly asked.
-- Never close a pane, workspace, tab, or session on `agent_status: idle` alone. Confirm the actual expected output is present first -- a direct `pane read`/`agent read`, not just the status field. `idle` can be reported early on a nested-TUI pane (see above); closing on a false idle kills whatever was still genuinely running, and that work is not recoverable, not merely delayed.
+- **Read panes with `herdr-pane-read`, not a hand-picked `--lines`.** It sizes the request itself, strips the blank rows below the content, states positively what it showed of what, says exit 3 out loud when a pane is genuinely empty, and warns when a pane is scrolled and the chosen source follows that scroll. It takes a pane id, a live agent name, or `--current`. The raw `herdr pane read` / `agent read` are fine with a generous `--lines` (400 or more) and dangerous with a small one; see the floor rule above.
+- Never close a pane, workspace, tab, or session on `agent_status: idle` alone. Confirm the actual expected output is present first -- a direct `herdr-pane-read`, not just the status field. `idle` can be reported early on a nested-TUI pane (see above); closing on a false idle kills whatever was still genuinely running, and that work is not recoverable, not merely delayed.
 - `pane close` takes the pane ID as a bare positional argument (`herdr pane close <pane_id>`), and so do most other `pane` subcommands -- only `layout`, `current` and `split` accept `--pane`/`--current` (see the target-form table above; the earlier claim here that a `--pane` flag was the norm was measured false on 2026-09-20). `herdr pane close --pane <id>` is a syntax error (exit 2). `workspace close <workspace_id>` is the same shape and returns `{"result":{"type":"ok"}}` (verified 2026-09-06).
 - Never run `herdr server stop` from an active session unless the user explicitly intends to stop the server and its pane processes.
 - Never run bare `herdr server` either. The server is service-managed on every box in this estate: `systemctl --user {start,restart,status} herdr.service` on Linux/WSL, `brew services {start,restart} herdr` on macOS. A hand-started server inherits the launching shell's environment (which made every pane skip the dotfiles welcome banner on the Linux box, 2026-09-06) and dies with that session. A `herdr()` function in `.zshrc` refuses the bare form and prints the service command; on Linux it also starts the unit before an attach, because attach silently spawns its own server when none is running. Why and how: `docs/HERDR.md` in the dotfiles repo.

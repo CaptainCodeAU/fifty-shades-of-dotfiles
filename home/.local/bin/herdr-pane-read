@@ -52,7 +52,7 @@
 #   stdout carries only the pane text, so `herdr-pane-read <id> | grep ...` works.
 #
 # USAGE
-#   herdr-pane-read <pane_id>|--current [-n N|--lines N] [--all]
+#   herdr-pane-read <pane_id>|<agent-name>|--current [-n N|--lines N] [--all]
 #                   [--source visible|recent|recent-unwrapped|detection]
 #                   [--ansi] [--quiet]
 #   herdr-pane-read --selftest
@@ -197,6 +197,19 @@ command -v herdr >/dev/null 2>&1 || die "herdr is not on PATH" 1
 # hint for the request size and nothing is concluded from it.
 geom=$(herdr pane get "$PANE" 2>&1)
 grc=$?
+if [ "$grc" -ne 0 ]; then
+	# Not a pane id? Try it as a live agent name, because the skill's own
+	# examples target agents by name (`agent read reviewer ...`) and an agent
+	# read has exactly the same blank-region floor as a pane read.
+	ag=$(herdr agent get "$PANE" 2>/dev/null)
+	apane=$(printf '%s' "$ag" | jq -r '.result.agent.pane_id // empty' 2>/dev/null)
+	if [ -n "$apane" ]; then
+		[ "$QUIET" -eq 1 ] || printf '%s: resolved agent '\''%s'\'' to pane %s\n' "$PROG" "$PANE" "$apane" >&2
+		PANE="$apane"
+		geom=$(herdr pane get "$PANE" 2>&1)
+		grc=$?
+	fi
+fi
 if [ "$grc" -ne 0 ]; then
 	printf '%s: herdr pane get %s failed:\n%s\n' "$PROG" "$PANE" "$geom" >&2
 	exit 1
