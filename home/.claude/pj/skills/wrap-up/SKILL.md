@@ -25,7 +25,8 @@ Work through these in order. Report once at the end.
    project's own trackers named in `.claude/pj-homes`, `decided` on the
    key words, and the file the work touched. Say "I found it only in X"
    or "I did not find it". Never "it is recorded nowhere" without having
-   looked.
+   looked. A condition a start hook printed (CVE sweep, changelog
+   drift, CI) is the hook's, not this conversation's: it is not a row.
 
 2. One table. Columns: what / kind (do, decide, lesson) / state / who
    said it / recorded where now / finish line / proposed verdict.
@@ -49,9 +50,8 @@ Work through these in order. Report once at the end.
 5. Delivery. For every repo this session touched: uncommitted,
    unpushed, stashes, and files written outside any repo. One table.
    Commit only what this session made, by explicit path. Anything else
-   is listed, not touched. Then `pj-wrap push` (it needs the Keychain,
-   so run that one call outside the sandbox). When it stops, put its
-   message in the report as the action for the user.
+   is listed, not touched. Unpushed project commits are listed for the
+   user; nothing here pushes the project repo.
 
 6. Handoff. Path from `handoff` in `.claude/pj-homes`, default
    `repo:OPENING-PROMPT.md`. Rewrite it whole, never append, at most
@@ -62,9 +62,16 @@ Work through these in order. Report once at the end.
    exists WITHOUT that line, someone wrote it by hand: do not overwrite
    it. Show the proposed text and ask.
 
-7. When `.claude/pj-homes` names the project's own `wrap-up` command,
+7. `pj-wrap push`. It commits a drawer handoff by explicit path and
+   pushes dot-claude, the drawer store. It never pushes the project
+   repo. It needs the Keychain, so run that one call outside the
+   sandbox. When it stops, put its message in the report as the action
+   for the user.
+
+8. When `.claude/pj-homes` names the project's own `wrap-up` command,
    tell the user to run it next.
 
-8. `pj-wrap done` (`pj-wrap done --keep-earlier` when step 0 chose
-   later). Then the report: first line is the action the user must
+9. `pj-wrap done` (`pj-wrap done --keep-earlier` when step 0 chose
+   later). It writes under `~/.local/state`, so run it outside the
+   sandbox too. Then the report: first line is the action the user must
    take, or "Done, nothing needed from you." End with the pending list.

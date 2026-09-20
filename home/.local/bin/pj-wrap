@@ -6,7 +6,8 @@
 #                                  wrap-up, with their transcript paths (rc 1 when none)
 #   pj-wrap done [--keep-earlier]  mark this session wrapped; move this project's
 #                                  no-wrap-up flag aside (kept with --keep-earlier)
-#   pj-wrap push                   push this project's drawer commits from dot-claude
+#   pj-wrap push                   commit this project's drawer handoff (if declared drawer:)
+#                                  and push dot-claude, the drawer store. NOT the project repo.
 #   pj-wrap --selftest             prove every arm (runs pj-wrap-selftest)
 #
 # STATE  ${XDG_STATE_HOME:-~/.local/state}/pj  (PJ_STATE_DIR overrides; test seam)
@@ -119,17 +120,38 @@ generated_only(){   # every conflicted path is a generated view or its stamp
     case "$p" in */WORK/OPEN.md|*/WORK/items/.generated.sha256) ;; *) return 1 ;; esac
   done; return 0
 }
+# The handoff the wrap-up writes lives in the drawer when pj-homes says drawer:. It is not
+# an item, so open-items never commits it; this does, by explicit path, before the push.
+commit_handoff(){               # commit_handoff <dot-claude top>
+  local top="$1" rtop decl mark rel where w f st
+  rtop="$(repo_top)" || return 0
+  decl="$rtop/.claude/pj-homes"
+  mark="$( [ -f "$decl" ] && sed -n 's/^handoff:[[:space:]]*//p' "$decl" | head -1 | sed 's/[[:space:]]*$//')"
+  case "$mark" in drawer:*) rel="${mark#drawer:}" ;; *) return 0 ;; esac
+  where="$(open-items --where 2>/dev/null)" || return 0
+  w="$(dirname "$where")"; f="$w/$rel"
+  [ -f "$f" ] || return 0
+  case "$(cd "$w" && pwd -P)" in "$top"/projects/*/memory/WORK) ;; *) return 0 ;; esac
+  st="$(git -C "$top" status --porcelain -- "$f" 2>/dev/null)"
+  [ -n "$st" ] || return 0
+  if git -C "$top" add -- "$f" && git -C "$top" commit -q -m "pj-wrap: handoff $(basename "$rtop") ($rel)" -- "$f" 2>/dev/null; then
+    say "handoff committed in dot-claude: $(tilde "$f")"
+  else
+    say "handoff at $(tilde "$f") could NOT be committed (see git status in dot-claude); pushing what is committed"
+  fi
+}
 cmd_push(){
   local top branch up ahead behind out rc paths p dirty took=() w
   top="$(git -C "$DOTCLAUDE" rev-parse --show-toplevel 2>/dev/null)" || refuse "push: $(tilde "$DOTCLAUDE") is not a git repo"
+  commit_handoff "$top"
   branch="$(git -C "$top" symbolic-ref --short HEAD 2>/dev/null)" || stop "dot-claude is not on a branch (detached HEAD). Check it out yourself, then push again."
   up="$(git -C "$top" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)" || stop "branch $branch has no upstream. Set one yourself (git branch -u origin/$branch), then push again."
   in_progress "$top" && stop "a rebase or merge is already in progress in $(tilde "$top"). Finish or abort it yourself, then push again."
   ahead="$(git -C "$top" rev-list --count "$up..HEAD" 2>/dev/null || echo 0)"
-  [ "$ahead" -gt 0 ] || { say "nothing to push: $branch is not ahead of $up"; exit 1; }
-  say "pushing $ahead commit(s) on $branch to $up"
+  [ "$ahead" -gt 0 ] || { say "nothing to push in dot-claude ($(tilde "$top")): $branch is not ahead of $up. This tool never pushes the project repo."; exit 1; }
+  say "pushing $ahead commit(s) on $branch to $up in dot-claude ($(tilde "$top")), the drawer store. This tool never pushes the project repo."
   out="$(git -C "$top" push 2>&1)"; rc=$?
-  [ "$rc" -eq 0 ] && { say "push accepted"; exit 0; }
+  [ "$rc" -eq 0 ] && { say "push accepted (dot-claude)"; exit 0; }
   case "$out" in
     *rejected*|*"fetch first"*|*non-fast-forward*|*"failed to push some refs"*) ;;
     *) stop "push failed before the remote accepted anything: $(printf '%s' "$out" | tail -1). Inside a Claude session the Keychain is blocked by the sandbox: run 'pj-wrap push' with the sandbox lifted." ;;
