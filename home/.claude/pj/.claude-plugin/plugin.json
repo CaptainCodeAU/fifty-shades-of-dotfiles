@@ -1,5 +1,5 @@
 {
   "name": "pj",
-  "description": "Commands that travel with the pj launcher. wrap-up: the end-of-session pass (D-20260920-03).",
+  "description": "What travels with the pj launcher. wrap-up: the end-of-session pass (D-20260920-03), shipped as a skill because the command loader does not follow stow symlinks.",
   "version": "0.1.0"
 }

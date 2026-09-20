@@ -1,5 +1,7 @@
 ---
-description: End-of-session pass. Capture what exists only in this conversation, check delivery, rewrite the handoff.
+name: wrap-up
+description: End-of-session pass for pj sessions. Capture what exists only in this conversation, check delivery, rewrite the handoff. Invoke as /pj:wrap-up; never auto-invoked.
+disable-model-invocation: true
 ---
 # Wrap-up
 
