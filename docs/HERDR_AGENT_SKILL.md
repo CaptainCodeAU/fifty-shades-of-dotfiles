@@ -229,6 +229,34 @@ of nothing. The old warning -- that too small a value returns NOTHING and looks
 exactly like "no output" -- is kept above only so nobody re-derives it from an
 old transcript. It was true; it stopped being true.
 
+**THAT RETRACTION IS WITHDRAWN. Re-measured 2026-09-20 on 0.8.2: the zero still
+happens, and the 2026-09-17 trial could not have seen it.** That trial used a
+pane running `seq 1 300`, which fills the screen and the scrollback. The real
+variable is whether the content REACHES THE BOTTOM of the grid. `--lines N`
+counts N rows up from the bottom of the terminal grid rather than from the
+bottom of the content; blank rows below the content fill your N and are trimmed
+before you see them. A pane whose program fills only the top returns zero bytes
+for every N below `viewport_rows - content_rows + 1`. `seq 1 300` leaves no
+blank rows, so its floor is 1 and nothing can go wrong.
+
+Three panes, each with a failing arm and a passing arm in the same command:
+
+| pane                  | viewport | content rows | floor | N=floor-1 | N=floor   |
+| --------------------- | -------- | ------------ | ----- | --------- | --------- |
+| idle Claude, 0 tokens | 90       | 24           | 67    | 0 bytes   | 209 bytes |
+| busy Claude           | 90       | 89           | 2     | 0 bytes   | 52 bytes  |
+| plain shell, no agent | 92       | 57           | 36    | 0 bytes   | 425 bytes |
+
+Not the source, either: at `--lines 200` the idle pane returned the same 3070
+bytes from all four of `visible`, `recent`, `recent-unwrapped` and `detection`.
+
+The lesson is the one this file already teaches about void trials, pointed at a
+RETRACTION rather than a finding. A fixture that fills the screen cannot
+disprove a bug about screens that are not filled, and "it no longer reproduces"
+was written from a single pane shape. Use
+[`herdr-pane-read`](../home/.local/bin/herdr-pane-read), which sizes the request
+itself, strips the blank region, and states positively what it showed of what.
+
 Two consequences of the new numbers:
 
 - `--lines 400` is still the right default, but now because it returns MORE, not

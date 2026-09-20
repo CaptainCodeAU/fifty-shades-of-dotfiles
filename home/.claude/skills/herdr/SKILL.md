@@ -239,11 +239,23 @@ Use the read source that matches the task:
 - `recent-unwrapped`: recent output with soft wraps joined; prefer it for logs and transcripts.
 - `detection`: the plain-text bottom-buffer snapshot used for agent detection.
 
-`recent` and `recent-unwrapped` come back EMPTY right after the pane ran `clear` (reproduced twice 2026-09-06, by two different sessions); `visible` still has everything on screen. Fall back to `visible` before concluding the pane is blank.
+**A SMALL `--lines` RETURNS NOTHING WHEN THE CONTENT DOES NOT REACH THE BOTTOM OF THE PANE.** `--lines N` counts N rows up from the bottom of the terminal GRID, not from the bottom of the CONTENT. A pane whose program fills only the top of its screen has blank rows below; those blank rows fill your N and are trimmed before you see them, so a pane full of text reads as empty. The floor is `viewport_rows - content_rows + 1`, and any N below it returns zero bytes.
+
+Measured 2026-09-20 on herdr 0.8.2, three panes, each with a failing arm and a passing arm in the same command:
+
+| pane                  | what it was | viewport | content | floor | N=floor-1 | N=floor   |
+| --------------------- | ----------- | -------- | ------- | ----- | --------- | --------- |
+| idle Claude, 0 tokens | agent pane  | 90       | 24      | 67    | 0 bytes   | 209 bytes |
+| busy Claude           | agent pane  | 90       | 89      | 2     | 0 bytes   | 52 bytes  |
+| plain shell, no agent | shell pane  | 92       | 57      | 36    | 0 bytes   | 425 bytes |
+
+It is NOT the source. At `--lines 200` that idle pane returned the same 3070 bytes from all four of `visible`, `recent`, `recent-unwrapped` and `detection`. An earlier note here said `recent` and `recent-unwrapped` "come back EMPTY right after the pane ran `clear`" while `visible` still worked; that is almost certainly this same floor, misattributed. After a `clear` the content sits in the top rows, and the two reads that disagreed differed in their `--lines` value as well as their source.
+
+**Use [`herdr-pane-read`](../../../.local/bin/herdr-pane-read) instead of hand-picking a number.** It asks for more rows than the pane can hold, strips the blank region itself, shows the last N rows of real content, and always states on stderr what it showed of what -- including the case where the pane really is empty, which it says out loud rather than returning silence. `herdr-pane-read --selftest` proves its six arms. A raw `herdr pane read` is still fine when you pass a generous `--lines` (400 or more).
 
 Use `--format ansi` when colors and terminal styling are evidence. Otherwise use text.
 
-`--lines` asks Herdr for more rows from the pane's available screen and host scrollback. If increasing it does not reveal more of a completed response, the pane is probably running the agent on the terminal's alternate screen. Rows that leave the alternate screen do not enter Herdr's host scrollback, so a larger line count cannot recover them.
+`--lines` asks Herdr for more rows from the pane's available screen and host scrollback. If increasing it does not reveal more of a completed response, the pane is probably running the agent on the terminal's alternate screen. Rule out the blank-region floor above FIRST: a read that returns nothing at all is the floor, not the alternate screen, and that misdiagnosis was made twice in one session on 2026-09-20 before the floor was measured. Rows that leave the alternate screen do not enter Herdr's host scrollback, so a larger line count cannot recover them.
 
 Herdr itself knows when it dropped rows: `PaneReadResult` carries a `truncated` field (herdr 0.8.0, #1717), confirmed 2026-09-17 in `herdr api schema --json` under both `success_response` and `subscription_event`. The plain CLI read prints pane text, not JSON, so that field is not visible in normal use; `pane read --raw` is the likely way to see it, NOT verified here (the throwaway pane used to test it produced no output yet, so the trial was void rather than negative). Treat the flag as a real signal to look for, not as a recipe.
 

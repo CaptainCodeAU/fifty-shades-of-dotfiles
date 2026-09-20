@@ -1,0 +1,240 @@
+#!/usr/bin/env bash
+# ============================================================================
+#  herdr-pane-read -- a `herdr pane read` that cannot land in the blank region
+# ============================================================================
+#
+# WHY
+# ---
+# `herdr pane read <id> --lines N` counts N rows up from the bottom of the
+# terminal GRID, not from the bottom of the CONTENT. A pane whose program fills
+# only the top of its screen has blank rows below the content, those blank rows
+# fill your N, and the blanks are trimmed before you see them. So the read
+# returns NOTHING while the pane is full of text.
+#
+# Measured 2026-09-20 on herdr 0.8.2, three panes, both arms each. The cut-off
+# is `viewport_rows - content_rows + 1`:
+#
+#   pane        what it was            viewport  content  floor  N=floor-1  N=floor
+#   w38:pA      idle Claude, 0 tokens        90       24     67    0 bytes  209 bytes
+#   w38:pD      a busy Claude                90       89      2    0 bytes   52 bytes
+#   w38:p4      a plain shell, no agent      92       57     36    0 bytes  425 bytes
+#
+# It is NOT about the --source: at --lines 200 that idle pane returned the same
+# 3070 bytes on all four of visible, recent, recent-unwrapped and detection.
+# The first two reads in that session differed only because one asked for 90
+# lines (above its floor) and the other for 15 (below it).
+#
+# This is the count-and-absence rule from CLAUDE.md wearing a new coat. An empty
+# read looks IDENTICAL to an idle pane, a cleared pane, and a pane whose program
+# died -- and the herdr skill's own safety rule says to confirm real output with
+# a direct `pane read` before closing anything. So the dangerous reading is the
+# one the raw command makes easy.
+#
+# A note in a document was not enough: the number is typed by hand every time,
+# and a session that has not read the note cannot tell it got a short read. So
+# the fix is a tool that picks the number itself.
+#
+# WHAT IT DOES
+#   Asks herdr for MORE rows than the pane could possibly hold (viewport plus
+#   scrollback plus a margin), strips the trailing blank rows itself, then shows
+#   the last N rows of real content. And it ALWAYS says what happened, on stderr:
+#
+#     herdr-pane-read: pane w38:pA -- showed 8 of 24 content rows -- 16 HIDDEN
+#         (grid 90 rows, 66 blank below the content; asked herdr for 290)
+#     herdr-pane-read: pane w38:pD -- showed all 24 content rows (nothing hidden)
+#     herdr-pane-read: pane w38:p9 -- NO CONTENT AT ALL in source 'recent'
+#         (asked herdr for 290 rows, the whole grid plus scrollback; this is a
+#          genuinely empty pane, not a short read)
+#
+#   The second and third forms are the point. Completeness is stated POSITIVELY,
+#   and a real empty pane says so out loud instead of looking like a mistake.
+#
+#   stdout carries only the pane text, so `herdr-pane-read <id> | grep ...` works.
+#
+# USAGE
+#   herdr-pane-read <pane_id>|--current [-n N|--lines N] [--all]
+#                   [--source visible|recent|recent-unwrapped|detection]
+#                   [--ansi] [--quiet]
+#   herdr-pane-read --selftest
+#
+#   Default N is 40, matching `peek`. --all shows every content row.
+#
+# EXIT CODES
+#   0  content shown
+#   1  the herdr call failed (its stderr is passed through)
+#   2  usage error
+#   3  the pane has no content at all -- STATED, never silent
+#
+# NOTES
+#   Every herdr subcommand needs the Claude sandbox off (the socket is denied),
+#   so inside Claude Code run this with dangerouslyDisableSandbox: true.
+#   `--source visible` follows the pane's CURRENT scroll position, which is a
+#   property of that source rather than of the line count; prefer the default
+#   `recent` when you want the newest output regardless of where the user has
+#   scrolled to.
+# ============================================================================
+
+set -uo pipefail
+
+PROG=herdr-pane-read
+MARGIN=200      # rows of slack above grid+scrollback
+FLOOR=500       # never ask for fewer than this
+
+die() { printf '%s: %s\n' "$PROG" "$*" >&2; exit "${2:-2}"; }
+
+usage() {
+	sed -n '/^# USAGE/,/^# EXIT CODES/p' "$0" | sed 's/^# \{0,1\}//; $d'
+	exit "${1:-2}"
+}
+
+# --- the pure part, so the selftest can exercise it without a real pane -----
+# strip_trailing_blanks: reads stdin, drops trailing all-whitespace lines
+strip_trailing_blanks() {
+	awk '
+		{ buf[NR] = $0; if (NF) last = NR }
+		END { for (i = 1; i <= last; i++) print buf[i] }
+	'
+}
+
+PANE=""
+WANT=40
+ALL=0
+SOURCE=recent
+QUIET=0
+EXTRA=()
+SELFTEST=0
+
+while [ $# -gt 0 ]; do
+	case "$1" in
+		--selftest) SELFTEST=1; shift ;;
+		-h|--help) usage 0 ;;
+		--current) PANE="${HERDR_PANE_ID:-}"; shift ;;
+		-n|--lines)
+			[ $# -ge 2 ] || die "$1 needs a number"
+			WANT="$2"; shift 2 ;;
+		--all) ALL=1; shift ;;
+		--source)
+			[ $# -ge 2 ] || die "--source needs a value"
+			SOURCE="$2"; shift 2 ;;
+		--ansi|--raw) EXTRA+=("$1"); shift ;;
+		--format)
+			[ $# -ge 2 ] || die "--format needs a value"
+			EXTRA+=("$1" "$2"); shift 2 ;;
+		--quiet) QUIET=1; shift ;;
+		-*) die "unknown option: $1" ;;
+		*)
+			[ -z "$PANE" ] || die "more than one pane id given: $PANE and $1"
+			PANE="$1"; shift ;;
+	esac
+done
+
+# --------------------------------------------------------------------------
+# selftest: proves the four arms against synthetic pane text, so it needs no
+# pane, no server, and no sandbox lift. The arms are the ones that matter:
+# a truncating read, a complete read, a genuinely empty pane, and the blank
+# region that caused the whole bug.
+# --------------------------------------------------------------------------
+if [ "$SELFTEST" -eq 1 ]; then
+	fails=0
+	check() { # check <name> <expected> <got>
+		if [ "$2" = "$3" ]; then
+			printf 'ok   %s\n' "$1"
+		else
+			printf 'FAIL %s: expected [%s] got [%s]\n' "$1" "$2" "$3"
+			fails=$((fails + 1))
+		fi
+	}
+
+	# arm 1: content followed by blank rows -- the exact shape of the bug.
+	# 3 content rows then 5 blanks must yield 3 rows, not 0.
+	got=$(printf 'a\nb\nc\n\n\n\n\n\n' | strip_trailing_blanks | wc -l | tr -d ' ')
+	check "blank region below content is stripped" "3" "$got"
+
+	# arm 2: the last content row survives (the bug ate exactly this row)
+	got=$(printf 'a\nb\nc\n\n\n' | strip_trailing_blanks | tail -1)
+	check "last content row is kept" "c" "$got"
+
+	# arm 3: interior blank rows are NOT dropped (Claude's UI has them)
+	got=$(printf 'a\n\nb\n\n\n' | strip_trailing_blanks | wc -l | tr -d ' ')
+	check "interior blank rows are preserved" "3" "$got"
+
+	# arm 4: a genuinely empty pane yields zero rows, so the caller can SAY so
+	got=$(printf '\n\n\n\n' | strip_trailing_blanks | wc -c | tr -d ' ')
+	check "all-blank input yields nothing" "0" "$got"
+
+	# arm 5: whitespace-only rows count as blank (grid rows are space-padded)
+	got=$(printf 'a\n   \n\t\n' | strip_trailing_blanks | wc -l | tr -d ' ')
+	check "whitespace-only rows count as blank" "1" "$got"
+
+	# arm 6: a NEGATIVE control -- if the stripper were a no-op, arm 1 would
+	# have returned 8. Prove the two really differ, so a broken stripper that
+	# passes everything through cannot pass this suite.
+	raw=$(printf 'a\nb\nc\n\n\n\n\n\n' | wc -l | tr -d ' ')
+	if [ "$raw" = "8" ]; then
+		printf 'ok   control: unstripped input really is 8 rows\n'
+	else
+		printf 'FAIL control: unstripped input was %s rows, expected 8 -- INVALID TRIAL\n' "$raw"
+		fails=$((fails + 1))
+	fi
+
+	if [ "$fails" -eq 0 ]; then
+		printf '%s --selftest: all 6 arms passed (5 positive, 1 control)\n' "$PROG"
+		exit 0
+	fi
+	printf '%s --selftest: %s arm(s) FAILED\n' "$PROG" "$fails" >&2
+	exit 1
+fi
+
+[ -n "$PANE" ] || usage 2
+case "$WANT" in
+	''|*[!0-9]*) die "--lines needs a non-negative integer, got: $WANT" ;;
+esac
+
+command -v herdr >/dev/null 2>&1 || die "herdr is not on PATH" 1
+
+# --- geometry: how many rows could this pane possibly hold? ----------------
+# max_offset_from_bottom has been observed changing between calls, so it is a
+# hint for the request size and nothing is concluded from it.
+geom=$(herdr pane get "$PANE" 2>&1)
+grc=$?
+if [ "$grc" -ne 0 ]; then
+	printf '%s: herdr pane get %s failed:\n%s\n' "$PROG" "$PANE" "$geom" >&2
+	exit 1
+fi
+rows=$(printf '%s' "$geom" | jq -r '.result.pane.scroll.viewport_rows // 0' 2>/dev/null)
+back=$(printf '%s' "$geom" | jq -r '.result.pane.scroll.max_offset_from_bottom // 0' 2>/dev/null)
+case "$rows" in ''|*[!0-9]*) rows=0 ;; esac
+case "$back" in ''|*[!0-9]*) back=0 ;; esac
+
+ask=$((rows + back + MARGIN))
+[ "$ask" -ge "$FLOOR" ] || ask=$FLOOR
+
+# --- the read --------------------------------------------------------------
+raw=$(herdr pane read "$PANE" --source "$SOURCE" --lines "$ask" ${EXTRA+"${EXTRA[@]}"} 2>&1)
+rrc=$?
+if [ "$rrc" -ne 0 ]; then
+	printf '%s: herdr pane read %s failed:\n%s\n' "$PROG" "$PANE" "$raw" >&2
+	exit 1
+fi
+
+content=$(printf '%s\n' "$raw" | strip_trailing_blanks)
+if [ -z "$content" ]; then
+	[ "$QUIET" -eq 1 ] || printf '%s: pane %s -- NO CONTENT AT ALL in source '\''%s'\''\n    (asked herdr for %s rows, the whole grid plus scrollback; this is a\n     genuinely empty pane, not a short read)\n' \
+		"$PROG" "$PANE" "$SOURCE" "$ask" >&2
+	exit 3
+fi
+
+total=$(printf '%s\n' "$content" | wc -l | tr -d ' ')
+blank=$((rows - total))
+[ "$blank" -ge 0 ] || blank=0
+
+if [ "$ALL" -eq 1 ] || [ "$WANT" -ge "$total" ]; then
+	printf '%s\n' "$content"
+	[ "$QUIET" -eq 1 ] || printf '%s: pane %s -- showed all %s content rows (nothing hidden)\n' \
+		"$PROG" "$PANE" "$total" >&2
+else
+	printf '%s\n' "$content" | tail -n "$WANT"
+	[ "$QUIET" -eq 1 ] || printf '%s: pane %s -- showed %s of %s content rows -- %s HIDDEN\n    (grid %s rows, %s blank below the content; asked herdr for %s)\n' \
+		"$PROG" "$PANE" "$WANT" "$total" "$((total - WANT))" "$rows" "$blank" "$ask" >&2
+fi
+exit 0
