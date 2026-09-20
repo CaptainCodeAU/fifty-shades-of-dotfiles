@@ -1,0 +1,7 @@
+# pj-homes: where this project's records live (D-20260920-06). Root markers only:
+# repo: (this repo's root), drawer: (the folder `open-items --where` names), ~/ (home).
+# Read by pj-start-card. Every key is optional; missing keys take the D-20260920-06 defaults.
+records: private
+handoff: drawer:OPENING-PROMPT.md
+decisions: drawer:decisions/
+# until the D-20260920-10 split, the register still sits at repo:home/.local/share/decisions/DECISIONS.md

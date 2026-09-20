@@ -1,0 +1,206 @@
+#!/usr/bin/env bash
+# pj-start-card -- the 20-line start card every pj session opens with (D-20260920-04).
+#
+# Usage:
+#   pj-start-card              print the card for the folder you are standing in
+#   pj-start-card --selftest   prove every arm (runs pj-start-card-selftest)
+#
+# Registered as a SessionStart hook for pj through settings/claude/hooks.json
+# (targets: project). Claude Code hands the hook a JSON object on stdin; the card
+# prints on source startup, resume and clear, and stays silent on compact.
+#
+# CONTRACT, in order of importance:
+#   1. exit 0 on EVERY path. A start hook that fails blocks a session.
+#   2. writes NOTHING. Not the project, not the drawer, not a state folder.
+#   3. no network, no prompt, well under a second.
+#   4. at most 20 lines; every path is a root marker (repo:, drawer:, ~/), never
+#      an absolute drawer path, so the output can be quoted in a public repo.
+#   5. on an internal error a SECTION drops out; on a catastrophic one the whole
+#      card does. Silence is the failure mode, by design, so a broken card can
+#      never stop a session.
+#
+# WHAT IT PRINTS
+#   line 1   pj start card: <project>
+#   line 2   WARNING when the last session here ended without wrap-up (flag below)
+#   then     open items from `open-items --session`: count, up to 10 titles,
+#            "+N more", "parked: N"; or one line saying there is no drawer
+#   then     Handoff: <marker path> (size, date) -- only when the file exists
+#   then     Tracker: <marker path>, one per declared tracker
+#   last     the hello rule
+#   Outside a git repo: line 1 and the hello rule only.
+#
+# THE DECLARATION FILE  .claude/pj-homes  (D-20260920-06)
+#   key: value lines, # comments. Keys: handoff, tracker (may repeat), decisions,
+#   incidents, plans, records (repo|private), wrap-up. Defaults for a missing key:
+#   handoff repo:OPENING-PROMPT.md, records repo, decisions/incidents/plans under
+#   repo:docs/ (or drawer: when records is private). The card reads handoff and
+#   tracker; the other keys are for later stages and `decided`.
+#
+# THE NO-WRAP-UP FLAG  (contract for the SessionEnd stage; the card only READS it)
+#   Location  ${XDG_STATE_HOME:-~/.local/state}/pj/no-wrap-up/<key>
+#             <key> = the repo toplevel with every / . _ turned into -, the same
+#             encoding the harness uses for ~/.claude/projects/<key>/ and that
+#             open-items uses for the drawer. Outside every repo on purpose.
+#   Format    key: value lines: project, repo, ended (local ISO time), session,
+#             transcript. Any other line is ignored.
+#   Writer    the SessionEnd script, only when /wrap-up did not run.
+#   Clearer   the /wrap-up command. This card never writes or deletes it.
+#   Reader    prints one line from ended and transcript. A flag that exists but
+#             cannot be read still prints the warning, without details.
+#   Override  PJ_STATE_DIR replaces the .../pj part (selftest seam).
+#
+# Selftest: pj-start-card-selftest. Rulings: D-20260920-02, -03, -04, -06, -09.
+
+set -u
+
+[ "${1:-}" = "--selftest" ] && exec "$(dirname "$0")/pj-start-card-selftest"
+
+CAP=20
+TITLE_CAP=10
+HELLO='Hello rule: on a first message like hello or start, reply in two or three lines from this card, make no tool calls, name anything a start hook flagged for action once at the top, then ask what to work on.'
+STATE="${PJ_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/pj}"
+
+# --- hook input: print on startup/resume/clear, never on compact --------------
+source_of_hook(){
+  local in="" s=""
+  [ -t 0 ] && { printf 'startup'; return; }
+  in="$(cat 2>/dev/null || true)"
+  [ -n "$in" ] || { printf 'startup'; return; }
+  if command -v jq >/dev/null 2>&1; then
+    s="$(printf '%s' "$in" | jq -r '.source // empty' 2>/dev/null || true)"
+  else
+    s="$(printf '%s' "$in" | sed -n 's/.*"source"[[:space:]]*:[[:space:]]*"\([a-z]*\)".*/\1/p' | head -1)"
+  fi
+  printf '%s' "${s:-startup}"
+}
+
+encode_key(){ printf '%s' "$1" | sed 's#[/._]#-#g'; }
+strip_ansi(){ sed 's/\x1b\[[0-9;]*m//g'; }
+
+# --- the declaration file -----------------------------------------------------
+decl_get(){   # decl_get <file> <key>  -> first value, or nothing
+  [ -f "$1" ] || return 0
+  sed -n "s/^$2:[[:space:]]*//p" "$1" 2>/dev/null | sed 's/[[:space:]]*$//' | head -1
+}
+decl_all(){   # every value of a repeatable key
+  [ -f "$1" ] || return 0
+  sed -n "s/^$2:[[:space:]]*//p" "$1" 2>/dev/null | sed 's/[[:space:]]*$//'
+}
+# A marked path -> a real path. Unknown marker: nothing (never guess).
+resolve(){    # resolve <marked> <top> <drawer>
+  case "$1" in
+    repo:*)   printf '%s/%s' "$2" "${1#repo:}" ;;
+    drawer:*) [ -n "$3" ] && printf '%s/%s' "$3" "${1#drawer:}" ;;
+    '~/'*)    printf '%s/%s' "$HOME" "${1#\~/}" ;;
+    *)        return 1 ;;
+  esac
+}
+
+file_size(){  # human size; GNU stat first, BSD fallback (memory: stat -f portability)
+  local b
+  b="$(stat -c %s "$1" 2>/dev/null || stat -f %z "$1" 2>/dev/null)" || return 1
+  if [ "$b" -lt 1024 ]; then printf '%s B' "$b"; else awk -v b="$b" 'BEGIN{printf "%.1f KB", b/1024}'; fi
+}
+file_date(){
+  local d
+  if d="$(stat -c %y "$1" 2>/dev/null)"; then printf '%s' "${d:0:10}"
+  else stat -f '%Sm' -t '%Y-%m-%d' "$1" 2>/dev/null; fi
+}
+
+# --- the card ------------------------------------------------------------------
+card(){
+  local top="" name="" lines=() drawer="" decl="" wrc=0 where=""
+  local warn="" handoff="" trackers=() open_header="" titles=() parked="" n=0
+
+  top="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || top=""
+  [ -n "$top" ] && top="$(dirname "$top")"
+
+  if [ -z "$top" ]; then
+    printf 'pj start card: %s (not a git repo, so no project, no items)\n' "$(basename "$PWD")"
+    printf '%s\n' "$HELLO"
+    return 0
+  fi
+  name="$(basename "$top")"
+  decl="$top/.claude/pj-homes"
+
+  # the drawer, through open-items so the key encoding lives in one place
+  where="$(open-items --where 2>/dev/null)"; wrc=$?
+  case "$wrc" in
+    0) drawer="$(dirname "$where")" ;;
+    1) drawer="" ;;              # this repo has no drawer yet
+    *) drawer=""; wrc=99 ;;      # open-items broken or absent: section drops out
+  esac
+
+  # the no-wrap-up flag
+  local flag="$STATE/no-wrap-up/$(encode_key "$top")" ended="" tr=""
+  if [ -e "$flag" ]; then
+    ended="$(decl_get "$flag" ended)"; tr="$(decl_get "$flag" transcript)"
+    warn="WARNING: the last session here ended without wrap-up"
+    [ -n "$ended" ] && warn="$warn ($ended)"
+    warn="$warn."
+    [ -n "$tr" ] && warn="$warn Transcript: ${tr/#$HOME/\~}"
+  fi
+
+  # open items
+  if [ "$wrc" -eq 1 ]; then
+    open_header="Open items: no drawer for this project yet (\`open-items init\` creates one)"
+  elif [ "$wrc" -eq 0 ]; then
+    local sess="" line=""
+    sess="$(open-items --session 2>/dev/null | strip_ansi)" || sess=""
+    if [ -z "$sess" ]; then
+      open_header="Open items: none open (\`open-items add\` files one)"
+    else
+      while IFS= read -r line; do
+        case "$line" in
+          'Open items'*) n="$(printf '%s' "$line" | sed -n 's/^Open items (\([0-9]*\) in.*/\1/p')" ;;
+          *'parked: '*)  parked="${line#"${line%%[![:space:]]*}"}" ;;
+          *'· '*)        titles+=("$line") ;;
+        esac
+      done <<<"$sess"
+      [ -n "$n" ] || n="${#titles[@]}"
+      open_header="Open items: $n open (\`open-items\` for detail; add/close/park/decline/reopen to change)"
+    fi
+  fi
+
+  # handoff: declared or default; a line only when the file exists
+  local hmark hpath
+  hmark="$(decl_get "$decl" handoff)"; [ -n "$hmark" ] || hmark="repo:OPENING-PROMPT.md"
+  if hpath="$(resolve "$hmark" "$top" "$drawer")" && [ -n "$hpath" ] && [ -f "$hpath" ]; then
+    handoff="Handoff: $hmark ($(file_size "$hpath"), $(file_date "$hpath")). Read on request, never print it."
+  fi
+
+  # trackers, one line each
+  local t
+  while IFS= read -r t; do [ -n "$t" ] && trackers+=("Tracker: $t"); done < <(decl_all "$decl" tracker)
+
+  # assemble under the cap: fixed lines first, titles get what is left
+  lines+=("pj start card: $name")
+  [ -n "$warn" ] && lines+=("$warn")
+  [ -n "$open_header" ] && lines+=("$open_header")
+  local fixed=$(( ${#lines[@]} + ${#trackers[@]} + 1 ))   # +1 hello
+  [ -n "$parked" ] && fixed=$((fixed + 1))
+  [ -n "$handoff" ] && fixed=$((fixed + 1))
+  local budget=$(( CAP - fixed )) cap=$TITLE_CAP total=${#titles[@]}
+  [ "$cap" -gt "$budget" ] && cap=$budget
+  local more=0
+  if [ "$total" -gt "$cap" ]; then more=1; cap=$((budget - 1)); [ "$cap" -gt "$TITLE_CAP" ] && cap=$TITLE_CAP; fi
+  [ "$cap" -lt 0 ] && cap=0
+  local i=0
+  while [ "$i" -lt "$cap" ] && [ "$i" -lt "$total" ]; do lines+=("${titles[$i]}"); i=$((i + 1)); done
+  [ "$more" -eq 1 ] && lines+=("   +$((total - cap)) more")
+  [ -n "$parked" ] && lines+=("   $parked")
+  [ -n "$handoff" ] && lines+=("$handoff")
+  [ "${#trackers[@]}" -gt 0 ] && lines+=("${trackers[@]}")
+  lines+=("$HELLO")
+  printf '%s\n' "${lines[@]}"
+}
+
+main(){
+  local src out
+  src="$(source_of_hook)"
+  [ "$src" = "compact" ] && exit 0
+  out="$(card 2>/dev/null)" || exit 0
+  [ -n "$out" ] && printf '%s\n' "$out"
+  exit 0
+}
+main

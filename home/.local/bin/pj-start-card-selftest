@@ -1,0 +1,180 @@
+#!/usr/bin/env bash
+# pj-start-card-selftest -- proves every arm of the start card against throwaway
+# fixtures: drawers of three sizes, a declaration present and absent, a declared
+# handoff missing and present, the no-wrap-up flag present and absent, outside a
+# repo, a broken open-items first on PATH, the stdin sources, trackers, the cap
+# squeeze, a no-write check with its control, and timing.
+#
+# Nothing here touches ~/.claude, the real drawers, or any real repo: every arm runs
+# with OPEN_ITEMS_PROJECTS_DIR and PJ_STATE_DIR pointed into a scratch tree.
+set -uo pipefail
+
+CARD="${PJ_CARD:-$(cd "$(dirname "$0")" && pwd -P)/pj-start-card}"
+[ -x "$CARD" ] || { echo "no pj-start-card next to this selftest"; exit 1; }
+
+ROOT="$(mktemp -d "${TMPDIR:-/tmp}/pj-card-selftest.XXXXXX")" || exit 1
+ROOT="$(cd "$ROOT" && pwd -P)"   # /tmp is a symlink on macOS; git reports the real path
+PROJ="$ROOT/projects"; STATE="$ROOT/state"; mkdir -p "$PROJ" "$STATE/no-wrap-up"
+export OPEN_ITEMS_PROJECTS_DIR="$PROJ" PJ_STATE_DIR="$STATE"
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+
+PASS=0; FAIL=0
+ok(){ PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
+bad(){ FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1"; }
+check(){ if eval "$2"; then ok "$1"; else bad "$1"; fi; }   # check <label> <test-expr>
+
+encode_key(){ printf '%s' "$1" | sed 's#[/._]#-#g'; }
+mkrepo(){ mkdir -p "$1" && git -C "$1" init -q && git -C "$1" config user.email t@t && git -C "$1" config user.name t; }
+mkdrawer(){  # mkdrawer <repo> <n-open> <n-parked>
+  local w="$PROJ/$(encode_key "$1")/memory/WORK" i
+  mkdir -p "$w/items/open" "$w/items/parked"
+  for i in $(seq 1 "$2"); do [ "$2" -gt 0 ] || break   # BSD seq 1 0 counts DOWN
+    printf '## W-20260101-%02d -- open item number %s\n\nproject: %s\nstatus: open\nkind: do\ndone-when: x\n' "$i" "$i" "$(basename "$1")" > "$w/items/open/W-20260101-$(printf %02d "$i").md"
+  done
+  for i in $(seq 1 "$3"); do [ "$3" -gt 0 ] || break
+    printf '## W-20260102-%02d -- parked item %s\n\nproject: %s\nstatus: parked\nkind: do\ndone-when: x\n' "$i" "$i" "$(basename "$1")" > "$w/items/parked/W-20260102-$(printf %02d "$i").md"
+  done
+  printf '%s' "$w"
+}
+run(){ ( builtin cd "$1" && "$CARD" </dev/null 2>"$ROOT/stderr" ) > "$ROOT/out"; RC=$?; OUT="$(cat "$ROOT/out")"; }
+lines(){ printf '%s\n' "$1" | grep -c ''; }
+has(){ printf '%s\n' "$1" | grep -q -- "$2"; }
+ntitles(){ printf '%s\n' "$1" | grep -c '   · '; }
+
+echo "pj-start-card selftest in $ROOT"
+
+# --- A: drawer with 3 open, 1 parked ------------------------------------------
+A="$ROOT/repo-a"; mkrepo "$A"; WA="$(mkdrawer "$A" 3 1)"
+run "$A"
+check "A rc 0" '[ "$RC" -eq 0 ]'
+check "A header names the repo" 'has "$OUT" "^pj start card: repo-a$"'
+check "A count 3" 'has "$OUT" "^Open items: 3 open"'
+check "A three titles" '[ "$(ntitles "$OUT")" -eq 3 ]'
+check "A no +more line" '! has "$OUT" "+[0-9]* more"'
+check "A parked: 1" 'has "$OUT" "^   parked: 1$"'
+check "A hello rule last" '[ "$(printf "%s\n" "$OUT" | tail -1 | cut -c1-11)" = "Hello rule:" ]'
+check "A no handoff line (none exists)" '! has "$OUT" "^Handoff:"'
+check "A no warning (no flag)" '! has "$OUT" "^WARNING"'
+check "A no ANSI bytes" '! printf "%s" "$OUT" | grep -q $'"'"'\x1b'"'"''
+check "A stderr empty" '[ ! -s "$ROOT/stderr" ]'
+
+# --- B: drawer over the cap, 14 open, 2 parked --------------------------------
+B="$ROOT/repo-b"; mkrepo "$B"; mkdrawer "$B" 14 2 >/dev/null
+run "$B"
+check "B rc 0" '[ "$RC" -eq 0 ]'
+check "B count 14" 'has "$OUT" "^Open items: 14 open"'
+check "B exactly 10 titles" '[ "$(ntitles "$OUT")" -eq 10 ]'
+check "B +4 more" 'has "$OUT" "^   +4 more$"'
+check "B parked: 2" 'has "$OUT" "^   parked: 2$"'
+check "B at most 20 lines ($(lines "$OUT"))" '[ "$(lines "$OUT")" -le 20 ]'
+check "B under 1.5 KB ($(printf "%s\n" "$OUT" | wc -c | tr -d " ") bytes)" '[ "$(printf "%s\n" "$OUT" | wc -c)" -le 1536 ]'
+
+# --- C: no drawer --------------------------------------------------------------
+C="$ROOT/repo-c"; mkrepo "$C"
+run "$C"
+check "C rc 0" '[ "$RC" -eq 0 ]'
+check "C no-drawer line" 'has "$OUT" "^Open items: no drawer for this project yet"'
+check "C two lines plus header = 3" '[ "$(lines "$OUT")" -eq 3 ]'
+# ...and a drawer with nothing open
+D="$ROOT/repo-d"; mkrepo "$D"; mkdrawer "$D" 0 0 >/dev/null
+run "$D"
+check "D empty drawer says none open" 'has "$OUT" "^Open items: none open"'
+
+# --- E: declaration absent -> default handoff repo:OPENING-PROMPT.md ---------------
+run "$A"; check "E default handoff absent -> no line" '! has "$OUT" "^Handoff:"'
+printf 'hand\n' > "$A/OPENING-PROMPT.md"
+run "$A"
+check "E default handoff present -> line with marker" 'has "$OUT" "^Handoff: repo:OPENING-PROMPT.md (5 B, 20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]). Read on request"'
+check "E handoff line never shows an absolute path" '! has "$OUT" "$ROOT"'
+
+# --- F: declaration present, handoff in the drawer, missing then present ------------
+mkdir -p "$A/.claude"
+printf '# comment\nrecords: private\nhandoff: drawer:OPENING-PROMPT.md\ntracker: repo:TODO.md\ntracker: ~/notes/tracker.md\n' > "$A/.claude/pj-homes"
+run "$A"
+check "F declared handoff missing -> no line, still rc 0" '[ "$RC" -eq 0 ] && ! has "$OUT" "^Handoff:"'
+check "F repo OPENING-PROMPT.md ignored once handoff is declared elsewhere" '! has "$OUT" "repo:OPENING-PROMPT"'
+check "F tracker lines, two" '[ "$(printf "%s\n" "$OUT" | grep -c "^Tracker: ")" -eq 2 ]'
+check "F tracker keeps its marker" 'has "$OUT" "^Tracker: repo:TODO.md$" && has "$OUT" "^Tracker: ~/notes/tracker.md$"'
+printf '%02000d\n' 0 > "$WA/OPENING-PROMPT.md"
+run "$A"
+check "F declared handoff present -> line with drawer marker and KB size" 'has "$OUT" "^Handoff: drawer:OPENING-PROMPT.md (2.0 KB, 20"'
+check "F handoff contents never printed" '! has "$OUT" "00000000"'
+
+# --- G: the no-wrap-up flag -----------------------------------------------------------
+FLAG="$STATE/no-wrap-up/$(encode_key "$A")"
+run "$A"; check "G no flag -> no warning" '! has "$OUT" "^WARNING"'
+printf 'project: repo-a\nrepo: %s\nended: 2026-09-20 21:30\nsession: abc\ntranscript: %s/.claude/projects/x/abc.jsonl\n' "$A" "$HOME" > "$FLAG"
+run "$A"
+check "G flag -> warning is line 2" '[ "$(printf "%s\n" "$OUT" | sed -n 2p | cut -c1-8)" = "WARNING:" ]'
+check "G warning carries ended and transcript with ~" 'has "$OUT" "(2026-09-20 21:30). Transcript: ~/.claude/projects/x/abc.jsonl"'
+check "G flag still there afterwards (card never deletes)" '[ -f "$FLAG" ]'
+printf 'garbage\n' > "$FLAG"
+run "$A"
+check "G unreadable flag -> warning without details" 'has "$OUT" "^WARNING: the last session here ended without wrap-up.$"'
+rm -f "$FLAG" 2>/dev/null || command mv "$FLAG" "$ROOT/flag.gone"
+run "$A"; check "G flag removed -> warning gone (control)" '! has "$OUT" "^WARNING"'
+
+# --- H: outside any git repo ---------------------------------------------------------
+H="$ROOT/plain-dir"; mkdir -p "$H"
+run "$H"
+check "H rc 0" '[ "$RC" -eq 0 ]'
+check "H exactly 2 lines" '[ "$(lines "$OUT")" -eq 2 ]'
+check "H header says not a git repo" 'has "$OUT" "^pj start card: plain-dir (not a git repo"'
+check "H hello rule present" 'has "$OUT" "^Hello rule:"'
+
+# --- I: broken open-items first on PATH ----------------------------------------------
+BROKEN="$ROOT/broken"; mkdir -p "$BROKEN"
+printf '#!/bin/sh\necho boom >&2\nexit 7\n' > "$BROKEN/open-items"; chmod +x "$BROKEN/open-items"
+OUT="$( builtin cd "$B" && PATH="$BROKEN:$PATH" "$CARD" </dev/null 2>"$ROOT/stderr" )"; RC=$?
+check "I rc 0 with broken open-items" '[ "$RC" -eq 0 ]'
+check "I header and hello rule still print" 'has "$OUT" "^pj start card: repo-b$" && has "$OUT" "^Hello rule:"'
+check "I no open-items section, no boom" '! has "$OUT" "Open items" && ! has "$OUT" boom && [ ! -s "$ROOT/stderr" ]'
+OUT="$( builtin cd "$B" && PATH="$ROOT/nowhere:/usr/bin:/bin" "$CARD" </dev/null 2>"$ROOT/stderr" )"; RC=$?
+check "I open-items absent from PATH -> rc 0, card still prints" '[ "$RC" -eq 0 ] && has "$OUT" "^pj start card: repo-b$"'
+run "$B"; check "I control: real open-items back -> section returns" 'has "$OUT" "^Open items: 14 open"'
+
+# --- J: stdin sources ------------------------------------------------------------------
+src(){ ( builtin cd "$B" && printf '%s' "$1" | "$CARD" 2>/dev/null ); }
+check "J compact -> nothing" '[ -z "$(src "{\"source\":\"compact\"}")" ]'
+check "J clear -> card" 'has "$(src "{\"source\":\"clear\"}")" "^pj start card"'
+check "J resume -> card" 'has "$(src "{\"source\":\"resume\"}")" "^pj start card"'
+check "J startup -> card" 'has "$(src "{\"source\":\"startup\",\"cwd\":\"/x\"}")" "^pj start card"'
+check "J garbage stdin -> card" 'has "$(src "not json")" "^pj start card"'
+check "J empty stdin -> card" 'has "$(src "")" "^pj start card"'
+
+# --- K: cap squeeze: 14 items + flag + handoff + 5 trackers still fits in 20 -----------
+mkdir -p "$B/.claude"; { printf 'handoff: repo:OPENING-PROMPT.md\n'; for i in 1 2 3 4 5; do printf 'tracker: repo:t%s.md\n' "$i"; done; } > "$B/.claude/pj-homes"
+printf 'h\n' > "$B/OPENING-PROMPT.md"
+printf 'ended: 2026-01-01 00:00\n' > "$STATE/no-wrap-up/$(encode_key "$B")"
+run "$B"
+check "K rc 0" '[ "$RC" -eq 0 ]'
+check "K exactly 20 lines" '[ "$(lines "$OUT")" -eq 20 ]'
+check "K titles squeezed below 10 ($(ntitles "$OUT"))" '[ "$(ntitles "$OUT")" -lt 10 ] && [ "$(ntitles "$OUT")" -gt 0 ]'
+check "K +N more present and consistent" '[ "$(( $(ntitles "$OUT") + $(printf "%s\n" "$OUT" | sed -n "s/^   +\([0-9]*\) more$/\1/p") ))" -eq 14 ]'
+check "K every fixed line survived" 'has "$OUT" "^WARNING" && has "$OUT" "^Handoff:" && [ "$(printf "%s\n" "$OUT" | grep -c "^Tracker: ")" -eq 5 ] && has "$OUT" "^   parked: 2$" && has "$OUT" "^Hello rule:"'
+
+# --- L: writes nothing, with a control -----------------------------------------------------
+STAMP="$ROOT/stamp"; touch "$STAMP"; sleep 1
+run "$A" >/dev/null; run "$B" >/dev/null; run "$C" >/dev/null; run "$H" >/dev/null
+NEW="$(find "$ROOT" -type f -newer "$STAMP" ! -name stderr ! -name out | wc -l | tr -d ' ')"
+check "L no file newer than the stamp after four runs ($NEW)" '[ "$NEW" -eq 0 ]'
+touch "$ROOT/control-write"
+NEWC="$(find "$ROOT" -type f -newer "$STAMP" ! -name stderr ! -name out | wc -l | tr -d ' ')"
+check "L control: a real write is counted ($NEWC)" '[ "$NEWC" -eq 1 ]'
+
+# --- M: timing -------------------------------------------------------------------------------
+now(){ perl -MTime::HiRes=time -e 'printf "%.3f\n", time'; }
+SLOW=0; T0="$(now)"
+for i in 1 2 3 4 5 6 7 8 9 10; do
+  s="$(now)"; run "$B" >/dev/null; e="$(now)"
+  awk -v s="$s" -v e="$e" 'BEGIN{exit !((e-s) < 1.0)}' || SLOW=$((SLOW+1))
+done
+T1="$(now)"; TOTAL="$(awk -v a="$T0" -v b="$T1" 'BEGIN{printf "%.2f", b-a}')"
+check "M every one of 10 runs under 1 s (slow: $SLOW, total ${TOTAL}s)" '[ "$SLOW" -eq 0 ]'
+
+# --- N: --selftest dispatch and syntax ------------------------------------------------------
+check "N bash -n clean" 'bash -n "$CARD"'
+
+printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
+rm -r "$ROOT" 2>/dev/null || true
+[ "$FAIL" -eq 0 ]

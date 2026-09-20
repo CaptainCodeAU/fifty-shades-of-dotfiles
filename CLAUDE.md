@@ -1,6 +1,6 @@
 Default branch is `master`.
 
-Open items: `open-items` (this project), `open-items --all` (every project). File one with `open-items add "title" --done-when "..."`; move one with `close`, `park`, `decline`, `reopen`; `--help` for the rest. Never hand-edit `OPEN.md`, it is generated.
+Open items arrive on the start card at the top of every `pj` session (count, titles, parked); do not run a listing to get them. `open-items` prints the detail, `open-items --all` every project. File one with `open-items add "title" --done-when "..."`; move one with `close`, `park`, `decline`, `reopen`; `--help` for the rest. Never hand-edit `OPEN.md`, it is generated. Where this project's handoff and records live: `.claude/pj-homes`.
 
 ## Before proposing a fix, ask whether it is already decided
 
@@ -44,8 +44,8 @@ you KNOW is present, run in the same breath.** Those are exactly the two answers
 that look identical when the check never actually ran. A check returning a real
 VALUE usually fails loudly on its own; a check returning `0`, "none", or the
 same number in every arm cannot distinguish "the mechanism works" from "the test
-did not happen". Before trusting one, ask: *what would this print if the thing
-never ran at all?* If the answer is "the same", it is not a check.
+did not happen". Before trusting one, ask: _what would this print if the thing
+never ran at all?_ If the answer is "the same", it is not a check.
 
 Four traps already in this file are that one rule written out four times, not
 four separate lessons:
@@ -92,7 +92,7 @@ than shelling out to a grep.
 
 **YOU CAN BE THE ONE WHO HIDES THE EVIDENCE.** The first three traps are all
 something else staying quiet -- a tool, a formatter, a refusal. This fourth one
-is different and worth naming separately: *you* narrowed the output, and then
+is different and worth naming separately: _you_ narrowed the output, and then
 read the narrowed version as the whole. `head`, `tail`, `cut`, `--lines N` and
 `| head -20` all feel like FORMATTING rather than measurement, which is exactly
 why the count-and-absence rule does not fire in your head when you type one.
@@ -304,11 +304,11 @@ The discipline does NOT change: ALWAYS get explicit user confirmation before del
 
 Two systems run side by side. Which one a repo uses is decided by its `origin` URL, nothing else.
 
-| `origin` looks like | Auth used | Notes |
-|---|---|---|
-| `git-cc:owner/repo` (or any `git@`/alias form) | SSH key `~/.ssh/captaincodeau` | The legacy path. Still the majority. |
-| `https://x-access-token@github.com/owner/repo.git` | GitHub App, short-lived token | The new path. A repo joins ONLY via `github-agent-flip`. |
-| plain `https://github.com/...` | nothing | The helper sees it and declines by design (no `x-access-token` username). |
+| `origin` looks like                                | Auth used                      | Notes                                                                     |
+| -------------------------------------------------- | ------------------------------ | ------------------------------------------------------------------------- |
+| `git-cc:owner/repo` (or any `git@`/alias form)     | SSH key `~/.ssh/captaincodeau` | The legacy path. Still the majority.                                      |
+| `https://x-access-token@github.com/owner/repo.git` | GitHub App, short-lived token  | The new path. A repo joins ONLY via `github-agent-flip`.                  |
+| plain `https://github.com/...`                     | nothing                        | The helper sees it and declines by design (no `x-access-token` username). |
 
 Git invokes a credential helper only for an HTTPS remote, so an untouched SSH repo never touches the new system. Nothing migrates on its own.
 
@@ -343,8 +343,8 @@ NOT use the token you passed** — the wrapper replaces it.
 Inside a repo flipped onto the GitHub App, the wrapper MINTS an App installation
 token and overrides yours with an assignment prefix: `GH_TOKEN="$_gh_token"
 command gh "$@"`. So a measurement taken in a flipped repo measures the App, and
-App failures say *"Resource not accessible by integration"*. A fine-grained PAT
-says *"not accessible by personal access token"*. Those are different strings for
+App failures say _"Resource not accessible by integration"_. A fine-grained PAT
+says _"not accessible by personal access token"_. Those are different strings for
 different credential families, and reading the first one while believing you
 passed a PAT sends you after the wrong thing entirely — measured 2026-09-17, it
 cost a peer session a wrong conclusion about what PATs can do, which then nearly

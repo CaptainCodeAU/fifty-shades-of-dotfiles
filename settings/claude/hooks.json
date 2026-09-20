@@ -142,6 +142,18 @@
     },
     {
       "event": "SessionStart",
+      "script": "pj-start-card",
+      "script_path": "$HOME/.local/bin/pj-start-card",
+      "targets": ["project"],
+      "entry": {
+        "type": "command",
+        "command": "test -x \"$HOME/.local/bin/pj-start-card\" && \"$HOME/.local/bin/pj-start-card\" || true",
+        "timeout": 5
+      },
+      "why": "The 20-line start card for pj sessions (D-20260920-04): open items, wrap-up warning, handoff pointer, hello rule. Project target only: pj is the launcher it serves"
+    },
+    {
+      "event": "SessionStart",
       "script": "ccw-watch",
       "script_path": "$HOME/.local/bin/ccw-watch",
       "entry": {
