@@ -1,0 +1,186 @@
+#!/usr/bin/env bash
+# pj-wrap -- the small helper behind /pj:wrap-up (D-20260920-03, D-20260920-08 c).
+#
+# Usage:
+#   pj-wrap status                 earlier sessions in THIS project that ended without
+#                                  wrap-up, with their transcript paths (rc 1 when none)
+#   pj-wrap done [--keep-earlier]  mark this session wrapped; move this project's
+#                                  no-wrap-up flag aside (kept with --keep-earlier)
+#   pj-wrap push                   push this project's drawer commits from dot-claude
+#   pj-wrap --selftest             prove every arm (runs pj-wrap-selftest)
+#
+# STATE  ${XDG_STATE_HOME:-~/.local/state}/pj  (PJ_STATE_DIR overrides; test seam)
+#   no-wrap-up/<key>            the flag pj-session-end writes, one record per session,
+#                               newest first (contract in pj-session-end and pj-start-card)
+#   no-wrap-up/handled/<key>.<time>   where `done` MOVES a flag. Nothing is ever deleted.
+#   wrapped/<session-id>        the marker `done` writes; pj-session-end then stays quiet.
+#
+# THE SESSION ID is CLAUDE_CODE_SESSION_ID (what the harness really exports; the older
+# CLAUDE_SESSION_ID is read as a fallback), the same way open-items fills `raised`.
+#
+# PUSH, step by step (ruled at the P5.3 gate, 2026-09-20). dot-claude almost always
+# carries someone else's uncommitted change, so:
+#   1. git push. Accepted: done.
+#   2. Rejected: git fetch. Say how many commits origin has that we lack.
+#   3. Uncommitted TRACKED changes anywhere in the tree, or a rebase/merge in progress:
+#      STOP and say what is needed. Touch nothing. Never stash, never autostash,
+#      never reset, never checkout over a dirty path.
+#   4. Clean tree: rebase our local commits onto origin.
+#   5. A conflict only in generated files (WORK/OPEN.md, items/.generated.sha256):
+#      take origin's copy, continue, then `open-items regen` rebuilds the view from the
+#      item files. The view is regenerated, never merged (docs/OPEN_ITEMS.md).
+#   6. Any other conflict: rebase --abort, STOP, name the paths. Tree back as it was.
+#   7. Push once more. Rejected again: STOP. No loop.
+# Inside a Claude session the push needs the login Keychain, which the Bash sandbox
+# blocks: run `pj-wrap push` with the sandbox lifted for that one call.
+#
+# Exit: 0 done · 1 nothing to report/push · 2 REFUSED (bad args, no session id) · 3 STOPPED,
+# action needed (the message says what). Nothing personal, no absolute drawer path is
+# printed with ~ expanded where it can be helped. Selftest: pj-wrap-selftest.
+
+set -uo pipefail
+
+STATE="${PJ_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/pj}"
+DOTCLAUDE="${OPEN_ITEMS_DOTCLAUDE:-$HOME/.claude}"
+SID="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
+
+refuse(){ printf 'pj-wrap: REFUSED -- %s\n' "$1" >&2; exit 2; }
+stop(){ printf 'pj-wrap: STOPPED -- %s\n' "$1" >&2; exit 3; }
+say(){ printf 'pj-wrap: %s\n' "$1"; }
+usage(){ sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; }
+encode_key(){ printf '%s' "$1" | sed 's#[/._]#-#g'; }
+tilde(){ printf '%s' "${1/#$HOME/\~}"; }
+
+repo_top(){
+  local g; g="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+  dirname "$g"
+}
+flag_path(){ local top; top="$(repo_top)" || refuse "not inside a git repo, so there is no project"; printf '%s/no-wrap-up/%s' "$STATE" "$(encode_key "$top")"; }
+
+# ---------------------------------------------------------------- status ----
+cmd_status(){
+  local flag n i=0 rec
+  flag="$(flag_path)" || exit 2
+  if [ ! -f "$flag" ]; then
+    say "no earlier session here ended without wrap-up (checked $(tilde "$flag"))"; exit 1
+  fi
+  n="$(grep -c '^session:' "$flag" 2>/dev/null || echo 0)"
+  [ "$n" -gt 0 ] || { say "a flag exists at $(tilde "$flag") but holds no readable record. Show it to the user."; exit 0; }
+  say "$n earlier session(s) here ended without wrap-up (newest first):"
+  awk 'BEGIN { RS = "" } {
+    s = ""; e = ""; t = ""; m = ""; d = ""
+    n = split($0, L, "\n")
+    for (j = 1; j <= n; j++) {
+      if (L[j] ~ /^session: /)    s = substr(L[j], 10)
+      if (L[j] ~ /^ended: /)      e = substr(L[j], 8)
+      if (L[j] ~ /^transcript: /) t = substr(L[j], 13)
+      if (L[j] ~ /^messages: /)   m = substr(L[j], 11)
+      if (L[j] ~ /^edits: /)      d = substr(L[j], 8)
+    }
+    if (s == "") next
+    i++
+    extra = ""; if (m != "" || d != "") extra = "  (" m " messages, " d " edits)"
+    printf "  %d. ended %s  session %s%s\n     transcript: %s\n", i, e, s, extra, t
+  }' "$flag" | sed "s#$HOME#~#g"
+  [ -n "$SID" ] && grep -q "^session: $SID\$" "$flag" && say "one of them is THIS session (resumed after an unwrapped end)."
+  exit 0
+}
+
+# ---------------------------------------------------------------- done ----
+cmd_done(){
+  local keep=0 flag dest
+  case "${1:-}" in --keep-earlier) keep=1 ;; "") ;; *) refuse "done: unknown flag $1" ;; esac
+  [ -n "$SID" ] || refuse "done: no session id in the environment (CLAUDE_CODE_SESSION_ID), so this session cannot be marked wrapped"
+  flag="$(flag_path)" || exit 2
+  mkdir -p "$STATE/wrapped" || refuse "done: cannot create $(tilde "$STATE/wrapped")"
+  printf 'wrapped: %s\nproject: %s\n' "$(date '+%Y-%m-%d %H:%M')" "$(basename "$(repo_top)")" > "$STATE/wrapped/$SID"
+  say "session $SID marked wrapped ($(tilde "$STATE/wrapped/$SID"))"
+  if [ -f "$flag" ]; then
+    if [ "$keep" -eq 1 ]; then
+      say "earlier-session flag KEPT at $(tilde "$flag") ($(grep -c '^session:' "$flag") record(s)); it warns again next start"
+    else
+      mkdir -p "$STATE/no-wrap-up/handled" || refuse "done: cannot create the handled folder"
+      dest="$STATE/no-wrap-up/handled/$(basename "$flag").$(date +%Y%m%d-%H%M%S)"
+      while [ -e "$dest" ]; do dest="$dest.$RANDOM"; done
+      mv "$flag" "$dest" || refuse "done: could not move the flag aside"
+      say "earlier-session flag cleared: moved to $(tilde "$dest") (nothing deleted)"
+    fi
+  else
+    say "no earlier-session flag to clear"
+  fi
+  exit 0
+}
+
+# ---------------------------------------------------------------- push ----
+dirty_tracked(){ git -C "$1" status --porcelain --untracked-files=no 2>/dev/null; }
+in_progress(){ local g; g="$(git -C "$1" rev-parse --git-dir)"; [ -d "$g/rebase-merge" ] || [ -d "$g/rebase-apply" ] || [ -f "$g/MERGE_HEAD" ]; }
+generated_only(){   # every conflicted path is a generated view or its stamp
+  local p; while IFS= read -r p; do
+    case "$p" in */WORK/OPEN.md|*/WORK/items/.generated.sha256) ;; *) return 1 ;; esac
+  done; return 0
+}
+cmd_push(){
+  local top branch up ahead behind out rc paths p dirty took=() w
+  top="$(git -C "$DOTCLAUDE" rev-parse --show-toplevel 2>/dev/null)" || refuse "push: $(tilde "$DOTCLAUDE") is not a git repo"
+  branch="$(git -C "$top" symbolic-ref --short HEAD 2>/dev/null)" || stop "dot-claude is not on a branch (detached HEAD). Check it out yourself, then push again."
+  up="$(git -C "$top" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)" || stop "branch $branch has no upstream. Set one yourself (git branch -u origin/$branch), then push again."
+  in_progress "$top" && stop "a rebase or merge is already in progress in $(tilde "$top"). Finish or abort it yourself, then push again."
+  ahead="$(git -C "$top" rev-list --count "$up..HEAD" 2>/dev/null || echo 0)"
+  [ "$ahead" -gt 0 ] || { say "nothing to push: $branch is not ahead of $up"; exit 1; }
+  say "pushing $ahead commit(s) on $branch to $up"
+  out="$(git -C "$top" push 2>&1)"; rc=$?
+  [ "$rc" -eq 0 ] && { say "push accepted"; exit 0; }
+  case "$out" in
+    *rejected*|*"fetch first"*|*non-fast-forward*|*"failed to push some refs"*) ;;
+    *) stop "push failed before the remote accepted anything: $(printf '%s' "$out" | tail -1). Inside a Claude session the Keychain is blocked by the sandbox: run 'pj-wrap push' with the sandbox lifted." ;;
+  esac
+  say "push rejected; fetching"
+  git -C "$top" fetch -q 2>&1 | sed 's/^/pj-wrap:   /' >&2
+  behind="$(git -C "$top" rev-list --count "HEAD..$up" 2>/dev/null || echo 0)"
+  [ "$behind" -gt 0 ] || stop "push rejected but $up has nothing we lack. Remote output: $(printf '%s' "$out" | tail -1)"
+  say "$up has $behind commit(s) we lack"
+  dirty="$(dirty_tracked "$top")"
+  if [ -n "$dirty" ]; then
+    printf 'pj-wrap: uncommitted changes in %s:\n' "$(tilde "$top")" >&2
+    printf '%s\n' "$dirty" | sed 's/^/pj-wrap:   /' >&2
+    stop "a rebase needs a clean tree and those changes are not ours to move. Commit or stash them yourself (or ask their owner), then run 'pj-wrap push' again. Nothing was touched."
+  fi
+  say "tree clean; rebasing our $ahead commit(s) onto $up"
+  while :; do
+    out="$(GIT_EDITOR=true git -C "$top" rebase "$up" 2>&1)"; rc=$?
+    [ "$rc" -eq 0 ] && break
+    paths="$(git -C "$top" diff --name-only --diff-filter=U 2>/dev/null)"
+    if [ -n "$paths" ] && printf '%s\n' "$paths" | generated_only; then
+      say "conflict only in generated files; taking origin's copy, regenerating after"
+      while IFS= read -r p; do git -C "$top" checkout --ours -- "$p" 2>/dev/null && git -C "$top" add -- "$p"; took+=("$(dirname "$p")"); done <<<"$paths"
+      out="$(GIT_EDITOR=true git -C "$top" rebase --continue 2>&1)"; rc=$?
+      [ "$rc" -eq 0 ] && break
+      in_progress "$top" && continue
+      git -C "$top" rebase --abort 2>/dev/null
+      stop "rebase could not continue: $(printf '%s' "$out" | tail -1). Aborted; tree as it was."
+    fi
+    git -C "$top" rebase --abort 2>/dev/null
+    stop "conflict in a file that is not a generated view. Aborted, tree as it was. Paths: $(printf '%s' "$paths" | tr '\n' ' '). Resolve by hand, then push again."
+  done
+  if [ "${#took[@]}" -gt 0 ]; then
+    # the stamp must match the view we just took, or regen would rescue it as a hand edit
+    for w in "${took[@]}"; do
+      w="${w%/items}"
+      [ -f "$top/$w/OPEN.md" ] && [ -d "$top/$w/items" ] && shasum -a 256 "$top/$w/OPEN.md" | cut -d' ' -f1 > "$top/$w/items/.generated.sha256"
+    done
+    out="$(open-items regen 2>&1)"; rc=$?
+    [ "$rc" -eq 0 ] && say "OPEN.md regenerated from items/ (a fresh commit)" || say "open-items regen returned $rc: $(printf '%s' "$out" | tail -1). Regenerate it yourself from the project."
+  fi
+  out="$(git -C "$top" push 2>&1)"; rc=$?
+  [ "$rc" -eq 0 ] && { say "push accepted after rebase"; exit 0; }
+  stop "second push rejected: $(printf '%s' "$out" | tail -1). Not retrying. Look at $(tilde "$top") yourself."
+}
+
+case "${1:-}" in
+  -h|--help|"") usage; [ -n "${1:-}" ] && exit 0 || exit 2 ;;
+  --selftest) exec "$(dirname "$0")/pj-wrap-selftest" ;;
+  status) cmd_status ;;
+  done)   shift; cmd_done "$@" ;;
+  push)   cmd_push ;;
+  *) refuse "unknown command $1 (status | done | push | --selftest)" ;;
+esac

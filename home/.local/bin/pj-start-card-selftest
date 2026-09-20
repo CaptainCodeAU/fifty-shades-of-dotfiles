@@ -108,6 +108,14 @@ run "$A"
 check "G flag -> warning is line 2" '[ "$(printf "%s\n" "$OUT" | sed -n 2p | cut -c1-8)" = "WARNING:" ]'
 check "G warning carries ended and transcript with ~" 'has "$OUT" "(2026-09-20 21:30). Transcript: ~/.claude/projects/x/abc.jsonl"'
 check "G flag still there afterwards (card never deletes)" '[ -f "$FLAG" ]'
+# P5.3: several records, newest first -> ONE line with the count, newest details
+printf 'project: repo-a\nrepo: %s\nended: 2026-09-20 23:00\nsession: newest\ntranscript: %s/.claude/projects/x/newest.jsonl\n\nproject: repo-a\nrepo: %s\nended: 2026-09-20 21:30\nsession: abc\ntranscript: %s/.claude/projects/x/abc.jsonl\n' "$A" "$HOME" "$A" "$HOME" > "$FLAG"
+run "$A"
+check "G two records -> still exactly ONE warning line" '[ "$(printf "%s\n" "$OUT" | grep -c "^WARNING")" -eq 1 ]'
+check "G two records -> the count is in the line" 'has "$OUT" "^WARNING: the last 2 sessions here ended without wrap-up (latest 2026-09-20 23:00)"'
+check "G two records -> newest transcript shown" 'has "$OUT" "Transcript: ~/.claude/projects/x/newest.jsonl"'
+check "G two records -> points at pj-wrap status" 'has "$OUT" "(pj-wrap status lists all)"'
+check "G two records -> older transcript NOT on the card (one line)" '! has "$OUT" "abc.jsonl"'
 printf 'garbage\n' > "$FLAG"
 run "$A"
 check "G unreadable flag -> warning without details" 'has "$OUT" "^WARNING: the last session here ended without wrap-up.$"'

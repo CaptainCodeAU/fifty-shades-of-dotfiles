@@ -1,0 +1,166 @@
+#!/usr/bin/env bash
+# pj-wrap-selftest -- proves every arm of pj-wrap against throwaway fixtures: status on
+# no, one and three records; done with and without a session id, with --keep-earlier;
+# push with nothing to push, accepted, rejected with a clean tree (rebased), rejected
+# with a DIRTY tree (stopped, tree byte-identical), a conflict in the generated OPEN.md
+# (regenerated, never merged) and a conflict elsewhere (aborted, tree as it was).
+# Nothing here touches ~/.local/state, ~/.claude or any real repo.
+set -uo pipefail
+BIN="$(cd "$(dirname "$0")" && pwd -P)"
+WRAP="${PJ_WRAP:-$BIN/pj-wrap}"; OI="${OPEN_ITEMS_TOOL:-$BIN/open-items}"
+[ -x "$WRAP" ] && [ -x "$OI" ] || { echo "need pj-wrap and open-items next to this selftest"; exit 1; }
+ROOT="$(mktemp -d "${TMPDIR:-/tmp}/pj-wrap-selftest.XXXXXX")" || exit 1
+ROOT="$(cd "$ROOT" && pwd -P)"
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+export PATH="$BIN:$PATH"
+STATE="$ROOT/state"; export PJ_STATE_DIR="$STATE"
+PASS=0; FAIL=0
+ok(){ PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
+bad(){ FAIL=$((FAIL+1)); printf '  FAIL %s\n       got: %s\n' "$1" "$(printf '%s' "${OUT:-}" | tr '\n' '|' | cut -c1-900)"; }
+check(){ if eval "$2"; then ok "$1"; else bad "$1"; fi; }
+encode_key(){ printf '%s' "$1" | sed 's#[/._]#-#g'; }
+nstate(){ find "$STATE" -type f 2>/dev/null | wc -l | tr -d ' '; }
+snapshot(){ ( cd "$1" && find . -path ./.git -prune -o -type f -print | sort | xargs shasum -a 256; git status --porcelain; git rev-parse HEAD ) 2>/dev/null; }
+echo "pj-wrap selftest in $ROOT"
+
+# --- fixture: a project repo, a bare remote, "dot-claude" DC and a second clone OTHER ---------
+ZETA="$ROOT/zeta"; mkdir -p "$ZETA"; git -C "$ZETA" init -q
+KEY="$(encode_key "$ZETA")"
+REMOTE="$ROOT/remote.git"; git init -q --bare "$REMOTE"
+DC="$ROOT/dc"; git clone -q "$REMOTE" "$DC" 2>/dev/null; git -C "$DC" checkout -q -b master 2>/dev/null
+printf 'seed\n' > "$DC/notes.txt"; git -C "$DC" add notes.txt; git -C "$DC" commit -q -m seed; git -C "$DC" push -q -u origin master 2>/dev/null
+OTHER="$ROOT/other"; git clone -q "$REMOTE" "$OTHER" 2>/dev/null
+oi(){   ( cd "$ZETA" && OPEN_ITEMS_PROJECTS_DIR="$DC/projects" OPEN_ITEMS_DOTCLAUDE="$DC" "$OI" "$@" ); }
+oi_other(){ ( cd "$ZETA" && OPEN_ITEMS_PROJECTS_DIR="$OTHER/projects" OPEN_ITEMS_DOTCLAUDE="$OTHER" "$OI" "$@" ); }
+wrap(){ OUT="$(cd "$ZETA" && OPEN_ITEMS_PROJECTS_DIR="$DC/projects" OPEN_ITEMS_DOTCLAUDE="$DC" CLAUDE_CODE_SESSION_ID="${SID-}" "$WRAP" "$@" 2>&1)"; RC=$?; return 0; }
+mkdir -p "$DC/projects/$KEY/memory/WORK"
+oi init >/dev/null 2>&1; oi add "seed item" --done-when x >/dev/null 2>&1
+git -C "$DC" push -q origin master 2>/dev/null; git -C "$OTHER" pull -q 2>/dev/null
+W="$DC/projects/$KEY/memory/WORK"
+[ -f "$W/OPEN.md" ] || { echo "fixture broken: no OPEN.md"; exit 1; }
+
+# --- A: status -------------------------------------------------------------------------------
+FLAG="$STATE/no-wrap-up/$KEY"; mkdir -p "$STATE/no-wrap-up"
+SID=this-session
+wrap status
+check "A no flag -> rc 1 and says so" '[ "$RC" -eq 1 ] && printf "%s" "$OUT" | grep -q "no earlier session"'
+printf 'project: zeta\nrepo: %s\nended: 2026-09-20 10:00\nsession: s-one\ntranscript: %s/t1.jsonl\nmessages: 3\nedits: 1\n' "$ZETA" "$ROOT" > "$FLAG"
+wrap status
+check "A one record -> rc 0" '[ "$RC" -eq 0 ]'
+check "A says 1 earlier session" 'printf "%s" "$OUT" | grep -q "^pj-wrap: 1 earlier session"'
+check "A lists the transcript path" 'printf "%s" "$OUT" | grep -q "transcript: $ROOT/t1.jsonl"'
+check "A lists the counts" 'printf "%s" "$OUT" | grep -q "(3 messages, 1 edits)"'
+printf 'project: zeta\nrepo: %s\nended: 2026-09-20 12:00\nsession: s-three\ntranscript: %s/t3.jsonl\n\nproject: zeta\nrepo: %s\nended: 2026-09-20 11:00\nsession: this-session\ntranscript: %s/t2.jsonl\n\n' "$ZETA" "$ROOT" "$ZETA" "$ROOT" | cat - "$FLAG" > "$FLAG.new" && mv "$FLAG.new" "$FLAG"
+wrap status
+check "A three records -> says 3" 'printf "%s" "$OUT" | grep -q "^pj-wrap: 3 earlier session"'
+check "A newest first" '[ "$(printf "%s\n" "$OUT" | grep -o "session s-[a-z]*" | head -1)" = "session s-three" ]'
+check "A all three transcripts listed" '[ "$(printf "%s\n" "$OUT" | grep -c "transcript: $ROOT/t[123].jsonl")" -eq 3 ]'
+check "A names this session when it is in the list" 'printf "%s" "$OUT" | grep -q "THIS session"'
+( cd "$ROOT" && PJ_STATE_DIR="$STATE" "$WRAP" status >/dev/null 2>&1 ); check "A outside a repo REFUSES (rc 2)" '[ $? -eq 2 ]'
+
+# --- B: done ---------------------------------------------------------------------------------
+BEFORE="$(nstate)"
+SID=""; wrap done
+check "B done without a session id REFUSES (rc 2)" '[ "$RC" -eq 2 ]'
+check "B and moved nothing" '[ -f "$FLAG" ] && [ "$(nstate)" -eq "$BEFORE" ]'
+SID=this-session; wrap done --keep-earlier
+check "B done --keep-earlier rc 0" '[ "$RC" -eq 0 ]'
+check "B marker written" '[ -f "$STATE/wrapped/this-session" ]'
+check "B flag KEPT" '[ -f "$FLAG" ] && printf "%s" "$OUT" | grep -q "KEPT"'
+wrap done
+check "B done rc 0" '[ "$RC" -eq 0 ]'
+check "B flag gone from no-wrap-up/" '[ ! -e "$FLAG" ]'
+check "B flag MOVED to handled/, not deleted" '[ "$(ls "$STATE/no-wrap-up/handled/" | grep -c "^$KEY\.")" -eq 1 ]'
+check "B handled copy still holds all three records" '[ "$(cat "$STATE/no-wrap-up/handled/$KEY".* | grep -c "^session:")" -eq 3 ]'
+check "B file count under state: flag + marker = before + 1, nothing lost" '[ "$(nstate)" -eq $((BEFORE + 1)) ]'
+wrap done
+check "B done again with no flag: rc 0, says so" '[ "$RC" -eq 0 ] && printf "%s" "$OUT" | grep -q "no earlier-session flag"'
+wrap done --bogus; check "B unknown flag REFUSES" '[ "$RC" -eq 2 ]'
+
+# --- C: push, nothing to push --------------------------------------------------------------
+wrap push
+check "C nothing to push -> rc 1" '[ "$RC" -eq 1 ] && printf "%s" "$OUT" | grep -q "nothing to push"'
+
+# --- D: push accepted ----------------------------------------------------------------------
+oi add "second item" --done-when x >/dev/null 2>&1
+wrap push
+check "D push accepted rc 0" '[ "$RC" -eq 0 ] && printf "%s" "$OUT" | grep -q "push accepted"'
+check "D remote head == local head" '[ "$(git -C "$REMOTE" rev-parse master)" = "$(git -C "$DC" rev-parse HEAD)" ]'
+
+# --- E: rejected, clean tree -> rebased and pushed ------------------------------------------
+git -C "$OTHER" pull -q --rebase 2>/dev/null; printf 'other 1\n' > "$OTHER/other1.txt"; git -C "$OTHER" add other1.txt; git -C "$OTHER" commit -q -m other1; git -C "$OTHER" push -q 2>/dev/null
+oi add "third item" --done-when x >/dev/null 2>&1
+wrap push
+check "E rc 0" '[ "$RC" -eq 0 ]'
+check "E reported the rejection and the fetch" 'printf "%s" "$OUT" | grep -q "push rejected; fetching"'
+check "E accepted after rebase" 'printf "%s" "$OUT" | grep -q "push accepted after rebase"'
+check "E remote has other1 AND the third item" 'git -C "$REMOTE" cat-file -e master:other1.txt && git -C "$REMOTE" ls-tree -r --name-only master | grep -q "items/open/W-.*-03.md"'
+check "E tree clean afterwards" '[ -z "$(git -C "$DC" status --porcelain)" ]'
+check "E no rebase in progress" '[ ! -d "$DC/.git/rebase-merge" ]'
+
+# --- F: rejected, DIRTY tree -> stopped, byte-identical --------------------------------------
+git -C "$OTHER" pull -q --rebase 2>/dev/null; printf 'other 2\n' > "$OTHER/other2.txt"; git -C "$OTHER" add other2.txt; git -C "$OTHER" commit -q -m other2; git -C "$OTHER" push -q 2>/dev/null
+oi add "fourth item" --done-when x >/dev/null 2>&1
+printf 'someone else is editing this\n' >> "$DC/notes.txt"
+printf 'untracked scratch\n' > "$DC/scratch.txt"
+SNAP="$(snapshot "$DC")"; REMOTE_BEFORE="$(git -C "$REMOTE" rev-parse master)"
+wrap push
+check "F rc 3 STOPPED" '[ "$RC" -eq 3 ]'
+check "F names the dirty path" 'printf "%s" "$OUT" | grep -q "notes.txt"'
+check "F says what is needed" 'printf "%s" "$OUT" | grep -q "Commit or stash them yourself"'
+check "F tree BYTE-IDENTICAL (every file hash, status and HEAD)" '[ "$(snapshot "$DC")" = "$SNAP" ]'
+check "F no rebase in progress" '[ ! -d "$DC/.git/rebase-merge" ] && [ ! -d "$DC/.git/rebase-apply" ]'
+check "F remote untouched" '[ "$(git -C "$REMOTE" rev-parse master)" = "$REMOTE_BEFORE" ]'
+check "F no stash created" '[ -z "$(git -C "$DC" stash list)" ]'
+# control: the same push with the dirt removed goes through
+git -C "$DC" checkout -q -- notes.txt; command mv "$DC/scratch.txt" "$ROOT/scratch.moved"
+wrap push
+check "F control: clean again -> pushed" '[ "$RC" -eq 0 ]'
+
+# --- G: conflict in the generated OPEN.md only -> regenerated, never merged -----------------
+git -C "$OTHER" pull -q --rebase 2>/dev/null
+OW="$OTHER/projects/$KEY/memory/WORK"
+printf '## W-20260101-77 -- from other\n\nproject: zeta\nstatus: open\nkind: do\ndone-when: x\n' > "$OW/items/open/W-20260101-77.md"
+oi_other regen >/dev/null 2>&1; git -C "$OTHER" push -q 2>/dev/null
+oi add "from here" --done-when x >/dev/null 2>&1
+wrap push
+check "G rc 0" '[ "$RC" -eq 0 ]'
+check "G took the generated conflict path" 'printf "%s" "$OUT" | grep -q "conflict only in generated files"'
+check "G regenerated" 'printf "%s" "$OUT" | grep -q "OPEN.md regenerated"'
+check "G remote OPEN.md holds BOTH titles" 'git -C "$REMOTE" show "master:projects/$KEY/memory/WORK/OPEN.md" | grep -q "from other" && git -C "$REMOTE" show "master:projects/$KEY/memory/WORK/OPEN.md" | grep -q "from here"'
+check "G no conflict markers in OPEN.md" '! grep -q "^<<<<<<<\|^>>>>>>>" "$W/OPEN.md"'
+check "G no hand-edit rescue was written (control: notes/ has none)" '[ -z "$(ls "$W/items/notes" 2>/dev/null | grep rescued)" ]'
+check "G tree clean, nothing in progress" '[ -z "$(git -C "$DC" status --porcelain)" ] && [ ! -d "$DC/.git/rebase-merge" ]'
+check "G both item files present (4 + other's 77 + here = 6)" '[ "$(ls "$W/items/open" | grep -c "^W-")" -eq 6 ]'
+
+# --- H: conflict elsewhere -> aborted, tree as it was ----------------------------------------
+git -C "$OTHER" pull -q --rebase 2>/dev/null; printf 'theirs\n' > "$OTHER/notes.txt"; git -C "$OTHER" commit -q -am theirs; git -C "$OTHER" push -q 2>/dev/null
+printf 'ours\n' > "$DC/notes.txt"; git -C "$DC" commit -q -am ours
+SNAP="$(snapshot "$DC")"; HEAD_BEFORE="$(git -C "$DC" rev-parse HEAD)"
+wrap push
+check "H rc 3 STOPPED" '[ "$RC" -eq 3 ]'
+check "H names the conflicted path" 'printf "%s" "$OUT" | grep -q "notes.txt"'
+check "H aborted: HEAD unchanged" '[ "$(git -C "$DC" rev-parse HEAD)" = "$HEAD_BEFORE" ]'
+check "H tree byte-identical" '[ "$(snapshot "$DC")" = "$SNAP" ]'
+check "H no rebase in progress" '[ ! -d "$DC/.git/rebase-merge" ]'
+
+# --- G0: two clones claim the SAME W-ID (found by this selftest 2026-09-20): an item file
+# is not a generated view, so it must STOP, never guess. In a throwaway clone DC2, behind origin.
+DC2="$ROOT/dc2"; git clone -q "$REMOTE" "$DC2" 2>/dev/null
+git -C "$OTHER" pull -q --rebase 2>/dev/null
+oi_other add "same id from other" --done-when x >/dev/null 2>&1; git -C "$OTHER" push -q 2>/dev/null
+( cd "$ZETA" && OPEN_ITEMS_PROJECTS_DIR="$DC2/projects" OPEN_ITEMS_DOTCLAUDE="$DC2" "$OI" add "same id from here" --done-when x >/dev/null 2>&1 )
+OUT="$(cd "$ZETA" && OPEN_ITEMS_PROJECTS_DIR="$DC2/projects" OPEN_ITEMS_DOTCLAUDE="$DC2" CLAUDE_CODE_SESSION_ID=x "$WRAP" push 2>&1)"; RC=$?
+check "G0 same W-ID claimed on two clones -> STOPPED (rc 3), item conflicts are never guessed" '[ "$RC" -eq 3 ]'
+check "G0 names the item path" 'printf "%s" "$OUT" | grep -q "items/open/W-"'
+check "G0 DC2 aborted cleanly" '[ ! -d "$DC2/.git/rebase-merge" ] && [ -z "$(git -C "$DC2" status --porcelain)" ]'
+
+# --- I: misc ------------------------------------------------------------------------------
+wrap bogus; check "I unknown command REFUSES (rc 2)" '[ "$RC" -eq 2 ]'
+wrap --help; check "I --help rc 0, usage first" '[ "$RC" -eq 0 ] && printf "%s" "$OUT" | grep -q "^Usage:"'
+check "I bash -n clean" 'bash -n "$WRAP"'
+check "I nothing personal: no \$HOME in printed status paths" '! printf "%s" "$(SID=x; cd "$ZETA" && "$WRAP" status 2>&1)" | grep -q "$HOME"'
+
+printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
+rm -r "$ROOT" 2>/dev/null || true
+[ "$FAIL" -eq 0 ]

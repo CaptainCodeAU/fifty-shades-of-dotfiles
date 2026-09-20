@@ -11,9 +11,10 @@
 #   open-items --where              print the current repo's drawer path (exists or not)
 #   open-items --session            the SessionStart surface: short, silent when nothing is open
 #   open-items add "title" --done-when "..." [--kind do|decide] [--size small|medium|large]
-#                  [--when ..] [--next ..] [--blocked-on ..] [--holds-in repo:..|drawer:..|~/..] [--body ..]
+#                  [--when ..] [--next ..] [--blocked-on ..] [--holds-in repo:..|drawer:..|~/..]... [--body ..]
 #   open-items close|decline|park|reopen <W-ID> ["note"]
-#   open-items set <W-ID> <field> "value"
+#   open-items set <W-ID> <field> "value"       (holds-in: several values replace the set)
+#   open-items set --add <W-ID> holds-in "value"   append one holds-in line, keep the rest
 #   open-items init                 create items/ for a project that has no drawer yet
 #   open-items regen                rebuild OPEN.md from items/ (rescues a hand edit first)
 #   open-items migrate [--dry-run --into <dir>] [--park W-ID,..]   legacy OPEN.md -> items/
@@ -32,7 +33,7 @@ STATUSES="open parked done declined"
 
 refuse(){ printf 'open-items: REFUSED -- %s\n' "$1" >&2; exit 2; }
 loud(){ printf 'open-items: %s\n' "$1" >&2; }
-usage(){ sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; }
+usage(){ sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; }
 today(){ date +%Y-%m-%d; }
 realdir(){ (cd "$1" 2>/dev/null && pwd -P); }
 
@@ -156,6 +157,29 @@ set_field(){                    # set_field <file> <field> <value>
     END { if (!done) print k ": " v }
   ' "$f" > "$tmp" && mv "$tmp" "$f"
 }
+# holds-in may repeat, one marked path per line (ruled at the P5.2 gate, 2026-09-20).
+valid_holds(){ case "$1" in repo:*|drawer:*|"~/"*) return 0;; *) return 1;; esac; }
+drop_field(){                   # drop_field <file> <field>: remove every header line of that field
+  local f="$1" k="$2" tmp="$1.tmp"
+  awk -v k="$k" 'NR == 1 { print; next }
+    inhdr == 0 && $0 == "" { inhdr = 1; print; next }
+    inhdr == 1 && $0 ~ "^" k ":" { next }
+    inhdr == 1 && $0 !~ /^[a-z-]+:/ { inhdr = 2 }
+    { print }' "$f" > "$tmp" && mv "$tmp" "$f"
+}
+add_field(){                    # add_field <file> <field> <value>: a new line after the last line of that field, else after the header
+  local f="$1" k="$2" v="$3" tmp="$1.tmp"
+  awk -v k="$k" -v v="$v" '
+    NR == 1 { print; next }
+    !done && inhdr == 0 && $0 == "" { inhdr = 1; print; next }
+    inhdr == 1 && $0 ~ "^" k ":" { print; seen = 1; next }
+    inhdr == 1 && !done && (seen || $0 ~ /^raised:/) { print k ": " v; done = 1 }
+    inhdr == 1 && $0 ~ /^[a-z-]+:/ { print; next }
+    inhdr == 1 && !done { print k ": " v; done = 1; inhdr = 2; print; next }
+    { print }
+    END { if (!done) print k ": " v }
+  ' "$f" > "$tmp" && mv "$tmp" "$f"
+}
 valid_status(){ case " $STATUSES " in *" $1 "*) return 0;; *) return 1;; esac; }
 folder_for_status(){ case "$1" in open) printf open;; parked) printf parked;; *) printf closed;; esac; }
 
@@ -273,7 +297,7 @@ finish_write(){                 # finish_write <work> <msg>: regen + commit, rc 
 }
 
 cmd_add(){
-  local title="" kind="do" size="" dw="" when="" next="" blocked="" holds="" body="" w f id
+  local title="" kind="do" size="" dw="" when="" next="" blocked="" holds=() body="" w f id h
   while [ $# -gt 0 ]; do
     case "$1" in
       --kind) kind="${2:-}"; shift 2 ;;
@@ -282,7 +306,7 @@ cmd_add(){
       --when) when="${2:-}"; shift 2 ;;
       --next) next="${2:-}"; shift 2 ;;
       --blocked-on) blocked="${2:-}"; shift 2 ;;
-      --holds-in) holds="${2:-}"; shift 2 ;;
+      --holds-in) holds+=("${2:-}"); shift 2 ;;
       --body) body="${2:-}"; shift 2 ;;
       --*) refuse "add: unknown flag $1" ;;
       *) [ -z "$title" ] && title="$1" || refuse "add: one title only (quote it)"; shift ;;
@@ -293,7 +317,7 @@ cmd_add(){
   case "$kind" in do|decide) ;; *) refuse "add: --kind must be do or decide" ;; esac
   if [ "$kind" = decide ]; then [ -z "$size" ] || refuse "add: --size is for do items only"
   else case "$size" in ""|small|medium|large) ;; *) refuse "add: --size must be small, medium or large" ;; esac; fi
-  case "$holds" in ""|repo:*|drawer:*|"~/"*) ;; *) refuse "add: --holds-in needs a root marker: repo:<path>, drawer:<path> or ~/<path>" ;; esac
+  for h in "${holds[@]}"; do valid_holds "$h" || refuse "add: --holds-in needs a root marker: repo:<path>, drawer:<path> or ~/<path>"; done
   w="$(writable_drawer)" || exit 2
   lock_drawer "$w"
   f="$(next_id "$w")" || exit 2; id="$(id_of_file "$f")"
@@ -304,8 +328,8 @@ cmd_add(){
     [ -n "$when" ] && printf 'when: %s\n' "$when"
     [ -n "$next" ] && printf 'next: %s\n' "$next"
     [ -n "$blocked" ] && printf 'blocked-on: %s\n' "$blocked"
-    [ -n "$holds" ] && printf 'holds-in: %s\n' "$holds"
-    printf 'raised: %s (session %s)\n' "$(today)" "${CLAUDE_SESSION_ID:-unknown}"
+    for h in "${holds[@]}"; do printf 'holds-in: %s\n' "$h"; done
+    printf 'raised: %s (session %s)\n' "$(today)" "${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-unknown}}"
     [ -n "$body" ] && printf '\n%s\n' "$body"
   } > "$f"
   printf '%s\n' "$id"
@@ -328,14 +352,27 @@ cmd_status(){                   # cmd_status <new-status> <W-ID> [note]
 }
 
 cmd_set(){
-  local id="${1:-}" k="${2:-}" v="${3:-}" w f
-  [ -n "$id" ] && [ -n "$k" ] && [ $# -ge 3 ] || refuse "set: usage: open-items set <W-ID> <field> \"value\""
+  local mode=replace id k v w f
+  [ "${1:-}" = --add ] && { mode=add; shift; }
+  id="${1:-}"; k="${2:-}"; v="${3:-}"
+  [ -n "$id" ] && [ -n "$k" ] && [ $# -ge 3 ] || refuse "set: usage: open-items set [--add] <W-ID> <field> \"value\"..."
   case "$k" in status) refuse "set: change status with close|park|decline|reopen" ;; project|raised) refuse "set: $k is tool-owned" ;;
     kind|size|done-when|when|next|blocked-on|holds-in) ;; *) refuse "set: unknown field $k" ;; esac
+  if [ "$k" = holds-in ]; then
+    shift 2; for v in "$@"; do valid_holds "$v" || refuse "set: holds-in needs a root marker: repo:<path>, drawer:<path> or ~/<path>"; done
+  else
+    [ $# -eq 3 ] || refuse "set: $k takes one value"
+    [ "$mode" = replace ] || refuse "set: --add is for holds-in only"
+  fi
   w="$(writable_drawer)" || exit 2
   f="$(find_item "$w" "$id")" || refuse "set: no item $id in $(name_of "$w")"
   lock_drawer "$w"
-  set_field "$f" "$k" "$v"
+  if [ "$k" = holds-in ]; then
+    [ "$mode" = replace ] && drop_field "$f" "$k"
+    for v in "$@"; do add_field "$f" "$k" "$v"; done
+  else
+    set_field "$f" "$k" "$v"
+  fi
   printf '%s %s set\n' "$id" "$k"
   finish_write "$w" "open-items: set $id $k"
 }

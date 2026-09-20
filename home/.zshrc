@@ -1090,8 +1090,11 @@ alias ct='__claude_launch CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 claude "${_LIFE
 # `targets` field in settings/claude/hooks.json. So pj DOES have one global hook,
 # on purpose; it is not a leak. Add another by naming "project" in that manifest,
 # never by hand-editing settings.project.json.
+# PLUGINS: ~/.claude/pj is the pj plugin (stowed from this repo, home/.claude/pj):
+# /pj:wrap-up, the end-of-session pass (D-20260920-03). A project's own /wrap-up
+# keeps the plain name; the pj: prefix always reaches this one (verified 2026-09-20).
 # Remove this block to end the trial.
-alias pj='__claude_launch claude --setting-sources project,local --settings ~/.claude/settings.project.json --append-system-prompt-file ~/.claude/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md --plugin-dir ~/.claude/skills/herdr --plugin-dir ~/.claude/skills/AgentRelay --plugin-dir ~/.claude/skills/ISA --plugin-dir ~/.claude/pj-voice --dangerously-skip-permissions --effort high'
+alias pj='__claude_launch claude --setting-sources project,local --settings ~/.claude/settings.project.json --append-system-prompt-file ~/.claude/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md --plugin-dir ~/.claude/skills/herdr --plugin-dir ~/.claude/skills/AgentRelay --plugin-dir ~/.claude/skills/ISA --plugin-dir ~/.claude/pj-voice --plugin-dir ~/.claude/pj --dangerously-skip-permissions --effort high'
 
 # Clean-room Claude for measuring front-loaded context (CLAUDE.md, memory,
 # skills, MCP) one piece at a time. Measured 2026-09-06 (Claude Code 2.1.263):

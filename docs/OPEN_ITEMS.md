@@ -51,7 +51,9 @@ done-when: what finished looks like      REQUIRED; add refuses without it
 when: trigger                             optional
 next: first step or command               optional
 blocked-on: what it waits for             optional
-holds-in: repo:docs/X.md                  root marker: repo: | drawer: | ~/
+holds-in: repo:docs/X.md                  root marker: repo: | drawer: | ~/; MAY REPEAT,
+holds-in: ~/.local/bin/y                  one marked path per line (P5.3; `set` replaces
+                                          the set, `set --add` appends one line)
 raised: 2026-09-20 (session <id>)         tool-filled
 
 Body prose.
@@ -92,9 +94,15 @@ files are committed with the write, and are not re-shown in the view.
 ## Known limitation (recorded 2026-09-20, not solved)
 
 `OPEN.md` is a generated file tracked in git, so two machines adding items will conflict
-on it at push time. Rule for the wrap-up stage: on any conflict in `OPEN.md`, regenerate
-it (`open-items regen`), never merge it. Item files never conflict with each other since
-every ID is claimed by file creation.
+on it at push time. `pj-wrap push` (P5.3) handles exactly that: on a conflict only in
+`OPEN.md` or `items/.generated.sha256` it takes origin's copy and regenerates the view
+with `open-items regen`, never merges it.
+
+**Item IDs can collide ACROSS machines** (measured by `pj-wrap-selftest` on 2026-09-20):
+the ID is claimed by creating the file, which is atomic on one machine and blind to a
+clone that claimed the same `W-YYYYMMDD-NN` the same day. Two such files conflict at push
+time as an add/add on the same path, and `pj-wrap push` STOPS and names it rather than
+guess; the fix is by hand (rename one file, `open-items regen`). Not solved.
 
 ## The design point, borrowed from census and decided
 

@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+# pj-session-end-selftest -- proves every arm of the SessionEnd flag writer against
+# throwaway fixtures: a trivial session, a session with edits, a shell-only session with
+# a commit, a long talk, a wrapped session, several unwrapped in a row (every pointer
+# kept, newest first), the same session ending twice, garbage and empty stdin, a missing
+# transcript, outside a repo, a no-write check with its control, and timing.
+# Nothing here touches ~/.local/state, a real repo or a real transcript.
+set -uo pipefail
+END="${PJ_SESSION_END:-$(cd "$(dirname "$0")" && pwd -P)/pj-session-end}"
+[ -x "$END" ] || { echo "no pj-session-end next to this selftest"; exit 1; }
+ROOT="$(mktemp -d "${TMPDIR:-/tmp}/pj-end-selftest.XXXXXX")" || exit 1
+ROOT="$(cd "$ROOT" && pwd -P)"
+STATE="$ROOT/state"; export PJ_STATE_DIR="$STATE"
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+PASS=0; FAIL=0
+ok(){ PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
+bad(){ FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1"; }
+check(){ if eval "$2"; then ok "$1"; else bad "$1"; fi; }
+encode_key(){ printf '%s' "$1" | sed 's#[/._]#-#g'; }
+mkrepo(){ mkdir -p "$1" && git -C "$1" init -q; }
+# transcript builders: one JSONL line each
+u(){ printf '{"type":"user","message":{"role":"user","content":"%s"},"uuid":"u%s"}\n' "$1" "$RANDOM"; }
+umeta(){ printf '{"type":"user","isMeta":true,"message":{"role":"user","content":"<local-command-caveat>x"}}\n'; }
+ucmd(){ printf '{"type":"user","message":{"role":"user","content":"<command-name>/clear</command-name>"}}\n'; }
+uresult(){ printf '{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"Edit Write git commit"}]}}\n'; }
+tool(){ printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t%s","name":"%s","input":%s}]}}\n' "$RANDOM" "$1" "$2"; }
+text(){ printf '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"%s"}]}}\n' "$1"; }
+run(){  # run <session> <transcript> <cwd> -> RC
+  printf '{"session_id":"%s","transcript_path":"%s","cwd":"%s","hook_event_name":"SessionEnd","reason":"other"}' "$1" "$2" "$3" \
+    | "$END" >"$ROOT/out" 2>"$ROOT/err"; RC=$?
+}
+nstate(){ find "$STATE" -type f 2>/dev/null | wc -l | tr -d ' '; }
+echo "pj-session-end selftest in $ROOT"
+
+A="$ROOT/repo-a"; mkrepo "$A"; FLAG="$STATE/no-wrap-up/$(encode_key "$A")"
+
+# --- A: trivial session (hello, one read-only Bash) -> no flag ----------------------------
+T="$ROOT/t-hello.jsonl"; { umeta; ucmd; u hello; tool Bash '{"command":"ls -la"}'; uresult; text hi; } > "$T"
+run s-hello "$T" "$A"
+check "A rc 0" '[ "$RC" -eq 0 ]'
+check "A silent" '[ ! -s "$ROOT/out" ] && [ ! -s "$ROOT/err" ]'
+check "A trivial session -> NO flag" '[ ! -e "$FLAG" ]'
+check "A nothing written under state at all" '[ "$(nstate)" -eq 0 ]'
+
+# --- B: a tool result MENTIONING Edit is not an edit --------------------------------------
+T="$ROOT/t-mention.jsonl"; { u "does Edit exist"; tool Bash '{"command":"echo Edit Write"}'; uresult; } > "$T"
+run s-mention "$T" "$A"
+check "B a Bash echo that mentions Edit/Write -> NO flag" '[ ! -e "$FLAG" ]'
+
+# --- C: one Edit -> flag ------------------------------------------------------------------
+T="$ROOT/t-edit.jsonl"; { u "fix it"; tool Edit '{"file_path":"/x","old_string":"a","new_string":"b"}'; uresult; } > "$T"
+run s-edit "$T" "$A"
+check "C rc 0" '[ "$RC" -eq 0 ]'
+check "C one Edit -> flag written" '[ -f "$FLAG" ]'
+check "C record names the session" 'grep -q "^session: s-edit$" "$FLAG"'
+check "C record names the transcript" 'grep -q "^transcript: $T$" "$FLAG"'
+check "C record names the repo" 'grep -q "^repo: $A$" "$FLAG"'
+check "C counts: messages 1, edits 1" 'grep -q "^messages: 1$" "$FLAG" && grep -q "^edits: 1$" "$FLAG"'
+check "C exactly one record" '[ "$(grep -c "^session:" "$FLAG")" -eq 1 ]'
+check "C only the flag exists under state (control: 1 file)" '[ "$(nstate)" -eq 1 ]'
+
+# --- D: shell-only session with a git commit -> flag (threshold option B) -----------------
+D="$ROOT/repo-d"; mkrepo "$D"; FLAGD="$STATE/no-wrap-up/$(encode_key "$D")"
+T="$ROOT/t-commit.jsonl"; { u "ship"; tool Bash '{"command":"git add x && git commit -m y"}'; uresult; } > "$T"
+run s-commit "$T" "$D"
+check "D Bash git commit -> flag" '[ -f "$FLAGD" ] && grep -q "^edits: 1$" "$FLAGD"'
+T="$ROOT/t-oi.jsonl"; { u "file it"; tool Bash '{"command":"open-items add \"x\" --done-when y"}'; uresult; } > "$T"
+E="$ROOT/repo-e"; mkrepo "$E"; FLAGE="$STATE/no-wrap-up/$(encode_key "$E")"
+run s-oi "$T" "$E"
+check "D open-items add -> flag" '[ -f "$FLAGE" ]'
+T="$ROOT/t-oiread.jsonl"; { u "show"; tool Bash '{"command":"open-items --all"}'; uresult; } > "$T"
+F="$ROOT/repo-f"; mkrepo "$F"; FLAGF="$STATE/no-wrap-up/$(encode_key "$F")"
+run s-oiread "$T" "$F"
+check "D open-items READ -> no flag (control)" '[ ! -e "$FLAGF" ]'
+
+# --- E: long talk, no tools: 4 messages no flag, 5 messages flag ---------------------------
+G="$ROOT/repo-g"; mkrepo "$G"; FLAGG="$STATE/no-wrap-up/$(encode_key "$G")"
+T="$ROOT/t-4.jsonl"; { umeta; ucmd; u a; u b; u c; u d; uresult; uresult; } > "$T"
+run s-four "$T" "$G"
+check "E four real messages (meta, /command and results excluded) -> no flag" '[ ! -e "$FLAGG" ]'
+T="$ROOT/t-5.jsonl"; { umeta; ucmd; u a; u b; u c; u d; u e; } > "$T"
+run s-five "$T" "$G"
+check "E five real messages -> flag" '[ -f "$FLAGG" ] && grep -q "^messages: 5$" "$FLAGG"'
+H="$ROOT/repo-h"; mkrepo "$H"; FLAGH="$STATE/no-wrap-up/$(encode_key "$H")"
+PJ_WRAP_MIN_MESSAGES=3 run s-three "$ROOT/t-4.jsonl" "$H"
+check "E PJ_WRAP_MIN_MESSAGES seam: 4 messages flag at min 3" '[ -f "$FLAGH" ]'
+
+# --- F: wrapped session -> no flag even with edits ----------------------------------------
+I="$ROOT/repo-i"; mkrepo "$I"; FLAGI="$STATE/no-wrap-up/$(encode_key "$I")"
+mkdir -p "$STATE/wrapped"; : > "$STATE/wrapped/s-wrapped"
+run s-wrapped "$ROOT/t-edit.jsonl" "$I"
+check "F wrapped marker present -> NO flag despite an edit" '[ ! -e "$FLAGI" ]'
+run s-notwrapped "$ROOT/t-edit.jsonl" "$I"
+check "F same transcript, unwrapped session id -> flag (control)" '[ -f "$FLAGI" ]'
+
+# --- G: several unwrapped sessions in a row: every pointer kept, newest first ---------------
+J="$ROOT/repo-j"; mkrepo "$J"; FLAGJ="$STATE/no-wrap-up/$(encode_key "$J")"
+for n in 1 2 3; do cp "$ROOT/t-edit.jsonl" "$ROOT/t-j$n.jsonl"; run "s-j$n" "$ROOT/t-j$n.jsonl" "$J"; done
+check "G three records" '[ "$(grep -c "^session:" "$FLAGJ")" -eq 3 ]'
+check "G newest first" '[ "$(grep "^session:" "$FLAGJ" | head -1)" = "session: s-j3" ]'
+check "G oldest last" '[ "$(grep "^session:" "$FLAGJ" | tail -1)" = "session: s-j1" ]'
+check "G all three transcript pointers present" '[ "$(grep -c "^transcript: $ROOT/t-j[123].jsonl$" "$FLAGJ")" -eq 3 ]'
+check "G records separated by exactly one blank line" '[ "$(grep -c "^$" "$FLAGJ")" -eq 2 ]'
+check "G first record complete (7 lines before the blank)" '[ "$(awk "/^$/{exit} {n++} END{print n}" "$FLAGJ")" -eq 7 ]'
+# the card reads the FIRST value of each key: prove the head is the newest
+check "G first ended/transcript belong to the newest" '[ "$(sed -n "s/^transcript: //p" "$FLAGJ" | head -1)" = "$ROOT/t-j3.jsonl" ]'
+
+# --- H: same session ending twice replaces its own record, keeps the others ----------------
+run s-j2 "$ROOT/t-j2.jsonl" "$J"
+check "H still three records" '[ "$(grep -c "^session:" "$FLAGJ")" -eq 3 ]'
+check "H s-j2 now first (re-ended), no duplicate" '[ "$(grep "^session:" "$FLAGJ" | head -1)" = "session: s-j2" ] && [ "$(grep -c "^session: s-j2$" "$FLAGJ")" -eq 1 ]'
+check "H the other two kept" 'grep -q "^session: s-j3$" "$FLAGJ" && grep -q "^session: s-j1$" "$FLAGJ"'
+
+# --- I: garbage and empty stdin, missing transcript, missing session id, outside a repo ------
+BEFORE="$(nstate)"
+printf 'not json at all' | "$END" >"$ROOT/out" 2>"$ROOT/err"; check "I garbage stdin rc 0, silent" '[ $? -eq 0 ] && [ ! -s "$ROOT/out" ] && [ ! -s "$ROOT/err" ]'
+: | "$END" >"$ROOT/out" 2>"$ROOT/err"; check "I empty stdin rc 0" '[ $? -eq 0 ]'
+run s-missing "$ROOT/does-not-exist.jsonl" "$A"; check "I missing transcript rc 0" '[ "$RC" -eq 0 ]'
+run "" "$ROOT/t-edit.jsonl" "$A"; check "I empty session id rc 0" '[ "$RC" -eq 0 ]'
+OUT="$ROOT/outside"; mkdir -p "$OUT"; run s-out "$ROOT/t-edit.jsonl" "$OUT"; check "I outside a repo rc 0" '[ "$RC" -eq 0 ]'
+run s-nocwd "$ROOT/t-edit.jsonl" "$ROOT/no-such-dir"; check "I missing cwd rc 0" '[ "$RC" -eq 0 ]'
+printf '{"session_id":"x","transcript_path":"%s"' "$ROOT/t-edit.jsonl" | "$END"; check "I truncated JSON rc 0" '[ $? -eq 0 ]'
+T="$ROOT/t-badline.jsonl"; { u a; printf 'this line is not json\n'; tool Edit '{"file_path":"/x"}'; } > "$T"
+K="$ROOT/repo-k"; mkrepo "$K"; run s-bad "$T" "$K"; check "I transcript with a bad line rc 0" '[ "$RC" -eq 0 ]'
+check "I none of those wrote anything (files under state unchanged: $BEFORE)" '[ "$(nstate)" -eq "$BEFORE" ]'
+# control for the no-write check: a real one adds exactly one file
+L="$ROOT/repo-l"; mkrepo "$L"; run s-l "$ROOT/t-edit.jsonl" "$L"
+check "I control: a flagged session adds exactly one file" '[ "$(nstate)" -eq $((BEFORE + 1)) ]'
+
+# --- J: PJ_STATE_DIR seam: nothing outside it ----------------------------------------------
+check "J nothing written outside the state dir (repo-a tree still empty)" '[ -z "$(find "$A" -path "$A/.git" -prune -o -type f -print)" ]'
+
+# --- K: timing on a 5000-line synthetic transcript ---------------------------------------
+T="$ROOT/t-big.jsonl"; { for i in $(seq 1 2500); do u "m$i"; tool Bash '{"command":"ls"}'; done; } > "$T"
+M="$ROOT/repo-m"; mkrepo "$M"
+now(){ date +%s.%N 2>/dev/null | grep -q N && perl -MTime::HiRes=time -e 'printf "%.3f\n", time' || date +%s.%N; }
+s="$(now)"; run s-big "$T" "$M"; e="$(now)"
+check "K 5000-line transcript under 2 s ($(awk -v s="$s" -v e="$e" 'BEGIN{printf "%.2f", e-s}') s)" 'awk -v s="$s" -v e="$e" "BEGIN{exit !((e-s) < 2.0)}"'
+check "K and flagged on messages (2500)" 'grep -q "^messages: 2500$" "$STATE/no-wrap-up/$(encode_key "$M")"'
+
+check "L bash -n clean" 'bash -n "$END"'
+printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
+rm -r "$ROOT" 2>/dev/null || true
+[ "$FAIL" -eq 0 ]

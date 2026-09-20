@@ -153,6 +153,18 @@
       "why": "The 20-line start card for pj sessions (D-20260920-04): open items, wrap-up warning, handoff pointer, hello rule. Project target only: pj is the launcher it serves"
     },
     {
+      "event": "SessionEnd",
+      "script": "pj-session-end",
+      "script_path": "$HOME/.local/bin/pj-session-end",
+      "targets": ["project"],
+      "entry": {
+        "type": "command",
+        "command": "test -x \"$HOME/.local/bin/pj-session-end\" && \"$HOME/.local/bin/pj-session-end\" || true",
+        "timeout": 10
+      },
+      "why": "Writes the no-wrap-up flag the start card reads when a pj session that did real work ends without /pj:wrap-up (D-20260920-03). Project target only, same as the card"
+    },
+    {
       "event": "SessionStart",
       "script": "ccw-watch",
       "script_path": "$HOME/.local/bin/ccw-watch",

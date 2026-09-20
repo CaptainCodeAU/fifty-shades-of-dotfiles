@@ -1,6 +1,6 @@
 Default branch is `master`.
 
-Open items arrive on the start card at the top of every `pj` session (count, titles, parked); do not run a listing to get them. `open-items` prints the detail, `open-items --all` every project. File one with `open-items add "title" --done-when "..."`; move one with `close`, `park`, `decline`, `reopen`; `--help` for the rest. Never hand-edit `OPEN.md`, it is generated. Where this project's handoff and records live: `.claude/pj-homes`.
+Open items arrive on the start card at the top of every `pj` session (count, titles, parked); do not run a listing to get them. `open-items` prints the detail, `open-items --all` every project. File one with `open-items add "title" --done-when "..."`; move one with `close`, `park`, `decline`, `reopen`; `--help` for the rest. Never hand-edit `OPEN.md`, it is generated. Where this project's handoff and records live: `.claude/pj-homes`. End a session that did real work with `/pj:wrap-up` (the pj plugin); a session that skips it leaves a warning on the next card, and `pj-wrap status` lists the transcripts.
 
 ## Before proposing a fix, ask whether it is already decided
 

@@ -41,12 +41,14 @@
 #             <key> = the repo toplevel with every / . _ turned into -, the same
 #             encoding the harness uses for ~/.claude/projects/<key>/ and that
 #             open-items uses for the drawer. Outside every repo on purpose.
-#   Format    key: value lines: project, repo, ended (local ISO time), session,
-#             transcript. Any other line is ignored.
-#   Writer    the SessionEnd script, only when /wrap-up did not run.
-#   Clearer   the /wrap-up command. This card never writes or deletes it.
-#   Reader    prints one line from ended and transcript. A flag that exists but
-#             cannot be read still prints the warning, without details.
+#   Format    one RECORD per unwrapped session, NEWEST FIRST, a blank line between
+#             (P5.3). Each record: key: value lines: project, repo, ended (local
+#             time), session, transcript, messages, edits. Any other line ignored.
+#   Writer    pj-session-end, the SessionEnd hook, only when /pj:wrap-up did not run.
+#   Clearer   pj-wrap done (moves it aside, never deletes). This card never writes.
+#   Reader    ONE line from the first record's ended and transcript, plus the count
+#             of records when there is more than one. A flag that exists but cannot
+#             be read still prints the warning, without details.
 #   Override  PJ_STATE_DIR replaces the .../pj part (selftest seam).
 #
 # Selftest: pj-start-card-selftest. Rulings: D-20260920-02, -03, -04, -06, -09.
@@ -132,13 +134,20 @@ card(){
   esac
 
   # the no-wrap-up flag
-  local flag="$STATE/no-wrap-up/$(encode_key "$top")" ended="" tr=""
+  local flag="$STATE/no-wrap-up/$(encode_key "$top")" ended="" tr="" nrec=0
   if [ -e "$flag" ]; then
     ended="$(decl_get "$flag" ended)"; tr="$(decl_get "$flag" transcript)"
-    warn="WARNING: the last session here ended without wrap-up"
-    [ -n "$ended" ] && warn="$warn ($ended)"
+    nrec="$(grep -c '^session:' "$flag" 2>/dev/null || true)"; nrec="${nrec:-0}"
+    if [ "$nrec" -gt 1 ]; then
+      warn="WARNING: the last $nrec sessions here ended without wrap-up"
+      [ -n "$ended" ] && warn="$warn (latest $ended)"
+    else
+      warn="WARNING: the last session here ended without wrap-up"
+      [ -n "$ended" ] && warn="$warn ($ended)"
+    fi
     warn="$warn."
     [ -n "$tr" ] && warn="$warn Transcript: ${tr/#$HOME/\~}"
+    [ "$nrec" -gt 1 ] && warn="$warn (pj-wrap status lists all)"
   fi
 
   # open items

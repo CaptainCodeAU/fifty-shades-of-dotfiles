@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# pj-session-end -- the SessionEnd hook for pj (D-20260920-03). When a session ends
+# WITHOUT /pj:wrap-up having run, and it did work worth wrapping, it writes the
+# no-wrap-up flag the start card reads next time. Nothing else.
+#
+# Usage:
+#   pj-session-end              reads the hook JSON on stdin (session_id, transcript_path, cwd)
+#   pj-session-end --selftest   prove every arm (runs pj-session-end-selftest)
+#
+# Registered through settings/claude/hooks.json (targets: project), so it runs at the
+# end of every pj session on the machine.
+#
+# CONTRACT, in order of importance:
+#   1. exit 0 on EVERY path, fast, silent, never prompts, no network.
+#   2. writes ONLY under the pj state folder. Never a repo, a drawer or a memory folder.
+#   3. never deletes. A record is only ever added or replaced (same session ending twice).
+#   4. a hello probe or a quick question leaves NO flag, or the warning becomes wallpaper.
+#
+# THE THRESHOLD (ruled at the P5.3 gate, 2026-09-20, option B). A session did work worth
+# wrapping when EITHER holds:
+#   - at least one file-changing tool call: Edit, Write, NotebookEdit, MultiEdit, or a
+#     Bash call whose command contains `git commit` or an open-items write
+#     (add close park decline reopen set init regen migrate);
+#   - or at least PJ_WRAP_MIN_MESSAGES (default 5) real messages from the user: lines of
+#     type user with string content, not isMeta, not a /command echo, not a tool result.
+# Counted with jq on exact fields, never with grep on the raw text: a command that
+# MENTIONS "Edit" is not an edit (measured, a grep count read 1 on a session with zero).
+# jq on the largest transcript on this machine (114 MB) took under half a second.
+#
+# WRAPPED means pj-wrap done wrote  <state>/wrapped/<session_id>.  Then no flag.
+#
+# THE FLAG  <state>/no-wrap-up/<key>   (the P5.2 contract, extended here)
+#   <state>  = ${XDG_STATE_HOME:-~/.local/state}/pj, or PJ_STATE_DIR (test seam)
+#   <key>    = the repo toplevel with every / . _ turned into -, the harness encoding
+#   Format   = one RECORD per unwrapped session, NEWEST FIRST, a blank line between.
+#              Each record: project, repo, ended (local time), session, transcript,
+#              messages, edits. The card reads the first record and counts `session:`
+#              lines; pj-wrap status lists them all; pj-wrap done moves the file to
+#              no-wrap-up/handled/. Several sessions can end unwrapped before the next
+#              wrap-up and no transcript pointer is lost.
+#
+# Outside a git repo, with no session id, with no transcript, or when jq is missing:
+# nothing is written. Selftest: pj-session-end-selftest. Rulings: D-20260920-03, -04.
+
+set -u
+[ "${1:-}" = "--selftest" ] && exec "$(dirname "$0")/pj-session-end-selftest"
+
+STATE="${PJ_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/pj}"
+MIN_MSGS="${PJ_WRAP_MIN_MESSAGES:-5}"
+
+encode_key(){ printf '%s' "$1" | sed 's#[/._]#-#g'; }
+
+# One pass over the transcript: "<real user messages> <file-changing tool calls>".
+count_work(){                   # count_work <transcript> -> "m e" or nothing
+  jq -rn '
+    def real_user: .type == "user" and ((.isMeta // false) | not)
+      and ((.message.content | type) == "string")
+      and (((.message.content | test("^[[:space:]]*<(command-|local-command)")) | not));
+    def edits: [ select(.type == "assistant") | .message.content[]? | select(.type == "tool_use")
+      | select((.name | IN("Edit", "Write", "NotebookEdit", "MultiEdit"))
+               or (.name == "Bash" and ((.input.command // "")
+                   | test("git commit|open-items +(add|close|park|decline|reopen|set|init|regen|migrate)")))) ] | length;
+    reduce inputs as $l ({m: 0, e: 0};
+      (if ($l | real_user) then .m += 1 else . end) | .e += ($l | edits))
+    | "\(.m) \(.e)"' "$1" 2>/dev/null
+}
+
+main(){
+  local in sid tp cwd top key flag m e rec tmp now
+  [ -t 0 ] && return 0
+  in="$(cat 2>/dev/null)" || return 0
+  [ -n "$in" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  sid="$(printf '%s' "$in" | jq -r '.session_id // empty' 2>/dev/null)" || return 0
+  tp="$(printf '%s' "$in" | jq -r '.transcript_path // empty' 2>/dev/null)" || return 0
+  cwd="$(printf '%s' "$in" | jq -r '.cwd // empty' 2>/dev/null)" || return 0
+  [ -n "$sid" ] && [ -n "$tp" ] && [ -f "$tp" ] || return 0
+  [ -e "$STATE/wrapped/$sid" ] && return 0
+  [ -d "${cwd:-/nonexistent}" ] || return 0
+  top="$(git -C "$cwd" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 0
+  top="$(dirname "$top")"
+  key="$(encode_key "$top")"
+
+  read -r m e < <(count_work "$tp") || return 0
+  [ -n "${m:-}" ] && [ -n "${e:-}" ] || return 0
+  [ "$e" -ge 1 ] || [ "$m" -ge "$MIN_MSGS" ] || return 0
+
+  mkdir -p "$STATE/no-wrap-up" 2>/dev/null || return 0
+  flag="$STATE/no-wrap-up/$key"
+  now="$(date '+%Y-%m-%d %H:%M')"
+  rec="$(printf 'project: %s\nrepo: %s\nended: %s\nsession: %s\ntranscript: %s\nmessages: %s\nedits: %s\n' \
+          "$(basename "$top")" "$top" "$now" "$sid" "$tp" "$m" "$e")"
+  tmp="$flag.tmp.$$"
+  {
+    printf '%s\n' "$rec"
+    if [ -f "$flag" ]; then
+      # keep every earlier record except a stale one for THIS session (ended twice)
+      awk -v sid="$sid" 'BEGIN { RS = ""; ORS = "" }
+        $0 !~ ("(^|\n)session: " sid "(\n|$)") { print "\n" $0 "\n" }' "$flag"
+    fi
+  } > "$tmp" 2>/dev/null && mv -f "$tmp" "$flag" 2>/dev/null
+  return 0
+}
+main 2>/dev/null
+exit 0

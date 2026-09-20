@@ -227,7 +227,7 @@ mk_dotclaude(){
     ZETA="$D/zeta"; mkdir -p "$ZETA"; git -C "$ZETA" init -q 2>/dev/null
     ZW="$P/$(key "$ZETA")/memory/WORK"; mkdir -p "$ZW"
 }
-runw(){ local d="$1"; shift; OUT="$(cd "$d" 2>/dev/null && OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" CLAUDE_SESSION_ID=sess-test "$TOOL" "$@" 2>&1)"; RC=$?; return 0; }
+runw(){ local d="$1"; shift; OUT="$(cd "$d" 2>/dev/null && OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" CLAUDE_CODE_SESSION_ID=sess-test CLAUDE_SESSION_ID=sess-test "$TOOL" "$@" 2>&1)"; RC=$?; return 0; }
 TODAY="$(date +%Y%m%d)"
 committed(){ [ -z "$(git -C "$DC" status --porcelain -- "$1" 2>/dev/null)" ] && git -C "$DC" ls-files --error-unmatch -- "$1" >/dev/null 2>&1; }
 
@@ -285,6 +285,35 @@ runw "$ZETA" set "W-$TODAY-03" next "run the thing"
 want   "set adds a field that was absent, inside the header" "next: run the thing" "$(sed -n '2,12p' "$ZW/items/open/W-$TODAY-03.md")"
 runw "$ZETA" set "W-$TODAY-03" status done
 wanteq "set status REFUSES (rc=2); status moves through close/park/decline/reopen" "2" "$RC"
+# holds-in may repeat, one marked path per line (P5.3, ruled at the P5.2 gate).
+runw "$ZETA" add "two homes" --done-when h --holds-in repo:docs/a.md --holds-in "~/.local/bin/b"
+F4="$ZW/items/open/W-$TODAY-04.md"
+wanteq "add with --holds-in twice writes two lines (rc=0)" "0" "$RC"
+wanteq "  two holds-in lines" "2" "$(grep -c '^holds-in:' "$F4")"
+wanteq "  in the order given" "holds-in: repo:docs/a.md|holds-in: ~/.local/bin/b" "$(grep '^holds-in:' "$F4" | tr '\n' '|' | sed 's/|$//')"
+runw "$ZETA" add "bad second home" --done-when h --holds-in repo:ok.md --holds-in docs/bare.md
+wanteq "add REFUSES when any --holds-in lacks a marker (rc=2)" "2" "$RC"
+runw "$ZETA" set "W-$TODAY-04" holds-in drawer:x.md drawer:y.md
+wanteq "set holds-in with two values (rc=0)" "0" "$RC"
+wanteq "  replaces the whole set: two lines" "2" "$(grep -c '^holds-in:' "$F4")"
+wantnot "  old value gone" "repo:docs/a.md" "$(cat "$F4")"
+want    "  new value present, inside the header" "holds-in: drawer:y.md" "$(sed -n '2,12p' "$F4")"
+runw "$ZETA" set --add "W-$TODAY-04" holds-in repo:z.md
+wanteq "set --add holds-in appends (rc=0)" "0" "$RC"
+wanteq "  three lines now" "3" "$(grep -c '^holds-in:' "$F4")"
+wanteq "  appended after the existing ones" "drawer:x.md|drawer:y.md|repo:z.md" "$(sed -n 's/^holds-in: //p' "$F4" | tr '\n' '|' | sed 's/|$//')"
+want   "  raised still last in the header (control)" "raised:" "$(awk 'NR>2 && /^$/{exit} NR>2{l=$0} END{print l}' "$F4")"
+runw "$ZETA" set --add "W-$TODAY-04" next "x"
+wanteq "set --add on a single-valued field REFUSES (rc=2)" "2" "$RC"
+runw "$ZETA" set "W-$TODAY-04" next "a" "b"
+wanteq "set with two values on a single-valued field REFUSES (rc=2)" "2" "$RC"
+runw "$ZETA" set "W-$TODAY-04" holds-in bare/path.md
+wanteq "set holds-in without a marker REFUSES (rc=2)" "2" "$RC"
+wanteq "  and the file keeps its three lines (control)" "3" "$(grep -c '^holds-in:' "$F4")"
+# the session id the harness really sets is CLAUDE_CODE_SESSION_ID (P5.3); the old name stays as a fallback
+OUT="$(cd "$ZETA" && OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" CLAUDE_CODE_SESSION_ID=cc-real CLAUDE_SESSION_ID=sess-test "$TOOL" add "real id" --done-when i 2>&1)"; RC=$?
+want   "raised uses CLAUDE_CODE_SESSION_ID when set" "(session cc-real)" "$(cat "$ZW/items/open/W-$TODAY-05.md")"
+runw "$ZETA" decline "W-$TODAY-04" "test"; runw "$ZETA" decline "W-$TODAY-05" "test"
 runw "$ZETA" close "W-$TODAY-99"
 wanteq "close of an unknown ID REFUSES (rc=2)" "2" "$RC"
 runw "$ZETA" --closed
