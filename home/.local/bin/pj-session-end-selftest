@@ -73,6 +73,23 @@ F="$ROOT/repo-f"; mkrepo "$F"; FLAGF="$STATE/no-wrap-up/$(encode_key "$F")"
 run s-oiread "$T" "$F"
 check "D open-items READ -> no flag (control)" '[ ! -e "$FLAGF" ]'
 
+# --- D2: Bash file-changing shapes (2026-09-21): a heredoc/redirect counts, /dev/null does not
+D2="$ROOT/repo-d2"; mkrepo "$D2"; FLAGD2="$STATE/no-wrap-up/$(encode_key "$D2")"
+T="$ROOT/t-heredoc.jsonl"; { u "make it"; tool Bash '{"command":"mkdir -p /x && printf probe > /x/p.txt"}'; uresult; } > "$T"
+run s-heredoc "$T" "$D2"
+check "D2 Bash printf > file -> flag" '[ -f "$FLAGD2" ] && grep -q "^edits: 1$" "$FLAGD2"'
+D3="$ROOT/repo-d3"; mkrepo "$D3"; FLAGD3="$STATE/no-wrap-up/$(encode_key "$D3")"
+T="$ROOT/t-devnull.jsonl"; { u "look"; tool Bash '{"command":"git status 2>/dev/null; ls >/dev/null; cat x 2> /dev/null"}'; uresult; } > "$T"
+run s-devnull "$T" "$D3"
+check "D2 redirects to /dev/null only -> no flag (control)" '[ ! -e "$FLAGD3" ]'
+T="$ROOT/t-sedi.jsonl"; { u "fix"; tool Bash '{"command":"sed -i \"\" s/a/b/ f.txt"}'; uresult; } > "$T"
+run s-sedi "$T" "$D3"
+check "D2 sed -i -> flag" '[ -f "$FLAGD3" ]'
+D4="$ROOT/repo-d4"; mkrepo "$D4"; FLAGD4="$STATE/no-wrap-up/$(encode_key "$D4")"
+T="$ROOT/t-mvword.jsonl"; { u "q"; tool Bash '{"command":"ls; echo remove the cp-word; git log --oneline"}'; uresult; } > "$T"
+run s-mvword "$T" "$D4"
+check "D2 mv/cp inside a word or echo text -> no flag (control)" '[ ! -e "$FLAGD4" ]'
+
 # --- E: long talk, no tools: 4 messages no flag, 5 messages flag ---------------------------
 G="$ROOT/repo-g"; mkrepo "$G"; FLAGG="$STATE/no-wrap-up/$(encode_key "$G")"
 T="$ROOT/t-4.jsonl"; { umeta; ucmd; u a; u b; u c; u d; uresult; uresult; } > "$T"

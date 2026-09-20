@@ -19,8 +19,12 @@
 # THE THRESHOLD (ruled at the P5.3 gate, 2026-09-20, option B). A session did work worth
 # wrapping when EITHER holds:
 #   - at least one file-changing tool call: Edit, Write, NotebookEdit, MultiEdit, or a
-#     Bash call whose command contains `git commit` or an open-items write
-#     (add close park decline reopen set init regen migrate);
+#     Bash call with a file-changing shape: a redirect that is not to /dev/null (so a
+#     heredoc or printf > file counts; Bash is how most edits are made here), tee,
+#     sed -i, mv, cp, mkdir, touch, chmod, stow, git add/commit/push/tag/mv/rm, or an
+#     open-items write. Widened from the gate's wording on 2026-09-21 after the first
+#     Herdr probe wrote its file through a heredoc and left no flag. A read-only Bash
+#     call (ls, cat, git status, a 2>/dev/null) does not count;
 #   - or at least PJ_WRAP_MIN_MESSAGES (default 5) real messages from the user: lines of
 #     type user with string content, not isMeta, not a /command echo, not a tool result.
 # Counted with jq on exact fields, never with grep on the raw text: a command that
@@ -59,7 +63,7 @@ count_work(){                   # count_work <transcript> -> "m e" or nothing
     def edits: [ select(.type == "assistant") | .message.content[]? | select(.type == "tool_use")
       | select((.name | IN("Edit", "Write", "NotebookEdit", "MultiEdit"))
                or (.name == "Bash" and ((.input.command // "")
-                   | test("git commit|open-items +(add|close|park|decline|reopen|set|init|regen|migrate)")))) ] | length;
+                   | test("(^|[^0-9&<>])>>?[[:space:]]*(?!/dev/null)|(^|[;&|[:space:]])(tee|sed -i|mv|cp|mkdir|touch|chmod|stow)[[:space:]]|git (commit|push|tag|add|mv|rm)([[:space:]]|$)|open-items +(add|close|park|decline|reopen|set|init|regen|migrate)")))) ] | length;
     reduce inputs as $l ({m: 0, e: 0};
       (if ($l | real_user) then .m += 1 else . end) | .e += ($l | edits))
     | "\(.m) \(.e)"' "$1" 2>/dev/null
