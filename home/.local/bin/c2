@@ -177,11 +177,79 @@ EOF
 # F5c gate Q3: Gavin asked to be told how to address the session by hand.
 #
 # THE NAME IS KNOWN IN ADVANCE AND THE SESSION ID IS NOT, so they are printed in two
-# different places rather than pretended to be one. `pj` names a non-default profile's
-# session `<profile>-<cwd>-<suffix>`; c2 picks the suffix, exports it, and prints the
-# resulting name plus the exact SendMessage line BEFORE the exec. The session id only
-# exists once Claude Code has started, so `c2 list` reads it live out of the registry.
-peer_suffix(){ od -An -N2 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n'; }
+# different places rather than pretended to be one. The session id only exists once Claude
+# Code has started, so `c2 list` reads it live out of the registry.
+#
+# F5d 2026-09-22: c2 no longer BUILDS the name. It used to pick a random suffix, export it
+# as PJ_NAME_SUFFIX and rebuild pj's formula here, which meant two copies of one rule that
+# could drift apart in silence. pj now derives the whole name from the repo, the profile
+# and the cwd, and the suffix is gone entirely (the collision fear behind it was measured
+# false -- see build_session_name in pj). So c2 ASKS pj what the name will be, with the
+# same cwd and profile the launch will use, and prints the answer. One rule, one place.
+#
+# `pj --dry-run-env` is that question. It touches nothing: no keychain, no ssh-agent, no
+# registry link, no launch (pj selftest arm 20j holds it to that).
+peer_name_for(){  # <cwd> -> the name the launch will get, or empty if pj cannot say
+  ( builtin cd "$1" 2>/dev/null && PJ_PROFILE="$PROFILE" pj --dry-run-env 2>/dev/null ) \
+    | sed -n 's/^CLAUDE_CODE_SESSION_NAME=//p' | head -1
+}
+
+# --------------------------------------------------------------- direnv ----
+# envrc_gate <main repo> <worktree> -- rc 0 to carry on, rc 1 to STOP the launch.
+#
+# THE PROBLEM, measured live 2026-09-22 with a real c2 worktree and a control in the same
+# command: the worktree's `.envrc` is BYTE-IDENTICAL to the main repo's (it is a tracked
+# file, so git simply checks the same blob out) and direnv blocks it anyway. Main repo
+# `Found RC allowed 0`, worktree `Found RC allowed 1`, same second.
+#
+# WHY, and this is the whole of it: direnv's allow token is a file under
+# ~/.local/share/direnv/allow named `sha256(<absolute path> + "\n" + <file content>)`.
+# Reproduced exactly against the live token for this repo, with a different-path control
+# that produced a different digest. So the PATH is inside the hash: identical content at a
+# new path is a file direnv has never been shown, which is correct of direnv and merely
+# inconvenient here.
+#
+# THE RULE (Gavin, 2026-09-22): allow it only when it is byte-identical to the main repo's
+# ALREADY-ALLOWED one -- that is the same trust he has already given, moved to a new path.
+# Anything else prints the diff and stops, because a scratch branch quietly changing what
+# executes on every cd is exactly the thing worth stopping for. At `c2 start` time the two
+# are always identical, so in practice this is silent; it earns its keep later.
+#
+# Every other case is a NOTE and not a stop: no .envrc at all, no .envrc in the main repo,
+# no direnv binary, or a main-repo .envrc that is not itself allowed. None of those is a
+# change c2 should make on its own, and none of them is a reason to refuse a worktree.
+envrc_allowed(){  # <dir> -> rc 0 when direnv would load that dir's .envrc
+  ( builtin cd "$1" 2>/dev/null && direnv status 2>/dev/null ) \
+    | grep -qE '^Found RC allowed 0$'
+}
+envrc_gate(){
+  local repo="$1" wt="$2" a="$1/.envrc" b="$2/.envrc"
+  [ -e "$b" ] || return 0                       # nothing to allow
+  if ! command -v direnv >/dev/null 2>&1; then
+    say "NOTE: $(tilde "$b") exists and direnv is not installed; nothing to do."
+    return 0
+  fi
+  if [ ! -e "$a" ]; then
+    say "NOTE: the worktree has a .envrc and $(tilde "$repo") does not, so there is no allowed original to compare it with. Run 'direnv allow' there yourself if you want it."
+    return 0
+  fi
+  if ! cmp -s "$a" "$b"; then
+    printf 'c2: REFUSED -- the worktree .envrc is NOT the one you allowed:\n' >&2
+    diff -u "$a" "$b" 2>/dev/null | sed 's/^/    /' >&2
+    printf '  nothing was launched. Read it, then either fix it or run: direnv allow %s\n' "$(tilde "$wt")" >&2
+    return 1
+  fi
+  if ! envrc_allowed "$repo"; then
+    say "NOTE: $(tilde "$a") is byte-identical but is not itself allowed, so there is no trust to carry over. Run 'direnv allow' in $(tilde "$repo") first."
+    return 0
+  fi
+  if ( builtin cd "$wt" && direnv allow . >/dev/null 2>&1 ); then
+    say "direnv: allowed the worktree .envrc (byte-identical to the one already allowed in $(basename "$repo"))"
+  else
+    say "NOTE: direnv allow failed in $(tilde "$wt"); run it yourself if you want the .envrc loaded."
+  fi
+  return 0
+}
 
 # registry_row <worktree path> -> "name<TAB>sessionId<TAB>pid", empty when not running.
 # Reads ~/.claude/sessions, which since F5c is also where a scratch session registers
@@ -265,29 +333,30 @@ cmd_start(){
     say "NOTE: this project's key is $keylen characters and CLAUDE_CODE_PROJECT_DIR_NAME is capped at 64, so the transcript will land under the WORKTREE's own key, not $(basename "$repo")'s. pj-health --profile $PROFILE will not find this session's evidence. Everything else (the drawer, the rulings, the commit trailer) is unaffected."
     key=""
   fi
-  # The peer name pj will give this session. Built here, not read back afterwards, because
-  # `exec` leaves nobody to read it back: c2 chooses the suffix and pj uses it, so the name
-  # printed below is the name the session actually gets. Same shape as pj's own builder --
-  # <profile>-<cwd basename, non-alphanumerics dashed, 20 chars>-<suffix>.
-  local sfx pname pbase
-  sfx="${C2_NAME_SUFFIX:-$(peer_suffix)}"
-  [ -n "$sfx" ] && : || sfx="$$"
-  pbase="$(printf '%s' "${wt##*/}" | tr -c 'a-zA-Z0-9-' '-' | cut -c1-20)"
-  pname="$PROFILE-$pbase-$sfx"
-  say "peer name $pname  --  SendMessage to=\"$pname\" reaches it from any session"
+  # direnv (F5d gate Q3(a), ruled by Gavin 2026-09-22). Must run BEFORE the name is printed
+  # and before the launch, because a differing .envrc STOPS the launch.
+  envrc_gate "$repo" "$wt" || exit 2
+
+  # The peer name pj will give this session, asked of pj rather than rebuilt here.
+  local pname; pname="$(peer_name_for "$wt")"
+  if [ -n "$pname" ]; then
+    say "peer name $pname  --  SendMessage to=\"$pname\" reaches it from any session"
+  else
+    say "peer name: pj could not say (pj --dry-run-env printed none); c2 list shows it once the session is up"
+  fi
   say "its session id appears once Claude Code is up: c2 list"
 
   if [ -n "${C2_LAUNCH:-}" ]; then
-    printf '%s\n' "$C2_LAUNCH cwd=$wt profile=$PROFILE project_dir_name=${key:-<too-long:$keylen>} peer_name=$pname"
+    printf '%s\n' "$C2_LAUNCH cwd=$wt profile=$PROFILE project_dir_name=${key:-<too-long:$keylen>} peer_name=${pname:-<unknown>}"
     return 0
   fi
   # The trust watcher goes into the background BEFORE the exec, because the exec replaces
   # this process. It is a no-op outside herdr and a no-op when no dialog appears.
   ( trust_watch "${HERDR_PANE_ID:-}" & ) >/dev/null 2>&1
   if [ -n "$key" ]; then
-    (builtin cd "$wt" && CLAUDE_CODE_PROJECT_DIR_NAME="$key" PJ_NAME_SUFFIX="$sfx" exec pj --profile "$PROFILE")
+    (builtin cd "$wt" && CLAUDE_CODE_PROJECT_DIR_NAME="$key" exec pj --profile "$PROFILE")
   else
-    (builtin cd "$wt" && PJ_NAME_SUFFIX="$sfx" exec pj --profile "$PROFILE")
+    (builtin cd "$wt" && exec pj --profile "$PROFILE")
   fi
 }
 
@@ -360,7 +429,53 @@ cmd_done(){
     git -C "$repo" branch -D "$br" >/dev/null 2>&1 || refuse "done: could not delete branch $br"
     say "deleted branch $br"
   fi
+  close_herdr_workspace "$wt"
   [ "$discard" -eq 1 ] && say "--discard: the guards were not run"
+  return 0
+}
+
+# close_herdr_workspace <the worktree path just removed>
+#
+# THE LEAK THIS CLOSES, and it is the whole of W-20260922-A04. `c2 start` makes the
+# worktree through `hwt`, which is `herdr worktree create`, and that creates a HERDR
+# WORKSPACE alongside the git worktree. `c2 done` removed the worktree and the branch and
+# never touched the workspace, so every discarded scratch topic left a dead entry in the
+# sidebar pointing at a path that no longer exists.
+#
+# Measured 2026-09-22 by doing exactly that: `c2 start f5denvrc` then `c2 done f5denvrc
+# --discard` left workspace w44, `checkout_path` set to the deleted worktree. w3Y and w3Z,
+# the two the item was filed about, are the same thing from an earlier stage. So this is a
+# bug in c2 and not a cleanup job, and fixing it here closes the class.
+#
+# IT CLOSES ONLY WHAT IT CAN NAME. The workspace is matched on `worktree.checkout_path`
+# being exactly the path just removed -- never on the label, which is the repo name and is
+# shared by every workspace of that repo including the one you are sitting in. Anything
+# else is left alone, which is the herdr rule about not closing what you did not create.
+close_herdr_workspace(){
+  local gone="$1" ws
+  [ -n "$gone" ] || return 0
+  command -v herdr >/dev/null 2>&1 || return 0
+  command -v jq    >/dev/null 2>&1 || return 0
+  ws="$(herdr workspace list 2>/dev/null \
+        | jq -r --arg p "$gone" '.result.workspaces[]?
+                 | select(.worktree.checkout_path == $p)
+                 | .workspace_id' 2>/dev/null | head -1)"
+  # `workspace list` is a summary and may not carry the worktree block; ask each one
+  # directly when it does not, rather than reading its silence as "no match".
+  if [ -z "$ws" ]; then
+    local id
+    for id in $(herdr workspace list 2>/dev/null | jq -r '.result.workspaces[]?.workspace_id' 2>/dev/null); do
+      if [ "$(herdr workspace get "$id" 2>/dev/null | jq -r '.result.workspace.worktree.checkout_path // ""' 2>/dev/null)" = "$gone" ]; then
+        ws="$id"; break
+      fi
+    done
+  fi
+  [ -n "$ws" ] || return 0
+  if herdr workspace close "$ws" >/dev/null 2>&1; then
+    say "closed herdr workspace $ws (it pointed at the worktree just removed)"
+  else
+    say "NOTE: herdr workspace $ws still points at $(tilde "$gone"), which is gone. Close it with: herdr workspace close $ws"
+  fi
   return 0
 }
 
@@ -636,12 +751,95 @@ LATE
   run --trust-watch
   [ "$RC" -eq 2 ] && ok "12j --trust-watch with no pane id REFUSES rc 2" || bad "12j" "rc=$RC $OUT"
 
-  # 13. start prints the peer NAME and hands pj the same suffix (F5c gate Q3).
-  C2_NAME_SUFFIX=ab12 run start t13
-  case "$OUT" in *"peer name scratch-t13-ab12"*) ok "13 start prints the peer name it will give the session";; *) bad "13 peer name" "$OUT";; esac
-  case "$OUT" in *'SendMessage to="scratch-t13-ab12"'*) ok "13 and the exact SendMessage line to use";; *) bad "13 sendmessage line" "$OUT";; esac
-  case "$OUT" in *"peer_name=scratch-t13-ab12"*) ok "13 the name reaches the launch (seam shows it)";; *) bad "13 launch name" "$OUT";; esac
+  # 13. start prints the peer NAME, and it is pj's name rather than one c2 invented
+  #     (F5c gate Q3, reshaped by F5d gate Q1: no suffix, and c2 ASKS pj).
+  run start t13
+  case "$OUT" in *"peer name repo-scratch-t13"*) ok "13 start prints the peer name pj will give the session";; *) bad "13 peer name" "$OUT";; esac
+  case "$OUT" in *'SendMessage to="repo-scratch-t13"'*) ok "13 and the exact SendMessage line to use";; *) bad "13 sendmessage line" "$OUT";; esac
+  case "$OUT" in *"peer_name=repo-scratch-t13"*) ok "13 the name reaches the launch (seam shows it)";; *) bad "13 launch name" "$OUT";; esac
+  # 13b THE ANTI-DRIFT ARM, and the reason c2 stopped building the name itself: what c2
+  #     prints must be what pj would export, character for character. A second copy of the
+  #     formula here would pass arm 13 and still disagree with the launch.
+  local pjname
+  pjname="$( builtin cd "$repo/.worktree/scratch/t13" 2>/dev/null \
+             && PJ_PROFILE=scratch pj --dry-run-env 2>/dev/null \
+             | sed -n 's/^CLAUDE_CODE_SESSION_NAME=//p' | head -1 )"
+  if [ -n "$pjname" ]; then
+    case "$OUT" in *"peer_name=$pjname"*) ok "13b c2's printed name IS pj's, asked of pj not rebuilt";; *) bad "13b name drift" "c2 said ${OUT##*peer_name=} / pj says $pjname";; esac
+  else
+    ok "13b pj not on PATH in this environment, so the drift arm is not applicable"
+  fi
+  # 13c NO SUFFIX. The random hex is gone, and this is the arm that keeps it gone: the
+  #     collision fear that justified it was measured false (see pj build_session_name).
+  case "$OUT" in *"peer_name=repo-scratch-t13-"*) bad "13c a suffix came back" "$OUT";; *) ok "13c the name carries no random suffix";; esac
   run done t13 --discard
+
+  # 14. envrc_gate (F5d gate Q3a). A pure function of two files plus direnv, so every arm
+  #     runs without a worktree, a direnv allow or a launch.
+  local ea="$root/ea"; mkdir -p "$ea/main" "$ea/wt"
+  # 14a no .envrc in the worktree -> silent rc 0, whatever the main repo holds
+  printf 'export A=1\n' > "$ea/main/.envrc"
+  envrc_gate "$ea/main" "$ea/wt" >/dev/null 2>&1
+  [ $? -eq 0 ] && ok "14a no worktree .envrc -> rc 0, nothing said" || bad "14a" "rc=$?"
+  # 14b IDENTICAL but the main repo's is not allowed -> rc 0 and a NOTE, never a stop.
+  #     (No fixture can be direnv-allowed, so this is the branch the selftest reaches.)
+  printf 'export A=1\n' > "$ea/wt/.envrc"
+  OUT="$(envrc_gate "$ea/main" "$ea/wt" 2>&1)"; RC=$?
+  if command -v direnv >/dev/null 2>&1; then
+    [ "$RC" -eq 0 ] && ok "14b identical but unallowed original -> rc 0 (carry on)" || bad "14b" "rc=$RC $OUT"
+    case "$OUT" in *"not itself allowed"*) ok "14b and it says WHY, rather than going quiet";; *) bad "14b note" "$OUT";; esac
+  else
+    [ "$RC" -eq 0 ] && ok "14b no direnv installed -> rc 0 (carry on)" || bad "14b" "rc=$RC $OUT"
+  fi
+  # 14c DIFFERS -> rc 1, the diff on stderr, and the launch stops. The arm that matters.
+  printf 'export A=2\n' > "$ea/wt/.envrc"
+  OUT="$(envrc_gate "$ea/main" "$ea/wt" 2>&1)"; RC=$?
+  [ "$RC" -eq 1 ] && ok "14c a differing .envrc STOPS the launch (rc 1)" || bad "14c" "rc=$RC $OUT"
+  case "$OUT" in *REFUSED*) ok "14c and it refuses by name";; *) bad "14c refusal" "$OUT";; esac
+  case "$OUT" in *"export A=2"*) ok "14c and prints the diff, so you can read what changed";; *) bad "14c diff" "$OUT";; esac
+  # 14d no .envrc in the MAIN repo -> rc 0 and a NOTE. Nothing to compare is not a fault.
+  rm -f "$ea/main/.envrc"; printf 'export A=1\n' > "$ea/wt/.envrc"
+  OUT="$(envrc_gate "$ea/main" "$ea/wt" 2>&1)"; RC=$?
+  [ "$RC" -eq 0 ] && ok "14d no original to compare -> rc 0 (carry on)" || bad "14d" "rc=$RC $OUT"
+  # 14e CONTROL for 14a: the gate really does read the files, so 14a's rc 0 means "nothing
+  #     to do" rather than "this function never looks at anything". 14c is the proof.
+  [ "$RC" -eq 0 ] && ok "14e control: 14c rc 1 vs 14a/14d rc 0 -- the gate separates the cases" || bad "14e control" "every arm returned the same rc"
+
+  # 15. close_herdr_workspace (F5d gate Q4). A fake herdr answers workspace list, so the
+  #     matching rule is tested without a herdr server or a real workspace.
+  local hb="$root/herdrbin"; mkdir -p "$hb"
+  cat > "$hb/herdr" <<HFAKE
+#!/bin/sh
+if [ "\$1" = workspace ] && [ "\$2" = list ]; then
+  printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"wA","label":"repo"},{"workspace_id":"wB","label":"repo","worktree":{"checkout_path":"GONEPATH"}}]}}'
+  exit 0
+fi
+if [ "\$1" = workspace ] && [ "\$2" = get ]; then
+  printf '%s\n' '{"result":{"workspace":{}}}'; exit 0
+fi
+if [ "\$1" = workspace ] && [ "\$2" = close ]; then
+  printf '%s\n' "closed \$3" >> "$root/ws-closed"; exit 0
+fi
+exit 0
+HFAKE
+  chmod +x "$hb/herdr"
+  rm -f "$root/ws-closed"
+  # 15a the workspace whose checkout_path IS the removed path is closed, by id
+  OUT="$( PATH="$hb:$PATH"; close_herdr_workspace "GONEPATH" 2>&1 )"
+  [ "$(cat "$root/ws-closed" 2>/dev/null)" = "closed wB" ] && ok "15a the workspace pointing at the removed worktree is closed" || bad "15a" "$(cat "$root/ws-closed" 2>/dev/null)"
+  case "$OUT" in *"closed herdr workspace wB"*) ok "15a and it says so, rather than closing something silently";; *) bad "15a said" "$OUT";; esac
+  # 15b THE NEGATIVE ARM: a path that matches nothing closes NOTHING. wA shares the label
+  #     with wB, so a rule that matched on the label would close the wrong workspace here.
+  rm -f "$root/ws-closed"
+  ( PATH="$hb:$PATH"; close_herdr_workspace "SOMEOTHERPATH" ) >/dev/null 2>&1
+  [ ! -e "$root/ws-closed" ] && ok "15b an unmatched path closes nothing (label is never matched on)" || bad "15b closed the wrong one" "$(cat "$root/ws-closed")"
+  # 15c an empty path closes nothing
+  rm -f "$root/ws-closed"
+  ( PATH="$hb:$PATH"; close_herdr_workspace "" ) >/dev/null 2>&1
+  [ ! -e "$root/ws-closed" ] && ok "15c an empty path closes nothing" || bad "15c" "$(cat "$root/ws-closed")"
+  # 15d herdr ABSENT -> silent no-op, rc 0
+  ( PATH="$root/emptybin"; close_herdr_workspace "GONEPATH" ) >/dev/null 2>&1; RC=$?
+  [ "$RC" -eq 0 ] && ok "15d no herdr on PATH -> silent no-op, rc 0" || bad "15d" "rc=$RC"
 
   printf 'c2 selftest: %d passed, %d failed\n' "$pass" "$fail"
   [ "$fail" -eq 0 ]
