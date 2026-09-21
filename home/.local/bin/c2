@@ -3,11 +3,16 @@
 #
 # Usage:
 #   c2 start <topic>          make the worktree and launch pj --profile scratch inside it.
-#                             Prints the peer NAME the session will get, so you can
-#                             SendMessage it by hand, and accepts the folder-trust dialog
-#                             for you (D-20260922-A01; that carve-out is c2 worktrees and
-#                             the scratch config dir ONLY, never any other dialog).
-#   c2 done  <topic>          tear it down, but ONLY if both guards pass
+#                             Prints the peer NAME the session will get (asked of pj, not
+#                             rebuilt here) so you can SendMessage it by hand; accepts the
+#                             folder-trust dialog for you (D-20260922-A01; that carve-out
+#                             is c2 worktrees and the scratch config dir ONLY, never any
+#                             other dialog); and runs `direnv allow` in the worktree when
+#                             its .envrc is byte-identical to the main repo's already
+#                             allowed one. A DIFFERING .envrc prints the diff and STOPS.
+#   c2 done  <topic>          tear it down, but ONLY if both guards pass. Also closes the
+#                             herdr workspace hwt made for it, which until F5d was left
+#                             behind pointing at a path that no longer existed.
 #   c2 done  <topic> --discard   tear it down anyway, losing whatever the guards found
 #   c2 list                   the scratch worktrees of the repo you are standing in, with
 #                             each one's live peer name, session id and pid when a session

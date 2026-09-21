@@ -277,6 +277,33 @@ If a monitor script's `herdr` calls fail unexpectedly, look for a bug in the scr
 
 This compounds with the nested-TUI `idle`-unreliability warning above: corroborate a wait that settled unexpectedly fast with a direct `pane read --source visible` before trusting it. Reproduced 2026-09-06 on a Claude Code pane: `agent wait` returned 0 one second into a turn that ran fifteen more. The reliable pattern for a nested Claude is a sentinel: ask the agent to end its reply with a word spelled backwards (the reversed form never appears in the echoed prompt), then `pane wait-output --match <reversed-word>`.
 
+## Name what you create: workspace, tab, pane
+
+One convention on this estate, ruled 2026-09-22 (F5d). It exists so a sidebar and a
+`ListAgents` listing read as the same world rather than two.
+
+| Level         | Name it?                     | Shape                               | Example                                |
+| ------------- | ---------------------------- | ----------------------------------- | -------------------------------------- |
+| **workspace** | **no** — leave it alone      | it auto-tracks the repo already     | `fifty-shades-of-dotfiles`             |
+| **tab**       | yes, at creation (`--label`) | the PURPOSE                         | `main`, `scratch/f5d`, `f5d-control`   |
+| **pane**      | yes (`pane rename`)          | the session's own name, or its ROLE | `fifty-shades-of-dotfiles-f5d-control` |
+
+A pane running a `pj` session is labelled by `pj` itself at launch, with that session's
+`CLAUDE_CODE_SESSION_NAME`. You do not need to do it. Label the panes **you** open — a
+build pane, a log tail, a control session — and clear them when you close the work:
+`herdr pane rename <id> --clear`.
+
+**Why the pane and not the tab or the workspace.** Measured 2026-09-22 against herdr 0.8.2:
+`herdr agent list` does **not** carry a pane or tab label at all. It carries
+`terminal_title`, and Claude Code overwrites that with the current task summary while it
+works and with the shell prompt after it exits — so a session's name is visible there only
+while nothing is happening, which is exactly the property that cannot distinguish anything.
+The pane label is the one stable join between the two listings.
+
+A pane label **survives the pane's process exiting** (measured: a pane kept `control` after
+its Claude was exited and the title reverted to the shell prompt). So a label you set is a
+claim that stays on screen after the thing it described is gone. Clear it.
+
 ## Workspace labels: rename is permanent, do not use it to "refresh" a title
 
 A workspace's sidebar label auto-tracks its live pane cwd -- until you call `herdr workspace rename <id> <label>`. That call writes a permanent override (`custom_name` in herdr's session state) that from then on always wins over the real cwd, even after a later `cd`. There is no supported way to clear it and go back to auto-tracking (upstream herdr#3252, closed `not_planned` -- only panes have a reset action, not workspaces).

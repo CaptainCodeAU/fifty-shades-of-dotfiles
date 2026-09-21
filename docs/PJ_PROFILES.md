@@ -214,12 +214,12 @@ That was `W-20260921-A37`.
 
 **What the registry actually is**, measured 2026-09-22 with three live sessions:
 
-| Thing | Where |
-|---|---|
-| the address book | `<config_dir>/sessions/`, one `<pid>.json` + one `<pid>.<hex>.key` per LIVE session |
-| the phone line | `messagingSocketPath`, `/tmp/cc-socks/<pid>.sock` -- **global**, not under any config dir |
-| the key | **per session**, not per config dir: two live `~/.claude` sessions carry different tokens |
-| the config dir | named in **no field at all** |
+| Thing            | Where                                                                                     |
+| ---------------- | ----------------------------------------------------------------------------------------- |
+| the address book | `<config_dir>/sessions/`, one `<pid>.json` + one `<pid>.<hex>.key` per LIVE session       |
+| the phone line   | `messagingSocketPath`, `/tmp/cc-socks/<pid>.sock` -- **global**, not under any config dir |
+| the key          | **per session**, not per config dir: two live `~/.claude` sessions carry different tokens |
+| the config dir   | named in **no field at all**                                                              |
 
 **So only the address book was split.** The transport already spanned profiles. That is
 why the fix is one symlink rather than a message-relay tool.
@@ -242,11 +242,11 @@ says whether the link is actually there.
 The brief for this work asked for per-session symlinks. They cannot work, and finding that
 out was the measurement that decided the design:
 
-| Shape | Result |
-|---|---|
+| Shape                                       | Result                                                      |
+| ------------------------------------------- | ----------------------------------------------------------- |
 | symlinked **files** into the other registry | **NOT LISTED.** The reader does not follow a symlinked file |
-| **copies** of the same two files | **LISTED**, and messaging worked both ways |
-| the whole **directory** symlinked | **LISTED**, both ways, by name, nothing per-session |
+| **copies** of the same two files            | **LISTED**, and messaging worked both ways                  |
+| the whole **directory** symlinked           | **LISTED**, both ways, by name, nothing per-session         |
 
 The copy and the symlink were the identical registry pair, in the same folder, one minute
 apart, with nothing else changed. Copies work but have two faults a shared directory does
@@ -352,14 +352,122 @@ a dialog still up afterwards is said out loud rather than hammered with Enter.
 ### The peer name, and finding the session id
 
 `c2 start` prints the peer NAME it is about to give the session, and the exact
-`SendMessage` line to use, **before** the launch. It can do that because it chooses the
-name suffix and hands it to `pj`; it could not print the session id there, because the id
-does not exist until Claude Code has started and the exec leaves nobody to read it back.
+`SendMessage` line to use, **before** the launch. It could not print the session id there,
+because the id does not exist until Claude Code has started and the exec leaves nobody to
+read it back.
+
+Since F5d it does not BUILD that name. It **asks `pj`**, with the same cwd and profile the
+launch will use (`pj --dry-run-env`, which touches nothing), and prints the answer. Until
+then c2 kept its own copy of pj's formula, which is one rule written twice and free to
+drift in silence; `c2 --selftest` arm 13b is the arm that would catch it if it ever did.
 
 `c2 list` carries the live half instead -- for each scratch worktree it reads the registry
 and prints the running session's name, session id and pid, or `no session running`. That
 is read fresh each time rather than remembered, so a session that has since exited simply
 stops being shown.
+
+## Names: sessions, panes and tabs
+
+One convention, and it is readable cold. Ruled by Gavin at the F5d gate, 2026-09-22.
+
+| Thing | Shape | Example | Set by |
+| --- | --- | --- | --- |
+| session | `<repo-or-alias>-<role>[-<topic>]` | `fifty-shades-of-dotfiles-main` | `pj`, via `CLAUDE_CODE_SESSION_NAME` |
+| session, scratch | the same, role = the profile | `fifty-shades-of-dotfiles-scratch-f5d` | `pj`, launched by `c2` |
+| session, a stage's control pane | the same, chosen by the session | `fifty-shades-of-dotfiles-f5d-control` | the session, exported before `pj` |
+| Herdr **workspace** | left alone | `fifty-shades-of-dotfiles` (auto) | Herdr itself |
+| Herdr **tab** | the purpose | `main`, `scratch/f5d`, `f5d-control` | the session that opens it |
+| Herdr **pane** | the session's own name | `fifty-shades-of-dotfiles-scratch-f5d` | `pj`, at launch |
+
+`role` is `main` for the default profile and the profile's own name otherwise. `topic` is
+the working directory's basename when it is not the repo root, which is the `c2` worktree
+case and nothing else. The repo part is the repo **basename**; a repo that wants a shorter
+one declares `session-alias: <word>` in its own `.claude/pj-homes`. There is no hidden
+alias table, so a name is always explainable from two files.
+
+### Why the name travels in the environment
+
+`CLAUDE_CODE_SESSION_NAME` sets the display name exactly as `-n/--name` does. Measured
+2026-09-22 against Claude Code 2.1.278, with controls: the variable is honoured, and the
+registry then records **no `nameSource` field at all**, where `--name` records `user` and
+no name at all records `derived`. That absence is how you tell them apart.
+
+**That is the whole reason the default profile can have a name.** A `--name` entry would
+have added one to argv and broken the byte-identical guarantee that `pj --selftest` arm 12
+holds. An environment variable adds nothing to argv, so the guarantee is untouched and the
+default session stops being anonymous in a shared registry.
+
+A `--name` typed after `pj` still wins: the flag beats the variable (measured). And a name
+already in the environment is left alone, which is how a stage names a control pane.
+
+### What happens on a collision
+
+Claude Code renames the loser and **keeps the prefix**. Measured 2026-09-22: two
+interactive sessions launched as `f5d-dup` ended up `f5d-dup` and `f5d-dup-twinkly-lake`,
+the second recording `nameSource: collision`, and `ListAgents` listed both, distinctly.
+
+So there is no random suffix any more. F5c added one because a comment in `pj` said a
+collision would lose the prefix; that sentence was never measured and is false.
+
+**One hole, left open deliberately.** That check runs only for `entrypoint: cli`, a real
+terminal launch. A headless `claude -p` is `entrypoint: sdk-cli` and does not check at all:
+measured, a `-p` probe took the name of a **live** interactive session and both kept it.
+Note that `kind` says `interactive` for both, so `kind` is not the field to read.
+Probes only; no real `pj` or `c2` session is affected.
+
+**And the name is cut at 200 characters -- by `pj`, on purpose.** Claude Code truncates
+silently at 200 (measured by bisection: 200 verbatim, 201 to 200, `nameSource` still
+`user`, exit 0, no warning). Nothing here comes close, but a truncation you did not ask for
+is worth making visible.
+
+### Why the pane, and not the workspace or the tab
+
+**`herdr agent list` does not carry the session name.** It carries `terminal_title`, and
+Claude Code overwrites that with the current task summary and then, after exit, with the
+shell prompt. So a fresh idle session shows its name there and a working one does not --
+a field that is right only while nothing is happening cannot distinguish anything.
+
+The pane **label** is stable, survives the process exiting, and can be cleared. So `pj`
+sets it at launch, and `ListAgents` and the Herdr sidebar read the same string.
+
+- **Workspace: never touched.** Its label already auto-tracks the live cwd, and
+  `herdr workspace rename` writes a permanent override with no supported way back
+  (upstream herdr#3252, closed `not_planned`). Renaming it would buy a string it already
+  shows and cost the tracking for ever.
+- **Tab: the session's job, not the launcher's.** One tab can hold several panes doing
+  different things, so a launcher naming it would clobber whatever else is in there.
+- **Pane: one pane, one session.** `pane rename` takes any characters and has `--clear`.
+
+**The cost, stated rather than hidden:** the label outlives the session. A pane whose
+Claude has exited keeps its label until the next `pj` launch overwrites it or someone runs
+`herdr pane rename <id> --clear`. `pj` cannot clear it on the way out, because it `exec`s
+and leaves nobody behind to do it.
+
+## `direnv` in a `c2` worktree
+
+`c2 start` runs `direnv allow` in the new worktree **only** when its `.envrc` is
+byte-identical to the main repo's already-allowed one. Anything else prints the diff and
+**stops the launch**. Ruled by Gavin at the F5d gate: a byte-identical file is the same
+trust he has already given, moved to a new path.
+
+**Why it needs doing at all.** Measured live 2026-09-22, with a control in the same
+command: the worktree's `.envrc` is byte-identical to the main repo's -- it is a tracked
+file, so git simply checks the same blob out -- and direnv blocks it anyway. Main repo
+`Found RC allowed 0`, worktree `Found RC allowed 1`, same second.
+
+The reason is the allow token's name. It is a file under `~/.local/share/direnv/allow`
+called `sha256(<absolute path> + "\n" + <file content>)` -- reproduced exactly against this
+repo's live token, with a different-path control that produced a different digest. **The
+path is inside the hash**, so identical content at a new path is a file direnv has never
+been shown. Correct of direnv, and merely inconvenient here.
+
+At `c2 start` the two are always identical, so in practice this is silent. It earns its
+keep later, if a scratch branch edits `.envrc`: what runs on every `cd` into that folder is
+then something you have not read, and that is worth stopping for.
+
+Every other case is a note and never a stop, because none of them is a change `c2` should
+make on its own: no `.envrc` at all, no `.envrc` in the main repo to compare with, no
+`direnv` installed, or a main-repo `.envrc` that is not itself allowed.
 
 ## The worktree transcript, and a 64-character cap
 
