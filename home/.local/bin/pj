@@ -46,6 +46,18 @@
 # Unset means EMIT NOTHING, never "emit the default", so a profile that names none of
 # them produces the same argv it did before this change.
 #
+# TWO MORE THINGS A NON-DEFAULT PROFILE GETS, F5c 2026-09-22 (gate Q1(a) and Q2):
+#   1. a SHARED SESSION REGISTRY. On a real launch the profile's config dir is given
+#      `sessions -> ~/.claude/sessions`, one symlink, so sessions in the two config dirs
+#      see each other in ListAgents and can SendMessage by name BOTH ways. The long form,
+#      and why a directory link rather than per-session links, is above
+#      ensure_registry_link. Never created on --dry-run.
+#   2. a NAME. `--name <profile>-<cwd>-<suffix>`, because once the registry is shared the
+#      listing shows name, kind, status and age and nothing else -- no cwd, no config dir
+#      -- so without it a scratch session is indistinguishable from a real one.
+# Both apply ONLY when config_dir differs from ~/.claude, so the default launch is
+# untouched and its argv stays byte-identical (selftest arms 12, 20g, 21b).
+#
 # THE CONFIG DIR IS THE ONLY THING THAT ACTUALLY MOVES. Measured 2026-09-21 with pj's
 # real argv under a scratch CLAUDE_CONFIG_DIR: the appended prompt file, the output
 # style and all five --plugin-dir dirs still loaded from ~/.claude, because every path
@@ -189,6 +201,27 @@ build_argv() {
   [[ "$P_VOICE" == on  ]] && ov="$ov\"voiceEnabled\":true,"
   [[ "$P_VOICE" == off ]] && ov="$ov\"voiceEnabled\":false,"
   [[ -n "$ov" ]] && PJ_ARGV+=(--settings "{${ov%,}}")
+  # F5c gate Q2. A non-default profile's sessions are NAMED, so you can tell them apart
+  # in ListAgents. This matters only because of the shared registry below: once a scratch
+  # session is listed beside the real ones, the listing gives you name, kind, status and
+  # age and NOTHING ELSE -- no cwd, no config dir -- so a derived name like
+  # `fifty-shades-of-dotfiles-23` is indistinguishable from a default-profile session in
+  # the same repo. Measured 2026-09-22: that is exactly what happened in the proof run.
+  #
+  # `-n/--name` sets the display name (Claude Code then records nameSource "user" instead
+  # of "derived"). Names must be unique among live sessions, so a short random suffix is
+  # appended; a collision would otherwise be renamed by Claude Code and the prefix lost.
+  # The DEFAULT profile passes no --name at all, which is what keeps its argv
+  # byte-identical to the pre-F5a launcher (selftest arm 12).
+  if [[ "$PROFILE_NAME" != default ]]; then
+    local base sfx
+    base="${PWD:t}"
+    base="${base//[^a-zA-Z0-9-]/-}"
+    base="${base[1,20]}"
+    sfx="${PJ_NAME_SUFFIX:-$(od -An -N2 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')}"
+    [[ -z "$sfx" ]] && sfx="$$"
+    PJ_ARGV+=(--name "${PROFILE_NAME}-${base}-${sfx}")
+  fi
   PJ_ARGV+=(${=P_REQUIRED})
   # The env the launch exports. EMPTY for the default profile, which is what keeps the
   # default launch byte-identical: `config_dir: ~/.claude` means DO NOT EXPORT, because a
@@ -228,6 +261,76 @@ kick_dotclaude_fetch() {
   fi
   ( GIT_TERMINAL_PROMPT=0 GIT_HTTP_LOW_SPEED_LIMIT=1000 GIT_HTTP_LOW_SPEED_TIME=8 \
       git -C "$dc" fetch --quiet origin >/dev/null 2>&1 & ) >/dev/null 2>&1
+  return 0
+}
+
+# --- the shared session registry (F5c, gate Q1 option (a), 2026-09-22) ------------
+# Claude Code registers ONE `<pid>.json` plus one `<pid>.<hex>.key` per LIVE session under
+# `<config_dir>/sessions/`, and builds ListAgents by reading ONLY that folder. The socket
+# it names in that file -- `/tmp/cc-socks/<pid>.sock` -- is GLOBAL, shared by every config
+# dir on the machine. So the TRANSPORT already spans profiles and only the ADDRESS BOOK is
+# split, which is the whole of W-20260921-A37.
+#
+# One symlink fixes it: `<config_dir>/sessions -> ~/.claude/sessions`. Both sides then see
+# each other in ListAgents and can SendMessage BY NAME in both directions, with no
+# per-session machinery anywhere.
+#
+# WHY A DIRECTORY LINK AND NOT PER-SESSION LINKS, all measured 2026-09-22 with two live
+# sessions in two config dirs:
+#   - the reader does NOT follow a symlinked FILE. The identical registry pair was listed
+#     as a COPY and not listed as a SYMLINK, same files, same minute, nothing else changed.
+#     So the brief's per-session-link shape cannot work at all.
+#   - per-session COPIES do work, and were proven both ways -- but a copy FREEZES: the live
+#     session rewrites `status` and `updatedAt` in its own file and the copy keeps the old
+#     values. Worse, it outlives the peer: after the session exited its copy sat there
+#     naming a dead pid until Claude Code's own sweep reaped it.
+#   - with a shared DIRECTORY the live session writes and removes ITS OWN file, so there is
+#     nothing to go stale and nothing to sweep. Proven: the scratch session's entry appeared
+#     in ~/.claude/sessions at launch and was gone from it seconds after /exit.
+#
+# IT NEVER TOUCHES ~/.claude/sessions. That folder is the default profile's own registry
+# AND this link's target; replacing it would cut every default-profile session adrift.
+#
+# IT NEVER REFUSES A LAUNCH. Every failure path returns 0 after one line on stderr: a
+# launcher that will not start because a convenience link could not be made is worse than
+# one without the link. The only destructive call is `rmdir`, which by definition cannot
+# lose data -- it fails on a non-empty directory, and that failure IS the guard.
+ensure_registry_link() {
+  local cfg="$1" target="${PJ_SESSIONS_DIR:-$HOME/.claude/sessions}" link cur
+  [[ -n "$cfg" && "$cfg" != "$HOME/.claude" ]] || return 0
+  link="$cfg/sessions"
+  mkdir -p "$target" 2>/dev/null || return 0
+  if [[ -L "$link" ]]; then
+    cur="$(readlink "$link" 2>/dev/null)"
+    [[ "$cur" == "$target" ]] && return 0
+    if [[ -e "$link" ]]; then
+      # points somewhere real and different: a human's choice, left alone but SAID
+      print -u2 -- "pj: NOTE: ${link/#$HOME/~} points at $cur, not ~/.claude/sessions; leaving it. Cross-config-dir ListAgents will not work for profile '$PROFILE_NAME'."
+      return 0
+    fi
+    # DANGLING: the only thing it can mean is a target that moved, so repair it. `ln -sfn`
+    # replaces the link in one call rather than deleting and recreating it.
+    ln -sfn "$target" "$link" 2>/dev/null || \
+      print -u2 -- "pj: NOTE: could not repair the dangling link ${link/#$HOME/~}."
+    return 0
+  fi
+  if [[ -d "$link" ]]; then
+    # a REAL directory. Empty means a config dir that has simply never had the link; adopt
+    # it. NON-EMPTY means a session is registered in it right now, and taking the folder
+    # away would strand that session's own exit cleanup.
+    if [[ -n "$(print -l -- "$link"/*(NDY1) 2>/dev/null)" ]]; then
+      print -u2 -- "pj: NOTE: ${link/#$HOME/~} holds live session files, so it was NOT replaced by the shared-registry link. Close those sessions and relaunch."
+      return 0
+    fi
+    rmdir "$link" 2>/dev/null || { print -u2 -- "pj: NOTE: could not replace ${link/#$HOME/~} with the shared-registry link."; return 0; }
+  elif [[ -e "$link" ]]; then
+    print -u2 -- "pj: NOTE: ${link/#$HOME/~} exists and is not a directory; leaving it."
+    return 0
+  else
+    mkdir -p "$cfg" 2>/dev/null || return 0
+  fi
+  ln -s "$target" "$link" 2>/dev/null || \
+    print -u2 -- "pj: NOTE: could not create ${link/#$HOME/~} -> ~/.claude/sessions; cross-config-dir ListAgents will not work for profile '$PROFILE_NAME'."
   return 0
 }
 
@@ -379,6 +482,74 @@ selftest() {
   [[ "$out" != *'"voiceEnabled"'* && "$out" != *'"remoteControlAtStartup"'* ]] && ok "19d unset keys emit no overlay --settings" || bad "19d overlay leaked" "$out"
   n=$(print -r -- "$out" | grep -c -- '^--settings$')
   [[ "$n" -eq 1 ]] && ok "19d exactly ONE --settings when no profile key is set" || bad "19d settings count" "got $n, wanted 1"
+  # ---- the shared session registry (F5c) ------------------------------------------
+  # Every arm runs against a FIXTURE target via PJ_SESSIONS_DIR. Pointing these at the
+  # real ~/.claude/sessions would have the suite rearranging live sessions' address book.
+  local reg="$root/registry" cfgx err20
+  mkdir -p "$reg/default-sessions"
+  export PJ_SESSIONS_DIR="$reg/default-sessions"
+  # 20a POSITIVE: a config dir with no sessions entry at all gets the link.
+  cfgx="$reg/cfg-a"; mkdir -p "$cfgx"
+  ensure_registry_link "$cfgx" 2>/dev/null
+  [[ -L "$cfgx/sessions" && "$(readlink "$cfgx/sessions")" == "$PJ_SESSIONS_DIR" ]] \
+    && ok "20a a fresh config dir gets sessions -> the default registry" || bad "20a no link" "$(ls -la "$cfgx" 2>&1 | tail -2)"
+  # 20b idempotent: a second call changes nothing and says nothing.
+  err20="$(ensure_registry_link "$cfgx" 2>&1 >/dev/null)"
+  [[ -L "$cfgx/sessions" && -z "$err20" ]] && ok "20b a second call is a silent no-op" || bad "20b not idempotent" "$err20"
+  # 20c DANGLING link -> repaired. This is the arm the brief asked for by name.
+  cfgx="$reg/cfg-c"; mkdir -p "$cfgx"; ln -s "$reg/no-such-target" "$cfgx/sessions"
+  [[ ! -e "$cfgx/sessions" && -L "$cfgx/sessions" ]] || bad "20c fixture" "the fixture link is not dangling, so the arm proves nothing"
+  ensure_registry_link "$cfgx" 2>/dev/null
+  [[ "$(readlink "$cfgx/sessions")" == "$PJ_SESSIONS_DIR" ]] \
+    && ok "20c a DANGLING sessions link is repaired" || bad "20c dangling" "$(readlink "$cfgx/sessions")"
+  # 20d NEGATIVE: a link to a real, DIFFERENT directory is left alone and announced.
+  #     Without this arm 20c passes just as well on code that clobbers every symlink it
+  #     meets -- "the link now points at the target" is true in both worlds.
+  cfgx="$reg/cfg-d"; mkdir -p "$cfgx" "$reg/somewhere-else"; ln -s "$reg/somewhere-else" "$cfgx/sessions"
+  err20="$(ensure_registry_link "$cfgx" 2>&1 >/dev/null)"
+  [[ "$(readlink "$cfgx/sessions")" == "$reg/somewhere-else" ]] \
+    && ok "20d a link to a real OTHER directory is NOT clobbered" || bad "20d clobbered" "$(readlink "$cfgx/sessions")"
+  [[ "$err20" == *"points at"* ]] && ok "20d and it says so on stderr" || bad "20d silent" "$err20"
+  # 20e a real EMPTY directory is adopted (rmdir cannot lose data; it fails if it would).
+  cfgx="$reg/cfg-e"; mkdir -p "$cfgx/sessions"
+  ensure_registry_link "$cfgx" 2>/dev/null
+  [[ -L "$cfgx/sessions" && "$(readlink "$cfgx/sessions")" == "$PJ_SESSIONS_DIR" ]] \
+    && ok "20e an EMPTY real sessions dir is replaced by the link" || bad "20e empty dir" "$(ls -la "$cfgx" 2>&1 | tail -2)"
+  # 20f NON-EMPTY (a peer registered there right now) is left alone and announced. Losing
+  #     this folder would strand that session's own exit cleanup.
+  cfgx="$reg/cfg-f"; mkdir -p "$cfgx/sessions"; : > "$cfgx/sessions/12345.json"
+  err20="$(ensure_registry_link "$cfgx" 2>&1 >/dev/null)"
+  [[ -d "$cfgx/sessions" && ! -L "$cfgx/sessions" && -e "$cfgx/sessions/12345.json" ]] \
+    && ok "20f a NON-EMPTY sessions dir is left alone, live files intact" || bad "20f clobbered a live registry" "$(ls -la "$cfgx/sessions" 2>&1 | tail -3)"
+  [[ "$err20" == *"live session files"* ]] && ok "20f and it says so on stderr" || bad "20f silent" "$err20"
+  # 20g the DEFAULT config dir is never linked -- to itself or to anything else.
+  err20="$(ensure_registry_link "$HOME/.claude" 2>&1 >/dev/null)"
+  [[ -z "$err20" ]] && [[ ! -L "$HOME/.claude/sessions" ]] \
+    && ok "20g config_dir ~/.claude is a silent no-op (the default profile is untouched)" || bad "20g touched the default" "$err20"
+  ensure_registry_link "" 2>/dev/null
+  [[ $? -eq 0 ]] && ok "20g an empty config_dir is a silent no-op" || bad "20g empty arg" "rc=$?"
+  # 20h a config dir that does not exist yet is created along with the link.
+  cfgx="$reg/cfg-h-missing"
+  [[ ! -e "$cfgx" ]] || bad "20h fixture" "the missing-dir fixture already exists"
+  ensure_registry_link "$cfgx" 2>/dev/null
+  [[ -L "$cfgx/sessions" ]] && ok "20h a config dir that does not exist yet is created with the link" || bad "20h missing dir" "$(ls -la "$cfgx" 2>&1)"
+  # 20i CONTROL: the fixture target really is a different path from the real registry, so
+  #     none of 20a-20h can have been measuring ~/.claude/sessions by accident.
+  [[ "$PJ_SESSIONS_DIR" != "$HOME/.claude/sessions" ]] \
+    && ok "20i control: the arms ran against a fixture, not the live registry" || bad "20i control" "the suite pointed at the real registry"
+  unset PJ_SESSIONS_DIR
+  # 20j --dry-run creates NO link, the same contract arm 8 holds the fetch to.
+  cfgx="$reg/cfg-dry"
+  printf 'config_dir: %s\nplugins: none\n' "$cfgx" > "$pdir/dryreg"
+  PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile dryreg --dry-run >/dev/null 2>&1
+  [[ ! -e "$cfgx/sessions" ]] && ok "20j --dry-run creates no registry link" || bad "20j dry-run wrote" "$cfgx/sessions exists"
+  # ---- 21: the profile session name (F5c gate Q2) ----------------------------------
+  out="$(PJ_NAME_SUFFIX=zz99 PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile scratchy --dry-run 2>/dev/null)"
+  [[ "$out" == *$'\n--name\nscratchy-'*$'-zz99\n'* ]] && ok "21a a non-default profile is NAMED <profile>-<cwd>-<suffix>" || bad "21a name" "$out"
+  # 21b THE NEGATIVE ARM, and the one that protects arm 12: the default profile emits no
+  #     --name at all. Emitting one would break the byte-identical guarantee.
+  out="$(PJ_NAME_SUFFIX=zz99 PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --dry-run 2>/dev/null)"
+  [[ "$out" != *"--name"* ]] && ok "21b the default profile emits NO --name" || bad "21b default named" "$out"
   print -- "pj selftest: $pass passed, $fail failed"
   [[ $fail -eq 0 ]]
 }
@@ -420,6 +591,9 @@ if [[ ! -r "$LAUNCH_FILE" ]]; then
   exit 2
 fi
 kick_dotclaude_fetch
+# Only on a REAL launch, never on --dry-run or --dry-run-env: a dry run must not touch
+# the filesystem, which is the same contract arm 8 holds kick_dotclaude_fetch to.
+ensure_registry_link "$P_CONFIG_DIR"
 source "$LAUNCH_FILE"
 # Exported into THIS script's own process, which is safe because the script is its own
 # process: nothing leaks back to the interactive shell that typed `pj`. NOT `env VAR=v
