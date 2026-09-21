@@ -27,6 +27,61 @@
 # ============================================================================
 set -uo pipefail
 
+# --selftest: prove the exit-code contract with a stubbed scanner. Four arms, and the
+# one that matters is `1`: a change that stops FALSE alarms must not also stop TRUE ones.
+# W-20260921-A38 -- this hook had no test at all when it started claiming findings that
+# did not exist, so the fix ships with the test that would have caught it.
+if [ "${1:-}" = "--selftest" ]; then
+    _st_pass=0; _st_fail=0
+    _st_dir="$(mktemp -d "${TMPDIR:-/tmp}/pnpm-audit-hook-selftest.XXXXXX")" || exit 1
+    _st_arm() { # <scanner-exit> <want-hook-rc> <want-text-or-EMPTY>
+        printf '#!/bin/sh\nexit %s\n' "$1" > "$_st_dir/pnpm-audit-tree"
+        chmod +x "$_st_dir/pnpm-audit-tree"
+        _o="$(PATH="$_st_dir:$PATH" PNPM_AUDIT_DISABLE=0 "$0" full 2>&1)"; _r=$?
+        if [ "$_r" -ne "$2" ]; then
+            _st_fail=$((_st_fail + 1)); printf '  FAIL scanner exit %s -> wanted hook rc %s, got %s\n' "$1" "$2" "$_r"; return
+        fi
+        case "$3" in
+            EMPTY) if [ -n "$(printf '%s' "$_o" | tr -d '[:space:]')" ]; then
+                       _st_fail=$((_st_fail + 1)); printf '  FAIL scanner exit %s -> wanted silence, got: %s\n' "$1" "$_o"; return
+                   fi ;;
+            *)     case "$_o" in *"$3"*) ;; *)
+                       _st_fail=$((_st_fail + 1)); printf '  FAIL scanner exit %s -> wanted %s, got: %s\n' "$1" "$3" "$_o"; return ;;
+                   esac ;;
+        esac
+        _st_pass=$((_st_pass + 1)); printf '  ok   scanner exit %s -> hook rc %s, %s\n' "$1" "$2" "$3"
+    }
+    printf 'pnpm-audit-hook selftest in %s\n' "$_st_dir"
+    _st_arm 0   0 EMPTY
+    _st_arm 1   1 "supply-chain findings"
+    _st_arm 2   0 "THE SCAN DID NOT RUN"
+    _st_arm 127 0 "THE SCAN DID NOT RUN"
+    # The scanner missing entirely must still fail OPEN and say so (pre-existing arm).
+    #
+    # MOVE, DO NOT rm. `rm` is the Trash-routed shim and its Trash call FAILS inside the
+    # Claude Bash sandbox, leaving the file exactly where it was -- so this teardown used
+    # to leave the stub on PATH and the arm measured nothing. Same bug as W-20260921-A33,
+    # reintroduced here within the hour, which is why the rule is written down rather
+    # than remembered. A rename inside one tree needs no Trash and works in both worlds.
+    #
+    # And the PATH must keep /bin:/usr/bin: an empty-ish PATH breaks the `env bash`
+    # shebang itself, which fails with 127 and looks exactly like the hook misbehaving.
+    mkdir -p "$_st_dir/parked"
+    mv -f "$_st_dir/pnpm-audit-tree" "$_st_dir/parked/pnpm-audit-tree" 2>/dev/null
+    if [ -e "$_st_dir/pnpm-audit-tree" ]; then
+        printf 'pnpm-audit-hook selftest: INVALID TRIAL -- could not clear the stub scanner\n' >&2
+        exit 2
+    fi
+    _o="$(PATH="$_st_dir:/bin:/usr/bin" PNPM_AUDIT_DISABLE=0 "$0" full 2>&1)"; _r=$?
+    case "$_r:$_o" in
+        0:*"not on PATH"*) _st_pass=$((_st_pass + 1)); printf '  ok   no scanner at all -> rc 0, says not on PATH\n' ;;
+        *) _st_fail=$((_st_fail + 1)); printf '  FAIL no scanner -> rc=%s out=%s\n' "$_r" "$_o" ;;
+    esac
+    printf 'pnpm-audit-hook selftest: %s passed, %s failed\n' "$_st_pass" "$_st_fail"
+    [ "$_st_fail" -eq 0 ]
+    exit $?
+fi
+
 [ "${PNPM_AUDIT_DISABLE:-0}" = "1" ] && exit 0
 
 mode="${1:-fast}"
@@ -45,11 +100,49 @@ case "$mode" in
     *)    args=(--offline --quiet --no-report --fail-on "$failon") ;;
 esac
 
-if ! pnpm-audit-tree "$root" "${args[@]}"; then
+# W-20260921-A38. pnpm-audit-tree's shebang is `uv run python3`, and uv's default cache
+# (~/.cache/uv) is outside the Claude Bash sandbox's writable set. Point uv at a cache it
+# can write when the normal one is unwritable, so the scanner RUNS instead of dying at
+# the shebang. Only ever set when the caller has not chosen one, and only when the real
+# cache root actually refuses a write -- this must change nothing in an ordinary shell.
+if [ -z "${UV_CACHE_DIR:-}" ]; then
+    _cache_root="${XDG_CACHE_HOME:-$HOME/.cache}"
+    if ! ( mkdir -p "$_cache_root/uv" && : > "$_cache_root/uv/.pnpm-audit-hook-probe" ) 2>/dev/null; then
+        UV_CACHE_DIR="${TMPDIR:-/tmp}/uv-cache-$(id -u)"
+        export UV_CACHE_DIR
+    else
+        rm -f "$_cache_root/uv/.pnpm-audit-hook-probe" 2>/dev/null
+    fi
+fi
+
+# READ THE EXIT CODE, DO NOT JUST TEST IT. pnpm-audit-tree returns 1 for a real finding
+# and 2 for "I could not run"; a uv that cannot start also exits non-zero. This block
+# used to be `if ! pnpm-audit-tree ...` and so reported EVERY non-zero as a supply-chain
+# block -- measured 2026-09-21 inside the sandbox, where a uv cache failure printed
+#     pnpm-audit-hook: supply-chain findings >= high blocked this full hook.
+# for findings that did not exist. That is the worst member of the A38 class: a security
+# control raising a FALSE ALARM rather than admitting it never ran. A scanner that could
+# not start and a scanner that found something must not look the same.
+pnpm-audit-tree "$root" "${args[@]}"
+rc=$?
+if [ "$rc" -eq 0 ]; then
+    exit 0
+fi
+if [ "$rc" -eq 1 ]; then
     echo "" >&2
     echo "pnpm-audit-hook: supply-chain findings >= ${failon} blocked this ${mode} hook." >&2
     echo "  Review:  pnpm-audit-tree \"$root\"" >&2
     echo "  Bypass:  PNPM_AUDIT_DISABLE=1 <git cmd>   (or: git commit --no-verify)" >&2
     exit 1
 fi
+# Any other code: the scanner did not complete. Say which, say it is NOT a finding, and
+# fail open -- the same posture as "pnpm-audit-tree not on PATH" above, for the same
+# reason. Blocking every push on a broken scanner teaches people to pass --no-verify,
+# and a bypass habit costs more than one unscanned push.
+echo "" >&2
+echo "pnpm-audit-hook: THE SCAN DID NOT RUN (pnpm-audit-tree exit ${rc}). This is NOT a" >&2
+echo "  finding and NOT a clean result -- nothing was scanned. Not blocking the ${mode} hook." >&2
+echo "  Reproduce:  pnpm-audit-tree \"$root\" ${args[*]}" >&2
+echo "  Inside a Claude Bash sandbox this is usually uv's cache; UV_CACHE_DIR is set" >&2
+echo "  automatically here, so a failure now is something else." >&2
 exit 0
