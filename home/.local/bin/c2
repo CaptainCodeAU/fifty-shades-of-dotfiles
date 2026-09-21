@@ -245,13 +245,22 @@ envrc_gate(){
     return 1
   fi
   if ! envrc_allowed "$repo"; then
-    say "NOTE: $(tilde "$a") is byte-identical but is not itself allowed, so there is no trust to carry over. Run 'direnv allow' in $(tilde "$repo") first."
+    # QUOTE WHAT DIRENV SAID, rather than only our reading of it. Measured 2026-09-22: this
+    # branch fired once against a main repo that WAS allowed, and did not reproduce -- the
+    # same command run twice afterwards, once from a script and once from the same Herdr
+    # pane, both read `Found RC allowed 0`. One unexplained reading is not a reason to
+    # weaken the check, but a check that cannot say what it saw is a reason to fix the
+    # check. The failure mode is already the safe one: a note, never a stop.
+    say "NOTE: $(tilde "$a") is byte-identical but direnv does not report it as allowed, so there is no trust to carry over. Run 'direnv allow' in $(tilde "$repo") first. direnv said: $( ( builtin cd "$repo" && direnv status 2>&1 ) | grep -E '^Found RC allowed' | head -1 || true)"
     return 0
   fi
-  if ( builtin cd "$wt" && direnv allow . >/dev/null 2>&1 ); then
+  if ( builtin cd "$wt" && direnv allow . >/dev/null 2>&1 ) && envrc_allowed "$wt"; then
     say "direnv: allowed the worktree .envrc (byte-identical to the one already allowed in $(basename "$repo"))"
   else
-    say "NOTE: direnv allow failed in $(tilde "$wt"); run it yourself if you want the .envrc loaded."
+    # The allow ran and the worktree still does not read as allowed, or the allow itself
+    # failed. Either way SAY SO: silence here would leave you to discover it on the first
+    # cd, which is exactly the noise this gate exists to remove.
+    say "NOTE: direnv allow did not take in $(tilde "$wt") -- direnv says: $( ( builtin cd "$wt" && direnv status 2>&1 ) | grep -E '^Found RC allowed' | head -1 || true). Run it yourself if you want the .envrc loaded."
   fi
   return 0
 }
@@ -792,7 +801,11 @@ LATE
   OUT="$(envrc_gate "$ea/main" "$ea/wt" 2>&1)"; RC=$?
   if command -v direnv >/dev/null 2>&1; then
     [ "$RC" -eq 0 ] && ok "14b identical but unallowed original -> rc 0 (carry on)" || bad "14b" "rc=$RC $OUT"
-    case "$OUT" in *"not itself allowed"*) ok "14b and it says WHY, rather than going quiet";; *) bad "14b note" "$OUT";; esac
+    case "$OUT" in *"does not report it as allowed"*) ok "14b and it says WHY, rather than going quiet";; *) bad "14b note" "$OUT";; esac
+    # 14b' and it QUOTES direnv, rather than only its own reading of direnv. This arm exists
+    #      because that branch fired once in a live run against a repo that WAS allowed and
+    #      did not reproduce; a check that cannot say what it saw cannot be diagnosed.
+    case "$OUT" in *"direnv said: Found RC allowed"*) ok "14b' and quotes what direnv actually said";; *) bad "14b' no quote" "$OUT";; esac
   else
     [ "$RC" -eq 0 ] && ok "14b no direnv installed -> rc 0 (carry on)" || bad "14b" "rc=$RC $OUT"
   fi
