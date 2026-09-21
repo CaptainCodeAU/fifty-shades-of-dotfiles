@@ -253,6 +253,44 @@ build_session_name() {
   print -r -- "${n[1,200]}"
 }
 
+# label_herdr_pane <name> -- put the session's name on its Herdr pane (F5d gate Q2).
+#
+# WHY A PANE AND NOT A WORKSPACE OR A TAB. Measured 2026-09-22 against herdr 0.8.2:
+#   workspace  label already auto-tracks the live cwd, and `workspace rename` writes a
+#              PERMANENT override with no way back (upstream herdr#3252, closed
+#              not_planned). Renaming it would buy a string it already shows and cost the
+#              tracking for ever. So pj never touches a workspace.
+#   tab        one tab can hold several panes doing different things, so a launcher naming
+#              it would clobber whatever else is in there. Tabs are named by the SESSION
+#              that opens them, which is a convention in the herdr skill, not code here.
+#   pane       one pane, one session. `pane rename` takes any characters, survives the
+#              process exiting, and has `--clear`.
+#
+# AND THIS IS THE ONLY JOIN THERE IS. `herdr agent list` does NOT carry the session name:
+# it carries `terminal_title`, and Claude Code overwrites that with the current task
+# summary ("F5d: names for sessions, panes and tabs" while this was measured) and then with
+# the shell prompt after exit. So a fresh idle session shows its name there and a working
+# one does not -- which is exactly the property that cannot distinguish anything. The pane
+# LABEL is stable, so setting it is what makes both listings read the same string.
+#
+# THE COST, NAMED RATHER THAN HIDDEN: the label outlives the session. A pane whose Claude
+# has exited keeps the label until the next pj launch overwrites it or someone runs
+# `herdr pane rename <id> --clear`. pj cannot clear it on the way out, because it `exec`s
+# and leaves nobody behind to do it.
+#
+# Silent and harmless everywhere else: outside Herdr, with no pane id, or with no herdr
+# binary it does nothing at all, and a herdr failure never blocks a launch.
+label_herdr_pane() {
+  local name="$1"
+  [[ -n "$name" ]] || return 0
+  [[ "${HERDR_ENV:-}" == 1 ]] || return 0
+  [[ -n "${HERDR_PANE_ID:-}" ]] || return 0
+  [[ -n "${PJ_HERDR:-herdr}" ]] || return 0
+  whence -p "${PJ_HERDR:-herdr}" >/dev/null 2>&1 || return 0
+  "${PJ_HERDR:-herdr}" pane rename "$HERDR_PANE_ID" "$name" >/dev/null 2>&1
+  return 0
+}
+
 build_argv() {
   local prompt d
   if [[ "$P_PROMPT" == pj-prompt-file ]]; then
@@ -682,6 +720,42 @@ selftest() {
   git -C "$nrepo2" init -q 2>/dev/null
   out="$(nameof "$nrepo2")"
   [[ "$out" == "othername-main" && "$out" != "namerepo-main" ]] && ok "21i control: a different repo gets a different name" || bad "21i control" "$out"
+
+  # ---- 22: the Herdr pane label (F5d gate Q2) ---------------------------------------
+  # A fake `herdr` on PATH records every call, so "it did nothing" and "it was never asked"
+  # are two different files rather than the same silence.
+  local fb="$root/fakebin"; mkdir -p "$fb"
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/herdr-calls"\n' "$root" > "$fb/herdr"
+  chmod +x "$fb/herdr"
+  rm -f "$root/herdr-calls"
+  # 22a outside Herdr: nothing is called
+  ( PATH="$fb:$PATH"; unset HERDR_ENV; HERDR_PANE_ID=w1:p1 label_herdr_pane "x-main" ) >/dev/null 2>&1
+  [[ ! -e "$root/herdr-calls" ]] && ok "22a no HERDR_ENV -> herdr is never called" || bad "22a called" "$(<$root/herdr-calls)"
+  # 22b inside Herdr but with no pane id: still nothing
+  ( PATH="$fb:$PATH"; HERDR_ENV=1 HERDR_PANE_ID="" label_herdr_pane "x-main" ) >/dev/null 2>&1
+  [[ ! -e "$root/herdr-calls" ]] && ok "22b no pane id -> herdr is never called" || bad "22b called" "$(<$root/herdr-calls)"
+  # 22c an empty name: nothing, rather than a blank label. herdr has no guard against a
+  #     blank one and a blank workspace label is unclearable, so refuse it here.
+  ( PATH="$fb:$PATH"; HERDR_ENV=1 HERDR_PANE_ID=w1:p1 label_herdr_pane "" ) >/dev/null 2>&1
+  [[ ! -e "$root/herdr-calls" ]] && ok "22c an empty name -> herdr is never called" || bad "22c called" "$(<$root/herdr-calls)"
+  # 22d THE POSITIVE ARM: pane id + name -> exactly one rename, with that pane and that name
+  ( PATH="$fb:$PATH"; HERDR_ENV=1 HERDR_PANE_ID=w1:p1 label_herdr_pane "namerepo-main" ) >/dev/null 2>&1
+  if [[ -e "$root/herdr-calls" ]]; then
+    out="$(<"$root/herdr-calls")"
+    [[ "$out" == "pane rename w1:p1 namerepo-main" ]] && ok "22d a labelled pane gets exactly: pane rename <id> <name>" || bad "22d call" "$out"
+    [[ "$(grep -c . "$root/herdr-calls")" == 1 ]] && ok "22d exactly ONE call, not one per arm above" || bad "22d call count" "$out"
+  else
+    bad "22d call" "nothing was recorded"
+  fi
+  # 22e CONTROL for 22a-22c: the fake herdr really does record when it IS run, so those
+  #     three empty files mean "not called" rather than "the recorder is broken".
+  rm -f "$root/herdr-calls"
+  ( PATH="$fb:$PATH"; herdr control arm ) >/dev/null 2>&1
+  [[ -e "$root/herdr-calls" ]] && ok "22e control: the fake herdr records a call when one happens" || bad "22e control" "the recorder never fired, so 22a-22c prove nothing"
+  # 22f herdr ABSENT from PATH entirely: no call, no error, rc 0
+  rm -f "$root/herdr-calls"
+  ( PATH="$root/emptybin"; HERDR_ENV=1 HERDR_PANE_ID=w1:p1 label_herdr_pane "x-main" ) >/dev/null 2>&1; rc=$?
+  [[ $rc -eq 0 && ! -e "$root/herdr-calls" ]] && ok "22f no herdr on PATH -> silent no-op, rc 0" || bad "22f herdr absent" "rc=$rc"
   print -- "pj selftest: $pass passed, $fail failed"
   [[ $fail -eq 0 ]]
 }
@@ -726,6 +800,13 @@ kick_dotclaude_fetch
 # Only on a REAL launch, never on --dry-run or --dry-run-env: a dry run must not touch
 # the filesystem, which is the same contract arm 8 holds kick_dotclaude_fetch to.
 ensure_registry_link "$P_CONFIG_DIR"
+# Same contract: the pane label is a real side effect, so it happens here and not in
+# build_argv. The name is read back out of PJ_ENV rather than rebuilt, so the label and the
+# session can never disagree -- including when the name came in already set.
+_pj_name=""
+for _pv in "${PJ_ENV[@]}"; do [[ "$_pv" == CLAUDE_CODE_SESSION_NAME=* ]] && _pj_name="${_pv#*=}"; done
+label_herdr_pane "${_pj_name:-${CLAUDE_CODE_SESSION_NAME:-}}"
+unset _pj_name
 source "$LAUNCH_FILE"
 # Exported into THIS script's own process, which is safe because the script is its own
 # process: nothing leaks back to the interactive shell that typed `pj`. NOT `env VAR=v
