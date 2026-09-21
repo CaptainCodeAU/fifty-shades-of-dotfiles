@@ -209,6 +209,53 @@ The Claude sandbox denies reads under any `.ssh` directory (`**/.ssh` is in its 
 
 **So for anything that sweeps `home/`: dry-run first, and verify the dry run itself SUCCEEDED** — not merely that it produced output. A truncated plan looks like a plan. If it aborts on `home/.ssh`, re-run with `dangerouslyDisableSandbox: true` and compare, rather than trusting the short version.
 
+### The sandbox denies every cache under `$HOME`, and the tool usually LIES about why
+
+Measured across five tools (W-20260921-A38, closed F5b 2026-09-21). The sandbox's
+writable set is `.`, `$TMPDIR` and a short allowlist — **every cache root under `$HOME`
+is denied**, and almost none of the affected tools says so plainly.
+
+The prefixes that work, all proven with a passing arm in the same sandbox:
+
+```
+UV_CACHE_DIR="$TMPDIR/uvcache" uv run python3 ...        # uv:   rc 2 -> rc 0
+XDG_CACHE_HOME="$TMPDIR/xdgcache" pnpm dlx <pkg> ...     # pnpm: ERR_PNPM_CLI_DLX_CACHE gone
+```
+
+**Do NOT export `XDG_CACHE_HOME` for a whole session** to "fix them all at once". It also
+moves `$XDG_CACHE_HOME/dotfiles/`, which holds `pj-prompt-file`'s system-prompt cache and
+the welcome banner's 6-hour GitHub rate-limit cache. Set it per command.
+
+`pnpm dlx` has a second, unrelated failure after the cache is fixed: the sandbox's HTTPS
+proxy presents a certificate pnpm's Rust fetcher does not trust
+(`invalid peer certificate: OSStatus -26276`) while `curl` to the same URL returns 200.
+That is a network-trust problem, not a cache one, and it is unsolved.
+
+**THE PART WORTH REMEMBERING IS NOT THE PREFIX.** In four of the five instances the
+denial arrived wearing a different hat, and each one is the all-cases-identical rule
+again:
+
+| Tool                                | What it did instead of saying "denied"                                                                                                                   |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `decided add`                       | **hung forever**: its id-allocation loop could not tell "file exists" from "write refused" and retried the collision path                                |
+| `decided-selftest`                  | **printed a wrong count** (78/5 vs 83/0): its `rm` teardown hit the Trash denial, the fixture stayed, later arms read it as data                         |
+| `pnpm-audit-hook` (global pre-push) | **raised a false security alarm**: `uv` died at the shebang, and `if ! scanner` reported "supply-chain findings >= high" for findings that did not exist |
+| `uv`, `pnpm dlx`                    | said so plainly — the only two that behaved                                                                                                              |
+
+So: **a tool that cannot write must REFUSE, by name.** A refusal is a finding; a hang is
+a session sitting still while the next person assumes the machine is busy, and a count or
+an alarm from a run that never happened is worse than either. When you add error handling
+around a write, ask what ELSE could produce that same failure — and test the property that
+actually separates them (`[ -e "$f" ]` after a failed create, the exit CODE rather than
+just its truthiness), not the one you happened to catch.
+
+**And `sudo rm` cannot reach the Trash shim.** Found 2026-09-21 removing a root-owned file
+under `/Library`: `sudo rm` resolves to `~/.local/bin/rm`, which cannot trash a file it
+does not own, so the deletion has to be `sudo /bin/rm` — a human's deliberate, informed
+choice, which is exactly the escape hatch the deletion rules reserve for one. **When you
+prepare `sudo` commands for a human, say this up front** rather than letting them
+discover it at the prompt.
+
 ### `stow -n` PRINTS NOTHING AT DEFAULT VERBOSITY — always pass `-v2`
 
 The sibling trap, and the more dangerous one, because it has no error message at all. Measured 2026-09-04 with GNU Stow 2.4.1:
