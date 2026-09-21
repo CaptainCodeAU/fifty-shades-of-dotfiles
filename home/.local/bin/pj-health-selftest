@@ -198,7 +198,7 @@ echo "pj-health-selftest: fixture $T"
 # 0. baseline: all PASS except the live row
 run
 arm "baseline parses as JSON" jq -e '.rows|length>0' <<<"$OUT" >/dev/null
-for n in launcher output-style plugin-dirs prompt-file rules-cap settings-render hooks-sync hook-orphans hook-single-fire stow-links machine-file pj-global no-wrap-up selftests launch-log stale-shells pj-homes drawer decided-store commit-trailer evidence-card evidence-ci-watch evidence-rules evidence-plugins evidence-tokens; do
+for n in launcher output-style plugin-dirs prompt-file rules-cap settings-render hooks-sync hook-orphans hook-single-fire stow-links bin-strays machine-file pj-global no-wrap-up selftests launch-log stale-shells pj-homes drawer decided-store commit-trailer evidence-card evidence-ci-watch evidence-rules evidence-plugins evidence-tokens; do
   arm "baseline $n PASS (got $(st "$n"): $(dt "$n" | cut -c1-80))" is "$n" PASS
 done
 arm "baseline live-probe NOT MEASURED without --live" is live-probe "$NM"
@@ -359,6 +359,28 @@ run "$PROJ" --full; arm "--full runs them all PASS" is selftests PASS; arm "--fu
 fake "$DF/home/.local/bin/pj-wrap-selftest" 'echo "3 passed, 1 failed"; exit 1'; run "$PROJ" --full; arm "--full FAIL when one selftest fails" is selftests FAIL; arm "--full names the failing one" has selftests "pj-wrap-selftest (rc 1"
 fake "$DF/home/.local/bin/pj-wrap-selftest" 'echo "7 passed, 0 failed"; exit 0'
 
+# M10b bin-strays (P8b, 2026-09-21). WARN, never FAIL.
+# The baseline fixture's $BIN holds only stow links, so the PASS arm above already
+# covers the clean case. These add the three things that can go wrong.
+printf '#!/bin/sh\necho hi\n' > "$BIN/a-real-file"; chmod +x "$BIN/a-real-file"
+run
+arm "bin-strays WARNs on a real file in ~/.local/bin" is bin-strays WARN
+arm "bin-strays names the file" has bin-strays "a-real-file"
+arm "bin-strays never FAILs" not_has bin-strays "FAIL"
+arm "bin-strays says why it matters" has bin-strays "versioned nowhere"
+# A tool-install link is NOT a stray: uv, bun and claude all link their binaries
+# into this directory and none of them belongs in a dotfiles repo.
+ln -sfn "$T/home-claude/../fake/.local/share/uv/tools/x/bin/x" "$BIN/a-tool-link"
+run
+arm "a ~/.local/share tool link is not counted as a stray" not_has bin-strays "a-tool-link"
+gone "$BIN/a-real-file"
+run
+# CONTROL: with the real file gone the row must go GREEN again, and say the count
+# positively. Without this, the WARN arms pass equally if the row warns always.
+arm "CONTROL: bin-strays returns to PASS once the real file is gone" is bin-strays PASS
+arm "CONTROL: the clean row states the count positively" has bin-strays "0 in no repo"
+gone "$BIN/a-tool-link"
+
 # P1 pj-homes
 cp "$PROJ/.claude/pj-homes" "$T/ph.bak"
 echo "bogus: 1" >>"$PROJ/.claude/pj-homes"; run; arm "pj-homes FAIL on an unknown key" is pj-homes FAIL; cp "$T/ph.bak" "$PROJ/.claude/pj-homes"
@@ -445,7 +467,7 @@ arm "--quiet keeps the summary line" grep -q '^pj-health: .* FAIL, ' <<<"$QOUT"
 write_settings
 FOUT="$( (builtin cd "$PROJ" && PATH="$BIN:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" PJ_HOME="$H" PJ_BIN_DIR="$BIN" PJ_DOTFILES="$DF" PJ_LAUNCHER="$BIN/pj" PJ_TYPE_OUT="$T/type-out" DRYRUN_FILE="$T/dryrun" PJ_PS_OUT="$T/ps" PJ_ZSHRC_MTIME="$ZMT" PJ_TRANSCRIPTS_DIR="$H/projects" PJ_STATE_DIR="$STATE" PJ_MACHINE_FILE="$T/machine" PJ_PROMPT_SOURCES="$OR:$RULES" PJ_PROMPT_OUT="$T/cache/prompt.md" OI_WHERE_FILE="$T/oi-where" DECIDED_LIST_FILE="$T/decided-list" DECIDED_LIST_RC="$T/decided-list-rc" DECIDED_HOMES_FILE="$T/decided-homes" RENDER_OUT_FILE="$T/render-out" RENDER_RC_FILE="$T/render-rc" SYNC_OUT_FILE="$T/sync-out" pj-health 2>/dev/null) )"
 arm "normal output under 40 lines ($(wc -l <<<"$FOUT" | tr -d ' '))" [ "$(wc -l <<<"$FOUT" | tr -d ' ')" -lt 40 ]
-arm "normal output has one row per check (26)" [ "$(grep -cE '^(PASS|WARN|FAIL|NOT MEASURED) ' <<<"$FOUT")" -eq 26 ]
+arm "normal output has one row per check (27)" [ "$(grep -cE '^(PASS|WARN|FAIL|NOT MEASURED) ' <<<"$FOUT")" -eq 27 ]
 arm "unknown arg REFUSED rc 2" bash -c 'PATH="$1:$PATH" pj-health --bogus >/dev/null 2>&1; [ $? -eq 2 ]' _ "$BIN"
 arm "--help exits 0" bash -c 'PATH="$1:$PATH" pj-health --help >/dev/null 2>&1' _ "$BIN"
 

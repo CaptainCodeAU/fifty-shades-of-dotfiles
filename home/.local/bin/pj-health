@@ -311,6 +311,48 @@ else
   else row FAIL stow-links "${dangling:+dangling:$dangling }${notlink:+not a dotfiles link:$notlink}; fix: stow -R --no-folding -t ~ -d $(tilde "$PJ_DOTFILES") home"; fi
 fi
 
+# M10b bin-strays (P8b, 2026-09-21). WARN, NEVER FAIL, and the reason matters:
+# a real file in ~/.local/bin is not a fault. Some are legitimate tool installs
+# (uv, bun and claude all link their own binaries in here) and some belong to
+# ANOTHER project and are simply parked on this machine. What is worth saying out
+# loud is that a real file there is versioned NOWHERE unless some repo claims it,
+# and nothing else on this box reports that. Measured 2026-09-21: 96 entries, 71
+# stow links into the dotfiles repo, 22 links into uv/bun/claude installs, and 3
+# real files -- one of which (risk-watch) is LOADED at every c session start and
+# exists in no repo at all.
+#
+# Tool-install links are NOT strays and are not counted: they point into
+# ~/.local/share or ~/.bun, which is where those installers put things.
+if [ ! -d "$PJ_BIN_DIR" ]; then
+  row NOTM bin-strays "$(tilde "$PJ_BIN_DIR") does not exist"
+else
+  nbin=0; nstow=0; ntool=0; strays=""
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    nbin=$((nbin + 1)); b="${f##*/}"
+    if [ -L "$f" ]; then
+      t="$(readlink "$f")"
+      case "$t" in
+        *"${PJ_DOTFILES##*/}"*)                      nstow=$((nstow + 1)) ;;
+        */.local/share/*|*/.bun/*|*/.local/state/*)  ntool=$((ntool + 1)) ;;
+        *)                                           strays="$strays $b" ;;
+      esac
+    else
+      strays="$strays $b"
+    fi
+  done <<EOF
+$(find "$PJ_BIN_DIR" -mindepth 1 -maxdepth 1 -print 2>/dev/null)
+EOF
+  # Stated POSITIVELY on a clean run: a row that only speaks when something is
+  # wrong leaves every quiet run ambiguous, which is the bug this whole file is
+  # about. The denominator goes in both branches.
+  if [ -z "$strays" ]; then
+    row PASS bin-strays "$nbin entries: $nstow dotfiles links, $ntool tool-install links, 0 in no repo"
+  else
+    row WARN bin-strays "$nbin entries ($nstow dotfiles links, $ntool tool-install links); in NO repo:$strays -- versioned nowhere, so a rebuild loses them. Not a fault: adopt into a repo, or record as deliberately local"
+  fi
+fi
+
 # M11 machine file. The two-range scheme (range: 01-49 / 50-99) was RETIRED on 2026-09-21
 # (P8a gate Q6): the ID carries a machine letter instead. A file still holding only a range
 # is a FAIL, not a pass -- pj-id refuses to allocate from it, so `open-items add` is dead on
