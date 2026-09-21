@@ -121,25 +121,50 @@ trust_keys_for(){
   return 0
 }
 
-# trust_watch <pane_id> -- blocks on herdr's event system until the dialog appears (or the
-# timeout passes), accepts it once, and verifies it went away. Never loops on the keys: a
-# dialog still present after one attempt is one this was wrong about, and hammering Enter
-# into a live session is exactly the damage the guard exists to avoid.
+# trust_watch <pane_id> -- waits for the dialog, accepts it once, and verifies it went.
+#
+# A BOUNDED POLL, NOT `pane wait-output`, AND THAT IS A CORRECTION. The first version of
+# this used `herdr pane wait-output --match "Yes, I trust this folder"`, and it failed the
+# first time it met a real dialog. `wait-output` searches the whole recent snapshot, so it
+# matched the SAME WORDS left in the scrollback by an earlier session and returned in one
+# second -- before the new dialog had rendered. The single read that followed saw no cursor
+# marker, trust_keys_for correctly sent nothing, and the watcher exited while the dialog sat
+# there waiting. The herdr skill warns about exactly this, the brief for this stage repeats
+# it, and it still went in.
+#
+# The event system cannot help here, because "these words are on screen" is true in the
+# stale case and the live case alike -- the same all-cases-identical fault this repo keeps
+# writing up. What separates them is the CURSOR MARKER, which only a live dialog has, and
+# that has to be re-read over time rather than waited on once. So: read the visible pane
+# every C2_TRUST_POLL_S seconds until the deadline, and act the moment a marker appears.
+#
+# Polling is the right shape here and not a shortcut around the no-polling rule: there is
+# no event to subscribe to that distinguishes the two cases.
+#
+# It accepts ONCE. A dialog still up afterwards is one this was wrong about, and hammering
+# Enter into a live session is the damage the guard exists to avoid.
 trust_watch(){
-  local pane="$1" txt keys k
+  local pane="$1" txt keys k deadline now poll
   [ "${HERDR_ENV:-}" = 1 ] || return 0
   [ -n "$pane" ] || return 0
   command -v herdr >/dev/null 2>&1 || return 0
-  herdr pane wait-output "$pane" --match "$TRUST_DIALOG" \
-    --timeout "${C2_TRUST_TIMEOUT_MS:-120000}" >/dev/null 2>&1 || return 0
-  txt="$(herdr pane read "$pane" --source visible --lines 400 2>/dev/null || true)"
-  keys="$(trust_keys_for "$txt")"
+  poll="${C2_TRUST_POLL_S:-2}"
+  now="$(date +%s)"
+  deadline=$(( now + ${C2_TRUST_TIMEOUT_MS:-120000} / 1000 ))
+  keys=""
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    txt="$(herdr pane read "$pane" --source visible --lines 400 2>/dev/null || true)"
+    keys="$(trust_keys_for "$txt")"
+    [ -n "$keys" ] && break
+    sleep "$poll"
+  done
   [ -n "$keys" ] || return 0
   while IFS= read -r k; do
     [ -n "$k" ] && herdr pane send-keys "$pane" "$k" >/dev/null 2>&1
   done <<EOF
 $keys
 EOF
+  sleep 1
   txt="$(herdr pane read "$pane" --source visible --lines 400 2>/dev/null || true)"
   case "$txt" in
     *"$TRUST_CURSOR_NO"*|*"$TRUST_CURSOR_YES"*)
@@ -571,6 +596,46 @@ selftest(){
   [ -e "$root/herdr-calls" ] && ok "12g control: the fake herdr records a call when one happens" \
     || bad "12g control" "the probe cannot detect a call at all, so 12f proves nothing"
 
+  # 12h THE ARM THAT WOULD HAVE CAUGHT THE REAL BUG. The first trust_watch used
+  #     `herdr pane wait-output --match "Yes, I trust this folder"` and returned in one
+  #     second on words left in the SCROLLBACK by an earlier session, read the pane once
+  #     before the new dialog had rendered, saw no cursor marker, and gave up while the
+  #     dialog sat there. Every unit arm above passed on that version, because they all
+  #     test the DECISION and the bug was in the WAITING.
+  #     So this arm makes the dialog arrive LATE: a fake herdr returns ordinary pane text
+  #     on the first read and the dialog only on the second. A watcher that decides once
+  #     sends nothing; a watcher that keeps looking sends down+enter.
+  local lb="$root/latebin"; mkdir -p "$lb"
+  printf '%s\n%s\n%s\n' ' Quick safety check: Is this a project you created or one you trust?' ' ❯ No, exit' '   Yes, I trust this folder' > "$root/late-dialog.txt"
+  cat > "$lb/herdr" <<LATE
+#!/bin/sh
+R="$root"
+if [ "\$1" = pane ] && [ "\$2" = read ]; then
+  n=\$(cat "\$R/readn" 2>/dev/null || echo 0); n=\$((n+1)); printf '%s\n' "\$n" > "\$R/readn"
+  if [ "\$n" -eq 2 ]; then cat "\$R/late-dialog.txt"; else printf 'claude> ready\n'; fi
+  exit 0
+fi
+if [ "\$1" = pane ] && [ "\$2" = send-keys ]; then printf '%s\n' "\$4" >> "\$R/late-keys"; exit 0; fi
+exit 0
+LATE
+  chmod +x "$lb/herdr"
+  ( PATH="$lb:$PATH"; HERDR_ENV=1 C2_TRUST_POLL_S=0 C2_TRUST_TIMEOUT_MS=20000 trust_watch "w1:p1" ) >/dev/null 2>&1
+  if [ -f "$root/late-keys" ] && [ "$(tr '\n' ' ' < "$root/late-keys")" = "down enter " ]; then
+    ok "12h a dialog that arrives on the SECOND read is still accepted (down, enter)"
+  else
+    bad "12h the watcher gave up before the dialog arrived" "late-keys: $(cat "$root/late-keys" 2>/dev/null | tr '\n' ' ')"
+  fi
+  # 12i CONTROL for 12h: with the SAME fake but no dialog ever, nothing is sent. Without
+  #     it, 12h passes on a watcher that fires down+enter at anything.
+  printf '5\n' > "$root/readn"   # past the one read that yields a dialog
+  ( PATH="$lb:$PATH"; HERDR_ENV=1 C2_TRUST_POLL_S=0 C2_TRUST_TIMEOUT_MS=3000 trust_watch "w1:p1" ) >/dev/null 2>&1
+  [ "$(tr '\n' ' ' < "$root/late-keys" 2>/dev/null)" = "down enter " ] \
+    && ok "12i control: with no dialog ever, the same watcher sends nothing more" \
+    || bad "12i control" "keys changed with no dialog: $(cat "$root/late-keys" 2>/dev/null | tr '\n' ' ')"
+  # 12j the internal --trust-watch entry point refuses without a pane id.
+  run --trust-watch
+  [ "$RC" -eq 2 ] && ok "12j --trust-watch with no pane id REFUSES rc 2" || bad "12j" "rc=$RC $OUT"
+
   # 13. start prints the peer NAME and hands pj the same suffix (F5c gate Q3).
   C2_NAME_SUFFIX=ab12 run start t13
   case "$OUT" in *"peer name scratch-t13-ab12"*) ok "13 start prints the peer name it will give the session";; *) bad "13 peer name" "$OUT";; esac
@@ -585,6 +650,12 @@ selftest(){
 case "${1:-}" in
   --help|-h|"") usage; exit 0 ;;
   --selftest) selftest; exit $? ;;
+  # INTERNAL, and deliberately not in --help: `start` forks this in the background, and
+  # having it reachable is what let the watcher be proven against a REAL dialog in a REAL
+  # pane rather than only against fixture text. The first version passed every unit arm
+  # and still failed the first live dialog it met, so "the pure function is tested" is not
+  # the same claim as "the watcher works".
+  --trust-watch) shift; [ -n "${1:-}" ] || refuse "--trust-watch needs a pane id"; trust_watch "$1"; exit $? ;;
   start) shift; cmd_start "$@"; exit $? ;;
   done)  shift; cmd_done  "$@"; exit $? ;;
   list)  shift; cmd_list  "$@"; exit $? ;;
