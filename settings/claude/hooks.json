@@ -71,10 +71,7 @@
       "event": "PreToolUse",
       "matcher": "Bash",
       "script": "enforce-secret-probe.sh",
-      "targets": [
-        "user",
-        "project"
-      ],
+      "targets": ["user", "project"],
       "entry": {
         "type": "command",
         "command": "$HOME/.claude/hooks/enforce-secret-probe.sh",
@@ -86,10 +83,7 @@
       "event": "PreToolUse",
       "matcher": "Bash",
       "script": "enforce-census.sh",
-      "targets": [
-        "user",
-        "project"
-      ],
+      "targets": ["user", "project"],
       "entry": {
         "type": "command",
         "command": "$HOME/.claude/hooks/enforce-census.sh",
@@ -101,10 +95,7 @@
       "event": "PreToolUse",
       "matcher": "Grep",
       "script": "enforce-census.sh",
-      "targets": [
-        "user",
-        "project"
-      ],
+      "targets": ["user", "project"],
       "entry": {
         "type": "command",
         "command": "$HOME/.claude/hooks/enforce-census.sh",
@@ -116,44 +107,31 @@
       "event": "PreToolUse",
       "matcher": "Bash",
       "script": "enforce-herdr-skill.sh",
-      "targets": [
-        "user",
-        "project"
-      ],
+      "targets": ["user", "project"],
       "entry": {
         "type": "command",
         "command": "$HOME/.claude/hooks/enforce-herdr-skill.sh"
       },
-      "requires": [
-        "$HOME/.claude/skills/herdr"
-      ],
+      "requires": ["$HOME/.claude/skills/herdr"],
       "why": "Blocks herdr commands until the herdr skill is read this session"
     },
     {
       "event": "PostToolUse",
       "matcher": "Skill",
       "script": "mark-herdr-skill-read.sh",
-      "targets": [
-        "user",
-        "project"
-      ],
+      "targets": ["user", "project"],
       "entry": {
         "type": "command",
         "command": "$HOME/.claude/hooks/mark-herdr-skill-read.sh"
       },
-      "requires": [
-        "$HOME/.claude/skills/herdr"
-      ],
+      "requires": ["$HOME/.claude/skills/herdr"],
       "why": "Lifts the block above; pointless without the skill it watches for"
     },
     {
       "event": "SessionStart",
       "script": "ci-watch",
       "script_path": "$HOME/.local/bin/ci-watch",
-      "targets": [
-        "user",
-        "project"
-      ],
+      "targets": ["user", "project"],
       "entry": {
         "type": "command",
         "command": "test -x \"$HOME/.local/bin/ci-watch\" && \"$HOME/.local/bin/ci-watch\" || true",
@@ -165,9 +143,7 @@
       "event": "SessionStart",
       "script": "pj-start-card",
       "script_path": "$HOME/.local/bin/pj-start-card",
-      "targets": [
-        "project"
-      ],
+      "targets": ["project"],
       "entry": {
         "type": "command",
         "command": "test -x \"$HOME/.local/bin/pj-start-card\" && \"$HOME/.local/bin/pj-start-card\" || true",
@@ -179,9 +155,7 @@
       "event": "SessionStart",
       "script": "pj-launch-check",
       "script_path": "$HOME/.local/bin/pj-launch-check",
-      "targets": [
-        "project"
-      ],
+      "targets": ["project"],
       "entry": {
         "type": "command",
         "command": "test -x \"$HOME/.local/bin/pj-launch-check\" && \"$HOME/.local/bin/pj-launch-check\" || true",
@@ -193,9 +167,7 @@
       "event": "SessionEnd",
       "script": "pj-session-end",
       "script_path": "$HOME/.local/bin/pj-session-end",
-      "targets": [
-        "project"
-      ],
+      "targets": ["project"],
       "entry": {
         "type": "command",
         "command": "test -x \"$HOME/.local/bin/pj-session-end\" && \"$HOME/.local/bin/pj-session-end\" || true",
@@ -207,10 +179,7 @@
       "event": "SessionStart",
       "script": "ccw-watch",
       "script_path": "$HOME/.local/bin/ccw-watch",
-      "targets": [
-        "user",
-        "project"
-      ],
+      "targets": ["user", "project"],
       "entry": {
         "type": "command",
         "command": "test -x \"$HOME/.local/bin/ccw-watch\" && \"$HOME/.local/bin/ccw-watch\" || true",
@@ -222,9 +191,7 @@
       "event": "PreToolUse",
       "matcher": "Bash",
       "script": "validate-bash.sh",
-      "targets": [
-        "project"
-      ],
+      "targets": ["project"],
       "entry": {
         "type": "command",
         "command": "test -x \"$HOME/.claude/hooks/validate-bash.sh\" && \"$HOME/.claude/hooks/validate-bash.sh\" || true",
@@ -236,9 +203,7 @@
       "event": "PreToolUse",
       "matcher": "Bash",
       "script": "enforce-uv.sh",
-      "targets": [
-        "project"
-      ],
+      "targets": ["project"],
       "entry": {
         "type": "command",
         "command": "test -x \"$HOME/.claude/hooks/enforce-uv.sh\" && \"$HOME/.claude/hooks/enforce-uv.sh\" || true",
@@ -250,9 +215,7 @@
       "event": "PreToolUse",
       "matcher": "Bash",
       "script": "enforce-pnpm.sh",
-      "targets": [
-        "project"
-      ],
+      "targets": ["project"],
       "entry": {
         "type": "command",
         "command": "test -x \"$HOME/.claude/hooks/enforce-pnpm.sh\" && \"$HOME/.claude/hooks/enforce-pnpm.sh\" || true",
@@ -265,9 +228,7 @@
       "matcher": "Bash",
       "script": "enforce-gh-ssh-only.sh",
       "script_path": "$HOME/.claude/hooks/enforce-gh-ssh-only.sh",
-      "targets": [
-        "project"
-      ],
+      "targets": ["project"],
       "entry": {
         "type": "command",
         "command": "test -x \"$HOME/.claude/hooks/enforce-gh-ssh-only.sh\" && \"$HOME/.claude/hooks/enforce-gh-ssh-only.sh\" || true",
@@ -279,9 +240,7 @@
       "event": "SessionStart",
       "script": "MemoryRootGuard.sh",
       "script_path": "$HOME/.claude/hooks/MemoryRootGuard.sh",
-      "targets": [
-        "project"
-      ],
+      "targets": ["project"],
       "entry": {
         "type": "command",
         "command": "test -x \"$HOME/.claude/hooks/MemoryRootGuard.sh\" && \"$HOME/.claude/hooks/MemoryRootGuard.sh\" || true",
@@ -290,12 +249,22 @@
       "why": "WARNS when the session's cwd is a subdirectory of a hub root, so opening a subdir does not spawn a fresh empty memory store and re-scatter memory. Carried under pj at the P8b gate 2026-09-21: its HUB_ROOTS list holds exactly one path, and that path is a pj project, so the guard was aimed squarely at pj sessions and fired in none of them. LifeOS's file, reached by script_path, not copied. Never blocks: always exits 0"
     },
     {
+      "event": "UserPromptSubmit",
+      "script": "pj-voice-contract.sh",
+      "script_path": "$HOME/.claude/hooks/pj-voice-contract.sh",
+      "targets": ["project"],
+      "entry": {
+        "type": "command",
+        "command": "test -x \"$HOME/.claude/hooks/pj-voice-contract.sh\" && \"$HOME/.claude/hooks/pj-voice-contract.sh\" || true",
+        "timeout": 5
+      },
+      "why": "STATES the voice contract before the reply is written and names what the previous reply broke. pj-voice V4 says zero em dashes; measured across 17 pj transcripts, 371 of them in 174,107 characters of prose, while every other voice rule was obeyed. The wording is not the fault: DA_IDENTITY.md says almost the same words and the `c` control set has ZERO, because the `c` family also runs DriftReminder.hook.ts, which counts. That hook is registered only in ~/.claude/settings.json and pj passes --setting-sources project,local, so it has never fired here -- its contract line appears twice in a `c` transcript and zero times in 35.3 MB of pj transcript. UserPromptSubmit and not Stop, on DriftReminder's own recorded measurement: a Stop hook fires after the text is on screen, and FormatGate going observation-only took drift from 0% across 168 turns to 61-91% across 2,608. DriftReminder itself is NOT carried: its contract is hardcoded to a banner, a closer and max 2 em dashes, none of which pj has, and its only seam is LIFEOS_DIR. First UserPromptSubmit entry in this manifest. Project target only. Never blocks: every path exits 0. Ruled by Gavin at the P9 gate 2026-09-22"
+    },
+    {
       "event": "SessionStart",
       "script": "herdr-agent-state.sh",
       "script_path": "$HOME/.claude/hooks/herdr-agent-state.sh",
-      "targets": [
-        "project"
-      ],
+      "targets": ["project"],
       "entry": {
         "type": "command",
         "command": "test -x \"$HOME/.claude/hooks/herdr-agent-state.sh\" && \"$HOME/.claude/hooks/herdr-agent-state.sh\" session || true",

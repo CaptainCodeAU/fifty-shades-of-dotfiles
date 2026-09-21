@@ -210,7 +210,7 @@ arm "baseline parses as JSON" jq -e '.rows|length>0' <<<"$OUT" >/dev/null
 # ~/.config/pj/profiles and the suite's result would depend on the machine it runs on --
 # NOT MEASURED on a box with nothing stowed, WARN on a box with a profile pointing
 # somewhere unusual. They get hermetic arms of their own in the profiles section below.
-for n in launcher output-style plugin-dirs prompt-file rules-cap settings-render hooks-sync hook-orphans hook-single-fire stow-links bin-strays machine-file pj-global no-wrap-up selftests launch-log stale-shells pj-homes drawer decided-store commit-trailer evidence-card evidence-ci-watch evidence-rules evidence-plugins evidence-tokens; do
+for n in launcher output-style plugin-dirs prompt-file rules-budget settings-render hooks-sync hook-orphans hook-single-fire stow-links bin-strays machine-file pj-global no-wrap-up selftests launch-log stale-shells pj-homes drawer decided-store commit-trailer evidence-card evidence-ci-watch evidence-rules evidence-plugins evidence-tokens; do
   arm "baseline $n PASS (got $(st "$n"): $(dt "$n" | cut -c1-80))" is "$n" PASS
 done
 arm "baseline live-probe NOT MEASURED without --live" is live-probe "$NM"
@@ -308,14 +308,20 @@ mv "$H/settings.project.json" "$T/sp.bak"; run; arm "output-style NOT MEASURED w
 mv "$H/skills/ISA/SKILL.md" "$T/isa.bak"; run; arm "plugin-dirs FAIL on an empty plugin dir" is plugin-dirs FAIL; arm "plugin-dirs names it" has plugin-dirs "skills/ISA"; mv "$T/isa.bak" "$H/skills/ISA/SKILL.md"
 
 # 4. prompt file
-mv "$OR" "$T/or.bak"; run; arm "prompt-file NOT MEASURED when a source is missing" is prompt-file "$NM"; arm "rules-cap still PASS" is rules-cap PASS; mv "$T/or.bak" "$OR"
+mv "$OR" "$T/or.bak"; run; arm "prompt-file NOT MEASURED when a source is missing" is prompt-file "$NM"; arm "rules-budget still PASS" is rules-budget PASS; mv "$T/or.bak" "$OR"
 fake "$DF/home/.local/bin/pj-prompt-file" 'printf "%s" "${PJ_PROMPT_SOURCES%%:*}"'; run; arm "prompt-file NOT MEASURED on the fallback-to-source path" is prompt-file "$NM"
 fake "$DF/home/.local/bin/pj-prompt-file" 'echo wrong >"$PJ_PROMPT_OUT"; echo "$PJ_PROMPT_OUT"'; run; arm "prompt-file FAIL when the cache differs" is prompt-file FAIL
 cp "$REAL_PROMPT" "$DF/home/.local/bin/pj-prompt-file"; chmod +x "$DF/home/.local/bin/pj-prompt-file"
 
-# 5. rules cap
-cp "$RULES" "$T/rules.bak"; for i in $(seq 1 45); do echo "- extra $i"; done >>"$RULES"; run; arm "rules-cap FAIL over 60 lines" is rules-cap FAIL; cp "$T/rules.bak" "$RULES"
-mv "$RULES" "$T/rules.bak"; run; arm "rules-cap NOT MEASURED when absent" is rules-cap "$NM"; mv "$T/rules.bak" "$RULES"
+# 5. rules budget (P9 2026-09-22: was a 60-LINE cap, which never bound -- the thing
+#    that cut six approved lines at P5.4 was a token reading the line count could not
+#    see. The arms now push BYTES past the budget, and the control arm proves a file
+#    that is long in LINES but small in bytes still passes, which is the whole point.)
+cp "$RULES" "$T/rules.bak"
+for i in $(seq 1 70); do printf -- '- a line long enough to cost real tokens, repeated so the byte budget is what decides this arm, not the line count at all %s\n' "$i"; done >>"$RULES"
+run; arm "rules-budget FAIL over the token budget" is rules-budget FAIL; arm "rules-budget FAIL names the byte count" has rules-budget "bytes"; cp "$T/rules.bak" "$RULES"
+for i in $(seq 1 70); do echo "- x"; done >>"$RULES"; run; arm "rules-budget PASS on 70 SHORT extra lines (a line cap would have failed)" is rules-budget PASS; cp "$T/rules.bak" "$RULES"
+mv "$RULES" "$T/rules.bak"; run; arm "rules-budget NOT MEASURED when absent" is rules-budget "$NM"; mv "$T/rules.bak" "$RULES"
 
 # 6. settings render
 echo 1 >"$T/render-rc"; echo "drift: env.X" >"$T/render-out"; run; arm "settings-render FAIL on drift" is settings-render FAIL; arm "settings-render FAIL quotes the fix" has settings-render "--install"; echo 0 >"$T/render-rc"

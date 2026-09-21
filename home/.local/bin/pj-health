@@ -238,14 +238,35 @@ else
   fi
 fi
 
-# M5 rules cap
+# M5 rules budget
+#
+# THE CAP USED TO BE 60 LINES AND IT NEVER BOUND. Measured at P9 2026-09-22:
+# RULES.md was 31 lines of its 60 while six approved pinned lines had already
+# been cut from it, and they were cut by a 1.5k /context reading the line count
+# could not see. A line cap cannot tell a 40-character line from a 400-character
+# one, so it was watching the wrong quantity the whole time -- the exact shape
+# this repo keeps recording, a check that returns the same answer either way.
+#
+# So the budget is TOKENS. The divisor is measured on this text, not guessed:
+# removing RULES.md entirely from a real pj launch moved the first turn from
+# 62,162 to 60,561, so 3,930 characters cost 1,601 tokens, 2.45 chars/token.
+# Six single-line probes agreed within 7% of the all-six probe. Budget ruled by
+# Gavin at the P9 gate. Raise it deliberately, with a measurement, never to make
+# a red row go green.
+RULES_TOKEN_BUDGET="${PJ_RULES_TOKEN_BUDGET:-2200}"
+RULES_CHARS_PER_TOKEN=245 # x100, integer maths only
 RULES="$PJ_HOME/pj-global/RULES.md"
 if [ -r "$RULES" ]; then
+  rb="$(wc -c <"$RULES" | tr -d ' ')"
   rl="$(wc -l <"$RULES" | tr -d ' ')"
-  if [ "$rl" -le 60 ]; then row PASS rules-cap "RULES.md $rl of 60 lines"
-  else row FAIL rules-cap "RULES.md $rl lines, cap 60 (D-20260920-07); fix: move lines to pj-global/notes/"; fi
+  rt=$((rb * 100 / RULES_CHARS_PER_TOKEN))
+  if [ "$rt" -le "$RULES_TOKEN_BUDGET" ]; then
+    row PASS rules-budget "RULES.md ~$rt of $RULES_TOKEN_BUDGET tokens ($rb bytes, $rl lines, 2.45 chars/token measured P9)"
+  else
+    row FAIL rules-budget "RULES.md ~$rt tokens over budget $RULES_TOKEN_BUDGET ($rb bytes, $rl lines); fix: move lines to pj-global/notes/ and add a pointer to INDEX.md, or raise PJ_RULES_TOKEN_BUDGET with a measurement"
+  fi
 else
-  row NOTM rules-cap "$(tilde "$RULES") absent"
+  row NOTM rules-budget "$(tilde "$RULES") absent"
 fi
 
 # M6 settings render
