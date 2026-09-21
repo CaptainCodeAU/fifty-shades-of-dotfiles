@@ -21,7 +21,7 @@ loud that a miss is not the same as "not decided".
 One ruling per block, the same shape `open-items` uses:
 
 ```
-## D-YYYYMMDD-NN -- short title
+## D-YYYYMMDD-LNN -- short title   (L = the machine letter, P8a)
 
 topic: the words someone would actually type      (the grep surface; overload it)
 decided: YYYY-MM-DD
@@ -58,14 +58,24 @@ own tools (D-20260920-02).
 ## Writing
 
 `decided add "title" --topic "..." --holds-in "<doc>" --global|--project [--body ..]`
-allocates the next `D-` ID through `pj-id` (this machine's slice of 01-99, so two machines
-never claim the same ID on one day; see `docs/OPEN_ITEMS.md`), writes the file into the
+allocates the next `D-` ID through `pj-id` (the ID carries this machine's LETTER --
+`D-20260921-A07` -- so two machines cannot claim the same one at all; `A` mini, `B` Intel
+laptop, `C` WSL, `D` Linux VM. A box with no letter is REFUSED, never defaulted; see
+`docs/OPEN_ITEMS.md`), writes the file into the
 chosen home, and commits it by explicit path when that home is inside dot-claude. A
 `repo:` store is written and reported NOT COMMITTED (exit 3): the project repo is yours to
 commit, the way `pj-wrap push` never pushes it.
 
 `decided withdraw <ID> "reason"` sets `status: withdrawn` and commits. The ID stays
-claimed; IDs never change and never get reused.
+claimed and never gets reused.
+
+**IDs changed ONCE, on 2026-09-21** (P8a), when the machine letter was added: every ruling
+minted before then was renamed `D-YYYYMMDD-NN` -> `D-YYYYMMDD-ANN`, since every one was
+made on the Mac mini. The ~370 citations of the old shape in documents were left alone, so
+`decided <old-id>` falls back to the letter form after an exact miss and says so on stderr.
+The fallback widens by ONE letter slot, not into a wildcard: a bare ID whose number matches
+nothing still misses, and a legacy ID is never invented into a new block. One block keeps
+the unlettered shape on purpose -- `D-20260919-04`, which LifeOS owns.
 
 ## The split, for the record
 

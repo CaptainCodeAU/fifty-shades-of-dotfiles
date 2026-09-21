@@ -42,6 +42,14 @@ cat > "$G/D-19990101-02-echo.md" <<'EOF'
 topic: echo foxtrot
 status: standing
 EOF
+# A POST-P8a block, ID carrying a machine letter. The arms below type the pre-P8a shape
+# (D-19990101-07) at it, because that is what every document written before 2026-09-21 says.
+cat > "$G/D-19990101-A07-sierra.md" <<'EOF'
+## D-19990101-A07 -- A machine-lettered thing
+
+topic: sierra tango
+status: standing
+EOF
 mkrepo(){ mkdir -p "$1"; git -C "$1" init -q; git -C "$1" config core.hooksPath "$T/nohooks"; git -C "$1" commit -q --allow-empty -m init; }
 R1="$T/repo-private"; mkrepo "$R1"; mkdir -p "$R1/.claude"; printf 'records: private\ndecisions: drawer:decisions/\n' > "$R1/.claude/pj-homes"
 W1="$DC/projects/$(encode_key "$(cd "$R1" && pwd -P)")/memory/WORK"; mkdir -p "$W1/items/open" "$W1/decisions"
@@ -59,12 +67,16 @@ W5="$DC/projects/-other-project/memory/WORK"; mkdir -p "$W5/items/open" "$W5/dec
 printf '## D-19990103-01 -- Other drawer thing\n\ntopic: india\nstatus: standing\n' > "$W5/decisions/D-19990103-01-india.md"
 LEG="$T/legacy.md"; printf '# legacy\n\n## D-19990104-01 -- Legacy thing\n\ntopic: juliet\nstatus: standing\n' > "$LEG"
 git -C "$DC" add -A >/dev/null && git -C "$DC" commit -q -m fixture
-export DECIDED_GLOBAL_DIR="$G" OPEN_ITEMS_PROJECTS_DIR="$DC/projects" OPEN_ITEMS_DOTCLAUDE="$DC" DECISIONS_FILE="$LEG" PJ_MACHINE_FILE="$T/no-machine-file"
+# A FIXTURE machine letter (P8a), so the minted IDs read -A01, -A02 ... on every machine and
+# the suite passes on a box whose real ~/.config/pj/machine does not exist yet. Pointing at
+# an absent file is not an option any more: pj-id REFUSES without a letter, by design.
+printf 'name: selftest-fixture\nletter: A\n' > "$T/machine-A"
+export DECIDED_GLOBAL_DIR="$G" OPEN_ITEMS_PROJECTS_DIR="$DC/projects" OPEN_ITEMS_DOTCLAUDE="$DC" DECISIONS_FILE="$LEG" PJ_MACHINE_FILE="$T/machine-A"
 run(){ local d="$1"; shift; OUT="$( (builtin cd "$d" && "$DECIDED" "$@") 2>&1)"; RC=$?; }
 
 echo "-- the six original arms (from repo-private: project + machine-wide)"
 run "$R1" bravo;   wantrc "present word hits" 0 "$RC"; want "  both homes hit" "[in machine-wide]" "$OUT"; want "  including the project block" "[in project (drawer:decisions)]" "$OUT"
-run "$R1" zulu;    wantrc "absent word misses" 1 "$RC"; want "  miss states the denominator" "3 decision(s) searched" "$OUT"; want "  miss says a miss is not not-decided" 'NOT the same as "not decided"' "$OUT"
+run "$R1" zulu;    wantrc "absent word misses" 1 "$RC"; want "  miss states the denominator" "4 decision(s) searched" "$OUT"; want "  miss says a miss is not not-decided" 'NOT the same as "not decided"' "$OUT"
 run "$R1" bravo foxtrot; wantrc "words spanning two blocks do not match" 1 "$RC"
 run "$R1" delta;   wantrc "body text is searchable" 0 "$RC"
 DECIDED_GLOBAL_DIR="$T/nope" run "$T" bravo; wantrc "no readable home anywhere refuses" 2 "$RC"; want "  refusal says it is not 'no decisions'" "not 'no decisions'" "$OUT"
@@ -85,11 +97,20 @@ echo "-- ID form and --all"
 run "$R1" D-19990102-01; wantrc "ID form finds the project block" 0 "$RC"; want "  header match" "## D-19990102-01 -- A project thing" "$OUT"
 run "$R1" D-19990104-01; wantrc "an ID outside scope is still found" 0 "$RC"; want "  and says it is outside the default scope" "OUTSIDE this project's default scope" "$OUT"; want "  naming the legacy file" "[in legacy file" "$OUT"
 run "$R1" D-19990109-09; wantrc "an unknown ID misses" 1 "$RC"
+# PRE-P8a IDs STILL RESOLVE (gate Q1). ~370 citations of the bare shape survive in documents
+# nobody is going to rewrite; a dangling citation would print "NO decision recorded", which
+# reads as "this was never decided" rather than "you typed the old shape".
+run "$R1" D-19990101-A07; wantrc "the letter form finds its block" 0 "$RC"; want "  header match" "## D-19990101-A07 -- A machine-lettered thing" "$OUT"
+run "$R1" D-19990101-07;  wantrc "the PRE-P8a bare form finds the same block" 0 "$RC"; want "  same block" "A machine-lettered thing" "$OUT"; want "  and says the shape is the old one" "pre-2026-09-21 shape" "$OUT"
+# NEGATIVE CONTROL: the fallback widens by ONE letter slot, not into a wildcard. A bare ID
+# whose number matches nothing must still miss, or every typo would look like a hit.
+run "$R1" D-19990101-06;  wantrc "a bare ID matching no letter form still misses" 1 "$RC"
+run "$R1" D-19990101-01;  wantrc "control: a genuinely legacy-shaped block is found exactly" 0 "$RC"; want "  the right one" "A machine-wide thing" "$OUT"; wantnot "  and not the lettered one" "A machine-lettered thing" "$OUT"
 run "$R1" --list;        want "--list shows titles with homes" "A project thing   [project (drawer:decisions)]" "$OUT"; wantnot "  and not the other drawer" "Other drawer" "$OUT"
 run "$R1" --all juliet;  wantrc "--all reaches the legacy file" 0 "$RC"
 run "$R1" --all india;   wantrc "--all reaches another drawer" 0 "$RC"; want "  labelled by its project key" "[in drawer -other-project]" "$OUT"
-run "$R1" --list --all;  want "--all denominator counts every home" "5 decision(s) searched (machine-wide 2, project (drawer:decisions) 1, drawer -other-project 1, legacy file 1)" "$OUT"
-run "$R1" --all zulu;    want "control: --all miss states the same denominator" "5 decision(s) searched" "$OUT"
+run "$R1" --list --all;  want "--all denominator counts every home" "6 decision(s) searched (machine-wide 3, project (drawer:decisions) 1, drawer -other-project 1, legacy file 1)" "$OUT"
+run "$R1" --all zulu;    want "control: --all miss states the same denominator" "6 decision(s) searched" "$OUT"
 
 echo "-- add"
 run "$R1" add "No topic" --holds-in x --global; wantrc "add without --topic refuses" 2 "$RC"
@@ -97,20 +118,40 @@ run "$R1" add "No holds" --topic x --global;    wantrc "add without --holds-in r
 run "$R1" add "No home" --topic x --holds-in y; wantrc "add without --global/--project refuses" 2 "$RC"
 [ -z "$(ls "$G" | grep -c "$TODAY")" ] || [ "$(ls "$G" | grep -c "$TODAY")" = 0 ] && ok "  refusals wrote nothing" || bad "  a refusal wrote a file" "$(ls "$G")"
 run "$R1" add "Kilo ruling" --topic "kilo lima" --holds-in "docs/K.md" --global --body "The body."
-wantrc "add --global writes" 0 "$RC"; want "  prints the new ID" "D-$TODAY-01" "$OUT"; want "  committed" "committed in dot-claude: pj-global/decisions/D-$TODAY-01-kilo-ruling.md" "$OUT"
-want "  block shape" "topic: kilo lima" "$(cat "$G/D-$TODAY-01-kilo-ruling.md")"; want "  body written" "The body." "$(cat "$G/D-$TODAY-01-kilo-ruling.md")"
-want "  the commit names only that path" "pj-global/decisions/D-$TODAY-01-kilo-ruling.md" "$(git -C "$DC" show --stat --name-only HEAD)"
+wantrc "add --global writes" 0 "$RC"; want "  prints the new ID" "D-$TODAY-A01" "$OUT"; want "  committed" "committed in dot-claude: pj-global/decisions/D-$TODAY-A01-kilo-ruling.md" "$OUT"
+want "  block shape" "topic: kilo lima" "$(cat "$G/D-$TODAY-A01-kilo-ruling.md")"; want "  body written" "The body." "$(cat "$G/D-$TODAY-A01-kilo-ruling.md")"
+want "  the commit names only that path" "pj-global/decisions/D-$TODAY-A01-kilo-ruling.md" "$(git -C "$DC" show --stat --name-only HEAD)"
 wanteq_n="$(git -C "$DC" show --name-only --pretty=format: HEAD | grep -c .)"; [ "$wanteq_n" = 1 ] && ok "  and nothing else (1 path)" || bad "  commit carried $wanteq_n paths" ""
 run "$R1" add "Mike ruling" --topic "mike" --holds-in "docs/M.md" --project
-wantrc "add --project writes" 0 "$RC"; [ "$RC" -eq 0 ] || printf "       %s\n" "$OUT"; want "  next ID skips the one the other home took" "D-$TODAY-02" "$OUT"; [ -f "$W1/decisions/D-$TODAY-02-mike-ruling.md" ] && ok "  file in the drawer store" || bad "  file missing in drawer" "$(ls "$W1/decisions")"
+wantrc "add --project writes" 0 "$RC"; [ "$RC" -eq 0 ] || printf "       %s\n" "$OUT"; want "  next ID skips the one the other home took" "D-$TODAY-A02" "$OUT"; [ -f "$W1/decisions/D-$TODAY-A02-mike-ruling.md" ] && ok "  file in the drawer store" || bad "  file missing in drawer" "$(ls "$W1/decisions")"
 run "$R1" kilo; wantrc "the added block is found" 0 "$RC"
-run "$R4" add "November" --topic n --holds-in n --project; wantrc "add --project into a repo: store is written but NOT committed" 3 "$RC"; want "  says so" "NOT COMMITTED, outside dot-claude" "$OUT"; [ -f "$R4/docs/decisions/D-$TODAY-03-november.md" ] && ok "  file is on disk" || bad "  file missing" "$(ls "$R4/docs/decisions")"
+run "$R4" add "November" --topic n --holds-in n --project; wantrc "add --project into a repo: store is written but NOT committed" 3 "$RC"; want "  says so" "NOT COMMITTED, outside dot-claude" "$OUT"; [ -f "$R4/docs/decisions/D-$TODAY-A03-november.md" ] && ok "  file is on disk" || bad "  file missing" "$(ls "$R4/docs/decisions")"
 [ -z "$(git -C "$DC" status --porcelain)" ] && ok "fixture dot-claude tree clean after adds" || bad "dot-claude dirty" "$(git -C "$DC" status --porcelain)"
 
 echo "-- withdraw"
-run "$R1" withdraw "D-$TODAY-01" "probe only"; wantrc "withdraw" 0 "$RC"; want "  status line replaced" "status: withdrawn" "$(cat "$G/D-$TODAY-01-kilo-ruling.md")"; want "  reason recorded" "withdrawn: $(date +%Y-%m-%d) -- probe only" "$(cat "$G/D-$TODAY-01-kilo-ruling.md")"; want "  committed" "committed in dot-claude" "$OUT"
-run "$R1" withdraw "D-$TODAY-01" "again"; wantrc "withdrawing twice refuses" 2 "$RC"
+run "$R1" withdraw "D-$TODAY-A01" "probe only"; wantrc "withdraw" 0 "$RC"; want "  status line replaced" "status: withdrawn" "$(cat "$G/D-$TODAY-A01-kilo-ruling.md")"; want "  reason recorded" "withdrawn: $(date +%Y-%m-%d) -- probe only" "$(cat "$G/D-$TODAY-A01-kilo-ruling.md")"; want "  committed" "committed in dot-claude" "$OUT"
+run "$R1" withdraw "D-$TODAY-A01" "again"; wantrc "withdrawing twice refuses" 2 "$RC"
 run "$R1" withdraw "D-19990104-01" "legacy"; wantrc "a legacy-file block cannot be withdrawn" 2 "$RC"
+
+echo "-- withdraw by a PRE-P8a id"
+# A bare -NN can answer to one block PER MACHINE LETTER. Guessing would withdraw an
+# arbitrary machine's ruling and commit the edit, which is why this refuses.
+printf '## D-19990105-A03 -- Machine A block\n\ntopic: uniform\nstatus: standing\n' > "$G/D-19990105-A03-a.md"
+printf '## D-19990105-B03 -- Machine B block\n\ntopic: victor\nstatus: standing\n' > "$G/D-19990105-B03-b.md"
+run "$R1" withdraw "D-19990105-03" "ambiguous"; wantrc "an ambiguous legacy ID REFUSES" 2 "$RC"
+want "  and names both candidates" "D-19990105-A03" "$OUT"; want "  and the second one" "D-19990105-B03" "$OUT"
+wantnot "  and changed NOTHING (A block)" "status: withdrawn" "$(cat "$G/D-19990105-A03-a.md")"
+wantnot "  and changed NOTHING (B block)" "status: withdrawn" "$(cat "$G/D-19990105-B03-b.md")"
+rm -f "$G/D-19990105-B03-b.md"
+# Now unambiguous: it resolves, and must REPORT and COMMIT under the ID the FILE carries.
+# Committing the typed legacy ID would record a withdrawal of an ID that does not exist,
+# in the one place nobody greps by topic afterwards.
+run "$R1" withdraw "D-19990105-03" "now unambiguous"; wantrc "an unambiguous legacy ID withdraws" 0 "$RC"
+want "  says it resolved" "pre-2026-09-21 shape" "$OUT"
+want "  reports the RESOLVED id, not the typed one" "withdrawn: D-19990105-A03" "$OUT"
+wantnot "  and never reports the bare typed id" "withdrawn: D-19990105-03 " "$OUT"
+want "  the commit message carries the resolved id" "withdraw D-19990105-A03" "$(git -C "$DC" log -1 --format=%s)"
+want "  the block really is withdrawn" "status: withdrawn" "$(cat "$G/D-19990105-A03-a.md")"
 
 printf '\ndecided-selftest: %s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

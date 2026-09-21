@@ -8,14 +8,23 @@ drawer (this repo declares `records: private` in `.claude/pj-homes`).
 
 Query it with `decided <words>`. `decided --list` shows every block in
 scope, `decided --all` every block on the machine, `decided --selftest`
-proves the arms. IDs never changed: every `D-YYYYMMDD-NN` cited anywhere in
-this repo still resolves through `decided`. The moved blocks remain in this
-file's git history; history was not rewritten. How the tool decides where to
-look: `docs/DECIDED.md`.
+proves the arms. The moved blocks remain in this file's git history; history
+was not rewritten. How the tool decides where to look: `docs/DECIDED.md`.
+
+**The IDs gained a machine letter on 2026-09-21** (P8a): a ruling is now
+`D-YYYYMMDD-LNN`, where L names the machine that minted it -- `A` for every
+ruling made before that date, because every one of them was made on the Mac
+mini. **Every `D-YYYYMMDD-NN` cited anywhere in this repo still resolves**:
+`decided` falls back to the letter form after an exact miss and says so on
+stderr when it does. That fallback is what keeps this sentence true; the
+filenames themselves did change.
 
 Two blocks stay here on purpose: one is LifeOS-owned and not this project's
 to move; the other was the bridge that pointed `decided` at the machine-wide
-home before it could read that home itself.
+home before it could read that home itself. **The LifeOS-owned block keeps
+its original ID**, unlettered: relabelling another project's ruling is not
+this project's call. It is the one block on the machine still on the old
+shape, and `decided` finds it exactly as before.
 
 ---
 
@@ -35,13 +44,14 @@ Keep the LEARNING incidents, the UPGRADES records and the one citation in
 `OPERATIONAL_RULES.md`; those are LifeOS's own lessons, and deleting evidence to tidy a
 boundary is the wrong trade. Gated on the hash check, never on a date. NOT EXECUTED.
 
-## D-20260920-11 -- pj session framework rulings R0 to R8
+## D-20260920-A11 -- pj session framework rulings R0 to R8
 
 topic: pj session framework rulings R0 R1 R2 R3 R4 R5 R6 R7 R8 start routine wrap-up item model homes machine-wide rules concurrent sessions machinery travels register home pj-global pointer
 decided: 2026-09-20
 status: superseded (the split this block bridged was done on 2026-09-21, P5.5; `decided` now reads that folder itself)
-holds-in: ~/.claude/pj-global/decisions/ (D-20260920-02 to D-20260920-10, one file per ruling)
+holds-in: ~/.claude/pj-global/decisions/ (D-20260920-A02 to D-20260920-A10, one file per ruling)
 
 Pointer only. Nine rulings made on 2026-09-20 for the pj session framework programme are
-recorded machine-wide, outside this repo, under D-20260920-10 (R8). This block exists so
+recorded machine-wide, outside this repo, under D-20260920-A10 (R8). This block exists so
 `decided` can find them until it learns to search that folder. No ruling text here.
+Those nine were `D-20260920-02` to `-10` until 2026-09-21; both shapes resolve.

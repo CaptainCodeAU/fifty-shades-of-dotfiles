@@ -3,7 +3,8 @@
 #
 # Usage:
 #   decided <words...>        every word must appear in one block (case-insensitive)
-#   decided D-YYYYMMDD-NN     one block by ID (header match); found outside scope, says where
+#   decided D-YYYYMMDD-LNN    one block by ID (L = machine letter); found outside scope, says
+#                             where. The pre-2026-09-21 D-YYYYMMDD-NN resolves too.
 #   decided --all <words...>  search every home on the machine, not just this project's
 #   decided --list [--all]    titles only, with the home each block sits in
 #   decided --homes           the homes this call would search, and why
@@ -34,7 +35,7 @@ DOTCLAUDE="${OPEN_ITEMS_DOTCLAUDE:-$HOME/.claude}"
 
 die_refused(){ printf 'decided: REFUSED -- %s\n' "$1" >&2; exit 2; }
 loud(){ printf 'decided: %s\n' "$1" >&2; }
-usage(){ sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; }
+usage(){ sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; }
 today(){ date +%Y-%m-%d; }
 realdir(){ (cd "$1" 2>/dev/null && pwd -P); }
 tilde(){ printf '%s' "${1/#$HOME/\~}"; }
@@ -126,11 +127,16 @@ count_in(){ blocks_of "$1" "$2" | grep -c '^## D-' 2>/dev/null || true; }
 
 # ---------------------------------------------------------------- search ----
 # One awk pass per home. BSD awk: no \x escapes, so no record separator tricks.
-search_stream(){  # search_stream <mode:words|id> <query> -> prints hits, rc 0 hit / 1 miss
-  awk -v mode="$1" -v q="$2" '
+# <qre>, when non-empty, is a SECOND header pattern tried after an exact ID miss: the P8a
+# letter migration (2026-09-21) renamed every D-YYYYMMDD-NN to D-YYYYMMDD-LNN, and the old
+# shape is cited ~370 times in documents that were never rewritten. A citation must not
+# dangle, so an old ID falls through to its letter form (P8a gate Q1).
+search_stream(){  # search_stream <mode:words|id> <query> [legacy-regex] -> hits, rc 0 hit / 1 miss
+  awk -v mode="$1" -v q="$2" -v qre="${3:-}" '
     function test_and_print(b,   lower, ok, i, cnt, w, first) {
       if (b == "") return
-      if (mode == "id") { first = substr(b, 1, index(b, "\n") - 1); ok = (index(first, "## " q " ") == 1) }
+      if (mode == "id") { first = substr(b, 1, index(b, "\n") - 1); ok = (index(first, "## " q " ") == 1)
+                          if (!ok && qre != "") ok = (first ~ qre) }
       else {
         lower = tolower(b); ok = 1
         cnt = split(tolower(q), w, " ")
@@ -166,7 +172,16 @@ print_home_notes(){
 }
 
 run_search(){     # run_search <all> <mode> <query>
-  local all="$1" mode="$2" q="$3" h label kind path rc=1 hits den
+  local all="$1" mode="$2" q="$3" h label kind path rc=1 hits den qre=""
+  # A pre-P8a ID (no machine letter) also matches its migrated letter form. Announced when
+  # it resolves, so nobody reads an old citation as a current shape.
+  if [ "$mode" = id ]; then
+    case "$q" in
+      D-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9])
+        qre="^## ${q%-*}-[A-Z]${q##*-} "
+        printf 'decided: note: %s is the pre-2026-09-21 shape (no machine letter); also looking for %s.\n' "$q" "${q%-*}-?${q##*-}" >&2 ;;
+    esac
+  fi
   build_scope "$all"
   readable_homes || { print_home_notes; die_refused "no readable register in scope (this is not 'no decisions')"; }
   denominator; den="$DEN"
@@ -174,7 +189,7 @@ run_search(){     # run_search <all> <mode> <query>
   for h in "${HOMES[@]}"; do
     IFS=$'\t' read -r label kind path _ <<<"$h"
     case "$kind" in folder|file) ;; *) continue ;; esac
-    hits="$(blocks_of "$path" "$kind" | search_stream "$mode" "$q")" && { printf '%s' "$hits"; printf '  [in %s]\n\n' "$label"; rc=0; }
+    hits="$(blocks_of "$path" "$kind" | search_stream "$mode" "$q" "$qre")" && { printf '%s' "$hits"; printf '  [in %s]\n\n' "$label"; rc=0; }
   done
   if [ "$rc" -eq 0 ]; then printf 'decided: matched in %s.\n' "$den"; print_home_notes; return 0; fi
   # an ID not in scope: look everywhere once and say where it is, so a citation never dangles
@@ -183,7 +198,7 @@ run_search(){     # run_search <all> <mode> <query>
     for h in "${HOMES[@]}"; do
       IFS=$'\t' read -r label kind path _ <<<"$h"
       case "$kind" in folder|file) ;; *) continue ;; esac
-      hits="$(blocks_of "$path" "$kind" | search_stream id "$q")" && { printf '%s' "$hits"; printf '  [in %s -- OUTSIDE this project'"'"'s default scope; seen because you asked by ID]\n\n' "$label"; rc=0; }
+      hits="$(blocks_of "$path" "$kind" | search_stream id "$q" "$qre")" && { printf '%s' "$hits"; printf '  [in %s -- OUTSIDE this project'"'"'s default scope; seen because you asked by ID]\n\n' "$label"; rc=0; }
     done
     [ "$rc" -eq 0 ] && { denominator; printf 'decided: %s found outside the default scope (%s).\n' "$q" "$DEN"; return 0; }
   fi
@@ -279,16 +294,48 @@ cmd_add(){
 }
 
 cmd_withdraw(){
-  local id="${1:-}" reason="${2:-}" top h label kind path f tmp
-  case "$id" in D-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9]) ;; *) die_refused "withdraw: give a D-YYYYMMDD-NN id" ;; esac
+  local id="${1:-}" reason="${2:-}" top h label kind path f tmp m
+  local idre=""
+  case "$id" in
+    D-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[A-Z][0-9][0-9]) ;;
+    D-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9]) idre="^## ${id%-*}-[A-Z]${id##*-} " ;;   # pre-P8a shape
+    *) die_refused "withdraw: give a D-YYYYMMDD-LNN id (the pre-2026-09-21 D-YYYYMMDD-NN is accepted too)" ;;
+  esac
   [ -n "$reason" ] || die_refused "withdraw: a reason is required"
   build_scope 0
+  # EXACT first, across every folder home.
   for h in "${HOMES[@]}"; do
     IFS=$'\t' read -r label kind path _ <<<"$h"
     [ "$kind" = folder ] || continue
     f="$(grep -l "^## $id " "$path"/D-*.md 2>/dev/null | head -1)"; [ -n "$f" ] && break
   done
+  # Only then the pre-P8a fallback, and it must COLLECT every candidate before choosing.
+  # A bare -NN can answer to one block per machine letter, so `| head -1` would withdraw
+  # whichever home happened to be searched first and commit the edit without a word. The
+  # letter scheme is what CREATES that ambiguity, so the tool that reads old IDs has to
+  # refuse it, exactly as `open-items find_item` does.
+  if [ -z "$f" ] && [ -n "$idre" ]; then
+    local hits="" n
+    for h in "${HOMES[@]}"; do
+      IFS=$'\t' read -r label kind path _ <<<"$h"
+      [ "$kind" = folder ] || continue
+      while IFS= read -r m; do [ -n "$m" ] && hits="$hits$m"$'\n'; done < <(grep -lE "$idre" "$path"/D-*.md 2>/dev/null)
+    done
+    hits="${hits%$'\n'}"
+    if [ -n "$hits" ]; then
+      n="$(printf '%s\n' "$hits" | wc -l | tr -d ' ')"
+      if [ "$n" -gt 1 ]; then
+        die_refused "withdraw: the legacy ID $id matches $n decisions after the P8a letter migration ($(printf '%s\n' "$hits" | while IFS= read -r m; do printf '%s ' "$(sed -n '1s/^## \([^ ]*\).*/\1/p' "$m")"; done)). Name the full ID; nothing was changed."
+      fi
+      f="$hits"
+      loud "note: $id is the pre-2026-09-21 shape; resolved to $(sed -n '1s/^## \([^ ]*\).*/\1/p' "$f")"
+    fi
+  fi
   [ -n "$f" ] || die_refused "withdraw: $id is not in a folder home in scope (legacy single-file blocks are not edited by this tool)"
+  # Report and COMMIT under the ID the file actually carries. Writing the typed legacy ID
+  # into the register's git history would record a withdrawal of an ID that no longer
+  # exists, and a commit message is the one place nobody greps by topic later.
+  id="$(sed -n '1s/^## \([^ ]*\).*/\1/p' "$f")"
   grep -q '^status: withdrawn' "$f" && die_refused "withdraw: $id is already withdrawn"
   tmp="$f.tmp"
   awk -v d="$(today)" -v r="$reason" '/^status: /{ print "status: withdrawn"; print "withdrawn: " d " -- " r; next } { print }' "$f" > "$tmp" && mv "$tmp" "$f"
@@ -311,5 +358,8 @@ case "${1:-}" in
   withdraw) shift; cmd_withdraw "$@"; exit $? ;;
   "") usage; exit 0 ;;
 esac
-if [ $# -eq 1 ]; then case "$1" in D-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9]) run_search "$ALL" id "$1"; exit $? ;; esac; fi
+if [ $# -eq 1 ]; then case "$1" in
+  D-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[A-Z][0-9][0-9]) run_search "$ALL" id "$1"; exit $? ;;
+  D-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9])      run_search "$ALL" id "$1"; exit $? ;;   # pre-P8a shape, resolved in run_search
+esac; fi
 run_search "$ALL" words "$*"; exit $?

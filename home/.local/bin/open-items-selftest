@@ -229,9 +229,12 @@ mk_dotclaude(){
 }
 runw(){ local d="$1"; shift; OUT="$(cd "$d" 2>/dev/null && OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" CLAUDE_CODE_SESSION_ID=sess-test CLAUDE_SESSION_ID=sess-test "$TOOL" "$@" 2>&1)"; RC=$?; return 0; }
 TODAY="$(date +%Y%m%d)"
-# IDs come from pj-id (P5.5). Point it at an ABSENT machine file so this box's real
-# range (~/.config/pj/machine) never shifts the -01/-02 numbers these arms expect.
-export PJ_MACHINE_FILE="$D/no-machine-file"
+# IDs come from pj-id (P5.5, letters since P8a). Pin a FIXTURE machine file so this box's
+# real letter (~/.config/pj/machine) never shifts the -A01/-A02 numbers these arms expect,
+# and so the suite passes on a machine whose real file does not exist yet (B, C, D on day
+# one). Pointing at an absent file is no longer an option: pj-id REFUSES without a letter.
+printf 'name: selftest-fixture\nletter: A\n' > "$D/machine-A"
+export PJ_MACHINE_FILE="$D/machine-A"
 committed(){ [ -z "$(git -C "$DC" status --porcelain -- "$1" 2>/dev/null)" ] && git -C "$DC" ls-files --error-unmatch -- "$1" >/dev/null 2>&1; }
 
 printf 'F  commands on the items/ layout\n'
@@ -244,97 +247,123 @@ wanteq "init: OPEN.md generated" "1" "$([ -f "$ZW/OPEN.md" ] && echo 1)"
 want   "init: OPEN.md carries the do-not-edit header" "DO NOT EDIT" "$(cat "$ZW/OPEN.md")"
 runw "$ZETA" add "first thing" --done-when "it is done" --size small --holds-in repo:README.md --body "Body text."
 wanteq "add succeeds (rc=0)" "0" "$RC"
-want   "add prints the new ID" "W-$TODAY-01" "$OUT"
-F1="$ZW/items/open/W-$TODAY-01.md"
+want   "add prints the new ID" "W-$TODAY-A01" "$OUT"
+F1="$ZW/items/open/W-$TODAY-A01.md"
 wanteq "add: the file lands in items/open/" "1" "$([ -f "$F1" ] && echo 1)"
 want   "add: status open written"      "status: open"          "$(cat "$F1")"
 want   "add: kind defaults to do"      "kind: do"              "$(cat "$F1")"
 want   "add: done-when written"        "done-when: it is done" "$(cat "$F1")"
 want   "add: raised filled by the tool with date and session" "raised: $(date +%Y-%m-%d) (session sess-test)" "$(cat "$F1")"
 want   "add: body kept"                "Body text."            "$(cat "$F1")"
-wanteq "add: the item file is COMMITTED" "1" "$(committed "projects/$(key "$ZETA")/memory/WORK/items/open/W-$TODAY-01.md" && echo 1)"
-want   "add: the commit names the item by explicit path" "items/open/W-$TODAY-01.md" "$(git -C "$DC" show --stat --name-only HEAD)"
+wanteq "add: the item file is COMMITTED" "1" "$(committed "projects/$(key "$ZETA")/memory/WORK/items/open/W-$TODAY-A01.md" && echo 1)"
+want   "add: the commit names the item by explicit path" "items/open/W-$TODAY-A01.md" "$(git -C "$DC" show --stat --name-only HEAD)"
 want   "add: OPEN.md regenerated with the item" "first thing" "$(cat "$ZW/OPEN.md")"
 runw "$ZETA" add "second thing" --done-when y --kind decide
-want   "add: the next ID is -02" "W-$TODAY-02" "$OUT"
-printf 'name: other-box\nrange: 50-99\n' > "$D/machine-50"
-PJ_MACHINE_FILE="$D/machine-50" runw "$ZETA" add "from the other machine" --done-when z
-want   "add: a machine file with range 50-99 claims -50, not -03 (cross-machine IDs, P5.5)" "W-$TODAY-50" "$OUT"
-wanteq "add: the -50 item file exists" "1" "$([ -f "$ZW/items/open/W-$TODAY-50.md" ] && echo 1)"
+want   "add: the next ID is -02" "W-$TODAY-A02" "$OUT"
+printf 'name: other-box\nletter: B\n' > "$D/machine-B"
+PJ_MACHINE_FILE="$D/machine-B" runw "$ZETA" add "from the other machine" --done-when z
+want   "add: a machine file with letter B claims -B01, not -A03 (cross-machine IDs, P8a)" "W-$TODAY-B01" "$OUT"
+wanteq "add: the -B01 item file exists" "1" "$([ -f "$ZW/items/open/W-$TODAY-B01.md" ] && echo 1)"
+wanteq "add: machine A's own numbering is untouched by B's claim" "1" "$([ ! -f "$ZW/items/open/W-$TODAY-A03.md" ] && echo 1)"
+# NO MACHINE FILE = NO ID. A default letter would put another machine's name on this
+# machine's work, so the tool refuses instead (P8a gate Q6).
+PJ_MACHINE_FILE="$D/no-machine-file" runw "$ZETA" add "no letter for this box" --done-when q
+wanteq "add with NO machine file REFUSES (rc=2): no default letter exists" "2" "$RC"
+want   "and the refusal names install.sh" "install.sh" "$OUT"
 # THE REQUIRED-FIELD REFUSAL, with the passing control right above it.
 runw "$ZETA" add "no finish line"
 wanteq "add WITHOUT --done-when REFUSES (rc=2)" "2" "$RC"
 want   "and says which field" "done-when" "$OUT"
-wanteq "and creates NO file (control: -01, -02 and -50 exist)" "3" "$(ls "$ZW/items/open" | grep -c '^W-')"
+wanteq "and creates NO file (control: -A01, -A02 and -B01 exist)" "3" "$(ls "$ZW/items/open" | grep -c '^W-')"
 runw "$ZETA" add "bad size" --done-when z --kind decide --size small
 wanteq "add: --size on a decide item REFUSES (rc=2)" "2" "$RC"
 runw "$ZETA" add "bad root" --done-when z --holds-in docs/x.md
 wanteq "add: holds-in without a root marker REFUSES (rc=2)" "2" "$RC"
 want   "and names the markers" "repo:" "$OUT"
-runw "$ZETA" close "W-$TODAY-01" "finished it"
+runw "$ZETA" close "W-$TODAY-A01" "finished it"
 wanteq "close succeeds (rc=0)" "0" "$RC"
-wanteq "close: file moved to items/closed/" "1" "$([ -f "$ZW/items/closed/W-$TODAY-01.md" ] && [ ! -f "$F1" ] && echo 1)"
-want   "close: status done"   "status: done" "$(cat "$ZW/items/closed/W-$TODAY-01.md")"
-want   "close: note appended" "finished it"  "$(cat "$ZW/items/closed/W-$TODAY-01.md")"
+wanteq "close: file moved to items/closed/" "1" "$([ -f "$ZW/items/closed/W-$TODAY-A01.md" ] && [ ! -f "$F1" ] && echo 1)"
+want   "close: status done"   "status: done" "$(cat "$ZW/items/closed/W-$TODAY-A01.md")"
+want   "close: note appended" "finished it"  "$(cat "$ZW/items/closed/W-$TODAY-A01.md")"
 wanteq "close: committed (old path gone from the index too)" "0" "$(git -C "$DC" status --porcelain | wc -l | tr -d ' ')"
-runw "$ZETA" park "W-$TODAY-02"
-wanteq "park: file in items/parked/ with status parked" "1" "$(grep -q '^status: parked$' "$ZW/items/parked/W-$TODAY-02.md" && echo 1)"
-runw "$ZETA" reopen "W-$TODAY-02"
-wanteq "reopen: back in items/open/ with status open" "1" "$(grep -q '^status: open$' "$ZW/items/open/W-$TODAY-02.md" && echo 1)"
-runw "$ZETA" decline "W-$TODAY-02" "not doing it"
-wanteq "decline: in items/closed/ with status declined" "1" "$(grep -q '^status: declined$' "$ZW/items/closed/W-$TODAY-02.md" && echo 1)"
+runw "$ZETA" park "W-$TODAY-A02"
+wanteq "park: file in items/parked/ with status parked" "1" "$(grep -q '^status: parked$' "$ZW/items/parked/W-$TODAY-A02.md" && echo 1)"
+runw "$ZETA" reopen "W-$TODAY-A02"
+wanteq "reopen: back in items/open/ with status open" "1" "$(grep -q '^status: open$' "$ZW/items/open/W-$TODAY-A02.md" && echo 1)"
+runw "$ZETA" decline "W-$TODAY-A02" "not doing it"
+wanteq "decline: in items/closed/ with status declined" "1" "$(grep -q '^status: declined$' "$ZW/items/closed/W-$TODAY-A02.md" && echo 1)"
 runw "$ZETA" add "third thing" --done-when q
-runw "$ZETA" set "W-$TODAY-03" done-when "a better finish line"
+# LEGACY ID RESOLUTION (P8a gate Q1). ~230 references to the pre-letter shape survive in
+# reports and handoffs; one typed from there must land, not read as "no such item".
+runw "$ZETA" set "W-$TODAY-03" next "typed the old way"
+wanteq "set with a pre-P8a bare ID resolves to the letter form (rc=0)" "0" "$RC"
+want   "  and SAYS it resolved, naming the real ID" "resolved to W-$TODAY-A03" "$OUT"
+want   "  and the value landed in the A03 file" "next: typed the old way" "$(cat "$ZW/items/open/W-$TODAY-A03.md")"
+wanteq "  and NO bare-NN file was created (the old ID is a lookup, never a new item)" "1" "$([ ! -e "$ZW/items/open/W-$TODAY-03.md" ] && echo 1)"
+# AMBIGUITY REFUSES. -A01 (closed) and -B01 (open) both answer to a bare -01, so guessing
+# would silently edit one machine's item while you meant the other's.
+runw "$ZETA" set "W-$TODAY-01" next "which one?"
+wanteq "an ambiguous legacy ID REFUSES (rc=2) rather than guessing" "2" "$RC"
+want   "  and names every candidate" "W-$TODAY-A01" "$OUT"
+want   "  and the other candidate too" "W-$TODAY-B01" "$OUT"
+# The refusal must be the LAST word. It used to be followed by "no item <id>", which is
+# false and is the line a reader keeps.
+wantnot "  and is NOT contradicted by a 'no item' line after it" "no item" "$OUT"
+# NEGATIVE CONTROL: a legacy ID matching nothing still misses, so the fallback did not
+# turn every typo into a hit.
+runw "$ZETA" set "W-$TODAY-77" next "nobody"
+wanteq "a legacy ID matching no item still REFUSES (rc=2)" "2" "$RC"
+runw "$ZETA" set "W-$TODAY-A03" done-when "a better finish line"
 wanteq "set replaces a field (rc=0)" "0" "$RC"
-want   "set: new value present" "done-when: a better finish line" "$(cat "$ZW/items/open/W-$TODAY-03.md")"
-wanteq "set: old value gone" "1" "$(grep -c '^done-when:' "$ZW/items/open/W-$TODAY-03.md")"
-runw "$ZETA" set "W-$TODAY-03" next "run the thing"
-want   "set adds a field that was absent, inside the header" "next: run the thing" "$(sed -n '2,12p' "$ZW/items/open/W-$TODAY-03.md")"
-runw "$ZETA" set "W-$TODAY-03" status done
+want   "set: new value present" "done-when: a better finish line" "$(cat "$ZW/items/open/W-$TODAY-A03.md")"
+wanteq "set: old value gone" "1" "$(grep -c '^done-when:' "$ZW/items/open/W-$TODAY-A03.md")"
+runw "$ZETA" set "W-$TODAY-A03" next "run the thing"
+want   "set adds a field that was absent, inside the header" "next: run the thing" "$(sed -n '2,12p' "$ZW/items/open/W-$TODAY-A03.md")"
+runw "$ZETA" set "W-$TODAY-A03" status done
 wanteq "set status REFUSES (rc=2); status moves through close/park/decline/reopen" "2" "$RC"
 # holds-in may repeat, one marked path per line (P5.3, ruled at the P5.2 gate).
 runw "$ZETA" add "two homes" --done-when h --holds-in repo:docs/a.md --holds-in "~/.local/bin/b"
-F4="$ZW/items/open/W-$TODAY-04.md"
+F4="$ZW/items/open/W-$TODAY-A04.md"
 wanteq "add with --holds-in twice writes two lines (rc=0)" "0" "$RC"
 wanteq "  two holds-in lines" "2" "$(grep -c '^holds-in:' "$F4")"
 wanteq "  in the order given" "holds-in: repo:docs/a.md|holds-in: ~/.local/bin/b" "$(grep '^holds-in:' "$F4" | tr '\n' '|' | sed 's/|$//')"
 runw "$ZETA" add "bad second home" --done-when h --holds-in repo:ok.md --holds-in docs/bare.md
 wanteq "add REFUSES when any --holds-in lacks a marker (rc=2)" "2" "$RC"
-runw "$ZETA" set "W-$TODAY-04" holds-in drawer:x.md drawer:y.md
+runw "$ZETA" set "W-$TODAY-A04" holds-in drawer:x.md drawer:y.md
 wanteq "set holds-in with two values (rc=0)" "0" "$RC"
 wanteq "  replaces the whole set: two lines" "2" "$(grep -c '^holds-in:' "$F4")"
 wantnot "  old value gone" "repo:docs/a.md" "$(cat "$F4")"
 want    "  new value present, inside the header" "holds-in: drawer:y.md" "$(sed -n '2,12p' "$F4")"
-runw "$ZETA" set --add "W-$TODAY-04" holds-in repo:z.md
+runw "$ZETA" set --add "W-$TODAY-A04" holds-in repo:z.md
 wanteq "set --add holds-in appends (rc=0)" "0" "$RC"
 wanteq "  three lines now" "3" "$(grep -c '^holds-in:' "$F4")"
 wanteq "  appended after the existing ones" "drawer:x.md|drawer:y.md|repo:z.md" "$(sed -n 's/^holds-in: //p' "$F4" | tr '\n' '|' | sed 's/|$//')"
 want   "  raised still last in the header (control)" "raised:" "$(awk 'NR>2 && /^$/{exit} NR>2{l=$0} END{print l}' "$F4")"
-runw "$ZETA" set --add "W-$TODAY-04" next "x"
+runw "$ZETA" set --add "W-$TODAY-A04" next "x"
 wanteq "set --add on a single-valued field REFUSES (rc=2)" "2" "$RC"
-runw "$ZETA" set "W-$TODAY-04" next "a" "b"
+runw "$ZETA" set "W-$TODAY-A04" next "a" "b"
 wanteq "set with two values on a single-valued field REFUSES (rc=2)" "2" "$RC"
-runw "$ZETA" set "W-$TODAY-04" holds-in bare/path.md
+runw "$ZETA" set "W-$TODAY-A04" holds-in bare/path.md
 wanteq "set holds-in without a marker REFUSES (rc=2)" "2" "$RC"
 wanteq "  and the file keeps its three lines (control)" "3" "$(grep -c '^holds-in:' "$F4")"
 # the session id the harness really sets is CLAUDE_CODE_SESSION_ID (P5.3); the old name stays as a fallback
 OUT="$(cd "$ZETA" && OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" CLAUDE_CODE_SESSION_ID=cc-real CLAUDE_SESSION_ID=sess-test "$TOOL" add "real id" --done-when i 2>&1)"; RC=$?
-want   "raised uses CLAUDE_CODE_SESSION_ID when set" "(session cc-real)" "$(cat "$ZW/items/open/W-$TODAY-05.md")"
-runw "$ZETA" decline "W-$TODAY-04" "test"; runw "$ZETA" decline "W-$TODAY-05" "test"
-runw "$ZETA" close "W-$TODAY-99"
+want   "raised uses CLAUDE_CODE_SESSION_ID when set" "(session cc-real)" "$(cat "$ZW/items/open/W-$TODAY-A05.md")"
+runw "$ZETA" decline "W-$TODAY-A04" "test"; runw "$ZETA" decline "W-$TODAY-A05" "test"
+runw "$ZETA" close "W-$TODAY-A99"
 wanteq "close of an unknown ID REFUSES (rc=2)" "2" "$RC"
 runw "$ZETA" --closed
-want   "listing --closed shows done, declined and open together" "W-$TODAY-01" "$OUT"
-want   "  ..." "W-$TODAY-03" "$OUT"
+want   "listing --closed shows done, declined and open together" "W-$TODAY-A01" "$OUT"
+want   "  ..." "W-$TODAY-A03" "$OUT"
 runw "$ZETA" --status declined
-want    "--status declined shows the declined one" "W-$TODAY-02" "$OUT"
-wantnot "and not the open one" "W-$TODAY-03" "$OUT"
+want    "--status declined shows the declined one" "W-$TODAY-A02" "$OUT"
+wantnot "and not the open one" "W-$TODAY-A03" "$OUT"
 runw "$ZETA"
 wanteq "default listing shows only open (rc=0)" "0" "$RC"
-wantnot "default hides the declined item" "W-$TODAY-02" "$OUT"
+wantnot "default hides the declined item" "W-$TODAY-A02" "$OUT"
 runw "$ZETA" --session
 want   "--session on items/ layout names the open item" "third thing" "$OUT"
-runw "$ZETA" park "W-$TODAY-03"
+runw "$ZETA" park "W-$TODAY-A03"
 runw "$ZETA" --session
 want   "--session with only a parked item prints the parked count" "parked: 1" "$OUT"
 wantnot "and no title" "third thing" "$OUT"
@@ -388,7 +417,7 @@ wanteq "init through a symlink OUTSIDE dot-claude: written, NOT committed (rc=3)
 want   "  and says so out loud" "NOT COMMITTED, outside dot-claude" "$OUT"
 runw "$ETA" add "outside" --done-when x
 wanteq "add there: rc=3" "3" "$RC"
-wanteq "  the file IS written" "1" "$([ -f "$D/elsewhere/WORK/items/open/W-$TODAY-01.md" ] && echo 1)"
+wanteq "  the file IS written" "1" "$([ -f "$D/elsewhere/WORK/items/open/W-$TODAY-A01.md" ] && echo 1)"
 wanteq "  and dot-claude got NO commit for it (control: zeta's add commits)" "0" "$(git -C "$DC" log --oneline | grep -c 'add W-')"
 runw "$ZETA" init; runw "$ZETA" add "inside" --done-when x
 wanteq "  control: the in-tree drawer's add IS committed" "1" "$(git -C "$DC" log --oneline | grep -c 'add W-')"
@@ -400,7 +429,7 @@ printf '#!/bin/sh\nexit 1\n' > "$DC/.git/hooks/pre-commit"; chmod +x "$DC/.git/h
 runw "$ZETA" add "survives" --done-when x
 wanteq "commit refused by a hook: rc=3, not 0 and not 2" "3" "$RC"
 want   "  and says COMMIT FAILED" "COMMIT FAILED" "$OUT"
-wanteq "  the item file is on disk" "1" "$([ -f "$ZW/items/open/W-$TODAY-01.md" ] && echo 1)"
+wanteq "  the item file is on disk" "1" "$([ -f "$ZW/items/open/W-$TODAY-A01.md" ] && echo 1)"
 wanteq "  and OPEN.md was still regenerated" "1" "$(grep -q survives "$ZW/OPEN.md" && echo 1)"
 mv "$DC/.git/hooks/pre-commit" "$DC/.git/hooks/pre-commit.off"
 runw "$ZETA" add "next write" --done-when x
@@ -432,7 +461,7 @@ wanteq "regen: exactly one generated header" "1" "$(grep -c 'GENERATED by open-i
 printf 'stale\n' > "$ZW/OPEN.md"
 runw "$ZETA" regen
 wanteq "regen rebuilds a stale OPEN.md (rc=0)" "0" "$RC"
-want   "  which now holds the items again" "W-$TODAY-03" "$(cat "$ZW/OPEN.md")"
+want   "  which now holds the items again" "W-$TODAY-A03" "$(cat "$ZW/OPEN.md")"
 wanteq "  control: the stale text is gone" "0" "$(grep -c '^stale$' "$ZW/OPEN.md")"
 
 printf 'L  migrate: legacy OPEN.md -> items/\n'

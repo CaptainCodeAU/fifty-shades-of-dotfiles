@@ -137,12 +137,44 @@ report(){                       # report <label> <drawer...>
 
 # ---------------------------------------------------------------- item files ----
 field_of(){ sed -n "s/^$2:[[:space:]]*//p" "$1" | head -1; }
-title_of(){ sed -n '1s/^## W-[0-9]*-[0-9]* -- //p' "$1"; }
+# The NN slot carries a machine letter since 2026-09-21 (P8a): W-20260921-A07. The
+# character class must therefore admit A-Z, or a letter-form item silently reads as having
+# no title at all -- which is exactly the class of failure the P8a census went looking for.
+title_of(){ sed -n '1s/^## W-[0-9]*-[0-9A-Z]* -- //p' "$1"; }
 id_of_file(){ basename "$1" .md; }
-find_item(){                    # find_item <work> <W-ID> -> path or rc=1
-  local d
+# LEGACY RESOLUTION (P8a gate Q1, Gavin 2026-09-21). Every pre-P8a ID was renamed from
+# W-YYYYMMDD-NN to W-YYYYMMDD-LNN, but ~680 references to the old shape live on in reports,
+# handoffs and committed docs. A bare old ID typed from one of those still has to land: a
+# lookup that MISSES would print "no item", which reads as "there is no such item" rather
+# than "you typed the old shape". So an exact miss falls back to the letter form, and says
+# out loud which ID it resolved to. An ambiguous match (two machines, same day and number)
+# refuses and names both rather than guessing.
+# TWO failure codes, because the caller must not talk over the refusal. rc 1 is a genuine
+# miss and the caller says "no item <id>"; rc 2 means this function has ALREADY refused and
+# explained why, so the caller exits quietly. Without that split the user read "matches 2
+# items" and then "no item" on the very next line, and the false line came last.
+find_item(){                    # find_item <work> <W-ID> -> path, rc 1 miss, rc 2 refused here
+  local d g hits n
   for d in open parked closed; do [ -f "$1/items/$d/$2.md" ] && { printf '%s' "$1/items/$d/$2.md"; return 0; }; done
-  return 1
+  case "$2" in
+    W-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9]) ;;
+    *) return 1 ;;
+  esac
+  hits=""
+  for d in open parked closed; do
+    for g in "$1/items/$d/${2%-*}-"[A-Z]"${2##*-}.md"; do [ -f "$g" ] && hits="$hits$g"$'\n'; done
+  done
+  hits="${hits%$'\n'}"
+  [ -n "$hits" ] || return 1
+  n="$(printf '%s\n' "$hits" | wc -l | tr -d ' ')"
+  if [ "$n" -gt 1 ]; then
+    printf 'open-items: REFUSED -- the legacy ID %s matches %s items after the P8a letter migration: %s. Name the full ID.\n' \
+      "$2" "$n" "$(printf '%s\n' "$hits" | while IFS= read -r g; do printf '%s ' "$(basename "$g" .md)"; done)" >&2
+    return 2
+  fi
+  printf 'open-items: note: %s is the pre-2026-09-21 shape; resolved to %s.\n' "$2" "$(basename "$hits" .md)" >&2
+  printf '%s' "$hits"
+  return 0
 }
 # Set a header field in place: replace if present, else append after the last header field.
 set_field(){                    # set_field <file> <field> <value>
@@ -281,10 +313,11 @@ writable_drawer(){
   [ -d "$w/items" ] || refuse "$(name_of "$w" 2>/dev/null || basename "$repo") has no items/ folder -- a legacy OPEN.md drawer is read-only; run 'open-items migrate' in the project that owns it"
   printf '%s' "$w"
 }
-next_id(){                      # claim W-<today>-NN atomically; retry on a clash
-  # The NN comes from pj-id, which knows this machine's slice of 01-99 (P5.5,
-  # W-20260921-01): two clones no longer claim the same ID on the same day. pj-id
-  # searches the whole items/ tree (open, parked, closed) for an ID already taken.
+next_id(){                      # claim W-<today>-<LETTER><NN> atomically; retry on a clash
+  # The NN and the machine letter come from pj-id (P8a, 2026-09-21): the ID itself names
+  # the machine that minted it, so two clones can never claim the same one. pj-id searches
+  # the whole items/ tree (open, parked, closed) for an ID already taken, and REFUSES when
+  # ~/.config/pj/machine has no letter rather than guessing one.
   local w="$1" id f
   while :; do
     id="$(pj-id next W "$w/items")" || refuse "no ID allocated (pj-id refused, see above)"
@@ -341,7 +374,8 @@ cmd_status(){                   # cmd_status <new-status> <W-ID> [note]
   local st="$1" id="${2:-}" note="${3:-}" w f dest
   [ -n "$id" ] || refuse "$st: which item? give a W-ID"
   w="$(writable_drawer)" || exit 2
-  f="$(find_item "$w" "$id")" || refuse "$st: no item $id in $(name_of "$w")"
+  f="$(find_item "$w" "$id")" || { [ $? -eq 2 ] && exit 2; refuse "$st: no item $id in $(name_of "$w")"; }
+  id="$(id_of_file "$f")"      # a legacy ID resolved to the letter form: move and report under the REAL id
   lock_drawer "$w"
   set_field "$f" status "$st"
   if [ -n "$note" ]; then printf '\n**%s %s.** %s\n' "$(printf '%s' "$st" | tr '[:lower:]' '[:upper:]')" "$(today)" "$note" >> "$f"; fi
@@ -366,7 +400,8 @@ cmd_set(){
     [ "$mode" = replace ] || refuse "set: --add is for holds-in only"
   fi
   w="$(writable_drawer)" || exit 2
-  f="$(find_item "$w" "$id")" || refuse "set: no item $id in $(name_of "$w")"
+  f="$(find_item "$w" "$id")" || { [ $? -eq 2 ] && exit 2; refuse "set: no item $id in $(name_of "$w")"; }
+  id="$(id_of_file "$f")"      # see cmd_status: report under the REAL id, not the legacy one typed
   lock_drawer "$w"
   if [ "$k" = holds-in ]; then
     [ "$mode" = replace ] && drop_field "$f" "$k"

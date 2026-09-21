@@ -37,11 +37,11 @@ lives behind a symlink into lifeos-private, and stays legacy.
 
 ## The item model (D-20260920-05)
 
-One file per item, `items/<folder>/W-YYYYMMDD-NN.md`, in the same block shape
+One file per item, `items/<folder>/W-YYYYMMDD-LNN.md` (L = the machine letter, P8a), in the same block shape
 `decided` already parses:
 
 ```
-## W-20260920-10 -- short title
+## W-20260920-A10 -- short title
 
 project: fifty-shades-of-dotfiles
 status: open              open | parked | done | declined
@@ -68,8 +68,9 @@ parked-by-Gavin and decision-withheld. `closed/` holds both `done` and `declined
 `add`, `close`, `park`, `decline`, `reopen`, `set`, `init`, `regen`, `migrate` each:
 
 1. take a per-drawer lock (`items/.lock`, a directory; a dead holder is taken over),
-2. write the item file (the NN comes from `pj-id`, which hands out this machine's slice
-   of 01-99; the file is claimed with `noclobber`, next free number on a clash),
+2. write the item file (the ID comes from `pj-id`, which stamps it with this machine's
+   letter and hands out `01`-`99` under it; the file is claimed with `noclobber`, next
+   free number on a clash. No machine letter, no ID: `pj-id` refuses),
 3. regenerate `OPEN.md`,
 4. commit by explicit pathspec: this project's `items/` and `OPEN.md`, nothing else in
    dot-claude. A write left uncommitted by an earlier failure rides along with the next.
@@ -99,15 +100,32 @@ on it at push time. `pj-wrap push` (P5.3) handles exactly that: on a conflict on
 with `open-items regen`, never merges it.
 
 **Item IDs used to collide ACROSS machines** (measured by `pj-wrap-selftest` on
-2026-09-20, W-20260921-01): the ID was claimed by creating the file, atomic on one machine
-and blind to a clone that claimed the same `W-YYYYMMDD-NN` the same day. Since P5.5
-(2026-09-21) the NN comes from `pj-id`, which reads `~/.config/pj/machine` (`name:` and
-`range: 01-49` or `50-99`, written once by `install.sh`; an absent file means 01-49) and
-refuses loudly when the range is exhausted. Measured before choosing 49: the most IDs
-claimed in one day on this machine were 9 W and 11 D. The same allocator serves `decided
-add`. `pj-wrap push` keeps its add/add collision STOP as the second line of defence; a
-box that never wrote its machine file still sits on 01-49, so two such boxes can still
-collide, and the stop is what catches that.
+2026-09-20, W-20260921-A01): the ID was claimed by creating the file, atomic on one machine
+and blind to a clone that claimed the same `W-YYYYMMDD-NN` the same day.
+
+**Since P8a (2026-09-21) the ID names the machine that minted it: `W-20260921-A07`.**
+`pj-id` reads the letter from `~/.config/pj/machine` (`name:` and `letter:`, written by
+`install.sh`, which asks which machine this is) and hands out `01`-`99` under it. Gavin's
+four: **A** the M4 Mac mini, **B** the Intel Mac laptop, **C** the PC's WSL2 Ubuntu,
+**D** a Proxmox Linux VM. Two machines cannot produce the same item PATH at all, so the
+collision is structurally gone rather than merely unlikely. The same allocator serves
+`decided add`, and `pj-wrap push` keeps its add/add STOP as a second line of defence.
+
+**There is NO DEFAULT LETTER, and that is the point.** `pj-id` REFUSES on a box whose
+machine file is missing or letterless, so `open-items add` is dead there until
+`./install.sh` runs. P5.5's interim scheme (`range: 01-49` / `50-99`) did default, and a
+default was safe then because the worst case was a duplicate NUMBER. A default letter
+would put another machine's name on this machine's work, which is a wrong record rather
+than a clash, and a wrong record is the thing this whole store exists to prevent. The
+`range:` key is retired; `pj-health`'s `machine-file` row FAILs on a file that still
+carries it, naming the fix.
+
+**Every pre-P8a ID still resolves.** The 2026-09-21 migration renamed 76 files and their
+`## ` header lines, but the ~680 citations inside reports, handoffs and committed docs were
+deliberately left as history. So `open-items close|park|set|reopen|decline` accepts a bare
+`W-YYYYMMDD-NN`, resolves it to the letter form, and SAYS which ID it resolved to. Two
+items answering to one legacy ID (the same number under two letters) is REFUSED with both
+named, never guessed. `decided` does the same for `D-` IDs.
 
 ## The design point, borrowed from census and decided
 
