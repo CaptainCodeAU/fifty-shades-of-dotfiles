@@ -773,11 +773,20 @@ fi
 TR=""; TR_LIST=""
 # WHERE TO LOOK (F5a). A session's transcript lives under ITS config dir, and a profile
 # session's config dir is not ~/.claude. The launch log is the index that maps them: it
-# lives under ~/.local/state (MACHINE scope, shared by every profile) and carries
-# config_dir= for this project key. So the search covers the profile's own projects dir
-# PLUS every distinct config dir the log has seen for this project, newest first.
-# `config_dir=default` means the variable was unset, which is ~/.claude.
-# Older log lines carry no config_dir= at all and simply contribute nothing.
+# lives under ~/.local/state (MACHINE scope, shared by every profile) and carries both
+# profile= and config_dir= for this project key.
+#
+# SCOPED TO THIS PROFILE, and that scoping is load-bearing. The first version matched on
+# the project key ALONE and added every config dir the log had ever seen for it. Measured
+# 2026-09-21 with two real profile sessions in one repo: `pj-health --profile scratch`
+# then reported `PASS evidence-card transcript 89f89c44` -- which was the B-TEST session's
+# transcript. A profile graded itself on another profile's evidence and called it a pass.
+# That is the worst possible shape for a check: confidently green about the wrong thing.
+# Matching profile= as well makes the index answer the question actually being asked.
+#
+# `config_dir=default` means the variable was unset, which is ~/.claude. Older log lines
+# carry neither field and contribute nothing, which is correct: they are all default-profile
+# sessions and $PJ_TRANSCRIPTS_DIR already covers them.
 TR_DIRS="$PJ_TRANSCRIPTS_DIR"
 if [ "$IN_REPO" -eq 1 ] && [ -r "$PJ_STATE_DIR/launches.log" ]; then
   while IFS= read -r cd_seen; do
@@ -785,7 +794,9 @@ if [ "$IN_REPO" -eq 1 ] && [ -r "$PJ_STATE_DIR/launches.log" ]; then
     [ "$cd_seen" = default ] && cd_seen="$PJ_HOME"
     case " $TR_DIRS " in *" $cd_seen/projects "*) continue ;; esac
     TR_DIRS="$TR_DIRS $cd_seen/projects"
-  done <<<"$(awk -v k="project=$KEY" '$0 ~ k { for (i = 1; i <= NF; i++) if ($i ~ /^config_dir=/) print substr($i, 12) }' "$PJ_STATE_DIR/launches.log" 2>/dev/null | awk '!seen[$0]++')"
+  done <<<"$(awk -v k="project=$KEY" -v p="profile=$PROFILE" '
+      index($0, k) && index($0, p) { for (i = 1; i <= NF; i++) if ($i ~ /^config_dir=/) print substr($i, 12) }
+    ' "$PJ_STATE_DIR/launches.log" 2>/dev/null | awk '!seen[$0]++')"
 fi
 TR_SEARCHED=""
 for _td in $TR_DIRS; do [ -d "$_td/$KEY" ] && TR_SEARCHED="${TR_SEARCHED:+$TR_SEARCHED }$_td"; done

@@ -115,11 +115,51 @@ cmd_start(){
   if [ -n "$cfg" ] && [ ! -d "$cfg" ]; then
     say "FIRST RUN ON THIS PROFILE: $(tilde "$cfg") does not exist yet, so Claude Code will ask you to /login and to trust this folder. Both are one-time and only you can do them."
   fi
+  # THE TRANSCRIPT HAS TO LAND UNDER THE MAIN REPO'S KEY, and Claude Code will not do that
+  # on its own. Measured 2026-09-21 with a real c2 session: every pj tool keys the project
+  # by `git rev-parse --git-common-dir` (the MAIN repo), but Claude Code derives
+  # projects/<name> from the WORKING DIRECTORY, so the session's transcript landed under
+  # ...-f5a-probe--worktree-scratch-t1 while the launch log recorded ...-f5a-probe. The two
+  # disagreed, and pj-health could not find the session's own evidence.
+  #
+  # CLAUDE_CODE_PROJECT_DIR_NAME exists for exactly this: "Set together with
+  # CLAUDE_CONFIG_DIR to choose the projects/ directory name Claude Code stores that
+  # session's transcripts and auto memory under, in place of one derived from the working
+  # directory path" (Claude Code docs; needs v2.1.234 or later). It is IGNORED unless
+  # CLAUDE_CONFIG_DIR is also set, and read only from the launch environment -- never from
+  # a settings env block -- so here is the only place it can be set.
+  #
+  # The encoding is the harness's own: every / . _ in the absolute path becomes a dash,
+  # which is the same one open-items, pj-start-card and pj-launch-check use for the key.
+  #
+  # IT IS CAPPED AT 64 CHARACTERS, AND A LONGER NAME IS IGNORED IN SILENCE. Measured
+  # 2026-09-21 by bisection against Claude Code 2.1.278, one live probe per length:
+  # 62 and 64 honoured, 65, 66, 70, 78, 88, 99 and 149 all ignored with no warning, no
+  # error and a normal exit -- the transcript simply lands under the cwd-derived name
+  # instead. The cap is in no documentation this session could find. A leading dash is
+  # fine (tested separately), so length is the whole of it.
+  #
+  # So this is MEASURED, not assumed, and when it will not fit c2 SAYS SO. Silence here
+  # would mean pj-health quietly failing to find a c2 session's evidence forever, which is
+  # the same silent-divergence shape the launch log exists to prevent. Most real keys fit:
+  # ~/CODE/CaptainCodeAU/Network_Plan is 48 characters, this dotfiles repo 59. A repo under
+  # a deep scratch path does not, and that is exactly when you want to be told.
+  local key keylen
+  key="$(printf '%s' "$repo" | sed 's#[/._]#-#g')"
+  keylen=${#key}
+  if [ "$keylen" -gt 64 ]; then
+    say "NOTE: this project's key is $keylen characters and CLAUDE_CODE_PROJECT_DIR_NAME is capped at 64, so the transcript will land under the WORKTREE's own key, not $(basename "$repo")'s. pj-health --profile $PROFILE will not find this session's evidence. Everything else (the drawer, the rulings, the commit trailer) is unaffected."
+    key=""
+  fi
   if [ -n "${C2_LAUNCH:-}" ]; then
-    printf '%s\n' "$C2_LAUNCH cwd=$wt profile=$PROFILE"
+    printf '%s\n' "$C2_LAUNCH cwd=$wt profile=$PROFILE project_dir_name=${key:-<too-long:$keylen>}"
     return 0
   fi
-  (builtin cd "$wt" && exec pj --profile "$PROFILE")
+  if [ -n "$key" ]; then
+    (builtin cd "$wt" && CLAUDE_CODE_PROJECT_DIR_NAME="$key" exec pj --profile "$PROFILE")
+  else
+    (builtin cd "$wt" && exec pj --profile "$PROFILE")
+  fi
 }
 
 # ----------------------------------------------------------------- done ----
@@ -232,6 +272,45 @@ selftest(){
   [ -d "$repo/.worktree/scratch/t1" ] && ok "1 worktree at <repo>/.worktree/scratch/<topic> (D-20260914-A01)" || bad "1 path" "$(ls -R "$repo/.worktree" 2>&1)"
   git -C "$repo" show-ref --verify --quiet refs/heads/scratch/t1 && ok "1 branch scratch/t1 exists" || bad "1 branch" "missing"
   case "$OUT" in *WOULD-LAUNCH*) ok "1 the launch is reached (seam printed instead)";; *) bad "1 launch" "$OUT";; esac
+  # 1b. the transcript key handed to Claude Code is the MAIN repo's, not the worktree's.
+  #     Without this the session's transcript lands under a key no pj tool ever looks in.
+  # $OUT is saved and restored around this block: arm 1d runs its own start/done pair,
+  # which overwrites OUT, and arm 1's remaining checks read it afterwards. Caught by the
+  # suite itself -- "1 route" failed on arm 1d's output rather than arm 1's.
+  local OUT_ARM1="$OUT"
+  local mainkey wtkey
+  mainkey="$(printf '%s' "$(cd "$repo" && pwd -P)" | sed 's#[/._]#-#g')"
+  wtkey="$(printf '%s' "$(cd "$repo/.worktree/scratch/t1" && pwd -P)" | sed 's#[/._]#-#g')"
+  if [ "${#mainkey}" -le 64 ]; then
+    case "$OUT" in *"project_dir_name=$mainkey"*) ok "1b the transcript key is the MAIN repo's, not the worktree's";; *) bad "1b project_dir_name" "$OUT";; esac
+  else
+    # The 64-character cap. A fixture under $TMPDIR often exceeds it, and when it does the
+    # right behaviour is to SAY so rather than pass a name that will be ignored in silence.
+    case "$OUT" in
+      *"project_dir_name=<too-long:${#mainkey}>"*) ok "1b a key over 64 chars is not passed (it would be ignored in silence)";;
+      *) bad "1b over-long key" "$OUT";;
+    esac
+    case "$OUT" in *"capped at 64"*) ok "1b and the over-long key is announced, not swallowed";; *) bad "1b no notice" "$OUT";; esac
+  fi
+  # 1c. CONTROL: the two keys really are different, so arm 1b could have failed
+  [ "$mainkey" != "$wtkey" ] && ok "1c control: the worktree's own key differs from the main key" || bad "1c control" "the keys are identical, so arm 1b proves nothing"
+  # 1d. BOTH SIDES of the cap, on a fixture built to sit under it. Without this, arm 1b
+  #     only ever exercises whichever side this machine's TMPDIR happens to land on.
+  local shortrepo="$root/s"
+  if [ "${#shortrepo}" -le 60 ]; then
+    git init -q "$shortrepo" >/dev/null 2>&1
+    git -C "$shortrepo" -c user.email=t@e -c user.name=t commit -q --allow-empty -m init >/dev/null 2>&1
+    RUNDIR="$shortrepo" run start s1
+    local shortkey; shortkey="$(printf '%s' "$(cd "$shortrepo" && pwd -P)" | sed 's#[/._]#-#g')"
+    if [ "${#shortkey}" -le 64 ]; then
+      case "$OUT" in *"project_dir_name=$shortkey"*) ok "1d a key under the cap IS passed (the other side of arm 1b)";; *) bad "1d short key" "$OUT";; esac
+    else
+      printf '  info 1d the short fixture key is still %s chars here; both-sides arm skipped\n' "${#shortkey}"
+    fi
+    RUNDIR="$shortrepo" run done s1 --discard
+  fi
+  unset RUNDIR
+  OUT="$OUT_ARM1"
   [ -d "$root/Scratch/repo" ] && ok "1 learnings folder created outside the worktree" || bad "1 scratch home" "missing"
   case "$OUT" in *"git worktree add"*) ok "1 says which route it took when hwt is absent";; *) bad "1 route" "$OUT";; esac
 
