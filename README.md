@@ -750,7 +750,7 @@ This repository includes a comprehensive [Claude Code](https://code.claude.com/)
 
 ### Installing Claude Code
 
-Claude Code is a CLI tool from Anthropic. Install it following the [official documentation](https://docs.anthropic.com/en/docs/claude-code/overview). Once installed, the shell aliases (`c`, `cb`, `cr`, `ci`, `ct`, `cd_`, `cskip`) defined in `.zshrc` will work.
+Claude Code is a CLI tool from Anthropic. Install it following the [official documentation](https://docs.anthropic.com/en/docs/claude-code/overview). Once installed, the shell launchers defined in `.zshrc` will work (`cb`, `cr`, `ci`, `ct`, `cd_`, `cskip`, and `c-legacy`; `c` itself now prints a signpost to `pj` / `c2` / `lifeos` and starts nothing).
 
 ### Optional Tools for Hooks
 
@@ -1372,7 +1372,7 @@ The function auto-generates a comprehensive `~/.config/yt-dlp/config` file on fi
 - **Navigation**: `..`, `...`, `....`, `.....` for quick directory navigation
 - **Node.js**: `serve` (pnpm dlx http-server), `tsc` (pnpm dlx typescript) — also usable via `bunx`
 - **Docker**: `lzd` (lazydocker), `lzg`/`lg` (lazygit)
-- **Claude Code**: `c` (standard), `cb` (bare/full control), `cr` (resume), `ci` (non-interactive), `ct` (tmux agent teams), `cpr` (from PR), `cd_` (debug), `cskip` (skip end hooks). All aliases spin up an isolated ephemeral SSH agent scoped to the Claude Code process, so marketplace plugin refreshes and git operations work with SSH-only auth without leaking the key to other terminals.
+- **Claude Code**: `c` is a **signpost since 2026-09-22**, not a launcher -- it prints the routes (`pj`, `c2 start <topic>`, `lifeos`) and exits 1, and `c-legacy` is the former standard launch, unchanged. The rest are `cb` (bare/full control), `cr` (resume), `ci` (non-interactive), `ct` (tmux agent teams), `cpr` (from PR), `cd_` (debug), `cskip` (skip end hooks). All aliases spin up an isolated ephemeral SSH agent scoped to the Claude Code process, so marketplace plugin refreshes and git operations work with SSH-only auth without leaking the key to other terminals.
 - **Zoxide**: `cd` command is replaced with `zoxide` for intelligent directory jumping
 
 ### Standalone Script Commands

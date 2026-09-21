@@ -204,6 +204,92 @@ false alarm, and false alarms are how a row stops being read.
 
 ---
 
+## Cross-config-dir messaging: one shared registry
+
+**The problem, from F5a and F5b.** `ListAgents` in a `~/.claude` session could not see a
+live `~/.claude-scratch` session, and the scratch session saw **zero** peers -- not even
+the Remote Control rows. So `SendMessage` could not reach a `c2` session from a normal
+`pj` session, or the reverse, and herdr was the only cross-profile channel on the machine.
+That was `W-20260921-A37`.
+
+**What the registry actually is**, measured 2026-09-22 with three live sessions:
+
+| Thing | Where |
+|---|---|
+| the address book | `<config_dir>/sessions/`, one `<pid>.json` + one `<pid>.<hex>.key` per LIVE session |
+| the phone line | `messagingSocketPath`, `/tmp/cc-socks/<pid>.sock` -- **global**, not under any config dir |
+| the key | **per session**, not per config dir: two live `~/.claude` sessions carry different tokens |
+| the config dir | named in **no field at all** |
+
+**So only the address book was split.** The transport already spanned profiles. That is
+why the fix is one symlink rather than a message-relay tool.
+
+### What `pj` does now
+
+On a REAL launch (never on `--dry-run`), a profile whose `config_dir` differs from
+`~/.claude` gets:
+
+```
+<config_dir>/sessions  ->  ~/.claude/sessions
+```
+
+Both sides then appear in each other's `ListAgents` and can `SendMessage` **by name**, in
+both directions, with no per-session work anywhere. `pj-health`'s `profile-registry` row
+says whether the link is actually there.
+
+### Why a directory link and not per-session links
+
+The brief for this work asked for per-session symlinks. They cannot work, and finding that
+out was the measurement that decided the design:
+
+| Shape | Result |
+|---|---|
+| symlinked **files** into the other registry | **NOT LISTED.** The reader does not follow a symlinked file |
+| **copies** of the same two files | **LISTED**, and messaging worked both ways |
+| the whole **directory** symlinked | **LISTED**, both ways, by name, nothing per-session |
+
+The copy and the symlink were the identical registry pair, in the same folder, one minute
+apart, with nothing else changed. Copies work but have two faults a shared directory does
+not: the live session rewrites `status` and `updatedAt` in **its own** file and the copy
+keeps the old values, and the copy **outlives the peer** -- after the session exited, its
+copy sat there naming a dead pid until Claude Code's own sweep reaped it. With a shared
+directory the live session writes and removes its own file, so there is nothing to go
+stale and nothing to sweep.
+
+### What the reader will and will not accept
+
+Measured, because each of these fails silently:
+
+- the file name **must** be `<pid>.json`. Identical content under another name is never
+  listed. Control: the same content under a pid name was.
+- the content is **validated against the live process**. An entry whose `procStart` does
+  not match the real process start time is skipped without a word; correcting only that
+  field made it appear.
+- a **dangling symlink** in the folder is ignored, does not crash anything, and is removed
+  by Claude Code within about a minute.
+- an entry naming a **dead pid** is not listed, and is then reaped.
+
+### A reply needs no bridge at all
+
+Worth knowing before reaching for any of this. A session that RECEIVES a cross-session
+message can always answer it, across config dirs, with nothing shared: the `from=` address
+is the raw socket path and the socket is global. Measured -- the by-NAME send was refused
+(`no agent named ... is reachable`) and the same reply to `uds:/tmp/cc-socks/<pid>.sock`
+went straight through. **Only INITIATING by name needs the registry.**
+
+### The cost, stated plainly
+
+One shared address book is two-way by construction. A throwaway `c2` session can see, and
+message by name, **every** `~/.claude` session that is open, including LifeOS `c-legacy`
+ones. And `ListAgents` shows name, kind, status and age and **no cwd and no config dir**,
+so nothing in the listing marks a peer as a scratch one.
+
+That is why `pj` also passes `--name <profile>-<cwd>-<suffix>` for a non-default profile:
+a scratch session is then called `scratch-f5c-probe-a1b2` rather than
+`fifty-shades-of-dotfiles-23`, which is what it was called in the proof run and is
+indistinguishable from a real session. A session launched under a forked config dir by
+some other route is still indistinguishable; that is `W-20260922-A01`.
+
 ## `c2`, the throwaway session
 
 ```
@@ -241,6 +327,39 @@ remove` and `git branch -D`, so the deletion-safety rule's banned list is never
 reached.
 
 ---
+
+### The folder-trust dialog, and the one carve-out
+
+A fresh config dir refuses a workspace until a human accepts the trust dialog, and the
+standing rule is that a session stops and signals rather than answering a security prompt.
+**`D-20260922-A01` carves out exactly one case**, ruled by Gavin 2026-09-22: a session may
+accept the folder-trust dialog itself, via Herdr, for **c2 worktrees and for any folder
+opened under the scratch config dir**. Every other trust or security dialog still stops
+and waits for him.
+
+The carve-out is narrow for a reason. A c2 worktree is a checkout of a repo he already
+trusts under the default config dir, and `~/.claude-scratch` is the disposable profile, so
+accepting there grants nothing already withheld elsewhere. It does **not** extend to the
+default config dir, to a folder he has never opened, or to any other prompt.
+
+How it works: `c2 start` ends in `exec pj`, which replaces the process, so the watcher is
+forked **before** the exec and talks to the pane `c2` is itself running in. The decision
+is a pure function, `trust_keys_for`, so it is tested without a pane, a server or a live
+dialog. It sends nothing unless it sees the cursor marker -- the dialog's WORDS alone, as
+they appear in a transcript or in this document, are not enough -- and it tries **once**:
+a dialog still up afterwards is said out loud rather than hammered with Enter.
+
+### The peer name, and finding the session id
+
+`c2 start` prints the peer NAME it is about to give the session, and the exact
+`SendMessage` line to use, **before** the launch. It can do that because it chooses the
+name suffix and hands it to `pj`; it could not print the session id there, because the id
+does not exist until Claude Code has started and the exec leaves nobody to read it back.
+
+`c2 list` carries the live half instead -- for each scratch worktree it reads the registry
+and prints the running session's name, session id and pid, or `no session running`. That
+is read fresh each time rather than remembered, so a session that has since exited simply
+stops being shown.
 
 ## The worktree transcript, and a 64-character cap
 
