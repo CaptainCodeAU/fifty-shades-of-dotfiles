@@ -341,7 +341,48 @@ commit_drawer(){                # commit_drawer <work> <message> -> rc 0 committ
     # matches memory/ case-insensitively; dot-claude's .gitignore re-includes it).
     st="$(git -C "$top" status --porcelain --ignored -- "$rel/items" "$rel/OPEN.md" 2>/dev/null)"
     [ -z "$st" ] && return 0
-    case "$st" in *"!!"*) out="paths are IGNORED by a gitignore rule (git check-ignore -v to see which): $(printf '%s' "$st" | grep '^!!' | head -3 | tr '\n' ' ')"; rc=1 ;; esac
+    # W-20260922-A02. --ignored lists EVERY ignored path under the drawer, and a
+    # single Finder .DS_Store in items/ made the whole block non-empty, so an
+    # UNCHANGED regen shouted COMMIT FAILED on a commit that had nothing to do.
+    # A loud failure that is not one is worse than a quiet one, because it trains
+    # the reader to skim past the real thing.
+    #
+    # The fix is the CLASS, not the instance: an ignored path only matters when it
+    # is a path THIS TOOL WRITES. Those are OPEN.md, the stamp, and the item and
+    # note .md files. Anything else under the drawer is somebody else's stray and
+    # is none of our business. Deleting the .DS_Store would have fixed one folder
+    # on one machine and left the shape free to come back.
+    #
+    # Split by hand rather than with grep: this repo has measured its grep shim
+    # returning an EMPTY count on a file where `command grep` and `rg` returned 13,
+    # and a filter that silently matches nothing here would restore the old bug
+    # while looking like the fix.
+    ours=""; rest=""
+    while IFS= read -r _l; do
+      [ -n "$_l" ] || continue
+      case "$_l" in
+        '!!'*)
+          # A DIRECTORY line (trailing /) is the alarm's original case: a rule
+          # swallowed the drawer or a parent whole, so every file we write is
+          # ignored and git collapses them all into one line. Measured
+          # 2026-09-22: `--ignored=matching` does NOT expand that case either,
+          # because git only lists files inside a directory it is not ignoring.
+          # An early version of this filter looked only at per-file suffixes and
+          # would have silenced exactly the alarm it was meant to keep.
+          # A stray is always a FILE, never a directory line, so the two separate.
+          case "$_l" in
+            */ | *"/OPEN.md" | *"/.generated.sha256" | *.md) ours="$ours$_l " ;;
+          esac
+          ;;
+        *) rest="$rest$_l " ;;
+      esac
+    done <<EOF
+$st
+EOF
+    # Nothing of ours is ignored and nothing of ours is pending: the commit had
+    # nothing to do, which is a success.
+    [ -z "$ours" ] && [ -z "$rest" ] && return 0
+    case "$ours" in ?*) out="paths THIS TOOL WRITES are IGNORED by a gitignore rule (git check-ignore -v to see which): $ours"; rc=1 ;; esac
     case "$out" in *index.lock*|*"Unable to create"*|*"could not lock"*)
       try=$((try+1)); [ "$try" -lt 20 ] && { sleep 0.3; continue; } ;;
     esac

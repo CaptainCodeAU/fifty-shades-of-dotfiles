@@ -495,6 +495,54 @@ wanteq "regen rebuilds a stale OPEN.md (rc=0)" "0" "$RC"
 want   "  which now holds the items again" "W-$TODAY-A03" "$(cat "$ZW/OPEN.md")"
 wanteq "  control: the stale text is gone" "0" "$(grep -c '^stale$' "$ZW/OPEN.md")"
 
+# W-20260922-A02: an IGNORED stray in the drawer must not make an unchanged regen
+# shout COMMIT FAILED. Three arms, because the passing one alone cannot tell the
+# fix from a filter that matches nothing.
+printf '\0\0\0finder junk\n' > "$ZW/items/.DS_Store"
+printf 'ignored-stray\n' >> "$DC/.gitignore"
+printf '.DS_Store\n' >> "$DC/.gitignore"
+git -C "$DC" add .gitignore >/dev/null 2>&1
+git -C "$DC" -c user.name=t -c user.email=t@t commit -q -m "ignore .DS_Store" >/dev/null 2>&1
+runw "$ZETA" regen
+wanteq  "A02: regen on an UNCHANGED drawer with an ignored .DS_Store exits 0" "0" "$RC"
+wantnot "A02: and says nothing about a failed commit" "COMMIT FAILED" "$OUT"
+# CONTROL 1: the stray is really there and really ignored, so the arm above was a
+# real trial and not a folder with nothing in it.
+wanteq  "A02 control: the .DS_Store still exists (the fix is the class, not the file)" "1" "$([ -f "$ZW/items/.DS_Store" ] && echo 1)"
+wanteq  "A02 control: git really ignores it" "1" "$(git -C "$DC" status --porcelain --ignored -- "$ZW/items" 2>/dev/null | grep -c '^!! .*\.DS_Store$')"
+# CONTROL 2: a path THIS TOOL WRITES being ignored must STILL be loud. Without
+# this arm the fix is indistinguishable from switching the alarm off altogether,
+# and those two look identical from a clean run. An UNTRACKED item file is the
+# honest fixture: git ignores nothing that is already tracked, which is also why
+# the original bug only ever surfaced through a stray.
+# The alarm only CAN fire when nothing of ours is trackable, because git ignores
+# nothing that is already tracked. So the fixture is a drawer that was never
+# committed, sitting under a rule that swallows it whole -- which is the exact
+# shape the alarm was written for (the global MEMORY/ rule).
+A02R="$P/a02"
+mkdir -p "$A02R"
+git -C "$A02R" init -q 2>/dev/null
+git -C "$A02R" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init 2>/dev/null
+# Derive the key from the RESOLVED toplevel, the way the tool does. Building it
+# from the path we typed gets a different key whenever /tmp resolves to
+# /private/tmp, and the arm then ignores a drawer nothing writes to -- which
+# passes silently and proves nothing.
+A02K="$(key "$(git -C "$A02R" rev-parse --show-toplevel)")"; A02W="$DC/projects/$A02K/memory/WORK"
+mkdir -p "$A02W/items/open"
+printf 'projects/%s/memory/\n' "$A02K" >> "$DC/.gitignore"
+git -C "$DC" add .gitignore >/dev/null 2>&1
+git -C "$DC" -c user.name=t -c user.email=t@t commit -q -m "ignore the a02 drawer whole" >/dev/null 2>&1
+runw "$A02R" add "an item in a wholly ignored drawer" --done-when x
+want    "A02 control: a drawer git ignores WHOLE is STILL reported" "IGNORED" "$OUT"
+want    "A02 control: and it still says COMMIT FAILED for a real failure" "COMMIT FAILED" "$OUT"
+want    "A02 control: and it NAMES the ignored path (a collapsed directory, not a file)" "memory/" "$OUT"
+# restore the fixture gitignore so nothing after this block inherits the rules
+printf 'projects/*\n!projects/*/\nprojects/*/*\n!projects/*/memory/\n!projects/*/memory\n.DS_Store\n' > "$DC/.gitignore"
+git -C "$DC" add .gitignore >/dev/null 2>&1
+git -C "$DC" -c user.name=t -c user.email=t@t commit -q -m "restore ignore rules" >/dev/null 2>&1
+command rm -f "$ZW/items/.DS_Store" "$ZW/items/open/W-20260101-Z99.md" 2>/dev/null
+runw "$ZETA" regen
+
 printf 'L  migrate: legacy OPEN.md -> items/\n'
 mk_dotclaude
 cat > "$ZW/OPEN.md" <<'EOF'
