@@ -523,6 +523,64 @@ else
   fi
 fi
 
+# ---- profile-registry (F5c) ----------------------------------------------------------
+# ListAgents is built from <config_dir>/sessions ALONE, so two config dirs cannot see each
+# other unless they share that folder. `pj` gives every non-default profile a symlink
+# sessions -> ~/.claude/sessions on a real launch; this row says whether it is actually
+# there, because a link that silently failed to be created looks exactly like a profile
+# that has simply never been launched.
+#
+# THE FAIL ARM IS THE DEFAULT'S OWN REGISTRY. ~/.claude/sessions is the link TARGET. If it
+# is itself a symlink, every default-profile session is registering somewhere nobody reads
+# and the whole mechanism is inverted -- which is why that is a FAIL and the rest are WARN.
+# Nothing in the WARN cases is broken; the profile simply does not have cross-config-dir
+# messaging, and pj repairs most of them at the next launch.
+# $PJ_HOME, not a literal $HOME/.claude: the default profile's CONFIG dir and RECORDS are
+# the same path by construction, and going through the seam is what lets the selftest
+# exercise this row against a fixture instead of rearranging the live registry.
+REG_TARGET="$PJ_HOME/sessions"
+if [ -L "$REG_TARGET" ]; then
+  row FAIL profile-registry "$(tilde "$REG_TARGET") is itself a SYMLINK (-> $(readlink "$REG_TARGET")); it is the target every profile links TO, so default-profile sessions are registering where nothing reads them; fix: restore it as a real directory"
+elif [ ! -d "$PROFILE_DIR" ]; then
+  : # the missing-profiles-dir case is already stated once above
+else
+  reg_n=0; reg_ok=0; reg_warn=""
+  for pf in "$PROFILE_DIR"/*; do
+    [ -f "$pf" ] || continue
+    pn="$(basename "$pf")"
+    cda="$(expand_tilde "$(profile_key "$pn" config_dir)")"
+    # A profile with no config_dir, or one pointing at ~/.claude, IS the default case and
+    # needs no link at all. Counting it as a miss would put a permanent WARN on every box.
+    # Compared against $PJ_HOME rather than a literal ~/.claude, for the same reason
+    # REG_TARGET is: a profile whose config dir IS the default one needs no link, and
+    # hardcoding the path here made the row count the fixture's own default profile as a
+    # non-default one. Caught by the selftest, which is what the seam is for.
+    [ -n "$cda" ] || continue
+    [ "$cda" = "$PJ_HOME" ] && continue
+    reg_n=$((reg_n+1))
+    if [ ! -d "$cda" ]; then
+      reg_warn="${reg_warn:+$reg_warn; }$pn: config dir $(tilde "$cda") does not exist yet (pj creates the link at its first launch)"
+    elif [ -L "$cda/sessions" ] && [ "$(readlink "$cda/sessions")" = "$REG_TARGET" ]; then
+      reg_ok=$((reg_ok+1))
+    elif [ -L "$cda/sessions" ] && [ ! -e "$cda/sessions" ]; then
+      reg_warn="${reg_warn:+$reg_warn; }$pn: $(tilde "$cda")/sessions is a DANGLING link (pj repairs it at the next launch)"
+    elif [ -L "$cda/sessions" ]; then
+      reg_warn="${reg_warn:+$reg_warn; }$pn: $(tilde "$cda")/sessions points at $(readlink "$cda/sessions"), not $(tilde "$REG_TARGET"); pj leaves a deliberate link alone"
+    elif [ -d "$cda/sessions" ]; then
+      reg_warn="${reg_warn:+$reg_warn; }$pn: $(tilde "$cda")/sessions is a real directory, so this profile's sessions are invisible to ListAgents from ~/.claude; fix: launch pj --profile $pn with no session running under it"
+    else
+      reg_warn="${reg_warn:+$reg_warn; }$pn: no $(tilde "$cda")/sessions yet (pj creates it at the next launch)"
+    fi
+  done
+  if [ "$reg_n" -eq 0 ]; then
+    row NOTM profile-registry "no profile has a config dir of its own, so there is nothing to share (that is the default state, not a fault)"
+  elif [ -n "$reg_warn" ]; then
+    row WARN profile-registry "$reg_warn"
+  else
+    row PASS profile-registry "$reg_ok of $reg_n non-default profile(s) share $(tilde "$REG_TARGET"), so ListAgents and SendMessage reach across config dirs"
+  fi
+fi
+
 # M14d records pinned (F5a). open-items and decided must resolve the drawer and the rulings
 # under ~/.claude WHATEVER the session's config dir is, or a profile session would file
 # items into a register nobody else reads. Measured by RUNNING them with a foreign

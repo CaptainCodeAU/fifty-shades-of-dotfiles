@@ -505,6 +505,65 @@ run_p default
 arm "profile-siblings drops to WARN once the nested profile is gone (control)" is profile-siblings WARN
 arm "profile-siblings no longer says INSIDE (control)" not_has profile-siblings "is INSIDE"
 arm "a config dir outside ~ is described as outside ~, not as deep" has profile-siblings "not under ~ at all"
+# P4b profile-registry (F5c). ListAgents reads <config_dir>/sessions and nothing else, so
+#     a non-default profile only sees across config dirs when that folder is a link to the
+#     default's. Every state the row distinguishes gets an arm, because they all look the
+#     same from outside: nothing is listed either way.
+#     $H is the fixture PJ_HOME, so the target is a fixture and the live registry is never
+#     touched -- asserted by its own arm at the end.
+REGT="$H/sessions"; mkdir -p "$REGT"
+# The NOT MEASURED arm FIRST, while no profile has a config dir of its own. Without it the
+# PASS below could equally mean "the loop never ran".
+run_p default
+arm "profile-registry is NOT MEASURED when no profile has its own config dir" is profile-registry "$NM"
+printf 'config_dir: %s/sharedcfg\n' "$T" > "$PFX/shared"
+mkdir -p "$T/sharedcfg"
+# a) the shared link: PASS
+ln -sfn "$REGT" "$T/sharedcfg/sessions"
+run_p default
+arm "profile-registry PASSes when the profile's sessions link at the default registry" is profile-registry PASS
+arm "  and says messaging reaches across config dirs" has profile-registry "reach across config dirs"
+# b) a REAL directory: WARN, and it must say the sessions are invisible
+# NOT `rm`: it is the Trash-routed shim here, it can REFUSE and leave the file, and an
+# arm that then measures the stale fixture reads as a finding. F5b hit exactly this twice.
+mkdir -p "$T/discard"
+mv -f "$T/sharedcfg/sessions" "$T/discard/sessions-a"
+mkdir -p "$T/sharedcfg/sessions"
+run_p default
+arm "a real sessions DIRECTORY is a WARN" is profile-registry WARN
+arm "  and the WARN says the profile's sessions are invisible" has profile-registry "invisible to ListAgents"
+# c) a DANGLING link: WARN, named as dangling rather than as a wrong target
+rmdir "$T/sharedcfg/sessions"; ln -sfn "$T/no-such-registry" "$T/sharedcfg/sessions"
+run_p default
+arm "a DANGLING sessions link is a WARN" is profile-registry WARN
+arm "  and is called dangling, not a wrong target" has profile-registry "DANGLING"
+# d) a link somewhere real but different: WARN, and it must NOT be called dangling
+mkdir -p "$T/elsewhere"; ln -sfn "$T/elsewhere" "$T/sharedcfg/sessions"
+run_p default
+arm "a link to a different real directory is a WARN" is profile-registry WARN
+arm "  and is NOT reported as dangling (control: case c was)" not_has profile-registry "DANGLING"
+# e) the config dir does not exist at all
+mv -f "$T/sharedcfg/sessions" "$T/discard/sessions-d"; mv -f "$T/sharedcfg" "$T/sharedcfg-gone"
+run_p default
+arm "a config dir that does not exist yet is a WARN" is profile-registry WARN
+arm "  and says pj creates the link at its first launch" has profile-registry "first launch"
+mv -f "$T/sharedcfg-gone" "$T/sharedcfg"; ln -sfn "$REGT" "$T/sharedcfg/sessions"
+run_p default
+arm "profile-registry returns to PASS once the link is back (control)" is profile-registry PASS
+# f) THE FAIL ARM: the default's own registry is itself a symlink. That inverts the whole
+#    mechanism, so it is the one case that is a FAIL rather than a WARN.
+mv -f "$REGT" "$T/real-sessions"; ln -sfn "$T/real-sessions" "$REGT"
+run_p default
+arm "profile-registry FAILs when the DEFAULT registry is itself a symlink" is profile-registry FAIL
+arm "  and says default sessions register where nothing reads them" has profile-registry "nothing reads them"
+mv -f "$REGT" "$T/discard/regt-link"; mv -f "$T/real-sessions" "$REGT"
+run_p default
+arm "profile-registry back to PASS once the default registry is a real dir (control)" is profile-registry PASS
+# g) CONTROL: every arm above ran against the FIXTURE registry, not the live one. Without
+#    this the whole block could have been reading ~/.claude/sessions and passing by luck.
+arm "profile-registry arms ran against the fixture registry, not the live one" test "$REGT" != "$HOME/.claude/sessions"
+unprofile shared
+run_p default
 # P5 records-pinned: the differential. The stub open-items ignores CLAUDE_CONFIG_DIR, so
 #    the row passes; a stub that FOLLOWS it must make the row FAIL, or the check is
 #    measuring nothing. Both arms, same fixture, one variable changed.
@@ -536,7 +595,7 @@ arm "--quiet keeps the summary line" grep -q '^pj-health: .* FAIL, ' <<<"$QOUT"
 write_settings
 FOUT="$( (builtin cd "$PROJ" && PATH="$BIN:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" PJ_HOME="$H" PJ_BIN_DIR="$BIN" PJ_DOTFILES="$DF" PJ_LAUNCHER="$BIN/pj" PJ_TYPE_OUT="$T/type-out" DRYRUN_FILE="$T/dryrun" PJ_PS_OUT="$T/ps" PJ_ZSHRC_MTIME="$ZMT" PJ_TRANSCRIPTS_DIR="$H/projects" PJ_STATE_DIR="$STATE" PJ_MACHINE_FILE="$T/machine" PJ_PROMPT_SOURCES="$OR:$RULES" PJ_PROMPT_OUT="$T/cache/prompt.md" OI_WHERE_FILE="$T/oi-where" DECIDED_LIST_FILE="$T/decided-list" DECIDED_LIST_RC="$T/decided-list-rc" DECIDED_HOMES_FILE="$T/decided-homes" RENDER_OUT_FILE="$T/render-out" RENDER_RC_FILE="$T/render-rc" SYNC_OUT_FILE="$T/sync-out" pj-health 2>/dev/null) )"
 arm "normal output under 40 lines ($(wc -l <<<"$FOUT" | tr -d ' '))" [ "$(wc -l <<<"$FOUT" | tr -d ' ')" -lt 40 ]
-arm "normal output has one row per check (30)" [ "$(grep -cE '^(PASS|WARN|FAIL|NOT MEASURED) ' <<<"$FOUT")" -eq 30 ]
+arm "normal output has one row per check (31)" [ "$(grep -cE '^(PASS|WARN|FAIL|NOT MEASURED) ' <<<"$FOUT")" -eq 31 ]
 arm "unknown arg REFUSED rc 2" bash -c 'PATH="$1:$PATH" pj-health --bogus >/dev/null 2>&1; [ $? -eq 2 ]' _ "$BIN"
 arm "--help exits 0" bash -c 'PATH="$1:$PATH" pj-health --help >/dev/null 2>&1' _ "$BIN"
 
