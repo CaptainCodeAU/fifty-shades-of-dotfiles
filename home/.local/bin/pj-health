@@ -311,17 +311,28 @@ else
   else row FAIL stow-links "${dangling:+dangling:$dangling }${notlink:+not a dotfiles link:$notlink}; fix: stow -R --no-folding -t ~ -d $(tilde "$PJ_DOTFILES") home"; fi
 fi
 
-# M11 machine file
+# M11 machine file. The two-range scheme (range: 01-49 / 50-99) was RETIRED on 2026-09-21
+# (P8a gate Q6): the ID carries a machine letter instead. A file still holding only a range
+# is a FAIL, not a pass -- pj-id refuses to allocate from it, so `open-items add` is dead on
+# that box, and a row that shrugged at it would hide the reason.
 if [ -r "$MACHINE_FILE" ]; then
+  ml="$(sed -n 's/^letter:[[:space:]]*//p' "$MACHINE_FILE" | head -1 | tr -d '[:space:]')"
   mr="$(sed -n 's/^range:[[:space:]]*//p' "$MACHINE_FILE" | head -1 | tr -d '[:space:]')"
   mn="$(sed -n 's/^name:[[:space:]]*//p' "$MACHINE_FILE" | head -1 | tr -d '[:space:]')"
-  case "$mr" in 01-49|50-99) [ -n "$mn" ] && row PASS machine-file "$(tilde "$MACHINE_FILE"): range $mr" || row FAIL machine-file "$(tilde "$MACHINE_FILE") has no name:; fix: add 'name: <host>'";;
-    *) row FAIL machine-file "$(tilde "$MACHINE_FILE") range '${mr:-unset}' invalid; fix: set 'range: 01-49' or 'range: 50-99'";;
+  case "$ml" in
+    [A-Z])
+      if [ -z "$mn" ]; then row FAIL machine-file "$(tilde "$MACHINE_FILE") has no name:; fix: add 'name: <host>'"
+      elif [ -n "$mr" ]; then row WARN machine-file "$(tilde "$MACHINE_FILE"): $mn, letter $ml -- and a retired 'range: $mr' line no tool reads; fix: delete the range line"
+      else row PASS machine-file "$(tilde "$MACHINE_FILE"): $mn, letter $ml (IDs are X-YYYYMMDD-$ml""NN)"; fi ;;
+    "")
+      if [ -n "$mr" ]; then row FAIL machine-file "$(tilde "$MACHINE_FILE") still carries the retired 'range: $mr' and no 'letter:'; pj-id REFUSES to allocate; fix: run ./install.sh in the dotfiles repo (it rewrites this file once)"
+      else row FAIL machine-file "$(tilde "$MACHINE_FILE") has no 'letter:'; pj-id REFUSES to allocate; fix: run ./install.sh, or add 'letter: <A-Z>' (A mini, B Intel laptop, C WSL, D Linux VM)"; fi ;;
+    *) row FAIL machine-file "$(tilde "$MACHINE_FILE") letter '$ml' is not one capital A-Z; fix: set 'letter: A' (mini), B (Intel laptop), C (WSL) or D (Linux VM)";;
   esac
 elif [ -e "$MACHINE_FILE" ]; then
   row FAIL machine-file "$(tilde "$MACHINE_FILE") exists but is unreadable; fix: chmod u+r"
 else
-  row NOTM machine-file "absent, default range 01-49 in use (install.sh writes it)"
+  row FAIL machine-file "$(tilde "$MACHINE_FILE") absent, so this machine has no letter and pj-id REFUSES every allocation; fix: run ./install.sh in the dotfiles repo"
 fi
 
 # M12 pj-global
@@ -394,7 +405,25 @@ fi
 # M16 stale shells (F3). Interactive zsh started before ~/.zshrc last changed will launch the OLD
 # definitions. WARN, never FAIL: an old shell is a warning about future launches, not a wiring fault.
 mtime_of(){ stat -L -c %Y "$1" 2>/dev/null || stat -L -f %m "$1" 2>/dev/null || echo 0; }   # GNU first: Linux -f means filesystem
-lstart_epoch(){ date -j -f '%a %e %b %H:%M:%S %Y' "$1" +%s 2>/dev/null || date -d "$1" +%s 2>/dev/null || echo 0; }
+# BSD ps prints lstart as "Mon 21 Sep 12:32:38 2026"; GNU procps prints "Mon Sep 21
+# 12:32:38 2026" -- day and month SWAPPED. `date -j -f` (BSD) parses the first, `date -d`
+# (GNU) parses the second, and each platform ships exactly the one it needs, so the chain
+# covers both. Nothing downstream may read those five fields POSITIONALLY for display.
+# THREE arms, not two. The first two are the two FIELD ORDERS, both handed to BSD date;
+# the third is GNU date, which reads either. Neither -j form can mis-parse the other's
+# string (%e demands a number, %b demands a month name), so the order of the arms is safe.
+# Measured 2026-09-21: with only the BSD-order arm, a Mac reading a procps-shaped lstart
+# returned 0 and the shell was silently DROPPED from the count -- a zero that looked exactly
+# like "no stale shells". The selftest's GNU fixture is what caught it.
+lstart_epoch(){
+  date -j -f '%a %e %b %H:%M:%S %Y' "$1" +%s 2>/dev/null \
+    || date -j -f '%a %b %e %H:%M:%S %Y' "$1" +%s 2>/dev/null \
+    || date -d "$1" +%s 2>/dev/null \
+    || echo 0
+}
+# Format an epoch the same way on both platforms, so the WARN text does not depend on which
+# ps laid the fields out (measured: positional $d2 $d3 read "21 Sep" on macOS, "Sep 21" on Linux).
+epoch_fmt(){ date -r "$1" "+$2" 2>/dev/null || date -d "@$1" "+$2" 2>/dev/null || printf '%s' "$1"; }
 zmt="${PJ_ZSHRC_MTIME:-$(mtime_of "$HOME/.zshrc")}"
 if [ -n "${PJ_PS_OUT:-}" ]; then ps_out="$(cat "$PJ_PS_OUT" 2>/dev/null)"; else ps_out="$(ps -axo pid=,ppid=,tty=,lstart=,command= -u "$USER" 2>/dev/null)"; fi
 if [ "$zmt" -eq 0 ]; then
@@ -406,12 +435,14 @@ else
   while read -r pid ppid tty d1 d2 d3 d4 d5 cmd; do
     [ -n "${pid:-}" ] || continue
     case "$cmd" in -zsh|zsh|*/zsh) ;; *) continue;; esac       # interactive shells only: no `zsh -c`, no args
-    [ "$tty" != "??" ] && [ "$tty" != "-" ] && [ "$ppid" != 1 ] || continue   # ppid 1: orphaned forks, not panes
+    # No tty: BSD ps writes "??", GNU procps writes "?". Both mean the same thing, and
+    # checking only the BSD spelling let every ttyless process through on Linux.
+    [ "$tty" != "??" ] && [ "$tty" != "?" ] && [ "$tty" != "-" ] && [ "$ppid" != 1 ] || continue   # ppid 1: orphaned forks, not panes
     nsh=$((nsh+1))
     st="$(lstart_epoch "$d1 $d2 $d3 $d4 $d5")"
-    if [ "$st" -gt 0 ] && [ "$st" -lt "$zmt" ]; then nold=$((nold+1)); oldlist="$oldlist, $tty pid $pid since $d2 $d3 ${d4%:*}"; fi
+    if [ "$st" -gt 0 ] && [ "$st" -lt "$zmt" ]; then nold=$((nold+1)); oldlist="$oldlist, $tty pid $pid since $(epoch_fmt "$st" '%d %b %H:%M')"; fi
   done <<<"$ps_out"
-  zdate="$(date -r "$zmt" '+%Y-%m-%d %H:%M' 2>/dev/null || date -d "@$zmt" '+%Y-%m-%d %H:%M' 2>/dev/null || echo "$zmt")"
+  zdate="$(epoch_fmt "$zmt" '%Y-%m-%d %H:%M')"
   if [ "$nold" -eq 0 ]; then row PASS stale-shells "0 of $nsh interactive zsh older than ~/.zshrc ($zdate)"
   else row WARN stale-shells "$nold of $nsh interactive zsh older than ~/.zshrc ($zdate):${oldlist#,}; fix: close the pane or open a new one (exec zsh keeps the start time, so the row lists it until the pane is reopened). Every .zshrc edit makes all open shells stale by this measure; that is correct"; fi
 fi

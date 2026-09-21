@@ -50,9 +50,13 @@ usage(){ sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; }
 
 iso_now(){ date +%Y-%m-%dT%H:%M:%S%z; }
 iso_from_epoch(){ date -r "$1" +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -d "@$1" +%Y-%m-%dT%H:%M:%S 2>/dev/null || printf '%s' "$1"; }
-iso_from_lstart(){   # "Mon 21 Sep 12:32:38 2026" -> 2026-09-21T12:32:38 (BSD date, then GNU, else raw with _)
+# BSD ps prints "Mon 21 Sep 12:32:38 2026", GNU procps "Mon Sep 21 12:32:38 2026" -- day and
+# month swapped. Both orders are handed to BSD date, then GNU date, which reads either.
+# Neither -j form can mis-parse the other's string (%e demands a number, %b a month name).
+iso_from_lstart(){   # lstart in either layout -> 2026-09-21T12:32:38, else the raw text with _
   local s="$1"
   date -j -f '%a %e %b %H:%M:%S %Y' "$s" +%Y-%m-%dT%H:%M:%S 2>/dev/null \
+    || date -j -f '%a %b %e %H:%M:%S %Y' "$s" +%Y-%m-%dT%H:%M:%S 2>/dev/null \
     || date -d "$s" +%Y-%m-%dT%H:%M:%S 2>/dev/null \
     || printf '%s' "${s// /_}"
 }

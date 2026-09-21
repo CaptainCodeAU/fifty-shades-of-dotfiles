@@ -69,7 +69,7 @@ OR="$H/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md"; RULES="$H/pj-global/RULES.md"
 printf '# OPERATIONAL_RULES.md fixture\n- rule one\n' >"$OR"
 { echo "# pj-global RULES.md: fixture header line"; for i in $(seq 1 20); do echo "- pinned $i"; done; } >"$RULES"
 echo "- [x](y): z" >"$H/pj-global/notes/INDEX.md"; echo "## D-20260101-01 -- x" >"$H/pj-global/decisions/D-20260101-01-x.md"
-printf 'name: fixture\nrange: 01-49\n' >"$T/machine"
+printf 'name: fixture\nletter: A\n' >"$T/machine"
 printf 'project: p\nrepo: r\nended: t\nsession: s1\ntranscript: x\n\nproject: p\nrepo: r\nended: t\nsession: s2\ntranscript: y\n' >"$STATE/no-wrap-up/-tmp-proj"
 # the launcher fixtures (F3): a dry-run argv, what `whence -w pj; alias pj` prints, a ps listing, a .zshrc mtime
 printf '%s\n' claude --setting-sources project,local --settings "$HOME/.claude/settings.project.json" --append-system-prompt-file "$T/cache/prompt.md" \
@@ -265,6 +265,24 @@ arm "stale-shells WARN fix text names the exec limit" has stale-shells "exec zsh
 cp "$T/ps.ok" "$T/ps"; : >"$T/ps"; run; arm "stale-shells NOT MEASURED when ps prints nothing" is stale-shells "$NM"; cp "$T/ps.ok" "$T/ps"
 run; arm "stale-shells back to PASS (control)" is stale-shells PASS
 
+# 1c-GNU. THE SAME FACTS IN LINUX SHAPE (P8a gate Q3). procps differs from BSD ps twice, and
+# both differences are silent: lstart prints "Mon Sep 21" (month first) where BSD prints
+# "Mon 21 Sep", and a process with no terminal shows "?" where BSD shows "??". The old
+# fixture was BSD-only, so neither could ever fail here. Same five rows, procps layout.
+printf '%s\n' \
+  '  501   870 pts/0    Mon Sep 21 12:32:38 2026     -zsh' \
+  '  502   870 pts/1    Mon Sep 21 12:40:00 2026     zsh' \
+  '  503   501 pts/0    Mon Sep 21 12:41:00 2026     /bin/zsh -c source snapshot.sh' \
+  '  504     1 pts/0    Fri Sep 18 13:05:58 2026     -zsh' \
+  '  505   870 ?        Fri Sep 18 13:05:58 2026     -zsh' >"$T/ps"; run
+arm "GNU ps: PASS, and the SAME 2 shells counted (zsh -c, ppid 1 and the ?-tty row skipped)" has stale-shells "0 of 2 interactive zsh"
+arm "GNU ps: a '?' tty is excluded exactly as BSD's '??' is" is stale-shells PASS
+printf '%s\n' '  506   870 pts/3    Fri Sep 18 13:05:58 2026     -zsh' >>"$T/ps"; run
+arm "GNU ps: WARN on a shell older than .zshrc" is stale-shells WARN
+arm "GNU ps: the date reads the same as under BSD ps, not month-first" has stale-shells "pts/3 pid 506 since 18 Sep 13:05"
+arm "GNU ps: counts 1 of 3, same as BSD" has stale-shells "1 of 3 interactive zsh"
+cp "$T/ps.ok" "$T/ps"; run; arm "stale-shells back to PASS after the GNU fixture (control)" is stale-shells PASS
+
 # 2. output style
 write_settings '.outputStyle="default"'; run; arm "output-style FAIL on wrong style" is output-style FAIL; write_settings
 mv "$H/pj-voice/output-styles/pj-voice.md" "$T/style.bak"; run; arm "output-style FAIL when the style file is missing" is output-style FAIL; mv "$T/style.bak" "$H/pj-voice/output-styles/pj-voice.md"
@@ -312,9 +330,15 @@ run; arm "stow-links PASS restored" is stow-links PASS
 mkdir -p "$T/empty"; DF_SAVE="$DF"; DF="$T/empty"; run; arm "stow-links NOT MEASURED without a dotfiles checkout" is stow-links "$NM"; DF="$DF_SAVE"
 
 # 11. machine file
-printf 'name: x\nrange: 10-20\n' >"$T/machine"; run; arm "machine-file FAIL on a bad range" is machine-file FAIL
-printf 'range: 50-99\n' >"$T/machine"; run; arm "machine-file FAIL without a name" is machine-file FAIL
-mv "$T/machine" "$T/machine.bak"; run; arm "machine-file NOT MEASURED when absent" is machine-file "$NM"; arm "machine-file absent says default range" has machine-file "default range 01-49"; mv "$T/machine.bak" "$T/machine"; printf 'name: fixture\nrange: 01-49\n' >"$T/machine"
+# The two-range scheme was retired on 2026-09-21 (P8a Q6); the row now reads `letter:`.
+# An absent or letterless file is a FAIL, not NOT MEASURED: pj-id refuses to allocate from
+# it, so `open-items add` is dead on that box and the row has to say why.
+printf 'name: x\nletter: aa\n' >"$T/machine"; run; arm "machine-file FAIL on a bad letter" is machine-file FAIL; arm "machine-file bad letter names the four machines" has machine-file "C (WSL)"
+printf 'letter: A\n' >"$T/machine"; run; arm "machine-file FAIL without a name" is machine-file FAIL
+printf 'name: x\nrange: 01-49\n' >"$T/machine"; run; arm "machine-file FAIL on the RETIRED range-only file" is machine-file FAIL; arm "  and names the retired key" has machine-file "retired 'range: 01-49'"; arm "  and says pj-id refuses" has machine-file "REFUSES"
+printf 'name: x\nletter: A\nrange: 01-49\n' >"$T/machine"; run; arm "machine-file WARN on a letter WITH a leftover range" is machine-file WARN; arm "  and says to delete it" has machine-file "delete the range line"
+mv "$T/machine" "$T/machine.bak"; run; arm "machine-file FAIL when absent" is machine-file FAIL; arm "machine-file absent says pj-id refuses" has machine-file "REFUSES every allocation"; mv "$T/machine.bak" "$T/machine"; printf 'name: fixture\nletter: A\n' >"$T/machine"
+run; arm "CONTROL: a good machine file is PASS again" is machine-file PASS; arm "  and prints the ID shape" has machine-file "X-YYYYMMDD-ANN"
 
 # 12. pj-global
 mv "$H/pj-global/notes/INDEX.md" "$T/idx.bak"; run; arm "pj-global FAIL when INDEX.md is missing" is pj-global FAIL; mv "$T/idx.bak" "$H/pj-global/notes/INDEX.md"
