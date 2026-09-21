@@ -26,6 +26,8 @@
 #            "+N more", "parked: N"; or one line saying there is no drawer
 #   then     Handoff: <marker path> (size, date) -- only when the file exists
 #   then     Tracker: <marker path>, one per declared tracker
+#   then     dot-claude: N commit(s) behind origin -- ONLY when behind, never when level
+#            (refs only, no network; `pj` kicks the detached fetch that fills them)
 #   last     the hello rule
 #   Outside a git repo: line 1 and the hello rule only.
 #
@@ -108,6 +110,41 @@ file_date(){
   if d="$(stat -c %y "$1" 2>/dev/null)"; then printf '%s' "${d:0:10}"
   else stat -f '%Sm' -t '%Y-%m-%d' "$1" 2>/dev/null; fi
 }
+mtime_epoch(){ stat -L -c %Y "$1" 2>/dev/null || stat -L -f %m "$1" 2>/dev/null || echo 0; }   # GNU first: on Linux -f means filesystem
+
+# --- dot-claude freshness (P8a gate Q4) -----------------------------------------
+# READS REFS ONLY. The card's contract forbids network (point 3) and writing (point 2), so
+# it never fetches: `pj` kicks a DETACHED fetch at launch and does not wait, and this line
+# reports what that fetch last brought back. Worst case the reading is one launch stale,
+# which the age suffix states rather than hides.
+#
+# EXCEPTION-BASED, deliberately. Silent when level with origin. A line printed every session
+# saying "up to date" is the passive, identical alert that teaches you to stop reading the
+# card (alert-design-for-adhd), and the whole point of this line is to be noticed.
+#
+# It never pulls, and never suggests that pj should: dot-claude holds the drawer another
+# session may be writing, and a pull at launch is exactly the concurrent-write hazard
+# D-20260920-08 exists to keep out of the tooling.
+sync_line(){
+  local dc="${OPEN_ITEMS_DOTCLAUDE:-$HOME/.claude}" up behind fh m now age=""
+  up="$(git -C "$dc" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)" || return 0
+  [ -n "$up" ] || return 0
+  behind="$(git -C "$dc" rev-list --count "HEAD..$up" 2>/dev/null)" || return 0
+  case "$behind" in ''|*[!0-9]*) return 0 ;; esac
+  [ "$behind" -gt 0 ] || return 0
+  fh="$dc/.git/FETCH_HEAD"
+  if [ -f "$fh" ]; then
+    m="$(mtime_epoch "$fh")"; now="$(date +%s 2>/dev/null || echo 0)"
+    # >=, not >: a fetch that landed in THIS second is "0m ago", which is a fact worth
+    # printing. With `>` the freshest possible reading was the one that said nothing about
+    # its age, and the arm that checks for the age suffix failed roughly one run in two.
+    if [ "$m" -gt 0 ] && [ "$now" -ge "$m" ]; then
+      age=$(( (now - m) / 60 ))
+      if [ "$age" -lt 90 ]; then age=", measured ${age}m ago"; else age=", measured $(( age / 60 ))h ago"; fi
+    fi
+  fi
+  printf 'dot-claude: %s commit(s) behind %s%s. Pull it yourself when convenient; pj fetches but never pulls.' "$behind" "$up" "$age"
+}
 
 # --- the card ------------------------------------------------------------------
 card(){
@@ -186,9 +223,11 @@ card(){
   lines+=("pj start card: $name")
   [ -n "$warn" ] && lines+=("$warn")
   [ -n "$open_header" ] && lines+=("$open_header")
+  local sync=""; sync="$(sync_line 2>/dev/null)" || sync=""
   local fixed=$(( ${#lines[@]} + ${#trackers[@]} + 1 ))   # +1 hello
   [ -n "$parked" ] && fixed=$((fixed + 1))
   [ -n "$handoff" ] && fixed=$((fixed + 1))
+  [ -n "$sync" ] && fixed=$((fixed + 1))
   local budget=$(( CAP - fixed )) cap=$TITLE_CAP total=${#titles[@]}
   [ "$cap" -gt "$budget" ] && cap=$budget
   local more=0
@@ -200,6 +239,7 @@ card(){
   [ -n "$parked" ] && lines+=("   $parked")
   [ -n "$handoff" ] && lines+=("$handoff")
   [ "${#trackers[@]}" -gt 0 ] && lines+=("${trackers[@]}")
+  [ -n "$sync" ] && lines+=("$sync")
   lines+=("$HELLO")
   printf '%s\n' "${lines[@]}"
 }

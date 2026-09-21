@@ -16,6 +16,10 @@ ROOT="$(mktemp -d "${TMPDIR:-/tmp}/pj-card-selftest.XXXXXX")" || exit 1
 ROOT="$(cd "$ROOT" && pwd -P)"   # /tmp is a symlink on macOS; git reports the real path
 PROJ="$ROOT/projects"; STATE="$ROOT/state"; mkdir -p "$PROJ" "$STATE/no-wrap-up"
 export OPEN_ITEMS_PROJECTS_DIR="$PROJ" PJ_STATE_DIR="$STATE"
+# The dot-claude freshness line reads a git repo. Point it at a fixture, or every arm below
+# would depend on how far behind the REAL ~/.claude happens to be, and the card's "touches
+# nothing real" promise would be broken by its own test.
+export OPEN_ITEMS_DOTCLAUDE="$ROOT/dotclaude-level"
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
 
 PASS=0; FAIL=0
@@ -179,6 +183,48 @@ for i in 1 2 3 4 5 6 7 8 9 10; do
 done
 T1="$(now)"; TOTAL="$(awk -v a="$T0" -v b="$T1" 'BEGIN{printf "%.2f", b-a}')"
 check "M every one of 10 runs under 1 s (slow: $SLOW, total ${TOTAL}s)" '[ "$SLOW" -eq 0 ]'
+
+# --- O: the dot-claude freshness line (P8a gate Q4) -----------------------------------------
+# EXCEPTION-BASED: silent when level, one line when behind. Both halves are asserted, because
+# "no line" is also what a completely broken sync_line produces.
+mk_pair(){   # mk_pair <bare> <clone> : a remote with one commit on main, and a clone of it
+  git init -q --bare "$1"
+  # Point the bare repo's HEAD at main BEFORE anyone clones it. Without this the bare HEAD
+  # stays on `master` while the only branch is `main`, and the second clone lands on an
+  # unborn master -- its push then fails with "src refspec main does not match any", which
+  # leaves the fixture level with origin and every "behind" arm silently un-exercised.
+  git -C "$1" symbolic-ref HEAD refs/heads/main
+  git clone -q "$1" "$2" 2>/dev/null
+  git -C "$2" checkout -q -b main 2>/dev/null
+  printf 'seed\n' > "$2/f"; git -C "$2" add f; git -C "$2" commit -q -m seed
+  git -C "$2" push -q -u origin main 2>/dev/null
+}
+DCL="$ROOT/dotclaude-level"; mk_pair "$ROOT/origin.git" "$DCL"
+run "$A"
+check "O level with origin: NO freshness line (the silent half)" '! has "$OUT" "dot-claude:"'
+# now put two commits on the remote through a second clone, and fetch them into DCL
+OTHER="$ROOT/other"; git clone -q "$ROOT/origin.git" "$OTHER" 2>/dev/null
+printf 'a\n' > "$OTHER/a"; git -C "$OTHER" add a; git -C "$OTHER" commit -q -m a
+printf 'b\n' > "$OTHER/b"; git -C "$OTHER" add b; git -C "$OTHER" commit -q -m b
+git -C "$OTHER" push -q origin main 2>/dev/null
+git -C "$DCL" fetch -q origin 2>/dev/null
+# FIXTURE CONTROL. Everything below asserts on "behind by 2"; if the push or the fetch
+# silently did nothing, those arms would be testing a level repo and could never fail.
+check "O fixture control: DCL really is 2 commits behind before the arms run" \
+  '[ "$(git -C "$DCL" rev-list --count HEAD..origin/main 2>/dev/null)" -eq 2 ]'
+run "$A"
+check "O behind origin: the line appears (positive control for the arm above)" 'has "$OUT" "dot-claude:"'
+check "O and states HOW FAR behind"            'has "$OUT" "2 commit(s) behind origin/main"'
+check "O and says how old the measurement is"  'has "$OUT" "measured"'
+check "O and says pj never pulls"              'has "$OUT" "never pulls"'
+check "O the card reads refs only: it did NOT pull (local HEAD unmoved)" '[ "$(git -C "$DCL" rev-list --count HEAD)" -eq 1 ]'
+check "O still under the 20-line cap with the extra line" '[ "$(lines "$OUT")" -le 20 ]'
+OPEN_ITEMS_DOTCLAUDE="$ROOT/not-a-repo" run "$A"
+check "O a dot-claude that is not a repo: no line, card still fine" '! has "$OUT" "dot-claude:" && [ "$RC" -eq 0 ]'
+NOUP="$ROOT/dotclaude-noup"; mkrepo "$NOUP"; git -C "$NOUP" commit -q --allow-empty -m x
+OPEN_ITEMS_DOTCLAUDE="$NOUP" run "$A"
+check "O a repo with no upstream: no line, card still fine" '! has "$OUT" "dot-claude:" && [ "$RC" -eq 0 ]'
+export OPEN_ITEMS_DOTCLAUDE="$DCL"
 
 # --- N: --selftest dispatch and syntax ------------------------------------------------------
 check "N bash -n clean" 'bash -n "$CARD"'

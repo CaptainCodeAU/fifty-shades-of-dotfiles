@@ -53,6 +53,38 @@ build_argv() {
   PJ_ARGV+=(--dangerously-skip-permissions --effort high)
 }
 
+# --- dot-claude freshness (P8a gate Q4, ruled by Gavin 2026-09-21) --------------
+# FIRE AND FORGET. Nothing waits on this: a measured fetch of dot-claude took 1354, 1208 and
+# 1223 ms on this machine (three warm runs, 2026-09-21), and a second and a quarter on every
+# launch is a tax nobody consented to. The start card reports what the PREVIOUS fetch left in
+# the refs, so the reading is at worst one launch old and says how old it is.
+#
+# IT NEVER PULLS, and never merges. dot-claude holds the drawer another session may be
+# writing; a pull at launch is the concurrent-write hazard D-20260920-08 exists to keep out.
+#
+# THREE THINGS BOUND IT, because a launcher must never hang:
+#   GIT_TERMINAL_PROMPT=0   a stale credential FAILS instead of blocking on a prompt. This is
+#                           the real hazard: dot-claude is on the GitHub App HTTPS path, and
+#                           an expired ghs_ token is what stopped `pj-wrap push` twice today.
+#   low-speed abort         a stalled transfer gives up after 8 s rather than hanging on.
+#   detached, output binned  nothing it prints can reach the terminal or a pipe.
+# Skipped entirely when the last fetch is under 10 minutes old (a relaunch is not new news)
+# or when PJ_NO_FETCH is set.
+kick_dotclaude_fetch() {
+  [[ -n "${PJ_NO_FETCH:-}" ]] && return 0
+  local dc="${OPEN_ITEMS_DOTCLAUDE:-$HOME/.claude}" fh m now
+  [[ -d "$dc/.git" ]] || return 0
+  fh="$dc/.git/FETCH_HEAD"
+  if [[ -f "$fh" ]]; then
+    m="$(stat -L -c %Y "$fh" 2>/dev/null || stat -L -f %m "$fh" 2>/dev/null || echo 0)"
+    now="$(date +%s 2>/dev/null || echo 0)"
+    [[ "$m" -gt 0 && "$now" -gt 0 && $(( now - m )) -lt 600 ]] && return 0
+  fi
+  ( GIT_TERMINAL_PROMPT=0 GIT_HTTP_LOW_SPEED_LIMIT=1000 GIT_HTTP_LOW_SPEED_TIME=8 \
+      git -C "$dc" fetch --quiet origin >/dev/null 2>&1 & ) >/dev/null 2>&1
+  return 0
+}
+
 selftest() {
   local pass=0 fail=0 out rc root n d
   ok()  { pass=$((pass + 1)); print -- "  ok   $1"; }
@@ -86,6 +118,37 @@ selftest() {
   # 7. negative control: a missing launch file is REFUSED before any launch (dry-run untouched)
   out="$(PJ_LAUNCH_FILE="$root/nope" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --dry-run 2>/dev/null)"; rc=$?
   [[ $rc -eq 0 && "${out%%$'\n'*}" == claude ]] && ok "7 dry-run does not need the launch file" || bad "7 dry-run vs launch file" "rc=$rc"
+  # 8. the dry-run path NEVER kicks a fetch: a real git repo is left with no FETCH_HEAD.
+  #    The fixture is a real repo with a real (unreachable) remote, so a fetch WOULD write.
+  local dc="$root/dotclaude"
+  git init -q --bare "$root/origin.git" >/dev/null 2>&1
+  git init -q "$dc" >/dev/null 2>&1
+  git -C "$dc" remote add origin "$root/origin.git" >/dev/null 2>&1
+  PJ_PROMPT_OUT="$root/prompt.md" OPEN_ITEMS_DOTCLAUDE="$dc" "$SELF" --dry-run >/dev/null 2>&1
+  [[ ! -e "$dc/.git/FETCH_HEAD" ]] && ok "8 --dry-run kicks no fetch (no FETCH_HEAD written)" || bad "8 dry-run fetched" "FETCH_HEAD exists"
+  # 9. the guard: PJ_NO_FETCH, a non-repo, and a fresh FETCH_HEAD each return 0 and fetch nothing
+  PJ_NO_FETCH=1 OPEN_ITEMS_DOTCLAUDE="$dc" kick_dotclaude_fetch
+  [[ $? -eq 0 && ! -e "$dc/.git/FETCH_HEAD" ]] && ok "9 PJ_NO_FETCH suppresses the fetch" || bad "9 PJ_NO_FETCH" "fetched or rc!=0"
+  OPEN_ITEMS_DOTCLAUDE="$root/not-a-repo" kick_dotclaude_fetch
+  [[ $? -eq 0 ]] && ok "9 a directory with no .git is a silent no-op" || bad "9 non-repo" "rc=$?"
+  : > "$dc/.git/FETCH_HEAD"
+  OPEN_ITEMS_DOTCLAUDE="$dc" kick_dotclaude_fetch
+  [[ $? -eq 0 ]] && ok "9 a FETCH_HEAD under 10 min old skips the fetch" || bad "9 fresh FETCH_HEAD" "rc=$?"
+  # 10. POSITIVE CONTROL for arm 8: with no guard in the way the fetch IS reached.
+  #     Without this arm, arm 8 passes just as well when the function is broken and never
+  #     fetches at all -- "no FETCH_HEAD" is true in both worlds.
+  #     A SECOND, VIRGIN fixture, never a cleared one: `rm` here is the Trash-routed shim,
+  #     which can refuse and leave the file (measured 2026-09-21 in this very arm), and then
+  #     the control would pass on a stale file instead of a fresh fetch.
+  local dc2="$root/dotclaude2"
+  git init -q "$dc2" >/dev/null 2>&1
+  git -C "$dc2" remote add origin "$root/origin.git" >/dev/null 2>&1
+  [[ ! -e "$dc2/.git/FETCH_HEAD" ]] || bad "10 fixture was not virgin" "FETCH_HEAD already present"
+  OPEN_ITEMS_DOTCLAUDE="$dc2" kick_dotclaude_fetch
+  local waited=0
+  while [[ $waited -lt 50 && ! -e "$dc2/.git/FETCH_HEAD" ]]; do sleep 0.1; waited=$((waited + 1)); done
+  [[ -e "$dc2/.git/FETCH_HEAD" ]] && ok "10 control: with no guard the fetch IS reached (FETCH_HEAD appears)" \
+    || bad "10 control did not fetch -- arm 8 proves nothing" "no FETCH_HEAD after ${waited}00ms"
   print -- "pj selftest: $pass passed, $fail failed"
   [[ $fail -eq 0 ]]
 }
@@ -104,5 +167,6 @@ if [[ ! -r "$LAUNCH_FILE" ]]; then
   print -u2 -- "pj: REFUSED: ${LAUNCH_FILE/#$HOME/~} missing; stow -R the dotfiles"
   exit 2
 fi
+kick_dotclaude_fetch
 source "$LAUNCH_FILE"
 __claude_launch "${PJ_ARGV[@]}" "$@"
