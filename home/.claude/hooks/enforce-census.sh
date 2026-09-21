@@ -243,8 +243,23 @@ if [ -f "$TOOL" ]; then
   # never once ran --help — it learned --include-ignored from census's own output at
   # the moment it mattered, and learned nothing about any other flag. One line here
   # costs nothing and names the door.
-  invocation="uv run python3 \$HOME/.claude/tools/census.py --control <a-token-you-KNOW-is-present> [--under PATH] PATTERN...
-    \$HOME/.claude/tools/census.py --help   # every flag: hidden files, JSON, regex, case, scoping"
+  # W-20260921-A03. UV_CACHE_DIR IS NOT OPTIONAL DECORATION, it is what makes this
+  # line RUNNABLE where it is printed. uv's default cache is ~/.cache/uv, which
+  # contains a `.git` entry, and the Claude Bash sandbox denies reads there:
+  #
+  #   error: Failed to initialize cache at `~/.cache/uv`
+  #     cause: failed to open file `~/.cache/uv/sdists-v9/.git`: Operation not permitted
+  #
+  # So the hint this hook prints on every grep was a command that could not run in
+  # the place it was being printed. Measured again on 2026-09-21: the first census
+  # call of that session failed exactly this way. A hint that fails teaches you to
+  # ignore the hint, which is the whole mechanism this hook exists to protect.
+  #
+  # ${TMPDIR:-/tmp} is inside the sandbox's writable set, and a cold cache costs a
+  # few seconds once per session. Outside a sandbox the line is still correct.
+  invocation="UV_CACHE_DIR=\${TMPDIR:-/tmp}/uvcache uv run python3 \$HOME/.claude/tools/census.py --control <a-token-you-KNOW-is-present> [--under PATH] PATTERN...
+    \$HOME/.claude/tools/census.py --help   # every flag: hidden files, JSON, regex, case, scoping
+    (UV_CACHE_DIR is what lets this run inside the Bash sandbox; uv's default cache is denied there)"
   missing=""
 else
   invocation="(THE CENSUS TOOL IS MISSING FROM THIS MACHINE — see below)"
