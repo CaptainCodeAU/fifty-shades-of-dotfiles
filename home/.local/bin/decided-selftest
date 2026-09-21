@@ -128,6 +128,27 @@ run "$R1" kilo; wantrc "the added block is found" 0 "$RC"
 run "$R4" add "November" --topic n --holds-in n --project; wantrc "add --project into a repo: store is written but NOT committed" 3 "$RC"; want "  says so" "NOT COMMITTED, outside dot-claude" "$OUT"; [ -f "$R4/docs/decisions/D-$TODAY-A03-november.md" ] && ok "  file is on disk" || bad "  file missing" "$(ls "$R4/docs/decisions")"
 [ -z "$(git -C "$DC" status --porcelain)" ] && ok "fixture dot-claude tree clean after adds" || bad "dot-claude dirty" "$(git -C "$DC" status --porcelain)"
 
+echo "-- add into an UNWRITABLE store (W-20260921-A30)"
+# The real failure this covers: inside the Claude Bash sandbox ~/.claude is not writable,
+# and `decided add` used to spin forever in its id-allocation loop rather than say so.
+# A tool that refuses is a finding; a tool that hangs is a session sitting still.
+#
+# BOTH ARMS, in the same breath, because "it refused" and "it never ran" look identical:
+# the locked store must REFUSE, and the ordinary store above must still have SUCCEEDED
+# (the `next ID skips` and `file in the drawer store` arms are that positive control).
+RO="$T/readonly-decisions"; mkdir -p "$RO"; chmod 500 "$RO"
+STARTED=$(date +%s)
+OUT="$( (builtin cd "$R1" && DECIDED_GLOBAL_DIR="$RO" "$DECIDED" add "locked store probe" --topic lock --holds-in "docs/X.md" --global) 2>&1)"; RC=$?
+ELAPSED=$(( $(date +%s) - STARTED ))
+chmod 700 "$RO"
+wantrc "an unwritable store REFUSES instead of hanging" 2 "$RC"
+want "  and says REFUSED" "REFUSED" "$OUT"
+want "  and names the path it could not create" "locked-store-probe.md" "$OUT"
+want "  and says the create was refused, not a collision" "not a name collision" "$OUT"
+want "  and says nothing was changed" "Nothing was changed" "$OUT"
+[ "$ELAPSED" -lt 10 ] && ok "  and returns in under 10s (it used to hang for minutes)" || bad "  took too long" "${ELAPSED}s"
+[ -z "$(find "$RO" -type f -print)" ] && ok "  and left no partial file behind" || bad "  partial file" "$(find "$RO" -type f -print)"
+
 echo "-- withdraw"
 run "$R1" withdraw "D-$TODAY-A01" "probe only"; wantrc "withdraw" 0 "$RC"; want "  status line replaced" "status: withdrawn" "$(cat "$G/D-$TODAY-A01-kilo-ruling.md")"; want "  reason recorded" "withdrawn: $(date +%Y-%m-%d) -- probe only" "$(cat "$G/D-$TODAY-A01-kilo-ruling.md")"; want "  committed" "committed in dot-claude" "$OUT"
 run "$R1" withdraw "D-$TODAY-A01" "again"; wantrc "withdrawing twice refuses" 2 "$RC"
@@ -142,7 +163,28 @@ run "$R1" withdraw "D-19990105-03" "ambiguous"; wantrc "an ambiguous legacy ID R
 want "  and names both candidates" "D-19990105-A03" "$OUT"; want "  and the second one" "D-19990105-B03" "$OUT"
 wantnot "  and changed NOTHING (A block)" "status: withdrawn" "$(cat "$G/D-19990105-A03-a.md")"
 wantnot "  and changed NOTHING (B block)" "status: withdrawn" "$(cat "$G/D-19990105-B03-b.md")"
-rm -f "$G/D-19990105-B03-b.md"
+# W-20260921-A33, FIXED HERE. This line used to be `rm -f`, and `rm` on this machine is
+# the Trash-routed shim. Inside the Claude Bash sandbox the Trash call FAILS with
+# afpAccessDenied and safe-rm correctly refuses to fall back to the real deleter -- so
+# the file was NEITHER trashed NOR deleted, it simply STAYED. Every arm below then found
+# TWO candidates instead of one, got the ambiguity refusal, and the suite printed
+# "78 passed, 5 failed" while nothing was wrong with `decided` at all.
+#
+# A COUNT IS THE ONE ANSWER THAT LOOKS THE SAME WHETHER THE TEST RAN OR NOT. 78/5 read
+# like a finding; it was a broken fixture. The disagreeing reading (83/0 from an
+# unsandboxed run) is what exposed it, not re-reading the code.
+#
+# MOVE, DO NOT DELETE. A rename inside one directory tree needs no Trash and works in
+# both worlds, which is the whole point -- and then VERIFY it, because a teardown that
+# quietly did nothing is exactly what caused this.
+mv -f "$G/D-19990105-B03-b.md" "$T/removed-D-19990105-B03-b.md" 2>/dev/null
+if [ -e "$G/D-19990105-B03-b.md" ]; then
+  printf 'decided-selftest: INVALID TRIAL -- could not clear the second legacy candidate\n' >&2
+  printf '  %s still exists, so the arms below would report an ambiguity that is the\n' "$G/D-19990105-B03-b.md" >&2
+  printf '  fixture, not the tool. Refusing to print a count.\n' >&2
+  exit 2
+fi
+ok "teardown cleared the second legacy candidate (verified, not assumed)"
 # Now unambiguous: it resolves, and must REPORT and COMMIT under the ID the FILE carries.
 # Committing the typed legacy ID would record a withdrawal of an ID that does not exist,
 # in the one place nobody greps by topic afterwards.
