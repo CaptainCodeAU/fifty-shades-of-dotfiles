@@ -581,6 +581,47 @@ else
   fi
 fi
 
+# ---- stale-workspaces (F5d, W-20260922-A04) ------------------------------------------
+# A Herdr workspace whose worktree `checkout_path` is not on disk any more. That is what
+# w3Y and w3Z were, and c2 done leaked one on every discarded topic until F5d; the fix is
+# in c2, and this row is what would have shown it without anyone noticing the sidebar.
+#
+# IT COUNTS ONLY WORKSPACES THAT NAME A WORKTREE. A workspace with no worktree block is an
+# ordinary one and its cwd is nobody's business here, so it is not measured -- and the row
+# says how many it looked at, so "0 stale" and "0 examined" can never read the same.
+#
+# NOT MEASURED, and said out loud, when herdr or jq is missing or the server is not up.
+# A silent PASS in those cases would be a check that cannot fail.
+# PJ_HEALTH_HERDR is the seam: it names the herdr binary, so the selftest can point it at
+# one that is not there and actually reach the NOT MEASURED branch. Without it that branch
+# is unreachable on any machine where herdr IS installed, and an untestable branch is how
+# you ship a row that silently passes for ever.
+HERDR_BIN="${PJ_HEALTH_HERDR:-herdr}"
+if command -v "$HERDR_BIN" >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+  ws_json="$("$HERDR_BIN" workspace list 2>/dev/null || true)"
+  if [ -z "$ws_json" ] || [ "$(printf '%s' "$ws_json" | jq -r 'has("result")' 2>/dev/null)" != true ]; then
+    row NOTM stale-workspaces "herdr answered nothing (server down, or the sandbox blocked the socket); nothing was examined"
+  else
+    ws_seen=0; ws_wt=0; ws_stale=""
+    for ws_id in $(printf '%s' "$ws_json" | jq -r '.result.workspaces[]?.workspace_id' 2>/dev/null); do
+      ws_seen=$((ws_seen+1))
+      ws_path="$("$HERDR_BIN" workspace get "$ws_id" 2>/dev/null | jq -r '.result.workspace.worktree.checkout_path // ""' 2>/dev/null)"
+      [ -n "$ws_path" ] || continue
+      ws_wt=$((ws_wt+1))
+      [ -e "$ws_path" ] || ws_stale="${ws_stale:+$ws_stale; }$ws_id -> $(tilde "$ws_path")"
+    done
+    if [ "$ws_seen" -eq 0 ]; then
+      row NOTM stale-workspaces "herdr listed no workspaces at all, so nothing was examined"
+    elif [ -n "$ws_stale" ]; then
+      row WARN stale-workspaces "$ws_stale; each points at a path that is gone. fix: herdr workspace close <id>. c2 done closes its own since F5d, so a new one here means it was made another way"
+    else
+      row PASS stale-workspaces "$ws_wt of $ws_seen workspace(s) name a worktree and every one of those paths exists"
+    fi
+  fi
+else
+  row NOTM stale-workspaces "herdr or jq is not on PATH, so no workspace was examined"
+fi
+
 # M14d records pinned (F5a). open-items and decided must resolve the drawer and the rulings
 # under ~/.claude WHATEVER the session's config dir is, or a profile session would file
 # items into a register nobody else reads. Measured by RUNNING them with a foreign

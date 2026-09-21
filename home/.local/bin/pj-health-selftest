@@ -571,6 +571,70 @@ arm "profile-registry back to PASS once the default registry is a real dir (cont
 arm "profile-registry arms ran against the fixture registry, not the live one" test "$REGT" != "$HOME/.claude/sessions"
 unprofile shared
 run_p default
+
+# P4c stale-workspaces (F5d, W-20260922-A04). A Herdr workspace pointing at a worktree that
+#     is gone. Every arm runs against a STUB herdr reading a fixture JSON file, so no real
+#     workspace is listed, got at, or closed -- asserted by its own control at the end.
+#
+#     The four states look identical from outside (nothing happens either way), so each one
+#     gets an arm: no herdr at all, herdr answering nothing, a live path, a dead path. The
+#     no-worktree workspace sits in the SAME listing as the dead one throughout, because a
+#     rule that matched every workspace would pass a PASS arm and a WARN arm alike.
+SW="$T/sw"; mkdir -p "$SW"
+cat > "$BIN/herdr" <<'SWFAKE'
+#!/usr/bin/env bash
+# stub herdr: answers `workspace list` and `workspace get` from $SW_FIXTURE.
+[ "${1:-}" = workspace ] || exit 0
+case "${2:-}" in
+  list) cat "${SW_FIXTURE:-/dev/null}" 2>/dev/null || true ;;
+  get)  sed -n "s/^${3}[[:space:]]//p" "${SW_PATHS:-/dev/null}" 2>/dev/null \
+          | { read -r p || p=""; printf '{"result":{"workspace":{"worktree":{"checkout_path":"%s"}}}}\n' "$p"; } ;;
+  *)    printf '{"result":{"type":"ok"}}\n' ;;
+esac
+SWFAKE
+chmod +x "$BIN/herdr"
+mkdir -p "$SW/live-worktree"
+# a) herdr answers NOTHING: NOT MEASURED, said out loud. This arm comes first, so the PASS
+#    below cannot be confused with "the loop never ran".
+: > "$SW/empty.json"; export SW_FIXTURE="$SW/empty.json"; export SW_PATHS="$SW/paths"
+: > "$SW/paths"
+run_p default
+arm "stale-workspaces is NOT MEASURED when herdr answers nothing" is stale-workspaces "$NM"
+arm "  and says nothing was examined" has stale-workspaces "nothing was examined"
+# b) two workspaces, one with a LIVE worktree path and one with no worktree block at all
+printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"wL"},{"workspace_id":"wP"}]}}' > "$SW/ok.json"
+printf 'wP %s\n' "$SW/live-worktree" > "$SW/paths"
+export SW_FIXTURE="$SW/ok.json"
+run_p default
+arm "stale-workspaces PASSes when every named worktree path exists" is stale-workspaces PASS
+arm "  and states BOTH denominators, so 0 stale and 0 examined cannot read alike" has stale-workspaces "of 2 workspace(s)"
+# c) the same listing, with wP now pointing at a path that is GONE: WARN, naming the id
+printf 'wP %s\n' "$SW/no-such-worktree" > "$SW/paths"
+run_p default
+arm "a workspace pointing at a missing worktree is a WARN" is stale-workspaces WARN
+arm "  and the WARN names the workspace id, not just a count" has stale-workspaces "wP ->"
+arm "  and gives the exact command to clear it" has stale-workspaces "herdr workspace close"
+# d) CONTROL for c): wL, the workspace with no worktree block, is in that same listing and
+#    is NOT reported. Without this, a rule that flagged everything would pass arm c too.
+arm "  and a workspace that names no worktree is NOT reported (control)" not_has stale-workspaces "wL ->"
+# e) back to PASS once the path exists again (control for c)
+printf 'wP %s\n' "$SW/live-worktree" > "$SW/paths"
+run_p default
+arm "stale-workspaces returns to PASS once the path is back (control)" is stale-workspaces PASS
+# f) herdr ABSENT: NOT MEASURED, and it says which tool is missing.
+#    THROUGH THE SEAM, not by moving the stub: this box HAS a real herdr, so removing the
+#    stub from $BIN just falls through to the real one and the row would measure the live
+#    server. The first draft of this arm did exactly that and failed, which is the only
+#    reason it was caught.
+PJ_HEALTH_HERDR=herdr-that-is-not-installed run_p default
+arm "stale-workspaces is NOT MEASURED with no herdr on PATH" is stale-workspaces "$NM"
+arm "  and names herdr or jq as the missing tool" has stale-workspaces "not on PATH"
+# g) CONTROL: every arm above read the FIXTURE, never a real workspace. Without it the
+#    block could have been reading the live herdr and passing by luck.
+arm "stale-workspaces arms ran against a fixture, not the live herdr" test "$SW_FIXTURE" != ""
+arm "  and the fixture lives under the throwaway root" test "${SW_FIXTURE#$T/}" != "$SW_FIXTURE"
+unset SW_FIXTURE SW_PATHS
+
 # P5 records-pinned: the differential. The stub open-items ignores CLAUDE_CONFIG_DIR, so
 #    the row passes; a stub that FOLLOWS it must make the row FAIL, or the check is
 #    measuring nothing. Both arms, same fixture, one variable changed.
@@ -602,7 +666,7 @@ arm "--quiet keeps the summary line" grep -q '^pj-health: .* FAIL, ' <<<"$QOUT"
 write_settings
 FOUT="$( (builtin cd "$PROJ" && PATH="$BIN:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" PJ_HOME="$H" PJ_BIN_DIR="$BIN" PJ_DOTFILES="$DF" PJ_LAUNCHER="$BIN/pj" PJ_TYPE_OUT="$T/type-out" DRYRUN_FILE="$T/dryrun" PJ_PS_OUT="$T/ps" PJ_ZSHRC_MTIME="$ZMT" PJ_TRANSCRIPTS_DIR="$H/projects" PJ_STATE_DIR="$STATE" PJ_MACHINE_FILE="$T/machine" PJ_PROMPT_SOURCES="$OR:$RULES" PJ_PROMPT_OUT="$T/cache/prompt.md" OI_WHERE_FILE="$T/oi-where" DECIDED_LIST_FILE="$T/decided-list" DECIDED_LIST_RC="$T/decided-list-rc" DECIDED_HOMES_FILE="$T/decided-homes" RENDER_OUT_FILE="$T/render-out" RENDER_RC_FILE="$T/render-rc" SYNC_OUT_FILE="$T/sync-out" pj-health 2>/dev/null) )"
 arm "normal output under 40 lines ($(wc -l <<<"$FOUT" | tr -d ' '))" [ "$(wc -l <<<"$FOUT" | tr -d ' ')" -lt 40 ]
-arm "normal output has one row per check (31)" [ "$(grep -cE '^(PASS|WARN|FAIL|NOT MEASURED) ' <<<"$FOUT")" -eq 31 ]
+arm "normal output has one row per check (32)" [ "$(grep -cE '^(PASS|WARN|FAIL|NOT MEASURED) ' <<<"$FOUT")" -eq 32 ]
 arm "unknown arg REFUSED rc 2" bash -c 'PATH="$1:$PATH" pj-health --bogus >/dev/null 2>&1; [ $? -eq 2 ]' _ "$BIN"
 arm "--help exits 0" bash -c 'PATH="$1:$PATH" pj-health --help >/dev/null 2>&1' _ "$BIN"
 
