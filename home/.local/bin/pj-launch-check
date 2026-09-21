@@ -16,10 +16,28 @@
 #             LAUNCH CHECK: could not read the launcher argv (<why>)
 #             A check that cannot see says so; it never passes by silence.
 #
+# PROFILES (F5a). What "the pj launcher must carry" is no longer a constant: a profile
+# declares its own plugins and setting_sources, and `scratch` declares `plugins: none`.
+# So the expected set is read from ~/.config/pj/profiles/<PJ_PROFILE>, which `pj` exports
+# into the session. The match is EXACT IN BOTH DIRECTIONS -- a declared dir that is
+# missing is stale, and an undeclared dir that is present is equally stale, because a
+# shell holding the old launcher would pass the old five to a profile that wants none.
+# No profile file, or no PJ_PROFILE: the old hardcoded five, so a box with nothing
+# stowed checks exactly what it always did.
+#
 # ALWAYS appends one line to ~/.local/state/pj/launches.log (the debugging record):
-#   ts=<ISO local> session=<id> project=<key> tty=<tty> shell_start=<ISO> zshrc_mtime=<ISO> result=<ok|stale:a,b|unmeasured:why>
+#   ts=<ISO local> session=<id> project=<key> profile=<name> config_dir=<path|default>
+#     tty=<tty> shell_start=<ISO> zshrc_mtime=<ISO> result=<ok|stale:a,b|unmeasured:why>
 # `result=` is last so a grep on it is unambiguous. An unwritable log dir costs one stderr
 # line; the warning still prints and the exit is still 0.
+#
+# WHY config_dir IS LOGGED, and logged HERE. The log lives under ~/.local/state, which is
+# MACHINE scope and therefore shared by every profile, while a session's transcript lives
+# under its own config dir. That makes this the one place that maps session_id -> which
+# config dir holds that session's transcript, which is how pj-health finds the evidence
+# for a session that did not run under ~/.claude. `config_dir=default` means the variable
+# was unset, which is not the same fact as it being set to ~/.claude.
+# Older lines carry neither field; every reader must tolerate their absence.
 #
 # HOW IT FINDS THE ARGV (measured 2026-09-21 with a scratch --settings hook under
 # `claude -p`, Claude Code 2.1.278): Claude Code exports CLAUDE_PID into the hook's env,
@@ -38,13 +56,33 @@
 #   PJ_STATE_DIR         replaces ~/.local/state/pj
 #   PJ_ZSHRC_PATH        the .zshrc to stat (default ~/.zshrc, followed through the link)
 #   PJ_LAUNCH_SHELL_START / PJ_LAUNCH_TTY   fixed values instead of ps lookups
+#   PJ_PROFILE_DIR       the profiles folder (default ~/.config/pj/profiles)
 # Flags: --selftest, --help.
 set -u
 
 STATE="${PJ_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/pj}"
 LOG="$STATE/launches.log"
 PLUGIN_DIRS_EXPECTED="skills/herdr skills/AgentRelay skills/ISA pj-voice pj"
+SETTING_SOURCES_EXPECTED="project,local"
+PROFILE_DIR="${PJ_PROFILE_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/pj/profiles}"
+PROFILE="${PJ_PROFILE:-default}"
 ZSHRC="${PJ_ZSHRC_PATH:-$HOME/.zshrc}"
+
+# One key out of a profile file. Deliberately NOT a call to `pj --dry-run`: that would run
+# pj-prompt-file, which WRITES the prompt cache, and this hook's contract is that it
+# writes only its own log line.
+profile_key(){   # profile_key <name> <key> -> value, or nothing
+  local f="$PROFILE_DIR/$1"
+  [ -r "$f" ] || return 0
+  sed -n "s/^$2:[[:space:]]*//p" "$f" 2>/dev/null | sed 's/[[:space:]]*$//' | head -1
+}
+load_profile_expectations(){
+  local p
+  p="$(profile_key "$PROFILE" plugins)"
+  [ -n "$p" ] && PLUGIN_DIRS_EXPECTED="$p"
+  p="$(profile_key "$PROFILE" setting_sources)"
+  [ -n "$p" ] && SETTING_SOURCES_EXPECTED="$p"
+}
 
 usage(){ sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; }
 
@@ -123,23 +161,64 @@ check(){   # sets REASONS (comma list) and PHRASES (for the warning) from ARGV_T
   if [ -z "$got" ] || [ "$got" != "$want" ]; then
     REASONS="rules-file"; PHRASES="RULES.md (prompt file is not the pj-prompt-file cache)"
   fi
-  for d in $PLUGIN_DIRS_EXPECTED; do
-    local hit=0 x
-    for x in $dirs; do [ "$(canon "$x")" = "$(canon "$HOME/.claude/$d")" ] && hit=1; done
-    if [ "$hit" -eq 0 ]; then
-      REASONS="${REASONS:+$REASONS,}plugin-dir:${d##*/}"; PHRASES="${PHRASES:+$PHRASES, }plugin dir ~/.claude/$d"
+  # declared but ABSENT
+  if [ "$PLUGIN_DIRS_EXPECTED" != none ]; then
+    for d in $PLUGIN_DIRS_EXPECTED; do
+      local hit=0 x
+      for x in $dirs; do [ "$(canon "$x")" = "$(canon "$HOME/.claude/$d")" ] && hit=1; done
+      if [ "$hit" -eq 0 ]; then
+        REASONS="${REASONS:+$REASONS,}plugin-dir:${d##*/}"; PHRASES="${PHRASES:+$PHRASES, }plugin dir ~/.claude/$d"
+      fi
+    done
+  fi
+  # PRESENT but not declared. The other direction matters just as much: a shell holding
+  # the pre-profile launcher passes the old five to a `plugins: none` profile, and a
+  # one-way check would call that a clean launch.
+  local extra="" x d2 hit2
+  for x in $dirs; do
+    hit2=0
+    if [ "$PLUGIN_DIRS_EXPECTED" != none ]; then
+      for d2 in $PLUGIN_DIRS_EXPECTED; do [ "$(canon "$x")" = "$(canon "$HOME/.claude/$d2")" ] && hit2=1; done
     fi
+    [ "$hit2" -eq 0 ] && extra="${extra:+$extra }${x##*/}"
   done
-  if [ "$sources" != "project,local" ]; then
-    REASONS="${REASONS:+$REASONS,}setting-sources"; PHRASES="${PHRASES:+$PHRASES, }--setting-sources project,local"
+  if [ -n "$extra" ]; then
+    REASONS="${REASONS:+$REASONS,}plugin-dir-undeclared:$(printf '%s' "$extra" | tr ' ' '+')"
+    PHRASES="${PHRASES:+$PHRASES, }undeclared plugin dir(s) $extra (profile $PROFILE declares: $PLUGIN_DIRS_EXPECTED)"
+  fi
+  if [ "$sources" != "$SETTING_SOURCES_EXPECTED" ]; then
+    REASONS="${REASONS:+$REASONS,}setting-sources"; PHRASES="${PHRASES:+$PHRASES, }--setting-sources $SETTING_SOURCES_EXPECTED"
+  fi
+  # the running config dir against what the profile declares. `config_dir: ~/.claude`
+  # means the variable is deliberately UNSET, so an unset variable matches it.
+  local want_cd got_cd
+  want_cd="$(profile_key "$PROFILE" config_dir)"
+  if [ -n "$want_cd" ]; then
+    case "$want_cd" in '~/'*) want_cd="$HOME/${want_cd#\~/}" ;; esac
+    got_cd="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+    if [ "$(canon "$got_cd")" != "$(canon "$want_cd")" ]; then
+      REASONS="${REASONS:+$REASONS,}config-dir"
+      PHRASES="${PHRASES:+$PHRASES, }the declared config dir for profile $PROFILE"
+    fi
   fi
 }
 
 log_line(){   # log_line <result>
-  local key=""
-  if [ -n "$CWD" ]; then key="$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null | sed 's#[/._]#-#g')"; fi
+  # --git-common-dir, NOT --show-toplevel (F5a Q4). From inside a linked worktree the
+  # first returns the MAIN repo's .git and the second returns the worktree, so only the
+  # first gives the project key that open-items, pj-start-card, pj-session-end and
+  # decided already use. Measured in a real worktree fixture 2026-09-21; this line was
+  # the only one of the five still keying by the worktree, which meant a c2 session
+  # logged under a key pj-health would never look in. No existing key changes: none of
+  # the three live drawers is a worktree.
+  local key="" gcd=""
+  if [ -n "$CWD" ]; then
+    gcd="$(git -C "$CWD" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
+    [ -n "$gcd" ] && key="$(dirname "$gcd" | sed 's#[/._]#-#g')"
+  fi
   [ -n "$key" ] || key="$(printf '%s' "${CWD:-$PWD}" | sed 's#[/._]#-#g')"
-  local line="ts=$(iso_now) session=${SESSION:-unknown} project=$key tty=${TTY_:-unknown} shell_start=${SHELL_START:-unknown} zshrc_mtime=$(iso_from_epoch "$(mtime_of "$ZSHRC")") result=$1"
+  local cd_field="${CLAUDE_CONFIG_DIR:-default}"
+  local line="ts=$(iso_now) session=${SESSION:-unknown} project=$key profile=$PROFILE config_dir=$cd_field tty=${TTY_:-unknown} shell_start=${SHELL_START:-unknown} zshrc_mtime=$(iso_from_epoch "$(mtime_of "$ZSHRC")") result=$1"
   if mkdir -p "$STATE" 2>/dev/null && printf '%s\n' "$line" >>"$LOG" 2>/dev/null; then :; else
     printf 'pj-launch-check: could not append to %s\n' "$(tilde "$LOG")" >&2
   fi
@@ -148,6 +227,7 @@ log_line(){   # log_line <result>
 main(){
   read_input
   [ "$SRC" = compact ] && exit 0
+  load_profile_expectations
   EXPECTED="${PJ_PROMPT_EXPECTED:-}"
   if [ -z "$EXPECTED" ]; then
     EXPECTED="$(pj-prompt-file --path 2>/dev/null || true)"
@@ -191,8 +271,12 @@ selftest(){
   printf '%s\n' "${argv_ok/ --plugin-dir $HOME\/.claude\/pj / }" >"$root/argv.fourdirs"
   printf '%s\n' "${argv_ok/ --plugin-dir $HOME\/.claude\/pj / }" | sed "s#$exp#$root/old-rules.md#" >"$root/argv.both"
   printf '%s\n' "${argv_ok/project,local/user,project,local}" >"$root/argv.sources"
+  # An EMPTY profiles dir on purpose for arms 1-10: with no profile file the tool must
+  # fall back to the hardcoded five, which is what those arms were written against and
+  # what a box with nothing stowed still gets. Arms 11+ point at real fixture profiles.
+  mkdir -p "$root/profiles"
   run(){   # run <argv-file> [stdin]  -> OUT RC
-    OUT="$(printf '%s' "${2:-{\"session_id\":\"s1\",\"source\":\"startup\",\"cwd\":\"$root\"\}}" | PJ_LAUNCH_ARGV="$root/$1" PJ_PROMPT_EXPECTED="$exp" PJ_STATE_DIR="$root/state" PJ_ZSHRC_PATH="$root/zshrc" PJ_LAUNCH_TTY=ttys099 PJ_LAUNCH_SHELL_START=2026-01-01T00:00:00 "$0" 2>"$root/stderr")"; RC=$?
+    OUT="$(printf '%s' "${2:-{\"session_id\":\"s1\",\"source\":\"startup\",\"cwd\":\"$root\"\}}" | PJ_LAUNCH_ARGV="$root/$1" PJ_PROMPT_EXPECTED="$exp" PJ_STATE_DIR="$root/state" PJ_ZSHRC_PATH="$root/zshrc" PJ_PROFILE_DIR="${RUN_PROFILE_DIR:-$root/profiles}" PJ_PROFILE="${RUN_PROFILE:-default}" PJ_LAUNCH_TTY=ttys099 PJ_LAUNCH_SHELL_START=2026-01-01T00:00:00 "$0" 2>"$root/stderr")"; RC=$?
   }
   echo "pj-launch-check selftest in $root"
   # 1. ok argv: silent, exit 0, one ok line logged
@@ -235,9 +319,51 @@ selftest(){
   case "$(tail -1 "$root/state/launches.log")" in *" result=unmeasured:fixture-empty") ok "8 log says unmeasured";; *) bad "8 log" "$(tail -1 "$root/state/launches.log")";; esac
   # 9. log line format: every key present once, in order, result last
   local l; l="$(sed -n 1p "$root/state/launches.log")"
-  if printf '%s' "$l" | grep -qE '^ts=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}[+-][0-9]{4} session=s1 project=[^ ]+ tty=ttys099 shell_start=2026-01-01T00:00:00 zshrc_mtime=[0-9]{4}-[0-9-]+T[0-9:]{8} result=ok$'; then ok "9 log line format"; else bad "9 log format" "$l"; fi
+  if printf '%s' "$l" | grep -qE '^ts=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}[+-][0-9]{4} session=s1 project=[^ ]+ profile=[^ ]+ config_dir=[^ ]+ tty=ttys099 shell_start=2026-01-01T00:00:00 zshrc_mtime=[0-9]{4}-[0-9-]+T[0-9:]{8} result=ok$'; then ok "9 log line format (with profile= and config_dir=)"; else bad "9 log format" "$l"; fi
   # 10. control: the tty and shell-start seams are what landed (a wrong fixture would fail 9)
   [ "$(grep -c ' tty=ttys099 ' "$root/state/launches.log")" -ge 5 ] && ok "10 control: every measured line carries the fixture tty" || bad "10 control" "$(grep -c ' tty=ttys099 ' "$root/state/launches.log")"
+
+  # ---- profiles (F5a) -------------------------------------------------------------
+  # 11. config_dir=default when CLAUDE_CONFIG_DIR is unset. "default" and "~/.claude" are
+  #     different facts and the log must not blur them.
+  case "$(tail -1 "$root/state/launches.log")" in *" config_dir=default "*) ok "11 an unset CLAUDE_CONFIG_DIR logs as config_dir=default";; *) bad "11 config_dir" "$(tail -1 "$root/state/launches.log")";; esac
+  # 12. a `plugins: none` profile: the SAME five-dir argv that was clean above is now
+  #     stale, because a stale shell passing the old five is exactly the failure to catch.
+  printf 'plugins: none\nconfig_dir: %s/cfgx\n' "$root" > "$root/profiles/nodirs"
+  RUN_PROFILE=nodirs run argv.ok
+  case "$OUT" in *"undeclared plugin dir(s)"*) ok "12 plugins: none flags the five undeclared dirs";; *) bad "12 undeclared" "$OUT";; esac
+  case "$(tail -1 "$root/state/launches.log")" in *" profile=nodirs "*) ok "12 the profile name is logged";; *) bad "12 profile field" "$(tail -1 "$root/state/launches.log")";; esac
+  # 12b. CONTROL for 12: an argv with NO plugin dirs is clean under the same profile.
+  #      Without this, arm 12 passes just as well if the check flags everything.
+  printf '%s\n' "claude --setting-sources project,local --settings $HOME/.claude/settings.project.json --append-system-prompt-file $exp --dangerously-skip-permissions --effort high" >"$root/argv.nodirs"
+  RUN_PROFILE=nodirs CLAUDE_CONFIG_DIR="$root/cfgx" run argv.nodirs
+  [ -z "$OUT" ] && ok "12b control: a no-plugin argv IS clean under plugins: none" || bad "12b control" "$OUT"
+  # 13. a config dir that does not match the profile's declaration is stale
+  RUN_PROFILE=nodirs run argv.nodirs
+  case "$OUT" in *"declared config dir for profile nodirs"*) ok "13 a config dir that disagrees with the profile is flagged";; *) bad "13 config-dir drift" "$OUT";; esac
+  # 14. a profile declaring the five behaves exactly as the hardcoded default did
+  printf 'plugins: skills/herdr skills/AgentRelay skills/ISA pj-voice pj\nsetting_sources: project,local\nconfig_dir: ~/.claude\n' > "$root/profiles/five"
+  RUN_PROFILE=five run argv.ok
+  [ -z "$OUT" ] && ok "14 a profile declaring the five is silent on the five-dir argv" || bad "14 five" "$OUT"
+  # 15. an unset CLAUDE_CONFIG_DIR satisfies `config_dir: ~/.claude` (the do-not-export rule)
+  case "$(tail -1 "$root/state/launches.log")" in *" result=ok"*) ok "15 unset CLAUDE_CONFIG_DIR matches config_dir: ~/.claude";; *) bad "15 do-not-export" "$(tail -1 "$root/state/launches.log")";; esac
+  # 16. the project key comes from --git-common-dir, so a WORKTREE logs under the MAIN
+  #     repo's key (F5a Q4). Real fixture: a repo and a linked worktree of it.
+  local wtmain="$root/wtrepo" wtlinked="$root/wtlinked"
+  git init -q "$wtmain" >/dev/null 2>&1
+  git -C "$wtmain" -c user.email=t@e -c user.name=t commit -q --allow-empty -m init >/dev/null 2>&1
+  git -C "$wtmain" worktree add -q "$wtlinked" -b wtbranch >/dev/null 2>&1
+  if [ -d "$wtlinked" ]; then
+    local mainkey
+    mainkey="$(printf '%s' "$(cd "$wtmain" && pwd -P)" | sed 's#[/._]#-#g')"
+    run argv.ok "{\"session_id\":\"swt\",\"source\":\"startup\",\"cwd\":\"$wtlinked\"}"
+    case "$(tail -1 "$root/state/launches.log")" in *" project=$mainkey "*) ok "16 a launch inside a worktree logs under the MAIN repo key";; *) bad "16 worktree key" "$(tail -1 "$root/state/launches.log")";; esac
+    # 16b. CONTROL: the worktree's OWN key is different, so arm 16 could have failed
+    local wtkey; wtkey="$(printf '%s' "$(cd "$wtlinked" && pwd -P)" | sed 's#[/._]#-#g')"
+    [ "$wtkey" != "$mainkey" ] && ok "16b control: the worktree's own key differs from the main key" || bad "16b control" "the two keys are identical, so arm 16 proves nothing"
+  else
+    printf '  info 16 worktree fixture could not be created; key check skipped\n'
+  fi
   printf 'pj-launch-check selftest: %d passed, %d failed\n' "$pass" "$fail"
   [ "$fail" -eq 0 ]
 }
