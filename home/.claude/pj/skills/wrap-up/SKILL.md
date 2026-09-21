@@ -3,6 +3,7 @@ name: wrap-up
 description: End-of-session pass for pj sessions. Capture what exists only in this conversation, check delivery, rewrite the handoff. Invoke as /pj:wrap-up; never auto-invoked.
 disable-model-invocation: true
 ---
+
 # Wrap-up
 
 Work through these in order. Report once at the end.
@@ -21,12 +22,12 @@ Work through these in order. Report once at the end.
    - questions you asked that were never answered
    - verdicts given in passing ("leave it", "not now")
    - lessons about how the user wants things done
-   Before calling anything conversation-only, check: `open-items`, the
-   project's own trackers named in `.claude/pj-homes`, `decided` on the
-   key words, and the file the work touched. Say "I found it only in X"
-   or "I did not find it". Never "it is recorded nowhere" without having
-   looked. A condition a start hook printed (CVE sweep, changelog
-   drift, CI) is the hook's, not this conversation's: it is not a row.
+     Before calling anything conversation-only, check: `open-items`, the
+     project's own trackers named in `.claude/pj-homes`, `decided` on the
+     key words, and the file the work touched. Say "I found it only in X"
+     or "I did not find it". Never "it is recorded nowhere" without having
+     looked. A condition a start hook printed (CVE sweep, changelog
+     drift, CI) is the hook's, not this conversation's: it is not a row.
 
 2. One table. Columns: what / kind (do, decide, lesson) / state / who
    said it / recorded where now / finish line / proposed verdict.
@@ -41,7 +42,7 @@ Work through these in order. Report once at the end.
    exceptions. Mirror the question and every option label in chat first.
 
 4. Apply the approved verdicts through tools only. Items: `open-items
-   add`, then `decline` for declined ones. A project lesson: a memory
+add`, then `decline` for declined ones. A project lesson: a memory
    file. A machine-wide lesson: a note under `~/.claude/pj-global/notes/`
    plus one line in its `INDEX.md`; create both on first use. Where this
    project has no drawer, ask once whether to create one. Never create
@@ -70,7 +71,25 @@ Work through these in order. Report once at the end.
    for the user.
 
 8. When `.claude/pj-homes` names the project's own `wrap-up` command,
-   tell the user to run it next.
+   OFFER to run it, and run it only on a yes. Ask in one line, naming
+   the command: "Run `<command>` now?" A yes means invoke it as your
+   next act. Anything else, or no answer, means say it is still owed
+   and put it at the top of the report as the user's action.
+
+   Ruled at the P8b gate 2026-09-21. Running it unasked was rejected
+   because a project's wrap-up is that project's ritual and can commit,
+   tag, push and edit a changelog, so `pj` would be deciding when
+   another project's process runs. Handing it back silently was
+   rejected because it is the last step of a long session and the
+   easiest thing in the world to lose.
+
+   Note the mechanical limit, so nobody writes a fix for the wrong
+   problem: a slash command is executed by the MODEL, not by a shell.
+   This step cannot exec it. "Run it" means the model invokes it next,
+   which the user can still interrupt. Do not try to shell out to it.
+
+   Where there is no `wrap-up` key, this step is silent. Say so in the
+   report rather than leaving a gap the reader has to interpret.
 
 9. `pj-wrap done` (`pj-wrap done --keep-earlier` when step 0 chose
    later). It writes under `~/.local/state`, so run it outside the
