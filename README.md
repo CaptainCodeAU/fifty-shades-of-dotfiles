@@ -225,6 +225,8 @@ The installer will check prerequisites, install missing tools, set up Oh My Zsh 
 
 It will also ask **which machine this is** (`A` Mac mini, `B` Intel laptop, `C` WSL, `D` Linux VM) and write the answer to `~/.config/pj/machine`. That letter goes into every work-item and decision ID minted here, so two machines can never claim the same one; there is no default, and skipping it leaves the ID allocator refusing.
 
+`pj --profile <name>` launches under a **profile** — a `key: value` file in `~/.config/pj/profiles/` naming the config dir, the settings, the prompt source, the plugin dirs and whether the start card prints. The point of a profile is that only the config dir moves: the drawer, the rulings and `pj-global` stay in `~/.claude` whatever `CLAUDE_CONFIG_DIR` says, so a second account or a throwaway session never forks the record. `c2 start <topic>` uses the `scratch` profile in a git worktree under `<repo>/.worktree/scratch/`, and `c2 done` refuses to tear it down while it holds uncommitted files or unmerged commits. A profile with a config dir of its own needs a one-time `/login` and folder trust that only a human can give; `pj-health --profile <name>` says so until it is done. Full reference: **[docs/PJ_PROFILES.md](docs/PJ_PROFILES.md)**.
+
 ### Manual Install
 
 1. **Prerequisites**:
