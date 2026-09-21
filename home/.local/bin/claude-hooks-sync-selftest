@@ -211,6 +211,42 @@ else bad "settings.json is still valid JSON" "jq empty failed"; fi
 if compgen -G "$SETTINGS.bak."* >/dev/null; then ok "a backup was written before the change"
 else bad "a backup was written before the change" "no .bak.* file"; fi
 
+# --- 9b. W-20260921-A18: backups are capped, oldest pruned -------------------
+# Seven had accumulated beside the real settings.project.json by 2026-09-21 while
+# the item that filed it said three: nobody counts a thing that only grows.
+# Plant six OLDER backups by name (the suffix is YYYYmmdd_HHMMSS, so a reverse
+# sort is newest-first and no stat call is needed), then force one real change
+# and check what survives.
+_bak_count(){ find "$(dirname "$SETTINGS")" -maxdepth 1 -name "$(basename "$SETTINGS").bak.*" -print 2>/dev/null | wc -l | tr -d ' '; }
+for d in 20260101_000001 20260101_000002 20260101_000003 20260101_000004 20260101_000005 20260101_000006; do
+    cp "$SETTINGS" "$SETTINGS.bak.$d"
+done
+planted=$(_bak_count)
+if [[ "$planted" -ge 7 ]]; then ok "CONTROL: $planted backups planted, so the prune has something to bite on"
+else bad "CONTROL: backups planted" "wanted >=7, got $planted"; fi
+# A change the tool will actually make: drop one registered hook back out.
+jq 'del(.hooks.PreToolUse)' "$SETTINGS" > "$SETTINGS.tmp9b" && command mv "$SETTINGS.tmp9b" "$SETTINGS"
+out=$(run_tool --install); rc=$?
+kept=$(_bak_count)
+if [[ "$kept" -eq 3 ]]; then ok "backups capped at the default 3 (was $planted)"
+else bad "backups capped at the default 3" "got $kept"; fi
+# The two OLDEST planted names must be the ones gone, and the newest planted one
+# must still be there -- otherwise "3 remain" is true of pruning the wrong end.
+if [[ ! -e "$SETTINGS.bak.20260101_000001" && ! -e "$SETTINGS.bak.20260101_000002" ]]; then
+    ok "the OLDEST backups are the ones pruned"
+else bad "the OLDEST backups are the ones pruned" "20260101_000001/2 survived"; fi
+case "$out" in *"pruned"*) ok "the prune is announced, not silent";; *) bad "the prune is announced, not silent" "no 'pruned' in output: $out";; esac
+# KEEP_BACKUPS=0 disables the prune entirely.
+for d in 20260101_000007 20260101_000008; do cp "$SETTINGS" "$SETTINGS.bak.$d"; done
+before0=$(_bak_count)
+jq 'del(.hooks.PreToolUse)' "$SETTINGS" > "$SETTINGS.tmp9c" && command mv "$SETTINGS.tmp9c" "$SETTINGS"
+out=$(KEEP_BACKUPS=0 run_tool --install); rc=$?
+after0=$(_bak_count)
+if [[ "$after0" -ge "$before0" ]]; then ok "KEEP_BACKUPS=0 prunes nothing ($before0 -> $after0)"
+else bad "KEEP_BACKUPS=0 prunes nothing" "$before0 -> $after0"; fi
+# Put the fixture back the way arm 10 expects it: one settled --install, capped.
+out=$(run_tool --install) || true
+
 # --- 10. second run is a no-op, and byte-identical ---------------------------
 before=$(shasum "$SETTINGS" | awk '{print $1}')
 out=$(run_tool --install); rc=$?

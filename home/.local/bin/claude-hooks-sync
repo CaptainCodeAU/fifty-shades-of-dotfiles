@@ -403,6 +403,45 @@ if ! command mv "$TMP" "$SETTINGS"; then
 fi
 TMP=""   # moved, so the EXIT trap must not chase it
 
+# W-20260921-A18: keep a ROLLING $KEEP_BACKUPS, oldest pruned. The no-change
+# guard above already stops identical backups piling up, so every file here is a
+# real change -- but by 2026-09-21 there were SEVEN, and the item that filed this
+# said three, because nobody counts a thing that only grows. The newest is the
+# only one that can serve the purpose (undo the run that just happened), and the
+# file itself is rendered from a template in the dotfiles repo, so none of them
+# is the last copy of anything.
+#
+# The prune is announced, never silent: a tool that deletes without saying so is
+# the thing you find out about later. Pruning happens AFTER the successful write,
+# so a failed run never destroys history.
+pruned=0; stuck=0
+if [ "${KEEP_BACKUPS:-3}" -gt 0 ] 2>/dev/null; then
+    # Names are ...bak.YYYYmmdd_HHMMSS, so a plain reverse sort is newest-first
+    # and needs no stat call (and no BSD/GNU stat divergence).
+    # `rm` here is the Trash-routed wrapper, which is what we want for a file the
+    # operator might still need -- but it can REFUSE and leave the file in place
+    # (measured: inside a Claude Bash sandbox the trash call returns
+    # afpAccessDenied). Its exit code alone is not proof, so each removal is
+    # checked with `test -e`, and `stuck` is reported rather than swallowed.
+    # A pruner that quietly prunes nothing is the accumulation bug again.
+    while IFS= read -r old; do
+        [ -n "$old" ] || continue
+        rm -f -- "$old" 2>/dev/null
+        if [ -e "$old" ]; then stuck=$((stuck + 1)); else pruned=$((pruned + 1)); fi
+    done <<EOF
+$(find "$(dirname "$SETTINGS")" -maxdepth 1 -name "$(basename "$SETTINGS").bak.*" -print 2>/dev/null \
+    | sort -r | tail -n "+$((${KEEP_BACKUPS:-3} + 1))")
+EOF
+fi
+
 printf '  %s+%s %d Claude hook(s) registered. Backup: %s%s%s\n' "$G" "$N" "$added" "$D" "$BACKUP" "$N"
+if [ "$pruned" -gt 0 ]; then
+    printf '      %spruned %d older backup(s); keeping the newest %d (KEEP_BACKUPS)%s\n' "$D" "$pruned" "${KEEP_BACKUPS:-3}" "$N"
+else
+    printf '      %s%d backup(s) kept, the cap is %d (KEEP_BACKUPS); nothing to prune%s\n' "$D" "$(find "$(dirname "$SETTINGS")" -maxdepth 1 -name "$(basename "$SETTINGS").bak.*" -print 2>/dev/null | wc -l | tr -d ' ')" "${KEEP_BACKUPS:-3}" "$N"
+fi
+if [ "$stuck" -gt 0 ]; then
+    printf '%s  ! %d backup(s) could NOT be removed and are still on disk (the trash call refused; this happens inside a sandbox). Prune them from a terminal.%s\n' "$Y" "$stuck" "$N" >&2
+fi
 printf '      %sRestart Claude Code (or open /hooks) to load them.%s\n' "$D" "$N"
 exit 0
