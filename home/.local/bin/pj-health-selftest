@@ -59,7 +59,7 @@ for s in c2 pj-launcher-menu; do
   fake "$DF/home/.local/bin/$s" 'case "${1:-}" in --selftest) echo "7 passed, 0 failed"; exit 0;; esac; exit 0'
 done
 
-for h in enforce-secret-probe.sh enforce-census.sh enforce-herdr-skill.sh mark-herdr-skill-read.sh validate-bash.sh enforce-uv.sh enforce-pnpm.sh; do
+for h in enforce-secret-probe.sh enforce-census.sh enforce-herdr-skill.sh mark-herdr-skill-read.sh validate-bash.sh enforce-uv.sh enforce-pnpm.sh pj-voice-contract.sh; do
   fake "$DF/home/.claude/hooks/$h" 'echo "ALL ARMS PASS"; exit 0'
 done
 echo '{"name":"pj","version":"0.1.0"}' >"$DF/home/.claude/pj/.claude-plugin/plugin.json"
@@ -67,7 +67,7 @@ printf -- '---\nname: wrap-up\n---\n# wrap-up\n' >"$DF/home/.claude/pj/skills/wr
 for t in $TOOLS c2 pj-launcher-menu pj-start-card-selftest pj-session-end-selftest pj-wrap-selftest open-items-selftest decided-selftest claude-hooks-sync-selftest claude-project-settings-render-selftest ccw-watch-selftest ci-watch-selftest pj-health-selftest audit-chain-selftest; do
   ln -s "$DF/home/.local/bin/$t" "$BIN/$t"
 done
-for h in enforce-secret-probe.sh enforce-census.sh enforce-herdr-skill.sh mark-herdr-skill-read.sh validate-bash.sh enforce-uv.sh enforce-pnpm.sh; do ln -s "$DF/home/.claude/hooks/$h" "$H/hooks/$h"; done
+for h in enforce-secret-probe.sh enforce-census.sh enforce-herdr-skill.sh mark-herdr-skill-read.sh validate-bash.sh enforce-uv.sh enforce-pnpm.sh pj-voice-contract.sh; do ln -s "$DF/home/.claude/hooks/$h" "$H/hooks/$h"; done
 ln -s "$DF/home/.claude/pj/.claude-plugin/plugin.json" "$H/pj/.claude-plugin/plugin.json"
 ln -s "$DF/home/.claude/pj/skills/wrap-up/SKILL.md" "$H/pj/skills/wrap-up/SKILL.md"
 echo "# style" >"$H/pj-voice/output-styles/pj-voice.md"

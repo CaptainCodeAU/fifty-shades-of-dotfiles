@@ -9,17 +9,34 @@
 # obeyed -- 0 filler openers, 0 hedges, 0 banned words -- so the file is not
 # being ignored, this one rule is.
 #
-# AND THE WORDING IS NOT THE PROBLEM. DA_IDENTITY.md line 45, which the `c`
-# family loads, says "no em dashes, ever, use commas or full stops" -- almost
-# word for word what V4 says. The control set of 8 non-pj transcripts, 19,505
-# characters of prose, contains ZERO. Same rule, opposite outcome.
+# THE DEFECT IS MODEL-SPECIFIC, and that is the single most important fact
+# here. Split the same 17 transcripts by model:
+#     claude-opus-5       371 em dashes in 157,774 prose chars   1 per 425
+#     claude-fable-5-1      0 em dashes in  15,725 prose chars   none
+# Same rules file, same output style, same repo. So V4 holds on one model and
+# not on the other, and any count taken without naming the model is not a
+# measurement. That is why this hook logs the model on every line.
+#
+# THE WORDING IS NOT THE PROBLEM. DA_IDENTITY.md line 45, which the `c` family
+# loads, says "no em dashes, ever, use commas or full stops" -- almost word for
+# word what V4 says, and the `c` family is clean.
+#
+# BUT THE `c` COMPARISON IS THINNER THAN IT FIRST LOOKED, and the first version
+# of this comment overstated it. The `c` control set is 19,505 characters of
+# prose with zero em dashes, and 15,831 of those characters are FABLE, which
+# produces zero under pj as well. The arm that actually compares is `c` on
+# Opus: 3,674 characters, 0 observed against about 9 predicted at the pj Opus
+# rate. Real, and thin. Do not cite the 19,505 figure.
 #
 # What the `c` family has that pj does not is DriftReminder.hook.ts, which
 # COUNTS. It is registered only in ~/.claude/settings.json, and pj passes
 # --setting-sources project,local, so it has never fired here: its contract
 # line appears twice in a `c` transcript and zero times in 35.3 MB of pj
-# transcript. That separation, with a positive arm in the control, is the
-# whole argument for this file.
+# transcript. THAT separation is measured and solid. The inference from it,
+# that counting is WHY `c` is clean, is a hypothesis: the one `c` transcript
+# carrying the contract line ran on Fable, which is clean anyway. So this hook
+# addresses a real, measured, Opus-specific defect by a mechanism with good
+# evidence behind it and no proof yet. The log below is how that gets settled.
 #
 # WHY UserPromptSubmit AND NOT Stop. DriftReminder's own header records the
 # measurement: FormatGate was a Stop hook, went observation-only 2026-07-11,
@@ -47,6 +64,20 @@
 #
 # `--selftest` proves every arm, positive and negative. Exit 0 = all pass.
 
+# THE LOG (Gavin, 2026-09-22). One line per turn, so the hook's effect is
+# measured automatically instead of by a one-off scan somebody has to remember
+# to run. TSV: timestamp, session (8 chars), turn, model, em dashes, prose
+# chars. The MODEL field is not decoration and was not in the original request:
+# the header above shows the defect is Opus-specific, so a count without a
+# model beside it cannot be read at all.
+#
+# Turn is the number of assistant text blocks in the transcript when this hook
+# fired, which is a measured number rather than a counter this hook keeps.
+# Never blocks: an unwritable log is skipped in silence, because a voice hook
+# that fails a prompt over a log file would be worse than the drift.
+LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/pj"
+LOG_FILE="${PJ_VOICE_DRIFT_LOG:-$LOG_DIR/voice-drift.log}"
+
 EM=$(printf '\xe2\x80\x94')
 
 # Count em dashes in assistant PROSE: outside fenced blocks, outside inline backticks.
@@ -64,6 +95,21 @@ count_prose_em() {
   '
 }
 
+# Characters of PROSE, same definition as the counter above: the denominator
+# without which an em-dash count means nothing.
+strip_code_chars() {
+  awk '
+    /^[[:space:]]*```/ { fence = !fence; next }
+    fence { next }
+    {
+      line = $0
+      gsub(/`[^`]*`/, " ", line)
+      total += length(line) + 1
+    }
+    END { print total + 0 }
+  '
+}
+
 # Last assistant visible text from a transcript, or nothing.
 last_assistant_text() {
   local tr="$1"
@@ -72,6 +118,35 @@ last_assistant_text() {
     [ .[] | select(.type == "assistant")
           | .message.content[]? | select(.type == "text") | .text ]
     | last // empty' 2>/dev/null
+}
+
+# Model of the last assistant message, or "?" when it cannot be read.
+last_model() {
+  local tr="$1"
+  [ -n "$tr" ] && [ -r "$tr" ] || { printf '?'; return 0; }
+  tail -n 400 "$tr" 2>/dev/null | jq -rs '
+    [ .[] | select(.type == "assistant") | .message.model // empty ] | last // "?"' 2>/dev/null
+}
+
+# Number of assistant text blocks so far: the turn this reply was.
+turn_no() {
+  local tr="$1"
+  [ -n "$tr" ] && [ -r "$tr" ] || { printf '0'; return 0; }
+  jq -s '[ .[] | select(.type == "assistant") | .message.content[]? | select(.type == "text") ] | length' \
+    "$tr" 2>/dev/null || printf '0'
+}
+
+log_turn() { # log_turn <session> <turn> <model> <em> <prose_chars>
+  # The braces matter: a FAILED APPEND is a redirection error, raised by the
+  # shell before the command's own 2>/dev/null can apply, so the bare form
+  # printed "Operation not permitted" to stderr on every turn in a sandbox.
+  # A voice hook that prints an error every prompt is noise of exactly the kind
+  # this repo says trains you to skim. Measured 2026-09-22.
+  { mkdir -p "$(dirname "$LOG_FILE")" || return 0
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${1:0:8}" "$2" "$3" "$4" "$5" >>"$LOG_FILE"
+  } 2>/dev/null
+  return 0
 }
 
 emit() {
@@ -94,6 +169,9 @@ contract() {
 selftest() {
   local root pass=0 fail=0 out n
   root="$(mktemp -d "${TMPDIR:-/tmp}/pj-voice-contract-selftest.XXXXXX")" || exit 1
+  # Never let a selftest write into the real drift log: its rows would be
+  # fixtures sitting in what is meant to be a record of real turns.
+  export PJ_VOICE_DRIFT_LOG="$root/drift.log"
   ok() { pass=$((pass + 1)); printf '  ok   %s\n' "$1"; }
   bad() { fail=$((fail + 1)); printf '  FAIL %s\n       got: %s\n' "$1" "$2"; }
   mk() { printf '%s\n' "$2" | jq -Rs '{type:"assistant",message:{content:[{type:"text",text:.}]}}' > "$1"; }
@@ -169,6 +247,40 @@ More prose."
     ok "8 emits valid JSON naming UserPromptSubmit"
   else bad "8 JSON shape" "$out"; fi
 
+  # 9. THE LOG. One TSV row per measured turn: ts, session, turn, model, em, prose chars.
+  : >"$PJ_VOICE_DRIFT_LOG"
+  printf '%s\n' \
+    '{"type":"assistant","message":{"model":"claude-opus-5","content":[{"type":"text","text":"one'"$EM"'two"}]}}' \
+    >"$root/g.jsonl"
+  printf '{"session_id":"abcdefgh-1111","transcript_path":"%s"}' "$root/g.jsonl" | "$0" >/dev/null
+  n="$(wc -l <"$PJ_VOICE_DRIFT_LOG" | tr -d ' ')"
+  [ "$n" -eq 1 ] && ok "9 one measured turn -> exactly one log row" || bad "9 log rows" "$n"
+  IFS=$'\t' read -r _ts _sid _turn _model _em _prose <"$PJ_VOICE_DRIFT_LOG"
+  [ "$_sid" = "abcdefgh" ] && ok "9 row carries the 8-char session" || bad "9 session field" "$_sid"
+  [ "$_model" = "claude-opus-5" ] && ok "9 row carries the MODEL (the field that decides how to read the count)" || bad "9 model field" "$_model"
+  [ "$_em" -eq 1 ] 2>/dev/null && ok "9 row carries the em-dash count" || bad "9 em field" "$_em"
+  [ "$_turn" -eq 1 ] 2>/dev/null && ok "9 row carries the turn number" || bad "9 turn field" "$_turn"
+  [ "$_prose" -gt 0 ] 2>/dev/null && ok "9 row carries prose chars, the denominator" || bad "9 prose field" "$_prose"
+
+  # 9b. CONTROL: a clean turn is logged too, at zero. A log that only records
+  #     breaks cannot produce a RATE, and a rate is the whole point.
+  : >"$PJ_VOICE_DRIFT_LOG"
+  mk "$root/h.jsonl" "clean prose, no dashes"
+  printf '{"session_id":"zzzz1111","transcript_path":"%s"}' "$root/h.jsonl" | "$0" >/dev/null
+  IFS=$'\t' read -r _ts _sid _turn _model _em _prose <"$PJ_VOICE_DRIFT_LOG" 2>/dev/null
+  [ "${_em:-x}" = "0" ] && ok "9b a clean turn is logged at 0, so the log yields a rate not a tally" || bad "9b clean turn logged" "${_em:-<no row>}"
+
+  # 10. CONTROL: nothing is logged when there was no previous reply to measure.
+  : >"$PJ_VOICE_DRIFT_LOG"
+  printf '{"session_id":"nope","transcript_path":"%s/absent.jsonl"}' "$root" | "$0" >/dev/null
+  [ ! -s "$PJ_VOICE_DRIFT_LOG" ] && ok "10 no previous reply -> no log row invented" || bad "10 logged something it never measured" "$(cat "$PJ_VOICE_DRIFT_LOG")"
+
+  # 11. An unwritable log must not break the prompt.
+  mkdir -p "$root/ro" && chmod 500 "$root/ro"
+  out="$(printf '{"session_id":"x","transcript_path":"%s/g.jsonl"}' "$root" | PJ_VOICE_DRIFT_LOG="$root/ro/sub/drift.log" "$0" 2>/dev/null)"; n=$?
+  chmod 700 "$root/ro"
+  case "$out" in *'VOICE CONTRACT'*) [ "$n" -eq 0 ] && ok "11 unwritable log -> contract still emitted, exit 0" || bad "11 exit" "rc=$n" ;; *) bad "11 unwritable log" "$out" ;; esac
+
   printf 'pj-voice-contract selftest: %d passed, %d failed\n' "$pass" "$fail"
   [ "$fail" -eq 0 ]
 }
@@ -182,12 +294,15 @@ command -v jq >/dev/null 2>&1 || exit 0
 
 INPUT=$(cat 2>/dev/null)
 TR=$(printf '%s' "$INPUT" | jq -r '.transcript_path // empty' 2>/dev/null)
+SID=$(printf '%s' "$INPUT" | jq -r '.session_id // "unknown"' 2>/dev/null)
 
 TEXT=$(last_assistant_text "$TR")
 if [ -z "$TEXT" ]; then
   emit "$(contract "")"
 else
   N=$(printf '%s\n' "$TEXT" | count_prose_em)
+  PROSE=$(printf '%s\n' "$TEXT" | strip_code_chars)
+  log_turn "$SID" "$(turn_no "$TR")" "$(last_model "$TR")" "$N" "$PROSE"
   emit "$(contract "$N")"
 fi
 exit 0
