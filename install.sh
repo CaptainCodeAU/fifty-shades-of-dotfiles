@@ -3925,6 +3925,28 @@ _check_pj_prereqs() {
     if [[ -d "$dotclaude/pj-voice" ]]; then echo -e "  ${GREEN}✓${RESET} pj-voice plugin dir"
     else echo -e "  ${RED}✗${RESET} $dotclaude/pj-voice missing -- the pj output style will not load"; ok=0; fi
 
+    # Profiles (F5a). NOT a ✗ and NOT part of `ok`: with no profiles dir `pj` falls back to
+    # its built-in argv and launches exactly as it always did. That fallback is a supported
+    # state, not a fault, so a missing profiles dir must not turn a working install red.
+    # It is still worth a line, because the dir is what `pj --profile` and `c2` need.
+    local pdir="${XDG_CONFIG_HOME:-$HOME/.config}/pj/profiles"
+    if [[ -d "$pdir" ]]; then
+        local pnames; pnames="$(ls "$pdir" 2>/dev/null | paste -sd ' ' -)"
+        echo -e "  ${GREEN}✓${RESET} pj profiles: ${pnames:-none} ${DIM}(${pdir/#$HOME/\~})${RESET}"
+        # A declared config dir that does not exist yet needs a human: a fresh config dir
+        # has no credentials and no folder trust, so its first launch stops at /login.
+        local pf cfg
+        for pf in "$pdir"/*; do
+            [[ -f "$pf" ]] || continue
+            cfg="$(sed -n 's/^config_dir:[[:space:]]*//p' "$pf" 2>/dev/null | head -1)"
+            [[ -n "$cfg" ]] || continue
+            cfg="${cfg/#\~/$HOME}"
+            [[ -d "$cfg" ]] || echo -e "      ${YELLOW}~${RESET} profile $(basename "$pf") declares ${cfg/#$HOME/\~}, which does not exist yet -- its first launch will ask you to /login and to trust the folder"
+        done
+    else
+        echo -e "  ${YELLOW}~${RESET} $pdir absent -- pj uses its built-in argv (supported); \`pj --profile\` and \`c2\` need it, so re-run stow"
+    fi
+
     # The three tracked symlinks: a dangling one is worse than an absent one, because the
     # folder still looks right.
     for p in pj/.claude-plugin/plugin.json pj/skills/wrap-up/SKILL.md pj/skills/health/SKILL.md; do
