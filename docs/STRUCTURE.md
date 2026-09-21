@@ -215,18 +215,29 @@ Documentation and reference materials.
 | `reference/pai_memory_system.md`   | How Claude remembers across conversations, projects and sessions — the memory and persistence mechanisms, written as a read-at-leisure explainer                                              |
 | `reference/windows/`               | Historical Windows batch scripts (reference only, not for deployment)                                                                                                                         |
 
-**Hook documentation lives outside `docs/`** — two files, and knowing which is which matters:
+**Hook documentation lives outside `docs/`** — and since 2026-09-21 there is exactly **one**
+file, not two:
 
-- [`.claude/hooks/README.md`](../.claude/hooks/README.md) — the **living inventory**. One
-  section per shell hook, and the doc the root README links to. Keep this one current.
-- [`.claude/docs/HOOKS_ARCHITECTURE.md`](../.claude/docs/HOOKS_ARCHITECTURE.md) —
-  **architecture only**: handler class hierarchy, event lifecycle, data flow, config
-  schema, dedup/state model, audio pipeline. Its per-hook inventory was retired on
-  2026-07-30 (it had fallen four months behind) and now points here instead, so the two
-  docs no longer compete. The architecture content was **re-verified against the code on
-  2026-07-30** — classes, handler set, routing, override table, config schema, state API,
-  sound files and registered events all check out; see the doc's header for exactly what
-  was and was not traced.
+- [`.claude/hooks/README.md`](../.claude/hooks/README.md) — the **living inventory** and the
+  only hook document. One section per shell hook, and the doc the root README links to.
+  Keep this one current. Machine-wide travel (which hooks reach a `pj` session in other
+  projects) is declared in [`settings/claude/hooks.json`](../settings/claude/hooks.json)
+  via each entry's `targets`.
+
+`.claude/docs/HOOKS_ARCHITECTURE.md` was **deleted on 2026-09-21** (W-20260921-A11). Do not
+look for it, and do not recreate it. It is worth knowing why, because the obvious fix was
+tried first and failed:
+
+- On **2026-07-30** its per-hook inventory was retired — it had fallen four months behind
+  and covered 5 of 14 hooks — leaving it as "architecture only" so the two docs would stop
+  competing. Its architecture content was re-verified against the code that same day.
+- By **2026-09-21** the rump had drifted anyway. At 1647 lines it still named
+  `pre-commit-check.sh` (retired) in six places and `export_transcript.sh` (deleted
+  2026-08-18) in one, and its file tree and `settings.json` excerpt predated the three
+  travelling guards.
+
+**Splitting a document by "inventory vs architecture" does not stop drift. It moves the
+drift into the half nobody audits.** One document, audited, or none.
 
 **Files prefixed `_` are deliberately untracked** (`_CODE_FOLDER_STRUCTURE.md`,
 `_MLBOX_SEALED_DAY_TO_DAY.md`) — they carry real usernames or host detail. They are
