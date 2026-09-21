@@ -17,11 +17,33 @@
 #      claude. Anything after `pj` on the command line is appended (`pj -p x`,
 #      `pj --resume`, `pj --model haiku` all pass through untouched).
 #
-# Own flags, recognised ONLY as the first argument so pass-through stays pure:
+# Own flags, recognised ONLY as the leading arguments so pass-through stays pure:
+#   pj --profile <name>      launch under that profile (F5a). Must come FIRST, before
+#                            --dry-run. PJ_PROFILE=<name> does the same without a flag.
 #   pj --dry-run [args...]   print the exact claude argv, one entry per line, exit 0. No
 #                            launch, no keychain, no ssh-agent. pj-launch-check and
 #                            pj-health read it.
 #   pj --selftest            prove the dry-run arms (below). Exit 0 all green, 1 otherwise.
+#
+# PROFILES (F5a, ruled by Gavin 2026-09-21). A profile is a key:value file under
+# ~/.config/pj/profiles/, stowed from home/.config/pj/profiles/. It names the config dir,
+# the settings file, the prompt source, the plugin dirs, the always-appended flags, the
+# mode and whether the start card prints. `default` reproduces this script's built-in
+# values exactly, so a machine with NO profiles dir stowed behaves as it always did --
+# every value below has the old hardcoded constant as its fallback, and a missing or
+# unreadable profile file is a silent no-op rather than a refusal.
+#
+# THE MERGE RULE: the DEFAULT profile's `required` flags are appended to every profile,
+# whatever that profile says, so no profile can drop --dangerously-skip-permissions or
+# --effort high by forgetting the key.
+#
+# THE CONFIG DIR IS THE ONLY THING THAT ACTUALLY MOVES. Measured 2026-09-21 with pj's
+# real argv under a scratch CLAUDE_CONFIG_DIR: the appended prompt file, the output
+# style and all five --plugin-dir dirs still loaded from ~/.claude, because every path
+# pj passes is absolute. What moves with the config dir is login, folder trust,
+# ~/.claude.json, transcripts and auto memory -- and nothing pj owns. `config_dir:
+# ~/.claude` is therefore treated as "do not export the variable at all", so the default
+# launch keeps an UNSET CLAUDE_CONFIG_DIR rather than one set to its own default.
 #
 # Refuses (exit 2, one line on stderr) when pj-prompt-file prints nothing: a launch
 # without the rules file is the failure this script exists to prevent, so it never
@@ -32,25 +54,109 @@
 #   PJ_LAUNCH_FILE   the launch-function file (default ~/.zsh_claude_launch)
 #   PJ_PROMPT_OUT    honoured by pj-prompt-file (its own seam), so the dry run can be
 #                    pointed at a fixture cache
+#   PJ_PROFILE_DIR   the profiles folder (default ~/.config/pj/profiles)
 set -u
 emulate -L zsh
 
 SELF="${0:A}"   # captured at top level: inside a zsh function $0 is the FUNCTION name
 LAUNCH_FILE="${PJ_LAUNCH_FILE:-$HOME/.zsh_claude_launch}"
 PLUGIN_DIRS=(skills/herdr skills/AgentRelay skills/ISA pj-voice pj)
+PROFILE_DIR="${PJ_PROFILE_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/pj/profiles}"
 typeset -ga PJ_ARGV   # not ARGV: in zsh that is the positional parameters
+typeset -ga PJ_ENV    # VAR=value pairs the launch exports; EMPTY for the default profile
+
+# --- the profile ----------------------------------------------------------------
+# Every P_* below starts at the value this script hardcoded before profiles existed, so
+# a box with no profiles dir stowed launches exactly as it always did. THAT IS THE
+# FALLBACK, not an error path: `pj` must never refuse because a config file is absent.
+P_CONFIG_DIR="$HOME/.claude"
+P_SETTING_SOURCES="project,local"
+P_SETTINGS="$HOME/.claude/settings.project.json"
+P_PROMPT="pj-prompt-file"
+P_PLUGINS="skills/herdr skills/AgentRelay skills/ISA pj-voice pj"
+P_REQUIRED="--dangerously-skip-permissions --effort high"
+P_MODE="normal"
+P_CARD="on"
+PROFILE_NAME="default"
+
+expand_tilde() { local p="$1"; print -r -- "${p/#\~/$HOME}"; }
+
+# read_profile <file> -- apply the keys it holds; unknown keys and comments ignored.
+# Silent on a missing file, by design (see the fallback note above).
+read_profile() {
+  # extended_glob is what makes `[[:space:]]#` mean "zero or more spaces" in the trims
+  # below. `local_options` scopes it to this function, so nothing else sees it.
+  setopt local_options extended_glob
+  local f="$1" k v line
+  [[ -r "$f" ]] || return 0
+  while IFS= read -r line; do
+    case "$line" in ''|'#'*) continue ;; esac
+    [[ "$line" == *:* ]] || continue
+    k="${line%%:*}"; v="${line#*:}"
+    k="${k##[[:space:]]#}"; k="${k%%[[:space:]]#}"
+    v="${v##[[:space:]]#}"; v="${v%%[[:space:]]#}"
+    case "$k" in
+      config_dir)      P_CONFIG_DIR="$(expand_tilde "$v")" ;;
+      setting_sources) P_SETTING_SOURCES="$v" ;;
+      settings)        P_SETTINGS="$(expand_tilde "$v")" ;;
+      prompt)          P_PROMPT="$v" ;;
+      plugins)         P_PLUGINS="$v" ;;
+      required)        P_REQUIRED="$v" ;;
+      mode)            P_MODE="$v" ;;
+      card)            P_CARD="$v" ;;
+    esac
+  done < "$f"
+}
+
+# load_profile <name> -- the default profile first (it supplies every fallback AND the
+# `required` flags every profile inherits), then the named one on top.
+load_profile() {
+  local name="$1" req_default
+  PROFILE_NAME="$name"
+  read_profile "$PROFILE_DIR/default"
+  req_default="$P_REQUIRED"
+  if [[ "$name" != default ]]; then
+    if [[ ! -r "$PROFILE_DIR/$name" ]]; then
+      print -u2 -- "pj: REFUSED: no profile '$name' at ${PROFILE_DIR/#$HOME/~}/$name; pj-health lists the profiles it can see"
+      return 2
+    fi
+    read_profile "$PROFILE_DIR/$name"
+  fi
+  # THE MERGE RULE (ruled at the F5a gate): the default profile's `required` flags are
+  # appended to every profile. A profile that omits or shortens `required` cannot drop
+  # them; a profile that repeats one does not get it twice.
+  local t
+  for t in ${=req_default}; do
+    [[ " $P_REQUIRED " == *" $t "* ]] || P_REQUIRED="$P_REQUIRED $t"
+  done
+  return 0
+}
 
 build_argv() {
   local prompt d
-  prompt="$(pj-prompt-file)"
+  if [[ "$P_PROMPT" == pj-prompt-file ]]; then
+    prompt="$(pj-prompt-file)"
+  else
+    prompt="$(expand_tilde "$P_PROMPT")"
+  fi
   if [[ -z "$prompt" ]]; then
     print -u2 -- "pj: REFUSED: pj-prompt-file printed no system-prompt file; run pj-prompt-file --selftest"
     return 2
   fi
-  PJ_ARGV=(claude --setting-sources project,local --settings "$HOME/.claude/settings.project.json"
+  PJ_ARGV=(claude --setting-sources "$P_SETTING_SOURCES" --settings "$P_SETTINGS"
         --append-system-prompt-file "$prompt")
-  for d in "${PLUGIN_DIRS[@]}"; do PJ_ARGV+=(--plugin-dir "$HOME/.claude/$d"); done
-  PJ_ARGV+=(--dangerously-skip-permissions --effort high)
+  if [[ "$P_PLUGINS" != none ]]; then
+    for d in ${=P_PLUGINS}; do PJ_ARGV+=(--plugin-dir "$HOME/.claude/$d"); done
+  fi
+  [[ "$P_MODE" == safe ]] && PJ_ARGV+=(--safe-mode)
+  PJ_ARGV+=(${=P_REQUIRED})
+  # The env the launch exports. EMPTY for the default profile, which is what keeps the
+  # default launch byte-identical: `config_dir: ~/.claude` means DO NOT EXPORT, because a
+  # CLAUDE_CONFIG_DIR set to its own default is not the same as one that is unset.
+  PJ_ENV=()
+  [[ "$P_CONFIG_DIR" != "$HOME/.claude" ]] && PJ_ENV+=("CLAUDE_CONFIG_DIR=$P_CONFIG_DIR")
+  [[ "$P_CARD" == off ]] && PJ_ENV+=("PJ_NO_CARD=1")
+  PJ_ENV+=("PJ_PROFILE=$PROFILE_NAME")
 }
 
 # --- dot-claude freshness (P8a gate Q4, ruled by Gavin 2026-09-21) --------------
@@ -149,19 +255,101 @@ selftest() {
   while [[ $waited -lt 50 && ! -e "$dc2/.git/FETCH_HEAD" ]]; do sleep 0.1; waited=$((waited + 1)); done
   [[ -e "$dc2/.git/FETCH_HEAD" ]] && ok "10 control: with no guard the fetch IS reached (FETCH_HEAD appears)" \
     || bad "10 control did not fetch -- arm 8 proves nothing" "no FETCH_HEAD after ${waited}00ms"
+  # ---- profiles (F5a) -------------------------------------------------------------
+  # 11. NO profiles dir at all: the argv is the built-in one. This is the consumer-box
+  #     fallback, and it is arm ONE of the byte-for-byte guarantee.
+  local pdir="$root/profiles" base
+  base="$(PJ_PROFILE_DIR="$root/none-such" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --dry-run 2>/dev/null)"
+  [[ "${base%%$'\n'*}" == claude ]] && ok "11 no profiles dir: still launches (built-in fallback)" || bad "11 no profiles dir" "$base"
+  n=0; for d in "${PLUGIN_DIRS[@]}"; do [[ "$base" == *$'\n--plugin-dir\n'"$HOME/.claude/$d"$'\n'* ]] && n=$((n + 1)); done
+  [[ $n -eq 5 ]] && ok "11 fallback carries all five plugin dirs" || bad "11 fallback plugins" "$n of 5"
+  # 12. a `default` profile that spells out today's values produces the SAME argv, byte
+  #     for byte. Hard constraint 1 of F5a, proven against arm 11's output rather than
+  #     against a copy of the expected text.
+  mkdir -p "$pdir"
+  {
+    print -- "config_dir:      ~/.claude"
+    print -- "setting_sources: project,local"
+    print -- "settings:        ~/.claude/settings.project.json"
+    print -- "prompt:          pj-prompt-file"
+    print -- "plugins:         skills/herdr skills/AgentRelay skills/ISA pj-voice pj"
+    print -- "required:        --dangerously-skip-permissions --effort high"
+    print -- "mode:            normal"
+    print -- "card:            on"
+  } > "$pdir/default"
+  out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --dry-run 2>/dev/null)"
+  [[ "$out" == "$base" ]] && ok "12 the default profile reproduces the built-in argv byte for byte" || bad "12 default profile drift" "$(diff <(print -r -- "$base") <(print -r -- "$out") | head -6)"
+  # 13. the default profile exports NO CLAUDE_CONFIG_DIR. A variable set to its own
+  #     default is not the same as an unset one, and this is the arm that keeps them apart.
+  out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --dry-run-env 2>/dev/null)"
+  [[ "$out" != *CLAUDE_CONFIG_DIR* ]] && ok "13 default profile exports no CLAUDE_CONFIG_DIR" || bad "13 default exported a config dir" "$out"
+  [[ "$out" == *"PJ_PROFILE=default"* ]] && ok "13 default profile names itself in the env" || bad "13 PJ_PROFILE" "$out"
+  # 14. a named profile: config dir exported, no plugin dirs, card off, safe mode absent
+  {
+    print -- "config_dir: $root/cfg-x"
+    print -- "plugins:    none"
+    print -- "card:       off"
+  } > "$pdir/scratchy"
+  out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile scratchy --dry-run 2>/dev/null)"
+  [[ "$out" != *"--plugin-dir"* ]] && ok "14 plugins: none passes no --plugin-dir" || bad "14 plugins none" "$out"
+  [[ "$out" != *"--safe-mode"* ]] && ok "14 mode defaults to normal (no --safe-mode)" || bad "14 unexpected safe mode" "$out"
+  # 14b. THE MERGE RULE: scratchy never says `required`, and still gets both flags.
+  [[ "$out" == *$'\n--dangerously-skip-permissions\n--effort\nhigh' ]] && ok "14b required flags are inherited from the default profile" || bad "14b merge rule" "$out"
+  out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile scratchy --dry-run-env 2>/dev/null)"
+  [[ "$out" == *"CLAUDE_CONFIG_DIR=$root/cfg-x"* ]] && ok "14 a forked config dir IS exported" || bad "14 config dir" "$out"
+  [[ "$out" == *"PJ_NO_CARD=1"* ]] && ok "14 card: off exports PJ_NO_CARD=1" || bad "14 card off" "$out"
+  # 15. mode: safe adds --safe-mode, and ONLY then. Kept supported for P9's baseline.
+  printf 'mode: safe\n' > "$pdir/safey"
+  out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile safey --dry-run 2>/dev/null)"
+  [[ "$out" == *$'\n--safe-mode\n'* ]] && ok "15 mode: safe adds --safe-mode" || bad "15 safe mode" "$out"
+  # 16. a profile that does not exist REFUSES rc 2 and prints no argv. Silence would
+  #     launch the default profile under the wrong name, which is the dangerous arm.
+  out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile nope --dry-run 2>"$root/err16")"; rc=$?
+  [[ $rc -eq 2 && -z "$out" ]] && ok "16 unknown profile REFUSES rc 2, prints no argv" || bad "16 unknown profile" "rc=$rc out=$out"
+  grep -q REFUSED "$root/err16" && ok "16 the refusal names itself on stderr" || bad "16 stderr" "$(<"$root/err16")"
+  # 17. --profile with no name refuses; and a LATER --profile is a claude arg, not ours
+  PJ_PROFILE_DIR="$pdir" "$SELF" --profile >/dev/null 2>&1; rc=$?
+  [[ $rc -eq 2 ]] && ok "17 --profile with no name refuses rc 2" || bad "17 bare --profile" "rc=$rc"
+  out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --dry-run --profile x 2>/dev/null)"
+  [[ "$out" == *$'\n--profile\nx' ]] && ok "17 a later --profile passes through to claude" || bad "17 pass-through" "$out"
+  # 18. PJ_PROFILE selects without the flag
+  out="$(PJ_PROFILE=scratchy PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --dry-run 2>/dev/null)"
+  [[ "$out" != *"--plugin-dir"* ]] && ok "18 PJ_PROFILE selects the profile without a flag" || bad "18 PJ_PROFILE" "$out"
   print -- "pj selftest: $pass passed, $fail failed"
   [[ $fail -eq 0 ]]
 }
 
+# --profile is read BEFORE --dry-run so `pj --profile scratch --dry-run` works, and only
+# in leading position so a later --profile passes through to claude untouched.
+WANT="${PJ_PROFILE:-default}"
+if [[ "${1:-}" == --profile ]]; then
+  if [[ -z "${2:-}" ]]; then
+    print -u2 -- "pj: REFUSED: --profile needs a name (pj --profile scratch)"
+    exit 2
+  fi
+  WANT="$2"; shift 2
+fi
+
 case "${1:-}" in
   --dry-run)
     shift
+    load_profile "$WANT" || exit $?
     build_argv || exit $?
     print -l -- "${PJ_ARGV[@]}" "$@"
+    exit 0 ;;
+  --dry-run-env)
+    # the env half of the dry run, one VAR=value per line. Deliberately a SEPARATE flag:
+    # --dry-run must keep printing argv and nothing else, or the byte-for-byte default
+    # comparison that hard constraint 1 rests on would compare two different things.
+    shift
+    load_profile "$WANT" || exit $?
+    build_argv || exit $?
+    print -l -- "${PJ_ENV[@]}"
     exit 0 ;;
   --selftest) selftest; exit $? ;;
 esac
 
+load_profile "$WANT" || exit $?
 build_argv || exit $?
 if [[ ! -r "$LAUNCH_FILE" ]]; then
   print -u2 -- "pj: REFUSED: ${LAUNCH_FILE/#$HOME/~} missing; stow -R the dotfiles"
@@ -169,4 +357,12 @@ if [[ ! -r "$LAUNCH_FILE" ]]; then
 fi
 kick_dotclaude_fetch
 source "$LAUNCH_FILE"
+# Exported into THIS script's own process, which is safe because the script is its own
+# process: nothing leaks back to the interactive shell that typed `pj`. NOT `env VAR=v
+# __claude_launch ...` -- `env` execs an external command and __claude_launch is a shell
+# function, so that form would fail with "No such file or directory".
+# PJ_ENV never contains CLAUDE_CONFIG_DIR on the default profile, so the default launch
+# still runs with that variable UNSET rather than set to its own default.
+for _pv in "${PJ_ENV[@]}"; do export "${_pv%%=*}=${_pv#*=}"; done
+unset _pv
 __claude_launch "${PJ_ARGV[@]}" "$@"

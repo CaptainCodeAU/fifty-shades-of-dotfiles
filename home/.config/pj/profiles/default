@@ -1,0 +1,39 @@
+# ~/.config/pj/profiles/default -- the profile `pj` uses when none is named (F5a).
+#
+# EVERY KEY HERE REPRODUCES TODAY'S LAUNCH EXACTLY. `pj --dry-run` with this file
+# present must print the same 18 lines, byte for byte, as it did before profiles
+# existed; that is hard constraint 1 of F5a and arm 1 of `pj --selftest`.
+#
+# key: value lines, # comments, one value per key. Same shape as ~/.config/pj/machine,
+# which install.sh already writes. PATHS ONLY -- never a secret, never a token, never
+# a command with arguments. The file is tracked in the dotfiles repo, so anything in
+# it is public.
+#
+# Keys, and what each one feeds:
+#   config_dir       CLAUDE_CONFIG_DIR for the session. `~/.claude` means DO NOT EXPORT
+#                    it at all, so the default launch keeps an unset variable rather
+#                    than one set to its own default. Any other value is exported.
+#   setting_sources  the --setting-sources value
+#   settings         the --settings path (absolute, or ~-relative)
+#   prompt           `pj-prompt-file` runs that tool and uses what it prints; any other
+#                    value is used as a literal path
+#   plugins          space-separated dirs under ~/.claude, one --plugin-dir each.
+#                    `none` passes no --plugin-dir at all
+#   required         flags always appended last. The DEFAULT profile's `required` is
+#                    appended to every profile, whatever that profile says (the merge
+#                    rule ruled at the F5a gate), so no profile can drop them by
+#                    forgetting the key
+#   mode             normal | safe. `safe` adds --safe-mode, which turns OFF hooks,
+#                    plugins, skills, output styles, CLAUDE.md and auto memory. Kept
+#                    supported for P9's baseline measurement; scratch does NOT use it
+#   card             on | off. `off` exports PJ_NO_CARD=1 and pj-start-card stays
+#                    silent. This is how a profile drops the start card WITHOUT
+#                    dropping the hooks, which `mode: safe` cannot separate
+config_dir:      ~/.claude
+setting_sources: project,local
+settings:        ~/.claude/settings.project.json
+prompt:          pj-prompt-file
+plugins:         skills/herdr skills/AgentRelay skills/ISA pj-voice pj
+required:        --dangerously-skip-permissions --effort high
+mode:            normal
+card:            on

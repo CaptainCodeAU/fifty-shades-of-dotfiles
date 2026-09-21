@@ -1,0 +1,30 @@
+# ~/.config/pj/profiles/scratch -- the throwaway profile `c2` launches (F5a).
+#
+# Ruled by Gavin at the F5a gate: plugins none, card off, HOOKS ON.
+#
+# WHY NOT `mode: safe`, which the brief first said. Measured 2026-09-21 from the
+# Claude Code docs: --safe-mode disables "CLAUDE.md, skills, plugins, hooks, MCP
+# servers, custom commands and agents, output styles, workflows ... and auto memory".
+# That is one switch for two very different things. It would drop the start card, which
+# is wanted, AND enforce-secret-probe.sh, validate-bash.sh, enforce-uv, enforce-pnpm
+# and MemoryRootGuard, which is not: a throwaway worktree would be the least guarded
+# session on the machine. `card: off` drops only the card. `mode: safe` stays a
+# supported key for P9's baseline measurement; no shipped profile sets it.
+#
+# THE CONFIG DIR IS FORKED. ~/.claude-scratch is a SIBLING of ~/.claude, never inside
+# it (pj-health's sibling row enforces that). Measured: a fresh config dir has no
+# credentials and no folder trust, so the FIRST launch on this profile needs a
+# `/login` and a trust dialog from a human. pj-health's profile row WARNs while the
+# directory is absent, so the owed login is stated rather than discovered.
+#
+# What forking costs, measured, not assumed: auto memory does NOT travel. A session
+# here gets an empty projects/<key>/memory/, so no MEMORY.md is loaded. The drawer,
+# the rulings and pj-global are unaffected: open-items and decided always write to
+# ~/.claude whatever CLAUDE_CONFIG_DIR says.
+config_dir:      ~/.claude-scratch
+setting_sources: project,local
+settings:        ~/.claude/settings.project.json
+prompt:          pj-prompt-file
+plugins:         none
+mode:            normal
+card:            off
