@@ -473,7 +473,23 @@ else
     key="${line%%:*}"; val="${line#*:}"; val="${val#"${val%%[![:space:]]*}"}"
     case "$key" in
       records) records="$val"; nkeys=$((nkeys+1)); case "$val" in repo|private) ;; *) bad="$bad records='$val'";; esac;;
-      handoff|tracker|decisions|incidents|plans|wrap-up)
+      # W-20260921-A14. `wrap-up` holds a SLASH-COMMAND NAME, not a path: the P5.2
+      # key shape is `/wrap-up` (Network_Plan) or `/vertical-wrap-up`
+      # (win_go_app_test). resolve_marker cannot resolve one, so both projects sat
+      # on a WARN reading "unresolvable marker on: wrap-up" for a line that is a
+      # correct declaration under D-20260920-02. A check that reds a correct
+      # declaration teaches you to ignore the check.
+      wrap-up)
+        nkeys=$((nkeys+1))
+        case "$val" in
+          /*/*|/*.*) p="$(resolve_marker "$val")" ;;   # a path, oddly spelled: still resolve it
+          /*) p="COMMAND" ;;                           # /wrap-up, /vertical-wrap-up: a command name
+          *)  p="$(resolve_marker "$val")" ;;
+        esac
+        if [ "$p" = COMMAND ]; then :
+        elif [ -z "$p" ]; then unresolved="$unresolved $key"
+        elif [ ! -e "$p" ]; then missing="$missing $key"; fi;;
+      handoff|tracker|decisions|incidents|plans)
         nkeys=$((nkeys+1)); p="$(resolve_marker "$val")"
         if [ -z "$p" ]; then unresolved="$unresolved $key"
         elif [ ! -e "$p" ]; then [ "$key" = handoff ] || missing="$missing $key"; fi;;
@@ -517,7 +533,13 @@ else
   case "$kind" in
     folder|file) row PASS decided-store "$label found ($kind)";;
     missing) row NOTM decided-store "$label not present ($(printf '%s' "$hl" | sed -E 's/.*\((.*)\)$/\1/'))";;
-    unsupported) row FAIL decided-store "$label unsupported format; fix: point decisions: at a folder of D-*.md or a file of '## D-' blocks";;
+    # W-20260921-A14: WARN, not FAIL. A project that DECLARES where its rulings
+    # live, in a format `decided` cannot parse, is in a better state than one that
+    # declares nothing -- and both Network_Plan (repo:common/04-decisions.md) and
+    # win_go_app_test (repo:edge-decisions.html) are correct declarations under
+    # D-20260920-02. FAIL is for a broken machine, not for a store this tool has
+    # not learned to read yet. The fix text names both routes.
+    unsupported) row WARN decided-store "$label declared but in a format decided cannot read; the declaration is correct, the reader is the gap. fix: point decisions: at a folder of D-*.md or a file of '## D-' blocks, or teach decided that format";;
     *) row NOTM decided-store "decided --homes printed no project line";;
   esac
 fi

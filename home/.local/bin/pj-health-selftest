@@ -186,6 +186,10 @@ run(){   # run [dir] [args...]  -> OUT holds the JSON; RC the exit code
 st(){ jq -r --arg n "$1" '.rows[] | select(.name==$n) | .state' <<<"$OUT"; }
 dt(){ jq -r --arg n "$1" '.rows[] | select(.name==$n) | .detail' <<<"$OUT"; }
 has(){ case "$(dt "$1")" in *"$2"*) return 0;; *) return 1;; esac; }
+# `arm` runs its arguments as a command, so a bare `!` cannot be passed through.
+# A negative arm needs its own word. Used by the W-20260921-A14 wrap-up arms,
+# which have to show a phrase STOPPED appearing, not merely that the row is green.
+not_has(){ has "$@" && return 1 || return 0; }
 is(){ [ "$(st "$1")" = "$2" ]; }
 NM="NOT MEASURED"
 
@@ -363,6 +367,26 @@ mv "$PROJ/TRACK.md" "$T/track.bak"; run; arm "pj-homes FAIL when a declared trac
 echo "plans: elsewhere:x" >>"$PROJ/.claude/pj-homes"; run; arm "pj-homes WARN on an unresolvable marker" is pj-homes WARN; cp "$T/ph.bak" "$PROJ/.claude/pj-homes"
 mv "$PROJ/.claude/pj-homes" "$T/ph2.bak"; run; arm "pj-homes NOT MEASURED without the file" is pj-homes "$NM"; arm "pj-homes absent says defaults" has pj-homes "defaults in use"; mv "$T/ph2.bak" "$PROJ/.claude/pj-homes"
 run; arm "pj-homes handoff missing is still PASS" is pj-homes PASS
+# W-20260921-A14: `wrap-up` holds a SLASH-COMMAND NAME, not a path. Both real
+# projects declare one (/wrap-up, /vertical-wrap-up) and both sat on a WARN
+# reading "unresolvable marker on: wrap-up" for a correct line.
+echo "wrap-up: /wrap-up" >>"$PROJ/.claude/pj-homes"; run
+arm "pj-homes PASS with a slash-command wrap-up (Network_Plan shape)" is pj-homes PASS
+arm "pj-homes does not call the command unresolvable" not_has pj-homes "unresolvable"
+cp "$T/ph.bak" "$PROJ/.claude/pj-homes"
+echo "wrap-up: /vertical-wrap-up" >>"$PROJ/.claude/pj-homes"; run
+arm "pj-homes PASS with a slash-command wrap-up (win_go_app_test shape)" is pj-homes PASS
+cp "$T/ph.bak" "$PROJ/.claude/pj-homes"
+# CONTROL for the two arms above: the key still catches a real mistake. A
+# wrap-up value that is NOT a command name and does NOT resolve must still WARN,
+# or the two PASSes above prove only that the row stopped looking.
+echo "wrap-up: elsewhere:nope" >>"$PROJ/.claude/pj-homes"; run
+arm "CONTROL: an unresolvable non-command wrap-up still WARNs" is pj-homes WARN
+cp "$T/ph.bak" "$PROJ/.claude/pj-homes"
+# CONTROL 2: a wrap-up declared as a real path that is MISSING must still FAIL.
+echo "wrap-up: repo:no-such-wrapup.md" >>"$PROJ/.claude/pj-homes"; run
+arm "CONTROL: a missing wrap-up PATH still FAILs" is pj-homes FAIL
+cp "$T/ph.bak" "$PROJ/.claude/pj-homes"
 
 # P2 drawer
 echo "# edited by hand" >>"$T/drawer/OPEN.md"; run; arm "drawer WARN on a stamp mismatch" is drawer WARN; arm "drawer WARN says regen" has drawer "regen"
@@ -375,7 +399,16 @@ mv "$T/open.bak" "$T/drawer/OPEN.md"; mv "$T/items.bak" "$T/drawer/items"
 # P3 decided store
 printf 'machine-wide   folder   ~/x   (~/x)\nproject (repo:docs/decisions)   missing   ~/y/docs/decisions   (no .claude/pj-homes, default repo:docs/decisions/)\n' >"$T/decided-homes"; run
 arm "decided-store NOT MEASURED when the store is missing" is decided-store "$NM"; arm "decided-store missing quotes the reason" has decided-store "no .claude/pj-homes"
-printf 'machine-wide   folder   ~/x   (~/x)\nproject (repo:common/x.md)   unsupported   ~/y   (declared)\n' >"$T/decided-homes"; run; arm "decided-store FAIL on an unsupported format" is decided-store FAIL
+# W-20260921-A14: a DECLARED store in a format `decided` cannot read is a WARN.
+# Both real cases are correct declarations under D-20260920-02: Network_Plan's
+# repo:common/04-decisions.md and win_go_app_test's repo:edge-decisions.html.
+# The gap is the reader, not the project. FAIL here reds two healthy repos.
+printf 'machine-wide   folder   ~/x   (~/x)\nproject (repo:common/04-decisions.md)   unsupported   ~/y   (declared)\n' >"$T/decided-homes"; run
+arm "decided-store WARN, not FAIL, on a declared unsupported format" is decided-store WARN
+arm "decided-store says the declaration is correct" has decided-store "the declaration is correct"
+arm "decided-store names the declared path" has decided-store "04-decisions.md"
+printf 'machine-wide   folder   ~/x   (~/x)\nproject (repo:edge-decisions.html)   unsupported   ~/y   (declared)\n' >"$T/decided-homes"; run
+arm "decided-store WARN for the win_go_app_test shape too" is decided-store WARN
 printf 'machine-wide   folder   ~/x   (~/x)\nproject (drawer:decisions)   folder   ~/y   (declared in .claude/pj-homes)\n' >"$T/decided-homes"
 
 # E1..E5 evidence
