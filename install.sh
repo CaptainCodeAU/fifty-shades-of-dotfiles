@@ -3809,32 +3809,151 @@ _render_project_settings() {
     esac
 }
 
-# The pj ID allocator (home/.local/bin/pj-id) gives each machine its own slice of
-# the NN in W-YYYYMMDD-NN and D-YYYYMMDD-NN, so two clones never claim the same ID
-# on the same day (P5.5, W-20260921-01). The slice lives in ~/.config/pj/machine:
+# The pj ID allocator (home/.local/bin/pj-id) stamps every W- and D- ID with the LETTER of
+# the machine that minted it -- W-20260921-A07 -- so two clones can never claim the same ID
+# (P5.5, P8a). The letter lives in ~/.config/pj/machine:
 #   name: <hostname>
-#   range: 01-49        (or 50-99 on the second machine)
-# WRITTEN ONCE. An existing file is never touched: IDs already claimed under a
-# range must keep that range. An absent file means 01-49 to every tool, so a box
-# that never ran this step still works; the question here is only which slice.
+#   letter: A
+# Gavin's four machines, ruled 2026-09-21:
+#   A  the M4 Mac mini (desktop)      C  the PC, all coding inside WSL2 Ubuntu
+#   B  the Intel Mac laptop           D  a Proxmox Linux VM or container
+#
+# THERE IS NO DEFAULT LETTER. pj-id REFUSES to allocate without one, so `open-items add` and
+# `decided add` are dead on a box that skips this step. That is deliberate: a default range
+# only risked a duplicate number, but a default LETTER would put another machine's name on
+# this machine's work, which is a wrong record rather than a clash.
+#
+# WRITTEN ONCE, with ONE exception: a file left over from the retired two-range scheme
+# (`range: 01-49`) is rewritten, because pj-id refuses to read it and the box would silently
+# lose the ability to file an item. Every ID already claimed keeps its own text; the P8a
+# migration renamed them and both tools still resolve the old shape.
+_pj_machine_letter_prompt() {
+    # Prints ONE capital letter on stdout, or nothing when it could not ask.
+    local ans
+    [[ -t 0 ]] || { printf ''; return 0; }
+    echo -e "  ${DIM}A = M4 Mac mini (desktop)   B = Intel Mac laptop   C = PC/WSL2 Ubuntu   D = Proxmox Linux VM${RESET}" >&2
+    read -rp "$(echo -e "${YELLOW}Which machine is this? [A/B/C/D]: ${RESET}")" ans || { printf ''; return 0; }
+    ans="$(printf '%s' "$ans" | tr '[:lower:]' '[:upper:]' | tr -d '[:space:]')"
+    case "$ans" in [A-Z]) printf '%s' "$ans" ;; *) printf '' ;; esac
+}
 _write_pj_machine_file() {
-    local f="${XDG_CONFIG_HOME:-$HOME/.config}/pj/machine" name range="01-49"
+    local f="${XDG_CONFIG_HOME:-$HOME/.config}/pj/machine" name letter existing_letter existing_range
     if [[ -f "$f" ]]; then
-        info "pj machine file present: $f ($(sed -n 's/^name:[[:space:]]*//p' "$f" | head -1), range $(sed -n 's/^range:[[:space:]]*//p' "$f" | head -1)). Left as is."
-        return 0
+        existing_letter="$(sed -n 's/^letter:[[:space:]]*//p' "$f" | head -1 | tr -d '[:space:]')"
+        existing_range="$(sed -n 's/^range:[[:space:]]*//p' "$f" | head -1 | tr -d '[:space:]')"
+        if [[ "$existing_letter" =~ ^[A-Z]$ && -z "$existing_range" ]]; then
+            info "pj machine file present: $f ($(sed -n 's/^name:[[:space:]]*//p' "$f" | head -1), letter $existing_letter). Left as is."
+            return 0
+        fi
+        if [[ "$existing_letter" =~ ^[A-Z]$ ]]; then
+            # letter present, retired range line still there: drop the dead key, keep the letter
+            name="$(sed -n 's/^name:[[:space:]]*//p' "$f" | head -1 | tr -d '[:space:]')"
+            [[ -n "$name" ]] || name="$(hostname -s 2>/dev/null || hostname)"
+            if [[ "$DRY_RUN" == true ]]; then
+                echo -e "  ${DIM}[dry-run] Would drop the retired 'range: $existing_range' line from $f, keeping letter $existing_letter${RESET}"
+                return 0
+            fi
+            printf 'name: %s\nletter: %s\n' "$name" "$existing_letter" > "$f" \
+                && success "pj machine file tidied: dropped the retired 'range:' line from $f (letter $existing_letter kept)" \
+                || warn "could not rewrite $f"
+            return 0
+        fi
+        # No letter at all. pj-id refuses to allocate from this file, so it must be fixed.
+        warn "pj machine file $f has no 'letter:' line${existing_range:+ (it still carries the retired 'range: $existing_range')}. pj-id REFUSES to allocate an ID without one, so 'open-items add' and 'decided add' will not work on this box."
+        # KEEP a name someone chose. The tidy branch above preserves it; this one used to
+        # fall through to the hostname, so a hand-written file with a meaningful name lost
+        # it on the very run that was meant to repair it.
+        name="$(sed -n 's/^name:[[:space:]]*//p' "$f" | head -1 | sed 's/[[:space:]]*$//')"
     fi
-    name="$(hostname -s 2>/dev/null || hostname)"
+    [[ -n "${name:-}" ]] || name="$(hostname -s 2>/dev/null || hostname)"
     if [[ "$DRY_RUN" == true ]]; then
-        echo -e "  ${DIM}[dry-run] Would write $f (name: $name, range: 01-49 unless another box already has it)${RESET}"
+        echo -e "  ${DIM}[dry-run] Would write $f (name: $name, letter: asked interactively -- A mini, B Intel laptop, C WSL, D Linux VM)${RESET}"
         return 0
     fi
-    warn "No pj machine file yet. Each machine needs its own ID range; two machines on one range can claim the same W-/D- ID on the same day."
-    if confirm "Is another machine already using the primary range 01-49? (answer y to take 50-99 here)" n; then
-        range="50-99"
+    [[ -f "$f" ]] || warn "No pj machine file yet. Every W-/D- ID carries the letter of the machine that minted it, so two clones can never claim the same one."
+    letter="$(_pj_machine_letter_prompt)"
+    if [[ -z "$letter" ]]; then
+        warn "No letter given, so $f was NOT written. pj-id will refuse to allocate IDs until it exists; re-run ./install.sh, or write it by hand:"
+        # printf, not echo -e: echo does not substitute %s, and the first version of this
+        # line printed the placeholders verbatim at the exact moment someone needed the
+        # command to copy.
+        printf '      %sprintf '"'"'name: %s\\nletter: <A-D>\\n'"'"' > %s%s\n' "${CYAN}" "$name" "$f" "${RESET}"
+        return 0
     fi
-    mkdir -p "$(dirname "$f")" || { warn "could not create $(dirname "$f"); pj-id will use the default range 01-49"; return 0; }
-    printf 'name: %s\nrange: %s\n' "$name" "$range" > "$f" || { warn "could not write $f"; return 0; }
-    success "pj machine file written: $f (name: $name, range: $range)"
+    mkdir -p "$(dirname "$f")" || { warn "could not create $(dirname "$f"); pj-id will refuse to allocate IDs"; return 0; }
+    printf 'name: %s\nletter: %s\n' "$name" "$letter" > "$f" || { warn "could not write $f"; return 0; }
+    success "pj machine file written: $f (name: $name, letter: $letter -- IDs here read X-YYYYMMDD-${letter}NN)"
+}
+
+# --- pj prerequisites that live OUTSIDE this repo (P8a gate Q2) ---------------
+# REPORT ONLY. It clones nothing, writes nothing and never fails the install.
+#
+# WHY IT EXISTS. Code and wiring live in this repo; the personal content pj needs does not
+# (D-20260920-09). `pj-prompt-file` concatenates ~/.claude/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md
+# and ~/.claude/pj-global/RULES.md, and `pj` REFUSES to launch when it gets neither. So on a
+# fresh machine this installer can finish perfectly and `pj` still will not start -- measured
+# by reading pj:46-49 and pj-prompt-file:118, not guessed. Before P8a nothing said so.
+#
+# THE PATH IS LOAD-BEARING. dot-claude tracks the three pj plugin files as SYMLINKS
+# (git mode 120000) whose targets are relative paths ending in
+# CODE/Scaffoldings/fifty-shades-of-dotfiles. Clone this repo anywhere else and those links
+# dangle, silently: the plugin folder exists, the files in it resolve to nothing, and the
+# only symptom is a pj session with no /pj:wrap-up. So a dead link is reported WITH the path
+# it needs, not just as "missing".
+_check_pj_prereqs() {
+    local dotclaude="$HOME/.claude" ok=1 required="$HOME/CODE/Scaffoldings/fifty-shades-of-dotfiles"
+    local rules="$dotclaude/pj-global/RULES.md"
+    local oprules="$dotclaude/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md"
+    local p dead=""
+
+    step "pj framework prerequisites (report only)"
+
+    if [[ -r "$rules" ]]; then echo -e "  ${GREEN}✓${RESET} pj-global/RULES.md"
+    else echo -e "  ${RED}✗${RESET} $rules missing -- pj launches without its machine-wide rules"; ok=0; fi
+    for p in decisions notes/INDEX.md; do
+        if [[ -e "$dotclaude/pj-global/$p" ]]; then echo -e "  ${GREEN}✓${RESET} pj-global/$p"
+        else echo -e "  ${YELLOW}~${RESET} $dotclaude/pj-global/$p missing"; fi
+    done
+    if [[ -r "$oprules" ]]; then echo -e "  ${GREEN}✓${RESET} LIFEOS OPERATIONAL_RULES.md"
+    else echo -e "  ${RED}✗${RESET} $oprules missing -- pj launches without Gavin's operating rules"; ok=0; fi
+    if [[ -d "$dotclaude/pj-voice" ]]; then echo -e "  ${GREEN}✓${RESET} pj-voice plugin dir"
+    else echo -e "  ${RED}✗${RESET} $dotclaude/pj-voice missing -- the pj output style will not load"; ok=0; fi
+
+    # The three tracked symlinks: a dangling one is worse than an absent one, because the
+    # folder still looks right.
+    for p in pj/.claude-plugin/plugin.json pj/skills/wrap-up/SKILL.md pj/skills/health/SKILL.md; do
+        if [[ -e "$dotclaude/$p" ]]; then echo -e "  ${GREEN}✓${RESET} $p"
+        elif [[ -L "$dotclaude/$p" ]]; then dead="$dead $p"
+        else echo -e "  ${YELLOW}~${RESET} $dotclaude/$p absent (stow places it)"; fi
+    done
+    if [[ -n "$dead" ]]; then
+        ok=0
+        echo -e "  ${RED}✗${RESET} dangling symlink(s) in ~/.claude:${dead}"
+        echo -e "      ${DIM}dot-claude tracks these as symlinks into the dotfiles repo, so the repo MUST be at:${RESET}"
+        echo -e "      ${CYAN}${required}${RESET}"
+        [[ "$REPO_DIR" != "$required" ]] && echo -e "      ${DIM}this checkout is at ${REPO_DIR} -- move or symlink it there, then re-run ./install.sh${RESET}"
+    fi
+
+    if (( ok )); then
+        success "pj can launch on this machine."
+    else
+        warn "pj will NOT launch until the items marked ✗ above exist. They live in two PRIVATE repos this installer deliberately does not clone:"
+        echo -e "      ${CYAN}git clone <dot-claude>      ~/.claude${RESET}          ${DIM}(pj-global/, pj-voice/, the plugin symlinks)${RESET}"
+        echo -e "      ${CYAN}git clone <lifeos-private>  ~/CODE/CaptainCodeAU/lifeos-private${RESET}"
+        echo -e "      ${DIM}then link ~/.claude/LIFEOS/USER -> that clone. Clone dot-claude BEFORE running stow.${RESET}"
+        echo -e "      ${DIM}And keep this repo at ${required} -- the tracked symlinks point there.${RESET}"
+    fi
+
+    # The zsh helper namespace check, if it is stowed. Read-only, and a real failure here
+    # means a pj session's shell helpers collide with something else.
+    if command -v zsh-helper-namespace-check >/dev/null 2>&1; then
+        if zsh-helper-namespace-check >/dev/null 2>&1; then
+            echo -e "  ${GREEN}✓${RESET} zsh helper namespace clean"
+        else
+            echo -e "  ${YELLOW}~${RESET} zsh-helper-namespace-check reports a collision -- run it to see which helper"
+        fi
+    fi
+    return 0
 }
 
 _claude_hooks_sync() {
@@ -4111,8 +4230,12 @@ main() {
     _render_project_settings install
     _claude_hooks_sync install
 
-    # --- pj: this machine's ID range (written once, never rewritten) ---
+    # --- pj: this machine's ID letter (written once; a retired range file is rewritten) ---
     _write_pj_machine_file
+
+    # --- pj: report on the prerequisites that live outside this repo. Must run AFTER
+    # stow_home, because stow is what places the plugin symlinks it checks. ---
+    _check_pj_prereqs
 
     # --- Optional: pnpm-audit git hooks (confirm-gated) ---
     setup_pnpm_audit_hooks
@@ -4157,7 +4280,7 @@ case "${ACTION:-}" in
     # register the hooks it just deployed -- otherwise the exact command the
     # welcome banner recommends leaves them stowed and inert, which is the
     # original bug wearing a different hat.
-    stow-only)  _gate_toolchain_takeover; stow_home; stow_platform; _render_project_settings install; _claude_hooks_sync install ;;
+    stow-only)  _gate_toolchain_takeover; stow_home; stow_platform; _render_project_settings install; _claude_hooks_sync install; _write_pj_machine_file; _check_pj_prereqs ;;
     uninstall)  uninstall ;;
     update)     update ;;
     force)      force_adopt ;;

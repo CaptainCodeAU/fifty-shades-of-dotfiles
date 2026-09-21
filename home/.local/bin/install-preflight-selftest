@@ -276,6 +276,97 @@ if grep -qE 'confirm "Open the download page now\?" y' <<<"$clt"; then
     ok "the browser prompt defaults to yes"
 else bad "the browser prompt defaults to yes" "still defaults to no"; fi
 
+# --- 12. the pj machine file and the pj prerequisite report (P8a) -----------
+# These two are DRIVEN, not read: the machine file decides whether `open-items add` works
+# at all on a box, and the prereq report is the only thing that tells a fresh machine why
+# `pj` refuses to launch. Both run in a scratch HOME; nothing real is touched.
+for fn in _write_pj_machine_file _check_pj_prereqs; do
+    if grep -q "^${fn}() {" "$INSTALL_SH"; then ok "$fn is defined"
+    else bad "$fn is defined" "not found in $INSTALL_SH"; fi
+    if grep -qE "^[[:space:]]+${fn}$" "$INSTALL_SH"; then ok "$fn is called from main()"
+    else bad "$fn is called from main()" "defined but never invoked"; fi
+done
+# The retired two-range scheme must be gone from the writer: a box that still gets a
+# `range:` file has an allocator that refuses, and the installer would have caused it.
+mf=$(sed -n '/^_write_pj_machine_file() {/,/^}/p' "$INSTALL_SH")
+if grep -q "range: %s" <<<"$(code_of "$mf")"; then
+    bad "the writer no longer writes a 'range:' line" "it still formats one"
+else ok "the writer no longer writes a 'range:' line"; fi
+if grep -q "letter: %s" <<<"$(code_of "$mf")"; then ok "the writer writes a 'letter:' line"
+else bad "the writer writes a 'letter:' line" "no letter format found"; fi
+
+# The writer's fallback prints a command to COPY. It is printf, not `echo -e`: echo does not
+# substitute %s, and the first version of the line printed the placeholders verbatim at the
+# exact moment someone needed a working command. Driven, with no tty, so the prompt declines.
+mf_home="$WORK/mfhome"; mkdir -p "$mf_home/.config/pj"
+mf_out="$(HOME="$mf_home" bash -c '
+    DRY_RUN=false; GREEN=""; RED=""; YELLOW=""; RESET=""; DIM=""; CYAN=""; BOLD=""
+    info(){ :; }; success(){ echo "OK $*"; }; warn(){ echo "WARN $*"; }
+    source <(sed -n "/^_pj_machine_letter_prompt() {/,/^}/p;/^_write_pj_machine_file() {/,/^}/p" "$1")
+    _write_pj_machine_file' _ "$INSTALL_SH" </dev/null 2>&1)"
+if grep -q "letter: <A-D>" <<<"$mf_out"; then ok "the no-letter fallback prints a copyable command"
+else bad "the no-letter fallback prints a copyable command" "$(tail -2 <<<"$mf_out")"; fi
+if grep -q '%s' <<<"$mf_out"; then
+    bad "the fallback command has no unsubstituted placeholders" "$(grep '%s' <<<"$mf_out" | head -1)"
+else ok "the fallback command has no unsubstituted placeholders"; fi
+if [[ -e "$mf_home/.config/pj/machine" ]]; then
+    bad "declining the prompt writes NO machine file" "the file was created anyway"
+else ok "declining the prompt writes NO machine file"; fi
+# A retired range-only file is rewritten to a letter file, and a good one is left alone.
+printf 'name: box\nletter: B\nrange: 01-49\n' > "$mf_home/.config/pj/machine"
+HOME="$mf_home" bash -c '
+    DRY_RUN=false; GREEN=""; RED=""; YELLOW=""; RESET=""; DIM=""; CYAN=""; BOLD=""
+    info(){ :; }; success(){ :; }; warn(){ :; }
+    source <(sed -n "/^_pj_machine_letter_prompt() {/,/^}/p;/^_write_pj_machine_file() {/,/^}/p" "$1")
+    _write_pj_machine_file' _ "$INSTALL_SH" </dev/null >/dev/null 2>&1
+if grep -q '^letter: B$' "$mf_home/.config/pj/machine" && ! grep -q '^range:' "$mf_home/.config/pj/machine"; then
+    ok "a leftover 'range:' beside a good letter is dropped, the letter kept"
+else bad "a leftover 'range:' beside a good letter is dropped, the letter kept" "$(tr '\n' '|' < "$mf_home/.config/pj/machine")"; fi
+
+pj_scratch="$WORK/pjhome"; mkdir -p "$pj_scratch/.claude/pj/.claude-plugin"
+# shellcheck disable=SC2016
+pj_drive() {   # pj_drive <HOME> <REPO_DIR> : run _check_pj_prereqs with stubs, print its output
+    HOME="$1" bash -c '
+      REPO_DIR="$2"
+      GREEN=""; RED=""; YELLOW=""; RESET=""; DIM=""; CYAN=""
+      step(){ :; }; success(){ echo "VERDICT-OK $*"; }; warn(){ echo "VERDICT-WARN $*"; }
+      source <(sed -n "/^_check_pj_prereqs() {/,/^}/p" "$1")
+      _check_pj_prereqs
+    ' _ "$INSTALL_SH" "$2" 2>&1
+}
+out_missing="$(pj_drive "$pj_scratch" /some/other/place)"
+if grep -q 'VERDICT-WARN' <<<"$out_missing"; then ok "prereq report WARNS on a bare machine"
+else bad "prereq report WARNS on a bare machine" "$(head -3 <<<"$out_missing")"; fi
+if grep -q 'pj-global/RULES.md missing' <<<"$out_missing"; then ok "  and names the missing RULES.md"
+else bad "  and names the missing RULES.md" "$(head -3 <<<"$out_missing")"; fi
+if grep -q 'OPERATIONAL_RULES.md missing' <<<"$out_missing"; then ok "  and names the missing OPERATIONAL_RULES.md"
+else bad "  and names the missing OPERATIONAL_RULES.md" "$(head -3 <<<"$out_missing")"; fi
+# A DANGLING plugin symlink must name the one path the whole scheme depends on.
+ln -sfn /nowhere/plugin.json "$pj_scratch/.claude/pj/.claude-plugin/plugin.json"
+out_dead="$(pj_drive "$pj_scratch" /some/other/place)"
+if grep -q 'dangling symlink' <<<"$out_dead"; then ok "a dangling plugin symlink is reported as dangling, not absent"
+else bad "a dangling plugin symlink is reported as dangling, not absent" "$(grep -i plugin <<<"$out_dead" | head -2)"; fi
+if grep -q 'CODE/Scaffoldings/fifty-shades-of-dotfiles' <<<"$out_dead"; then ok "  and names the required repo path"
+else bad "  and names the required repo path" "$(grep -i dangl -A3 <<<"$out_dead")"; fi
+# POSITIVE CONTROL. Without this, every arm above passes just as well when the function
+# is broken and reports everything as missing.
+mkdir -p "$pj_scratch/ok/.claude/pj-global/notes" "$pj_scratch/ok/.claude/pj-voice" \
+         "$pj_scratch/ok/.claude/LIFEOS/USER/CONFIG" "$pj_scratch/ok/.claude/pj/.claude-plugin" \
+         "$pj_scratch/ok/.claude/pj/skills/wrap-up" "$pj_scratch/ok/.claude/pj/skills/health"
+: > "$pj_scratch/ok/.claude/pj-global/RULES.md"
+: > "$pj_scratch/ok/.claude/pj-global/notes/INDEX.md"
+mkdir -p "$pj_scratch/ok/.claude/pj-global/decisions"
+: > "$pj_scratch/ok/.claude/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md"
+: > "$pj_scratch/ok/.claude/pj/.claude-plugin/plugin.json"
+: > "$pj_scratch/ok/.claude/pj/skills/wrap-up/SKILL.md"
+: > "$pj_scratch/ok/.claude/pj/skills/health/SKILL.md"
+out_ok="$(pj_drive "$pj_scratch/ok" /some/other/place)"
+if grep -q 'VERDICT-OK' <<<"$out_ok"; then ok "CONTROL: a complete machine gets the pass verdict"
+else bad "CONTROL: a complete machine gets the pass verdict" "$(head -5 <<<"$out_ok")"; fi
+if grep -q 'VERDICT-WARN' <<<"$out_ok"; then
+    bad "CONTROL: a complete machine gets NO warning" "$(grep VERDICT-WARN <<<"$out_ok")"
+else ok "CONTROL: a complete machine gets NO warning"; fi
+
 echo
 echo "  $PASS passed, $FAIL failed"
 (( FAIL == 0 ))

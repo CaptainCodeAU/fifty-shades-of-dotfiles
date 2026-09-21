@@ -219,6 +219,12 @@ cd ~/fifty-shades-of-dotfiles
 
 The installer will check prerequisites, install missing tools, set up Oh My Zsh plugins, survey your existing Python/Node setup and ask before taking either over (see [Will it also mess with my existing Python or Node setup?](#faq)), symlink dotfiles via GNU Stow, configure git identity, install TPM/nvm/pnpm/bun/Nerd Fonts, and more. Run `./install.sh --help` for all options including `--check`, `--dry-run`, `--update`, and `--force`.
 
+#### If you also use the `pj` project launcher
+
+`pj` is wired by this repo but its content lives in two PRIVATE repos the installer deliberately does not clone: `dot-claude` (into `~/.claude`) and `lifeos-private`. Clone `dot-claude` **before** running `install.sh`, and keep this checkout at **`~/CODE/Scaffoldings/fifty-shades-of-dotfiles`** — `dot-claude` tracks three plugin files as symlinks pointing at that exact path, so anywhere else leaves them dangling. The installer ends with a report naming anything missing, and `pj-health` checks the same things later; without them `pj` refuses to launch rather than starting half-loaded.
+
+It will also ask **which machine this is** (`A` Mac mini, `B` Intel laptop, `C` WSL, `D` Linux VM) and write the answer to `~/.config/pj/machine`. That letter goes into every work-item and decision ID minted here, so two machines can never claim the same one; there is no default, and skipping it leaves the ID allocator refusing.
+
 ### Manual Install
 
 1. **Prerequisites**:
