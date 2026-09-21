@@ -14,6 +14,11 @@ ROOT="$(cd "$ROOT" && pwd -P)"
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 export PATH="$BIN:$PATH"
 STATE="$ROOT/state"; export PJ_STATE_DIR="$STATE"
+# PIN THE MACHINE LETTER (P8a). Every ID pj-id mints carries this box's letter, so an arm
+# that matched a bare -NN passed on the mini and would fail on the laptop. A fixture letter
+# makes the IDs identical on all four machines -- and proves the tool works on a box whose
+# real ~/.config/pj/machine does not exist yet, which is B, C and D on day one.
+printf 'name: selftest-fixture\nletter: Z\n' > "$ROOT/machine"; export PJ_MACHINE_FILE="$ROOT/machine"
 PASS=0; FAIL=0
 ok(){ PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
 bad(){ FAIL=$((FAIL+1)); printf '  FAIL %s\n       got: %s\n' "$1" "$(printf '%s' "${OUT:-}" | tr '\n' '|' | cut -c1-900)"; }
@@ -107,7 +112,7 @@ wrap push
 check "E rc 0" '[ "$RC" -eq 0 ]'
 check "E reported the rejection and the fetch" 'printf "%s" "$OUT" | grep -q "push rejected; fetching"'
 check "E accepted after rebase" 'printf "%s" "$OUT" | grep -q "push accepted after rebase"'
-check "E remote has other1 AND the third item" 'git -C "$REMOTE" cat-file -e master:other1.txt && git -C "$REMOTE" ls-tree -r --name-only master | grep -q "items/open/W-.*-03.md"'
+check "E remote has other1 AND the third item" 'git -C "$REMOTE" cat-file -e master:other1.txt && git -C "$REMOTE" ls-tree -r --name-only master | grep -q "items/open/W-[0-9]*-Z03.md"'
 check "E tree clean afterwards" '[ -z "$(git -C "$DC" status --porcelain)" ]'
 check "E no rebase in progress" '[ ! -d "$DC/.git/rebase-merge" ]'
 
@@ -167,6 +172,40 @@ OUT="$(cd "$ZETA" && OPEN_ITEMS_PROJECTS_DIR="$DC2/projects" OPEN_ITEMS_DOTCLAUD
 check "G0 same W-ID claimed on two clones -> STOPPED (rc 3), item conflicts are never guessed" '[ "$RC" -eq 3 ]'
 check "G0 names the item path" 'printf "%s" "$OUT" | grep -q "items/open/W-"'
 check "G0 DC2 aborted cleanly" '[ ! -d "$DC2/.git/rebase-merge" ] && [ -z "$(git -C "$DC2" status --porcelain)" ]'
+
+# --- H: the push failure DIAGNOSIS names the right cause (P8a gate Q5) -----------------------
+# The message used to blame the sandbox unconditionally, which was wrong every time the
+# sandbox was already off (F3, P6b). Both arms, and each must EXCLUDE the other's wording --
+# a message containing both sentences would pass a one-sided check while telling you nothing.
+AA(){ OUT="$(PJ_WRAP_KEYCHAIN="$1" "$WRAP" why-auth 2>&1)"; RC=$?; }
+AA yes
+check "H why-auth exits 0 and pushes nothing" '[ "$RC" -eq 0 ]'
+check "H keychain answers -> says it is NOT the sandbox" 'printf "%s" "$OUT" | grep -q "not the sandbox"'
+check "H keychain answers -> names the stale App token"  'printf "%s" "$OUT" | grep -qi "stale or expired GitHub App token"'
+check "H keychain answers -> does NOT tell you to lift the sandbox" '! printf "%s" "$OUT" | grep -q "with the sandbox lifted"'
+AA no
+check "H keychain silent -> says to lift the sandbox for this one command" 'printf "%s" "$OUT" | grep -q "with the sandbox lifted"'
+check "H keychain silent -> does NOT claim the Keychain answered" '! printf "%s" "$OUT" | grep -q "DOES answer"'
+check "H both arms name [H12] step 1 verbatim" 'printf "%s" "$OUT" | grep -q "git credential-cache exit"'
+check "H both arms name [H12] steps 2 and 3" 'printf "%s" "$OUT" | grep -q "github-agent-token token" && printf "%s" "$OUT" | grep -q "githubagent.tier"'
+# The advice NAMES the ghs_ prefix on purpose ([H12] step 2), so the check must reject a
+# real token, not the word. A token is the prefix plus at least 20 more characters.
+check "H the advice names the ghs_ prefix (positive control for the next arm)" 'printf "%s" "$OUT" | grep -q "ghs_"'
+check "H the advice never prints an actual credential" '! printf "%s" "$OUT" | grep -qE "gh[pousr]_[A-Za-z0-9]{20,}"'
+# THE REAL BRANCH, not just the seam. The two arms above drive PJ_WRAP_KEYCHAIN, which
+# proves the wording and nothing about the probe. A stub `security` first on PATH lets the
+# actual detection run. Three exit codes: success, 44 (item not found / sandbox), and 51
+# (errSecInteractionNotAllowed) -- the third is the one that used to read as "it answered".
+STUB="$ROOT/stub"; mkdir -p "$STUB"
+sec_rc(){ printf '#!/bin/sh\nexit %s\n' "$1" > "$STUB/security"; chmod +x "$STUB/security"
+          OUT="$(PATH="$STUB:$PATH" "$WRAP" why-auth 2>&1)"; }
+sec_rc 0
+check "H real probe: security exit 0 -> the Keychain answered" 'printf "%s" "$OUT" | grep -q "DOES answer"'
+sec_rc 44
+check "H real probe: security exit 44 -> not answering here" 'printf "%s" "$OUT" | grep -q "not answering in this shell"'
+sec_rc 51
+check "H real probe: any OTHER non-zero also reads as not answering (the conservative arm)" 'printf "%s" "$OUT" | grep -q "not answering in this shell"'
+check "H real probe: exit 51 does NOT claim the Keychain answered" '! printf "%s" "$OUT" | grep -q "DOES answer"'
 
 # --- I: misc ------------------------------------------------------------------------------
 wrap bogus; check "I unknown command REFUSES (rc 2)" '[ "$RC" -eq 2 ]'

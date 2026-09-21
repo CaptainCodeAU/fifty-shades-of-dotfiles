@@ -8,6 +8,9 @@
 #                                  no-wrap-up flag aside (kept with --keep-earlier)
 #   pj-wrap push                   commit this project's drawer handoff (if declared drawer:)
 #                                  and push dot-claude, the drawer store. NOT the project repo.
+#   pj-wrap why-auth               what a push failure here would be blamed on, measured
+#                                  now: the Keychain either answers in this shell or it
+#                                  does not. Reads no secret, writes nothing, pushes nothing.
 #   pj-wrap --selftest             prove every arm (runs pj-wrap-selftest)
 #
 # STATE  ${XDG_STATE_HOME:-~/.local/state}/pj  (PJ_STATE_DIR overrides; test seam)
@@ -33,7 +36,9 @@
 #   6. Any other conflict: rebase --abort, STOP, name the paths. Tree back as it was.
 #   7. Push once more. Rejected again: STOP. No loop.
 # Inside a Claude session the push needs the login Keychain, which the Bash sandbox
-# blocks: run `pj-wrap push` with the sandbox lifted for that one call.
+# blocks: run `pj-wrap push` with the sandbox lifted for that one call. A pre-remote
+# failure with the sandbox ALREADY off is a different fault, usually a stale GitHub App
+# token; the tool measures which it is and names [H12]'s steps (see auth_advice below).
 #
 # Exit: 0 done · 1 nothing to report/push · 2 REFUSED (bad args, no session id) · 3 STOPPED,
 # action needed (the message says what). Nothing personal, no absolute drawer path is
@@ -48,7 +53,7 @@ SID="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
 refuse(){ printf 'pj-wrap: REFUSED -- %s\n' "$1" >&2; exit 2; }
 stop(){ printf 'pj-wrap: STOPPED -- %s\n' "$1" >&2; exit 3; }
 say(){ printf 'pj-wrap: %s\n' "$1"; }
-usage(){ sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; }
+usage(){ sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; }
 encode_key(){ printf '%s' "$1" | sed 's#[/._]#-#g'; }
 tilde(){ printf '%s' "${1/#$HOME/\~}"; }
 
@@ -112,6 +117,42 @@ cmd_done(){
   exit 0
 }
 
+# ------------------------------------------------------- push: diagnosis ----
+# Until 2026-09-21 a pre-remote push failure printed ONE diagnosis, "the Keychain is blocked
+# by the sandbox". That is right in a sandboxed Claude session and WRONG everywhere else, and
+# it sent the next session looking in the wrong place twice in one day (F3 wrap-up, P6b step
+# 7). The second time the sandbox was already lifted and the real cause was an expired ghs_
+# token on the GitHub App path; OPERATIONAL_RULES [H12] step 1 alone fixed it.
+#
+# So: MEASURE, then advise. A message that names one cause without checking is a guess
+# wearing the clothes of a finding.
+#
+# keychain_answers -- 0 when the login Keychain gives this shell an answer, 1 when it does
+# not. A sandboxed call and a genuinely absent entry both come back 44, which is why the
+# wording says "not answering here" rather than claiming the sandbox: both mean the same
+# thing for this purpose (no bootstrap secret), and only one of them is provable.
+# Nothing is printed: only the exit status is read, never the secret.
+# Seam (the selftest sets it; nobody else should): PJ_WRAP_KEYCHAIN=yes|no.
+keychain_answers(){
+  case "${PJ_WRAP_KEYCHAIN:-}" in yes) return 0 ;; no) return 1 ;; esac
+  command -v security >/dev/null 2>&1 || return 0          # not macOS: no Keychain story to tell
+  # ANY non-zero means "no answer", not just 44. `security` also fails with
+  # errSecInteractionNotAllowed, on a locked keychain, and on a malformed invocation.
+  # Treating only 44 as silence made every other failure read as "the Keychain DOES answer",
+  # which would send the reader after a stale token while the Keychain was the actual fault
+  # -- the same single-cause misdiagnosis this whole block exists to end.
+  security find-generic-password -a "$USER" -s github-api-readonly -w >/dev/null 2>&1 || return 1
+  return 0
+}
+H12_STEPS="OPERATIONAL_RULES [H12], in order: (1) 'git credential-cache exit', then push again; (2) 'github-agent-token token' must print a ghs_; (3) 'git config --get githubagent.tier' must be set and the helper registered."
+auth_advice(){
+  if keychain_answers; then
+    printf 'The login Keychain DOES answer in this shell, so this is not the sandbox. On a flipped repo the usual cause is a stale or expired GitHub App token. %s' "$H12_STEPS"
+  else
+    printf 'The login Keychain is not answering in this shell (a Claude sandbox blocks it, and an absent entry looks the same), so the credential helper cannot bootstrap: run this one command with the sandbox lifted. If it still fails with the sandbox off, it is the token, not the sandbox: %s' "$H12_STEPS"
+  fi
+}
+
 # ---------------------------------------------------------------- push ----
 dirty_tracked(){ git -C "$1" status --porcelain --untracked-files=no 2>/dev/null; }
 in_progress(){ local g; g="$(git -C "$1" rev-parse --git-dir)"; [ -d "$g/rebase-merge" ] || [ -d "$g/rebase-apply" ] || [ -f "$g/MERGE_HEAD" ]; }
@@ -154,7 +195,7 @@ cmd_push(){
   [ "$rc" -eq 0 ] && { say "push accepted (dot-claude)"; exit 0; }
   case "$out" in
     *rejected*|*"fetch first"*|*non-fast-forward*|*"failed to push some refs"*) ;;
-    *) stop "push failed before the remote accepted anything: $(printf '%s' "$out" | tail -1). Inside a Claude session the Keychain is blocked by the sandbox: run 'pj-wrap push' with the sandbox lifted." ;;
+    *) stop "push failed before the remote accepted anything: $(printf '%s' "$out" | tail -1). $(auth_advice)" ;;
   esac
   say "push rejected; fetching"
   git -C "$top" fetch -q 2>&1 | sed 's/^/pj-wrap:   /' >&2
@@ -204,5 +245,6 @@ case "${1:-}" in
   status) cmd_status ;;
   done)   shift; cmd_done "$@" ;;
   push)   cmd_push ;;
-  *) refuse "unknown command $1 (status | done | push | --selftest)" ;;
+  why-auth) auth_advice; printf '\n'; exit 0 ;;
+  *) refuse "unknown command $1 (status | done | push | why-auth | --selftest)" ;;
 esac
