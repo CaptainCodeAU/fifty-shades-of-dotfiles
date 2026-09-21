@@ -27,6 +27,13 @@
 
 set -uo pipefail
 
+# RECORDS, NEVER CLAUDE_CONFIG_DIR (F5a). $HOME/.claude is spelled out on purpose. Under
+# a pj profile the SESSION's config dir can be ~/.claude-scratch or ~/.claude-b, and
+# Claude Code then puts that session's transcripts and auto memory there -- but the
+# drawer must not fork, or a profile session would file items into a register nobody
+# else reads. Ruled by Gavin before F5a and re-confirmed at its gate. The env seams
+# below are TEST seams; nothing derives them from CLAUDE_CONFIG_DIR, and pj-health's
+# `records-pinned` row FAILS if that ever changes.
 PROJECTS="${OPEN_ITEMS_PROJECTS_DIR:-$HOME/.claude/projects}"
 DOTCLAUDE="${OPEN_ITEMS_DOTCLAUDE:-$HOME/.claude}"
 STATUSES="open parked done declined"

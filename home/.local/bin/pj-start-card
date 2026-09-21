@@ -246,6 +246,13 @@ card(){
 
 main(){
   local src out
+  # PJ_NO_CARD (F5a): a profile with `card: off` exports this, and pj exports it into the
+  # session. It is how a profile drops the START CARD without dropping the HOOKS.
+  # --safe-mode cannot make that distinction: it disables hooks, plugins, skills, output
+  # styles, CLAUDE.md and auto memory in one switch, so using it to quieten the card
+  # would also disarm enforce-secret-probe.sh, validate-bash.sh, enforce-uv, enforce-pnpm
+  # and MemoryRootGuard. Ruled by Gavin at the F5a gate: scratch sessions keep the guards.
+  [ -n "${PJ_NO_CARD:-}" ] && exit 0
   src="$(source_of_hook)"
   [ "$src" = "compact" ] && exit 0
   out="$(card 2>/dev/null)" || exit 0

@@ -28,6 +28,12 @@
 
 set -uo pipefail
 
+# RECORDS, NEVER CLAUDE_CONFIG_DIR (F5a). $HOME/.claude is spelled out on purpose. A pj
+# profile can move the SESSION's config dir; the rulings must not move with it, or a
+# ruling recorded from a scratch session would be invisible to every other session and
+# `decided` would answer "not decided" about something that was. Ruled by Gavin before
+# F5a and re-confirmed at its gate. The env seams are TEST seams; nothing derives them
+# from CLAUDE_CONFIG_DIR, and pj-health's `records-pinned` row FAILS if that changes.
 GLOBAL_DIR="${DECIDED_GLOBAL_DIR:-$HOME/.claude/pj-global/decisions}"
 LEGACY="${DECISIONS_FILE:-$HOME/.local/share/decisions/DECISIONS.md}"
 PROJECTS="${OPEN_ITEMS_PROJECTS_DIR:-$HOME/.claude/projects}"
