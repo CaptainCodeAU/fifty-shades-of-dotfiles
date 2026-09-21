@@ -284,10 +284,35 @@ cmd_add(){
   fi
   mkdir -p "$home" || die_refused "add: cannot create $(tilde "$home")"
   while IFS= read -r s; do stores+=("$s"); done < <(all_d_stores)
+  # ID allocation, race-safe: `set -C` (noclobber) makes the create FAIL if the file is
+  # already there, so a collision with a concurrent `decided add` retries with a fresh id.
+  #
+  # W-20260921-A30, FIXED HERE. This loop used to be `while :; do ... && break; done` with
+  # the error binned, and it HUNG FOREVER inside the Claude Bash sandbox: ~/.claude is
+  # outside the sandbox's writable set, so the create never succeeded, pj-id handed back
+  # the same id every time, and nothing printed. Ten minutes, no output, killed by hand.
+  #
+  # THE BUG WAS NOT THE DENIED WRITE. It was that a failed `: > "$f"` means EITHER "the
+  # file already exists" OR "I am not allowed to write here", and the loop treated both
+  # as the first. A property true in both worlds cannot decide between them -- so the
+  # test below is `[ -e "$f" ]`, which IS different in the two cases: a collision leaves
+  # a file there, a refusal does not.
+  #
+  # Sibling tools already refuse with a reason in one line (claude-hooks-sync,
+  # claude-project-settings-render). A tool that refuses is a finding; a tool that hangs
+  # is a session sitting still while the next person assumes the machine is busy.
+  local tries=0
   while :; do
     id="$(pj-id next D "${stores[@]}")" || exit 2
     f="$home/$id-$(slug "$title").md"
     ( set -C; : > "$f" ) 2>/dev/null && break
+    if [ ! -e "$f" ]; then
+      die_refused "add: cannot create $(tilde "$f") -- the create was REFUSED, not a name collision (the path does not exist afterwards). Inside the Claude Bash sandbox ~/.claude is not writable; run this from a terminal. Nothing was changed."
+    fi
+    tries=$((tries + 1))
+    if [ "$tries" -ge 50 ]; then
+      die_refused "add: gave up after $tries id attempts, every one colliding under $(tilde "$home"). That should be impossible -- check pj-id next. Nothing was changed."
+    fi
   done
   {
     printf '## %s -- %s\n\ntopic: %s\ndecided: %s\nstatus: %s\nholds-in: %s\n' "$id" "$title" "$topic" "$(today)" "$status" "$holds"
