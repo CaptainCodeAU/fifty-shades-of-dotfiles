@@ -38,8 +38,11 @@
     "the missing slot closes up and \"high · /effort\" moves up a row -- which is why",
     "this read as a DIFFERENT item rather than a missing one.",
     "",
-    "48 OTHER user keys are still dropped this way, theme:dark-daltonized among them.",
-    "Restoring them one at a time is the failure mode; see the open item for the audit.",
+    "THE AUDIT IS DONE. F5b, 2026-09-21, settled every remaining key at a gate:",
+    "47 were still dropped (not 48 -- a recount, the number in a record about a",
+    "growing thing goes stale the day it is written). 10 restored below, 3 became",
+    "PROFILE keys, 34 stay dropped with a reason recorded on W-20260920-A03.",
+    "Restoring them one at a time was the failure mode; the audit replaced it.",
     "",
     "Top-level keys beginning with _ are stripped at render time; this note is one."
   ],
@@ -134,5 +137,87 @@
   },
   "disableClaudeAiConnectors": true,
   "outputStyle": "pj-voice:pj-voice",
-  "verbose": true
+  "verbose": true,
+
+  "_f5b_hook_security_why": [
+    "W-20260920-A03, F5b 2026-09-21. THE TWO KEYS BELOW ARE THE REAL FINDING OF",
+    "THE AUDIT, and neither was dropped on purpose -- both were lost by accident",
+    "when pj stopped reading ~/.claude/settings.json.",
+    "",
+    "Both are RESTRICTIONS whose ABSENCE means NO RESTRICTION. From the schema,",
+    "quoted: allowedHttpHookUrls -- 'When set, hooks with non-matching URLs are",
+    "blocked. Undefined = no restriction, empty array = block all HTTP hooks.'",
+    "httpHookAllowedEnvVars -- 'each hook's effective allowedEnvVars is the",
+    "intersection with this list. Undefined = no restriction.'",
+    "",
+    "So `c` limited HTTP hooks to localhost:31337 and blocked every environment",
+    "variable from reaching a hook header, while `pj` -- the launcher that runs",
+    "with --dangerously-skip-permissions -- had NO limit on either. The less",
+    "guarded launcher was the one with fewer guard rails, which is backwards.",
+    "",
+    "This is the same shape as the missing SessionStart hooks and the dropped",
+    "verbose: an absent restriction and a deliberate default look identical, and",
+    "a security setting that is silently off looks exactly like one that is on."
+  ],
+  "allowedHttpHookUrls": [
+    "http://localhost:31337/hooks/*"
+  ],
+  "httpHookAllowedEnvVars": [],
+
+  "_f5b_a11y_and_input_why": [
+    "tui:'default' is the classic main-screen renderer. It is the settings-key",
+    "sibling of CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1, which memory records as",
+    "forced for accessibility with 'don't remove'. Same class as theme above:",
+    "an accessibility setting that was silently off in the launcher used most.",
+    "",
+    "leftArrowOpensAgents:false -- measured live 2026-09-21, a pj session's",
+    "footer reads 'left-arrow for agents' and a `c` session's does not. A real",
+    "behaviour difference, chosen once and then quietly reverted by the launcher."
+  ],
+  "tui": "default",
+  "leftArrowOpensAgents": false,
+
+  "_f5b_notifications_why": [
+    "awaySummaryEnabled -- the schema default is TRUE, so pj was SHOWING a",
+    "session recap that `c` does not. Dropping a false is not a no-op: it turns",
+    "the feature ON. That is the trap this whole item is about.",
+    "",
+    "preferredNotifChannel -- where task-complete and permission pings go.",
+    "CAVEAT, stated because it is unverified: the docs list only auto,",
+    "terminal_bell and notifications_disabled. 'iterm2_with_bell' is the live",
+    "value from ~/.claude/settings.json and may be a legacy spelling. It is",
+    "restored as-is to match `c`; if pings stop working, this line is the suspect."
+  ],
+  "awaySummaryEnabled": false,
+  "preferredNotifChannel": "iterm2_with_bell",
+
+  "_f5b_behaviour_why": [
+    "autoMemoryEnabled -- RULING COMPLIANCE, not a preference. The schema default",
+    "is TRUE, so every pj session has been running with Claude auto memory ON and",
+    "writing to projects/<key>/memory/, against D-20260919-A07 which ruled that",
+    "the Claude memory stores stay off and MEMORY.md is the store. The ruling was",
+    "made, and the launcher quietly broke it, because the key lived in the file",
+    "pj does not read.",
+    "",
+    "plansDirectory -- the default is ~/.claude/plans. This repo keeps its specs",
+    "in Plans/ and memory tracks them there, so a pj session entering plan mode",
+    "was writing plans where nobody looks.",
+    "",
+    "respondToBashCommands:false -- a `! command` adds its output to context",
+    "without Claude replying.",
+    "",
+    "skillListingBudgetFraction -- 1.5% of context for the skill listing instead",
+    "of the 1% default, matching `c`.",
+    "",
+    "DELIBERATELY NOT HERE: autoCompactEnabled. Ruled at the F5b gate that it",
+    "STAYS DROPPED, so pj keeps auto-compact ON. Gavin's reason, recorded in his",
+    "words: pj stage sessions run unattended for hours, and with auto-compact off",
+    "a full context halts the session with nobody present to /compact. Under `c` a",
+    "human is at the keyboard. A profile may set it off later for interactive use;",
+    "the template keeps the default. Do not 'fix' this."
+  ],
+  "autoMemoryEnabled": false,
+  "plansDirectory": "Plans/",
+  "respondToBashCommands": false,
+  "skillListingBudgetFraction": 0.015
 }
