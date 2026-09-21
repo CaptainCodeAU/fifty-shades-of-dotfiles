@@ -54,6 +54,50 @@ It is tracked in a public repo, so nothing in it is ever a secret.
 | `required`        | flags appended last           | the **default** profile's `required` is appended to every profile, so none can drop them by omitting the key |
 | `mode`            | `normal` \| `safe`            | `safe` adds `--safe-mode`. Supported, but no shipped profile uses it -- see below                            |
 | `card`            | `on` \| `off`                 | `off` exports `PJ_NO_CARD=1`, and `pj-start-card` stays silent                                               |
+| `model`           | `--model <name>`              | unset = the account default (Opus 5 1M here). Added F5b                                                      |
+| `remote_control`  | `remoteControlAtStartup`      | `on` \| `off`, via an overlay `--settings`. Unset = leave it to the organisation default. Added F5b          |
+| `voice`           | `voiceEnabled`                | `on` \| `off`, via the same overlay. Claude Code's OWN voice, not this repo's audio hooks. Added F5b         |
+
+### The last three keys, and why they ride a second `--settings`
+
+Added in F5b, 2026-09-21, out of the `W-20260920-A03` settings audit: of the 47 user
+settings keys `pj` was dropping, Gavin ruled these three are a **per-profile** choice
+rather than something every `pj` session should get.
+
+`model` has its own flag. The other two are settings keys with no command-line flag, so
+`pj` appends a **second `--settings`** carrying a JSON string. That works because the
+flag repeats and **merges** — measured against 2.1.278 with three arms, because two
+arms cannot tell merging from last-one-wins:
+
+| Argv                                  | `API_TIMEOUT_MS` (from the file) | `F5B_OVERLAY` (from the string) |
+| ------------------------------------- | -------------------------------- | ------------------------------- |
+| `--settings <file>`                   | `1800000`                        | — (control)                     |
+| `--settings <file> --settings <json>` | —                                | `OVERLAYSET`                    |
+| `--settings <file> --settings <json>` | **`1800000`**                    | —                               |
+
+The third row is the one that decided it. Had the flag been last-one-wins, the overlay
+would have silently replaced the whole of `settings.project.json` — every hook, every
+env var — and the first two rows would have looked exactly the same.
+
+**Unset means emit NOTHING, never "emit the default value".** That is what keeps the
+default profile's argv byte-identical to the pre-profile launcher, which `pj --selftest`
+arm 1 checks and arm 19d guards from the other side.
+
+### There is no `audio` key, deliberately
+
+F5b was asked to add one and Gavin **parked** it instead (`W-20260921-A06`). LifeOS's
+audio pipeline is the better one, and this repo's `hook_runner.py` stays repo-local
+rather than travelling with `pj`. If a `pj` session ever makes a sound, it comes from
+LifeOS, decided in a lifeos session. Two things were measured before it was parked and
+are worth knowing:
+
+- `config.yaml` names its sounds as `.claude/sounds/...`, resolved against `os.getcwd()`,
+  so **outside this repo the sound files are simply missing** and `play_sound` returns
+  `False` in silence while the voice still speaks.
+- The 11 hook rows live in this repo's `.claude/settings.json`, which **both** `pj` and
+  `c` read, while `~/.claude/settings.json` (which `c` alone reads) carries LifeOS's
+  `VoiceCompletion`. That is why a `c` session **in this repo** speaks twice. Understood,
+  not fixed.
 
 ### `config_dir: ~/.claude` means "do not export"
 
@@ -213,10 +257,10 @@ the only place it can be set.
 **It is capped at 64 characters and a longer value is ignored in silence.** Bisected
 2026-09-21 against Claude Code 2.1.278, one live probe per length:
 
-| Length                        | Honoured |
-| ----------------------------- | -------- |
-| 62, 64                        | yes      |
-| 65, 66, 70, 78, 88, 99, 149   | **no**   |
+| Length                      | Honoured |
+| --------------------------- | -------- |
+| 62, 64                      | yes      |
+| 65, 66, 70, 78, 88, 99, 149 | **no**   |
 
 No warning, no error, normal exit -- the transcript simply lands under the
 cwd-derived name instead. A leading dash is fine (tested separately), so length is
