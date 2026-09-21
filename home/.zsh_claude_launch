@@ -1,0 +1,135 @@
+# ~/.zsh_claude_launch -- the shared Claude Code launch function, __claude_launch.
+#
+# Sourced by ~/.zshrc (for the `c` family of aliases: c, cb, cr, ct, ci, cpr, cd_, cskip)
+# AND by the `pj` script in ~/.local/bin (F3, 2026-09-21). It lived inside .zshrc until
+# then; it moved here so the pj SCRIPT can source one small file instead of all of
+# .zshrc, and so there is ONE definition of the launch steps. Edit it here, never copy
+# it back into .zshrc.
+#
+# Nothing LifeOS-specific lives here: _LIFEOS_SP (the LifeOS system-prompt flag) stays in
+# .zshrc because only the `c` family uses it. Paths under ~ only; the two keychain reads
+# are inside the function and their values are never printed.
+#
+# Listed in zsh-helper-namespace-check's FILES (D-20260917-06): the function is named
+# __double_underscore so Claude Code's shell snapshot keeps it.
+
+# Isolated ephemeral SSH agent per Claude Code session.
+# Spins up a dedicated ssh-agent in a subshell so the GitHub key is never
+# loaded into macOS's system-wide launchd agent. The agent (and key) die
+# when Claude Code exits; a 12h timeout is a safety net for SIGKILL.
+#
+# Per-process telemetry exception: clears DISABLE_TELEMETRY and DO_NOT_TRACK
+# for the claude process ONLY (the global shell stays opt-out for every other
+# tool) so GrowthBook feature flags evaluate and Remote Control can start.
+# OTEL metrics (CLAUDE_CODE_ENABLE_TELEMETRY=0) and error reporting stay off.
+# Pairs with settings.json remoteControlAtStartup:true; also requires a
+# full-scope token from `claude auth login`.
+__claude_launch() {
+  # Print what the last commit touched, on screen, before Claude takes over the terminal.
+  # WHY HERE AND NOT IN A HOOK: hooks/LastCommitFiles.sh is wired to SessionStart and feeds the
+  # AGENT, but Claude Code stores SessionStart stdout as a context ATTACHMENT and never prints it,
+  # and it spawns hooks with NO controlling terminal, so the hook cannot write to /dev/tty either.
+  # Both measured 2026-09-15: a probe inside the hook logged `w_test=yes real_write=FAIL`, i.e.
+  # `[ -w /dev/tty ]` passes while the open() fails. The shell, unlike the hook, owns the terminal.
+  # Writing to /dev/tty rather than stdout is deliberate: it can never pollute a pipe, so `ci`
+  # (piped -p) stays clean with no flag sniffing. Fails silently when there is no tty.
+  if [[ -x "$HOME/.claude/hooks/LastCommitFiles.sh" ]]; then
+    { "$HOME/.claude/hooks/LastCommitFiles.sh" </dev/null > /dev/tty; } 2>/dev/null || true
+  fi
+
+  local key="$HOME/.ssh/captaincodeau"
+  # Read-only GitHub API token (macOS Keychain) -> exposed as $GH_TOKEN for this
+  # Claude session and its Bash tool only. Empty on non-macOS; harmless (gh just
+  # stays unauthenticated). gh reads GH_TOKEN; never run `gh auth login`.
+  local gh_token="$(security find-generic-password -a "$USER" -s github-api-readonly -w 2>/dev/null)"
+  # NVD API key (macOS Keychain) -> $NVD_API_KEY for this Claude session. UNLIKE
+  # $GH_TOKEN this is NOT a credential: it grants no access to anything and only
+  # lifts NVD's anonymous rate limit from 5 to 50 requests/30s, which is what makes
+  # a 231-formula Homebrew sweep ~2min instead of ~20min. Free + instantly
+  # regenerable at https://nvd.nist.gov/developers/request-an-api-key.
+  # toolchain-cve-check ALSO reads this same Keychain entry directly, so a manual
+  # run outside a Claude session is authenticated too; this export just saves it
+  # the `security` call. Empty on non-macOS -> the sweep degrades to slow, never wrong.
+  local nvd_key="$(security find-generic-password -a "$USER" -s nvd-api-key -w 2>/dev/null)"
+
+  # Refresh the read-only GH API status cache that the welcome banner reads.
+  # Background, 6h-gated, uses the token we just read; never blocks the launch.
+  if [[ -n "$gh_token" ]]; then
+    local _ghc="${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles/gh_api_status" _ghn=$(date +%s) _ghl=0
+    # GNU `stat -c` FIRST, then BSD `-f`. The order is load-bearing, not style: on
+    # Linux `-f` means --file-system, so a BSD-first chain SUCCEEDS with a multi-line
+    # `File: "..."` block, never reaches the fallback, and feeds non-numeric garbage to
+    # the arithmetic below. Unreachable on Linux today ($gh_token only exists via the
+    # macOS Keychain), but every SessionStart hook orders it this way after that exact
+    # bug bit -- see .claude/hooks/zed-version-check.sh for the full account.
+    [[ -f "$_ghc" ]] && _ghl=$(stat -c %Y "$_ghc" 2>/dev/null || stat -f %m "$_ghc" 2>/dev/null || echo 0)
+    if (( _ghn - _ghl > 21600 )); then
+      ( mkdir -p "${_ghc:h}"
+        _h=$(curl -s -o /dev/null -D - -H "Authorization: Bearer $gh_token" https://api.github.com/rate_limit 2>/dev/null)
+        _c=$(printf '%s' "$_h" | awk 'NR==1{print $2}' | tr -d '\r')
+        _e=$(printf '%s' "$_h" | awk 'tolower($0) ~ /^(x-)?github-authentication-token-expiration:/{sub(/^[^:]*: /,"");print}' | tr -d '\r')
+        if [[ "$_c" == 200 ]]; then _s=alive; elif [[ -n "$_c" ]]; then _s=dead; else _s=unknown; fi
+        printf 'status=%s\nchecked=%s\nexpires=%s\n' "$_s" "$_ghn" "$_e" > "$_ghc" ) &!
+    fi
+  fi
+
+  if [[ -f "$key" ]]; then
+    (
+      eval "$(ssh-agent -s -t 43200)" >/dev/null
+      trap 'ssh-agent -k >/dev/null 2>&1' EXIT INT TERM HUP
+      # --apple-use-keychain reads the passphrase from the login keychain instead of
+      # prompting. It is REQUIRED here and the ssh_config UseKeychain setting does NOT
+      # cover it: `UseKeychain yes` lives in a `Host git-cc` block, and `ssh-add` on a
+      # FILE PATH has no host context, so no Host block ever applies to it. Measured
+      # 2026-09-18 in a live pane: plain `ssh-add` prompted for the passphrase even
+      # with the keychain populated and the config in place, while the flagged form
+      # returned rc=0 silently and loaded the key. Two earlier "verifications" missed
+      # this because they tested `ssh -G git-cc` (connections, not ssh-add) and
+      # `--apple-load-keychain` (a different command).
+      # The fallback keeps this portable: the flag is macOS-only, so a non-macOS box
+      # fails the first form and runs the original.
+      ssh-add --apple-use-keychain "$key" 2>/dev/null || ssh-add "$key"
+      # GH_TOKEN REMOVED 2026-09-18. It used to be injected here as:
+      #     GH_TOKEN="$gh_token" \
+      # To revert, restore that line into the chain below (NOT as a comment inside it:
+      # the chain is backslash-continued, so a '#' line would swallow the rest).
+      # Why it went: every session started with a GitHub key in its environment, where
+      # any command could read it and any transcript could record it. That is the route
+      # by which tokens reached transcripts from June 2026. All consumers now fetch
+      # their own credential and fail closed (toolchain-cve-check, ci-watch,
+      # zed-version-check, and LifeOS's five), so nothing needed it here.
+      # $gh_token is still read above and still used for the local status-cache curl.
+      # Ordering rule D-20260917-03 is satisfied: the keyring was repointed at the
+      # narrow PAT and the old broad token revoked BEFORE this line was removed.
+      DISABLE_TELEMETRY= \
+        DO_NOT_TRACK= \
+        NVD_API_KEY="$nvd_key" \
+        CLAUDE_CODE_HIDE_ACCOUNT_INFO=1 \
+        CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1 \
+        ENABLE_EXPERIMENTAL_MCP_CLI=1 \
+        ENABLE_TOOL_SEARCH=1 \
+        "$@"
+    )
+  else
+    # GH_TOKEN REMOVED 2026-09-18. It used to be injected here as:
+    #     GH_TOKEN="$gh_token" \
+    # To revert, restore that line into the chain below (NOT as a comment inside it:
+    # the chain is backslash-continued, so a '#' line would swallow the rest).
+    # Why it went: every session started with a GitHub key in its environment, where
+    # any command could read it and any transcript could record it. That is the route
+    # by which tokens reached transcripts from June 2026. All consumers now fetch
+    # their own credential and fail closed (toolchain-cve-check, ci-watch,
+    # zed-version-check, and LifeOS's five), so nothing needed it here.
+    # $gh_token is still read above and still used for the local status-cache curl.
+    # Ordering rule D-20260917-03 is satisfied: the keyring was repointed at the
+    # narrow PAT and the old broad token revoked BEFORE this line was removed.
+    DISABLE_TELEMETRY= \
+      DO_NOT_TRACK= \
+      NVD_API_KEY="$nvd_key" \
+      CLAUDE_CODE_HIDE_ACCOUNT_INFO=1 \
+      CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1 \
+      ENABLE_EXPERIMENTAL_MCP_CLI=1 \
+      ENABLE_TOOL_SEARCH=1 \
+      "$@"
+  fi
+}

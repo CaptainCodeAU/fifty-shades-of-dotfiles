@@ -3,8 +3,8 @@
 #
 # Every check gets a PASS fixture, at least one FAIL fixture where a FAIL exists, and every
 # NOT MEASURED reason. The live setup is never touched: every path pj-health reads is
-# redirected through its test seams (PJ_HOME, PJ_BIN_DIR, PJ_DOTFILES, PJ_ZSHRC,
-# PJ_TRANSCRIPTS_DIR, PJ_STATE_DIR) and the seams the other tools already honour
+# redirected through its test seams (PJ_HOME, PJ_BIN_DIR, PJ_DOTFILES, PJ_LAUNCHER, PJ_TYPE_OUT,
+# PJ_PS_OUT, PJ_ZSHRC_MTIME, PJ_TRANSCRIPTS_DIR, PJ_STATE_DIR) and the seams the other tools already honour
 # (PJ_MACHINE_FILE, PJ_PROMPT_SOURCES, PJ_PROMPT_OUT, CLAUDE_PROJECT_SETTINGS_FILE,
 # CLAUDE_HOOKS_MANIFEST). Tools pj-health shells out to are FAKES on a PATH prefix, except
 # pj-prompt-file, which is the real one (it honours its own seams). The no-write arm
@@ -38,8 +38,11 @@ mkdir -p "$DF/home/.local/bin" "$DF/home/.claude/hooks" "$DF/home/.claude/pj/.cl
 fake(){   # fake <path> <body>   an executable that runs <body> with "$@"
   printf '#!/usr/bin/env bash\n%s\n' "$2" >"$1"; chmod +x "$1"
 }
-TOOLS="pj-prompt-file pj-start-card pj-session-end pj-wrap pj-id open-items decided claude-hooks-sync claude-project-settings-render ci-watch ccw-watch pj-health"
+TOOLS="pj pj-launch-check pj-prompt-file pj-start-card pj-session-end pj-wrap pj-id open-items decided claude-hooks-sync claude-project-settings-render ci-watch ccw-watch pj-health"
 for t in $TOOLS; do fake "$DF/home/.local/bin/$t" 'exit 0'; done
+# the fake launcher: --dry-run prints the fixture argv (F3), --selftest a pass line
+fake "$DF/home/.local/bin/pj" 'case "${1:-}" in --dry-run) cat "$DRYRUN_FILE"; exit $(cat "$DRYRUN_RC" 2>/dev/null || echo 0);; --selftest) echo "11 passed, 0 failed"; exit 0;; esac; exit 0'
+fake "$DF/home/.local/bin/pj-launch-check" 'case "${1:-}" in --selftest) echo "20 passed, 0 failed"; exit 0;; esac; exit 0'
 cp "$REAL_HEALTH" "$DF/home/.local/bin/pj-health"; cp "$REAL_PROMPT" "$DF/home/.local/bin/pj-prompt-file"; chmod +x "$DF/home/.local/bin/pj-health" "$DF/home/.local/bin/pj-prompt-file"
 fake "$DF/home/.local/bin/open-items" 'case "$1" in --where) cat "$OI_WHERE_FILE" 2>/dev/null; exit 0;; esac; exit 0'
 fake "$DF/home/.local/bin/decided" 'case "$1" in --list) cat "$DECIDED_LIST_FILE"; exit $(cat "$DECIDED_LIST_RC");; --homes) cat "$DECIDED_HOMES_FILE"; exit 0;; esac; exit 0'
@@ -68,8 +71,20 @@ printf '# OPERATIONAL_RULES.md fixture\n- rule one\n' >"$OR"
 echo "- [x](y): z" >"$H/pj-global/notes/INDEX.md"; echo "## D-20260101-01 -- x" >"$H/pj-global/decisions/D-20260101-01-x.md"
 printf 'name: fixture\nrange: 01-49\n' >"$T/machine"
 printf 'project: p\nrepo: r\nended: t\nsession: s1\ntranscript: x\n\nproject: p\nrepo: r\nended: t\nsession: s2\ntranscript: y\n' >"$STATE/no-wrap-up/-tmp-proj"
-ALIAS='alias pj='"'"'__claude_launch claude --setting-sources project,local --settings ~/.claude/settings.project.json --append-system-prompt-file "$(pj-prompt-file)" --plugin-dir ~/.claude/skills/herdr --plugin-dir ~/.claude/skills/AgentRelay --plugin-dir ~/.claude/skills/ISA --plugin-dir ~/.claude/pj-voice --plugin-dir ~/.claude/pj --dangerously-skip-permissions --effort high'"'"
-echo "$ALIAS" >"$T/zshrc"
+# the launcher fixtures (F3): a dry-run argv, what `whence -w pj; alias pj` prints, a ps listing, a .zshrc mtime
+printf '%s\n' claude --setting-sources project,local --settings "$HOME/.claude/settings.project.json" --append-system-prompt-file "$T/cache/prompt.md" \
+  --plugin-dir "$HOME/.claude/skills/herdr" --plugin-dir "$HOME/.claude/skills/AgentRelay" --plugin-dir "$HOME/.claude/skills/ISA" --plugin-dir "$HOME/.claude/pj-voice" --plugin-dir "$HOME/.claude/pj" \
+  --dangerously-skip-permissions --effort high >"$T/dryrun"; cp "$T/dryrun" "$T/dryrun.ok"
+printf 'pj: command\n' >"$T/type-out"; cp "$T/type-out" "$T/type-out.ok"
+ZMT="$(date -j -f '%Y-%m-%d %H:%M:%S' '2026-09-21 01:00:00' +%s 2>/dev/null || date -d '2026-09-21 01:00:00' +%s)"
+# ps fixture: pid ppid tty lstart(5 fields) command. Two fresh panes, one `zsh -c` (skipped), one ppid-1 fork (skipped)
+printf '%s\n' \
+  '  501   870 ttys001  Mon 21 Sep 12:32:38 2026     -zsh' \
+  '  502   870 ttys002  Mon 21 Sep 12:40:00 2026     zsh' \
+  '  503   501 ttys001  Mon 21 Sep 12:41:00 2026     /bin/zsh -c source snapshot.sh' \
+  '  504     1 ttys001  Fri 18 Sep 13:05:58 2026     -zsh' \
+  '  505   870 ??       Fri 18 Sep 13:05:58 2026     -zsh' >"$T/ps"; cp "$T/ps" "$T/ps.ok"
+printf 'ts=2026-09-21T12:34:06+1000 session=s1 project=p tty=ttys009 shell_start=2026-09-21T12:32:38 zshrc_mtime=2026-09-21T01:00:52 result=ok\nts=2026-09-21T12:50:00+1000 session=s2 project=p tty=ttys009 shell_start=2026-09-21T12:32:38 zshrc_mtime=2026-09-21T01:00:52 result=ok\n' >"$STATE/launches.log"; cp "$STATE/launches.log" "$T/launches.ok"
 cat >"$DF/settings/claude/hooks.json" <<'EOF'
 {"hooks":[
  {"event":"PreToolUse","matcher":"Bash","script":"enforce-secret-probe.sh","targets":["user","project"],"entry":{"type":"command","command":"$HOME/.claude/hooks/enforce-secret-probe.sh"}},
@@ -84,7 +99,7 @@ cat >"$DF/settings/claude/hooks.json" <<'EOF'
  {"event":"SessionStart","script":"only-user","script_path":"$HOME/.local/bin/nowhere","entry":{"type":"command","command":"$HOME/.local/bin/nowhere"}}
 ]}
 EOF
-# settings.project.json: $HOME paths point at the fixture hooks through the PJ_ZSHRC fixture-mode rewrite
+# settings.project.json: $HOME paths point at the fixture hooks through the PJ_LAUNCHER fixture-mode rewrite
 write_settings(){   # write_settings [extra-jq-filter]
   jq -n '{outputStyle:"pj-voice:pj-voice", hooks:{
     PreToolUse:[{matcher:"Bash",hooks:[{type:"command",command:"$HOME/.claude/hooks/enforce-secret-probe.sh"},{type:"command",command:"$HOME/.claude/hooks/enforce-census.sh"},{type:"command",command:"$HOME/.claude/hooks/enforce-herdr-skill.sh"},{type:"command",command:"test -x \"$HOME/.claude/hooks/validate-bash.sh\" && \"$HOME/.claude/hooks/validate-bash.sh\" || true"}]},{matcher:"Grep",hooks:[{type:"command",command:"$HOME/.claude/hooks/enforce-census.sh"}]}],
@@ -131,7 +146,7 @@ mk_transcript "$H/projects/$KEY/e.jsonl" 999999 1 1 1 1 sdk-cli   # -p probe: ne
 OUT=""
 run(){   # run [dir] [args...]  -> OUT holds the JSON; RC the exit code
   local dir="${1:-$PROJ}"; shift || true
-  OUT="$( (builtin cd "$dir" && PATH="$BIN:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" PJ_HOME="$H" PJ_BIN_DIR="$BIN" PJ_DOTFILES="$DF" PJ_ZSHRC="$T/zshrc" PJ_TRANSCRIPTS_DIR="$H/projects" PJ_STATE_DIR="$STATE" \
+  OUT="$( (builtin cd "$dir" && PATH="$BIN:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" PJ_HOME="$H" PJ_BIN_DIR="$BIN" PJ_DOTFILES="$DF" PJ_LAUNCHER="$BIN/pj" PJ_TYPE_OUT="$T/type-out" DRYRUN_FILE="$T/dryrun" DRYRUN_RC="$T/dryrun-rc" PJ_PS_OUT="$T/ps" PJ_ZSHRC_MTIME="$ZMT" PJ_TRANSCRIPTS_DIR="$H/projects" PJ_STATE_DIR="$STATE" \
       PJ_MACHINE_FILE="$T/machine" PJ_PROMPT_SOURCES="$OR:$RULES" PJ_PROMPT_OUT="$T/cache/prompt.md" \
       OI_WHERE_FILE="$T/oi-where" DECIDED_LIST_FILE="$T/decided-list" DECIDED_LIST_RC="$T/decided-list-rc" DECIDED_HOMES_FILE="$T/decided-homes" \
       RENDER_OUT_FILE="$T/render-out" RENDER_RC_FILE="$T/render-rc" SYNC_OUT_FILE="$T/sync-out" \
@@ -148,7 +163,7 @@ echo "pj-health-selftest: fixture $T"
 # 0. baseline: all PASS except the live row
 run
 arm "baseline parses as JSON" jq -e '.rows|length>0' <<<"$OUT" >/dev/null
-for n in alias output-style plugin-dirs prompt-file rules-cap settings-render hooks-sync hook-orphans hook-single-fire stow-links machine-file pj-global no-wrap-up selftests pj-homes drawer decided-store evidence-card evidence-ci-watch evidence-rules evidence-plugins evidence-tokens; do
+for n in launcher output-style plugin-dirs prompt-file rules-cap settings-render hooks-sync hook-orphans hook-single-fire stow-links machine-file pj-global no-wrap-up selftests launch-log stale-shells pj-homes drawer decided-store evidence-card evidence-ci-watch evidence-rules evidence-plugins evidence-tokens; do
   arm "baseline $n PASS (got $(st "$n"): $(dt "$n" | cut -c1-80))" is "$n" PASS
 done
 arm "baseline live-probe NOT MEASURED without --live" is live-probe "$NM"
@@ -159,10 +174,36 @@ arm "evidence-tokens used the median of 3 earlier transcripts" has evidence-toke
 arm "evidence picked a.jsonl not the sdk-cli probe" has evidence-card "transcript a:"
 arm "selftests present, not run" has selftests "not run"
 
-# 1. alias
-sed 's/ --plugin-dir ~\/.claude\/pj / /' "$T/zshrc" >"$T/zshrc.bad"; cp "$T/zshrc" "$T/zshrc.ok"; cp "$T/zshrc.bad" "$T/zshrc"; run
-arm "alias FAIL when a plugin-dir is missing" is alias FAIL; arm "alias FAIL names the dir" has alias "plugin-dir ~/.claude/pj]"
-: >"$T/zshrc"; run; arm "alias NOT MEASURED when no alias line" is alias "$NM"; cp "$T/zshrc.ok" "$T/zshrc"
+# 1. launcher (F3)
+arm "launcher PASS names the script and no alias" has launcher "is a command, no alias"
+arm "launcher PASS counts 5 plugin dirs" has launcher "5 plugin dirs"
+awk -v skip="$HOME/.claude/pj" '$0=="--plugin-dir"{getline v; if (v==skip) next; print; print v; next} {print}' "$T/dryrun.ok" >"$T/dryrun"; run
+arm "launcher FAIL when a plugin-dir is missing from the dry-run" is launcher FAIL; arm "launcher FAIL names the dir" has launcher "plugin-dir ~/.claude/pj]"
+sed "s#$T/cache/prompt.md#$H/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md#" "$T/dryrun.ok" >"$T/dryrun"; run
+arm "launcher FAIL when the prompt file is not the cache (the pre-P5.4 shape)" is launcher FAIL; arm "launcher FAIL names the expected cache" has launcher "append-system-prompt-file"
+cp "$T/dryrun.ok" "$T/dryrun"; echo 2 >"$T/dryrun-rc"; run; arm "launcher FAIL when pj --dry-run refuses" has launcher "dry-run rc 2"; command mv "$T/dryrun-rc" "$T/gone/dryrun-rc"
+printf 'pj: alias\npj: aliased to __claude_launch claude --old-form\n' >"$T/type-out"; run
+arm "launcher FAIL when pj is an alias in a fresh shell" is launcher FAIL; arm "launcher alias FAIL says it shadows the script" has launcher "shadows ~/.local/bin/pj"
+printf 'pj: function\n' >"$T/type-out"; run; arm "launcher FAIL when pj is a function" has launcher "resolves to a function"
+: >"$T/type-out"; run; arm "launcher NOT MEASURED when whence prints nothing" is launcher "$NM"; cp "$T/type-out.ok" "$T/type-out"
+run; arm "launcher back to PASS (control)" is launcher PASS
+
+# 1b. launch-log (F3)
+arm "launch-log PASS quotes the count read" has launch-log "last 2 launches ok"
+printf 'ts=2026-09-21T13:05:00+1000 session=s3 project=p tty=ttys003 shell_start=2026-09-20T11:59:29 zshrc_mtime=2026-09-21T01:00:52 result=stale:rules-file\n' >>"$STATE/launches.log"; run
+arm "launch-log WARN on a stale launch" is launch-log WARN; arm "launch-log WARN names the tty and reason" has launch-log "ttys003 2026-09-21 13:05 (rules-file)"; arm "launch-log WARN counts 1 of 3" has launch-log "1 of the last 3"
+printf 'ts=2026-09-21T13:06:00+1000 session=s4 project=p tty=ttys004 shell_start=unknown zshrc_mtime=2026-09-21T01:00:52 result=unmeasured:no-claude-pid\n' >>"$STATE/launches.log"; run
+arm "launch-log stays WARN with an unmeasured line" is launch-log WARN
+cp "$T/launches.ok" "$STATE/launches.log"; run; arm "launch-log back to PASS (control)" is launch-log PASS
+command mv "$STATE/launches.log" "$T/gone/launches.log"; run; arm "launch-log NOT MEASURED when the log is absent" is launch-log "$NM"; arm "launch-log absent reason names the writer" has launch-log "first pj launch"; cp "$T/launches.ok" "$STATE/launches.log"
+
+# 1c. stale-shells (F3)
+arm "stale-shells PASS counts 2 interactive shells (zsh -c, ppid 1, no-tty rows skipped)" has stale-shells "0 of 2 interactive zsh"
+printf '%s\n' '  506   870 ttys003  Fri 18 Sep 13:05:58 2026     -zsh' >>"$T/ps"; run
+arm "stale-shells WARN when a shell predates .zshrc" is stale-shells WARN; arm "stale-shells WARN names tty, pid and start" has stale-shells "ttys003 pid 506 since 18 Sep 13:05"; arm "stale-shells WARN counts 1 of 3" has stale-shells "1 of 3 interactive zsh"
+arm "stale-shells WARN fix text names the exec limit" has stale-shells "exec zsh keeps the start time"
+cp "$T/ps.ok" "$T/ps"; : >"$T/ps"; run; arm "stale-shells NOT MEASURED when ps prints nothing" is stale-shells "$NM"; cp "$T/ps.ok" "$T/ps"
+run; arm "stale-shells back to PASS (control)" is stale-shells PASS
 
 # 2. output style
 write_settings '.outputStyle="default"'; run; arm "output-style FAIL on wrong style" is output-style FAIL; write_settings
@@ -270,24 +311,24 @@ mk_transcript "$H/projects/$DKEY/a.jsonl" 75000; run "$DF"; arm "evidence-tokens
 mk_transcript "$H/projects/$DKEY/a.jsonl" 90000; run "$DF"; arm "evidence-tokens WARN over the header budget" is evidence-tokens WARN
 
 # L1 live
-run "$PROJ" --live; arm "--live in fixture mode is NOT MEASURED, never a launch" is live-probe "$NM"; arm "--live fixture reason names the seam" has live-probe "PJ_ZSHRC"
+run "$PROJ" --live; arm "--live in fixture mode is NOT MEASURED, never a launch" is live-probe "$NM"; arm "--live fixture reason names the seam" has live-probe "PJ_LAUNCHER"
 
 # outside any repo
-run "$T"; arm "outside a repo: pj-homes NOT MEASURED" is pj-homes "$NM"; arm "outside a repo: reason" has pj-homes "not in a git repo"; arm "outside a repo: hook-single-fire NOT MEASURED" is hook-single-fire "$NM"; arm "outside a repo: evidence NOT MEASURED" is evidence-card "$NM"; arm "outside a repo: machine checks still PASS" is alias PASS; arm "outside a repo: project field empty" [ "$(jq -r .project <<<"$OUT")" = "" ]
+run "$T"; arm "outside a repo: pj-homes NOT MEASURED" is pj-homes "$NM"; arm "outside a repo: reason" has pj-homes "not in a git repo"; arm "outside a repo: hook-single-fire NOT MEASURED" is hook-single-fire "$NM"; arm "outside a repo: evidence NOT MEASURED" is evidence-card "$NM"; arm "outside a repo: machine checks still PASS" is launcher PASS; arm "outside a repo: project field empty" [ "$(jq -r .project <<<"$OUT")" = "" ]
 
 # output shape, exit codes, quiet, line cap
 run; arm "exit 0 when no FAIL" [ "$RC" -eq 0 ]
 arm "json exit field 0" [ "$(jq -r .exit <<<"$OUT")" = 0 ]
 write_settings '.outputStyle="default"'; run; arm "exit 1 with a FAIL" [ "$RC" -eq 1 ]; arm "json exit field 1" [ "$(jq -r .exit <<<"$OUT")" = 1 ]
-QOUT="$( (builtin cd "$PROJ" && PATH="$BIN:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" PJ_HOME="$H" PJ_BIN_DIR="$BIN" PJ_DOTFILES="$DF" PJ_ZSHRC="$T/zshrc" PJ_TRANSCRIPTS_DIR="$H/projects" PJ_STATE_DIR="$STATE" PJ_MACHINE_FILE="$T/machine" PJ_PROMPT_SOURCES="$OR:$RULES" PJ_PROMPT_OUT="$T/cache/prompt.md" OI_WHERE_FILE="$T/oi-where" DECIDED_LIST_FILE="$T/decided-list" DECIDED_LIST_RC="$T/decided-list-rc" DECIDED_HOMES_FILE="$T/decided-homes" RENDER_OUT_FILE="$T/render-out" RENDER_RC_FILE="$T/render-rc" SYNC_OUT_FILE="$T/sync-out" pj-health --quiet 2>/dev/null) )"
+QOUT="$( (builtin cd "$PROJ" && PATH="$BIN:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" PJ_HOME="$H" PJ_BIN_DIR="$BIN" PJ_DOTFILES="$DF" PJ_LAUNCHER="$BIN/pj" PJ_TYPE_OUT="$T/type-out" DRYRUN_FILE="$T/dryrun" PJ_PS_OUT="$T/ps" PJ_ZSHRC_MTIME="$ZMT" PJ_TRANSCRIPTS_DIR="$H/projects" PJ_STATE_DIR="$STATE" PJ_MACHINE_FILE="$T/machine" PJ_PROMPT_SOURCES="$OR:$RULES" PJ_PROMPT_OUT="$T/cache/prompt.md" OI_WHERE_FILE="$T/oi-where" DECIDED_LIST_FILE="$T/decided-list" DECIDED_LIST_RC="$T/decided-list-rc" DECIDED_HOMES_FILE="$T/decided-homes" RENDER_OUT_FILE="$T/render-out" RENDER_RC_FILE="$T/render-rc" SYNC_OUT_FILE="$T/sync-out" pj-health --quiet 2>/dev/null) )"
 arm "--quiet prints the FAIL row" grep -q '^FAIL  *output-style' <<<"$QOUT"
 arm "--quiet prints the NOT MEASURED row" grep -q '^NOT MEASURED live-probe' <<<"$QOUT"
 arm "--quiet hides PASS rows" bash -c '! grep -q "^PASS" <<<"$1"' _ "$QOUT"
 arm "--quiet keeps the summary line" grep -q '^pj-health: .* FAIL, ' <<<"$QOUT"
 write_settings
-FOUT="$( (builtin cd "$PROJ" && PATH="$BIN:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" PJ_HOME="$H" PJ_BIN_DIR="$BIN" PJ_DOTFILES="$DF" PJ_ZSHRC="$T/zshrc" PJ_TRANSCRIPTS_DIR="$H/projects" PJ_STATE_DIR="$STATE" PJ_MACHINE_FILE="$T/machine" PJ_PROMPT_SOURCES="$OR:$RULES" PJ_PROMPT_OUT="$T/cache/prompt.md" OI_WHERE_FILE="$T/oi-where" DECIDED_LIST_FILE="$T/decided-list" DECIDED_LIST_RC="$T/decided-list-rc" DECIDED_HOMES_FILE="$T/decided-homes" RENDER_OUT_FILE="$T/render-out" RENDER_RC_FILE="$T/render-rc" SYNC_OUT_FILE="$T/sync-out" pj-health 2>/dev/null) )"
+FOUT="$( (builtin cd "$PROJ" && PATH="$BIN:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" PJ_HOME="$H" PJ_BIN_DIR="$BIN" PJ_DOTFILES="$DF" PJ_LAUNCHER="$BIN/pj" PJ_TYPE_OUT="$T/type-out" DRYRUN_FILE="$T/dryrun" PJ_PS_OUT="$T/ps" PJ_ZSHRC_MTIME="$ZMT" PJ_TRANSCRIPTS_DIR="$H/projects" PJ_STATE_DIR="$STATE" PJ_MACHINE_FILE="$T/machine" PJ_PROMPT_SOURCES="$OR:$RULES" PJ_PROMPT_OUT="$T/cache/prompt.md" OI_WHERE_FILE="$T/oi-where" DECIDED_LIST_FILE="$T/decided-list" DECIDED_LIST_RC="$T/decided-list-rc" DECIDED_HOMES_FILE="$T/decided-homes" RENDER_OUT_FILE="$T/render-out" RENDER_RC_FILE="$T/render-rc" SYNC_OUT_FILE="$T/sync-out" pj-health 2>/dev/null) )"
 arm "normal output under 40 lines ($(wc -l <<<"$FOUT" | tr -d ' '))" [ "$(wc -l <<<"$FOUT" | tr -d ' ')" -lt 40 ]
-arm "normal output has one row per check (23)" [ "$(grep -cE '^(PASS|WARN|FAIL|NOT MEASURED) ' <<<"$FOUT")" -eq 23 ]
+arm "normal output has one row per check (25)" [ "$(grep -cE '^(PASS|WARN|FAIL|NOT MEASURED) ' <<<"$FOUT")" -eq 25 ]
 arm "unknown arg REFUSED rc 2" bash -c 'PATH="$1:$PATH" pj-health --bogus >/dev/null 2>&1; [ $? -eq 2 ]' _ "$BIN"
 arm "--help exits 0" bash -c 'PATH="$1:$PATH" pj-health --help >/dev/null 2>&1' _ "$BIN"
 

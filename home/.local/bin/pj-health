@@ -37,7 +37,11 @@
 # TEST SEAMS (each replaces one real path; the selftest sets them, nobody else should):
 #   PJ_HOME              ~/.claude              PJ_BIN_DIR         ~/.local/bin
 #   PJ_DOTFILES          the dotfiles checkout (default: resolved from this script's link)
-#   PJ_ZSHRC             read `alias pj=` from this file instead of the live shell
+#   PJ_LAUNCHER          a `pj` to --dry-run instead of ~/.local/bin/pj; setting it is
+#                        FIXTURE MODE (no zsh -ic, no live launch, $HOME/.claude -> PJ_HOME)
+#   PJ_TYPE_OUT          file holding what `zsh -ic 'whence -w pj; alias pj'` would print
+#   PJ_PS_OUT            file holding a `ps -axo pid=,ppid=,tty=,lstart=,command=` listing
+#   PJ_ZSHRC_MTIME       epoch to use as ~/.zshrc's real mtime
 #   PJ_TRANSCRIPTS_DIR   ~/.claude/projects     PJ_STATE_DIR       ~/.local/state/pj
 #   plus the seams the tools already honour and pass through untouched: PJ_MACHINE_FILE,
 #   PJ_PROMPT_SOURCES, PJ_PROMPT_OUT, OPEN_ITEMS_PROJECTS_DIR, DECIDED_GLOBAL_DIR,
@@ -48,11 +52,11 @@ DOTFILES_BASELINE=70000
 BUDGET_MARGIN_PCT=15
 BASELINE_MIN_TRANSCRIPTS=3
 BASELINE_WINDOW=5
-FRAMEWORK_TOOLS="pj-prompt-file pj-start-card pj-session-end pj-wrap pj-id open-items decided claude-hooks-sync claude-project-settings-render ci-watch ccw-watch pj-health"
-SELFTESTS="pj-start-card-selftest pj-session-end-selftest pj-wrap-selftest pj-prompt-file:--selftest pj-id:--selftest open-items-selftest decided-selftest claude-hooks-sync-selftest claude-project-settings-render-selftest ccw-watch-selftest ci-watch-selftest pj-health-selftest"
+FRAMEWORK_TOOLS="pj pj-launch-check pj-prompt-file pj-start-card pj-session-end pj-wrap pj-id open-items decided claude-hooks-sync claude-project-settings-render ci-watch ccw-watch pj-health"
+SELFTESTS="pj:--selftest pj-launch-check:--selftest pj-start-card-selftest pj-session-end-selftest pj-wrap-selftest pj-prompt-file:--selftest pj-id:--selftest open-items-selftest decided-selftest claude-hooks-sync-selftest claude-project-settings-render-selftest ccw-watch-selftest ci-watch-selftest pj-health-selftest"
 HOOK_SELFTESTS="enforce-secret-probe.sh validate-bash.sh enforce-uv.sh enforce-pnpm.sh"
 PLUGIN_DIRS_EXPECTED="skills/herdr skills/AgentRelay skills/ISA pj-voice pj"
-ALIAS_PARTS='--setting-sources project,local|--settings ~/.claude/settings.project.json|--append-system-prompt-file "$(pj-prompt-file)"'
+LAUNCH_LOG_WINDOW=20
 
 FULL=0; LIVE=0; QUIET=0; JSON=0
 for a in "$@"; do
@@ -106,36 +110,43 @@ fi
 [ "$JSON" -eq 0 ] && { if [ "$IN_REPO" -eq 1 ]; then echo "pj-health: $PROJECT"; else echo "pj-health: (not in a git repo: machine checks only)"; fi; }
 
 # =============================================================== MACHINE ==
-# M1 alias
-alias_text=""; alias_src=""
-if [ -n "${PJ_ZSHRC:-}" ]; then
-  alias_text="$(grep -E '^alias pj=' "$PJ_ZSHRC" 2>/dev/null | head -1)"; alias_src="$(tilde "$PJ_ZSHRC")"
-else
-  alias_text="$(timeout 5 zsh -ic 'alias pj' 2>/dev/null | head -1)"; alias_src="live shell (zsh -ic)"
-fi
+# M1 launcher (F3: `pj` is a SCRIPT; an alias shadows it and goes stale, so an alias is a FAIL)
 PLUGIN_DIRS=""
-if [ -z "$alias_text" ]; then
-  row NOTM alias "no \`pj\` alias read from $alias_src; fix: stow -R the dotfiles, open a new shell"
+if [ -n "${PJ_LAUNCHER:-}" ]; then
+  launcher="$PJ_LAUNCHER"; type_out="$(cat "${PJ_TYPE_OUT:-/dev/null}" 2>/dev/null)"; lsrc="fixture"
 else
-  missing=""
-  IFS='|' read -r -a parts <<<"$ALIAS_PARTS"
-  for p in "${parts[@]}"; do
-    case "$alias_text" in *"$p"*) ;; *) missing="$missing [$p]";; esac
-  done
-  # tolerate $HOME in place of ~ for the settings path
-  case "$missing" in *'[--settings ~/.claude/settings.project.json]'*)
-    case "$alias_text" in *'--settings $HOME/.claude/settings.project.json'*|*'--settings "$HOME/.claude/settings.project.json"'*) missing="${missing/ \[--settings ~\/.claude\/settings.project.json\]/}";; esac;;
-  esac
-  PLUGIN_DIRS="$(printf '%s' "$alias_text" | grep -oE -- '--plugin-dir [^ ]+' | sed 's/--plugin-dir //')"
-  pd_n="$(printf '%s\n' "$PLUGIN_DIRS" | grep -c . || true)"
-  for d in $PLUGIN_DIRS_EXPECTED; do   # exact entry: ~/.claude/pj must not be satisfied by ~/.claude/pj-voice
-    printf '%s\n' "$PLUGIN_DIRS" | grep -qE "^(~|\\\$HOME|$HOME)/\.claude/$d/?$" || missing="$missing [--plugin-dir ~/.claude/$d]"
-  done
-  case "$alias_text" in *'--output-style pj-voice:pj-voice'*) ;; esac   # the style comes from settings (M2), not the alias
-  if [ -z "$missing" ] && [ "$pd_n" -eq 5 ]; then
-    row PASS alias "$alias_src: setting-sources, settings file, prompt-file, 5 plugin dirs"
+  launcher="$PJ_BIN_DIR/pj"; type_out="$(timeout 5 zsh -ic 'whence -w pj; alias pj' 2>/dev/null)"; lsrc="fresh zsh -ic"
+fi
+kind="$(printf '%s\n' "$type_out" | sed -n 's/^pj: //p' | head -1)"      # command | alias | function | none
+if [ -z "$kind" ]; then
+  row NOTM launcher "$lsrc printed nothing for \`whence -w pj\` (timed out?); fix: in a terminal, whence -w pj"
+elif [ "$kind" = alias ]; then
+  row FAIL launcher "$lsrc: pj is an ALIAS, which shadows ~/.local/bin/pj and goes stale (F3): $(printf '%s\n' "$type_out" | sed -n 2p | cut -c1-70); fix: remove \`alias pj\` from .zshrc/.zshrc.private, open a new shell"
+elif [ "$kind" != command ]; then
+  row FAIL launcher "$lsrc: pj resolves to a $kind, expected the command ~/.local/bin/pj; fix: stow -R the dotfiles, open a new shell"
+elif [ ! -x "$launcher" ]; then
+  row FAIL launcher "$(tilde "$launcher") missing or not executable; fix: stow -R the dotfiles"
+else
+  dry="$(timeout 10 "$launcher" --dry-run 2>/dev/null)"; drc=$?
+  if [ "$drc" -ne 0 ] || [ -z "$dry" ]; then
+    row FAIL launcher "pj --dry-run rc $drc, no argv; fix: pj --selftest, pj-prompt-file --selftest"
   else
-    row FAIL alias "$alias_src is missing:${missing:- (plugin-dir count $pd_n, expected 5)}; fix: stow -R the dotfiles, open a new shell"
+    missing=""
+    { grep -qx -- '--setting-sources' <<<"$dry" && grep -qx -- 'project,local' <<<"$dry"; } || missing="$missing [--setting-sources project,local]"
+    grep -qE -- "^(~|\\\$HOME|$HOME)/\.claude/settings\.project\.json$" <<<"$dry" || missing="$missing [--settings ~/.claude/settings.project.json]"
+    pf="$(awk '$0=="--append-system-prompt-file"{getline; print; exit}' <<<"$dry")"
+    expf="$(pj-prompt-file --path 2>/dev/null || true)"
+    { [ -n "$pf" ] && [ -n "$expf" ] && [ "$pf" = "$expf" ]; } || missing="$missing [--append-system-prompt-file $(tilde "${expf:-<pj-prompt-file --path>}") got $(tilde "${pf:-nothing}")]"
+    PLUGIN_DIRS="$(awk '$0=="--plugin-dir"{getline; print}' <<<"$dry")"
+    pd_n="$(printf '%s\n' "$PLUGIN_DIRS" | grep -c . || true)"
+    for d in $PLUGIN_DIRS_EXPECTED; do   # exact entry: ~/.claude/pj must not be satisfied by ~/.claude/pj-voice
+      printf '%s\n' "$PLUGIN_DIRS" | grep -qE "^(~|\\\$HOME|$HOME)/\.claude/$d/?$" || missing="$missing [--plugin-dir ~/.claude/$d]"
+    done
+    if [ -z "$missing" ] && [ "$pd_n" -eq 5 ]; then
+      row PASS launcher "$(tilde "$launcher") is a command, no alias ($lsrc); dry-run carries setting-sources, settings file, prompt cache, 5 plugin dirs"
+    else
+      row FAIL launcher "pj --dry-run is missing:${missing:- (plugin-dir count $pd_n, expected 5)}; fix: stow -R the dotfiles, pj --selftest"
+    fi
   fi
 fi
 
@@ -160,7 +171,7 @@ bad=""; ok=0
 while IFS= read -r d; do
   [ -z "$d" ] && continue
   real="${d/#\~/$HOME}"; real="${real/#\$HOME/$HOME}"
-  [ -n "${PJ_ZSHRC:-}" ] && real="${real/#$HOME\/.claude/$PJ_HOME}"
+  [ -n "${PJ_LAUNCHER:-}" ] && real="${real/#$HOME\/.claude/$PJ_HOME}"   # fixture mode
   if [ ! -d "$real" ]; then bad="$bad $(tilde "$real")(missing)"
   elif [ -f "$real/.claude-plugin/plugin.json" ] || [ -f "$real/SKILL.md" ] || ls "$real"/skills/*/SKILL.md >/dev/null 2>&1 || ls "$real"/output-styles/*.md >/dev/null 2>&1; then ok=$((ok+1))
   else bad="$bad $(tilde "$real")(no manifest, skill or output style)"; fi
@@ -247,7 +258,7 @@ if [ -r "$SETTINGS_PROJECT" ]; then
     p="$(printf '%s' "$cmd" | grep -oE '"?\$HOME/[^" ]+' | head -1 | tr -d '"')"
     [ -z "$p" ] && continue
     real="${p/#\$HOME/$HOME}"
-    [ -n "${PJ_ZSHRC:-}" ] && real="${real/#$HOME\/.claude/$PJ_HOME}"   # fixture mode
+    [ -n "${PJ_LAUNCHER:-}" ] && real="${real/#$HOME\/.claude/$PJ_HOME}"   # fixture mode
     if [ ! -x "$real" ]; then
       orphans="$orphans $(basename "$p")"
       fixes="$fixes\n  jq '(.hooks.\"$ev\"[].hooks) |= map(select(.command != $(jq -Rn --arg c "$cmd" '$c')))' $(tilde "$SETTINGS_PROJECT")"
@@ -363,6 +374,46 @@ if [ -n "$stmiss" ]; then row FAIL selftests "missing:$stmiss; fix: stow -R the 
 elif [ "$FULL" -eq 0 ]; then row PASS selftests "$stn selftests present, not run (--full runs them)"
 elif [ -n "$stfail" ]; then row FAIL selftests "$stn run, failing:$stfail"
 else row PASS selftests "$stn run, all rc 0:$stres"; fi
+
+# M15 launch log (F3; pj-launch-check writes it). WARN, never FAIL: a stale launch is history, not wiring.
+LAUNCH_LOG="$PJ_STATE_DIR/launches.log"
+if [ ! -r "$LAUNCH_LOG" ]; then
+  row NOTM launch-log "no $(tilde "$LAUNCH_LOG") yet (the first pj launch after F3 writes it)"
+else
+  last="$(tail -n "$LAUNCH_LOG_WINDOW" "$LAUNCH_LOG")"
+  nread="$(printf '%s\n' "$last" | grep -c 'result=' || true)"
+  nunm="$(printf '%s\n' "$last" | grep -c ' result=unmeasured:' || true)"
+  stale_list="$(printf '%s\n' "$last" | grep ' result=stale:' | sed -E 's/^ts=([0-9-]+)T([0-9:]{5})[^ ]* .* tty=([^ ]+) .* result=stale:(.*)$/\3 \1 \2 (\4)/' | paste -sd ';' - | sed 's/;/, /g')"
+  nstale="$(printf '%s\n' "$last" | grep -c ' result=stale:' || true)"
+  if [ "$nread" -eq 0 ]; then row NOTM launch-log "$(tilde "$LAUNCH_LOG") has no result= lines"
+  elif [ "$nstale" -eq 0 ]; then row PASS launch-log "last $nread launches ok${nunm:+ ($nunm unmeasured)}"
+  else row WARN launch-log "$nstale of the last $nread launches stale: $stale_list; fix: open a new shell in those panes (exec zsh or a fresh pane), relaunch pj"; fi
+fi
+
+# M16 stale shells (F3). Interactive zsh started before ~/.zshrc last changed will launch the OLD
+# definitions. WARN, never FAIL: an old shell is a warning about future launches, not a wiring fault.
+mtime_of(){ stat -L -c %Y "$1" 2>/dev/null || stat -L -f %m "$1" 2>/dev/null || echo 0; }   # GNU first: Linux -f means filesystem
+lstart_epoch(){ date -j -f '%a %e %b %H:%M:%S %Y' "$1" +%s 2>/dev/null || date -d "$1" +%s 2>/dev/null || echo 0; }
+zmt="${PJ_ZSHRC_MTIME:-$(mtime_of "$HOME/.zshrc")}"
+if [ -n "${PJ_PS_OUT:-}" ]; then ps_out="$(cat "$PJ_PS_OUT" 2>/dev/null)"; else ps_out="$(ps -axo pid=,ppid=,tty=,lstart=,command= -u "$USER" 2>/dev/null)"; fi
+if [ "$zmt" -eq 0 ]; then
+  row NOTM stale-shells "cannot stat ~/.zshrc"
+elif [ -z "$ps_out" ]; then
+  row NOTM stale-shells "ps returned nothing (a sandbox refuses it); fix: run pj-health from a terminal"
+else
+  nsh=0; nold=0; oldlist=""
+  while read -r pid ppid tty d1 d2 d3 d4 d5 cmd; do
+    [ -n "${pid:-}" ] || continue
+    case "$cmd" in -zsh|zsh|*/zsh) ;; *) continue;; esac       # interactive shells only: no `zsh -c`, no args
+    [ "$tty" != "??" ] && [ "$tty" != "-" ] && [ "$ppid" != 1 ] || continue   # ppid 1: orphaned forks, not panes
+    nsh=$((nsh+1))
+    st="$(lstart_epoch "$d1 $d2 $d3 $d4 $d5")"
+    if [ "$st" -gt 0 ] && [ "$st" -lt "$zmt" ]; then nold=$((nold+1)); oldlist="$oldlist, $tty pid $pid since $d2 $d3 ${d4%:*}"; fi
+  done <<<"$ps_out"
+  zdate="$(date -r "$zmt" '+%Y-%m-%d %H:%M' 2>/dev/null || date -d "@$zmt" '+%Y-%m-%d %H:%M' 2>/dev/null || echo "$zmt")"
+  if [ "$nold" -eq 0 ]; then row PASS stale-shells "0 of $nsh interactive zsh older than ~/.zshrc ($zdate)"
+  else row WARN stale-shells "$nold of $nsh interactive zsh older than ~/.zshrc ($zdate):${oldlist#,}; fix: close the pane or open a new one (exec zsh keeps the start time, so the row lists it until the pane is reopened). Every .zshrc edit makes all open shells stale by this measure; that is correct"; fi
+fi
 
 # =============================================================== PROJECT ==
 DRAWER=""
@@ -506,11 +557,13 @@ if [ "$LIVE" -eq 0 ]; then
   row NOTM live-probe "not run (--live launches one headless pj probe, an API call)"
 elif [ "$IN_REPO" -eq 0 ]; then
   row NOTM live-probe "not in a git repo (the probe's transcript is read from the project key)"
-elif [ -n "${PJ_ZSHRC:-}" ]; then
-  row NOTM live-probe "fixture mode (PJ_ZSHRC set): no real launch"
+elif [ -n "${PJ_LAUNCHER:-}" ]; then
+  row NOTM live-probe "fixture mode (PJ_LAUNCHER set): no real launch"
+elif [ ! -x "$PJ_BIN_DIR/pj" ]; then
+  row NOTM live-probe "$(tilde "$PJ_BIN_DIR/pj") not executable; nothing to launch"
 else
   prompt='Do exactly two things, in order, then stop. 1. If a SessionStart hook output in your context contains a line beginning with "pj start card:", print that line verbatim; otherwise print NO-CARD. 2. Run this Bash command exactly once, verbatim, no retry, no rewording: DUMMY_TOKEN=abc123; echo "set? ${DUMMY_TOKEN:-no}" . Then print CANARY-DENIED if a hook blocked that tool call, or CANARY-ALLOWED if it ran.'
-  lout="$(timeout 300 zsh -ic 'pj -p "$1" --model haiku --output-format json' _ "$prompt" 2>/dev/null </dev/null)"; lrc=$?
+  lout="$(timeout 300 "$PJ_BIN_DIR/pj" -p "$prompt" --model haiku --output-format json 2>/dev/null </dev/null)"; lrc=$?   # the script directly (F3): no zsh -ic, no alias
   res="$(jq -r '.[]? | select(.type=="result") | .result // ""' <<<"$lout" 2>/dev/null)"
   sid="$(jq -r '.[]? | select(.type=="result") | .session_id // ""' <<<"$lout" 2>/dev/null)"
   lu="$(jq -r '.[]? | select(.type=="result") | .usage | ((.input_tokens // 0) + (.cache_creation_input_tokens // 0) + (.cache_read_input_tokens // 0))' <<<"$lout" 2>/dev/null)"

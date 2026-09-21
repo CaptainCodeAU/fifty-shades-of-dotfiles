@@ -53,6 +53,7 @@ FILES=(
   ~/.zsh_onboarding
   ~/.zsh_welcome
   ~/.zsh_tmux
+  ~/.zsh_claude_launch
 )
 
 # A public function we KNOW these files define. If it is absent after sourcing,

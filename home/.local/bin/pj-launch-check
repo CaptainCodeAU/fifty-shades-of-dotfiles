@@ -1,0 +1,246 @@
+#!/usr/bin/env bash
+# pj-launch-check -- did THIS pj session launch with the current launcher? (F3, W-20260921-13)
+#
+# A SessionStart hook for pj, registered through settings/claude/hooks.json (targets:
+# project). It reads the argv of the running `claude` process and checks three things the
+# pj launcher must carry: the appended system-prompt file is the cache `pj-prompt-file`
+# names (that is where pj-global/RULES.md lands), the five plugin dirs, and
+# `--setting-sources project,local`.
+#
+#   match     prints NOTHING.
+#   mismatch  prints ONE line, first and loud, then exits 0:
+#             LAUNCH WARNING: stale launcher, missing <what>. Open a new shell and relaunch pj.
+#             <what> is a comma-separated list: "RULES.md (prompt file is not the
+#             pj-prompt-file cache)", "plugin dir ~/.claude/<d>", "--setting-sources project,local".
+#   unmeasured (no claude pid, ps refused): prints
+#             LAUNCH CHECK: could not read the launcher argv (<why>)
+#             A check that cannot see says so; it never passes by silence.
+#
+# ALWAYS appends one line to ~/.local/state/pj/launches.log (the debugging record):
+#   ts=<ISO local> session=<id> project=<key> tty=<tty> shell_start=<ISO> zshrc_mtime=<ISO> result=<ok|stale:a,b|unmeasured:why>
+# `result=` is last so a grep on it is unambiguous. An unwritable log dir costs one stderr
+# line; the warning still prints and the exit is still 0.
+#
+# HOW IT FINDS THE ARGV (measured 2026-09-21 with a scratch --settings hook under
+# `claude -p`, Claude Code 2.1.278): Claude Code exports CLAUDE_PID into the hook's env,
+# and with a bare-path command the hook's parent IS that pid. With the manifest's
+# `test -x ... && ... || true` shape an `sh -c` sits between, so $PPID alone is wrong.
+# Route: CLAUDE_PID first, else walk ancestors (8 hops) to the first command that starts
+# with `claude`. Then `ps -ww -o command=` on it. The argv from ps is space-joined, so a
+# path with a space cannot be parsed; every path here is under ~ and has none.
+#
+# Contract: exit 0 on EVERY path, no network, no prompt, well under a second; writes ONLY
+# the log line. Silent on the `compact` source (same as the card). Never repairs.
+#
+# Seams (the selftest sets them, nobody else should):
+#   PJ_LAUNCH_ARGV       file holding the argv text instead of ps
+#   PJ_PROMPT_EXPECTED   the expected prompt path instead of `pj-prompt-file --path`
+#   PJ_STATE_DIR         replaces ~/.local/state/pj
+#   PJ_ZSHRC_PATH        the .zshrc to stat (default ~/.zshrc, followed through the link)
+#   PJ_LAUNCH_SHELL_START / PJ_LAUNCH_TTY   fixed values instead of ps lookups
+# Flags: --selftest, --help.
+set -u
+
+STATE="${PJ_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/pj}"
+LOG="$STATE/launches.log"
+PLUGIN_DIRS_EXPECTED="skills/herdr skills/AgentRelay skills/ISA pj-voice pj"
+ZSHRC="${PJ_ZSHRC_PATH:-$HOME/.zshrc}"
+
+usage(){ sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; }
+
+iso_now(){ date +%Y-%m-%dT%H:%M:%S%z; }
+iso_from_epoch(){ date -r "$1" +%Y-%m-%dT%H:%M:%S 2>/dev/null || date -d "@$1" +%Y-%m-%dT%H:%M:%S 2>/dev/null || printf '%s' "$1"; }
+iso_from_lstart(){   # "Mon 21 Sep 12:32:38 2026" -> 2026-09-21T12:32:38 (BSD date, then GNU, else raw with _)
+  local s="$1"
+  date -j -f '%a %e %b %H:%M:%S %Y' "$s" +%Y-%m-%dT%H:%M:%S 2>/dev/null \
+    || date -d "$s" +%Y-%m-%dT%H:%M:%S 2>/dev/null \
+    || printf '%s' "${s// /_}"
+}
+mtime_of(){ stat -L -c %Y "$1" 2>/dev/null || stat -L -f %m "$1" 2>/dev/null || echo 0; }   # -L: ~/.zshrc is a stow LINK, its own mtime is the link's (caught in probe 1); GNU first (Linux -f means filesystem)
+canon(){   # expand ~ and $HOME, follow links when the path exists
+  local p="$1"; p="${p/#\~/$HOME}"; p="${p/#\$HOME/$HOME}"
+  if [ -e "$p" ]; then readlink -f "$p" 2>/dev/null || printf '%s' "$p"; else printf '%s' "$p"; fi
+}
+tilde(){ printf '%s' "${1/#$HOME/\~}"; }
+
+# --- hook input --------------------------------------------------------------------
+read_input(){   # sets SRC SESSION CWD from the hook JSON on stdin; tolerant of garbage
+  SRC=startup; SESSION=""; CWD=""
+  [ -t 0 ] && return
+  local in; in="$(cat 2>/dev/null)"
+  [ -n "$in" ] || return
+  if command -v jq >/dev/null 2>&1; then
+    SRC="$(printf '%s' "$in" | jq -r '.source // "startup"' 2>/dev/null || echo startup)"
+    SESSION="$(printf '%s' "$in" | jq -r '.session_id // ""' 2>/dev/null || true)"
+    CWD="$(printf '%s' "$in" | jq -r '.cwd // ""' 2>/dev/null || true)"
+  else
+    SRC="$(printf '%s' "$in" | sed -n 's/.*"source"[[:space:]]*:[[:space:]]*"\([a-z]*\)".*/\1/p' | head -1)"
+    SESSION="$(printf '%s' "$in" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+  fi
+  [ -n "$SRC" ] || SRC=startup
+}
+
+# --- the claude process ------------------------------------------------------------
+find_claude_pid(){   # prints the pid or nothing; WHY set on failure
+  WHY=""
+  if [ -n "${CLAUDE_PID:-}" ]; then printf '%s' "$CLAUDE_PID"; return; fi
+  local p="$PPID" i cmd
+  for i in 1 2 3 4 5 6 7 8; do
+    [ -n "$p" ] && [ "$p" != 1 ] || break
+    cmd="$(ps -o command= -p "$p" 2>/dev/null)"
+    case "$cmd" in claude|claude\ *|*/claude|*/claude\ *) printf '%s' "$p"; return;; esac
+    p="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')"
+  done
+  WHY=no-claude-pid
+}
+shell_of(){   # first zsh/bash ancestor of <pid> that is not a -c one; prints its lstart or nothing
+  local p="$1" i cmd
+  for i in 1 2 3 4 5 6 7 8; do
+    p="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')"
+    [ -n "$p" ] && [ "$p" != 1 ] || return
+    cmd="$(ps -o command= -p "$p" 2>/dev/null)"
+    case "$cmd" in *" -c "*) continue;; -zsh|zsh|*/zsh|-bash|bash|*/bash|*zsh\ -l*|*bash\ -l*) ps -o lstart= -p "$p" 2>/dev/null | sed 's/^ *//;s/ *$//'; return;; esac
+  done
+}
+
+# --- the check ---------------------------------------------------------------------
+check(){   # sets REASONS (comma list) and PHRASES (for the warning) from ARGV_TEXT and EXPECTED
+  REASONS=""; PHRASES=""
+  local prompt="" sources="" dirs="" tok prev="" d want got
+  for tok in $ARGV_TEXT; do
+    case "$prev" in
+      --append-system-prompt-file) prompt="$tok";;
+      --plugin-dir) dirs="$dirs $tok";;
+      --setting-sources) sources="$tok";;
+    esac
+    prev="$tok"
+  done
+  want="$(canon "$EXPECTED")"; got=""; [ -n "$prompt" ] && got="$(canon "$prompt")"
+  if [ -z "$got" ] || [ "$got" != "$want" ]; then
+    REASONS="rules-file"; PHRASES="RULES.md (prompt file is not the pj-prompt-file cache)"
+  fi
+  for d in $PLUGIN_DIRS_EXPECTED; do
+    local hit=0 x
+    for x in $dirs; do [ "$(canon "$x")" = "$(canon "$HOME/.claude/$d")" ] && hit=1; done
+    if [ "$hit" -eq 0 ]; then
+      REASONS="${REASONS:+$REASONS,}plugin-dir:${d##*/}"; PHRASES="${PHRASES:+$PHRASES, }plugin dir ~/.claude/$d"
+    fi
+  done
+  if [ "$sources" != "project,local" ]; then
+    REASONS="${REASONS:+$REASONS,}setting-sources"; PHRASES="${PHRASES:+$PHRASES, }--setting-sources project,local"
+  fi
+}
+
+log_line(){   # log_line <result>
+  local key=""
+  if [ -n "$CWD" ]; then key="$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null | sed 's#[/._]#-#g')"; fi
+  [ -n "$key" ] || key="$(printf '%s' "${CWD:-$PWD}" | sed 's#[/._]#-#g')"
+  local line="ts=$(iso_now) session=${SESSION:-unknown} project=$key tty=${TTY_:-unknown} shell_start=${SHELL_START:-unknown} zshrc_mtime=$(iso_from_epoch "$(mtime_of "$ZSHRC")") result=$1"
+  if mkdir -p "$STATE" 2>/dev/null && printf '%s\n' "$line" >>"$LOG" 2>/dev/null; then :; else
+    printf 'pj-launch-check: could not append to %s\n' "$(tilde "$LOG")" >&2
+  fi
+}
+
+main(){
+  read_input
+  [ "$SRC" = compact ] && exit 0
+  EXPECTED="${PJ_PROMPT_EXPECTED:-}"
+  if [ -z "$EXPECTED" ]; then
+    EXPECTED="$(pj-prompt-file --path 2>/dev/null || true)"
+    [ -n "$EXPECTED" ] || EXPECTED="${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles/pj-system-prompt.md"
+  fi
+  ARGV_TEXT=""; WHY=""; TTY_="${PJ_LAUNCH_TTY:-}"; SHELL_START="${PJ_LAUNCH_SHELL_START:-}"
+  if [ -n "${PJ_LAUNCH_ARGV:-}" ]; then
+    ARGV_TEXT="$(cat "$PJ_LAUNCH_ARGV" 2>/dev/null || true)"; [ -n "$ARGV_TEXT" ] || WHY=fixture-empty
+  else
+    local pid; pid="$(find_claude_pid)"
+    if [ -n "$pid" ]; then
+      ARGV_TEXT="$(ps -ww -o command= -p "$pid" 2>/dev/null || true)"; [ -n "$ARGV_TEXT" ] || WHY=ps-refused
+      [ -n "$TTY_" ] || TTY_="$(ps -o tty= -p "$pid" 2>/dev/null | tr -d ' ')"
+      if [ -z "$SHELL_START" ]; then local ls; ls="$(shell_of "$pid")"; [ -n "$ls" ] && SHELL_START="$(iso_from_lstart "$ls")"; fi
+    fi
+  fi
+  if [ -n "$WHY" ]; then
+    printf 'LAUNCH CHECK: could not read the launcher argv (%s)\n' "$WHY"
+    log_line "unmeasured:$WHY"; exit 0
+  fi
+  check
+  if [ -n "$REASONS" ]; then
+    printf 'LAUNCH WARNING: stale launcher, missing %s. Open a new shell and relaunch pj.\n' "$PHRASES"
+    log_line "stale:$REASONS"
+  else
+    log_line ok
+  fi
+  exit 0
+}
+
+selftest(){
+  local root pass=0 fail=0 out rc argv_ok
+  ok(){ pass=$((pass+1)); printf '  ok   %s\n' "$1"; }
+  bad(){ fail=$((fail+1)); printf '  FAIL %s\n       got: %s\n' "$1" "$2"; }
+  root="$(mktemp -d "${TMPDIR:-/tmp}/pj-launch-check-selftest.XXXXXX")" || exit 1
+  mkdir -p "$root/state" "$root/cache/dotfiles"; : >"$root/cache/dotfiles/pj-system-prompt.md"; : >"$root/old-rules.md"; printf '# zshrc\n' >"$root/zshrc"
+  local exp="$root/cache/dotfiles/pj-system-prompt.md"
+  argv_ok="claude --setting-sources project,local --settings $HOME/.claude/settings.project.json --append-system-prompt-file $exp --plugin-dir $HOME/.claude/skills/herdr --plugin-dir $HOME/.claude/skills/AgentRelay --plugin-dir $HOME/.claude/skills/ISA --plugin-dir $HOME/.claude/pj-voice --plugin-dir $HOME/.claude/pj --dangerously-skip-permissions --effort high"
+  printf '%s\n' "$argv_ok" >"$root/argv.ok"
+  printf '%s\n' "${argv_ok/$exp/$root/old-rules.md}" >"$root/argv.oldprompt"
+  printf '%s\n' "${argv_ok/ --plugin-dir $HOME\/.claude\/pj / }" >"$root/argv.fourdirs"
+  printf '%s\n' "${argv_ok/ --plugin-dir $HOME\/.claude\/pj / }" | sed "s#$exp#$root/old-rules.md#" >"$root/argv.both"
+  printf '%s\n' "${argv_ok/project,local/user,project,local}" >"$root/argv.sources"
+  run(){   # run <argv-file> [stdin]  -> OUT RC
+    OUT="$(printf '%s' "${2:-{\"session_id\":\"s1\",\"source\":\"startup\",\"cwd\":\"$root\"\}}" | PJ_LAUNCH_ARGV="$root/$1" PJ_PROMPT_EXPECTED="$exp" PJ_STATE_DIR="$root/state" PJ_ZSHRC_PATH="$root/zshrc" PJ_LAUNCH_TTY=ttys099 PJ_LAUNCH_SHELL_START=2026-01-01T00:00:00 "$0" 2>"$root/stderr")"; RC=$?
+  }
+  echo "pj-launch-check selftest in $root"
+  # 1. ok argv: silent, exit 0, one ok line logged
+  run argv.ok
+  [ "$RC" -eq 0 ] && [ -z "$OUT" ] && ok "1 ok argv: prints nothing, exit 0" || bad "1 ok argv" "rc=$RC out=$OUT"
+  [ "$(wc -l <"$root/state/launches.log" | tr -d ' ')" = 1 ] && ok "1 one log line written" || bad "1 log lines" "$(cat "$root/state/launches.log" 2>&1)"
+  case "$(tail -1 "$root/state/launches.log")" in *" result=ok") ok "1 log line ends with result=ok";; *) bad "1 result" "$(tail -1 "$root/state/launches.log")";; esac
+  # 2. stale: old prompt file
+  run argv.oldprompt
+  [ "$RC" -eq 0 ] && ok "2 exit 0 on a stale launch" || bad "2 rc" "$RC"
+  [ "$OUT" = "LAUNCH WARNING: stale launcher, missing RULES.md (prompt file is not the pj-prompt-file cache). Open a new shell and relaunch pj." ] && ok "2 exact warning line for an old prompt file" || bad "2 warning" "$OUT"
+  case "$(tail -1 "$root/state/launches.log")" in *" result=stale:rules-file") ok "2 log says stale:rules-file";; *) bad "2 log" "$(tail -1 "$root/state/launches.log")";; esac
+  # 3. stale: four plugin dirs
+  run argv.fourdirs
+  [ "$OUT" = "LAUNCH WARNING: stale launcher, missing plugin dir ~/.claude/pj. Open a new shell and relaunch pj." ] && ok "3 exact warning line for a missing plugin dir" || bad "3 warning" "$OUT"
+  case "$(tail -1 "$root/state/launches.log")" in *" result=stale:plugin-dir:pj") ok "3 log says stale:plugin-dir:pj";; *) bad "3 log" "$(tail -1 "$root/state/launches.log")";; esac
+  # 4. both at once, in order; and setting-sources
+  run argv.both
+  [ "$OUT" = "LAUNCH WARNING: stale launcher, missing RULES.md (prompt file is not the pj-prompt-file cache), plugin dir ~/.claude/pj. Open a new shell and relaunch pj." ] && ok "4 two phrases, rules first" || bad "4 warning" "$OUT"
+  case "$(tail -1 "$root/state/launches.log")" in *" result=stale:rules-file,plugin-dir:pj") ok "4 log lists both reasons";; *) bad "4 log" "$(tail -1 "$root/state/launches.log")";; esac
+  run argv.sources
+  case "$OUT" in *"missing --setting-sources project,local."*) ok "4 setting-sources drift is named";; *) bad "4 sources" "$OUT";; esac
+  # 5. garbage stdin: still measured, session unknown
+  run argv.ok 'this is not json {{{'
+  [ "$RC" -eq 0 ] && [ -z "$OUT" ] && ok "5 garbage stdin: exit 0, still silent on an ok argv" || bad "5 garbage" "rc=$RC out=$OUT"
+  case "$(tail -1 "$root/state/launches.log")" in *" session=unknown "*) ok "5 session logged as unknown";; *) bad "5 session" "$(tail -1 "$root/state/launches.log")";; esac
+  # 6. compact source: silent, no log line
+  local before; before="$(wc -l <"$root/state/launches.log" | tr -d ' ')"
+  run argv.oldprompt '{"session_id":"s2","source":"compact"}'
+  [ -z "$OUT" ] && [ "$(wc -l <"$root/state/launches.log" | tr -d ' ')" = "$before" ] && ok "6 compact: nothing printed, nothing logged" || bad "6 compact" "out=$OUT"
+  # 7. unreadable log dir: warning still printed, exit 0, stderr names the log
+  mkdir -p "$root/ro" && chmod 500 "$root/ro"
+  OUT="$(printf '{"session_id":"s3","source":"startup"}' | PJ_LAUNCH_ARGV="$root/argv.oldprompt" PJ_PROMPT_EXPECTED="$exp" PJ_STATE_DIR="$root/ro/state" PJ_ZSHRC_PATH="$root/zshrc" "$0" 2>"$root/stderr7")"; RC=$?
+  [ "$RC" -eq 0 ] && case "$OUT" in "LAUNCH WARNING: "*) ok "7 unwritable log: warning still printed, exit 0";; *) bad "7 unwritable" "rc=$RC out=$OUT";; esac
+  grep -q 'could not append' "$root/stderr7" && ok "7 stderr names the failed append" || bad "7 stderr" "$(cat "$root/stderr7")"
+  chmod 700 "$root/ro"
+  # 8. unmeasured: empty argv fixture
+  : >"$root/argv.empty"; run argv.empty
+  case "$OUT" in "LAUNCH CHECK: could not read the launcher argv (fixture-empty)") ok "8 unmeasured is said out loud";; *) bad "8 unmeasured" "$OUT";; esac
+  case "$(tail -1 "$root/state/launches.log")" in *" result=unmeasured:fixture-empty") ok "8 log says unmeasured";; *) bad "8 log" "$(tail -1 "$root/state/launches.log")";; esac
+  # 9. log line format: every key present once, in order, result last
+  local l; l="$(sed -n 1p "$root/state/launches.log")"
+  if printf '%s' "$l" | grep -qE '^ts=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}[+-][0-9]{4} session=s1 project=[^ ]+ tty=ttys099 shell_start=2026-01-01T00:00:00 zshrc_mtime=[0-9]{4}-[0-9-]+T[0-9:]{8} result=ok$'; then ok "9 log line format"; else bad "9 log format" "$l"; fi
+  # 10. control: the tty and shell-start seams are what landed (a wrong fixture would fail 9)
+  [ "$(grep -c ' tty=ttys099 ' "$root/state/launches.log")" -ge 5 ] && ok "10 control: every measured line carries the fixture tty" || bad "10 control" "$(grep -c ' tty=ttys099 ' "$root/state/launches.log")"
+  printf 'pj-launch-check selftest: %d passed, %d failed\n' "$pass" "$fail"
+  [ "$fail" -eq 0 ]
+}
+
+case "${1:-}" in
+  --help|-h) usage; exit 0;;
+  --selftest) selftest; exit $?;;
+  "") main;;
+  *) printf 'pj-launch-check: unknown argument %s\n' "$1" >&2; exit 0;;
+esac

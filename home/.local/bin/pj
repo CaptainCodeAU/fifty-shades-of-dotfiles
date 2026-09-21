@@ -1,0 +1,108 @@
+#!/usr/bin/env zsh
+# pj -- the light project launcher for Claude Code (F3, W-20260921-13).
+#
+# WHY A SCRIPT AND NOT AN ALIAS. Until 2026-09-21 `pj` was an alias in ~/.zshrc. An
+# alias is read ONCE, when the shell starts, so a shell opened before the alias changed
+# kept launching the OLD form for as long as it lived. Herdr keeps panes alive for days,
+# and four of the last seven pj sessions ran without pj-global/RULES.md that way (P5.7,
+# P6a). A script is read from disk at every launch: it cannot go stale.
+#
+# What it does, and only that (the same steps the alias + __claude_launch did):
+#   1. builds the claude argv: project-only settings, the ONE combined system-prompt file
+#      pj-prompt-file prints, the five plugin dirs, skip-permissions, effort high;
+#   2. sources ~/.zsh_claude_launch (the shared launch function, also used by the `c`
+#      family from .zshrc) and hands the argv to __claude_launch, which prints the last
+#      commit's files to the tty, reads the two keychain entries, refreshes the GH
+#      rate-limit cache, starts the per-session ssh-agent, sets the env vars and runs
+#      claude. Anything after `pj` on the command line is appended (`pj -p x`,
+#      `pj --resume`, `pj --model haiku` all pass through untouched).
+#
+# Own flags, recognised ONLY as the first argument so pass-through stays pure:
+#   pj --dry-run [args...]   print the exact claude argv, one entry per line, exit 0. No
+#                            launch, no keychain, no ssh-agent. pj-launch-check and
+#                            pj-health read it.
+#   pj --selftest            prove the dry-run arms (below). Exit 0 all green, 1 otherwise.
+#
+# Refuses (exit 2, one line on stderr) when pj-prompt-file prints nothing: a launch
+# without the rules file is the failure this script exists to prevent, so it never
+# launches half-loaded. Also refuses when ~/.zsh_claude_launch is missing (stow it).
+#
+# Paths under ~ only. No secrets in this file; the keychain is read inside
+# __claude_launch and never printed. Seams (the selftest sets them, nobody else should):
+#   PJ_LAUNCH_FILE   the launch-function file (default ~/.zsh_claude_launch)
+#   PJ_PROMPT_OUT    honoured by pj-prompt-file (its own seam), so the dry run can be
+#                    pointed at a fixture cache
+set -u
+emulate -L zsh
+
+SELF="${0:A}"   # captured at top level: inside a zsh function $0 is the FUNCTION name
+LAUNCH_FILE="${PJ_LAUNCH_FILE:-$HOME/.zsh_claude_launch}"
+PLUGIN_DIRS=(skills/herdr skills/AgentRelay skills/ISA pj-voice pj)
+typeset -ga PJ_ARGV   # not ARGV: in zsh that is the positional parameters
+
+build_argv() {
+  local prompt d
+  prompt="$(pj-prompt-file)"
+  if [[ -z "$prompt" ]]; then
+    print -u2 -- "pj: REFUSED: pj-prompt-file printed no system-prompt file; run pj-prompt-file --selftest"
+    return 2
+  fi
+  PJ_ARGV=(claude --setting-sources project,local --settings "$HOME/.claude/settings.project.json"
+        --append-system-prompt-file "$prompt")
+  for d in "${PLUGIN_DIRS[@]}"; do PJ_ARGV+=(--plugin-dir "$HOME/.claude/$d"); done
+  PJ_ARGV+=(--dangerously-skip-permissions --effort high)
+}
+
+selftest() {
+  local pass=0 fail=0 out rc root n d
+  ok()  { pass=$((pass + 1)); print -- "  ok   $1"; }
+  bad() { fail=$((fail + 1)); print -- "  FAIL $1"; print -- "       got: $2"; }
+  root="$(mktemp -d "${TMPDIR:-/tmp}/pj-selftest.XXXXXX")" || exit 1
+  print -- "pj selftest in $root"
+  # 1. dry-run argv carries the cache prompt file and all five plugin dirs, first entry is claude
+  out="$(PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --dry-run 2>"$root/err1")"; rc=$?
+  [[ $rc -eq 0 ]] && ok "1 dry-run exits 0" || bad "1 dry-run rc" "$rc $(<"$root/err1")"
+  [[ "${out%%$'\n'*}" == claude ]] && ok "1 argv[0] is claude" || bad "1 argv[0]" "${out%%$'\n'*}"
+  [[ "$out" == *$'\n--append-system-prompt-file\n'"$root/prompt.md"$'\n'* ]] && ok "1 carries the prompt cache path" || bad "1 prompt path" "$out"
+  n=0; for d in "${PLUGIN_DIRS[@]}"; do [[ "$out" == *$'\n--plugin-dir\n'"$HOME/.claude/$d"$'\n'* ]] && n=$((n + 1)); done
+  [[ $n -eq 5 ]] && ok "1 all five plugin dirs present" || bad "1 plugin dirs" "$n of 5"
+  [[ "$out" == *$'\n--setting-sources\nproject,local\n'* ]] && ok "1 setting-sources project,local" || bad "1 setting-sources" "$out"
+  [[ "$out" == *$'\n--settings\n'"$HOME/.claude/settings.project.json"$'\n'* ]] && ok "1 project settings file" || bad "1 settings" "$out"
+  # 2. pass-through: -p x --model haiku land at the end, in order
+  out="$(PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --dry-run -p x --model haiku 2>/dev/null)"
+  [[ "$out" == *$'\n-p\nx\n--model\nhaiku' ]] && ok "2 -p x --model haiku appended in order" || bad "2 pass-through" "$out"
+  # 3. a claude flag in first position is NOT eaten: --dry-run only counts as \$1
+  out="$(PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --dry-run --resume --dry-run 2>/dev/null)"
+  [[ "$out" == *$'\n--resume\n--dry-run' ]] && ok "3 a later --dry-run passes through as a claude arg" || bad "3 later flag" "$out"
+  # 4. no prompt file: refuses with rc 2, prints nothing on stdout
+  out="$(PJ_PROMPT_SOURCES="$root/none-a:$root/none-b" PJ_PROMPT_OUT="$root/p2.md" "$SELF" --dry-run 2>"$root/err4")"; rc=$?
+  [[ $rc -eq 2 && -z "$out" ]] && ok "4 no prompt source -> REFUSED rc 2, no argv" || bad "4 refusal" "rc=$rc out=$out"
+  grep -q REFUSED "$root/err4" && ok "4 refusal is announced on stderr" || bad "4 stderr" "$(<"$root/err4")"
+  # 5. control: the launch file is found (the real launch path exists on this machine)
+  [[ -r "$LAUNCH_FILE" ]] && ok "5 launch file readable: ${LAUNCH_FILE/#$HOME/~}" || bad "5 launch file" "$LAUNCH_FILE missing (stow?)"
+  # 6. control: __claude_launch is defined by that file, in a clean zsh
+  out="$(zsh -fc "source '$LAUNCH_FILE' && whence -w __claude_launch" 2>&1)"
+  [[ "$out" == *": function" ]] && ok "6 launch file defines __claude_launch" || bad "6 function" "$out"
+  # 7. negative control: a missing launch file is REFUSED before any launch (dry-run untouched)
+  out="$(PJ_LAUNCH_FILE="$root/nope" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --dry-run 2>/dev/null)"; rc=$?
+  [[ $rc -eq 0 && "${out%%$'\n'*}" == claude ]] && ok "7 dry-run does not need the launch file" || bad "7 dry-run vs launch file" "rc=$rc"
+  print -- "pj selftest: $pass passed, $fail failed"
+  [[ $fail -eq 0 ]]
+}
+
+case "${1:-}" in
+  --dry-run)
+    shift
+    build_argv || exit $?
+    print -l -- "${PJ_ARGV[@]}" "$@"
+    exit 0 ;;
+  --selftest) selftest; exit $? ;;
+esac
+
+build_argv || exit $?
+if [[ ! -r "$LAUNCH_FILE" ]]; then
+  print -u2 -- "pj: REFUSED: ${LAUNCH_FILE/#$HOME/~} missing; stow -R the dotfiles"
+  exit 2
+fi
+source "$LAUNCH_FILE"
+__claude_launch "${PJ_ARGV[@]}" "$@"

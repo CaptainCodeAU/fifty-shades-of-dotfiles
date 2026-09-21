@@ -153,6 +153,18 @@
       "why": "The 20-line start card for pj sessions (D-20260920-04): open items, wrap-up warning, handoff pointer, hello rule. Project target only: pj is the launcher it serves"
     },
     {
+      "event": "SessionStart",
+      "script": "pj-launch-check",
+      "script_path": "$HOME/.local/bin/pj-launch-check",
+      "targets": ["project"],
+      "entry": {
+        "type": "command",
+        "command": "test -x \"$HOME/.local/bin/pj-launch-check\" && \"$HOME/.local/bin/pj-launch-check\" || true",
+        "timeout": 5
+      },
+      "why": "F3 (W-20260921-13): reads the running claude's argv via CLAUDE_PID and prints ONE LAUNCH WARNING line when the appended prompt file is not the pj-prompt-file cache (RULES.md missing), a plugin dir is absent or --setting-sources drifted; silent on a match; always appends one line to ~/.local/state/pj/launches.log. Separate from the read-only card on purpose (P5.2). Project target only"
+    },
+    {
       "event": "SessionEnd",
       "script": "pj-session-end",
       "script_path": "$HOME/.local/bin/pj-session-end",

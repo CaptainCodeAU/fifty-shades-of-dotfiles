@@ -21,7 +21,8 @@
 #
 # Env: PJ_PROMPT_SOURCES  colon-separated source list (default: the two files above)
 #      PJ_PROMPT_OUT      output path (default: ${XDG_CACHE_HOME:-~/.cache}/dotfiles/pj-system-prompt.md)
-# Flags: --selftest  prove every arm against throwaway fixtures; --help.
+# Flags: --path      print the output path only, no build, no write (F3: pj-launch-check reads it)
+#        --selftest  prove every arm against throwaway fixtures; --help.
 set -u
 
 usage() {
@@ -99,6 +100,10 @@ selftest() {
 	case "$err" in *"falling back"*) ok "4 fallback is announced" ;; *) bad "4 fallback warning" "$err" ;; esac
 	chmod 700 "$root/ro"
 
+	# 4b. --path prints the output path without writing anything (F3)
+	got="$(PJ_PROMPT_SOURCES="$a:$b" PJ_PROMPT_OUT="$root/never/written.md" "$0" --path 2>"$root/err4b")"; rc=$?
+	if [ "$rc" -eq 0 ] && [ "$got" = "$root/never/written.md" ] && [ ! -e "$root/never" ]; then ok "4b --path prints the cache path and creates nothing"; else bad "4b --path" "rc=$rc got=$got exists=$([ -e "$root/never" ] && echo yes || echo no)"; fi
+
 	# 5. real defaults: the two shipped paths exist here (informational, not a failure elsewhere)
 	if [ -r "$HOME/.claude/pj-global/RULES.md" ] && [ -r "$HOME/.claude/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md" ]; then
 		ok "5 both default sources are readable on this machine"
@@ -110,13 +115,15 @@ selftest() {
 	[ "$fail" -eq 0 ]
 }
 
+SOURCES="${PJ_PROMPT_SOURCES:-$HOME/.claude/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md:$HOME/.claude/pj-global/RULES.md}"
+OUT="${PJ_PROMPT_OUT:-${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles/pj-system-prompt.md}"
+
 case "${1:-}" in
 --help | -h) usage; exit 0 ;;
 --selftest) selftest; exit $? ;;
+--path) printf '%s\n' "$OUT"; exit 0 ;;   # the cache path WITHOUT building (pj-launch-check compares against it; F3)
 "") ;;
 *) printf 'pj-prompt-file: unknown argument %s\n' "$1" >&2; usage >&2; exit 2 ;;
 esac
 
-SOURCES="${PJ_PROMPT_SOURCES:-$HOME/.claude/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md:$HOME/.claude/pj-global/RULES.md}"
-OUT="${PJ_PROMPT_OUT:-${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles/pj-system-prompt.md}"
 build "$SOURCES" "$OUT"

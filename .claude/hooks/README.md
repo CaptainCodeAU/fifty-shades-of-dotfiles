@@ -239,9 +239,11 @@ Moved from this directory to `home/.claude/hooks/` on 2026-09-21 (P5.6) and decl
 
 Machine-wide safety, declared with `targets: ["user", "project"]` and registered by `claude-hooks-sync` into both settings files. Until 2026-09-20 they were user-only, so no `pj` session was guarded (F1). Under `pj` the herdr skill loads as a plugin, so the Skill parameter is `herdr:herdr`; the mark hook accepts exactly `herdr` or `herdr:herdr`.
 
-### ci-watch, ccw-watch, pj-start-card, pj-session-end
+### ci-watch, ccw-watch, pj-start-card, pj-session-end, pj-launch-check
 
-Ordinary CLI tools stowed to `~/.local/bin/`, run BY a manifest entry (`script_path` in the manifest). `ci-watch` and `ccw-watch` are `user,project`; the two `pj-*` are `project` only because `pj` is the launcher they serve. There is deliberately no wrapper script for any of them in this directory. See [`docs/CI_WATCH.md`](../../docs/CI_WATCH.md), [`docs/OPEN_ITEMS.md`](../../docs/OPEN_ITEMS.md).
+Ordinary CLI tools stowed to `~/.local/bin/`, run BY a manifest entry (`script_path` in the manifest). `ci-watch` and `ccw-watch` are `user,project`; the three `pj-*` are `project` only because `pj` is the launcher they serve. There is deliberately no wrapper script for any of them in this directory. See [`docs/CI_WATCH.md`](../../docs/CI_WATCH.md), [`docs/OPEN_ITEMS.md`](../../docs/OPEN_ITEMS.md), [`docs/PJ_HEALTH.md`](../../docs/PJ_HEALTH.md).
+
+`pj-launch-check` (SessionStart, F3, 2026-09-21) reads the running `claude` process's argv (`CLAUDE_PID` is exported into every hook; measured, and the hook's parent is that pid when the command is a bare path) and prints ONE line, `LAUNCH WARNING: stale launcher, missing <what>. Open a new shell and relaunch pj.`, when the appended system-prompt file is not the `pj-prompt-file` cache (that is where `pj-global/RULES.md` lands), a plugin dir is absent or `--setting-sources` drifted. Silent on a match, silent on `compact`. Every launch appends one `ts= session= project= tty= shell_start= zshrc_mtime= result=` line to `~/.local/state/pj/launches.log`; `pj-health`'s `launch-log` row reads it. It is a separate hook from `pj-start-card` on purpose: the card is read-only (P5.2) and this one writes a log. Hooks run concurrently, so the warning is the first line of its own hook block, not necessarily of the card's.
 
 ## Retired
 

@@ -943,126 +943,10 @@ alias repomix='pnpm dlx repomix@1.16.1'
 # Use system ripgrep for Claude Code search (faster than bundled ripgrep).
 export USE_BUILTIN_RIPGREP=0
 
-# Isolated ephemeral SSH agent per Claude Code session.
-# Spins up a dedicated ssh-agent in a subshell so the GitHub key is never
-# loaded into macOS's system-wide launchd agent. The agent (and key) die
-# when Claude Code exits; a 12h timeout is a safety net for SIGKILL.
-#
-# Per-process telemetry exception: clears DISABLE_TELEMETRY and DO_NOT_TRACK
-# for the claude process ONLY (the global shell stays opt-out for every other
-# tool) so GrowthBook feature flags evaluate and Remote Control can start.
-# OTEL metrics (CLAUDE_CODE_ENABLE_TELEMETRY=0) and error reporting stay off.
-# Pairs with settings.json remoteControlAtStartup:true; also requires a
-# full-scope token from `claude auth login`.
-__claude_launch() {
-  # Print what the last commit touched, on screen, before Claude takes over the terminal.
-  # WHY HERE AND NOT IN A HOOK: hooks/LastCommitFiles.sh is wired to SessionStart and feeds the
-  # AGENT, but Claude Code stores SessionStart stdout as a context ATTACHMENT and never prints it,
-  # and it spawns hooks with NO controlling terminal, so the hook cannot write to /dev/tty either.
-  # Both measured 2026-09-15: a probe inside the hook logged `w_test=yes real_write=FAIL`, i.e.
-  # `[ -w /dev/tty ]` passes while the open() fails. The shell, unlike the hook, owns the terminal.
-  # Writing to /dev/tty rather than stdout is deliberate: it can never pollute a pipe, so `ci`
-  # (piped -p) stays clean with no flag sniffing. Fails silently when there is no tty.
-  if [[ -x "$HOME/.claude/hooks/LastCommitFiles.sh" ]]; then
-    { "$HOME/.claude/hooks/LastCommitFiles.sh" </dev/null > /dev/tty; } 2>/dev/null || true
-  fi
-
-  local key="$HOME/.ssh/captaincodeau"
-  # Read-only GitHub API token (macOS Keychain) -> exposed as $GH_TOKEN for this
-  # Claude session and its Bash tool only. Empty on non-macOS; harmless (gh just
-  # stays unauthenticated). gh reads GH_TOKEN; never run `gh auth login`.
-  local gh_token="$(security find-generic-password -a "$USER" -s github-api-readonly -w 2>/dev/null)"
-  # NVD API key (macOS Keychain) -> $NVD_API_KEY for this Claude session. UNLIKE
-  # $GH_TOKEN this is NOT a credential: it grants no access to anything and only
-  # lifts NVD's anonymous rate limit from 5 to 50 requests/30s, which is what makes
-  # a 231-formula Homebrew sweep ~2min instead of ~20min. Free + instantly
-  # regenerable at https://nvd.nist.gov/developers/request-an-api-key.
-  # toolchain-cve-check ALSO reads this same Keychain entry directly, so a manual
-  # run outside a Claude session is authenticated too; this export just saves it
-  # the `security` call. Empty on non-macOS -> the sweep degrades to slow, never wrong.
-  local nvd_key="$(security find-generic-password -a "$USER" -s nvd-api-key -w 2>/dev/null)"
-
-  # Refresh the read-only GH API status cache that the welcome banner reads.
-  # Background, 6h-gated, uses the token we just read; never blocks the launch.
-  if [[ -n "$gh_token" ]]; then
-    local _ghc="${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles/gh_api_status" _ghn=$(date +%s) _ghl=0
-    # GNU `stat -c` FIRST, then BSD `-f`. The order is load-bearing, not style: on
-    # Linux `-f` means --file-system, so a BSD-first chain SUCCEEDS with a multi-line
-    # `File: "..."` block, never reaches the fallback, and feeds non-numeric garbage to
-    # the arithmetic below. Unreachable on Linux today ($gh_token only exists via the
-    # macOS Keychain), but every SessionStart hook orders it this way after that exact
-    # bug bit -- see .claude/hooks/zed-version-check.sh for the full account.
-    [[ -f "$_ghc" ]] && _ghl=$(stat -c %Y "$_ghc" 2>/dev/null || stat -f %m "$_ghc" 2>/dev/null || echo 0)
-    if (( _ghn - _ghl > 21600 )); then
-      ( mkdir -p "${_ghc:h}"
-        _h=$(curl -s -o /dev/null -D - -H "Authorization: Bearer $gh_token" https://api.github.com/rate_limit 2>/dev/null)
-        _c=$(printf '%s' "$_h" | awk 'NR==1{print $2}' | tr -d '\r')
-        _e=$(printf '%s' "$_h" | awk 'tolower($0) ~ /^(x-)?github-authentication-token-expiration:/{sub(/^[^:]*: /,"");print}' | tr -d '\r')
-        if [[ "$_c" == 200 ]]; then _s=alive; elif [[ -n "$_c" ]]; then _s=dead; else _s=unknown; fi
-        printf 'status=%s\nchecked=%s\nexpires=%s\n' "$_s" "$_ghn" "$_e" > "$_ghc" ) &!
-    fi
-  fi
-
-  if [[ -f "$key" ]]; then
-    (
-      eval "$(ssh-agent -s -t 43200)" >/dev/null
-      trap 'ssh-agent -k >/dev/null 2>&1' EXIT INT TERM HUP
-      # --apple-use-keychain reads the passphrase from the login keychain instead of
-      # prompting. It is REQUIRED here and the ssh_config UseKeychain setting does NOT
-      # cover it: `UseKeychain yes` lives in a `Host git-cc` block, and `ssh-add` on a
-      # FILE PATH has no host context, so no Host block ever applies to it. Measured
-      # 2026-09-18 in a live pane: plain `ssh-add` prompted for the passphrase even
-      # with the keychain populated and the config in place, while the flagged form
-      # returned rc=0 silently and loaded the key. Two earlier "verifications" missed
-      # this because they tested `ssh -G git-cc` (connections, not ssh-add) and
-      # `--apple-load-keychain` (a different command).
-      # The fallback keeps this portable: the flag is macOS-only, so a non-macOS box
-      # fails the first form and runs the original.
-      ssh-add --apple-use-keychain "$key" 2>/dev/null || ssh-add "$key"
-      # GH_TOKEN REMOVED 2026-09-18. It used to be injected here as:
-      #     GH_TOKEN="$gh_token" \
-      # To revert, restore that line into the chain below (NOT as a comment inside it:
-      # the chain is backslash-continued, so a '#' line would swallow the rest).
-      # Why it went: every session started with a GitHub key in its environment, where
-      # any command could read it and any transcript could record it. That is the route
-      # by which tokens reached transcripts from June 2026. All consumers now fetch
-      # their own credential and fail closed (toolchain-cve-check, ci-watch,
-      # zed-version-check, and LifeOS's five), so nothing needed it here.
-      # $gh_token is still read above and still used for the local status-cache curl.
-      # Ordering rule D-20260917-03 is satisfied: the keyring was repointed at the
-      # narrow PAT and the old broad token revoked BEFORE this line was removed.
-      DISABLE_TELEMETRY= \
-        DO_NOT_TRACK= \
-        NVD_API_KEY="$nvd_key" \
-        CLAUDE_CODE_HIDE_ACCOUNT_INFO=1 \
-        CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1 \
-        ENABLE_EXPERIMENTAL_MCP_CLI=1 \
-        ENABLE_TOOL_SEARCH=1 \
-        "$@"
-    )
-  else
-    # GH_TOKEN REMOVED 2026-09-18. It used to be injected here as:
-    #     GH_TOKEN="$gh_token" \
-    # To revert, restore that line into the chain below (NOT as a comment inside it:
-    # the chain is backslash-continued, so a '#' line would swallow the rest).
-    # Why it went: every session started with a GitHub key in its environment, where
-    # any command could read it and any transcript could record it. That is the route
-    # by which tokens reached transcripts from June 2026. All consumers now fetch
-    # their own credential and fail closed (toolchain-cve-check, ci-watch,
-    # zed-version-check, and LifeOS's five), so nothing needed it here.
-    # $gh_token is still read above and still used for the local status-cache curl.
-    # Ordering rule D-20260917-03 is satisfied: the keyring was repointed at the
-    # narrow PAT and the old broad token revoked BEFORE this line was removed.
-    DISABLE_TELEMETRY= \
-      DO_NOT_TRACK= \
-      NVD_API_KEY="$nvd_key" \
-      CLAUDE_CODE_HIDE_ACCOUNT_INFO=1 \
-      CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1 \
-      ENABLE_EXPERIMENTAL_MCP_CLI=1 \
-      ENABLE_TOOL_SEARCH=1 \
-      "$@"
-  fi
-}
+# __claude_launch, the shared launch function, lives in ~/.zsh_claude_launch since F3
+# (2026-09-21) so the `pj` SCRIPT in ~/.local/bin can source the same definition. One
+# copy: edit it there, never paste it back here. The `c` family below still calls it.
+[[ -f ~/.zsh_claude_launch ]] && source ~/.zsh_claude_launch
 
 # LifeOS "Layer 2": the constitutional system prompt (output format, verification
 # gate, security protocol, ~/.claude privacy rule). Layer 1 -- global CLAUDE.md,
@@ -1077,10 +961,21 @@ _LIFEOS_SP=(--append-system-prompt-file "$HOME/.claude/LIFEOS/LIFEOS_SYSTEM_PROM
 alias c='__claude_launch claude "${_LIFEOS_SP[@]}" --dangerously-skip-permissions --permission-mode plan'       # Standard launch
 alias ct='__claude_launch CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 claude "${_LIFEOS_SP[@]}" --dangerously-skip-permissions --permission-mode plan --teammate-mode tmux'  # Tmux agent teams
 
-# pj - light project launcher (TRIAL, added 2026-09-19).
+# pj - light project launcher (TRIAL, added 2026-09-19; a SCRIPT since F3, 2026-09-21).
 # Claude Code + OPERATIONAL_RULES + the project's own CLAUDE.md and notes. No LifeOS prompt,
 # no global CLAUDE.md. Settings live in ~/.claude/settings.project.json.
 # herdr, AgentRelay, ISA and pj-voice are loaded as single-skill plugins.
+#
+# THERE IS NO `alias pj` HERE ON PURPOSE. `pj` is ~/.local/bin/pj, stowed from this repo
+# (home/.local/bin/pj). It sources ~/.zsh_claude_launch and hands __claude_launch the same
+# argv the alias used to build. Why it stopped being an alias: an alias is read ONCE when
+# the shell starts and shadows any PATH command of the same name, so every shell opened
+# before the alias changed kept launching the OLD form for as long as it lived. Herdr
+# keeps panes alive for days; four of the last seven pj sessions ran without
+# pj-global/RULES.md that way (P5.7, P6a reports; W-20260921-13). A script is read from
+# disk at every launch and cannot go stale. Adding an alias back here would shadow the
+# script and reintroduce the fault; pj-health's `launcher` row FAILs on one.
+# `pj --dry-run` prints the exact claude argv; `pj --selftest` proves it.
 #
 # HOOKS: --setting-sources project,local means ~/.claude/settings.json is never
 # read, so none of its 14 SessionStart hooks register here. That was silent until
@@ -1089,7 +984,10 @@ alias ct='__claude_launch CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 claude "${_LIFE
 # one. ci-watch is now registered into settings.project.json as well, via the
 # `targets` field in settings/claude/hooks.json. So pj DOES have one global hook,
 # on purpose; it is not a leak. Add another by naming "project" in that manifest,
-# never by hand-editing settings.project.json.
+# never by hand-editing settings.project.json. pj-launch-check (F3) is registered the
+# same way: it reads the running claude's argv at SessionStart and shouts one LAUNCH
+# WARNING line when the prompt file or a plugin dir is missing, and logs every launch
+# to ~/.local/state/pj/launches.log.
 # PLUGINS: ~/.claude/pj is the pj plugin (stowed from this repo, home/.claude/pj):
 # /pj:wrap-up, the end-of-session pass (D-20260920-03). A project's own /wrap-up
 # keeps the plain name; the pj: prefix always reaches this one (verified 2026-09-20).
@@ -1099,10 +997,9 @@ alias ct='__claude_launch CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 claude "${_LIFE
 # ~/.claude/pj-global/RULES.md (machine-wide pj rules, D-20260920-07). Claude Code keeps
 # only the LAST --append-system-prompt-file and refuses to mix it with the text flag
 # (both measured 2026-09-21), so `pj-prompt-file` (home/.local/bin) glues them into
-# ~/.cache/dotfiles/pj-system-prompt.md at every launch and the alias passes that path.
-# The alias carries paths only; the content stays in lifeos-private and dot-claude.
-# Remove this block to end the trial.
-alias pj='__claude_launch claude --setting-sources project,local --settings ~/.claude/settings.project.json --append-system-prompt-file "$(pj-prompt-file)" --plugin-dir ~/.claude/skills/herdr --plugin-dir ~/.claude/skills/AgentRelay --plugin-dir ~/.claude/skills/ISA --plugin-dir ~/.claude/pj-voice --plugin-dir ~/.claude/pj --dangerously-skip-permissions --effort high'
+# ~/.cache/dotfiles/pj-system-prompt.md at every launch and the script passes that path.
+# The script carries paths only; the content stays in lifeos-private and dot-claude.
+# Remove home/.local/bin/pj and this block to end the trial.
 
 # Clean-room Claude for measuring front-loaded context (CLAUDE.md, memory,
 # skills, MCP) one piece at a time. Measured 2026-09-06 (Claude Code 2.1.263):
