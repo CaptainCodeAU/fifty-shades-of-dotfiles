@@ -52,11 +52,12 @@
 #      see each other in ListAgents and can SendMessage by name BOTH ways. The long form,
 #      and why a directory link rather than per-session links, is above
 #      ensure_registry_link. Never created on --dry-run.
-#   2. a NAME. `--name <profile>-<cwd>-<suffix>`, because once the registry is shared the
-#      listing shows name, kind, status and age and nothing else -- no cwd, no config dir
-#      -- so without it a scratch session is indistinguishable from a real one.
-# Both apply ONLY when config_dir differs from ~/.claude, so the default launch is
-# untouched and its argv stays byte-identical (selftest arms 12, 20g, 21b).
+#   2. a NAME -- since F5d 2026-09-22, EVERY profile gets one, the default included, and it
+#      travels in the environment (`CLAUDE_CODE_SESSION_NAME`) rather than argv. The long
+#      form, the measurements and the shape are above build_session_name.
+# The registry link applies ONLY when config_dir differs from ~/.claude. The name applies
+# everywhere and still costs argv nothing, so the default launch stays byte-identical
+# (selftest arms 12, 20g, 21b).
 #
 # THE CONFIG DIR IS THE ONLY THING THAT ACTUALLY MOVES. Measured 2026-09-21 with pj's
 # real argv under a scratch CLAUDE_CONFIG_DIR: the appended prompt file, the output
@@ -163,6 +164,95 @@ load_profile() {
   return 0
 }
 
+# --- the session name (F5d gate Q1, ruled by Gavin 2026-09-22) -------------------------
+#
+# EVERY profile's session is named now, the DEFAULT one included, and the name travels in
+# the ENVIRONMENT rather than in argv. `CLAUDE_CODE_SESSION_NAME` sets the display name
+# exactly as `-n/--name` does. Measured 2026-09-22 against Claude Code 2.1.278, three arms
+# and two controls: the variable is honoured and the registry then records NO `nameSource`
+# field at all, where `--name` records "user" and no name at all records "derived". That
+# absence is how you tell the two apart.
+#
+# THAT IS WHY THE DEFAULT PROFILE CAN HAVE A NAME. F5c could not give it one, because a
+# `--name` entry would have broken the byte-identical argv guarantee arm 12 holds. An
+# environment variable adds nothing to argv, so the guarantee is untouched and the default
+# session stops being anonymous in a shared registry.
+#
+# THE SHAPE: <repo-or-alias>-<role>[-<topic>]
+#   repo first, so a mixed ListAgents groups by project and sorts;
+#   role is `main` for the default profile and the profile's own name otherwise;
+#   topic is the working directory's basename when it is not the repo root, which is
+#   exactly the c2 worktree case and nothing else.
+#
+#   ~/CODE/.../fifty-shades-of-dotfiles, default    -> fifty-shades-of-dotfiles-main
+#   the same repo, --profile scratch                -> fifty-shades-of-dotfiles-scratch
+#   <repo>/.worktree/scratch/f5d, --profile scratch -> fifty-shades-of-dotfiles-scratch-f5d
+#
+# The repo part is the repo BASENAME as it stands. A repo that wants a shorter one
+# declares `session-alias: <word>` in its own `.claude/pj-homes`; there is deliberately no
+# hidden alias table anywhere, so the name is always explainable from two files.
+#
+# NO RANDOM SUFFIX, AND THIS REVERSES F5c. The suffix was there because this file said a
+# collision "would otherwise be renamed by Claude Code and the prefix lost". MEASURED
+# 2026-09-22 and that sentence is FALSE: two interactive sessions launched as `f5d-dup`
+# ended up `f5d-dup` and `f5d-dup-twinkly-lake`, the second recording nameSource
+# "collision", and ListAgents listed BOTH, distinctly. The prefix is kept and nothing is
+# lost, so the suffix bought nothing and cost every name its readability.
+#
+# ONE HOLE, LEFT OPEN DELIBERATELY (gate Q5d). That collision check runs only for
+# entrypoint `cli`, a real terminal launch. A headless `claude -p` is entrypoint `sdk-cli`
+# and does NOT check: measured 2026-09-22, a `-p` probe took the name of a LIVE interactive
+# session in the same registry and both kept it. `kind` says "interactive" for both, so
+# `kind` is not the field to read -- `entrypoint` is. Probes only; no real pj or c2 session
+# is affected, and closing it would put a registry read in front of every --dry-run and
+# every selftest arm.
+#
+# THE 200-CHARACTER CAP IS OURS, NOT A GUESS. Measured by bisection: 200 characters are
+# stored verbatim, 201 are silently truncated to 200 with nameSource still "user" and exit
+# 0. Nothing here comes close, but a truncation you did not ask for is the kind of silence
+# this repo writes up, so the cut is made here where it is visible.
+
+# session_alias <repo root> -- the repo's own short name, or empty.
+session_alias() {
+  setopt local_options extended_glob
+  local f="$1/.claude/pj-homes" v
+  [[ -r "$f" ]] || return 0
+  v="$(sed -n 's/^[[:space:]]*session-alias:[[:space:]]*//p' "$f" 2>/dev/null | head -1)"
+  v="${v%%[[:space:]]#}"
+  print -r -- "$v"
+}
+
+# name_repo_root -- the MAIN repo, never the worktree.
+#
+# `--show-toplevel` in a linked worktree returns the WORKTREE, so a c2 session would name
+# itself after its topic twice and lose the repo. The common dir is always <main repo>/.git
+# whichever checkout you stand in, so its parent is the main repo. Same rule c2 uses.
+name_repo_root() {
+  local cdir
+  cdir="$(git rev-parse --git-common-dir 2>/dev/null)" || return 1
+  [[ -n "$cdir" ]] || return 1
+  [[ "$cdir" == /* ]] || cdir="$PWD/$cdir"
+  print -r -- "${cdir:h:A}"
+}
+
+build_session_name() {
+  local root base alias_ role topic n
+  root="$(name_repo_root 2>/dev/null)" || root=""
+  if [[ -n "$root" ]]; then
+    alias_="$(session_alias "$root")"
+    base="${alias_:-${root:t}}"
+    [[ "${PWD:A}" != "$root" ]] && topic="${PWD:t}"
+  else
+    # outside a git repo there is no project to name, so the directory is the whole of it
+    base="${PWD:t}"
+  fi
+  [[ "$PROFILE_NAME" == default ]] && role="main" || role="$PROFILE_NAME"
+  n="${base}-${role}"
+  [[ -n "${topic:-}" ]] && n="${n}-${topic}"
+  n="${n//[^a-zA-Z0-9._-]/-}"
+  print -r -- "${n[1,200]}"
+}
+
 build_argv() {
   local prompt d
   if [[ "$P_PROMPT" == pj-prompt-file ]]; then
@@ -201,35 +291,19 @@ build_argv() {
   [[ "$P_VOICE" == on  ]] && ov="$ov\"voiceEnabled\":true,"
   [[ "$P_VOICE" == off ]] && ov="$ov\"voiceEnabled\":false,"
   [[ -n "$ov" ]] && PJ_ARGV+=(--settings "{${ov%,}}")
-  # F5c gate Q2. A non-default profile's sessions are NAMED, so you can tell them apart
-  # in ListAgents. This matters only because of the shared registry below: once a scratch
-  # session is listed beside the real ones, the listing gives you name, kind, status and
-  # age and NOTHING ELSE -- no cwd, no config dir -- so a derived name like
-  # `fifty-shades-of-dotfiles-23` is indistinguishable from a default-profile session in
-  # the same repo. Measured 2026-09-22: that is exactly what happened in the proof run.
-  #
-  # `-n/--name` sets the display name (Claude Code then records nameSource "user" instead
-  # of "derived"). Names must be unique among live sessions, so a short random suffix is
-  # appended; a collision would otherwise be renamed by Claude Code and the prefix lost.
-  # The DEFAULT profile passes no --name at all, which is what keeps its argv
-  # byte-identical to the pre-F5a launcher (selftest arm 12).
-  if [[ "$PROFILE_NAME" != default ]]; then
-    local base sfx
-    base="${PWD:t}"
-    base="${base//[^a-zA-Z0-9-]/-}"
-    base="${base[1,20]}"
-    sfx="${PJ_NAME_SUFFIX:-$(od -An -N2 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')}"
-    [[ -z "$sfx" ]] && sfx="$$"
-    PJ_ARGV+=(--name "${PROFILE_NAME}-${base}-${sfx}")
-  fi
+  # F5c's `--name` block lived here. It is GONE: the name now travels in the environment,
+  # for every profile including the default one. See build_session_name above.
   PJ_ARGV+=(${=P_REQUIRED})
-  # The env the launch exports. EMPTY for the default profile, which is what keeps the
-  # default launch byte-identical: `config_dir: ~/.claude` means DO NOT EXPORT, because a
+  # The env the launch exports. `config_dir: ~/.claude` means DO NOT EXPORT, because a
   # CLAUDE_CONFIG_DIR set to its own default is not the same as one that is unset.
   PJ_ENV=()
   [[ "$P_CONFIG_DIR" != "$HOME/.claude" ]] && PJ_ENV+=("CLAUDE_CONFIG_DIR=$P_CONFIG_DIR")
   [[ "$P_CARD" == off ]] && PJ_ENV+=("PJ_NO_CARD=1")
   PJ_ENV+=("PJ_PROFILE=$PROFILE_NAME")
+  # ALREADY SET WINS, so a stage that opens a control pane exports its own name first and
+  # pj leaves it alone. Note the asymmetry: `--name` typed after `pj` beats the variable
+  # (measured), so a hand-typed name still wins over both.
+  [[ -z "${CLAUDE_CODE_SESSION_NAME:-}" ]] && PJ_ENV+=("CLAUDE_CODE_SESSION_NAME=$(build_session_name)")
 }
 
 # --- dot-claude freshness (P8a gate Q4, ruled by Gavin 2026-09-21) --------------
@@ -543,13 +617,71 @@ selftest() {
   printf 'config_dir: %s\nplugins: none\n' "$cfgx" > "$pdir/dryreg"
   PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile dryreg --dry-run >/dev/null 2>&1
   [[ ! -e "$cfgx/sessions" ]] && ok "20j --dry-run creates no registry link" || bad "20j dry-run wrote" "$cfgx/sessions exists"
-  # ---- 21: the profile session name (F5c gate Q2) ----------------------------------
-  out="$(PJ_NAME_SUFFIX=zz99 PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile scratchy --dry-run 2>/dev/null)"
-  [[ "$out" == *$'\n--name\nscratchy-'*$'-zz99\n'* ]] && ok "21a a non-default profile is NAMED <profile>-<cwd>-<suffix>" || bad "21a name" "$out"
-  # 21b THE NEGATIVE ARM, and the one that protects arm 12: the default profile emits no
-  #     --name at all. Emitting one would break the byte-identical guarantee.
-  out="$(PJ_NAME_SUFFIX=zz99 PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --dry-run 2>/dev/null)"
-  [[ "$out" != *"--name"* ]] && ok "21b the default profile emits NO --name" || bad "21b default named" "$out"
+  # ---- 21: the session name (F5d gate Q1) -------------------------------------------
+  #
+  # Every arm runs inside a REAL throwaway git repo, because the builder reads
+  # `git rev-parse --git-common-dir` and a fixture that is not a repo would exercise only
+  # the fallback. Arm 21i is the control that proves the builder reads the repo it is
+  # standing in rather than printing a constant.
+  local nrepo nwt
+  nrepo="$root/namerepo"; mkdir -p "$nrepo"
+  git -C "$nrepo" init -q 2>/dev/null
+  git -C "$nrepo" commit -q --allow-empty -m init 2>/dev/null
+  nameof() {  # <dir> [profile args...] -> the CLAUDE_CODE_SESSION_NAME the env would carry
+    local d="$1"; shift
+    ( builtin cd "$d" && PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" \
+        "$SELF" "$@" --dry-run-env 2>/dev/null ) | sed -n 's/^CLAUDE_CODE_SESSION_NAME=//p'
+  }
+  # 21a the default profile IS named now, <repo>-main
+  out="$(nameof "$nrepo")"
+  [[ "$out" == "namerepo-main" ]] && ok "21a the default profile is named <repo>-main" || bad "21a default name" "$out"
+  # 21b THE NEGATIVE ARM, and the one that protects arm 12: the name costs argv NOTHING.
+  #     A --name entry here would break the byte-identical guarantee.
+  out="$( builtin cd "$nrepo" && PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --dry-run 2>/dev/null )"
+  [[ "$out" != *"--name"* ]] && ok "21b no profile emits --name into argv" || bad "21b argv named" "$out"
+  # 21c a non-default profile takes its own name as the role
+  out="$(nameof "$nrepo" --profile scratchy)"
+  [[ "$out" == "namerepo-scratchy" ]] && ok "21c a non-default profile is <repo>-<profile>" || bad "21c profile name" "$out"
+  # 21d a LINKED WORKTREE adds the topic, and still names the MAIN repo. This is the arm
+  #     that would fail if the builder used --show-toplevel: it would print worktopic-*.
+  nwt="$nrepo/.worktree/scratch/worktopic"
+  git -C "$nrepo" worktree add -q -b scratch/worktopic "$nwt" 2>/dev/null
+  if [[ -d "$nwt" ]]; then
+    out="$(nameof "$nwt" --profile scratchy)"
+    [[ "$out" == "namerepo-scratchy-worktopic" ]] && ok "21d a worktree is <repo>-<profile>-<topic>, repo NOT the worktree" || bad "21d worktree name" "$out"
+  else
+    bad "21d worktree name" "could not create the fixture worktree"
+  fi
+  # 21e session-alias: in .claude/pj-homes replaces the basename
+  mkdir -p "$nrepo/.claude"
+  printf 'records: private\nsession-alias: nr\n' > "$nrepo/.claude/pj-homes"
+  out="$(nameof "$nrepo")"
+  [[ "$out" == "nr-main" ]] && ok "21e session-alias: replaces the repo basename" || bad "21e alias" "$out"
+  # 21f ALREADY SET WINS: an exported name is left exactly alone, alias and all
+  out="$( builtin cd "$nrepo" && CLAUDE_CODE_SESSION_NAME=hand-picked PJ_PROFILE_DIR="$pdir" \
+          PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --dry-run-env 2>/dev/null | sed -n 's/^CLAUDE_CODE_SESSION_NAME=//p' )"
+  [[ -z "$out" ]] && ok "21f an already-set name is not overwritten (pj adds nothing)" || bad "21f overwrote" "$out"
+  rm -f "$nrepo/.claude/pj-homes"
+  # 21g OUTSIDE a git repo the builder falls back to the directory, and does not crash
+  mkdir -p "$root/notarepo"
+  out="$(nameof "$root/notarepo")"
+  [[ "$out" == "notarepo-main" ]] && ok "21g outside a repo the directory is the whole name" || bad "21g no repo" "$out"
+  # 21h the 200-character cut is OURS and is made here, where it is visible. Claude Code
+  #     truncates silently at 200 (measured: 200 verbatim, 201 -> 200, exit 0, no warning).
+  local longdir="$root/$(printf 'q%.0s' {1..230})"
+  mkdir -p "$longdir" 2>/dev/null
+  if [[ -d "$longdir" ]]; then
+    out="$(nameof "$longdir")"
+    [[ ${#out} -eq 200 ]] && ok "21h a name longer than 200 is cut to 200 by pj, not silently by Claude Code" || bad "21h cut" "len=${#out}"
+  else
+    bad "21h cut" "could not create the long fixture dir"
+  fi
+  # 21i THE CONTROL for every arm above: a DIFFERENT repo must produce a DIFFERENT name.
+  #     Without it, a builder that printed one constant would pass 21a and 21c alike.
+  local nrepo2="$root/othername"; mkdir -p "$nrepo2"
+  git -C "$nrepo2" init -q 2>/dev/null
+  out="$(nameof "$nrepo2")"
+  [[ "$out" == "othername-main" && "$out" != "namerepo-main" ]] && ok "21i control: a different repo gets a different name" || bad "21i control" "$out"
   print -- "pj selftest: $pass passed, $fail failed"
   [[ $fail -eq 0 ]]
 }
