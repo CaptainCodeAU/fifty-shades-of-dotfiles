@@ -250,9 +250,6 @@
           "mode": "deny"
         }
       ]
-    },
-    "excludedCommands": [
-      "git"
-    ]
+    }
   }
 }
