@@ -71,9 +71,39 @@ _classify() {
   if echo "$s" | grep -qE 'git\s+reset\s+--hard\s*($|[;&|])'; then
     echo "git reset --hard without a ref: specify a commit"; return
   fi
-  if echo "$s" | grep -qE 'git\s+clean\s+-[a-zA-Z]*f[a-zA-Z]*d' \
-     || echo "$s" | grep -qE 'git\s+clean\s+.*-f.*-d|git\s+clean\s+.*-d.*-f'; then
-    echo "git clean -fd would remove untracked files and directories"; return
+  # git clean. TWO bugs lived in the old form of this rule and both were measured
+  # on 2026-09-21 (W-20260921-A10):
+  #
+  #   FALSE POSITIVE -- `git clean -fdn`, `--dry-run -fd` and `-fd --dry-run` are
+  #   DRY RUNS and were all denied, because -n and --dry-run were never looked for.
+  #   Both P5.6 probe sessions hit it.
+  #
+  #   FALSE NEGATIVE -- `git clean -df` and `-dfx` were ALLOWED. The old pattern
+  #   `-[a-zA-Z]*f[a-zA-Z]*d` requires f BEFORE d inside one flag group, and the
+  #   two-group alternation needed a separate `-f` and `-d`. Neither matched the
+  #   d-before-f spelling, so the destructive form the rule exists for got through.
+  #   That one was not in the item; it was found by running all six spellings.
+  #
+  # So the rule now decides on two independent facts: does a dry-run flag appear,
+  # and do BOTH f and d appear among the short flags in either order.
+  # A regex over the whole command cannot express "f and d appear, in any order,
+  # across any number of flag groups, and n does not". Collecting the letters and
+  # asking three yes/no questions can, and it reads the same as the rule.
+  if printf '%s' "$s" | grep -qE 'git[[:space:]]+clean'; then
+    local tail short long dry=0 has_f=0 has_d=0
+    tail=$(printf '%s' "$s" | sed -E 's/.*git[[:space:]]+clean//')
+    # every LONG option, and every SHORT cluster's letters mashed together.
+    # `--dry-run` cannot leak into the short set: the short pattern needs a letter
+    # straight after a single leading `-`, and the second `-` is not a letter.
+    long=$(printf '%s' "$tail"  | grep -oE -- '--[a-zA-Z-]+' | tr '\n' ' ')
+    short=$(printf '%s' "$tail" | grep -oE -- '(^|[[:space:]])-[a-zA-Z]+' | tr -d ' -' | tr -d '\n')
+    case " $long " in *' --dry-run '*) dry=1;; esac
+    case "$short" in *n*) dry=1;; esac
+    case "$short" in *f*) has_f=1;; esac
+    case "$short" in *d*) has_d=1;; esac
+    if [ "$dry" -eq 0 ] && [ "$has_f" -eq 1 ] && [ "$has_d" -eq 1 ]; then
+      echo "git clean with -f and -d would remove untracked files and directories (add -n to dry-run it)"; return
+    fi
   fi
 }
 
@@ -95,11 +125,30 @@ if [ "${1:-}" = "--selftest" ]; then
   _must 1 'bare reset --hard, chained'      'git fetch && git reset --hard; ls'
   _must 1 'git clean -fd'                   'git clean -fd'
   _must 1 'git clean -f -d'                 'git clean -f -d'
+  # W-20260921-A10: every spelling that reaches the same destructive command.
+  # -df and -dfx were ALLOWED before 2026-09-21: the old pattern demanded f
+  # before d. A guard with a hole in it is worse than no guard, because it is
+  # trusted. Order, extra letters and separate groups all mean the same thing.
+  _must 1 'git clean -df (d before f)'      'git clean -df'
+  _must 1 'git clean -dfx'                  'git clean -dfx'
+  _must 1 'git clean -d -f (separate)'      'git clean -d -f'
+  _must 1 'git clean -xfd'                  'git clean -xfd'
+  _must 1 'git clean -ffd'                  'git clean -ffd'
   echo "=== NEGATIVE arms: these MUST be allowed ==="
   _must 0 'rm of a subdir'                  'rm -rf ./build'
   _must 0 'plain push'                      'git push origin master'
   _must 0 'reset --hard with a ref'         'git reset --hard HEAD~1'
   _must 0 'git clean dry run'               'git clean -n'
+  # W-20260921-A10: a dry run is a dry run wherever -n or --dry-run sits.
+  # All four of these were DENIED before 2026-09-21 except the -n -fd one, which
+  # was allowed only because the old regex happened to miss it.
+  _must 0 'git clean -fdn'                  'git clean -fdn'
+  _must 0 'git clean -n -fd'                'git clean -n -fd'
+  _must 0 'git clean --dry-run -fd'         'git clean --dry-run -fd'
+  _must 0 'git clean -fd --dry-run'         'git clean -fd --dry-run'
+  _must 0 'git clean -ndfx'                 'git clean -ndfx'
+  _must 0 'git clean -f only (no -d)'       'git clean -f'
+  _must 0 'git clean -d only (no -f)'       'git clean -d'
   _must 0 'prose in an echo'                'echo "never git push --force to master"'
   _must 0 'prose in a commit message'       'git commit -m "note: git clean -fd is banned"'
   _must 0 'prose in a heredoc'              $'cat <<EOF\ngit reset --hard is dangerous\nEOF'
