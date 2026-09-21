@@ -47,6 +47,24 @@
   "claudeMdExcludes": [
     "__HOME__/.claude/CLAUDE.md"
   ],
+  "_theme_why": [
+    "W-20260920-A03, restored at the P8b gate 2026-09-21. `pj` passes",
+    "--setting-sources project,local, so ~/.claude/settings.json is never read and",
+    "all 61 of its top-level keys are dropped; this file restores them by hand and",
+    "restores 13 of the 61. The other 48 are preferences and costs and are a",
+    "decision PER KEY, deferred to F5 -- do not restore that list wholesale, several",
+    "are dropped on purpose.",
+    "",
+    "THIS ONE IS NOT A PREFERENCE. `dark-daltonized` is a colour-vision",
+    "accessibility setting, and it was silently off in the launcher used most.",
+    "Absence in a UI looks exactly like a deliberate default, which is why it sat",
+    "unnoticed: nothing was broken, the colours were just wrong for the person",
+    "reading them. Accessibility does not wait for a stage.",
+    "",
+    "Same mechanism as the SessionStart hooks that never registered, the literal",
+    "${HOME} env values, and the dropped verbose:true -- fourth instance."
+  ],
+  "theme": "dark-daltonized",
   "attribution": {
     "commit": "",
     "pr": ""
