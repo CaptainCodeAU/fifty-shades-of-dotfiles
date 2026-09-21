@@ -330,8 +330,12 @@ pj_drive() {   # pj_drive <HOME> <REPO_DIR> : run _check_pj_prereqs with stubs, 
       REPO_DIR="$2"
       GREEN=""; RED=""; YELLOW=""; RESET=""; DIM=""; CYAN=""
       step(){ :; }; success(){ echo "VERDICT-OK $*"; }; warn(){ echo "VERDICT-WARN $*"; }
+      BOLD=""
       source <(sed -n "/^_check_pj_prereqs() {/,/^}/p" "$1")
       _check_pj_prereqs
+      # W-20260921-A23: the flag is the thing the exit code is built from, so the
+      # arms have to see it, not just the prose.
+      echo "PJ_PREREQS_OK=${PJ_PREREQS_OK:-unset}"
     ' _ "$INSTALL_SH" "$2" 2>&1
 }
 out_missing="$(pj_drive "$pj_scratch" /some/other/place)"
@@ -366,6 +370,44 @@ else bad "CONTROL: a complete machine gets the pass verdict" "$(head -5 <<<"$out
 if grep -q 'VERDICT-WARN' <<<"$out_ok"; then
     bad "CONTROL: a complete machine gets NO warning" "$(grep VERDICT-WARN <<<"$out_ok")"
 else ok "CONTROL: a complete machine gets NO warning"; fi
+
+# --- W-20260921-A23: the installer must SAY pj is not ready, and not exit 0 ----
+# Ruled 2026-09-21: the public installer never clones the two private repos, a
+# human does that first. But "installed fine" and "installed, and pj cannot
+# start" must not be the same observation -- for a human reading a terminal, or
+# for anything reading $?.
+if grep -q 'pj is not ready on this machine' <<<"$out_missing"; then ok "bare machine: the block is headed 'pj is not ready on this machine'"
+else bad "bare machine: the block is headed 'pj is not ready on this machine'" "$(head -4 <<<"$out_missing")"; fi
+if grep -q 'PJ_PREREQS_OK=0' <<<"$out_missing"; then ok "bare machine: PJ_PREREQS_OK=0"
+else bad "bare machine: PJ_PREREQS_OK=0" "$(grep PJ_PREREQS_OK <<<"$out_missing")"; fi
+if grep -q 'git clone' <<<"$out_missing"; then ok "bare machine: the block carries the clone commands"
+else bad "bare machine: the block carries the clone commands" "$(head -4 <<<"$out_missing")"; fi
+if grep -q 're-run ./install.sh' <<<"$out_missing"; then ok "bare machine: it says what to do next"
+else bad "bare machine: it says what to do next" "$(head -4 <<<"$out_missing")"; fi
+# CONTROL, the other half: a complete machine must NOT print the block and must
+# set the flag to 1. Without this pair, "the block appears" is equally true of a
+# function that prints it unconditionally.
+if grep -q 'PJ_PREREQS_OK=1' <<<"$out_ok"; then ok "CONTROL: a complete machine sets PJ_PREREQS_OK=1"
+else bad "CONTROL: a complete machine sets PJ_PREREQS_OK=1" "$(grep PJ_PREREQS_OK <<<"$out_ok")"; fi
+if grep -q 'pj is not ready' <<<"$out_ok"; then
+    bad "CONTROL: a complete machine does NOT print the not-ready block" "$(grep -n 'not ready' <<<"$out_ok")"
+else ok "CONTROL: a complete machine does NOT print the not-ready block"; fi
+# _finish turns the flag into the exit code. Both directions, from install.sh's
+# own text, so a future edit to _finish is caught here.
+fin_src="$(sed -n '/^_finish() {/,/^}/p' "$INSTALL_SH")"
+if [[ -n "$fin_src" ]]; then ok "CONTROL: _finish is defined in install.sh"
+else bad "CONTROL: _finish is defined in install.sh" "not found -- the two arms below would prove nothing"; fi
+rc_bad=0; PJ_PREREQS_OK=0 bash -c "$fin_src"'; _finish' || rc_bad=$?
+rc_ok=0;  PJ_PREREQS_OK=1 bash -c "$fin_src"'; _finish' || rc_ok=$?
+if [[ "$rc_bad" -ne 0 ]]; then ok "_finish exits NON-ZERO ($rc_bad) when pj is not ready"
+else bad "_finish exits NON-ZERO when pj is not ready" "got 0"; fi
+if [[ "$rc_ok" -eq 0 ]]; then ok "CONTROL: _finish exits 0 when pj IS ready"
+else bad "CONTROL: _finish exits 0 when pj IS ready" "got $rc_ok"; fi
+# And the dispatch must actually CALL it, or none of the above reaches a user.
+if grep -qE '^\s+""\)\s+main; _finish ;;' "$INSTALL_SH"; then ok "the default action runs _finish"
+else bad "the default action runs _finish" "$(grep -n '"")' "$INSTALL_SH" | head -2)"; fi
+if grep -qE 'stow-only\).*_check_pj_prereqs; _finish ;;' "$INSTALL_SH"; then ok "--stow-only runs _finish"
+else bad "--stow-only runs _finish" "$(grep -n 'stow-only)' "$INSTALL_SH" | head -2)"; fi
 
 echo
 echo "  $PASS passed, $FAIL failed"

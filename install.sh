@@ -3900,6 +3900,12 @@ _write_pj_machine_file() {
 # dangle, silently: the plugin folder exists, the files in it resolve to nothing, and the
 # only symptom is a pj session with no /pj:wrap-up. So a dead link is reported WITH the path
 # it needs, not just as "missing".
+# W-20260921-A23. PJ_PREREQS_OK is a GLOBAL, and the function still returns 0,
+# because install.sh runs under `set -e`: returning non-zero here would abort the
+# rest of main() mid-way, which is the opposite of the ruling. The ruling is that
+# the installer FINISHES the public part, then refuses to call itself a success.
+# The exit code is applied once, at the end of the dispatch.
+PJ_PREREQS_OK=1
 _check_pj_prereqs() {
     local dotclaude="$HOME/.claude" ok=1 required="$HOME/CODE/Scaffoldings/fifty-shades-of-dotfiles"
     local rules="$dotclaude/pj-global/RULES.md"
@@ -3936,12 +3942,28 @@ _check_pj_prereqs() {
 
     if (( ok )); then
         success "pj can launch on this machine."
+        PJ_PREREQS_OK=1
     else
-        warn "pj will NOT launch until the items marked ✗ above exist. They live in two PRIVATE repos this installer deliberately does not clone:"
+        # W-20260921-A23, ruled 2026-09-21. The public installer NEVER clones the
+        # two private repos -- a human clones them first. But it must SAY SO
+        # unmistakably and it must not exit 0, or "installed fine" and "installed,
+        # and pj cannot start" look identical to anyone reading a terminal or a CI
+        # log. That is the same silent-failure shape as the SessionStart hooks
+        # that were stowed but unregistered: a missing thing fails toward silence.
+        PJ_PREREQS_OK=0
+        echo
+        echo -e "${RED}${BOLD}  ════════════════════════════════════════════════════════════${RESET}"
+        echo -e "${RED}${BOLD}   pj is not ready on this machine${RESET}"
+        echo -e "${RED}${BOLD}  ════════════════════════════════════════════════════════════${RESET}"
+        warn "Everything this installer owns is done. pj itself will NOT launch until the items marked ✗ above exist. They live in two PRIVATE repos this installer deliberately does not clone:"
         echo -e "      ${CYAN}git clone <dot-claude>      ~/.claude${RESET}          ${DIM}(pj-global/, pj-voice/, the plugin symlinks)${RESET}"
         echo -e "      ${CYAN}git clone <lifeos-private>  ~/CODE/CaptainCodeAU/lifeos-private${RESET}"
         echo -e "      ${DIM}then link ~/.claude/LIFEOS/USER -> that clone. Clone dot-claude BEFORE running stow.${RESET}"
         echo -e "      ${DIM}And keep this repo at ${required} -- the tracked symlinks point there.${RESET}"
+        echo
+        echo -e "      ${DIM}Then re-run ./install.sh. When both are present this block is replaced by${RESET}"
+        echo -e "      ${DIM}one green line, and ${RESET}${CYAN}pj-health${RESET}${DIM}'s pj-global row is the standing proof.${RESET}"
+        echo -e "${RED}${BOLD}  ════════════════════════════════════════════════════════════${RESET}"
     fi
 
     # The zsh helper namespace check, if it is stowed. Read-only, and a real failure here
@@ -4273,6 +4295,12 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# W-20260921-A23: the two actions that run _check_pj_prereqs exit NON-ZERO when pj
+# cannot launch. Everything the installer owns has already been done by then; the
+# code says "done, and pj is not ready", which a human reading a terminal and a CI
+# log reading $? both understand. Without it those two outcomes are identical.
+_finish() { [[ "${PJ_PREREQS_OK:-1}" -eq 1 ]] || exit 3; exit 0; }
+
 case "${ACTION:-}" in
     help)       show_help ;;
     check)      check_prerequisites ;;
@@ -4280,9 +4308,9 @@ case "${ACTION:-}" in
     # register the hooks it just deployed -- otherwise the exact command the
     # welcome banner recommends leaves them stowed and inert, which is the
     # original bug wearing a different hat.
-    stow-only)  _gate_toolchain_takeover; stow_home; stow_platform; _render_project_settings install; _claude_hooks_sync install; _write_pj_machine_file; _check_pj_prereqs ;;
+    stow-only)  _gate_toolchain_takeover; stow_home; stow_platform; _render_project_settings install; _claude_hooks_sync install; _write_pj_machine_file; _check_pj_prereqs; _finish ;;
     uninstall)  uninstall ;;
     update)     update ;;
     force)      force_adopt ;;
-    "")         main ;;
+    "")         main; _finish ;;
 esac
