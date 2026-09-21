@@ -498,6 +498,12 @@ cmd_done(){
 # the prune had not yet noticed, a topic somebody re-created a second earlier -- and the
 # deletion rules would need a human for it.
 #
+# AND ON THIS MACHINE `rmdir` IS TRASH-ROUTED TOO, measured 2026-09-22: removing the live
+# repo's leftover pair printed `Trashed: ... (recover: Finder -> Put Back)` for both. So even
+# the empty-directory removal is recoverable rather than permanent. That is a property of
+# the local shim, not of `rmdir`, so the argument above is what this code rests on -- this
+# paragraph is the belt, not the braces.
+#
 # THE PARENT TOO, and it is one step beyond what was asked, named rather than hidden: an
 # empty `<repo>/.worktree/` is the identical complaint one level up, and it is only ever
 # reached when `scratch/` itself has just gone. Either removal failing is fine and silent.
