@@ -77,7 +77,25 @@ blocks_raw(){
 
 name_of(){                      # a drawer's project name, from its own records
   local w="$1" n=""
-  n="$(blocks_raw "$w" 2>/dev/null | sed -n 's/^project:[[:space:]]*//p' | head -1)"
+  # W-20260921-A15. ORDER IS THE WHOLE FIX, and it took two attempts to see why.
+  #
+  # `items/.project` is read FIRST because it is the only source here that was
+  # WRITTEN BY THE REPO ITSELF. Every other source is a cache of a previous
+  # answer, so one wrong answer becomes permanent:
+  #
+  #   an empty drawer has no project: line and no OPEN.md title, so the old code
+  #   fell through to the harness's encoded directory key -> cmd_add wrote that
+  #   key into the FIRST item's project: line, and regen wrote it into OPEN.md's
+  #   "# <name> -- open items" header -> from then on name_of read its own old
+  #   guess straight back out of one of those two and agreed with itself forever.
+  #
+  # Measured 2026-09-21: one project's three items all carried a `project:` line
+  # holding the encoded key instead of its repo name, and another's OPEN.md header
+  # carried the same shape with ZERO items in the drawer. The second is what made
+  # the loop visible: with no items at all there was nothing left to blame.
+  # Putting the stamp last (the first attempt at this fix) changed neither of them.
+  [ -r "$w/items/.project" ] && n="$(head -1 "$w/items/.project" | tr -d '\n')"
+  [ -n "$n" ] || n="$(blocks_raw "$w" 2>/dev/null | sed -n 's/^project:[[:space:]]*//p' | head -1)"
   [ -n "$n" ] || [ ! -f "$w/OPEN.md" ] || n="$(sed -n '1s/^# \(.*\) -- open items$/\1/p' "$w/OPEN.md" 2>/dev/null)"
   [ -n "$n" ] || n="$(basename "$(dirname "$(dirname "$w")")")"
   printf '%s' "$n"
@@ -356,7 +374,16 @@ cmd_add(){
   lock_drawer "$w"
   f="$(next_id "$w")" || exit 2; id="$(id_of_file "$f")"
   {
-    printf '## %s -- %s\n\nproject: %s\nstatus: open\nkind: %s\n' "$id" "$title" "$(name_of "$w")" "$kind"
+    # W-20260921-A15. The project name written here comes from the REPO YOU ARE
+    # STANDING IN, not from name_of. name_of is for READING a drawer you are not
+    # in, and using it here made the bug self-perpetuating: an empty drawer has no
+    # name to read, so name_of returned the harness's encoded key, cmd_add baked
+    # that into the FIRST item, and from then on name_of read it straight back out
+    # of that item and agreed with itself forever. One project's three items all
+    # carry an encoded key in their project: line because of exactly that. A
+    # writer standing in the repo already knows the answer and never needs to
+    # guess it.
+    printf '## %s -- %s\n\nproject: %s\nstatus: open\nkind: %s\n' "$id" "$title" "$(basename "$(current_repo)")" "$kind"
     [ -n "$size" ] && printf 'size: %s\n' "$size"
     printf 'done-when: %s\n' "$dw"
     [ -n "$when" ] && printf 'when: %s\n' "$when"
@@ -420,6 +447,9 @@ cmd_init(){
   [ ! -d "$w/items" ] || refuse "init: $w already has items/"
   [ ! -f "$w/OPEN.md" ] || refuse "init: $w has a legacy OPEN.md; use 'open-items migrate'"
   mkdir -p "$w/items/open" "$w/items/parked" "$w/items/closed" || refuse "init: cannot create $w/items"
+  # W-20260921-A15: stamp the repo name, so an EMPTY drawer still knows what it
+  # belongs to. Without it name_of has nothing to read but the encoded harness key.
+  printf '%s\n' "$(basename "$repo")" > "$w/items/.project"
   printf '%s\n' "$w/items"
   lock_drawer "$w"
   finish_write "$w" "open-items: init $(basename "$repo")"

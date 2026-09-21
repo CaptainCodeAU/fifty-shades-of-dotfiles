@@ -245,6 +245,16 @@ runw "$ZETA" init
 wanteq "init creates items/ and commits (rc=0)" "0" "$RC"
 wanteq "init: OPEN.md generated" "1" "$([ -f "$ZW/OPEN.md" ] && echo 1)"
 want   "init: OPEN.md carries the do-not-edit header" "DO NOT EDIT" "$(cat "$ZW/OPEN.md")"
+# W-20260921-A15: an EMPTY drawer must still name its repo. Before the stamp,
+# name_of had nothing to read but the harness's encoded directory key, so two
+# projects announced "nothing open for <the encoded key>" the day their drawers
+# were created -- which reads as a broken tool, not an empty drawer. The arms
+# are: the stamp exists, the LISTING shows the repo name, and -- the one that
+# matters -- the encoded key does NOT appear anywhere in it.
+wanteq "init: items/.project stamps the repo name" "zeta" "$(cat "$ZW/items/.project" 2>/dev/null)"
+runw "$ZETA"
+want    "empty drawer names the repo, not the encoded key" "zeta" "$OUT"
+wantnot "empty drawer never prints the encoded harness key" "$(key "$ZETA")" "$OUT"
 runw "$ZETA" add "first thing" --done-when "it is done" --size small --holds-in repo:README.md --body "Body text."
 wanteq "add succeeds (rc=0)" "0" "$RC"
 want   "add prints the new ID" "W-$TODAY-A01" "$OUT"
@@ -253,6 +263,27 @@ wanteq "add: the file lands in items/open/" "1" "$([ -f "$F1" ] && echo 1)"
 want   "add: status open written"      "status: open"          "$(cat "$F1")"
 want   "add: kind defaults to do"      "kind: do"              "$(cat "$F1")"
 want   "add: done-when written"        "done-when: it is done" "$(cat "$F1")"
+# W-20260921-A15: the project: line names the REPO, never the encoded harness key.
+# This is the arm that matters, because a wrong value here is PERMANENT: name_of
+# reads the first item back and agrees with itself from then on.
+want    "add: project: names the repo"            "project: zeta"  "$(cat "$F1")"
+wantnot "add: project: is never the encoded key"  "$(key "$ZETA")" "$(cat "$F1")"
+# W-20260921-A15 CONTROL, two directions.
+#
+# (1) The stamp WINS, because it is the only source not derived from an earlier
+#     guess. Poison it and the poison must show. Without this arm, "the listing
+#     says zeta" is equally true if the stamp is read first, read last, or never
+#     read at all -- the drawer says zeta in every one of those worlds.
+cp "$ZW/items/.project" "$ZW/items/.project.bak8b"
+printf 'POISONED-STAMP\n' > "$ZW/items/.project"
+runw "$ZETA"
+want "CONTROL: the stamp is read FIRST, ahead of the item's project: line" "POISONED-STAMP" "$OUT"
+# (2) With no stamp at all, the older sources must still work: a drawer nobody
+#     stamped still finds its name in the filed item.
+command mv "$ZW/items/.project" "$ZW/items/.project.gone8b"
+runw "$ZETA"
+want "CONTROL: with no stamp, the item's project: line is still read" "zeta" "$OUT"
+command mv "$ZW/items/.project.bak8b" "$ZW/items/.project"
 want   "add: raised filled by the tool with date and session" "raised: $(date +%Y-%m-%d) (session sess-test)" "$(cat "$F1")"
 want   "add: body kept"                "Body text."            "$(cat "$F1")"
 wanteq "add: the item file is COMMITTED" "1" "$(committed "projects/$(key "$ZETA")/memory/WORK/items/open/W-$TODAY-A01.md" && echo 1)"
