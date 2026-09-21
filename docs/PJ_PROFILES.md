@@ -198,6 +198,52 @@ reached.
 
 ---
 
+## The worktree transcript, and a 64-character cap
+
+Every pj tool keys the project by `git rev-parse --git-common-dir` -- the **main**
+repo. Claude Code derives `projects/<name>` from the **working directory**. Inside a
+`c2` worktree those disagree, so the session's transcript lands under a key nothing
+else looks in and `pj-health` cannot find its own evidence.
+
+`c2` closes that by setting `CLAUDE_CODE_PROJECT_DIR_NAME` to the main repo's key.
+The variable is ignored unless `CLAUDE_CONFIG_DIR` is also set, and it is read only
+from the launch environment, never from a settings `env` block -- so `c2 start` is
+the only place it can be set.
+
+**It is capped at 64 characters and a longer value is ignored in silence.** Bisected
+2026-09-21 against Claude Code 2.1.278, one live probe per length:
+
+| Length                        | Honoured |
+| ----------------------------- | -------- |
+| 62, 64                        | yes      |
+| 65, 66, 70, 78, 88, 99, 149   | **no**   |
+
+No warning, no error, normal exit -- the transcript simply lands under the
+cwd-derived name instead. A leading dash is fine (tested separately), so length is
+the whole of it. The cap appears in no documentation found in that session.
+
+So `c2` measures the key first. Under the cap it passes it; over the cap it says so
+and launches without it, rather than passing a value that will be quietly dropped.
+Most real keys fit: `~/CODE/CaptainCodeAU/Network_Plan` is 48 characters and this
+dotfiles repo is 59. A repo under a deep scratch path does not.
+
+---
+
+## One profile must not read another's transcripts
+
+The launch log is the index from session to config dir, and it is matched on
+**`profile=` as well as `project=`**. Matching the project key alone was measured
+wrong on 2026-09-21: with a `scratch` session and a `b-test` session in one repo,
+`pj-health --profile scratch` reported `PASS evidence-card transcript 89f89c44` --
+the **b-test** session's transcript. Since `scratch` sets `card: off`, a start card
+in its own transcript would have been a real fault, and the row would have hidden it
+behind someone else's green.
+
+A row that cannot see must say so. Scoped correctly it now reads `NOT MEASURED ...
+searched: ~/.claude-scratch/projects`, which is the true answer.
+
+---
+
 ## Adding a second account
 
 1. Write `~/.config/pj/profiles/<name>` with `config_dir: ~/.claude-<name>` (a
