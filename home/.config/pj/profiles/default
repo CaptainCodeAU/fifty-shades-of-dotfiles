@@ -29,6 +29,25 @@
 #   card             on | off. `off` exports PJ_NO_CARD=1 and pj-start-card stays
 #                    silent. This is how a profile drops the start card WITHOUT
 #                    dropping the hooks, which `mode: safe` cannot separate
+#
+# THREE MORE KEYS, added in F5b 2026-09-21 out of the W-20260920-A03 settings audit.
+# Gavin ruled these are a per-profile choice, not something every pj session gets.
+# NONE OF THEM IS SET HERE, deliberately: unset means EMIT NOTHING, which is what keeps
+# this profile's argv byte-identical to the pre-profile launcher.
+#   model            passed as --model <name>. Unset = the account default, which on
+#                    this machine is Opus 5 1M. A scratch profile could name something
+#                    cheap without changing what the default profile runs
+#   remote_control   on | off -> remoteControlAtStartup. Sensible for a long staged
+#                    session that should reach your phone, wasteful for a throwaway c2
+#   voice            on | off -> voiceEnabled. Claude Code's OWN voice feature. NOT the
+#                    hook_runner audio pipeline in this repo, which was PARKED at the
+#                    F5b gate: LifeOS's audio is the better pipeline and pj's audio, if
+#                    it ever happens, comes from there. See W-20260921-A06
+#
+# HOW THE LAST TWO TRAVEL. They are settings keys with no command-line flag, so pj
+# appends a SECOND --settings carrying a JSON string. Measured 2026-09-21: --settings
+# REPEATS and MERGES (later wins per key, earlier keys survive), so the overlay does not
+# replace settings.project.json. pj --selftest arm 19c proves both halves in one run.
 config_dir:      ~/.claude
 setting_sources: project,local
 settings:        ~/.claude/settings.project.json

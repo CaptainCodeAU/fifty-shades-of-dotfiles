@@ -37,6 +37,15 @@
 # whatever that profile says, so no profile can drop --dangerously-skip-permissions or
 # --effort high by forgetting the key.
 #
+# THREE MORE KEYS, F5b 2026-09-21, from the W-20260920-A03 audit. Gavin ruled these three
+# are a per-profile choice rather than something every pj session gets:
+#   model: <name>            --model <name>. Unset = the account default (Opus 5 here).
+#   remote_control: on|off   remoteControlAtStartup. Unset = leave it to the org default.
+#   voice: on|off            voiceEnabled (Claude Code's own voice, NOT the hook_runner
+#                            audio pipeline, which was PARKED at the same gate).
+# Unset means EMIT NOTHING, never "emit the default", so a profile that names none of
+# them produces the same argv it did before this change.
+#
 # THE CONFIG DIR IS THE ONLY THING THAT ACTUALLY MOVES. Measured 2026-09-21 with pj's
 # real argv under a scratch CLAUDE_CONFIG_DIR: the appended prompt file, the output
 # style and all five --plugin-dir dirs still loaded from ~/.claude, because every path
@@ -77,6 +86,13 @@ P_PLUGINS="skills/herdr skills/AgentRelay skills/ISA pj-voice pj"
 P_REQUIRED="--dangerously-skip-permissions --effort high"
 P_MODE="normal"
 P_CARD="on"
+# F5b. The three keys Gavin made per-profile at the F5b gate out of the 47 audited in
+# W-20260920-A03. ALL THREE DEFAULT TO EMPTY, and empty means EMIT NOTHING -- not "emit
+# the default value". That distinction is what keeps the default profile's argv
+# byte-identical to the pre-F5a launcher, which is arm 1 of this selftest.
+P_MODEL=""
+P_REMOTE_CONTROL=""
+P_VOICE=""
 PROFILE_NAME="default"
 
 expand_tilde() { local p="$1"; print -r -- "${p/#\~/$HOME}"; }
@@ -104,6 +120,9 @@ read_profile() {
       required)        P_REQUIRED="$v" ;;
       mode)            P_MODE="$v" ;;
       card)            P_CARD="$v" ;;
+      model)           P_MODEL="$v" ;;
+      remote_control)  P_REMOTE_CONTROL="$v" ;;
+      voice)           P_VOICE="$v" ;;
     esac
   done < "$f"
 }
@@ -149,6 +168,27 @@ build_argv() {
     for d in ${=P_PLUGINS}; do PJ_ARGV+=(--plugin-dir "$HOME/.claude/$d"); done
   fi
   [[ "$P_MODE" == safe ]] && PJ_ARGV+=(--safe-mode)
+  # F5b: the three per-profile keys. `model` has its own flag; the other two are
+  # settings keys with no flag, so they ride a SECOND --settings carrying a JSON string.
+  #
+  # WHY THAT WORKS, measured 2026-09-21 against Claude Code 2.1.278 with three arms:
+  #   --settings <file> alone                  -> API_TIMEOUT_MS=1800000   (control)
+  #   --settings <file> --settings <json>      -> F5B_OVERLAY=OVERLAYSET   (overlay applies)
+  #   --settings <file> --settings <json>      -> API_TIMEOUT_MS=1800000   (file SURVIVES)
+  # So the flag REPEATS and MERGES: later wins per key, earlier keys are kept. It is not
+  # last-one-wins, which would have silently dropped the whole settings.project.json.
+  # The third arm is the one that decided it; the first two alone cannot tell the two
+  # behaviours apart.
+  #
+  # The overlay is emitted ONLY when a profile sets one of the two keys, so the default
+  # profile passes exactly one --settings and its argv is unchanged.
+  [[ -n "$P_MODEL" ]] && PJ_ARGV+=(--model "$P_MODEL")
+  local ov=""
+  [[ "$P_REMOTE_CONTROL" == on  ]] && ov="$ov\"remoteControlAtStartup\":true,"
+  [[ "$P_REMOTE_CONTROL" == off ]] && ov="$ov\"remoteControlAtStartup\":false,"
+  [[ "$P_VOICE" == on  ]] && ov="$ov\"voiceEnabled\":true,"
+  [[ "$P_VOICE" == off ]] && ov="$ov\"voiceEnabled\":false,"
+  [[ -n "$ov" ]] && PJ_ARGV+=(--settings "{${ov%,}}")
   PJ_ARGV+=(${=P_REQUIRED})
   # The env the launch exports. EMPTY for the default profile, which is what keeps the
   # default launch byte-identical: `config_dir: ~/.claude` means DO NOT EXPORT, because a
@@ -315,6 +355,30 @@ selftest() {
   # 18. PJ_PROFILE selects without the flag
   out="$(PJ_PROFILE=scratchy PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --dry-run 2>/dev/null)"
   [[ "$out" != *"--plugin-dir"* ]] && ok "18 PJ_PROFILE selects the profile without a flag" || bad "18 PJ_PROFILE" "$out"
+  # 19. F5b: the three per-profile keys from the W-20260920-A03 audit.
+  #     19a is the POSITIVE arm and 19d the NEGATIVE one, and 19d is the arm that
+  #     matters: an absent key must emit NOTHING, because emitting the default value
+  #     instead would break the byte-identical guarantee arm 1 proves. A negative arm
+  #     alone cannot tell "correctly silent" from "the feature never ran", so 19a-c run
+  #     against the SAME fixture dir in the same breath.
+  {
+    print -- "model:          haiku"
+    print -- "remote_control: on"
+    print -- "voice:          off"
+  } > "$pdir/threekeys"
+  out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile threekeys --dry-run 2>/dev/null)"
+  [[ "$out" == *$'\n--model\nhaiku\n'* ]] && ok "19a model: emits --model <name>" || bad "19a model" "$out"
+  [[ "$out" == *'"remoteControlAtStartup":true'* ]] && ok "19b remote_control: on rides a second --settings" || bad "19b remote_control" "$out"
+  [[ "$out" == *'"voiceEnabled":false'* ]] && ok "19c voice: off is emitted explicitly, not omitted" || bad "19c voice" "$out"
+  n=$(print -r -- "$out" | grep -c -- '^--settings$')
+  [[ "$n" -eq 2 ]] && ok "19c the FILE --settings survives beside the overlay (2 of them)" || bad "19c settings count" "got $n, wanted 2"
+  # 19d. the negative arm: a profile naming none of the three emits none of them.
+  printf 'plugins: none\n' > "$pdir/nokeys"
+  out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile nokeys --dry-run 2>/dev/null)"
+  [[ "$out" != *"--model"* ]] && ok "19d an unset model emits no --model" || bad "19d model leaked" "$out"
+  [[ "$out" != *'"voiceEnabled"'* && "$out" != *'"remoteControlAtStartup"'* ]] && ok "19d unset keys emit no overlay --settings" || bad "19d overlay leaked" "$out"
+  n=$(print -r -- "$out" | grep -c -- '^--settings$')
+  [[ "$n" -eq 1 ]] && ok "19d exactly ONE --settings when no profile key is set" || bad "19d settings count" "got $n, wanted 1"
   print -- "pj selftest: $pass passed, $fail failed"
   [[ $fail -eq 0 ]]
 }
