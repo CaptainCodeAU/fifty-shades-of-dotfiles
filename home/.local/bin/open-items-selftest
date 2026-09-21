@@ -568,6 +568,37 @@ runw "$ZETA" --session
 want   "--session after migrate: open title" "a decision with a finish line" "$OUT"
 want   "  and parked count" "parked: 1" "$OUT"
 
+printf '\nG  a REFUSED drawer write is not a held lock (W-20260921-A44)\n'
+# The bug: `mkdir "$LOCK"` fails for two completely different reasons -- the lock is held,
+# or the folder is not writable -- and open-items read both as the first. Sandboxed, it
+# span for 60 seconds and then blamed "pid ?" for a lock file that did not exist.
+#
+# The fixture is a chmod, not the sandbox, so the arm runs the same in both modes. Three
+# arms in order, because the refusal is an ABSENCE of a write and an absence needs both
+# sides: it must work, then fail for the right reason, then work again.
+runw "$ZETA" add "A44 positive arm before" --done-when x
+wanteq "  control: the drawer is writable and an add succeeds (rc=0)" "0" "$RC"
+chmod 500 "$ZW/items" 2>/dev/null
+A44_S=$(date +%s)
+runw "$ZETA" add "A44 refused arm" --done-when x
+A44_E=$(date +%s)
+wanteq "  an unwritable drawer REFUSES (rc=2)" "2" "$RC"
+want   "  the refusal names the denied path" "$ZW/items/.lock" "$OUT"
+want   "  and names WRITE permission as the cause" "WRITE permission" "$OUT"
+want   "  and says nothing was changed" "Nothing was changed" "$OUT"
+case "$OUT" in
+  *"held by pid"*) bad "  and does NOT blame a pid for holding the lock" "no 'held by pid'" "$OUT" ;;
+  *) ok "  and does NOT blame a pid for holding the lock" ;;
+esac
+# The 60 seconds were the actual cost of this bug, so the arm measures them.
+if [ $(( A44_E - A44_S )) -lt 10 ]; then ok "  and refuses at once, not after the 60s spin ($(( A44_E - A44_S ))s)"
+else bad "  and refuses at once, not after the 60s spin" "<10s" "$(( A44_E - A44_S ))s"; fi
+chmod 700 "$ZW/items" 2>/dev/null
+runw "$ZETA" add "A44 positive arm after" --done-when x
+wanteq "  control: with the permission back, an add succeeds again (rc=0)" "0" "$RC"
+# The lock must not be left behind by any of the three.
+wanteq "  no lock directory left behind" "0" "$([ -d "$ZW/items/.lock" ] && echo 1 || echo 0)"
+
 printf '\n%s passed, %s failed   (fixtures: %s)\n' "$PASS" "$FAIL" "$ROOT"
 [ "$FAIL" -eq 0 ] || { printf 'open-items-selftest: FAILURES above\n' >&2; exit 1; }
 printf 'open-items-selftest: all arms pass\n'

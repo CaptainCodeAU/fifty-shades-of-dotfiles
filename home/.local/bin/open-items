@@ -245,17 +245,41 @@ folder_for_status(){ case "$1" in open) printf open;; parked) printf parked;; *)
 # a mkdir lock so two sessions never interleave. A lock older than 60s whose owner
 # is dead is taken over.
 LOCK=""
+# W-20260921-A44, FIXED HERE. A failed `mkdir "$LOCK"` means EITHER "the lock directory is
+# already there" OR "I am not allowed to write in this folder", and this loop treated both
+# as the first. Inside the Claude Bash sandbox the drawer lives under ~/.claude/projects,
+# which is in the deny list, so the create could never succeed: the loop span the full 600
+# iterations and then reported
+#
+#   could not take the drawer lock ... after 60s (held by pid ?)
+#
+# about a lock file that was not there at all. The EMPTY pid was the only tell, and the
+# first diagnosis was the wrong one -- another session holding the drawer. Sixty seconds
+# per attempt, three attempts, and a wrong conclusion.
+#
+# THE TEST THAT SEPARATES THEM is whether the lock directory EXISTS after the failure: a
+# real contended lock leaves one, a refused create does not. Same bug and same fix as
+# `decided add` in 651e95e; this is the fourth instance of the class CLAUDE.md writes up
+# under "the tool usually LIES about why".
+#
+# The retry before refusing is for the one race this could otherwise misread: a holder
+# releasing the lock in the instant between the failed mkdir and the test would look
+# exactly like a refusal. One more attempt costs nothing and removes it.
 lock_drawer(){
   local w="$1" i=0 pid
   LOCK="$w/items/.lock"
   # The holder's pid is a SUBDIRECTORY name, so release is two rmdirs and no rm.
   while ! mkdir "$LOCK" 2>/dev/null; do
+    if [ ! -d "$LOCK" ]; then
+      mkdir "$LOCK" 2>/dev/null && break
+      [ -d "$LOCK" ] || refuse "cannot create the drawer lock at $LOCK -- the create was REFUSED for want of WRITE permission on $(dirname "$LOCK"), not because a pid holds it (the lock does not exist afterwards). Inside the Claude Bash sandbox ~/.claude/projects is not writable; run this from a terminal, or lift the sandbox for this one command. Nothing was changed."
+    fi
     pid="$(ls "$LOCK" 2>/dev/null | head -1)"
     if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then rmdir "$LOCK/$pid" "$LOCK" 2>/dev/null; continue; fi
     i=$((i+1)); [ "$i" -lt 600 ] || refuse "could not take the drawer lock at $LOCK after 60s (held by pid ${pid:-?})"
     sleep 0.1
   done
-  mkdir "$LOCK/$$"
+  mkdir "$LOCK/$$" 2>/dev/null || refuse "took the drawer lock at $LOCK but cannot write inside it. Nothing was changed."
   trap 'rmdir "$LOCK/$$" "$LOCK" 2>/dev/null' EXIT
 }
 
