@@ -131,6 +131,40 @@ session on the machine, which is exactly backwards. `card: off` drops only the c
 `mode: safe` remains supported for P9's baseline measurement, where a session with
 nothing loaded is the point.
 
+### Two things P9 measured that contradict what you would assume
+
+**`--safe-mode` does NOT drop the appended system prompt.** Measured 2026-09-22 against
+Claude Code 2.1.278, reading the prompt snapshot of a real safe-mode launch:
+`OPERATIONAL_RULES.md` and `pj-global/RULES.md` were both still present, with the RULES.md
+header matched twice. Safe mode turns off the things the harness treats as
+_customizations_ (hooks, plugins, skills, the output style, `CLAUDE.md`, MCP, auto memory),
+and an explicit `--append-system-prompt-file` is an argument, not a customization. So a
+safe-mode session is **not a floor for the rules file**, and a measurement that treats it
+as one will under-attribute by the whole 1,601 tokens that file costs. What it did drop,
+measured in the same pair of runs: the first turn fell from 62,162 tokens to 38,920, and
+the system prompt from 24,598 characters to 20,432, the difference being the Chrome MCP
+block.
+
+**A `scratch`-profile session does not load `pj-voice` at all.** `plugins: none` passes no
+`--plugin-dir`, and `outputStyle` in the settings file is not enough on its own to load a
+style whose plugin directory is absent. Measured 2026-09-22 across every transcript under
+`~/.claude-scratch/projects`: **0 of 49 files, 10.2 MB, carry the style's text**, with 43
+of the same files carrying the control string, so the reader was working. The practical
+consequence, and the reason this is written down: **a scratch session cannot be used to
+test anything about voice or format**, because the rules are not in it. P9's A/B had to run
+on the `default` profile for that reason.
+
+The sibling trap is worth naming too. Removing `outputStyle` from the settings file does
+**not** disable the style: `pj-voice.md` carries `force-for-plugin: true`, so as long as
+its plugin directory is passed the style loads anyway. A P9 arm built that way measured
+62,186 tokens against a 62,162 baseline, i.e. no change, and read as a null result until
+the probe was asked to name its own style. Dropping the `--plugin-dir` is what actually
+removes it, and then the cost is **1,235 tokens**.
+
+**Do not ask the model to name its own configuration as the control.** The same arm
+answered "none" on one run and "pj-voice" on the next with the style genuinely absent both
+times. Check the transcript for the file's text instead.
+
 ---
 
 ## What actually moves with the config dir

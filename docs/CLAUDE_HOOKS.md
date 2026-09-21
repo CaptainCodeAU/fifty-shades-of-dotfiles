@@ -126,3 +126,53 @@ by joining with US (``), which is not whitespace.
 **`mktemp -d` with no template ignores `$TMPDIR` on BSD/macOS.** It uses the
 confstr default under `/var/folders`, which is not writable everywhere. Always
 pass an explicit template. Same family as the `stat -f` / `stat -c` split.
+
+**A FAILED APPEND is a redirection error, and the command's own `2>/dev/null`
+cannot catch it.** `printf ... >>"$LOG" 2>/dev/null` still prints
+`Operation not permitted` when the shell cannot open `$LOG`, because the shell
+raises that before the command runs. A hook that logs on every turn then prints
+an error on every turn, which is the false alarm this repo cares most about.
+Wrap the whole thing: `{ printf ... >>"$LOG"; } 2>/dev/null`. Measured
+2026-09-22 in `pj-voice-contract.sh`, whose log lives outside the Bash sandbox's
+writable set.
+
+---
+
+## `pj-voice-contract.sh`: the first `UserPromptSubmit` entry, and why not `Stop`
+
+Added at the P9 gate, 2026-09-22. It states the voice contract before a reply is
+written, names what the previous reply broke, and appends one TSV row per
+measured turn to `${XDG_STATE_HOME:-~/.local/state}/pj/voice-drift.log`:
+timestamp, session, turn, **model**, em dashes, prose chars.
+
+**Why the event matters more than the hook.** `DriftReminder.hook.ts`, the
+LifeOS equivalent, records the measurement in its own header: `FormatGate` was a
+`Stop` hook, went observation-only on 2026-07-11, and drift went from **0%
+across 168 turns** to **61-91% every day across 2,608**. A `Stop` hook fires
+after the text is on screen and can only block, which forces a doubled re-emit.
+Separately, on this machine `peer-reply-check.sh` prints on `Stop` with exit 0
+and nothing sees it. Checking **before** the answer is written is the only point
+that works.
+
+**Why the LifeOS hook was not simply carried.** It runs standalone, and the
+`script_path` plus `targets: ["project"]` route would have taken one manifest
+entry, exactly the `MemoryRootGuard.sh` precedent. But its contract is hardcoded
+to `banner first, closer last, max 2 em-dashes`, `pj-voice` defines no banner and
+no closer and its rule says zero, and the only environment seam is `LIFEOS_DIR`,
+a path. Carrying it would have put a contract wrong in all three clauses into
+every `pj` turn, and written state into `lifeos-private` on each one.
+
+**The model field is the point, not decoration.** The defect this hook exists for
+is model-specific. Across the same 17 `pj` transcripts, same rules file, same
+output style:
+
+| Model              | Prose chars | Em dashes | Rate      |
+| ------------------ | ----------: | --------: | --------- |
+| `claude-opus-5`    |     157,774 |   **371** | 1 per 425 |
+| `claude-fable-5-1` |      15,725 |     **0** | none      |
+
+So a count taken without naming the model cannot be read at all, and the `c`
+family's clean record is thinner evidence than it first looks: 15,831 of its
+19,505 prose characters are Fable, which is clean everywhere. The arm that
+actually compares is `c` on Opus, 3,674 characters, 0 observed against about 9
+predicted.
