@@ -40,6 +40,25 @@ Never use `npm` or `yarn`. Use `pnpm` (or `bun`). Pick by lockfile:
 
 Emit only ASCII punctuation in source code: straight quotes (`"` `'`), straight apostrophes, and hyphen-minus (`-`). Never write Unicode smart quotes (`“ ” ‘ ’`), en/em dashes (`– —`), or other Unicode punctuation into code files — they pass type-checks but break the build at transform time (the JS/TS build rejects them), and hunting them down afterward wastes a session. Unicode is fine in comments, docs, and string literals meant for display; never in identifiers, keys, or code tokens.
 
+## `.claude/types/` is generated and is NEVER committed
+
+`/plugin-types` (Claude Mods / function hooks, early access) writes three TypeScript
+declaration files into **the folder you run it from**, not the config dir:
+`.claude/types/claude-code.d.ts` and two smaller siblings, about **504 KB**. Ruled by
+Gavin 2026-09-22 (F8a): **do not commit it, and do not gitignore it either.** It is
+generated from an API that changes between releases without notice, so a stale copy sitting
+in the repo is worse than none at all, and a gitignore entry would quietly bless keeping one.
+
+Move it out (`command mv` to your scratchpad) and regenerate on demand:
+
+```
+CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 pj --profile scratch -p '/plugin-types'
+```
+
+The first line of the big file names the version that wrote it, so a copy you already have
+can always be checked against `claude --version`. Without the environment variable the
+command does not exist at all — measured, with the control session reporting it absent.
+
 ## Verifying: a COUNT or an ABSENCE needs a positive arm
 
 **Any check whose answer is a count or an absence must be paired with something
