@@ -2,10 +2,16 @@
 # c2 -- the throwaway pj session: a scratch worktree, its own config dir, two guards (F5a).
 #
 # Usage:
-#   c2 start <topic>          make the worktree and launch pj --profile scratch inside it
+#   c2 start <topic>          make the worktree and launch pj --profile scratch inside it.
+#                             Prints the peer NAME the session will get, so you can
+#                             SendMessage it by hand, and accepts the folder-trust dialog
+#                             for you (D-20260922-A01; that carve-out is c2 worktrees and
+#                             the scratch config dir ONLY, never any other dialog).
 #   c2 done  <topic>          tear it down, but ONLY if both guards pass
 #   c2 done  <topic> --discard   tear it down anyway, losing whatever the guards found
-#   c2 list                   the scratch worktrees of the repo you are standing in
+#   c2 list                   the scratch worktrees of the repo you are standing in, with
+#                             each one's live peer name, session id and pid when a session
+#                             is running in it
 #   c2 --selftest             prove every arm against throwaway fixtures
 #
 # Exit: 0 done  ·  1 nothing to do (not an error)  ·  2 REFUSED
@@ -65,7 +71,7 @@ PROFILE=scratch
 
 refuse(){ printf 'c2: REFUSED -- %s\n' "$1" >&2; exit 2; }
 say(){ printf 'c2: %s\n' "$1"; }
-usage(){ sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; }
+usage(){ sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; }
 tilde(){ printf '%s' "${1/#$HOME/\~}"; }
 
 # The MAIN worktree, whichever worktree you are standing in (--git-common-dir, the same
@@ -79,6 +85,89 @@ main_repo(){
 
 wt_path(){ printf '%s/.worktree/scratch/%s' "$1" "$2"; }
 branch_of(){ printf 'scratch/%s' "$1"; }
+
+# ------------------------------------------------- the folder-trust watcher ----
+# D-20260922-A01, ruled by Gavin 2026-09-22: a session MAY accept the folder-trust
+# dialog itself, via Herdr, for c2 worktrees and for any folder opened under the scratch
+# config dir. Every OTHER trust or security dialog still stops and waits for him.
+#
+# The carve-out is narrow on purpose. A c2 worktree is a checkout of a repo he already
+# trusts under the default config dir, and ~/.claude-scratch is the disposable profile,
+# so accepting here grants nothing he has not already granted elsewhere. It does NOT
+# extend to the default config dir, to a folder he has never opened, or to any other
+# prompt.
+#
+# WHY A BACKGROUND WATCHER. `start` ends in `exec pj`, which REPLACES this process, so
+# there is nobody left to watch. The watcher is therefore forked before the exec and
+# talks to the pane c2 is itself running in ($HERDR_PANE_ID).
+#
+# THE DECISION IS A PURE FUNCTION so it can be tested without a pane, a herdr server or a
+# live dialog. trust_keys_for prints the keys to send and NOTHING when it is not certain:
+# silence means Gavin gets asked, which is the safe direction for a wrong reading.
+TRUST_DIALOG='Yes, I trust this folder'
+TRUST_CURSOR_NO='❯ No, exit'
+TRUST_CURSOR_YES='❯ Yes, I trust this folder'
+
+# trust_keys_for <pane text> -> one key per line, or nothing at all.
+trust_keys_for(){
+  local t="$1"
+  case "$t" in *"$TRUST_DIALOG"*) ;; *) return 0 ;; esac
+  # The cursor marker is what separates a live dialog from the same words quoted in a
+  # transcript, a doc or this script's own help. Without it, nothing is sent.
+  case "$t" in
+    *"$TRUST_CURSOR_YES"*) printf 'enter\n' ;;
+    *"$TRUST_CURSOR_NO"*)  printf 'down\nenter\n' ;;
+  esac
+  return 0
+}
+
+# trust_watch <pane_id> -- blocks on herdr's event system until the dialog appears (or the
+# timeout passes), accepts it once, and verifies it went away. Never loops on the keys: a
+# dialog still present after one attempt is one this was wrong about, and hammering Enter
+# into a live session is exactly the damage the guard exists to avoid.
+trust_watch(){
+  local pane="$1" txt keys k
+  [ "${HERDR_ENV:-}" = 1 ] || return 0
+  [ -n "$pane" ] || return 0
+  command -v herdr >/dev/null 2>&1 || return 0
+  herdr pane wait-output "$pane" --match "$TRUST_DIALOG" \
+    --timeout "${C2_TRUST_TIMEOUT_MS:-120000}" >/dev/null 2>&1 || return 0
+  txt="$(herdr pane read "$pane" --source visible --lines 400 2>/dev/null || true)"
+  keys="$(trust_keys_for "$txt")"
+  [ -n "$keys" ] || return 0
+  while IFS= read -r k; do
+    [ -n "$k" ] && herdr pane send-keys "$pane" "$k" >/dev/null 2>&1
+  done <<EOF
+$keys
+EOF
+  txt="$(herdr pane read "$pane" --source visible --lines 400 2>/dev/null || true)"
+  case "$txt" in
+    *"$TRUST_CURSOR_NO"*|*"$TRUST_CURSOR_YES"*)
+      printf 'c2: the folder-trust dialog is still up after one accept attempt; it is yours to answer.\n' >&2 ;;
+  esac
+  return 0
+}
+
+# ------------------------------------------- the peer name and the session id ----
+# F5c gate Q3: Gavin asked to be told how to address the session by hand.
+#
+# THE NAME IS KNOWN IN ADVANCE AND THE SESSION ID IS NOT, so they are printed in two
+# different places rather than pretended to be one. `pj` names a non-default profile's
+# session `<profile>-<cwd>-<suffix>`; c2 picks the suffix, exports it, and prints the
+# resulting name plus the exact SendMessage line BEFORE the exec. The session id only
+# exists once Claude Code has started, so `c2 list` reads it live out of the registry.
+peer_suffix(){ od -An -N2 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n'; }
+
+# registry_row <worktree path> -> "name<TAB>sessionId<TAB>pid", empty when not running.
+# Reads ~/.claude/sessions, which since F5c is also where a scratch session registers
+# (its own config dir's sessions/ is a symlink to it).
+registry_row(){
+  local wt="$1" f
+  for f in "$HOME/.claude/sessions"/*.json; do
+    [ -e "$f" ] || continue
+    jq -r --arg wt "$wt" 'select(.cwd == $wt) | [.name // "-", .sessionId // "-", (.pid|tostring)] | @tsv' "$f" 2>/dev/null
+  done
+}
 
 # ---------------------------------------------------------------- start ----
 cmd_start(){
@@ -151,14 +240,29 @@ cmd_start(){
     say "NOTE: this project's key is $keylen characters and CLAUDE_CODE_PROJECT_DIR_NAME is capped at 64, so the transcript will land under the WORKTREE's own key, not $(basename "$repo")'s. pj-health --profile $PROFILE will not find this session's evidence. Everything else (the drawer, the rulings, the commit trailer) is unaffected."
     key=""
   fi
+  # The peer name pj will give this session. Built here, not read back afterwards, because
+  # `exec` leaves nobody to read it back: c2 chooses the suffix and pj uses it, so the name
+  # printed below is the name the session actually gets. Same shape as pj's own builder --
+  # <profile>-<cwd basename, non-alphanumerics dashed, 20 chars>-<suffix>.
+  local sfx pname pbase
+  sfx="${C2_NAME_SUFFIX:-$(peer_suffix)}"
+  [ -n "$sfx" ] && : || sfx="$$"
+  pbase="$(printf '%s' "${wt##*/}" | tr -c 'a-zA-Z0-9-' '-' | cut -c1-20)"
+  pname="$PROFILE-$pbase-$sfx"
+  say "peer name $pname  --  SendMessage to=\"$pname\" reaches it from any session"
+  say "its session id appears once Claude Code is up: c2 list"
+
   if [ -n "${C2_LAUNCH:-}" ]; then
-    printf '%s\n' "$C2_LAUNCH cwd=$wt profile=$PROFILE project_dir_name=${key:-<too-long:$keylen>}"
+    printf '%s\n' "$C2_LAUNCH cwd=$wt profile=$PROFILE project_dir_name=${key:-<too-long:$keylen>} peer_name=$pname"
     return 0
   fi
+  # The trust watcher goes into the background BEFORE the exec, because the exec replaces
+  # this process. It is a no-op outside herdr and a no-op when no dialog appears.
+  ( trust_watch "${HERDR_PANE_ID:-}" & ) >/dev/null 2>&1
   if [ -n "$key" ]; then
-    (builtin cd "$wt" && CLAUDE_CODE_PROJECT_DIR_NAME="$key" exec pj --profile "$PROFILE")
+    (builtin cd "$wt" && CLAUDE_CODE_PROJECT_DIR_NAME="$key" PJ_NAME_SUFFIX="$sfx" exec pj --profile "$PROFILE")
   else
-    (builtin cd "$wt" && exec pj --profile "$PROFILE")
+    (builtin cd "$wt" && PJ_NAME_SUFFIX="$sfx" exec pj --profile "$PROFILE")
   fi
 }
 
@@ -243,7 +347,16 @@ cmd_list(){
     case "$line" in worktree\ *) p="${line#worktree }" ;; *) continue ;; esac
     case "$p" in "$repo"/.worktree/scratch/*)
       n=$((n+1))
-      printf '%-40s %s\n' "$(tilde "$p")" "scratch/${p##*/}" ;;
+      # The live session, if one is running in that worktree. Read from the registry
+      # rather than remembered, so a session that has since exited simply is not shown.
+      local row name sid pid
+      row="$(registry_row "$p")"
+      if [ -n "$row" ]; then
+        name="$(printf '%s' "$row" | cut -f1)"; sid="$(printf '%s' "$row" | cut -f2)"; pid="$(printf '%s' "$row" | cut -f3)"
+        printf '%-40s %-24s %s\n' "$(tilde "$p")" "scratch/${p##*/}" "live: $name  session $sid  pid $pid"
+      else
+        printf '%-40s %-24s %s\n' "$(tilde "$p")" "scratch/${p##*/}" "no session running"
+      fi ;;
     esac
   done <<<"$(git -C "$repo" worktree list --porcelain 2>/dev/null)"
   [ "$n" -eq 0 ] && { say "no scratch worktrees in $(basename "$repo")"; return 1; }
@@ -422,6 +535,48 @@ selftest(){
   [ -s "$oper" ] && grep -q 'git worktree remove' "$oper" \
     && ok "11 control: the scanned text is non-empty and holds the teardown call" \
     || bad "11 control" "the scanned text was empty or lacked git worktree remove, so arm 11's absence proves nothing"
+
+  # 12. the folder-trust decision (D-20260922-A01). A PURE function, so every arm runs
+  #     without a pane, a herdr server or a live dialog.
+  local dlg_no dlg_yes no_dlg prose k
+  dlg_no="$(printf '%s\n%s\n%s\n' ' Quick safety check: Is this a project you created or one you trust?' ' ❯ No, exit' '   Yes, I trust this folder')"
+  dlg_yes="$(printf '%s\n%s\n%s\n' ' Quick safety check: Is this a project you created or one you trust?' '   No, exit' ' ❯ Yes, I trust this folder')"
+  no_dlg="$(printf '%s\n' 'claude> ready. 0 tokens')"
+  # The false-positive fixture: the exact dialog WORDS with no cursor marker, which is what
+  # a transcript, a doc, or this script's own --help looks like in a pane.
+  prose="$(printf '%s\n' 'the watcher matches on Yes, I trust this folder before it sends anything')"
+  k="$(trust_keys_for "$dlg_no")"
+  [ "$k" = "$(printf 'down\nenter')" ] && ok "12a dialog with the cursor on No -> down, enter" || bad "12a" "got [$k]"
+  k="$(trust_keys_for "$dlg_yes")"
+  [ "$k" = "enter" ] && ok "12b dialog already on Yes -> enter only" || bad "12b" "got [$k]"
+  k="$(trust_keys_for "$no_dlg")"
+  [ -z "$k" ] && ok "12c no dialog -> sends NOTHING" || bad "12c sent keys with no dialog" "got [$k]"
+  k="$(trust_keys_for "$prose")"
+  [ -z "$k" ] && ok "12d the dialog WORDS without a cursor marker -> sends NOTHING" || bad "12d false positive" "got [$k]"
+  # 12e CONTROL: 12c and 12d are absences, and an absence proves nothing on its own. This
+  #     says the same function, called the same way in the same breath, DOES produce keys.
+  [ -n "$(trust_keys_for "$dlg_no")" ] && ok "12e control: the function does emit keys for a real dialog" \
+    || bad "12e control" "the function emits nothing for anything, so 12c and 12d prove nothing"
+  # 12f trust_watch is inert outside herdr. A fake `herdr` on PATH records any call, so
+  #     "it did nothing" is measured rather than assumed.
+  local fakebin="$root/fakebin"; mkdir -p "$fakebin"
+  printf '#!/bin/sh\necho called >> "%s/herdr-calls"\n' "$root" > "$fakebin/herdr"; chmod +x "$fakebin/herdr"
+  ( PATH="$fakebin:$PATH"; unset HERDR_ENV; trust_watch "w9:p9" ) >/dev/null 2>&1
+  [ ! -e "$root/herdr-calls" ] && ok "12f trust_watch calls nothing when HERDR_ENV is unset" || bad "12f called herdr" "$(cat "$root/herdr-calls")"
+  ( PATH="$fakebin:$PATH"; HERDR_ENV=1 trust_watch "" ) >/dev/null 2>&1
+  [ ! -e "$root/herdr-calls" ] && ok "12f trust_watch calls nothing without a pane id" || bad "12f called herdr" "$(cat "$root/herdr-calls")"
+  # 12g CONTROL for 12f: the fake herdr really does record when it IS run, so the two
+  #     absences above are evidence rather than a broken probe.
+  ( PATH="$fakebin:$PATH"; herdr anything ) >/dev/null 2>&1
+  [ -e "$root/herdr-calls" ] && ok "12g control: the fake herdr records a call when one happens" \
+    || bad "12g control" "the probe cannot detect a call at all, so 12f proves nothing"
+
+  # 13. start prints the peer NAME and hands pj the same suffix (F5c gate Q3).
+  C2_NAME_SUFFIX=ab12 run start t13
+  case "$OUT" in *"peer name scratch-t13-ab12"*) ok "13 start prints the peer name it will give the session";; *) bad "13 peer name" "$OUT";; esac
+  case "$OUT" in *'SendMessage to="scratch-t13-ab12"'*) ok "13 and the exact SendMessage line to use";; *) bad "13 sendmessage line" "$OUT";; esac
+  case "$OUT" in *"peer_name=scratch-t13-ab12"*) ok "13 the name reaches the launch (seam shows it)";; *) bad "13 launch name" "$OUT";; esac
+  run done t13 --discard
 
   printf 'c2 selftest: %d passed, %d failed\n' "$pass" "$fail"
   [ "$fail" -eq 0 ]
