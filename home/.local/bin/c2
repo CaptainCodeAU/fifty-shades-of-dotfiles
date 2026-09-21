@@ -478,7 +478,51 @@ cmd_done(){
     say "deleted branch $br"
   fi
   close_herdr_workspace "$wt"
+  prune_empty_worktree_dirs "$repo"
   [ "$discard" -eq 1 ] && say "--discard: the guards were not run"
+  return 0
+}
+
+# prune_empty_worktree_dirs <main repo> -- take away the two scaffold directories
+# `c2 start` created, but ONLY while they are empty.
+#
+# WHAT IT FIXES. `c2 start` makes `<repo>/.worktree/scratch/<topic>`, so it creates two
+# parent directories on the way. `c2 done` removed the topic and left both behind, and
+# F5d's report carried "`<repo>/.worktree/scratch/` is left as an empty directory" in its
+# stopped-on list rather than as a fix. Asked for by Gavin after the F8a gate.
+#
+# WHY `rmdir` AND NOTHING ELSE. `rmdir` cannot lose data: it refuses a non-empty directory,
+# and that refusal IS the guard, so no emptiness test has to be trusted and no recursive
+# delete is ever reached. It is the same argument `pj`'s ensure_registry_link makes for the
+# one destructive call it allows itself. `rm -r` here would be a real hazard -- a worktree
+# the prune had not yet noticed, a topic somebody re-created a second earlier -- and the
+# deletion rules would need a human for it.
+#
+# THE PARENT TOO, and it is one step beyond what was asked, named rather than hidden: an
+# empty `<repo>/.worktree/` is the identical complaint one level up, and it is only ever
+# reached when `scratch/` itself has just gone. Either removal failing is fine and silent.
+#
+# IT SAYS WHAT IT DID, POSITIVELY. "removed nothing because another topic is still live"
+# and "removed nothing because the code never ran" are the same silence, and this repo
+# writes that failure up often enough that a cleanup which cannot be observed is not worth
+# having. So the kept case is stated too, with the reason.
+prune_empty_worktree_dirs(){
+  local repo="$1" scratch parent left
+  [ -n "$repo" ] || return 0
+  scratch="$repo/.worktree/scratch"
+  parent="$repo/.worktree"
+  [ -d "$scratch" ] || return 0
+  if rmdir "$scratch" 2>/dev/null; then
+    say "removed the now-empty $(tilde "$scratch")"
+    if [ -d "$parent" ] && rmdir "$parent" 2>/dev/null; then
+      say "removed the now-empty $(tilde "$parent")"
+    fi
+  else
+    # Non-empty: another topic is still checked out. Name how many, so the line is a fact
+    # rather than a shrug.
+    left="$(find "$scratch" -mindepth 1 -maxdepth 1 -print 2>/dev/null | wc -l | tr -d ' ')"
+    say "kept $(tilde "$scratch"): $left other topic(s) still there"
+  fi
   return 0
 }
 
@@ -941,6 +985,47 @@ HFAKE
   # 15e CONTROL for 15b-15d: the fake really does record when a close happens, so those
   #     three absent files mean "nothing was closed" rather than "the recorder is broken".
   [ -e "$root/ws.15a" ] && ok "15e control: the recorder fires when a close really happens" || bad "15e control" "15a recorded nothing, so 15b-15d prove nothing"
+
+  # ---- 16: the empty scaffold directories `c2 start` leaves behind --------------------
+  # Asked for by Gavin after the F8a gate. A FRESH repo per arm, never a cleared one: a
+  # `rm` here is the Trash shim and can refuse, leaving a stale fixture to be read as a
+  # finding (the trap CLAUDE.md records for decided-selftest, and the one that bit arm 22
+  # of pj --selftest).
+  local r16 r16b
+  r16="$root/repo16"
+  git init -q "$r16" >/dev/null 2>&1
+  git -C "$r16" config user.email t@e; git -C "$r16" config user.name t
+  printf 'base\n' > "$r16/f.txt"; git -C "$r16" add f.txt; git -C "$r16" commit -qm base
+  # 16a THE POSITIVE ARM: one topic, done, and both scaffold dirs go
+  OUT="$( (builtin cd "$r16" && "$SELF" start s1 2>&1) )"; RC=$?
+  [ -d "$r16/.worktree/scratch/s1" ] && ok "16a fixture: start made the worktree" || bad "16a fixture" "rc=$RC $OUT"
+  OUT="$( (builtin cd "$r16" && "$SELF" done s1 --discard 2>&1) )"; RC=$?
+  [ "$RC" -eq 0 ] && ok "16a done exits 0" || bad "16a done rc" "$RC: $OUT"
+  [ ! -d "$r16/.worktree/scratch" ] && ok "16a the empty <repo>/.worktree/scratch/ is removed" || bad "16a scratch left" "$(ls -la "$r16/.worktree" 2>&1)"
+  [ ! -d "$r16/.worktree" ] && ok "16a and the empty <repo>/.worktree/ with it" || bad "16a parent left" "$(ls -la "$r16/.worktree" 2>&1)"
+  case "$OUT" in *"removed the now-empty"*) ok "16a it says what it removed";; *) bad "16a silent" "$OUT";; esac
+  # 16b THE NEGATIVE ARM, and the one that matters: with a SECOND topic still checked out,
+  #     nothing is removed. Without this, 16a passes just as well for an `rm -r`.
+  r16b="$root/repo16b"
+  git init -q "$r16b" >/dev/null 2>&1
+  git -C "$r16b" config user.email t@e; git -C "$r16b" config user.name t
+  printf 'base\n' > "$r16b/f.txt"; git -C "$r16b" add f.txt; git -C "$r16b" commit -qm base
+  ( builtin cd "$r16b" && "$SELF" start k1 >/dev/null 2>&1 )
+  ( builtin cd "$r16b" && "$SELF" start k2 >/dev/null 2>&1 )
+  [ -d "$r16b/.worktree/scratch/k1" ] && [ -d "$r16b/.worktree/scratch/k2" ] && ok "16b fixture: two topics checked out" || bad "16b fixture" "$(ls "$r16b/.worktree/scratch" 2>&1)"
+  OUT="$( (builtin cd "$r16b" && "$SELF" done k1 --discard 2>&1) )"
+  [ -d "$r16b/.worktree/scratch" ] && ok "16b a live sibling topic keeps <repo>/.worktree/scratch/" || bad "16b removed an in-use dir" "$OUT"
+  [ -d "$r16b/.worktree/scratch/k2" ] && ok "16b and the sibling worktree is untouched" || bad "16b sibling gone" "$(ls "$r16b/.worktree/scratch" 2>&1)"
+  case "$OUT" in *"kept"*"1 other topic(s) still there"*) ok "16b it states the denominator rather than going quiet";; *) bad "16b silent keep" "$OUT";; esac
+  # 16c the function is a no-op when there is no .worktree at all, rc 0 (a repo that never
+  #     ran `c2 start`), so `done` on a branch-only leftover cannot fail here
+  prune_empty_worktree_dirs "$root/repo" >/dev/null 2>&1; RC=$?
+  [ "$RC" -eq 0 ] && ok "16c no .worktree/scratch at all -> rc 0, no output" || bad "16c" "rc=$RC"
+  # 16d CONTROL for 16c: the same function DOES act when there is something to act on, so
+  #     16c's silence means "nothing to do" and not "the function is broken".
+  mkdir -p "$root/ctl16/.worktree/scratch"
+  OUT="$( prune_empty_worktree_dirs "$root/ctl16" 2>&1 )"
+  [ ! -d "$root/ctl16/.worktree/scratch" ] && ok "16d control: the function really removes an empty scratch dir" || bad "16d control" "$OUT"
 
   printf 'c2 selftest: %d passed, %d failed\n' "$pass" "$fail"
   [ "$fail" -eq 0 ]

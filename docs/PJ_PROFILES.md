@@ -370,14 +370,14 @@ stops being shown.
 
 One convention, and it is readable cold. Ruled by Gavin at the F5d gate, 2026-09-22.
 
-| Thing | Shape | Example | Set by |
-| --- | --- | --- | --- |
-| session | `<repo-or-alias>-<role>[-<topic>]` | `fifty-shades-of-dotfiles-main` | `pj`, via `CLAUDE_CODE_SESSION_NAME` |
-| session, scratch | the same, role = the profile | `fifty-shades-of-dotfiles-scratch-f5d` | `pj`, launched by `c2` |
-| session, a stage's control pane | the same, chosen by the session | `fifty-shades-of-dotfiles-f5d-control` | the session, exported before `pj` |
-| Herdr **workspace** | left alone | `fifty-shades-of-dotfiles` (auto) | Herdr itself |
-| Herdr **tab** | the purpose | `main`, `scratch/f5d`, `f5d-control` | the session that opens it |
-| Herdr **pane** | the session's own name | `fifty-shades-of-dotfiles-scratch-f5d` | `pj`, at launch |
+| Thing                           | Shape                              | Example                                | Set by                               |
+| ------------------------------- | ---------------------------------- | -------------------------------------- | ------------------------------------ |
+| session                         | `<repo-or-alias>-<role>[-<topic>]` | `fifty-shades-of-dotfiles-main`        | `pj`, via `CLAUDE_CODE_SESSION_NAME` |
+| session, scratch                | the same, role = the profile       | `fifty-shades-of-dotfiles-scratch-f5d` | `pj`, launched by `c2`               |
+| session, a stage's control pane | the same, chosen by the session    | `fifty-shades-of-dotfiles-f5d-control` | the session, exported before `pj`    |
+| Herdr **workspace**             | left alone                         | `fifty-shades-of-dotfiles` (auto)      | Herdr itself                         |
+| Herdr **tab**                   | the purpose                        | `main`, `scratch/f5d`, `f5d-control`   | the session that opens it            |
+| Herdr **pane**                  | the session's own name             | `fifty-shades-of-dotfiles-scratch-f5d` | `pj`, at launch                      |
 
 `role` is `main` for the default profile and the profile's own name otherwise. `topic` is
 the working directory's basename when it is not the repo root, which is the `c2` worktree
@@ -408,11 +408,11 @@ inside a `pj` session would take its **parent's** name and collide with it.
 
 So `pj` exports a second variable, `PJ_SESSION_NAME`, holding the same string:
 
-| In the environment | `pj` concludes | What it does |
-| --- | --- | --- |
-| both set, and **equal** | inherited from a parent `pj` | **recomputes** the name for this launch |
-| only `CLAUDE_CODE_SESSION_NAME` | a human or a stage chose it | **keeps** it |
-| neither | a fresh launch | computes one |
+| In the environment              | `pj` concludes               | What it does                            |
+| ------------------------------- | ---------------------------- | --------------------------------------- |
+| both set, and **equal**         | inherited from a parent `pj` | **recomputes** the name for this launch |
+| only `CLAUDE_CODE_SESSION_NAME` | a human or a stage chose it  | **keeps** it                            |
+| neither                         | a fresh launch               | computes one                            |
 
 A stage that wants to name a control pane exports `CLAUDE_CODE_SESSION_NAME` and not the
 marker, which is what "export it before `pj`" already meant. `c2` reads `PJ_SESSION_NAME`
@@ -461,6 +461,29 @@ sets it at launch, and `ListAgents` and the Herdr sidebar read the same string.
 Claude has exited keeps its label until the next `pj` launch overwrites it or someone runs
 `herdr pane rename <id> --clear`. `pj` cannot clear it on the way out, because it `exec`s
 and leaves nobody behind to do it.
+
+### `c2 done` takes the empty scaffold directories with it
+
+`c2 start` makes `<repo>/.worktree/scratch/<topic>`, creating two parent directories on the
+way, and until 2026-09-22 `c2 done` left both behind. F5d's report carried
+"`<repo>/.worktree/scratch/` is left as an empty directory" in its stopped-on list rather
+than as a fix; it is a fix now.
+
+`prune_empty_worktree_dirs` runs after the workspace close and uses **`rmdir` only**.
+`rmdir` cannot lose data -- it refuses a non-empty directory, and that refusal IS the guard,
+so nothing has to trust an emptiness test and no recursive delete is ever reached. `rm -r`
+here would be a real hazard (a worktree the prune had not yet noticed, a topic re-created a
+second earlier) and would need a human under the deletion rules.
+
+It removes `scratch/` when empty and then `.worktree/` when that is empty too, and **it says
+which**. When a sibling topic is still checked out it says so with the count, because
+"kept it, another topic is live" and "the code never ran" are otherwise the same silence.
+
+Arms 16a to 16d of `c2 --selftest`: the positive case, the **negative** case (a second live
+topic keeps both directories and the sibling worktree is untouched -- the arm that separates
+this from an `rm -r`), a no-op on a repo that never ran `c2 start`, and a control proving the
+function does act when there is something to act on. Each arm builds its own fresh repo,
+because a sandboxed `rm` can refuse and leave a stale fixture to be read as a finding.
 
 ## `direnv` in a `c2` worktree
 
@@ -586,13 +609,13 @@ one of them is refused.** Both controls fired in the same command: a write to `.
 cwd) succeeded, and a write to `~/.claude/settings.json.f8a` was refused, so the denials
 are the sandbox rather than a broken probe.
 
-| dir | sandboxed write | symlinked top-level entries |
-| --- | --- | --- |
-| `~/.claude/skills/herdr` | DENIED | **3 of 3** |
-| `~/.claude/skills/AgentRelay` | DENIED | 0 of 6 |
-| `~/.claude/skills/ISA` | DENIED | 0 of 2 |
-| `~/.claude/pj` | DENIED | 0 of 1 |
-| `~/.claude/pj-voice` | DENIED | 0 of 1 |
+| dir                           | sandboxed write | symlinked top-level entries |
+| ----------------------------- | --------------- | --------------------------- |
+| `~/.claude/skills/herdr`      | DENIED          | **3 of 3**                  |
+| `~/.claude/skills/AgentRelay` | DENIED          | 0 of 6                      |
+| `~/.claude/skills/ISA`        | DENIED          | 0 of 2                      |
+| `~/.claude/pj`                | DENIED          | 0 of 1                      |
+| `~/.claude/pj-voice`          | DENIED          | 0 of 1                      |
 
 **And stow links FILES, not directories**, so a file newly added on the repo side does not
 appear under `~/` at all until a restow. That is the second reason the dirs are hard to
@@ -607,6 +630,6 @@ the cwd is writable. Proven and reverted byte-exact: appending a marker to the r
 lives under `~/.claude/skills/herdr`.** The other four dirs are protected as they stand.
 
 This is not a claim that the estate is tamper-proof. A user-tier mod is outermost only
-because it was *listed* first, so anything that can edit this launcher can reorder it;
+because it was _listed_ first, so anything that can edit this launcher can reorder it;
 there is no protected seat without managed settings. It is the narrow rule that follows
 from where the one measured hole actually is.
