@@ -66,13 +66,15 @@
     "(event, matcher, entry.command) matches something already present. Never the",
     "command alone -- the same script legitimately appears under several matchers."
   ],
-
   "hooks": [
     {
       "event": "PreToolUse",
       "matcher": "Bash",
       "script": "enforce-secret-probe.sh",
-      "targets": ["user", "project"],
+      "targets": [
+        "user",
+        "project"
+      ],
       "entry": {
         "type": "command",
         "command": "$HOME/.claude/hooks/enforce-secret-probe.sh",
@@ -84,7 +86,10 @@
       "event": "PreToolUse",
       "matcher": "Bash",
       "script": "enforce-census.sh",
-      "targets": ["user", "project"],
+      "targets": [
+        "user",
+        "project"
+      ],
       "entry": {
         "type": "command",
         "command": "$HOME/.claude/hooks/enforce-census.sh",
@@ -96,7 +101,10 @@
       "event": "PreToolUse",
       "matcher": "Grep",
       "script": "enforce-census.sh",
-      "targets": ["user", "project"],
+      "targets": [
+        "user",
+        "project"
+      ],
       "entry": {
         "type": "command",
         "command": "$HOME/.claude/hooks/enforce-census.sh",
@@ -108,31 +116,44 @@
       "event": "PreToolUse",
       "matcher": "Bash",
       "script": "enforce-herdr-skill.sh",
-      "targets": ["user", "project"],
+      "targets": [
+        "user",
+        "project"
+      ],
       "entry": {
         "type": "command",
         "command": "$HOME/.claude/hooks/enforce-herdr-skill.sh"
       },
-      "requires": ["$HOME/.claude/skills/herdr"],
+      "requires": [
+        "$HOME/.claude/skills/herdr"
+      ],
       "why": "Blocks herdr commands until the herdr skill is read this session"
     },
     {
       "event": "PostToolUse",
       "matcher": "Skill",
       "script": "mark-herdr-skill-read.sh",
-      "targets": ["user", "project"],
+      "targets": [
+        "user",
+        "project"
+      ],
       "entry": {
         "type": "command",
         "command": "$HOME/.claude/hooks/mark-herdr-skill-read.sh"
       },
-      "requires": ["$HOME/.claude/skills/herdr"],
+      "requires": [
+        "$HOME/.claude/skills/herdr"
+      ],
       "why": "Lifts the block above; pointless without the skill it watches for"
     },
     {
       "event": "SessionStart",
       "script": "ci-watch",
       "script_path": "$HOME/.local/bin/ci-watch",
-      "targets": ["user", "project"],
+      "targets": [
+        "user",
+        "project"
+      ],
       "entry": {
         "type": "command",
         "command": "test -x \"$HOME/.local/bin/ci-watch\" && \"$HOME/.local/bin/ci-watch\" || true",
@@ -144,7 +165,9 @@
       "event": "SessionStart",
       "script": "pj-start-card",
       "script_path": "$HOME/.local/bin/pj-start-card",
-      "targets": ["project"],
+      "targets": [
+        "project"
+      ],
       "entry": {
         "type": "command",
         "command": "test -x \"$HOME/.local/bin/pj-start-card\" && \"$HOME/.local/bin/pj-start-card\" || true",
@@ -156,7 +179,9 @@
       "event": "SessionStart",
       "script": "pj-launch-check",
       "script_path": "$HOME/.local/bin/pj-launch-check",
-      "targets": ["project"],
+      "targets": [
+        "project"
+      ],
       "entry": {
         "type": "command",
         "command": "test -x \"$HOME/.local/bin/pj-launch-check\" && \"$HOME/.local/bin/pj-launch-check\" || true",
@@ -168,7 +193,9 @@
       "event": "SessionEnd",
       "script": "pj-session-end",
       "script_path": "$HOME/.local/bin/pj-session-end",
-      "targets": ["project"],
+      "targets": [
+        "project"
+      ],
       "entry": {
         "type": "command",
         "command": "test -x \"$HOME/.local/bin/pj-session-end\" && \"$HOME/.local/bin/pj-session-end\" || true",
@@ -180,7 +207,10 @@
       "event": "SessionStart",
       "script": "ccw-watch",
       "script_path": "$HOME/.local/bin/ccw-watch",
-      "targets": ["user", "project"],
+      "targets": [
+        "user",
+        "project"
+      ],
       "entry": {
         "type": "command",
         "command": "test -x \"$HOME/.local/bin/ccw-watch\" && \"$HOME/.local/bin/ccw-watch\" || true",
@@ -192,7 +222,9 @@
       "event": "PreToolUse",
       "matcher": "Bash",
       "script": "validate-bash.sh",
-      "targets": ["project"],
+      "targets": [
+        "project"
+      ],
       "entry": {
         "type": "command",
         "command": "test -x \"$HOME/.claude/hooks/validate-bash.sh\" && \"$HOME/.claude/hooks/validate-bash.sh\" || true",
@@ -204,7 +236,9 @@
       "event": "PreToolUse",
       "matcher": "Bash",
       "script": "enforce-uv.sh",
-      "targets": ["project"],
+      "targets": [
+        "project"
+      ],
       "entry": {
         "type": "command",
         "command": "test -x \"$HOME/.claude/hooks/enforce-uv.sh\" && \"$HOME/.claude/hooks/enforce-uv.sh\" || true",
@@ -216,16 +250,60 @@
       "event": "PreToolUse",
       "matcher": "Bash",
       "script": "enforce-pnpm.sh",
-      "targets": ["project"],
+      "targets": [
+        "project"
+      ],
       "entry": {
         "type": "command",
         "command": "test -x \"$HOME/.claude/hooks/enforce-pnpm.sh\" && \"$HOME/.claude/hooks/enforce-pnpm.sh\" || true",
         "timeout": 10
       },
       "why": "DENIES npm/yarn/npx in favour of pnpm or bun. Moved 2026-09-21 (P5.6): the package-manager policy is machine-wide (.zshrc wrappers block the same in every shell). 0 would-denies in 296 recent commands elsewhere"
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "Bash",
+      "script": "enforce-gh-ssh-only.sh",
+      "script_path": "$HOME/.claude/hooks/enforce-gh-ssh-only.sh",
+      "targets": [
+        "project"
+      ],
+      "entry": {
+        "type": "command",
+        "command": "test -x \"$HOME/.claude/hooks/enforce-gh-ssh-only.sh\" && \"$HOME/.claude/hooks/enforce-gh-ssh-only.sh\" || true",
+        "timeout": 5
+      },
+      "why": "DENIES gh auth login / setup-git / refresh, which re-add HTTPS credential helpers and break SSH-only auth (D-20260917-09). F1 travelled the census, secret-probe and herdr guards and MISSED this one: it was registered only in ~/.claude/settings.json (user, so c only) and in this repo's own .claude/settings.json (so pj only HERE). Under pj in any other project nothing registered it -- measured at P6b. script_path points at the EXISTING dot-claude file rather than stowing a copy: the two copies are byte-identical (verified 2026-09-21, sha 58a9712ed1c1, 4715 b), that path is already occupied so stow would conflict, and nothing in dot-claude is edited. Project target only, and this repo's own entry is removed in the same commit, so it fires ONCE per session, not twice"
+    },
+    {
+      "event": "SessionStart",
+      "script": "MemoryRootGuard.sh",
+      "script_path": "$HOME/.claude/hooks/MemoryRootGuard.sh",
+      "targets": [
+        "project"
+      ],
+      "entry": {
+        "type": "command",
+        "command": "test -x \"$HOME/.claude/hooks/MemoryRootGuard.sh\" && \"$HOME/.claude/hooks/MemoryRootGuard.sh\" || true",
+        "timeout": 10
+      },
+      "why": "WARNS when the session's cwd is a subdirectory of a hub root, so opening a subdir does not spawn a fresh empty memory store and re-scatter memory. Carried under pj at the P8b gate 2026-09-21: its HUB_ROOTS list holds exactly one path, and that path is a pj project, so the guard was aimed squarely at pj sessions and fired in none of them. LifeOS's file, reached by script_path, not copied. Never blocks: always exits 0"
+    },
+    {
+      "event": "SessionStart",
+      "script": "herdr-agent-state.sh",
+      "script_path": "$HOME/.claude/hooks/herdr-agent-state.sh",
+      "targets": [
+        "project"
+      ],
+      "entry": {
+        "type": "command",
+        "command": "test -x \"$HOME/.claude/hooks/herdr-agent-state.sh\" && \"$HOME/.claude/hooks/herdr-agent-state.sh\" session || true",
+        "timeout": 10
+      },
+      "why": "Records the session's herdr agent state. Carried under pj at the P8b gate 2026-09-21: pj sessions run inside herdr panes, and this fired only under c. HERDR OWNS THIS FILE and rewrites it on integration update (its header says so), which is exactly why the entry points at its path via script_path instead of stowing a copy that would go stale silently. The `session` argument matches the user-level registration's shape"
     }
   ],
-
   "_traveller_note": [
     "THE test -x ... || true SHAPE ON A PreToolUse GUARD IS DELIBERATE. A deny is JSON on",
     "stdout under exit 0, so the guard still denies through it; and a registration that",
@@ -237,7 +315,6 @@
     "session, not two. A c session in this repo therefore no longer has them; LifeOS can",
     "register the stowed path itself if it wants them under c (note in the P5.6 report)."
   ],
-
   "_sessionstart_note": [
     "THE COMMAND STRINGS ABOVE ARE COPIED BYTE-FOR-BYTE FROM THE LIVE settings.json.",
     "That is not fussiness. is_registered() compares the command EXACTLY, so a",
@@ -261,7 +338,6 @@
     "toward silence, and silence is indistinguishable from health. That is the exact",
     "failure ccw-watch exists to catch, and it was happening to ccw-watch."
   ],
-
   "_requires_note": [
     "The requires gate on enforce-herdr-skill.sh is load-bearing, and it is the reason",
     "this manifest has a requires field at all.",
