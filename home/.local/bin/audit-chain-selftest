@@ -1,0 +1,212 @@
+#!/usr/bin/env bash
+# ============================================================================
+#  audit-chain-selftest -- proves step 3 of _audit-chain, the C-* commit trailers
+# ============================================================================
+# Written 2026-09-21 alongside the CLAUDE_CODE_SESSION_ID fallback (F4,
+# W-20260921-16). Until then step 3 had no test at all, which is how it ran for
+# three days writing `C-Sess-Id:` with an EMPTY value in every session that was
+# not launched by the `c` family -- pj, a Remote Control bridge session, and
+# `claude -p` alike. An empty trailer and a correct one look identical to
+# anything that only checks the key is present, so the arms below check VALUES.
+#
+# WHY THE `c`-FAMILY ARMS ARE THE IMPORTANT ONES. The fallback is only safe
+# because CLAUDE_SESSION_ID (set by the claude-session-env SessionStart hook)
+# takes precedence over CLAUDE_CODE_SESSION_ID (exported by the harness into
+# every Bash tool subprocess). Arms 4-6 set the two variables to DIFFERENT
+# values and assert which one lands. A test that set them to the same value
+# would pass whichever won, and would therefore prove nothing -- the
+# all-cases-identical trap this repo keeps re-learning.
+#
+# HOW THE HOOK IS INVOKED. _audit-chain reads `basename "$0"` to decide which
+# hook it is, so each case runs it through a symlink named prepare-commit-msg.
+# A real `git commit` is deliberately NOT used: it would drag in the pre-commit
+# leak scan and the operator's own git config, and the arms would then be
+# measuring three tools at once.
+#
+# HOME IS OVERRIDDEN to the fixture root so the C-Wt-Path arm exercises the
+# $HOME-relative branch without a repo in the operator's real home.
+# ============================================================================
+
+set -uo pipefail
+
+TOOL="${AUDIT_CHAIN_TOOL:-$HOME/.config/git/hooks/_audit-chain}"
+# ../../ -- this file lives at home/.local/bin/, the hook at home/.config/git/hooks/.
+# One ../ too few lands on home/.local/.config/, which does not exist, and the miss is
+# invisible on a stowed machine because $HOME/.config/... answers first. The cases this
+# fallback EXISTS for -- a fresh checkout before stow, a consumer box, CI -- are exactly
+# the ones that would have got "cannot find" and exit 2.
+[ -x "$TOOL" ] || TOOL="$(dirname "$0")/../../.config/git/hooks/_audit-chain"
+[ -x "$TOOL" ] || { printf 'selftest: cannot find _audit-chain (tried %s)\n' "$TOOL" >&2; exit 2; }
+TOOL="$(cd "$(dirname "$TOOL")" && pwd -P)/$(basename "$TOOL")"
+
+PASS=0; FAIL=0
+ROOT="$(mktemp -d "${TMPDIR:-/tmp}/audit-chain-selftest.XXXXXX")"
+ROOT="$(cd "$ROOT" && pwd -P)"   # physical path: the C-Wt-Path arm compares against $HOME
+# NOT cleaned up on purpose -- a delete here would route through the Trash
+# wrapper and fill the Trash with fixture trees. The OS reaps TMPDIR; the path
+# is printed at the end so a failing arm can be inspected by hand.
+
+ok(){  PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
+bad(){ FAIL=$((FAIL+1)); printf '  FAIL %s\n     want: %s\n     got : %s\n' "$1" "$2" "$3"; }
+want(){    case "$3" in *"$2"*) ok "$1";; *) bad "$1" "contains: $2" "$(printf '%s' "$3" | tr '\n' '|')";; esac; }
+wantnot(){ case "$3" in *"$2"*) bad "$1" "must NOT contain: $2" "$(printf '%s' "$3" | tr '\n' '|')";; *) ok "$1";; esac; }
+wanteq(){  [ "$2" = "$3" ] && ok "$1" || bad "$1" "$2" "$3"; }
+
+# ---- the fixture repo ------------------------------------------------------
+# One repo, reused. Each case gets a fresh message file, so nothing leaks
+# between arms except the repo's branch, which two arms change on purpose.
+REPO="$ROOT/home/work/scratch-repo"
+mkdir -p "$REPO" "$ROOT/home/bin"
+ln -sf "$TOOL" "$ROOT/home/bin/prepare-commit-msg"
+HOOK="$ROOT/home/bin/prepare-commit-msg"
+git -C "$REPO" init -q -b main >/dev/null 2>&1
+git -C "$REPO" config user.email selftest@example.invalid
+git -C "$REPO" config user.name  selftest
+git -C "$REPO" config core.hooksPath "$ROOT/home/bin"   # never the operator's chain
+printf 'x\n' > "$REPO/f.txt"
+git -C "$REPO" add f.txt >/dev/null 2>&1
+git -C "$REPO" -c core.hooksPath=/dev/null commit -q --no-verify -m seed >/dev/null 2>&1
+SEED="$(git -C "$REPO" rev-parse HEAD)"
+
+# run <msg-body> [env assignments...] -- writes MSG, OUT (message after), ERR, RC
+run(){
+    local body="$1"; shift
+    MSGF="$ROOT/msg.$$.$RANDOM"
+    printf '%s\n' "$body" > "$MSGF"
+    ERRF="$ROOT/err.$$.$RANDOM"
+    # env wants every OPTION before every assignment, and gives no error worth the
+    # name when you get it wrong: it treats -u as the command and exits 127. Arms
+    # 10-12 then PASSED, because "the hook left the message alone" is precisely what
+    # they assert, and only arm 9 -- which checks a key is PRESENT -- caught it
+    # (2026-09-21, twice: once in run(), once in a single arm's own argument order).
+    # So run() does not TRUST the caller's order, it sorts the two kinds itself. An
+    # arm can then list -u flags and assignments in whatever order reads best.
+    local flags=() assigns=() a
+    for a in "$@"; do
+        case "$a" in
+            -*)   flags+=("$a") ;;
+            *=*)  assigns+=("$a") ;;
+            *)    flags+=("$a") ;;   # the operand of a preceding -u
+        esac
+    done
+    # CLAUDE_WEB_URL and CLAUDE_TRAILERS_DISABLE are cleared for EVERY arm, always. Both
+    # are documented knobs a human may have exported in the shell running this suite, and
+    # either one silently changes the verdict: CLAUDE_TRAILERS_DISABLE=1 fails arms 1-14
+    # and 20-24 while arms 15-19 pass for the wrong reason, and CLAUDE_WEB_URL makes $web
+    # non-empty unconditionally, so the negative controls 10 and 11 fail. An arm that wants
+    # one of them sets it in "$@", which env applies after these.
+    ( cd "$REPO" && env -u CLAUDE_WEB_URL -u CLAUDE_TRAILERS_DISABLE "${flags[@]+"${flags[@]}"}" "${assigns[@]+"${assigns[@]}"}" HOME="$ROOT/home" "$HOOK" "$MSGF" ) 2>"$ERRF"
+    RC=$?
+    OUT="$(cat "$MSGF")"
+    ERR="$(cat "$ERRF")"
+}
+# value of a trailer key in OUT; prints nothing when the key is absent
+val(){ printf '%s\n' "$OUT" | grep -i -m1 "^$1:" | sed -E "s/^[^:]*:[[:space:]]*//"; }
+has(){ printf '%s\n' "$OUT" | grep -qi "^$1:" && echo yes || echo no; }
+count(){ printf '%s\n' "$OUT" | grep -i -c "^$1:" | tr -d ' '; }
+
+PJ_ID="11111111-2222-3333-4444-555555555555"
+C_ID="99999999-8888-7777-6666-555555555555"
+URL="https://claude.ai/code/session_01SELFTESTSELFTESTSELF"
+WITH_URL="a commit
+
+Claude-Session: $URL"
+
+# ------------------------------------------------- 1-3  the pj shape --------
+printf '\nPJ SHAPE (only CLAUDE_CODE_SESSION_ID, message carries the URL)\n'
+run "$WITH_URL" -u CLAUDE_SESSION_ID CLAUDE_CODE_SESSION_ID="$PJ_ID"
+wanteq '1  C-Sess-Id carries the harness id' "$PJ_ID" "$(val C-Sess-Id)"
+wanteq '2  C-Web-Id carries the harvested URL' "$URL" "$(val C-Web-Id)"
+wantnot '3  the retired Claude-Session: line is gone' 'Claude-Session:' "$OUT"
+
+# ------------------------------------------------- 4-6  the `c` shape -------
+printf '\nC-FAMILY SHAPE (the hook ran; its variable must win)\n'
+run "$WITH_URL" CLAUDE_SESSION_ID="$C_ID" CLAUDE_CODE_SESSION_ID="$PJ_ID"
+wanteq '4  CLAUDE_SESSION_ID wins over the fallback' "$C_ID" "$(val C-Sess-Id)"
+wantnot '5  and the fallback value does NOT appear' "$PJ_ID" "$OUT"
+run "$WITH_URL" CLAUDE_SESSION_ID="$C_ID" -u CLAUDE_CODE_SESSION_ID
+wanteq '6  with no fallback var at all, unchanged' "$C_ID" "$(val C-Sess-Id)"
+
+# ------------------------------------------------- 7-9  the script shape ----
+printf '\nSCRIPT SHAPE (open-items / pj-wrap: an id, but no URL in the message)\n'
+run "open-items: add W-99999999-01 -- fixture" -u CLAUDE_SESSION_ID CLAUDE_CODE_SESSION_ID="$PJ_ID"
+wanteq '7  C-Sess-Id filled although no URL was harvestable' "$PJ_ID" "$(val C-Sess-Id)"
+wanteq '8  C-Web-Id is present and empty' "" "$(val C-Web-Id)"
+wanteq '9  C-Web-Id key exists all the same' yes "$(has C-Web-Id)"
+
+# ------------------------------------------------ 10-12 negative controls ---
+printf '\nNEGATIVE CONTROLS (a non-Claude commit must stay untouched)\n'
+run "a plain commit from a terminal" -u CLAUDE_SESSION_ID -u CLAUDE_CODE_SESSION_ID
+wanteq '10 no C-Sess-Id at all' no "$(has C-Sess-Id)"
+wanteq '11 the message is byte-identical' "a plain commit from a terminal" "$OUT"
+run "$WITH_URL" -u CLAUDE_SESSION_ID -u CLAUDE_CODE_SESSION_ID
+wanteq '12 URL but no id: the key is present and EMPTY (documented)' "" "$(val C-Sess-Id)"
+
+# ------------------------------------------------ 13-14 idempotency ---------
+printf '\nIDEMPOTENCY (--amend must not double a key)\n'
+run "$WITH_URL" -u CLAUDE_SESSION_ID CLAUDE_CODE_SESSION_ID="$PJ_ID"
+( cd "$REPO" && env -u CLAUDE_WEB_URL -u CLAUDE_TRAILERS_DISABLE -u CLAUDE_SESSION_ID CLAUDE_CODE_SESSION_ID="$PJ_ID" HOME="$ROOT/home" "$HOOK" "$MSGF" ) >/dev/null 2>&1
+OUT="$(cat "$MSGF")"
+wanteq '13 C-Sess-Id appears exactly once after a second run' 1 "$(count C-Sess-Id)"
+wanteq '14 and still carries the same value' "$PJ_ID" "$(val C-Sess-Id)"
+
+# ------------------------------------------------ 15-19 the opt-outs --------
+printf '\nOPT-OUTS (both knobs, and what each one still does)\n'
+git -C "$REPO" config trailers.disable true
+run "$WITH_URL" -u CLAUDE_SESSION_ID CLAUDE_CODE_SESSION_ID="$PJ_ID"
+wanteq '15 trailers.disable: no C-Sess-Id' no "$(has C-Sess-Id)"
+wantnot '16 trailers.disable: the URL line is STILL stripped' 'Claude-Session:' "$OUT"
+want    '17 trailers.disable: the skip is announced' 'trailers.disable set for this repo' "$ERR"
+git -C "$REPO" config --unset trailers.disable
+run "$WITH_URL" -u CLAUDE_SESSION_ID CLAUDE_CODE_SESSION_ID="$PJ_ID" CLAUDE_TRAILERS_DISABLE=1
+wanteq '18 CLAUDE_TRAILERS_DISABLE: no C-Sess-Id' no "$(has C-Sess-Id)"
+want    '19 and the stderr names the ENV, not the repo knob' 'set in the environment' "$ERR"
+
+# ------------------------------------------------ 20-24 commit context ------
+printf '\nCOMMIT CONTEXT (the other three keys)\n'
+run "$WITH_URL" -u CLAUDE_SESSION_ID CLAUDE_CODE_SESSION_ID="$PJ_ID"
+wanteq '20 C-Wt-Path is $HOME-relative' "~/work/scratch-repo" "$(val C-Wt-Path)"
+wanteq '21 C-Worktree is the folder name' "scratch-repo" "$(val C-Worktree)"
+wanteq '22 C-Branch is the branch' "main" "$(val C-Branch)"
+git -C "$REPO" checkout -q --detach "$SEED"
+run "$WITH_URL" -u CLAUDE_SESSION_ID CLAUDE_CODE_SESSION_ID="$PJ_ID"
+wanteq '23 detached HEAD: C-Branch present and empty' "" "$(val C-Branch)"
+git -C "$REPO" checkout -q main
+wanteq '24 the hook always exits 0' 0 "$RC"
+
+# ------------------------------------------------ 25-26 harness control -----
+# The point of this repo's count-and-absence rule: prove the checkers above can
+# still REPORT a failure. Without it, a runner broken into always-ok would print
+# the same green wall as a passing suite.
+printf '\nHARNESS CONTROL (can this runner still fail?)\n'
+_p=$PASS; _f=$FAIL
+wanteq 'probe (expected to fail)' "this-value" "that-value" >/dev/null
+_detected=$(( FAIL - _f ))
+PASS=$_p; FAIL=$_f
+wanteq '25 a mismatch IS detected by wanteq' 1 "$_detected"
+_p=$PASS; _f=$FAIL
+want 'probe (expected to fail)' 'needle-that-is-absent' 'haystack' >/dev/null
+_detected=$(( FAIL - _f ))
+PASS=$_p; FAIL=$_f
+wanteq '26 a missing needle IS detected by want' 1 "$_detected"
+
+# ------------------------------------------------ 27-28 regression guards ---
+# 27 is the review finding that this file's own repo-relative fallback was one ../ short,
+# invisible on a stowed machine because $HOME answered first. It is checked here rather
+# than trusted, because the case it protects -- a fresh checkout, a consumer box, CI --
+# is precisely the case nobody runs by hand.
+printf '\nREGRESSION GUARDS\n'
+_rel="$(dirname "$0")/../../.config/git/hooks/_audit-chain"
+wanteq '27 the repo-relative fallback path resolves' yes "$([ -f "$_rel" ] && echo yes || echo no)"
+# 28: the suite must not inherit a verdict from the operator's shell.
+run "$WITH_URL" -u CLAUDE_SESSION_ID CLAUDE_CODE_SESSION_ID="$PJ_ID" >/dev/null 2>&1
+_baseline="$(val C-Sess-Id)"
+( export CLAUDE_TRAILERS_DISABLE=1; export CLAUDE_WEB_URL=https://example.invalid/leaked
+  run "$WITH_URL" -u CLAUDE_SESSION_ID CLAUDE_CODE_SESSION_ID="$PJ_ID"
+  printf '%s' "$(val C-Sess-Id)" > "$ROOT/inherited" )
+wanteq '28 an exported CLAUDE_TRAILERS_DISABLE / CLAUDE_WEB_URL cannot change the verdict' "$_baseline" "$(cat "$ROOT/inherited")"
+
+printf '\nfixtures: %s\n' "$ROOT"
+printf 'tool: %s\n' "$TOOL"
+printf '%s passed, %s failed\n\n' "$PASS" "$FAIL"
+[ "$FAIL" -eq 0 ]

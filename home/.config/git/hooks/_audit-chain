@@ -83,8 +83,14 @@ fi
 # 3. Claude Code session attribution -- prepare-commit-msg only.
 #    Stamp five independent, machine-parseable trailers on commits made inside a
 #    Claude Code session:
-#      C-Sess-Id: <local UUID>    -- from $CLAUDE_SESSION_ID (set by the SessionStart
-#                                    hook); maps to the on-disk transcript.
+#      C-Sess-Id: <local UUID>    -- the session's on-disk transcript UUID. Read from
+#                                    $CLAUDE_SESSION_ID (set by the claude-session-env
+#                                    SessionStart hook) and, when that is unset, from
+#                                    $CLAUDE_CODE_SESSION_ID, which the harness exports
+#                                    into every Bash tool subprocess with no hook and no
+#                                    registration. See step 3's own comment for why the
+#                                    fallback exists and why it cannot change the `c`
+#                                    launcher's behaviour.
 #      C-Web-Id:  <claude.ai URL> -- harvested from the harness-appended
 #                                    "Claude-Session: <url>" line (the only live source;
 #                                    the web id is exposed to no hook/env). Blank when
@@ -120,8 +126,31 @@ if [ "$hook" = "prepare-commit-msg" ]; then
             web="$(grep -i -m1 '^Claude-Session:' "$msg_file" \
                 | sed -E 's/^[Cc]laude-[Ss]ession:[[:space:]]*//')"
         fi
-        # Act only on Claude commits (id set) or when a URL was harvested.
-        if [ -n "${CLAUDE_SESSION_ID:-}" ] || [ -n "$web" ]; then
+        # The session id, from the first source that has it.
+        #   CLAUDE_SESSION_ID      -- written by the claude-session-env SessionStart hook
+        #                             into $CLAUDE_ENV_FILE. That hook is registered ONLY
+        #                             in ~/.claude/settings.json, so it runs under the `c`
+        #                             family and NOWHERE ELSE: not under the `pj` launcher
+        #                             (which loads settings.project.json instead), not in a
+        #                             Remote Control bridge session, not under `claude -p`.
+        #   CLAUDE_CODE_SESSION_ID -- exported by the harness into every Bash tool
+        #                             subprocess. No hook, no registration, no settings
+        #                             file. Verified 2026-09-21: its value IS the on-disk
+        #                             transcript UUID, i.e. the same thing the first
+        #                             variable carries.
+        # Order matters and is the whole safety argument: where the hook ran, its variable
+        # wins, so the `c` family's commits are byte-identical to before.
+        # What this fixed (measured 2026-09-21, W-20260921-16): the newest 30 commits in
+        # BOTH fifty-shades-of-dotfiles and dot-claude carried `C-Sess-Id:` with an EMPTY
+        # value. The block below still fired, because the harness-appended
+        # `Claude-Session:` URL was harvested, so the key was written with nothing after
+        # it -- which reads like a stamped commit and is not one.
+        sid="${CLAUDE_SESSION_ID:-${CLAUDE_CODE_SESSION_ID:-}}"
+        # Act only on Claude commits (id set) or when a URL was harvested. This gate reads
+        # $sid rather than CLAUDE_SESSION_ID, so a commit made by a SCRIPT inside a Claude
+        # session -- open-items, pj-wrap: no `Claude-Session:` line in the message, so no
+        # URL to harvest -- is stamped too. Those carried no C-* trailers AT ALL before.
+        if [ -n "$sid" ] || [ -n "$web" ]; then
             # Migrate: drop the retired single key so it does not persist alongside the
             # new ones. Portable in-place delete (GNU sed: -i ; BSD/macOS sed: -i '').
             if grep -qi '^Claude-Session:' "$msg_file"; then
@@ -169,9 +198,9 @@ if [ "$hook" = "prepare-commit-msg" ]; then
             # trailers, the printf fallback still writes the key (also covers a missing
             # interpret-trailers).
             if ! grep -qi '^C-Sess-Id:' "$msg_file"; then
-                git interpret-trailers --trailer "C-Sess-Id: ${CLAUDE_SESSION_ID:-}" \
+                git interpret-trailers --trailer "C-Sess-Id: ${sid}" \
                     --in-place "$msg_file" 2>/dev/null \
-                    || printf '\nC-Sess-Id: %s\n' "${CLAUDE_SESSION_ID:-}" >> "$msg_file"
+                    || printf '\nC-Sess-Id: %s\n' "${sid}" >> "$msg_file"
             fi
             if ! grep -qi '^C-Web-Id:' "$msg_file"; then
                 git interpret-trailers --trailer "C-Web-Id: ${web}" \
