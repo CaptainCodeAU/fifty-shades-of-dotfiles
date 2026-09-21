@@ -7,6 +7,9 @@
 #   pj-health --full          also run every framework selftest and quote its pass count
 #   pj-health --live          also launch ONE headless pj probe (an API call, haiku) and
 #                             check the start card printed and a dummy secret was denied
+#   pj-health --profile <n>   grade the run as profile <n> (F5a): its declared config_dir
+#                             decides where transcripts are looked for. Defaults to
+#                             $PJ_PROFILE, which `pj` exports, then to `default`
 #   pj-health --quiet         print only FAIL and NOT MEASURED rows (and the summary)
 #   pj-health --json          one JSON object for scripts: rows, summary, exit code
 #   pj-health --selftest      prove every arm against fixtures (runs pj-health-selftest)
@@ -60,22 +63,43 @@ PLUGIN_DIRS_EXPECTED="skills/herdr skills/AgentRelay skills/ISA pj-voice pj"
 LAUNCH_LOG_WINDOW=20
 
 FULL=0; LIVE=0; QUIET=0; JSON=0
+PROFILE="${PJ_PROFILE:-default}"
+_want_profile=0
 for a in "$@"; do
+  if [ "$_want_profile" -eq 1 ]; then PROFILE="$a"; _want_profile=0; continue; fi
   case "$a" in
     --full) FULL=1 ;; --live) LIVE=1 ;; --quiet) QUIET=1 ;; --json) JSON=1 ;;
+    --profile) _want_profile=1 ;;
+    --profile=*) PROFILE="${a#--profile=}" ;;
     --selftest) exec pj-health-selftest ;;
     -h|--help) sed -n '2,45p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "pj-health: REFUSED unknown arg: $a (--help)" >&2; exit 2 ;;
   esac
 done
+[ "$_want_profile" -eq 1 ] && { echo "pj-health: REFUSED: --profile needs a name" >&2; exit 2; }
 command -v jq >/dev/null 2>&1 || { echo "pj-health: REFUSED: jq is required" >&2; exit 2; }
 
 PJ_HOME="${PJ_HOME:-$HOME/.claude}"
 PJ_BIN_DIR="${PJ_BIN_DIR:-$HOME/.local/bin}"
 PJ_STATE_DIR="${PJ_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/pj}"
-PJ_TRANSCRIPTS_DIR="${PJ_TRANSCRIPTS_DIR:-$PJ_HOME/projects}"
 SETTINGS_PROJECT="${CLAUDE_PROJECT_SETTINGS_FILE:-$PJ_HOME/settings.project.json}"
 MACHINE_FILE="${PJ_MACHINE_FILE:-$HOME/.config/pj/machine}"
+PROFILE_DIR="${PJ_PROFILE_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/pj/profiles}"
+
+# --- profiles and the three roots (F5a) --------------------------------------------
+# RECORDS is always $PJ_HOME (~/.claude): the drawer, the rulings, pj-global, the project
+# settings, the plugin dirs. MACHINE is always $PJ_STATE_DIR and the machine file. Only
+# CONFIG moves with a profile, and the only CONFIG reader in this tool is the transcript
+# search below.
+profile_key(){   # profile_key <name> <key> -> value, or nothing
+  local f="$PROFILE_DIR/$1"
+  [ -r "$f" ] || return 0
+  sed -n "s/^$2:[[:space:]]*//p" "$f" 2>/dev/null | sed 's/[[:space:]]*$//' | head -1
+}
+expand_tilde(){ case "$1" in '~/'*) printf '%s/%s' "$HOME" "${1#\~/}" ;; *) printf '%s' "$1" ;; esac; }
+PROFILE_CONFIG_DIR="$(expand_tilde "$(profile_key "$PROFILE" config_dir)")"
+[ -n "$PROFILE_CONFIG_DIR" ] || PROFILE_CONFIG_DIR="$PJ_HOME"
+PJ_TRANSCRIPTS_DIR="${PJ_TRANSCRIPTS_DIR:-$PROFILE_CONFIG_DIR/projects}"
 if [ -z "${PJ_DOTFILES:-}" ]; then
   _self="$(readlink -f "$0" 2>/dev/null || echo "$0")"
   PJ_DOTFILES="$(dirname "$(dirname "$(dirname "$(dirname "$_self")")")")"
@@ -101,8 +125,18 @@ row(){   # row STATE name detail
 }
 
 # ---------------------------------------------------------- project ctx ----
-TOPLEVEL=""; IN_REPO=0
-if TOPLEVEL="$(git rev-parse --show-toplevel 2>/dev/null)"; then IN_REPO=1; fi
+# --git-common-dir, not --show-toplevel: from inside a linked worktree the first gives the
+# MAIN repo, which is the key open-items, pj-start-card, pj-session-end, decided and (since
+# F5a) pj-launch-check all use. A c2 session runs in a worktree, so this tool would
+# otherwise look for its evidence under a key nothing writes.
+# KEY and PROJECT are initialised HERE, not only inside the in-repo branch. `set -u` is on,
+# so an unset KEY is a fatal error the moment anything outside that branch names it -- which
+# is exactly what the F5a transcript search did, killing every outside-a-repo row until the
+# selftest caught it.
+TOPLEVEL=""; IN_REPO=0; KEY=""; PROJECT=""
+if _gcd="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" && [ -n "$_gcd" ]; then
+  TOPLEVEL="$(dirname "$_gcd")"; IN_REPO=1
+fi
 if [ "$IN_REPO" -eq 1 ]; then
   KEY="$(printf '%s' "$TOPLEVEL" | sed 's#[/._]#-#g')"
   PROJECT="$(basename "$TOPLEVEL")"
@@ -429,6 +463,99 @@ elif [ "$FULL" -eq 0 ]; then row PASS selftests "$stn selftests present, not run
 elif [ -n "$stfail" ]; then row FAIL selftests "$stn run, failing:$stfail"
 else row PASS selftests "$stn run, all rc 0:$stres"; fi
 
+# M14b profile (F5a). Which profile this run is grading, and whether its declared
+# config_dir exists yet. A config dir that does not exist is a WARN, not a FAIL: it is the
+# NORMAL state of a freshly declared profile, and it names the one thing only a human can
+# do. Measured 2026-09-21: a fresh CLAUDE_CONFIG_DIR exits 1 with "Not logged in - Please
+# run /login", and separately refuses the workspace until a trust dialog is accepted. This
+# row is what stops that being discovered at the moment you wanted to work.
+if [ ! -d "$PROFILE_DIR" ]; then
+  row NOTM profile "no profiles dir at $(tilde "$PROFILE_DIR"); pj falls back to its built-in argv (that is a supported state, not a fault); fix: stow -R the dotfiles"
+elif [ "$PROFILE" != default ] && [ ! -r "$PROFILE_DIR/$PROFILE" ]; then
+  row FAIL profile "profile '$PROFILE' not found at $(tilde "$PROFILE_DIR")/$PROFILE; fix: name one of: $(ls "$PROFILE_DIR" 2>/dev/null | paste -sd ' ' -)"
+elif [ ! -d "$PROFILE_CONFIG_DIR" ]; then
+  row WARN profile "profile '$PROFILE' declares config_dir $(tilde "$PROFILE_CONFIG_DIR"), which does not exist yet. A fresh config dir has no credentials and no folder trust, so the FIRST launch on it needs a human: run pj --profile $PROFILE in a pane, then /login, then accept the trust dialog"
+else
+  row PASS profile "profile '$PROFILE', config_dir $(tilde "$PROFILE_CONFIG_DIR"), transcripts under $(tilde "$PJ_TRANSCRIPTS_DIR")"
+fi
+
+# M14c profile siblings (F5a, ruled by Gavin at the gate). Profiles are SIBLING directories
+# under ~, never nested. A nested config dir is a FAIL: ~/.claude/<x> would put a profile's
+# transcripts inside the RECORDS repo, where dot-claude would try to track them and
+# open-items' drawer scan would walk them.
+# A dot-claude worktree at a different depth than ~/.claude is a WARN, not a FAIL: nothing
+# is measured to break, and a FAIL on an unmeasured hazard is a false alarm that teaches
+# you to skip the row.
+if [ ! -d "$PROFILE_DIR" ]; then
+  : # already said above; one silence is enough
+else
+  sib_fail=""; sib_warn=""; sib_n=0
+  for pf in "$PROFILE_DIR"/*; do
+    [ -f "$pf" ] || continue
+    sib_n=$((sib_n+1))
+    cda="$(expand_tilde "$(profile_key "$(basename "$pf")" config_dir)")"
+    [ -n "$cda" ] || continue
+    for pg in "$PROFILE_DIR"/*; do
+      [ -f "$pg" ] || continue
+      [ "$pf" = "$pg" ] && continue
+      cdb="$(expand_tilde "$(profile_key "$(basename "$pg")" config_dir)")"
+      [ -n "$cdb" ] || continue
+      case "$cda" in "$cdb"/*) sib_fail="${sib_fail:+$sib_fail, }$(basename "$pf") ($(tilde "$cda")) is INSIDE $(basename "$pg") ($(tilde "$cdb"))" ;; esac
+    done
+    # Depth. ~/.claude is ONE level under ~, and the rule is that profiles are its
+    # siblings. Two different oddities, worth two different sentences: a config dir that
+    # is not under ~ at all is not "deep", it is somewhere else entirely, and saying
+    # "deeper than ~/.claude" about /var/folders/... reads as a broken instrument.
+    # Both are WARN, never FAIL: neither is measured to break anything.
+    case "$cda" in
+      "$HOME"/*)
+        rel="${cda#$HOME/}"
+        case "$rel" in */*) sib_warn="${sib_warn:+$sib_warn, }$(basename "$pf") at $(tilde "$cda") is deeper than ~/.claude" ;; esac ;;
+      *) sib_warn="${sib_warn:+$sib_warn, }$(basename "$pf") at $cda is not under ~ at all" ;;
+    esac
+  done
+  if [ -n "$sib_fail" ]; then
+    row FAIL profile-siblings "$sib_fail; fix: profiles are siblings under ~ (~/.claude, ~/.claude-scratch), never nested"
+  elif [ -n "$sib_warn" ]; then
+    row WARN profile-siblings "$sib_warn"
+  else
+    row PASS profile-siblings "$sib_n profile(s), all config dirs are siblings under ~"
+  fi
+fi
+
+# M14d records pinned (F5a). open-items and decided must resolve the drawer and the rulings
+# under ~/.claude WHATEVER the session's config dir is, or a profile session would file
+# items into a register nobody else reads. Measured by RUNNING them with a foreign
+# CLAUDE_CONFIG_DIR and reading where they say they point -- not by reading the source,
+# which would only prove what the source says today.
+# The control is the same call WITHOUT the foreign variable: both must answer ~/.claude,
+# and if the unset arm ever stops doing so the instrument is broken, not the tool.
+if [ "$IN_REPO" -eq 0 ]; then
+  row NOTM records-pinned "not in a git repo (the check asks open-items where THIS repo's drawer is)"
+else
+  rp_ctl="$(open-items --where 2>/dev/null)"; rp_ctl_rc=$?
+  rp_fork="$(CLAUDE_CONFIG_DIR="$HOME/.claude-pj-health-probe" open-items --where 2>/dev/null)"
+  if [ "$rp_ctl_rc" -gt 1 ] || [ -z "$rp_ctl" ]; then
+    row NOTM records-pinned "open-items --where printed nothing here (rc $rp_ctl_rc), so the control never hit and the comparison proves nothing"
+  elif [ "$rp_ctl" != "$rp_fork" ]; then
+    row FAIL records-pinned "open-items followed CLAUDE_CONFIG_DIR: unset -> $(tilde "$rp_ctl"), forked -> $(tilde "$rp_fork"). The drawer must NOT fork; fix: OPEN_ITEMS_PROJECTS_DIR must stay \$HOME/.claude/projects"
+  else
+    # The "is it under ~/.claude" half is asserted ONLY on a LIVE run. A seamed run points
+    # PJ_HOME and the drawer at fixtures on purpose, and asserting the real path against a
+    # fixture would make the row fail for being UNDER TEST rather than for being wrong --
+    # which is how a green suite turns red without anything breaking. The DIFFERENTIAL
+    # above is the half that actually catches the drift, and it runs either way.
+    if [ "$PJ_HOME" != "$HOME/.claude" ] || [ -n "${PJ_LAUNCHER:-}" ] || [ -n "${OPEN_ITEMS_PROJECTS_DIR:-}" ]; then
+      row PASS records-pinned "open-items gives the same answer with and without a foreign CLAUDE_CONFIG_DIR (root not asserted: seamed run)"
+    else
+      case "$rp_ctl" in
+        "$HOME"/.claude/*) row PASS records-pinned "open-items answers $(tilde "$rp_ctl") with and without a foreign CLAUDE_CONFIG_DIR" ;;
+        *) row FAIL records-pinned "open-items resolves outside ~/.claude: $(tilde "$rp_ctl"); fix: OPEN_ITEMS_PROJECTS_DIR must stay \$HOME/.claude/projects" ;;
+      esac
+    fi
+  fi
+fi
+
 # M15 launch log (F3; pj-launch-check writes it). WARN, never FAIL: a stale launch is history, not wiring.
 LAUNCH_LOG="$PJ_STATE_DIR/launches.log"
 if [ ! -r "$LAUNCH_LOG" ]; then
@@ -644,7 +771,25 @@ fi
 
 # ============================================================== EVIDENCE ==
 TR=""; TR_LIST=""
-if [ "$IN_REPO" -eq 1 ] && [ -d "$PJ_TRANSCRIPTS_DIR/$KEY" ]; then
+# WHERE TO LOOK (F5a). A session's transcript lives under ITS config dir, and a profile
+# session's config dir is not ~/.claude. The launch log is the index that maps them: it
+# lives under ~/.local/state (MACHINE scope, shared by every profile) and carries
+# config_dir= for this project key. So the search covers the profile's own projects dir
+# PLUS every distinct config dir the log has seen for this project, newest first.
+# `config_dir=default` means the variable was unset, which is ~/.claude.
+# Older log lines carry no config_dir= at all and simply contribute nothing.
+TR_DIRS="$PJ_TRANSCRIPTS_DIR"
+if [ "$IN_REPO" -eq 1 ] && [ -r "$PJ_STATE_DIR/launches.log" ]; then
+  while IFS= read -r cd_seen; do
+    [ -n "$cd_seen" ] || continue
+    [ "$cd_seen" = default ] && cd_seen="$PJ_HOME"
+    case " $TR_DIRS " in *" $cd_seen/projects "*) continue ;; esac
+    TR_DIRS="$TR_DIRS $cd_seen/projects"
+  done <<<"$(awk -v k="project=$KEY" '$0 ~ k { for (i = 1; i <= NF; i++) if ($i ~ /^config_dir=/) print substr($i, 12) }' "$PJ_STATE_DIR/launches.log" 2>/dev/null | awk '!seen[$0]++')"
+fi
+TR_SEARCHED=""
+for _td in $TR_DIRS; do [ -d "$_td/$KEY" ] && TR_SEARCHED="${TR_SEARCHED:+$TR_SEARCHED }$_td"; done
+if [ "$IN_REPO" -eq 1 ] && [ -n "$TR_SEARCHED" ]; then
   # newest interactive pj transcript: pj-voice style, not an sdk-cli (-p) probe
   # the style marker lands at the first assistant turn and entrypoint on line 1, so the
   # first 400 lines decide; stop once the newest plus the baseline window are found
@@ -655,14 +800,15 @@ if [ "$IN_REPO" -eq 1 ] && [ -d "$PJ_TRANSCRIPTS_DIR/$KEY" ]; then
     head -n 5 "$f" 2>/dev/null | grep -q -F '"entrypoint":"sdk-cli"' && continue
     TR_LIST="$TR_LIST$f"$'\n'; found=$((found+1))
     [ "$found" -gt "$BASELINE_WINDOW" ] && break
-  done <<<"$(ls -t "$PJ_TRANSCRIPTS_DIR/$KEY"/*.jsonl 2>/dev/null)"
+  done <<<"$(for _td in $TR_SEARCHED; do ls -t "$_td/$KEY"/*.jsonl 2>/dev/null; done | xargs -r ls -t 2>/dev/null || for _td in $TR_SEARCHED; do ls -t "$_td/$KEY"/*.jsonl 2>/dev/null; done)"
   TR="$(printf '%s' "$TR_LIST" | head -1)"
 fi
 RULES_MARKER="$( [ -r "$RULES" ] && head -1 "$RULES" | cut -c1-60 || echo "# pj-global RULES.md")"
 if [ "$IN_REPO" -eq 0 ]; then
   for c in evidence-card evidence-ci-watch evidence-rules evidence-plugins evidence-tokens; do row NOTM "$c" "not in a git repo"; done
 elif [ -z "$TR" ]; then
-  for c in evidence-card evidence-ci-watch evidence-rules evidence-plugins evidence-tokens; do row NOTM "$c" "no interactive pj transcript for this project under $(tilde "$PJ_TRANSCRIPTS_DIR")"; done
+  _tl="$(for _td in ${TR_SEARCHED:-$PJ_TRANSCRIPTS_DIR}; do printf '%s ' "$(tilde "$_td")"; done)"
+  for c in evidence-card evidence-ci-watch evidence-rules evidence-plugins evidence-tokens; do row NOTM "$c" "no interactive pj transcript for this project; searched: ${_tl% }"; done
 else
   ev="$(jq -c --arg m "$RULES_MARKER" -s '
     [ .[] | select(.type=="attachment" and .attachment.type=="hook_success") | (.attachment.stdout // "") ] as $hs
