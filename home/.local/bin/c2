@@ -195,8 +195,15 @@ EOF
 # `pj --dry-run-env` is that question. It touches nothing: no keychain, no ssh-agent, no
 # registry link, no launch (pj selftest arm 20j holds it to that).
 peer_name_for(){  # <cwd> -> the name the launch will get, or empty if pj cannot say
-  ( builtin cd "$1" 2>/dev/null && PJ_PROFILE="$PROFILE" pj --dry-run-env 2>/dev/null ) \
-    | sed -n 's/^CLAUDE_CODE_SESSION_NAME=//p' | head -1
+  #
+  # READ PJ_SESSION_NAME, NOT CLAUDE_CODE_SESSION_NAME. pj emits the first on every launch
+  # and the second only when it computed the name itself, so asking for the second returns
+  # nothing whenever a name is already in the environment -- which is ALWAYS the case here,
+  # because c2 is usually run from inside a pj session and pj exports the name into it.
+  # Measured 2026-09-22: c2 printed "pj could not say" for exactly that reason.
+  local out
+  out="$( builtin cd "$1" 2>/dev/null && PJ_PROFILE="$PROFILE" pj --dry-run-env 2>/dev/null )" || true
+  printf '%s\n' "$out" | sed -n 's/^PJ_SESSION_NAME=//p' | head -1
 }
 
 # --------------------------------------------------------------- direnv ----
@@ -223,9 +230,36 @@ peer_name_for(){  # <cwd> -> the name the launch will get, or empty if pj cannot
 # Every other case is a NOTE and not a stop: no .envrc at all, no .envrc in the main repo,
 # no direnv binary, or a main-repo .envrc that is not itself allowed. None of those is a
 # change c2 should make on its own, and none of them is a reason to refuse a worktree.
-envrc_allowed(){  # <dir> -> rc 0 when direnv would load that dir's .envrc
-  ( builtin cd "$1" 2>/dev/null && direnv status 2>/dev/null ) \
-    | grep -qE '^Found RC allowed 0$'
+# envrc_allowed <dir> -> rc 0 when direnv would load that dir's .envrc.
+#
+# CAPTURE FIRST, THEN TEST, AND THIS IS NOT STYLE. The first version was
+#   ( cd "$1" && direnv status ) | grep -qE '^Found RC allowed 0$'
+# and this script runs `set -uo pipefail`. `grep -q` exits the instant it matches, which
+# SIGPIPEs direnv; direnv dies 141; pipefail makes the PIPELINE 141; and an ALLOWED repo
+# therefore reads as not-allowed. Reproduced deterministically with a long producer
+# (`yes "Found RC allowed 0" | grep -q ...` -> 141, three for three); against direnv's short
+# output it is a race, which is why it fired exactly once in the live proof and then would
+# not reproduce. Found by /code-review, after this file had already recorded that occurrence
+# as "unexplained". It was explained all along, one line up from where I was looking.
+#
+# The repo's own rule, at c2's guard-2 comment: capture the output, then test the string.
+envrc_allowed(){
+  local out
+  out="$( builtin cd "$1" 2>/dev/null && direnv status 2>/dev/null )" || true
+  case $'\n'"$out"$'\n' in
+    *$'\nFound RC allowed 0\n'*) return 0 ;;
+  esac
+  return 1
+}
+
+# envrc_state <dir> -> the one line direnv gives, for quoting in a NOTE. Never pipes.
+envrc_state(){
+  local out line
+  out="$( builtin cd "$1" 2>/dev/null && direnv status 2>&1 )" || true
+  while IFS= read -r line; do
+    case "$line" in "Found RC allowed "*) printf '%s' "$line"; return 0 ;; esac
+  done <<<"$out"
+  printf 'no "Found RC allowed" line at all'
 }
 envrc_gate(){
   local repo="$1" wt="$2" a="$1/.envrc" b="$2/.envrc"
@@ -251,7 +285,7 @@ envrc_gate(){
     # pane, both read `Found RC allowed 0`. One unexplained reading is not a reason to
     # weaken the check, but a check that cannot say what it saw is a reason to fix the
     # check. The failure mode is already the safe one: a note, never a stop.
-    say "NOTE: $(tilde "$a") is byte-identical but direnv does not report it as allowed, so there is no trust to carry over. Run 'direnv allow' in $(tilde "$repo") first. direnv said: $( ( builtin cd "$repo" && direnv status 2>&1 ) | grep -E '^Found RC allowed' | head -1 || true)"
+    say "NOTE: $(tilde "$a") is byte-identical but direnv does not report it as allowed, so there is no trust to carry over. Run 'direnv allow' in $(tilde "$repo") first. direnv said: $(envrc_state "$repo")"
     return 0
   fi
   if ( builtin cd "$wt" && direnv allow . >/dev/null 2>&1 ) && envrc_allowed "$wt"; then
@@ -260,7 +294,7 @@ envrc_gate(){
     # The allow ran and the worktree still does not read as allowed, or the allow itself
     # failed. Either way SAY SO: silence here would leave you to discover it on the first
     # cd, which is exactly the noise this gate exists to remove.
-    say "NOTE: direnv allow did not take in $(tilde "$wt") -- direnv says: $( ( builtin cd "$wt" && direnv status 2>&1 ) | grep -E '^Found RC allowed' | head -1 || true). Run it yourself if you want the .envrc loaded."
+    say "NOTE: direnv allow did not take in $(tilde "$wt") -- direnv says: $(envrc_state "$wt"). Run it yourself if you want the .envrc loaded."
   fi
   return 0
 }
@@ -465,26 +499,37 @@ cmd_done(){
 # being exactly the path just removed -- never on the label, which is the repo name and is
 # shared by every workspace of that repo including the one you are sitting in. Anything
 # else is left alone, which is the herdr rule about not closing what you did not create.
+#
+# A MISS IS REPORTED, NOT SWALLOWED. "herdr has no workspace for this worktree" and "herdr
+# stored checkout_path in a different spelling than the path we removed" (a resolved
+# /private/... against /tmp/..., a trailing slash, a symlinked repo root) are the same
+# silence, and the second one silently re-opens the leak this function exists to close.
+# So a miss says how many workspaces were examined and how many named a worktree at all --
+# the same denominator discipline pj-health's stale-workspaces row uses, for the same
+# reason. Raised by /code-review.
 close_herdr_workspace(){
-  local gone="$1" ws
+  local gone="$1" ws="" seen=0 named=0 id p list
   [ -n "$gone" ] || return 0
   command -v herdr >/dev/null 2>&1 || return 0
   command -v jq    >/dev/null 2>&1 || return 0
-  ws="$(herdr workspace list 2>/dev/null \
-        | jq -r --arg p "$gone" '.result.workspaces[]?
-                 | select(.worktree.checkout_path == $p)
-                 | .workspace_id' 2>/dev/null | head -1)"
-  # `workspace list` is a summary and may not carry the worktree block; ask each one
-  # directly when it does not, rather than reading its silence as "no match".
+  list="$(herdr workspace list 2>/dev/null || true)"
+  [ -n "$list" ] || return 0
+  # Compare against the RESOLVED path too, since herdr stores what it was handed.
+  local gone_r; gone_r="$(cd "$(dirname "$gone")" 2>/dev/null && printf '%s/%s' "$(pwd -P)" "$(basename "$gone")")" || gone_r="$gone"
+  for id in $(printf '%s' "$list" | jq -r '.result.workspaces[]?.workspace_id' 2>/dev/null); do
+    seen=$((seen+1))
+    p="$(printf '%s' "$list" | jq -r --arg i "$id" '.result.workspaces[]? | select(.workspace_id==$i) | .worktree.checkout_path // ""' 2>/dev/null)"
+    # `workspace list` is a summary and may omit the worktree block; ask directly when it
+    # does, rather than reading its silence as "this workspace names no worktree".
+    [ -n "$p" ] || p="$(herdr workspace get "$id" 2>/dev/null | jq -r '.result.workspace.worktree.checkout_path // ""' 2>/dev/null)"
+    [ -n "$p" ] || continue
+    named=$((named+1))
+    if [ "$p" = "$gone" ] || [ "$p" = "$gone_r" ]; then ws="$id"; break; fi
+  done
   if [ -z "$ws" ]; then
-    local id
-    for id in $(herdr workspace list 2>/dev/null | jq -r '.result.workspaces[]?.workspace_id' 2>/dev/null); do
-      if [ "$(herdr workspace get "$id" 2>/dev/null | jq -r '.result.workspace.worktree.checkout_path // ""' 2>/dev/null)" = "$gone" ]; then
-        ws="$id"; break
-      fi
-    done
+    say "NOTE: no herdr workspace named this worktree ($named of $seen examined named one at all), so none was closed. If one is left in your sidebar: herdr workspace list, then herdr workspace close <id>."
+    return 0
   fi
-  [ -n "$ws" ] || return 0
   if herdr workspace close "$ws" >/dev/null 2>&1; then
     say "closed herdr workspace $ws (it pointed at the worktree just removed)"
   else
@@ -774,14 +819,26 @@ LATE
   # 13b THE ANTI-DRIFT ARM, and the reason c2 stopped building the name itself: what c2
   #     prints must be what pj would export, character for character. A second copy of the
   #     formula here would pass arm 13 and still disagree with the launch.
-  local pjname
-  pjname="$( builtin cd "$repo/.worktree/scratch/t13" 2>/dev/null \
-             && PJ_PROFILE=scratch pj --dry-run-env 2>/dev/null \
-             | sed -n 's/^CLAUDE_CODE_SESSION_NAME=//p' | head -1 )"
-  if [ -n "$pjname" ]; then
-    case "$OUT" in *"peer_name=$pjname"*) ok "13b c2's printed name IS pj's, asked of pj not rebuilt";; *) bad "13b name drift" "c2 said ${OUT##*peer_name=} / pj says $pjname";; esac
+  #     AND "pj IS NOT INSTALLED" IS NOT THE SAME AS "pj ANSWERED NOTHING". The first
+  #     version reported ok for an empty $pjname whatever the reason, so a pj that was
+  #     present and BROKEN passed the anti-drift arm -- and pj was in fact broken for
+  #     exactly this input at the time (it aborted rc 1 whenever CLAUDE_CODE_SESSION_NAME
+  #     was already set, which it is inside any pj session). Skipping and passing are
+  #     different outcomes and they get different branches. Raised by /code-review.
+  local pjname pjout pjrc
+  if ! command -v pj >/dev/null 2>&1; then
+    ok "13b pj is not on PATH here, so the drift arm is SKIPPED (not passed)"
   else
-    ok "13b pj not on PATH in this environment, so the drift arm is not applicable"
+    pjout="$( builtin cd "$repo/.worktree/scratch/t13" 2>/dev/null \
+              && PJ_PROFILE=scratch pj --dry-run-env 2>/dev/null )"; pjrc=$?
+    pjname="$(printf '%s\n' "$pjout" | sed -n 's/^CLAUDE_CODE_SESSION_NAME=//p' | head -1)"
+    if [ "$pjrc" -ne 0 ]; then
+      bad "13b pj is installed but exited $pjrc" "$(printf '%s' "$pjout" | head -c 200)"
+    elif [ -z "$pjname" ]; then
+      bad "13b pj answered with no name at all" "$(printf '%s' "$pjout" | head -c 200)"
+    else
+      case "$OUT" in *"peer_name=$pjname"*) ok "13b c2's printed name IS pj's, asked of pj not rebuilt";; *) bad "13b name drift" "c2 said ${OUT##*peer_name=} / pj says $pjname";; esac
+    fi
   fi
   # 13c NO SUFFIX. The random hex is gone, and this is the arm that keeps it gone: the
   #     collision fear that justified it was measured false (see pj build_session_name).
@@ -791,10 +848,13 @@ LATE
   # 14. envrc_gate (F5d gate Q3a). A pure function of two files plus direnv, so every arm
   #     runs without a worktree, a direnv allow or a launch.
   local ea="$root/ea"; mkdir -p "$ea/main" "$ea/wt"
-  # 14a no .envrc in the worktree -> silent rc 0, whatever the main repo holds
+  # 14a no .envrc in the worktree -> silent rc 0, whatever the main repo holds.
+  #     CAPTURE THE STATUS FIRST: by the time `bad` runs in an `a && b || c` chain, `$?` is
+  #     the status of the TEST, always 1, not of the thing under test. The first version
+  #     would have reported rc=1 for a gate that returned 2 or 127. Raised by /code-review.
   printf 'export A=1\n' > "$ea/main/.envrc"
-  envrc_gate "$ea/main" "$ea/wt" >/dev/null 2>&1
-  [ $? -eq 0 ] && ok "14a no worktree .envrc -> rc 0, nothing said" || bad "14a" "rc=$?"
+  envrc_gate "$ea/main" "$ea/wt" >/dev/null 2>&1; RC=$?
+  [ "$RC" -eq 0 ] && ok "14a no worktree .envrc -> rc 0, nothing said" || bad "14a" "rc=$RC"
   # 14b IDENTICAL but the main repo's is not allowed -> rc 0 and a NOTE, never a stop.
   #     (No fixture can be direnv-allowed, so this is the branch the selftest reaches.)
   printf 'export A=1\n' > "$ea/wt/.envrc"
@@ -816,9 +876,23 @@ LATE
   case "$OUT" in *REFUSED*) ok "14c and it refuses by name";; *) bad "14c refusal" "$OUT";; esac
   case "$OUT" in *"export A=2"*) ok "14c and prints the diff, so you can read what changed";; *) bad "14c diff" "$OUT";; esac
   # 14d no .envrc in the MAIN repo -> rc 0 and a NOTE. Nothing to compare is not a fault.
-  rm -f "$ea/main/.envrc"; printf 'export A=1\n' > "$ea/wt/.envrc"
-  OUT="$(envrc_gate "$ea/main" "$ea/wt" 2>&1)"; RC=$?
-  [ "$RC" -eq 0 ] && ok "14d no original to compare -> rc 0 (carry on)" || bad "14d" "rc=$RC $OUT"
+  #
+  #     MOVE IT, AND CHECK IT MOVED. `rm` here is the Trash shim; inside the sandbox it
+  #     refuses on these fixtures (afpAccessDenied, trash exit 5) and leaves the file. This
+  #     arm then measures the IDENTICAL-files path instead, which also returns rc 0, so it
+  #     passed in both worlds. Caught by reading the selftest's own trash error rather than
+  #     by the arm, which is the point. `mv` always works; the assertion proves it did.
+  mkdir -p "$ea/discard"
+  command mv -f "$ea/main/.envrc" "$ea/discard/main-envrc" 2>/dev/null || true
+  printf 'export A=1\n' > "$ea/wt/.envrc"
+  if [ -e "$ea/main/.envrc" ]; then
+    bad "14d setup" "the main .envrc is still there, so this arm would measure the wrong branch"
+  else
+    ok "14d setup: the main .envrc really is gone (checked, not assumed)"
+    OUT="$(envrc_gate "$ea/main" "$ea/wt" 2>&1)"; RC=$?
+    [ "$RC" -eq 0 ] && ok "14d no original to compare -> rc 0 (carry on)" || bad "14d" "rc=$RC $OUT"
+    case "$OUT" in *"no allowed original"*) ok "14d and says there is no original to compare with";; *) bad "14d note" "$OUT";; esac
+  fi
   # 14e CONTROL for 14a: the gate really does read the files, so 14a's rc 0 means "nothing
   #     to do" rather than "this function never looks at anything". 14c is the proof.
   [ "$RC" -eq 0 ] && ok "14e control: 14c rc 1 vs 14a/14d rc 0 -- the gate separates the cases" || bad "14e control" "every arm returned the same rc"
@@ -826,6 +900,11 @@ LATE
   # 15. close_herdr_workspace (F5d gate Q4). A fake herdr answers workspace list, so the
   #     matching rule is tested without a herdr server or a real workspace.
   local hb="$root/herdrbin"; mkdir -p "$hb"
+  #     EVERY ARM GETS ITS OWN RECORDER FILE, through WS_CLOSED. The first version reused
+  #     one path and cleared it with `rm -f`; inside the sandbox `rm` is the Trash shim and
+  #     CAN REFUSE, leaving the file, and arms 15b and 15c then read 15a's recording as
+  #     their own finding. /code-review measured exactly that: both failed with
+  #     "got: closed wB". A fresh filename cannot go stale.
   cat > "$hb/herdr" <<HFAKE
 #!/bin/sh
 if [ "\$1" = workspace ] && [ "\$2" = list ]; then
@@ -836,28 +915,32 @@ if [ "\$1" = workspace ] && [ "\$2" = get ]; then
   printf '%s\n' '{"result":{"workspace":{}}}'; exit 0
 fi
 if [ "\$1" = workspace ] && [ "\$2" = close ]; then
-  printf '%s\n' "closed \$3" >> "$root/ws-closed"; exit 0
+  printf '%s\n' "closed \$3" >> "\${WS_CLOSED:-/dev/null}"; exit 0
 fi
 exit 0
 HFAKE
   chmod +x "$hb/herdr"
-  rm -f "$root/ws-closed"
   # 15a the workspace whose checkout_path IS the removed path is closed, by id
-  OUT="$( PATH="$hb:$PATH"; close_herdr_workspace "GONEPATH" 2>&1 )"
-  [ "$(cat "$root/ws-closed" 2>/dev/null)" = "closed wB" ] && ok "15a the workspace pointing at the removed worktree is closed" || bad "15a" "$(cat "$root/ws-closed" 2>/dev/null)"
+  OUT="$( PATH="$hb:$PATH"; WS_CLOSED="$root/ws.15a"; export WS_CLOSED; close_herdr_workspace "GONEPATH" 2>&1 )"
+  [ "$(cat "$root/ws.15a" 2>/dev/null)" = "closed wB" ] && ok "15a the workspace pointing at the removed worktree is closed" || bad "15a" "$(cat "$root/ws.15a" 2>/dev/null)"
   case "$OUT" in *"closed herdr workspace wB"*) ok "15a and it says so, rather than closing something silently";; *) bad "15a said" "$OUT";; esac
   # 15b THE NEGATIVE ARM: a path that matches nothing closes NOTHING. wA shares the label
   #     with wB, so a rule that matched on the label would close the wrong workspace here.
-  rm -f "$root/ws-closed"
-  ( PATH="$hb:$PATH"; close_herdr_workspace "SOMEOTHERPATH" ) >/dev/null 2>&1
-  [ ! -e "$root/ws-closed" ] && ok "15b an unmatched path closes nothing (label is never matched on)" || bad "15b closed the wrong one" "$(cat "$root/ws-closed")"
-  # 15c an empty path closes nothing
-  rm -f "$root/ws-closed"
-  ( PATH="$hb:$PATH"; close_herdr_workspace "" ) >/dev/null 2>&1
-  [ ! -e "$root/ws-closed" ] && ok "15c an empty path closes nothing" || bad "15c" "$(cat "$root/ws-closed")"
+  OUT="$( PATH="$hb:$PATH"; WS_CLOSED="$root/ws.15b"; export WS_CLOSED; close_herdr_workspace "SOMEOTHERPATH" 2>&1 )"
+  [ ! -e "$root/ws.15b" ] && ok "15b an unmatched path closes nothing (label is never matched on)" || bad "15b closed the wrong one" "$(cat "$root/ws.15b")"
+  # 15b' and a miss SAYS SO, with its denominators, rather than going quiet -- silence here
+  #      and "herdr spelled the path differently" are the same thing, and the second one
+  #      silently re-opens the leak.
+  case "$OUT" in *"1 of 2 examined"*) ok "15b' a miss reports how many were examined and how many named a worktree";; *) bad "15b' silent miss" "$OUT";; esac
+  # 15c an empty path closes nothing, and says nothing either (there is nothing to report)
+  OUT="$( PATH="$hb:$PATH"; WS_CLOSED="$root/ws.15c"; export WS_CLOSED; close_herdr_workspace "" 2>&1 )"
+  [ ! -e "$root/ws.15c" ] && ok "15c an empty path closes nothing" || bad "15c" "$(cat "$root/ws.15c")"
   # 15d herdr ABSENT -> silent no-op, rc 0
-  ( PATH="$root/emptybin"; close_herdr_workspace "GONEPATH" ) >/dev/null 2>&1; RC=$?
-  [ "$RC" -eq 0 ] && ok "15d no herdr on PATH -> silent no-op, rc 0" || bad "15d" "rc=$RC"
+  ( PATH="$root/emptybin"; WS_CLOSED="$root/ws.15d"; export WS_CLOSED; close_herdr_workspace "GONEPATH" ) >/dev/null 2>&1; RC=$?
+  [ "$RC" -eq 0 ] && [ ! -e "$root/ws.15d" ] && ok "15d no herdr on PATH -> silent no-op, rc 0" || bad "15d" "rc=$RC"
+  # 15e CONTROL for 15b-15d: the fake really does record when a close happens, so those
+  #     three absent files mean "nothing was closed" rather than "the recorder is broken".
+  [ -e "$root/ws.15a" ] && ok "15e control: the recorder fires when a close really happens" || bad "15e control" "15a recorded nothing, so 15b-15d prove nothing"
 
   printf 'c2 selftest: %d passed, %d failed\n' "$pass" "$fail"
   [ "$fail" -eq 0 ]

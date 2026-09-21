@@ -400,6 +400,25 @@ default session stops being anonymous in a shared registry.
 A `--name` typed after `pj` still wins: the flag beats the variable (measured). And a name
 already in the environment is left alone, which is how a stage names a control pane.
 
+### Inherited is not chosen
+
+`pj` exports the name into the session it launches, so everything that session starts --
+a nested `pj`, a `c2 start` -- inherits it. Left at that, a scratch session launched from
+inside a `pj` session would take its **parent's** name and collide with it.
+
+So `pj` exports a second variable, `PJ_SESSION_NAME`, holding the same string:
+
+| In the environment | `pj` concludes | What it does |
+| --- | --- | --- |
+| both set, and **equal** | inherited from a parent `pj` | **recomputes** the name for this launch |
+| only `CLAUDE_CODE_SESSION_NAME` | a human or a stage chose it | **keeps** it |
+| neither | a fresh launch | computes one |
+
+A stage that wants to name a control pane exports `CLAUDE_CODE_SESSION_NAME` and not the
+marker, which is what "export it before `pj`" already meant. `c2` reads `PJ_SESSION_NAME`
+when it asks `pj` for the name, because that one is emitted on every launch while
+`CLAUDE_CODE_SESSION_NAME` is emitted only when `pj` computed the name itself.
+
 ### What happens on a collision
 
 Claude Code renames the loser and **keeps the prefix**. Measured 2026-09-22: two

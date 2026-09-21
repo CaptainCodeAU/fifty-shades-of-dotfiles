@@ -235,13 +235,39 @@ name_repo_root() {
   print -r -- "${cdir:h:A}"
 }
 
+# in_linked_worktree -- rc 0 only inside a LINKED worktree, never in the main checkout.
+#
+# `--git-dir` is <main>/.git in the main checkout and <main>/.git/worktrees/<name> in a
+# linked one, while `--git-common-dir` is <main>/.git in both. So the two differing IS the
+# definition of a linked worktree, and it is the only honest test.
+#
+# THIS IS A CORRECTION. The first version asked `is the cwd the repo root?`, and the comment
+# claimed that was "exactly the c2 worktree case and nothing else". Measured by
+# /code-review: `cd ~/repo/docs && pj` produced `repo-main-docs`, so the same session got a
+# different name depending on which SUBDIRECTORY it was launched from, and names became
+# cwd-dependent. The claim in that comment was never tested; this one is, by arm 21j.
+in_linked_worktree() {
+  local gd cd_
+  gd="$(git rev-parse --absolute-git-dir 2>/dev/null)" || return 1
+  cd_="$(git rev-parse --git-common-dir 2>/dev/null)" || return 1
+  [[ "$cd_" == /* ]] || cd_="$PWD/$cd_"
+  [[ "${gd:A}" != "${cd_:A}" ]]
+}
+
 build_session_name() {
   local root base alias_ role topic n
   root="$(name_repo_root 2>/dev/null)" || root=""
   if [[ -n "$root" ]]; then
     alias_="$(session_alias "$root")"
     base="${alias_:-${root:t}}"
-    [[ "${PWD:A}" != "$root" ]] && topic="${PWD:t}"
+    # The topic is the WORKTREE's own name, and only a linked worktree has one. Read from
+    # --show-toplevel rather than the cwd, so launching from a subdirectory OF the worktree
+    # gives the same name as launching from its root -- which is the whole point of the
+    # correction above, applied one level down.
+    if in_linked_worktree; then
+      topic="$(git rev-parse --show-toplevel 2>/dev/null)"
+      topic="${topic:t}"
+    fi
   else
     # outside a git repo there is no project to name, so the directory is the whole of it
     base="${PWD:t}"
@@ -341,7 +367,36 @@ build_argv() {
   # ALREADY SET WINS, so a stage that opens a control pane exports its own name first and
   # pj leaves it alone. Note the asymmetry: `--name` typed after `pj` beats the variable
   # (measured), so a hand-typed name still wins over both.
-  [[ -z "${CLAUDE_CODE_SESSION_NAME:-}" ]] && PJ_ENV+=("CLAUDE_CODE_SESSION_NAME=$(build_session_name)")
+  #
+  # AN `if` BLOCK, NOT A `&&` LIST, AND THIS COST A REAL BUG. As the LAST statement of this
+  # function a bare `[[ ... ]] && ...` returns 1 when the test is false, every caller does
+  # `build_argv || exit $?`, and pj then REFUSED TO LAUNCH AT ALL whenever the variable was
+  # already set -- which is exactly the case this code exists to support, and which pj
+  # itself creates for every session it launches. Caught by /code-review, not by arm 21f,
+  # which passed in both worlds; see that arm for why.
+  #
+  # INHERITED IS NOT THE SAME AS CHOSEN, and telling them apart needs a second variable.
+  # pj exports the name into the session it launches, so EVERYTHING that session starts --
+  # a nested `pj`, a `c2 start` -- inherits it. Without this, a scratch session launched
+  # from inside a pj session would take its PARENT's name and collide with it. Measured
+  # 2026-09-22 immediately after the `&&` fix: `c2 start` from a named environment printed
+  # "pj could not say" and would have handed the child the parent's name.
+  #
+  # So pj also exports PJ_SESSION_NAME, holding the same string. On the next launch:
+  #   the two are EQUAL     -> the name was inherited from a parent pj. Recompute.
+  #   only CLAUDE_..._NAME  -> a human or a stage chose it deliberately. Leave it.
+  # A stage that wants a name simply exports CLAUDE_CODE_SESSION_NAME and not the marker,
+  # which is what "export it before pj" already means.
+  local want="${CLAUDE_CODE_SESSION_NAME:-}"
+  if [[ -n "$want" && "$want" == "${PJ_SESSION_NAME:-}" ]]; then
+    want=""   # inherited from the parent pj session, not chosen
+  fi
+  if [[ -z "$want" ]]; then
+    want="$(build_session_name)"
+    PJ_ENV+=("CLAUDE_CODE_SESSION_NAME=$want")
+  fi
+  PJ_ENV+=("PJ_SESSION_NAME=$want")
+  return 0
 }
 
 # --- dot-claude freshness (P8a gate Q4, ruled by Gavin 2026-09-21) --------------
@@ -695,11 +750,46 @@ selftest() {
   printf 'records: private\nsession-alias: nr\n' > "$nrepo/.claude/pj-homes"
   out="$(nameof "$nrepo")"
   [[ "$out" == "nr-main" ]] && ok "21e session-alias: replaces the repo basename" || bad "21e alias" "$out"
-  # 21f ALREADY SET WINS: an exported name is left exactly alone, alias and all
+  # 21f ALREADY SET WINS: an exported name is left exactly alone, alias and all.
+  #
+  #     THREE ASSERTIONS, NOT ONE, AND THAT IS THE LESSON. The first version checked only
+  #     that no CLAUDE_CODE_SESSION_NAME line came back -- which is equally true when pj
+  #     correctly omits it AND when pj ABORTS printing nothing. pj was aborting (rc 1, no
+  #     output at all) for exactly this input, the arm passed, and /code-review found the
+  #     bug instead. The repo's own all-cases-identical rule, in the arm written to guard
+  #     the feature it hid. So: the exit code, the ABSENCE, and a POSITIVE line that proves
+  #     the run produced real output.
   out="$( builtin cd "$nrepo" && CLAUDE_CODE_SESSION_NAME=hand-picked PJ_PROFILE_DIR="$pdir" \
-          PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --dry-run-env 2>/dev/null | sed -n 's/^CLAUDE_CODE_SESSION_NAME=//p' )"
-  [[ -z "$out" ]] && ok "21f an already-set name is not overwritten (pj adds nothing)" || bad "21f overwrote" "$out"
-  rm -f "$nrepo/.claude/pj-homes"
+          PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --dry-run-env 2>/dev/null )"; rc=$?
+  [[ $rc -eq 0 ]] && ok "21f pj still exits 0 when the name is already set" || bad "21f rc" "rc=$rc out=$out"
+  [[ "$out" != *"CLAUDE_CODE_SESSION_NAME="* ]] && ok "21f an already-set name is not overwritten (pj adds nothing)" || bad "21f overwrote" "$out"
+  [[ "$out" == *"PJ_PROFILE=default"* ]] && ok "21f POSITIVE: the run still produced its other env, so the absence above is a choice not a crash" || bad "21f no output" "$out"
+  # And the argv path must survive it too, since that is what a real launch uses.
+  out="$( builtin cd "$nrepo" && CLAUDE_CODE_SESSION_NAME=hand-picked PJ_PROFILE_DIR="$pdir" \
+          PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --dry-run 2>/dev/null )"; rc=$?
+  [[ $rc -eq 0 && "$out" == claude* ]] && ok "21f the argv path also survives an already-set name" || bad "21f argv" "rc=$rc out=${out:0:80}"
+  # 21g' INHERITED IS NOT CHOSEN. pj exports the name into the session it launches, so a
+  #      nested pj or a c2 start inherits it; without a marker the child would silently take
+  #      its PARENT's name and collide with it. PJ_SESSION_NAME carries the same string, and
+  #      the two being EQUAL is what identifies an inherited name.
+  out="$( builtin cd "$nrepo" && CLAUDE_CODE_SESSION_NAME=namerepo-main PJ_SESSION_NAME=namerepo-main \
+          PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile scratchy --dry-run-env 2>/dev/null )"; rc=$?
+  [[ $rc -eq 0 ]] && ok "21g' an inherited name still launches, rc 0" || bad "21g' rc" "rc=$rc"
+  #      (the session-alias from 21e is still in force here, so the expected base is `nr`)
+  [[ "$out" == *"CLAUDE_CODE_SESSION_NAME=nr-scratchy"* ]] && ok "21g' an INHERITED name is RECOMPUTED for the new profile, not carried over" || bad "21g' inherited carried" "$out"
+  # 21g'' THE CONTROL: the same name WITHOUT the marker is a deliberate choice and is kept.
+  #       Both arms set CLAUDE_CODE_SESSION_NAME to the same value; only the marker differs.
+  out="$( builtin cd "$nrepo" && CLAUDE_CODE_SESSION_NAME=namerepo-main \
+          PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile scratchy --dry-run-env 2>/dev/null )"
+  [[ "$out" != *"CLAUDE_CODE_SESSION_NAME="* ]] && ok "21g'' control: without the marker the same name is left alone (so 21g' measured the marker)" || bad "21g'' overwrote a chosen name" "$out"
+  [[ "$out" == *"PJ_SESSION_NAME=namerepo-main"* ]] && ok "21g'' and the marker is set to it, so the NEXT nested launch recomputes" || bad "21g'' no marker" "$out"
+  # OVERWRITE, do not remove. `rm` here is the Trash shim and can REFUSE inside the sandbox,
+  # leaving the file exactly where it was -- and arms 21j and 21k then read the stale alias
+  # as their answer. That happened, to this very line, on the run that added those arms. A
+  # write always takes; a delete does not. (Same trap as arm 22's recorder files above.)
+  printf 'records: private\n' > "$nrepo/.claude/pj-homes"
+  out="$(nameof "$nrepo")"
+  [[ "$out" == "namerepo-main" ]] && ok "21f' control: with session-alias gone the basename is back (so 21e measured the alias, not a constant)" || bad "21f' alias stuck" "$out"
   # 21g OUTSIDE a git repo the builder falls back to the directory, and does not crash
   mkdir -p "$root/notarepo"
   out="$(nameof "$root/notarepo")"
@@ -720,42 +810,60 @@ selftest() {
   git -C "$nrepo2" init -q 2>/dev/null
   out="$(nameof "$nrepo2")"
   [[ "$out" == "othername-main" && "$out" != "namerepo-main" ]] && ok "21i control: a different repo gets a different name" || bad "21i control" "$out"
+  # 21j A PLAIN SUBDIRECTORY IS NOT A TOPIC, and arm 21d is the control that says the topic
+  #     mechanism still works. The first version of the builder added a topic for any cwd
+  #     that was not the repo root, so `cd repo/docs && pj` named the session `repo-main-docs`
+  #     and the same session got a different name per subdirectory. Measured by /code-review.
+  mkdir -p "$nrepo/docs/deep"
+  out="$(nameof "$nrepo/docs")"
+  [[ "$out" == "namerepo-main" ]] && ok "21j a subdirectory of the repo adds NO topic" || bad "21j subdir topic" "$out"
+  out="$(nameof "$nrepo/docs/deep")"
+  [[ "$out" == "namerepo-main" ]] && ok "21j and neither does a deeper one" || bad "21j deep subdir" "$out"
+  # 21k and a subdirectory OF A WORKTREE still names the worktree, not the subdirectory
+  if [[ -d "$nwt" ]]; then
+    mkdir -p "$nwt/sub"
+    out="$(nameof "$nwt/sub" --profile scratchy)"
+    [[ "$out" == "namerepo-scratchy-worktopic" ]] && ok "21k inside a worktree subdir the topic is still the WORKTREE" || bad "21k worktree subdir" "$out"
+  fi
 
   # ---- 22: the Herdr pane label (F5d gate Q2) ---------------------------------------
   # A fake `herdr` on PATH records every call, so "it did nothing" and "it was never asked"
   # are two different files rather than the same silence.
+  # EVERY ARM GETS ITS OWN RECORDER FILE, via HERDR_CALLS in the fake's environment.
+  # The first version reused one path and cleared it with `rm -f` between arms. Inside the
+  # Claude sandbox `rm` is the Trash shim and CAN REFUSE (trash exit 5, file left in place),
+  # so the stale recording from an earlier arm was read by a later one as a finding: measured
+  # by /code-review as `22f ... got: rc=0` with the rc itself correct. CLAUDE.md writes this
+  # up for decided-selftest; it is the same trap. A fresh filename cannot go stale.
   local fb="$root/fakebin"; mkdir -p "$fb"
-  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/herdr-calls"\n' "$root" > "$fb/herdr"
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "${HERDR_CALLS:-/dev/null}"\n' > "$fb/herdr"
   chmod +x "$fb/herdr"
-  rm -f "$root/herdr-calls"
   # 22a outside Herdr: nothing is called
-  ( PATH="$fb:$PATH"; unset HERDR_ENV; HERDR_PANE_ID=w1:p1 label_herdr_pane "x-main" ) >/dev/null 2>&1
-  [[ ! -e "$root/herdr-calls" ]] && ok "22a no HERDR_ENV -> herdr is never called" || bad "22a called" "$(<$root/herdr-calls)"
+  ( PATH="$fb:$PATH"; HERDR_CALLS="$root/calls.22a"; export HERDR_CALLS; unset HERDR_ENV; HERDR_PANE_ID=w1:p1 label_herdr_pane "x-main" ) >/dev/null 2>&1
+  [[ ! -e "$root/calls.22a" ]] && ok "22a no HERDR_ENV -> herdr is never called" || bad "22a called" "$(<$root/calls.22a)"
   # 22b inside Herdr but with no pane id: still nothing
-  ( PATH="$fb:$PATH"; HERDR_ENV=1 HERDR_PANE_ID="" label_herdr_pane "x-main" ) >/dev/null 2>&1
-  [[ ! -e "$root/herdr-calls" ]] && ok "22b no pane id -> herdr is never called" || bad "22b called" "$(<$root/herdr-calls)"
+  ( PATH="$fb:$PATH"; HERDR_CALLS="$root/calls.22b"; export HERDR_CALLS; HERDR_ENV=1 HERDR_PANE_ID="" label_herdr_pane "x-main" ) >/dev/null 2>&1
+  [[ ! -e "$root/calls.22b" ]] && ok "22b no pane id -> herdr is never called" || bad "22b called" "$(<$root/calls.22b)"
   # 22c an empty name: nothing, rather than a blank label. herdr has no guard against a
   #     blank one and a blank workspace label is unclearable, so refuse it here.
-  ( PATH="$fb:$PATH"; HERDR_ENV=1 HERDR_PANE_ID=w1:p1 label_herdr_pane "" ) >/dev/null 2>&1
-  [[ ! -e "$root/herdr-calls" ]] && ok "22c an empty name -> herdr is never called" || bad "22c called" "$(<$root/herdr-calls)"
+  ( PATH="$fb:$PATH"; HERDR_CALLS="$root/calls.22c"; export HERDR_CALLS; HERDR_ENV=1 HERDR_PANE_ID=w1:p1 label_herdr_pane "" ) >/dev/null 2>&1
+  [[ ! -e "$root/calls.22c" ]] && ok "22c an empty name -> herdr is never called" || bad "22c called" "$(<$root/calls.22c)"
   # 22d THE POSITIVE ARM: pane id + name -> exactly one rename, with that pane and that name
-  ( PATH="$fb:$PATH"; HERDR_ENV=1 HERDR_PANE_ID=w1:p1 label_herdr_pane "namerepo-main" ) >/dev/null 2>&1
-  if [[ -e "$root/herdr-calls" ]]; then
-    out="$(<"$root/herdr-calls")"
+  ( PATH="$fb:$PATH"; HERDR_CALLS="$root/calls.22d"; export HERDR_CALLS; HERDR_ENV=1 HERDR_PANE_ID=w1:p1 label_herdr_pane "namerepo-main" ) >/dev/null 2>&1
+  if [[ -e "$root/calls.22d" ]]; then
+    out="$(<"$root/calls.22d")"
     [[ "$out" == "pane rename w1:p1 namerepo-main" ]] && ok "22d a labelled pane gets exactly: pane rename <id> <name>" || bad "22d call" "$out"
-    [[ "$(grep -c . "$root/herdr-calls")" == 1 ]] && ok "22d exactly ONE call, not one per arm above" || bad "22d call count" "$out"
+    [[ "$(grep -c . "$root/calls.22d")" == 1 ]] && ok "22d exactly ONE call, not one per arm above" || bad "22d call count" "$out"
   else
     bad "22d call" "nothing was recorded"
   fi
   # 22e CONTROL for 22a-22c: the fake herdr really does record when it IS run, so those
-  #     three empty files mean "not called" rather than "the recorder is broken".
-  rm -f "$root/herdr-calls"
-  ( PATH="$fb:$PATH"; herdr control arm ) >/dev/null 2>&1
-  [[ -e "$root/herdr-calls" ]] && ok "22e control: the fake herdr records a call when one happens" || bad "22e control" "the recorder never fired, so 22a-22c prove nothing"
+  #     three absent files mean "not called" rather than "the recorder is broken".
+  ( PATH="$fb:$PATH"; HERDR_CALLS="$root/calls.22e"; export HERDR_CALLS; herdr control arm ) >/dev/null 2>&1
+  [[ -e "$root/calls.22e" ]] && ok "22e control: the fake herdr records a call when one happens" || bad "22e control" "the recorder never fired, so 22a-22c prove nothing"
   # 22f herdr ABSENT from PATH entirely: no call, no error, rc 0
-  rm -f "$root/herdr-calls"
-  ( PATH="$root/emptybin"; HERDR_ENV=1 HERDR_PANE_ID=w1:p1 label_herdr_pane "x-main" ) >/dev/null 2>&1; rc=$?
-  [[ $rc -eq 0 && ! -e "$root/herdr-calls" ]] && ok "22f no herdr on PATH -> silent no-op, rc 0" || bad "22f herdr absent" "rc=$rc"
+  ( PATH="$root/emptybin"; HERDR_CALLS="$root/calls.22f"; export HERDR_CALLS; HERDR_ENV=1 HERDR_PANE_ID=w1:p1 label_herdr_pane "x-main" ) >/dev/null 2>&1; rc=$?
+  [[ $rc -eq 0 && ! -e "$root/calls.22f" ]] && ok "22f no herdr on PATH -> silent no-op, rc 0" || bad "22f herdr absent" "rc=$rc $( [[ -e $root/calls.22f ]] && cat "$root/calls.22f")"
   print -- "pj selftest: $pass passed, $fail failed"
   [[ $fail -eq 0 ]]
 }
@@ -802,10 +910,12 @@ kick_dotclaude_fetch
 ensure_registry_link "$P_CONFIG_DIR"
 # Same contract: the pane label is a real side effect, so it happens here and not in
 # build_argv. The name is read back out of PJ_ENV rather than rebuilt, so the label and the
-# session can never disagree -- including when the name came in already set.
+# session can never disagree -- including when the name came in already chosen.
+# PJ_SESSION_NAME is the one to read: it is emitted on EVERY launch, where
+# CLAUDE_CODE_SESSION_NAME is emitted only when pj computed the name itself.
 _pj_name=""
-for _pv in "${PJ_ENV[@]}"; do [[ "$_pv" == CLAUDE_CODE_SESSION_NAME=* ]] && _pj_name="${_pv#*=}"; done
-label_herdr_pane "${_pj_name:-${CLAUDE_CODE_SESSION_NAME:-}}"
+for _pv in "${PJ_ENV[@]}"; do [[ "$_pv" == PJ_SESSION_NAME=* ]] && _pj_name="${_pv#*=}"; done
+label_herdr_pane "$_pj_name"
 unset _pj_name
 source "$LAUNCH_FILE"
 # Exported into THIS script's own process, which is safe because the script is its own
