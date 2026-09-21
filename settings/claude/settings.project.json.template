@@ -68,6 +68,24 @@
     "${HOME} env values, and the dropped verbose:true -- fourth instance."
   ],
   "theme": "dark-daltonized",
+  "_f8a_attribution_why": [
+    "EMPTY ON PURPOSE -- DO NOT RESTORE (D-20260922-A07, ruled at the F8a gate).",
+    "",
+    "Empty strings mean Claude Code composes NO attribution text for a commit or",
+    "a PR. `_audit-chain`'s five C-* trailers ARE the attribution here, and the",
+    "engine's own line would duplicate them. Those trailers are stamped",
+    "unconditionally by the prepare-commit-msg hook on the global core.hooksPath,",
+    "so they also cover commits a SCRIPT makes inside a session (open-items,",
+    "pj-wrap). An engine attribution line is text the MODEL is told to write, so",
+    "it can be reworded, dropped, or never written on a script commit.",
+    "",
+    "This key had no comment until 2026-09-22 and nothing recorded the reason:",
+    "`decided` returned a clean miss and F4's report mentions the word only as a",
+    "filename. F8a then hooked `attribution.text` and the event never fired,",
+    "which reads exactly like a dead event until you find this key. It is not",
+    "dead: restoring attribution through a one-off --settings overlay made it",
+    "fire four times and a probe mod's trailer land in the commit message."
+  ],
   "attribution": {
     "commit": "",
     "pr": ""

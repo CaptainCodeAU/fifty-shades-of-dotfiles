@@ -574,3 +574,39 @@ under the config dir.
 `--show-toplevel`. From inside a linked worktree the first returns the **main** repo
 and the second returns the worktree, so a `c2` session shares its parent project's
 drawer instead of inventing a key nothing else writes to.
+
+## The five plugin dirs, and where a Claude Mod may NOT live
+
+`plugins:` names dirs under `~/.claude`, one `--plugin-dir` each. Measured 2026-09-22
+(F8a), because the question "are they writable by a session standing in this repo?" had
+been assumed rather than checked, and the assumption was wrong in the safe direction.
+
+**All five are real directories under `~/.claude`, and a sandboxed Bash write into every
+one of them is refused.** Both controls fired in the same command: a write to `.` (the
+cwd) succeeded, and a write to `~/.claude/settings.json.f8a` was refused, so the denials
+are the sandbox rather than a broken probe.
+
+| dir | sandboxed write | symlinked top-level entries |
+| --- | --- | --- |
+| `~/.claude/skills/herdr` | DENIED | **3 of 3** |
+| `~/.claude/skills/AgentRelay` | DENIED | 0 of 6 |
+| `~/.claude/skills/ISA` | DENIED | 0 of 2 |
+| `~/.claude/pj` | DENIED | 0 of 1 |
+| `~/.claude/pj-voice` | DENIED | 0 of 1 |
+
+**And stow links FILES, not directories**, so a file newly added on the repo side does not
+appear under `~/` at all until a restow. That is the second reason the dirs are hard to
+tamper with from a session.
+
+**The one hole is herdr's three entries.** `SKILL.md`, `UPSTREAM.md` and
+`UPSTREAM.version` are symlinks resolving into the dotfiles repo, which is the cwd, and
+the cwd is writable. Proven and reverted byte-exact: appending a marker to the repo-side
+`UPSTREAM.version` made it visible through the `~/` path the launcher loads.
+
+**So, ruled at the F8a gate (D-20260922-A06): nothing moves, and a hooks module never
+lives under `~/.claude/skills/herdr`.** The other four dirs are protected as they stand.
+
+This is not a claim that the estate is tamper-proof. A user-tier mod is outermost only
+because it was *listed* first, so anything that can edit this launcher can reorder it;
+there is no protected seat without managed settings. It is the narrow rule that follows
+from where the one measured hole actually is.
