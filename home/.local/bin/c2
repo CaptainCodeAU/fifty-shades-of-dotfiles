@@ -1,0 +1,358 @@
+#!/usr/bin/env bash
+# c2 -- the throwaway pj session: a scratch worktree, its own config dir, two guards (F5a).
+#
+# Usage:
+#   c2 start <topic>          make the worktree and launch pj --profile scratch inside it
+#   c2 done  <topic>          tear it down, but ONLY if both guards pass
+#   c2 done  <topic> --discard   tear it down anyway, losing whatever the guards found
+#   c2 list                   the scratch worktrees of the repo you are standing in
+#   c2 --selftest             prove every arm against throwaway fixtures
+#
+# Exit: 0 done  ·  1 nothing to do (not an error)  ·  2 REFUSED
+#
+# WHERE THE WORKTREE GOES  <repo>/.worktree/scratch/<topic>, on branch scratch/<topic>.
+# That is D-20260914-A01 applied literally -- "every worktree goes to <repo>/.worktree/
+# <branch> via the hwt wrapper", never ~/.herdr/worktrees and never the sidebar button.
+# The F5a brief said `.worktree/scratch-<topic>`; the ruling's own shape is used instead,
+# so the branch name and the folder name stay the same string.
+#
+# HOW IT IS CREATED  `hwt` by default, which is the wrapper the ruling names and which
+# makes the worktree herdr-tracked. `--no-herdr` uses plain `git worktree add` at the
+# IDENTICAL path. Both satisfy the ruling, which is about where a worktree lives rather
+# than which tool digs the hole; the flag exists because hwt needs the herdr server up
+# and a scratch checkout should not depend on a daemon. c2 says which route it took.
+#
+# THE PROFILE  `scratch`: plugins none, card off, HOOKS ON, config_dir ~/.claude-scratch.
+# Ruled by Gavin at the F5a gate. NOT --safe-mode, which would also disarm
+# enforce-secret-probe.sh, validate-bash.sh, enforce-uv, enforce-pnpm and
+# MemoryRootGuard -- a throwaway session is where you are LEAST careful, so it is the
+# last place to turn the guards off.
+#
+# THE FIRST RUN NEEDS A HUMAN. ~/.claude-scratch is a fresh config dir. Measured
+# 2026-09-21: a fresh config dir exits 1 with "Not logged in - Please run /login", and
+# separately refuses the workspace until a trust dialog is accepted. c2 says so up front
+# rather than letting the launch fail in a pane. `pj-health --profile scratch` carries the
+# same warning as a row.
+#
+# THE LEARNINGS FOLDER  ~/Scratch/<project>/, created by `start` when absent. It is
+# OUTSIDE the worktree on purpose: everything inside the worktree is what `done` is
+# allowed to destroy, so anything worth keeping has to leave first.
+#
+# THE TWO GUARDS on `done`, both refusing rather than asking:
+#   1. UNCOPIED WORK   any uncommitted change in the worktree -- tracked-modified,
+#      staged, or untracked-and-not-ignored. Those files exist nowhere else.
+#   2. UNMERGED COMMITS  commits on scratch/<topic> that no other branch contains.
+#      Reachability is asked of every local branch and every remote-tracking ref, so a
+#      topic merged into a release branch rather than the base counts as merged.
+# --discard skips both. It is the only way to lose work here and it has to be typed.
+#
+# IT NEVER PUSHES. Not on start, not on done, not with --discard. A scratch branch that
+# deserves a remote deserves a real branch first.
+#
+# NO `rm` ANYWHERE. Teardown is `git worktree remove` and `git branch -D`, so the
+# deletion-safety rule's banned list is never reached and nothing routes around the Trash
+# shim. The directory does go for good, which is exactly why the guards come first.
+#
+# Seams (the selftest sets them, nobody else should):
+#   C2_SCRATCH_HOME   the learnings root (default ~/Scratch)
+#   C2_LAUNCH         printed instead of launching, so `start` can be tested headlessly
+#   C2_HWT            the hwt to call (default: hwt on PATH)
+set -uo pipefail
+
+SCRATCH_HOME="${C2_SCRATCH_HOME:-$HOME/Scratch}"
+HWT="${C2_HWT:-hwt}"
+PROFILE=scratch
+
+refuse(){ printf 'c2: REFUSED -- %s\n' "$1" >&2; exit 2; }
+say(){ printf 'c2: %s\n' "$1"; }
+usage(){ sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; }
+tilde(){ printf '%s' "${1/#$HOME/\~}"; }
+
+# The MAIN worktree, whichever worktree you are standing in (--git-common-dir, the same
+# key open-items, pj-start-card, pj-session-end, decided and pj-launch-check all use).
+main_repo(){
+  local gcd
+  gcd="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+  [ -n "$gcd" ] || return 1
+  dirname "$gcd"
+}
+
+wt_path(){ printf '%s/.worktree/scratch/%s' "$1" "$2"; }
+branch_of(){ printf 'scratch/%s' "$1"; }
+
+# ---------------------------------------------------------------- start ----
+cmd_start(){
+  local topic="${1:-}" use_hwt=1 a
+  shift || true
+  for a in "$@"; do case "$a" in --no-herdr) use_hwt=0 ;; *) refuse "start: unknown flag $a" ;; esac; done
+  [ -n "$topic" ] || refuse "start: name a topic (c2 start <topic>)"
+  case "$topic" in */*|.*|*' '*) refuse "start: a topic is one plain word, no slashes, dots or spaces (got '$topic')" ;; esac
+
+  local repo wt br proj
+  repo="$(main_repo)" || refuse "start: not inside a git repository"
+  wt="$(wt_path "$repo" "$topic")"; br="$(branch_of "$topic")"; proj="$(basename "$repo")"
+  [ -e "$wt" ] && refuse "start: $(tilde "$wt") already exists; c2 done $topic first, or pick another topic"
+  git -C "$repo" show-ref --verify --quiet "refs/heads/$br" && refuse "start: branch $br already exists; c2 done $topic first, or pick another topic"
+
+  mkdir -p "$SCRATCH_HOME/$proj" 2>/dev/null || refuse "start: cannot create $(tilde "$SCRATCH_HOME/$proj")"
+
+  local how
+  if [ "$use_hwt" -eq 1 ] && command -v "$HWT" >/dev/null 2>&1; then
+    if (builtin cd "$repo" && "$HWT" "$br" >/dev/null 2>&1); then how="hwt (herdr-tracked)"; fi
+  fi
+  if [ -z "${how:-}" ]; then
+    git -C "$repo" worktree add -q -b "$br" "$wt" >/dev/null 2>&1 \
+      || refuse "start: could not create the worktree at $(tilde "$wt")"
+    how="git worktree add"
+    [ "$use_hwt" -eq 1 ] && how="$how (hwt unavailable or refused; the path is identical)"
+  fi
+  [ -d "$wt" ] || refuse "start: $how reported success but $(tilde "$wt") is not there"
+
+  say "worktree $(tilde "$wt") on branch $br, via $how"
+  say "learnings folder $(tilde "$SCRATCH_HOME/$proj") -- anything worth keeping goes THERE, not in the worktree"
+  local cfg; cfg="$(sed -n 's/^config_dir:[[:space:]]*//p' "${XDG_CONFIG_HOME:-$HOME/.config}/pj/profiles/$PROFILE" 2>/dev/null | head -1)"
+  case "$cfg" in '~/'*) cfg="$HOME/${cfg#\~/}" ;; esac
+  if [ -n "$cfg" ] && [ ! -d "$cfg" ]; then
+    say "FIRST RUN ON THIS PROFILE: $(tilde "$cfg") does not exist yet, so Claude Code will ask you to /login and to trust this folder. Both are one-time and only you can do them."
+  fi
+  if [ -n "${C2_LAUNCH:-}" ]; then
+    printf '%s\n' "$C2_LAUNCH cwd=$wt profile=$PROFILE"
+    return 0
+  fi
+  (builtin cd "$wt" && exec pj --profile "$PROFILE")
+}
+
+# ----------------------------------------------------------------- done ----
+# uncopied_work <wt> -> prints the porcelain lines, empty when the worktree is clean
+uncopied_work(){ git -C "$1" status --porcelain 2>/dev/null; }
+
+# unmerged_commits <repo> <branch> -> the sha/subject lines that live ONLY on <branch>
+#
+# The exclusion list is built EXPLICITLY, one full refname at a time, rather than with
+# `--not --exclude=<pat> --branches`. Measured 2026-09-21: that form silently returned
+# nothing for a genuinely unmerged commit, because --exclude patterns are matched against
+# the glob that FOLLOWS them (refs/heads/<name>, not the full refname as typed), so the
+# branch was never actually excluded from --branches and every one of its own commits was
+# subtracted from itself. Guard 2 passed a worktree that was about to lose real work, and
+# only the selftest's arm 4 caught it. An explicit list cannot mean something other than
+# what it says.
+unmerged_commits(){
+  local repo="$1" br="$2" others
+  git -C "$repo" show-ref --verify --quiet "refs/heads/$br" || return 0
+  others="$(git -C "$repo" for-each-ref --format='%(refname)' refs/heads refs/remotes 2>/dev/null | grep -v "^refs/heads/$br\$" || true)"
+  # No other ref at all: every commit on the branch is unique to it, which is what
+  # `git log <br> --not` with an empty list already reports.
+  # shellcheck disable=SC2086
+  git -C "$repo" log --oneline "$br" --not $others 2>/dev/null
+}
+
+cmd_done(){
+  local topic="${1:-}" discard=0 a
+  shift || true
+  for a in "$@"; do case "$a" in --discard) discard=1 ;; *) refuse "done: unknown flag $a" ;; esac; done
+  [ -n "$topic" ] || refuse "done: name a topic (c2 done <topic>)"
+
+  local repo wt br
+  repo="$(main_repo)" || refuse "done: not inside a git repository"
+  wt="$(wt_path "$repo" "$topic")"; br="$(branch_of "$topic")"
+  if [ ! -e "$wt" ] && ! git -C "$repo" show-ref --verify --quiet "refs/heads/$br"; then
+    say "nothing to do: no worktree at $(tilde "$wt") and no branch $br"
+    return 1
+  fi
+
+  if [ "$discard" -eq 0 ]; then
+    local dirty="" unmerged=""
+    [ -d "$wt" ] && dirty="$(uncopied_work "$wt")"
+    unmerged="$(unmerged_commits "$repo" "$br")"
+    if [ -n "$dirty" ] || [ -n "$unmerged" ]; then
+      printf 'c2: REFUSED -- %s still holds work that exists nowhere else:\n' "$br" >&2
+      if [ -n "$dirty" ]; then
+        printf '  uncopied files (%s):\n' "$(printf '%s\n' "$dirty" | wc -l | tr -d ' ')" >&2
+        printf '%s\n' "$dirty" | sed 's/^/    /' >&2
+        printf '  copy them to %s first.\n' "$(tilde "$SCRATCH_HOME/$(basename "$repo")")" >&2
+      fi
+      if [ -n "$unmerged" ]; then
+        printf '  unmerged commits (%s), on no other branch:\n' "$(printf '%s\n' "$unmerged" | wc -l | tr -d ' ')" >&2
+        printf '%s\n' "$unmerged" | sed 's/^/    /' >&2
+        printf '  merge or cherry-pick them first.\n' >&2
+      fi
+      printf '  c2 done %s --discard throws all of it away. Nothing was changed.\n' "$topic" >&2
+      exit 2
+    fi
+  fi
+
+  if [ -d "$wt" ]; then
+    git -C "$repo" worktree remove --force "$wt" >/dev/null 2>&1 \
+      || refuse "done: could not remove the worktree at $(tilde "$wt")"
+    say "removed worktree $(tilde "$wt")"
+  fi
+  git -C "$repo" worktree prune >/dev/null 2>&1
+  if git -C "$repo" show-ref --verify --quiet "refs/heads/$br"; then
+    git -C "$repo" branch -D "$br" >/dev/null 2>&1 || refuse "done: could not delete branch $br"
+    say "deleted branch $br"
+  fi
+  [ "$discard" -eq 1 ] && say "--discard: the guards were not run"
+  return 0
+}
+
+# ----------------------------------------------------------------- list ----
+cmd_list(){
+  local repo; repo="$(main_repo)" || refuse "list: not inside a git repository"
+  local n=0 line p
+  while IFS= read -r line; do
+    case "$line" in worktree\ *) p="${line#worktree }" ;; *) continue ;; esac
+    case "$p" in "$repo"/.worktree/scratch/*)
+      n=$((n+1))
+      printf '%-40s %s\n' "$(tilde "$p")" "scratch/${p##*/}" ;;
+    esac
+  done <<<"$(git -C "$repo" worktree list --porcelain 2>/dev/null)"
+  [ "$n" -eq 0 ] && { say "no scratch worktrees in $(basename "$repo")"; return 1; }
+  return 0
+}
+
+# ------------------------------------------------------------- selftest ----
+selftest(){
+  local root pass=0 fail=0 out rc repo
+  ok(){ pass=$((pass+1)); printf '  ok   %s\n' "$1"; }
+  bad(){ fail=$((fail+1)); printf '  FAIL %s\n       got: %s\n' "$1" "$2"; }
+  root="$(mktemp -d "${TMPDIR:-/tmp}/c2-selftest.XXXXXX")" || exit 1
+  printf 'c2 selftest in %s\n' "$root"
+  repo="$root/repo"
+  git init -q "$repo" >/dev/null 2>&1
+  git -C "$repo" config user.email t@e; git -C "$repo" config user.name t
+  printf 'base\n' > "$repo/f.txt"; git -C "$repo" add f.txt; git -C "$repo" commit -qm base
+  export C2_SCRATCH_HOME="$root/Scratch" C2_LAUNCH="WOULD-LAUNCH" C2_HWT="$root/no-such-hwt"
+
+  run(){ OUT="$( (builtin cd "${RUNDIR:-$repo}" && "$SELF" "$@" 2>&1) )"; RC=$?; }
+  SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+
+  # 1. start makes the worktree at the RULED path and does not launch under the seam
+  run start t1
+  [ "$RC" -eq 0 ] && ok "1 start exits 0" || bad "1 start rc" "$RC: $OUT"
+  [ -d "$repo/.worktree/scratch/t1" ] && ok "1 worktree at <repo>/.worktree/scratch/<topic> (D-20260914-A01)" || bad "1 path" "$(ls -R "$repo/.worktree" 2>&1)"
+  git -C "$repo" show-ref --verify --quiet refs/heads/scratch/t1 && ok "1 branch scratch/t1 exists" || bad "1 branch" "missing"
+  case "$OUT" in *WOULD-LAUNCH*) ok "1 the launch is reached (seam printed instead)";; *) bad "1 launch" "$OUT";; esac
+  [ -d "$root/Scratch/repo" ] && ok "1 learnings folder created outside the worktree" || bad "1 scratch home" "missing"
+  case "$OUT" in *"git worktree add"*) ok "1 says which route it took when hwt is absent";; *) bad "1 route" "$OUT";; esac
+
+  # 2. a second start on the same topic REFUSES rather than clobbering
+  run start t1
+  [ "$RC" -eq 2 ] && ok "2 a repeated start REFUSES rc 2" || bad "2 repeat" "rc=$RC $OUT"
+
+  # 3. GUARD 1: an uncommitted file refuses, names the file, and changes NOTHING
+  printf 'unsaved\n' > "$repo/.worktree/scratch/t1/new.txt"
+  run done t1
+  [ "$RC" -eq 2 ] && ok "3 done REFUSES rc 2 while an uncopied file exists" || bad "3 dirty rc" "rc=$RC $OUT"
+  case "$OUT" in *new.txt*) ok "3 the refusal names the file";; *) bad "3 names" "$OUT";; esac
+  [ -d "$repo/.worktree/scratch/t1" ] && ok "3 the worktree is still there after the refusal" || bad "3 destroyed" "gone"
+
+  # 4. GUARD 2: commit it, and the unmerged commit refuses on its own
+  git -C "$repo/.worktree/scratch/t1" add new.txt
+  git -C "$repo/.worktree/scratch/t1" -c user.email=t@e -c user.name=t commit -qm "scratch work"
+  run done t1
+  [ "$RC" -eq 2 ] && ok "4 done REFUSES rc 2 on an unmerged commit" || bad "4 unmerged rc" "rc=$RC $OUT"
+  case "$OUT" in *"scratch work"*) ok "4 the refusal names the commit";; *) bad "4 commit named" "$OUT";; esac
+  case "$OUT" in *"--discard"*) ok "4 the refusal names the only way through";; *) bad "4 discard hint" "$OUT";; esac
+  [ -d "$repo/.worktree/scratch/t1" ] && ok "4 still nothing destroyed" || bad "4 destroyed" "gone"
+
+  # 5. --discard tears it down: worktree AND branch
+  run done t1 --discard
+  [ "$RC" -eq 0 ] && ok "5 --discard exits 0" || bad "5 discard rc" "rc=$RC $OUT"
+  [ ! -d "$repo/.worktree/scratch/t1" ] && ok "5 worktree gone" || bad "5 worktree" "still there"
+  git -C "$repo" show-ref --verify --quiet refs/heads/scratch/t1 && bad "5 branch" "still there" || ok "5 branch gone"
+  case "$OUT" in *"the guards were not run"*) ok "5 --discard says the guards were skipped";; *) bad "5 discard notice" "$OUT";; esac
+
+  # 6. THE POSITIVE ARM, and the one that matters most: a CLEAN, MERGED topic needs no
+  #    --discard. Without it, arms 3 and 4 pass just as well on a `done` that always
+  #    refuses -- "it refused" is true in both worlds.
+  run start t2
+  printf 'kept\n' > "$repo/.worktree/scratch/t2/kept.txt"
+  git -C "$repo/.worktree/scratch/t2" add kept.txt
+  git -C "$repo/.worktree/scratch/t2" -c user.email=t@e -c user.name=t commit -qm "worth keeping"
+  git -C "$repo" merge -q --no-ff -m merge scratch/t2 >/dev/null 2>&1
+  run done t2
+  [ "$RC" -eq 0 ] && ok "6 control: a clean, merged topic tears down with NO --discard" || bad "6 clean teardown" "rc=$RC $OUT"
+  [ ! -d "$repo/.worktree/scratch/t2" ] && ok "6 its worktree is gone" || bad "6 worktree" "still there"
+  git -C "$repo" show-ref --verify --quiet refs/heads/scratch/t2 && bad "6 branch" "still there" || ok "6 branch gone"
+  # CAPTURE FIRST, then test. NOT `git log ... | grep -q`: `set -o pipefail` is on, and
+  # `grep -q` exits the moment it matches, so git takes a SIGPIPE and the PIPELINE reports
+  # failure even though the match succeeded. Measured 2026-09-21 -- this arm reported "the
+  # commit is gone" about a commit that was sitting in the log the whole time. Same family
+  # as the rule about never reading $? after a pipe.
+  out="$(git -C "$repo" log --oneline --all 2>/dev/null || true)"
+  case "$out" in *"worth keeping"*) ok "6 the merged work survived the teardown";; *) bad "6 work lost" "the commit is gone";; esac
+
+  # 7. list, and the empty case
+  run start t3
+  run list
+  case "$OUT" in *scratch/t3*) ok "7 list names a live scratch worktree";; *) bad "7 list" "$OUT";; esac
+  run done t3 --discard
+  run list
+  [ "$RC" -eq 1 ] && ok "7 list exits 1 when there are none (not an error)" || bad "7 empty list" "rc=$RC $OUT"
+
+  # 8. done on a topic that never existed: rc 1, says so, destroys nothing
+  run done nosuch
+  [ "$RC" -eq 1 ] && ok "8 done on an unknown topic exits 1, not 2" || bad "8 unknown" "rc=$RC $OUT"
+
+  # 9. refusals: bad topic shapes, unknown flags, outside a repo
+  local b
+  for b in 'a/b' '.hidden' 'two words'; do
+    run start "$b"
+    [ "$RC" -eq 2 ] && ok "9 topic '$b' REFUSED" || bad "9 topic '$b'" "rc=$RC"
+  done
+  run start t9 --bogus
+  [ "$RC" -eq 2 ] && ok "9 an unknown start flag REFUSES" || bad "9 flag" "rc=$RC"
+  RUNDIR="$root" run list
+  [ "$RC" -eq 2 ] && ok "9 outside a git repo REFUSES" || bad "9 outside repo" "rc=$RC $OUT"
+  unset RUNDIR
+
+  # 10. it NEVER pushes. A remote is added and must stay empty through a full cycle.
+  git init -q --bare "$root/origin.git" >/dev/null 2>&1
+  git -C "$repo" remote add origin "$root/origin.git" >/dev/null 2>&1
+  run start t10
+  printf 'x\n' > "$repo/.worktree/scratch/t10/x.txt"
+  git -C "$repo/.worktree/scratch/t10" add x.txt
+  git -C "$repo/.worktree/scratch/t10" -c user.email=t@e -c user.name=t commit -qm x
+  run done t10 --discard
+  out="$(git -C "$root/origin.git" for-each-ref --format='%(refname)' 2>/dev/null)"
+  [ -z "$out" ] && ok "10 a full start/done cycle pushed nothing (the remote is still empty)" || bad "10 pushed" "$out"
+  # 10b. CONTROL: the remote CAN receive, so arm 10's emptiness means "c2 did not push"
+  #      rather than "nothing here can push". core.hooksPath is emptied for this one
+  #      command: this machine has a GLOBAL pre-push hook (pnpm-audit-hook) that fails
+  #      inside the Bash sandbox because uv's cache is unwritable there, and measured
+  #      2026-09-21 it blocks every push. Leaving it in would make the control fail for a
+  #      reason that has nothing to do with the remote, which is a broken instrument
+  #      reading as a finding.
+  git -C "$repo" -c core.hooksPath=/dev/null push -q origin HEAD:refs/heads/control-probe >/dev/null 2>&1
+  out="$(git -C "$root/origin.git" for-each-ref --format='%(refname)' 2>/dev/null)"
+  case "$out" in *control-probe*) ok "10b control: the remote accepts a push, so arm 10's empty result is real";; *) bad "10b control" "the remote refused even a deliberate push: arm 10 proves nothing";; esac
+
+  # 11. no `rm` in the OPERATIONAL half of this script, so the deletion-safety rule's
+  #     banned list is unreachable. The scan stops at the selftest marker: the first
+  #     version of this arm searched the whole file and matched ITS OWN grep pattern,
+  #     which is the self-referential form of reading a count you produced yourself.
+  local oper="$root/c2-operational.txt"
+  sed -n '1,/^# ---* selftest ---*$/p' "$SELF" > "$oper"
+  if grep -nE '(^|[;&|( ])(/bin/rm|rm )' "$oper" | grep -vE '^[0-9]+:[[:space:]]*#' | grep -q .; then
+    bad "11 an rm call is present in the operational half" "$(grep -nE '(^|[;&|( ])(/bin/rm|rm )' "$oper" | grep -vE '^[0-9]+:[[:space:]]*#' | head -3)"
+  else
+    ok "11 no rm call in the operational half (teardown is git worktree remove + git branch -D)"
+  fi
+  # CONTROL: the scan really did read the operational half, and that half really does
+  # contain the teardown. Without this, an empty $oper would pass arm 11 silently.
+  [ -s "$oper" ] && grep -q 'git worktree remove' "$oper" \
+    && ok "11 control: the scanned text is non-empty and holds the teardown call" \
+    || bad "11 control" "the scanned text was empty or lacked git worktree remove, so arm 11's absence proves nothing"
+
+  printf 'c2 selftest: %d passed, %d failed\n' "$pass" "$fail"
+  [ "$fail" -eq 0 ]
+}
+
+case "${1:-}" in
+  --help|-h|"") usage; exit 0 ;;
+  --selftest) selftest; exit $? ;;
+  start) shift; cmd_start "$@"; exit $? ;;
+  done)  shift; cmd_done  "$@"; exit $? ;;
+  list)  shift; cmd_list  "$@"; exit $? ;;
+  *) refuse "unknown command $1 (start | done | list | --selftest)" ;;
+esac
