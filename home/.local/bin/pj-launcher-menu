@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# pj-launcher-menu -- what `c` prints now (F5c, 2026-09-22).
+#
+# Usage:
+#   pj-launcher-menu            print the signpost, exit 1
+#   pj-launcher-menu --help     the same text, exit 0
+#   pj-launcher-menu --selftest prove every arm, exit 0 all green
+#
+# Exit: 1 the signpost (it is NOT a launcher, so it must not look like a success)
+#       0 --help and a passing --selftest
+#       2 an unknown flag
+#
+# WHY `c` IS A SIGNPOST NOW. Ruled by Gavin 2026-09-22 during F5c. `c` launched Claude
+# Code with the LifeOS constitution and plan mode, and it is the habit that predates the
+# pj framework: typing it in a project got a session with no start card, no open items,
+# no rulings and no wrap-up, which is the whole framework silently absent. A launcher you
+# reach for out of habit cannot be fixed by documentation.
+#
+# IT EXITS 1 ON PURPOSE. A signpost that exits 0 is indistinguishable from a launch that
+# did nothing, which is the same all-cases-identical fault this repo keeps writing up.
+# Non-zero says plainly that nothing was started.
+#
+# THE OLD BEHAVIOUR IS NOT GONE. `c-legacy` is the original alias, unchanged, and it is
+# named in the text below so nobody has to go looking through .zshrc for it.
+#
+# WHY A SCRIPT AND NOT JUST A LONGER ALIAS. So it can be tested. An alias is unreachable
+# from a non-interactive shell, so a selftest could not see it at all; this file is on
+# PATH and `--selftest` runs anywhere. Same reasoning that made `pj` a script in F3.
+set -u
+
+MENU_TEXT() {
+  cat <<'EOF'
+
+  `c` is a signpost now, not a launcher. Nothing was started. Pick one:
+
+    pj                    THIS PROJECT, with the framework on: start card, open items,
+                          rulings, /pj:wrap-up. This is the one you want almost always.
+
+    c2 start <topic>      A DISPOSABLE scratch worktree with its own config dir, for
+                          something you are willing to throw away.
+                          c2 done <topic>            tears it down, guarded
+                          c2 done <topic> --discard  throws the work away too
+
+    lifeos                GLOBAL work, with the LifeOS constitution loaded.
+
+    c-legacy              the old `c`, unchanged, if you really do want it.
+
+EOF
+}
+
+selftest() {
+  local pass=0 fail=0 out rc self
+  self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+  ok(){  pass=$((pass+1)); printf '  ok   %s\n' "$1"; }
+  bad(){ fail=$((fail+1)); printf '  FAIL %s\n       got: %s\n' "$1" "$2"; }
+  printf 'pj-launcher-menu selftest\n'
+
+  out="$("$self" 2>&1)"; rc=$?
+  # 1. THE ARM THAT MATTERS. A signpost that exits 0 looks exactly like a launcher that
+  #    started something and produced no output.
+  [ "$rc" -eq 1 ] && ok "1 the bare call exits 1, so it cannot be mistaken for a launch" || bad "1 exit code" "rc=$rc"
+  case "$out" in *"Nothing was started"*) ok "1 and says so in words";; *) bad "1 no plain statement" "$out";; esac
+
+  # 2. every route Gavin named is present, each asserted by name rather than by counting
+  #    lines -- a line count would pass on a menu that named the wrong things.
+  local want
+  for want in 'pj' 'c2 start <topic>' 'c2 done <topic> --discard' 'lifeos' 'c-legacy'; do
+    case "$out" in *"$want"*) ok "2 names $want";; *) bad "2 missing $want" "$out";; esac
+  done
+
+  # 3. CONTROL for arm 2: a string that must NOT be there. Without this, arm 2 passes on
+  #    any text long enough to contain those words by accident, and it proves that the
+  #    matcher can fail at all.
+  case "$out" in
+    *'ThisStringIsNotInTheMenu'*) bad "3 control" "the matcher matches anything" ;;
+    *) ok "3 control: a string that is not in the menu does not match" ;;
+  esac
+
+  # 4. --help prints the SAME routes but exits 0: asking for help is not an error.
+  out="$("$self" --help 2>&1)"; rc=$?
+  [ "$rc" -eq 0 ] && ok "4 --help exits 0" || bad "4 --help exit" "rc=$rc"
+  case "$out" in *'c2 start <topic>'*) ok "4 --help carries the same routes";; *) bad "4 --help text" "$out";; esac
+
+  # 5. an unknown flag REFUSES with 2, distinct from both 0 and the signpost's 1.
+  out="$("$self" --bogus 2>&1)"; rc=$?
+  [ "$rc" -eq 2 ] && ok "5 an unknown flag exits 2, distinct from 0 and 1" || bad "5 unknown flag" "rc=$rc"
+
+  # 6. it launches NOTHING. A fake `claude` on PATH must never be called.
+  local fake; fake="$(mktemp -d "${TMPDIR:-/tmp}/pjmenu.XXXXXX")" || return 1
+  printf '#!/bin/sh\necho called >> "%s/called"\n' "$fake" > "$fake/claude"; chmod +x "$fake/claude"
+  ( PATH="$fake:$PATH"; "$self" >/dev/null 2>&1 )
+  [ ! -e "$fake/called" ] && ok "6 it starts no claude process" || bad "6 launched something" "$(cat "$fake/called")"
+  # 6b CONTROL: the fake really does record when it is run.
+  ( PATH="$fake:$PATH"; claude x >/dev/null 2>&1 )
+  [ -e "$fake/called" ] && ok "6b control: the fake claude records a call when one happens" \
+    || bad "6b control" "the probe cannot detect a launch, so arm 6 proves nothing"
+
+  printf 'pj-launcher-menu selftest: %d passed, %d failed\n' "$pass" "$fail"
+  [ "$fail" -eq 0 ]
+}
+
+case "${1:-}" in
+  "")         MENU_TEXT; exit 1 ;;
+  --help|-h)  MENU_TEXT; exit 0 ;;
+  --selftest) selftest; exit $? ;;
+  *) printf 'pj-launcher-menu: unknown option %s (try --help)\n' "$1" >&2; exit 2 ;;
+esac

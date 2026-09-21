@@ -958,7 +958,26 @@ export USE_BUILTIN_RIPGREP=0
 # script stdout) or `claude-clean` (unconstituted by design).
 _LIFEOS_SP=(--append-system-prompt-file "$HOME/.claude/LIFEOS/LIFEOS_SYSTEM_PROMPT.md")
 
-alias c='__claude_launch claude "${_LIFEOS_SP[@]}" --dangerously-skip-permissions --permission-mode plan'       # Standard launch
+# `c` IS A SIGNPOST NOW, NOT A LAUNCHER (F5c, ruled by Gavin 2026-09-22).
+#
+# It used to be the standard launch, and it is the habit that predates the pj framework:
+# typing it in a project got a session with no start card, no open items, no rulings and
+# no wrap-up -- the whole framework silently absent, which looks exactly like a framework
+# that has nothing to say. A launcher reached for out of habit cannot be fixed by writing
+# something down somewhere else.
+#
+# Measured before changing it: `alias c=` has exactly ONE definition on this machine, this
+# line, and it lives in THIS repo rather than in a LifeOS-owned file. Nothing can call it
+# programmatically either -- an alias is not visible to a script, a hook or a cron job --
+# so the only caller was a human at a prompt. `c-legacy` below is the original, unchanged.
+#
+# A FUNCTION, not an alias, because it has to EXIT 1: a signpost that exits 0 is
+# indistinguishable from a launcher that started something and printed nothing. The text
+# and every arm of its behaviour live in ~/.local/bin/pj-launcher-menu (stowed from this
+# repo), which has a --selftest; an alias could not be tested at all, since a
+# non-interactive shell never sees one. Same reasoning that made `pj` a script in F3.
+alias c-legacy='__claude_launch claude "${_LIFEOS_SP[@]}" --dangerously-skip-permissions --permission-mode plan'  # the former `c`, unchanged
+c() { pj-launcher-menu; }
 alias ct='__claude_launch CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 claude "${_LIFEOS_SP[@]}" --dangerously-skip-permissions --permission-mode plan --teammate-mode tmux'  # Tmux agent teams
 
 # pj - light project launcher (TRIAL, added 2026-09-19; a SCRIPT since F3, 2026-09-21).
