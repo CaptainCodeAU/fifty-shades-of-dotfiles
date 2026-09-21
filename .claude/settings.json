@@ -100,7 +100,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "jq -r '.tool_input.file_path // .tool_input.filePath // empty' | xargs -I{} pnpm dlx prettier --write {} 2>/dev/null || true",
+            "command": "jq -r '.tool_input.file_path // .tool_input.filePath // empty' | xargs -I{} sh -c 'f=\"$1\"; d=\"${CLAUDE_PROJECT_DIR:-}\"; [ -n \"$d\" ] || exit 0; case \"$f\" in \"$d\"/*) pnpm dlx prettier --write \"$f\" >/dev/null 2>&1 ;; esac' _ {} || true",
             "timeout": 10
           }
         ]
@@ -110,7 +110,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "jq -r '.tool_input.file_path // .tool_input.filePath // empty' | xargs -I{} sh -c 'case \"{}\" in *.md) pnpm dlx markdownlint-cli --fix \"{}\" 2>/dev/null ;; esac' || true",
+            "command": "jq -r '.tool_input.file_path // .tool_input.filePath // empty' | xargs -I{} sh -c 'f=\"$1\"; d=\"${CLAUDE_PROJECT_DIR:-}\"; [ -n \"$d\" ] || exit 0; case \"$f\" in \"$d\"/*.md) pnpm dlx markdownlint-cli --fix \"$f\" >/dev/null 2>&1 ;; esac' _ {} || true",
             "timeout": 10
           }
         ]
