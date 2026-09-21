@@ -48,7 +48,7 @@ fake "$DF/home/.local/bin/open-items" 'case "$1" in --where) cat "$OI_WHERE_FILE
 fake "$DF/home/.local/bin/decided" 'case "$1" in --list) cat "$DECIDED_LIST_FILE"; exit $(cat "$DECIDED_LIST_RC");; --homes) cat "$DECIDED_HOMES_FILE"; exit 0;; esac; exit 0'
 fake "$DF/home/.local/bin/claude-hooks-sync" 'cat "$SYNC_OUT_FILE"; exit 0'
 fake "$DF/home/.local/bin/claude-project-settings-render" 'cat "$RENDER_OUT_FILE"; exit $(cat "$RENDER_RC_FILE")'
-for s in pj-start-card-selftest pj-session-end-selftest pj-wrap-selftest open-items-selftest decided-selftest claude-hooks-sync-selftest claude-project-settings-render-selftest ccw-watch-selftest ci-watch-selftest pj-health-selftest; do
+for s in pj-start-card-selftest pj-session-end-selftest pj-wrap-selftest open-items-selftest decided-selftest claude-hooks-sync-selftest claude-project-settings-render-selftest ccw-watch-selftest ci-watch-selftest pj-health-selftest audit-chain-selftest; do
   fake "$DF/home/.local/bin/$s" 'echo "7 passed, 0 failed"; exit 0'
 done
 fake "$DF/home/.local/bin/pj-id" 'echo "all 9 arms pass"; exit 0'
@@ -57,7 +57,7 @@ for h in enforce-secret-probe.sh enforce-census.sh enforce-herdr-skill.sh mark-h
 done
 echo '{"name":"pj","version":"0.1.0"}' >"$DF/home/.claude/pj/.claude-plugin/plugin.json"
 printf -- '---\nname: wrap-up\n---\n# wrap-up\n' >"$DF/home/.claude/pj/skills/wrap-up/SKILL.md"
-for t in $TOOLS pj-start-card-selftest pj-session-end-selftest pj-wrap-selftest open-items-selftest decided-selftest claude-hooks-sync-selftest claude-project-settings-render-selftest ccw-watch-selftest ci-watch-selftest pj-health-selftest; do
+for t in $TOOLS pj-start-card-selftest pj-session-end-selftest pj-wrap-selftest open-items-selftest decided-selftest claude-hooks-sync-selftest claude-project-settings-render-selftest ccw-watch-selftest ci-watch-selftest pj-health-selftest audit-chain-selftest; do
   ln -s "$DF/home/.local/bin/$t" "$BIN/$t"
 done
 for h in enforce-secret-probe.sh enforce-census.sh enforce-herdr-skill.sh mark-herdr-skill-read.sh validate-bash.sh enforce-uv.sh enforce-pnpm.sh; do ln -s "$DF/home/.claude/hooks/$h" "$H/hooks/$h"; done
@@ -142,14 +142,45 @@ mk_transcript "$H/projects/$KEY/b.jsonl" 54000; sleep 0.01
 mk_transcript "$H/projects/$KEY/a.jsonl" 55000; sleep 0.01
 mk_transcript "$H/projects/$KEY/e.jsonl" 999999 1 1 1 1 sdk-cli   # -p probe: newest, must be skipped
 
+# commit-trailer fixture (F4). Two throwaway repos, because the row READS GIT and a
+# fixture file would test the parser without testing the read. trailer_state rewrites
+# the newest commit message in place; the three states are the three the row separates.
+TR_A="$T/trrepo-a"; TR_B="$T/trrepo-b"
+trailer_repo(){   # trailer_repo <dir>
+  mkdir -p "$1"; git -C "$1" init -q -b main >/dev/null 2>&1
+  git -C "$1" config user.email selftest@example.invalid; git -C "$1" config user.name selftest
+  git -C "$1" config core.hooksPath /dev/null    # never the operator's own hook chain
+  printf 'x\n' >"$1/f.txt"; git -C "$1" add f.txt >/dev/null 2>&1
+  git -C "$1" commit -q --no-verify -m "seed" >/dev/null 2>&1
+}
+trailer_state(){   # trailer_state <dir> filled|empty|absent
+  local m="work"
+  case "$2" in
+    filled) m="$m
+
+C-Sess-Id: 11111111-2222-3333-4444-555555555555" ;;
+    empty)  m="$m
+
+C-Sess-Id:" ;;
+  esac
+  git -C "$1" -c core.hooksPath=/dev/null commit -q --no-verify --amend -m "$m" >/dev/null 2>&1
+}
+trailer_repo "$TR_A"; trailer_repo "$TR_B"
+trailer_state "$TR_A" filled; trailer_state "$TR_B" filled
+
 # ------------------------------------------------------------------ runner ----
 OUT=""
 run(){   # run [dir] [args...]  -> OUT holds the JSON; RC the exit code
   local dir="${1:-$PROJ}"; shift || true
+  # PJ_TRAILER_REPOS_FX names the fixture repos; the literal "-" leaves the seam EMPTY,
+  # so the row falls back to its own default (this repo + dot-claude) and the
+  # outside-a-repo arm measures the code path a real run takes.
+  local TR_SEAM="${PJ_TRAILER_REPOS_FX:-$TR_A $TR_B}"; [ "$TR_SEAM" = "-" ] && TR_SEAM=""
   OUT="$( (builtin cd "$dir" && PATH="$BIN:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" PJ_HOME="$H" PJ_BIN_DIR="$BIN" PJ_DOTFILES="$DF" PJ_LAUNCHER="$BIN/pj" PJ_TYPE_OUT="$T/type-out" DRYRUN_FILE="$T/dryrun" DRYRUN_RC="$T/dryrun-rc" PJ_PS_OUT="$T/ps" PJ_ZSHRC_MTIME="$ZMT" PJ_TRANSCRIPTS_DIR="$H/projects" PJ_STATE_DIR="$STATE" \
       PJ_MACHINE_FILE="$T/machine" PJ_PROMPT_SOURCES="$OR:$RULES" PJ_PROMPT_OUT="$T/cache/prompt.md" \
       OI_WHERE_FILE="$T/oi-where" DECIDED_LIST_FILE="$T/decided-list" DECIDED_LIST_RC="$T/decided-list-rc" DECIDED_HOMES_FILE="$T/decided-homes" \
       RENDER_OUT_FILE="$T/render-out" RENDER_RC_FILE="$T/render-rc" SYNC_OUT_FILE="$T/sync-out" \
+      PJ_TRAILER_REPOS="$TR_SEAM" \
       pj-health --json "$@" 2>"$T/stderr") )"; RC=$?
 }
 st(){ jq -r --arg n "$1" '.rows[] | select(.name==$n) | .state' <<<"$OUT"; }
@@ -163,7 +194,7 @@ echo "pj-health-selftest: fixture $T"
 # 0. baseline: all PASS except the live row
 run
 arm "baseline parses as JSON" jq -e '.rows|length>0' <<<"$OUT" >/dev/null
-for n in launcher output-style plugin-dirs prompt-file rules-cap settings-render hooks-sync hook-orphans hook-single-fire stow-links machine-file pj-global no-wrap-up selftests launch-log stale-shells pj-homes drawer decided-store evidence-card evidence-ci-watch evidence-rules evidence-plugins evidence-tokens; do
+for n in launcher output-style plugin-dirs prompt-file rules-cap settings-render hooks-sync hook-orphans hook-single-fire stow-links machine-file pj-global no-wrap-up selftests launch-log stale-shells pj-homes drawer decided-store commit-trailer evidence-card evidence-ci-watch evidence-rules evidence-plugins evidence-tokens; do
   arm "baseline $n PASS (got $(st "$n"): $(dt "$n" | cut -c1-80))" is "$n" PASS
 done
 arm "baseline live-probe NOT MEASURED without --live" is live-probe "$NM"
@@ -196,6 +227,35 @@ printf 'ts=2026-09-21T13:06:00+1000 session=s4 project=p tty=ttys004 shell_start
 arm "launch-log stays WARN with an unmeasured line" is launch-log WARN
 cp "$T/launches.ok" "$STATE/launches.log"; run; arm "launch-log back to PASS (control)" is launch-log PASS
 command mv "$STATE/launches.log" "$T/gone/launches.log"; run; arm "launch-log NOT MEASURED when the log is absent" is launch-log "$NM"; arm "launch-log absent reason names the writer" has launch-log "first pj launch"; cp "$T/launches.ok" "$STATE/launches.log"
+
+# 1b2. commit-trailer (F4, W-20260921-16)
+arm "commit-trailer PASS names both repos" has commit-trailer "newest commit stamped in: trrepo-a trrepo-b"
+trailer_state "$TR_B" empty; run
+arm "commit-trailer WARN on an EMPTY trailer" is commit-trailer WARN
+arm "commit-trailer WARN names the repo" has commit-trailer "EMPTY C-Sess-Id in: trrepo-b"
+arm "commit-trailer WARN is not a FAIL (a past commit cannot be repaired)" [ "$(st commit-trailer)" != FAIL ]
+arm "commit-trailer WARN points at the selftest" has commit-trailer "audit-chain-selftest"
+trailer_state "$TR_B" absent; run
+arm "commit-trailer stays PASS when the key is ABSENT (not a Claude commit)" is commit-trailer PASS
+arm "commit-trailer says which repo had no key" has commit-trailer "no C-Sess-Id key in: trrepo-b"
+trailer_state "$TR_B" filled; run
+arm "commit-trailer back to PASS (control)" is commit-trailer PASS
+trailer_state "$TR_B" empty; run
+arm "commit-trailer WARN still names the CLEAN repo too (one bad repo must not hide the rest)" has commit-trailer "stamped in: trrepo-a"
+trailer_state "$TR_A" absent; run
+arm "commit-trailer WARN names the bad, the absent, and hides neither" has commit-trailer "EMPTY C-Sess-Id in: trrepo-b"
+arm "commit-trailer WARN also names the keyless repo" has commit-trailer "no C-Sess-Id key in: trrepo-a"
+trailer_state "$TR_A" filled; trailer_state "$TR_B" filled; run
+arm "commit-trailer back to PASS again (control)" is commit-trailer PASS
+PJ_TRAILER_REPOS_FX="$T/gone/not-a-repo" run
+arm "commit-trailer NOT MEASURED when no repo is reachable" is commit-trailer "$NM"
+arm "commit-trailer names what it could not reach" has commit-trailer "not-a-repo"
+PJ_TRAILER_REPOS_FX="$TR_A $T/gone/not-a-repo" run
+arm "commit-trailer PASSes on the reachable one and names the other" has commit-trailer "not a git repo: not-a-repo"
+PJ_TRAILER_REPOS_FX=- run "$T/gone"
+arm "commit-trailer outside a repo does NOT say 'not in a git repo' (dot-claude is still measurable)" [ "$(dt commit-trailer)" != "not in a git repo" ]
+arm "commit-trailer outside a repo still reached for a repo" has commit-trailer "measure"
+run; arm "commit-trailer restored (control)" is commit-trailer PASS
 
 # 1c. stale-shells (F3)
 arm "stale-shells PASS counts 2 interactive shells (zsh -c, ppid 1, no-tty rows skipped)" has stale-shells "0 of 2 interactive zsh"
@@ -328,7 +388,7 @@ arm "--quiet keeps the summary line" grep -q '^pj-health: .* FAIL, ' <<<"$QOUT"
 write_settings
 FOUT="$( (builtin cd "$PROJ" && PATH="$BIN:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" PJ_HOME="$H" PJ_BIN_DIR="$BIN" PJ_DOTFILES="$DF" PJ_LAUNCHER="$BIN/pj" PJ_TYPE_OUT="$T/type-out" DRYRUN_FILE="$T/dryrun" PJ_PS_OUT="$T/ps" PJ_ZSHRC_MTIME="$ZMT" PJ_TRANSCRIPTS_DIR="$H/projects" PJ_STATE_DIR="$STATE" PJ_MACHINE_FILE="$T/machine" PJ_PROMPT_SOURCES="$OR:$RULES" PJ_PROMPT_OUT="$T/cache/prompt.md" OI_WHERE_FILE="$T/oi-where" DECIDED_LIST_FILE="$T/decided-list" DECIDED_LIST_RC="$T/decided-list-rc" DECIDED_HOMES_FILE="$T/decided-homes" RENDER_OUT_FILE="$T/render-out" RENDER_RC_FILE="$T/render-rc" SYNC_OUT_FILE="$T/sync-out" pj-health 2>/dev/null) )"
 arm "normal output under 40 lines ($(wc -l <<<"$FOUT" | tr -d ' '))" [ "$(wc -l <<<"$FOUT" | tr -d ' ')" -lt 40 ]
-arm "normal output has one row per check (25)" [ "$(grep -cE '^(PASS|WARN|FAIL|NOT MEASURED) ' <<<"$FOUT")" -eq 25 ]
+arm "normal output has one row per check (26)" [ "$(grep -cE '^(PASS|WARN|FAIL|NOT MEASURED) ' <<<"$FOUT")" -eq 26 ]
 arm "unknown arg REFUSED rc 2" bash -c 'PATH="$1:$PATH" pj-health --bogus >/dev/null 2>&1; [ $? -eq 2 ]' _ "$BIN"
 arm "--help exits 0" bash -c 'PATH="$1:$PATH" pj-health --help >/dev/null 2>&1' _ "$BIN"
 

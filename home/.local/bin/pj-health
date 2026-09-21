@@ -43,6 +43,7 @@
 #   PJ_PS_OUT            file holding a `ps -axo pid=,ppid=,tty=,lstart=,command=` listing
 #   PJ_ZSHRC_MTIME       epoch to use as ~/.zshrc's real mtime
 #   PJ_TRANSCRIPTS_DIR   ~/.claude/projects     PJ_STATE_DIR       ~/.local/state/pj
+#   PJ_TRAILER_REPOS     space-separated repos the commit-trailer row reads
 #   plus the seams the tools already honour and pass through untouched: PJ_MACHINE_FILE,
 #   PJ_PROMPT_SOURCES, PJ_PROMPT_OUT, OPEN_ITEMS_PROJECTS_DIR, DECIDED_GLOBAL_DIR,
 #   CLAUDE_PROJECT_SETTINGS_FILE, CLAUDE_PROJECT_SETTINGS_TEMPLATE, CLAUDE_HOOKS_MANIFEST.
@@ -53,7 +54,7 @@ BUDGET_MARGIN_PCT=15
 BASELINE_MIN_TRANSCRIPTS=3
 BASELINE_WINDOW=5
 FRAMEWORK_TOOLS="pj pj-launch-check pj-prompt-file pj-start-card pj-session-end pj-wrap pj-id open-items decided claude-hooks-sync claude-project-settings-render ci-watch ccw-watch pj-health"
-SELFTESTS="pj:--selftest pj-launch-check:--selftest pj-start-card-selftest pj-session-end-selftest pj-wrap-selftest pj-prompt-file:--selftest pj-id:--selftest open-items-selftest decided-selftest claude-hooks-sync-selftest claude-project-settings-render-selftest ccw-watch-selftest ci-watch-selftest pj-health-selftest"
+SELFTESTS="pj:--selftest pj-launch-check:--selftest pj-start-card-selftest pj-session-end-selftest pj-wrap-selftest pj-prompt-file:--selftest pj-id:--selftest open-items-selftest decided-selftest claude-hooks-sync-selftest claude-project-settings-render-selftest ccw-watch-selftest ci-watch-selftest pj-health-selftest audit-chain-selftest"
 HOOK_SELFTESTS="enforce-secret-probe.sh validate-bash.sh enforce-uv.sh enforce-pnpm.sh"
 PLUGIN_DIRS_EXPECTED="skills/herdr skills/AgentRelay skills/ISA pj-voice pj"
 LAUNCH_LOG_WINDOW=20
@@ -488,6 +489,62 @@ else
     unsupported) row FAIL decided-store "$label unsupported format; fix: point decisions: at a folder of D-*.md or a file of '## D-' blocks";;
     *) row NOTM decided-store "decided --homes printed no project line";;
   esac
+fi
+
+# P4 commit-trailer (F4, W-20260921-16). The C-Sess-Id trailer is stamped by
+# ~/.config/git/hooks/_audit-chain from $CLAUDE_SESSION_ID, else $CLAUDE_CODE_SESSION_ID.
+# THREE states, and the middle one is the whole point of the row:
+#   key absent      -- not a Claude commit at all (a terminal commit, or trailers.disable).
+#                      Quiet: this row does not police who commits.
+#   key with value  -- stamped correctly.
+#   key EMPTY       -- the defect. The stamp block fired, so the commit LOOKS attributed
+#                      in any check that only asks whether the key is present, and the id
+#                      that maps it to a transcript is gone. Three days of commits in two
+#                      repos read this way before anyone noticed (2026-09-21).
+# WARN, never FAIL, ruled at the F4 gate: a past commit cannot be repaired without a
+# history rewrite, so a FAIL here would be permanent and unfixable.
+# The population is an ARRAY, not a space-separated string: $TOPLEVEL comes from
+# `git rev-parse --show-toplevel` and is not under the caller's control, so a project in
+# ~/CODE/My Project would split into two fragments, both fail rev-parse, and the row could
+# degrade to NOT MEASURED while the defect it exists to catch went unreported. Only the
+# PJ_TRAILER_REPOS seam is space-separated, and only the selftest sets it.
+# Outside any repo the dot-claude arm is still measured: half the population this row was
+# written for lives there, and "not in a git repo" would hide a live regression in it.
+tr_list=()
+if [ -n "${PJ_TRAILER_REPOS:-}" ]; then
+  for r in $PJ_TRAILER_REPOS; do tr_list+=("$r"); done
+else
+  [ "$IN_REPO" -eq 1 ] && tr_list+=("$TOPLEVEL")
+  [ -n "$PJ_HOME" ] && tr_list+=("$PJ_HOME")
+fi
+if [ "${#tr_list[@]}" -eq 0 ]; then
+  row NOTM commit-trailer "no repo named to measure"
+else
+  tr_bad=""; tr_ok=""; tr_none=""; tr_unreach=""
+  for r in "${tr_list[@]}"; do
+    rn="$(basename "$r")"
+    if ! git -C "$r" rev-parse --git-dir >/dev/null 2>&1; then tr_unreach="$tr_unreach $rn"; continue; fi
+    msg="$(git -C "$r" log -1 --format=%B 2>/dev/null)"
+    line="$(printf '%s\n' "$msg" | grep -i -m1 '^C-Sess-Id:' || true)"
+    if [ -z "$line" ]; then tr_none="$tr_none $rn"; continue; fi
+    v="$(printf '%s' "$line" | sed -E 's/^[^:]*:[[:space:]]*//')"
+    if [ -n "$v" ]; then tr_ok="$tr_ok $rn"; else tr_bad="$tr_bad $rn"; fi
+  done
+  tr_seen=$(( $(printf '%s' "$tr_ok$tr_bad$tr_none" | wc -w) ))
+  # Every branch reports EVERY repo. A WARN that named only the bad one would hide a second
+  # regression behind the first, and would not say whether the others were clean, unstamped
+  # or unreachable -- which is the same silence this row exists to break.
+  tr_rest=""
+  [ -n "$tr_none" ]    && tr_rest="$tr_rest; no C-Sess-Id key in:$tr_none (not a Claude commit)"
+  [ -n "$tr_unreach" ] && tr_rest="$tr_rest; not a git repo:$tr_unreach"
+  if [ -n "$tr_bad" ]; then
+    tr_ok_clause=""; [ -n "$tr_ok" ] && tr_ok_clause="; stamped in:$tr_ok"
+    row WARN commit-trailer "newest commit carries an EMPTY C-Sess-Id in:${tr_bad}; the stamp fired but the session id was missing; fix: audit-chain-selftest, then check _audit-chain reads CLAUDE_CODE_SESSION_ID (F4). Past commits are not repairable without a rewrite${tr_ok_clause}${tr_rest}"
+  elif [ "$tr_seen" -eq 0 ]; then
+    row NOTM commit-trailer "no repo reachable to measure:${tr_unreach:- none named}"
+  else
+    row PASS commit-trailer "newest commit stamped in:${tr_ok:- (none)}${tr_rest}"
+  fi
 fi
 
 # ============================================================== EVIDENCE ==

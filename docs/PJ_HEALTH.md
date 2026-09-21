@@ -30,7 +30,7 @@ because the two used to be misread for each other.
 | `--live`     | also launch ONE headless `pj -p` probe (an API call, haiku) and read its transcript                                                 |
 | `--quiet`    | print only FAIL and NOT MEASURED rows, plus the summary                                                                             |
 | `--json`     | one object: `project`, `rows[]`, `summary`, `exit`                                                                                  |
-| `--selftest` | prove every arm against fixtures (`pj-health-selftest`, 167 arms)                                                                   |
+| `--selftest` | prove every arm against fixtures (`pj-health-selftest`, 186 arms)                                                                   |
 
 `/pj:health` inside a pj session runs it and pastes the rows.
 
@@ -64,6 +64,7 @@ Project level, inside a repo:
 | `pj-homes`      | the declaration parses, `records` is `repo` or `private`, every declared store exists | unknown key, bad value, or a declared store missing     | a marker the tools do not resolve                                                                              | outside a repo, or no declaration (defaults in use) |
 | `drawer`        | the items folder exists and the generated view matches its stamp                      | `open-items --where` prints nothing                     | the view differs from its stamp (a hand edit; `open-items regen` rescues it), or the legacy single-file layout | no drawer yet (`open-items init`)                   |
 | `decided-store` | `decided --homes` finds the project store                                             | the store is declared in a format `decided` cannot read | outside a repo, or the store is not present                                                                    |
+| `commit-trailer` | the newest commit in this repo and in dot-claude either carries a non-empty `C-Sess-Id` or carries no `C-Sess-Id` key at all (a terminal commit, or `trailers.disable`) | never: a past commit cannot be repaired without a history rewrite, so a FAIL here would be permanent | the newest commit carries the `C-Sess-Id` key with an EMPTY value. The stamp fired and the id was missing, so the commit LOOKS attributed to anything that only checks the key is present. Fix: `audit-chain-selftest`, then check `_audit-chain` still reads `CLAUDE_CODE_SESSION_ID` (F4) | no named repo is reachable |
 
 Evidence, read from the newest interactive pj transcript for the repo (the one whose
 output style is pj-voice; headless `-p` probes are skipped):
