@@ -36,6 +36,39 @@
 #   4. doc-stamp     each docs/HERDR*.md carries `herdr-verified: X.Y.Z` and it
 #                    matches the installed binary. Replaces six hand-typed
 #                    version mentions that went stale without anyone noticing.
+#   5. upstream-drift three CONTENT HASHES against upstream's own repo, which is
+#                    the subject checks 1-4 structurally cannot see (below).
+#
+# WHY CHECK 5 EXISTS AT ALL -- checks 1-4 ARE ALL LOCAL
+#   Check 1 compares `herdr --skill` against UPSTREAM.md. Both come off THIS
+#   BOX, so while the binary sits at a pinned version they agree by
+#   construction and the check reports CLEAN no matter what upstream does.
+#   Measured 2026-09-22 (F9): upstream's skill had been TEN HUNKS ahead for six
+#   days, and this tool printed "merge base current" on every session card in
+#   that window. A green light that is green in both worlds is not a check.
+#
+#   So check 5 asks the only party that can answer: upstream's git repo,
+#   file skills/herdr/SKILL.md, at three refs.
+#
+#     FAIL  UPSTREAM.md differs from upstream at the tag UPSTREAM.version names.
+#           The snapshot is CORRUPT -- it is supposed to be a verbatim capture,
+#           so a difference means it was edited, truncated, or captured wrong,
+#           and every merge built on it is built on sand.
+#     WARN  upstream at its newest RELEASE tag differs from the snapshot.
+#           Upstream has SHIPPED skill changes we have not merged. This is the
+#           one that fires in normal life, and it fires the day they release,
+#           not the day we happen to upgrade.
+#     INFO  upstream master differs from that newest release tag. Changes exist
+#           but are UNRELEASED. Never actionable; it is the early warning that
+#           the next release will carry a merge.
+#
+#   It NEVER writes to SKILL.md or UPSTREAM.md. A WARN beats a silent rewrite.
+#
+# CACHE
+#   One JSON file under $XDG_CACHE_HOME/dotfiles (default ~/.cache/dotfiles),
+#   24h, so pj-health and the session hook run offline after the first fetch.
+#   `--live` forces a fetch. A fetch failure with no usable cache degrades to
+#   SKIPPED and says which ref could not be reached -- never to a false CLEAN.
 #
 # SAFETY
 #   Read-only, and deliberately so. It never merges, never writes a snapshot,
@@ -49,6 +82,9 @@
 #     --repo PATH   dotfiles repo (default: resolved from the stow symlink)
 #     --quiet       print only actionable + SKIPPED lines
 #     --json        emit a JSON report instead of the table
+#     --live        ignore the 24h cache and fetch from upstream now
+#     --no-network  never fetch; use the cache or report SKIPPED
+#     --timeout SEC per-network-call timeout (default: 8)
 #
 # EXIT CODES
 #   0  nothing actionable
@@ -58,16 +94,31 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.error
+import urllib.request
 
 CLEAN, ACTION, SKIP = "OK", "ACTION", "SKIPPED"
 
 SKILL_LINK = os.path.expanduser("~/.claude/skills/herdr/SKILL.md")
+
+# Upstream's own copy of the skill, and the endpoint that names its newest
+# NON-prerelease tag (the daily preview-* tags must never be proposed as a
+# merge target). Same repo and same releases endpoint herdr-cooldown-check
+# uses, deliberately: two tools disagreeing about which release is newest is
+# its own failure mode.
+UPSTREAM_REPO = "herdrdev/herdr"
+UPSTREAM_SKILL_PATH = "skills/herdr/SKILL.md"
+RAW_TMPL = "https://raw.githubusercontent.com/{repo}/{ref}/{path}"
+RELEASES_LATEST = "https://api.github.com/repos/{repo}/releases/latest"
+CACHE_TTL = 86400  # 24h
 REL_SKILL_DIR = "home/.claude/skills/herdr"
 STAMP_RE = re.compile(r"^herdr-verified:\s*([0-9]+\.[0-9]+\.[0-9]+)\s*$", re.M)
 
@@ -126,6 +177,151 @@ def resolve_repo(explicit: str | None, link: str = SKILL_LINK) -> tuple[str | No
     return None, "not found"
 
 
+def sha(text: str | None) -> str | None:
+    """sha256 of the text, or None for None. Newline-normalised at the end
+    only, because a trailing-newline difference is a capture artefact rather
+    than a skill change and would otherwise cry wolf on every run."""
+    if text is None:
+        return None
+    return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
+
+
+def upstream_rows(base_tag: str | None, latest_tag: str | None,
+                  h_snap: str | None, h_base: str | None,
+                  h_latest: str | None, h_master: str | None
+                  ) -> list[tuple[str, str, str]]:
+    """PURE. The whole three-hash rule, so the self-test can drive every
+    verdict without a network call. Returns (subject, state, detail) rows.
+
+    Each arm refuses to guess: a hash we could not fetch is SKIPPED by name,
+    never folded into "no difference found".
+    """
+    rows: list[tuple[str, str, str]] = []
+
+    # FAIL: the snapshot is not what it claims to be.
+    if h_snap is None or h_base is None:
+        missing = "UPSTREAM.md" if h_snap is None else f"upstream at {base_tag}"
+        rows.append(("upstream-base", SKIP,
+                     f"could not read {missing}, so the snapshot was NOT verified"))
+    elif h_snap != h_base:
+        rows.append(("upstream-base", ACTION,
+                     f"SNAPSHOT CORRUPT: UPSTREAM.md does not match upstream at "
+                     f"{base_tag} ({h_snap[:12]} vs {h_base[:12]}). It is meant to be a "
+                     f"verbatim capture, so every merge built on it is unsound. "
+                     f"Recapture it from {RAW_TMPL.format(repo=UPSTREAM_REPO, ref=base_tag, path=UPSTREAM_SKILL_PATH)}"))
+    else:
+        rows.append(("upstream-base", CLEAN,
+                     f"UPSTREAM.md is byte-identical to upstream at {base_tag} "
+                     f"(normalised sha256 {h_snap[:12]}; a raw `shasum -a 256` of the file "
+                     f"differs, because these hashes strip trailing whitespace first)"))
+
+    # WARN: upstream shipped skill changes we have not merged.
+    if h_latest is None or latest_tag is None:
+        rows.append(("upstream-released", SKIP,
+                     "could not read upstream's newest release tag, so nothing was compared"))
+    elif h_snap is None:
+        rows.append(("upstream-released", SKIP,
+                     "no UPSTREAM.md to compare the newest release against"))
+    elif h_latest != h_snap:
+        rows.append(("upstream-released", ACTION,
+                     f"UPSTREAM MOVED: {latest_tag} differs from our merge base "
+                     f"({h_latest[:12]} vs {h_snap[:12]}). Upstream has SHIPPED skill "
+                     f"changes we have not merged. Diff the two and merge; never "
+                     f"overwrite SKILL.md, it is a superset"))
+    else:
+        rows.append(("upstream-released", CLEAN,
+                     f"upstream's newest release {latest_tag} matches our merge base"))
+
+    # INFO: unreleased work. Never actionable.
+    if h_master is None or h_latest is None:
+        rows.append(("upstream-unreleased", SKIP,
+                     "could not read upstream master, so unreleased work was not checked"))
+    elif h_master != h_latest:
+        rows.append(("upstream-unreleased", CLEAN,
+                     f"INFO only: upstream master differs from {latest_tag} "
+                     f"({h_master[:12]} vs {h_latest[:12]}) -- skill changes exist but are "
+                     f"UNRELEASED, so the next release will carry a merge"))
+    else:
+        rows.append(("upstream-unreleased", CLEAN,
+                     f"upstream master is the same file as {latest_tag}; nothing unreleased"))
+
+    return rows
+
+
+def cache_path() -> str:
+    base = os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache")
+    return os.path.join(base, "dotfiles", "herdr-upstream-skill.json")
+
+
+def cache_fresh(stamp: float | None, now: float, ttl: int = CACHE_TTL) -> bool:
+    """PURE. A cache with no stamp, or a stamp in the future, is NOT fresh --
+    a clock that moved backwards must re-fetch rather than trust a file it
+    cannot date."""
+    if stamp is None:
+        return False
+    age = now - stamp
+    return 0 <= age < ttl
+
+
+def cache_read(path: str | None = None, now: float | None = None) -> dict | None:
+    try:
+        with open(path or cache_path(), encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    if not cache_fresh(data.get("stamp"), now if now is not None else time.time()):
+        return None
+    return data
+
+
+def cache_write(data: dict, path: str | None = None) -> bool:
+    """Best effort. A cache that cannot be written is not an error; the next
+    run simply fetches again. Returns whether it landed, so the report can say
+    so rather than implying a cache exists."""
+    p = path or cache_path()
+    try:
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        tmp = p + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=2)
+        os.replace(tmp, p)
+        return True
+    except OSError:
+        return False
+
+
+def _get(url: str, timeout: int, accept: str | None = None) -> str | None:
+    req = urllib.request.Request(url, headers={"User-Agent": "herdr-skill-drift-check"})
+    if accept:
+        req.add_header("Accept", accept)
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read().decode("utf-8")
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+
+
+def upstream_latest_tag(timeout: int) -> str | None:
+    body = _get(RELEASES_LATEST.format(repo=UPSTREAM_REPO), timeout,
+                "application/vnd.github+json")
+    if not body:
+        return None
+    try:
+        return json.loads(body).get("tag_name") or None
+    except ValueError:
+        return None
+
+
+def upstream_skill(ref: str, timeout: int) -> str | None:
+    return _get(RAW_TMPL.format(repo=UPSTREAM_REPO, ref=ref, path=UPSTREAM_SKILL_PATH),
+                timeout)
+
+
 def self_test() -> list[str]:
     """Prove the detectors still DETECT.
 
@@ -163,6 +359,71 @@ def self_test() -> list[str]:
         open(plain, "w").close()
         check("resolver reports a real file as not found", resolve_repo(None, link=plain)[0], None)
 
+    # --- upstream three-hash rule: drive EVERY verdict on fixtures ----------
+    # The live run can only ever show the state the world happens to be in, so
+    # the two arms that matter most (a corrupt snapshot, an upstream that
+    # moved) would otherwise never be observed going red at all.
+    A, B, C = sha("alpha"), sha("beta"), sha("gamma")
+
+    def states(rows):
+        return [(s, st) for s, st, _ in rows]
+
+    check("all three clean when every hash agrees",
+          states(upstream_rows("v1.0.0", "v1.0.0", A, A, A, A)),
+          [("upstream-base", CLEAN), ("upstream-released", CLEAN),
+           ("upstream-unreleased", CLEAN)])
+    check("FAIL arm: a snapshot that does not match its own tag",
+          states(upstream_rows("v1.0.0", "v1.0.0", A, B, B, B))[0],
+          ("upstream-base", ACTION))
+    check("WARN arm: upstream released changes we have not merged",
+          states(upstream_rows("v1.0.0", "v1.1.0", A, A, B, B))[1],
+          ("upstream-released", ACTION))
+    check("WARN arm leaves the base arm CLEAN",
+          states(upstream_rows("v1.0.0", "v1.1.0", A, A, B, B))[0],
+          ("upstream-base", CLEAN))
+    check("INFO arm: master ahead of the newest tag is never actionable",
+          states(upstream_rows("v1.0.0", "v1.0.0", A, A, A, B))[2],
+          ("upstream-unreleased", CLEAN))
+    # A missing hash must be SKIPPED BY NAME. This is the arm that stops an
+    # unreachable network reading as "no difference found".
+    check("an unfetchable tag is SKIPPED, never clean",
+          states(upstream_rows("v1.0.0", "v1.0.0", A, None, A, A))[0],
+          ("upstream-base", SKIP))
+    check("an unfetchable master is SKIPPED, never clean",
+          states(upstream_rows("v1.0.0", "v1.0.0", A, A, A, None))[2],
+          ("upstream-unreleased", SKIP))
+    check("an unfetchable latest tag is SKIPPED, never clean",
+          states(upstream_rows("v1.0.0", None, A, A, None, None))[1],
+          ("upstream-released", SKIP))
+    check("sha of nothing is None, not the hash of an empty string",
+          sha(None), None)
+    check("sha ignores a trailing newline difference",
+          sha("x\n") == sha("x"), True)
+    check("sha still separates different text", sha("x") == sha("y"), False)
+
+    # --- cache: a hit, a miss, and a clock that went backwards -------------
+    check("a fresh stamp is a cache HIT", cache_fresh(1000.0, 1000.0 + 10), True)
+    check("a stamp older than the TTL is a cache MISS",
+          cache_fresh(1000.0, 1000.0 + CACHE_TTL + 1), False)
+    check("a stamp exactly at the TTL is a MISS", cache_fresh(1000.0, 1000.0 + CACHE_TTL), False)
+    check("no stamp at all is a MISS", cache_fresh(None, 1000.0), False)
+    check("a stamp in the FUTURE is a MISS, not a hit",
+          cache_fresh(2000.0, 1000.0), False)
+    with tempfile.TemporaryDirectory(prefix="herdr-drift-cache-") as tmp:
+        cp = os.path.join(tmp, "sub", "cache.json")
+        payload = {"stamp": 1000.0, "base_tag": "v1.0.0", "h_snap": A}
+        check("cache_write lands", cache_write(payload, path=cp), True)
+        check("cache_read returns it inside the TTL",
+              (cache_read(cp, now=1000.0 + 10) or {}).get("h_snap"), A)
+        check("cache_read returns None past the TTL",
+              cache_read(cp, now=1000.0 + CACHE_TTL + 1), None)
+        check("cache_read returns None for a missing file",
+              cache_read(os.path.join(tmp, "nope.json"), now=1000.0), None)
+        with open(cp, "w", encoding="utf-8") as fh:
+            fh.write("{not json")
+        check("cache_read returns None for a corrupt file",
+              cache_read(cp, now=1000.0), None)
+
     return fails
 
 
@@ -173,6 +434,12 @@ def main() -> int:
     ap.add_argument("--repo", default=None)
     ap.add_argument("--quiet", action="store_true")
     ap.add_argument("--json", dest="as_json", action="store_true")
+    ap.add_argument("--live", action="store_true",
+                    help="ignore the 24h cache and fetch from upstream now")
+    ap.add_argument("--timeout", type=int, default=8,
+                    help="per-network-call timeout in seconds (default: 8)")
+    ap.add_argument("--no-network", action="store_true",
+                    help="never fetch; use the cache or report SKIPPED")
     args = ap.parse_args()
 
     rows: list[tuple[str, str, str]] = []
@@ -243,11 +510,47 @@ def main() -> int:
             elif not args.quiet:
                 rows.append((f"doc:{name}", CLEAN, f"verified against {stamp}"))
 
+    # --- subject 5: the three hashes against upstream's own repo -----------
+    # Everything above this line is local, so it cannot see upstream moving
+    # while the binary stays pinned. This is the only arm that can.
+    up = {"source": None, "base_tag": None, "latest_tag": None,
+          "h_snap": None, "h_base": None, "h_latest": None, "h_master": None}
+    h_snap = sha(stored_txt)
+    base_tag = f"v{stored_ver}" if stored_ver else None
+    # --live is the ONLY flag that bypasses the cache. --no-network must PREFER
+    # it: "offline with a cache" and "offline with no cache" are different
+    # states, and a first draft that made them identical printed the same three
+    # SKIPPED rows for both (caught 2026-09-22 by running the two arms side by
+    # side, which is the only reason it was visible at all).
+    cached = None if args.live else cache_read()
+    if cached and cached.get("base_tag") == base_tag:
+        up.update({k: cached.get(k) for k in
+                   ("base_tag", "latest_tag", "h_base", "h_latest", "h_master")})
+        up["source"] = "cache"
+    elif args.no_network:
+        up["source"] = "none (--no-network and no usable cache)"
+    else:
+        latest_tag = upstream_latest_tag(args.timeout)
+        h_base = sha(upstream_skill(base_tag, args.timeout)) if base_tag else None
+        h_latest = sha(upstream_skill(latest_tag, args.timeout)) if latest_tag else None
+        h_master = sha(upstream_skill("master", args.timeout))
+        up.update({"base_tag": base_tag, "latest_tag": latest_tag, "h_base": h_base,
+                   "h_latest": h_latest, "h_master": h_master, "source": "live"})
+        # Only cache a fetch that actually answered. Caching a failure for 24h
+        # would turn one unreachable moment into a day of false SKIPPEDs.
+        if h_base and h_latest and h_master:
+            payload = dict(up); payload["stamp"] = time.time(); payload.pop("source", None)
+            up["cached"] = cache_write(payload)
+    up["h_snap"] = h_snap
+    rows.extend(upstream_rows(base_tag, up["latest_tag"], h_snap,
+                              up["h_base"], up["h_latest"], up["h_master"]))
+
     report = {
         "self_test": "pass",
         "installed": have,
         "base_version": stored_ver,
         "drift": verdict,
+        "upstream": up,
         "repo": repo,
         "subjects": [{"subject": s, "state": st, "note": n} for s, st, n in rows],
     }
