@@ -46,6 +46,25 @@
     "",
     "Top-level keys beginning with _ are stripped at render time; this note is one."
   ],
+  "_five_settings_layers": [
+    "THE FIVE SETTINGS LAYERS, and which file each one is under pj (W-20260922-A10).",
+    "Measured 2026-09-22 in F8a with $.settings.read({source}) and cross-checked against",
+    "every file on disk. Written here so a settings audit reads it instead of re-deriving it.",
+    "",
+    "  policy   managed settings: /Library/Application Support/ClaudeCode/managed-settings.json",
+    "           EMPTY on this machine (0 keys). Reaches every launcher, every config dir,",
+    "           and survives --safe-mode; --setting-sources cannot exclude it (F5b Part C).",
+    "  user     <config_dir>/settings.json. Under pj this is NOT READ: pj passes",
+    "           --setting-sources project,local. Under a profile it is that profile's dir",
+    "           (~/.claude-scratch/settings.json), never ~/.claude/settings.json.",
+    "  project  the repo's .claude/settings.json (hooks, mostly).",
+    "  local    the repo's .claude/settings.local.json (permissions, sandbox).",
+    "  flag     THIS FILE, rendered to ~/.claude/settings.project.json and passed with",
+    "           --settings. pj's own settings are the FLAG layer, not user or project.",
+    "",
+    "Later layers win per key. A second --settings (the profile overlay for remote_control",
+    "and voice) merges on top of this file rather than replacing it (F5b, three arms)."
+  ],
   "cleanupPeriodDays": 1825,
   "claudeMdExcludes": [
     "__HOME__/.claude/CLAUDE.md"
