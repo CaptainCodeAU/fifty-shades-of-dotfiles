@@ -7,6 +7,36 @@ description: "Control Herdr, a terminal multiplexer for coding agents. Use only 
 
 Herdr organizes terminals into workspaces, tabs, and panes, recognizes coding agents running inside panes, and exposes the current session through the `herdr` CLI.
 
+## Read this first
+
+Ten rules, each of which has already cost this estate a session. Every one is
+argued from a measurement further down; this list exists so you meet them
+BEFORE the mistake rather than while diagnosing it.
+
+1. **Every `herdr` call needs `dangerouslyDisableSandbox: true`.** The socket is
+   denied even when `settings.local.json` grants it, in background tasks too.
+2. **Read panes with `herdr-pane-read`, never a hand-picked `--lines`.** A small
+   `--lines` returns ZERO BYTES from a pane full of text.
+3. **One wait per call, handed to a background task.** `agent wait` and
+   `pane wait-output` block on Herdr's events. Never wrap either in your own
+   `while`/`sleep` loop.
+4. **A `wait-output` match string must be impossible in the command you sent.**
+   It searches the echoed command line too, so a literal you typed matches
+   instantly, before anything ran. Assemble the sentinel at runtime.
+5. **A registry entry is not a ready agent.** A Claude session's entry appears
+   BEFORE its name is applied (F5d), and `agent_status: idle` is reported early
+   on a nested TUI. Neither proves the pane will accept a prompt.
+6. **Never close anything on `idle` alone.** Confirm the expected output is
+   really there with a read. Work killed by a false idle is gone, not delayed.
+7. **Never `workspace rename`.** It writes a PERMANENT override with no way
+   back, including a rename to the value already showing.
+8. **`agent prompt` can type the text and not submit it.** Read the pane and
+   look at where the text sits; the fix is `pane send-keys <pane-id> enter`.
+9. **A timeout or a stall does not prove the prompt was never delivered.** Read
+   before you resend, or the agent gets it twice.
+10. **Close only what you opened, and clear the labels you set.** A pane label
+    outlives the process it described.
+
 Before issuing any control command, verify that this agent is running inside a Herdr-managed pane:
 
 ```bash
