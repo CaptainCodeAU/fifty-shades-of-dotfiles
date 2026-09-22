@@ -176,6 +176,8 @@ herdr agent wait reviewer --timeout 120000
 
 The first call only submits -- no five-second grace-period check applies without `--wait`. The second call is a plain wait with whatever timeout the task actually needs.
 
+**`agent prompt` can type the text and NOT submit it.** Hit twice on 2026-09-22 (F8a, W-20260922-A11): the call returned `agent_prompted`, `agent wait` then returned, and the pane showed the prompt sitting IN THE INPUT BOX after the `>` rather than above it as a sent turn; no hook fired. This is a different trap from the stall and the false idle above: the submit itself did not happen. The check is to read the pane (`herdr-pane-read <target>`) and look at where the text sits; the fix is an explicit `herdr pane send-keys <pane-id> enter`. The same swallowed-keystroke shape hits `pane run` on a pane whose shell is still printing its startup banner: the first character can be eaten (measured 2026-09-22: `pj --profile p10` ran as `j --profile p10`), so read the pane after any `pane run` into a freshly split pane before trusting that the command ran.
+
 Use `--until` only for a state-specific workflow, such as waiting for an already-running agent to request input:
 
 ```bash
