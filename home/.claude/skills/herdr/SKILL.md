@@ -41,6 +41,7 @@ herdr terminal
 herdr notification
 herdr integration
 herdr session
+herdr machine
 ```
 
 Do not run bare `herdr` for discovery; it launches or attaches the TUI. Do not probe a mutating nested command by omitting arguments. Commands such as `herdr workspace create` are valid with defaults and will execute.
@@ -59,7 +60,7 @@ A pane exists whether or not it contains an agent. `agent start` requires an exi
 
 Agent commands accept either a unique live agent name or the pane ID currently hosting that agent. They do not accept terminal IDs or bare agent-kind labels. Names must match `[a-z][a-z0-9_-]{0,31}` and be unique among live agents. A name follows the current pane occupant and is cleared when that agent exits, is released, or is replaced.
 
-`idle` means the agent is ready for input and its tab has been seen in the focused Herdr UI. `done` is the same underlying idle state after unseen background work finishes. Focusing the tab or targeting the pane or agent with a focus command marks it seen. CLI reads do not mark it seen. `blocked` means Herdr recognized an approval or question UI. `unknown` means an agent is present but Herdr cannot classify it confidently; it does not prove completion.
+`idle` and `done` both mean the agent is ready for input. The CLI and API use the server's seen state to distinguish them; explicit focus commands mark the target seen, while reads do not. Each TUI client tracks viewed completions independently, so its Done badge can differ from the CLI or another client's badge (upstream rewrote this paragraph for 0.9.x; before that it was phrased as one tab being seen in one focused UI). `blocked` means Herdr recognized an approval or question UI. `unknown` means an agent is present but Herdr cannot classify it confidently; it does not prove completion.
 
 ## Use IDs and caller context
 
@@ -84,6 +85,8 @@ printf '%s\n' "$HERDR_WORKSPACE_ID" "$HERDR_TAB_ID" "$HERDR_PANE_ID"
 | `pane layout`, `pane current`, `pane split`                                              | `--current` or `--pane <id>` (`split` also accepts a positional id) |
 | `pane read`, `pane run`, `pane send-keys`, `pane wait-output`, `pane close`, `pane move` | positional `<PANE_ID>` only                                         |
 
+**From 0.9.1 an omitted `pane split` target means the CALLING pane** when `HERDR_PANE_ID` is available, falling back to the focused pane otherwise (upstream #4123). That is NOT true of 0.8.2 and earlier, where an omitted target meant the UI-focused pane, which can belong to the user or another client. Every other `pane` subcommand still follows the old rule, so keep naming the target explicitly and do not rely on the new default.
+
 So the calling pane is `herdr pane read "$HERDR_PANE_ID"`, NOT `herdr pane read --current`. This split is written out rather than left to "prefer" because an earlier version of this line said only "prefer `--current`", and a session reading it spent two round trips on `--pane` then `--current` before running `pane read --help` (2026-09-20). A rejected flag prints one short line with no usage block, so it reads like a Herdr fault rather than the syntax error it is.
 
 Discover live state with:
@@ -97,6 +100,26 @@ herdr agent list
 ```
 
 Creation responses expose the IDs to use next. `workspace create` returns `.result.workspace`, `.result.tab`, and `.result.root_pane`; the id fields inside those objects are `.result.workspace.workspace_id` (`wF`), `.result.tab.tab_id` (`wF:t1`) and `.result.root_pane.pane_id` (`wF:p1`) -- verified 2026-09-06. `tab create` returns `.result.tab` and `.result.root_pane`. `pane split` returns the new pane as `.result.pane`.
+
+## Control a saved SSH machine (0.9.1 and later)
+
+Nothing on this estate has a saved machine yet, so none of this is measured here. It is upstream's text, kept verbatim in substance so the merge base stays comparable.
+
+IDs and live agent names are scoped to one server. Two saved SSH machines can both have `w1:p1` or an agent named `reviewer`. Selecting a machine in the TUI does not retarget commands running in your pane: without `--machine`, they still use the inherited session and socket context.
+
+To control a saved SSH machine, use the same global prefix for discovery and every later command:
+
+```bash
+herdr --machine <label-or-id> agent list
+herdr --machine <label-or-id> pane list
+herdr --machine <label-or-id> agent prompt <remote-agent-name> "Reply with your current status." --wait --timeout 120000
+```
+
+The selector must be an enabled saved profile ID or a unique, case-sensitive label, not an arbitrary SSH hostname. Commands use that profile's remote session without an open TUI. Do not combine `--machine` with `--session` or `--remote`. Discover IDs on that machine; inherited local IDs and `--current` do not identify remote panes.
+
+Both installations must support machine API forwarding, and the remote server must already be running and API-compatible. Forwarding never installs, starts, or restarts a server and never falls back to Local. Local configuration, session management, installation commands, and interactive attachment are not forwarded. Remote worktree paths must be absolute, `~`, or start with `~/`; plugin link paths must be absolute. A connection failure does not prove a mutation was not applied: inspect remote state before retrying.
+
+`herdr machine list` lists saved connection profiles, not a cross-machine pane inventory; add `--json` for scripts. Only add, remove, enable, or disable profiles when the user asks. Removing a profile disconnects the client but does not stop remote sessions. Adding a machine uses the remote default session unless `--remote-session` is explicitly supplied. Setup asks before stopping an incompatible server and defaults to No; do not approve replacement without the user's consent. Experimental handoff is not part of `machine add`.
 
 ## Create a worktree
 
@@ -163,9 +186,9 @@ Submit work through the agent surface:
 herdr agent prompt reviewer "Review the current diff and report only actionable findings." --wait --timeout 120000
 ```
 
-`agent prompt` atomically submits text and encoded Enter while honoring the pane's live bracketed-paste mode. It refuses an agent already waiting at an approval or question dialog, returning `agent_blocked` before sending any input: inspect the blocked UI and ask the user before answering it, because that answer is theirs to give. For normal agent work, `--wait` is enough: it waits for the first settled `idle`, `done`, or `blocked` state. Do not repeat those defaults with `--until`.
+`agent prompt` sends text followed by encoded Enter as ONE ORDERED SUBMISSION, honoring the pane's live bracketed-paste mode. From 0.9.x upstream states the contract precisely, and the precision matters: it reports successful submission only after BOTH have been written, and **that alone does not prove the agent started a turn**. For Codex on Windows it sends a paste boundary before Enter so submission does not depend on prompt size. It refuses an agent already waiting at an approval or question dialog, returning `agent_blocked` before sending any input: inspect the blocked UI and ask the user before answering it, because that answer is theirs to give. For normal agent work, `--wait` is enough: it waits for the first settled `idle`, `done`, or `blocked` state. Do not repeat those defaults with `--until`.
 
-A prompt sent from a non-working state must produce an observed lifecycle change within five seconds. Otherwise Herdr returns `agent_prompt_stalled` instead of waiting indefinitely. This wait tracks lifecycle state, not an individual turn; if the agent is already working, completion of the active turn may satisfy it.
+With `--wait`, a prompt sent from a non-working state must produce observed `working` or `blocked` activity. After submission Herdr waits up to five seconds for that activity; unrelated `idle`, `done` or session changes do NOT satisfy the gate (0.9.0 tightened this, #3685: before it, any lifecycle change could complete the wait). It returns `agent_prompt_stalled` if no activity is observed, or `timeout` if the caller's timeout expires first, and the caller timeout includes submission time. Without a timeout the settled-state wait is indefinite once activity is observed. This wait tracks lifecycle state, not an individual turn; if the agent is already working, completion of the active turn may satisfy it.
 
 That five-second window is tight in an environment with heavy per-turn overhead (session-start hooks, skill loading, a custom status line) -- confirmed reproducible here, not a one-off: the visible "working" transition can take longer than five seconds even though the prompt was accepted and did run. `agent_prompt_stalled` on an otherwise-healthy target does not mean the prompt failed; check with `agent read` before retrying anything. To avoid the stall check entirely, decouple submit from wait instead of using the combined flag:
 
@@ -205,7 +228,7 @@ herdr agent read reviewer --source recent-unwrapped --lines 120   # raw form: pa
 
 `agent get`'s result key is `agent` (singular, one object) -- the status field is `.result.agent.agent_status`, not `.result.agent_status`. This differs from `agent list`, whose `.result.agents[]` array has `agent_status` as a sibling of `agent`, not nested under it. Confirmed cause of a wasted debugging session: a script checking the wrong (shallower) path saw `null` on every call, foreground and background alike, and that false signal was briefly mistaken for a real Herdr behavior. Verify any status-reading jq filter against a real `agent get` response before trusting it.
 
-If a wait fails or returns `blocked`, inspect `agent get` and `agent read` before deciding what input to send. Use the pane surface only when raw terminal control is intentional.
+If a wait fails or returns `blocked`, inspect `agent get` and `agent read` before deciding what input to send. **A timeout or a stalled response does not prove the prompt was never delivered; do not blindly submit it again.** That is the refusal-is-not-an-answer rule aimed at your own retry: a resend after a delivered prompt puts the text into the agent twice. Use the pane surface only when raw terminal control is intentional.
 
 ## Start a clean-room Claude in a pane
 
@@ -261,11 +284,11 @@ It is NOT the source. At `--lines 200` that idle pane returned the same 3070 byt
 
 Use `--format ansi` when colors and terminal styling are evidence. Otherwise use text.
 
-`--lines` asks Herdr for more rows from the pane's available screen and host scrollback. If increasing it does not reveal more of a completed response, the pane is probably running the agent on the terminal's alternate screen. Rule out the blank-region floor above FIRST: a read that returns nothing at all is the floor, not the alternate screen, and that misdiagnosis was made twice in one session on 2026-09-20 before the floor was measured. Rows that leave the alternate screen do not enter Herdr's host scrollback, so a larger line count cannot recover them.
+`--lines` asks Herdr for more rows from the pane's available screen and host scrollback. If increasing it does not reveal more of a completed response, the pane is probably running the agent on the terminal's alternate screen. Rule out the blank-region floor above FIRST: a read that returns nothing at all is the floor, not the alternate screen, and that misdiagnosis was made twice in one session on 2026-09-20 before the floor was measured. Alternate-screen rows do not enter ordinary host scrollback. **From 0.9.x this is no longer flatly unrecoverable:** for supported IDLE agents Herdr can collect application-owned history and restore the viewport afterwards, though not every application or response can be recovered that way. So a bigger `--lines` is worth one more try on an idle agent before falling back.
 
 Herdr itself knows when it dropped rows: `PaneReadResult` carries a `truncated` field (herdr 0.8.0, #1717), confirmed 2026-09-17 in `herdr api schema --json` under both `success_response` and `subscription_event`. The plain CLI read prints pane text, not JSON, so that field is not visible in normal use; `pane read --raw` is the likely way to see it, NOT verified here (the throwaway pane used to test it produced no output yet, so the trial was void rather than negative). Treat the flag as a real signal to look for, not as a recipe.
 
-After that failed read, ask the agent to write its complete response as Markdown in a temporary directory and reply only with the file path, then read the file directly. Use this only as a fallback; do not request file output in the initial prompt.
+If a larger recent read still does not reveal the completed response, ask the agent to write it as Markdown in a temporary directory and reply only with the file path, then read that file ON THE SAME MACHINE. Use this only as a fallback; do not request file output in the initial prompt.
 
 ## Wait for completion without polling
 
@@ -321,7 +344,9 @@ If a stale title/label needs correcting without renaming, rebuild the display va
 - Use `--no-focus` for background work unless the user asked to switch context.
 - Use `--current`, an explicit pane ID, or a unique agent name. Do not rely on another client's focused pane.
 - Parse IDs from JSON responses. Do not derive them from sidebar order or examples.
-- Do not close workspaces, tabs, panes, or sessions you did not create unless the user explicitly asked.
+- Do not close workspaces, tabs, panes, or sessions you did not create unless the user explicitly asked. `workspace close --group` closes the primary workspace AND its linked worktree workspaces; never add it merely to bypass `workspace_group_close_required`. That refusal (new in 0.9.0, #2874) is Herdr telling you the close would take more than you named, which is a finding, not an obstacle.
+- Use `--trust-repository` only after the USER has verified the repository. It grants per-request Git trust; it is not a routine retry for a failed worktree command.
+- Client and server versions can differ after an update. Check `herdr status` before relying on new server features. A missing method is not permission to stop or upgrade a server.
 - **Read panes with `herdr-pane-read`, not a hand-picked `--lines`.** It sizes the request itself, strips the blank rows below the content, states positively what it showed of what, says exit 3 out loud when a pane is genuinely empty, and warns when a pane is scrolled and the chosen source follows that scroll. It takes a pane id, a live agent name, or `--current`. The raw `herdr pane read` / `agent read` are fine with a generous `--lines` (400 or more) and dangerous with a small one; see the floor rule above.
 - Never close a pane, workspace, tab, or session on `agent_status: idle` alone. Confirm the actual expected output is present first -- a direct `herdr-pane-read`, not just the status field. `idle` can be reported early on a nested-TUI pane (see above); closing on a false idle kills whatever was still genuinely running, and that work is not recoverable, not merely delayed.
 - `pane close` takes the pane ID as a bare positional argument (`herdr pane close <pane_id>`), and so do most other `pane` subcommands -- only `layout`, `current` and `split` accept `--pane`/`--current` (see the target-form table above; the earlier claim here that a `--pane` flag was the norm was measured false on 2026-09-20). `herdr pane close --pane <id>` is a syntax error (exit 2). `workspace close <workspace_id>` is the same shape and returns `{"result":{"type":"ok"}}` (verified 2026-09-06).
