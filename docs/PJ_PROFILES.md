@@ -338,7 +338,7 @@ went straight through. **Only INITIATING by name needs the registry.**
 ### The cost, stated plainly
 
 One shared address book is two-way by construction. A throwaway `c2` session can see, and
-message by name, **every** `~/.claude` session that is open, including LifeOS `c-legacy`
+message by name, **every** `~/.claude` session that is open, including LifeOS `lifeos`
 ones. And `ListAgents` shows name, kind, status and age and **no cwd and no config dir**,
 so nothing in the listing marks a peer as a scratch one.
 

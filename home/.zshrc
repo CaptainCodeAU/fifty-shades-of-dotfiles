@@ -969,14 +969,16 @@ _LIFEOS_SP=(--append-system-prompt-file "$HOME/.claude/LIFEOS/LIFEOS_SYSTEM_PROM
 # Measured before changing it: `alias c=` has exactly ONE definition on this machine, this
 # line, and it lives in THIS repo rather than in a LifeOS-owned file. Nothing can call it
 # programmatically either -- an alias is not visible to a script, a hook or a cron job --
-# so the only caller was a human at a prompt. `c-legacy` below is the original, unchanged.
+# so the only caller was a human at a prompt. `c-legacy` kept the original launch, unchanged,
+# from 2026-09-22 until P10 the same day, when Gavin ruled it out: nothing had needed it
+# (it was never the LifeOS launch; that is `lifeos`), and the `_LIFEOS_SP` prompt still
+# reaches `cb`, `cr`, `ct`, `cpr`, `cd_` and `cskip` below.
 #
 # A FUNCTION, not an alias, because it has to EXIT 1: a signpost that exits 0 is
 # indistinguishable from a launcher that started something and printed nothing. The text
 # and every arm of its behaviour live in ~/.local/bin/pj-launcher-menu (stowed from this
 # repo), which has a --selftest; an alias could not be tested at all, since a
 # non-interactive shell never sees one. Same reasoning that made `pj` a script in F3.
-alias c-legacy='__claude_launch claude "${_LIFEOS_SP[@]}" --dangerously-skip-permissions --permission-mode plan'  # the former `c`, unchanged
 c() { pj-launcher-menu; }
 alias ct='__claude_launch CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 claude "${_LIFEOS_SP[@]}" --dangerously-skip-permissions --permission-mode plan --teammate-mode tmux'  # Tmux agent teams
 

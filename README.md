@@ -1372,7 +1372,7 @@ The function auto-generates a comprehensive `~/.config/yt-dlp/config` file on fi
 - **Navigation**: `..`, `...`, `....`, `.....` for quick directory navigation
 - **Node.js**: `serve` (pnpm dlx http-server), `tsc` (pnpm dlx typescript) — also usable via `bunx`
 - **Docker**: `lzd` (lazydocker), `lzg`/`lg` (lazygit)
-- **Claude Code**: `c` is a **signpost since 2026-09-22**, not a launcher -- it prints the routes (`pj`, `c2 start <topic>`, `lifeos`) and exits 1, and `c-legacy` is the former standard launch, unchanged. The rest are `cb` (bare/full control), `cr` (resume), `ci` (non-interactive), `ct` (tmux agent teams), `cpr` (from PR), `cd_` (debug), `cskip` (skip end hooks). All aliases spin up an isolated ephemeral SSH agent scoped to the Claude Code process, so marketplace plugin refreshes and git operations work with SSH-only auth without leaking the key to other terminals.
+- **Claude Code**: `c` is a **signpost since 2026-09-22**, not a launcher -- it prints the routes (`pj`, `c2 start <topic>`, `lifeos`) and exits 1; the former standard launch (`c-legacy`, kept for one day) was removed at P10 on 2026-09-22 because nothing needed it. The rest are `cb` (bare/full control), `cr` (resume), `ci` (non-interactive), `ct` (tmux agent teams), `cpr` (from PR), `cd_` (debug), `cskip` (skip end hooks). All aliases spin up an isolated ephemeral SSH agent scoped to the Claude Code process, so marketplace plugin refreshes and git operations work with SSH-only auth without leaking the key to other terminals.
 - **Zoxide**: `cd` command is replaced with `zoxide` for intelligent directory jumping
 
 ### Standalone Script Commands

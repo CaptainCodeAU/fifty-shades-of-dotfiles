@@ -20,8 +20,9 @@
 # did nothing, which is the same all-cases-identical fault this repo keeps writing up.
 # Non-zero says plainly that nothing was started.
 #
-# THE OLD BEHAVIOUR IS NOT GONE. `c-legacy` is the original alias, unchanged, and it is
-# named in the text below so nobody has to go looking through .zshrc for it.
+# THE OLD BEHAVIOUR IS GONE. `c-legacy` carried the original alias from 2026-09-22 until
+# P10 the same day, when Gavin removed it: nothing had needed it. `lifeos` is the LifeOS
+# launch and `cb`, `cr`, `ct`, `cpr`, `cd_`, `cskip` still carry the LifeOS prompt.
 #
 # WHY A SCRIPT AND NOT JUST A LONGER ALIAS. So it can be tested. An alias is unreachable
 # from a non-interactive shell, so a selftest could not see it at all; this file is on
@@ -43,8 +44,6 @@ MENU_TEXT() {
 
     lifeos                GLOBAL work, with the LifeOS constitution loaded.
 
-    c-legacy              the old `c`, unchanged, if you really do want it.
-
 EOF
 }
 
@@ -64,9 +63,12 @@ selftest() {
   # 2. every route Gavin named is present, each asserted by name rather than by counting
   #    lines -- a line count would pass on a menu that named the wrong things.
   local want
-  for want in 'pj' 'c2 start <topic>' 'c2 done <topic> --discard' 'lifeos' 'c-legacy'; do
+  for want in 'pj' 'c2 start <topic>' 'c2 done <topic> --discard' 'lifeos'; do
     case "$out" in *"$want"*) ok "2 names $want";; *) bad "2 missing $want" "$out";; esac
   done
+  # 2b. the retired route is NOT offered (P10, 2026-09-22): a menu naming a dead alias
+  #     would send someone to a command that no longer exists.
+  case "$out" in *"c-legacy"*) bad "2b still names c-legacy" "$out";; *) ok "2b does not name the retired c-legacy";; esac
 
   # 3. CONTROL for arm 2: a string that must NOT be there. Without this, arm 2 passes on
   #    any text long enough to contain those words by accident, and it proves that the
