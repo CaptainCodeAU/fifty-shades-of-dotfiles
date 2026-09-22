@@ -64,12 +64,14 @@ It is tracked in a public repo, so nothing in it is ever a secret.
 ### A branch of dot-claude as the loaded one (P10)
 
 The three keys above exist for one job: checking dot-claude out a second time, on a
-branch, as a **sibling config dir** (`git -C ~/.claude worktree add ~/.claude-p10 -b
+branch, as a **sibling config dir** (`git -C ~/.claude worktree add ~/.claude-memory -b
 p10/memory`) and making _that_ checkout the one a session loads, so an edit to the rules
 file, the voice style or the pj plugin can be A/B'd against the live `~/.claude` before it
 is merged. Measured before the keys existed: switching `config_dir` alone moved login,
 trust, transcripts and auto memory, and nothing pj passes, because every path pj builds is
-absolute under `~/.claude`. The shipped `p10` profile is the worked example.
+absolute under `~/.claude`. The shipped `memory` profile is the worked example: it was
+`p10` while P10 ran, and P10 proved the method, every edited line in the branch session's
+prompt snapshot and not in the live control, every cut line the other way round.
 
 Two things it cannot move, stated so nobody looks for a key:
 

@@ -1,0 +1,44 @@
+# ~/.config/pj/profiles/memory -- the memory-work profile (built as `p10` at P10, 2026-09-22,
+# renamed `memory` at the P10 gate to stay for the next memory stage).
+#
+# WHAT IT IS FOR. dot-claude is checked out a second time, as a git worktree on branch
+# `p10/memory`, at ~/.claude-memory (a sibling under ~, per the F5a rule). This profile
+# makes THAT checkout the one a session loads, so an edit to the rules file, the voice
+# style or the pj plugin can be A/B'd against the live ~/.claude before it is merged.
+# P10 proved the method: every edited line showed in the branch session's prompt snapshot
+# and not in the live control, and the cut lines the other way round.
+#
+# WHAT MOVES, AND HOW. Measured before the three keys below existed: switching only
+# `config_dir` moved login, trust, transcripts and auto memory, and NOTHING pj passes,
+# because every path pj builds is absolute under ~/.claude. Each key names the file it
+# redirects and the mechanism, so a report can show a marker from every edited file:
+#   pj-global/RULES.md      prompt_sources -> pj-prompt-file reads the branch copy
+#   pj-voice, the pj plugin plugins_root   -> --plugin-dir points into the worktree
+#   OPERATIONAL_RULES.md    prompt_sources -> the lifeos-private worktree's copy. It lives
+#                           in lifeos-private (reached through the ~/.claude/LIFEOS/USER
+#                           symlink), NOT in dot-claude, so a dot-claude branch cannot
+#                           carry an edit to it; that repo has its own worktree at
+#                           .worktree/memory on the same branch name.
+# The settings file stays ~/.claude/settings.project.json (RECORDS), so every hook
+# still runs from the live ~/.claude/hooks/. The drawer, rulings and pj-global that
+# open-items and decided write are always ~/.claude, whatever config_dir says.
+#
+# prompt_out is its OWN cache file. Without it the branch build would overwrite the
+# default profile's cache and the next default launch would trip pj-launch-check.
+#
+# THE WORKTREES ARE NOT REBUILT BY STOW OR install.sh. On a machine without them, this
+# profile's config dir is absent and pj-health's profile row WARNs, naming what to run:
+#   git -C ~/.claude worktree add ~/.claude-memory -b p10/memory
+#   git -C ~/CODE/CaptainCodeAU/lifeos-private worktree add \
+#       ~/CODE/CaptainCodeAU/lifeos-private/.worktree/memory -b p10/memory
+# then a /login and a trust dialog, once, like any new config dir.
+config_dir:      ~/.claude-memory
+setting_sources: project,local
+settings:        ~/.claude/settings.project.json
+prompt:          pj-prompt-file
+prompt_sources:  ~/CODE/CaptainCodeAU/lifeos-private/.worktree/memory/CONFIG/OPERATIONAL_RULES.md:~/.claude-memory/pj-global/RULES.md
+prompt_out:      ~/.cache/dotfiles/pj-system-prompt-memory.md
+plugins:         skills/herdr skills/AgentRelay skills/ISA pj-voice pj
+plugins_root:    ~/.claude-memory
+mode:            normal
+card:            on
