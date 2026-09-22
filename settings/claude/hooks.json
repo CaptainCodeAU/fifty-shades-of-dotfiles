@@ -271,6 +271,18 @@
         "timeout": 10
       },
       "why": "Records the session's herdr agent state. Carried under pj at the P8b gate 2026-09-21: pj sessions run inside herdr panes, and this fired only under c. HERDR OWNS THIS FILE and rewrites it on integration update (its header says so), which is exactly why the entry points at its path via script_path instead of stowing a copy that would go stale silently. The `session` argument matches the user-level registration's shape"
+    },
+    {
+      "event": "SessionStart",
+      "script": "risk-watch",
+      "script_path": "$HOME/.claude/hooks/risk-watch",
+      "targets": ["project"],
+      "entry": {
+        "type": "command",
+        "command": "test -x \"$HOME/.claude/hooks/risk-watch\" && \"$HOME/.claude/hooks/risk-watch\" || true",
+        "timeout": 10
+      },
+      "why": "Renders the ThreatModel risk register at session start (overdue count, Critical/High counts, one OK line when clean; 0.03 s measured). Carried under pj at the P8b gate 2026-09-21 on ONE condition, Gavin's words: it carries after it is versioned. Until P10 (2026-09-22) it was a 3.3 KB file in ~/.local/bin in no repository; P10 adopted it into dot-claude at ~/.claude/hooks/risk-watch (W-20260921-A25), which is what this entry points at. LifeOS owns the register and the tool (skills/ThreatModel); this manifest only carries the alarm to pj, the same shape as MemoryRootGuard.sh above."
     }
   ],
   "_traveller_note": [
