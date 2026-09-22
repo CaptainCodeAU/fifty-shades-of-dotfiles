@@ -3,14 +3,30 @@
 **Audience: an AI coding agent, not a human.** This replaces reading
 <https://herdr.dev/docs/plugins/>.
 
-herdr-verified: 0.8.2
+herdr-verified: 0.9.1
 
-Re-verified against **herdr 0.8.2** on 2026-09-17 by re-probing every claim that
-a release since 0.7.5 could have changed; the `herdr-verified:` line is
-machine-read by `herdr-skill-drift-check`. Originally written against **0.7.5**
-on 2026-08-02 by authoring, linking, invoking
-and unlinking a real plugin. OBSERVED = produced by a real run. DOC = upstream
-claim not confirmed here.
+Re-verified against **herdr 0.9.1** on 2026-09-22 (F9b) and against **0.8.2** on
+2026-09-17, each time by re-probing every claim that the releases since the last
+stamp could have changed; the `herdr-verified:` line is machine-read by
+`herdr-skill-drift-check`. Originally written against **0.7.5** on 2026-08-02 by
+authoring, linking, invoking and unlinking a real plugin. OBSERVED = produced by
+a real run. DOC = upstream claim not confirmed here.
+
+**THE 0.9.1 RE-VERIFY WAS THE NARROWEST OF THE FOUR, and that is stated rather
+than hidden.** Plugins are the part of herdr the 0.8.2 to 0.9.1 delta barely
+touches: reading the two releases' notes, the only plugin-adjacent changes are
+`herdr integration install letta` and a rule that plugin link paths must be
+absolute when reached through `--machine`, neither of which contradicts anything
+here. RE-RUN: all ten documented `plugin` subcommands are present in 0.9.1's own
+group listing, with a control separating a real subcommand from an invented one;
+`plugin list` still prints text and `plugin list --json` still prints JSON, which
+is this document's output-format claim; `plugin config-dir` still takes a bare
+`<PLUGIN_ID>` positional; and the one real plugin on this box,
+`dotfiles.window-title-fix`, is still installed, enabled and linked to its
+in-repo path. NOT RE-RUN: the authoring, install, uninstall, link and unlink
+cycle, which the 0.7.5 pass did with a real plugin and which would mean
+installing and removing one in the user's live session. The security posture in
+section 1 is a judgement rather than a measurement and no release changes it.
 
 Read [`HERDR_AGENT_SKILL.md`](HERDR_AGENT_SKILL.md) sections 3 and 4 first --
 the sandbox trap and the output-format map apply here too.

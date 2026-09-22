@@ -207,6 +207,24 @@ echo '{"base_version":"0.9.1","subjects":[{"subject":"skill-drift","state":"OK",
 DOLD
 chmod +x "$T/drift/old"
 
+# --- skill-budget fixtures (F9b) --------------------------------------------
+# On this box the real SKILL.md is inside its budget, so PASS is the only
+# reachable state and WARN would be a branch that ships unobserved. Same
+# argument as the drift fixtures above. Sizes are chosen against the budget
+# (18641 tokens at 2.45 chars/token, so about 45,671 bytes), not against today's file.
+mkdir -p "$T/skill"
+# 20,000 bytes -> ~8,163 tokens, comfortably under
+UV_SKILL_UNDER="$T/skill/under.md"
+UV_SKILL_OVER="$T/skill/over.md"
+UV_SKILL_EDGE="$T/skill/edge.md"
+head -c 20000 /dev/zero | tr '\0' 'x' >"$UV_SKILL_UNDER"
+# 60,000 bytes -> ~24,489 tokens, comfortably over
+head -c 60000 /dev/zero | tr '\0' 'x' >"$UV_SKILL_OVER"
+# exactly at the budget boundary. The row does integer maths, bytes*100/245, so
+# the smallest byte count that READS as 18641 is 45,671, not the 45,670 that
+# 18641*2.45 suggests: 4567000/245 truncates to 18640. Measured, not derived.
+head -c 45671 /dev/zero | tr '\0' 'x' >"$UV_SKILL_EDGE"
+
 # ------------------------------------------------------------------ runner ----
 OUT=""
 run(){   # run [dir] [args...]  -> OUT holds the JSON; RC the exit code
@@ -221,6 +239,7 @@ run(){   # run [dir] [args...]  -> OUT holds the JSON; RC the exit code
       RENDER_OUT_FILE="$T/render-out" RENDER_RC_FILE="$T/render-rc" SYNC_OUT_FILE="$T/sync-out" \
       PJ_TRAILER_REPOS="$TR_SEAM" \
       PJ_HEALTH_DRIFT="${PJ_HEALTH_DRIFT_FX:-$T/drift/pass}" \
+      PJ_HEALTH_SKILL="${PJ_HEALTH_SKILL_FX:-$T/skill/under.md}" \
       pj-health --json "$@" 2>"$T/stderr") )"; RC=$?
 }
 st(){ jq -r --arg n "$1" '.rows[] | select(.name==$n) | .state' <<<"$OUT"; }
@@ -243,7 +262,7 @@ arm "baseline parses as JSON" jq -e '.rows|length>0' <<<"$OUT" >/dev/null
 # ~/.config/pj/profiles and the suite's result would depend on the machine it runs on --
 # NOT MEASURED on a box with nothing stowed, WARN on a box with a profile pointing
 # somewhere unusual. They get hermetic arms of their own in the profiles section below.
-for n in launcher output-style plugin-dirs prompt-file rules-budget settings-render hooks-sync hook-orphans hook-single-fire stow-links bin-strays machine-file pj-global no-wrap-up selftests launch-log stale-shells pj-homes drawer decided-store commit-trailer skill-upstream evidence-card evidence-ci-watch evidence-rules evidence-plugins evidence-tokens; do
+for n in launcher output-style plugin-dirs prompt-file rules-budget skill-budget settings-render hooks-sync hook-orphans hook-single-fire stow-links bin-strays machine-file pj-global no-wrap-up selftests launch-log stale-shells pj-homes drawer decided-store commit-trailer skill-upstream evidence-card evidence-ci-watch evidence-rules evidence-plugins evidence-tokens; do
   arm "baseline $n PASS (got $(st "$n"): $(dt "$n" | cut -c1-80))" is "$n" PASS
 done
 arm "baseline live-probe NOT MEASURED without --live" is live-probe "$NM"
@@ -744,6 +763,32 @@ arm "and it says which tool was missing" has skill-upstream "herdr-skill-drift-c
 PJ_HEALTH_DRIFT_FX="" run
 arm "skill-upstream back to PASS (control: the four arms above were not a broken fixture)" is skill-upstream PASS
 
+# ------------------------------------------------- skill-budget (F9b) ----
+# A size budget that only ever prints PASS is a row that watches nothing, so
+# every arm here drives a fixture of a known size rather than the real file.
+# The boundary arm is the one worth having: "over budget" and "at budget" are
+# the two states an off-by-one confuses, and they must not read the same.
+arm "skill-budget PASS under budget" is skill-budget PASS
+arm "skill-budget PASS states the measured token figure" has skill-budget "~8163 of 18641 tokens"
+arm "skill-budget PASS states bytes as well as tokens" has skill-budget "20000 bytes"
+arm "skill-budget PASS names the divisor and where it came from" has skill-budget "2.45 chars/token measured P9"
+PJ_HEALTH_SKILL_FX="$T/skill/over.md" run
+arm "skill-budget WARN when the file is over budget" is skill-budget WARN
+arm "skill-budget WARN states by how much" has skill-budget "~24489 tokens over budget 18641"
+arm "skill-budget WARN says to cut narrative before a measurement" has skill-budget "never a measurement"
+arm "skill-budget WARN is NOT a FAIL (a skill body is per-use, not per-session)" [ "$(st skill-budget)" != FAIL ]
+arm "skill-budget WARN does not fail the whole run on its own" [ "$RC" -eq 0 ]
+PJ_HEALTH_SKILL_FX="$T/skill/edge.md" run
+arm "skill-budget exactly AT budget is PASS, not WARN" is skill-budget PASS
+arm "and the boundary really is the budget value" has skill-budget "~18641 of 18641 tokens"
+PJ_HEALTH_SKILL_FX="$T/skill/no-such-file.md" run
+arm "skill-budget NOT MEASURED when the file is absent" is skill-budget "$NM"
+arm "skill-budget NOT MEASURED says nothing was weighed, rather than reading 0" has skill-budget "nothing was weighed"
+arm "an absent skill file never reads as PASS" [ "$(st skill-budget)" != PASS ]
+PJ_HEALTH_SKILL_FX="" run
+arm "skill-budget back to PASS (control: the arms above were fixtures, not a broken row)" is skill-budget PASS
+arm "control: the three fixtures really are different sizes" [ "$(wc -c <"$T/skill/under.md")" -lt "$(wc -c <"$T/skill/edge.md")" ] && [ "$(wc -c <"$T/skill/edge.md")" -lt "$(wc -c <"$T/skill/over.md")" ]
+
 # output shape, exit codes, quiet, line cap
 run; arm "exit 0 when no FAIL" [ "$RC" -eq 0 ]
 arm "json exit field 0" [ "$(jq -r .exit <<<"$OUT")" = 0 ]
@@ -756,7 +801,7 @@ arm "--quiet keeps the summary line" grep -q '^pj-health: .* FAIL, ' <<<"$QOUT"
 write_settings
 FOUT="$( (builtin cd "$PROJ" && PATH="$BIN:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" PJ_HOME="$H" PJ_BIN_DIR="$BIN" PJ_DOTFILES="$DF" PJ_LAUNCHER="$BIN/pj" PJ_TYPE_OUT="$T/type-out" DRYRUN_FILE="$T/dryrun" PJ_PS_OUT="$T/ps" PJ_ZSHRC_MTIME="$ZMT" PJ_TRANSCRIPTS_DIR="$H/projects" PJ_STATE_DIR="$STATE" PJ_MACHINE_FILE="$T/machine" PJ_PROMPT_SOURCES="$OR:$RULES" PJ_PROMPT_OUT="$T/cache/prompt.md" OI_WHERE_FILE="$T/oi-where" DECIDED_LIST_FILE="$T/decided-list" DECIDED_LIST_RC="$T/decided-list-rc" DECIDED_HOMES_FILE="$T/decided-homes" RENDER_OUT_FILE="$T/render-out" RENDER_RC_FILE="$T/render-rc" SYNC_OUT_FILE="$T/sync-out" pj-health 2>/dev/null) )"
 arm "normal output under 40 lines ($(wc -l <<<"$FOUT" | tr -d ' '))" [ "$(wc -l <<<"$FOUT" | tr -d ' ')" -lt 40 ]
-arm "normal output has one row per check (34)" [ "$(grep -cE '^(PASS|WARN|FAIL|NOT MEASURED) ' <<<"$FOUT")" -eq 34 ]
+arm "normal output has one row per check (35)" [ "$(grep -cE '^(PASS|WARN|FAIL|NOT MEASURED) ' <<<"$FOUT")" -eq 35 ]
 arm "unknown arg REFUSED rc 2" bash -c 'PATH="$1:$PATH" pj-health --bogus >/dev/null 2>&1; [ $? -eq 2 ]' _ "$BIN"
 arm "--help exits 0" bash -c 'PATH="$1:$PATH" pj-health --help >/dev/null 2>&1' _ "$BIN"
 

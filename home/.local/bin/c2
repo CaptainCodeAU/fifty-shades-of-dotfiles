@@ -467,6 +467,13 @@ cmd_done(){
     fi
   fi
 
+  # ASK FOR THE PEER NAME BEFORE THE WORKTREE GOES. peer_name_for runs pj
+  # --dry-run-env with the worktree as cwd, so once the directory is removed the
+  # question can no longer be asked. Captured here, used after the close to clear
+  # the pane label pj put on the pane `c2 start` ran in (F9b, Gavin Q5d).
+  local donename=""
+  [ -d "$wt" ] && donename="$(peer_name_for "$wt")"
+
   if [ -d "$wt" ]; then
     git -C "$repo" worktree remove --force "$wt" >/dev/null 2>&1 \
       || refuse "done: could not remove the worktree at $(tilde "$wt")"
@@ -478,6 +485,7 @@ cmd_done(){
     say "deleted branch $br"
   fi
   close_herdr_workspace "$wt"
+  clear_herdr_pane_label "$donename"
   prune_empty_worktree_dirs "$repo"
   [ "$discard" -eq 1 ] && say "--discard: the guards were not run"
   return 0
@@ -600,6 +608,51 @@ close_herdr_workspace(){
   else
     say "NOTE: herdr workspace $ws still points at $(tilde "$gone"), which is gone. Close it with: herdr workspace close $ws"
   fi
+  return 0
+}
+
+# clear_herdr_pane_label <the peer name pj labelled a pane with>
+#
+# THE LEAK, observed live 2026-09-22 (F9b, Gavin Q5d). `c2 start` launches pj in the
+# CALLING pane, and pj labels that pane with the session's own name. `c2 done` removed the
+# worktree, deleted the branch and closed the worktree workspace, and left the label. Pane
+# w3X:p27 still read `fifty-shades-of-dotfiles-scratch-f9bd` after a clean teardown.
+#
+# WHY THAT MATTERS RATHER THAN BEING UNTIDY. The herdr skill's own rule is that a pane
+# label outlives the process it described, so a label you set is a claim that stays on
+# screen after the thing it described is gone. A sidebar entry naming a scratch topic that
+# no longer exists is the same shape as the dead workspace entry close_herdr_workspace was
+# written to stop, one level down. Our own tool was breaking our own rule.
+#
+# WHY NOT THE WORKTREE WORKSPACE'S PANE. That one goes with the workspace when it closes.
+# This is the pane `c2 start` was RUN in, which is usually in a different workspace
+# entirely, so nothing that closes the worktree can reach it.
+#
+# IT CLEARS ONLY AN EXACT MATCH, never a prefix. The name is specific to this topic
+# (`<repo>-scratch-<topic>`), and a prefix match would take `-f9bd` and `-f9bd2` together.
+# Same rule close_herdr_workspace uses for checkout_path, for the same reason.
+#
+# A MISS IS REPORTED WITH ITS DENOMINATOR. "no pane carried that label" and "herdr answered
+# but we never looked" are the same silence, and the second re-opens the leak.
+clear_herdr_pane_label(){
+  local want="${1:-}" list seen=0 labelled=0 hit=0 id
+  [ -n "$want" ] || return 0
+  command -v herdr >/dev/null 2>&1 || return 0
+  command -v jq    >/dev/null 2>&1 || return 0
+  list="$(herdr pane list 2>/dev/null || true)"
+  [ -n "$list" ] || return 0
+  seen="$(printf '%s' "$list" | jq -r '.result.panes | length' 2>/dev/null)" || seen=0
+  labelled="$(printf '%s' "$list" | jq -r '[.result.panes[]? | select((.label // "") != "")] | length' 2>/dev/null)" || labelled=0
+  case "$seen" in ''|*[!0-9]*) seen=0 ;; esac
+  case "$labelled" in ''|*[!0-9]*) labelled=0 ;; esac
+  for id in $(printf '%s' "$list" | jq -r --arg w "$want" '.result.panes[]? | select((.label // "")==$w) | .pane_id' 2>/dev/null); do
+    if herdr pane rename "$id" --clear >/dev/null 2>&1; then
+      hit=$((hit+1)); say "cleared the pane label $want on $id"
+    else
+      say "NOTE: could not clear the pane label $want on $id; clear it by hand: herdr pane rename $id --clear"
+    fi
+  done
+  [ "$hit" -gt 0 ] || say "NOTE: no pane carried the label $want ($labelled of $seen panes carried any label), so none was cleared."
   return 0
 }
 
@@ -1013,11 +1066,30 @@ HFAKE
   #     with "close it with: herdr workspace close <id>" -- the command that had
   #     just refused. A refusal that reads like a generic failure is the same
   #     trap as a refusal that reads like a "no".
-  #     PROVENANCE OF THE FIXTURE, stated rather than assumed: 0.8.2 cannot
-  #     produce this error at all, so the token comes from upstream's own skill
-  #     text and its 0.9.0 release notes, and the envelope from the documented
-  #     shape (server errors are JSON on stderr, exit 1). It is re-checked
-  #     against `herdr api schema --json` the moment 0.9.1 is installed.
+  #     PROVENANCE OF THE FIXTURE: it is now the REAL payload, captured from a
+  #     live 0.9.1 server on 2026-09-22 (F9b) and pasted verbatim. Until then it
+  #     was typed from upstream's skill text and release notes, because 0.8.2
+  #     could not produce the error at all, and THAT VERSION WAS WRONG: it used
+  #     `"type"` where herdr actually sends `"code"`, and a different message.
+  #     c2 survived the error only because it detects by grepping for the bare
+  #     token, which is key-agnostic. So the arms below were passing against a
+  #     shape that does not exist, which is exactly what this estate's rule
+  #     about fixtures typed from a model of the output is for.
+  #
+  #     HOW IT WAS CAPTURED, with both controls in the same breath: a throwaway
+  #     repo, one primary workspace, one linked worktree workspace. Closing the
+  #     PRIMARY refused (exit 1, the payload below). Closing the LONE WORKTREE
+  #     workspace returned exit 0. Closing the now-childless primary returned
+  #     exit 0. The second and third are what prove the refusal is about the
+  #     GROUP rather than about that workspace.
+  #
+  #     AND THAT MAKES THIS BRANCH DEFENSIVE RATHER THAN LOAD-BEARING. c2 only
+  #     ever closes a WORKTREE workspace, because it matches on
+  #     `worktree.checkout_path`, which a primary does not carry for a path c2
+  #     just removed. A worktree close does not refuse, so in c2's own normal
+  #     path this branch cannot fire. Kept deliberately at the F9b gate (Gavin,
+  #     Q5b) as cheap insurance should herdr ever widen the refusal; it is not
+  #     dead code that nobody noticed.
   local rb="$root/herdrbin-refuse"; mkdir -p "$rb"
   cat > "$rb/herdr" <<RFAKE
 #!/bin/sh
@@ -1027,7 +1099,7 @@ if [ "\$1" = workspace ] && [ "\$2" = list ]; then
 fi
 if [ "\$1" = workspace ] && [ "\$2" = get ]; then printf '%s\n' '{"result":{"workspace":{}}}'; exit 0; fi
 if [ "\$1" = workspace ] && [ "\$2" = close ]; then
-  printf '%s\n' '{"error":{"type":"workspace_group_close_required","message":"workspace wB has open worktree workspaces; pass --group to close the group"}}' >&2
+  printf '%s\n' '{"error":{"code":"workspace_group_close_required","message":"workspace has linked worktree workspaces; use --group (close_group=true in the API) to close the group"},"id":"cli:workspace:close"}' >&2
   exit 1
 fi
 exit 0
@@ -1046,6 +1118,59 @@ RFAKE
   #     closes, so 15h's empty recorder means "no retry", not "this fake never closes".
   OUT2="$( PATH="$hb:$PATH"; WS_CLOSED="$root/ws.15i"; export WS_CLOSED; close_herdr_workspace "GONEPATH" 2>&1 )"
   [ "$(cat "$root/ws.15i" 2>/dev/null)" = "closed wB" ] && ok "15i control: the same code path DOES close when herdr does not refuse" || bad "15i control" "$(cat "$root/ws.15i" 2>/dev/null)"
+  # 15j THE FIXTURE IS THE REAL SHAPE, and this arm exists so nobody "corrects"
+  #     it back. Until F9b it said "type"; herdr 0.9.1 actually sends "code",
+  #     measured live. Pin both the right key and the absence of the wrong one,
+  #     because a fixture that carries both would pass a test for either.
+  grep -q '"code":"workspace_group_close_required"' "$rb/herdr" \
+    && ok "15j the refusal fixture uses the REAL key, code (captured from 0.9.1, F9b)" \
+    || bad "15j fixture key" "$(grep -o '"[a-z]*":"workspace_group_close_required"' "$rb/herdr")"
+  grep -q '"type":"workspace_group_close_required"' "$rb/herdr" \
+    && bad "15j" "the fixture still carries the typed-from-a-model key, type" \
+    || ok "15j control: the old typed key, type, is gone from the fixture"
+
+  # ---- 15k-15p clear_herdr_pane_label (F9b gate Q5d) ---------------------------------
+  #     A fake herdr that answers `pane list` and records every `pane rename`, so the
+  #     arms can tell "cleared the right one" from "cleared something" from "cleared
+  #     nothing", which are three states one boolean cannot separate.
+  local lb="$root/herdrbin-label"; mkdir -p "$lb"
+  cat > "$lb/herdr" <<LFAKE
+#!/bin/sh
+if [ "\$1" = pane ] && [ "\$2" = list ]; then
+  printf '%s\n' '{"result":{"panes":[{"pane_id":"w1:p1","label":"repo-main"},{"pane_id":"w1:p2","label":"repo-scratch-t15"},{"pane_id":"w1:p3"},{"pane_id":"w1:p4","label":"repo-scratch-t15b"}]}}'
+  exit 0
+fi
+if [ "\$1" = pane ] && [ "\$2" = rename ]; then printf '%s %s\n' "\$3" "\$4" >> "\$PANE_RENAMED"; exit 0; fi
+exit 0
+LFAKE
+  chmod +x "$lb/herdr"
+  # 15k the exact match is cleared, and it is the only one
+  PANE_RENAMED="$root/pr.15k"; export PANE_RENAMED
+  OUT="$( PATH="$lb:$PATH"; clear_herdr_pane_label "repo-scratch-t15" 2>&1 )"
+  [ "$(cat "$root/pr.15k" 2>/dev/null)" = "w1:p2 --clear" ] \
+    && ok "15k the pane carrying that exact label is cleared, and only it" \
+    || bad "15k renamed" "$(cat "$root/pr.15k" 2>/dev/null)"
+  case "$OUT" in *"cleared the pane label repo-scratch-t15 on w1:p2"*) ok "15k it says which label it cleared and where";; *) bad "15k said" "$OUT";; esac
+  # 15l A PREFIX IS NOT A MATCH. repo-scratch-t15b must survive repo-scratch-t15.
+  case "$(cat "$root/pr.15k" 2>/dev/null)" in *p4*) bad "15l" "a prefix match took repo-scratch-t15b as well";; *) ok "15l a prefix is not a match: repo-scratch-t15b survived repo-scratch-t15";; esac
+  # 15m a label nothing carries is REPORTED with its denominator, not swallowed
+  PANE_RENAMED="$root/pr.15m"; export PANE_RENAMED
+  OUT="$( PATH="$lb:$PATH"; clear_herdr_pane_label "repo-scratch-nosuch" 2>&1 )"
+  [ ! -e "$root/pr.15m" ] && ok "15m an unmatched label clears nothing" || bad "15m" "$(cat "$root/pr.15m")"
+  case "$OUT" in *"3 of 4 panes carried any label"*) ok "15m the miss states its denominator";; *) bad "15m denominator" "$OUT";; esac
+  # 15n an EMPTY name is a no-op and never a wildcard: p3 has no label and must not be touched
+  PANE_RENAMED="$root/pr.15n"; export PANE_RENAMED
+  ( PATH="$lb:$PATH"; clear_herdr_pane_label "" ) >/dev/null 2>&1
+  [ ! -e "$root/pr.15n" ] && ok "15n an empty name clears nothing (never matches the unlabelled pane)" || bad "15n" "$(cat "$root/pr.15n")"
+  # 15o no herdr on PATH is a silent no-op, rc 0, same as every other herdr touch here
+  PANE_RENAMED="$root/pr.15o"; export PANE_RENAMED
+  ( PATH="$root/emptybin"; clear_herdr_pane_label "repo-scratch-t15" ) >/dev/null 2>&1; RC=$?
+  [ "$RC" -eq 0 ] && [ ! -e "$root/pr.15o" ] && ok "15o no herdr on PATH: silent no-op, rc 0" || bad "15o" "rc=$RC"
+  # 15p CONTROL for 15m/15n/15o: the fake really does record a rename when one happens,
+  #     so those three absent files mean "nothing was cleared" and not "the recorder broke".
+  [ -e "$root/pr.15k" ] && ok "15p control: the recorder fires when a rename really happens" \
+    || bad "15p control" "15k recorded nothing, so 15m-15o prove nothing"
+  unset PANE_RENAMED
 
   # ---- 16: the empty scaffold directories `c2 start` leaves behind --------------------
   # Asked for by Gavin after the F8a gate. A FRESH repo per arm, never a cleared one: a

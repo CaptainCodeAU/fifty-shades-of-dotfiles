@@ -1,12 +1,32 @@
 # herdr — release cooldown, daemon persistence, and the tmux question
 
-herdr-verified: 0.8.2
+herdr-verified: 0.9.1
 
-Re-verified 2026-09-17 against the installed 0.8.2. The `herdr-verified:`
-line is machine-read by `herdr-skill-drift-check`, which reports every
-`docs/HERDR*.md` that has fallen behind the binary. It replaced six
-hand-typed version mentions across four docs, all six of which had gone
-stale without anyone noticing. Move it only after actually re-checking.
+Re-verified 2026-09-22 (F9b) against the installed 0.9.1 with a running server,
+and 2026-09-17 against 0.8.2. The `herdr-verified:` line is machine-read by
+`herdr-skill-drift-check`, which reports every `docs/HERDR*.md` that has fallen
+behind the binary. It replaced six hand-typed version mentions across four docs,
+all six of which had gone stale without anyone noticing. Move it only after
+actually re-checking.
+
+**WHAT THE 0.9.1 RE-VERIFY COVERED HERE.** This document is about the cooldown
+machinery, running herdr as a persistent server, and where it overlaps with
+tmux, so the delta that matters to it is 0.9.0's client and server split rather
+than any agent behaviour. RE-RUN: `herdr status server --json` and its `.running`
+and `.restart_needed` fields, read at 0.9.1 running with `restart_needed: false`
+and `compatible: true`; `herdr status` printing separate client and server
+version blocks, which is the shape 0.9.0's split produced and which this document
+should be read against; the pin and the cooldown gate, exercised by the
+SessionStart hook on every launch that day; and the Cellar keg and cached bottle
+facts in the rollback section, re-measured for W-20260922-A22, which also added
+the `HOMEBREW_NO_INSTALL_CLEANUP` guard to `install.sh` and the two Homebrew
+cleanup defaults (30 days periodic, 120 days cache) read from Homebrew's own
+`env_config.rb` with a control. NOT RE-RUN, and the reason is the same one that
+blocked F9: anything that requires stopping or restarting the server, including
+the systemd and launchd service paths and the hand-started-server warning. Those
+carry their original 2026-09-06 and 0.8.2 evidence and are unchanged by this
+stamp. Checked and found absent rather than assumed: this document makes no claim
+about `--no-session`, which 0.9.0 removed.
 
 [herdr](https://github.com/herdrdev/herdr) is an agent multiplexer: a terminal
 UI that runs several AI coding agents side by side in real panes, with a status
@@ -104,14 +124,14 @@ before.
 **Measured 2026-09-18, and it had silently disabled three guards.** An Xcode 27
 update left its licence unaccepted, so every `brew` command on the Mac exited 1
 with its message on stderr. Four separate places then read that failure as
-*"herdr is not managed by Homebrew"*:
+_"herdr is not managed by Homebrew"_:
 
-| Place | The line | What it did |
-| --- | --- | --- |
-| `herdr-cooldown-check` | `install_method()` probing `brew list --versions herdr` | reported `install_method: "direct"`, which **removed the `pin` row from the report entirely** — not a `SKIPPED` line, gone — and printed a download-from-GitHub fix for a brew-managed, pinned install |
-| `_preflight_herdr_pin_check` | `brew list --versions herdr &>/dev/null \|\| return 0` | pin guard off, no output |
-| `_preflight_herdr_bump_check` | same line | **cooldown auto-bump off, no output** — an eligible release would simply never have been adopted |
-| `_preflight_herdr_service_health_check` | `command -v brew` then an unchecked `brew services info` | service check off, no output |
+| Place                                   | The line                                                 | What it did                                                                                                                                                                                            |
+| --------------------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `herdr-cooldown-check`                  | `install_method()` probing `brew list --versions herdr`  | reported `install_method: "direct"`, which **removed the `pin` row from the report entirely** — not a `SKIPPED` line, gone — and printed a download-from-GitHub fix for a brew-managed, pinned install |
+| `_preflight_herdr_pin_check`            | `brew list --versions herdr &>/dev/null \|\| return 0`   | pin guard off, no output                                                                                                                                                                               |
+| `_preflight_herdr_bump_check`           | same line                                                | **cooldown auto-bump off, no output** — an eligible release would simply never have been adopted                                                                                                       |
+| `_preflight_herdr_service_health_check` | `command -v brew` then an unchecked `brew services info` | service check off, no output                                                                                                                                                                           |
 
 The root cause is one fact: **`brew list --versions <formula>` exits 1 with
 EMPTY stdout both when the formula is genuinely absent and when Homebrew is
@@ -121,7 +141,7 @@ different hat — a refusal to answer is not an answer of "no".
 
 **The fix is a self-controlling probe.** `brew list --formula` is used instead,
 because a non-empty roster is itself proof that Homebrew can answer; only then
-does "herdr is not in the roster" support a conclusion. A failed *or empty*
+does "herdr is not in the roster" support a conclusion. A failed _or empty_
 roster yields a third state, `brew-broken`, which is reported **loudly** and
 still runs the pin check (the pin marker is read off disk and needs no working
 brew). `install.sh` gained `_brew_health` / `_brew_has` / `_warn_brew_unusable`
@@ -314,10 +334,10 @@ no supported `brew` route to it.
 
 Measured 2026-09-18, on a Mac sitting at 0.8.2:
 
-| Release | Age | Status |
-| --- | --- | --- |
-| v0.9.0 | 11 days | past the 7-day gate, but the formula had already moved on |
-| v0.9.1 | 1.4 days | what `brew upgrade` offers, and HELD by the gate |
+| Release | Age      | Status                                                    |
+| ------- | -------- | --------------------------------------------------------- |
+| v0.9.0  | 11 days  | past the 7-day gate, but the formula had already moved on |
+| v0.9.1  | 1.4 days | what `brew upgrade` offers, and HELD by the gate          |
 
 So the gate correctly reported `HELD`, and the only genuinely-aged release was
 unobtainable. This is not a defect to fix; it is the gate preferring "wait a
@@ -359,27 +379,27 @@ not Homebrew's.
 
 Homebrew does these on its own:
 
-| Path | What happens |
-|---|---|
-| `$(brew --prefix)/Cellar/herdr/<new>/` | new tree: `bin/herdr`, `CHANGELOG.md`, `sbom.spdx.json`, the plist, `INSTALL_RECEIPT.json`, `.brew/herdr.rb` |
-| `$(brew --prefix)/bin/herdr`, `opt/herdr` | symlinks repointed |
-| `$(brew --prefix)/var/homebrew/pinned/herdr` | removed by `brew unpin`, recreated by `brew pin` |
-| the 6h cache in `$TMPDIR` | `herdr-cooldown-check`'s verdict goes stale |
+| Path                                         | What happens                                                                                                 |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `$(brew --prefix)/Cellar/herdr/<new>/`       | new tree: `bin/herdr`, `CHANGELOG.md`, `sbom.spdx.json`, the plist, `INSTALL_RECEIPT.json`, `.brew/herdr.rb` |
+| `$(brew --prefix)/bin/herdr`, `opt/herdr`    | symlinks repointed                                                                                           |
+| `$(brew --prefix)/var/homebrew/pinned/herdr` | removed by `brew unpin`, recreated by `brew pin`                                                             |
+| the 6h cache in `$TMPDIR`                    | `herdr-cooldown-check`'s verdict goes stale                                                                  |
 
 These are ours, and nothing upstream will do them for you:
 
-| # | File | Version-bound thing |
-|---|---|---|
-| 1 | `install.sh` | `HERDR_VERSION` (Linux pin) |
-| 2 | `install.sh` | both `HERDR_SHA256_LINUX_*` hashes |
-| 3 | `home/.claude/skills/herdr/UPSTREAM.md` | the skill merge base -- 0.8.2 revised the bundled skill wholesale (#2847) |
-| 4 | `home/.claude/skills/herdr/UPSTREAM.version` | the tag that capture came from |
-| 5 | `home/.claude/skills/herdr/SKILL.md` | whatever the merge pulls in |
-| 6-9 | `docs/HERDR*.md` | one `herdr-verified:` line each |
-| 10 | `home/.config/herdr/config.toml` | only when a release retires or adds a key -- run `herdr config check` |
-| 11 | `home/.config/herdr/plugins/*/herdr-plugin.toml` | `min_herdr_version`, and the plugin API if it moved |
-| 12 | `home/.config/systemd/user/herdr.service` | only if service flags change |
-| 13 | `~/.claude/hooks/herdr-agent-state.sh` + its `~/.claude/settings.json` registration | **rewritten BY herdr on upgrade, not by you** |
+| #   | File                                                                                | Version-bound thing                                                       |
+| --- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| 1   | `install.sh`                                                                        | `HERDR_VERSION` (Linux pin)                                               |
+| 2   | `install.sh`                                                                        | both `HERDR_SHA256_LINUX_*` hashes                                        |
+| 3   | `home/.claude/skills/herdr/UPSTREAM.md`                                             | the skill merge base -- 0.8.2 revised the bundled skill wholesale (#2847) |
+| 4   | `home/.claude/skills/herdr/UPSTREAM.version`                                        | the tag that capture came from                                            |
+| 5   | `home/.claude/skills/herdr/SKILL.md`                                                | whatever the merge pulls in                                               |
+| 6-9 | `docs/HERDR*.md`                                                                    | one `herdr-verified:` line each                                           |
+| 10  | `home/.config/herdr/config.toml`                                                    | only when a release retires or adds a key -- run `herdr config check`     |
+| 11  | `home/.config/herdr/plugins/*/herdr-plugin.toml`                                    | `min_herdr_version`, and the plugin API if it moved                       |
+| 12  | `home/.config/systemd/user/herdr.service`                                           | only if service flags change                                              |
+| 13  | `~/.claude/hooks/herdr-agent-state.sh` + its `~/.claude/settings.json` registration | **rewritten BY herdr on upgrade, not by you**                             |
 
 Item 13 is the odd one and the reason this table is not only a to-do list. herdr
 installs a state-reporting hook into each agent CLI it finds, each file declaring
@@ -712,8 +732,8 @@ box with neither is untouched.
 | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `herdr server`                               | **Refused.** Prints `systemctl --user start herdr.service` (Linux) or `brew services start herdr` (macOS). | A hand-started server inherits the shell's environment and dies with the session -- the whole reason the service exists. On the Mac it also exits 1 on the socket and `keep_alive` respawns it forever. |
 | `herdr server stop`, `reload-config`, ...    | Pass through.                                                                                              | Only the bare form starts a server.                                                                                                                                                                     |
-| `herdr update`                               | **Refused** (2026-09-17). Prints `herdr-cooldown-check` and `./install.sh`.                                 | herdr ships its own updater. It downloads and installs a release directly, walking around Homebrew, `brew pin` and the whole `HERDR_COOLDOWN_DAYS` gate in one command.                                 |
-| `herdr channel set preview`                  | **Refused** (2026-09-17).                                                                                   | Same hole by another route: it repoints that updater at preview builds. `channel set stable` passes through.                                                                                            |
+| `herdr update`                               | **Refused** (2026-09-17). Prints `herdr-cooldown-check` and `./install.sh`.                                | herdr ships its own updater. It downloads and installs a release directly, walking around Homebrew, `brew pin` and the whole `HERDR_COOLDOWN_DAYS` gate in one command.                                 |
+| `herdr channel set preview`                  | **Refused** (2026-09-17).                                                                                  | Same hole by another route: it repoints that updater at preview builds. `channel set stable` passes through.                                                                                            |
 | `herdr` (attach), Linux, unit down           | Starts the unit first, then attaches.                                                                      | Upstream attach "starts or attaches to" a server: with the unit down it would spawn the same hand-started server with no visible command.                                                               |
 | Anything inside a herdr pane (`HERDR_ENV=1`) | No check at all.                                                                                           | The server is by definition running; agents call the CLI constantly and should pay nothing.                                                                                                             |
 
