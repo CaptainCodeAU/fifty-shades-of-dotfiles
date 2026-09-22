@@ -3,14 +3,32 @@
 **Audience: an AI coding agent, not a human.** This replaces reading
 https://herdr.dev/docs/preview/agent-automation/.
 
-herdr-verified: 0.8.2
+herdr-verified: 0.9.1
 
 Written against **herdr 0.7.5** on 2026-08-02 by executing every command.
-Reviewed against **0.8.2** on 2026-09-17. What that review did and did not do is
-stated at each claim: several traps here are about agent STARTUP, which 0.8.2
+Reviewed against **0.8.2** on 2026-09-17. Re-verified against **0.9.1** on
+2026-09-22 (F9b), against a running server. What each review did and did not do
+is stated at each claim: several traps here are about agent STARTUP, which 0.8.2
 reworked, and re-running them means starting real agents in the user's live
 session. Where a claim was not re-run it says so rather than carrying a stamp it
 has not earned.
+
+**THE 0.9.1 RE-VERIFY DID START REAL AGENTS**, which is why it reaches further
+than the 0.8.2 review did. Three were started in a scratch tab and all of them
+closed afterwards: a named `claude` agent, a settled `pj --profile scratch`
+session, and a fresh `pj` prompted on its first ever turn. OBSERVED against
+those: `agent start` refusing a pane still running its shell startup with
+`agent_pane_busy`, then succeeding on the retry; `agent prompt` with and without
+`--wait`, 21 submissions, all 21 producing a real turn, verified by a reversed
+sentinel that cannot appear in the echoed prompt; `agent_prompt_stalled` firing
+ZERO times, including under pj's per-turn hook overhead, so the trap this
+document and the skill both warn about did not reproduce on 0.9.1; `agent wait`
+timing out cleanly at its bounded timeout in a background task, with a
+satisfiable wait returning in 0s as the control; `agent get` and `agent list`
+keeping their different result-key shapes; and `pane send-keys <id> enter`
+submitting text left sitting in an agent's input box, which is the documented
+fix for the trap. NOT RE-RUN: anything needing a server restart, and the
+Windows and Codex paste-boundary behaviour, which this estate cannot exercise.
 
 The `herdr-verified:` line is machine-read by `herdr-skill-drift-check`.
 OBSERVED = produced by a real run. DOC = upstream claim, not confirmed here.
@@ -30,7 +48,7 @@ Three primitives, not a trigger/rule engine:
 
 - **Layout** (`workspace`, `tab`, `pane`) creates terminal locations.
 - **Pane** controls a raw terminal.
-- **Agent** controls a *recognised coding agent* occupying a pane.
+- **Agent** controls a _recognised coding agent_ occupying a pane.
 
 A pane exists whether or not an agent is in it. `agent start` requires an
 existing shell pane and never creates, splits or moves layout. Use pane
@@ -46,12 +64,12 @@ pane occupant and is cleared when that agent exits or is replaced.
 
 ## 2. Lifecycle states
 
-| State | Meaning |
-|---|---|
-| `idle` | ready for input, and its tab has been seen in the focused UI |
-| `done` | same underlying idle state, after *unseen* background work finished |
-| `blocked` | herdr recognised an approval or question UI |
-| `working` | actively processing |
+| State     | Meaning                                                                     |
+| --------- | --------------------------------------------------------------------------- |
+| `idle`    | ready for input, and its tab has been seen in the focused UI                |
+| `done`    | same underlying idle state, after _unseen_ background work finished         |
+| `blocked` | herdr recognised an approval or question UI                                 |
+| `working` | actively processing                                                         |
 | `unknown` | an agent is present but cannot be classified; **does not prove completion** |
 
 `done` vs `idle` is purely about whether you have looked at it. Focusing the
@@ -125,7 +143,12 @@ herdr agent focus <name>          # WARNING: marks the tab seen
 ### Trap 1 -- `agent_pane_busy`
 
 ```json
-{"error":{"code":"agent_pane_busy","message":"agent target pane wJ:p8 is not an available shell"}}
+{
+  "error": {
+    "code": "agent_pane_busy",
+    "message": "agent target pane wJ:p8 is not an available shell"
+  }
+}
 ```
 
 OBSERVED immediately after `pane split`. The pane exists but the shell is still
@@ -156,7 +179,7 @@ done
 OBSERVED: `agent start` returned `"interactive_ready": true, "agent_status":
 "idle"`, but a prompt submitted immediately afterwards was **silently
 swallowed**. The agent's own startup banner was still painting. `--wait`
-returned in 6s having settled on the *startup* lifecycle change, not on any
+returned in 6s having settled on the _startup_ lifecycle change, not on any
 answer. No error was raised. Cost telemetry stayed at `$0`, which is how the
 loss was detected.
 
@@ -215,7 +238,7 @@ withdrawn there: prefer `recent-unwrapped` for transcripts again, since at
   change within 5 seconds, else herdr returns `agent_prompt_stalled` rather than
   hanging.
 - The wait tracks lifecycle state, not an individual turn. If the agent was
-  already working, completion of the *previous* turn satisfies it.
+  already working, completion of the _previous_ turn satisfies it.
 - **0.8.2: `agent prompt` now REFUSES an agent already waiting at an approval or
   question dialog**, returning `agent_blocked` without sending text or Enter
   (#2788). herdr now enforces at the CLI what sections 7 and 8 argue for on
