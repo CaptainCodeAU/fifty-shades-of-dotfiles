@@ -63,6 +63,10 @@ set -u
 STATE="${PJ_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/pj}"
 LOG="$STATE/launches.log"
 PLUGIN_DIRS_EXPECTED="skills/herdr skills/AgentRelay skills/ISA pj-voice pj"
+# P10: the root the plugin entries are joined to. A profile may move it (`plugins_root:`)
+# so a branch checkout of dot-claude can be the loaded one; the expectation here has to
+# move with it, or every such launch reads as five stale dirs plus five undeclared ones.
+PLUGINS_ROOT="$HOME/.claude"
 SETTING_SOURCES_EXPECTED="project,local"
 PROFILE_DIR="${PJ_PROFILE_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/pj/profiles}"
 PROFILE="${PJ_PROFILE:-default}"
@@ -82,6 +86,8 @@ load_profile_expectations(){
   [ -n "$p" ] && PLUGIN_DIRS_EXPECTED="$p"
   p="$(profile_key "$PROFILE" setting_sources)"
   [ -n "$p" ] && SETTING_SOURCES_EXPECTED="$p"
+  p="$(profile_key "$PROFILE" plugins_root)"
+  [ -n "$p" ] && PLUGINS_ROOT="$(canon "$p")"
 }
 
 usage(){ sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; }
@@ -165,9 +171,9 @@ check(){   # sets REASONS (comma list) and PHRASES (for the warning) from ARGV_T
   if [ "$PLUGIN_DIRS_EXPECTED" != none ]; then
     for d in $PLUGIN_DIRS_EXPECTED; do
       local hit=0 x
-      for x in $dirs; do [ "$(canon "$x")" = "$(canon "$HOME/.claude/$d")" ] && hit=1; done
+      for x in $dirs; do [ "$(canon "$x")" = "$(canon "$PLUGINS_ROOT/$d")" ] && hit=1; done
       if [ "$hit" -eq 0 ]; then
-        REASONS="${REASONS:+$REASONS,}plugin-dir:${d##*/}"; PHRASES="${PHRASES:+$PHRASES, }plugin dir ~/.claude/$d"
+        REASONS="${REASONS:+$REASONS,}plugin-dir:${d##*/}"; PHRASES="${PHRASES:+$PHRASES, }plugin dir $(tilde "$PLUGINS_ROOT")/$d"
       fi
     done
   fi
@@ -178,7 +184,7 @@ check(){   # sets REASONS (comma list) and PHRASES (for the warning) from ARGV_T
   for x in $dirs; do
     hit2=0
     if [ "$PLUGIN_DIRS_EXPECTED" != none ]; then
-      for d2 in $PLUGIN_DIRS_EXPECTED; do [ "$(canon "$x")" = "$(canon "$HOME/.claude/$d2")" ] && hit2=1; done
+      for d2 in $PLUGIN_DIRS_EXPECTED; do [ "$(canon "$x")" = "$(canon "$PLUGINS_ROOT/$d2")" ] && hit2=1; done
     fi
     [ "$hit2" -eq 0 ] && extra="${extra:+$extra }${x##*/}"
   done
@@ -364,6 +370,18 @@ selftest(){
   else
     printf '  info 16 worktree fixture could not be created; key check skipped\n'
   fi
+  # 17. plugins_root (P10): a profile that moves the root accepts the five dirs under THAT
+  #     root as clean, and flags the five under ~/.claude as stale AND undeclared. Both
+  #     arms, because a check that ignored the key would pass the ~/.claude five as before
+  #     and the rooted five would read as ten wrong dirs.
+  local proot="$root/proot"
+  printf 'plugins_root: %s\nplugins: skills/herdr skills/AgentRelay skills/ISA pj-voice pj\nconfig_dir: ~/.claude\n' "$proot" > "$root/profiles/rooted"
+  printf '%s\n' "claude --setting-sources project,local --settings $HOME/.claude/settings.project.json --append-system-prompt-file $exp --plugin-dir $proot/skills/herdr --plugin-dir $proot/skills/AgentRelay --plugin-dir $proot/skills/ISA --plugin-dir $proot/pj-voice --plugin-dir $proot/pj --dangerously-skip-permissions --effort high" >"$root/argv.rooted"
+  RUN_PROFILE=rooted run argv.rooted
+  [ -z "$OUT" ] && ok "17 plugins_root: the five dirs under the moved root are clean" || bad "17 rooted clean" "$OUT"
+  RUN_PROFILE=rooted run argv.ok
+  case "$OUT" in *"plugin dir $(tilde "$proot")/pj"*) ok "17 control: the ~/.claude five are STALE under a moved root (names the rooted path)";; *) bad "17 control stale" "$OUT";; esac
+  case "$OUT" in *"undeclared plugin dir(s)"*) ok "17 control: and UNDECLARED, both directions measured";; *) bad "17 control undeclared" "$OUT";; esac
   printf 'pj-launch-check selftest: %d passed, %d failed\n' "$pass" "$fail"
   [ "$fail" -eq 0 ]
 }

@@ -1,0 +1,35 @@
+# ~/.config/pj/profiles/p10 -- the memory-work profile (P10, 2026-09-22).
+#
+# WHAT IT IS FOR. dot-claude is checked out a second time, as a git worktree on branch
+# `p10/memory`, at ~/.claude-p10 (a sibling under ~, per the F5a rule). This profile
+# makes THAT checkout the one a session loads, so an edit to the rules file, the voice
+# style or the pj plugin can be A/B'd against the live ~/.claude before it is merged.
+#
+# WHAT MOVES, AND HOW. Measured before the three keys below existed: switching only
+# `config_dir` moved login, trust, transcripts and auto memory, and NOTHING pj passes,
+# because every path pj builds is absolute under ~/.claude. Each key names the file it
+# redirects and the mechanism, so the report can show a marker from every edited file:
+#   pj-global/RULES.md      prompt_sources -> pj-prompt-file reads the branch copy
+#   pj-voice, the pj plugin plugins_root   -> --plugin-dir points into the worktree
+#   OPERATIONAL_RULES.md    prompt_sources -> whichever path the first entry names.
+#                           It lives in lifeos-private (reached through the
+#                           ~/.claude/LIFEOS/USER symlink), NOT in dot-claude, so a
+#                           dot-claude branch cannot carry an edit to it; a branch copy
+#                           needs its own worktree of lifeos-private and this line
+#                           pointed at it.
+# The settings file stays ~/.claude/settings.project.json (RECORDS), so every hook
+# still runs from the live ~/.claude/hooks/. The drawer, rulings and pj-global that
+# open-items and decided write are always ~/.claude, whatever config_dir says.
+#
+# prompt_out is its OWN cache file. Without it the branch build would overwrite the
+# default profile's cache and the next default launch would trip pj-launch-check.
+config_dir:      ~/.claude-p10
+setting_sources: project,local
+settings:        ~/.claude/settings.project.json
+prompt:          pj-prompt-file
+prompt_sources:  ~/.claude/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md:~/.claude-p10/pj-global/RULES.md
+prompt_out:      ~/.cache/dotfiles/pj-system-prompt-p10.md
+plugins:         skills/herdr skills/AgentRelay skills/ISA pj-voice pj
+plugins_root:    ~/.claude-p10
+mode:            normal
+card:            on

@@ -57,6 +57,30 @@ It is tracked in a public repo, so nothing in it is ever a secret.
 | `model`           | `--model <name>`              | unset = the account default (Opus 5 1M here). Added F5b                                                      |
 | `remote_control`  | `remoteControlAtStartup`      | `on` \| `off`, via an overlay `--settings`. Unset = leave it to the organisation default. Added F5b          |
 | `voice`           | `voiceEnabled`                | `on` \| `off`, via the same overlay. Claude Code's OWN voice, not this repo's audio hooks. Added F5b         |
+| `prompt_sources`  | `PJ_PROMPT_SOURCES`           | colon list handed to `pj-prompt-file`; `~` expands per entry. Unset = the tool's own two files. Added P10    |
+| `prompt_out`      | `PJ_PROMPT_OUT`               | the cache file that build writes. A branch profile MUST set its own (see below). Added P10                   |
+| `plugins_root`    | the `--plugin-dir` prefix     | the dir the `plugins` names are joined to. Unset = `~/.claude`. `pj-launch-check` reads it too. Added P10    |
+
+### A branch of dot-claude as the loaded one (P10)
+
+The three keys above exist for one job: checking dot-claude out a second time, on a
+branch, as a **sibling config dir** (`git -C ~/.claude worktree add ~/.claude-p10 -b
+p10/memory`) and making _that_ checkout the one a session loads, so an edit to the rules
+file, the voice style or the pj plugin can be A/B'd against the live `~/.claude` before it
+is merged. Measured before the keys existed: switching `config_dir` alone moved login,
+trust, transcripts and auto memory, and nothing pj passes, because every path pj builds is
+absolute under `~/.claude`. The shipped `p10` profile is the worked example.
+
+Two things it cannot move, stated so nobody looks for a key:
+
+- `OPERATIONAL_RULES.md` lives in **lifeos-private**, reached through the
+  `~/.claude/LIFEOS/USER` symlink, so a dot-claude branch cannot carry an edit to it. A
+  branch copy needs its own worktree of lifeos-private, and `prompt_sources` pointed at it.
+- The hooks. `settings` still names `~/.claude/settings.project.json`, whose commands are
+  absolute `~/.claude/hooks/...` paths. RECORDS does not fork.
+
+`prompt_out` is not optional for such a profile: without it the branch build overwrites
+the default profile's cache and the next default launch trips `pj-launch-check`.
 
 ### The last three keys, and why they ride a second `--settings`
 

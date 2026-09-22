@@ -67,6 +67,21 @@
 # ~/.claude` is therefore treated as "do not export the variable at all", so the default
 # launch keeps an UNSET CLAUDE_CONFIG_DIR rather than one set to its own default.
 #
+# THREE MORE KEYS, P10 2026-09-22, so a BRANCH of dot-claude checked out as a sibling
+# config dir can be the thing a session actually loads (the A/B this stage rests on).
+# Measured before they existed: with only `config_dir` moved, the rules file and every
+# plugin dir were still read from ~/.claude, so an edit on the branch changed nothing a
+# session saw. Each key is EMPTY by default and empty means "the old path", so the default
+# profile's argv stays byte-identical (arm 12) and pj-prompt-file's own defaults apply.
+#   prompt_sources: <a:b>   colon list handed to pj-prompt-file as PJ_PROMPT_SOURCES.
+#                           `~` expands per entry. Only used when prompt: is pj-prompt-file.
+#   prompt_out: <path>      the cache file that build writes, as PJ_PROMPT_OUT. A branch
+#                           profile MUST set its own, or it overwrites the default cache
+#                           and the next default launch trips pj-launch-check.
+#   plugins_root: <dir>     the directory the `plugins` entries are joined to; default
+#                           ~/.claude. pj-launch-check reads the same key, so its
+#                           declared-vs-passed comparison follows the root too.
+#
 # Refuses (exit 2, one line on stderr) when pj-prompt-file prints nothing: a launch
 # without the rules file is the failure this script exists to prevent, so it never
 # launches half-loaded. Also refuses when ~/.zsh_claude_launch is missing (stow it).
@@ -106,9 +121,27 @@ P_CARD="on"
 P_MODEL=""
 P_REMOTE_CONTROL=""
 P_VOICE=""
+# P10: empty means "the path the tool already uses" (see the header). plugins_root is the
+# one with a real default, because build_argv joins it unconditionally.
+P_PROMPT_SOURCES=""
+P_PROMPT_OUT=""
+P_PLUGINS_ROOT="$HOME/.claude"
 PROFILE_NAME="default"
 
 expand_tilde() { local p="$1"; print -r -- "${p/#\~/$HOME}"; }
+# expand_tilde_list <a:b:c> -- a colon list with `~` expanded in EVERY entry, not just the
+# first. `${p/#\~/$HOME}` anchors at the start of the string, so a bare expand_tilde on the
+# whole list would leave `a:~/b` half-expanded and pj-prompt-file would then skip `~/b` as
+# missing, silently, and launch with one source. Arm 23b pins this.
+expand_tilde_list() {
+  local in="$1" out="" e
+  local IFS=':'
+  for e in ${=in}; do
+    [[ -n "$e" ]] || continue
+    out="${out:+$out:}${e/#\~/$HOME}"
+  done
+  print -r -- "$out"
+}
 
 # read_profile <file> -- apply the keys it holds; unknown keys and comments ignored.
 # Silent on a missing file, by design (see the fallback note above).
@@ -136,6 +169,9 @@ read_profile() {
       model)           P_MODEL="$v" ;;
       remote_control)  P_REMOTE_CONTROL="$v" ;;
       voice)           P_VOICE="$v" ;;
+      prompt_sources)  P_PROMPT_SOURCES="$(expand_tilde_list "$v")" ;;
+      prompt_out)      P_PROMPT_OUT="$(expand_tilde "$v")" ;;
+      plugins_root)    P_PLUGINS_ROOT="$(expand_tilde "$v")" ;;
     esac
   done < "$f"
 }
@@ -320,7 +356,13 @@ label_herdr_pane() {
 build_argv() {
   local prompt d
   if [[ "$P_PROMPT" == pj-prompt-file ]]; then
-    prompt="$(pj-prompt-file)"
+    # P10: the two profile keys ride pj-prompt-file's OWN seams, set only when the profile
+    # names them, so a profile without them leaves the tool's defaults (and a caller's
+    # exported PJ_PROMPT_OUT, which the selftest relies on) exactly as they were.
+    local -a penv=()
+    [[ -n "$P_PROMPT_SOURCES" ]] && penv+=("PJ_PROMPT_SOURCES=$P_PROMPT_SOURCES")
+    [[ -n "$P_PROMPT_OUT" ]] && penv+=("PJ_PROMPT_OUT=$P_PROMPT_OUT")
+    prompt="$(env "${penv[@]}" pj-prompt-file)"
   else
     prompt="$(expand_tilde "$P_PROMPT")"
   fi
@@ -331,7 +373,7 @@ build_argv() {
   PJ_ARGV=(claude --setting-sources "$P_SETTING_SOURCES" --settings "$P_SETTINGS"
         --append-system-prompt-file "$prompt")
   if [[ "$P_PLUGINS" != none ]]; then
-    for d in ${=P_PLUGINS}; do PJ_ARGV+=(--plugin-dir "$HOME/.claude/$d"); done
+    for d in ${=P_PLUGINS}; do PJ_ARGV+=(--plugin-dir "$P_PLUGINS_ROOT/$d"); done
   fi
   [[ "$P_MODE" == safe ]] && PJ_ARGV+=(--safe-mode)
   # F5b: the three per-profile keys. `model` has its own flag; the other two are
@@ -649,6 +691,42 @@ selftest() {
   [[ "$out" != *'"voiceEnabled"'* && "$out" != *'"remoteControlAtStartup"'* ]] && ok "19d unset keys emit no overlay --settings" || bad "19d overlay leaked" "$out"
   n=$(print -r -- "$out" | grep -c -- '^--settings$')
   [[ "$n" -eq 1 ]] && ok "19d exactly ONE --settings when no profile key is set" || bad "19d settings count" "got $n, wanted 1"
+  # ---- 23: a branch config dir's own files are the loaded ones (P10) ----------------
+  # 23a plugins_root: every --plugin-dir is joined to the root, and NONE is under ~/.claude.
+  #     Both directions, because a launcher that ignored the key would pass the ~/.claude
+  #     five and still "have five plugin dirs".
+  local proot="$root/proot"
+  printf 'plugins_root: %s\nplugins: skills/herdr skills/AgentRelay skills/ISA pj-voice pj\n' "$proot" > "$pdir/rooted"
+  out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile rooted --dry-run 2>/dev/null)"
+  n=0; for d in "${PLUGIN_DIRS[@]}"; do [[ "$out" == *$'\n--plugin-dir\n'"$proot/$d"$'\n'* ]] && n=$((n + 1)); done
+  [[ $n -eq 5 ]] && ok "23a plugins_root: all five plugin dirs are joined to the root" || bad "23a rooted dirs" "$n of 5 under $proot"
+  #     (the --settings path is still ~/.claude/settings.project.json, by design: RECORDS
+  #     does not move, so the check is on --plugin-dir pairs, not on the whole argv)
+  [[ "$out" != *$'\n--plugin-dir\n'"$HOME/.claude/"* ]] && ok "23a and no --plugin-dir is under ~/.claude" || bad "23a ~/.claude plugin dir leaked" "$out"
+  # 23a' `~` in plugins_root expands
+  printf 'plugins_root: ~/p23-nowhere\nplugins: pj\n' > "$pdir/rootedtilde"
+  out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile rootedtilde --dry-run 2>/dev/null)"
+  [[ "$out" == *$'\n--plugin-dir\n'"$HOME/p23-nowhere/pj"$'\n'* ]] && ok "23a' a ~ in plugins_root expands to \$HOME" || bad "23a' tilde" "$out"
+  # 23b prompt_sources + prompt_out: the argv names the profile's OWN cache file, that file
+  #     holds exactly the profile's sources (a + newline + b), and the DEFAULT cache the
+  #     caller exported was not written by this launch. The second source is spelled with
+  #     `~` so per-entry expansion is proven, not assumed.
+  #     HOME is pointed at the fixture root for this one launch so `~/src-b.md` resolves
+  #     there: a real file under the operator's home is not something a selftest writes.
+  local sa="$root/src-a.md" sb="$root/src-b.md" pout="$root/p23/own-cache.md"
+  printf 'alpha rules\n' > "$sa"; printf 'beta rules\n' > "$sb"
+  printf 'prompt_sources: %s:~/src-b.md\nprompt_out: %s\nplugins: none\n' "$sa" "$pout" > "$pdir/ownprompt"
+  : > "$root/default-cache.md"
+  out="$(HOME="$root" PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/default-cache.md" "$SELF" --profile ownprompt --dry-run 2>/dev/null)"; rc=$?
+  [[ $rc -eq 0 && "$out" == *$'\n--append-system-prompt-file\n'"$pout"$'\n'* ]] && ok "23b prompt_out: the argv carries the profile's own cache path" || bad "23b prompt path" "rc=$rc $out"
+  if cmp -s "$pout" <(cat "$sa"; printf '\n'; cat "$sb"); then ok "23b prompt_sources: the cache holds a + newline + b (both sources, ~ expanded per entry)"; else bad "23b cache bytes" "$(cat "$pout" 2>&1 | tr '\n' '|')"; fi
+  [[ ! -s "$root/default-cache.md" ]] && ok "23b the caller's default cache was NOT written (still empty)" || bad "23b default cache written" "$(wc -c <"$root/default-cache.md") bytes"
+  # 23c CONTROL: the default profile still runs pj-prompt-file with NO overrides, so its
+  #     argv names the exported PJ_PROMPT_OUT (the same fact arm 1 rests on, restated here
+  #     because 23b would pass just as well if the overrides leaked into every profile).
+  out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --dry-run 2>/dev/null)"
+  [[ "$out" == *$'\n--append-system-prompt-file\n'"$root/prompt.md"$'\n'* ]] && ok "23c control: the default profile still uses the caller's PJ_PROMPT_OUT" || bad "23c default prompt" "$out"
+  [[ "$out" == "$base" ]] && ok "23c control: and its argv is still byte-identical to the built-in one" || bad "23c drift" "$(diff <(print -r -- "$base") <(print -r -- "$out") | head -6)"
   # ---- the shared session registry (F5c) ------------------------------------------
   # Every arm runs against a FIXTURE target via PJ_SESSIONS_DIR. Pointing these at the
   # real ~/.claude/sessions would have the suite rearranging live sessions' address book.
