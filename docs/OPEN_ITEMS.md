@@ -127,6 +127,41 @@ deliberately left as history. So `open-items close|park|set|reopen|decline` acce
 items answering to one legacy ID (the same number under two letters) is REFUSED with both
 named, never guessed. `decided` does the same for `D-` IDs.
 
+## Multi-drawer output: the blank line between drawers is load-bearing (X0, 2026-09-22)
+
+`--all` used to GLUE the first header of each drawer onto the previous drawer's last body
+line. Measured on the real drawers: `open-items --all` printed 28 `## W-` headers of which
+only 26 started a line, and `--all --closed` 94 of which 91 did. The glue count was exactly
+(drawers emitting minus 1) in both arms, so every boundary was affected, not some:
+
+```
+...exit 2.## W-20260920-A01 -- 331 of 335 files under lifeos-private...
+```
+
+Anything reading the output line by line, a session included, lost one item per boundary.
+
+**The cause was the PRINTER, and that was measured rather than assumed.** `report()`
+captured each drawer with `hits="$(blocks_from ...)"`, and `$(...)` strips every trailing
+newline, so a bare `printf '%s'` emitted the drawer ending on its last body byte. The
+obvious suspect, an item file saved without its final newline, was ruled out with a pair of
+arms: such a file glues NOTHING inside a drawer, because `blocks_raw` already appends its
+own `\n` after each `cat`, while two perfectly well formed drawers still glued. A writer
+side normalisation would have fixed none of it. Gavin ruled printer only at the X0 gate.
+
+`report()` now ends each drawer with `printf '%s\n\n'` and the footer no longer carries a
+leading `\n` of its own. The second newline is the blank line BETWEEN drawers, which keeps
+the boundary looking like every other join in the output.
+
+**One cosmetic gap is knowingly left.** When an item file ends without a newline, the blank
+line between it and the NEXT record in the same drawer is missing. The header still starts
+its own line, so nothing is lost to a line-by-line reader, and the fix for it belongs on
+the writer side. Filed, not solved.
+
+Section H of the selftest holds the arms, with the three controls that make the absence
+readable: a denominator drawn from the number of item FILES rather than from the text being
+measured, a deliberately glued string that the instrument must still detect, and a single
+drawer that was never glued before the fix or after.
+
 ## The design point, borrowed from census and decided
 
 AN EMPTY RESULT IS THE ANSWER THAT LIES. "No open items" reads identically to "the drawer
