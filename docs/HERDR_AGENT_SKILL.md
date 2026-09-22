@@ -180,6 +180,37 @@ cut the output two lines above the answer. **A truncated listing read as an
 absence** -- the same failure as trusting a zero, wearing different clothes.
 Do not conclude a command is gone from a listing you did not see all of.
 
+### `<group> <sub> --help` CANNOT tell you whether a subcommand exists
+
+OBSERVED 2026-09-22 on 0.9.1, and it invalidated a whole probe before a control
+caught it. herdr answers an UNKNOWN subcommand by printing the group's listing,
+exit 0. It answers a REAL one by printing the top-level help. Neither says "no
+such subcommand", so the two outcomes are easy to read as the same thing, and a
+probe built on `--help` reports every invented name as present:
+
+```bash
+herdr agent no-such-subcommand --help    # prints the agent group listing
+herdr server no-such-thing --help        # prints "herdr server commands:"
+herdr status no-such-thing --help        # prints "herdr status commands:"
+```
+
+**To test existence, check membership of the group's own listing instead**, and
+run both arms so you can see they differ:
+
+```bash
+herdr agent > /tmp/agent.txt
+grep -qE '^ *herdr agent list\b'                /tmp/agent.txt   # must HIT
+grep -qE '^ *herdr agent no-such-subcommand\b'  /tmp/agent.txt   # must MISS
+```
+
+That probe verified all 47 subcommands these four documents claim, against 0.9.1.
+Two caveats it also surfaced, both measured: `herdr status` prints status rather
+than a listing and `herdr server` bare is the one form the skill forbids, so
+those two groups need the `--help` form with the invented-sibling control instead
+of a listing grep. This is the `workspace close --group` trap one level up: there,
+a help text omitting a flag and the flag not existing looked identical; here, a
+help text APPEARING and the subcommand not existing look identical.
+
 **Exit codes** (OBSERVED, measured without a pipe):
 
 | Code | Meaning                                 |
