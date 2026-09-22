@@ -148,10 +148,35 @@ report(){                       # report <label> <drawer...>
   total="$(count_all_blocks)"
   for w in "$@"; do
     is_drawer "$w" || continue
-    hits="$(blocks_from "$w" "$WANT")" && { printf '%s' "$hits"; any=0; }
+    # D-20260922-A12. THE `\n\n` IS THE WHOLE FIX, and it is easy to delete by accident.
+    #
+    # `$(...)` strips EVERY trailing newline from what it captures, so `hits` always
+    # ends on the last body byte of the drawer, never on a line terminator. With a bare
+    # `printf '%s'` the NEXT drawer's first line -- a `## W-` header -- landed on the
+    # previous drawer's last line: `...exit 2.## W-20260920-A01 -- 331 of 335...`.
+    # Anything reading this output line by line, a session included, lost one item per
+    # boundary. Measured 2026-09-22 on the real drawers: `--all` glued 2 of 28 headers
+    # and `--all --closed` glued 3 of 94, exactly (drawers emitting - 1) both times.
+    #
+    # It is a PRINTER bug, not a writer one, and that distinction was measured rather
+    # than assumed: an item file saved with no trailing newline glues NOTHING inside a
+    # drawer, because blocks_raw already appends its own '\n' after each `cat`. Two
+    # well-formed drawers still glued. So normalising item files on write would have
+    # fixed none of it. Gavin ruled printer-only at the X0 gate; the reasoning and the
+    # measurements live in docs/OPEN_ITEMS.md, not here.
+    #
+    # The second '\n' is the blank line BETWEEN drawers, so the boundary looks like every
+    # other join in the output. The footer below therefore no longer carries a leading
+    # '\n' of its own. Records inside a drawer are usually already separated by one, from
+    # blocks_raw's trailing '\n' landing on top of the file's own last newline -- but NOT
+    # when an item file was saved without that last byte, and then the two records print
+    # back to back with no gap. Verified 2026-09-22, and knowingly left: the header still
+    # starts its own line, so no line-by-line reader loses an item, and closing the gap is
+    # a WRITER change, which this ruling deliberately excluded.
+    hits="$(blocks_from "$w" "$WANT")" && { printf '%s\n\n' "$hits"; any=0; }
   done
   if [ "$any" -eq 0 ]; then
-    printf '\nopen-items: %s. %s item(s) exist across %s drawer(s).\n' "$label" "$total" "$(count_drawers)"
+    printf 'open-items: %s. %s item(s) exist across %s drawer(s).\n' "$label" "$total" "$(count_drawers)"
     return 0
   fi
   printf 'open-items: nothing open for %s.\n' "$label" >&2

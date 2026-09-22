@@ -647,6 +647,93 @@ wanteq "  control: with the permission back, an add succeeds again (rc=0)" "0" "
 # The lock must not be left behind by any of the three.
 wanteq "  no lock directory left behind" "0" "$([ -d "$ZW/items/.lock" ] && echo 1 || echo 0)"
 
+printf '\nH  every `## W-` header starts its own line, across a drawer boundary (X0)\n'
+# THE BUG: `hits="$(blocks_from ...)"` strips every trailing newline, and report() then
+# printed it with a bare `printf '%s'`. The next drawer's first line, a `## W-` header,
+# landed on the previous drawer's last body line. Two real headers were lost that way on
+# 2026-09-22 and anything reading the output line by line lost the items with them.
+#
+# THE MEASUREMENT IS A DIFFERENCE, not a count: headers that START a line versus headers
+# ANYWHERE. Those two numbers are equal in a healthy run and equal in a run that produced
+# no output at all, so the arm below is worthless without the two controls that follow it.
+#
+# KNOWN LIMIT OF THE INSTRUMENT, stated because it decides how the arms are written:
+# the "anywhere" arm counts the literal `## W-` wherever it falls, so a fixture whose
+# BODY quoted a header mid-line would read as a glue that is not there. The arms below
+# therefore never trust "anywhere" alone. The real assertion compares at-line-start
+# against the number of item FILES in the fixture, a denominator drawn from the
+# filesystem rather than from the text being measured, and "anywhere" is kept only for
+# the negative control that proves the instrument can see a glue at all.
+glue_count(){                   # glue_count <text> -> "<anywhere> <atstart>"
+    printf '%s\n' "$1" | awk '
+      { n = 0; s = $0; while ((i = index(s, "## W-")) > 0) { n++; s = substr(s, i + 5) }
+        anywhere += n; if ($0 ~ /^## W-/) atstart++ }
+      END { printf "%d %d", anywhere + 0, atstart + 0 }'
+}
+# `set --` would clobber the script's own positional parameters for every arm that came
+# after, and under `set -u` an empty capture would abort the run at "$1" instead of
+# failing an arm. Two named variables, filled in one read, do neither.
+X0_ANY=0; X0_AT=0
+measure(){ read -r X0_ANY X0_AT <<<"$(glue_count "$1")"; }
+
+D="$ROOT/caseX0"; P="$D/projects"
+# Two drawers. The glob in all_drawers() is sorted, so `-x0-aaa` is printed first and
+# `-x0-bbb`'s header is the one that used to glue onto aaa's last line.
+#
+# aaa holds THREE items, and the newline-less file sits in the MIDDLE and at the END.
+# Both placements are deliberate. The pre-X0 bug was first blamed on a file saved
+# without its last byte, so the fixture has to put that file everywhere it could
+# matter: mid-drawer, where blocks_raw's own '\n' absorbs it, and last, where it meets
+# the drawer boundary. A fixture that only tested the last slot would leave the
+# mid-drawer case looking untested and assumed safe.
+X0A="$P/-x0-aaa/memory/WORK/items/open"; X0B="$P/-x0-bbb/memory/WORK/items/open"
+mkdir -p "$X0A" "$X0B"
+printf 'x0-aaa\n' > "$P/-x0-aaa/memory/WORK/items/.project"
+printf 'x0-bbb\n' > "$P/-x0-bbb/memory/WORK/items/.project"
+printf '## W-20260101-A01 -- aaa first, file ends with a newline\n\nproject: x0-aaa\nstatus: open\nkind: do\ndone-when: x\n' > "$X0A/W-20260101-A01.md"
+printf '## W-20260101-A02 -- aaa MIDDLE, file ends WITHOUT a newline\n\nproject: x0-aaa\nstatus: open\nkind: do\ndone-when: x'  > "$X0A/W-20260101-A02.md"
+printf '## W-20260101-A03 -- aaa LAST, file ends WITHOUT a newline\n\nproject: x0-aaa\nstatus: open\nkind: do\ndone-when: x'    > "$X0A/W-20260101-A03.md"
+printf '## W-20260101-B01 -- bbb, the header that used to glue\n\nproject: x0-bbb\nstatus: open\nkind: do\ndone-when: x\n'      > "$X0B/W-20260101-B01.md"
+wanteq "  fixture: aaa's middle item file really has no trailing newline" "0" \
+       "$(tail -c 1 "$X0A/W-20260101-A02.md" | wc -l | tr -d ' ')"
+wanteq "  fixture: aaa's last item file really has no trailing newline" "0" \
+       "$(tail -c 1 "$X0A/W-20260101-A03.md" | wc -l | tr -d ' ')"
+# The denominator comes from the FILESYSTEM, not from the text being measured, so a
+# body that happened to quote a `## W-` cannot inflate it. 4 item files, 4 headers.
+X0_FILES="$(find "$X0A" "$X0B" -name 'W-*.md' | wc -l | tr -d ' ')"
+wanteq "  fixture: four item files across the two drawers" "4" "$X0_FILES"
+
+run --all
+wanteq "--all across two drawers succeeds (rc=0)" "0" "$RC"
+X0_ALL="$(OPEN_ITEMS_PROJECTS_DIR="$P" "$TOOL" --all 2>/dev/null)"
+measure "$X0_ALL"
+wanteq "  CONTROL: the run produced headers at all, so 0==0 cannot pass vacuously" "4" "$X0_ANY"
+wanteq "  every header starts its own line: one per item FILE ($X0_FILES)" "$X0_FILES" "$X0_AT"
+want   "  and the glued header is present and whole" "W-20260101-B01 -- bbb, the header that used to glue" "$X0_ALL"
+
+# CONTROL 2: the instrument must be able to FAIL. Hand it the pre-X0 shape -- the same
+# text with the boundary newline removed -- and it has to report the glue. Without this
+# arm the assertion above would pass just as happily on a measurement that never ran.
+X0_BROKEN='## W-20260101-A01 -- one
+done-when: x## W-20260101-B01 -- two'
+measure "$X0_BROKEN"
+wanteq "  CONTROL: glue_count SEES a glued header (anywhere 2)" "2" "$X0_ANY"
+wanteq "  CONTROL: and reports only one at line start, so the arm above can fail" "1" "$X0_AT"
+
+# CONTROL 3: a SINGLE drawer was never glued, before the fix or after, INCLUDING across
+# its newline-less middle file. This is what pins the bug to the drawer BOUNDARY rather
+# than to a file saved without its last byte.
+X0_ONE="$(OPEN_ITEMS_PROJECTS_DIR="$P" "$TOOL" --project x0-aaa 2>/dev/null)"
+measure "$X0_ONE"
+wanteq "  CONTROL: one drawer alone, headers found" "3" "$X0_ANY"
+wanteq "  CONTROL: one drawer alone, none glued (a newline-less file is NOT the cause)" "3" "$X0_AT"
+
+# --closed widens the population; the boundary must hold there too.
+X0_CL="$(OPEN_ITEMS_PROJECTS_DIR="$P" "$TOOL" --all --closed 2>/dev/null)"
+measure "$X0_CL"
+wanteq "  --all --closed: headers found" "4" "$X0_ANY"
+wanteq "  --all --closed: none glued" "4" "$X0_AT"
+
 printf '\n%s passed, %s failed   (fixtures: %s)\n' "$PASS" "$FAIL" "$ROOT"
 [ "$FAIL" -eq 0 ] || { printf 'open-items-selftest: FAILURES above\n' >&2; exit 1; }
 printf 'open-items-selftest: all arms pass\n'
