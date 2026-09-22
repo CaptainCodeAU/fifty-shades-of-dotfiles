@@ -27,7 +27,7 @@ config_dir:      ~/.claude-p10
 setting_sources: project,local
 settings:        ~/.claude/settings.project.json
 prompt:          pj-prompt-file
-prompt_sources:  ~/.claude/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md:~/.claude-p10/pj-global/RULES.md
+prompt_sources:  ~/CODE/CaptainCodeAU/lifeos-private/.worktree/p10/CONFIG/OPERATIONAL_RULES.md:~/.claude-p10/pj-global/RULES.md
 prompt_out:      ~/.cache/dotfiles/pj-system-prompt-p10.md
 plugins:         skills/herdr skills/AgentRelay skills/ISA pj-voice pj
 plugins_root:    ~/.claude-p10
