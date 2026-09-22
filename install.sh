@@ -910,8 +910,37 @@ _preflight_herdr_bump_check() {
     # unpin/upgrade/pin as three separate checks (not a bare &&-chain): an upgrade failure
     # must still re-pin whatever is currently installed, or a transient failure here would
     # leave herdr permanently unguarded instead of merely behind.
+    # HOMEBREW_NO_INSTALL_CLEANUP=1 IS THE RETURN PATH (W-20260922-A22, ruled by
+    # Gavin at the F9b gate: guard it AND say it is not permanent).
+    #
+    # Without it, Homebrew cleans up around an upgrade and that cleanup removes
+    # BOTH the outgoing keg under /opt/homebrew/Cellar/herdr/<old> AND the cached
+    # bottle under $(brew --cache)/downloads. Those two ARE the way back: there is
+    # no versioned herdr@X.Y.Z formula, homebrew-core is not cloned on this box
+    # (API mode) so `brew extract` would mean a several-hundred-MB clone, and the
+    # cached bottle is the only artefact that reconstitutes the old version
+    # offline. So the routine that exists to take a one-way step had no guard on
+    # the step being one-way. F9's upgrade survived only because it was run BY
+    # HAND with this variable in front of it.
+    #
+    # Read from Homebrew's own env_config.rb on 2026-09-22, with a control:
+    #   HOMEBREW_NO_INSTALL_CLEANUP          if set, upgrade never auto-cleans
+    #   HOMEBREW_CLEANUP_PERIODIC_FULL_DAYS  default 30: every 30 days an upgrade
+    #                                        cleans ALL formulae, not just this one
+    #   HOMEBREW_CLEANUP_MAX_AGE_DAYS        default 120: cached downloads older
+    #                                        than that are removed regardless
+    #
+    # THE GUARD IS NOT A PROMISE OF PERMANENCE. It stops THIS upgrade eating the
+    # bottle. The 120-day cache expiry still applies, and so does any `brew
+    # cleanup` a human runs, so a rollback that depends on the cache has a shelf
+    # life rather than being permanent. To keep a version past that, copy the
+    # bottle out of the cache somewhere of your own before the clock runs down.
+    #
+    # `run_cmd env VAR=1 cmd` rather than a `VAR=1 run_cmd` prefix: run_cmd execs
+    # "$@", which would take the assignment as the command name, and this form
+    # also prints the variable in --dry-run instead of hiding it.
     if run_cmd brew unpin herdr; then
-        if ! run_cmd brew upgrade herdr; then
+        if ! run_cmd env HOMEBREW_NO_INSTALL_CLEANUP=1 brew upgrade herdr; then
             warn "brew upgrade herdr failed — re-pinning the current version; will retry next run."
         fi
         run_cmd brew pin herdr
