@@ -580,8 +580,23 @@ close_herdr_workspace(){
     say "NOTE: no herdr workspace named this worktree ($named of $seen examined named one at all), so none was closed. If one is left in your sidebar: herdr workspace list, then herdr workspace close <id>."
     return 0
   fi
-  if herdr workspace close "$ws" >/dev/null 2>&1; then
+  # THE CLOSE CAN BE REFUSED FOR A REASON WORTH REPEATING. herdr 0.9.0 (#2874)
+  # made closing a primary workspace that still has open worktree workspaces
+  # require explicit group intent, and the refusal is `workspace_group_close_required`.
+  # A refusal is a FINDING, not a failure: it means the close would take more
+  # than this function named, and the old branch below would have printed
+  # "close it with: herdr workspace close $ws", which is the command that just
+  # refused. c2 deliberately does NOT retry with --group. That would also close
+  # the PRIMARY workspace the worktree hangs off, which nobody asked for, and
+  # it is exactly the "never add it merely to bypass the refusal" rule in the
+  # herdr skill. Adding a broader flag after a refusal is the same shape as
+  # retrying with a broader credential.
+  local _close_out _close_rc
+  _close_out="$(herdr workspace close "$ws" 2>&1)"; _close_rc=$?
+  if [ "$_close_rc" -eq 0 ]; then
     say "closed herdr workspace $ws (it pointed at the worktree just removed)"
+  elif printf '%s' "$_close_out" | grep -q workspace_group_close_required; then
+    say "NOTE: herdr REFUSED to close workspace $ws: it belongs to a workspace GROUP, so closing it needs explicit group intent (herdr 0.9.0, #2874). c2 does not add --group for you, because that would also close the PRIMARY workspace this worktree hangs off. The git worktree IS gone; only the sidebar entry is left. Look at the group first (herdr workspace list), then decide: herdr workspace close $ws --group"
   else
     say "NOTE: herdr workspace $ws still points at $(tilde "$gone"), which is gone. Close it with: herdr workspace close $ws"
   fi
@@ -991,6 +1006,46 @@ HFAKE
   # 15e CONTROL for 15b-15d: the fake really does record when a close happens, so those
   #     three absent files mean "nothing was closed" rather than "the recorder is broken".
   [ -e "$root/ws.15a" ] && ok "15e control: the recorder fires when a close really happens" || bad "15e control" "15a recorded nothing, so 15b-15d prove nothing"
+
+  # 15f-15i THE REFUSAL, added at the F9 gate (Gavin, 2026-09-22). herdr 0.9.0
+  #     (#2874) made `workspace close` on a grouped workspace fail with
+  #     `workspace_group_close_required`. Before this, c2 answered that refusal
+  #     with "close it with: herdr workspace close <id>" -- the command that had
+  #     just refused. A refusal that reads like a generic failure is the same
+  #     trap as a refusal that reads like a "no".
+  #     PROVENANCE OF THE FIXTURE, stated rather than assumed: 0.8.2 cannot
+  #     produce this error at all, so the token comes from upstream's own skill
+  #     text and its 0.9.0 release notes, and the envelope from the documented
+  #     shape (server errors are JSON on stderr, exit 1). It is re-checked
+  #     against `herdr api schema --json` the moment 0.9.1 is installed.
+  local rb="$root/herdrbin-refuse"; mkdir -p "$rb"
+  cat > "$rb/herdr" <<RFAKE
+#!/bin/sh
+if [ "\$1" = workspace ] && [ "\$2" = list ]; then
+  printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"wA","label":"repo"},{"workspace_id":"wB","label":"repo","worktree":{"checkout_path":"GONEPATH"}}]}}'
+  exit 0
+fi
+if [ "\$1" = workspace ] && [ "\$2" = get ]; then printf '%s\n' '{"result":{"workspace":{}}}'; exit 0; fi
+if [ "\$1" = workspace ] && [ "\$2" = close ]; then
+  printf '%s\n' '{"error":{"type":"workspace_group_close_required","message":"workspace wB has open worktree workspaces; pass --group to close the group"}}' >&2
+  exit 1
+fi
+exit 0
+RFAKE
+  chmod +x "$rb/herdr"
+  OUT="$( PATH="$rb:$PATH"; WS_CLOSED="$root/ws.15f"; export WS_CLOSED; close_herdr_workspace "GONEPATH" 2>&1 )"
+  # 15f it NAMES the refusal instead of printing the generic still-points-at line
+  case "$OUT" in *"belongs to a workspace GROUP"*) ok "15f a group refusal is reported as a refusal, not as a generic failure";; *) bad "15f said" "$OUT";; esac
+  # 15g and it does NOT re-suggest the bare command that just refused
+  case "$OUT" in *"still points at"*) bad "15g" "fell through to the generic branch: $OUT";; *) ok "15g it does not fall through to the generic 'close it with' advice";; esac
+  # 15h AND IT NEVER RETRIES WITH --group ITSELF. This is the arm that matters:
+  #     the recorder would have caught a second close call, and there is none.
+  [ ! -e "$root/ws.15f" ] && ok "15h c2 never retries the close with --group on its own" || bad "15h retried" "$(cat "$root/ws.15f")"
+  # 15i CONTROL for 15h: the refusing fake's OWN close path is reachable, proven by
+  #     the message above having been produced by it. And the NON-refusing fake still
+  #     closes, so 15h's empty recorder means "no retry", not "this fake never closes".
+  OUT2="$( PATH="$hb:$PATH"; WS_CLOSED="$root/ws.15i"; export WS_CLOSED; close_herdr_workspace "GONEPATH" 2>&1 )"
+  [ "$(cat "$root/ws.15i" 2>/dev/null)" = "closed wB" ] && ok "15i control: the same code path DOES close when herdr does not refuse" || bad "15i control" "$(cat "$root/ws.15i" 2>/dev/null)"
 
   # ---- 16: the empty scaffold directories `c2 start` leaves behind --------------------
   # Asked for by Gavin after the F8a gate. A FRESH repo per arm, never a cleared one: a
