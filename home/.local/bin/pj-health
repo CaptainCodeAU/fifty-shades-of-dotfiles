@@ -52,6 +52,9 @@
 #                        Its FAIL and WARN branches are unreachable on a machine
 #                        whose snapshot is current, which is how you ship a row
 #                        that can only ever print PASS
+#   PJ_HEALTH_SKILL      the herdr SKILL.md the skill-budget row weighs. Same
+#                        argument: on a box inside its budget only PASS is
+#                        reachable, so WARN needs a fixture to be observed
 #   plus the seams the tools already honour and pass through untouched: PJ_MACHINE_FILE,
 #   PJ_PROMPT_SOURCES, PJ_PROMPT_OUT, OPEN_ITEMS_PROJECTS_DIR, DECIDED_GLOBAL_DIR,
 #   CLAUDE_PROJECT_SETTINGS_FILE, CLAUDE_PROJECT_SETTINGS_TEMPLATE, CLAUDE_HOOKS_MANIFEST.
@@ -704,6 +707,49 @@ if command -v "$PJ_HEALTH_DRIFT" >/dev/null 2>&1 && command -v jq >/dev/null 2>&
   fi
 else
   row NOTM skill-upstream "herdr-skill-drift-check or jq is not on PATH, so upstream was not compared"
+fi
+
+# --- herdr SKILL.md size budget (F9b) ---------------------------------------
+# WHY A BUDGET AT ALL. This file is the estate's largest skill and it grows
+# every time something is measured, which is exactly the behaviour that earns
+# it: a finding written down is worth more than the tokens it costs. What it
+# does NOT have is anything that notices the total. F9 added 1,838 characters
+# of rules block and F9b added four re-measurements; nobody was counting.
+#
+# SAME DIVISOR, SAME REASON as rules-budget above, and the same refusal to
+# watch line count. Two instruments, both reported so neither is trusted alone:
+# cl100k (tiktoken, exact, needs the network so NOT run here) read the file at
+# 9,535 tokens / 39,715 bytes on 2026-09-22; the P9 divisor of 2.45 chars per
+# token reads the same file as ~16,210. They disagree by 70%, because cl100k is
+# not Anthropic's tokenizer. The P9 figure is the one that predicted a real
+# first-turn cost on this box, so it is the one budgeted, and the cl100k number
+# is recorded beside it so a future reading can tell which instrument moved.
+#
+# WARN, NOT FAIL. Over budget means "this grew, look at it", not "this is
+# broken". rules-budget FAILs because RULES.md is in EVERY session's first
+# turn; a skill body is loaded only when the skill is invoked, so the cost is
+# per-use and the judgement is Gavin's.
+#
+# THE THREE THINGS A LINE IN THAT FILE MUST CARRY: a rule, one number, and a
+# date. A paragraph with no number cannot be re-verified and a number with no
+# date cannot be re-measured, and both are how a file this size rots while
+# still reading as authoritative.
+#
+# Budget = the 2026-09-22 measurement plus 15%. Raise it deliberately, with a
+# measurement, never to make a yellow row go green.
+SKILL_TOKEN_BUDGET="${PJ_SKILL_TOKEN_BUDGET:-18641}"
+HERDR_SKILL="${PJ_HEALTH_SKILL:-$PJ_HOME/skills/herdr/SKILL.md}"
+if [ -r "$HERDR_SKILL" ]; then
+  sb="$(wc -c <"$HERDR_SKILL" | tr -d ' ')"
+  sl="$(wc -l <"$HERDR_SKILL" | tr -d ' ')"
+  st=$((sb * 100 / RULES_CHARS_PER_TOKEN))
+  if [ "$st" -le "$SKILL_TOKEN_BUDGET" ]; then
+    row PASS skill-budget "herdr SKILL.md ~$st of $SKILL_TOKEN_BUDGET tokens ($sb bytes, $sl lines, 2.45 chars/token measured P9)"
+  else
+    row WARN skill-budget "herdr SKILL.md ~$st tokens over budget $SKILL_TOKEN_BUDGET ($sb bytes, $sl lines); it grew. Cut narrative and corrections of earlier versions first, never a measurement, or raise PJ_SKILL_TOKEN_BUDGET with a fresh count"
+  fi
+else
+  row NOTM skill-budget "$(tilde "$HERDR_SKILL") absent or unreadable, so nothing was weighed"
 fi
 
 # M14d records pinned (F5a). open-items and decided must resolve the drawer and the rulings
