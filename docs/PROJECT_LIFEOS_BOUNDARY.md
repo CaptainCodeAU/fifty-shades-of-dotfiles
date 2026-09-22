@@ -109,7 +109,7 @@ resolve the drawer per repo BEFORE anything moves.
 - **Ties.** Depends on D1. `open-items` change must land first or the `c`-side SessionStart
   hook breaks on every session (it fails loudly, which is the safe direction).
 
-### D3. Residue in lifeos-private: delete the copies, keep the learning (D-20260919-04)
+### D3. Residue in lifeos-private: delete the copies, keep the learning (D-20260919-A04, `-04` until P10)
 
 After D2 lands and a hash comparison shows nothing unique remains: delete
 `SCOPES/dotfiles/` and the dotfiles folders under `MEMORY/WORK/`. Keep the incidents, the

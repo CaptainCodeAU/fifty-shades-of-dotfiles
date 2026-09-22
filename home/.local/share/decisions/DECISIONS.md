@@ -21,19 +21,24 @@ filenames themselves did change.
 
 Two blocks stay here on purpose: one is LifeOS-owned and not this project's
 to move; the other was the bridge that pointed `decided` at the machine-wide
-home before it could read that home itself. **The LifeOS-owned block keeps
-its original ID**, unlettered: relabelling another project's ruling is not
-this project's call. It is the one block on the machine still on the old
-shape, and `decided` finds it exactly as before.
+home before it could read that home itself. **The LifeOS-owned block kept
+its original ID**, unlettered, until 2026-09-22: relabelling another project's
+ruling was not this project's call, so it waited for LifeOS's own ruling, made
+at P10. It is `D-20260919-A04` now, and `decided` finds the old spelling by
+fallback exactly as before.
 
 ---
 
-## D-20260919-04 -- Delete the dotfiles copies in lifeos-private, keep the learning
+## D-20260919-A04 -- Delete the dotfiles copies in lifeos-private, keep the learning
 
 topic: lifeos-private residue SCOPES dotfiles copy MEMORY WORK ci-watch-observability github-credential-lanes incidents upgrades delete keep hash check
 decided: 2026-09-19
 status: standing
 holds-in: fifty-shades-of-dotfiles/docs/PROJECT_LIFEOS_BOUNDARY.md section D3
+
+LifeOS's own ruling, 2026-09-22 (P10, Gavin): this block adopts the machine letter like
+every other ruling on the box. It was `D-20260919-04` until then, the last block on the
+pre-P8a shape; `decided` resolves the old spelling by fallback. W-20260921-A24 closed on it.
 
 After D-20260919-03 lands and a hash comparison shows nothing unique remains (AMENDED
 2026-09-19 before execution: measured, 3 of the SCOPES copy's 9 content hashes are unique,

@@ -74,8 +74,9 @@ minted before then was renamed `D-YYYYMMDD-NN` -> `D-YYYYMMDD-ANN`, since every 
 made on the Mac mini. The ~370 citations of the old shape in documents were left alone, so
 `decided <old-id>` falls back to the letter form after an exact miss and says so on stderr.
 The fallback widens by ONE letter slot, not into a wildcard: a bare ID whose number matches
-nothing still misses, and a legacy ID is never invented into a new block. One block keeps
-the unlettered shape on purpose -- `D-20260919-04`, which LifeOS owns.
+nothing still misses, and a legacy ID is never invented into a new block. The last block on
+the old shape, `D-20260919-04` (LifeOS-owned), took the letter on 2026-09-22 by LifeOS's own
+ruling at P10 and is `D-20260919-A04` now; the old spelling still resolves by fallback.
 
 ## The split, for the record
 
@@ -84,7 +85,7 @@ Until 2026-09-21 every block sat in ONE file in this PUBLIC repo, stowed to
 D-20260920-10, 9 machine-wide blocks moved to `~/.claude/pj-global/decisions/` and 17 of
 this project's own to its private drawer, one file per block, block text unchanged,
 each verified by content hash (with a control that had to fail) before it left the public
-file. Two blocks stay in the public stub: D-20260919-04 (LifeOS-owned) and D-20260920-11
+file. Two blocks stay in the public stub: D-20260919-A04 (LifeOS-owned, `-04` until P10) and D-20260920-11
 (the pointer that bridged the gap). The moved blocks remain in this repo's git history;
 that history was not rewritten and no scrub is proposed.
 
