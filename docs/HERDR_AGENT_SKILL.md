@@ -3,12 +3,35 @@
 **Audience: an AI coding agent, not a human.** Read this before issuing any
 `herdr` command. It replaces reading https://herdr.dev/docs/agent-skill/.
 
-herdr-verified: 0.8.2
+herdr-verified: 0.9.1
 
-Re-verified against **herdr 0.8.2** (Homebrew, macOS arm64) on 2026-09-17;
-originally written against 0.7.5 on 2026-08-02 by executing every command
-listed. Statements marked OBSERVED were produced by a real run; statements
-marked DOC come from upstream docs and were not independently confirmed.
+Re-verified against **herdr 0.9.1** (Homebrew, macOS arm64) on 2026-09-22 (F9b),
+against a RUNNING 0.9.1 server rather than the binary alone; against 0.8.2 on
+2026-09-17; originally written against 0.7.5 on 2026-08-02 by executing every
+command listed. Statements marked OBSERVED were produced by a real run;
+statements marked DOC come from upstream docs and were not independently
+confirmed.
+
+**WHAT THE 0.9.1 RE-VERIFY DID, so the stamp is a claim of a known size.** It
+re-probed every claim a release since 0.8.2 could have changed, the same scope
+the 0.7.5 to 0.8.2 stamp was earned on. RE-RUN and unchanged: the whole
+documented command surface, 47 of 47 subcommands across all four HERDR docs,
+checked against 0.9.1's own group listings with a control that separates a real
+subcommand from an invented one (an invented one prints the group listing, a
+real one prints the top-level help); the sandbox socket denial, hit on every
+`herdr` call in that session; the output-format map, with `pane read` still
+printing text and `plugin list --json` still printing JSON; the `agent get` /
+`agent list` result-key split; the id fields returned by `workspace create`,
+`tab create` and `pane split`; `agent_pane_busy` on a pane still running its
+shell startup; `status server --json`; and server errors as JSON on stderr at
+exit 1. RE-MEASURED AND CHANGED: the pane-read blank-region floor is gone
+(#3444), the `agent prompt` submit trap did not reproduce in 21 attempts, an
+omitted `pane split` target now means the calling pane (#4123), and
+`workspace_group_close_required` was captured live. NOT RE-RUN: nothing here
+requires a server restart, and no claim in this document was left unchecked
+because of one. Checked and found absent rather than assumed: this document
+makes no claim about `--no-session`, `experimental.kitty_graphics` or event
+replay, the three things 0.9.0 removed or renamed.
 
 The `herdr-verified:` line above is machine-read by `herdr-skill-drift-check`,
 which compares it to the installed binary and reports every doc that has fallen
