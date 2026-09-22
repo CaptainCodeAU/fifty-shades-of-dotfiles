@@ -47,6 +47,11 @@
 #   PJ_ZSHRC_MTIME       epoch to use as ~/.zshrc's real mtime
 #   PJ_TRANSCRIPTS_DIR   ~/.claude/projects     PJ_STATE_DIR       ~/.local/state/pj
 #   PJ_TRAILER_REPOS     space-separated repos the commit-trailer row reads
+#   PJ_HEALTH_HERDR      the herdr binary the stale-workspaces row calls
+#   PJ_HEALTH_DRIFT      the herdr-skill-drift-check the skill-upstream row calls.
+#                        Its FAIL and WARN branches are unreachable on a machine
+#                        whose snapshot is current, which is how you ship a row
+#                        that can only ever print PASS
 #   plus the seams the tools already honour and pass through untouched: PJ_MACHINE_FILE,
 #   PJ_PROMPT_SOURCES, PJ_PROMPT_OUT, OPEN_ITEMS_PROJECTS_DIR, DECIDED_GLOBAL_DIR,
 #   CLAUDE_PROJECT_SETTINGS_FILE, CLAUDE_PROJECT_SETTINGS_TEMPLATE, CLAUDE_HOOKS_MANIFEST.
@@ -648,6 +653,57 @@ if command -v "$HERDR_BIN" >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; the
   fi
 else
   row NOTM stale-workspaces "herdr or jq is not on PATH, so no workspace was examined"
+fi
+
+# --- herdr skill upstream drift (F9) ----------------------------------------
+# WHY THIS ROW IS NOT THE ONE ABOVE IT. Our herdr SKILL.md is a SUPERSET of
+# upstream's: upstream's text with a lot of locally measured findings written
+# into it. UPSTREAM.md is the stored merge base. herdr-skill-drift-check's own
+# first four subjects compare things that both come off THIS BOX, so while the
+# formula is pinned they agree by construction -- and on 2026-09-22 upstream's
+# skill had been ten hunks ahead for six days while that tool printed "merge
+# base current" on every session card. This row carries its three CONTENT
+# HASHES against upstream's repo, which is the only arm that can see it.
+#
+# It maps that tool's own states onto this one's, and the mapping is the point:
+#   upstream-base       ACTION -> FAIL  the snapshot is corrupt, merges are unsound
+#   upstream-released   ACTION -> WARN  upstream shipped changes; a merge is DUE,
+#                                       which is a decision for Gavin, not a fault
+#   upstream-unreleased ACTION -> WARN  (cannot currently happen; INFO stays CLEAN)
+#   any SKIPPED                -> NOT MEASURED, naming what could not be read
+#
+# --no-network ON PURPOSE. This tool's contract is "finishes in a few seconds";
+# three cold fetches at an 8s timeout is 24s. The SessionStart hook does the
+# fetching and fills the 24h cache, so in normal life this row reads it for
+# free. A cold cache is NOT MEASURED and says how to warm it, which is the
+# honest answer rather than a slow one. `pj-health --live` passes --live down.
+PJ_HEALTH_DRIFT="${PJ_HEALTH_DRIFT:-herdr-skill-drift-check}"
+if command -v "$PJ_HEALTH_DRIFT" >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+  if [ "$LIVE" -eq 1 ]; then drift_json="$("$PJ_HEALTH_DRIFT" --json --live 2>/dev/null || true)"
+  else drift_json="$("$PJ_HEALTH_DRIFT" --json --no-network 2>/dev/null || true)"; fi
+  if [ -z "$drift_json" ] || [ "$(printf '%s' "$drift_json" | jq -r 'has("subjects")' 2>/dev/null)" != true ]; then
+    row NOTM skill-upstream "herdr-skill-drift-check returned no JSON report, so upstream was not compared"
+  else
+    du_base="$(printf '%s' "$drift_json" | jq -r '.subjects[]? | select(.subject=="upstream-base") | .state' 2>/dev/null)"
+    du_rel="$(printf '%s' "$drift_json" | jq -r '.subjects[]? | select(.subject=="upstream-released") | .state' 2>/dev/null)"
+    du_unrel="$(printf '%s' "$drift_json" | jq -r '.subjects[]? | select(.subject=="upstream-unreleased") | .state' 2>/dev/null)"
+    du_tag="$(printf '%s' "$drift_json" | jq -r '.upstream.latest_tag // "?"' 2>/dev/null)"
+    du_ver="$(printf '%s' "$drift_json" | jq -r '.base_version // "?"' 2>/dev/null)"
+    du_src="$(printf '%s' "$drift_json" | jq -r '.upstream.source // "?"' 2>/dev/null)"
+    if [ -z "$du_base" ]; then
+      row NOTM skill-upstream "the drift report carried no upstream subjects at all, so nothing was compared"
+    elif [ "$du_base" = SKIPPED ] || [ "$du_rel" = SKIPPED ] || [ "$du_unrel" = SKIPPED ]; then
+      row NOTM skill-upstream "upstream was not reachable and the 24h cache was cold or stale (source: $du_src). warm it: herdr-skill-drift-check --live"
+    elif [ "$du_base" = ACTION ]; then
+      row FAIL skill-upstream "UPSTREAM.md is NOT a verbatim capture of upstream at v$du_ver, so every merge built on it is unsound. fix: herdr-skill-drift-check --live for the detail, then recapture the snapshot"
+    elif [ "$du_rel" = ACTION ]; then
+      row WARN skill-upstream "upstream has SHIPPED skill changes we have not merged: $du_tag differs from our merge base v$du_ver. Merge them into SKILL.md (never overwrite it, it is a superset), then refresh UPSTREAM.md and UPSTREAM.version"
+    else
+      row PASS skill-upstream "our merge base v$du_ver is upstream's newest release $du_tag, and master carries nothing unreleased (source: $du_src)"
+    fi
+  fi
+else
+  row NOTM skill-upstream "herdr-skill-drift-check or jq is not on PATH, so upstream was not compared"
 fi
 
 # M14d records pinned (F5a). open-items and decided must resolve the drawer and the rulings

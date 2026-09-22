@@ -175,6 +175,38 @@ C-Sess-Id:" ;;
 trailer_repo "$TR_A"; trailer_repo "$TR_B"
 trailer_state "$TR_A" filled; trailer_state "$TR_B" filled
 
+# --- skill-upstream fixtures (F9) -------------------------------------------
+# Five fake `herdr-skill-drift-check`s, one per shape the row must distinguish.
+# They are FAKES on purpose: the real tool's answer depends on what upstream has
+# published this morning, so a suite built on it would go red for reasons that
+# have nothing to do with pj-health. The real tool's own self-test proves the
+# verdicts; these prove the MAPPING from its states onto this tool's four.
+mkdir -p "$T/drift"
+drift_fake(){   # drift_fake <name> <base-state> <released-state> <unreleased-state> <base-version> <latest-tag>
+  cat >"$T/drift/$1" <<DFAKE
+#!/bin/sh
+cat <<'DJSON'
+{"base_version":"$5","upstream":{"latest_tag":"$6","source":"cache"},
+ "subjects":[{"subject":"upstream-base","state":"$2","note":"fixture"},
+             {"subject":"upstream-released","state":"$3","note":"fixture"},
+             {"subject":"upstream-unreleased","state":"$4","note":"fixture"}]}
+DJSON
+DFAKE
+  chmod +x "$T/drift/$1"
+}
+drift_fake pass   OK      OK      OK      0.9.1 v0.9.1
+drift_fake corrupt ACTION ACTION  OK      0.9.1 v0.9.1
+drift_fake moved  OK      ACTION  OK      0.8.2 v0.9.1
+drift_fake cold   SKIPPED SKIPPED SKIPPED 0.9.1 null
+printf '#!/bin/sh\necho "not json at all"\n' >"$T/drift/junk"; chmod +x "$T/drift/junk"
+# A drift tool with NO upstream subjects at all: the shape an OLDER
+# herdr-skill-drift-check (pre-F9) returns. That must read NOT MEASURED, not PASS.
+cat >"$T/drift/old" <<'DOLD'
+#!/bin/sh
+echo '{"base_version":"0.9.1","subjects":[{"subject":"skill-drift","state":"OK","note":"x"}]}'
+DOLD
+chmod +x "$T/drift/old"
+
 # ------------------------------------------------------------------ runner ----
 OUT=""
 run(){   # run [dir] [args...]  -> OUT holds the JSON; RC the exit code
@@ -188,6 +220,7 @@ run(){   # run [dir] [args...]  -> OUT holds the JSON; RC the exit code
       OI_WHERE_FILE="$T/oi-where" DECIDED_LIST_FILE="$T/decided-list" DECIDED_LIST_RC="$T/decided-list-rc" DECIDED_HOMES_FILE="$T/decided-homes" \
       RENDER_OUT_FILE="$T/render-out" RENDER_RC_FILE="$T/render-rc" SYNC_OUT_FILE="$T/sync-out" \
       PJ_TRAILER_REPOS="$TR_SEAM" \
+      PJ_HEALTH_DRIFT="${PJ_HEALTH_DRIFT_FX:-$T/drift/pass}" \
       pj-health --json "$@" 2>"$T/stderr") )"; RC=$?
 }
 st(){ jq -r --arg n "$1" '.rows[] | select(.name==$n) | .state' <<<"$OUT"; }
@@ -210,7 +243,7 @@ arm "baseline parses as JSON" jq -e '.rows|length>0' <<<"$OUT" >/dev/null
 # ~/.config/pj/profiles and the suite's result would depend on the machine it runs on --
 # NOT MEASURED on a box with nothing stowed, WARN on a box with a profile pointing
 # somewhere unusual. They get hermetic arms of their own in the profiles section below.
-for n in launcher output-style plugin-dirs prompt-file rules-budget settings-render hooks-sync hook-orphans hook-single-fire stow-links bin-strays machine-file pj-global no-wrap-up selftests launch-log stale-shells pj-homes drawer decided-store commit-trailer evidence-card evidence-ci-watch evidence-rules evidence-plugins evidence-tokens; do
+for n in launcher output-style plugin-dirs prompt-file rules-budget settings-render hooks-sync hook-orphans hook-single-fire stow-links bin-strays machine-file pj-global no-wrap-up selftests launch-log stale-shells pj-homes drawer decided-store commit-trailer skill-upstream evidence-card evidence-ci-watch evidence-rules evidence-plugins evidence-tokens; do
   arm "baseline $n PASS (got $(st "$n"): $(dt "$n" | cut -c1-80))" is "$n" PASS
 done
 arm "baseline live-probe NOT MEASURED without --live" is live-probe "$NM"
@@ -681,6 +714,36 @@ cp "$T/open-items.pinned.bak" "$BIN/open-items" 2>/dev/null; chmod +x "$BIN/open
 run_p default
 arm "records-pinned green again once the honest stub is restored (control)" is records-pinned PASS
 
+# ---------------------------------------------- skill-upstream (F9) ----
+# The mapping, every branch, each one distinguishable from the others. The
+# FAIL and WARN arms matter most: on this machine the live tool reads PASS, so
+# without fixtures neither would ever be observed going red at all.
+arm "skill-upstream PASS names both versions" has skill-upstream "merge base v0.9.1 is upstream's newest release v0.9.1"
+arm "skill-upstream PASS names where the answer came from" has skill-upstream "source: cache"
+PJ_HEALTH_DRIFT_FX="$T/drift/corrupt" run
+arm "skill-upstream FAIL when the snapshot is not a verbatim capture" is skill-upstream FAIL
+arm "skill-upstream FAIL says the merges are unsound" has skill-upstream "every merge built on it is unsound"
+arm "a corrupt snapshot outranks upstream having moved (both ACTION, one row)" not_has skill-upstream "SHIPPED skill changes"
+PJ_HEALTH_DRIFT_FX="$T/drift/moved" run
+arm "skill-upstream WARN when upstream shipped changes we have not merged" is skill-upstream WARN
+arm "skill-upstream WARN names both sides of the gap" has skill-upstream "v0.9.1 differs from our merge base v0.8.2"
+arm "skill-upstream WARN says never overwrite the superset" has skill-upstream "never overwrite it, it is a superset"
+arm "skill-upstream WARN is not a FAIL (a due merge is Gavin's call, not a wiring fault)" [ "$(st skill-upstream)" != FAIL ]
+PJ_HEALTH_DRIFT_FX="$T/drift/cold" run
+arm "skill-upstream NOT MEASURED on a cold cache with no network" is skill-upstream "$NM"
+arm "skill-upstream NOT MEASURED says how to warm it" has skill-upstream "herdr-skill-drift-check --live"
+PJ_HEALTH_DRIFT_FX="$T/drift/junk" run
+arm "skill-upstream NOT MEASURED when the tool prints no JSON" is skill-upstream "$NM"
+arm "skill-upstream names the no-JSON cause" has skill-upstream "returned no JSON report"
+PJ_HEALTH_DRIFT_FX="$T/drift/old" run
+arm "an OLDER drift tool with no upstream subjects is NOT MEASURED, never PASS" is skill-upstream "$NM"
+arm "and it says the subjects were absent" has skill-upstream "no upstream subjects at all"
+PJ_HEALTH_DRIFT_FX=/nonexistent-drift-tool run
+arm "skill-upstream NOT MEASURED when the tool is not on PATH" is skill-upstream "$NM"
+arm "and it says which tool was missing" has skill-upstream "herdr-skill-drift-check or jq is not on PATH"
+PJ_HEALTH_DRIFT_FX="" run
+arm "skill-upstream back to PASS (control: the four arms above were not a broken fixture)" is skill-upstream PASS
+
 # output shape, exit codes, quiet, line cap
 run; arm "exit 0 when no FAIL" [ "$RC" -eq 0 ]
 arm "json exit field 0" [ "$(jq -r .exit <<<"$OUT")" = 0 ]
@@ -693,7 +756,7 @@ arm "--quiet keeps the summary line" grep -q '^pj-health: .* FAIL, ' <<<"$QOUT"
 write_settings
 FOUT="$( (builtin cd "$PROJ" && PATH="$BIN:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" PJ_HOME="$H" PJ_BIN_DIR="$BIN" PJ_DOTFILES="$DF" PJ_LAUNCHER="$BIN/pj" PJ_TYPE_OUT="$T/type-out" DRYRUN_FILE="$T/dryrun" PJ_PS_OUT="$T/ps" PJ_ZSHRC_MTIME="$ZMT" PJ_TRANSCRIPTS_DIR="$H/projects" PJ_STATE_DIR="$STATE" PJ_MACHINE_FILE="$T/machine" PJ_PROMPT_SOURCES="$OR:$RULES" PJ_PROMPT_OUT="$T/cache/prompt.md" OI_WHERE_FILE="$T/oi-where" DECIDED_LIST_FILE="$T/decided-list" DECIDED_LIST_RC="$T/decided-list-rc" DECIDED_HOMES_FILE="$T/decided-homes" RENDER_OUT_FILE="$T/render-out" RENDER_RC_FILE="$T/render-rc" SYNC_OUT_FILE="$T/sync-out" pj-health 2>/dev/null) )"
 arm "normal output under 40 lines ($(wc -l <<<"$FOUT" | tr -d ' '))" [ "$(wc -l <<<"$FOUT" | tr -d ' ')" -lt 40 ]
-arm "normal output has one row per check (33)" [ "$(grep -cE '^(PASS|WARN|FAIL|NOT MEASURED) ' <<<"$FOUT")" -eq 33 ]
+arm "normal output has one row per check (34)" [ "$(grep -cE '^(PASS|WARN|FAIL|NOT MEASURED) ' <<<"$FOUT")" -eq 34 ]
 arm "unknown arg REFUSED rc 2" bash -c 'PATH="$1:$PATH" pj-health --bogus >/dev/null 2>&1; [ $? -eq 2 ]' _ "$BIN"
 arm "--help exits 0" bash -c 'PATH="$1:$PATH" pj-health --help >/dev/null 2>&1' _ "$BIN"
 
