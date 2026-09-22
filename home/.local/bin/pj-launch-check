@@ -88,7 +88,13 @@ load_profile_expectations(){
   [ -n "$p" ] && SETTING_SOURCES_EXPECTED="$p"
   p="$(profile_key "$PROFILE" plugins_root)"
   [ -n "$p" ] && PLUGINS_ROOT="$(canon "$p")"
+  # P10: a profile with its own prompt cache (prompt_out) is expected to carry THAT path.
+  # Measured 2026-09-22 on the first p10 launch: without this the hook logged
+  # result=stale:rules-file and told the model to relaunch, for a launch that was correct.
+  p="$(profile_key "$PROFILE" prompt_out)"
+  [ -n "$p" ] && PROFILE_PROMPT_OUT="$(canon "$p")"
 }
+PROFILE_PROMPT_OUT=""
 
 usage(){ sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; }
 
@@ -234,7 +240,7 @@ main(){
   read_input
   [ "$SRC" = compact ] && exit 0
   load_profile_expectations
-  EXPECTED="${PJ_PROMPT_EXPECTED:-}"
+  EXPECTED="${PJ_PROMPT_EXPECTED:-$PROFILE_PROMPT_OUT}"
   if [ -z "$EXPECTED" ]; then
     EXPECTED="$(pj-prompt-file --path 2>/dev/null || true)"
     [ -n "$EXPECTED" ] || EXPECTED="${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles/pj-system-prompt.md"
@@ -382,6 +388,14 @@ selftest(){
   RUN_PROFILE=rooted run argv.ok
   case "$OUT" in *"plugin dir $(tilde "$proot")/pj"*) ok "17 control: the ~/.claude five are STALE under a moved root (names the rooted path)";; *) bad "17 control stale" "$OUT";; esac
   case "$OUT" in *"undeclared plugin dir(s)"*) ok "17 control: and UNDECLARED, both directions measured";; *) bad "17 control undeclared" "$OUT";; esac
+  # 18. prompt_out (P10): a profile with its own cache expects THAT path. The seam
+  #     PJ_PROMPT_EXPECTED is unset for both arms so the profile key is what decides.
+  printf 'prompt_out: %s/own-cache.md\nconfig_dir: ~/.claude\n' "$root" > "$root/profiles/ownprompt"
+  printf '%s\n' "claude --setting-sources project,local --settings $HOME/.claude/settings.project.json --append-system-prompt-file $root/own-cache.md --plugin-dir $HOME/.claude/skills/herdr --plugin-dir $HOME/.claude/skills/AgentRelay --plugin-dir $HOME/.claude/skills/ISA --plugin-dir $HOME/.claude/pj-voice --plugin-dir $HOME/.claude/pj --dangerously-skip-permissions --effort high" >"$root/argv.ownprompt"
+  OUT="$(printf '{"session_id":"s18","source":"startup","cwd":"%s"}' "$root" | PJ_LAUNCH_ARGV="$root/argv.ownprompt" PJ_PROMPT_EXPECTED="" PJ_STATE_DIR="$root/state" PJ_PROFILE_DIR="$root/profiles" PJ_PROFILE=ownprompt PJ_LAUNCH_TTY=ttys099 PJ_LAUNCH_SHELL_START=0 "$0" 2>/dev/null)"
+  [ -z "$OUT" ] && ok "18 prompt_out: the profile's own cache path is clean" || bad "18 prompt_out clean" "$OUT"
+  OUT="$(printf '{"session_id":"s18b","source":"startup","cwd":"%s"}' "$root" | PJ_LAUNCH_ARGV="$root/argv.ok" PJ_PROMPT_EXPECTED="" PJ_STATE_DIR="$root/state" PJ_PROFILE_DIR="$root/profiles" PJ_PROFILE=ownprompt PJ_LAUNCH_TTY=ttys099 PJ_LAUNCH_SHELL_START=0 "$0" 2>/dev/null)"
+  case "$OUT" in *"RULES.md"*) ok "18 control: the default cache path is STALE under a prompt_out profile";; *) bad "18 control" "$OUT";; esac
   printf 'pj-launch-check selftest: %d passed, %d failed\n' "$pass" "$fail"
   [ "$fail" -eq 0 ]
 }
