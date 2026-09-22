@@ -743,6 +743,28 @@ else
   else row WARN stale-shells "$nold of $nsh interactive zsh older than ~/.zshrc ($zdate):${oldlist#,}; fix: close the pane or open a new one (exec zsh keeps the start time, so the row lists it until the pane is reopened). Every .zshrc edit makes all open shells stale by this measure; that is correct"; fi
 fi
 
+# M17 frontmatter (P10, W-20260921-A43). WARN, never FAIL: latent, not live.
+# An UNQUOTED `description:` whose text holds a colon-space ends the YAML scalar early.
+# Claude Code's own parser tolerates it, PyYAML does not, and four files under ~/.claude
+# had drifted that way unnoticed (Forge, Grok, Max, AgentRelay). This row is the
+# preventive fix: it names the next one. Pure shell on purpose (no PyYAML on a health
+# check): the defect class is exactly "unquoted, contains ': '", and a block scalar
+# (`>` or `|`) is fine. Population: <PJ_HOME>/agents/*.md and <PJ_HOME>/skills/*/SKILL.md,
+# stated on every run so a zero is never silent.
+fm_bad=""; fm_n=0
+for f in "$PJ_HOME"/agents/*.md "$PJ_HOME"/skills/*/SKILL.md; do
+  [ -f "$f" ] || continue
+  fm_n=$((fm_n+1))
+  fm_desc="$(awk 'NR==1 && $0!="---" {exit} /^---$/ {c++; if (c==2) exit; next} /^description:/ {sub(/^description:[ \t]*/, ""); print; exit}' "$f" 2>/dev/null)"
+  case "$fm_desc" in
+    ''|\'*|\"*|'>'*|'|'*) ;;
+    *': '*) fm_bad="$fm_bad $(tilde "$f")" ;;
+  esac
+done
+if [ "$fm_n" -eq 0 ]; then row NOTM frontmatter "no agents/*.md or skills/*/SKILL.md under $(tilde "$PJ_HOME"); nothing to check"
+elif [ -z "$fm_bad" ]; then row PASS frontmatter "$fm_n frontmatters: every description is quoted, a block scalar, or free of ': '"
+else row WARN frontmatter "unquoted description with ': ' (ends the YAML scalar early; latent under Claude Code, fatal under PyYAML):$fm_bad; fix: quote the value (single quotes, double any ' inside), then re-run"; fi
+
 # =============================================================== PROJECT ==
 DRAWER=""
 if [ "$IN_REPO" -eq 1 ] && command -v open-items >/dev/null 2>&1; then

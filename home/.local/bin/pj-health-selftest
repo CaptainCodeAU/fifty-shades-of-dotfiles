@@ -386,6 +386,27 @@ arm "bin-strays WARNs on a real file in ~/.local/bin" is bin-strays WARN
 arm "bin-strays names the file" has bin-strays "a-real-file"
 arm "bin-strays never FAILs" not_has bin-strays "FAIL"
 arm "bin-strays says why it matters" has bin-strays "versioned nowhere"
+
+# M17 frontmatter (P10, W-20260921-A43). WARN, never FAIL. The baseline fixture holds the
+# three skill SKILL.md files and no agents/, so the baseline row already PASSes on 3.
+# These arms add three agents: one clean file (a control that must stay quiet), one quoted
+# file with a colon inside (must stay quiet: quoting is the fix), one block scalar (quiet),
+# and then the defect itself, which must be named.
+mkdir -p "$H/agents"
+printf -- '---\nname: clean\ndescription: a plain description with no colon space\n---\nbody\n' > "$H/agents/clean.md"
+printf -- "---\nname: quoted\ndescription: 'One invariant: quoted, so the colon is fine'\n---\nbody\n" > "$H/agents/quoted.md"
+printf -- '---\nname: block\ndescription: >-\n  A block scalar: colons are fine here\n---\nbody\n' > "$H/agents/block.md"
+run
+arm "frontmatter PASS with three clean shapes (plain, quoted, block scalar)" is frontmatter PASS
+arm "frontmatter states its population (3 skills + 3 agents)" has frontmatter "6 frontmatters"
+printf -- '---\nname: bad\ndescription: One invariant: Forge never audits its own output\n---\nbody\n' > "$H/agents/bad.md"
+run
+arm "frontmatter WARNs on an unquoted description holding ': '" is frontmatter WARN
+arm "frontmatter names the file" has frontmatter "agents/bad.md"
+arm "frontmatter never FAILs" not_has frontmatter "FAIL"
+arm "frontmatter control: the three clean files are NOT named" not_has frontmatter "clean.md"
+command mv "$H/agents/bad.md" "$T/gone/fm-bad.md"; run
+arm "frontmatter control: PASS again once the bad file is gone (so the WARN was that file)" is frontmatter PASS
 # A tool-install link is NOT a stray: uv, bun and claude all link their binaries
 # into this directory and none of them belongs in a dotfiles repo.
 ln -sfn "$T/home-claude/../fake/.local/share/uv/tools/x/bin/x" "$BIN/a-tool-link"
@@ -672,7 +693,7 @@ arm "--quiet keeps the summary line" grep -q '^pj-health: .* FAIL, ' <<<"$QOUT"
 write_settings
 FOUT="$( (builtin cd "$PROJ" && PATH="$BIN:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" PJ_HOME="$H" PJ_BIN_DIR="$BIN" PJ_DOTFILES="$DF" PJ_LAUNCHER="$BIN/pj" PJ_TYPE_OUT="$T/type-out" DRYRUN_FILE="$T/dryrun" PJ_PS_OUT="$T/ps" PJ_ZSHRC_MTIME="$ZMT" PJ_TRANSCRIPTS_DIR="$H/projects" PJ_STATE_DIR="$STATE" PJ_MACHINE_FILE="$T/machine" PJ_PROMPT_SOURCES="$OR:$RULES" PJ_PROMPT_OUT="$T/cache/prompt.md" OI_WHERE_FILE="$T/oi-where" DECIDED_LIST_FILE="$T/decided-list" DECIDED_LIST_RC="$T/decided-list-rc" DECIDED_HOMES_FILE="$T/decided-homes" RENDER_OUT_FILE="$T/render-out" RENDER_RC_FILE="$T/render-rc" SYNC_OUT_FILE="$T/sync-out" pj-health 2>/dev/null) )"
 arm "normal output under 40 lines ($(wc -l <<<"$FOUT" | tr -d ' '))" [ "$(wc -l <<<"$FOUT" | tr -d ' ')" -lt 40 ]
-arm "normal output has one row per check (32)" [ "$(grep -cE '^(PASS|WARN|FAIL|NOT MEASURED) ' <<<"$FOUT")" -eq 32 ]
+arm "normal output has one row per check (33)" [ "$(grep -cE '^(PASS|WARN|FAIL|NOT MEASURED) ' <<<"$FOUT")" -eq 33 ]
 arm "unknown arg REFUSED rc 2" bash -c 'PATH="$1:$PATH" pj-health --bogus >/dev/null 2>&1; [ $? -eq 2 ]' _ "$BIN"
 arm "--help exits 0" bash -c 'PATH="$1:$PATH" pj-health --help >/dev/null 2>&1' _ "$BIN"
 
