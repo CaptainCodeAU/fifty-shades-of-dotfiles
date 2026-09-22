@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
-# SessionStart hook (read-only): is a herdr upgrade eligible under the 7-day
-# release cooldown, and are the guards that enforce it still in place?
+# SessionStart hook (read-only): is a herdr upgrade eligible under the release
+# cooldown, and are the guards that enforce it still in place?
+#
+# The LENGTH of that cooldown is deliberately not written here. It is read out
+# of install.sh below, because a number repeated in prose goes stale silently:
+# the comment under `cache=` said "the 3-day line" for the whole month the
+# policy was 7 days, and nothing anywhere reported the disagreement
+# (found 2026-09-22, F9, while lowering it to 5 per D-20260922-A10).
 #
 # Purpose: herdr is the one tool in this estate that can move on its own --
 # it ships a self-updater plus TWO default-on background calls to herdr.dev
@@ -42,8 +48,8 @@ command -v uv >/dev/null 2>&1 || { echo "🐑 herdr cooldown: uv not found — s
 days=$(grep -oE 'HERDR_COOLDOWN_DAYS="[0-9]+"' "$PROJECT_DIR/install.sh" 2>/dev/null \
   | grep -oE '[0-9]+' | head -1)
 
-# 6h cache of the tool's plain-text verdict. A release crossing the 3-day line
-# is not a sub-6h event, and the assistant can always run the tool live.
+# 6h cache of the tool's plain-text verdict. A release crossing the cooldown
+# line is not a sub-6h event, and the assistant can always run the tool live.
 cache="${TMPDIR:-/tmp}/herdr-cooldown-check.verdict"
 ttl=21600
 now=$(date +%s)

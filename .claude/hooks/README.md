@@ -199,7 +199,7 @@ Runs on `SessionStart`, read-only. CVE check of the pinned pnpm/nvm/bun floors (
 
 ### herdr-cooldown-check.sh and herdr-skill-drift-check.sh
 
-Both `SessionStart`, read-only, silent when herdr is not installed. The first reports whether a herdr upgrade is eligible under the 7-day cooldown and whether the guards enforcing it are in place. The second reports whether a herdr upgrade moved the agent skill or left a `docs/HERDR*.md` behind (deliberately uncached: no network call). See [`docs/HERDR.md`](../../docs/HERDR.md).
+Both `SessionStart`, read-only, silent when herdr is not installed. The first reports whether a herdr upgrade is eligible under the release cooldown (its length is `HERDR_COOLDOWN_DAYS` in `install.sh`, which the hook reads) and whether the guards enforcing it are in place. The second reports whether a herdr upgrade moved the agent skill or left a `docs/HERDR*.md` behind (deliberately uncached: no network call). See [`docs/HERDR.md`](../../docs/HERDR.md).
 
 ### bun-cooldown-check.sh
 

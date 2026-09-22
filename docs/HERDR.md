@@ -146,7 +146,7 @@ to raise the rate ceiling).
 - **Session surface:** `.claude/hooks/herdr-cooldown-check.sh`, wired into
   `SessionStart` beside the [toolchain-CVE](TOOLCHAIN_CVE_CHECK.md),
   [Zed-PR](ZED_PREVIEW_CHANGELOG.md) and [CI](CI_WATCH.md) watchers.
-- **Cache:** 6h verdict cache in `$TMPDIR`. A release crossing the 7-day line is
+- **Cache:** 6h verdict cache in `$TMPDIR`. A release crossing the cooldown line is
   not a sub-6h event.
 - **Read-only:** it never installs, unpins, upgrades or edits config. It prints
   the command it thinks you want and stops.

@@ -73,7 +73,10 @@
 #
 # USAGE
 #   herdr-cooldown-check [options]
-#     --cooldown-days N  age gate in days (default: $HERDR_COOLDOWN_DAYS or 7)
+#     --cooldown-days N  age gate in days (default: $HERDR_COOLDOWN_DAYS or 5).
+#                        install.sh is CANONICAL and passes it explicitly; this
+#                        literal only covers a bare hand-run. Bump BOTH
+#                        (D-20260922-A10 lowered it from 7 to 5, 2026-09-22).
 #     --timeout SEC      per-network-call timeout (default: 8)
 #     --quiet            print only actionable + SKIPPED lines
 #     --json             emit a JSON report instead of the table
@@ -394,7 +397,7 @@ def release_by_tag(tag: str, timeout: int) -> datetime | None:
 def main() -> int:
     ap = argparse.ArgumentParser(add_help=True)
     ap.add_argument("--cooldown-days", type=float,
-                    default=float(os.environ.get("HERDR_COOLDOWN_DAYS", "7")))
+                    default=float(os.environ.get("HERDR_COOLDOWN_DAYS", "5")))
     ap.add_argument("--timeout", type=int, default=8)
     ap.add_argument("--quiet", action="store_true")
     ap.add_argument("--json", dest="as_json", action="store_true")

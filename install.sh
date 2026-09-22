@@ -144,7 +144,18 @@ BUN_MIN_VERSION="1.3.0"
 # it -- 3 days wasn't the right lever regardless, but 7 buys more of the
 # window that DOES sometimes work (community/maintainer response) without
 # pretending the gate alone solves a triage-process gap. See docs/HERDR.md.
-HERDR_COOLDOWN_DAYS="7"
+#
+# LOWERED from 7 to 5 (2026-09-22, D-20260922-A10, ruled by Gavin at the F9
+# gate). The 2026-08-20 reasoning above is NOT overturned; the ruling is that a
+# FOLLOWING POINT RELEASE carries more signal than the extra two days of
+# waiting. v0.9.0 shipped 2026-09-07 and v0.9.1 followed on 2026-09-16, which
+# is the shape this shorter gate is priced for. herdr ONLY: pnpm's
+# minimumReleaseAge, bun's, uv's UV_EXCLUDE_NEWER and the SHA-pinned GitHub
+# Actions are untouched. The mechanism is unchanged too -- the formula stays
+# pinned, herdr-cooldown-check stays read-only and self-tested, and
+# _preflight_herdr_bump_check still does the unpin/upgrade/re-pin itself once
+# the verdict reads ELIGIBLE. Only the number moves. `decided D-20260922-A10`.
+HERDR_COOLDOWN_DAYS="5"
 
 # --- herdr pinned release (Linux/WSL only) ---
 # macOS gets herdr from Homebrew, whose formula hashes the SOURCE tarball and

@@ -798,7 +798,7 @@ herdr() {
     if [[ "$1" == "update" ]] || [[ "$1" == "channel" && "$2" == "set" && "$3" == "preview" ]]; then
         echo "${err}BLOCKED: herdr $1${2:+ $2}${3:+ $3}${done}"
         echo
-        echo "  This bypasses Homebrew, the pin and the ${warn}${HERDR_COOLDOWN_DAYS:-7}-day release cooldown${done}."
+        echo "  This bypasses Homebrew, the pin and the ${warn}${HERDR_COOLDOWN_DAYS:-5}-day release cooldown${done}."
         echo
         echo "  Check state:  herdr-cooldown-check"
         echo "  Upgrade:      ./install.sh   (bumps automatically once the cooldown has elapsed)"
