@@ -221,7 +221,7 @@
         "command": "test -x \"$HOME/.claude/hooks/validate-bash.sh\" && \"$HOME/.claude/hooks/validate-bash.sh\" || true",
         "timeout": 10
       },
-      "why": "DENIES rm -rf / or ~, force push to main/master, bare git reset --hard, git clean -fd. Moved from the dotfiles project settings 2026-09-21 (P5.6): the rule is OPERATIONAL_RULES Deletion, machine-wide. Project target only: c sessions keep LifeOS's own set"
+      "why": "DENIES rm -rf / or ~, force push to main/master, bare git reset --hard, git clean -fd. Moved from the dotfiles project settings 2026-09-21 (P5.6): the rule is OPERATIONAL_RULES Deletion, machine-wide. Project target only: c sessions keep LifeOS's own set. Since 2026-09-23 (Gavin, proposals A B C) it also denies the six .zshrc aliases that launch a nested claude --dangerously-skip-permissions (ci cr ct cpr cd_ cskip), the oh-my-zsh gpf! (git push --force) and brew install/reinstall/upgrade, through the shared scanner conv-shscan.awk, which must be stowed beside it (it is, same directory). No new registration: the rules joined this entry, so the command string is unchanged"
     },
     {
       "event": "PreToolUse",

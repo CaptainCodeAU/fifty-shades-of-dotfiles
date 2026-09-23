@@ -151,14 +151,14 @@ Code 2.1.280 in headless scratch sessions with a fixture hook registered through
 the rewritten command runs even when nothing permits it. With no decision, the
 normal permission check runs on the REWRITTEN command.
 
-| Arm | Hook output                        | Permissions                                   | Result                                  |
-| --- | ---------------------------------- | --------------------------------------------- | --------------------------------------- |
-| P0  | none (control)                     | nothing allowed                               | `touch A.txt` refused: touch needs a grant |
-| P1  | rewrite to `touch B.txt`, no decision | only `Bash(touch A.txt)` allowed           | refused: the check ran on `touch B.txt`  |
-| P2  | same                               | only `Bash(touch B.txt)` allowed              | ran, B.txt created                      |
-| P3  | same                               | nothing allowed                               | refused                                 |
-| P5  | same                               | `Bash(touch A.txt)` allowed, deny rule `Bash(touch B.txt)` | refused by the deny rule    |
-| P6  | rewrite + `permissionDecision: "allow"` | NOTHING allowed                          | **ran, B.txt created: escalation**      |
+| Arm | Hook output                             | Permissions                                                | Result                                     |
+| --- | --------------------------------------- | ---------------------------------------------------------- | ------------------------------------------ |
+| P0  | none (control)                          | nothing allowed                                            | `touch A.txt` refused: touch needs a grant |
+| P1  | rewrite to `touch B.txt`, no decision   | only `Bash(touch A.txt)` allowed                           | refused: the check ran on `touch B.txt`    |
+| P2  | same                                    | only `Bash(touch B.txt)` allowed                           | ran, B.txt created                         |
+| P3  | same                                    | nothing allowed                                            | refused                                    |
+| P5  | same                                    | `Bash(touch A.txt)` allowed, deny rule `Bash(touch B.txt)` | refused by the deny rule                   |
+| P6  | rewrite + `permissionDecision: "allow"` | NOTHING allowed                                            | **ran, B.txt created: escalation**         |
 
 P6 is the one to remember: a hook that answers `allow` turns every rewrite into
 an auto-approval, so a slip that would have prompted (or been refused) runs
@@ -190,14 +190,30 @@ guard would refuse; the convention hooks only insert `uv run`, `pnpm`,
 ```sh
 ~/.claude/hooks/enforce-uv.sh --selftest              # 78 arms
 ~/.claude/hooks/enforce-pnpm.sh --selftest            # 56 arms
-.claude/hooks/enforce-no-cd.sh --selftest             # 52 arms (this repo only)
+.claude/hooks/enforce-no-cd.sh --selftest             # 64 arms (this repo only)
+.claude/hooks/enforce-builtin.sh --selftest           # 44 arms (this repo only)
+~/.claude/hooks/validate-bash.sh --selftest           # 113 arms (29 function, 84 payload)
 CONV_HOOK_UNDER_TEST=<other copy> <hook> --selftest   # same arms, another copy
+VB_HOOK_UNDER_TEST=<other copy> validate-bash.sh --selftest
+CONV_PAYLOAD_FILE=<captured payload> <hook> --selftest   # arms on a real envelope
 ```
 
 The three share `home/.claude/hooks/conv-shscan.awk` (a zsh command scanner:
 quotes, `$(...)`, heredocs, `|&`, `&!`, `=(...)`, glob qualifiers) and
 `conv-hooklib.sh` (JSON in and out, the log, the selftest runner). A new hook
 that rewrites should reuse them rather than grow a fourth regex.
+
+Two deny-only modes use the same scanner (2026-09-23): `builtin`, for
+`enforce-builtin.sh`, and `guard`, for the three alias-and-brew rules in
+`validate-bash.sh`. Deny-only modes never compose with the rewriting ones. Only
+`guard` records the commands inside `$(...)`, `<(...)` and `=(...)` and reads
+backtick bodies and `eval` arguments, because an alias expands there too
+(measured in agent Bash: after an assignment, `time`, `nocorrect`, `!`, keywords,
+`(`, `{`, in `$(...)`, backticks and `eval`; NOT after `noglob`, `nohup`,
+`command`, `builtin`, `exec`, `env`, `sudo` or `xargs`). The other modes still
+skip those bodies, as the old sed strip did. The scanner also marks commands
+inside an explicit `( )` subshell, which is how `enforce-no-cd.sh` allows
+`(cd /x && make)`.
 
 ---
 
@@ -268,13 +284,13 @@ stdin, stdout and stderr on `/dev/null`. A worker that kept either output pipe
 would make Claude Code wait for it; the selftest's timing arm fails in exactly
 that case (measured before pj-ping: 3.0 s instead of 0.06 s; after: 0.1 s).
 
-| Case                                    | Result                                         |
-| --------------------------------------- | ---------------------------------------------- |
-| `PJ_NO_PING=1`                          | nothing, not logged                            |
-| same session pinged under 20 s ago      | nothing, logged as `debounced`                 |
-| `pj-ping` missing                       | nothing, logged                                |
-| `afplay` missing                        | messages only, `ping.log` names `afplay`       |
-| `imsg` missing or `IMSG_TO` unset       | sounds only, `ping.log` names what was missing |
+| Case                               | Result                                         |
+| ---------------------------------- | ---------------------------------------------- |
+| `PJ_NO_PING=1`                     | nothing, not logged                            |
+| same session pinged under 20 s ago | nothing, logged as `debounced`                 |
+| `pj-ping` missing                  | nothing, logged                                |
+| `afplay` missing                   | messages only, `ping.log` names `afplay`       |
+| `imsg` missing or `IMSG_TO` unset  | sounds only, `ping.log` names what was missing |
 
 State lives under `${XDG_STATE_HOME:-~/.local/state}/pj/`: `question-ping.log`
 (one decision per line with the ping id, never the message text),
