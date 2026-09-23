@@ -47,6 +47,12 @@
 # capped at 400 chars and token-shaped strings and credential-named
 # assignments are redacted first: a guard must not become the leak.
 #
+# FAILS CLOSED when it cannot finish: the verdict is computed in a child, and
+# no verdict within 3 s (guard-timeout) or a child that exits without one
+# (guard-no-verdict) is a DENY that says it is not a match. The harness allows
+# the command once this hook passes its 5 s timeout, so a stall used to be an
+# allow (W-20260923-A54).
+#
 # FAILS OPEN on malformed JSON or an empty command (exit 0, no decision): a
 # crash here would block every Bash call. jq missing, or the lexer failing,
 # SHOUTS through additionalContext instead of going quiet.
@@ -368,6 +374,8 @@ _msg() { # $1 = rule id -> what it does, then the safe route
     rimraf)         echo "rimraf deletes outside the Trash. SAFE ROUTE: bare rm -r." ;;
     disk)           echo "diskutil erase/partition, mkfs, newfs and wipefs destroy whole volumes. SAFE ROUTE: ask Gavin." ;;
     tmutil)         echo "tmutil delete* removes backups or snapshots. SAFE ROUTE: ask Gavin." ;;
+    guard-timeout)  echo "the guard gave NO VERDICT within ${DEADLINE:-3} s (a timeout, not a match). SAFE ROUTE: split the command into smaller pieces, or ask Gavin." ;;
+    guard-no-verdict) echo "the guard exited without a verdict (a crash, not a match). SAFE ROUTE: ask Gavin; the guard's --selftest shows what broke." ;;
     trash-empty)    echo "emptying the Trash (trash-empty, trash-rm, Finder empty trash) makes every earlier delete permanent. SAFE ROUTE: ask Gavin." ;;
     *)              echo "this command destroys data outside the Trash. SAFE ROUTE: ask Gavin." ;;
   esac
@@ -1391,6 +1399,26 @@ SNAP
   su="$(awk '/shift [2-9]/ && !/shift [2-9] \|\| set --/ {n++} END {print n+0}' "$self")"
   [ "$sg" -ge 20 ] && [ "$su" -eq 0 ]; _chk "lint: $sg guarded multi-shifts (>= 20, the control), $su unguarded (must be 0)" $?
 
+  echo "=== DEADLINE arms: no verdict in time is a DENY that says so (fail closed) ==="
+  # DEL_GUARD_TEST_STALL makes the verdict child sleep, DEL_GUARD_TEST_CRASH
+  # makes it exit early: the two ways a guard can go quiet. Harmless commands
+  # throughout, so a deny here can only come from the fail-closed path.
+  _hookb 'echo control-ok' 0 3 DEL_GUARD_DEADLINE=1
+  [ "$rc" -eq 0 ] && [ -z "$out" ] && [ "$hb_ms" -lt 1000 ]; _chk "control: deadline 1 s, no stall: allowed in ${hb_ms} ms (the deadline itself denies nothing)" $?
+  _hookb 'echo control-ok' 0 4 DEL_GUARD_DEADLINE=1 DEL_GUARD_TEST_STALL=6
+  [ "$hb_d" = deny ] && [[ $hb_r == 'BLOCKED (guard-timeout)'* ]] && [ "$hb_ms" -lt 2500 ]; _chk "stall 6 s, deadline 1 s: denied as guard-timeout in ${hb_ms} ms (< 2500)" $?
+  [[ $hb_r == *'NOT a match'* ]] && [[ $hb_r == *'timeout, not a match'* ]]; _chk 'the timeout deny says it was a timeout, not a match' $?
+  grep -q "BLOCKED $HOOK_NAME \"guard-timeout\"" "$logf" 2>/dev/null; _chk 'the timeout is logged' $?
+  # the deadline can only be lowered: 99 is ignored and the built-in 3 s holds,
+  # under the harness's 5 s (a stall past 5 s would be an allow)
+  _hookb 'echo control-ok' 0 6 DEL_GUARD_DEADLINE=99 DEL_GUARD_TEST_STALL=8
+  [ "$hb_d" = deny ] && [[ $hb_r == 'BLOCKED (guard-timeout)'* ]] && [ "$hb_ms" -lt 4500 ]; _chk "DEL_GUARD_DEADLINE=99 is ignored: denied at the built-in deadline in ${hb_ms} ms (< 4500, harness gives 5000)" $?
+  _hookb 'echo control-ok' 0 3 DEL_GUARD_TEST_CRASH=1
+  [ "$hb_d" = deny ] && [[ $hb_r == 'BLOCKED (guard-no-verdict)'* ]] && [[ $hb_r == *'crash, not a match'* ]] && [ "$hb_ms" -lt 1000 ]; _chk "child exits before its verdict: denied as guard-no-verdict in ${hb_ms} ms" $?
+  # a verdict still crosses the child boundary intact: rule id and where
+  _hookb 'gwtrm ../wt' 0 3 DEL_GUARD_DEADLINE=1
+  [ "$hb_d" = deny ] && [[ $hb_r == 'BLOCKED (git-worktree-remove)'* ]] && [[ $hb_r == *"Found: alias gwtrm='git worktree remove'"* ]]; _chk 'a rule verdict and its Found: line cross from the child intact' $?
+
   # The fixture dir is left in $TMPDIR on purpose: deleting it would go to the
   # Trash (or fail inside the sandbox), and the OS clears $TMPDIR.
   echo
@@ -1435,7 +1463,7 @@ case "${1:-}" in
   --selftest) _selftest; exit $? ;;
   --mutants)  _mutants "${2:-}"; exit $? ;;   # optional: only tags containing this text
   --help|-h)
-    sed -n '2,55p' "$0" | sed 's/^# \{0,1\}//'
+    awk 'NR > 1 && /^$/ { exit } NR > 1' "$0" | sed 's/^# \{0,1\}//'   # the header, up to its first blank line
     exit 0 ;;
   --classify) # debugging aid: prints the rule id and where, or "allow"
     _classify "${2:-}" "${3:-$PWD}"
@@ -1456,7 +1484,48 @@ cmd="$(printf '%s' "$payload" | jq -r '.tool_input.command // ""' 2>/dev/null)" 
 [ -n "$cmd" ] || exit 0
 cwd="$(printf '%s' "$payload" | jq -r '.cwd // ""' 2>/dev/null)"
 
-_classify "$cmd" "$cwd"
+# FAIL CLOSED ON A STALL. The harness gives this hook 5 s ("timeout": 5 in
+# settings) and then lets the command run, so a guard that never answers is a
+# guard that allows. The verdict is computed in a child; this shell waits at
+# most DEADLINE seconds for its one line and DENIES when none arrives
+# (guard-timeout), or when the child exits without one (guard-no-verdict).
+# DEL_GUARD_DEADLINE can only LOWER the deadline (the selftest uses 1): a
+# caller who sets it cannot buy back the time to stall past the harness.
+DEADLINE=3
+case "${DEL_GUARD_DEADLINE:-}" in 1|2) DEADLINE="$DEL_GUARD_DEADLINE" ;; esac   #M: deadline can only be lowered
+_verdict_child() {
+  trap 'printf "X\n"' EXIT          # any exit before the verdict says so
+  # Test seams, for the selftest's fail-closed arms. Both only ever make the
+  # child LATE or DEAD, which this shell turns into a deny: neither can
+  # produce an allow, so a caller who sets them gains nothing but refusals.
+  case "${DEL_GUARD_TEST_STALL:-}" in [1-9]) sleep "$DEL_GUARD_TEST_STALL" >/dev/null 2>&1 ;; esac
+  [ "${DEL_GUARD_TEST_CRASH:-}" = 1 ] && exit 7
+  _classify "$cmd" "$cwd"
+  trap - EXIT
+  printf 'V%s%s%s%s%s%s\n' "$US" "$REASON_ID" "$US" "${LEXER_FAILED:-0}" "$US" "${REASON_WHERE//$'\n'/$RSC}"
+}
+exec 3< <(_verdict_child 2>/dev/null)
+vchild=$!
+vline=""; IFS= read -r -t "$DEADLINE" -u 3 vline
+case "$vline" in
+  V"$US"*)
+    IFS="$US"; vf=($vline); IFS=$' \t\n'
+    REASON_ID="${vf[1]:-}"; LEXER_FAILED="${vf[2]:-0}"; REASON_WHERE="${vf[3]:-}"; REASON_WHERE="${REASON_WHERE//$RSC/$'\n'}"
+    [ -n "$REASON_ID" ] && REASON="$(_msg "$REASON_ID")" ;;
+  X)
+    _deny guard-no-verdict "the guard's child exited before its verdict"                        #M: crash fails closed
+    ;;
+  *)
+    # nothing within the deadline: the child is still working, or died too
+    # hard for its EXIT trap (a signal); either way it gave no verdict
+    if kill -0 "$vchild" 2>/dev/null; then
+      kill -KILL "$vchild" 2>/dev/null
+      _deny guard-timeout "no verdict within ${DEADLINE} s"                                     #M: timeout fails closed
+    else
+      _deny guard-no-verdict "the guard's child died without a verdict"
+    fi ;;
+esac
+exec 3<&-
 
 if [ -z "$REASON_ID" ]; then
   if [ "${LEXER_FAILED:-0}" -eq 1 ]; then
@@ -1466,7 +1535,12 @@ if [ -z "$REASON_ID" ]; then
 fi
 
 _log "$REASON_ID" "$cmd"
-jq -n --arg r "$REASON" --arg w "$REASON_WHERE" --arg f "$FOOTER" --arg id "$REASON_ID" \
+case "$REASON_ID" in
+  guard-*) head="the deletion guard could not finish checking this command, so it is refused (fail closed). This is NOT a match: nothing in it was found to be a delete."
+           foot="A guard that stalls would let the command through when the harness gives up on it, so it refuses instead. Tell Gavin if an ordinary command hits this; run enforce-no-permanent-delete.sh --selftest." ;;
+  *)       head="this command deletes or destroys data outside the Trash."; foot="$FOOTER" ;;
+esac
+jq -n --arg r "$REASON" --arg w "$REASON_WHERE" --arg f "$foot" --arg id "$REASON_ID" --arg h "$head" \
   '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny",
-    permissionDecisionReason: ("BLOCKED (" + $id + "): this command deletes or destroys data outside the Trash.\n\n" + (if $w != "" then "Found: " + $w + "\n" else "" end) + $r + "\n\n" + $f)}}'
+    permissionDecisionReason: ("BLOCKED (" + $id + "): " + $h + "\n\n" + (if $w != "" then "Found: " + $w + "\n" else "" end) + $r + "\n\n" + $f)}}'
 exit 0
