@@ -327,7 +327,7 @@ function lex(i, term,   c, c2, j, op) {
       gsub(/[!|]/, "", op)   #M: lexer: zsh >! and >|
       addop(op)
       if (op == "<<" || op == "<<-") { hdp[d] = 1; hst[d] = (op == "<<-") }   #M: lexer: heredoc start
-      else if (op == "<<<") hsp[d] = 1   #M: lexer: here-string
+      if (op == "<<<") hsp[d] = 1   #M: lexer: here-string
       continue
     }
     cur[d] = cur[d] c; inw[d] = 1; i++
@@ -546,7 +546,8 @@ _argv() {
       return 0 ;;
     command)
       while [ $# -gt 0 ]; do
-        case "$1" in -v|-V) return 0 ;; -p|--) shift ;; -*) shift ;; *) break ;; esac   #M: command -v is a lookup
+        case "$1" in -v|-V) return 0 ;; esac   #M: command -v is a lookup
+        case "$1" in -*) shift ;; *) break ;; esac
       done
       [ $# -gt 0 ] && _argv "$adepth" "$@"; return 0 ;;
     exec)
@@ -659,9 +660,7 @@ _argv() {
           cat|gcat) [ "$*" = /dev/null ] && { _deny redir-trunc "cat /dev/null > $TRUNC"; return 0; } ;;   #M: cat /dev/null truncation
         esac
       fi
-      if [ "$base" = cp ] || [ "$base" = gcp ]; then
-        [ "${1:-}" = /dev/null ] && [ $# -eq 2 ] && { _deny redir-trunc "cp /dev/null $2"; return 0; }   #M: cp /dev/null
-      fi
+      { [ "$base" = cp ] || [ "$base" = gcp ]; } && [ "${1:-}" = /dev/null ] && [ $# -eq 2 ] && { _deny redir-trunc "cp /dev/null $2"; return 0; }   #M: cp /dev/null
       return 0 ;;
     find|gfind)
       _find_cmd "$adepth" "$@"; return 0 ;;
@@ -772,7 +771,6 @@ _shell_cmd() { # sh/bash/zsh [opts] [-c CODE | script | -s]
 _interp_cmd() { # $1 = python|node|perl|ruby, then args
   local kind="$1"; shift
   local w
-  if [ $# -eq 0 ]; then SI_KIND[$CUR_PID]=code; return 0; fi   #M: interpreter with no args reads stdin
   while [ $# -gt 0 ]; do
     w="$1"
     case "$kind" in
@@ -782,7 +780,6 @@ _interp_cmd() { # $1 = python|node|perl|ruby, then args
           -c*) _code_deletes "${w#-c}"; return 0 ;;
           -m) return 0 ;;
           -W|-X) shift 2; continue ;;
-          -) SI_KIND[$CUR_PID]=code; return 0 ;;   #M: python - reads stdin
           -[A-Za-z]*c) _code_deletes "${2:-}"; return 0 ;;   #M: python -Xc cluster (a GLOB: letter, anything, c)
           -*) shift; continue ;;
           *) return 0 ;;                            # a script file: invisible
@@ -792,7 +789,6 @@ _interp_cmd() { # $1 = python|node|perl|ruby, then args
           -e|--eval|-p|--print) _code_deletes "${2:-}"; return 0 ;;                  #M: node -e
           --eval=*|--print=*) _code_deletes "${w#*=}"; return 0 ;;
           -r|--require|--import|--loader) shift 2; continue ;;
-          -) SI_KIND[$CUR_PID]=code; return 0 ;;
           -*) shift; continue ;;
           *) return 0 ;;
         esac ;;
@@ -807,7 +803,8 @@ _interp_cmd() { # $1 = python|node|perl|ruby, then args
         esac ;;
     esac
   done
-  SI_KIND[$CUR_PID]=code
+  # only options, or `-`, or nothing at all: the code arrives on stdin
+  SI_KIND[$CUR_PID]=code   #M: interpreter reading stdin
   return 0
 }
 
@@ -854,9 +851,7 @@ _container_cmd() { # docker|podman|docker-compose, then args
   local p0="${pos[0]:-}" p1="${pos[1]:-}"
   if [ "$p0" = prune ] || [ "$p1" = prune ]; then _deny prune "$tool ... prune"; return 0; fi      #M: docker prune
   if [ "$p0" = volume ] && { [ "$p1" = rm ] || [ "$p1" = remove ]; }; then _deny prune "$tool volume $p1"; return 0; fi   #M: docker volume rm
-  if { [ "$tool" = docker-compose ] && [ "$p0" = down ]; } || { [ "$p0" = compose ] && [ "$p1" = down ]; }; then
-    [ "$vol" -eq 1 ] && { _deny prune "$tool compose down -v"; return 0; }   #M: compose down -v
-  fi
+  { { [ "$tool" = docker-compose ] && [ "$p0" = down ]; } || { [ "$p0" = compose ] && [ "$p1" = down ]; }; } && [ "$vol" -eq 1 ] && { _deny prune "$tool compose down -v"; return 0; }   #M: compose down -v
   return 0
 }
 
