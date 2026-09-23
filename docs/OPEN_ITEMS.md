@@ -183,6 +183,7 @@ open-items show <W-ID> [--project p] [--json]      one item, any status, any dra
 open-items get <W-ID> <field> [--project p]        raw value; also id | title | body | file
 open-items --grep "words" [--all] [--closed]       every word, case-insensitive
 open-items [--all | --project p] [--closed] --json  the listing as one JSON object
+open-items --projects [--json]                     every drawer: name, path, layout, counts
 open-items supersede <old> <new> [--project p]     decline old -> new, back-pointer on new
 ```
 
@@ -227,6 +228,23 @@ the listing filter reads it). `fields` is raw: `holds-in` and `supersedes` are a
 arrays, any other field is a string unless it repeats, and then an array, so nothing in the
 file is dropped. A miss is exit 1 and still prints valid JSON with `count: 0`. `show --json`
 prints the single item object.
+
+**`--projects`** lists every drawer, the inbox included: name, `OPEN.md` path and layout,
+tab-separated, then a total. **`--projects --json`** (W-20260923-A29, 2026-09-23) prints the
+same population as one object, through the same escaper:
+
+```
+{"projects_root":"...","count":5,"items_total":212,"open_total":54,"drawers":[
+ {"name":"...","drawer":"<WORK dir>","view":"<WORK dir>/OPEN.md","layout":"items",
+  "items":80,"open":41}]}
+```
+
+`items` counts every status and `open` counts what the default listing shows. No drawers is
+exit 1 and still valid JSON with `count: 0`. `--where` and `--session` have no JSON form:
+given `--json` they print `--json has no effect with <mode>` on stderr and otherwise behave
+exactly as without it (`--session` still exits 0 on every path). Until A29 the flag was
+parsed and silently dropped by all three, which is the bug class: a flag a mode cannot honour
+must say so.
 
 **`supersede <old> <new>`** declines the old item, adds `superseded-by: <new>` to its
 header and a dated `**DECLINED**` note naming the new title, moves it to `closed/`, and

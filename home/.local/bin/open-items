@@ -2,7 +2,7 @@
 # open-items -- what is still open, scoped to the project you are standing in.
 # Usage:
 #   open-items [--all | --project <name>] [--closed | --status s] [--grep "words"] [--json]
-#   open-items --projects | --where | --session [--verbose] | seen <ID>..|--all | checks-run   (see --session in docs)
+#   open-items --projects [--json] | --where | --session [--verbose] | seen <ID>..|--all | checks-run   (see --session in docs)
 #   open-items show <W-ID> | open-items get <W-ID> <field>  [--project p]   any drawer
 #   open-items add "title" --done-when ".." [--kind do|decide] [--size small|medium|large]
 #       [--when ..] [--next ..] [--blocked-on ..] [--holds-in repo:..|drawer:..|~/..].. [--body ..]
@@ -1342,6 +1342,27 @@ list_ex(){                      # list_ex <label> <drawer...>
 json_str(){ awk "$JSON_ESC_AWK"'{ s = s (NR > 1 ? "\n" : "") $0 } END { printf "%s", esc(s) }'; }
 list_or_report(){ if [ -n "$GREP$JSON" ]; then need_root; list_ex "$@"; else report "$@"; fi; }
 
+# W-20260923-A29. `--projects --json`: every drawer, inbox included, as one object. Until
+# then --json was parsed and silently dropped here, so a script got the tab listing and
+# read it as JSON that failed. `items` is every status, `open` is what the listing shows.
+# No drawers is exit 1 and still valid JSON, the same as a listing miss.
+projects_json(){                # projects_json <drawer count>
+  local w objs="" all op tot=0 otot=0
+  while IFS= read -r w; do
+    [ -n "$w" ] || continue
+    all="$(count_blocks "$w")"; op="$(blocks_from "$w" "" | count_headers)"
+    tot=$(( tot + all )); otot=$(( otot + op ))
+    objs="$objs{\"name\":$(name_of "$w" | json_str),\"drawer\":$(printf '%s' "$w" | json_str),\"view\":$(printf '%s' "$w/OPEN.md" | json_str),\"layout\":\"$(layout_of "$w")\",\"items\":$all,\"open\":$op}"$'\n'
+  done < <(all_drawers)
+  printf '{"projects_root":%s,"count":%s,"items_total":%s,"open_total":%s,"drawers":[' \
+    "$(printf '%s' "$PROJECTS" | json_str)" "$1" "$tot" "$otot"
+  printf '%s' "${objs%$'\n'}" | awk 'NR > 1 { printf "," } { printf "\n%s", $0 }'
+  printf '\n]}\n'
+  [ "$1" -gt 0 ] || { printf 'open-items: no drawers under %s/*/memory/WORK/\n' "$PROJECTS" >&2; return 1; }
+}
+# A flag a mode cannot honour says so on stderr instead of vanishing (W-20260923-A29).
+json_ignored(){ [ -z "$JSON" ] || printf 'open-items: --json has no effect with %s (plain text only)\n' "$1" >&2; }
+
 cmd_show(){                     # show <W-ID> [--project p]
   local hit w id ref
   split_args "$@"
@@ -2166,6 +2187,7 @@ case "${1:-}" in
   # THE SESSION-START SURFACE: silent when nothing is open, exit 0 on every path.
   # Feeds the 20-line start card: open as count then titles, parked as a count only.
   --session)
+    json_ignored --session
     repo="$(current_repo)" || exit 0
     w="$(work_for "$repo")"
     # A16: the cross-project lines follow this project's own, and they print even when this
@@ -2175,6 +2197,7 @@ case "${1:-}" in
     xp_session "$repo" "$w" || true
     exit 0 ;;
   --where)
+    json_ignored --where
     repo="$(current_repo)" || refuse "not inside a git repo, so there is no current project"
     w="$(work_for "$repo")"
     printf '%s\n' "$w/OPEN.md"
@@ -2182,6 +2205,7 @@ case "${1:-}" in
     printf 'open-items: (does not exist yet)\n' >&2; exit 1 ;;
   --projects)
     n="$(count_drawers)"
+    [ -z "$JSON" ] || { projects_json "$n"; exit $?; }
     [ "$n" -gt 0 ] || { printf 'open-items: no drawers under %s/*/memory/WORK/\n' "$PROJECTS" >&2; exit 1; }
     while IFS= read -r w; do [ -n "$w" ] && printf '%s\t%s\t%s\n' "$(name_of "$w")" "$w/OPEN.md" "$(layout_of "$w")"; done < <(all_drawers)
     printf '\nopen-items: %s drawer(s), %s item(s) total.\n' "$n" "$(count_all_blocks)" ;;
