@@ -1073,6 +1073,61 @@ run_in "$PIN" --session
 wantnot "TWIN unpinned, item 40 is NOT in the first 10 (the bug the pin fixes)" "item number 40" "$(printf '%s\n' "$OUT" | grep '   · ' | head -10)"
 wantnot "TWIN and the header says nothing about pinned" "pinned" "$OUT"
 
+printf '\nPJ --projects --json, and --json that cannot apply says so (W-20260923-A29)\n'
+# THE BUG: dispatch parsed --json into JSON=1 and then --projects, --where and --session
+# never read it, so a script asking for JSON got the tab listing and nothing said why.
+# Fixture: a drawer whose key AND name hold a quote, a backslash and a non-ASCII letter;
+# a legacy drawer keyed to a real repo (for --where); the inbox, which is a drawer too.
+D="$ROOT/casePJ"; P="$D/projects"; DC="$D/dotclaude"; mkdir -p "$P" "$DC"
+export PJ_ID_CLAIMS_DIR="$D/claims"   # per case: a claim never leaks between cases, never the real folder
+PJH="$P/we\"ird\\é-key/memory/WORK"; PJN='we"ird\é name'
+mkdir -p "$PJH/items/open" "$PJH/items/closed"; printf '%s\n' "$PJN" > "$PJH/items/.project"
+printf '## W-20260101-A01 -- hostile open\n\nproject: x\nstatus: open\n' > "$PJH/items/open/W-20260101-A01.md"
+printf '## W-20260101-A02 -- hostile done\n\nproject: x\nstatus: done\n' > "$PJH/items/closed/W-20260101-A02.md"
+PJL="$D/leg"; mkdir -p "$PJL"; git -C "$PJL" init -q 2>/dev/null; PJLW="$P/$(key "$PJL")/memory/WORK"; mkdir -p "$PJLW"
+printf '# leg -- open items\n\n## W-20260101-03 -- c\n\nproject: leg\nstatus: open\n\n## W-20260101-04 -- d\n\nproject: leg\nstatus: parked\n' > "$PJLW/OPEN.md"
+mkdir -p "$DC/pj-inbox/items/open"
+printf '## W-20260101-A09 -- inboxed\n\nproject: inbox\nstatus: open\n' > "$DC/pj-inbox/items/open/W-20260101-A09.md"
+pjrun(){ OUT="$(cd "${PJD:-$D}" 2>/dev/null && OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" "$TOOL" "$@" 2>"$D/err")"; RC=$?; ERR="$(cat "$D/err")"; return 0; }
+if command -v jq >/dev/null 2>&1; then
+  printf '{"a":"x\001y"}' | jq . >/dev/null 2>&1; M_RC=$?
+  wanteq "  CONTROL: jq REJECTS a raw control character in a string" "1" "$([ "$M_RC" -ne 0 ] && echo 1)"
+  pjrun --projects --json
+  printf '%s' "$OUT" | jq . >/dev/null 2>&1; M_RC=$?
+  wanteq "--projects --json exits 0 AND jq . accepts it (a quote, a backslash, an e-acute in a name and a path)" "0|0" "$RC|$M_RC"
+  wanteq "  count = the 3 drawers built, inbox included" "3" "$(printf '%s' "$OUT" | jq '.count')"
+  wanteq "  items_total 5 (every status), open_total 3" "5|3" "$(printf '%s' "$OUT" | jq -r '"\(.items_total)|\(.open_total)"')"
+  wanteq "  the hostile name round-trips byte for byte" "$PJN" "$(printf '%s' "$OUT" | jq -r '.drawers[] | select(.layout == "items" and .items == 2) | .name')"
+  wanteq "  and so does its drawer path" "$PJH" "$(printf '%s' "$OUT" | jq -r --arg n "$PJN" '.drawers[] | select(.name == $n) | .drawer')"
+  wanteq "  view is the drawer's OPEN.md" "$PJH/OPEN.md" "$(printf '%s' "$OUT" | jq -r --arg n "$PJN" '.drawers[] | select(.name == $n) | .view')"
+  wanteq "  the legacy drawer: layout legacy, 2 items, 1 open" "legacy|2|1" "$(printf '%s' "$OUT" | jq -r '.drawers[] | select(.name == "leg") | "\(.layout)|\(.items)|\(.open)"')"
+  wanteq "  the inbox is listed like any other drawer" "inbox|1|1" "$(printf '%s' "$OUT" | jq -r --arg d "$DC/pj-inbox" '.drawers[] | select(.drawer == $d) | "\(.name)|\(.items)|\(.open)"')"
+  PJE="$D/emptyroot"; mkdir -p "$PJE"
+  OUT="$(OPEN_ITEMS_PROJECTS_DIR="$PJE" OPEN_ITEMS_DOTCLAUDE="$D/nodc" "$TOOL" --projects --json 2>/dev/null)"; RC=$?
+  wanteq "--projects --json with no drawers exits 1 and is STILL valid JSON, count 0, empty list" "1|0|0" \
+         "$RC|$(printf '%s' "$OUT" | jq -r '"\(.count)|\(.drawers | length)"' 2>/dev/null)"
+else
+  bad "jq is required to prove --projects --json is valid JSON" "jq on PATH" "jq not found -- INVALID TRIAL"
+fi
+# TWIN, a guard rather than a new behaviour: the plain listing must not move by a byte. The
+# expected text is master's (c341a4d) real output on this same fixture, paths substituted.
+pjrun --projects
+wanteq "TWIN plain --projects is byte-identical to before (rc 0 + stdout)" \
+  "0|$(printf 'leg\t%s\tlegacy\n%s\t%s\titems\ninbox\t%s\titems\n\nopen-items: 3 drawer(s), 5 item(s) total.' "$PJLW/OPEN.md" "$PJN" "$PJH/OPEN.md" "$DC/pj-inbox/OPEN.md")" "$RC|$OUT"
+# --where and --session cannot honour --json: they say so on stderr and change nothing else.
+PJD="$PJL" pjrun --where --json; PJW_J="$RC|$OUT"
+want   "--where --json says --json has no effect, on stderr" "--json has no effect with --where" "$ERR"
+PJD="$PJL" pjrun --where
+wanteq "  and its exit code and stdout are what --where alone gives" "$RC|$OUT" "$PJW_J"
+wantnot "TWIN --where without --json prints no such note" "no effect" "$ERR"
+PJD="$PJL" pjrun --session --json
+wanteq "--session --json still exits 0 (the start card depends on it)" "0" "$RC"
+want   "  and says --json has no effect, on stderr" "--json has no effect with --session" "$ERR"
+PJD="$ROOT" pjrun --session --json
+wanteq "  outside any git repo --session --json still exits 0" "0" "$RC"
+want   "  and still says so" "--json has no effect with --session" "$ERR"
+unset PJD
+
 printf '\nU  IDs unique across every drawer, claimed machine-wide (W-20260923-A22, A25; D-20260923-A10)\n'
 # THE BUG: `add` passed only its OWN drawer to pj-id, so a project minted an ID another
 # drawer already held; 12 W- IDs exist twice on the real machine because of it. Every arm
