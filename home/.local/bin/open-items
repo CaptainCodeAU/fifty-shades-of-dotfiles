@@ -2,7 +2,7 @@
 # open-items -- what is still open, scoped to the project you are standing in.
 # Usage:
 #   open-items [--all | --project <name>] [--closed | --status s] [--grep "words"] [--json]
-#   open-items --projects | --where | --session   drawers found | this drawer | start-card surface
+#   open-items --projects | --where | --session [--verbose] | seen <ID>..|--all | checks-run   (see --session in docs)
 #   open-items show <W-ID> | open-items get <W-ID> <field>  [--project p]   any drawer
 #   open-items add "title" --done-when ".." [--kind do|decide] [--size small|medium|large]
 #       [--when ..] [--next ..] [--blocked-on ..] [--holds-in repo:..|drawer:..|~/..].. [--body ..]
@@ -39,7 +39,7 @@ STATUSES="open parked done declined"
 
 refuse(){ printf 'open-items: REFUSED -- %s\n' "$1" >&2; exit 2; }
 loud(){ printf 'open-items: %s\n' "$1" >&2; }
-usage(){ sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; }
+usage(){ awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"; }   # the whole header, however long it grows
 today(){ date +%Y-%m-%d; }
 realdir(){ (cd "$1" 2>/dev/null && pwd -P); }
 

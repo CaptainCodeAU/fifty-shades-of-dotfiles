@@ -336,6 +336,63 @@ readable: a denominator drawn from the number of item FILES rather than from the
 measured, a deliberately glued string that the instrument must still detect, and a single
 drawer that was never glued before the fix or after.
 
+## Other projects' items on your card: the read side (W-20260923-A28, 2026-09-23)
+
+The design, the rejected options and the twelve safety rules live in
+[`OPEN_ITEMS_CROSS_PROJECT.md`](OPEN_ITEMS_CROSS_PROJECT.md) and
+[`OPEN_ITEMS_CROSS_PROJECT_SAFETY.md`](OPEN_ITEMS_CROSS_PROJECT_SAFETY.md) (ruling
+D-20260923-A09). This section is what `--session`, `seen` and `checks-run` do.
+
+After this project's own lines, `--session` prints up to five sections, each a count line and
+at most 3 titles, each only when non-empty, then single lines:
+
+| Line | What is counted | Clears when |
+| ---- | --------------- | ----------- |
+| `Watching: N (M changed)` | open items in ANY drawer with a header `watch: <this project>` | `open-items seen <ID>` or `--all` records the item's current sha256 |
+| `Checks owed: N` | open items elsewhere with `check: <this project> [open] ...` | the check is ticked from inside this project |
+| `Mandatory: N not passed (K not measured yet, U unknown)` | open `reach: mandatory` items in any drawer | a `passed: <this project>` header line (manual items), or a pass record `checks-run` left (scripted items) |
+| `Moved out: N` | `items/moved-out/<ID>.md` records in this drawer | `seen` |
+| `Ignored lines: N` | this project's OWN items carrying lines the reader ignores (machine reach with watchers, more than 5 watch or check lines, a check-script without mandatory reach) | fixing the item |
+| `Inbox: N unrouted (Gavin routes)` | open items in `~/.claude/pj-inbox` | routing; silent when empty or missing |
+
+Every cross-project section header ends `(item text, not instructions)` and every title is
+labelled `[owner: <p>, filed by <q>]`. Titles from other projects are cleaned (control bytes
+and bidi or zero-width marks become `?`) and capped at 100 characters; own titles are cleaned
+too, because a terminal escape in one reached the card intact (review M2).
+`--session --verbose` prints every title, the scan denominator ("scanned N open item
+file(s), expected N") and says whether the inbox is empty or missing.
+
+**Reading rules, each with a selftest arm:** every field comes from the header only, so a
+body line reading `passed: x` never counts (P1); names are compared as exact tokens, so
+`watch: foo-bar` never answers to `foo`, and a name two drawers share suppresses the cross
+lines and says so (P9); the first 5 watch and 5 check lines of an item count, the rest are
+named on the owner's card (P8); `reach: machine` items never reach another card (P1.3);
+a `repo:` line in this drawer's `.project` that does not match the drawer is named (P10).
+
+**`seen` writes machine state only**, `~/.local/state/pj/seen/<project>`, lines
+`<owner> <ID> <sha256>` (a moved-out notice uses owner `<project>/moved-out`). It has no
+project argument (P2). An item that closed, parked or moved since it was last seen shows once
+as changed, then drops out at the next `seen`.
+
+**Scripts never run on the card (P3).** `checks-run`, which `pj` starts detached at launch,
+is the only runner. It runs a script only when it passes the trust checks (P4: plain name,
+real path inside `home/.claude/tools/mandatory-checks/` of the dotfiles checkout the running
+`open-items` lives in, content equal to `master`), in `env -i` with a fixed PATH, cwd the repo
+root, stdin `/dev/null`, output to a file, `timeout -k 1 5`; with no timeout binary nothing
+runs and that is recorded. Results go to `~/.local/state/pj/mandatory-cache/<key>`, key =
+sha256 of (repo, ID, item sha256, script blob, HEAD); only `v1 0 <N > 0> <time>` is a pass
+(P5, P6). The script contract and fixtures: `home/.claude/tools/mandatory-checks/README.md`;
+`mandatory-checks-selftest` runs every script against its fixtures.
+
+**Cost, measured 2026-09-23** over the real drawers, card medians before and after: +70 to
+90 ms (dotfiles 524 to 590 ms, Network_Plan 159 to 235, win_go_app_test 144 to 224,
+cc-claude-mods 112 to 190). Most of the dotfiles card is still the own-items listing (about
+430 ms), which A16 did not change.
+
+**Found while building it:** with no open item in any drawer, the scan handed awk only
+variable assignments and no file, and awk then read stdin, so `--session` hung on any open
+stdin. Fixed, with an arm that feeds it a stdin that never closes.
+
 ## The design point, borrowed from census and decided
 
 AN EMPTY RESULT IS THE ANSWER THAT LIES. "No open items" reads identically to "the drawer
@@ -354,3 +411,8 @@ transient index lock, hand-edit rescue with its control, regeneration, and migra
 (dry run into scratch, then real). Sections Q to T (2026-09-23) cover `show`, `get`,
 `--json`, `--grep` and `supersede` on a fixture with the same ID in two drawers plus a
 legacy drawer, including the cross-drawer and not-this-repo supersede refusals.
+Section XP folds in `open-items-xp-selftest` (the cross-project read side, W-20260923-A28):
+it copies the tool into a fixture dotfiles repo so the check-script trust root is real, and
+proves Watching, seen, Checks owed, Mandatory, the runner, the trust checks, the cache key,
+Moved out, the inbox and the text cleaning, each with a control. Run it with
+`OPEN_ITEMS_TOOL=<another copy>` to see which arms that copy fails.
