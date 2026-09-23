@@ -1,0 +1,241 @@
+#!/usr/bin/env bash
+# pj-ping -- get Gavin's attention: four sounds, then two numbered iMessages.
+#
+#   pj-ping <question|done|waiting|test> "<summary>" [--action "<what Gavin must do>"] [--detach]
+#   pj-ping --help | --selftest
+#
+# WHY IT EXISTS. D-20260921-A10: signal at every question popup, every finish,
+# every wait on Gavin. Until 2026-09-23 every session typed the signal by hand
+# and the messages all looked alike, so after a real ping test Gavin could not
+# tell WHICH message had arrived or IN WHAT ORDER. This is the one command every
+# session and the pj-question-ping.sh hook use, so every message has the same
+# shape and carries an id that he can quote and a session can look up.
+#
+# THE SIGNAL. afplay Ping, Glass, Glass, Glass, then two imsg messages, the
+# second sent one second after the first returns:
+#
+#   1: "<icon> PJ <KIND> #<id> <HH:MM:SS> | <session> | <summary>"
+#   2: "<icon> #<id> 2/2 | <action> | pane <HERDR_PANE_ID or ->"
+#
+#   kind      icon  default action
+#   question  (?)   answer the popup
+#   done      (ok)  nothing needed
+#   waiting   (..)  NONE: --action is required, and pj-ping refuses without it
+#   test      (lab) confirm the id and order to the session
+#
+# <id> is 4 characters from ABCDEFGHJKMNPQRSTUVWXYZ23456789 (no 0/O/1/I/L), so
+# it survives being read aloud or typed from a phone. It is printed on stdout as
+# "#K3F9" and never reused: an id already in the log is drawn again. <HH:MM:SS>
+# is local time at the call. <session> is $CLAUDE_CODE_SESSION_NAME, else the
+# basename of the git toplevel of the current directory, else the directory's.
+#
+# TEXT IS UNTRUSTED. Summary, action, session and pane are agent-written or come
+# from the environment, so control characters (C0, DEL, C1) and bidi or
+# zero-width characters become a space, token-shaped strings become
+# [redacted], whitespace is squeezed, and each part is capped (session 40,
+# summary 80, action 80, pane 40 characters). No other environment value ever
+# reaches a message. imsg sends to $IMSG_TO only; pj-ping cannot address anyone.
+#
+# THE LOG: $PJ_PING_LOG, else ${PJ_PING_STATE_DIR:-${XDG_STATE_HOME:-~/.local/state}/pj}/ping.log
+# Tab-separated, two lines per ping, never the summary or action text:
+#   <local ISO time>  <id>  <kind>  <session>  queued  <what was missing, or ->
+#   <local ISO time>  <id>  <kind>  <session>  sent    afplay=<rc x4> imsg=<rc1>,<rc2>
+# So "did #K3F9 go out, and before #7QHM?" is: rg -w 'K3F9|7QHM' <log>
+#
+# --detach  print the id, then do the sounds and messages in a double-forked
+#           process with stdin, stdout and stderr on /dev/null, and return at
+#           once. The hook uses this so a popup is never delayed.
+#
+# EXIT: 0 the whole signal went out (or, with --detach, was handed off)
+#       1 something was missing or failed: named on stderr and in the log
+#       2 usage error or no unique id could be drawn: nothing sent, nothing logged
+# PJ_NO_PING=1 is the kill switch: exit 0, nothing sent, nothing logged.
+# Missing afplay, imsg or IMSG_TO: the rest is still done and the log names it.
+#
+# SANDBOX. afplay fails inside the Bash tool's sandbox (AudioQueueStart -66680),
+# and so does every child of a sandboxed command, so from a Bash tool call run
+# pj-ping as its own call with the sandbox lifted. Hooks run outside it.
+#
+# TEST SEAMS: PJ_PING_AFPLAY / PJ_PING_IMSG, when SET (even to a missing path),
+# replace the PATH lookup, so a selftest can never reach the real binaries.
+# PJ_PING_ALPHABET narrows the id alphabet (only characters of the real one are
+# kept), so the never-reuse rule can be tested on a tiny id space.
+#
+# `pj-ping --selftest` runs pj-ping-selftest from the same folder.
+
+set -u
+
+ALPHABET="ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+SOUNDS_DIR="/System/Library/Sounds"
+STATE_DIR="${PJ_PING_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/pj}"
+LOG_FILE="${PJ_PING_LOG:-$STATE_DIR/ping.log}"
+
+usage() { sed -n '2,/^# `pj-ping --selftest`/p' "$0" | sed 's/^# \{0,1\}//'; }
+die2() { printf 'pj-ping: %s\n' "$1" >&2; exit 2; }
+
+# clean <max-chars>: stdin -> one line, controls and bidi replaced by a space,
+# token shapes redacted, whitespace squeezed, capped. Works on characters, not
+# bytes, so a cap never splits a UTF-8 sequence.
+clean() {
+  perl -CSD -e '
+    my $max = shift;
+    local $/; my $s = <STDIN>; $s = "" unless defined $s;
+    $s =~ s/[\x{00}-\x{1F}\x{7F}-\x{9F}\x{061C}\x{200B}-\x{200F}\x{202A}-\x{202E}\x{2060}-\x{2069}\x{FEFF}]/ /g;
+    $s =~ s/\b(?:gh[pousr]_|github_pat_|sk-ant-|sk-|xox[abprs]-|AKIA|glpat-)[A-Za-z0-9_\-]{6,}/[redacted]/g;
+    $s =~ s/\s+/ /g; $s =~ s/^ //; $s =~ s/ $//;
+    $s = substr($s, 0, $max) if length($s) > $max;
+    print $s;
+  ' "$1" 2>/dev/null
+}
+
+# One log line. The braces matter: a failed append is a redirection error the
+# shell raises before any 2>/dev/null on the command applies. Returns 1 when
+# the line could not be written, so the caller can say so.
+log() { # log <id> <kind> <session> <event> <detail>
+  { mkdir -p "$(dirname "$LOG_FILE")" &&
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$(date +%Y-%m-%dT%H:%M:%S%z)" "$1" "$2" "$3" "$4" "$5" >>"$LOG_FILE"
+  } 2>/dev/null
+}
+
+# Resolve a tool: the seam variable when SET (even to a missing path), else PATH.
+resolve() { # resolve <seam-var-name> <tool>
+  local seam
+  if [ -n "${!1+x}" ]; then
+    seam="${!1}"
+    [ -x "$seam" ] && printf '%s' "$seam"
+    return 0
+  fi
+  command -v "$2" 2>/dev/null
+  return 0
+}
+
+session_name() {
+  local n top
+  n="${CLAUDE_CODE_SESSION_NAME:-}"
+  if [ -z "$n" ]; then
+    top=$(git rev-parse --show-toplevel 2>/dev/null)
+    n=$(basename "${top:-$PWD}")
+  fi
+  printf '%s' "${n:-pj}"
+}
+
+# new_id: 4 random characters from the alphabet, drawn again while the log
+# already holds that id. Prints nothing and returns 1 after 200 draws.
+new_id() {
+  local alpha="$ALPHABET" narrow id i
+  if [ -n "${PJ_PING_ALPHABET:-}" ]; then
+    narrow=$(printf '%s' "$PJ_PING_ALPHABET" | tr -cd "$ALPHABET")
+    [ -n "$narrow" ] && alpha="$narrow"
+  fi
+  for i in $(seq 200); do
+    id=$(perl -e '
+      my $a = shift; my $n = length $a; my $lim = 256 - 256 % $n; my $id = "";
+      open my $r, "<", "/dev/urandom" or exit 1; binmode $r;
+      while (length $id < 4) { read($r, my $b, 1) == 1 or exit 1; my $v = ord $b;
+        $id .= substr($a, $v % $n, 1) if $v < $lim; }
+      print $id;' "$alpha") || return 1
+    [ ${#id} -eq 4 ] || return 1
+    if [ ! -f "$LOG_FILE" ] || ! awk -F'\t' -v id="$id" '$2 == id { f = 1; exit } END { exit !f }' "$LOG_FILE" 2>/dev/null; then
+      printf '%s' "$id"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# The send half: sounds in order, then the two messages, the second one second
+# after the first returns. Logs the rcs. Returns 1 when anything failed.
+send() { # send <id> <kind> <session> <afplay-or-empty> <imsg-or-empty> <msg1> <msg2>
+  local id="$1" kind="$2" sess="$3" afplay="$4" imsg="$5" s r a="" m="" bad=0
+  if [ -n "$afplay" ]; then
+    for s in Ping Glass Glass Glass; do
+      "$afplay" "$SOUNDS_DIR/$s.aiff" </dev/null >/dev/null 2>&1; r=$?
+      a="$a$r"; [ "$r" -eq 0 ] || bad=1
+    done
+  else a="-"; fi
+  if [ -n "$imsg" ]; then
+    "$imsg" "$6" </dev/null >/dev/null 2>&1; r=$?; m="$r"; [ "$r" -eq 0 ] || bad=1
+    sleep 1
+    "$imsg" "$7" </dev/null >/dev/null 2>&1; r=$?; m="$m,$r"; [ "$r" -eq 0 ] || bad=1
+  else m="-"; fi
+  log "$id" "$kind" "$sess" sent "afplay=$a imsg=$m" || bad=1
+  return "$bad"
+}
+
+case "${1:-}" in
+--help | -h) usage; exit 0 ;;
+--selftest) exec "$(dirname "$0")/pj-ping-selftest" ;;
+--send) shift; send "$@"; exit $? ;;
+esac
+
+# Positional first, so a summary that begins with a dash is still a summary.
+[ $# -ge 2 ] || die2 "usage: pj-ping <question|done|waiting|test> \"<summary>\" [--action \"...\"] [--detach]"
+KIND="$1"; RAW_SUMMARY="$2"; shift 2
+RAW_ACTION=""; HAVE_ACTION=0; DETACH=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+  --action) [ $# -ge 2 ] || die2 "--action needs a value"; RAW_ACTION="$2"; HAVE_ACTION=1; shift 2 ;;
+  --detach) DETACH=1; shift ;;
+  *) die2 "unknown argument: $(printf '%s' "$1" | clean 40)" ;;
+  esac
+done
+
+case "$KIND" in
+question) ICON=$'\xe2\x9d\x93'; DEF_ACTION="answer the popup" ;;
+done) ICON=$'\xe2\x9c\x85'; DEF_ACTION="nothing needed" ;;
+waiting) ICON=$'\xe2\x8f\xb3'; DEF_ACTION="" ;;
+test) ICON=$'\xf0\x9f\xa7\xaa'; DEF_ACTION="confirm the id and order to the session" ;;
+*) die2 "kind must be question, done, waiting or test (got: $(printf '%s' "$KIND" | clean 20))" ;;
+esac
+
+SUMMARY=$(printf '%s' "$RAW_SUMMARY" | clean 80)
+[ -n "$SUMMARY" ] || die2 "the summary is empty"
+if [ "$HAVE_ACTION" -eq 1 ]; then
+  ACTION=$(printf '%s' "$RAW_ACTION" | clean 80)
+  [ -n "$ACTION" ] || die2 "--action is empty"
+else
+  [ "$KIND" = "waiting" ] && die2 "waiting needs --action \"<what Gavin must do>\""
+  ACTION="$DEF_ACTION"
+fi
+
+[ "${PJ_NO_PING:-}" = "1" ] && { printf 'pj-ping: PJ_NO_PING=1, nothing sent\n' >&2; exit 0; }
+
+SESSION=$(session_name | clean 40); SESSION="${SESSION:-pj}"
+PANE=$(printf '%s' "${HERDR_PANE_ID:-}" | clean 40); PANE="${PANE:--}"
+ID=$(new_id) || die2 "could not draw an unused id (log: $LOG_FILE)"
+KIND_UP=$(printf '%s' "$KIND" | tr '[:lower:]' '[:upper:]')
+MSG1="$ICON PJ $KIND_UP #$ID $(date +%H:%M:%S) | $SESSION | $SUMMARY"
+MSG2="$ICON #$ID 2/2 | $ACTION | pane $PANE"
+
+AFPLAY=$(resolve PJ_PING_AFPLAY afplay)
+IMSG=$(resolve PJ_PING_IMSG imsg)
+MISSING=""
+[ -n "$AFPLAY" ] || MISSING="$MISSING afplay missing;"
+[ -n "$IMSG" ] || MISSING="$MISSING imsg missing;"
+if [ -n "$IMSG" ] && [ -z "${IMSG_TO:-}" ]; then
+  MISSING="$MISSING IMSG_TO unset;"
+  IMSG=""
+fi
+MISSING="${MISSING# }"
+RC=0
+if ! log "$ID" "$KIND" "$SESSION" queued "${MISSING:--}"; then
+  printf 'pj-ping: #%s could not write the log %s, so this id is not recorded\n' "$ID" "$LOG_FILE" >&2
+  RC=1
+fi
+if [ -n "$MISSING" ]; then
+  printf 'pj-ping: #%s partial: %s\n' "$ID" "$MISSING" >&2
+  RC=1
+fi
+printf '#%s\n' "$ID"
+
+if [ "$DETACH" -eq 1 ]; then
+  # Double fork with every descriptor off the caller's pipes: pj-ping returns
+  # now and the worker is reparented, so nothing the caller holds waits on it.
+  ( nohup "$0" --send "$ID" "$KIND" "$SESSION" "$AFPLAY" "$IMSG" "$MSG1" "$MSG2" </dev/null >/dev/null 2>&1 & ) </dev/null >/dev/null 2>&1
+  exit "$RC"
+fi
+send "$ID" "$KIND" "$SESSION" "$AFPLAY" "$IMSG" "$MSG1" "$MSG2" || {
+  printf 'pj-ping: #%s a sound or message failed; see %s\n' "$ID" "$LOG_FILE" >&2
+  RC=1
+}
+exit "$RC"
