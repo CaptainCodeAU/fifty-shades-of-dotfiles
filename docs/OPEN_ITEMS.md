@@ -35,6 +35,12 @@ command refuses on it. `open-items migrate` converts the CURRENT repo's drawer o
 only when it resolves inside dot-claude. The `~/.claude` drawer itself belongs to LifeOS,
 lives behind a symlink into lifeos-private, and stays legacy.
 
+A project with NO drawer at all is a third case, and its fix is `open-items init`, not
+`migrate`. A write there refuses and names `init` (W-20260923-A15); a write into a legacy
+drawer refuses and names `migrate`. The two messages used to be one, which sent a brand-new
+project to `migrate`, and `migrate` then refused for want of an `OPEN.md` to convert.
+`add` does not run `init` for you: creating a drawer is a separate, visible step.
+
 ## The item model (D-20260920-05)
 
 One file per item, `items/<folder>/W-YYYYMMDD-LNN.md` (L = the machine letter, P8a), in the same block shape

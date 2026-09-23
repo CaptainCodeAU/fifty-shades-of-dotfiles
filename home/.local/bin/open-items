@@ -425,6 +425,12 @@ writable_drawer(){
   local repo w
   repo="$(current_repo)" || refuse "not inside a git repo, so there is no current project"
   w="$(work_for "$repo")"
+  # W-20260923-A15. Two different absences, two different fixes. A drawer that is NOT THERE
+  # AT ALL needs `init`; only a legacy OPEN.md needs `migrate`. The old single message sent
+  # a brand-new project to migrate, which then refused for want of an OPEN.md to migrate.
+  if [ ! -d "$w/items" ] && [ ! -f "$w/OPEN.md" ]; then
+    refuse "$(basename "$repo") has no drawer yet -- run 'open-items init' here to create one, then write to it"
+  fi
   [ -d "$w/items" ] || refuse "$(name_of "$w" 2>/dev/null || basename "$repo") has no items/ folder -- a legacy OPEN.md drawer is read-only; run 'open-items migrate' in the project that owns it"
   printf '%s' "$w"
 }

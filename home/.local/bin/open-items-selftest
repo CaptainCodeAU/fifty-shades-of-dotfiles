@@ -241,6 +241,10 @@ printf 'F  commands on the items/ layout\n'
 mk_dotclaude
 runw "$ZETA" add "no drawer yet" --done-when x
 wanteq "add before init REFUSES (rc=2): a project with no items/ is never written" "2" "$RC"
+# W-20260923-A15: NO drawer at all is fixed by init, not migrate. Twin in section H: a
+# LEGACY drawer still gets the migrate advice and never the init one.
+want    "  A15: the refusal names 'open-items init'" "open-items init" "$OUT"
+wantnot "  A15: and does NOT send a new project to migrate" "migrate" "$OUT"
 runw "$ZETA" init
 wanteq "init creates items/ and commits (rc=0)" "0" "$RC"
 wanteq "init: OPEN.md generated" "1" "$([ -f "$ZW/OPEN.md" ] && echo 1)"
@@ -437,6 +441,8 @@ want   "legacy --session still prints the title" "the legacy one" "$OUT"
 runw "$LEG" add "into a legacy drawer" --done-when x
 wanteq "add into a LEGACY drawer REFUSES (rc=2): it stays as it is" "2" "$RC"
 want   "  and says why" "legacy" "$OUT"
+want    "  A15 twin: a legacy drawer still gets the migrate advice" "open-items migrate" "$OUT"
+wantnot "  A15 twin: and NOT the init advice (init would refuse there)" "open-items init" "$OUT"
 wanteq "  and the legacy OPEN.md is byte-identical (control: zeta's changed)" "1" "$(grep -q 'into a legacy' "$LW/OPEN.md" || echo 1)"
 
 printf 'I  the symlinked drawer that must NOT be committed\n'
