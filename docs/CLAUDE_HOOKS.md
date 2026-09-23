@@ -290,3 +290,48 @@ The selftest pins `PJ_PING_AFPLAY` and `PJ_PING_IMSG` to fake binaries, and
 replaces the PATH lookup, so no arm can reach the real `afplay` or `imsg`.
 `PJ_QUESTION_PING_HOOK=<path>` points the selftest at another copy of the
 hook.
+
+---
+
+## `enforce-no-permanent-delete.sh`: deletes that never call `rm`
+
+Added 2026-09-23 on Gavin's ruling (option A). Registered on `PreToolUse` with
+matcher `Bash` for **both** targets, because the Deletion rule is machine-wide.
+It denies `git worktree remove`, `git clean` without `-n`, `reset --hard`,
+checkout/restore discards, `branch -D`, `stash drop`, `find -delete`, `/bin/rm`,
+`rm -P`, `SAFE_RM_OFF`, `unlink`, `shred`, `truncate`, `dd of=`, a bare `> f`,
+`rsync --delete`, deleting calls in inline code, and prune/cleanup commands.
+The full coverage table, including what it cannot see, lives in
+[`DELETION_SAFETY.md`](DELETION_SAFETY.md); this section is only the hook side.
+
+**A lexer, not a grep.** Every sibling guard strips quotes with `sed` one line at
+a time, so a double-quoted string that spans lines (a multi-line `git commit -m`)
+is not stripped and its words read as commands. Measured 2026-09-23 while
+building this hook: `enforce-uv.sh` denied a commit whose message named an
+interpreter flag, and `enforce-secret-probe.sh` denied an `rg` whose regex held
+`|env|`. This hook lexes the whole command in one `awk` pass instead: quotes,
+heredocs, comments, `$( )`, backticks, process substitution and zsh shapes, then
+judges the command word of each simple command.
+
+**Why the lexer also filters.** `/bin/bash` is 3.2 on macOS and costs about
+0.15 ms per simple command it sees. A dense 5 KB command is about 330 of them.
+So the `awk` pass drops every simple command that holds no trigger word, alias,
+`SAFE_RM_OFF` or truncating redirection, since nothing in it can be denied.
+`DEL_GUARD_NOFILTER=1` turns the filter off, and the selftest runs every arm
+BOTH ways, so a filter that hid a deniable command fails an arm.
+
+**Aliases are read live.** The lexer reads the newest
+`~/.claude/shell-snapshots/snapshot-*.sh` on each call and sends the expansion of
+any alias it meets; the rules classify that expansion as zsh would.
+
+```sh
+~/.claude/hooks/enforce-no-permanent-delete.sh --selftest   # 257 arms, each run twice
+~/.claude/hooks/enforce-no-permanent-delete.sh --mutants    # about 8 min: removes each #M: line
+~/.claude/hooks/enforce-no-permanent-delete.sh --classify '<command>' [cwd]
+```
+
+| Seam                       | Effect                                              |
+| -------------------------- | --------------------------------------------------- |
+| `DEL_GUARD_LOG`            | log file (default `.../dotfiles/hooks-security.log`) |
+| `DEL_GUARD_SNAPSHOT_DIR`   | where snapshots are looked for                      |
+| `DEL_GUARD_NOFILTER=1`     | lexer emits every command (equivalence testing)     |

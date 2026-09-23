@@ -338,7 +338,9 @@ No agent, subagent, script, hook, Makefile, or subprocess may EVER call the real
 - `/bin/rm` — and every variation: `/usr/bin/rm`, `env rm`, `xargs /bin/rm`, `sh -c '/bin/rm …'`, an absolute path built from a variable, or any other spelling that reaches the binary directly.
 - **`/bin/rm -P`** — the worst one. `-P` OVERWRITES the file's contents before unlinking. Nothing recovers it: not the Trash, not an APFS snapshot, not Time Machine unless the last backup predates the delete. Never type it, never generate it, never suggest it.
 - `SAFE_RM_OFF=1 rm …` — the documented bypass. Still permanent. Reserved for a human.
-- Any other route that destroys data without passing through the Trash: `unlink`, `find … -delete`, `truncate -s0`, `> file`, `dd of=…`, `shred`, `srm`.
+- Any other route that destroys data without passing through the Trash: `unlink`, `find … -delete`, `truncate -s0`, `> file`, `dd of=…`, `shred`, `srm`, `git worktree remove`, `git clean` (without `-n`), `git reset --hard`, `rsync --delete`, `os.remove` in a `python3 -c`.
+
+Since 2026-09-23 [`enforce-no-permanent-delete.sh`](home/.claude/hooks/enforce-no-permanent-delete.sh) DENIES these at the Bash tool, in every project (user and project targets), and its denial names the safe route. Its coverage table, including what it cannot see, is in [`docs/DELETION_SAFETY.md`](docs/DELETION_SAFETY.md). A denial there is the rule working: change the command to the safe route or ask, never reword it to get past the guard.
 
 **Always use bare `rm`.** It resolves to the Trash-routed wrapper — a zsh function when interactive, the `~/.local/bin/rm` PATH shim everywhere else (scripts, `xargs`, `make`, hooks). `command rm` and `\rm` are also safe: they bypass shell functions, not PATH.
 

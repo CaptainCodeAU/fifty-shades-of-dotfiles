@@ -157,10 +157,10 @@ Two implementation details, each of which cost a bug:
 
 `CLAUDE.md` makes it **binding** that no agent, subagent, script or hook invokes the real
 deleter in any form — `/bin/rm`, `/bin/rm -P`, `/usr/bin/rm`, `SAFE_RM_OFF=1`, `unlink`,
-`find … -delete`, `truncate -s0`, `> file`, `shred`. All of them destroy data outside the
-Trash, and `-P` overwrites the bytes first so that no Trash, snapshot or backup can recover
-it. An agent that believes it needs a permanent delete must stop and ask; that call belongs
-to the operator.
+`find … -delete`, `truncate -s0`, `> file`, `shred`, `git worktree remove`. All of them destroy
+data outside the Trash, and `-P` overwrites the bytes first so that no Trash, snapshot or backup
+can recover it. An agent that believes it needs a permanent delete must stop and ask; that call
+belongs to the operator. Since 2026-09-23 the agent guard below enforces this at the Bash tool.
 
 ## sudo rm
 
@@ -234,13 +234,16 @@ chflags uchg file.txt
 unprotected before it can be removed by any means. That makes `uchg` suitable for archives and
 records you never edit, and unsuitable for anything in active use.
 
-## What this does NOT protect against
+## What the rm wrappers do NOT protect against
 
-None of the above involves `rm`, and no `rm` wrapper can see any of it:
+None of the following involves `rm`, and no `rm` wrapper can see any of it:
 
+- `git worktree remove`: unlinks a whole checkout. The trigger for the guard below: on
+  2026-09-23 an agent was one step from running it.
 - Shell truncation: `> file`, `: > file`, `truncate -s0`
 - `find -delete`, `unlink`, `mv` over an existing file, `install`, `rsync --delete`
-- `git clean -fdx`, `git checkout` discarding changes, `git reset --hard`
+- `git clean -fdx`, `git checkout` / `git restore` discarding changes, `git reset --hard`,
+  `git branch -D`, `git stash drop` / `clear`
 - `docker system prune`, `brew cleanup`, `pnpm store prune`
 - Language-level deletes: Python `os.remove`, Node `fs.unlinkSync`
 - Finder Shift-Delete, or emptying the Trash
@@ -249,7 +252,77 @@ None of the above involves `rm`, and no `rm` wrapper can see any of it:
 A recoverable-delete wrapper is one door. It is not a backup, and it must not be mistaken for
 one.
 
+## The agent guard: `enforce-no-permanent-delete.sh`
+
+Ruled by Gavin 2026-09-23 (option A). A PreToolUse hook on the Bash tool
+([`home/.claude/hooks/enforce-no-permanent-delete.sh`](../home/.claude/hooks/enforce-no-permanent-delete.sh)),
+registered for BOTH targets (user and project) in `settings/claude/hooks.json`. It **denies**
+an agent's Bash call that would destroy data outside the Trash, and the denial names the safe
+route. It covers agents only: a human's terminal never passes through it.
+
+It does not grep the command text. A small lexer splits the command into simple commands the way
+zsh does (the Bash tool runs zsh), so the rules look at the command word of each one. That is
+why a banned phrase inside a commit message, an `echo`, an `rg` pattern or a heredoc is allowed,
+while the same phrase as a command is denied wherever it sits: after `&&`, `||`, `;`, `|`, `&!`,
+inside `( )`, `{ }`, `$( )`, backticks, `<( )`, `=( )`, behind `VAR=1`, `sudo`, `command`,
+`env`, `nohup`, `time`, `nice`, `timeout`, `xargs`, `noglob`, `nocorrect`, `exec`, `repeat N`,
+`uv run`, `git -C/-c/--git-dir`, inside `sh -c`, `eval`, `env -S`, `find -exec`, `fd -x`,
+`git submodule foreach`, and in a heredoc fed to a shell or an interpreter.
+
+### Coverage
+
+| Shape                                                                                                                                                                                                                                                              | Guard      | Safe route in the denial                         |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------- | ------------------------------------------------ |
+| `git worktree remove`                                                                                                                                                                                                                                              | **denied** | `rm -r <dir>` (Trash), then `git worktree prune` |
+| `git clean` without `-n` / `--dry-run`                                                                                                                                                                                                                             | **denied** | `git clean -n` to list, then bare `rm`           |
+| `git reset --hard` (any ref)                                                                                                                                                                                                                                       | **denied** | `git stash push -u`, or ask Gavin                |
+| `git checkout -- <p>`, `.`, a glob, `<ref> <path>`, a path on disk, `-f`                                                                                                                                                                                           | **denied** | `git stash push -u`; `git switch` for branches   |
+| `git restore` without `--staged`, or with `--worktree`                                                                                                                                                                                                             | **denied** | `git stash push -u`, or ask Gavin                |
+| `git switch -f` / `--discard-changes`                                                                                                                                                                                                                              | **denied** | `git stash push -u` first                        |
+| `git branch -D`, `--delete --force`, `-M`, `-C`                                                                                                                                                                                                                    | **denied** | `git branch -d`                                  |
+| `git stash drop` / `clear`                                                                                                                                                                                                                                         | **denied** | ask Gavin                                        |
+| `git reflog expire/delete`, `git gc --prune=now/all`, `git prune`                                                                                                                                                                                                  | **denied** | ask Gavin (they destroy the recovery trail)      |
+| `/bin/rm`, `/usr/bin/rm`, any path to rm, `grm`                                                                                                                                                                                                                    | **denied** | bare `rm`                                        |
+| `rm -P` (any cluster), `SAFE_RM_OFF=...` (prefix, `env`, `export`)                                                                                                                                                                                                 | **denied** | bare `rm`, or ask Gavin                          |
+| `unlink`, `shred`, `srm`, `wipe`, `truncate`, `dd of=` (not `/dev/null`)                                                                                                                                                                                           | **denied** | bare `rm`, or move aside first                   |
+| `> f`, `2> f`, `>! f`, `: > f`, `true >\| f`, `cat /dev/null > f`, `cp /dev/null f`                                                                                                                                                                                | **denied** | move the file aside first                        |
+| `find -delete`; `find -exec` / `fd -x` with any denied command                                                                                                                                                                                                     | **denied** | `find -print`, then `-exec rm {} +`              |
+| `rsync --delete*`, `--del`, `--remove-source-files`                                                                                                                                                                                                                | **denied** | rsync without them, then bare `rm`               |
+| inline code: `python -c`, `node -e`, `perl -e`, `ruby -e`, `deno eval`, `osascript -e`, and code on stdin (`python3 - <<EOF`, `echo ... \| python3`) calling `os.remove`, `shutil.rmtree`, `Path.unlink`, `rmdir`, `fs.rm*`, `unlink*`, `/bin/rm`, `FileUtils.rm*` | **denied** | bare `rm` in the shell                           |
+| `docker`/`podman` `... prune`, `volume rm`, `compose down -v`; `brew cleanup`, `--zap`; `pnpm store prune`; `uv cache clean/prune`; `bun pm cache rm`; `rimraf`                                                                                                    | **denied** | ask Gavin (`rimraf`: bare `rm -r`)               |
+| `diskutil erase*`/`partitionDisk`/..., `mkfs*`, `newfs*`, `wipefs`, `tmutil delete*`, `trash-empty`, Finder "empty trash"                                                                                                                                          | **denied** | ask Gavin                                        |
+| an alias from the shell snapshot whose expansion is any of the above                                                                                                                                                                                               | **denied** | (as the expansion)                               |
+| bare `rm`, `command rm`, `\rm`, `rm *(.)`, `find -exec rm`, `git clean -n`, `git branch -d`, `git restore --staged`, `cmd > out`                                                                                                                                   | allowed    |                                                  |
+| a script or Makefile target that deletes internally, a compiled program                                                                                                                                                                                            | invisible  | the rm shim still covers a bare `rm` inside it   |
+| a command name in a variable (`$RM x`, zsh `$=x`), git aliases, `ssh host 'rm ...'`                                                                                                                                                                                | invisible  |                                                  |
+| `mv` / `cp` over an existing file, `sed -i`, `open(f, 'w')`                                                                                                                                                                                                        | invisible  | cp/mv wrappers prompt in interactive shells      |
+| code piped from a file (`cat x.py \| python3`), heredoc `$( )` expansions                                                                                                                                                                                          | invisible  |                                                  |
+| snapshot FUNCTIONS (their bodies are not expanded; `rm()` itself contains `/bin/rm` on its `SAFE_RM_OFF` branch)                                                                                                                                                   | invisible  |                                                  |
+
+**Aliases.** Agent shells source Claude Code's shell snapshot, and its aliases expand (measured
+2026-09-23: 311 aliases, `ll` ran `eza`). A hook sees the text before expansion, so the guard reads
+the newest `~/.claude/shell-snapshots/snapshot-*.sh` on every call and classifies an alias's
+expansion as zsh would, recursively. On 2026-09-23 **19 of the 311** expanded to a denied shape:
+`dcleanbuild dcleanup dcprune dipru dnprune dsprune dvprune gbD gbgD gclean gpristine grhh groh grs
+grss gstc gstd gwipe gwtrm`. They are denied by their expansion, not by name, so a new alias is
+covered the moment it reaches the snapshot.
+
+**It fails open, loudly.** Malformed JSON or an empty command is allowed with no decision, because
+a crash here would block every Bash call. A missing `jq`, or a lexer that fails, is reported through
+`additionalContext` instead of going quiet.
+
+**Every denial is logged** to `${XDG_STATE_HOME:-~/.local/state}/dotfiles/hooks-security.log` in
+the sibling hooks' shape, with the command capped at 400 characters and token-shaped strings and
+credential-named assignments redacted.
+
+```sh
+~/.claude/hooks/enforce-no-permanent-delete.sh --selftest   # every deny and allow arm, twice
+~/.claude/hooks/enforce-no-permanent-delete.sh --mutants    # removes each rule line; each must be caught
+~/.claude/hooks/enforce-no-permanent-delete.sh --classify 'git clean -fdx'
+```
+
 ## Related
 
 - [`home/.local/bin/safe-rm`](../home/.local/bin/safe-rm) — the single owner of "move to Trash"
+- [`home/.claude/hooks/enforce-no-permanent-delete.sh`](../home/.claude/hooks/enforce-no-permanent-delete.sh) — the agent guard for everything that never calls `rm`
 - [`SECURITY.md`](SECURITY.md) — overall posture
