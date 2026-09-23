@@ -325,7 +325,7 @@ BOTH ways, so a filter that hid a deniable command fails an arm.
 any alias it meets; the rules classify that expansion as zsh would.
 
 ```sh
-~/.claude/hooks/enforce-no-permanent-delete.sh --selftest   # 259 arms, classifier arms run twice
+~/.claude/hooks/enforce-no-permanent-delete.sh --selftest   # 268 arms, classifier arms run twice
 ~/.claude/hooks/enforce-no-permanent-delete.sh --mutants    # about 8 min: removes each #M: line
 ~/.claude/hooks/enforce-no-permanent-delete.sh --classify '<command>' [cwd]
 ```

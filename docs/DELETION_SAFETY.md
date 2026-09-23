@@ -305,7 +305,9 @@ the newest `~/.claude/shell-snapshots/snapshot-*.sh` on every call and classifie
 expansion as zsh would, recursively. On 2026-09-23 **19 of the 311** expanded to a denied shape:
 `dcleanbuild dcleanup dcprune dipru dnprune dsprune dvprune gbD gbgD gclean gpristine grhh groh grs
 grss gstc gstd gwipe gwtrm`. They are denied by their expansion, not by name, so a new alias is
-covered the moment it reaches the snapshot.
+covered the moment it reaches the snapshot. Three oh-my-zsh aliases that hide a `git reset --hard` (`grhh`, `gwipe`,
+`gpristine`) are ALSO denied by name (Gavin, 2026-09-23), so they stay denied if a hook cannot read
+the snapshot.
 
 **It fails open, loudly.** Malformed JSON or an empty command is allowed with no decision, because
 a crash here would block every Bash call. A missing `jq`, or a lexer that fails, is reported through

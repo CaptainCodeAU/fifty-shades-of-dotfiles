@@ -86,7 +86,7 @@ BEGIN { US = sprintf("%c", 31); RSC = sprintf("%c", 30); OPM = sprintf("%c", 2);
         # of them, no alias, no SAFE_RM_OFF and no truncating redirection cannot be
         # denied, so it is not emitted: bash 3.2 costs ~0.15 ms per command it sees.
         # nofilter=1 emits everything; the selftest runs every arm both ways.
-        nt = split("sudo doas env command exec time repeat nice timeout gtimeout caffeinate stdbuf gstdbuf watch xargs gxargs eval sh bash zsh dash ksh mksh yash fish rm grm unlink gunlink shred gshred srm wipe truncate gtruncate dd gdd cp gcp find gfind fd fdfind git rsync rimraf del-cli docker podman docker-compose brew pnpm bun bunx npx pnpx uv node nodejs deno perl ruby osascript diskutil wipefs tmutil trash-empty trash-rm export declare typeset local readonly", TL, " ")
+        nt = split("sudo doas env command exec time repeat nice timeout gtimeout caffeinate stdbuf gstdbuf watch xargs gxargs eval sh bash zsh dash ksh mksh yash fish rm grm unlink gunlink shred gshred srm wipe truncate gtruncate dd gdd cp gcp find gfind fd fdfind git rsync rimraf del-cli docker podman docker-compose brew pnpm bun bunx npx pnpx uv node nodejs deno perl ruby osascript diskutil wipefs tmutil trash-empty trash-rm export declare typeset local readonly grhh gwipe gpristine", TL, " ")
         for (k = 1; k <= nt; k++) TRIG[TL[k]] = 1
         hasal = 0
         if (snap != "") loadaliases() }
@@ -733,6 +733,10 @@ _argv() {
       case "${1:-}" in delete|deletelocalsnapshots|thinlocalsnapshots|deleteinprogress) _deny tmutil "tmutil $1"; return 0 ;; esac   #M: tmutil delete
       return 0 ;;
     trash-empty|trash-rm) _deny trash-empty "$base"; return 0 ;;   #M: trash-empty
+    # oh-my-zsh aliases that hide a reset --hard, denied BY NAME as well (Gavin,
+    # 2026-09-23). The snapshot's alias table normally denies them by their
+    # expansion above; this arm covers a hook that cannot read the snapshot.
+    grhh|gwipe|gpristine) _deny git-reset-hard "alias $base (oh-my-zsh: git reset --hard$([ "$base" = grhh ] || echo ' && git clean'))"; return 0 ;;   #M: oh-my-zsh reset aliases by name
   esac
   return 0
 }
@@ -1168,6 +1172,10 @@ SNAP
   _must git-clean           'alias of alias (nuke->gclean)'   'nuke'
   _must git-worktree-remove 'alias gwtrm + args'              'gwtrm ../wt'
   _must git-clean           'alias after &&'                  'git status && gclean'
+  _must git-reset-hard      'grhh by name (not in snapshot)'  'grhh'
+  _must git-reset-hard      'gwipe by name'                   'gwipe'
+  _must git-reset-hard      'gpristine by name, after &&'     'git fetch && gpristine'
+  _must git-reset-hard      'sudo gpristine'                  'sudo gpristine'
   _must git-worktree-remove 'unquoted $( ) in an assignment'  'x=$(git worktree remove y)'
   _must git-worktree-remove '$( ) inside ${(f)...}'           'echo ${(f)"$(git worktree remove x)"}'
   _must git-worktree-remove 'backticks inside double quotes'  'echo "`git worktree remove x`"'
@@ -1267,6 +1275,11 @@ SNAP
   _must - 'self alias ls=ls -G'             'ls notes.txt'
   _must - 'alias that echoes the words'     'q'
   _must - 'git status alias'                'gs'
+  _must - 'look-alike grh (soft reset)'     'grh'
+  _must - 'look-alike gwip (wip commit)'    'gwip'
+  _must - 'look-alike gpr'                  'gpr'
+  _must - 'the names as data'               'echo grhh gwipe gpristine'
+  _must - 'the name inside a git grep'      'git log --grep=gpristine'
   _must - 'quoted alias name is data'       "echo 'gclean'"
   _must - 'SAFE_RM_OFF in prose'            'echo "SAFE_RM_OFF=1 is for humans"'
   _must - 'array assignment holding words'  'arr=(git worktree remove x)'
