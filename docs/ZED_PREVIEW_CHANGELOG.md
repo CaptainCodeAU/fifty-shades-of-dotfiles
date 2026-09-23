@@ -13,8 +13,10 @@
 > watched upstream PRs live every session. The only PR it ever watched, **#58755**
 > (per-window themes), was closed unmerged on 2026-09-07; the closure was recorded here
 > on 2026-09-23 and #58755 was removed from the hook's `WATCHED_PRS` list the same day,
-> so the list is now empty and the hook says so. If a
-> newer release exists, or a watched PR merges/closes, it nudges the assistant to refresh
+> so the list is now empty and the hook says so. Since 2026-09-23 it also polls watched
+> upstream ISSUES (`WATCHED_ISSUES`: zed#13300) for state and last-update date. If a
+> newer release exists, a watched PR merges/closes, or a watched issue moves or closes,
+> it nudges the assistant to refresh
 > this file. The hook only _detects_; the assistant does the _update_ (see
 > [Update runbook](#update-runbook)).
 >
@@ -786,12 +788,12 @@ when it visibly affects the above or Gavin's known setup.
 
 ## Standing watch-items (open threads)
 
-| Item                               | Status as of 2026-09-23                                                 | Why it matters                      |
-| ---------------------------------- | ----------------------------------------------------------------------- | ----------------------------------- |
-| Per-project themes (zed#13300)     | Issue open; **PR #58755 CLOSED unmerged 2026-09-07**, no successor      | Gavin's color-per-window goal       |
-| `theme_overrides` at project level | Still user-settings only; nothing in 1.17.0 to 1.21.0 changes it        | zed#13300 open, nothing building it |
-| `detect_venv` default              | Not mentioned in 1.17.0 to 1.21.0; yours still pins `off`               | direnv double-activation            |
-| Title-bar settings surface         | `title_bar.show_worktree_name` (1.13.0); `window_title_format` (1.20.0) | Title text only, never colour       |
+| Item                               | Status as of 2026-09-23                                                                                                             | Why it matters                      |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| Per-project themes (zed#13300)     | Issue open, hook-watched since 2026-09-23; **PR #58755 CLOSED unmerged 2026-09-07**, no successor; ruling: title aid + keep waiting | Gavin's color-per-window goal       |
+| `theme_overrides` at project level | Still user-settings only; nothing in 1.17.0 to 1.21.0 changes it                                                                    | zed#13300 open, nothing building it |
+| `detect_venv` default              | Not mentioned in 1.17.0 to 1.21.0; yours still pins `off`                                                                           | direnv double-activation            |
+| Title-bar settings surface         | `title_bar.show_worktree_name` (1.13.0); `window_title_format` (1.20.0)                                                             | Title text only, never colour       |
 
 **PR #58755 "Add per-window theme overrides"** (author 42piratas; opened 2026-06-06;
 open / not merged / not draft; last activity 2026-06-29; base `main`; no milestone;
@@ -847,8 +849,34 @@ Gavin has accepted. Two related 1.17.0 and 1.21.0 fixes (`--user-data-dir` survi
 Restart to Update; "database is locked" across instances) are logged in the release
 entries in case he ever revisits. The one new single-process lever is 1.20.0's
 `window_title_format`, which can lead each title with the project name: text, not
-colour, so a partial aid at best. Which way to go is Gavin's call and is raised in the
-2026-09-23 worker report, not decided here.
+colour, so a partial aid at best. Which way to go was put to Gavin the same day; his
+ruling follows.
+
+**Ruling, 2026-09-23 (Gavin): title aid + keep waiting.** Recorded in the decisions
+register (`decided zed per-window colour`).
+
+1. **Title aid.** `home/.config/zed/settings.json` pins
+   `"window_title_format": "${projectName}${separator}${fileName}"`, so every window
+   title leads with the project name. Syntax verified against Zed's own source at tag
+   `v1.21.0-pre` (`assets/settings/default.json`, `crates/settings_content/src/workspace.rs`,
+   `docs/src/reference/all-settings.md`). **That string is already Zed's default**, so
+   the pin changes nothing today; it stops a future default from dropping the project
+   name. The file is `skip-worktree`, so the pin lives on disk only and is deliberately
+   **not committed** (its `ssh_connections` block must never reach git). Not verified:
+   where macOS shows this title (Zed draws its own title bar; the OS window title is
+   what Mission Control and the Window menu list).
+2. **Keep waiting on zed#13300.** No `--user-data-dir`, no wrapper: the 2026-06-18
+   rejection stands.
+3. **Watch the issue, not just PRs.** The session-start hook now polls zed#13300's state
+   and `updated_at` every session (`WATCHED_ISSUES`, recorded date 2026-06-08). It
+   stays quiet while the date matches, flags when the date moves or the issue closes,
+   and tells the assistant to record the activity here and then move the recorded date.
+   Controls: `.claude/hooks/zed-version-check-selftest`, 7 arms on bash 3.2 and 5.3,
+   using saved real API responses (#13300 open, #40418 closed) as fixtures.
+
+- _In plain English:_ each Zed window's title now starts with the project name (it
+  already did; now it is locked in), and the start-up check tells you when anyone
+  touches the per-project-colour issue.
 
 - _In plain English:_ the feature was dropped because of how its author talked to Zed,
   not because Zed said no. Nobody is building it now. The workaround is still the one you
@@ -856,7 +884,8 @@ colour, so a partial aid at best. Which way to go is Gavin's call and is raised 
 
 The session-start hook no longer polls #58755 (removed from `WATCHED_PRS` on
 2026-09-23; the list is empty and the hook prints that). To watch a future attempt, add
-its PR number to `WATCHED_PRS` in `.claude/hooks/zed-version-check.sh`.
+its PR number to `WATCHED_PRS` in `.claude/hooks/zed-version-check.sh`. The issue itself,
+zed#13300, is watched through `WATCHED_ISSUES` in the same hook (ruling above).
 
 When refreshing this doc, re-check each row against the new release.
 

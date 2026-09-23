@@ -4,7 +4,8 @@
 # Purpose: at every session start, (1) notice when a NEWER Zed Preview release exists
 # than the version recorded in docs/ZED_PREVIEW_CHANGELOG.md, and (2) report the merge
 # status of watched upstream PRs (e.g. #58755 per-window themes) so a merge is caught
-# the session it lands. Then nudge the assistant to refresh that doc (UI / config /
+# the session it lands, and (3) report the state and last-update date of watched upstream
+# ISSUES (zed#13300 per-project themes) so a revival or closure is caught. Then nudge the assistant to refresh that doc (UI / config /
 # theme focus). The hook NEVER edits the doc and NEVER fetches/synthesizes the changelog
 # itself -- a bash hook cannot web-search. It only checks state and prints instructions
 # the assistant acts on that session.
@@ -48,6 +49,29 @@ ZED_REPO="zed-industries/zed"
 # the loop below prints "none" rather than going silent.
 WATCHED_PRS=()
 
+# Upstream ISSUES to watch, checked live at every session start (decided 2026-09-23:
+# per-window colour is "title aid + keep waiting on zed#13300", so the wait gets a
+# watcher). Format: "<number>|<updated date last recorded, YYYY-MM-DD>|<short label>".
+# The recorded date is the acknowledgement: while GitHub's updated_at differs from it,
+# every session flags the issue. After reading the new activity and recording it in
+# docs/ZED_PREVIEW_CHANGELOG.md, set the date here to the new updated_at. On close,
+# record why (state_reason) and drop the entry.
+WATCHED_ISSUES=(
+  "13300|2026-06-08|per-project themes, multiple active themes (Gavin's colour-per-window goal)"
+)
+
+# Test mode, used only by zed-version-check-selftest. With ZED_CHECK_FIXTURE_DIR set,
+# issue_status reads <dir>/issue-<num>.json (saved GitHub API output) instead of the
+# network, and ZED_CHECK_WATCHED_ISSUES (entries separated by ';') replaces the list.
+# Both are ignored unless the fixture dir is set.
+FIXTURE_DIR="${ZED_CHECK_FIXTURE_DIR:-}"
+if [ -n "$FIXTURE_DIR" ] && [ -n "${ZED_CHECK_WATCHED_ISSUES+x}" ]; then
+  WATCHED_ISSUES=()
+  _old_ifs=$IFS; IFS=';'
+  for _e in $ZED_CHECK_WATCHED_ISSUES; do [ -n "$_e" ] && WATCHED_ISSUES+=("$_e"); done
+  IFS=$_old_ifs; unset _old_ifs _e
+fi
+
 # Numeric semver compare: returns 0 (true) if $1 > $2, else 1. Pure shell, no sort -V
 # (BSD sort lacks it). Inputs must already be validated X.Y.Z.
 version_gt() {
@@ -82,6 +106,38 @@ pr_status() {
     printf 'live|%s' "$out"
   elif [ -s "$pc" ]; then
     printf 'cached|%s' "$(cat "$pc" 2>/dev/null)"
+  else
+    printf 'offline||||'
+  fi
+}
+
+# issue_status <num> -> echoes "src|state|updated|state_reason|title" for a GitHub issue.
+# Same shape as pr_status: live (gh -> curl), per-issue cache, cache fallback when
+# offline. In test mode it reads the fixture file and never touches the network, and a
+# missing fixture reports "offline" (the cache lives in $TMPDIR, which the selftest
+# points at a fresh directory).
+ISSUE_JQ='[.state, (.updated_at|split("T")[0]), (.state_reason // ""), .title] | join("|")'
+issue_status() {
+  local num="$1" ic out
+  ic="${TMPDIR:-/tmp}/zed-issue-${num}.cache"
+  out=""
+  if [ -n "$FIXTURE_DIR" ]; then
+    [ -f "$FIXTURE_DIR/issue-$num.json" ] && \
+      out=$(jq -r "$ISSUE_JQ" "$FIXTURE_DIR/issue-$num.json" 2>/dev/null || true)
+  else
+    if command -v gh >/dev/null 2>&1; then
+      out=$(timeout 8 gh api "repos/$ZED_REPO/issues/$num" --jq "$ISSUE_JQ" 2>/dev/null || true)
+    fi
+    if [ -z "$out" ] && command -v jq >/dev/null 2>&1; then
+      out=$(timeout 8 curl -fsSL "https://api.github.com/repos/$ZED_REPO/issues/$num" 2>/dev/null \
+        | jq -r "$ISSUE_JQ" 2>/dev/null || true)
+    fi
+  fi
+  if [ -n "$out" ] && printf '%s' "$out" | grep -q '|'; then
+    printf '%s\n' "$out" >"$ic" 2>/dev/null || true
+    printf 'live|%s' "$out"
+  elif [ -s "$ic" ]; then
+    printf 'cached|%s' "$(cat "$ic" 2>/dev/null)"
   else
     printf 'offline||||'
   fi
@@ -208,5 +264,31 @@ for entry in ${WATCHED_PRS[@]+"${WATCHED_PRS[@]}"}; do
       echo "   • #$num status unavailable (${src:-offline}) — $label"
       ;;
   esac
+done
+
+echo
+echo "📌 Watched Zed issues (state + last update · checked live each session):"
+if [ "${#WATCHED_ISSUES[@]}" -eq 0 ]; then
+  echo "   (none watched -- add \"<number>|<YYYY-MM-DD>|<label>\" to WATCHED_ISSUES in this hook)"
+fi
+for entry in ${WATCHED_ISSUES[@]+"${WATCHED_ISSUES[@]}"}; do
+  num="${entry%%|*}"; rest="${entry#*|}"; seen="${rest%%|*}"; label="${rest#*|}"
+  IFS='|' read -r src st upd reason _title <<<"$(issue_status "$num")"
+  url="https://github.com/$ZED_REPO/issues/$num"
+  if [ "$st" = "closed" ]; then
+    echo "   ✖ zed#$num CLOSED (${reason:-no reason given}, updated ${upd:-?}) -- $label   [${src}]"
+    echo "      Assistant: read $url, record the closure and its reason in"
+    echo "      docs/ZED_PREVIEW_CHANGELOG.md + the project_zed_per_project_theme memory, then drop"
+    echo "      #$num from WATCHED_ISSUES in this hook."
+  elif [ "$st" = "open" ] && [ "$upd" != "$seen" ]; then
+    echo "   🔔 zed#$num UPDATED: last activity $upd, recorded $seen -- $label   [${src}]"
+    echo "      Assistant: read the new activity on $url, record it in"
+    echo "      docs/ZED_PREVIEW_CHANGELOG.md (watch-items), then set #$num's recorded date in"
+    echo "      WATCHED_ISSUES to $upd so this stops flagging."
+  elif [ "$st" = "open" ]; then
+    echo "   ⏳ zed#$num open, last activity $upd (unchanged since recorded) -- $label   [${src}]"
+  else
+    echo "   • zed#$num status unavailable (${src:-offline}) -- $label"
+  fi
 done
 exit 0
