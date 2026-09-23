@@ -1004,10 +1004,12 @@ lk_shims(){
 [ -z "\${LK_LS_LOG:-}" ] || echo ls >> "\$LK_LS_LOG"
 exec "$real_ls" "\$@"
 EOF
-  # sleep: (A60) logs every duration the tool asks for, then really sleeps it.
+  # sleep: (A60) logs every duration the tool asks for, then really sleeps it; (LK11) each
+  # sleep takes LK_SLEEP_EXTRA longer than asked, the way load stretches a poll.
   cat > "$LKS/sleep" <<EOF
 #!/usr/bin/env bash
 [ -z "\${LK_SLEEP_LOG:-}" ] || echo "\$1" >> "\$LK_SLEEP_LOG"
+[ -z "\${LK_SLEEP_EXTRA:-}" ] || "$real_sleep" "\$LK_SLEEP_EXTRA"
 exec "$real_sleep" "\$@"
 EOF
   # perl, only when it is the lock rename (its last argument is a drawer's items/.lock):
@@ -1015,11 +1017,15 @@ EOF
   #        fails with the real rename's own ENOTEMPTY, and the lock is gone again before the
   #        caller can look;
   #  (LK3) a pause before the rename, widening the window between deciding and renaming;
-  #  (LK8) the writer is KILLED here, after it built its private dir and before the rename.
+  #  (LK8) the writer is KILLED here, after it built its private dir and before the rename;
+  #  (LK12) a live pid takes the lock just first, and the rename fails with LK_RENAME_ERR.
   cat > "$LKS/perl" <<EOF
 #!/usr/bin/env bash
 case "\${!#}" in
   */items/.lock)
+    if [ -n "\${LK_RENAME_HOLDER:-}" ]; then
+      "$real_mkdir" -p "\${!#}/\$LK_RENAME_HOLDER"; echo "\$LK_RENAME_ERR" >&2; exit 1
+    fi
     if [ -n "\${LK_KILL_BEFORE_RENAME:-}" ]; then
       p="\${@: -2:1}"; p="\${p##*/.lock.new.}"; kill -9 "\${p%%.*}"; exit 1
     fi
@@ -1153,6 +1159,7 @@ wanteq "LK5: an orphaned EMPTY lock no longer blocks a writer (rc=0, no human)" 
 wanteq "LK5:   its item was written once" "1" "$(lk_items "LK5 behind an orphan")"
 want   "LK5:   and it took the lock, alone (trace)" "overlap=0 listed=0 acq=1 rel=1" "$(trace_count "$D/lk5.trace")"
 wanteq "LK5:   and no lock is left behind" "0" "$([ -d "$LKL" ] && echo 1 || echo 0)"
+rmdir "${LKL:?}" 2>/dev/null   # code that fails LK5 leaves the orphan; later arms need a clear drawer
 
 # LK6 -- the A59 counter can SEE two writers. A holder pauses before its commit, still
 # holding the lock; the test breaks the lock under it the way the old stale takeover did,
@@ -1215,6 +1222,57 @@ wanteq "LK9:   the holder's lock is untouched, holder alone inside it" "$LK9_H" 
 wanteq "LK9:   and nothing was written" "0" "$(lk_items "LK9 behind a live holder")"
 wanteq "LK9:   and the waiter left no private lock dir" "" "$(ls -a "$ZW/items" | grep '^\.lock\.new\.')"
 kill "${LK9_H:?}" 2>/dev/null; wait "${LK9_H:?}" 2>/dev/null; rmdir "${LKL:?}/${LK9_H:?}" && rmdir "${LKL:?}"
+
+# LK10 -- a waiter backs off with jitter and forks as little as it can (A60). Behind a live
+# holder for a 3 s budget, the old waiter forked `ls` and slept 0.1 s every poll: 30 sleeps,
+# all the same, 30 ls. Now: fewer, growing, jittered sleeps that still add up to the budget
+# (not more: the budget stays honest), and no ls at all.
+sleep 60 & LK10_H=$!; mkdir -p "$LKL/$LK10_H"
+LK10_S=$SECONDS
+lk_bg w10 "LK10 backing off" OPEN_ITEMS_TEST_LOCK_TRIES=30 LK_SLEEP_LOG="$D/lk10.sleeps" LK_LS_LOG="$D/lk10.ls"
+LK10_RC="$(lk_wait_rc w10)"; LK10_E=$SECONDS
+wanteq "LK10: behind a live holder for a 3 s budget the waiter times out (rc=2)" "2" "$LK10_RC"
+want   "LK10:   with a lock TIMEOUT naming the holder" "live pid $LK10_H" "$(cat "$D/lk.w10.out")"
+LK10_N="$(grep -c . "$D/lk10.sleeps" 2>/dev/null)"; LK10_N="${LK10_N:-0}"
+LK10_V="$(sort -u "$D/lk10.sleeps" 2>/dev/null | grep -c .)"; LK10_V="${LK10_V:-0}"
+LK10_MS="$(awk '{ t += $1 * 1000 } END { printf "%d", t + 0.5 }' "$D/lk10.sleeps" 2>/dev/null)"
+if [ "$LK10_N" -ge 3 ] && [ "$LK10_N" -le 15 ]; then ok "LK10:   it slept $LK10_N times, not 30 (backoff)"
+else bad "LK10:   it slept between 3 and 15 times, not 30 (backoff)" "3..15 sleeps" "$LK10_N sleeps"; fi
+if [ "$LK10_V" -ge 3 ]; then ok "LK10:   in $LK10_V different lengths (growing, with jitter)"
+else bad "LK10:   in at least 3 different lengths (growing, with jitter)" ">= 3 distinct" "$LK10_V distinct: $(tr '\n' ' ' < "$D/lk10.sleeps" 2>/dev/null)"; fi
+if [ "${LK10_MS:-0}" -ge 2500 ] && [ "${LK10_MS:-0}" -le 3000 ]; then ok "LK10:   adding up to the budget and not past it (${LK10_MS} ms of 3000)"
+else bad "LK10:   adding up to the budget and not past it" "2500..3000 ms" "${LK10_MS:-none} ms"; fi
+wanteq "LK10:   and it never forked ls to read the lock" "0" "$(grep -c . "$D/lk10.ls" 2>/dev/null || echo 0)"
+if [ $(( LK10_E - LK10_S )) -le 5 ]; then ok "LK10:   and the refusal came on time ($(( LK10_E - LK10_S )) s wall clock for a 3 s budget)"
+else bad "LK10:   and the refusal came on time" "<= 5 s" "$(( LK10_E - LK10_S )) s"; fi
+kill "${LK10_H:?}" 2>/dev/null; wait "${LK10_H:?}" 2>/dev/null; rmdir "${LKL:?}/${LK10_H:?}" && rmdir "${LKL:?}"
+
+# LK11 -- the budget is WALL CLOCK (A60). Every sleep the waiter asks for takes 0.5 s longer
+# than asked, the way a loaded machine stretches each poll. The old budget counted polls, so
+# 20 polls of 0.1 s became 12 s; a wall-clock budget of 2 s must end within about 4 s.
+sleep 60 & LK11_H=$!; mkdir -p "$LKL/$LK11_H"
+LK11_S=$SECONDS
+lk_bg w11 "LK11 slow polls" OPEN_ITEMS_TEST_LOCK_TRIES=20 LK_SLEEP_EXTRA=0.5
+LK11_RC="$(lk_wait_rc w11 300)"; LK11_E=$SECONDS
+wanteq "LK11: behind a live holder, with every poll 0.5 s slower than asked, the waiter times out (rc=2)" "2" "$LK11_RC"
+if [ $(( LK11_E - LK11_S )) -le 5 ]; then ok "LK11:   within the 2 s budget by the wall clock ($(( LK11_E - LK11_S )) s, not 12 s of counted polls)"
+else bad "LK11:   within the 2 s budget by the wall clock" "<= 5 s" "$(( LK11_E - LK11_S )) s"; fi
+kill "${LK11_H:?}" 2>/dev/null; wait "${LK11_H:?}" 2>/dev/null; rmdir "${LKL:?}/${LK11_H:?}" && rmdir "${LKL:?}"
+
+# LK12 -- a rename that fails because another writer got there first is HELD, whatever the
+# error text. POSIX lets rename onto a non-empty directory fail with ENOTEMPTY (macOS) or
+# EEXIST (allowed, and seen on Linux), so the lock's own contents decide. The shim takes the
+# lock for a live holder just before our rename, then fails it with the given text: the
+# Linux one, and one no code branches on. Either way: wait, then an honest TIMEOUT.
+sleep 60 & LK12_H=$!
+for LK12_T in "File exists" "Invalid argument"; do
+  lk_bg w12 "LK12 $LK12_T" OPEN_ITEMS_TEST_LOCK_TRIES=5 LK_RENAME_HOLDER="$LK12_H" LK_RENAME_ERR="$LK12_T"
+  wanteq "LK12: a rename refused with \"$LK12_T\" onto a lock a live pid now holds waits (rc=2 TIMEOUT)" "2" "$(lk_wait_rc w12)"
+  want    "LK12:   the refusal is a lock TIMEOUT naming the holder" "live pid $LK12_H" "$(cat "$D/lk.w12.out")"
+  wantnot "LK12:   and never \"rename failed for a reason other than a held lock\"" "other than a held lock" "$(cat "$D/lk.w12.out")"
+  rmdir "${LKL:?}/${LK12_H:?}" 2>/dev/null; rmdir "${LKL:?}" 2>/dev/null; command mv "$D/lk.w12.rc" "$D/lk.w12.$LK12_T.rc"
+done
+kill "${LK12_H:?}" 2>/dev/null; wait "${LK12_H:?}" 2>/dev/null
 
 printf '\nH  every `## W-` header starts its own line, across a drawer boundary (X0)\n'
 # THE BUG: `hits="$(blocks_from ...)"` strips every trailing newline, and report() then

@@ -508,7 +508,20 @@ lock_sweep(){
   return 0
 }
 lock_drawer(){
-  local w="$1" i=0 pid err k tries="${OPEN_ITEMS_TEST_LOCK_TRIES:-600}"   # the env var is a TEST seam: timing only
+  local w="$1" pid err h k tries="${OPEN_ITEMS_TEST_LOCK_TRIES:-600}"   # the env var is a TEST seam: timing only
+  # THE WAIT (W-20260923-A60). Until A60 every waiter forked `ls` (and a subshell for kill)
+  # and slept a fixed 0.1 s: 160 waiters made about 1600 polls a second, several forks each,
+  # all competing with the one process doing real work. Now the lock is
+  # read with a glob and kill with no fork, perl runs only when the lock looks free, and the
+  # sleep backs off (50 ms doubling to 800 ms) with jitter: each sleep is a random point in
+  # the upper half of its step, so waiters that collided once do not collide again in step.
+  # THE BUDGET IS WALL CLOCK. Until A60 it counted polls, 600 of them, and each poll's forks
+  # took longer under load, so "60 s" was up to 237 s of real waiting in the 160-add repro
+  # (measured 2026-09-24 on master 28acc21). Backoff would stretch a poll count further. Now
+  # the wait ends at 60 s (OPEN_ITEMS_TEST_LOCK_TRIES tenths of a second) by $SECONDS, which
+  # bash 3.2 has, rounded up to whole seconds, plus at most one sleep; and, for the
+  # sub-second budgets the tests use, when the sleeps alone add up to the budget.
+  local ms=50 slept=0 s frac t0=$SECONDS budget=$((tries * 100))
   LOCK="$w/items/.lock"
   command -v perl >/dev/null 2>&1 || refuse "cannot take the drawer lock at $LOCK -- perl is not on PATH, and the lock is taken with one atomic rename(2), which nothing in a portable shell does (BSD mv has no -T). Nothing was changed."
   # Every lock this process holds, and its private dir while it waits, is released on exit,
@@ -532,24 +545,39 @@ lock_drawer(){
   # and an "ownership check" retry was worse. Neither is repeated: nothing but its holder,
   # or a waiter that proved the holder dead, ever removes anything inside LOCK.
   mkdir "$LOCK_PRIV/$$" 2>/dev/null || refuse "cannot write inside its own new lock directory $LOCK_PRIV. Nothing was changed."
-  while ! err="$(lock_rename "$LOCK_PRIV" "$LOCK")"; do
-    case "$err" in
-      *"Directory not empty"*|*"File exists"*) ;;
-      *"Permission denied"*|*"Operation not permitted"*|*"Read-only file system"*)
-        refuse "cannot take the drawer lock at $LOCK -- the rename was REFUSED for want of WRITE permission on $(dirname "$LOCK") (rename: $err), not because a pid holds it. Nothing was changed." ;;
-      *) refuse "cannot take the drawer lock at $LOCK -- rename failed for a reason other than a held lock (rename: $err). Nothing was changed." ;;
-    esac
-    pid="$(ls "$LOCK" 2>/dev/null | head -1)"
-    if [ -n "$pid" ]; then
+  while :; do
+    # A lock with a pid dir inside it is held: look (a glob, no fork) before forking perl.
+    pid=""; for h in "$LOCK"/*; do [ -e "$h" ] && { pid="${h##*/}"; break; }; done
+    if [ -z "$pid" ]; then
+      err="$(lock_rename "$LOCK_PRIV" "$LOCK")" && break
+      # A failed rename onto a lock that now has a pid dir inside is HELD, whatever the
+      # error says: POSIX lets a non-empty target fail with ENOTEMPTY (macOS) or EEXIST, so
+      # the lock's own contents decide, not the text. Only a failure with NO holder in sight
+      # is read for its error, and there both held-lock errors still mean "it was held a
+      # moment ago" (churn), never a refusal.
+      for h in "$LOCK"/*; do [ -e "$h" ] && { pid="${h##*/}"; break; }; done
+      if [ -z "$pid" ]; then
+        case "$err" in
+          *"Directory not empty"*|*"File exists"*) ;;
+          *"Permission denied"*|*"Operation not permitted"*|*"Read-only file system"*)
+            refuse "cannot take the drawer lock at $LOCK -- the rename was REFUSED for want of WRITE permission on $(dirname "$LOCK") (rename: $err), not because a pid holds it. Nothing was changed." ;;
+          *) refuse "cannot take the drawer lock at $LOCK -- rename failed for a reason other than a held lock (rename: $err). Nothing was changed." ;;
+        esac
+      fi
+    fi
+    # kill -0 succeeding is alive, with no fork; only a failure is read for its own error.
+    if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
       case "$(LC_ALL=C kill -0 "$pid" 2>&1)" in
         *"No such process"*) rmdir "$LOCK/$pid" 2>/dev/null && { lock_trace TAKE "$LOCK" "$pid"; continue; } ;;
       esac
     fi
-    i=$((i+1)); [ "$i" -lt "$tries" ] || {
+    if [ "$slept" -ge "$budget" ] || [ $((SECONDS - t0)) -gt $(( (budget + 999) / 1000 )) ]; then
       [ -n "$pid" ] && refuse "could not take the drawer lock at $LOCK after $((tries / 10))s -- a lock TIMEOUT: another writer kept it (live pid $pid at the last poll). Nothing was changed; run the command again."
       refuse "could not take the drawer lock at $LOCK after $((tries / 10))s -- a lock TIMEOUT: the lock named no pid at the last poll, so writers kept taking it between polls. Nothing was changed; run the command again."
-    }
-    sleep 0.1
+    fi
+    s=$(( ms / 2 + RANDOM % (ms / 2 + 1) )); [ $((slept + s)) -le "$budget" ] || s=$((budget - slept))
+    printf -v frac '%03d' $((s % 1000)); sleep "$((s / 1000)).$frac"
+    slept=$((slept + s)); [ "$ms" -ge 800 ] || ms=$((ms * 2))
   done
   # The private dir IS the lock now; nothing of it is left to clean up under its old name.
   LOCK_PRIV=""
