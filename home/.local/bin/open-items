@@ -445,8 +445,26 @@ LOCK=""
 # KNOWN GAP, not fixed here: an EMPTY lock left by a process killed between its two mkdirs
 # (or between the two rmdirs of a release) names no pid, so nothing ever takes it over and
 # every writer times out on it until a human removes it with `rmdir`. The timeout says so.
+#
+# OPEN_ITEMS_TRACE (W-20260923-A59) is a TEST and diagnosis seam, with no effect when unset:
+# a file name, to which every lock step appends one tab-separated line, EVENT pid lock detail.
+#   ACQ   this pid now holds the lock; detail = every pid dir inside it at that moment
+#   REL   this pid is about to let go
+#   TAKE  this pid removed a DEAD holder's pid dir; detail = the dead pid
+# ACQ is written AFTER the lock is held and REL BEFORE it is let go, so each traced hold lies
+# inside the real one. Two traced holds that overlap are therefore two writers at once for
+# certain, never a false alarm; a real overlap shorter than the gap between the two appends
+# could be missed. Until A59 the repro and section G counted two writers only through a
+# commit failing with rc 3, and that read 0 on the old master while a trace of the same runs
+# showed 3 double holders (every one had both writers commit).
+lock_trace(){
+  [ -z "${OPEN_ITEMS_TRACE:-}" ] && return 0
+  local d="${3:-}" h
+  if [ "$1" = ACQ ]; then for h in "$2"/*; do [ -e "$h" ] && d="$d${d:+,}${h##*/}"; done; fi
+  printf '%s\t%s\t%s\t%s\n' "$1" "$$" "$2" "$d" >> "$OPEN_ITEMS_TRACE"
+}
 LOCKS=()
-release_locks(){ local l; for l in ${LOCKS[@]+"${LOCKS[@]}"}; do rmdir "$l/$$" 2>/dev/null && rmdir "$l" 2>/dev/null; done; return 0; }
+release_locks(){ local l; for l in ${LOCKS[@]+"${LOCKS[@]}"}; do lock_trace REL "$l"; rmdir "$l/$$" 2>/dev/null && rmdir "$l" 2>/dev/null; done; return 0; }
 lock_drawer(){
   local w="$1" i=0 pid err tries="${OPEN_ITEMS_TEST_LOCK_TRIES:-600}"   # the env var is a TEST seam: timing only
   LOCK="$w/items/.lock"
@@ -461,7 +479,7 @@ lock_drawer(){
     pid="$(ls "$LOCK" 2>/dev/null | head -1)"
     if [ -n "$pid" ]; then
       case "$(LC_ALL=C kill -0 "$pid" 2>&1)" in
-        *"No such process"*) rmdir "$LOCK/$pid" 2>/dev/null && { rmdir "$LOCK" 2>/dev/null; continue; } ;;
+        *"No such process"*) rmdir "$LOCK/$pid" 2>/dev/null && { lock_trace TAKE "$LOCK" "$pid"; rmdir "$LOCK" 2>/dev/null; continue; } ;;
       esac
     fi
     i=$((i+1)); [ "$i" -lt "$tries" ] || {
@@ -479,6 +497,7 @@ lock_drawer(){
   mkdir "$LOCK/$$" 2>/dev/null || refuse "took the drawer lock at $LOCK but cannot write inside it. Nothing was changed."
   # Every lock this process holds is released on exit, so a two-drawer write (move, route)
   # never leaves its first lock behind when the second refuses.
+  lock_trace ACQ "$LOCK"
   LOCKS+=("$LOCK")
   trap release_locks EXIT
 }

@@ -471,15 +471,31 @@ wanteq "--help opens with usage in under 25 lines (was 71)" "1" "$([ "$(printf '
 want   "--help lists add" "open-items add" "$OUT"
 want   "--help points at the doc" "docs/OPEN_ITEMS.md" "$OUT"
 
+# trace_count <trace>: two writers at once, COUNTED from the tool's OPEN_ITEMS_TRACE lines
+# (W-20260923-A59) rather than inferred from a commit failing with rc 3, which read 0 on the
+# old master while a trace of the same runs showed 3 double holders. Holds are replayed in
+# trace order per lock, and an ACQ while another pid holds the same lock is an "overlap".
+# "listed" is a second, independent instrument: an ACQ that found more than one pid dir in
+# its lock. acq is the POSITIVE arm: with no ACQ lines the seam never ran and a 0 means nothing.
+trace_count(){ awk -F'\t' '
+  $1=="ACQ" { k=$3; if (n[k]>0) d++; n[k]++; h[k SUBSEP $2]=1; a++; if ($4 ~ /,/) l++ }
+  $1=="REL" || $1=="TAKE" { k=$3; p=($1=="REL")?$2:$4; if ((k SUBSEP p) in h) { n[k]--; delete h[k SUBSEP p] }; if ($1=="REL") r++ }
+  END { printf "overlap=%d listed=%d acq=%d rel=%d", d, l, a, r }' "$1" 2>/dev/null; }
+
 printf 'G  two writers at once\n'
 mk_dotclaude
 runw "$ZETA" init
 # Every add's rc and output are KEPT (W-20260923-A37): with them thrown away, a short count
 # could not say whether an add was refused (and which refusal) or reported success and lost
-# its write, and those are different bugs.
+# its write, and those are different bugs. Every add is traced (A59), so two writers at once
+# are counted directly.
 i=0; while [ $i -lt 20 ]; do i=$((i+1))
-  ( cd "$ZETA" && OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" "$TOOL" add "parallel $i" --done-when x >"$D/g.$i.out" 2>&1; echo $? > "$D/g.$i.rc" ) &
+  ( cd "$ZETA" && OPEN_ITEMS_TRACE="$D/g.trace" OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" "$TOOL" add "parallel $i" --done-when x >"$D/g.$i.out" 2>&1; echo $? > "$D/g.$i.rc" ) &
 done; wait
+G_TC="$(trace_count "$D/g.trace")"
+want   "the trace seam ran: one ACQ and one REL per add (positive arm; without it the next two mean nothing)" "acq=20 rel=20" "$G_TC"
+want   "  and no two writers held the lock at once (holds replayed from the trace)" "overlap=0 " "$G_TC"
+want   "  and no writer found a second pid dir inside its lock (independent instrument)" "listed=0 " "$G_TC"
 G_BAD=""; G_OK=0; i=0; while [ $i -lt 20 ]; do i=$((i+1))
   rc="$(cat "$D/g.$i.rc" 2>/dev/null)"
   if [ "$rc" = 0 ]; then G_OK=$((G_OK+1)); continue; fi
