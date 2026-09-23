@@ -56,6 +56,8 @@ if [ "${1:-}" = "--selftest" ]; then
   conv_arm deny 'on a second line'                $'echo a\nbuiltin rg x'
   conv_arm deny 'after an assignment'             'FOO=1 builtin foo'
   conv_arm deny 'after env VAR=1'                 'env FOO=1 builtin foo'
+  conv_arm deny 'after env VAR="a b" (quoted value)' 'env FOO="a b" builtin foo'
+  conv_arm deny 'after VAR="a b" (quoted value)'  'FOO="a b" builtin foo'
   conv_arm deny 'after sudo -n'                   'sudo -n builtin foo'
   conv_arm deny 'after nohup'                     'nohup builtin foo'
   conv_arm deny 'after time'                      'time builtin foo'

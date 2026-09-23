@@ -756,7 +756,7 @@ function builtin_check(    k, j, n, w, arg, mod) {
     for (k = 1; k <= NC; k++) {
         n = CNW[k]; j = 1; mod = 0
         while (j <= n && WR[k, j] ~ /^[A-Za-z_][A-Za-z0-9_]*=/) j++
-        while (j <= n && !WQ[k, j]) {
+        while (j <= n) {              # a quoted VALUE (env FOO="a b") is still skipped
             w = WR[k, j]
             if (w ~ /^([A-Za-z0-9_.\/-]*\/)?builtin$/) break
             if (bi_mod(w)) { mod = 1; j++; continue }
