@@ -1,29 +1,28 @@
 #!/usr/bin/env bash
 # open-items -- what is still open, scoped to the project you are standing in.
 # Usage:
-#   open-items                      open items for the CURRENT repo
-#   open-items --all | --project <name>   every repo with a drawer | one project (its `project:`)
-#   open-items --closed | --status <s>    add parked/done/declined | only open|parked|done|declined
-#   open-items --grep "words"       items holding every word in title/body (+ --all, --closed)
-#   open-items --json               any listing, --grep or show as JSON (jq-free, jq-valid)
-#   open-items --projects | --where       the drawers found | this repo's drawer path
-#   open-items --session            the SessionStart surface: short, silent when nothing is open, pinned (when: next session) first
-#   open-items show <W-ID> [--project p]          one item, any status, any drawer
-#   open-items get <W-ID> <field> [--project p]   one field's raw value (or id|title|body|file)
-#   open-items add "title" --done-when "..." [--kind do|decide] [--size small|medium|large]
-#                  [--when ..] [--next ..] [--blocked-on ..] [--holds-in repo:..|drawer:..|~/..]... [--body ..]
-#   open-items close|decline|park|reopen <W-ID> ["note"]
-#   open-items supersede <old> <new> [--project p]   decline old pointing at new, back-pointer on new; ONE drawer
-#   open-items set <W-ID> <field> "value"       replace; WARNS on dropped text (holds-in: several values replace the set)
-#   open-items set --add|--append <W-ID> <field> "value"   holds-in: one more line; next/when/done-when/blocked-on: "; value"; body: a paragraph
-#   open-items init | regen         create items/ | rebuild OPEN.md (rescues a hand edit first)
-#   open-items migrate [--dry-run --into <dir>] [--park W-ID,..]   legacy OPEN.md -> items/
+#   open-items [--all | --project <name>] [--closed | --status s] [--grep "words"] [--json]
+#   open-items --projects | --where | --session   drawers found | this drawer | start-card surface
+#   open-items show <W-ID> | open-items get <W-ID> <field>  [--project p]   any drawer
+#   open-items add "title" --done-when ".." [--kind do|decide] [--size small|medium|large]
+#       [--when ..] [--next ..] [--blocked-on ..] [--holds-in repo:..|drawer:..|~/..].. [--body ..]
+#       [--for <project|path/> | --inbox] [--watch p].. [--check p "done-when"]..   (max 5 each)
+#       [--reach machine | --reach mandatory [--check-script <name>]]
+#   open-items watch <W-ID> <p> | check <W-ID> <p> "done-when"   add a watcher / a check
+#   open-items tick | pass <W-ID> <p>   tick p's check | pass a mandatory item; ONLY from inside p
+#   open-items move <W-ID> --to <p> --why ".."   inside one group; across groups is Gavin's (TTY)
+#   open-items route <W-ID> --to <p>   out of the inbox; routing is Gavin's call (TTY)
+#   open-items close|decline|park|reopen <W-ID> ["note"]   close refuses while a check is open
+#   open-items supersede <old> <new> [--project p]   decline old pointing at new; ONE drawer
+#   open-items set [--add] <W-ID> <field> "value"   replace (WARNS on dropped text) | append
+#   open-items init [--name n] | regen | migrate [--dry-run --into <dir>] [--park W-ID,..]
 #   open-items --selftest           prove every arm before trusting it
 # New IDs are unique machine-wide; 12 older ones repeat, so show/get/supersede REFUSE those.
 # Exit: 0 found/written  ·  1 nothing found (not an error)  ·  2 REFUSED  ·  3 written but NOT committed
 #
 # Design, layout, the two drawer formats and why every write is a commit: docs/OPEN_ITEMS.md
-# in the dotfiles repo. Rulings: D-20260918-02, D-20260919-03, D-20260920-05, D-20260920-08.
+# in the dotfiles repo; across projects: docs/OPEN_ITEMS_CROSS_PROJECT.md. Rulings:
+# D-20260918-02, D-20260919-03, D-20260920-05, D-20260920-08, D-20260923-A09.
 
 set -uo pipefail
 

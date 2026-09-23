@@ -907,7 +907,9 @@ wanteq "  and no drawer lock left behind" "0|0" \
        "$([ -d "$ZW/items/.lock" ] && echo 1 || echo 0)|$([ -d "$OW/items/.lock" ] && echo 1 || echo 0)"
 runw "$ZETA" --help
 wanteq "--help still under 25 lines with the new commands" "1" "$([ "$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')" -lt 25 ] && echo 1)"
-for M_W in "open-items show" "open-items get" "open-items supersede" "--grep" "--json"; do
+for M_W in "open-items show" "open-items get" "open-items supersede" "--grep" "--json" \
+    "--for" "--inbox" "--watch" "--check" "--reach mandatory" "open-items watch" "open-items tick" \
+    "open-items move" "open-items route" "routing is Gavin's call"; do
   want "  --help lists $M_W" "$M_W" "$OUT"
 done
 
@@ -1296,6 +1298,7 @@ runw "$D/alpha" add "exact" --done-when y --watch foo-bar
 want   "P9: --watch foo-bar writes exactly that token" "watch: foo-bar" "$(cat "$(ifile "$AW2" "$(lastid)")" 2>/dev/null)"
 runw "$D/alpha" add "prefix" --done-when y --watch fo
 wanteq "P9: --watch fo (a prefix of foo) REFUSES, never a prefix match (rc=2)" "2" "$RC"
+want   "P9:   as an unknown name" "no drawer is named fo" "$OUT"
 
 printf 'V4 watchers and checks, and the P8 caps\n'
 runw "$D/alpha" add "fan" --done-when y --watch beta --check gamma "gamma runs its smoke test"
@@ -1316,13 +1319,16 @@ wanteq "P8: 'watch' adding a 6th watcher REFUSES (rc=2)" "2" "$RC"
 want   "P8:   naming the cap" "the cap (P8)" "$OUT"
 runw "$D/alpha" add "six checks" --done-when y --check w1 a --check w2 a --check w3 a --check w4 a --check w5 a --check w6 a
 wanteq "P8: a 6th --check REFUSES (rc=2)" "2" "$RC"
+want   "P8:   naming the cap" "at most 5 --check" "$OUT"
 runw "$D/alpha" watch "$V_FAN" gamma
 wanteq "'watch <ID> <p>' adds a watcher (rc=0)" "0" "$RC"
 wanteq "  two watch: lines now" "2" "$(grep -c '^watch: ' "$F_FAN")"
 runw "$D/alpha" watch "$V_FAN" gamma
 wanteq "  the same watcher twice REFUSES (rc=2)" "2" "$RC"
+want   "    by name" "gamma already watches" "$OUT"
 runw "$D/alpha" watch "$V_FAN" alpha
 wanteq "  the owner watching itself REFUSES (rc=2)" "2" "$RC"
+want   "    by name" "alpha owns" "$OUT"
 runw "$D/alpha" check "$V_FAN" beta "beta re-runs install"
 wanteq "'check <ID> <p> \"dw\"' adds a check (rc=0)" "0" "$RC"
 want   "  as an [open] check line" "check: beta [open] beta re-runs install" "$(cat "$F_FAN")"
@@ -1339,6 +1345,7 @@ wanteq "'watch' on a reach: machine item REFUSES (rc=2)" "2" "$RC"
 want   "  by name" "reach: machine" "$OUT"
 runw "$D/alpha" check "$V_MACH" beta "x"
 wanteq "'check' on a reach: machine item REFUSES (rc=2)" "2" "$RC"
+want   "  by name" "is reach: machine" "$OUT"
 
 printf 'V5 P2: tick and close\n'
 runw "$D/alpha" close "$V_FAN"
@@ -1356,6 +1363,7 @@ want   "P2:   the line records date, session and project" "check: beta [done $(d
 want   "P2:   gamma's check is still open" "check: gamma [open]" "$(cat "$F_FAN")"
 runw "$D/beta" tick "$V_FAN" beta
 wanteq "  a second tick of the same check REFUSES (no open check left, rc=2)" "2" "$RC"
+want   "    by name" "no OPEN check for beta" "$OUT"
 runw "$D/gamma" tick "$V_FAN" gamma
 runw "$D/alpha" close "$V_FAN"
 wanteq "P2 CONTROL: with every check done, close works (rc=0)" "0" "$RC"
@@ -1421,6 +1429,7 @@ wanteq "P2 CONTROL: pass from inside beta on a script-less item works (rc=0)" "0
 want   "P2:   passed: records date and session" "passed: beta $(date +%Y-%m-%d) by sess-name" "$(cat "$F_MAN")"
 runf "$D/beta" pass "$V_MAN" beta
 wanteq "  a second pass by the same project REFUSES (rc=2)" "2" "$RC"
+want   "    by name" "beta has already passed" "$OUT"
 if [ -n "$PTY_OK" ]; then
   tty_run alpha "$D/alpha" "$TOOL" add "human mandatory" --done-when y --reach mandatory
   wanteq "P8 TTY: a human typing the owner name at a terminal may file reach: mandatory (rc=0)" "0" "$RC"
@@ -1540,8 +1549,8 @@ v_race(){                       # v_race <unsorted?> -> "okA okB" exit codes
   local x y a b
   runw "$D/alpha" add "race a" --done-when y; x="$(lastid)"
   runw "$D/beta" add "race b" --done-when y; y="$(lastid)"
-  ( cd "$D/alpha" && OPEN_ITEMS_TEST_LOCK_UNSORTED="$1" OPEN_ITEMS_TEST_LOCK_GAP=1 OPEN_ITEMS_TEST_LOCK_TRIES="${2:-600}" OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" "$TOOL" move "$x" --to beta --why race >/dev/null 2>&1; echo $? > "$D/race.a" ) &
-  ( cd "$D/beta" && OPEN_ITEMS_TEST_LOCK_UNSORTED="$1" OPEN_ITEMS_TEST_LOCK_GAP=1 OPEN_ITEMS_TEST_LOCK_TRIES="${2:-600}" OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" "$TOOL" move "$y" --to alpha --why race >/dev/null 2>&1; echo $? > "$D/race.b" ) &
+  ( cd "$D/alpha" && OPEN_ITEMS_TEST_LOCK_UNSORTED="$1" OPEN_ITEMS_TEST_LOCK_GAP=1 OPEN_ITEMS_TEST_LOCK_TRIES="${2:-600}" OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" "$TOOL" move "$x" --to beta --why race >"$D/race.a.out" 2>&1; echo $? > "$D/race.a" ) &
+  ( cd "$D/beta" && OPEN_ITEMS_TEST_LOCK_UNSORTED="$1" OPEN_ITEMS_TEST_LOCK_GAP=1 OPEN_ITEMS_TEST_LOCK_TRIES="${2:-600}" OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" "$TOOL" move "$y" --to alpha --why race >"$D/race.b.out" 2>&1; echo $? > "$D/race.b" ) &
   wait
   a="$(cat "$D/race.a")"; b="$(cat "$D/race.b")"
   printf '%s %s' "$a" "$b"
@@ -1552,6 +1561,7 @@ wanteq "P12:   and no lock is left behind" "1" "$([ ! -e "$AW2/items/.lock" ] &&
 R_C="$(v_race 1 25)"
 case "$R_C" in *2*) ok "P12 CONTROL: the same race with the locks in CALLER order deadlocks, and a move refuses ($R_C)" ;;
   *) bad "P12 CONTROL: unsorted locks should deadlock and refuse" "a rc of 2" "$R_C" ;; esac
+want   "P12 CONTROL:   and the refusal IS the lock timeout (not some other refusal)" "could not take the drawer lock" "$(cat "$D/race.a.out" "$D/race.b.out")"
 wanteq "P12:   every ID still sits in exactly one drawer" "0" "$(ls "$AW2/items/open" "$BW2/items/open" 2>/dev/null | grep '^W-' | sort | uniq -d | wc -l | tr -d ' ')"
 
 printf 'V10 the inbox and route (P11, P12)\n'
@@ -1564,15 +1574,17 @@ wanteq "  the inbox is named inbox" "inbox" "$(head -1 "$DC/pj-inbox/items/.proj
 want   "P12: the commit lists the inbox item" "pj-inbox/items/open/$V_IN.md" "$(git -C "$DC" log -1 --name-only --format=)"
 wantnot "P12:   and NOT a stray file elsewhere in dot-claude" "other/stray.txt" "$(git -C "$DC" log -1 --name-only --format=)"
 runw "$D/alpha" --projects
-want   "  --projects lists the inbox" "inbox" "$OUT"
+want   "  --projects lists the inbox drawer by its path" "inbox	$DC/pj-inbox/OPEN.md	items" "$OUT"
 runw "$D/alpha" add "both" --done-when y --inbox --for beta
 wanteq "--inbox with --for REFUSES (rc=2)" "2" "$RC"
+want   "  by name" "--inbox and --for each name the owner" "$OUT"
 runw "$D/alpha" route "$V_IN" --to beta < /dev/null
 wanteq "P11: route with stdin from a pipe REFUSES (rc=2)" "2" "$RC"
 want   "P11:   saying it needs a human at a terminal" "needs a human at a terminal" "$OUT"
 wanteq "P11:   and the item is still in the inbox" "1" "$([ -f "$DC/pj-inbox/items/open/$V_IN.md" ] && echo 1)"
 runw "$D/alpha" move "$V_IN" --to beta --why "sneak"
 wanteq "P11: 'move' cannot take an item out of the inbox either (rc=2)" "2" "$RC"
+want   "P11:   pointing at route" "only by 'open-items route'" "$OUT"
 if [ -n "$PTY_OK" ]; then
   tty_run "$V_IN" "$D/alpha" "$TOOL" route "$V_IN" --to beta
   wanteq "P11 TTY: a human typing the ID routes it (rc=0)" "0" "$RC"

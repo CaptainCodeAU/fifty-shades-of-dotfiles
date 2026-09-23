@@ -87,7 +87,9 @@ parked-by-Gavin and decision-withheld. `closed/` holds both `done` and `declined
 
 ## Every write is a commit (D-20260920-08 c)
 
-`add`, `close`, `park`, `decline`, `reopen`, `supersede`, `set`, `init`, `regen`, `migrate` each:
+`add`, `close`, `park`, `decline`, `reopen`, `supersede`, `set`, `init`, `regen`, `migrate`,
+and since A16 `watch`, `check`, `tick`, `pass`, `move`, `route` each (a move or route takes
+two locks and makes ONE commit for both drawers; see "Across projects" below):
 
 1. take a per-drawer lock (`items/.lock`, a directory; a dead holder is taken over),
 2. write the item file (the ID comes from `pj-id claim`, which stamps it with this
@@ -100,7 +102,7 @@ parked-by-Gavin and decision-withheld. `closed/` holds both `done` and `declined
    dot-claude. A write left uncommitted by an earlier failure rides along with the next.
 
 The commit happens only when the drawer's REAL path (`pwd -P`) is under
-`<dot-claude>/projects/<key>/memory/`. Anywhere else, the file is written and the tool
+`<dot-claude>/projects/<key>/memory/`, or is the inbox `<dot-claude>/pj-inbox`. Anywhere else, the file is written and the tool
 prints `NOT COMMITTED, outside dot-claude` and exits 3. A failed commit (hook, lock that
 never clears, a path a gitignore rule swallows) also exits 3 with `COMMIT FAILED`; the
 file is never lost. A transient `index.lock` is retried.
@@ -243,6 +245,61 @@ Also refused, with nothing changed: an old item that is already done or declined
 one that is declined, an item superseding itself, an unknown ID (a write never "misses"),
 any item in a legacy drawer, and a pair in another project's drawer. `set` cannot write
 either pointer field.
+
+## Across projects: the write side (W-20260923-A28, 2026-09-23)
+
+The design and its six cases are in [`OPEN_ITEMS_CROSS_PROJECT.md`](OPEN_ITEMS_CROSS_PROJECT.md)
+(ruling D-20260923-A09); the twelve safety rules it cites as P1 to P12 are in
+[`OPEN_ITEMS_CROSS_PROJECT_SAFETY.md`](OPEN_ITEMS_CROSS_PROJECT_SAFETY.md). This section is
+what the tool now WRITES; the card side (Watching, Checks owed, Mandatory, the inbox line,
+`seen`, `checks-run`) is described where it is built.
+
+New header fields, all optional, all read from the HEADER only (a body line never counts, P1):
+
+```
+filed-by: alpha (session <name>) 2026-09-23        every add; "none" outside any repo
+watch: beta                                        one line per watcher, at most 5
+check: gamma [open] gamma runs its smoke test      at most 5; ticked in place to
+check: gamma [done 2026-09-23 by <session> in gamma] gamma runs its smoke test
+reach: machine | mandatory
+check-script: no-bare-python                       reach: mandatory only
+passed: beta 2026-09-23 by <session>               a manual pass, script-less items only
+moved-from: alpha 2026-09-23 by <session> (group g -> g, head 1a2b3c4 -> 5d6e7f8): <why>
+```
+
+`<session>` is `CLAUDE_CODE_SESSION_NAME`, else `PJ_SESSION_NAME`, else `unknown`.
+`items/.project` gains a second line, `repo: <absolute repo root>`: `init` writes it, a write
+from inside that repo adds it when missing, and it is never overwritten (P10).
+
+| Command | What it writes | Refuses when |
+| --- | --- | --- |
+| `add --for <project\|path/>` | the item in THAT project's drawer; a path (anything with a `/`) resolves to its repo | a second `--for`; an unknown or shared name (P9); no drawer (names `init`); a legacy drawer |
+| `add --inbox` | the item in `~/.claude/pj-inbox/`, created on first use | it cannot create the inbox (says so by path) |
+| `add --watch p`, `watch <ID> p` | a `watch:` line | a 6th; the owner itself; a duplicate; a `reach:` item |
+| `add --check p "dw"`, `check <ID> p "dw"` | a `check: p [open] dw` line | same as watch |
+| `tick <ID> p` | ticks p's check, recording who | you are not standing in p's repo (P2) |
+| `close <ID>` | as before | any check is still `[open]`; the refusal says each is ticked from inside its project |
+| `add --reach machine` | `reach: machine` | combined with any watch or check |
+| `add --reach mandatory [--check-script n]` | `reach:` and `check-script:` | the owner is not the dotfiles project and no human confirms at a terminal (P8); the script name is not plain, not a regular file inside `home/.claude/tools/mandatory-checks/`, not committed on master or edited since, or has no committed `n.fixtures/pass/` and `fail/` (P4, P5) |
+| `pass <ID> p` | `passed: p ...` | not reach: mandatory; the item has a check-script (only the script can pass it); not inside p |
+| `move <ID> --to p --why ".."` | moves the file, keeps the ID, appends `moved-from:`, writes `items/moved-out/<ID>.md` in the old drawer, ONE commit for both | not run from the owner; groups differ or are unknown; p held the item before; p already has that ID anywhere; `--to inbox`. The first three pass only for a human at a terminal typing the ID |
+| `route <ID> --to p` | the same, out of the inbox | always, unless a human at a terminal types the ID back |
+| `init [--name n]` | `.project` with name and `repo:` | the name is `inbox` or `none`, or another drawer answers to it |
+
+Groups come from `group: <name>` in each repo's COMMITTED `.claude/pj-homes`
+(`git show HEAD:`); a group line only in the working tree refuses the move with "commit the
+group line first" (P11). A group needs a valid `repo:` line on both drawers (P10).
+
+"Gavin's call" is enforced, not just written: `route`, a cross-group move, a move back, and
+`reach: mandatory` outside the dotfiles project read a typed answer from a TERMINAL on stdin.
+An agent's Bash has no terminal, so it is refused. There is no environment override; one would
+be the bypass. The selftest drives a real terminal with `expect`; inside the Claude sandbox,
+which denies a pty, those arms print NOT MEASURED instead of passing.
+
+A move takes both drawer locks in sorted real-path order (P12). If its commit fails, both
+drawers get an empty marker dir `items/.pending-move/<ID>@<other drawer key>/`, and the next
+write in EITHER drawer commits both halves together and clears it. The inbox is the only
+committable place outside `projects/*/memory/WORK`, and `all_drawers` lists it explicitly.
 
 ## Multi-drawer output: the blank line between drawers is load-bearing (X0, 2026-09-22)
 
