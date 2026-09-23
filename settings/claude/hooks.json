@@ -82,6 +82,18 @@
     {
       "event": "PreToolUse",
       "matcher": "Bash",
+      "script": "enforce-no-permanent-delete.sh",
+      "targets": ["user", "project"],
+      "entry": {
+        "type": "command",
+        "command": "test -x \"$HOME/.claude/hooks/enforce-no-permanent-delete.sh\" && \"$HOME/.claude/hooks/enforce-no-permanent-delete.sh\" || true",
+        "timeout": 5
+      },
+      "why": "DENIES Bash commands that destroy data outside the Trash (git worktree remove, git clean without -n, reset --hard, checkout/restore discards, branch -D, stash drop/clear, find -delete, /bin/rm, rm -P, SAFE_RM_OFF, unlink, shred, truncate, dd of=, bare > f, rsync --delete, os.remove/fs.rm in inline code, prune/cleanup commands) and names the safe route. Ruled by Gavin 2026-09-23 (option A) after an agent came one step from git worktree remove, which no rm wrapper can see. Both targets: the Deletion rule is machine-wide. Lexes zsh, sees through prefixes and snapshot aliases; --selftest and --mutants prove every rule. The test -x ... || true shape self-gates a missing script, and a deny still passes through it (JSON on stdout, exit 0)"
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "Bash",
       "script": "enforce-census.sh",
       "targets": ["user", "project"],
       "entry": {
