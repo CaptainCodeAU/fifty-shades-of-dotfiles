@@ -47,6 +47,12 @@
 # capped at 400 chars and token-shaped strings and credential-named
 # assignments are redacted first: a guard must not become the leak.
 #
+# FAILS CLOSED when it cannot finish: the verdict is computed in a child, and
+# no verdict within 3 s (guard-timeout) or a child that exits without one
+# (guard-no-verdict) is a DENY that says it is not a match. The harness allows
+# the command once this hook passes its 5 s timeout, so a stall used to be an
+# allow (W-20260923-A54).
+#
 # FAILS OPEN on malformed JSON or an empty command (exit 0, no decision): a
 # crash here would block every Bash call. jq missing, or the lexer failing,
 # SHOUTS through additionalContext instead of going quiet.
@@ -368,6 +374,8 @@ _msg() { # $1 = rule id -> what it does, then the safe route
     rimraf)         echo "rimraf deletes outside the Trash. SAFE ROUTE: bare rm -r." ;;
     disk)           echo "diskutil erase/partition, mkfs, newfs and wipefs destroy whole volumes. SAFE ROUTE: ask Gavin." ;;
     tmutil)         echo "tmutil delete* removes backups or snapshots. SAFE ROUTE: ask Gavin." ;;
+    guard-timeout)  echo "the guard gave NO VERDICT within ${DEADLINE:-3} s (a timeout, not a match). SAFE ROUTE: split the command into smaller pieces, or ask Gavin." ;;
+    guard-no-verdict) echo "the guard exited without a verdict (a crash, not a match). SAFE ROUTE: ask Gavin; the guard's --selftest shows what broke." ;;
     trash-empty)    echo "emptying the Trash (trash-empty, trash-rm, Finder empty trash) makes every earlier delete permanent. SAFE ROUTE: ask Gavin." ;;
     *)              echo "this command destroys data outside the Trash. SAFE ROUTE: ask Gavin." ;;
   esac
@@ -553,12 +561,12 @@ _argv() {
       [ $# -gt 0 ] && _argv "$adepth" "$@"; return 0 ;;
     exec)
       while [ $# -gt 0 ]; do
-        case "$1" in -a) shift 2 ;; -c|-l|-cl|-lc) shift ;; --) shift; break ;; *) break ;; esac
+        case "$1" in -a) shift 2 || set -- ;; -c|-l|-cl|-lc) shift ;; --) shift; break ;; *) break ;; esac
       done
       [ $# -gt 0 ] && _argv "$adepth" "$@"   #M: exec look-through
       return 0 ;;
     time)
-      while [ $# -gt 0 ]; do case "$1" in -o) shift 2 ;; -*) shift ;; *) break ;; esac; done
+      while [ $# -gt 0 ]; do case "$1" in -o) shift 2 || set -- ;; -*) shift ;; *) break ;; esac; done
       [ $# -gt 0 ] && _argv "$adepth" "$@"   #M: time look-through
       return 0 ;;
     repeat)
@@ -569,7 +577,7 @@ _argv() {
       while [ $# -gt 0 ]; do
         case "$1" in
           --) shift; break ;;
-          -u|-g|-h|-p|-C|-D|-r|-t|-T|-U|-c) shift 2 ;;
+          -u|-g|-h|-p|-C|-D|-r|-t|-T|-U|-c) shift 2 || set -- ;;
           -*) shift ;;
           *) break ;;
         esac
@@ -580,8 +588,8 @@ _argv() {
       while [ $# -gt 0 ]; do
         case "$1" in
           --) shift; break ;;
-          -u|-C|-P|--unset|--chdir) shift 2 ;;
-          -S|--split-string) _shell_text "${2:-}"; shift 2; [ -n "$REASON_ID" ] && return 0 ;;   #M: env -S
+          -u|-C|-P|--unset|--chdir) shift 2 || set -- ;;
+          -S|--split-string) _shell_text "${2:-}"; shift 2 || set --; [ -n "$REASON_ID" ] && return 0 ;;   #M: env -S
           --split-string=*) _shell_text "${1#*=}"; shift; [ -n "$REASON_ID" ] && return 0 ;;
           -*) shift ;;
           *) if _is_assign "$1"; then
@@ -599,31 +607,31 @@ _argv() {
       done
       return 0 ;;
     nice)
-      while [ $# -gt 0 ]; do case "$1" in -n) shift 2 ;; -*) shift ;; *) break ;; esac; done
+      while [ $# -gt 0 ]; do case "$1" in -n) shift 2 || set -- ;; -*) shift ;; *) break ;; esac; done
       [ $# -gt 0 ] && _argv "$adepth" "$@"   #M: nice look-through
       return 0 ;;
     timeout|gtimeout)
-      while [ $# -gt 0 ]; do case "$1" in -s|-k) shift 2 ;; -*) shift ;; *) break ;; esac; done
+      while [ $# -gt 0 ]; do case "$1" in -s|-k) shift 2 || set -- ;; -*) shift ;; *) break ;; esac; done
       [ $# -gt 0 ] && shift                     # the duration
       [ $# -gt 0 ] && _argv "$adepth" "$@"   #M: timeout look-through
       return 0 ;;
     caffeinate)
-      while [ $# -gt 0 ]; do case "$1" in -t|-w) shift 2 ;; -*) shift ;; *) break ;; esac; done
+      while [ $# -gt 0 ]; do case "$1" in -t|-w) shift 2 || set -- ;; -*) shift ;; *) break ;; esac; done
       [ $# -gt 0 ] && _argv "$adepth" "$@"   #M: caffeinate look-through
       return 0 ;;
     stdbuf|gstdbuf)
-      while [ $# -gt 0 ]; do case "$1" in -i|-o|-e) shift 2 ;; -*) shift ;; *) break ;; esac; done
+      while [ $# -gt 0 ]; do case "$1" in -i|-o|-e) shift 2 || set -- ;; -*) shift ;; *) break ;; esac; done
       [ $# -gt 0 ] && _argv "$adepth" "$@"   #M: stdbuf look-through
       return 0 ;;
     watch)
-      while [ $# -gt 0 ]; do case "$1" in -n|--interval) shift 2 ;; -*) shift ;; *) break ;; esac; done
+      while [ $# -gt 0 ]; do case "$1" in -n|--interval) shift 2 || set -- ;; -*) shift ;; *) break ;; esac; done
       [ $# -gt 0 ] && _shell_text "$*"   #M: watch look-through
       return 0 ;;
     xargs|gxargs)
       while [ $# -gt 0 ]; do
         case "$1" in
           --) shift; break ;;
-          -I|-n|-P|-L|-s|-d|-E|-a|-J|-R|-S|--arg-file|--delimiter|--max-args|--max-procs|--max-lines|--max-chars|--process-slot-var) shift 2 ;;
+          -I|-n|-P|-L|-s|-d|-E|-a|-J|-R|-S|--arg-file|--delimiter|--max-args|--max-procs|--max-lines|--max-chars|--process-slot-var) shift 2 || set -- ;;
           -*) shift ;;
           *) break ;;
         esac
@@ -755,7 +763,7 @@ _shell_cmd() { # sh/bash/zsh [opts] [-c CODE | script | -s]
     w="$1"
     case "$w" in
       --) shift; break ;;
-      -o|+o|-O|+O) shift 2; continue ;;
+      -o|+o|-O|+O) shift 2 || set --; continue ;;
       -|--noprofile|--norc|--login|--posix) shift; continue ;;
       --*) shift; continue ;;
       -*|+*)
@@ -784,7 +792,7 @@ _interp_cmd() { # $1 = python|node|perl|ruby, then args
           -c) _code_deletes "${2:-}"; return 0 ;;                                     #M: python -c
           -c*) _code_deletes "${w#-c}"; return 0 ;;
           -m) return 0 ;;
-          -W|-X) shift 2; continue ;;
+          -W|-X) shift 2 || set --; continue ;;
           -[A-Za-z]*c) _code_deletes "${2:-}"; return 0 ;;   #M: python -Xc cluster (a GLOB: letter, anything, c)
           -*) shift; continue ;;
           *) return 0 ;;                            # a script file: invisible
@@ -793,14 +801,14 @@ _interp_cmd() { # $1 = python|node|perl|ruby, then args
         case "$w" in
           -e|--eval|-p|--print) _code_deletes "${2:-}"; return 0 ;;                  #M: node -e
           --eval=*|--print=*) _code_deletes "${w#*=}"; return 0 ;;
-          -r|--require|--import|--loader) shift 2; continue ;;
+          -r|--require|--import|--loader) shift 2 || set --; continue ;;
           -*) shift; continue ;;
           *) return 0 ;;
         esac ;;
       perl|ruby)
         case "$w" in
-          -e|-E) _code_deletes "${2:-}"; [ -n "$REASON_ID" ] && return 0; shift 2; continue ;;   #M: perl/ruby -e
-          -[A-Za-z]*[eE]) _code_deletes "${2:-}"; [ -n "$REASON_ID" ] && return 0; shift 2; continue ;;
+          -e|-E) _code_deletes "${2:-}"; [ -n "$REASON_ID" ] && return 0; shift 2 || set --; continue ;;   #M: perl/ruby -e
+          -[A-Za-z]*[eE]) _code_deletes "${2:-}"; [ -n "$REASON_ID" ] && return 0; shift 2 || set --; continue ;;
           -[A-Za-z]*[eE]?*) _code_deletes "${w#*[eE]}"; [ -n "$REASON_ID" ] && return 0; shift; continue ;;
           -) SI_KIND[$CUR_PID]=code; return 0 ;;
           -*) shift; continue ;;
@@ -817,7 +825,7 @@ _uv_cmd() { # uv [global opts] run|cache|tool ...
   local adepth="$1"; shift
   while [ $# -gt 0 ]; do
     case "$1" in
-      --directory|--project|--cache-dir|--config-file|--color|--python|-p) shift 2 ;;
+      --directory|--project|--cache-dir|--config-file|--color|--python|-p) shift 2 || set -- ;;
       -*) shift ;;
       *) break ;;
     esac
@@ -831,7 +839,7 @@ _uv_cmd() { # uv [global opts] run|cache|tool ...
       while [ $# -gt 0 ]; do
         case "$1" in
           --) shift; break ;;
-          --with|--with-editable|--with-requirements|--python|-p|--project|--directory|--package|--extra|--group|--only-group|--no-group|--env-file|--index|--default-index|--index-url|--extra-index-url|--find-links|-f|--upgrade-package|--reinstall-package|--cache-dir|--config-file|--exclude-newer|--python-platform|--color) shift 2 ;;
+          --with|--with-editable|--with-requirements|--python|-p|--project|--directory|--package|--extra|--group|--only-group|--no-group|--env-file|--index|--default-index|--index-url|--extra-index-url|--find-links|-f|--upgrade-package|--reinstall-package|--cache-dir|--config-file|--exclude-newer|--python-platform|--color) shift 2 || set -- ;;
           -m|--module) return 0 ;;
           -*) shift ;;
           *) break ;;
@@ -895,8 +903,8 @@ _git_cmd() {
   # global options, and the directory they point at
   while [ $# -gt 0 ]; do
     case "$1" in
-      -C) case "${2:-}" in /*) gdir="${2:-}" ;; *) [ -n "$gdir" ] && gdir="$gdir/${2:-}" ;; esac; shift 2 ;;   #M: git -C
-      -c|--git-dir|--work-tree|--namespace|--config-env|--super-prefix) shift 2 ;;
+      -C) case "${2:-}" in /*) gdir="${2:-}" ;; *) [ -n "$gdir" ] && gdir="$gdir/${2:-}" ;; esac; shift 2 || set -- ;;   #M: git -C
+      -c|--git-dir|--work-tree|--namespace|--config-env|--super-prefix) shift 2 || set -- ;;
       -*) shift ;;
       *) break ;;
     esac
@@ -1016,6 +1024,10 @@ rm () {
 SNAP
   local save_snap="$SNAP_DIR"; SNAP_DIR="$fx/snap"; SNAP_DONE=0
 
+  # --mutants sets DEL_GUARD_FAILFAST=1: a mutant is caught at its first
+  # failing arm, so the run is not the full selftest times every rule line
+  _failfast() { [ "${DEL_GUARD_FAILFAST:-0}" = 1 ] && { echo "del-guard selftest: stopped at the first failure (DEL_GUARD_FAILFAST)"; exit 1; }; return 0; }
+
   # Every arm runs twice: with the lexer's prefilter, and with it off
   # (DEL_GUARD_NOFILTER=1). Both must give the expected answer, which proves
   # the filter never hides a command the rules would have denied.
@@ -1024,7 +1036,7 @@ SNAP
     _classify "$3" "${4:-$fx/repo}"; got="${REASON_ID:--}"
     DEL_GUARD_NOFILTER=1 _classify "$3" "${4:-$fx/repo}"; got2="${REASON_ID:--}"
     if [ "$got" = "$1" ] && [ "$got2" = "$1" ]; then passes=$((passes + 1)); printf 'ok    %-26s %s\n' "$1" "$2"
-    else fails=$((fails + 1)); printf 'FAIL  %-26s %s  (got %s, unfiltered %s)\n' "$1" "$2" "$got" "$got2"; fi
+    else fails=$((fails + 1)); printf 'FAIL  %-26s %s  (got %s, unfiltered %s)\n' "$1" "$2" "$got" "$got2"; _failfast; fi
   }
 
   echo "=== DENY arms: each must be refused by the named rule ==="
@@ -1303,7 +1315,7 @@ SNAP
   }
   _chk() { # $1 = label, $2 = condition result (0 ok)
     if [ "$2" -eq 0 ]; then passes=$((passes + 1)); printf 'ok    %-26s %s\n' hook "$1"
-    else fails=$((fails + 1)); printf 'FAIL  %-26s %s\n' hook "$1"; fi
+    else fails=$((fails + 1)); printf 'FAIL  %-26s %s\n' hook "$1"; _failfast; fi
   }
   _hook 'echo capture-test-for-del-guard'
   [ "$rc" -eq 0 ] && [ -z "$out" ]; _chk 'real payload, harmless: exit 0, no output' $?
@@ -1351,6 +1363,66 @@ SNAP
   _time3 "$hd"
   [ "$rc" -eq 0 ] && [ -z "$out" ] && [ "$best" -lt 100 ]; _chk "5 KB heredoc commit message: ${best} ms (< 100), allowed" $?
 
+  echo "=== SHIFT arms: a value flag given LAST must not stall the guard (W-20260923-A54) ==="
+  # Found 2026-09-23: in bash a shift of 2 with one word left FAILS and shifts
+  # nothing, so `while [ $# -gt 0 ]` spun forever, the harness killed the hook
+  # at 5 s, and the command ran unchecked. Each arm runs the real hook under a
+  # alarm (so an old copy that spins is a FAIL here, not a hung selftest) and
+  # times that one run; a verdict must arrive within 1 s.
+  local hb_ms hb_d hb_r f
+  _hookb() { # $1 = command, $2 = DEL_GUARD_NOFILTER value, $3 = alarm s (default 2), then VAR=value env -> out, rc, hb_ms, hb_d, hb_r
+    local pl s al="${3:-2}" nf="${2:-0}"; pl="$(printf '%s' "$env_json" | jq -c --arg c "$1" --arg cwd "$fx/repo" '.tool_input.command = $c | .cwd = $cwd')"
+    shift 3 || set --
+    # time's report goes to a fixture file so `out` and `rc` stay in this shell
+    { TIMEFORMAT=%R; time { out="$(printf '%s' "$pl" | env DEL_GUARD_LOG="$logf" DEL_GUARD_SNAPSHOT_DIR="$fx/snap" DEL_GUARD_NOFILTER="${nf:-0}" "$@" perl -e 'alarm shift; exec @ARGV' "$al" "$self" 2>&1)"; rc=$?; }; } 2> "$fx/time.txt"
+    s="$(tail -n 1 "$fx/time.txt")"; hb_ms=$(( 10#${s%.*} * 1000 + 10#${s#*.} ))
+    hb_d="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)"
+    hb_r="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty' 2>/dev/null)"
+  }
+  # every wrapper flag that takes a value, given last; sudo/doas/env/git/uv
+  # cover their option loops, the interpreters cover _interp_cmd, bash/zsh
+  # cover _shell_cmd
+  for f in 'time -o' 'nice -n' 'exec -a' 'echo x | xargs -n' 'echo x | xargs -I' 'echo x | gxargs --max-args' \
+           'sudo -u' 'doas -u' 'env -u' 'env -C' 'env -S' 'env --split-string' 'timeout -s' 'gtimeout -k' \
+           'caffeinate -t' 'stdbuf -o' 'watch -n' 'git -C' 'git -c' 'git --git-dir' \
+           'python3 -W' 'python3 -X' 'node -r' 'node --require' 'perl -e' 'perl -ne' 'ruby -E' \
+           'bash -o' 'zsh +o' 'sh -O' 'uv --project' 'uv -p' 'uv run --with' 'uv run -p' 'uv run --env-file'; do
+    _hookb "$f; unlink f" 0
+    [ "$hb_d" = deny ] && [[ $hb_r == *'(unlink)'* ]] && [ "$hb_ms" -lt 1000 ]; _chk "'$f; unlink f': denied as unlink in ${hb_ms} ms (< 1000)" $?
+    _hookb "$f; unlink f" 1
+    [ "$hb_d" = deny ] && [[ $hb_r == *'(unlink)'* ]] && [ "$hb_ms" -lt 1000 ]; _chk "same, prefilter off: ${hb_ms} ms, denied" $?
+    _hookb "$f" 0
+    [ "$rc" -eq 0 ] && [ -z "$out" ] && [ "$hb_ms" -lt 1000 ]; _chk "'$f' alone: allowed in ${hb_ms} ms (< 1000)" $?
+  done
+  # The class, not only the instances above: no shift of 2 or more in this
+  # file may run unguarded. The positive arm (the guarded form IS found)
+  # proves the scan read the file; a zero from a scan that read nothing is
+  # not a pass.
+  local sg su
+  sg="$(awk '/shift [2-9] \|\| set --/ {n++} END {print n+0}' "$self")"
+  su="$(awk '/shift [2-9]/ && !/shift [2-9] \|\| set --/ {n++} END {print n+0}' "$self")"
+  [ "$sg" -ge 20 ] && [ "$su" -eq 0 ]; _chk "lint: $sg guarded multi-shifts (>= 20, the control), $su unguarded (must be 0)" $?
+
+  echo "=== DEADLINE arms: no verdict in time is a DENY that says so (fail closed) ==="
+  # DEL_GUARD_TEST_STALL makes the verdict child sleep, DEL_GUARD_TEST_CRASH
+  # makes it exit early: the two ways a guard can go quiet. Harmless commands
+  # throughout, so a deny here can only come from the fail-closed path.
+  _hookb 'echo control-ok' 0 3 DEL_GUARD_DEADLINE=1
+  [ "$rc" -eq 0 ] && [ -z "$out" ] && [ "$hb_ms" -lt 1000 ]; _chk "control: deadline 1 s, no stall: allowed in ${hb_ms} ms (the deadline itself denies nothing)" $?
+  _hookb 'echo control-ok' 0 4 DEL_GUARD_DEADLINE=1 DEL_GUARD_TEST_STALL=6
+  [ "$hb_d" = deny ] && [[ $hb_r == 'BLOCKED (guard-timeout)'* ]] && [ "$hb_ms" -lt 2500 ]; _chk "stall 6 s, deadline 1 s: denied as guard-timeout in ${hb_ms} ms (< 2500)" $?
+  [[ $hb_r == *'NOT a match'* ]] && [[ $hb_r == *'timeout, not a match'* ]]; _chk 'the timeout deny says it was a timeout, not a match' $?
+  grep -q "BLOCKED $HOOK_NAME \"guard-timeout\"" "$logf" 2>/dev/null; _chk 'the timeout is logged' $?
+  # the deadline can only be lowered: 99 is ignored and the built-in 3 s holds,
+  # under the harness's 5 s (a stall past 5 s would be an allow)
+  _hookb 'echo control-ok' 0 6 DEL_GUARD_DEADLINE=99 DEL_GUARD_TEST_STALL=8
+  [ "$hb_d" = deny ] && [[ $hb_r == 'BLOCKED (guard-timeout)'* ]] && [ "$hb_ms" -lt 4500 ]; _chk "DEL_GUARD_DEADLINE=99 is ignored: denied at the built-in deadline in ${hb_ms} ms (< 4500, harness gives 5000)" $?
+  _hookb 'echo control-ok' 0 3 DEL_GUARD_TEST_CRASH=1
+  [ "$hb_d" = deny ] && [[ $hb_r == 'BLOCKED (guard-no-verdict)'* ]] && [[ $hb_r == *'crash, not a match'* ]] && [ "$hb_ms" -lt 1000 ]; _chk "child exits before its verdict: denied as guard-no-verdict in ${hb_ms} ms" $?
+  # a verdict still crosses the child boundary intact: rule id and where
+  _hookb 'gwtrm ../wt' 0 3 DEL_GUARD_DEADLINE=1
+  [ "$hb_d" = deny ] && [[ $hb_r == 'BLOCKED (git-worktree-remove)'* ]] && [[ $hb_r == *"Found: alias gwtrm='git worktree remove'"* ]]; _chk 'a rule verdict and its Found: line cross from the child intact' $?
+
   # The fixture dir is left in $TMPDIR on purpose: deleting it would go to the
   # Trash (or fail inside the sandbox), and the OS clears $TMPDIR.
   echo
@@ -1381,7 +1453,7 @@ _mutants() {
       broken=$((broken + 1)); printf 'BROKEN  line %-4s %s (lexer fails, not a rule test)\n' "$ln" "$tag"; continue
     fi
     # a removed line can loop forever; 300 s is five times a normal selftest
-    if perl -e 'alarm shift; exec @ARGV' 300 "$tmp/m.sh" --selftest >/dev/null 2>&1; then
+    if DEL_GUARD_FAILFAST=1 perl -e 'alarm shift; exec @ARGV' 300 "$tmp/m.sh" --selftest >/dev/null 2>&1; then
       missed=$((missed + 1)); printf 'MISSED  line %-4s %s\n' "$ln" "$tag"
     else
       caught=$((caught + 1)); printf 'caught  line %-4s %s\n' "$ln" "$tag"
@@ -1395,7 +1467,7 @@ case "${1:-}" in
   --selftest) _selftest; exit $? ;;
   --mutants)  _mutants "${2:-}"; exit $? ;;   # optional: only tags containing this text
   --help|-h)
-    sed -n '2,55p' "$0" | sed 's/^# \{0,1\}//'
+    awk 'NR > 1 && /^$/ { exit } NR > 1' "$0" | sed 's/^# \{0,1\}//'   # the header, up to its first blank line
     exit 0 ;;
   --classify) # debugging aid: prints the rule id and where, or "allow"
     _classify "${2:-}" "${3:-$PWD}"
@@ -1416,7 +1488,48 @@ cmd="$(printf '%s' "$payload" | jq -r '.tool_input.command // ""' 2>/dev/null)" 
 [ -n "$cmd" ] || exit 0
 cwd="$(printf '%s' "$payload" | jq -r '.cwd // ""' 2>/dev/null)"
 
-_classify "$cmd" "$cwd"
+# FAIL CLOSED ON A STALL. The harness gives this hook 5 s ("timeout": 5 in
+# settings) and then lets the command run, so a guard that never answers is a
+# guard that allows. The verdict is computed in a child; this shell waits at
+# most DEADLINE seconds for its one line and DENIES when none arrives
+# (guard-timeout), or when the child exits without one (guard-no-verdict).
+# DEL_GUARD_DEADLINE can only LOWER the deadline (the selftest uses 1): a
+# caller who sets it cannot buy back the time to stall past the harness.
+DEADLINE=3
+case "${DEL_GUARD_DEADLINE:-}" in 1|2) DEADLINE="$DEL_GUARD_DEADLINE" ;; esac   #M: deadline can only be lowered
+_verdict_child() {
+  trap 'printf "X\n"' EXIT          # any exit before the verdict says so
+  # Test seams, for the selftest's fail-closed arms. Both only ever make the
+  # child LATE or DEAD, which this shell turns into a deny: neither can
+  # produce an allow, so a caller who sets them gains nothing but refusals.
+  case "${DEL_GUARD_TEST_STALL:-}" in [1-9]) sleep "$DEL_GUARD_TEST_STALL" >/dev/null 2>&1 ;; esac
+  [ "${DEL_GUARD_TEST_CRASH:-}" = 1 ] && exit 7
+  _classify "$cmd" "$cwd"
+  trap - EXIT
+  printf 'V%s%s%s%s%s%s\n' "$US" "$REASON_ID" "$US" "${LEXER_FAILED:-0}" "$US" "${REASON_WHERE//$'\n'/$RSC}"
+}
+exec 3< <(_verdict_child 2>/dev/null)
+vchild=$!
+vline=""; IFS= read -r -t "$DEADLINE" -u 3 vline
+case "$vline" in
+  V"$US"*)
+    IFS="$US"; vf=($vline); IFS=$' \t\n'
+    REASON_ID="${vf[1]:-}"; LEXER_FAILED="${vf[2]:-0}"; REASON_WHERE="${vf[3]:-}"; REASON_WHERE="${REASON_WHERE//$RSC/$'\n'}"
+    [ -n "$REASON_ID" ] && REASON="$(_msg "$REASON_ID")" ;;
+  X)
+    _deny guard-no-verdict "the guard's child exited before its verdict"                        #M: crash fails closed
+    ;;
+  *)
+    # nothing within the deadline: the child is still working, or died too
+    # hard for its EXIT trap (a signal); either way it gave no verdict
+    if kill -0 "$vchild" 2>/dev/null; then
+      kill -KILL "$vchild" 2>/dev/null
+      _deny guard-timeout "no verdict within ${DEADLINE} s"                                     #M: timeout fails closed
+    else
+      _deny guard-no-verdict "the guard's child died without a verdict"
+    fi ;;
+esac
+exec 3<&-
 
 if [ -z "$REASON_ID" ]; then
   if [ "${LEXER_FAILED:-0}" -eq 1 ]; then
@@ -1426,7 +1539,12 @@ if [ -z "$REASON_ID" ]; then
 fi
 
 _log "$REASON_ID" "$cmd"
-jq -n --arg r "$REASON" --arg w "$REASON_WHERE" --arg f "$FOOTER" --arg id "$REASON_ID" \
+case "$REASON_ID" in
+  guard-*) head="the deletion guard could not finish checking this command, so it is refused (fail closed). This is NOT a match: nothing in it was found to be a delete."
+           foot="A guard that stalls would let the command through when the harness gives up on it, so it refuses instead. Tell Gavin if an ordinary command hits this; run enforce-no-permanent-delete.sh --selftest." ;;
+  *)       head="this command deletes or destroys data outside the Trash."; foot="$FOOTER" ;;
+esac
+jq -n --arg r "$REASON" --arg w "$REASON_WHERE" --arg f "$foot" --arg id "$REASON_ID" --arg h "$head" \
   '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny",
-    permissionDecisionReason: ("BLOCKED (" + $id + "): this command deletes or destroys data outside the Trash.\n\n" + (if $w != "" then "Found: " + $w + "\n" else "" end) + $r + "\n\n" + $f)}}'
+    permissionDecisionReason: ("BLOCKED (" + $id + "): " + $h + "\n\n" + (if $w != "" then "Found: " + $w + "\n" else "" end) + $r + "\n\n" + $f)}}'
 exit 0

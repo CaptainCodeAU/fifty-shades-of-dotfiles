@@ -292,6 +292,8 @@ inside `( )`, `{ }`, `$( )`, backticks, `<( )`, `=( )`, behind `VAR=1`, `sudo`, 
 | `docker`/`podman` `... prune`, `volume rm`, `compose down -v`; `brew cleanup`, `--zap`; `pnpm store prune`; `uv cache clean/prune`; `bun pm cache rm`; `rimraf`                                                                                                    | **denied** | ask Gavin (`rimraf`: bare `rm -r`)               |
 | `diskutil erase*`/`partitionDisk`/..., `mkfs*`, `newfs*`, `wipefs`, `tmutil delete*`, `trash-empty`, Finder "empty trash"                                                                                                                                          | **denied** | ask Gavin                                        |
 | an alias from the shell snapshot whose expansion is any of the above                                                                                                                                                                                               | **denied** | (as the expansion)                               |
+| a wrapper's value flag given LAST with no value (`time -o`, `nice -n`, `exec -a`, `xargs -n`, `sudo -u`, `env -S`, `git -C`, `perl -e`, `uv run --with`, ...), then a denied command (`time -o; unlink f`)                                                         | **denied** | (as the later command)                           |
+| the guard itself gives no verdict within 3 s (`guard-timeout`), or its child exits without one (`guard-no-verdict`); the denial says it is NOT a match                                                                                                             | **denied** | split the command, or ask Gavin                  |
 | bare `rm`, `command rm`, `\rm`, `rm *(.)`, `find -exec rm`, `git clean -n`, `git branch -d`, `git restore --staged`, `cmd > out`                                                                                                                                   | allowed    |                                                  |
 | a script or Makefile target that deletes internally, a compiled program                                                                                                                                                                                            | invisible  | the rm shim still covers a bare `rm` inside it   |
 | a command name in a variable (`$RM x`, zsh `$=x`), git aliases, `ssh host 'rm ...'`                                                                                                                                                                                | invisible  |                                                  |
@@ -309,9 +311,28 @@ covered the moment it reaches the snapshot. Three oh-my-zsh aliases that hide a 
 `gpristine`) are ALSO denied by name (Gavin, 2026-09-23), so they stay denied if a hook cannot read
 the snapshot.
 
-**It fails open, loudly.** Malformed JSON or an empty command is allowed with no decision, because
-a crash here would block every Bash call. A missing `jq`, or a lexer that fails, is reported through
-`additionalContext` instead of going quiet.
+**A stall is a deny, not an allow.** The hook is registered with `"timeout": 5` and `|| true`, so
+once it runs past 5 s the harness lets the command through. Until 2026-09-23 a value flag given
+last (`time -o`, `nice -n`, or any flag at the 20 unguarded shift sites) spun the option loops forever, and `time -o; unlink f`
+ran unchecked (W-20260923-A54). Two fixes: every multi-word `shift` is guarded, and the verdict is
+computed in a child the hook waits on for at most **3 s**. What each way of going quiet does now:
+
+| What goes wrong                                                              | Result                                                          | Evidence                                          |
+| ---------------------------------------------------------------------------- | --------------------------------------------------------------- | ------------------------------------------------- |
+| the classifier runs past 3 s                                                 | **denied** (`guard-timeout`)                                    | selftest DEADLINE arm, test seam                  |
+| the classifier exits before its verdict (an `exit`, a fatal shell error)     | **denied** (`guard-no-verdict`, via an EXIT trap)               | selftest DEADLINE arm, test seam                  |
+| the classifier is killed by a signal                                         | **denied** (`guard-no-verdict`)                                 | one manual run in a scratch copy, not in selftest |
+| `DEL_GUARD_DEADLINE` set above 2                                             | ignored; the 3 s deadline holds                                 | selftest arm (99: denied under 4.5 s)             |
+| the lexer (awk) fails                                                        | allowed, `additionalContext` warning                            | unchanged                                         |
+| `jq` missing                                                                 | allowed, `additionalContext` warning                            | unchanged                                         |
+| malformed JSON, empty stdin, empty command, no `tool_input`                  | allowed, no decision (a crash here would block every Bash call) | selftest HOOK arms                                |
+| a stall BEFORE the deadline starts: stdin never closing, `jq` itself hanging | allowed at the harness's 5 s timeout                            | not covered                                       |
+| a spinning `awk` child of a killed classifier                                | keeps running as an orphan (the verdict is already a deny)      | not covered; no awk loop is known to spin         |
+
+The test seams `DEL_GUARD_TEST_STALL=<1-9>` and `DEL_GUARD_TEST_CRASH=1` only make the child late or
+dead, which the hook turns into a deny, so setting them cannot skip the guard. A hook's
+environment is the harness's, not the Bash command's: `VAR=1 cmd` in a command reaches `cmd`, never
+the hook.
 
 **Every denial is logged** to `${XDG_STATE_HOME:-~/.local/state}/dotfiles/hooks-security.log` in
 the sibling hooks' shape, with the command capped at 400 characters and token-shaped strings and
