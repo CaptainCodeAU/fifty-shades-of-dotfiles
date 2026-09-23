@@ -98,7 +98,7 @@ function loadaliases(   line, l, k, v) {
     if (length(v) >= 2 && substr(v, 1, 1) == Q && substr(v, length(v), 1) == Q) {
       v = substr(v, 2, length(v) - 2); gsub(Q "\\\\" Q Q, Q, v)
     }
-    AV[substr(l, 1, k - 1)] = v; hasal = 1
+    AV[substr(l, 1, k - 1)] = v; hasal = 1   #M: alias table loaded
   }
   close(snap)
 }
@@ -136,13 +136,13 @@ function emitcmd(   k, out, w, op, intr, nop, fw, data, al, safe) {
     for (k = 1; k <= nw[d]; k++) {
       w = W[d, k]
       if (substr(w, 1, 1) == OPM) {
-        op = substr(w, 2); if (op == ">" || op == "&>" || op == ">&") intr = 1
+        op = substr(w, 2); if (op == ">" || op == "&>" || op == ">&") intr = 1   #M: prefilter: truncating redirect
         k++; continue
       }
       nop++
       if (fw == "" && w !~ /^[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?\+?=/) fw = w
       else if (fw != "") data = (data == "") ? w : data " " w
-      if (trig(w)) intr = 1
+      if (trig(w)) intr = 1   #M: prefilter: trigger words
       if (index(w, "SAFE_RM_OFF") == 1) safe = 1
       if (hasal && (w in AV)) { intr = 1; al = 1 }
     }
@@ -150,12 +150,12 @@ function emitcmd(   k, out, w, op, intr, nop, fw, data, al, safe) {
     # echo/printf/print is DATA: emitted as stdin for its pipeline, which only
     # matters when an interpreter reads it (echo code | python3)
     if (!al && (fw == "echo" || fw == "printf" || fw == "print") && !(fw in AV)) {
-      if (!safe) { print "H" US pid[d] US enc(data); nw[d] = 0; return }
+      if (!safe) { print "H" US pid[d] US enc(data); nw[d] = 0; return }   #M: echo is data for its pipeline
     }
     if (intr) {
       if (al) for (k = 1; k <= nw[d]; k++) {
         w = W[d, k]
-        if ((w in AV) && !(w in EA)) { EA[w] = 1; print "A" US w US enc(AV[w]) }
+        if ((w in AV) && !(w in EA)) { EA[w] = 1; print "A" US w US enc(AV[w]) }   #M: alias records sent
       }
       out = "C" US pid[d]
       for (k = 1; k <= nw[d]; k++) out = out US enc(W[d, k])
@@ -171,7 +171,7 @@ function readheredocs(i,   k, j, line, t, body, rest) {
     while (i < n) {
       rest = substr(s, i + 1); j = index(rest, "\n")
       if (j == 0) { line = rest; i = n } else { line = substr(rest, 1, j - 1); i = i + j }
-      t = line; if (HT[k]) sub(/^\t+/, "", t)
+      t = line; if (HT[k]) sub(/^\t+/, "", t)   #M: lexer: <<- strips tabs
       if (t == HD[k]) break
       body = body line "\n"
     }
@@ -196,7 +196,7 @@ function brace(i,   depth, c) {
   while (i <= n) {
     c = substr(s, i, 1)
     if (c == "\\") { i += 2; continue }
-    if (c == "$" && substr(s, i + 1, 1) == "(") { i = lex(i + 2, ")"); continue }
+    if (c == "$" && substr(s, i + 1, 1) == "(") { i = lex(i + 2, ")"); continue }   #M: lexer: $( ) inside ${ }
     if (c == "{") depth++
     else if (c == "}") { depth--; if (depth == 0) return i + 1 }
     i++
@@ -219,7 +219,7 @@ function ansic(i,   c, c2, v) {
       else if (c2 == "t") cur[d] = cur[d] "\t"
       else if (c2 == "x") {
         v = hexval(substr(s, i + 2, 2))
-        if (v >= 0) { cur[d] = cur[d] sprintf("%c", v); i += (index(HEX, tolower(substr(s, i + 3, 1))) > 0) ? 4 : 3; continue }
+        if (v >= 0) { cur[d] = cur[d] sprintf("%c", v); i += (index(HEX, tolower(substr(s, i + 3, 1))) > 0) ? 4 : 3; continue }   #M: lexer: $'\\xHH'
         cur[d] = cur[d] c2
       }
       else cur[d] = cur[d] c2
@@ -239,9 +239,9 @@ function dq(i,   c, c2, j) {
       if (c2 == "\"" || c2 == "\\" || c2 == "$" || c2 == "`") { cur[d] = cur[d] c2; i += 2; continue }
       cur[d] = cur[d] c; i++; continue
     }
-    if (c == "$" && substr(s, i + 1, 1) == "(") { i = lex(i + 2, ")"); cur[d] = cur[d] "$(...)"; continue }
+    if (c == "$" && substr(s, i + 1, 1) == "(") { i = lex(i + 2, ")"); cur[d] = cur[d] "$(...)"; continue }   #M: lexer: $( ) inside double quotes
     if (c == "$" && substr(s, i + 1, 1) == "{") { j = brace(i + 2); cur[d] = cur[d] substr(s, i, j - i); i = j; continue }
-    if (c == "`") { i = lex(i + 1, "`"); cur[d] = cur[d] "$(...)"; continue }
+    if (c == "`") { i = lex(i + 1, "`"); cur[d] = cur[d] "$(...)"; continue }   #M: lexer: backticks inside double quotes
     cur[d] = cur[d] c; i++
   }
   return i
@@ -264,13 +264,13 @@ function lex(i, term,   c, c2, j, op) {
     if (c == "'") {
       j = index(substr(s, i + 1), "'")
       if (j == 0) { cur[d] = cur[d] substr(s, i + 1); inw[d] = 1; i = n + 1; continue }
-      cur[d] = cur[d] substr(s, i + 1, j - 1); inw[d] = 1; i = i + j + 1; continue
+      cur[d] = cur[d] substr(s, i + 1, j - 1); inw[d] = 1; i = i + j + 1; continue   #M: lexer: single quotes
     }
-    if (c == "\"") { inw[d] = 1; i = dq(i + 1); continue }
+    if (c == "\"") { inw[d] = 1; i = dq(i + 1); continue }   #M: lexer: double quotes
     if (c == "$") {
       c2 = substr(s, i + 1, 1)
       if (c2 == "'") { inw[d] = 1; i = ansic(i + 2); continue }
-      if (c2 == "(") { i = lex(i + 2, ")"); cur[d] = cur[d] "$(...)"; inw[d] = 1; continue }
+      if (c2 == "(") { i = lex(i + 2, ")"); cur[d] = cur[d] "$(...)"; inw[d] = 1; continue }   #M: lexer: $( ) unquoted
       if (c2 == "{") { j = brace(i + 2); cur[d] = cur[d] substr(s, i, j - i); inw[d] = 1; i = j; continue }
       cur[d] = cur[d] c; inw[d] = 1; i++; continue
     }
@@ -280,21 +280,17 @@ function lex(i, term,   c, c2, j, op) {
     }
     if ((c == "<" || c == ">" || c == "=") && substr(s, i + 1, 1) == "(" && (c != "=" || !inw[d])) {
       if (c != "=") flushword()
-      i = lex(i + 2, ")"); cur[d] = cur[d] "$(...)"; inw[d] = 1; continue
+      i = lex(i + 2, ")"); cur[d] = cur[d] "$(...)"; inw[d] = 1; continue   #M: lexer: <( ) >( ) =( )
     }
     if (c == " " || c == "\t") { flushword(); i++; continue }
     if (c == "\n") {
-      emitcmd(); newpipe()
-      if (hstart <= hn) i = readheredocs(i)
+      emitcmd(); newpipe()   #M: lexer: newline separates
+      if (hstart <= hn) i = readheredocs(i)   #M: lexer: heredoc bodies set aside
       i++; continue
     }
-    if (c == "#" && !inw[d]) {
-      j = index(substr(s, i), "\n")
-      if (j == 0) i = n + 1; else i = i + j - 1
-      continue
-    }
+    if (c == "#" && !inw[d]) { j = index(substr(s, i), "\n"); i = (j == 0) ? n + 1 : i + j - 1; continue }   #M: lexer: comments
     if (c == ";") {
-      emitcmd(); newpipe(); i++
+      emitcmd(); newpipe(); i++   #M: lexer: ; separates
       while (substr(s, i, 1) == ";" || substr(s, i, 1) == "&" || substr(s, i, 1) == "|") i++
       continue
     }
@@ -317,7 +313,7 @@ function lex(i, term,   c, c2, j, op) {
       continue
     }
     if (c == "(") {
-      if (inw[d]) { j = matchparen(i); cur[d] = cur[d] substr(s, i, j - i + 1); i = j + 1; continue }
+      if (inw[d]) { j = matchparen(i); cur[d] = cur[d] substr(s, i, j - i + 1); i = j + 1; continue }   #M: lexer: ( inside a word
       emitcmd(); pd[d]++; i++; continue
     }
     if (c == ")") {
@@ -326,12 +322,12 @@ function lex(i, term,   c, c2, j, op) {
       emitcmd(); i++; continue
     }
     if (c == "<" || c == ">") {
-      if (inw[d] && cur[d] ~ /^[0-9]+$/) { cur[d] = ""; inw[d] = 0 } else flushword()
+      if (inw[d] && cur[d] ~ /^[0-9]+$/) { cur[d] = ""; inw[d] = 0 } else flushword()   #M: lexer: fd number before >
       op = redirop(i); i += length(op)
-      gsub(/[!|]/, "", op)
+      gsub(/[!|]/, "", op)   #M: lexer: zsh >! and >|
       addop(op)
-      if (op == "<<" || op == "<<-") { hdp[d] = 1; hst[d] = (op == "<<-") }
-      else if (op == "<<<") hsp[d] = 1
+      if (op == "<<" || op == "<<-") { hdp[d] = 1; hst[d] = (op == "<<-") }   #M: lexer: heredoc start
+      else if (op == "<<<") hsp[d] = 1   #M: lexer: here-string
       continue
     }
     cur[d] = cur[d] c; inw[d] = 1; i++
@@ -450,7 +446,7 @@ _shell_text() { # $1 = text
     IFS="$US"; f=($line); IFS="$oldifs"
     case "${f[0]}" in
       C) CUR_PID="${f[1]}"; _simple "${f[@]:2}" ;;
-      A) AL_N[${#AL_N[@]}]="${f[1]}"; AL_V[${#AL_V[@]}]="${f[2]//$RSC/$'\n'}" ;;
+      A) AL_N[${#AL_N[@]}]="${f[1]}"; AL_V[${#AL_V[@]}]="${f[2]//$RSC/$'\n'}" ;;   #M: alias records
       H) hpids[${#hpids[@]}]="${f[1]}"; hbodies[${#hbodies[@]}]="${f[2]:-}" ;;
       E) [ "${f[1]}" -gt "$PIDBASE" ] 2>/dev/null && PIDBASE="${f[1]}" ;;
     esac
@@ -480,7 +476,7 @@ _simple() {
         '>'|'&>')
           case "$w" in
             /dev/null|/dev/stdout|/dev/stderr|/dev/tty|/dev/fd/*|'$(...)'*) ;;
-            *) trunc="$w" ;;
+            *) trunc="$w" ;;   #M: truncation target
           esac ;;
         '>&')
           case "$w" in
@@ -520,7 +516,7 @@ _argv() {
     return 0
   fi
   local c="$1"; shift
-  c="${c#=}"                      # zsh =cmd expands to the PATH hit
+  c="${c#=}"                      # zsh =cmd expands to the PATH hit   #M: zsh =cmd
   local base="${c##*/}"
   local w k letters
 
@@ -550,20 +546,23 @@ _argv() {
       return 0 ;;
     command)
       while [ $# -gt 0 ]; do
-        case "$1" in -v|-V) return 0 ;; -p|--) shift ;; -*) shift ;; *) break ;; esac
+        case "$1" in -v|-V) return 0 ;; -p|--) shift ;; -*) shift ;; *) break ;; esac   #M: command -v is a lookup
       done
       [ $# -gt 0 ] && _argv "$adepth" "$@"; return 0 ;;
     exec)
       while [ $# -gt 0 ]; do
         case "$1" in -a) shift 2 ;; -c|-l|-cl|-lc) shift ;; --) shift; break ;; *) break ;; esac
       done
-      [ $# -gt 0 ] && _argv "$adepth" "$@"; return 0 ;;
+      [ $# -gt 0 ] && _argv "$adepth" "$@"   #M: exec look-through
+      return 0 ;;
     time)
       while [ $# -gt 0 ]; do case "$1" in -o) shift 2 ;; -*) shift ;; *) break ;; esac; done
-      [ $# -gt 0 ] && _argv "$adepth" "$@"; return 0 ;;
+      [ $# -gt 0 ] && _argv "$adepth" "$@"   #M: time look-through
+      return 0 ;;
     repeat)
       [ $# -gt 0 ] && shift
-      [ $# -gt 0 ] && _argv "$adepth" "$@"; return 0 ;;
+      [ $# -gt 0 ] && _argv "$adepth" "$@"   #M: repeat N look-through
+      return 0 ;;
     sudo|doas)
       while [ $# -gt 0 ]; do
         case "$1" in
@@ -580,11 +579,11 @@ _argv() {
         case "$1" in
           --) shift; break ;;
           -u|-C|-P|--unset|--chdir) shift 2 ;;
-          -S|--split-string) _shell_text "${2:-}"; shift 2; [ -n "$REASON_ID" ] && return 0 ;;
+          -S|--split-string) _shell_text "${2:-}"; shift 2; [ -n "$REASON_ID" ] && return 0 ;;   #M: env -S
           --split-string=*) _shell_text "${1#*=}"; shift; [ -n "$REASON_ID" ] && return 0 ;;
           -*) shift ;;
           *) if _is_assign "$1"; then
-               case "$1" in SAFE_RM_OFF=*) _deny safe-rm-off "env $1"; return 0 ;; esac
+               case "$1" in SAFE_RM_OFF=*) _deny safe-rm-off "env $1"; return 0 ;; esac   #M: env SAFE_RM_OFF
                shift
              else break; fi ;;
         esac
@@ -593,25 +592,31 @@ _argv() {
       return 0 ;;
     export|declare|typeset|local|readonly)
       for w in "$@"; do
-        case "$w" in SAFE_RM_OFF=*|SAFE_RM_OFF) _deny safe-rm-off "$base $w"; return 0 ;; esac
+        :
+        case "$w" in SAFE_RM_OFF=*|SAFE_RM_OFF) _deny safe-rm-off "$base $w"; return 0 ;; esac   #M: export SAFE_RM_OFF
       done
       return 0 ;;
     nice)
       while [ $# -gt 0 ]; do case "$1" in -n) shift 2 ;; -*) shift ;; *) break ;; esac; done
-      [ $# -gt 0 ] && _argv "$adepth" "$@"; return 0 ;;
+      [ $# -gt 0 ] && _argv "$adepth" "$@"   #M: nice look-through
+      return 0 ;;
     timeout|gtimeout)
       while [ $# -gt 0 ]; do case "$1" in -s|-k) shift 2 ;; -*) shift ;; *) break ;; esac; done
       [ $# -gt 0 ] && shift                     # the duration
-      [ $# -gt 0 ] && _argv "$adepth" "$@"; return 0 ;;
+      [ $# -gt 0 ] && _argv "$adepth" "$@"   #M: timeout look-through
+      return 0 ;;
     caffeinate)
       while [ $# -gt 0 ]; do case "$1" in -t|-w) shift 2 ;; -*) shift ;; *) break ;; esac; done
-      [ $# -gt 0 ] && _argv "$adepth" "$@"; return 0 ;;
+      [ $# -gt 0 ] && _argv "$adepth" "$@"   #M: caffeinate look-through
+      return 0 ;;
     stdbuf|gstdbuf)
       while [ $# -gt 0 ]; do case "$1" in -i|-o|-e) shift 2 ;; -*) shift ;; *) break ;; esac; done
-      [ $# -gt 0 ] && _argv "$adepth" "$@"; return 0 ;;
+      [ $# -gt 0 ] && _argv "$adepth" "$@"   #M: stdbuf look-through
+      return 0 ;;
     watch)
       while [ $# -gt 0 ]; do case "$1" in -n|--interval) shift 2 ;; -*) shift ;; *) break ;; esac; done
-      [ $# -gt 0 ] && _shell_text "$*"; return 0 ;;
+      [ $# -gt 0 ] && _shell_text "$*"   #M: watch look-through
+      return 0 ;;
     xargs|gxargs)
       while [ $# -gt 0 ]; do
         case "$1" in
@@ -624,7 +629,8 @@ _argv() {
       [ $# -gt 0 ] && _argv "$adepth" "$@"                                                   #M: xargs look-through
       return 0 ;;
     eval)
-      [ $# -gt 0 ] && _shell_text "$*"; return 0 ;;
+      [ $# -gt 0 ] && _shell_text "$*"   #M: eval
+      return 0 ;;
     sh|bash|zsh|dash|ksh|mksh|yash|fish)
       _shell_cmd "$@"; return 0 ;;
 
@@ -636,12 +642,13 @@ _argv() {
         if [[ $w =~ $RE_RM_P ]]; then _deny rm-P "rm $w"; return 0; fi                           #M: rm -P
       done
       return 0 ;;
-    grm) _deny grm "grm"; return 0 ;;
+    grm) _deny grm "grm"; return 0 ;;   #M: grm
     unlink|gunlink) _deny unlink "$base"; return 0 ;;                                            #M: unlink
     shred|gshred|srm|wipe) _deny shred "$base"; return 0 ;;                                      #M: shred
     truncate|gtruncate) _deny truncate "$base"; return 0 ;;                                      #M: truncate
     dd|gdd)
       for w in "$@"; do
+        :
         case "$w" in of=/dev/null) ;; of=*) _deny dd-of "dd $w"; return 0 ;; esac                #M: dd of=
       done
       return 0 ;;
@@ -649,11 +656,11 @@ _argv() {
       if [ -n "$TRUNC" ]; then
         case "$base" in
           :|true) [ $# -eq 0 ] && { _deny redir-trunc ": > $TRUNC"; return 0; } ;;               #M: colon truncation
-          cat|gcat) [ "$*" = /dev/null ] && { _deny redir-trunc "cat /dev/null > $TRUNC"; return 0; } ;;
+          cat|gcat) [ "$*" = /dev/null ] && { _deny redir-trunc "cat /dev/null > $TRUNC"; return 0; } ;;   #M: cat /dev/null truncation
         esac
       fi
       if [ "$base" = cp ] || [ "$base" = gcp ]; then
-        [ "${1:-}" = /dev/null ] && [ $# -eq 2 ] && { _deny redir-trunc "cp /dev/null $2"; return 0; }
+        [ "${1:-}" = /dev/null ] && [ $# -eq 2 ] && { _deny redir-trunc "cp /dev/null $2"; return 0; }   #M: cp /dev/null
       fi
       return 0 ;;
     find|gfind)
@@ -665,7 +672,7 @@ _argv() {
             shift
             local -a sub=()
             while [ $# -gt 0 ] && [ "$1" != ";" ]; do sub[${#sub[@]}]="$1"; shift; done
-            [ ${#sub[@]} -gt 0 ] && _argv "$adepth" "${sub[@]}"
+            [ ${#sub[@]} -gt 0 ] && _argv "$adepth" "${sub[@]}"   #M: fd -x body
             [ -n "$REASON_ID" ] && return 0 ;;
           *) shift ;;
         esac
@@ -675,24 +682,25 @@ _argv() {
       _git_cmd "$@"; return 0 ;;
     rsync)
       for w in "$@"; do
+        :
         [[ $w =~ $RE_RSYNC_DEL ]] && { _deny rsync-delete "rsync $w"; return 0; }            #M: rsync delete
       done
       return 0 ;;
-    rimraf|del-cli) _deny rimraf "$base"; return 0 ;;
+    rimraf|del-cli) _deny rimraf "$base"; return 0 ;;   #M: rimraf
     docker|podman|docker-compose)
       _container_cmd "$base" "$@"; return 0 ;;
     brew)
       case "${1:-}" in
         cleanup) _deny prune "brew cleanup"; return 0 ;;                                         #M: brew cleanup
-        uninstall|remove|rm) for w in "$@"; do [ "$w" = --zap ] && { _deny prune "brew $1 --zap"; return 0; }; done ;;
+        uninstall|remove|rm) for w in "$@"; do [ "$w" = --zap ] && { _deny prune "brew $1 --zap"; return 0; }; done ;;   #M: brew --zap
       esac
       return 0 ;;
     pnpm)
       if [ "${1:-}" = store ] && [ "${2:-}" = prune ]; then _deny prune "pnpm store prune"; return 0; fi   #M: pnpm store prune
-      if [ "${1:-}" = dlx ] || [ "${1:-}" = exec ]; then shift; [ $# -gt 0 ] && _argv "$adepth" "$@"; fi
+      if [ "${1:-}" = dlx ] || [ "${1:-}" = exec ]; then shift; [ $# -gt 0 ] && _argv "$adepth" "$@"; fi   #M: pnpm dlx look-through
       return 0 ;;
     bun)
-      if [ "${1:-}" = pm ] && [ "${2:-}" = cache ] && [ "${3:-}" = rm ]; then _deny prune "bun pm cache rm"; return 0; fi
+      if [ "${1:-}" = pm ] && [ "${2:-}" = cache ] && [ "${3:-}" = rm ]; then _deny prune "bun pm cache rm"; return 0; fi   #M: bun pm cache rm
       if [ "${1:-}" = x ]; then shift; [ $# -gt 0 ] && _argv "$adepth" "$@"; return 0; fi
       _interp_cmd node "$@"; return 0 ;;
     bunx|npx|pnpx)
@@ -703,27 +711,28 @@ _argv() {
     python|python[0-9]*|pypy|pypy[0-9]*)
       _interp_cmd python "$@"; return 0 ;;
     node|nodejs|deno)
-      if [ "$base" = deno ] && [ "${1:-}" = eval ]; then _code_deletes "${2:-}"; return 0; fi
+      if [ "$base" = deno ] && [ "${1:-}" = eval ]; then _code_deletes "${2:-}"; return 0; fi   #M: deno eval
       _interp_cmd node "$@"; return 0 ;;
     perl|ruby)
       _interp_cmd "$base" "$@"; return 0 ;;
     osascript)
       while [ $# -gt 0 ]; do
-        case "$1" in -e) _code_deletes "${2:-}"; [ -n "$REASON_ID" ] && return 0; shift 2 ;; *) shift ;; esac
+        [ "$1" = -e ] && { _code_deletes "${2:-}"; [ -n "$REASON_ID" ] && return 0; }   #M: osascript -e
+        shift
       done
       return 0 ;;
     diskutil)
       case "${1:-}" in
         erase*|zeroDisk|randomDisk|secureErase|partitionDisk|reformat|apfs)
-          if [ "${1:-}" != apfs ]; then _deny disk "diskutil $1"; return 0; fi
+          if [ "${1:-}" != apfs ]; then _deny disk "diskutil $1"; return 0; fi   #M: diskutil erase
           case "${2:-}" in delete*|erase*) _deny disk "diskutil apfs $2"; return 0 ;; esac ;;
       esac
       return 0 ;;
-    mkfs|mkfs.*|newfs|newfs_*|wipefs) _deny disk "$base"; return 0 ;;
+    mkfs|mkfs.*|newfs|newfs_*|wipefs) _deny disk "$base"; return 0 ;;   #M: mkfs / newfs / wipefs
     tmutil)
-      case "${1:-}" in delete|deletelocalsnapshots|thinlocalsnapshots|deleteinprogress) _deny tmutil "tmutil $1"; return 0 ;; esac
+      case "${1:-}" in delete|deletelocalsnapshots|thinlocalsnapshots|deleteinprogress) _deny tmutil "tmutil $1"; return 0 ;; esac   #M: tmutil delete
       return 0 ;;
-    trash-empty|trash-rm) _deny trash-empty "$base"; return 0 ;;
+    trash-empty|trash-rm) _deny trash-empty "$base"; return 0 ;;   #M: trash-empty
   esac
   return 0
 }
@@ -756,14 +765,14 @@ _shell_cmd() { # sh/bash/zsh [opts] [-c CODE | script | -s]
     [ $# -gt 0 ] && _shell_text "$1"                                                 #M: sh -c
     return 0
   fi
-  [ $# -eq 0 ] && SI_KIND[$CUR_PID]=shell
+  [ $# -eq 0 ] && SI_KIND[$CUR_PID]=shell   #M: shell reading stdin
   return 0
 }
 
 _interp_cmd() { # $1 = python|node|perl|ruby, then args
   local kind="$1"; shift
   local w
-  if [ $# -eq 0 ]; then SI_KIND[$CUR_PID]=code; return 0; fi
+  if [ $# -eq 0 ]; then SI_KIND[$CUR_PID]=code; return 0; fi   #M: interpreter with no args reads stdin
   while [ $# -gt 0 ]; do
     w="$1"
     case "$kind" in
@@ -773,8 +782,8 @@ _interp_cmd() { # $1 = python|node|perl|ruby, then args
           -c*) _code_deletes "${w#-c}"; return 0 ;;
           -m) return 0 ;;
           -W|-X) shift 2; continue ;;
-          -) SI_KIND[$CUR_PID]=code; return 0 ;;
-          -[A-Za-z][A-Za-z]*c) _code_deletes "${2:-}"; return 0 ;;
+          -) SI_KIND[$CUR_PID]=code; return 0 ;;   #M: python - reads stdin
+          -[A-Za-z]*c) _code_deletes "${2:-}"; return 0 ;;   #M: python -Xc cluster (a GLOB: letter, anything, c)
           -*) shift; continue ;;
           *) return 0 ;;                            # a script file: invisible
         esac ;;
@@ -789,7 +798,7 @@ _interp_cmd() { # $1 = python|node|perl|ruby, then args
         esac ;;
       perl|ruby)
         case "$w" in
-          -e|-E) _code_deletes "${2:-}"; [ -n "$REASON_ID" ] && return 0; shift 2; continue ;;
+          -e|-E) _code_deletes "${2:-}"; [ -n "$REASON_ID" ] && return 0; shift 2; continue ;;   #M: perl/ruby -e
           -[A-Za-z]*[eE]) _code_deletes "${2:-}"; [ -n "$REASON_ID" ] && return 0; shift 2; continue ;;
           -[A-Za-z]*[eE]?*) _code_deletes "${w#*[eE]}"; [ -n "$REASON_ID" ] && return 0; shift; continue ;;
           -) SI_KIND[$CUR_PID]=code; return 0 ;;
@@ -813,7 +822,8 @@ _uv_cmd() { # uv [global opts] run|cache|tool ...
   done
   case "${1:-}" in
     cache)
-      case "${2:-}" in clean|prune) _deny prune "uv cache $2"; return 0 ;; esac; return 0 ;;
+      case "${2:-}" in clean|prune) _deny prune "uv cache $2"; return 0 ;; esac   #M: uv cache clean
+      return 0 ;;
     run)
       shift
       while [ $# -gt 0 ]; do
@@ -843,9 +853,9 @@ _container_cmd() { # docker|podman|docker-compose, then args
   done
   local p0="${pos[0]:-}" p1="${pos[1]:-}"
   if [ "$p0" = prune ] || [ "$p1" = prune ]; then _deny prune "$tool ... prune"; return 0; fi      #M: docker prune
-  if [ "$p0" = volume ] && { [ "$p1" = rm ] || [ "$p1" = remove ]; }; then _deny prune "$tool volume $p1"; return 0; fi
+  if [ "$p0" = volume ] && { [ "$p1" = rm ] || [ "$p1" = remove ]; }; then _deny prune "$tool volume $p1"; return 0; fi   #M: docker volume rm
   if { [ "$tool" = docker-compose ] && [ "$p0" = down ]; } || { [ "$p0" = compose ] && [ "$p1" = down ]; }; then
-    [ "$vol" -eq 1 ] && { _deny prune "$tool compose down -v"; return 0; }
+    [ "$vol" -eq 1 ] && { _deny prune "$tool compose down -v"; return 0; }   #M: compose down -v
   fi
   return 0
 }
@@ -920,7 +930,7 @@ _git_cmd() {
         if [ "$skip" -eq 1 ]; then skip=0; continue; fi
         case "$w" in -b|-B|--orphan|--conflict) skip=1 ;; -*) ;; *) pos[${#pos[@]}]="$w" ;; esac
       done
-      if [ ${#pos[@]} -ge 2 ]; then _deny git-checkout-discard "git checkout <ref> <path>"; return 0; fi
+      if [ ${#pos[@]} -ge 2 ]; then _deny git-checkout-discard "git checkout <ref> <path>"; return 0; fi   #M: git checkout <ref> <path>
       if [ ${#pos[@]} -eq 1 ]; then
         case "${pos[0]}" in
           .|./|:/|:/*|*'*'*|*'?'*) _deny git-checkout-discard "git checkout ${pos[0]}"; return 0 ;;   #M: git checkout .
@@ -956,7 +966,7 @@ _git_cmd() {
           if [ "$seen" -eq 1 ]; then case "$w" in --recursive|-q|--quiet) ;; *) rest[${#rest[@]}]="$w" ;; esac; fi
           [ "$w" = foreach ] && seen=1
         done
-        [ ${#rest[@]} -gt 0 ] && _shell_text "${rest[*]}"
+        [ ${#rest[@]} -gt 0 ] && _shell_text "${rest[*]}"   #M: git submodule foreach
       fi ;;
   esac
   return 0
@@ -1161,6 +1171,21 @@ SNAP
   _must git-clean           'alias of alias (nuke->gclean)'   'nuke'
   _must git-worktree-remove 'alias gwtrm + args'              'gwtrm ../wt'
   _must git-clean           'alias after &&'                  'git status && gclean'
+  _must git-worktree-remove 'unquoted $( ) in an assignment'  'x=$(git worktree remove y)'
+  _must git-worktree-remove '$( ) inside ${(f)...}'           'echo ${(f)"$(git worktree remove x)"}'
+  _must git-worktree-remove 'backticks inside double quotes'  'echo "`git worktree remove x`"'
+  _must git-worktree-remove 'after a <<- heredoc'             $'cat <<-EOF\n\tprose\n\tEOF\ngit worktree remove x'
+  _must git-worktree-remove 'caffeinate'                      'caffeinate -i git worktree remove x'
+  _must git-worktree-remove 'stdbuf'                          'stdbuf -oL git worktree remove x'
+  _must git-worktree-remove 'watch'                           'watch -n 5 git worktree remove x'
+  _must git-worktree-remove 'env -S string'                   "env -S 'git worktree remove x'"
+  _must git-worktree-remove 'pnpm exec'                       'pnpm exec git worktree remove x'
+  _must inline-code         'perl -ne cluster'                "perl -ne 'unlink \$_' list.txt"
+  _must inline-code         'python3 -Ic cluster'             "python3 -Ic 'import os; os.remove(\"x\")'"
+  _must inline-code         'deno eval'                       "deno eval 'Deno.removeSync(\"x\"); unlink(\"y\")'"
+  _must inline-code         'node heredoc'                    $'node <<EOF\nrequire("fs").rmSync("d")\nEOF'
+  _must inline-code         'node - heredoc'                  $'node - <<EOF\nrequire("fs").unlinkSync("f")\nEOF'
+  _must git-clean           'zsh heredoc to sh -s'            $'sh -s <<EOF\ngit clean -fdx\nEOF'
 
   echo "=== ALLOW arms: each must pass untouched ==="
   _must - 'bare rm'                         'rm notes.txt'
@@ -1246,6 +1271,9 @@ SNAP
   _must - 'git status alias'                'gs'
   _must - 'quoted alias name is data'       "echo 'gclean'"
   _must - 'SAFE_RM_OFF in prose'            'echo "SAFE_RM_OFF=1 is for humans"'
+  _must - 'array assignment holding words'  'arr=(git worktree remove x)'
+  _must - 'git checkout - (previous branch)' 'git checkout -'
+  _must - 'heredoc to a non-shell after sh'  $'sh ./x.sh; cat <<EOF\ngit clean -fdx\nEOF'
   _must - 'control: harmless'               'echo control-ok'
   _must - 'empty command'                   ''
 
@@ -1335,7 +1363,13 @@ _mutants() {
     if ! /bin/bash -n "$tmp/m.sh" 2>/dev/null; then
       broken=$((broken + 1)); printf 'BROKEN  line %-4s %s (syntax error, not a rule test)\n' "$ln" "$tag"; continue
     fi
-    if "$tmp/m.sh" --selftest >/dev/null 2>&1; then
+    # a mutant whose LEXER no longer runs fails every deny arm for a reason
+    # that has nothing to do with the rule removed
+    if "$tmp/m.sh" --classify 'git clean -fdx' / 2>/dev/null | grep -q 'LEXER FAILED'; then
+      broken=$((broken + 1)); printf 'BROKEN  line %-4s %s (lexer fails, not a rule test)\n' "$ln" "$tag"; continue
+    fi
+    # a removed line can loop forever; 300 s is five times a normal selftest
+    if perl -e 'alarm shift; exec @ARGV' 300 "$tmp/m.sh" --selftest >/dev/null 2>&1; then
       missed=$((missed + 1)); printf 'MISSED  line %-4s %s\n' "$ln" "$tag"
     else
       caught=$((caught + 1)); printf 'caught  line %-4s %s\n' "$ln" "$tag"
@@ -1352,7 +1386,9 @@ case "${1:-}" in
     sed -n '2,55p' "$0" | sed 's/^# \{0,1\}//'
     exit 0 ;;
   --classify) # debugging aid: prints the rule id and where, or "allow"
-    _classify "${2:-}" "${3:-$PWD}"; echo "${REASON_ID:-allow}${REASON_WHERE:+ ($REASON_WHERE)}"; exit 0 ;;
+    _classify "${2:-}" "${3:-$PWD}"
+    [ "${LEXER_FAILED:-0}" -eq 1 ] && echo "LEXER FAILED"
+    echo "${REASON_ID:-allow}${REASON_WHERE:+ ($REASON_WHERE)}"; exit 0 ;;
 esac
 
 # ---------------------------------------------------------------- hook path
