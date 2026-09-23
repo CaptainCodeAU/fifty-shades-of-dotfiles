@@ -290,4 +290,3 @@ The selftest pins `PJ_PING_AFPLAY` and `PJ_PING_IMSG` to fake binaries, and
 replaces the PATH lookup, so no arm can reach the real `afplay` or `imsg`.
 `PJ_QUESTION_PING_HOOK=<path>` points the selftest at another copy of the
 hook.
-
