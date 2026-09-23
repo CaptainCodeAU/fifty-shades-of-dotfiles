@@ -39,7 +39,7 @@ STATUSES="open parked done declined"
 
 refuse(){ printf 'open-items: REFUSED -- %s\n' "$1" >&2; exit 2; }
 loud(){ printf 'open-items: %s\n' "$1" >&2; }
-usage(){ awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"; }   # the whole header, however long it grows
+usage(){ sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; }
 today(){ date +%Y-%m-%d; }
 realdir(){ (cd "$1" 2>/dev/null && pwd -P); }
 
