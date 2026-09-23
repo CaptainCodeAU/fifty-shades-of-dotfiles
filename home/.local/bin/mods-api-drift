@@ -1,0 +1,390 @@
+#!/usr/bin/env bash
+# mods-api-drift -- notice when a Claude Code update changes the Claude Mods API
+# (D-20260923-A01, -A06; report drawer:pj-session-framework/reports/F8b-mods-early.md).
+#
+# Usage:
+#   mods-api-drift                 check now: when the installed Claude Code version has no
+#                                  saved declarations, regenerate them (/plugin-types: local,
+#                                  0 tokens, under a second), then record what changed
+#   mods-api-drift --hook          the SessionStart form: the same check, prints nothing,
+#                                  exits 0 on every path
+#   mods-api-drift --json [--no-regen]
+#                                  the report as JSON. --no-regen never regenerates and never
+#                                  writes: pj-health reads it this way
+#   mods-api-drift --card          one start-card line when there are unseen changes, else
+#                                  nothing. Read-only, never regenerates
+#   mods-api-drift list [--all]    the changes, newest first (default: unseen only)
+#   mods-api-drift seen <id>|--all mark change(s) seen. NOT marking is how Gavin "keeps it
+#                                  unread": the count stays on the card until he clears it
+#   mods-api-drift --selftest      prove every arm against a throwaway state dir
+#
+# WHY. Anthropic changes the mods API between releases and says so nowhere: 2.1.278 ->
+# 2.1.280 added an event, three $ ops and 22 types and removed 2, and the public CHANGELOG
+# has never mentioned function hooks (measured 2026-09-23, F8b). The declaration file
+# /plugin-types writes is the only record, so this keeps one per version and compares them.
+#
+# STATE  ${PJ_STATE_DIR:-~/.local/state/pj}/mods-api/   MACHINE scope, never a repo
+#   <version>/claude-code*.d.ts  what /plugin-types wrote for that version, never edited
+#   <version>/surface.tsv        kind<TAB>name, sorted: event, op, classic, type, module
+#   changes.jsonl                one record per step between consecutive saved versions
+#   CHANGES.md                   the same, for agents (Gavin reads the card, not this file)
+#   report.json                  the last check's report
+#   SHA256SUMS, README
+#
+# WHAT A CHANGE IS. Five name sets pulled out of the declarations: engine events
+# (EngineEventOf keys), $ ops (CoreEngineInterface noun.method), classic seams
+# (hook_event_name literals), exported type names, declared modules. On 2.1.278 they read
+# 38 / 69 / 33, F8a's own counts, which is the extractor's calibration. A step where no
+# name moved but the text did is recorded as text-only and born SEEN: a hash fires on
+# every release, including 2.1.277 -> 2.1.278 where nothing moved, and a card that shouts
+# about nothing teaches you to ignore it.
+#
+# CONTRACT
+#   1. Writes only under its state dir. /plugin-types writes into its cwd, so it runs in
+#      a scratch dir made inside the state dir, and claude is launched with no settings
+#      sources, so no hook (including this one) fires inside it.
+#   2. A write it cannot make is a REFUSAL by name, exit 3. Never a hang, never a count.
+#   3. An empty name set, or declarations that name a different version than the one
+#      installed, is NOT MEASURED, exit 4: a broken extractor must not read as "no change".
+#   4. --hook exits 0 on every path and prints nothing; --card prints at most one line.
+#
+# TEST SEAMS  PJ_STATE_DIR (the pj state root), MODS_API_CLAUDE (the claude to call).
+set -u
+
+STATE="${PJ_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/pj}/mods-api"
+CLAUDE_BIN="${MODS_API_CLAUDE:-claude}"
+REGEN_TIMEOUT=20   # under the SessionStart hook's 30 s limit, so we fail cleanly first
+
+die(){ local rc="$1"; shift; echo "mods-api-drift: $*" >&2; exit "$rc"; }
+now(){ date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+installed_version(){   # the running claude's version, or nothing
+  "$CLAUDE_BIN" --version 2>/dev/null | awk 'NR==1 && $1 ~ /^[0-9]+\.[0-9]+\.[0-9]+$/ {print $1}'
+}
+saved_versions(){   # every saved version, oldest first
+  [ -d "$STATE" ] || return 0
+  find "$STATE" -mindepth 2 -maxdepth 2 -name claude-code.d.ts -print 2>/dev/null \
+    | sed "s#^$STATE/##; s#/claude-code.d.ts\$##" | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -t. -k1,1n -k2,2n -k3,3n
+}
+decl_version(){   # decl_version <d.ts> -> the version its first line names
+  sed -n '1s#^// Written by Claude Code \([0-9][0-9.]*[0-9]\)\.$#\1#p' "$1" 2>/dev/null
+}
+
+# ---------------------------------------------------------------- surface ----
+read -r -d '' AWK_SURFACE <<'AWK'
+/^  export type EngineEventOf = \{/            { ev = 1 }
+ev && /^  \}/                                  { ev = 0 }
+ev && /^      '[^']+':/                        { s = $0; sub(/^      '/, "", s); sub(/'.*/, "", s); print "event\t" s }
+/^  export interface CoreEngineInterface \{/   { ce = 1; noun = "" }
+ce && /^  \}/                                  { ce = 0 }
+ce && /^      [A-Za-z0-9_]+: \{/               { s = $0; sub(/^      /, "", s); sub(/:.*/, "", s); noun = s; next }
+ce && noun != "" && /^          [A-Za-z0-9_]+[?]?: / { s = $0; sub(/^          /, "", s); sub(/[?]?:.*/, "", s); print "op\t" noun "." s }
+/hook_event_name: '[A-Za-z0-9_]+'/             { s = $0; sub(/.*hook_event_name: '/, "", s); sub(/'.*/, "", s); print "classic\t" s }
+/^  export (type|interface) [A-Za-z0-9_]+/     { s = $0; sub(/^  export (type|interface) /, "", s); sub(/[^A-Za-z0-9_].*/, "", s); print "type\t" s }
+/^declare module '[^']+'/                      { s = $0; sub(/^declare module '/, "", s); sub(/'.*/, "", s); print "module\t" s }
+AWK
+surface_of(){ awk "$AWK_SURFACE" "$1" | LC_ALL=C sort -u; }
+surface_for(){   # surface_for <version>: the saved surface, or computed in memory (never written here)
+  if [ -s "$STATE/$1/surface.tsv" ]; then cat "$STATE/$1/surface.tsv"; else surface_of "$STATE/$1/claude-code.d.ts"; fi
+}
+kind_count(){ awk -F'\t' -v k="$2" '$1==k' <<<"$1" | wc -l | tr -d ' '; }
+empty_kinds(){   # the kinds that came back empty (modules may legitimately be one line, never zero)
+  local s="$1" k out=""
+  for k in event op classic type module; do [ "$(kind_count "$s" "$k")" -gt 0 ] || out="$out $k"; done
+  printf '%s' "${out# }"
+}
+
+# ------------------------------------------------------------------ steps ----
+step_json(){   # step_json <from> <to> <recorded> -> one changes.jsonl record
+  local a b diffs text_only=false seen=false ha hb
+  a="$(surface_for "$1")"; b="$(surface_for "$2")"
+  diffs="$( { LC_ALL=C comm -13 <(printf '%s\n' "$a") <(printf '%s\n' "$b") | sed 's/^/+\t/'
+              LC_ALL=C comm -23 <(printf '%s\n' "$a") <(printf '%s\n' "$b") | sed 's/^/-\t/'; } | grep -v '^[+-]	$' )"
+  if [ -z "$diffs" ]; then
+    text_only=true; seen=true
+    ha="$(shasum -a 256 "$STATE/$1/claude-code.d.ts" | cut -c1-16)"; hb="$(shasum -a 256 "$STATE/$2/claude-code.d.ts" | cut -c1-16)"
+    [ "$ha" = "$hb" ] && text_only=identical
+  fi
+  printf '%s\n' "$diffs" | jq -R -s -c --arg from "$1" --arg to "$2" --arg at "$3" --arg to_only "$text_only" --argjson seen "$seen" '
+    [split("\n")[] | select(length>0) | split("\t") | {op:.[0], kind:.[1], name:.[2]}] as $d
+    | def names($o;$k): [$d[] | select(.op==$o and .kind==$k) | .name];
+      def grp($o): {event:names($o;"event"), op:names($o;"op"), classic:names($o;"classic"), type:names($o;"type"), module:names($o;"module")};
+      def part($o;$k;$label): (names($o;$k)|length) as $n | if $n>0 then "\($o)\($n) \($label)" else empty end;
+    {id:"\($from)->\($to)", from:$from, to:$to, recorded:$at,
+     text_only:($to_only != "false"), identical:($to_only == "identical"), seen:$seen,
+     added:grp("+"), removed:grp("-"),
+     summary:( [part("+";"event";"event(s)"), part("-";"event";"event(s)"), part("+";"op";"$ op(s)"), part("-";"op";"$ op(s)"),
+                part("+";"classic";"classic seam(s)"), part("-";"classic";"classic seam(s)"),
+                part("+";"type";"type(s)"), part("-";"type";"type(s)"), part("+";"module";"module(s)"), part("-";"module";"module(s)")]
+               | if length==0 then (if $to_only=="identical" then "identical" else "text only, no name moved" end) else join(", ") end)}'
+}
+
+changes(){ [ -s "$STATE/changes.jsonl" ] && cat "$STATE/changes.jsonl"; return 0; }
+has_step(){ changes | jq -e --arg id "$1" 'select(.id==$id)' >/dev/null 2>&1; }
+
+# ----------------------------------------------------------------- report ----
+report_json(){   # report_json: computed from the state dir, writes nothing
+  local inst vers newest n status detail s=""
+  inst="$(installed_version)"; vers="$(saved_versions)"; newest="$(printf '%s\n' "$vers" | tail -1)"
+  n="$(printf '%s\n' "$vers" | grep -c . )"
+  if [ "$n" -eq 0 ]; then status=none; detail="no saved declarations under $STATE"
+  else
+    s="$(surface_for "$newest")"
+    if [ -n "$(empty_kinds "$s")" ]; then status=broken; detail="the extractor found no $(empty_kinds "$s") in $newest's declarations: a format change, not an empty API"
+    elif [ -z "$inst" ]; then status=unknown; detail="claude --version gave no version, so the installed API was not compared"
+    elif [ "$inst" != "$newest" ] && ! printf '%s\n' "$vers" | grep -qx "$inst"; then status=behind; detail="Claude Code $inst is installed but the newest saved API is $newest"
+    else status=ok; detail=""; fi
+  fi
+  changes | jq -s -c --arg status "$status" --arg detail "$detail" --arg inst "$inst" --arg newest "$newest" \
+      --arg vers "$vers" --arg s "$s" --arg state "$STATE" '
+    def cnt($k): [$s | split("\n")[] | select(startswith($k+"\t"))] | length;
+    {tool:"mods-api-drift", state:$state, status:$status, detail:$detail,
+     installed:$inst, newest_saved:$newest, saved:[$vers|split("\n")[]|select(length>0)],
+     surface:(if $s=="" then null else {event:cnt("event"), op:cnt("op"), classic:cnt("classic"), type:cnt("type"), module:cnt("module")} end),
+     unseen:[.[]|select(.seen|not)]|length,
+     unseen_steps:[.[]|select(.seen|not)|{id, summary}]|reverse,
+     steps:length}'
+}
+
+# ------------------------------------------------------------------ check ----
+writable(){   # refuse by name when the state dir cannot be written (CONTRACT 2)
+  mkdir -p "$STATE" 2>/dev/null
+  local probe="$STATE/.write-probe.$$"
+  if ! ( : >"$probe" ) 2>/dev/null || [ ! -e "$probe" ]; then
+    die 3 "REFUSED -- cannot write the state dir $STATE (a sandboxed shell cannot; run it from a terminal, or it runs itself as a SessionStart hook)"
+  fi
+  command mv -f "$probe" "$STATE/.write-probe" 2>/dev/null   # keep one probe file rather than delete
+}
+
+regenerate(){   # regenerate <version>: /plugin-types into a scratch dir, then into <version>/
+  local v="$1" tmp f got
+  tmp="$(mktemp -d "$STATE/.regen.XXXXXX" 2>/dev/null)" || die 3 "REFUSED -- cannot make a scratch dir under $STATE"
+  local to=""; command -v timeout >/dev/null 2>&1 && to="timeout $REGEN_TIMEOUT"
+  ( builtin cd "$tmp" && MODS_API_DRIFT_ACTIVE=1 CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 $to "$CLAUDE_BIN" -p --setting-sources '' --strict-mcp-config '/plugin-types' >"$tmp/.out" 2>&1 )
+  f="$tmp/.claude/types/claude-code.d.ts"
+  [ -s "$f" ] || die 4 "NOT MEASURED -- /plugin-types wrote no declarations for $v (flag not honoured, or the command is gone); scratch left at $tmp"
+  got="$(decl_version "$f")"
+  [ "$got" = "$v" ] || die 4 "NOT MEASURED -- the declarations name version '${got:-none}', not the installed $v; scratch left at $tmp"
+  mkdir -p "$STATE/$v" || die 3 "REFUSED -- cannot create $STATE/$v"
+  local x
+  for x in "$tmp"/.claude/types/claude-code*.d.ts; do command mv -f "$x" "$STATE/$v/"; done
+  ( builtin cd "$STATE" && shasum -a 256 "$v"/claude-code*.d.ts >>SHA256SUMS )
+  # Leave nothing behind: everything moved out, so only empty dirs and the log remain.
+  # rmdir one dir at a time, deepest first: `find -empty` is judged BEFORE the children go,
+  # so it never matches a parent, and rmdir refuses anything that still holds a file.
+  command mv -f "$tmp/.out" "$STATE/$v/.plugin-types.out" 2>/dev/null
+  find "$tmp" -depth -type d -exec rmdir {} \; 2>/dev/null
+  return 0
+}
+
+write_changes_md(){
+  {
+    echo "# Claude Mods API changes (generated by mods-api-drift; agents read this, Gavin reads the card)"
+    echo
+    echo "Newest first. Unseen = not yet cleared with \`mods-api-drift seen\`. Source: $STATE/changes.jsonl"
+    echo
+    changes | jq -s -r 'reverse[] |
+      "## \(.id)\(if .seen then "" else "   (UNSEEN)" end)\n\nRecorded \(.recorded). \(.summary).\n" +
+      ( [ ("added","removed") as $o | .[$o] | to_entries[] | select(.value|length>0)
+          | "- \(if $o=="added" then "+" else "-" end) \(.key): \(.value|join(", "))" ] | join("\n") ) + "\n"'
+  } >"$STATE/CHANGES.md.tmp" && command mv -f "$STATE/CHANGES.md.tmp" "$STATE/CHANGES.md"
+}
+
+check(){   # the default action; exit 0 ok, 3 refused, 4 not measured
+  [ -n "${MODS_API_DRIFT_ACTIVE:-}" ] && return 0     # never recurse through our own claude -p
+  writable
+  local inst v prev="" at
+  inst="$(installed_version)"
+  [ -n "$inst" ] || die 4 "NOT MEASURED -- '$CLAUDE_BIN --version' gave no version"
+  [ -s "$STATE/$inst/claude-code.d.ts" ] || regenerate "$inst"
+  for v in $(saved_versions); do
+    [ -s "$STATE/$v/surface.tsv" ] || surface_of "$STATE/$v/claude-code.d.ts" >"$STATE/$v/surface.tsv"
+    local ek; ek="$(empty_kinds "$(cat "$STATE/$v/surface.tsv")")"
+    [ -z "$ek" ] || die 4 "NOT MEASURED -- the extractor found no $ek in $v's declarations (a format change, not an empty API)"
+  done
+  at="$(now)"
+  for v in $(saved_versions); do
+    if [ -n "$prev" ] && ! has_step "$prev->$v"; then step_json "$prev" "$v" "$at" >>"$STATE/changes.jsonl"; fi
+    prev="$v"
+  done
+  write_changes_md
+  report_json >"$STATE/report.json.tmp" && command mv -f "$STATE/report.json.tmp" "$STATE/report.json"
+  return 0
+}
+
+seen(){   # seen <id>|--all
+  [ -n "${1:-}" ] || die 2 "REFUSED -- seen needs a step id (see: mods-api-drift list) or --all"
+  writable
+  [ -s "$STATE/changes.jsonl" ] || die 4 "NOT MEASURED -- no changes recorded yet under $STATE"
+  if [ "$1" != --all ] && ! has_step "$1"; then die 2 "REFUSED -- no step '$1' (see: mods-api-drift list --all)"; fi
+  local n; n="$(changes | jq -s --arg id "$1" '[.[]|select((.seen|not) and ($id=="--all" or .id==$id))]|length')"
+  changes | jq -c --arg id "$1" 'if ($id=="--all" or .id==$id) then .seen=true else . end' >"$STATE/changes.jsonl.tmp" \
+    && command mv -f "$STATE/changes.jsonl.tmp" "$STATE/changes.jsonl"
+  write_changes_md
+  report_json >"$STATE/report.json.tmp" && command mv -f "$STATE/report.json.tmp" "$STATE/report.json"
+  echo "mods-api-drift: marked $n step(s) seen"
+}
+
+list(){   # list [--all]
+  local all=0; [ "${1:-}" = --all ] && all=1
+  local out; out="$(changes | jq -s -r --argjson all "$all" 'reverse[] | select($all==1 or (.seen|not)) |
+    "\(if .seen then "   " else "NEW" end)  \(.id)  \(.summary)" +
+    ( [ ("added","removed") as $o | .[$o] | to_entries[] | select(.value|length>0) | select(.key!="type")
+        | "\n       \(if $o=="added" then "+" else "-" end) \(.key): \(.value|join(", "))" ] | join("") ) +
+    ( [ ("added","removed") as $o | .[$o].type | select(length>0) | "\n       \(if $o=="added" then "+" else "-" end) type: \(length) (\(.[:6]|join(", "))\(if length>6 then ", ..." else "" end))" ] | join("") )')"
+  if [ -z "$out" ]; then
+    if [ "$all" -eq 1 ]; then echo "mods-api-drift: no steps recorded under $STATE"; else echo "mods-api-drift: no unseen changes ($(changes | jq -s length 2>/dev/null || echo 0) step(s) recorded; --all shows them)"; fi
+  else printf '%s\n' "$out"; fi
+}
+
+card(){   # at most one line, only when something is unseen; read-only
+  local r n first more
+  r="$(report_json 2>/dev/null)" || return 0
+  n="$(jq -r '.unseen // 0' <<<"$r" 2>/dev/null)"
+  case "$(jq -r .status <<<"$r" 2>/dev/null)" in
+    broken) echo "Mods API: the drift check is NOT MEASURED ($(jq -r .detail <<<"$r")); ask to look at it"; return 0 ;;
+  esac
+  [ "${n:-0}" -gt 0 ] 2>/dev/null || return 0
+  first="$(jq -r '.unseen_steps[0] | "\(.id): \(.summary)"' <<<"$r")"
+  more=""; [ "$n" -gt 1 ] && more=" (+$((n-1)) older)"
+  echo "Mods API: ($n) unseen change$([ "$n" -gt 1 ] && echo s) -- $first$more. Ask to see them; they stay until you say seen."
+}
+
+# ---------------------------------------------------------------- selftest ----
+selftest(){
+  local P=0 F=0 T S FC out rc
+  arm(){ local l="$1"; shift; if "$@"; then P=$((P+1)); else F=$((F+1)); echo "  FAIL: $l" >&2; fi; }
+  T="$(mktemp -d "${TMPDIR:-/tmp}/mods-api-drift-selftest.XXXXXX")"; T="$(builtin cd "$T" && pwd -P)"
+  S="$T/pj"; FC="$T/claude"; mkdir -p "$T/decl"
+  # Declarations: cut from the REAL 2.1.278 / 2.1.280 files when they are on this machine,
+  # keeping only the lines the extractor reads (a fixture comes from the real tool's output).
+  local real="${PJ_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/pj}/mods-api"
+  local keep='^// Written by|^  export type EngineEventOf = \{|^  export interface CoreEngineInterface \{|^  \}|^      '"'"'[^'"'"']+'"'"':|^      [A-Za-z0-9_]+: \{|^          [A-Za-z0-9_]+[?]?: |hook_event_name: '"'"'|^  export (type|interface) |^declare module '"'"
+  local v have=1
+  for v in 2.1.278 2.1.280; do
+    if [ -s "$real/$v/claude-code.d.ts" ]; then grep -E "$keep" "$real/$v/claude-code.d.ts" >"$T/decl/$v.d.ts"; else have=0; fi
+  done
+  if [ "$have" -eq 0 ]; then echo "mods-api-drift selftest: NOT MEASURED -- the real 2.1.278 and 2.1.280 declarations are not under $real, and the fixtures must come from them"; return 4; fi
+  # a fake claude: --version prints $FAKE_VER; -p /plugin-types writes that version's fixture into cwd
+  cat >"$FC" <<FAKE
+#!/usr/bin/env bash
+case "\$1" in
+  --version) [ -n "\${FAKE_VER:-}" ] && echo "\$FAKE_VER (Claude Code)"; exit 0 ;;
+  -p) [ -n "\${FAKE_NOWRITE:-}" ] && exit 0
+      mkdir -p .claude/types; src="$T/decl/\${FAKE_SRC:-\$FAKE_VER}.d.ts"; [ -s "\$src" ] || exit 1
+      cp "\$src" .claude/types/claude-code.d.ts; echo "// plugins" >.claude/types/claude-code-plugins.d.ts
+      mkdir -p .claude/types/claude-code-plugins; echo "\$*" >"$T/last-argv"; exit 0 ;;
+esac
+exit 0
+FAKE
+  chmod +x "$FC"
+  mad(){ PJ_STATE_DIR="$S" MODS_API_CLAUDE="$FC" "$0" "$@"; }
+  st(){ jq -r "$1" "$S/mods-api/report.json" 2>/dev/null; }
+
+  # 1. calibration: the extractor reads F8a's counts off the real 2.1.278 lines
+  local s78; s78="$(surface_of "$T/decl/2.1.278.d.ts")"
+  arm "calibration: 2.1.278 has 38 engine events (F8a)" [ "$(kind_count "$s78" event)" -eq 38 ]
+  arm "calibration: 2.1.278 has 69 \$ ops (F8a)" [ "$(kind_count "$s78" op)" -eq 69 ]
+  arm "calibration: 2.1.278 has 33 classic seams (F8a)" [ "$(kind_count "$s78" classic)" -eq 33 ]
+  # Types too: a block-opening line is ALSO an exported type. An earlier version of the awk
+  # ended those two rules with `next` and silently dropped EngineEventOf and
+  # CoreEngineInterface from every version alike, so no diff could ever show it (372 by rg).
+  arm "calibration: 2.1.278 exports 372 type names (rg count)" [ "$(kind_count "$s78" type)" -eq 372 ]
+  arm "calibration: the two block-opening names are counted as types" bash -c 'grep -qx "type	EngineEventOf" <<<"$1" && grep -qx "type	CoreEngineInterface" <<<"$1"' _ "$s78"
+
+  # 2. first check on 2.1.278: regenerates, one version, no steps, nothing unseen
+  FAKE_VER=2.1.278 mad; rc=$?
+  arm "first check exits 0 (rc $rc)" [ "$rc" -eq 0 ]
+  arm "first check saved 2.1.278's declarations" [ -s "$S/mods-api/2.1.278/claude-code.d.ts" ]
+  arm "first check wrote SHA256SUMS that verify" bash -c 'cd "$1" && shasum -a 256 -c SHA256SUMS >/dev/null 2>&1' _ "$S/mods-api"
+  arm "the scratch dir was cleaned (no .regen.* left)" [ -z "$(find "$S/mods-api" -maxdepth 1 -name '.regen.*' -print)" ]
+  arm "regen ran claude with no settings sources (no hook can fire inside it)" grep -q -- "--setting-sources" "$T/last-argv"
+  arm "report ok, 0 unseen" [ "$(st .status) $(st .unseen)" = "ok 0" ]
+  arm "card is silent with nothing unseen" [ -z "$(FAKE_VER=2.1.278 mad --card)" ]
+
+  # 3. update to 2.1.280: one unseen step naming the real changes
+  FAKE_VER=2.1.280 mad; rc=$?
+  arm "update check exits 0" [ "$rc" -eq 0 ]
+  arm "one step recorded, unseen" [ "$(st .unseen) $(st .steps)" = "1 1" ]
+  arm "the step names session.send as a new event" jq -e 'select(.id=="2.1.278->2.1.280") | .added.event | index("session.send")' "$S/mods-api/changes.jsonl" >/dev/null
+  arm "the step names the three new \$ ops" jq -e 'select(.id=="2.1.278->2.1.280") | (.added.op | index("process.spawn") and index("session.send") and index("ui.copy"))' "$S/mods-api/changes.jsonl" >/dev/null
+  arm "the step names a removed type" jq -e 'select(.id=="2.1.278->2.1.280") | .removed.type | index("ContextApiUsage")' "$S/mods-api/changes.jsonl" >/dev/null
+  out="$(FAKE_VER=2.1.280 mad --card)"
+  arm "card shows the count in brackets" grep -q '^Mods API: (1) unseen change -- 2.1.278->2.1.280: ' <<<"$out"
+  arm "card is one line" [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" -eq 1 ]
+  arm "CHANGES.md marks it UNSEEN" grep -q '2.1.278->2.1.280   (UNSEEN)' "$S/mods-api/CHANGES.md"
+  arm "list shows it as NEW" bash -c 'PJ_STATE_DIR="$1" MODS_API_CLAUDE="$2" FAKE_VER=2.1.280 "$3" list | grep -q "^NEW  2.1.278->2.1.280"' _ "$S" "$FC" "$0"
+
+  # 4. a second check on the same version changes nothing (no duplicate step, no regen)
+  local before; before="$(shasum -a 256 "$S/mods-api/changes.jsonl" | cut -c1-16)"
+  FAKE_VER=2.1.280 FAKE_NOWRITE=1 mad
+  arm "re-check on the same version adds no step" [ "$before" = "$(shasum -a 256 "$S/mods-api/changes.jsonl" | cut -c1-16)" ]
+
+  # 5. a text-only step is born seen and never reaches the card
+  mkdir -p "$S/mods-api/2.1.281"; { echo "// Written by Claude Code 2.1.281."; tail -n +2 "$S/mods-api/2.1.280/claude-code.d.ts"; echo "  // a comment moved"; } >"$S/mods-api/2.1.281/claude-code.d.ts"
+  FAKE_VER=2.1.281 mad
+  arm "text-only step recorded as seen" jq -e 'select(.id=="2.1.280->2.1.281") | .text_only and .seen' "$S/mods-api/changes.jsonl" >/dev/null
+  arm "and the card still counts only the real one" grep -q '^Mods API: (1) unseen' <<<"$(FAKE_VER=2.1.281 mad --card)"
+
+  # 6. keep-unread is the default; seen clears; the control: an unknown id is REFUSED
+  PJ_STATE_DIR="$S" MODS_API_CLAUDE="$FC" "$0" seen 9.9.9-bogus >/dev/null 2>&1; rc=$?
+  arm "seen <unknown id> is REFUSED rc 2" [ "$rc" -eq 2 ]
+  arm "and it changed nothing (still 1 unseen)" [ "$(FAKE_VER=2.1.281 mad --json --no-regen | jq -r .unseen)" = 1 ]
+  FAKE_VER=2.1.281 mad seen --all >/dev/null
+  arm "seen --all clears the count" [ "$(st .unseen)" = 0 ]
+  arm "card silent once seen" [ -z "$(FAKE_VER=2.1.281 mad --card)" ]
+
+  # 7. behind: a newer claude installed, --no-regen must not regenerate and must say so
+  out="$(FAKE_VER=2.1.290 mad --json --no-regen)"
+  arm "--no-regen reports behind" [ "$(jq -r .status <<<"$out")" = behind ]
+  arm "--no-regen wrote nothing (no 2.1.290 dir)" [ ! -e "$S/mods-api/2.1.290" ]
+
+  # 8. regen that names the wrong version is NOT MEASURED, never saved
+  FAKE_VER=2.1.291 FAKE_SRC=2.1.280 mad >/dev/null 2>&1; rc=$?
+  arm "declarations naming another version: rc 4" [ "$rc" -eq 4 ]
+  arm "and nothing was saved for 2.1.291" [ ! -e "$S/mods-api/2.1.291/claude-code.d.ts" ]
+
+  # 9. a broken extractor (a version whose file lost its blocks) is NOT MEASURED, not "no change"
+  mkdir -p "$S/mods-api/2.1.300"; echo "// Written by Claude Code 2.1.300." >"$S/mods-api/2.1.300/claude-code.d.ts"
+  FAKE_VER=2.1.300 mad >/dev/null 2>&1; rc=$?
+  arm "empty name sets: rc 4" [ "$rc" -eq 4 ]
+  arm "report --no-regen says broken" [ "$(FAKE_VER=2.1.300 mad --json --no-regen | jq -r .status)" = broken ]
+  arm "card names the broken check" grep -q 'NOT MEASURED' <<<"$(FAKE_VER=2.1.300 mad --card)"
+  command mv "$S/mods-api/2.1.300" "$T/aside-2.1.300"
+
+  # 10. an unwritable state dir is a REFUSAL by name (exit 3), not a hang; control: writable passes
+  local RO="$T/ro"; mkdir -p "$RO/mods-api"; chmod 555 "$RO/mods-api"
+  PJ_STATE_DIR="$RO" MODS_API_CLAUDE="$FC" FAKE_VER=2.1.280 "$0" >/dev/null 2>"$T/ro.err"; rc=$?
+  chmod 755 "$RO/mods-api"
+  arm "unwritable state dir: rc 3" [ "$rc" -eq 3 ]
+  arm "and it says REFUSED and names the dir" grep -q "REFUSED -- cannot write the state dir $RO/mods-api" "$T/ro.err"
+
+  # 11. --hook: exit 0 and silent even when it fails; the recursion guard short-circuits
+  chmod 555 "$RO/mods-api"
+  out="$(PJ_STATE_DIR="$RO" MODS_API_CLAUDE="$FC" FAKE_VER=2.1.280 "$0" --hook 2>&1)"; rc=$?
+  chmod 755 "$RO/mods-api"
+  arm "--hook exits 0 on a refusal" [ "$rc" -eq 0 ]
+  arm "--hook prints nothing on a refusal" [ -z "$out" ]
+  MODS_API_DRIFT_ACTIVE=1 PJ_STATE_DIR="$T/guard" MODS_API_CLAUDE="$FC" FAKE_VER=2.1.280 "$0" --hook
+  arm "recursion guard: inside our own claude -p nothing is written" [ ! -e "$T/guard/mods-api" ]
+
+  # 12. no claude version at all is NOT MEASURED
+  FAKE_VER= mad >/dev/null 2>&1; rc=$?
+  arm "no installed version: rc 4" [ "$rc" -eq 4 ]
+
+  echo "mods-api-drift selftest: $P passed, $F failed   (fixtures: $T)"
+  [ "$F" -eq 0 ]
+}
+
+# ------------------------------------------------------------------- main ----
+case "${1:-}" in
+  "")          check; exit $? ;;
+  --hook)      ( check ) >/dev/null 2>&1; exit 0 ;;
+  --json)      if [ "${2:-}" = --no-regen ]; then report_json; else check >/dev/null && report_json; fi; exit $? ;;
+  --card)      card; exit 0 ;;
+  list)        list "${2:-}"; exit 0 ;;
+  seen)        seen "${2:-}"; exit $? ;;
+  --selftest)  selftest; exit $? ;;
+  -h|--help)   sed -n '2,52p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  *)           die 2 "REFUSED unknown arg: $1 (--help)" ;;
+esac

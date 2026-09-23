@@ -55,7 +55,7 @@ fake "$DF/home/.local/bin/pj-id" 'echo "all 9 arms pass"; exit 0'
 # F5c: c2 and pj-launcher-menu carry selftests too, so pj-health --full runs them. A
 # tool whose suite nobody runs rots in silence, which is the same shape as a tool that
 # was never stowed -- it looks fine right up to the moment you need it.
-for s in c2 pj-launcher-menu; do
+for s in c2 pj-launcher-menu mods-api-drift; do
   fake "$DF/home/.local/bin/$s" 'case "${1:-}" in --selftest) echo "7 passed, 0 failed"; exit 0;; esac; exit 0'
 done
 
@@ -64,7 +64,7 @@ for h in enforce-secret-probe.sh enforce-census.sh enforce-herdr-skill.sh mark-h
 done
 echo '{"name":"pj","version":"0.1.0"}' >"$DF/home/.claude/pj/.claude-plugin/plugin.json"
 printf -- '---\nname: wrap-up\n---\n# wrap-up\n' >"$DF/home/.claude/pj/skills/wrap-up/SKILL.md"
-for t in $TOOLS c2 pj-launcher-menu pj-start-card-selftest pj-session-end-selftest pj-wrap-selftest open-items-selftest decided-selftest claude-hooks-sync-selftest claude-project-settings-render-selftest ccw-watch-selftest ci-watch-selftest pj-health-selftest audit-chain-selftest; do
+for t in $TOOLS c2 pj-launcher-menu mods-api-drift pj-start-card-selftest pj-session-end-selftest pj-wrap-selftest open-items-selftest decided-selftest claude-hooks-sync-selftest claude-project-settings-render-selftest ccw-watch-selftest ci-watch-selftest pj-health-selftest audit-chain-selftest; do
   ln -s "$DF/home/.local/bin/$t" "$BIN/$t"
 done
 for h in enforce-secret-probe.sh enforce-census.sh enforce-herdr-skill.sh mark-herdr-skill-read.sh validate-bash.sh enforce-uv.sh enforce-pnpm.sh pj-voice-contract.sh; do ln -s "$DF/home/.claude/hooks/$h" "$H/hooks/$h"; done
@@ -225,6 +225,59 @@ head -c 60000 /dev/zero | tr '\0' 'x' >"$UV_SKILL_OVER"
 # 18641*2.45 suggests: 4567000/245 truncates to 18640. Measured, not derived.
 head -c 45671 /dev/zero | tr '\0' 'x' >"$UV_SKILL_EDGE"
 
+# --- mods-api fixtures (F8b) ------------------------------------------------
+# Fake mods-api-drift reports, one per status the row maps. Fakes for the same reason
+# as the drift fakes above: the real report depends on which Claude Code is installed
+# today. mods-api-drift's own --selftest proves the statuses; these prove the mapping.
+mkdir -p "$T/modsdrift"
+mods_fake(){   # mods_fake <name> <json>
+  printf '#!/bin/sh\ncat <<'"'"'MJSON'"'"'\n%s\nMJSON\n' "$2" >"$T/modsdrift/$1"; chmod +x "$T/modsdrift/$1"
+}
+mods_fake pass   '{"status":"ok","detail":"","installed":"2.1.280","newest_saved":"2.1.280","saved":["2.1.277","2.1.278","2.1.280"],"surface":{"event":39,"op":72,"classic":33,"type":392,"module":1},"unseen":0,"unseen_steps":[],"steps":2}'
+mods_fake unseen '{"status":"ok","detail":"","installed":"2.1.280","newest_saved":"2.1.280","saved":["2.1.278","2.1.280"],"surface":{"event":39,"op":72,"classic":33,"type":392,"module":1},"unseen":1,"unseen_steps":[{"id":"2.1.278->2.1.280","summary":"+1 event(s), +3 $ op(s), +22 type(s), -2 type(s)"}],"steps":1}'
+mods_fake behind '{"status":"behind","detail":"Claude Code 2.1.290 is installed but the newest saved API is 2.1.280","installed":"2.1.290","newest_saved":"2.1.280","saved":["2.1.280"],"surface":null,"unseen":0,"unseen_steps":[],"steps":0}'
+mods_fake broken '{"status":"broken","detail":"the extractor found no event op in 2.1.300'"'"'s declarations: a format change, not an empty API","installed":"2.1.300","newest_saved":"2.1.300","saved":["2.1.300"],"surface":null,"unseen":0,"unseen_steps":[],"steps":0}'
+mods_fake none   '{"status":"none","detail":"no saved declarations","installed":"2.1.280","newest_saved":"","saved":[],"surface":null,"unseen":0,"unseen_steps":[],"steps":0}'
+printf '#!/bin/sh\necho "not json at all"\n' >"$T/modsdrift/junk"; chmod +x "$T/modsdrift/junk"
+
+# --- mod-validate fixtures (F8b, W-20260922-A08) -----------------------------
+# The fake claude answers `plugin validate --json <dir>` with the REAL JSON that
+# claude 2.1.280 printed for D's fixtures on 2026-09-23 (d-good, d-broken, d-linkdir),
+# paths shortened, keyed by the dir's basename. A fixture from the real tool, not typed
+# from a model of it: the "hooks:" note and the symlink warning text are what the row reads.
+MVR="$T/mvroot"; MVP="$T/mvprofiles"; MVC="$T/fakeclaude"; mkdir -p "$MVR" "$MVP" "$MVC/json"
+cat >"$MVC/json/m-good.json" <<'VJSON'
+{"success":true,"strict":false,"target":"d-good/.claude-plugin/plugin.json","manifest":{"file":"d-good/.claude-plugin/plugin.json","type":"plugin","errors":[],"warnings":[{"path":"author","message":"No author information provided. Consider adding author details for plugin attribution","code":null}],"notes":[]},"contents":[{"file":"d-good/hooks/hooks.json","type":"hooks","errors":[],"warnings":[],"notes":["./register.ts hooks: prompt.submit","./register.ts calls: $.env.get","./register.ts env writes: nothing","./register.ts env reads: D_GOOD_MODE"]}]}
+VJSON
+cat >"$MVC/json/m-broken.json" <<'VJSON'
+{"success":false,"strict":false,"target":"d-broken/.claude-plugin/plugin.json","manifest":{"file":"d-broken/.claude-plugin/plugin.json","type":"plugin","errors":[],"warnings":[{"path":"author","message":"No author information provided. Consider adding author details for plugin attribution","code":null}],"notes":[]},"contents":[{"file":"d-broken/hooks/hooks.json","type":"hooks","errors":[{"path":"modules../register.ts","message":"d-broken: d-broken/hooks/register.ts does not parse: Unexpected end of file (line 6, column 19)","code":null}],"warnings":[],"notes":[]}]}
+VJSON
+cat >"$MVC/json/m-linkwarn.json" <<'VJSON'
+{"success":true,"strict":false,"target":"d-linkdir/.claude-plugin/plugin.json","manifest":{"file":"d-linkdir/.claude-plugin/plugin.json","type":"plugin","errors":[],"warnings":[{"path":"author","message":"No author information provided. Consider adding author details for plugin attribution","code":null}],"notes":[]},"contents":[{"file":"d-linkdir/hooks/hooks.json","type":"hooks","errors":[],"warnings":[{"path":"directory","message":"The hooks directory is a symlink and was not read — hooks are read without following symlinks and are capped at 1048576 bytes. The plugin loader has neither limit and fails the whole plugin on bad hook config, so validate the real file separately.","code":null}],"notes":[]}]}
+VJSON
+# m-twomods lists two modules; the real good JSON carries one hooks note, so validate "read one of two"
+cp "$MVC/json/m-good.json" "$MVC/json/m-twomods.json"
+cat >"$MVC/claude" <<FCL
+#!/bin/sh
+[ "\$1 \$2 \$3" = "plugin validate --json" ] || exit 2
+b="\$(basename "\$4")"
+[ "\$b" = m-nojson ] && { echo "validate crashed"; exit 1; }
+cat "$MVC/json/\$b.json" 2>/dev/null || exit 1
+FCL
+chmod +x "$MVC/claude"
+mkmod(){   # mkmod <dir-name> <n-modules>   a plugin dir whose hooks/hooks.json lists n modules
+  mkdir -p "$MVR/$1/.claude-plugin" "$MVR/$1/hooks"; echo "{\"name\":\"$1\"}" >"$MVR/$1/.claude-plugin/plugin.json"
+  if [ "$2" -eq 2 ]; then echo '{"modules":["./register.ts","./second.ts"]}' >"$MVR/$1/hooks/hooks.json"
+  else echo '{"modules":["./register.ts"]}' >"$MVR/$1/hooks/hooks.json"; fi
+  echo 'export const register = () => {}' >"$MVR/$1/hooks/register.ts"
+}
+for m in m-good m-broken m-linkwarn m-nojson m-links; do mkmod "$m" 1; done; mkmod m-twomods 2
+mkdir -p "$MVR/skills/plain"; echo "# a skill, no hooks" >"$MVR/skills/plain/SKILL.md"
+ln -s "$MVR/m-good/hooks/register.ts" "$MVR/m-links/hooks/linked.ts"   # a stow-shaped link inside a mod dir
+mvprof(){   # mvprof <plugins...>   rewrite the one fixture profile
+  printf 'plugins: %s\nplugins_root: %s\n' "$*" "$MVR" >"$MVP/mods"
+}
+
 # ------------------------------------------------------------------ runner ----
 OUT=""
 run(){   # run [dir] [args...]  -> OUT holds the JSON; RC the exit code
@@ -240,6 +293,8 @@ run(){   # run [dir] [args...]  -> OUT holds the JSON; RC the exit code
       PJ_TRAILER_REPOS="$TR_SEAM" \
       PJ_HEALTH_DRIFT="${PJ_HEALTH_DRIFT_FX:-$T/drift/pass}" \
       PJ_HEALTH_SKILL="${PJ_HEALTH_SKILL_FX:-$T/skill/under.md}" \
+      PJ_HEALTH_MODS_DRIFT="${PJ_HEALTH_MODS_DRIFT_FX:-$T/modsdrift/pass}" \
+      PJ_HEALTH_CLAUDE="${PJ_HEALTH_CLAUDE_FX:-$MVC/claude}" \
       pj-health --json "$@" 2>"$T/stderr") )"; RC=$?
 }
 st(){ jq -r --arg n "$1" '.rows[] | select(.name==$n) | .state' <<<"$OUT"; }
@@ -262,7 +317,7 @@ arm "baseline parses as JSON" jq -e '.rows|length>0' <<<"$OUT" >/dev/null
 # ~/.config/pj/profiles and the suite's result would depend on the machine it runs on --
 # NOT MEASURED on a box with nothing stowed, WARN on a box with a profile pointing
 # somewhere unusual. They get hermetic arms of their own in the profiles section below.
-for n in launcher output-style plugin-dirs prompt-file rules-budget skill-budget settings-render hooks-sync hook-orphans hook-single-fire stow-links bin-strays machine-file pj-global no-wrap-up selftests launch-log stale-shells pj-homes drawer decided-store commit-trailer skill-upstream evidence-card evidence-ci-watch evidence-rules evidence-plugins evidence-tokens; do
+for n in launcher output-style plugin-dirs prompt-file rules-budget skill-budget settings-render hooks-sync hook-orphans hook-single-fire stow-links bin-strays machine-file pj-global no-wrap-up selftests launch-log stale-shells pj-homes drawer decided-store commit-trailer skill-upstream mods-api evidence-card evidence-ci-watch evidence-rules evidence-plugins evidence-tokens; do
   arm "baseline $n PASS (got $(st "$n"): $(dt "$n" | cut -c1-80))" is "$n" PASS
 done
 arm "baseline live-probe NOT MEASURED without --live" is live-probe "$NM"
@@ -789,6 +844,72 @@ PJ_HEALTH_SKILL_FX="" run
 arm "skill-budget back to PASS (control: the arms above were fixtures, not a broken row)" is skill-budget PASS
 arm "control: the three fixtures really are different sizes" [ "$(wc -c <"$T/skill/under.md")" -lt "$(wc -c <"$T/skill/edge.md")" ] && [ "$(wc -c <"$T/skill/edge.md")" -lt "$(wc -c <"$T/skill/over.md")" ]
 
+# ---------------------------------------------------- mods-api (F8b) ----
+# Every status mods-api-drift reports, mapped. On this machine the live tool will read
+# PASS or WARN depending on the day, so without fakes most branches would ship unseen.
+arm "mods-api PASS names the version and the surface" has mods-api "API of 2.1.280 saved and compared (3 version(s) kept, 39 events, 72 \$ ops"
+PJ_HEALTH_MODS_DRIFT_FX="$T/modsdrift/unseen" run
+arm "mods-api WARN on an unseen change" is mods-api WARN
+arm "mods-api WARN gives the count and the step" has mods-api "1 unseen mods API change(s), newest 2.1.278->2.1.280"
+arm "mods-api WARN says how to clear it" has mods-api "mods-api-drift seen --all"
+arm "an unseen change is not a FAIL (news, not a wiring fault)" [ "$(st mods-api)" != FAIL ]
+PJ_HEALTH_MODS_DRIFT_FX="$T/modsdrift/behind" run
+arm "mods-api WARN when the installed claude is newer than the saved API" is mods-api WARN
+arm "and it names both versions" has mods-api "2.1.290 is installed but the newest saved API is 2.1.280"
+PJ_HEALTH_MODS_DRIFT_FX="$T/modsdrift/broken" run
+arm "mods-api NOT MEASURED when the extractor found empty sets" is mods-api "$NM"
+arm "and it says never to read that as no change" has mods-api "never read this as 'no change'"
+PJ_HEALTH_MODS_DRIFT_FX="$T/modsdrift/none" run
+arm "mods-api NOT MEASURED with nothing saved" is mods-api "$NM"
+PJ_HEALTH_MODS_DRIFT_FX="$T/modsdrift/junk" run
+arm "mods-api NOT MEASURED when the tool prints no JSON" is mods-api "$NM"
+arm "and names the no-JSON cause" has mods-api "returned no JSON report"
+PJ_HEALTH_MODS_DRIFT_FX=/nonexistent-mods-api-drift run
+arm "mods-api NOT MEASURED when the tool is not on PATH" is mods-api "$NM"
+PJ_HEALTH_MODS_DRIFT_FX="" run
+arm "mods-api back to PASS (control: the arms above were fixtures, not a broken row)" is mods-api PASS
+
+# ------------------------------------------------ mod-validate (F8b) ----
+# Hermetic: its own profiles dir and plugin root, so the real ~/.config/pj/profiles and
+# the real ~/.claude plugin dirs are never read.
+mvrun(){ PJ_PROFILE_DIR="$MVP" run; }
+mvprof skills/plain; mvrun
+arm "mod-validate PASS with no mods, and says so rather than reading 0 as a pass of something" has mod-validate "0 of 1 declared plugin dir(s) carry a hooks module, so there is nothing to validate"
+arm "mod-validate PASS with no mods" is mod-validate PASS
+mvprof m-good skills/plain; mvrun
+arm "mod-validate PASS on a mod that parses (real validate JSON)" is mod-validate PASS
+arm "mod-validate PASS names the mod and its module count" has mod-validate "1 of 2 declared plugin dir(s) carry a hooks module and all parse: m-good (1 module(s))"
+mvprof m-good m-broken; mvrun
+arm "mod-validate FAIL on a mod that does not parse" is mod-validate FAIL
+arm "mod-validate FAIL quotes the parse error" has mod-validate "does not parse: Unexpected end of file (line 6, column 19)"
+arm "mod-validate FAIL gives the fix command" has mod-validate "fix: claude plugin validate"
+arm "a FAIL row fails the run" [ "$RC" -eq 1 ]
+mvprof m-links; mvrun
+arm "mod-validate FAIL on a symlink inside a mod dir (validate would skip it)" is mod-validate FAIL
+arm "the symlink FAIL names the link and points at the ruling" has mod-validate "linked.ts ->"
+arm "the symlink FAIL says why" has mod-validate "D-20260923-A05"
+mvprof m-twomods; mvrun
+arm "mod-validate NOT MEASURED when validate reported hooks for fewer modules than listed" is mod-validate "$NM"
+arm "and it gives both counts" has mod-validate "lists 2 module(s) but validate reported hooks for 1"
+mvprof m-linkwarn; mvrun
+arm "mod-validate NOT MEASURED on validate's own symlink warning (real text)" is mod-validate "$NM"
+arm "never PASS when validate did not read the hooks" [ "$(st mod-validate)" != PASS ]
+mvprof m-nojson; mvrun
+arm "mod-validate NOT MEASURED when validate gives no JSON" is mod-validate "$NM"
+mvprof m-good; PJ_HEALTH_CLAUDE_FX=/nonexistent-claude mvrun
+arm "mod-validate NOT MEASURED when claude is not on PATH (and a mod exists)" is mod-validate "$NM"
+mvprof skills/plain; PJ_HEALTH_CLAUDE_FX=/nonexistent-claude mvrun
+arm "no claude needed when no mod is declared (control for the arm above)" is mod-validate PASS
+printf 'plugins: none\n' >"$MVP/mods"; mvrun
+arm "a 'plugins: none' profile contributes 0 dirs" has mod-validate "0 of 0 declared plugin dir(s)"
+mvprof m-good skills/plain; printf 'plugins: m-good\nplugins_root: %s\n' "$MVR" >"$MVP/other"; mvrun
+arm "the same dir declared by two profiles is counted once" has mod-validate "1 of 2 declared plugin dir(s)"
+command mv "$MVP/other" "$T/gone/mvp-other"
+PJ_PROFILE_DIR="$T/no-such-profiles" run
+arm "mod-validate NOT MEASURED with no profiles dir" is mod-validate "$NM"
+mvprof m-good skills/plain; mvrun
+arm "mod-validate back to PASS (control)" is mod-validate PASS
+
 # output shape, exit codes, quiet, line cap
 run; arm "exit 0 when no FAIL" [ "$RC" -eq 0 ]
 arm "json exit field 0" [ "$(jq -r .exit <<<"$OUT")" = 0 ]
@@ -801,7 +922,7 @@ arm "--quiet keeps the summary line" grep -q '^pj-health: .* FAIL, ' <<<"$QOUT"
 write_settings
 FOUT="$( (builtin cd "$PROJ" && PATH="$BIN:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" PJ_HOME="$H" PJ_BIN_DIR="$BIN" PJ_DOTFILES="$DF" PJ_LAUNCHER="$BIN/pj" PJ_TYPE_OUT="$T/type-out" DRYRUN_FILE="$T/dryrun" PJ_PS_OUT="$T/ps" PJ_ZSHRC_MTIME="$ZMT" PJ_TRANSCRIPTS_DIR="$H/projects" PJ_STATE_DIR="$STATE" PJ_MACHINE_FILE="$T/machine" PJ_PROMPT_SOURCES="$OR:$RULES" PJ_PROMPT_OUT="$T/cache/prompt.md" OI_WHERE_FILE="$T/oi-where" DECIDED_LIST_FILE="$T/decided-list" DECIDED_LIST_RC="$T/decided-list-rc" DECIDED_HOMES_FILE="$T/decided-homes" RENDER_OUT_FILE="$T/render-out" RENDER_RC_FILE="$T/render-rc" SYNC_OUT_FILE="$T/sync-out" pj-health 2>/dev/null) )"
 arm "normal output under 40 lines ($(wc -l <<<"$FOUT" | tr -d ' '))" [ "$(wc -l <<<"$FOUT" | tr -d ' ')" -lt 40 ]
-arm "normal output has one row per check (35)" [ "$(grep -cE '^(PASS|WARN|FAIL|NOT MEASURED) ' <<<"$FOUT")" -eq 35 ]
+arm "normal output has one row per check (37)" [ "$(grep -cE '^(PASS|WARN|FAIL|NOT MEASURED) ' <<<"$FOUT")" -eq 37 ]
 arm "unknown arg REFUSED rc 2" bash -c 'PATH="$1:$PATH" pj-health --bogus >/dev/null 2>&1; [ $? -eq 2 ]' _ "$BIN"
 arm "--help exits 0" bash -c 'PATH="$1:$PATH" pj-health --help >/dev/null 2>&1' _ "$BIN"
 

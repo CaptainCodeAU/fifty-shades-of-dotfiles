@@ -44,22 +44,23 @@ to the config dir holding that session's transcript.
 `~/.config/pj/profiles/<name>`, stowed from `home/.config/pj/profiles/`. Paths only.
 It is tracked in a public repo, so nothing in it is ever a secret.
 
-| Key               | Feeds                         | Notes                                                                                                        |
-| ----------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `config_dir`      | `CLAUDE_CONFIG_DIR`           | `~/.claude` means **do not export the variable at all** (see below)                                          |
-| `setting_sources` | `--setting-sources`           |                                                                                                              |
-| `settings`        | `--settings`                  |                                                                                                              |
-| `prompt`          | `--append-system-prompt-file` | the literal word `pj-prompt-file` runs that tool; anything else is used as a path                            |
-| `plugins`         | one `--plugin-dir` each       | names are relative to `~/.claude`. `none` passes no `--plugin-dir` at all                                    |
-| `required`        | flags appended last           | the **default** profile's `required` is appended to every profile, so none can drop them by omitting the key |
-| `mode`            | `normal` \| `safe`            | `safe` adds `--safe-mode`. Supported, but no shipped profile uses it -- see below                            |
-| `card`            | `on` \| `off`                 | `off` exports `PJ_NO_CARD=1`, and `pj-start-card` stays silent                                               |
-| `model`           | `--model <name>`              | unset = the account default (Opus 5 1M here). Added F5b                                                      |
-| `remote_control`  | `remoteControlAtStartup`      | `on` \| `off`, via an overlay `--settings`. Unset = leave it to the organisation default. Added F5b          |
-| `voice`           | `voiceEnabled`                | `on` \| `off`, via the same overlay. Claude Code's OWN voice, not this repo's audio hooks. Added F5b         |
-| `prompt_sources`  | `PJ_PROMPT_SOURCES`           | colon list handed to `pj-prompt-file`; `~` expands per entry. Unset = the tool's own two files. Added P10    |
-| `prompt_out`      | `PJ_PROMPT_OUT`               | the cache file that build writes. A branch profile MUST set its own (see below). Added P10                   |
-| `plugins_root`    | the `--plugin-dir` prefix     | the dir the `plugins` names are joined to. Unset = `~/.claude`. `pj-launch-check` reads it too. Added P10    |
+| Key               | Feeds                                 | Notes                                                                                                                                                                                                    |
+| ----------------- | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `config_dir`      | `CLAUDE_CONFIG_DIR`                   | `~/.claude` means **do not export the variable at all** (see below)                                                                                                                                      |
+| `setting_sources` | `--setting-sources`                   |                                                                                                                                                                                                          |
+| `settings`        | `--settings`                          |                                                                                                                                                                                                          |
+| `prompt`          | `--append-system-prompt-file`         | the literal word `pj-prompt-file` runs that tool; anything else is used as a path                                                                                                                        |
+| `plugins`         | one `--plugin-dir` each               | names are relative to `~/.claude`. `none` passes no `--plugin-dir` at all                                                                                                                                |
+| `required`        | flags appended last                   | the **default** profile's `required` is appended to every profile, so none can drop them by omitting the key                                                                                             |
+| `mode`            | `normal` \| `safe`                    | `safe` adds `--safe-mode`. Supported, but no shipped profile uses it -- see below                                                                                                                        |
+| `card`            | `on` \| `off`                         | `off` exports `PJ_NO_CARD=1`, and `pj-start-card` stays silent                                                                                                                                           |
+| `model`           | `--model <name>`                      | unset = the account default (Opus 5 1M here). Added F5b                                                                                                                                                  |
+| `remote_control`  | `remoteControlAtStartup`              | `on` \| `off`, via an overlay `--settings`. Unset = leave it to the organisation default. Added F5b                                                                                                      |
+| `voice`           | `voiceEnabled`                        | `on` \| `off`, via the same overlay. Claude Code's OWN voice, not this repo's audio hooks. Added F5b                                                                                                     |
+| `prompt_sources`  | `PJ_PROMPT_SOURCES`                   | colon list handed to `pj-prompt-file`; `~` expands per entry. Unset = the tool's own two files. Added P10                                                                                                |
+| `prompt_out`      | `PJ_PROMPT_OUT`                       | the cache file that build writes. A branch profile MUST set its own (see below). Added P10                                                                                                               |
+| `plugins_root`    | the `--plugin-dir` prefix             | the dir the `plugins` names are joined to. Unset = `~/.claude`. `pj-launch-check` reads it too. Added P10                                                                                                |
+| `function_hooks`  | `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` | **on by default** in every profile (D-20260923-A08); only the literal `off` exports nothing, the negative-control lane for testing a mod. Remove once Claude Code ships mods without the flag. Added F8b |
 
 ### A branch of dot-claude as the loaded one (P10)
 

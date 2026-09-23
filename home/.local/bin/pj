@@ -81,6 +81,11 @@
 #   plugins_root: <dir>     the directory the `plugins` entries are joined to; default
 #                           ~/.claude. pj-launch-check reads the same key, so its
 #                           declared-vs-passed comparison follows the root too.
+#   function_hooks: on|off  Claude Mods (function hooks, early access). ON by default for
+#                           every profile (D-20260923-A08): pj exports
+#                           CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1. `off` exports nothing, which
+#                           is the negative-control lane for testing a mod. Remove the key
+#                           and the export once Claude Code ships mods without the flag.
 #
 # Refuses (exit 2, one line on stderr) when pj-prompt-file prints nothing: a launch
 # without the rules file is the failure this script exists to prevent, so it never
@@ -126,6 +131,8 @@ P_VOICE=""
 P_PROMPT_SOURCES=""
 P_PROMPT_OUT=""
 P_PLUGINS_ROOT="$HOME/.claude"
+# D-20260923-A08: mods on by default until Claude Code ships them without the flag.
+P_FUNCTION_HOOKS="on"
 PROFILE_NAME="default"
 
 expand_tilde() { local p="$1"; print -r -- "${p/#\~/$HOME}"; }
@@ -172,6 +179,7 @@ read_profile() {
       prompt_sources)  P_PROMPT_SOURCES="$(expand_tilde_list "$v")" ;;
       prompt_out)      P_PROMPT_OUT="$(expand_tilde "$v")" ;;
       plugins_root)    P_PLUGINS_ROOT="$(expand_tilde "$v")" ;;
+      function_hooks)  P_FUNCTION_HOOKS="$v" ;;
     esac
   done < "$f"
 }
@@ -405,6 +413,8 @@ build_argv() {
   PJ_ENV=()
   [[ "$P_CONFIG_DIR" != "$HOME/.claude" ]] && PJ_ENV+=("CLAUDE_CONFIG_DIR=$P_CONFIG_DIR")
   [[ "$P_CARD" == off ]] && PJ_ENV+=("PJ_NO_CARD=1")
+  # Only the literal `off` switches it off: an unknown value keeps the documented default.
+  [[ "$P_FUNCTION_HOOKS" != off ]] && PJ_ENV+=("CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1")
   PJ_ENV+=("PJ_PROFILE=$PROFILE_NAME")
   # ALREADY SET WINS, so a stage that opens a control pane exports its own name first and
   # pj leaves it alone. Note the asymmetry: `--name` typed after `pj` beats the variable
@@ -636,11 +646,14 @@ selftest() {
   out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --dry-run-env 2>/dev/null)"
   [[ "$out" != *CLAUDE_CONFIG_DIR* ]] && ok "13 default profile exports no CLAUDE_CONFIG_DIR" || bad "13 default exported a config dir" "$out"
   [[ "$out" == *"PJ_PROFILE=default"* ]] && ok "13 default profile names itself in the env" || bad "13 PJ_PROFILE" "$out"
+  # 13c. D-20260923-A08: mods are ON by default, so the default launch exports the flag.
+  [[ "$out" == *"CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1"* ]] && ok "13c default profile exports CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1" || bad "13c function hooks default" "$out"
   # 14. a named profile: config dir exported, no plugin dirs, card off, safe mode absent
   {
     print -- "config_dir: $root/cfg-x"
     print -- "plugins:    none"
     print -- "card:       off"
+    print -- "function_hooks: off"
   } > "$pdir/scratchy"
   out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile scratchy --dry-run 2>/dev/null)"
   [[ "$out" != *"--plugin-dir"* ]] && ok "14 plugins: none passes no --plugin-dir" || bad "14 plugins none" "$out"
@@ -650,6 +663,8 @@ selftest() {
   out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile scratchy --dry-run-env 2>/dev/null)"
   [[ "$out" == *"CLAUDE_CONFIG_DIR=$root/cfg-x"* ]] && ok "14 a forked config dir IS exported" || bad "14 config dir" "$out"
   [[ "$out" == *"PJ_NO_CARD=1"* ]] && ok "14 card: off exports PJ_NO_CARD=1" || bad "14 card off" "$out"
+  # 14c. function_hooks: off is the negative-control lane: no flag in the env at all.
+  [[ "$out" != *FUNCTION_HOOKS* ]] && ok "14c function_hooks: off exports no flag" || bad "14c function hooks off" "$out"
   # 15. mode: safe adds --safe-mode, and ONLY then. Kept supported for P9's baseline.
   printf 'mode: safe\n' > "$pdir/safey"
   out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile safey --dry-run 2>/dev/null)"

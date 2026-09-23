@@ -153,6 +153,18 @@
     },
     {
       "event": "SessionStart",
+      "script": "mods-api-drift",
+      "script_path": "$HOME/.local/bin/mods-api-drift",
+      "targets": ["project"],
+      "entry": {
+        "type": "command",
+        "command": "test -x \"$HOME/.local/bin/mods-api-drift\" && \"$HOME/.local/bin/mods-api-drift\" --hook || true",
+        "timeout": 30
+      },
+      "why": "Claude Mods API drift (F8b, D-20260923-A01/-A06): once per Claude Code update, saves the /plugin-types declarations (local, 0 tokens) and records what changed, which the start card then counts as unseen. Silent, exit 0 always. The card reads the result, so the first session after an update may show it one session late"
+    },
+    {
+      "event": "SessionStart",
       "script": "pj-launch-check",
       "script_path": "$HOME/.local/bin/pj-launch-check",
       "targets": ["project"],

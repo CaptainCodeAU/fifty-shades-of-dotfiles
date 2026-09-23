@@ -28,6 +28,9 @@
 #   then     Tracker: <marker path>, one per declared tracker
 #   then     dot-claude: N commit(s) behind origin -- ONLY when behind, never when level
 #            (refs only, no network; `pj` kicks the detached fetch that fills them)
+#   then     Mods API: (N) unseen change(s) -- ONLY when a Claude Code update changed the
+#            mods API and Gavin has not said "seen" (`mods-api-drift --card`, read-only;
+#            D-20260923-A06). Also one line when the drift check itself is NOT MEASURED
 #   last     the hello rule
 #   Outside a git repo: line 1 and the hello rule only.
 #
@@ -146,6 +149,16 @@ sync_line(){
   printf 'dot-claude: %s commit(s) behind %s%s. Pull it yourself when convenient; pj fetches but never pulls.' "$behind" "$up" "$age"
 }
 
+# The mods API line (F8b, D-20260923-A06). mods-api-drift --card reads the saved reports and
+# prints one line only when a Claude Code update changed the mods API and nobody has said
+# "seen" yet. Read-only and local (it runs `claude --version`, 7 ms), so it keeps CONTRACT 2
+# and 3. The count stays until Gavin clears it: that is his "keep unread".
+mods_line(){
+  local t="${PJ_MODS_API_DRIFT:-mods-api-drift}"
+  command -v "$t" >/dev/null 2>&1 || return 0
+  "$t" --card 2>/dev/null | head -1
+}
+
 # --- the card ------------------------------------------------------------------
 card(){
   local top="" name="" lines=() drawer="" decl="" wrc=0 where=""
@@ -224,10 +237,12 @@ card(){
   [ -n "$warn" ] && lines+=("$warn")
   [ -n "$open_header" ] && lines+=("$open_header")
   local sync=""; sync="$(sync_line 2>/dev/null)" || sync=""
+  local mods=""; mods="$(mods_line 2>/dev/null)" || mods=""
   local fixed=$(( ${#lines[@]} + ${#trackers[@]} + 1 ))   # +1 hello
   [ -n "$parked" ] && fixed=$((fixed + 1))
   [ -n "$handoff" ] && fixed=$((fixed + 1))
   [ -n "$sync" ] && fixed=$((fixed + 1))
+  [ -n "$mods" ] && fixed=$((fixed + 1))
   local budget=$(( CAP - fixed )) cap=$TITLE_CAP total=${#titles[@]}
   [ "$cap" -gt "$budget" ] && cap=$budget
   local more=0
@@ -240,6 +255,7 @@ card(){
   [ -n "$handoff" ] && lines+=("$handoff")
   [ "${#trackers[@]}" -gt 0 ] && lines+=("${trackers[@]}")
   [ -n "$sync" ] && lines+=("$sync")
+  [ -n "$mods" ] && lines+=("$mods")
   lines+=("$HELLO")
   printf '%s\n' "${lines[@]}"
 }

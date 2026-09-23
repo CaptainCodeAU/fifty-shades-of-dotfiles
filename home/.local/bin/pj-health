@@ -52,6 +52,8 @@
 #                        Its FAIL and WARN branches are unreachable on a machine
 #                        whose snapshot is current, which is how you ship a row
 #                        that can only ever print PASS
+#   PJ_HEALTH_MODS_DRIFT the mods-api-drift the mods-api row reads (F8b)
+#   PJ_HEALTH_CLAUDE     the claude the mod-validate row calls for `plugin validate`
 #   PJ_HEALTH_SKILL      the herdr SKILL.md the skill-budget row weighs. Same
 #                        argument: on a box inside its budget only PASS is
 #                        reachable, so WARN needs a fixture to be observed
@@ -64,8 +66,8 @@ DOTFILES_BASELINE=70000
 BUDGET_MARGIN_PCT=15
 BASELINE_MIN_TRANSCRIPTS=3
 BASELINE_WINDOW=5
-FRAMEWORK_TOOLS="pj pj-launch-check pj-prompt-file pj-start-card pj-session-end pj-wrap pj-id open-items decided claude-hooks-sync claude-project-settings-render ci-watch ccw-watch pj-health"
-SELFTESTS="pj:--selftest pj-launch-check:--selftest pj-start-card-selftest pj-session-end-selftest pj-wrap-selftest pj-prompt-file:--selftest pj-id:--selftest open-items-selftest decided-selftest claude-hooks-sync-selftest claude-project-settings-render-selftest ccw-watch-selftest ci-watch-selftest pj-health-selftest audit-chain-selftest c2:--selftest pj-launcher-menu:--selftest"
+FRAMEWORK_TOOLS="pj pj-launch-check pj-prompt-file pj-start-card pj-session-end pj-wrap pj-id open-items decided claude-hooks-sync claude-project-settings-render ci-watch ccw-watch pj-health mods-api-drift"
+SELFTESTS="pj:--selftest pj-launch-check:--selftest pj-start-card-selftest pj-session-end-selftest pj-wrap-selftest pj-prompt-file:--selftest pj-id:--selftest open-items-selftest decided-selftest claude-hooks-sync-selftest claude-project-settings-render-selftest ccw-watch-selftest ci-watch-selftest pj-health-selftest audit-chain-selftest c2:--selftest pj-launcher-menu:--selftest mods-api-drift:--selftest"
 HOOK_SELFTESTS="enforce-secret-probe.sh validate-bash.sh enforce-uv.sh enforce-pnpm.sh pj-voice-contract.sh"
 PLUGIN_DIRS_EXPECTED="skills/herdr skills/AgentRelay skills/ISA pj-voice pj"
 LAUNCH_LOG_WINDOW=20
@@ -80,7 +82,7 @@ for a in "$@"; do
     --profile) _want_profile=1 ;;
     --profile=*) PROFILE="${a#--profile=}" ;;
     --selftest) exec pj-health-selftest ;;
-    -h|--help) sed -n '2,45p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,47p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "pj-health: REFUSED unknown arg: $a (--help)" >&2; exit 2 ;;
   esac
 done
@@ -750,6 +752,101 @@ if [ -r "$HERDR_SKILL" ]; then
   fi
 else
   row NOTM skill-budget "$(tilde "$HERDR_SKILL") absent or unreadable, so nothing was weighed"
+fi
+
+# --- mods-api: has a Claude Code update changed the mods API? (F8b, D-20260923-A01/-A06) ----
+# Reads mods-api-drift's report with --no-regen, so this row never regenerates and never
+# writes (CONTRACT 1). The SessionStart hook `mods-api-drift --hook` does the work once
+# per Claude Code update; /plugin-types is local and free. WARN, never FAIL: an unseen API
+# change is news for Gavin, not a wiring fault, and it stays WARN until he says "seen".
+PJ_HEALTH_MODS_DRIFT="${PJ_HEALTH_MODS_DRIFT:-mods-api-drift}"
+if command -v "$PJ_HEALTH_MODS_DRIFT" >/dev/null 2>&1; then
+  ma_json="$("$PJ_HEALTH_MODS_DRIFT" --json --no-regen 2>/dev/null || true)"
+  ma_st="$(printf '%s' "$ma_json" | jq -r '.status // empty' 2>/dev/null)"
+  ma_det="$(printf '%s' "$ma_json" | jq -r '.detail // ""' 2>/dev/null)"
+  ma_new="$(printf '%s' "$ma_json" | jq -r '.newest_saved // "?"' 2>/dev/null)"
+  ma_n="$(printf '%s' "$ma_json" | jq -r '.saved | length' 2>/dev/null)"
+  ma_un="$(printf '%s' "$ma_json" | jq -r '.unseen // 0' 2>/dev/null)"
+  case "$ma_st" in
+    "")      row NOTM mods-api "mods-api-drift returned no JSON report, so the mods API was not compared" ;;
+    none)    row NOTM mods-api "no saved mods API declarations yet; run: mods-api-drift (local, 0 tokens)" ;;
+    broken)  row NOTM mods-api "$ma_det; fix the extractor in mods-api-drift, never read this as 'no change'" ;;
+    unknown) row NOTM mods-api "$ma_det" ;;
+    behind)  row WARN mods-api "$ma_det; run: mods-api-drift (local, 0 tokens), or open a pj session and its hook will" ;;
+    ok)
+      if [ "${ma_un:-0}" -gt 0 ] 2>/dev/null; then
+        row WARN mods-api "$ma_un unseen mods API change(s), newest $(printf '%s' "$ma_json" | jq -r '.unseen_steps[0] | "\(.id): \(.summary)"'); list: mods-api-drift list, clear: mods-api-drift seen --all"
+      else
+        row PASS mods-api "API of $ma_new saved and compared ($ma_n version(s) kept, $(printf '%s' "$ma_json" | jq -r '.surface | "\(.event) events, \(.op) $ ops, \(.classic) classic seams, \(.type) types"')); nothing unseen"
+      fi ;;
+    *)       row NOTM mods-api "mods-api-drift reported an unknown status '$ma_st'" ;;
+  esac
+else
+  row NOTM mods-api "mods-api-drift is not on PATH, so the mods API was not compared; fix: stow -R the dotfiles"
+fi
+
+# --- mod-validate: does every mod a profile declares parse? (F8b, W-20260922-A08) ----
+# A broken hooks module fails OPEN and leaves no trace in a `claude -p` run (F8a E3), and
+# `claude plugin validate` is the only instrument that sees it. Two traps, both measured
+# on 2.1.280 and both reasons this row is more than "run validate":
+#   * validate does NOT read a symlinked hooks/hooks.json or hooks/ dir and exits 0 anyway,
+#     while the loader follows the link. So ANY symlink inside a mod dir is a FAIL here
+#     (D-20260923-A05: no mod file may resolve into a cwd-writable repo).
+#   * validate scans only the modules hooks/hooks.json lists under "modules", and exits 0
+#     having scanned nothing otherwise. So the positive arm is one "<module> hooks:" note
+#     per listed module; fewer is NOT MEASURED, never PASS.
+# Profiles are read from their FILES with profile_key, never from the launcher's dry run:
+# `pj --dry-run` does not see --profile (W-20260923-A03). A dir is a mod when its
+# hooks/hooks.json lists modules; the others are skills and styles and are only counted.
+PJ_HEALTH_CLAUDE="${PJ_HEALTH_CLAUDE:-claude}"
+if [ ! -d "$PROFILE_DIR" ]; then
+  row NOTM mod-validate "no profiles dir at $(tilde "$PROFILE_DIR"), so no declared plugin dir was read"
+else
+  mv_dirs=0; mv_mods=0; mv_ok=""; mv_fail=""; mv_notm=""; mv_seen=" "
+  for pf in "$PROFILE_DIR"/*; do
+    [ -f "$pf" ] || continue
+    pn="$(basename "$pf")"
+    pl="$(profile_key "$pn" plugins)"; [ -n "$pl" ] || pl="$PLUGIN_DIRS_EXPECTED"
+    [ "$pl" = none ] && continue
+    pr="$(expand_tilde "$(profile_key "$pn" plugins_root)")"; [ -n "$pr" ] || pr="$PJ_HOME"
+    for p in $pl; do
+      d="$pr/$p"
+      case "$mv_seen" in *" $d "*) continue ;; esac
+      mv_seen="$mv_seen$d "; mv_dirs=$((mv_dirs+1))
+      hj="$d/hooks/hooks.json"
+      nmod="$(jq -r '(.modules // []) | length' "$hj" 2>/dev/null || echo 0)"
+      [ "${nmod:-0}" -gt 0 ] 2>/dev/null || continue
+      mv_mods=$((mv_mods+1))
+      links="$( { [ -L "$d" ] && echo "$d"; find "$d/" -type l -print 2>/dev/null; } | head -3 | while IFS= read -r l; do printf '%s -> %s; ' "$(tilde "$l")" "$(tilde "$(readlink "$l")")"; done)"
+      if [ -n "$links" ]; then
+        mv_fail="${mv_fail:+$mv_fail | }$(tilde "$d") holds symlink(s): ${links%; } (validate skips them and a session in the repo can rewrite them live); fix: install the mod as real files (D-20260923-A05)"
+        continue
+      fi
+      if ! command -v "$PJ_HEALTH_CLAUDE" >/dev/null 2>&1; then
+        mv_notm="${mv_notm:+$mv_notm | }claude is not on PATH, so $(tilde "$d") was not validated"; continue
+      fi
+      vj="$("$PJ_HEALTH_CLAUDE" plugin validate --json "$d" 2>/dev/null)"
+      if [ "$(printf '%s' "$vj" | jq -r 'has("success")' 2>/dev/null)" != true ]; then
+        mv_notm="${mv_notm:+$mv_notm | }claude plugin validate gave no JSON for $(tilde "$d")"; continue
+      fi
+      if [ "$(printf '%s' "$vj" | jq -r .success)" != true ]; then
+        mv_fail="${mv_fail:+$mv_fail | }$(tilde "$d") does not validate: $(printf '%s' "$vj" | jq -r '[.manifest.errors[]?, .contents[]?.errors[]?] | first | "\(.path): \(.message)"' | sed "s#$HOME#~#g" | cut -c1-220); fix: claude plugin validate $(tilde "$d")"
+        continue
+      fi
+      if printf '%s' "$vj" | jq -e '[.contents[]?.warnings[]?.message] | any(test("symlink"))' >/dev/null 2>&1; then
+        mv_notm="${mv_notm:+$mv_notm | }validate did not read part of $(tilde "$d") (a symlink warning)"; continue
+      fi
+      nnote="$(printf '%s' "$vj" | jq -r '[.contents[]?.notes[]? | select(test(" hooks: "))] | length')"
+      if [ "${nnote:-0}" -lt "$nmod" ]; then
+        mv_notm="${mv_notm:+$mv_notm | }$(tilde "$d") lists $nmod module(s) but validate reported hooks for $nnote, so it did not read them all"; continue
+      fi
+      mv_ok="${mv_ok:+$mv_ok, }$(basename "$d") ($nmod module(s))"
+    done
+  done
+  if [ -n "$mv_fail" ]; then row FAIL mod-validate "$mv_fail"
+  elif [ -n "$mv_notm" ]; then row NOTM mod-validate "$mv_notm"
+  elif [ "$mv_mods" -eq 0 ]; then row PASS mod-validate "0 of $mv_dirs declared plugin dir(s) carry a hooks module, so there is nothing to validate"
+  else row PASS mod-validate "$mv_mods of $mv_dirs declared plugin dir(s) carry a hooks module and all parse: $mv_ok"; fi
 fi
 
 # M14d records pinned (F5a). open-items and decided must resolve the drawer and the rulings
