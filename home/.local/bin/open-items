@@ -1680,8 +1680,14 @@ XP_CLEAN_AWK='
 '
 xp_clean(){ LC_ALL=C awk "$XP_CLEAN_AWK"'{ print clean($0) }'; }
 
-# Every items-layout drawer as "name<US>work", the inbox included exactly once.
+# Every items-layout drawer as "name<US>work", the inbox included exactly once. Listed ONCE
+# per run (XP_DRW): each listing forks a name_of per drawer, and the card pays for every fork.
+XP_DRW=""; XP_DRW_SET=""
 xp_drawers(){
+  if [ -z "$XP_DRW_SET" ]; then XP_DRW="$(xp_drawers_list)"; XP_DRW_SET=1; fi
+  [ -z "$XP_DRW" ] || printf '%s\n' "$XP_DRW"
+}
+xp_drawers_list(){
   local w inbox="" ri=""
   [ -d "$XP_INBOX/items" ] && ri="$(realdir "$XP_INBOX")"
   while IFS= read -r w; do
@@ -1832,7 +1838,8 @@ xp_compute(){
 
   # --- the owner's own anomalies: machine fan-out and lines over the cap (P1.3, P8.2)
   while IFS="$US" read -r k o id f reach cs fb title nw nc; do
-    [ "$k" = I ] && [ -n "$me" ] && [ "$(realdir "$(dirname "$(dirname "$(dirname "$f")")")")" = "$(realdir "$own")" ] || continue
+    [ "$k" = I ] && [ -n "$me" ] || continue
+    case "$f" in "$own"/items/open/*) ;; *) continue ;; esac     # a string test: no fork per item
     if [ "$reach" = machine ] && [ $((nw + nc)) -gt 0 ]; then
       XI_LINES+=("   · $id: reach machine carries $((nw + nc)) watch/check line(s), ignored"); XI_N=$((XI_N+1))
     fi
@@ -1942,7 +1949,7 @@ xp_session(){                   # xp_session <repo> <own-work>: the cross-projec
     extra=""; [ "$XW_GONE" -gt 0 ] && extra=", $XW_GONE closed or moved since seen"
     xp_section "Watching: $XW_N ($XW_CH changed$extra) -- \`open-items seen <ID>|--all\` clears" "${XW_LINES[@]}"
   fi
-  vsay "scanned $XP_SCANNED open item file(s), expected $(xp_expected) (every items-layout drawer, the inbox included)"
+  [ -z "$VERBOSE" ] || vsay "scanned $XP_SCANNED open item file(s), expected $(xp_expected) (every items-layout drawer, the inbox included)"
   vsay "watching $XW_N open, $XW_CH changed, $XW_GONE gone (seen state $XP_STATE/seen/${XP_ME:-<no drawer>})"
   [ "$XC_N" -gt 0 ] && xp_section "Checks owed: $XC_N" "${XC_LINES[@]}"
   vsay "checks owed $XC_N"
