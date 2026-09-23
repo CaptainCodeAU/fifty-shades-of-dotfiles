@@ -90,9 +90,11 @@ parked-by-Gavin and decision-withheld. `closed/` holds both `done` and `declined
 `add`, `close`, `park`, `decline`, `reopen`, `supersede`, `set`, `init`, `regen`, `migrate` each:
 
 1. take a per-drawer lock (`items/.lock`, a directory; a dead holder is taken over),
-2. write the item file (the ID comes from `pj-id`, which stamps it with this machine's
-   letter and hands out `01`-`99` under it; the file is claimed with `noclobber`, next
-   free number on a clash. No machine letter, no ID: `pj-id` refuses),
+2. write the item file (the ID comes from `pj-id claim`, which stamps it with this
+   machine's letter, hands out `01`-`99` under it after scanning EVERY drawer, and claims
+   it in `~/.local/state/pj/ids/`; the item file is then created with `noclobber`. No
+   machine letter, no ID: `pj-id` refuses. A create that is refused, in the claim folder
+   or in `items/open`, refuses by path and never loops, W-20260923-A25),
 3. regenerate `OPEN.md`,
 4. commit by explicit pathspec: this project's `items/` and `OPEN.md`, nothing else in
    dot-claude. A write left uncommitted by an earlier failure rides along with the next.
@@ -142,6 +144,29 @@ than a clash, and a wrong record is the thing this whole store exists to prevent
 `range:` key is retired; `pj-health`'s `machine-file` row FAILs on a file that still
 carries it, naming the fix.
 
+**Since 2026-09-23 an ID is unique across every drawer on the machine (D-20260923-A10,
+W-20260923-A22).** Until then `add` passed only its own drawer to `pj-id`, so two projects
+minted the same ID on the same day; 12 W- IDs exist twice or three times because of it.
+Now `add` passes every drawer's `items/` and every legacy `OPEN.md`, and `pj-id claim`
+CLAIMS the chosen ID with a `noclobber` create in one machine-wide folder,
+`~/.local/state/pj/ids/` (one empty file per ID; machine state, never a repo, never synced,
+because the letter already separates machines). Passing every drawer alone was not enough:
+two adds in two projects released at the same instant both saw the same free number and
+both created their own file, since `noclobber` only guards one folder (measured 20 of 20).
+The shared folder makes the create itself the arbiter (0 of 20; `open-items-selftest`
+section U and `pj-id --selftest` keep that race as a standing arm with a claim-off
+control). The folder only adds to the scan and never replaces it, so an empty or wiped
+folder still yields a free ID. No part of an ID comes from a project, repo or folder name.
+The old duplicates are LEFT; lookups across drawers refuse them (below). Cost, measured
+read-only over the five real stores with 32 of the day's IDs present (mean of 10): 435 ms
+per allocation on the old scanner, 45 ms now, because the scan is one `find` per store
+instead of one per candidate per store. Both return the same ID.
+
+Test seams: `PJ_ID_CLAIMS_DIR` moves the folder, and `pj-id` REFUSES a fixture
+`PJ_MACHINE_FILE` paired with the real folder, so no selftest can write it.
+`PJ_ID_CLAIM=off` switches the claim off for the race control, honoured only with a
+fixture folder.
+
 **Every pre-P8a ID still resolves.** The 2026-09-21 migration renamed 76 files and their
 `## ` header lines, but the ~680 citations inside reports, handoffs and committed docs were
 deliberately left as history. So `open-items close|park|set|reopen|decline` accepts a bare
@@ -159,8 +184,8 @@ open-items [--all | --project p] [--closed] --json  the listing as one JSON obje
 open-items supersede <old> <new> [--project p]     decline old -> new, back-pointer on new
 ```
 
-**IDs are unique per drawer only.** `W-20260923-A01` was in three drawers on the day this
-was built, so `show`, `get` and `supersede` search EVERY drawer, and an ID found in two
+**IDs minted before 2026-09-23 can repeat across drawers** (see above; new ones cannot).
+`W-20260923-A01` was in three drawers on the day this was built, so `show`, `get` and `supersede` search EVERY drawer, and an ID found in two
 is REFUSED (exit 2) with the projects named. They never prefer the current repo's copy:
 that would be a guess that reads like an answer, and on a write it edits the wrong item.
 `--project <name>` settles it. Two drawers with the SAME name cannot be told apart by it;

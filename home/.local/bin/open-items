@@ -762,7 +762,7 @@ resolve_item(){
     done <<EOF
 $hits
 EOF
-    printf 'open-items: REFUSED -- %s: %s is in %s drawers: %s-- IDs are unique per drawer only. Name one with --project <name>.\n' \
+    printf 'open-items: REFUSED -- %s: %s is in %s drawers: %s-- IDs minted before 2026-09-23 can repeat across drawers. Name one with --project <name>.\n' \
       "$verb" "$id" "$n" "$names" >&2
     [ -z "$proj" ] || printf 'open-items: (all %s drawers are named %s, so --project cannot separate them; paths above)\n' "$n" "$proj" >&2
     return 2

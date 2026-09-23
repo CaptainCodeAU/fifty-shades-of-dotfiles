@@ -82,11 +82,12 @@ own tools (D-20260920-02).
 ## Writing
 
 `decided add "title" --topic "..." --holds-in "<doc>" --global|--project [--body ..]`
-allocates the next `D-` ID through `pj-id` (the ID carries this machine's LETTER --
-`D-20260921-A07` -- so two machines cannot claim the same one at all; `A` mini, `B` Intel
-laptop, `C` WSL, `D` Linux VM. A box with no letter is REFUSED, never defaulted; see
-`docs/OPEN_ITEMS.md`), writes the file into the
-chosen home, and commits it by explicit path when that home is inside dot-claude. A
+allocates the next `D-` ID through `pj-id claim` over every D- store, claimed in
+`~/.local/state/pj/ids/` so no two adds anywhere on the machine get it (D-20260923-A10;
+see `docs/OPEN_ITEMS.md`). The ID carries this machine's LETTER (`D-20260921-A07`), so
+two machines cannot claim the same one at all: `A` mini, `B` Intel laptop, `C` WSL, `D`
+Linux VM, and a box with no letter is REFUSED, never defaulted. It then writes the file
+into the chosen home, and commits it by explicit path when that home is inside dot-claude. A
 `repo:` store is written and reported NOT COMMITTED (exit 3): the project repo is yours to
 commit, the way `pj-wrap push` never pushes it.
 
