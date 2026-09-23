@@ -1621,6 +1621,473 @@ do_move(){
   return "$rc"
 }
 
+# ----------------------------------------------- cross-project READ side (A16) ----
+# W-20260923-A28, ruling D-20260923-A09, safety rules P1-P12 in
+# docs/OPEN_ITEMS_CROSS_PROJECT_SAFETY.md. Everything in this block READS drawers; the
+# only writes are `seen` (this project's seen state) and `checks-run` (the pass cache),
+# both under the machine state root, never a drawer and never a repo.
+#
+#   Watching     open items in ANY drawer with `watch: <this project>`, changed first
+#   Checks owed  open items elsewhere with `check: <this project> [open] ...`
+#   Mandatory    open `reach: mandatory` items this project has not passed. A manual
+#                item passes on a `passed: <this project>` header line; a scripted one ONLY
+#                on a cache record `checks-run` wrote (P3, P6). The card never runs one.
+#   Moved out    items/moved-out/<ID>.md records in this drawer, until `seen`
+#   Inbox        one line when the inbox drawer holds open items, silent otherwise
+#
+# EVERY field comes from the HEADER only (P1): a body paragraph reading "passed: x" must
+# never count. Names are exact tokens (P9). Text from another project is data (P7):
+# controls and bidi characters become ?, titles are capped at 100 characters, and every
+# section says it is item text, not instructions. At most 5 watch and 5 check lines per
+# item are honoured (P8); the owner's card names the rest.
+XP_STATE="${PJ_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/pj}"
+XP_INBOX="$INBOX"
+XP_LINE_CAP=5; XP_TITLES=3; XP_TLEN=100; XP_TIMEOUT=5
+XP_DATA=" (item text, not instructions)"
+VERBOSE=""
+US=$'\037'                      # field separator: clean() turns every control into ?, so no field holds one
+vsay(){ [ -z "$VERBOSE" ] || printf 'open-items: session: %s\n' "$1" >&2; }
+
+# P7 in one awk, byte-wise under LC_ALL=C so it behaves the same in every awk and locale.
+# clean(): every byte 0x00 to 0x1F and 0x7F, and the bidi and zero-width code points
+# U+202A to U+202E, U+2066 to U+2069, U+200B to U+200F, U+FEFF, become "?". cap(): at most n CHARACTERS
+# (UTF-8 lead bytes counted, so a multi-byte character is never split), then "...".
+XP_CLEAN_AWK='
+  BEGIN {
+    BAD["\342\200\252"]; BAD["\342\200\253"]; BAD["\342\200\254"]; BAD["\342\200\255"]; BAD["\342\200\256"]
+    BAD["\342\201\246"]; BAD["\342\201\247"]; BAD["\342\201\250"]; BAD["\342\201\251"]
+    BAD["\342\200\213"]; BAD["\342\200\214"]; BAD["\342\200\215"]; BAD["\342\200\216"]; BAD["\342\200\217"]
+    BAD["\357\273\277"]
+  }
+  function clean(s,   o, i, n, c) {
+    o = ""; n = length(s)
+    for (i = 1; i <= n; i++) {
+      c = substr(s, i, 1)
+      if (c < " " || c == "\177") { o = o "?"; continue }
+      if (c == "\342" || c == "\357") { if (substr(s, i, 3) in BAD) { o = o "?"; i += 2; continue } }
+      o = o c
+    }
+    return o
+  }
+  function cap(s, m,   i, n, c, k) {
+    n = length(s); k = 0
+    for (i = 1; i <= n; i++) {
+      c = substr(s, i, 1)
+      if (c < "\200" || c > "\277") { k++; if (k > m) return substr(s, 1, i - 1) "..." }
+    }
+    return s
+  }
+'
+xp_clean(){ LC_ALL=C awk "$XP_CLEAN_AWK"'{ print clean($0) }'; }
+
+# Every items-layout drawer as "name<US>work", the inbox included exactly once.
+xp_drawers(){
+  local w inbox="" ri=""
+  [ -d "$XP_INBOX/items" ] && ri="$(realdir "$XP_INBOX")"
+  while IFS= read -r w; do
+    [ -n "$w" ] && [ -d "$w/items" ] || continue
+    if [ -n "$ri" ] && [ "$(realdir "$w")" = "$ri" ]; then inbox=1; printf 'inbox%s%s\n' "$US" "$w"; continue; fi
+    printf '%s%s%s\n' "$(name_of "$w" | xp_clean)" "$US" "$w"
+  done < <(all_drawers)
+  [ -n "$ri" ] && [ -z "$inbox" ] && printf 'inbox%s%s\n' "$US" "$XP_INBOX"
+  return 0
+}
+
+# One awk pass over every OPEN item file of every drawer. Records, fields split by US:
+#   I owner id file reach check-script filed-by title watch-lines check-lines
+#   W owner id project            (honoured watch lines only; none for reach: machine)
+#   C owner id project state done-when   (honoured check lines only; none for reach: machine)
+#   P owner id project            (passed: lines)
+xp_scan(){
+  local args=() name w f
+  while IFS="$US" read -r name w; do
+    [ -n "$w" ] || continue
+    args+=("owner=$name")
+    for f in "$w/items/open"/W-*.md; do [ -f "$f" ] && args+=("$f"); done
+  done < <(xp_drawers)
+  [ "${#args[@]}" -gt 0 ] || return 0
+  LC_ALL=C awk -v S="$US" -v lcap="$XP_LINE_CAP" -v tlen="$XP_TLEN" "$XP_CLEAN_AWK"'
+    function flush(   i) {
+      if (file == "") return
+      print "I" S clean(own) S id S file S clean(reach) S clean(cs) S clean(fb) S cap(clean(title), tlen) S (nw + 0) S (nc + 0)
+      if (reach != "machine") {
+        for (i = 1; i <= nw && i <= lcap; i++) print "W" S clean(own) S id S clean(wt[i])
+        for (i = 1; i <= nc && i <= lcap; i++) print "C" S clean(own) S id S clean(ct[i]) S clean(cst[i]) S cap(clean(cdw[i]), 80)
+      }
+      for (i = 1; i <= np; i++) print "P" S clean(own) S id S clean(pt[i])
+      file = ""
+    }
+    FNR == 1 {
+      flush(); file = FILENAME; own = owner; id = FILENAME; sub(/.*\//, "", id); sub(/\.md$/, "", id)
+      title = $0; if (!sub(/^## W-[0-9]+-[0-9A-Z]+ -- /, "", title)) title = ""
+      ph = 0; nw = 0; nc = 0; np = 0; reach = ""; cs = ""; fb = ""; next
+    }
+    ph == 2 { next }
+    ph == 0 && $0 == "" { ph = 1; next }
+    $0 == "" || $0 !~ /^[a-z][a-z-]*:/ { ph = 2; next }
+    { ph = 1; v = $0; sub(/^[a-z][a-z-]*:[ ]*/, "", v) }
+    /^reach:/        { if (reach == "") { reach = v; sub(/[ ]+$/, "", reach) } next }
+    /^check-script:/ { if (cs == "") { cs = v; sub(/[ ]+$/, "", cs) } next }
+    /^filed-by:/     { if (fb == "") { fb = v; sub(/ .*/, "", fb) } next }
+    /^watch:[ ]+[^ ]+[ ]*$/ { t = v; sub(/[ ]+$/, "", t); wt[++nw] = t; next }
+    /^check:[ ]+[^ ]+[ ]+\[[^]]*\]/ {
+      t = v; sub(/ .*/, "", t); st = v; sub(/^[^ ]+[ ]+\[/, "", st); d = st; sub(/\].*/, "", st); sub(/^[^]]*\][ ]*/, "", d)
+      ct[++nc] = t; cst[nc] = st; cdw[nc] = d; next
+    }
+    /^passed:[ ]+[^ ]+[ ]/ { t = v; sub(/ .*/, "", t); pt[++np] = t; next }
+    END { flush() }
+  ' "${args[@]}"
+}
+
+xp_expected(){ local name w f n=0; while IFS="$US" read -r name w; do for f in "$w/items/open"/W-*.md; do [ -f "$f" ] && n=$((n+1)); done; done < <(xp_drawers); printf '%s' "$n"; }
+xp_label(){                     # xp_label <owner> <filed-by>
+  if [ -n "$2" ] && [ "$2" != "$1" ]; then printf '[owner: %s, filed by %s]' "$1" "$2"; else printf '[owner: %s]' "$1"; fi
+}
+
+# Seen state: <state>/seen/<project>, lines "<owner> <ID> <sha256>". An owner of the form
+# "<project>/moved-out" is a moved-out notice ("/" cannot be in a repo basename).
+SEEN_OWN=(); SEEN_ID=(); SEEN_SHA=()
+xp_seen_load(){
+  local f="$XP_STATE/seen/$1" l rest
+  SEEN_OWN=(); SEEN_ID=(); SEEN_SHA=()
+  [ -r "$f" ] || return 0
+  while IFS= read -r l; do
+    case "$l" in *" "*" "*) ;; *) continue ;; esac
+    rest="${l% *}"
+    SEEN_SHA+=("${l##* }"); SEEN_ID+=("${rest##* }"); SEEN_OWN+=("${rest% *}")
+  done < "$f"
+}
+xp_seen_sha(){                  # xp_seen_sha <owner> <id> -> the recorded sha, rc 1 none
+  local i
+  for i in "${!SEEN_ID[@]}"; do
+    [ "${SEEN_ID[$i]}" = "$2" ] && [ "${SEEN_OWN[$i]}" = "$1" ] && { printf '%s' "${SEEN_SHA[$i]}"; return 0; }
+  done
+  return 1
+}
+
+# Mandatory state for this project (P3-P6). NEVER runs a script: reads the cache only.
+# Prints "state<US>reason", state one of passed | failed | unknown | unmeasured.
+xp_cache_key(){                 # xp_cache_key <repo> <id> <item file> <script path>: the P6 key, rc 1 no HEAD
+  local head blob isha
+  head="$(git -C "$1" rev-parse -q --verify HEAD 2>/dev/null)" || return 1
+  [ -n "$head" ] || return 1
+  isha="$(sha_of "$3")"
+  blob="$(git hash-object "$4" 2>/dev/null)" || return 1
+  printf '%s\n%s\n%s\n%s\n%s\n' "$1" "$2" "$isha" "$blob" "$head" | shasum -a 256 | cut -d' ' -f1
+}
+xp_read_record(){               # xp_read_record <file> -> "state<US>reason"; only "v1 0 N>0 ts" is a pass
+  local l="" v c n ts extra
+  [ -f "$1" ] && IFS= read -r l < "$1"
+  read -r v c n ts extra <<<"$l"
+  if [ "$v" != v1 ] || [ -z "$ts" ] || [ -n "$extra" ]; then printf 'unmeasured%snot measured yet' "$US"; return; fi
+  case "$c" in
+    0) if [[ "$n" =~ ^[0-9]+$ ]] && [ "$n" -gt 0 ]; then printf 'passed%s' "$US"; else printf 'unknown%sscanned nothing' "$US"; fi ;;
+    1) printf 'failed%scheck failed' "$US" ;;
+    124) printf 'unknown%stimed out' "$US" ;;
+    no-timeout) printf 'unmeasured%snot measured: no timeout binary' "$US" ;;
+    *[!0-9]*|'') printf 'unmeasured%snot measured yet' "$US" ;;
+    *) printf 'unknown%sexit %s' "$US" "$c" ;;
+  esac
+}
+xp_mand_state(){                # xp_mand_state <me> <id> <file> <script> <repo> <passed-by list>
+  local me="$1" id="$2" f="$3" cs="$4" repo="$5" passed="$6" sp key
+  if [ -z "$cs" ]; then
+    case "$US$passed$US" in *"$US$me$US"*) [ -n "$me" ] && { printf 'passed%s' "$US"; return; } ;; esac
+    printf 'failed%smanual, not passed here' "$US"; return
+  fi
+  # A check-script is the only authority (P2.3): a passed: line on a scripted item is ignored.
+  sp="$(script_trust "$cs")" || { printf 'unknown%s%s' "$US" "$sp"; return; }
+  key="$(xp_cache_key "$repo" "$id" "$f" "$sp")" || { printf 'unmeasured%snot measured: this repo has no commits' "$US"; return; }
+  xp_read_record "$XP_STATE/mandatory-cache/$key"
+}
+
+# Compute every cross-project section for the project in <repo>, drawer <own-work>.
+# Results land in the XP_* arrays below; xp_session prints them, cmd_seen writes from them.
+XW_LINES=(); XW_KEYS=(); XW_CH=0; XW_N=0; XW_GONE=0
+XC_LINES=(); XC_N=0
+XM_LINES=(); XM_N=0; XM_UNM=0; XM_UNK=0
+XO_LINES=(); XO_KEYS=(); XO_N=0
+XI_LINES=(); XI_N=0
+XP_NOTES=(); XP_ME=""; XP_SHARED=0; XP_SCANNED=0
+xp_compute(){
+  local repo="$1" own="$2" me="" rec k o id f reach cs fb title nw nc p st dw i sha seen lab
+  local ich=() inch=() ichk=() inchk=() m ms reason mt ids="" nsh=0 name w
+  local recs; recs="$(xp_scan)"
+  XP_SCANNED="$(printf '%s\n' "$recs" | awk -F "$US" '$1 == "I" { n++ } END { print n + 0 }')"
+  if is_drawer "$own"; then me="$(name_of "$own" | xp_clean)"; fi
+  XP_ME="$me"
+  if [ -n "$me" ]; then
+    while IFS="$US" read -r name w; do [ "$name" = "$me" ] && nsh=$((nsh+1)); done < <(xp_drawers)
+    if [ "$nsh" -gt 1 ]; then
+      XP_SHARED=1
+      XP_NOTES+=("Cross-project: the name $me is shared by $nsh drawers, so watch, check and mandatory lines are suppressed here rather than guessed")
+    fi
+    case "$me" in inbox|none)
+      [ "$(realdir "$own")" = "$(realdir "$XP_INBOX")" ] || { XP_SHARED=1; XP_NOTES+=("Cross-project: the name $me is reserved, so cross-project lines are suppressed here"); } ;;
+    esac
+  fi
+
+  # --- the owner's own anomalies: machine fan-out and lines over the cap (P1.3, P8.2)
+  while IFS="$US" read -r k o id f reach cs fb title nw nc; do
+    [ "$k" = I ] && [ -n "$me" ] && [ "$(realdir "$(dirname "$(dirname "$(dirname "$f")")")")" = "$(realdir "$own")" ] || continue
+    if [ "$reach" = machine ] && [ $((nw + nc)) -gt 0 ]; then
+      XI_LINES+=("   · $id: reach machine carries $((nw + nc)) watch/check line(s), ignored"); XI_N=$((XI_N+1))
+    fi
+    if [ "$nw" -gt "$XP_LINE_CAP" ] || [ "$nc" -gt "$XP_LINE_CAP" ]; then
+      XI_LINES+=("   · $id: $nw watch and $nc check line(s); only the first $XP_LINE_CAP of each count"); XI_N=$((XI_N+1))
+    fi
+    if [ -n "$cs" ] && [ "$reach" != mandatory ]; then
+      XI_LINES+=("   · $id: check-script without reach: mandatory, ignored"); XI_N=$((XI_N+1))
+    fi
+  done <<<"$recs"
+
+  local vr; vr="$(repo_of_drawer "$own" 2>/dev/null)" || case "$vr" in *"does not match"*|*"does not exist"*|*"is not that repo"*) XP_NOTES+=("Repo: $vr");; esac
+
+  if [ -n "$me" ] && [ "$XP_SHARED" -eq 0 ]; then
+    # --- Watching
+    xp_seen_load "$me"
+    local wl_ch=() wl_same=()
+    while IFS="$US" read -r k o id p; do
+      [ "$k" = W ] && [ "$p" = "$me" ] && [ "$o" != "$me" ] || continue
+      f="$(printf '%s\n' "$recs" | awk -F "$US" -v o="$o" -v id="$id" '$1 == "I" && $2 == o && $3 == id { print $4 "\037" $7 "\037" $8; exit }')"
+      IFS="$US" read -r f fb title <<<"$f"
+      [ -f "$f" ] || continue
+      sha="$(sha_of "$f")"; ids="$ids $id "
+      XW_N=$((XW_N+1)); XW_KEYS+=("$o $id $sha")
+      lab="$(xp_label "$o" "$fb")"
+      if seen="$(xp_seen_sha "$o" "$id")" && [ "$seen" = "$sha" ]; then
+        wl_same+=("   · $id $lab \"$title\"")
+      else
+        XW_CH=$((XW_CH+1)); wl_ch+=("   · $id $lab \"$title\" (changed)")
+      fi
+    done <<<"$recs"
+    # Seen entries whose item left open/ or dropped the watch: shown once as changed, until seen.
+    for i in "${!SEEN_ID[@]}"; do
+      o="${SEEN_OWN[$i]}"; id="${SEEN_ID[$i]}"
+      case "$o" in */moved-out) continue ;; esac
+      case "$ids" in *" $id "*) continue ;; esac
+      st="moved or deleted"; w="$(drawer_named "$o")" || w=""
+      if [ -n "$w" ] && f="$(find_item "$w" "$id" 2>/dev/null)"; then
+        case "$f" in */closed/*) st="closed" ;; */parked/*) st="parked" ;; *) st="no longer watched here" ;; esac
+        title="$(title_of "$f" | LC_ALL=C awk "$XP_CLEAN_AWK"'{ print cap(clean($0), '"$XP_TLEN"') }')"
+        wl_ch+=("   · $id $(xp_label "$o" "") \"$title\" ($st since you last looked)")
+      else
+        wl_ch+=("   · $id $(xp_label "$o" "") ($st since you last looked)")
+      fi
+      XW_GONE=$((XW_GONE+1)); XW_KEYS+=("$o $id -")
+    done
+    XW_LINES=(${wl_ch[@]+"${wl_ch[@]}"} ${wl_same[@]+"${wl_same[@]}"})
+
+    # --- Checks owed
+    while IFS="$US" read -r k o id p st dw; do
+      [ "$k" = C ] && [ "$p" = "$me" ] && [ "$o" != "$me" ] && [ "$st" = open ] || continue
+      f="$(printf '%s\n' "$recs" | awk -F "$US" -v o="$o" -v id="$id" '$1 == "I" && $2 == o && $3 == id { print $7 "\037" $8; exit }')"
+      IFS="$US" read -r fb title <<<"$f"
+      XC_N=$((XC_N+1)); XC_LINES+=("   · $id $(xp_label "$o" "$fb") \"$title\": $dw")
+    done <<<"$recs"
+
+    # --- Moved out of this drawer, until seen
+    for f in "$own/items/moved-out"/W-*.md; do
+      [ -f "$f" ] || continue
+      id="$(id_of_file "$f")"; sha="$(sha_of "$f")"
+      XO_KEYS+=("$me/moved-out $id $sha")
+      if seen="$(xp_seen_sha "$me/moved-out" "$id")" && [ "$seen" = "$sha" ]; then continue; fi
+      m="$(LC_ALL=C awk "$XP_CLEAN_AWK"'
+        NR == 1 { t = $0; sub(/^## [^ ]* -- /, "", t); next }
+        /^moved-to:/ && to == "" { to = $0; sub(/^moved-to:[ ]*/, "", to) }
+        /^moved-by:/ && by == "" { by = $0; sub(/^moved-by:[ ]*/, "", by) }
+        /^why:/ && why == "" { why = $0; sub(/^why:[ ]*/, "", why) }
+        $0 == "" && NR > 2 { exit }
+        END { printf "-> %s by %s: %s (\"%s\")", clean(to), clean(by), cap(clean(why), 80), cap(clean(t), 60) }' "$f")"
+      XO_N=$((XO_N+1)); XO_LINES+=("   · $id $m")
+    done
+  fi
+
+  # --- Mandatory: every project, including the owner and a repo with no drawer yet
+  if [ "$XP_SHARED" -eq 0 ]; then
+    while IFS="$US" read -r k o id f reach cs fb title nw nc; do
+      [ "$k" = I ] && [ "$reach" = mandatory ] || continue
+      p="$(printf '%s\n' "$recs" | awk -F "$US" -v o="$o" -v id="$id" '$1 == "P" && $2 == o && $3 == id { printf "%s\037", $4 }')"
+      ms="$(xp_mand_state "$me" "$id" "$f" "$cs" "$repo" "$p")"
+      IFS="$US" read -r mt reason <<<"$ms"
+      [ "$mt" = passed ] && continue
+      XM_N=$((XM_N+1))
+      case "$mt" in unmeasured) XM_UNM=$((XM_UNM+1)) ;; unknown) XM_UNK=$((XM_UNK+1)); reason="unknown: $reason" ;; esac
+      XM_LINES+=("   · $id $(xp_label "$o" "$fb") \"$title\" ($reason)")
+    done <<<"$recs"
+  fi
+
+  # --- Uncommitted two-drawer moves (P12.3): the marker a failed move commit leaves
+  for f in "$own/items/.pending-move"/*; do
+    [ -d "$f" ] || continue
+    XP_NOTES+=("Uncommitted move $(basename "$f" | sed 's/@.*//' | xp_clean): the next write in either drawer commits it")
+  done
+  return 0
+}
+
+xp_section(){                   # xp_section <header> <line>...: header plus at most XP_TITLES lines
+  local h="$1" n; shift; n=$#
+  if [ "$n" -gt "$XP_TITLES" ]; then printf '%s, showing %s%s\n' "$h" "$XP_TITLES" "$XP_DATA"; else printf '%s%s\n' "$h" "$XP_DATA"; fi
+  [ "$n" -gt 0 ] && printf '%s\n' "${@:1:$XP_TITLES}"
+  return 0
+}
+xp_session(){                   # xp_session <repo> <own-work>: the cross-project lines of --session
+  local repo="$1" own="$2" n extra
+  xp_compute "$repo" "$own"
+  if [ "$XW_N" -gt 0 ] || [ "$XW_GONE" -gt 0 ]; then
+    extra=""; [ "$XW_GONE" -gt 0 ] && extra=", $XW_GONE closed or moved since seen"
+    xp_section "Watching: $XW_N ($XW_CH changed$extra) -- \`open-items seen <ID>|--all\` clears" "${XW_LINES[@]}"
+  fi
+  vsay "scanned $XP_SCANNED open item file(s), expected $(xp_expected) (every items-layout drawer, the inbox included)"
+  vsay "watching $XW_N open, $XW_CH changed, $XW_GONE gone (seen state $XP_STATE/seen/${XP_ME:-<no drawer>})"
+  [ "$XC_N" -gt 0 ] && xp_section "Checks owed: $XC_N" "${XC_LINES[@]}"
+  vsay "checks owed $XC_N"
+  if [ "$XM_N" -gt 0 ]; then
+    extra=""
+    [ "$XM_UNM" -gt 0 ] && extra="$XM_UNM not measured yet"
+    [ "$XM_UNK" -gt 0 ] && extra="${extra:+$extra, }$XM_UNK unknown"
+    xp_section "Mandatory: $XM_N not passed${extra:+ ($extra)}" "${XM_LINES[@]}"
+  fi
+  vsay "mandatory not passed $XM_N ($XM_UNM not measured, $XM_UNK unknown; cache $XP_STATE/mandatory-cache)"
+  [ "$XO_N" -gt 0 ] && xp_section "Moved out: $XO_N -- \`open-items seen <ID>|--all\` clears" "${XO_LINES[@]}"
+  vsay "moved out, unseen $XO_N"
+  [ "$XI_N" -gt 0 ] && xp_section "Ignored lines: $XI_N on this project's own items" "${XI_LINES[@]}"
+  [ "${#XP_NOTES[@]}" -gt 0 ] && printf '%s\n' "${XP_NOTES[@]}"
+  # The inbox line: every card, only when not empty. Its absence is stated under --verbose.
+  if [ -d "$XP_INBOX/items/open" ]; then
+    n=0; for f in "$XP_INBOX/items/open"/W-*.md; do [ -f "$f" ] && n=$((n+1)); done
+    [ "$n" -gt 0 ] && printf 'Inbox: %s unrouted (Gavin routes)\n' "$n"
+    vsay "inbox $XP_INBOX: $n open"
+  else
+    vsay "inbox $XP_INBOX: missing (no items/open), so no line"
+  fi
+  return 0
+}
+
+# seen <ID>...|--all: record the current hash of watched items and moved-out notices for
+# THIS project only (P2: there is no project argument). An item that left open/ is dropped
+# from the seen state, so it shows as changed once and then goes.
+cmd_seen(){
+  local repo own all=0 ids=() k o id sha d f tmp cleared=0 i hit keep line
+  [ $# -gt 0 ] || refuse "seen: usage: open-items seen <W-ID>... | --all"
+  for k in "$@"; do case "$k" in --all) all=1 ;; W-*) ids+=("$k") ;; *) refuse "seen: \"$k\" is not an item ID or --all" ;; esac; done
+  repo="$(current_repo)" || refuse "seen: not inside a git repo, so there is no current project"
+  own="$(work_for "$repo")"
+  is_drawer "$own" || refuse "seen: $(basename "$repo") has no drawer, so it has no seen state"
+  xp_compute "$repo" "$own"
+  [ -n "$XP_ME" ] && [ "$XP_SHARED" -eq 0 ] || refuse "seen: ${XP_NOTES[0]:-no project name}"
+  xp_seen_load "$XP_ME"
+  local new=() K=(${XW_KEYS[@]+"${XW_KEYS[@]}"} ${XO_KEYS[@]+"${XO_KEYS[@]}"})
+  # Keep every existing line not being re-recorded; then add the targets.
+  for i in "${!SEEN_ID[@]}"; do
+    keep=1
+    for k in "${!K[@]}"; do
+      line="${K[$k]}"; o="${line% * *}"; id="${line#"$o "}"; id="${id% *}"
+      [ "$o" = "${SEEN_OWN[$i]}" ] && [ "$id" = "${SEEN_ID[$i]}" ] || continue
+      if [ "$all" -eq 1 ] || case " ${ids[*]-} " in *" $id "*) true ;; *) false ;; esac; then keep=0; fi
+    done
+    [ "$keep" -eq 1 ] && new+=("${SEEN_OWN[$i]} ${SEEN_ID[$i]} ${SEEN_SHA[$i]}")
+  done
+  for line in ${K[@]+"${K[@]}"}; do
+    o="${line% * *}"; id="${line#"$o "}"; sha="${id##* }"; id="${id% *}"
+    if [ "$all" -eq 0 ]; then case " ${ids[*]-} " in *" $id "*) ;; *) continue ;; esac; fi
+    hit="$(xp_seen_sha "$o" "$id" 2>/dev/null)" || hit=""
+    [ "$hit" = "$sha" ] || cleared=$((cleared+1))
+    [ "$sha" = "-" ] || new+=("$o $id $sha")
+    printf 'seen: %s [%s]%s\n' "$id" "$o" "$([ "$hit" = "$sha" ] && printf ' (already seen)')"
+  done
+  if [ "$all" -eq 0 ]; then
+    for id in "${ids[@]}"; do
+      case " ${K[*]-} " in *" $id "*) ;; *) printf 'open-items: seen: %s is not watched by %s and not a moved-out notice here; nothing recorded for it\n' "$id" "$XP_ME" >&2 ;; esac
+    done
+  fi
+  d="$XP_STATE/seen"
+  mkdir -p "$d" 2>/dev/null && tmp="$d/.$XP_ME.$$" && { printf '%s\n' ${new[@]+"${new[@]}"} > "$tmp"; } 2>/dev/null && mv -f "$tmp" "$d/$XP_ME" 2>/dev/null \
+    || refuse "seen: cannot write the seen state under $d -- the write was REFUSED (inside the Claude Bash sandbox ~/.local/state is not writable; run it from a terminal). Nothing was recorded."
+  printf 'open-items: seen: %s notice(s) cleared for %s (%s)\n' "$cleared" "$XP_ME" "$d/$XP_ME" >&2
+  [ "${#K[@]}" -gt 0 ] || return 1
+  return 0
+}
+
+# checks-run: the ONLY place a check-script ever runs (P3). pj starts it detached after
+# launch; the card reads what it leaves. For the repo you stand in, every open reach:
+# mandatory item with a trusted script (P4) whose cache record is not already a pass or a
+# fail gets one run: clean environment, cwd the repo root, stdin /dev/null, output to a
+# file never a pipe, a hard timeout with a kill after it (P5.4, P3.3). No timeout binary
+# -> nothing runs, and that is recorded. Record: "v1 <exit> <scanned N|-> <utc>" (P6.2).
+xp_timeout_bin(){
+  local d c IFS=:
+  for d in ${OPEN_ITEMS_TIMEOUT_DIRS-$PATH:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin}; do
+    for c in timeout gtimeout; do case "$d" in /*) [ -x "$d/$c" ] && { printf '%s' "$d/$c"; return 0; } ;; esac; done
+  done
+  return 1
+}
+cmd_checks_run(){
+  local repo d recs k o id f reach cs fb title nw nc sp key rec st tb out rc n ran=0 cached=0 skipped=0 now
+  repo="$(current_repo)" || refuse "checks-run: not inside a git repo"
+  d="$XP_STATE/mandatory-cache"
+  { mkdir -p "$d" && : > "$d/.writable"; } 2>/dev/null \
+    || refuse "checks-run: cannot write the check cache at $d -- the write was REFUSED (inside the Claude Bash sandbox ~/.local/state is not writable). Nothing was run."
+  tb="$(xp_timeout_bin)" || tb=""
+  recs="$(xp_scan)"
+  while IFS="$US" read -r k o id f reach cs fb title nw nc; do
+    [ "$k" = I ] && [ "$reach" = mandatory ] && [ -n "$cs" ] || continue
+    sp="$(script_trust "$cs")" || { printf 'checks-run: %s: not run, %s\n' "$id" "$sp"; skipped=$((skipped+1)); continue; }
+    key="$(xp_cache_key "$repo" "$id" "$f" "$sp")" || { printf 'checks-run: %s: not run, this repo has no commits\n' "$id"; skipped=$((skipped+1)); continue; }
+    rec="$d/$key"
+    st="$(xp_read_record "$rec")"; st="${st%%"$US"*}"
+    case "$st" in passed|failed) cached=$((cached+1)); continue ;; esac
+    now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    if [ -z "$tb" ]; then
+      printf 'v1 no-timeout - %s\n' "$now" > "$rec.$$" && mv -f "$rec.$$" "$rec"
+      printf 'checks-run: %s: NOT RUN, no timeout binary (timeout or gtimeout) found; recorded as not measured\n' "$id"
+      skipped=$((skipped+1)); continue
+    fi
+    out="$d/.out.$$"
+    ( builtin cd "$repo" && env -i HOME="$HOME" PATH=/usr/bin:/bin:/usr/sbin:/sbin LANG=C.UTF-8 \
+        "$tb" -k 1 "$XP_TIMEOUT" "$sp" ) </dev/null >"$out" 2>/dev/null; rc=$?
+    n="$(sed -n 's/^scanned: \([0-9][0-9]*\)$/\1/p' "$out" 2>/dev/null | head -1)"
+    printf 'v1 %s %s %s\n' "$rc" "${n:--}" "$now" > "$rec.$$" && mv -f "$rec.$$" "$rec"
+    mv -f "$out" "$d/.last-output" 2>/dev/null
+    printf 'checks-run: %s: %s exit %s, scanned %s\n' "$id" "$cs" "$rc" "${n:--}"
+    ran=$((ran+1))
+  done <<<"$recs"
+  printf 'checks-run: %s ran, %s cached, %s not run, for %s (cache %s)\n' "$ran" "$cached" "$skipped" "$repo" "$d"
+  return 0
+}
+
+# This project's own open items, the surface --session has always printed. A16 only moved
+# it into a function (so the cross-project lines can follow it) and passes its titles
+# through xp_clean: a terminal escape in a title reached the card intact (safety review M2).
+own_session(){                  # own_session <work>
+  local w="$1" titles parked n npin pinned
+  # W-20260923-A23. PINNED FIRST. The card shows 10 titles in ID order, so an item filed
+  # today for the very next session sat at position 30-something and never appeared: on
+  # 2026-09-23 eight such items were open and the card showed none of them. "Pinned" is a
+  # HEADER `when:` that begins with "next session", any case (conductor's ruling; no
+  # pin/unpin command). Pinned titles print first, in ID order, marked [pinned]; the rest
+  # follow unchanged. Header lines only: a body sentence starting "when: next session"
+  # must not pin anything.
+  titles="$(blocks_from "$w" "" 2>/dev/null | awk '
+    function flush() { if (t == "") return; if (pin) p[++np] = t; else r[++nr] = t; t = "" }
+    /^## W-/ { flush(); t = $0; sub(/^## [^ ]* -- /, "", t); pin = 0; st = 1; next }
+    st == 1 { if ($0 == "") { st = 2; next } st = 2 }
+    st == 2 { if ($0 == "") { st = 3; next }
+              if (tolower($0) ~ /^when:[ \t]*next session/) pin = 1; next }
+    END { flush()
+          for (i = 1; i <= np; i++) print "   · [pinned] " p[i]
+          for (i = 1; i <= nr; i++) print "   · " r[i] }' | xp_clean)"
+  parked="$(blocks_from "$w" parked 2>/dev/null | grep -c '^## W-' || true)"
+  [ -n "$titles" ] || [ "${parked:-0}" -gt 0 ] || return 0
+  n=0; [ -n "$titles" ] && n="$(printf '%s\n' "$titles" | wc -l | tr -d ' ')"
+  npin="$(printf '%s\n' "$titles" | grep -c '^   · \[pinned\] ' || true)"
+  pinned=""; [ "${npin:-0}" -gt 0 ] && pinned=", $npin pinned"
+  printf '\033[1mOpen items\033[0m \033[2m(%s in %s%s -- `open-items` for detail)\033[0m\n' "$n" "$(name_of "$w")" "$pinned"
+  [ -n "$titles" ] && printf '\033[2m%s\033[0m\n' "$titles"
+  [ "${parked:-0}" -gt 0 ] && printf '\033[2m   parked: %s\033[0m\n' "$parked"
+  return 0
+}
+
 # ---------------------------------------------------------------- dispatch ----
 WANT=""
 JSON=""; GREP=""
@@ -1631,6 +2098,7 @@ while [ $# -gt 0 ]; do
     --json) JSON=1; shift ;;
     --grep) GREP="${2:-}"; [ -n "$GREP" ] || refuse "--grep needs the words to look for (quote a phrase)"; shift 2 ;;
     --status) WANT="${2:-}"; valid_status "$WANT" || refuse "--status must be one of: $STATUSES"; shift 2 ;;
+    --verbose) VERBOSE=1; shift ;;
     *) ARGS+=("$1"); shift ;;
   esac
 done
@@ -1657,6 +2125,8 @@ case "${1:-}" in
   pass)     shift; need_root; cmd_pass "$@"; exit $? ;;
   move)     shift; need_root; cmd_move "$@"; exit $? ;;
   route)    shift; need_root; cmd_route "$@"; exit $? ;;
+  seen)     shift; cmd_seen "$@"; exit $? ;;
+  checks-run) shift; [ $# -eq 0 ] || refuse "checks-run takes no arguments"; cmd_checks_run; exit $? ;;
 esac
 
 [ -d "$PROJECTS" ] || [ "${1:-}" = --session ] \
@@ -1668,31 +2138,11 @@ case "${1:-}" in
   --session)
     repo="$(current_repo)" || exit 0
     w="$(work_for "$repo")"
-    is_drawer "$w" || exit 0
-    # W-20260923-A23. PINNED FIRST. The card shows 10 titles in ID order, so an item filed
-    # today for the very next session sat at position 30-something and never appeared: on
-    # 2026-09-23 eight such items were open and the card showed none of them. "Pinned" is a
-    # HEADER `when:` that begins with "next session", any case (conductor's ruling; no
-    # pin/unpin command). Pinned titles print first, in ID order, marked [pinned]; the rest
-    # follow unchanged. Header lines only: a body sentence starting "when: next session"
-    # must not pin anything.
-    titles="$(blocks_from "$w" "" 2>/dev/null | awk '
-      function flush() { if (t == "") return; if (pin) p[++np] = t; else r[++nr] = t; t = "" }
-      /^## W-/ { flush(); t = $0; sub(/^## [^ ]* -- /, "", t); pin = 0; st = 1; next }
-      st == 1 { if ($0 == "") { st = 2; next } st = 2 }
-      st == 2 { if ($0 == "") { st = 3; next }
-                if (tolower($0) ~ /^when:[ \t]*next session/) pin = 1; next }
-      END { flush()
-            for (i = 1; i <= np; i++) print "   · [pinned] " p[i]
-            for (i = 1; i <= nr; i++) print "   · " r[i] }')"
-    parked="$(blocks_from "$w" parked 2>/dev/null | grep -c '^## W-' || true)"
-    [ -n "$titles" ] || [ "${parked:-0}" -gt 0 ] || exit 0
-    n=0; [ -n "$titles" ] && n="$(printf '%s\n' "$titles" | wc -l | tr -d ' ')"
-    npin="$(printf '%s\n' "$titles" | grep -c '^   · \[pinned\] ' || true)"
-    pinned=""; [ "${npin:-0}" -gt 0 ] && pinned=", $npin pinned"
-    printf '\033[1mOpen items\033[0m \033[2m(%s in %s%s -- `open-items` for detail)\033[0m\n' "$n" "$(name_of "$w")" "$pinned"
-    [ -n "$titles" ] && printf '\033[2m%s\033[0m\n' "$titles"
-    [ "${parked:-0}" -gt 0 ] && printf '\033[2m   parked: %s\033[0m\n' "$parked"
+    # A16: the cross-project lines follow this project's own, and they print even when this
+    # project has nothing open or no drawer at all (the inbox and mandatory lines are for
+    # every project). Each part is silent when empty; a failure in one never stops the other.
+    if is_drawer "$w"; then own_session "$w" || true; fi
+    xp_session "$repo" "$w" || true
     exit 0 ;;
   --where)
     repo="$(current_repo)" || refuse "not inside a git repo, so there is no current project"

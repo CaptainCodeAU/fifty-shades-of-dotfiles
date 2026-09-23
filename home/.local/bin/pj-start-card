@@ -25,6 +25,10 @@
 #   then     open items from `open-items --session`: count (and "N pinned" when any item's
 #            when: begins "next session"), up to 10 titles with pinned ones FIRST,
 #            "+N more", "parked: N"; or one line saying there is no drawer
+#   then     the cross-project lines from the same call (A16, W-20260923-A28): Watching,
+#            Checks owed, Mandatory, Moved out, Ignored lines (each a count line plus up to
+#            3 titles), then Inbox and notes. Only when non-empty. Own titles keep a floor
+#            of 5 before any cross title (P8). The card never runs a check-script (P3).
 #   then     Handoff: <marker path> (size, date) -- only when the file exists
 #   then     Tracker: <marker path>, one per declared tracker
 #   then     dot-claude: N commit(s) behind origin -- ONLY when behind, never when level
@@ -65,6 +69,7 @@ set -u
 
 CAP=20
 TITLE_CAP=10
+OWN_FLOOR=5      # P8 rule 3: this project's own titles before any cross-project title
 HELLO='Hello rule: on a first message like hello or start, reply in two or three lines from this card, make no tool calls, name anything a start hook flagged for action once at the top, then ask what to work on.'
 STATE="${PJ_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/pj}"
 
@@ -201,23 +206,36 @@ card(){
     [ "$nrec" -gt 1 ] && warn="$warn (pj-wrap status lists all)"
   fi
 
-  # open items
+  # open items, then (A16, W-20260923-A28) the cross-project sections open-items --session
+  # prints after them: Watching, Checks owed, Mandatory, Moved out, Ignored lines, each a
+  # header plus up to 3 titles, and single lines (Inbox, notes). Read even with NO drawer:
+  # the inbox and mandatory lines are for every project. Parsed by SECTION, so a cross title
+  # can never be counted as one of this project's own.
+  local sess="" line="" npin="" sec="" have_own=0
+  local xh=() xt=() xs=() xsingle=()
+  if [ "$wrc" -eq 0 ] || [ "$wrc" -eq 1 ]; then
+    sess="$(open-items --session 2>/dev/null | strip_ansi)" || sess=""
+    while IFS= read -r line; do
+      case "$line" in
+        'Open items'*) have_own=1; sec=own
+                       n="$(printf '%s' "$line" | sed -n 's/^Open items (\([0-9]*\) in.*/\1/p')"
+                       npin="$(printf '%s' "$line" | sed -n 's/^Open items ([0-9]* in .*, \([0-9]*\) pinned -- .*/\1/p')" ;;
+        'Watching: '*|'Checks owed: '*|'Mandatory: '*|'Moved out: '*|'Ignored lines: '*)
+                       xh+=("$line"); sec=$(( ${#xh[@]} - 1 )) ;;
+        'Inbox: '*|'Cross-project: '*|'Repo: '*|'Uncommitted move '*)
+                       xsingle+=("$line"); sec=none ;;
+        '   · '*)      if [ "$sec" = own ]; then titles+=("$line")
+                       elif [ "$sec" != none ] && [ -n "$sec" ]; then xt+=("$line"); xs+=("$sec"); fi ;;
+        '   parked: '*) [ "$sec" = own ] && parked="${line#"${line%%[![:space:]]*}"}" ;;
+      esac
+    done <<<"$sess"
+  fi
   if [ "$wrc" -eq 1 ]; then
     open_header="Open items: no drawer for this project yet (\`open-items init\` creates one)"
   elif [ "$wrc" -eq 0 ]; then
-    local sess="" line="" npin=""
-    sess="$(open-items --session 2>/dev/null | strip_ansi)" || sess=""
-    if [ -z "$sess" ]; then
+    if [ "$have_own" -eq 0 ]; then
       open_header="Open items: none open (\`open-items add\` files one)"
     else
-      while IFS= read -r line; do
-        case "$line" in
-          'Open items'*) n="$(printf '%s' "$line" | sed -n 's/^Open items (\([0-9]*\) in.*/\1/p')"
-                         npin="$(printf '%s' "$line" | sed -n 's/^Open items ([0-9]* in .*, \([0-9]*\) pinned -- .*/\1/p')" ;;
-          *'parked: '*)  parked="${line#"${line%%[![:space:]]*}"}" ;;
-          *'· '*)        titles+=("$line") ;;
-        esac
-      done <<<"$sess"
       [ -n "$n" ] || n="${#titles[@]}"
       # W-20260923-A23: open-items --session lists pinned items (when: next session) FIRST,
       # so they survive the title cap below; the header says how many there are. Silent
@@ -249,15 +267,51 @@ card(){
   [ -n "$handoff" ] && fixed=$((fixed + 1))
   [ -n "$sync" ] && fixed=$((fixed + 1))
   [ -n "$mods" ] && fixed=$((fixed + 1))
-  local budget=$(( CAP - fixed )) cap=$TITLE_CAP total=${#titles[@]}
-  [ "$cap" -gt "$budget" ] && cap=$budget
-  local more=0
-  if [ "$total" -gt "$cap" ]; then more=1; cap=$((budget - 1)); [ "$cap" -gt "$TITLE_CAP" ] && cap=$TITLE_CAP; fi
-  [ "$cap" -lt 0 ] && cap=0
+  fixed=$(( fixed + ${#xh[@]} + ${#xsingle[@]} ))
+  # THE BUDGET (P8 rule 3). This project's own titles keep a floor of OWN_FLOOR before any
+  # cross-project title is placed; cross sections then take one title each in turn (at most
+  # 3 each, as --session already cut them); own titles take what is left up to TITLE_CAP.
+  # A "+N more" line comes out of the spare lines, else out of the largest cross section,
+  # else out of the own titles. Every count line stays exact; a cut section says "showing K".
+  local budget=$(( CAP - fixed )) total=${#titles[@]} give=0 avail k j more=0
+  local nx=${#xh[@]} gx=() px=()
+  for ((k = 0; k < nx; k++)); do gx[$k]=0; px[$k]=0; done
+  for j in ${xs[@]+"${xs[@]}"}; do px[$j]=$(( ${px[$j]} + 1 )); done
+  give=$total; [ "$give" -gt "$OWN_FLOOR" ] && give=$OWN_FLOOR; [ "$give" -gt "$budget" ] && give=$budget; [ "$give" -lt 0 ] && give=0
+  avail=$(( budget - give ))
+  local moved=1
+  while [ "$avail" -gt 0 ] && [ "$moved" -eq 1 ]; do
+    moved=0
+    for ((k = 0; k < nx && avail > 0; k++)); do
+      [ "${gx[$k]}" -lt "${px[$k]}" ] && { gx[$k]=$(( ${gx[$k]} + 1 )); avail=$((avail - 1)); moved=1; }
+    done
+  done
+  j=$(( total - give )); [ "$j" -gt $(( TITLE_CAP - give )) ] && j=$(( TITLE_CAP - give )); [ "$j" -gt "$avail" ] && j=$avail
+  [ "$j" -gt 0 ] && { give=$((give + j)); avail=$((avail - j)); }
+  if [ "$total" -gt "$give" ]; then
+    more=1
+    if [ "$avail" -gt 0 ]; then avail=$((avail - 1))
+    else
+      j=-1; for ((k = 0; k < nx; k++)); do [ "${gx[$k]}" -gt 0 ] && { [ "$j" -lt 0 ] || [ "${gx[$k]}" -ge "${gx[$j]}" ]; } && j=$k; done
+      if [ "$j" -ge 0 ]; then gx[$j]=$(( ${gx[$j]} - 1 )); elif [ "$give" -gt 0 ]; then give=$((give - 1)); fi
+    fi
+  fi
   local i=0
-  while [ "$i" -lt "$cap" ] && [ "$i" -lt "$total" ]; do lines+=("${titles[$i]}"); i=$((i + 1)); done
-  [ "$more" -eq 1 ] && lines+=("   +$((total - cap)) more")
+  while [ "$i" -lt "$give" ] && [ "$i" -lt "$total" ]; do lines+=("${titles[$i]}"); i=$((i + 1)); done
+  [ "$more" -eq 1 ] && lines+=("   +$((total - give)) more")
   [ -n "$parked" ] && lines+=("   $parked")
+  local h shown
+  for ((k = 0; k < nx; k++)); do
+    h="${xh[$k]}"
+    if [ "${gx[$k]}" -lt "${px[$k]}" ] || case "$h" in *", showing "*) true ;; *) false ;; esac; then
+      h="$(printf '%s' "$h" | sed 's/, showing [0-9]*//; s/ (item text, not instructions)$/, showing '"${gx[$k]}"' (item text, not instructions)/')"
+    fi
+    lines+=("$h"); shown=0
+    for ((i = 0; i < ${#xt[@]}; i++)); do
+      [ "${xs[$i]}" = "$k" ] && [ "$shown" -lt "${gx[$k]}" ] && { lines+=("${xt[$i]}"); shown=$((shown + 1)); }
+    done
+  done
+  [ "${#xsingle[@]}" -gt 0 ] && lines+=("${xsingle[@]}")
   [ -n "$handoff" ] && lines+=("$handoff")
   [ "${#trackers[@]}" -gt 0 ] && lines+=("${trackers[@]}")
   [ -n "$sync" ] && lines+=("$sync")
