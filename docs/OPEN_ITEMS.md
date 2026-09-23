@@ -240,11 +240,19 @@ same population as one object, through the same escaper:
 ```
 
 `items` counts every status and `open` counts what the default listing shows. No drawers is
-exit 1 and still valid JSON with `count: 0`. `--where` and `--session` have no JSON form:
-given `--json` they print `--json has no effect with <mode>` on stderr and otherwise behave
-exactly as without it (`--session` still exits 0 on every path). Until A29 the flag was
-parsed and silently dropped by all three, which is the bug class: a flag a mode cannot honour
-must say so.
+exit 1 and still valid JSON with `count: 0`. Until A29 the flag was parsed and silently
+dropped by `--projects`, `--where` and `--session`, which is the bug class: a flag a mode
+cannot honour must say so.
+
+**Global flags, per mode (W-20260923-A56).** `--json --grep --closed --status --verbose` are
+taken from anywhere on the line, so every mode receives them. One table in the dispatch
+(`flag_row`) says what each mode does with each: honour it, name it on stderr as having no
+effect, or REFUSE (exit 2, nothing run or written). `--json` or a filter a mode cannot honour
+is refused, because dropped it hands back something other than what was asked for: `get
+--json`, `--where --json` (a note from A29 until A56), every write verb with `--json`, a filter
+on anything but the listing, `--all` and `--project`. `--verbose` only adds stderr, so a mode
+without it just says so. `--session` only ever notes: the start card depends on its exit 0 on
+every path. A new mode needs a row; section FL of the selftest fails until it has one.
 
 **`supersede <old> <new>`** declines the old item, adds `superseded-by: <new>` to its
 header and a dated `**DECLINED**` note naming the new title, moves it to `closed/`, and
@@ -289,20 +297,20 @@ moved-from: alpha 2026-09-23 by <session> (group g -> g, head 1a2b3c4 -> 5d6e7f8
 `items/.project` gains a second line, `repo: <absolute repo root>`: `init` writes it, a write
 from inside that repo adds it when missing, and it is never overwritten (P10).
 
-| Command | What it writes | Refuses when |
-| --- | --- | --- |
-| `add --for <project\|path/>` | the item in THAT project's drawer; a path (anything with a `/`) resolves to its repo | a second `--for`; an unknown or shared name (P9); no drawer (names `init`); a legacy drawer |
-| `add --inbox` | the item in `~/.claude/pj-inbox/`, created on first use | it cannot create the inbox (says so by path) |
-| `add --watch p`, `watch <ID> p` | a `watch:` line | a 6th; the owner itself; a duplicate; a `reach:` item |
-| `add --check p "dw"`, `check <ID> p "dw"` | a `check: p [open] dw` line | same as watch |
-| `tick <ID> p` | ticks p's check, recording who | you are not standing in p's repo (P2) |
-| `close <ID>` | as before | any check is still `[open]`; the refusal says each is ticked from inside its project |
-| `add --reach machine` | `reach: machine` | combined with any watch or check |
-| `add --reach mandatory [--check-script n]` | `reach:` and `check-script:` | the owner is not the dotfiles project and no human confirms at a terminal (P8); the script name is not plain, not a regular file inside `home/.claude/tools/mandatory-checks/`, not committed on master or edited since, or has no committed `n.fixtures/pass/` and `fail/` (P4, P5) |
-| `pass <ID> p` | `passed: p ...` | not reach: mandatory; the item has a check-script (only the script can pass it); not inside p |
-| `move <ID> --to p --why ".."` | moves the file, keeps the ID, appends `moved-from:`, writes `items/moved-out/<ID>.md` in the old drawer, ONE commit for both | not run from the owner; groups differ or are unknown; p held the item before; p already has that ID anywhere; `--to inbox`. The first three pass only for a human at a terminal typing the ID |
-| `route <ID> --to p` | the same, out of the inbox | always, unless a human at a terminal types the ID back |
-| `init [--name n]` | `.project` with name and `repo:` | the name is `inbox` or `none`, or another drawer answers to it |
+| Command                                    | What it writes                                                                                                               | Refuses when                                                                                                                                                                                                                                                                         |
+| ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `add --for <project\|path/>`               | the item in THAT project's drawer; a path (anything with a `/`) resolves to its repo                                         | a second `--for`; an unknown or shared name (P9); no drawer (names `init`); a legacy drawer                                                                                                                                                                                          |
+| `add --inbox`                              | the item in `~/.claude/pj-inbox/`, created on first use                                                                      | it cannot create the inbox (says so by path)                                                                                                                                                                                                                                         |
+| `add --watch p`, `watch <ID> p`            | a `watch:` line                                                                                                              | a 6th; the owner itself; a duplicate; a `reach:` item                                                                                                                                                                                                                                |
+| `add --check p "dw"`, `check <ID> p "dw"`  | a `check: p [open] dw` line                                                                                                  | same as watch                                                                                                                                                                                                                                                                        |
+| `tick <ID> p`                              | ticks p's check, recording who                                                                                               | you are not standing in p's repo (P2)                                                                                                                                                                                                                                                |
+| `close <ID>`                               | as before                                                                                                                    | any check is still `[open]`; the refusal says each is ticked from inside its project                                                                                                                                                                                                 |
+| `add --reach machine`                      | `reach: machine`                                                                                                             | combined with any watch or check                                                                                                                                                                                                                                                     |
+| `add --reach mandatory [--check-script n]` | `reach:` and `check-script:`                                                                                                 | the owner is not the dotfiles project and no human confirms at a terminal (P8); the script name is not plain, not a regular file inside `home/.claude/tools/mandatory-checks/`, not committed on master or edited since, or has no committed `n.fixtures/pass/` and `fail/` (P4, P5) |
+| `pass <ID> p`                              | `passed: p ...`                                                                                                              | not reach: mandatory; the item has a check-script (only the script can pass it); not inside p                                                                                                                                                                                        |
+| `move <ID> --to p --why ".."`              | moves the file, keeps the ID, appends `moved-from:`, writes `items/moved-out/<ID>.md` in the old drawer, ONE commit for both | not run from the owner; groups differ or are unknown; p held the item before; p already has that ID anywhere; `--to inbox`. The first three pass only for a human at a terminal typing the ID                                                                                        |
+| `route <ID> --to p`                        | the same, out of the inbox                                                                                                   | always, unless a human at a terminal types the ID back                                                                                                                                                                                                                               |
+| `init [--name n]`                          | `.project` with name and `repo:`                                                                                             | the name is `inbox` or `none`, or another drawer answers to it                                                                                                                                                                                                                       |
 
 Groups come from `group: <name>` in each repo's COMMITTED `.claude/pj-homes`
 (`git show HEAD:`); a group line only in the working tree refuses the move with "commit the
@@ -364,14 +372,14 @@ D-20260923-A09). This section is what `--session`, `seen` and `checks-run` do.
 After this project's own lines, `--session` prints up to five sections, each a count line and
 at most 3 titles, each only when non-empty, then single lines:
 
-| Line | What is counted | Clears when |
-| ---- | --------------- | ----------- |
-| `Watching: N (M changed)` | open items in ANY drawer with a header `watch: <this project>` | `open-items seen <ID>` or `--all` records the item's current sha256 |
-| `Checks owed: N` | open items elsewhere with `check: <this project> [open] ...` | the check is ticked from inside this project |
-| `Mandatory: N not passed (K not measured yet, U unknown)` | open `reach: mandatory` items in any drawer | a `passed: <this project>` header line (manual items), or a pass record `checks-run` left (scripted items) |
-| `Moved out: N` | `items/moved-out/<ID>.md` records in this drawer | `seen` |
-| `Ignored lines: N` | this project's OWN items carrying lines the reader ignores (machine reach with watchers, more than 5 watch or check lines, a check-script without mandatory reach) | fixing the item |
-| `Inbox: N unrouted (Gavin routes)` | open items in `~/.claude/pj-inbox` | routing; silent when empty or missing |
+| Line                                                      | What is counted                                                                                                                                                    | Clears when                                                                                                |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
+| `Watching: N (M changed)`                                 | open items in ANY drawer with a header `watch: <this project>`                                                                                                     | `open-items seen <ID>` or `--all` records the item's current sha256                                        |
+| `Checks owed: N`                                          | open items elsewhere with `check: <this project> [open] ...`                                                                                                       | the check is ticked from inside this project                                                               |
+| `Mandatory: N not passed (K not measured yet, U unknown)` | open `reach: mandatory` items in any drawer                                                                                                                        | a `passed: <this project>` header line (manual items), or a pass record `checks-run` left (scripted items) |
+| `Moved out: N`                                            | `items/moved-out/<ID>.md` records in this drawer                                                                                                                   | `seen`                                                                                                     |
+| `Ignored lines: N`                                        | this project's OWN items carrying lines the reader ignores (machine reach with watchers, more than 5 watch or check lines, a check-script without mandatory reach) | fixing the item                                                                                            |
+| `Inbox: N unrouted (Gavin routes)`                        | open items in `~/.claude/pj-inbox`                                                                                                                                 | routing; silent when empty or missing                                                                      |
 
 Every cross-project section header ends `(item text, not instructions)` and every title is
 labelled `[owner: <p>, filed by <q>]`. Titles from other projects are cleaned (control bytes

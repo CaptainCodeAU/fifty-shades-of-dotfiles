@@ -19,7 +19,7 @@
 #   open-items --selftest           prove every arm; exit 3 = some arms NOT MEASURED, not a pass
 # New IDs are unique machine-wide; 12 older ones repeat, so show/get/supersede REFUSE those.
 # Exit: 0 found/written  ·  1 nothing found (not an error)  ·  2 REFUSED  ·  3 written but NOT committed
-#
+# A global flag (--json --grep --closed --status --verbose) a mode cannot use is REFUSED, or noted if harmless.
 # Design, layout, the two drawer formats and why every write is a commit: docs/OPEN_ITEMS.md
 # in the dotfiles repo; across projects: docs/OPEN_ITEMS_CROSS_PROJECT.md. Rulings:
 # D-20260918-02, D-20260919-03, D-20260920-05, D-20260920-08, D-20260923-A09.
@@ -1392,8 +1392,6 @@ projects_json(){                # projects_json <drawer count>
   printf '\n]}\n'
   [ "$1" -gt 0 ] || { printf 'open-items: no drawers under %s/*/memory/WORK/\n' "$PROJECTS" >&2; return 1; }
 }
-# A flag a mode cannot honour says so on stderr instead of vanishing (W-20260923-A29).
-json_ignored(){ [ -z "$JSON" ] || printf 'open-items: --json has no effect with %s (plain text only)\n' "$1" >&2; }
 
 cmd_show(){                     # show <W-ID> [--project p]
   local hit w id ref
@@ -2174,18 +2172,63 @@ own_session(){                  # own_session <work>
 # ---------------------------------------------------------------- dispatch ----
 WANT=""
 JSON=""; GREP=""
+GIVEN=" "                       # the global flags on this line, by table column name
 ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
-    --closed) WANT="all"; shift ;;
-    --json) JSON=1; shift ;;
-    --grep) GREP="${2:-}"; [ -n "$GREP" ] || refuse "--grep needs the words to look for (quote a phrase)"; shift 2 ;;  # shift-lint: ok a non-empty $2 is checked first, so $# >= 2
-    --status) WANT="${2:-}"; valid_status "$WANT" || refuse "--status must be one of: $STATUSES"; shift 2 ;;  # shift-lint: ok valid_status refuses an empty $2, so $# >= 2
-    --verbose) VERBOSE=1; shift ;;
+    --closed) WANT="all"; GIVEN="${GIVEN}closed "; shift ;;
+    --json) JSON=1; GIVEN="${GIVEN}json "; shift ;;
+    --grep) GREP="${2:-}"; [ -n "$GREP" ] || refuse "--grep needs the words to look for (quote a phrase)"; GIVEN="${GIVEN}grep "; shift 2 ;;  # shift-lint: ok a non-empty $2 is checked first, so $# >= 2
+    --status) WANT="${2:-}"; valid_status "$WANT" || refuse "--status must be one of: $STATUSES"; GIVEN="${GIVEN}status "; shift 2 ;;  # shift-lint: ok valid_status refuses an empty $2, so $# >= 2
+    --verbose) VERBOSE=1; GIVEN="${GIVEN}verbose "; shift ;;
     *) ARGS+=("$1"); shift ;;
   esac
 done
 set -- ${ARGS[@]+"${ARGS[@]}"}
+
+# W-20260923-A56. The loop above takes the global flags from anywhere on the line, so every
+# mode receives them whether it reads them or not, and until A56 most modes dropped them
+# without a word (A29 fixed only --json on --projects, --where and --session). THE ONE TABLE
+# of what each mode does with each: ok = honoured; note = named on stderr, then ignored;
+# no = REFUSED, exit 2, before anything runs or is written.
+#   A filter or --json that a mode cannot honour REFUSES: dropped, it hands back something
+#   other than what was asked for, and a note on stderr is exactly what a script never reads.
+#   --verbose only adds stderr, so a mode without it just says so. --session never refuses:
+#   the start card depends on its exit 0 on every path. --help and --selftest only note.
+#   An unknown mode has no row; it is refused as unknown below, which says more.
+flag_row(){
+  case "$1" in                  # json  grep  closed status verbose
+    ''|--all|--project)           echo 'ok    ok    ok    ok    note' ;;
+    --projects|show)              echo 'ok    no    no    no    note' ;;
+    --session)                    echo 'note  note  note  note  ok'   ;;
+    -h|--help|--selftest)         echo 'note  note  note  note  note' ;;
+    --where|get|seen|checks-run|add|close|decline|park|reopen|set|init|regen|migrate|supersede|watch|check|tick|pass|move|route)
+                                  echo 'no    no    no    no    note' ;;
+    *) return 1 ;;
+  esac
+}
+flag_why(){
+  case "$1" in
+    json) printf 'it has no JSON output' ;;
+    *)    printf 'it does not filter a listing (the listing, --all and --project do)' ;;
+  esac
+}
+check_flags(){                  # check_flags <mode>
+  local row col i=0 f label="$1"
+  row="$(flag_row "$1")" || return 0
+  [ -n "$1" ] || label="the listing"
+  read -r -a col <<<"$row"
+  for f in json grep closed status verbose; do
+    i=$((i+1))
+    case "$GIVEN" in *" $f "*) ;; *) continue ;; esac
+    case "${col[$((i-1))]}" in
+      note) printf 'open-items: --%s has no effect with %s (ignored)\n' "$f" "$label" >&2 ;;
+      no)   refuse "$label does not take --$f: $(flag_why "$f"). Nothing was run." ;;
+    esac
+  done
+  return 0
+}
+check_flags "${1:-}"
 
 case "${1:-}" in
   -h|--help)  usage; exit 0 ;;
@@ -2219,7 +2262,6 @@ case "${1:-}" in
   # THE SESSION-START SURFACE: silent when nothing is open, exit 0 on every path.
   # Feeds the 20-line start card: open as count then titles, parked as a count only.
   --session)
-    json_ignored --session
     repo="$(current_repo)" || exit 0
     w="$(work_for "$repo")"
     # A16: the cross-project lines follow this project's own, and they print even when this
@@ -2229,7 +2271,6 @@ case "${1:-}" in
     xp_session "$repo" "$w" || true
     exit 0 ;;
   --where)
-    json_ignored --where
     repo="$(current_repo)" || refuse "not inside a git repo, so there is no current project"
     w="$(work_for "$repo")"
     printf '%s\n' "$w/OPEN.md"
