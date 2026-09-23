@@ -22,7 +22,8 @@
 # WHAT IT PRINTS
 #   line 1   pj start card: <project>
 #   line 2   WARNING when the last session here ended without wrap-up (flag below)
-#   then     open items from `open-items --session`: count, up to 10 titles,
+#   then     open items from `open-items --session`: count (and "N pinned" when any item's
+#            when: begins "next session"), up to 10 titles with pinned ones FIRST,
 #            "+N more", "parked: N"; or one line saying there is no drawer
 #   then     Handoff: <marker path> (size, date) -- only when the file exists
 #   then     Tracker: <marker path>, one per declared tracker
@@ -204,20 +205,25 @@ card(){
   if [ "$wrc" -eq 1 ]; then
     open_header="Open items: no drawer for this project yet (\`open-items init\` creates one)"
   elif [ "$wrc" -eq 0 ]; then
-    local sess="" line=""
+    local sess="" line="" npin=""
     sess="$(open-items --session 2>/dev/null | strip_ansi)" || sess=""
     if [ -z "$sess" ]; then
       open_header="Open items: none open (\`open-items add\` files one)"
     else
       while IFS= read -r line; do
         case "$line" in
-          'Open items'*) n="$(printf '%s' "$line" | sed -n 's/^Open items (\([0-9]*\) in.*/\1/p')" ;;
+          'Open items'*) n="$(printf '%s' "$line" | sed -n 's/^Open items (\([0-9]*\) in.*/\1/p')"
+                         npin="$(printf '%s' "$line" | sed -n 's/^Open items ([0-9]* in .*, \([0-9]*\) pinned -- .*/\1/p')" ;;
           *'parked: '*)  parked="${line#"${line%%[![:space:]]*}"}" ;;
           *'· '*)        titles+=("$line") ;;
         esac
       done <<<"$sess"
       [ -n "$n" ] || n="${#titles[@]}"
-      open_header="Open items: $n open (\`open-items\` for detail; add/close/park/decline/reopen to change)"
+      # W-20260923-A23: open-items --session lists pinned items (when: next session) FIRST,
+      # so they survive the title cap below; the header says how many there are. Silent
+      # when none are pinned, like every other exception line on this card.
+      local pin_note=""; [ -n "$npin" ] && pin_note=", $npin pinned for next session, listed first"
+      open_header="Open items: $n open$pin_note (\`open-items\` for detail; add/close/park/decline/reopen to change)"
     fi
   fi
 

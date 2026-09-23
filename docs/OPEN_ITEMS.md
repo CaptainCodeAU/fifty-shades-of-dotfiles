@@ -11,6 +11,14 @@ to remember to type is a list he will not see. So this tool is the query layer, 
 `--session` is the surface that actually speaks. It is short on purpose: it feeds a
 20-line start card (D-20260920-04), open items as a count then titles, parked as a count.
 
+The card keeps only 10 titles, so `--session` lists PINNED items first (W-20260923-A23):
+an open item whose header `when:` begins with `next session`, in any case, is printed first
+and marked `[pinned]`, and the count line says `N pinned`. Everything else follows in ID
+order as before. There is no pin/unpin command: `open-items set <ID> when "next session"`
+pins, and changing `when` unpins. Without this, an item filed today for the very next session
+has the newest ID and lands last; on 2026-09-23 eight of them were open and the card showed
+none.
+
 ## Where the drawer lives
 
 Each repo's drawer is `~/.claude/projects/<key>/memory/WORK/`, inside the harness memory

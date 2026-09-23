@@ -791,6 +791,42 @@ measure "$X0_CL"
 wanteq "  --all --closed: headers found" "4" "$X0_ANY"
 wanteq "  --all --closed: none glued" "4" "$X0_AT"
 
+printf '\nM  pinned items lead the session surface (W-20260923-A23)\n'
+# THE BUG: --session listed titles in ID order and the card keeps the first 10, so an item
+# filed today "for next session" was the NEWEST ID and fell off the bottom. The fixture is a
+# 40-item drawer whose two pinned items are the two NEWEST IDs, plus two look-alikes that
+# must NOT pin: a `when:` that says "next time", and "when: next session" in the BODY.
+D="$ROOT/caseM"; P="$D/projects"; PIN="$D/pin"; mkdir -p "$PIN"; git -C "$PIN" init -q 2>/dev/null
+PWK="$P/$(key "$PIN")/memory/WORK"; mkdir -p "$PWK/items/open"; printf 'pin\n' > "$PWK/items/.project"
+i=0; while [ $i -lt 40 ]; do i=$((i+1)); id="$(printf 'W-20260101-A%02d' "$i")"
+  { printf '## %s -- item number %s\n\nproject: pin\nstatus: open\nkind: do\ndone-when: x\n' "$id" "$i"
+    case "$i" in
+      37) printf '\nBody that happens to say\nwhen: next session\non a line of its own.\n' ;;
+      38) printf 'when: next time something breaks\n' ;;
+      39) printf 'when: Next Session, before anything else\n' ;;
+      40) printf 'when: next session, first\n' ;;
+    esac; } > "$PWK/items/open/$id.md"
+done
+run_in "$PIN" --session
+M_TITLES="$(printf '%s\n' "$OUT" | sed 's/\x1b\[[0-9;]*m//g' | grep '   · ')"   # the dim code rides on line 1
+M_TOP10="$(printf '%s\n' "$M_TITLES" | head -10)"
+wanteq "--session on a 40-item drawer exits 0" "0" "$RC"
+wanteq "  control: all 40 titles are listed (nothing dropped here; the card caps)" "40" "$(printf '%s\n' "$M_TITLES" | wc -l | tr -d ' ')"
+want   "  the NEWEST-ID pinned item is inside the first 10 titles" "item number 40" "$M_TOP10"
+want   "  a pinned item whose when: is in another case is too" "item number 39" "$M_TOP10"
+wanteq "  pinned come FIRST, in ID order" "   · [pinned] item number 39|   · [pinned] item number 40" "$(printf '%s\n' "$M_TITLES" | head -2 | tr '\n' '|' | sed 's/|$//')"
+want   "  the header says how many are pinned" "40 in pin, 2 pinned --" "$OUT"
+wantnot "  'when: next time' does NOT pin" "[pinned] item number 38" "$OUT"
+wantnot "  'when: next session' in the BODY does NOT pin" "[pinned] item number 37" "$OUT"
+wanteq "  the rest keep ID order after the pinned ones" "   · item number 1" "$(printf '%s\n' "$M_TITLES" | sed -n 3p)"
+# TWIN: unpin them and the same newest items must fall OUT of the first 10, or the arm
+# above would pass on a fixture that never tested ordering at all.
+sed -i '' '/^when: /d' "$PWK/items/open/W-20260101-A39.md" "$PWK/items/open/W-20260101-A40.md" 2>/dev/null \
+  || sed -i '/^when: /d' "$PWK/items/open/W-20260101-A39.md" "$PWK/items/open/W-20260101-A40.md" 2>/dev/null
+run_in "$PIN" --session
+wantnot "TWIN unpinned, item 40 is NOT in the first 10 (the bug the pin fixes)" "item number 40" "$(printf '%s\n' "$OUT" | grep '   · ' | head -10)"
+wantnot "TWIN and the header says nothing about pinned" "pinned" "$OUT"
+
 printf '\n%s passed, %s failed   (fixtures: %s)\n' "$PASS" "$FAIL" "$ROOT"
 [ "$FAIL" -eq 0 ] || { printf 'open-items-selftest: FAILURES above\n' >&2; exit 1; }
 printf 'open-items-selftest: all arms pass\n'

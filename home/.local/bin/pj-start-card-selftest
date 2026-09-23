@@ -25,6 +25,10 @@ export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
 # would depend on whether this machine has an unseen mods API change today.
 printf '#!/bin/sh\nexit 0\n' > "$ROOT/mods-silent"; chmod +x "$ROOT/mods-silent"
 export PJ_MODS_API_DRIFT="$ROOT/mods-silent"
+# The card calls `open-items` from PATH. Put the one BESIDE this card first, or a worktree's
+# selftest measures the stowed master copy and can never see a change to open-items --session
+# (found 2026-09-23 while building W-20260923-A23). PJ_CARD moves both together.
+export PATH="$(dirname "$CARD"):$PATH"
 
 PASS=0; FAIL=0
 ok(){ PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
@@ -248,6 +252,24 @@ check "P tool absent: no line, card still fine" '! has "$OUT" "^Mods API:" && [ 
 PJ_MODS_API_DRIFT="$ROOT/mods-unseen" run "$B"
 check "P the cap squeeze still holds with the mods line ($(lines "$OUT") lines)" '[ "$(lines "$OUT")" -eq 20 ] && has "$OUT" "^Mods API:" && has "$OUT" "^Hello rule:"'
 check "P titles gave up the line, fixed lines did not" '[ "$(( $(ntitles "$OUT") + $(printf "%s\n" "$OUT" | sed -n "s/^   +\([0-9]*\) more$/\1/p") ))" -eq 14 ] && [ "$(printf "%s\n" "$OUT" | grep -c "^Tracker: ")" -eq 5 ]'
+
+# --- Q: a pinned item survives the title cap (W-20260923-A23) -----------------------------
+# A 40-item drawer whose NEWEST ID says `when: next session`. In ID order it is title 40 of
+# 40 and the card keeps 10, which is exactly how urgent items fell off the card.
+Q="$ROOT/repo-q"; mkrepo "$Q"; WQ="$(mkdrawer "$Q" 40 0)"
+printf 'when: next session, first\n' >> "$WQ/items/open/W-20260101-40.md"
+run "$Q"
+check "Q rc 0" '[ "$RC" -eq 0 ]'
+check "Q the newest-ID pinned item IS on the card" 'has "$OUT" "^   · \[pinned\] open item number 40$"'
+check "Q and it is the FIRST title" '[ "$(printf "%s\n" "$OUT" | grep "   · " | head -1)" = "   · [pinned] open item number 40" ]'
+check "Q the header says how many are pinned" 'has "$OUT" "^Open items: 40 open, 1 pinned for next session, listed first ("'
+check "Q still 10 titles and +30 more (the cap is unchanged)" '[ "$(ntitles "$OUT")" -eq 10 ] && has "$OUT" "^   +30 more$"'
+check "Q at most 20 lines ($(lines "$OUT"))" '[ "$(lines "$OUT")" -le 20 ]'
+# TWIN: unpin it and it must fall off again, or the arms above never tested the order.
+sed -i '' '/^when: /d' "$WQ/items/open/W-20260101-40.md" 2>/dev/null || sed -i '/^when: /d' "$WQ/items/open/W-20260101-40.md"
+run "$Q"
+check "Q TWIN unpinned: item 40 is OFF the card (the bug)" '! has "$OUT" "open item number 40$"'
+check "Q TWIN and the header says nothing about pinned" '! has "$OUT" "pinned"'
 
 # --- N: --selftest dispatch and syntax ------------------------------------------------------
 check "N bash -n clean" 'bash -n "$CARD"'
