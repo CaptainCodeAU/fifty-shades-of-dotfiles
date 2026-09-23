@@ -40,8 +40,9 @@ re-proposes them without new evidence.
 
 ### 1. An item belongs to one project, and others must stay across it
 
-**Owner plus watchers, live, with a changed flag.** The owner's item carries
-`watchers: <project>, <project>`. Each watcher's start card shows its watched items, read live
+**Owner plus watchers, live, with a changed flag.** The owner's item carries one
+`watch: <project>` header line per watcher (repeatable; settled 2026-09-23, earlier text here
+said `watchers: <project>, <project>`). Each watcher's start card shows its watched items, read live
 from the owner's drawer (never copied), and flags any that changed or closed since that project
 last marked them seen. The seen/unseen state reuses the pattern the Mods API card line already
 uses.
@@ -155,10 +156,41 @@ lock (race-proof too, but a session that dies holding it needs stale-lock recove
 The unique IDs come first: every watcher list, check and move above names items across drawers,
 and an ID that means two things breaks all of them.
 
+## Safety rules (accepted by Gavin 2026-09-23, all twelve)
+
+A read-only safety review of the build spec proposed twelve rules; Gavin accepted every one
+before the build started. They bind the build as firmly as the design above. The full text,
+with each risk, scenario, rule and selftest arm, and the options considered and rejected, is
+[`OPEN_ITEMS_CROSS_PROJECT_SAFETY.md`](OPEN_ITEMS_CROSS_PROJECT_SAFETY.md). Two holes were
+proven by test there before any rule was written: `add` accepted a newline that forged header
+lines, and a terminal escape in a title reached the start card intact.
+
+| #   | Rule, one line                                                                                                                                               |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| P1  | Header values refuse control characters; every cross-project field is read from the header only                                                              |
+| P2  | `tick`, `pass`, `seen` write only the current project's own state; no manual pass when a script exists; ticks record who                                     |
+| P3  | The start card never runs a script and never writes; a detached runner that `pj` starts fills a cache the card reads                                         |
+| P4  | A check-script runs only if its name is plain, its real path is inside the dotfiles repo, and its content equals master                                      |
+| P5  | Exit 0/1/other = passed/not passed/unknown; a pass must print `scanned: N` with N > 0; each script ships pass and fail fixtures; clean environment           |
+| P6  | The pass cache key includes the item hash and the script's committed blob; only an explicit positive record is a pass                                        |
+| P7  | Another project's text is data: controls and bidi stripped, length capped, source labelled                                                                   |
+| P8  | `reach: mandatory` only from the dotfiles project or a human at a terminal; at most 5 watch and 5 check lines; 5 card lines kept for the project's own items |
+| P9  | Project names compared as exact tokens; a name shared by two drawers is refused; `inbox` and `none` reserved                                                 |
+| P10 | A `repo:` line counts only if it matches the drawer's own key and resolves; back-fill never overwrites                                                       |
+| P11 | The moved-out notice is built; groups read from committed `pj-homes`; no move back to a former owner; `route` needs a human at a terminal                    |
+| P12 | Two-drawer writes lock in a fixed order, never overwrite a destination ID, commit both drawers together, and the inbox is committable                        |
+
+P3 changes WHEN a mandatory check is computed (by a runner after the card, read from cache),
+not WHETHER: "computed live" in case 4 now means "measured by the runner, never stored as a
+claim". P8 and P11 make two of the ruling's "Gavin's call" points enforced by a terminal check,
+since an agent's Bash has no terminal (measured by the reviewer).
+
 ## What is built, and what is not (as of 2026-09-23)
 
-- Built on branch `oi-read`, not yet merged when this was written: `show`, `get`, `--json` and a
-  current-drawer `supersede` refuse an ambiguous ID (W-20260923-A24). Nothing else in this
-  document.
-- To build, in order: the A22 scheme (with W-20260923-A25, the `add` hang in the same code),
-  then the A16 design above, which waits for Gavin's go.
+- Merged 2026-09-23: `show`, `get`, `--json` and a current-drawer `supersede` refuse an
+  ambiguous ID (W-20260923-A24, 4f629df).
+- Merged 2026-09-23: the unique-ID scheme, `pj-id claim` with the claim folder, used by
+  `open-items add` and `decided add` (W-20260923-A22, 249e1b5..fda6fe7), and the `add` hang fix
+  (W-20260923-A25).
+- Being built from 2026-09-23 (Gavin's go given): the A16 design above with all twelve safety
+  rules, as W-20260923-A28.
