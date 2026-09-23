@@ -477,15 +477,31 @@ wanteq "--help opens with usage in under 25 lines (was 71)" "1" "$([ "$(printf '
 want   "--help lists add" "open-items add" "$OUT"
 want   "--help points at the doc" "docs/OPEN_ITEMS.md" "$OUT"
 
+# trace_count <trace>: two writers at once, COUNTED from the tool's OPEN_ITEMS_TRACE lines
+# (W-20260923-A59) rather than inferred from a commit failing with rc 3, which read 0 on the
+# old master while a trace of the same runs showed 3 double holders. Holds are replayed in
+# trace order per lock, and an ACQ while another pid holds the same lock is an "overlap".
+# "listed" is a second, independent instrument: an ACQ that found more than one pid dir in
+# its lock. acq is the POSITIVE arm: with no ACQ lines the seam never ran and a 0 means nothing.
+trace_count(){ awk -F'\t' '
+  $1=="ACQ" { k=$3; if (n[k]>0) d++; n[k]++; h[k SUBSEP $2]=1; a++; if ($4 ~ /,/) l++ }
+  $1=="REL" || $1=="TAKE" { k=$3; p=($1=="REL")?$2:$4; if ((k SUBSEP p) in h) { n[k]--; delete h[k SUBSEP p] }; if ($1=="REL") r++ }
+  END { printf "overlap=%d listed=%d acq=%d rel=%d", d, l, a, r }' "$1" 2>/dev/null; }
+
 printf 'G  two writers at once\n'
 mk_dotclaude
 runw "$ZETA" init
 # Every add's rc and output are KEPT (W-20260923-A37): with them thrown away, a short count
 # could not say whether an add was refused (and which refusal) or reported success and lost
-# its write, and those are different bugs.
+# its write, and those are different bugs. Every add is traced (A59), so two writers at once
+# are counted directly.
 i=0; while [ $i -lt 20 ]; do i=$((i+1))
-  ( cd "$ZETA" && OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" "$TOOL" add "parallel $i" --done-when x >"$D/g.$i.out" 2>&1; echo $? > "$D/g.$i.rc" ) &
+  ( cd "$ZETA" && OPEN_ITEMS_TRACE="$D/g.trace" OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" "$TOOL" add "parallel $i" --done-when x >"$D/g.$i.out" 2>&1; echo $? > "$D/g.$i.rc" ) &
 done; wait
+G_TC="$(trace_count "$D/g.trace")"
+want   "the trace seam ran: one ACQ and one REL per add (positive arm; without it the next two mean nothing)" "acq=20 rel=20" "$G_TC"
+want   "  and no two writers held the lock at once (holds replayed from the trace)" "overlap=0 " "$G_TC"
+want   "  and no writer found a second pid dir inside its lock (independent instrument)" "listed=0 " "$G_TC"
 G_BAD=""; G_OK=0; i=0; while [ $i -lt 20 ]; do i=$((i+1))
   rc="$(cat "$D/g.$i.rc" 2>/dev/null)"
   if [ "$rc" = 0 ]; then G_OK=$((G_OK+1)); continue; fi
@@ -971,56 +987,88 @@ wanteq "  control: with the permission back, an add succeeds again (rc=0)" "0" "
 # The lock must not be left behind by any of the three.
 wanteq "  no lock directory left behind" "0" "$([ -d "$ZW/items/.lock" ] && echo 1 || echo 0)"
 
-printf '\nLK  a stale lock snapshot never removes a live lock; contention is never a permission refusal (W-20260923-A37)\n'
-# Two bugs in lock_drawer, both races, both measured in 160 concurrent adds on 2026-09-23:
-# (1) a waiter whose `ls` snapshot of the holder pid had gone stale removed a NEW holder's
-# still-empty lock (rmdir LOCK/pid and rmdir LOCK ran independently), giving "cannot write
-# inside it" and two writers at once (rc 3); (2) a contended lock that vanished and came back
-# between the failed mkdir and the -d test was refused "for want of WRITE permission".
+printf '\nLK  the drawer lock: taken whole by one rename, never two holders, never a false refusal (W-20260923-A37, A58, A59, A60)\n'
+# History. A37 (2026-09-23) fixed two races in the old two-step lock (`mkdir LOCK` then
+# `mkdir LOCK/$$`): a waiter with a stale pid snapshot removed a NEW holder's still-empty
+# lock (two writers at once), and a contended lock that vanished and came back was refused
+# "for want of WRITE permission". A58 then replaced the two steps with ONE rename(2) of a
+# privately built `.lock.new.<pid>.<random>/<pid>`, so a held lock is never empty and an
+# empty one is always an orphan that the next writer replaces.
 #
-# A race that is left to chance passes on the old code most rounds, which is not an arm. So
-# LK1 and LK2 STAGE each race deterministically, with shims for `ls` and `mkdir` put first on
-# PATH (both are external commands the tool calls by name; the shims change timing only and
-# call the real binaries). LK3 is the concurrent version, with the same shims widening the
-# two windows so the old code fails it reliably instead of one round in six.
+# A race left to chance passes on broken code most rounds, which is not an arm. So each race
+# below is STAGED with shims put first on PATH for commands the tool calls by name (`perl`
+# for the rename, `rmdir`, `ls`, `git`, `sleep`); the shims change timing, or kill the tool
+# at a chosen step, and otherwise call the real binaries.
 lk_shims(){
   LKS="$ROOT/lk-shim"; mkdir -p "$LKS"
-  local real_ls real_mkdir real_rmdir
+  local real_ls real_mkdir real_rmdir real_perl real_git real_sleep
   real_ls="$(command -v ls)"; real_mkdir="$(command -v mkdir)"; real_rmdir="$(command -v rmdir)"
-  # ls: the real listing, then (LK1) a pause ONCE when the listing is exactly the staged pid,
-  # or (LK3) a pause after every listing of a drawer lock. The caller's $(ls | head -1) waits
-  # for the pause, so it acts on the snapshot it read before it.
+  real_perl="$(command -v perl)"; real_git="$(command -v git)"; real_sleep="$(command -v sleep)"
+  # ls: (A60) one line per call when LK_LS_LOG is set, so a waiter's forks can be counted.
   cat > "$LKS/ls" <<EOF
 #!/usr/bin/env bash
-out="\$("$real_ls" "\$@")"; rc=\$?
-[ -z "\$out" ] || printf '%s\n' "\$out"
-if [ -n "\${LK_STALE_PID:-}" ] && [ "\$out" = "\$LK_STALE_PID" ] && "$real_mkdir" "\$LK_MARK" 2>/dev/null; then sleep "\$LK_STALE_SLEEP"; fi
-case "\${LK_LS_PAUSE:-}:\${!#}" in ?*:*/items/.lock) sleep "\$LK_LS_PAUSE" ;; esac
-exit \$rc
+[ -z "\${LK_LS_LOG:-}" ] || echo ls >> "\$LK_LS_LOG"
+exec "$real_ls" "\$@"
 EOF
-  # mkdir: (LK2) for the first LK_CHURN_N creates of the lock, another writer takes it first
-  # (so ours fails with the real mkdir's own EEXIST message) and releases it before the
-  # caller can look; (LK3) a pause before a holder creates its pid dir, which is the window
-  # a stale waiter could remove the lock in, and a record whenever the lock then holds MORE
-  # than one pid: two writers at once, which only sometimes shows up as a failed commit.
-  cat > "$LKS/mkdir" <<EOF
+  # sleep: (A60) logs every duration the tool asks for, then really sleeps it; (LK11) each
+  # sleep takes LK_SLEEP_EXTRA longer than asked, the way load stretches a poll.
+  cat > "$LKS/sleep" <<EOF
 #!/usr/bin/env bash
-if [ -n "\${LK_CHURN_LOCK:-}" ] && [ "\$#" = 1 ] && [ "\$1" = "\$LK_CHURN_LOCK" ]; then
-  n=\$(( \$(cat "\$LK_CHURN_COUNT" 2>/dev/null || echo 0) + 1 )); echo "\$n" > "\$LK_CHURN_COUNT"
-  if [ "\$n" -le "\$LK_CHURN_N" ]; then
-    "$real_mkdir" "\$1" 2>/dev/null; "$real_mkdir" "\$1"; rc=\$?; "$real_rmdir" "\$1"; exit \$rc
-  fi
-fi
-case "\${!#}" in
-  */items/.lock/[0-9]*)
-    [ -z "\${LK_PID_PAUSE:-}" ] || sleep "\$LK_PID_PAUSE"
-    "$real_mkdir" "\$@"; rc=\$?
-    [ -z "\${LK_HOLDERS_LOG:-}" ] || [ "\$("$real_ls" "\${!#%/*}" 2>/dev/null | wc -l)" -le 1 ] || echo "\$\$ \${!#}" >> "\$LK_HOLDERS_LOG"
-    exit \$rc ;;
-esac
-exec "$real_mkdir" "\$@"
+[ -z "\${LK_SLEEP_LOG:-}" ] || echo "\$1" >> "\$LK_SLEEP_LOG"
+[ -z "\${LK_SLEEP_EXTRA:-}" ] || "$real_sleep" "\$LK_SLEEP_EXTRA"
+exec "$real_sleep" "\$@"
 EOF
-  chmod +x "$LKS/ls" "$LKS/mkdir"
+  # perl, only when it is the lock rename (its last argument is a drawer's items/.lock):
+  #  (LK2) churn: for the first LK_CHURN_N renames another writer holds the lock, so ours
+  #        fails with the real rename's own ENOTEMPTY, and the lock is gone again before the
+  #        caller can look;
+  #  (LK3) a pause before the rename, widening the window between deciding and renaming;
+  #  (LK8) the writer is KILLED here, after it built its private dir and before the rename;
+  #  (LK12) a live pid takes the lock just first, and the rename fails with LK_RENAME_ERR.
+  cat > "$LKS/perl" <<EOF
+#!/usr/bin/env bash
+case "\${!#}" in
+  */items/.lock)
+    if [ -n "\${LK_RENAME_HOLDER:-}" ]; then
+      "$real_mkdir" -p "\${!#}/\$LK_RENAME_HOLDER"; echo "\$LK_RENAME_ERR" >&2; exit 1
+    fi
+    if [ -n "\${LK_KILL_BEFORE_RENAME:-}" ]; then
+      p="\${@: -2:1}"; p="\${p##*/.lock.new.}"; kill -9 "\${p%%.*}"; exit 1
+    fi
+    if [ -n "\${LK_CHURN_LOCK:-}" ] && [ "\${!#}" = "\$LK_CHURN_LOCK" ]; then
+      n=\$(( \$(cat "\$LK_CHURN_COUNT" 2>/dev/null || echo 0) + 1 )); echo "\$n" > "\$LK_CHURN_COUNT"
+      if [ "\$n" -le "\$LK_CHURN_N" ]; then
+        "$real_mkdir" -p "\${!#}/\$\$"; "$real_perl" "\$@"; rc=\$?; "$real_rmdir" "\${!#}/\$\$" && "$real_rmdir" "\${!#}"; exit \$rc
+      fi
+    fi
+    [ -z "\${LK_RENAME_PAUSE:-}" ] || "$real_sleep" "\$LK_RENAME_PAUSE" ;;
+esac
+exec "$real_perl" "\$@"
+EOF
+  # rmdir, only on a pid dir inside a drawer lock:
+  #  (LK1) a waiter that has found the holder dead pauses ONCE just before removing its dir,
+  #        so another waiter can take the lock over first;
+  #  (LK7) a RELEASE (the pid dir is the caller's own) is completed and the caller is then
+  #        KILLED, before its second rmdir: the empty orphan, made by the real tool.
+  cat > "$LKS/rmdir" <<EOF
+#!/usr/bin/env bash
+case "\${1:-}" in
+  */items/.lock/[0-9]*)
+    if [ -n "\${LK_STALE_PID:-}" ] && [ "\${1##*/}" = "\$LK_STALE_PID" ] && "$real_mkdir" "\$LK_MARK" 2>/dev/null; then "$real_sleep" "\$LK_STALE_SLEEP"; fi
+    if [ -n "\${LK_KILL_RELEASE:-}" ] && [ "\${1##*/}" = "\$PPID" ]; then "$real_rmdir" "\$1" && kill -9 "\$PPID"; exit 1; fi ;;
+esac
+exec "$real_rmdir" "\$@"
+EOF
+  # git: (LK6) a holder pauses before its commit, still holding the lock, until released.
+  cat > "$LKS/git" <<EOF
+#!/usr/bin/env bash
+case " \$* " in
+  *" commit "*) if [ -n "\${LK_HOLD_MARK:-}" ] && "$real_mkdir" "\$LK_HOLD_MARK" 2>/dev/null; then
+      k=0; while [ ! -e "\$LK_HOLD_GO" ] && [ "\$k" -lt 300 ]; do "$real_sleep" 0.1; k=\$((k+1)); done; fi ;;
+esac
+exec "$real_git" "\$@"
+EOF
+  chmod +x "$LKS/ls" "$LKS/sleep" "$LKS/perl" "$LKS/rmdir" "$LKS/git"
 }
 # lk_bg <tag> <title> [VAR=value...]: one add in the background, shims first on PATH.
 lk_bg(){
@@ -1030,43 +1078,41 @@ lk_bg(){
 }
 lk_wait_rc(){ local k=0; while [ ! -s "$D/lk.$1.rc" ] && [ "$k" -lt "${2:-300}" ]; do sleep 0.1; k=$((k+1)); done; cat "$D/lk.$1.rc" 2>/dev/null; }
 lk_items(){ grep -l "^## W-.* -- $1" "$ZW"/items/open/*.md 2>/dev/null | wc -l | tr -d ' '; }
+lk_holders(){ ls "$LKL" 2>/dev/null | tr '\n' ' ' | sed 's/ $//'; }
+lk_dead_pid(){ sleep 0 & local p=$!; wait "$p" 2>/dev/null; printf '%s' "$p"; }   # reaped: kill -0 says No such process
 mk_dotclaude; lk_shims
 runw "$ZETA" init
 wanteq "LK: control: a fresh drawer for these arms (init rc=0)" "0" "$RC"
 LKL="$ZW/items/.lock"
 
-# LK1 -- the stale takeover, staged. H1 (a live sleep) holds the lock. The waiter reads H1's
-# pid and pauses. Meanwhile H1 releases normally and dies, and H2 takes the lock and sits
-# between its two mkdirs (the lock exists and is EMPTY). The waiter then finds H1 dead.
+# LK1 -- two waiters race to take over the same DEAD holder. H1 was killed holding the lock.
+# The waiter finds H1 dead and pauses just before removing H1's dir; meanwhile a second
+# waiter (this test) removes it first and takes the lock whole. The paused waiter then
+# acts on its stale view and must remove NOTHING of the new holder's lock.
 sleep 60 & LK_H1=$!
-mkdir "$LKL" "$LKL/$LK_H1"
-lk_bg w1 "LK1 stale waiter" LK_STALE_PID="$LK_H1" LK_MARK="$D/lk1.mark" LK_STALE_SLEEP=2
+mkdir -p "$LKL/$LK_H1"; kill "$LK_H1" 2>/dev/null; wait "$LK_H1" 2>/dev/null
+lk_bg w1 "LK1 stale waiter" LK_STALE_PID="$LK_H1" LK_MARK="$D/lk1.mark" LK_STALE_SLEEP=3
 k=0; while [ ! -d "$D/lk1.mark" ] && [ "$k" -lt 150 ]; do sleep 0.1; k=$((k+1)); done
 if [ ! -d "$D/lk1.mark" ]; then
-  bad "LK1: the waiter reached its read of the holder pid (INVALID TRIAL, nothing below means anything)" "the shim's mark" "no mark after 15s"
+  bad "LK1: the waiter reached its removal of the dead holder's dir (INVALID TRIAL, nothing below means anything)" "the shim's mark" "no mark after 15s"
 fi
-kill "$LK_H1" 2>/dev/null; wait "$LK_H1" 2>/dev/null   # reaped, so kill -0 really says No such process
-rmdir "$LKL/$LK_H1" && rmdir "$LKL"                    # H1's normal release
-mkdir "$LKL"                                           # H2 takes it: exists, still empty
-sleep 3                                                # the waiter's pause ends inside this
-LK1_SEEN="$([ -d "$LKL" ] && echo "lock present" || echo "lock GONE"), holders [$(ls "$LKL" 2>/dev/null | tr '\n' ' ')], items $(lk_items "LK1 stale waiter")"
-wanteq "LK1: a waiter holding a STALE pid leaves H2's lock alone (still there, still empty, no write under it)" \
-       "lock present, holders [], items 0" "$LK1_SEEN"
-mkdir "$LKL/$$" 2>/dev/null; LK1_IN=$?
-wanteq "LK1:   and H2's second mkdir then succeeds (it was not left without a lock)" "0" "$LK1_IN"
-wanteq "LK1:   with H2 the ONLY holder inside it" "$$" "$(ls "$LKL" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
-rmdir "$LKL/$$" 2>/dev/null && rmdir "$LKL" 2>/dev/null  # H2 releases
+rmdir "${LKL:?}/${LK_H1:?}"; mkdir -p "$D/lk1.h2/$$"; perl -e 'rename($ARGV[0], $ARGV[1]) or exit 1' "$D/lk1.h2" "${LKL:?}"
+sleep 4                                                # the waiter's pause ends inside this
+LK1_SEEN="$([ -d "$LKL" ] && echo "lock present" || echo "lock GONE"), holders [$(lk_holders)], items $(lk_items "LK1 stale waiter")"
+wanteq "LK1: a waiter acting on a STALE view of a dead holder leaves the new holder's lock alone" \
+       "lock present, holders [$$], items 0" "$LK1_SEEN"
+rmdir "${LKL:?}/$$" && rmdir "${LKL:?}"                        # the second waiter releases
 wanteq "LK1:   the waiter then takes the lock and adds (rc=0)" "0" "$(lk_wait_rc w1)"
 wanteq "LK1:   its item was written once" "1" "$(lk_items "LK1 stale waiter")"
 wanteq "LK1:   and no lock is left behind" "0" "$([ -d "$LKL" ] && echo 1 || echo 0)"
 
-# LK2 -- churn, staged. For the first 6 creates the lock is taken and released around ours,
-# so after each failed mkdir the lock does not exist. Old code: "WRITE permission" on the 2nd.
+# LK2 -- churn, staged. For the first 6 renames another writer holds the lock, and it is gone
+# again by the time the caller looks. Contention is never a permission refusal.
 lk_bg w2 "LK2 churned" LK_CHURN_LOCK="$LKL" LK_CHURN_COUNT="$D/lk2.count" LK_CHURN_N=6
-wanteq "LK2: a lock that vanishes and comes back under churn is waited out (rc=0)" "0" "$(lk_wait_rc w2)"
+wanteq "LK2: a lock that is taken and gone again under churn is waited out (rc=0)" "0" "$(lk_wait_rc w2)"
 wantnot "LK2:   and is NOT refused for want of WRITE permission" "WRITE permission" "$(cat "$D/lk.w2.out")"
 wanteq "LK2:   its item was written once" "1" "$(lk_items "LK2 churned")"
-wanteq "LK2:   control: the churn really ran (7 creates, 6 of them refused EEXIST)" "7" "$(cat "$D/lk2.count" 2>/dev/null)"
+wanteq "LK2:   control: the churn really ran (7 renames, 6 of them refused ENOTEMPTY)" "7" "$(cat "$D/lk2.count" 2>/dev/null)"
 # Churn that never stops: the only honest refusal is the TIMEOUT, and it says so.
 lk_bg w2t "LK2 endless churn" LK_CHURN_LOCK="$LKL" LK_CHURN_COUNT="$D/lk2t.count" LK_CHURN_N=100000 OPEN_ITEMS_TEST_LOCK_TRIES=5
 wanteq "LK2: endless churn REFUSES (rc=2)" "2" "$(lk_wait_rc w2t)"
@@ -1074,11 +1120,10 @@ want    "LK2:   and the refusal is a lock TIMEOUT" "a lock TIMEOUT" "$(cat "$D/l
 wantnot "LK2:   not a WRITE permission refusal" "WRITE permission" "$(cat "$D/lk.w2t.out")"
 wanteq "LK2:   and nothing was written" "0" "$(lk_items "LK2 endless churn")"
 
-# LK3 -- the concurrent version: 10 adds at once, the shims widening both windows (0.5 s
-# after every lock listing, and before every pid dir). Old code: items lost, "cannot write
-# inside", or two writers inside the lock (rc 3), most rounds.
+# LK3 -- the concurrent version: 10 adds at once, each pausing 0.3 s between deciding to
+# rename and renaming, all traced (A59). Two writers at once are COUNTED from the trace.
 LK_N=10; LK_PIDS=()
-for k in $(seq 1 "$LK_N"); do lk_bg "c$k" "LK3 parallel $k" LK_LS_PAUSE=0.5 LK_PID_PAUSE=0.5 LK_HOLDERS_LOG="$D/lk3.holders"; LK_PIDS+=("$!"); done
+for k in $(seq 1 "$LK_N"); do lk_bg "c$k" "LK3 parallel $k" LK_RENAME_PAUSE=0.3 OPEN_ITEMS_TRACE="$D/lk3.trace"; LK_PIDS+=("$!"); done
 wait "${LK_PIDS[@]}"
 LK3_BAD=""; LK3_FALSE=""
 for k in $(seq 1 "$LK_N"); do
@@ -1086,11 +1131,13 @@ for k in $(seq 1 "$LK_N"); do
   [ "$rc" = 0 ] || LK3_BAD="$LK3_BAD add$k:rc=${rc:-none}"
   case "$rc:$(cat "$D/lk.c$k.out")" in 0:*) ;; *"a lock TIMEOUT"*) ;; *) LK3_FALSE="$LK3_FALSE add$k:$(tr '\n' ' ' < "$D/lk.c$k.out" | cut -c1-120)" ;; esac
 done
-wanteq "LK3: $LK_N concurrent adds with widened windows all succeed" "" "$LK3_BAD"
+LK3_TC="$(trace_count "$D/lk3.trace")"
+wanteq "LK3: $LK_N concurrent adds with a widened rename window all succeed" "" "$LK3_BAD"
 wanteq "LK3:   every refusal (if any) is a lock TIMEOUT, never permission, inside or rc 3" "" "$LK3_FALSE"
-wanteq "LK3:   and never two writers inside the lock at once" "0" "$(cat "$D/lk3.holders" 2>/dev/null | wc -l | tr -d ' ')"
+want   "LK3:   the trace saw every hold (positive arm)" "acq=$LK_N rel=$LK_N" "$LK3_TC"
+want   "LK3:   and never two writers holding the lock at once" "overlap=0 listed=0 " "$LK3_TC"
 wanteq "LK3:   and exactly $LK_N items were written" "$LK_N" "$(lk_items "LK3 parallel")"
-wanteq "LK3:   and no lock is left behind" "0" "$([ -d "$LKL" ] && echo 1 || echo 0)"
+wanteq "LK3:   and no lock and no private lock dir is left behind" "" "$(ls -a "$ZW/items" | grep '^\.lock')"
 
 # LK4 -- a holder this process may not SIGNAL is alive, not dead. `kill -0` fails with EPERM
 # for a live process owned by someone else, and (measured 2026-09-23) for a live process
@@ -1104,21 +1151,134 @@ else
   lk_bg w4 "LK4 behind pid 1" OPEN_ITEMS_TEST_LOCK_TRIES=5
   wanteq "LK4: a lock held by a live pid it may not signal is NOT taken over (rc=2)" "2" "$(lk_wait_rc w4)"
   want   "LK4:   the refusal is a lock TIMEOUT naming that live pid" "live pid 1" "$(cat "$D/lk.w4.out")"
-  wanteq "LK4:   the holder's lock is untouched" "1" "$(ls "$LKL" 2>/dev/null | tr -d '\n')"
+  wanteq "LK4:   the holder's lock is untouched" "1" "$(lk_holders)"
   wanteq "LK4:   and nothing was written" "0" "$(lk_items "LK4 behind pid 1")"
-  rmdir "$LKL/1" && rmdir "$LKL"
+  rmdir "${LKL:?}/1" && rmdir "${LKL:?}"
 fi
 
-# LK5 -- KNOWN GAP, pinned so a change to it is noticed: an EMPTY lock (a process killed
-# between its two mkdirs) names no pid, so nothing takes it over. Until that is fixed the
-# refusal must say what it is and how to clear it, instead of "held by pid ?".
+# LK5 -- an EMPTY lock (the old two-step lock's writer killed between its mkdirs) is an
+# ORPHAN, and the next writer replaces it without a human (A58). Until A58 this arm pinned
+# the opposite: every writer timed out on it until someone ran rmdir.
 mkdir "$LKL"
-lk_bg w5 "LK5 behind an orphan" OPEN_ITEMS_TEST_LOCK_TRIES=5
-wanteq "LK5: an orphaned EMPTY lock still blocks a writer (rc=2, the known gap)" "2" "$(lk_wait_rc w5)"
-want   "LK5:   the refusal is a lock TIMEOUT" "a lock TIMEOUT" "$(cat "$D/lk.w5.out")"
-want   "LK5:   that names the orphan and how to clear it" "rmdir $LKL" "$(cat "$D/lk.w5.out")"
-rmdir "$LKL"
-wanteq "LK5:   control: with the orphan cleared, the same add succeeds (rc=0)" "0" "$(runw "$ZETA" add "LK5 after clearing" --done-when x; echo "$RC")"
+lk_bg w5 "LK5 behind an orphan" OPEN_ITEMS_TEST_LOCK_TRIES=30 OPEN_ITEMS_TRACE="$D/lk5.trace"
+wanteq "LK5: an orphaned EMPTY lock no longer blocks a writer (rc=0, no human)" "0" "$(lk_wait_rc w5)"
+wanteq "LK5:   its item was written once" "1" "$(lk_items "LK5 behind an orphan")"
+want   "LK5:   and it took the lock, alone (trace)" "overlap=0 listed=0 acq=1 rel=1" "$(trace_count "$D/lk5.trace")"
+wanteq "LK5:   and no lock is left behind" "0" "$([ -d "$LKL" ] && echo 1 || echo 0)"
+rmdir "${LKL:?}" 2>/dev/null   # code that fails LK5 leaves the orphan; later arms need a clear drawer
+
+# LK6 -- the A59 counter can SEE two writers. A holder pauses before its commit, still
+# holding the lock; the test breaks the lock under it the way the old stale takeover did,
+# and a second writer then takes it. Both are real runs of the tool, traced; the counter
+# must report the overlap. Without this arm, overlap=0 elsewhere could mean a blind counter.
+lk_bg h6a "LK6 first holder" OPEN_ITEMS_TRACE="$D/lk6.trace" LK_HOLD_MARK="$D/lk6.mark" LK_HOLD_GO="$D/lk6.go"
+k=0; while [ ! -d "$D/lk6.mark" ] && [ "$k" -lt 150 ]; do sleep 0.1; k=$((k+1)); done
+LK6_H="$(lk_holders)"
+if [ -d "$D/lk6.mark" ] && [ -n "$LK6_H" ]; then
+  rmdir "${LKL:?}/${LK6_H:?}" && rmdir "${LKL:?}"
+  lk_bg h6b "LK6 second holder" OPEN_ITEMS_TRACE="$D/lk6.trace"
+  lk_wait_rc h6b >/dev/null
+  mkdir "$D/lk6.go"; lk_wait_rc h6a >/dev/null
+  LK6_TC="$(trace_count "$D/lk6.trace")"
+  want "LK6: two writers holding at once, staged, are COUNTED by the trace (overlap=1)" "overlap=1 " "$LK6_TC"
+  want "LK6:   positive arm: both holds were traced" "acq=2 rel=2" "$LK6_TC"
+else
+  bad "LK6: the first holder paused inside its commit, holding the lock (INVALID TRIAL)" "a mark and one holder" "mark $([ -d "$D/lk6.mark" ] && echo yes || echo no), holders [$LK6_H]"
+  mkdir -p "$D/lk6.go"; lk_wait_rc h6a >/dev/null
+fi
+
+# LK7 -- the orphan made by the REAL tool: a writer is killed after the first rmdir of its
+# release and before the second, so the lock it leaves is EMPTY. The next writer must
+# recover it without a human (A58). The shell reports this kill and LK8's as "Killed: 9";
+# that line is the staging, not a failure.
+lk_bg w7 "LK7 killed releasing" LK_KILL_RELEASE=1
+lk_wait_rc w7 >/dev/null
+wanteq "LK7: staging: the writer was killed in its release and left an EMPTY lock" "lock present, holders []" \
+       "$([ -d "$LKL" ] && echo "lock present" || echo "lock GONE"), holders [$(lk_holders)]"
+lk_bg w7b "LK7 after the killed writer" OPEN_ITEMS_TEST_LOCK_TRIES=30
+wanteq "LK7: the next writer recovers the orphan without a human (rc=0)" "0" "$(lk_wait_rc w7b)"
+wanteq "LK7:   its item was written once" "1" "$(lk_items "LK7 after the killed writer")"
+wanteq "LK7:   and no lock is left behind" "0" "$([ -d "$LKL" ] && echo 1 || echo 0)"
+rmdir "${LKL:?}" 2>/dev/null
+
+# LK8 -- a writer killed after building its private lock dir and before the rename leaves
+# `.lock.new.<pid>.<random>`. The next writer that takes the lock removes the leftovers of
+# DEAD pids and never one whose pid is alive. Planted leftovers too, so the sweep is tested
+# even where the kill cannot be staged.
+lk_bg w8 "LK8 killed before its rename" LK_KILL_BEFORE_RENAME=1
+lk_wait_rc w8 >/dev/null
+LK8_LEFT="$(ls -a "$ZW/items" | grep '^\.lock\.new\.' | tr '\n' ' ')"
+want "LK8: staging: the killed writer left its private lock dir behind" ".lock.new." "$LK8_LEFT"
+LK8_DEAD="$(lk_dead_pid)"; mkdir -p "$ZW/items/.lock.new.$LK8_DEAD.7/$LK8_DEAD"
+sleep 60 & LK8_LIVE=$!; mkdir -p "$ZW/items/.lock.new.$LK8_LIVE.7/$LK8_LIVE"
+lk_bg w8b "LK8 sweeper"
+wanteq "LK8: the next writer adds (rc=0)" "0" "$(lk_wait_rc w8b)"
+wanteq "LK8:   and every DEAD writer's private lock dir is gone, the LIVE one's kept" ".lock.new.$LK8_LIVE.7" \
+       "$(ls -a "$ZW/items" | grep '^\.lock\.new\.' | tr '\n' ' ' | sed 's/ $//')"
+kill "$LK8_LIVE" 2>/dev/null; wait "$LK8_LIVE" 2>/dev/null
+rmdir "${ZW:?}/items/.lock.new.${LK8_LIVE:?}.7/${LK8_LIVE:?}" "${ZW:?}/items/.lock.new.${LK8_LIVE:?}.7" 2>/dev/null
+
+# LK9 -- a HELD lock is never taken: a live holder this process may signal (the ordinary
+# case, unlike LK4). The rename onto it fails, the waiter waits, and times out honestly.
+sleep 60 & LK9_H=$!; mkdir -p "$LKL/$LK9_H"
+lk_bg w9 "LK9 behind a live holder" OPEN_ITEMS_TEST_LOCK_TRIES=5
+wanteq "LK9: a lock held by a live pid is NOT taken (rc=2)" "2" "$(lk_wait_rc w9)"
+want   "LK9:   the refusal is a lock TIMEOUT naming that live pid" "live pid $LK9_H" "$(cat "$D/lk.w9.out")"
+wanteq "LK9:   the holder's lock is untouched, holder alone inside it" "$LK9_H" "$(lk_holders)"
+wanteq "LK9:   and nothing was written" "0" "$(lk_items "LK9 behind a live holder")"
+wanteq "LK9:   and the waiter left no private lock dir" "" "$(ls -a "$ZW/items" | grep '^\.lock\.new\.')"
+kill "${LK9_H:?}" 2>/dev/null; wait "${LK9_H:?}" 2>/dev/null; rmdir "${LKL:?}/${LK9_H:?}" && rmdir "${LKL:?}"
+
+# LK10 -- a waiter backs off with jitter and forks as little as it can (A60). Behind a live
+# holder for a 3 s budget, the old waiter forked `ls` and slept 0.1 s every poll: 30 sleeps,
+# all the same, 30 ls. Now: fewer, growing, jittered sleeps that still add up to the budget
+# (not more: the budget stays honest), and no ls at all.
+sleep 60 & LK10_H=$!; mkdir -p "$LKL/$LK10_H"
+LK10_S=$SECONDS
+lk_bg w10 "LK10 backing off" OPEN_ITEMS_TEST_LOCK_TRIES=30 LK_SLEEP_LOG="$D/lk10.sleeps" LK_LS_LOG="$D/lk10.ls"
+LK10_RC="$(lk_wait_rc w10)"; LK10_E=$SECONDS
+wanteq "LK10: behind a live holder for a 3 s budget the waiter times out (rc=2)" "2" "$LK10_RC"
+want   "LK10:   with a lock TIMEOUT naming the holder" "live pid $LK10_H" "$(cat "$D/lk.w10.out")"
+LK10_N="$(grep -c . "$D/lk10.sleeps" 2>/dev/null)"; LK10_N="${LK10_N:-0}"
+LK10_V="$(sort -u "$D/lk10.sleeps" 2>/dev/null | grep -c .)"; LK10_V="${LK10_V:-0}"
+LK10_MS="$(awk '{ t += $1 * 1000 } END { printf "%d", t + 0.5 }' "$D/lk10.sleeps" 2>/dev/null)"
+if [ "$LK10_N" -ge 3 ] && [ "$LK10_N" -le 15 ]; then ok "LK10:   it slept $LK10_N times, not 30 (backoff)"
+else bad "LK10:   it slept between 3 and 15 times, not 30 (backoff)" "3..15 sleeps" "$LK10_N sleeps"; fi
+if [ "$LK10_V" -ge 3 ]; then ok "LK10:   in $LK10_V different lengths (growing, with jitter)"
+else bad "LK10:   in at least 3 different lengths (growing, with jitter)" ">= 3 distinct" "$LK10_V distinct: $(tr '\n' ' ' < "$D/lk10.sleeps" 2>/dev/null)"; fi
+if [ "${LK10_MS:-0}" -ge 2500 ] && [ "${LK10_MS:-0}" -le 3000 ]; then ok "LK10:   adding up to the budget and not past it (${LK10_MS} ms of 3000)"
+else bad "LK10:   adding up to the budget and not past it" "2500..3000 ms" "${LK10_MS:-none} ms"; fi
+wanteq "LK10:   and it never forked ls to read the lock" "0" "$(grep -c . "$D/lk10.ls" 2>/dev/null || echo 0)"
+if [ $(( LK10_E - LK10_S )) -le 5 ]; then ok "LK10:   and the refusal came on time ($(( LK10_E - LK10_S )) s wall clock for a 3 s budget)"
+else bad "LK10:   and the refusal came on time" "<= 5 s" "$(( LK10_E - LK10_S )) s"; fi
+kill "${LK10_H:?}" 2>/dev/null; wait "${LK10_H:?}" 2>/dev/null; rmdir "${LKL:?}/${LK10_H:?}" && rmdir "${LKL:?}"
+
+# LK11 -- the budget is WALL CLOCK (A60). Every sleep the waiter asks for takes 0.5 s longer
+# than asked, the way a loaded machine stretches each poll. The old budget counted polls, so
+# 20 polls of 0.1 s became 12 s; a wall-clock budget of 2 s must end within about 4 s.
+sleep 60 & LK11_H=$!; mkdir -p "$LKL/$LK11_H"
+LK11_S=$SECONDS
+lk_bg w11 "LK11 slow polls" OPEN_ITEMS_TEST_LOCK_TRIES=20 LK_SLEEP_EXTRA=0.5
+LK11_RC="$(lk_wait_rc w11 300)"; LK11_E=$SECONDS
+wanteq "LK11: behind a live holder, with every poll 0.5 s slower than asked, the waiter times out (rc=2)" "2" "$LK11_RC"
+if [ $(( LK11_E - LK11_S )) -le 5 ]; then ok "LK11:   within the 2 s budget by the wall clock ($(( LK11_E - LK11_S )) s, not 12 s of counted polls)"
+else bad "LK11:   within the 2 s budget by the wall clock" "<= 5 s" "$(( LK11_E - LK11_S )) s"; fi
+kill "${LK11_H:?}" 2>/dev/null; wait "${LK11_H:?}" 2>/dev/null; rmdir "${LKL:?}/${LK11_H:?}" && rmdir "${LKL:?}"
+
+# LK12 -- a rename that fails because another writer got there first is HELD, whatever the
+# error text. POSIX lets rename onto a non-empty directory fail with ENOTEMPTY (macOS) or
+# EEXIST (allowed, and seen on Linux), so the lock's own contents decide. The shim takes the
+# lock for a live holder just before our rename, then fails it with the given text: the
+# Linux one, and one no code branches on. Either way: wait, then an honest TIMEOUT.
+sleep 60 & LK12_H=$!
+for LK12_T in "File exists" "Invalid argument"; do
+  lk_bg w12 "LK12 $LK12_T" OPEN_ITEMS_TEST_LOCK_TRIES=5 LK_RENAME_HOLDER="$LK12_H" LK_RENAME_ERR="$LK12_T"
+  wanteq "LK12: a rename refused with \"$LK12_T\" onto a lock a live pid now holds waits (rc=2 TIMEOUT)" "2" "$(lk_wait_rc w12)"
+  want    "LK12:   the refusal is a lock TIMEOUT naming the holder" "live pid $LK12_H" "$(cat "$D/lk.w12.out")"
+  wantnot "LK12:   and never \"rename failed for a reason other than a held lock\"" "other than a held lock" "$(cat "$D/lk.w12.out")"
+  rmdir "${LKL:?}/${LK12_H:?}" 2>/dev/null; rmdir "${LKL:?}" 2>/dev/null; command mv "$D/lk.w12.rc" "$D/lk.w12.$LK12_T.rc"
+done
+kill "${LK12_H:?}" 2>/dev/null; wait "${LK12_H:?}" 2>/dev/null
 
 printf '\nH  every `## W-` header starts its own line, across a drawer boundary (X0)\n'
 # THE BUG: `hits="$(blocks_from ...)"` strips every trailing newline, and report() then

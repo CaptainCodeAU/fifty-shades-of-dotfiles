@@ -91,7 +91,16 @@ parked-by-Gavin and decision-withheld. `closed/` holds both `done` and `declined
 and since A16 `watch`, `check`, `tick`, `pass`, `move`, `route` each (a move or route takes
 two locks and makes ONE commit for both drawers; see "Across projects" below):
 
-1. take a per-drawer lock (`items/.lock`, a directory; a dead holder is taken over),
+1. take a per-drawer lock (`items/.lock`, a directory holding one subdirectory named for
+   the holder's pid). It is built privately as `items/.lock.new.<pid>.<random>/<pid>` and
+   moved onto `items/.lock` with ONE `rename(2)` (via perl; BSD `mv` has no `-T`), so a held
+   lock is never empty and never taken, and an EMPTY lock, left by a writer killed between
+   steps, is an orphan the next writer replaces with no human (W-20260923-A58). A dead
+   holder is taken over; private dirs left by dead writers are swept by the next holder.
+   A waiter backs off from 50 ms to 800 ms with jitter, and gives up after 60 s of sleep
+   (never more than 61 s of wall clock) with a lock TIMEOUT refusal (A60). Set
+   `OPEN_ITEMS_TRACE=<file>` to log every ACQ/REL/TAKE; the selftest counts two writers at
+   once from it (A59),
 2. write the item file (the ID comes from `pj-id claim`, which stamps it with this
    machine's letter, hands out `01`-`99` under it after scanning EVERY drawer, and claims
    it in `~/.local/state/pj/ids/`; the item file is then created with `noclobber`. No
