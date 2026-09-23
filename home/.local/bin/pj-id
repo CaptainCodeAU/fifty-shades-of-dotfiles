@@ -7,7 +7,24 @@
 #                                       given every store an ID of that kind could sit in
 #                                       (a folder is searched recursively for <ID>*.md, a
 #                                       file for a "## <ID> " header). Prints the full ID.
+#   pj-id claim <D|W> <store>...        the same, then CLAIMS it with a no-clobber create in
+#                                       the machine-wide claim folder, retrying on a clash.
+#                                       What open-items add and decided add call.
 #   pj-id --selftest                    prove the arms
+#
+# THE CLAIM FOLDER (D-20260923-A10, W-20260923-A22)  $HOME/.local/state/pj/ids/, one empty
+# file per claimed ID. Machine state, never a repo; the machine letter already separates
+# machines, so it never syncs. WHY: passing every store makes an ID unique against what is
+# on disk, but two adds in DIFFERENT drawers at the same instant both saw the same free NN
+# and both created their file, because no-clobber only catches a clash inside ONE folder
+# (measured 20 of 20 races). One shared folder makes the create itself the arbiter (0 of 20).
+# The folder only ADDS to the scan, it never replaces it: IDs minted before it existed, or
+# on a box whose folder was wiped, are still found in the stores.
+# A claim create that is REFUSED (not a collision: the path does not exist afterwards)
+# REFUSES by name, rc 2. It never loops (W-20260923-A25, the W-20260921-A30 class).
+# Test seams: PJ_ID_CLAIMS_DIR moves the folder. A FIXTURE machine file (PJ_MACHINE_FILE
+# set) with the real folder REFUSES, so a selftest can never write the real one.
+# PJ_ID_CLAIM=off turns the claim off for a race CONTROL, and only with PJ_ID_CLAIMS_DIR set.
 #
 # WHY. W- and D- IDs are claimed locally by creating a file, which is atomic on one
 # machine and blind to another clone: two machines claimed the same W-YYYYMMDD-NN on one
@@ -44,9 +61,12 @@
 set -uo pipefail
 
 MACHINE_FILE="${PJ_MACHINE_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/pj/machine}"
+# $HOME spelled out, no XDG_STATE_HOME: two shells that disagreed about XDG would claim in
+# two folders and the race protection would silently be gone.
+CLAIMS_DIR="${PJ_ID_CLAIMS_DIR:-$HOME/.local/state/pj/ids}"
 
 refuse(){ printf 'pj-id: REFUSED -- %s\n' "$1" >&2; exit 2; }
-usage(){ sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//'; }
+usage(){ sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; }
 
 # read_machine -> "NAME LETTER"
 read_machine(){
@@ -72,23 +92,25 @@ read_machine(){
   printf '%s %s\n' "$name" "$letter"
 }
 
-# taken <ID> <store>... -> 0 when any store already holds that ID
-taken(){
-  local id="$1" s; shift
+# used_ids <prefix> <store>... -> "|ID|ID|..." of every <prefix>NN already in a store.
+# ONE pass per store (2026-09-23). It used to run a `find` per candidate NN per store, so
+# the cost grew with today's count times the stores: 311 ms over the five real stores.
+# Same matching as before: a folder holds <prefix>NN*.md anywhere beneath it, a file holds
+# a "## <prefix>NN " header.
+used_ids(){
+  local p="$1" s; shift
+  printf '|'
   for s in "$@"; do
     if [ -d "$s" ]; then
-      [ -n "$(find "$s" -name "$id*.md" -print -quit 2>/dev/null)" ] && return 0
+      find "$s" -name "$p[0-9][0-9]*.md" -print 2>/dev/null | sed -n "s#.*/\($p[0-9][0-9]\)[^/]*\$#\1|#p" | tr -d '\n'
     elif [ -f "$s" ]; then
-      grep -q "^## $id " "$s" 2>/dev/null && return 0
+      grep -o "^## $p[0-9][0-9] " "$s" 2>/dev/null | sed "s/^## //; s/ \$/|/" | tr -d '\n'
     fi
   done
-  return 1
 }
 
-cmd_next(){
-  local kind="${1:-}" day n id name letter; shift || true
-  case "$kind" in D|W) ;; *) refuse "next: kind must be D or W" ;; esac
-  [ $# -gt 0 ] || refuse "next: name at least one store to check"
+# machine_letter -> sets LETTER and NAME, refusing on anything but one capital letter
+machine_letter(){
   local line
   line="$(read_machine)" || exit 2
   # SPLIT FROM THE RIGHT, and re-validate. `read -r name letter` word-splits, so a machine
@@ -97,19 +119,62 @@ cmd_next(){
   # a file with a space in its name. read_machine validates the letter before printing, so
   # nothing was watching after the split. The old range code caught this only by accident,
   # because a non-number failed the arithmetic; a letter goes straight into printf.
-  letter="${line##* }"; name="${line% *}"
-  case "$letter" in
+  LETTER="${line##* }"; NAME="${line% *}"
+  case "$LETTER" in
     [A-Z]) ;;
     *) refuse "could not read a single-letter machine name out of '$line' (check $MACHINE_FILE)" ;;
   esac
-  day="$(date +%Y%m%d)"
-  n=1
+}
+
+# first_free <kind> <day> <used> [skip-claims] -> the lowest free ID, or refuse when exhausted
+first_free(){
+  local kind="$1" day="$2" used="$3" claims="${4:-}" n=1 id
   while [ "$n" -le 99 ]; do
-    id="$(printf '%s-%s-%s%02d' "$kind" "$day" "$letter" "$n")"
-    taken "$id" "$@" || { printf '%s\n' "$id"; return 0; }
+    id="$(printf '%s-%s-%s%02d' "$kind" "$day" "$LETTER" "$n")"
+    case "$used" in *"|$id|"*) ;; *)
+      if [ -z "$claims" ] || [ ! -e "$claims/$id" ]; then printf '%s\n' "$id"; return 0; fi ;;
+    esac
     n=$((n+1))
   done
-  refuse "no free $kind ID left for $day on machine $letter ($name): all 99 are taken. The letter is exhausted, not wrapped, and this machine never borrows another machine's letter. Wait for tomorrow, or close/rename some of today's."
+  refuse "no free $kind ID left for $day on machine $LETTER ($NAME): all 99 are taken. The letter is exhausted, not wrapped, and this machine never borrows another machine's letter. Wait for tomorrow, or close/rename some of today's."
+}
+
+cmd_claim(){
+  local kind="${1:-}" day used id f tries=0; shift || true
+  case "$kind" in D|W) ;; *) refuse "claim: kind must be D or W" ;; esac
+  [ $# -gt 0 ] || refuse "claim: name at least one store to check"
+  if [ -n "${PJ_MACHINE_FILE:-}" ] && [ -z "${PJ_ID_CLAIMS_DIR:-}" ]; then
+    refuse "claim: a FIXTURE machine file (PJ_MACHINE_FILE=$PJ_MACHINE_FILE) with the REAL claim folder $CLAIMS_DIR. A test must never write the real folder; set PJ_ID_CLAIMS_DIR to a fixture."
+  fi
+  machine_letter
+  day="$(date +%Y%m%d)"
+  if [ "${PJ_ID_CLAIM:-}" = off ]; then
+    [ -n "${PJ_ID_CLAIMS_DIR:-}" ] || refuse "claim: PJ_ID_CLAIM=off is a TEST seam and is honoured only with PJ_ID_CLAIMS_DIR set"
+    printf 'pj-id: claim DISABLED by PJ_ID_CLAIM=off (race control); this ID is NOT claimed\n' >&2
+    first_free "$kind" "$day" "$(used_ids "$kind-$day-$LETTER" "$@")"; return $?
+  fi
+  mkdir -p "$CLAIMS_DIR" 2>/dev/null
+  [ -d "$CLAIMS_DIR" ] || refuse "claim: cannot create the claim folder $CLAIMS_DIR -- the create was REFUSED (it does not exist afterwards). Inside the Claude Bash sandbox ~/.local/state is not writable; run this from a terminal. Nothing was claimed."
+  while :; do
+    used="$(used_ids "$kind-$day-$LETTER" "$@")"
+    id="$(first_free "$kind" "$day" "$used" "$CLAIMS_DIR")" || exit 2
+    f="$CLAIMS_DIR/$id"
+    ( set -C; : > "$f" ) 2>/dev/null && { printf '%s\n' "$id"; return 0; }
+    # A failed create means EITHER "someone claimed it first" OR "not allowed to write
+    # here". Only the first leaves a file behind, so that is the test (W-20260921-A30).
+    [ -e "$f" ] || refuse "claim: cannot create $f -- the create was REFUSED, not a clash (the path does not exist afterwards). Nothing was claimed."
+    tries=$((tries+1))
+    [ "$tries" -lt 99 ] || refuse "claim: $tries clashes in a row under $CLAIMS_DIR; that should be impossible. Nothing was claimed."
+  done
+}
+
+cmd_next(){
+  local kind="${1:-}" day; shift || true
+  case "$kind" in D|W) ;; *) refuse "next: kind must be D or W" ;; esac
+  [ $# -gt 0 ] || refuse "next: name at least one store to check"
+  machine_letter
+  day="$(date +%Y%m%d)"
+  first_free "$kind" "$day" "$(used_ids "$kind-$day-$LETTER" "$@")"
 }
 
 selftest(){
@@ -188,6 +253,65 @@ selftest(){
   [ "$rc" -eq 0 ] && [ "$out" = "one A" ] && ok "the old 'range' verb still prints NAME LETTER" || fail "range gave rc=$rc '$out'"
   grep -q -i 'deprecated' "$tmp/dep" && ok "'range' announces it is deprecated on stderr" || fail "no deprecation notice: $(cat "$tmp/dep")"
 
+  # ---- claim (D-20260923-A10, W-20260923-A22 / A25). Every arm below sets PJ_ID_CLAIMS_DIR
+  # to a fixture; the guard arm proves the real folder is refused without it.
+  # PJ_ID_UNDER_TEST points these arms at another pj-id (to prove they fail on master).
+  local B="${PJ_ID_UNDER_TEST:-$0}"
+  echo "  -- claim arms, testing $B"
+  local C="$tmp/claims" pa pb dup trials=10 i w
+  out="$(PJ_MACHINE_FILE="$tmp/mA" "$B" claim W "$tmp/s" 2>&1)"; rc=$?
+  [ "$rc" -eq 2 ] && case "$out" in *"REAL claim folder"*) ok "claim with a fixture machine file and the REAL folder REFUSES (rc=2)";; *) fail "guard rc 2 but said '$out'";; esac || fail "guard gave rc=$rc '$out'"
+  mkdir -p "$tmp/cs"
+  out="$(PJ_MACHINE_FILE="$tmp/mA" PJ_ID_CLAIMS_DIR="$C" "$B" claim W "$tmp/cs")"; [ "$out" = "W-$day-A01" ] && ok "first claim is -A01" || fail "first claim '$out'"
+  [ -e "$C/W-$day-A01" ] && ok "  and leaves a claim file in the claim folder" || fail "no claim file at $C/W-$day-A01"
+  out="$(PJ_MACHINE_FILE="$tmp/mA" PJ_ID_CLAIMS_DIR="$C" "$B" claim W "$tmp/cs")"; [ "$out" = "W-$day-A02" ] && ok "a CLAIMED id is skipped although no store holds it -> -A02" || fail "second claim '$out'"
+  : > "$tmp/cs/W-$day-A03.md"
+  out="$(PJ_MACHINE_FILE="$tmp/mA" PJ_ID_CLAIMS_DIR="$C" "$B" claim W "$tmp/cs")"; [ "$out" = "W-$day-A04" ] && ok "the folder only ADDS: an id in a store but never claimed is still skipped -> -A04" || fail "store-only id gave '$out'"
+  out="$(PJ_MACHINE_FILE="$tmp/mA" PJ_ID_CLAIM=off "$B" claim W "$tmp/cs" 2>&1)"; rc=$?
+  [ "$rc" -eq 2 ] && ok "PJ_ID_CLAIM=off without a fixture folder REFUSES (rc=2)" || fail "claim-off without fixture gave rc=$rc '$out'"
+  # A25: a REFUSED create must refuse by name, not loop. perl's alarm is the timeout so a
+  # regression shows as a kill, not a hang (142 = SIGALRM).
+  mkdir -p "$tmp/locked"; chmod 500 "$tmp/locked"
+  out="$(PJ_MACHINE_FILE="$tmp/mA" PJ_ID_CLAIMS_DIR="$tmp/locked" perl -e 'alarm 10; exec @ARGV' "$B" claim W "$tmp/cs" 2>&1)"; rc=$?
+  chmod 700 "$tmp/locked"
+  [ "$rc" -eq 2 ] && ok "an unwritable claim folder REFUSES (rc=2), no loop" || fail "unwritable claim folder gave rc=$rc (142 = hung and was killed)"
+  case "$out" in *"$tmp/locked/W-$day-A"*"REFUSED, not a clash"*) ok "  and names the claim path it could not create";; *) fail "  message was '$out'";; esac
+  [ -z "$(find "$tmp/locked" -type f -print)" ] && ok "  and left nothing behind" || fail "  left $(find "$tmp/locked" -type f -print)"
+  mkdir -p "$tmp/noparent"; chmod 500 "$tmp/noparent"
+  out="$(PJ_MACHINE_FILE="$tmp/mA" PJ_ID_CLAIMS_DIR="$tmp/noparent/ids" "$B" claim W "$tmp/cs" 2>&1)"; rc=$?
+  chmod 700 "$tmp/noparent"
+  [ "$rc" -eq 2 ] && case "$out" in *"cannot create the claim folder"*) ok "a claim folder that cannot be CREATED refuses by name (rc=2)";; *) fail "rc 2 but said '$out'";; esac || fail "uncreatable folder gave rc=$rc"
+
+  # THE RACE (the W-20260923-A22 measurement, now a standing arm). Two processes, one per
+  # drawer, released at the same instant, each doing what open-items add does: allocate over
+  # BOTH drawers, then a no-clobber create in its OWN drawer. With the claim: no duplicate.
+  # CONTROL, claim off: duplicates, because no-clobber only guards one folder. A race arm
+  # whose control also shows 0 proves nothing, so the control must show at least one.
+  race(){  # race <claim:on|off> -> number of trials where both drawers got the same ID
+    local mode="$1" d=0 k R who
+    for k in $(seq 1 "$trials"); do
+      R="$tmp/race-$mode-$k"; mkdir -p "$R/P/items/open" "$R/Q/items/open" "$R/claims"
+      for who in P Q; do
+        ( while [ ! -e "$R/go" ]; do :; done
+          while :; do
+            if [ "$mode" = on ]; then id2="$(PJ_MACHINE_FILE="$tmp/mA" PJ_ID_CLAIMS_DIR="$R/claims" "$B" claim W "$R/P/items" "$R/Q/items" 2>/dev/null)" || exit 2
+            else id2="$(PJ_MACHINE_FILE="$tmp/mA" PJ_ID_CLAIMS_DIR="$R/claims" PJ_ID_CLAIM=off "$B" claim W "$R/P/items" "$R/Q/items" 2>/dev/null)" || exit 2; fi
+            ( set -C; : > "$R/$who/items/open/$id2.md" ) 2>/dev/null && { printf '%s' "$id2" > "$R/$who.id"; exit 0; }
+          done ) &
+      done
+      sleep 0.2; : > "$R/go"; wait
+      [ -s "$R/P.id" ] && [ -s "$R/Q.id" ] || { echo "INVALID"; return; }
+      [ "$(cat "$R/P.id")" = "$(cat "$R/Q.id")" ] && d=$((d+1))
+    done
+    echo "$d"
+  }
+  pa="$(race on)"; pb="$(race off)"
+  if [ "$pa" = INVALID ] || [ "$pb" = INVALID ]; then fail "race: a racer produced no ID -- INVALID TRIAL (on=$pa off=$pb)"
+  else
+    [ "$pb" -gt 0 ] && ok "race CONTROL, claim off: $pb of $trials races produced a duplicate (must be > 0)" || fail "race control showed 0 duplicates, so the race never happened; the arm below proves nothing"
+    [ "$pa" -eq 0 ] && ok "race with the claim: 0 of $trials produced a duplicate" || fail "race with the claim: $pa of $trials duplicates"
+  fi
+
   if [ "$fails" -eq 0 ]; then echo "pj-id --selftest: all arms pass"; return 0; fi
   echo "pj-id --selftest: FAILURES above"; return 1
 }
@@ -198,5 +322,6 @@ case "${1:-}" in
   machine) read_machine; exit $? ;;
   range) printf 'pj-id: note: `range` is deprecated (the two-range scheme was retired 2026-09-21); use `pj-id machine`.\n' >&2; read_machine; exit $? ;;
   next) shift; cmd_next "$@"; exit $? ;;
-  *) refuse "unknown command $1 (machine | next | --selftest)" ;;
+  claim) shift; cmd_claim "$@"; exit $? ;;
+  *) refuse "unknown command $1 (machine | next | claim | --selftest)" ;;
 esac
