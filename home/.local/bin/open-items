@@ -259,7 +259,10 @@ drop_field(){                   # drop_field <file> <field>: remove every header
 }
 add_field(){                    # add_field <file> <field> <value>: a new line after the last line of that field, else after the header
   local f="$1" k="$2" v="$3" tmp="$1.tmp"
-  awk -v k="$k" -v v="$v" '
+  # ENVIRON, never -v: -v expands backslash escapes (the W-20260923-A20 class, fixed in
+  # set_field first). A16 routes done-when text through here for check: lines.
+  OI_ADD_V="$v" awk -v k="$k" '
+    BEGIN { v = ENVIRON["OI_ADD_V"] }
     NR == 1 { print; next }
     !done && inhdr == 0 && $0 == "" { inhdr = 1; print; next }
     inhdr == 1 && $0 ~ "^" k ":" { print; seen = 1; next }
@@ -408,8 +411,10 @@ LOCK=""
 # The retry before refusing is for the one race this could otherwise misread: a holder
 # releasing the lock in the instant between the failed mkdir and the test would look
 # exactly like a refusal. One more attempt costs nothing and removes it.
+LOCKS=()
+release_locks(){ local l; for l in ${LOCKS[@]+"${LOCKS[@]}"}; do rmdir "$l/$$" "$l" 2>/dev/null; done; return 0; }
 lock_drawer(){
-  local w="$1" i=0 pid
+  local w="$1" i=0 pid tries="${OPEN_ITEMS_TEST_LOCK_TRIES:-600}"   # the env var is a TEST seam: timing only
   LOCK="$w/items/.lock"
   # The holder's pid is a SUBDIRECTORY name, so release is two rmdirs and no rm.
   while ! mkdir "$LOCK" 2>/dev/null; do
@@ -419,11 +424,27 @@ lock_drawer(){
     fi
     pid="$(ls "$LOCK" 2>/dev/null | head -1)"
     if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then rmdir "$LOCK/$pid" "$LOCK" 2>/dev/null; continue; fi
-    i=$((i+1)); [ "$i" -lt 600 ] || refuse "could not take the drawer lock at $LOCK after 60s (held by pid ${pid:-?})"
+    i=$((i+1)); [ "$i" -lt "$tries" ] || refuse "could not take the drawer lock at $LOCK after $((tries / 10))s (held by pid ${pid:-?})"
     sleep 0.1
   done
-  mkdir "$LOCK/$$" 2>/dev/null || refuse "took the drawer lock at $LOCK but cannot write inside it. Nothing was changed."
-  trap 'rmdir "$LOCK/$$" "$LOCK" 2>/dev/null' EXIT
+  mkdir "$LOCK/$$" 2>/dev/null || { rmdir "$LOCK" 2>/dev/null; refuse "took the drawer lock at $LOCK but cannot write inside it. Nothing was changed."; }
+  # Every lock this process holds is released on exit, so a two-drawer write (move, route)
+  # never leaves its first lock behind when the second refuses.
+  LOCKS+=("$LOCK")
+  trap release_locks EXIT
+}
+# P12 rule 1: a two-drawer write takes both locks in SORTED real-path order, always. A move
+# A->B and a move B->A at once, each taking its own drawer first, would otherwise wait on
+# each other until both time out. The two env vars are TEST seams (order and a pause between
+# the two locks) so the selftest can show that deadlock in its control arm; neither can
+# skip a lock.
+lock_two(){                     # lock_two <work-a> <work-b>
+  local a="$1" b="$2" first second
+  if [ -n "${OPEN_ITEMS_TEST_LOCK_UNSORTED:-}" ] || [[ "$(realdir "$a")" < "$(realdir "$b")" ]]; then first="$a"; second="$b"
+  else first="$b"; second="$a"; fi
+  lock_drawer "$first"
+  [ -z "${OPEN_ITEMS_TEST_LOCK_GAP:-}" ] || sleep "$OPEN_ITEMS_TEST_LOCK_GAP"
+  lock_drawer "$second"
 }
 
 # ---------------------------------------------------------------- OPEN.md view ----
@@ -464,26 +485,59 @@ regen_view(){                   # regen_view <work>
 # R6c: commit each write by explicit pathspec, only when the drawer's REAL path is
 # inside dot-claude under that project's own memory folder. Anything else (the LifeOS
 # drawer resolves into lifeos-private) gets the file and a loud NOT COMMITTED line.
-commit_drawer(){                # commit_drawer <work> <message> -> rc 0 committed | 3 not committed
-  local w="$1" msg="$2" real top rel try=0 out rc
-  real="$(realdir "$w")"
-  top="$(git -C "$DOTCLAUDE" rev-parse --show-toplevel 2>/dev/null)" || { loud "NOT COMMITTED, $DOTCLAUDE is not a git repo"; return 3; }
-  top="$(realdir "$top")"
+# P12 rule 4: EXACTLY two shapes are committable, a project drawer and the inbox. Anything
+# else under dot-claude is refused, so widening this for the inbox did not let the tool
+# commit any other folder. `*` in a case pattern also matches `/`, hence the part count.
+drawer_rel(){                   # drawer_rel <work> <top>: the drawer's path inside dot-claude, or rc 1
+  local real r; real="$(realdir "$1")"
+  [ -n "$real" ] || return 1
   case "$real" in
-    "$top"/projects/*/memory/WORK) rel="${real#"$top"/}" ;;
-    *) loud "NOT COMMITTED, outside dot-claude: $real"; return 3 ;;
+    "$2"/pj-inbox) printf 'pj-inbox'; return 0 ;;
+    "$2"/projects/*/memory/WORK) r="${real#"$2"/}"
+      [ "$(printf '%s' "$r" | awk -F/ '{ print NF }')" -eq 4 ] || return 1
+      printf '%s' "$r"; return 0 ;;
   esac
-  # (2b) stage this project's whole items/ plus the view, so anything an earlier
+  return 1
+}
+rel_key(){ case "$1" in pj-inbox|pj-inbox/*) printf 'pj-inbox' ;; *) printf '%s' "$1" | cut -d/ -f2 ;; esac; }
+key_rel(){ case "$1" in pj-inbox) printf 'pj-inbox' ;; *) printf 'projects/%s/memory/WORK' "$1" ;; esac; }
+dot_top(){ local t; t="$(git -C "$DOTCLAUDE" rev-parse --show-toplevel 2>/dev/null)" || return 1; realdir "$t"; }
+commit_drawer(){ commit_drawers "$2" "$1"; }   # commit_drawer <work> <message> -> rc 0 committed | 3 not committed
+# commit_drawers <message> <work>...: ONE commit for every drawer named (P12 rule 3: a move
+# touches two). An uncommitted-move marker (items/.pending-move/<ID>@<other key>/, an empty
+# dir, written when a move's commit failed) pulls the OTHER drawer into this commit too, so
+# a later write in either drawer carries both halves of the move, never one alone.
+commit_drawers(){
+  local msg="$1" w top rel try=0 out rc m k specs=() markers=() rels=()
+  shift
+  top="$(dot_top)" || { loud "NOT COMMITTED, $DOTCLAUDE is not a git repo"; return 3; }
+  for w in "$@"; do
+    rel="$(drawer_rel "$w" "$top")" || { loud "NOT COMMITTED, outside dot-claude: $(realdir "$w")"; return 3; }
+    rels+=("$rel")
+  done
+  for rel in "${rels[@]}"; do
+    for m in "$top/$rel/items/.pending-move"/*@*; do
+      [ -d "$m" ] || continue
+      k="${m##*@}"
+      [[ "$k" =~ ^[A-Za-z0-9-]+$ ]] || continue
+      markers+=("$m"); case " ${rels[*]} " in *" $(key_rel "$k") "*) ;; *) rels+=("$(key_rel "$k")") ;; esac
+    done
+  done
+  for rel in "${rels[@]}"; do
+    specs+=("$rel/items")
+    [ -e "$top/$rel/OPEN.md" ] && specs+=("$rel/OPEN.md")
+  done
+  # (2b) stage each drawer's whole items/ plus the view, so anything an earlier
   # failed commit left behind rides along with this one.
   while :; do
-    out="$(git -C "$top" add -A -- "$rel/items" "$rel/OPEN.md" 2>&1 \
-        && git -C "$top" commit -q -m "$msg" -- "$rel/items" "$rel/OPEN.md" 2>&1)"; rc=$?
-    [ "$rc" -eq 0 ] && return 0
+    out="$(git -C "$top" add -A -- "${specs[@]}" 2>&1 \
+        && git -C "$top" commit -q -m "$msg" -- "${specs[@]}" 2>&1)"; rc=$?
+    [ "$rc" -eq 0 ] && { clear_markers "$top" ${markers[@]+"${markers[@]}"}; return 0; }
     # Nothing to commit is a success when a neighbour's commit already carried our
     # files -- but NOT when git is silently IGNORING them (the global MEMORY/ rule
     # matches memory/ case-insensitively; dot-claude's .gitignore re-includes it).
-    st="$(git -C "$top" status --porcelain --ignored -- "$rel/items" "$rel/OPEN.md" 2>/dev/null)"
-    [ -z "$st" ] && return 0
+    st="$(git -C "$top" status --porcelain --ignored -- "${specs[@]}" 2>/dev/null)"
+    [ -z "$st" ] && { clear_markers "$top" ${markers[@]+"${markers[@]}"}; return 0; }
     # W-20260922-A02. --ignored lists EVERY ignored path under the drawer, and a
     # single Finder .DS_Store in items/ made the whole block non-empty, so an
     # UNCHANGED regen shouted COMMIT FAILED on a commit that had nothing to do.
@@ -524,16 +578,28 @@ $st
 EOF
     # Nothing of ours is ignored and nothing of ours is pending: the commit had
     # nothing to do, which is a success.
-    [ -z "$ours" ] && [ -z "$rest" ] && return 0
+    [ -z "$ours" ] && [ -z "$rest" ] && { clear_markers "$top" ${markers[@]+"${markers[@]}"}; return 0; }
     case "$ours" in ?*) out="paths THIS TOOL WRITES are IGNORED by a gitignore rule (git check-ignore -v to see which): $ours"; rc=1 ;; esac
     case "$out" in *index.lock*|*"Unable to create"*|*"could not lock"*)
       try=$((try+1)); [ "$try" -lt 20 ] && { sleep 0.3; continue; } ;;
     esac
     break
   done
-  loud "COMMIT FAILED (rc=$rc) -- the write is on disk under $real and will be picked up by the next successful write."
+  loud "COMMIT FAILED (rc=$rc) -- the write is on disk under $top/${rels[0]} and will be picked up by the next successful write."
   printf '%s\n' "$out" | sed 's/^/open-items:   /' >&2
   return 3
+}
+# A committed move clears its markers in BOTH drawers. They are empty directories, so this
+# is rmdir and never a delete of anything with content.
+clear_markers(){                # clear_markers <top> <marker>...
+  local top="$1" m id k here; shift
+  for m in "$@"; do
+    id="$(basename "$m")"; k="${id##*@}"; id="${id%@*}"
+    here="$(rel_key "${m#"$top"/}")"
+    rmdir "$m" "$top/$(key_rel "$k")/items/.pending-move/$id@$here" 2>/dev/null
+    rmdir "$(dirname "$m")" "$top/$(key_rel "$k")/items/.pending-move" 2>/dev/null
+  done
+  return 0
 }
 
 # ---------------------------------------------------------------- writes ----
@@ -550,7 +616,41 @@ writable_drawer(){
     refuse "$(basename "$repo") has no drawer yet -- run 'open-items init' here to create one, then write to it"
   fi
   [ -d "$w/items" ] || refuse "$(name_of "$w" 2>/dev/null || basename "$repo") has no items/ folder -- a legacy OPEN.md drawer is read-only; run 'open-items migrate' in the project that owns it"
+  repo_line_guard "$w" "$repo"
   printf '%s' "$w"
+}
+# P10 rule 2. The drawer key is lossy (a/b_c and a/b/c share one), so a drawer whose repo:
+# line names a DIFFERENT repo than the one you are standing in is either a key collision or
+# a repo that moved. Both are Gavin's call: refuse, name both, write nothing.
+repo_line_guard(){              # repo_line_guard <work> <current repo>
+  local v
+  [ -r "$1/items/.project" ] || return 0
+  v="$(sed -n '2,$s/^repo:[[:space:]]*//p' "$1/items/.project" | head -1)"
+  [ -z "$v" ] || [ "$v" = "$2" ] \
+    || refuse "this drawer's items/.project says repo: $v, but you are in $2. They share one drawer key (the encoding is lossy) or the repo moved; either way it is Gavin's call which repo owns $1 (P10). Nothing was written."
+  return 0
+}
+# P10 back-fill: a write from INSIDE the repo that owns the drawer adds the repo: line when it
+# is missing, and never overwrites one (the guard above refuses a mismatch first). Called
+# under the drawer lock, from finish_write, so two writers never both append it.
+backfill_repo(){                # backfill_repo <work>
+  local w="$1" repo p
+  repo="$(current_repo)" || return 0
+  [ "$(realdir "$(work_for "$repo")")" = "$(realdir "$w")" ] || return 0
+  p="$w/items/.project"
+  [ -f "$p" ] || return 0
+  [ "$(sed -n '2,$p' "$p" | awk '/^repo:/ { n++ } END { print n + 0 }')" -eq 0 ] || return 0
+  [ -z "$(tail -c 1 "$p")" ] || printf '\n' >> "$p"
+  printf 'repo: %s\n' "$repo" >> "$p"
+}
+# The project name of the repo you are standing in: its drawer's stamp when it has one,
+# else the repo's basename, else "none" outside any repo (filed-by, P2's "you are in").
+here_name(){
+  local repo w n=""
+  repo="$(current_repo)" || { printf 'none'; return 0; }
+  w="$(work_for "$repo")"
+  [ -r "$w/items/.project" ] && n="$(head -1 "$w/items/.project" | tr -d '\n')"
+  printf '%s' "${n:-$(basename "$repo")}"
 }
 # Every place a W- ID could already sit on this machine: each drawer's items/ tree, or a
 # legacy drawer's OPEN.md. D-20260923-A10: an ID is unique across EVERY drawer, not just
@@ -587,12 +687,93 @@ next_id(){                      # claim W-<today>-<LETTER><NN> machine-wide, the
   done
 }
 finish_write(){                 # finish_write <work> <msg>: regen + commit, rc 0 or 3
+  backfill_repo "$1"
   regen_view "$1"
   commit_drawer "$1" "$2"
 }
 
+# ------------------------------------------ A16 write side: owners, fan-out, gates ----
+# D-20260923-A09 and the twelve safety rules (docs/OPEN_ITEMS_CROSS_PROJECT_SAFETY.md).
+# resolve_name <name> <verb>: EXACTLY one drawer answers to the name, or a refusal (P9).
+resolve_name(){
+  local n="$1" v="$2" hits c
+  valid_name "$n" || refuse "$v: \"$n\" is not a project name (one token: no spaces, no control characters)"
+  if is_reserved "$n"; then
+    [ "$n" = inbox ] && refuse "$v: 'inbox' is reserved (P9). To file into the inbox use 'add --inbox'; items leave it only by 'open-items route'."
+    refuse "$v: '$n' is a reserved name (P9: inbox and none)"
+  fi
+  hits="$(drawers_named_all "$n")"
+  c=0; [ -z "$hits" ] || c="$(printf '%s\n' "$hits" | wc -l | tr -d ' ')"
+  [ "$c" -gt 0 ] || refuse "$v: no drawer is named $n. Drawers that exist: $(drawer_names)-- a project with no drawer needs 'open-items init' in its repo first."
+  [ "$c" -eq 1 ] || refuse "$v: $c drawers answer to the name $n: $(printf '%s\n' "$hits" | tr '\n' ' ')-- a shared name is refused, never guessed (P9). Give one of them another name."
+  printf '%s' "$hits"
+}
+# The owner named by --for: a project name, or a PATH (anything holding a /, so ./x works),
+# which resolves to the repo that owns it and then to that repo's drawer.
+owner_drawer(){                 # owner_drawer <project|path>
+  local a="$1" d gcd repo w
+  case "$a" in
+    */*)
+      [ -e "$a" ] || refuse "add --for $a: no such path"
+      d="$a"; [ -d "$d" ] || d="$(dirname "$d")"
+      gcd="$(git -C "$d" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" && [ -n "$gcd" ] \
+        || refuse "add --for $a: that path is not inside a git repo, so it has no project"
+      repo="$(dirname "$gcd")"; w="$(work_for "$repo")"
+      is_drawer "$w" || refuse "add --for $a: $repo has no drawer yet -- run 'open-items init' in $repo first. Nothing was written." ;;
+    *) w="$(resolve_name "$a" "add --for")" || exit 2 ;;
+  esac
+  [ -d "$w/items" ] || refuse "add --for $a: $(name_of "$w") is a legacy OPEN.md drawer, read-only; run 'open-items migrate' in its repo first. Nothing was written."
+  printf '%s' "$w"
+}
+# The owner's name as written into project: -- its stamp when it has one (never the
+# encoded-key fallback of name_of, W-20260921-A15), else the name that resolved it.
+stamp_name(){ local n=""; [ -r "$1/items/.project" ] && n="$(head -1 "$1/items/.project" | tr -d '\n')"; printf '%s' "${n:-$2}"; }
+# The inbox, created with init semantics on first use; a create that is refused says so by path.
+inbox_drawer(){
+  if [ ! -d "$INBOX/items" ]; then
+    mkdir -p "$INBOX/items/open" "$INBOX/items/parked" "$INBOX/items/closed" 2>/dev/null
+    [ -d "$INBOX/items/open" ] || refuse "cannot create the inbox at $INBOX/items -- the create was REFUSED (no write permission there). Inside the Claude Bash sandbox ~/.claude is not writable; run this from a terminal. Nothing was written."
+  fi
+  [ -f "$INBOX/items/.project" ] || printf 'inbox\n' > "$INBOX/items/.project" 2>/dev/null \
+    || refuse "cannot write $INBOX/items/.project -- REFUSED (no write permission). Nothing was written."
+  printf '%s' "$INBOX"
+}
+# P8 and P11: "Gavin's call" is enforced as a human at a terminal who types a word back.
+# An agent's Bash has no TTY on stdin (measured by the safety review), so this separates
+# them. There is deliberately NO environment override: a seam here would be the bypass.
+human_confirm(){                # human_confirm <expected answer> <prompt>
+  local ans
+  [ -t 0 ] || return 1
+  printf 'open-items: %s ' "$2" >&2
+  IFS= read -r ans || return 1
+  [ "$ans" = "$1" ]
+}
+# The dotfiles project, from this tool's own real path (P4 rule 2), compared with a drawer's
+# VALIDATED repo: line (P10). reach: mandatory owned by it needs no terminal (P8 rule 1).
+is_dotfiles_drawer(){           # is_dotfiles_drawer <work>
+  local root gcd main r
+  root="$(dotfiles_root)" || return 1
+  gcd="$(git -C "$root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+  main="$(dirname "$gcd")"
+  r="$(repo_of_drawer "$1")" || return 1
+  [ "$r" = "$main" ]
+}
+# check: lines as "<project> TAB <state word>", header only; the state is the first word
+# inside the brackets: open, or done.
+checks_of(){
+  hdr_all "$1" check | awk '{ p = $1; r = $0; sub(/^[^ ]+[ ]+/, "", r)
+    if (substr(r, 1, 1) != "[") next; e = index(r, "]"); if (e < 2) next
+    st = substr(r, 2, e - 2); split(st, a, " "); print p "\t" a[1] }'
+}
+open_checks(){ checks_of "$1" | awk -F'\t' '$2 == "open" { printf "%s%s", (n++ ? ", " : ""), $1 }'; }
+first_tokens(){ hdr_all "$1" "$2" | awk '{ print $1 }'; }
+has_token(){ local t; while IFS= read -r t; do name_token_eq "$t" "$2" && return 0; done < <(first_tokens "$1" "$3"); return 1; }
+count_field(){ hdr_all "$1" "$2" | awk 'END { print NR + 0 }'; }
+MAX_FANOUT=5                    # P8 rule 2: at most 5 watch: and 5 check: lines per item
+
 cmd_add(){
   local title="" kind="do" size="" dw="" when="" next="" blocked="" holds=() body="" w f id h
+  local fors=() inbox=0 watches=() checks=() cdws=() reach="" script="" owner here sn x i j pw
   while [ $# -gt 0 ]; do
     case "$1" in
       --kind) kind="${2:-}"; shift 2 ;;
@@ -603,49 +784,123 @@ cmd_add(){
       --blocked-on) blocked="${2:-}"; shift 2 ;;
       --holds-in) holds+=("${2:-}"); shift 2 ;;
       --body) body="${2:-}"; shift 2 ;;
+      --for) [ $# -ge 2 ] || refuse "add: --for needs a project name or a path"; fors+=("$2"); shift 2 ;;
+      --inbox) inbox=1; shift ;;
+      --watch) [ $# -ge 2 ] || refuse "add: --watch needs a project name"; watches+=("$2"); shift 2 ;;
+      --check) [ $# -ge 3 ] || refuse "add: --check takes a project AND its own done-when: --check <project> \"done-when\""
+               checks+=("$2"); cdws+=("$3"); shift 3 ;;
+      --reach) [ $# -ge 2 ] || refuse "add: --reach needs machine or mandatory"; reach="$2"; shift 2 ;;
+      --check-script) [ $# -ge 2 ] || refuse "add: --check-script needs a script name"; script="$2"; shift 2 ;;
       --*) refuse "add: unknown flag $1" ;;
       *) [ -z "$title" ] && title="$1" || refuse "add: one title only (quote it)"; shift ;;
     esac
   done
   [ -n "$title" ] || refuse "add: a title is required"
   [ -n "$dw" ] || refuse "add: --done-when is required (D-20260920-05). Say what finished looks like."
+  # P1: nothing that lands in a header line may carry a control character or a bidi mark.
+  # Measured before A16: a newline in --done-when forged `reach:` and `check-script:` lines.
+  refuse_bad "add: the title" "$title"; refuse_bad "add: --done-when" "$dw"; refuse_bad "add: --when" "$when"
+  refuse_bad "add: --next" "$next"; refuse_bad "add: --blocked-on" "$blocked"
+  refuse_bad "add: --reach" "$reach"; refuse_bad "add: --check-script" "$script"
+  for h in ${holds[@]+"${holds[@]}"}; do refuse_bad "add: --holds-in" "$h"; done
+  for x in ${fors[@]+"${fors[@]}"}; do refuse_bad "add: --for" "$x"; done
+  for x in ${watches[@]+"${watches[@]}"}; do refuse_bad "add: --watch" "$x"; done
+  for x in ${checks[@]+"${checks[@]}"}; do refuse_bad "add: --check (project)" "$x"; done
+  for x in ${cdws[@]+"${cdws[@]}"}; do refuse_bad "add: --check (done-when)" "$x"; [ -n "$x" ] || refuse "add: --check needs a done-when of its own"; done
+  sn="$(session_name)"; refuse_bad "add: the session name (CLAUDE_CODE_SESSION_NAME)" "$sn"
   case "$kind" in do|decide) ;; *) refuse "add: --kind must be do or decide" ;; esac
   if [ "$kind" = decide ]; then [ -z "$size" ] || refuse "add: --size is for do items only"
   else case "$size" in ""|small|medium|large) ;; *) refuse "add: --size must be small, medium or large" ;; esac; fi
-  for h in "${holds[@]}"; do valid_holds "$h" || refuse "add: --holds-in needs a root marker: repo:<path>, drawer:<path> or ~/<path>"; done
-  w="$(writable_drawer)" || exit 2
+  for h in ${holds[@]+"${holds[@]}"}; do valid_holds "$h" || refuse "add: --holds-in needs a root marker: repo:<path>, drawer:<path> or ~/<path>"; done
+  [ "${#fors[@]}" -le 1 ] || refuse "add: --for names exactly ONE owner (D-20260923-A09 case 6a); add the other projects with --watch <p> or --check <p> \"done-when\". Nothing was written."
+  [ "$inbox" -eq 0 ] || [ "${#fors[@]}" -eq 0 ] || refuse "add: --inbox and --for each name the owner; give one. Nothing was written."
+  case "$reach" in
+    "") ;;
+    machine) [ "${#watches[@]}" -eq 0 ] && [ "${#checks[@]}" -eq 0 ] \
+      || refuse "add: reach: machine stays with its owner and takes NO --watch or --check (D-20260923-A09 case 3); its outcome goes to pj-global once, when done. Nothing was written." ;;
+    mandatory) [ "${#watches[@]}" -eq 0 ] && [ "${#checks[@]}" -eq 0 ] \
+      || refuse "add: reach: mandatory is on every project's card already; --watch and --check do not apply (each project passes it with its check-script or 'open-items pass'). Nothing was written." ;;
+    *) refuse "add: --reach must be machine or mandatory" ;;
+  esac
+  [ -z "$script" ] || [ "$reach" = mandatory ] || refuse "add: --check-script is for --reach mandatory only"
+  [ "${#watches[@]}" -le "$MAX_FANOUT" ] || refuse "add: at most $MAX_FANOUT --watch per item (P8); a wider audience is reach: mandatory or a pj-global rule. Nothing was written."
+  [ "${#checks[@]}" -le "$MAX_FANOUT" ] || refuse "add: at most $MAX_FANOUT --check per item (P8). Nothing was written."
+  # The owner: --inbox, --for, or (as before A16) the repo you are standing in.
+  if [ "$inbox" -eq 1 ]; then
+    w="$(inbox_drawer)" || exit 2; owner=inbox
+  elif [ "${#fors[@]}" -eq 1 ]; then
+    w="$(owner_drawer "${fors[0]}")" || exit 2; owner="$(stamp_name "$w" "${fors[0]}")"
+  else
+    w="$(writable_drawer)" || exit 2
+    # W-20260921-A15. The project name written here comes from the REPO YOU ARE
+    # STANDING IN (its stamp, else its basename), not from name_of. name_of is for
+    # READING a drawer you are not in, and using it here made the bug self-perpetuating:
+    # an empty drawer has no name to read, so name_of returned the harness's encoded key,
+    # cmd_add baked that into the FIRST item, and from then on name_of read it straight
+    # back out of that item and agreed with itself forever.
+    owner="$(here_name)"
+  fi
+  # Watchers and checks: each a real, unique project (P9), never the owner, never twice.
+  for i in ${watches[@]+"${!watches[@]}"}; do
+    pw="$(resolve_name "${watches[$i]}" "add --watch")" || exit 2
+    [ "$(realdir "$pw")" != "$(realdir "$w")" ] || refuse "add: --watch ${watches[$i]} is the owner; an owner sees its own items already"
+    for j in "${!watches[@]}"; do [ "$j" -ge "$i" ] || [ "${watches[$j]}" != "${watches[$i]}" ] || refuse "add: --watch ${watches[$i]} given twice"; done
+  done
+  for i in ${checks[@]+"${!checks[@]}"}; do
+    pw="$(resolve_name "${checks[$i]}" "add --check")" || exit 2
+    [ "$(realdir "$pw")" != "$(realdir "$w")" ] || refuse "add: --check ${checks[$i]} is the owner; the owner's work is the item's own done-when"
+    for j in "${!checks[@]}"; do [ "$j" -ge "$i" ] || [ "${checks[$j]}" != "${checks[$i]}" ] || refuse "add: --check ${checks[$i]} given twice"; done
+  done
+  if [ -n "$script" ]; then
+    x="$(script_trust "$script")" || refuse "add --check-script $script: $x (P4). Nothing was written."
+    for j in pass fail; do
+      git -C "$(dotfiles_root)" rev-parse -q --verify "master:$MC_REL/$script.fixtures/$j^{tree}" >/dev/null 2>&1 \
+        || refuse "add --check-script $script: no committed fixture folder $MC_REL/$script.fixtures/$j/ on master (P5 rule 3: every check-script ships a pass and a fail fixture). Nothing was written."
+    done
+  fi
+  # P8 rule 1: reach: mandatory lands on EVERY card, so it is accepted only for the dotfiles
+  # project (which builds machine-wide rules) or from a human at a terminal.
+  if [ "$reach" = mandatory ] && ! is_dotfiles_drawer "$w"; then
+    human_confirm "$owner" "reach: mandatory puts this item on EVERY project's card. Type the owner's name ($owner) to confirm:" \
+      || refuse "add --reach mandatory: accepted only when the owner is the dotfiles project, or from a human at a terminal who types the owner's name back (P8). The owner here is $owner and stdin is not a terminal (or the name did not match). Nothing was written."
+  fi
+  here="$(here_name)"
   lock_drawer "$w"
   f="$(next_id "$w")" || exit 2; id="$(id_of_file "$f")"
   {
-    # W-20260921-A15. The project name written here comes from the REPO YOU ARE
-    # STANDING IN, not from name_of. name_of is for READING a drawer you are not
-    # in, and using it here made the bug self-perpetuating: an empty drawer has no
-    # name to read, so name_of returned the harness's encoded key, cmd_add baked
-    # that into the FIRST item, and from then on name_of read it straight back out
-    # of that item and agreed with itself forever. One project's three items all
-    # carry an encoded key in their project: line because of exactly that. A
-    # writer standing in the repo already knows the answer and never needs to
-    # guess it.
-    printf '## %s -- %s\n\nproject: %s\nstatus: open\nkind: %s\n' "$id" "$title" "$(basename "$(current_repo)")" "$kind"
+    printf '## %s -- %s\n\nproject: %s\nstatus: open\nkind: %s\n' "$id" "$title" "$owner" "$kind"
     [ -n "$size" ] && printf 'size: %s\n' "$size"
     printf 'done-when: %s\n' "$dw"
     [ -n "$when" ] && printf 'when: %s\n' "$when"
     [ -n "$next" ] && printf 'next: %s\n' "$next"
     [ -n "$blocked" ] && printf 'blocked-on: %s\n' "$blocked"
-    for h in "${holds[@]}"; do printf 'holds-in: %s\n' "$h"; done
+    for h in ${holds[@]+"${holds[@]}"}; do printf 'holds-in: %s\n' "$h"; done
+    [ -n "$reach" ] && printf 'reach: %s\n' "$reach"
+    [ -n "$script" ] && printf 'check-script: %s\n' "$script"
+    for x in ${watches[@]+"${watches[@]}"}; do printf 'watch: %s\n' "$x"; done
+    for i in ${checks[@]+"${!checks[@]}"}; do printf 'check: %s [open] %s\n' "${checks[$i]}" "${cdws[$i]}"; done
+    printf 'filed-by: %s (session %s) %s\n' "$here" "$sn" "$(today)"
     printf 'raised: %s (session %s)\n' "$(today)" "${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-unknown}}"
     [ -n "$body" ] && printf '\n%s\n' "$body"
   } > "$f"
   printf '%s\n' "$id"
-  finish_write "$w" "open-items: add $id -- $title"
+  if [ "$owner" = "$here" ]; then finish_write "$w" "open-items: add $id -- $title"
+  else finish_write "$w" "open-items: add $id for $owner (filed from $here) -- $title"; fi
 }
 
 cmd_status(){                   # cmd_status <new-status> <W-ID> [note]
-  local st="$1" id="${2:-}" note="${3:-}" w f dest
+  local st="$1" id="${2:-}" note="${3:-}" w f dest x
   [ -n "$id" ] || refuse "$st: which item? give a W-ID"
   w="$(writable_drawer)" || exit 2
   f="$(find_item "$w" "$id")" || { [ $? -eq 2 ] && exit 2; refuse "$st: no item $id in $(name_of "$w")"; }
   id="$(id_of_file "$f")"      # a legacy ID resolved to the letter form: move and report under the REAL id
+  # D-20260923-A09 case 2: the item closes only when every check is done. P2 rule 4: the
+  # refusal says HOW (from inside each project), because a bare list of names reads as an
+  # instruction to tick them all from here.
+  if [ "$st" = done ]; then
+    x="$(open_checks "$f")"
+    [ -z "$x" ] || refuse "close: $id still has open checks: $x. It closes only when every check is done, and each check is ticked from inside that project ('open-items tick $id <project>' run in that project's repo; P2). Nothing was changed."
+  fi
   lock_drawer "$w"
   set_field "$f" status "$st"
   if [ -n "$note" ]; then printf '\n**%s %s.** %s\n' "$(printf '%s' "$st" | tr '[:lower:]' '[:upper:]')" "$(today)" "$note" >> "$f"; fi
@@ -677,7 +932,7 @@ cmd_set(){
   case "$k" in status) refuse "set: change status with close|park|decline|reopen" ;; project|raised) refuse "set: $k is tool-owned" ;;
     kind|size|done-when|when|next|blocked-on|holds-in|body) ;; *) refuse "set: unknown field $k" ;; esac
   if [ "$k" = holds-in ]; then
-    shift 2; for v in "$@"; do valid_holds "$v" || refuse "set: holds-in needs a root marker: repo:<path>, drawer:<path> or ~/<path>"; done
+    shift 2; for v in "$@"; do refuse_bad "set: holds-in" "$v"; valid_holds "$v" || refuse "set: holds-in needs a root marker: repo:<path>, drawer:<path> or ~/<path>"; done
   else
     [ $# -eq 3 ] || refuse "set: $k takes one value"
     case "$k" in
@@ -687,6 +942,7 @@ cmd_set(){
     [ "$mode" = replace ] || [ -n "$v" ] || refuse "set --add: nothing to append to $k"
     # A header field is one line; a newline in its value would start a new, bogus field.
     [ "$k" = body ] || case "$v" in *$'\n'*) refuse "set: $k is one line; the value holds a newline (use body for paragraphs)" ;; esac
+    [ "$k" = body ] || refuse_bad "set: $k" "$v"     # P1: every other control character and bidi mark too
   fi
   w="$(writable_drawer)" || exit 2
   f="$(find_item "$w" "$id")" || { [ $? -eq 2 ] && exit 2; refuse "set: no item $id in $(name_of "$w")"; }
@@ -717,18 +973,29 @@ cmd_set(){
 }
 
 cmd_init(){
-  local repo w
+  local repo w name="" other
+  while [ $# -gt 0 ]; do case "$1" in
+    --name) [ $# -ge 2 ] || refuse "init: --name needs a name"; name="$2"; shift 2 ;;
+    *) refuse "init: unknown arg $1" ;; esac; done
   repo="$(current_repo)" || refuse "not inside a git repo"
   w="$(work_for "$repo")"
+  # P9: a project name is a key now. It is one token, `inbox` and `none` are reserved, and a
+  # name another drawer already answers to is refused here, before it can ever be ambiguous.
+  name="${name:-$(basename "$repo")}"
+  valid_name "$name" || refuse "init: \"$name\" cannot be a project name (one token: no spaces, no control characters); give one with 'open-items init --name <name>'"
+  ! is_reserved "$name" || refuse "init: '$name' is reserved (P9: inbox and none); name this project with 'open-items init --name <name>'"
+  other="$(drawers_named_all "$name" | head -1)"
+  [ -z "$other" ] || refuse "init: another drawer already answers to the name $name ($other); name this project with 'open-items init --name <name>' (P9)"
   [ ! -d "$w/items" ] || refuse "init: $w already has items/"
   [ ! -f "$w/OPEN.md" ] || refuse "init: $w has a legacy OPEN.md; use 'open-items migrate'"
   mkdir -p "$w/items/open" "$w/items/parked" "$w/items/closed" || refuse "init: cannot create $w/items"
   # W-20260921-A15: stamp the repo name, so an EMPTY drawer still knows what it
   # belongs to. Without it name_of has nothing to read but the encoded harness key.
-  printf '%s\n' "$(basename "$repo")" > "$w/items/.project"
+  # A16 (P10): line 2 is the repo that owns the drawer, the one path the lossy key cannot give back.
+  printf '%s\nrepo: %s\n' "$name" "$repo" > "$w/items/.project"
   printf '%s\n' "$w/items"
   lock_drawer "$w"
-  finish_write "$w" "open-items: init $(basename "$repo")"
+  finish_write "$w" "open-items: init $name"
 }
 
 cmd_regen(){
@@ -1136,6 +1403,220 @@ cmd_supersede(){                # supersede <old> <new> [--project p]
   finish_write "$wo" "open-items: supersede $io by $in -- $(title_of "$fo")"
 }
 
+# ------------------------------------------ A16: watch, check, tick, pass, move, route ----
+# All six write into the OWNER's drawer, found by ID across every drawer (an ID in two
+# drawers is refused as before; --project picks one). A legacy drawer is never written.
+OW=""; OF=""
+owner_item(){                   # owner_item <W-ID> <project|""> <verb>: sets OW (drawer) and OF (item file)
+  local hit id ref
+  hit="$(resolve_item "$1" "$2" "$3")" || exit 2
+  IFS=$'\t' read -r OW id ref <<<"$hit"
+  case "$ref" in legacy:*) refuse "$3: $id is in a legacy OPEN.md drawer ($(name_of "$OW")), which is read-only. Nothing was changed." ;; esac
+  OF="$ref"
+}
+item_status(){ local s; s="$(hdr_field_of status "$1")"; printf '%s' "${s:-open}"; }
+need_live(){ case "$(item_status "$1")" in open|parked) ;; *) refuse "$2: $(id_of_file "$1") is $(item_status "$1"); only an open or parked item takes this. Nothing was changed." ;; esac; }
+# P2 rule 1: a project's own state (its tick, its pass) is written only from INSIDE that
+# project. The drawer of the repo you stand in must be the one drawer named <p>.
+need_inside(){                  # need_inside <p> <verb>
+  local repo hw pw
+  repo="$(current_repo)" || refuse "$2: only a session in $1 can $2 $1's check; you are not inside any repo (P2). Nothing was changed."
+  hw="$(work_for "$repo")"
+  pw="$(resolve_name "$1" "$2")" || exit 2
+  [ "$(realdir "$pw")" = "$(realdir "$hw")" ] \
+    || refuse "$2: only a session in $1 can $2 $1's check; you are in $(here_name) (P2). Run it from $1's repo. Nothing was changed."
+}
+fanout_guard(){                 # fanout_guard <file> <verb> <p>: reach and the P8 caps, owner never fans out to itself
+  local r; r="$(hdr_field_of reach "$1")"
+  [ "$r" != machine ] || refuse "$2: $(id_of_file "$1") is reach: machine, which stays with its owner and takes no watch or check (D-20260923-A09 case 3). Nothing was changed."
+  [ "$r" != mandatory ] || refuse "$2: $(id_of_file "$1") is reach: mandatory, already on every project's card; watch and check do not apply. Nothing was changed."
+  [ "$(realdir "$(resolve_name "$3" "$2")")" != "$(realdir "$OW")" ] || refuse "$2: $3 owns $(id_of_file "$1"); an owner sees its own items already"
+}
+
+cmd_watch(){                    # watch <W-ID> <p> [--project owner]
+  local id p
+  split_args "$@"
+  [ "${#POS[@]}" -eq 2 ] || refuse "watch: usage: open-items watch <W-ID> <project> [--project <owner>]"
+  id="${POS[0]}"; p="${POS[1]}"; refuse_bad "watch: the project" "$p"
+  resolve_name "$p" watch >/dev/null || exit 2
+  owner_item "$id" "$PROJ" watch; id="$(id_of_file "$OF")"
+  need_live "$OF" watch; fanout_guard "$OF" watch "$p"
+  ! has_token "$OF" "$p" watch || refuse "watch: $p already watches $id"
+  [ "$(count_field "$OF" watch)" -lt "$MAX_FANOUT" ] || refuse "watch: $id already has $MAX_FANOUT watchers, the cap (P8). Nothing was changed."
+  lock_drawer "$OW"
+  add_field "$OF" watch "$p"
+  printf '%s watched by %s\n' "$id" "$p"
+  finish_write "$OW" "open-items: watch $id by $p"
+}
+
+cmd_check(){                    # check <W-ID> <p> "done-when" [--project owner]
+  local id p dw
+  split_args "$@"
+  [ "${#POS[@]}" -eq 3 ] || refuse "check: usage: open-items check <W-ID> <project> \"done-when\" [--project <owner>]"
+  id="${POS[0]}"; p="${POS[1]}"; dw="${POS[2]}"
+  refuse_bad "check: the project" "$p"; refuse_bad "check: the done-when" "$dw"
+  [ -n "$dw" ] || refuse "check: a check needs its own done-when"
+  resolve_name "$p" check >/dev/null || exit 2
+  owner_item "$id" "$PROJ" check; id="$(id_of_file "$OF")"
+  need_live "$OF" check; fanout_guard "$OF" check "$p"
+  ! has_token "$OF" "$p" check || refuse "check: $id already has a check for $p"
+  [ "$(count_field "$OF" check)" -lt "$MAX_FANOUT" ] || refuse "check: $id already has $MAX_FANOUT checks, the cap (P8). Nothing was changed."
+  lock_drawer "$OW"
+  add_field "$OF" check "$p [open] $dw"
+  printf '%s: check added for %s\n' "$id" "$p"
+  finish_write "$OW" "open-items: check $id for $p"
+}
+
+cmd_tick(){                     # tick <W-ID> <p> [--project owner]; only from inside p (P2)
+  local id p sn tmp
+  split_args "$@"
+  [ "${#POS[@]}" -eq 2 ] || refuse "tick: usage: open-items tick <W-ID> <project>, run from inside that project"
+  id="${POS[0]}"; p="${POS[1]}"; refuse_bad "tick: the project" "$p"
+  need_inside "$p" tick
+  owner_item "$id" "$PROJ" tick; id="$(id_of_file "$OF")"
+  checks_of "$OF" | awk -F'\t' -v p="$p" '$1 == p && $2 == "open" { f = 1 } END { exit !f }' \
+    || refuse "tick: $id has no OPEN check for $p. Its checks: $(checks_of "$OF" | tr '\t\n' ' ,' | sed 's/,$//')"
+  sn="$(session_name)"; refuse_bad "tick: the session name" "$sn"
+  lock_drawer "$OW"
+  # P2 rule 2: the tick records who did it and from where. Exact token match on the project.
+  tmp="$OF.tmp"
+  OI_P="$p" OI_S="done $(today) by $sn in $p" awk '
+    BEGIN { p = ENVIRON["OI_P"]; s = ENVIRON["OI_S"] }
+    NR == 1 || (NR == 2 && $0 == "") { print; next }
+    hdr == 0 && $0 == "" { hdr = 1 }
+    hdr == 0 && !done && index($0, "check: ") == 1 {
+      r = substr($0, 8); sub(/^[ ]+/, "", r); q = r; sub(/[ ].*/, "", q)
+      if (q == p) { r = substr(r, length(q) + 1); sub(/^[ ]+/, "", r)
+        if (index(r, "[open]") == 1) { print "check: " p " [" s "]" substr(r, 7); done = 1; next } } }
+    { print }' "$OF" > "$tmp" && command mv "$tmp" "$OF"
+  printf '%s: %s check ticked\n' "$id" "$p"
+  finish_write "$OW" "open-items: tick $id for $p"
+}
+
+cmd_pass(){                     # pass <W-ID> <p>: a manual pass of a reach: mandatory item, from inside p
+  local id p sn
+  split_args "$@"
+  [ "${#POS[@]}" -eq 2 ] || refuse "pass: usage: open-items pass <W-ID> <project>, run from inside that project"
+  id="${POS[0]}"; p="${POS[1]}"; refuse_bad "pass: the project" "$p"
+  need_inside "$p" pass
+  owner_item "$id" "$PROJ" pass; id="$(id_of_file "$OF")"
+  [ "$(hdr_field_of reach "$OF")" = mandatory ] || refuse "pass: $id is not reach: mandatory; a check on an ordinary item is ticked with 'open-items tick'"
+  # P2 rule 3: where a check-script exists, the script is the only authority. A manual pass
+  # would turn a measurement back into a claim, which the ruling rejected for case 4.
+  [ -z "$(hdr_field_of check-script "$OF")" ] || refuse "pass: $id has check-script: $(hdr_field_of check-script "$OF"); only the script can pass it, never a manual tick (P2). Nothing was changed."
+  need_live "$OF" pass
+  ! has_token "$OF" "$p" passed || refuse "pass: $p has already passed $id"
+  sn="$(session_name)"; refuse_bad "pass: the session name" "$sn"
+  lock_drawer "$OW"
+  add_field "$OF" passed "$p $(today) by $sn"
+  printf '%s: passed by %s\n' "$id" "$p"
+  finish_write "$OW" "open-items: pass $id for $p"
+}
+
+# move and route. D-20260923-A09 case 5b + P11 + P12: an agent may move an item inside ONE
+# group (both repos' COMMITTED pj-homes); across groups, back to a former owner, or out of
+# the inbox (route) is Gavin's call, enforced as a human at a terminal typing the ID back.
+head7(){ git -C "$1" rev-parse --short=7 HEAD 2>/dev/null || printf '?'; }
+cmd_move(){                     # move <W-ID> --to <p> --why "..." [--project owner]
+  local id="" to="" why="" proj="" sw dw sr dr sg dg rcg gate="" sdesc ddesc here
+  while [ $# -gt 0 ]; do case "$1" in
+    --to) [ $# -ge 2 ] || refuse "move: --to needs a project"; to="$2"; shift 2 ;;
+    --why) [ $# -ge 2 ] || refuse "move: --why needs the reason"; why="$2"; shift 2 ;;
+    --project) [ $# -ge 2 ] || refuse "--project needs a name"; proj="$2"; shift 2 ;;
+    --*) refuse "move: unknown flag $1" ;;
+    *) [ -z "$id" ] && id="$1" || refuse "move: one item only"; shift ;; esac; done
+  [ -n "$id" ] && [ -n "$to" ] || refuse "move: usage: open-items move <W-ID> --to <project> --why \"...\""
+  [ -n "$why" ] || refuse "move: --why is required; it is recorded in the item's moved-from line and on the notice the old owner sees"
+  refuse_bad "move: --to" "$to"; refuse_bad "move: --why" "$why"
+  [ "$to" != inbox ] || refuse "move: --to inbox is refused; the inbox holds UNROUTED items only, and an item never goes back into it (P11). Nothing was changed."
+  owner_item "$id" "$proj" move; id="$(id_of_file "$OF")"; sw="$OW"
+  [ "$(realdir "$sw")" != "$(realdir "$INBOX")" ] || refuse "move: $id is in the inbox; it leaves the inbox only by 'open-items route', which is Gavin's call"
+  here="$(current_repo)" && [ "$(realdir "$(work_for "$here")")" = "$(realdir "$sw")" ] \
+    || refuse "move: run it from the project that owns $id ($(name_of "$sw")); you are in $(here_name). Nothing was changed."
+  need_live "$OF" move
+  dw="$(resolve_name "$to" "move --to")" || exit 2
+  [ "$(realdir "$dw")" != "$(realdir "$sw")" ] || refuse "move: $id is already in $to"
+  [ -d "$dw/items" ] || refuse "move: $to is a legacy OPEN.md drawer, read-only. Nothing was changed."
+  # Groups: both repo: lines validated (P10), both group lines committed (P11 rule 2).
+  sr="$(repo_of_drawer "$sw")" || { sdesc="$sr"; sr=""; }
+  dr="$(repo_of_drawer "$dw")" || { ddesc="$dr"; dr=""; }
+  sg=""; dg=""
+  if [ -n "$sr" ]; then sg="$(repo_group "$sr")"; rcg=$?; [ "$rcg" -ne 2 ] || refuse "move: $sg (P11). Nothing was changed."; [ "$rcg" -eq 0 ] || { sdesc="$sg"; sg=""; }; fi
+  if [ -n "$dr" ]; then dg="$(repo_group "$dr")"; rcg=$?; [ "$rcg" -ne 2 ] || refuse "move: $dg (P11). Nothing was changed."; [ "$rcg" -eq 0 ] || { ddesc="$dg"; dg=""; }; fi
+  [ -z "$sg" ] || sdesc="group $sg"; [ -z "$dg" ] || ddesc="group $dg"
+  if [ -z "$sg" ] || [ "$sg" != "$dg" ]; then
+    gate="$id cannot move from $(name_of "$sw") ($sdesc) to $to ($ddesc): only a move inside ONE group is an agent's to make; across groups is Gavin's call (D-20260923-A09 5b, P11)"
+  fi
+  ! has_token "$OF" "$to" moved-from || gate="${gate:+$gate; and }$id has been in $to before, and a move back is Gavin's call (P11 rule 3)"
+  if [ "$(hdr_field_of reach "$OF")" = mandatory ] && ! is_dotfiles_drawer "$dw"; then
+    gate="${gate:+$gate; and }$id is reach: mandatory, which only the dotfiles project owns without a human's say-so (P8)"
+  fi
+  if [ -n "$gate" ]; then
+    human_confirm "$id" "$gate. Type the item ID to confirm:" \
+      || refuse "move: $gate. It needs a human at a terminal who types the ID back; stdin is not a terminal (or the ID did not match). Nothing was changed."
+  fi
+  do_move "$sw" "$dw" "$to" "$why" "${sg:-?} -> ${dg:-?}" "$( [ -n "$sr" ] && head7 "$sr" || printf '?') -> $( [ -n "$dr" ] && head7 "$dr" || printf '?')" move
+}
+
+cmd_route(){                    # route <W-ID> --to <p> [--why "..."]: inbox -> owner, Gavin's call
+  local id="" to="" why="routed from the inbox" dw dr dg rcg
+  while [ $# -gt 0 ]; do case "$1" in
+    --to) [ $# -ge 2 ] || refuse "route: --to needs a project"; to="$2"; shift 2 ;;
+    --why) [ $# -ge 2 ] || refuse "route: --why needs the reason"; why="$2"; shift 2 ;;
+    --*) refuse "route: unknown flag $1" ;;
+    *) [ -z "$id" ] && id="$1" || refuse "route: one item only"; shift ;; esac; done
+  [ -n "$id" ] && [ -n "$to" ] || refuse "route: usage: open-items route <W-ID> --to <project> [--why \"...\"]"
+  refuse_bad "route: --to" "$to"; refuse_bad "route: --why" "$why"
+  # P11 rule 4, FIRST: routing is Gavin's call, so nothing else is looked at for an agent.
+  human_confirm "$id" "routing $id out of the inbox to $to is Gavin's call. Type the item ID to confirm:" \
+    || refuse "route: routing out of the inbox is Gavin's call and needs a human at a terminal who types the ID back (D-20260923-A09 6b, P11); stdin is not a terminal (or the ID did not match). Nothing was changed."
+  owner_item "$id" "" route; id="$(id_of_file "$OF")"
+  [ "$(realdir "$OW")" = "$(realdir "$INBOX")" ] || refuse "route: $id is not in the inbox (it is in $(name_of "$OW")); between projects, use 'open-items move'"
+  need_live "$OF" route
+  dw="$(resolve_name "$to" "route --to")" || exit 2
+  [ -d "$dw/items" ] || refuse "route: $to is a legacy OPEN.md drawer, read-only. Nothing was changed."
+  dr="$(repo_of_drawer "$dw")" || dr=""
+  dg="?"; if [ -n "$dr" ]; then dg="$(repo_group "$dr")"; rcg=$?; [ "$rcg" -eq 0 ] || dg="?"; fi
+  do_move "$INBOX" "$dw" "$to" "$why" "- -> $dg" "- -> $( [ -n "$dr" ] && head7 "$dr" || printf '?')" route
+}
+
+# do_move <src work> <dst work> <dst name> <why> <groups> <heads> <verb>: the two-drawer write.
+# P12: both locks in sorted order; the destination ID must be free in open/, parked/ AND
+# closed/ (12 older IDs repeat across drawers, and an overwrite there would be silent);
+# one commit for both drawers; a failed commit leaves a marker in BOTH so the next write in
+# either carries both halves. The old owner gets a moved-out record (P11 rule 1).
+do_move(){
+  local sw="$1" dw="$2" to="$3" why="$4" groups="$5" heads="$6" verb="$7" top id title sn from folder dest d rc
+  top="$(dot_top)" || refuse "$verb: $DOTCLAUDE is not a git repo, so the two halves of a move could not be one commit (P12). Nothing was changed."
+  drawer_rel "$sw" "$top" >/dev/null && drawer_rel "$dw" "$top" >/dev/null \
+    || refuse "$verb: both drawers must be inside dot-claude so the move is ONE commit (P12); $(drawer_rel "$sw" "$top" >/dev/null || realdir "$sw") $(drawer_rel "$dw" "$top" >/dev/null || realdir "$dw") is not. Nothing was changed."
+  sn="$(session_name)"; refuse_bad "$verb: the session name" "$sn"
+  id="$(id_of_file "$OF")"
+  lock_two "$sw" "$dw"
+  [ -f "$OF" ] || refuse "$verb: $OF vanished while waiting for the lock; nothing was changed"
+  for d in open parked closed; do
+    [ ! -e "$dw/items/$d/$id.md" ] || refuse "$verb: $dw/items/$d/$id.md already exists; the destination holds the same ID (IDs minted before 2026-09-23 can repeat). Refused rather than overwrite (P12). Both files are unchanged: $OF and $dw/items/$d/$id.md"
+  done
+  from="$(stamp_name "$sw" "$(name_of "$sw")")"; title="$(title_of "$OF")"
+  folder="$(basename "$(dirname "$OF")")"; dest="$dw/items/$folder/$id.md"
+  set_field "$OF" project "$(stamp_name "$dw" "$to")"
+  add_field "$OF" moved-from "$from $(today) by $sn (group $groups, head $heads): $why"
+  # The new owner is not also a watcher of its own item.
+  has_token "$OF" "$to" watch && { OI_P="$to" awk 'BEGIN { p = ENVIRON["OI_P"] } NR > 2 && !h && $0 == "" { h = 1 } !h && NR > 2 && $0 == "watch: " p { next } { print }' "$OF" > "$OF.tmp" && command mv "$OF.tmp" "$OF"; loud "note: $to watched $id; now it owns it, so its watch: line was dropped"; }
+  mkdir -p "$dw/items/$folder" "$sw/items/moved-out"
+  command mv -n "$OF" "$dest"
+  [ -f "$dest" ] && [ ! -e "$OF" ] || refuse "$verb: the rename to $dest did not complete; check $OF and $dest by hand. Nothing was committed."
+  printf '## %s -- %s\n\nmoved-to: %s\nmoved-by: %s\nmoved-on: %s\nwhy: %s\n' "$id" "$title" "$to" "$sn" "$(today)" "$why" > "$sw/items/moved-out/$id.md"
+  printf '%s moved %s -> %s\n' "$id" "$from" "$to"
+  regen_view "$sw"; regen_view "$dw"
+  commit_drawers "open-items: $verb $id $from -> $to -- $title" "$sw" "$dw"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    mkdir -p "$sw/items/.pending-move/$id@$(rel_key "$(drawer_rel "$dw" "$top")")" "$dw/items/.pending-move/$id@$(rel_key "$(drawer_rel "$sw" "$top")")"
+    loud "uncommitted move $id: both drawers are marked, so the next write in EITHER one commits both halves together (P12)."
+  fi
+  return "$rc"
+}
+
 # ---------------------------------------------------------------- dispatch ----
 WANT=""
 JSON=""; GREP=""
@@ -1160,12 +1641,18 @@ case "${1:-}" in
   park)     shift; cmd_status parked "$@"; exit $? ;;
   reopen)   shift; cmd_status open "$@"; exit $? ;;
   set)      shift; cmd_set "$@"; exit $? ;;
-  init)     cmd_init; exit $? ;;
+  init)     shift; cmd_init "$@"; exit $? ;;
   regen)    cmd_regen; exit $? ;;
   migrate)  shift; cmd_migrate "$@"; exit $? ;;
   show)     shift; need_root; cmd_show "$@"; exit $? ;;
   get)      shift; need_root; cmd_get "$@"; exit $? ;;
   supersede) shift; cmd_supersede "$@"; exit $? ;;
+  watch)    shift; need_root; cmd_watch "$@"; exit $? ;;
+  check)    shift; need_root; cmd_check "$@"; exit $? ;;
+  tick)     shift; need_root; cmd_tick "$@"; exit $? ;;
+  pass)     shift; need_root; cmd_pass "$@"; exit $? ;;
+  move)     shift; need_root; cmd_move "$@"; exit $? ;;
+  route)    shift; need_root; cmd_route "$@"; exit $? ;;
 esac
 
 [ -d "$PROJECTS" ] || [ "${1:-}" = --session ] \

@@ -262,7 +262,9 @@ want   "init: OPEN.md carries the do-not-edit header" "DO NOT EDIT" "$(cat "$ZW/
 # were created -- which reads as a broken tool, not an empty drawer. The arms
 # are: the stamp exists, the LISTING shows the repo name, and -- the one that
 # matters -- the encoded key does NOT appear anywhere in it.
-wanteq "init: items/.project stamps the repo name" "zeta" "$(cat "$ZW/items/.project" 2>/dev/null)"
+wanteq "init: items/.project stamps the repo name (line 1)" "zeta" "$(head -1 "$ZW/items/.project" 2>/dev/null)"
+# A16 (P10): line 2 is the repo root, the one path the lossy drawer key cannot give back.
+wanteq "init: items/.project line 2 is repo: <the repo root> (A16, P10)" "repo: $ZETA" "$(sed -n 2p "$ZW/items/.project" 2>/dev/null)"
 runw "$ZETA"
 want    "empty drawer names the repo, not the encoded key" "zeta" "$OUT"
 wantnot "empty drawer never prints the encoded harness key" "$(key "$ZETA")" "$OUT"
