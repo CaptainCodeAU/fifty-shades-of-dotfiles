@@ -16,7 +16,7 @@
 #   open-items supersede <old> <new> [--project p]   decline old pointing at new; ONE drawer
 #   open-items set [--add] <W-ID> <field> "value"   replace (WARNS on dropped text) | append
 #   open-items init [--name n] | regen | migrate [--dry-run --into <dir>] [--park W-ID,..]
-#   open-items --selftest           prove every arm before trusting it
+#   open-items --selftest           prove every arm; exit 3 = some arms NOT MEASURED, not a pass
 # New IDs are unique machine-wide; 12 older ones repeat, so show/get/supersede REFUSE those.
 # Exit: 0 found/written  ·  1 nothing found (not an error)  ·  2 REFUSED  ·  3 written but NOT committed
 #

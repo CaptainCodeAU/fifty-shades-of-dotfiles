@@ -21,7 +21,11 @@
 # on the EXIT CODE and on the text, and each "must not appear" arm is twinned with a
 # case where the same marker MUST appear. An assertion with no twin proves nothing.
 #
-# Exit: 0 all passed  |  1 a case failed  |  2 could not run (invalid trial)
+# Exit: 0 all passed, every arm measured  |  1 a case failed  |  2 could not run (invalid trial)
+#       3 passed what ran, but N arm(s) NOT MEASURED (no pty in this environment): NOT a pass.
+#         A check that did not run must not look like one (conductor ruling 2026-09-23, the
+#         same idea as git-leak-scan's exit 2). OPEN_ITEMS_SELFTEST_NO_PTY=1 forces the
+#         no-pty path, which is how the suite proves its own exit 3.
 
 set -uo pipefail
 
@@ -1197,7 +1201,10 @@ wk(){ printf '%s' "$P/$(key "$D/$1")/memory/WORK"; }
 # denies openpty, so there these arms are reported NOT MEASURED, never passed.
 # expect exits 0 even when spawn fails ("no more ptys"), so the probe must see a real
 # terminal on the far side: rc 7 comes only from [ -t 0 ] being true there.
-PTY_OK=""; expect -c 'spawn sh -c {[ -t 0 ] && exit 7}; expect eof; exit [lindex [wait] 3]' >/dev/null 2>&1; [ $? -eq 7 ] && PTY_OK=1
+PTY_OK=""
+if [ -z "${OPEN_ITEMS_SELFTEST_NO_PTY:-}" ]; then
+  expect -c 'spawn sh -c {[ -t 0 ] && exit 7}; expect eof; exit [lindex [wait] 3]' >/dev/null 2>&1; [ $? -eq 7 ] && PTY_OK=1
+fi
 cat > "$ROOT/tty.exp" <<'EXP'
 set ans [lindex $argv 0]
 set cmd [lrange $argv 1 end]
@@ -1601,8 +1608,19 @@ wanteq "an inbox that cannot be created REFUSES (rc=2)" "2" "$RC"
 want   "  naming the path" "$DC/pj-inbox/items" "$OUT"
 unset CLAUDE_CODE_SESSION_NAME
 
+# THE EXIT CODE FOR "NOT MEASURED" IS ITSELF MEASURED: a child run of this very suite with
+# the pty forced off must exit 3, never 0. The child does not recurse.
+if [ -z "${OPEN_ITEMS_SELFTEST_CHILD:-}" ]; then
+  printf 'W  exit 3 when arms were NOT MEASURED (a child run of this suite, pty forced off)\n'
+  OUT="$(OPEN_ITEMS_SELFTEST_CHILD=1 OPEN_ITEMS_SELFTEST_NO_PTY=1 "$0" 2>&1)"; RC=$?
+  wanteq "a run with NOT MEASURED arms exits 3, not 0 (1 would mean the child had a real failure)" "3" "$RC"
+  want   "  and says passed what ran, N not measured" "passed what ran, 3 arm group(s) NOT MEASURED" "$OUT"
+fi
 printf '\n%s passed, %s failed   (fixtures: %s)\n' "$PASS" "$FAIL" "$ROOT"
-[ "${NM:-0}" -eq 0 ] || printf 'open-items-selftest: %s arm group(s) NOT MEASURED (no pty in this environment) -- run outside the sandbox to measure them; not a pass\n' "$NM"
 [ "$FAIL" -eq 0 ] || { printf 'open-items-selftest: FAILURES above\n' >&2; exit 1; }
+if [ "${NM:-0}" -gt 0 ]; then
+  printf 'open-items-selftest: passed what ran, %s arm group(s) NOT MEASURED (no pty in this environment) -- NOT a pass; run outside the sandbox to measure them (exit 3)\n' "$NM"
+  exit 3
+fi
 printf 'open-items-selftest: all arms pass\n'
 exit 0
