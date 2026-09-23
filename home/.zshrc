@@ -1555,9 +1555,9 @@ EOF
     case "$1" in
       --h264) codec="h264"; shift ;;
       --av1)  codec="av1"; shift ;;
-      --crf)  crf="$2"; shift 2 ;;
-      --bitrate) bitrate="$2"; shift 2 ;;
-      -o|--output) output="$2"; shift 2 ;;
+      --crf)  [ $# -ge 2 ] || { echo "${err}conv: --crf needs a value${done}"; return 1; }; crf="$2"; shift 2 ;;
+      --bitrate) [ $# -ge 2 ] || { echo "${err}conv: --bitrate needs a value${done}"; return 1; }; bitrate="$2"; shift 2 ;;
+      -o|--output) [ $# -ge 2 ] || { echo "${err}conv: $1 needs a value${done}"; return 1; }; output="$2"; shift 2 ;;
       -*)
         echo "${err}conv: unknown option '$1'${done}"
         return 1
