@@ -192,8 +192,8 @@ since an agent's Bash has no terminal (measured by the reviewer).
 - Merged 2026-09-23: the unique-ID scheme, `pj-id claim` with the claim folder, used by
   `open-items add` and `decided add` (W-20260923-A22, 249e1b5..fda6fe7), and the `add` hang fix
   (W-20260923-A25).
-- Being built from 2026-09-23 (Gavin's go given): the A16 design above with all twelve safety
-  rules, as W-20260923-A28.
+- Merged 2026-09-23 (Gavin's go given): the A16 design above with all twelve safety rules
+  (W-20260923-A28): write side a4f8026, read side 7408125. Stowed and live.
 - Read side built 2026-09-23 on branch `a16-read` (not merged when written): `--session`
   Watching / Checks owed / Mandatory / Moved out / Inbox, `seen`, `checks-run` started
   detached by `pj`, the card's own-title floor, `mandatory-checks-selftest`. What it does:
