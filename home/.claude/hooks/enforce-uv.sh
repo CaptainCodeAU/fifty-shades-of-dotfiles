@@ -16,6 +16,10 @@
 #   pip install a b      -> uv add a b               (-r FILE kept)
 #   pip uninstall -y a   -> uv remove a              (-y dropped: uv never prompts)
 #   pip list|show|freeze|check -> uv pip ...
+#   py313 x.py           -> uv run --python 3.13 python x.py   (py310 to py313)
+#   pipx install|uninstall|upgrade X -> uv tool ...; pipx run X -> uvx X;
+#   pipx list -> uv tool list --show-paths; pipx upgrade-all -> uv tool upgrade --all
+# (the py31x and pipx mappings are the .zshrc wrappers' own advice, 2026-09-23)
 # at command position, after VAR=val, env VAR=val, time, nohup, noglob, nocorrect.
 # Everything else that trips the rule is still DENIED with the old message: any
 # other pip option, a path-prefixed or quoted binary, sudo/doas/exec/xargs/command
@@ -84,11 +88,22 @@ if [ "${1:-}" = "--selftest" ]; then
   conv_arm rewrite 'bare pytest'                  'pytest'                               'uv run pytest'
   conv_arm rewrite 'pytest -q'                    'pytest -q'                            'uv run pytest -q'
   conv_arm rewrite 'bare ruff'                    'ruff check .'                         'uv run ruff check .'
+  conv_arm rewrite 'py313 (wrapper advice)'       'py313 x.py'                           'uv run --python 3.13 python x.py'
+  conv_arm rewrite 'py310 -c'                     'py310 -c "print(1)"'                  'uv run --python 3.10 python -c "print(1)"'
+  conv_arm rewrite 'pipx install'                 'pipx install ruff'                    'uv tool install ruff'
+  conv_arm rewrite 'pipx uninstall'               'pipx uninstall ruff'                  'uv tool uninstall ruff'
+  conv_arm rewrite 'pipx upgrade'                 'pipx upgrade ruff'                    'uv tool upgrade ruff'
+  conv_arm rewrite 'pipx run'                     'pipx run cowsay hi'                   'uvx cowsay hi'
+  conv_arm rewrite 'pipx list'                    'pipx list'                            'uv tool list --show-paths'
+  conv_arm rewrite 'pipx upgrade-all'             'pipx upgrade-all'                     'uv tool upgrade --all'
   echo "=== DENY arms: a slip whose fix is not clear-cut ==="
   conv_arm deny 'pip install --upgrade'           'pip install --upgrade requests'
   conv_arm deny 'pip install -e .'                'pip install -e .'
   conv_arm deny 'pip install, no package'         'pip install'
   conv_arm deny 'pip download'                    'pip download x'
+  conv_arm deny 'pipx install with an option'     'pipx install --python 3.12 ruff'
+  conv_arm deny 'pipx inject'                     'pipx inject ruff rich'
+  conv_arm deny 'pipx run with an option'         'pipx run --spec x y'
   conv_arm deny 'pip uninstall, no package'       'pip3 uninstall -y'
   conv_arm deny 'path-prefixed python3'           '/usr/bin/python3 x.py'
   conv_arm deny 'venv python'                     '.venv/bin/python -m pytest'
@@ -112,6 +127,8 @@ if [ "${1:-}" = "--selftest" ]; then
   conv_arm allow 'which probe'                    'which python3'
   conv_arm allow 'bare interpreter, unchanged'    'python3'
   conv_arm allow 'python3.12, unchanged'          'python3.12 x.py'
+  conv_arm allow 'bare py313, unchanged'          'py313'
+  conv_arm allow 'uv tool install'                'uv tool install ruff && uvx cowsay hi'
   conv_arm allow 'a path argument'                'ls python3-stuff/ && grep -r pytest .'
   conv_arm allow 'inside $(...), unchanged'       'v=$(python3 -c "print(1)")'
   conv_arm allow 'prose in an echo'               'echo "python3 is banned here"'

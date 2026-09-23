@@ -388,13 +388,15 @@ function hardname() { return (match(EM, /hard:[^ ]+/) ? substr(EM, RSTART + 5, R
 
 # ------------------------------------------------------------------ uv
 
-function uv_name(b) { return b == "python" || b == "python3" || b == "pip" || b == "pip3" || b == "pytest" || b == "ruff" }
+function uv_name(b) { return b == "python" || b == "python3" || b == "pip" || b == "pip3" || b == "pytest" || b == "ruff" || b == "pipx" || b ~ /^py31[0-3]$/ }
 
 function uv_msg(b, s1) {
     if (b ~ /^pip3?$/ && s1 == "install")   return "Use 'uv add <package>' instead of pip install"
     if (b ~ /^pip3?$/ && s1 == "uninstall") return "Use 'uv remove <package>' instead of pip uninstall"
     if (b ~ /^pip3?$/)                      return "Use 'uv run pip' or 'uv pip' instead of bare pip"
     if (b ~ /^python3?$/)                   return "Use 'uv run python' instead of bare python"
+    if (b == "pipx")                        return "Use 'uv tool' instead of pipx (install, uninstall, upgrade, list; 'uvx' for run)"
+    if (b ~ /^py31[0-3]$/)                  return "Use 'uv run --python 3." substr(b, 4) " python' instead of " b
     return "Use 'uv run " b "' instead of bare " b
 }
 
@@ -418,6 +420,28 @@ function uv_check(    k, j, n, a, v, b, s1, pk) {
         if (b ~ /^python3?$/) {
             if (j == n) continue                        # bare interpreter: never matched, unchanged
             splice("uv", WS[k, j], WS[k, j] - 1, "uv run "); verdict("uv", "REWRITE", b " -> uv run " b); continue
+        }
+        if (b ~ /^py31[0-3]$/) {                   # the .zshrc wrappers' own advice
+            if (j == n) continue                        # bare interpreter: unchanged
+            splice("uv", WS[k, j], WE[k, j], "uv run --python 3." substr(b, 4) " python")
+            verdict("uv", "REWRITE", b " -> uv run --python 3." substr(b, 4) " python"); continue
+        }
+        if (b == "pipx") {                             # mapping from the .zshrc pipx() wrapper
+            if (j < n && WQ[k, j + 1]) { verdict("uv", "DENY", uv_msg(b, s1)); continue }
+            pk = pn_pkgs(k, j, "")                     # words after the subcommand, no options
+            if ((s1 == "install" || s1 == "uninstall" || s1 == "upgrade") && pk > 0) {
+                splice("uv", WS[k, j], WE[k, j], "uv tool"); verdict("uv", "REWRITE", "pipx " s1 " -> uv tool " s1); continue
+            }
+            if (s1 == "run" && j + 2 <= n && !isopt(k, j + 2)) {
+                splice("uv", WS[k, j], WE[k, j + 1], "uvx"); verdict("uv", "REWRITE", "pipx run -> uvx"); continue
+            }
+            if (s1 == "list" && j + 1 == n) {
+                splice("uv", WS[k, j], WE[k, j + 1], "uv tool list --show-paths"); verdict("uv", "REWRITE", "pipx list -> uv tool list --show-paths"); continue
+            }
+            if (s1 == "upgrade-all" && j + 1 == n) {
+                splice("uv", WS[k, j], WE[k, j + 1], "uv tool upgrade --all"); verdict("uv", "REWRITE", "pipx upgrade-all -> uv tool upgrade --all"); continue
+            }
+            verdict("uv", "DENY", uv_msg(b, s1) " (only install, uninstall, upgrade, upgrade-all, run and list, without options, are rewritten)"); continue
         }
         if (b == "pytest" || b == "ruff") {
             splice("uv", WS[k, j], WS[k, j] - 1, "uv run "); verdict("uv", "REWRITE", b " -> uv run " b); continue
@@ -583,10 +607,21 @@ function cd_alias(w) {        # .zshrc aliases that expand to cd; "" if w is not
     return ""
 }
 
+# Aliases live in agent Bash (measured 2026-09-23: 310 from the shell snapshot)
+# that ALSO change directory but cannot be rewritten safely: - is `cd -`, 1..9
+# are `cd -N` (the directory stack), grt is cd to the git top level. Deny only.
+function cd_deny_alias(w) { return w ~ /^[1-9]$/ || w == "grt" }
+
 function nocd_check(    k, j, n, v, cnt, first, fj, dir, why) {
     V["nocd"] = "ALLOW"; M["nocd"] = ""; cnt = 0
     for (k = 1; k <= NC; k++) {
+        if (CNW[k] >= 1 && WR[k, 1] == "-" && !WQ[k, 1]) {   # alias - = cd - (eff reads it as zsh's - modifier)
+            verdict("nocd", "DENY", "'-' is an alias for 'cd -' here; use an absolute path, git -C, or builtin cd"); return
+        }
         j = eff(k); n = CNW[k]
+        if (j <= n && !WQ[k, j] && cd_deny_alias(WR[k, j]) && EM !~ /hard:builtin/) {
+            verdict("nocd", "DENY", "'" WR[k, j] "' is an alias that changes directory here; use an absolute path, git -C, or builtin cd"); return
+        }
         if (j > n || EM ~ /hard:builtin/) continue
         v = unq(WR[k, j])
         if (v == "cd" || (!WQ[k, j] && cd_alias(WR[k, j]) != "")) { if (++cnt == 1) { first = k; fj = j } }

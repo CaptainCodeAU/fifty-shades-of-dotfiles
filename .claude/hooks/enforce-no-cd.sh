@@ -18,6 +18,8 @@
 # (0, 1, 7, a failed cd), same globbing, and the session's PWD is unchanged.
 # The .zshrc aliases that expand to cd (.. ... .... ..... ~) are the same shape and
 # are rewritten the same way; the hook sees the typed text, before alias expansion.
+# The live aliases that also change directory but cannot be rewritten safely are
+# DENIED: - (cd -), 1..9 (cd -N, oh-my-zsh), grt (cd to the git top level).
 #
 # STILL DENIED, as before: a cd that is not the first command, more than one cd,
 # `cd` alone, `cd -`, `cd` with options or two arguments, `cd DIR || ...`,
@@ -85,6 +87,9 @@ if [ "${1:-}" = "--selftest" ]; then
   conv_arm deny 'command cd'                      'command cd /x && ls'
   conv_arm deny 'env-prefixed cd'                 'FOO=1 cd /x && ls'
   conv_arm deny 'alias .. alone'                  '..'
+  conv_arm deny 'alias - (cd -)'                  '- && ls'
+  conv_arm deny 'alias 2 (cd -2)'                 '2; git status'
+  conv_arm deny 'alias grt (cd to top level)'     'grt && ls'
   conv_arm deny 'unsure: case clause'             'cd /x && case $a in b) ls ;; esac'
   conv_arm deny 'two conventions: + python3'      'cd /x && python3 a.py'
   conv_arm deny 'two conventions: + npm'          'cd /x && npm test'
@@ -100,6 +105,7 @@ if [ "${1:-}" = "--selftest" ]; then
   conv_arm allow 'quoted ) inside $(...) (2026-09-23 false positive)' 'o=$(open-items add "title (no-cd, uv, pnpm) more" --done-when "... (cd into a subshell with builtin cd, python/pip to uv) ...");'
   conv_arm allow 'multi-line "..." message'       $'git commit -m "first line\n; cd /x && ls is prose\nlast"'
   conv_arm allow 'a word containing cd'           'abcd /x && ls; git add cdrom.txt'
+  conv_arm allow 'digits and - as arguments'      'sleep 2 && head -3 f && git diff - <<< x'
   conv_arm allow 'uv run, no cd'                  'uv run python3 x.py'
   conv_arm allow 'nested quotes inside "$(...)"'  'x="$(echo "a; cd /tmp && ls")"; echo "$x"'
   conv_arm allow 'control: harmless'              'echo control-ok'
