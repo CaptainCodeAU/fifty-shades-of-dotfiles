@@ -176,3 +176,50 @@ family's clean record is thinner evidence than it first looks: 15,831 of its
 19,505 prose characters are Fable, which is clean everywhere. The arm that
 actually compares is `c` on Opus, 3,674 characters, 0 observed against about 9
 predicted.
+
+---
+
+## `pj-question-ping.sh`: a ping at every question popup
+
+Added 2026-09-23 for D-20260921-A10, widened that day by Gavin to "whenever
+there is one of those Ask User Question tool popups". Registered on
+`PreToolUse` with matcher `AskUserQuestion`, project target only.
+
+**What it does.** Four sounds (Ping, Glass, Glass, Glass) through `afplay`,
+then two `imsg` messages one second apart:
+
+```
+<session>: question waiting: <header, or first 80 chars of the question>
+answer the popup in <session>
+```
+
+`<session>` is `$CLAUDE_CODE_SESSION_NAME`, else the basename of the git
+toplevel of the payload's `cwd`. `imsg` sends only to `$IMSG_TO`.
+
+**It never delays the popup.** The hook prints nothing, exits 0, and hands the
+signal to a double-forked worker with stdin, stdout and stderr on `/dev/null`.
+A worker that kept either output pipe would make Claude Code wait for it; the
+selftest's timing arm fails in exactly that case (measured: 3.0 s instead of
+0.06 s).
+
+| Case                                    | Result                                         |
+| --------------------------------------- | ---------------------------------------------- |
+| `PJ_NO_PING=1`                          | nothing, not logged                            |
+| same session pinged under 20 s ago      | nothing, logged as `debounced`                 |
+| `afplay` missing                        | messages only, log names `afplay`              |
+| `imsg` missing or `IMSG_TO` unset       | sounds only, log names what was missing        |
+
+The question text is agent-written, so control and bidi characters are
+replaced, token-shaped strings become `[redacted]`, and every part is capped.
+
+State lives under `${XDG_STATE_HOME:-~/.local/state}/pj/`: `question-ping.log`
+(one decision per line, never the message text) and `question-ping/<session>`
+(the debounce stamp).
+
+```sh
+~/.claude/hooks/pj-question-ping.sh --selftest   # fake afplay and imsg, 24 arms
+```
+
+The selftest pins `PJ_PING_AFPLAY` and `PJ_PING_IMSG` to fake binaries. When
+either is set, even to a missing path, it replaces the PATH lookup, so no arm
+can reach the real `afplay` or `imsg`.
