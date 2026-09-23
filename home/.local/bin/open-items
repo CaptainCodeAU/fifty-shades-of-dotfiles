@@ -684,12 +684,339 @@ cmd_migrate(){
   finish_write "$w" "open-items: migrate $(name_of "$w") from OPEN.md to items/"
 }
 
+# ------------------------------------------ one item, text search, JSON (A24, A21) ----
+# W-20260923-A24. IDs are unique PER DRAWER only: W-20260923-A01 was measured in three
+# drawers on 2026-09-23. So a lookup by ID searches EVERY drawer, and two hits without
+# --project are REFUSED with the projects named. Picking the current repo's copy would
+# be a guess that reads exactly like an answer, and on a write it edits the wrong item.
+need_root(){ [ -d "$PROJECTS" ] || refuse "no projects root at $PROJECTS (set OPEN_ITEMS_PROJECTS_DIR to point elsewhere)"; }
+drawers_scoped(){               # drawers_scoped [project]: every drawer, or those named <project>
+  local w
+  while IFS= read -r w; do
+    [ -n "$w" ] || continue
+    [ -z "${1:-}" ] || [ "$(name_of "$w")" = "$1" ] || continue
+    printf '%s\n' "$w"
+  done < <(all_drawers)
+}
+count_headers(){ awk '/^## W-/ { n++ } END { print n + 0 }'; }
+# One line per hit: <work> TAB <resolved id> TAB <item file | legacy:<OPEN.md>>. rc 2 when
+# find_item has already refused (a legacy bare ID matching two letters inside one drawer).
+locate_hits(){                  # locate_hits <W-ID> [project]
+  local id="$1" w f rc
+  while IFS= read -r w; do
+    [ -n "$w" ] || continue
+    if [ -d "$w/items" ]; then
+      f="$(find_item "$w" "$id")"; rc=$?
+      [ "$rc" -eq 2 ] && return 2
+      [ "$rc" -eq 0 ] && printf '%s\t%s\t%s\n' "$w" "$(id_of_file "$f")" "$f"
+    elif awk -v id="$id" '$0 == "## " id || index($0, "## " id " ") == 1 { f = 1; exit } END { exit !f }' "$w/OPEN.md" 2>/dev/null; then
+      printf '%s\t%s\tlegacy:%s\n' "$w" "$id" "$w/OPEN.md"
+    fi
+  done < <(drawers_scoped "${2:-}")
+  return 0
+}
+# resolve_item <W-ID> <project|""> <verb> -> the one hit line. rc 1 a miss, rc 2 refused;
+# both are explained on stderr here, so the caller only picks the exit code.
+resolve_item(){
+  local id="$1" proj="$2" verb="$3" hits n w total=0 nd=0 names=""
+  [[ "$id" =~ ^W-[0-9]{8}-[0-9A-Z]+$ ]] \
+    || { printf 'open-items: REFUSED -- %s: "%s" is not an item ID (W-YYYYMMDD-LNN)\n' "$verb" "$id" >&2; return 2; }
+  [ -d "$PROJECTS" ] || { printf 'open-items: REFUSED -- no projects root at %s\n' "$PROJECTS" >&2; return 2; }
+  hits="$(locate_hits "$id" "$proj")" || return 2
+  n=0; [ -z "$hits" ] || n="$(printf '%s\n' "$hits" | wc -l | tr -d ' ')"
+  if [ "$n" -eq 0 ]; then
+    while IFS= read -r w; do
+      [ -n "$w" ] || continue
+      nd=$((nd+1)); total=$(( total + $(count_blocks "$w") )); names="$names$(name_of "$w") "
+    done < <(drawers_scoped "$proj")
+    printf 'open-items: %s: no item %s%s.\n' "$verb" "$id" "${proj:+ in project $proj}" >&2
+    printf 'open-items: searched %s item(s), every status, across %s drawer(s): %s\n' "$total" "$nd" "${names:-(none)}" >&2
+    [ "$nd" -gt 0 ] || printf 'open-items: drawers that exist: %s\n' "$(drawer_names)" >&2
+    return 1
+  fi
+  if [ "$n" -gt 1 ]; then
+    while IFS=$'\t' read -r w _ _; do
+      if [ -n "$proj" ]; then names="$names$w "; else names="$names$(name_of "$w") "; fi
+    done <<EOF
+$hits
+EOF
+    printf 'open-items: REFUSED -- %s: %s is in %s drawers: %s-- IDs are unique per drawer only. Name one with --project <name>.\n' \
+      "$verb" "$id" "$n" "$names" >&2
+    [ -z "$proj" ] || printf 'open-items: (all %s drawers are named %s, so --project cannot separate them; paths above)\n' "$n" "$proj" >&2
+    return 2
+  fi
+  printf '%s' "$hits"
+}
+block_text(){                   # block_text <ref> <id>: the item's block, whichever layout
+  case "$1" in
+    legacy:*) awk -v id="$2" '
+        /^## / { if (on) exit; if ($0 == "## " id || index($0, "## " id " ") == 1) on = 1 }
+        on { buf[++n] = $0 }
+        END { while (n > 0 && buf[n] == "") n--; for (i = 1; i <= n; i++) print buf[i] }' "${1#legacy:}" ;;
+    *) cat "$1" ;;
+  esac
+}
+# Split an item's arguments into positionals and --project, for show/get/supersede.
+POS=(); PROJ=""
+split_args(){
+  POS=(); PROJ=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --project) [ -n "${2:-}" ] || refuse "--project needs a name"; PROJ="$2"; shift 2 ;;
+      --*) refuse "unknown flag $1" ;;
+      *) POS+=("$1"); shift ;;
+    esac
+  done
+}
+
+# JSON without jq, so the reader does not depend on a tool this box might lack. awk emits
+# one object per item on one line; every string goes through esc(), which walks the text
+# one character at a time. gsub is deliberately NOT used: how awk treats a backslash in a
+# gsub replacement differs between awks, and a JSON escaper that doubles backslashes on
+# one machine and not on another is invalid JSON on the second. The selftest proves the
+# output with `jq .` and round-trips a body holding quotes, backslashes, a tab and a
+# control character.
+#
+# Shape: {"id","title","project","status","drawer","layout","fields":{..},"body"}. The
+# top-level project and status are the EFFECTIVE values (status defaults to open, as the
+# listing filter treats it; project falls back to the drawer's name). `fields` is raw:
+# holds-in and supersedes are always arrays, any other field is a string unless it
+# repeats, and then it is an array too, so nothing in the file is dropped.
+JSON_ESC_AWK='
+    BEGIN { for (j = 1; j < 32; j++) ORD[sprintf("%c", j)] = j }
+    function esc(s,   i, n, c, o) {
+      o = ""; n = length(s)
+      for (i = 1; i <= n; i++) {
+        c = substr(s, i, 1)
+        if (c == "\\") o = o "\\\\"
+        else if (c == "\"") o = o "\\\""
+        else if (c == "\n") o = o "\\n"
+        else if (c == "\t") o = o "\\t"
+        else if (c == "\r") o = o "\\r"
+        else if (c in ORD) o = o sprintf("\\u%04x", ORD[c])
+        else o = o c
+      }
+      return "\"" o "\""
+    }
+'
+json_blocks(){                  # json_blocks <drawer name> <layout>: block stream -> one object per line
+  awk -v dname="$1" -v layout="$2" "$JSON_ESC_AWK"'
+    BEGIN { MULTI["holds-in"] = 1; MULTI["supersedes"] = 1 }
+    function flush(   id, title, p, i, l, k, v, ph, nk, bn, bs, be, body, out, j, st, pr) {
+      if (n == 0) return
+      id = lines[1]; sub(/^## /, "", id); title = ""
+      p = index(id, " -- "); if (p > 0) { title = substr(id, p + 4); id = substr(id, 1, p - 1) }
+      nk = 0; bn = 0; ph = 0; delete cnt; delete val; delete order; delete bl
+      for (i = 2; i <= n; i++) {
+        l = lines[i]
+        if (ph == 0) { if (l == "") continue; ph = 1 }
+        if (ph == 1) {
+          if (l ~ /^[a-z][a-z-]*:/) {
+            k = l; sub(/:.*/, "", k); v = l; sub(/^[a-z][a-z-]*:[ \t]*/, "", v)
+            if (!(k in cnt)) { order[++nk] = k; cnt[k] = 0 }
+            val[k, ++cnt[k]] = v; continue
+          }
+          ph = 2
+        }
+        bl[++bn] = l
+      }
+      bs = 1; while (bs <= bn && bl[bs] == "") bs++
+      be = bn; while (be >= bs && bl[be] == "") be--
+      body = ""; for (i = bs; i <= be; i++) body = body (i > bs ? "\n" : "") bl[i]
+      st = ("status" in cnt) ? val["status", 1] : "open"
+      pr = ("project" in cnt) ? val["project", 1] : dname
+      out = "{\"id\":" esc(id) ",\"title\":" esc(title) ",\"project\":" esc(pr) ",\"status\":" esc(st)
+      out = out ",\"drawer\":" esc(dname) ",\"layout\":" esc(layout) ",\"fields\":{"
+      for (i = 1; i <= nk; i++) {
+        k = order[i]; out = out (i > 1 ? "," : "") esc(k) ":"
+        if ((k in MULTI) || cnt[k] > 1) {
+          out = out "["; for (j = 1; j <= cnt[k]; j++) out = out (j > 1 ? "," : "") esc(val[k, j]); out = out "]"
+        } else out = out esc(val[k, 1])
+      }
+      print out "},\"body\":" esc(body) "}"
+      n = 0
+    }
+    /^## W-/ { flush(); lines[++n] = $0; next }
+    /^## /   { flush(); next }                 # a non-item section of a legacy OPEN.md
+    { if (n > 0) lines[++n] = $0 }
+    END { flush() }
+  '
+}
+
+# W-20260923-A21. Text search: every word (case-insensitive, AND) must appear in the
+# item's title, body, or a free-text field (done-when, next, holds-in ...). The tool-owned
+# metadata lines (project, status, kind, size, raised) are NOT searched: every item in a
+# drawer carries its project name, so searching for it would match the whole drawer and
+# read as a finding.
+grep_blocks(){                  # grep_blocks "<words>": block stream -> matching blocks; rc 1 none
+  awk -v words="$1" '
+    BEGIN { nw = split(tolower(words), W, /[ \t]+/) }
+    function flush(   t, i) {
+      if (b == "") return
+      t = tolower(txt)
+      for (i = 1; i <= nw; i++) if (W[i] != "" && index(t, W[i]) == 0) { b = ""; return }
+      printf "%s", b; m++; b = ""
+    }
+    /^## W-/ { flush(); b = $0 "\n"; txt = $0; hs = 0; next }
+    /^## /   { flush(); next }
+    {
+      if (b == "") next
+      b = b $0 "\n"
+      if (hs < 2) {
+        if ($0 == "") { if (hs == 1) hs = 2; next }
+        if ($0 ~ /^[a-z][a-z-]*:/) { hs = 1; if ($0 ~ /^(project|status|kind|size|raised):/) next; txt = txt "\n" $0; next }
+        hs = 2
+      }
+      txt = txt "\n" $0
+    }
+    END { flush(); exit (m > 0 ? 0 : 1) }
+  '
+}
+
+# The listing when --grep or --json is given. report() above stays the plain listing, so
+# neither flag can change what a bare `open-items` prints.
+list_ex(){                      # list_ex <label> <drawer...>
+  local label="$1"; shift
+  local w hits nd=0 searched=0 matched=0 objs="" sf k
+  case "$WANT" in "") sf=open ;; all) sf=all ;; *) sf="$WANT" ;; esac
+  for w in "$@"; do
+    is_drawer "$w" || continue
+    nd=$((nd+1))
+    hits="$(blocks_from "$w" "$WANT")" || continue
+    searched=$(( searched + $(printf '%s\n' "$hits" | count_headers) ))
+    if [ -n "$GREP" ]; then hits="$(printf '%s\n' "$hits" | grep_blocks "$GREP")" || continue; fi
+    k="$(printf '%s\n' "$hits" | count_headers)"; matched=$(( matched + k ))
+    if [ -n "$JSON" ]; then
+      objs="$objs$(printf '%s\n' "$hits" | json_blocks "$(name_of "$w")" "$(layout_of "$w")")"$'\n'
+    else
+      printf '%s\n\n' "$hits"      # the \n\n is load-bearing: see report(), D-20260922-A12
+    fi
+  done
+  if [ -n "$JSON" ]; then
+    printf '{"scope":%s,"status_filter":"%s","grep":%s,"drawers_searched":%s,"items_searched":%s,"count":%s,"items":[' \
+      "$(printf '%s' "$label" | json_str)" "$sf" "$([ -n "$GREP" ] && printf '%s' "$GREP" | json_str || printf null)" "$nd" "$searched" "$matched"
+    printf '%s' "${objs%$'\n'}" | awk 'NR > 1 { printf "," } { printf "\n%s", $0 }'
+    printf '\n]}\n'
+  fi
+  if [ "$matched" -gt 0 ]; then
+    if [ -n "$GREP" ]; then k="match(es) for \"$GREP\" in"; else k="item(s) listed from"; fi
+    [ -n "$JSON" ] || printf 'open-items: %s %s %s %s item(s) across %s drawer(s) (%s).\n' "$label:" "$matched" "$k" "$searched" "$nd" "status $sf"
+    return 0
+  fi
+  if [ -n "$GREP" ]; then
+    printf 'open-items: no match for "%s" in %s %s item(s) across %s drawer(s) (%s).\n' "$GREP" "$searched" "$sf" "$nd" "$label" >&2
+  else
+    printf 'open-items: nothing %s for %s: %s drawer(s) searched.\n' "$sf" "$label" "$nd" >&2
+  fi
+  [ "$nd" -gt 0 ] || printf 'open-items: no drawer for %s; drawers that exist: %s\n' "$label" "$(drawer_names)" >&2
+  [ -n "$GREP" ] && [ "$WANT" = "" ] && printf 'open-items: only OPEN items were searched; --closed adds parked, done and declined.\n' >&2
+  [ -n "$GREP" ] && [ "$label" != "every project" ] && printf 'open-items: only %s was searched; --all searches every drawer.\n' "$label" >&2
+  return 1
+}
+json_str(){ awk "$JSON_ESC_AWK"'{ s = s (NR > 1 ? "\n" : "") $0 } END { printf "%s", esc(s) }'; }
+list_or_report(){ if [ -n "$GREP$JSON" ]; then need_root; list_ex "$@"; else report "$@"; fi; }
+
+cmd_show(){                     # show <W-ID> [--project p]
+  local hit w id ref
+  split_args "$@"
+  [ "${#POS[@]}" -eq 1 ] || refuse "show: usage: open-items show <W-ID> [--project <name>] [--json]"
+  hit="$(resolve_item "${POS[0]}" "$PROJ" show)" || exit $?
+  IFS=$'\t' read -r w id ref <<<"$hit"
+  if [ -n "$JSON" ]; then block_text "$ref" "$id" | json_blocks "$(name_of "$w")" "$(layout_of "$w")"
+  else block_text "$ref" "$id"; printf 'open-items: %s in %s (%s)\n' "$id" "$(name_of "$w")" "${ref#legacy:}" >&2
+  fi
+}
+
+cmd_get(){                      # get <W-ID> <field> [--project p]
+  local hit w id ref k out rc
+  split_args "$@"
+  [ "${#POS[@]}" -eq 2 ] || refuse "get: usage: open-items get <W-ID> <field> [--project <name>]"
+  k="${POS[1]}"
+  [[ "$k" =~ ^[a-z][a-z-]*$ ]] || refuse "get: \"$k\" is not a field name"
+  hit="$(resolve_item "${POS[0]}" "$PROJ" get)" || exit $?
+  IFS=$'\t' read -r w id ref <<<"$hit"
+  case "$k" in
+    id)    printf '%s\n' "$id"; return 0 ;;
+    title) block_text "$ref" "$id" | sed -n '1s/^## [^ ]* -- //p'; return 0 ;;
+    file)  printf '%s\n' "${ref#legacy:}"; return 0 ;;
+  esac
+  # Header fields print every occurrence, one per line (holds-in repeats). body is the
+  # prose after the header. An ABSENT field is rc 1 and says so: an empty line on stdout
+  # would read the same as a field that is present and empty.
+  out="$(block_text "$ref" "$id" | awk -v k="$k" '
+    NR == 1 { next }
+    ph == 0 { if ($0 == "") next; ph = 1 }
+    ph == 1 && /^[a-z][a-z-]*:/ { f = $0; sub(/:.*/, "", f); have[f] = 1
+      if (k != "body" && f == k) { v = $0; sub(/^[a-z][a-z-]*:[ \t]*/, "", v); print v; hit = 1 }
+      next }
+    ph == 1 { ph = 2 }
+    ph == 2 && k == "body" { bl[++bn] = $0 }
+    END {
+      if (k == "body") { bs = 1; while (bs <= bn && bl[bs] == "") bs++; be = bn; while (be >= bs && bl[be] == "") be--
+        for (i = bs; i <= be; i++) print bl[i]; exit (be >= bs ? 0 : 1) }
+      if (!hit) { s = ""; for (f in have) s = s " " f; print "fields present:" s > "/dev/stderr" }
+      exit (hit ? 0 : 1)
+    }')"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf 'open-items: %s has no %s%s\n' "$id" "$k" "$([ "$k" = body ] && printf ' text' || printf ' field')" >&2
+    return 1
+  fi
+  printf '%s\n' "$out"
+}
+
+# supersede <old> <new>: the old item is DECLINED with `superseded-by:` and a dated note,
+# and the new one gets `supersedes:` (repeatable: one item can replace several). Both
+# IDs resolve across every drawer, so the two items may live in different projects; then
+# each pointer names the other project, and each drawer gets its own lock and its own
+# commit through the same finish_write as close and decline.
+unlock_drawer(){ [ -z "$LOCK" ] || rmdir "$LOCK/$$" "$LOCK" 2>/dev/null; trap - EXIT; LOCK=""; }
+cmd_supersede(){                # supersede <old> <new> [--project p]
+  local ho hn wo io fo wn in fn so sn po pn rc1=0 rc2=0 tn
+  split_args "$@"
+  [ "${#POS[@]}" -eq 2 ] || refuse "supersede: usage: open-items supersede <old W-ID> <new W-ID> [--project <name>]"
+  need_root
+  ho="$(resolve_item "${POS[0]}" "$PROJ" supersede)" || refuse "supersede: nothing was changed"
+  hn="$(resolve_item "${POS[1]}" "$PROJ" supersede)" || refuse "supersede: nothing was changed"
+  IFS=$'\t' read -r wo io fo <<<"$ho"; IFS=$'\t' read -r wn in fn <<<"$hn"
+  [ "$fo" != "$fn" ] || refuse "supersede: $io cannot supersede itself"
+  case "$fo$fn" in *legacy:*) refuse "supersede: a legacy OPEN.md drawer is read-only; nothing was changed" ;; esac
+  so="$(field_of "$fo" status)"; sn="$(field_of "$fn" status)"
+  case "${so:-open}" in open|parked) ;; *) refuse "supersede: $io is already ${so}; only an open or parked item can be superseded" ;; esac
+  [ "$sn" != declined ] || refuse "supersede: $in is declined, so it cannot replace anything"
+  po="$(name_of "$wo")"; pn="$(name_of "$wn")"
+  if [ "$wo" = "$wn" ]; then po=""; pn=""; fi
+  tn="$(title_of "$fn")"
+  lock_drawer "$wo"
+  set_field "$fo" status declined
+  add_field "$fo" superseded-by "$in${pn:+ (project $pn)}"
+  printf '\n**DECLINED %s.** Superseded by %s%s -- %s\n' "$(today)" "$in" "${pn:+ in $pn}" "$tn" >> "$fo"
+  mkdir -p "$wo/items/closed"; command mv "$fo" "$wo/items/closed/$io.md"; fo="$wo/items/closed/$io.md"
+  if [ "$wo" != "$wn" ]; then
+    printf '%s -> declined, superseded by %s (%s)\n' "$io" "$in" "$pn"
+    finish_write "$wo" "open-items: supersede $io by $in ($pn) -- $(title_of "$fo")"; rc1=$?
+    unlock_drawer
+    lock_drawer "$wn"
+  fi
+  add_field "$fn" supersedes "$io${po:+ (project $po)}"
+  if [ "$wo" = "$wn" ]; then
+    printf '%s -> declined, superseded by %s\n' "$io" "$in"
+    finish_write "$wo" "open-items: supersede $io by $in -- $(title_of "$fo")"; rc1=$?
+  else
+    printf '%s <- supersedes %s (%s)\n' "$in" "$io" "$po"
+    finish_write "$wn" "open-items: $in supersedes $io ($po) -- $tn"; rc2=$?
+  fi
+  [ "$rc1" -eq 0 ] && [ "$rc2" -eq 0 ] || exit 3
+}
+
 # ---------------------------------------------------------------- dispatch ----
 WANT=""
+JSON=""; GREP=""
 ARGS=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --closed) WANT="all"; shift ;;
+    --json) JSON=1; shift ;;
+    --grep) GREP="${2:-}"; [ -n "$GREP" ] || refuse "--grep needs the words to look for (quote a phrase)"; shift 2 ;;
     --status) WANT="${2:-}"; valid_status "$WANT" || refuse "--status must be one of: $STATUSES"; shift 2 ;;
     *) ARGS+=("$1"); shift ;;
   esac
@@ -708,6 +1035,9 @@ case "${1:-}" in
   init)     cmd_init; exit $? ;;
   regen)    cmd_regen; exit $? ;;
   migrate)  shift; cmd_migrate "$@"; exit $? ;;
+  show)     shift; need_root; cmd_show "$@"; exit $? ;;
+  get)      shift; need_root; cmd_get "$@"; exit $? ;;
+  supersede) shift; cmd_supersede "$@"; exit $? ;;
 esac
 
 [ -d "$PROJECTS" ] || [ "${1:-}" = --session ] \
@@ -759,17 +1089,17 @@ case "${1:-}" in
   --all)
     files=(); while IFS= read -r w; do [ -n "$w" ] && files+=("$w"); done < <(all_drawers)
     [ "${#files[@]}" -gt 0 ] || refuse "no drawers under $PROJECTS/*/memory/WORK/ -- nothing could have been searched"
-    report "every project" "${files[@]}" ;;
+    list_or_report "every project" "${files[@]}" ;;
   --project)
     [ -n "${2:-}" ] || { printf 'usage: open-items --project <name>\n' >&2; exit 2; }
     w="$(drawer_named "$2")" || w=""
-    report "$2" "${w:-/nonexistent}" ;;
+    list_or_report "$2" "${w:-/nonexistent}" ;;
   '')
     repo="$(current_repo)" || refuse "not inside a git repo, so there is no current project -- use --project <name> or --all"
     w="$(work_for "$repo")"
     [ -d "$(dirname "$w")" ] \
       || refuse "no harness memory dir for $repo at $(dirname "$w") -- the key may be wrong, or this repo has never had a session"
     if is_drawer "$w"; then label="$(name_of "$w")"; else label="$(basename "$repo")"; fi
-    report "$label" "$w" ;;
+    list_or_report "$label" "$w" ;;
   *) printf 'open-items: unknown arg "%s" (try --help)\n' "$1" >&2; exit 2 ;;
 esac
