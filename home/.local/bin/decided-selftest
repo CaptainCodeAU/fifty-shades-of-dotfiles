@@ -9,8 +9,13 @@
 
 set -uo pipefail
 
-DECIDED="${DECIDED:-$(command -v decided)}"
+# The SIBLING copy by default, not the one on PATH (2026-09-23). A worktree's selftest used
+# to resolve `decided` from PATH, which is the stowed master copy, so it tested master and
+# reported master's count as the worktree's. Nothing in the output said which one ran, so
+# the line below names the binary under test on every run.
+DECIDED="${DECIDED:-$(dirname "$0")/decided}"
 [ -x "$DECIDED" ] || { echo "decided-selftest: no decided binary ($DECIDED) -- INVALID TRIAL" >&2; exit 2; }
+echo "decided-selftest: testing $DECIDED"
 BIN="$(cd "$(dirname "$DECIDED")" && pwd -P)"; export PATH="$BIN:$PATH"
 command -v pj-id >/dev/null || { echo "decided-selftest: pj-id not on PATH -- INVALID TRIAL" >&2; exit 2; }
 
@@ -194,6 +199,44 @@ want "  reports the RESOLVED id, not the typed one" "withdrawn: D-19990105-A03" 
 wantnot "  and never reports the bare typed id" "withdrawn: D-19990105-03 " "$OUT"
 want "  the commit message carries the resolved id" "withdraw D-19990105-A03" "$(git -C "$DC" log -1 --format=%s)"
 want "  the block really is withdrawn" "status: withdrawn" "$(cat "$G/D-19990105-A03-a.md")"
+
+echo "-- --status and --since filters (W-20260923-A21)"
+# Their own home, run from outside any repo, so the pool is exactly these four and no
+# count above moves. One block per case the filter has to tell apart: a standing block,
+# a withdrawn one, a superseded one whose status line carries prose after the word (as a
+# real block does), and one with NO decided: line, which must fall back to its ID's date.
+FH="$T/filterhome"; mkdir -p "$FH"
+printf '## D-20260101-A01 -- Filter standing\n\ntopic: papa quebec\ndecided: 2026-01-01\nstatus: standing\n' > "$FH/D-20260101-A01-s.md"
+printf '## D-20260301-A02 -- Filter withdrawn\n\ntopic: papa romeo\ndecided: 2026-03-01\nstatus: withdrawn\nwithdrawn: 2026-03-02 -- probe\n' > "$FH/D-20260301-A02-w.md"
+printf '## D-20260401-A03 -- Filter superseded\n\ntopic: papa\ndecided: 2026-04-01\nstatus: superseded (by something later, with prose)\n' > "$FH/D-20260401-A03-x.md"
+printf '## D-20260501-A04 -- Filter undated\n\ntopic: papa xray\nstatus: standing\n' > "$FH/D-20260501-A04-u.md"
+frun(){ OUT="$( (builtin cd "$T" && DECIDED_GLOBAL_DIR="$FH" "$DECIDED" "$@") 2>&1)"; RC=$?; }
+# CONTROL FIRST: unfiltered, the same word reaches all four. Without this, a filter arm
+# that shows one block could be a search that only ever finds one.
+frun papa;                      wantrc "control: unfiltered, papa hits" 0 "$RC"; want "  all four blocks in the pool" "4 decision(s) searched" "$OUT"; want "  including the withdrawn one" "Filter withdrawn" "$OUT"
+frun --status withdrawn;        wantrc "--status alone lists every block with that status" 0 "$RC"; want "  the withdrawn block" "## D-20260301-A02 -- Filter withdrawn" "$OUT"; wantnot "  and not the standing one" "Filter standing" "$OUT"
+want "  denominator states both sides of the filter" "4 decision(s) in scope (machine-wide 4); 1 passed the filter [status withdrawn]" "$OUT"
+frun --status withdrawn papa;   wantrc "--status combines with words" 0 "$RC"; want "  the withdrawn block" "Filter withdrawn" "$OUT"; wantnot "  and not the others" "Filter superseded" "$OUT"
+frun papa --status standing;    wantrc "the flag may follow the words" 0 "$RC"; want "  standing block" "Filter standing" "$OUT"; want "  the undated standing block" "Filter undated" "$OUT"; wantnot "  and not withdrawn" "Filter withdrawn" "$OUT"
+frun --status superseded;       wantrc "status is the FIRST word, prose after it is ignored" 0 "$RC"; want "  the superseded block" "Filter superseded" "$OUT"
+frun --status withdrawn quebec; wantrc "NO-MATCH, words miss inside the filter" 1 "$RC"; want "  states the denominator" "4 decision(s) in scope (machine-wide 4); 1 passed the filter [status withdrawn] and were searched" "$OUT"; want "  and says a miss is not not-decided" 'NOT the same as "not decided"' "$OUT"; wantnot "  and does not blame the filter" "FILTER passed nothing" "$OUT"
+frun --status deferred papa;    wantrc "NO-MATCH, the filter itself passes nothing" 1 "$RC"; want "  states the denominator" "4 decision(s) in scope (machine-wide 4); 0 passed the filter [status deferred]" "$OUT"; want "  and says the filter emptied the pool" "FILTER passed nothing" "$OUT"
+frun --since 2026-03-01;        wantrc "--since keeps blocks on or after the date" 0 "$RC"; want "  the boundary day is included" "Filter withdrawn" "$OUT"; want "  a later one" "Filter superseded" "$OUT"; wantnot "  and not the earlier one" "Filter standing" "$OUT"
+want "  a block with no decided: line falls back to its ID date" "Filter undated" "$OUT"; want "  3 passed" "3 passed the filter [decided since 2026-03-01]" "$OUT"
+frun --since 2026-04-15 --status standing; wantrc "--since and --status combine" 0 "$RC"; want "  only the block passing both" "Filter undated" "$OUT"; wantnot "  not the superseded one" "Filter superseded" "$OUT"; want "  both named in the denominator" "[status standing, decided since 2026-04-15]" "$OUT"
+frun --since 2027-01-01 papa;   wantrc "NO-MATCH, --since past every block" 1 "$RC"; want "  states the denominator" "4 decision(s) in scope (machine-wide 4); 0 passed the filter [decided since 2027-01-01]" "$OUT"; want "  and blames the filter" "FILTER passed nothing" "$OUT"
+frun --list --status withdrawn; wantrc "--list filters too" 0 "$RC"; want "  lists the withdrawn title" "D-20260301-A02 -- Filter withdrawn   [machine-wide]" "$OUT"; wantnot "  and no other" "Filter standing" "$OUT"
+frun --list --since 2027-01-01; wantrc "NO-MATCH --list: an emptied list exits 1" 1 "$RC"; want "  with the denominator" "0 passed the filter" "$OUT"; want "  and says it is not no-decisions" 'NOT "no decisions"' "$OUT"
+frun --status bogus;            wantrc "an unknown status REFUSES" 2 "$RC"
+frun --status;                  wantrc "--status with no value REFUSES" 2 "$RC"
+frun --since 2026/01/01;        wantrc "a malformed --since REFUSES" 2 "$RC"
+frun --status withdrawn D-20260301-A02; wantrc "a filter on an exact ID lookup REFUSES" 2 "$RC"
+frun --homes --status standing; wantrc "a filter on --homes REFUSES" 2 "$RC"
+# --all reaches every home with the filter applied: the two withdrawals made above.
+run "$R1" --all --list --status withdrawn; wantrc "--all --list --status reaches every home" 0 "$RC"; want "  the withdrawn machine-wide block" "D-$TODAY-A01 -- Kilo ruling" "$OUT"; want "  the legacy-ID withdrawal" "D-19990105-A03" "$OUT"; wantnot "  and not a standing block from another drawer" "Other drawer" "$OUT"
+# add has its OWN --status; the filter parser must leave it alone.
+frun add "Deferred probe" --topic dp --holds-in d --global --status deferred; wantrc "add keeps its own --status (written, outside dot-claude)" 3 "$RC"
+want "  and the block carries it" "status: deferred" "$(cat "$FH"/D-"$TODAY"-*-deferred-probe.md 2>/dev/null)"
 
 printf '\ndecided-selftest: %s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

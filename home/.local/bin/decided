@@ -7,6 +7,10 @@
 #                             where. The pre-2026-09-21 D-YYYYMMDD-NN resolves too.
 #   decided --all <words...>  search every home on the machine, not just this project's
 #   decided --list [--all]    titles only, with the home each block sits in
+#   decided --status S        only blocks whose status is S (standing | deferred |
+#                             superseded | withdrawn); with no words, every such block
+#   decided --since YYYY-MM-DD  only blocks whose `decided:` date is on or after it
+#                             (both filters combine with words, --all and --list)
 #   decided --homes           the homes this call would search, and why
 #   decided add "title" --topic "words" --holds-in "<doc>" (--global | --project)
 #                             [--body "..."] [--ruled-by "..."] [--status standing]
@@ -41,7 +45,7 @@ DOTCLAUDE="${OPEN_ITEMS_DOTCLAUDE:-$HOME/.claude}"
 
 die_refused(){ printf 'decided: REFUSED -- %s\n' "$1" >&2; exit 2; }
 loud(){ printf 'decided: %s\n' "$1" >&2; }
-usage(){ sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; }
+usage(){ sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; }
 today(){ date +%Y-%m-%d; }
 realdir(){ (cd "$1" 2>/dev/null && pwd -P); }
 tilde(){ printf '%s' "${1/#$HOME/\~}"; }
@@ -131,6 +135,46 @@ blocks_of(){
 }
 count_in(){ blocks_of "$1" "$2" | grep -c '^## D-' 2>/dev/null || true; }
 
+# ---------------------------------------------------------------- filters ----
+# --status / --since (W-20260923-A21). A filter is applied BEFORE the word search and
+# the denominator counts both sides of it: "12 in scope, 2 passed". A filtered miss that
+# only said "12 searched" would read the same whether the words missed or the filter
+# emptied the pool, and those are different answers.
+F_STATUS=""; F_SINCE=""
+filtering(){ [ -n "$F_STATUS$F_SINCE" ]; }
+filter_desc(){
+  local d=""
+  [ -n "$F_STATUS" ] && d="status $F_STATUS"
+  [ -n "$F_SINCE" ] && d="${d:+$d, }decided since $F_SINCE"
+  printf '%s' "$d"
+}
+# Status is the FIRST word after `status:` (a real block reads "superseded (the split
+# ...)"). The date is the `decided:` line; a block without one falls back to the date in
+# its ID, which is the day pj-id allocated it. A block with neither never passes --since.
+filter_stream(){
+  awk -v st="$F_STATUS" -v since="${F_SINCE//-/}" '
+    function emit(b,   n, i, line, s, d, lines) {
+      if (b == "") return
+      s = ""; d = ""
+      n = split(b, lines, "\n")
+      for (i = 1; i <= n; i++) {
+        line = lines[i]
+        if (s == "" && line ~ /^status:/) { sub(/^status:[ \t]*/, "", line); split(line, w, /[ \t]+/); s = w[1] }
+        else if (d == "" && line ~ /^decided:/) { sub(/^decided:[ \t]*/, "", line); d = substr(line, 1, 10); gsub(/-/, "", d) }
+      }
+      if (d !~ /^[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]$/ && match(lines[1], /D-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-/)) d = substr(lines[1], RSTART + 2, 8)
+      if (st != "" && s != st) return
+      if (since != "" && (d !~ /^[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]$/ || d < since)) return
+      printf "%s", b
+    }
+    /^## D-/ { emit(block); block = $0 "\n"; next }
+    { if (block != "") block = block $0 "\n" }
+    END { emit(block) }
+  '
+}
+fblocks_of(){ if filtering; then blocks_of "$1" "$2" | filter_stream; else blocks_of "$1" "$2"; fi; }
+fcount_in(){ fblocks_of "$1" "$2" | grep -c '^## D-' 2>/dev/null || true; }
+
 # ---------------------------------------------------------------- search ----
 # One awk pass per home. BSD awk: no \x escapes, so no record separator tricks.
 # <qre>, when non-empty, is a SECOND header pattern tried after an exact ID miss: the P8a
@@ -156,13 +200,21 @@ search_stream(){  # search_stream <mode:words|id> <query> [legacy-regex] -> hits
   '
 }
 
-denominator(){    # sets DEN="N decision(s) searched (label a, label b)" and TOTAL
-  local h label kind path n parts="" ; TOTAL=0
+denominator(){    # sets DEN="N decision(s) searched (label a, label b)", TOTAL and PASSED
+  local h label kind path n m parts="" fparts="" ; TOTAL=0; PASSED=0
   for h in "${HOMES[@]}"; do
     IFS=$'\t' read -r label kind path _ <<<"$h"
-    case "$kind" in folder|file) n="$(count_in "$path" "$kind")"; TOTAL=$((TOTAL+n)); parts="$parts, $label $n" ;; esac
+    case "$kind" in folder|file)
+      n="$(count_in "$path" "$kind")"; TOTAL=$((TOTAL+n)); parts="$parts, $label $n"
+      if filtering; then m="$(fcount_in "$path" "$kind")"; PASSED=$((PASSED+m)); fparts="$fparts, $label $m"; fi ;;
+    esac
   done
-  DEN="$(printf '%s decision(s) searched (%s)' "$TOTAL" "${parts#, }")"
+  if filtering; then
+    DEN="$(printf '%s decision(s) in scope (%s); %s passed the filter [%s] and were searched (%s)' "$TOTAL" "${parts#, }" "$PASSED" "$(filter_desc)" "${fparts#, }")"
+  else
+    PASSED=$TOTAL
+    DEN="$(printf '%s decision(s) searched (%s)' "$TOTAL" "${parts#, }")"
+  fi
 }
 readable_homes(){ local h kind; for h in "${HOMES[@]}"; do IFS=$'\t' read -r _ kind _ _ <<<"$h"; case "$kind" in folder|file) return 0;; esac; done; return 1; }
 print_home_notes(){
@@ -195,9 +247,17 @@ run_search(){     # run_search <all> <mode> <query>
   for h in "${HOMES[@]}"; do
     IFS=$'\t' read -r label kind path _ <<<"$h"
     case "$kind" in folder|file) ;; *) continue ;; esac
-    hits="$(blocks_of "$path" "$kind" | search_stream "$mode" "$q" "$qre")" && { printf '%s' "$hits"; printf '  [in %s]\n\n' "$label"; rc=0; }
+    hits="$(fblocks_of "$path" "$kind" | search_stream "$mode" "$q" "$qre")" && { printf '%s' "$hits"; printf '  [in %s]\n\n' "$label"; rc=0; }
   done
   if [ "$rc" -eq 0 ]; then printf 'decided: matched in %s.\n' "$den"; print_home_notes; return 0; fi
+  if filtering; then
+    # Say WHICH side emptied: the filter, or the words inside what passed it.
+    printf 'decided: NO decision recorded matching: %s [%s]\n' "${q:-(any words)}" "$(filter_desc)" >&2
+    printf 'decided: %s -- and a miss is NOT the same as "not decided".\n' "$den" >&2
+    [ "$PASSED" -eq 0 ] && printf 'decided: the FILTER passed nothing, so no words were tested; drop or widen it before reading this as an answer.\n' >&2
+    print_home_notes
+    return 1
+  fi
   # an ID not in scope: look everywhere once and say where it is, so a citation never dangles
   if [ "$mode" = id ] && [ "$all" -eq 0 ]; then
     HOMES=(); NOTES=(); build_scope 1
@@ -222,10 +282,15 @@ list_all(){       # list_all <all>
   for h in "${HOMES[@]}"; do
     IFS=$'\t' read -r label kind path _ <<<"$h"
     case "$kind" in folder|file) ;; *) continue ;; esac
-    blocks_of "$path" "$kind" | grep '^## D-' | sed "s/^## /  /; s/\$/   [$label]/"
+    fblocks_of "$path" "$kind" | grep '^## D-' | sed "s/^## /  /; s/\$/   [$label]/"
   done
   denominator; printf '\ndecided: %s.\n' "$DEN"
   print_home_notes
+  if filtering && [ "$PASSED" -eq 0 ]; then
+    printf 'decided: the filter [%s] passed nothing; a filtered empty list is NOT "no decisions".\n' "$(filter_desc)" >&2
+    return 1
+  fi
+  return 0
 }
 show_homes(){
   local h label kind path note
@@ -377,17 +442,42 @@ cmd_withdraw(){
 # ---------------------------------------------------------------- main ----
 ALL=0
 case "${1:-}" in
-  --selftest) exec decided-selftest ;;
+  --selftest) DECIDED="$0" exec "$(dirname "$0")/decided-selftest" ;;   # this copy, not PATH's
   --help|-h|"") usage; exit 0 ;;
 esac
 [ "${1:-}" = --all ] && { ALL=1; shift; }
+# add and withdraw keep their own flags (add has its own --status); pull the query
+# filters out of every other call, wherever they sit on the line.
 case "${1:-}" in
-  --list) shift; [ "${1:-}" = --all ] && ALL=1; list_all "$ALL"; exit 0 ;;
+  add|withdraw) ;;
+  *)
+    REST=()
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --status)
+          F_STATUS="${2:-}"; shift 2 2>/dev/null || shift
+          case "$F_STATUS" in standing|deferred|superseded|withdrawn) ;; *) die_refused "--status must be standing, deferred, superseded or withdrawn (got '$F_STATUS')" ;; esac ;;
+        --since)
+          F_SINCE="${2:-}"; shift 2 2>/dev/null || shift
+          case "$F_SINCE" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;; *) die_refused "--since takes YYYY-MM-DD (got '$F_SINCE')" ;; esac ;;
+        *) REST+=("$1"); shift ;;
+      esac
+    done
+    set -- ${REST[@]+"${REST[@]}"}
+    if filtering; then
+      case "${1:-}" in
+        --homes) die_refused "--status and --since filter a search or --list, not --homes" ;;
+        D-[0-9]*) [ $# -eq 1 ] && die_refused "--status and --since filter a search or --list; an ID lookup is exact, drop the filter" ;;
+      esac
+    fi ;;
+esac
+case "${1:-}" in
+  --list) shift; [ "${1:-}" = --all ] && ALL=1; list_all "$ALL"; exit $? ;;
   --homes) shift; [ "${1:-}" = --all ] && ALL=1; show_homes "$ALL"; exit 0 ;;
   --all) ALL=1; shift ;;
   add) shift; cmd_add "$@"; exit $? ;;
   withdraw) shift; cmd_withdraw "$@"; exit $? ;;
-  "") usage; exit 0 ;;
+  "") filtering || { usage; exit 0; } ;;   # a filter alone lists every block that passes it
 esac
 if [ $# -eq 1 ]; then case "$1" in
   D-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[A-Z][0-9][0-9]) run_search "$ALL" id "$1"; exit $? ;;

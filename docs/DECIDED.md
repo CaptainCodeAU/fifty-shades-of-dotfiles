@@ -50,6 +50,30 @@ says so. An ID given on its own (`decided D-20260919-03`) matches on the header 
 when it is not in the default scope the tool looks everywhere once and says where it found
 it, so a citation never dangles.
 
+## Filters: `--status` and `--since` (W-20260923-A21, 2026-09-23)
+
+`--status standing|deferred|superseded|withdrawn` keeps only blocks whose `status:` line
+starts with that word (a real block reads `superseded (the split ...)`, so prose after
+the word is ignored). `--since YYYY-MM-DD` keeps blocks whose `decided:` date is on or
+after it; a block with no `decided:` line falls back to the date in its ID. Both combine
+with each other, with words, with `--all` and with `--list`, and may sit anywhere on the
+line. A filter with no words lists every block that passes it in full.
+
+A filter is applied BEFORE the words, and the denominator counts both sides of it:
+
+```
+decided: 67 decision(s) in scope (machine-wide 25, project 40, legacy file 2);
+         2 passed the filter [status withdrawn] and were searched (...)
+```
+
+A filtered miss that only said "67 searched" would read the same whether the words
+missed or the filter emptied the pool. When the filter passed nothing, the miss says so
+in its own line ("the FILTER passed nothing, so no words were tested"), and a filtered
+`--list` that comes out empty exits 1 with the same warning. Refused (exit 2): an
+unknown status, a malformed date, a filter with no value, and a filter on an exact ID
+lookup or on `--homes`. `decided add` keeps its own `--status`; the filter parser does
+not touch `add` or `withdraw`.
+
 A declared store the tool cannot read (Network_Plan's per-box ledgers, a JSONL file) is
 named as "declared store in an unsupported format, not searched". It is never silently
 skipped and no parser for other projects' formats lives here; those projects keep their
@@ -101,4 +125,16 @@ args, empty scope: none of these is "no decisions"), `3` written but not committ
 dot-claude with the machine-wide home and two drawers, a legacy file): the original six
 arms, each scope rule above, the unsupported-format line with its control, an ID found
 outside scope, `--all` counting every home, outside-a-repo, `add` committing by explicit
-path and refusing without its required fields, `withdraw`.
+path and refusing without its required fields, `withdraw`, and the `--status`/`--since`
+filters (a control that reaches all four fixture blocks unfiltered, each filter, both
+combined, and three no-match arms that must state the denominator).
+
+The selftest tests the `decided` BESIDE it, not the one on PATH, and prints the path of
+the binary under test on its first line. Until 2026-09-23 it used `command -v decided`,
+so a worktree's selftest silently tested the stowed master copy and reported master's
+count. `decided --selftest` hands over its own path the same way.
+
+It never deletes its fixture folder under `$TMPDIR`: inside the Claude Bash sandbox a
+Trash-routed `rm` fails there and leaves the folder (measured 2026-09-23), so a teardown
+would be a step that quietly does nothing. The one mid-run removal it needs is a `mv`,
+verified with `test -e` (W-20260921-A33).
