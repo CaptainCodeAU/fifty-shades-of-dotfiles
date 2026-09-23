@@ -1389,12 +1389,14 @@ fi
 pjrun --projects
 wanteq "TWIN plain --projects is byte-identical to before (rc 0 + stdout)" \
   "0|$(printf 'leg\t%s\tlegacy\n%s\t%s\titems\ninbox\t%s\titems\n\nopen-items: 3 drawer(s), 5 item(s) total.' "$PJLW/OPEN.md" "$PJN" "$PJH/OPEN.md" "$DC/pj-inbox/OPEN.md")" "$RC|$OUT"
-# --where and --session cannot honour --json: they say so on stderr and change nothing else.
-PJD="$PJL" pjrun --where --json; PJW_J="$RC|$OUT"
-want   "--where --json says --json has no effect, on stderr" "--json has no effect with --where" "$ERR"
+# --where and --session cannot honour --json. --where REFUSES it since A56 (it said "no
+# effect" until then; section FL holds the whole table). --session only notes it.
+PJD="$PJL" pjrun --where --json
+wanteq "--where --json is REFUSED, rc 2, nothing on stdout (A56; a note until then)" "2|" "$RC|$OUT"
+want   "  and names --json" "--where does not take --json" "$ERR"
 PJD="$PJL" pjrun --where
-wanteq "  and its exit code and stdout are what --where alone gives" "$RC|$OUT" "$PJW_J"
-wantnot "TWIN --where without --json prints no such note" "no effect" "$ERR"
+wanteq "TWIN --where alone exits 0 and prints the drawer" "0|$PJLW/OPEN.md" "$RC|$OUT"
+wantnot "  and says nothing about --json" "--json" "$ERR"
 PJD="$PJL" pjrun --session --json
 wanteq "--session --json still exits 0 (the start card depends on it)" "0" "$RC"
 want   "  and says --json has no effect, on stderr" "--json has no effect with --session" "$ERR"
@@ -1402,6 +1404,107 @@ PJD="$ROOT" pjrun --session --json
 wanteq "  outside any git repo --session --json still exits 0" "0" "$RC"
 want   "  and still says so" "--json has no effect with --session" "$ERR"
 unset PJD
+
+printf '\nFL a global flag a mode cannot use is refused or named, never dropped (W-20260923-A56)\n'
+# THE BUG: dispatch takes --json --grep --closed --status --verbose from anywhere on the
+# line, and every mode that does not read one dropped it without a word: `get --json` printed
+# plain text, `--projects --grep x` listed every drawer, `close --json` closed and said
+# nothing. One arm per mode, each asserting the exact outcome the tool's table promises:
+# REFUSED (rc 2, names the mode and the flag, nothing written) or a note on stderr.
+mk_dotclaude
+export PJ_STATE_DIR="$D/state"   # seen and checks-run write here, never ~/.local/state
+runw "$ZETA" init
+runw "$ZETA" add "fl subject" --done-when x
+wanteq "  CONTROL: add with no global flag writes (rc 0), so a refusal below is the flag's" "0" "$RC"
+FL_ID="$(find "$ZW/items/open" -name 'W-*.md' 2>/dev/null | head -1)"; FL_ID="$(basename "${FL_ID:-none}" .md)"
+FL_C0="$(git -C "$DC" rev-list --count HEAD 2>/dev/null)"
+FL_F0="$(find "$ZW/items" -name 'W-*.md' 2>/dev/null | wc -l | tr -d ' ')"
+flk(){ OUT="$(cd "$ZETA" 2>/dev/null && OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" CLAUDE_CODE_SESSION_ID=sess-test CLAUDE_SESSION_ID=sess-test perl -e 'alarm 20; exec @ARGV' "$TOOL" "$@" 2>"$D/flerr" </dev/null)"; RC=$?; ERR="$(cat "$D/flerr")"; return 0; }
+# REFUSED: one per mode that reads no --json (every write verb included), plus a filter on
+# each mode that is not a listing. "<mode> does not take --<flag>" is the refusal's text.
+while IFS='|' read -r FL_MODE FL_FLAG FL_ARGS; do
+  [ -n "$FL_MODE" ] || continue
+  eval "set -- $FL_ARGS"
+  flk "$@"
+  wanteq "$FL_MODE ... $FL_FLAG is REFUSED (rc 2) and prints nothing on stdout" "2|" "$RC|$OUT"
+  want   "  and names $FL_MODE and $FL_FLAG" "$FL_MODE does not take $FL_FLAG" "$ERR"
+done <<EOF
+--projects|--grep|--projects --grep words
+--where|--status|--where --status open
+show|--closed|show $FL_ID --closed
+get|--json|get $FL_ID title --json
+seen|--json|seen $FL_ID --json
+checks-run|--json|checks-run --json
+add|--json|add 'fl refused' --done-when x --json
+close|--json|close $FL_ID --json
+decline|--json|decline $FL_ID --json
+park|--json|park $FL_ID --json
+set|--json|set $FL_ID next 'fl value' --json
+init|--json|init --json
+regen|--closed|regen --closed
+migrate|--json|migrate --dry-run --json
+supersede|--json|supersede $FL_ID $FL_ID --json
+watch|--json|watch $FL_ID zeta --json
+check|--json|check $FL_ID zeta 'fl check' --json
+tick|--json|tick $FL_ID zeta --json
+pass|--json|pass $FL_ID zeta --json
+move|--json|move $FL_ID --to zeta --why x --json
+route|--json|route $FL_ID --to zeta --json
+EOF
+# Checked BEFORE reopen runs: a reopen that slipped through would hide a close that did.
+wanteq "  close, decline and park left the subject open" "open" "$(sed -n 's/^status: //p' "$ZW/items/open/$FL_ID.md" 2>/dev/null)"
+flk reopen "$FL_ID" --grep words
+wanteq "reopen ... --grep is REFUSED (rc 2) and prints nothing on stdout" "2|" "$RC|$OUT"
+want   "  and names reopen and --grep" "reopen does not take --grep" "$ERR"
+wanteq "  none of the refusals committed or wrote an item (commits, files)" "$FL_C0|$FL_F0" \
+       "$(git -C "$DC" rev-list --count HEAD 2>/dev/null)|$(find "$ZW/items" -name 'W-*.md' 2>/dev/null | wc -l | tr -d ' ')"
+# NOTED: --verbose only adds stderr, and --session must exit 0 on every path, so these run
+# as before and name the flag. Each is twinned with the same call without it.
+while IFS='|' read -r FL_MODE FL_FLAG FL_LABEL FL_ARGS; do
+  [ -n "$FL_MODE" ] || continue
+  eval "set -- $FL_ARGS"
+  flk "$@"; FL_WITH="$RC|$OUT"
+  want   "$FL_MODE ... $FL_FLAG names the flag as having no effect" "$FL_FLAG has no effect with $FL_LABEL" "$ERR"
+  set -- $(printf '%s\n' "$@" | grep -vx -- "$FL_FLAG")
+  flk "$@"
+  wanteq "  and its rc and stdout equal the same call without $FL_FLAG" "$RC|$OUT" "$FL_WITH"
+  wantnot "  TWIN without $FL_FLAG: no such note" "has no effect" "$ERR"
+done <<EOF
+(listing)|--verbose|the listing|--verbose
+--all|--verbose|--all|--all --verbose
+--project|--verbose|--project|--project zeta --verbose
+--session|--closed|--session|--session --closed
+--help|--json|--help|--help --json
+regen|--verbose|regen|regen --verbose
+EOF
+# --selftest execs the selftest beside the tool; a stub stands in, so this does not recurse.
+FLB="$D/flbin"; mkdir -p "$FLB"; cp "$TOOL" "$FLB/open-items"
+printf '#!/bin/sh\necho stub-selftest-ran\n' > "$FLB/open-items-selftest"; chmod +x "$FLB/open-items" "$FLB/open-items-selftest"
+OUT="$("$FLB/open-items" --selftest --json 2>"$D/flerr")"; RC=$?; ERR="$(cat "$D/flerr")"
+wanteq "--selftest --json still runs the selftest (the stub), rc 0" "0|stub-selftest-ran" "$RC|$OUT"
+want   "  and names --json as having no effect" "--json has no effect with --selftest" "$ERR"
+# HONOURED stays honoured: the table must not refuse what a mode reads.
+flk show "$FL_ID" --json
+wanteq "TWIN show --json is honoured (rc 0, a JSON object with the id)" "0|1" "$RC|$(printf '%s' "$OUT" | grep -c "\"id\":\"$FL_ID\"")"
+flk --project zeta --grep subject --closed
+wanteq "TWIN --project with --grep and --closed is honoured (rc 0, the item found, no note)" "0|1|0" \
+       "$RC|$(printf '%s' "$OUT" | grep -c 'fl subject')|$(printf '%s' "$ERR" | grep -c 'no effect\|does not take')"
+# PREVENTIVE: every mode in dispatch has a row in the table, so a new mode cannot join
+# without a decision about each flag. Read from the tool's own source.
+FL_MISS="$(awk '
+  /^flag_row\(\)/ { inrow = 1 } inrow && /^}/ { inrow = 0 }
+  inrow { rows = rows " " $0 }
+  /^# -+ dispatch -+$/ { d = 1 }
+  d && /^  [^ #*][^ ]*\)/ { m = $1; sub(/\).*/, "", m); n = split(m, a, "|")
+    for (i = 1; i <= n; i++) mode[a[i]] = 1 }
+  END { gsub(/[()|]/, " ", rows)
+    for (k in mode) if (index(rows " ", " " k " ") == 0) printf "%s ", k }' "$TOOL")"
+FL_NMODES="$(awk '/^# -+ dispatch -+$/ { d = 1 } d && /^  [^ #*][^ ]*\)/ { m = $1; sub(/\).*/, "", m); n += split(m, a, "|") } END { print n + 0 }' "$TOOL")"
+# 29 modes on 2026-09-24 (23 in the first case, 6 in the second); a floor, not a pin, so a
+# new mode does not break the control, and an empty read (0) cannot pass the arm below.
+wanteq "  CONTROL: the dispatch reader finds at least 25 modes (found ${FL_NMODES:-0})" "1" "$([ "${FL_NMODES:-0}" -ge 25 ] && echo 1)"
+wanteq "every dispatch mode has a row in flag_row (missing: none)" "" "$FL_MISS"
+unset PJ_STATE_DIR
 
 printf '\nU  IDs unique across every drawer, claimed machine-wide (W-20260923-A22, A25; D-20260923-A10)\n'
 # THE BUG: `add` passed only its OWN drawer to pj-id, so a project minted an ID another
