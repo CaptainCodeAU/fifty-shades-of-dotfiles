@@ -368,7 +368,10 @@ cmd_add(){
   # is a session sitting still while the next person assumes the machine is busy.
   local tries=0
   while :; do
-    id="$(pj-id next D "${stores[@]}")" || exit 2
+    # `claim`, not `next` (D-20260923-A10): the ID is claimed in the machine-wide claim
+    # folder first, so a --global and a --project add at the same instant, or an add here
+    # and one in another project, cannot both get it. pj-id refuses by name on its own.
+    id="$(pj-id claim D "${stores[@]}")" || exit 2
     f="$home/$id-$(slug "$title").md"
     ( set -C; : > "$f" ) 2>/dev/null && break
     if [ ! -e "$f" ]; then
@@ -376,7 +379,7 @@ cmd_add(){
     fi
     tries=$((tries + 1))
     if [ "$tries" -ge 50 ]; then
-      die_refused "add: gave up after $tries id attempts, every one colliding under $(tilde "$home"). That should be impossible -- check pj-id next. Nothing was changed."
+      die_refused "add: gave up after $tries id attempts, every one colliding under $(tilde "$home"). That should be impossible -- check pj-id claim. Nothing was changed."
     fi
   done
   {

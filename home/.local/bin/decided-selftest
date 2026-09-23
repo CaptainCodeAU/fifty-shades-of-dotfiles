@@ -77,6 +77,9 @@ git -C "$DC" add -A >/dev/null && git -C "$DC" commit -q -m fixture
 # an absent file is not an option any more: pj-id REFUSES without a letter, by design.
 printf 'name: selftest-fixture\nletter: A\n' > "$T/machine-A"
 export DECIDED_GLOBAL_DIR="$G" OPEN_ITEMS_PROJECTS_DIR="$DC/projects" OPEN_ITEMS_DOTCLAUDE="$DC" DECISIONS_FILE="$LEG" PJ_MACHINE_FILE="$T/machine-A"
+# A FIXTURE claim folder (D-20260923-A10). pj-id refuses a fixture machine file with the
+# real ~/.local/state/pj/ids, so leaving this out fails loudly rather than writing it.
+export PJ_ID_CLAIMS_DIR="$T/claims"
 run(){ local d="$1"; shift; OUT="$( (builtin cd "$d" && "$DECIDED" "$@") 2>&1)"; RC=$?; }
 
 echo "-- the six original arms (from repo-private: project + machine-wide)"
@@ -130,6 +133,13 @@ wanteq_n="$(git -C "$DC" show --name-only --pretty=format: HEAD | grep -c .)"; [
 run "$R1" add "Mike ruling" --topic "mike" --holds-in "docs/M.md" --project
 wantrc "add --project writes" 0 "$RC"; [ "$RC" -eq 0 ] || printf "       %s\n" "$OUT"; want "  next ID skips the one the other home took" "D-$TODAY-A02" "$OUT"; [ -f "$W1/decisions/D-$TODAY-A02-mike-ruling.md" ] && ok "  file in the drawer store" || bad "  file missing in drawer" "$(ls "$W1/decisions")"
 run "$R1" kilo; wantrc "the added block is found" 0 "$RC"
+[ -e "$T/claims/D-$TODAY-A01" ] && [ -e "$T/claims/D-$TODAY-A02" ] && ok "  both adds CLAIMED their IDs in the (fixture) claim folder" || bad "  claim files missing" "$(ls "$T/claims" 2>&1)"
+# A refused CLAIM create refuses by name, like a refused block create (W-20260923-A25).
+mkdir -p "$T/claims-locked"; chmod 500 "$T/claims-locked"
+OUT="$( (builtin cd "$R1" && PJ_ID_CLAIMS_DIR="$T/claims-locked" "$DECIDED" add "claim probe" --topic cp --holds-in d --global) 2>&1)"; RC=$?
+chmod 700 "$T/claims-locked"
+wantrc "a claim folder that refuses the create REFUSES the add" 2 "$RC"; want "  and names the claim path" "$T/claims-locked/D-$TODAY-A" "$OUT"
+[ -z "$(find "$G" -name '*claim-probe*' -print)" ] && ok "  and wrote no block" || bad "  a block was written" "$(find "$G" -name '*claim-probe*' -print)"
 run "$R4" add "November" --topic n --holds-in n --project; wantrc "add --project into a repo: store is written but NOT committed" 3 "$RC"; want "  says so" "NOT COMMITTED, outside dot-claude" "$OUT"; [ -f "$R4/docs/decisions/D-$TODAY-A03-november.md" ] && ok "  file is on disk" || bad "  file missing" "$(ls "$R4/docs/decisions")"
 [ -z "$(git -C "$DC" status --porcelain)" ] && ok "fixture dot-claude tree clean after adds" || bad "dot-claude dirty" "$(git -C "$DC" status --porcelain)"
 
