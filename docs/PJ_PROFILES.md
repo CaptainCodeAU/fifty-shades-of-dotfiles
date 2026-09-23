@@ -669,13 +669,21 @@ one of them is refused.** Both controls fired in the same command: a write to `.
 cwd) succeeded, and a write to `~/.claude/settings.json.f8a` was refused, so the denials
 are the sandbox rather than a broken probe.
 
-| dir                           | sandboxed write | symlinked top-level entries |
-| ----------------------------- | --------------- | --------------------------- |
-| `~/.claude/skills/herdr`      | DENIED          | **3 of 3**                  |
-| `~/.claude/skills/AgentRelay` | DENIED          | 0 of 6                      |
-| `~/.claude/skills/ISA`        | DENIED          | 0 of 2                      |
-| `~/.claude/pj`                | DENIED          | 0 of 1                      |
-| `~/.claude/pj-voice`          | DENIED          | 0 of 1                      |
+| dir                           | sandboxed write | symlinked top-level entries                           |
+| ----------------------------- | --------------- | ----------------------------------------------------- |
+| `~/.claude/skills/herdr`      | DENIED          | **3 of 3**                                            |
+| `~/.claude/skills/AgentRelay` | DENIED          | 0 of 6                                                |
+| `~/.claude/skills/ISA`        | DENIED          | 0 of 2                                                |
+| `~/.claude/pj`                | DENIED          | 0 of 1 (**but 3 of 5 files at any depth**, see below) |
+| `~/.claude/pj-voice`          | DENIED          | 0 of 1                                                |
+
+**Corrected 2026-09-23 (F8b): the "top-level" column hid three links.** Counted at every
+depth, `~/.claude/pj` holds **3 symlinks out of 5 files**, all resolving into this repo:
+`.claude-plugin/plugin.json`, `skills/health/SKILL.md`, `skills/wrap-up/SKILL.md` (tracked
+in dot-claude as mode 120000). Control in the same count: `skills/herdr` 3 of 3,
+AgentRelay 0 of 19, ISA 0 of 23, pj-voice 0 of 3. A top-level count is not a tree count;
+the machine-wide note `20260923-a-top-level-count-is-not-a-tree-count.md` has the general
+form.
 
 **And stow links FILES, not directories**, so a file newly added on the repo side does not
 appear under `~/` at all until a restow. That is the second reason the dirs are hard to
@@ -687,7 +695,28 @@ the cwd is writable. Proven and reverted byte-exact: appending a marker to the r
 `UPSTREAM.version` made it visible through the `~/` path the launcher loads.
 
 **So, ruled at the F8a gate (D-20260922-A06): nothing moves, and a hooks module never
-lives under `~/.claude/skills/herdr`.** The other four dirs are protected as they stand.
+lives under `~/.claude/skills/herdr`.** ~~The other four dirs are protected as they stand.~~
+Not true of `~/.claude/pj` (above).
+
+**Widened 2026-09-23 (F8b, D-20260923-A04): no mod file may resolve into a cwd-writable
+repo, anywhere.** A mod is copy-installed, never stowed. Two measured reasons, both on
+Claude Code 2.1.280:
+
+- **A stowed mod is rewritable mid-session.** Any session standing in this repo can edit
+  the repo-side file, and hot reload (F8a E2) applies the edit live.
+- **`claude plugin validate` does not read a stowed mod.** When `hooks/hooks.json` or the
+  whole `hooks/` folder is a symlink, validate prints a warning and exits **0**, even when
+  the link points at a module that does not parse. The loader follows the link anyway.
+  Fixtures: `pj-session-framework/reports/F8b-working/fixtures/` (recipe for the two link
+  fixtures in `F8b-mods-early.md`).
+
+**And validate only reads modules listed in `hooks/hooks.json`.** A hooks module is scanned
+only when `hooks/hooks.json` names it under `"modules"` (paths relative to `hooks/`), for
+example `{"modules": ["./register.ts"]}`. Without that file validate passes and scans
+nothing. Four other layouts (`hooks/register.ts` alone, a root `register.ts`,
+`hooks/hooks.ts`, `hooks/index.ts`) all exit 0 with no `hooks:` line. So a check built on
+validate must see one `<module> hooks: ...` note per listed module, or it cannot tell
+"parsed" from "never opened".
 
 This is not a claim that the estate is tamper-proof. A user-tier mod is outermost only
 because it was _listed_ first, so anything that can edit this launcher can reorder it;

@@ -59,6 +59,11 @@ The first line of the big file names the version that wrote it, so a copy you al
 can always be checked against `claude --version`. Without the environment variable the
 command does not exist at all — measured, with the control session reporting it absent.
 
+It costs nothing: a local command, 0 turns, 0 USD, under a second, and it runs inside the
+Bash sandbox (measured 2026-09-23 on 2.1.280, F8b). Kept copies per version live in
+`~/.local/state/pj/mods-api/<version>/` with a `SHA256SUMS`, never in a repo; they are the
+only record of what changed in the mods API, because the public changelog does not say.
+
 ## Verifying: a COUNT or an ABSENCE needs a positive arm
 
 **Any check whose answer is a count or an absence must be paired with something
