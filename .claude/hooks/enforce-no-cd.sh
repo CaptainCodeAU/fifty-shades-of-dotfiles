@@ -101,6 +101,7 @@ if [ "${1:-}" = "--selftest" ]; then
   conv_arm allow 'multi-line "..." message'       $'git commit -m "first line\n; cd /x && ls is prose\nlast"'
   conv_arm allow 'a word containing cd'           'abcd /x && ls; git add cdrom.txt'
   conv_arm allow 'uv run, no cd'                  'uv run python3 x.py'
+  conv_arm allow 'nested quotes inside "$(...)"'  'x="$(echo "a; cd /tmp && ls")"; echo "$x"'
   conv_arm allow 'control: harmless'              'echo control-ok'
   echo "=== FALLBACK arms: scanner missing, the rule still holds ==="
   export CONV_SHSCAN=/nonexistent/conv-shscan.awk

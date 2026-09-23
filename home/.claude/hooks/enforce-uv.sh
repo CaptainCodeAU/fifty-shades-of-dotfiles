@@ -122,6 +122,7 @@ if [ "${1:-}" = "--selftest" ]; then
   conv_arm allow 'quoted ) inside $(...) (2026-09-23 false positive)' 'o=$(open-items add "title (no-cd, uv, pnpm) more" --done-when "... (cd into a subshell with builtin cd, python/pip to uv) ...");'
   conv_arm allow 'git -C'                         'git -C /x log --oneline -3'
   conv_arm allow 'multi-line "..." message (2026-09-23 false positive)' $'git commit -m "first line\n; pip install x is prose\nlast"'
+  conv_arm allow 'nested quotes inside "$(...)"'  'x="$(echo "a; python3 b")"; echo "$x"'
   conv_arm allow 'control: harmless'              'echo control-ok'
   echo "=== FALLBACK arms: scanner missing, the rule still holds ==="
   export CONV_SHSCAN=/nonexistent/conv-shscan.awk
