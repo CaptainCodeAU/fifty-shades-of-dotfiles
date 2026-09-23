@@ -556,7 +556,7 @@ JSON
 
 # Run against an explicit settings file and target.
 run_target() {
-    local t="$1" s="$2"; shift 2
+    local t="$1" s="$2"; shift 2   # shift-lint: ok run_target helper, fixed arity, not a loop
     CLAUDE_SETTINGS_FILE="$s" \
     CLAUDE_HOOKS_DIR="$HOOKS_DIR" \
     CLAUDE_HOOKS_MANIFEST="$MANIFEST" \
