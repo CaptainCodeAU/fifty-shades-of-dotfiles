@@ -280,6 +280,9 @@ function parse_list(rec, closer, depth, sep,    k, c, ws, raw, q) {
                 k = new_cmd(rec, depth, sep); ws = P; skip_parens(); add_word(k, ws, P - 1, 1); continue
             }
             if (k == 0) { P++; parse_list(rec, ")", depth + 1, "("); sep = ")"; continue }
+            if (C[P + 1] == ")") {                      # f () { ... }: a function definition
+                unsure("function definition"); P += 2; end_cmd(k, "kw"); k = 0; sep = "kw"; continue
+            }
             unsure("parenthesis after words"); skip_parens(); continue
         }
         ws = P; parse_word(); q = WQF
@@ -291,8 +294,15 @@ function parse_list(rec, closer, depth, sep,    k, c, ws, raw, q) {
             if (!q && raw == "{") { parse_list(rec, "}", depth + 1, "{"); sep = "}"; continue }
             if (!q && raw == "}") { if (closer == "}") return; unsure("unmatched }"); continue }
             if (!q && raw == "[[") { k = new_cmd(rec, depth, sep); add_word(k, ws, P - 1, 0); skip_dbracket(k); continue }
-            if (!q && (raw == "case" || raw == "function" || raw == "coproc" || raw == "select" || raw == "foreach")) unsure("zsh construct " raw)
-            if (raw ~ /\(\)$/) unsure("function definition")
+            # A function body must still be scanned as commands: record nothing for
+            # the header, so the { that follows opens a group at command position.
+            if (!q && raw == "function") {
+                unsure("function definition"); skip_blanks(); parse_word()
+                if (C[P] == "(" && C[P + 1] == ")") P += 2
+                sep = "kw"; continue
+            }
+            if (raw ~ /\(\)$/) { unsure("function definition"); sep = "kw"; continue }
+            if (!q && (raw == "case" || raw == "coproc" || raw == "select" || raw == "foreach")) unsure("zsh construct " raw)
             k = new_cmd(rec, depth, sep)
         } else if (!q && raw == "}" && closer == "}") { end_cmd(k, "}"); return }
         add_word(k, ws, P - 1, q)

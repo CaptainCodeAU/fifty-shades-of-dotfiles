@@ -1,5 +1,5 @@
 #!/bin/bash
-# Block npm/yarn/npx: enforce pnpm or bun for all Node.js commands.
+# Enforce pnpm for Node.js commands: REWRITE a clear slip, DENY an unclear one.
 # Runs on PreToolUse for Bash.
 #
 # TRAVELS WITH pj (P5.6, 2026-09-21). Stowed to ~/.claude/hooks/ and declared once
@@ -7,103 +7,122 @@
 # package-manager policy (npm and yarn are also blocked by .zshrc wrappers in every
 # interactive shell; this hook is the Bash-tool half). Audit line goes to
 #   ${XDG_STATE_HOME:-~/.local/state}/dotfiles/hooks-security.log
+# (BLOCKED lines for denials, REWROTE lines for rewrites).
+#
+# REWRITE, NOT DENY (ruled by Gavin 2026-09-23). Only shapes where pnpm is a
+# drop-in are rewritten, and the session is told in one line:
+#   npm install | npm i          -> pnpm install | pnpm i
+#   npm install|i|add <pkgs>     -> pnpm add <pkgs>      (-D -E -g and long forms)
+#   npm uninstall|remove|rm <p>  -> pnpm remove <p>      (-g)
+#   npm run <script>             -> pnpm run <script>    (no extra arguments)
+#   npm test|t|start             -> pnpm test|start      (no extra arguments)
+#   yarn | yarn install          -> pnpm install
+#   yarn add|remove|run|dlx|test|start ... -> pnpm ...   (same limits)
+#   npx [-y] <pkg> [args]        -> pnpm dlx <pkg> [args]
+# Everything else is still DENIED: npm ci (pnpm has no ci; the message names
+# `pnpm install --frozen-lockfile`), other subcommands and options, extra script
+# arguments, a quoted or path-prefixed binary, sudo/xargs/exec/command in front,
+# pnpm link --global (unchanged), a command the scanner is unsure of, and a
+# command that ALSO trips the uv rule (two rewriting hooks would race).
+#
+# NPX IS DENIED WHEN IT MAY MEAN A LOCAL BINARY. `npx tsc` in a project runs the
+# local node_modules/.bin/tsc; `pnpm dlx tsc` always fetches from the registry,
+# where "tsc" is an unrelated package. So an npx target found in
+# node_modules/.bin of the payload's cwd or any parent, or any npx after a cd in
+# the same command, is denied with both forms named (pnpm exec / pnpm dlx).
+#
+# The scanning is conv-shscan.awk and the plumbing conv-hooklib.sh, both beside
+# this file. If the scanner is missing the hook still denies, by name.
 #
 # Measured before travelling (last 20 transcripts each): 0 of 51 Network_Plan and
 # 0 of 245 win_go_app_test commands would have been denied.
 #
 # `--selftest` proves every arm, positive and negative. Exit 0 = all arms pass.
+# CONV_HOOK_UNDER_TEST=<path> runs the same arms against another copy.
 
-STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles"
-LOG_FILE="$STATE_DIR/hooks-security.log"
+CONV_TAG=enforce-pnpm
+CONV_MODE_NAME=pnpm
+CONV_LIB_DIR="$(dirname "$0")"
+CONV_LOG_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/hooks-security.log"
+CONV_FALLBACK_ERE='(^|[^A-Za-z0-9_./-])(npm|yarn|npx)([^A-Za-z0-9_-]|$)'
 
-log_blocked() {
-  mkdir -p "$STATE_DIR" 2>/dev/null
-  echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] BLOCKED enforce-pnpm \"$1\" \"$2\"" >> "$LOG_FILE"
-}
-
-deny() {
-  jq -n --arg r "$1" \
-    '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
-  exit 0
-}
-
-PFX='(^|[;&|(])[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+|(env|sudo|command|nohup|time|exec|doas|xargs)([[:space:]]+(-[^[:space:]]+|[A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*|[A-Za-z_][A-Za-z0-9_]*))*[[:space:]]+)*([A-Za-z0-9_./-]*/)?'
-
-# Strip heredoc bodies (keep the opening line), then $(...), "..." and '...'.
-# Measured 2026-09-17: without this, prose about the guard refused a commit message.
-_strip() {
-  printf '%s\n' "$1" | awk '
-    BEGIN { in_h = 0; term = "" }
-    {
-      if (in_h) {
-        stripped = $0
-        sub(/^[ \t]+/, "", stripped)
-        if ($0 == term || stripped == term) { in_h = 0 }
-        next
-      }
-      if (match($0, /<<-?[ \t]*["\047]?[A-Za-z_][A-Za-z0-9_]*["\047]?/)) {
-        t = substr($0, RSTART, RLENGTH)
-        sub(/^<<-?[ \t]*/, "", t)
-        gsub(/["\047]/, "", t)
-        term = t
-        in_h = 1
-      }
-      print
-    }' | sed -E 's/\$\([^)]*\)//g; s/"[^"]*"//g; s/'"'"'[^'"'"']*'"'"'//g'
-}
-
-_has() { echo "$1" | grep -qE "${PFX}$2"; }
-
-# Prints the deny reason, or nothing when the command is allowed.
-_classify() {
-  local s
-  s=$(_strip "$1")
-  if _has "$s" 'npm\s+'; then echo "Use 'pnpm' or 'bun' instead of npm"; return; fi
-  if _has "$s" 'yarn\s+'; then echo "Use 'pnpm' or 'bun' instead of yarn"; return; fi
-  if _has "$s" 'yarn\s*$'; then echo "Use 'pnpm install' or 'bun install' instead of yarn"; return; fi
-  if _has "$s" 'npx\s+'; then echo "Use 'pnpm dlx' or 'bunx' instead of npx"; return; fi
-  if _has "$s" 'pnpm\s+(link|ln)\s+.*(-g|--global)'; then
-    echo "Use 'pnpm install -g .' instead of 'pnpm link --global' (v11 shim layout bug)"; return
+if [ ! -r "$CONV_LIB_DIR/conv-hooklib.sh" ]; then
+  COMMAND=$(jq -r '.tool_input.command // empty' 2>/dev/null)
+  if printf '%s' "$COMMAND" | command grep -qE "$CONV_FALLBACK_ERE"; then
+    jq -n '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:"enforce-pnpm: conv-hooklib.sh is missing beside the hook, so it cannot check this command; restow the dotfiles (home/.claude/hooks). Use pnpm / pnpm dlx meanwhile."}}'
   fi
-}
+  exit 0
+fi
+. "$CONV_LIB_DIR/conv-hooklib.sh"
 
 # ---------------------------------------------------------------- selftest
 if [ "${1:-}" = "--selftest" ]; then
-  fails=0
-  _must() { # $1 = expect-hit(1)/expect-miss(0), $2 = label, $3 = command
-    local got hit=0; got="$(_classify "$3")"; [ -n "$got" ] && hit=1
-    if [ "$hit" -eq "$1" ]; then printf 'ok    %s\n' "$2"
-    else printf 'FAIL  %s  (expected hit=%s, got hit=%s)\n' "$2" "$1" "$hit"; fails=$((fails+1)); fi
-  }
-  echo "=== POSITIVE arms: these MUST be denied ==="
-  _must 1 'npm install'                     'npm install'
-  _must 1 'npm, chained'                    'git pull && npm ci'
-  _must 1 'yarn with args'                  'yarn add left-pad'
-  _must 1 'bare yarn'                       'yarn'
-  _must 1 'npx'                             'npx create-thing'
-  _must 1 'env-prefixed npm'                'env CI=1 npm test'
-  _must 1 'pnpm link --global'              'pnpm link --global'
-  echo "=== NEGATIVE arms: these MUST be allowed ==="
-  _must 0 'pnpm install'                    'pnpm install'
-  _must 0 'pnpm dlx'                        'pnpm dlx prettier --check .'
-  _must 0 'bun add'                         'bun add x'
-  _must 0 'bunx'                            'bunx foo'
-  _must 0 'npm as a word inside a path'     'cat ~/.npmrc'
-  _must 0 'prose in an echo'                'echo "npm install is banned"'
-  _must 0 'prose in a heredoc'              $'git commit -F - <<EOF\nnever npm install\nEOF'
-  _must 0 'control: harmless'               'echo control-ok'
-  echo
-  [ "$fails" -eq 0 ] && { echo "ALL ARMS PASS"; exit 0; } || { echo "$fails ARM(S) FAILED"; exit 1; }
+  conv_selftest_begin "$0"
+  # A fixture project whose node_modules/.bin holds a LOCAL binary, for the npx arms.
+  _st_proj="${TMPDIR:-/tmp}/conv-selftest-npx-project"
+  mkdir -p "$_st_proj/node_modules/.bin" "$_st_proj/sub/dir"
+  : > "$_st_proj/node_modules/.bin/localtool"
+  echo "=== REWRITE arms: the exact command that must run ==="
+  conv_arm rewrite 'npm install'                  'npm install'                    'pnpm install'
+  conv_arm rewrite 'npm i'                        'npm i'                          'pnpm i'
+  conv_arm rewrite 'npm, chained'                 'git pull && npm install'        'git pull && pnpm install'
+  conv_arm rewrite 'npm i <pkg>'                  'npm i left-pad'                 'pnpm add left-pad'
+  conv_arm rewrite 'npm install -D <pkg>'         'npm install -D typescript'      'pnpm add -D typescript'
+  conv_arm rewrite 'npm install --save-dev'       'npm install --save-dev a b'     'pnpm add --save-dev a b'
+  conv_arm rewrite 'npm uninstall'                'npm uninstall left-pad'         'pnpm remove left-pad'
+  conv_arm rewrite 'npm run build'                'npm run build'                  'pnpm run build'
+  conv_arm rewrite 'npm test'                     'npm test'                       'pnpm test'
+  conv_arm rewrite 'npm t'                        'npm t'                          'pnpm test'
+  conv_arm rewrite 'env-prefixed npm test'        'env CI=1 npm test'              'env CI=1 pnpm test'
+  conv_arm rewrite 'bare yarn'                    'yarn'                           'pnpm install'
+  conv_arm rewrite 'yarn install'                 'yarn install'                   'pnpm install'
+  conv_arm rewrite 'yarn add'                     'yarn add left-pad'              'pnpm add left-pad'
+  conv_arm rewrite 'yarn add -D'                  'yarn add -D vitest'             'pnpm add -D vitest'
+  conv_arm rewrite 'yarn run'                     'yarn run lint'                  'pnpm run lint'
+  conv_arm rewrite 'npx, registry package'        'npx cowsay hello'               'pnpm dlx cowsay hello'
+  conv_arm rewrite 'npx -y dropped'               'npx -y create-vite my-app'      'pnpm dlx create-vite my-app'
+  conv_arm rewrite 'npx scoped@version'           'npx @biomejs/biome@1.9.4 check .' 'pnpm dlx @biomejs/biome@1.9.4 check .'
+  conv_arm rewrite 'zsh |& after npm'             'npm test |& tee log'            'pnpm test |& tee log'
+  echo "=== DENY arms: a slip whose fix is not clear-cut ==="
+  conv_arm deny 'npm ci'                          'npm ci'
+  conv_arm deny 'npm exec'                        'npm exec foo'
+  conv_arm deny 'npm test with arguments'         'npm test -- --watch'
+  conv_arm deny 'npm run with arguments'          'npm run build -- --prod'
+  conv_arm deny 'npm install unknown option'      'npm install --legacy-peer-deps x'
+  conv_arm deny 'bare npm'                        'npm'
+  conv_arm deny 'yarn build (script by name)'     'yarn build'
+  conv_arm deny 'npx unknown option'              'npx --package=x y'
+  conv_arm deny 'npx local binary, cwd'           'npx localtool --version'   ''  "$_st_proj"
+  conv_arm deny 'npx local binary, parent dir'    'npx localtool'             ''  "$_st_proj/sub/dir"
+  conv_arm deny 'npx after a cd'                  'builtin cd /x && npx cowsay hi'
+  conv_arm deny 'sudo npm'                        'sudo npm install -g x'
+  conv_arm deny 'path-prefixed npm'               '/usr/local/bin/npm install'
+  conv_arm deny 'quoted "npm"'                    '"npm" install'
+  conv_arm deny 'pnpm link --global'              'pnpm link --global'
+  conv_arm deny 'pnpm ln -g'                      'pnpm ln -g'
+  conv_arm deny 'two conventions: + pip'          'npm test && pip install x'
+  conv_arm deny 'unsure: function definition'     'f() { npm install; }; f'
+  conv_arm deny 'unsure: f () with a space'       'f () { npm install; }; f'
+  conv_arm deny 'unsure: function keyword'        'function f { npm install; }; f'
+  echo "=== ALLOW arms: look-alikes that must pass untouched ==="
+  conv_arm allow 'pnpm install'                   'pnpm install'
+  conv_arm allow 'pnpm dlx'                       'pnpm dlx prettier --check .'
+  conv_arm allow 'pnpm link (local)'              'pnpm link ../lib'
+  conv_arm allow 'bun add'                        'bun add x'
+  conv_arm allow 'bunx'                           'bunx foo'
+  conv_arm allow 'npm as a word inside a path'    'cat ~/.npmrc'
+  conv_arm allow 'command -v probe'               'command -v npm'
+  conv_arm allow 'inside $(...), unchanged'       'v=$(npm --version)'
+  conv_arm allow 'prose in an echo'               'echo "npm install is banned"'
+  conv_arm allow 'prose in a heredoc'             $'git commit -F - <<EOF\nnever npm install\nEOF'
+  conv_arm allow 'commit message via $(heredoc)'  $'git commit -m "$(cat <<\'EOF\'\nnpx (not npm) isn\'t used\nEOF\n)"'
+  conv_arm allow 'control: harmless'              'echo control-ok'
+  echo "=== FALLBACK arms: scanner missing, the rule still holds ==="
+  export CONV_SHSCAN=/nonexistent/conv-shscan.awk
+  conv_arm deny  'scanner missing: slip denied'   'npm install'
+  conv_arm allow 'scanner missing: harmless ok'   'echo control-ok'
+  unset CONV_SHSCAN
+  conv_selftest_end
 fi
 
-# ---------------------------------------------------------------- hook path
-INPUT=$(cat)
-COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)
-[ -z "$COMMAND" ] && exit 0
-
-REASON=$(_classify "$COMMAND")
-if [ -n "$REASON" ]; then
-  log_blocked "$REASON" "$COMMAND"
-  deny "$REASON"
-fi
-exit 0
+conv_hook_main
