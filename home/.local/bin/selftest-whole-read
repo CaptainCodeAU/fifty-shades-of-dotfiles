@@ -38,6 +38,9 @@
 #     chooses (exit N, set -e, pipefail, signals). The callers that read a suite's
 #     code (pj-health, open-items-selftest) test only zero against non-zero.
 #   - A top-level `return` would end a sourced run quietly; --check refuses one.
+#   - A suite that re-runs "$0" as a child reads the file as it is when the child
+#     starts. The only site found (census, 19 suites, 2026-09-24) is
+#     open-items-selftest's exit-3 arm (line 1951), which then fails loudly.
 #   - `bash -x suite` traces only the header, since the exec'd shell does not
 #     inherit -x. Put `set -x` in the suite, or run `bash -x -c '. ./suite'`.
 #
@@ -324,6 +327,6 @@ EOF
 case "${1:-}" in
   --check) shift; check "$@"; exit $? ;;
   --selftest) selftest; exit $? ;;
-  -h|--help|"") sed -n '2,60p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  -h|--help|"") sed -n '2,63p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   *) echo "selftest-whole-read: unknown argument '$1' (--check [DIR...] | --selftest | --help)" >&2; exit 2 ;;
 esac
