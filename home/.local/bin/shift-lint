@@ -70,6 +70,9 @@
 #
 # USAGE
 #   shift-lint [-v] [PATH...]    # -v also lists every ok site with its verdict
+#   shift-lint --staged          # the INDEX copy of every staged file (a pre-commit
+#                                # hook): an unstaged working-tree fix cannot hide a
+#                                # bad staged line; no staged shell file = stated exit 0
 #   shift-lint --selftest        # proves every arm both ways, on THIS copy
 #
 # EXIT CODES
@@ -87,6 +90,7 @@ set -u
 PROG=shift-lint
 VERBOSE=0
 SELFTEST=0
+STAGED=0
 
 refuse(){ printf '%s: REFUSED: %s\n' "$PROG" "$*" >&2; exit 2; }
 usage(){ sed -n '2,/^# =*$/p' "$0" | sed -n '2,200p' | sed 's/^# \{0,1\}//'; }
@@ -99,7 +103,10 @@ usage(){ sed -n '2,/^# =*$/p' "$0" | sed -n '2,200p' | sed 's/^# \{0,1\}//'; }
 # Emits one record per site: SITE<TAB>file<TAB>line<TAB>N<TAB>verdict<TAB>why
 # and one TOTAL record at the end.
 # ---------------------------------------------------------------------------
-AWK_PROG=$(cat <<'AWK'
+# read -d '', NOT $(cat <<AWK): macOS /bin/bash 3.2 mis-parses a quoted heredoc inside $( ),
+# and a hook run with a minimal PATH (a GUI git client) gets that bash. Measured 2026-09-24:
+# "unexpected EOF while looking for matching" and rc 2, which step 2c read as a refusal.
+IFS= read -r -d '' AWK_PROG <<'AWK' || true
 function reset_file() {
   sp = 1; stk[1] = "C"; px[1] = 0; ld = 0; lvl = 0; WLO = 1
   delete glx; delete clx; delete LCOND; delete Q; delete QT; delete QF; delete QS; delete QN; delete QI; delete QFIRST
@@ -414,7 +421,6 @@ FNR == 1 { reset_file() }
 }
 END { printf "TOTAL\t%d\t%d\t%d\t%d\t%d\n", lines, RAW, CODE, HERE, IGN }
 AWK
-)
 
 # ---------------------------------------------------------------------------
 # File selection.
@@ -448,7 +454,37 @@ run_lint(){
   local paths=() p f rel top rc ferr gitmode=0
   local files=() unread=() declined=() skipped=0
   while [ $# -gt 0 ]; do paths+=("$1"); shift; done
-  if [ ${#paths[@]} -eq 0 ]; then
+  local nstaged=0 mode rest
+  if [ $STAGED -eq 1 ]; then
+    # --staged (W-20260924-A01): judge what the COMMIT will contain, i.e. the INDEX copy
+    # of each added, copied, modified or renamed file, never the working tree. A fix
+    # sitting unstaged in the working tree must not hide a bad staged line. Each blob is
+    # written under a fresh temp dir at its repo-relative path, so names, extensions and
+    # shebangs read as they would in the repo. The dir is left in $TMPDIR (the OS clears
+    # it): removing it would route every commit's copy through the Trash.
+    [ ${#paths[@]} -eq 0 ] || refuse "--staged takes no PATH: it checks exactly what is staged"
+    top="$(git rev-parse --show-toplevel 2>/dev/null)" || top=""
+    [ -n "$top" ] || refuse "--staged outside a git repo: nothing is staged here"
+    local T; T="$(mktemp -d "${TMPDIR:-/tmp}/shift-lint-staged.XXXXXX")" || refuse "--staged: cannot make a temp dir"
+    while IFS= read -r -d '' rel; do
+      nstaged=$((nstaged + 1))
+      mode="$(git -C "$top" ls-files -s -- ":(literal)$rel" | awk '{ print $1; exit }')"
+      case "$mode" in 120000|160000) declined+=("$rel (staged as a symlink or submodule)"); continue ;; esac
+      mkdir -p "$T/$(dirname "$rel")" && git -C "$top" show ":$rel" > "$T/$rel" 2>/dev/null \
+        || { unread+=("$rel (the staged copy could not be read)"); continue; }
+      is_shell "$T/$rel"; rc=$?
+      case $rc in 0) files+=("$rel") ;; 3) unread+=("$rel") ;; *) skipped=$((skipped + 1)) ;; esac
+    done < <(git -C "$top" diff --cached --name-only -z --diff-filter=ACMR)
+    top="$T"; gitmode=1
+    if [ ${#files[@]} -eq 0 ] && [ ${#unread[@]} -eq 0 ]; then
+      # Stated, and exit 0: a commit with no shell files in it has nothing this checker
+      # judges. A refusal here would block every docs-only commit in an opted-in repo.
+      for f in "${declined[@]+"${declined[@]}"}"; do printf '%s: declined (not checked): %s\n' "$PROG" "$f" >&2; done
+      printf '%s: --staged: 0 staged shell files among %d staged file(s) (%d skipped as not shell, %d declined): nothing to judge in this commit\n' \
+        "$PROG" "$nstaged" "$skipped" "${#declined[@]}"
+      return 0
+    fi
+  elif [ ${#paths[@]} -eq 0 ]; then
     top="$(git rev-parse --show-toplevel 2>/dev/null)" || top=""
     [ -n "$top" ] || refuse "no PATH given and this is not inside a git repo: name the files or directories to check"
     gitmode=1
@@ -513,7 +549,9 @@ run_lint(){
       WEAK) c_w=$((c_w + 1)) ;; READ) c_r=$((c_r + 1)) ;; ANNOTATION) c_an=$((c_an + 1)) ;;
     esac
     case "$v" in
-      [A-Z]*) nfind=$((nfind + 1))
+      # [[:upper:]], never [A-Z]: bash 3.2 matches a case range by locale collation,
+      # so [A-Z]* also matched `guarded-a` and counted an ok site as a finding (2026-09-24).
+      [[:upper:]]*) nfind=$((nfind + 1))
         if [ "$n" = 0 ]; then printf '%s:%s: %s: %s\n' "$file" "$line" "$v" "$why"
         else printf '%s:%s: %s: shift %s %s\n' "$file" "$line" "$v" "$n" "$why"; fi ;;
       *) nok=$((nok + 1)); [ $VERBOSE -eq 1 ] && printf '%s:%s: ok %s: shift %s, %s\n' "$file" "$line" "$v" "$n" "$why" ;;
@@ -862,6 +900,33 @@ FIX
   lint "$T/she"; has "envs:2: UNGUARDED-LOOP" && has "zsh1:2: UNGUARDED-LOOP"; chk "env -S bash and /bin/zsh shebangs are shell" $?
   has "py1:"; [ $? -ne 0 ] && has "1 other files skipped"; chk "an env -S uv run python3 shebang is not shell, and is counted as skipped" $?
 
+  echo "=== --staged judges the INDEX, never the working tree (W-20260924-A01) ==="
+  local R="$T/stagerepo"
+  mkdir -p "$R/bin" && git -C "$R" init -q 2>/dev/null
+  sg(){ out="$(builtin cd "$R" && "$self" --staged 2>&1)"; rc=$?; }
+  sg; [ $rc -eq 0 ] && has "0 staged shell files among 0 staged file(s)"; chk "nothing staged: exit 0, and it SAYS 0 of 0 (rc $rc)" $?
+  printf '# notes\n' > "$R/README.md"; git -C "$R" add README.md
+  sg; [ $rc -eq 0 ] && has "0 staged shell files among 1 staged file(s)"; chk "a docs-only commit: exit 0, stated, never a refusal (rc $rc)" $?
+  cp "$T/decided.sh" "$R/bin/tool.sh"; git -C "$R" add bin/tool.sh
+  cp "$T/guarded.sh" "$R/bin/tool.sh"            # the fix exists, but only in the working tree
+  sg; [ $rc -eq 1 ] && has "bin/tool.sh:7: UNGUARDED-LOOP"; chk "a staged unguarded line blocks (rc $rc), named by its repo path" $?
+  lint "$R/bin/tool.sh"; [ $rc -eq 0 ]; chk "  control: the same file in the WORKING TREE is clean (rc $rc), so the arm above read the index" $?
+  git -C "$R" add bin/tool.sh
+  sg; [ $rc -eq 0 ] && has "findings 0"; chk "once the fix is staged too: exit 0 (rc $rc)" $?
+  out="$("$self" --staged "$R/bin/tool.sh" 2>&1)"; rc=$?; [ $rc -eq 2 ]; chk "--staged with a PATH: exit 2 (rc $rc)" $?
+  out="$(builtin cd "$T" && "$self" --staged 2>&1)"; rc=$?
+  [ $rc -eq 2 ] && has "outside a git repo"; chk "--staged outside a git repo: exit 2 (rc $rc)" $?
+
+  echo "=== it runs under the OLDEST bash a hook can get (macOS /bin/bash 3.2) ==="
+  if [ -x /bin/bash ]; then
+    out="$(/bin/bash "$self" "$T/decided.sh" 2>&1)"; rc=$?
+    [ $rc -eq 1 ] && has "decided.sh:7: UNGUARDED-LOOP"; chk "/bin/bash ($(/bin/bash -c 'echo $BASH_VERSION')) runs it and finds the hang (rc $rc)" $?
+    out="$(builtin cd "$R" && /bin/bash "$self" --staged 2>&1)"; rc=$?
+    [ $rc -eq 0 ] && has "findings 0"; chk "  and --staged under /bin/bash (rc $rc)" $?
+  else
+    echo "  (no /bin/bash on this machine: the oldest-bash arm is NOT MEASURED)"
+  fi
+
   echo "=== this file checks clean against itself (its fixtures are annotated heredocs) ==="
   lint "$self"; [ $rc -eq 0 ] && has "findings 0" && ! has "fixture heredoc 0"; chk "shift-lint on itself: exit 0, its fixtures counted as fixture heredocs (rc $rc)" $?
 
@@ -874,6 +939,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --selftest) SELFTEST=1; shift ;;
     -v|--verbose) VERBOSE=1; shift ;;
+    --staged) STAGED=1; shift ;;
     -h|--help) usage; exit 0 ;;
     --) shift; break ;;
     -*) refuse "unknown flag $1 (see --help)" ;;

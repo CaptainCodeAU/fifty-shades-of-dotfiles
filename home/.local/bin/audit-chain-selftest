@@ -190,6 +190,44 @@ _detected=$(( FAIL - _f ))
 PASS=$_p; FAIL=$_f
 wanteq '26 a missing needle IS detected by want' 1 "$_detected"
 
+# ------------------------------------------------ 29-34 step 2c, shift-lint --
+# Opt-in per repo (Gavin, 2026-09-24; W-20260924-A01). Run through a symlink named
+# pre-commit, like the step 3 arms. PATH holds shift-lint ALONE (plus /usr/bin:/bin), so
+# step 2b's leak scan is absent and these arms measure one tool, not two.
+printf '\nSTEP 2c: shift-lint on staged shell files, opt-in per repo\n'
+SL="$(cd "$(dirname "$0")" && pwd -P)/shift-lint"
+if [ ! -x "$SL" ]; then
+  bad '29-34 shift-lint beside this selftest' "an executable $SL" "absent: the step 2c arms did NOT run"
+else
+  SLB="$ROOT/sl-bin"; mkdir -p "$SLB"; ln -sf "$SL" "$SLB/shift-lint"; ln -sf "$TOOL" "$ROOT/home/bin/pre-commit"
+  SR="$ROOT/sl-repo"; mkdir -p "$SR/bin"; git -C "$SR" init -q
+  pc(){ OUT="$(builtin cd "$SR" && env GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null PATH="$1" ${2:+"$2"} "$ROOT/home/bin/pre-commit" 2>&1)"; RC=$?; }
+  # A real unguarded loop, the shape of decided add before A55.
+  printf '#!/bin/bash\nwhile [ $# -gt 0 ]; do\n  case "$1" in\n    --topic) topic="$2"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\n' > "$SR/bin/t.sh"
+  git -C "$SR" add bin/t.sh
+  pc "$SLB:/usr/bin:/bin"
+  wanteq '29 not enabled: a staged unguarded shift is NOT checked (rc 0)' 0 "$RC"
+  wantnot '   and says nothing about it' 'UNGUARDED' "$OUT"
+  git -C "$SR" config shiftlint.enable true
+  pc "$SLB:/usr/bin:/bin"
+  wanteq '30 enabled: the same staged file BLOCKS (rc 1)' 1 "$RC"
+  want   '   naming the file and the hang' 'bin/t.sh:4: UNGUARDED-LOOP' "$OUT"
+  pc "$SLB:/usr/bin:/bin" SHIFT_LINT_DISABLE=1
+  wanteq '31 SHIFT_LINT_DISABLE=1 lets that one commit through (rc 0)' 0 "$RC"
+  pc "/usr/bin:/bin"
+  wanteq '32 enabled but shift-lint not on PATH: not blocked (rc 0)' 0 "$RC"
+  want   '   and says the commit was NOT checked' 'NOT checked' "$OUT"
+  printf '#!/bin/bash\nwhile [ $# -gt 0 ]; do\n  case "$1" in\n    --topic) [ $# -ge 2 ] || exit 2; topic="$2"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\n' > "$SR/bin/t.sh"
+  git -C "$SR" add bin/t.sh
+  pc "$SLB:/usr/bin:/bin"
+  wanteq '33 enabled, the fix staged: passes (rc 0)' 0 "$RC"
+  want   '   and states its denominator' 'checked 1 shell files' "$OUT"
+  git -C "$SR" config shiftlint.enable false
+  printf 'x\n' >> "$SR/bin/t.sh"; git -C "$SR" add bin/t.sh
+  pc "$SLB:/usr/bin:/bin"
+  wantnot '34 shiftlint.enable false: step 2c does not run' 'shift-lint' "$OUT"
+fi
+
 # ------------------------------------------------ 27-28 regression guards ---
 # 27 is the review finding that this file's own repo-relative fallback was one ../ short,
 # invisible on a stowed machine because $HOME answered first. It is checked here rather

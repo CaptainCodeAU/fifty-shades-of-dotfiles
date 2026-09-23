@@ -33,6 +33,8 @@
 #                                          #   here as the only knob is how a session
 #                                          #   reached for it on 2026-09-12 when one
 #                                          #   noisy rule was the actual problem.
+#   git config shiftlint.enable true       # step 2c -- OPT-IN: block unguarded
+#                                          #   `shift N` in staged shell files
 #   git config trailers.disable true       # step 3  -- no C-* session trailers
 # ============================================================================
 set -uo pipefail
@@ -78,6 +80,23 @@ fi
 #     (machine-local .git/config knob; see the git-leak-scan header).
 if [ "$hook" = "pre-commit" ] && command -v git-leak-scan >/dev/null 2>&1; then
     git-leak-scan || exit $?
+fi
+
+# 2c. shift-lint -- pre-commit only, and OPT-IN PER REPO (Gavin, 2026-09-24): blocks a
+#     commit whose STAGED shell files carry a `shift N` that a value flag given last can
+#     hang on (W-20260923-A36, A54, A55). Off unless the repo says so, because this chain
+#     runs for every repo on the machine and other repos' helpers are not annotated:
+#       git config shiftlint.enable true     # this repo, this machine only
+#     Enabled but not installed is said out loud, never silent: the commit goes through
+#     UNCHECKED, like every other step here when its tool is absent.
+#     Bypass one commit: SHIFT_LINT_DISABLE=1 git commit ...  (or --no-verify)
+if [ "$hook" = "pre-commit" ] && [ "$(git config --bool shiftlint.enable 2>/dev/null)" = true ] \
+        && [ -z "${SHIFT_LINT_DISABLE:-}" ]; then
+    if command -v shift-lint >/dev/null 2>&1; then
+        shift-lint --staged || exit $?
+    else
+        echo "shift-lint: enabled for this repo (shiftlint.enable) but not installed; this commit was NOT checked" >&2
+    fi
 fi
 
 # 3. Claude Code session attribution -- prepare-commit-msg only.
