@@ -54,8 +54,8 @@
 #                     edited mid-run dies (the control), a guarded one finishes
 #                     with the same count, on /bin/bash (3.2) and the PATH bash;
 #                     plus the $0, argument, exit-code, guard and sourcepath
-#                     arms, an inline `--selftest)` in a tool surviving the
-#                     same edit unguarded, and --check's pass, fail, refuse arms.
+#                     arms, a tool's inline `--selftest` (case and if forms)
+#                     surviving the same edit unguarded, and --check's pass, fail, refuse arms.
 #
 # EXIT CODES
 #   0  every bash suite carries the header / every selftest arm passed
@@ -283,6 +283,16 @@ EOF
     [ "$RC" = 7 ] && [ "$OUT" = PASS=3 ] && grep -q garbage "$f" \
       && ok "inline, $B: 'case --selftest) st; exit' survives the same edit with no header (so tools are exempt)" \
       || bad "inline, $B: an inline --selftest was reached by the edit" "rc=$RC $OUT"
+    # The other shape the hooks use: `if [ "${1:-}" = --selftest ]; then ...; exit; fi`.
+    awk '/^case/ { print "if [ \"${1:-}\" = --selftest ]; then st; exit $?; fi"; skip = 1; next }
+         skip && /^esac/ { skip = 0; next } !skip' "$f" | grep -v garbage > "$f.if"
+    mv "$f.if" "$f"; chmod +x "$f"
+    grep -q '^if \[ "${1:-}" = --selftest \]; then st; exit \$?; fi$' "$f" \
+      || bad "inline-if, $B: the if-form fixture was not built" "$(cat "$f")"
+    run_edited "$f" --selftest
+    [ "$RC" = 7 ] && [ "$OUT" = PASS=3 ] && grep -q garbage "$f" \
+      && ok "inline-if, $B: 'if [ \$1 = --selftest ]; then st; exit; fi' survives the same edit with no header" \
+      || bad "inline-if, $B: an inline if-form --selftest was reached by the edit" "rc=$RC $OUT"
 
     # sourcepath: run by a slash-less name from its own folder, with a decoy of the
     # same name earlier on PATH. The header must run the local file, not the decoy.
