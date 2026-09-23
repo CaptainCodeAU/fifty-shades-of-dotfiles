@@ -1083,6 +1083,68 @@ measure "$X0_CL"
 wanteq "  --all --closed: headers found" "4" "$X0_ANY"
 wanteq "  --all --closed: none glued" "4" "$X0_AT"
 
+printf '\nAR argument parsing: a value flag given last, a backslash in holds-in (W-20260923-A36, A27)\n'
+# THE BUG (A36): `add t --kind` spun forever. `shift 2` with ONE argument left shifts
+# nothing in bash, so `while [ $# -gt 0 ]` never ends. Every value flag is given LAST with
+# no value; each must REFUSE (rc 2) naming the flag. The kill is a 1 s alarm, which reports
+# a hang as rc 142, so a hanging tool FAILS these arms instead of hanging the suite.
+mk_dotclaude
+runw "$ZETA" init
+AR_T0="$(find "$ZW/items" -name 'W-*.md' 2>/dev/null | wc -l | tr -d ' ')"
+runk(){ local s="$1" d="$2"; shift 2; OUT="$(cd "$d" 2>/dev/null && OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" CLAUDE_CODE_SESSION_ID=sess-test CLAUDE_SESSION_ID=sess-test perl -e 'alarm shift; exec @ARGV' "$s" "$TOOL" "$@" 2>&1 </dev/null)"; RC=$?; return 0; }
+# CONTROL: the instrument can report a hang at all. Without this, rc 2 everywhere below
+# could not be told from a kill that never fired.
+OUT="$(perl -e 'alarm 1; exec @ARGV' sleep 5 2>&1)"; RC=$?
+wanteq "  CONTROL: the 1 s alarm kills a hang, and says so as rc 142" "142" "$RC"
+# CONTROL: the same flag WITH its value still works, so the guard refuses only the bare flag.
+runk 20 "$ZETA" add "value given" --done-when x --kind do
+wanteq "  CONTROL: add with --kind do given last WITH its value succeeds (rc 0)" "0" "$RC"
+for AR_F in --kind --size --done-when --when --next --blocked-on --holds-in --body \
+            --for --watch --reach --check-script; do
+  runk 1 "$ZETA" add "flag last" "$AR_F"
+  wanteq "add ... $AR_F (last, no value) REFUSES within 1 s (rc 2; 142 = hung)" "2" "$RC"
+  want   "  and names $AR_F" "$AR_F" "$OUT"
+done
+runk 1 "$ZETA" add "flag last" --check
+wanteq "add ... --check (last, no value) REFUSES within 1 s (rc 2)" "2" "$RC"
+wanteq "  none of the refusals wrote an item (one file: the control)" "$((AR_T0 + 1))" \
+       "$(find "$ZW/items" -name 'W-*.md' 2>/dev/null | wc -l | tr -d ' ')"
+for AR_F in --into --park; do
+  runk 1 "$ZETA" migrate --dry-run "$AR_F"
+  wanteq "migrate ... $AR_F (last, no value) REFUSES within 1 s (rc 2; 142 = hung)" "2" "$RC"
+  want   "  and names $AR_F" "$AR_F" "$OUT"
+done
+for AR_F in --grep --status; do
+  runk 1 "$ZETA" "$AR_F"
+  wanteq "top level $AR_F (last, no value) REFUSES within 1 s (rc 2)" "2" "$RC"
+done
+runk 1 "$ZETA" show --project
+wanteq "show --project (last, no value) REFUSES within 1 s (rc 2)" "2" "$RC"
+
+# A27: a holds-in value is written LITERALLY. `awk -v` expands backslash escapes, so
+# the `\t` in `repo:C:\temp\x.md` became a TAB through add_field (set, set --add). add
+# writes with printf and was never affected; it is armed too so a later move to add_field
+# cannot regress it quietly.
+AR_BS='repo:C:\temp\x.md'
+runk 20 "$ZETA" add "backslash home" --done-when x --holds-in "$AR_BS"
+wanteq "add --holds-in with a backslash (rc 0)" "0" "$RC"
+AR_ID="$(printf '%s\n' "$OUT" | sed -n 's/^\(W-[0-9]\{8\}-[A-Z][0-9]*\)$/\1/p' | head -1)"
+AR_FILE="$ZW/items/open/$AR_ID.md"
+wanteq "  fixture: the new item file exists" "1" "$([ -f "$AR_FILE" ] && echo 1)"
+wanteq "  add wrote it literally" "$AR_BS" "$(sed -n 's/^holds-in: //p' "$AR_FILE" 2>/dev/null)"
+ar_ctl(){ LC_ALL=C tr -d '\n' < "$AR_FILE" 2>/dev/null | LC_ALL=C tr -cd '[:cntrl:]' | wc -c | tr -d ' '; }
+runk 20 "$ZETA" set --add "$AR_ID" holds-in 'drawer:D:\tmp\new.md'
+wanteq "set --add holds-in with a backslash (rc 0)" "0" "$RC"
+wanteq "  set --add wrote it literally, and left the first one literal" \
+       'repo:C:\temp\x.md|drawer:D:\tmp\new.md' "$(sed -n 's/^holds-in: //p' "$AR_FILE" 2>/dev/null | tr '\n' '|' | sed 's/|$//')"
+wanteq "  and no control byte (TAB from \\t, BEL from \\a ...) is in the file" "0" "$(ar_ctl)"
+runk 20 "$ZETA" set "$AR_ID" holds-in 'repo:E:\a\b.md'
+wanteq "set (replace) holds-in with a backslash (rc 0)" "0" "$RC"
+wanteq "  set replace wrote it literally" 'repo:E:\a\b.md' "$(sed -n 's/^holds-in: //p' "$AR_FILE" 2>/dev/null)"
+wanteq "  and no control byte is in the file" "0" "$(ar_ctl)"
+# CONTROL: the byte counter SEES a control byte, or the two zeros above could not fail.
+printf 'x\ty\n' > "$D/ar-ctl"; wanteq "  CONTROL: the counter finds the one TAB in a probe file" "1" "$(AR_FILE="$D/ar-ctl" ar_ctl)"
+
 printf '\nM  pinned items lead the session surface (W-20260923-A23)\n'
 # THE BUG: --session listed titles in ID order and the card keeps the first 10, so an item
 # filed today "for next session" was the NEWEST ID and fell off the bottom. The fixture is a
