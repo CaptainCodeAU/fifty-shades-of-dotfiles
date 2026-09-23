@@ -190,8 +190,8 @@ while [ $# -gt 0 ]; do
         --stop)   mode="stop";   shift ;;
         --toggle) mode="toggle"; shift ;;
         --stdin)  from_stdin=1;  shift ;;
-        --rate)  rate="${2:-}"; shift 2 ;;
-        --voice) voice="${2:-}"; shift 2 ;;
+        --rate)  [ $# -ge 2 ] || { echo "speak-clipboard: --rate needs a value" >&2; exit 1; }; rate="$2"; shift 2 ;;
+        --voice) [ $# -ge 2 ] || { echo "speak-clipboard: --voice needs a value" >&2; exit 1; }; voice="$2"; shift 2 ;;
         -h|--help) sed -n '/^# USAGE/,/^# EXIT/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "speak-clipboard: unknown option '$1'" >&2; exit 1 ;;
     esac
