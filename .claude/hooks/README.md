@@ -26,7 +26,7 @@ Three ways a hook this repo owns reaches a session, and they do not overlap:
 | `herdr-skill-drift-check.sh` | `SessionStart` | `startup\|resume` | project                                         | herdr skill merge base vs `docs/HERDR*.md`                                                  | no                             |
 | `bun-cooldown-check.sh`      | `SessionStart` | `startup\|resume` | project                                         | global bun packages vs `minimumReleaseAge`                                                  | no                             |
 | _(inline echo)_              | `SessionStart` | `compact`         | project                                         | uv/pnpm reminder after compaction                                                           | n/a                            |
-| `enforce-no-cd.sh`           | `PreToolUse`   | `Bash`            | project                                         | deny a leading `cd` (see the note below)                                                    | no                             |
+| `enforce-no-cd.sh`           | `PreToolUse`   | `Bash`            | project                                         | rewrite a leading `cd DIR && rest` into a subshell, deny other `cd` (see the note below)    | `--selftest`                   |
 | `enforce-builtin.sh`         | `PreToolUse`   | `Bash`            | project                                         | deny `builtin <non-builtin>`                                                                | no                             |
 | `enforce-gh-ssh-only.sh`     | `PreToolUse`   | `Bash`            | project, plus a LifeOS user-level twin          | deny `gh auth login\|setup-git\|refresh`                                                    | no                             |
 | `protect-files.sh`           | `PreToolUse`   | `Edit\|Write`     | project                                         | deny edits to `.env*`, lockfiles, `.git/`                                                   | no                             |
@@ -34,8 +34,8 @@ Three ways a hook this repo owns reaches a session, and they do not overlap:
 | _(inline prettier)_          | `PostToolUse`  | `Edit\|Write`     | project                                         | `pnpm dlx prettier --write` on the edited file                                              | n/a                            |
 | _(inline markdownlint)_      | `PostToolUse`  | `Edit\|Write`     | project                                         | `markdownlint-cli --fix` on `.md`                                                           | n/a                            |
 | `validate-bash.sh`           | `PreToolUse`   | `Bash`            | manifest `project` (`home/.claude/hooks/`)      | deny `rm -rf /`, force push to main/master, bare `git reset --hard`, `git clean -fd`        | `--selftest`                   |
-| `enforce-uv.sh`              | `PreToolUse`   | `Bash`            | manifest `project` (`home/.claude/hooks/`)      | deny bare pip/python/pytest/ruff                                                            | `--selftest`                   |
-| `enforce-pnpm.sh`            | `PreToolUse`   | `Bash`            | manifest `project` (`home/.claude/hooks/`)      | deny npm/yarn/npx, `pnpm link --global`                                                     | `--selftest`                   |
+| `enforce-uv.sh`              | `PreToolUse`   | `Bash`            | manifest `project` (`home/.claude/hooks/`)      | rewrite clear pip/python/pytest/ruff slips to uv, deny the rest                             | `--selftest`                   |
+| `enforce-pnpm.sh`            | `PreToolUse`   | `Bash`            | manifest `project` (`home/.claude/hooks/`)      | rewrite drop-in npm/yarn/npx slips to pnpm, deny the rest and `pnpm link --global`          | `--selftest`                   |
 | `pj-start-card`              | `SessionStart` | none              | manifest `project` (`home/.local/bin/`)         | the 20-line start card: open items, wrap-up warning, handoff pointer (D-20260920-04)        | `pj-start-card --selftest`     |
 | `pj-session-end`             | `SessionEnd`   | none              | manifest `project` (`home/.local/bin/`)         | writes the no-wrap-up flag the next start card reads (D-20260920-03)                        | `pj-session-end --selftest`    |
 | `enforce-secret-probe.sh`    | `PreToolUse`   | `Bash`            | manifest `user,project` (`home/.claude/hooks/`) | deny printing a credential-named variable                                                   | `--selftest`                   |
@@ -156,7 +156,7 @@ The stop handler reads Claude's transcript, extracts a summary of what it did, a
   herdr-cooldown-check.sh           SessionStart: herdr release cooldown + guards
   herdr-skill-drift-check.sh        SessionStart: herdr skill vs docs
   bun-cooldown-check.sh             SessionStart: global bun packages vs cooldown
-  enforce-no-cd.sh                  PreToolUse Bash: block a leading cd
+  enforce-no-cd.sh                  PreToolUse Bash: rewrite a leading cd into a subshell, deny other cd
   enforce-builtin.sh                PreToolUse Bash: block builtin with non-builtins
   enforce-gh-ssh-only.sh            PreToolUse Bash: block gh auth login/setup-git/refresh
   protect-files.sh                  PreToolUse Edit|Write: block edits to protected files
@@ -168,8 +168,10 @@ The stop handler reads Claude's transcript, extracts a summary of what it did, a
 
 home/.claude/hooks/                 stowed to ~/.claude/hooks/, registered by the manifest
   validate-bash.sh                  manifest project: destructive git and rm
-  enforce-uv.sh                     manifest project: uv over bare Python tooling
-  enforce-pnpm.sh                   manifest project: pnpm or bun over npm/yarn/npx
+  enforce-uv.sh                     manifest project: uv over bare Python tooling (rewrites)
+  enforce-pnpm.sh                   manifest project: pnpm or bun over npm/yarn/npx (rewrites)
+  conv-shscan.awk                   not a hook: the zsh scanner the three convention hooks share
+  conv-hooklib.sh                   not a hook: their shared plumbing and selftest runner
   enforce-secret-probe.sh           manifest user,project: no credential printing
   enforce-census.sh                 manifest user,project: grep nudge
   enforce-herdr-skill.sh            manifest user,project: herdr gate
@@ -207,7 +209,7 @@ Runs on `SessionStart`, read-only. Whether a globally installed bun package is s
 
 ### enforce-no-cd.sh
 
-Runs on `PreToolUse` for `Bash`. Blocks a leading `cd`: use absolute paths, `git -C <path>`, or `builtin cd`. Strips heredoc bodies, `$(...)` and quoted strings first. Project-level on purpose; see the note above and W-20260921-07 (shadow-mode traveller).
+Runs on `PreToolUse` for `Bash`. Since 2026-09-23 a LEADING `cd DIR && rest` (or `;`, or a newline) is REWRITTEN to `(builtin cd DIR && rest` plus a newline and `)`, so the session's working directory cannot move; the `.zshrc` aliases that expand to `cd` (`..` `...` `....` `.....` `~`) are rewritten the same way. Every other `cd` shape is still denied: use absolute paths, `git -C <path>`, or `builtin cd`. It uses the shared scanner in `home/.claude/hooks/conv-shscan.awk` (reached through this repo's path), which reads quotes, `$(...)`, heredocs and zsh operators properly; the old sed strip denied a quoted `)` inside `$(...)` and a multi-line `"..."` commit message. A command that also trips the uv or pnpm rule is denied with one combined message, because two rewriting hooks race (`docs/CLAUDE_HOOKS.md`, "Rewriting a tool call"). Project-level on purpose; see the note above and W-20260921-07 (shadow-mode traveller).
 
 ### enforce-builtin.sh
 
@@ -279,7 +281,10 @@ Format, both:
 ```text
 [2026-02-18T14:30:22Z] BLOCKED validate-bash "Force push to main/master is not allowed" "git push --force main"
 [2026-02-18T14:31:05Z] BLOCKED protect-files "Secrets file" ".env.local"
+[2026-09-23T07:54:13Z] REWROTE enforce-pnpm "<the one line the session saw>" "npm test" -> "pnpm test"
 ```
+
+`REWROTE` lines come from the three convention hooks when they change a command instead of denying it.
 
 Append-only; the hooks never truncate them.
 
@@ -290,6 +295,7 @@ PYTHONPATH=.claude/hooks uv run --with pytest pytest .claude/hooks/tests/ -v   #
 ~/.claude/hooks/validate-bash.sh --selftest
 ~/.claude/hooks/enforce-uv.sh --selftest
 ~/.claude/hooks/enforce-pnpm.sh --selftest
+.claude/hooks/enforce-no-cd.sh --selftest
 ~/.claude/hooks/enforce-secret-probe.sh --selftest
 .claude/hooks/toolchain-cve-check-selftest
 claude-hooks-sync-selftest && claude-hooks-sync --target project --check

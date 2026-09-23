@@ -227,3 +227,66 @@ The selftest pins `PJ_PING_AFPLAY` and `PJ_PING_IMSG` to fake binaries, and
 replaces the PATH lookup, so no arm can reach the real `afplay` or `imsg`.
 `PJ_QUESTION_PING_HOOK=<path>` points the selftest at another copy of the
 hook.
+
+---
+
+## Rewriting a tool call (`updatedInput`): two rules, both measured
+
+A `PreToolUse` hook can change a Bash command before it runs instead of denying
+it: `hookSpecificOutput.updatedInput` replaces the tool input. The convention
+hooks (`enforce-uv.sh`, `enforce-pnpm.sh`, this repo's `enforce-no-cd.sh`) do
+this since 2026-09-23 so a clear slip costs no round trip. Measured on Claude
+Code 2.1.280 in headless scratch sessions with a fixture hook registered through
+`--settings` only, 12 live arms, 2026-09-23.
+
+**Rule 1: send `updatedInput` with NO `permissionDecision`.** With `"allow"`
+the rewritten command runs even when nothing permits it. With no decision, the
+normal permission check runs on the REWRITTEN command.
+
+| Arm | Hook output                        | Permissions                                   | Result                                  |
+| --- | ---------------------------------- | --------------------------------------------- | --------------------------------------- |
+| P0  | none (control)                     | nothing allowed                               | `touch A.txt` refused: touch needs a grant |
+| P1  | rewrite to `touch B.txt`, no decision | only `Bash(touch A.txt)` allowed           | refused: the check ran on `touch B.txt`  |
+| P2  | same                               | only `Bash(touch B.txt)` allowed              | ran, B.txt created                      |
+| P3  | same                               | nothing allowed                               | refused                                 |
+| P5  | same                               | `Bash(touch A.txt)` allowed, deny rule `Bash(touch B.txt)` | refused by the deny rule    |
+| P6  | rewrite + `permissionDecision: "allow"` | NOTHING allowed                          | **ran, B.txt created: escalation**      |
+
+P6 is the one to remember: a hook that answers `allow` turns every rewrite into
+an auto-approval, so a slip that would have prompted (or been refused) runs
+silently. The docs say `allow` skips the prompt while deny and ask rules still
+apply; they do not say the rewrite is re-checked, and P1 to P5 show that only
+the no-decision form gets that check.
+
+**Rule 2: never let two hooks rewrite the same call.** The official hooks
+reference: "the last one to finish takes effect. Since hooks run in parallel,
+the order is non-deterministic. Avoid having more than one hook modify the same
+tool's input." Every hook sees the ORIGINAL input. A deny from any hook beats a
+rewrite from another (P4: rewrite + allow alongside a deny hook, refused with
+the deny hook's reason; P7: the same with a no-decision rewrite). So when one
+command trips two rewriting hooks (`cd x && python3 y`, `npm test && pip
+install z`), each hook DENIES with one combined message instead of rewriting.
+The deny is deterministic; two rewrites would not be.
+
+**What the session is told.** `additionalContext` reaches the model verbatim,
+as `PreToolUse:Bash hook additional context: <text>`. `permissionDecisionReason`
+on an allow did not reach it at all (0 occurrences of its marker in the stream,
+2 of the context marker). The tool call in the transcript still shows the
+ORIGINAL command, so the context line must say what actually ran.
+
+A rewrite with no decision behaves like an allow for the purpose of later hooks:
+none re-run on the new text. So a rewrite must never introduce anything another
+guard would refuse; the convention hooks only insert `uv run`, `pnpm`,
+`builtin cd` and a subshell.
+
+```sh
+~/.claude/hooks/enforce-uv.sh --selftest              # 65 arms
+~/.claude/hooks/enforce-pnpm.sh --selftest            # 56 arms
+.claude/hooks/enforce-no-cd.sh --selftest             # 48 arms (this repo only)
+CONV_HOOK_UNDER_TEST=<other copy> <hook> --selftest   # same arms, another copy
+```
+
+The three share `home/.claude/hooks/conv-shscan.awk` (a zsh command scanner:
+quotes, `$(...)`, heredocs, `|&`, `&!`, `=(...)`, glob qualifiers) and
+`conv-hooklib.sh` (JSON in and out, the log, the selftest runner). A new hook
+that rewrites should reuse them rather than grow a fourth regex.

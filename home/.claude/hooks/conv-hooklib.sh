@@ -26,10 +26,12 @@
 conv_log() { # $1 BLOCKED|REWROTE, $2 reason, $3 command, [$4 new command]
   local f="${CONV_HOOK_LOG:-$CONV_LOG_FILE}"
   mkdir -p "$(dirname "$f")" 2>/dev/null
+  # The braces matter: a failed >> is the SHELL's error, raised before the
+  # command's own 2>/dev/null applies (docs/CLAUDE_HOOKS.md, "Two traps").
   if [ "$1" = REWROTE ]; then
-    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] REWROTE $CONV_TAG \"$2\" \"$3\" -> \"$4\"" >> "$f" 2>/dev/null
+    { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] REWROTE $CONV_TAG \"$2\" \"$3\" -> \"$4\"" >> "$f"; } 2>/dev/null
   else
-    echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] BLOCKED $CONV_TAG \"$2\" \"$3\"" >> "$f" 2>/dev/null
+    { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] BLOCKED $CONV_TAG \"$2\" \"$3\"" >> "$f"; } 2>/dev/null
   fi
   return 0
 }
