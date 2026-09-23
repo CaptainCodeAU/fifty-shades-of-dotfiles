@@ -1030,6 +1030,53 @@ measure "$X0_ONE"
 wanteq "  CONTROL: one drawer alone, headers found" "3" "$X0_ANY"
 wanteq "  CONTROL: one drawer alone, none glued (a newline-less file is NOT the cause)" "3" "$X0_AT"
 
+# W-20260922-A25: EXACTLY one blank line between two records INSIDE a drawer, whatever
+# each item file ends with. The arms above prove only that headers start their own line;
+# before A25 a file saved without its last byte printed its last line and the next header
+# with NO blank line between, and a file with trailing blank lines printed two. Measured as
+# a pair per header (blank lines directly above it, and whether it counted at all), with a
+# denominator from the filesystem, so an output with no headers cannot pass.
+gap_check(){                    # gap_check <text> -> "<headers after the first> <with exactly one blank above>"
+    printf '%s\n' "$1" | awk '
+      /^## W-/ { if (seen++) { n++; if (nb == 1) ok++ } }
+      { if ($0 == "") nb++; else nb = 0 }
+      END { printf "%d %d", n + 0, ok + 0 }'
+}
+A25_N=0; A25_OK=0
+gap_measure(){ read -r A25_N A25_OK <<<"$(gap_check "$1")"; }
+# CONTROL: the instrument must see both faults. No blank, and two blanks, each fail.
+gap_measure '## W-20260101-A01 -- a
+done-when: x
+## W-20260101-A02 -- b
+
+x
+
+
+## W-20260101-A03 -- c'
+wanteq "A25 CONTROL: gap_check counts 2 headers after the first, only 0 with exactly one blank" "2 0" "$A25_N $A25_OK"
+# The same drawer as CONTROL 3: A02 in the MIDDLE and A03 LAST were saved without a last byte.
+gap_measure "$X0_ONE"
+wanteq "A25: one drawer, every record after the first has exactly one blank line above it" "2 2" "$A25_N $A25_OK"
+# A drawer of its own, so the X0 counts above stay as they were: a file ending WITHOUT a
+# newline, one ending with THREE trailing blank lines, and plain ones around them.
+A25D="$ROOT/caseA25"; A25P="$A25D/projects"; A25R="$A25D/repo"; mkdir -p "$A25R"; git -C "$A25R" init -q 2>/dev/null
+A25W="$A25P/$(key "$A25R")/memory/WORK"; mkdir -p "$A25W/items/open"; printf 'a25\n' > "$A25W/items/.project"
+printf '## W-20260101-C01 -- plain\n\nproject: a25\nstatus: open\nkind: do\ndone-when: x\n'            > "$A25W/items/open/W-20260101-C01.md"
+printf '## W-20260101-C02 -- no last byte\n\nproject: a25\nstatus: open\nkind: do\ndone-when: x'        > "$A25W/items/open/W-20260101-C02.md"
+printf '## W-20260101-C03 -- three trailing blanks\n\nproject: a25\nstatus: open\nkind: do\ndone-when: x\n\n\n\n' > "$A25W/items/open/W-20260101-C03.md"
+printf '## W-20260101-C04 -- plain, last\n\nproject: a25\nstatus: open\nkind: do\ndone-when: x\n'      > "$A25W/items/open/W-20260101-C04.md"
+A25_FILES="$(find "$A25W/items/open" -name 'W-*.md' | wc -l | tr -d ' ')"
+wanteq "  fixture: four item files, C02 with no last byte" "4 0" "$A25_FILES $(tail -c 1 "$A25W/items/open/W-20260101-C02.md" | wc -l | tr -d ' ')"
+gap_measure "$(OPEN_ITEMS_PROJECTS_DIR="$A25P" "$TOOL" --project a25 2>/dev/null)"
+wanteq "A25: the listing puts exactly one blank line above each of the $((A25_FILES - 1)) later records" "$((A25_FILES - 1)) $((A25_FILES - 1))" "$A25_N $A25_OK"
+# The generated OPEN.md is the second printer. regen writes it; the commit then fails
+# (rc 3) because the fixture has no dot-claude repo, and the view is on disk either way.
+OUT="$(cd "$A25R" && OPEN_ITEMS_PROJECTS_DIR="$A25P" OPEN_ITEMS_DOTCLAUDE="$A25D/no-dotclaude" "$TOOL" regen 2>&1)"; RC=$?
+wanteq "  regen writes the view (rc 3: written, NOT committed, no dot-claude here)" "3" "$RC"
+gap_measure "$(cat "$A25W/OPEN.md" 2>/dev/null)"
+wanteq "A25: the generated OPEN.md puts exactly one blank line above each later record" "$((A25_FILES - 1)) $((A25_FILES - 1))" "$A25_N $A25_OK"
+want   "  and the record after the no-last-byte file is whole" "## W-20260101-C03 -- three trailing blanks" "$(cat "$A25W/OPEN.md" 2>/dev/null)"
+
 # --closed widens the population; the boundary must hold there too.
 X0_CL="$(OPEN_ITEMS_PROJECTS_DIR="$P" "$TOOL" --all --closed 2>/dev/null)"
 measure "$X0_CL"
