@@ -101,8 +101,8 @@ if [ "$sub" = run ]; then
   repo=''; branch=''
   while [ $# -gt 0 ]; do
     case "$1" in
-      --repo)   repo="$2"; shift 2 ;;
-      --branch) branch="$2"; shift 2 ;;
+      --repo)   repo="${2:-}"; shift 2 || set -- ;;
+      --branch) branch="${2:-}"; shift 2 || set -- ;;
       *) shift ;;
     esac
   done
@@ -650,7 +650,7 @@ if [ "$sub" = api ]; then
   printf '{}\n'; exit 0
 fi
 repo=''
-while [ $# -gt 0 ]; do case "$1" in --repo) repo="$2"; shift 2 ;; *) shift ;; esac; done
+while [ $# -gt 0 ]; do case "$1" in --repo) repo="${2:-}"; shift 2 || set -- ;; *) shift ;; esac; done
 case "$repo" in
   o/r)  f="$CI_WATCH_SELFTEST_STUB" ;;
   o/r2) f="$CI_WATCH_SELFTEST_STUB2" ;;

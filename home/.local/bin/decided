@@ -324,11 +324,11 @@ cmd_add(){
   local title="" topic="" holds="" body="" ruled="" status="standing" where="" home id f top stores=() s
   while [ $# -gt 0 ]; do
     case "$1" in
-      --topic) topic="${2:-}"; shift 2 ;;
-      --holds-in) holds="${2:-}"; shift 2 ;;
-      --body) body="${2:-}"; shift 2 ;;
-      --ruled-by) ruled="${2:-}"; shift 2 ;;
-      --status) status="${2:-}"; shift 2 ;;
+      --topic) [ $# -ge 2 ] || die_refused "add: --topic needs a value"; topic="$2"; shift 2 ;;
+      --holds-in) [ $# -ge 2 ] || die_refused "add: --holds-in needs a value"; holds="$2"; shift 2 ;;
+      --body) [ $# -ge 2 ] || die_refused "add: --body needs a value"; body="$2"; shift 2 ;;
+      --ruled-by) [ $# -ge 2 ] || die_refused "add: --ruled-by needs a value"; ruled="$2"; shift 2 ;;
+      --status) [ $# -ge 2 ] || die_refused "add: --status needs a value"; status="$2"; shift 2 ;;
       --global) where=global; shift ;;
       --project) where=project; shift ;;
       --*) die_refused "add: unknown flag $1" ;;
