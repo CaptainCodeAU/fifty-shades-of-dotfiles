@@ -116,6 +116,7 @@ if [ "${1:-}" = "--selftest" ]; then
   conv_arm allow 'prose in an echo'               'echo "npm install is banned"'
   conv_arm allow 'prose in a heredoc'             $'git commit -F - <<EOF\nnever npm install\nEOF'
   conv_arm allow 'commit message via $(heredoc)'  $'git commit -m "$(cat <<\'EOF\'\nnpx (not npm) isn\'t used\nEOF\n)"'
+  conv_arm allow 'multi-line "..." message (2026-09-23 false positive)' $'git commit -m "first line\n; npm ci is prose\nlast"'
   conv_arm allow 'control: harmless'              'echo control-ok'
   echo "=== FALLBACK arms: scanner missing, the rule still holds ==="
   export CONV_SHSCAN=/nonexistent/conv-shscan.awk
