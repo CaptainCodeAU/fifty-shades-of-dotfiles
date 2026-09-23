@@ -1435,6 +1435,7 @@ if [ -n "$PTY_OK" ]; then
   wanteq "P8 TTY: a human typing the owner name at a terminal may file reach: mandatory (rc=0)" "0" "$RC"
   tty_run wrong "$D/alpha" "$TOOL" add "human typo" --done-when y --reach mandatory
   wanteq "P8 TTY CONTROL: the wrong name typed REFUSES (rc=2)" "2" "$RC"
+  want   "P8 TTY CONTROL:   with the P8 refusal, not an unknown flag" "or the name did not match" "$OUT"
 else nm "P8 TTY positive and typo arms" "no pty here: expect could not open one (the Claude sandbox denies openpty)"; fi
 
 printf 'V7 move: groups, history, notice, no-clobber (P10, P11, P12)\n'
