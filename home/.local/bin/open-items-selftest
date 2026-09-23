@@ -27,6 +27,11 @@ set -uo pipefail
 
 TOOL="${OPEN_ITEMS_TOOL:-$(dirname "$0")/$(basename "$0" | sed "s/-selftest//")}"
 [ -x "$TOOL" ] || { printf 'selftest: cannot find open-items at %s\n' "$TOOL" >&2; exit 2; }
+# The tool's OWN folder first on PATH, so it calls the pj-id beside it. Otherwise a
+# worktree's open-items ran against the stowed master pj-id, and a change to the pair
+# (the claim verb, D-20260923-A10) could not be tested before it was merged.
+PATH="$(cd "$(dirname "$TOOL")" && pwd -P):$PATH"; export PATH
+printf 'open-items-selftest -- testing %s with pj-id %s\n' "$TOOL" "$(command -v pj-id)"
 
 PASS=0; FAIL=0
 ROOT="$(mktemp -d "${TMPDIR:-/tmp}/open-items-selftest.XXXXXX")" || {
@@ -52,6 +57,7 @@ key(){ printf '%s' "$1" | sed 's#[/._]#-#g'; }
 N=0
 mk_fixture(){
     D="$ROOT/case$((++N))"; P="$D/projects"; mkdir -p "$P"
+    export PJ_ID_CLAIMS_DIR="$D/claims"   # per case: a claim never leaks between cases, never the real folder
     ALPHA="$D/alpha"; BETA="$D/.beta"
     mkdir -p "$ALPHA/deep/sub" "$BETA"
     git -C "$ALPHA" init -q 2>/dev/null; git -C "$BETA" init -q 2>/dev/null
@@ -217,6 +223,7 @@ wanteq "and says nothing there either" "" "$OUT"
 # drawer inside it is committable and one symlinked elsewhere is not.
 mk_dotclaude(){
     D="$ROOT/case$((++N))"; DC="$D/dotclaude"; P="$DC/projects"; mkdir -p "$P"
+    export PJ_ID_CLAIMS_DIR="$D/claims"   # per case: a claim never leaks between cases, never the real folder
     git -C "$DC" init -q 2>/dev/null
     git -C "$DC" config user.email t@t; git -C "$DC" config user.name t
     # Mirror the real dot-claude .gitignore: the global MEMORY/ rule would otherwise
@@ -694,8 +701,16 @@ runw "$ZETA" add "zeta shared id" --done-when "zeta finish" --body "$M_BODY"    
 runw "$ZETA" add "zeta second" --done-when x --holds-in repo:a.md --holds-in repo:b.md   # A02
 runw "$ZETA" add "zeta old plan" --done-when x                                     # A03
 runw "$ZETA" add "zeta new plan" --done-when x                                     # A04
-runw "$OMEGA" add "omega shared id" --done-when "omega finish"                     # A01
-runw "$OMEGA" add "omega replacement" --done-when x                                # A02
+# The duplicates are PLANTED, as files that predate the claim folder, because that is what
+# the 12 real ones are: since D-20260923-A10 `add` scans every drawer and claims the ID, so
+# it cannot mint a duplicate any more (section U proves that).
+for M_P in "A01|omega shared id|omega finish" "A02|omega replacement|x"; do
+  IFS='|' read -r M_N M_T M_DW <<<"$M_P"
+  printf '## W-%s-%s -- %s\n\nproject: omega\nstatus: open\nkind: do\ndone-when: %s\nraised: %s (session sess-test)\n' \
+    "$TODAY" "$M_N" "$M_T" "$M_DW" "$(date +%Y-%m-%d)" > "$OW/items/open/W-$TODAY-$M_N.md"
+done
+runw "$OMEGA" regen
+git -C "$DC" add -A -- "projects/$(key "$OMEGA")" >/dev/null 2>&1; git -C "$DC" -c commit.gpgsign=false commit -q -m "plant omega duplicates" -- "projects/$(key "$OMEGA")" >/dev/null 2>&1
 wanteq "  fixture: W-$TODAY-A01 really exists in BOTH drawers" "2" \
        "$(find "$ZW/items" "$OW/items" -name "W-$TODAY-A01.md" | wc -l | tr -d ' ')"
 
@@ -955,6 +970,7 @@ X0_ANY=0; X0_AT=0
 measure(){ read -r X0_ANY X0_AT <<<"$(glue_count "$1")"; }
 
 D="$ROOT/caseX0"; P="$D/projects"
+export PJ_ID_CLAIMS_DIR="$D/claims"   # per case: a claim never leaks between cases, never the real folder
 # Two drawers. The glob in all_drawers() is sorted, so `-x0-aaa` is printed first and
 # `-x0-bbb`'s header is the one that used to glue onto aaa's last line.
 #
@@ -1018,6 +1034,7 @@ printf '\nM  pinned items lead the session surface (W-20260923-A23)\n'
 # 40-item drawer whose two pinned items are the two NEWEST IDs, plus two look-alikes that
 # must NOT pin: a `when:` that says "next time", and "when: next session" in the BODY.
 D="$ROOT/caseM"; P="$D/projects"; PIN="$D/pin"; mkdir -p "$PIN"; git -C "$PIN" init -q 2>/dev/null
+export PJ_ID_CLAIMS_DIR="$D/claims"   # per case: a claim never leaks between cases, never the real folder
 PWK="$P/$(key "$PIN")/memory/WORK"; mkdir -p "$PWK/items/open"; printf 'pin\n' > "$PWK/items/.project"
 i=0; while [ $i -lt 40 ]; do i=$((i+1)); id="$(printf 'W-20260101-A%02d' "$i")"
   { printf '## %s -- item number %s\n\nproject: pin\nstatus: open\nkind: do\ndone-when: x\n' "$id" "$i"
@@ -1047,6 +1064,103 @@ sed -i '' '/^when: /d' "$PWK/items/open/W-20260101-A39.md" "$PWK/items/open/W-20
 run_in "$PIN" --session
 wantnot "TWIN unpinned, item 40 is NOT in the first 10 (the bug the pin fixes)" "item number 40" "$(printf '%s\n' "$OUT" | grep '   · ' | head -10)"
 wantnot "TWIN and the header says nothing about pinned" "pinned" "$OUT"
+
+printf '\nU  IDs unique across every drawer, claimed machine-wide (W-20260923-A22, A25; D-20260923-A10)\n'
+# THE BUG: `add` passed only its OWN drawer to pj-id, so a project minted an ID another
+# drawer already held; 12 W- IDs exist twice on the real machine because of it. Every arm
+# here runs with a FIXTURE claim folder (mk_dotclaude exports it); none can write the real
+# ~/.local/state/pj/ids, because pj-id refuses a fixture machine file with the real folder.
+mk_dotclaude
+UO="$D/other"; mkdir -p "$UO"; git -C "$UO" init -q 2>/dev/null
+UOW="$P/$(key "$UO")/memory/WORK"
+runw "$ZETA" init; runw "$UO" init
+u_plant(){  # u_plant <work> <NN> <title>: an item file written by hand, then committed
+  printf '## W-%s-%s -- %s\n\nproject: planted\nstatus: open\nkind: do\ndone-when: x\nraised: %s (session sess-test)\n' \
+    "$TODAY" "$2" "$3" "$(date +%Y-%m-%d)" > "$1/items/open/W-$TODAY-$2.md"
+  git -C "$DC" add -A -- "${1#"$DC"/}" >/dev/null 2>&1; git -C "$DC" -c commit.gpgsign=false commit -q -m plant >/dev/null 2>&1
+}
+u_plant "$UOW" A01 "other one"; u_plant "$UOW" A02 "other two"
+runw "$ZETA" add "zeta after other" --done-when x
+wanteq "add in zeta skips the IDs ANOTHER drawer holds (rc=0)" "0" "$RC"
+want   "  and mints -A03, not the -A01 its own empty drawer would allow" "W-$TODAY-A03" "$OUT"
+[ -e "$PJ_ID_CLAIMS_DIR/W-$TODAY-A03" ] && ok "  and CLAIMED it in the (fixture) claim folder" || bad "  and CLAIMED it in the (fixture) claim folder" "$PJ_ID_CLAIMS_DIR/W-$TODAY-A03" "$(ls "$PJ_ID_CLAIMS_DIR" 2>&1)"
+# A legacy drawer's OPEN.md is a store too.
+UL="$D/legacyu"; mkdir -p "$UL"; git -C "$UL" init -q 2>/dev/null; ULW="$P/$(key "$UL")/memory/WORK"; mkdir -p "$ULW"
+printf '# legacyu -- open items\n\n## W-%s-A04 -- a legacy-drawer item\n\nproject: legacyu\nstatus: open\n' "$TODAY" > "$ULW/OPEN.md"
+runw "$ZETA" add "zeta after legacy" --done-when x
+want   "a legacy OPEN.md header counts as taken too: -A05, not -A04" "W-$TODAY-A05" "$OUT"
+# The duplicates already on disk are LEFT; a lookup across drawers refuses them by name.
+u_plant "$ZW" A02 "zeta planted twin"
+runw "$ZETA" show "W-$TODAY-A02"
+wanteq "an ID planted in two drawers (pre-claim duplicate): show REFUSES (rc=2)" "2" "$RC"
+want   "  and names the other drawer" "other" "$OUT"
+
+# A25: an items/open that refuses the create must REFUSE, by path, and not spin.
+# u_capped kills the whole PROCESS GROUP after N seconds (rc 142). A plain `perl alarm;
+# exec` is not enough, measured 2026-09-23: it killed open-items but not the command-
+# substitution child running the endless loop, which kept the output pipe open and hung
+# the suite for ten minutes against master.
+u_capped(){ perl -e 'my $s = shift; my $p = fork; defined $p or exit 125;
+  if (!$p) { setpgrp(0, 0); exec @ARGV or exit 127 }
+  setpgrp($p, $p); local $SIG{ALRM} = sub { kill "KILL", -$p; waitpid($p, 0); exit 142 };
+  alarm $s; waitpid($p, 0); exit($? >> 8)' "$@"; }
+runw "$ZETA" add "A25 control before" --done-when x
+wanteq "A25 control: a writable drawer adds (rc=0)" "0" "$RC"
+chmod 500 "$ZW/items/open"
+U_S=$(date +%s)
+OUT="$(cd "$ZETA" && OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" u_capped 10 "$TOOL" add "A25 refused" --done-when x 2>&1)"; RC=$?
+U_E=$(date +%s)
+chmod 700 "$ZW/items/open"
+wanteq "an items/open that refuses the create REFUSES (rc=2; 142 means it hung and was killed)" "2" "$RC"
+want   "  and names the path it could not create" "$ZW/items/open/W-$TODAY-A" "$OUT"
+want   "  and says refused, not a clash" "REFUSED, not a clash" "$OUT"
+[ $(( U_E - U_S )) -lt 10 ] && ok "  and returns at once ($(( U_E - U_S ))s)" || bad "  and returns at once" "<10s" "$(( U_E - U_S ))s"
+wanteq "  and wrote no item" "0" "$(grep -l 'A25 refused' "$ZW/items/open"/*.md 2>/dev/null | wc -l | tr -d ' ')"
+wanteq "  and left no drawer lock" "0" "$([ -d "$ZW/items/.lock" ] && echo 1 || echo 0)"
+# The same refusal for a CLAIM create that is refused.
+chmod 500 "$PJ_ID_CLAIMS_DIR"
+OUT="$(cd "$ZETA" && OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" u_capped 10 "$TOOL" add "claim refused" --done-when x 2>&1)"; RC=$?
+chmod 700 "$PJ_ID_CLAIMS_DIR"
+wanteq "a claim folder that refuses the create REFUSES the add (rc=2)" "2" "$RC"
+want   "  and names the claim path" "$PJ_ID_CLAIMS_DIR/W-$TODAY-A" "$OUT"
+wanteq "  and wrote no item" "0" "$(grep -l 'claim refused' "$ZW/items/open"/*.md 2>/dev/null | wc -l | tr -d ' ')"
+runw "$ZETA" add "A25 control after" --done-when x
+wanteq "A25 control: with permissions back, an add works again (rc=0)" "0" "$RC"
+
+# THE RACE, end to end: two real adds in two drawers released at the same instant.
+# CONTROL first, claim off (PJ_ID_CLAIM=off, a test seam pj-id honours only with a fixture
+# folder): they must collide, or the race never happened and the claim arm proves nothing.
+u_race(){  # u_race <on|off> <trials> -> "DUPS" count, or INVALID
+  local mode="$1" n="$2" k d=0 R who a b
+  for k in $(seq 1 "$n"); do
+    R="$D/race-$mode-$k"
+    for who in X Y; do mkdir -p "$R/$who"; git -C "$R/$who" init -q 2>/dev/null; (cd "$R/$who" && OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" "$TOOL" init >/dev/null 2>&1); done
+    for who in X Y; do
+      ( while [ ! -e "$R/go" ]; do :; done
+        cd "$R/$who" || exit 2
+        if [ "$mode" = off ]; then PJ_ID_CLAIM=off PJ_ID_CLAIMS_DIR="$R/claims" OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" "$TOOL" add "race $who" --done-when x >/dev/null 2>&1
+        else PJ_ID_CLAIMS_DIR="$R/claims" OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" "$TOOL" add "race $who" --done-when x >/dev/null 2>&1; fi ) &
+    done
+    sleep 0.2; : > "$R/go"; wait
+    a="$(ls "$P/$(key "$R/X")/memory/WORK/items/open" 2>/dev/null | head -1)"; b="$(ls "$P/$(key "$R/Y")/memory/WORK/items/open" 2>/dev/null | head -1)"
+    [ -n "$a" ] && [ -n "$b" ] || { echo INVALID; return; }
+    [ "$a" = "$b" ] && d=$((d+1))
+  done
+  echo "$d"
+}
+# Every trial adds two drawers that later trials also scan, so each race starts from a
+# FRESH projects root: otherwise trial 2 would see trial 1's IDs and still be a fair race,
+# but the counts would drift. Separate roots keep every trial identical.
+U_P="$P"; U_OFF=0; U_ON=0; U_BAD=""
+for k in 1 2 3 4; do P="$D/rp-off-$k/projects"; mkdir -p "$P"; r="$(u_race off 1)"; [ "$r" = INVALID ] && U_BAD=1 || U_OFF=$((U_OFF+r)); done
+for k in 1 2 3 4; do P="$D/rp-on-$k/projects"; mkdir -p "$P"; r="$(u_race on 1)"; [ "$r" = INVALID ] && U_BAD=1 || U_ON=$((U_ON+r)); done
+P="$U_P"
+if [ -n "$U_BAD" ]; then bad "race: a racer wrote no item -- INVALID TRIAL" "two items per trial" "off=$U_OFF on=$U_ON"
+else
+  [ "$U_OFF" -gt 0 ] && ok "race CONTROL, claim off: $U_OFF of 4 simultaneous adds in two drawers got the SAME ID (must be > 0)" \
+                     || bad "race CONTROL showed no duplicate, so the race never happened" "> 0" "$U_OFF"
+  wanteq "race with the claim: simultaneous adds in two drawers never share an ID (duplicates of 4)" "0" "$U_ON"
+fi
 
 printf '\n%s passed, %s failed   (fixtures: %s)\n' "$PASS" "$FAIL" "$ROOT"
 [ "$FAIL" -eq 0 ] || { printf 'open-items-selftest: FAILURES above\n' >&2; exit 1; }

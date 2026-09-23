@@ -19,7 +19,7 @@
 #   open-items init | regen         create items/ | rebuild OPEN.md (rescues a hand edit first)
 #   open-items migrate [--dry-run --into <dir>] [--park W-ID,..]   legacy OPEN.md -> items/
 #   open-items --selftest           prove every arm before trusting it
-# IDs are unique per drawer only: show/get/supersede REFUSE an ID found in two without --project.
+# New IDs are unique machine-wide; 12 older ones repeat, so show/get/supersede REFUSE those.
 # Exit: 0 found/written  ·  1 nothing found (not an error)  ·  2 REFUSED  ·  3 written but NOT committed
 #
 # Design, layout, the two drawer formats and why every write is a commit: docs/OPEN_ITEMS.md
@@ -438,16 +438,38 @@ writable_drawer(){
   [ -d "$w/items" ] || refuse "$(name_of "$w" 2>/dev/null || basename "$repo") has no items/ folder -- a legacy OPEN.md drawer is read-only; run 'open-items migrate' in the project that owns it"
   printf '%s' "$w"
 }
-next_id(){                      # claim W-<today>-<LETTER><NN> atomically; retry on a clash
+# Every place a W- ID could already sit on this machine: each drawer's items/ tree, or a
+# legacy drawer's OPEN.md. D-20260923-A10: an ID is unique across EVERY drawer, not just
+# this one. Until 2026-09-23 only this drawer was passed, and 12 W- IDs were minted twice
+# in different projects; they are left as they are and lookups refuse them as ambiguous.
+all_w_stores(){
+  local w
+  while IFS= read -r w; do
+    [ -n "$w" ] || continue
+    if [ -d "$w/items" ]; then printf '%s\n' "$w/items"; else printf '%s\n' "$w/OPEN.md"; fi
+  done < <(all_drawers)
+}
+next_id(){                      # claim W-<today>-<LETTER><NN> machine-wide, then create the item
   # The NN and the machine letter come from pj-id (P8a, 2026-09-21): the ID itself names
-  # the machine that minted it, so two clones can never claim the same one. pj-id searches
-  # the whole items/ tree (open, parked, closed) for an ID already taken, and REFUSES when
-  # ~/.config/pj/machine has no letter rather than guessing one.
-  local w="$1" id f
+  # the machine that minted it, so two clones can never claim the same one. `pj-id claim`
+  # scans every drawer below, then claims the ID in the machine-wide claim folder, so two
+  # adds in two projects at the same instant cannot both get it (D-20260923-A10). It
+  # REFUSES when ~/.config/pj/machine has no letter rather than guessing one.
+  local w="$1" id f s stores=() tries=0
+  while IFS= read -r s; do stores+=("$s"); done < <(all_w_stores)
+  # This drawer is always searched, even when it is not under the projects root.
+  case " ${stores[*]-} " in *" $w/items "*) ;; *) stores+=("$w/items") ;; esac
   while :; do
-    id="$(pj-id next W "$w/items")" || refuse "no ID allocated (pj-id refused, see above)"
+    id="$(pj-id claim W "${stores[@]}")" || refuse "no ID allocated (pj-id refused, see above)"
     f="$w/items/open/$id.md"
     ( set -C; : > "$f" ) 2>/dev/null && { printf '%s' "$f"; return 0; }
+    # W-20260923-A25. A failed create means EITHER "the file is already there" OR "I may
+    # not write here", and this loop used to treat both as the first: an unwritable
+    # items/open made it spin forever, claiming a fresh ID every turn. Only a clash leaves
+    # a file behind, so that is the test (the W-20260921-A30 fix, now here too).
+    [ -e "$f" ] || refuse "cannot create $f -- the create was REFUSED, not a clash (the path does not exist afterwards). Inside the Claude Bash sandbox ~/.claude/projects is not writable; run this from a terminal. Nothing was written; $id stays claimed and is never reused."
+    tries=$((tries+1))
+    [ "$tries" -lt 20 ] || refuse "gave up after $tries IDs that pj-id claimed but that already existed in $w/items/open; check pj-id claim. Nothing was written."
   done
 }
 finish_write(){                 # finish_write <work> <msg>: regen + commit, rc 0 or 3
