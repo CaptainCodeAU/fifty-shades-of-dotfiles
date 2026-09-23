@@ -68,7 +68,7 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             profile_name="$2"
-            shift 2
+            shift 2  # shift-lint: ok the if above exits unless $2 is non-empty, so $# >= 2
             ;;
         -r|--random)
             random_profile=true

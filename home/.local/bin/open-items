@@ -1220,7 +1220,7 @@ split_args(){
   POS=(); PROJ=""
   while [ $# -gt 0 ]; do
     case "$1" in
-      --project) [ -n "${2:-}" ] || refuse "--project needs a name"; PROJ="$2"; shift 2 ;;
+      --project) [ -n "${2:-}" ] || refuse "--project needs a name"; PROJ="$2"; shift 2 ;;  # shift-lint: ok a non-empty $2 is checked first, so $# >= 2
       --*) refuse "unknown flag $1" ;;
       *) POS+=("$1"); shift ;;
     esac
@@ -2179,8 +2179,8 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --closed) WANT="all"; shift ;;
     --json) JSON=1; shift ;;
-    --grep) GREP="${2:-}"; [ -n "$GREP" ] || refuse "--grep needs the words to look for (quote a phrase)"; shift 2 ;;
-    --status) WANT="${2:-}"; valid_status "$WANT" || refuse "--status must be one of: $STATUSES"; shift 2 ;;
+    --grep) GREP="${2:-}"; [ -n "$GREP" ] || refuse "--grep needs the words to look for (quote a phrase)"; shift 2 ;;  # shift-lint: ok a non-empty $2 is checked first, so $# >= 2
+    --status) WANT="${2:-}"; valid_status "$WANT" || refuse "--status must be one of: $STATUSES"; shift 2 ;;  # shift-lint: ok valid_status refuses an empty $2, so $# >= 2
     --verbose) VERBOSE=1; shift ;;
     *) ARGS+=("$1"); shift ;;
   esac
