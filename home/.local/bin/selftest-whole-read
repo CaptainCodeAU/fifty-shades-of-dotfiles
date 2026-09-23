@@ -1,0 +1,215 @@
+#!/usr/bin/env bash
+# ============================================================================
+#  selftest-whole-read -- prove every bash selftest reads itself whole first
+# ============================================================================
+#
+# WHY
+# ---
+# bash reads a script as it runs it, one command at a time, from the open file.
+# So a selftest that is edited while it runs (an agent fixing arm 40 while arm 12
+# is still going) carries on reading the NEW file at the OLD byte offset: the
+# rest of the run is a mix of two versions, and usually dies of a syntax error
+# half way through. That run is an invalid trial that looks like a failing
+# suite. It happened to open-items-selftest in batch 2 (W-20260923-A57).
+#
+# THE FIX, identical in every bash *-selftest, as its first two lines of code:
+#
+#   [ -n "${SELFTEST_WHOLE_READ-}" ] || SELFTEST_WHOLE_READ=1 exec "$BASH" -c 'shopt -u sourcepath; . "$0"' "$0" "$@"
+#   unset SELFTEST_WHOLE_READ
+#
+# The suite re-runs itself through `.` (source), and bash's `.` reads the whole
+# file into memory before running any of it, so a later edit cannot reach the
+# run. There is no temp copy, so nothing to clean up, and `$0`, BASH_SOURCE,
+# the arguments and the exit code are all the original ones: every suite still
+# finds its sibling tool the way it did before. The pieces:
+#   SELFTEST_WHOLE_READ=1   recursion guard, set only for the exec'd shell and
+#                           unset on the next line, so a suite run BY a suite
+#                           still guards itself
+#   "$BASH"                 the same interpreter that started the suite
+#   shopt -u sourcepath     without it, `.` looks a slash-less name up on PATH
+#                           first, so `bash open-items-selftest` from inside
+#                           home/.local/bin would run the MASTER copy (measured)
+# Limit: `bash -x suite` traces only the header, since the exec'd shell does not
+# inherit -x. Put `set -x` in the suite, or run `bash -x -c '. ./suite'`.
+#
+# WHAT THIS TOOL DOES
+#   --check [DIR...]  every file named *-selftest in DIR (default: the folder
+#                     this tool is in) whose first line names bash must carry
+#                     the two lines above as its first code. Counts are stated
+#                     positively, including the files that are not bash.
+#   --selftest        proves the mechanism on fixtures: an unguarded script
+#                     edited mid-run dies (the control), a guarded one finishes
+#                     with the same count, on /bin/bash (3.2) and the PATH bash;
+#                     plus the $0, argument, exit-code, guard and sourcepath
+#                     arms, and --check's own pass, fail and refuse arms.
+#
+# EXIT CODES
+#   0  every bash suite carries the header / every selftest arm passed
+#   1  a suite is missing it (named) / a selftest arm failed
+#   2  could not run: no such folder, or no bash suite found (NOT a pass)
+# ============================================================================
+
+set -uo pipefail
+
+HEADER1='[ -n "${SELFTEST_WHOLE_READ-}" ] || SELFTEST_WHOLE_READ=1 exec "$BASH" -c '"'"'shopt -u sourcepath; . "$0"'"'"' "$0" "$@"'
+HEADER2='unset SELFTEST_WHOLE_READ'
+
+# first_code <file>: the first two lines after the shebang that are neither blank
+# nor a comment, one per line.
+first_code() {
+  awk 'NR == 1 { next } /^[[:space:]]*$/ || /^[[:space:]]*#/ { next } { print; if (++n == 2) exit }' "$1"
+}
+
+check() {
+  local dir f name shebang code want total=0 good=0 missing=0 other=0 rc=0
+  [ $# -gt 0 ] || set -- "$(dirname "$0")"
+  want="$(printf '%s\n%s' "$HEADER1" "$HEADER2")"
+  for dir in "$@"; do
+    [ -d "$dir" ] || { echo "selftest-whole-read: REFUSED no such folder: $dir" >&2; return 2; }
+    for f in "$dir"/*-selftest; do
+      [ -f "$f" ] || continue
+      name="$(basename "$f")"
+      shebang="$(head -1 "$f")"
+      case "$shebang" in
+        '#!'*bash*) ;;
+        *) other=$((other + 1)); echo "  --   $name (not bash: $shebang)"; continue ;;
+      esac
+      total=$((total + 1))
+      code="$(first_code "$f")"
+      if [ "$code" = "$want" ]; then
+        good=$((good + 1)); echo "  ok   $name"
+      else
+        missing=$((missing + 1)); rc=1
+        echo "  MISSING $name: its first code is not the whole-read header"
+      fi
+    done
+  done
+  if [ "$total" -eq 0 ]; then
+    echo "selftest-whole-read: REFUSED found no bash *-selftest in $* ($other not bash): nothing checked, NOT a pass" >&2
+    return 2
+  fi
+  echo "selftest-whole-read: $good of $total bash suite(s) carry the header, $missing missing; $other *-selftest file(s) not bash, not checked"
+  return "$rc"
+}
+
+# ---- selftest --------------------------------------------------------------
+
+PASS=0; FAIL=0; RUNS=0
+ok(){  PASS=$((PASS + 1)); printf '  ok   %s\n' "$1"; }
+bad(){ FAIL=$((FAIL + 1)); printf '  FAIL %s\n       got: %s\n' "$1" "$(printf '%s' "$2" | tr '\n' '|' | cut -c1-400)"; }
+
+# make_fixture <path> <bash> <guarded 0|1>: a script that waits for $MARK.edited
+# (so the edit lands mid-run, with no timing race), then runs three more arms.
+make_fixture() {
+  {
+    echo "#!$2"
+    echo "# a comment the header may follow"
+    [ "$3" = 1 ] && { echo "$HEADER1"; echo "$HEADER2"; }
+    cat <<'EOF'
+echo "0=$0 bs=${BASH_SOURCE[0]} n=$# args=[$*] guard_seen_by_child=$("$BASH" -c 'echo "${SELFTEST_WHOLE_READ-unset}"')"
+: > "$MARK.started"
+while [ ! -e "$MARK.edited" ]; do sleep 0.05; done
+P=1
+P=$((P + 1))
+P=$((P + 1))
+echo "PASS=$P"
+exit 7
+EOF
+  } > "$1"
+  chmod +x "$1"
+}
+
+# run_edited <fixture> [args...]: run it with those arguments, and once it has started, insert a broken
+# line into its unread middle, written in place (same inode, as an editor that
+# saves in place would). Prints the output; the exit code is in $RC.
+run_edited() {
+  local f="$1" new
+  [ $# -gt 0 ] && shift
+  RUNS=$((RUNS + 1)); MARK="$T/mark.$RUNS"   # fresh markers: no rm, which the sandbox refuses
+  (
+    while [ ! -e "$MARK.started" ]; do sleep 0.05; done
+    new="$(awk '/^echo "PASS/ { print "if then fi ((( garbage" } { print }' "$f")"
+    printf '%s\n' "$new" > "$f"
+    : > "$MARK.edited"
+  ) &
+  OUT="$(MARK="$MARK" "$f" "$@" 2>&1)"; RC=$?
+  wait
+}
+
+selftest() {
+  local B bashes f inode out rc
+  T="$(mktemp -d "${TMPDIR:-/tmp}/selftest-whole-read.XXXXXX")" || { echo "selftest-whole-read: mktemp failed -- INVALID TRIAL" >&2; return 2; }
+  T="$(builtin cd "$T" && pwd -P)"
+  bashes="/bin/bash"
+  B="$(env -i PATH="$PATH" sh -c 'command -v bash')"
+  [ -n "$B" ] && [ "$B" != /bin/bash ] && bashes="$bashes $B"
+  echo "selftest-whole-read: testing the header in $0 against $bashes"
+
+  for B in $bashes; do
+    f="$T/unguarded"; make_fixture "$f" "$B" 0; inode="$(ls -i "$f" | awk '{print $1}')"
+    run_edited "$f"
+    case "$RC:$OUT" in
+      *PASS=3*) bad "control, $B: an unguarded script edited mid-run must die (else the edit never landed: INVALID TRIAL)" "rc=$RC $OUT" ;;
+      *syntax\ error*) ok "control, $B: unguarded script edited mid-run dies of a syntax error (rc=$RC)" ;;
+      *) bad "control, $B: unguarded script edited mid-run gave neither PASS=3 nor a syntax error" "rc=$RC $OUT" ;;
+    esac
+    [ "$(ls -i "$f" | awk '{print $1}')" = "$inode" ] && grep -q garbage "$f" \
+      && ok "control, $B: the edit was in place (same inode) and is in the file" \
+      || bad "control, $B: the edit did not land in place" "$(ls -i "$f")"
+
+    f="$T/guarded"; make_fixture "$f" "$B" 1
+    run_edited "$f" "a b" c
+    [ "$RC" = 7 ] && case "$OUT" in *PASS=3*) true ;; *) false ;; esac && ! case "$OUT" in *error*) true ;; *) false ;; esac \
+      && ok "guarded, $B: same edit, run finishes PASS=3 with its own exit code 7" \
+      || bad "guarded, $B: the edit reached the run" "rc=$RC $OUT"
+    grep -q garbage "$f" && ok "guarded, $B: the edit did land in the file (so the pass above means something)" \
+      || bad "guarded, $B: the edit never landed: INVALID TRIAL" "$(cat "$f")"
+    case "$OUT" in *"0=$f bs=$f n=2 args=[a b c]"*) ok "guarded, $B: \$0, BASH_SOURCE and 2 arguments (one with a space) unchanged" ;;
+      *) bad "guarded, $B: \$0/BASH_SOURCE/arguments changed" "$OUT" ;; esac
+    case "$OUT" in *guard_seen_by_child=unset*) ok "guarded, $B: the recursion guard is not inherited by children" ;;
+      *) bad "guarded, $B: a child sees SELFTEST_WHOLE_READ" "$OUT" ;; esac
+
+    # sourcepath: run by a slash-less name from its own folder, with a decoy of the
+    # same name earlier on PATH. The header must run the local file, not the decoy.
+    mkdir -p "$T/here" "$T/decoy"
+    { echo "#!$B"; echo "$HEADER1"; echo "$HEADER2"; echo 'echo I_AM_LOCAL'; } > "$T/here/sp-selftest"
+    printf 'echo I_AM_THE_PATH_DECOY\n' > "$T/decoy/sp-selftest"; chmod +x "$T/here/sp-selftest" "$T/decoy/sp-selftest"
+    out="$(builtin cd "$T/here" && PATH="$T/decoy:$PATH" "$B" sp-selftest 2>&1)"
+    [ "$out" = I_AM_LOCAL ] && ok "guarded, $B: '$B name' from its folder runs the local file, not a PATH namesake" \
+      || bad "guarded, $B: sourcepath arm" "$out"
+    out="$(builtin cd "$T/here" && PATH="$T/decoy:$PATH" "$B" -c '. "$0"' sp-selftest 2>&1)"
+    [ "$out" = I_AM_THE_PATH_DECOY ] && ok "control, $B: without 'shopt -u sourcepath' the same call runs the PATH decoy" \
+      || bad "control, $B: the sourcepath control did not pick the decoy (arm above proves nothing)" "$out"
+  done
+
+  # --check arms
+  mkdir -p "$T/c-good" "$T/c-bad" "$T/c-none"
+  make_fixture "$T/c-good/a-selftest" /bin/bash 1
+  printf '#!/usr/bin/env python3\nprint(1)\n' > "$T/c-good/py-selftest"
+  make_fixture "$T/c-bad/a-selftest" /bin/bash 1
+  make_fixture "$T/c-bad/b-selftest" /bin/bash 0
+  { echo '#!/usr/bin/env bash'; echo 'set -u'; echo "$HEADER1"; echo "$HEADER2"; } > "$T/c-bad/late-selftest"
+  printf '#!/usr/bin/env zsh\n' > "$T/c-none/z-selftest"
+  out="$(check "$T/c-good" 2>&1)"; rc=$?
+  [ "$rc" = 0 ] && case "$out" in *"1 of 1 bash suite(s) carry the header, 0 missing; 1 *-selftest file(s) not bash"*) true ;; *) false ;; esac \
+    && ok "--check: all guarded -> rc 0, counts stated, the python suite named as not bash" || bad "--check good" "rc=$rc $out"
+  out="$(check "$T/c-bad" 2>&1)"; rc=$?
+  [ "$rc" = 1 ] && case "$out" in *"MISSING b-selftest"*"MISSING late-selftest"*"1 of 3"*) true ;; *) false ;; esac \
+    && ok "--check: unguarded and header-after-code both named MISSING -> rc 1" || bad "--check bad" "rc=$rc $out"
+  out="$(check "$T/c-none" 2>&1)"; rc=$?
+  [ "$rc" = 2 ] && case "$out" in *REFUSED*"NOT a pass"*) true ;; *) false ;; esac \
+    && ok "--check: no bash suite -> REFUSED rc 2, not a pass" || bad "--check none" "rc=$rc $out"
+  out="$(check "$T/no-such" 2>&1)"; rc=$?
+  [ "$rc" = 2 ] && ok "--check: missing folder -> REFUSED rc 2" || bad "--check missing" "rc=$rc $out"
+
+  rm -rf "$T" 2>/dev/null
+  echo "selftest-whole-read --selftest: $PASS passed, $FAIL failed"
+  [ "$FAIL" -eq 0 ]
+}
+
+case "${1:-}" in
+  --check) shift; check "$@"; exit $? ;;
+  --selftest) selftest; exit $? ;;
+  -h|--help|"") sed -n '2,49p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  *) echo "selftest-whole-read: unknown argument '$1' (--check [DIR...] | --selftest | --help)" >&2; exit 2 ;;
+esac
