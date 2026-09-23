@@ -1,0 +1,421 @@
+#!/usr/bin/env bash
+# open-items-xp-selftest -- the cross-project READ side of open-items (W-20260923-A28,
+# ruling D-20260923-A09, safety rules P1-P12 in docs/OPEN_ITEMS_CROSS_PROJECT_SAFETY.md):
+# `--session` Watching / Checks owed / Mandatory / Moved out / Inbox, `seen`, `checks-run`.
+#
+# Fixtures are HAND-BUILT from the item format in the spec, deliberately independent of the
+# write commands, so a writer bug cannot hide a reader bug. (The end-to-end arm, written by
+# the write tool and read by the card, is added once both halves are merged.)
+#
+# THE TOOL RUNS FROM A FIXTURE DOTFILES REPO. The check-script trust root is the real path
+# of the running open-items (P4.2), so the tool under test is COPIED to
+# <fixture>/home/.local/bin/open-items in a fixture git repo whose master holds the
+# fixture check-scripts. No env seam can point it at another script directory.
+#
+# Every behaviour has: an arm that FAILS on master's open-items (run this with
+# OPEN_ITEMS_TOOL=<master copy> to see it), a silent-when-empty arm, and a control.
+# Nothing here touches ~/.claude, ~/.local/state or any real repo.
+#
+# Exit: 0 all passed | 1 a case failed | 2 could not run (invalid trial)
+
+set -uo pipefail
+
+SRC="${OPEN_ITEMS_TOOL:-$(dirname "$0")/open-items}"
+[ -x "$SRC" ] || { printf 'xp-selftest: cannot find open-items at %s\n' "$SRC" >&2; exit 2; }
+SRCDIR="$(cd "$(dirname "$SRC")" && pwd -P)"
+
+ROOT="$(mktemp -d "${TMPDIR:-/tmp}/open-items-xp-selftest.XXXXXX")" || { printf 'xp-selftest: mktemp failed -- INVALID TRIAL\n' >&2; exit 2; }
+ROOT="$(cd "$ROOT" && pwd -P)"
+P="$ROOT/projects"; DC="$ROOT/dotclaude"; ST="$ROOT/state"; DF="$ROOT/dotfiles"; MK="$ROOT/markers"
+mkdir -p "$P" "$DC" "$ST" "$MK"
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+unset CLAUDE_CODE_SESSION_NAME PJ_SESSION_NAME
+
+PASS=0; FAIL=0
+ok(){  PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
+bad(){ FAIL=$((FAIL+1)); printf '  FAIL %s\n       want: %s\n       got : %s\n' "$1" "$2" "$(printf '%s' "$3" | tr '\n' '|' | cut -c1-600)"; }
+want(){    case "$3" in *"$2"*) ok "$1";; *) bad "$1" "contains: $2" "$3";; esac; }
+wantnot(){ case "$3" in *"$2"*) bad "$1" "must NOT contain: $2" "$3";; *) ok "$1";; esac; }
+wanteq(){  [ "$2" = "$3" ] && ok "$1" || bad "$1" "$2" "$3"; }
+key(){ printf '%s' "$1" | sed 's#[/._]#-#g'; }
+
+# --- the fixture dotfiles repo: the tool under test, pj-id beside it, check-scripts on master
+MC="$DF/home/.claude/tools/mandatory-checks"
+mkdir -p "$DF/home/.local/bin" "$MC"
+git -C "$DF" init -q -b master
+cp "$SRC" "$DF/home/.local/bin/open-items"
+[ -x "$SRCDIR/pj-id" ] && cp "$SRCDIR/pj-id" "$DF/home/.local/bin/pj-id"
+TOOL="$DF/home/.local/bin/open-items"
+mkscript(){ printf '#!/bin/sh\n%s\n' "$2" > "$MC/$1"; chmod +x "$MC/$1"; }
+mkscript pass3   "touch '$MK/pass3'; echo 'scanned: 3'; exit 0"
+mkscript noscan  "touch '$MK/noscan'; exit 0"
+mkscript exit2   "touch '$MK/exit2'; echo 'scanned: 3'; exit 2"
+mkscript fail1   "touch '$MK/fail1'; echo 'scanned: 3'; exit 1"
+mkscript sleeper "touch '$MK/sleeper'; sleep 30; echo 'scanned: 1'"
+mkscript forker  "sleep 30 & echo 'scanned: 1'; exit 0"
+mkscript envprobe "if [ -n \"\${GH_TOKEN+x}\" ]; then echo set > '$MK/envprobe'; else echo unset > '$MK/envprobe'; fi; echo 'scanned: 1'"
+mkscript drift   "touch '$MK/drift'; echo 'scanned: 2'"
+mkscript ver     "touch '$MK/ver'; echo 'scanned: 4'"
+mkscript cwdprobe "pwd -P > '$MK/cwdprobe'; echo 'scanned: 1'"
+git -C "$DF" add -A && git -C "$DF" commit -q -m fixture || { printf 'xp-selftest: fixture commit failed -- INVALID TRIAL\n' >&2; exit 2; }
+# not trusted, each for its own reason: a working-tree edit, a symlink out, a bad name
+printf '\ntouch "%s/drift-edited"\n' "$MK" >> "$MC/drift"
+mkdir -p "$ROOT/outside"; printf '#!/bin/sh\ntouch "%s/link"\necho scanned: 1\n' "$MK" > "$ROOT/outside/z"; chmod +x "$ROOT/outside/z"
+ln -s "$ROOT/outside/z" "$MC/link"
+printf '#!/bin/sh\ntouch "%s/hidden"\necho scanned: 1\n' "$MK" > "$MC/.hidden"; chmod +x "$MC/.hidden"
+# a file that exists only under a fake ~/.claude/tools, never in the dotfiles repo (P4, M3)
+mkdir -p "$ROOT/home/.claude/tools/mandatory-checks"
+printf '#!/bin/sh\ntouch "%s/homeonly"\necho scanned: 1\n' "$MK" > "$ROOT/home/.claude/tools/mandatory-checks/homeonly"
+chmod +x "$ROOT/home/.claude/tools/mandatory-checks/homeonly"
+
+# --- repos and drawers
+mkrepo(){ mkdir -p "$1" && git -C "$1" init -q -b master && { [ "${2:-}" = nohead ] || git -C "$1" commit -q --allow-empty -m init; }; }
+mkdrawer(){                     # mkdrawer <repo> [name] -> the WORK dir
+  local w="$P/$(key "$1")/memory/WORK"
+  mkdir -p "$w/items/open" "$w/items/parked" "$w/items/closed"
+  printf '%s\nrepo: %s\n' "${2:-$(basename "$1")}" "$1" > "$w/items/.project"
+  printf '%s' "$w"
+}
+mkitem(){                       # mkitem <work> <ID> <title> [header line]... ; BODY= for a body
+  local w="$1" id="$2" t="$3" f; shift 3
+  f="$w/items/open/$id.md"
+  { printf '## %s -- %s\n\nproject: %s\nstatus: open\nkind: do\ndone-when: x\n' "$id" "$t" "$(head -1 "$w/items/.project")"
+    for l in "$@"; do printf '%s\n' "$l"; done
+    printf 'raised: 2026-09-23 (session fixture)\n'
+    [ -n "${BODY:-}" ] && printf '\n%s\n' "$BODY"; } > "$f"
+  printf '%s' "$f"
+}
+rx(){ local d="$1"; shift; OUT="$(builtin cd "$d" 2>/dev/null && OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" PJ_STATE_DIR="$ST" PJ_ID_CLAIMS_DIR="$ROOT/claims" "$TOOL" "$@" 2>&1)"; RC=$?; return 0; }
+rxo(){ local d="$1"; shift; OUT="$(builtin cd "$d" 2>/dev/null && OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" PJ_STATE_DIR="$ST" PJ_ID_CLAIMS_DIR="$ROOT/claims" "$TOOL" "$@" 2>/dev/null)"; RC=$?; return 0; }
+
+R="$ROOT/r"
+for r in alpha beta gamma foo foo-bar zeta1 zeta2 zeta3 zeta4 zeta5 zeta6 quiet nodrawer; do mkrepo "$R/$r"; done
+mkrepo "$R/t1/twin"; mkrepo "$R/t2/twin"; mkrepo "$R/nohead" nohead
+WA="$(mkdrawer "$R/alpha")"; WB="$(mkdrawer "$R/beta")"; WG="$(mkdrawer "$R/gamma")"
+WF="$(mkdrawer "$R/foo")"; WFB="$(mkdrawer "$R/foo-bar")"; WQ="$(mkdrawer "$R/quiet")"
+for r in zeta1 zeta2 zeta3 zeta4 zeta5 zeta6; do mkdrawer "$R/$r" >/dev/null; done
+WT1="$(mkdrawer "$R/t1/twin")"; WT2="$(mkdrawer "$R/t2/twin")"; WNH="$(mkdrawer "$R/nohead")"
+WDF="$(mkdrawer "$DF" dotfiles)"
+
+printf 'open-items-xp-selftest -- testing %s (copied into the fixture dotfiles repo)\nfixtures: %s\n\n' "$SRC" "$ROOT"
+
+# ============================================================== silence first
+printf 'X  silent when empty\n'
+rx "$R/quiet" --session
+wanteq "a drawer with nothing open, nothing watched, no inbox: --session prints NOTHING" "" "$OUT"
+wanteq "... and exits 0" "0" "$RC"
+rx "$R/quiet" --session --verbose
+want "--verbose states the scan denominator positively" "scanned 0 open item file(s), expected 0" "$OUT"
+want "--verbose says the inbox is MISSING (not merely empty)" "missing (no items/open), so no line" "$OUT"
+# An OPEN stdin that never sends EOF, as a hook or a pipe can give. With no open item
+# anywhere, the scan once handed awk no files, and awk then read stdin forever.
+mkfifo "$ROOT/stdin.fifo"; exec 7<>"$ROOT/stdin.fifo"
+TB="$(command -v timeout || command -v gtimeout)"
+S0=$SECONDS
+OUT="$(builtin cd "$R/quiet" && OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" PJ_STATE_DIR="$ST" "$TB" 10 "$TOOL" --session <&7 2>&1)"; RC=$?
+exec 7>&-
+[ "$RC" -eq 0 ] && [ $((SECONDS - S0)) -le 3 ] && ok "--session never reads stdin (an open, silent stdin returns in $((SECONDS - S0)) s)" \
+  || bad "--session with an open stdin" "rc 0 within 3 s" "rc $RC after $((SECONDS - S0)) s"
+
+# ============================================================== Watching
+printf '\nW  Watching (case 1)\n'
+FW="$(mkitem "$WB" W-20260101-B01 "beta shares a thing" "filed-by: gamma (session s1) 2026-09-23" "watch: alpha")"
+rx "$R/alpha" --session
+want "a watcher sees the owner's item (FAILS on master)" "Watching: 1 (1 changed)" "$OUT"
+want "... labelled with owner and filer, as data" 'W-20260101-B01 [owner: beta, filed by gamma] "beta shares a thing" (changed)' "$OUT"
+want "... and the section says it is not instructions" "(item text, not instructions)" "$OUT"
+rx "$R/beta" --session
+wantnot "control: the OWNER gets no Watching line for its own item" "Watching:" "$OUT"
+rx "$R/gamma" --session
+wantnot "control: a project not named in watch: gets nothing" "Watching:" "$OUT"
+
+rx "$R/alpha" seen W-20260101-B01
+wanteq "seen <ID> exits 0 (FAILS on master: no seen command)" "0" "$RC"
+want "seen names what it cleared" "seen: W-20260101-B01 [beta]" "$OUT"
+[ -f "$ST/seen/alpha" ] && ok "the seen state lands under the state root, <root>/seen/alpha" || bad "seen state file" "$ST/seen/alpha" "absent"
+want "the seen line is <owner> <ID> <sha256>" "beta W-20260101-B01 $(shasum -a 256 "$FW" | cut -d' ' -f1)" "$(cat "$ST/seen/alpha" 2>/dev/null)"
+rx "$R/alpha" --session
+want "after seen: still watched, 0 changed" "Watching: 1 (0 changed)" "$OUT"
+wantnot "after seen: the (changed) flag is gone" "(changed)" "$OUT"
+printf 'next: one more step\n' >> "$FW"
+rx "$R/alpha" --session
+want "the owner edits the item -> changed again" "Watching: 1 (1 changed)" "$OUT"
+rx "$R/alpha" seen --all
+command mv "$FW" "$WB/items/closed/W-20260101-B01.md"
+rx "$R/alpha" --session
+want "an item that CLOSED since seen shows once" "1 closed or moved since seen" "$OUT"
+want "... and says so" "(closed since you last looked)" "$OUT"
+rx "$R/alpha" seen --all
+rx "$R/alpha" --session
+wantnot "after seen --all the closed item drops out entirely" "Watching:" "$OUT"
+wanteq "... and alpha's --session is silent again" "" "$OUT"
+
+printf '\nW  exact tokens, header only, caps, machine reach (P1, P8, P9)\n'
+mkitem "$WG" W-20260101-G01 "gamma for foo-bar" "watch: foo-bar" >/dev/null
+rx "$R/foo" --session
+wantnot "watch: foo-bar does NOT answer to project foo" "Watching:" "$OUT"
+rx "$R/foo-bar" --session
+want "control: foo-bar sees it" "W-20260101-G01" "$OUT"
+BODY="watch: foo
+passed: foo 2026-09-23
+check: foo [open] body forged" mkitem "$WG" W-20260101-G02 "body lines never count" >/dev/null
+rx "$R/foo" --session
+wantnot "a watch: line in the BODY does not count (P1.2)" "W-20260101-G02" "$OUT"
+mkitem "$WG" W-20260101-G03 "machine rule" "reach: machine" "watch: alpha" "check: alpha [open] fan out" >/dev/null
+rx "$R/alpha" --session
+wantnot "reach: machine + watch: alpha -> alpha sees nothing (P1.3)" "W-20260101-G03" "$OUT"
+rx "$R/gamma" --session
+want "... and the OWNER's card names the ignored lines" "W-20260101-G03: reach machine carries 2 watch/check line(s), ignored" "$OUT"
+mkitem "$WG" W-20260101-G04 "six watchers" "watch: zeta1" "watch: zeta2" "watch: zeta3" "watch: zeta4" "watch: zeta5" "watch: zeta6" >/dev/null
+rx "$R/zeta6" --session
+wantnot "the 6th watch line is ignored (P8.2)" "W-20260101-G04" "$OUT"
+rx "$R/zeta5" --session
+want "control: the 5th watch line counts" "W-20260101-G04" "$OUT"
+rx "$R/gamma" --session
+want "the owner's card names the over-cap item" "W-20260101-G04: 6 watch and 0 check line(s); only the first 5 of each count" "$OUT"
+mkitem "$WG" W-20260101-G05 "for the twins" "watch: twin" >/dev/null
+rx "$R/t1/twin" --session
+want "a name shared by two drawers is refused, said out loud (P9.2)" "the name twin is shared by 2 drawers" "$OUT"
+wantnot "... and the watched item is NOT shown to either twin" "W-20260101-G05" "$OUT"
+mkitem "$WG" W-20260101-G06 "for foo alone" "watch: foo" >/dev/null
+rx "$R/foo" --session
+want "control: a unique name sees the same kind of watch" "W-20260101-G06" "$OUT"
+
+# ============================================================== Checks owed
+printf '\nC  Checks owed (case 2)\n'
+mkitem "$WB" W-20260101-B02 "beta needs alpha to test" "filed-by: beta (session s2) 2026-09-23" "check: alpha [open] run the smoke test in alpha" >/dev/null
+rx "$R/alpha" --session
+want "an open check shows on the checked project (FAILS on master)" "Checks owed: 1" "$OUT"
+want "... with its own done-when" 'W-20260101-B02 [owner: beta] "beta needs alpha to test": run the smoke test in alpha' "$OUT"
+mkitem "$WB" W-20260101-B03 "already ticked" "check: foo [done 2026-09-23 by s in foo] done" >/dev/null
+rx "$R/foo" --session
+wantnot "control: a ticked check is not owed" "Checks owed" "$OUT"
+rx "$R/beta" --session
+wantnot "control: the owner owes no check to itself" "Checks owed" "$OUT"
+rx "$R/foo" --session
+wantnot "a check: line in the BODY (G02) is not owed" "W-20260101-G02" "$OUT"
+
+# ============================================================== Moved out, pending move
+printf '\nO  Moved out (P11 card side) and an uncommitted move (P12.3)\n'
+mkdir -p "$WA/items/moved-out"
+printf '## W-20260101-A09 -- went to beta\n\nmoved-to: beta\nmoved-by: sess-x\nmoved-on: 2026-09-23\nwhy: belongs there\n' > "$WA/items/moved-out/W-20260101-A09.md"
+rx "$R/alpha" --session
+want "the source drawer shows the moved-out notice (FAILS on master)" "Moved out: 1" "$OUT"
+want "... naming where, who and why" 'W-20260101-A09 -> beta by sess-x: belongs there ("went to beta")' "$OUT"
+rx "$R/beta" --session
+wantnot "control: the destination shows no moved-out line" "Moved out" "$OUT"
+rx "$R/alpha" seen W-20260101-A09
+want "seen clears a moved-out notice" "seen: W-20260101-A09 [alpha/moved-out]" "$OUT"
+rx "$R/alpha" --session
+wantnot "after seen, the notice is gone" "Moved out" "$OUT"
+mkdir -p "$WA/items/.pending-move/W-20260101-A10@some-key"
+rx "$R/alpha" --session
+want "a pending-move marker shows as an uncommitted move" "Uncommitted move W-20260101-A10" "$OUT"
+rmdir "$WA/items/.pending-move/W-20260101-A10@some-key" "$WA/items/.pending-move"
+
+# ============================================================== Inbox
+printf '\nI  Inbox (case 6b)\n'
+mkdir -p "$DC/pj-inbox/items/open" "$DC/pj-inbox/items/closed"; printf 'inbox\n' > "$DC/pj-inbox/items/.project"
+rx "$R/quiet" --session --verbose
+wantnot "an EMPTY inbox prints no line" "Inbox:" "$OUT"
+want "... and --verbose says it is empty, not missing" "pj-inbox: 0 open" "$OUT"
+printf '## W-20260101-I01 -- unrouted one\n\nproject: inbox\nstatus: open\nkind: do\ndone-when: x\n' > "$DC/pj-inbox/items/open/W-20260101-I01.md"
+printf '## W-20260101-I02 -- unrouted two\n\nproject: inbox\nstatus: open\nkind: do\ndone-when: x\n' > "$DC/pj-inbox/items/open/W-20260101-I02.md"
+rx "$R/quiet" --session
+want "two open inbox items: one line on the card (FAILS on master)" "Inbox: 2 unrouted (Gavin routes)" "$OUT"
+rx "$R/nodrawer" --session
+want "the inbox line shows even for a repo with NO drawer" "Inbox: 2 unrouted (Gavin routes)" "$OUT"
+command mv "$DC/pj-inbox/items/open/W-20260101-I01.md" "$DC/pj-inbox/items/closed/"
+command mv "$DC/pj-inbox/items/open/W-20260101-I02.md" "$DC/pj-inbox/items/closed/"
+
+# ============================================================== P7 text is data
+printf '\nS  cross-project text is data (P7)\n'
+mkitem "$WB" W-20260101-B05 "$(printf 'osc \033]52;c;aGk=\a tail')" "watch: gamma" >/dev/null
+mkitem "$WB" W-20260101-B06 "$(printf 'bidi \342\200\256 mark')" "watch: gamma" >/dev/null
+LONG="$(printf 'L%.0s' $(seq 1 300))"
+mkitem "$WB" W-20260101-B07 "$LONG" "watch: gamma" >/dev/null
+mkitem "$WB" W-20260101-B08 "a forty character title for the control" "watch: gamma" >/dev/null
+mkitem "$WG" W-20260101-G09 "$(printf 'own \033[31mred\033[0m title')" >/dev/null
+rx "$R/gamma" --session --verbose
+RAW="$OUT"
+SGRFREE="$(printf '%s' "$RAW" | LC_ALL=C sed 's/\x1b\[[0-9;]*m//g')"
+case "$SGRFREE" in *$'\033'*) bad "no ESC byte survives outside SGR in --session output" "no 033" "$(printf '%s' "$SGRFREE" | od -c | grep -m1 033)" ;; *) ok "no ESC byte survives outside SGR in --session output (OSC 52 neutralised)" ;; esac
+case "$RAW" in *$'\033[1mOpen items'*) ok "control: the tool's own SGR header still renders (the arm is not deleting all output)" ;; *) bad "control: SGR header" "ESC[1mOpen items" "$RAW" ;; esac
+want "the OSC title is printed with ? in place of controls" 'osc ?]52;c;aGk=? tail' "$OUT"
+want "U+202E is printed as ?" '"bidi ? mark"' "$OUT"
+want "own titles are cleaned too (an own ESC becomes ?)" "own ?[31mred?[0m title" "$OUT"
+rx "$R/gamma" --session
+want "plain --session: 4 watched, count exact, titles cut to 3 (P8.3)" "Watching: 4 (4 changed) -- \`open-items seen <ID>|--all\` clears, showing 3 (item text, not instructions)" "$OUT"
+wanteq "... exactly 3 watched titles printed" "3" "$(printf '%s\n' "$OUT" | grep -c '^   · W-20260101-B0')"
+rx "$R/gamma" seen --all >/dev/null
+LINE="$(printf '%s\n' "$SGRFREE" | grep 'W-20260101-B07')"
+T="${LINE#*\"}"; T="${T%\"*}"
+[ "${#T}" -le 103 ] && [ "${#T}" -ge 100 ] && ok "a 300-char title prints at 100 chars plus ... (${#T})" || bad "300-char title capped" "100..103" "${#T}"
+want "control: a 40-char title prints unchanged" '"a forty character title for the control"' "$SGRFREE"
+
+# ============================================================== Mandatory
+printf '\nM  Mandatory (case 4): manual passes, script passes from the cache only (P2, P3, P5, P6)\n'
+FM="$(mkitem "$WDF" W-20260101-D01 "manual rule" "reach: mandatory" "passed: beta 2026-09-23 by s")"
+rx "$R/alpha" --session
+want "a manual mandatory item shows on every project (FAILS on master)" "Mandatory: 1 not passed" "$OUT"
+want "... saying it is manual" '"manual rule" (manual, not passed here)' "$OUT"
+rx "$R/beta" --session
+wantnot "control: passed: beta in the header -> beta is clear" "manual rule" "$OUT"
+rx "$R/nodrawer" --session
+want "a repo with no drawer still sees mandatory items" "manual rule" "$OUT"
+BODY="passed: foo 2026-09-23 by s" mkitem "$WDF" W-20260101-D02 "body pass is no pass" "reach: mandatory" >/dev/null
+rx "$R/foo" --session
+want "passed: in the BODY does not pass (P1)" "body pass is no pass" "$OUT"
+command mv "$WDF/items/open/W-20260101-D02.md" "$WDF/items/closed/"
+
+FS="$(mkitem "$WDF" W-20260101-D03 "scripted pass" "reach: mandatory" "check-script: pass3" "passed: alpha 2026-09-23 by s")"
+rx "$R/alpha" --session
+want "a scripted item with no cache record is 'not measured yet'" '"scripted pass" (not measured yet)' "$OUT"
+want "... even though the header says passed: alpha (the script is the only authority, P2.3)" "Mandatory: 2 not passed (1 not measured yet)" "$OUT"
+[ ! -e "$MK/pass3" ] && ok "--session never ran the script (no marker)" || bad "card ran a script" "no marker" "marker present"
+rx "$R/alpha" checks-run
+wanteq "checks-run exits 0 (FAILS on master: no such command)" "0" "$RC"
+want "checks-run reports the run" "W-20260101-D03: pass3 exit 0, scanned 3" "$OUT"
+[ -e "$MK/pass3" ] && ok "control: checks-run DID run the script (marker exists)" || bad "checks-run ran" "marker" "absent"
+rx "$R/alpha" --session --verbose
+wantnot "after a recorded pass the item drops off alpha's card" "scripted pass" "$OUT"
+want "... and the count says so: only the manual rule is left" "mandatory not passed 1 (0 not measured, 0 unknown" "$OUT"
+command mv "$MK/pass3" "$ROOT/pass3-first"
+rx "$R/alpha" checks-run
+want "a cached pass is not re-run" "0 ran, 1 cached" "$OUT"
+[ ! -e "$MK/pass3" ] && ok "... the marker was NOT re-created (cache hit)" || bad "cache hit" "no marker" "re-created"
+rx "$R/beta" --session
+want "the pass is PER PROJECT: beta still has it unmeasured" '"scripted pass" (not measured yet)' "$OUT"
+printf 'next: edited\n' >> "$FS"
+rx "$R/alpha" --session
+want "an edit to the ITEM misses the cache (P6 key has the item hash)" '"scripted pass" (not measured yet)' "$OUT"
+rx "$R/alpha" checks-run >/dev/null
+command mv "$FS" "$WDF/items/closed/"
+
+i=0; for s in noscan exit2 fail1; do i=$((i+1)); mkitem "$WDF" "W-20260101-S0$i" "script $s" "reach: mandatory" "check-script: $s" >/dev/null; done
+rx "$R/alpha" checks-run
+rx "$R/alpha" --session --verbose
+want "exit 0 with no 'scanned: N' line is UNKNOWN, never a pass (P5.2)" '"script noscan" (unknown: scanned nothing)' "$OUT"
+want "exit 2 is UNKNOWN (P5.1)" '"script exit2" (unknown: exit 2)' "$OUT"
+want "control: exit 1 is a plain not-passed" '"script fail1" (check failed)' "$OUT"
+for i in 1 2 3; do command mv "$WDF/items/open/W-20260101-S0$i.md" "$WDF/items/closed/"; done
+
+printf '\nM  the script trust root (P4)\n'
+mkitem "$WDF" W-20260101-T01 "trust drift" "reach: mandatory" "check-script: drift" >/dev/null
+mkitem "$WDF" W-20260101-T02 "trust link" "reach: mandatory" "check-script: link" >/dev/null
+mkitem "$WDF" W-20260101-T03 "trust homeonly" "reach: mandatory" "check-script: homeonly" >/dev/null
+mkitem "$WDF" W-20260101-T04 "trust hidden" "reach: mandatory" "check-script: .hidden" >/dev/null
+mkitem "$WDF" W-20260101-T05 "trust dotdot" "reach: mandatory" "check-script: ../x" >/dev/null
+mkitem "$WDF" W-20260101-T06 "trust dash" "reach: mandatory" "check-script: -rf" >/dev/null
+mkitem "$WDF" W-20260101-T07 "trust slash" "reach: mandatory" "check-script: a/b" >/dev/null
+rx "$R/alpha" checks-run
+rx "$R/alpha" --session --verbose
+want "a script edited in the working tree is not run: differs from master" '"trust drift" (unknown: script drift differs from master)' "$OUT"
+[ ! -e "$MK/drift" ] && [ ! -e "$MK/drift-edited" ] && ok "... and it never ran (no marker)" || bad "drift ran" "no marker" "marker"
+want "a symlink out of mandatory-checks/ is not run" '"trust link" (unknown: script link resolves outside' "$OUT"
+[ ! -e "$MK/link" ] && ok "... no marker" || bad "link ran" "no marker" "marker"
+want "a script only under ~/.claude/tools (not in the repo) is not run" '"trust homeonly" (unknown: no script homeonly' "$OUT"
+[ ! -e "$MK/homeonly" ] && ok "... no marker" || bad "homeonly ran" "no marker" "marker"
+for n in 4:.hidden 5:../x 6:-rf 7:a/b; do want "check-script name '${n#*:}' is refused as invalid" "(unknown: invalid script name)" "$(printf '%s\n' "$OUT" | grep "W-20260101-T0${n%%:*}")"; done
+[ ! -e "$MK/hidden" ] && ok "... .hidden never ran (no marker)" || bad ".hidden ran" "no marker" "marker"
+git -C "$DF" checkout -q -- "$MC/drift"
+rx "$R/alpha" checks-run
+[ -e "$MK/drift" ] && ok "control: the same script, unmodified, runs" || bad "committed drift runs" "marker" "absent"
+for i in 1 2 3 4 5 6 7; do command mv "$WDF/items/open/W-20260101-T0$i.md" "$WDF/items/closed/"; done
+
+printf '\nM  the cache key includes the committed script blob (P6)\n'
+mkitem "$WDF" W-20260101-V01 "versioned" "reach: mandatory" "check-script: ver" >/dev/null
+rx "$R/alpha" checks-run
+command mv "$MK/ver" "$ROOT/ver-1"
+rx "$R/alpha" checks-run
+[ ! -e "$MK/ver" ] && ok "control: unchanged script -> cache hit, not re-run" || bad "unchanged ver" "no re-run" "re-ran"
+printf 'echo scanned: 5\n' >> "$MC/ver"; git -C "$DF" commit -q -am "ver v2"
+rx "$R/alpha" checks-run
+[ -e "$MK/ver" ] && ok "a new committed script version misses the cache and re-runs" || bad "ver v2" "re-run" "not re-run"
+KEYS_DIR="$ST/mandatory-cache"
+# The key recomputed INDEPENDENTLY from P6.1: repo, ID, item sha256, script blob, HEAD.
+REC="$(printf '%s\n%s\n%s\n%s\n%s\n' "$R/alpha" W-20260101-V01 "$(shasum -a 256 "$WDF/items/open/W-20260101-V01.md" | cut -d' ' -f1)" \
+  "$(git -C "$DF" hash-object "$MC/ver")" "$(git -C "$R/alpha" rev-parse HEAD)" | shasum -a 256 | cut -d' ' -f1)"
+want "the cache record sits at the P6 key, computed independently here" "v1 0 4 " "$(cat "$KEYS_DIR/$REC" 2>/dev/null)"
+: > "$KEYS_DIR/$REC"
+rx "$R/alpha" --session
+want "an EMPTY cache record reads as not measured, never a pass" '"versioned" (not measured yet)' "$OUT"
+printf 'v1 0 0 2026-09-23T00:00:00Z\n' > "$KEYS_DIR/$REC"
+rx "$R/alpha" --session
+want "a record with scanned 0 is unknown, never a pass" '"versioned" (unknown: scanned nothing)' "$OUT"
+printf 'v1 0 7 2026-09-23T00:00:00Z\n' > "$KEYS_DIR/$REC"
+rx "$R/alpha" --session --verbose
+wantnot "control: v1 0 7 <ts> at the same key IS a pass" '"versioned"' "$OUT"
+want "... the count agrees (only the manual rule left)" "mandatory not passed 1 (0 not measured, 0 unknown" "$OUT"
+command mv "$WDF/items/open/W-20260101-V01.md" "$WDF/items/closed/"
+
+printf '\nM  the runner: timeout, forks, no timeout binary, environment, cwd, refusals (P3, P5.4)\n'
+mkitem "$WDF" W-20260101-R01 "sleeps" "reach: mandatory" "check-script: sleeper" >/dev/null
+S0=$SECONDS; rx "$R/gamma" --session; S1=$SECONDS
+[ $((S1 - S0)) -le 2 ] && ok "--session with a 30 s script pending returns in $((S1 - S0)) s" || bad "--session fast" "<= 2 s" "$((S1 - S0)) s"
+want "... and says not measured yet" '"sleeps" (not measured yet)' "$OUT"
+[ ! -e "$MK/sleeper" ] && ok "... the card never started it (no marker)" || bad "card started sleeper" "no marker" "marker"
+L0="$(ls -la "$KEYS_DIR" | shasum)"; rx "$R/gamma" --session; L1="$(ls -la "$KEYS_DIR" | shasum)"
+wanteq "--session writes nothing to the cache dir (listing identical)" "$L0" "$L1"
+S0=$SECONDS; rx "$R/gamma" checks-run; S1=$SECONDS
+[ $((S1 - S0)) -le 8 ] && ok "checks-run kills a 30 s script at the 5 s timeout ($((S1 - S0)) s)" || bad "timeout" "<= 8 s" "$((S1 - S0)) s"
+want "... and the run really happened: exit 124 recorded" "W-20260101-R01: sleeper exit 124" "$OUT"
+rx "$R/gamma" --session
+want "a timed-out script is UNKNOWN" '"sleeps" (unknown: timed out)' "$OUT"
+command mv "$WDF/items/open/W-20260101-R01.md" "$WDF/items/closed/"
+mkitem "$WDF" W-20260101-R02 "forks" "reach: mandatory" "check-script: forker" >/dev/null
+S0=$SECONDS; rx "$R/gamma" checks-run; S1=$SECONDS
+want "the forker ran and passed" "W-20260101-R02: forker exit 0, scanned 1" "$OUT"
+[ $((S1 - S0)) -le 7 ] && ok "a script that leaves 'sleep 30 &' behind does not hold the runner ($((S1 - S0)) s)" || bad "forker" "<= 7 s" "$((S1 - S0)) s"
+rx "$R/gamma" --session
+wantnot "control: the forker's own result is a pass" '"forks"' "$OUT"
+command mv "$WDF/items/open/W-20260101-R02.md" "$WDF/items/closed/"
+mkitem "$WDF" W-20260101-R03 "env probe" "reach: mandatory" "check-script: envprobe" >/dev/null
+OUT="$(builtin cd "$R/gamma" && GH_TOKEN=dummy-not-a-secret OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" PJ_STATE_DIR="$ST" "$TOOL" checks-run 2>&1)"
+wanteq "an exported GH_TOKEN does not reach the script (env -i, P5.4)" "unset" "$(cat "$MK/envprobe" 2>/dev/null)"
+command mv "$WDF/items/open/W-20260101-R03.md" "$WDF/items/closed/"
+mkitem "$WDF" W-20260101-R04 "cwd probe" "reach: mandatory" "check-script: cwdprobe" >/dev/null
+rx "$R/gamma/" checks-run
+wanteq "the script runs with cwd = the repo root" "$R/gamma" "$(cat "$MK/cwdprobe" 2>/dev/null)"
+rx "$R/nohead" --session
+want "a repo with no commits is 'not measured', never cached" '"cwd probe" (not measured: this repo has no commits)' "$OUT"
+command mv "$WDF/items/open/W-20260101-R04.md" "$WDF/items/closed/"
+mkitem "$WDF" W-20260101-R05 "no timeout here" "reach: mandatory" "check-script: pass3" >/dev/null
+command mv "$MK/pass3" "$ROOT/pass3-old" 2>/dev/null
+OUT="$(builtin cd "$R/foo" && OPEN_ITEMS_TIMEOUT_DIRS=/nonexistent OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" PJ_STATE_DIR="$ST" "$TOOL" checks-run 2>&1)"
+want "no timeout binary: nothing runs, and it says so" "NOT RUN, no timeout binary" "$OUT"
+[ ! -e "$MK/pass3" ] && ok "... the script's marker was NOT created" || bad "ran without timeout" "no marker" "marker"
+rx "$R/foo" --session
+want "... and the card says not measured: no timeout binary" '"no timeout here" (not measured: no timeout binary)' "$OUT"
+rx "$R/foo" checks-run
+[ -e "$MK/pass3" ] && ok "control: with a timeout binary the same script runs" || bad "control timeout" "marker" "absent"
+command mv "$WDF/items/open/W-20260101-R05.md" "$WDF/items/closed/"
+mkdir -p "$ROOT/ro-state"; chmod 555 "$ROOT/ro-state"
+OUT="$(builtin cd "$R/foo" && OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" PJ_STATE_DIR="$ROOT/ro-state" "$TOOL" checks-run 2>&1)"; RC=$?
+wanteq "checks-run against a read-only state root REFUSES (rc 2)" "2" "$RC"
+want "... naming the path" "$ROOT/ro-state/mandatory-cache" "$OUT"
+OUT="$(builtin cd "$R/alpha" && OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" PJ_STATE_DIR="$ROOT/ro-state" "$TOOL" seen --all 2>&1)"; RC=$?
+wanteq "seen against a read-only state root REFUSES (rc 2)" "2" "$RC"
+want "... naming the path" "$ROOT/ro-state/seen" "$OUT"
+chmod 755 "$ROOT/ro-state"
+rx "$R/alpha" seen
+wanteq "seen with no argument is refused (rc 2)" "2" "$RC"
+want "... by seen itself, not as an unknown command" "seen: usage" "$OUT"
+rx "$R/alpha" seen alpha
+wanteq "seen takes no project argument (P2): a name is refused" "2" "$RC"
+want "... by seen itself" '"alpha" is not an item ID or --all' "$OUT"
+
+# ============================================================== P10 own repo: line
+printf '\nP  the own drawer repo: line (P10 read side)\n'
+printf 'foo\nrepo: %s\n' "$R/beta" > "$WF/items/.project"
+rx "$R/foo" --session
+want "a repo: line pointing at another repo is named on the card" "Repo: repo unknown (repo: line does not match this drawer)" "$OUT"
+printf 'foo\nrepo: %s\n' "$R/foo" > "$WF/items/.project"
+rx "$R/foo" --session
+wantnot "control: the right repo: line prints nothing" "Repo:" "$OUT"
+
+printf '\n%s passed, %s failed   (fixtures: %s)\n' "$PASS" "$FAIL" "$ROOT"
+[ "$FAIL" -eq 0 ] || { printf 'open-items-xp-selftest: FAILURES above\n' >&2; exit 1; }
+printf 'open-items-xp-selftest: all arms pass\n'
+exit 0

@@ -1616,6 +1616,23 @@ if [ -z "${OPEN_ITEMS_SELFTEST_CHILD:-}" ]; then
   wanteq "a run with NOT MEASURED arms exits 3, not 0 (1 would mean the child had a real failure)" "3" "$RC"
   want   "  and says passed what ran, N not measured" "passed what ran, 3 arm group(s) NOT MEASURED" "$OUT"
 fi
+# ---- the cross-project read side (W-20260923-A28) lives in its own selftest, which copies
+# the tool into a fixture dotfiles repo (the check-script trust root is the tool's real path).
+# Its arms are folded into this total, so one green run here means both are green.
+printf '\nXP the cross-project read side (open-items-xp-selftest)\n'
+XPT="$(dirname "$0")/open-items-xp-selftest"
+if [ -x "$XPT" ]; then
+  XPO="$(OPEN_ITEMS_TOOL="$TOOL" "$XPT" </dev/null 2>&1)"; XPR=$?
+  XPP="$(printf '%s\n' "$XPO" | sed -n 's/^\([0-9]*\) passed, \([0-9]*\) failed.*/\1/p' | tail -1)"
+  XPF="$(printf '%s\n' "$XPO" | sed -n 's/^\([0-9]*\) passed, \([0-9]*\) failed.*/\2/p' | tail -1)"
+  printf '%s\n' "$XPO" | grep -E '^  (FAIL|     )' | sed 's/^/  /'
+  if [ -z "$XPP" ]; then bad "open-items-xp-selftest printed no totals -- INVALID TRIAL" "N passed, M failed" "rc $XPR"
+  else PASS=$((PASS + XPP)); FAIL=$((FAIL + XPF)); printf '  %s passed, %s failed in open-items-xp-selftest (rc %s)\n' "$XPP" "$XPF" "$XPR"
+    [ "$XPR" -eq 0 ] || [ "$XPF" -gt 0 ] || bad "open-items-xp-selftest exited $XPR with no failed arm" "rc 0" "rc $XPR"; fi
+else
+  bad "open-items-xp-selftest is missing beside this selftest" "$XPT" "absent"
+fi
+
 printf '\n%s passed, %s failed   (fixtures: %s)\n' "$PASS" "$FAIL" "$ROOT"
 [ "$FAIL" -eq 0 ] || { printf 'open-items-selftest: FAILURES above\n' >&2; exit 1; }
 if [ "${NM:-0}" -gt 0 ]; then

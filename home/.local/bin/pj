@@ -483,6 +483,22 @@ kick_dotclaude_fetch() {
   return 0
 }
 
+# --- the mandatory-check runner (A16, W-20260923-A28, safety rule P3) ----------
+# `open-items checks-run` is the ONLY place a reach: mandatory check-script runs; the start
+# card only reads the cache it leaves. pj starts it here, detached, in the folder it launches
+# in, the same fire-and-forget shape as the fetch above: nothing waits, nothing it prints can
+# reach the terminal. The runner bounds itself (a 5 s timeout per script, nothing at all
+# without a timeout binary) and is a no-op outside a git repo. PJ_NO_CHECKS skips it;
+# PJ_OPEN_ITEMS names another open-items (selftest seam).
+kick_checks_run() {
+  [[ -n "${PJ_NO_CHECKS:-}" ]] && return 0
+  local oi="${PJ_OPEN_ITEMS:-open-items}"
+  whence -p "$oi" >/dev/null 2>&1 || [[ -x "$oi" ]] || return 0
+  git rev-parse --git-dir >/dev/null 2>&1 || return 0
+  ( "$oi" checks-run </dev/null >/dev/null 2>&1 & ) >/dev/null 2>&1
+  return 0
+}
+
 # --- the shared session registry (F5c, gate Q1 option (a), 2026-09-22) ------------
 # Claude Code registers ONE `<pid>.json` plus one `<pid>.<hex>.key` per LIVE session under
 # `<config_dir>/sessions/`, and builds ListAgents by reading ONLY that folder. The socket
@@ -617,6 +633,25 @@ selftest() {
   while [[ $waited -lt 50 && ! -e "$dc2/.git/FETCH_HEAD" ]]; do sleep 0.1; waited=$((waited + 1)); done
   [[ -e "$dc2/.git/FETCH_HEAD" ]] && ok "10 control: with no guard the fetch IS reached (FETCH_HEAD appears)" \
     || bad "10 control did not fetch -- arm 8 proves nothing" "no FETCH_HEAD after ${waited}00ms"
+  # 10b. the mandatory-check runner (A16, P3): a fake open-items that records its call.
+  #      The dry run never starts it; PJ_NO_CHECKS stops it; the control shows it IS reached.
+  local fake="$root/fake-open-items" mark="$root/checks-ran"
+  print -r -- '#!/bin/sh
+[ "$1" = checks-run ] && touch "'"$mark"'"' > "$fake"; chmod +x "$fake"
+  PJ_OPEN_ITEMS="$fake" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --dry-run >/dev/null 2>&1
+  sleep 0.3
+  [[ ! -e "$mark" ]] && ok "10b --dry-run starts no checks-run" || bad "10b dry-run ran checks" "marker exists"
+  ( builtin cd "$dc" && PJ_NO_CHECKS=1 PJ_OPEN_ITEMS="$fake" kick_checks_run )
+  sleep 0.3
+  [[ ! -e "$mark" ]] && ok "10b PJ_NO_CHECKS suppresses checks-run" || bad "10b PJ_NO_CHECKS" "marker exists"
+  ( builtin cd "$root" && PJ_OPEN_ITEMS="$fake" kick_checks_run )
+  sleep 0.3
+  [[ ! -e "$mark" ]] && ok "10b outside a git repo checks-run is not started" || bad "10b non-repo" "marker exists"
+  ( builtin cd "$dc" && PJ_OPEN_ITEMS="$fake" kick_checks_run )
+  waited=0
+  while [[ $waited -lt 50 && ! -e "$mark" ]]; do sleep 0.1; waited=$((waited + 1)); done
+  [[ -e "$mark" ]] && ok "10b control: in a repo with no guard, checks-run IS started (detached)" \
+    || bad "10b control never started checks-run -- the arms above prove nothing" "no marker after ${waited}00ms"
   # ---- profiles (F5a) -------------------------------------------------------------
   # 11. NO profiles dir at all: the argv is the built-in one. This is the consumer-box
   #     fallback, and it is arm ONE of the byte-for-byte guarantee.
@@ -998,6 +1033,7 @@ if [[ ! -r "$LAUNCH_FILE" ]]; then
   exit 2
 fi
 kick_dotclaude_fetch
+kick_checks_run
 # Only on a REAL launch, never on --dry-run or --dry-run-env: a dry run must not touch
 # the filesystem, which is the same contract arm 8 holds kick_dotclaude_fetch to.
 ensure_registry_link "$P_CONFIG_DIR"

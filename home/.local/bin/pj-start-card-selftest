@@ -271,6 +271,46 @@ run "$Q"
 check "Q TWIN unpinned: item 40 is OFF the card (the bug)" '! has "$OUT" "open item number 40$"'
 check "Q TWIN and the header says nothing about pinned" '! has "$OUT" "pinned"'
 
+# --- Z: cross-project lines (A16, W-20260923-A28): the P8 floor, P7 escapes, the inbox --------
+# repo-z owns 10 open items; repo-w owns 10 items watching repo-z, 10 owing it a check and 10
+# reach: mandatory rules. The card must stay <= 20 lines, keep >= 5 of repo-z's OWN titles,
+# and keep every count exact. All of these FAIL with master's card and open-items.
+Z="$ROOT/repo-z"; mkrepo "$Z"; mkdrawer "$Z" 10 0 >/dev/null
+WZ="$ROOT/repo-w"; mkrepo "$WZ"; WW="$(mkdrawer "$WZ" 0 0)"
+for i in $(seq 10 39); do
+  case "$i" in 1?) extra="watch: repo-z" ;; 2?) extra="check: repo-z [open] run it in z" ;; *) extra="reach: mandatory" ;; esac
+  printf '## W-20260103-%s -- cross item %s\n\nproject: repo-w\nstatus: open\nkind: do\ndone-when: x\n%s\n' "$i" "$i" "$extra" > "$WW/items/open/W-20260103-$i.md"
+done
+run "$Z"
+check "Z rc 0" '[ "$RC" -eq 0 ]'
+check "Z at most 20 lines ($(lines "$OUT"))" '[ "$(lines "$OUT")" -le 20 ]'
+check "Z at least 5 of the project's OWN titles ($(printf "%s\n" "$OUT" | grep -c "open item number"))" '[ "$(printf "%s\n" "$OUT" | grep -c "open item number")" -ge 5 ]'
+check "Z own count exact, the rest as +N more" 'has "$OUT" "^Open items: 10 open" && has "$OUT" "^   +[0-9]* more$"'
+check "Z Watching count exact: 10" 'has "$OUT" "^Watching: 10 (10 changed)"'
+check "Z Checks owed count exact: 10" 'has "$OUT" "^Checks owed: 10, showing"'
+check "Z Mandatory count exact: 10 (repo-z has passed none)" 'has "$OUT" "^Mandatory: 10 not passed, showing"'
+check "Z each cross section shows at most 3 titles" '[ "$(printf "%s\n" "$OUT" | grep -c "cross item")" -le 9 ] && [ "$(printf "%s\n" "$OUT" | grep -c "cross item")" -ge 3 ]'
+check "Z the showing counts add up to the cross titles printed" '[ "$(printf "%s\n" "$OUT" | sed -n "s/.*, showing \([0-9]*\) (item text.*/\1/p" | awk "{s+=\$1} END {print s+0}")" -eq "$(printf "%s\n" "$OUT" | grep -c "cross item")" ]'
+check "Z the hello rule is still last" '[ "$(printf "%s\n" "$OUT" | tail -1 | cut -c1-11)" = "Hello rule:" ]'
+# the owner of the items sees none of it as cross-project lines
+run "$WZ"
+check "Z control: the owner's card has no Watching or Checks owed line" '! has "$OUT" "^Watching:" && ! has "$OUT" "^Checks owed:"'
+# P7: an OSC 52 clipboard write in a title, own and watched. strip_ansi removes SGR only.
+Y="$ROOT/repo-y"; mkrepo "$Y"; WY="$(mkdrawer "$Y" 1 0)"
+printf '## W-20260104-01 -- own \033]52;c;aGk=\a title\n\nproject: repo-y\nstatus: open\nkind: do\ndone-when: x\n' > "$WY/items/open/W-20260104-01.md"
+printf '## W-20260104-02 -- watched \033]52;c;aGk=\a title\n\nproject: repo-w\nstatus: open\nkind: do\ndone-when: x\nwatch: repo-y\n' > "$WW/items/open/W-20260104-02.md"
+run "$Y"
+check "Z an OSC 52 escape in an own or watched title never reaches the card (no ESC byte)" '! printf "%s" "$OUT" | LC_ALL=C grep -q "$(printf "\033")"'
+check "Z control: both titles ARE on the card, neutralised" 'has "$OUT" "own ?]52;c;aGk=? title" && has "$OUT" "watched ?]52;c;aGk=? title"'
+# the inbox line, on a repo with NO drawer, from its own dot-claude fixture
+IDC="$ROOT/dc-inbox"; mkdir -p "$IDC/pj-inbox/items/open"; printf 'inbox\n' > "$IDC/pj-inbox/items/.project"
+OPEN_ITEMS_DOTCLAUDE="$IDC" run "$C"
+check "Z an empty inbox adds no line (silent)" '! has "$OUT" "^Inbox:"'
+printf '## W-20260105-01 -- unrouted\n\nproject: inbox\nstatus: open\nkind: do\ndone-when: x\n' > "$IDC/pj-inbox/items/open/W-20260105-01.md"
+OPEN_ITEMS_DOTCLAUDE="$IDC" run "$C"
+check "Z one unrouted inbox item: the line shows even with no drawer" 'has "$OUT" "^Inbox: 1 unrouted (Gavin routes)$"'
+check "Z ... and the no-drawer line is still there" 'has "$OUT" "^Open items: no drawer for this project yet"'
+
 # --- N: --selftest dispatch and syntax ------------------------------------------------------
 check "N bash -n clean" 'bash -n "$CARD"'
 

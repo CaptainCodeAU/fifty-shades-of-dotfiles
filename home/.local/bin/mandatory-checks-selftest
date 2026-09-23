@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+# mandatory-checks-selftest -- run every check-script in the dotfiles mandatory-checks/
+# directory against its own pass and fail fixtures (P5.3, W-20260923-A28).
+#
+# Usage:
+#   mandatory-checks-selftest              check the scripts of the dotfiles repo this tool lives in
+#   mandatory-checks-selftest --dir <dir>  check the scripts in <dir> instead
+#   mandatory-checks-selftest --selftest   prove the checker itself on planted fixtures
+#
+# For every script <name> (a regular file whose name matches ^[a-z0-9][a-z0-9-]{0,63}$):
+#   <name>.fixtures/pass/  must exist; the script run there must exit 0 AND print
+#                          "scanned: N" with N > 0
+#   <name>.fixtures/fail/  must exist; the script run there must exit 1
+# Each run uses the runner's own environment (env -i, the fixed PATH, stdin /dev/null,
+# a 5 s timeout), so a script that only works in an agent's shell fails here first.
+#
+# The count is stated positively on every run, including "0 script(s)": no real rule ships
+# yet (the first is Gavin's to choose), so an empty directory is the expected state today,
+# and --selftest is what proves the checker can fail.
+#
+# Exit: 0 every script passed both arms (or there are none, said so) | 1 a script failed |
+#       2 could not run (no directory, no timeout binary): NOT a pass
+
+set -uo pipefail
+
+NAME_RE='^[a-z0-9][a-z0-9-]{0,63}$'
+
+timeout_bin(){
+  local d c IFS=:
+  for d in $PATH:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin; do
+    for c in timeout gtimeout; do case "$d" in /*) [ -x "$d/$c" ] && { printf '%s' "$d/$c"; return 0; } ;; esac; done
+  done
+  return 1
+}
+real_self(){
+  local p="$0" l i=0
+  while [ -L "$p" ] && [ "$i" -lt 40 ]; do
+    l="$(readlink "$p")"; case "$l" in /*) p="$l" ;; *) p="$(dirname "$p")/$l" ;; esac; i=$((i+1))
+  done
+  printf '%s/%s' "$(cd -P "$(dirname "$p")" && pwd -P)" "$(basename "$p")"
+}
+
+check_dir(){                    # check_dir <dir>: rc 0 all good, 1 a failure, 2 cannot run
+  local dir="$1" tb f n out rc sc total=0 bad=0
+  [ -d "$dir" ] || { printf 'mandatory-checks-selftest: REFUSED -- no directory %s; nothing was checked\n' "$dir" >&2; return 2; }
+  tb="$(timeout_bin)" || { printf 'mandatory-checks-selftest: REFUSED -- no timeout binary (timeout or gtimeout); nothing was run\n' >&2; return 2; }
+  out="$(mktemp "${TMPDIR:-/tmp}/mc-selftest.XXXXXX")" || return 2
+  for f in "$dir"/*; do
+    n="$(basename "$f")"
+    [ -f "$f" ] && [[ "$n" =~ $NAME_RE ]] || continue
+    total=$((total+1))
+    if [ ! -d "$f.fixtures/pass" ] || [ ! -d "$f.fixtures/fail" ]; then
+      printf '  FAIL %s: missing %s.fixtures/pass/ or %s.fixtures/fail/\n' "$n" "$n" "$n"; bad=$((bad+1)); continue
+    fi
+    ( builtin cd "$f.fixtures/pass" && env -i HOME="$HOME" PATH=/usr/bin:/bin:/usr/sbin:/sbin LANG=C.UTF-8 "$tb" -k 1 5 "$f" ) </dev/null >"$out" 2>/dev/null; rc=$?
+    sc="$(sed -n 's/^scanned: \([0-9][0-9]*\)$/\1/p' "$out" | head -1)"
+    if [ "$rc" -eq 0 ] && [ -n "$sc" ] && [ "$sc" -gt 0 ]; then printf '  ok   %s: pass fixture exits 0, scanned %s\n' "$n" "$sc"
+    else printf '  FAIL %s: pass fixture must exit 0 with scanned N > 0; got exit %s, scanned %s\n' "$n" "$rc" "${sc:-none}"; bad=$((bad+1)); fi
+    ( builtin cd "$f.fixtures/fail" && env -i HOME="$HOME" PATH=/usr/bin:/bin:/usr/sbin:/sbin LANG=C.UTF-8 "$tb" -k 1 5 "$f" ) </dev/null >"$out" 2>/dev/null; rc=$?
+    if [ "$rc" -eq 1 ]; then printf '  ok   %s: fail fixture exits 1\n' "$n"
+    else printf '  FAIL %s: fail fixture must exit 1; got exit %s\n' "$n" "$rc"; bad=$((bad+1)); fi
+  done
+  : > "$out"
+  if [ "$total" -eq 0 ]; then
+    printf 'mandatory-checks-selftest: 0 script(s) in %s (none shipped yet); nothing to check\n' "$dir"
+    return 0
+  fi
+  printf 'mandatory-checks-selftest: %s script(s) in %s, %s failing arm(s)\n' "$total" "$dir" "$bad"
+  [ "$bad" -eq 0 ]
+}
+
+selftest(){
+  local root d pass=0 fail=0 out rc
+  root="$(mktemp -d "${TMPDIR:-/tmp}/mc-selftest-self.XXXXXX")" || exit 2
+  mk(){ printf '#!/bin/sh\n%s\n' "$3" > "$1/$2"; chmod +x "$1/$2"; mkdir -p "$1/$2.fixtures/pass" "$1/$2.fixtures/fail"; }
+  # A realistic scanner: counts *.sh files, fails when one says `python3 ` bare.
+  local GOOD='n=$(find . -name "*.sh" | wc -l | tr -d " "); echo "scanned: $n"; if grep -l "^python3 " $(find . -name "*.sh") >/dev/null 2>&1; then exit 1; fi; [ "$n" -gt 0 ] || exit 2; exit 0'
+  sayok(){ pass=$((pass+1)); printf '  ok   %s\n' "$1"; }
+  saybad(){ fail=$((fail+1)); printf '  FAIL %s\n       got: %s\n' "$1" "$(printf '%s' "$2" | tr '\n' '|')"; }
+  d="$root/good"; mkdir -p "$d"; mk "$d" no-bare-python "$GOOD"
+  printf 'uv run python3 x\n' > "$d/no-bare-python.fixtures/pass/a.sh"; printf 'python3 x\n' > "$d/no-bare-python.fixtures/fail/a.sh"
+  printf 'readme\n' > "$d/README.md"
+  out="$(check_dir "$d" 2>&1)"; rc=$?
+  [ "$rc" -eq 0 ] && sayok "control: a correct script with both fixtures passes (rc 0)" || saybad "control good dir" "$out"
+  case "$out" in *"1 script(s)"*) sayok "README.md is not counted as a script (1 script)" ;; *) saybad "README counted" "$out" ;; esac
+  d="$root/planted"; mkdir -p "$d"; mk "$d" no-bare-python "$GOOD"
+  printf 'uv run python3 x\n' > "$d/no-bare-python.fixtures/pass/a.sh"; printf 'uv run python3 x\n' > "$d/no-bare-python.fixtures/fail/a.sh"
+  out="$(check_dir "$d" 2>&1)"; rc=$?
+  [ "$rc" -eq 1 ] && sayok "a fail fixture that exits 0 is caught (rc 1)" || saybad "planted fail fixture exits 0" "$out"
+  d="$root/nofix"; mkdir -p "$d"; printf '#!/bin/sh\necho scanned: 1\n' > "$d/lonely"; chmod +x "$d/lonely"
+  out="$(check_dir "$d" 2>&1)"; rc=$?
+  [ "$rc" -eq 1 ] && case "$out" in *missing*) true ;; *) false ;; esac && sayok "a script with no fixtures is caught" || saybad "no fixtures" "$out"
+  d="$root/noscan"; mkdir -p "$d"; mk "$d" quiet 'exit 0'
+  out="$(check_dir "$d" 2>&1)"; rc=$?
+  [ "$rc" -eq 1 ] && sayok "a pass fixture with no 'scanned: N' line is caught" || saybad "noscan" "$out"
+  d="$root/empty"; mkdir -p "$d"
+  out="$(check_dir "$d" 2>&1)"; rc=$?
+  [ "$rc" -eq 0 ] && case "$out" in *"0 script(s)"*) true ;; *) false ;; esac && sayok "an empty directory says 0 script(s) positively" || saybad "empty" "$out"
+  out="$(check_dir "$root/absent" 2>&1)"; rc=$?
+  [ "$rc" -eq 2 ] && sayok "a missing directory is REFUSED (rc 2), never a pass" || saybad "absent dir" "$out"
+  printf '\n%s passed, %s failed (fixtures: %s)\n' "$pass" "$fail" "$root"
+  [ "$fail" -eq 0 ]
+}
+
+case "${1:-}" in
+  --selftest) selftest; exit $? ;;
+  --dir) [ -n "${2:-}" ] || { echo "usage: mandatory-checks-selftest --dir <dir>" >&2; exit 2; }; check_dir "$2"; exit $? ;;
+  -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  '') s="$(real_self)"
+      case "$s" in */home/.local/bin/mandatory-checks-selftest) ;;
+        *) echo "mandatory-checks-selftest: REFUSED -- not running from <dotfiles>/home/.local/bin; use --dir" >&2; exit 2 ;; esac
+      check_dir "${s%/home/.local/bin/mandatory-checks-selftest}/home/.claude/tools/mandatory-checks"; exit $? ;;
+  *) echo "mandatory-checks-selftest: unknown arg $1 (try --help)" >&2; exit 2 ;;
+esac
