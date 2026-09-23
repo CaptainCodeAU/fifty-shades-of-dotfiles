@@ -93,7 +93,15 @@ conv_hook_main() {
 
 # A PreToolUse payload with the envelope Claude Code 2.1.280 really sends: keys
 # copied from a captured payload (2026-09-23, del-guard capture), values neutral.
+# CONV_PAYLOAD_FILE=<a captured payload> runs every arm on THAT envelope instead,
+# only command, cwd, description and timeout replaced (the arms check the last two).
 conv_payload() { # $1 command, [$2 cwd]
+  if [ -n "${CONV_PAYLOAD_FILE:-}" ]; then
+    jq --arg c "$1" --arg cwd "${2:-${TMPDIR:-/tmp}}" \
+      '.cwd = $cwd | .tool_input.command = $c | .tool_input.description = "selftest arm" | .tool_input.timeout = 120000' \
+      "$CONV_PAYLOAD_FILE"
+    return
+  fi
   jq -n --arg c "$1" --arg cwd "${2:-${TMPDIR:-/tmp}}" '{
     session_id:"selftest", transcript_path:"/dev/null", cwd:$cwd, prompt_id:"selftest",
     permission_mode:"bypassPermissions", effort:{level:"medium"}, hook_event_name:"PreToolUse",
@@ -105,6 +113,7 @@ conv_selftest_begin() { # $1 = this hook's own path
   _st_fails=0; _st_n=0
   _st_hook="${CONV_HOOK_UNDER_TEST:-$1}"
   echo "hook under test: $_st_hook"
+  echo "payload envelope: ${CONV_PAYLOAD_FILE:-built in (2.1.280 keys)}"
 }
 
 # $1 rewrite|deny|allow, $2 label, $3 command, $4 expected new command (rewrite), [$5 cwd]

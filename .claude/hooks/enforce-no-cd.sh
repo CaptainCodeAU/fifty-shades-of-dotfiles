@@ -24,10 +24,15 @@
 # STILL DENIED, as before: a cd that is not the first command, more than one cd,
 # `cd` alone, `cd -`, `cd` with options or two arguments, `cd DIR || ...`,
 # `cd DIR | ...`, a command with a background & anywhere, a quoted or escaped cd,
-# a command the scanner is unsure of, and a command that ALSO trips the uv or pnpm
-# rule (two rewriting hooks would race; conv-hooklib.sh has the two rules).
-# Allowed untouched: `builtin cd`, cd inside $(...), and cd written as prose in
-# quotes, heredocs and commit messages.
+# a cd inside a { } group (it runs in the CURRENT shell: measured in zsh 5.9,
+# `{ cd /tmp; }; pwd` prints /tmp), a command the scanner is unsure of, and a
+# command that ALSO trips the uv or pnpm rule (two rewriting hooks would race;
+# conv-hooklib.sh has the two rules).
+# Allowed untouched: `builtin cd`, cd inside $(...), cd written as prose in
+# quotes, heredocs and commit messages, and (since 2026-09-23, Gavin's proposal E)
+# any cd inside an explicit ( ) subshell such as `(cd /x && make)`: a subshell's cd
+# cannot outlive it (measured: `( cd /tmp ); pwd` prints the old directory). A cd
+# OUTSIDE the subshell in the same command is still judged as above.
 #
 # The scanning is home/.claude/hooks/conv-shscan.awk and the plumbing
 # home/.claude/hooks/conv-hooklib.sh, reached through THIS REPO's path (the hook is
@@ -81,8 +86,11 @@ if [ "${1:-}" = "--selftest" ]; then
   conv_arm deny 'cd in a pipeline'                'cd /x | cat'
   conv_arm deny 'background & anywhere'           'cd /x && sleep 5 &'
   conv_arm deny 'zsh &! background'               'cd /x && sleep 5 &!'
-  conv_arm deny 'cd inside a subshell (as before)' '(cd /x && make)'
-  conv_arm deny 'cd inside { } (as before)'       '{ cd /x; make; }'
+  conv_arm deny 'cd inside { } (it persists)'     '{ cd /x; make; }'
+  conv_arm deny '{ } cd feeding a pipe'           '{ cd /x; make; } | cat'
+  conv_arm deny 'top-level cd after a ( ) cd'     '(cd /x && make) && cd /y && ls'
+  conv_arm deny '( ) then a { } cd'               '(cd /x); { cd /y; ls; }'
+  conv_arm deny 'unsure: ( ) cd with a case'      '(cd /x && case $a in b) ls ;; esac)'
   conv_arm deny 'quoted "cd"'                     '"cd" /x && ls'
   conv_arm deny 'command cd'                      'command cd /x && ls'
   conv_arm deny 'env-prefixed cd'                 'FOO=1 cd /x && ls'
@@ -109,6 +117,16 @@ if [ "${1:-}" = "--selftest" ]; then
   conv_arm allow 'uv run, no cd'                  'uv run python3 x.py'
   conv_arm allow 'nested quotes inside "$(...)"'  'x="$(echo "a; cd /tmp && ls")"; echo "$x"'
   conv_arm allow 'control: harmless'              'echo control-ok'
+  echo "=== SUBSHELL arms (proposal E): a cd inside ( ) cannot persist ==="
+  conv_arm allow '(cd DIR && make)'               '(cd /x && make)'
+  conv_arm allow '(cd DIR; make) into a pipe'     '(cd /x; make) | cat'
+  conv_arm allow 'subshell after another command' 'make && (cd /x && ls)'
+  conv_arm allow 'subshell in the background'     '(cd /x && make) &'
+  conv_arm allow '{ } nested inside ( )'          '( { cd /x; make; } )'
+  conv_arm allow 'alias .. inside ( )'            '(.. && ls)'
+  conv_arm allow 'alias 2 inside ( )'             '( 2 && ls )'
+  conv_arm allow 'zsh glob qualifier inside ( )'  '(cd /x && print -l *(.))'
+  conv_arm allow 'multi-line subshell'            $'(\n  cd /x\n  make\n)'
   echo "=== FALLBACK arms: scanner missing, the rule still holds ==="
   export CONV_SHSCAN=/nonexistent/conv-shscan.awk
   conv_arm deny  'scanner missing: slip denied'   'cd /x && ls'

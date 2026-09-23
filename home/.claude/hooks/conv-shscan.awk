@@ -45,6 +45,7 @@ function unsure(why) { if (UNSURE == "") UNSURE = why }
 function new_cmd(rec, depth, sep) {
     if (!rec) return -1
     NC++; CD[NC] = depth; CSB[NC] = sep; CSA[NC] = ""; CNW[NC] = 0; CEND[NC] = 0
+    CSS[NC] = SUBSH                   # >0: inside an explicit ( ) subshell
     return NC
 }
 
@@ -72,17 +73,18 @@ function skip_squote() {    # P at the opening '
     P++
 }
 
-function skip_backtick() {  # P at the opening `
-    P++
+function skip_backtick(    s) {  # P at the opening `
+    s = ++P
     while (P <= N && C[P] != "`") { if (C[P] == "\\") P++; P++ }
     if (P > N) unsure("unterminated backtick")
+    if (REC_NESTED) BT[++BTN] = substr(S, s, P - s)   # guard mode reads the body
     P++
 }
 
 function skip_cmdsub() {    # P at the "(" of $( ; handles $(( too
     if (C[P + 1] == "(") { skip_parens(); return }
     P++
-    parse_list(0, ")", 0, "")
+    parse_list(REC_NESTED, ")", 1, "$(")
 }
 
 function parse_dq(    c) {  # P at the opening "
@@ -149,7 +151,7 @@ function parse_word(    c, n, ws) {
         c = C[P]
         if (c == " " || c == "\t" || c == "\n" || c == ";" || c == "&" || c == "|" || c == "<" || c == ">" || c == ")") break
         if (c == "(") {
-            if (P == ws + 1 && C[ws] == "=") { P++; parse_list(0, ")", 0, ""); WQF = 1; continue }  # zsh =(...)
+            if (P == ws + 1 && C[ws] == "=") { P++; parse_list(REC_NESTED, ")", 1, "=("); WQF = 1; continue }  # zsh =(...)
             skip_parens(); continue                    # glob qualifier or pattern group
         }
         if (c == "'") { skip_squote(); WQF = 1; continue }
@@ -204,7 +206,7 @@ function handle_redir(k,    c, ws, d) {
         HDN++; HD[HDN] = unquote_delim(substr(S, ws, P - ws)); HDD[HDN] = d
         if (HD[HDN] == "") unsure("here-document with no delimiter")
     } else if ((c == "<" || c == ">") && C[P + 1] == "(") {
-        P += 2; parse_list(0, ")", 0, "")          # process substitution, an argument
+        P += 2; parse_list(REC_NESTED, ")", 1, c "(")   # process substitution, an argument
     } else {
         if (c == "&") P++
         P++
@@ -213,7 +215,7 @@ function handle_redir(k,    c, ws, d) {
             P++
         }
         skip_blanks()
-        if ((C[P] == "<" || C[P] == ">") && C[P + 1] == "(") { P += 2; parse_list(0, ")", 0, "") }
+        if ((C[P] == "<" || C[P] == ">") && C[P + 1] == "(") { P += 2; parse_list(REC_NESTED, ")", 1, C[P - 2] "(") }
         else {
             ws = P; parse_word()
             if (P == ws) unsure("redirection with no target")
@@ -279,7 +281,7 @@ function parse_list(rec, closer, depth, sep,    k, c, ws, raw, q) {
             if (k == 0 && C[P + 1] == "(") {          # (( arithmetic ))
                 k = new_cmd(rec, depth, sep); ws = P; skip_parens(); add_word(k, ws, P - 1, 1); continue
             }
-            if (k == 0) { P++; parse_list(rec, ")", depth + 1, "("); sep = ")"; continue }
+            if (k == 0) { P++; SUBSH++; parse_list(rec, ")", depth + 1, "("); SUBSH--; sep = ")"; continue }
             if (C[P + 1] == ")") {                      # f () { ... }: a function definition
                 unsure("function definition"); P += 2; end_cmd(k, "kw"); k = 0; sep = "kw"; continue
             }
@@ -612,9 +614,20 @@ function cd_alias(w) {        # .zshrc aliases that expand to cd; "" if w is not
 # are `cd -N` (the directory stack), grt is cd to the git top level. Deny only.
 function cd_deny_alias(w) { return w ~ /^[1-9]$/ || w == "grt" }
 
-function nocd_check(    k, j, n, v, cnt, first, fj, dir, why) {
-    V["nocd"] = "ALLOW"; M["nocd"] = ""; cnt = 0
+# A cd inside an explicit ( ) subshell cannot outlive it, so it is not counted
+# (ruled by Gavin 2026-09-23, proposal E). A { } group runs in the CURRENT shell
+# and its cd persists (measured in zsh 5.9), so a { } cd is counted as before.
+# One exception keeps the old deny: a subshell cd in a command the scanner is
+# UNSURE of, because then the subshell boundaries themselves are in doubt.
+function nocd_check(    k, j, n, v, cnt, first, fj, dir, why, subcd) {
+    V["nocd"] = "ALLOW"; M["nocd"] = ""; cnt = 0; subcd = 0
+    why = "Don't use 'cd' -- use absolute paths, 'git -C <path>', or 'builtin cd' instead"
     for (k = 1; k <= NC; k++) {
+        if (CSS[k] > 0) {
+            j = eff(k)
+            if (j <= CNW[k] && EM !~ /hard:builtin/ && (unq(WR[k, j]) == "cd" || WR[k, 1] == "-" || (!WQ[k, j] && (cd_alias(WR[k, j]) != "" || cd_deny_alias(WR[k, j]))))) subcd++
+            continue
+        }
         if (CNW[k] >= 1 && WR[k, 1] == "-" && !WQ[k, 1]) {   # alias - = cd - (eff reads it as zsh's - modifier)
             verdict("nocd", "DENY", "'-' is an alias for 'cd -' here; use an absolute path, git -C, or builtin cd"); return
         }
@@ -626,8 +639,10 @@ function nocd_check(    k, j, n, v, cnt, first, fj, dir, why) {
         v = unq(WR[k, j])
         if (v == "cd" || (!WQ[k, j] && cd_alias(WR[k, j]) != "")) { if (++cnt == 1) { first = k; fj = j } }
     }
-    if (cnt == 0) return
-    why = "Don't use 'cd' -- use absolute paths, 'git -C <path>', or 'builtin cd' instead"
+    if (cnt == 0) {
+        if (subcd && UNSURE != "") verdict("nocd", "DENY", why " (a cd inside ( ) is allowed, but this command has a " UNSURE ")")
+        return
+    }
     k = first; j = fj; n = CNW[k]; eff(k)
     if (cnt > 1 || k != 1 || CD[k] != 0 || CSB[k] != "^" || EM != "" || j != 1 || UNSURE != "" || BG) {
         verdict("nocd", "DENY", why); return
@@ -647,16 +662,130 @@ function nocd_check(    k, j, n, v, cnt, first, fj, dir, why) {
     verdict("nocd", "REWRITE", "leading cd " dir " -> (builtin cd " dir " ...) in a subshell, so the session's working directory did not change")
 }
 
+# ------------------------------------------------------------------ guard
+# Used by validate-bash.sh (CONV_MODE=guard). Deny only, never a rewrite. Three
+# rules approved by Gavin 2026-09-23 from the conv-hooks survey:
+#   A. the six aliases that launch a NESTED Claude with --dangerously-skip-permissions
+#      (ci cr ct cpr cd_ cskip; cb launches one WITHOUT it and is left alone)
+#   B. gpf!, the oh-my-zsh alias for `git push --force` (gpf and gpsupf are
+#      --force-with-lease and are left alone)
+#   C. brew install / instal / reinstall / upgrade: ask Gavin. The .zshrc brew()
+#      guard is [[ -o interactive ]] only, measured inert in agent Bash.
+# An alias expands only at command position: after assignments, time, nocorrect, !,
+# keywords, ( and {, and inside $(...), backticks and eval (all measured in agent
+# Bash, zsh 5.9). This mode records $(...) and process substitution bodies
+# (REC_NESTED), reads backtick bodies and eval arguments with a cruder word match,
+# and denies the alias names after ANY precommand modifier too, where zsh would not
+# expand them: a false positive there costs nothing, no such command exists.
+# A quoted or escaped alias name (\ci, "ci") does not expand and is allowed.
+
+function g_alias_msg(w) {
+    if (w == "gpf!") return "'gpf!' is the oh-my-zsh alias for 'git push --force'. A force push is Gavin's call: ask him. 'gpf' (--force-with-lease --force-if-includes) is the safer form when he agrees"
+    return "'" w "' is a .zshrc alias that launches a NESTED Claude session with --dangerously-skip-permissions. Nesting a skip-permissions session is Gavin's call, not an agent's: ask him"
+}
+function g_is_alias(w) { return w == "ci" || w == "cr" || w == "ct" || w == "cpr" || w == "cd_" || w == "cskip" || w == "gpf!" }
+function g_brew_sub(s) { return s == "install" || s == "instal" || s == "reinstall" || s == "upgrade" }
+function g_brew_msg(s) { return "'brew " s "' changes what is installed on Gavin's machine: ask Gavin to run it. brew list, info, search, outdated and deps stay allowed" }
+
+# The crude match, for text the scanner cannot parse as commands (backtick
+# bodies, eval arguments). Returns a deny message or "".
+function g_crude(t,    m) {
+    if (match(t, /(^|[;&|({\n])[ \t]*(ci|cr|ct|cpr|cd_|cskip|gpf!)([ \t\n;&|)}]|$)/)) {
+        m = substr(t, RSTART, RLENGTH); gsub(/^[;&|({\n \t]+|[ \t\n;&|)}]+$/, "", m)
+        return g_alias_msg(m)
+    }
+    if (match(t, /(^|[;&|({\n])[ \t]*([^ \t\n;&|]*\/)?brew[ \t]+(-[^ \t\n]+[ \t]+)*(install|instal|reinstall|upgrade)([ \t\n;&|)}]|$)/)) {
+        m = substr(t, RSTART, RLENGTH); sub(/[ \t\n;&|)}]+$/, "", m); sub(/.*[ \t]/, "", m)
+        return g_brew_msg(m)
+    }
+    return ""
+}
+
+function guard_check(    k, j, n, a, w, b, s, i, t) {
+    V["guard"] = "ALLOW"; M["guard"] = ""
+    for (k = 1; k <= NC; k++) {
+        j = eff(k); n = CNW[k]
+        if (j > n || EM ~ /probe/) continue
+        w = WR[k, j]
+        if (!WQ[k, j] && g_is_alias(w)) { verdict("guard", "DENY", g_alias_msg(w)); return }
+        # brew: a quoted or path-prefixed name still runs brew, so unq and base.
+        # After a hard modifier (sudo -u x brew ...) eff cannot find the command
+        # word reliably, so look at every word, as the uv rule does.
+        for (a = j; a <= n; a++) {
+            if (base(unq(WR[k, a])) == "brew") break
+            if (EM !~ /hard:|envopt/) { a = n + 1; break }
+        }
+        if (a <= n) {
+            for (i = a + 1; i <= n && isopt(k, i); i++) ;
+            if (i <= n) {
+                s = unq(WR[k, i])
+                if (s == "") { verdict("guard", "DENY", "brew with a subcommand held in a variable or expansion (" WR[k, i] "): it may be an install. Ask Gavin, or spell the subcommand out"); return }
+                if (g_brew_sub(s)) { verdict("guard", "DENY", g_brew_msg(s)); return }
+            }
+        }
+        if (unq(w) == "eval" && !WQ[k, j]) {
+            t = ""
+            for (a = j + 1; a <= n; a++) t = t " " WR[k, a]
+            gsub(/["']/, "", t)
+            s = g_crude(t)
+            if (s != "") { verdict("guard", "DENY", s " (inside eval)"); return }
+        }
+    }
+    for (i = 1; i <= BTN; i++) {
+        s = g_crude(BT[i])
+        if (s != "") { verdict("guard", "DENY", s " (inside backticks)"); return }
+    }
+}
+
+# ------------------------------------------------------------------ builtin
+# Used by this repo's .claude/hooks/enforce-builtin.sh (CONV_MODE=builtin), which
+# denies `builtin <word>` when <word> is not a zsh builtin. Until 2026-09-23 it
+# stripped "$(...)", "..." and '...' with sed, the same flaw the other hooks had:
+# a quoted ) inside $(...) put prose at command position. Kept as it was: the
+# allowed list, the prefixes it saw through (assignments, then env sudo command
+# nohup time exec doas xargs followed by options, assignments or plain words), a
+# path-prefixed builtin, a quoted builtin ignored, nothing inside $(...) checked.
+
+function bi_ok(w) {
+    return w ~ /^(cd|echo|printf|print|pushd|popd|pwd|read|set|shift|test|trap|true|false|type|typeset|ulimit|umask|unset|wait|export|local|return|exit|source|eval|exec|hash|kill|let|unalias|unfunction|declare|readonly|dirs|bg|fg|jobs|disown|suspend|times|builtin|command|whence|where|which|getopts|break|continue|:|\.)$/
+}
+function bi_mod(w) { return w ~ /^(env|sudo|command|nohup|time|exec|doas|xargs)$/ }
+
+function builtin_check(    k, j, n, w, arg, mod) {
+    V["builtin"] = "ALLOW"; M["builtin"] = ""
+    for (k = 1; k <= NC; k++) {
+        n = CNW[k]; j = 1; mod = 0
+        while (j <= n && WR[k, j] ~ /^[A-Za-z_][A-Za-z0-9_]*=/) j++
+        while (j <= n && !WQ[k, j]) {
+            w = WR[k, j]
+            if (w ~ /^([A-Za-z0-9_.\/-]*\/)?builtin$/) break
+            if (bi_mod(w)) { mod = 1; j++; continue }
+            if (mod && (w ~ /^-/ || w ~ /^[A-Za-z_][A-Za-z0-9_]*(=.*)?$/)) { j++; continue }
+            j = n + 1
+        }
+        if (j >= n || WQ[k, j]) continue
+        arg = unq(WR[k, j + 1]); if (arg == "") arg = WR[k, j + 1]
+        if (bi_ok(arg)) continue
+        verdict("builtin", "DENY", "'builtin " arg "' is invalid -- builtin only works with zsh builtins (cd, echo, printf, etc.)")
+        return
+    }
+}
+
 # ------------------------------------------------------------------ main
 
 { S = (NR > 1 ? S "\n" : "") $0 }
 
 END {
     N = split(S, C, "")
-    P = 1; NC = 0; HDN = 0; BG = 0; UNSURE = ""
+    mode = ENVIRON["CONV_MODE"]
+    P = 1; NC = 0; HDN = 0; BG = 0; UNSURE = ""; SUBSH = 0; BTN = 0
+    REC_NESTED = (mode == "guard")      # only guard looks inside $(...) and backticks
     parse_list(1, "", 0, "^")
     if (HDN) unsure("here-document with no body")
-    mode = ENVIRON["CONV_MODE"]
+    if (mode == "guard" || mode == "builtin") {       # deny-only modes: never compose
+        if (mode == "guard") guard_check(); else builtin_check()
+        print V[mode]; print M[mode]; exit 0
+    }
     if (mode == "uv")        { own = "uv";   uv_check(); pnpm_check(); others = "pnpm" }
     else if (mode == "pnpm") { own = "pnpm"; pnpm_check(); uv_check(); others = "uv" }
     else if (mode == "nocd") { own = "nocd"; nocd_check(); uv_check(); pnpm_check(); others = "uv pnpm" }
