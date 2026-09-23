@@ -280,9 +280,9 @@ guard would refuse; the convention hooks only insert `uv run`, `pnpm`,
 `builtin cd` and a subshell.
 
 ```sh
-~/.claude/hooks/enforce-uv.sh --selftest              # 65 arms
+~/.claude/hooks/enforce-uv.sh --selftest              # 78 arms
 ~/.claude/hooks/enforce-pnpm.sh --selftest            # 56 arms
-.claude/hooks/enforce-no-cd.sh --selftest             # 48 arms (this repo only)
+.claude/hooks/enforce-no-cd.sh --selftest             # 52 arms (this repo only)
 CONV_HOOK_UNDER_TEST=<other copy> <hook> --selftest   # same arms, another copy
 ```
 
