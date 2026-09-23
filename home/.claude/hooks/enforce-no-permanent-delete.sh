@@ -10,8 +10,8 @@
 # Trash, and no rm wrapper can see it because it never calls rm. The rm PATH
 # shim covers `rm`; it cannot cover `git clean`, `find -delete`, `unlink`,
 # `rsync --delete`, `> file`, an absolute `/bin/rm`, or `os.remove` inside a
-# `python3 -c`. docs/DELETION_SAFETY.md lists those as "What this does NOT
-# protect against"; this hook turns most of that list into a refusal.
+# `python3 -c`. docs/DELETION_SAFETY.md lists those under "What the rm wrappers
+# do NOT protect against"; this hook turns most of that list into a refusal.
 #
 # HOW IT READS A COMMAND. Not a regex over the text. A small shell lexer (awk,
 # below) splits the command into SIMPLE COMMANDS the way zsh would: quotes are
@@ -51,8 +51,9 @@
 # crash here would block every Bash call. jq missing, or the lexer failing,
 # SHOUTS through additionalContext instead of going quiet.
 #
-# `--selftest` proves every arm, deny AND allow. `--mutants` removes each
-# `#M:` line in turn from a copy and shows the selftest catch it.
+# `--selftest` proves every arm, deny AND allow. `--mutants [text]` removes each
+# `#M:` line (or only those whose tag holds text) in turn from a copy and shows
+# the selftest catch it.
 
 # No `set -u`: /bin/bash is 3.2 on macOS, where an EMPTY array expanded as
 # "${a[@]}" is an unbound-variable error. Globbing is off for the whole run
@@ -1160,6 +1161,7 @@ SNAP
   _must rm-path             'xargs /bin/rm'                   'ls | xargs /bin/rm'
   _must rm-path             'ANSI-C quoted path'              $'$\'\\x2fbin\\x2frm\' x'
   _must rm-path             'zsh =rm style path'              '=/bin/rm x'
+  _must unlink              'zsh =unlink (= stripped)'        '=unlink x'
   _must shred               'command shred'                   'command shred x'
   _must git-clean           'git clean in sh -c after &&'     "cd_ok=1 && sh -c 'ls; git clean -fd'"
   _must git-clean           'alias gclean (fixture)'          'gclean'
@@ -1240,6 +1242,7 @@ SNAP
   _must - 'rg unlink'                       'rg -n unlink src/'
   _must - 'decided add --body'              'decided add "x" --body "we shred nothing; unlink is banned"'
   _must - 'comment'                         'ls # then git worktree remove x'
+  _must - 'comment holding a ;'             'ls # tidy up; git worktree remove x'
   _must - 'python3 -c reads only'           "python3 -c 'print(open(\"x\").read())'"
   _must - 'uv run python3 script.py'        'uv run python3 tools/census.py --control x y'
   _must - 'python heredoc reads only'       $'uv run python3 - <<\'EOF\'\nimport json; print(json.load(open("a")))\nEOF'
@@ -1347,12 +1350,13 @@ SNAP
 # expects it to FAIL. A tagged line whose removal still passes is a rule no arm
 # proves, which is the finding this mode exists to surface.
 _mutants() {
-  local self="$0" tmp n=0 caught=0 missed=0 broken=0 line tag ln mk
+  local self="$0" tmp n=0 caught=0 missed=0 broken=0 line tag ln mk only="${1:-}"
   mk='#''M: '              # built, so no line in this function carries the marker itself
   tmp="$(mktemp -d "${TMPDIR:-/tmp}/del-guard-mutants.XXXXXX")" || return 1
   while IFS= read -r line; do
-    n=$((n + 1))
     ln="${line%%:*}"; tag="${line##*"$mk"}"
+    [ -n "$only" ] && [[ $tag != *"$only"* ]] && continue
+    n=$((n + 1))
     awk -v L="$ln" 'NR != L' "$self" > "$tmp/m.sh"; chmod +x "$tmp/m.sh"
     # a mutant that no longer PARSES proves nothing about the rule: say so
     if ! /bin/bash -n "$tmp/m.sh" 2>/dev/null; then
@@ -1376,7 +1380,7 @@ _mutants() {
 
 case "${1:-}" in
   --selftest) _selftest; exit $? ;;
-  --mutants)  _mutants; exit $? ;;
+  --mutants)  _mutants "${2:-}"; exit $? ;;   # optional: only tags containing this text
   --help|-h)
     sed -n '2,55p' "$0" | sed 's/^# \{0,1\}//'
     exit 0 ;;
