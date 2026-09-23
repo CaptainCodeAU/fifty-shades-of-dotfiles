@@ -43,9 +43,10 @@ ZED_REPO="zed-industries/zed"
 # Upstream PRs to watch for merge, checked live at every session start.
 # Format: "<number>:<short label>". When a PR merges (or closes), the hook nudges the
 # assistant to update the doc/memory and to drop it from this list once recorded.
-WATCHED_PRS=(
-  "58755:per-window theme overrides (per-project themes / zed#13300)"
-)
+# Empty on purpose since 2026-09-23: #58755 (per-window themes) closed unmerged on
+# 2026-09-07, was recorded in the doc, and was dropped. An empty list is a valid state;
+# the loop below prints "none" rather than going silent.
+WATCHED_PRS=()
 
 # Numeric semver compare: returns 0 (true) if $1 > $2, else 1. Pure shell, no sort -V
 # (BSD sort lacks it). Inputs must already be validated X.Y.Z.
@@ -178,7 +179,13 @@ fi
 
 echo
 echo "🔀 Watched Zed PRs (merge status · checked live each session):"
-for entry in "${WATCHED_PRS[@]}"; do
+# ${A[@]+"${A[@]}"} rather than "${A[@]}": bash 3.2 (macOS /bin/bash) treats an empty
+# array as unbound under `set -u` and dies here. Measured 2026-09-23: 3.2.57 fails,
+# 5.3 passes, the guarded form passes on both.
+if [ "${#WATCHED_PRS[@]}" -eq 0 ]; then
+  echo "   (none watched -- add \"<number>:<label>\" to WATCHED_PRS in this hook to watch one)"
+fi
+for entry in ${WATCHED_PRS[@]+"${WATCHED_PRS[@]}"}; do
   num="${entry%%:*}"; label="${entry#*:}"
   IFS='|' read -r src st mg upd _title <<<"$(pr_status "$num")"
   case "$mg" in
