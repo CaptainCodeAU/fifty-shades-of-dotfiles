@@ -29,8 +29,17 @@
 #   shopt -u sourcepath     without it, `.` looks a slash-less name up on PATH
 #                           first, so `bash open-items-selftest` from inside
 #                           home/.local/bin would run the MASTER copy (measured)
-# Limit: `bash -x suite` traces only the header, since the exec'd shell does not
-# inherit -x. Put `set -x` in the suite, or run `bash -x -c '. ./suite'`.
+# Limits, all measured on bash 3.2 and 5:
+#   - A suite that CRASHES exits with a different non-zero code, because the run is
+#     a `bash -c` (an inline `bash -c 'set -u; echo $X'` does the same):
+#         unbound variable under set -u, or ${V?msg}:  1 -> 127
+#         a syntax error in the file:                  2 -> 1 on bash 3.2 (5: 2)
+#     Output and the line it stops at are unchanged, and so is every code the suite
+#     chooses (exit N, set -e, pipefail, signals). The callers that read a suite's
+#     code (pj-health, open-items-selftest) test only zero against non-zero.
+#   - A top-level `return` would end a sourced run quietly; --check refuses one.
+#   - `bash -x suite` traces only the header, since the exec'd shell does not
+#     inherit -x. Put `set -x` in the suite, or run `bash -x -c '. ./suite'`.
 #
 # WHAT THIS TOOL DOES
 #   --check [DIR...]  every file named *-selftest in DIR (default: the folder
@@ -61,8 +70,27 @@ first_code() {
   awk 'NR == 1 { next } /^[[:space:]]*$/ || /^[[:space:]]*#/ { next } { print; if (++n == 2) exit }' "$1"
 }
 
+# toplevel_returns <file>: print every `return` the file would run at its top level,
+# outside all functions. Sourced, such a return quietly ends the suite with its status,
+# where run as a script it errors and carries on, so --check refuses one. Read from
+# bash's own parse (declare -f of the file wrapped in a function), never by running it;
+# the exit code is 3 when bash cannot parse the file.
+toplevel_returns() {
+  "$BASH" -c 'eval "__whole_read_probe() {
+$(cat "$1")
+}" || exit 3; declare -f __whole_read_probe' _ "$1" | awk '
+    NR <= 2 { next }
+    term != "" { if ($0 == term) term = ""; next }
+    /^ +(function +)?[A-Za-z_][A-Za-z0-9_:.-]* +\(\) *$/ { match($0, /^ +/); stack[++d] = RLENGTH; next }
+    d > 0 && /^ +\};? *$/ { match($0, /^ +/); if (RLENGTH == stack[d]) d--; next }
+    d == 0 && /(^ +|[;&|{(] +|(then|else|do) +)return( |;|$)/ { print "  " $0 }
+    /<<-? *["\047]?[A-Za-z_][A-Za-z0-9_]*["\047]? *;?$/ { t = $0; sub(/.*<<-? */, "", t); gsub(/["\047; ]/, "", t); term = t }
+  '
+  return "${PIPESTATUS[0]}"
+}
+
 check() {
-  local dir f name shebang code want total=0 good=0 missing=0 other=0 rc=0
+  local dir f name shebang code want rets prc total=0 good=0 missing=0 returns=0 other=0 rc=0
   [ $# -gt 0 ] || set -- "$(dirname "$0")"
   want="$(printf '%s\n%s' "$HEADER1" "$HEADER2")"
   for dir in "$@"; do
@@ -77,11 +105,16 @@ check() {
       esac
       total=$((total + 1))
       code="$(first_code "$f")"
-      if [ "$code" = "$want" ]; then
-        good=$((good + 1)); echo "  ok   $name"
-      else
+      rets="$(toplevel_returns "$f")"; prc=$?
+      if [ "$code" != "$want" ]; then
         missing=$((missing + 1)); rc=1
         echo "  MISSING $name: its first code is not the whole-read header"
+      elif [ "$prc" -ne 0 ] || [ -n "$rets" ]; then
+        returns=$((returns + 1)); rc=1
+        echo "  TOP-LEVEL RETURN $name (or bash could not parse it, rc $prc): sourced, it would end the run quietly"
+        [ -n "$rets" ] && printf '%s\n' "$rets"
+      else
+        good=$((good + 1)); echo "  ok   $name"
       fi
     done
   done
@@ -89,7 +122,7 @@ check() {
     echo "selftest-whole-read: REFUSED found no bash *-selftest in $* ($other not bash): nothing checked, NOT a pass" >&2
     return 2
   fi
-  echo "selftest-whole-read: $good of $total bash suite(s) carry the header, $missing missing; $other *-selftest file(s) not bash, not checked"
+  echo "selftest-whole-read: $good of $total bash suite(s) pass: $missing missing the header, $returns with a top-level return; $other *-selftest file(s) not bash, not checked"
   return "$rc"
 }
 
@@ -107,6 +140,8 @@ make_fixture() {
     echo "# a comment the header may follow"
     [ "$3" = 1 ] && { echo "$HEADER1"; echo "$HEADER2"; }
     cat <<'EOF'
+trap 'echo "trap EXIT rc=$?"' EXIT
+[ "${BASH_SOURCE[0]}" = "$0" ] && echo main_guard=equal || echo main_guard=differs
 echo "0=$0 bs=${BASH_SOURCE[0]} n=$# args=[$*] guard_seen_by_child=$("$BASH" -c 'echo "${SELFTEST_WHOLE_READ-unset}"')"
 : > "$MARK.started"
 while [ ! -e "$MARK.edited" ]; do sleep 0.05; done
@@ -124,13 +159,14 @@ EOF
 # line into its unread middle, written in place (same inode, as an editor that
 # saves in place would). Prints the output; the exit code is in $RC.
 run_edited() {
-  local f="$1" new
+  local f="$1" new target
   [ $# -gt 0 ] && shift
+  target="${EDIT_TARGET:-$f}"   # the file to edit, when it is not the one run
   RUNS=$((RUNS + 1)); MARK="$T/mark.$RUNS"   # fresh markers: no rm, which the sandbox refuses
   (
     while [ ! -e "$MARK.started" ]; do sleep 0.05; done
-    new="$(awk '/^echo "PASS/ { print "if then fi ((( garbage" } { print }' "$f")"
-    printf '%s\n' "$new" > "$f"
+    new="$(awk '/^echo "PASS/ { print "if then fi ((( garbage" } { print }' "$target")"
+    printf '%s\n' "$new" > "$target"
     : > "$MARK.edited"
   ) &
   OUT="$(MARK="$MARK" "$f" "$@" 2>&1)"; RC=$?
@@ -138,7 +174,7 @@ run_edited() {
 }
 
 selftest() {
-  local B bashes f inode out rc
+  local B bashes f inode out rc major mode want inner
   T="$(mktemp -d "${TMPDIR:-/tmp}/selftest-whole-read.XXXXXX")" || { echo "selftest-whole-read: mktemp failed -- INVALID TRIAL" >&2; return 2; }
   T="$(builtin cd "$T" && pwd -P)"
   bashes="/bin/bash"
@@ -169,6 +205,57 @@ selftest() {
       *) bad "guarded, $B: \$0/BASH_SOURCE/arguments changed" "$OUT" ;; esac
     case "$OUT" in *guard_seen_by_child=unset*) ok "guarded, $B: the recursion guard is not inherited by children" ;;
       *) bad "guarded, $B: a child sees SELFTEST_WHOLE_READ" "$OUT" ;; esac
+    case "$OUT" in *main_guard=equal*"trap EXIT rc=7"*) ok "guarded, $B: BASH_SOURCE[0] = \$0 (a main guard still sees them equal) and the EXIT trap fires with rc 7" ;;
+      *) bad "guarded, $B: main guard or EXIT trap changed" "$OUT" ;; esac
+
+    # Nested: a guarded suite runs another guarded suite, and the INNER one is edited.
+    # The inner run must guard itself, which needs the outer's `unset` (the control).
+    inner="$T/inner-selftest"; make_fixture "$inner" "$B" 1
+    { echo "#!$B"; echo "$HEADER1"; echo "$HEADER2"; echo '"$INNER"; echo "outer: inner rc=$?"'; } > "$T/outer-selftest"
+    { echo "#!$B"; echo "$HEADER1"; echo '"$INNER"; echo "outer: inner rc=$?"'; } > "$T/leaky-outer-selftest"
+    chmod +x "$T/outer-selftest" "$T/leaky-outer-selftest"
+    export INNER="$inner"; EDIT_TARGET="$inner"
+    run_edited "$T/outer-selftest"
+    case "$OUT" in *PASS=3*"outer: inner rc=7"*) case "$OUT" in *error*) false ;; esac ;; *) false ;; esac \
+      && ok "nested, $B: a suite run by a suite guards itself (inner edited mid-run, finishes PASS=3 rc 7)" \
+      || bad "nested, $B: the inner suite was reached by the edit" "$OUT"
+    make_fixture "$inner" "$B" 1
+    run_edited "$T/leaky-outer-selftest"
+    case "$OUT" in *"syntax error"*"outer: inner rc=2"*) ok "control, $B: without the outer's unset, the inner inherits the guard and dies of the edit" ;;
+      *) bad "control, $B: the leaky-outer control did not fail (the nested arm proves nothing)" "$OUT" ;; esac
+    unset INNER EDIT_TARGET
+
+    # set -e, set -u and a syntax error after the header: the same file run guarded and
+    # run plain (guard preset, so it is read incrementally as before) must print the same
+    # and stop at the same line. The exit codes follow the map in --help, pinned here so
+    # a bash that changes them is noticed: <mode>:<guarded rc>:<plain rc>.
+    major="$("$B" -c 'echo "${BASH_VERSINFO[0]}"')"
+    for want in e:1:1 u:127:1 syntax:$([ "$major" -le 3 ] && echo 1 || echo 2):2; do
+      mode="${want%%:*}"; want="${want#*:}"
+      f="$T/set$mode-selftest"
+      { echo "#!$B"; echo "$HEADER1"; echo "$HEADER2"; echo 'echo before'
+        case "$mode" in
+          e) echo 'set -e'; echo 'false' ;;
+          u) echo 'set -u'; echo 'echo "$NO_SUCH_VAR_WHOLE_READ"' ;;
+          syntax) echo 'if then fi' ;;
+        esac
+        echo 'echo AFTER'; } > "$f"; chmod +x "$f"
+      out="$("$f" 2>&1)"; rc=$?
+      OUT="$(SELFTEST_WHOLE_READ=1 "$f" 2>&1)"; RC=$?
+      [ "$out" = "$OUT" ] && [ "$rc:$RC" = "$want" ] && case "$out" in before*) true ;; *) false ;; esac && case "$out" in *AFTER*) false ;; esac \
+        && ok "$mode, $B: guarded and plain stop at the same line with the same output; rc guarded:plain = $want as documented" \
+        || bad "$mode, $B: want same output and rc $want" "guarded rc=$rc [$out] plain rc=$RC [$OUT]"
+    done
+
+    # A top-level return is the one thing sourcing changes; this arm measures the change,
+    # which is why --check refuses a suite that has one.
+    f="$T/ret-selftest"
+    { echo "#!$B"; echo "$HEADER1"; echo "$HEADER2"; echo 'return 5'; echo 'echo after-the-return'; } > "$f"; chmod +x "$f"
+    out="$("$f" 2>&1)"; rc=$?
+    OUT="$(SELFTEST_WHOLE_READ=1 "$f" 2>&1)"; RC=$?
+    [ "$rc" = 5 ] && [ -z "$out" ] && case "$OUT" in *"can only"*after-the-return*) true ;; *) false ;; esac \
+      && ok "top-level return, $B: guarded ends quietly rc 5, plain errors and carries on (so --check must refuse it)" \
+      || bad "top-level return, $B: behaviour not as documented" "guarded rc=$rc [$out] plain rc=$RC [$OUT]"
 
     # A tool's own inline --selftest needs no header: `case ... --selftest) st; exit $?`
     # is parsed whole before it runs, and the exit comes before bash reads on.
@@ -210,13 +297,14 @@ EOF
   make_fixture "$T/c-bad/a-selftest" /bin/bash 1
   make_fixture "$T/c-bad/b-selftest" /bin/bash 0
   { echo '#!/usr/bin/env bash'; echo 'set -u'; echo "$HEADER1"; echo "$HEADER2"; } > "$T/c-bad/late-selftest"
+  { echo '#!/usr/bin/env bash'; echo "$HEADER1"; echo "$HEADER2"; echo 'f() { return 1; }'; echo 'if true; then'; echo '  return 3'; echo 'fi'; } > "$T/c-bad/ret-selftest"
   printf '#!/usr/bin/env zsh\n' > "$T/c-none/z-selftest"
   out="$(check "$T/c-good" 2>&1)"; rc=$?
-  [ "$rc" = 0 ] && case "$out" in *"1 of 1 bash suite(s) carry the header, 0 missing; 1 *-selftest file(s) not bash"*) true ;; *) false ;; esac \
+  [ "$rc" = 0 ] && case "$out" in *"1 of 1 bash suite(s) pass: 0 missing the header, 0 with a top-level return; 1 *-selftest file(s) not bash"*) true ;; *) false ;; esac \
     && ok "--check: all guarded -> rc 0, counts stated, the python suite named as not bash" || bad "--check good" "rc=$rc $out"
   out="$(check "$T/c-bad" 2>&1)"; rc=$?
-  [ "$rc" = 1 ] && case "$out" in *"MISSING b-selftest"*"MISSING late-selftest"*"1 of 3"*) true ;; *) false ;; esac \
-    && ok "--check: unguarded and header-after-code both named MISSING -> rc 1" || bad "--check bad" "rc=$rc $out"
+  [ "$rc" = 1 ] && case "$out" in *"MISSING b-selftest"*"MISSING late-selftest"*"TOP-LEVEL RETURN ret-selftest"*"return 3"*"1 of 4"*"2 missing the header, 1 with a top-level return"*) true ;; *) false ;; esac \
+    && ok "--check: unguarded and header-after-code named MISSING, a top-level return (not the one in a function) named -> rc 1" || bad "--check bad" "rc=$rc $out"
   out="$(check "$T/c-none" 2>&1)"; rc=$?
   [ "$rc" = 2 ] && case "$out" in *REFUSED*"NOT a pass"*) true ;; *) false ;; esac \
     && ok "--check: no bash suite -> REFUSED rc 2, not a pass" || bad "--check none" "rc=$rc $out"
@@ -231,6 +319,6 @@ EOF
 case "${1:-}" in
   --check) shift; check "$@"; exit $? ;;
   --selftest) selftest; exit $? ;;
-  -h|--help|"") sed -n '2,50p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  -h|--help|"") sed -n '2,59p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   *) echo "selftest-whole-read: unknown argument '$1' (--check [DIR...] | --selftest | --help)" >&2; exit 2 ;;
 esac
