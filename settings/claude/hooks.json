@@ -273,6 +273,18 @@
       "why": "STATES the voice contract before the reply is written, names what the previous reply broke, and LOGS every measured turn to ${XDG_STATE_HOME:-~/.local/state}/pj/voice-drift.log as TSV (timestamp, session, turn, model, em dashes, prose chars). pj-voice V4 says zero em dashes; measured across 17 pj transcripts, 371 of them in 174,107 characters of prose, while every other voice rule was obeyed. THE DEFECT IS MODEL-SPECIFIC: split by model, claude-opus-5 has 371 in 157,774 prose chars (1 per 425) and claude-fable-5-1 has 0 in 15,725, same rules file and same style file -- which is why the log carries the model and why a count without one cannot be read. The wording is not the fault: DA_IDENTITY.md line 45 says almost the same words and the `c` family is clean. BE CAREFUL WITH THAT COMPARISON: 15,831 of the 19,505 characters in the `c` control set are Fable, which is clean under pj too, so the arm that actually compares is `c` on Opus, 3,674 characters, 0 observed against about 9 predicted. Real and thin. What IS solidly measured is that DriftReminder.hook.ts, the counter the `c` family runs, has never fired here: it is registered only in ~/.claude/settings.json and pj passes --setting-sources project,local, and its contract line appears twice in a `c` transcript and zero times in 35.3 MB of pj transcript. The inference that counting is WHY `c` is clean remains a hypothesis, and the log is how it gets settled (W-20260922-A13). UserPromptSubmit and not Stop, on DriftReminder's own recorded measurement: a Stop hook fires after the text is on screen, and FormatGate going observation-only took drift from 0% across 168 turns to 61-91% across 2,608. DriftReminder itself is NOT carried: its contract is hardcoded to a banner, a closer and max 2 em dashes, none of which pj has, and its only seam is LIFEOS_DIR. First UserPromptSubmit entry in this manifest. Project target only. Never blocks and never prints: every path exits 0, and an unwritable log is skipped in silence. Ruled by Gavin at the P9 gate 2026-09-22"
     },
     {
+      "event": "PreToolUse",
+      "matcher": "AskUserQuestion",
+      "script": "pj-question-ping.sh",
+      "targets": ["project"],
+      "entry": {
+        "type": "command",
+        "command": "test -x \"$HOME/.claude/hooks/pj-question-ping.sh\" && \"$HOME/.claude/hooks/pj-question-ping.sh\" || true",
+        "timeout": 5
+      },
+      "why": "PINGS Gavin at every AskUserQuestion popup: four sounds (Ping, Glass, Glass, Glass) then two imsg messages one second apart, per D-20260921-A10 as widened 2026-09-23 ('whenever there is one of those Ask User Question tool popups'). A hook because a rule the model must remember before each popup is forgotten on exactly the popup that stalls a session. Never blocks and never delays the popup: it prints nothing, exits 0, and runs the signal in a detached worker. PJ_NO_PING=1 disables it; a second popup from the same session inside 20 s is debounced. Project target only: pj is where the ruling applies"
+    },
+    {
       "event": "SessionStart",
       "script": "herdr-agent-state.sh",
       "script_path": "$HOME/.claude/hooks/herdr-agent-state.sh",
