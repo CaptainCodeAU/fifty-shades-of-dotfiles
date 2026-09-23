@@ -11,8 +11,10 @@
 # session and the pj-question-ping.sh hook use, so every message has the same
 # shape and carries an id that he can quote and a session can look up.
 #
-# THE SIGNAL. afplay Ping, Glass, Glass, Glass, then two imsg messages, the
-# second sent one second after the first returns:
+# THE SIGNAL. afplay Ping, Glass, Glass, Glass, then two imsg messages, EACH
+# SENT TWICE (Gavin, 2026-09-23): message 1, one second, message 1 again, a
+# pause of at least 5 seconds, message 2, one second, message 2 again. Four
+# texts per ping:
 #
 #   1: "<icon> PJ <KIND> #<id> <HH:MM:SS> | <session> | <summary>"
 #   2: "<icon> #<id> 2/2 | <action> | pane <HERDR_PANE_ID or ->"
@@ -39,7 +41,7 @@
 # THE LOG: $PJ_PING_LOG, else ${PJ_PING_STATE_DIR:-${XDG_STATE_HOME:-~/.local/state}/pj}/ping.log
 # Tab-separated, two lines per ping, never the summary or action text:
 #   <local ISO time>  <id>  <kind>  <session>  queued  <what was missing, or ->
-#   <local ISO time>  <id>  <kind>  <session>  sent    afplay=<rc x4> imsg=<rc1>,<rc2>
+#   <local ISO time>  <id>  <kind>  <session>  sent    afplay=<rc x4> imsg=<rc1>,<rc1 again>,<rc2>,<rc2 again>
 # So "did #K3F9 go out, and before #7QHM?" is: rg -w 'K3F9|7QHM' <log>
 #
 # --detach  print the id, then do the sounds and messages in a double-forked
@@ -143,8 +145,21 @@ new_id() {
   return 1
 }
 
-# The send half: sounds in order, then the two messages, the second one second
-# after the first returns. Logs the rcs. Returns 1 when anything failed.
+# The pause between the two PAIRS is at least 5 s (Gavin, 2026-09-23).
+# PJ_PING_PAIR_GAP (whole seconds) can lengthen it; it can shorten it only in a
+# selftest, i.e. when the PJ_PING_IMSG seam is set, so a real ping never has a
+# pause under 5 s.
+PAIR_GAP=5
+case "${PJ_PING_PAIR_GAP:-}" in
+  '' | *[!0-9]*) ;;
+  *) if [ "$PJ_PING_PAIR_GAP" -ge 5 ] || [ -n "${PJ_PING_IMSG+x}" ]; then PAIR_GAP="$PJ_PING_PAIR_GAP"; fi ;;
+esac
+
+# The send half: sounds in order, then message 1 twice (one second apart), a
+# pause of PAIR_GAP, then message 2 twice (one second apart). Gavin's order,
+# 2026-09-23: "one message must first be sent two times. Then there needs to be
+# a pause, let's say a minimum of five seconds. Then a different message must be
+# sent twice." Logs the four rcs. Returns 1 when anything failed.
 send() { # send <id> <kind> <session> <afplay-or-empty> <imsg-or-empty> <msg1> <msg2>
   local id="$1" kind="$2" sess="$3" afplay="$4" imsg="$5" s r a="" m="" bad=0
   if [ -n "$afplay" ]; then
@@ -155,6 +170,10 @@ send() { # send <id> <kind> <session> <afplay-or-empty> <imsg-or-empty> <msg1> <
   else a="-"; fi
   if [ -n "$imsg" ]; then
     "$imsg" "$6" </dev/null >/dev/null 2>&1; r=$?; m="$r"; [ "$r" -eq 0 ] || bad=1
+    sleep 1
+    "$imsg" "$6" </dev/null >/dev/null 2>&1; r=$?; m="$m,$r"; [ "$r" -eq 0 ] || bad=1
+    sleep "$PAIR_GAP"
+    "$imsg" "$7" </dev/null >/dev/null 2>&1; r=$?; m="$m,$r"; [ "$r" -eq 0 ] || bad=1
     sleep 1
     "$imsg" "$7" </dev/null >/dev/null 2>&1; r=$?; m="$m,$r"; [ "$r" -eq 0 ] || bad=1
   else m="-"; fi

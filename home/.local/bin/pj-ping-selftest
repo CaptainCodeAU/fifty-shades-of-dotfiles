@@ -5,7 +5,7 @@
 #
 # THE CLAIM UNDER TEST is that Gavin and a session can tell WHICH ping arrived
 # and IN WHAT ORDER: both messages carry the same id, the id is never reused,
-# message 1 is sent before message 2 with a one-second gap, and the log records
+# each message is sent twice one second apart, the pairs at least 5 s apart, and the log records
 # the id with its kind, session, time and rcs. Every "nothing happened" arm
 # (kill switch, refusal) is twinned with an arm in the same harness that proves
 # the harness hears a call.
@@ -43,7 +43,7 @@ exit "${PJ_PING_FAKE_IMSG_RC:-0}"
 EOF
 chmod +x "$FAKE/afplay" "$FAKE/imsg"
 
-export PATH="$FAKE:$PATH" PJ_PING_AFPLAY="$FAKE/afplay" PJ_PING_IMSG="$FAKE/imsg"
+export PATH="$FAKE:$PATH" PJ_PING_AFPLAY="$FAKE/afplay" PJ_PING_IMSG="$FAKE/imsg" PJ_PING_PAIR_GAP=2
 export IMSG_TO="selftest@example.invalid" CLAUDE_CODE_SESSION_NAME="st-sess" HERDR_PANE_ID="w1-p2"
 unset PJ_NO_PING PJ_PING_LOG PJ_PING_ALPHABET PJ_PING_FAKE_IMSG_RC
 
@@ -80,23 +80,27 @@ ID="${OUT#\#}"
 [ "$RC" -eq 0 ] && [ -z "$ERR" ] && printf '%s' "$OUT" | grep -Eqx "#$IDRE" \
   && ok "1 exit 0, stdout is the id ($OUT), stderr empty" || bad "1 exit/stdout" "rc=$RC out=$OUT err=$ERR"
 got=$(awk '{print $2, $3}' "$PJ_PING_FAKE_LOG" | sed "s#/System/Library/Sounds/##" | cut -c1-17 | tr '\n' '|')
-want="afplay Ping.aiff|afplay Glass.aiff|afplay Glass.aiff|afplay Glass.aiff|imsg $Q|imsg $Q|"
-[ "$got" = "$want" ] && ok "2 Ping Glass Glass Glass, then two imsg, in that order" || bad "2 order" "$got"
+want="afplay Ping.aiff|afplay Glass.aiff|afplay Glass.aiff|afplay Glass.aiff|imsg $Q|imsg $Q|imsg $Q|imsg $Q|"
+[ "$got" = "$want" ] && ok "2 Ping Glass Glass Glass, then four imsg, in that order" || bad "2 order" "$got"
 got=$(fake_line 5)
 printf '%s' "$got" | grep -Eqx "$Q PJ QUESTION #$ID [0-2][0-9]:[0-5][0-9]:[0-5][0-9] \| st-sess \| Pick a delivery route" \
   && ok "3 imsg 1: icon, PJ QUESTION, the same id, HH:MM:SS, session, summary" || bad "3 imsg 1" "$got"
-got=$(fake_line 6)
+[ "$(fake_line 6)" = "$(fake_line 5)" ] && [ "$(fake_line 8)" = "$(fake_line 7)" ] && ok "4 each message is sent twice, the repeat identical" || bad "4 repeats" "$(fake_line 5)|$(fake_line 6)|$(fake_line 7)|$(fake_line 8)"
+got=$(fake_line 7)
 [ "$got" = "$Q #$ID 2/2 | answer the popup | pane w1-p2" ] && ok "4 imsg 2: icon, same id, 2/2, default action, pane" || bad "4 imsg 2" "$got"
-gap=$(awk 'NR==5{a=$1} NR==6{b=$1} END{printf "%.3f", b-a}' "$PJ_PING_FAKE_LOG")
-perl -e "exit !($gap >= 1.0 && $gap < 1.5)" && ok "5 gap between the messages ${gap}s (1.0 to 1.5)" || bad "5 gap" "${gap}s"
+g1=$(awk 'NR==5{a=$1} NR==6{b=$1} END{printf "%.3f", b-a}' "$PJ_PING_FAKE_LOG")
+g2=$(awk 'NR==6{a=$1} NR==7{b=$1} END{printf "%.3f", b-a}' "$PJ_PING_FAKE_LOG")
+g3=$(awk 'NR==7{a=$1} NR==8{b=$1} END{printf "%.3f", b-a}' "$PJ_PING_FAKE_LOG")
+perl -e "exit !($g1 >= 1.0 && $g1 < 1.5 && $g3 >= 1.0 && $g3 < 1.5)" && ok "5 one second between a message and its repeat (${g1}s, ${g3}s)" || bad "5 repeat gaps" "${g1}s ${g3}s"
+perl -e "exit !($g2 >= 2.0 && $g2 < 2.5)" && ok "5 the pause between the pairs follows PJ_PING_PAIR_GAP=2 in the selftest (${g2}s)" || bad "5 pair gap" "${g2}s"
 
 # 6. The log: queued then sent, keyed by the id, with kind, session, time, rcs.
 q=$(awk -F'\t' -v id="$ID" '$2==id && $5=="queued"' "$LOG")
 s=$(awk -F'\t' -v id="$ID" '$2==id && $5=="sent"' "$LOG")
 printf '%s' "$q" | grep -Eq "^20[0-9-]+T[0-9:]+[+-][0-9]{4}	$ID	question	st-sess	queued	-$" \
   && ok "6 log: queued line with time, id, kind, session, nothing missing" || bad "6 log queued" "$(cat "$LOG")"
-printf '%s' "$s" | grep -Eq "	$ID	question	st-sess	sent	afplay=0000 imsg=0,0$" \
-  && ok "6 log: sent line with the four afplay rcs and both imsg rcs" || bad "6 log sent" "$(cat "$LOG")"
+printf '%s' "$s" | grep -Eq "	$ID	question	st-sess	sent	afplay=0000 imsg=0,0,0,0$" \
+  && ok "6 log: sent line with the four afplay rcs and all four imsg rcs" || bad "6 log sent" "$(cat "$LOG")"
 t_msg=$(fake_line 5 | awk '{print $5}'); t_log=$(printf '%s' "$q" | cut -f1 | cut -c12-19)
 [ "$t_msg" = "$t_log" ] && ok "6 the time in imsg 1 ($t_msg) matches the log" || bad "6 time match" "msg=$t_msg log=$t_log"
 grep -q 'delivery route' "$LOG" && bad "6 the log carries the summary text" "$(cat "$LOG")" || ok "6 the log never carries the summary text"
@@ -108,7 +112,7 @@ for k in done:"$D":DONE:"nothing needed" test:"$L":TEST:"confirm the id and orde
   arm "kind-$kind"
   if [ "$kind" = waiting ]; then run waiting "Blocked on sudo" --action "$act"; else run "$kind" "Blocked on sudo"; fi
   id="${OUT#\#}"
-  m1=$(fake_line 5); m2=$(fake_line 6)
+  m1=$(fake_line 5); m2=$(fake_line 7)
   if [ "$RC" -eq 0 ] && printf '%s' "$m1" | grep -Eqx "$icon PJ $up #$id [0-9:]{8} \| st-sess \| Blocked on sudo" \
      && [ "$m2" = "$icon #$id 2/2 | $act | pane w1-p2" ]; then
     ok "7 kind $kind: $icon $up, action '$act'"
@@ -144,11 +148,11 @@ run question "Pick a route" --detach
 id="${OUT#\#}"
 [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -Eqx "#$IDRE" && ok "10 --detach prints the id and exits 0" || bad "10 detach rc/out" "rc=$RC out=$OUT err=$ERR"
 perl -e "exit !($T < 0.3)" && ok "10 --detach returned in ${T}s (< 0.3 s) while the signal takes >= 2.2 s" || bad "10 detach blocked" "${T}s"
-wait_lines "$PJ_PING_FAKE_LOG" 6; wait_lines "$LOG" 2
+wait_lines "$PJ_PING_FAKE_LOG" 8; wait_lines "$LOG" 2
 got=$(awk '{print $2}' "$PJ_PING_FAKE_LOG" | tr '\n' ' ')
-[ "$got" = "afplay afplay afplay afplay imsg imsg " ] && fake_line 6 | grep -q "#$id 2/2" \
+[ "$got" = "afplay afplay afplay afplay imsg imsg imsg imsg " ] && fake_line 8 | grep -q "#$id 2/2" \
   && ok "10 the detached worker played four sounds then sent both messages with the id" || bad "10 detached worker" "$got"
-grep -q "	$id	question	st-sess	sent	afplay=0000 imsg=0,0" "$LOG" && ok "10 the detached worker logged the rcs" || bad "10 detached log" "$(cat "$LOG")"
+grep -q "	$id	question	st-sess	sent	afplay=0000 imsg=0,0,0,0" "$LOG" && ok "10 the detached worker logged the rcs" || bad "10 detached log" "$(cat "$LOG")"
 
 # 11. Ids: 50 calls, 50 distinct, all from the no-lookalike alphabet. Fakes set
 #     to a missing path, so nothing is sent and each call is fast.
@@ -184,7 +188,7 @@ arm san
 tok="ghp_$(printf 'A%.0s' $(seq 36))"
 CLAUDE_CODE_SESSION_NAME=$'evil\033[2Jsess\xe2\x80\xae' HERDR_PANE_ID=$'p\x07ane' \
   run question $'Hi\033[31mRED\xe2\x80\xaeevil\tx '"$tok" --action $'do\x01 it '"$tok"
-m1=$(fake_line 5); m2=$(fake_line 6)
+m1=$(fake_line 5); m2=$(fake_line 7)
 if printf '%s%s' "$m1" "$m2" | perl -CSD -ne 'exit(/[\x00-\x1F\x7F-\x9F\x{202A}-\x{202E}]/ ? 1 : 0)'; then
   ok "13 no control or bidi character reaches either message"
 else bad "13 control chars leaked" "$(printf '%s%s' "$m1" "$m2" | od -c | head -3)"; fi
@@ -195,7 +199,7 @@ printf '%s' "$m2" | grep -Eq "2/2 \| do it \[redacted\] \| pane p ane$" \
   && ok "13 action and pane are cleaned the same way" || bad "13 surviving text m2" "$m2"
 arm cap
 CLAUDE_CODE_SESSION_NAME="$(printf 's%.0s' $(seq 100))" run question "$(printf 'x%.0s' $(seq 300))" --action "$(printf 'a%.0s' $(seq 300))"
-m1=$(fake_line 5); m2=$(fake_line 6)
+m1=$(fake_line 5); m2=$(fake_line 7)
 sess=$(printf '%s' "$m1" | awk -F' [|] ' '{print $2}'); summ=$(printf '%s' "$m1" | awk -F' [|] ' '{print $3}')
 act=$(printf '%s' "$m2" | awk -F' [|] ' '{print $2}')
 [ "${#sess}" -eq 40 ] && [ "${#summ}" -eq 80 ] && [ "${#act}" -eq 80 ] \
@@ -208,7 +212,7 @@ OUT2="$OUT"; unset IMSG_TO
 run done "Finished"
 export IMSG_TO="selftest@example.invalid"
 got=$(awk '{print $2}' "$PJ_PING_FAKE_LOG" | tr '\n' ' ')
-[ "$RC" -eq 1 ] && [ "$got" = "afplay afplay afplay afplay imsg imsg afplay afplay afplay afplay " ] \
+[ "$RC" -eq 1 ] && [ "$got" = "afplay afplay afplay afplay imsg imsg imsg imsg afplay afplay afplay afplay " ] \
   && ok "14 IMSG_TO unset -> sounds only, exit 1 (control: the call before it sent both)" || bad "14 IMSG_TO unset" "rc=$RC calls=$got"
 grep -q 'queued	IMSG_TO unset;' "$LOG" && printf '%s' "$ERR" | grep -q 'IMSG_TO unset' \
   && ok "14 the log and stderr name IMSG_TO" || bad "14 IMSG_TO named" "err=$ERR log=$(cat "$LOG")"
@@ -216,18 +220,18 @@ grep -q 'sent	afplay=0000 imsg=-$' "$LOG" && ok "14 the sent line shows imsg=- (
 arm noaf
 PJ_PING_AFPLAY="$ROOT/missing/afplay" run done "Finished"
 got=$(awk '{print $2}' "$PJ_PING_FAKE_LOG" | tr '\n' ' ')
-[ "$RC" -eq 1 ] && [ "$got" = "imsg imsg " ] && ok "14 afplay missing -> messages only, no fallback to the real afplay" || bad "14 afplay missing" "rc=$RC calls=$got"
+[ "$RC" -eq 1 ] && [ "$got" = "imsg imsg imsg imsg " ] && ok "14 afplay missing -> messages only, no fallback to the real afplay" || bad "14 afplay missing" "rc=$RC calls=$got"
 grep -q 'queued	afplay missing;' "$LOG" && ok "14 the log names afplay" || bad "14 log afplay" "$(cat "$LOG")"
 arm fail
 PJ_PING_FAKE_IMSG_RC=3 run done "Finished"
-[ "$RC" -eq 1 ] && grep -q 'sent	afplay=0000 imsg=3,3$' "$LOG" && [ "$(ncalls)" -eq 6 ] \
-  && ok "14 imsg failing -> both still tried, rcs 3,3 logged, exit 1" || bad "14 imsg fail" "rc=$RC $(cat "$LOG")"
+[ "$RC" -eq 1 ] && grep -q 'sent	afplay=0000 imsg=3,3,3,3$' "$LOG" && [ "$(ncalls)" -eq 8 ] \
+  && ok "14 imsg failing -> all four still tried, rcs 3,3,3,3 logged, exit 1" || bad "14 imsg fail" "rc=$RC $(cat "$LOG")"
 
 # 15. Session name: CLAUDE_CODE_SESSION_NAME unset -> the git toplevel's basename.
 arm name
 mkdir -p "$ROOT/fixture-repo/sub" && git -C "$ROOT/fixture-repo" init -q 2>/dev/null
 ( builtin cd "$ROOT/fixture-repo/sub" && env -u CLAUDE_CODE_SESSION_NAME -u HERDR_PANE_ID "$TOOL" test "name" >/dev/null 2>&1 )
-m1=$(fake_line 5); m2=$(fake_line 6)
+m1=$(fake_line 5); m2=$(fake_line 7)
 printf '%s' "$m1" | grep -q '| fixture-repo | name$' && ok "15 no session variable -> the git toplevel basename" || bad "15 fallback name" "$m1"
 printf '%s' "$m2" | grep -q '| pane -$' && ok "15 no HERDR_PANE_ID -> pane -" || bad "15 pane dash" "$m2"
 
@@ -237,6 +241,25 @@ PJ_PING_LOG="$ROOT/elsewhere/p.log" run done "Finished"
 id="${OUT#\#}"
 grep -q "	$id	done	" "$ROOT/elsewhere/p.log" 2>/dev/null && [ ! -e "$LOG" ] \
   && ok "16 PJ_PING_LOG moves the log" || bad "16 PJ_PING_LOG" "$(ls -R "$ROOT/elsewhere" "$PJ_PING_STATE_DIR" 2>&1)"
+
+# 17. The pause between the pairs: 5 s by default, and PJ_PING_PAIR_GAP cannot
+#     shorten it outside a selftest. The seam PJ_PING_IMSG is UNSET here, so
+#     pj-ping resolves imsg from PATH, where the fake is first; the arm refuses
+#     to run (invalid trial) unless PATH really does resolve to the fake.
+arm pairgap
+if [ "$(env -u PJ_PING_IMSG sh -c 'command -v imsg')" != "$FAKE/imsg" ]; then
+  bad "17 INVALID TRIAL: imsg on PATH is not the fake" "$(env -u PJ_PING_IMSG sh -c 'command -v imsg')"
+else
+  OUT="$(env -u PJ_PING_IMSG PJ_PING_PAIR_GAP=1 "$TOOL" done "Pair gap" 2>/dev/null)"; RC=$?
+  g2=$(awk 'NR==6{a=$1} NR==7{b=$1} END{printf "%.3f", b-a}' "$PJ_PING_FAKE_LOG")
+  [ "$RC" -eq 0 ] && [ "$(ncalls)" -eq 8 ] && perl -e "exit !($g2 >= 5.0 && $g2 < 5.6)" \
+    && ok "17 outside a selftest PJ_PING_PAIR_GAP=1 is ignored: pause ${g2}s (>= 5)" || bad "17 pair gap floor" "rc=$RC calls=$(ncalls) pause=${g2}s"
+  arm pairgap-long
+  OUT="$(env -u PJ_PING_IMSG PJ_PING_PAIR_GAP=6 "$TOOL" done "Pair gap" 2>/dev/null)"; RC=$?
+  g2=$(awk 'NR==6{a=$1} NR==7{b=$1} END{printf "%.3f", b-a}' "$PJ_PING_FAKE_LOG")
+  perl -e "exit !($g2 >= 6.0 && $g2 < 6.6)" \
+    && ok "17 control: PJ_PING_PAIR_GAP=6 lengthens it (${g2}s), so the floor arm is not just ignoring the variable" || bad "17 pair gap lengthen" "pause=${g2}s"
+fi
 
 printf 'pj-ping-selftest: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -2,7 +2,7 @@
 
 `pj-ping` is the one command every pj session and the `pj-question-ping.sh`
 hook use to get Gavin's attention (D-20260921-A10): four sounds, then two
-iMessages one second apart. Built 2026-09-23 after a real ping test in which
+iMessages, each sent twice. Built 2026-09-23 after a real ping test in which
 the messages were hard to tell apart. Every message now carries an id, so
 Gavin and a session can confirm **which** ping arrived and **in what order**.
 
@@ -42,9 +42,11 @@ For example:
 - **The time** is local time at the call.
 - **The session** is `$CLAUDE_CODE_SESSION_NAME`, else the basename of the
   git toplevel of the current directory.
-- **The second message** is sent one second after the first one returns. That
-  is the ruling's `imsg A && sleep 1 && imsg B`, and the gap also keeps the
-  two in order on the phone.
+- **Each message is sent twice** (Gavin, 2026-09-23): message 1, one second,
+  message 1 again, a pause of at least 5 seconds, message 2, one second,
+  message 2 again. Four texts per ping. `PJ_PING_PAIR_GAP` can lengthen the
+  pause; it can shorten it only in a selftest (when the `PJ_PING_IMSG` seam is
+  set), so a real ping never pauses less than 5 seconds.
 
 ## Confirming which ping arrived, and in what order
 
@@ -54,7 +56,7 @@ are never logged.
 
 ```
 2026-09-23T17:30:41+1000  K3F9  question  fifty-shades-...-main  queued  -
-2026-09-23T17:30:45+1000  K3F9  question  fifty-shades-...-main  sent    afplay=0000 imsg=0,0
+2026-09-23T17:30:45+1000  K3F9  question  fifty-shades-...-main  sent    afplay=0000 imsg=0,0,0,0
 ```
 
 `queued` is written at the call, with anything that was missing. `sent` is
