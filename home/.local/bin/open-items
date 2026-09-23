@@ -387,8 +387,8 @@ script_trust(){                 # script_trust <name>
 
 # ---------------------------------------------------------------- locking ----
 # One writer per drawer at a time: claim the ID, write, regenerate and commit under
-# a mkdir lock so two sessions never interleave. A lock older than 60s whose owner
-# is dead is taken over.
+# a mkdir lock so two sessions never interleave. A lock whose owner pid is dead is
+# taken over (no age test); a writer that waits 60s gives up with a TIMEOUT refusal.
 LOCK=""
 # W-20260921-A44, FIXED HERE. A failed `mkdir "$LOCK"` means EITHER "the lock directory is
 # already there" OR "I am not allowed to write in this folder", and this loop treated both
@@ -402,35 +402,64 @@ LOCK=""
 # first diagnosis was the wrong one -- another session holding the drawer. Sixty seconds
 # per attempt, three attempts, and a wrong conclusion.
 #
-# THE TEST THAT SEPARATES THEM is whether the lock directory EXISTS after the failure: a
-# real contended lock leaves one, a refused create does not. Same bug and same fix as
-# `decided add` in 651e95e; this is the fourth instance of the class CLAUDE.md writes up
-# under "the tool usually LIES about why".
+# THE TEST THAT SEPARATES THEM is mkdir's OWN ERROR, read in the C locale: "File exists" is
+# a held lock, anything else (EACCES, EPERM, EROFS, ENOENT) is a refused create. Until
+# W-20260923-A37 the test was whether the lock directory EXISTED after the failure, with one
+# retry. Under churn that property is true in both worlds: a contended lock can vanish and
+# reappear between the failed mkdir and the test, twice, and 3 to 5 adds in 160 concurrent
+# ones were refused "for want of WRITE permission" on a drawer that was writable. The errno
+# is the only thing that separates the two cases, so that is what is read. Same class as
+# `decided add` in 651e95e, "the tool usually LIES about why" in CLAUDE.md.
 #
-# The retry before refusing is for the one race this could otherwise misread: a holder
-# releasing the lock in the instant between the failed mkdir and the test would look
-# exactly like a refusal. One more attempt costs nothing and removes it.
+# THE STALE TAKEOVER (W-20260923-A37). A lock whose pid is DEAD is taken over. The waiter
+# reads the pid with `ls`, and by the time it acts that snapshot can be stale: the holder
+# released normally and exited, and a NEW holder has run `mkdir LOCK` but not yet
+# `mkdir LOCK/$$`. Master ran `rmdir LOCK/pid LOCK` as two independent removals, so the
+# first failed (the dead pid's dir was already gone) and the second removed the new holder's
+# still-empty lock. The new holder then refused "cannot write inside it", or, when a third
+# process took LOCK in that gap, landed its pid dir inside the third one's lock: two writers
+# at once, and a commit that failed with rc 3. Traced and staged 2026-09-23 (arm LK1).
+# So the takeover removes LOCK ONLY when removing the dead pid's OWN dir succeeded: that
+# proves the snapshot was current, and a waiter holding a stale snapshot does nothing. The
+# same && in release_locks, so a holder only ever removes a lock it can prove is its own.
+#
+# "Dead" is read from kill's own error too: only "No such process" is dead. EPERM means a
+# live process this one may not signal (another user, a sandbox), which is not a takeover.
+#
+# KNOWN GAP, not fixed here: an EMPTY lock left by a process killed between its two mkdirs
+# (or between the two rmdirs of a release) names no pid, so nothing ever takes it over and
+# every writer times out on it until a human removes it with `rmdir`. The timeout says so.
 LOCKS=()
-release_locks(){ local l; for l in ${LOCKS[@]+"${LOCKS[@]}"}; do rmdir "$l/$$" "$l" 2>/dev/null; done; return 0; }
+release_locks(){ local l; for l in ${LOCKS[@]+"${LOCKS[@]}"}; do rmdir "$l/$$" 2>/dev/null && rmdir "$l" 2>/dev/null; done; return 0; }
 lock_drawer(){
-  local w="$1" i=0 pid tries="${OPEN_ITEMS_TEST_LOCK_TRIES:-600}"   # the env var is a TEST seam: timing only
+  local w="$1" i=0 pid err tries="${OPEN_ITEMS_TEST_LOCK_TRIES:-600}"   # the env var is a TEST seam: timing only
   LOCK="$w/items/.lock"
   # The holder's pid is a SUBDIRECTORY name, so release is two rmdirs and no rm.
-  while ! mkdir "$LOCK" 2>/dev/null; do
-    if [ ! -d "$LOCK" ]; then
-      mkdir "$LOCK" 2>/dev/null && break
-      [ -d "$LOCK" ] || refuse "cannot create the drawer lock at $LOCK -- the create was REFUSED for want of WRITE permission on $(dirname "$LOCK"), not because a pid holds it (the lock does not exist afterwards). Inside the Claude Bash sandbox ~/.claude/projects is not writable; run this from a terminal, or lift the sandbox for this one command. Nothing was changed."
-    fi
+  while ! err="$(LC_ALL=C mkdir "$LOCK" 2>&1)"; do
+    case "$err" in
+      *"File exists") ;;
+      *"Permission denied"|*"Operation not permitted"|*"Read-only file system")
+        refuse "cannot create the drawer lock at $LOCK -- the create was REFUSED for want of WRITE permission on $(dirname "$LOCK") (mkdir: ${err##*: }), not because a pid holds it. Inside the Claude Bash sandbox ~/.claude/projects is not writable; run this from a terminal, or lift the sandbox for this one command. Nothing was changed." ;;
+      *) refuse "cannot create the drawer lock at $LOCK -- mkdir failed for a reason other than a held lock (mkdir: ${err##*: }). Nothing was changed." ;;
+    esac
     pid="$(ls "$LOCK" 2>/dev/null | head -1)"
-    if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then rmdir "$LOCK/$pid" "$LOCK" 2>/dev/null; continue; fi
-    i=$((i+1)); [ "$i" -lt "$tries" ] || refuse "could not take the drawer lock at $LOCK after $((tries / 10))s (held by pid ${pid:-?})"
+    if [ -n "$pid" ]; then
+      case "$(LC_ALL=C kill -0 "$pid" 2>&1)" in
+        *"No such process"*) rmdir "$LOCK/$pid" 2>/dev/null && { rmdir "$LOCK" 2>/dev/null; continue; } ;;
+      esac
+    fi
+    i=$((i+1)); [ "$i" -lt "$tries" ] || {
+      [ -n "$pid" ] && refuse "could not take the drawer lock at $LOCK after $((tries / 10))s -- a lock TIMEOUT: another writer kept it (live pid $pid at the last poll). Nothing was changed; run the command again."
+      refuse "could not take the drawer lock at $LOCK after $((tries / 10))s -- a lock TIMEOUT: the lock names no pid. Either writers kept taking it between polls, or it is an ORPHAN left by a process killed between its two mkdirs; when nothing else is writing, \`rmdir $LOCK\` clears an orphan. Nothing was changed."
+    }
     sleep 0.1
   done
-  # Master's line, exactly. A16 briefly added `rmdir "$LOCK"` here to tidy up on refusal; that
-  # removed OTHER processes' freshly created locks and turned a rare takeover race into a
-  # cascade (1 round in 10 of 20 concurrent adds lost items; 0 in 10 on master, measured side
-  # by side 2026-09-23). An "ownership check" retry was tried next and was worse (empty locks
-  # orphaned when two holders backed off at once). The underlying takeover race is pre-existing.
+  # A16 briefly added `rmdir "$LOCK"` here to tidy up on refusal; that removed OTHER
+  # processes' freshly created locks and turned the takeover race into a cascade (1 round in
+  # 10 of 20 concurrent adds lost items; 0 in 10 on master, measured side by side
+  # 2026-09-23). An "ownership check" retry was tried next and was worse (empty locks
+  # orphaned when two holders backed off at once). Neither is repeated: this refusal only
+  # names the fault, and after the A37 fix nothing but this process can remove its LOCK.
   mkdir "$LOCK/$$" 2>/dev/null || refuse "took the drawer lock at $LOCK but cannot write inside it. Nothing was changed."
   # Every lock this process holds is released on exit, so a two-drawer write (move, route)
   # never leaves its first lock behind when the second refuses.
