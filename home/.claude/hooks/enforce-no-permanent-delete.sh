@@ -553,12 +553,12 @@ _argv() {
       [ $# -gt 0 ] && _argv "$adepth" "$@"; return 0 ;;
     exec)
       while [ $# -gt 0 ]; do
-        case "$1" in -a) shift 2 ;; -c|-l|-cl|-lc) shift ;; --) shift; break ;; *) break ;; esac
+        case "$1" in -a) shift 2 || set -- ;; -c|-l|-cl|-lc) shift ;; --) shift; break ;; *) break ;; esac
       done
       [ $# -gt 0 ] && _argv "$adepth" "$@"   #M: exec look-through
       return 0 ;;
     time)
-      while [ $# -gt 0 ]; do case "$1" in -o) shift 2 ;; -*) shift ;; *) break ;; esac; done
+      while [ $# -gt 0 ]; do case "$1" in -o) shift 2 || set -- ;; -*) shift ;; *) break ;; esac; done
       [ $# -gt 0 ] && _argv "$adepth" "$@"   #M: time look-through
       return 0 ;;
     repeat)
@@ -569,7 +569,7 @@ _argv() {
       while [ $# -gt 0 ]; do
         case "$1" in
           --) shift; break ;;
-          -u|-g|-h|-p|-C|-D|-r|-t|-T|-U|-c) shift 2 ;;
+          -u|-g|-h|-p|-C|-D|-r|-t|-T|-U|-c) shift 2 || set -- ;;
           -*) shift ;;
           *) break ;;
         esac
@@ -580,8 +580,8 @@ _argv() {
       while [ $# -gt 0 ]; do
         case "$1" in
           --) shift; break ;;
-          -u|-C|-P|--unset|--chdir) shift 2 ;;
-          -S|--split-string) _shell_text "${2:-}"; shift 2; [ -n "$REASON_ID" ] && return 0 ;;   #M: env -S
+          -u|-C|-P|--unset|--chdir) shift 2 || set -- ;;
+          -S|--split-string) _shell_text "${2:-}"; shift 2 || set --; [ -n "$REASON_ID" ] && return 0 ;;   #M: env -S
           --split-string=*) _shell_text "${1#*=}"; shift; [ -n "$REASON_ID" ] && return 0 ;;
           -*) shift ;;
           *) if _is_assign "$1"; then
@@ -599,31 +599,31 @@ _argv() {
       done
       return 0 ;;
     nice)
-      while [ $# -gt 0 ]; do case "$1" in -n) shift 2 ;; -*) shift ;; *) break ;; esac; done
+      while [ $# -gt 0 ]; do case "$1" in -n) shift 2 || set -- ;; -*) shift ;; *) break ;; esac; done
       [ $# -gt 0 ] && _argv "$adepth" "$@"   #M: nice look-through
       return 0 ;;
     timeout|gtimeout)
-      while [ $# -gt 0 ]; do case "$1" in -s|-k) shift 2 ;; -*) shift ;; *) break ;; esac; done
+      while [ $# -gt 0 ]; do case "$1" in -s|-k) shift 2 || set -- ;; -*) shift ;; *) break ;; esac; done
       [ $# -gt 0 ] && shift                     # the duration
       [ $# -gt 0 ] && _argv "$adepth" "$@"   #M: timeout look-through
       return 0 ;;
     caffeinate)
-      while [ $# -gt 0 ]; do case "$1" in -t|-w) shift 2 ;; -*) shift ;; *) break ;; esac; done
+      while [ $# -gt 0 ]; do case "$1" in -t|-w) shift 2 || set -- ;; -*) shift ;; *) break ;; esac; done
       [ $# -gt 0 ] && _argv "$adepth" "$@"   #M: caffeinate look-through
       return 0 ;;
     stdbuf|gstdbuf)
-      while [ $# -gt 0 ]; do case "$1" in -i|-o|-e) shift 2 ;; -*) shift ;; *) break ;; esac; done
+      while [ $# -gt 0 ]; do case "$1" in -i|-o|-e) shift 2 || set -- ;; -*) shift ;; *) break ;; esac; done
       [ $# -gt 0 ] && _argv "$adepth" "$@"   #M: stdbuf look-through
       return 0 ;;
     watch)
-      while [ $# -gt 0 ]; do case "$1" in -n|--interval) shift 2 ;; -*) shift ;; *) break ;; esac; done
+      while [ $# -gt 0 ]; do case "$1" in -n|--interval) shift 2 || set -- ;; -*) shift ;; *) break ;; esac; done
       [ $# -gt 0 ] && _shell_text "$*"   #M: watch look-through
       return 0 ;;
     xargs|gxargs)
       while [ $# -gt 0 ]; do
         case "$1" in
           --) shift; break ;;
-          -I|-n|-P|-L|-s|-d|-E|-a|-J|-R|-S|--arg-file|--delimiter|--max-args|--max-procs|--max-lines|--max-chars|--process-slot-var) shift 2 ;;
+          -I|-n|-P|-L|-s|-d|-E|-a|-J|-R|-S|--arg-file|--delimiter|--max-args|--max-procs|--max-lines|--max-chars|--process-slot-var) shift 2 || set -- ;;
           -*) shift ;;
           *) break ;;
         esac
@@ -755,7 +755,7 @@ _shell_cmd() { # sh/bash/zsh [opts] [-c CODE | script | -s]
     w="$1"
     case "$w" in
       --) shift; break ;;
-      -o|+o|-O|+O) shift 2; continue ;;
+      -o|+o|-O|+O) shift 2 || set --; continue ;;
       -|--noprofile|--norc|--login|--posix) shift; continue ;;
       --*) shift; continue ;;
       -*|+*)
@@ -784,7 +784,7 @@ _interp_cmd() { # $1 = python|node|perl|ruby, then args
           -c) _code_deletes "${2:-}"; return 0 ;;                                     #M: python -c
           -c*) _code_deletes "${w#-c}"; return 0 ;;
           -m) return 0 ;;
-          -W|-X) shift 2; continue ;;
+          -W|-X) shift 2 || set --; continue ;;
           -[A-Za-z]*c) _code_deletes "${2:-}"; return 0 ;;   #M: python -Xc cluster (a GLOB: letter, anything, c)
           -*) shift; continue ;;
           *) return 0 ;;                            # a script file: invisible
@@ -793,14 +793,14 @@ _interp_cmd() { # $1 = python|node|perl|ruby, then args
         case "$w" in
           -e|--eval|-p|--print) _code_deletes "${2:-}"; return 0 ;;                  #M: node -e
           --eval=*|--print=*) _code_deletes "${w#*=}"; return 0 ;;
-          -r|--require|--import|--loader) shift 2; continue ;;
+          -r|--require|--import|--loader) shift 2 || set --; continue ;;
           -*) shift; continue ;;
           *) return 0 ;;
         esac ;;
       perl|ruby)
         case "$w" in
-          -e|-E) _code_deletes "${2:-}"; [ -n "$REASON_ID" ] && return 0; shift 2; continue ;;   #M: perl/ruby -e
-          -[A-Za-z]*[eE]) _code_deletes "${2:-}"; [ -n "$REASON_ID" ] && return 0; shift 2; continue ;;
+          -e|-E) _code_deletes "${2:-}"; [ -n "$REASON_ID" ] && return 0; shift 2 || set --; continue ;;   #M: perl/ruby -e
+          -[A-Za-z]*[eE]) _code_deletes "${2:-}"; [ -n "$REASON_ID" ] && return 0; shift 2 || set --; continue ;;
           -[A-Za-z]*[eE]?*) _code_deletes "${w#*[eE]}"; [ -n "$REASON_ID" ] && return 0; shift; continue ;;
           -) SI_KIND[$CUR_PID]=code; return 0 ;;
           -*) shift; continue ;;
@@ -817,7 +817,7 @@ _uv_cmd() { # uv [global opts] run|cache|tool ...
   local adepth="$1"; shift
   while [ $# -gt 0 ]; do
     case "$1" in
-      --directory|--project|--cache-dir|--config-file|--color|--python|-p) shift 2 ;;
+      --directory|--project|--cache-dir|--config-file|--color|--python|-p) shift 2 || set -- ;;
       -*) shift ;;
       *) break ;;
     esac
@@ -831,7 +831,7 @@ _uv_cmd() { # uv [global opts] run|cache|tool ...
       while [ $# -gt 0 ]; do
         case "$1" in
           --) shift; break ;;
-          --with|--with-editable|--with-requirements|--python|-p|--project|--directory|--package|--extra|--group|--only-group|--no-group|--env-file|--index|--default-index|--index-url|--extra-index-url|--find-links|-f|--upgrade-package|--reinstall-package|--cache-dir|--config-file|--exclude-newer|--python-platform|--color) shift 2 ;;
+          --with|--with-editable|--with-requirements|--python|-p|--project|--directory|--package|--extra|--group|--only-group|--no-group|--env-file|--index|--default-index|--index-url|--extra-index-url|--find-links|-f|--upgrade-package|--reinstall-package|--cache-dir|--config-file|--exclude-newer|--python-platform|--color) shift 2 || set -- ;;
           -m|--module) return 0 ;;
           -*) shift ;;
           *) break ;;
@@ -895,8 +895,8 @@ _git_cmd() {
   # global options, and the directory they point at
   while [ $# -gt 0 ]; do
     case "$1" in
-      -C) case "${2:-}" in /*) gdir="${2:-}" ;; *) [ -n "$gdir" ] && gdir="$gdir/${2:-}" ;; esac; shift 2 ;;   #M: git -C
-      -c|--git-dir|--work-tree|--namespace|--config-env|--super-prefix) shift 2 ;;
+      -C) case "${2:-}" in /*) gdir="${2:-}" ;; *) [ -n "$gdir" ] && gdir="$gdir/${2:-}" ;; esac; shift 2 || set -- ;;   #M: git -C
+      -c|--git-dir|--work-tree|--namespace|--config-env|--super-prefix) shift 2 || set -- ;;
       -*) shift ;;
       *) break ;;
     esac
@@ -1350,6 +1350,46 @@ SNAP
   hd=$'git commit -F - <<\'EOF\'\n'; while [ ${#hd} -lt 5120 ]; do hd="${hd}prose that mentions git clean -fdx and /bin/rm -P and find . -delete"$'\n'; done; hd="${hd}EOF"
   _time3 "$hd"
   [ "$rc" -eq 0 ] && [ -z "$out" ] && [ "$best" -lt 100 ]; _chk "5 KB heredoc commit message: ${best} ms (< 100), allowed" $?
+
+  echo "=== SHIFT arms: a value flag given LAST must not stall the guard (W-20260923-A54) ==="
+  # Found 2026-09-23: in bash a shift of 2 with one word left FAILS and shifts
+  # nothing, so `while [ $# -gt 0 ]` spun forever, the harness killed the hook
+  # at 5 s, and the command ran unchecked. Each arm runs the real hook under a
+  # alarm (so an old copy that spins is a FAIL here, not a hung selftest) and
+  # times that one run; a verdict must arrive within 1 s.
+  local hb_ms hb_d hb_r f
+  _hookb() { # $1 = command, $2 = DEL_GUARD_NOFILTER value, $3 = alarm s (default 2), then VAR=value env -> out, rc, hb_ms, hb_d, hb_r
+    local pl s al="${3:-2}" nf="${2:-0}"; pl="$(printf '%s' "$env_json" | jq -c --arg c "$1" --arg cwd "$fx/repo" '.tool_input.command = $c | .cwd = $cwd')"
+    shift 3 || set --
+    # time's report goes to a fixture file so `out` and `rc` stay in this shell
+    { TIMEFORMAT=%R; time { out="$(printf '%s' "$pl" | env DEL_GUARD_LOG="$logf" DEL_GUARD_SNAPSHOT_DIR="$fx/snap" DEL_GUARD_NOFILTER="${nf:-0}" "$@" perl -e 'alarm shift; exec @ARGV' "$al" "$self" 2>&1)"; rc=$?; }; } 2> "$fx/time.txt"
+    s="$(tail -n 1 "$fx/time.txt")"; hb_ms=$(( 10#${s%.*} * 1000 + 10#${s#*.} ))
+    hb_d="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)"
+    hb_r="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty' 2>/dev/null)"
+  }
+  # every wrapper flag that takes a value, given last; sudo/doas/env/git/uv
+  # cover their option loops, the interpreters cover _interp_cmd, bash/zsh
+  # cover _shell_cmd
+  for f in 'time -o' 'nice -n' 'exec -a' 'echo x | xargs -n' 'echo x | xargs -I' 'echo x | gxargs --max-args' \
+           'sudo -u' 'doas -u' 'env -u' 'env -C' 'env -S' 'env --split-string' 'timeout -s' 'gtimeout -k' \
+           'caffeinate -t' 'stdbuf -o' 'watch -n' 'git -C' 'git -c' 'git --git-dir' \
+           'python3 -W' 'python3 -X' 'node -r' 'node --require' 'perl -e' 'perl -ne' 'ruby -E' \
+           'bash -o' 'zsh +o' 'sh -O' 'uv --project' 'uv -p' 'uv run --with' 'uv run -p' 'uv run --env-file'; do
+    _hookb "$f; unlink f" 0
+    [ "$hb_d" = deny ] && [[ $hb_r == *'(unlink)'* ]] && [ "$hb_ms" -lt 1000 ]; _chk "'$f; unlink f': denied as unlink in ${hb_ms} ms (< 1000)" $?
+    _hookb "$f; unlink f" 1
+    [ "$hb_d" = deny ] && [[ $hb_r == *'(unlink)'* ]] && [ "$hb_ms" -lt 1000 ]; _chk "same, prefilter off: ${hb_ms} ms, denied" $?
+    _hookb "$f" 0
+    [ "$rc" -eq 0 ] && [ -z "$out" ] && [ "$hb_ms" -lt 1000 ]; _chk "'$f' alone: allowed in ${hb_ms} ms (< 1000)" $?
+  done
+  # The class, not only the instances above: no shift of 2 or more in this
+  # file may run unguarded. The positive arm (the guarded form IS found)
+  # proves the scan read the file; a zero from a scan that read nothing is
+  # not a pass.
+  local sg su
+  sg="$(awk '/shift [2-9] \|\| set --/ {n++} END {print n+0}' "$self")"
+  su="$(awk '/shift [2-9]/ && !/shift [2-9] \|\| set --/ {n++} END {print n+0}' "$self")"
+  [ "$sg" -ge 20 ] && [ "$su" -eq 0 ]; _chk "lint: $sg guarded multi-shifts (>= 20, the control), $su unguarded (must be 0)" $?
 
   # The fixture dir is left in $TMPDIR on purpose: deleting it would go to the
   # Trash (or fail inside the sandbox), and the OS clears $TMPDIR.
