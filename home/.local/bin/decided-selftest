@@ -248,5 +248,23 @@ run "$R1" --all --list --status withdrawn; wantrc "--all --list --status reaches
 frun add "Deferred probe" --topic dp --holds-in d --global --status deferred; wantrc "add keeps its own --status (written, outside dot-claude)" 3 "$RC"
 want "  and the block carries it" "status: deferred" "$(cat "$FH"/D-"$TODAY"-*-deferred-probe.md 2>/dev/null)"
 
+# W-20260923-A55: an add flag given LAST spun forever. bash's `shift 2` with one argument
+# left fails WITHOUT shifting, so `while [ $# -gt 0 ]` saw the same flag again. Each arm runs
+# under a 5 s alarm (rc 142 = killed, i.e. the hang is back) and must refuse, naming the
+# flag, BEFORE anything is written or committed: the store's file list and dot-claude's HEAD
+# are compared across all five.
+echo "-- add: a value flag given last refuses, never spins (W-20260923-A55)"
+hrun(){ local d="$1"; shift; OUT="$( (builtin cd "$d" && perl -e 'alarm shift; exec @ARGV' 5 "$DECIDED" "$@") 2>&1)"; RC=$?; }
+a55_files_before="$(ls "$G")"; a55_head_before="$(git -C "$DC" rev-parse HEAD)"
+for a55_flag in --topic --holds-in --body --ruled-by --status; do
+  hrun "$R1" add "A55 probe" --topic t --holds-in h --global "$a55_flag"
+  wantrc "add ... $a55_flag (last) refuses, not a hang" 2 "$RC"; want "  names $a55_flag" "$a55_flag needs a value" "$OUT"
+done
+[ "$(ls "$G")" = "$a55_files_before" ] && ok "  no block written by any of the five" || bad "  a refused add wrote a block" "$(ls "$G")"
+[ "$(git -C "$DC" rev-parse HEAD)" = "$a55_head_before" ] && ok "  no commit made by any of the five" || bad "  a refused add committed" "$(git -C "$DC" log --oneline -1)"
+# CONTROL: the same line with the value supplied writes, so the refusals above are the flag's.
+hrun "$R1" add "A55 control" --topic t --holds-in h --global --ruled-by gavin
+wantrc "control: add with --ruled-by valued (last) writes" 0 "$RC"
+
 printf '\ndecided-selftest: %s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
