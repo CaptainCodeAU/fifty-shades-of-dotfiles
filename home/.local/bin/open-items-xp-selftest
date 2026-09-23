@@ -415,6 +415,81 @@ printf 'foo\nrepo: %s\n' "$R/foo" > "$WF/items/.project"
 rx "$R/foo" --session
 wantnot "control: the right repo: line prints nothing" "Repo:" "$OUT"
 
+# ============================================================== END TO END
+# The one arm the spec asks for once both halves are merged: the WRITE commands write
+# (add --watch/--check, --reach mandatory, pass, tick, --inbox, move) and the READ side
+# (--session and the start card) reads what they wrote. No hand-built item below.
+printf '\nE  end to end: the write tool writes, --session and the card read it\n'
+if ! "$TOOL" --help 2>/dev/null | grep -q 'tick | pass'; then
+  printf '  SKIPPED: this open-items has no write side (a16-write not merged); nothing measured here\n'
+else
+  DC2="$ROOT/e2e-dotclaude"; P2="$DC2/projects"; ST2="$ROOT/e2e-state"; mkdir -p "$P2" "$ST2"
+  git -C "$DC2" init -q -b master
+  printf 'projects/*\n!projects/*/\nprojects/*/*\n!projects/*/memory/\n!projects/*/memory\n' > "$DC2/.gitignore"
+  git -C "$DC2" add .gitignore && git -C "$DC2" commit -q -m init
+  re(){ local d="$1"; shift; OUT="$(builtin cd "$d" && OPEN_ITEMS_PROJECTS_DIR="$P2" OPEN_ITEMS_DOTCLAUDE="$DC2" PJ_STATE_DIR="$ST2" PJ_ID_CLAIMS_DIR="$ROOT/e2e-claims" CLAUDE_CODE_SESSION_NAME=e2e-sess "$TOOL" "$@" </dev/null 2>&1)"; RC=$?; return 0; }
+  eid(){ printf '%s\n' "$OUT" | sed -n 's/^\(W-[0-9]\{8\}-[A-Z][0-9]*\)$/\1/p' | head -1; }
+  E="$ROOT/e2e"
+  for r in e-alpha e-beta; do
+    mkdir -p "$E/$r/.claude"; git -C "$E/$r" init -q -b master
+    printf 'group: g\n' > "$E/$r/.claude/pj-homes"; git -C "$E/$r" add .claude/pj-homes; git -C "$E/$r" commit -q -m init
+    mkdir -p "$P2/$(key "$E/$r")/memory/WORK"; re "$E/$r" init
+  done
+  mkdir -p "$P2/$(key "$DF")/memory/WORK"; re "$DF" init
+  wanteq "E fixture: init wrote the dotfiles drawer" "0" "$RC"
+
+  re "$E/e-beta" add "shared thing" --done-when "both halves" --watch e-alpha --check e-alpha "run it in alpha"
+  E1="$(eid)"
+  [ -n "$E1" ] && ok "E add --watch --check wrote $E1" || bad "E add --watch --check" "an ID" "$OUT"
+  re "$E/e-alpha" --session
+  want "E the watcher's --session reads it" "Watching: 1 (1 changed)" "$OUT"
+  want "E ... labelled with the owner the tool wrote" "$E1 [owner: e-beta] \"shared thing\" (changed)" "$OUT"
+  want "E the checked project owes the check, done-when as written" "$E1 [owner: e-beta] \"shared thing\": run it in alpha" "$OUT"
+  re "$E/e-alpha" tick "$E1" e-alpha
+  wanteq "E tick from inside e-alpha is accepted" "0" "$RC"
+  re "$E/e-alpha" --session
+  wantnot "E after the tick, nothing is owed" "Checks owed" "$OUT"
+  want "E and the tick changed the watched item, so it is flagged again" "Watching: 1 (1 changed)" "$OUT"
+
+  re "$DF" add "every repo rule" --done-when "each repo passes" --reach mandatory
+  E2="$(eid)"
+  [ -n "$E2" ] && ok "E add --reach mandatory from the dotfiles project wrote $E2" || bad "E add mandatory" "an ID" "$OUT"
+  re "$E/e-alpha" --session
+  want "E every project sees the mandatory item" "$E2 [owner: dotfiles" "$OUT"
+  re "$E/e-alpha" pass "$E2" e-alpha
+  wanteq "E pass from inside e-alpha is accepted" "0" "$RC"
+  re "$E/e-alpha" --session
+  wantnot "E after the pass, e-alpha is clear" "$E2" "$OUT"
+  re "$E/e-beta" --session
+  want "E control: e-beta has not passed, so it still sees it" "$E2" "$OUT"
+
+  re "$E/e-alpha" add "nobody owns this yet" --done-when x --inbox
+  re "$E/e-beta" --session
+  want "E add --inbox shows on every card" "Inbox: 1 unrouted (Gavin routes)" "$OUT"
+
+  re "$E/e-beta" add "belongs in alpha" --done-when x
+  E3="$(eid)"
+  re "$E/e-beta" move "$E3" --to e-alpha --why "alpha builds it"
+  wanteq "E move inside one group is accepted" "0" "$RC"
+  re "$E/e-beta" --session
+  want "E the source reads the moved-out notice the move wrote" "$E3 -> e-alpha by e2e-sess: alpha builds it" "$OUT"
+  re "$E/e-alpha" --session
+  want "E the destination lists it among its OWN titles (an own title line has no ID)" "   · belongs in alpha" "$OUT"
+  re "$E/e-beta" seen "$E3"
+  re "$E/e-beta" --session
+  wantnot "E seen clears the moved-out notice" "Moved out" "$OUT"
+
+  CARD="$SRCDIR/pj-start-card"
+  if [ -x "$CARD" ]; then
+    COUT="$(builtin cd "$E/e-alpha" && PATH="$DF/home/.local/bin:$PATH" OPEN_ITEMS_PROJECTS_DIR="$P2" OPEN_ITEMS_DOTCLAUDE="$DC2" PJ_STATE_DIR="$ST2" PJ_MODS_API_DRIFT=/nonexistent "$CARD" </dev/null 2>/dev/null)"
+    want "E the start card shows the watched item the write tool filed" "Watching: 1 (1 changed)" "$COUT"
+    want "E the start card shows the inbox line" "Inbox: 1 unrouted (Gavin routes)" "$COUT"
+    [ "$(printf '%s\n' "$COUT" | wc -l | tr -d ' ')" -le 20 ] && ok "E the card stays within 20 lines" || bad "E card lines" "<= 20" "$COUT"
+  else
+    printf '  SKIPPED the card half: no pj-start-card beside %s\n' "$SRC"
+  fi
+fi
+
 printf '\n%s passed, %s failed   (fixtures: %s)\n' "$PASS" "$FAIL" "$ROOT"
 [ "$FAIL" -eq 0 ] || { printf 'open-items-xp-selftest: FAILURES above\n' >&2; exit 1; }
 printf 'open-items-xp-selftest: all arms pass\n'
