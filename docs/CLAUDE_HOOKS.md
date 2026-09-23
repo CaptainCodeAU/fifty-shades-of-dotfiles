@@ -185,41 +185,45 @@ Added 2026-09-23 for D-20260921-A10, widened that day by Gavin to "whenever
 there is one of those Ask User Question tool popups". Registered on
 `PreToolUse` with matcher `AskUserQuestion`, project target only.
 
-**What it does.** Four sounds (Ping, Glass, Glass, Glass) through `afplay`,
-then two `imsg` messages one second apart:
+**What it does.** It decides, then runs `pj-ping question "<header>" --detach`
+from the payload's `cwd` (the first question's header, or its text when the
+header is empty). Since 2026-09-23 the sounds, the two numbered messages, the
+sanitising and the session name all belong to `pj-ping`, so a popup's ping has
+the same format as every other ping (see `docs/PJ_PING.md`):
 
 ```
-<session>: question waiting: <header, or first 80 chars of the question>
-answer the popup in <session>
+❓ PJ QUESTION #K3F9 17:30:41 | <session> | <header, capped at 80>
+❓ #K3F9 2/2 | answer the popup | pane <HERDR_PANE_ID or ->
 ```
 
-`<session>` is `$CLAUDE_CODE_SESSION_NAME`, else the basename of the git
-toplevel of the payload's `cwd`. `imsg` sends only to `$IMSG_TO`.
+`pj-ping` is found as `$PJ_PING_BIN` when set, else `../../.local/bin/pj-ping`
+beside the hook (right in the repo and once stowed), else on `PATH`.
 
-**It never delays the popup.** The hook prints nothing, exits 0, and hands the
-signal to a double-forked worker with stdin, stdout and stderr on `/dev/null`.
-A worker that kept either output pipe would make Claude Code wait for it; the
-selftest's timing arm fails in exactly that case (measured: 3.0 s instead of
-0.06 s).
+**It never delays the popup.** The hook prints nothing and exits 0. `pj-ping
+--detach` prints the id and hands the signal to a double-forked worker with
+stdin, stdout and stderr on `/dev/null`. A worker that kept either output pipe
+would make Claude Code wait for it; the selftest's timing arm fails in exactly
+that case (measured before pj-ping: 3.0 s instead of 0.06 s; after: 0.1 s).
 
 | Case                                    | Result                                         |
 | --------------------------------------- | ---------------------------------------------- |
 | `PJ_NO_PING=1`                          | nothing, not logged                            |
 | same session pinged under 20 s ago      | nothing, logged as `debounced`                 |
-| `afplay` missing                        | messages only, log names `afplay`              |
-| `imsg` missing or `IMSG_TO` unset       | sounds only, log names what was missing        |
-
-The question text is agent-written, so control and bidi characters are
-replaced, token-shaped strings become `[redacted]`, and every part is capped.
+| `pj-ping` missing                       | nothing, logged                                |
+| `afplay` missing                        | messages only, `ping.log` names `afplay`       |
+| `imsg` missing or `IMSG_TO` unset       | sounds only, `ping.log` names what was missing |
 
 State lives under `${XDG_STATE_HOME:-~/.local/state}/pj/`: `question-ping.log`
-(one decision per line, never the message text) and `question-ping/<session>`
-(the debounce stamp).
+(one decision per line with the ping id, never the message text),
+`question-ping/<session>` (the debounce stamp) and `pj-ping`'s own `ping.log`,
+keyed by the same id.
 
 ```sh
-~/.claude/hooks/pj-question-ping.sh --selftest   # fake afplay and imsg, 24 arms
+~/.claude/hooks/pj-question-ping.sh --selftest   # fake afplay and imsg, 26 arms
 ```
 
-The selftest pins `PJ_PING_AFPLAY` and `PJ_PING_IMSG` to fake binaries. When
-either is set, even to a missing path, it replaces the PATH lookup, so no arm
-can reach the real `afplay` or `imsg`.
+The selftest pins `PJ_PING_AFPLAY` and `PJ_PING_IMSG` to fake binaries, and
+`pj-ping` honours them. When either is set, even to a missing path, it
+replaces the PATH lookup, so no arm can reach the real `afplay` or `imsg`.
+`PJ_QUESTION_PING_HOOK=<path>` points the selftest at another copy of the
+hook.
