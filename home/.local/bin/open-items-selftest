@@ -1231,12 +1231,22 @@ kill "${LK9_H:?}" 2>/dev/null; wait "${LK9_H:?}" 2>/dev/null; rmdir "${LKL:?}/${
 
 # LK10 -- a waiter backs off with jitter and forks as little as it can (A60). Behind a live
 # holder for a 3 s budget, the old waiter forked `ls` and slept 0.1 s every poll: 30 sleeps,
-# all the same, 30 ls. Now: fewer, growing, jittered sleeps that still add up to the budget
-# (not more: the budget stays honest), and no ls at all.
+# all the same, 30 ls. Now: fewer, growing, jittered sleeps, and no ls at all.
+# THE BUDGET IS MEASURED ON A FINE CLOCK, not as a sum of sleeps. The wait stops when the
+# sleeps reach the budget OR when $SECONDS says it has passed, and $SECONDS is whole seconds:
+# a wall-clock stop comes after more than 3 s of real time, never before, but the sleeps
+# then add up to 3 s MINUS the waiter's own per-poll cost (forks, this test's sleep shim).
+# A floor on the sleep sum measured that cost, not the code, and flaked (2268 ms on an
+# integration run, 2604 to 3000 ms in 20 runs here, 2026-09-24). What the code promises is:
+# never past the budget in sleep, never EARLY by the wall, and late by at most the clock's
+# whole second plus one 0.8 s sleep. perl's Time::HiRes is the fine clock (the tool needs
+# perl anyway); the add runs in the foreground so nothing but it sits between the readings.
+lk_ms(){ perl -MTime::HiRes=time -e 'printf "%d", time * 1000'; }
 sleep 60 & LK10_H=$!; mkdir -p "$LKL/$LK10_H"
-LK10_S=$SECONDS
-lk_bg w10 "LK10 backing off" OPEN_ITEMS_TEST_LOCK_TRIES=30 LK_SLEEP_LOG="$D/lk10.sleeps" LK_LS_LOG="$D/lk10.ls"
-LK10_RC="$(lk_wait_rc w10)"; LK10_E=$SECONDS
+LK10_T0="$(lk_ms)"
+( cd "$ZETA" && env PATH="$LKS:$PATH" OPEN_ITEMS_TEST_LOCK_TRIES=30 LK_SLEEP_LOG="$D/lk10.sleeps" LK_LS_LOG="$D/lk10.ls" \
+    OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" "$TOOL" add "LK10 backing off" --done-when x >"$D/lk.w10.out" 2>&1; echo $? > "$D/lk.w10.rc" )
+LK10_T1="$(lk_ms)"; LK10_RC="$(cat "$D/lk.w10.rc" 2>/dev/null)"; LK10_WALL=$(( LK10_T1 - LK10_T0 ))
 wanteq "LK10: behind a live holder for a 3 s budget the waiter times out (rc=2)" "2" "$LK10_RC"
 want   "LK10:   with a lock TIMEOUT naming the holder" "live pid $LK10_H" "$(cat "$D/lk.w10.out")"
 LK10_N="$(grep -c . "$D/lk10.sleeps" 2>/dev/null)"; LK10_N="${LK10_N:-0}"
@@ -1246,11 +1256,13 @@ if [ "$LK10_N" -ge 3 ] && [ "$LK10_N" -le 15 ]; then ok "LK10:   it slept $LK10_
 else bad "LK10:   it slept between 3 and 15 times, not 30 (backoff)" "3..15 sleeps" "$LK10_N sleeps"; fi
 if [ "$LK10_V" -ge 3 ]; then ok "LK10:   in $LK10_V different lengths (growing, with jitter)"
 else bad "LK10:   in at least 3 different lengths (growing, with jitter)" ">= 3 distinct" "$LK10_V distinct: $(tr '\n' ' ' < "$D/lk10.sleeps" 2>/dev/null)"; fi
-if [ "${LK10_MS:-0}" -ge 2500 ] && [ "${LK10_MS:-0}" -le 3000 ]; then ok "LK10:   adding up to the budget and not past it (${LK10_MS} ms of 3000)"
-else bad "LK10:   adding up to the budget and not past it" "2500..3000 ms" "${LK10_MS:-none} ms"; fi
+if [ "${LK10_MS:-0}" -gt 0 ] && [ "${LK10_MS:-0}" -le 3000 ]; then ok "LK10:   its sleeps never went past the budget (${LK10_MS} ms of 3000)"
+else bad "LK10:   its sleeps never went past the budget" "1..3000 ms" "${LK10_MS:-none} ms"; fi
+if [ "$LK10_WALL" -ge 3000 ]; then ok "LK10:   and it did not give up EARLY: $LK10_WALL ms of wall clock for a 3000 ms budget"
+else bad "LK10:   and it did not give up EARLY (fine clock)" ">= 3000 ms" "$LK10_WALL ms"; fi
+if [ "$LK10_WALL" -le 6000 ]; then ok "LK10:   nor late: at most the budget + 1 s of clock granularity + one 0.8 s sleep + start-up ($LK10_WALL ms)"
+else bad "LK10:   nor late (fine clock)" "<= 6000 ms" "$LK10_WALL ms"; fi
 wanteq "LK10:   and it never forked ls to read the lock" "0" "$(grep -c . "$D/lk10.ls" 2>/dev/null || echo 0)"
-if [ $(( LK10_E - LK10_S )) -le 5 ]; then ok "LK10:   and the refusal came on time ($(( LK10_E - LK10_S )) s wall clock for a 3 s budget)"
-else bad "LK10:   and the refusal came on time" "<= 5 s" "$(( LK10_E - LK10_S )) s"; fi
 kill "${LK10_H:?}" 2>/dev/null; wait "${LK10_H:?}" 2>/dev/null; rmdir "${LKL:?}/${LK10_H:?}" && rmdir "${LKL:?}"
 
 # LK11 -- the budget is WALL CLOCK (A60). Every sleep the waiter asks for takes 0.5 s longer
