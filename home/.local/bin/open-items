@@ -426,7 +426,12 @@ lock_drawer(){
     i=$((i+1)); [ "$i" -lt "$tries" ] || refuse "could not take the drawer lock at $LOCK after $((tries / 10))s (held by pid ${pid:-?})"
     sleep 0.1
   done
-  mkdir "$LOCK/$$" 2>/dev/null || { rmdir "$LOCK" 2>/dev/null; refuse "took the drawer lock at $LOCK but cannot write inside it. Nothing was changed."; }
+  # Master's line, exactly. A16 briefly added `rmdir "$LOCK"` here to tidy up on refusal; that
+  # removed OTHER processes' freshly created locks and turned a rare takeover race into a
+  # cascade (1 round in 10 of 20 concurrent adds lost items; 0 in 10 on master, measured side
+  # by side 2026-09-23). An "ownership check" retry was tried next and was worse (empty locks
+  # orphaned when two holders backed off at once). The underlying takeover race is pre-existing.
+  mkdir "$LOCK/$$" 2>/dev/null || refuse "took the drawer lock at $LOCK but cannot write inside it. Nothing was changed."
   # Every lock this process holds is released on exit, so a two-drawer write (move, route)
   # never leaves its first lock behind when the second refuses.
   LOCKS+=("$LOCK")
