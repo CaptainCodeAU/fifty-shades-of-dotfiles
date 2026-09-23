@@ -678,7 +678,7 @@ want   "  and parked count" "parked: 1" "$OUT"
 # the real shape that made these hard: the SAME ID in two drawers (IDs are unique per
 # drawer only; W-20260923-A01 was in three on 2026-09-23), plus a legacy drawer.
 # ==============================================================================
-printf 'M  show, get, --json, supersede: one item across every drawer (A24)\n'
+printf 'Q  show, get, --json, supersede: one item across every drawer (A24)\n'
 mk_dotclaude
 OMEGA="$D/omega"; mkdir -p "$OMEGA"; git -C "$OMEGA" init -q 2>/dev/null
 OW="$P/$(key "$OMEGA")/memory/WORK"; mkdir -p "$OW"
@@ -753,7 +753,7 @@ want   "  and says which field is missing" "has no nosuch field" "$OUT"
 runw "$ZETA" get "W-$TODAY-A03" body
 wanteq "get body of an item with no prose: rc=1" "1" "$RC"
 
-printf 'N  --json: valid JSON, proven by jq, with a control that jq can fail\n'
+printf 'R  --json: valid JSON, proven by jq, with a control that jq can fail\n'
 if command -v jq >/dev/null 2>&1; then
   # CONTROL FIRST: `jq .` must be able to say no, or every arm below is a rubber stamp.
   printf '{"a":"x\001y"}' | jq . >/dev/null 2>&1; M_RC=$?
@@ -790,7 +790,7 @@ else
   bad "jq is required to prove --json is valid JSON" "jq on PATH" "jq not found -- INVALID TRIAL"
 fi
 
-printf 'O  --grep: text search with a stated denominator (A21)\n'
+printf 'S  --grep: text search with a stated denominator (A21)\n'
 runw "$ZETA" --grep "shared id"
 wanteq "--grep finds a title word in the current drawer (rc=0)" "0" "$RC"
 want    "  zeta's item" "zeta shared id" "$OUT"
@@ -814,7 +814,7 @@ M_OPEN="$(find "$ZW/items/open" -name 'W-*.md' | wc -l | tr -d ' ')"
 want   "  and states the denominator ($M_OPEN open items, 1 drawer)" "no match for \"zzqq-nothing\" in $M_OPEN open item(s) across 1 drawer(s)" "$OUT"
 want   "  and says --closed would widen it" "--closed" "$OUT"
 
-printf 'P  supersede: decline with a pointer, back-pointer on the new one\n'
+printf 'T  supersede: decline with a pointer, back-pointer on the new one\n'
 M_SUM(){ find "$ZW/items" "$OW/items" -name 'W-*.md' -exec shasum {} + | sort; }
 M_BEFORE="$(M_SUM)"
 runw "$ZETA" supersede "W-$TODAY-A01" "W-$TODAY-A02"
@@ -863,15 +863,28 @@ wanteq "TWIN supersede --project zeta settles the ambiguous pair (rc=0)" "0" "$R
 want   "  zeta's A01 declined, pointing at A02" "superseded-by: W-$TODAY-A02" "$(cat "$ZW/items/closed/W-$TODAY-A01.md")"
 wanteq "  and omega's A01 untouched (still open, no pointer)" "1|0" \
        "$(grep -c '^status: open$' "$OW/items/open/W-$TODAY-A01.md")|$(grep -c superseded "$OW/items/open/W-$TODAY-A01.md")"
-# Across two drawers: each drawer gets its own write and its own commit.
+# Across two drawers: REFUSED by name (conductor ruling 2026-09-23, current-drawer only).
+# Cross-drawer writes arrive with the item-move build, W-20260923-A16.
 PJ_MACHINE_FILE="$D/machine-B" runw "$OMEGA" add "omega successor" --done-when x   # B01, unique
 runw "$ZETA" add "zeta cross old" --done-when x                                     # A05, unique
-M_HEAD="$(git -C "$DC" rev-parse HEAD)"
+M_BEFORE="$(M_SUM)"; M_HEAD="$(git -C "$DC" rev-parse HEAD)"
 runw "$ZETA" supersede "W-$TODAY-A05" "W-$TODAY-B01"
-wanteq "supersede ACROSS drawers (rc=0)" "0" "$RC"
-want   "  old names the new item's project" "superseded-by: W-$TODAY-B01 (project omega)" "$(cat "$ZW/items/closed/W-$TODAY-A05.md")"
-want   "  new names the old item's project" "supersedes: W-$TODAY-A05 (project zeta)" "$(cat "$OW/items/open/W-$TODAY-B01.md")"
-wanteq "  TWO commits, one per drawer, and the tree is clean" "2|0" \
+wanteq "supersede ACROSS drawers REFUSES (rc=2)" "2" "$RC"
+want   "  and names the old item's project" "W-$TODAY-A05 is in zeta" "$OUT"
+want   "  and the new item's project" "W-$TODAY-B01 is in omega" "$OUT"
+want   "  and says DIFFERENT drawers" "DIFFERENT drawers" "$OUT"
+want   "  and points at the item-move build" "W-20260923-A16" "$OUT"
+wanteq "  and NOTHING changed (every item file byte-identical)" "$M_BEFORE" "$(M_SUM)"
+wanteq "  and no commit was made" "$M_HEAD" "$(git -C "$DC" rev-parse HEAD)"
+# Same drawer, but not the repo you stand in: refused, like close and decline.
+runw "$OMEGA" supersede "W-$TODAY-A05" "W-$TODAY-A04"
+wanteq "supersede of two zeta items from OMEGA's repo REFUSES (rc=2)" "2" "$RC"
+want   "  and says it writes only this repo's drawer" "writes only this repo's drawer (omega)" "$OUT"
+wanteq "  and NOTHING changed" "$M_BEFORE" "$(M_SUM)"
+runw "$ZETA" supersede "W-$TODAY-A05" "W-$TODAY-A04"
+wanteq "TWIN the same pair from ZETA's repo succeeds (rc=0)" "0" "$RC"
+want   "  A05 declined, pointing at A04" "superseded-by: W-$TODAY-A04" "$(cat "$ZW/items/closed/W-$TODAY-A05.md")"
+wanteq "  ONE commit, zeta and omega clean" "1|0" \
        "$(git -C "$DC" rev-list --count "$M_HEAD"..HEAD)|$(git -C "$DC" status --porcelain -- "projects/$(key "$ZETA")" "projects/$(key "$OMEGA")" | wc -l | tr -d ' ')"
 wanteq "  and no drawer lock left behind" "0|0" \
        "$([ -d "$ZW/items/.lock" ] && echo 1 || echo 0)|$([ -d "$OW/items/.lock" ] && echo 1 || echo 0)"

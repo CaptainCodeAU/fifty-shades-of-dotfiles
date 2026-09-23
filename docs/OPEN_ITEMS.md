@@ -203,13 +203,21 @@ prints the single item object.
 
 **`supersede <old> <new>`** declines the old item, adds `superseded-by: <new>` to its
 header and a dated `**DECLINED**` note naming the new title, moves it to `closed/`, and
-adds `supersedes: <old>` to the new item (repeatable: one item can replace several). The
-two may be in different drawers; each pointer then names the other project, as in
-`superseded-by: W-... (project omega)`, and each drawer gets its own lock and its own
-commit through the same `finish_write` as `close`. Refused, with nothing changed: an old
-item that is already done or declined, a new one that is declined, an item superseding
-itself, an unknown ID (a write never "misses"), and any item in a legacy drawer. `set`
-cannot write either pointer field.
+adds `supersedes: <old>` to the new item (repeatable: one item can replace several). One
+lock, one commit, through the same `finish_write` as `close`.
+
+**It writes the CURRENT repo's drawer only** (conductor ruling, 2026-09-23, the
+conservative default). Both IDs still resolve across every drawer, so an ambiguous ID is
+refused exactly as `show` refuses it, and then both items must sit in the drawer of the
+repo you are standing in. Two items in DIFFERENT drawers are REFUSED by name
+(`<old> is in zeta and <new> is in omega -- DIFFERENT drawers`). Cross-drawer writes
+arrive with the item-move build, W-20260923-A16 (`docs/OPEN_ITEMS_CROSS_PROJECT.md`), which
+can do both sides under one design instead of two commits that are not atomic.
+
+Also refused, with nothing changed: an old item that is already done or declined, a new
+one that is declined, an item superseding itself, an unknown ID (a write never "misses"),
+any item in a legacy drawer, and a pair in another project's drawer. `set` cannot write
+either pointer field.
 
 ## Multi-drawer output: the blank line between drawers is load-bearing (X0, 2026-09-22)
 
@@ -261,6 +269,6 @@ every command, the required-field refusal with its passing control, twenty concu
 adds all committed, a mixed machine (one legacy, one items), the symlinked drawer that
 must not be committed, a commit refused by a hook that must not lose the write, a
 transient index lock, hand-edit rescue with its control, regeneration, and migration
-(dry run into scratch, then real). Sections M to P (2026-09-23) cover `show`, `get`,
+(dry run into scratch, then real). Sections Q to T (2026-09-23) cover `show`, `get`,
 `--json`, `--grep` and `supersede` on a fixture with the same ID in two drawers plus a
-legacy drawer, including a same-drawer and a cross-drawer supersede.
+legacy drawer, including the cross-drawer and not-this-repo supersede refusals.

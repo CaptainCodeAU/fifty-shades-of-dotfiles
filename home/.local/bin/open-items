@@ -965,13 +965,15 @@ cmd_get(){                      # get <W-ID> <field> [--project p]
 }
 
 # supersede <old> <new>: the old item is DECLINED with `superseded-by:` and a dated note,
-# and the new one gets `supersedes:` (repeatable: one item can replace several). Both
-# IDs resolve across every drawer, so the two items may live in different projects; then
-# each pointer names the other project, and each drawer gets its own lock and its own
-# commit through the same finish_write as close and decline.
-unlock_drawer(){ [ -z "$LOCK" ] || rmdir "$LOCK/$$" "$LOCK" 2>/dev/null; trap - EXIT; LOCK=""; }
+# and the new one gets `supersedes:` (repeatable: one item can replace several). Both IDs
+# resolve across every drawer, so an ID that is in two drawers still REFUSES without
+# --project. The WRITE is current-drawer only (conductor ruling, 2026-09-23): both items
+# must be in the drawer of the repo you are standing in, like close and decline. Two items
+# in DIFFERENT drawers are refused by name; cross-drawer writes arrive with the item-move
+# build (W-20260923-A16), which can then do both sides under one design instead of two
+# commits that are not atomic.
 cmd_supersede(){                # supersede <old> <new> [--project p]
-  local ho hn wo io fo wn in fn so sn po pn rc1=0 rc2=0 tn
+  local ho hn wo io fo wn in fn so sn w tn
   split_args "$@"
   [ "${#POS[@]}" -eq 2 ] || refuse "supersede: usage: open-items supersede <old W-ID> <new W-ID> [--project <name>]"
   need_root
@@ -980,32 +982,22 @@ cmd_supersede(){                # supersede <old> <new> [--project p]
   IFS=$'\t' read -r wo io fo <<<"$ho"; IFS=$'\t' read -r wn in fn <<<"$hn"
   [ "$fo" != "$fn" ] || refuse "supersede: $io cannot supersede itself"
   case "$fo$fn" in *legacy:*) refuse "supersede: a legacy OPEN.md drawer is read-only; nothing was changed" ;; esac
+  [ "$wo" = "$wn" ] || refuse "supersede: $io is in $(name_of "$wo") and $in is in $(name_of "$wn") -- DIFFERENT drawers. Supersede works inside one drawer only; cross-drawer writes arrive with the item-move build (W-20260923-A16). Nothing was changed."
+  w="$(writable_drawer)" || exit 2
+  [ "$(realdir "$wo")" = "$(realdir "$w")" ] \
+    || refuse "supersede: writes only this repo's drawer ($(name_of "$w")); $io and $in are in $(name_of "$wo"). Run it from that project's repo. Nothing was changed."
   so="$(field_of "$fo" status)"; sn="$(field_of "$fn" status)"
   case "${so:-open}" in open|parked) ;; *) refuse "supersede: $io is already ${so}; only an open or parked item can be superseded" ;; esac
   [ "$sn" != declined ] || refuse "supersede: $in is declined, so it cannot replace anything"
-  po="$(name_of "$wo")"; pn="$(name_of "$wn")"
-  if [ "$wo" = "$wn" ]; then po=""; pn=""; fi
   tn="$(title_of "$fn")"
   lock_drawer "$wo"
   set_field "$fo" status declined
-  add_field "$fo" superseded-by "$in${pn:+ (project $pn)}"
-  printf '\n**DECLINED %s.** Superseded by %s%s -- %s\n' "$(today)" "$in" "${pn:+ in $pn}" "$tn" >> "$fo"
+  add_field "$fo" superseded-by "$in"
+  printf '\n**DECLINED %s.** Superseded by %s -- %s\n' "$(today)" "$in" "$tn" >> "$fo"
   mkdir -p "$wo/items/closed"; command mv "$fo" "$wo/items/closed/$io.md"; fo="$wo/items/closed/$io.md"
-  if [ "$wo" != "$wn" ]; then
-    printf '%s -> declined, superseded by %s (%s)\n' "$io" "$in" "$pn"
-    finish_write "$wo" "open-items: supersede $io by $in ($pn) -- $(title_of "$fo")"; rc1=$?
-    unlock_drawer
-    lock_drawer "$wn"
-  fi
-  add_field "$fn" supersedes "$io${po:+ (project $po)}"
-  if [ "$wo" = "$wn" ]; then
-    printf '%s -> declined, superseded by %s\n' "$io" "$in"
-    finish_write "$wo" "open-items: supersede $io by $in -- $(title_of "$fo")"; rc1=$?
-  else
-    printf '%s <- supersedes %s (%s)\n' "$in" "$io" "$po"
-    finish_write "$wn" "open-items: $in supersedes $io ($po) -- $tn"; rc2=$?
-  fi
-  [ "$rc1" -eq 0 ] && [ "$rc2" -eq 0 ] || exit 3
+  add_field "$fn" supersedes "$io"
+  printf '%s -> declined, superseded by %s\n' "$io" "$in"
+  finish_write "$wo" "open-items: supersede $io by $in -- $(title_of "$fo")"
 }
 
 # ---------------------------------------------------------------- dispatch ----
