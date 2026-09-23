@@ -1024,6 +1024,10 @@ rm () {
 SNAP
   local save_snap="$SNAP_DIR"; SNAP_DIR="$fx/snap"; SNAP_DONE=0
 
+  # --mutants sets DEL_GUARD_FAILFAST=1: a mutant is caught at its first
+  # failing arm, so the run is not the full selftest times every rule line
+  _failfast() { [ "${DEL_GUARD_FAILFAST:-0}" = 1 ] && { echo "del-guard selftest: stopped at the first failure (DEL_GUARD_FAILFAST)"; exit 1; }; return 0; }
+
   # Every arm runs twice: with the lexer's prefilter, and with it off
   # (DEL_GUARD_NOFILTER=1). Both must give the expected answer, which proves
   # the filter never hides a command the rules would have denied.
@@ -1032,7 +1036,7 @@ SNAP
     _classify "$3" "${4:-$fx/repo}"; got="${REASON_ID:--}"
     DEL_GUARD_NOFILTER=1 _classify "$3" "${4:-$fx/repo}"; got2="${REASON_ID:--}"
     if [ "$got" = "$1" ] && [ "$got2" = "$1" ]; then passes=$((passes + 1)); printf 'ok    %-26s %s\n' "$1" "$2"
-    else fails=$((fails + 1)); printf 'FAIL  %-26s %s  (got %s, unfiltered %s)\n' "$1" "$2" "$got" "$got2"; fi
+    else fails=$((fails + 1)); printf 'FAIL  %-26s %s  (got %s, unfiltered %s)\n' "$1" "$2" "$got" "$got2"; _failfast; fi
   }
 
   echo "=== DENY arms: each must be refused by the named rule ==="
@@ -1311,7 +1315,7 @@ SNAP
   }
   _chk() { # $1 = label, $2 = condition result (0 ok)
     if [ "$2" -eq 0 ]; then passes=$((passes + 1)); printf 'ok    %-26s %s\n' hook "$1"
-    else fails=$((fails + 1)); printf 'FAIL  %-26s %s\n' hook "$1"; fi
+    else fails=$((fails + 1)); printf 'FAIL  %-26s %s\n' hook "$1"; _failfast; fi
   }
   _hook 'echo capture-test-for-del-guard'
   [ "$rc" -eq 0 ] && [ -z "$out" ]; _chk 'real payload, harmless: exit 0, no output' $?
@@ -1449,7 +1453,7 @@ _mutants() {
       broken=$((broken + 1)); printf 'BROKEN  line %-4s %s (lexer fails, not a rule test)\n' "$ln" "$tag"; continue
     fi
     # a removed line can loop forever; 300 s is five times a normal selftest
-    if perl -e 'alarm shift; exec @ARGV' 300 "$tmp/m.sh" --selftest >/dev/null 2>&1; then
+    if DEL_GUARD_FAILFAST=1 perl -e 'alarm shift; exec @ARGV' 300 "$tmp/m.sh" --selftest >/dev/null 2>&1; then
       missed=$((missed + 1)); printf 'MISSED  line %-4s %s\n' "$ln" "$tag"
     else
       caught=$((caught + 1)); printf 'caught  line %-4s %s\n' "$ln" "$tag"
