@@ -5,6 +5,12 @@
 # kept, newest first), the same session ending twice, garbage and empty stdin, a missing
 # transcript, outside a repo, a no-write check with its control, and timing.
 # Nothing here touches ~/.local/state, a real repo or a real transcript.
+# Read this whole file before running any of it, so an edit saved mid-run cannot change
+# the run (W-20260923-A57). A crash under it exits 127 (unbound var) or 1 (bash 3.2 syntax
+# error); `selftest-whole-read --help` has the map. Do not move or reword these lines.
+[ -n "${SELFTEST_WHOLE_READ-}" ] || SELFTEST_WHOLE_READ=1 exec "$BASH" -c 'shopt -u sourcepath; . "$0"' "$0" "$@"
+unset SELFTEST_WHOLE_READ
+
 set -uo pipefail
 END="${PJ_SESSION_END:-$(cd "$(dirname "$0")" && pwd -P)/pj-session-end}"
 [ -x "$END" ] || { echo "no pj-session-end next to this selftest"; exit 1; }
