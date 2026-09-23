@@ -41,7 +41,8 @@
 #                     edited mid-run dies (the control), a guarded one finishes
 #                     with the same count, on /bin/bash (3.2) and the PATH bash;
 #                     plus the $0, argument, exit-code, guard and sourcepath
-#                     arms, and --check's own pass, fail and refuse arms.
+#                     arms, an inline `--selftest)` in a tool surviving the
+#                     same edit unguarded, and --check's pass, fail, refuse arms.
 #
 # EXIT CODES
 #   0  every bash suite carries the header / every selftest arm passed
@@ -169,6 +170,26 @@ selftest() {
     case "$OUT" in *guard_seen_by_child=unset*) ok "guarded, $B: the recursion guard is not inherited by children" ;;
       *) bad "guarded, $B: a child sees SELFTEST_WHOLE_READ" "$OUT" ;; esac
 
+    # A tool's own inline --selftest needs no header: `case ... --selftest) st; exit $?`
+    # is parsed whole before it runs, and the exit comes before bash reads on.
+    f="$T/inline"
+    { echo "#!$B"; cat <<'EOF'
+st() {
+  : > "$MARK.started"
+  while [ ! -e "$MARK.edited" ]; do sleep 0.05; done
+  P=1; P=$((P + 1)); P=$((P + 1)); echo "PASS=$P"; return 7
+}
+case "${1:-}" in
+  --selftest) st; exit $? ;;
+esac
+echo "PASS: the tool's normal work, never reached by --selftest"
+EOF
+    } > "$f"; chmod +x "$f"
+    run_edited "$f" --selftest
+    [ "$RC" = 7 ] && [ "$OUT" = PASS=3 ] && grep -q garbage "$f" \
+      && ok "inline, $B: 'case --selftest) st; exit' survives the same edit with no header (so tools are exempt)" \
+      || bad "inline, $B: an inline --selftest was reached by the edit" "rc=$RC $OUT"
+
     # sourcepath: run by a slash-less name from its own folder, with a decoy of the
     # same name earlier on PATH. The header must run the local file, not the decoy.
     mkdir -p "$T/here" "$T/decoy"
@@ -210,6 +231,6 @@ selftest() {
 case "${1:-}" in
   --check) shift; check "$@"; exit $? ;;
   --selftest) selftest; exit $? ;;
-  -h|--help|"") sed -n '2,49p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  -h|--help|"") sed -n '2,50p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   *) echo "selftest-whole-read: unknown argument '$1' (--check [DIR...] | --selftest | --help)" >&2; exit 2 ;;
 esac
