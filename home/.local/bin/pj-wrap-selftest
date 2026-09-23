@@ -19,6 +19,9 @@ STATE="$ROOT/state"; export PJ_STATE_DIR="$STATE"
 # makes the IDs identical on all four machines -- and proves the tool works on a box whose
 # real ~/.config/pj/machine does not exist yet, which is B, C and D on day one.
 printf 'name: selftest-fixture\nletter: Z\n' > "$ROOT/machine"; export PJ_MACHINE_FILE="$ROOT/machine"
+# A FIXTURE claim folder (D-20260923-A10). pj-id refuses a fixture machine file with the real
+# ~/.local/state/pj/ids, so without this every add here fails and the push arms find nothing.
+export PJ_ID_CLAIMS_DIR="$ROOT/claims"
 PASS=0; FAIL=0
 ok(){ PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
 bad(){ FAIL=$((FAIL+1)); printf '  FAIL %s\n       got: %s\n' "$1" "$(printf '%s' "${OUT:-}" | tr '\n' '|' | cut -c1-900)"; }
@@ -167,7 +170,10 @@ check "H no rebase in progress" '[ ! -d "$DC/.git/rebase-merge" ]'
 DC2="$ROOT/dc2"; git clone -q "$REMOTE" "$DC2" 2>/dev/null
 git -C "$OTHER" pull -q --rebase 2>/dev/null
 oi_other add "same id from other" --done-when x >/dev/null 2>&1; git -C "$OTHER" push -q 2>/dev/null
-( cd "$ZETA" && OPEN_ITEMS_PROJECTS_DIR="$DC2/projects" OPEN_ITEMS_DOTCLAUDE="$DC2" "$OI" add "same id from here" --done-when x >/dev/null 2>&1 )
+# DC2 stands for a clone on ANOTHER box, so it gets its own claim folder: claim folders are
+# machine state and never sync (D-20260923-A10). Sharing one here would stop the clash this
+# arm exists to provoke, which no two real machines could do.
+( cd "$ZETA" && PJ_ID_CLAIMS_DIR="$ROOT/claims-dc2" OPEN_ITEMS_PROJECTS_DIR="$DC2/projects" OPEN_ITEMS_DOTCLAUDE="$DC2" "$OI" add "same id from here" --done-when x >/dev/null 2>&1 )
 OUT="$(cd "$ZETA" && OPEN_ITEMS_PROJECTS_DIR="$DC2/projects" OPEN_ITEMS_DOTCLAUDE="$DC2" CLAUDE_CODE_SESSION_ID=x "$WRAP" push 2>&1)"; RC=$?
 check "G0 same W-ID claimed on two clones -> STOPPED (rc 3), item conflicts are never guessed" '[ "$RC" -eq 3 ]'
 check "G0 names the item path" 'printf "%s" "$OUT" | grep -q "items/open/W-"'
