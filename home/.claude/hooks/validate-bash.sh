@@ -12,16 +12,38 @@
 #   git push --force|-f ... main|master
 #   git reset --hard                  with no ref
 #   git clean -fd / -f -d             untracked files and directories
+# and, through the shared scanner (conv-shscan.awk, mode guard), three rules Gavin
+# approved 2026-09-23 from the conv-hooks survey of live aliases:
+#   ci cr ct cpr cd_ cskip            .zshrc aliases launching a NESTED Claude with
+#                                     --dangerously-skip-permissions (cb does not
+#                                     skip permissions and is allowed)
+#   gpf!                              oh-my-zsh alias for git push --force; the
+#                                     lease forms gpf and gpsupf stay allowed
+#   brew install|instal|reinstall|upgrade   ask Gavin; list/info/search/outdated
+#                                     stay allowed. The .zshrc brew() guard is
+#                                     interactive-only, measured inert here.
+# A hook sees the TYPED text, never the alias expansion, which is why the first
+# four rules (on the expansions) never saw these names.
 #
 # Quoted strings, $(...) and heredoc BODIES are stripped before matching, the same
 # way the enforce-* guards do it. Measured 2026-09-21 before the fix: a commit
 # message saying "git clean -fd is banned" and an echo mentioning a force push were
-# both denied, and the probe that found it was itself denied by this hook.
+# both denied, and the probe that found it was itself denied by this hook. The three
+# guard rules do not use that strip: the scanner reads the command the way zsh
+# tokenises it (quotes, $(...), heredocs, groups), so they deny the alias at command
+# position only, including inside $(...), backticks and eval, where zsh expands it.
+# conv-shscan.awk and conv-hooklib.sh must be stowed beside this file; without them
+# the three rules fall back to a crude word match, deny only, and say so by name.
 #
 # `--selftest` proves every arm, positive and negative. Exit 0 = all arms pass.
+# VB_HOOK_UNDER_TEST=<path> runs the payload arms against another copy, and
+# CONV_PAYLOAD_FILE=<captured payload> runs them on a real payload envelope.
 
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles"
 LOG_FILE="$STATE_DIR/hooks-security.log"
+HOOKS_DIR="$(builtin cd "$(dirname "$0")" && pwd)"
+SHSCAN="${CONV_SHSCAN:-$HOOKS_DIR/conv-shscan.awk}"
+GUARD_FALLBACK_ERE='(^|[;&|({`][[:space:]]*)(ci|cr|ct|cpr|cd_|cskip|gpf!)([[:space:];&|)]|$)|(^|[;&|({`][[:space:]]*)([^[:space:]]*/)?brew[[:space:]]+(install|instal|reinstall|upgrade)'
 
 log_blocked() {
   mkdir -p "$STATE_DIR" 2>/dev/null
@@ -105,13 +127,34 @@ _classify() {
       echo "git clean with -f and -d would remove untracked files and directories (add -n to dry-run it)"; return
     fi
   fi
+  _guard "$1"
+}
+
+# The three scanner rules (nested-Claude aliases, gpf!, brew install). Prints the
+# deny reason, or nothing. A missing or failed scanner is named, never silent.
+_guard() {
+  local out rc=3 r
+  if [ -r "$SHSCAN" ]; then
+    out=$(printf '%s' "$1" | CONV_MODE=guard LC_ALL=C awk -f "$SHSCAN" 2>/dev/null); rc=$?
+  fi
+  if [ "$rc" -ne 0 ] || [ -z "$out" ]; then
+    if printf '%s' "$1" | command grep -qE "$GUARD_FALLBACK_ERE"; then
+      echo "validate-bash: its scanner conv-shscan.awk is missing or failed (rc=$rc), so it cannot tell a nested-Claude alias, gpf! or brew install from prose, and this command mentions one. Restow the dotfiles (home/.claude/hooks) or fix the scanner."
+    fi
+    return
+  fi
+  case "${out%%$'\n'*}" in
+    ALLOW) ;;
+    DENY) r=${out#*$'\n'}; echo "${r%%$'\n'*}" ;;
+    *) echo "validate-bash: its scanner answered '${out%%$'\n'*}'; denying rather than guessing" ;;
+  esac
 }
 
 # ---------------------------------------------------------------- selftest
 if [ "${1:-}" = "--selftest" ]; then
-  fails=0
+  fails=0; _must_n=0
   _must() { # $1 = expect-hit(1)/expect-miss(0), $2 = label, $3 = command
-    local got hit=0; got="$(_classify "$3")"; [ -n "$got" ] && hit=1
+    local got hit=0; _must_n=$((_must_n + 1)); got="$(_classify "$3")"; [ -n "$got" ] && hit=1
     if [ "$hit" -eq "$1" ]; then printf 'ok    %s\n' "$2"
     else printf 'FAIL  %s  (expected hit=%s, got hit=%s)\n' "$2" "$1" "$hit"; fails=$((fails+1)); fi
   }
@@ -153,8 +196,113 @@ if [ "${1:-}" = "--selftest" ]; then
   _must 0 'prose in a commit message'       'git commit -m "note: git clean -fd is banned"'
   _must 0 'prose in a heredoc'              $'cat <<EOF\ngit reset --hard is dangerous\nEOF'
   _must 0 'control: harmless'               'echo control-ok'
+  # The guard rules run end to end: a PreToolUse payload into the hook script, so
+  # VB_HOOK_UNDER_TEST=<master's copy> can prove each arm fails where the rule is
+  # absent. conv-hooklib.sh supplies the payload and the arm checker.
+  if [ ! -r "$HOOKS_DIR/conv-hooklib.sh" ]; then
+    echo "FAIL  conv-hooklib.sh missing beside this hook: the guard arms cannot run"
+    echo; echo "$((fails + 1)) ARM(S) FAILED"; exit 1
+  fi
+  . "$HOOKS_DIR/conv-hooklib.sh"
+  CONV_HOOK_UNDER_TEST="${VB_HOOK_UNDER_TEST:-}"
+  conv_selftest_begin "$0"
+  echo "=== A. nested-Claude skip-permissions aliases: DENY ==="
+  conv_arm deny 'ci'                               'ci "summarise this"'
+  conv_arm deny 'cr'                               'cr'
+  conv_arm deny 'ct'                               'ct'
+  conv_arm deny 'cpr'                              'cpr 123'
+  conv_arm deny 'cd_'                              'cd_'
+  conv_arm deny 'cskip'                            'cskip'
+  conv_arm deny 'after &&'                         'git status && ci x'
+  conv_arm deny 'in a pipeline'                    'echo a | ci -'
+  conv_arm deny 'on a second line'                 $'echo a\nci b'
+  conv_arm deny 'after an assignment'              'FOO=1 cskip'
+  conv_arm deny 'after time'                       'time cr'
+  conv_arm deny 'after nocorrect'                  'nocorrect cpr 1'
+  conv_arm deny 'after !'                          '! ct'
+  conv_arm deny 'after if'                         'if cd_; then :; fi'
+  conv_arm deny 'in { }'                           '{ ci x; }'
+  conv_arm deny 'in ( )'                           '(ci x)'
+  conv_arm deny 'inside $(...)'                    'x=$(cr)'
+  conv_arm deny 'inside backticks'                 'y=`ct --x`'
+  conv_arm deny 'inside eval'                      'eval "cpr 1"'
+  conv_arm deny 'inside <(...)'                    'cat <(ci x)'
+  conv_arm deny 'inside zsh =(...)'                'diff =(ci x) f'
+  conv_arm deny 'zsh &! background'                'ci x &!'
+  conv_arm deny 'after nohup (no expansion; conservative)' 'nohup ci x'
+  echo "=== A. look-alikes: ALLOW ==="
+  conv_arm allow 'cb (no skip-permissions)'        'cb'
+  conv_arm allow 'escaped \ci (no alias expansion)' '\ci x'
+  conv_arm allow "quoted 'ci'"                     "'ci' x"
+  conv_arm allow 'git ci (a git alias)'            'git ci -m x'
+  conv_arm allow 'make ci / pnpm run ci'           'make ci && pnpm run ci'
+  conv_arm allow 'echo ci'                         'echo ci'
+  conv_arm allow 'alias ci / whence / type'        'alias ci; whence -w cr; type cskip'
+  conv_arm allow 'command -v ci'                   'command -v ci'
+  conv_arm allow 'prose in quotes'                 'echo "run ci then cr"'
+  conv_arm allow 'prose in a heredoc'              $'cat <<EOF\nci is the alias\nEOF'
+  conv_arm allow 'prose in a commit message'       $'git commit -m "note\n; ci x is denied\nend"'
+  conv_arm allow 'words that start with ci'        'circleci x; cid=1; cd_x y'
+  conv_arm allow 'zsh glob qualifier'              'print -l ci*(.)'
+  echo "=== B. gpf! (git push --force): DENY, lease forms ALLOW ==="
+  conv_arm deny  'gpf!'                            'gpf!'
+  conv_arm deny  'gpf! origin main'                'gpf! origin main'
+  conv_arm deny  'gpf! after &&'                   'git fetch && gpf!'
+  conv_arm deny  'gpf! after an assignment'        'GIT_TRACE=1 gpf!'
+  conv_arm allow 'gpf (lease)'                     'gpf'
+  conv_arm allow 'gpf origin x (lease)'            'gpf origin x'
+  conv_arm allow 'gpsupf (lease)'                  'gpsupf'
+  conv_arm allow 'echo gpf!'                       'echo gpf!'
+  conv_arm allow 'git push --force-with-lease'     'git push --force-with-lease origin x'
+  echo "=== C. brew install/reinstall/upgrade: DENY ==="
+  conv_arm deny 'brew install'                     'brew install jq'
+  conv_arm deny 'brew instal (brew alias)'         'brew instal jq'
+  conv_arm deny 'brew reinstall'                   'brew reinstall jq'
+  conv_arm deny 'brew upgrade <formula>'           'brew upgrade jq'
+  conv_arm deny 'brew upgrade (everything)'        'brew upgrade'
+  conv_arm deny 'brew install --cask'              'brew install --cask foo'
+  conv_arm deny 'global option first'              'brew -v install jq'
+  conv_arm deny 'after an assignment'              'HOMEBREW_NO_AUTO_UPDATE=1 brew install jq'
+  conv_arm deny 'path-prefixed brew'               '/opt/homebrew/bin/brew install jq'
+  conv_arm deny 'command brew (skips the wrapper)' 'command brew install jq'
+  conv_arm deny 'escaped \brew'                    '\brew install jq'
+  conv_arm deny 'quoted "brew"'                    '"brew" install jq'
+  conv_arm deny 'sudo -u x brew'                   'sudo -u admin brew install jq'
+  conv_arm deny 'env VAR=1 brew'                   'env FOO=1 brew install jq'
+  conv_arm deny 'xargs brew install'               'xargs brew install < list.txt'
+  conv_arm deny 'after &&'                         'brew update && brew upgrade jq'
+  conv_arm deny 'inside $(...)'                    'x=$(brew install jq)'
+  conv_arm deny 'inside backticks'                 'x=`brew install jq`'
+  conv_arm deny 'inside eval'                      'eval "brew install jq"'
+  conv_arm deny 'subcommand in a variable'         'brew $sub jq'
+  conv_arm deny 'quoted subcommand'                'brew "install" jq'
+  echo "=== C. read-only brew and prose: ALLOW ==="
+  conv_arm allow 'brew list'                       'brew list'
+  conv_arm allow 'brew info'                       'brew info jq'
+  conv_arm allow 'brew search'                     'brew search jq'
+  conv_arm allow 'brew outdated'                   'brew outdated'
+  conv_arm allow 'brew deps'                       'brew deps --tree jq'
+  conv_arm allow 'brew --prefix'                   'brew --prefix'
+  conv_arm allow 'brew list | grep'                'brew list --versions | grep jq'
+  conv_arm allow 'zsh |& pipe'                     'brew info jq |& cat'
+  conv_arm allow 'zsh =(...) around brew list'     'diff =(brew list) f'
+  conv_arm allow 'command -v brew'                 'command -v brew; whence -p brew'
+  conv_arm allow 'prose in an echo'                'echo "brew install jq"'
+  conv_arm allow 'prose in a commit message'       $'git commit -m "why\n; brew install x is denied\nend"'
+  conv_arm allow 'rg for the phrase'               "rg 'brew install' docs"
+  conv_arm allow 'the word install after brew list' 'brew list install'
+  conv_arm allow 'control: harmless'               'echo control-ok'
+  echo "=== FALLBACK arms: scanner missing, the rules still hold ==="
+  export CONV_SHSCAN=/nonexistent/conv-shscan.awk
+  conv_arm deny  'scanner missing: ci denied'      'ci x'
+  conv_arm deny  'scanner missing: brew install'   'brew install jq'
+  conv_arm allow 'scanner missing: harmless ok'    'echo control-ok'
+  unset CONV_SHSCAN
   echo
-  [ "$fails" -eq 0 ] && { echo "ALL ARMS PASS"; exit 0; } || { echo "$fails ARM(S) FAILED"; exit 1; }
+  echo "function arms: $_must_n, $((_must_n - fails)) passed, $fails failed"
+  echo "payload arms:  $_st_n, $((_st_n - _st_fails)) passed, $_st_fails failed"
+  echo "$((_must_n + _st_n)) arms, $((_must_n + _st_n - fails - _st_fails)) passed, $((fails + _st_fails)) failed"
+  [ $((fails + _st_fails)) -eq 0 ] && { echo "ALL ARMS PASS"; exit 0; } || { echo "$((fails + _st_fails)) ARM(S) FAILED"; exit 1; }
 fi
 
 # ---------------------------------------------------------------- hook path
