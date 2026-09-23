@@ -1018,7 +1018,7 @@ EOF
 }
 # lk_bg <tag> <title> [VAR=value...]: one add in the background, shims first on PATH.
 lk_bg(){
-  local tag="$1" title="$2"; shift 2
+  local tag="$1" title="$2"; shift 2   # shift-lint: ok lk_bg helper, fixed arity, not a loop
   ( cd "$ZETA" && env PATH="$LKS:$PATH" "$@" OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" \
       "$TOOL" add "$title" --done-when x >"$D/lk.$tag.out" 2>&1; echo $? > "$D/lk.$tag.rc" ) &
 }
@@ -1257,7 +1257,7 @@ printf '\nAR argument parsing: a value flag given last, a backslash in holds-in 
 mk_dotclaude
 runw "$ZETA" init
 AR_T0="$(find "$ZW/items" -name 'W-*.md' 2>/dev/null | wc -l | tr -d ' ')"
-runk(){ local s="$1" d="$2"; shift 2; OUT="$(cd "$d" 2>/dev/null && OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" CLAUDE_CODE_SESSION_ID=sess-test CLAUDE_SESSION_ID=sess-test perl -e 'alarm shift; exec @ARGV' "$s" "$TOOL" "$@" 2>&1 </dev/null)"; RC=$?; return 0; }
+runk(){ local s="$1" d="$2"; shift 2; OUT="$(cd "$d" 2>/dev/null && OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" CLAUDE_CODE_SESSION_ID=sess-test CLAUDE_SESSION_ID=sess-test perl -e 'alarm shift; exec @ARGV' "$s" "$TOOL" "$@" 2>&1 </dev/null)"; RC=$?; return 0; }   # shift-lint: ok runk helper, fixed arity, not a loop
 # CONTROL: the instrument can report a hang at all. Without this, rc 2 everywhere below
 # could not be told from a kill that never fired.
 OUT="$(perl -e 'alarm 1; exec @ARGV' sleep 5 2>&1)"; RC=$?
@@ -1549,7 +1549,7 @@ expect {
 set r [wait]
 exit [lindex $r 3]
 EXP
-tty_run(){ local ans="$1" d="$2"; shift 2; OUT="$(cd "$d" && OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" CLAUDE_CODE_SESSION_ID=sess-test expect -f "$ROOT/tty.exp" -- "$ans" "$@" 2>&1)"; RC=$?; }
+tty_run(){ local ans="$1" d="$2"; shift 2; OUT="$(cd "$d" && OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" CLAUDE_CODE_SESSION_ID=sess-test expect -f "$ROOT/tty.exp" -- "$ans" "$@" 2>&1)"; RC=$?; }   # shift-lint: ok tty_run helper, fixed arity, not a loop
 
 mk_dotclaude
 mkrepo alpha g; mkrepo beta g; mkrepo gamma h; mkrepo nogroup

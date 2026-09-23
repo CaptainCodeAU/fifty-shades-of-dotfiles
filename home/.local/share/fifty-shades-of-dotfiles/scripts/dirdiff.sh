@@ -483,7 +483,7 @@ dir_label() {
 filtered_find() {
   local dir="$1"
   local type="$2"
-  shift 2
+  shift 2   # shift-lint: ok fixed positionals <dir> <type>, not an option loop
 
   local find_args=()
   local item
@@ -762,7 +762,7 @@ print_diff_summary() {
 
 print_diff_list_section() {
   local label="$1" color="$2" symbol="$3" remaining="$4"
-  shift 4
+  shift 4   # shift-lint: ok fixed positionals <label> <color> <symbol> <remaining>, not an option loop
   local items=("$@")
   local count=${#items[@]}
 

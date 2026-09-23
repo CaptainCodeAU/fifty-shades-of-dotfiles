@@ -78,7 +78,7 @@ mkdrawer(){                     # mkdrawer <repo> [name] -> the WORK dir
   printf '%s' "$w"
 }
 mkitem(){                       # mkitem <work> <ID> <title> [header line]... ; BODY= for a body
-  local w="$1" id="$2" t="$3" f; shift 3
+  local w="$1" id="$2" t="$3" f; shift 3   # shift-lint: ok mkitem helper, fixed arity, not a loop
   f="$w/items/open/$id.md"
   { printf '## %s -- %s\n\nproject: %s\nstatus: open\nkind: do\ndone-when: x\n' "$id" "$t" "$(head -1 "$w/items/.project")"
     for l in "$@"; do printf '%s\n' "$l"; done

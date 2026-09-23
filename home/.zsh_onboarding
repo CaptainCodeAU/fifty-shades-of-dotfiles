@@ -780,7 +780,7 @@ __run_section() {
 
     while (( $# >= 3 )); do
         local cmd="$1" pkg_brew="$2" pkg_apt="$3"
-        shift 3
+        shift 3   # shift-lint: ok the loop condition (( $# >= 3 )) guarantees three
         all_names+=("$cmd")
         if ! command -v "$cmd" &>/dev/null; then
             miss_cmds+=("$cmd")

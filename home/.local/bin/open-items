@@ -987,7 +987,7 @@ cmd_set(){
   case "$k" in status) refuse "set: change status with close|park|decline|reopen" ;; project|raised) refuse "set: $k is tool-owned" ;;
     kind|size|done-when|when|next|blocked-on|holds-in|body) ;; *) refuse "set: unknown field $k" ;; esac
   if [ "$k" = holds-in ]; then
-    shift 2; for v in "$@"; do refuse_bad "set: holds-in" "$v"; valid_holds "$v" || refuse "set: holds-in needs a root marker: repo:<path>, drawer:<path> or ~/<path>"; done
+    shift 2; for v in "$@"; do refuse_bad "set: holds-in" "$v"; valid_holds "$v" || refuse "set: holds-in needs a root marker: repo:<path>, drawer:<path> or ~/<path>"; done   # shift-lint: ok cmd_set refuses unless $# -ge 3 at its top, not a loop
   else
     [ $# -eq 3 ] || refuse "set: $k takes one value"
     case "$k" in

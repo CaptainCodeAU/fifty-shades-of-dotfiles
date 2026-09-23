@@ -61,7 +61,7 @@ fresh() { n=$(( n + 1 )); D="$T/arm$n"; mkdir -p "$D"; builtin cd "$D"; printf A
 
 # arm <label> <expected rc> <check> -- <command...>; stdin comes from the caller.
 arm() {
-    local label="$1" want="$2" check="$3"; shift 4
+    local label="$1" want="$2" check="$3"; shift 4   # shift-lint: ok arm helper, fixed arity <label> <rc> <check> --, not a loop
     local rc
     "$@" 2>/dev/null; rc=$?
     if [[ "$rc" -ne "$want" ]]; then bad "$label" "rc $rc, expected $want"; return; fi

@@ -378,7 +378,7 @@ seed_sweep() {
 }
 sweep() { # sweep BLOCK|ALLOW <label> <targets...>
 	local want="$1" label="$2"
-	shift 2
+	shift 2   # shift-lint: ok sweep helper, fixed arity, not a loop
 	seed_sweep
 	OUT=$(HOME="$SH" "$SAFE_RM" -rf "$@" 2>&1); ST=$?
 	[ "$VERBOSE" -eq 1 ] && say "$OUT"

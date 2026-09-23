@@ -1004,7 +1004,7 @@ if [[ "${1:-}" == --profile ]]; then
     print -u2 -- "pj: REFUSED: --profile needs a name (pj --profile scratch)"
     exit 2
   fi
-  WANT="$2"; shift 2
+  WANT="$2"; shift 2   # shift-lint: ok one-shot leading --profile, the -z "${2:-}" refusal above guards it
 fi
 
 case "${1:-}" in

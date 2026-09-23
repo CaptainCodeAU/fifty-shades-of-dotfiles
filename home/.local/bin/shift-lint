@@ -1,0 +1,885 @@
+#!/usr/bin/env bash
+# ============================================================================
+#  shift-lint -- find every `shift N` (N >= 2) a value flag given LAST can hang
+# ============================================================================
+#
+# WHY
+# ---
+# In bash, `shift 2` with only ONE argument left FAILS AND SHIFTS NOTHING (zsh
+# errors the same way). Inside an option loop, `--topic) topic="$2"; shift 2 ;;`
+# then sees the same `--topic` on the next pass, forever. Found four times on
+# 2026-09-23 alone: open-items (W-20260923-A36), the deletion guard (A54, where
+# the harness killed the hook at its timeout and let the command through), and
+# decided, speak-clipboard, imsg and ci-watch-selftest (A55). This checker is
+# the preventive half: it finds the class, not one instance.
+#
+# WHAT COUNTS AS GUARDED (the RULES rule-7 forms, plus a conductor ruling)
+#   (a) `[ $# -ge N ] || <refuse>` earlier on the SAME line as the `shift N`
+#       (also `[[ ... ]]`, `-gt N-1`, `(( $# >= N ))`, `(( $# > N-1 ))`).
+#   (b) a helper whose call names `$#` earlier on the same line,
+#       e.g. `need_val add "$1" $#; kind="$2"; shift 2`.
+#   (c) `shift N || <something>` on the same line (`|| set --`, `|| shift`, a
+#       refusal; a redirection such as `2>/dev/null` before the `||` is fine).
+#   (d) the form (a) test on an EARLIER line of the same stretch: walking back
+#       from the shift over non-blank lines that hold no `;;`, no other shift,
+#       no `set --` and no control keyword, the first test found counts
+#       (ruled 2026-09-23 for herdr-pane-read, watch-history-sync, open-items
+#       --check).
+#   (loop) the site is in a `while` loop whose own condition is the test,
+#       `while (( $# >= 3 )); do ... shift 3`, with no other shift before it.
+#   A test whose number is too small for the shift is WEAK, never guarded.
+#
+# ANNOTATION, for a site a human has read and ruled safe (a fixed-arity helper,
+# or a guard in a form this checker cannot recognise). Same line, reason
+# required, printed by -v and counted on every run:
+#       local t="$1" s="$2"; shift 2   # shift-lint: ok fixed-arity helper
+# A whole-line comment is never an annotation. On a line that OPENS a heredoc,
+# `# shift-lint: fixture <reason>` marks that heredoc's body as deliberate test
+# material: counted as a fixture, never judged (this file's selftest uses it).
+#
+# HEREDOCS. A heredoc whose body starts with a shell shebang, or that is fed to
+# a shell (`bash <<EOF`), is a script another program will RUN: it is scanned
+# as code, and its findings say "[in a script written by a heredoc]". (Found on
+# master: ci-watch-selftest's gh stub hangs exactly this way.) Any other
+# heredoc body is text: counted, never judged.
+#
+# VERDICTS
+#   findings (exit 1):
+#     UNGUARDED-LOOP  in a loop, no guard: a flag given last spins forever
+#     UNGUARDED       not in a loop, no guard: a short call shifts nothing
+#     WEAK            a count test is there but its number is too small
+#     READ            guarded some OTHER way (an `if [ -z ... ]`, an `exit` in a
+#                     nested case, a `$#` test in another shape): read it, then
+#                     rewrite it to a recognised form or annotate it
+#     ANNOTATION      an annotation with no reason, on a line with no site (or,
+#                     for `fixture`, no heredoc), or an unknown annotation word
+#   ok: guarded-a/b/c/d, guarded-loop, annotated, heredoc (a text body), fixture
+#   (a body annotated as test material).
+#
+# WHICH FILES
+#   bash/zsh/sh/ksh/dash by shebang (`#!/usr/bin/env -S bash` included), or by
+#   extension (.sh .bash .zsh .ksh), or by name (.zshrc .zshenv .zprofile
+#   .zlogin .zlogout .zsh_* .bashrc .bash_profile .profile .envrc direnvrc).
+#   With no PATH: every file `git ls-files` tracks in the current repo.
+#   A directory PATH is walked without following symlinks; every symlink it
+#   declines is NAMED, so an omission is stated, not inferred.
+#
+# IT ALWAYS STATES ITS DENOMINATOR, so an empty run cannot look clean:
+#   shift-lint: checked 118 shell files (40213 lines), 89 shift sites (N >= 2)
+# and a zero-file or zero-line run is a REFUSAL, never a pass.
+#
+# USAGE
+#   shift-lint [-v] [PATH...]    # -v also lists every ok site with its verdict
+#   shift-lint --selftest        # proves every arm both ways, on THIS copy
+#
+# EXIT CODES
+#   0  clean: every site guarded, annotated, heredoc text or fixture
+#   1  findings (listed as path:line: VERDICT reason)
+#   2  REFUSED: nothing checked, a file could not be read, bad usage
+#
+# LIMITS (measured by the selftest, not assumed)
+#   A line ending in `\` is not joined to the next. A `shift` whose count is a
+#   variable (`shift $n`) is not a site (none in this repo on 2026-09-23).
+#   Loops are found from `do`/`done` keywords, so zsh's short loop forms
+#   (`for x (a b) cmd`, `repeat`) are invisible.
+# ============================================================================
+set -u
+PROG=shift-lint
+VERBOSE=0
+SELFTEST=0
+
+refuse(){ printf '%s: REFUSED: %s\n' "$PROG" "$*" >&2; exit 2; }
+usage(){ sed -n '2,/^# =*$/p' "$0" | sed -n '2,200p' | sed 's/^# \{0,1\}//'; }
+
+# ---------------------------------------------------------------------------
+# The scanner. One awk pass per run, state reset per file. It keeps TWO views
+# of each line: CL, code only (quoted text, comments and heredoc bodies blanked
+# to spaces, positions preserved), used to find sites and keywords; GL, code
+# plus double-quoted text, used to read guards (`"$#"`, `"${2:-}"`).
+# Emits one record per site: SITE<TAB>file<TAB>line<TAB>N<TAB>verdict<TAB>why
+# and one TOTAL record at the end.
+# ---------------------------------------------------------------------------
+AWK_PROG=$(cat <<'AWK'
+function reset_file() {
+  sp = 1; stk[1] = "C"; px[1] = 0; ld = 0; lvl = 0; WLO = 1
+  delete glx; delete clx; delete LCOND; delete Q; delete QT; delete QF; delete QS; delete QN; delete QI; delete QFIRST
+  QN[0] = 0; QI[0] = 0
+}
+# Heredocs. Each code level keeps a queue of the heredocs opened on its last
+# line (Q delimiter, QT <<- flag, QF fixture-annotated, QS fed to a shell).
+# A heredoc whose body starts with a shell shebang, or that feeds `bash <<`,
+# is a SCRIPT another program will run: its body is scanned as code one level
+# down (lvl+1), with fresh quote and loop state, until its terminator. Any
+# other body is text: counted, never judged.
+function isterm(s, d, dash) { if (dash) sub(/^\t+/, "", s); return s == d }
+function shell_shebang(s) { return s ~ /^#![ \t]*([^ \t]*\/)?(env[ \t]+(-[^ \t]*[ \t]+)*)?(ba|z|k|da|a|mk)?sh([ \t]|$)/ }
+function advance(l) { QI[l]++; if (QI[l] > QN[l]) { QI[l] = 0; QN[l] = 0 } else QFIRST[l] = 1 }
+function push_level(d, dash,   i) {
+  SVsp[lvl] = sp; for (i = 1; i <= sp; i++) { SVstk[lvl, i] = stk[i]; SVpx[lvl, i] = px[i] }
+  SVld[lvl] = ld; for (i = 1; i <= ld; i++) SVlc[lvl, i] = LCOND[i]
+  SVwlo[lvl] = WLO; ED[lvl] = d; EDT[lvl] = dash
+  lvl++; sp = 1; stk[1] = "C"; px[1] = 0; ld = 0; WLO = FNR; QN[lvl] = 0; QI[lvl] = 0
+}
+function pop_to(l,   i) {
+  lvl = l; sp = SVsp[l]; for (i = 1; i <= sp; i++) { stk[i] = SVstk[l, i]; px[i] = SVpx[l, i] }
+  ld = SVld[l]; for (i = 1; i <= ld; i++) LCOND[i] = SVlc[l, i]
+  WLO = SVwlo[l]
+}
+function isw(c) { return c ~ /[A-Za-z0-9_]/ }
+function prevnb(s, i,   c) { i--; while (i >= 1) { c = substr(s, i, 1); if (c != " " && c != "\t") return c; i-- } return "" }
+function blanks(n,   r) { r = ""; while (n-- > 0) r = r " "; return r }
+function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
+
+# scan(s): build CL and GL for raw line s, carry quote state across lines,
+# queue heredocs, capture the comment text in COMMENT.
+function scan(s,   n, i, c, st, cl, gl, pv, k, rest, dash, q, d) {
+  n = length(s); cl = ""; gl = ""; i = 1; COMMENT = ""
+  while (i <= n) {
+    c = substr(s, i, 1); st = stk[sp]
+    if (st == "S") { if (c == "'") sp--; cl = cl " "; gl = gl " "; i++; continue }
+    if (st == "A") {
+      if (c == "\\") { cl = cl "  "; gl = gl "  "; i += 2; continue }
+      if (c == "'") sp--
+      cl = cl " "; gl = gl " "; i++; continue
+    }
+    if (st == "D") {
+      if (c == "\\") { cl = cl "  "; gl = gl substr(s, i, 2); i += 2; continue }
+      if (c == "\"") { sp--; cl = cl " "; gl = gl c; i++; continue }
+      if (c == "$" && substr(s, i + 1, 1) == "(") { sp++; stk[sp] = "X"; px[sp] = 0; cl = cl "$("; gl = gl "$("; i += 2; continue }
+      cl = cl " "; gl = gl c; i++; continue
+    }
+    # code: top level (C) or a $( ) inside double quotes (X)
+    if (c == "\\") { cl = cl substr(s, i, 2); gl = gl substr(s, i, 2); i += 2; continue }
+    if (c == "'") { sp++; stk[sp] = "S"; cl = cl " "; gl = gl " "; i++; continue }
+    if (c == "$" && substr(s, i + 1, 1) == "'") { sp++; stk[sp] = "A"; cl = cl "  "; gl = gl "  "; i += 2; continue }
+    if (c == "\"") { sp++; stk[sp] = "D"; cl = cl " "; gl = gl c; i++; continue }
+    if (c == "#") {
+      pv = (i == 1) ? "" : substr(s, i - 1, 1)
+      if (pv == "" || pv ~ /[ \t;&|(]/) { COMMENT = substr(s, i); cl = cl blanks(n - i + 1); gl = gl blanks(n - i + 1); break }
+    }
+    if (st == "X") {
+      if (c == "(") px[sp]++
+      else if (c == ")") { if (px[sp] == 0) sp--; else px[sp]-- }
+    }
+    if (substr(s, i, 3) == "<<<") { cl = cl "<<<"; gl = gl "<<<"; i += 3; continue }
+    if (substr(s, i, 2) == "<<") {
+      k = i + 2; dash = 0
+      if (substr(s, k, 1) == "-") { dash = 1; k++ }
+      while (substr(s, k, 1) == " " || substr(s, k, 1) == "\t") k++
+      q = substr(s, k, 1)
+      if (q == "'" || q == "\"" || q == "\\") k++; else q = ""
+      rest = substr(s, k)
+      if (match(rest, /^[A-Za-z_][A-Za-z0-9_]*/)) {
+        d = substr(rest, 1, RLENGTH); k += RLENGTH
+        if (q == "'" || q == "\"") { if (substr(s, k, 1) == q) k++ }
+        QN[lvl]++; Q[lvl, QN[lvl]] = d; QT[lvl, QN[lvl]] = dash; QF[lvl, QN[lvl]] = 0
+        QS[lvl, QN[lvl]] = (cl ~ /(^|[;&|({ \t])(bash|sh|zsh|ksh|dash)([ \t]+-[A-Za-z]+)*[ \t]*$/)
+        cl = cl "<<" blanks(k - i - 2); gl = gl "<<" blanks(k - i - 2); i = k; continue
+      }
+    }
+    cl = cl c; gl = gl c; i++
+  }
+  CL = cl; GL = gl
+}
+
+# tokens(s): the words and separators the walks care about, in order, into
+# TK (text) TP (position) TL (length). Keywords count only in command position,
+# and `done)` / `do|` at the start of a pattern is a case label, not a keyword.
+function tokens(s,   n, i, c, c2, j, w, pc, nc, kw, L) {
+  n = 0; i = 1; L = length(s)
+  while (i <= L) {
+    c = substr(s, i, 1)
+    if (c == ";") {
+      c2 = substr(s, i + 1, 1)
+      if (c2 == ";" || c2 == "&" || c2 == "|") { n++; TK[n] = ";;"; TP[n] = i; TL[n] = 2; i += 2; continue }
+    }
+    if (c ~ /[A-Za-z_]/ && (i == 1 || (!isw(substr(s, i - 1, 1)) && substr(s, i - 1, 1) !~ /[-$.{\/]/))) {
+      j = i; while (j <= L && isw(substr(s, j, 1))) j++
+      w = substr(s, i, j - i); kw = 0
+      if (w == "shift") kw = 1
+      else if (w == "set") { if (substr(s, j) ~ /^[ \t]+--/) kw = 1 }
+      else if (w ~ /^(do|done|case|esac|if|then|else|elif|fi|while|until|for|select)$/) {
+        pc = prevnb(s, i); nc = substr(s, j, 1)
+        if ((pc == "" || pc ~ /[;&|({)}]/ || substr(s, 1, i - 1) ~ /(^|[^A-Za-z0-9_])(do|then|else|elif|if|while|until|!)[ \t]+$/) && (nc == "" || nc ~ /[ \t;&|)<>]/)) {
+          kw = 1
+          if ((nc == ")" || nc == "|") && (pc == "" || pc == "(" || pc == "|")) kw = 0
+        }
+      }
+      if (kw) { n++; TK[n] = w; TP[n] = i; TL[n] = j - i }
+      i = j; continue
+    }
+    i++
+  }
+  return n
+}
+
+function is_fnbound(s) { return (s ~ /\)[ \t]*\{[ \t]*$/ || s ~ /^[ \t]*\}[ \t]*$/ || s ~ /^[ \t]*function[ \t]/) }
+
+# walkD(p): the stretch a count guard may sit in. The current line up to the
+# site (cut after its last `;;`, keyword, shift or `set --`), then earlier
+# non-blank lines until one holds any of those. Sets DCUR (current-line part).
+function walkD(p,   n, k, cut, text, L, cnt, s) {
+  n = tokens(substr(CL, 1, p - 1)); cut = 1
+  for (k = n; k >= 1; k--) { cut = TP[k] + TL[k]; break }
+  DCUR = substr(GL, cut, p - cut); text = DCUR
+  if (n > 0) return text
+  L = FNR - 1; cnt = 0
+  while (L >= WLO && cnt < 10) {
+    s = clx[L]
+    if (trim(s) == "") { L--; continue }
+    if (is_fnbound(s)) break
+    if (tokens(s) > 0) break
+    text = glx[L] "\n" text; L--; cnt++
+  }
+  return text
+}
+
+# walkR(p): the case arm (or loop body, or function prologue) holding the
+# site, nesting-aware, for the READ signals. Sets RSHIFT when another shift
+# or `set --` sits between the arm start and the site.
+function walkR(p,   L, seg, gseg, n, k, t, cd, dd, stop, text, cnt) {
+  cd = 0; dd = 0; text = ""; RSHIFT = 0; L = FNR; cnt = 0
+  while (L >= WLO && cnt <= 15) {
+    seg = (L == FNR) ? substr(clx[L], 1, p - 1) : clx[L]
+    gseg = (L == FNR) ? substr(glx[L], 1, p - 1) : glx[L]
+    if (L < FNR && is_fnbound(seg)) break
+    n = tokens(seg); stop = 0
+    for (k = n; k >= 1; k--) {
+      t = TK[k]
+      if (t == "esac") cd++
+      else if (t == "case") { if (cd > 0) cd--; else { stop = TP[k] + TL[k]; break } }
+      else if (t == ";;") { if (cd == 0 && dd == 0) { stop = TP[k] + TL[k]; break } }
+      else if (t == "done") dd++
+      else if (t == "do") { if (dd > 0) dd--; else { stop = TP[k] + TL[k]; break } }
+      else if (t == "shift" || t == "set") RSHIFT = 1
+    }
+    if (stop) return substr(gseg, stop) "\n" text
+    text = gseg "\n" text; L--; cnt++
+  }
+  return text
+}
+
+# enough(op, k, N): does `$# <op> k` guarantee at least N arguments?
+function enough(op, k, N) { if (op == "-ge" || op == ">=") return k + 0 >= N; return k + 0 >= N - 1 }
+
+# lastguard(t): the LAST count test followed by `||` in t. Sets GOP GK GPOS.
+function lastguard(t,   r, off, m, g) {
+  GPOS = 0; off = 0; r = t
+  while (1) {
+    if (match(r, /\[\[?[ \t]+"?\$#"?[ \t]+-(ge|gt)[ \t]+"?[0-9]+"?[ \t]+\]\]?[ \t]*\|\|/)) {
+      m = substr(r, RSTART, RLENGTH); GPOS = off + RSTART
+      GOP = (m ~ /-ge/) ? "-ge" : "-gt"; g = m; sub(/^.*-g[et][ \t]+"?/, "", g); sub(/[^0-9].*$/, "", g); GK = g
+      off += RSTART + RLENGTH - 1; r = substr(r, RSTART + RLENGTH); continue
+    }
+    if (match(r, /\(\([ \t]*\$#[ \t]*>=?[ \t]*[0-9]+[ \t]*\)\)[ \t]*\|\|/)) {
+      m = substr(r, RSTART, RLENGTH); GPOS = off + RSTART
+      GOP = (m ~ />=/) ? ">=" : ">"; g = m; sub(/^[^>]*>=?[ \t]*/, "", g); sub(/[^0-9].*$/, "", g); GK = g
+      off += RSTART + RLENGTH - 1; r = substr(r, RSTART + RLENGTH); continue
+    }
+    break
+  }
+  return GPOS > 0
+}
+
+# bare_count(t): a `$#` passed as a word (form b), not one inside a test.
+function bare_count(t,   r, b, a) {
+  r = t
+  while (match(r, /\$#/)) {
+    b = substr(r, 1, RSTART - 1); a = substr(r, RSTART + 2)
+    sub(/"$/, "", b); sub(/[ \t]+$/, "", b)
+    sub(/^"/, "", a)
+    if (b !~ /(\[|\[\[|\(\()$/ && a !~ /^[ \t]*(-[a-z][a-z]|[<>=!])/ && b !~ /\$$/) return 1
+    r = a
+  }
+  return 0
+}
+
+function signal(t,   m) {
+  if (t ~ /\$#/) return "a $# test in a shape not recognised"
+  if (match(t, /(^|[^A-Za-z0-9_])(exit|return|die[A-Za-z0-9_]*|refuse[A-Za-z0-9_]*|usage|fail[A-Za-z0-9_]*|abort)([^A-Za-z0-9_]|$)/)) {
+    m = substr(t, RSTART, RLENGTH); gsub(/[^A-Za-z0-9_]/, "", m); return "`" m "` before it"
+  }
+  if (t ~ /(^|[^A-Za-z0-9_])if([^A-Za-z0-9_]|$)/) return "an `if` before it"
+  if (t ~ /\[\[?[ \t]+-[nz][ \t]/) return "a -n/-z test before it"
+  if (t ~ /\$\{2:?\?/) return "a ${2:?} before it"
+  return ""
+}
+
+function emit(v, why) { printf "SITE\t%s\t%d\t%d\t%s\t%s%s\n", FILENAME, FNR, SN, v, why, (lvl > 0 && v != "heredoc" && v != "fixture") ? " [in a script written by a heredoc]" : "" }
+
+function classify(p, len,   after, D, R, s, loopc) {
+  if (ANN == "ok") { emit("annotated", ANNWHY); return }
+  if (ANN == "noreason") { emit("ANNOTATION", "`# shift-lint: ok` needs a reason after it"); return }
+  after = substr(CL, p + len)
+  if (after ~ /^[ \t]*([0-9]*[<>]&?[^ \t;|&]*[ \t]*)*\|\|/) { emit("guarded-c", "shift " SN " || ..."); return }
+  D = walkD(p)
+  if (lastguard(D)) {
+    if (enough(GOP, GK, SN)) {
+      if (GPOS > length(D) - length(DCUR)) emit("guarded-a", "$# " GOP " " GK " || ... on the same line")
+      else emit("guarded-d", "$# " GOP " " GK " || ... on an earlier line")
+    } else emit("WEAK", "the guard tests $# " GOP " " GK " but the line shifts " SN)
+    return
+  }
+  if (bare_count(D)) { emit("guarded-b", "a helper is handed $# first"); return }
+  R = walkR(p)
+  if (ld > 0 && !RSHIFT) {
+    loopc = LCOND[ld]
+    GOP = ""
+    if (loopc ~ /^while[ \t]/) {
+      if (match(loopc, /\[\[?[ \t]+"?\$#"?[ \t]+-(ge|gt)[ \t]+"?[0-9]+/)) { s = substr(loopc, RSTART, RLENGTH); GOP = (s ~ /-ge/) ? "-ge" : "-gt" }
+      else if (match(loopc, /\(\([ \t]*\$#[ \t]*>=?[ \t]*[0-9]+/)) { s = substr(loopc, RSTART, RLENGTH); GOP = (s ~ />=/) ? ">=" : ">" }
+    }
+    if (GOP != "") {
+      GK = s; sub(/^.*[^0-9]/, "", GK)
+      if (enough(GOP, GK, SN)) { emit("guarded-loop", "the while condition tests $# " GOP " " GK); return }
+    }
+  }
+  s = signal(R)
+  if (s != "") { emit("READ", (ld > 0 ? "in a loop" : "not in a loop") ", guarded some other way (" s ")"); return }
+  if (ld > 0) emit("UNGUARDED-LOOP", "in a loop with no guard: a value flag given last shifts nothing and the loop spins forever")
+  else emit("UNGUARDED", "not in a loop and no guard: a call with fewer than " SN " arguments shifts nothing")
+}
+
+function rawcount(s,   n, r) {
+  n = 0; r = s
+  while (match(r, /(^|[^A-Za-z0-9_$.{\/-])shift[ \t]+([2-9]|[1-9][0-9]+)([^0-9A-Za-z_]|$)/)) { n++; r = substr(r, RSTART + RLENGTH) }
+  return n
+}
+
+function heretext(raw, v, why,   r) {
+  r = raw
+  while (match(r, /shift[ \t]+([2-9]|[1-9][0-9]+)/)) {
+    SN = substr(r, RSTART, RLENGTH); sub(/^shift[ \t]+/, "", SN); emit(v, why); HERE++; r = substr(r, RSTART + RLENGTH)
+  }
+}
+
+FNR == 1 { reset_file() }
+{
+  lines++; raw = $0; nraw = rawcount(raw); RAW += nraw
+  glx[FNR] = ""; clx[FNR] = ""
+  # 1. the terminator of an enclosing script heredoc, outermost first
+  for (l = 0; l < lvl; l++) if (isterm(raw, ED[l], EDT[l])) { pop_to(l); advance(l); next }
+  # 2. a heredoc body at this level: text, or the first line of a script
+  if (QI[lvl] > 0) {
+    qi = QI[lvl]
+    if (isterm(raw, Q[lvl, qi], QT[lvl, qi])) { advance(lvl); next }
+    if (QFIRST[lvl]) {
+      QFIRST[lvl] = 0
+      if (!QF[lvl, qi] && (QS[lvl, qi] || shell_shebang(raw))) push_level(Q[lvl, qi], QT[lvl, qi])
+    }
+    if (QI[lvl] > 0) {
+      if (QF[lvl, qi]) heretext(raw, "fixture", "a heredoc annotated as a fixture: " QFWHY[lvl, qi])
+      else heretext(raw, "heredoc", "text inside a heredoc that is not a shell script")
+      next
+    }
+  }
+  # 3. code at this level
+  q0 = QN[lvl]
+  scan(raw); glx[FNR] = GL; clx[FNR] = CL
+  ANN = ""; ANNWHY = ""
+  # A whole-line comment is documentation: an annotation shares its line with code.
+  if (trim(CL) != "" && match(COMMENT, /^#[ \t]*shift-lint:/)) {
+    a = substr(COMMENT, RLENGTH + 1)
+    if (match(a, /^[ \t]*ok([ \t]|$)/)) { ANNWHY = trim(substr(a, RLENGTH + 1)); ANN = (ANNWHY == "") ? "noreason" : "ok" }
+    else if (match(a, /^[ \t]*fixture([ \t]|$)/)) {
+      ANNWHY = trim(substr(a, RLENGTH + 1))
+      if (QN[lvl] == q0) ANN = "nohere"
+      else if (ANNWHY == "") ANN = "noreasonfix"
+      else { ANN = "fixture"; for (k = q0 + 1; k <= QN[lvl]; k++) { QF[lvl, k] = 1; QFWHY[lvl, k] = ANNWHY } }
+    }
+    else ANN = "bad"
+  }
+  n = tokens(CL); for (k = 1; k <= n; k++) { LK[k] = TK[k]; LP[k] = TP[k]; LL[k] = TL[k] }
+  sites = 0
+  for (k = 1; k <= n; k++) {
+    if (LK[k] == "do") {
+      ld++; c = substr(GL, 1, LP[k] - 1)
+      if (trim(c) == "") { for (m = FNR - 1; m >= WLO && trim(glx[m]) == ""; m--) ; c = (m >= WLO) ? glx[m] : "" }
+      c = trim(c); if (c ~ /(^|[^A-Za-z0-9_])while[ \t]/) sub(/^.*while[ \t]/, "while ", c); LCOND[ld] = c
+    } else if (LK[k] == "done") { if (ld > 0) ld-- }
+    else if (LK[k] == "shift") {
+      r = substr(CL, LP[k] + 5)
+      if (match(r, /^[ \t]+([2-9]|[1-9][0-9]+)([^0-9A-Za-z_]|$)/)) {
+        SN = substr(r, 1, RLENGTH); gsub(/[^0-9]/, "", SN); sites++; CODE++
+        classify(LP[k], 5 + RLENGTH - ((substr(r, RLENGTH, 1) ~ /[0-9]/) ? 0 : 1))
+      }
+    }
+  }
+  if (ANN == "bad") { SN = 0; emit("ANNOTATION", "unknown `# shift-lint:` annotation (only `ok <reason>` and `fixture <reason>` exist)") }
+  else if (ANN == "nohere") { SN = 0; emit("ANNOTATION", "`# shift-lint: fixture` on a line that opens no heredoc") }
+  else if (ANN == "noreasonfix") { SN = 0; emit("ANNOTATION", "`# shift-lint: fixture` needs a reason after it") }
+  else if ((ANN == "ok" || ANN == "noreason") && sites == 0) { SN = 0; emit("ANNOTATION", "annotation on a line with no shift site") }
+  if (nraw > sites) IGN += nraw - sites
+  if (QN[lvl] > 0 && QI[lvl] == 0) { QI[lvl] = 1; QFIRST[lvl] = 1 }
+}
+END { printf "TOTAL\t%d\t%d\t%d\t%d\t%d\n", lines, RAW, CODE, HERE, IGN }
+AWK
+)
+
+# ---------------------------------------------------------------------------
+# File selection.
+# ---------------------------------------------------------------------------
+is_shell(){  # is_shell <path>: 0 shell, 1 not shell, 3 unreadable
+  local f="$1" b first interp
+  b="${f##*/}"
+  case "$b" in
+    *.sh|*.bash|*.zsh|*.ksh) head -c 1 "$f" >/dev/null 2>&1 || return 3; return 0 ;;
+    .zshrc|.zshenv|.zprofile|.zlogin|.zlogout|.zsh_*|.bashrc|.bash_profile|.bash_login|.bash_logout|.profile|.envrc|direnvrc)
+      head -c 1 "$f" >/dev/null 2>&1 || return 3; return 0 ;;
+    *.md|*.json|*.jsonl|*.yml|*.yaml|*.toml|*.txt|*.png|*.jpg|*.jpeg|*.gif|*.svg|*.ico|*.pdf|*.lock|*.plist|*.py|*.js|*.mjs|*.ts|*.css|*.html|*.xml|*.csv|*.exp|*.pl|*.rb|*.go|*.rs|*.c|*.h|*.swift)
+      return 1 ;;
+  esac
+  head -c 1 "$f" >/dev/null 2>&1 || return 3
+  IFS= read -r first < "$f" 2>/dev/null || [ -n "${first:-}" ] || return 1
+  case "$first" in '#!'*) ;; *) return 1 ;; esac
+  set -f; set -- ${first#??}; set +f
+  interp="${1:-}"; [ $# -gt 0 ] && shift
+  if [ "${interp##*/}" = env ]; then
+    while [ $# -gt 0 ]; do
+      case "$1" in -u) shift 2 || set -- ;; -*|*=*) shift ;; *) break ;; esac
+    done
+    interp="${1:-}"
+  fi
+  case "${interp##*/}" in sh|bash|zsh|ksh|dash|ash|mksh) return 0 ;; esac
+  return 1
+}
+
+run_lint(){
+  local paths=() p f rel top rc ferr gitmode=0
+  local files=() unread=() declined=() skipped=0
+  while [ $# -gt 0 ]; do paths+=("$1"); shift; done
+  if [ ${#paths[@]} -eq 0 ]; then
+    top="$(git rev-parse --show-toplevel 2>/dev/null)" || top=""
+    [ -n "$top" ] || refuse "no PATH given and this is not inside a git repo: name the files or directories to check"
+    gitmode=1
+    while IFS= read -r -d '' rel; do
+      if [ -L "$top/$rel" ]; then declined+=("$rel"); continue; fi
+      is_shell "$top/$rel"; rc=$?
+      case $rc in 0) files+=("$rel") ;; 3) unread+=("$rel") ;; *) skipped=$((skipped + 1)) ;; esac
+    done < <(git -C "$top" ls-files -z)
+  else
+    for p in "${paths[@]}"; do
+      if [ -L "$p" ] && [ -d "$p" ]; then declined+=("$p"); continue; fi
+      if [ -d "$p" ]; then
+        while IFS= read -r -d '' f; do
+          if [ -L "$f" ]; then declined+=("$f"); continue; fi
+          is_shell "$f"; rc=$?
+          case $rc in 0) files+=("$f") ;; 3) unread+=("$f") ;; *) skipped=$((skipped + 1)) ;; esac
+        done < <(find "$p" -name .git -prune -o \( -type f -o -type l \) -print0 2>/dev/null)
+        # A directory the walk could not enter is an omission: name it. (The
+        # sandbox denies home/.ssh, and find reports that only on stderr.)
+        while IFS= read -r ferr; do
+          [ -n "$ferr" ] && unread+=("$ferr")
+        done < <(find "$p" -name .git -prune -o -type d -print 2>&1 >/dev/null)
+      elif [ -e "$p" ] || [ -L "$p" ]; then
+        if [ -L "$p" ] && [ ! -e "$p" ]; then declined+=("$p"); continue; fi
+        is_shell "$p"; rc=$?
+        case $rc in 0) files+=("$p") ;; 3) unread+=("$p") ;; *) skipped=$((skipped + 1)) ;; esac
+      else
+        refuse "no such file or directory: $p"
+      fi
+    done
+  fi
+
+  for f in "${declined[@]+"${declined[@]}"}"; do printf '%s: declined symlink (not followed, not checked): %s\n' "$PROG" "$f" >&2; done
+  for f in "${unread[@]+"${unread[@]}"}"; do printf '%s: UNREADABLE (could not tell whether it is shell, not checked): %s\n' "$PROG" "$f" >&2; done
+  if [ ${#files[@]} -eq 0 ]; then
+    refuse "checked 0 shell files ($skipped other files skipped as not shell, ${#unread[@]} unreadable): nothing was checked, which is not a pass"
+  fi
+
+  local out arc
+  if [ $gitmode -eq 1 ]; then
+    out="$(builtin cd "$top" && LC_ALL=C awk "$AWK_PROG" "${files[@]}" 2>&1)"; arc=$?
+  else
+    out="$(LC_ALL=C awk "$AWK_PROG" "${files[@]}" 2>&1)"; arc=$?
+  fi
+  [ $arc -eq 0 ] || { printf '%s\n' "$out" >&2; refuse "the scanner failed (awk rc $arc): nothing can be concluded"; }
+  local total
+  total="$(printf '%s\n' "$out" | awk -F'\t' '$1=="TOTAL"')"
+  [ -n "$total" ] || refuse "the scanner printed no TOTAL line: nothing can be concluded"
+  local lines raw code here ign
+  IFS=$'\t' read -r _ lines raw code here ign <<<"$total"
+  [ "${lines:-0}" -gt 0 ] || refuse "checked ${#files[@]} shell files but read 0 lines from them: nothing can be concluded"
+
+  # Findings first, then ok sites under -v, then the denominator, always.
+  local nfind=0 nok=0 tag file line n v why
+  local c_a=0 c_b=0 c_c=0 c_d=0 c_loop=0 c_ann=0 c_here=0 c_fix=0 c_ul=0 c_u=0 c_w=0 c_r=0 c_an=0
+  while IFS=$'\t' read -r tag file line n v why; do
+    [ "$tag" = SITE ] || continue
+    case "$v" in
+      guarded-a) c_a=$((c_a + 1)) ;; guarded-b) c_b=$((c_b + 1)) ;; guarded-c) c_c=$((c_c + 1)) ;;
+      guarded-d) c_d=$((c_d + 1)) ;; guarded-loop) c_loop=$((c_loop + 1)) ;; annotated) c_ann=$((c_ann + 1)) ;;
+      heredoc) c_here=$((c_here + 1)) ;; fixture) c_fix=$((c_fix + 1)) ;; UNGUARDED-LOOP) c_ul=$((c_ul + 1)) ;; UNGUARDED) c_u=$((c_u + 1)) ;;
+      WEAK) c_w=$((c_w + 1)) ;; READ) c_r=$((c_r + 1)) ;; ANNOTATION) c_an=$((c_an + 1)) ;;
+    esac
+    case "$v" in
+      [A-Z]*) nfind=$((nfind + 1))
+        if [ "$n" = 0 ]; then printf '%s:%s: %s: %s\n' "$file" "$line" "$v" "$why"
+        else printf '%s:%s: %s: shift %s %s\n' "$file" "$line" "$v" "$n" "$why"; fi ;;
+      *) nok=$((nok + 1)); [ $VERBOSE -eq 1 ] && printf '%s:%s: ok %s: shift %s, %s\n' "$file" "$line" "$v" "$n" "$why" ;;
+    esac
+  done <<<"$out"
+  local sites=$((code + here))
+  printf '%s: checked %d shell files (%d lines; %d other files skipped as not shell, %d unreadable, %d symlinks declined), %d shift sites (N >= 2)\n' \
+    "$PROG" "${#files[@]}" "$lines" "$skipped" "${#unread[@]}" "${#declined[@]}" "$sites"
+  printf '%s:   ok %d: guarded a %d, b %d, c %d, d %d, by while condition %d, annotated %d, heredoc text %d, fixture heredoc %d\n' \
+    "$PROG" "$nok" "$c_a" "$c_b" "$c_c" "$c_d" "$c_loop" "$c_ann" "$c_here" "$c_fix"
+  printf '%s:   findings %d: unguarded in a loop %d, unguarded outside a loop %d, weak %d, read-it %d, bad annotation %d\n' \
+    "$PROG" "$nfind" "$c_ul" "$c_u" "$c_w" "$c_r" "$c_an"
+  printf '%s:   text: %d raw matches of shift N = %d in code + %d in heredocs + %d in comments or quoted strings\n' \
+    "$PROG" "$raw" "$code" "$here" "$ign"
+  [ $nfind -gt 0 ] && return 1
+  [ ${#unread[@]} -gt 0 ] && { printf '%s: REFUSED: %d file(s) could not be read (named above); clean only for what was read\n' "$PROG" "${#unread[@]}" >&2; return 2; }
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# Selftest. Every fixture is a REAL line from this repo (master at fcf8544 or
+# earlier), named with its source; the few mutations say so and say what was
+# changed. It runs THIS copy by absolute path, never the one on PATH.
+# ---------------------------------------------------------------------------
+selftest(){
+  local self dir T pass=0 fail=0 out rc
+  dir="$(builtin cd "$(dirname "$0")" && pwd)"; self="$dir/$(basename "$0")"
+  T="$(mktemp -d "${TMPDIR:-/tmp}/shift-lint-selftest.XXXXXX")" || refuse "selftest: cannot make a temp dir"
+  echo "shift-lint selftest: testing $self"
+  echo "  fixtures in $T"
+  chk(){ if [ "$2" -eq 0 ]; then pass=$((pass + 1)); echo "  PASS $1"; else fail=$((fail + 1)); echo "  FAIL $1"; fi; }
+  lint(){ out="$("$self" -v "$@" 2>&1)"; rc=$?; }
+  has(){ case "$out" in *"$1"*) return 0 ;; *) return 1 ;; esac; }
+
+  # --- F1: master decided cmd_add (home/.local/bin/decided lines 323-336) ---
+  cat > "$T/decided.sh" <<'FIX'   # shift-lint: fixture real lines, deliberately unguarded, for the selftest
+#!/usr/bin/env bash
+die_refused(){ printf 'decided: REFUSED: %s\n' "$*" >&2; exit 2; }
+cmd_add(){
+  local title="" topic="" holds="" body="" ruled="" status="standing" where="" home id f top stores=() s
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --topic) topic="${2:-}"; shift 2 ;;
+      --holds-in) holds="${2:-}"; shift 2 ;;
+      --body) body="${2:-}"; shift 2 ;;
+      --ruled-by) ruled="${2:-}"; shift 2 ;;
+      --status) status="${2:-}"; shift 2 ;;
+      --global) where=global; shift ;;
+      --project) where=project; shift ;;
+      --*) die_refused "add: unknown flag $1" ;;
+      *) [ -z "$title" ] && title="$1" || die_refused "add: one title only (quote it)"; shift ;;
+    esac
+  done
+  printf 'parsed topic=%s\n' "$topic"
+}
+cmd_add "$@"
+FIX
+  echo "=== UNGUARDED-LOOP: master decided's five value flags ==="
+  lint "$T/decided.sh"
+  [ $rc -eq 1 ]; chk "decided fixture: exit 1 (got $rc)" $?
+  local l; for l in 7 8 9 10 11; do has "decided.sh:$l: UNGUARDED-LOOP"; chk "decided.sh:$l flagged UNGUARDED-LOOP" $?; done
+  has "5 shift sites"; chk "denominator counts exactly the 5 sites (plain 'shift' is not a site)" $?
+  has "checked 1 shell files"; chk "denominator states the file count positively" $?
+
+  echo "=== the verdict matches real behaviour (run under an alarm, no side effects) ==="
+  local t0 t1 brc
+  perl -e 'alarm 3; exec @ARGV' bash "$T/decided.sh" --topic x >/dev/null 2>&1; brc=$?
+  [ $brc -eq 0 ]; chk "control: decided fixture with a value parses and exits 0 (rc $brc)" $?
+  t0=$SECONDS; brc="$(perl -e 'alarm 3; exec @ARGV' bash "$T/decided.sh" --topic >/dev/null 2>&1; echo $?)"; t1=$SECONDS
+  [ $brc -eq 142 ]; chk "decided fixture with --topic LAST spins until the alarm kills it (rc $brc, $((t1 - t0)) s)" $?
+
+  # --- F2: master imsg (home/.local/bin/imsg lines 148-157) + the real one-liner
+  #     from ci-watch-selftest:653, whose loop test `[ $# -gt 0 ]` is on the SAME
+  #     line and must not be read as a guard ---
+  cat > "$T/imsg.sh" <<'FIX'   # shift-lint: fixture real lines, deliberately unguarded, for the selftest
+#!/usr/bin/env bash
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --dry-run|-n) dry=1; shift ;;
+        --resolve)    resolve=1; shift ;;
+        --max)        max="${2:-}"; shift 2 ;;
+        --account)    acct="${2:-}"; shift 2 ;;
+        -h|--help)    usage; exit 0 ;;
+        --)           shift; break ;;
+        -*)           echo "imsg: unknown option '$1'" >&2; exit 1 ;;
+        *)            break ;;
+    esac
+done
+while [ $# -gt 0 ]; do case "$1" in --repo) repo="$2"; shift 2 ;; *) shift ;; esac; done
+FIX
+  echo "=== UNGUARDED-LOOP: master imsg, and a one-line loop ==="
+  lint "$T/imsg.sh"
+  has "imsg.sh:6: UNGUARDED-LOOP"; chk "imsg --max flagged" $?
+  has "imsg.sh:7: UNGUARDED-LOOP"; chk "imsg --account flagged" $?
+  has "imsg.sh:14: UNGUARDED-LOOP"; chk "ci-watch-selftest:653 one-liner flagged: the loop's own \$# test is not a guard" $?
+  has "imsg.sh:8: "; [ $? -ne 0 ]; chk "the arm after '-h|--help)  usage; exit 0 ;;' is not a site (control: no line-8 record)" $?
+
+  # --- F3: one guarded example of each form, all real ---
+  cat > "$T/guarded.sh" <<'FIX'   # shift-lint: fixture real lines, deliberately unguarded, for the selftest
+#!/usr/bin/env bash
+need_val(){ [ "$3" -ge 2 ] || refuse "$1: $2 needs a value (it was given last, with nothing after it). Nothing was written."; }
+cmd_add(){
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --kind) need_val add "$1" $#; kind="$2"; shift 2 ;;
+      --for) [ $# -ge 2 ] || refuse "add: --for needs a project name or a path"; fors+=("$2"); shift 2 ;;
+      --check) [ $# -ge 3 ] || refuse "add: --check takes a project AND its own done-when: --check <project> \"done-when\""
+               checks+=("$2"); cdws+=("$3"); shift 3 ;;
+      *) shift ;;
+    esac
+  done
+}
+_time(){ while [ $# -gt 0 ]; do case "$1" in -o) shift 2 || set -- ;; -*) shift ;; *) break ;; esac; done; }
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --range)  MODE="range"; RANGE="${2:-}"; shift 2 || shift ;;
+        --status)
+          F_STATUS="${2:-}"; shift 2 2>/dev/null || shift
+          case "$F_STATUS" in standing|deferred|superseded|withdrawn) ;; *) die_refused "--status must be standing (got '$F_STATUS')" ;; esac ;;
+    --db-path)
+      [[ $# -ge 2 ]] || { echo "Missing value for --db-path" >&2; exit 1; }
+      db_path="$2"
+      shift 2
+      ;;
+    esac
+done
+FIX
+  echo "=== guarded forms a, b, c, d (open-items, deletion guard, git-leak-scan, decided, watch-history-sync) ==="
+  lint "$T/guarded.sh"
+  [ $rc -eq 0 ]; chk "all-guarded fixture: exit 0 (got $rc)" $?
+  has "guarded.sh:6: ok guarded-b"; chk "form b: need_val ... \$# (open-items --kind)" $?
+  has "guarded.sh:7: ok guarded-a"; chk "form a: [ \$# -ge 2 ] || refuse on the same line (open-items --for)" $?
+  has "guarded.sh:9: ok guarded-d"; chk "form d: the test on the arm's first line, shift 3 on the next (open-items --check)" $?
+  has "guarded.sh:14: ok guarded-c"; chk "form c: shift 2 || set -- (deletion guard, time -o)" $?
+  has "guarded.sh:17: ok guarded-c"; chk "form c: shift 2 || shift (git-leak-scan --range)" $?
+  has "guarded.sh:19: ok guarded-c"; chk "form c with a redirection: shift 2 2>/dev/null || shift (decided --status)" $?
+  has "guarded.sh:24: ok guarded-d"; chk "form d across an assignment line (watch-history-sync --db-path)" $?
+  has "findings 0"; chk "summary states 'findings 0' positively" $?
+
+  # --- F4: the same lines MUTATED so each guard is gone or too small ---
+  cat > "$T/mutated.sh" <<'FIX'   # shift-lint: fixture real lines, deliberately unguarded, for the selftest
+#!/usr/bin/env bash
+cmd_add(){
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --check) [ $# -ge 2 ] || refuse "add: --check takes a project AND its own done-when: --check <project> \"done-when\""
+               checks+=("$2"); cdws+=("$3"); shift 3 ;;
+      --for) [ $# -gt 0 ] || refuse "add: --for needs a project name or a path"; fors+=("$2"); shift 2 ;;
+    --db-path)
+      [[ $# -ge 2 ]] || { echo "Missing value for --db-path" >&2; exit 1; }
+      shift
+      shift 2
+      ;;
+      --kind) need_val add "$1" "$2"; kind="$2"; shift 2 ;;
+      -o) shift 2 && set -- ;;
+    esac
+  done
+}
+FIX
+  echo "=== each guard removed or weakened is caught (mutations of the lines above) ==="
+  lint "$T/mutated.sh"
+  [ $rc -eq 1 ]; chk "mutated fixture: exit 1 (got $rc)" $?
+  has "mutated.sh:6: WEAK"; chk "open-items --check with -ge 2 before shift 3: WEAK" $?
+  has "mutated.sh:7: WEAK"; chk "open-items --for with -gt 0 before shift 2: WEAK" $?
+  has "mutated.sh:11: "; chk "watch-history-sync with a plain shift between guard and shift 2: not accepted" $?
+  has "mutated.sh:11: ok"; [ $? -ne 0 ]; chk "  ...and not reported ok" $?
+  has "mutated.sh:13: UNGUARDED-LOOP"; chk "need_val without \$#: not form b" $?
+  has "mutated.sh:14: UNGUARDED-LOOP"; chk "shift 2 && set --: not form c" $?
+
+  # --- F5: loop condition, not-a-loop, READ, annotation ---
+  cat > "$T/other.sh" <<'FIX'   # shift-lint: fixture real lines, deliberately unguarded, for the selftest
+#!/usr/bin/env bash
+check_missing(){
+    shift
+    local -a all_names=()
+    while (( $# >= 3 )); do
+        local cmd="$1" pkg_brew="$2" pkg_apt="$3"
+        shift 3
+        all_names+=("$cmd")
+    done
+}
+filtered_find() {
+  local dir="$1"
+  local type="$2"
+  shift 2
+}
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --target)
+            TARGET="${2:-}"
+            case "$TARGET" in
+                user|project) ;;
+                *) printf '%sclaude-hooks-sync: --target must be user or project (got %s)%s\n' \
+                          "$R" "${TARGET:-<empty>}" "$N" >&2; exit 2 ;;
+            esac
+            shift 2 ;;
+        -p|--profile)
+            if [[ -z "${2:-}" ]]; then
+                echo "Error: --profile requires a name argument." >&2
+                exit 1
+            fi
+            profile_name="$2"
+            shift 2
+            ;;
+        --crf)  crf="$2"; shift 2 ;;
+    esac
+done
+sweep() { # sweep BLOCK|ALLOW <label> <targets...>
+	local want="$1" label="$2"
+	shift 2   # shift-lint: ok fixed-arity helper, not a loop
+}
+arm() {
+    local label="$1" want="$2" check="$3"; shift 4   # shift-lint: ok
+}
+x=1   # shift-lint: ok nothing here
+#   shift-lint: checked 118 shell files, a whole-line comment quoting the output
+y=2   # shift-lint: skip this one
+FIX
+  echo "=== while condition, not a loop, read-it, annotations ==="
+  lint "$T/other.sh"
+  has "other.sh:7: ok guarded-loop"; chk "while (( \$# >= 3 )) guards shift 3 (.zsh_onboarding)" $?
+  has "other.sh:14: UNGUARDED: "; chk "fixed-arity prologue shift 2 outside a loop: UNGUARDED, not -LOOP (dirdiff filtered_find)" $?
+  has "other.sh:25: READ: shift 2 in a loop"; chk "nested case that exits first: READ (claude-hooks-sync --target)" $?
+  has "other.sh:32: READ: shift 2 in a loop"; chk "if [[ -z \"\${2:-}\" ]] ... exit: READ (init-vscode-project-settings --profile)" $?
+  has "other.sh:34: UNGUARDED-LOOP"; chk "control: the next arm in the same loop is still UNGUARDED-LOOP (.zshrc --crf)" $?
+  has "other.sh:39: ok annotated: shift 2, fixed-arity helper, not a loop"; chk "annotation with a reason: ok, reason printed (safe-rm-selftest sweep)" $?
+  has "other.sh:42: ANNOTATION"; chk "annotation with no reason: a finding (mv-wrapper-selftest arm)" $?
+  has "other.sh:44: ANNOTATION"; chk "annotation on a line with no site: a finding" $?
+  has "other.sh:45:"; [ $? -ne 0 ]; chk "a whole-line comment starting 'shift-lint:' is documentation, not an annotation" $?
+  has "other.sh:46: ANNOTATION: unknown"; chk "an unknown annotation word ('skip') is a finding" $?
+
+  # --- F6: text that is not code: comments, strings, heredocs, case labels ---
+  cat > "$T/text.sh" <<'FIX'   # shift-lint: fixture real lines, deliberately unguarded, for the selftest
+#!/usr/bin/env bash
+# argument left shifts NOTHING in bash, so `shift 2` in the parse loop spun forever (W-20260923-A36).
+echo "a flag given last makes shift 2 spin"
+printf '%s\n' 'shift 3 in single quotes'
+cat > "$out" <<'EOF'
+while [ $# -gt 0 ]; do case "$1" in -x) shift 2 ;; esac; done
+EOF
+	cat <<-EOT
+	shift 2
+	EOT
+while [ $# -gt 0 ]; do
+  case "$1" in
+    done)  shift; cmd_done  "$@"; exit $? ;;
+    --lines) n="$2"; shift 2 ;;
+  esac
+done
+y=$(( 1 << 2 )); echo "${done}"
+z="$(while [ $# -gt 0 ]; do shift 2; done)"
+FIX
+  echo "=== comments, strings, heredocs and case labels are not code ==="
+  lint "$T/text.sh"
+  has "text.sh:2:"; [ $? -ne 0 ]; chk "a comment mentioning shift 2 is not a site (open-items:825)" $?
+  has "text.sh:3:"; [ $? -ne 0 ]; chk "shift 2 inside double quotes is not a site" $?
+  has "text.sh:6: ok heredoc"; chk "a quoted heredoc body is heredoc text, counted, not judged" $?
+  has "text.sh:9: ok heredoc"; chk "a <<- heredoc with tab-indented body and terminator" $?
+  has "text.sh:14: UNGUARDED-LOOP"; chk "a 'done)' case label does not close the loop (c2:1230)" $?
+  has "text.sh:18: UNGUARDED-LOOP"; chk "a loop inside \$( ) inside double quotes is code" $?
+  has "= 2 in code + 2 in heredocs + 3 in comments or quoted strings"; chk "raw text matches reconcile: code + heredoc + ignored" $?
+
+  # --- F7: a heredoc that WRITES a script another program runs. Lines 3-16 are
+  #     master ci-watch-selftest's gh stub (lines 84-106, middle trimmed); its
+  #     --repo/--branch loop is one of the A55 hangs. ---
+  cat > "$T/emb.sh" <<'FIX'   # shift-lint: fixture real lines, deliberately unguarded, for the selftest
+#!/usr/bin/env bash
+D="$1"
+    cat > "$D/http-stub" <<'STUBEOF'
+#!/usr/bin/env bash
+sub="$1"; shift
+if [ "$sub" = run ]; then
+  shift                                  # drop "list"
+  repo=''; branch=''
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --repo)   repo="$2"; shift 2 ;;
+      --branch) branch="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+fi
+cat <<'INNER'
+shift 2 is text here
+INNER
+STUBEOF
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --x) x="$2"; shift 2 ;;
+  esac
+done
+bash <<'EOF'
+while [ $# -gt 0 ]; do case "$1" in -o) shift 2 ;; esac; done
+EOF
+cat > "$D/cfg.json" <<'JSON'
+{"note": "shift 2"}
+JSON
+cat > "$D/fix.sh" <<'EOF'   # shift-lint: fixture a deliberately broken script for a test
+#!/usr/bin/env bash
+while :; do x=1; shift 2; done
+EOF
+cat > "$D/fix2.sh" <<'EOF'   # shift-lint: fixture
+#!/bin/sh
+EOF
+echo hi   # shift-lint: fixture no heredoc here
+FIX
+  echo "=== a heredoc that writes a shell script is scanned as code (ci-watch-selftest's stub) ==="
+  lint "$T/emb.sh"
+  local L23
+  has "emb.sh:11: UNGUARDED-LOOP: shift 2 in a loop with no guard: a value flag given last shifts nothing and the loop spins forever [in a script written by a heredoc]"; chk "stub --repo inside the heredoc script: UNGUARDED-LOOP, marked as in a heredoc script" $?
+  has "emb.sh:12: UNGUARDED-LOOP"; chk "stub --branch flagged" $?
+  has "emb.sh:18: ok heredoc"; chk "a text heredoc INSIDE the script is text" $?
+  L23="$(printf '%s\n' "$out" | awk 'index($0, "emb.sh:23:")')"
+  case "$L23" in *UNGUARDED-LOOP*) case "$L23" in *"heredoc]"*) false ;; *) true ;; esac ;; *) false ;; esac
+  chk "after the script's terminator the outer file is code again, not marked as heredoc (line 23)" $?
+  has "emb.sh:27: UNGUARDED-LOOP"; chk "a heredoc fed to 'bash <<' is a script even without a shebang" $?
+  has "emb.sh:30: ok heredoc"; chk "a JSON heredoc is text, counted, not judged" $?
+  has "emb.sh:34: ok fixture"; chk "'# shift-lint: fixture <reason>' on the opener: body counted as fixture, not judged" $?
+  has "emb.sh:36: ANNOTATION: \`# shift-lint: fixture\` needs a reason"; chk "a fixture annotation with no reason is a finding" $?
+  has "emb.sh:39: ANNOTATION: \`# shift-lint: fixture\` on a line that opens no heredoc"; chk "a fixture annotation with no heredoc is a finding" $?
+
+  echo "=== refusals: nothing checked is never a pass ==="
+  printf '# notes\n' > "$T/notes.md"
+  lint "$T/notes.md"; [ $rc -eq 2 ] && has "checked 0 shell files"; chk "only a non-shell file: exit 2, says 0 checked (rc $rc)" $?
+  lint "$T/does-not-exist"; [ $rc -eq 2 ]; chk "a missing path: exit 2 (rc $rc)" $?
+  mkdir -p "$T/d"; : > "$T/d/empty.sh"
+  lint "$T/d"; [ $rc -eq 2 ] && has "read 0 lines"; chk "a shell file with 0 lines: exit 2, not clean (rc $rc)" $?
+  cp "$T/guarded.sh" "$T/locked.sh"; chmod 000 "$T/locked.sh"
+  lint "$T/guarded.sh" "$T/locked.sh"; [ $rc -eq 2 ] && has "UNREADABLE" && has "locked.sh"; chk "an unreadable file is named and the run exits 2 (rc $rc)" $?
+  chmod 600 "$T/locked.sh"
+  mkdir -p "$T/walk/shut"; cp "$T/guarded.sh" "$T/walk/g.sh"; cp "$T/decided.sh" "$T/walk/shut/d.sh"; chmod 000 "$T/walk/shut"
+  lint "$T/walk"; [ $rc -eq 2 ] && has "UNREADABLE" && has "shut"; chk "a directory the walk cannot enter is named and the run exits 2, not 0 (rc $rc)" $?
+  chmod 700 "$T/walk/shut"
+  lint "$T/walk"; [ $rc -eq 1 ] && has "d.sh:7: UNGUARDED-LOOP"; chk "  control: the same directory, opened, is walked and its finding appears (rc $rc)" $?
+  ln -s "$T/d" "$T/linkdir"
+  lint "$T/guarded.sh" "$T/linkdir"; has "declined symlink" && has "linkdir"; chk "a symlinked directory is named as declined" $?
+  out="$(builtin cd "$T" && "$self" 2>&1)"; rc=$?
+  [ $rc -eq 2 ] && has "not inside a git repo"; chk "no PATH outside a git repo: exit 2 (rc $rc)" $?
+  out="$("$self" --bogus 2>&1)"; rc=$?; [ $rc -eq 2 ]; chk "an unknown flag: exit 2 (rc $rc)" $?
+
+  echo "=== shebang detection ==="
+  printf '#!/usr/bin/env -S bash -e\nwhile :; do x=1; shift 2; done\n' > "$T/envs"
+  printf '#!/bin/zsh -f\nwhile :; do x=1; shift 2; done\n' > "$T/zsh1"
+  printf '#!/usr/bin/env -S uv run python3\nwhile :; do x=1; shift 2; done\n' > "$T/py1"
+  mkdir -p "$T/she"; mv "$T/envs" "$T/zsh1" "$T/py1" "$T/she/"
+  lint "$T/she"; has "envs:2: UNGUARDED-LOOP" && has "zsh1:2: UNGUARDED-LOOP"; chk "env -S bash and /bin/zsh shebangs are shell" $?
+  has "py1:"; [ $? -ne 0 ] && has "1 other files skipped"; chk "an env -S uv run python3 shebang is not shell, and is counted as skipped" $?
+
+  echo "=== this file checks clean against itself (its fixtures are annotated heredocs) ==="
+  lint "$self"; [ $rc -eq 0 ] && has "findings 0" && ! has "fixture heredoc 0"; chk "shift-lint on itself: exit 0, its fixtures counted as fixture heredocs (rc $rc)" $?
+
+  rm -rf "$T" 2>/dev/null
+  echo "shift-lint selftest: $pass passed, $fail failed"
+  [ $fail -eq 0 ]
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --selftest) SELFTEST=1; shift ;;
+    -v|--verbose) VERBOSE=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    --) shift; break ;;
+    -*) refuse "unknown flag $1 (see --help)" ;;
+    *) break ;;
+  esac
+done
+
+if [ $SELFTEST -eq 1 ]; then selftest; exit $?; fi
+run_lint "$@"

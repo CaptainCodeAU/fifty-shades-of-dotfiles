@@ -75,7 +75,7 @@ while [[ $# -gt 0 ]]; do
                 *) printf '%sclaude-hooks-sync: --target must be user or project (got %s)%s\n' \
                           "$R" "${TARGET:-<empty>}" "$N" >&2; exit 2 ;;
             esac
-            shift 2 ;;
+            shift 2 ;;   # shift-lint: ok --target value validated as user|project above
         -h|--help) sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) printf '%sclaude-hooks-sync: unknown option %s%s\n' "$R" "$1" "$N" >&2; exit 2 ;;
     esac
