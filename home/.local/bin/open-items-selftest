@@ -722,6 +722,19 @@ runw "$ZETA" show not-an-id
 wanteq "show: a string that is not an ID REFUSES (rc=2)" "2" "$RC"
 want   "  and says why" "not an item ID" "$OUT"
 
+# Two drawers can carry the SAME project name (a copied .project stamp, a clone keyed
+# from another path). --project cannot separate them, so it must refuse with PATHS.
+M_TW="$P/-twin-zeta/memory/WORK/items/open"; mkdir -p "$M_TW"
+printf 'zeta\n' > "$P/-twin-zeta/memory/WORK/items/.project"
+printf '## W-%s-A03 -- twin copy\n\nproject: zeta\nstatus: open\n' "$TODAY" > "$M_TW/W-$TODAY-A03.md"
+runw "$ZETA" show "W-$TODAY-A03" --project zeta
+wanteq "show --project that names TWO drawers still REFUSES (rc=2)" "2" "$RC"
+want   "  and prints the drawer PATHS, since the names are identical" "$P/-twin-zeta/memory/WORK" "$OUT"
+wantnot "  and prints neither item" "twin copy" "$OUT"
+command mv "$P/-twin-zeta" "$D/twin-zeta.moved"
+runw "$ZETA" show "W-$TODAY-A03" --project zeta
+wanteq "  CONTROL: with the twin moved away the same command works (rc=0)" "0" "$RC"
+
 runw "$ZETA" get "W-$TODAY-A01" done-when
 wanteq "get: an ID in two drawers REFUSES without --project (rc=2)" "2" "$RC"
 wantnot "  and prints neither value" "finish" "$OUT"

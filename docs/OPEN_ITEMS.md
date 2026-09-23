@@ -87,7 +87,7 @@ parked-by-Gavin and decision-withheld. `closed/` holds both `done` and `declined
 
 ## Every write is a commit (D-20260920-08 c)
 
-`add`, `close`, `park`, `decline`, `reopen`, `set`, `init`, `regen`, `migrate` each:
+`add`, `close`, `park`, `decline`, `reopen`, `supersede`, `set`, `init`, `regen`, `migrate` each:
 
 1. take a per-drawer lock (`items/.lock`, a directory; a dead holder is taken over),
 2. write the item file (the ID comes from `pj-id`, which stamps it with this machine's
@@ -149,6 +149,68 @@ deliberately left as history. So `open-items close|park|set|reopen|decline` acce
 items answering to one legacy ID (the same number under two letters) is REFUSED with both
 named, never guessed. `decided` does the same for `D-` IDs.
 
+## Reading one item, searching, JSON, supersede (W-20260923-A24, A21; 2026-09-23)
+
+```
+open-items show <W-ID> [--project p] [--json]      one item, any status, any drawer
+open-items get <W-ID> <field> [--project p]        raw value; also id | title | body | file
+open-items --grep "words" [--all] [--closed]       every word, case-insensitive
+open-items [--all | --project p] [--closed] --json  the listing as one JSON object
+open-items supersede <old> <new> [--project p]     decline old -> new, back-pointer on new
+```
+
+**IDs are unique per drawer only.** `W-20260923-A01` was in three drawers on the day this
+was built, so `show`, `get` and `supersede` search EVERY drawer, and an ID found in two
+is REFUSED (exit 2) with the projects named. They never prefer the current repo's copy:
+that would be a guess that reads like an answer, and on a write it edits the wrong item.
+`--project <name>` settles it. Two drawers with the SAME name cannot be told apart by it;
+the refusal then prints their paths. A bare pre-P8a ID resolves as it does for `close`.
+
+**`show`** prints the block on stdout and `<id> in <project> (<path>)` on stderr, so the
+block pipes clean. It works on legacy drawers too, and stops at the next `## ` section. A
+miss is exit 1 with the denominator: items searched, every status, and the drawers.
+
+**`get`** prints one field's raw value. A field that repeats (`holds-in`, `supersedes`)
+prints every value, one per line. An ABSENT field is exit 1 and names the fields that are
+present, because an empty line on stdout reads the same as a field that is present and
+empty. `body` is the prose after the header; `title`, `id` and `file` are derived.
+
+**`--grep`** searches the title, the body and the free-text fields (`done-when`, `next`,
+`holds-in` ...). It does NOT search the tool-owned lines `project`, `status`, `kind`,
+`size`, `raised`: every item carries its project name and a session ID, so a search for
+either would match the whole drawer. Scope follows the listing: the current drawer by
+default, `--all`, `--project`, and `--closed`/`--status`. A miss prints the denominator,
+for example `no match for "x" in 41 open item(s) across 1 drawer(s)`, and says which of
+`--closed` and `--all` would widen it. Quote a phrase: the words are ANDed.
+
+**`--json`** is jq-free and jq-valid (the selftest runs `jq .`, with a control proving jq
+rejects a raw control character, and round-trips a body holding quotes, backslashes, a tab,
+a 0x01 and non-ASCII). The escaper walks each string one character at a time instead of
+using awk's `gsub`, because awks disagree on backslashes in a `gsub` replacement. Shape:
+
+```
+{"scope":"every project","status_filter":"open","grep":null,
+ "drawers_searched":5,"items_searched":54,"count":54,"items":[
+ {"id":"W-...","title":"...","project":"...","status":"open","drawer":"...",
+  "layout":"items","fields":{"done-when":"...","holds-in":["repo:a","repo:b"]},"body":"..."}]}
+```
+
+The top-level `project` and `status` are the EFFECTIVE values (status defaults to open, as
+the listing filter reads it). `fields` is raw: `holds-in` and `supersedes` are always
+arrays, any other field is a string unless it repeats, and then an array, so nothing in the
+file is dropped. A miss is exit 1 and still prints valid JSON with `count: 0`. `show --json`
+prints the single item object.
+
+**`supersede <old> <new>`** declines the old item, adds `superseded-by: <new>` to its
+header and a dated `**DECLINED**` note naming the new title, moves it to `closed/`, and
+adds `supersedes: <old>` to the new item (repeatable: one item can replace several). The
+two may be in different drawers; each pointer then names the other project, as in
+`superseded-by: W-... (project omega)`, and each drawer gets its own lock and its own
+commit through the same `finish_write` as `close`. Refused, with nothing changed: an old
+item that is already done or declined, a new one that is declined, an item superseding
+itself, an unknown ID (a write never "misses"), and any item in a legacy drawer. `set`
+cannot write either pointer field.
+
 ## Multi-drawer output: the blank line between drawers is load-bearing (X0, 2026-09-22)
 
 `--all` used to GLUE the first header of each drawer onto the previous drawer's last body
@@ -199,4 +261,6 @@ every command, the required-field refusal with its passing control, twenty concu
 adds all committed, a mixed machine (one legacy, one items), the symlinked drawer that
 must not be committed, a commit refused by a hook that must not lose the write, a
 transient index lock, hand-edit rescue with its control, regeneration, and migration
-(dry run into scratch, then real).
+(dry run into scratch, then real). Sections M to P (2026-09-23) cover `show`, `get`,
+`--json`, `--grep` and `supersede` on a fixture with the same ID in two drawers plus a
+legacy drawer, including a same-drawer and a cross-drawer supersede.
