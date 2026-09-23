@@ -65,6 +65,14 @@ raised: 2026-09-20 (session <id>)         tool-filled
 Body prose.
 ```
 
+`set` REPLACES a field. On a non-empty text field (`next`, `when`, `done-when`,
+`blocked-on`) that replace prints a WARNING naming how many characters it dropped and the
+old text, unless the new value starts with the old one. To add rather than replace, use
+`set --add` (or `--append`): a text field gets `; <value>` on the same line, and `body`
+gets a new paragraph at the end of the file. `body` is append-only, because the same place
+holds the `**DONE date.**` notes that `close`, `park` and `decline` write. `set --add
+holds-in` is unchanged: one more line (W-20260923-A20).
+
 `parked` means do not work it and do not re-ask until Gavin raises it; it covers
 parked-by-Gavin and decision-withheld. `closed/` holds both `done` and `declined`.
 `declined` is what the wrap-up writes for "leave it", so it is not asked again.

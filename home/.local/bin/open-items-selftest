@@ -374,13 +374,64 @@ wanteq "set --add holds-in appends (rc=0)" "0" "$RC"
 wanteq "  three lines now" "3" "$(grep -c '^holds-in:' "$F4")"
 wanteq "  appended after the existing ones" "drawer:x.md|drawer:y.md|repo:z.md" "$(sed -n 's/^holds-in: //p' "$F4" | tr '\n' '|' | sed 's/|$//')"
 want   "  raised still last in the header (control)" "raised:" "$(awk 'NR>2 && /^$/{exit} NR>2{l=$0} END{print l}' "$F4")"
-runw "$ZETA" set --add "W-$TODAY-A04" next "x"
-wanteq "set --add on a single-valued field REFUSES (rc=2)" "2" "$RC"
+# Until W-20260923-A20 this arm used `next`, which --add now appends to. An enum field
+# is the case that must still refuse.
+runw "$ZETA" set --add "W-$TODAY-A04" kind "decide"
+wanteq "set --add on an enum field (kind) REFUSES (rc=2)" "2" "$RC"
 runw "$ZETA" set "W-$TODAY-A04" next "a" "b"
 wanteq "set with two values on a single-valued field REFUSES (rc=2)" "2" "$RC"
 runw "$ZETA" set "W-$TODAY-A04" holds-in bare/path.md
 wanteq "set holds-in without a marker REFUSES (rc=2)" "2" "$RC"
 wanteq "  and the file keeps its three lines (control)" "3" "$(grep -c '^holds-in:' "$F4")"
+# W-20260923-A20: set used to REPLACE a text field whole and say nothing. --add appends,
+# and a replace that drops text says how much. Each "no warning" arm is twinned with one
+# where the warning MUST appear, or a warning that never fires would pass them all.
+runw "$ZETA" set "W-$TODAY-A04" next "first plan"
+wanteq  "A20: set next on an EMPTY field (rc=0)" "0" "$RC"
+wantnot "A20:   and drops nothing, so no warning" "WARNING" "$OUT"
+runw "$ZETA" set --add "W-$TODAY-A04" next "second step"
+wanteq  "A20: set --add next appends (rc=0)" "0" "$RC"
+want    "A20:   and says appended" "next appended" "$OUT"
+wanteq  "A20:   the EARLIER text survives, joined by '; '" "first plan; second step" "$(sed -n 's/^next: //p' "$F4")"
+wanteq  "A20:   still one next: line" "1" "$(grep -c '^next:' "$F4")"
+wantnot "A20:   and an append warns about nothing" "WARNING" "$OUT"
+runw "$ZETA" set --append "W-$TODAY-A04" next "third"
+wanteq  "A20: --append is the same as --add" "first plan; second step; third" "$(sed -n 's/^next: //p' "$F4")"
+A20_OLD="first plan; second step; third"
+runw "$ZETA" set "W-$TODAY-A04" next "replaced"
+wanteq  "A20: a plain set on a NON-EMPTY next still replaces (rc=0)" "0" "$RC"
+wanteq  "A20:   the file holds only the new value" "replaced" "$(sed -n 's/^next: //p' "$F4")"
+want    "A20:   and WARNS that it replaced text" "WARNING: set REPLACED next" "$OUT"
+want    "A20:   naming how many characters were dropped" "dropped ${#A20_OLD} character(s)" "$OUT"
+want    "A20:   and the text itself, so it can be put back" "$A20_OLD" "$OUT"
+runw "$ZETA" set "W-$TODAY-A04" next "replaced, and then some"
+wantnot "A20: CONTROL a value that KEEPS the old text as its start drops nothing, so no warning" "WARNING" "$OUT"
+runw "$ZETA" set "W-$TODAY-A04" kind decide
+wantnot "A20: CONTROL an enum field (kind) never warns" "WARNING" "$OUT"
+runw "$ZETA" set "W-$TODAY-A04" kind do
+# body: append-only, a new paragraph each time, the header left alone.
+runw "$ZETA" set --add "W-$TODAY-A04" body "First appended paragraph."
+wanteq  "A20: set --add body (rc=0)" "0" "$RC"
+runw "$ZETA" set --add "W-$TODAY-A04" body "Second appended paragraph."
+want    "A20:   the EARLIER paragraph survives a second append" "First appended paragraph." "$(cat "$F4")"
+wanteq  "A20:   in order, a blank line between" "First appended paragraph.||Second appended paragraph." \
+        "$(awk '/^First appended/{p=1} p' "$F4" | tr '\n' '|' | sed 's/|$//')"
+A20_HDR="$(awk 'NR>2 && /^$/{exit} NR>2' "$F4")"
+want    "A20:   the header is still there (control)" "raised:" "$A20_HDR"
+wantnot "A20:   and the appended body sits BELOW it, not inside it" "appended paragraph" "$A20_HDR"
+runw "$ZETA" set "W-$TODAY-A04" body "wipe it"
+wanteq  "A20: a plain set body REFUSES (rc=2): body is append-only" "2" "$RC"
+want    "A20:   and names --add" "set --add" "$OUT"
+wantnot "A20:   and the body was not touched" "wipe it" "$(cat "$F4")"
+runw "$ZETA" set --add "W-$TODAY-A04" next "$(printf 'two\nlines')"
+wanteq  "A20: a newline in a one-line field REFUSES (rc=2)" "2" "$RC"
+# A backslash in the EARLIER text must survive the append. awk -v expands escapes, and
+# an append re-reads and re-writes the old text, so every append would expand it again.
+runw "$ZETA" set "W-$TODAY-A04" blocked-on 'C:\temp\new'
+wanteq  "A20: a backslash is written literally by set" 'C:\temp\new' "$(sed -n 's/^blocked-on: //p' "$F4")"
+runw "$ZETA" set --add "W-$TODAY-A04" blocked-on 'and D:\x'
+wanteq  "A20:   and survives an append" 'C:\temp\new; and D:\x' "$(sed -n 's/^blocked-on: //p' "$F4")"
+wanteq  "A20: CONTROL holds-in untouched by all of the above" "drawer:x.md|drawer:y.md|repo:z.md" "$(sed -n 's/^holds-in: //p' "$F4" | tr '\n' '|' | sed 's/|$//')"
 # the session id the harness really sets is CLAUDE_CODE_SESSION_ID (P5.3); the old name stays as a fallback
 OUT="$(cd "$ZETA" && OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" CLAUDE_CODE_SESSION_ID=cc-real CLAUDE_SESSION_ID=sess-test "$TOOL" add "real id" --done-when i 2>&1)"; RC=$?
 want   "raised uses CLAUDE_CODE_SESSION_ID when set" "(session cc-real)" "$(cat "$ZW/items/open/W-$TODAY-A05.md")"

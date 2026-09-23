@@ -13,8 +13,8 @@
 #   open-items add "title" --done-when "..." [--kind do|decide] [--size small|medium|large]
 #                  [--when ..] [--next ..] [--blocked-on ..] [--holds-in repo:..|drawer:..|~/..]... [--body ..]
 #   open-items close|decline|park|reopen <W-ID> ["note"]
-#   open-items set <W-ID> <field> "value"       (holds-in: several values replace the set)
-#   open-items set --add <W-ID> holds-in "value"   append one holds-in line, keep the rest
+#   open-items set <W-ID> <field> "value"       replace; WARNS on dropped text (holds-in: several values replace the set)
+#   open-items set --add|--append <W-ID> <field> "value"   holds-in: one more line; next/when/done-when/blocked-on: "; value"; body: a paragraph
 #   open-items init                 create items/ for a project that has no drawer yet
 #   open-items regen                rebuild OPEN.md from items/ (rescues a hand edit first)
 #   open-items migrate [--dry-run --into <dir>] [--park W-ID,..]   legacy OPEN.md -> items/
@@ -229,7 +229,11 @@ find_item(){                    # find_item <work> <W-ID> -> path, rc 1 miss, rc
 # Set a header field in place: replace if present, else append after the last header field.
 set_field(){                    # set_field <file> <field> <value>
   local f="$1" k="$2" v="$3" tmp="$1.tmp"
-  awk -v k="$k" -v v="$v" '
+  # The value goes in through ENVIRON, never `awk -v`: -v expands backslash escapes, so
+  # `C:\temp` was written as `C:<TAB>emp`, and `set --add` re-reads the old text and would
+  # expand it AGAIN on every append (W-20260923-A20).
+  OI_SET_V="$v" awk -v k="$k" '
+    BEGIN { v = ENVIRON["OI_SET_V"] }
     NR == 1 { print; next }
     !done && inhdr == 0 && $0 == "" { inhdr = 1; print; next }
     inhdr == 1 && $0 ~ "^" k ":" { print k ": " v; done = 1; next }
@@ -516,18 +520,37 @@ cmd_status(){                   # cmd_status <new-status> <W-ID> [note]
   finish_write "$w" "open-items: $st $id -- $(title_of "$dest")"
 }
 
+# W-20260923-A20. `set` on a free-text field REPLACED it whole and said nothing, so a
+# session adding one clause to `next` silently dropped the earlier plan. Now:
+#   set --add (or --append) on a text field appends after "; ", on body as a new paragraph;
+#   a plain set that drops non-empty text says so, with the count of characters dropped.
+# body is append-only: it also holds the **DONE date.** notes close/park/decline write, and a
+# replace would take those with it.
+TEXT_FIELDS="done-when when next blocked-on"
+is_text_field(){ case " $TEXT_FIELDS " in *" $1 "*) return 0;; *) return 1;; esac; }
+hdr_field_of(){                 # hdr_field_of <file> <field>: the HEADER value only, never a body line
+  awk -v k="$1" 'NR == 1 || (NR == 2 && $0 == "") { next }
+    $0 == "" { exit }
+    index($0, k ":") == 1 { v = substr($0, length(k) + 2); sub(/^[ \t]*/, "", v); print v; exit }' "$2"
+}
 cmd_set(){
-  local mode=replace id k v w f
-  [ "${1:-}" = --add ] && { mode=add; shift; }
+  local mode=replace id k v w f old="" dropped=0
+  case "${1:-}" in --add|--append) mode=add; shift ;; esac
   id="${1:-}"; k="${2:-}"; v="${3:-}"
   [ -n "$id" ] && [ -n "$k" ] && [ $# -ge 3 ] || refuse "set: usage: open-items set [--add] <W-ID> <field> \"value\"..."
   case "$k" in status) refuse "set: change status with close|park|decline|reopen" ;; project|raised) refuse "set: $k is tool-owned" ;;
-    kind|size|done-when|when|next|blocked-on|holds-in) ;; *) refuse "set: unknown field $k" ;; esac
+    kind|size|done-when|when|next|blocked-on|holds-in|body) ;; *) refuse "set: unknown field $k" ;; esac
   if [ "$k" = holds-in ]; then
     shift 2; for v in "$@"; do valid_holds "$v" || refuse "set: holds-in needs a root marker: repo:<path>, drawer:<path> or ~/<path>"; done
   else
     [ $# -eq 3 ] || refuse "set: $k takes one value"
-    [ "$mode" = replace ] || refuse "set: --add is for holds-in only"
+    case "$k" in
+      body) [ "$mode" = add ] || refuse "set: body is append-only; use 'open-items set --add $id body \"text\"' (a replace would also drop the status notes kept there)" ;;
+      kind|size) [ "$mode" = replace ] || refuse "set: --add is for holds-in, body and the text fields ($TEXT_FIELDS), not $k" ;;
+    esac
+    [ "$mode" = replace ] || [ -n "$v" ] || refuse "set --add: nothing to append to $k"
+    # A header field is one line; a newline in its value would start a new, bogus field.
+    [ "$k" = body ] || case "$v" in *$'\n'*) refuse "set: $k is one line; the value holds a newline (use body for paragraphs)" ;; esac
   fi
   w="$(writable_drawer)" || exit 2
   f="$(find_item "$w" "$id")" || { [ $? -eq 2 ] && exit 2; refuse "set: no item $id in $(name_of "$w")"; }
@@ -536,11 +559,25 @@ cmd_set(){
   if [ "$k" = holds-in ]; then
     [ "$mode" = replace ] && drop_field "$f" "$k"
     for v in "$@"; do add_field "$f" "$k" "$v"; done
+    printf '%s %s set\n' "$id" "$k"
+    finish_write "$w" "open-items: set $id $k"
+    return
+  fi
+  if [ "$k" = body ]; then
+    [ -n "$(tail -c 1 "$f")" ] && printf '\n' >> "$f"     # a file saved without its last newline
+    printf '\n%s\n' "$v" >> "$f"
   else
+    old="$(hdr_field_of "$k" "$f")"
+    if [ "$mode" = add ]; then
+      [ -n "$old" ] && v="$old; $v"
+    elif [ -n "$old" ] && is_text_field "$k"; then
+      case "$v" in "$old"*) ;; *) dropped=${#old} ;; esac   # a value that keeps the old text as its start drops nothing
+    fi
     set_field "$f" "$k" "$v"
   fi
-  printf '%s %s set\n' "$id" "$k"
-  finish_write "$w" "open-items: set $id $k"
+  if [ "$mode" = add ]; then printf '%s %s appended\n' "$id" "$k"; else printf '%s %s set\n' "$id" "$k"; fi
+  [ "$dropped" -gt 0 ] && loud "WARNING: set REPLACED $k on $id and dropped $dropped character(s) of earlier text: \"$old\". To keep text and add to it, use: open-items set --add $id $k \"...\""
+  if [ "$mode" = add ]; then finish_write "$w" "open-items: set --add $id $k"; else finish_write "$w" "open-items: set $id $k"; fi
 }
 
 cmd_init(){
