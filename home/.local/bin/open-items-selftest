@@ -1164,7 +1164,432 @@ else
   wanteq "race with the claim: simultaneous adds in two drawers never share an ID (duplicates of 4)" "0" "$U_ON"
 fi
 
+
+# ==============================================================================
+# V  A16 write side (W-20260923-A28, D-20260923-A09, safety rules P1-P12 in
+#    docs/OPEN_ITEMS_CROSS_PROJECT_SAFETY.md). Every refusal arm checks the refusal's
+#    TEXT as well as rc 2: master's tool refuses every new verb and flag as "unknown",
+#    and an arm satisfied by that would prove nothing.
+# ==============================================================================
+printf 'V  A16: owners, watchers, checks, reach, moves, the inbox\n'
+export CLAUDE_CODE_SESSION_NAME=sess-name
+NM=0
+nm(){ NM=$((NM+1)); printf '  NOT MEASURED %s (%s)\n' "$1" "$2"; }
+lastid(){ printf '%s\n' "$OUT" | sed -n 's/^\(W-[0-9]\{8\}-[A-Z][0-9]*\)$/\1/p' | head -1; }
+ifile(){ local d; for d in open parked closed; do [ -f "$1/items/$d/$2.md" ] && { printf '%s' "$1/items/$d/$2.md"; return 0; }; done; return 1; }
+nfiles(){ find "$1/items/open" "$1/items/parked" "$1/items/closed" -name 'W-*.md' 2>/dev/null | wc -l | tr -d ' '; }
+shaf(){ [ -f "$1" ] && shasum -a 256 "$1" | cut -d' ' -f1 || printf 'absent'; }
+# mkrepo <name> [group] [--nocommit-group]: a fixture repo with one commit, a drawer via init.
+mkrepo(){
+  local r="$D/$1"
+  mkdir -p "$r"; git -C "$r" init -q 2>/dev/null
+  git -C "$r" config user.email t@t; git -C "$r" config user.name t
+  printf 'readme\n' > "$r/README"; git -C "$r" add README
+  if [ -n "${2:-}" ]; then mkdir -p "$r/.claude"; printf 'records: private\ngroup: %s\n' "$2" > "$r/.claude/pj-homes"; git -C "$r" add .claude/pj-homes; fi
+  git -C "$r" -c commit.gpgsign=false commit -q -m init 2>/dev/null
+  mkdir -p "$P/$(key "$r")/memory/WORK"
+  runw "$r" init
+}
+wk(){ printf '%s' "$P/$(key "$D/$1")/memory/WORK"; }
+# A real terminal, driven by expect: the ONLY way the TTY gates can be passed. The sandbox
+# denies openpty, so there these arms are reported NOT MEASURED, never passed.
+# expect exits 0 even when spawn fails ("no more ptys"), so the probe must see a real
+# terminal on the far side: rc 7 comes only from [ -t 0 ] being true there.
+PTY_OK=""; expect -c 'spawn sh -c {[ -t 0 ] && exit 7}; expect eof; exit [lindex [wait] 3]' >/dev/null 2>&1; [ $? -eq 7 ] && PTY_OK=1
+cat > "$ROOT/tty.exp" <<'EXP'
+set ans [lindex $argv 0]
+set cmd [lrange $argv 1 end]
+set timeout 30
+log_user 1
+spawn {*}$cmd
+expect {
+  "confirm:" { send -- "$ans\r"; exp_continue }
+  eof {}
+  timeout { exit 124 }
+}
+set r [wait]
+exit [lindex $r 3]
+EXP
+tty_run(){ local ans="$1" d="$2"; shift 2; OUT="$(cd "$d" && OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" CLAUDE_CODE_SESSION_ID=sess-test expect -f "$ROOT/tty.exp" -- "$ans" "$@" 2>&1)"; RC=$?; }
+
+mk_dotclaude
+mkrepo alpha g; mkrepo beta g; mkrepo gamma h; mkrepo nogroup
+AW2="$(wk alpha)"; BW2="$(wk beta)"; GW2="$(wk gamma)"
+
+printf 'V1 P1: a header value is one plain line (the forgery measured in M1)\n'
+n0="$(nfiles "$AW2")"
+runw "$D/alpha" add "harmless" --done-when $'x\nreach: mandatory'
+wanteq "P1: a newline in --done-when REFUSES (rc=2)" "2" "$RC"
+want   "P1:   and names the control character, not an unknown flag" "control character" "$OUT"
+wanteq "P1:   and wrote NO file (count before = after)" "$n0" "$(nfiles "$AW2")"
+runw "$D/alpha" add $'title\nwatch: beta' --done-when x
+wanteq "P1: a newline in the TITLE refuses (rc=2)" "2" "$RC"
+want   "P1:   naming the title" "the title holds a control" "$OUT"
+runw "$D/alpha" add "t" --done-when x --check beta $'dw\npassed: beta 2026-09-23'
+wanteq "P1: a newline in a --check done-when refuses (rc=2)" "2" "$RC"
+want   "P1:   naming --check" "--check (done-when) holds a control" "$OUT"
+runw "$D/alpha" add $'osc \e]52;c;aGk=\a title' --done-when x
+want   "P1: an ESC (OSC 52) in a title is refused" "control character" "$OUT"
+runw "$D/alpha" add $'rtl \xe2\x80\xae title' --done-when x
+want   "P1: a U+202E bidi override in a title is refused" "bidi" "$OUT"
+wanteq "P1:   none of the four refused adds wrote a file" "$n0" "$(nfiles "$AW2")"
+runw "$D/alpha" add "plain" --done-when "a plain value"
+wanteq "P1 CONTROL: the same add with plain values writes (rc=0)" "0" "$RC"
+V_PLAIN="$(lastid)"
+runw "$D/alpha" get "$V_PLAIN" reach
+wanteq "P1 CONTROL:   and the item has no reach: field (get rc=1)" "1" "$RC"
+runw "$D/alpha" set "$V_PLAIN" next $'a\tb'
+wanteq "P1: set with a TAB in a one-line field refuses (rc=2; master only refused a newline)" "2" "$RC"
+want   "P1:   naming the control character" "control character" "$OUT"
+runw "$D/alpha" set "$V_PLAIN" next "tab free"
+wanteq "P1 CONTROL: the same set without the tab works (rc=0)" "0" "$RC"
+
+printf 'V2 filed-by, --for, the owner\n'
+F_PL="$(ifile "$AW2" "$V_PLAIN")"
+want   "filed-by: every add records the project and session it came from" "filed-by: alpha (session sess-name) $(date +%Y-%m-%d)" "$(cat "$F_PL")"
+runw "$D/alpha" add "for beta" --done-when y --for beta
+wanteq "--for beta from alpha writes (rc=0)" "0" "$RC"
+V_FOR="$(lastid)"
+wanteq "  into BETA's drawer" "1" "$([ -n "$(ifile "$BW2" "$V_FOR")" ] && echo 1)"
+wanteq "  and not alpha's" "1" "$(ifile "$AW2" "$V_FOR" >/dev/null || echo 1)"
+want   "  project: names the owner" "project: beta" "$(cat "$(ifile "$BW2" "$V_FOR")")"
+want   "  filed-by: names where it was filed from" "filed-by: alpha (session sess-name)" "$(cat "$(ifile "$BW2" "$V_FOR")")"
+wanteq "  and beta's drawer is COMMITTED" "0" "$(git -C "$DC" status --porcelain -- "projects/$(key "$D/beta")" | wc -l | tr -d ' ')"
+mkdir -p "$D/beta/sub"; printf x > "$D/beta/sub/file.txt"
+runw "$D/alpha" add "for a path" --done-when y --for "$D/beta/sub/file.txt"
+wanteq "--for <a path inside beta> resolves to beta's drawer (rc=0)" "1" "$([ "$RC" = 0 ] && [ -n "$(ifile "$BW2" "$(lastid)")" ] && echo 1)"
+runw "$D" add "outside" --done-when y --for beta
+wanteq "--for from OUTSIDE any repo writes (rc=0)" "0" "$RC"
+want   "  and filed-by says none" "filed-by: none (session" "$(cat "$(ifile "$BW2" "$(lastid)")" 2>/dev/null)"
+runw "$D/alpha" add "two owners" --done-when y --for beta --for gamma
+wanteq "--for twice REFUSES (rc=2)" "2" "$RC"
+want   "  saying one owner, and how to add the others" "exactly ONE owner" "$OUT"
+runw "$D/alpha" add "nobody" --done-when y --for no-such-project
+wanteq "--for an unknown project REFUSES (rc=2)" "2" "$RC"
+want   "  naming the drawers that exist" "no drawer is named no-such-project" "$OUT"
+mkdir -p "$D/undrawered"; git -C "$D/undrawered" init -q 2>/dev/null
+runw "$D/alpha" add "no drawer" --done-when y --for "$D/undrawered/"
+wanteq "--for a repo path with no drawer REFUSES (rc=2)" "2" "$RC"
+want   "  and names init" "open-items init" "$OUT"
+runw "$D/alpha" add "to inbox" --done-when y --for inbox
+wanteq "--for inbox REFUSES (rc=2; P9 reserved)" "2" "$RC"
+want   "  and points at --inbox" "--inbox" "$OUT"
+
+printf 'V3 P9: names are keys\n'
+mkdir -p "$D/one/twin" "$D/two/twin"
+for t in one two; do git -C "$D/$t/twin" init -q 2>/dev/null; mkdir -p "$P/$(key "$D/$t/twin")/memory/WORK/items/open"; printf 'twin\n' > "$P/$(key "$D/$t/twin")/memory/WORK/items/.project"; done
+runw "$D/alpha" add "ambiguous" --done-when y --for twin
+wanteq "P9: --for a name two drawers answer to REFUSES (rc=2)" "2" "$RC"
+want   "P9:   printing both paths" "$(key "$D/one/twin")" "$OUT"
+want   "P9:   and the other" "$(key "$D/two/twin")" "$OUT"
+runw "$D/alpha" add "unique" --done-when y --for gamma
+wanteq "P9 CONTROL: a unique name writes (rc=0)" "0" "$RC"
+mkdir -p "$D/inbox"; git -C "$D/inbox" init -q 2>/dev/null; mkdir -p "$P/$(key "$D/inbox")/memory"
+runw "$D/inbox" init
+wanteq "P9: init in a repo NAMED inbox REFUSES (rc=2)" "2" "$RC"
+want   "P9:   saying the name is reserved and how to override" "init --name" "$OUT"
+runw "$D/inbox" init --name inbox-repo
+wanteq "P9 CONTROL: init --name <other> works there (rc=0)" "0" "$RC"
+wanteq "P9 CONTROL:   and stamps the given name" "inbox-repo" "$(head -1 "$P/$(key "$D/inbox")/memory/WORK/items/.project")"
+mkrepo foo; mkrepo foo-bar
+runw "$D/alpha" add "exact" --done-when y --watch foo-bar
+want   "P9: --watch foo-bar writes exactly that token" "watch: foo-bar" "$(cat "$(ifile "$AW2" "$(lastid)")" 2>/dev/null)"
+runw "$D/alpha" add "prefix" --done-when y --watch fo
+wanteq "P9: --watch fo (a prefix of foo) REFUSES, never a prefix match (rc=2)" "2" "$RC"
+
+printf 'V4 watchers and checks, and the P8 caps\n'
+runw "$D/alpha" add "fan" --done-when y --watch beta --check gamma "gamma runs its smoke test"
+wanteq "add --watch --check writes (rc=0)" "0" "$RC"
+V_FAN="$(lastid)"; F_FAN="$(ifile "$AW2" "$V_FAN")"
+want   "  a watch: line per watcher" "watch: beta" "$(cat "$F_FAN")"
+want   "  a check: line with [open] and its own done-when" "check: gamma [open] gamma runs its smoke test" "$(cat "$F_FAN")"
+for i in 1 2 3 4 5 6; do mkrepo "w$i"; done
+runw "$D/alpha" add "six" --done-when y --watch w1 --watch w2 --watch w3 --watch w4 --watch w5 --watch w6
+wanteq "P8: a 6th --watch REFUSES (rc=2)" "2" "$RC"
+want   "P8:   naming the cap" "at most 5 --watch" "$OUT"
+runw "$D/alpha" add "five" --done-when y --watch w1 --watch w2 --watch w3 --watch w4 --watch w5
+wanteq "P8 CONTROL: five --watch are written (rc=0)" "0" "$RC"
+V_FIVE="$(lastid)"
+wanteq "P8 CONTROL:   five watch: lines" "5" "$(grep -c '^watch: ' "$(ifile "$AW2" "$V_FIVE")")"
+runw "$D/alpha" watch "$V_FIVE" w6
+wanteq "P8: 'watch' adding a 6th watcher REFUSES (rc=2)" "2" "$RC"
+want   "P8:   naming the cap" "the cap (P8)" "$OUT"
+runw "$D/alpha" add "six checks" --done-when y --check w1 a --check w2 a --check w3 a --check w4 a --check w5 a --check w6 a
+wanteq "P8: a 6th --check REFUSES (rc=2)" "2" "$RC"
+runw "$D/alpha" watch "$V_FAN" gamma
+wanteq "'watch <ID> <p>' adds a watcher (rc=0)" "0" "$RC"
+wanteq "  two watch: lines now" "2" "$(grep -c '^watch: ' "$F_FAN")"
+runw "$D/alpha" watch "$V_FAN" gamma
+wanteq "  the same watcher twice REFUSES (rc=2)" "2" "$RC"
+runw "$D/alpha" watch "$V_FAN" alpha
+wanteq "  the owner watching itself REFUSES (rc=2)" "2" "$RC"
+runw "$D/alpha" check "$V_FAN" beta "beta re-runs install"
+wanteq "'check <ID> <p> \"dw\"' adds a check (rc=0)" "0" "$RC"
+want   "  as an [open] check line" "check: beta [open] beta re-runs install" "$(cat "$F_FAN")"
+want   "  and every header line is still above the body (raised: last)" "raised:" "$(awk 'NR>2 && /^$/{exit} NR>2{l=$0} END{print l}' "$F_FAN")"
+runw "$D/alpha" add "machine rule" --done-when y --reach machine --watch beta
+wanteq "reach machine + --watch REFUSES (rc=2)" "2" "$RC"
+want   "  by name" "reach: machine stays with its owner" "$OUT"
+runw "$D/alpha" add "machine rule" --done-when y --reach machine
+wanteq "reach machine CONTROL: alone it is written (rc=0)" "0" "$RC"
+V_MACH="$(lastid)"
+want   "  with reach: machine" "reach: machine" "$(cat "$(ifile "$AW2" "$V_MACH")")"
+runw "$D/alpha" watch "$V_MACH" beta
+wanteq "'watch' on a reach: machine item REFUSES (rc=2)" "2" "$RC"
+want   "  by name" "reach: machine" "$OUT"
+runw "$D/alpha" check "$V_MACH" beta "x"
+wanteq "'check' on a reach: machine item REFUSES (rc=2)" "2" "$RC"
+
+printf 'V5 P2: tick and close\n'
+runw "$D/alpha" close "$V_FAN"
+wanteq "P2: close with open checks REFUSES (rc=2)" "2" "$RC"
+want   "P2:   naming the open checks" "gamma, beta" "$OUT"
+want   "P2:   and saying each is ticked from inside that project" "from inside that project" "$OUT"
+S0="$(shaf "$F_FAN")"
+runw "$D/alpha" tick "$V_FAN" beta
+wanteq "P2: tick of beta's check FROM ALPHA REFUSES (rc=2)" "2" "$RC"
+want   "P2:   with the P2 text, not an unknown-arg refusal" "only a session in beta" "$OUT"
+wanteq "P2:   and the item is byte-identical" "$S0" "$(shaf "$F_FAN")"
+runw "$D/beta" tick "$V_FAN" beta
+wanteq "P2 CONTROL: tick from INSIDE beta works (rc=0)" "0" "$RC"
+want   "P2:   the line records date, session and project" "check: beta [done $(date +%Y-%m-%d) by sess-name in beta] beta re-runs install" "$(cat "$F_FAN")"
+want   "P2:   gamma's check is still open" "check: gamma [open]" "$(cat "$F_FAN")"
+runw "$D/beta" tick "$V_FAN" beta
+wanteq "  a second tick of the same check REFUSES (no open check left, rc=2)" "2" "$RC"
+runw "$D/gamma" tick "$V_FAN" gamma
+runw "$D/alpha" close "$V_FAN"
+wanteq "P2 CONTROL: with every check done, close works (rc=0)" "0" "$RC"
+# P1 read side of the write tool: a check: line in the BODY never blocks close.
+runw "$D/alpha" add "body text" --done-when y --body "check: beta [open] only prose"
+runw "$D/alpha" close "$(lastid)"
+wanteq "P1: a check: line in the BODY does not count (close works, rc=0)" "0" "$RC"
+
+printf 'V6 reach: mandatory, check-scripts, pass (P2, P4, P5, P8)\n'
+# A fixture DOTFILES repo holding a copy of the tool under test, so the tool's own real
+# path is the trust root (P4 rule 2) with no seam at all.
+FD="$D/dotfiles"; mkdir -p "$FD/home/.local/bin" "$FD/home/.claude/tools/mandatory-checks"
+git -c init.defaultBranch=master -C "$FD" init -q 2>/dev/null; git -C "$FD" config user.email t@t; git -C "$FD" config user.name t
+cp "$TOOL" "$FD/home/.local/bin/open-items"; FT="$FD/home/.local/bin/open-items"
+MC="$FD/home/.claude/tools/mandatory-checks"
+printf '#!/bin/sh\necho scanned: 1\nexit 0\n' > "$MC/good"; chmod +x "$MC/good"
+mkdir -p "$MC/good.fixtures/pass" "$MC/good.fixtures/fail"; : > "$MC/good.fixtures/pass/a"; : > "$MC/good.fixtures/fail/a"
+printf '#!/bin/sh\nexit 0\n' > "$MC/nofix"; chmod +x "$MC/nofix"
+printf '#!/bin/sh\nexit 0\n' > "$MC/drift"; chmod +x "$MC/drift"; mkdir -p "$MC/drift.fixtures/pass" "$MC/drift.fixtures/fail"; : > "$MC/drift.fixtures/pass/a"; : > "$MC/drift.fixtures/fail/a"
+printf '#!/bin/sh\nexit 0\n' > "$D/outside-script"; ln -s "$D/outside-script" "$MC/linked"
+git -C "$FD" add -A; git -C "$FD" -c commit.gpgsign=false commit -q -m init 2>/dev/null
+printf '#!/bin/sh\nexit 0\n' > "$MC/draft"; chmod +x "$MC/draft"
+printf '# edited after commit\n' >> "$MC/drift"
+mkdir -p "$P/$(key "$FD")/memory/WORK"
+runf(){ local d="$1"; shift; OUT="$(cd "$d" 2>/dev/null && OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" CLAUDE_CODE_SESSION_ID=sess-test "$FT" "$@" 2>&1)"; RC=$?; return 0; }
+runf "$FD" init
+FDW="$P/$(key "$FD")/memory/WORK"
+runf "$D/alpha" add "mandatory from alpha" --done-when y --reach mandatory < /dev/null
+wanteq "P8: --reach mandatory owned by a NON-dotfiles project, no terminal, REFUSES (rc=2)" "2" "$RC"
+want   "P8:   naming both routes" "only when the owner is the dotfiles project, or from a human at a terminal" "$OUT"
+runf "$FD" add "mandatory from dotfiles" --done-when y --reach mandatory < /dev/null
+wanteq "P8 CONTROL: the same from the dotfiles project is written (rc=0)" "0" "$RC"
+V_MAN="$(lastid)"; F_MAN="$(ifile "$FDW" "$V_MAN")"
+want   "P8 CONTROL:   with reach: mandatory" "reach: mandatory" "$(cat "$F_MAN" 2>/dev/null)"
+for bad in ../x a/b -rf .hidden; do
+  runf "$FD" add "bad script" --done-when y --reach mandatory --check-script "$bad"
+  want "P4: --check-script '$bad' REFUSED as an invalid name" "invalid script name" "$OUT"
+done
+runf "$FD" add "draft" --done-when y --reach mandatory --check-script draft
+want   "P4: an UNCOMMITTED script is refused" "not committed on master" "$OUT"
+runf "$FD" add "drift" --done-when y --reach mandatory --check-script drift
+want   "P4: a committed script EDITED since is refused" "differs from master" "$OUT"
+runf "$FD" add "linked" --done-when y --reach mandatory --check-script linked
+want   "P4: a script that is a symlink out of the folder is refused" "resolves outside" "$OUT"
+runf "$FD" add "nofix" --done-when y --reach mandatory --check-script nofix
+want   "P5: a committed script with NO fixtures is refused" "fixture" "$OUT"
+wanteq "P4/P5:   and none of those refusals wrote an item" "1" "$(nfiles "$FDW")"
+runf "$FD" add "scripted" --done-when y --reach mandatory --check-script good
+wanteq "P4 CONTROL: a committed script with fixtures is accepted (rc=0)" "0" "$RC"
+V_SCR="$(lastid)"
+want   "P4 CONTROL:   check-script: written" "check-script: good" "$(cat "$(ifile "$FDW" "$V_SCR")" 2>/dev/null)"
+mkdir -p "$D/loose"; cp "$TOOL" "$D/loose/open-items"
+OUT="$(cd "$FD" && OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" "$D/loose/open-items" add "script elsewhere" --done-when y --reach mandatory --check-script good 2>&1)"; RC=$?
+want   "P4: the same name through a tool copy NOT inside a dotfiles repo is refused" "dotfiles root unknown" "$OUT"
+runf "$D/beta" pass "$V_SCR" beta
+wanteq "P2: pass on an item WITH a check-script REFUSES even from beta (rc=2)" "2" "$RC"
+want   "P2:   saying only the script can pass it" "only the script can pass it" "$OUT"
+runf "$D/alpha" pass "$V_MAN" beta
+wanteq "P2: pass for beta FROM ALPHA REFUSES (rc=2)" "2" "$RC"
+want   "P2:   with the P2 text" "only a session in beta" "$OUT"
+runf "$D/beta" pass "$V_MAN" beta
+wanteq "P2 CONTROL: pass from inside beta on a script-less item works (rc=0)" "0" "$RC"
+want   "P2:   passed: records date and session" "passed: beta $(date +%Y-%m-%d) by sess-name" "$(cat "$F_MAN")"
+runf "$D/beta" pass "$V_MAN" beta
+wanteq "  a second pass by the same project REFUSES (rc=2)" "2" "$RC"
+if [ -n "$PTY_OK" ]; then
+  tty_run alpha "$D/alpha" "$TOOL" add "human mandatory" --done-when y --reach mandatory
+  wanteq "P8 TTY: a human typing the owner name at a terminal may file reach: mandatory (rc=0)" "0" "$RC"
+  tty_run wrong "$D/alpha" "$TOOL" add "human typo" --done-when y --reach mandatory
+  wanteq "P8 TTY CONTROL: the wrong name typed REFUSES (rc=2)" "2" "$RC"
+else nm "P8 TTY positive and typo arms" "no pty here: expect could not open one (the Claude sandbox denies openpty)"; fi
+
+printf 'V7 move: groups, history, notice, no-clobber (P10, P11, P12)\n'
+runw "$D/alpha" add "to move" --done-when y --watch beta
+V_MV="$(lastid)"; F_MV="$(ifile "$AW2" "$V_MV")"
+runw "$D/alpha" move "$V_MV" --to beta
+wanteq "move without --why REFUSES (rc=2)" "2" "$RC"
+want   "  saying --why is required" "--why is required" "$OUT"
+runw "$D/alpha" move "$V_MV" --to beta --why $'x\nmoved-from: gamma'
+want   "P1: a newline in --why is refused" "control character" "$OUT"
+runw "$D/alpha" move "$V_MV" --to inbox --why "hide it"
+wanteq "P11: move --to inbox REFUSES (rc=2)" "2" "$RC"
+want   "P11:   by name" "--to inbox is refused" "$OUT"
+H0="$(git -C "$DC" rev-parse HEAD)"
+runw "$D/alpha" move "$V_MV" --to gamma --why "wrong group"
+wanteq "P11: a CROSS-GROUP move (g -> h) REFUSES without a terminal (rc=2)" "2" "$RC"
+want   "P11:   naming both groups" "(group g) to gamma (group h)" "$OUT"
+want   "P11:   and saying it is Gavin's call" "Gavin's call" "$OUT"
+runw "$D/alpha" move "$V_MV" --to nogroup --why "no group there"
+want   "P11: a move to a project with NO group is refused as cross-group" "(no group)" "$OUT"
+runw "$D/alpha" move "$V_MV" --to beta --why "belongs to beta"
+wanteq "move inside group g, alpha -> beta, works (rc=0)" "0" "$RC"
+F_MV2="$BW2/items/open/$V_MV.md"
+wanteq "  the source file is gone" "1" "$([ ! -e "$F_MV" ] && echo 1)"
+wanteq "  the destination file exists" "1" "$([ -f "$F_MV2" ] && echo 1)"
+want   "  project: is now beta" "project: beta" "$(cat "$F_MV2")"
+want   "  moved-from: records source, session, both groups and both heads, then why" "moved-from: alpha $(date +%Y-%m-%d) by sess-name (group g -> g, head $(git -C "$D/alpha" rev-parse --short=7 HEAD) -> $(git -C "$D/beta" rev-parse --short=7 HEAD)): belongs to beta" "$(cat "$F_MV2")"
+wantnot "  beta's watch: line went (it owns the item now)" "watch: beta" "$(cat "$F_MV2")"
+want   "P11: the SOURCE drawer holds a moved-out record" "moved-to: beta" "$(cat "$AW2/items/moved-out/$V_MV.md" 2>/dev/null)"
+want   "P11:   naming the session and the reason" "why: belongs to beta" "$(cat "$AW2/items/moved-out/$V_MV.md" 2>/dev/null)"
+wanteq "P12: ONE commit touches both drawers" "2" "$(git -C "$DC" show --name-only --format= HEAD | sed -n 's#^projects/\([^/]*\)/.*#\1#p' | sort -u | wc -l | tr -d ' ')"
+wanteq "P12:   and both drawers are clean afterwards" "0" "$(git -C "$DC" status --porcelain -- "projects/$(key "$D/alpha")" "projects/$(key "$D/beta")" | wc -l | tr -d ' ')"
+wanteq "P12:   the item is in the index under beta only" "1" "$(git -C "$DC" ls-files | grep -c "/items/open/$V_MV.md")"
+runw "$D/beta" move "$V_MV" --to alpha --why "back again"
+wanteq "P11: a move BACK to a former owner REFUSES (rc=2)" "2" "$RC"
+want   "P11:   by name" "a move back is Gavin's call" "$OUT"
+wanteq "P11:   and the item is unchanged" "1" "$([ -f "$F_MV2" ] && [ ! -e "$F_MV" ] && echo 1)"
+# no-clobber: plant beta's own copy of an ID alpha holds, in beta's CLOSED folder.
+runw "$D/alpha" add "clash" --done-when y
+V_CL="$(lastid)"; F_CL="$(ifile "$AW2" "$V_CL")"
+mkdir -p "$BW2/items/closed"; printf '## %s -- beta own copy\n\nproject: beta\nstatus: done\n' "$V_CL" > "$BW2/items/closed/$V_CL.md"
+SA="$(shaf "$F_CL")"; SB="$(shaf "$BW2/items/closed/$V_CL.md")"
+runw "$D/alpha" move "$V_CL" --to beta --why "collide" --project alpha
+wanteq "P12: a move onto an ID the destination holds in closed/ REFUSES (rc=2)" "2" "$RC"
+want   "P12:   naming both files" "$BW2/items/closed/$V_CL.md" "$OUT"
+wanteq "P12:   source byte-identical" "$SA" "$(shaf "$F_CL")"
+wanteq "P12:   destination byte-identical" "$SB" "$(shaf "$BW2/items/closed/$V_CL.md")"
+# P11 rule 2: a group line only in the working tree does not count.
+mkrepo late; mkdir -p "$D/late/.claude"; printf 'group: g\n' > "$D/late/.claude/pj-homes"
+runw "$D/alpha" move "$V_CL" --to late --why "uncommitted group" --project alpha
+wanteq "P11: a group line only in the WORKING TREE refuses the move (rc=2)" "2" "$RC"
+want   "P11:   saying commit it first" "commit the group line first" "$OUT"
+git -C "$D/late" add .claude/pj-homes; git -C "$D/late" -c commit.gpgsign=false commit -q -m group 2>/dev/null
+runw "$D/alpha" move "$V_CL" --to late --why "committed group" --project alpha
+wanteq "P11 CONTROL: once committed, the same move works (rc=0)" "0" "$RC"
+# P10: a repo: line that does not belong to its drawer makes the repo unknown.
+runw "$D/alpha" add "spoof" --done-when y
+V_SP="$(lastid)"
+cp "$BW2/items/.project" "$D/beta-project.bak"
+printf 'beta\nrepo: %s\n' "$D/gamma" > "$BW2/items/.project"
+runw "$D/alpha" move "$V_SP" --to beta --why "spoofed"
+wanteq "P10: a repo: line pointing at ANOTHER repo -> repo unknown, move refused (rc=2)" "2" "$RC"
+want   "P10:   said out loud" "repo unknown (repo: line does not match this drawer)" "$OUT"
+printf 'beta\nrepo: %s\n' "$D/beta-deleted" > "$BW2/items/.project"
+runw "$D/alpha" move "$V_SP" --to beta --why "deleted"
+want   "P10: a repo: line naming a missing directory -> repo unknown" "repo unknown" "$OUT"
+command mv "$D/beta-project.bak" "$BW2/items/.project"
+runw "$D/alpha" move "$V_SP" --to beta --why "restored"
+wanteq "P10 CONTROL: with the right repo: line the move works (rc=0)" "0" "$RC"
+if [ -n "$PTY_OK" ]; then
+  runw "$D/alpha" add "cross by hand" --done-when y
+  V_X="$(lastid)"
+  tty_run "$V_X" "$D/alpha" "$TOOL" move "$V_X" --to gamma --why "Gavin says so"
+  wanteq "P11 TTY: a human typing the ID moves ACROSS groups (rc=0)" "0" "$RC"
+  wanteq "P11 TTY:   the item is in gamma" "1" "$([ -n "$(ifile "$GW2" "$V_X")" ] && echo 1)"
+else nm "P11 TTY cross-group positive arm" "no pty here"; fi
+
+printf 'V8 P10: the repo: line on write\n'
+runw "$D/alpha" add "no-op" --done-when y
+wanteq "back-fill CONTROL: a drawer that has its repo: line keeps exactly one" "1" "$(awk '/^repo:/{n++} END{print n+0}' "$AW2/items/.project")"
+printf 'alpha\n' > "$AW2/items/.project"
+runw "$D/alpha" add "backfill" --done-when y
+wanteq "back-fill: a write from inside the repo adds the missing repo: line" "repo: $D/alpha" "$(sed -n 2p "$AW2/items/.project")"
+wanteq "back-fill:   and it was committed" "0" "$(git -C "$DC" status --porcelain -- "projects/$(key "$D/alpha")" | wc -l | tr -d ' ')"
+mkdir -p "$D/a/b" "$D/a_b"; git -C "$D/a/b" init -q 2>/dev/null; git -C "$D/a_b" init -q 2>/dev/null
+mkdir -p "$P/$(key "$D/a/b")/memory"
+runw "$D/a/b" init
+SPJ="$(shaf "$P/$(key "$D/a/b")/memory/WORK/items/.project")"
+runw "$D/a_b" add "collide" --done-when y
+wanteq "P10: a write from a_b into the drawer a/b owns (same key) REFUSES (rc=2)" "2" "$RC"
+want   "P10:   naming the repo on record" "repo: $D/a/b" "$OUT"
+want   "P10:   and the repo you are in" "you are in $D/a_b" "$OUT"
+wanteq "P10:   .project is byte-identical" "$SPJ" "$(shaf "$P/$(key "$D/a/b")/memory/WORK/items/.project")"
+
+printf 'V9 P12: a failed move commit, and opposite moves at once\n'
+runw "$D/alpha" add "fails to commit" --done-when y
+V_FC="$(lastid)"
+printf '#!/bin/sh\nexit 1\n' > "$DC/.git/hooks/pre-commit"; chmod +x "$DC/.git/hooks/pre-commit"
+runw "$D/alpha" move "$V_FC" --to beta --why "commit will fail"
+command mv "$DC/.git/hooks/pre-commit" "$DC/.git/hooks/pre-commit.off"
+wanteq "P12: a move whose commit fails returns rc=3" "3" "$RC"
+want   "P12:   and says uncommitted move" "uncommitted move $V_FC" "$OUT"
+wanteq "P12:   a marker in the SOURCE drawer" "1" "$([ -d "$AW2/items/.pending-move/$V_FC@$(key "$D/beta")" ] && echo 1)"
+wanteq "P12:   and one in the DESTINATION" "1" "$([ -d "$BW2/items/.pending-move/$V_FC@$(key "$D/alpha")" ] && echo 1)"
+runw "$D/beta" add "next write in beta" --done-when y
+wanteq "P12: the next write in EITHER drawer commits (rc=0)" "0" "$RC"
+wanteq "P12:   carrying BOTH halves: both drawers are clean" "0" "$(git -C "$DC" status --porcelain -- "projects/$(key "$D/alpha")" "projects/$(key "$D/beta")" | wc -l | tr -d ' ')"
+wanteq "P12:   the moved item is committed under beta only" "1" "$(git -C "$DC" ls-files | grep -c "/items/open/$V_FC.md" )"
+wanteq "P12:   and both markers are gone" "1" "$([ ! -e "$AW2/items/.pending-move/$V_FC@$(key "$D/beta")" ] && [ ! -e "$BW2/items/.pending-move/$V_FC@$(key "$D/alpha")" ] && echo 1)"
+# Opposite moves at once, with a pause between taking the two locks so the order matters.
+v_race(){                       # v_race <unsorted?> -> "okA okB" exit codes
+  local x y a b
+  runw "$D/alpha" add "race a" --done-when y; x="$(lastid)"
+  runw "$D/beta" add "race b" --done-when y; y="$(lastid)"
+  ( cd "$D/alpha" && OPEN_ITEMS_TEST_LOCK_UNSORTED="$1" OPEN_ITEMS_TEST_LOCK_GAP=1 OPEN_ITEMS_TEST_LOCK_TRIES="${2:-600}" OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" "$TOOL" move "$x" --to beta --why race >/dev/null 2>&1; echo $? > "$D/race.a" ) &
+  ( cd "$D/beta" && OPEN_ITEMS_TEST_LOCK_UNSORTED="$1" OPEN_ITEMS_TEST_LOCK_GAP=1 OPEN_ITEMS_TEST_LOCK_TRIES="${2:-600}" OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" "$TOOL" move "$y" --to alpha --why race >/dev/null 2>&1; echo $? > "$D/race.b" ) &
+  wait
+  a="$(cat "$D/race.a")"; b="$(cat "$D/race.b")"
+  printf '%s %s' "$a" "$b"
+}
+R_OK=0; for k in 1 2 3; do [ "$(v_race "")" = "0 0" ] && R_OK=$((R_OK+1)); done
+wanteq "P12: 3 rounds of opposite moves at once, locks in sorted order: every move succeeds" "3" "$R_OK"
+wanteq "P12:   and no lock is left behind" "1" "$([ ! -e "$AW2/items/.lock" ] && [ ! -e "$BW2/items/.lock" ] && echo 1)"
+R_C="$(v_race 1 25)"
+case "$R_C" in *2*) ok "P12 CONTROL: the same race with the locks in CALLER order deadlocks, and a move refuses ($R_C)" ;;
+  *) bad "P12 CONTROL: unsorted locks should deadlock and refuse" "a rc of 2" "$R_C" ;; esac
+wanteq "P12:   every ID still sits in exactly one drawer" "0" "$(ls "$AW2/items/open" "$BW2/items/open" 2>/dev/null | grep '^W-' | sort | uniq -d | wc -l | tr -d ' ')"
+
+printf 'V10 the inbox and route (P11, P12)\n'
+mkdir -p "$DC/other"; printf 'stray\n' > "$DC/other/stray.txt"
+runw "$D/alpha" add "unrouted" --done-when y --inbox
+wanteq "add --inbox writes (rc=0)" "0" "$RC"
+V_IN="$(lastid)"
+wanteq "  into pj-inbox/items/open" "1" "$([ -f "$DC/pj-inbox/items/open/$V_IN.md" ] && echo 1)"
+wanteq "  the inbox is named inbox" "inbox" "$(head -1 "$DC/pj-inbox/items/.project")"
+want   "P12: the commit lists the inbox item" "pj-inbox/items/open/$V_IN.md" "$(git -C "$DC" log -1 --name-only --format=)"
+wantnot "P12:   and NOT a stray file elsewhere in dot-claude" "other/stray.txt" "$(git -C "$DC" log -1 --name-only --format=)"
+runw "$D/alpha" --projects
+want   "  --projects lists the inbox" "inbox" "$OUT"
+runw "$D/alpha" add "both" --done-when y --inbox --for beta
+wanteq "--inbox with --for REFUSES (rc=2)" "2" "$RC"
+runw "$D/alpha" route "$V_IN" --to beta < /dev/null
+wanteq "P11: route with stdin from a pipe REFUSES (rc=2)" "2" "$RC"
+want   "P11:   saying it needs a human at a terminal" "needs a human at a terminal" "$OUT"
+wanteq "P11:   and the item is still in the inbox" "1" "$([ -f "$DC/pj-inbox/items/open/$V_IN.md" ] && echo 1)"
+runw "$D/alpha" move "$V_IN" --to beta --why "sneak"
+wanteq "P11: 'move' cannot take an item out of the inbox either (rc=2)" "2" "$RC"
+if [ -n "$PTY_OK" ]; then
+  tty_run "$V_IN" "$D/alpha" "$TOOL" route "$V_IN" --to beta
+  wanteq "P11 TTY: a human typing the ID routes it (rc=0)" "0" "$RC"
+  want   "P11 TTY:   moved-from: inbox" "moved-from: inbox" "$(cat "$BW2/items/open/$V_IN.md" 2>/dev/null)"
+  want   "P11 TTY:   and the inbox keeps a moved-out record" "moved-to: beta" "$(cat "$DC/pj-inbox/items/moved-out/$V_IN.md" 2>/dev/null)"
+else nm "P11 TTY route positive arm" "no pty here"; fi
+mk_dotclaude
+mkrepo solo
+chmod 500 "$DC"
+runw "$D/solo" add "no inbox possible" --done-when y --inbox
+chmod 700 "$DC"
+wanteq "an inbox that cannot be created REFUSES (rc=2)" "2" "$RC"
+want   "  naming the path" "$DC/pj-inbox/items" "$OUT"
+unset CLAUDE_CODE_SESSION_NAME
+
 printf '\n%s passed, %s failed   (fixtures: %s)\n' "$PASS" "$FAIL" "$ROOT"
+[ "${NM:-0}" -eq 0 ] || printf 'open-items-selftest: %s arm group(s) NOT MEASURED (no pty in this environment) -- run outside the sandbox to measure them; not a pass\n' "$NM"
 [ "$FAIL" -eq 0 ] || { printf 'open-items-selftest: FAILURES above\n' >&2; exit 1; }
 printf 'open-items-selftest: all arms pass\n'
 exit 0

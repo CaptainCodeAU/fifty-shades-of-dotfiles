@@ -854,7 +854,7 @@ cmd_add(){
   if [ -n "$script" ]; then
     x="$(script_trust "$script")" || refuse "add --check-script $script: $x (P4). Nothing was written."
     for j in pass fail; do
-      git -C "$(dotfiles_root)" rev-parse -q --verify "master:$MC_REL/$script.fixtures/$j^{tree}" >/dev/null 2>&1 \
+      [ "$(git -C "$(dotfiles_root)" cat-file -t "master:$MC_REL/$script.fixtures/$j" 2>/dev/null)" = tree ] \
         || refuse "add --check-script $script: no committed fixture folder $MC_REL/$script.fixtures/$j/ on master (P5 rule 3: every check-script ships a pass and a fail fixture). Nothing was written."
     done
   fi
