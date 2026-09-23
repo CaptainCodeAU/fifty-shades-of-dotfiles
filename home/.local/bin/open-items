@@ -1,25 +1,25 @@
 #!/usr/bin/env bash
 # open-items -- what is still open, scoped to the project you are standing in.
-#
 # Usage:
 #   open-items                      open items for the CURRENT repo
-#   open-items --all                open items for every repo that has a drawer
-#   open-items --project <name>     a named project (matched on its `project:` field)
-#   open-items --closed             include parked/done/declined as well
-#   open-items --status <s>         only items with that status (open|parked|done|declined)
-#   open-items --projects           list the drawers found, with their paths
-#   open-items --where              print the current repo's drawer path (exists or not)
+#   open-items --all | --project <name>   every repo with a drawer | one project (its `project:`)
+#   open-items --closed | --status <s>    add parked/done/declined | only open|parked|done|declined
+#   open-items --grep "words"       items holding every word in title/body (+ --all, --closed)
+#   open-items --json               any listing, --grep or show as JSON (jq-free, jq-valid)
+#   open-items --projects | --where       the drawers found | this repo's drawer path
 #   open-items --session            the SessionStart surface: short, silent when nothing is open, pinned (when: next session) first
+#   open-items show <W-ID> [--project p]          one item, any status, any drawer
+#   open-items get <W-ID> <field> [--project p]   one field's raw value (or id|title|body|file)
 #   open-items add "title" --done-when "..." [--kind do|decide] [--size small|medium|large]
 #                  [--when ..] [--next ..] [--blocked-on ..] [--holds-in repo:..|drawer:..|~/..]... [--body ..]
 #   open-items close|decline|park|reopen <W-ID> ["note"]
+#   open-items supersede <old> <new> [--project p]   decline old pointing at new, back-pointer on new; ONE drawer
 #   open-items set <W-ID> <field> "value"       replace; WARNS on dropped text (holds-in: several values replace the set)
 #   open-items set --add|--append <W-ID> <field> "value"   holds-in: one more line; next/when/done-when/blocked-on: "; value"; body: a paragraph
-#   open-items init                 create items/ for a project that has no drawer yet
-#   open-items regen                rebuild OPEN.md from items/ (rescues a hand edit first)
+#   open-items init | regen         create items/ | rebuild OPEN.md (rescues a hand edit first)
 #   open-items migrate [--dry-run --into <dir>] [--park W-ID,..]   legacy OPEN.md -> items/
 #   open-items --selftest           prove every arm before trusting it
-#
+# IDs are unique per drawer only: show/get/supersede REFUSE an ID found in two without --project.
 # Exit: 0 found/written  ·  1 nothing found (not an error)  ·  2 REFUSED  ·  3 written but NOT committed
 #
 # Design, layout, the two drawer formats and why every write is a commit: docs/OPEN_ITEMS.md

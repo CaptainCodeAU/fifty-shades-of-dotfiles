@@ -673,6 +673,201 @@ runw "$ZETA" --session
 want   "--session after migrate: open title" "a decision with a finish line" "$OUT"
 want   "  and parked count" "parked: 1" "$OUT"
 
+# ==============================================================================
+# W-20260923-A24 (show, get, --json, supersede) and A21 (--grep). The fixture copies
+# the real shape that made these hard: the SAME ID in two drawers (IDs are unique per
+# drawer only; W-20260923-A01 was in three on 2026-09-23), plus a legacy drawer.
+# ==============================================================================
+printf 'M  show, get, --json, supersede: one item across every drawer (A24)\n'
+mk_dotclaude
+OMEGA="$D/omega"; mkdir -p "$OMEGA"; git -C "$OMEGA" init -q 2>/dev/null
+OW="$P/$(key "$OMEGA")/memory/WORK"; mkdir -p "$OW"
+LEG="$D/legacy"; mkdir -p "$LEG"; git -C "$LEG" init -q 2>/dev/null
+LW="$P/$(key "$LEG")/memory/WORK"; mkdir -p "$LW"
+printf '# legacy -- open items\n\n## W-20260918-05 -- the legacy one\n\nproject: legacy\nstatus: open\nsize: small\n\nLegacy body.\n\n## Notes -- not an item\n\nsection text\n' > "$LW/OPEN.md"
+runw "$ZETA" init; runw "$OMEGA" init
+printf 'name: other-box\nletter: B\n' > "$D/machine-B"
+# A body that a naive JSON printer gets wrong: quotes, a backslash, a tab, a raw control
+# character (0x01), and non-ASCII text.
+M_BODY="$(printf 'He said "go" at C:\\temp\\x,\ta tab and a control\001char. Caf\303\251.')"
+runw "$ZETA" add "zeta shared id" --done-when "zeta finish" --body "$M_BODY"      # A01
+runw "$ZETA" add "zeta second" --done-when x --holds-in repo:a.md --holds-in repo:b.md   # A02
+runw "$ZETA" add "zeta old plan" --done-when x                                     # A03
+runw "$ZETA" add "zeta new plan" --done-when x                                     # A04
+runw "$OMEGA" add "omega shared id" --done-when "omega finish"                     # A01
+runw "$OMEGA" add "omega replacement" --done-when x                                # A02
+wanteq "  fixture: W-$TODAY-A01 really exists in BOTH drawers" "2" \
+       "$(find "$ZW/items" "$OW/items" -name "W-$TODAY-A01.md" | wc -l | tr -d ' ')"
+
+runw "$ZETA" show "W-$TODAY-A01"
+wanteq "show: an ID in two drawers REFUSES without --project (rc=2)" "2" "$RC"
+want   "  and names the first project" "zeta" "$OUT"
+want   "  and names the second project" "omega" "$OUT"
+wantnot "  and prints neither item (no guess)" "shared id" "$OUT"
+runw "$ZETA" show "W-$TODAY-A01" --project omega
+wanteq "TWIN show --project omega picks one (rc=0)" "0" "$RC"
+want    "  and prints omega's item" "omega shared id" "$OUT"
+wantnot "  and not zeta's" "zeta shared id" "$OUT"
+runw "$D" show "W-$TODAY-A03"
+wanteq "show: a unique ID needs no --project, even from OUTSIDE any repo (rc=0)" "0" "$RC"
+want   "  and prints the block" "## W-$TODAY-A03 -- zeta old plan" "$OUT"
+runw "$ZETA" show W-20260918-05
+wanteq "show: an item in a LEGACY drawer (rc=0)" "0" "$RC"
+want    "  prints its body" "Legacy body." "$OUT"
+wantnot "  and stops at the next section" "section text" "$OUT"
+runw "$ZETA" show W-20990101-A01
+wanteq "show: an unknown ID misses (rc=1), it does not refuse" "1" "$RC"
+want   "  and states the denominator: every drawer searched" "across 3 drawer(s)" "$OUT"
+runw "$ZETA" show not-an-id
+wanteq "show: a string that is not an ID REFUSES (rc=2)" "2" "$RC"
+want   "  and says why" "not an item ID" "$OUT"
+
+runw "$ZETA" get "W-$TODAY-A01" done-when
+wanteq "get: an ID in two drawers REFUSES without --project (rc=2)" "2" "$RC"
+wantnot "  and prints neither value" "finish" "$OUT"
+want   "  and names the drawers it is in" "omega" "$OUT"
+OUT="$(cd "$ZETA" && OPEN_ITEMS_PROJECTS_DIR="$P" "$TOOL" get "W-$TODAY-A01" done-when --project zeta 2>/dev/null)"; RC=$?
+wanteq "TWIN get --project zeta prints the raw value, nothing else" "zeta finish" "$OUT"
+OUT="$(cd "$ZETA" && OPEN_ITEMS_PROJECTS_DIR="$P" "$TOOL" get "W-$TODAY-A02" holds-in --project zeta 2>/dev/null)"
+wanteq "get: a repeated field prints every value, one per line" "repo:a.md|repo:b.md" "$(printf '%s' "$OUT" | tr '\n' '|')"
+OUT="$(cd "$ZETA" && OPEN_ITEMS_PROJECTS_DIR="$P" "$TOOL" get "W-$TODAY-A01" body --project zeta 2>/dev/null)"
+wanteq "get body: the prose exactly, control characters and all" "$M_BODY" "$OUT"
+OUT="$(cd "$ZETA" && OPEN_ITEMS_PROJECTS_DIR="$P" "$TOOL" get "W-$TODAY-A03" title 2>/dev/null)"
+wanteq "get title" "zeta old plan" "$OUT"
+runw "$ZETA" get "W-$TODAY-A03" nosuch
+wanteq "get: an ABSENT field is rc=1, not an empty success" "1" "$RC"
+want   "  and says which field is missing" "has no nosuch field" "$OUT"
+runw "$ZETA" get "W-$TODAY-A03" body
+wanteq "get body of an item with no prose: rc=1" "1" "$RC"
+
+printf 'N  --json: valid JSON, proven by jq, with a control that jq can fail\n'
+if command -v jq >/dev/null 2>&1; then
+  # CONTROL FIRST: `jq .` must be able to say no, or every arm below is a rubber stamp.
+  printf '{"a":"x\001y"}' | jq . >/dev/null 2>&1; M_RC=$?
+  wanteq "  CONTROL: jq REJECTS a raw control character in a string" "1" "$([ "$M_RC" -ne 0 ] && echo 1)"
+  J="$(cd "$ZETA" && OPEN_ITEMS_PROJECTS_DIR="$P" "$TOOL" --all --closed --json 2>/dev/null)"; RC=$?
+  wanteq "--all --closed --json exits 0" "0" "$RC"
+  printf '%s' "$J" | jq . >/dev/null 2>&1; M_RC=$?
+  wanteq "  and jq . accepts it (valid JSON)" "0" "$M_RC"
+  # Denominator from the FILESYSTEM, not from the JSON: item files plus the one legacy block.
+  M_N="$(( $(find "$ZW/items" "$OW/items" -name 'W-*.md' | wc -l | tr -d ' ') + 1 ))"
+  wanteq "  count = every item file + the legacy block ($M_N)" "$M_N" "$(printf '%s' "$J" | jq '.count')"
+  wanteq "  and items[] has that many entries" "$M_N" "$(printf '%s' "$J" | jq '.items | length')"
+  wanteq "  and drawers_searched is 3" "3" "$(printf '%s' "$J" | jq '.drawers_searched')"
+  wanteq "  each item carries its project (A01 is in zeta AND omega)" "omega,zeta" \
+         "$(printf '%s' "$J" | jq -r "[.items[] | select(.id == \"W-$TODAY-A01\") | .project] | sort | join(\",\")")"
+  wanteq "  the hostile body round-trips byte for byte" "$M_BODY" \
+         "$(printf '%s' "$J" | jq -r ".items[] | select(.id == \"W-$TODAY-A01\" and .project == \"zeta\") | .body")"
+  wanteq "  holds-in is an array of every value" "2" \
+         "$(printf '%s' "$J" | jq ".items[] | select(.id == \"W-$TODAY-A02\" and .project == \"zeta\") | .fields[\"holds-in\"] | length")"
+  wanteq "  a single field is a string" "zeta finish" \
+         "$(printf '%s' "$J" | jq -r ".items[] | select(.id == \"W-$TODAY-A01\" and .project == \"zeta\") | .fields[\"done-when\"]")"
+  wanteq "  the legacy item is there, labelled legacy, without the next section" "legacy|Legacy body." \
+         "$(printf '%s' "$J" | jq -r '.items[] | select(.id == "W-20260918-05") | "\(.layout)|\(.body)"')"
+  J="$(cd "$ZETA" && OPEN_ITEMS_PROJECTS_DIR="$P" "$TOOL" --json 2>/dev/null)"
+  wanteq "--json with no scope flag lists the CURRENT drawer only" "zeta" \
+         "$(printf '%s' "$J" | jq -r '[.items[].project] | unique | join(",")')"
+  J="$(cd "$ZETA" && OPEN_ITEMS_PROJECTS_DIR="$P" "$TOOL" --json --grep zzqq-nothing 2>/dev/null)"; RC=$?
+  wanteq "--json with no match exits 1" "1" "$RC"
+  wanteq "  and is STILL valid JSON with count 0 and the denominator" "0|4" \
+         "$(printf '%s' "$J" | jq -r '"\(.count)|\(.items_searched)"')"
+  J="$(cd "$ZETA" && OPEN_ITEMS_PROJECTS_DIR="$P" "$TOOL" show "W-$TODAY-A01" --project zeta --json 2>/dev/null)"
+  wanteq "show --json prints one valid object" "zeta shared id" "$(printf '%s' "$J" | jq -r '.title')"
+else
+  bad "jq is required to prove --json is valid JSON" "jq on PATH" "jq not found -- INVALID TRIAL"
+fi
+
+printf 'O  --grep: text search with a stated denominator (A21)\n'
+runw "$ZETA" --grep "shared id"
+wanteq "--grep finds a title word in the current drawer (rc=0)" "0" "$RC"
+want    "  zeta's item" "zeta shared id" "$OUT"
+wantnot "  and not omega's without --all" "omega shared id" "$OUT"
+runw "$ZETA" --grep "shared id" --all
+want   "TWIN --grep --all reaches omega too" "omega shared id" "$OUT"
+want   "  and zeta" "zeta shared id" "$OUT"
+runw "$ZETA" --grep "A CONTROL"
+wanteq "--grep matches the BODY, case-insensitively (rc=0)" "0" "$RC"
+want   "  the item whose body holds it" "zeta shared id" "$OUT"
+runw "$ZETA" --grep "zeta nonexistentword"
+wanteq "--grep needs EVERY word: one missing word misses (rc=1)" "1" "$RC"
+# Metadata is not searched: every item carries `raised: ... (session sess-test)`, so a
+# search for it would hit the whole drawer. Control: it really is in the file.
+wanteq "  CONTROL: sess-test is in the item file" "1" "$(grep -c 'sess-test' "$ZW/items/open/W-$TODAY-A03.md")"
+runw "$ZETA" --grep "sess-test"
+wanteq "--grep does NOT search the tool-owned raised/project lines (rc=1)" "1" "$RC"
+runw "$ZETA" --grep "zzqq-nothing"
+wanteq "--grep with no match exits 1" "1" "$RC"
+M_OPEN="$(find "$ZW/items/open" -name 'W-*.md' | wc -l | tr -d ' ')"
+want   "  and states the denominator ($M_OPEN open items, 1 drawer)" "no match for \"zzqq-nothing\" in $M_OPEN open item(s) across 1 drawer(s)" "$OUT"
+want   "  and says --closed would widen it" "--closed" "$OUT"
+
+printf 'P  supersede: decline with a pointer, back-pointer on the new one\n'
+M_SUM(){ find "$ZW/items" "$OW/items" -name 'W-*.md' -exec shasum {} + | sort; }
+M_BEFORE="$(M_SUM)"
+runw "$ZETA" supersede "W-$TODAY-A01" "W-$TODAY-A02"
+wanteq "supersede: IDs in two drawers REFUSE without --project (rc=2)" "2" "$RC"
+want   "  and names one project" "zeta" "$OUT"
+want   "  and the other" "omega" "$OUT"
+wanteq "  and NOTHING changed (every item file byte-identical)" "$M_BEFORE" "$(M_SUM)"
+M_HEAD="$(git -C "$DC" rev-parse HEAD)"
+runw "$ZETA" supersede "W-$TODAY-A03" "W-$TODAY-A04"
+wanteq "supersede within one drawer (rc=0)" "0" "$RC"
+F3="$ZW/items/closed/W-$TODAY-A03.md"; F4="$ZW/items/open/W-$TODAY-A04.md"
+wanteq "  old moved to closed/" "1" "$([ -f "$F3" ] && [ ! -e "$ZW/items/open/W-$TODAY-A03.md" ] && echo 1)"
+want   "  old is declined" "status: declined" "$(cat "$F3")"
+want   "  old carries superseded-by, inside the header" "superseded-by: W-$TODAY-A04" "$(sed -n '2,12p' "$F3")"
+want   "  old carries a dated note naming the new title" "Superseded by W-$TODAY-A04 -- zeta new plan" "$(cat "$F3")"
+want   "  new carries the back-pointer" "supersedes: W-$TODAY-A03" "$(cat "$F4")"
+wanteq "  new stays open" "1" "$(grep -c '^status: open$' "$F4")"
+wanteq "  ONE commit, and the tree is clean" "1|0" \
+       "$(git -C "$DC" rev-list --count "$M_HEAD"..HEAD)|$(git -C "$DC" status --porcelain -- "projects/$(key "$ZETA")" "projects/$(key "$OMEGA")" | wc -l | tr -d ' ')"
+want   "  the commit names both IDs" "supersede W-$TODAY-A03 by W-$TODAY-A04" "$(git -C "$DC" log -1 --format=%s)"
+runw "$ZETA" --grep "old plan"
+wanteq "  --grep no longer finds the declined item among OPEN ones (rc=1)" "1" "$RC"
+runw "$ZETA" --grep "old plan" --closed
+wanteq "  TWIN --grep --closed finds it (rc=0)" "0" "$RC"
+runw "$ZETA" show "W-$TODAY-A03"
+wanteq "  show still finds a closed item (rc=0)" "0" "$RC"
+runw "$ZETA" supersede "W-$TODAY-A03" "W-$TODAY-A04"
+wanteq "supersede of an already-declined item REFUSES (rc=2)" "2" "$RC"
+want   "  and says so" "already declined" "$OUT"
+runw "$ZETA" supersede "W-$TODAY-A04" "W-$TODAY-A04"
+wanteq "supersede of an item by itself REFUSES (rc=2)" "2" "$RC"
+want   "  and says why" "cannot supersede itself" "$OUT"
+runw "$ZETA" supersede W-20990101-A01 "W-$TODAY-A04"
+wanteq "supersede of an unknown ID REFUSES (rc=2), a write never 'misses'" "2" "$RC"
+want   "  and says nothing was changed" "supersede: nothing was changed" "$OUT"
+runw "$ZETA" supersede W-20260918-05 "W-$TODAY-A04"
+wanteq "supersede of a LEGACY-drawer item REFUSES (rc=2)" "2" "$RC"
+want   "  and says the legacy drawer is read-only" "read-only" "$OUT"
+wanteq "  and the legacy OPEN.md is untouched" "0" "$(grep -c 'superseded' "$LW/OPEN.md")"
+runw "$ZETA" set "W-$TODAY-A04" supersedes "W-x"
+wanteq "set cannot forge a supersedes pointer (rc=2)" "2" "$RC"
+want   "  because set does not know the field" "unknown field supersedes" "$OUT"
+# --project settles an ambiguous pair for a write too.
+runw "$ZETA" supersede "W-$TODAY-A01" "W-$TODAY-A02" --project zeta
+wanteq "TWIN supersede --project zeta settles the ambiguous pair (rc=0)" "0" "$RC"
+want   "  zeta's A01 declined, pointing at A02" "superseded-by: W-$TODAY-A02" "$(cat "$ZW/items/closed/W-$TODAY-A01.md")"
+wanteq "  and omega's A01 untouched (still open, no pointer)" "1|0" \
+       "$(grep -c '^status: open$' "$OW/items/open/W-$TODAY-A01.md")|$(grep -c superseded "$OW/items/open/W-$TODAY-A01.md")"
+# Across two drawers: each drawer gets its own write and its own commit.
+PJ_MACHINE_FILE="$D/machine-B" runw "$OMEGA" add "omega successor" --done-when x   # B01, unique
+runw "$ZETA" add "zeta cross old" --done-when x                                     # A05, unique
+M_HEAD="$(git -C "$DC" rev-parse HEAD)"
+runw "$ZETA" supersede "W-$TODAY-A05" "W-$TODAY-B01"
+wanteq "supersede ACROSS drawers (rc=0)" "0" "$RC"
+want   "  old names the new item's project" "superseded-by: W-$TODAY-B01 (project omega)" "$(cat "$ZW/items/closed/W-$TODAY-A05.md")"
+want   "  new names the old item's project" "supersedes: W-$TODAY-A05 (project zeta)" "$(cat "$OW/items/open/W-$TODAY-B01.md")"
+wanteq "  TWO commits, one per drawer, and the tree is clean" "2|0" \
+       "$(git -C "$DC" rev-list --count "$M_HEAD"..HEAD)|$(git -C "$DC" status --porcelain -- "projects/$(key "$ZETA")" "projects/$(key "$OMEGA")" | wc -l | tr -d ' ')"
+wanteq "  and no drawer lock left behind" "0|0" \
+       "$([ -d "$ZW/items/.lock" ] && echo 1 || echo 0)|$([ -d "$OW/items/.lock" ] && echo 1 || echo 0)"
+runw "$ZETA" --help
+wanteq "--help still under 25 lines with the new commands" "1" "$([ "$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')" -lt 25 ] && echo 1)"
+for M_W in "open-items show" "open-items get" "open-items supersede" "--grep" "--json"; do
+  want "  --help lists $M_W" "$M_W" "$OUT"
+done
+
 printf '\nG  a REFUSED drawer write is not a held lock (W-20260921-A44)\n'
 # The bug: `mkdir "$LOCK"` fails for two completely different reasons -- the lock is held,
 # or the folder is not writable -- and open-items read both as the first. Sandboxed, it
