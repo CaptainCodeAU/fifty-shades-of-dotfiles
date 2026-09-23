@@ -101,13 +101,15 @@ SECTION_DECISION=ask
 PNPM_MIN_VERSION="12.3.2"
 
 # --- nvm version policy ---
-# Minimum acceptable nvm. Two mirror-based CVEs set this floor: CVE-2026-10796
-# (RCE via a malicious mirror's version strings; affects <= 0.40.4, fixed 0.40.5)
-# and CVE-2026-15921 (startup-file overwrite via LTS-alias path traversal;
-# affects 0.32.1-0.40.5, fixed 0.40.6). If nvm is missing OR below this,
+# Minimum acceptable nvm. Three CVEs set this floor: CVE-2026-10796
+# (RCE via a malicious mirror's version strings; affects <= 0.40.4, fixed 0.40.5),
+# CVE-2026-15921 (startup-file overwrite via LTS-alias path traversal;
+# affects 0.32.1-0.40.5, fixed 0.40.6) and CVE-2026-94185 (arbitrary file read
+# via a malicious .nvmrc's alias path traversal on `nvm use`; affects <= 0.40.7,
+# fixed 0.40.8). If nvm is missing OR below this,
 # install/upgrade is offered; the installer pins exactly this tag. Keep in sync
 # with NVM_MIN_VERSION in home/.zsh_onboarding.
-NVM_MIN_VERSION="0.40.6"
+NVM_MIN_VERSION="0.40.8"
 
 # --- Node.js version policy ---
 # Lowest Node major still receiving security support. Node 20 reached end-of-life
@@ -3367,7 +3369,8 @@ GITEOF"
 
     # --- NVM ---
     # Pin the exact, audited tag (v${NVM_MIN_VERSION}); older nvm is affected by
-    # CVE-2026-10796 (<= 0.40.4) and CVE-2026-15921 (<= 0.40.5). The official
+    # CVE-2026-10796 (<= 0.40.4), CVE-2026-15921 (<= 0.40.5) and CVE-2026-94185
+    # (<= 0.40.7). The official
     # installer is idempotent — re-running it upgrades an existing nvm in place.
     if [[ ! -d "$HOME/.nvm" ]]; then
         if confirm "nvm not found. Install it (v${NVM_MIN_VERSION}) for Node.js version management?"; then
@@ -3381,7 +3384,7 @@ GITEOF"
     elif _nvm_needs_upgrade; then
         local cur_nvm
         cur_nvm=$(_nvm_installed_version)
-        warn "nvm ${cur_nvm:-?} is below ${NVM_MIN_VERSION} (CVE-2026-10796 <= 0.40.4, CVE-2026-15921 <= 0.40.5)."
+        warn "nvm ${cur_nvm:-?} is below ${NVM_MIN_VERSION} (CVE-2026-10796 <= 0.40.4, CVE-2026-15921 <= 0.40.5, CVE-2026-94185 <= 0.40.7)."
         if confirm "Upgrade nvm to v${NVM_MIN_VERSION}?"; then
             run_cmd bash -c "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v${NVM_MIN_VERSION}/install.sh | bash"
             export NVM_DIR="$HOME/.nvm"

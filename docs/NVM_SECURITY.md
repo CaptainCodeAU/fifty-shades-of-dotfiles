@@ -9,20 +9,28 @@ cooldown: delaying a runtime's security patches would be counterproductive.
 
 ## Threat model
 
-| Risk                                                                                                                                                                                                                                                             | Mitigation here                                                            |
-| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| **nvm itself is vulnerable** (CVE-2026-10796, High 7.5: RCE via a malicious Node mirror's version strings, affects <= 0.40.4, fixed 0.40.5; CVE-2026-15921, Low: shell startup-file overwrite via LTS-alias path traversal, affects 0.32.1-0.40.5, fixed 0.40.6) | `NVM_MIN_VERSION` floor + pinned installer (Layer 1)                       |
-| **Malicious / planted download mirror** (the CVE vector)                                                                                                                                                                                                         | Official-mirror pin (Layer 2) + independent verifier (Layer 5)             |
-| **Running an end-of-life Node** (no security patches)                                                                                                                                                                                                            | `NODE_MIN_MAJOR` EOL guard (Layer 3) + preflight sweep (Layer 4)           |
-| **Tampered Node binary that passes nvm's own checksum** (mirror serves matching bad SHASUMS)                                                                                                                                                                     | `nvm-verify-node` re-checks against official, GPG-signed SHASUMS (Layer 5) |
+| Risk                                                                                                                                                                                                                                                                                                                                                                                                                          | Mitigation here                                                            |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| **nvm itself is vulnerable** (CVE-2026-10796, High 7.5: RCE via a malicious Node mirror's version strings, affects <= 0.40.4, fixed 0.40.5; CVE-2026-15921, Low: shell startup-file overwrite via LTS-alias path traversal, affects 0.32.1-0.40.5, fixed 0.40.6; CVE-2026-94185, Medium 5.5: arbitrary file read via a malicious `.nvmrc`'s alias path traversal on `nvm use` / `nvm alias`, affects <= 0.40.7, fixed 0.40.8) | `NVM_MIN_VERSION` floor + pinned installer (Layer 1)                       |
+| **Malicious / planted download mirror** (the CVE vector)                                                                                                                                                                                                                                                                                                                                                                      | Official-mirror pin (Layer 2) + independent verifier (Layer 5)             |
+| **Running an end-of-life Node** (no security patches)                                                                                                                                                                                                                                                                                                                                                                         | `NODE_MIN_MAJOR` EOL guard (Layer 3) + preflight sweep (Layer 4)           |
+| **Tampered Node binary that passes nvm's own checksum** (mirror serves matching bad SHASUMS)                                                                                                                                                                                                                                                                                                                                  | `nvm-verify-node` re-checks against official, GPG-signed SHASUMS (Layer 5) |
 
-`.nvmrc` auto-switching is **not** a vector here: `load-nvmrc` (in `.zshrc`) only runs
-`nvm use` for an already-installed version (`!= "N/A"`); walking into a cloned repo
-never triggers an arbitrary Node download.
+`.nvmrc` auto-switching never triggers an arbitrary Node download: `load-nvmrc` (in
+`.zshrc`) only runs `nvm use` for an already-installed version (`!= "N/A"`).
+
+A cloned repo's `.nvmrc` IS a read vector on nvm <= 0.40.7 (CVE-2026-94185, added
+2026-09-23). nvm resolved the `.nvmrc` string as a filename under `$NVM_DIR/alias/`
+with no `..` check, so a `.nvmrc` of `../../.npmrc` makes a typed `nvm use` print that
+file's first non-comment line, and `nvm alias <traversal>` prints a whole file or
+directory. The advisory's maintainer triage says auto-switch hooks shaped like
+`load-nvmrc` do not disclose, because a traversing name resolves to `N/A` and only
+`nvm use --silent` is ever called (from the advisory text as published; not tested
+against this repo's hook). The 0.40.8 floor closes the whole class.
 
 ## Layer 1 — nvm version floor + pinned installer
 
-- `NVM_MIN_VERSION` (currently `0.40.6`) is defined in **both** `install.sh` and
+- `NVM_MIN_VERSION` (currently `0.40.8`) is defined in **both** `install.sh` and
   `home/.zsh_onboarding` (kept in sync, like `PNPM_MIN_VERSION`).
 - `install.sh` installs/upgrades nvm by pinning exactly `v${NVM_MIN_VERSION}` — never
   the mutable `master` ref the onboarding handler previously used. It now also
@@ -54,7 +62,10 @@ if typeset -f nvm >/dev/null 2>&1 && ! typeset -f nvm_orig >/dev/null 2>&1; then
 fi
 ```
 
-Remove this shim once upstream nvm resolves the incompatibility.
+Remove this shim once upstream nvm resolves the incompatibility. nvm 0.40.8's release
+notes list "`nvm_alias`: unset zsh's `extendedglob` while reading an alias file
+(#3891)", which may be that fix. Not tested here: keep the shim until `nvm version
+lts/*` is shown to resolve under `extendedglob` on 0.40.8 with the shim removed.
 
 ## Layer 2 — official mirror pin
 

@@ -294,7 +294,7 @@ It will also ask **which machine this is** (`A` Mac mini, `B` Intel laptop, `C` 
 
    ```bash
    # nvm (Node Version Manager)
-   curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.6/install.sh | bash
+   curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.8/install.sh | bash
 
    # pnpm (standalone install — used instead of Corepack)
    curl -fsSL https://get.pnpm.io/install.sh | sh -
