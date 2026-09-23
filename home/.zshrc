@@ -1237,6 +1237,15 @@ cp() {
     command cp -i "$@"
 }
 
+# mv -i EXITS 0 WHEN AN OVERWRITE IS DECLINED (measured 2026-09-23, macOS mv: it
+# prints "not overwritten" and reports success, also on EOF, which is what an agent's
+# Bash gives it), so `mv a b && next` went on as if the move had happened. cp -i
+# already exits 1 on a decline (same measurement), so cp needs nothing. After an -i
+# run, a source still where it was was declined: say so, return 1. A case-only
+# rename on APFS (Foo -> foo) is judged by the exact spelling in the directory,
+# because there -e finds the file under either name.
+# Checked only for the plain form, options from -h -i -n -v; anything else keeps
+# mv's own exit status. `mv-wrapper-selftest` proves the arms.
 mv() {
     local arg
     for arg in "$@"; do
@@ -1245,7 +1254,36 @@ mv() {
             return
         fi
     done
-    command mv -i "$@"
+    command mv -i "$@" || return
+    local -a ops=()
+    local end=0 dest s t declined=0
+    for arg in "$@"; do
+        if (( ! end )) && [[ "$arg" == -- ]]; then end=1; continue; fi
+        if (( ! end )) && [[ "$arg" == -* ]]; then
+            [[ "${arg//[hinv]/}" == - ]] || return 0
+            continue
+        fi
+        ops+=("$arg")
+    done
+    (( ${#ops} >= 2 )) || return 0
+    dest=${ops[-1]}
+    local -a ents
+    for s in "${(@)ops[1,-2]}"; do
+        s=${s%/}
+        [[ -e "$s" || -L "$s" ]] || continue
+        if [[ -d "$dest" ]]; then t="$dest/${s:t}"; else t="$dest"; fi
+        if [[ "$s" -ef "$t" ]]; then
+            # Same file: a case-only rename on a case-insensitive disk (Foo -> foo),
+            # where -e cannot tell. mv -i prompts for it too (measured). Declined
+            # only when the old spelling is still an entry in its directory.
+            [[ "${s:t}" == "${t:t}" ]] && continue
+            ents=( "${s:h}"/*(DN:t) )
+            (( ${ents[(Ie)${s:t}]} )) || continue
+        fi
+        print -ru2 -- "mv: $s was not moved (overwrite declined); returning 1"
+        declined=1
+    done
+    return $declined
 }
 
 # --- yt-dlp Wrapper ---

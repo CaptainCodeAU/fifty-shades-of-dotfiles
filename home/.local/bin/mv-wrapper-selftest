@@ -1,0 +1,109 @@
+#!/usr/bin/env zsh
+# mv-wrapper-selftest -- prove the .zshrc mv() and cp() wrappers report a DECLINED
+# overwrite as a failure.
+#
+# Both wrappers add -i unless -f is given. Measured 2026-09-23: macOS `mv -i` exits
+# 0 when the overwrite is declined (also on EOF, which is what an agent's Bash tool
+# gives it), so `mv a b && next` carried on as if the file had moved; `cp -i` exits
+# 1. The mv wrapper now checks, after an -i run, whether each source is still where
+# it was and not the same file as its destination, and returns 1 if so.
+#
+# THE SEAM is the two functions themselves, cut out of the REAL home/.zshrc (never
+# copied into a fixture) and run in a scratch directory under $TMPDIR. Every arm is
+# driven: the declined arms are fed EOF and "n", the accepted arm "y".
+#
+# Usage: mv-wrapper-selftest                 (exit 0 = all passed)
+#        ZSHRC_UNDER_TEST=<path> mv-wrapper-selftest   (test another copy)
+
+setopt no_unset pipe_fail 2>/dev/null
+
+PASS=0; FAIL=0
+
+_resolve_repo() {
+    local self="${(%):-%x}" dir target
+    dir="$(builtin cd -- "$(dirname -- "$self")" && pwd)"
+    if [[ -L "$self" ]]; then
+        target="$(readlink "$self")"
+        [[ "$target" != /* ]] && target="$dir/$target"   # re-base a relative stow link
+        dir="$(builtin cd -- "$(dirname -- "$target")" && pwd)"
+    fi
+    (builtin cd -- "$dir/../../.." && pwd)                # <repo>/home/.local/bin -> <repo>
+}
+ZSHRC="${ZSHRC_UNDER_TEST:-$(_resolve_repo)/home/.zshrc}"
+
+ok()  { PASS=$(( PASS + 1 )); printf '  PASS  %s\n' "$1"; }
+bad() { FAIL=$(( FAIL + 1 )); printf '  FAIL  %s\n' "$1"
+        [[ $# -gt 1 ]] && printf '        %s\n' "$2"; }
+
+echo "mv/cp wrapper selftest"
+echo "zshrc under test: $ZSHRC"
+echo
+
+if [[ ! -r "$ZSHRC" ]]; then
+    bad ".zshrc readable" "looked at $ZSHRC"
+    echo; echo "  $PASS passed, $FAIL failed"; exit 1
+fi
+
+# Cut the two functions out and define them here. A missing function is a FAIL,
+# never a silent pass through to the real binary.
+for fn in mv cp; do
+    body=$(sed -n "/^${fn}() {/,/^}/p" "$ZSHRC")
+    if [[ -z "$body" ]]; then bad "$fn() found in .zshrc"; continue; fi
+    eval "$body"
+    [[ "$(whence -w $fn)" == "$fn: function" ]] && ok "$fn() defined from .zshrc" || bad "$fn() defined from .zshrc"
+done
+
+T="${TMPDIR:-/tmp}/mv-wrapper-selftest.$$"
+mkdir -p "$T" || { bad "scratch dir $T"; echo; echo "  $PASS passed, $FAIL failed"; exit 1; }
+builtin cd "$T" || exit 1
+n=0
+fresh() { n=$(( n + 1 )); D="$T/arm$n"; mkdir -p "$D"; builtin cd "$D"; printf A > a; printf B > b; }
+
+# arm <label> <expected rc> <check> -- <command...>; stdin comes from the caller.
+arm() {
+    local label="$1" want="$2" check="$3"; shift 4
+    local rc
+    "$@" 2>/dev/null; rc=$?
+    if [[ "$rc" -ne "$want" ]]; then bad "$label" "rc $rc, expected $want"; return; fi
+    if ! eval "$check"; then bad "$label" "rc $rc as expected, but state check failed: $check"; return; fi
+    ok "$label (rc $rc)"
+}
+
+echo "=== mv: a declined overwrite must FAIL, and leave both files alone ==="
+fresh; arm 'mv a b, EOF (agent Bash) declines'  1 '[[ -e a && $(<b) == B ]]' -- mv a b </dev/null
+fresh; arm 'mv a b, "n" declines'               1 '[[ -e a && $(<b) == B ]]' -- mv a b <<<n
+fresh; mkdir d; printf OLD > d/a
+       arm 'mv a d/, target exists, declined'   1 '[[ -e a && $(<d/a) == OLD ]]' -- mv a d </dev/null
+fresh; mkdir d; printf OLD > d/a
+       arm 'two sources into d/, one declined'  1 '[[ -e a && ! -e b && $(<d/b) == B ]]' -- mv a b d </dev/null
+fresh; arm 'mv -v a b declined'                 1 '[[ -e a ]]' -- mv -v a b </dev/null
+fresh; arm 'mv -- a b declined'                 1 '[[ -e a ]]' -- mv -- a b </dev/null
+fresh; out=$(mv a b </dev/null 2>/dev/null && echo NEXT-RAN)
+       [[ -z "$out" ]] && ok "'mv a b && next': next did not run" || bad "'mv a b && next': next did not run" "got: $out"
+
+echo "=== mv: a real move must still SUCCEED ==="
+fresh; arm 'mv a b, "y" accepts'                0 '[[ ! -e a && $(<b) == A ]]' -- mv a b <<<y
+fresh; arm 'mv a c, no conflict, no prompt'     0 '[[ ! -e a && $(<c) == A ]]' -- mv a c </dev/null
+fresh; mkdir d
+       arm 'mv a d/, no conflict'               0 '[[ ! -e a && $(<d/a) == A ]]' -- mv a d </dev/null
+fresh; arm 'mv -f a b overwrites'               0 '[[ ! -e a && $(<b) == A ]]' -- mv -f a b </dev/null
+fresh; mkdir sub
+       arm 'mv sub newdir (a directory)'        0 '[[ ! -e sub && -d newdir ]]' -- mv sub newdir </dev/null
+fresh; arm 'missing source keeps mv failure'    1 '[[ -e a ]]' -- mv nosuch b </dev/null
+fresh; printf X > Foo
+if [[ -e foo ]]; then   # case-insensitive filesystem (APFS default): mv -i prompts here too
+       arm 'case-only rename Foo -> foo, "y"'   0 '[[ " $(print *(N)) " == *" foo "* && " $(print *(N)) " != *" Foo "* ]]' -- mv Foo foo <<<y
+       fresh; printf X > Foo
+       arm 'case-only rename declined (EOF)'    1 '[[ " $(print *(N)) " == *" Foo "* ]]' -- mv Foo foo </dev/null
+else
+       ok 'case-only rename: filesystem is case-sensitive, not applicable (stated, not skipped silently)'
+fi
+
+echo "=== cp: unchanged, already FAILS on a decline ==="
+fresh; arm 'cp a b, EOF declines'               1 '[[ $(<b) == B ]]' -- cp a b </dev/null
+fresh; arm 'cp a b, "y" accepts'                0 '[[ $(<b) == A ]]' -- cp a b <<<y
+
+builtin cd /
+echo
+echo "  $PASS passed, $FAIL failed   (scratch: $T, left in place)"
+(( FAIL == 0 ))
