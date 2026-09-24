@@ -968,6 +968,225 @@ function reset_check(    k, j, n, b, a, w, rec, p, c, v, chain, exited, shown) {
     }
 }
 
+# ------------------------------------------------------------------ pjw
+# Used by enforce-pj-workers.sh (CONV_MODE=pjw). Deny only, never a rewrite.
+# W-20260924-A59, rulings D-20260924-A04/A05: a conductor starts a Claude worker
+# ONLY through `pj-worker start` (clean room: `pj-worker start --cleanroom`).
+# This mode refuses the conductor's honest slip, early. It is NOT the floor: the
+# `claude()` guard in the pane's own zsh is, because herdr TYPES `claude` into the
+# pane and a Bash hook sees only this call's text (redteam-3 H1: send-keys letter
+# by letter, send-text split over two calls, a script on the socket all pass here).
+#
+# Denied:
+#   herdr [global opts] agent start ... --kind K   K (trimmed, lowercased) not in
+#       the known list of NON-claude kinds from herdr 0.9.1's --help: so claude,
+#       claude-code, Claude, an expansion, or no readable --kind at all
+#   herdr pane run|send-text <pane> <text>, and send-keys spelling text: the text
+#       is re-scanned as the pane's zsh would run it, and denied when the COMMAND
+#       WORD of any command in it is claude (bare or by path) or a .zshrc alias or
+#       function that launches it (cb cr ci cpr cd_ cskip ct lifeos claude-clean,
+#       __claude_launch claude). claude's info forms pass: --version, --help and
+#       the subcommands in pj_info().
+# Seen through: $(...), backticks, function bodies, and the string argument of
+#   bash/sh/zsh/dash/ksh -c, eval, and ssh's remote command (all re-scanned).
+# Allowed: pj, pj-worker, herdr-quick-task (not herdr), other kinds, claude as an
+#   ARGUMENT (alias claude, which claude), prose in quotes, heredocs and commits.
+# Override: a PJ_WORKERS_CONTROL=W-YYYYMMDD-XNN assignment on the herdr command
+#   turns its deny into CONTROL: allowed, logged and named by the hook.
+# Output: ALLOW | DENY | CONTROL, then one message line (CONTROL: the item id,
+#   then the message).
+
+function pj_kind_ok(k) {
+    return k ~ /^(pi|codex|gemini|cursor|devin|agy|cline|omp|mastracode|opencode|copilot|kimi|kiro|droid|amp|grok|hermes|kilo|qodercli|qwen|letta|maki|muse)$/
+}
+function pj_alias(b) { return b ~ /^(cb|cr|ci|cpr|cd_|cskip|ct|lifeos|claude-clean)$/ }
+# claude words that print or manage, and never start a session.
+function pj_info(w) {
+    return w ~ /^(-v|-V|--version|-h|--help|agents|mcp|doctor|plugin|plugins|update|upgrade|install|config|migrate-installer|setup-token|auth)$/
+}
+function pj_is_claude(v) { return base(v) == "claude" || v ~ /\/claude\/versions\/[^\/]+$/ }
+
+# The text zsh passes as the argument, quotes removed, expansions left as written.
+function pj_dq(w,    i, n, c, out) {
+    n = length(w); out = ""; i = 1
+    while (i <= n) {
+        c = substr(w, i, 1)
+        if (c == "'") { i++; while (i <= n && substr(w, i, 1) != "'") { out = out substr(w, i, 1); i++ }; i++; continue }
+        if (c == "$" && substr(w, i + 1, 1) == "'") {
+            i += 2
+            while (i <= n && substr(w, i, 1) != "'") {
+                c = substr(w, i, 1)
+                if (c == "\\") { i++; c = substr(w, i, 1); if (c == "n") c = "\n"; else if (c == "t") c = "\t" }
+                out = out c; i++
+            }
+            i++; continue
+        }
+        if (c == "\"") {
+            i++
+            while (i <= n && substr(w, i, 1) != "\"") {
+                c = substr(w, i, 1)
+                if (c == "\\" && index("$`\"\\\n", substr(w, i + 1, 1)) > 0) { i++; c = substr(w, i, 1) }
+                out = out c; i++
+            }
+            i++; continue
+        }
+        if (c == "\\") { i++; out = out substr(w, i, 1); i++; continue }
+        out = out c; i++
+    }
+    return out
+}
+
+function pj_enqueue(t, ctx, ov, where) {
+    if (QN >= 64) { pj_hit("DENY", "enforce-pj-workers: more than 64 nested strings to re-scan; refusing rather than guessing", ""); return }
+    QN++; QT[QN] = t; QX[QN] = ctx; QO[QN] = ov; QW[QN] = where
+}
+
+# First DENY wins; a CONTROL (override) is kept only while nothing is denied.
+function pj_hit(v, m, ov) {
+    if (PV == "DENY") return
+    if (v == "DENY" && ov != "") { if (PV == "") { PV = "CONTROL"; PM = m; PO = ov }; return }
+    PV = v; PM = m
+}
+
+function pj_msg_worker(what) {
+    return "enforce-pj-workers: " what ". A conductor starts a Claude worker ONLY with `pj-worker start` (it launches a pj session, checks it, and counts the 4-session cap), and a clean-room worker with `pj-worker start --cleanroom` (D-20260924-A04/A05; the text exemption -- --setting-sources '' is refused). Other agent kinds (codex, gemini, ...) are allowed. A proof that needs a plain worker as its control: prefix the herdr command with PJ_WORKERS_CONTROL=<item id>; it is allowed, logged and named."
+}
+
+# herdr command k, its command word at j. Reads global options, then the group.
+function pj_herdr(k, j, ov, ctx, where,    a, n, g, s, kind, gotk, clean, t, w, sep) {
+    n = CNW[k]
+    for (a = j + 1; a <= n; a++) {
+        w = unq(WR[k, a])
+        if (w == "--machine" || w == "--session" || w == "--remote" || w == "--remote-keybindings") { a++; continue }
+        if (w ~ /^-/) continue
+        break
+    }
+    if (a > n) return
+    g = unq(WR[k, a]); s = unq(WR[k, a + 1])
+    if (g == "agent" && s == "start") {
+        gotk = 0; clean = 0; kind = ""
+        for (a += 2; a <= n; a++) {
+            w = WR[k, a]
+            if (w == "--") {
+                for (a++; a <= n; a++) if (unq(WR[k, a]) ~ /^--setting-sources(=|$)/) clean = 1
+                break
+            }
+            if (w == "--kind" || w ~ /^--kind=/) {
+                if (w == "--kind") { a++; w = (a <= n) ? WR[k, a] : "" } else sub(/^--kind=/, "", w)
+                gotk = 1; kind = (w ~ /[$`]/) ? "" : tolower(pj_dq(w))
+                gsub(/^[ \t]+|[ \t]+$/, "", kind)
+            }
+        }
+        if (gotk && pj_kind_ok(kind)) return
+        if (clean) t = "`herdr agent start --kind claude -- --setting-sources ''` is the clean-room text exemption, refused by ruling"
+        else if (!gotk) t = "`herdr agent start` with no --kind this hook can read (herdr needs one, and it may be claude)"
+        else if (kind == "") t = "`herdr agent start --kind` from an expansion this hook cannot read (it may be claude)"
+        else if (kind == "claude" || kind == "claude-code") t = "`herdr agent start --kind " kind "` starts plain claude, not a pj session"
+        else t = "`herdr agent start --kind " kind "`: not a kind herdr 0.9.1 lists besides claude"
+        pj_hit("DENY", pj_msg_worker(t (where != "" ? " (" where ")" : "")), ov)
+        return
+    }
+    if (g == "pane" && (s == "run" || s == "send-text" || s == "send-keys")) {
+        t = ""; sep = ""
+        for (a += 3; a <= n; a++) {
+            w = pj_dq(WR[k, a])
+            if (s == "send-keys") {
+                if (w == "space") w = " "
+                else if (w == "enter" || w == "return") w = "\n"
+                else if (w == "tab") w = "\t"
+                else if (length(w) > 1 && w ~ /^(ctrl|alt|shift|meta|cmd)\+|^(esc|escape|up|down|left|right|home|end|backspace|delete|pageup|pagedown|f[0-9]+)$/) w = ""
+                t = t w
+            } else { t = t sep w; sep = " " }
+        }
+        pj_enqueue(t, "pane", ov, "typed into a pane by herdr pane " s)
+    }
+}
+
+# Is simple command k (typed into a pane) a claude session? Returns a label or "".
+function pj_pane_claude(k, j,    n, a, v, w) {
+    n = CNW[k]
+    v = unq(WR[k, j])
+    if (v == "") {                    # the command word is an expansion: read every word
+        for (a = j; a <= n; a++) { w = base(unq(WR[k, a])); if (w == "claude" || pj_alias(w)) return w " (after an expansion)" }
+        return ""
+    }
+    if (base(v) == "__claude_launch" || base(v) == "_claude_launch") {
+        for (j++; j <= n && WR[k, j] ~ /^[A-Za-z_][A-Za-z0-9_]*=/; j++) ;
+        if (j > n) return ""
+        v = unq(WR[k, j])
+    }
+    if (pj_alias(base(v))) return base(v)
+    if (!pj_is_claude(v)) return ""
+    for (a = j + 1; a <= n; a++) {
+        w = unq(WR[k, a])
+        if (pj_info(w)) return ""
+        if (w !~ /^-/) break
+    }
+    for (a = j + 1; a <= n; a++) if (unq(WR[k, a]) ~ /^--setting-sources(=|$)/) return "claude --setting-sources (the clean-room text exemption)"
+    return "claude"
+}
+
+function pj_scan(ctx, ov, where,    k, j, n, a, w, b, ovk, t, lab) {
+    for (k = 1; k <= NC; k++) {
+        j = eff(k); n = CNW[k]
+        if (j > n) continue
+        ovk = ov
+        for (a = 1; a < j; a++) if (WR[k, a] ~ /^PJ_WORKERS_CONTROL=/) {
+            w = unq(WR[k, a]); sub(/^PJ_WORKERS_CONTROL=/, "", w)
+            if (w ~ /^W-[0-9]{8}-[A-Z][0-9]+$/) ovk = w
+        }
+        w = unq(WR[k, j]); b = base(w)
+        if (ctx == "pane") {
+            lab = pj_pane_claude(k, j)
+            if (lab != "") { pj_hit("DENY", pj_msg_worker("`" lab "` " (where != "" ? where : "typed into a pane") ", which starts plain claude, not a pj session"), ovk); if (PV == "DENY") return }
+        }
+        if (b == "herdr") { pj_herdr(k, j, ovk, ctx, where); if (PV == "DENY") return; continue }
+        if (b ~ /^(bash|sh|zsh|dash|ksh)$/) {
+            for (a = j + 1; a <= n; a++) {
+                w = unq(WR[k, a])
+                if (w ~ /^-[a-zA-Z]*c[a-zA-Z]*$/) { if (a < n) pj_enqueue(pj_dq(WR[k, a + 1]), ctx, ovk, "inside " b " -c"); break }
+                if (w !~ /^[-+]/) break
+            }
+            continue
+        }
+        if (b == "eval") {
+            t = ""; for (a = j + 1; a <= n; a++) t = t (a > j + 1 ? " " : "") pj_dq(WR[k, a])
+            pj_enqueue(t, ctx, ovk, "inside eval"); continue
+        }
+        if (b == "ssh") {
+            for (a = j + 1; a <= n; a++) {
+                w = unq(WR[k, a])
+                if (w ~ /^-[bcDEeFIiJLlmOoPpQRSWw]$/) { a++; continue }
+                if (w ~ /^-/) continue
+                break
+            }
+            t = ""; for (a++; a <= n; a++) t = t (t != "" ? " " : "") pj_dq(WR[k, a])
+            if (t != "") pj_enqueue(t, ctx, ovk, "inside ssh's remote command")
+            continue
+        }
+        # herdr behind a wrapper eff() does not know (timeout 60 herdr ...,
+        # caffeinate herdr ...): any later UNQUOTED word that is herdr.
+        for (a = j + 1; a <= n; a++) if (!WQ[k, a] && base(WR[k, a]) == "herdr") { pj_herdr(k, a, ovk, ctx, where); break }
+        if (PV == "DENY") return
+    }
+}
+
+function pj_load(t) { S = t; N = split(S, C, ""); P = 1; NC = 0; HDN = 0; BG = 0; UNSURE = ""; SUBSH = 0; BTN = 0 }
+
+function pjw_main(    qi, i) {
+    PV = ""; PM = ""; PO = ""; QN = 1; QT[1] = S; QX[1] = "bash"; QO[1] = ""; QW[1] = ""
+    for (qi = 1; qi <= QN; qi++) {
+        pj_load(QT[qi])
+        parse_list(1, "", 0, "^")
+        pj_scan(QX[qi], QO[qi], QW[qi])
+        if (PV == "DENY") break
+        for (i = 1; i <= BTN; i++) pj_enqueue(BT[i], QX[qi], QO[qi], "inside backticks")
+    }
+    if (PV == "DENY") { print "DENY"; print PM; exit 0 }
+    if (PV == "CONTROL") { print "CONTROL"; print PO " " PM; exit 0 }
+    print "ALLOW"; print ""; exit 0
+}
+
 # ------------------------------------------------------------------ main
 
 { S = (NR > 1 ? S "\n" : "") $0 }
@@ -976,7 +1195,8 @@ END {
     N = split(S, C, "")
     mode = ENVIRON["CONV_MODE"]
     P = 1; NC = 0; HDN = 0; BG = 0; UNSURE = ""; SUBSH = 0; BTN = 0
-    REC_NESTED = (mode == "guard")      # only guard looks inside $(...) and backticks
+    REC_NESTED = (mode == "guard" || mode == "pjw")   # only these look inside $(...) and backticks
+    if (mode == "pjw") pjw_main()
     parse_list(1, "", 0, "^")
     if (HDN) unsure("here-document with no body")
     if (mode == "guard" || mode == "builtin" || mode == "reset") {   # deny-only modes: never compose
