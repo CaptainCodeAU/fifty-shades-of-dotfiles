@@ -103,9 +103,9 @@ Usage
                         Give it the SAME syntax class as your patterns: a literal
                         control cannot prove a regex pattern compiled as intended.
     --root PATH         project root to census (default: current directory).
-    --under PREFIX      restrict to this path or anything beneath it, relative to root
-                        (repeatable). Matched on PATH boundaries, so `d` never means
-                        docs/, dist/ and data/ at once.
+    --under PREFIX      restrict to this path or anything beneath it (repeatable).
+                        Relative to root, or absolute and beneath root. Matched on PATH
+                        boundaries, so `d` never means docs/, dist/ and data/ at once.
     --exclude PREFIX    drop this path and anything beneath it (repeatable). Both
                         filters print the number of files they moved.
     --regex             treat patterns as regular expressions instead of literals.
@@ -146,6 +146,8 @@ REFUSALS (exit 2, no numbers printed)
     · the control or any pattern is not a valid regular expression — the run is refused
       WHOLE, because a partial count with no TOTAL beneath it reads like a complete one
     · --root is not a directory
+    · a --under or --exclude path is empty, or lies outside --root (absolute, or
+      relative and climbing out with ..) — it would keep or drop nothing
 
 Exit codes
     0  a count was produced      2  refused (see REFUSALS above)
@@ -296,7 +298,32 @@ def inside(path, prefix):
     the header printed only `EXCLUDED: d`. The trim was silent, which is the same defect
     as an unstated population.
     """
-    return path == prefix or path.startswith(prefix + "/")
+    return prefix == "." or path == prefix or path.startswith(prefix + "/")
+
+
+def to_prefix(given, root, raw_root):
+    """The root-relative prefix a --under/--exclude value names, or None when it lies
+    outside the root. '.' is the root itself.
+
+    A relative value is relative to the root. An absolute one is accepted when it lies
+    beneath the root as typed OR as resolved: on this Mac /tmp is /private/tmp, and
+    --root is resolved while the path a person types usually is not. Lexical forms are
+    tried before the symlink-resolved one, so a path through an in-repo link keeps the
+    spelling git lists it under.
+
+    This replaced `u.strip("/")`, which turned `--under /Users/.../repo/home` into
+    `Users/.../repo/home`. That matched 0 files and only the control caught it (A24).
+    """
+    if not os.path.isabs(given):
+        rel = os.path.normpath(given)
+        return None if rel == ".." or rel.startswith("../") else rel
+    for target, base in ((os.path.normpath(given), str(root)),
+                         (os.path.normpath(given), os.path.abspath(raw_root)),
+                         (os.path.realpath(given), str(root))):
+        rel = os.path.relpath(target, base)
+        if rel != ".." and not rel.startswith("../"):
+            return rel
+    return None
 
 
 def classify(path):
@@ -333,9 +360,8 @@ def collect(root, unders, excludes, force_walk, include_binary=False, scope="tra
             visible, _, _ = walked_files(root, "tracked")
             files = sorted(set(files) - set(visible))
 
+    # unders and excludes arrive already normalised by to_prefix() in main().
     filters = []
-    unders = [u.strip("/") for u in unders]
-    excludes = [e.strip("/") for e in excludes]
     if unders:
         for u in unders:
             n = sum(1 for f in files if inside(f, u))
@@ -463,6 +489,7 @@ refused (exit 2, and nothing is counted):
   --control empty, or able to match      the control or a pattern is not valid
     the empty string (x*, a?, ^)           regex - the run is refused WHOLE, since
   --root is not a directory                a partial count reads like a full one
+  a --under/--exclude path that is empty or lies outside --root
 
 always printed, so a count is never quoted bare:
   the population and how it was drawn (git ls-files, or an explicit walk)
@@ -513,12 +540,14 @@ def build_parser():
     ap.add_argument("--root", default=".", metavar="PATH",
                     help="project root to census (default: the current directory)")
     ap.add_argument("--under", action="append", default=[], metavar="PREFIX",
-                    help="restrict to this path or anything beneath it, relative to "
-                         "root. Repeatable. Matched on PATH boundaries, so 'd' never "
+                    help="restrict to this path or anything beneath it: relative to "
+                         "root, or absolute and beneath root (outside is refused). "
+                         "Repeatable. Matched on PATH boundaries, so 'd' never "
                          "means docs/, dist/ and data/ at once")
     ap.add_argument("--exclude", action="append", default=[], metavar="PREFIX",
-                    help="drop this path and anything beneath it. Repeatable. Both "
-                         "filters print how many files they actually moved")
+                    help="drop this path and anything beneath it; same path rules as "
+                         "--under. Repeatable. Both filters print how many files they "
+                         "actually moved")
     ap.add_argument("--regex", action="store_true",
                     help="treat the control and patterns as regular expressions "
                          "(default: literal, so metacharacters are escaped)")
@@ -647,8 +676,41 @@ def main() -> int:
         print(f"{RED}✗ --root {root} is not a directory — no population, no count{OFF}")
         return 2
 
+    # ── EVERY FILTER NAMES A PATH INSIDE THE ROOT, OR THE RUN IS REFUSED ──────────
+    # A filter pointing outside the root keeps 0 files, and the control then fails with
+    # a message about patterns and file sets rather than the path. Name the path instead.
+    # An empty filter is refused too: normalised, "" would mean the WHOLE root, so
+    # `--under "$UNSET"` would widen a search while reading like a narrow one.
+    unders, excludes, outside = [], [], []
+    for flag, values, dest in (("--under", a.under, unders),
+                               ("--exclude", a.exclude, excludes)):
+        for v in values:
+            if not v.strip():
+                if refused("empty_filter", flag=flag):
+                    return 2
+                print(f"{RED}✗ {flag} is empty — not a path, and not the whole root "
+                      f"either.{OFF}")
+                print(f"  {DIM}If you wrote {flag} \"$VAR\", the variable is unset or empty. "
+                      f"Use {flag} . to mean the root.{OFF}")
+                return 2
+            p = to_prefix(v, root, a.root)
+            if p is None:
+                outside.append({"flag": flag, "path": v})
+            else:
+                dest.append(p)
+    if outside:
+        if refused("filter_outside_root", root=str(root), outside=outside):
+            return 2
+        print(f"{RED}✗ {len(outside)} filter(s) point outside --root {root} — nothing "
+              f"there is in the population, so nothing was counted.{OFF}")
+        for o in outside:
+            print(f"  {RED}{o['flag']} {o['path']}{OFF}")
+        print(f"  {DIM}A filter is relative to --root, or absolute and beneath it. To search\n"
+              f"  that tree, make it the root: --root <that path>.{OFF}")
+        return 2
+
     scope = "ignored" if a.ignored_only else ("all" if a.include_ignored else "tracked")
-    files, mode, filters, skipped, unfollowed = collect(root, a.under, a.exclude, a.walk,
+    files, mode, filters, skipped, unfollowed = collect(root, unders, excludes, a.walk,
                                                         a.binary, scope)
 
     # ── the denominator AND how it was drawn, ON BOTH PATHS ───────────────────────

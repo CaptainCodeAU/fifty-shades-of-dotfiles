@@ -450,6 +450,53 @@ def main() -> int:
         check("21f symlink: --json says [] rather than nothing when none were hidden",
               ok, why)
 
+        # ── 22 · an ABSOLUTE --under/--exclude is honoured, or refused by name ────────
+        # Measured 2026-09-24 (A24): `--under <repo>/home` had its leading slash stripped,
+        # matched 0 files, and only the control caught it. The same call with `--under
+        # home` found 170. On this Mac mkdtemp hands back /var/... while --root resolves to
+        # /private/var/..., so the unresolved spelling is the one a person actually types.
+        _, _, full = run(root, *W, "NEEDLE")
+        _, _, rel = run(root, "--under", "docs", *W, "NEEDLE")
+        check("22a abspath: the relative control arm keeps docs/ alone",
+              "--under docs → 1 file(s) kept" in rel and pop(rel) == 1,
+              "the relative form broke, so the absolute arms below prove nothing")
+        rc, _, plain = run(root, "--under", str(root / "docs"), *W, "NEEDLE")
+        check("22b abspath: an absolute path inside --root keeps what the relative one does",
+              rc == 0 and "--under docs → 1 file(s) kept" in plain,
+              f"rc={rc}; the leading slash is still being stripped")
+        rc, _, plain = run(root, "--under", str(root.resolve() / "docs") + "/", *W, "NEEDLE")
+        check("22c abspath: the symlink-resolved spelling, trailing slash and all, works too",
+              rc == 0 and "--under docs → 1 file(s) kept" in plain, f"rc={rc}")
+        rc, _, plain = run(root, "--exclude", str(root / "docs"), *W, "NEEDLE")
+        check("22d abspath: --exclude takes an absolute path the same way",
+              rc == 0 and "--exclude docs → 1 file(s) dropped" in plain, f"rc={rc}")
+        rc, _, plain = run(root, "--under", str(root), *W, "NEEDLE")
+        check("22e abspath: --under the root itself keeps the whole population",
+              rc == 0 and pop(plain) == pop(full), f"rc={rc}")
+        rc, _, plain = run(root, "--under", str(tmp_link), *W, "NEEDLE")
+        check("22f abspath: a path OUTSIDE --root is refused by name with exit 2",
+              rc == 2 and "outside --root" in plain and str(tmp_link) in plain,
+              f"rc={rc}")
+        check("22g abspath: the refusal prints no numbers",
+              not re.search(r"^\s*(TOTAL|NEEDLE)\s+\d", plain, re.M))
+        rc, _, plain = run(root, "--under", "../elsewhere", *W, "NEEDLE")
+        check("22h abspath: a RELATIVE path that climbs out of --root is refused too",
+              rc == 2 and "outside --root" in plain, f"rc={rc}")
+        rc, raw, _ = run(root, "--json", "--exclude", str(tmp_link), *W, "NEEDLE")
+        try:
+            d = json.loads(raw)
+            ok = (rc == 2 and d.get("refused") == "filter_outside_root"
+                  and d["outside"][0]["flag"] == "--exclude")
+            why = "" if ok else f"rc={rc} doc={d}"
+        except Exception as e:
+            ok, why = False, f"not JSON: {e}"
+        check("22i abspath: --json names the refusal and the flag", ok, why)
+        # Normalising makes "" mean ".", the whole root. `--under "$UNSET"` would then
+        # WIDEN a search while looking like a narrow one: census's founding accident again.
+        rc, _, plain = run(root, "--under", "", *W, "NEEDLE")
+        check("22j abspath: an EMPTY filter is refused, not read as the whole root",
+              rc == 2 and "is empty" in plain, f"rc={rc}")
+
         # ── the original guarantee must still hold ──────────────────────────────────
         rc, _, plain = run(root, "--walk", "--control", "ABSENT-TOKEN", "NEEDLE")
         check("8a control still refuses: exit 2 when the control misses", rc == 2)
