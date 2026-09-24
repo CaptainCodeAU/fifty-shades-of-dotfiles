@@ -19,6 +19,9 @@ ROOT="$(mktemp -d "${TMPDIR:-/tmp}/pj-wrap-selftest.XXXXXX")" || exit 1
 ROOT="$(cd "$ROOT" && pwd -P)"
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 export PATH="$BIN:$PATH"
+# BLANK BOTH session variables (M16). pj-wrap falls back to CLAUDE_SESSION_ID, so a selftest
+# run inside a session that exports it saw a session id in every "no session id" arm.
+unset CLAUDE_SESSION_ID CLAUDE_CODE_SESSION_ID
 STATE="$ROOT/state"; export PJ_STATE_DIR="$STATE"
 # PIN THE MACHINE LETTER (P8a). Every ID pj-id mints carries this box's letter, so an arm
 # that matched a bare -NN passed on the mini and would fail on the laptop. A fixture letter
@@ -46,7 +49,7 @@ printf 'seed\n' > "$DC/notes.txt"; git -C "$DC" add notes.txt; git -C "$DC" comm
 OTHER="$ROOT/other"; git clone -q "$REMOTE" "$OTHER" 2>/dev/null
 oi(){   ( cd "$ZETA" && OPEN_ITEMS_PROJECTS_DIR="$DC/projects" OPEN_ITEMS_DOTCLAUDE="$DC" "$OI" "$@" ); }
 oi_other(){ ( cd "$ZETA" && OPEN_ITEMS_PROJECTS_DIR="$OTHER/projects" OPEN_ITEMS_DOTCLAUDE="$OTHER" "$OI" "$@" ); }
-wrap(){ OUT="$(cd "$ZETA" && OPEN_ITEMS_PROJECTS_DIR="$DC/projects" OPEN_ITEMS_DOTCLAUDE="$DC" CLAUDE_CODE_SESSION_ID="${SID-}" "$WRAP" "$@" 2>&1)"; RC=$?; return 0; }
+wrap(){ OUT="$(cd "$ZETA" && OPEN_ITEMS_PROJECTS_DIR="$DC/projects" OPEN_ITEMS_DOTCLAUDE="$DC" CLAUDE_SESSION_ID= CLAUDE_CODE_SESSION_ID="${SID-}" "$WRAP" "$@" 2>&1)"; RC=$?; return 0; }
 mkdir -p "$DC/projects/$KEY/memory/WORK"
 oi init >/dev/null 2>&1; oi add "seed item" --done-when x >/dev/null 2>&1
 git -C "$DC" push -q origin master 2>/dev/null; git -C "$OTHER" pull -q 2>/dev/null
@@ -91,6 +94,65 @@ wrap done
 check "B done again with no flag: rc 0, says so" '[ "$RC" -eq 0 ] && printf "%s" "$OUT" | grep -q "no earlier-session flag"'
 wrap done --bogus; check "B unknown flag REFUSES" '[ "$RC" -eq 2 ]'
 
+# --- B2: via (W6), the CHECKED marker write (W-20260924-A25), owed records (W5) --------------
+MK="$STATE/wrapped/this-session"
+check "B bare done writes via: bare" 'grep -qx "via: bare" "$MK"'
+wrap done --skill
+check "B done --skill rc 0, writes via: skill" '[ "$RC" -eq 0 ] && grep -qx "via: skill" "$MK" && ! grep -q "via: bare" "$MK"'
+check "B marker keeps wrapped: and project: lines" 'grep -q "^wrapped: [0-9-]* [0-9:]*$" "$MK" && grep -qx "project: zeta" "$MK"'
+# A refused write, two ways. The marker path is a directory (the write cannot succeed),
+# and a read-only wrapped/ (the sandbox's EPERM shape). Each must REFUSE, never claim.
+printf 'project: zeta\nsession: s-refused\n' > "$FLAG"
+mkdir -p "$STATE/wrapped/refused-sid"
+SID=refused-sid; wrap done
+check "B marker write refused (path is a dir) -> rc 2" '[ "$RC" -eq 2 ]'
+check "B refused write never prints marked wrapped" '! printf "%s" "$OUT" | grep -q "marked wrapped,"'
+check "B refused write says NOT marked wrapped" 'printf "%s" "$OUT" | grep -q "NOT marked wrapped"'
+check "B refused write left the no-wrap-up flag in place" '[ -f "$FLAG" ]'
+chmod 555 "$STATE/wrapped"
+SID=readonly-sid; wrap done
+chmod 755 "$STATE/wrapped"
+check "B read-only wrapped/ -> rc 2 and no marker file" '[ "$RC" -eq 2 ] && [ ! -e "$STATE/wrapped/readonly-sid" ] && printf "%s" "$OUT" | grep -q "NOT marked wrapped"'
+SID=readonly-sid; wrap done
+check "B control: same session, writable again -> rc 0, marker written, flag moved" '[ "$RC" -eq 0 ] && [ -f "$STATE/wrapped/readonly-sid" ] && [ ! -e "$FLAG" ]'
+# owed
+SID=this-session
+OWED="$STATE/owed/$KEY"
+wrap done --owed "/wrap-up"
+check "B done --owed rc 0 and says owed" '[ "$RC" -eq 0 ] && printf "%s" "$OUT" | grep -q "owed: /wrap-up, recorded"'
+check "B owed record: keys owed, project, session, since in that order" '[ "$(sed -n "s/^\([a-z]*\): .*/\1/p" "$OWED" | tr "\n" " ")" = "owed project session since " ]'
+check "B owed record values" 'grep -qx "owed: /wrap-up" "$OWED" && grep -qx "project: zeta" "$OWED" && grep -qx "session: this-session" "$OWED" && grep -Eqx "since: [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}" "$OWED"'
+check "B owed done still marks wrapped (via: bare)" 'grep -qx "via: bare" "$MK"'
+wrap done --skill --owed "/release patch" --keep-earlier
+check "B --owed combines with --skill and --keep-earlier" '[ "$RC" -eq 0 ] && grep -qx "via: skill" "$MK" && [ "$(grep -c "^owed: " "$OWED")" -eq 2 ]'
+check "B two owed records, exactly one blank line between" '[ "$(grep -c "^$" "$OWED")" -eq 1 ] && [ "$(sed -n 6p "$OWED")" = "owed: /release patch" ]'
+OSNAP="$(shasum "$OWED")"; MSNAP="$(shasum "$MK")"
+wrap done --owed "";                       R1=$RC
+wrap done --owed "   ";                    R2=$RC
+wrap done --owed "$(printf 'a\tb')";       R3=$RC
+wrap done --owed "$(printf '/a\nowed: b')"; R4=$RC
+wrap done --owed;                          R5=$RC
+check "B --owed empty, blank, tab, newline, missing -> all rc 2" '[ "$R1$R2$R3$R4$R5" = "22222" ]'
+check "B and none of them wrote: owed file and marker byte-identical" '[ "$(shasum "$OWED")" = "$OSNAP" ] && [ "$(shasum "$MK")" = "$MSNAP" ]'
+wrap owed
+check "B owed lists both records, rc 0" '[ "$RC" -eq 0 ] && printf "%s" "$OUT" | grep -q "^pj-wrap: 2 owed record" && printf "%s" "$OUT" | grep -q "1. /wrap-up  since" && printf "%s" "$OUT" | grep -q "2. /release patch  since"'
+wrap owed --clear "/nope"
+check "B owed --clear of a command not owed -> rc 1, nothing moved" '[ "$RC" -eq 1 ] && [ "$(shasum "$OWED")" = "$OSNAP" ] && [ ! -d "$STATE/owed/handled" -o -z "$(ls "$STATE/owed/handled")" ]'
+wrap owed --clear "pj:wrap-up"
+check "B owed --clear pj:wrap-up does NOT clear /wrap-up (exact name, never a suffix)" '[ "$RC" -eq 1 ] && [ "$(shasum "$OWED")" = "$OSNAP" ]'
+wrap owed --clear "release patch"
+check "B owed --clear one command (no slash) -> rc 0" '[ "$RC" -eq 0 ] && printf "%s" "$OUT" | grep -q "1 other record"'
+check "B that command moved to owed/handled, the other still owed" '[ "$(grep -c "^owed: " "$OWED")" -eq 1 ] && grep -qx "owed: /wrap-up" "$OWED" && grep -qx "owed: /release patch" "$STATE/owed/handled/$KEY".*'
+check "B the kept file is a clean record (no leading blank line)" '[ "$(head -1 "$OWED")" = "owed: /wrap-up" ]'
+wrap owed --clear
+check "B owed --clear with no command -> rc 0, the file moved" '[ "$RC" -eq 0 ] && [ ! -e "$OWED" ]'
+check "B nothing deleted: 2 owed records across owed/handled/, 2 files" '[ "$(cat "$STATE/owed/handled/"* | grep -c "^owed: ")" -eq 2 ] && [ "$(ls "$STATE/owed/handled" | grep -c "^$KEY\.")" -eq 2 ]'
+wrap owed
+check "B owed with nothing owed -> rc 1" '[ "$RC" -eq 1 ] && printf "%s" "$OUT" | grep -q "nothing owed"'
+wrap owed --clear
+check "B owed --clear with nothing owed -> rc 1" '[ "$RC" -eq 1 ]'
+wrap owed --bogus; check "B owed unknown argument REFUSES" '[ "$RC" -eq 2 ]'
+
 # --- C: push, nothing to push --------------------------------------------------------------
 wrap push
 check "C nothing to push -> rc 1" '[ "$RC" -eq 1 ] && printf "%s" "$OUT" | grep -q "nothing to push"'
@@ -113,6 +175,84 @@ check "D1 message names dot-claude, never the project repo" 'printf "%s" "$OUT" 
 command mv "$W/stray.txt" "$ROOT/stray.moved"
 wrap push
 check "D1 unchanged handoff -> nothing to push (rc 1), no new commit" '[ "$RC" -eq 1 ]'
+
+# --- P1: W1, commits that are not this session's are NAMED before the push, grouped ---------
+# The trailer block is the shape a real dot-claude commit carries (five C- trailers).
+SID=this-session
+dcommit(){  # dcommit <subject> [<C-Sess-Id>]
+  printf '%s\n' "$1" >> "$DC/p.txt"; git -C "$DC" add p.txt
+  if [ -n "${2-}" ]; then
+    git -C "$DC" commit -q -m "$1" -m "$(printf 'C-Sess-Id: %s\nC-Web-Id: https://claude.ai/code/session_fixture\nC-Branch: master\nC-Worktree: .\nC-Wt-Path: ~/dc' "$2")"
+  else git -C "$DC" commit -q -m "$1"; fi
+}
+dcommit "p1 from other-a" other-a; dcommit "p2 mine" this-session; dcommit "p3 from other-a again" other-a; dcommit "p4 no trailer"
+wrap push
+check "P1 W1 still pushes (rc 0, accepted)" '[ "$RC" -eq 0 ] && printf "%s" "$OUT" | grep -q "push accepted"'
+check "P1 W1 says 3 of 4 are not from this session" 'printf "%s" "$OUT" | grep -q "3 of 4 commit(s) to push are NOT this session"'
+check "P1 W1 groups session other-a with its count" 'printf "%s" "$OUT" | grep -q "session other-a (2):"'
+check "P1 W1 names both other-a subjects" 'printf "%s" "$OUT" | grep -q "p1 from other-a$" && printf "%s" "$OUT" | grep -q "p3 from other-a again$"'
+check "P1 W1 names the commit with no trailer" 'printf "%s" "$OUT" | grep -q "no C-Sess-Id trailer (1):" && printf "%s" "$OUT" | grep -q "p4 no trailer$"'
+check "P1 W1 does NOT list the commit from this session" '! printf "%s" "$OUT" | grep -q "p2 mine"'
+check "P1 W1 the list comes BEFORE the push" '[ "$(printf "%s\n" "$OUT" | grep -n "NOT this session" | cut -d: -f1)" -lt "$(printf "%s\n" "$OUT" | grep -n "^pj-wrap: pushing" | cut -d: -f1)" ]'
+dcommit "p5 mine" this-session
+wrap push
+check "P1 control: only a commit from this session -> says so, lists nothing" '[ "$RC" -eq 0 ] && printf "%s" "$OUT" | grep -q "all 1 commit(s) to push carry this session" && ! printf "%s" "$OUT" | grep -q "NOT this session"'
+dcommit "p6 mine but unknown" this-session
+SID=""; wrap push; SID=this-session
+check "P1 no session id -> every commit listed, and it says why" '[ "$RC" -eq 0 ] && printf "%s" "$OUT" | grep -q "id is not in the environment" && printf "%s" "$OUT" | grep -q "p6 mine but unknown"'
+
+# --- P2: W3, a GENERATED handoff over 60 lines is warned with its count --------------------
+gen(){ { printf '<!-- generated by /pj:wrap-up -->\n'; i=2; while [ "$i" -le "$1" ]; do printf 'line %s %s\n' "$i" "$3"; i=$((i+1)); done; } > "$2"; }
+gen 61 "$W/OPENING-PROMPT.md" a
+wrap push
+check "P2 drawer handoff of 61 lines -> WARNING with the count" '[ "$RC" -eq 0 ] && printf "%s" "$OUT" | grep -q "WARNING: the generated handoff .*OPENING-PROMPT.md is 61 lines, over the 60-line cap"'
+gen 60 "$W/OPENING-PROMPT.md" b
+wrap push
+check "P2 control: 60 lines -> no warning" '[ "$RC" -eq 0 ] && ! printf "%s" "$OUT" | grep -q "WARNING"'
+{ printf '# written by the project, no marker\n'; seq 1 80; } > "$W/OPENING-PROMPT.md"
+wrap push
+check "P2 control: 81 lines WITHOUT the marker -> no warning (the project owns it, W2)" '[ "$RC" -eq 0 ] && ! printf "%s" "$OUT" | grep -q "WARNING"'
+printf 'handoff: repo:HANDOFF.md\n' > "$ZETA/.claude/pj-homes"; gen 75 "$ZETA/HANDOFF.md" c
+wrap push
+check "P2 repo: handoff of 75 lines -> WARNING even with nothing to push (rc 1)" '[ "$RC" -eq 1 ] && printf "%s" "$OUT" | grep -q "HANDOFF.md is 75 lines"'
+printf 'records: private\n' > "$ZETA/.claude/pj-homes"; gen 62 "$ZETA/OPENING-PROMPT.md" d
+wrap push
+check "P2 no handoff: key -> the default repo:OPENING-PROMPT.md is counted" 'printf "%s" "$OUT" | grep -q "zeta/OPENING-PROMPT.md is 62 lines"'
+printf 'handoff: drawer:OPENING-PROMPT.md\n' > "$ZETA/.claude/pj-homes"
+
+# --- P3: E8, branch and upstream are checked BEFORE the handoff is committed ---------------
+gen 5 "$W/OPENING-PROMPT.md" e
+git -C "$DC" checkout -q --detach; HB="$(git -C "$DC" rev-parse HEAD)"
+wrap push
+check "P3 detached HEAD -> STOPPED (rc 3)" '[ "$RC" -eq 3 ] && printf "%s" "$OUT" | grep -q "detached HEAD"'
+check "P3 detached HEAD -> the handoff was NOT committed (HEAD unchanged, file still modified)" '[ "$(git -C "$DC" rev-parse HEAD)" = "$HB" ] && [ -n "$(git -C "$DC" status --porcelain -- "$W/OPENING-PROMPT.md")" ]'
+git -C "$DC" checkout -q master; git -C "$DC" checkout -q -b p3-noup; HB="$(git -C "$DC" rev-parse HEAD)"
+wrap push
+check "P3 no upstream -> STOPPED, handoff NOT committed" '[ "$RC" -eq 3 ] && printf "%s" "$OUT" | grep -q "no upstream" && [ "$(git -C "$DC" rev-parse HEAD)" = "$HB" ] && [ -n "$(git -C "$DC" status --porcelain -- "$W/OPENING-PROMPT.md")" ]'
+git -C "$DC" checkout -q master
+wrap push
+check "P3 control: back on master -> handoff committed and pushed" '[ "$RC" -eq 0 ] && printf "%s" "$OUT" | grep -q "handoff committed" && [ -z "$(git -C "$DC" status --porcelain -- "$W/OPENING-PROMPT.md")" ]'
+
+# --- P4: W-20260924-A12, "Everything up-to-date" is not an auth failure ---------------------
+# A stub git first on PATH answers `push` with git's own up-to-date line (the text quoted in
+# A12) and hands every other call to the real git. No real remote could be made to do this
+# on demand; the cause in A12 is still unknown, so the arm fixes the REPORTING only.
+REALGIT="$(command -v git)"; GSTUB="$ROOT/gitstub"; mkdir -p "$GSTUB"
+stubgit(){  # stubgit <exit code> <say up-to-date: yes|no>
+  printf '#!/bin/sh\nfor a in "$@"; do [ "$a" = push ] && { [ "%s" = yes ] && echo "Everything up-to-date" >&2; exit %s; }; done\nexec "%s" "$@"\n' "$2" "$1" "$REALGIT" > "$GSTUB/git"; chmod +x "$GSTUB/git"
+}
+wrapg(){ OUT="$(cd "$ZETA" && PATH="$GSTUB:$PATH" OPEN_ITEMS_PROJECTS_DIR="$DC/projects" OPEN_ITEMS_DOTCLAUDE="$DC" CLAUDE_SESSION_ID= CLAUDE_CODE_SESSION_ID="${SID-}" "$WRAP" "$@" 2>&1)"; RC=$?; }
+dcommit "p7 pending" this-session
+stubgit 1 yes; wrapg push
+check "P4 push exit 1 + up-to-date while ahead -> STOPPED (rc 3), its own case" '[ "$RC" -eq 3 ] && printf "%s" "$OUT" | grep -q "not an auth failure"'
+check "P4 and NO credential advice (no Keychain, no [H12] steps)" '! printf "%s" "$OUT" | grep -qi "keychain" && ! printf "%s" "$OUT" | grep -q "credential-cache"'
+stubgit 0 yes; wrapg push
+check "P4 push exit 0 + up-to-date while ahead -> STOPPED, never push accepted" '[ "$RC" -eq 3 ] && ! printf "%s" "$OUT" | grep -q "push accepted" && printf "%s" "$OUT" | grep -q "Everything up-to-date"'
+stubgit 0 no; wrapg push
+check "P4 push exit 0 but the upstream still lacks HEAD -> STOPPED, never push accepted" '[ "$RC" -eq 3 ] && ! printf "%s" "$OUT" | grep -q "push accepted" && printf "%s" "$OUT" | grep -q "went somewhere else"'
+wrap push
+check "P4 control: the real git -> push accepted" '[ "$RC" -eq 0 ] && printf "%s" "$OUT" | grep -q "push accepted"'
+git -C "$OTHER" pull -q --rebase 2>/dev/null
 
 # --- E: rejected, clean tree -> rebased and pushed ------------------------------------------
 git -C "$OTHER" pull -q --rebase 2>/dev/null; printf 'other 1\n' > "$OTHER/other1.txt"; git -C "$OTHER" add other1.txt; git -C "$OTHER" commit -q -m other1; git -C "$OTHER" push -q 2>/dev/null
@@ -218,10 +358,19 @@ check "H real probe: security exit 44 -> not answering here" 'printf "%s" "$OUT"
 sec_rc 51
 check "H real probe: any OTHER non-zero also reads as not answering (the conservative arm)" 'printf "%s" "$OUT" | grep -q "not answering in this shell"'
 check "H real probe: exit 51 does NOT claim the Keychain answered" '! printf "%s" "$OUT" | grep -q "DOES answer"'
+# NO `security` binary at all (Linux, audit A10). A PATH holding only bash, so the real
+# `command -v security` probe runs and misses. It used to read that as "DOES answer".
+NOSEC="$ROOT/nosec"; mkdir -p "$NOSEC"; ln -s "$BASH" "$NOSEC/bash"
+OUT="$(PATH="$NOSEC" "$WRAP" why-auth 2>&1)"; RC=$?
+check "H control: the stripped PATH really has no security binary, and pj-wrap ran (rc 0)" '! PATH="$NOSEC" command -v security >/dev/null 2>&1 && [ "$RC" -eq 0 ]'
+check "H no security binary -> says there is no Keychain on this OS" 'printf "%s" "$OUT" | grep -q "no Keychain on this OS"'
+check "H no security binary -> does NOT claim the Keychain answered" '! printf "%s" "$OUT" | grep -q "DOES answer"'
+check "H no security binary -> no sandbox advice either, still the [H12] steps" '! printf "%s" "$OUT" | grep -q "with the sandbox lifted" && printf "%s" "$OUT" | grep -q "git credential-cache exit"'
 
 # --- I: misc ------------------------------------------------------------------------------
 wrap bogus; check "I unknown command REFUSES (rc 2)" '[ "$RC" -eq 2 ]'
 wrap --help; check "I --help rc 0, usage first" '[ "$RC" -eq 0 ] && printf "%s" "$OUT" | grep -q "^Usage:"'
+check "I usage names --skill, --owed, owed --clear and ends at --selftest" 'printf "%s" "$OUT" | grep -q -- "--skill" && printf "%s" "$OUT" | grep -q -- "--owed" && printf "%s" "$OUT" | grep -q "owed --clear" && [ "$(printf "%s\n" "$OUT" | tail -1 | grep -c -- "--selftest")" -eq 1 ]'
 check "I bash -n clean" 'bash -n "$WRAP"'
 check "I nothing personal: no \$HOME in printed status paths" '! printf "%s" "$(SID=x; cd "$ZETA" && "$WRAP" status 2>&1)" | grep -q "$HOME"'
 

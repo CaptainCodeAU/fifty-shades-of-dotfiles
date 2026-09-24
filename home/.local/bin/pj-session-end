@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # pj-session-end -- the SessionEnd hook for pj (D-20260920-03). When a session ends
 # WITHOUT /pj:wrap-up having run, and it did work worth wrapping, it writes the
-# no-wrap-up flag the start card reads next time. Nothing else.
+# no-wrap-up flag the start card reads next time. It also moves an owed record aside
+# once the session ran the owed command (OWED RECORDS, below). Nothing else.
 #
 # Usage:
 #   pj-session-end              reads the hook JSON on stdin (session_id, transcript_path, cwd)
@@ -13,7 +14,8 @@
 # CONTRACT, in order of importance:
 #   1. exit 0 on EVERY path, fast, silent, never prompts, no network.
 #   2. writes ONLY under the pj state folder. Never a repo, a drawer or a memory folder.
-#   3. never deletes. A record is only ever added or replaced (same session ending twice).
+#   3. never deletes. A record is only ever added, replaced (same session ending twice),
+#      or MOVED to a handled/ folder.
 #   4. a hello probe or a quick question leaves NO flag, or the warning becomes wallpaper.
 #
 # THE THRESHOLD (ruled at the P5.3 gate, 2026-09-20, option B). A session did work worth
@@ -43,6 +45,20 @@
 #              no-wrap-up/handled/. Several sessions can end unwrapped before the next
 #              wrap-up and no transcript pointer is lost.
 #
+# OWED RECORDS  <state>/owed/<key>  (W5, dotfiles docs/PJ_WRAP_UP.md "State contract")
+#   `pj-wrap done --owed "<command>"` leaves one when the project's own wrap-up is declined.
+#   This hook MOVES a record to owed/handled/<key>.<time> when the ending session ran that
+#   command, wrapped or not, above the threshold or not. Two routes, both measured in real
+#   transcripts on 2026-09-25:
+#     typed   a user line whose string content starts with <command-message>/<command-name>,
+#             holding <command-name>/NAME</command-name>
+#     model   a user line whose toolUseResult is {success: true, commandName: "NAME"}
+#             (the Skill tool; a failed call leaves a string there instead)
+#   NAME is compared with the record's FIRST word, one leading / dropped, EXACTLY:
+#   pj:wrap-up never clears /wrap-up. Only an invocation at or after the record's since:
+#   minute counts, so a run earlier in the session that declined does not clear its owe.
+#   Other records stay. A since: or a timestamp that cannot be read clears nothing.
+#
 # Outside a git repo, with no session id, with no transcript, when jq is missing, or when
 # jq cannot parse the transcript (a broken line): nothing is written. Silence over a guess. Selftest: pj-session-end-selftest. Rulings: D-20260920-03, -04.
 
@@ -69,6 +85,54 @@ count_work(){                   # count_work <transcript> -> "m e" or nothing
     | "\(.m) \(.e)"' "$1" 2>/dev/null
 }
 
+# Every command this transcript shows as run: "NAME<TAB>epoch" per line, -1 for a
+# timestamp that cannot be read. Non-zero when jq cannot parse the transcript.
+invocations(){                  # invocations <transcript>
+  jq -rn '
+    inputs | select(.type == "user") |
+    ( ( .message.content | select(type == "string")
+        | select(test("^[[:space:]]*<command-(message|name)>"))
+        | capture("<command-name>/?(?<n>[^<]+)</command-name>").n ),
+      ( .toolUseResult | select(type == "object" and .success == true)
+        | .commandName | select(type == "string") | sub("^/"; "") )
+    ) as $n
+    | [$n, ((.timestamp // "") | sub("\\.[0-9]+Z$"; "Z") | (try fromdateiso8601 catch -1))] | @tsv' "$1" 2>/dev/null
+}
+to_epoch(){ date -j -f '%Y-%m-%d %H:%M:%S' "$1:00" +%s 2>/dev/null || date -d "$1" +%s 2>/dev/null; }
+
+clear_owed(){                   # clear_owed <transcript> <key>
+  local owed="$STATE/owed/$2" inv idx=0 nh=0 hits=" " o since se name ep dest keep
+  [ -f "$owed" ] || return 0
+  inv="$(invocations "$1")" || return 0
+  [ -n "$inv" ] || return 0
+  while IFS=$'\t' read -r o since; do
+    idx=$((idx + 1))
+    o="${o#/}"; [ -n "$o" ] || continue
+    se="$(to_epoch "$since")"; [ -n "$se" ] || continue
+    while IFS=$'\t' read -r name ep; do
+      if [ "$name" = "$o" ] && [ "${ep%.*}" -ge "$se" ] 2>/dev/null; then hits="$hits$idx "; nh=$((nh + 1)); break; fi
+    done <<<"$inv"
+  done < <(awk 'BEGIN { RS = "" } {
+      o = ""; s = ""; n = split($0, L, "\n")
+      for (j = 1; j <= n; j++) { if (L[j] ~ /^owed: /) o = substr(L[j], 7); if (L[j] ~ /^since: /) s = substr(L[j], 8) }
+      sub(/^[ \t]+/, "", o); split(o, W, /[ \t]+/)
+      printf "%s\t%s\n", W[1], s }' "$owed")
+  [ "$nh" -gt 0 ] || return 0
+  mkdir -p "$STATE/owed/handled" 2>/dev/null || return 0
+  dest="$STATE/owed/handled/$2.$(date +%Y%m%d-%H%M%S)"
+  while [ -e "$dest" ]; do dest="$dest.$RANDOM"; done
+  if [ "$nh" -eq "$idx" ]; then mv "$owed" "$dest" 2>/dev/null; return 0; fi
+  # Cleared records land in handled/ FIRST: a failure between the writes duplicates a
+  # record, never loses one.
+  keep="$owed.tmp.$$"
+  awk -v hits="$hits" -v hit="$dest" -v keep="$keep" 'BEGIN { RS = "" } {
+      i++
+      if (index(hits, " " i " ")) { if (a++) printf "\n" > hit;  printf "%s\n", $0 > hit }
+      else                        { if (b++) printf "\n" > keep; printf "%s\n", $0 > keep } }' "$owed" 2>/dev/null \
+    && [ -s "$dest" ] && [ -s "$keep" ] && mv -f "$keep" "$owed" 2>/dev/null
+  return 0
+}
+
 main(){
   local in sid tp cwd top key flag m e rec tmp now
   [ -t 0 ] && return 0
@@ -79,11 +143,12 @@ main(){
   tp="$(printf '%s' "$in" | jq -r '.transcript_path // empty' 2>/dev/null)" || return 0
   cwd="$(printf '%s' "$in" | jq -r '.cwd // empty' 2>/dev/null)" || return 0
   [ -n "$sid" ] && [ -n "$tp" ] && [ -f "$tp" ] || return 0
-  [ -e "$STATE/wrapped/$sid" ] && return 0
   [ -d "${cwd:-/nonexistent}" ] || return 0
   top="$(git -C "$cwd" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 0
   top="$(dirname "$top")"
   key="$(encode_key "$top")"
+  clear_owed "$tp" "$key"         # before the wrapped check: a wrapped session clears too
+  [ -e "$STATE/wrapped/$sid" ] && return 0
 
   read -r m e < <(count_work "$tp") || return 0
   [ -n "${m:-}" ] && [ -n "${e:-}" ] || return 0
