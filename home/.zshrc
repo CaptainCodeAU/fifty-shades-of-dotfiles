@@ -990,7 +990,7 @@ alias ct='__claude_launch CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 claude "${_LIFE
 # pj - light project launcher (TRIAL, added 2026-09-19; a SCRIPT since F3, 2026-09-21).
 # Claude Code + OPERATIONAL_RULES + the project's own CLAUDE.md and notes. No LifeOS prompt,
 # no global CLAUDE.md. Settings live in ~/.claude/settings.project.json.
-# herdr, AgentRelay, ISA and pj-voice are loaded as single-skill plugins.
+# herdr, ISA and pj-voice are loaded as single-skill plugins (AgentRelay parked 2026-09-24, D-20260924-A07).
 #
 # THERE IS NO `alias pj` HERE ON PURPOSE. `pj` is ~/.local/bin/pj, stowed from this repo
 # (home/.local/bin/pj). It sources ~/.zsh_claude_launch and hands __claude_launch the same

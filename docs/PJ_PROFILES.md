@@ -659,7 +659,11 @@ under the config dir.
 and the second returns the worktree, so a `c2` session shares its parent project's
 drawer instead of inventing a key nothing else writes to.
 
-## The five plugin dirs, and where a Claude Mod may NOT live
+## The plugin dirs, and where a Claude Mod may NOT live
+
+Four since 2026-09-24: AgentRelay was PARKED (D-20260924-A07; Gavin: "not currently using it, but I
+don't want to lose it either"). It is out of every pj argv and profile; its files are kept in
+`~/.claude/skills/AgentRelay`. The 2026-09-22 measurements below still name five and are history.
 
 `plugins:` names dirs under `~/.claude`, one `--plugin-dir` each. Measured 2026-09-22
 (F8a), because the question "are they writable by a session standing in this repo?" had
