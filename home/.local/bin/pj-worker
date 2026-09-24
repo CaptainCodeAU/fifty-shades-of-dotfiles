@@ -47,8 +47,10 @@
 #   machine  at most CAP_MACHINE live Claude sessions on this machine (D-20260924-A10; A09's 6
 #            withdrawn). Read twice: the live registry and a same-uid `ps` count of `claude`
 #            processes. They should agree; when they do not, BOTH are printed and the LARGER
-#            is compared. `claude agents --json` is never read: it listed a background
-#            session with no process behind it (verified by the conductor, 2026-09-24).
+#            is compared, and `start` (and `count --check`) refuses with exit 2, because only
+#            the registry can place a session in a project. `claude agents --json` is never
+#            read: it listed a background session with no process behind it (verified by the
+#            conductor, 2026-09-24).
 #   account  Gavin's ruling 10: the figure compared with CAP_MACHINE is the larger of the
 #            machine count and the account count (other machines, cloud). The account part
 #            is NOT MEASURED yet and is printed as exactly that, never as 0; until it is,
@@ -169,6 +171,7 @@ herdr_why() {
 # collapsed). rc 1 with PS_ERR when it cannot be read. Its own control: this process must be
 # in the table, or the table is not a process list.
 typeset -gA PS_COMM PS_UID PS_START
+typeset -ga EXTRA_SESS_DIRS   # verify: <CLAUDE_CONFIG_DIR>/sessions of each claude in the pane
 PS_ERR=""
 load_ps() {
   local out line pid rest
@@ -228,7 +231,7 @@ sess_dirs() {
   local f v d
   local -A seen
   SESS_DIRS=()
-  for d in "$SESS_DIR" ; do [[ -d "$d" ]] && { SESS_DIRS+=("$d"); seen[${d:A}]=1; }; done
+  for d in "$SESS_DIR" ${EXTRA_SESS_DIRS[@]}; do [[ -d "$d" && -z "${seen[${d:A}]:-}" ]] && { SESS_DIRS+=("$d"); seen[${d:A}]=1; }; done
   for f in "$PROFILE_DIR"/*(N.); do
     v="$(sed -n 's/^[[:space:]]*config_dir:[[:space:]]*//p' "$f" 2>/dev/null | head -1)"
     v="${v%%[[:space:]]#}"; [[ -n "$v" ]] || continue
@@ -356,6 +359,10 @@ do_count() {
     fi
   fi
   C_PROJECT=${#C_PROJ}
+  # Two instruments that disagree mean one of them is wrong, and only the registry can place a
+  # session in a project, so a ps-only claude could be a session this project count missed.
+  C_DISAGREE=""
+  (( C_MACH_REG == C_MACH_PS )) || C_DISAGREE="the registry ($C_MACH_REG live) and ps ($C_MACH_PS claude processes) disagree (ps-only pids: ${(j:, :)C_PSONLY}); the project count cannot be trusted, so nothing is started"
   C_REFUSE=""
   (( C_PROJECT >= CAP_PROJECT )) && C_REFUSE="project cap: $C_PROJECT of $CAP_PROJECT live sessions in $PROJ_ROOT (D-20260924-A08)"
   (( C_MACHINE >= CAP_MACHINE )) && C_REFUSE="${C_REFUSE:+$C_REFUSE; }machine cap: $C_MACHINE of $CAP_MACHINE live sessions on this machine (D-20260924-A10)"
@@ -376,13 +383,14 @@ count_json() {
   for k in $C_MACH; do mach+=("$(jq -cn --arg pid "$k" --arg n "${R_NAME[$k]}" --arg c "${R_CWD[$k]}" '{pid:($pid|tonumber), name:$n, cwd:$c}')"); done
   jq -cn --arg root "$PROJ_ROOT" --arg key "$PROJ_KEY" --argjson pc "$C_PROJECT" --argjson pcap "$CAP_PROJECT" \
     --argjson mreg "$C_MACH_REG" --argjson mps "$C_MACH_PS" --argjson m "$C_MACHINE" --argjson mcap "$CAP_MACHINE" \
-    --argjson psonly "[${(j:,:)C_PSONLY}]" --arg ws "$C_WS" --arg refuse "$C_REFUSE" \
+    --argjson psonly "[${(j:,:)C_PSONLY}]" --arg ws "$C_WS" --arg refuse "$C_REFUSE" --arg dis "$C_DISAGREE" \
     --argjson proj "[${(j:,:)proj}]" --argjson mach "[${(j:,:)mach}]" \
     '{project:{root:$root, key:$key, count:$pc, cap:$pcap, sessions:$proj},
       machine:{registry:$mreg, ps:$mps, count:$m, cap:$mcap, disagree:($mreg != $mps), ps_only_pids:$psonly, sessions:$mach},
       account:{count:null, status:"not measured"},
       compared_with_machine_cap:$m, workspace_rule:$ws,
-      start_allowed:($refuse == ""), refusal:(if $refuse == "" then null else $refuse end)}'
+      start_allowed:($refuse == "" and $dis == "" and $ws == "measured"), refusal:(if $refuse == "" then null else $refuse end),
+      unmeasured:(if $dis != "" then $dis elif $ws != "measured" then "workspace rule " + $ws else null end)}'
 }
 count_human() {
   local k
@@ -470,6 +478,9 @@ verify_run() {
   local pinfo="$HOUT"
   pids=(${(f)"$(print -r -- "$pinfo" | jq -r '.result.process_info.foreground_processes[] | select(((.argv0 // "") | split("/") | last) == "claude") | .pid' 2>/dev/null)"})
   load_ps || { V_UNM+=("$PS_ERR"); return; }
+  # rt2 H5: a claude whose CLAUDE_CONFIG_DIR is in no profile registers under that dir
+  EXTRA_SESS_DIRS=()
+  for pid in $pids; do env_of "$pid" && [[ -n "${E_HAS[CLAUDE_CONFIG_DIR]:-}" ]] && EXTRA_SESS_DIRS+=("$E_CCD/sessions"); done
   load_registry
   local -a live dead
   for pid in $R_PIDS; do
@@ -632,6 +643,7 @@ cmd_start() {
   do_count "$counted"; local rc=$?
   (( rc == 0 )) || die 2 "cannot count live sessions: $C_ERR"
   [[ "$C_WS" == measured ]] || die 2 "cannot count this project's herdr panes ($C_WS)"
+  [[ -z "$C_DISAGREE" ]] || die 2 "$C_DISAGREE"
   if [[ -n "$C_REFUSE" ]]; then
     say "REFUSED, $C_REFUSE. No override. Close a session first. Counted:"
     count_human >&2
@@ -785,6 +797,7 @@ cmd_count() {
   if [[ -n "$JSON" ]]; then count_json; else count_human; fi
   if [[ -n "$CHECK" ]]; then
     [[ "$C_WS" == measured ]] || die 2 "workspace rule $C_WS"
+    [[ -z "$C_DISAGREE" ]] || die 2 "$C_DISAGREE"
     [[ -z "$C_REFUSE" ]] || { say "REFUSED, $C_REFUSE"; exit 6; }
   fi
   exit 0

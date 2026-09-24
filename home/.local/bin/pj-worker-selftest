@@ -85,6 +85,7 @@ cat > "$FB/ps" <<'EOF'
 #!/usr/bin/env bash
 printf 'ps %s\n' "$*" >> "$FAKE/calls"
 if [ -e "$FAKE/SANDBOX_PS" ]; then echo "(eval):3: operation not permitted: ps" >&2; exit 127; fi
+if [ -e "$FAKE/PS_GARBAGE" ]; then echo "ps: illegal option -- A"; exit 0; fi
 case "$*" in
   "-A -o pid=,uid=,comm=") grep -v "^${DROP_PID:-x} " "$FAKE/ps/A"; printf '%5d   501 zsh\n' "${PJW_ME:-$PPID}" ;;
   "-A -o pid=,lstart=") cat "$FAKE/ps/lstart"; printf '%5d Thu Sep 24 06:00:00 2026    \n' "${PJW_ME:-$PPID}" ;;
@@ -324,7 +325,7 @@ run verify w3X:p4Q
 check "V1 the live pj worker (real fixtures) passes, rc 0" '[ "$RC" -eq 0 ] && [ "$(j .result)" = "pass " ]'
 check "V1b it reports the name READ from the registry and the live pid" '[ "$(j ".session_name, .pid")" = "fifty-shades-of-dotfiles-a59-pjworker 36921 " ]'
 check "V1c the dry run ran in the worker's cwd with PJ_PROFILE, PJ_SESSION_NAME, CCSN, CLAUDE_CONFIG_DIR unset" \
-  'grep -q "^cwd=$REPO/.worktree/a59-pjworker PJ_PROFILE=<unset> PJ_SESSION_NAME=<unset> CCSN=<unset> CCD=<unset> " "$FAKE/pj.calls"'
+  'grep -q "^cwd=$REPO/.worktree/a59-pjworker PJ_PROFILE=<unset> PJ_SESSION_NAME=<unset> CCSN=<unset> CCD=<unset> .* args=--profile default --dry-run\$" "$FAKE/pj.calls"'
 check "V1d the dry run was pointed away from the real prompt cache (PJ_PROMPT_OUT under PJW_TMP)" \
   'grep -q "PJ_PROMPT_OUT=$W/tmp/prompt.md args=--profile default --dry-run\$" "$FAKE/pj.calls"'
 check "V1e verify never ran claude (no claude agents, no session)" '[ ! -e "$FAKE/claude.calls" ]'
@@ -414,6 +415,11 @@ check "V18 an unreadable environment (no HOME in it): rc 2, never a pass or a fa
 new_world "" unlinked; verify_fixture; mv "$SESS/36921.json" "$H/.claude-scratch/sessions/"
 run verify w3X:p4Q
 check "V19 a worker registered in another profile's own (unlinked) sessions dir is found: rc 0" '[ "$RC" -eq 0 ]'
+new_world; verify_fixture; mkdir -p "$H/.claude-adhoc/sessions"; mv "$SESS/36921.json" "$H/.claude-adhoc/sessions/"
+CCD="@H@/.claude-adhoc" psenv 36921 w3X:p4Q fifty-shades-of-dotfiles-a59-pjworker
+run verify w3X:p4Q
+check "V21 a claude whose own CLAUDE_CONFIG_DIR is in no profile is still found (and judged: rc 1, config dir named)" \
+  '[ "$RC" -eq 1 ] && has "$(failures)" "CLAUDE_CONFIG_DIR" && [ "$(j ".unmeasured | length")" = "0 " ]'
 new_world; verify_fixture; agent_get_json w3X:p4Q $S_PW working | sed 's/"agent":"claude","agent_session"/"agent":"codex","agent_session"/' | resp agent_get_w3X:p4Q 1 0
 run verify w3X:p4Q
 check "V20 an agent that is not claude: rc 1, named" '[ "$RC" -eq 1 ] && has "$(failures)" "not claude"'
@@ -444,6 +450,10 @@ new_world; lists; psrow 60606 claude "$T_W"
 run count --cwd "$SWITCH" --json
 check "C5 ps 6 vs registry 5: disagreement flagged, 6 compared, the ps-only pid named" \
   '[ "$(j ".machine.registry, .machine.ps, .machine.count, .machine.disagree, (.machine.ps_only_pids|join(\",\"))")" = "5 6 6 true 60606 " ]'
+run count --cwd "$SWITCH" --check
+check "C5b count --check refuses when the two instruments disagree: rc 2, the ps-only pid named" '[ "$RC" -eq 2 ] && has "$ERR" "disagree" && has "$ERR" 60606'
+run count --cwd "$SWITCH" --json
+check "C5c --json says start is not allowed and why (unmeasured), with no cap refusal" '[ "$(j ".start_allowed, (.refusal|tostring)")" = "false null " ] && has "$(j .unmeasured)" "disagree"'
 # the conductor's `claude agents --json` trap (a background session, no process behind it):
 # its sessionId as a registry file whose pid is gone must not count, and claude is never run
 new_world; lists
@@ -459,6 +469,13 @@ check "C7 a clean-room session (cwd under ~/.cache) in this project's workspace 
   '[ "$(j .project.count)" = "4 " ] && [ "$(j ".project.sessions[] | select(.pid==80808) | .why")" = "workspace w3X " ]'
 run count --cwd "$SWITCH" --json
 check "C7b the same session does not count for claude-switcher (its workspace is w42)" '[ "$(j .project.count)" = "1 " ]'
+new_world room; lists; mkdir -p "$REPO/docs"
+reg "$SESS" 90909 99999999-1111-2222-3333-888888888888 "$REPO/docs" fifty-shades-of-dotfiles-main "$T_W"; psrow 90909 claude "$T_W"
+run count --cwd "$REPO" --json
+check "C13 a session in the repo with NO herdr pane (a plain terminal) counts by cwd alone" '[ "$(j .project.count)" = "4 " ] && [ "$(j ".project.sessions[] | select(.pid==90909) | .why")" = "cwd " ]'
+new_world; lists; touch "$FAKE/PS_GARBAGE"
+run count --cwd "$REPO" --check
+check "C14 ps prints garbage and exits 0: the own-pid control refuses (rc 2), never a count of 0" '[ "$RC" -eq 2 ] && has "$ERR" "not a process list"'
 new_world room; lists '{"agent":"claude","agent_session":{"value":null},"agent_status":"idle","pane_id":"w3X:p50","workspace_id":"w3X"}'
 run count --cwd "$REPO" --json
 check "C8 a claude herdr agent in the workspace with no registry entry yet COUNTS (unregistered)" \
@@ -537,6 +554,10 @@ check "S4d machine at 8 (project 3): refused by the machine cap, rc 6, nothing t
 new_world room; lists; start_happy; touch "$FAKE/SANDBOX"
 run start a59-pjworker --cwd "$WT"
 check "S5 sandboxed herdr: rc 2, never 'free', nothing split" '[ "$RC" -eq 2 ] && [ "$(ncalls "^pane split")" = 0 ]'
+new_world room; lists; start_happy; new_session
+printf '%s\n' 'Error: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }' | resp agent_get_a59-pjworker 1 1
+run start a59-pjworker --cwd "$WT"
+check "S5c only the NAME lookup is refused (non-JSON, rc 1 like agent_not_found): rc 2, never 'free', nothing split" '[ "$RC" -eq 2 ] && has "$ERR" "cannot check the name" && [ "$(ncalls "^pane split")" = 0 ]'
 new_world room; lists; start_happy; touch "$FAKE/SANDBOX_PS"
 run start a59-pjworker --cwd "$WT"
 check "S5b sandboxed ps: rc 2 before anything is split" '[ "$RC" -eq 2 ] && [ "$(ncalls "^pane split")" = 0 ]'
@@ -573,6 +594,12 @@ new_world room; lists; start_happy; printf '%s\n' "$IDLE_SHELL" | resp pane_proc
 printf '%s\n' 'pj: REFUSED: pj-prompt-file printed no system-prompt file; run pj-prompt-file --selftest' | resp pane_read_w3X:p4W 1 0
 run start a59-pjworker --cwd "$WT"
 check "S9b control: a launch that died for another reason is NOT blamed on the guard" '[ "$RC" -eq 4 ] && ! has "$ERR" "PANE GUARD" && has "$ERR" "launch ended"'
+new_world room; lists; start_happy; new_session; psrow 60606 claude "$T_W"
+run start a59-pjworker --cwd "$WT"
+check "S16 registry and ps disagree: start refuses, rc 2, nothing split" '[ "$RC" -eq 2 ] && has "$ERR" "disagree" && [ "$(ncalls "^pane split")" = 0 ]'
+new_world room; start_happy; new_session
+run start a59-pjworker --cwd "$WT"
+check "S17 herdr's pane/agent lists unreadable (rest fine): start refuses, rc 2, nothing split" '[ "$RC" -eq 2 ] && has "$ERR" "herdr panes" && [ "$(ncalls "^pane split")" = 0 ]'
 # serial starts: another start holding the lock makes this one wait, then refuse by name
 new_world room; lists; start_happy; new_session
 zsh -c 'zmodload zsh/system; : >> "$1"; zsystem flock "$1" && sleep 4' _ "$STATE/pj-worker.lock" &
