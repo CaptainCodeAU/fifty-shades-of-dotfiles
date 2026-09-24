@@ -1133,7 +1133,7 @@ function pj_scan(ctx, ov, where,    k, j, n, a, w, b, ovk, t, lab) {
         ovk = ov
         for (a = 1; a < j; a++) if (WR[k, a] ~ /^PJ_WORKERS_CONTROL=/) {
             w = unq(WR[k, a]); sub(/^PJ_WORKERS_CONTROL=/, "", w)
-            if (w ~ /^W-[0-9]{8}-[A-Z][0-9]+$/) ovk = w
+            if (w ~ /^W-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[A-Z][0-9]+$/) ovk = w   # no {8}: mawk lacks intervals
         }
         w = unq(WR[k, j]); b = base(w)
         if (ctx == "pane") {

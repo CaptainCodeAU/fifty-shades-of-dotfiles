@@ -268,6 +268,7 @@ EOF
   conv_arm deny "pane run: claude -p (headless is a session too)" "herdr pane run w1:p1 \"claude -p 'hi'\""
   conv_arm deny "pane run: claude-clean (ruled: pj-worker --cleanroom)" 'herdr pane run w1:p1 "claude-clean"'
   conv_arm deny "pane run: __claude_launch claude"               'herdr pane run w1:p1 "__claude_launch claude --resume"'
+  conv_arm deny "pane run: command word is an expansion, then claude" 'herdr pane run "$pid" "${(j: :)envs} claude --resume"'
   conv_arm deny "pane run: claude in \$(...) in the pane"        'herdr pane run w1:p1 "x=\$(claude -p hi)"'
   conv_arm deny "pane run: bash -c inside the pane string"       "herdr pane run w1:p1 \"bash -c 'cd /tmp && claude'\""
   conv_arm deny "send-text claude (typed, Enter later)"         'herdr pane send-text w1:p1 "claude --resume"; herdr pane send-keys w1:p1 enter'
