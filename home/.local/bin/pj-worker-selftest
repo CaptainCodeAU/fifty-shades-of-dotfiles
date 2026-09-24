@@ -300,7 +300,7 @@ run(){
     PJW_HERDR="$FB/herdr" PJW_PS="$FB/ps" PJW_PJ="$FB/pj" PJW_PROMPT_FILE="$FB/pj-prompt-file" \
     PJW_SESSIONS_DIR="$SESS" PJW_STATE_DIR="$STATE" PJW_LAUNCH_LOG="$STATE/launches.log" \
     PJW_CLEAN_ROOT="$H/.cache/claude-clean" PJW_TMP="$W/tmp" PJW_UID=501 PJW_POLL=0 PJW_PREFLIGHT_WAIT=0 \
-    PJW_ENDED_AFTER=0 PJW_VERIFY_RETRY=0 PJ_PROFILE_DIR="$ROOT/profiles" \
+    PJW_ENDED_AFTER=0 PJW_VERIFY_RETRY=0 PJW_LOCK_WAIT="${PJW_LOCK_WAIT:-5}" PJ_PROFILE_DIR="$ROOT/profiles" \
     HERDR_ENV="${RUN_HERDR_ENV-1}" HERDR_PANE_ID=w3X:p48 HERDR_WORKSPACE_ID=w3X \
     PJ_PROFILE=default PJ_SESSION_NAME=fifty-shades-of-dotfiles-main CLAUDE_CODE_SESSION_NAME=fifty-shades-of-dotfiles-main \
     CLAUDE_CONFIG_DIR="$H/.claude-conductor" \
@@ -554,7 +554,7 @@ check "S8 --pane onto a pane hosting an agent: rc 8, nothing typed" '[ "$RC" -eq
 new_world room; lists; printf '%s\n' "$NOTFOUND" | resp agent_get_a59-pjworker 1 1; printf '%s\n' "$NOTFOUND" | resp agent_get_w3X:p4N 1 1
 process_info_json w3X:p4N 36921 | resp pane_process-info_w3X:p4N 1 0
 run start a59-pjworker --cwd "$WT" --pane w3X:p4N
-check "S8b --pane with claude in the foreground (not yet an agent): rc 8, nothing typed" '[ "$RC" -eq 8 ] && [ "$(ncalls "^pane run")" = 0 ]'
+check "S8b --pane with claude in the foreground (not yet an agent): rc 8, nothing typed, named" '[ "$RC" -eq 8 ] && [ "$(ncalls "^pane run")" = 0 ] && has "$ERR" "claude in its foreground"'
 new_world room; lists; printf '%s\n' "$NOTFOUND" | resp agent_get_a59-pjworker 1 1; printf '%s\n' "$NOTFOUND" | resp agent_get_w3X:p4N 1 1
 printf '%s\n' "$BUSY_SHELL" | resp pane_process-info_w3X:p4N 1 0
 run start a59-pjworker --cwd "$WT" --pane w3X:p4N
@@ -573,6 +573,15 @@ new_world room; lists; start_happy; printf '%s\n' "$IDLE_SHELL" | resp pane_proc
 printf '%s\n' 'pj: REFUSED: pj-prompt-file printed no system-prompt file; run pj-prompt-file --selftest' | resp pane_read_w3X:p4W 1 0
 run start a59-pjworker --cwd "$WT"
 check "S9b control: a launch that died for another reason is NOT blamed on the guard" '[ "$RC" -eq 4 ] && ! has "$ERR" "PANE GUARD" && has "$ERR" "launch ended"'
+# serial starts: another start holding the lock makes this one wait, then refuse by name
+new_world room; lists; start_happy; new_session
+zsh -c 'zmodload zsh/system; : >> "$1"; zsystem flock "$1" && sleep 4' _ "$STATE/pj-worker.lock" &
+LOCKER=$!; sleep 1
+PJW_LOCK_WAIT=1 run start a59-pjworker --cwd "$WT"
+check "S15 another start holds the lock: rc 2, named, nothing split" '[ "$RC" -eq 2 ] && has "$ERR" "could not take" && [ "$(ncalls "^pane split")" = 0 ]'
+wait "$LOCKER" 2>/dev/null
+run start a59-pjworker --cwd "$WT"
+check "S15b control: once the lock is free the same start goes through, rc 0" '[ "$RC" -eq 0 ]'
 new_world room; lists; RUN_HERDR_ENV="" run start a59-pjworker --cwd "$WT"
 check "S10 outside a herdr pane: rc 2, no herdr call" '[ "$RC" -eq 2 ] && has "$ERR" "not inside a herdr pane" && [ "$(ncalls "^[ap][ga]")" = 0 ]'
 new_world room; lists; start_happy; new_session "$PLAIN"; psenv 41000 w3X:p4W - "$PLAIN"

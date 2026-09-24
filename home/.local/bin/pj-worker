@@ -113,7 +113,7 @@
 #
 # Seams, for the selftest only: PJW_HERDR, PJW_PS, PJW_PJ, PJW_PROMPT_FILE (commands);
 # PJW_SESSIONS_DIR, PJW_STATE_DIR, PJW_LAUNCH_LOG, PJW_CLEAN_ROOT, PJW_TMP (paths); PJW_UID;
-# PJW_POLL, PJW_PREFLIGHT_WAIT, PJW_ENDED_AFTER, PJW_VERIFY_RETRY (seconds); PJ_PROFILE_DIR (shared with pj).
+# PJW_POLL, PJW_PREFLIGHT_WAIT, PJW_ENDED_AFTER, PJW_VERIFY_RETRY, PJW_LOCK_WAIT (seconds); PJ_PROFILE_DIR (shared with pj).
 set -u
 emulate -L zsh
 setopt pipefail extended_glob
@@ -139,6 +139,7 @@ POLL="${PJW_POLL:-1}"
 PREFLIGHT_WAIT="${PJW_PREFLIGHT_WAIT:-15}"   # --pane: seconds to wait for a starting shell to go idle
 ENDED_AFTER="${PJW_ENDED_AFTER:-8}"         # settle: seconds before "back at a bare shell" means the launch died
 VERIFY_RETRY="${PJW_VERIFY_RETRY:-30}"      # start: seconds to retry a verify that could not measure yet
+LOCK_WAIT="${PJW_LOCK_WAIT:-180}"          # start: seconds to wait for another start to finish
 
 say() { print -u2 -r -- "pj-worker: $*"; }
 die() { local c="$1"; shift; say "$*"; exit "$c"; }
@@ -620,7 +621,7 @@ cmd_start() {
   if zmodload zsh/system 2>/dev/null; then
     local lockfd
     : >> "$STATE/pj-worker.lock" 2>/dev/null   # zsystem flock opens it for writing and will not create it
-    zsystem flock -t 180 -f lockfd "$STATE/pj-worker.lock" || die 2 "could not take $STATE/pj-worker.lock within 180s (another start running, or the state dir is not writable)"
+    zsystem flock -t "$LOCK_WAIT" -f lockfd "$STATE/pj-worker.lock" || die 2 "could not take $STATE/pj-worker.lock within ${LOCK_WAIT}s (another start running, or the state dir is not writable)"
   else
     say "zsh/system missing: starts are not serialised on this machine"
   fi
