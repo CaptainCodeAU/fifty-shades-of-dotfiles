@@ -4,27 +4,43 @@
 # Usage:
 #   pj-wrap status                 earlier sessions in THIS project that ended without
 #                                  wrap-up, with their transcript paths (rc 1 when none)
-#   pj-wrap done [--keep-earlier]  mark this session wrapped; move this project's
-#                                  no-wrap-up flag aside (kept with --keep-earlier)
+#   pj-wrap done [--skill] [--owed "<command>"] [--keep-earlier]
+#                                  mark this session wrapped; move this project's
+#                                  no-wrap-up flag aside (kept with --keep-earlier).
+#                                  --skill: the marker says via: skill (else via: bare, W6).
+#                                  --owed: the project's own wrap-up was declined; leave an
+#                                  owed record the start card shows until it runs (W5).
+#   pj-wrap owed                   list this project's owed records (rc 1 when none)
+#   pj-wrap owed --clear [<command>]  move the owed records (or only that command's) to
+#                                  owed/handled/. Nothing is deleted.
 #   pj-wrap push                   commit this project's drawer handoff (if declared drawer:)
 #                                  and push dot-claude, the drawer store. NOT the project repo.
+#                                  Names every commit that is not this session's first (W1).
 #   pj-wrap why-auth               what a push failure here would be blamed on, measured
-#                                  now: the Keychain either answers in this shell or it
-#                                  does not. Reads no secret, writes nothing, pushes nothing.
+#                                  now: the Keychain answers in this shell, does not, or
+#                                  this OS has none. Reads no secret, writes nothing.
 #   pj-wrap --selftest             prove every arm (runs pj-wrap-selftest)
 #
 # STATE  ${XDG_STATE_HOME:-~/.local/state}/pj  (PJ_STATE_DIR overrides; test seam)
+#   The contract is docs/PJ_WRAP_UP.md "State contract" in the dotfiles repo.
 #   no-wrap-up/<key>            the flag pj-session-end writes, one record per session,
 #                               newest first (contract in pj-session-end and pj-start-card)
 #   no-wrap-up/handled/<key>.<time>   where `done` MOVES a flag. Nothing is ever deleted.
-#   wrapped/<session-id>        the marker `done` writes; pj-session-end then stays quiet.
+#   wrapped/<session-id>        the marker `done` writes (wrapped, project, via); then
+#                               pj-session-end stays quiet. A refused write is a REFUSAL.
+#   owed/<key>                  records split by a blank line: owed, project, session, since.
+#   owed/handled/<key>.<time>   where `owed --clear` and pj-session-end MOVE owed records.
 #
 # THE SESSION ID is CLAUDE_CODE_SESSION_ID (what the harness really exports; the older
 # CLAUDE_SESSION_ID is read as a fallback), the same way open-items fills `raised`.
 #
 # PUSH, step by step (ruled at the P5.3 gate, 2026-09-20). dot-claude almost always
 # carries someone else's uncommitted change, so:
-#   1. git push. Accepted: done.
+#   0. Warn when a generated handoff is over 60 lines (W3). Branch, upstream and
+#      in-progress checks, THEN the drawer handoff commit (E8). Name every commit that
+#      is not this session's, by C-Sess-Id (W1).
+#   1. git push. Accepted AND the upstream now holds HEAD: done. "Everything up-to-date"
+#      while still ahead is its own STOP, never auth advice (W-20260924-A12).
 #   2. Rejected: git fetch. Say how many commits origin has that we lack.
 #   3. Uncommitted TRACKED changes anywhere in the tree, or a rebase/merge in progress:
 #      STOP and say what is needed. Touch nothing. Never stash, never autostash,
@@ -53,7 +69,7 @@ SID="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
 refuse(){ printf 'pj-wrap: REFUSED -- %s\n' "$1" >&2; exit 2; }
 stop(){ printf 'pj-wrap: STOPPED -- %s\n' "$1" >&2; exit 3; }
 say(){ printf 'pj-wrap: %s\n' "$1"; }
-usage(){ sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; }
+usage(){ sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; }
 encode_key(){ printf '%s' "$1" | sed 's#[/._]#-#g'; }
 tilde(){ printf '%s' "${1/#$HOME/\~}"; }
 
@@ -62,6 +78,90 @@ repo_top(){
   dirname "$g"
 }
 flag_path(){ local top; top="$(repo_top)" || refuse "not inside a git repo, so there is no project"; printf '%s/no-wrap-up/%s' "$STATE" "$(encode_key "$top")"; }
+owed_path(){ local top; top="$(repo_top)" || refuse "not inside a git repo, so there is no project"; printf '%s/owed/%s' "$STATE" "$(encode_key "$top")"; }
+trim(){ local s="$1"; s="${s#"${s%%[![:space:]]*}"}"; printf '%s' "${s%"${s##*[![:space:]]}"}"; }
+# How two commands are compared: whitespace trimmed, ONE leading / dropped, then exact.
+# `/wrap-up` and `wrap-up` are the same command; `pj:wrap-up` is not `wrap-up`.
+norm_cmd(){ local s; s="$(trim "$1")"; printf '%s' "${s#/}"; }
+stamp_dest(){ local d="$1.$(date +%Y%m%d-%H%M%S)"; while [ -e "$d" ]; do d="$d.$RANDOM"; done; printf '%s' "$d"; }
+
+# ---------------------------------------------------------------- owed ----
+# The owed record (W5, docs/PJ_WRAP_UP.md): step 8 of the skill offered the project's own
+# wrap-up and it was declined. The record stays until that command runs (pj-session-end
+# sees it in a later transcript) or `pj-wrap owed --clear`. Records are APPENDED, a blank
+# line between, and the write is checked by counting records before and after.
+write_owed(){                   # write_owed <command> <project>
+  local f before after
+  f="$(owed_path)" || exit 2
+  mkdir -p "$STATE/owed" 2>/dev/null || refuse "done: cannot create $(tilde "$STATE/owed"): the owe for '$1' was NOT recorded (the session IS marked wrapped). Lift the sandbox and run done --owed again."
+  before="$(grep -c '^owed: ' "$f" 2>/dev/null)"; before="${before:-0}"
+  { [ -s "$f" ] && printf '\n'
+    printf 'owed: %s\nproject: %s\nsession: %s\nsince: %s\n' "$1" "$2" "$SID" "$(date '+%Y-%m-%d %H:%M')"
+  } >> "$f" 2>/dev/null
+  after="$(grep -c '^owed: ' "$f" 2>/dev/null)"; after="${after:-0}"
+  [ "$after" -eq $((before + 1)) ] || refuse "done: the owed record for '$1' could NOT be written to $(tilde "$f") (the session IS marked wrapped). Lift the sandbox and run done --owed again."
+  say "owed: $1, recorded in $(tilde "$f"); the start card shows it until it runs or 'pj-wrap owed --clear'"
+}
+cmd_owed(){
+  local f want="" n dest keep_tmp nh nk
+  f="$(owed_path)" || exit 2
+  case "${1:-}" in
+    "") ;;
+    --clear) shift; [ $# -le 1 ] || refuse "owed --clear takes at most one command (quote it)"
+             want="${1-}"; [ $# -eq 1 ] && [ -z "$(norm_cmd "$want")" ] && refuse "owed --clear was given an empty command"
+             ;;
+    *) refuse "owed: unknown argument $1 (owed | owed --clear [<command>])" ;;
+  esac
+  n="$(grep -c '^owed: ' "$f" 2>/dev/null)"; n="${n:-0}"
+  if [ ! -f "$f" ] || [ "$n" -eq 0 ]; then
+    say "nothing owed in this project (checked $(tilde "$f"))"; exit 1
+  fi
+  if [ "${1:-}" != --clear ]; then
+    say "$n owed record(s) in this project ($(tilde "$f")):"
+    awk 'BEGIN { RS = "" } {
+      o = ""; s = ""; t = ""
+      n = split($0, L, "\n")
+      for (j = 1; j <= n; j++) {
+        if (L[j] ~ /^owed: /)    o = substr(L[j], 7)
+        if (L[j] ~ /^session: /) s = substr(L[j], 10)
+        if (L[j] ~ /^since: /)   t = substr(L[j], 8)
+      }
+      if (o == "") next
+      printf "  %d. %s  since %s  (declined in session %s)\n", ++i, o, t, s
+    }' "$f"
+    exit 0
+  fi
+  mkdir -p "$STATE/owed/handled" 2>/dev/null || refuse "owed --clear: cannot create $(tilde "$STATE/owed/handled"). Nothing moved."
+  dest="$(stamp_dest "$STATE/owed/handled/$(basename "$f")")"
+  if [ $# -eq 0 ]; then
+    mv "$f" "$dest" 2>/dev/null && [ -f "$dest" ] && [ ! -e "$f" ] || refuse "owed --clear: could not move $(tilde "$f") aside. Nothing moved."
+    say "cleared $n owed record(s): moved to $(tilde "$dest") (nothing deleted)"; exit 0
+  fi
+  # One command only. Count first, write only when something moves.
+  split_owed(){ awk -v want="$(norm_cmd "$want")" -v mode="$1" -v hit="${2-}" -v keep="${3-}" 'BEGIN { RS = "" } {
+      o = ""; n = split($0, L, "\n")
+      for (j = 1; j <= n; j++) if (L[j] ~ /^owed: /) o = substr(L[j], 7)
+      gsub(/^[ \t]+|[ \t]+$/, "", o); sub(/^\//, "", o)
+      if (o == want) { if (mode == "write") { if (nh) printf "\n" > hit;  printf "%s\n", $0 > hit  }; nh++ }
+      else           { if (mode == "write") { if (nk) printf "\n" > keep; printf "%s\n", $0 > keep }; nk++ }
+    } END { if (mode == "count") printf "%d %d\n", nh, nk }' "$f"; }
+  read -r nh nk <<<"$(split_owed count)"
+  if [ "${nh:-0}" -eq 0 ]; then
+    say "no owed record for '$want' in this project. Owed here: $(sed -n 's/^owed: //p' "$f" | tr '\n' ' ')(nothing moved)"; exit 1
+  fi
+  if [ "${nk:-0}" -eq 0 ]; then
+    mv "$f" "$dest" 2>/dev/null && [ -f "$dest" ] && [ ! -e "$f" ] || refuse "owed --clear: could not move $(tilde "$f") aside. Nothing moved."
+  else
+    # The cleared records land in handled/ FIRST, so a failure between the two writes
+    # leaves a record in both places, never in neither.
+    keep_tmp="$f.tmp.$$"
+    split_owed write "$dest" "$keep_tmp" 2>/dev/null && [ -s "$dest" ] && [ -s "$keep_tmp" ] \
+      && command mv -f "$keep_tmp" "$f" 2>/dev/null \
+      || refuse "owed --clear: the split of $(tilde "$f") did not complete. Check $(tilde "$dest") and $(tilde "$keep_tmp") by hand; the owed file itself was not replaced."
+  fi
+  say "cleared $nh owed record(s) for '$want': moved to $(tilde "$dest") (nothing deleted; $nk other record(s) still owed)"
+  exit 0
+}
 
 # ---------------------------------------------------------------- status ----
 cmd_status(){
@@ -94,13 +194,36 @@ cmd_status(){
 
 # ---------------------------------------------------------------- done ----
 cmd_done(){
-  local keep=0 flag dest
-  case "${1:-}" in --keep-earlier) keep=1 ;; "") ;; *) refuse "done: unknown flag $1" ;; esac
+  local keep=0 via=bare owed="" has_owed=0 flag dest marker proj
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --keep-earlier) keep=1 ;;
+      --skill) via=skill ;;
+      --owed) [ $# -ge 2 ] || refuse "done: --owed needs the command, e.g. --owed \"/wrap-up\""
+              owed="$2"; has_owed=1; shift ;;
+      --owed=*) owed="${1#--owed=}"; has_owed=1 ;;
+      *) refuse "done: unknown flag $1" ;;
+    esac
+    shift
+  done
   [ -n "$SID" ] || refuse "done: no session id in the environment (CLAUDE_CODE_SESSION_ID), so this session cannot be marked wrapped"
+  if [ "$has_owed" -eq 1 ]; then
+    case "$owed" in *[[:cntrl:]]*) refuse "done: the --owed command holds a control character (a tab or a newline would break the record). Nothing written." ;; esac
+    owed="$(trim "$owed")"
+    [ -n "$owed" ] || refuse "done: --owed was given an empty command. Nothing written."
+  fi
   flag="$(flag_path)" || exit 2
-  mkdir -p "$STATE/wrapped" || refuse "done: cannot create $(tilde "$STATE/wrapped")"
-  printf 'wrapped: %s\nproject: %s\n' "$(date '+%Y-%m-%d %H:%M')" "$(basename "$(repo_top)")" > "$STATE/wrapped/$SID"
-  say "session $SID marked wrapped ($(tilde "$STATE/wrapped/$SID"))"
+  proj="$(basename "$(repo_top)")"
+  mkdir -p "$STATE/wrapped" 2>/dev/null || refuse "done: cannot create $(tilde "$STATE/wrapped"), so this session is NOT marked wrapped (a Claude sandbox refuses writes there: lift it for this one command)"
+  # CHECKED (W-20260924-A25): a sandboxed redirect used to fail, print its error, and the
+  # next line said "marked wrapped" anyway. Only the file on disk proves the write.
+  marker="$STATE/wrapped/$SID"
+  if ! printf 'wrapped: %s\nproject: %s\nvia: %s\n' "$(date '+%Y-%m-%d %H:%M')" "$proj" "$via" > "$marker" 2>/dev/null \
+     || [ ! -f "$marker" ] || ! grep -qx "via: $via" "$marker" 2>/dev/null; then
+    refuse "done: the marker $(tilde "$marker") could not be written, so this session is NOT marked wrapped and nothing else was changed. A Claude sandbox refuses writes under the pj state folder: run this one command with the sandbox lifted."
+  fi
+  say "session $SID marked wrapped, via: $via ($(tilde "$marker"))"
+  [ "$has_owed" -eq 1 ] && write_owed "$owed" "$proj"
   if [ -f "$flag" ]; then
     if [ "$keep" -eq 1 ]; then
       say "earlier-session flag KEPT at $(tilde "$flag") ($(grep -c '^session:' "$flag") record(s)); it warns again next start"
@@ -132,10 +255,13 @@ cmd_done(){
 # wording says "not answering here" rather than claiming the sandbox: both mean the same
 # thing for this purpose (no bootstrap secret), and only one of them is provable.
 # Nothing is printed: only the exit status is read, never the secret.
-# Seam (the selftest sets it; nobody else should): PJ_WRAP_KEYCHAIN=yes|no.
+# Returns 2 when there is no `security` binary at all (Linux): there is no Keychain to
+# answer, and saying it DOES answer sent the reader after a token for a reason that was
+# never measured (audit A10). Seam (the selftest sets it; nobody else should):
+# PJ_WRAP_KEYCHAIN=yes|no|none.
 keychain_answers(){
-  case "${PJ_WRAP_KEYCHAIN:-}" in yes) return 0 ;; no) return 1 ;; esac
-  command -v security >/dev/null 2>&1 || return 0          # not macOS: no Keychain story to tell
+  case "${PJ_WRAP_KEYCHAIN:-}" in yes) return 0 ;; no) return 1 ;; none) return 2 ;; esac
+  command -v security >/dev/null 2>&1 || return 2
   # ANY non-zero means "no answer", not just 44. `security` also fails with
   # errSecInteractionNotAllowed, on a locked keychain, and on a malformed invocation.
   # Treating only 44 as silence made every other failure read as "the Keychain DOES answer",
@@ -146,11 +272,12 @@ keychain_answers(){
 }
 H12_STEPS="OPERATIONAL_RULES [H12], in order: (1) 'git credential-cache exit', then push again; (2) 'github-agent-token token' must print a ghs_; (3) 'git config --get githubagent.tier' must be set and the helper registered."
 auth_advice(){
-  if keychain_answers; then
-    printf 'The login Keychain DOES answer in this shell, so this is not the sandbox. On a flipped repo the usual cause is a stale or expired GitHub App token. %s' "$H12_STEPS"
-  else
-    printf 'The login Keychain is not answering in this shell (a Claude sandbox blocks it, and an absent entry looks the same), so the credential helper cannot bootstrap: run this one command with the sandbox lifted. If it still fails with the sandbox off, it is the token, not the sandbox: %s' "$H12_STEPS"
-  fi
+  local k; keychain_answers; k=$?
+  case "$k" in
+    0) printf 'The login Keychain DOES answer in this shell, so this is not the sandbox. On a flipped repo the usual cause is a stale or expired GitHub App token. %s' "$H12_STEPS" ;;
+    2) printf 'There is no Keychain on this OS (no security binary), so no Keychain or sandbox explanation applies here. Check the credential itself: %s' "$H12_STEPS" ;;
+    *) printf 'The login Keychain is not answering in this shell (a Claude sandbox blocks it, and an absent entry looks the same), so the credential helper cannot bootstrap: run this one command with the sandbox lifted. If it still fails with the sandbox off, it is the token, not the sandbox: %s' "$H12_STEPS" ;;
+  esac
 }
 
 # ---------------------------------------------------------------- push ----
@@ -163,16 +290,71 @@ generated_only(){   # every conflicted path is a generated view or its stamp
 }
 # The handoff the wrap-up writes lives in the drawer when pj-homes says drawer:. It is not
 # an item, so open-items never commits it; this does, by explicit path, before the push.
-commit_handoff(){               # commit_handoff <dot-claude top>
-  local top="$1" rtop decl mark rel where w f st
+# handoff_path -> "drawer <path>" or "repo <path>" for this project's handoff, or nothing.
+# pj-homes `handoff:` names it; a missing key means repo:OPENING-PROMPT.md (D-20260920-06).
+# Any other value (a project command that owns its handoff, W2) is not ours: nothing.
+handoff_path(){
+  local rtop decl mark where
   rtop="$(repo_top)" || return 0
   decl="$rtop/.claude/pj-homes"
   mark="$( [ -f "$decl" ] && sed -n 's/^handoff:[[:space:]]*//p' "$decl" | head -1 | sed 's/[[:space:]]*$//')"
-  case "$mark" in drawer:*) rel="${mark#drawer:}" ;; *) return 0 ;; esac
-  where="$(open-items --where 2>/dev/null)" || return 0
-  w="$(dirname "$where")"; f="$w/$rel"
+  [ -n "$mark" ] || mark="repo:OPENING-PROMPT.md"
+  case "$mark" in
+    drawer:*) where="$(open-items --where 2>/dev/null)" || return 0
+              printf 'drawer %s/%s' "$(dirname "$where")" "${mark#drawer:}" ;;
+    repo:*)   printf 'repo %s/%s' "$rtop" "${mark#repo:}" ;;
+  esac
+}
+# W3: a GENERATED handoff (first line is the marker) over 60 lines is warned about, with
+# the count. A handoff without the marker belongs to the project (W2) and is not counted.
+HANDOFF_MARK='<!-- generated by /pj:wrap-up -->'
+HANDOFF_CAP=60
+US="$(printf '\037')"   # the unit separator list_foreign splits git log on
+warn_handoff_length(){
+  local hp f n
+  hp="$(handoff_path)"; f="${hp#* }"
+  [ -n "$hp" ] && [ -f "$f" ] || return 0
+  [ "$(head -1 "$f" | tr -d '\r')" = "$HANDOFF_MARK" ] || return 0
+  n="$(awk 'END { print NR }' "$f")"
+  [ "$n" -gt "$HANDOFF_CAP" ] || return 0
+  say "WARNING: the generated handoff $(tilde "$f") is $n lines, over the $HANDOFF_CAP-line cap (W3). Move the detail into the records it points at."
+}
+# W1: before pushing, name every commit in <up>..HEAD whose C-Sess-Id trailer is not this
+# session's (or is missing), grouped by session. It still pushes; this is disclosure.
+list_foreign(){                 # list_foreign <dot-claude top> <upstream>
+  local top="$1" up="$2" rows total foreign
+  rows="$(git -C "$top" log --reverse --format='%h%x1f%(trailers:key=C-Sess-Id,valueonly,separator=%x2C)%x1f%s' "$up..HEAD" 2>/dev/null)"
+  [ -n "$rows" ] || return 0
+  total="$(printf '%s\n' "$rows" | awk 'END { print NR }')"
+  foreign="$(printf '%s\n' "$rows" | awk -F "$US" -v me="$SID" '$2 == "" || me == "" || $2 != me' | awk 'END { print NR }')"
+  if [ "$foreign" -eq 0 ]; then
+    say "all $total commit(s) to push carry this session's C-Sess-Id"; return 0
+  fi
+  [ -n "$SID" ] || say "this session's id is not in the environment, so every commit is listed as not this session's"
+  say "$foreign of $total commit(s) to push are NOT this session's (pushed anyway, W1):"
+  printf '%s\n' "$rows" | awk -F "$US" -v me="$SID" '
+    $2 == "" || me == "" || $2 != me {
+      k = ($2 == "") ? "no C-Sess-Id trailer" : "session " $2
+      if (!(k in n)) order[++m] = k
+      n[k]++; subj[k] = subj[k] "\npj-wrap:     " $1 " " $3
+    }
+    END { for (i = 1; i <= m; i++) printf "pj-wrap:   %s (%d):%s\n", order[i], n[order[i]], subj[order[i]] }'
+}
+# A push is accepted only when the upstream then holds HEAD. git can exit 0 and say
+# "Everything up-to-date" having pushed somewhere else (push.default, pushRemote), and
+# W-20260924-A12 saw it exit non-zero with that text while 36 commits were ahead.
+still_ahead(){ git -C "$1" rev-list --count "$2..HEAD" 2>/dev/null || echo 0; }
+uptodate_stop(){                # uptodate_stop <rc> <git output> <ahead>
+  stop "git push exited $1 and said 'Everything up-to-date' while $3 commit(s) are still ahead of the upstream. That is not an auth failure: the push went to a different ref than the upstream, or a hook stopped it. Full git output: $(printf '%s' "$2" | tr '\n' '|')"
+}
+commit_handoff(){               # commit_handoff <dot-claude top>
+  local top="$1" rtop hp w f st rel
+  rtop="$(repo_top)" || return 0
+  hp="$(handoff_path)"
+  case "$hp" in "drawer "*) f="${hp#drawer }" ;; *) return 0 ;; esac
+  w="$(dirname "$f")"; rel="$(basename "$f")"
   [ -f "$f" ] || return 0
-  case "$(cd "$w" && pwd -P)" in "$top"/projects/*/memory/WORK) ;; *) return 0 ;; esac
+  case "$(cd "$w" && pwd -P)/" in "$top"/projects/*/memory/WORK/*) ;; *) return 0 ;; esac
   st="$(git -C "$top" status --porcelain -- "$f" 2>/dev/null)"
   [ -n "$st" ] || return 0
   if git -C "$top" add -- "$f" && git -C "$top" commit -q -m "pj-wrap: handoff $(basename "$rtop") ($rel)" -- "$f" 2>/dev/null; then
@@ -184,15 +366,23 @@ commit_handoff(){               # commit_handoff <dot-claude top>
 cmd_push(){
   local top branch up ahead behind out rc paths p dirty took=() w
   top="$(git -C "$DOTCLAUDE" rev-parse --show-toplevel 2>/dev/null)" || refuse "push: $(tilde "$DOTCLAUDE") is not a git repo"
+  warn_handoff_length
+  # Branch, upstream and in-progress checks come BEFORE the handoff commit (audit E8): a
+  # commit made on a detached HEAD or mid-rebase is one the push below will never carry.
+  branch="$(git -C "$top" symbolic-ref --short HEAD 2>/dev/null)" || stop "dot-claude is not on a branch (detached HEAD). Check it out yourself, then push again. Nothing was committed."
+  up="$(git -C "$top" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)" || stop "branch $branch has no upstream. Set one yourself (git branch -u origin/$branch), then push again. Nothing was committed."
+  in_progress "$top" && stop "a rebase or merge is already in progress in $(tilde "$top"). Finish or abort it yourself, then push again. Nothing was committed."
   commit_handoff "$top"
-  branch="$(git -C "$top" symbolic-ref --short HEAD 2>/dev/null)" || stop "dot-claude is not on a branch (detached HEAD). Check it out yourself, then push again."
-  up="$(git -C "$top" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)" || stop "branch $branch has no upstream. Set one yourself (git branch -u origin/$branch), then push again."
-  in_progress "$top" && stop "a rebase or merge is already in progress in $(tilde "$top"). Finish or abort it yourself, then push again."
   ahead="$(git -C "$top" rev-list --count "$up..HEAD" 2>/dev/null || echo 0)"
   [ "$ahead" -gt 0 ] || { say "nothing to push in dot-claude ($(tilde "$top")): $branch is not ahead of $up. This tool never pushes the project repo."; exit 1; }
+  list_foreign "$top" "$up"
   say "pushing $ahead commit(s) on $branch to $up in dot-claude ($(tilde "$top")), the drawer store. This tool never pushes the project repo."
   out="$(git -C "$top" push 2>&1)"; rc=$?
-  [ "$rc" -eq 0 ] && { say "push accepted (dot-claude)"; exit 0; }
+  case "$out" in *"Everything up-to-date"*) [ "$(still_ahead "$top" "$up")" -gt 0 ] && uptodate_stop "$rc" "$out" "$ahead" ;; esac
+  if [ "$rc" -eq 0 ]; then
+    [ "$(still_ahead "$top" "$up")" -eq 0 ] || stop "git push exited 0 but $up still lacks $(still_ahead "$top" "$up") commit(s): the push went somewhere else. Git output: $(printf '%s' "$out" | tr '\n' '|')"
+    say "push accepted (dot-claude)"; exit 0
+  fi
   case "$out" in
     *rejected*|*"fetch first"*|*non-fast-forward*|*"failed to push some refs"*) ;;
     *) stop "push failed before the remote accepted anything: $(printf '%s' "$out" | tail -1). $(auth_advice)" ;;
@@ -235,7 +425,8 @@ cmd_push(){
     [ "$rc" -eq 0 ] && say "OPEN.md regenerated from items/ (a fresh commit)" || say "open-items regen returned $rc: $(printf '%s' "$out" | tail -1). Regenerate it yourself from the project."
   fi
   out="$(git -C "$top" push 2>&1)"; rc=$?
-  [ "$rc" -eq 0 ] && { say "push accepted after rebase"; exit 0; }
+  if [ "$rc" -eq 0 ] && [ "$(still_ahead "$top" "$up")" -eq 0 ]; then say "push accepted after rebase"; exit 0; fi
+  case "$out" in *"Everything up-to-date"*) uptodate_stop "$rc" "$out" "$(still_ahead "$top" "$up")" ;; esac
   stop "second push rejected: $(printf '%s' "$out" | tail -1). Not retrying. Look at $(tilde "$top") yourself."
 }
 
@@ -244,7 +435,8 @@ case "${1:-}" in
   --selftest) exec "$(dirname "$0")/pj-wrap-selftest" ;;
   status) cmd_status ;;
   done)   shift; cmd_done "$@" ;;
+  owed)   shift; cmd_owed "$@" ;;
   push)   cmd_push ;;
   why-auth) auth_advice; printf '\n'; exit 0 ;;
-  *) refuse "unknown command $1 (status | done | push | why-auth | --selftest)" ;;
+  *) refuse "unknown command $1 (status | done | owed | push | why-auth | --selftest)" ;;
 esac
