@@ -37,6 +37,8 @@ M3. `~/.claude/tools` is a REAL directory (stow --no-folding) that already mixes
 into the dotfiles repo (census.py, census-selftest, enforce-census-selftest) with real files that
 are NOT from the dotfiles repo (flourish-check.py, stall_watch.sh). So "a file under
 ~/.claude/tools/mandatory-checks/" does not imply "a file from the dotfiles repo".
+(Since 2026-09-24 stall_watch.sh is a stow link too, W-20260924-A42; flourish-check.py is still
+a real file, so the point stands.)
 
 M4. pj-start-card's own contract, lines 12-20: "2. writes NOTHING ... not a state folder",
 "3. no network, no prompt, well under a second", "5. ... on a catastrophic one the whole card
