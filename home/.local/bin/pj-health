@@ -68,7 +68,7 @@ BASELINE_MIN_TRANSCRIPTS=3
 BASELINE_WINDOW=5
 FRAMEWORK_TOOLS="pj pj-launch-check pj-prompt-file pj-start-card pj-session-end pj-wrap pj-id open-items decided claude-hooks-sync claude-project-settings-render ci-watch ccw-watch pj-health mods-api-drift"
 SELFTESTS="pj:--selftest pj-launch-check:--selftest pj-start-card-selftest pj-session-end-selftest pj-wrap-selftest pj-prompt-file:--selftest pj-id:--selftest open-items-selftest decided-selftest claude-hooks-sync-selftest claude-project-settings-render-selftest ccw-watch-selftest ci-watch-selftest pj-health-selftest audit-chain-selftest c2:--selftest pj-launcher-menu:--selftest mods-api-drift:--selftest"
-HOOK_SELFTESTS="enforce-secret-probe.sh validate-bash.sh enforce-uv.sh enforce-pnpm.sh pj-voice-contract.sh"
+HOOK_SELFTESTS="enforce-secret-probe.sh validate-bash.sh enforce-uv.sh enforce-pnpm.sh pj-voice-contract.sh enforce-pj-workers.sh"
 PLUGIN_DIRS_EXPECTED="skills/herdr skills/AgentRelay skills/ISA pj-voice pj"
 LAUNCH_LOG_WINDOW=20
 
@@ -311,6 +311,32 @@ if [ -r "$MANIFEST" ] && [ -r "$SETTINGS_PROJECT" ]; then
   else row FAIL hooks-sync "not registered: $unreg; fix: claude-hooks-sync --target project --install (terminal)$note"; fi
 else
   row NOTM hooks-sync "manifest $(tilde "$MANIFEST") or $(tilde "$SETTINGS_PROJECT") unreadable"
+fi
+
+# M7b pj-workers hook (W-20260924-A59, redteam-3 H10). Registration and deployment are
+# separate facts, and hooks-sync above reads only the PROJECT target. This hook must be in
+# BOTH: a cb or lifeos conductor loads only ~/.claude/settings.json. Its --selftest is in
+# HOOK_SELFTESTS, so --full runs it in the selftests row.
+PJW=enforce-pj-workers.sh
+SETTINGS_USER="${CLAUDE_SETTINGS_FILE:-$PJ_HOME/settings.json}"
+pjw_cmd="$(jq -r --arg s "$PJW" '[.hooks[] | select(.script == $s) | .entry.command][0] // empty' "$MANIFEST" 2>/dev/null)"
+if [ -z "$pjw_cmd" ]; then
+  row NOTM pj-workers-hook "manifest $(tilde "$MANIFEST") has no $PJW entry (unreadable, or older than W-20260924-A59)"
+elif [ ! -r "$SETTINGS_USER" ] || [ ! -r "$SETTINGS_PROJECT" ]; then
+  row NOTM pj-workers-hook "$(tilde "$SETTINGS_USER") or $(tilde "$SETTINGS_PROJECT") unreadable"
+else
+  pjw_miss=""
+  for f in "$SETTINGS_USER" "$SETTINGS_PROJECT"; do
+    jq -e --arg c "$pjw_cmd" '[.hooks.PreToolUse[]? | select(.matcher == "Bash") | .hooks[]?.command] | index($c) != null' "$f" >/dev/null 2>&1 \
+      || pjw_miss="$pjw_miss $(basename "$f")"
+  done
+  if [ ! -x "$PJ_HOME/hooks/$PJW" ]; then
+    row FAIL pj-workers-hook "$(tilde "$PJ_HOME/hooks/$PJW") missing or not executable, so the registration's test -x ... || true allows everything; fix: stow -R the dotfiles"
+  elif [ -n "$pjw_miss" ]; then
+    row FAIL pj-workers-hook "not registered in:$pjw_miss; fix: claude-hooks-sync --target user --install and --target project --install (terminal)"
+  else
+    row PASS pj-workers-hook "registered in $(basename "$SETTINGS_USER") and $(basename "$SETTINGS_PROJECT"), script executable; its --selftest runs under --full"
+  fi
 fi
 
 # M8 hook orphans (the P5.2 rollback gap: sync tools are add-only)

@@ -106,6 +106,18 @@
     {
       "event": "PreToolUse",
       "matcher": "Bash",
+      "script": "enforce-pj-workers.sh",
+      "targets": ["user", "project"],
+      "entry": {
+        "type": "command",
+        "command": "test -x \"$HOME/.claude/hooks/enforce-pj-workers.sh\" && \"$HOME/.claude/hooks/enforce-pj-workers.sh\" || true",
+        "timeout": 5
+      },
+      "why": "DENIES a conductor starting a plain Claude worker in a herdr pane: herdr agent start --kind claude (or claude-code, Claude, an unreadable kind), and herdr pane run/send-text/send-keys whose text runs claude or a .zshrc launcher (cb cr ci cpr cd_ cskip ct lifeos claude-clean), seen through $(...), backticks, function bodies, bash -c, eval and ssh. The denial names pj-worker start (pj-worker start --cleanroom for the clean room). Rulings D-20260924-A04/A05 (W-20260924-A59). The EARLY honest-slip layer, not the floor: the claude() guard in the pane's zsh is. Both targets (a cb or lifeos conductor loads only the user target). Fails closed without jq or on a bad payload; one named override PJ_WORKERS_CONTROL=<item id>, logged. Scanner is conv-shscan.awk mode pjw; --selftest proves every arm"
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "Bash",
       "script": "enforce-census.sh",
       "targets": ["user", "project"],
       "entry": {

@@ -346,11 +346,11 @@ any alias it meets; the rules classify that expansion as zsh would.
 ~/.claude/hooks/enforce-no-permanent-delete.sh --classify '<command>' [cwd]
 ```
 
-| Seam                       | Effect                                              |
-| -------------------------- | --------------------------------------------------- |
-| `DEL_GUARD_LOG`            | log file (default `.../dotfiles/hooks-security.log`) |
-| `DEL_GUARD_SNAPSHOT_DIR`   | where snapshots are looked for                      |
-| `DEL_GUARD_NOFILTER=1`     | lexer emits every command (equivalence testing)     |
+| Seam                     | Effect                                               |
+| ------------------------ | ---------------------------------------------------- |
+| `DEL_GUARD_LOG`          | log file (default `.../dotfiles/hooks-security.log`) |
+| `DEL_GUARD_SNAPSHOT_DIR` | where snapshots are looked for                       |
+| `DEL_GUARD_NOFILTER=1`   | lexer emits every command (equivalence testing)      |
 
 ---
 
@@ -386,3 +386,80 @@ thin `conv-hooklib.sh` wrapper, like `enforce-uv.sh`.
 Measured against every distinct Bash command in this machine's transcripts
 (132,937, 2026-09-24): 362 would be denied (0.27%); a hand-graded random 40 were
 all the real pattern, none a misread.
+
+---
+
+## `enforce-pj-workers.sh`: a conductor starting a plain Claude worker
+
+Added 2026-09-24 for W-20260924-A59, on rulings D-20260924-A04 (layered) and A05
+(pj-worker, a pane guard, and this hook). On 2026-09-24 four workers started with
+`herdr agent start --kind claude` ran as plain `claude`: no pj system prompt, no
+project hooks, no Mods flag. A conductor starts a Claude worker ONLY with
+`pj-worker start`, and a clean-room worker with `pj-worker start --cleanroom`.
+Registered on `PreToolUse`, matcher `Bash`, for **both** targets, because a
+conductor launched as `cb` or `lifeos` loads only the user target. Deny only.
+
+**What it is: the early, honest-slip layer. It is NOT the floor.** A Bash hook
+sees the text of one Bash call and nothing else. It refuses the conductor's own
+slip before anything reaches a pane, and its denial names the route to use. The
+floor is the `claude()` guard in the pane's own zsh (`.zshrc`, active when
+`HERDR_ENV=1`), because herdr TYPES `claude` into that shell whatever route
+started it. redteam-3 H1 measured the routes, with a decoy `claude()` in a pane:
+
+| Route                                                                                       | Does this hook see it?                                                   |
+| ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `herdr agent start ... --kind claude` (any case, `claude-code`, `--machine X`)              | yes, denied                                                              |
+| `herdr pane run P "claude ..."`, `"cb"`, `"lifeos"`, `"claude-clean"`                       | yes, denied                                                              |
+| `herdr pane send-keys P c l a u d e enter` in ONE call                                      | yes, denied (keys are reassembled)                                       |
+| any of the above inside `$(...)`, backticks, a function body, `bash -c`, `eval`, `ssh host` | yes, denied                                                              |
+| `send-text P "cla"`, then `send-text P "ude"` in a SECOND Bash call                         | **no**: each call alone is harmless text                                 |
+| a script or `python3` talking to herdr's socket (`agent.start`)                             | **no**: the text is `zsh x.sh`                                           |
+| `herdr-quick-task`                                                                          | no, and it does not need to: it routes kind `claude` through `pj-worker` |
+| the Monitor tool                                                                            | **no**: no Bash hook runs there at all (W-20260924-A71)                  |
+| a claude binary behind a variable (`pane run P "$CMD"`)                                     | **no**: the text is not known until it runs                              |
+
+**What it denies.** `herdr [--machine X] agent start ... --kind K` unless `K`,
+trimmed and lowercased, is one of the non-claude kinds herdr 0.9.1 lists (`codex`,
+`gemini`, ...): so `claude`, `claude-code`, `Claude`, a kind from an expansion, or
+no readable `--kind` at all. The old clean-room text exemption
+(`-- --setting-sources ''`) is refused by name. `herdr pane run|send-text|send-keys`
+whose text, re-scanned the way the pane's zsh would run it, has a command whose
+COMMAND WORD is `claude` (bare, by path, or `~/.local/share/claude/versions/X`),
+or a `.zshrc` launcher: `cb cr ci cpr cd_ cskip ct lifeos claude-clean`, or
+`__claude_launch claude`.
+
+**What it allows.** `pj` (the Mods probe launches too), `pj-worker`,
+`herdr-quick-task`, other kinds, `herdr agent start --help`, claude's info forms in
+a pane (`--version`, `--help`, `agents`, `mcp`, `doctor`, `plugin`, `update`, ...),
+`claude` as an argument (`alias claude`, `which claude`), and prose: quotes,
+heredoc bodies, commit messages.
+
+**One named override** (redteam-3 H6). A proof whose control needs a plain worker
+prefixes the herdr command with `PJ_WORKERS_CONTROL=<W-YYYYMMDD-XNN>`. It is
+allowed with no permission decision (the normal permission check still runs),
+logged as `CONTROL` to `hooks-security.log`, and named back in the hook's reply
+and a `systemMessage`. A malformed id, or the prefix on a different command,
+does not count.
+
+**It fails closed** (redteam-3 H4). No `jq`, a payload that is not JSON, or a
+payload with no `tool_input.command`: when the raw stdin mentions `herdr` with a
+launch verb it denies by name, in pure bash. Every deny is
+`permissionDecision: deny` with exit 0, so the `test -x ... || true` wrapper
+cannot swallow it (a selftest arm runs the wrapper). A missing scanner falls back
+to a crude word match. What it cannot fail closed on: the script not being there,
+because `test -x` then allows everything. `pj-health`'s `pj-workers-hook` row
+checks that it is stowed and registered in both settings files.
+
+The rule lives in `conv-shscan.awk` as the deny-only mode `pjw`, which records
+commands inside `$(...)` the way `guard` does and re-scans the nested strings.
+
+```sh
+~/.claude/hooks/enforce-pj-workers.sh --selftest   # 80 arms; DENY and ALLOW arms are real transcript commands
+```
+
+Measured 2026-09-24 against every distinct Bash command in this machine's
+transcripts that mentions herdr (4,123 from 3,806 transcripts): 147 would be
+denied. 133 of them hold `--kind claude` and every one read was a live launch;
+the other 14 are real `claude`, `cb` or `lifeos` pane launches and redteam-3's
+kind probes. The first pass also denied 11 `herdr agent start --help` probes,
+which is how the `--help` rule got in. 27 one-fault mutants, 27 killed.
