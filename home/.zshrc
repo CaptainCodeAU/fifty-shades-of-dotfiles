@@ -907,6 +907,11 @@ brew() {
                 done
             done
         fi
+        if (( ${#hits} )) && __cannot_prompt; then
+            # Nobody can answer the confirm below: take the safe default, install nothing.
+            print -ru2 -- "brew: nothing installed: '${formulae[*]}' would newly install ${(uj:, :)hits}, and no one can answer the confirm prompt here (agent or no terminal). Set HOMEBREW_ALLOW_MANAGED_RUNTIME=1 to proceed."
+            return 1
+        fi
         if (( ${#hits} )); then
             print -ru2 -- ""
             print -ru2 -- "WARNING: 'brew install ${formulae[*]}' would newly install a runtime you manage elsewhere:"
@@ -1180,6 +1185,11 @@ rm() {
 	for arg in "$@"; do
 		[[ "$arg" != -* && -L "$arg" ]] && symlinks+=("$arg")
 	done
+	if (( ${#symlinks[@]} > 0 )) && __cannot_prompt; then
+		# Nobody can answer the confirm below: take the safe default, delete nothing.
+		print -ru2 -- "${funcstack[1]}: nothing deleted: ${symlinks[*]} is a symlink and no one can answer the confirm prompt here (agent or no terminal). To trash it anyway: 'command rm <path>' (the Trash-routed PATH shim, no prompt)."
+		return 1
+	fi
 	if (( ${#symlinks[@]} > 0 )); then
 		echo "${warn}⚠️  Symlink target(s) detected:${done}"
 		for s in "${symlinks[@]}"; do
@@ -1208,6 +1218,11 @@ rmdir() {
 	for arg in "$@"; do
 		[[ "$arg" != -* && -L "$arg" ]] && symlinks+=("$arg")
 	done
+	if (( ${#symlinks[@]} > 0 )) && __cannot_prompt; then
+		# Nobody can answer the confirm below: take the safe default, delete nothing.
+		print -ru2 -- "${funcstack[1]}: nothing deleted: ${symlinks[*]} is a symlink and no one can answer the confirm prompt here (agent or no terminal). To trash it anyway: 'command rm <path>' (the Trash-routed PATH shim, no prompt)."
+		return 1
+	fi
 	if (( ${#symlinks[@]} > 0 )); then
 		echo "${warn}⚠️  Symlink target(s) detected:${done}"
 		for s in "${symlinks[@]}"; do
@@ -1224,17 +1239,96 @@ rmdir() {
 	safe-rm "$@"
 }
 
-# Prompt before overwriting files by default.
-# Use explicit -f when you intentionally want to overwrite without prompts.
-cp() {
-    local arg
+# __cannot_prompt: true when nobody can answer a y/n prompt in this shell. That is an
+# agent running it (CLAUDECODE or AI_AGENT set and non-empty), or stdin that is not a
+# terminal: a pipe, a `| while read` loop, /dev/null, or the silent socket Claude Code's
+# Bash tool hands every command containing a heredoc or any `<`, where a read blocks
+# forever (measured 2026-09-24, W-20260924-A32). Every prompting wrapper in this file
+# asks this before it reads. CLAUDECODE is also set in IDE integrated terminals, so a
+# human typing there gets the no-prompt behaviour too (known, accepted in stage 1).
+# Double underscore on purpose: Claude Code's shell snapshot drops _single helpers
+# (docs/ZSH_HELPER_NAMESPACE.md).
+__cannot_prompt() {
+    [[ -n "${CLAUDECODE-}" || -n "${AI_AGENT-}" ]] && return 0
+    [[ ! -t 0 ]]
+}
+
+# Prompt before overwriting files by default; cp() and mv() both come here.
+# -f means overwrite with no prompt, as always, but only when it is an OPTION: the
+# scan stops at `--` or the first operand, so `cp -- -file dst` or a file named -foo
+# is not -f. Short clusters count (-rf, -pf), and so does --force; other long options
+# never do (GNU --dereference, --reflink). An i next to the f (-if, -i -f) cancels it,
+# because macOS cp lets -i win in either order.
+# At a terminal with nobody else driving: `-i`, exactly as before.
+# Otherwise (__cannot_prompt): never prompt, never overwrite, never hang. The tool
+# still runs with -i but reads /dev/null, so each overwrite is declined at once, a
+# caller's stdin (a while-read loop) is never consumed, every declined file gets one
+# stderr line naming it, and the call returns non-zero. A source of /dev/stdin is
+# data, so it keeps stdin and an existing target is refused before the copy runs.
+__cp_mv_guarded() {
+    local tool=$1; shift
+    local arg end=0 force=0 inter=0 fromstdin=0 err rc line t dest
+    local -a ops=() declined=()
     for arg in "$@"; do
-        if [[ "$arg" == -f || "$arg" == -*f* ]]; then
-            command cp "$@"
+        if (( ! end )); then
+            case $arg in
+                --) end=1; continue ;;
+                --force) force=1; continue ;;
+                --interactive) inter=1; continue ;;
+                --*) continue ;;
+                -?*) [[ $arg == *f* ]] && force=1; [[ $arg == *i* ]] && inter=1; continue ;;
+                *) end=1 ;;
+            esac
+        fi
+        ops+=("$arg")
+        [[ $arg == /dev/stdin || $arg == /dev/fd/0 || $arg == /proc/self/fd/0 ]] && fromstdin=1
+    done
+    if (( force && ! inter )); then
+        command $tool "$@"
+        return
+    fi
+    if ! __cannot_prompt; then
+        command $tool -i "$@" || return
+        [[ $tool == mv ]] && { __mv_post_check 0 "$@"; return; }
+        return 0
+    fi
+    if (( fromstdin )); then
+        dest=${ops[-1]}
+        for arg in "${(@)ops[1,-2]}"; do
+            if [[ -d "$dest" ]]; then t="$dest/${arg:t}"; else t="$dest"; fi
+            [[ -e "$t" || -L "$t" ]] && declined+=("$t")
+        done
+        if (( ! ${#declined} )); then
+            command $tool "$@"
             return
         fi
+        rc=1
+    else
+        { err=$(command $tool -i "$@" 2>&1 1>&3 3>&- </dev/null) } 3>&1
+        rc=$?
+        for line in "${(@f)err}"; do
+            case $line in
+                'overwrite '*'? (y/n [n]) not overwritten')      # macOS BSD
+                    t=${line#overwrite }; declined+=("${t%'? (y/n [n]) not overwritten'}") ;;
+                "$tool: overwrite "*)                             # GNU (unverified)
+                    t=${line#"$tool: overwrite "}; t=${t% }; declined+=("${t%\?}") ;;
+                '') ;;
+                *) print -ru2 -- "$line" ;;
+            esac
+        done
+    fi
+    for t in "${declined[@]}"; do
+        print -ru2 -- "$tool: $t NOT overwritten: no one can answer an overwrite prompt here (agent or no terminal). Use $tool -f to overwrite."
     done
-    command cp -i "$@"
+    if [[ $tool == mv ]] && (( ! fromstdin && rc == 0 )); then
+        __mv_post_check $(( ${#declined} > 0 )) "$@" || rc=1
+    fi
+    (( ${#declined} && rc == 0 )) && rc=1
+    return $rc
+}
+
+cp() {
+    __cp_mv_guarded cp "$@"
 }
 
 # mv -i EXITS 0 WHEN AN OVERWRITE IS DECLINED (measured 2026-09-23, macOS mv: it
@@ -1245,16 +1339,12 @@ cp() {
 # rename on APFS (Foo -> foo) is judged by the exact spelling in the directory,
 # because there -e finds the file under either name.
 # Checked only for the plain form, options from -h -i -n -v; anything else keeps
-# mv's own exit status. `mv-wrapper-selftest` proves the arms.
-mv() {
+# mv's own exit status (off a terminal the decline lines themselves also count, see
+# __cp_mv_guarded). $1 = 1 keeps it quiet when those lines already named the files.
+# `mv-wrapper-selftest` proves the arms.
+__mv_post_check() {
+    local quiet=$1; shift
     local arg
-    for arg in "$@"; do
-        if [[ "$arg" == -f || "$arg" == -*f* ]]; then
-            command mv "$@"
-            return
-        fi
-    done
-    command mv -i "$@" || return
     local -a ops=()
     local end=0 dest s t declined=0
     for arg in "$@"; do
@@ -1280,10 +1370,14 @@ mv() {
             ents=( "${s:h}"/*(DN:t) )
             (( ${ents[(Ie)${s:t}]} )) || continue
         fi
-        print -ru2 -- "mv: $s was not moved (overwrite declined); returning 1"
+        (( quiet )) || print -ru2 -- "mv: $s was not moved (overwrite declined); returning 1"
         declined=1
     done
     return $declined
+}
+
+mv() {
+    __cp_mv_guarded mv "$@"
 }
 
 # --- yt-dlp Wrapper ---

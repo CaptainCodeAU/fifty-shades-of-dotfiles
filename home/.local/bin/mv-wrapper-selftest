@@ -1,23 +1,36 @@
 #!/usr/bin/env zsh
 # mv-wrapper-selftest -- prove the .zshrc mv() and cp() wrappers report a DECLINED
-# overwrite as a failure.
+# overwrite as a failure, and that no prompting wrapper (cp, mv, rm, rmdir, brew)
+# ever waits on a prompt nobody can answer.
 #
 # Both wrappers add -i unless -f is given. Measured 2026-09-23: macOS `mv -i` exits
 # 0 when the overwrite is declined (also on EOF, which is what an agent's Bash tool
 # gives it), so `mv a b && next` carried on as if the file had moved; `cp -i` exits
-# 1. The mv wrapper now checks, after an -i run, whether each source is still where
+# 1. The mv wrapper checks, after an -i run, whether each source is still where
 # it was and not the same file as its destination, and returns 1 if so.
 #
-# THE SEAM is the two functions themselves, cut out of the REAL home/.zshrc (never
+# Measured 2026-09-24 (W-20260924-A32): a Claude Code Bash call that contains a
+# heredoc or any `<` gets a stdin that is open and silent, so every prompt blocked
+# forever (one cp sat 23 minutes). Since then, when __cannot_prompt says nobody can
+# answer (agent env var, or stdin not a terminal), the wrappers never read stdin:
+# overwrites are declined at once with one stderr line per file, rm/rmdir/brew take
+# the do-nothing default. A "y" piped in is therefore NOT an answer any more; the
+# accept arms run on a real pty via script(1).
+#
+# THE SEAM is the functions themselves, cut out of the REAL home/.zshrc (never
 # copied into a fixture) and run in a scratch directory under $TMPDIR. Every arm is
-# driven: the declined arms are fed EOF and "n", the accepted arm "y".
+# driven. The hang arms feed a FIFO this script holds open read-write, the same
+# open-and-silent shape as the harness socket (measured: bare cp -i -> rc 124), and
+# run in a child zsh under `timeout 5`, so a regression FAILS instead of hanging.
 #
 # Usage: mv-wrapper-selftest                 (exit 0 = all passed)
-#        ZSHRC_UNDER_TEST=<path> mv-wrapper-selftest   (test another copy)
+#        ZSHRC_UNDER_TEST=<path> mv-wrapper-selftest   (test another copy, e.g.
+#        master's, as the negative control: the A32 arms must FAIL there)
 
 setopt no_unset pipe_fail 2>/dev/null
+zmodload zsh/datetime
 
-PASS=0; FAIL=0
+PASS=0; FAIL=0; NM=0
 
 _resolve_repo() {
     local self="${(%):-%x}" dir target
@@ -44,17 +57,28 @@ if [[ ! -r "$ZSHRC" ]]; then
     echo; echo "  $PASS passed, $FAIL failed"; exit 1
 fi
 
-# Cut the two functions out and define them here. A missing function is a FAIL,
-# never a silent pass through to the real binary.
-for fn in mv cp; do
+T="${TMPDIR:-/tmp}/mv-wrapper-selftest.$$"
+mkdir -p "$T" || { bad "scratch dir $T"; echo; echo "  $PASS passed, $FAIL failed"; exit 1; }
+
+# Cut the wrappers, plus every __helper they may call, out of the file and define
+# them here; the same text goes to $FNS for the child shells. A missing wrapper is a
+# FAIL, never a silent pass through to the real binary.
+FNS="$T/functions.zsh"
+: > "$FNS"
+helpers=( ${(f)"$(sed -n 's/^\(__[A-Za-z0-9_]*\)() {.*/\1/p' "$ZSHRC")"} )
+for fn in mv cp rm rmdir brew $helpers; do
+    [[ -n "$fn" ]] || continue
     body=$(sed -n "/^${fn}() {/,/^}/p" "$ZSHRC")
     if [[ -z "$body" ]]; then bad "$fn() found in .zshrc"; continue; fi
     eval "$body"
+    print -r -- "$body" >> "$FNS"
     [[ "$(whence -w $fn)" == "$fn: function" ]] && ok "$fn() defined from .zshrc" || bad "$fn() defined from .zshrc"
 done
+# Claude Code's snapshot drops _single helpers (docs/ZSH_HELPER_NAMESPACE.md).
+for fn in $helpers; do
+    [[ "$fn" == __* ]] && ok "helper $fn is __double (survives the snapshot)" || bad "helper $fn is __double"
+done
 
-T="${TMPDIR:-/tmp}/mv-wrapper-selftest.$$"
-mkdir -p "$T" || { bad "scratch dir $T"; echo; echo "  $PASS passed, $FAIL failed"; exit 1; }
 builtin cd "$T" || exit 1
 n=0
 fresh() { n=$(( n + 1 )); D="$T/arm$n"; mkdir -p "$D"; builtin cd "$D"; printf A > a; printf B > b; }
@@ -72,6 +96,7 @@ arm() {
 echo "=== mv: a declined overwrite must FAIL, and leave both files alone ==="
 fresh; arm 'mv a b, EOF (agent Bash) declines'  1 '[[ -e a && $(<b) == B ]]' -- mv a b </dev/null
 fresh; arm 'mv a b, "n" declines'               1 '[[ -e a && $(<b) == B ]]' -- mv a b <<<n
+fresh; arm 'mv a b, "y" on a pipe is no answer' 1 '[[ -e a && $(<b) == B ]]' -- mv a b <<<y
 fresh; mkdir d; printf OLD > d/a
        arm 'mv a d/, target exists, declined'   1 '[[ -e a && $(<d/a) == OLD ]]' -- mv a d </dev/null
 fresh; mkdir d; printf OLD > d/a
@@ -82,7 +107,6 @@ fresh; out=$(mv a b </dev/null 2>/dev/null && echo NEXT-RAN)
        [[ -z "$out" ]] && ok "'mv a b && next': next did not run" || bad "'mv a b && next': next did not run" "got: $out"
 
 echo "=== mv: a real move must still SUCCEED ==="
-fresh; arm 'mv a b, "y" accepts'                0 '[[ ! -e a && $(<b) == A ]]' -- mv a b <<<y
 fresh; arm 'mv a c, no conflict, no prompt'     0 '[[ ! -e a && $(<c) == A ]]' -- mv a c </dev/null
 fresh; mkdir d
        arm 'mv a d/, no conflict'               0 '[[ ! -e a && $(<d/a) == A ]]' -- mv a d </dev/null
@@ -92,18 +116,144 @@ fresh; mkdir sub
 fresh; arm 'missing source keeps mv failure'    1 '[[ -e a ]]' -- mv nosuch b </dev/null
 fresh; printf X > Foo
 if [[ -e foo ]]; then   # case-insensitive filesystem (APFS default): mv -i prompts here too
-       arm 'case-only rename Foo -> foo, "y"'   0 '[[ " $(print *(N)) " == *" foo "* && " $(print *(N)) " != *" Foo "* ]]' -- mv Foo foo <<<y
+       arm 'case-only rename Foo -> foo, -f'    0 '[[ " $(print *(N)) " == *" foo "* && " $(print *(N)) " != *" Foo "* ]]' -- mv -f Foo foo </dev/null
        fresh; printf X > Foo
        arm 'case-only rename declined (EOF)'    1 '[[ " $(print *(N)) " == *" Foo "* ]]' -- mv Foo foo </dev/null
 else
        ok 'case-only rename: filesystem is case-sensitive, not applicable (stated, not skipped silently)'
 fi
 
-echo "=== cp: unchanged, already FAILS on a decline ==="
+echo "=== cp: FAILS on a decline ==="
 fresh; arm 'cp a b, EOF declines'               1 '[[ $(<b) == B ]]' -- cp a b </dev/null
-fresh; arm 'cp a b, "y" accepts'                0 '[[ $(<b) == A ]]' -- cp a b <<<y
+fresh; arm 'cp a b, "y" on a pipe is no answer' 1 '[[ $(<b) == B ]]' -- cp a b <<<y
 
+# ---------------------------------------------------------------------------
+# W-20260924-A32: nobody can answer -> never prompt, never overwrite, never hang.
+# ---------------------------------------------------------------------------
+# The silent open stdin that hangs a prompt: a FIFO held open read-write by us.
+mkfifo "$T/silent" && exec {SILENT}<>"$T/silent" || { bad "silent FIFO"; exit 1; }
+
+# kid <code>: run <code> in a fresh `zsh -f` with the cut functions sourced, under
+# timeout 5, in the current arm dir. The caller supplies stdin. Sets KRC KSECS KOUT KERR.
+# KZSH_OPTS adds shell options (brew's guard needs -i).
+KZSH_OPTS=
+kid() {
+    local t0=$EPOCHREALTIME
+    KOUT=$(timeout 5 zsh -f ${=KZSH_OPTS} -c "source ${(q)FNS}; $1" 2>"$T/kerr"); KRC=$?
+    KSECS=$(( EPOCHREALTIME - t0 )); KERR=$(<"$T/kerr")
+}
+# expect <label> <condition>
+expect() {
+    if eval "$2"; then ok "$1 (rc $KRC, $(printf %.2f $KSECS)s)"
+    else bad "$1" "rc $KRC, $(printf %.2f $KSECS)s, stdout: ${KOUT[1,120]} | stderr: ${KERR[1,240]}"; fi
+}
+AGENT='export CLAUDECODE=1'
+NOAGENT='unset CLAUDECODE AI_AGENT'
+FAST='(( KRC != 0 && KRC != 124 && KSECS < 2 ))'
+NAMES_B='[[ $KERR == *"b NOT overwritten"* && $KERR == *"-f to overwrite"* ]]'
+
+echo "=== A32 a/b: agent, target exists: declined fast, target kept, file named ==="
+fresh; kid "$AGENT; cp a b" <&$SILENT
+       expect 'a) cp, silent open stdin (the heredoc shape)'   "$FAST && [[ \$(<b) == B ]] && $NAMES_B"
+fresh; kid "$AGENT; cp a b" </dev/null
+       expect 'b) cp, /dev/null stdin (no-heredoc call)'       "$FAST && [[ \$(<b) == B ]] && $NAMES_B"
+fresh; kid "$NOAGENT; cp a b" <&$SILENT
+       expect 'b) cp, no agent var, stdin not a terminal'      "$FAST && [[ \$(<b) == B ]] && $NAMES_B"
+fresh; mkdir -p s/sub t/sub; printf X > s/sub/x; printf Y > t/sub/x
+       kid "$AGENT; cp -R s/ t/" </dev/null
+       expect 'b) cp -R, nested conflict named'                "$FAST && [[ \$(<t/sub/x) == Y && \$KERR == *'t/sub/x NOT overwritten'* ]]"
+fresh; kid "$AGENT; cp a c" <&$SILENT
+       expect 'control: agent, no existing target copies'      "(( KRC == 0 )) && [[ \$(<c) == A ]]"
+fresh; kid "$AGENT; print -r DATA | cp /dev/stdin c" </dev/null
+       expect 'cp /dev/stdin to a new file keeps the data'     "(( KRC == 0 )) && [[ \$(<c) == DATA ]]"
+fresh; kid "$AGENT; print -r DATA | cp /dev/stdin b" </dev/null
+       expect 'cp /dev/stdin onto existing refused'            "$FAST && [[ \$(<b) == B ]] && $NAMES_B"
+
+echo "=== A32 c: -f still overwrites in agent context ==="
+for fl in -f -rf -pf; do
+fresh; kid "$AGENT; cp $fl a b" <&$SILENT
+       expect "c) cp $fl overwrites"                           "(( KRC == 0 )) && [[ \$(<b) == A ]]"
+done
+# --force counts as -f and is passed through untouched. BSD cp has no --force and
+# rejects it (rc 64, measured); GNU overwrites.
+fresh; kid "$AGENT; cp --force a b" <&$SILENT
+if [[ $OSTYPE == darwin* ]]; then
+       expect 'c) cp --force passed through (BSD rejects, rc 64)' "(( KRC == 64 )) && [[ \$(<b) == B ]]"
+else
+       expect 'c) cp --force overwrites (GNU)'                 "(( KRC == 0 )) && [[ \$(<b) == A ]]"
+fi
+fresh; kid "$AGENT; mv -f a b" <&$SILENT
+       expect 'c) mv -f overwrites'                            "(( KRC == 0 )) && [[ ! -e a && \$(<b) == A ]]"
+
+echo "=== A32 d: an operand is never mistaken for -f ==="
+fresh; printf X > -x; kid "$AGENT; cp -- -x b" </dev/null
+       expect 'd) cp -- -x b does NOT overwrite'               "$FAST && [[ \$(<b) == B ]] && $NAMES_B"
+fresh; printf X > -file; kid "$AGENT; cp -- -file b" </dev/null
+       expect 'd) cp -- -file b does NOT overwrite (had an f)' "$FAST && [[ \$(<b) == B ]] && $NAMES_B"
+fresh; printf X > -file; kid "$AGENT; mv -- -file b" </dev/null
+       expect 'd) mv -- -file b does NOT overwrite'            "$FAST && [[ -e -file && \$(<b) == B ]]"
+
+echo "=== A32 e: a while-read loop keeps all its lines ==="
+fresh; kid "$NOAGENT; printf 'l1\nyes-data\nl3\n' | while read -r l; do cp a b; print -r -- \$l; done" </dev/null
+       expect 'e) cp in while-read: 3 lines, b kept'           "[[ \$KOUT == \$'l1\nyes-data\nl3' && \$(<b) == B ]]"
+fresh; kid "$NOAGENT; printf 'l1\nyes-data\nl3\n' | while read -r l; do printf A > a; mv a b; print -r -- \$l; done" </dev/null
+       expect 'e) mv in while-read: 3 lines, b kept'           "[[ \$KOUT == \$'l1\nyes-data\nl3' && \$(<b) == B ]]"
+
+echo "=== A32 f: mv declined -> non-zero ==="
+fresh; kid "$AGENT; mv a b && print NEXT-RAN" <&$SILENT
+       expect 'f) mv a b declined, next did not run'           "$FAST && [[ \$KOUT != *NEXT-RAN* && -e a && \$(<b) == B ]] && $NAMES_B"
+fresh; mkdir d; printf OLD > d/a
+       kid "$AGENT; mv a b d" </dev/null
+       expect 'f) two sources, one declined: named, rc 1'      "$FAST && [[ -e a && ! -e b && \$(<d/a) == OLD && \$KERR == *'d/a NOT overwritten'* ]]"
+
+echo "=== A32 g: a real terminal, nobody else driving, still prompts ==="
+# script(1) gives the child a pty; the answer is typed into it. Agent vars removed.
+ptyrun() {   # ptyrun <answer> <code>
+    # The answer waits until the prompt is up, and stdin stays open after it: on EOF
+    # script(1) sends ^D into the pty, which raced the prompt (measured: "^Dy", no RC).
+    KOUT=$( { sleep 0.5; print -r -- "$1"; sleep 1; } | env -u CLAUDECODE -u AI_AGENT timeout 5 script -q /dev/null \
+           zsh -f -c "source ${(q)FNS}; $2; print -r -- RC=\$?" 2>&1); KRC=$?; KSECS=0; KERR=
+}
+if [[ "$(print | script -q /dev/null true 2>&1)" == *openpty*"not permitted"* ]]; then
+    NM=$(( NM + 1 ))
+    printf '  NOT MEASURED  g) pty arms: this sandbox denies openpty; rerun unsandboxed\n'
+else
+fresh; ptyrun n 'cp a b'
+       expect 'g) pty, cp a b, answer n: prompted, kept'       "[[ \$KOUT == *'overwrite'*'(y/n'* && \$KOUT == *RC=1* && \$(<b) == B ]]"
+fresh; ptyrun y 'cp a b'
+       expect 'g) pty, cp a b, answer y: overwritten'          "[[ \$KOUT == *'(y/n'* && \$KOUT == *RC=0* && \$(<b) == A ]]"
+fresh; ptyrun y 'mv a b'
+       expect 'g) pty, mv a b, answer y: moved'                "[[ \$KOUT == *'(y/n'* && \$KOUT == *RC=0* && ! -e a && \$(<b) == A ]]"
+fresh; ptyrun n 'mv a b'
+       expect 'g) pty, mv a b, answer n: rc 1, kept'           "[[ \$KOUT == *'(y/n'* && \$KOUT == *RC=1* && -e a && \$(<b) == B ]]"
+fresh; ptyrun y "$AGENT; cp a b"
+       expect 'g) pty but CLAUDECODE set: no prompt, declined' "[[ \$KOUT != *'(y/n'* && \$KOUT == *'b NOT overwritten'* && \$KOUT == *RC=1* && \$(<b) == B ]]"
+fresh; ptyrun y "export AI_AGENT=x; cp a b"
+       expect 'g) pty but AI_AGENT set: no prompt, declined'   "[[ \$KOUT != *'(y/n'* && \$KOUT == *RC=1* && \$(<b) == B ]]"
+fi
+
+echo "=== A32 h: rm / rmdir / brew prompts do not block an agent ==="
+fresh; ln -s a lnk; kid "$AGENT; rm lnk" <&$SILENT
+       expect 'h) rm <symlink>: nothing deleted, fast'         "$FAST && [[ -L lnk && \$KERR == *'nothing deleted'*lnk* ]]"
+fresh; mkdir dd; ln -s dd ldd; kid "$AGENT; rmdir ldd" <&$SILENT
+       expect 'h) rmdir <symlink>: nothing deleted, fast'      "$FAST && [[ -L ldd && \$KERR == *'nothing deleted'*ldd* ]]"
+# A fake brew first on PATH: `deps` names node, `list` names nothing, `install`
+# leaves a mark. The real brew is never run.
+mkdir -p "$T/fakebin"
+print -r -- '#!/bin/sh
+case "$1" in deps) echo node ;; list) : ;; install) : > "$FAKE_BREW_MARK" ;; esac' > "$T/fakebin/brew"
+chmod +x "$T/fakebin/brew"
+KZSH_OPTS=-i
+fresh; kid "$AGENT; export PATH=${(q)T}/fakebin:\$PATH FAKE_BREW_MARK=\$PWD/mark; brew install foo" <&$SILENT
+       expect 'h) brew install (interactive guard): nothing installed, fast' "$FAST && [[ ! -e mark && \$KERR == *'nothing installed'*node* ]]"
+fresh; kid "$NOAGENT; export PATH=${(q)T}/fakebin:\$PATH FAKE_BREW_MARK=\$PWD/mark; HOMEBREW_ALLOW_MANAGED_RUNTIME=1 brew install foo" <&$SILENT
+       expect 'control: brew with the documented bypass installs' "(( KRC == 0 )) && [[ -e mark ]]"
+KZSH_OPTS=
+
+exec {SILENT}>&-
 builtin cd /
 echo
-echo "  $PASS passed, $FAIL failed   (scratch: $T, left in place)"
-(( FAIL == 0 ))
+echo "  $PASS passed, $FAIL failed, $NM not measured   (scratch: $T, left in place)"
+(( FAIL == 0 )) || exit 1
+(( NM == 0 )) || exit 2   # not measured is not a pass
+exit 0
