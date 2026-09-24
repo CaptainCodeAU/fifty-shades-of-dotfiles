@@ -55,6 +55,15 @@ Nothing here is ever deleted; a cleared record is MOVED to a `handled/` folder w
   pj-session-end moves it aside when the ending session's transcript shows that command was
   invoked (a `<command-name>` for it), so running the project's wrap-up in any later session
   clears the card without a second step.
+- How pj-session-end sees that a command ran, measured from real transcripts 2026-09-25 by worker
+  wrap. Typed: a `user` line whose content is a string starting
+  `<command-message>NAME</command-message>` then `<command-name>/NAME</command-name>`. Run by the
+  model: a `Skill` tool call, then a `user` line with `toolUseResult: {success: true, commandName:
+  "NAME"}`, and no `<command-name>` at all. Either route clears. The owed command's first word, one
+  leading `/` dropped, must equal NAME exactly, so `pj:wrap-up` never clears `/wrap-up`. Only an
+  invocation at or after the record's `since:` minute counts, so running the command early in the
+  session that then declines it does not clear the owe. `pj-wrap owed --clear <cmd>` compares the
+  whole command.
 - `pj-wrap owed` with no flag lists the project's owed records (rc 1 when none).
 - The start card prints one line per owed command while the record exists:
   `Owed: <command> (since <date>, declined at wrap-up). Run it, or 'pj-wrap owed --clear'.`
