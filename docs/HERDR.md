@@ -411,6 +411,9 @@ real files that are not stow symlinks and so are not restored by a restow.
 here because a checklist that lists only what you must do hides the one thing
 that happens whether you act or not.
 
+(Since 2026-09-24 a Claude worker starts only through `pj-worker start`, and the plain
+`--kind claude` route below is refused in herdr panes; D-20260924-A05. Kept as history.)
+
 **And the herdr spawn path does NOT run our credential wrapper.** Measured
 2026-09-17 in a throwaway workspace: `herdr agent start --kind claude` echoes
 the bare command `claude` into the pane, not the `c` alias, so `_claude_launch`

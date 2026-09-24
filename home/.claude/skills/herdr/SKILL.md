@@ -25,10 +25,10 @@ Rules first. Each points to the section holding its measurement.
 10. Only `pane layout`, `pane current`, `pane split` accept `--pane`/`--current`; every other `pane` subcommand takes a bare positional id (Use IDs).
 11. A registry entry is not a ready agent: a Claude session's entry appears before its name is applied (Name what you create).
 12. Close only what you opened, and clear the labels you set; a pane label outlives its process (Name what you create).
-13. `herdr agent start --kind claude` starts plain `claude`, NOT a pj session: no pj system prompt (OPERATIONAL_RULES, pj-global RULES), no project hooks, no Mods flag. 4 of 4 workers' command lines showed only `--permission-mode`, 2026-09-24 (W-20260924-A59). Until that is fixed, put every rule a worker needs into its brief.
+13. A Claude worker starts ONLY through `pj-worker start <name>`, never `herdr agent start --kind claude` (plain `claude`: no pj rules, no pj hooks, no Mods flag; 4 of 4 workers ran that way on 2026-09-24). `pj-worker` splits the pane, launches `pj`, proves it with `pj-worker verify` (exit 0 pj, 1 not pj, 2 could not measure) and refuses past the caps: 4 live sessions per project, conductor and Gavin's own included, and 8 on the machine (D-20260924-A05, A08, A10). A `claude()` guard in herdr pane shells and the `enforce-pj-workers.sh` hook refuse the plain routes; a refused `agent start` shows only `timeout`. Before a launch, also count the account's ONLINE sessions on other machines with ListAgents and hold at 8 (ruling 11). Space first prompts a few seconds apart (a login-refresh race is suspected, W-20260923-A14).
 14. One stall watch per worker, never several paths in one `--once` watch: it exits on the FIRST path's STALL and leaves the rest unwatched (twice on 2026-09-24). TaskStop each watch the moment its worker reports: of 101 watches in 30 sessions, 43 ended in STALL and about 17 of those fired after the worker was already done (W-20260924-A42).
 15. Hand files between conductor and workers by absolute path (the scratchpad), never `$TMPDIR`: it is `/tmp/claude-501` sandboxed and `/var/folders/.../T` unsandboxed in the same session; one control arm was voided that way, 2026-09-24.
-16. A side-by-side test session (a live mod, a UI check) goes in a separate herdr TAB, never a pane (Gavin, 2026-09-23); one Mods probe tab opened and closed cleanly that way, 2026-09-24.
+16. A side-by-side test session (a live mod, a UI check) goes in a separate herdr TAB, never a pane (Gavin, 2026-09-23); one Mods probe tab opened and closed cleanly that way, 2026-09-24. Always `tab create --workspace "$HERDR_WORKSPACE_ID"`: without it the tab lands in the FOCUSED workspace (3 of 3 red-team tabs did, 2026-09-24).
 17. Every worker brief carries a required edge-cases section and the VERIFIED / AGENT-REPORTED / ASSUMED labels (Gavin, 2026-09-24: "preferably all of them are"); re-check a worker's load-bearing claim yourself before relaying it. 4 of 4 checked claims held on 2026-09-24, and one conductor count (10 of 41 arms) was the conductor's own instrument error.
 
 Before any control command, verify this agent is inside a Herdr-managed pane:
@@ -194,7 +194,7 @@ An available shell pane is at its interactive prompt, shell in the foreground, n
 herdr agent start reviewer --kind codex --pane <returned-pane-id>
 ```
 
-Use the kind the user requested; `herdr agent` lists installed kinds and options. Native agent arguments go after `--`:
+For a Claude worker use `pj-worker start` (rule 13); the recipe below is for other kinds. Use the kind the user requested; `herdr agent` lists installed kinds and options. Native agent arguments go after `--`:
 
 ```bash
 herdr agent start reviewer --kind codex --pane <returned-pane-id> -- <agent-args...>
@@ -258,11 +258,7 @@ If a wait fails or returns `blocked`, inspect `agent get` and `agent read` befor
 
 ## Start a clean-room Claude in a pane
 
-For measuring front-loaded context (CLAUDE.md, memory, skills, MCP) piece by piece, the user may ask for a Claude with none of it. Split a sibling pane with `--cwd` set to a NEW empty folder (project CLAUDE.md and auto-memory are keyed by folder), then:
-
-```bash
-herdr agent start cleanroom --kind claude --pane <returned-pane-id> -- --setting-sources '' --strict-mcp-config
-```
+For measuring front-loaded context (CLAUDE.md, memory, skills, MCP) piece by piece, the user may ask for a Claude with none of it. A conductor starts one ONLY with `pj-worker start <name> --cleanroom` (ruling D-20260924-A05 #2): it makes a new empty folder under `~/.cache/claude-clean/`, launches `command claude --setting-sources '' --strict-mcp-config` with no bypass flags, and says the session is unguarded by design. The old form, `herdr agent start cleanroom --kind claude ... -- --setting-sources ''`, is refused by the pane guard and the hook since 2026-09-24.
 
 Measured 2026-09-06 on Claude Code 2.1.263: that session sees no CLAUDE.md from any path (global included), no memory, no PAI, zero MCP tools. `--bare` is NOT usable: it never reads OAuth or the keychain and fails "Not logged in" on the user's Max account; a fresh `CLAUDE_CONFIG_DIR` is logged out for the same reason. The folder-trust dialog appears once because the folder is new; accepting it for an empty scratch folder is harmless (unlike for `$HOME`). Add context with `--append-system-prompt-file <file>`, or drop a `CLAUDE.md` in the folder and relaunch without `--setting-sources ''`; `/context` inside the session is the token meter. The dotfiles ship `claude-clean` (in `.zshrc`) as the one-word interactive form.
 

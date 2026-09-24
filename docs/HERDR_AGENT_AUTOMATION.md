@@ -163,13 +163,15 @@ The retry below is still the right shape. NOT re-run on 0.8.2 -- reproducing it
 means starting real agents in a live session, so this is upstream's account plus
 our own script's behaviour, not a fresh measurement.
 
-Fix -- wait for the prompt, then retry with backoff:
+Fix -- wait for the prompt, then retry with backoff. (The example uses `codex`: since 2026-09-24 a
+Claude worker starts only through `pj-worker start`, which does this handshake itself, and the
+pane guard and `enforce-pj-workers.sh` refuse `--kind claude`; ruling D-20260924-A05.)
 
 ```bash
 herdr pane wait-output "$P" --regex "$(basename "$PWD")" --timeout 30000
 for i in 1 2 3 4 5 6 7 8; do
   sleep 2
-  R=$(herdr agent start demo --kind claude --pane "$P" --timeout 120000 2>&1)
+  R=$(herdr agent start demo --kind codex --pane "$P" --timeout 120000 2>&1)
   echo "$R" | grep -q agent_pane_busy || break
 done
 ```
