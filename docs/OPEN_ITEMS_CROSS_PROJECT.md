@@ -127,7 +127,7 @@ then moves to its owner with its history, like a case 5 move.
 Rejected: no inbox, flag the item where filed (it sits in the wrong list); one inbox per group
 (an item with no group has nowhere to go).
 
-### 7. Who owns a file, and routing by that owner (W-20260924-A53, ruled 2026-09-24)
+### 7. Who owns a file, and routing by that owner (D-20260924-A12, W-20260924-A53)
 
 Ruled by Gavin 2026-09-24, four questions answered in one pass, all four recommendations taken.
 Evidence: drawer:agent-shell-prompts/reports/switcher-audit/2-ownership.md (investigator 2).
@@ -159,7 +159,7 @@ Rejected: keep the gate and also gate `add --for` (more terminal steps for Gavin
 bypass it closes is a recoverable one); no change.
 
 **7d. Gavin's own tools live in dotfiles and are stowed; LifeOS upstream stays in dot-claude.**
-`stall_watch.sh` moved 2026-09-24 (D-20260920-A09); `flourish-check.py` follows.
+`stall_watch.sh` moved 2026-09-24 (D-20260920-A09); `flourish-check.py` moved the same day.
 
 ## Unique IDs (W-20260923-A22)
 
