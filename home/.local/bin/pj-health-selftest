@@ -329,7 +329,7 @@ arm "baseline parses as JSON" jq -e '.rows|length>0' <<<"$OUT" >/dev/null
 # ~/.config/pj/profiles and the suite's result would depend on the machine it runs on --
 # NOT MEASURED on a box with nothing stowed, WARN on a box with a profile pointing
 # somewhere unusual. They get hermetic arms of their own in the profiles section below.
-for n in launcher output-style plugin-dirs prompt-file rules-budget skill-budget settings-render hooks-sync pj-workers-hook hook-orphans hook-single-fire stow-links bin-strays machine-file pj-global no-wrap-up selftests launch-log stale-shells pj-homes drawer decided-store commit-trailer skill-upstream mods-api evidence-card evidence-ci-watch evidence-rules evidence-plugins evidence-tokens; do
+for n in launcher output-style plugin-dirs prompt-file rules-budget skill-budget settings-render hooks-sync pj-workers-hook hook-orphans hook-single-fire stow-links bin-strays machine-file pj-global no-wrap-up owed bare-wrap selftests launch-log stale-shells pj-homes drawer decided-store commit-trailer skill-upstream mods-api evidence-card evidence-ci-watch evidence-rules evidence-plugins evidence-tokens; do
   arm "baseline $n PASS (got $(st "$n"): $(dt "$n" | cut -c1-80))" is "$n" PASS
 done
 arm "baseline live-probe NOT MEASURED without --live" is live-probe "$NM"
@@ -498,6 +498,78 @@ gone "$BIN/decided"; run; arm "pj-global NOT MEASURED when decided is absent" is
 
 # 13. no-wrap-up
 mv "$STATE/no-wrap-up" "$T/nw.bak"; run; arm "no-wrap-up PASS with 0 when the folder does not exist" has no-wrap-up "0 projects"; mv "$T/nw.bak" "$STATE/no-wrap-up"
+
+# 13b. owed and 13c. bare-wrap (W5, W6; D-20260925-A01). Fixtures typed from the state contract in
+# docs/PJ_WRAP_UP.md (pj-wrap done --owed is built in parallel): re-take them from the writer once
+# it lands. The baseline arms above already cover "folder not created yet".
+arm "baseline owed says the folder is not created yet" has owed "0 projects owe a project wrap-up (folder not created yet)"
+arm "baseline bare-wrap says the folder is not created yet" has bare-wrap "0 wrapped/ markers (folder not created yet)"
+TODAY="$(date +%Y-%m-%d)"; OLD="$(date -v-30d +%Y-%m-%d 2>/dev/null || date -d '30 days ago' +%Y-%m-%d)"
+OW="$STATE/owed"; WM="$STATE/wrapped"; mkdir -p "$OW/handled" "$WM"
+HK="$(printf '%s' "$HOME" | sed 's#[/._]#-#g')"
+# project-a: the contract's project: line, two records. project-b: no project: line, so the name
+# comes through wrapped/<session>. A third key has no record left. handled/ holds history.
+printf 'owed: /wrap-up\nproject: proj-a\nsession: sa1\nsince: %s 10:00\n\nowed: /release\nproject: proj-a\nsession: sa2\nsince: %s 11:00\n' "$TODAY" "$TODAY" >"$OW/-x-proj-a"
+printf 'owed: /wrap-up\nsession: sb1\nsince: %s 10:00\n' "$TODAY" >"$OW/-x-proj-b"
+printf 'wrapped: %s 10:00\nproject: proj-b-from-marker\nvia: skill\n' "$TODAY" >"$WM/sb1"
+printf '\n' >"$OW/-x-proj-cleared"
+printf 'owed: /wrap-up\nproject: proj-handled\nsession: sh\nsince: %s 10:00\n' "$TODAY" >"$OW/handled/-x-proj-handled.20260101-000000"
+run
+arm "owed PASS with records present (informational, never FAIL)" is owed PASS
+arm "owed counts 2 owing projects and 3 records" has owed "2 project(s) owe a project wrap-up, 3 record(s)"
+arm "owed states its denominator: 3 owed files" has owed "of 3 owed file(s)"
+arm "owed names proj-a from its project: line, with its count" has owed "proj-a (2)"
+arm "owed names proj-b through wrapped/<session> when project: is missing" has owed "proj-b-from-marker (1)"
+arm "owed ignores owed/handled/ (history)" not_has owed "proj-handled"
+# no project: line and no marker: the key, with the encoded HOME shown as ~
+printf 'owed: /wrap-up\nsession: nomarker\nsince: %s 10:00\n' "$TODAY" >"$OW/$HK-CODE-lost"
+run; arm "owed falls back to the key, HOME shown as ~" has owed "key:~-CODE-lost (1)"
+gone "$OW/$HK-CODE-lost"
+# a hostile project name is data
+printf 'owed: /x\nproject: ev\033]52;c;aGk=\ail\nsession: s\nsince: %s 10:00\n' "$TODAY" >"$OW/-x-proj-evil"
+run; arm "owed neutralises a control character in a name (no ESC byte)" bash -c '! printf "%s" "$1" | LC_ALL=C grep -q "$(printf "\033")"' _ "$(dt owed)"
+arm "  CONTROL: the name IS in the row, neutralised" has owed "ev?]52;c;aGk=?il (1)"
+gone "$OW/-x-proj-evil"
+chmod 000 "$OW/-x-proj-b"; run
+if [ -r "$OW/-x-proj-b" ]; then echo "  skip: chmod 000 did not take (root?); owed unreadable-file arm NOT MEASURED" >&2
+else arm "owed NOT MEASURED when one owed file is unreadable, never a smaller count" is owed "$NM"; arm "  and says how many of how many" has owed "1 of 3 owed file(s) unreadable"; fi
+chmod 644 "$OW/-x-proj-b"
+chmod 000 "$OW"; run
+if [ -r "$OW" ]; then echo "  skip: chmod 000 did not take (root?); owed unreadable-folder arm NOT MEASURED" >&2
+else arm "owed NOT MEASURED when the folder is unreadable, never 0" is owed "$NM"; arm "  and names the folder" has owed "owed unreadable"; fi
+chmod 755 "$OW"; run; arm "CONTROL: owed readable again is PASS with the count" has owed "2 project(s) owe"
+# bare-wrap: in the window 2 bare (proj-a), 1 skill (sb1 above) + 1 skill, 1 with no via, 1 unknown via;
+# outside it 1 bare 30 days old. 7 markers in the folder.
+printf 'wrapped: %s 09:00\nproject: proj-a\nvia: bare\n' "$TODAY" >"$WM/b1"
+printf 'wrapped: %s 09:30\nproject: proj-a\nvia: bare\n' "$TODAY" >"$WM/b2"
+printf 'wrapped: %s 09:40\nproject: proj-c\nvia: skill\n' "$TODAY" >"$WM/s2"
+printf 'wrapped: %s 09:50\nproject: proj-c\n' "$TODAY" >"$WM/n1"
+printf 'wrapped: %s 09:55\nproject: proj-c\nvia: sideways\n' "$TODAY" >"$WM/o1"
+printf 'wrapped: %s 09:00\nproject: proj-old\nvia: bare\n' "$OLD" >"$WM/old"
+run
+arm "bare-wrap PASS (informational: W6 allows a bare done)" is bare-wrap PASS
+arm "bare-wrap counts the window: 6 of 7 markers" has bare-wrap "of 6 marker(s) wrapped since"
+arm "bare-wrap states the folder denominator" has bare-wrap "7 in the folder"
+arm "bare-wrap splits bare, skill and no via" has bare-wrap "2 via bare, 2 via skill, 1 with no via line"
+arm "bare-wrap counts an unknown via apart" has bare-wrap "1 with an unknown via"
+arm "bare-wrap names where the bare ones ran" has bare-wrap "bare in: proj-a (2)"
+arm "bare-wrap leaves the 30-day-old bare marker out" not_has bare-wrap "proj-old"
+printf 'project: proj-c\nvia: bare\n' >"$WM/undated"; run
+arm "bare-wrap WARN when a marker has no wrapped: date" is bare-wrap WARN
+arm "  and says it is not counted" has bare-wrap "1 of 8 marker(s) have no readable wrapped: date"
+gone "$WM/undated"
+chmod 000 "$WM/b1"; run
+if [ -r "$WM/b1" ]; then echo "  skip: chmod 000 did not take (root?); bare-wrap unreadable-file arm NOT MEASURED" >&2
+else arm "bare-wrap NOT MEASURED when a marker is unreadable" is bare-wrap "$NM"; arm "  and says how many" has bare-wrap "1 of 7 marker(s) unreadable"; fi
+chmod 644 "$WM/b1"
+chmod 000 "$WM"; run
+if [ -r "$WM" ]; then echo "  skip: chmod 000 did not take (root?); bare-wrap unreadable-folder arm NOT MEASURED" >&2
+else arm "bare-wrap NOT MEASURED when the folder is unreadable, never 0" is bare-wrap "$NM"
+     arm "  and the owed join does not break the owed row" has owed "2 project(s) owe"; fi
+chmod 755 "$WM"; run; arm "CONTROL: bare-wrap readable again is PASS" is bare-wrap PASS
+# leave the state as the baseline found it, so later arms and the no-write hash are unchanged
+gone "$OW"; gone "$WM"
+run; arm "CONTROL: owed and bare-wrap back to folder-not-created" has owed "folder not created yet"
 
 # 14. selftests
 gone "$BIN/decided-selftest"; run; arm "selftests FAIL when one is missing" is selftests FAIL; arm "selftests names it" has selftests "decided-selftest"; ln -s "$DF/home/.local/bin/decided-selftest" "$BIN/decided-selftest"
@@ -942,9 +1014,9 @@ arm "--quiet hides PASS rows" bash -c '! grep -q "^PASS" <<<"$1"' _ "$QOUT"
 arm "--quiet keeps the summary line" grep -q '^pj-health: .* FAIL, ' <<<"$QOUT"
 write_settings
 FOUT="$( (builtin cd "$PROJ" && PATH="$BIN:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" PJ_HOME="$H" PJ_BIN_DIR="$BIN" PJ_DOTFILES="$DF" PJ_LAUNCHER="$BIN/pj" PJ_TYPE_OUT="$T/type-out" DRYRUN_FILE="$T/dryrun" PJ_PS_OUT="$T/ps" PJ_ZSHRC_MTIME="$ZMT" PJ_TRANSCRIPTS_DIR="$H/projects" PJ_STATE_DIR="$STATE" PJ_MACHINE_FILE="$T/machine" PJ_PROMPT_SOURCES="$OR:$RULES" PJ_PROMPT_OUT="$T/cache/prompt.md" OI_WHERE_FILE="$T/oi-where" DECIDED_LIST_FILE="$T/decided-list" DECIDED_LIST_RC="$T/decided-list-rc" DECIDED_HOMES_FILE="$T/decided-homes" RENDER_OUT_FILE="$T/render-out" RENDER_RC_FILE="$T/render-rc" SYNC_OUT_FILE="$T/sync-out" pj-health 2>/dev/null) )"
-# 41, not 40, since W-20260924-A59 added the pj-workers-hook row (38 rows + header + summary).
-arm "normal output under 41 lines ($(wc -l <<<"$FOUT" | tr -d ' '))" [ "$(wc -l <<<"$FOUT" | tr -d ' ')" -lt 41 ]
-arm "normal output has one row per check (38)" [ "$(grep -cE '^(PASS|WARN|FAIL|NOT MEASURED) ' <<<"$FOUT")" -eq 38 ]
+# 43, not 41, since D-20260925-A01 added the owed and bare-wrap rows (40 rows + header + summary).
+arm "normal output under 43 lines ($(wc -l <<<"$FOUT" | tr -d ' '))" [ "$(wc -l <<<"$FOUT" | tr -d ' ')" -lt 43 ]
+arm "normal output has one row per check (40)" [ "$(grep -cE '^(PASS|WARN|FAIL|NOT MEASURED) ' <<<"$FOUT")" -eq 40 ]
 arm "unknown arg REFUSED rc 2" bash -c 'PATH="$1:$PATH" pj-health --bogus >/dev/null 2>&1; [ $? -eq 2 ]' _ "$BIN"
 arm "--help exits 0" bash -c 'PATH="$1:$PATH" pj-health --help >/dev/null 2>&1' _ "$BIN"
 
