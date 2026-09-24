@@ -103,11 +103,11 @@ write_owed(){                   # write_owed <command> <project>
   say "owed: $1, recorded in $(tilde "$f"); the start card shows it until it runs or 'pj-wrap owed --clear'"
 }
 cmd_owed(){
-  local f want="" n dest keep_tmp nh nk
+  local f want="" clear=0 n dest keep_tmp nh nk
   f="$(owed_path)" || exit 2
   case "${1:-}" in
     "") ;;
-    --clear) shift; [ $# -le 1 ] || refuse "owed --clear takes at most one command (quote it)"
+    --clear) clear=1; shift; [ $# -le 1 ] || refuse "owed --clear takes at most one command (quote it)"
              want="${1-}"; [ $# -eq 1 ] && [ -z "$(norm_cmd "$want")" ] && refuse "owed --clear was given an empty command"
              ;;
     *) refuse "owed: unknown argument $1 (owed | owed --clear [<command>])" ;;
@@ -116,7 +116,7 @@ cmd_owed(){
   if [ ! -f "$f" ] || [ "$n" -eq 0 ]; then
     say "nothing owed in this project (checked $(tilde "$f"))"; exit 1
   fi
-  if [ "${1:-}" != --clear ]; then
+  if [ "$clear" -eq 0 ]; then
     say "$n owed record(s) in this project ($(tilde "$f")):"
     awk 'BEGIN { RS = "" } {
       o = ""; s = ""; t = ""
