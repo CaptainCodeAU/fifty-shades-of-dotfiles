@@ -139,7 +139,9 @@ mkfifo "$T/silent" && exec {SILENT}<>"$T/silent" || { bad "silent FIFO"; exit 1;
 KZSH_OPTS=
 kid() {
     local t0=$EPOCHREALTIME
-    KOUT=$(timeout 5 zsh -f ${=KZSH_OPTS} -c "source ${(q)FNS}; $1" 2>"$T/kerr"); KRC=$?
+    # -k 2: an interactive zsh (KZSH_OPTS=-i) ignores SIGTERM, so without a KILL
+    # after it a hung arm hung the whole suite (measured against master's brew()).
+    KOUT=$(timeout -k 2 5 zsh -f ${=KZSH_OPTS} -c "source ${(q)FNS}; $1" 2>"$T/kerr"); KRC=$?
     KSECS=$(( EPOCHREALTIME - t0 )); KERR=$(<"$T/kerr")
 }
 # expect <label> <condition>
@@ -149,7 +151,7 @@ expect() {
 }
 AGENT='export CLAUDECODE=1'
 NOAGENT='unset CLAUDECODE AI_AGENT'
-FAST='(( KRC != 0 && KRC != 124 && KSECS < 2 ))'
+FAST='(( KRC != 0 && KRC != 124 && KRC != 137 && KSECS < 2 ))'
 NAMES_B='[[ $KERR == *"b NOT overwritten"* && $KERR == *"-f to overwrite"* ]]'
 
 echo "=== A32 a/b: agent, target exists: declined fast, target kept, file named ==="
@@ -211,7 +213,7 @@ echo "=== A32 g: a real terminal, nobody else driving, still prompts ==="
 ptyrun() {   # ptyrun <answer> <code>
     # The answer waits until the prompt is up, and stdin stays open after it: on EOF
     # script(1) sends ^D into the pty, which raced the prompt (measured: "^Dy", no RC).
-    KOUT=$( { sleep 0.5; print -r -- "$1"; sleep 1; } | env -u CLAUDECODE -u AI_AGENT timeout 5 script -q /dev/null \
+    KOUT=$( { sleep 0.5; print -r -- "$1"; sleep 1; } | env -u CLAUDECODE -u AI_AGENT timeout -k 2 5 script -q /dev/null \
            zsh -f -c "source ${(q)FNS}; $2; print -r -- RC=\$?" 2>&1); KRC=$?; KSECS=0; KERR=
 }
 if [[ "$(print | script -q /dev/null true 2>&1)" == *openpty*"not permitted"* ]]; then
