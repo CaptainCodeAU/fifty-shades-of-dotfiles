@@ -1,0 +1,644 @@
+#!/usr/bin/env bash
+# pj-worker-selftest -- proves every arm of pj-worker (and herdr-quick-task's claude route)
+# against fixtures taken from REAL output, with fake herdr, ps, pj and pj-prompt-file on the
+# seams. Nothing here touches herdr, ~/.claude, ~/.local/state or a real session, and it
+# deletes nothing: every arm gets a fresh world folder under the run's temp dir.
+#
+# WHERE THE FIXTURES COME FROM (all captured 2026-09-24, herdr 0.9.1, Claude Code 2.1.281):
+#   agent get / agent list / pane list / pane process-info / pane split / wait-output /
+#   agent rename errors     live, read-only, from this project's sessions and one throwaway tab
+#   the sandbox's herdr and ps refusals   the same commands run with the sandbox on
+#   registry files          ~/.claude/sessions/<pid>.json, copied (36920 rebuilt from its
+#                           fields as read while it was live)
+#   ps lines, lstart, env   ps -A / LC_ALL=C TZ=UTC ps -A -o pid=,lstart= / ps -E. The env is
+#                           CUT DOWN to the variables pj-worker reads plus one REDACTED
+#                           neighbour: the real line carried an API key (never commit one)
+#   pj --dry-run(-env)      the real pj, default and scratch profiles, in a worktree cwd
+#   launches.log lines      ~/.local/state/pj/launches.log (the user name in project= masked)
+#   plain and --resume argv rt2's transcript (red team 2, 2026-09-24)
+#   trust dialog screen     rt1's transcript (red team 1, 2026-09-24)
+#   claude agents --json    the conductor's transcript: a background session, no process
+#   pane guard refusal      the guard's own message, a59-paneguard commit de9e67b
+# One substitution everywhere: the real home directory is written @H@ and becomes the arm's
+# fixture home, so the suite runs on any machine.
+#
+# Run it against another copy with PJ_WORKER=<path> (and HERDR_QUICK_TASK=<path>).
+# Read this whole file before running any of it, so an edit saved mid-run cannot change
+# the run (W-20260923-A57). A crash under it exits 127 (unbound var) or 1 (bash 3.2 syntax
+# error); `selftest-whole-read --help` has the map. Do not move or reword these lines.
+[ -n "${SELFTEST_WHOLE_READ-}" ] || SELFTEST_WHOLE_READ=1 exec "$BASH" -c 'shopt -u sourcepath; . "$0"' "$0" "$@"
+unset SELFTEST_WHOLE_READ
+
+set -uo pipefail
+BIN="$(cd "$(dirname "$0")" && pwd -P)"
+PJW="${PJ_WORKER:-$BIN/pj-worker}"
+HQT="${HERDR_QUICK_TASK:-$BIN/herdr-quick-task}"
+[ -x "$PJW" ] || { echo "need pj-worker next to this selftest (or PJ_WORKER=<path>)"; exit 1; }
+command -v jq >/dev/null && command -v git >/dev/null && command -v zsh >/dev/null || { echo "need jq, git and zsh"; exit 1; }
+ROOT="$(mktemp -d "${TMPDIR:-/tmp}/pj-worker-selftest.XXXXXX")" || exit 1
+ROOT="$(cd "$ROOT" && pwd -P)"
+FB="$ROOT/bin"; PJFIX="$ROOT/pjfix"; mkdir -p "$FB" "$PJFIX" "$ROOT/profiles"
+export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
+PASS=0; FAIL=0
+ok(){ PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
+bad(){ FAIL=$((FAIL+1)); printf '  FAIL %s\n       rc=%s out: %s\n       err: %s\n' "$1" "${RC-}" "$(printf '%s' "${OUT:-}" | tr '\n' '|' | cut -c1-600)" "$(printf '%s' "${ERR:-}" | tr '\n' '|' | cut -c1-600)"; }
+check(){ if eval "$2"; then ok "$1"; else bad "$1"; fi; }
+has(){ case "$1" in *"$2"*) return 0;; *) return 1;; esac; }
+fx(){ sed "s#@H@#$H#g"; }   # every fixture passes through this
+echo "pj-worker selftest in $ROOT (tool: $PJW)"
+
+# ------------------------------------------------------------------ fakes
+# herdr: answers from $FAKE/r/<key>.<n> (line 1 `rc=N`, the rest is the output), one per call
+# in order, staying on the last. No file: rc 1 and a non-JSON line (a missing fixture reads as
+# "could not measure", never as a pass), except the four write calls, which answer rc 0 and
+# nothing, as the real ones did. $FAKE/SANDBOX fails every call the way the sandbox does.
+# Every call is logged to $FAKE/calls, one line.
+cat > "$FB/herdr" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FAKE/calls"
+if [ -e "$FAKE/SANDBOX" ]; then echo 'Error: Os { code: 1, kind: PermissionDenied, message: "Operation not permitted" }' >&2; exit 1; fi
+key="$1_${2:-}"
+if [ "$1 ${2:-}" = "pane process-info" ]; then key="${key}_${4:-}"
+else case "${3:-}" in ""|-*) ;; *) key="${key}_$3" ;; esac; fi
+n=$(( $(cat "$FAKE/n/$key" 2>/dev/null || echo 0) + 1 ))
+f="$FAKE/r/$key.$n"
+if [ -r "$f" ]; then echo "$n" > "$FAKE/n/$key"
+else
+  f=""; i=$((n - 1)); while [ "$i" -ge 1 ]; do [ -r "$FAKE/r/$key.$i" ] && { f="$FAKE/r/$key.$i"; break; }; i=$((i - 1)); done
+fi
+# a launch line brings the staged session to life: registry file, ps rows, launch-log line
+if [ "$1 ${2:-}" = "pane run" ] && [ -d "$FAKE/stage" ] && [ ! -e "$FAKE/stage/done" ]; then
+  case "$*" in *" pj --profile "*|*"command claude "*)
+    cp "$FAKE/stage/"*.json "$PJW_SESSIONS_DIR/"; cat "$FAKE/stage/A" >> "$FAKE/ps/A"; cat "$FAKE/stage/lstart" >> "$FAKE/ps/lstart"
+    cat "$FAKE/stage/log" >> "$PJW_LAUNCH_LOG"; : > "$FAKE/stage/done" ;;
+  esac
+fi
+if [ -z "$f" ]; then
+  case "$1 ${2:-}" in "pane run"|"pane send-keys"|"agent rename"|"agent prompt"|"workspace close") exit 0 ;; esac
+  echo "fake herdr: no response for $key" >&2; exit 1
+fi
+rc="$(head -1 "$f")"; tail -n +2 "$f"; exit "${rc#rc=}"
+EOF
+# ps: the four shapes pj-worker uses. Its own process is added to the table the way a real
+# ps lists it; $FAKE/SANDBOX_PS fails the way the sandbox does (rc 127).
+cat > "$FB/ps" <<'EOF'
+#!/usr/bin/env bash
+printf 'ps %s\n' "$*" >> "$FAKE/calls"
+if [ -e "$FAKE/SANDBOX_PS" ]; then echo "(eval):3: operation not permitted: ps" >&2; exit 127; fi
+case "$*" in
+  "-A -o pid=,uid=,comm=") grep -v "^${DROP_PID:-x} " "$FAKE/ps/A"; printf '%5d   501 zsh\n' "${PJW_ME:-$PPID}" ;;
+  "-A -o pid=,lstart=") cat "$FAKE/ps/lstart"; printf '%5d Thu Sep 24 06:00:00 2026    \n' "${PJW_ME:-$PPID}" ;;
+  "-E -ww -o command= -p "*) a="$*"; f="$FAKE/ps/env.${a##* }"; [ -r "$f" ] || exit 1; cat "$f" ;;
+  "-ww -o command= -p "*) a="$*"; f="$FAKE/ps/cmd.${a##* }"; [ -r "$f" ] || exit 1; cat "$f" ;;
+  *) echo "fake ps: unexpected $*" >&2; exit 1 ;;
+esac
+EOF
+# pj: prints the real dry-run output for the profile. The prompt line is @PROMPT@ and becomes
+# PJ_PROMPT_OUT when that is set, as the real pj does (measured: with PJ_PROMPT_OUT set the
+# dry run printed that path). Logs its cwd and the pj variables it saw.
+cat > "$FB/pj" <<'EOF'
+#!/usr/bin/env bash
+printf 'cwd=%s PJ_PROFILE=%s PJ_SESSION_NAME=%s CCSN=%s CCD=%s PJ_PROMPT_OUT=%s args=%s\n' "$PWD" "${PJ_PROFILE-<unset>}" \
+  "${PJ_SESSION_NAME-<unset>}" "${CLAUDE_CODE_SESSION_NAME-<unset>}" "${CLAUDE_CONFIG_DIR-<unset>}" "${PJ_PROMPT_OUT-<unset>}" "$*" >> "$FAKE/pj.calls"
+[ "${1:-}" = --profile ] || { echo "fake pj: want --profile first" >&2; exit 2; }
+f="$PJFIX/${3#--}.${2}"
+[ -r "$f" ] || { echo "pj: REFUSED: no profile '${2}'" >&2; exit 2; }
+if [ -e "$FAKE/FALLBACK" ]; then
+  echo "pj-prompt-file: cannot write $HOME/.cache/dotfiles/pj-system-prompt.md; falling back to $HOME/.claude/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md alone" >&2
+  sed -e "s#@H@#$HOME#g" -e "s#^@PROMPT@\$#$HOME/.claude/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md#" "$f"; exit 0
+fi
+sed -e "s#@H@#$HOME#g" -e "s#^@PROMPT@\$#${PJ_PROMPT_OUT:-$HOME/.cache/dotfiles/pj-system-prompt.md}#" "$f"
+EOF
+cat > "$FB/pj-prompt-file" <<'EOF'
+#!/usr/bin/env bash
+[ "${1:-}" = --path ] && { echo "${PJ_PROMPT_OUT:-$HOME/.cache/dotfiles/pj-system-prompt.md}"; exit 0; }
+echo "fake pj-prompt-file: only --path" >&2; exit 2
+EOF
+# claude: pj-worker must never run it (it reads no `claude agents` and starts nothing itself)
+cat > "$FB/claude" <<'EOF'
+#!/usr/bin/env bash
+printf 'claude %s\n' "$*" >> "$FAKE/claude.calls"; exit 0
+EOF
+chmod +x "$FB"/*
+
+# the real pj dry runs (default and scratch profiles, a worktree cwd)
+cat > "$PJFIX/dry-run.default" <<'EOF'
+claude
+--setting-sources
+project,local
+--settings
+@H@/.claude/settings.project.json
+--append-system-prompt-file
+@PROMPT@
+--plugin-dir
+@H@/.claude/skills/herdr
+--plugin-dir
+@H@/.claude/skills/AgentRelay
+--plugin-dir
+@H@/.claude/skills/ISA
+--plugin-dir
+@H@/.claude/pj-voice
+--plugin-dir
+@H@/.claude/pj
+--dangerously-skip-permissions
+--effort
+high
+EOF
+cat > "$PJFIX/dry-run-env.default" <<'EOF'
+CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1
+PJ_PROFILE=default
+CLAUDE_CODE_SESSION_NAME=fifty-shades-of-dotfiles-main-a59-pjworker
+PJ_SESSION_NAME=fifty-shades-of-dotfiles-main-a59-pjworker
+EOF
+cat > "$PJFIX/dry-run.scratch" <<'EOF'
+claude
+--setting-sources
+project,local
+--settings
+@H@/.claude/settings.project.json
+--append-system-prompt-file
+@PROMPT@
+--dangerously-skip-permissions
+--effort
+high
+EOF
+cat > "$PJFIX/dry-run-env.scratch" <<'EOF'
+CLAUDE_CONFIG_DIR=@H@/.claude-scratch
+PJ_NO_CARD=1
+CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1
+PJ_PROFILE=scratch
+CLAUDE_CODE_SESSION_NAME=fifty-shades-of-dotfiles-scratch-a59-pjworker
+PJ_SESSION_NAME=fifty-shades-of-dotfiles-scratch-a59-pjworker
+EOF
+ARGV_PJ='claude --setting-sources project,local --settings @H@/.claude/settings.project.json --append-system-prompt-file @H@/.cache/dotfiles/pj-system-prompt.md --plugin-dir @H@/.claude/skills/herdr --plugin-dir @H@/.claude/skills/AgentRelay --plugin-dir @H@/.claude/skills/ISA --plugin-dir @H@/.claude/pj-voice --plugin-dir @H@/.claude/pj --dangerously-skip-permissions --effort high'
+ARGV_SCRATCH='claude --setting-sources project,local --settings @H@/.claude/settings.project.json --append-system-prompt-file @H@/.cache/dotfiles/pj-system-prompt.md --dangerously-skip-permissions --effort high'
+PLAIN='claude --permission-mode bypassPermissions'   # rt2: what herdr agent start --kind claude ran
+
+# the two profile keys pj-worker reads, as in ~/.config/pj/profiles/{default,scratch}
+printf 'config_dir:      ~/.claude\n' > "$ROOT/profiles/default"
+printf 'config_dir:      ~/.claude-scratch\n' > "$ROOT/profiles/scratch"
+
+# the repo with the three worktrees the conductor's workers ran in, and claude-switcher
+REPO="$ROOT/code/fifty-shades-of-dotfiles"; SWITCH="$ROOT/code/claude-switcher"
+mkdir -p "$REPO" "$SWITCH"
+for r in "$REPO" "$SWITCH"; do git -C "$r" init -q; git -C "$r" commit -q --allow-empty -m seed; done
+for w in a59-pjworker a59-hook a59-paneguard; do git -C "$REPO" worktree add -q -b "$w" "$REPO/.worktree/$w" 2>/dev/null; done
+[ -d "$REPO/.worktree/a59-hook" ] || { echo "fixture broken: git worktree add failed"; exit 1; }
+
+# a registry file, from the real 36921.json with the fields changed
+REGTPL='{"pid":36921,"sessionId":"19e66748-5a52-430f-8fe7-30024dbbe95c","cwd":"@H@/CODE/Scaffoldings/fifty-shades-of-dotfiles/.worktree/a59-pjworker","startedAt":1790235785222,"procStart":"Thu Sep 24 07:43:03 2026","version":"2.1.281","peerProtocol":1,"peerFeatures":["notify_idle","reply_across_default_dirs","artifact_yield"],"kind":"interactive","entrypoint":"cli","pidDomain":"darwin","messagingSocketPath":"/tmp/cc-socks/36921.sock","name":"fifty-shades-of-dotfiles-a59-pjworker","nameSince":1790235785222,"status":"busy","updatedAt":1790235885153,"statusUpdatedAt":1790235885153,"bridgeSessionId":"session_01XfGZ1267V3TJggr9rHo4NP"}'
+reg(){  # reg <dir> <pid> <sid> <cwd> <name> <procStart>
+  printf '%s' "$REGTPL" | fx | jq -c --argjson p "$2" --arg s "$3" --arg c "$4" --arg n "$5" --arg t "$6" \
+    '.pid=$p | .sessionId=$s | .cwd=$c | .name=$n | .procStart=$t | .messagingSocketPath="/tmp/cc-socks/\($p).sock"' > "$1/$2.json"
+}
+# ps rows: `ps -A -o pid=,uid=,comm=` and `LC_ALL=C TZ=UTC ps -A -o pid=,lstart=` (real widths)
+psrow(){ printf '%5d   501 %s\n' "$1" "$2" >> "$FAKE/ps/A"; printf '%5d %s    \n' "$1" "$3" >> "$FAKE/ps/lstart"; }
+# ps -E, cut down (see the header): argv, then the environment. PROF and CCD vary the env.
+psenv(){  # psenv <pid> <pane> <name|-> [argv]
+  local e="HERDR_ENV=1 HERDR_PANE_ID=$2 HOME=@H@ NVD_API_KEY=REDACTED"
+  [ "$3" != - ] && e="$e CLAUDE_CODE_SESSION_NAME=$3 PJ_PROFILE=${PROF:-default} PJ_SESSION_NAME=$3${CCD:+ CLAUDE_CONFIG_DIR=$CCD}"
+  printf '%s %s\n' "${4:-$ARGV_PJ}" "$e" | fx > "$FAKE/ps/env.$1"
+  printf '%s\n' "${4:-$ARGV_PJ}" | fx > "$FAKE/ps/cmd.$1"
+}
+resp(){ { echo "rc=$3"; fx; } > "$FAKE/r/$1.$2"; }   # resp <key> <n> <rc>  < output
+
+S_MAIN=f372c81b-c55a-44da-9874-9896903e3313; S_PG=57685d38-10b8-43b2-b465-f7dc3495fb22
+S_PW=19e66748-5a52-430f-8fe7-30024dbbe95c; S_HOOK=a64bbe44-d6e4-4d5f-8b47-583926f712d3; S_SW=2d70e2b7-cce2-4f9b-ba7f-210952e9d206
+T_MAIN="Thu Sep 24 07:16:59 2026"; T_W="Thu Sep 24 07:43:03 2026"; T_SW="Thu Sep 24 07:12:20 2026"
+K=0
+# new_world [room] [unlinked] -- a fresh folder holding the live world as the brief found it:
+# 4 sessions in this project (conductor + three worktree workers), 5 on the machine.
+#   room      the paneguard worker has finished: 3 in the project, 4 on the machine
+#   unlinked  the scratch profile's sessions dir is a real dir, not a link (rt2 H5)
+new_world(){
+  K=$((K + 1)); W="$ROOT/w$K"; H="$W/home"; FAKE="$W/fake"; STATE="$W/state"; SESS="$H/.claude/sessions"; ROOM="${1:-}"
+  mkdir -p "$SESS" "$H/.cache/dotfiles" "$H/.claude-scratch" "$FAKE/r" "$FAKE/n" "$FAKE/ps" "$STATE"
+  : > "$FAKE/ps/A"; : > "$FAKE/ps/lstart"
+  printf 'OPERATIONAL_RULES and pj-global RULES, concatenated\n' > "$H/.cache/dotfiles/pj-system-prompt.md"
+  if [ "${2:-}" = unlinked ]; then mkdir -p "$H/.claude-scratch/sessions"; else ln -s "$SESS" "$H/.claude-scratch/sessions"; fi
+  reg "$SESS" 1610 $S_MAIN "$REPO" fifty-shades-of-dotfiles-main "$T_MAIN"
+  reg "$SESS" 36921 $S_PW "$REPO/.worktree/a59-pjworker" fifty-shades-of-dotfiles-a59-pjworker "$T_W"
+  reg "$SESS" 36922 $S_HOOK "$REPO/.worktree/a59-hook" fifty-shades-of-dotfiles-a59-hook "$T_W"
+  reg "$SESS" 93679 $S_SW "$SWITCH" claude-switcher-main "$T_SW"
+  psrow 1610 claude "$T_MAIN"; psrow 36921 claude "$T_W"; psrow 36922 claude "$T_W"; psrow 93679 claude "$T_SW"
+  psrow 45701 caffeinate "$T_W"; psrow 31132 zsh "$T_W"
+  psenv 1610 w3X:p48 fifty-shades-of-dotfiles-main; psenv 36921 w3X:p4Q fifty-shades-of-dotfiles-a59-pjworker
+  psenv 36922 w3X:p4S fifty-shades-of-dotfiles-a59-hook; psenv 93679 w42:pG claude-switcher-main
+  if [ "${1:-}" != room ]; then
+    reg "$SESS" 36920 $S_PG "$REPO/.worktree/a59-paneguard" fifty-shades-of-dotfiles-a59-paneguard "$T_W"
+    psrow 36920 claude "$T_W"; psenv 36920 w3X:p4R fifty-shades-of-dotfiles-a59-paneguard
+  fi
+  # launches.log, the real lines for these five sessions
+  cat > "$STATE/launches.log" <<EOF
+ts=2026-09-24T17:12:22+1000 session=$S_SW project=-Users-someone-CODE-CaptainCodeAU-claude-switcher profile=default config_dir=default tty=ttys005 shell_start=2026-09-24T17:12:14 zshrc_mtime=2026-09-24T14:41:42 result=ok
+ts=2026-09-24T17:17:00+1000 session=$S_MAIN project=-Users-someone-CODE-Scaffoldings-fifty-shades-of-dotfiles profile=default config_dir=default tty=ttys007 shell_start=2026-09-24T17:16:40 zshrc_mtime=2026-09-24T14:41:42 result=ok
+ts=2026-09-24T17:43:06+1000 session=$S_PG project=-Users-someone-CODE-Scaffoldings-fifty-shades-of-dotfiles profile=default config_dir=default tty=ttys014 shell_start=2026-09-24T17:42:56 zshrc_mtime=2026-09-24T14:41:42 result=ok
+ts=2026-09-24T17:43:06+1000 session=$S_HOOK project=-Users-someone-CODE-Scaffoldings-fifty-shades-of-dotfiles profile=default config_dir=default tty=ttys015 shell_start=2026-09-24T17:42:56 zshrc_mtime=2026-09-24T14:41:42 result=ok
+ts=2026-09-24T17:43:06+1000 session=$S_PW project=-Users-someone-CODE-Scaffoldings-fifty-shades-of-dotfiles profile=default config_dir=default tty=ttys013 shell_start=2026-09-24T17:42:56 zshrc_mtime=2026-09-24T14:41:42 result=ok
+EOF
+  DROP_PID=""
+}
+# real `herdr agent get` for the pj worker pane (w3X:p4Q), and its process-info
+agent_get_json(){  # <pane> <sid|null> <status> [name]
+  local sid="\"$2\""; [ "$2" = null ] && sid=null
+  printf '{"id":"cli:agent:get","result":{"agent":{"agent":"claude","agent_session":{"agent":"claude","kind":"id","source":"herdr:claude","value":%s},"agent_status":"%s","cwd":"@H@/CODE/Scaffoldings/fifty-shades-of-dotfiles/.worktree/a59-pjworker","focused":false,"foreground_cwd":"@H@/CODE/Scaffoldings/fifty-shades-of-dotfiles/.worktree/a59-pjworker","name":"%s","pane_id":"%s","revision":6,"state_change_seq":1362,"tab_id":"w3X:t11","terminal_id":"term_65c35bf8af9d779","terminal_title":"a59-pjworker brief","terminal_title_stripped":"a59-pjworker brief","workspace_id":"w3X"},"type":"agent_info"}}\n' \
+    "$sid" "$3" "${4:-a59-pjworker}" "$1"
+}
+NOTFOUND='{"error":{"code":"agent_not_found","message":"agent target X not found"},"id":"cli:agent:get"}'
+process_info_json(){  # <pane> <claude pid> [argv]: the real p4Q shape (caffeinate, claude, two zsh)
+  local a="${3:-$ARGV_PJ}" argv
+  argv="$(printf '%s' "$a" | fx | jq -Rc 'split(" ")')"
+  jq -cn --arg pane "$1" --argjson pid "$2" --argjson argv "$argv" '{"id":"cli:pane:process_info","result":{"process_info":{"foreground_process_group_id":36401,"foreground_processes":[
+    {"argv":["caffeinate","-i","-t","300"],"argv0":"caffeinate","cmdline":"caffeinate -i -t 300","cwd":"x","name":"caffeinate","pid":45701},
+    {"argv":$argv,"argv0":"claude","cmdline":($argv|join(" ")),"cwd":"x","name":"2.1.281","pid":$pid},
+    {"argv":["zsh","@H@/.local/bin/pj"],"argv0":"zsh","cmdline":"zsh pj","cwd":"x","name":"zsh","pid":36890},
+    {"argv":["zsh","@H@/.local/bin/pj"],"argv0":"zsh","cmdline":"zsh pj","cwd":"x","name":"zsh","pid":36401}],"pane_id":$pane,"shell_pid":31132},"type":"pane_process_info"}}' | fx
+}
+IDLE_SHELL='{"id":"cli:pane:process_info","result":{"process_info":{"foreground_process_group_id":10153,"foreground_processes":[{"argv":["zsh"],"argv0":"zsh","cmdline":"zsh","cwd":"x","name":"zsh","pid":10153}],"pane_id":"w3X:p4W","shell_pid":10153},"type":"pane_process_info"}}'
+BUSY_SHELL='{"id":"cli:pane:process_info","result":{"process_info":{"foreground_process_group_id":62942,"foreground_processes":[{"argv":["sleep","45"],"argv0":"sleep","cmdline":"sleep 45","cwd":"x","name":"sleep","pid":62942}],"pane_id":"w3X:p4N","shell_pid":35749},"type":"pane_process_info"}}'
+SPLIT='{"id":"cli:pane:split","result":{"pane":{"agent_status":"unknown","cwd":"x","focused":false,"foreground_cwd":"x","pane_id":"w3X:p4W","revision":0,"scroll":{"max_offset_from_bottom":0,"offset_from_bottom":0,"viewport_rows":113},"tab_id":"w3X:t12","terminal_id":"term_65c35d9d170dd7e","workspace_id":"w3X"},"type":"pane_info"}}'
+WAIT_OK='{"id":"cli:pane:wait-output","result":{"matched_line":"PJWREADY-1790236226x13219","pane_id":"w3X:p4W","read":{"format":"text","pane_id":"w3X:p4W","revision":0,"source":"recent_unwrapped","tab_id":"w3X:t12","text":"PJWREADY-1790236226x13219\n","truncated":true,"workspace_id":"w3X"},"revision":0,"type":"output_matched"}}'
+WAIT_TIMEOUT='{"error":{"code":"timeout","message":"timed out waiting for output match"},"id":"cli:pane:wait-output"}'
+RENAME_TAKEN='{"error":{"code":"agent_name_taken","message":"agent name a59-hook is already used; candidates: terminal_id=term_65c35bf8b789a7b pane_id=w3X:p4S workspace_id=w3X tab_id=w3X:t11 cwd=x status=Working"},"id":"cli:agent:rename"}'
+TRUST_SCREEN=' Quick safety check: Is this a project you created or one you trust? (Like your own code, a well-known open source project, or work from your team). If not, tak
+
+ Claude Code'"'"'ll be able to read, edit, and execute files here.
+
+ Security guide
+
+ ❯ No, exit
+   Yes, I trust this folder
+
+ Enter to confirm · Esc to cancel'
+GUARD_LINE='claude: REFUSED in a herdr pane: this session would carry no pj rules. Workers: pj-worker start. Yourself: pj. To run it anyway: command claude --permission-mode bypassPermissions'
+WS_CREATE='{"id":"cli:workspace:create","result":{"root_pane":{"pane_id":"wQ:p1"},"tab":{"tab_id":"wQ:t1"},"workspace":{"workspace_id":"wQ"},"type":"workspace_created"}}'
+# pane list / agent list for the live world, plus optional extra agent rows
+lists(){
+  local extra="" pg=""; [ $# -ge 1 ] && extra=",$1"
+  [ "$ROOM" = room ] || pg=",{\"agent\":\"claude\",\"agent_session\":{\"value\":\"$S_PG\"},\"agent_status\":\"working\",\"pane_id\":\"w3X:p4R\",\"workspace_id\":\"w3X\"}"
+  resp pane_list 1 0 <<EOF
+{"id":"cli:pane:list","result":{"panes":[{"cwd":"$REPO","foreground_cwd":"$REPO","pane_id":"w3X:p48","workspace_id":"w3X"},{"cwd":"$REPO/.worktree/a59-pjworker","foreground_cwd":"$REPO/.worktree/a59-pjworker","pane_id":"w3X:p4Q","workspace_id":"w3X"},{"cwd":"$SWITCH","foreground_cwd":"$SWITCH","pane_id":"w42:pG","workspace_id":"w42"}]}}
+EOF
+  resp agent_list 1 0 <<EOF
+{"id":"cli:agent:list","result":{"agents":[{"agent":"claude","agent_session":{"value":"$S_MAIN"},"agent_status":"done","pane_id":"w3X:p48","workspace_id":"w3X"},{"agent":"claude","agent_session":{"value":"$S_PW"},"agent_status":"working","pane_id":"w3X:p4Q","workspace_id":"w3X"},{"agent":"claude","agent_session":{"value":"$S_HOOK"},"agent_status":"working","pane_id":"w3X:p4S","workspace_id":"w3X"},{"agent":"claude","agent_session":{"value":"$S_SW"},"agent_status":"idle","pane_id":"w42:pG","workspace_id":"w42"}$pg$extra]}}
+EOF
+}
+verify_fixture(){  # the pj worker in w3X:p4Q, as measured
+  agent_get_json w3X:p4Q $S_PW working | resp agent_get_w3X:p4Q 1 0
+  agent_get_json w3X:p4Q $S_PW working | resp agent_get_a59-pjworker 1 0
+  process_info_json w3X:p4Q 36921 | resp pane_process-info_w3X:p4Q 1 0
+}
+restart_36921(){  # the same pid, started later (as after a --resume)
+  reg "$SESS" 36921 $S_PW "$REPO/.worktree/a59-pjworker" fifty-shades-of-dotfiles-a59-pjworker "Thu Sep 24 08:30:00 2026"
+  sed "s/^36921 Thu Sep 24 07:43:03 2026/36921 Thu Sep 24 08:30:00 2026/" "$FAKE/ps/lstart" > "$FAKE/ps/lstart.new"; mv "$FAKE/ps/lstart.new" "$FAKE/ps/lstart"
+}
+
+# run <args...> -- the tool with every seam pointed at this world's fakes, from a
+# conductor-like env that carries pj's variables (rt1 H5: none may reach the dry run)
+run(){
+  OUT="$(cd "${RUN_CWD:-$REPO}" && env HOME="$H" PATH="$FB:$PATH" FAKE="$FAKE" PJFIX="$PJFIX" DROP_PID="${DROP_PID:-}" \
+    PJW_HERDR="$FB/herdr" PJW_PS="$FB/ps" PJW_PJ="$FB/pj" PJW_PROMPT_FILE="$FB/pj-prompt-file" \
+    PJW_SESSIONS_DIR="$SESS" PJW_STATE_DIR="$STATE" PJW_LAUNCH_LOG="$STATE/launches.log" \
+    PJW_CLEAN_ROOT="$H/.cache/claude-clean" PJW_TMP="$W/tmp" PJW_UID=501 PJW_POLL=0 PJW_PREFLIGHT_WAIT=0 \
+    PJW_ENDED_AFTER=0 PJW_VERIFY_RETRY=0 PJ_PROFILE_DIR="$ROOT/profiles" \
+    HERDR_ENV="${RUN_HERDR_ENV-1}" HERDR_PANE_ID=w3X:p48 HERDR_WORKSPACE_ID=w3X \
+    PJ_PROFILE=default PJ_SESSION_NAME=fifty-shades-of-dotfiles-main CLAUDE_CODE_SESSION_NAME=fifty-shades-of-dotfiles-main \
+    CLAUDE_CONFIG_DIR="$H/.claude-conductor" \
+    "$PJW" "$@" 2>"$W/err")"; RC=$?; ERR="$(cat "$W/err")"; return 0
+}
+failures(){ printf '%s' "$OUT" | jq -r '.failures | join(" | ")' 2>/dev/null; }
+j(){ printf '%s' "$OUT" | jq -r "$1" 2>/dev/null | tr '\n' ' '; }
+ncalls(){ [ -e "$FAKE/calls" ] || { echo 0; return; }; grep -c "$1" "$FAKE/calls" || true; }
+
+# ================================================================== controls
+# The "no claude was run" arms (V1e, S1i, C6) are absences; prove the recorder records.
+new_world; ( PATH="$FB:$PATH"; FAKE="$FAKE"; export FAKE; claude control-arm ) >/dev/null 2>&1
+check "X0 control: the fake claude on PATH records a call when one happens" 'grep -qx "claude control-arm" "$FAKE/claude.calls"'
+new_world; ( FAKE="$FAKE"; export FAKE; "$FB/herdr" agent get control-arm ) >/dev/null 2>&1
+check "X0b control: the fake herdr logs every call" 'grep -qx "agent get control-arm" "$FAKE/calls"'
+
+# ================================================================== VERIFY
+echo "--- verify"
+new_world; verify_fixture
+run verify w3X:p4Q
+check "V1 the live pj worker (real fixtures) passes, rc 0" '[ "$RC" -eq 0 ] && [ "$(j .result)" = "pass " ]'
+check "V1b it reports the name READ from the registry and the live pid" '[ "$(j ".session_name, .pid")" = "fifty-shades-of-dotfiles-a59-pjworker 36921 " ]'
+check "V1c the dry run ran in the worker's cwd with PJ_PROFILE, PJ_SESSION_NAME, CCSN, CLAUDE_CONFIG_DIR unset" \
+  'grep -q "^cwd=$REPO/.worktree/a59-pjworker PJ_PROFILE=<unset> PJ_SESSION_NAME=<unset> CCSN=<unset> CCD=<unset> " "$FAKE/pj.calls"'
+check "V1d the dry run was pointed away from the real prompt cache (PJ_PROMPT_OUT under PJW_TMP)" \
+  'grep -q "PJ_PROMPT_OUT=$W/tmp/prompt.md args=--profile default --dry-run\$" "$FAKE/pj.calls"'
+check "V1e verify never ran claude (no claude agents, no session)" '[ ! -e "$FAKE/claude.calls" ]'
+run verify a59-pjworker
+check "V2 by herdr agent name: rc 0" '[ "$RC" -eq 0 ]'
+
+# V3 plain claude (rt2): the argv herdr agent start --kind claude produced, no pj env, no log line
+new_world; verify_fixture
+process_info_json w3X:p4Q 36921 "$PLAIN" | resp pane_process-info_w3X:p4Q 1 0; psenv 36921 w3X:p4Q - "$PLAIN"
+grep -v "session=$S_PW " "$STATE/launches.log" > "$STATE/l2"; mv "$STATE/l2" "$STATE/launches.log"
+run verify w3X:p4Q
+check "V3 a plain-claude worker (rt2's argv) FAILS, rc 1" '[ "$RC" -eq 1 ]'
+check "V3b every failed property is named (argv, PJ_PROFILE, PJ_SESSION_NAME)" \
+  'f="$(failures)"; has "$f" "argv lacks" && has "$f" "--append-system-prompt-file" && has "$f" "no PJ_PROFILE" && has "$f" "no PJ_SESSION_NAME"'
+
+# V4 `claude --resume <old pj id>` (rt2 H2): the id's log line exists but predates the process
+new_world; verify_fixture; restart_36921
+RESUME="claude --resume $S_PW --permission-mode bypassPermissions"
+process_info_json w3X:p4Q 36921 "$RESUME" | resp pane_process-info_w3X:p4Q 1 0; psenv 36921 w3X:p4Q - "$RESUME"
+run verify w3X:p4Q
+check "V4 a plain --resume of an old pj session id FAILS, rc 1" '[ "$RC" -eq 1 ]'
+check "V4b the old log line is named as predating this process, and --resume as an extra arg" \
+  'f="$(failures)"; has "$f" "predates this process" && has "$f" "--resume"'
+new_world; verify_fixture; restart_36921
+run verify w3X:p4Q
+check "V4c pj argv and env, but the only ok line is older than the pid: FAILS alone (rc 1, named)" '[ "$RC" -eq 1 ] && has "$(failures)" "predates"'
+
+# V5 a scratch-profile worker (rt1 H6): no herdr skill, another config dir
+new_world; verify_fixture
+process_info_json w3X:p4Q 36921 "$ARGV_SCRATCH" | resp pane_process-info_w3X:p4Q 1 0
+PROF=scratch CCD="@H@/.claude-scratch" psenv 36921 w3X:p4Q fifty-shades-of-dotfiles-a59-pjworker "$ARGV_SCRATCH"
+run verify w3X:p4Q
+check "V5 a scratch worker verified as default FAILS, rc 1" '[ "$RC" -eq 1 ]'
+check "V5b named: the profile, the config dir and the missing herdr skill" \
+  'f="$(failures)"; has "$f" "profile is '"'"'scratch'"'"'" && has "$f" "CLAUDE_CONFIG_DIR" && has "$f" "skills/herdr"'
+run verify w3X:p4Q --profile scratch
+check "V5c the same worker verified as scratch passes, rc 0 (per profile, not a shape)" '[ "$RC" -eq 0 ]'
+
+new_world; verify_fixture
+process_info_json w3X:p4Q 36921 "$ARGV_PJ --safe-mode" | resp pane_process-info_w3X:p4Q 1 0
+run verify w3X:p4Q
+check "V6 a --safe-mode argv is a named difference, rc 1" '[ "$RC" -eq 1 ] && has "$(failures)" "does not: --safe-mode"'
+
+new_world; verify_fixture; touch "$FAKE/SANDBOX"
+run verify w3X:p4Q
+check "V7 sandboxed herdr: rc 2 (could not measure), the sandbox named, never 'not found'" '[ "$RC" -eq 2 ] && has "$ERR" sandbox && ! has "$ERR" agent_not_found'
+new_world; verify_fixture; touch "$FAKE/SANDBOX_PS"
+run verify w3X:p4Q
+check "V8 sandboxed ps: rc 2" '[ "$RC" -eq 2 ] && has "$ERR" "ps refused"'
+new_world; printf '%s\n' "$NOTFOUND" | resp agent_get_w3X:p46 1 1
+run verify w3X:p46
+check "V9 a shell pane with no agent (agent_not_found): rc 1, named" '[ "$RC" -eq 1 ] && has "$(failures)" agent_not_found'
+new_world; verify_fixture; agent_get_json w3X:p4Q null idle | resp agent_get_w3X:p4Q 1 0
+run verify w3X:p4Q
+check "V10 no session id yet: rc 2, said" '[ "$RC" -eq 2 ] && has "$ERR" "no Claude session id yet"'
+new_world; verify_fixture; DROP_PID=36921
+run verify w3X:p4Q
+check "V11 registry file whose pid is gone (SIGKILLed, rt2 H6): rc 2, the stale file noted" '[ "$RC" -eq 2 ] && has "$OUT" "stale file"'
+new_world; verify_fixture; sed 's/^36921   501 claude/36921   501 node/' "$FAKE/ps/A" > "$FAKE/ps/A2"; mv "$FAKE/ps/A2" "$FAKE/ps/A"
+run verify w3X:p4Q
+check "V12 pid reused by another command: not live, rc 2" '[ "$RC" -eq 2 ] && has "$OUT" "not claude (pid reused)"'
+new_world; verify_fixture; sed 's/^36921 Thu Sep 24 07:43:03 2026/36921 Thu Sep 24 09:00:00 2026/' "$FAKE/ps/lstart" > "$FAKE/ps/l2"; mv "$FAKE/ps/l2" "$FAKE/ps/lstart"
+run verify w3X:p4Q
+check "V12b pid reused (start differs from procStart): not live, rc 2" '[ "$RC" -eq 2 ] && has "$OUT" "pid reused"'
+new_world; verify_fixture; process_info_json w3X:p4Q 99999 | resp pane_process-info_w3X:p4Q 1 0
+run verify w3X:p4Q
+check "V13 the registry's pid is not the claude in that pane: rc 1, named" '[ "$RC" -eq 1 ] && has "$(failures)" "is not the claude in pane"'
+new_world; verify_fixture; touch "$FAKE/FALLBACK"
+run verify w3X:p4Q
+check "V14 pj's dry run fell back to OPERATIONAL_RULES alone: rc 2, never a diff" '[ "$RC" -eq 2 ] && [ -z "$(failures)" ] && has "$OUT" "falling back"'
+new_world; verify_fixture; mv "$STATE/launches.log" "$STATE/launches.moved"
+run verify w3X:p4Q
+check "V15 no launch log on this machine: rc 2" '[ "$RC" -eq 2 ] && has "$OUT" "no launch log"'
+new_world; verify_fixture
+printf 'ts=2026-09-24T17:43:06+1000 session=%s project=x profile=default config_dir=default tty=t shell_start=x zshrc_mtime=x result=stale:plugins\n' $S_PW > "$STATE/launches.log"
+run verify w3X:p4Q
+check "V15b the launch log says stale for this process: rc 1, named" '[ "$RC" -eq 1 ] && has "$(failures)" "result=stale:plugins"'
+new_world; verify_fixture; : > "$H/.cache/dotfiles/pj-system-prompt.md"
+run verify w3X:p4Q
+check "V16 an EMPTY system-prompt file: rc 1, named" '[ "$RC" -eq 1 ] && has "$(failures)" "missing or empty"'
+new_world; verify_fixture; CCD="@H@/.claude-elsewhere" psenv 36921 w3X:p4Q fifty-shades-of-dotfiles-a59-pjworker
+run verify w3X:p4Q
+check "V17 a default-profile worker with CLAUDE_CONFIG_DIR set: rc 1, named" '[ "$RC" -eq 1 ] && has "$(failures)" "CLAUDE_CONFIG_DIR"'
+new_world; verify_fixture; : > "$FAKE/ps/env.36921"
+run verify w3X:p4Q
+check "V18 an unreadable environment (no HOME in it): rc 2, never a pass or a fail" '[ "$RC" -eq 2 ] && has "$ERR" "environment"'
+new_world "" unlinked; verify_fixture; mv "$SESS/36921.json" "$H/.claude-scratch/sessions/"
+run verify w3X:p4Q
+check "V19 a worker registered in another profile's own (unlinked) sessions dir is found: rc 0" '[ "$RC" -eq 0 ]'
+new_world; verify_fixture; agent_get_json w3X:p4Q $S_PW working | sed 's/"agent":"claude","agent_session"/"agent":"codex","agent_session"/' | resp agent_get_w3X:p4Q 1 0
+run verify w3X:p4Q
+check "V20 an agent that is not claude: rc 1, named" '[ "$RC" -eq 1 ] && has "$(failures)" "not claude"'
+
+# ================================================================== COUNT
+echo "--- count"
+new_world; lists
+run count --cwd "$REPO" --json
+check "C1 the live world: project 4 (conductor + 3 worktree workers), machine 5" '[ "$RC" -eq 0 ] && [ "$(j ".project.count, .machine.count")" = "4 5 " ]'
+check "C1b registry and ps agree (5 and 5), no disagreement flagged" '[ "$(j ".machine.registry, .machine.ps, .machine.disagree")" = "5 5 false " ]'
+check "C1c account is 'not measured' and null, never 0" '[ "$(j ".account.status, (.account.count|tostring)")" = "not measured null " ]'
+check "C1d at 4 in the project start is not allowed, and the refusal names the project cap" '[ "$(j .start_allowed)" = "false " ] && has "$(j .refusal)" "project cap: 4 of 4"'
+check "C1e the machine cap alone would allow it (5 < 8)" '[ "$(j .machine.count)" = "5 " ] && ! has "$(j .refusal)" "machine cap"'
+check "C1f the three worktree sessions count toward their repo" '[ "$(j "[.project.sessions[] | select(.cwd | test(\"/.worktree/\"))] | length")" = "3 " ]'
+run count --cwd "$REPO" --check
+check "C2 count --check at the project cap: rc 6" '[ "$RC" -eq 6 ]'
+run count --cwd "$SWITCH" --check
+check "C3 claude-switcher's project (1 live) with the machine at 5: rc 0" '[ "$RC" -eq 0 ]'
+new_world; lists
+for p in 50001 50002; do mkdir -p "$ROOT/code/other$p"; reg "$SESS" $p "0000$p-aaaa-bbbb-cccc-000000000000" "$ROOT/code/other$p" "other$p-main" "$T_W"; psrow $p claude "$T_W"; done
+run count --cwd "$SWITCH" --json
+check "C4 machine 7 live: start allowed from a project with room" '[ "$(j ".machine.count, .start_allowed")" = "7 true " ]'
+mkdir -p "$ROOT/code/other50003"; reg "$SESS" 50003 "000050003-aaaa-bbbb-cccc-000000000000" "$ROOT/code/other50003" other50003-main "$T_W"; psrow 50003 claude "$T_W"
+run count --cwd "$SWITCH" --json
+check "C4b machine 8 live: refused by the MACHINE cap though the project has room" \
+  '[ "$(j ".machine.count, .project.count, .start_allowed")" = "8 1 false " ] && has "$(j .refusal)" "machine cap: 8 of 8"'
+new_world; lists; psrow 60606 claude "$T_W"
+run count --cwd "$SWITCH" --json
+check "C5 ps 6 vs registry 5: disagreement flagged, 6 compared, the ps-only pid named" \
+  '[ "$(j ".machine.registry, .machine.ps, .machine.count, .machine.disagree, (.machine.ps_only_pids|join(\",\"))")" = "5 6 6 true 60606 " ]'
+# the conductor's `claude agents --json` trap (a background session, no process behind it):
+# its sessionId as a registry file whose pid is gone must not count, and claude is never run
+new_world; lists
+reg "$SESS" 70707 895d55a9-14c6-4199-829d-e1a369df279b "$REPO" "verify obsolete agent definitions" "Wed Sep  9 01:02:43 2026"
+run count --cwd "$REPO" --json
+check "C6 the background session with no process (claude agents' trap) does not count: machine 5" '[ "$(j .machine.count)" = "5 " ] && [ ! -e "$FAKE/claude.calls" ]'
+# rule (b): cwd OUTSIDE the repo, pane in this project's workspace
+new_world room; mkdir -p "$H/.cache/claude-clean/20260924-180000-cr"
+reg "$SESS" 80808 cccccccc-1111-2222-3333-444444444444 "$H/.cache/claude-clean/20260924-180000-cr" fifty-shades-of-dotfiles-cleanroom-cr "$T_W"; psrow 80808 claude "$T_W"
+lists '{"agent":"claude","agent_session":{"value":"cccccccc-1111-2222-3333-444444444444"},"agent_status":"idle","pane_id":"w3X:p4Z","workspace_id":"w3X"}'
+run count --cwd "$REPO" --json
+check "C7 a clean-room session (cwd under ~/.cache) in this project's workspace COUNTS, by workspace" \
+  '[ "$(j .project.count)" = "4 " ] && [ "$(j ".project.sessions[] | select(.pid==80808) | .why")" = "workspace w3X " ]'
+run count --cwd "$SWITCH" --json
+check "C7b the same session does not count for claude-switcher (its workspace is w42)" '[ "$(j .project.count)" = "1 " ]'
+new_world room; lists '{"agent":"claude","agent_session":{"value":null},"agent_status":"idle","pane_id":"w3X:p50","workspace_id":"w3X"}'
+run count --cwd "$REPO" --json
+check "C8 a claude herdr agent in the workspace with no registry entry yet COUNTS (unregistered)" \
+  '[ "$(j .project.count)" = "4 " ] && [ "$(j "[.project.sessions[] | select(.pid==null)] | length")" = "1 " ]'
+new_world; touch "$FAKE/SANDBOX"
+run count --cwd "$REPO" --json
+check "C9 herdr refused: count still measures registry and ps (rc 0) and says the workspace rule is unmeasured" \
+  '[ "$RC" -eq 0 ] && has "$(j .workspace_rule)" "unmeasured" && has "$(j .workspace_rule)" "sandbox"'
+run count --cwd "$SWITCH" --check
+check "C9b count --check refuses to call that allowed: rc 2, the workspace rule named" '[ "$RC" -eq 2 ] && has "$ERR" "workspace rule"'
+new_world; lists; touch "$FAKE/SANDBOX_PS"
+run count --cwd "$REPO"
+check "C10 ps refused: count rc 2, never a number" '[ "$RC" -eq 2 ] && [ -z "$OUT" ] && has "$ERR" "ps refused"'
+new_world "" unlinked; lists; mv "$SESS/36922.json" "$H/.claude-scratch/sessions/"
+run count --cwd "$REPO" --json
+check "C11 a profile's own (unlinked) sessions dir is counted: project still 4" '[ "$(j .project.count)" = "4 " ]'
+new_world; lists
+run count --cwd "$REPO" --json
+check "C11b a LINKED sessions dir is not counted twice: machine 5" '[ "$(j .machine.count)" = "5 " ]'
+run list --cwd "$REPO"
+check "C12 list prints both counts, the account slot and every counted name" \
+  'has "$OUT" "4 of 4 live" && has "$OUT" "a59-paneguard  pid 36920" && has "$OUT" "machine: 5 of 8" && has "$OUT" "account: not measured"'
+
+# ================================================================== START
+echo "--- start"
+new_session(){  # the session the launch will start: staged, and brought to life by the fake's `pane run`
+  mkdir -p "$FAKE/stage"
+  reg "$FAKE/stage" 41000 dddddddd-1111-2222-3333-555555555555 "$REPO/.worktree/a59-pjworker" fifty-shades-of-dotfiles-main-a59-pjworker "Thu Sep 24 08:10:00 2026"
+  printf '%5d   501 claude\n' 41000 > "$FAKE/stage/A"; printf '%5d %s    \n' 41000 "Thu Sep 24 08:10:00 2026" > "$FAKE/stage/lstart"
+  psenv 41000 w3X:p4W fifty-shades-of-dotfiles-main-a59-pjworker "${1:-}"
+  printf 'ts=2026-09-24T18:10:03+1000 session=dddddddd-1111-2222-3333-555555555555 project=x profile=default config_dir=default tty=t shell_start=x zshrc_mtime=x result=ok\n' > "$FAKE/stage/log"
+  process_info_json w3X:p4W 41000 "${1:-$ARGV_PJ}" | resp pane_process-info_w3X:p4W 1 0
+}
+start_happy(){  # herdr's answers for a clean split launch
+  printf '%s\n' "$NOTFOUND" | resp agent_get_a59-pjworker 1 1
+  printf '%s\n' "$SPLIT" | resp pane_split 1 0
+  printf '%s\n' "$WAIT_OK" | resp pane_wait-output_w3X:p4W 1 0
+  printf '%s\n' "$NOTFOUND" | resp agent_get_w3X:p4W 1 1
+  agent_get_json w3X:p4W null idle | resp agent_get_w3X:p4W 2 0
+  agent_get_json w3X:p4W dddddddd-1111-2222-3333-555555555555 idle | resp agent_get_w3X:p4W 3 0
+}
+WT="$REPO/.worktree/a59-pjworker"
+new_world room; lists; start_happy; new_session
+run start a59-pjworker --cwd "$WT"
+check "S1 a clean split start: rc 0, verified pj" '[ "$RC" -eq 0 ] && [ "$(j .result)" = "pass " ]'
+check "S1b the name is READ from the registry, and not doubled (worktree a59-pjworker + name a59-pjworker)" '[ "$(j .session_name)" = "fifty-shades-of-dotfiles-main-a59-pjworker " ]'
+check "S1c the launch line: cd to --cwd, the chosen name, pj --profile default" \
+  'grep -qxF "pane run w3X:p4W  builtin cd -- $WT && CLAUDE_CODE_SESSION_NAME=fifty-shades-of-dotfiles-main-a59-pjworker pj --profile default" "$FAKE/calls"'
+check "S1d the handshake line never contains its own sentinel (only printf joins it)" \
+  'l="$(grep "^pane run w3X:p4W .*PJWREADY" "$FAKE/calls")"; [ -n "$l" ] && ! has "$l" "PJWREADY-" && has "$l" "clear;"'
+check "S1e split, not --pane: one split of the CALLING pane, --no-focus, --cwd" \
+  'grep -qxF "pane split --pane w3X:p48 --direction right --cwd $WT --no-focus" "$FAKE/calls"'
+check "S1f the herdr agent is renamed to the worker name" 'grep -qx "agent rename w3X:p4W a59-pjworker" "$FAKE/calls"'
+check "S1g the name was computed in --cwd with the conductor's pj variables unset (rt1 H5)" \
+  'grep -q "^cwd=$WT PJ_PROFILE=<unset> PJ_SESSION_NAME=<unset> CCSN=<unset> CCD=<unset> .*--dry-run-env\$" "$FAKE/pj.calls"'
+check "S1h the start is logged with kind, name, pane, pid and result" \
+  'grep -q "kind=pj name=a59-pjworker session_name=fifty-shades-of-dotfiles-main-a59-pjworker pane=w3X:p4W pid=41000 .* result=pass by=fifty-shades-of-dotfiles-main" "$STATE/workers.log"'
+check "S1i the tool itself ran no claude" '[ ! -e "$FAKE/claude.calls" ]'
+new_world room; lists; agent_get_json w3X:p4S $S_HOOK working a59-hook | resp agent_get_a59-hook 1 0
+run start a59-hook --cwd "$REPO/.worktree/a59-hook"
+check "S2 a live herdr agent already has the name: rc 7, nothing split" '[ "$RC" -eq 7 ] && [ "$(ncalls "^pane split")" = 0 ]'
+new_world room; lists; start_happy
+mkdir -p "$ROOT/code/elsewhere"; reg "$SESS" 42000 eeeeeeee-1111-2222-3333-666666666666 "$ROOT/code/elsewhere" fifty-shades-of-dotfiles-main-a59-pjworker "$T_W"; psrow 42000 claude "$T_W"
+run start a59-pjworker --cwd "$WT"
+check "S3 a live SESSION already holds the session name (rt1 H3): rc 7, nothing split, the holder named" '[ "$RC" -eq 7 ] && [ "$(ncalls "^pane split")" = 0 ] && has "$ERR" "pid 42000"'
+new_world; lists; start_happy
+run start a59-pjworker --cwd "$WT"
+check "S4 project at 4: start refused, rc 6, nothing split or typed" '[ "$RC" -eq 6 ] && [ "$(ncalls "^pane [rs][ue]")" = 0 ]'
+check "S4b the refusal names the cap, No override, and EVERY session counted (name, pid)" \
+  'has "$ERR" "project cap: 4 of 4" && has "$ERR" "No override" && has "$ERR" "fifty-shades-of-dotfiles-main  pid 1610" && has "$ERR" "a59-paneguard  pid 36920" && has "$ERR" "a59-pjworker  pid 36921" && has "$ERR" "a59-hook  pid 36922"'
+check "S4c the refusal is logged" 'grep -q "name=a59-pjworker result=refused-cap" "$STATE/workers.log"'
+new_world room; lists; start_happy
+for p in 50001 50002 50003 50004; do mkdir -p "$ROOT/code/other$p"; reg "$SESS" $p "0000$p-aaaa-bbbb-cccc-000000000000" "$ROOT/code/other$p" "other$p-main" "$T_W"; psrow $p claude "$T_W"; done
+run start a59-pjworker --cwd "$WT"
+check "S4d machine at 8 (project 3): refused by the machine cap, rc 6, nothing typed" '[ "$RC" -eq 6 ] && has "$ERR" "machine cap: 8 of 8" && [ "$(ncalls "^pane [rs][ue]")" = 0 ]'
+new_world room; lists; start_happy; touch "$FAKE/SANDBOX"
+run start a59-pjworker --cwd "$WT"
+check "S5 sandboxed herdr: rc 2, never 'free', nothing split" '[ "$RC" -eq 2 ] && [ "$(ncalls "^pane split")" = 0 ]'
+new_world room; lists; start_happy; touch "$FAKE/SANDBOX_PS"
+run start a59-pjworker --cwd "$WT"
+check "S5b sandboxed ps: rc 2 before anything is split" '[ "$RC" -eq 2 ] && [ "$(ncalls "^pane split")" = 0 ]'
+new_world room; lists; start_happy; agent_get_json w3X:p4W null blocked | resp agent_get_w3X:p4W 2 0
+printf '%s\n' "$TRUST_SCREEN" | resp pane_read_w3X:p4W 1 0
+run start a59-pjworker --cwd "$WT"
+check "S6 the new session sits at the trust dialog: rc 3, the dialog named, nothing answered" \
+  '[ "$RC" -eq 3 ] && has "$ERR" "Yes, I trust this folder" && [ "$(ncalls "^pane send-keys")" = 0 ]'
+new_world room; lists; start_happy; printf '%s\n' "$WAIT_TIMEOUT" | resp pane_wait-output_w3X:p4W 1 1
+run start a59-pjworker --cwd "$WT"
+check "S7 the pane never answered the handshake: rc 5, exactly one line typed into it" '[ "$RC" -eq 5 ] && [ "$(ncalls "^pane run w3X:p4W")" = 1 ]'
+new_world room; lists; printf '%s\n' "$NOTFOUND" | resp agent_get_a59-pjworker 1 1; agent_get_json w3X:p4N $S_PW idle x | resp agent_get_w3X:p4N 1 0
+run start a59-pjworker --cwd "$WT" --pane w3X:p4N
+check "S8 --pane onto a pane hosting an agent: rc 8, nothing typed" '[ "$RC" -eq 8 ] && [ "$(ncalls "^pane run")" = 0 ]'
+new_world room; lists; printf '%s\n' "$NOTFOUND" | resp agent_get_a59-pjworker 1 1; printf '%s\n' "$NOTFOUND" | resp agent_get_w3X:p4N 1 1
+process_info_json w3X:p4N 36921 | resp pane_process-info_w3X:p4N 1 0
+run start a59-pjworker --cwd "$WT" --pane w3X:p4N
+check "S8b --pane with claude in the foreground (not yet an agent): rc 8, nothing typed" '[ "$RC" -eq 8 ] && [ "$(ncalls "^pane run")" = 0 ]'
+new_world room; lists; printf '%s\n' "$NOTFOUND" | resp agent_get_a59-pjworker 1 1; printf '%s\n' "$NOTFOUND" | resp agent_get_w3X:p4N 1 1
+printf '%s\n' "$BUSY_SHELL" | resp pane_process-info_w3X:p4N 1 0
+run start a59-pjworker --cwd "$WT" --pane w3X:p4N
+check "S8c --pane on a busy shell (sleep 45): rc 8, nothing typed" '[ "$RC" -eq 8 ] && [ "$(ncalls "^pane run")" = 0 ]'
+new_world room; lists; start_happy; new_session
+printf '%s\n' "$IDLE_SHELL" | resp pane_process-info_w3X:p4W 1 0; process_info_json w3X:p4W 41000 | resp pane_process-info_w3X:p4W 2 0
+printf '%s\n' "$NOTFOUND" | resp agent_get_w3X:p4W 2 1
+run start a59-pjworker --cwd "$WT" --pane w3X:p4W
+check "S8d --pane on an idle shell: ctrl+c first, no split, then started and verified" \
+  '[ "$RC" -eq 0 ] && grep -qx "pane send-keys w3X:p4W ctrl+c" "$FAKE/calls" && [ "$(ncalls "^pane split")" = 0 ]'
+new_world room; lists; start_happy; printf '%s\n' "$IDLE_SHELL" | resp pane_process-info_w3X:p4W 1 0
+printf '%s\n%s\n' "$GUARD_LINE" '~/code/fifty-shades-of-dotfiles/.worktree/a59-pjworker $' | resp pane_read_w3X:p4W 1 0
+run start a59-pjworker --cwd "$WT"
+check "S9 the pane guard refused the launch: rc 4, 'REFUSED BY THE PANE GUARD' named" '[ "$RC" -eq 4 ] && has "$ERR" "REFUSED BY THE PANE GUARD"'
+new_world room; lists; start_happy; printf '%s\n' "$IDLE_SHELL" | resp pane_process-info_w3X:p4W 1 0
+printf '%s\n' 'pj: REFUSED: pj-prompt-file printed no system-prompt file; run pj-prompt-file --selftest' | resp pane_read_w3X:p4W 1 0
+run start a59-pjworker --cwd "$WT"
+check "S9b control: a launch that died for another reason is NOT blamed on the guard" '[ "$RC" -eq 4 ] && ! has "$ERR" "PANE GUARD" && has "$ERR" "launch ended"'
+new_world room; lists; RUN_HERDR_ENV="" run start a59-pjworker --cwd "$WT"
+check "S10 outside a herdr pane: rc 2, no herdr call" '[ "$RC" -eq 2 ] && has "$ERR" "not inside a herdr pane" && [ "$(ncalls "^[ap][ga]")" = 0 ]'
+new_world room; lists; start_happy; new_session "$PLAIN"; psenv 41000 w3X:p4W - "$PLAIN"
+run start a59-pjworker --cwd "$WT"
+check "S11 the started session verifies as NOT pj: rc 1, the pane named for closing" '[ "$RC" -eq 1 ] && has "$ERR" "herdr pane close w3X:p4W"'
+new_world room; lists; start_happy; new_session; printf '%s\n' "$WAIT_OK" | resp pane_wait-output_w3X:p4W 2 0
+run start a59-pjworker --cwd "$WT" --probe
+check "S12 --probe: a prompt goes out and a reversed word is awaited that the prompt does not contain" \
+  'p="$(grep "^agent prompt a59-pjworker" "$FAKE/calls")"; w="$(grep "^pane wait-output w3X:p4W --match eborp" "$FAKE/calls" | sed "s/.*--match \([^ ]*\).*/\1/")"; [ "$RC" -eq 0 ] && [ -n "$p" ] && [ -n "$w" ] && ! has "$p" "$w"'
+new_world room; lists; start_happy; new_session; printf '%s\n' "$WAIT_TIMEOUT" | resp pane_wait-output_w3X:p4W 2 1
+run start a59-pjworker --cwd "$WT" --probe
+check "S12b --probe with no reply: rc 9" '[ "$RC" -eq 9 ]'
+new_world room; lists; start_happy; agent_get_json w3X:p4W ffffffff-1111-2222-3333-777777777777 idle | resp agent_get_w3X:p4W 3 0
+printf '%s\n' "$NOTFOUND" | resp agent_get_cr 1 1
+run start cr --cleanroom
+check "S13 --cleanroom: rc 0, reported as not pj and not guarded" '[ "$RC" -eq 0 ] && [ "$(j ".pj, .guarded, .cleanroom")" = "false false true " ]'
+check "S13b it launches command claude with no settings and no MCP, and NO bypass flag" \
+  'l="$(grep "^pane run w3X:p4W .*claude" "$FAKE/calls")"; has "$l" "command claude --setting-sources '"''"' --strict-mcp-config" && ! has "$l" dangerously && ! has "$l" bypass'
+check "S13c it says UNGUARDED BY DESIGN" 'has "$ERR" "UNGUARDED BY DESIGN"'
+check "S13d a fresh folder under the clean root, and the start is logged as cleanroom" \
+  'd="$(j .cwd)"; d="${d% }"; case "$d" in "$H/.cache/claude-clean/"*-cr) [ -d "$d" ];; *) false;; esac && grep -q "kind=cleanroom name=cr .*result=unguarded" "$STATE/workers.log"'
+check "S13e its session name is the caller's project, marked cleanroom" 'grep -q "CLAUDE_CODE_SESSION_NAME=fifty-shades-of-dotfiles-cleanroom-cr command claude" "$FAKE/calls"'
+new_world; lists; start_happy
+run start cr --cleanroom
+check "S13f a clean room counts toward the caller's project cap: refused at 4, rc 6" '[ "$RC" -eq 6 ] && has "$ERR" "project cap: 4 of 4"'
+new_world room; lists; run start cr --cleanroom --profile scratch
+check "S13g --cleanroom with --profile is refused, rc 2" '[ "$RC" -eq 2 ] && has "$ERR" "cleanroom takes no"'
+new_world room; lists; run start Bad_Name
+check "S14 a name outside herdr's rule: rc 2" '[ "$RC" -eq 2 ] && has "$ERR" "herdr'"'"'s rule"'
+new_world room; lists; run start a59-pjworker --cwd
+check "S14b a value flag given last is refused, not a hang: rc 2" '[ "$RC" -eq 2 ] && has "$ERR" "needs a value"'
+
+# ================================================================== herdr-quick-task
+echo "--- herdr-quick-task"
+if [ -x "$HQT" ]; then
+  mkdir -p "$ROOT/hqbin"
+  cat > "$ROOT/hqbin/pj-worker" <<'EOF'
+#!/usr/bin/env bash
+printf 'pj-worker %s\n' "$*" >> "$FAKE/calls"
+case "${1:-}" in
+  count) [ -e "$FAKE/PJW_REFUSE" ] && { echo "pj-worker: REFUSED, project cap: 4 of 4" >&2; exit 6; }; exit 0 ;;
+  start) [ -e "$FAKE/PJW_REFUSE_START" ] && { echo "pj-worker: REFUSED, project cap: 4 of 4" >&2; exit 6; }
+         printf '{"name":"%s","pane_id":"wQ:p1","result":"pass"}\n' "$2" ;;
+esac
+EOF
+  chmod +x "$ROOT/hqbin/pj-worker"
+  hq(){ OUT="$(env PATH="$ROOT/hqbin:$FB:$PATH" FAKE="$FAKE" HERDR_ENV=1 "$HQT" "$@" 2>"$W/err")"; RC=$?; ERR="$(cat "$W/err")"; }
+  new_world; printf '%s\n' "$WS_CREATE" | resp workspace_create 1 0; agent_get_json wQ:p1 x idle | resp agent_get_x 1 0
+  hq "$REPO" "say hi"
+  check "Q1 kind claude goes through pj-worker start --pane <root> --cwd <dir> (ruling A05 #3)" 'grep -q "^pj-worker start [a-z0-9-]* --pane wQ:p1 --cwd $REPO\$" "$FAKE/calls"'
+  check "Q1b and never through herdr agent start --kind claude" '[ "$(ncalls "^agent start")" = 0 ]'
+  check "Q1c the task is prompted to the worker pj-worker started" 'grep -q "^agent prompt [a-z0-9-]* say hi --wait" "$FAKE/calls"'
+  check "Q1d the caps are checked BEFORE a workspace is made" '[ "$(grep -n "^pj-worker count" "$FAKE/calls" | cut -d: -f1)" -lt "$(grep -n "^workspace create" "$FAKE/calls" | cut -d: -f1)" ]'
+  new_world; printf '%s\n' "$WS_CREATE" | resp workspace_create 1 0
+  hq "$REPO" "say hi" codex
+  check "Q2 another kind (codex) still uses herdr agent start --kind codex, no pj-worker" 'grep -q "^agent start [a-z0-9-]* --kind codex --pane wQ:p1" "$FAKE/calls" && [ "$(ncalls "^pj-worker")" = 0 ]'
+  new_world; touch "$FAKE/PJW_REFUSE"; printf '%s\n' "$WS_CREATE" | resp workspace_create 1 0
+  hq "$REPO" "say hi"
+  check "Q3 at a cap: herdr-quick-task exits 6, makes no workspace, prompts nothing" '[ "$RC" -eq 6 ] && [ "$(ncalls "^workspace create")" = 0 ] && [ "$(ncalls "^agent prompt")" = 0 ]'
+  new_world; touch "$FAKE/PJW_REFUSE_START"; printf '%s\n' "$WS_CREATE" | resp workspace_create 1 0
+  hq "$REPO" "say hi"
+  check "Q3b refused at start (after the workspace): closes the workspace it made, prompts nothing" '[ "$RC" -eq 6 ] && grep -qx "workspace close wQ" "$FAKE/calls" && [ "$(ncalls "^agent prompt")" = 0 ]'
+else
+  bad "Q herdr-quick-task not found at $HQT"
+fi
+
+echo
+echo "pj-worker selftest: $PASS passed, $FAIL failed"
+[ "$FAIL" -eq 0 ]

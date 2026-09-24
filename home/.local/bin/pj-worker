@@ -113,7 +113,7 @@
 #
 # Seams, for the selftest only: PJW_HERDR, PJW_PS, PJW_PJ, PJW_PROMPT_FILE (commands);
 # PJW_SESSIONS_DIR, PJW_STATE_DIR, PJW_LAUNCH_LOG, PJW_CLEAN_ROOT, PJW_TMP (paths); PJW_UID;
-# PJW_POLL (seconds between settle reads); PJ_PROFILE_DIR (shared with pj).
+# PJW_POLL, PJW_PREFLIGHT_WAIT, PJW_ENDED_AFTER, PJW_VERIFY_RETRY (seconds); PJ_PROFILE_DIR (shared with pj).
 set -u
 emulate -L zsh
 setopt pipefail extended_glob
@@ -136,6 +136,9 @@ CLEAN_ROOT="${PJW_CLEAN_ROOT:-$HOME/.cache/claude-clean}"
 PJW_TMP="${PJW_TMP:-${TMPDIR:-/tmp}/pj-worker.$UID}"
 MY_UID="${PJW_UID:-$UID}"
 POLL="${PJW_POLL:-1}"
+PREFLIGHT_WAIT="${PJW_PREFLIGHT_WAIT:-15}"   # --pane: seconds to wait for a starting shell to go idle
+ENDED_AFTER="${PJW_ENDED_AFTER:-8}"         # settle: seconds before "back at a bare shell" means the launch died
+VERIFY_RETRY="${PJW_VERIFY_RETRY:-30}"      # start: seconds to retry a verify that could not measure yet
 
 say() { print -u2 -r -- "pj-worker: $*"; }
 die() { local c="$1"; shift; say "$*"; exit "$c"; }
@@ -169,14 +172,14 @@ PS_ERR=""
 load_ps() {
   local out line pid rest
   PS_COMM=(); PS_UID=(); PS_START=()
-  out="$("$PS_CMD" -A -o pid=,uid=,comm= 2>&1)" || { PS_ERR="ps refused (sandbox on? run with it off): ${out[1,160]}"; return 1; }
+  out="$(PJW_ME=$$ "$PS_CMD" -A -o pid=,uid=,comm= 2>&1)" || { PS_ERR="ps refused (sandbox on? run with it off): ${out[1,160]}"; return 1; }
   for line in ${(f)out}; do
     local -a f; f=(${=line})
     (( ${#f} >= 3 )) || continue
     [[ "$f[1]" == <-> ]] || continue
     PS_UID[$f[1]]="$f[2]"; PS_COMM[$f[1]]="${${f[3,-1]}:t}"
   done
-  out="$(LC_ALL=C TZ=UTC "$PS_CMD" -A -o pid=,lstart= 2>&1)" || { PS_ERR="ps lstart refused: ${out[1,160]}"; return 1; }
+  out="$(PJW_ME=$$ LC_ALL=C TZ=UTC "$PS_CMD" -A -o pid=,lstart= 2>&1)" || { PS_ERR="ps lstart refused: ${out[1,160]}"; return 1; }
   for line in ${(f)out}; do
     line="${line##[[:space:]]#}"; pid="${line%%[[:space:]]*}"; rest="${line#$pid}"
     [[ "$pid" == <-> ]] || continue
@@ -616,19 +619,22 @@ cmd_start() {
   mkdir -p "$STATE" 2>/dev/null
   if zmodload zsh/system 2>/dev/null; then
     local lockfd
-    zsystem flock -t 180 -f lockfd "$STATE/pj-worker.lock" 2>/dev/null || die 2 "could not take $STATE/pj-worker.lock within 180s (another start running?)"
+    : >> "$STATE/pj-worker.lock" 2>/dev/null   # zsystem flock opens it for writing and will not create it
+    zsystem flock -t 180 -f lockfd "$STATE/pj-worker.lock" || die 2 "could not take $STATE/pj-worker.lock within 180s (another start running, or the state dir is not writable)"
   else
     say "zsh/system missing: starts are not serialised on this machine"
   fi
 
   # 1. the caps, before anything is touched
-  do_count "${clean:+$PWD}${clean:-$cwd}"; local rc=$?
+  local kind=pj counted="$cwd"
+  [[ -n "$clean" ]] && { kind=cleanroom; counted="$PWD"; }   # a clean room counts for the CALLER's project
+  do_count "$counted"; local rc=$?
   (( rc == 0 )) || die 2 "cannot count live sessions: $C_ERR"
   [[ "$C_WS" == measured ]] || die 2 "cannot count this project's herdr panes ($C_WS)"
   if [[ -n "$C_REFUSE" ]]; then
     say "REFUSED, $C_REFUSE. No override. Close a session first. Counted:"
     count_human >&2
-    log_worker "kind=${clean:+cleanroom}${clean:-pj} name=$name result=refused-cap"
+    log_worker "kind=$kind name=$name result=refused-cap"
     exit 6
   fi
 
@@ -661,13 +667,13 @@ cmd_start() {
     if [[ "$HKIND" == ok ]]; then die 8 "--pane $pane already hosts an agent ($(print -r -- "$HOUT" | jq -r '.result.agent | "\(.agent) \(.name // "unnamed") \(.agent_status)"' 2>/dev/null)); refusing to type into it"
     elif [[ "$HKIND" != err ]]; then die 2 "preflight on $pane: $(herdr_why)"
     elif [[ "$HCODE" != agent_not_found ]]; then die 8 "preflight on $pane: herdr said $HCODE"; fi
-    local deadline=$(( EPOCHSECONDS + 15 )) shape=""
+    local deadline=$(( EPOCHSECONDS + PREFLIGHT_WAIT )) shape=""
     while :; do
       hcall pane process-info --pane "$pane" || die 8 "preflight on $pane: $( [[ $HKIND == err ]] && print -r -- "$HCODE" || herdr_why )"
       shape="$(print -r -- "$HOUT" | jq -r '.result.process_info | if ([.foreground_processes[] | ((.argv0 // "") | split("/") | last)] | index("claude")) then "claude" elif .foreground_process_group_id == .shell_pid then "idle" else "busy:" + ([.foreground_processes[].argv0] | join(",")) end' 2>/dev/null)"
       [[ "$shape" == idle ]] && break
       [[ "$shape" == claude ]] && die 8 "--pane $pane has claude in its foreground; refusing to type into it"
-      (( EPOCHSECONDS >= deadline )) && die 8 "--pane $pane is not at an idle shell after 15s (${shape:-unreadable}); refusing to type into it"
+      (( EPOCHSECONDS >= deadline )) && die 8 "--pane $pane is not at an idle shell after ${PREFLIGHT_WAIT}s (${shape:-unreadable}); refusing to type into it"
       sleep "$POLL"
     done
     hcall pane send-keys "$pane" ctrl+c || die 4 "send-keys ctrl+c to $pane failed: $HCODE"
@@ -683,7 +689,7 @@ cmd_start() {
   local nonce="${EPOCHSECONDS}x$$x$RANDOM"
   hcall pane run "$pane" " clear; printf '%s-%s\n' PJWREADY $nonce" || die 4 "pane run into $pane failed: ${HCODE:-$(herdr_why)}"
   if ! hcall pane wait-output "$pane" --match "PJWREADY-$nonce" --timeout "$hs_ms"; then
-    [[ "$HKIND" == err && "$HCODE" == timeout ]] && { log_worker "kind=${clean:+cleanroom}${clean:-pj} name=$name pane=$pane result=handshake-timeout"; die 5 "$pane never answered the ready handshake in $(( hs_ms / 1000 ))s; not retrying into it (a half-typed line would prefix the next command). Pane: $(pane_tail "$pane")"; }
+    [[ "$HKIND" == err && "$HCODE" == timeout ]] && { log_worker "kind=$kind name=$name pane=$pane result=handshake-timeout"; die 5 "$pane never answered the ready handshake in $(( hs_ms / 1000 ))s; not retrying into it (a half-typed line would prefix the next command). Pane: $(pane_tail "$pane")"; }
     die 4 "wait-output on $pane: ${HCODE:-$(herdr_why)}"
   fi
 
@@ -705,16 +711,16 @@ cmd_start() {
       st="$(print -r -- "$HOUT" | jq -r '.result.agent.agent_status // empty' 2>/dev/null)"
       sid="$(print -r -- "$HOUT" | jq -r '.result.agent.agent_session.value // empty' 2>/dev/null)"
       if [[ "$st" == blocked ]]; then
-        log_worker "kind=${clean:+cleanroom}${clean:-pj} name=$name pane=$pane result=blocked"
+        log_worker "kind=$kind name=$name pane=$pane result=blocked"
         die 3 "$pane: the new session is at a dialog. It is left open for you (this tool answers no dialog). Screen: $(pane_tail "$pane")"
       fi
       [[ -n "$sid" && ( "$st" == idle || "$st" == done ) ]] && break
     elif [[ "$HKIND" == err && "$HCODE" == agent_not_found ]]; then
-      (( EPOCHSECONDS - t0 >= 8 )) && launch_ended "$pane" && { log_worker "kind=${clean:+cleanroom}${clean:-pj} name=$name pane=$pane result=launch-died"; die 4 "$pane: $(settle_why "$pane" "the launch ended without a Claude")"; }
+      (( EPOCHSECONDS - t0 >= ENDED_AFTER )) && launch_ended "$pane" && { log_worker "kind=$kind name=$name pane=$pane result=launch-died"; die 4 "$pane: $(settle_why "$pane" "the launch ended without a Claude")"; }
     else
       die 2 "cannot read $pane's agent state: $(herdr_why)"
     fi
-    (( EPOCHSECONDS >= deadline2 )) && { log_worker "kind=${clean:+cleanroom}${clean:-pj} name=$name pane=$pane result=timeout"; die 4 "$pane: $(settle_why "$pane" "no settled agent with a session id after ${timeout}s")"; }
+    (( EPOCHSECONDS >= deadline2 )) && { log_worker "kind=$kind name=$name pane=$pane result=timeout"; die 4 "$pane: $(settle_why "$pane" "no settled agent with a session id after ${timeout}s")"; }
     sleep "$POLL"
   done
   if ! hcall agent rename "$pane" "$name"; then
@@ -723,7 +729,7 @@ cmd_start() {
   fi
 
   # 7. prove it (pj only). Retry only on "could not measure", for a bounded time, never on 1.
-  local vrc=2 vdeadline=$(( EPOCHSECONDS + 30 ))
+  local vrc=2 vdeadline=$(( EPOCHSECONDS + VERIFY_RETRY ))
   if [[ -z "$clean" ]]; then
     while :; do
       verify_run "$pane" "$profile"; vrc=$V_RC
@@ -735,7 +741,7 @@ cmd_start() {
     for pid in $R_PIDS; do [[ -n "${R_LIVE[$pid]:-}" && "${R_SID[$pid]}" == "$sid" ]] && { V_PID="$pid"; V_NAME="${R_NAME[$pid]}"; }; done
     V_PANE="$pane"; V_SID="$sid"; V_PROFILE=""
   fi
-  log_worker "kind=${clean:+cleanroom}${clean:-pj} name=$name session_name=${V_NAME:-$sname} pane=$pane pid=${V_PID:-?} sid=$sid cwd=$cwd project=$PROJ_ROOT result=$( [[ -n $clean ]] && print -r -- unguarded || print -r -- ${${(s: :):-pass fail unmeasured}[vrc + 1]} )"
+  log_worker "kind=$kind name=$name session_name=${V_NAME:-$sname} pane=$pane pid=${V_PID:-?} sid=$sid cwd=$cwd project=$PROJ_ROOT result=$( [[ -n $clean ]] && print -r -- unguarded || print -r -- ${${(s: :):-pass fail unmeasured}[vrc + 1]} )"
   if [[ -z "$clean" ]]; then
     verify_json "$pane" "$profile" | jq -c --arg n "$name" '. + {name:$n}'
     if (( vrc == 1 )); then local x; for x in $V_FAIL; do say "NOT pj: $x"; done; die 1 "the session in $pane is running but is NOT a pj session; close it (herdr pane close $pane)"; fi
