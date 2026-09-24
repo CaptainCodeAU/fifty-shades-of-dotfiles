@@ -30,7 +30,7 @@
 # Byte offsets: run with LC_ALL=C so every awk counts bytes the same way.
 #
 # Input:  the Bash tool's command on stdin.
-# Env:    CONV_MODE = uv | pnpm | nocd   (which hook is asking)
+# Env:    CONV_MODE = uv | pnpm | nocd | guard | builtin | reset   (which hook is asking)
 #         CONV_CWD  = the payload's cwd (npx looks for a local binary from here)
 # Output: line 1  ALLOW | DENY | REWRITE
 #         line 2  one-line message for the session (DENY reason or what changed)
@@ -44,7 +44,7 @@ function unsure(why) { if (UNSURE == "") UNSURE = why }
 
 function new_cmd(rec, depth, sep) {
     if (!rec) return -1
-    NC++; CD[NC] = depth; CSB[NC] = sep; CSA[NC] = ""; CNW[NC] = 0; CEND[NC] = 0
+    NC++; CD[NC] = depth; CSB[NC] = sep; CSA[NC] = ""; CNW[NC] = 0; CEND[NC] = 0; RDN[NC] = 0
     CSS[NC] = SUBSH                   # >0: inside an explicit ( ) subshell
     return NC
 }
@@ -219,6 +219,8 @@ function handle_redir(k,    c, ws, d) {
         else {
             ws = P; parse_word()
             if (P == ws) unsure("redirection with no target")
+            # reset mode reads where output goes: > >> &> >| >! and fd forms
+            else if (k > 0 && c != "<") { RDN[k]++; RDT[k, RDN[k]] = substr(S, ws, P - ws) }
         }
     }
     if (k > 0) CEND[k] = P - 1
@@ -771,6 +773,201 @@ function builtin_check(    k, j, n, w, arg, mod) {
     }
 }
 
+# ------------------------------------------------------------------ reset
+# Used by enforce-no-reset-by-name.sh (CONV_MODE=reset). Deny only, never a
+# rewrite. The class is RESET-BY-NAME (W-20260924-A32, Stage 1): one command
+# removes a directory P, then recreates or writes into P, as if the rm worked:
+#     rm -rf "$S/mut4" 2>/dev/null; mkdir -p "$S/mut4"; cp x "$S/mut4/"
+# In the Claude sandbox the Trash-routed rm FAILS (rc 1, P left in place); with
+# 2>/dev/null and ; nobody sees it, and the reuse merges into stale files.
+#
+# A remove is: rm/grm with -r, -R or --recursive in an option word, or rmdir.
+# `rm -rf P/*` counts as a reset of P. A path with any other glob is skipped.
+# A reuse of P, in a LATER simple command of the same Bash call:
+#   mkdir P or P/...; cd/pushd P or P/...; the destination (last word, or -t) of
+#   cp mv ln rsync install ditto (a cp with no -r/-R/-a onto exactly P is a file
+#   overwrite, not a merge: skipped); tar -C P or -f P/...; unzip -d P; git init P;
+#   touch/tee P/...; a > or >> redirection into P/...
+# Words are compared as text after dropping quotes and backslashes, ${V} -> $V,
+# a leading ./, doubled and trailing slashes. So "$S/mut4" == $S/mut4 == ${S}/mut4/.
+# P stops being tracked (ALLOW) when, between the rm and the reuse:
+#   - a test / [ / [[ naming P has its result used (&&, ||, or after if/while), or
+#     a `git clone ... P &&` / `git worktree add ... P &&` (both refuse a
+#     non-empty P, so the && stops the chain), or
+#   - every separator from the rm up to the reuse is && (a failed rm stops it), or
+#   - the rm is followed by || and an exit/return comes before the reuse, or
+#   - a variable P is built from is reassigned (D=$(mktemp -d), for D in, read D)
+#   - `set -e` (or -o errexit) ran earlier in the command.
+# Words inside $(...), backticks and heredoc bodies are not commands here.
+
+function rs_norm(w) {
+    if (w ~ /\$\(|`/) return ""
+    gsub(/["'\\]/, "", w)
+    while (match(w, /\$\{[A-Za-z_][A-Za-z0-9_]*\}/))
+        w = substr(w, 1, RSTART - 1) "$" substr(w, RSTART + 2, RLENGTH - 3) substr(w, RSTART + RLENGTH)
+    gsub(/\/\/+/, "/", w)
+    while (substr(w, 1, 2) == "./" && length(w) > 2) w = substr(w, 3)
+    while (length(w) > 1 && w ~ /\/\.?$/) sub(/\/\.?$/, "", w)
+    return w
+}
+function rs_under(t, p) { return t != "" && (t == p || index(t, p "/") == 1) }
+function rs_strict(t, p) { return t != "" && index(t, p "/") == 1 }
+
+# The path a word names, if it may be reset; "" to skip it.
+function rs_target(w) {
+    w = rs_norm(w)
+    if (w ~ /\/\*$/) w = substr(w, 1, length(w) - 2)
+    if (w == "" || w ~ /[*?[]/ || w == "/" || w == "." || w == ".." || w == "~") return ""
+    return w
+}
+
+# Does simple command c reuse path p? Returns the verb, or "".
+function rs_reuse(c, p,    j, n, b, a, w, last, i) {
+    for (i = 1; i <= RDN[c]; i++) if (rs_strict(rs_norm(RDT[c, i]), p)) return "a > redirection into it"
+    j = eff(c); n = CNW[c]
+    if (j > n) return ""
+    b = base(rs_norm(WR[c, j]))
+    if (b == "mkdir") {
+        for (a = j + 1; a <= n; a++) {
+            w = WR[c, a]
+            if (w == "-m") { a++; continue }
+            if (w ~ /^-/) continue
+            if (rs_under(rs_norm(w), p)) return "mkdir"
+        }
+        return ""
+    }
+    if (b == "cd" || b == "pushd") {
+        for (a = j + 1; a <= n && WR[c, a] ~ /^-/; a++) ;
+        return (a <= n && rs_under(rs_norm(WR[c, a]), p)) ? b : ""
+    }
+    if (b == "cp" || b == "gcp" || b == "mv" || b == "gmv" || b == "ln" || b == "rsync" || b == "install" || b == "ditto") {
+        last = ""; i = 0
+        for (a = j + 1; a <= n; a++) {
+            w = WR[c, a]
+            if (w == "-t" || w == "--target-directory") { if (rs_under(rs_norm(WR[c, a + 1]), p)) return b; a++; continue }
+            if (w ~ /^--target-directory=/) { sub(/^--target-directory=/, "", w); if (rs_under(rs_norm(w), p)) return b; continue }
+            if (w ~ /^--recursive$|^--archive$|^-[a-zA-Z]*[rRa]/) i = 1
+            if (w ~ /^-/) continue
+            last = w
+        }
+        last = rs_norm(last)
+        # A non-recursive cp onto exactly P overwrites a FILE: no merge, out of scope.
+        if ((b == "cp" || b == "gcp") && !i && last == p) return ""
+        return rs_under(last, p) ? b : ""
+    }
+    if (b == "tar" || b == "gtar" || b == "bsdtar") {
+        for (a = j + 1; a <= n; a++) {
+            w = WR[c, a]
+            if (w == "-C" || w == "--directory") { if (rs_under(rs_norm(WR[c, a + 1]), p)) return "tar -C"; a++; continue }
+            if (w ~ /^--directory=/) { sub(/^--directory=/, "", w); if (rs_under(rs_norm(w), p)) return "tar -C"; continue }
+            if ((w == "-f" || w ~ /^-?[a-zA-Z]*f$/) && a < n && rs_strict(rs_norm(WR[c, a + 1]), p)) return "tar -f"
+        }
+        return ""
+    }
+    if (b == "unzip") {
+        for (a = j + 1; a < n; a++) if (WR[c, a] == "-d" && rs_under(rs_norm(WR[c, a + 1]), p)) return "unzip -d"
+        return ""
+    }
+    if (b == "git") {
+        for (a = j + 1; a <= n && WR[c, a] ~ /^-/; a++) ;
+        if (a > n || WR[c, a] != "init") return ""
+        for (a++; a <= n; a++) if (WR[c, a] !~ /^-/ && rs_under(rs_norm(WR[c, a]), p)) return "git init"
+        return ""
+    }
+    if (b == "touch" || b == "tee") {
+        for (a = j + 1; a <= n; a++) if (WR[c, a] !~ /^-/ && rs_strict(rs_norm(WR[c, a]), p)) return b
+        return ""
+    }
+    return ""
+}
+
+# Does command c test path p (a check whose result is USED)? A `git clone` or
+# `git worktree add` into p, followed by &&, is one too: both refuse a directory
+# that exists and is not empty, so a survivor stops the chain there.
+function rs_checks(c, p,    j, n, b, a, seg) {
+    if (!(CSA[c] == "&&" || CSA[c] == "||" || CSB[c] == "kw")) return 0
+    j = eff(c); n = CNW[c]
+    if (j > n) return 0
+    b = rs_norm(WR[c, j])
+    if (base(b) == "git" && CSA[c] == "&&") {
+        for (a = j + 1; a <= n && WR[c, a] ~ /^-/; a++) if (WR[c, a] == "-C" || WR[c, a] == "-c") a++
+        if (a < n && (WR[c, a] == "clone" || (WR[c, a] == "worktree" && WR[c, a + 1] == "add")))
+            for (a++; a <= n; a++) if (rs_norm(WR[c, a]) == p) return 1
+        return 0
+    }
+    if (b == "[[") {
+        seg = rs_norm(substr(S, WS[c, j], CEND[c] - WS[c, j] + 1))
+        return index(seg " ", " " p " ") > 0 || index(seg, " " p "]") > 0
+    }
+    if (b != "test" && b != "[") return 0
+    for (a = j + 1; a <= n; a++) if (rs_norm(WR[c, a]) == p) return 1
+    return 0
+}
+
+# Is a variable that p is built from (re)assigned in command c?
+function rs_reassigns(c, p,    t, v, a, n, w) {
+    n = CNW[c]; t = p
+    while (match(t, /\$[A-Za-z_][A-Za-z0-9_]*/)) {
+        v = substr(t, RSTART + 1, RLENGTH - 1); t = substr(t, RSTART + RLENGTH)
+        if (WR[c, 1] == "for" && WR[c, 2] == v) return 1
+        for (a = 1; a <= n; a++) {
+            w = WR[c, a]
+            if (index(w, v "=") == 1 || index(w, v "+=") == 1) return 1
+            if (WR[c, 1] == "read" && w == v) return 1
+        }
+    }
+    return 0
+}
+
+function rs_errexit(c,    a, n) {
+    if (WR[c, 1] != "set") return 0
+    n = CNW[c]
+    for (a = 2; a <= n; a++) {
+        if (WR[c, a] ~ /^-[a-zA-Z]*e/) return 1
+        if (WR[c, a] == "-o" && WR[c, a + 1] == "errexit") return 1
+    }
+    return 0
+}
+
+function reset_check(    k, j, n, b, a, w, rec, p, c, v, chain, exited, shown) {
+    V["reset"] = "ALLOW"; M["reset"] = ""
+    for (k = 1; k <= NC; k++) {
+        if (rs_errexit(k)) return
+        j = eff(k); n = CNW[k]
+        if (j > n) continue
+        b = base(rs_norm(WR[k, j]))
+        if (b == "rm" || b == "grm") {
+            rec = 0
+            for (a = j + 1; a <= n; a++) {
+                w = WR[k, a]
+                if (w == "--") break
+                if (w == "--recursive" || w ~ /^-[a-zA-Z]*[rR]/) rec = 1
+            }
+            if (!rec) continue
+        } else if (b != "rmdir") continue
+        for (a = j + 1; a <= n; a++) {
+            w = WR[k, a]
+            if (w ~ /^-/ && w != "-") continue
+            p = rs_target(w)
+            if (p == "") continue
+            chain = (CSA[k] == "&&"); exited = 0
+            for (c = k + 1; c <= NC; c++) {
+                if (rs_checks(c, p) || rs_reassigns(c, p)) break
+                if (CSA[k] == "||" && (base(WR[c, 1]) == "exit" || base(WR[c, 1]) == "return")) exited = 1
+                if (exited) break
+                v = rs_reuse(c, p)
+                if (v != "") {
+                    if (chain) break
+                    shown = w; gsub(/["']/, "", shown)
+                    verdict("reset", "DENY", "enforce-no-reset-by-name: this command removes " shown " and then reuses it (" v ") without checking the remove worked. rm can FAIL and leave the directory in place (in the Claude sandbox the Trash is refused, rc 1), and with 2>/dev/null or ; the chain carries on, so the reuse silently merges into STALE files. Safe routes: a fresh directory per run, d=$(mktemp -d \"$TMPDIR/name.XXXXXX\") (always pass a template: BSD mktemp ignores TMPDIR without one); or stop the chain when the remove fails: rm -rf " shown " && test ! -e " shown " && mkdir -p " shown ". The rm keeps failing loudly by design (no fallback); do not hide its stderr.")
+                    return
+                }
+                if (CSA[c] != "&&") chain = 0
+            }
+        }
+    }
+}
+
 # ------------------------------------------------------------------ main
 
 { S = (NR > 1 ? S "\n" : "") $0 }
@@ -782,8 +979,8 @@ END {
     REC_NESTED = (mode == "guard")      # only guard looks inside $(...) and backticks
     parse_list(1, "", 0, "^")
     if (HDN) unsure("here-document with no body")
-    if (mode == "guard" || mode == "builtin") {       # deny-only modes: never compose
-        if (mode == "guard") guard_check(); else builtin_check()
+    if (mode == "guard" || mode == "builtin" || mode == "reset") {   # deny-only modes: never compose
+        if (mode == "guard") guard_check(); else if (mode == "builtin") builtin_check(); else reset_check()
         print V[mode]; print M[mode]; exit 0
     }
     if (mode == "uv")        { own = "uv";   uv_check(); pnpm_check(); others = "pnpm" }

@@ -94,6 +94,18 @@
     {
       "event": "PreToolUse",
       "matcher": "Bash",
+      "script": "enforce-no-reset-by-name.sh",
+      "targets": ["user", "project"],
+      "entry": {
+        "type": "command",
+        "command": "test -x \"$HOME/.claude/hooks/enforce-no-reset-by-name.sh\" && \"$HOME/.claude/hooks/enforce-no-reset-by-name.sh\" || true",
+        "timeout": 5
+      },
+      "why": "DENIES reset-by-name: a Bash command that removes a directory (rm -r, rmdir) and then reuses the same path (mkdir, cd, cp/mv/ln destination, tar -C, unzip -d, git init, > into it) without checking the remove worked. In the sandbox the Trash-routed rm fails and leaves the directory, 2>/dev/null hides it, and the reuse merges into stale files (the 2026-09-19 cp hang). Ruled by Gavin 2026-09-24 (W-20260924-A32 Stage 1): rm keeps failing loudly, a hook blocks the pattern in every project. Both targets. Deny only; scanner is conv-shscan.awk mode reset; --selftest proves every arm"
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "Bash",
       "script": "enforce-census.sh",
       "targets": ["user", "project"],
       "entry": {
