@@ -161,6 +161,71 @@ s="$(now)"; run s-big "$T" "$M"; e="$(now)"
 check "K 5000-line transcript under 2 s ($(awk -v s="$s" -v e="$e" 'BEGIN{printf "%.2f", e-s}') s)" 'awk -v s="$s" -v e="$e" "BEGIN{exit !((e-s) < 2.0)}"'
 check "K and flagged on messages (2500)" 'grep -q "^messages: 2500$" "$STATE/no-wrap-up/$(encode_key "$M")"'
 
+# --- O: owed records (W5) are MOVED aside when the owed command ran in this session ----------
+# FIXTURES FROM REAL LINES (copied 2026-09-25, read-only, from ~/.claude/projects). Keys,
+# nesting and escaping are the real ones; only the values were swapped for placeholders
+# (CMD, TSTAMP, CWD, SID) and usage/model/request ids dropped:
+#   typed      a user-typed slash command     claude-switcher 92f62fd8, line 1490, v2.1.281
+#   skill_call the Skill tool call            win_go_app_test 7fd2f1f8, v2.1.270
+#   skill_ok   its result (success)           the next line of the same transcript
+#   skill_err  a failed Skill result          fifty-shades-of-dotfiles 498eea9f, v2.1.278
+fx(){ sed "s#CMD#$1#g; s#TSTAMP#$2#g"; }
+typed(){ printf '%s\n' '{"parentUuid":"6d7cb392-fe7e-400e-99ad-8c44e4b60a2a","isSidechain":false,"promptId":"f7507ba1-eea0-4844-b31e-264630682a21","type":"user","message":{"role":"user","content":"<command-message>CMD</command-message>\n<command-name>/CMD</command-name>"},"uuid":"b8478dc7-332d-4375-84d3-f9899582fabf","timestamp":"TSTAMP","origin":{"kind":"human"},"turnOrigin":"human","userType":"external","entrypoint":"cli","cwd":"CWD","sessionId":"SID","version":"2.1.281","gitBranch":"master"}' | fx "$1" "${2:-2026-09-24T06:43:55.659Z}"; }
+skill_call(){ printf '%s\n' '{"parentUuid":"431d05fb-e9c1-460a-9554-af559f4047ad","isSidechain":false,"message":{"type":"message","role":"assistant","content":[{"type":"tool_use","id":"toolu_018vrwiPJAr3Za6ZrU6HYk4P","name":"Skill","input":{"skill":"CMD"},"caller":{"type":"direct"}}],"container":null,"stop_reason":"tool_use","stop_sequence":null,"stop_details":null,"diagnostics":null,"context_management":null},"apiBlockIndex":2,"type":"assistant","uuid":"e070372f-50a4-4d6e-a927-6db1cfcdf420","timestamp":"TSTAMP","effort":"low","perTurnEffort":"low","session_id":"SID","userType":"external","entrypoint":"cli","cwd":"CWD","sessionId":"SID","version":"2.1.270","gitBranch":"master"}' | fx "$1" "${2:-2026-09-13T04:00:53.482Z}"; }
+skill_ok(){ printf '%s\n' '{"parentUuid":"e070372f-50a4-4d6e-a927-6db1cfcdf420","isSidechain":false,"promptId":"68d11410-ba50-4b85-87fc-10ff4d87ef86","type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_018vrwiPJAr3Za6ZrU6HYk4P","content":"Launching skill: CMD"}]},"uuid":"3464befa-221e-4bbb-b0f1-12380ac59832","timestamp":"TSTAMP","toolUseResult":{"success":true,"commandName":"CMD"},"sourceToolAssistantUUID":"e070372f-50a4-4d6e-a927-6db1cfcdf420","session_id":"SID","userType":"external","entrypoint":"cli","cwd":"CWD","sessionId":"SID","version":"2.1.270","gitBranch":"master"}' | fx "$1" "${2:-2026-09-13T04:00:53.605Z}"; }
+skill_err(){ printf '%s\n' '{"parentUuid":"d0d2f3c0-f5db-4681-bea9-9d32d3e01bfe","isSidechain":false,"promptId":"2d225574-9e72-4542-8e42-1ce903dc12c8","type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"<tool_use_error>Unknown skill: CMD</tool_use_error>","is_error":true,"tool_use_id":"toolu_01Jp8w6WoRomjaLfNWDnmyGJ"}]},"uuid":"437e588e-bf4e-450d-96ca-059fe88650a5","timestamp":"TSTAMP","toolUseResult":"Error: Unknown skill: CMD","sourceToolAssistantUUID":"d0d2f3c0-f5db-4681-bea9-9d32d3e01bfe","session_id":"SID","userType":"external","entrypoint":"cli","cwd":"CWD","sessionId":"SID","version":"2.1.278","gitBranch":"master"}' | fx "$1" "${2:-2026-09-20T15:25:20.664Z}"; }
+owedrec(){ printf 'owed: %s\nproject: repo-o\nsession: s-declined\nsince: %s\n' "$1" "$2"; }
+two_owed(){ { owedrec /wrap-up "${1:-2026-01-01 00:00}"; printf '\n'; owedrec "/release patch" "${1:-2026-01-01 00:00}"; } > "$OWEDF"; }
+nowed(){ cat "$STATE/owed/handled/$KO".* 2>/dev/null | grep -c "^owed: "; }
+check "O control: no owed file anywhere so far -> the hook never made an owed folder" '[ ! -e "$STATE/owed" ]'
+check "O control: the fixture lines are valid JSON (jq parses all four)" '{ typed x; skill_call x; skill_ok x; skill_err x; } | jq -e . >/dev/null 2>&1'
+O="$ROOT/repo-o"; mkrepo "$O"; KO="$(encode_key "$O")"; OWEDF="$STATE/owed/$KO"; mkdir -p "$STATE/owed"
+two_owed
+T="$ROOT/t-o1.jsonl"; { u "wrap it"; typed wrap-up; } > "$T"
+run s-o1 "$T" "$O"
+check "O1 typed route: rc 0, silent" '[ "$RC" -eq 0 ] && [ ! -s "$ROOT/out" ] && [ ! -s "$ROOT/err" ]'
+check "O1 typed /wrap-up -> its record moved to owed/handled" '[ "$(nowed)" -eq 1 ] && grep -qx "owed: /wrap-up" "$STATE/owed/handled/$KO".*'
+check "O1 the other record (/release patch) still owed, clean file" '[ "$(grep -c "^owed: " "$OWEDF")" -eq 1 ] && [ "$(head -1 "$OWEDF")" = "owed: /release patch" ]'
+T="$ROOT/t-o2.jsonl"; { u "release"; skill_call release; skill_ok release; } > "$T"
+run s-o2 "$T" "$O"
+check "O2 model route (Skill, success) -> the last record moved, owed file gone" '[ ! -e "$OWEDF" ] && [ "$(nowed)" -eq 2 ]'
+check "O2 nothing deleted: two handled files hold both records" '[ "$(ls "$STATE/owed/handled" | grep -c "^$KO\.")" -eq 2 ]'
+# exact name: pj:wrap-up (typed AND via Skill) never clears /wrap-up
+two_owed; OS="$(shasum "$OWEDF")"
+T="$ROOT/t-o3.jsonl"; { u a; typed pj:wrap-up; skill_call pj:wrap-up; skill_ok pj:wrap-up; } > "$T"
+run s-o3 "$T" "$O"
+check "O3 pj:wrap-up ran (both routes) -> /wrap-up STAYS owed (exact name, never a suffix)" '[ "$(shasum "$OWEDF")" = "$OS" ]'
+two_owed; OS="$(shasum "$OWEDF")"
+T="$ROOT/t-o4.jsonl"; { u a; skill_call wrap-up; skill_err wrap-up; } > "$T"
+run s-o4 "$T" "$O"
+check "O4 a FAILED Skill call for wrap-up -> stays owed" '[ "$(shasum "$OWEDF")" = "$OS" ]'
+two_owed; OS="$(shasum "$OWEDF")"
+# a real-shaped typed line (so it HAS a timestamp) whose content does not START with the tag
+T="$ROOT/t-o5.jsonl"; { typed wrap-up | sed "s#\"content\":\"<command-message>#\"content\":\"later run <command-message>#"; uresult; tool Bash '{"command":"echo <command-name>/wrap-up</command-name>"}'; } > "$T"
+run s-o5 "$T" "$O"
+check "O5 the tag only MENTIONED (mid-message, in a tool call) -> stays owed" '[ "$(shasum "$OWEDF")" = "$OS" ]'
+two_owed "2026-12-31 00:00"; OS="$(shasum "$OWEDF")"
+run s-o6 "$ROOT/t-o1.jsonl" "$O"
+check "O6 invocation BEFORE the since: of the record -> stays owed" '[ "$(shasum "$OWEDF")" = "$OS" ]'
+# since: is LOCAL time and a transcript stamp is UTC, so pin TZ to test the minute edge.
+two_owed "2026-09-24 06:44"; OS="$(shasum "$OWEDF")"
+TZ=UTC run s-o6a "$ROOT/t-o1.jsonl" "$O"
+check "O6 run at 06:43:55 UTC, since 06:44 (TZ=UTC) -> stays owed" '[ "$(shasum "$OWEDF")" = "$OS" ]'
+two_owed "2026-09-24 06:43"
+TZ=UTC run s-o6b "$ROOT/t-o1.jsonl" "$O"
+check "O6 control: since 06:43, the same minute as the run (TZ=UTC) -> cleared" '[ "$(grep -c "^owed: " "$OWEDF")" -eq 1 ]'
+two_owed; mkdir -p "$STATE/wrapped"; : > "$STATE/wrapped/s-o7"
+run s-o7 "$ROOT/t-o1.jsonl" "$O"
+check "O7 a WRAPPED session that ran it still clears it" '[ "$(grep -c "^owed: " "$OWEDF")" -eq 1 ] && grep -qx "owed: /release patch" "$OWEDF"'
+two_owed; OS="$(shasum "$OWEDF")"
+T="$ROOT/t-o8.jsonl"; { u a; typed wrap-up; printf 'this line is not json\n'; } > "$T"
+run s-o8 "$T" "$O"
+check "O8 a transcript jq cannot parse -> nothing moved (silence over a guess)" '[ "$(shasum "$OWEDF")" = "$OS" ] && [ "$RC" -eq 0 ]'
+two_owed; OS="$(shasum "$OWEDF")"
+P="$ROOT/repo-p"; mkrepo "$P"
+run s-o9 "$ROOT/t-o1.jsonl" "$P"
+check "O9 a session in ANOTHER project ran it -> the record here stays" '[ "$(shasum "$OWEDF")" = "$OS" ]'
+
 check "L bash -n clean" 'bash -n "$END"'
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 rm -r "$ROOT" 2>/dev/null || true
