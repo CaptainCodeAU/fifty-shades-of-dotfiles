@@ -311,6 +311,9 @@ herdr agent start cleanroom --kind claude --pane <returned-pane-id> -- --setting
 PY
 EOF
   conv_arm allow "A11 the pattern inside a heredoc body (f210c4d2, trimmed)" "$F"
+  # 11 real commands had this shape; all were denied before the --help rule
+  conv_arm allow "A13 herdr agent start --help (a transcript probe; 11 of this shape)" \
+    'herdr agent start --help 2>&1 | head -40; echo "=== prompt ==="; herdr agent prompt --help 2>&1 | head -30'
   conv_arm allow "A12 the pattern as a search pattern (af5d0494-style rg)" \
     "rg -n -- '--kind claude|agent start .*claude|herdr pane run .*(pj|claude)' docs/HERDR.md"
 

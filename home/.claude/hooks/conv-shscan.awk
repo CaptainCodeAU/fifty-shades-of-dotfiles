@@ -1067,6 +1067,7 @@ function pj_herdr(k, j, ov, ctx, where,    a, n, g, s, kind, gotk, clean, t, w, 
         gotk = 0; clean = 0; kind = ""
         for (a += 2; a <= n; a++) {
             w = WR[k, a]
+            if (unq(w) == "--help" || unq(w) == "-h") return     # prints usage, starts nothing
             if (w == "--") {
                 for (a++; a <= n; a++) if (unq(WR[k, a]) ~ /^--setting-sources(=|$)/) clean = 1
                 break
