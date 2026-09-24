@@ -317,6 +317,18 @@ OPEN_ITEMS_DOTCLAUDE="$IDC" run "$C"
 check "Z one unrouted inbox item: the line shows even with no drawer" 'has "$OUT" "^Inbox: 1 unrouted (Gavin routes)$"'
 check "Z ... and the no-drawer line is still there" 'has "$OUT" "^Open items: no drawer for this project yet"'
 
+# --- R: an ID past 99 in a day (W-20260924-A22): pj-id now mints -A100 ---------------------
+# A guard, not a fix: the card reads titles through open-items --session. A narrowing of that
+# read to two digits would drop the -A100 title and still count it, so both are checked.
+R="$ROOT/repo-r"; mkrepo "$R"; WR="$(mkdrawer "$R" 0 0)"; mkdir -p "$WR/items/open"
+for hid in A10 A100; do
+  printf '## W-20260103-%s -- item %s here\n\nproject: repo-r\nstatus: open\nkind: do\ndone-when: x\n' "$hid" "$hid" > "$WR/items/open/W-20260103-$hid.md"
+done
+run "$R"
+check "R count 2 (-A10 and -A100)" 'has "$OUT" "^Open items: 2 open"'
+check "R the -A100 title shows" 'has "$OUT" "   · item A100 here$"'
+check "R CONTROL: the -A10 title shows" 'has "$OUT" "   · item A10 here$"'
+
 # --- N: --selftest dispatch and syntax ------------------------------------------------------
 check "N bash -n clean" 'bash -n "$CARD"'
 
