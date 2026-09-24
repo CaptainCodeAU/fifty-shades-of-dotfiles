@@ -25,6 +25,11 @@ Rules first. Each points to the section holding its measurement.
 10. Only `pane layout`, `pane current`, `pane split` accept `--pane`/`--current`; every other `pane` subcommand takes a bare positional id (Use IDs).
 11. A registry entry is not a ready agent: a Claude session's entry appears before its name is applied (Name what you create).
 12. Close only what you opened, and clear the labels you set; a pane label outlives its process (Name what you create).
+13. `herdr agent start --kind claude` starts plain `claude`, NOT a pj session: no pj system prompt (OPERATIONAL_RULES, pj-global RULES), no project hooks, no Mods flag. 4 of 4 workers' command lines showed only `--permission-mode`, 2026-09-24 (W-20260924-A59). Until that is fixed, put every rule a worker needs into its brief.
+14. One stall watch per worker, never several paths in one `--once` watch: it exits on the FIRST path's STALL and leaves the rest unwatched (twice on 2026-09-24). TaskStop each watch the moment its worker reports: of 101 watches in 30 sessions, 43 ended in STALL and about 17 of those fired after the worker was already done (W-20260924-A42).
+15. Hand files between conductor and workers by absolute path (the scratchpad), never `$TMPDIR`: it is `/tmp/claude-501` sandboxed and `/var/folders/.../T` unsandboxed in the same session; one control arm was voided that way, 2026-09-24.
+16. A side-by-side test session (a live mod, a UI check) goes in a separate herdr TAB, never a pane (Gavin, 2026-09-23); one Mods probe tab opened and closed cleanly that way, 2026-09-24.
+17. Every worker brief carries a required edge-cases section and the VERIFIED / AGENT-REPORTED / ASSUMED labels (Gavin, 2026-09-24: "preferably all of them are"); re-check a worker's load-bearing claim yourself before relaying it. 4 of 4 checked claims held on 2026-09-24, and one conductor count (10 of 41 arms) was the conductor's own instrument error.
 
 Before any control command, verify this agent is inside a Herdr-managed pane:
 
