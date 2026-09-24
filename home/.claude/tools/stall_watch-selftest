@@ -1,0 +1,163 @@
+#!/bin/sh
+# stall_watch-selftest -- prove stall_watch.sh's finish markers (W-20260924-A42), its grace window for a
+# path missing at ARMED (W-20260923-A30), and the older STALL / NOPATH / DEAD / argument behaviour.
+# Every new arm has a control beside it that must end differently.
+#
+#   sh ~/.claude/tools/stall_watch-selftest            # tests the stall_watch.sh next to this file
+#   STALL_WATCH=<path> sh stall_watch-selftest         # tests another copy; the pre-A42 one must FAIL
+#
+# One "minute" is one second (STALL_WATCH_UNIT=1) and the poll is 1 s, so the run takes about 12 s.
+# Arms run in parallel, each in its own dir under one temp dir in $TMPDIR. That dir is printed and left
+# for inspection: nothing is deleted, because a delete from a sandboxed shell can fail and leave a
+# fixture that a later run reads as data (CLAUDE.md, "The sandbox denies every cache").
+#
+# Exit: 0 every check passed, 1 a check failed, 2 the harness could not prove itself first.
+
+here=$(cd "$(dirname "$0")" && pwd)
+W="${STALL_WATCH:-$here/stall_watch.sh}"
+T=$(mktemp -d "${TMPDIR:-/tmp}/stall_watch-selftest.XXXXXX") || { echo "stall_watch-selftest: cannot make a temp dir" >&2; exit 2; }
+pass=0; fail=0
+
+# --- the harness proves itself before any assertion: the script must exist and answer --help ---
+if [ ! -r "$W" ]; then echo "stall_watch-selftest: HARNESS: $W is not readable" >&2; exit 2; fi
+if ! sh "$W" --help 2>/dev/null | grep -q 'stall_watch.sh'; then
+  echo "stall_watch-selftest: HARNESS: '$W --help' did not name itself; nothing below would mean anything" >&2; exit 2
+fi
+echo "testing $W"
+echo "fixtures in $T (kept)"
+
+# start <arm> <watch args...>: run the watch in the background. Writes <arm>.out, <arm>.wpid (the watch's
+# own pid, for the kill), and <arm>.rc plus <arm>.secs when it exits by itself.
+start() {
+  _a=$1; shift
+  (
+    t0=$(date +%s)
+    STALL_WATCH_UNIT=1 sh "$W" --interval 1 "$@" > "$T/$_a.out" 2>&1 &
+    echo $! > "$T/$_a.wpid"
+    wait $!; rc=$?
+    echo "$rc" > "$T/$_a.rc"; echo $(( $(date +%s) - t0 )) > "$T/$_a.secs"
+  ) &
+  # the pid file is written by the subshell; wait for it so a kill can always find it
+  _k=0; while [ ! -s "$T/$_a.wpid" ] && [ "$_k" -lt 50 ]; do sleep 0.1; _k=$((_k+1)); done
+}
+# reap <arm> <max-secs>: wait for the watch to exit; past max, kill it and record rc=killed
+reap() {
+  _k=0
+  while [ ! -f "$T/$1.rc" ]; do
+    if [ "$_k" -ge "$2" ]; then kill "$(cat "$T/$1.wpid")" 2>/dev/null; sleep 1; echo killed > "$T/$1.rc"; return; fi
+    sleep 1; _k=$((_k+1))
+  done
+}
+ok()   { pass=$((pass+1)); echo "  ok    $1"; }
+bad()  { fail=$((fail+1)); echo "  FAIL  $1"; sed 's/^/          | /' "$T/$2.out" 2>/dev/null; echo "          | rc=$(cat "$T/$2.rc" 2>/dev/null) secs=$(cat "$T/$2.secs" 2>/dev/null)"; }
+has()  { grep -qF -- "$2" "$T/$1.out" 2>/dev/null; }
+rc_is() { [ "$(cat "$T/$1.rc" 2>/dev/null)" = "$2" ]; }
+secs() { cat "$T/$1.secs" 2>/dev/null || echo 999; }
+
+# ---------- the arms (each a background timeline) ----------
+arm_done_line() {            # A42: a last line of DONE retires the file
+  d=$T/done_line; mkdir -p "$d"; echo working > "$d/f"
+  start done_line --once 2 "$d/f"; sleep 1; echo DONE >> "$d/f"; reap done_line 8
+}
+arm_no_done() {              # control for done_line: same file, no marker, must STALL
+  d=$T/no_done; mkdir -p "$d"; echo working > "$d/f"
+  start no_done --once 2 "$d/f"; sleep 1; echo more >> "$d/f"; reap no_done 10
+}
+arm_done_not_last() {        # control: DONE that is not exactly the last non-blank line does not count
+  d=$T/done_not_last; mkdir -p "$d"; echo working > "$d/f"
+  start done_not_last --once 2 "$d/f"; sleep 1; printf 'DONE\nnot DONE yet\n' >> "$d/f"; reap done_not_last 10
+}
+arm_status_done() {          # A42: "status: DONE" with CRLF, trailing spaces and a blank line after it
+  d=$T/status_done; mkdir -p "$d"; echo working > "$d/r.md"
+  start status_done --once 2 "$d/r.md"; sleep 1; printf 'text\r\nstatus: DONE  \r\n\n' >> "$d/r.md"; reap status_done 8
+}
+arm_sibling() {              # A42: <path>.done beside a file
+  d=$T/sibling; mkdir -p "$d"; echo working > "$d/f"
+  start sibling --once 2 "$d/f"; sleep 1; : > "$d/f.done"; reap sibling 8
+}
+arm_dir() {                  # A42: <dir>/.done inside a watched directory
+  d=$T/dir/out; mkdir -p "$d"; echo a > "$d/a"
+  start dir --once 2 "$d"; sleep 1; : > "$d/.done"; reap dir 8
+}
+arm_multi_all() {            # A42: two paths; the first finishing does not end the watch; both finishing does
+  d=$T/multi_all; mkdir -p "$d"; echo w > "$d/f1"; echo w > "$d/f2"
+  start multi_all --once 2 "$d/f1" "$d/f2"; sleep 1; echo DONE >> "$d/f1"
+  for _i in 1 2 3; do echo more >> "$d/f2"; sleep 1; done; echo DONE >> "$d/f2"; reap multi_all 10
+}
+arm_multi_stall() {          # control: f1 finished early, f2 goes quiet; the STALL must name f2, never f1
+  d=$T/multi_stall; mkdir -p "$d"; echo w > "$d/f1"; echo w > "$d/f2"
+  start multi_stall --once 2 "$d/f1" "$d/f2"; sleep 1; echo DONE >> "$d/f1"
+  for _i in 1 2 3; do echo more >> "$d/f2"; sleep 1; done; reap multi_stall 12
+}
+arm_old_done() {             # A42: a marker older than ARMED is OLDDONE and ignored; the path still stalls
+  d=$T/old_done; mkdir -p "$d"; printf 'last run\nDONE\n' > "$d/f"; touch -t 202601010000 "$d/f"
+  start old_done --once 2 "$d/f"; reap old_done 12
+}
+arm_late_path() {            # A30: a path created after ARMED does not end the watch with NOPATH
+  d=$T/late_path; mkdir -p "$d"
+  start late_path --once 2 "$d/f"; sleep 1; echo start > "$d/f"; sleep 2; echo DONE >> "$d/f"; reap late_path 10
+}
+arm_never_path() {           # control for late_path: never created, NOPATH only after one quiet window
+  d=$T/never_path; mkdir -p "$d"
+  start never_path --once 2 "$d/f"; reap never_path 8
+}
+arm_vanished() {             # regression: a path that existed and vanished is NOPATH at once, no grace
+  d=$T/vanished; mkdir -p "$d/gone"; echo w > "$d/f"
+  start vanished --once 5 "$d/f"; sleep 1; mv "$d/f" "$d/gone/f"; reap vanished 8
+}
+arm_dead() {                 # regression: --pidfile with a dead pid is DEAD before any quiet window
+  d=$T/dead; mkdir -p "$d"; echo w > "$d/f"; true & _p=$!; wait "$_p"; echo "$_p" > "$d/pid"
+  start dead --once --pidfile "$d/pid" 5 "$d/f"; reap dead 8
+}
+arm_flag_last() {            # regression: a value flag given last must refuse, not spin forever
+  start flag_last --interval; reap flag_last 3
+  start flag_last2 --pidfile; reap flag_last2 3
+}
+
+for a in done_line no_done done_not_last status_done sibling dir multi_all multi_stall old_done \
+         late_path never_path vanished dead flag_last; do
+  "arm_$a" > "$T/arm_$a.log" 2>&1 &
+done
+wait
+
+echo "finish markers (A42)"
+{ has done_line "DONE $T/done_line/f " && has done_line "DONE all" && rc_is done_line 0 && ! has done_line STALL; } \
+  && ok "a last line of DONE retires the file and exits DONE all" || bad "DONE line" done_line
+{ has no_done "STALL $T/no_done/f" && ! has no_done DONE; } \
+  && ok "control: the same file without DONE ends in STALL" || bad "no-DONE control" no_done
+{ has done_not_last STALL && ! has done_not_last "DONE all"; } \
+  && ok "control: DONE followed by another line does not count" || bad "DONE-not-last control" done_not_last
+{ has status_done "DONE all" && rc_is status_done 0 && ! has status_done STALL; } \
+  && ok "'status: DONE' with CRLF, trailing spaces and a blank line counts" || bad "status: DONE" status_done
+{ has sibling "DONE all" && rc_is sibling 0 && ! has sibling STALL; } \
+  && ok "a <path>.done file beside the path retires it" || bad "sibling .done" sibling
+{ has dir "DONE all" && rc_is dir 0 && ! has dir STALL; } \
+  && ok "a <dir>/.done file retires a watched directory" || bad "dir .done" dir
+{ has multi_all "DONE $T/multi_all/f1 " && has multi_all "DONE $T/multi_all/f2 " && has multi_all "DONE all" && ! has multi_all STALL; } \
+  && ok "two paths: the first DONE keeps watching, the second ends it" || bad "multi-path DONE" multi_all
+{ has multi_stall "STALL $T/multi_stall/f2" && ! has multi_stall "STALL $T/multi_stall/f1" && ! has multi_stall "DONE all"; } \
+  && ok "control: a finished path never stalls; the unfinished one still does" || bad "multi-path STALL control" multi_stall
+{ has old_done "OLDDONE $T/old_done/f" && has old_done STALL && ! has old_done "DONE all"; } \
+  && ok "a marker older than ARMED is OLDDONE, ignored, and the path still stalls" || bad "stale marker" old_done
+
+echo "missing path at ARMED (A30)"
+{ has late_path "ARMED $T/late_path/f exists=no" && ! has late_path NOPATH && has late_path "CHANGE $T/late_path/f" && has late_path "DONE all"; } \
+  && ok "a path created 1 s after ARMED does not end the watch" || bad "late path" late_path
+{ has never_path "NOPATH $T/never_path/f" && rc_is never_path 0 && [ "$(secs never_path)" -ge 2 ]; } \
+  && ok "control: a path never created ends it with NOPATH after the window ($(secs never_path) s)" || bad "never-created control" never_path
+
+echo "regressions"
+{ has vanished "NOPATH $T/vanished/f" && [ "$(secs vanished)" -lt 4 ]; } \
+  && ok "a path that vanished is NOPATH at once, inside a 5 s window ($(secs vanished) s)" || bad "vanished path" vanished
+{ has dead "DEAD $T/dead/pid" && [ "$(secs dead)" -lt 3 ]; } \
+  && ok "--pidfile with a dead pid prints DEAD before any window ($(secs dead) s)" || bad "DEAD" dead
+{ rc_is flag_last 2 && rc_is flag_last2 2; } \
+  && ok "--interval or --pidfile given last refuses with exit 2" || { bad "--interval last" flag_last; bad "--pidfile last" flag_last2; }
+if sh "$W" --help 2>/dev/null | grep -q 'DONE all' && sh "$W" --help 2>/dev/null | grep -q 'ONE WATCH PER WORKER'; then
+  ok "--help documents DONE all and one watch per worker"
+else
+  fail=$((fail+1)); echo "  FAIL  --help lacks 'DONE all' or 'ONE WATCH PER WORKER'"
+fi
+
+echo "stall_watch-selftest: $pass passed, $fail failed ($W)"
+[ "$fail" = 0 ]
