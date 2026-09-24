@@ -11,7 +11,7 @@
 #   open-items watch <W-ID> <p> | check <W-ID> <p> "done-when"   add a watcher / a check
 #   open-items tick | pass <W-ID> <p>   tick p's check | pass a mandatory item; ONLY from inside p
 #   open-items move <W-ID> --to <p> --why ".."   inside one group; across groups is Gavin's (TTY)
-#   open-items route <W-ID> --to <p>   out of the inbox; routing is Gavin's call (TTY)
+#   open-items route <W-ID> --to <p> | --file <path>   out of the inbox; routing is Gavin's call (TTY), or --file: its owner
 #   open-items close|decline|park|reopen <W-ID> ["note"]   close refuses while a check is open
 #   open-items supersede <old> <new> [--project p]   decline old pointing at new; ONE drawer
 #   open-items set [--add] <W-ID> <field> "value"   replace (WARNS on dropped text) | append
@@ -22,7 +22,7 @@
 # A global flag (--json --grep --closed --status --verbose) a mode cannot use is REFUSED, or noted if harmless.
 # Design, layout, the two drawer formats and why every write is a commit: docs/OPEN_ITEMS.md
 # in the dotfiles repo; across projects: docs/OPEN_ITEMS_CROSS_PROJECT.md. Rulings:
-# D-20260918-02, D-20260919-03, D-20260920-05, D-20260920-08, D-20260923-A09.
+# D-20260918-02, D-20260919-03, D-20260920-05, D-20260920-08, D-20260923-A09 (+ section 7, W-20260924-A53).
 
 set -uo pipefail
 
@@ -863,18 +863,41 @@ resolve_name(){
   [ "$c" -eq 1 ] || refuse "$v: $c drawers answer to the name $n: $(printf '%s\n' "$hits" | tr '\n' ' ')-- a shared name is refused, never guessed (P9). Give one of them another name."
   printf '%s' "$hits"
 }
+# The owner of a FILE (W-20260924-A53, docs/OPEN_ITEMS_CROSS_PROJECT.md section 7).
+# 7a: the symlink chain is followed first, so a stow link under ~/.claude belongs to the
+# dotfiles repo; asking git about the link's own folder answered dot-claude, and A35 went to
+# the inbox on that reading. 7b: the repo that holds the real file may redirect with
+# `items-to: <project>` in its COMMITTED .claude/pj-homes (same trust as group:, P11 rule 2);
+# its own drawer then becomes a watcher. Prints "<drawer><US><watch name><US><how>".
+file_owner(){                   # file_owner <path> <verb>
+  local a="$1" v="$2" p d gcd repo w th tw rw
+  [ -e "$a" ] || [ -L "$a" ] || refuse "$v $a: no such path. Nothing was written."
+  if [ -d "$a" ]; then p="$(realdir "$a")"; else p="$(real_file "$a")"; fi
+  [ -e "$p" ] || refuse "$v $a: the link resolves to $p, which does not exist. Nothing was written."
+  d="$p"; [ -d "$d" ] || d="$(dirname "$d")"
+  gcd="$(git -C "$d" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" && [ -n "$gcd" ] \
+    || refuse "$v $a: $p is not inside a git repo, so it has no project. Nothing was written."
+  repo="$(dirname "$gcd")"; rw="$(work_for "$repo")"
+  th="$(git -C "$repo" show HEAD:.claude/pj-homes 2>/dev/null | sed -n 's/^items-to:[[:space:]]*\([^[:space:]]*\)[[:space:]]*$/\1/p' | head -1)"
+  tw=""; [ -f "$repo/.claude/pj-homes" ] && tw="$(sed -n 's/^items-to:[[:space:]]*\([^[:space:]]*\)[[:space:]]*$/\1/p' "$repo/.claude/pj-homes" | head -1)"
+  [ "$th" = "$tw" ] || refuse "$v $a: uncommitted items-to line in $repo/.claude/pj-homes (HEAD: ${th:-none}, working tree: ${tw:-none}); commit it first (P11 rule 2). Nothing was written."
+  if [ -n "$th" ]; then
+    w="$(resolve_name "$th" "$v (items-to in $repo)")" || exit 2
+    [ -d "$w/items" ] || refuse "$v $a: $repo says items-to: $th, and $th is a legacy OPEN.md drawer, read-only. Nothing was written."
+    is_drawer "$rw" && [ "$(realdir "$rw")" != "$(realdir "$w")" ] && tw="$(name_of "$rw")" || tw=""
+    printf '%s%s%s%s%s' "$w" "$US" "$tw" "$US" "items-to: $th in $repo/.claude/pj-homes"
+    return 0
+  fi
+  is_drawer "$rw" || refuse "$v $a: $repo has no drawer yet -- run 'open-items init' in $repo first. Nothing was written."
+  [ -d "$rw/items" ] || refuse "$v $a: $(name_of "$rw") is a legacy OPEN.md drawer, read-only, and $repo/.claude/pj-homes names no items-to: project to take its items (doc section 7b). Nothing was written."
+  printf '%s%s%s%s' "$rw" "$US" "$US" "real path in $repo"
+}
 # The owner named by --for: a project name, or a PATH (anything holding a /, so ./x works),
-# which resolves to the repo that owns it and then to that repo's drawer.
+# which resolves through file_owner above.
 owner_drawer(){                 # owner_drawer <project|path>
-  local a="$1" d gcd repo w
+  local a="$1" w
   case "$a" in
-    */*)
-      [ -e "$a" ] || refuse "add --for $a: no such path"
-      d="$a"; [ -d "$d" ] || d="$(dirname "$d")"
-      gcd="$(git -C "$d" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" && [ -n "$gcd" ] \
-        || refuse "add --for $a: that path is not inside a git repo, so it has no project"
-      repo="$(dirname "$gcd")"; w="$(work_for "$repo")"
-      is_drawer "$w" || refuse "add --for $a: $repo has no drawer yet -- run 'open-items init' in $repo first. Nothing was written." ;;
+    */*) w="$(file_owner "$a" "add --for")" || exit 2; w="${w%%"$US"*}" ;;
     *) w="$(resolve_name "$a" "add --for")" || exit 2 ;;
   esac
   [ -d "$w/items" ] || refuse "add --for $a: $(name_of "$w") is a legacy OPEN.md drawer, read-only; run 'open-items migrate' in its repo first. Nothing was written."
@@ -987,7 +1010,16 @@ cmd_add(){
   if [ "$inbox" -eq 1 ]; then
     w="$(inbox_drawer)" || exit 2; owner=inbox
   elif [ "${#fors[@]}" -eq 1 ]; then
-    w="$(owner_drawer "${fors[0]}")" || exit 2; owner="$(stamp_name "$w" "${fors[0]}")"
+    case "${fors[0]}" in
+      */*) x="$(file_owner "${fors[0]}" "add --for")" || exit 2
+           w="${x%%"$US"*}"; x="${x#*"$US"}"; pw="${x%%"$US"*}"; x="${x#*"$US"}"
+           owner="$(stamp_name "$w" "$(name_of "$w")")"
+           loud "--for ${fors[0]}: owner $owner ($x)${pw:+, watched by $pw}"
+           # 7b: the redirecting repo watches the item, unless --watch named it already.
+           if [ -n "$pw" ]; then j=""; for i in ${watches[@]+"${watches[@]}"}; do [ "$i" != "$pw" ] || j=1; done; [ -n "$j" ] || watches+=("$pw"); fi
+           [ "${#watches[@]}" -le "$MAX_FANOUT" ] || refuse "add: $pw watches this item by items-to, which makes more than $MAX_FANOUT --watch (P8). Nothing was written." ;;
+      *) w="$(owner_drawer "${fors[0]}")" || exit 2; owner="$(stamp_name "$w" "${fors[0]}")" ;;
+    esac
   else
     w="$(writable_drawer)" || exit 2
     # W-20260921-A15. The project name written here comes from the REPO YOU ARE
@@ -1693,6 +1725,7 @@ cmd_pass(){                     # pass <W-ID> <p>: a manual pass of a reach: man
 # move and route. D-20260923-A09 case 5b + P11 + P12: an agent may move an item inside ONE
 # group (both repos' COMMITTED pj-homes); across groups, back to a former owner, or out of
 # the inbox (route) is Gavin's call, enforced as a human at a terminal typing the ID back.
+# Except route --file (doc section 7c, W-20260924-A53): the file's owner names the destination.
 head7(){ git -C "$1" rev-parse --short=7 HEAD 2>/dev/null || printf '?'; }
 cmd_move(){                     # move <W-ID> --to <p> --why "..." [--project owner]
   local id="" to="" why="" proj="" sw dw sr dr sg dg rcg gate="" sdesc ddesc here
@@ -1735,18 +1768,30 @@ cmd_move(){                     # move <W-ID> --to <p> --why "..." [--project ow
   do_move "$sw" "$dw" "$to" "$why" "${sg:-?} -> ${dg:-?}" "$( [ -n "$sr" ] && head7 "$sr" || printf '?') -> $( [ -n "$dr" ] && head7 "$dr" || printf '?')" move
 }
 
-cmd_route(){                    # route <W-ID> --to <p> [--why "..."]: inbox -> owner, Gavin's call
-  local id="" to="" why="routed from the inbox" dw dr dg rcg
+cmd_route(){                    # route <W-ID> (--to <p> | --file <path>) [--why "..."]: inbox -> owner
+  local id="" to="" why="routed from the inbox" file="" x fw fo pw="" how dw dr dg rcg
   while [ $# -gt 0 ]; do case "$1" in
     --to) [ $# -ge 2 ] || refuse "route: --to needs a project"; to="$2"; shift 2 ;;
+    --file) [ $# -ge 2 ] || refuse "route: --file needs the path the item is about"; file="$2"; shift 2 ;;
     --why) [ $# -ge 2 ] || refuse "route: --why needs the reason"; why="$2"; shift 2 ;;
     --*) refuse "route: unknown flag $1" ;;
     *) [ -z "$id" ] && id="$1" || refuse "route: one item only"; shift ;; esac; done
-  [ -n "$id" ] && [ -n "$to" ] || refuse "route: usage: open-items route <W-ID> --to <project> [--why \"...\"]"
-  refuse_bad "route: --to" "$to"; refuse_bad "route: --why" "$why"
-  # P11 rule 4, FIRST: routing is Gavin's call, so nothing else is looked at for an agent.
-  human_confirm "$id" "routing $id out of the inbox to $to is Gavin's call. Type the item ID to confirm:" \
-    || refuse "route: routing out of the inbox is Gavin's call and needs a human at a terminal who types the ID back (D-20260923-A09 6b, P11); stdin is not a terminal (or the ID did not match). Nothing was changed."
+  [ -n "$id" ] && { [ -n "$to" ] || [ -n "$file" ]; } || refuse "route: usage: open-items route <W-ID> (--to <project> | --file <path>) [--why \"...\"]"
+  refuse_bad "route: --to" "$to"; refuse_bad "route: --why" "$why"; refuse_bad "route: --file" "$file"
+  if [ -n "$file" ]; then
+    # 7c (W-20260924-A53, amends P11 rule 4): the FILE's owner names the destination, so an
+    # agent may route with no terminal. The file is recorded in the moved-from line.
+    x="$(file_owner "$file" "route --file")" || exit 2
+    fw="${x%%"$US"*}"; x="${x#*"$US"}"; pw="${x%%"$US"*}"; how="${x#*"$US"}"
+    fo="$(stamp_name "$fw" "$(name_of "$fw")")"
+    [ -z "$to" ] || name_token_eq "$to" "$fo" \
+      || refuse "route: $file belongs to $fo ($how), not $to. Route it to its owner, or without --file from a terminal. Nothing was changed."
+    to="$fo"; why="$why by file owner: $file ($how)"
+  else
+    # P11 rule 4, FIRST: routing is Gavin's call, so nothing else is looked at for an agent.
+    human_confirm "$id" "routing $id out of the inbox to $to is Gavin's call. Type the item ID to confirm:" \
+      || refuse "route: routing out of the inbox is Gavin's call and needs a human at a terminal who types the ID back (D-20260923-A09 6b, P11); stdin is not a terminal (or the ID did not match). With --file <path>, the file's owner decides and no terminal is needed (doc section 7c). Nothing was changed."
+  fi
   owner_item "$id" "" route; id="$(id_of_file "$OF")"
   [ "$(realdir "$OW")" = "$(realdir "$INBOX")" ] || refuse "route: $id is not in the inbox (it is in $(name_of "$OW")); between projects, use 'open-items move'"
   need_live "$OF" route
@@ -1754,7 +1799,7 @@ cmd_route(){                    # route <W-ID> --to <p> [--why "..."]: inbox -> 
   [ -d "$dw/items" ] || refuse "route: $to is a legacy OPEN.md drawer, read-only. Nothing was changed."
   dr="$(repo_of_drawer "$dw")" || dr=""
   dg="?"; if [ -n "$dr" ]; then dg="$(repo_group "$dr")"; rcg=$?; [ "$rcg" -eq 0 ] || dg="?"; fi
-  do_move "$INBOX" "$dw" "$to" "$why" "- -> $dg" "- -> $( [ -n "$dr" ] && head7 "$dr" || printf '?')" route
+  do_move "$INBOX" "$dw" "$to" "$why" "- -> $dg" "- -> $( [ -n "$dr" ] && head7 "$dr" || printf '?')" route "$pw"
 }
 
 # do_move <src work> <dst work> <dst name> <why> <groups> <heads> <verb>: the two-drawer write.
@@ -1762,8 +1807,8 @@ cmd_route(){                    # route <W-ID> --to <p> [--why "..."]: inbox -> 
 # closed/ (12 older IDs repeat across drawers, and an overwrite there would be silent);
 # one commit for both drawers; a failed commit leaves a marker in BOTH so the next write in
 # either carries both halves. The old owner gets a moved-out record (P11 rule 1).
-do_move(){
-  local sw="$1" dw="$2" to="$3" why="$4" groups="$5" heads="$6" verb="$7" top id title sn from folder dest d rc
+do_move(){                      # [8th: a watcher to add under the lock, from items-to (7b)]
+  local sw="$1" dw="$2" to="$3" why="$4" groups="$5" heads="$6" verb="$7" addw="${8:-}" top id title sn from folder dest d rc
   top="$(dot_top)" || refuse "$verb: $DOTCLAUDE is not a git repo, so the two halves of a move could not be one commit (P12). Nothing was changed."
   drawer_rel "$sw" "$top" >/dev/null && drawer_rel "$dw" "$top" >/dev/null \
     || refuse "$verb: both drawers must be inside dot-claude so the move is ONE commit (P12); $(drawer_rel "$sw" "$top" >/dev/null || realdir "$sw") $(drawer_rel "$dw" "$top" >/dev/null || realdir "$dw") is not. Nothing was changed."
@@ -1778,6 +1823,7 @@ do_move(){
   folder="$(basename "$(dirname "$OF")")"; dest="$dw/items/$folder/$id.md"
   set_field "$OF" project "$(stamp_name "$dw" "$to")"
   add_field "$OF" moved-from "$from $(today) by $sn (group $groups, head $heads): $why"
+  [ -z "$addw" ] || has_token "$OF" "$addw" watch || add_field "$OF" watch "$addw"
   # The new owner is not also a watcher of its own item.
   has_token "$OF" "$to" watch && { OI_P="$to" awk 'BEGIN { p = ENVIRON["OI_P"] } NR > 2 && !h && $0 == "" { h = 1 } !h && NR > 2 && $0 == "watch: " p { next } { print }' "$OF" > "$OF.tmp" && command mv "$OF.tmp" "$OF"; loud "note: $to watched $id; now it owns it, so its watch: line was dropped"; }
   mkdir -p "$dw/items/$folder" "$sw/items/moved-out"

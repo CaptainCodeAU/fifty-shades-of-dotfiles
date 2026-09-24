@@ -49,6 +49,10 @@ ROOT="$(mktemp -d "${TMPDIR:-/tmp}/open-items-selftest.XXXXXX")" || {
 # git prints the REAL path of a toplevel (macOS: /tmp -> /private/tmp), and the key
 # is computed from that, so the fixture must be keyed from the same resolved path.
 ROOT="$(cd "$ROOT" && pwd -P)"
+# The real dot-claude must never reach a fixture: since the inbox exists (2026-09-24) an unset
+# OPEN_ITEMS_DOTCLAUDE put ~/.claude/pj-inbox into every `run` as a third drawer, and 12 arms
+# failed on the machine, not the tool. runw and tty_run still point it at their own $DC.
+export OPEN_ITEMS_DOTCLAUDE="$ROOT/no-dotclaude"
 
 ok(){  PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
 bad(){ FAIL=$((FAIL+1)); printf '  FAIL %s\n       want: %s\n       got : %s\n' \
@@ -2210,6 +2214,60 @@ if [ -n "$PTY_OK" ]; then
   want   "P11 TTY:   moved-from: inbox" "moved-from: inbox" "$(cat "$BW2/items/open/$V_IN.md" 2>/dev/null)"
   want   "P11 TTY:   and the inbox keeps a moved-out record" "moved-to: beta" "$(cat "$DC/pj-inbox/items/moved-out/$V_IN.md" 2>/dev/null)"
 else nm "P11 TTY route positive arm" "no pty here"; fi
+
+printf 'V11 file owners and routing by them (W-20260924-A53, doc section 7)\n'
+# 7a: a symlink INSIDE alpha whose real file is in beta, the stow-link shape that sent A35
+# to the inbox. The CONTROL is a plain file in alpha, which must still resolve to alpha.
+ln -s "$D/beta/sub/file.txt" "$D/alpha/linked.txt"
+runw "$D/alpha" add "about a link" --done-when y --for "$D/alpha/linked.txt"
+V_LK="$(lastid)"
+wanteq "7a: --for a symlink files with the owner of its REAL path, beta (rc=0)" "1" "$([ "$RC" = 0 ] && [ -n "$(ifile "$BW2" "$V_LK")" ] && echo 1)"
+want   "7a:   and says how it resolved" "real path in $D/beta" "$OUT"
+runw "$D/alpha" add "about a plain file" --done-when y --for "$D/alpha/README"
+wanteq "7a CONTROL: --for a plain file in alpha still files in alpha" "1" "$([ "$RC" = 0 ] && [ -n "$(ifile "$AW2" "$(lastid)")" ] && echo 1)"
+# 7b: a repo whose drawer is legacy declares items-to: in its COMMITTED pj-homes.
+mkdir -p "$D/lifeos/.claude"; git -C "$D/lifeos" init -q 2>/dev/null
+git -C "$D/lifeos" config user.email t@t; git -C "$D/lifeos" config user.name t
+printf 'records: private\nitems-to: beta\n' > "$D/lifeos/.claude/pj-homes"; printf 'x\n' > "$D/lifeos/tool.sh"
+git -C "$D/lifeos" add -A; git -C "$D/lifeos" -c commit.gpgsign=false commit -q -m init 2>/dev/null
+LW="$P/$(key "$D/lifeos")/memory/WORK"; mkdir -p "$LW"
+printf '# lifeos -- open items\n\n## W-20260101-01 -- legacy\n\nproject: lifeos\nstatus: open\n' > "$LW/OPEN.md"
+runw "$D/alpha" add "about a lifeos file" --done-when y --for "$D/lifeos/tool.sh"
+V_LF="$(lastid)"
+wanteq "7b: --for a file in a legacy-drawer repo with items-to: beta files in beta (rc=0)" "1" "$([ "$RC" = 0 ] && [ -n "$(ifile "$BW2" "$V_LF")" ] && echo 1)"
+want   "7b:   with watch: lifeos, so the file's own repo stays across it" "watch: lifeos" "$(cat "$(ifile "$BW2" "$V_LF")" 2>/dev/null)"
+want   "7b:   and names the items-to line it followed" "items-to: beta" "$OUT"
+printf 'records: private\nitems-to: gamma\n' > "$D/lifeos/.claude/pj-homes"
+runw "$D/alpha" add "uncommitted redirect" --done-when y --for "$D/lifeos/tool.sh"
+wanteq "7b: an UNCOMMITTED items-to line REFUSES (rc=2)" "2" "$RC"
+want   "7b:   saying commit it first" "commit it first" "$OUT"
+git -C "$D/lifeos" checkout -q -- .claude/pj-homes
+mkdir -p "$D/oldrepo"; git -C "$D/oldrepo" init -q 2>/dev/null; printf 'x\n' > "$D/oldrepo/f"
+OW="$P/$(key "$D/oldrepo")/memory/WORK"; mkdir -p "$OW"; printf '# oldrepo -- open items\n' > "$OW/OPEN.md"
+runw "$D/alpha" add "legacy, no redirect" --done-when y --for "$D/oldrepo/f"
+wanteq "7b: a legacy-drawer repo with NO items-to REFUSES (rc=2)" "2" "$RC"
+want   "7b:   naming items-to as the way out" "items-to:" "$OUT"
+# 7c: route --file needs no terminal when the file's owner is the destination.
+runw "$D/alpha" add "route me by file" --done-when y --inbox; V_RF="$(lastid)"
+runw "$D/alpha" route "$V_RF" --file "$D/alpha/linked.txt" < /dev/null
+wanteq "7c: route --file with stdin from a pipe routes to the file's owner (rc=0)" "0" "$RC"
+wanteq "7c:   the item is now in beta" "1" "$([ -n "$(ifile "$BW2" "$V_RF")" ] && echo 1)"
+want   "7c:   and its moved-from line names the file" "$D/alpha/linked.txt" "$(cat "$(ifile "$BW2" "$V_RF")" 2>/dev/null)"
+wanteq "7c:   both drawers committed" "0" "$(git -C "$DC" status --porcelain -- pj-inbox "projects/$(key "$D/beta")" | wc -l | tr -d ' ')"
+runw "$D/alpha" add "route me to the wrong place" --done-when y --inbox; V_RW="$(lastid)"
+runw "$D/alpha" route "$V_RW" --file "$D/alpha/linked.txt" --to gamma < /dev/null
+wanteq "7c: route --file with a --to that is NOT the file's owner REFUSES (rc=2)" "2" "$RC"
+want   "7c:   naming the real owner" "belongs to beta" "$OUT"
+wanteq "7c:   and the item is still in the inbox" "1" "$([ -f "$DC/pj-inbox/items/open/$V_RW.md" ] && echo 1)"
+runw "$D/alpha" route "$V_RW" --file "$D/lifeos/tool.sh" < /dev/null
+wanteq "7c: route --file through items-to (rc=0)" "0" "$RC"
+want   "7c:   adds watch: lifeos" "watch: lifeos" "$(cat "$(ifile "$BW2" "$V_RW")" 2>/dev/null)"
+runw "$D/alpha" add "no owner" --done-when y --inbox; V_NO="$(lastid)"
+mkdir -p "$D/norepo"; printf x > "$D/norepo/f"
+runw "$D/alpha" route "$V_NO" --file "$D/norepo/f" < /dev/null
+wanteq "7c: route --file on a file in no repo REFUSES (rc=2)" "2" "$RC"
+want   "7c:   saying it has no project" "not inside a git repo" "$OUT"
+wanteq "7c:   and the item is still in the inbox" "1" "$([ -f "$DC/pj-inbox/items/open/$V_NO.md" ] && echo 1)"
 mk_dotclaude
 mkrepo solo
 chmod 500 "$DC"

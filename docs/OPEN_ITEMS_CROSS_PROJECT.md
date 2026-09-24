@@ -127,6 +127,40 @@ then moves to its owner with its history, like a case 5 move.
 Rejected: no inbox, flag the item where filed (it sits in the wrong list); one inbox per group
 (an item with no group has nowhere to go).
 
+### 7. Who owns a file, and routing by that owner (W-20260924-A53, ruled 2026-09-24)
+
+Ruled by Gavin 2026-09-24, four questions answered in one pass, all four recommendations taken.
+Evidence: drawer:agent-shell-prompts/reports/switcher-audit/2-ownership.md (investigator 2).
+
+**7a. An item about a file belongs to the repo that holds the file's REAL path.** A stow link
+under `~/.claude` or `~/.local/bin` resolves to the dotfiles repo, so an item about
+`~/.claude/hooks/enforce-secret-probe.sh` is a dotfiles item. `add --for <path>` follows the
+symlink chain first. Before this it asked git about the link's own folder, which is dot-claude,
+and a conductor filed a dotfiles item into the inbox on that reading.
+
+**7b. Work on LifeOS-owned files files in the dotfiles drawer with `watch: dot-claude`.** The
+dot-claude drawer lives in lifeos-private and stays legacy (read-only) by design, so it can never
+take items. A repo declares this in its own committed `.claude/pj-homes` as
+`items-to: <project>`, the same shape and trust as `group:` in 5a: read from HEAD, and a working
+tree that differs from HEAD is refused. dot-claude carries `items-to: fifty-shades-of-dotfiles`.
+
+Rejected: a new writable drawer inside dot-claude (open-items changes for one repo); the inbox as
+their permanent home (every such item waits on Gavin forever).
+
+**7c. An agent may route an inbox item when the file's owner names the destination.**
+`open-items route <ID> --file <path>` resolves the owner by 7a and 7b and routes with no terminal,
+recording the file in the moved-from line. `route` without `--file`, or a file with no owner (no
+repo, or a legacy drawer with no `items-to:`), still needs Gavin at a terminal typing the ID back.
+This AMENDS D-20260923-A09 and P11 rule 4, on Gavin's 2026-09-24 principle that he is not a human
+in the loop for routine, recoverable choices: a route is a committed `git mv` with a moved-out
+notice.
+
+Rejected: keep the gate and also gate `add --for` (more terminal steps for Gavin, and the
+bypass it closes is a recoverable one); no change.
+
+**7d. Gavin's own tools live in dotfiles and are stowed; LifeOS upstream stays in dot-claude.**
+`stall_watch.sh` moved 2026-09-24 (D-20260920-A09); `flourish-check.py` follows.
+
 ## Unique IDs (W-20260923-A22)
 
 Gavin: "all IDs should be unique ... maybe not adding the project's name because a repo name or a
@@ -177,7 +211,7 @@ lines, and a terminal escape in a title reached the start card intact.
 | P8  | `reach: mandatory` only from the dotfiles project or a human at a terminal; at most 5 watch and 5 check lines; 5 card lines kept for the project's own items |
 | P9  | Project names compared as exact tokens; a name shared by two drawers is refused; `inbox` and `none` reserved                                                 |
 | P10 | A `repo:` line counts only if it matches the drawer's own key and resolves; back-fill never overwrites                                                       |
-| P11 | The moved-out notice is built; groups read from committed `pj-homes`; no move back to a former owner; `route` needs a human at a terminal                    |
+| P11 | The moved-out notice is built; groups read from committed `pj-homes`; no move back to a former owner; `route` needs a human at a terminal (unless 7c) |
 | P12 | Two-drawer writes lock in a fixed order, never overwrite a destination ID, commit both drawers together, and the inbox is committable                        |
 
 P3 changes WHEN a mandatory check is computed (by a runner after the card, read from cache),
@@ -198,3 +232,5 @@ since an agent's Bash has no terminal (measured by the reviewer).
   Watching / Checks owed / Mandatory / Moved out / Inbox, `seen`, `checks-run` started
   detached by `pj`, the card's own-title floor, `mandatory-checks-selftest`. What it does:
   [`OPEN_ITEMS.md`](OPEN_ITEMS.md), section "Other projects' items on your card".
+- Built 2026-09-24: section 7a to 7c, `add --for <path>` follows symlinks and `items-to:`, and
+  `route --file` (W-20260924-A53). open-items-selftest V11, 983 passed with every arm measured.
