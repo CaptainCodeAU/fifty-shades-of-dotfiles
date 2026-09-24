@@ -22,7 +22,7 @@ Rules first. Each points to the section holding its measurement.
 7. `agent prompt` could type the text and NOT submit it on 0.8.2. 21 of 21 landed on 0.9.1, but read the pane before retrying anyway; the fix is `pane send-keys <pane-id> enter` (Start and coordinate).
 8. A timeout or a stall does not prove the prompt was not delivered; read before resending or the agent gets it twice (Start and coordinate).
 9. `--no-focus` for background work (Safety).
-10. Only `pane layout`, `pane current`, `pane split` accept `--pane`/`--current`; every other `pane` subcommand takes a bare positional id (Use IDs).
+10. Only `pane layout`, `pane current`, `pane split` and `pane process-info` accept `--pane`/`--current`; every other `pane` subcommand takes a bare positional id (Use IDs). `process-info` REFUSES a positional id (exit 2, measured 2026-09-24).
 11. A registry entry is not a ready agent: a Claude session's entry appears before its name is applied (Name what you create).
 12. Close only what you opened, and clear the labels you set; a pane label outlives its process (Name what you create).
 13. A Claude worker starts ONLY through `pj-worker start <name>`, never `herdr agent start --kind claude` (plain `claude`: no pj rules, no pj hooks, no Mods flag; 4 of 4 workers ran that way on 2026-09-24). `pj-worker` splits the pane, launches `pj`, proves it with `pj-worker verify` (exit 0 pj, 1 not pj, 2 could not measure) and refuses past the caps: 4 live sessions per project, conductor and Gavin's own included, and 8 on the machine (D-20260924-A05, A08, A10). A `claude()` guard in herdr pane shells and the `enforce-pj-workers.sh` hook refuse the plain routes; a refused `agent start` shows only `timeout`. Before a launch, also count the account's ONLINE sessions on other machines with ListAgents and hold at 8 (ruling 11). Space first prompts a few seconds apart (a login-refresh race is suspected, W-20260923-A14).
@@ -104,7 +104,7 @@ Only three `pane` subcommands accept a target FLAG. For those, prefer `--current
 
 | subcommand                                                                               | how to name the target                                              |
 | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| `pane layout`, `pane current`, `pane split`                                              | `--current` or `--pane <id>` (`split` also accepts a positional id) |
+| `pane layout`, `pane current`, `pane split`, `pane process-info`                         | `--current` or `--pane <id>` (`split` also accepts a positional id; `process-info` refuses one, 2026-09-24) |
 | `pane read`, `pane run`, `pane send-keys`, `pane wait-output`, `pane close`, `pane move` | positional `<PANE_ID>` only                                         |
 
 So the calling pane is `herdr pane read "$HERDR_PANE_ID"`, NOT `herdr pane read --current`.
