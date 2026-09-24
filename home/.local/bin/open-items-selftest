@@ -2219,6 +2219,42 @@ wanteq "an inbox that cannot be created REFUSES (rc=2)" "2" "$RC"
 want   "  naming the path" "$DC/pj-inbox/items" "$OUT"
 unset CLAUDE_CODE_SESSION_NAME
 
+printf '\nV  IDs past 99 in a day: -A100 and on (W-20260924-A22)\n'
+# pj-id refused the 100th add of 2026-09-24. It now mints -A100; every open-items path that
+# reads an ID must take the third digit. The add arms fail on the 99-ceiling pj-id; the
+# read arms are guards (open-items already read [0-9A-Z]*), kept so a narrowing is caught.
+mk_dotclaude
+runw "$ZETA" init
+mkdir -p "$PJ_ID_CLAIMS_DIR"; for i in $(seq 1 99); do : > "$PJ_ID_CLAIMS_DIR/$(printf 'W-%s-A%02d' "$TODAY" "$i")"; done
+printf '## W-%s-A10 -- the tenth\n\nproject: zeta\nstatus: open\nkind: do\ndone-when: x\n' "$TODAY" > "$ZW/items/open/W-$TODAY-A10.md"
+git -C "$DC" add -A >/dev/null 2>&1; git -C "$DC" -c commit.gpgsign=false commit -q -m plant >/dev/null 2>&1
+runw "$ZETA" add "the hundredth" --done-when x
+wanteq "add with 99 claimed today succeeds (rc=0)" "0" "$RC"
+want   "  and mints -A100" "W-$TODAY-A100" "$OUT"
+wanteq "  the item file is W-...-A100.md" "1" "$([ -f "$ZW/items/open/W-$TODAY-A100.md" ] && echo 1)"
+wanteq "  and it is COMMITTED" "1" "$(committed "projects/$(key "$ZETA")/memory/WORK/items/open/W-$TODAY-A100.md" && echo 1)"
+runw "$ZETA" add "the hundred-and-first" --done-when x
+want   "the next add mints -A101" "W-$TODAY-A101" "$OUT"
+runw "$ZETA" show "W-$TODAY-A100"
+wanteq "show takes a 3-digit ID (rc=0)" "0" "$RC"; want "  and prints its block" "## W-$TODAY-A100 -- the hundredth" "$OUT"
+wantnot "  and not the -A10 its prefix matches" "the tenth" "$OUT"
+runw "$ZETA" get "W-$TODAY-A100" title
+want   "get title reads the 3-digit header" "the hundredth" "$OUT"
+runw "$ZETA"
+want   "the listing shows the -A100 title" "the hundredth" "$OUT"
+want   "  CONTROL: and the -A10 title" "the tenth" "$OUT"
+want   "OPEN.md carries the -A100 block" "## W-$TODAY-A100 -- the hundredth" "$(cat "$ZW/OPEN.md")"
+runw "$ZETA" --grep hundredth
+want   "--grep finds it by its 3-digit ID" "W-$TODAY-A100" "$OUT"
+runw "$ZETA" --session
+want   "--session (the start card's source) shows its title" "the hundredth" "$OUT"
+runw "$ZETA" show "W-$TODAY-10"
+wanteq "the pre-P8a bare -10 still resolves (rc=0)" "0" "$RC"; want "  to -A10" "the tenth" "$OUT"; wantnot "  and never to -A100" "the hundredth" "$OUT"
+runw "$ZETA" close "W-$TODAY-A100" "done"
+wanteq "close takes a 3-digit ID (rc=0)" "0" "$RC"
+wanteq "  the file moved to closed/" "1" "$([ -f "$ZW/items/closed/W-$TODAY-A100.md" ] && [ ! -e "$ZW/items/open/W-$TODAY-A100.md" ] && echo 1)"
+wanteq "  and -A10 is untouched in open/" "1" "$(grep -q '^status: open$' "$ZW/items/open/W-$TODAY-A10.md" && echo 1)"
+
 # THE EXIT CODE FOR "NOT MEASURED" IS ITSELF MEASURED: a child run of this very suite with
 # the pty forced off must exit 3, never 0. The child does not recurse.
 if [ -z "${OPEN_ITEMS_SELFTEST_CHILD:-}" ]; then
