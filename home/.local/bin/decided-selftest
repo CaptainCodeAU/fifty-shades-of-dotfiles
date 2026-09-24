@@ -272,5 +272,26 @@ done
 hrun "$R1" add "A55 control" --topic t --holds-in h --global --ruled-by gavin
 wantrc "control: add with --ruled-by valued (last) writes" 0 "$RC"
 
+# W-20260924-A22: past 99 in a day an ID gets a third digit (D-...-A100). Last in the file on
+# purpose: the blocks added here would move every denominator asserted above. The A10 block
+# CITES A100 in its body, so a lookup that fell through to word search (the old two-digit
+# gate) returns the wrong block and misses the one outside scope.
+echo "-- IDs past 99 in a day (W-20260924-A22)"
+printf '## D-19990106-A100 -- Hundredth thing\n\ntopic: hundredth\nstatus: standing\n' > "$W5/decisions/D-19990106-A100-hundredth.md"
+printf '## D-19990106-A10 -- Tenth thing\n\ntopic: tenth\nstatus: standing\nSuperseded by D-19990106-A100.\n' > "$G/D-19990106-A10-tenth.md"
+printf '## D-19990107-A100 -- Withdrawable hundredth\n\ntopic: wh\nstatus: standing\n' > "$G/D-19990107-A100-wh.md"
+git -C "$DC" add -A >/dev/null && git -C "$DC" commit -q -m "fixture: past 99"
+run "$R1" D-19990106-A100; wantrc "a 3-digit ID is looked up BY ID" 0 "$RC"; want "  finds its block" "## D-19990106-A100 -- Hundredth thing" "$OUT"
+want "  outside scope, as an ID lookup does" "OUTSIDE this project's default scope" "$OUT"; wantnot "  and not the block that only cites it" "Tenth thing" "$OUT"
+run "$R1" D-19990106-A10; wantrc "control: its 2-digit prefix -A10 finds -A10" 0 "$RC"; want "  the right one" "Tenth thing" "$OUT"; wantnot "  and not -A100" "Hundredth thing" "$OUT"
+run "$R1" D-19990106-10; wantrc "the pre-P8a bare -10 resolves" 0 "$RC"; want "  to -A10" "Tenth thing" "$OUT"; wantnot "  and never to -A100" "Hundredth thing" "$OUT"
+run "$R1" withdraw D-19990107-A100 "probe past 99"; wantrc "withdraw takes a 3-digit ID" 0 "$RC"
+want "  and the block is withdrawn" "status: withdrawn" "$(cat "$G/D-19990107-A100-wh.md")"
+mkdir -p "$T/claims99"; for c in $(seq 1 99); do : > "$T/claims99/$(printf 'D-%s-A%02d' "$TODAY" "$c")"; done
+OUT="$( (builtin cd "$R1" && PJ_ID_CLAIMS_DIR="$T/claims99" "$DECIDED" add "Past ninety-nine" --topic p99 --holds-in d --global) 2>&1)"; RC=$?
+wantrc "add with 99 already claimed today writes" 0 "$RC"; want "  as -A100" "D-$TODAY-A100" "$OUT"
+[ -f "$G/D-$TODAY-A100-past-ninety-nine.md" ] && ok "  the block file is -A100" || bad "  no -A100 file" "$(ls "$G" | grep "$TODAY")"
+run "$R1" "D-$TODAY-A100"; wantrc "  and is found by its ID" 0 "$RC"; want "  the right block" "Past ninety-nine" "$OUT"
+
 printf '\ndecided-selftest: %s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

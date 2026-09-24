@@ -3,8 +3,9 @@
 #
 # Usage:
 #   decided <words...>        every word must appear in one block (case-insensitive)
-#   decided D-YYYYMMDD-LNN    one block by ID (L = machine letter); found outside scope, says
-#                             where. The pre-2026-09-21 D-YYYYMMDD-NN resolves too.
+#   decided D-YYYYMMDD-LNN    one block by ID (L = machine letter; LNNN past 99 in a day);
+#                             found outside scope, says where. The pre-2026-09-21
+#                             D-YYYYMMDD-NN resolves too.
 #   decided --all <words...>  search every home on the machine, not just this project's
 #   decided --list [--all]    titles only, with the home each block sits in
 #   decided --status S        only blocks whose status is S (standing | deferred |
@@ -45,7 +46,7 @@ DOTCLAUDE="${OPEN_ITEMS_DOTCLAUDE:-$HOME/.claude}"
 
 die_refused(){ printf 'decided: REFUSED -- %s\n' "$1" >&2; exit 2; }
 loud(){ printf 'decided: %s\n' "$1" >&2; }
-usage(){ sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; }
+usage(){ sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; }
 today(){ date +%Y-%m-%d; }
 realdir(){ (cd "$1" 2>/dev/null && pwd -P); }
 tilde(){ printf '%s' "${1/#$HOME/\~}"; }
@@ -397,8 +398,9 @@ cmd_withdraw(){
   local idre=""
   case "$id" in
     D-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[A-Z][0-9][0-9]) ;;
+    D-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[A-Z][0-9][0-9][0-9]) ;;   # past 99 in a day (W-20260924-A22)
     D-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9]) idre="^## ${id%-*}-[A-Z]${id##*-} " ;;   # pre-P8a shape
-    *) die_refused "withdraw: give a D-YYYYMMDD-LNN id (the pre-2026-09-21 D-YYYYMMDD-NN is accepted too)" ;;
+    *) die_refused "withdraw: give a D-YYYYMMDD-LNN id (LNNN past 99 in a day; the pre-2026-09-21 D-YYYYMMDD-NN is accepted too)" ;;
   esac
   [ -n "$reason" ] || die_refused "withdraw: a reason is required"
   build_scope 0
@@ -484,6 +486,7 @@ case "${1:-}" in
 esac
 if [ $# -eq 1 ]; then case "$1" in
   D-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[A-Z][0-9][0-9]) run_search "$ALL" id "$1"; exit $? ;;
+  D-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[A-Z][0-9][0-9][0-9]) run_search "$ALL" id "$1"; exit $? ;;   # past 99 in a day (W-20260924-A22)
   D-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9])      run_search "$ALL" id "$1"; exit $? ;;   # pre-P8a shape, resolved in run_search
 esac; fi
 run_search "$ALL" words "$*"; exit $?
