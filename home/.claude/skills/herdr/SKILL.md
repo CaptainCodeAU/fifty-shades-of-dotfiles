@@ -252,7 +252,7 @@ herdr-pane-read reviewer -n 120
 herdr agent read reviewer --source recent-unwrapped --lines 120   # raw form: pass a GENEROUS --lines
 ```
 
-`agent get`'s result key is `agent` (singular): the status field is `.result.agent.agent_status`, not `.result.agent_status`. `agent list` differs: its `.result.agents[]` array has `agent_status` as a sibling of `agent`. A jq filter on the wrong (shallower) path returns `null` on every call, foreground and background alike; verify any status filter against a real `agent get` response first.
+`agent get`'s result key is `agent` (singular): the status field is `.result.agent.agent_status`, not `.result.agent_status`. `agent list` differs: its `.result.agents[]` array has `agent_status` as a sibling of `agent`, and `.agent` there is only the KIND string (`"claude"`), with NO agent name field (keys measured 2026-09-24: agent, agent_session, agent_status, cwd, focused, foreground_cwd, pane_id, revision, state_change_seq, tab_id, terminal_id, terminal_title, terminal_title_stripped, workspace_id); `.agent.name` errors. Match a worker by `pane_id`, or use `agent get <name>`. A jq filter on the wrong (shallower) path returns `null` on every call, foreground and background alike; verify any status filter against a real `agent get` response first.
 
 If a wait fails or returns `blocked`, inspect `agent get` and `agent read` before deciding what to send. A timeout or a stalled response does not prove the prompt was never delivered; a resend after a delivered prompt puts the text into the agent twice. Use the pane surface only when raw terminal control is intentional.
 
