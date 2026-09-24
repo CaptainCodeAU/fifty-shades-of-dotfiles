@@ -60,7 +60,9 @@ can always be checked against `claude --version`. Without the environment variab
 command does not exist at all — measured, with the control session reporting it absent.
 
 It costs nothing: a local command, 0 turns, 0 USD, under a second, and it runs inside the
-Bash sandbox (measured 2026-09-23 on 2.1.280, F8b). Kept copies per version live in
+Bash sandbox (measured 2026-09-23 on 2.1.280, F8b). **Since 2026-09-24 `pj` refuses inside the sandbox**: its
+session-cap check (4 per project, 8 on the machine; W-20260924-A79) needs `ps`, which the sandbox
+blocks, and a count it cannot take is a refusal, never a pass. Run this one with the sandbox off. Kept copies per version live in
 `~/.local/state/pj/mods-api/<version>/` with a `SHA256SUMS`, never in a repo; they are the
 only record of what changed in the mods API, because the public changelog does not say.
 
