@@ -44,7 +44,7 @@ Nothing here is ever deleted; a cleared record is MOVED to a `handled/` folder w
 | --------------------------------------- | ---------------------------------------- | -------------------------------- | ----------------------------------------------------------------------- |
 | `no-wrap-up/<key>`                      | pj-session-end                           | pj-start-card, pj-wrap, pj-health | unchanged (pj-session-end header)                                       |
 | `wrapped/<session-id>`                  | `pj-wrap done`                           | pj-session-end, pj-health         | `wrapped: <date>`, `project: <name>`, NEW `via: skill` or `via: bare`   |
-| `owed/<key>` (NEW, W5)                  | `pj-wrap done --owed "<command>"`        | pj-start-card, pj-health          | records separated by a blank line: `owed: <command>`, `session: <id>`, `since: YYYY-MM-DD HH:MM` |
+| `owed/<key>` (NEW, W5)                  | `pj-wrap done --owed "<command>"`        | pj-start-card, pj-health          | records separated by a blank line: `owed: <command>`, `project: <name>`, `session: <id>`, `since: YYYY-MM-DD HH:MM` |
 | `owed/handled/<key>.<YYYYmmdd-HHMMSS>`  | `pj-wrap owed --clear`, pj-session-end   | nobody (history)                  | the moved file                                                          |
 
 `<key>` is the project's encoded main-repo path, the same key `no-wrap-up/` uses.
