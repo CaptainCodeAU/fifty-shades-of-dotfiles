@@ -8,8 +8,10 @@
 # when it was safe to send the first prompt. This script needs none of that.
 #
 # Usage: herdr-quick-task <directory> "<task prompt>" [agent-kind]
-#   agent-kind defaults to "claude". Other kinds herdr supports: codex,
-#   gemini, cursor, and more -- see `herdr agent start` in the CLI reference.
+#   agent-kind defaults to "claude", which is started through `pj-worker start`
+#   (a real pj session, capped), never `herdr agent start --kind claude`. Other
+#   kinds herdr supports: codex, gemini, cursor, and more -- see `herdr agent
+#   start` in the CLI reference. Exit codes from pj-worker pass through.
 #
 # Creates a new background workspace at <directory>, starts the agent there,
 # sends it the task, waits for the agent to settle (idle, done, or blocked
@@ -35,9 +37,42 @@ fi
 base=$(basename "$dir" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | sed 's/-\+$//')
 name="${base:0:20}-$(date +%s | tail -c 6)"
 
+# CLAUDE GOES THROUGH pj-worker (ruling D-20260924-A05 #3, W-20260924-A59). `herdr agent
+# start --kind claude` runs plain `claude`: no pj rules, no pj hooks. pj-worker starts a real
+# pj session, proves it, and holds the session caps (4 per project, 8 per machine). The caps
+# are checked BEFORE a workspace is made, so a refusal leaves nothing behind.
+if [ "$kind" = claude ]; then
+  command -v pj-worker >/dev/null || { echo "herdr-quick-task: pj-worker is not on PATH; refusing to start a plain claude" >&2; exit 2; }
+  rc=0; pj-worker count --cwd "$dir" --check >/dev/null || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "herdr-quick-task: pj-worker refused (exit $rc, see above); nothing was created" >&2
+    exit "$rc"
+  fi
+fi
+
 echo "Creating a background workspace at $dir ..." >&2
 ws_json=$(herdr workspace create --cwd "$dir" --label "$base" --no-focus)
 pane_id=$(echo "$ws_json" | jq -r '.result.root_pane.pane_id')
+ws_id=$(echo "$ws_json" | jq -r '.result.workspace.workspace_id')
+
+if [ "$kind" = claude ]; then
+  echo "Starting a pj worker \"$name\" on pane $pane_id through pj-worker ..." >&2
+  rc=0; pj-worker start "$name" --pane "$pane_id" --cwd "$dir" >/dev/null || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    case "$rc" in
+      6|7|8) herdr workspace close "$ws_id" >/dev/null 2>&1 || true
+             echo "herdr-quick-task: pj-worker start refused (exit $rc) before typing anything; closed workspace $ws_id" >&2 ;;
+      *)     echo "herdr-quick-task: pj-worker start exited $rc; workspace $ws_id is left open for you to read" >&2 ;;
+    esac
+    exit "$rc"
+  fi
+  echo "Sending the task and waiting for it to settle ..." >&2
+  herdr agent prompt "$name" "$task" --wait >/dev/null
+  status=$(herdr agent get "$name" 2>/dev/null | jq -r '.result.agent.agent_status // "unknown"' || echo unknown)
+  echo "Agent \"$name\" is now: $status"
+  echo "Jump to it with: herdr agent focus $name"
+  exit 0
+fi
 
 # A pane's shell can take a moment to finish its own startup (motd, prompt
 # init, etc.) before herdr considers it "available". That's a different race

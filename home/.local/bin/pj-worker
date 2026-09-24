@@ -1,0 +1,830 @@
+#!/usr/bin/env zsh
+# pj-worker -- start a conductor's herdr worker as a REAL pj session, prove it, and hold the
+# session caps (W-20260924-A59; rulings D-20260924-A04, A05, A08, A10).
+#
+# WHY IT EXISTS. `herdr agent start <n> --kind claude` runs plain `claude`. Measured
+# 2026-09-24: four workers ran as `claude --permission-mode bypassPermissions`, so they loaded
+# ~/.claude/settings.json (the LifeOS hook set) instead of pj's settings.project.json, with no
+# --append-system-prompt-file (no OPERATIONAL_RULES, no pj-global RULES), no pj plugins and no
+# Mods flag. About 20 workers that day never saw the machine rules. This tool is the one route
+# a conductor uses to start a worker; the pane guard and the Bash hook are the floor under it.
+#
+#   pj-worker start <name> [--cwd DIR] [--pane ID] [--direction right|down]
+#                          [--profile P] [--probe] [--timeout SECONDS]
+#   pj-worker start <name> --cleanroom [--direction right|down] [--timeout SECONDS]
+#   pj-worker verify <name|pane-id> [--profile P]
+#   pj-worker list  [--cwd DIR]
+#   pj-worker count [--cwd DIR] [--json] [--check]
+#
+# EXIT CODES (one meaning each, so a caller never has to read text):
+#   0  done / pj proven / count measured
+#   1  verify: NOT a pj session, every failed property named. start: the session started
+#      but verify says it is not pj; it is LEFT RUNNING and named, close it yourself
+#   2  usage, or COULD NOT MEASURE (herdr or ps refused, sandbox on, not in herdr, no
+#      session id yet). Never read as "free" and never as "not pj"
+#   3  start: the new session sits at a dialog (trust, login); the dialog text is named
+#   4  start: a herdr action failed, or no agent appeared (the launch died or timed out)
+#   5  start: the pane never answered the ready handshake. Never retried into that pane:
+#      a half-typed line would be prefixed to the next command (rt1 H4)
+#   6  start, count --check: a cap is reached. Names the cap and every session counted.
+#      THERE IS NO OVERRIDE
+#   7  start: the name is taken (a live herdr agent, or a live session with that name)
+#   8  start --pane: preflight refused (the pane is busy or already hosts an agent)
+#   9  start --probe: the probe reply never arrived (login expired or prompt not delivered)
+#
+# THE CAPS, both checked by `start` before it touches anything, both printed by `list` and
+# `count`. One constant each, below, so the next change is one line.
+#   project  at most CAP_PROJECT live Claude sessions per project (D-20260924-A08), conductor
+#            and Gavin's own sessions included. A session counts for a project when
+#              (a) its cwd is inside the project: the same git COMMON dir, so every worktree
+#                  counts toward its repo; or
+#              (b) its herdr pane sits in a workspace that holds any pane whose cwd is inside
+#                  the project. This is how a clean-room worker (cwd under ~/.cache) and a
+#                  session Gavin opened elsewhere in the conductor's workspace still count.
+#                  Over-counting is the chosen error (false positives over misses); a session
+#                  can therefore count for two projects.
+#            A claude herdr agent in such a workspace with no live registry entry counts too.
+#   machine  at most CAP_MACHINE live Claude sessions on this machine (D-20260924-A10; A09's 6
+#            withdrawn). Read twice: the live registry and a same-uid `ps` count of `claude`
+#            processes. They should agree; when they do not, BOTH are printed and the LARGER
+#            is compared, and `start` (and `count --check`) refuses with exit 2, because only
+#            the registry can place a session in a project. `claude agents --json` is never
+#            read: it listed a background session with no process behind it (verified by the
+#            conductor, 2026-09-24).
+#   account  Gavin's ruling 10: the figure compared with CAP_MACHINE is the larger of the
+#            machine count and the account count (other machines, cloud). The account part
+#            is NOT MEASURED yet and is printed as exactly that, never as 0; until it is,
+#            the machine figure alone is compared.
+#   `start` is allowed only while project < CAP_PROJECT and machine < CAP_MACHINE.
+#
+# "LIVE" means: a registry file <config dir>/sessions/<pid>.json whose pid is running, whose
+# command is `claude`, and whose `procStart` equals `ps -o lstart=` for that pid (C locale,
+# UTC, which is the form Claude Code writes). A SIGKILLed claude leaves its file behind and a
+# reused pid would pass `kill -0` (rt2 H6). The registry is ~/.claude/sessions plus the
+# `sessions` dir of every pj profile's config_dir that is not a link to it (rt2 H5).
+#
+# WHAT VERIFY BINDS, all to the LIVE PROCESS, never to the session id alone (rt2 H2: a plain
+# `claude --resume <old pj id>` inherits the id's launch-log line and transcript):
+#   herdr agent get <t>          -> pane, agent kind claude, session id
+#   registry                     -> exactly one LIVE entry for that session id -> pid
+#   herdr pane process-info      -> that pid is a claude in that pane's foreground; its argv
+#                                   (exact array, argv0 claude, never element [0] of the list)
+#   the pid's environment        -> PJ_PROFILE and PJ_SESSION_NAME present (pj exports both;
+#                                   plain claude has neither); PJ_PROFILE is the expected one;
+#                                   CLAUDE_CONFIG_DIR as that profile sets it
+#   argv == pj --profile P --dry-run, EXACTLY, run in the worker's cwd with PJ_PROFILE,
+#                                   PJ_SESSION_NAME, CLAUDE_CODE_SESSION_NAME and
+#                                   CLAUDE_CONFIG_DIR unset. A scratch argv (no herdr skill),
+#                                   --safe-mode or a trailing --resume is a NAMED difference
+#   launches.log                 -> a `session=<id> ... result=ok` line NEWER than the pid's
+#                                   start (pj-launch-check writes it, only under pj's settings)
+# The dry run is pointed at a private prompt path (PJ_PROMPT_OUT) and mapped back to
+# `pj-prompt-file --path`, because a plain `pj --dry-run` REWRITES the real prompt cache and,
+# inside the sandbox, silently falls back to OPERATIONAL_RULES.md alone (both measured
+# 2026-09-24). A dry run that reports that fallback is "could not measure", never a diff.
+# The environment is read in memory only and never printed or written: `ps -E` shows every
+# variable, secrets included (an API key reached a fixture file that way, 2026-09-24).
+#
+# HOW START LAUNCHES (every rt1 hole):
+#   split by default. `--pane` only after a preflight: the pane's foreground group is its
+#   shell, no claude among its foreground processes, and `agent get` says agent_not_found;
+#   then ctrl+c to drop a stale line. One ready handshake: `clear; printf` of a per-call nonce
+#   that the typed line never contains, waited once. The name is computed with pj's own
+#   --dry-run-env in the worker's cwd with the pj variables unset (rt1 H5), and refused when a
+#   live session already holds it (rt1 H3: 2.1.281 does not rename a collision). Settle is on
+#   herdr's state, never on banner text: `blocked` is exit 3 with the dialog's text. herdr
+#   errors are keyed on .error.code, never on the exit code (rt1 H7: the sandbox's refusal
+#   exits 1 exactly like agent_not_found). Starts are serial (a lock), so two conductors cannot
+#   both see "3 live" and both start a 4th.
+#   The settle loop polls `agent get` once a second for at most --timeout: a bounded read
+#   loop, because the session id arrives after SessionStart and `agent wait` returns at once
+#   on an idle agent whose id is not there yet.
+#
+# --cleanroom (Gavin's ruling 2, 2026-09-24: the conductor's ONLY clean-room route). A fresh
+# empty cwd under ~/.cache/claude-clean/ (as `claude-clean` in .zshrc does), then
+# `command claude --setting-sources '' --strict-mcp-config`: no bypass flags, and `command`
+# because the pane guard refuses a bare `claude` in a herdr pane. It prints that the session
+# is UNGUARDED BY DESIGN, is never verified as pj, counts toward both caps, and is logged. Its
+# new folder raises the folder-trust dialog, and this tool never answers a dialog: expect
+# exit 3 with the dialog named.
+#
+# Every start is logged, one line, to ~/.local/state/pj/workers.log.
+#
+# Every herdr call and `ps` need the Bash sandbox OFF (the socket and ps are both denied).
+# Requires zsh, jq, git. Linux reads the pid's environment from /proc (ASSUMED, not measured).
+#
+# Seams, for the selftest only: PJW_HERDR, PJW_PS, PJW_PJ, PJW_PROMPT_FILE (commands);
+# PJW_SESSIONS_DIR, PJW_STATE_DIR, PJW_LAUNCH_LOG, PJW_CLEAN_ROOT, PJW_TMP (paths); PJW_UID;
+# PJW_POLL, PJW_PREFLIGHT_WAIT, PJW_ENDED_AFTER, PJW_VERIFY_RETRY, PJW_LOCK_WAIT (seconds); PJ_PROFILE_DIR (shared with pj).
+set -u
+emulate -L zsh
+setopt pipefail extended_glob
+zmodload zsh/datetime
+
+# THE CAPS. One constant each; the next change is one line.
+CAP_PROJECT=4   # D-20260924-A08: live Claude sessions per project, conductor and Gavin's own included
+CAP_MACHINE=8   # D-20260924-A10: live Claude sessions on this machine, all projects and profiles
+
+HERDR="${PJW_HERDR:-herdr}"
+PS_CMD="${PJW_PS:-ps}"
+PJ_CMD="${PJW_PJ:-pj}"
+PROMPT_FILE_CMD="${PJW_PROMPT_FILE:-pj-prompt-file}"
+SESS_DIR="${PJW_SESSIONS_DIR:-$HOME/.claude/sessions}"
+PROFILE_DIR="${PJ_PROFILE_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/pj/profiles}"
+STATE="${PJW_STATE_DIR:-${PJ_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/pj}}"
+LAUNCH_LOG="${PJW_LAUNCH_LOG:-$STATE/launches.log}"
+WORKERS_LOG="$STATE/workers.log"
+CLEAN_ROOT="${PJW_CLEAN_ROOT:-$HOME/.cache/claude-clean}"
+PJW_TMP="${PJW_TMP:-${TMPDIR:-/tmp}/pj-worker.$UID}"
+MY_UID="${PJW_UID:-$UID}"
+POLL="${PJW_POLL:-1}"
+PREFLIGHT_WAIT="${PJW_PREFLIGHT_WAIT:-15}"   # --pane: seconds to wait for a starting shell to go idle
+ENDED_AFTER="${PJW_ENDED_AFTER:-8}"         # settle: seconds before "back at a bare shell" means the launch died
+VERIFY_RETRY="${PJW_VERIFY_RETRY:-30}"      # start: seconds to retry a verify that could not measure yet
+LOCK_WAIT="${PJW_LOCK_WAIT:-180}"          # start: seconds to wait for another start to finish
+
+say() { print -u2 -r -- "pj-worker: $*"; }
+die() { local c="$1"; shift; say "$*"; exit "$c"; }
+need() { (( $2 >= 2 )) || die 2 "$1 needs a value"; }   # need <flag> $# -- before every shift 2
+
+# ------------------------------------------------------------------ herdr
+# hcall <args...> -- run herdr; HOUT holds its output, HKIND is ok | err (a JSON error with
+# .error.code in HCODE) | unmeasured (anything else: the sandbox's PermissionDenied, a syntax
+# error, no binary). The exit code is never the signal.
+hcall() {
+  HOUT="$("$HERDR" "$@" 2>&1)"; HRC=$?; HCODE=""
+  if (( HRC == 0 )); then HKIND=ok; return 0; fi
+  HCODE="$(print -r -- "$HOUT" | jq -r '.error.code // empty' 2>/dev/null)"
+  if [[ -n "$HCODE" ]]; then HKIND=err; else HKIND=unmeasured; fi
+  return 1
+}
+herdr_why() {
+  if [[ "$HOUT" == *PermissionDenied* || "$HOUT" == *"Operation not permitted"* ]]; then
+    print -r -- "herdr refused: the Bash sandbox blocks herdr's socket; run with the sandbox off"
+  else
+    print -r -- "herdr gave no JSON answer (rc $HRC): ${HOUT[1,200]}"
+  fi
+}
+
+# ------------------------------------------------------------------ processes
+# load_ps -- one process table: PS_COMM, PS_UID, PS_START (lstart, C locale, UTC, spaces
+# collapsed). rc 1 with PS_ERR when it cannot be read. Its own control: this process must be
+# in the table, or the table is not a process list.
+typeset -gA PS_COMM PS_UID PS_START
+typeset -ga EXTRA_SESS_DIRS   # verify: <CLAUDE_CONFIG_DIR>/sessions of each claude in the pane
+PS_ERR=""
+load_ps() {
+  local out line pid rest
+  PS_COMM=(); PS_UID=(); PS_START=()
+  out="$(PJW_ME=$$ "$PS_CMD" -A -o pid=,uid=,comm= 2>&1)" || { PS_ERR="ps refused (sandbox on? run with it off): ${out[1,160]}"; return 1; }
+  for line in ${(f)out}; do
+    local -a f; f=(${=line})
+    (( ${#f} >= 3 )) || continue
+    [[ "$f[1]" == <-> ]] || continue
+    PS_UID[$f[1]]="$f[2]"; PS_COMM[$f[1]]="${${f[3,-1]}:t}"
+  done
+  out="$(PJW_ME=$$ LC_ALL=C TZ=UTC "$PS_CMD" -A -o pid=,lstart= 2>&1)" || { PS_ERR="ps lstart refused: ${out[1,160]}"; return 1; }
+  for line in ${(f)out}; do
+    line="${line##[[:space:]]#}"; pid="${line%%[[:space:]]*}"; rest="${line#$pid}"
+    [[ "$pid" == <-> ]] || continue
+    PS_START[$pid]="${(j: :)${=rest}}"
+  done
+  [[ -n "${PS_COMM[$$]:-}" ]] || { PS_ERR="the ps table does not list this process ($$), so it is not a process list"; return 1; }
+  return 0
+}
+norm_ws() { print -r -- "${(j: :)${=1}}"; }
+
+# env_of <pid> -- E_PJ_PROFILE, E_PJ_SESSION_NAME, E_CCD, E_HPANE and E_HAS (assoc of names
+# present). Never printed, never written. rc 1 when the environment cannot be read; the
+# control is HOME, which every process here carries.
+typeset -gA E_HAS
+env_of() {
+  local pid="$1" out w k
+  local -a words
+  E_HAS=(); E_PJ_PROFILE=""; E_PJ_SESSION_NAME=""; E_CCD=""; E_HPANE=""
+  if [[ -z "${PJW_PS:-}" && -r "/proc/$pid/environ" ]]; then
+    out="$(<"/proc/$pid/environ")" 2>/dev/null || return 1
+    words=(${(0)out})
+  else
+    out="$("$PS_CMD" -E -ww -o command= -p "$pid" 2>/dev/null)" || return 1
+    words=(${(s: :)out})
+  fi
+  # the LAST occurrence wins: the environment follows argv in `ps -E`
+  for w in $words; do
+    [[ "$w" == [A-Za-z_][A-Za-z0-9_]#=* ]] || continue
+    k="${w%%=*}"
+    case "$k" in
+      HOME) E_HAS[HOME]=1 ;;
+      PJ_PROFILE) E_HAS[$k]=1; E_PJ_PROFILE="${w#*=}" ;;
+      PJ_SESSION_NAME) E_HAS[$k]=1; E_PJ_SESSION_NAME="${w#*=}" ;;
+      CLAUDE_CONFIG_DIR) E_HAS[$k]=1; E_CCD="${w#*=}" ;;
+      HERDR_PANE_ID) E_HAS[$k]=1; E_HPANE="${w#*=}" ;;
+    esac
+  done
+  [[ -n "${E_HAS[HOME]:-}" ]]
+}
+
+# ------------------------------------------------------------------ registry
+# sess_dirs -- ~/.claude/sessions plus each profile's config_dir/sessions that resolves
+# somewhere else (a profile whose link was never made registers there, rt2 H5).
+sess_dirs() {
+  local f v d
+  local -A seen
+  SESS_DIRS=()
+  for d in "$SESS_DIR" ${EXTRA_SESS_DIRS[@]}; do [[ -d "$d" && -z "${seen[${d:A}]:-}" ]] && { SESS_DIRS+=("$d"); seen[${d:A}]=1; }; done
+  for f in "$PROFILE_DIR"/*(N.); do
+    v="$(sed -n 's/^[[:space:]]*config_dir:[[:space:]]*//p' "$f" 2>/dev/null | head -1)"
+    v="${v%%[[:space:]]#}"; [[ -n "$v" ]] || continue
+    d="${v/#\~/$HOME}/sessions"
+    [[ -d "$d" && -z "${seen[${d:A}]:-}" ]] || continue
+    SESS_DIRS+=("$d"); seen[${d:A}]=1
+  done
+}
+
+# load_registry -- every entry in every registry dir. R_LIVE[pid]=1 for a live one; for a
+# dead one R_DEAD[pid] says why. Needs load_ps first.
+typeset -gA R_SID R_NAME R_CWD R_START R_LIVE R_DEAD
+typeset -ga R_PIDS
+load_registry() {
+  local d f j pid sid nm cwd st
+  R_SID=(); R_NAME=(); R_CWD=(); R_START=(); R_LIVE=(); R_DEAD=(); R_PIDS=()
+  sess_dirs
+  for d in $SESS_DIRS; do
+    for f in "$d"/*.json(N); do
+      j="$(jq -r '[(.pid|tostring), (.sessionId // ""), (.name // ""), (.cwd // ""), (.procStart // "")] | join("\u001f")' "$f" 2>/dev/null)" || continue
+      pid="${j%%$'\x1f'*}"; j="${j#*$'\x1f'}"
+      sid="${j%%$'\x1f'*}"; j="${j#*$'\x1f'}"
+      nm="${j%%$'\x1f'*}"; j="${j#*$'\x1f'}"
+      cwd="${j%%$'\x1f'*}"; st="${j#*$'\x1f'}"
+      [[ "$pid" == <-> ]] || continue
+      [[ -n "${R_SID[$pid]+x}" ]] && continue
+      R_PIDS+=("$pid"); R_SID[$pid]="$sid"; R_NAME[$pid]="$nm"; R_CWD[$pid]="$cwd"; R_START[$pid]="$st"
+      if [[ -z "${PS_COMM[$pid]:-}" ]]; then R_DEAD[$pid]="pid $pid is not running (stale file)"
+      elif [[ "${PS_COMM[$pid]}" != claude ]]; then R_DEAD[$pid]="pid $pid is '${PS_COMM[$pid]}', not claude (pid reused)"
+      elif [[ "${PS_UID[$pid]:-}" != "$MY_UID" ]]; then R_DEAD[$pid]="pid $pid belongs to uid ${PS_UID[$pid]:-?}"
+      elif [[ "$(norm_ws "$st")" != "${PS_START[$pid]:-}" ]]; then R_DEAD[$pid]="pid $pid started '${PS_START[$pid]:-?}', file says '$st' (pid reused)"
+      else R_LIVE[$pid]=1; fi
+    done
+  done
+}
+
+# ------------------------------------------------------------------ projects
+# proj_key <dir> -> REPLY: git:<common dir> inside a repo (so worktrees share their repo's
+# key), dir:<path> outside one.
+typeset -gA PKEY_CACHE
+proj_key() {
+  local d="$1" c
+  if [[ -n "${PKEY_CACHE[$d]:-}" ]]; then REPLY="${PKEY_CACHE[$d]}"; return 0; fi
+  if [[ -d "$d" ]] && c="$(git -C "$d" rev-parse --git-common-dir 2>/dev/null)" && [[ -n "$c" ]]; then
+    [[ "$c" == /* ]] || c="$d/$c"
+    REPLY="git:${c:A}"
+  else
+    REPLY="dir:${d:A}"
+  fi
+  PKEY_CACHE[$d]="$REPLY"
+}
+# in_project <dir> -- rc 0 when <dir> belongs to PROJ_KEY.
+in_project() {
+  [[ -n "$1" ]] || return 1
+  proj_key "$1"
+  if [[ "$PROJ_KEY" == git:* ]]; then [[ "$REPLY" == "$PROJ_KEY" ]]; return; fi
+  local root="${PROJ_KEY#dir:}" d="${1:A}"
+  [[ "$d" == "$root" || "$d" == "$root"/* ]]
+}
+# set_project <dir> -- PROJ_KEY, PROJ_ROOT, PROJ_BASE for the project <dir> belongs to.
+set_project() {
+  proj_key "$1"; PROJ_KEY="$REPLY"
+  if [[ "$PROJ_KEY" == git:* ]]; then
+    PROJ_ROOT="${PROJ_KEY#git:}"
+    [[ "${PROJ_ROOT:t}" == .git ]] && PROJ_ROOT="${PROJ_ROOT:h}"
+  else
+    PROJ_ROOT="${PROJ_KEY#dir:}"
+  fi
+  PROJ_BASE="${PROJ_ROOT:t}"
+}
+
+# ------------------------------------------------------------------ the count
+# do_count <dir> -- fills C_* for the project <dir> belongs to and for the machine.
+# rc 0 measured, 2 not (C_ERR). The herdr half (rule b) may be unmeasured on its own:
+# C_WS says so, and `start` refuses on it.
+typeset -ga C_PROJ C_MACH C_PSONLY
+typeset -gA C_WHY C_PANE
+do_count() {
+  local pid p ws cwd sid kind
+  C_PROJ=(); C_MACH=(); C_PSONLY=(); C_WHY=(); C_PANE=(); C_ERR=""; C_WS="measured"
+  set_project "$1"
+  load_ps || { C_ERR="$PS_ERR"; return 2; }
+  [[ -d "$SESS_DIR" ]] || { C_ERR="registry $SESS_DIR does not exist"; return 2; }
+  load_registry
+  for pid in $R_PIDS; do [[ -n "${R_LIVE[$pid]:-}" ]] && C_MACH+=("$pid"); done
+  for pid in ${(k)PS_COMM}; do
+    [[ "${PS_COMM[$pid]}" == claude && "${PS_UID[$pid]:-}" == "$MY_UID" ]] || continue
+    [[ -n "${R_LIVE[$pid]:-}" ]] || C_PSONLY+=("$pid")
+  done
+  C_MACH_REG=${#C_MACH}
+  C_MACH_PS=$(( ${#C_MACH} + ${#C_PSONLY} ))
+  # a live registry entry whose pid ps does not list as claude cannot exist (R_LIVE needs it)
+  (( C_MACH_PS > C_MACH_REG )) && C_MACHINE=$C_MACH_PS || C_MACHINE=$C_MACH_REG
+  # rule (a): cwd inside the project
+  for pid in $C_MACH; do in_project "${R_CWD[$pid]}" && { C_PROJ+=("$pid"); C_WHY[$pid]="cwd"; }; done
+  # rule (b): herdr panes in a workspace that holds the project
+  local -A proj_ws sid2pid
+  for pid in $C_MACH; do sid2pid[${R_SID[$pid]}]="$pid"; done
+  if ! hcall pane list; then
+    C_WS="unmeasured: $( [[ $HKIND == err ]] && print -r -- "herdr pane list: $HCODE" || herdr_why )"
+  else
+    local line
+    for line in ${(f)"$(print -r -- "$HOUT" | jq -r '.result.panes[] | [.workspace_id, (.cwd // ""), (.foreground_cwd // "")] | join("\u001f")' 2>/dev/null)"}; do
+      ws="${line%%$'\x1f'*}"; line="${line#*$'\x1f'}"
+      for cwd in "${line%%$'\x1f'*}" "${line#*$'\x1f'}"; do in_project "$cwd" && proj_ws[$ws]=1; done
+    done
+    if ! hcall agent list; then
+      C_WS="unmeasured: $( [[ $HKIND == err ]] && print -r -- "herdr agent list: $HCODE" || herdr_why )"
+    else
+      local n=0
+      for line in ${(f)"$(print -r -- "$HOUT" | jq -r '.result.agents[] | [(.agent // ""), .workspace_id, .pane_id, (.agent_session.value // "")] | join("\u001f")' 2>/dev/null)"}; do
+        kind="${line%%$'\x1f'*}"; line="${line#*$'\x1f'}"
+        ws="${line%%$'\x1f'*}"; line="${line#*$'\x1f'}"
+        p="${line%%$'\x1f'*}"; sid="${line#*$'\x1f'}"
+        [[ "$kind" == claude ]] || continue
+        pid="${sid2pid[$sid]:-}"
+        [[ -n "$pid" ]] && C_PANE[$pid]="$p"
+        [[ -n "${proj_ws[$ws]:-}" ]] || continue
+        if [[ -n "$pid" ]]; then
+          [[ -n "${C_WHY[$pid]:-}" ]] || { C_PROJ+=("$pid"); C_WHY[$pid]="workspace $ws"; }
+        else
+          n=$(( n + 1 )); C_PROJ+=("herdr:$p"); C_WHY[herdr:$p]="claude agent in workspace $ws with no live registry entry (session ${sid:-none yet})"
+        fi
+      done
+    fi
+  fi
+  C_PROJECT=${#C_PROJ}
+  # Two instruments that disagree mean one of them is wrong, and only the registry can place a
+  # session in a project, so a ps-only claude could be a session this project count missed.
+  C_DISAGREE=""
+  (( C_MACH_REG == C_MACH_PS )) || C_DISAGREE="the registry ($C_MACH_REG live) and ps ($C_MACH_PS claude processes) disagree (ps-only pids: ${(j:, :)C_PSONLY}); the project count cannot be trusted, so nothing is started"
+  C_REFUSE=""
+  (( C_PROJECT >= CAP_PROJECT )) && C_REFUSE="project cap: $C_PROJECT of $CAP_PROJECT live sessions in $PROJ_ROOT (D-20260924-A08)"
+  (( C_MACHINE >= CAP_MACHINE )) && C_REFUSE="${C_REFUSE:+$C_REFUSE; }machine cap: $C_MACHINE of $CAP_MACHINE live sessions on this machine (D-20260924-A10)"
+  return 0
+}
+sess_line() {  # <pid|herdr:pane> -> one human line
+  local k="$1"
+  if [[ "$k" == herdr:* ]]; then print -r -- "  (unregistered)  pane ${k#herdr:}  -- ${C_WHY[$k]}"; return; fi
+  print -r -- "  ${R_NAME[$k]:-<no name>}  pid $k  pane ${C_PANE[$k]:-?}  cwd ${R_CWD[$k]}${C_WHY[$k]:+  [counted by ${C_WHY[$k]}]}"
+}
+count_json() {
+  local k
+  local -a proj mach
+  for k in $C_PROJ; do
+    if [[ "$k" == herdr:* ]]; then proj+=("$(jq -cn --arg p "${k#herdr:}" --arg w "${C_WHY[$k]}" '{pid:null, name:null, pane:$p, cwd:null, why:$w}')")
+    else proj+=("$(jq -cn --arg pid "$k" --arg n "${R_NAME[$k]}" --arg p "${C_PANE[$k]:-}" --arg c "${R_CWD[$k]}" --arg w "${C_WHY[$k]}" '{pid:($pid|tonumber), name:$n, pane:(if $p=="" then null else $p end), cwd:$c, why:$w}')"); fi
+  done
+  for k in $C_MACH; do mach+=("$(jq -cn --arg pid "$k" --arg n "${R_NAME[$k]}" --arg c "${R_CWD[$k]}" '{pid:($pid|tonumber), name:$n, cwd:$c}')"); done
+  jq -cn --arg root "$PROJ_ROOT" --arg key "$PROJ_KEY" --argjson pc "$C_PROJECT" --argjson pcap "$CAP_PROJECT" \
+    --argjson mreg "$C_MACH_REG" --argjson mps "$C_MACH_PS" --argjson m "$C_MACHINE" --argjson mcap "$CAP_MACHINE" \
+    --argjson psonly "[${(j:,:)C_PSONLY}]" --arg ws "$C_WS" --arg refuse "$C_REFUSE" --arg dis "$C_DISAGREE" \
+    --argjson proj "[${(j:,:)proj}]" --argjson mach "[${(j:,:)mach}]" \
+    '{project:{root:$root, key:$key, count:$pc, cap:$pcap, sessions:$proj},
+      machine:{registry:$mreg, ps:$mps, count:$m, cap:$mcap, disagree:($mreg != $mps), ps_only_pids:$psonly, sessions:$mach},
+      account:{count:null, status:"not measured"},
+      compared_with_machine_cap:$m, workspace_rule:$ws,
+      start_allowed:($refuse == "" and $dis == "" and $ws == "measured"), refusal:(if $refuse == "" then null else $refuse end),
+      unmeasured:(if $dis != "" then $dis elif $ws != "measured" then "workspace rule " + $ws else null end)}'
+}
+count_human() {
+  local k
+  print -r -- "project $PROJ_ROOT: $C_PROJECT of $CAP_PROJECT live (cap D-20260924-A08)"
+  for k in $C_PROJ; do sess_line "$k"; done
+  print -r -- "machine: $C_MACHINE of $CAP_MACHINE live (registry $C_MACH_REG, ps $C_MACH_PS$( (( C_MACH_REG != C_MACH_PS )) && print -r -- ", DISAGREE: the larger is compared; ps-only pids ${(j:, :)C_PSONLY}"))"
+  print -r -- "account: not measured (the machine figure alone is compared until it is)"
+  print -r -- "workspace rule: $C_WS"
+}
+
+# ------------------------------------------------------------------ pj's own answers
+# pj_dry <profile> <dir> -- EXP_ARGV (JSON array), EXP_CCD / EXP_CCD_SET, EXP_NAME, exactly as
+# pj would launch in <dir>. rc 1 with DRY_ERR when pj cannot say.
+pj_dry() {
+  local p="$1" dir="$2" out real l
+  local -a lines errs argv
+  mkdir -p "$PJW_TMP" 2>/dev/null || { DRY_ERR="cannot create $PJW_TMP"; return 1; }
+  out="$( builtin cd -- "$dir" 2>/dev/null && env -u PJ_PROFILE -u PJ_SESSION_NAME -u CLAUDE_CODE_SESSION_NAME -u CLAUDE_CONFIG_DIR \
+      PJ_PROMPT_OUT="$PJW_TMP/prompt.md" "$PJ_CMD" --profile "$p" --dry-run 2>&1 )" \
+    || { DRY_ERR="pj --profile $p --dry-run failed in $dir: ${out[1,200]}"; return 1; }
+  lines=(${(f)out}); errs=(${(M)lines:#(pj|pj-prompt-file):*}); argv=(${lines:#(pj|pj-prompt-file):*})
+  if (( ${#errs} )); then DRY_ERR="pj's dry run could not build the real prompt: ${errs[1]}"; return 1; fi
+  (( ${#argv} )) && [[ "$argv[1]" == claude ]] || { DRY_ERR="pj --profile $p --dry-run printed no claude argv"; return 1; }
+  if (( ${argv[(Ie)$PJW_TMP/prompt.md]} )); then
+    real="$(env -u PJ_PROMPT_OUT "$PROMPT_FILE_CMD" --path 2>/dev/null)"
+    [[ -n "$real" ]] || { DRY_ERR="pj-prompt-file --path printed nothing"; return 1; }
+    argv[${argv[(ie)$PJW_TMP/prompt.md]}]="$real"
+  fi
+  EXP_ARGV="$(print -rl -- $argv | jq -Rn '[inputs]')"
+  out="$( builtin cd -- "$dir" 2>/dev/null && env -u PJ_PROFILE -u PJ_SESSION_NAME -u CLAUDE_CODE_SESSION_NAME -u CLAUDE_CONFIG_DIR \
+      PJ_PROMPT_OUT="$PJW_TMP/prompt.md" "$PJ_CMD" --profile "$p" --dry-run-env 2>/dev/null )" \
+    || { DRY_ERR="pj --profile $p --dry-run-env failed in $dir"; return 1; }
+  EXP_CCD=""; EXP_CCD_SET=""; EXP_NAME=""
+  for l in ${(f)out}; do
+    case "$l" in
+      CLAUDE_CONFIG_DIR=*) EXP_CCD="${l#*=}"; EXP_CCD_SET=1 ;;
+      CLAUDE_CODE_SESSION_NAME=*) EXP_NAME="${l#*=}" ;;
+    esac
+  done
+  [[ -n "$EXP_NAME" ]] || { DRY_ERR="pj --profile $p --dry-run-env named no session"; return 1; }
+  return 0
+}
+
+# to_epoch_utc <fmt> <string> -> epoch, reading the string as UTC
+to_epoch_utc() { ( TZ=UTC; strftime -r "$1" "$2" ) 2>/dev/null; }
+# log_ts_epoch <2026-09-24T17:43:06+1000> -> epoch
+log_ts_epoch() {
+  local ts="$1" base off e s h m
+  base="${ts[1,19]}"; off="${ts[20,-1]}"
+  e="$(to_epoch_utc '%Y-%m-%dT%H:%M:%S' "$base")" || return 1
+  [[ -n "$e" ]] || return 1
+  if [[ "$off" == [+-][0-9][0-9][0-9][0-9] ]]; then
+    s="${off[1]}"; h="${off[2,3]}"; m="${off[4,5]}"
+    (( e = e - (${s}1) * (10#$h * 3600 + 10#$m * 60) ))
+  elif [[ -z "$off" ]]; then
+    e="$(strftime -r '%Y-%m-%dT%H:%M:%S' "$base" 2>/dev/null)" || return 1
+  else
+    return 1
+  fi
+  print -r -- "$e"
+}
+
+# ------------------------------------------------------------------ verify
+# verify_run <name|pane> <expected profile> -- V_RC 0 pj / 1 not pj / 2 could not measure,
+# with V_FAIL, V_UNM and V_NOTE naming everything. Never exits.
+verify_run() {
+  local t="$1" want="${2:-default}" j pid argv_live k st e_start e_log l ts res
+  local -a pids lines ok_new ok_old other
+  V_FAIL=(); V_UNM=(); V_NOTE=(); V_PANE=""; V_SID=""; V_PID=""; V_NAME=""; V_CWD=""; V_PROFILE=""; V_RC=2
+  if ! hcall agent get "$t"; then
+    if [[ "$HKIND" == err && "$HCODE" == agent_not_found ]]; then V_FAIL+=("no live agent at '$t' (herdr: agent_not_found)"); V_RC=1
+    elif [[ "$HKIND" == err ]]; then V_UNM+=("herdr agent get $t: $HCODE")
+    else V_UNM+=("$(herdr_why)"); fi
+    return
+  fi
+  j="$(print -r -- "$HOUT" | jq -r '.result.agent | [(.pane_id // ""), (.agent // ""), (.agent_session.value // ""), (.agent_status // "")] | join("\u001f")' 2>/dev/null)" \
+    || { V_UNM+=("herdr agent get $t: unreadable JSON"); return; }
+  V_PANE="${j%%$'\x1f'*}"; j="${j#*$'\x1f'}"; k="${j%%$'\x1f'*}"; j="${j#*$'\x1f'}"; V_SID="${j%%$'\x1f'*}"
+  [[ -n "$V_PANE" ]] || { V_UNM+=("herdr agent get $t: no pane id"); return; }
+  if [[ "$k" != claude ]]; then V_FAIL+=("the agent at $V_PANE is '$k', not claude"); V_RC=1; return; fi
+  [[ -n "$V_SID" ]] || { V_UNM+=("$V_PANE: herdr has no Claude session id yet (it arrives after SessionStart)"); return; }
+  if ! hcall pane process-info --pane "$V_PANE"; then
+    V_UNM+=("process-info $V_PANE: $( [[ $HKIND == err ]] && print -r -- "$HCODE" || herdr_why )"); return
+  fi
+  local pinfo="$HOUT"
+  pids=(${(f)"$(print -r -- "$pinfo" | jq -r '.result.process_info.foreground_processes[] | select(((.argv0 // "") | split("/") | last) == "claude") | .pid' 2>/dev/null)"})
+  load_ps || { V_UNM+=("$PS_ERR"); return; }
+  # rt2 H5: a claude whose CLAUDE_CONFIG_DIR is in no profile registers under that dir
+  EXTRA_SESS_DIRS=()
+  for pid in $pids; do env_of "$pid" && [[ -n "${E_HAS[CLAUDE_CONFIG_DIR]:-}" ]] && EXTRA_SESS_DIRS+=("$E_CCD/sessions"); done
+  load_registry
+  local -a live dead
+  for pid in $R_PIDS; do
+    [[ "${R_SID[$pid]}" == "$V_SID" ]] || continue
+    if [[ -n "${R_LIVE[$pid]:-}" ]]; then live+=("$pid"); else dead+=("$pid"); fi
+  done
+  for pid in $dead; do V_NOTE+=("ignored a stale registry entry for this session: ${R_DEAD[$pid]}"); done
+  if (( ${#live} == 0 )); then V_UNM+=("no LIVE registry entry holds session $V_SID (searched ${(j:, :)SESS_DIRS})"); return; fi
+  if (( ${#live} > 1 )); then V_FAIL+=("${#live} live processes claim session $V_SID: pids ${(j:, :)live}"); V_RC=1; return; fi
+  V_PID="$live[1]"; V_NAME="${R_NAME[$V_PID]}"; V_CWD="${R_CWD[$V_PID]}"
+  if (( ! ${pids[(Ie)$V_PID]} )); then
+    V_FAIL+=("registry pid $V_PID is not the claude in pane $V_PANE's foreground (it runs: ${(j:, :)pids:-no claude})")
+    argv_live="$(jq -cn --arg c "$("$PS_CMD" -ww -o command= -p "$V_PID" 2>/dev/null)" '$c | split(" ")')"
+  else
+    argv_live="$(print -r -- "$pinfo" | jq -c --argjson p "$V_PID" '.result.process_info.foreground_processes[] | select(.pid == $p) | .argv' 2>/dev/null)"
+  fi
+  if ! env_of "$V_PID"; then V_UNM+=("could not read pid $V_PID's environment (no HOME in it, or ps refused)"); V_RC=2; return; fi
+  V_PROFILE="$E_PJ_PROFILE"
+  [[ -n "${E_HAS[PJ_PROFILE]:-}" ]] || V_FAIL+=("no PJ_PROFILE in pid $V_PID's environment: pj did not launch it")
+  [[ -n "${E_HAS[PJ_SESSION_NAME]:-}" ]] || V_FAIL+=("no PJ_SESSION_NAME in pid $V_PID's environment: pj did not launch it")
+  [[ -n "${E_HAS[PJ_PROFILE]:-}" && "$E_PJ_PROFILE" != "$want" ]] && V_FAIL+=("profile is '$E_PJ_PROFILE', expected '$want'")
+  [[ -n "${E_HAS[HERDR_PANE_ID]:-}" && "$E_HPANE" != "$V_PANE" ]] && V_NOTE+=("the process was started in pane $E_HPANE, now $V_PANE (moved?)")
+  [[ -n "${E_HAS[PJ_SESSION_NAME]:-}" && "$E_PJ_SESSION_NAME" != "$V_NAME" ]] && V_NOTE+=("registry name '$V_NAME' differs from PJ_SESSION_NAME '$E_PJ_SESSION_NAME'")
+  if ! pj_dry "$want" "${V_CWD:-$PWD}"; then V_UNM+=("$DRY_ERR")
+  else
+    if [[ -n "$EXP_CCD_SET" ]]; then
+      [[ -n "${E_HAS[CLAUDE_CONFIG_DIR]:-}" && "$E_CCD" == "$EXP_CCD" ]] || V_FAIL+=("CLAUDE_CONFIG_DIR is '${E_CCD:-unset}', profile $want sets '$EXP_CCD'")
+    else
+      [[ -z "${E_HAS[CLAUDE_CONFIG_DIR]:-}" ]] || V_FAIL+=("CLAUDE_CONFIG_DIR is '$E_CCD', profile $want leaves it unset")
+    fi
+    if [[ -z "$argv_live" ]]; then V_UNM+=("could not read pid $V_PID's argv")
+    elif [[ "$(jq -n --argjson a "$argv_live" --argjson b "$EXP_ARGV" '$a == $b')" != true ]]; then
+      local miss extra
+      miss="$(jq -rn --argjson a "$argv_live" --argjson b "$EXP_ARGV" '($b - $a) | join(" ")')"
+      extra="$(jq -rn --argjson a "$argv_live" --argjson b "$EXP_ARGV" '($a - $b) | join(" ")')"
+      [[ -n "$miss" ]] && V_FAIL+=("argv lacks what pj --profile $want passes: $miss")
+      [[ -n "$extra" ]] && V_FAIL+=("argv carries what pj --profile $want does not: $extra")
+      [[ -z "$miss$extra" ]] && V_FAIL+=("argv has pj's words in a different order or count: $(jq -rn --argjson a "$argv_live" '$a | join(" ")')")
+    fi
+    local pf
+    pf="$(jq -rn --argjson a "${argv_live:-[]}" '($a | index("--append-system-prompt-file")) as $i | if $i then $a[$i+1] else "" end')"
+    [[ -z "$pf" || -s "$pf" ]] || V_FAIL+=("the system-prompt file $pf is missing or empty")
+  fi
+  # the launch log, bound to THIS process: a result=ok line newer than its start
+  if [[ ! -r "$LAUNCH_LOG" ]]; then V_UNM+=("no launch log at $LAUNCH_LOG (pj-launch-check not stowed here?)")
+  else
+    e_start="$(to_epoch_utc '%a %b %d %H:%M:%S %Y' "$(norm_ws "${R_START[$V_PID]}")")"
+    if [[ -z "$e_start" ]]; then V_UNM+=("cannot read pid $V_PID's start '${R_START[$V_PID]}'")
+    else
+      lines=("${(@f)$(command grep -F " session=$V_SID " "$LAUNCH_LOG" 2>/dev/null)}"); lines=(${lines:#})
+      for l in $lines; do
+        ts="${l#ts=}"; ts="${ts%% *}"; res="${l##* result=}"
+        e_log="$(log_ts_epoch "$ts")" || e_log=""
+        if [[ "$res" == ok ]]; then
+          if [[ -n "$e_log" ]] && (( e_log >= e_start )); then ok_new+=("$ts"); else ok_old+=("$ts"); fi
+        elif [[ -n "$e_log" ]] && (( e_log >= e_start )); then other+=("$res")
+        fi
+      done
+      if (( ${#ok_new} )); then :
+      elif (( ${#other} )); then V_FAIL+=("launch log for session $V_SID says result=${other[-1]}")
+      elif (( ${#ok_old} )); then V_FAIL+=("launch log's result=ok for session $V_SID (${ok_old[-1]}) predates this process: a --resume of an old pj session?")
+      else V_UNM+=("no launch-log line for session $V_SID yet (SessionStart still running?)"); fi
+    fi
+  fi
+  if (( ${#V_FAIL} )); then V_RC=1; elif (( ${#V_UNM} )); then V_RC=2; else V_RC=0; fi
+}
+verify_json() {
+  jq -cn --arg t "$1" --argjson rc "$V_RC" --arg pane "$V_PANE" --arg sid "$V_SID" --arg pid "$V_PID" \
+    --arg name "$V_NAME" --arg prof "$V_PROFILE" --arg want "$2" \
+    --argjson f "$(print -rl -- $V_FAIL | jq -Rn '[inputs]')" --argjson u "$(print -rl -- $V_UNM | jq -Rn '[inputs]')" \
+    --argjson n "$(print -rl -- $V_NOTE | jq -Rn '[inputs]')" \
+    '{target:$t, pj:($rc == 0), result:(["pass","fail","unmeasured"][$rc]), pane_id:$pane, session_id:$sid,
+      pid:(if $pid == "" then null else ($pid|tonumber) end), session_name:$name, profile:$prof, expected_profile:$want,
+      failures:($f|map(select(. != ""))), unmeasured:($u|map(select(. != ""))), notes:($n|map(select(. != "")))}'
+}
+cmd_verify() {
+  local t="" want=default
+  while (( $# )); do
+    case "$1" in
+      --profile) need "$1" $#; want="$2"; shift 2 ;;
+      -*) die 2 "verify: unknown option $1" ;;
+      *) [[ -z "$t" ]] || die 2 "verify: one target only"; t="$1"; shift ;;
+    esac
+  done
+  [[ -n "$t" ]] || die 2 "usage: pj-worker verify <name|pane-id> [--profile P]"
+  verify_run "$t" "$want"
+  verify_json "$t" "$want"
+  local x
+  case "$V_RC" in
+    1) for x in $V_FAIL; do say "NOT pj: $x"; done ;;
+    2) for x in $V_UNM; do say "could not measure: $x"; done ;;
+  esac
+  exit "$V_RC"
+}
+
+# ------------------------------------------------------------------ start
+log_worker() {  # key=value pairs -> one line in workers.log; a write failure costs one stderr line
+  mkdir -p "$STATE" 2>/dev/null
+  print -r -- "ts=$(strftime '%Y-%m-%dT%H:%M:%S%z' $EPOCHSECONDS) $* by=${PJ_SESSION_NAME:-${CLAUDE_CODE_SESSION_NAME:-?}}" >> "$WORKERS_LOG" 2>/dev/null \
+    || say "could not append to $WORKERS_LOG"
+}
+pane_tail() {  # <pane> -> the last few non-blank visible lines, joined
+  "$HERDR" pane read "$1" --source visible --lines 40 2>/dev/null | command grep -v '^[[:space:]]*$' | tail -12 | tr '\n' '|' | cut -c1-900
+}
+# settle_why <pane> <default reason> -- name the cause when the screen shows one. The pane
+# guard (a59-paneguard, de9e67b) prints `claude: REFUSED in a herdr pane` and herdr then only
+# ever says timeout, so a refusal must never be reported as a slow start.
+settle_why() {
+  local tail; tail="$(pane_tail "$1")"
+  if [[ "$tail" == *"claude: REFUSED in a herdr pane"* ]]; then
+    print -r -- "REFUSED BY THE PANE GUARD (claude: REFUSED in a herdr pane), not a slow start. Pane: $tail"
+  else
+    print -r -- "$2. Pane: $tail"
+  fi
+}
+launch_ended() {  # <pane> -- rc 0 when the pane is back at a bare shell with no claude
+  hcall pane process-info --pane "$1" || return 1
+  print -r -- "$HOUT" | jq -e '.result.process_info | (.foreground_process_group_id == .shell_pid) and ([.foreground_processes[] | ((.argv0 // "") | split("/") | last)] | index("claude") | not)' >/dev/null 2>&1
+}
+
+cmd_start() {
+  local name="" cwd="" pane="" dir=right profile=default probe="" timeout=90 clean="" hs_ms=30000
+  while (( $# )); do
+    case "$1" in
+      --cwd) need "$1" $#; cwd="$2"; shift 2 ;;
+      --pane) need "$1" $#; pane="$2"; shift 2 ;;
+      --direction) need "$1" $#; dir="$2"; shift 2 ;;
+      --profile) need "$1" $#; profile="$2"; shift 2 ;;
+      --probe) probe=1; shift ;;
+      --timeout) need "$1" $#; timeout="$2"; shift 2 ;;
+      --cleanroom) clean=1; shift ;;
+      -*) die 2 "start: unknown option $1" ;;
+      *) [[ -z "$name" ]] || die 2 "start: one name only (got '$name' and '$1')"; name="$1"; shift ;;
+    esac
+  done
+  [[ "$name" =~ '^[a-z][a-z0-9_-]{0,31}$' ]] || die 2 "start: name '$name' must match [a-z][a-z0-9_-]{0,31} (herdr's rule)"
+  [[ "$dir" == (right|down) ]] || die 2 "start: --direction is right or down"
+  [[ "$timeout" == <1-> ]] || die 2 "start: --timeout is whole seconds"
+  if [[ -n "$clean" ]]; then
+    [[ -z "$cwd" && -z "$pane" && "$profile" == default && -z "$probe" ]] \
+      || die 2 "start --cleanroom takes no --cwd, --pane, --profile or --probe (it makes its own empty folder, and nothing about it is pj)"
+  fi
+  [[ "${HERDR_ENV:-}" == 1 && -n "${HERDR_PANE_ID:-}" ]] || die 2 "not inside a herdr pane (HERDR_ENV/HERDR_PANE_ID unset); refusing to drive the user's session from outside"
+  whence -p jq >/dev/null || die 2 "jq is required"
+  [[ -z "$clean" ]] && { [[ -n "$cwd" ]] || cwd="$PWD"; [[ -d "$cwd" ]] || die 2 "start: --cwd $cwd is not a directory"; cwd="${cwd:A}"; }
+
+  # serial: hold the lock from the count until the new session is in the registry
+  mkdir -p "$STATE" 2>/dev/null
+  if zmodload zsh/system 2>/dev/null; then
+    local lockfd
+    : >> "$STATE/pj-worker.lock" 2>/dev/null   # zsystem flock opens it for writing and will not create it
+    zsystem flock -t "$LOCK_WAIT" -f lockfd "$STATE/pj-worker.lock" || die 2 "could not take $STATE/pj-worker.lock within ${LOCK_WAIT}s (another start running, or the state dir is not writable)"
+  else
+    say "zsh/system missing: starts are not serialised on this machine"
+  fi
+
+  # 1. the caps, before anything is touched
+  local kind=pj counted="$cwd"
+  [[ -n "$clean" ]] && { kind=cleanroom; counted="$PWD"; }   # a clean room counts for the CALLER's project
+  do_count "$counted"; local rc=$?
+  (( rc == 0 )) || die 2 "cannot count live sessions: $C_ERR"
+  [[ "$C_WS" == measured ]] || die 2 "cannot count this project's herdr panes ($C_WS)"
+  [[ -z "$C_DISAGREE" ]] || die 2 "$C_DISAGREE"
+  if [[ -n "$C_REFUSE" ]]; then
+    say "REFUSED, $C_REFUSE. No override. Close a session first. Counted:"
+    count_human >&2
+    log_worker "kind=$kind name=$name result=refused-cap"
+    exit 6
+  fi
+
+  # 2. names: the herdr agent name, then the Claude session name
+  if hcall agent get "$name"; then die 7 "an agent named '$name' is already live ($(print -r -- "$HOUT" | jq -r '.result.agent.pane_id' 2>/dev/null))"
+  elif [[ "$HKIND" != err ]]; then die 2 "cannot check the name '$name': $(herdr_why)"
+  elif [[ "$HCODE" != agent_not_found ]]; then die 2 "cannot check the name '$name': herdr said $HCODE"; fi
+  local sname
+  if [[ -n "$clean" ]]; then
+    sname="${PROJ_BASE}-cleanroom-${name}"
+  else
+    pj_dry "$profile" "$cwd" || die 2 "cannot compute the session name: $DRY_ERR"
+    sname="$EXP_NAME"; [[ "$sname" == *-"$name" ]] || sname="${sname}-${name}"
+  fi
+  local pid
+  for pid in $C_MACH; do
+    [[ "${R_NAME[$pid]}" == "$sname" ]] && die 7 "a live session is already named '$sname' (pid $pid, cwd ${R_CWD[$pid]}); Claude Code does not rename a collision, so SendMessage could not tell them apart"
+  done
+
+  # 3. the pane
+  if [[ -n "$clean" ]]; then
+    cwd="$CLEAN_ROOT/$(strftime '%Y%m%d-%H%M%S' $EPOCHSECONDS)-$name"
+    [[ ! -e "$cwd" ]] || die 2 "clean-room folder $cwd already exists"
+    mkdir -p "$cwd" || die 2 "cannot create $cwd"
+  fi
+  local out
+  if [[ -n "$pane" ]]; then
+    # preflight (rt1 H1): an idle shell, no claude in the foreground, no agent in the pane
+    hcall agent get "$pane"
+    if [[ "$HKIND" == ok ]]; then die 8 "--pane $pane already hosts an agent ($(print -r -- "$HOUT" | jq -r '.result.agent | "\(.agent) \(.name // "unnamed") \(.agent_status)"' 2>/dev/null)); refusing to type into it"
+    elif [[ "$HKIND" != err ]]; then die 2 "preflight on $pane: $(herdr_why)"
+    elif [[ "$HCODE" != agent_not_found ]]; then die 8 "preflight on $pane: herdr said $HCODE"; fi
+    local deadline=$(( EPOCHSECONDS + PREFLIGHT_WAIT )) shape=""
+    while :; do
+      hcall pane process-info --pane "$pane" || die 8 "preflight on $pane: $( [[ $HKIND == err ]] && print -r -- "$HCODE" || herdr_why )"
+      shape="$(print -r -- "$HOUT" | jq -r '.result.process_info | if ([.foreground_processes[] | ((.argv0 // "") | split("/") | last)] | index("claude")) then "claude" elif .foreground_process_group_id == .shell_pid then "idle" else "busy:" + ([.foreground_processes[].argv0] | join(",")) end' 2>/dev/null)"
+      [[ "$shape" == idle ]] && break
+      [[ "$shape" == claude ]] && die 8 "--pane $pane has claude in its foreground; refusing to type into it"
+      (( EPOCHSECONDS >= deadline )) && die 8 "--pane $pane is not at an idle shell after ${PREFLIGHT_WAIT}s (${shape:-unreadable}); refusing to type into it"
+      sleep "$POLL"
+    done
+    hcall pane send-keys "$pane" ctrl+c || die 4 "send-keys ctrl+c to $pane failed: $HCODE"
+  else
+    hcall pane split --pane "$HERDR_PANE_ID" --direction "$dir" --cwd "$cwd" --no-focus \
+      || die 4 "pane split failed: $( [[ $HKIND == err ]] && print -r -- "$HCODE" || herdr_why )"
+    pane="$(print -r -- "$HOUT" | jq -r '.result.pane.pane_id // empty' 2>/dev/null)"
+    [[ -n "$pane" ]] || die 4 "pane split returned no pane id"
+  fi
+  say "pane $pane"
+
+  # 4. one ready handshake; the sentinel is joined only in the OUTPUT, never in the typed line
+  local nonce="${EPOCHSECONDS}x$$x$RANDOM"
+  hcall pane run "$pane" " clear; printf '%s-%s\n' PJWREADY $nonce" || die 4 "pane run into $pane failed: ${HCODE:-$(herdr_why)}"
+  if ! hcall pane wait-output "$pane" --match "PJWREADY-$nonce" --timeout "$hs_ms"; then
+    [[ "$HKIND" == err && "$HCODE" == timeout ]] && { log_worker "kind=$kind name=$name pane=$pane result=handshake-timeout"; die 5 "$pane never answered the ready handshake in $(( hs_ms / 1000 ))s; not retrying into it (a half-typed line would prefix the next command). Pane: $(pane_tail "$pane")"; }
+    die 4 "wait-output on $pane: ${HCODE:-$(herdr_why)}"
+  fi
+
+  # 5. launch
+  local line
+  if [[ -n "$clean" ]]; then
+    line=" builtin cd -- ${(q)cwd} && CLAUDE_CODE_SESSION_NAME=${(q)sname} command claude --setting-sources '' --strict-mcp-config"
+    say "CLEAN ROOM in $cwd: this session is UNGUARDED BY DESIGN (no pj hooks, no rules, no settings, no MCP). It counts toward both caps."
+  else
+    line=" builtin cd -- ${(q)cwd} && CLAUDE_CODE_SESSION_NAME=${(q)sname} pj --profile ${(q)profile}"
+  fi
+  hcall pane run "$pane" "$line" || die 4 "pane run into $pane failed: ${HCODE:-$(herdr_why)}"
+
+  # 6. settle on herdr's state
+  local st sid t0=$EPOCHSECONDS deadline2=$(( EPOCHSECONDS + timeout ))
+  sid=""
+  while :; do
+    if hcall agent get "$pane"; then
+      st="$(print -r -- "$HOUT" | jq -r '.result.agent.agent_status // empty' 2>/dev/null)"
+      sid="$(print -r -- "$HOUT" | jq -r '.result.agent.agent_session.value // empty' 2>/dev/null)"
+      if [[ "$st" == blocked ]]; then
+        log_worker "kind=$kind name=$name pane=$pane result=blocked"
+        die 3 "$pane: the new session is at a dialog. It is left open for you (this tool answers no dialog). Screen: $(pane_tail "$pane")"
+      fi
+      [[ -n "$sid" && ( "$st" == idle || "$st" == done ) ]] && break
+    elif [[ "$HKIND" == err && "$HCODE" == agent_not_found ]]; then
+      (( EPOCHSECONDS - t0 >= ENDED_AFTER )) && launch_ended "$pane" && { log_worker "kind=$kind name=$name pane=$pane result=launch-died"; die 4 "$pane: $(settle_why "$pane" "the launch ended without a Claude")"; }
+    else
+      die 2 "cannot read $pane's agent state: $(herdr_why)"
+    fi
+    (( EPOCHSECONDS >= deadline2 )) && { log_worker "kind=$kind name=$name pane=$pane result=timeout"; die 4 "$pane: $(settle_why "$pane" "no settled agent with a session id after ${timeout}s")"; }
+    sleep "$POLL"
+  done
+  if ! hcall agent rename "$pane" "$name"; then
+    [[ "$HCODE" == agent_name_taken ]] && die 7 "$pane started, but the herdr name '$name' was taken meanwhile; the session is left running in $pane"
+    die 4 "$pane: agent rename to $name failed: ${HCODE:-$(herdr_why)}"
+  fi
+
+  # 7. prove it (pj only). Retry only on "could not measure", for a bounded time, never on 1.
+  local vrc=2 vdeadline=$(( EPOCHSECONDS + VERIFY_RETRY ))
+  if [[ -z "$clean" ]]; then
+    while :; do
+      verify_run "$pane" "$profile"; vrc=$V_RC
+      (( vrc != 2 || EPOCHSECONDS >= vdeadline )) && break
+      sleep "$POLL"
+    done
+  else
+    load_ps && load_registry
+    for pid in $R_PIDS; do [[ -n "${R_LIVE[$pid]:-}" && "${R_SID[$pid]}" == "$sid" ]] && { V_PID="$pid"; V_NAME="${R_NAME[$pid]}"; }; done
+    V_PANE="$pane"; V_SID="$sid"; V_PROFILE=""
+  fi
+  log_worker "kind=$kind name=$name session_name=${V_NAME:-$sname} pane=$pane pid=${V_PID:-?} sid=$sid cwd=$cwd project=$PROJ_ROOT result=$( [[ -n $clean ]] && print -r -- unguarded || print -r -- ${${(s: :):-pass fail unmeasured}[vrc + 1]} )"
+  if [[ -z "$clean" ]]; then
+    verify_json "$pane" "$profile" | jq -c --arg n "$name" '. + {name:$n}'
+    if (( vrc == 1 )); then local x; for x in $V_FAIL; do say "NOT pj: $x"; done; die 1 "the session in $pane is running but is NOT a pj session; close it (herdr pane close $pane)"; fi
+    if (( vrc == 2 )); then local x; for x in $V_UNM; do say "could not measure: $x"; done; die 2 "the session in $pane is running but could not be proven pj; run: pj-worker verify $name"; fi
+  else
+    jq -cn --arg n "$name" --arg p "$pane" --arg s "$sid" --arg pid "${V_PID:-}" --arg sn "${V_NAME:-}" --arg c "$cwd" \
+      '{name:$n, pane_id:$p, session_id:$s, pid:(if $pid == "" then null else ($pid|tonumber) end), session_name:(if $sn == "" then null else $sn end), cwd:$c, pj:false, guarded:false, cleanroom:true}'
+  fi
+
+  # 8. optional probe: one turn, a reversed word that only a working reply can contain
+  if [[ -n "$probe" ]]; then
+    local word="pjw${nonce//x/}probe" rev
+    rev="${(j::)${(Oas::)word}}"
+    hcall agent prompt "$name" "Reply with only this text written backwards, nothing else: $word" \
+      || die 9 "probe: prompt to $name failed: ${HCODE:-$(herdr_why)}"
+    if ! hcall pane wait-output "$pane" --match "$rev" --timeout 120000; then
+      die 9 "probe: no reply from $name in 120s (login expired? prompt not delivered?). Pane: $(pane_tail "$pane")"
+    fi
+    say "probe: $name answered"
+  fi
+  exit 0
+}
+
+# ------------------------------------------------------------------ list / count
+parse_cwd_opt() {
+  CWD_OPT="$PWD"; JSON=""; CHECK=""
+  while (( $# )); do
+    case "$1" in
+      --cwd) need "$1" $#; CWD_OPT="$2"; shift 2 ;;
+      --json) JSON=1; shift ;;
+      --check) CHECK=1; shift ;;
+      *) die 2 "unknown option $1" ;;
+    esac
+  done
+  [[ -d "$CWD_OPT" ]] || die 2 "--cwd $CWD_OPT is not a directory"
+}
+cmd_count() {
+  parse_cwd_opt "$@"
+  do_count "${CWD_OPT:A}" || die 2 "cannot count: $C_ERR"
+  if [[ -n "$JSON" ]]; then count_json; else count_human; fi
+  if [[ -n "$CHECK" ]]; then
+    [[ "$C_WS" == measured ]] || die 2 "workspace rule $C_WS"
+    [[ -z "$C_DISAGREE" ]] || die 2 "$C_DISAGREE"
+    [[ -z "$C_REFUSE" ]] || { say "REFUSED, $C_REFUSE"; exit 6; }
+  fi
+  exit 0
+}
+cmd_list() {
+  parse_cwd_opt "$@"
+  [[ -z "$JSON$CHECK" ]] || die 2 "list takes only --cwd (use count --json)"
+  do_count "${CWD_OPT:A}" || die 2 "cannot count: $C_ERR"
+  count_human
+  # which of the project's sessions pj-worker started (by pid, from its own log)
+  local k by=""
+  if [[ -r "$WORKERS_LOG" ]]; then
+    for k in $C_PROJ; do
+      [[ "$k" == <-> ]] || continue
+      command grep -q " pid=$k sid=${R_SID[$k]} " "$WORKERS_LOG" 2>/dev/null && by="$by ${R_NAME[$k]}"
+    done
+  fi
+  print -r -- "started by pj-worker:${by:- none of these}"
+  exit 0
+}
+
+case "${1:-}" in
+  start) shift; cmd_start "$@" ;;
+  verify) shift; cmd_verify "$@" ;;
+  list) shift; cmd_list "$@" ;;
+  count) shift; cmd_count "$@" ;;
+  --selftest) exec "${SELF:h}/pj-worker-selftest" ;;
+  -h|--help) sed -n '2,/^set -u$/p' "${0:A}" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
+  *) die 2 "usage: pj-worker start <name> [...] | verify <name|pane-id> | list | count [--json] [--check] | --help" ;;
+esac
