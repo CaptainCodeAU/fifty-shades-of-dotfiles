@@ -495,6 +495,81 @@ else
   row PASS no-wrap-up "0 projects with unwrapped sessions (folder not created yet)"
 fi
 
+# M13b owed project wrap-ups and M13c bare wrap-ups (W5, W6; D-20260925-A01; the state contract
+# is docs/PJ_WRAP_UP.md). Both informational: a declined step 8 and a bare `pj-wrap done` are
+# allowed, so neither is ever a FAIL. Both state their denominator, and a folder or file that
+# cannot be read is NOT MEASURED, never a zero: an unreadable owed file is exactly the owe
+# this row exists to surface. Names are DATA from another session's write: anything outside
+# printable ASCII becomes ?, which also kills bidi marks, and each is cut to 40 characters.
+safe_name(){ printf '%s' "$1" | LC_ALL=C tr -c '[:print:]' '?' | cut -c1-40; }
+first_val(){ sed -n "s/^$2:[[:space:]]*//p" "$1" 2>/dev/null | head -1 | sed 's/[[:space:]]*$//'; }
+HOME_KEY="$(printf '%s' "$HOME" | sed 's#[/._]#-#g')"
+owed_name(){   # owed_name <owed-file>: project: line, else wrapped/<session>'s project:, else the key
+  local p s
+  p="$(first_val "$1" project)"
+  if [ -z "$p" ]; then
+    s="$(first_val "$1" session)"
+    case "$s" in ''|*[!A-Za-z0-9_-]*) ;; *) [ -r "$WRAPPED/$s" ] && p="$(first_val "$WRAPPED/$s" project)" ;; esac
+  fi
+  if [ -n "$p" ]; then safe_name "$p"
+  else s="$(basename "$1")"; case "$s" in "$HOME_KEY"*) s="~${s#"$HOME_KEY"}" ;; esac; printf 'key:%s' "$(safe_name "$s")"; fi
+}
+OWED_DIR="$PJ_STATE_DIR/owed"; WRAPPED="$PJ_STATE_DIR/wrapped"
+if [ ! -e "$OWED_DIR" ]; then
+  row PASS owed "0 projects owe a project wrap-up (folder not created yet)"
+elif [ ! -d "$OWED_DIR" ] || [ ! -r "$OWED_DIR" ] || [ ! -x "$OWED_DIR" ]; then
+  row NOTM owed "$(tilde "$OWED_DIR") unreadable, so the owing projects cannot be counted"
+else
+  of=0; ou=0; op=0; orec=0; onames=""; oshown=0
+  for f in "$OWED_DIR"/*; do
+    [ -f "$f" ] || continue                 # owed/handled/ is history, not an owe
+    of=$((of+1))
+    [ -r "$f" ] || { ou=$((ou+1)); continue; }
+    c="$(grep -c '^owed:' "$f" 2>/dev/null || true)"; c="${c:-0}"
+    [ "$c" -gt 0 ] || continue              # every record cleared from it: nothing owed
+    op=$((op+1)); orec=$((orec+c))
+    if [ "$oshown" -lt 5 ]; then onames="$onames${onames:+, }$(owed_name "$f") ($c)"; oshown=$((oshown+1)); fi
+  done
+  [ "$op" -gt "$oshown" ] && onames="$onames, +$((op-oshown)) more"
+  odet="$op project(s) owe a project wrap-up, $orec record(s)${onames:+: $onames}; of $of owed file(s)"
+  if [ "$ou" -gt 0 ]; then row NOTM owed "$ou of $of owed file(s) unreadable, so the count is short; readable: $odet"
+  else row PASS owed "$odet (informational; pj-wrap owed lists them in each project)"; fi
+fi
+
+BARE_DAYS=14
+if [ ! -e "$WRAPPED" ]; then
+  row PASS bare-wrap "0 wrapped/ markers (folder not created yet)"
+elif [ ! -d "$WRAPPED" ] || [ ! -r "$WRAPPED" ] || [ ! -x "$WRAPPED" ]; then
+  row NOTM bare-wrap "$(tilde "$WRAPPED") unreadable, so bare and skill wrap-ups cannot be counted"
+elif ! cutoff="$(date -v-${BARE_DAYS}d +%Y-%m-%d 2>/dev/null || date -d "$BARE_DAYS days ago" +%Y-%m-%d 2>/dev/null)" || [ -z "$cutoff" ]; then
+  row NOTM bare-wrap "cannot work out the date $BARE_DAYS days ago (date has neither -v nor -d)"
+else
+  wall=0; wu=0; wund=0; win=0; wb=0; ws=0; wn=0; wo=0; bp=""
+  for f in "$WRAPPED"/*; do
+    [ -f "$f" ] || continue
+    wall=$((wall+1))
+    [ -r "$f" ] || { wu=$((wu+1)); continue; }
+    d="$(first_val "$f" wrapped | cut -c1-10)"
+    case "$d" in [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;; *) wund=$((wund+1)); continue ;; esac
+    [[ "$d" < "$cutoff" ]] && continue      # ISO dates sort as strings
+    win=$((win+1))
+    case "$(first_val "$f" via)" in
+      bare)  wb=$((wb+1)); bp="$bp$(safe_name "$(first_val "$f" project)")"$'\n' ;;
+      skill) ws=$((ws+1)) ;;
+      '')    wn=$((wn+1)) ;;
+      *)     wo=$((wo+1)) ;;
+    esac
+  done
+  bdet="of $win marker(s) wrapped since $cutoff (last $BARE_DAYS days; $wall in the folder): $wb via bare, $ws via skill, $wn with no via line (written before via: existed)"
+  [ "$wo" -gt 0 ] && bdet="$bdet, $wo with an unknown via"
+  if [ "$wb" -gt 0 ]; then
+    bdet="$bdet; bare in: $(printf '%s' "$bp" | sed 's/^$/?/' | sort | uniq -c | sort -rn | head -5 | awk '{c=$1; $1=""; sub(/^ /, ""); printf "%s%s (%s)", (NR>1 ? ", " : ""), $0, c}')"
+  fi
+  if [ "$wu" -gt 0 ]; then row NOTM bare-wrap "$wu of $wall marker(s) unreadable, so the counts are short; readable: $bdet"
+  elif [ "$wund" -gt 0 ]; then row WARN bare-wrap "$wund of $wall marker(s) have no readable wrapped: date and are not counted; $bdet"
+  else row PASS bare-wrap "$bdet (informational; W6 allows a bare pj-wrap done)"; fi
+fi
+
 # M14 selftests
 stmiss=""; stn=0; stres=""; stfail=""
 run_selftest(){   # run_selftest <label> <cmd...>

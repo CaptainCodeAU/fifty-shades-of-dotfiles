@@ -329,6 +329,71 @@ check "R count 2 (-A10 and -A100)" 'has "$OUT" "^Open items: 2 open"'
 check "R the -A100 title shows" 'has "$OUT" "   · item A100 here$"'
 check "R CONTROL: the -A10 title shows" 'has "$OUT" "   · item A10 here$"'
 
+# --- S: owed project wrap-ups (W5, D-20260925-A01) ------------------------------------------
+# The fixture follows the state contract in docs/PJ_WRAP_UP.md (owed, project, session, since;
+# a blank line between records). pj-wrap done --owed is being built in parallel, so these are
+# typed from the contract, not captured from the writer: re-take them from pj-wrap once it lands.
+S="$ROOT/repo-s"; mkrepo "$S"; mkdrawer "$S" 2 0 >/dev/null; printf 'h\n' > "$S/OPENING-PROMPT.md"
+mkdir -p "$STATE/owed/handled"; OWED="$STATE/owed/$(encode_key "$S")"
+owedrec(){ printf 'owed: %s\nproject: repo-s\nsession: %s\nsince: %s\n' "$1" "$2" "$3"; }
+run "$S"
+check "S no owed file: no Owed line (the silent half)" '! has "$OUT" "^Owed:"'
+owedrec "/wrap-up" s1 "2026-09-25 14:02" > "$STATE/owed/handled/$(encode_key "$S").20260925-150000"
+run "$S"
+check "S a record moved to owed/handled/ is history: still silent" '! has "$OUT" "^Owed:"'
+owedrec "/wrap-up" s1 "2026-09-25 14:02" > "$OWED"
+run "$S"
+check "S one record: the exact line" 'has "$OUT" "^Owed: /wrap-up (since 2026-09-25, declined at wrap-up). Run it, or '"'"'pj-wrap owed --clear'"'"'.$"'
+check "S the Owed line sits directly above the Handoff line" '[ "$(printf "%s\n" "$OUT" | grep -A1 "^Owed:" | tail -1 | cut -c1-8)" = "Handoff:" ]'
+check "S rc 0, at most 20 lines, hello rule last" '[ "$RC" -eq 0 ] && [ "$(lines "$OUT")" -le 20 ] && [ "$(printf "%s\n" "$OUT" | tail -1 | cut -c1-11)" = "Hello rule:" ]'
+check "S the card did not move or change the owed file" '[ "$(owedrec "/wrap-up" s1 "2026-09-25 14:02")" = "$(cat "$OWED")" ]'
+{ owedrec "/wrap-up" s2 "2026-09-25 18:00"; echo; owedrec "/wrap-up" s1 "2026-09-24 09:00"; } > "$OWED"
+run "$S"
+check "S the same command twice: ONE line" '[ "$(printf "%s\n" "$OUT" | grep -c "^Owed:")" -eq 1 ]'
+check "S ... carrying the OLDEST since, whatever the record order" 'has "$OUT" "^Owed: /wrap-up (since 2026-09-24,"'
+{ owedrec "/wrap-up" s1 "2026-09-25 14:02"; printf '   \n'; owedrec "/release" s2 "2026-09-25 15:00"; } > "$OWED"
+run "$S"
+check "S a whitespace-only line still separates two records" 'has "$OUT" "^Owed: /wrap-up (since" && has "$OUT" "^Owed: /release (since"'
+{ for c in a b c d e; do owedrec "/cmd-$c" "s$c" "2026-09-2$(printf %s "$c" | tr a-e 1-5) 10:00"; echo; done; } > "$OWED"
+run "$S"
+check "S five commands: at most 3 Owed lines" '[ "$(printf "%s\n" "$OUT" | grep -c "^Owed:")" -eq 3 ]'
+check "S ... two named, in file order, then +3 more" 'has "$OUT" "^Owed: /cmd-a (" && has "$OUT" "^Owed: /cmd-b (" && ! has "$OUT" "^Owed: /cmd-c (" && has "$OUT" "^Owed: +3 more declined wrap-up command(s); '"'"'pj-wrap owed'"'"' lists them.$"'
+# P7: the command is data. An OSC 52 clipboard write, a bidi override and a zero-width space.
+printf 'owed: /wrap \033]52;c;aGk=\a up \342\200\256evil\342\200\213x\nsession: s1\nsince: 2026-09-25 14:02\n' > "$OWED"
+run "$S"
+check "S an escape in the command never reaches the card (no ESC byte)" '! printf "%s" "$OUT" | LC_ALL=C grep -q "$(printf "\033")"'
+check "S ... nor a bidi override or zero-width space" '! printf "%s" "$OUT" | LC_ALL=C grep -q "$(printf "\342\200\256")" && ! printf "%s" "$OUT" | LC_ALL=C grep -q "$(printf "\342\200\213")"'
+check "S CONTROL: the command IS on the card, neutralised" 'has "$OUT" "^Owed: /wrap ?]52;c;aGk=? up ?evil?x (since 2026-09-25,"'
+LONG="/$(printf 'x%.0s' $(seq 1 150))"; owedrec "$LONG" s1 "2026-09-25 14:02" > "$OWED"
+run "$S"
+check "S a 151-character command is capped at 80 characters plus ..." 'has "$OUT" "^Owed: /x\{79\}\.\.\. (since 2026-09-25,"'
+printf 'owed: /wrap-up\nsession: s1\nsince: yesterday-ish\n' > "$OWED"
+run "$S"
+check "S an unparsable since says so instead of printing it" 'has "$OUT" "^Owed: /wrap-up (since an unknown date, declined"'
+printf 'project: repo-s\nsession: s1\nsince: 2026-09-25 14:02\n\ngarbage\n' > "$OWED"
+run "$S"
+check "S a file with no owed: line is silent (nothing to run)" '! has "$OUT" "^Owed:"'
+owedrec "/wrap-up" s1 "2026-09-25 14:02" > "$OWED"; chmod 000 "$OWED"
+run "$S"
+if [ -r "$OWED" ]; then
+  echo "  skip S unreadable arm: chmod 000 did not take (running as root?) -- NOT MEASURED"
+else
+  check "S an unreadable owed file: ONE line saying so, no details" '[ "$(printf "%s\n" "$OUT" | grep -c "^Owed:")" -eq 1 ] && has "$OUT" "^Owed: a declined project wrap-up is recorded here but cannot be read"'
+fi
+chmod 644 "$OWED"; run "$S"
+check "S CONTROL: readable again, the real line returns" 'has "$OUT" "^Owed: /wrap-up (since 2026-09-25,"'
+# The key is the MAIN repo's, as no-wrap-up uses: a session in a linked worktree sees the owe.
+git -C "$S" commit -q --allow-empty -m init; git -C "$S" worktree add -q "$ROOT/repo-s-wt" -b wt 2>/dev/null
+run "$ROOT/repo-s-wt"
+check "S from a linked worktree the main repo's owed line shows" 'has "$OUT" "^Owed: /wrap-up (since 2026-09-25,"'
+# the cap squeeze: repo-b already fills 20 lines (K); three owed lines must come out of titles
+{ for c in a b c; do owedrec "/cmd-$c" "s$c" "2026-09-25 10:00"; echo; done; } > "$STATE/owed/$(encode_key "$B")"
+run "$B"
+check "S squeeze: still exactly 20 lines ($(lines "$OUT"))" '[ "$(lines "$OUT")" -eq 20 ]'
+check "S squeeze: all 3 Owed lines and every fixed line survived" '[ "$(printf "%s\n" "$OUT" | grep -c "^Owed: /cmd-")" -eq 3 ] && has "$OUT" "^WARNING" && has "$OUT" "^Handoff:" && [ "$(printf "%s\n" "$OUT" | grep -c "^Tracker: ")" -eq 5 ] && has "$OUT" "^Hello rule:"'
+check "S squeeze: titles gave up the lines, the count stayed exact" '[ "$(( $(ntitles "$OUT") + $(printf "%s\n" "$OUT" | sed -n "s/^   +\([0-9]*\) more$/\1/p") ))" -eq 14 ]'
+command mv "$STATE/owed/$(encode_key "$B")" "$ROOT/owed-b.gone"
+
 # --- N: --selftest dispatch and syntax ------------------------------------------------------
 check "N bash -n clean" 'bash -n "$CARD"'
 
