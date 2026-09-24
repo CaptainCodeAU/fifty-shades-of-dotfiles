@@ -1067,6 +1067,64 @@ alias cpr='__claude_launch claude "${_LIFEOS_SP[@]}" --dangerously-skip-permissi
 alias cd_='__claude_launch claude "${_LIFEOS_SP[@]}" --dangerously-skip-permissions --permission-mode plan --verbose --debug "api,hooks,mcp,statsig"'               # Debug (verbose logging)
 alias cskip='__claude_launch SKIP_SESSION_END_HOOK=1 claude "${_LIFEOS_SP[@]}" --dangerously-skip-permissions --permission-mode plan'  # Skip end hooks
 
+# claude() IS THE HERDR PANE GUARD (W-20260924-A59, ruled by Gavin 2026-09-24, D-20260924-A05).
+#
+# Outside herdr (HERDR_ENV unset) it is `command claude "$@"` and nothing else: there was no
+# claude function or alias before it (census 0, `whence -wa claude` said "command").
+#
+# Inside a herdr pane it refuses to start a Claude session that carries no system-prompt file,
+# i.e. one with none of pj's (or LifeOS's) rules. WHY A SHELL FUNCTION: herdr TYPES
+# `claude <args>` into the pane's interactive zsh for `agent start --kind claude`, `pane run`,
+# `send-text` and `send-keys` letter by letter, and every `c` alias ends in `claude` too
+# (measured with a decoy function, redteam-3 H1). A Bash PreToolUse hook sees none of the
+# indirect routes; the shell that finally runs the word sees them all.
+#
+# PASSES: HERDR_ENV unset; any argv holding --append-system-prompt-file or --system-prompt-file
+# (pj, cb, cr, ct, cpr, cd_, cskip); --help/-h/--version/-v anywhere; a first word that is a
+# `claude --help` subcommand (the selftest diffs this list against the real CLI); and
+# PJ_WORKERS_CONTROL=<item id> in the environment, the one named override, which is logged with
+# the pane id to hooks-security.log and REFUSED when that log cannot be written.
+# REFUSES: everything else, `claude -p` included (a headless session is still a session
+# without the rules, it counts against the per-project cap, and `pj -p` exists), and so `ci`.
+# Gavin typing a bare `claude` in a herdr pane is refused too (ruled): the guard cannot tell his
+# typing from herdr's, and the refusal names the escape.
+#
+# ESCAPES, by design: `command claude` (the human's, and pj-worker --cleanroom's route, as in
+# claude-clean above); `sudo claude` (already `command claude`); a path such as
+# ~/.local/bin/claude. Scripts never see this function: pj and lifeos run claude from PATH.
+# It DOES reach an agent's Bash tool, through Claude Code's shell snapshot, where HERDR_ENV is
+# set in every herdr-hosted session. Blind to: panes whose shell started before this landed,
+# a non-zsh pane shell, and a machine without these dotfiles. Proof: zsh-claude-paneguard-selftest.
+claude() {
+    [[ "${HERDR_ENV-}" == 1 ]] || { command claude "$@"; return; }
+    local __cpg_a MATCH MBEGIN MEND   # =~ below sets MATCH; keep it out of the caller's shell
+    local -a match mbegin mend
+    for __cpg_a in "$@"; do
+        case "$__cpg_a" in
+            --append-system-prompt-file|--append-system-prompt-file=*|--system-prompt-file|--system-prompt-file=*|-h|--help|-v|--version)
+                command claude "$@"; return ;;
+        esac
+    done
+    case "${1-}" in
+        agents|attach|auth|auto-mode|doctor|gateway|import|install|logs|mcp|plugin|plugins|project|respawn|rm|setup-token|stop|kill|ultrareview|update|upgrade)
+            command claude "$@"; return ;;
+    esac
+    local __cpg_log="${CONV_HOOK_LOG:-${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/hooks-security.log}"
+    local __cpg_argv="${${(j: :)${(q)@}}//$'\n'/ }" __cpg_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    if [[ -n "${PJ_WORKERS_CONTROL-}" ]]; then
+        if [[ "$PJ_WORKERS_CONTROL" =~ '^W-[0-9]{8}-[A-Za-z0-9]+$' ]] \
+            && { mkdir -p "${__cpg_log:h}" && print -r -- "[$__cpg_ts] OVERRIDE claude-paneguard \"PJ_WORKERS_CONTROL=$PJ_WORKERS_CONTROL pane=${HERDR_PANE_ID-unknown}\" \"claude $__cpg_argv\"" >> "$__cpg_log"; } 2>/dev/null; then
+            print -ru2 -- "claude: herdr pane guard OVERRIDDEN by PJ_WORKERS_CONTROL=$PJ_WORKERS_CONTROL (logged to $__cpg_log)"
+            command claude "$@"; return
+        fi
+        print -ru2 -- "claude: REFUSED in a herdr pane: PJ_WORKERS_CONTROL must be an item id like W-20260924-A59 and must log to $__cpg_log; one failed. Workers: pj-worker start. To run it anyway: command claude $__cpg_argv"
+        return 1
+    fi
+    { mkdir -p "${__cpg_log:h}" && print -r -- "[$__cpg_ts] BLOCKED claude-paneguard \"no system-prompt file pane=${HERDR_PANE_ID-unknown}\" \"claude $__cpg_argv\"" >> "$__cpg_log"; } 2>/dev/null
+    print -ru2 -- "claude: REFUSED in a herdr pane: this session would carry no pj rules. Workers: pj-worker start. Yourself: pj. To run it anyway: command claude $__cpg_argv"
+    return 1
+}
+
 # Intercepting the use of a command like 'sudo claude update' :P
 # pnpm branch: pnpm keeps global packages/config in the invoking user's home
 # dir, not root's -- sudo would silently operate on root's home instead

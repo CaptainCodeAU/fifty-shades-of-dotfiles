@@ -1,0 +1,238 @@
+#!/usr/bin/env zsh
+# zsh-claude-paneguard-selftest -- prove .zshrc's claude() herdr pane guard refuses and passes
+# what it claims to (W-20260924-A59, D-20260924-A05).
+#
+# THE SEAM is a real INTERACTIVE zsh (`zsh -i`) that sources the .zshrc under test, exactly as a
+# herdr pane does, so the `c` aliases (cb, ci, cr) expand and route through the function the way
+# herdr's typed `claude <args>` does. A STUB claude (a script that prints its argv) sits first on
+# PATH with ~/.local/bin removed, and the run ABORTS before any arm unless `whence -p claude` is
+# that stub: this test must never be able to start a real session (on 2026-09-24 a smoke test
+# whose stub had not been created ran the real binary; that is the failure this check prevents).
+# __claude_launch is replaced by `"$@"`, its last step, because the real one reads the Keychain
+# and starts an ssh-agent; the step under test is the word `claude` it runs at the end.
+#
+# Two shells: HERDR_ENV=1 (refuse and pass arms) and HERDR_ENV unset (everything passes). Plus a
+# drift arm: every subcommand the REAL `claude --help` lists must pass, so a new subcommand in a
+# Claude Code release turns this red instead of being refused in panes. The real binary is asked
+# for --help only, never started as a session.
+#
+# Usage:
+#   zsh-claude-paneguard-selftest            test <repo>/home/.zshrc   (exit 0 = all passed)
+#   zsh-claude-paneguard-selftest --mutants  also prove four one-fault mutants each turn arms red
+#   ZSHRC_UNDER_TEST=<file> zsh-claude-paneguard-selftest   test another copy (master's, say)
+# Exit: 0 all passed; 1 an arm failed; 2 REFUSED (stub not first, driver did not finish: NOT a pass).
+
+setopt no_unset pipe_fail 2>/dev/null
+
+_resolve_repo() {
+    local self="${(%):-%x}" dir target
+    dir="$(cd -- "$(dirname -- "$self")" && pwd)"
+    if [[ -L "$self" ]]; then
+        target="$(readlink "$self")"
+        [[ "$target" != /* ]] && target="$dir/$target"   # re-base a relative stow link
+        dir="$(cd -- "$(dirname -- "$target")" && pwd)"
+    fi
+    (cd -- "$dir/../../.." && pwd)                      # <repo>/home/.local/bin -> <repo>
+}
+REPO="$(_resolve_repo)"
+UNDER_TEST="${ZSHRC_UNDER_TEST:-$REPO/home/.zshrc}"
+MUTANTS=0
+for arg in "$@"; do
+    case "$arg" in
+        --mutants) MUTANTS=1 ;;
+        -h|--help) sed -n '2,26p' "$0"; exit 0 ;;
+        *) print -ru2 -- "zsh-claude-paneguard-selftest: unknown option: $arg"; exit 2 ;;
+    esac
+done
+[[ -f "$UNDER_TEST" ]] || { print -ru2 -- "REFUSED: no .zshrc at $UNDER_TEST"; exit 2; }
+
+T="$(mktemp -d "${TMPDIR:-/tmp}/zsh-cpg.XXXXXX")" || { print -ru2 -- "REFUSED: mktemp failed"; exit 2; }
+[[ -d "$T" ]] || { print -ru2 -- "REFUSED: no temp dir"; exit 2; }
+mkdir -p "$T/bin" "$T/zdot" || exit 2
+
+# The real CLI's subcommand list, read BEFORE the stub exists (help only, no session).
+REAL_CLAUDE="$(whence -p claude 2>/dev/null)"
+SUBCMDS=""
+if [[ -n "$REAL_CLAUDE" ]]; then
+    SUBCMDS="$("$REAL_CLAUDE" --help 2>/dev/null | awk '/^Commands:/{on=1;next} on && /^  [a-z]/{print $1}' | tr '|' '\n' | tr '\n' ' ')"
+fi
+
+print -r -- '#!/bin/sh
+printf "STUB_ARGV:"; for a in "$@"; do printf " [%s]" "$a"; done; echo' > "$T/bin/claude"
+print -r -- '#!/bin/zsh
+claude --from-a-script' > "$T/bin/cpg-script-caller"
+chmod +x "$T/bin/claude" "$T/bin/cpg-script-caller" || exit 2
+[[ -x "$T/bin/claude" ]] || { print -ru2 -- "REFUSED: stub claude was not created"; exit 2; }
+
+cat > "$T/zdot/.zshrc" <<'EOF'
+source "$CPG_UNDER_TEST"
+__claude_launch() { "$@"; }
+path=("$CPG_STUB_BIN" ${path:#$HOME/.local/bin})
+# The abort's own negative control (--mutants): drop the stub dir and the check below must fire.
+[[ "${CPG_DROP_STUB-}" == 1 ]] && path=(${path:#$CPG_STUB_BIN})
+if [[ "$(whence -p claude)" != "$CPG_STUB_BIN/claude" ]]; then
+    print -r -- "CPG_ABORT stub is not first on PATH: $(whence -p claude)"
+    exit 97
+fi
+EOF
+
+cat > "$T/driver.zsh" <<'EOF'
+n=0
+res()  { n=$(( n + 1 )); print -r -- "R $1 $2${3:+ :: $3}"; }
+run()  { OUT="$(eval "$1" 2>&1)"; RC=$?; }
+pass() { # $1 label $2 command [$3 argv that must appear]
+    run "$2"
+    if (( RC == 0 )) && [[ "$OUT" == *STUB_ARGV:* ]] && [[ -z "${3-}" || "$OUT" == *"$3"* ]]; then res PASS "$1"
+    else res FAIL "$1" "rc=$RC out=${OUT//$'\n'/ | }"; fi
+}
+refuse() { # $1 label $2 command
+    run "$2"
+    if (( RC == 1 )) && [[ "$OUT" != *STUB_ARGV:* ]] && [[ "$OUT" == *"pj-worker start"* ]] \
+       && [[ "$OUT" == *"command claude"* ]]; then res PASS "$1"
+    else res FAIL "$1" "rc=$RC out=${OUT//$'\n'/ | }"; fi
+}
+LP=$HOME/.claude/LIFEOS/LIFEOS_SYSTEM_PROMPT.md
+if [[ "$CPG_MODE" == herdr ]]; then
+    if [[ "$(whence -w claude)" == "claude: function" ]]; then res PASS "claude is a function in the pane shell"
+    else res FAIL "claude is a function in the pane shell" "$(whence -w claude)"; fi
+    # refuse: sessions without a prompt file
+    refuse "bare claude"                          'claude'
+    refuse "claude with a prompt"                 'claude "fix the bug"'
+    refuse "rt3 decoy argv from agent start"      'claude --probe-arg'
+    refuse "claude -p (headless is a session)"    'claude -p hi'
+    refuse "claude --print"                       'claude --print hi'
+    refuse "claude --resume"                      'claude --resume'
+    refuse "claude -c"                            'claude -c'
+    refuse "claude --bg"                          'claude --bg'
+    refuse "bypass flag alone"                    'claude --dangerously-skip-permissions'
+    refuse "--append-system-prompt TEXT is not a file" 'claude --append-system-prompt "be nice"'
+    refuse "--settings alone"                     'claude --settings /x.json'
+    refuse "alias ci (claude -p, no prompt file)" 'ci hi'
+    refuse "env prefix does not hide it"          'CLAUDE_CODE_SESSION_NAME=x claude'
+    refuse "override that is not an item id"     'PJ_WORKERS_CONTROL=yes claude'
+    refuse "override whose log cannot be written" 'PJ_WORKERS_CONTROL=W-20260924-A59 CONV_HOOK_LOG=/dev/null/cpg.log claude'
+    # pass: info and management
+    for a in --version -v --help -h; do pass "claude $a" "claude $a" "[$a]"; done
+    pass "claude -p --help (help wins)"           'claude -p --help'
+    pass "claude mcp list"                        'claude mcp list' '[mcp] [list]'
+    pass "claude agents --json (AgentRelay)"      'claude agents --json' '[agents]'
+    pass "claude doctor"                          'claude doctor'
+    pass "claude plugin list"                     'claude plugin list'
+    pass "claude update"                          'claude update'
+    pass "claude auth status"                     'claude auth status'
+    pass "claude install"                         'claude install'
+    pass "claude setup-token"                     'claude setup-token'
+    # drift: every subcommand the real CLI lists today
+    if [[ -n "${CPG_SUBCMDS// /}" ]]; then
+        for s in ${=CPG_SUBCMDS}; do pass "real --help subcommand: $s" "claude $s" "[$s]"; done
+    else res FAIL "real claude --help listed subcommands" "none read (no real claude on PATH?)"; fi
+    # pass: launches carrying a prompt file
+    pass "--append-system-prompt-file PATH"       'claude --append-system-prompt-file /p.md' '[--append-system-prompt-file] [/p.md]'
+    pass "--append-system-prompt-file=PATH"       'claude --append-system-prompt-file=/p.md'
+    pass "--system-prompt-file PATH"              'claude --system-prompt-file /p.md'
+    pass "alias cb (rt3 fixture argv)"            'cb --via-alias-cb' "[--append-system-prompt-file] [$LP] [--via-alias-cb]"
+    pass "alias cr"                               'cr' '[--resume]'
+    pass "alias cpr"                              'cpr 12' '[--from-pr] [12]'
+    # escapes and routes the function never sees
+    pass "command claude (the human escape)"      'command claude' 'STUB_ARGV:'
+    pass "sudo claude (its wrapper runs command claude)" 'sudo claude --x' '[--x]'
+    pass "a script calling claude (how pj and lifeos run it)" 'cpg-script-caller' '[--from-a-script]'
+    # the named override, and the log
+    : > "$CONV_HOOK_LOG"
+    pass "PJ_WORKERS_CONTROL=<item id> passes"    'PJ_WORKERS_CONTROL=W-20260924-A59 claude --ovr' '[--ovr]'
+    if grep -q 'OVERRIDE claude-paneguard "PJ_WORKERS_CONTROL=W-20260924-A59 pane=w0:cpg-selftest"' "$CONV_HOOK_LOG" 2>/dev/null
+    then res PASS "override logged with item id and pane id"
+    else res FAIL "override logged with item id and pane id" "log: $(cat "$CONV_HOOK_LOG" 2>&1)"; fi
+    run 'claude --logged-refusal'
+    if grep -q 'BLOCKED claude-paneguard "no system-prompt file pane=w0:cpg-selftest" "claude --logged-refusal"' "$CONV_HOOK_LOG" 2>/dev/null
+    then res PASS "refusal logged as BLOCKED with pane id"
+    else res FAIL "refusal logged as BLOCKED with pane id" "log: $(cat "$CONV_HOOK_LOG" 2>&1)"; fi
+else
+    # HERDR_ENV unset: exactly today's behaviour, every shape reaches claude
+    pass "unset: bare claude"                     'claude' 'STUB_ARGV:'
+    pass "unset: claude with a prompt"            'claude "fix the bug"' '[fix the bug]'
+    pass "unset: claude -p"                       'claude -p hi' '[-p] [hi]'
+    pass "unset: alias ci"                        'ci hi' '[--dangerously-skip-permissions] [-p] [hi]'
+    pass "unset: claude --version"                'claude --version'
+    pass "HERDR_ENV=0 is not herdr"               'HERDR_ENV=0 claude' 'STUB_ARGV:'
+    : > "$CONV_HOOK_LOG"; run 'claude --unset-probe'
+    if [[ ! -s "$CONV_HOOK_LOG" ]]; then res PASS "unset: nothing logged"
+    else res FAIL "unset: nothing logged" "$(cat "$CONV_HOOK_LOG")"; fi
+fi
+print -r -- "CPG_DRIVER_DONE $n"
+EOF
+
+# run_suite <zshrc> <quiet 0|1> -> sets S_PASS S_FAIL S_STATE (ok|refused)
+run_suite() {
+    local zrc="$1" quiet="$2" mode out rc done_n got l
+    local -a lines pl fl dl envset
+    S_PASS=0; S_FAIL=0; S_STATE=ok
+    for mode in herdr plain; do
+        envset=(env -u HERDR_ENV -u PJ_WORKERS_CONTROL -u CONV_HOOK_LOG
+            ZDOTDIR="$T/zdot" CPG_UNDER_TEST="$zrc" CPG_STUB_BIN="$T/bin" CPG_MODE="$mode"
+            CPG_SUBCMDS="$SUBCMDS" CONV_HOOK_LOG="$T/hooks-security.log" HERDR_PANE_ID=w0:cpg-selftest)
+        [[ "$mode" == herdr ]] && envset+=(HERDR_ENV=1)
+        out="$("${envset[@]}" zsh -i -c "source ${(q)T}/driver.zsh" 2>/dev/null)"; rc=$?
+        if [[ "$out" == *CPG_ABORT* ]] || (( rc == 97 )); then
+            print -ru2 -- "  REFUSED ($mode): stub claude is not first on PATH (rc=$rc)"; S_STATE=refused; continue
+        fi
+        lines=("${(@f)out}")
+        pl=(${(M)lines:#R PASS *}); fl=(${(M)lines:#R FAIL *}); dl=(${(M)lines:#CPG_DRIVER_DONE *})
+        done_n="${${dl[1]-}#CPG_DRIVER_DONE }"; got=$(( ${#pl} + ${#fl} ))
+        if [[ -z "$done_n" ]] || (( done_n == 0 || done_n != got )); then
+            print -ru2 -- "  REFUSED ($mode): driver did not finish (done='$done_n', results=$got)"; S_STATE=refused; continue
+        fi
+        S_PASS=$(( S_PASS + ${#pl} )); S_FAIL=$(( S_FAIL + ${#fl} ))
+        if (( ! quiet )); then
+            for l in "${pl[@]}" "${fl[@]}"; do
+                case "$l" in
+                    "R PASS "*) printf '  \033[32mPASS\033[0m  [%s] %s\n' "$mode" "${l#R PASS }" ;;
+                    *)          printf '  \033[31mFAIL\033[0m  [%s] %s\n' "$mode" "${l#R FAIL }" ;;
+                esac
+            done
+        fi
+    done
+}
+
+echo "claude() herdr pane guard selftest"
+echo "  under test: $UNDER_TEST"
+[[ -n "$SUBCMDS" ]] && echo "  real CLI: $REAL_CLAUDE ($(print -r -- ${=SUBCMDS} | wc -w | tr -d ' ') subcommand names)"
+echo
+run_suite "$UNDER_TEST" 0
+PASS=$S_PASS; FAIL=$S_FAIL; STATE=$S_STATE
+echo; echo "  $PASS passed, $FAIL failed"
+
+if (( MUTANTS )) && [[ "$STATE" == ok ]]; then
+    echo; echo "the stub check (the driver must never run when claude is not the stub):"
+    CPG_DROP_STUB=1 run_suite "$UNDER_TEST" 1 2>/dev/null
+    if [[ "$S_STATE" == refused ]] && (( S_PASS + S_FAIL == 0 )); then
+        PASS=$(( PASS + 1 )); printf '  \033[32mPASS\033[0m  stub dropped from PATH: both shells refused before any arm ran\n'
+    else
+        FAIL=$(( FAIL + 1 )); printf '  \033[31mFAIL\033[0m  stub dropped from PATH: state=%s, %d arms ran\n' "$S_STATE" $(( S_PASS + S_FAIL ))
+    fi
+    echo; echo "one-fault mutants (each must turn at least one arm red):"
+    local -A MUT=(
+        m1-no-refusal-line      '/REFUSED in a herdr pane/d'
+        m2-guard-always-off     's/\[\[ "\$\{HERDR_ENV-\}" == 1 \]\] \|\|/false ||/'
+        m3-any-override-accepted 's/\^W-\[0-9\]\{8\}-\[A-Za-z0-9\]\+\$/./'
+        m4-no-prompt-file-pass  's/--append-system-prompt-file\|--append-system-prompt-file=\*\|--system-prompt-file\|--system-prompt-file=\*\|//'
+    )
+    local m
+    for m in ${(ko)MUT}; do
+        sed -E "${MUT[$m]}" "$UNDER_TEST" > "$T/$m.zshrc"
+        if cmp -s "$UNDER_TEST" "$T/$m.zshrc"; then
+            FAIL=$(( FAIL + 1 )); printf '  \033[31mFAIL\033[0m  %s: the sed changed nothing (mutant not built)\n' "$m"; continue
+        fi
+        run_suite "$T/$m.zshrc" 1
+        if [[ "$S_STATE" == ok ]] && (( S_FAIL > 0 )); then
+            PASS=$(( PASS + 1 )); printf '  \033[32mPASS\033[0m  %s turns %d arm(s) red\n' "$m" "$S_FAIL"
+        else
+            FAIL=$(( FAIL + 1 )); printf '  \033[31mFAIL\033[0m  %s survived (state=%s, %d red)\n' "$m" "$S_STATE" "$S_FAIL"
+        fi
+    done
+    echo; echo "  $PASS passed, $FAIL failed (arms plus mutants)"
+fi
+
+rm -rf -- "$T" 2>/dev/null
+[[ "$STATE" == ok ]] || exit 2
+(( FAIL == 0 ))
