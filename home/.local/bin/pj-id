@@ -31,8 +31,17 @@
 # day (pj-wrap-selftest, 2026-09-20). Fix: the ID carries the machine that minted it.
 #
 # THE SHAPE  X-YYYYMMDD-LNN, e.g. W-20260921-A07, D-20260921-A07. L is the machine letter,
-# NN runs 01-99 per machine per day. Ruled by Gavin 2026-09-21 (P8a gate, Q1 and Q6); it
-# REPLACES the two-range scheme (`range: 01-49` / `50-99`) that P5.5 shipped.
+# NN runs 01-99 per machine per day, then 100-999 (W-20260924-A22). Ruled by Gavin
+# 2026-09-21 (P8a gate, Q1 and Q6); it REPLACES the two-range scheme (`range: 01-49` /
+# `50-99`) that P5.5 shipped.
+#
+# WHY 3 DIGITS AFTER 99 (W-20260924-A22, 2026-09-24). Machine A minted W-20260924-A99 and
+# every later add that day was refused: 95 real item files carried that date. The first 99
+# keep their two-digit form so every existing ID, fixture and citation is unchanged; only
+# the 100th and later get a third digit. The cost, accepted: a plain sort puts A100-A109
+# between A10 and A11, inside that one day only (the date still orders the days).
+# Every reader of the shape was audited for the width: `decided` accepts LNN and LNNN,
+# `open-items` and the hooks already read `[A-Z][0-9]+`.
 #
 # THE MACHINE FILE  ${PJ_MACHINE_FILE:-~/.config/pj/machine}, written by install.sh:
 #   name: mini
@@ -45,10 +54,10 @@
 # duplicated a number; a default LETTER would put another machine's name on this machine's
 # work, which is a wrong record rather than a clash. Refusing is the conservative arm.
 #
-# An exhausted letter (99 IDs of one kind in one day) REFUSES loudly; it never wraps and
+# An exhausted letter (999 IDs of one kind in one day) REFUSES loudly; it never wraps and
 # never borrows another machine's letter. `pj-wrap push` keeps its add/add collision stop as
 # the second line of defence. Measured before choosing 99: the most IDs ever claimed in one
-# day on this machine were 9 W and 11 D (2026-09-21 census).
+# day on this machine were 9 W and 11 D (2026-09-21 census); three days later it was 99 W.
 #
 # LEGACY IDs. The pre-P8a shape X-YYYYMMDD-NN is not minted any more. Every such ID was
 # renamed to the `A` form by the P8a migration, and `open-items` and `decided` still RESOLVE
@@ -96,15 +105,17 @@ read_machine(){
 # ONE pass per store (2026-09-23). It used to run a `find` per candidate NN per store, so
 # the cost grew with today's count times the stores: 311 ms over the five real stores.
 # Same matching as before: a folder holds <prefix>NN*.md anywhere beneath it, a file holds
-# a "## <prefix>NN " header.
+# a "## <prefix>NN " header. NN is two digits OR MORE (W-20260924-A22): the capture takes
+# every digit, because a two-digit capture read A100-slug.md as A10, which then looked
+# taken while A100 itself looked free.
 used_ids(){
   local p="$1" s; shift
   printf '|'
   for s in "$@"; do
     if [ -d "$s" ]; then
-      find "$s" -name "$p[0-9][0-9]*.md" -print 2>/dev/null | sed -n "s#.*/\($p[0-9][0-9]\)[^/]*\$#\1|#p" | tr -d '\n'
+      find "$s" -name "$p[0-9][0-9]*.md" -print 2>/dev/null | sed -n "s#.*/\($p[0-9][0-9][0-9]*\)[^0-9/][^/]*\$#\1|#p" | tr -d '\n'
     elif [ -f "$s" ]; then
-      grep -o "^## $p[0-9][0-9] " "$s" 2>/dev/null | sed "s/^## //; s/ \$/|/" | tr -d '\n'
+      grep -o "^## $p[0-9][0-9][0-9]* " "$s" 2>/dev/null | sed "s/^## //; s/ \$/|/" | tr -d '\n'
     fi
   done
 }
@@ -126,17 +137,22 @@ machine_letter(){
   esac
 }
 
+# The most IDs of one kind one machine may mint in a day. %02d keeps 01-99 two digits wide
+# and prints 100-999 as they are, so raising this is the whole width change on the minting
+# side (W-20260924-A22); the readers are what had to be audited.
+MAX_NN=999
+
 # first_free <kind> <day> <used> [skip-claims] -> the lowest free ID, or refuse when exhausted
 first_free(){
   local kind="$1" day="$2" used="$3" claims="${4:-}" n=1 id
-  while [ "$n" -le 99 ]; do
-    id="$(printf '%s-%s-%s%02d' "$kind" "$day" "$LETTER" "$n")"
+  while [ "$n" -le "$MAX_NN" ]; do
+    printf -v id '%s-%s-%s%02d' "$kind" "$day" "$LETTER" "$n"   # -v: no fork per candidate
     case "$used" in *"|$id|"*) ;; *)
       if [ -z "$claims" ] || [ ! -e "$claims/$id" ]; then printf '%s\n' "$id"; return 0; fi ;;
     esac
     n=$((n+1))
   done
-  refuse "no free $kind ID left for $day on machine $LETTER ($NAME): all 99 are taken. The letter is exhausted, not wrapped, and this machine never borrows another machine's letter. Wait for tomorrow, or close/rename some of today's."
+  refuse "no free $kind ID left for $day on machine $LETTER ($NAME): all $MAX_NN are taken. The letter is exhausted, not wrapped, and this machine never borrows another machine's letter. Wait for tomorrow, or close/rename some of today's."
 }
 
 cmd_claim(){
@@ -211,10 +227,11 @@ selftest(){
   [ "$out" = 0 ] && ok "the two letters share no ID (control: 99 + 99 = 198 distinct)" || fail "$out IDs overlap"
   out="$(ls "$tmp/one" "$tmp/two" | grep -c "^D-$day-[AB]")"; [ "$out" = 198 ] && ok "198 distinct IDs exist (positive arm)" || fail "expected 198 IDs, found $out"
 
-  # arm 5: an exhausted letter refuses loudly, rc 2, and does not borrow the other letter
+  # arm 5: past 99 the letter carries on (-A100, W-20260924-A22) and never borrows the other
+  # letter. Exhaustion itself (999, rc 2) is proved in arm 11.
   out="$(PJ_MACHINE_FILE="$tmp/mA" "$0" next D "$tmp/one" 2>&1)"; rc=$?
-  [ "$rc" -eq 2 ] && case "$out" in *exhausted*) ok "exhausted letter refuses (rc=2, says exhausted)";; *) fail "rc=2 but message was '$out'";; esac || fail "exhausted letter gave rc=$rc: $out"
-  out="$(ls "$tmp/one" | grep -c "^D-$day-B" || true)"; [ "$out" = 0 ] && ok "the exhausted run claimed nothing under letter B (negative control)" || fail "$out B-IDs leaked into machine A's store"
+  [ "$rc" -eq 0 ] && [ "$out" = "D-$day-A100" ] && ok "letter A's 100th is -A100 on letter A (rc=0)" || fail "letter A past 99 gave rc=$rc: $out"
+  out="$(ls "$tmp/one" | grep -c "^D-$day-B" || true)"; [ "$out" = 0 ] && ok "letter A's store holds nothing under letter B (negative control)" || fail "$out B-IDs leaked into machine A's store"
 
   # arm 6: a store that is a single FILE with headers counts as taken; a folder searched recursively
   printf '## D-%s-A01 -- x\n' "$day" > "$tmp/legacy.md"; mkdir -p "$tmp/deep/open"; : > "$tmp/deep/open/D-$day-A02-slug.md"
@@ -253,6 +270,36 @@ selftest(){
   [ "$rc" -eq 0 ] && [ "$out" = "one A" ] && ok "the old 'range' verb still prints NAME LETTER" || fail "range gave rc=$rc '$out'"
   grep -q -i 'deprecated' "$tmp/dep" && ok "'range' announces it is deprecated on stderr" || fail "no deprecation notice: $(cat "$tmp/dep")"
 
+  # arm 11: PAST 99 (W-20260924-A22). Machine A hit -A99 on 2026-09-24 and every later add
+  # was refused. 01-99 keep two digits; the 100th is -A100. Each arm names the one fault it
+  # catches, and every one of them FAILS on the 99-ceiling pj-id. PJ_ID_UNDER_TEST points
+  # them (and the claim arms below) at another copy, to prove exactly that.
+  local U="${PJ_ID_UNDER_TEST:-$0}"
+  echo "  -- past-99 arms, testing $U"
+  fill(){ local d="$1" k="$2" i; mkdir -p "$d"; for i in $(seq "$3" "$4"); do : > "$d/$(printf '%s-%s-A%02d' "$k" "$day" "$i").md"; done; }
+  fill "$tmp/w99" W 1 99
+  out="$(PJ_MACHINE_FILE="$tmp/mA" "$U" next W "$tmp/w99" 2>&1)"; rc=$?
+  [ "$rc" -eq 0 ] && [ "$out" = "W-$day-A100" ] && ok "99 taken -> -A100, not a refusal (the ceiling)" || fail "99 taken gave rc=$rc '$out'"
+  fill "$tmp/w9" W 1 9
+  out="$(PJ_MACHINE_FILE="$tmp/mA" "$U" next W "$tmp/w9")"
+  [ "$out" = "W-$day-A10" ] && ok "01-09 taken -> -A10: two digits stay two digits (no -A010)" || fail "01-09 taken gave '$out'"
+  : > "$tmp/w9/W-$day-A100-a-slug.md"
+  out="$(PJ_MACHINE_FILE="$tmp/mA" "$U" next W "$tmp/w9")"
+  [ "$out" = "W-$day-A10" ] && ok "a -A100-slug file does not read as -A10 (folder capture takes every digit)" || fail "A100 in the store masked A10: got '$out'"
+  : > "$tmp/w99/W-$day-A100-a-slug.md"
+  out="$(PJ_MACHINE_FILE="$tmp/mA" "$U" next W "$tmp/w99")"
+  [ "$out" = "W-$day-A101" ] && ok "  and -A100 itself counts as taken -> -A101" || fail "A100 taken gave '$out'"
+  : > "$tmp/h100.md"; for i in $(seq 1 99); do printf '## D-%s-A%02d -- x\n' "$day" "$i" >> "$tmp/h100.md"; done
+  printf '## D-%s-A100 -- the hundredth\n' "$day" >> "$tmp/h100.md"
+  out="$(PJ_MACHINE_FILE="$tmp/mA" "$U" next D "$tmp/h100.md" 2>&1)"
+  [ "$out" = "D-$day-A101" ] && ok "a '## D-...-A100 ' header in a FILE store counts as taken -> -A101" || fail "header store gave '$out'"
+  fill "$tmp/w999" W 1 999
+  out="$(PJ_MACHINE_FILE="$tmp/mA" "$U" next W "$tmp/w999" 2>&1)"; rc=$?
+  [ "$rc" -eq 2 ] && case "$out" in *"all 999 are taken"*exhausted*) ok "999 taken REFUSES (rc=2), says 999 and exhausted: no -A1000, no wrap";; *) fail "rc 2 but said '$out'";; esac || fail "999 taken gave rc=$rc '$out'"
+  mkdir -p "$tmp/c99"; for i in $(seq 1 99); do : > "$tmp/c99/$(printf 'W-%s-A%02d' "$day" "$i")"; done
+  out="$(PJ_MACHINE_FILE="$tmp/mA" PJ_ID_CLAIMS_DIR="$tmp/c99" "$U" claim W "$tmp/s" 2>&1)"; rc=$?
+  [ "$rc" -eq 0 ] && [ "$out" = "W-$day-A100" ] && [ -e "$tmp/c99/W-$day-A100" ] && ok "claim with 99 CLAIMED (no store holds them) -> -A100, and claims it" || fail "claim past 99 gave rc=$rc '$out'"
+
   # ---- claim (D-20260923-A10, W-20260923-A22 / A25). Every arm below sets PJ_ID_CLAIMS_DIR
   # to a fixture; the guard arm proves the real folder is refused without it.
   # PJ_ID_UNDER_TEST points these arms at another pj-id (to prove they fail on master).
@@ -287,10 +334,11 @@ selftest(){
   # BOTH drawers, then a no-clobber create in its OWN drawer. With the claim: no duplicate.
   # CONTROL, claim off: duplicates, because no-clobber only guards one folder. A race arm
   # whose control also shows 0 proves nothing, so the control must show at least one.
-  race(){  # race <claim:on|off> -> number of trials where both drawers got the same ID
-    local mode="$1" d=0 k R who
+  race(){  # race <claim:on|off> [prefill] -> number of trials where both drawers got the same ID
+    local mode="$1" pre="${2:-0}" d=0 k R who
     for k in $(seq 1 "$trials"); do
-      R="$tmp/race-$mode-$k"; mkdir -p "$R/P/items/open" "$R/Q/items/open" "$R/claims"
+      R="$tmp/race-$mode$pre-$k"; mkdir -p "$R/P/items/open" "$R/Q/items/open" "$R/claims"
+      [ "$pre" -gt 0 ] && fill "$R/P/items/open" W 1 "$pre"
       for who in P Q; do
         ( while [ ! -e "$R/go" ]; do :; done
           while :; do
@@ -310,6 +358,16 @@ selftest(){
   else
     [ "$pb" -gt 0 ] && ok "race CONTROL, claim off: $pb of $trials races produced a duplicate (must be > 0)" || fail "race control showed 0 duplicates, so the race never happened; the arm below proves nothing"
     [ "$pa" -eq 0 ] && ok "race with the claim: 0 of $trials produced a duplicate" || fail "race with the claim: $pa of $trials duplicates"
+  fi
+  # THE SAME RACE ACROSS THE 99/100 BOUNDARY (W-20260924-A22). 98 already taken, so the two
+  # racers straddle -A99 and -A100: the claim must still keep them apart at the new width.
+  pa="$(race on 98)"; pb="$(race off 98)"
+  if [ "$pa" = INVALID ] || [ "$pb" = INVALID ]; then fail "race at 98: a racer produced no ID -- INVALID TRIAL (on=$pa off=$pb)"
+  else
+    [ "$pb" -gt 0 ] && ok "race at 98 CONTROL, claim off: $pb of $trials duplicates (must be > 0)" || fail "race at 98 control showed 0 duplicates; the arm below proves nothing"
+    [ "$pa" -eq 0 ] && ok "race at 98 with the claim: 0 of $trials duplicates across -A99/-A100" || fail "race at 98 with the claim: $pa of $trials duplicates"
+    out="$(cat "$tmp"/race-on98-*/P.id "$tmp"/race-on98-*/Q.id 2>/dev/null | tr -d '\n' | grep -o "W-$day-A100" | wc -l | tr -d ' ')"
+    [ "$out" = "$trials" ] && ok "  and every trial minted exactly one -A100 (the boundary really was crossed)" || fail "  -A100 minted $out times in $trials trials"
   fi
 
   if [ "$fails" -eq 0 ]; then echo "pj-id --selftest: all arms pass"; return 0; fi
