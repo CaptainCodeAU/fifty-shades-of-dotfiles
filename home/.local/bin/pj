@@ -1005,8 +1005,56 @@ selftest() {
   # 22f herdr ABSENT from PATH entirely: no call, no error, rc 0
   ( PATH="$root/emptybin"; HERDR_CALLS="$root/calls.22f"; export HERDR_CALLS; HERDR_ENV=1 HERDR_PANE_ID=w1:p1 label_herdr_pane "x-main" ) >/dev/null 2>&1; rc=$?
   [[ $rc -eq 0 && ! -e "$root/calls.22f" ]] && ok "22f no herdr on PATH -> silent no-op, rc 0" || bad "22f herdr absent" "rc=$rc $( [[ -e $root/calls.22f ]] && cat "$root/calls.22f")"
+  # ---- 24: the session caps (W-20260924-A79) ---------------------------------------
+  local fk="$root/fakepjw"; mkdir -p "$fk"
+  for c in 0 6 2; do printf '#!/bin/sh\necho "fake count $*"\nexit %s\n' "$c" > "$fk/rc$c"; chmod +x "$fk/rc$c"; done
+  out="$(PJ_WORKER_BIN="$fk/rc0" "$SELF" --check-caps 2>&1)"; rc=$?
+  [[ $rc -eq 0 ]] && ok "24a under both caps: allowed (rc 0)" || bad "24a allowed" "rc=$rc $out"
+  out="$(PJ_WORKER_BIN="$fk/rc6" "$SELF" --check-caps 2>&1)"; rc=$?
+  [[ $rc -eq 6 && "$out" == *"REFUSED: a session cap is reached"* && "$out" == *"fake count count --check --cwd"* ]] && ok "24b a cap reached: REFUSED rc 6, the counter's own lines shown" || bad "24b cap refusal" "rc=$rc $out"
+  out="$(PJ_WORKER_BIN="$fk/rc2" "$SELF" --check-caps 2>&1)"; rc=$?
+  [[ $rc -eq 2 && "$out" == *"could not count"* ]] && ok "24c could not measure: REFUSED rc 2, never read as under the cap" || bad "24c unmeasured" "rc=$rc $out"
+  out="$(PJ_WORKER_BIN="$root/none-such" "$SELF" --check-caps 2>&1)"; rc=$?
+  [[ $rc -eq 0 && "$out" == *"NOT checked"* ]] && ok "24d pj-worker absent: launches with a NOTE naming the unchecked caps" || bad "24d absent" "rc=$rc $out"
+  # 24e the REAL launch path refuses BEFORE launching: a fake launch file whose
+  #     __claude_launch leaves a marker; with the cap reached the marker must not appear,
+  #     and with the counter allowing it (control) the check alone must pass.
+  printf '__claude_launch() { : > "%s/launched"; }\n' "$root" > "$root/fake-launch"
+  out="$(PJ_LAUNCH_FILE="$root/fake-launch" PJ_WORKER_BIN="$fk/rc6" PJ_PROFILE_DIR="$root/none-such" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" 2>&1)"; rc=$?
+  [[ $rc -eq 6 && ! -e "$root/launched" ]] && ok "24e a real launch at the cap exits 6 before __claude_launch" || bad "24e launch not stopped" "rc=$rc launched=$([[ -e $root/launched ]] && echo yes || echo no) $out"
   print -- "pj selftest: $pass passed, $fail failed"
   [[ $fail -eq 0 ]]
+}
+
+# --- the session caps (W-20260924-A79; D-20260924-A08 and A10) ---------------------
+# At most 4 live Claude sessions per project (the conductor and Gavin's own sessions
+# included) and 8 on the machine. pj-worker owns the counter (`pj-worker count --check`:
+# 0 allowed, 6 a cap is reached, 2 could not measure), so pj and pj-worker can never
+# disagree about a count. Checked on a REAL launch only, before any side effect.
+#   6   REFUSED, no override (Gavin's ruling).
+#   2   REFUSED as well: a launch the counter cannot see is the case the cap exists for,
+#       and "could not count" must never read as "under the cap" (the sandbox blocks ps,
+#       so a sandboxed `pj -p` lands here; run it with the sandbox off).
+#   pj-worker absent: LAUNCHES with a NOTE. pj never refuses because a file is missing
+#       (header), and a machine without it has no counter to be wrong.
+# Seam: PJ_WORKER_BIN (the selftest points it at fakes).
+check_session_caps() {
+  local pjw="${PJ_WORKER_BIN-}" out rc
+  [[ -n "$pjw" ]] || pjw="$(whence -p pj-worker 2>/dev/null)"
+  if [[ -z "$pjw" || ! -x "$pjw" ]]; then
+    print -u2 -- "pj: NOTE: pj-worker not found, so the session caps (4 per project, 8 on the machine) were NOT checked. stow -R the dotfiles."
+    return 0
+  fi
+  out="$("$pjw" count --check --cwd "$PWD" 2>&1)"; rc=$?
+  case $rc in
+    0) return 0 ;;
+    6) print -u2 -r -- "pj: REFUSED: a session cap is reached (4 per project, 8 on the machine; D-20260924-A08, A10). There is no override. Close a session first."
+       print -u2 -r -- "$out"
+       return 6 ;;
+    *) print -u2 -r -- "pj: REFUSED: could not count the live sessions (pj-worker count exit $rc), so the caps cannot be checked. Inside the Claude sandbox, run it with the sandbox off."
+       print -u2 -r -- "$out"
+       return 2 ;;
+  esac
 }
 
 # --profile is read BEFORE --dry-run so `pj --profile scratch --dry-run` works, and only
@@ -1037,6 +1085,7 @@ case "${1:-}" in
     print -l -- "${PJ_ENV[@]}"
     exit 0 ;;
   --selftest) selftest; exit $? ;;
+  --check-caps) check_session_caps; exit $? ;;   # the cap check alone, for the selftest and a human
 esac
 
 load_profile "$WANT" || exit $?
@@ -1045,6 +1094,7 @@ if [[ ! -r "$LAUNCH_FILE" ]]; then
   print -u2 -- "pj: REFUSED: ${LAUNCH_FILE/#$HOME/~} missing; stow -R the dotfiles"
   exit 2
 fi
+check_session_caps || exit $?
 kick_dotclaude_fetch
 kick_checks_run
 # Only on a REAL launch, never on --dry-run or --dry-run-env: a dry run must not touch
