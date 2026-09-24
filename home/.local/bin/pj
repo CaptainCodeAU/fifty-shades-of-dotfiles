@@ -590,7 +590,7 @@ selftest() {
   [[ ${#PLUGIN_DIRS} -eq 4 && "${PLUGIN_DIRS[*]}" != *AgentRelay* ]] || park="$park fallback:${PLUGIN_DIRS[*]}"
   for f in default memory; do
     [[ -r "$ppk/$f" ]] || { park="$park ${f}:unreadable"; continue; }
-    grep -q AgentRelay "$ppk/$f" && park="$park ${f}:lists-AgentRelay"
+    grep -q '^plugins:.*AgentRelay' "$ppk/$f" && park="$park ${f}:lists-AgentRelay"
   done
   out="$(PJ_PROFILE_DIR="$ppk" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --dry-run 2>/dev/null)"
   [[ "$out" == *AgentRelay* ]] && park="$park dry-run:loads-AgentRelay"
