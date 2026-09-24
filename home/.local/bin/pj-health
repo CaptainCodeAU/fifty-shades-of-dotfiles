@@ -69,7 +69,7 @@ BASELINE_WINDOW=5
 FRAMEWORK_TOOLS="pj pj-launch-check pj-prompt-file pj-start-card pj-session-end pj-wrap pj-id open-items decided claude-hooks-sync claude-project-settings-render ci-watch ccw-watch pj-health mods-api-drift"
 SELFTESTS="pj:--selftest pj-launch-check:--selftest pj-start-card-selftest pj-session-end-selftest pj-wrap-selftest pj-prompt-file:--selftest pj-id:--selftest open-items-selftest decided-selftest claude-hooks-sync-selftest claude-project-settings-render-selftest ccw-watch-selftest ci-watch-selftest pj-health-selftest audit-chain-selftest c2:--selftest pj-launcher-menu:--selftest mods-api-drift:--selftest"
 HOOK_SELFTESTS="enforce-secret-probe.sh validate-bash.sh enforce-uv.sh enforce-pnpm.sh pj-voice-contract.sh enforce-pj-workers.sh"
-PLUGIN_DIRS_EXPECTED="skills/herdr skills/AgentRelay skills/ISA pj-voice pj"
+PLUGIN_DIRS_EXPECTED="skills/herdr skills/ISA pj-voice pj"
 LAUNCH_LOG_WINDOW=20
 
 FULL=0; LIVE=0; QUIET=0; JSON=0
@@ -187,10 +187,11 @@ else
     for d in $PLUGIN_DIRS_EXPECTED; do   # exact entry: ~/.claude/pj must not be satisfied by ~/.claude/pj-voice
       printf '%s\n' "$PLUGIN_DIRS" | grep -qE "^(~|\\\$HOME|$HOME)/\.claude/$d/?$" || missing="$missing [--plugin-dir ~/.claude/$d]"
     done
-    if [ -z "$missing" ] && [ "$pd_n" -eq 5 ]; then
-      row PASS launcher "$(tilde "$launcher") is a command, no alias ($lsrc); dry-run carries setting-sources, settings file, prompt cache, 5 plugin dirs"
+    pd_exp="$(set -- $PLUGIN_DIRS_EXPECTED; echo $#)"   # follows the declared list (4 since AgentRelay was parked, D-20260924-A07)
+    if [ -z "$missing" ] && [ "$pd_n" -eq "$pd_exp" ]; then
+      row PASS launcher "$(tilde "$launcher") is a command, no alias ($lsrc); dry-run carries setting-sources, settings file, prompt cache, $pd_exp plugin dirs"
     else
-      row FAIL launcher "pj --dry-run is missing:${missing:- (plugin-dir count $pd_n, expected 5)}; fix: stow -R the dotfiles, pj --selftest"
+      row FAIL launcher "pj --dry-run is missing:${missing:- (plugin-dir count $pd_n, expected $pd_exp)}; fix: stow -R the dotfiles, pj --selftest"
     fi
   fi
 fi
@@ -1215,8 +1216,8 @@ else
     elif [ "$rules" -ge 1 ]; then row PASS evidence-rules "transcript $tid: RULES.md header in the prompt snapshot"
     else row FAIL evidence-rules "transcript $tid: RULES.md NOT in the prompt snapshot; fix: open a new shell (stale alias) and relaunch pj"; fi
     pmiss=""
-    for m in herdr:herdr AgentRelay:AgentRelay ISA:ISA pj:wrap-up pj-voice:pj-voice; do grep -q -F "$m" "$TR" || pmiss="$pmiss $m"; done
-    [ -z "$pmiss" ] && row PASS evidence-plugins "transcript $tid names all 5 plugins (4 skills + the output style)" || row FAIL evidence-plugins "transcript $tid lacks:$pmiss; fix: check the --plugin-dir flags (alias row)"
+    for m in herdr:herdr ISA:ISA pj:wrap-up pj-voice:pj-voice; do grep -q -F "$m" "$TR" || pmiss="$pmiss $m"; done
+    [ -z "$pmiss" ] && row PASS evidence-plugins "transcript $tid names all 4 plugins (3 skills + the output style)" || row FAIL evidence-plugins "transcript $tid lacks:$pmiss; fix: check the --plugin-dir flags (alias row)"
     # E5 tokens: WARN never FAIL (ruled at the P5.7 gate)
     baseline=""; bsrc=""
     if [ "$TOPLEVEL" = "$PJ_DOTFILES" ]; then baseline=$DOTFILES_BASELINE; bsrc="header constant"
