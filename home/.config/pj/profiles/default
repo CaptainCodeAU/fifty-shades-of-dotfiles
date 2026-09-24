@@ -2,7 +2,10 @@
 #
 # EVERY KEY HERE REPRODUCES TODAY'S LAUNCH EXACTLY. `pj --dry-run` with this file
 # present must print the same 18 lines, byte for byte, as it did before profiles
-# existed; that is hard constraint 1 of F5a and arm 1 of `pj --selftest`.
+# existed; that is hard constraint 1 of F5a and arm 1 of `pj --selftest`. ONE deliberate
+# change since: AgentRelay was PARKED on 2026-09-24 (D-20260924-A07), so the argv is now 16
+# lines with 4 plugin dirs. Its files stay in ~/.claude/skills/AgentRelay; to bring it back,
+# add skills/AgentRelay here and in pj's fallback (pj --selftest arm 1b will then fail, by design).
 #
 # key: value lines, # comments, one value per key. Same shape as ~/.config/pj/machine,
 # which install.sh already writes. PATHS ONLY -- never a secret, never a token, never
@@ -52,7 +55,7 @@ config_dir:      ~/.claude
 setting_sources: project,local
 settings:        ~/.claude/settings.project.json
 prompt:          pj-prompt-file
-plugins:         skills/herdr skills/AgentRelay skills/ISA pj-voice pj
+plugins:         skills/herdr skills/ISA pj-voice pj
 required:        --dangerously-skip-permissions --effort high
 mode:            normal
 card:            on

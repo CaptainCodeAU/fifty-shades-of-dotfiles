@@ -38,7 +38,7 @@ settings:        ~/.claude/settings.project.json
 prompt:          pj-prompt-file
 prompt_sources:  ~/CODE/CaptainCodeAU/lifeos-private/.worktree/memory/CONFIG/OPERATIONAL_RULES.md:~/.claude-memory/pj-global/RULES.md
 prompt_out:      ~/.cache/dotfiles/pj-system-prompt-memory.md
-plugins:         skills/herdr skills/AgentRelay skills/ISA pj-voice pj
+plugins:         skills/herdr skills/ISA pj-voice pj
 plugins_root:    ~/.claude-memory
 mode:            normal
 card:            on

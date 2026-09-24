@@ -9,7 +9,8 @@
 #
 # What it does, and only that (the same steps the alias + __claude_launch did):
 #   1. builds the claude argv: project-only settings, the ONE combined system-prompt file
-#      pj-prompt-file prints, the five plugin dirs, skip-permissions, effort high;
+#      pj-prompt-file prints, the plugin dirs (four since AgentRelay was parked 2026-09-24,
+#      D-20260924-A07), skip-permissions, effort high;
 #   2. sources ~/.zsh_claude_launch (the shared launch function, also used by the `c`
 #      family from .zshrc) and hands the argv to __claude_launch, which prints the last
 #      commit's files to the tty, reads the two keychain entries, refreshes the GH
@@ -102,7 +103,7 @@ emulate -L zsh
 
 SELF="${0:A}"   # captured at top level: inside a zsh function $0 is the FUNCTION name
 LAUNCH_FILE="${PJ_LAUNCH_FILE:-$HOME/.zsh_claude_launch}"
-PLUGIN_DIRS=(skills/herdr skills/AgentRelay skills/ISA pj-voice pj)
+PLUGIN_DIRS=(skills/herdr skills/ISA pj-voice pj)
 PROFILE_DIR="${PJ_PROFILE_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/pj/profiles}"
 typeset -ga PJ_ARGV   # not ARGV: in zsh that is the positional parameters
 typeset -ga PJ_ENV    # VAR=value pairs the launch exports; EMPTY for the default profile
@@ -115,7 +116,7 @@ P_CONFIG_DIR="$HOME/.claude"
 P_SETTING_SOURCES="project,local"
 P_SETTINGS="$HOME/.claude/settings.project.json"
 P_PROMPT="pj-prompt-file"
-P_PLUGINS="skills/herdr skills/AgentRelay skills/ISA pj-voice pj"
+P_PLUGINS="skills/herdr skills/ISA pj-voice pj"
 P_REQUIRED="--dangerously-skip-permissions --effort high"
 P_MODE="normal"
 P_CARD="on"
@@ -581,7 +582,19 @@ selftest() {
   [[ "${out%%$'\n'*}" == claude ]] && ok "1 argv[0] is claude" || bad "1 argv[0]" "${out%%$'\n'*}"
   [[ "$out" == *$'\n--append-system-prompt-file\n'"$root/prompt.md"$'\n'* ]] && ok "1 carries the prompt cache path" || bad "1 prompt path" "$out"
   n=0; for d in "${PLUGIN_DIRS[@]}"; do [[ "$out" == *$'\n--plugin-dir\n'"$HOME/.claude/$d"$'\n'* ]] && n=$((n + 1)); done
-  [[ $n -eq 5 ]] && ok "1 all five plugin dirs present" || bad "1 plugin dirs" "$n of 5"
+  [[ $n -eq ${#PLUGIN_DIRS} ]] && ok "1 all ${#PLUGIN_DIRS} plugin dirs present" || bad "1 plugin dirs" "$n of ${#PLUGIN_DIRS}"
+  # 1b. AgentRelay is PARKED (D-20260924-A07, 2026-09-24): no pj argv may load it. Its files stay.
+  #     Read through THIS repo's profiles (the stowed ones may be an older master copy), for the
+  #     built-in fallback, the default profile and the memory profile.
+  local ppk="${SELF:h:h:h}/.config/pj/profiles" park=""
+  [[ ${#PLUGIN_DIRS} -eq 4 && "${PLUGIN_DIRS[*]}" != *AgentRelay* ]] || park="$park fallback:${PLUGIN_DIRS[*]}"
+  for f in default memory; do
+    [[ -r "$ppk/$f" ]] || { park="$park ${f}:unreadable"; continue; }
+    grep -q AgentRelay "$ppk/$f" && park="$park ${f}:lists-AgentRelay"
+  done
+  out="$(PJ_PROFILE_DIR="$ppk" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --dry-run 2>/dev/null)"
+  [[ "$out" == *AgentRelay* ]] && park="$park dry-run:loads-AgentRelay"
+  [[ -z "$park" ]] && ok "1b AgentRelay is parked: not in the fallback, the default or memory profile, or the dry-run" || bad "1b AgentRelay parked" "$park"
   [[ "$out" == *$'\n--setting-sources\nproject,local\n'* ]] && ok "1 setting-sources project,local" || bad "1 setting-sources" "$out"
   [[ "$out" == *$'\n--settings\n'"$HOME/.claude/settings.project.json"$'\n'* ]] && ok "1 project settings file" || bad "1 settings" "$out"
   # 2. pass-through: -p x --model haiku land at the end, in order
@@ -659,7 +672,7 @@ selftest() {
   base="$(PJ_PROFILE_DIR="$root/none-such" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --dry-run 2>/dev/null)"
   [[ "${base%%$'\n'*}" == claude ]] && ok "11 no profiles dir: still launches (built-in fallback)" || bad "11 no profiles dir" "$base"
   n=0; for d in "${PLUGIN_DIRS[@]}"; do [[ "$base" == *$'\n--plugin-dir\n'"$HOME/.claude/$d"$'\n'* ]] && n=$((n + 1)); done
-  [[ $n -eq 5 ]] && ok "11 fallback carries all five plugin dirs" || bad "11 fallback plugins" "$n of 5"
+  [[ $n -eq ${#PLUGIN_DIRS} ]] && ok "11 fallback carries all ${#PLUGIN_DIRS} plugin dirs" || bad "11 fallback plugins" "$n of ${#PLUGIN_DIRS}"
   # 12. a `default` profile that spells out today's values produces the SAME argv, byte
   #     for byte. Hard constraint 1 of F5a, proven against arm 11's output rather than
   #     against a copy of the expected text.
@@ -669,7 +682,7 @@ selftest() {
     print -- "setting_sources: project,local"
     print -- "settings:        ~/.claude/settings.project.json"
     print -- "prompt:          pj-prompt-file"
-    print -- "plugins:         skills/herdr skills/AgentRelay skills/ISA pj-voice pj"
+    print -- "plugins:         skills/herdr skills/ISA pj-voice pj"
     print -- "required:        --dangerously-skip-permissions --effort high"
     print -- "mode:            normal"
     print -- "card:            on"
@@ -746,10 +759,10 @@ selftest() {
   #     Both directions, because a launcher that ignored the key would pass the ~/.claude
   #     five and still "have five plugin dirs".
   local proot="$root/proot"
-  printf 'plugins_root: %s\nplugins: skills/herdr skills/AgentRelay skills/ISA pj-voice pj\n' "$proot" > "$pdir/rooted"
+  printf 'plugins_root: %s\nplugins: skills/herdr skills/ISA pj-voice pj\n' "$proot" > "$pdir/rooted"
   out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile rooted --dry-run 2>/dev/null)"
   n=0; for d in "${PLUGIN_DIRS[@]}"; do [[ "$out" == *$'\n--plugin-dir\n'"$proot/$d"$'\n'* ]] && n=$((n + 1)); done
-  [[ $n -eq 5 ]] && ok "23a plugins_root: all five plugin dirs are joined to the root" || bad "23a rooted dirs" "$n of 5 under $proot"
+  [[ $n -eq ${#PLUGIN_DIRS} ]] && ok "23a plugins_root: all ${#PLUGIN_DIRS} plugin dirs are joined to the root" || bad "23a rooted dirs" "$n of ${#PLUGIN_DIRS} under $proot"
   #     (the --settings path is still ~/.claude/settings.project.json, by design: RECORDS
   #     does not move, so the check is on --plugin-dir pairs, not on the whole argv)
   [[ "$out" != *$'\n--plugin-dir\n'"$HOME/.claude/"* ]] && ok "23a and no --plugin-dir is under ~/.claude" || bad "23a ~/.claude plugin dir leaked" "$out"

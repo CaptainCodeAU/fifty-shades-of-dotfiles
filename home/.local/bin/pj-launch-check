@@ -62,7 +62,7 @@ set -u
 
 STATE="${PJ_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/pj}"
 LOG="$STATE/launches.log"
-PLUGIN_DIRS_EXPECTED="skills/herdr skills/AgentRelay skills/ISA pj-voice pj"
+PLUGIN_DIRS_EXPECTED="skills/herdr skills/ISA pj-voice pj"
 # P10: the root the plugin entries are joined to. A profile may move it (`plugins_root:`)
 # so a branch checkout of dot-claude can be the loaded one; the expectation here has to
 # move with it, or every such launch reads as five stale dirs plus five undeclared ones.
@@ -277,7 +277,7 @@ selftest(){
   root="$(mktemp -d "${TMPDIR:-/tmp}/pj-launch-check-selftest.XXXXXX")" || exit 1
   mkdir -p "$root/state" "$root/cache/dotfiles"; : >"$root/cache/dotfiles/pj-system-prompt.md"; : >"$root/old-rules.md"; printf '# zshrc\n' >"$root/zshrc"
   local exp="$root/cache/dotfiles/pj-system-prompt.md"
-  argv_ok="claude --setting-sources project,local --settings $HOME/.claude/settings.project.json --append-system-prompt-file $exp --plugin-dir $HOME/.claude/skills/herdr --plugin-dir $HOME/.claude/skills/AgentRelay --plugin-dir $HOME/.claude/skills/ISA --plugin-dir $HOME/.claude/pj-voice --plugin-dir $HOME/.claude/pj --dangerously-skip-permissions --effort high"
+  argv_ok="claude --setting-sources project,local --settings $HOME/.claude/settings.project.json --append-system-prompt-file $exp --plugin-dir $HOME/.claude/skills/herdr --plugin-dir $HOME/.claude/skills/ISA --plugin-dir $HOME/.claude/pj-voice --plugin-dir $HOME/.claude/pj --dangerously-skip-permissions --effort high"
   printf '%s\n' "$argv_ok" >"$root/argv.ok"
   printf '%s\n' "${argv_ok/$exp/$root/old-rules.md}" >"$root/argv.oldprompt"
   printf '%s\n' "${argv_ok/ --plugin-dir $HOME\/.claude\/pj / }" >"$root/argv.fourdirs"
@@ -354,7 +354,7 @@ selftest(){
   RUN_PROFILE=nodirs run argv.nodirs
   case "$OUT" in *"declared config dir for profile nodirs"*) ok "13 a config dir that disagrees with the profile is flagged";; *) bad "13 config-dir drift" "$OUT";; esac
   # 14. a profile declaring the five behaves exactly as the hardcoded default did
-  printf 'plugins: skills/herdr skills/AgentRelay skills/ISA pj-voice pj\nsetting_sources: project,local\nconfig_dir: ~/.claude\n' > "$root/profiles/five"
+  printf 'plugins: skills/herdr skills/ISA pj-voice pj\nsetting_sources: project,local\nconfig_dir: ~/.claude\n' > "$root/profiles/five"
   RUN_PROFILE=five run argv.ok
   [ -z "$OUT" ] && ok "14 a profile declaring the five is silent on the five-dir argv" || bad "14 five" "$OUT"
   # 15. an unset CLAUDE_CONFIG_DIR satisfies `config_dir: ~/.claude` (the do-not-export rule)
@@ -381,8 +381,8 @@ selftest(){
   #     arms, because a check that ignored the key would pass the ~/.claude five as before
   #     and the rooted five would read as ten wrong dirs.
   local proot="$root/proot"
-  printf 'plugins_root: %s\nplugins: skills/herdr skills/AgentRelay skills/ISA pj-voice pj\nconfig_dir: ~/.claude\n' "$proot" > "$root/profiles/rooted"
-  printf '%s\n' "claude --setting-sources project,local --settings $HOME/.claude/settings.project.json --append-system-prompt-file $exp --plugin-dir $proot/skills/herdr --plugin-dir $proot/skills/AgentRelay --plugin-dir $proot/skills/ISA --plugin-dir $proot/pj-voice --plugin-dir $proot/pj --dangerously-skip-permissions --effort high" >"$root/argv.rooted"
+  printf 'plugins_root: %s\nplugins: skills/herdr skills/ISA pj-voice pj\nconfig_dir: ~/.claude\n' "$proot" > "$root/profiles/rooted"
+  printf '%s\n' "claude --setting-sources project,local --settings $HOME/.claude/settings.project.json --append-system-prompt-file $exp --plugin-dir $proot/skills/herdr --plugin-dir $proot/skills/ISA --plugin-dir $proot/pj-voice --plugin-dir $proot/pj --dangerously-skip-permissions --effort high" >"$root/argv.rooted"
   RUN_PROFILE=rooted run argv.rooted
   [ -z "$OUT" ] && ok "17 plugins_root: the five dirs under the moved root are clean" || bad "17 rooted clean" "$OUT"
   RUN_PROFILE=rooted run argv.ok
@@ -391,7 +391,7 @@ selftest(){
   # 18. prompt_out (P10): a profile with its own cache expects THAT path. The seam
   #     PJ_PROMPT_EXPECTED is unset for both arms so the profile key is what decides.
   printf 'prompt_out: %s/own-cache.md\nconfig_dir: ~/.claude\n' "$root" > "$root/profiles/ownprompt"
-  printf '%s\n' "claude --setting-sources project,local --settings $HOME/.claude/settings.project.json --append-system-prompt-file $root/own-cache.md --plugin-dir $HOME/.claude/skills/herdr --plugin-dir $HOME/.claude/skills/AgentRelay --plugin-dir $HOME/.claude/skills/ISA --plugin-dir $HOME/.claude/pj-voice --plugin-dir $HOME/.claude/pj --dangerously-skip-permissions --effort high" >"$root/argv.ownprompt"
+  printf '%s\n' "claude --setting-sources project,local --settings $HOME/.claude/settings.project.json --append-system-prompt-file $root/own-cache.md --plugin-dir $HOME/.claude/skills/herdr --plugin-dir $HOME/.claude/skills/ISA --plugin-dir $HOME/.claude/pj-voice --plugin-dir $HOME/.claude/pj --dangerously-skip-permissions --effort high" >"$root/argv.ownprompt"
   OUT="$(printf '{"session_id":"s18","source":"startup","cwd":"%s"}' "$root" | PJ_LAUNCH_ARGV="$root/argv.ownprompt" PJ_PROMPT_EXPECTED="" PJ_STATE_DIR="$root/state" PJ_PROFILE_DIR="$root/profiles" PJ_PROFILE=ownprompt PJ_LAUNCH_TTY=ttys099 PJ_LAUNCH_SHELL_START=0 "$0" 2>/dev/null)"
   [ -z "$OUT" ] && ok "18 prompt_out: the profile's own cache path is clean" || bad "18 prompt_out clean" "$OUT"
   OUT="$(printf '{"session_id":"s18b","source":"startup","cwd":"%s"}' "$root" | PJ_LAUNCH_ARGV="$root/argv.ok" PJ_PROMPT_EXPECTED="" PJ_STATE_DIR="$root/state" PJ_PROFILE_DIR="$root/profiles" PJ_PROFILE=ownprompt PJ_LAUNCH_TTY=ttys099 PJ_LAUNCH_SHELL_START=0 "$0" 2>/dev/null)"

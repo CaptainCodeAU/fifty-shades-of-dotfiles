@@ -86,7 +86,7 @@ printf 'name: fixture\nletter: A\n' >"$T/machine"
 printf 'project: p\nrepo: r\nended: t\nsession: s1\ntranscript: x\n\nproject: p\nrepo: r\nended: t\nsession: s2\ntranscript: y\n' >"$STATE/no-wrap-up/-tmp-proj"
 # the launcher fixtures (F3): a dry-run argv, what `whence -w pj; alias pj` prints, a ps listing, a .zshrc mtime
 printf '%s\n' claude --setting-sources project,local --settings "$HOME/.claude/settings.project.json" --append-system-prompt-file "$T/cache/prompt.md" \
-  --plugin-dir "$HOME/.claude/skills/herdr" --plugin-dir "$HOME/.claude/skills/AgentRelay" --plugin-dir "$HOME/.claude/skills/ISA" --plugin-dir "$HOME/.claude/pj-voice" --plugin-dir "$HOME/.claude/pj" \
+  --plugin-dir "$HOME/.claude/skills/herdr" --plugin-dir "$HOME/.claude/skills/ISA" --plugin-dir "$HOME/.claude/pj-voice" --plugin-dir "$HOME/.claude/pj" \
   --dangerously-skip-permissions --effort high >"$T/dryrun"; cp "$T/dryrun" "$T/dryrun.ok"
 printf 'pj: command\n' >"$T/type-out"; cp "$T/type-out" "$T/type-out.ok"
 ZMT="$(date -j -f '%Y-%m-%d %H:%M:%S' '2026-09-21 01:00:00' +%s 2>/dev/null || date -d '2026-09-21 01:00:00' +%s)"
@@ -141,7 +141,7 @@ mk_transcript(){   # mk_transcript <file> <first_turn_tokens> [card_n] [ci_n] [r
   local marker; marker="$(head -1 "$RULES" | cut -c1-60)"; [ "$rules" -eq 1 ] || marker="no rules here"
   {
     echo "{\"type\":\"user\",\"entrypoint\":\"$ep\",\"message\":{\"role\":\"user\",\"content\":\"hello\"}}"
-    [ "$plug" -eq 1 ] && echo '{"type":"attachment","attachment":{"type":"skill_listing","text":"herdr:herdr AgentRelay:AgentRelay ISA:ISA pj:wrap-up"}}'
+    [ "$plug" -eq 1 ] && echo '{"type":"attachment","attachment":{"type":"skill_listing","text":"herdr:herdr ISA:ISA pj:wrap-up"}}'
     for i in $(seq 1 "$card"); do echo '{"type":"attachment","attachment":{"type":"hook_success","hookName":"SessionStart:startup","stdout":"pj start card: proj\nOpen items: 0\n"}}'; done
     for i in $(seq 1 "$ci"); do echo '{"type":"attachment","attachment":{"type":"hook_success","hookName":"SessionStart:startup","stdout":"CI watch (live)\n"}}'; done
     echo '{"type":"attachment","attachment":{"type":"output_style","style":"pj-voice:pj-voice"}}'
@@ -336,7 +336,7 @@ arm "selftests present, not run" has selftests "not run"
 
 # 1. launcher (F3)
 arm "launcher PASS names the script and no alias" has launcher "is a command, no alias"
-arm "launcher PASS counts 5 plugin dirs" has launcher "5 plugin dirs"
+arm "launcher PASS counts 4 plugin dirs" has launcher "4 plugin dirs"
 awk -v skip="$HOME/.claude/pj" '$0=="--plugin-dir"{getline v; if (v==skip) next; print; print v; next} {print}' "$T/dryrun.ok" >"$T/dryrun"; run
 arm "launcher FAIL when a plugin-dir is missing from the dry-run" is launcher FAIL; arm "launcher FAIL names the dir" has launcher "plugin-dir ~/.claude/pj]"
 sed "s#$T/cache/prompt.md#$H/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md#" "$T/dryrun.ok" >"$T/dryrun"; run
