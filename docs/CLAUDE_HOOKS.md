@@ -351,3 +351,38 @@ any alias it meets; the rules classify that expansion as zsh would.
 | `DEL_GUARD_LOG`            | log file (default `.../dotfiles/hooks-security.log`) |
 | `DEL_GUARD_SNAPSHOT_DIR`   | where snapshots are looked for                      |
 | `DEL_GUARD_NOFILTER=1`     | lexer emits every command (equivalence testing)     |
+
+---
+
+## `enforce-no-reset-by-name.sh`: remove a directory, then reuse the name
+
+Added 2026-09-24 for W-20260924-A32 (Stage 1), on Gavin's ruling: `rm` keeps
+failing loudly with no fallback, and a hook blocks the pattern in every project.
+Registered on `PreToolUse` with matcher `Bash` for **both** targets, the same
+`test -x ... || true` shape as `enforce-no-permanent-delete.sh`. Deny only.
+
+**The class.** `rm -rf "$S/mut4" 2>/dev/null; mkdir -p "$S/mut4"; cp ... "$S/mut4/"`.
+In the Claude sandbox the Trash-routed `rm` fails (rc 1) and leaves the directory;
+`2>/dev/null` and `;` hide that, and the next step merges into stale files, or,
+with `cp -i` and a heredoc in the same call, hangs (2026-09-19, about 23 minutes).
+
+**What it denies.** A recursive `rm` (or `rmdir`) of a path P, then, later in the
+same command, `mkdir`, `cd`, the destination of `cp`/`mv`/`ln`/`rsync`, `tar -C`,
+`unzip -d`, `git init`, `touch`/`tee` or a `>` into P. Paths compare as text after
+dropping quotes, `${V}` braces, `./` and trailing slashes.
+
+**What it allows.** An `&&` chain from the `rm`; a used check of P (`test ! -e P &&`,
+`[ -e P ] && exit`, `if [ -e P ]`); `rm ... || exit`; `git clone ... P &&` (a clone
+refuses a non-empty survivor); a variable reassigned in between; `set -e`; a
+non-recursive `cp` onto exactly P (a file overwrite cannot merge).
+
+The rule lives in `conv-shscan.awk` as the deny-only mode `reset`; the hook is the
+thin `conv-hooklib.sh` wrapper, like `enforce-uv.sh`.
+
+```sh
+~/.claude/hooks/enforce-no-reset-by-name.sh --selftest   # 41 arms; DENY arms are real transcript commands
+```
+
+Measured against every distinct Bash command in this machine's transcripts
+(132,937, 2026-09-24): 362 would be denied (0.27%); a hand-graded random 40 were
+all the real pattern, none a misread.
