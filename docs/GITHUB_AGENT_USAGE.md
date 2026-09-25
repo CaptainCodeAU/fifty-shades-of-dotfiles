@@ -89,12 +89,12 @@ is one edit in one file.
 
 Useful flags:
 
-| Flag | Effect |
-| --- | --- |
-| `--tier medium-value` | say the tier up front instead of being asked |
-| `-y` / `--yes` | no prompts (agent use, after you've said go-ahead) |
-| `--no-verify` | skip the live mint check |
-| `--verify` | force the live check on, even with `-y` |
+| Flag                  | Effect                                             |
+| --------------------- | -------------------------------------------------- |
+| `--tier medium-value` | say the tier up front instead of being asked       |
+| `-y` / `--yes`        | no prompts (agent use, after you've said go-ahead) |
+| `--no-verify`         | skip the live mint check                           |
+| `--verify`            | force the live check on, even with `-y`            |
 
 `-y` implies `--no-verify` on purpose: minting pulls the App's private key
 into the running process, which isn't something an agent's process should
@@ -121,7 +121,7 @@ git -c githubagent.tier=high-value clone https://x-access-token@github.com/OWNER
 2026-09-12, not assumed.)
 
 One edge worth knowing: git runs the credential helper from your **current
-directory**. Cloning while standing inside another flipped repo reads *that*
+directory**. Cloning while standing inside another flipped repo reads _that_
 repo's tier. It fails cleanly (wrong App, refused by GitHub) rather than
 doing anything dangerous, but the error will look confusing if you don't
 know why.
@@ -170,11 +170,11 @@ The flow is draft → show → confirm → post, and the draft prints **every
 time**, including under `-y`, so a session transcript always carries a record
 of exactly what went out.
 
-| Flag | Effect |
-| --- | --- |
-| `--dry-run` | show the draft and stop. **Fetches no token at all** — safe for an agent to run freely |
-| `-y` / `--yes` | skip the typed confirmation. Draft still prints |
-| `--allow-own-repo` | permit a target you own (refused by default) |
+| Flag               | Effect                                                                                 |
+| ------------------ | -------------------------------------------------------------------------------------- |
+| `--dry-run`        | show the draft and stop. **Fetches no token at all** — safe for an agent to run freely |
+| `-y` / `--yes`     | skip the typed confirmation. Draft still prints                                        |
+| `--allow-own-repo` | permit a target you own (refused by default)                                           |
 
 Without `-y` it asks you to type `post`. If there's no terminal attached and
 `-y` wasn't given, it refuses rather than hanging.
@@ -227,14 +227,14 @@ operation was the odd one out, not the cautious choice.
 
 ### What it costs, honestly
 
-| Property | Status |
-|---|---|
-| Anything written to disk | **No.** The credential lives in the memory of a short-lived daemon; the socket is not the secret |
-| Reachable from a sandboxed Claude session | **No.** A sandboxed fill gets `unable to connect to cache daemon: Operation not permitted`. Measured against a live daemon holding a real token, with a Keychain control (exit 44) in the same breath |
-| Blast radius if the socket block ever failed | **Bounded.** The cache is keyed per repo (`useHttpPath = true`), so a token cached for one repo is never served for another. Measured: same-repo fill 0 mint invocations, two other repos 2 each |
-| Detection lost | **Zero.** GitHub's account Security log has no per-token mint event type at all: App entries are installation lifecycle only (`integration.*`, `integration_installation.*`). So minting was never visible to the account owner either, and caching removes no signal that existed. Verified against a real exported log with a same-window positive control; the measurements are recorded privately, not here |
-| Reach gained by an attacker | **None.** In an unsandboxed session a process could always run the helper and mint on demand anyway |
-| **The one real cost** | **Security now rests on TWO sandbox blocks where it rested on one:** the login Keychain, and now the cache socket. Only one has to quietly stop being blocked |
+| Property                                     | Status                                                                                                                                                                                                                                                                                                                                                                                                          |
+| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Anything written to disk                     | **No.** The credential lives in the memory of a short-lived daemon; the socket is not the secret                                                                                                                                                                                                                                                                                                                |
+| Reachable from a sandboxed Claude session    | **No.** A sandboxed fill gets `unable to connect to cache daemon: Operation not permitted`. Measured against a live daemon holding a real token, with a Keychain control (exit 44) in the same breath                                                                                                                                                                                                           |
+| Blast radius if the socket block ever failed | **Bounded.** The cache is keyed per repo (`useHttpPath = true`), so a token cached for one repo is never served for another. Measured: same-repo fill 0 mint invocations, two other repos 2 each                                                                                                                                                                                                                |
+| Detection lost                               | **Zero.** GitHub's account Security log has no per-token mint event type at all: App entries are installation lifecycle only (`integration.*`, `integration_installation.*`). So minting was never visible to the account owner either, and caching removes no signal that existed. Verified against a real exported log with a same-window positive control; the measurements are recorded privately, not here |
+| Reach gained by an attacker                  | **None.** In an unsandboxed session a process could always run the helper and mint on demand anyway                                                                                                                                                                                                                                                                                                             |
+| **The one real cost**                        | **Security now rests on TWO sandbox blocks where it rested on one:** the login Keychain, and now the cache socket. Only one has to quietly stop being blocked                                                                                                                                                                                                                                                   |
 
 ### The timeout is honoured, and a retracted claim
 
@@ -257,6 +257,14 @@ A custom `--socket` path **silently starts no daemon**. Every fill then falls
 through to minting, which looks exactly like the cache working while doing
 nothing at all. Only the default `~/.cache/git/credential/socket` works. This
 cost a debugging cycle on the day it went in.
+
+**Corrected 2026-09-25 (W-20260925-A30): the path was not the cause.** A custom
+socket under `$TMPDIR` served from the cache fine when run unsandboxed, and the
+same probe inside the Claude sandbox failed with `unable to bind to '<socket>':
+Operation not permitted` and `cache daemon did not start`. So the sandbox, not
+the custom path, stops the daemon. Keep the default path anyway, since nothing
+here needs another one. `github-agent-token-selftest` uses a custom socket on
+purpose and exits 2 (invalid) when the daemon cannot start.
 
 ### Checking and clearing it
 

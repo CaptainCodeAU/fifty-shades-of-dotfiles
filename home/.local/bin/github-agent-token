@@ -77,6 +77,7 @@ import stat
 import subprocess
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
 import jwt
@@ -364,7 +365,7 @@ def build_app_jwt(app_id: str, private_key_pem: str) -> str:
     return jwt.encode(payload, private_key_pem, algorithm="RS256")
 
 
-def get_installation_token(app_jwt: str, owner: str, repo: str) -> str:
+def get_installation_token(app_jwt: str, owner: str, repo: str) -> tuple[str, int]:
     headers = {"Authorization": f"Bearer {app_jwt}", "Accept": "application/vnd.github+json"}
 
     installation_resp = request_with_retry(
@@ -384,6 +385,7 @@ def get_installation_token(app_jwt: str, owner: str, repo: str) -> str:
     # Scope the minted pass down to just this one repo, even if the App's
     # install covers many -- confirmed against GitHub's own REST docs
     # (Create an installation access token for an app, `repositories` param).
+    requested_at = int(time.time())
     token_resp = request_with_retry(
         "POST",
         f"https://api.github.com/app/installations/{installation_id}/access_tokens",
@@ -394,10 +396,47 @@ def get_installation_token(app_jwt: str, owner: str, repo: str) -> str:
     )
     if token_resp.status_code != 201:
         fail(f"could not mint installation token ({token_resp.status_code}): {token_resp.text}")
-    return token_resp.json()["token"]
+    body = token_resp.json()
+    return body["token"], usable_until(body.get("expires_at"), requested_at)
 
 
-def mint_token(owner: str, repo: str) -> str:
+# ---------------------------------------------------------------------------
+# Token expiry, handed to git as password_expiry_utc (W-20260925-A30).
+#
+# git's memory cache sits in front of this helper with --timeout=3000, under the
+# token's 1-hour life, and on 2026-09-25 it still served a dead token: the push
+# said "Invalid username or token" and only a cache clear plus one retry got
+# through. So the cache's own timer is not enough on its own. Best hypothesis,
+# NOT established: the daemon's poll timer does not count time the Mac is asleep.
+#
+# password_expiry_utc makes the expiry travel WITH the token. git 2.41+ drops an
+# expired password it reads back from any helper, the cache included, and asks
+# the next helper (this one) for a fresh one. Measured 2026-09-25 on git 2.55.0
+# with a fake helper and an isolated cache: with the field, a fill 8 s after the
+# expiry minted again; without it, the same fill got the cached password back.
+# github-agent-token-selftest keeps both arms.
+#
+# The margin keeps a push that starts just before expiry from dying half-way.
+# With no expires_at in the reply, fall back to GitHub's documented 1-hour life
+# counted from BEFORE the request, which can only err early.
+EXPIRY_MARGIN_SECONDS = 10 * 60
+DOCUMENTED_TOKEN_LIFE_SECONDS = 60 * 60
+
+
+def usable_until(expires_at: str | None, requested_at: int) -> int:
+    if expires_at:
+        try:
+            return int(datetime.fromisoformat(expires_at).timestamp()) - EXPIRY_MARGIN_SECONDS
+        except ValueError:
+            print(
+                f"github-agent-token: unreadable expires_at {expires_at!r}; "
+                "assuming the documented 1-hour life",
+                file=sys.stderr,
+            )
+    return requested_at + DOCUMENTED_TOKEN_LIFE_SECONDS - EXPIRY_MARGIN_SECONDS
+
+
+def mint_token(owner: str, repo: str) -> tuple[str, int]:
     profile = resolve_profile()
     base_url = profile_config(profile, "infisicalBaseUrl")
     client_id = profile_config(profile, "infisicalClientId")
@@ -467,12 +506,13 @@ def main() -> None:
         if attrs.get("username") != "x-access-token":
             return
         owner, repo = owner_and_repo_from_git_stdin(attrs)
-        token = mint_token(owner, repo)
+        token, expiry = mint_token(owner, repo)
         print("username=x-access-token")
         print(f"password={token}")
+        print(f"password_expiry_utc={expiry}")
     elif mode == "token":
         owner, repo = owner_and_repo_from_local_repo()
-        print(mint_token(owner, repo))
+        print(mint_token(owner, repo)[0])
     elif mode == "pat":
         if len(sys.argv) < 3:
             fail(

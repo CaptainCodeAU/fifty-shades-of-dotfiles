@@ -123,10 +123,12 @@ returned nothing, so there is no password to give.
 Diagnose in this order:
 
 1. **Is the helper actually being called?**
+
    ```
    printf 'protocol=https\nhost=github.com\nusername=x-access-token\n\n' \
      | GIT_TERMINAL_PROMPT=0 GIT_TRACE=1 git credential fill 2>&1 | grep run_command
    ```
+
    You want a line running `github-agent-token get`. If it is absent, the helper
    is not in the effective list — check the config order below.
 
@@ -220,6 +222,33 @@ git stops at the first helper that answers.
 git config --get-all credential.https://github.com.helper
 ```
 
+**A push says "Invalid username or token" (W-20260925-A30).** The cache handed
+back a token that had already expired. Its 50-minute timer did not stop it: on
+2026-09-25 a dot-claude push got that error at 03:42:32 UTC. Best guess, not
+established: the daemon's timer does not count time the Mac is asleep.
+
+Since A30, `github-agent-token` also returns `password_expiry_utc` (GitHub's
+`expires_at` minus 10 minutes). git 2.41+ drops an expired password that any
+helper returns, the cache included, and asks the minting helper for a new one.
+A token cached BEFORE that change carries no expiry, so for up to 50 minutes
+after upgrading, the old failure can still show once. Clear it with
+`git credential-cache exit`.
+
+**A token minted seconds ago can fail ONCE with "Repository not found".** Same
+push, 11 seconds later (03:42:43 UTC), after `git credential-cache exit`: the fresh
+token got `remote: Repository not found.`, and a plain retry about 30 seconds later went through. It
+looks like a missing repo or a missing install, but it was neither. Retry once
+before you debug anything.
+
+**Prove the expiry fix still holds** (after a git upgrade, say). Run it UNSANDBOXED.
+Inside the sandbox the throwaway cache daemon cannot bind its socket, and the
+selftest exits 2 (invalid, nothing tested) rather than passing:
+
+```
+github-agent-token-selftest            # fake helper + throwaway cache: 3 arms
+builtin cd <a flipped repo> && github-agent-token-selftest --live   # + the real helper, token never printed
+```
+
 ---
 
 ## Recipe 9 — Probe the API from a session whose token is stale or revoked
@@ -299,16 +328,18 @@ credential produces the same escalation without anyone choosing it. See
 
 ## Things that will trip you up
 
-| Symptom | Cause |
-|---|---|
-| `gh` works but proves nothing | `gh` ignores the credential helper. It prefers `$GH_TOKEN`, then its own keyring (which holds an old broad `gho_` token). Use `GH_TOKEN="$(github-agent-token token)" gh ...` to exercise the App path. |
-| `/user/repos` returns 403 | Correct. An App token is an installation, not a user. Its endpoint is `/installation/repositories`. |
-| Push fails inside a Claude session | The Bash sandbox blocks the login Keychain, which the helper reads first. Commits and tags are fine. Push yourself, or run that one command with the sandbox off. |
-| A flip "succeeded" but push fails | The flip's own check mints through its own code path and never exercises git's credential path. Only a real push proves a real push. |
-| A repo in the wrong folder | Doesn't matter. Matching is by origin URL. Move folders whenever you like. |
-| `git clone` of a flipped repo | Arrives with no tier. Either flip it after, or clone with `git -c githubagent.tier=<tier> clone ...`. |
-| A push works, then "stops using" the helper | Correct and expected. The token cache serves the next 50 minutes from memory, so `github-agent-token` is not invoked again. 0 invocations on a warm repeat is the cache working, not a broken helper. |
-| The cache seems to do nothing | Two usual causes. Helper ORDER: `cache` must sit above the minting helper in `~/.gitconfig-githubagent`. Or someone set a custom `--socket` path, which silently starts no daemon at all and falls through to minting every time. Only the default `~/.cache/git/credential/socket` works. |
-| `pgrep` says the cache daemon is not running | Not evidence. Inside the Claude sandbox `pgrep` fails with "Cannot get process list" and the count reads 0 either way. Check it unsandboxed. |
-| A push fails 403 "denied to gap-cc-...[bot]" | Do NOT conclude the App lost write access from one 403. Seen 2026-09-13 during a GitHub wobble while the installation record read `contents: write` and the next push succeeded. Retry first. `GET /installation/repositories` also reported `permissions.push: false` three times while real pushes worked, so that field is not a reliable indicator either. |
-| Mint fails with a 500 or 502 | GitHub's token endpoint, not you. Measured 6 failures in 10 calls on 2026-09-13 with githubstatus.com showing all green. `github-agent-token` retries 5xx six times with jitter and says so on stderr; a 4xx still fails instantly. |
+| Symptom                                                       | Cause                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `gh` works but proves nothing                                 | `gh` ignores the credential helper. It prefers `$GH_TOKEN`, then its own keyring (which holds an old broad `gho_` token). Use `GH_TOKEN="$(github-agent-token token)" gh ...` to exercise the App path.                                                                                                                                                                                                                                                                             |
+| `/user/repos` returns 403                                     | Correct. An App token is an installation, not a user. Its endpoint is `/installation/repositories`.                                                                                                                                                                                                                                                                                                                                                                                 |
+| Push fails inside a Claude session                            | The Bash sandbox blocks the login Keychain, which the helper reads first. Commits and tags are fine. Push yourself, or run that one command with the sandbox off.                                                                                                                                                                                                                                                                                                                   |
+| A flip "succeeded" but push fails                             | The flip's own check mints through its own code path and never exercises git's credential path. Only a real push proves a real push.                                                                                                                                                                                                                                                                                                                                                |
+| A repo in the wrong folder                                    | Doesn't matter. Matching is by origin URL. Move folders whenever you like.                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `git clone` of a flipped repo                                 | Arrives with no tier. Either flip it after, or clone with `git -c githubagent.tier=<tier> clone ...`.                                                                                                                                                                                                                                                                                                                                                                               |
+| A push works, then "stops using" the helper                   | Correct and expected. The token cache serves the next 50 minutes from memory, so `github-agent-token` is not invoked again. 0 invocations on a warm repeat is the cache working, not a broken helper.                                                                                                                                                                                                                                                                               |
+| The cache seems to do nothing                                 | Two usual causes. Helper ORDER: `cache` must sit above the minting helper in `~/.gitconfig-githubagent`. Or the daemon could not bind its socket: inside the Claude sandbox git prints `unable to bind to '<socket>': Operation not permitted` and `cache daemon did not start`, then mints every time. (This row used to blame any custom `--socket` path. Measured 2026-09-25 unsandboxed: a custom socket under `$TMPDIR` served from the cache. Only the sandboxed run failed.) |
+| Push fails "Invalid username or token"                        | The cache served an expired token. Fixed by A30 (the helper now sends `password_expiry_utc`), except for a token cached before the upgrade. `git credential-cache exit`, then retry. See Recipe 8.                                                                                                                                                                                                                                                                                  |
+| A freshly minted token fails once with "Repository not found" | Seen 2026-09-25, 11 seconds after a cache clear; a retry about 30 seconds later went through. Retry once before suspecting the repo or the install.                                                                                                                                                                                                                                                                                                                                 |
+| `pgrep` says the cache daemon is not running                  | Not evidence. Inside the Claude sandbox `pgrep` fails with "Cannot get process list" and the count reads 0 either way. Check it unsandboxed.                                                                                                                                                                                                                                                                                                                                        |
+| A push fails 403 "denied to gap-cc-...[bot]"                  | Do NOT conclude the App lost write access from one 403. Seen 2026-09-13 during a GitHub wobble while the installation record read `contents: write` and the next push succeeded. Retry first. `GET /installation/repositories` also reported `permissions.push: false` three times while real pushes worked, so that field is not a reliable indicator either.                                                                                                                      |
+| Mint fails with a 500 or 502                                  | GitHub's token endpoint, not you. Measured 6 failures in 10 calls on 2026-09-13 with githubstatus.com showing all green. `github-agent-token` retries 5xx six times with jitter and says so on stderr; a 4xx still fails instantly.                                                                                                                                                                                                                                                 |

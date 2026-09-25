@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+# github-agent-token-selftest -- proves the property W-20260925-A30 rests on: git's memory
+# cache hands back a DEAD token unless the helper stamps password_expiry_utc on it.
+# Arms, against a fake helper and a throwaway cache daemon (nothing real is touched):
+#   warm fill served from the cache in both arms (positive control; without it, INVALID)
+#   WITH the field: a fill after the expiry skips the cache and mints again
+#   WITHOUT the field (the pre-A30 helper): the same fill gets the stale token back
+# --live also asks the REAL github-agent-token for one token in the flipped repo you are
+# standing in and checks the field is there and 40 to 55 minutes ahead. It never prints
+# the token. It needs the login Keychain, so run it with the sandbox off.
+# Exit: 0 pass, 1 an arm failed, 2 INVALID TRIAL (the cache never engaged, so nothing was
+# tested; inside the Claude sandbox the daemon cannot bind its socket).
+# Read this whole file before running any of it, so an edit saved mid-run cannot change
+# the run (W-20260923-A57). A crash under it exits 127 (unbound var) or 1 (bash 3.2 syntax
+# error); `selftest-whole-read --help` has the map. Do not move or reword these lines.
+[ -n "${SELFTEST_WHOLE_READ-}" ] || SELFTEST_WHOLE_READ=1 exec "$BASH" -c 'shopt -u sourcepath; . "$0"' "$0" "$@"
+unset SELFTEST_WHOLE_READ
+
+set -uo pipefail
+BIN="$(cd "$(dirname "$0")" && pwd -P)"
+LIVE=0
+case "${1-}" in
+  "") ;;
+  --live) LIVE=1 ;;
+  *) echo "usage: github-agent-token-selftest [--live]"; exit 2 ;;
+esac
+ROOT="$(mktemp -d "${TMPDIR:-/tmp}/github-agent-token-selftest.XXXXXX")" || exit 1
+mkdir -p "$ROOT/home"
+PASS=0; FAIL=0; INVALID=0
+ok(){ PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
+bad(){ FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1"; }
+invalid(){ INVALID=$((INVALID+1)); printf '  INVALID %s\n' "$1"; }
+
+# The fake minting helper: counts its calls, hands out MINTED-<n>, and adds
+# password_expiry_utc=<now + FAKE_EXPIRY_OFFSET> only when that variable is set.
+cat > "$ROOT/fake-helper" <<'H'
+#!/bin/bash
+[ "$1" = get ] || { cat >/dev/null; exit 0; }
+cat >/dev/null
+n=$(( $(cat "$FAKE_CALLS" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$FAKE_CALLS"
+echo username=x-access-token
+echo "password=MINTED-$n"
+[ -n "${FAKE_EXPIRY_OFFSET-}" ] && echo "password_expiry_utc=$(( $(date +%s) + FAKE_EXPIRY_OFFSET ))"
+exit 0
+H
+chmod +x "$ROOT/fake-helper"
+
+REQ=$'protocol=https\nhost=example.invalid\npath=o/r.git\nusername=x-access-token\n'
+pw(){ printf '%s\n' "$1" | sed -n 's/^password=//p'; }
+
+# arm <label> <expiry offset, empty for none>: fill, store, fill warm, wait past the
+# expiry (the cache's own timeout is 300 s, far away), fill again. Prints "warm stale"
+# as the password each later fill got, or returns 2 when the cache never engaged.
+arm(){
+  local label=$1 offset=$2 cfg="$ROOT/$1.gitconfig" sock="$ROOT/$1.sock"
+  printf '[credential "https://example.invalid"]\n\thelper = cache --timeout=300 --socket=%s\n\thelper = %s\n\tuseHttpPath = true\n' \
+    "$sock" "$ROOT/fake-helper" > "$cfg"
+  (
+    export HOME="$ROOT/home" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="$cfg" GIT_TERMINAL_PROMPT=0 FAKE_CALLS="$ROOT/$label.calls"
+    if [ -n "$offset" ]; then export FAKE_EXPIRY_OFFSET="$offset"; else unset FAKE_EXPIRY_OFFSET; fi
+    f1=$(printf '%s\n' "$REQ" | git credential fill 2>"$ROOT/$label.err")
+    printf '%s\n' "$f1" | git credential approve 2>>"$ROOT/$label.err"
+    f2=$(printf '%s\n' "$REQ" | git credential fill 2>>"$ROOT/$label.err")
+    sleep 8
+    f3=$(printf '%s\n' "$REQ" | git credential fill 2>>"$ROOT/$label.err")
+    git credential-cache --socket="$sock" exit 2>/dev/null
+    printf '%s %s %s\n' "$(pw "$f1")" "$(pw "$f2")" "$(pw "$f3")"
+  )
+}
+
+echo "git: $(git --version)"
+read -r W1 W2 W3 <<<"$(arm with-expiry 5)"
+read -r N1 N2 N3 <<<"$(arm no-expiry "")"
+
+if [ "${W2-}" = MINTED-1 ] && [ "${N2-}" = MINTED-1 ]; then
+  ok "warm fill served from the cache in both arms (control)"
+  if [ "${W3-}" = MINTED-2 ]; then ok "with password_expiry_utc: expired cached token skipped, minted again"
+  else bad "with password_expiry_utc: expected MINTED-2 after expiry, got '${W3-}'"; fi
+  if [ "${N3-}" = MINTED-1 ]; then ok "without the field: cache served the stale token (the A30 failure, reproduced)"
+  else bad "without the field: expected the stale MINTED-1, got '${N3-}' (the arms no longer separate)"; fi
+else
+  invalid "cache never engaged (warm fills got '${W2-}' and '${N2-}', wanted MINTED-1): nothing was tested"
+  sed 's/^/         /' "$ROOT/with-expiry.err" | head -3
+fi
+
+if [ "$LIVE" = 1 ]; then
+  url=$(git remote get-url origin 2>/dev/null) || url=""
+  case "$url" in
+    https://x-access-token@github.com/*)
+      path=${url#https://x-access-token@github.com/}
+      now=$(date +%s)
+      # Straight to the helper, NOT through `git credential fill`: a fill could be
+      # answered by the real cache holding a token minted before this change.
+      live=$(printf 'protocol=https\nhost=github.com\npath=%s\nusername=x-access-token\n\n' "$path" \
+        | "$BIN/github-agent-token" get 2>"$ROOT/live.err"); rc=$?
+      fields=$(printf '%s\n' "$live" | sed -n 's/=.*//p' | tr '\n' ' ')
+      exp=$(printf '%s\n' "$live" | sed -n 's/^password_expiry_utc=//p')
+      live=""
+      if [ "$rc" != 0 ]; then
+        invalid "live: helper exited $rc: $(head -1 "$ROOT/live.err") (exit 44 or a Keychain error means the sandbox is on)"
+      elif [ -z "$exp" ]; then
+        bad "live: no password_expiry_utc from the real helper (fields: $fields)"
+      else
+        mins=$(( (exp - now) / 60 ))
+        if [ "$mins" -ge 40 ] && [ "$mins" -le 55 ]; then ok "live: real helper sent fields: $fields, expiry ${mins} min ahead"
+        else bad "live: expiry ${mins} min ahead, wanted 40 to 55 (fields: $fields)"; fi
+      fi ;;
+    *) invalid "live: origin here is not a flipped repo (want https://x-access-token@github.com/...)" ;;
+  esac
+fi
+
+echo "github-agent-token-selftest: $PASS passed, $FAIL failed, $INVALID invalid (scratch: $ROOT)"
+[ "$FAIL" -gt 0 ] && exit 1
+[ "$INVALID" -gt 0 ] && exit 2
+exit 0
