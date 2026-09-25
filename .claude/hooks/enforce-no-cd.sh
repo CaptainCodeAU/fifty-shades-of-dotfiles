@@ -48,6 +48,11 @@ CONV_MODE_NAME=nocd
 CONV_LIB_DIR="$HOOKS_DIR/../../home/.claude/hooks"
 CONV_LOG_FILE="$HOOKS_DIR/security.log"
 CONV_FALLBACK_ERE='(^|[;&|(][[:space:]]*)cd[[:space:]]'
+# An unreadable payload (jq gone, truncated JSON, a moved key) cannot be rewritten
+# safely, so a raw text with cd as a word is DENIED by name (D-20260925-A03).
+CONV_TRIGGER_ERE='(^|[^A-Za-z0-9_.-])cd([^A-Za-z0-9_-]|$)'
+CONV_TRIGGER_WHAT='a cd'
+CONV_UNREADABLE=deny
 
 if [ ! -r "$CONV_LIB_DIR/conv-hooklib.sh" ]; then
   COMMAND=$(jq -r '.tool_input.command // empty' 2>/dev/null)
@@ -132,6 +137,10 @@ if [ "${1:-}" = "--selftest" ]; then
   conv_arm deny  'scanner missing: slip denied'   'cd /x && ls'
   conv_arm allow 'scanner missing: harmless ok'   'echo control-ok'
   unset CONV_SHSCAN
+  echo "=== UNREADABLE arms: jq gone, truncated JSON, a moved key (D-20260925-A03) ==="
+  # With cd: deny, never a rewrite built from a payload that was not read.
+  # Without: `echo abcd` holds the letters cd inside a word, and stays quiet.
+  conv_unreadable_arms deny 'cd /tmp && ls' 'echo abcd'
   conv_selftest_end
 fi
 

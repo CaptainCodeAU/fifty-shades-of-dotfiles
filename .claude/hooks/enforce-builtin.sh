@@ -33,6 +33,11 @@ CONV_MODE_NAME=builtin
 CONV_LIB_DIR="$HOOKS_DIR/../../home/.claude/hooks"
 CONV_LOG_FILE="$HOOKS_DIR/security.log"
 CONV_FALLBACK_ERE='(^|[;&|(][[:space:]]*)builtin[[:space:]]'
+# An unreadable payload whose raw text has builtin as a word is DENIED by name
+# (D-20260925-A03).
+CONV_TRIGGER_ERE='(^|[^A-Za-z0-9_.-])builtin([^A-Za-z0-9_-]|$)'
+CONV_TRIGGER_WHAT='builtin'
+CONV_UNREADABLE=deny
 
 if [ ! -r "$CONV_LIB_DIR/conv-hooklib.sh" ]; then
   COMMAND=$(jq -r '.tool_input.command // empty' 2>/dev/null)
@@ -97,6 +102,8 @@ if [ "${1:-}" = "--selftest" ]; then
   conv_arm deny  'scanner missing: builtin denied' 'builtin foo'
   conv_arm allow 'scanner missing: harmless ok'   'echo control-ok'
   unset CONV_SHSCAN
+  echo "=== UNREADABLE arms: jq gone, truncated JSON, a moved key (D-20260925-A03) ==="
+  conv_unreadable_arms deny 'builtin foo' 'echo mybuiltin builtins'
   conv_selftest_end
 fi
 
