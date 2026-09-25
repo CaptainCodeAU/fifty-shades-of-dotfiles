@@ -1,6 +1,7 @@
 #!/bin/bash
-# Fire at the MOMENT a grep is about to run, and point the session at the census tool.
-# Runs on PreToolUse for Bash. Sibling of enforce-uv / enforce-pnpm / enforce-gh-ssh-only:
+# Fire at the MOMENT a grep is about to COUNT or LIST, and point the session at the census
+# tool. A plain locate stays quiet (D-20260925-A02; the second gate below). Runs on
+# PreToolUse for Bash. Sibling of enforce-uv / enforce-pnpm / enforce-gh-ssh-only:
 # it never blocks, never edits the command, and always exits 0.
 #
 # WHY IT EXISTS — measured, not felt
@@ -79,8 +80,14 @@ cmd="$(printf '%s' "$payload" | jq -r '.tool_input.command // ""' 2>/dev/null ||
 # delegated work too. Subagent transcripts live one directory deeper than the
 # session's, under `<session-id>/subagents/`; a glob that misses that level finds no
 # search commands at all and reads exactly like proof of a gap.
+#
+# D-20260925-A02 narrowed it: the Grep tool's DEFAULT output_mode is files_with_matches, a
+# LIST, and `count` is a COUNT, so both fire. `content` only locates lines, so it is quiet.
 if [ "$tool_name" = "Grep" ]; then
+  _gmode="$(printf '%s' "$payload" | jq -r '.tool_input.output_mode // "files_with_matches"' 2>/dev/null || true)"
+  [ "$_gmode" = "content" ] && exit 0
   _search=1
+  _trigger="output_mode $_gmode"
   _tool="Grep-tool search"
   _why="The Grep tool does none of that either: it skips hidden files and honours .gitignore
 by default, and answers a miss with the bare words \"No matches found\" — no denominator, no
@@ -158,7 +165,28 @@ inhd==0{
   print; next
 }
 { t=$0; sub(/^[ \t]+/,"",t); if (t==hd) { inhd=0; hd="" } ; next }'
-_bare="$(printf '%s' "$cmd" | awk "$_hd" | sed -e "s/'[^']*'/ /g" -e 's/"[^"]*"/ /g' -e 's/#.*$//')"
+_strip() { sed -e "s/'[^']*'/ /g" -e 's/"[^"]*"/ /g' -e 's/#.*$//'; }
+_nohd="$(printf '%s' "$cmd" | awk "$_hd")"
+_bare="$(printf '%s' "$_nohd" | _strip)"
+
+# THE ONE QUOTED STRING THAT IS READ AS COMMANDS: the script handed to a shell's `-c`.
+# D-20260925-A02 made the reminder depend on a count flag, and `bash -c 'rg -c foo'` then
+# asked two questions at once. The `-c` there is BASH's flag, never rg's, so it must not
+# count; and the rg inside the string is a real search, so its own `-c` should. Stripping the
+# whole span (above) answered neither. So the script of `bash|sh|zsh|dash|ksh -c '...'` in
+# command position is lifted out and scanned as extra lines, after the same stripping.
+# `bash -c "echo grep"` (s06) stays quiet: its grep is not in command position there either.
+# A script with a quote of the other kind nested inside is cut at that quote; a miss.
+_shc='(^|[|;&(`'$'\n''[:space:]])([A-Za-z0-9_./-]*/)?(bash|sh|zsh|dash|ksh)[[:space:]]+-[A-Za-z]*c[A-Za-z]*[[:space:]]+('"'"'([^'"'"']*)'"'"'|"([^"]*)")'
+_rest="$_nohd"
+_inner=""
+while [[ "$_rest" =~ $_shc ]]; do
+  _inner="$_inner"$'\n'"${BASH_REMATCH[5]}${BASH_REMATCH[6]}"
+  _rest="${_rest#*"${BASH_REMATCH[0]}"}"
+done
+if [ -n "$_inner" ]; then
+  _bare="$_bare"$'\n'"$(printf '%s' "$_inner" | _strip)"
+fi
 # A NEWLINE starts a command too, and leaving it out of the set below made the whole
 # reminder dead for multi-line commands — which is nearly all of them. Measured
 # 2026-09-04: `rg` on line 3 of a three-line command was SILENT while `grep` on line 3
@@ -189,8 +217,9 @@ _cmdpos='(^|[|;&(`'"$_NL"']|&&|\|\||\$\(|(^|[[:space:]])(xargs|time|sudo|command
 # itself in the notice — a notice that calls a ugrep "a grep" is a notice that looks like
 # a misfire, and one of those stops being read.
 #
-# KNOWN AND DELIBERATE: a search hidden inside a quoted argument — `bash -c "grep foo ."` —
-# is now silent, exactly as `sh -c "rg foo ."` already was. Deleting the span is what kills
+# KNOWN AND DELIBERATE: a search hidden inside a quoted argument — `watch "grep -c foo ."` —
+# is silent. (A shell's `-c` script is the one exception, lifted out above since
+# D-20260925-A02, so `bash -c "grep -c foo ."` is seen.) Deleting the span is what kills
 # the five prose cases; merely blanking the quote characters instead brings the
 # single-quoted false fire straight back (measured both ways). A miss on a wrapped search
 # is the cheaper error of the two, and it is the trade `rg` has been making all along.
@@ -208,6 +237,112 @@ elif [[ "$_bare" =~ $_greppos ]]; then
   _tool="${BASH_REMATCH[5]:-grep}"
 fi
 [ "$_search" -eq 1 ] || exit 0
+
+# ── SECOND GATE: does the search COUNT or LIST? (D-20260925-A02, option D of W-20260924-A48)
+# The reminder fired on every rg and grep, including the ones that only LOCATE a line to
+# read (`rg -n foo file`). A48 measured it firing on every search in two sessions; a notice
+# that fires on every locate is wallpaper by the time a count arrives. What census corrects
+# is a NUMBER or a LIST read as complete, so that is when it fires:
+#   -c --count --count-matches -l --files-with-matches -L(grep, git grep) --files-without-match
+#   --stats --name-only(git grep) --files(rg)  or the search piped into `wc`
+#   -q --quiet --silent: a yes/no test. Its "no" is an absence claim, the answer census
+#     exists for, and `grep -q foo || echo absent` is exactly the unproven zero. So it fires.
+# Quiet: a plain locate, `-o` without a count, and every non-search command.
+#
+# Measured traps this gate is written around:
+#   · rg `-L` is --follow (symlinks), NOT files-without-match as in grep and git grep.
+#   · a short flag that takes a value swallows the rest of its cluster or the next word:
+#     `rg -e -c` searches for the pattern "-c"; `rg -g*.c` is a glob. So each family has
+#     its list of value-taking letters, and a value is never read as a flag.
+#   · `--` ends the options; `rg -- -c` searches for "-c".
+#   · a flag belongs to ITS command: `ls -c ; rg foo` and `bash -c '...'` are not counts.
+# `rg --files` lists every file and fires; `fd` never reaches this gate, because the first
+# gate only knows grep and rg. They share the dotfile blind spot, but fd is not a search
+# and is outside the ruling (brief D). That is a scope line, not an oversight.
+#
+# Command separators become newlines and pipes stay pipes, so each line is one pipeline.
+# Redirections carrying `&` (2>&1, >&2, &>) are dropped first so they do not split a command.
+_countflag() {
+  local fam="$1" cl vl t rest ch
+  shift
+  case "$fam" in
+    rg)  cl="clq";  vl="ABCEefgjMmrTtd" ;;
+    git) cl="clLq"; vl="ABCefm" ;;
+    *)   cl="clLq"; vl="ABCDdefm" ;;
+  esac
+  while [ $# -gt 0 ]; do
+    t="$1"; shift
+    case "$t" in
+      --) return 1 ;;
+      --count|--count-matches|--files-with-matches|--files-without-match|--stats|--quiet|--silent)
+        printf '%s' "$t"; return 0 ;;
+      --name-only) [ "$fam" = git ] && { printf '%s' "$t"; return 0; } ;;
+      --files) [ "$fam" = rg ] && { printf '%s' "$t"; return 0; } ;;
+      --regexp|--file|--glob|--iglob|--type|--type-not|--replace|--max-count|--after-context|--before-context|--context)
+        [ $# -gt 0 ] && shift ;;
+      --*) ;;
+      -?*)
+        rest="${t#-}"
+        while [ -n "$rest" ]; do
+          ch="${rest:0:1}"; rest="${rest:1}"
+          case "$cl" in *"$ch"*) printf '%s' "$t"; return 0 ;; esac
+          case "$vl" in *"$ch"*) [ -z "$rest" ] && [ $# -gt 0 ] && shift; break ;; esac
+        done ;;
+    esac
+  done
+  return 1
+}
+_isrunner() {
+  case "$1" in xargs|time|sudo|command|env|exec|nohup|-exec|-execdir) return 0 ;; esac
+  return 1
+}
+_trigger="${_trigger:-}"
+if [ -z "$_trigger" ]; then
+  _norm="$(printf '%s' "$_bare" | sed -E -e 's/[0-9]*[<>]&[0-9-]*//g' -e 's/&>>?//g' -e 's/\|&/|/g')"
+  _norm="${_norm//&&/$_NL}"
+  _norm="${_norm//||/$_NL}"
+  for _sep in ';' '&' '(' ')' '`' '{' '}'; do
+    _norm="${_norm//"$_sep"/$_NL}"
+  done
+  while IFS= read -r _line; do
+    [ -n "$_trigger" ] && break
+    IFS='|' read -ra _cmds <<< "$_line"
+    _insearch=0
+    # `${a[@]+"${a[@]}"}`: macOS /bin/bash is 3.2, where an EMPTY array under `set -u` is
+    # "unbound" and kills the hook. Measured on the first probe of this gate: the blank line
+    # left by `bash -c '...'` crashed it, and a crashed hook prints nothing, which is silence.
+    for _c in ${_cmds[@]+"${_cmds[@]}"}; do
+      read -ra _w <<< "$_c"
+      [ "${#_w[@]}" -gt 0 ] || continue
+      # A later stage of the same pipeline that is `wc` counts the search's output.
+      _j=0
+      while [ "$_j" -lt "${#_w[@]}" ] && _isrunner "${_w[$_j]}"; do _j=$((_j + 1)); done
+      if [ "$_insearch" -eq 1 ] && [ "$_j" -lt "${#_w[@]}" ] && [ "${_w[$_j]##*/}" = "wc" ]; then
+        _trigger="| wc"; break
+      fi
+      # Find the search word in command position: first word, or straight after a runner,
+      # or `grep` straight after `git`. Mirrors the first gate's _cmdpos/_greppos.
+      _i=0; _prev=""; _fam=""
+      while [ "$_i" -lt "${#_w[@]}" ]; do
+        _t="${_w[$_i]##*/}"
+        if [ "$_i" -eq 0 ] || _isrunner "$_prev" || [ "$_prev" = "git" ]; then
+          case "$_t" in
+            rg|ripgrep) _fam=rg ;;
+            *grep) [[ "$_t" =~ ^[A-Za-z]*grep$ ]] && { [ "$_prev" = "git" ] && _fam=git || _fam=grep; } ;;
+          esac
+        fi
+        [ -n "$_fam" ] && break
+        _prev="$_t"; _i=$((_i + 1))
+      done
+      [ -n "$_fam" ] || continue
+      _insearch=1
+      if _hit="$(_countflag "$_fam" "${_w[@]:$((_i + 1))}")"; then
+        _trigger="$_hit"; break
+      fi
+    done
+  done <<< "$_norm"
+fi
+[ -n "$_trigger" ] || exit 0
 
 # Why THIS instrument cannot be trusted for a zero. Set by the Grep-tool branch; this is the
 # shell-command wording.
@@ -271,14 +406,24 @@ rather than working around it. Fix: re-run stow from the dotfiles repo, which sy
 home/.claude/tools/census.py into place."
 fi
 
+# The UNIT and the CASE lines are D-20260925-A02. A48 measured census answering 37 where every
+# grep said 12 to 14 for the same word in the same file: census counts every OCCURRENCE and
+# ignores case by default, while `-c` counts matching LINES, case-sensitively. Lined up, the
+# two agreed exactly across 4,317 files. So a mismatch is usually the unit or the case, and
+# the reminder has to say which number to compare with which. Ruled 2026-09-25: census keeps
+# its case-insensitive default and prints the case-sensitive count beside it.
 read -r -d '' NOTE <<EOF
-⚠️ A $_tool is about to run. Before trusting a ZERO or a COUNT from it, corroborate:
+⚠️ A $_tool is about to run. It COUNTS or LISTS ($_trigger). Before trusting a ZERO, a COUNT or a LIST from it, corroborate:
 
     $invocation
 
 Census requires a control hit first, prints the denominator and how the population was drawn,
 and never truncates. $_why
 A zero from a search is not evidence of absence until a control has hit in the same breath.
+Census counts OCCURRENCES, not lines: \`grep -c\` and \`rg -c\` count matching LINES, so a line
+holding the word twice is 1 to them and 2 to census (\`rg --count-matches\` counts occurrences).
+Census ignores case by default and prints the case-sensitive count beside it; compare that one
+with a grep or rg, which match case exactly unless given -i.
 Use the search to LOCATE; use census to CONCLUDE.$missing
 EOF
 
