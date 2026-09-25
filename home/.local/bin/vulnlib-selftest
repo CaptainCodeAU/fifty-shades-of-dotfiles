@@ -723,6 +723,47 @@ check("control: a real zero (says 0, sends 0) is still clean",
       _PayloadClient(_empty).cves_for("jqlang", "jq", "1.8.2"), ([], False))
 
 
+section("cves_for(): a short page is retried, a bounded number of times (W-20260925-A40)")
+
+# Live 2026-09-25 the jq query short-paged, answered in full, then short-paged
+# again. So one short page must not cost the answer, and a run of them must not
+# loop forever: each try costs 6.5s without a key.
+
+
+class _SequenceClient(V.NvdClient):
+    """The real cves_for() fed payloads in order, counting the tries."""
+
+    def __init__(self, payloads):
+        super().__init__(None, timeout=1.0)
+        self.delay = 0.0
+        self.payloads = list(payloads)
+        self.tries = 0
+
+    def _get(self, url, params):
+        self.tries += 1
+        return self.payloads.pop(0) if self.payloads else None
+
+
+_sc = _SequenceClient([_short, _pcre2_payload()])
+_got = _sc.cves_for("pcre", "pcre2", "10.47")
+check("short page then a full one: the full answer's six hits come through",
+      None if _got is None else sorted(h["id"] for h in _got[0]), PCRE2_IDS)
+check("short page then a full one: exactly two tries", _sc.tries, 2)
+
+_sc = _SequenceClient([_short, _short, _short, _pcre2_payload()])
+check("three short pages in a row: UNKNOWN, the fourth reply is never asked for",
+      (_sc.cves_for("pcre", "pcre2", "10.47"), _sc.tries), (None, getattr(V, "SHORT_PAGE_TRIES", "missing")))
+check("control: the retry cap is 3", getattr(V, "SHORT_PAGE_TRIES", "missing"), 3)
+
+_sc = _SequenceClient([_pcre2_payload()])
+_sc.cves_for("pcre", "pcre2", "10.47")
+check("control: a complete first reply is not retried", _sc.tries, 1)
+
+_sc = _SequenceClient([None, _pcre2_payload()])
+check("control: a failed _get is not retried here (throttle pacing is _get's job)",
+      (_sc.cves_for("pcre", "pcre2", "10.47"), _sc.tries), (None, 1))
+
+
 print("\n%s%s%s  %d passed, %d failed, %d skipped"
       % (RED if FAILURES else GREEN, "FAIL" if FAILURES else "OK  ", OFF,
          PASS, len(FAILURES), SKIP))

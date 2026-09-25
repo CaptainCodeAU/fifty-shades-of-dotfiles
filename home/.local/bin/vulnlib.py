@@ -52,6 +52,9 @@ import urllib.request
 # outright error). NVD 2.0 by CPE is authoritative and honours version ranges.
 NVD_CVE_URL = "https://services.nvd.nist.gov/rest/json/cves/2.0"
 NVD_CPE_URL = "https://services.nvd.nist.gov/rest/json/cpes/2.0"
+# One query plus two retries when NVD sends fewer records than it says. Each try
+# is paced by NvdClient.delay, so without a key the worst case is about 20s.
+SHORT_PAGE_TRIES = 3
 
 # OVERRIDES ONLY -- not the coverage mechanism. NvdClient.resolve_cpe discovers the
 # vendor for almost everything. This map is for the cases resolution CANNOT reach:
@@ -382,22 +385,30 @@ class NvdClient:
         flag, and vuln-scan caches a verdict for 7 days (W-20260925-A35). So a
         short page returns None, and so does a genuinely truncated page with no
         hit on it: the records it did not send may be the ones that apply.
-        `truncated` survives only alongside real hits, which the caller reports."""
+        `truncated` survives only alongside real hits, which the caller reports.
+
+        A short page is RETRIED, up to SHORT_PAGE_TRIES in all. It is transient:
+        the same query short-paged 2 of 4 tries on 2026-09-25 and answered in
+        full between them. _get already paces every try (W-20260925-A40)."""
         page = 200
         cpe = f"cpe:2.3:a:{vendor}:{product}:{version}:*:*:*:*:*:*:*"
-        data = self._get(NVD_CVE_URL, {"cpeName": cpe, "resultsPerPage": page})
-        if data is None:
+        for _ in range(SHORT_PAGE_TRIES):
+            data = self._get(NVD_CVE_URL, {"cpeName": cpe, "resultsPerPage": page})
+            if data is None:
+                return None
+            vulns = data.get("vulnerabilities") or []
+            try:
+                total = int(data.get("totalResults") or 0)
+            except (TypeError, ValueError):
+                self.failures += 1
+                return None
+            if len(vulns) >= min(total, page):
+                break
+            self.failures += 1          # short page: NVD sent less than it said
+        else:
             return None
         marker = f":{vendor}:{product}:"
-        hits, vulns = [], (data.get("vulnerabilities") or [])
-        try:
-            total = int(data.get("totalResults") or 0)
-        except (TypeError, ValueError):
-            self.failures += 1
-            return None
-        if len(vulns) < min(total, page):
-            self.failures += 1          # short page: NVD sent less than it said
-            return None
+        hits = []
         for v in vulns:
             cve = v.get("cve") or {}
             cid = cve.get("id")
