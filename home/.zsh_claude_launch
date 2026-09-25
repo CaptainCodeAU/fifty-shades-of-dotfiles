@@ -51,6 +51,14 @@ __claude_launch() {
   # run outside a Claude session is authenticated too; this export just saves it
   # the `security` call. Empty on non-macOS -> the sweep degrades to slow, never wrong.
   local nvd_key="$(security find-generic-password -a "$USER" -s nvd-api-key -w 2>/dev/null)"
+  # The classic-renderer lock (CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN, set on the launch below):
+  # 1 for every launch, which is Gavin's June 2026 rejection of fullscreen's mouse capture.
+  # ONLY a pj profile with `renderer: fullscreen` lifts it, by exporting PJ_RENDERER=fullscreen
+  # (pj exports PJ_RENDERER on every launch, so it is never inherited). The `c` family never
+  # sets it and stays locked. W-20260923-A12: the lock outranks /tui and NO_FLICKER, so a
+  # docked Mods pane needed a way past it.
+  local _pj_alt_off=1
+  [[ "${PJ_RENDERER-}" == fullscreen ]] && _pj_alt_off=0
 
   # Refresh the read-only GH API status cache that the welcome banner reads.
   # Background, 6h-gated, uses the token we just read; never blocks the launch.
@@ -105,7 +113,7 @@ __claude_launch() {
         DO_NOT_TRACK= \
         NVD_API_KEY="$nvd_key" \
         CLAUDE_CODE_HIDE_ACCOUNT_INFO=1 \
-        CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1 \
+        CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN="$_pj_alt_off" \
         ENABLE_EXPERIMENTAL_MCP_CLI=1 \
         ENABLE_TOOL_SEARCH=1 \
         "$@"
@@ -127,7 +135,7 @@ __claude_launch() {
       DO_NOT_TRACK= \
       NVD_API_KEY="$nvd_key" \
       CLAUDE_CODE_HIDE_ACCOUNT_INFO=1 \
-      CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1 \
+      CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN="$_pj_alt_off" \
       ENABLE_EXPERIMENTAL_MCP_CLI=1 \
       ENABLE_TOOL_SEARCH=1 \
       "$@"

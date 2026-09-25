@@ -28,3 +28,7 @@ prompt:          pj-prompt-file
 plugins:         none
 mode:            normal
 card:            off
+# Fullscreen so a Mods pane can dock beside the transcript (W-20260923-A12, Gavin
+# 2026-09-26: "Profile switch"). Every other profile keeps the classic lock. c2 sessions
+# use this profile too, so they open fullscreen as well.
+renderer:        fullscreen
