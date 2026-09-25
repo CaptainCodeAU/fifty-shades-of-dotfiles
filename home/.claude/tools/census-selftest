@@ -98,7 +98,7 @@ def main() -> int:
 
         # ── HARNESS CONTROL — no assertion runs until census is proven callable ──────
         rc, _, plain = run(root, *W, "NEEDLE")
-        m = re.search(r"^\s*NEEDLE\s+(\d+)\s*$", plain, re.M)
+        m = re.search(r"^\s*NEEDLE\s+(\d+)(?:\s+exact-case\s+\d+)?\s*$", plain, re.M)
         if rc != 0 or not m or int(m.group(1)) == 0:
             print(f"{RED}✗ HARNESS CONTROL FAILED — census did not produce a known "
                   f"non-zero count (rc={rc}).{OFF}")
@@ -125,12 +125,12 @@ def main() -> int:
 
         # ── 2 · a zero caused by literal escaping is called out, not reported clean ──
         _, _, plain = run(root, *W, r"\.zshrc")
-        zero = re.search(r"^\s*\\\.zshrc\s+0\s*$", plain, re.M)
+        zero = re.search(r"^\s*\\\.zshrc\s+0(?:\s+exact-case\s+\d+)?\s*$", plain, re.M)
         check("2a control: literal-mode zero is flagged, not silent",
               bool(zero) and "literal mode" in plain and "--regex" in plain,
               "a regex pattern returned 0 with no warning")
         _, _, plain = run(root, "--regex", *W, r"\.zshrc")
-        m = re.search(r"^\s*\\\.zshrc\s+(\d+)\s*$", plain, re.M)
+        m = re.search(r"^\s*\\\.zshrc\s+(\d+)(?:\s+exact-case\s+\d+)?\s*$", plain, re.M)
         check("2b control: --regex finds what literal mode could not",
               bool(m) and int(m.group(1)) == 2, "expected 2 hits for .zshrc")
         _, _, plain = run(root, *W, "NEEDLE")
@@ -146,7 +146,7 @@ def main() -> int:
               "matching: regex, case-sensitive" in plain)
         _, _, ins = run(root, *W, "needle")
         _, _, sen = run(root, "--case-sensitive", *W, "needle")
-        gi = re.search(r"^\s*needle\s+(\d+)\s*$", ins, re.M)
+        gi = re.search(r"^\s*needle\s+(\d+)(?:\s+exact-case\s+\d+)?\s*$", ins, re.M)
         gs = re.search(r"^\s*needle\s+(\d+)\s*$", sen, re.M)
         check("4b case: the two modes really do differ",
               bool(gi) and bool(gs) and int(gi.group(1)) > int(gs.group(1)),
