@@ -1,7 +1,7 @@
 # Zed Preview — Changelog Tracker
 
-<!-- ZED_PREVIEW_DOC_VERSION: 1.21.0 -->
-<!-- LAST_UPDATED: 2026-09-23 -->
+<!-- ZED_PREVIEW_DOC_VERSION: 1.22.0 -->
+<!-- LAST_UPDATED: 2026-09-25 -->
 
 > **What this is.** A living record of notable **Zed Preview** changes, filtered to
 > what Gavin cares about: **user interface**, **configuration / settings**, and
@@ -30,10 +30,10 @@
 
 | Field                  | Value         |
 | ---------------------- | ------------- |
-| Latest Preview tracked | **1.21.0**    |
-| Release date           | 2026-09-16    |
-| GitHub tag             | `v1.21.0-pre` |
-| Doc last refreshed     | 2026-09-23    |
+| Latest Preview tracked | **1.22.0**    |
+| Release date           | 2026-09-23    |
+| GitHub tag             | `v1.22.0-pre` |
+| Doc last refreshed     | 2026-09-25    |
 
 ---
 
@@ -49,7 +49,7 @@ rather than buried. (Cross-references are auto-memory slugs.)
     from git because it holds private server info — leave it alone.
 - **Per-project themes are wanted; the PR that would have delivered it was CLOSED
   unmerged** (`project_zed_per_project_theme`). Tracked upstream at **zed#13300** (still
-  open, re-checked 2026-09-23). **PR #58755 was closed on 2026-09-07** by a maintainer for
+  open, re-checked 2026-09-25). **PR #58755 was closed on 2026-09-07** by a maintainer for
   suspected LLM-written replies, not because the feature was refused; see the
   2026-09-23 re-check under watch-items for the detail. No successor PR found. The
   `--user-data-dir` workaround exists, but **Gavin rejected it on 2026-06-18** (one Zed
@@ -79,6 +79,71 @@ when it visibly affects the above or Gavin's known setup.
 ---
 
 ## Release log (newest first)
+
+> **Refresh of 2026-09-25 (1.21.0 to 1.22.0, one release).** Source: the GitHub release
+> body for `v1.22.0-pre` (published 2026-09-23), cross-checked against
+> <https://zed.dev/releases/preview/latest>, which showed 1.22.0 with the same items. The
+> GitHub releases list shows no preview patch (`v1.21.x-pre`) between the two; the stable
+> `v1.21.0` (2026-09-23) and `v1.20.2` tags in that window are the stable channel and are
+> not logged here. Settings claims were checked against `home/.config/zed/settings.json`
+> and `keymap.json` on 2026-09-25; the `cmd-w` claim was checked against Zed's own keymap
+> at tag `v1.22.0-pre`.
+
+### 1.22.0 - 2026-09-23
+
+**Theme / appearance**
+
+- _No theme, syntax, colour or icon-theme changes on macOS._ The only theme-setting item
+  is Windows-only: `background.appearance` gained `MicaBackdrop` and `MicaAltBackdrop`.
+  Nothing about per-window or per-project themes.
+  - _In plain English:_ nothing new for how Zed looks on your Mac, and still nothing on
+    colour-per-window.
+
+**Configuration**
+
+- **Threads Sidebar settings renamed and grouped**: now `agent.threads_sidebar.position`,
+  `agent.threads_sidebar.default_width` and the new `agent.threads_sidebar.auto_open`
+  (whether opening a folder in an existing window also opens the sidebar). Old names are
+  migrated automatically. This supersedes the flat `agent.threads_sidebar_default_width`
+  logged under 1.21.0 below; that entry was right when written and is left as is. None of
+  these are set in yours.
+- `"..."` (extend what you inherit) now works in `file_scan_inclusions`, `hidden_files`,
+  `edit_predictions.disabled_globs`, `edit_predictions_disabled_in` and
+  `terminal.path_hyperlink_regexes`. Continues 1.17.0's `file_scan_exclusions` and
+  1.21.0's `read_only_files`.
+- Breaking, narrow: a top-level `"..."` inside `terminal.path_hyperlink_regexes` now means
+  "insert inherited"; to keep a literal three-dot regex write `["..."]`. Not set in yours.
+- Fixed: one invalid file pattern no longer discards the valid exclusion, hidden-file,
+  read-only and private-file rules around it, or panics inclusion and file-type settings.
+- VS Code import: `files.exclude` now imports into `file_scan_exclusions` correctly;
+  `files.watcherInclude` is no longer imported as `file_scan_inclusions`.
+  - _In plain English:_ one agent sidebar setting changed its name (you do not use it),
+    and more list settings can now add to the defaults instead of replacing them.
+
+**UI**
+
+- **`cmd-w` with a dock focused now closes the tab, not the dock.** Closing the focused dock moved to
+  `ctrl-alt-w` on every platform. Checked in Zed's `default-macos.json` at `v1.22.0-pre`;
+  your `VSCode` base keymap does not rebind either key, and your `keymap.json` binds
+  neither.
+- Pending-keystrokes indicator groups bindings, scrolls, and supports chords with no
+  timeout (such as `cmd-k` combinations).
+- Title bar confirms when a manual update check finds Zed already up to date. Text only.
+- `zed --diff <old> <new>` gained a unified/split toggle. macOS Look Up and translation
+  gestures work in focused Markdown previews.
+  - _In plain English:_ `cmd-w` in a panel now closes your file tab, as you would expect;
+    the new close-panel key is `ctrl-alt-w`.
+
+**Fixes Gavin may feel**
+
+- Fixed Markdown preview tabs not showing the source file path on hover.
+- Fixed the block cursor hiding the character under it during its animation, and cursor
+  animation across characters of different widths.
+- Fixed deleted-line Git gutter markers vanishing at narrow custom gutter widths.
+- Fixed the macOS traffic-light animation when leaving fullscreen.
+- Fixed terminals keeping about 2 MB of memory per finished command.
+- Fixed the Git Panel jumping between repositories in multi-repo projects.
+  - _In plain English:_ small visual and memory fixes, nothing you need to change.
 
 > **Refresh of 2026-09-23 (1.17.0 to 1.21.0, nine releases).** Source: the GitHub release
 > bodies for each `v1.x.y-pre` tag, cross-checked against
@@ -788,12 +853,12 @@ when it visibly affects the above or Gavin's known setup.
 
 ## Standing watch-items (open threads)
 
-| Item                               | Status as of 2026-09-23                                                                                                             | Why it matters                      |
-| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
-| Per-project themes (zed#13300)     | Issue open, hook-watched since 2026-09-23; **PR #58755 CLOSED unmerged 2026-09-07**, no successor; ruling: title aid + keep waiting | Gavin's color-per-window goal       |
-| `theme_overrides` at project level | Still user-settings only; nothing in 1.17.0 to 1.21.0 changes it                                                                    | zed#13300 open, nothing building it |
-| `detect_venv` default              | Not mentioned in 1.17.0 to 1.21.0; yours still pins `off`                                                                           | direnv double-activation            |
-| Title-bar settings surface         | `title_bar.show_worktree_name` (1.13.0); `window_title_format` (1.20.0)                                                             | Title text only, never colour       |
+| Item                               | Status as of 2026-09-25                                                                                                                                                  | Why it matters                      |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------- |
+| Per-project themes (zed#13300)     | Issue open, last updated 2026-06-08 (unchanged); hook-watched since 2026-09-23; **PR #58755 CLOSED unmerged 2026-09-07**, no successor; ruling: title aid + keep waiting | Gavin's color-per-window goal       |
+| `theme_overrides` at project level | Still user-settings only; nothing in 1.17.0 to 1.22.0 changes it                                                                                                         | zed#13300 open, nothing building it |
+| `detect_venv` default              | Not mentioned in 1.17.0 to 1.22.0; yours still pins `off`                                                                                                                | direnv double-activation            |
+| Title-bar settings surface         | `title_bar.show_worktree_name` (1.13.0); `window_title_format` (1.20.0); 1.22.0 adds only an update-check confirmation                                                   | Title text only, never colour       |
 
 **PR #58755 "Add per-window theme overrides"** (author 42piratas; opened 2026-06-06;
 open / not merged / not draft; last activity 2026-06-29; base `main`; no milestone;
