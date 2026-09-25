@@ -1,0 +1,97 @@
+#!/bin/bash
+# conv-hooklib-selftest -- prove conv-hooklib.sh's unreadable-payload rule
+# (D-20260925-A03, W-20260924-A76) on stub hooks, apart from any real hook.
+#
+# THE RULE. When a convention hook cannot read its payload (jq missing, invalid
+# JSON, no tool_input.command) and the RAW text matches the caller's
+# CONV_TRIGGER_ERE, a guard denies by name and an advisory hook (CONV_UNREADABLE=
+# warn) warns via additionalContext and exits 0. A caller that sets no
+# CONV_TRIGGER_ERE stays exactly as before: exit 0, no output, so a hook nobody
+# has updated yet does not start denying every command. Before this, every one
+# of these hooks exited 0 in silence on all three faults (measured rt3 H4,
+# 2026-09-24, on enforce-no-reset-by-name).
+#
+# Sibling-selftest pattern, as home/.claude/tools/enforce-census-selftest: the
+# library is SOURCED, never run, so its test lives here. The arm helpers come
+# from the conv-hooklib.sh beside this file (../hooks/). The stub hooks source
+# CONV_LIB_UNDER_TEST when set, so the same arms run against another copy:
+#     CONV_LIB_UNDER_TEST=<master's conv-hooklib.sh> conv-hooklib-selftest
+# (its scanner, conv-shscan.awk, must sit beside that copy).
+#
+# bash 3.2 (/bin/bash on macOS): run it under its shebang.
+
+HERE="$(builtin cd "$(dirname "$0")" && pwd)"
+HELPERS="$HERE/../hooks/conv-hooklib.sh"
+[ -r "$HELPERS" ] || { echo "FAIL  conv-hooklib.sh not found at $HELPERS"; exit 1; }
+LIB="${CONV_LIB_UNDER_TEST:-$HELPERS}"
+LIB="$(builtin cd "$(dirname "$LIB")" && pwd)/$(basename "$LIB")"
+[ -r "$LIB" ] || { echo "FAIL  library under test not readable: $LIB"; exit 1; }
+
+. "$HELPERS" || { echo "FAIL  sourcing $HELPERS failed"; exit 1; }
+/bin/bash -n "$LIB" || { echo "FAIL  the library under test does not parse: $LIB"; exit 1; }
+conv_selftest_begin "$0"
+echo "library under test: $LIB"
+
+fx=$(mktemp -d "${TMPDIR:-/tmp}/conv-hooklib-selftest.XXXXXX") || { echo "FAIL  cannot make a fixture dir"; exit 1; }
+
+# $1 stub name, then lines of shell placed before the library is sourced.
+stub() {
+  local f="$fx/$1.sh"; shift
+  {
+    echo '#!/bin/bash'
+    echo "CONV_TAG=$(basename "$f" .sh)"
+    echo 'CONV_MODE_NAME=reset'
+    echo "CONV_LIB_DIR='$(dirname "$LIB")'"
+    echo 'CONV_LOG_FILE=/dev/null'
+    echo "CONV_FALLBACK_ERE='(^|[^A-Za-z0-9_./-])(rm[[:space:]]+-[A-Za-z]*[rR]|rmdir[[:space:]]).*(mkdir|cp)[[:space:]]'"
+    for l in "$@"; do echo "$l"; done
+    echo ". '$LIB'"
+    echo 'conv_hook_main'
+  } > "$f"
+  chmod +x "$f"
+  printf '%s' "$f"
+}
+
+TRIG="CONV_TRIGGER_ERE='(^|[^A-Za-z0-9_])zzcanary([^A-Za-z0-9_]|\$)'"
+
+echo "=== a GUARD (CONV_UNREADABLE unset = deny) ==="
+_st_hook=$(stub guard "$TRIG" "CONV_TRIGGER_WHAT='the word \"zzcanary\"'")
+conv_arm deny  "control: valid payload, the scanner still denies a reset" 'rm -rf P; mkdir P'
+conv_arm allow "control: valid payload with the trigger, nothing to deny" 'echo zzcanary'
+conv_unreadable_arms deny 'ls zzcanary' 'ls plain'
+p=$(conv_payload $'echo x\nzzcanary here' | jq -c .)
+conv_arm_raw deny  "trigger after an escaped newline (x\\nzzcanary) still counts" "${p%??????????}"
+p=$(conv_payload 'zzcanary SEKRITVALUE123' | jq -c .)
+out=$(printf '%s' "${p%??????????}" | CONV_HOOK_LOG=/dev/null "$_st_hook" 2>/dev/null)
+_st_n=$((_st_n + 1))
+case "$out" in
+  *SEKRITVALUE123*) echo "FAIL  deny    the refusal quotes the command text"; _st_fails=$((_st_fails + 1)) ;;
+  *'"deny"'*)       echo "ok    deny    the refusal never quotes the command text" ;;
+  *) echo "FAIL  deny    no deny to inspect: $out"; _st_fails=$((_st_fails + 1)) ;;
+esac
+_st_n=$((_st_n + 1))
+if printf '%s' "$out" | jq -e '.hookSpecificOutput.permissionDecisionReason | test("^guard: cannot read the tool payload \\(jq could not parse it, rc=[0-9]+\\); denying because it mentions the word \"zzcanary\"")' >/dev/null 2>&1; then
+  echo "ok    deny    the reason names the hook, the fault and the trigger (quotes escaped)"
+else
+  echo "FAIL  deny    the reason is not the agreed wording: $out"; _st_fails=$((_st_fails + 1))
+fi
+conv_arm_raw allow "empty stdin stays quiet" ''
+conv_arm_raw allow "a real, EMPTY command stays quiet, trigger in the description" \
+  "$(conv_payload '' | jq -c '.tool_input.description = "zzcanary"')"
+
+echo "=== an ADVISORY hook (CONV_UNREADABLE=warn) ==="
+_st_hook=$(stub advisory "$TRIG" 'CONV_UNREADABLE=warn')
+conv_arm deny  "control: valid payload, the scanner still denies a reset" 'rm -rf P; mkdir P'
+conv_unreadable_arms warn 'ls zzcanary' 'ls plain'
+
+echo "=== a misspelt CONV_UNREADABLE fails closed ==="
+_st_hook=$(stub typo "$TRIG" 'CONV_UNREADABLE=wran')
+conv_unreadable_arms deny 'ls zzcanary' 'ls plain'
+
+echo "=== a hook that sets no CONV_TRIGGER_ERE behaves as before: quiet ==="
+_st_hook=$(stub untouched)
+conv_arm deny  "control: valid payload, the scanner still denies a reset" 'rm -rf P; mkdir P'
+conv_unreadable_arms allow 'ls zzcanary' 'ls plain'
+
+echo "(fixtures: $fx)"
+conv_selftest_end
