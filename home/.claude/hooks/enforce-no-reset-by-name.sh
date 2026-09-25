@@ -40,6 +40,12 @@ CONV_MODE_NAME=reset
 CONV_LIB_DIR="$(dirname "$0")"
 CONV_LOG_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/hooks-security.log"
 CONV_FALLBACK_ERE='(^|[^A-Za-z0-9_./-])(rm[[:space:]]+-[A-Za-z]*[rR]|rmdir[[:space:]]).*(mkdir|cp|mv|tar|unzip|ln|git init)[[:space:]]'
+# An unreadable payload (jq missing, invalid JSON, no tool_input.command) is
+# DENIED when its raw text holds the same crude reset shape, and passes quietly
+# otherwise (D-20260925-A03, conv-hooklib.sh). A lone `rm -rf x` is not a
+# trigger: this hook never denies a remove on its own, only its reuse.
+CONV_TRIGGER_ERE="$CONV_FALLBACK_ERE"
+CONV_TRIGGER_WHAT='a recursive rm followed by a reuse verb (mkdir, cp, mv, tar, unzip, ln, git init)'
 
 if [ ! -r "$CONV_LIB_DIR/conv-hooklib.sh" ]; then
   # Not even the plumbing is here: deny a likely match by name, allow the rest.
@@ -198,6 +204,13 @@ EOF
   conv_arm deny  "scanner missing: a one-line reset is denied by name" 'rm -rf "$W" 2>/dev/null; mkdir -p "$W"'
   conv_arm allow "scanner missing: an unrelated command passes"      'ls -la'
   unset CONV_SHSCAN
+
+  echo "=== UNREADABLE arms: the payload cannot be read (D-20260925-A03) ==="
+  conv_unreadable_arms deny 'rm -rf "$W" 2>/dev/null; mkdir -p "$W"' 'ls -la'
+  p=$(conv_payload 'rm -rf "$S/old" 2>/dev/null' | jq -c .)
+  conv_arm_raw allow "unreadable, PATH without jq, a lone rm -rf is not a trigger" "$p" nojq
+  p=$(conv_payload $'rm -rf "$W"\nmkdir -p "$W"' | jq -c .)
+  conv_arm_raw deny  "unreadable, truncated, rm and mkdir on separate lines" "${p%??????????}"
   conv_selftest_end
 fi
 
