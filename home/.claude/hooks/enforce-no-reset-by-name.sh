@@ -67,7 +67,10 @@ _conv_rc=$?
 if [ "$_conv_rc" -ne 0 ] || ! declare -F conv_hook_main conv_unreadable conv_scan conv_deny conv_log conv_json_str >/dev/null 2>&1; then
   [ "${1:-}" = "--selftest" ] && { echo "FAIL  conv-hooklib.sh failed to load beside $0 (rc=$_conv_rc)"; exit 1; }
   _raw=$(sed -e 's/\\[nrt]/ /g' -e 's/\\"/"/g')
-  _ere="${CONV_TRIGGER_ERE:-$CONV_FALLBACK_ERE}"
+  # Never a bare $V (set -u would crash, silently: fail-open again), and an
+  # EMPTY pattern matches everything, so it would deny every command: exit 0.
+  _ere="${CONV_TRIGGER_ERE-}"; [ -n "$_ere" ] || _ere="${CONV_FALLBACK_ERE-}"
+  [ -n "$_ere" ] || exit 0
   [[ $_raw =~ $_ere ]] || exit 0
   _why="$CONV_TAG: conv-hooklib.sh failed to load (rc=$_conv_rc), so this command was not checked, and it mentions its trigger"
   if [ "${CONV_UNREADABLE:-deny}" = warn ]; then
@@ -237,11 +240,15 @@ EOF
   # A copy of the hook under test, with a broken library beside it: once with the
   # error at the top (nothing defined), once at the end (conv_hook_main defined,
   # but the source still returns 1).
-  _lf() { # $1 top|end, $2 deny|allow, $3 label, $4 command
+  _lf() { # $1 top|end|noere, $2 deny|allow, $3 label, $4 command
     local d out got ok=0
     d=$(mktemp -d "${TMPDIR:-/tmp}/reset-brokenlib.XXXXXX")
     cp "$_st_hook" "$d/hook.sh"; cp "$CONV_LIB_DIR/conv-shscan.awk" "$d/"
-    if [ "$1" = top ]; then
+    if [ "$1" = noere ]; then
+      # both patterns blanked in the hook copy: an empty ERE must not deny all
+      sed -e 's/^CONV_FALLBACK_ERE=.*/CONV_FALLBACK_ERE=/' -e 's/^CONV_TRIGGER_ERE=.*/CONV_TRIGGER_ERE=/' "$_st_hook" > "$d/hook.sh"
+    fi
+    if [ "$1" != end ]; then
       { echo 'broken() { if then; }'; cat "$CONV_LIB_DIR/conv-hooklib.sh"; } > "$d/conv-hooklib.sh"
     else
       { cat "$CONV_LIB_DIR/conv-hooklib.sh"; echo 'broken() { if then; }'; } > "$d/conv-hooklib.sh"
@@ -260,6 +267,7 @@ EOF
   _lf top allow "broken lib (error at the top), no trigger: quiet"           'ls -la'
   _lf end deny  "broken lib (error at the end, functions defined): denied"  'rm -rf "$W" 2>/dev/null; mkdir -p "$W"'
   _lf end allow "broken lib (error at the end), no trigger: quiet"          'ls -la'
+  _lf noere allow "broken lib, both patterns EMPTY: quiet, never deny-all"  'rm -rf "$W" 2>/dev/null; mkdir -p "$W"'
   conv_selftest_end
 fi
 
