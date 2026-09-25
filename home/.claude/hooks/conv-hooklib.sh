@@ -74,7 +74,8 @@ conv_unreadable() {
   local what why r
   [ -n "${CONV_TRIGGER_ERE:-}" ] || return 0
   printf '%s' "$1" | sed -e 's/\\[nrt]/ /g' -e 's/\\"/"/g' | command grep -qE "$CONV_TRIGGER_ERE" || return 0
-  # No apostrophe inside ${V:-word} here: bash 3.2 reads it as opening a quote.
+  # No apostrophe inside "${V:-word}" here: bash reads it as opening a quote and
+  # the whole file fails to load (measured on 3.2.57 and 5.3.20 alike).
   what="${CONV_TRIGGER_WHAT:-}"; [ -n "$what" ] || what="its trigger"; why="$2"
   if [ "${CONV_UNREADABLE:-deny}" = warn ]; then
     r="$CONV_TAG: cannot read the tool payload ($why), so this command was NOT checked, and it mentions $what. It runs unchecked. Fix the hook's input (install jq, or check the payload shape) and run the hook's --selftest."

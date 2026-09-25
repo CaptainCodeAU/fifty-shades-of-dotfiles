@@ -28,11 +28,23 @@ LIB="$(builtin cd "$(dirname "$LIB")" && pwd)/$(basename "$LIB")"
 [ -r "$LIB" ] || { echo "FAIL  library under test not readable: $LIB"; exit 1; }
 
 . "$HELPERS" || { echo "FAIL  sourcing $HELPERS failed"; exit 1; }
-/bin/bash -n "$LIB" || { echo "FAIL  the library under test does not parse: $LIB"; exit 1; }
 conv_selftest_begin "$0"
 echo "library under test: $LIB"
 
 fx=$(mktemp -d "${TMPDIR:-/tmp}/conv-hooklib-selftest.XXXXXX") || { echo "FAIL  cannot make a fixture dir"; exit 1; }
+
+# One apostrophe inside "${V:-word}" stops the whole file loading (hit
+# 2026-09-25 writing this rule; bash 3.2.57 and 5.3.20 alike). The hooks run
+# under /bin/bash, so that is the parser named here. The broken copy is the
+# control: it proves this check can fail.
+echo "=== the library parses under /bin/bash ==="
+_st_n=$((_st_n + 1))
+if /bin/bash -n "$LIB" 2>/dev/null; then echo "ok    parse   /bin/bash -n on the library under test"
+else echo "FAIL  parse   /bin/bash -n on the library under test: $LIB"; _st_fails=$((_st_fails + 1)); fi
+{ cat "$LIB"; printf '%s\n' 'x="${V:-it'"'"'s}"'; } > "$fx/broken-lib.sh"
+_st_n=$((_st_n + 1))
+if /bin/bash -n "$fx/broken-lib.sh" 2>/dev/null; then echo "FAIL  parse   control: a copy with the apostrophe trap still parses, so this check cannot fail"; _st_fails=$((_st_fails + 1))
+else echo "ok    parse   control: a copy with the apostrophe trap does not parse"; fi
 
 # $1 stub name, then lines of shell placed before the library is sourced.
 stub() {
