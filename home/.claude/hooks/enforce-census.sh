@@ -54,6 +54,25 @@ fi
 tool_name="$(printf '%s' "$payload" | jq -r '.tool_name // ""' 2>/dev/null || true)"
 cmd="$(printf '%s' "$payload" | jq -r '.tool_input.command // ""' 2>/dev/null || true)"
 
+# THE SHIFTED CONTROL (W-20260924-A48 item 6; Gavin 2026-09-25, option A of D-20260925-A02).
+# `census.py --control $CTL T1 T2` with CTL empty or unset: zsh drops the unquoted word, so
+# T1 becomes the control, T2 the only pattern, and census answers exit 0 with the wrong
+# control. census cannot see it: its argv is byte-identical to a legitimate call (censusb
+# REPORT.md, measured). The TYPED text still shows it, and this hook reads the typed text.
+# "$CTL" quoted is safe: an empty value arrives as an empty control, which census refuses;
+# so is --control=$CTL, which arrives as `--control=`. Only the bare space form is warned.
+_ctlvar='(^|[[:space:]])--control[[:space:]]+\$(\{[A-Za-z_][A-Za-z0-9_]*\}|[A-Za-z_][A-Za-z0-9_]*)'
+case "$cmd" in
+  *census*)
+    if [[ "$cmd" =~ $_ctlvar ]]; then
+      _v="${BASH_REMATCH[2]}"
+      _ctlnote="⚠️ census --control is followed by an UNQUOTED variable (\$$_v). When it is empty or unset, zsh drops the word, the next word silently becomes the control, and census answers exit 0 with a control you never chose. census cannot detect this; its arguments look exactly like a real call. Quote it, --control \"\$$_v\", so an empty value reaches census as an empty control, which it refuses."
+      jq -n --arg ctx "$_ctlnote" \
+        '{hookSpecificOutput: {hookEventName: "PreToolUse", additionalContext: $ctx}, suppressOutput: true}'
+      exit 0
+    fi ;;
+esac
+
 # The BUILT-IN Grep tool carries no `.command`, so the old `[ -n "$cmd" ] || exit 0` dropped
 # it on the floor. It is ripgrep underneath and inherits every trap: it skips hidden files
 # and honours .gitignore by default, and it answers a miss with the bare words "No matches

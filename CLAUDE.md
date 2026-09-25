@@ -199,6 +199,8 @@ Before you state a COUNT or a "none anywhere", corroborate it with [`census`](ho
 
 A census count is in OCCURRENCES, not lines: `grep -c` and `rg -c` count matching LINES, so `rg --count-matches` is the like-for-like. census ignores case by default and prints the case-sensitive count beside it on every row; compare that one with a plain grep or rg (D-20260925-A02).
 
+Quote a variable control: `--control "$CTL"`, never `--control $CTL`. Unquoted and empty, zsh drops the word, the next word silently becomes the control, and census answers exit 0 with a control you never chose; census cannot see it, so the census reminder hook warns on the typed form (A48 item 6, D-20260925-A02).
+
 Deployed machine-globally by stow from `home/.claude/tools/`, so it is present in every project on this box but not on a machine without these dotfiles.
 
 Same division for reading output: `head` to GLANCE, [`peek`](home/.local/bin/peek) before you CONCLUDE. `<cmd> | peek [N]` (default 40, `--all` for no limit) prints the lines on stdout and the denominator on stderr, so `cmd | peek | jq` still works. Stowed the same way, from `home/.local/bin/`.

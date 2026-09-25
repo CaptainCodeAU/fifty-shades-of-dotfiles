@@ -411,6 +411,33 @@ def main():
               "ignores case by default" in text and "case-sensitive count" in text,
               "case behaviour missing")
 
+        # ── the SHIFTED CONTROL (A48 item 6, Gavin 2026-09-25: option A) ───────────
+        # `census.py --control $CTL T1 T2` with CTL empty: zsh drops the word, T1 becomes the
+        # control and census answers exit 0. Census cannot see it (argv is byte-identical to a
+        # legitimate call); this hook sees the TYPED text, so it warns here.
+        C = "uv run python3 $HOME/.claude/tools/census.py"
+        for label, cmd, want in (
+            ("c01 unquoted --control $VAR warns", f"{C} --control $CTL foo", True),
+            ("c02 unquoted --control ${VAR} warns", f"{C} --control ${{CTL}} foo", True),
+            ("c03 warns on a later line of a multi-line command",
+             f"cd /tmp\n{C} --under home --control $CTL foo", True),
+            ("c04 double-quoted \"$VAR\" is safe (census refuses an empty control)",
+             f'{C} --control "$CTL" foo', False),
+            ("c05 single-quoted '$VAR' is a literal, quiet", f"{C} --control '$CTL' foo", False),
+            ("c06 --control=$VAR is safe (empty becomes --control=, refused)",
+             f"{C} --control=$CTL foo", False),
+            ("c07 a literal control is quiet", f"{C} --control stow foo", False),
+            ("c08 another tool's --control $VAR is not census's", "mytool --control $CTL foo",
+             False),
+        ):
+            did, _, out = bash(hook, tmp, cmd)
+            check(label, did == want, f"fired={did}")
+        _, _, out = bash(hook, tmp, f"{C} --control $CTL foo")
+        text = note(out)
+        check("c09 the warning names the accident and the fix",
+              "unquoted" in text.lower() and '"$' in text and "becomes the control" in text,
+              text.splitlines()[:1])
+
         # ── the interpreter: the suite runs what settings.json runs ────────────────
         check("h01 hook is run by its shebang interpreter",
               interpreter(hook)[0].startswith("/"), f"ran {interpreter(hook)}")
