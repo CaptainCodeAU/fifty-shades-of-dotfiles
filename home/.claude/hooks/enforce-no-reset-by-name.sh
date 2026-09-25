@@ -40,6 +40,12 @@ CONV_MODE_NAME=reset
 CONV_LIB_DIR="$(dirname "$0")"
 CONV_LOG_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/hooks-security.log"
 CONV_FALLBACK_ERE='(^|[^A-Za-z0-9_./-])(rm[[:space:]]+-[A-Za-z]*[rR]|rmdir[[:space:]]).*(mkdir|cp|mv|tar|unzip|ln|git init)[[:space:]]'
+# An unreadable payload (jq missing, invalid JSON, no tool_input.command) is
+# DENIED when its raw text holds the same crude reset shape, and passes quietly
+# otherwise (D-20260925-A03, conv-hooklib.sh). A lone `rm -rf x` is not a
+# trigger: this hook never denies a remove on its own, only its reuse.
+CONV_TRIGGER_ERE="$CONV_FALLBACK_ERE"
+CONV_TRIGGER_WHAT='a recursive rm followed by a reuse verb (mkdir, cp, mv, tar, unzip, ln, git init)'
 
 if [ ! -r "$CONV_LIB_DIR/conv-hooklib.sh" ]; then
   # Not even the plumbing is here: deny a likely match by name, allow the rest.
@@ -50,6 +56,30 @@ if [ ! -r "$CONV_LIB_DIR/conv-hooklib.sh" ]; then
   exit 0
 fi
 . "$CONV_LIB_DIR/conv-hooklib.sh"
+# conv-hooklib.sh FAILED TO LOAD (W-20260924-A76). One syntax error under bash
+# 3.2 is enough; then conv_hook_main is "command not found", rc 127, and the
+# hook fails open in silence. `.` returns non-zero on any syntax error (measured
+# on 3.2.57, even when the functions got defined), and an error at the TOP leaves
+# none defined; so check the status AND every function the hook needs. No lib
+# function and no jq below. Same rule as an unreadable payload: a guard denies,
+# CONV_UNREADABLE=warn warns, and only when the raw text looks like the trigger.
+_conv_rc=$?
+if [ "$_conv_rc" -ne 0 ] || ! declare -F conv_hook_main conv_unreadable conv_scan conv_deny conv_log conv_json_str >/dev/null 2>&1; then
+  [ "${1:-}" = "--selftest" ] && { echo "FAIL  conv-hooklib.sh failed to load beside $0 (rc=$_conv_rc)"; exit 1; }
+  _raw=$(sed -e 's/\\[nrt]/ /g' -e 's/\\"/"/g')
+  # Never a bare $V (set -u would crash, silently: fail-open again), and an
+  # EMPTY pattern matches everything, so it would deny every command: exit 0.
+  _ere="${CONV_TRIGGER_ERE-}"; [ -n "$_ere" ] || _ere="${CONV_FALLBACK_ERE-}"
+  [ -n "$_ere" ] || exit 0
+  [[ $_raw =~ $_ere ]] || exit 0
+  _why="$CONV_TAG: conv-hooklib.sh failed to load (rc=$_conv_rc), so this command was not checked, and it mentions its trigger"
+  if [ "${CONV_UNREADABLE:-deny}" = warn ]; then
+    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"%s. It runs unchecked. Run /bin/bash -n on conv-hooklib.sh, then restow the dotfiles."}}\n' "$_why"
+  else
+    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s; denying. Run /bin/bash -n on conv-hooklib.sh, then restow the dotfiles."}}\n' "$_why"
+  fi
+  exit 0
+fi
 
 # ---------------------------------------------------------------- selftest
 if [ "${1:-}" = "--selftest" ]; then
@@ -198,6 +228,49 @@ EOF
   conv_arm deny  "scanner missing: a one-line reset is denied by name" 'rm -rf "$W" 2>/dev/null; mkdir -p "$W"'
   conv_arm allow "scanner missing: an unrelated command passes"      'ls -la'
   unset CONV_SHSCAN
+
+  echo "=== UNREADABLE arms: the payload cannot be read (D-20260925-A03) ==="
+  conv_unreadable_arms deny 'rm -rf "$W" 2>/dev/null; mkdir -p "$W"' 'ls -la'
+  p=$(conv_payload 'rm -rf "$S/old" 2>/dev/null' | jq -c .)
+  conv_arm_raw allow "unreadable, PATH without jq, a lone rm -rf is not a trigger" "$p" nojq
+  p=$(conv_payload $'rm -rf "$W"\nmkdir -p "$W"' | jq -c .)
+  conv_arm_raw deny  "unreadable, truncated, rm and mkdir on separate lines" "${p%??????????}"
+
+  echo "=== LOAD-FAILURE arms: conv-hooklib.sh beside the hook does not parse ==="
+  # A copy of the hook under test, with a broken library beside it: once with the
+  # error at the top (nothing defined), once at the end (conv_hook_main defined,
+  # but the source still returns 1).
+  _lf() { # $1 top|end|noere, $2 deny|allow, $3 label, $4 command
+    local d out got ok=0
+    d=$(mktemp -d "${TMPDIR:-/tmp}/reset-brokenlib.XXXXXX")
+    cp "$_st_hook" "$d/hook.sh"; cp "$CONV_LIB_DIR/conv-shscan.awk" "$d/"
+    if [ "$1" = noere ]; then
+      # both patterns blanked in the hook copy: an empty ERE must not deny all
+      sed -e 's/^CONV_FALLBACK_ERE=.*/CONV_FALLBACK_ERE=/' -e 's/^CONV_TRIGGER_ERE=.*/CONV_TRIGGER_ERE=/' "$_st_hook" > "$d/hook.sh"
+    fi
+    if [ "$1" != end ]; then
+      { echo 'broken() { if then; }'; cat "$CONV_LIB_DIR/conv-hooklib.sh"; } > "$d/conv-hooklib.sh"
+    else
+      { cat "$CONV_LIB_DIR/conv-hooklib.sh"; echo 'broken() { if then; }'; } > "$d/conv-hooklib.sh"
+    fi
+    _st_n=$((_st_n + 1))
+    out=$(conv_payload "$4" | jq -c . | CONV_HOOK_LOG=/dev/null "$d/hook.sh" 2>/dev/null)
+    got=$(printf '%s' "$out" | jq -r '.hookSpecificOutput | "\(.permissionDecision) \(.permissionDecisionReason)"' 2>/dev/null)
+    case "$2" in
+      deny)  case "$got" in "deny enforce-no-reset-by-name: conv-hooklib.sh failed to load (rc="*) ok=1 ;; esac ;;
+      allow) [ -z "$out" ] && ok=1 ;;
+    esac
+    if [ "$ok" -eq 1 ]; then printf 'ok    %-7s %s\n' "$2" "$3"
+    else printf 'FAIL  %-7s %s\n        got: %s\n' "$2" "$3" "${got:-$out}"; _st_fails=$((_st_fails + 1)); fi
+  }
+  _lf top deny  "broken lib (error at the top), the trigger: denied by name" 'rm -rf "$W" 2>/dev/null; mkdir -p "$W"'
+  _lf top allow "broken lib (error at the top), no trigger: quiet"           'ls -la'
+  _lf end deny  "broken lib (error at the end, functions defined): denied"  'rm -rf "$W" 2>/dev/null; mkdir -p "$W"'
+  _lf end allow "broken lib (error at the end), no trigger: quiet"          'ls -la'
+  # A PIN, not a check: it passes with the empty-pattern line removed too,
+  # because bash's =~ rejects an empty ERE (rc 2; 3.2.57 and 5.3.20). The line
+  # stays for a grep -E rewrite, where '' matches everything.
+  _lf noere allow "PIN: broken lib, both patterns EMPTY: quiet, never deny-all" 'rm -rf "$W" 2>/dev/null; mkdir -p "$W"'
   conv_selftest_end
 fi
 

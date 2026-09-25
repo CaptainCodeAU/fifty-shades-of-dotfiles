@@ -324,8 +324,9 @@ computed in a child the hook waits on for at most **3 s**. What each way of goin
 | the classifier is killed by a signal                                         | **denied** (`guard-no-verdict`)                                 | one manual run in a scratch copy, not in selftest |
 | `DEL_GUARD_DEADLINE` set above 2                                             | ignored; the 3 s deadline holds                                 | selftest arm (99: denied under 4.5 s)             |
 | the lexer (awk) fails                                                        | allowed, `additionalContext` warning                            | unchanged                                         |
-| `jq` missing                                                                 | allowed, `additionalContext` warning                            | unchanged                                         |
-| malformed JSON, empty stdin, empty command, no `tool_input`                  | allowed, no decision (a crash here would block every Bash call) | selftest HOOK arms                                |
+| `jq` missing                                                                 | **denied** if the raw text names a trigger, else a warning      | selftest UNREADABLE arms (D-20260925-A03)         |
+| malformed JSON, or `tool_input.command` under another key                    | **denied** if the raw text names a trigger, else allowed        | selftest UNREADABLE arms                          |
+| empty stdin, empty command                                                   | allowed, no decision (a crash here would block every Bash call) | selftest HOOK arms                                |
 | a stall BEFORE the deadline starts: stdin never closing, `jq` itself hanging | allowed at the harness's 5 s timeout                            | not covered                                       |
 | a spinning `awk` child of a killed classifier                                | keeps running as an orphan (the verdict is already a deny)      | not covered; no awk loop is known to spin         |
 
