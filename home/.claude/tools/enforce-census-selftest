@@ -68,6 +68,14 @@ Two harness faults were fixed at the same time, both measured:
     against master's hook (01055a9)          42 failures, each naming its defect
     the hook without its empty-array guard   3 failures under /bin/bash 3.2 (f20 n11 n12),
                                              0 under bash 5: the old harness could not see it
+
+AN UNREADABLE PAYLOAD SHOUTS TOO (W-20260924-A76, D-20260925-A03, 2026-09-25). Truncated
+JSON and a moved command key read as an empty command and exited 0 in silence. The u-arms
+feed raw stdin: a mention of a search shouts "THE CENSUS REMINDER IS BROKEN", no mention
+stays quiet, and every arm is advisory (exit 0, no permissionDecision).
+
+    against the A76 hook                     142 checks, 0 failures
+    against master's hook (7da4dfe)            4 failures (u01 u02 u04 u06), all new arms
 """
 
 import json
@@ -437,6 +445,70 @@ def main():
         check("c09 the warning names the accident and the fix",
               "unquoted" in text.lower() and '"$' in text and "becomes the control" in text,
               text.splitlines()[:1])
+
+        # ── an UNREADABLE payload (W-20260924-A76, D-20260925-A03) ─────────────────
+        # Truncated JSON or a moved command key read as an empty command, and an empty
+        # command exited 0: silence, the failure this hook shouts about for a missing jq.
+        # Now the same shout, when the raw text mentions a search. Advisory throughout:
+        # exit 0 and no permissionDecision in every arm.
+        def raw(text, path=None):
+            env = dict(os.environ)
+            env.pop("CLAUDE_PROJECT_DIR", None)
+            if path is not None:
+                env["PATH"] = path
+            p = subprocess.run(interpreter(hook) + [str(hook)], input=text,
+                               capture_output=True, text=True, cwd=str(tmp), env=env)
+            return p.returncode, p.stdout.strip()
+
+        def broken(rc, out):
+            return rc == 0 and "permissionDecision" not in out and \
+                note(out).startswith("🔴 THE CENSUS REMINDER IS BROKEN")
+
+        def bash_payload(cmd):
+            return json.dumps({"tool_name": "Bash", "tool_input": {"command": cmd}})
+
+        def moved(cmd):
+            return json.dumps({"tool_name": "Bash", "tool_input": {"cmd": cmd}})
+
+        # A PATH with the plain tools and no jq, checked, so the no-jq arms cannot pass
+        # by testing a PATH that still holds one.
+        nojq = tmp / "nojq-bin"
+        nojq.mkdir()
+        for t in ("cat", "sed", "awk", "git"):
+            w = shutil.which(t)
+            if w:
+                (nojq / t).symlink_to(w)
+        check("u00 the no-jq PATH really holds no jq", not (nojq / "jq").exists()
+              and shutil.which("jq", path=str(nojq)) is None, "a jq is reachable")
+
+        for label, text, path, want in (
+            ("u01 truncated JSON, a counting grep: shouts", bash_payload(f"{G} -c foo x")[:-5], None, True),
+            ("u02 truncated JSON, an rg: shouts", bash_payload("rg -l foo .")[:-5], None, True),
+            ("u03 truncated JSON, no search: quiet", bash_payload("ls -la /tmp")[:-5], None, False),
+            ("u04 truncated, rg on line 2 (a JSON newline escape): shouts",
+             bash_payload("ls\nrg -c foo x")[:-5], None, True),
+            ("u05 truncated, rg only inside words (large, argv): quiet",
+             bash_payload("echo large argv target")[:-5], None, False),
+            ("u06 command under a moved key, a grep: shouts", moved(f"{G} -c foo x"), None, True),
+            ("u07 command under a moved key, no search: quiet", moved("ls -la"), None, False),
+            ("u08 PATH without jq, a grep: shouts (unchanged)", bash_payload(f"{G} -c foo x"), str(nojq), True),
+            # Kept on purpose: the missing-jq shout has always been unconditional. A lost jq
+            # breaks the reminder in every project, so it says so on every call.
+            ("u09 PATH without jq, no search: shouts too (unchanged, deliberate)",
+             bash_payload("ls -la"), str(nojq), True),
+        ):
+            rc, out = raw(text, path)
+            got = broken(rc, out)
+            silent = rc == 0 and out == ""
+            check(label, got if want else silent, f"rc={rc} out={out[:160]!r}")
+
+        # The moved-key branch must not mistake the Grep tool (no command, by design) for drift.
+        did, name, out = fired(hook, tmp, {"tool_name": "Grep", "tool_input": {"pattern": "foo"}})
+        check("u10 a readable Grep-tool payload gets the normal reminder, not the broken one",
+              did and name == "Grep-tool search" and "IS BROKEN" not in out, f'named "{name}"')
+        did, name, out = bash(hook, tmp, f"{G} -c foo x")
+        check("u11 a readable counting grep gets the normal reminder, not the broken one",
+              did and "IS BROKEN" not in out and "permissionDecision" not in out, out[:160])
 
         # ── the interpreter: the suite runs what settings.json runs ────────────────
         check("h01 hook is run by its shebang interpreter",
