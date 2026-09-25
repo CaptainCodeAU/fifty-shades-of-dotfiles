@@ -48,6 +48,12 @@ CONV_MODE_NAME=uv
 CONV_LIB_DIR="$(dirname "$0")"
 CONV_LOG_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/hooks-security.log"
 CONV_FALLBACK_ERE='(^|[^A-Za-z0-9_./-])(python3?|pip3?|pytest|ruff)([^A-Za-z0-9_-]|$)'
+# ADVISORY on an unreadable payload (D-20260925-A03): when the raw text mentions
+# python or pip, it WARNS that the rewrite could not run, and lets the command run.
+# Never a deny: a broken jq must not halt all work.
+CONV_TRIGGER_ERE='(^|[^A-Za-z0-9_.-])(python[0-9.]*|pip[0-9x]*|pytest|ruff|py3[0-9]+)([^A-Za-z0-9_-]|$)'
+CONV_TRIGGER_WHAT='python or pip, so the uv rewrite could not run'
+CONV_UNREADABLE=warn
 
 if [ ! -r "$CONV_LIB_DIR/conv-hooklib.sh" ]; then
   # Not even the plumbing is here: deny a likely slip by name, allow the rest.
@@ -146,6 +152,9 @@ if [ "${1:-}" = "--selftest" ]; then
   conv_arm deny  'scanner missing: slip denied'   'python3 x.py'
   conv_arm allow 'scanner missing: harmless ok'   'echo control-ok'
   unset CONV_SHSCAN
+  echo "=== UNREADABLE arms: jq gone, truncated JSON, a moved key (D-20260925-A03) ==="
+  conv_unreadable_arms warn 'python3 x.py' 'echo control-ok'
+  conv_unreadable_arms warn 'pip install requests' 'ls pipeline-notes'
   conv_selftest_end
 fi
 

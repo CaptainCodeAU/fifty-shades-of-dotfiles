@@ -45,6 +45,12 @@ CONV_MODE_NAME=pnpm
 CONV_LIB_DIR="$(dirname "$0")"
 CONV_LOG_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/hooks-security.log"
 CONV_FALLBACK_ERE='(^|[^A-Za-z0-9_./-])(npm|yarn|npx)([^A-Za-z0-9_-]|$)'
+# ADVISORY on an unreadable payload (D-20260925-A03): when the raw text mentions
+# npm, npx or yarn, it WARNS that the rewrite could not run, and lets the command
+# run. Never a deny: a broken jq must not halt all work.
+CONV_TRIGGER_ERE='(^|[^A-Za-z0-9_.-])(npm|npx|yarn)([^A-Za-z0-9_-]|$)'
+CONV_TRIGGER_WHAT='npm, npx or yarn, so the pnpm rewrite could not run'
+CONV_UNREADABLE=warn
 
 if [ ! -r "$CONV_LIB_DIR/conv-hooklib.sh" ]; then
   COMMAND=$(jq -r '.tool_input.command // empty' 2>/dev/null)
@@ -124,6 +130,9 @@ if [ "${1:-}" = "--selftest" ]; then
   conv_arm deny  'scanner missing: slip denied'   'npm install'
   conv_arm allow 'scanner missing: harmless ok'   'echo control-ok'
   unset CONV_SHSCAN
+  echo "=== UNREADABLE arms: jq gone, truncated JSON, a moved key (D-20260925-A03) ==="
+  conv_unreadable_arms warn 'npm install' 'pnpm install'
+  conv_unreadable_arms warn 'npx cowsay hi' 'cat ~/.npmrc'
   conv_selftest_end
 fi
 
