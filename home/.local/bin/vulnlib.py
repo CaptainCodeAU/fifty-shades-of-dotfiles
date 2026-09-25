@@ -373,13 +373,31 @@ class NvdClient:
 
         `fix_commit` is the commit hash named in the CVE description when there is
         one ("fixed in commit a2ed82d"). It is what lets a caller notice that a
-        distro has already backported the fix -- see homebrew_patch_commits."""
+        distro has already backported the fix -- see homebrew_patch_commits.
+
+        A REPLY THAT SAYS N AND CARRIES FEWER IS A THROTTLE, NOT AN ANSWER.
+        Measured 2026-09-25: 1 in 6 identical jq queries came back
+        `totalResults=3, resultsPerPage=0, vulnerabilities=[]`. The old return,
+        ([], True), was read as CLEAN by both callers before either looked at the
+        flag, and vuln-scan caches a verdict for 7 days (W-20260925-A35). So a
+        short page returns None, and so does a genuinely truncated page with no
+        hit on it: the records it did not send may be the ones that apply.
+        `truncated` survives only alongside real hits, which the caller reports."""
+        page = 200
         cpe = f"cpe:2.3:a:{vendor}:{product}:{version}:*:*:*:*:*:*:*"
-        data = self._get(NVD_CVE_URL, {"cpeName": cpe, "resultsPerPage": 200})
+        data = self._get(NVD_CVE_URL, {"cpeName": cpe, "resultsPerPage": page})
         if data is None:
             return None
         marker = f":{vendor}:{product}:"
         hits, vulns = [], (data.get("vulnerabilities") or [])
+        try:
+            total = int(data.get("totalResults") or 0)
+        except (TypeError, ValueError):
+            self.failures += 1
+            return None
+        if len(vulns) < min(total, page):
+            self.failures += 1          # short page: NVD sent less than it said
+            return None
         for v in vulns:
             cve = v.get("cve") or {}
             cid = cve.get("id")
@@ -405,7 +423,10 @@ class NvdClient:
                 "severity": severity,
                 "description": desc[:400],
             })
-        return (hits, int(data.get("totalResults") or 0) > len(vulns))
+        truncated = total > len(vulns)
+        if truncated and not hits:
+            return None                 # page one is clean; the unseen pages are not known
+        return (hits, truncated)
 
 
 def _cvss(cve: dict):

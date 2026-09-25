@@ -664,6 +664,65 @@ if _fixed is not None and _vuln is not None:
           len(_fc.cves_for("pcre", "pcre2", "10.48rc1")[0]), 6)
 
 
+section("cves_for(): a short page is UNKNOWN, never clean (W-20260925-A35)")
+
+# NVD SOMETIMES SAYS N AND SENDS FEWER. The worker measured it on 2026-09-25 on
+# this exact query shape (jq 1.8.2, resultsPerPage=200): 1 reply in 6 was
+# `totalResults=3, resultsPerPage=0, vulnerabilities=[]`, verbatim below. The old
+# cves_for returned ([], True) for it, and both callers read the empty hit list
+# as CLEAN before ever looking at the flag -- a false all-clear, cached for a week.
+#
+# THE ARMS COME IN PAIRS, for the same reason as the section above: "None" alone
+# is also what a cves_for that refused EVERYTHING would print. The complete page
+# and the genuinely truncated page carrying a real hit must still come through.
+
+
+class _PayloadClient(V.NvdClient):
+    """The real cves_for() fed one fixed payload."""
+
+    def __init__(self, payload):
+        super().__init__(None, timeout=1.0)
+        self.delay = 0.0
+        self.payload = payload
+
+    def _get(self, url, params):
+        return self.payload
+
+
+def _pcre2_records(n, cid_prefix="CVE-2026-9"):
+    return [{"cve": {"id": "%s%04d" % (cid_prefix, i),
+                     "descriptions": [{"lang": "en", "value": "An issue."}],
+                     "metrics": {},
+                     "configurations": [{"nodes": [{"cpeMatch": PCRE2_MATCHES}]}]}}
+            for i in range(n)]
+
+
+_short = {"totalResults": 3, "resultsPerPage": 0, "vulnerabilities": []}
+check("short page (says 3, sends 0, NVD's own shape) is UNKNOWN, not clean",
+      _PayloadClient(_short).cves_for("jqlang", "jq", "1.8.2"), None)
+
+_partial = {"totalResults": 6, "vulnerabilities": _pcre2_payload()["vulnerabilities"][:3]}
+check("partial short page (says 6, sends 3) is UNKNOWN, not 3 of 6",
+      _PayloadClient(_partial).cves_for("pcre", "pcre2", "10.47"), None)
+
+# A GENUINELY truncated page: more than one page exists, page one came back full.
+# Nothing on it applies to 10.48, but the unseen 50 might, so this is undetermined.
+_trunc_clean = {"totalResults": 250, "vulnerabilities": _pcre2_records(200)}
+check("full page one of 250 with no hit on it is UNKNOWN, not clean",
+      _PayloadClient(_trunc_clean).cves_for("pcre", "pcre2", "10.48"), None)
+
+# CONTROLS -- the guard must not swallow a real answer.
+_trunc_hit = _PayloadClient(_trunc_clean).cves_for("pcre", "pcre2", "10.47")
+check("control: full page one of 250 WITH hits still reports them, flagged truncated",
+      None if _trunc_hit is None else (len(_trunc_hit[0]), _trunc_hit[1]), (200, True))
+_complete = _PayloadClient(_pcre2_payload()).cves_for("pcre", "pcre2", "10.48")
+check("control: a complete page with no hit is still clean, not truncated",
+      _complete, ([], False))
+_empty = {"totalResults": 0, "resultsPerPage": 0, "vulnerabilities": []}
+check("control: a real zero (says 0, sends 0) is still clean",
+      _PayloadClient(_empty).cves_for("jqlang", "jq", "1.8.2"), ([], False))
+
+
 print("\n%s%s%s  %d passed, %d failed, %d skipped"
       % (RED if FAILURES else GREEN, "FAIL" if FAILURES else "OK  ", OFF,
          PASS, len(FAILURES), SKIP))
