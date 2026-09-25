@@ -665,6 +665,251 @@ if (( rc == 0 )) && [[ "$(cat "$SETTINGS")" != "$before" ]]; then
 else bad "empty override control: a real CLAUDE_REQUIRES_ROOT runs and registers" "exit was $rc"; fi
 cleanup
 
+# ===========================================================================
+# W-20260924-A76: class, legacy_commands (in-place upgrade), retired, and the
+# command SHAPE of every real manifest entry. Gavin's rulings 2026-09-25: a
+# missing guard denies; retiring is moving the entry to `retired`.
+# ===========================================================================
+LEG='test -x "$HOME/.claude/hooks/g.sh" && "$HOME/.claude/hooks/g.sh" || true'
+NEWG='h="$HOME/.claude/hooks/g.sh"; if [ -x "$h" ]; then "$h"; else echo gone >&2; exit 2; fi'
+
+# A throwaway tree whose manifest holds ONE entry, built by jq from $1 (a JSON
+# object merged over a default guard entry). Settings get $2 as .hooks.
+fixture_a76() {
+    WORK="$(mktemp -d "${TMPDIR:-/tmp}/claude-hooks-sync-a76.XXXXXX")" || WORK=""
+    if [[ -z "$WORK" || ! -d "$WORK" ]]; then
+        printf '  \033[31mABORT\033[0m  cannot create a temp dir -- no test can be trusted.\n' >&2; exit 2
+    fi
+    REQ_ROOT="$WORK/home"; HOOKS_DIR="$REQ_ROOT/.claude/hooks"
+    SETTINGS="$REQ_ROOT/.claude/settings.json"; MANIFEST="$WORK/hooks.json"
+    mkdir -p "$HOOKS_DIR"; : > "$HOOKS_DIR/g.sh"; : > "$HOOKS_DIR/other.sh"
+    jq -n --arg leg "$LEG" --arg new "$NEWG" --argjson over "$1" '
+      { hooks: [ ({ event: "PreToolUse", matcher: "Bash", script: "g.sh", class: "guard",
+                    entry: { type: "command", command: $new, timeout: 5 },
+                    legacy_commands: [ $leg ], why: "fixture guard" } + $over) ],
+        retired: [] }' > "$MANIFEST"
+    jq -n --argjson h "$2" '{ model: "opus", hooks: $h, theme: "dark" }' > "$SETTINGS"
+}
+cmds_at() {   # cmds_at <event> <matcher|""> -> JSON array of commands, group order kept
+    jq -c --arg e "$1" --arg m "$2" '[ .hooks[$e][]? | select($m == "" or .matcher == $m) | .hooks[]?.command ]' "$SETTINGS"
+}
+FOREIGN='{"type":"command","command":"${PAI_DIR}/hooks/SecurityValidator.hook.ts"}'
+OTHER='{"type":"command","command":"$HOME/.claude/hooks/other.sh"}'
+LEGH="$(jq -cn --arg c "$LEG" '{type:"command",command:$c,timeout:5}')"
+NEWH="$(jq -cn --arg c "$NEWG" '{type:"command",command:$c,timeout:5}')"
+
+# --- 31. the class rule refuses a guard whose command swallows its exit code --
+fixture_a76 "$(jq -cn --arg c "$LEG" '{entry:{type:"command",command:$c}}')" "{\"PreToolUse\":[{\"matcher\":\"Bash\",\"hooks\":[$OTHER]}]}"
+before=$(shasum "$SETTINGS"); out=$(run_tool --install); rc=$?
+if (( rc == 2 )) && [[ "$out" == *"g.sh: class guard, but its command contains ||"* ]] && [[ "$before" == "$(shasum "$SETTINGS")" ]]; then
+    ok "A76 class: a guard command with || is refused (exit 2, names it, writes nothing)"
+else bad "A76 class: a guard command with || is refused (exit 2, names it, writes nothing)" "rc=$rc out=$out"; fi
+# CONTROL: the same command as an ALARM is accepted, so the refusal is the class rule
+jq '.hooks[0].class = "alarm"' "$MANIFEST" > "$MANIFEST.t" && command mv "$MANIFEST.t" "$MANIFEST"
+out=$(run_tool --install); rc=$?
+if (( rc == 0 )) && [[ "$(cmds_at PreToolUse Bash)" == *'|| true'* ]]; then
+    ok "A76 class control: the same || command as an alarm is accepted and registered"
+else bad "A76 class control: the same || command as an alarm is accepted and registered" "rc=$rc out=$out"; fi
+cleanup
+
+# --- 32. no class: enforce-* defaults to guard, anything else to alarm ------
+fixture_a76 "$(jq -cn --arg c "$LEG" '{script:"enforce-x.sh", class:null, entry:{type:"command",command:$c}} | del(.class)')" '{}'
+jq '.hooks[0] |= del(.class)' "$MANIFEST" > "$MANIFEST.t" && command mv "$MANIFEST.t" "$MANIFEST"
+out=$(run_tool --check); rc=$?
+if (( rc == 2 )) && [[ "$out" == *"enforce-x.sh: class guard"* ]]; then
+    ok "A76 class: an unclassed enforce-* script defaults to guard (and is refused with ||)"
+else bad "A76 class: an unclassed enforce-* script defaults to guard (and is refused with ||)" "rc=$rc out=$out"; fi
+jq '.hooks[0].script = "g.sh"' "$MANIFEST" > "$MANIFEST.t" && command mv "$MANIFEST.t" "$MANIFEST"
+out=$(run_tool --check); rc=$?
+if (( rc != 2 )); then ok "A76 class control: an unclassed non-enforce script defaults to alarm (|| allowed)"
+else bad "A76 class control: an unclassed non-enforce script defaults to alarm (|| allowed)" "rc=$rc out=$out"; fi
+cleanup
+
+# --- 33. an unknown class, and a guard off PreToolUse, are refused ----------
+fixture_a76 '{"class":"guardd"}' '{}'
+out=$(run_tool --check); rc=$?
+if (( rc == 2 )) && [[ "$out" == *'unknown class "guardd"'* ]]; then ok "A76 class: an unknown class is refused"
+else bad "A76 class: an unknown class is refused" "rc=$rc out=$out"; fi
+cleanup
+fixture_a76 '{"event":"UserPromptSubmit","matcher":null}' '{}'
+jq '.hooks[0] |= del(.matcher)' "$MANIFEST" > "$MANIFEST.t" && command mv "$MANIFEST.t" "$MANIFEST"
+out=$(run_tool --check); rc=$?
+if (( rc == 2 )) && [[ "$out" == *"class guard on UserPromptSubmit"* ]]; then
+    ok "A76 class: a guard on UserPromptSubmit is refused (exit 2 there erases prompts)"
+else bad "A76 class: a guard on UserPromptSubmit is refused (exit 2 there erases prompts)" "rc=$rc out=$out"; fi
+cleanup
+
+# --- 34. THE UPGRADE: the old string is replaced in place, never duplicated ---
+fixture_a76 '{}' "{\"PreToolUse\":[{\"matcher\":\"Bash\",\"hooks\":[$FOREIGN]},{\"matcher\":\"Bash\",\"hooks\":[$OTHER,$LEGH]},{\"matcher\":\"Grep\",\"hooks\":[$LEGH]}]}"
+out=$(run_tool --check); rc=$?
+if (( rc == 1 )) && [[ "$out" == *"1 need an upgrade"* && "$out" == *"needs upgrade"* ]]; then
+    ok "A76 upgrade: --check reports the legacy line as needing an upgrade (exit 1)"
+else bad "A76 upgrade: --check reports the legacy line as needing an upgrade (exit 1)" "rc=$rc out=$out"; fi
+grep_before=$(cmds_at PreToolUse Grep)
+out=$(run_tool --install); rc=$?
+want=$(jq -cn --arg o '$HOME/.claude/hooks/other.sh' --arg n "$NEWG" '["${PAI_DIR}/hooks/SecurityValidator.hook.ts", $o, $n]')
+if (( rc == 0 )) && [[ "$(cmds_at PreToolUse Bash)" == "$want" ]]; then
+    ok "A76 upgrade: the legacy line became the new one AT THE SAME POSITION, once"
+else bad "A76 upgrade: the legacy line became the new one AT THE SAME POSITION, once" "rc=$rc got $(cmds_at PreToolUse Bash)"; fi
+if [[ "$(cmds_at PreToolUse Grep)" == "$grep_before" && "$grep_before" == *'|| true'* ]]; then
+    ok "A76 upgrade: the same string under ANOTHER matcher is out of scope and untouched"
+else bad "A76 upgrade: the same string under ANOTHER matcher is out of scope and untouched" "$(cmds_at PreToolUse Grep)"; fi
+if [[ "$(jq -c '[.model, .theme, (.hooks.PreToolUse | length)]' "$SETTINGS")" == '["opus","dark",3]' ]]; then
+    ok "A76 upgrade: unrelated keys and the group count are untouched"
+else bad "A76 upgrade: unrelated keys and the group count are untouched" "$(jq -c '[.model, .theme, (.hooks.PreToolUse | length)]' "$SETTINGS")"; fi
+before=$(shasum "$SETTINGS"); run_tool --install >/dev/null
+if [[ "$before" == "$(shasum "$SETTINGS")" ]]; then ok "A76 upgrade: a second --install is a byte-identical no-op"
+else bad "A76 upgrade: a second --install is a byte-identical no-op" "the file moved"; fi
+out=$(run_tool --check); rc=$?
+if (( rc == 0 )); then ok "A76 upgrade: --check is clean afterwards"
+else bad "A76 upgrade: --check is clean afterwards" "rc=$rc out=$out"; fi
+cleanup
+
+# --- 35. new AND legacy both present: the legacy copy goes, the new stays once --
+fixture_a76 '{}' "{\"PreToolUse\":[{\"matcher\":\"Bash\",\"hooks\":[$NEWH]},{\"matcher\":\"Bash\",\"hooks\":[$LEGH]},{\"matcher\":\"Bash\",\"hooks\":[]}]}"
+out=$(run_tool --check); rc=$?
+if (( rc == 1 )) && [[ "$out" == *"needs upgrade"* ]]; then
+    ok "A76 upgrade: a legacy copy beside the new one still reads as needing an upgrade"
+else bad "A76 upgrade: a legacy copy beside the new one still reads as needing an upgrade" "rc=$rc out=$out"; fi
+run_tool --install >/dev/null
+if [[ "$(cmds_at PreToolUse Bash)" == "$(jq -cn --arg n "$NEWG" '[$n]')" ]]; then
+    ok "A76 upgrade: the swallowing copy is removed, the new command stays exactly once"
+else bad "A76 upgrade: the swallowing copy is removed, the new command stays exactly once" "$(cmds_at PreToolUse Bash)"; fi
+if [[ "$(jq '.hooks.PreToolUse | length' "$SETTINGS")" == 2 ]]; then
+    ok "A76 upgrade: the group it emptied is dropped; a group that was ALREADY empty stays"
+else bad "A76 upgrade: the group it emptied is dropped; a group that was ALREADY empty stays" "$(jq -c '.hooks.PreToolUse' "$SETTINGS")"; fi
+cleanup
+
+# --- 36. a matcherless SessionStart legacy line is upgraded in place --------
+fixture_a76 "$(jq -cn --arg n "$NEWG" --arg l "$LEG" '{event:"SessionStart", class:"alarm", entry:{type:"command",command:($n|sub("; else"; " || true; else")),timeout:5}}')" \
+            "{\"SessionStart\":[{\"hooks\":[$OTHER,$LEGH]}]}"
+jq '.hooks[0] |= del(.matcher)' "$MANIFEST" > "$MANIFEST.t" && command mv "$MANIFEST.t" "$MANIFEST"
+before_dry=$(shasum "$SETTINGS"); out=$(run_tool --install --dry-run)
+if [[ "$before_dry" == "$(shasum "$SETTINGS")" && "$out" == *"would upgrade"* ]]; then
+    ok "A76 upgrade: --dry-run names the upgrade and writes nothing"
+else bad "A76 upgrade: --dry-run names the upgrade and writes nothing" "$out"; fi
+run_tool --install >/dev/null
+got=$(jq -c '[.hooks.SessionStart[] | [has("matcher"), [.hooks[].command | contains("|| true; else")]]]' "$SETTINGS")
+if [[ "$got" == '[[false,[false,true]]]' ]]; then
+    ok "A76 upgrade: a matcherless SessionStart line is replaced in place, group stays matcherless"
+else bad "A76 upgrade: a matcherless SessionStart line is replaced in place, group stays matcherless" "$got"; fi
+cleanup
+
+# --- 37. RETIRED: removed from BOTH targets, whatever its targets said ------
+fixture_a76 '{}' "{\"PreToolUse\":[{\"matcher\":\"Bash\",\"hooks\":[$OTHER,$NEWH]},{\"matcher\":\"Bash\",\"hooks\":[$LEGH]},{\"matcher\":\"Bash\",\"hooks\":[]}]}"
+jq '.retired = [ .hooks[0] + {targets: ["project"]} ] | .hooks = []' "$MANIFEST" > "$MANIFEST.t" && command mv "$MANIFEST.t" "$MANIFEST"
+command cp "$SETTINGS" "$WORK/project.json"
+command rm -f "$HOOKS_DIR/g.sh" 2>/dev/null; command mv "$HOOKS_DIR/g.sh" "$WORK/g.sh.gone" 2>/dev/null
+out=$(run_tool --check); rc=$?
+if (( rc == 1 )) && [[ "$out" == *"retired hook(s) still registered"* ]]; then
+    ok "A76 retired: --check reports a retired hook still registered (exit 1)"
+else bad "A76 retired: --check reports a retired hook still registered (exit 1)" "rc=$rc out=$out"; fi
+for tgt in user project; do
+    f="$SETTINGS"; [[ "$tgt" == project ]] && f="$WORK/project.json"
+    CLAUDE_SETTINGS_FILE="$f" CLAUDE_HOOKS_DIR="$HOOKS_DIR" CLAUDE_HOOKS_MANIFEST="$MANIFEST" \
+        CLAUDE_REQUIRES_ROOT="$REQ_ROOT" "$TOOL" --target "$tgt" --install >/dev/null 2>&1
+    got=$(jq -c '[.hooks.PreToolUse[] | [.hooks[]?.command]]' "$f")
+    if [[ "$got" == '[["$HOME/.claude/hooks/other.sh"],[]]' ]]; then
+        ok "A76 retired: $tgt target loses the new AND the legacy line; unrelated line and pre-empty group stay"
+    else bad "A76 retired: $tgt target loses the new AND the legacy line; unrelated line and pre-empty group stay" "$got"; fi
+done
+before=$(shasum "$SETTINGS"); run_tool --install >/dev/null
+if [[ "$before" == "$(shasum "$SETTINGS")" ]]; then ok "A76 retired: a second --install is a byte-identical no-op"
+else bad "A76 retired: a second --install is a byte-identical no-op" "the file moved"; fi
+cleanup
+
+# --- 38. THE REAL MANIFEST: every entry classed, and the class rule accepts it --
+REAL_MANIFEST="${CLAUDE_HOOKS_REAL_MANIFEST:-}"
+if [[ -z "$REAL_MANIFEST" ]]; then
+    _self="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || true)"
+    [[ -n "$_self" ]] && REAL_MANIFEST="$(dirname "$(dirname "$(dirname "$(dirname "$_self")")")")/settings/claude/hooks.json"
+fi
+if [[ ! -f "$REAL_MANIFEST" ]]; then
+    bad "A76 real manifest found beside this selftest" "not at ${REAL_MANIFEST:-<unresolved>}; set CLAUDE_HOOKS_REAL_MANIFEST"
+else
+    unclassed=$(jq -r '[.hooks[] | select(has("class") | not) | .script] | join(" ")' "$REAL_MANIFEST")
+    if [[ -z "$unclassed" ]]; then ok "A76 real manifest: every entry names its class"
+    else bad "A76 real manifest: every entry names its class" "unclassed: $unclassed"; fi
+    fixture with-skill with-script
+    out=$(CLAUDE_SETTINGS_FILE="$SETTINGS" CLAUDE_HOOKS_DIR="$HOOKS_DIR" CLAUDE_HOOKS_MANIFEST="$REAL_MANIFEST" \
+          CLAUDE_REQUIRES_ROOT="$REQ_ROOT" "$TOOL" --target project --check 2>&1); rc=$?
+    if (( rc != 2 )); then ok "A76 real manifest: the class rule accepts it (check exit $rc, not 2)"
+    else bad "A76 real manifest: the class rule accepts it" "$out"; fi
+    # CONTROL: put the old swallowing shape back on one real guard; now it must refuse
+    jq '(.hooks[] | select(.class == "guard") | .entry.command) |= (. + " || true")' "$REAL_MANIFEST" > "$WORK/mut.json"
+    out=$(CLAUDE_SETTINGS_FILE="$SETTINGS" CLAUDE_HOOKS_DIR="$HOOKS_DIR" CLAUDE_HOOKS_MANIFEST="$WORK/mut.json" \
+          CLAUDE_REQUIRES_ROOT="$REQ_ROOT" "$TOOL" --target project --check 2>&1); rc=$?
+    if (( rc == 2 )); then ok "A76 real manifest control: the same manifest with || on its guards is refused"
+    else bad "A76 real manifest control: the same manifest with || on its guards is refused" "rc=$rc"; fi
+    cleanup
+fi
+
+# --- 39. THE SHAPE of every real entry, run under each shell hooks may get ---
+# Claude Code runs a hook command through a shell: /bin/bash 3.2 on this Mac
+# (measured 2026-09-25), often dash as /bin/sh on Linux. For each entry: the
+# script present and exiting 0, 2 and 7; then absent; then not executable.
+#   guard, advisory: the exit code passes through untouched
+#   alarm:           exit 0 whatever the script says
+#   absent / not executable:
+#     guard   exit 2, stderr starts "HOOK MISSING, DENYING: <script>", stdout empty
+#     others  exit 0, stdout one JSON object whose systemMessage starts
+#             "HOOK MISSING: <script>" (and names the event unless SessionEnd)
+shape_run() {   # shape_run <manifest> -> sets SP SF SHELLS
+    local m="$1" root n i cls s cmd sp f sh code out err rc want args
+    SP=0; SF=0; SHELLS=""
+    root="$(mktemp -d "${TMPDIR:-/tmp}/claude-hooks-shape.XXXXXX")" || { SF=1; return; }
+    WORK="$root"
+    for sh in /bin/bash /bin/sh /bin/dash /usr/bin/dash; do [[ -x "$sh" ]] && SHELLS="$SHELLS $sh"; done
+    n=$(jq '.hooks | length' "$m")
+    for (( i = 0; i < n; i++ )); do
+        cls=$(jq -r ".hooks[$i].class" "$m"); s=$(jq -r ".hooks[$i].script" "$m")
+        cmd=$(jq -r ".hooks[$i].entry.command" "$m"); ev=$(jq -r ".hooks[$i].event" "$m")
+        sp=$(jq -r --arg s "$s" ".hooks[$i].script_path // (\"\$HOME/.claude/hooks/\" + \$s)" "$m")
+        f="${sp/\$HOME/$root}"; mkdir -p "$(dirname "$f")"
+        args=$(printf '%s' "$cmd" | sed -n 's/.*then "\$h"\( [^;|]*\)\{0,1\}\( || true\)\{0,1\}; else.*/\1/p')
+        for sh in $SHELLS; do
+            for code in 0 2 7; do
+                printf '#!/bin/sh\ncat >/dev/null\necho "ran:$*"\nexit %s\n' "$code" > "$f"; chmod +x "$f"
+                out=$(printf '{"x":1}' | HOME="$root" "$sh" -c "$cmd" 2>/dev/null); rc=$?
+                want=$code; [[ "$cls" == alarm ]] && want=0
+                if [[ "$rc" == "$want" && "$out" == "ran:${args# }" ]]; then SP=$((SP+1))
+                else SF=$((SF+1)); printf '        %s %s present exit %s: rc=%s out=%s\n' "$s" "$sh" "$code" "$rc" "$out"; fi
+            done
+            for mode in absent noexec; do
+                if [[ "$mode" == absent ]]; then command mv "$f" "$f.gone"; else command mv "$f.gone" "$f"; chmod -x "$f"; fi
+                out=$(printf '{"x":1}' | HOME="$root" "$sh" -c "$cmd" 2>"$root/err"); rc=$?; err=$(cat "$root/err")
+                if [[ "$cls" == guard ]]; then
+                    if [[ "$rc" == 2 && -z "$out" && "$err" == "HOOK MISSING, DENYING: $s "* ]]; then SP=$((SP+1))
+                    else SF=$((SF+1)); printf '        %s %s %s: rc=%s err=%s\n' "$s" "$sh" "$mode" "$rc" "${err:0:60}"; fi
+                elif [[ "$rc" == 0 ]] && printf '%s' "$out" | jq -e --arg s "$s" --arg ev "$ev" '
+                        (.systemMessage | startswith("HOOK MISSING: " + $s + " "))
+                        and (if $ev == "SessionEnd" then true
+                             else .hookSpecificOutput.hookEventName == $ev
+                                  and (.hookSpecificOutput.additionalContext | startswith("HOOK MISSING")) end)' >/dev/null 2>&1; then
+                    SP=$((SP+1))
+                else SF=$((SF+1)); printf '        %s %s %s: rc=%s out=%s\n' "$s" "$sh" "$mode" "$rc" "${out:0:60}"; fi
+            done
+            command mv "$f" "$f.old.$RANDOM"
+        done
+    done
+    cleanup
+}
+if [[ -f "$REAL_MANIFEST" ]]; then
+    shape_run "$REAL_MANIFEST"
+    n_real=$(jq '.hooks | length' "$REAL_MANIFEST")
+    if (( SF == 0 && SP > 0 )); then
+        ok "A76 shape: all $n_real real entries behave by class under$SHELLS ($SP cases)"
+    else bad "A76 shape: all $n_real real entries behave by class under$SHELLS" "$SP passed, $SF failed"; fi
+    case "$SHELLS" in *bash*) ;; *) bad "A76 shape: /bin/bash was among the shells" "shells:$SHELLS" ;; esac
+    # CONTROL: the SAME harness on each entry's OLD command (legacy_commands[0]) must
+    # fail -- the swallowed exit 2 and the silent absence are exactly what it tests.
+    jq '.hooks |= map(.entry.command = .legacy_commands[0])' "$REAL_MANIFEST" > "${TMPDIR:-/tmp}/a76-legacy-$$.json"
+    shape_run "${TMPDIR:-/tmp}/a76-legacy-$$.json" >/dev/null
+    command mv "${TMPDIR:-/tmp}/a76-legacy-$$.json" "${TMPDIR:-/tmp}/a76-legacy-$$.json.done" 2>/dev/null
+    if (( SF > 0 )); then ok "A76 shape control: the old commands FAIL the same harness ($SF cases)"
+    else bad "A76 shape control: the old commands FAIL the same harness" "the harness cannot fail"; fi
+fi
+
 echo
 echo "  $PASS passed, $FAIL failed"
 (( FAIL == 0 ))
