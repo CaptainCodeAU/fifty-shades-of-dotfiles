@@ -87,7 +87,7 @@ for a in "$@"; do
   esac
 done
 [ "$_want_profile" -eq 1 ] && { echo "pj-health: REFUSED: --profile needs a name" >&2; exit 2; }
-command -v jq >/dev/null 2>&1 || { echo "pj-health: REFUSED: jq is required" >&2; exit 2; }
+command -v jq >/dev/null 2>&1 || { echo "pj-health: REFUSED: jq is required. \`pj-launch-check --jq-check\` names the install command for this OS (A76)." >&2; exit 2; }
 
 PJ_HOME="${PJ_HOME:-$HOME/.claude}"
 PJ_BIN_DIR="${PJ_BIN_DIR:-$HOME/.local/bin}"
@@ -332,7 +332,7 @@ else
       || pjw_miss="$pjw_miss $(basename "$f")"
   done
   if [ ! -x "$PJ_HOME/hooks/$PJW" ]; then
-    row FAIL pj-workers-hook "$(tilde "$PJ_HOME/hooks/$PJW") missing or not executable, so the registration's test -x ... || true allows everything; fix: stow -R the dotfiles"
+    row FAIL pj-workers-hook "$(tilde "$PJ_HOME/hooks/$PJW") missing or not executable, so its registration denies every Bash call (HOOK MISSING, DENYING; A76), or under a pre-A76 test -x ... || true line allows everything; fix: stow -R the dotfiles"
   elif [ -n "$pjw_miss" ]; then
     row FAIL pj-workers-hook "not registered in:$pjw_miss; fix: claude-hooks-sync --target user --install and --target project --install (terminal)"
   else

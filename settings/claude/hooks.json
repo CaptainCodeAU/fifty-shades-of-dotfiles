@@ -1,7 +1,7 @@
 {
   "_comment": [
     "Claude Code hook registrations this repo OWNS. install.sh merges these into",
-    "~/.claude/settings.json (add-only: never removes, never edits an existing entry).",
+    "~/.claude/settings.json (add-only: never removes, and edits only a legacy_commands upgrade).",
     "",
     "WHY THIS FILE EXISTS. Stow deploys the hook SCRIPTS into ~/.claude/hooks/, but a",
     "script there is inert until settings.json REGISTERS it. Before 2026-09-05 nothing",
@@ -61,6 +61,20 @@
     "           belongs to LifeOS stays registered by LifeOS; routing one through",
     "           here would move its ownership across the boundary.",
     "  why      required. One line, printed when the entry is skipped.",
+    "  class    OPTIONAL but set on every entry here: guard | advisory | alarm. It decides",
+    "           the command SHAPE (see _shape_note). claude-hooks-sync REFUSES a guard or",
+    "           advisory command containing `||`, because that swallows the exit code and a",
+    "           guard's exit 2 deny never reaches Claude Code. Omitted: an enforce-* script",
+    "           is a guard, anything else an alarm (W-20260924-A76, D-20260925-A03).",
+    "  class guard is PreToolUse only (permissionDecision is read nowhere else).",
+    "  legacy_commands  OPTIONAL. Exact command strings this entry used to register. When",
+    "           one is found at the entry's event and matcher, the sync REPLACES it in place",
+    "           instead of adding a second copy beside it, and --check reports it as needing",
+    "           an upgrade. That and retired are the only edits the sync makes.",
+    "",
+    "retired (top level): entries moved here from hooks when a hook is retired, same",
+    "shape. The sync REMOVES each one's entry.command and legacy_commands strings at its",
+    "event and matcher from whichever target it is syncing, whatever its targets said.",
     "",
     "MATCH RULE (install.sh): an entry counts as already registered when the triple",
     "(event, matcher, entry.command) matches something already present. Never the",
@@ -74,10 +88,12 @@
       "targets": ["user", "project"],
       "entry": {
         "type": "command",
-        "command": "$HOME/.claude/hooks/enforce-secret-probe.sh",
+        "command": "h=\"$HOME/.claude/hooks/enforce-secret-probe.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"HOOK MISSING, DENYING: enforce-secret-probe.sh is registered but ~/.claude/hooks/enforce-secret-probe.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it from your own terminal, where no Claude hook runs: restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command names $HOME/.claude/hooks/enforce-secret-probe.sh from ~/.claude/settings.project.json and ~/.claude/settings.json.\"}}'; fi",
         "timeout": 5
       },
-      "why": "DENIES a Bash command that would print a credential-named variable into the transcript (the ${V:-word} probe, env dumps, bare echo). Was hand-wired into settings.json until 2026-09-20; this entry matches that command byte-for-byte"
+      "why": "DENIES a Bash command that would print a credential-named variable into the transcript (the ${V:-word} probe, env dumps, bare echo). Was hand-wired into settings.json until 2026-09-20; this entry matches that command byte-for-byte",
+      "class": "guard",
+      "legacy_commands": ["$HOME/.claude/hooks/enforce-secret-probe.sh"]
     },
     {
       "event": "PreToolUse",
@@ -86,10 +102,14 @@
       "targets": ["user", "project"],
       "entry": {
         "type": "command",
-        "command": "test -x \"$HOME/.claude/hooks/enforce-no-permanent-delete.sh\" && \"$HOME/.claude/hooks/enforce-no-permanent-delete.sh\" || true",
+        "command": "h=\"$HOME/.claude/hooks/enforce-no-permanent-delete.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"HOOK MISSING, DENYING: enforce-no-permanent-delete.sh is registered but ~/.claude/hooks/enforce-no-permanent-delete.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it from your own terminal, where no Claude hook runs: restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command names $HOME/.claude/hooks/enforce-no-permanent-delete.sh from ~/.claude/settings.project.json and ~/.claude/settings.json.\"}}'; fi",
         "timeout": 5
       },
-      "why": "DENIES Bash commands that destroy data outside the Trash (git worktree remove, git clean without -n, reset --hard, checkout/restore discards, branch -D, stash drop/clear, find -delete, /bin/rm, rm -P, SAFE_RM_OFF, unlink, shred, truncate, dd of=, bare > f, rsync --delete, os.remove/fs.rm in inline code, prune/cleanup commands) and names the safe route. Ruled by Gavin 2026-09-23 (option A) after an agent came one step from git worktree remove, which no rm wrapper can see. Both targets: the Deletion rule is machine-wide. Lexes zsh, sees through prefixes and snapshot aliases; --selftest and --mutants prove every rule. The test -x ... || true shape self-gates a missing script, and a deny still passes through it (JSON on stdout, exit 0)"
+      "why": "DENIES Bash commands that destroy data outside the Trash (git worktree remove, git clean without -n, reset --hard, checkout/restore discards, branch -D, stash drop/clear, find -delete, /bin/rm, rm -P, SAFE_RM_OFF, unlink, shred, truncate, dd of=, bare > f, rsync --delete, os.remove/fs.rm in inline code, prune/cleanup commands) and names the safe route. Ruled by Gavin 2026-09-23 (option A) after an agent came one step from git worktree remove, which no rm wrapper can see. Both targets: the Deletion rule is machine-wide. Lexes zsh, sees through prefixes and snapshot aliases; --selftest and --mutants prove every rule. The registration shape (_shape_note) passes its exit code through and denies by name when the script is absent",
+      "class": "guard",
+      "legacy_commands": [
+        "test -x \"$HOME/.claude/hooks/enforce-no-permanent-delete.sh\" && \"$HOME/.claude/hooks/enforce-no-permanent-delete.sh\" || true"
+      ]
     },
     {
       "event": "PreToolUse",
@@ -98,10 +118,14 @@
       "targets": ["user", "project"],
       "entry": {
         "type": "command",
-        "command": "test -x \"$HOME/.claude/hooks/enforce-no-reset-by-name.sh\" && \"$HOME/.claude/hooks/enforce-no-reset-by-name.sh\" || true",
+        "command": "h=\"$HOME/.claude/hooks/enforce-no-reset-by-name.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"HOOK MISSING, DENYING: enforce-no-reset-by-name.sh is registered but ~/.claude/hooks/enforce-no-reset-by-name.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it from your own terminal, where no Claude hook runs: restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command names $HOME/.claude/hooks/enforce-no-reset-by-name.sh from ~/.claude/settings.project.json and ~/.claude/settings.json.\"}}'; fi",
         "timeout": 5
       },
-      "why": "DENIES reset-by-name: a Bash command that removes a directory (rm -r, rmdir) and then reuses the same path (mkdir, cd, cp/mv/ln destination, tar -C, unzip -d, git init, > into it) without checking the remove worked. In the sandbox the Trash-routed rm fails and leaves the directory, 2>/dev/null hides it, and the reuse merges into stale files (the 2026-09-19 cp hang). Ruled by Gavin 2026-09-24 (W-20260924-A32 Stage 1): rm keeps failing loudly, a hook blocks the pattern in every project. Both targets. Deny only; scanner is conv-shscan.awk mode reset; --selftest proves every arm"
+      "why": "DENIES reset-by-name: a Bash command that removes a directory (rm -r, rmdir) and then reuses the same path (mkdir, cd, cp/mv/ln destination, tar -C, unzip -d, git init, > into it) without checking the remove worked. In the sandbox the Trash-routed rm fails and leaves the directory, 2>/dev/null hides it, and the reuse merges into stale files (the 2026-09-19 cp hang). Ruled by Gavin 2026-09-24 (W-20260924-A32 Stage 1): rm keeps failing loudly, a hook blocks the pattern in every project. Both targets. Deny only; scanner is conv-shscan.awk mode reset; --selftest proves every arm",
+      "class": "guard",
+      "legacy_commands": [
+        "test -x \"$HOME/.claude/hooks/enforce-no-reset-by-name.sh\" && \"$HOME/.claude/hooks/enforce-no-reset-by-name.sh\" || true"
+      ]
     },
     {
       "event": "PreToolUse",
@@ -110,10 +134,14 @@
       "targets": ["user", "project"],
       "entry": {
         "type": "command",
-        "command": "test -x \"$HOME/.claude/hooks/enforce-pj-workers.sh\" && \"$HOME/.claude/hooks/enforce-pj-workers.sh\" || true",
+        "command": "h=\"$HOME/.claude/hooks/enforce-pj-workers.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"HOOK MISSING, DENYING: enforce-pj-workers.sh is registered but ~/.claude/hooks/enforce-pj-workers.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it from your own terminal, where no Claude hook runs: restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command names $HOME/.claude/hooks/enforce-pj-workers.sh from ~/.claude/settings.project.json and ~/.claude/settings.json.\"}}'; fi",
         "timeout": 5
       },
-      "why": "DENIES a conductor starting a plain Claude worker in a herdr pane: herdr agent start --kind claude (or claude-code, Claude, an unreadable kind), and herdr pane run/send-text/send-keys whose text runs claude or a .zshrc launcher (cb cr ci cpr cd_ cskip ct lifeos claude-clean), seen through $(...), backticks, function bodies, bash -c, eval and ssh. The denial names pj-worker start (pj-worker start --cleanroom for the clean room). Rulings D-20260924-A04/A05 (W-20260924-A59). The EARLY honest-slip layer, not the floor: the claude() guard in the pane's zsh is. Both targets (a cb or lifeos conductor loads only the user target). Fails closed without jq or on a bad payload; one named override PJ_WORKERS_CONTROL=<item id>, logged. Scanner is conv-shscan.awk mode pjw; --selftest proves every arm"
+      "why": "DENIES a conductor starting a plain Claude worker in a herdr pane: herdr agent start --kind claude (or claude-code, Claude, an unreadable kind), and herdr pane run/send-text/send-keys whose text runs claude or a .zshrc launcher (cb cr ci cpr cd_ cskip ct lifeos claude-clean), seen through $(...), backticks, function bodies, bash -c, eval and ssh. The denial names pj-worker start (pj-worker start --cleanroom for the clean room). Rulings D-20260924-A04/A05 (W-20260924-A59). The EARLY honest-slip layer, not the floor: the claude() guard in the pane's zsh is. Both targets (a cb or lifeos conductor loads only the user target). Fails closed without jq or on a bad payload; one named override PJ_WORKERS_CONTROL=<item id>, logged. Scanner is conv-shscan.awk mode pjw; --selftest proves every arm",
+      "class": "guard",
+      "legacy_commands": [
+        "test -x \"$HOME/.claude/hooks/enforce-pj-workers.sh\" && \"$HOME/.claude/hooks/enforce-pj-workers.sh\" || true"
+      ]
     },
     {
       "event": "PreToolUse",
@@ -122,10 +150,12 @@
       "targets": ["user", "project"],
       "entry": {
         "type": "command",
-        "command": "$HOME/.claude/hooks/enforce-census.sh",
+        "command": "h=\"$HOME/.claude/hooks/enforce-census.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: enforce-census.sh is registered but ~/.claude/hooks/enforce-census.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"HOOK MISSING: enforce-census.sh is registered but ~/.claude/hooks/enforce-census.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}}'; fi",
         "timeout": 5
       },
-      "why": "Shouts when a grep/rg is used to CONCLUDE instead of census.py"
+      "why": "Shouts when a grep/rg is used to CONCLUDE instead of census.py",
+      "class": "advisory",
+      "legacy_commands": ["$HOME/.claude/hooks/enforce-census.sh"]
     },
     {
       "event": "PreToolUse",
@@ -134,10 +164,12 @@
       "targets": ["user", "project"],
       "entry": {
         "type": "command",
-        "command": "$HOME/.claude/hooks/enforce-census.sh",
+        "command": "h=\"$HOME/.claude/hooks/enforce-census.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: enforce-census.sh is registered but ~/.claude/hooks/enforce-census.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"HOOK MISSING: enforce-census.sh is registered but ~/.claude/hooks/enforce-census.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}}'; fi",
         "timeout": 5
       },
-      "why": "Same guard on the Grep tool, not just shell greps"
+      "why": "Same guard on the Grep tool, not just shell greps",
+      "class": "advisory",
+      "legacy_commands": ["$HOME/.claude/hooks/enforce-census.sh"]
     },
     {
       "event": "PreToolUse",
@@ -146,10 +178,12 @@
       "targets": ["user", "project"],
       "entry": {
         "type": "command",
-        "command": "$HOME/.claude/hooks/enforce-herdr-skill.sh"
+        "command": "h=\"$HOME/.claude/hooks/enforce-herdr-skill.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"HOOK MISSING, DENYING: enforce-herdr-skill.sh is registered but ~/.claude/hooks/enforce-herdr-skill.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it from your own terminal, where no Claude hook runs: restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command names $HOME/.claude/hooks/enforce-herdr-skill.sh from ~/.claude/settings.project.json and ~/.claude/settings.json.\"}}'; fi"
       },
       "requires": ["$HOME/.claude/skills/herdr"],
-      "why": "Blocks herdr commands until the herdr skill is read this session"
+      "why": "Blocks herdr commands until the herdr skill is read this session",
+      "class": "guard",
+      "legacy_commands": ["$HOME/.claude/hooks/enforce-herdr-skill.sh"]
     },
     {
       "event": "PostToolUse",
@@ -158,10 +192,12 @@
       "targets": ["user", "project"],
       "entry": {
         "type": "command",
-        "command": "$HOME/.claude/hooks/mark-herdr-skill-read.sh"
+        "command": "h=\"$HOME/.claude/hooks/mark-herdr-skill-read.sh\"; if [ -x \"$h\" ]; then \"$h\" || true; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: mark-herdr-skill-read.sh is registered but ~/.claude/hooks/mark-herdr-skill-read.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"HOOK MISSING: mark-herdr-skill-read.sh is registered but ~/.claude/hooks/mark-herdr-skill-read.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}}'; fi"
       },
       "requires": ["$HOME/.claude/skills/herdr"],
-      "why": "Lifts the block above; pointless without the skill it watches for"
+      "why": "Lifts the block above; pointless without the skill it watches for",
+      "class": "alarm",
+      "legacy_commands": ["$HOME/.claude/hooks/mark-herdr-skill-read.sh"]
     },
     {
       "event": "SessionStart",
@@ -170,10 +206,14 @@
       "targets": ["user", "project"],
       "entry": {
         "type": "command",
-        "command": "test -x \"$HOME/.local/bin/ci-watch\" && \"$HOME/.local/bin/ci-watch\" || true",
+        "command": "h=\"$HOME/.local/bin/ci-watch\"; if [ -x \"$h\" ]; then \"$h\" || true; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: ci-watch is registered but ~/.local/bin/ci-watch is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"HOOK MISSING: ci-watch is registered but ~/.local/bin/ci-watch is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}}'; fi",
         "timeout": 30
       },
-      "why": "Escalating CI-red alarm on the session dashboard"
+      "why": "Escalating CI-red alarm on the session dashboard",
+      "class": "alarm",
+      "legacy_commands": [
+        "test -x \"$HOME/.local/bin/ci-watch\" && \"$HOME/.local/bin/ci-watch\" || true"
+      ]
     },
     {
       "event": "SessionStart",
@@ -182,10 +222,14 @@
       "targets": ["project"],
       "entry": {
         "type": "command",
-        "command": "test -x \"$HOME/.local/bin/pj-start-card\" && \"$HOME/.local/bin/pj-start-card\" || true",
+        "command": "h=\"$HOME/.local/bin/pj-start-card\"; if [ -x \"$h\" ]; then \"$h\" || true; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: pj-start-card is registered but ~/.local/bin/pj-start-card is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"HOOK MISSING: pj-start-card is registered but ~/.local/bin/pj-start-card is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}}'; fi",
         "timeout": 5
       },
-      "why": "The 20-line start card for pj sessions (D-20260920-04): open items, wrap-up warning, handoff pointer, hello rule. Project target only: pj is the launcher it serves"
+      "why": "The 20-line start card for pj sessions (D-20260920-04): open items, wrap-up warning, handoff pointer, hello rule. Project target only: pj is the launcher it serves",
+      "class": "alarm",
+      "legacy_commands": [
+        "test -x \"$HOME/.local/bin/pj-start-card\" && \"$HOME/.local/bin/pj-start-card\" || true"
+      ]
     },
     {
       "event": "SessionStart",
@@ -194,10 +238,14 @@
       "targets": ["project"],
       "entry": {
         "type": "command",
-        "command": "test -x \"$HOME/.local/bin/mods-api-drift\" && \"$HOME/.local/bin/mods-api-drift\" --hook || true",
+        "command": "h=\"$HOME/.local/bin/mods-api-drift\"; if [ -x \"$h\" ]; then \"$h\" --hook || true; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: mods-api-drift is registered but ~/.local/bin/mods-api-drift is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"HOOK MISSING: mods-api-drift is registered but ~/.local/bin/mods-api-drift is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}}'; fi",
         "timeout": 30
       },
-      "why": "Claude Mods API drift (F8b, D-20260923-A01/-A06): once per Claude Code update, saves the /plugin-types declarations (local, 0 tokens) and records what changed, which the start card then counts as unseen. Silent, exit 0 always. The card reads the result, so the first session after an update may show it one session late"
+      "why": "Claude Mods API drift (F8b, D-20260923-A01/-A06): once per Claude Code update, saves the /plugin-types declarations (local, 0 tokens) and records what changed, which the start card then counts as unseen. Silent, exit 0 always. The card reads the result, so the first session after an update may show it one session late",
+      "class": "alarm",
+      "legacy_commands": [
+        "test -x \"$HOME/.local/bin/mods-api-drift\" && \"$HOME/.local/bin/mods-api-drift\" --hook || true"
+      ]
     },
     {
       "event": "SessionStart",
@@ -206,10 +254,14 @@
       "targets": ["project"],
       "entry": {
         "type": "command",
-        "command": "test -x \"$HOME/.local/bin/pj-launch-check\" && \"$HOME/.local/bin/pj-launch-check\" || true",
+        "command": "h=\"$HOME/.local/bin/pj-launch-check\"; if [ -x \"$h\" ]; then \"$h\" || true; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: pj-launch-check is registered but ~/.local/bin/pj-launch-check is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"HOOK MISSING: pj-launch-check is registered but ~/.local/bin/pj-launch-check is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}}'; fi",
         "timeout": 5
       },
-      "why": "F3 (W-20260921-13): reads the running claude's argv via CLAUDE_PID and prints ONE LAUNCH WARNING line when the appended prompt file is not the pj-prompt-file cache (RULES.md missing), a plugin dir is absent or --setting-sources drifted; silent on a match; always appends one line to ~/.local/state/pj/launches.log. Separate from the read-only card on purpose (P5.2). Project target only"
+      "why": "F3 (W-20260921-13): reads the running claude's argv via CLAUDE_PID and prints ONE LAUNCH WARNING line when the appended prompt file is not the pj-prompt-file cache (RULES.md missing), a plugin dir is absent or --setting-sources drifted; silent on a match; always appends one line to ~/.local/state/pj/launches.log. Separate from the read-only card on purpose (P5.2). Project target only",
+      "class": "alarm",
+      "legacy_commands": [
+        "test -x \"$HOME/.local/bin/pj-launch-check\" && \"$HOME/.local/bin/pj-launch-check\" || true"
+      ]
     },
     {
       "event": "SessionEnd",
@@ -218,10 +270,14 @@
       "targets": ["project"],
       "entry": {
         "type": "command",
-        "command": "test -x \"$HOME/.local/bin/pj-session-end\" && \"$HOME/.local/bin/pj-session-end\" || true",
+        "command": "h=\"$HOME/.local/bin/pj-session-end\"; if [ -x \"$h\" ]; then \"$h\" || true; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: pj-session-end is registered but ~/.local/bin/pj-session-end is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}'; fi",
         "timeout": 10
       },
-      "why": "Writes the no-wrap-up flag the start card reads when a pj session that did real work ends without /pj:wrap-up (D-20260920-03). Project target only, same as the card"
+      "why": "Writes the no-wrap-up flag the start card reads when a pj session that did real work ends without /pj:wrap-up (D-20260920-03). Project target only, same as the card",
+      "class": "alarm",
+      "legacy_commands": [
+        "test -x \"$HOME/.local/bin/pj-session-end\" && \"$HOME/.local/bin/pj-session-end\" || true"
+      ]
     },
     {
       "event": "SessionStart",
@@ -230,10 +286,14 @@
       "targets": ["user", "project"],
       "entry": {
         "type": "command",
-        "command": "test -x \"$HOME/.local/bin/ccw-watch\" && \"$HOME/.local/bin/ccw-watch\" || true",
+        "command": "h=\"$HOME/.local/bin/ccw-watch\"; if [ -x \"$h\" ]; then \"$h\" || true; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: ccw-watch is registered but ~/.local/bin/ccw-watch is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"HOOK MISSING: ccw-watch is registered but ~/.local/bin/ccw-watch is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}}'; fi",
         "timeout": 30
       },
-      "why": "Escalating capture-PRESENCE alarm (narrowed 2026-09-07: no ccw doctor call). Is ccw installed, at/above floor, plugin enabled, plugin copy on disk. Capture died silently for ten days once. Project target added 2026-09-21 (P5.6): cc-capture runs under pj, so its alarm must too"
+      "why": "Escalating capture-PRESENCE alarm (narrowed 2026-09-07: no ccw doctor call). Is ccw installed, at/above floor, plugin enabled, plugin copy on disk. Capture died silently for ten days once. Project target added 2026-09-21 (P5.6): cc-capture runs under pj, so its alarm must too",
+      "class": "alarm",
+      "legacy_commands": [
+        "test -x \"$HOME/.local/bin/ccw-watch\" && \"$HOME/.local/bin/ccw-watch\" || true"
+      ]
     },
     {
       "event": "PreToolUse",
@@ -242,10 +302,14 @@
       "targets": ["project"],
       "entry": {
         "type": "command",
-        "command": "test -x \"$HOME/.claude/hooks/validate-bash.sh\" && \"$HOME/.claude/hooks/validate-bash.sh\" || true",
+        "command": "h=\"$HOME/.claude/hooks/validate-bash.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"HOOK MISSING, DENYING: validate-bash.sh is registered but ~/.claude/hooks/validate-bash.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it from your own terminal, where no Claude hook runs: restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command names $HOME/.claude/hooks/validate-bash.sh from ~/.claude/settings.project.json and ~/.claude/settings.json.\"}}'; fi",
         "timeout": 10
       },
-      "why": "DENIES rm -rf / or ~, force push to main/master, bare git reset --hard, git clean -fd. Moved from the dotfiles project settings 2026-09-21 (P5.6): the rule is OPERATIONAL_RULES Deletion, machine-wide. Project target only: c sessions keep LifeOS's own set. Since 2026-09-23 (Gavin, proposals A B C) it also denies the six .zshrc aliases that launch a nested claude --dangerously-skip-permissions (ci cr ct cpr cd_ cskip), the oh-my-zsh gpf! (git push --force) and brew install/reinstall/upgrade, through the shared scanner conv-shscan.awk, which must be stowed beside it (it is, same directory). No new registration: the rules joined this entry, so the command string is unchanged"
+      "why": "DENIES rm -rf / or ~, force push to main/master, bare git reset --hard, git clean -fd. Moved from the dotfiles project settings 2026-09-21 (P5.6): the rule is OPERATIONAL_RULES Deletion, machine-wide. Project target only: c sessions keep LifeOS's own set. Since 2026-09-23 (Gavin, proposals A B C) it also denies the six .zshrc aliases that launch a nested claude --dangerously-skip-permissions (ci cr ct cpr cd_ cskip), the oh-my-zsh gpf! (git push --force) and brew install/reinstall/upgrade, through the shared scanner conv-shscan.awk, which must be stowed beside it (it is, same directory). No new registration: the rules joined this entry, so the command string is unchanged",
+      "class": "guard",
+      "legacy_commands": [
+        "test -x \"$HOME/.claude/hooks/validate-bash.sh\" && \"$HOME/.claude/hooks/validate-bash.sh\" || true"
+      ]
     },
     {
       "event": "PreToolUse",
@@ -254,10 +318,14 @@
       "targets": ["project"],
       "entry": {
         "type": "command",
-        "command": "test -x \"$HOME/.claude/hooks/enforce-uv.sh\" && \"$HOME/.claude/hooks/enforce-uv.sh\" || true",
+        "command": "h=\"$HOME/.claude/hooks/enforce-uv.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: enforce-uv.sh is registered but ~/.claude/hooks/enforce-uv.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"HOOK MISSING: enforce-uv.sh is registered but ~/.claude/hooks/enforce-uv.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}}'; fi",
         "timeout": 10
       },
-      "why": "DENIES bare pip/python/pytest/ruff in favour of uv. Moved 2026-09-21 (P5.6): the rule is OPERATIONAL_RULES Environment and every project CLAUDE.md. 0 of 51 and 1 of 245 recent commands elsewhere would have been denied, the 1 correctly"
+      "why": "DENIES bare pip/python/pytest/ruff in favour of uv. Moved 2026-09-21 (P5.6): the rule is OPERATIONAL_RULES Environment and every project CLAUDE.md. 0 of 51 and 1 of 245 recent commands elsewhere would have been denied, the 1 correctly",
+      "class": "advisory",
+      "legacy_commands": [
+        "test -x \"$HOME/.claude/hooks/enforce-uv.sh\" && \"$HOME/.claude/hooks/enforce-uv.sh\" || true"
+      ]
     },
     {
       "event": "PreToolUse",
@@ -266,10 +334,14 @@
       "targets": ["project"],
       "entry": {
         "type": "command",
-        "command": "test -x \"$HOME/.claude/hooks/enforce-pnpm.sh\" && \"$HOME/.claude/hooks/enforce-pnpm.sh\" || true",
+        "command": "h=\"$HOME/.claude/hooks/enforce-pnpm.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: enforce-pnpm.sh is registered but ~/.claude/hooks/enforce-pnpm.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"HOOK MISSING: enforce-pnpm.sh is registered but ~/.claude/hooks/enforce-pnpm.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}}'; fi",
         "timeout": 10
       },
-      "why": "DENIES npm/yarn/npx in favour of pnpm or bun. Moved 2026-09-21 (P5.6): the package-manager policy is machine-wide (.zshrc wrappers block the same in every shell). 0 would-denies in 296 recent commands elsewhere"
+      "why": "DENIES npm/yarn/npx in favour of pnpm or bun. Moved 2026-09-21 (P5.6): the package-manager policy is machine-wide (.zshrc wrappers block the same in every shell). 0 would-denies in 296 recent commands elsewhere",
+      "class": "advisory",
+      "legacy_commands": [
+        "test -x \"$HOME/.claude/hooks/enforce-pnpm.sh\" && \"$HOME/.claude/hooks/enforce-pnpm.sh\" || true"
+      ]
     },
     {
       "event": "PreToolUse",
@@ -279,10 +351,14 @@
       "targets": ["project"],
       "entry": {
         "type": "command",
-        "command": "test -x \"$HOME/.claude/hooks/enforce-gh-ssh-only.sh\" && \"$HOME/.claude/hooks/enforce-gh-ssh-only.sh\" || true",
+        "command": "h=\"$HOME/.claude/hooks/enforce-gh-ssh-only.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"HOOK MISSING, DENYING: enforce-gh-ssh-only.sh is registered but ~/.claude/hooks/enforce-gh-ssh-only.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it from your own terminal, where no Claude hook runs: restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command names $HOME/.claude/hooks/enforce-gh-ssh-only.sh from ~/.claude/settings.project.json and ~/.claude/settings.json.\"}}'; fi",
         "timeout": 5
       },
-      "why": "DENIES gh auth login / setup-git / refresh, which re-add HTTPS credential helpers and break SSH-only auth (D-20260917-09). F1 travelled the census, secret-probe and herdr guards and MISSED this one: it was registered only in ~/.claude/settings.json (user, so c only) and in this repo's own .claude/settings.json (so pj only HERE). Under pj in any other project nothing registered it -- measured at P6b. script_path points at the EXISTING dot-claude file rather than stowing a copy: the two copies are byte-identical (verified 2026-09-21, sha 58a9712ed1c1, 4715 b), that path is already occupied so stow would conflict, and nothing in dot-claude is edited. Project target only, and this repo's own entry is removed in the same commit, so it fires ONCE per session, not twice"
+      "why": "DENIES gh auth login / setup-git / refresh, which re-add HTTPS credential helpers and break SSH-only auth (D-20260917-09). F1 travelled the census, secret-probe and herdr guards and MISSED this one: it was registered only in ~/.claude/settings.json (user, so c only) and in this repo's own .claude/settings.json (so pj only HERE). Under pj in any other project nothing registered it -- measured at P6b. script_path points at the EXISTING dot-claude file rather than stowing a copy: the two copies are byte-identical (verified 2026-09-21, sha 58a9712ed1c1, 4715 b), that path is already occupied so stow would conflict, and nothing in dot-claude is edited. Project target only, and this repo's own entry is removed in the same commit, so it fires ONCE per session, not twice",
+      "class": "guard",
+      "legacy_commands": [
+        "test -x \"$HOME/.claude/hooks/enforce-gh-ssh-only.sh\" && \"$HOME/.claude/hooks/enforce-gh-ssh-only.sh\" || true"
+      ]
     },
     {
       "event": "SessionStart",
@@ -291,10 +367,14 @@
       "targets": ["project"],
       "entry": {
         "type": "command",
-        "command": "test -x \"$HOME/.claude/hooks/MemoryRootGuard.sh\" && \"$HOME/.claude/hooks/MemoryRootGuard.sh\" || true",
+        "command": "h=\"$HOME/.claude/hooks/MemoryRootGuard.sh\"; if [ -x \"$h\" ]; then \"$h\" || true; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: MemoryRootGuard.sh is registered but ~/.claude/hooks/MemoryRootGuard.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"HOOK MISSING: MemoryRootGuard.sh is registered but ~/.claude/hooks/MemoryRootGuard.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}}'; fi",
         "timeout": 10
       },
-      "why": "WARNS when the session's cwd is a subdirectory of a hub root, so opening a subdir does not spawn a fresh empty memory store and re-scatter memory. Carried under pj at the P8b gate 2026-09-21: its HUB_ROOTS list holds exactly one path, and that path is a pj project, so the guard was aimed squarely at pj sessions and fired in none of them. LifeOS's file, reached by script_path, not copied. Never blocks: always exits 0"
+      "why": "WARNS when the session's cwd is a subdirectory of a hub root, so opening a subdir does not spawn a fresh empty memory store and re-scatter memory. Carried under pj at the P8b gate 2026-09-21: its HUB_ROOTS list holds exactly one path, and that path is a pj project, so the guard was aimed squarely at pj sessions and fired in none of them. LifeOS's file, reached by script_path, not copied. Never blocks: always exits 0",
+      "class": "alarm",
+      "legacy_commands": [
+        "test -x \"$HOME/.claude/hooks/MemoryRootGuard.sh\" && \"$HOME/.claude/hooks/MemoryRootGuard.sh\" || true"
+      ]
     },
     {
       "event": "UserPromptSubmit",
@@ -303,10 +383,14 @@
       "targets": ["project"],
       "entry": {
         "type": "command",
-        "command": "test -x \"$HOME/.claude/hooks/pj-voice-contract.sh\" && \"$HOME/.claude/hooks/pj-voice-contract.sh\" || true",
+        "command": "h=\"$HOME/.claude/hooks/pj-voice-contract.sh\"; if [ -x \"$h\" ]; then \"$h\" || true; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: pj-voice-contract.sh is registered but ~/.claude/hooks/pj-voice-contract.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"HOOK MISSING: pj-voice-contract.sh is registered but ~/.claude/hooks/pj-voice-contract.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}}'; fi",
         "timeout": 5
       },
-      "why": "STATES the voice contract before the reply is written, names what the previous reply broke, and LOGS every measured turn to ${XDG_STATE_HOME:-~/.local/state}/pj/voice-drift.log as TSV (timestamp, session, turn, model, em dashes, prose chars). pj-voice V4 says zero em dashes; measured across 17 pj transcripts, 371 of them in 174,107 characters of prose, while every other voice rule was obeyed. THE DEFECT IS MODEL-SPECIFIC: split by model, claude-opus-5 has 371 in 157,774 prose chars (1 per 425) and claude-fable-5-1 has 0 in 15,725, same rules file and same style file -- which is why the log carries the model and why a count without one cannot be read. The wording is not the fault: DA_IDENTITY.md line 45 says almost the same words and the `c` family is clean. BE CAREFUL WITH THAT COMPARISON: 15,831 of the 19,505 characters in the `c` control set are Fable, which is clean under pj too, so the arm that actually compares is `c` on Opus, 3,674 characters, 0 observed against about 9 predicted. Real and thin. What IS solidly measured is that DriftReminder.hook.ts, the counter the `c` family runs, has never fired here: it is registered only in ~/.claude/settings.json and pj passes --setting-sources project,local, and its contract line appears twice in a `c` transcript and zero times in 35.3 MB of pj transcript. The inference that counting is WHY `c` is clean remains a hypothesis, and the log is how it gets settled (W-20260922-A13). UserPromptSubmit and not Stop, on DriftReminder's own recorded measurement: a Stop hook fires after the text is on screen, and FormatGate going observation-only took drift from 0% across 168 turns to 61-91% across 2,608. DriftReminder itself is NOT carried: its contract is hardcoded to a banner, a closer and max 2 em dashes, none of which pj has, and its only seam is LIFEOS_DIR. First UserPromptSubmit entry in this manifest. Project target only. Never blocks and never prints: every path exits 0, and an unwritable log is skipped in silence. Ruled by Gavin at the P9 gate 2026-09-22"
+      "why": "STATES the voice contract before the reply is written, names what the previous reply broke, and LOGS every measured turn to ${XDG_STATE_HOME:-~/.local/state}/pj/voice-drift.log as TSV (timestamp, session, turn, model, em dashes, prose chars). pj-voice V4 says zero em dashes; measured across 17 pj transcripts, 371 of them in 174,107 characters of prose, while every other voice rule was obeyed. THE DEFECT IS MODEL-SPECIFIC: split by model, claude-opus-5 has 371 in 157,774 prose chars (1 per 425) and claude-fable-5-1 has 0 in 15,725, same rules file and same style file -- which is why the log carries the model and why a count without one cannot be read. The wording is not the fault: DA_IDENTITY.md line 45 says almost the same words and the `c` family is clean. BE CAREFUL WITH THAT COMPARISON: 15,831 of the 19,505 characters in the `c` control set are Fable, which is clean under pj too, so the arm that actually compares is `c` on Opus, 3,674 characters, 0 observed against about 9 predicted. Real and thin. What IS solidly measured is that DriftReminder.hook.ts, the counter the `c` family runs, has never fired here: it is registered only in ~/.claude/settings.json and pj passes --setting-sources project,local, and its contract line appears twice in a `c` transcript and zero times in 35.3 MB of pj transcript. The inference that counting is WHY `c` is clean remains a hypothesis, and the log is how it gets settled (W-20260922-A13). UserPromptSubmit and not Stop, on DriftReminder's own recorded measurement: a Stop hook fires after the text is on screen, and FormatGate going observation-only took drift from 0% across 168 turns to 61-91% across 2,608. DriftReminder itself is NOT carried: its contract is hardcoded to a banner, a closer and max 2 em dashes, none of which pj has, and its only seam is LIFEOS_DIR. First UserPromptSubmit entry in this manifest. Project target only. Never blocks and never prints: every path exits 0, and an unwritable log is skipped in silence. Ruled by Gavin at the P9 gate 2026-09-22",
+      "class": "alarm",
+      "legacy_commands": [
+        "test -x \"$HOME/.claude/hooks/pj-voice-contract.sh\" && \"$HOME/.claude/hooks/pj-voice-contract.sh\" || true"
+      ]
     },
     {
       "event": "PreToolUse",
@@ -315,10 +399,14 @@
       "targets": ["project"],
       "entry": {
         "type": "command",
-        "command": "test -x \"$HOME/.claude/hooks/pj-question-ping.sh\" && \"$HOME/.claude/hooks/pj-question-ping.sh\" || true",
+        "command": "h=\"$HOME/.claude/hooks/pj-question-ping.sh\"; if [ -x \"$h\" ]; then \"$h\" || true; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: pj-question-ping.sh is registered but ~/.claude/hooks/pj-question-ping.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"HOOK MISSING: pj-question-ping.sh is registered but ~/.claude/hooks/pj-question-ping.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}}'; fi",
         "timeout": 5
       },
-      "why": "PINGS Gavin at every AskUserQuestion popup: four sounds (Ping, Glass, Glass, Glass) then two imsg messages one second apart, per D-20260921-A10 as widened 2026-09-23 ('whenever there is one of those Ask User Question tool popups'). A hook because a rule the model must remember before each popup is forgotten on exactly the popup that stalls a session. Never blocks and never delays the popup: it prints nothing, exits 0, and runs the signal in a detached worker. PJ_NO_PING=1 disables it; a second popup from the same session inside 20 s is debounced. Project target only: pj is where the ruling applies"
+      "why": "PINGS Gavin at every AskUserQuestion popup: four sounds (Ping, Glass, Glass, Glass) then two imsg messages one second apart, per D-20260921-A10 as widened 2026-09-23 ('whenever there is one of those Ask User Question tool popups'). A hook because a rule the model must remember before each popup is forgotten on exactly the popup that stalls a session. Never blocks and never delays the popup: it prints nothing, exits 0, and runs the signal in a detached worker. PJ_NO_PING=1 disables it; a second popup from the same session inside 20 s is debounced. Project target only: pj is where the ruling applies",
+      "class": "alarm",
+      "legacy_commands": [
+        "test -x \"$HOME/.claude/hooks/pj-question-ping.sh\" && \"$HOME/.claude/hooks/pj-question-ping.sh\" || true"
+      ]
     },
     {
       "event": "SessionStart",
@@ -327,10 +415,14 @@
       "targets": ["project"],
       "entry": {
         "type": "command",
-        "command": "test -x \"$HOME/.claude/hooks/herdr-agent-state.sh\" && \"$HOME/.claude/hooks/herdr-agent-state.sh\" session || true",
+        "command": "h=\"$HOME/.claude/hooks/herdr-agent-state.sh\"; if [ -x \"$h\" ]; then \"$h\" session || true; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: herdr-agent-state.sh is registered but ~/.claude/hooks/herdr-agent-state.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"HOOK MISSING: herdr-agent-state.sh is registered but ~/.claude/hooks/herdr-agent-state.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}}'; fi",
         "timeout": 10
       },
-      "why": "Records the session's herdr agent state. Carried under pj at the P8b gate 2026-09-21: pj sessions run inside herdr panes, and this fired only under c. HERDR OWNS THIS FILE and rewrites it on integration update (its header says so), which is exactly why the entry points at its path via script_path instead of stowing a copy that would go stale silently. The `session` argument matches the user-level registration's shape"
+      "why": "Records the session's herdr agent state. Carried under pj at the P8b gate 2026-09-21: pj sessions run inside herdr panes, and this fired only under c. HERDR OWNS THIS FILE and rewrites it on integration update (its header says so), which is exactly why the entry points at its path via script_path instead of stowing a copy that would go stale silently. The `session` argument matches the user-level registration's shape",
+      "class": "alarm",
+      "legacy_commands": [
+        "test -x \"$HOME/.claude/hooks/herdr-agent-state.sh\" && \"$HOME/.claude/hooks/herdr-agent-state.sh\" session || true"
+      ]
     },
     {
       "event": "SessionStart",
@@ -339,14 +431,19 @@
       "targets": ["project"],
       "entry": {
         "type": "command",
-        "command": "test -x \"$HOME/.claude/hooks/risk-watch\" && \"$HOME/.claude/hooks/risk-watch\" || true",
+        "command": "h=\"$HOME/.claude/hooks/risk-watch\"; if [ -x \"$h\" ]; then \"$h\" || true; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: risk-watch is registered but ~/.claude/hooks/risk-watch is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"HOOK MISSING: risk-watch is registered but ~/.claude/hooks/risk-watch is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}}'; fi",
         "timeout": 10
       },
-      "why": "Renders the ThreatModel risk register at session start (overdue count, Critical/High counts, one OK line when clean; 0.03 s measured). Carried under pj at the P8b gate 2026-09-21 on ONE condition, Gavin's words: it carries after it is versioned. Until P10 (2026-09-22) it was a 3.3 KB file in ~/.local/bin in no repository; P10 adopted it into dot-claude at ~/.claude/hooks/risk-watch (W-20260921-A25), which is what this entry points at. LifeOS owns the register and the tool (skills/ThreatModel); this manifest only carries the alarm to pj, the same shape as MemoryRootGuard.sh above."
+      "why": "Renders the ThreatModel risk register at session start (overdue count, Critical/High counts, one OK line when clean; 0.03 s measured). Carried under pj at the P8b gate 2026-09-21 on ONE condition, Gavin's words: it carries after it is versioned. Until P10 (2026-09-22) it was a 3.3 KB file in ~/.local/bin in no repository; P10 adopted it into dot-claude at ~/.claude/hooks/risk-watch (W-20260921-A25), which is what this entry points at. LifeOS owns the register and the tool (skills/ThreatModel); this manifest only carries the alarm to pj, the same shape as MemoryRootGuard.sh above.",
+      "class": "alarm",
+      "legacy_commands": [
+        "test -x \"$HOME/.claude/hooks/risk-watch\" && \"$HOME/.claude/hooks/risk-watch\" || true"
+      ]
     }
   ],
   "_traveller_note": [
-    "THE test -x ... || true SHAPE ON A PreToolUse GUARD IS DELIBERATE. A deny is JSON on",
+    "THE test -x ... || true SHAPE ON A PreToolUse GUARD WAS DELIBERATE (SUPERSEDED 2026-09-25",
+    "by _shape_note; kept as the reason it was once right). A deny is JSON on",
     "stdout under exit 0, so the guard still denies through it; and a registration that",
     "outlives its script (this tool is add-only) costs nothing instead of turning every",
     "Bash call into a hook error. That is also what makes a rollback safe: restore the",
@@ -392,5 +489,31 @@
     "PERMANENTLY inside Claude, with no way to unlock it. The laptop is exactly the box",
     "that drives herdr against the mini, which is how this was caught before shipping",
     "rather than after."
-  ]
+  ],
+  "_shape_note": [
+    "THE COMMAND SHAPE, BY class (W-20260924-A76, D-20260925-A03, 2026-09-25). Every entry:",
+    "  h=\"<path>\"; if [ -x \"$h\" ]; then \"$h\" [args] [|| true]; else printf <HOOK MISSING json>; fi",
+    "guard, advisory: NO `|| true`. The hook's own exit code reaches Claude Code; under the old",
+    "  `test -x P && P || true` an exit 2 deny became exit 0. No hook here denies by exit 2 yet",
+    "  (they deny with permissionDecision JSON under exit 0), so that fault was latent.",
+    "alarm: KEEPS `|| true`. A SessionStart hook's stdout reaches the model only on exit 0, so",
+    "  a stray exit 1 from a watcher would silence its card (AGENT-REPORTED from the hooks docs).",
+    "missing or not executable (ruled by Gavin 2026-09-25):",
+    "  guard: DENIES every call it guards, the way every guard here denies: permissionDecision",
+    "    deny JSON on stdout, exit 0 (printf by hand, jq may be what is missing). No exit 2:",
+    "    that is the one deny path not measured here (conductor, 2026-09-25). It names",
+    "    the file and the three fixes. The fix runs from Gavin's own terminal, where no Claude",
+    "    hook runs. A guard class is PreToolUse only, the one event that reads a",
+    "    permissionDecision; the sync refuses anything else. A script or script_path with a",
+    "    quote or backslash is refused too: it would break the hand-built JSON.",
+    "  advisory, alarm: one HOOK MISSING line, as systemMessage (the user) and",
+    "    additionalContext (the model), then exit 0.",
+    "  It used to be silent (test -x form) or a bare 'command not found' (bare-path form).",
+    "RETIRING A HOOK: move its whole entry from hooks to retired. The sync then removes its",
+    "  command and every legacy_commands string from both targets, so a planned retirement",
+    "  never leaves a guard line behind to deny every Bash call.",
+    "Each old string is kept in legacy_commands, so the sync upgrades a machine in place.",
+    "Shape proof: claude-hooks-sync-selftest runs every real entry under bash, sh and dash."
+  ],
+  "retired": []
 }

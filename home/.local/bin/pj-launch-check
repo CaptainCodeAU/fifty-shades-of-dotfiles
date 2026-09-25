@@ -50,6 +50,16 @@
 # Contract: exit 0 on EVERY path, no network, no prompt, well under a second; writes ONLY
 # the log line. Silent on the `compact` source (same as the card). Never repairs.
 #
+# JQ (W-20260924-A76, 2026-09-25). Every guard hook reads its payload with jq, and
+# without it they are blind: a guard then denies any command that mentions its
+# trigger, an advisory hook only warns. So a machine with no jq is a machine where
+# Bash calls get denied for a reason nobody on screen can see. After the launch
+# check, when `jq` is not on PATH, one more line prints:
+#   HOOK WARNING: jq is not on PATH ... Fix: <the install command for this OS>
+# `pj-launch-check --jq-check` asks the same question by hand (exit 0 present,
+# 1 missing), for machines C and D. It needs no jq itself; the OS comes from
+# `uname -s` and /etc/os-release (ID, then ID_LIKE).
+#
 # Seams (the selftest sets them, nobody else should):
 #   PJ_LAUNCH_ARGV       file holding the argv text instead of ps
 #   PJ_PROMPT_EXPECTED   the expected prompt path instead of `pj-prompt-file --path`
@@ -57,7 +67,8 @@
 #   PJ_ZSHRC_PATH        the .zshrc to stat (default ~/.zshrc, followed through the link)
 #   PJ_LAUNCH_SHELL_START / PJ_LAUNCH_TTY   fixed values instead of ps lookups
 #   PJ_PROFILE_DIR       the profiles folder (default ~/.config/pj/profiles)
-# Flags: --selftest, --help.
+#   PJ_UNAME / PJ_OS_RELEASE   the OS name and os-release file the jq fix is chosen from
+# Flags: --jq-check, --selftest, --help.
 set -u
 
 STATE="${PJ_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/pj}"
@@ -116,6 +127,41 @@ canon(){   # expand ~ and $HOME, follow links when the path exists
   if [ -e "$p" ]; then readlink -f "$p" 2>/dev/null || printf '%s' "$p"; else printf '%s' "$p"; fi
 }
 tilde(){ printf '%s' "${1/#$HOME/\~}"; }
+
+# --- jq ----------------------------------------------------------------------------
+jq_fix(){   # the install command for this OS, or a plain sentence when unknown
+  local os id like f
+  os="${PJ_UNAME:-$(uname -s 2>/dev/null)}"
+  case "$os" in
+    Darwin) printf 'brew install jq'; return;;
+    Linux)  ;;
+    *) printf 'install the jq package for %s (https://jqlang.org/download/)' "${os:-this OS}"; return;;
+  esac
+  f="${PJ_OS_RELEASE:-/etc/os-release}"
+  id="$(sed -n 's/^ID=//p' "$f" 2>/dev/null | tr -d '"' | head -1)"
+  like="$(sed -n 's/^ID_LIKE=//p' "$f" 2>/dev/null | tr -d '"' | head -1)"
+  for x in $id $like; do
+    case "$x" in
+      debian|ubuntu) printf 'sudo apt-get install -y jq'; return;;
+      fedora|rhel|centos) printf 'sudo dnf install -y jq'; return;;
+      arch) printf 'sudo pacman -S jq'; return;;
+      alpine) printf 'sudo apk add jq'; return;;
+      suse|opensuse|opensuse-leap|opensuse-tumbleweed) printf 'sudo zypper install jq'; return;;
+    esac
+  done
+  printf 'install the jq package with this Linux distribution'"'"'s package manager (os-release ID=%s)' "${id:-unknown}"
+}
+jq_line(){   # prints the warning when jq is missing, nothing when present
+  command -v jq >/dev/null 2>&1 && return 0
+  printf 'HOOK WARNING: jq is not on PATH, so the hooks that read tool payloads are blind (guards deny a command that mentions their trigger, advisory hooks only warn). Fix: %s\n' "$(jq_fix)"
+}
+jq_check(){   # --jq-check: exit 0 present, 1 missing
+  local p
+  if p="$(command -v jq 2>/dev/null)" && [ -n "$p" ]; then
+    printf 'jq: present (%s, %s)\n' "$p" "$(jq --version 2>/dev/null || echo 'version unreadable')"; return 0
+  fi
+  printf 'jq: MISSING from PATH. Fix: %s\n' "$(jq_fix)"; return 1
+}
 
 # --- hook input --------------------------------------------------------------------
 read_input(){   # sets SRC SESSION CWD from the hook JSON on stdin; tolerant of garbage
@@ -258,7 +304,7 @@ main(){
   fi
   if [ -n "$WHY" ]; then
     printf 'LAUNCH CHECK: could not read the launcher argv (%s)\n' "$WHY"
-    log_line "unmeasured:$WHY"; exit 0
+    log_line "unmeasured:$WHY"; jq_line; exit 0
   fi
   check
   if [ -n "$REASONS" ]; then
@@ -267,6 +313,7 @@ main(){
   else
     log_line ok
   fi
+  jq_line
   exit 0
 }
 
@@ -396,6 +443,46 @@ selftest(){
   [ -z "$OUT" ] && ok "18 prompt_out: the profile's own cache path is clean" || bad "18 prompt_out clean" "$OUT"
   OUT="$(printf '{"session_id":"s18b","source":"startup","cwd":"%s"}' "$root" | PJ_LAUNCH_ARGV="$root/argv.ok" PJ_PROMPT_EXPECTED="" PJ_STATE_DIR="$root/state" PJ_PROFILE_DIR="$root/profiles" PJ_PROFILE=ownprompt PJ_LAUNCH_TTY=ttys099 PJ_LAUNCH_SHELL_START=0 "$0" 2>/dev/null)"
   case "$OUT" in *"RULES.md"*) ok "18 control: the default cache path is STALE under a prompt_out profile";; *) bad "18 control" "$OUT";; esac
+
+  # ---- jq (A76) ---------------------------------------------------------------------
+  # 19. A REAL PATH without jq: a folder of links to every command in the system bin
+  #     dirs except jq (macOS ships /usr/bin/jq, so dropping /opt/homebrew is not enough).
+  local nojq="$root/nojq-bin" d c
+  mkdir -p "$nojq"
+  for d in /usr/bin /bin /usr/sbin /sbin; do
+    [ -d "$d" ] || continue
+    for c in "$d"/*; do
+      case "${c##*/}" in jq|jq-*) continue;; esac
+      [ -e "$nojq/${c##*/}" ] || ln -s "$c" "$nojq/${c##*/}" 2>/dev/null
+    done
+  done
+  if PATH="$nojq" command -v jq >/dev/null 2>&1; then bad "19 fixture: jq is NOT on the no-jq PATH" "$(PATH="$nojq" command -v jq)"
+  else ok "19 fixture: jq is NOT on the no-jq PATH"; fi
+  command -v jq >/dev/null 2>&1 && ok "19 control: jq IS on the normal PATH" || bad "19 control: jq IS on the normal PATH" "no jq here, so arm 20 cannot pass"
+  OUT="$(PATH="$nojq" PJ_UNAME=Darwin "$0" --jq-check 2>&1)"; RC=$?
+  [ "$RC" -eq 1 ] && [ "$OUT" = "jq: MISSING from PATH. Fix: brew install jq" ] && ok "19 --jq-check without jq: exit 1, names brew install jq" || bad "19 --jq-check without jq" "rc=$RC out=$OUT"
+  # 20. present: exit 0, names the path
+  OUT="$("$0" --jq-check 2>&1)"; RC=$?
+  case "$RC:$OUT" in "0:jq: present ("*) ok "20 --jq-check with jq: exit 0, says present";; *) bad "20 --jq-check with jq" "rc=$RC out=$OUT";; esac
+  # 21. the SessionStart run: no jq adds the HOOK WARNING line after a clean launch
+  #     check; with jq, the same run prints nothing (arm 1 is that control too).
+  OUT="$(printf '{"session_id":"s21","source":"startup"}' | PATH="$nojq" PJ_UNAME=Darwin PJ_LAUNCH_ARGV="$root/argv.ok" PJ_PROMPT_EXPECTED="$exp" PJ_STATE_DIR="$root/state" PJ_ZSHRC_PATH="$root/zshrc" PJ_PROFILE_DIR="$root/profiles" PJ_LAUNCH_TTY=ttys099 PJ_LAUNCH_SHELL_START=0 "$0" 2>/dev/null)"; RC=$?
+  case "$RC:$OUT" in "0:HOOK WARNING: jq is not on PATH"*"Fix: brew install jq") ok "21 no jq at session start: one HOOK WARNING line naming the fix, exit 0";; *) bad "21 session start without jq" "rc=$RC out=$OUT";; esac
+  OUT="$(printf '{"session_id":"s21b","source":"startup"}' | PJ_LAUNCH_ARGV="$root/argv.ok" PJ_PROMPT_EXPECTED="$exp" PJ_STATE_DIR="$root/state" PJ_ZSHRC_PATH="$root/zshrc" PJ_PROFILE_DIR="$root/profiles" PJ_LAUNCH_TTY=ttys099 PJ_LAUNCH_SHELL_START=0 "$0" 2>/dev/null)"
+  [ -z "$OUT" ] && ok "21 control: with jq the same run prints nothing" || bad "21 control" "$OUT"
+  # 22. the fix per OS. Linux fixtures are os-release files shaped like the real ones.
+  local osr="$root/os-release" want line
+  for line in "debian||sudo apt-get install -y jq" "ubuntu|debian|sudo apt-get install -y jq" "pop|ubuntu debian|sudo apt-get install -y jq" \
+              "fedora||sudo dnf install -y jq" "rocky|rhel centos fedora|sudo dnf install -y jq" "arch||sudo pacman -S jq" \
+              "alpine||sudo apk add jq" "opensuse-tumbleweed|opensuse suse|sudo zypper install jq"; do
+    want="${line##*|}"
+    printf 'NAME="x"\nID=%s\nID_LIKE="%s"\n' "${line%%|*}" "$(printf '%s' "$line" | cut -d'|' -f2)" > "$osr"
+    OUT="$(PATH="$nojq" PJ_UNAME=Linux PJ_OS_RELEASE="$osr" "$0" --jq-check 2>&1)"; RC=$?
+    [ "$RC" -eq 1 ] && [ "$OUT" = "jq: MISSING from PATH. Fix: $want" ] && ok "22 Linux ${line%%|*}: $want" || bad "22 Linux ${line%%|*}" "rc=$RC out=$OUT"
+  done
+  printf 'ID=nixos\n' > "$osr"
+  OUT="$(PATH="$nojq" PJ_UNAME=Linux PJ_OS_RELEASE="$osr" "$0" --jq-check 2>&1)"
+  case "$OUT" in *"package manager (os-release ID=nixos)") ok "22 an unknown distro is named, never guessed";; *) bad "22 unknown distro" "$OUT";; esac
   printf 'pj-launch-check selftest: %d passed, %d failed\n' "$pass" "$fail"
   [ "$fail" -eq 0 ]
 }
@@ -403,6 +490,7 @@ selftest(){
 case "${1:-}" in
   --help|-h) usage; exit 0;;
   --selftest) selftest; exit $?;;
+  --jq-check) jq_check; exit $?;;
   "") main;;
   *) printf 'pj-launch-check: unknown argument %s\n' "$1" >&2; exit 0;;
 esac

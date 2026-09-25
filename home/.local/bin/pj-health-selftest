@@ -456,7 +456,7 @@ write_user_settings '.hooks.PreToolUse = []'; run; arm "pj-workers-hook FAIL whe
 arm "hooks-sync stays PASS then (it reads only the project target: why 7b exists)" is hooks-sync PASS; write_user_settings
 write_settings '.hooks.PreToolUse[0].hooks |= map(select(.command | contains("enforce-pj-workers") | not))'; run; arm "pj-workers-hook FAIL when missing from settings.project.json" is pj-workers-hook FAIL; arm "pj-workers-hook names settings.project.json" has pj-workers-hook "settings.project.json"; write_settings
 write_settings '.hooks.PreToolUse[0].matcher = "Grep"'; run; arm "pj-workers-hook FAIL when registered under the wrong matcher" is pj-workers-hook FAIL; write_settings
-gone "$H/hooks/enforce-pj-workers.sh"; run; arm "pj-workers-hook FAIL when the script is not stowed" is pj-workers-hook FAIL; arm "pj-workers-hook says the wrapper then allows everything" has pj-workers-hook "allows everything"; ln -s "$DF/home/.claude/hooks/enforce-pj-workers.sh" "$H/hooks/enforce-pj-workers.sh"
+gone "$H/hooks/enforce-pj-workers.sh"; run; arm "pj-workers-hook FAIL when the script is not stowed" is pj-workers-hook FAIL; arm "pj-workers-hook says the registration then denies every Bash call" has pj-workers-hook "denies every Bash call"; ln -s "$DF/home/.claude/hooks/enforce-pj-workers.sh" "$H/hooks/enforce-pj-workers.sh"
 mv "$H/settings.json" "$T/su.bak"; run; arm "pj-workers-hook NOT MEASURED when the user settings are unreadable" is pj-workers-hook "$NM"; mv "$T/su.bak" "$H/settings.json"
 run; arm "pj-workers-hook PASS again after every arm put back" is pj-workers-hook PASS
 

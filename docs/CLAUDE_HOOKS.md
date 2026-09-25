@@ -359,7 +359,7 @@ any alias it meets; the rules classify that expansion as zsh would.
 Added 2026-09-24 for W-20260924-A32 (Stage 1), on Gavin's ruling: `rm` keeps
 failing loudly with no fallback, and a hook blocks the pattern in every project.
 Registered on `PreToolUse` with matcher `Bash` for **both** targets, the same
-`test -x ... || true` shape as `enforce-no-permanent-delete.sh`. Deny only.
+guard shape as `enforce-no-permanent-delete.sh` (`_shape_note` in the manifest, A76). Deny only.
 
 **The class.** `rm -rf "$S/mut4" 2>/dev/null; mkdir -p "$S/mut4"; cp ... "$S/mut4/"`.
 In the Claude sandbox the Trash-routed `rm` fails (rc 1) and leaves the directory;
@@ -444,10 +444,11 @@ does not count.
 **It fails closed** (redteam-3 H4). No `jq`, a payload that is not JSON, or a
 payload with no `tool_input.command`: when the raw stdin mentions `herdr` with a
 launch verb it denies by name, in pure bash. Every deny is
-`permissionDecision: deny` with exit 0, so the `test -x ... || true` wrapper
-cannot swallow it (a selftest arm runs the wrapper). A missing scanner falls back
-to a crude word match. What it cannot fail closed on: the script not being there,
-because `test -x` then allows everything. `pj-health`'s `pj-workers-hook` row
+`permissionDecision: deny` with exit 0, so even the old `test -x ... || true` wrapper
+could not swallow it (a selftest arm runs the wrapper). A missing scanner falls back
+to a crude word match. The script not being there is covered by the registration
+since A76 (2026-09-25): a missing guard denies every Bash call by name; under the old
+wrapper it allowed everything. `pj-health`'s `pj-workers-hook` row
 checks that it is stowed and registered in both settings files.
 
 The rule lives in `conv-shscan.awk` as the deny-only mode `pjw`, which records
