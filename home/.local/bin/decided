@@ -201,6 +201,71 @@ search_stream(){  # search_stream <mode:words|id> <query> [legacy-regex] -> hits
   '
 }
 
+# ---------------------------------------------------------------- explain a miss ----
+# W-20260924-A48 item E (D-20260925-A02). A word search needs EVERY word in one block, so
+# one extra word hides a ruling that the other words find: `decided stall watch done`
+# missed D-20260924-A02, which `decided stall watch` returns. A bare miss cannot tell
+# "nothing is written" from "one word too many", so the miss now shows each word's own
+# count and names the blocks that hold every word but one. Matching stays SUBSTRING
+# (measured over 140 real queries, docs/DECIDED.md "Why substring"); the second figure,
+# blocks where the word STARTS a word, is how `stall` inside `install` stays visible.
+NEAR_CAP=10       # near misses shown; the rest are counted and a command to see them named
+explain_miss(){   # explain_miss <all> <query>: to stderr, over the pool that was searched
+  local all="$1" q="$2" h label kind path mark=$'\036' pre="decided"
+  [ "$all" -eq 1 ] && pre="$pre --all"
+  [ -n "$F_STATUS" ] && pre="$pre --status $F_STATUS"
+  [ -n "$F_SINCE" ] && pre="$pre --since $F_SINCE"
+  for h in "${HOMES[@]}"; do
+    IFS=$'\t' read -r label kind path _ <<<"$h"
+    case "$kind" in folder|file) ;; *) continue ;; esac
+    printf '\n%s%s\n' "$mark" "$label"
+    fblocks_of "$path" "$kind"
+  done | awk -v q="$q" -v mark="$mark" -v cap="$NEAR_CAP" -v pool="$PASSED" -v pre="$pre" '
+    function starts(t, x,   p, off, c) {   # does x begin a word somewhere in t? [a-z0-9] are word chars
+      off = 0
+      while ((p = index(substr(t, off + 1), x)) > 0) {
+        p += off; c = (p > 1) ? substr(t, p - 1, 1) : ""
+        if (c !~ /[a-z0-9]/) return 1
+        off = p
+      }
+      return 0
+    }
+    function flush(   lower, i, got, miss) {
+      if (block == "") return
+      lower = tolower(block); got = 0; miss = 0
+      for (i = 1; i <= n; i++) {
+        if (index(lower, w[i])) { subn[i]++; got++; if (starts(lower, w[i])) stn[i]++ } else miss = i
+      }
+      if (n >= 2 && got == n - 1) { nn++; lacks[miss]++; near[nn] = substr(block, 4, index(block, "\n") - 4) "   [" label "]  lacks: " w[miss] }
+      block = ""
+    }
+    BEGIN {
+      c = split(tolower(q), raw, " "); n = 0
+      for (i = 1; i <= c; i++) if (raw[i] != "" && !(raw[i] in seen)) { seen[raw[i]] = 1; w[++n] = raw[i] }
+    }
+    index($0, mark) == 1 { flush(); label = substr($0, length(mark) + 1); next }
+    /^## D-/ { flush(); block = $0 "\n"; next }
+    { if (block != "") block = block $0 "\n" }
+    END {
+      flush()
+      line = "decided: each word on its own, in the " pool " block(s) searched:"
+      for (i = 1; i <= n; i++) line = line (i > 1 ? "," : "") " " w[i] " " (subn[i] + 0) (i == 1 ? " (" (stn[i] + 0) " where it starts a word)" : " (" (stn[i] + 0) ")")
+      print line
+      if (n < 2) { print "decided: near misses: not applicable to a one-word query."; exit }
+      if (nn == 0) { print "decided: near misses, holding every word but one: none."; exit }
+      shown = (nn > cap) ? cap : nn
+      print "decided: near misses, holding every word but one: " nn ", " (nn > cap ? "showing " cap ", " nn - cap " more" : "showing all " nn) "."
+      for (i = 1; i <= shown; i++) print "decided:   " near[i]
+      print "decided: a near miss may be the ruling; each command below shows its group in full:"
+      for (i = 1; i <= n; i++) {
+        if (!lacks[i]) continue
+        cmd = pre; for (j = 1; j <= n; j++) if (j != i) cmd = cmd " " w[j]
+        print "decided:   lacking " w[i] " (" lacks[i] "): " cmd
+      }
+    }
+  ' >&2
+}
+
 denominator(){    # sets DEN="N decision(s) searched (label a, label b)", TOTAL and PASSED
   local h label kind path n m parts="" fparts="" ; TOTAL=0; PASSED=0
   for h in "${HOMES[@]}"; do
@@ -257,6 +322,7 @@ run_search(){     # run_search <all> <mode> <query>
     printf 'decided: %s -- and a miss is NOT the same as "not decided".\n' "$den" >&2
     [ "$PASSED" -eq 0 ] && printf 'decided: the FILTER passed nothing, so no words were tested; drop or widen it before reading this as an answer.\n' >&2
     print_home_notes
+    [ "$PASSED" -gt 0 ] && [ -n "$q" ] && explain_miss "$all" "$q"
     return 1
   fi
   # an ID not in scope: look everywhere once and say where it is, so a citation never dangles
@@ -273,6 +339,7 @@ run_search(){     # run_search <all> <mode> <query>
   printf 'decided: %s -- and a miss is NOT the same as "not decided".\n' "$den" >&2
   printf 'decided: it means nothing is written down, so decide it and add a block (decided add).\n' >&2
   print_home_notes
+  [ "$mode" = words ] && explain_miss "$all" "$q"
   return 1
 }
 
