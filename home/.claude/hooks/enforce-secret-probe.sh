@@ -46,6 +46,12 @@ set -uo pipefail
 # not fire on TMPDIR, EDITOR or PATH, or the block becomes something to route around.
 SECRETY='[A-Za-z0-9_]*(TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|APIKEY|_KEY|CREDENTIAL|PRIVKEY|PAT)[A-Za-z0-9_]*'
 
+# The crude match on the RAW payload, used ONLY when the payload cannot be read
+# (jq missing, invalid JSON, no tool_input.command; D-20260925-A03). Any
+# expansion of a credential-named variable, ${#V} included (it cannot be told
+# apart here), or an env/printenv piped anywhere. A hit DENIES by name.
+RAW_TRIGGER='\$\{?#?'"$SECRETY"'|(^|[^A-Za-z0-9_.-])(env|printenv)([[:space:]]+-[A-Za-z0-9]+)*[[:space:]]*\|'
+
 # ---------------------------------------------------------------- matching engine
 # Returns the reason on stdout, or nothing. Never echoes the command back, and never
 # echoes a value: a guard that quotes the secret in its own refusal is the bug again.
@@ -138,6 +144,58 @@ if [ "${1:-}" = "--selftest" ]; then
   _must 0 'env names only'                'env | cut -d= -f1 | grep -i token'
   _must 0 'secret passed, not printed'    'GH_TOKEN="$T" gh api user --jq .login'
   _must 0 'prose in a heredoc'            $'git commit -F - <<EOF\necho "${GH_TOKEN:-no}" is the bug\nEOF'
+
+  # The arms above test _classify in THIS file. These run the whole hook, payload
+  # on stdin, so SECRET_PROBE_UNDER_TEST=<path> runs them on another copy.
+  echo "=== HOOK arms: the payload read, or not (D-20260925-A03) ==="
+  _hook="${SECRET_PROBE_UNDER_TEST:-$0}"
+  echo "hook under test: $_hook"
+  _pl() { jq -nc --arg c "$1" '{session_id:"selftest", transcript_path:"/dev/null", cwd:"/tmp",
+    permission_mode:"default", hook_event_name:"PreToolUse", tool_name:"Bash",
+    tool_input:{command:$c, description:"selftest arm", timeout:120000}, tool_use_id:"toolu_selftest"}'; }
+  _mv() { printf '%s' "$1" | jq -c '.tool_input.cmd = .tool_input.command | del(.tool_input.command)'; }
+  # A PATH with every tool in /bin and /usr/bin EXCEPT jq (macOS ships /usr/bin/jq).
+  _nojq="$(mktemp -d "${TMPDIR:-/tmp}/secret-probe-nojq.XXXXXX")"
+  for f in /bin/* /usr/bin/*; do
+    case "${f##*/}" in jq) continue ;; esac
+    [ -e "$_nojq/${f##*/}" ] || ln -s "$f" "$_nojq/${f##*/}"
+  done
+  _hk() { # $1 blocked|unreadable|shout|quiet, $2 label, $3 raw payload, [$4 nojq]
+    local out rc got ok=0 path="$PATH"
+    if [ "${4:-}" = nojq ]; then
+      if PATH="$_nojq" command -v jq >/dev/null 2>&1 || ! PATH="$_nojq" command -v grep >/dev/null 2>&1; then
+        printf 'FAIL  %s  (the no-jq PATH is not one: invalid trial)\n' "$2"; fails=$((fails+1)); return
+      fi
+      path="$_nojq"
+    fi
+    out="$(printf '%s' "$3" | PATH="$path" "$_hook" 2>/dev/null)"; rc=$?
+    got="$(printf '%s' "$out" | jq -r '.hookSpecificOutput | "\(.permissionDecision) \(.permissionDecisionReason) \(.additionalContext)"' 2>/dev/null || true)"
+    case "$1" in
+      blocked)    [[ $got == "deny 🔴 BLOCKED"* ]] && ok=1 ;;
+      unreadable) [[ $got == "deny enforce-secret-probe: cannot read the tool payload"* ]] && ok=1 ;;
+      shout)      [[ $got == "null null 🔴 THE SECRET-PROBE GUARD IS BROKEN"* ]] && ok=1 ;;
+      quiet)      [ -z "$out" ] && ok=1 ;;
+    esac
+    [ "$rc" -eq 0 ] || ok=0
+    if [ "$ok" -eq 1 ]; then printf 'ok    %s\n' "$2"
+    else printf 'FAIL  %s  (expected %s, rc=%s, got: %s)\n' "$2" "$1" "$rc" "$(printf '%s' "${got:-$out}" | head -c 200)"; fails=$((fails+1)); fi
+  }
+  W_T='echo "GH_TOKEN set? ${GH_TOKEN:+yes}${GH_TOKEN:-no}"'
+  W_O='ls -la'
+  _hk blocked    'control: valid payload, the real leak is blocked as before'   "$(_pl "$W_T")"
+  _hk quiet      'control: valid payload, harmless, no output as before'        "$(_pl "$W_O")"
+  p="$(_pl "$W_T")"; _hk unreadable 'truncated JSON, with the trigger'           "${p%??????????}"
+  p="$(_pl "$W_O")"; _hk quiet      'truncated JSON, without the trigger'        "${p%??????????}"
+  _hk unreadable 'command under another key, with the trigger'                  "$(_mv "$(_pl "$W_T")")"
+  _hk quiet      'command under another key, without the trigger'               "$(_mv "$(_pl "$W_O")")"
+  _hk unreadable 'PATH without jq, with the trigger'                            "$(_pl "$W_T")" nojq
+  _hk shout      'PATH without jq, without the trigger: the jq warning as before' "$(_pl "$W_O")" nojq
+  _hk unreadable 'PATH without jq, an env dump'                                 "$(_pl 'env | grep -i git')" nojq
+  _hk unreadable 'PATH without jq, ${#V} too: it cannot be told apart unread'   "$(_pl 'echo "len=${#GH_TOKEN}"')" nojq
+  p="$(_pl $'cd /tmp\necho "$ANTHROPIC_API_KEY"')"
+  _hk unreadable 'truncated, the variable after an escaped newline'             "${p%??????????}"
+  _hk quiet      'a real, EMPTY command stays quiet, trigger in the description' \
+    "$(_pl '' | jq -c '.tool_input.description = "echo $GH_TOKEN"')"
   echo
   [ "$fails" -eq 0 ] && { echo "ALL ARMS PASS"; exit 0; } || { echo "$fails ARM(S) FAILED"; exit 1; }
 fi
@@ -146,14 +204,35 @@ fi
 payload="$(cat 2>/dev/null || true)"
 [ -n "$payload" ] || exit 0
 
+# The payload cannot be read. $1 = why. When the RAW text mentions a trigger,
+# DENY by name, built without jq; otherwise return and go on as before. The
+# common JSON escapes are undone first (\n \r \t to a space, \" to "). Matched
+# with [[ =~ ]], not a pipe into grep -q: under pipefail an early grep exit can
+# turn a hit into a miss. The matched text is never printed.
+_unreadable() {
+  local raw
+  raw="$(printf '%s' "$payload" | sed -e 's/\\[nrt]/ /g' -e 's/\\"/"/g')"
+  [[ $raw =~ $RAW_TRIGGER ]] || return 0
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"enforce-secret-probe: cannot read the tool payload (%s); denying because it mentions a credential-named variable or an env dump. Install jq (brew install jq) or check the payload shape, then run enforce-secret-probe.sh --selftest."}}\n' "$1"
+  exit 0
+}
+
 if ! command -v jq >/dev/null 2>&1; then
+  _unreadable "jq is not on PATH"
   printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"%s"},"suppressOutput":true}\n' \
     "🔴 THE SECRET-PROBE GUARD IS BROKEN: jq is not on PATH, so this hook cannot read the tool payload. It has been SILENT for every command until now, and silence here is not a clean bill of health. Install jq (brew install jq). Until then, check by hand that nothing prints a credential value."
   exit 0
 fi
 
-cmd="$(printf '%s' "$payload" | jq -r '.tool_input.command // ""' 2>/dev/null || true)"
-[ -n "$cmd" ] || exit 0
+cmd="$(printf '%s' "$payload" | jq -r '.tool_input.command // ""' 2>/dev/null)"; rc=$?
+if [ -z "$cmd" ]; then
+  if [ "$rc" -ne 0 ]; then
+    _unreadable "jq could not parse it, rc=$rc"
+  elif ! printf '%s' "$payload" | jq -e '.tool_input | has("command")' >/dev/null 2>&1; then
+    _unreadable "it has no tool_input.command"
+  fi
+  exit 0   # a real, empty command: nothing to check, as before
+fi
 
 reason="$(_classify "$cmd")"
 [ -n "$reason" ] || exit 0
