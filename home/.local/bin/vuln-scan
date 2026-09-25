@@ -91,6 +91,12 @@ FAST_MAX_INLINE = 12
 # detached and lock-protected via spawn_background, so a stale backlog never
 # blocks a login -- see THE SHELL-SAFETY GUARD below.
 STALE_AFTER_DAYS = 7
+# Marks an UNKNOWN reached because NVD did not answer, not because it answered
+# "nothing here". The row is still recorded, so the formula stays visible as
+# UNKNOWN, but the next run treats it as stale at once: it goes to the locked
+# background sweep, never inline at login. Without this a flaky afternoon at
+# NVD froze "could not tell" for STALE_AFTER_DAYS (W-20260925-A40).
+RETRY_NEXT_RUN = "retry_next_run"
 
 
 # --------------------------------------------------------------------------- #
@@ -159,7 +165,8 @@ def scan_one(client, name, version, revision, absent_names=frozenset()):
         target = client.resolve_cpe(key)
     if target is None:
         return ("unknown", None, None,
-                [{"note": "CPE resolution failed or throttled -- NOT verified clean"}])
+                [{"note": "CPE resolution failed or throttled -- NOT verified clean",
+                  RETRY_NEXT_RUN: True}])
     if target is False:
         # CPE_ABSENT_OK is the hand-curated, in-source list; absent_names is the
         # DB-backed one triage_unknowns() fills in -- see its docstring for why
@@ -174,7 +181,8 @@ def scan_one(client, name, version, revision, absent_names=frozenset()):
     found = client.cves_for(vendor, product, version)
     if found is None:
         return ("unknown", cpe, None,
-                [{"note": f"NVD lookup failed or throttled ({cpe})"}])
+                [{"note": f"NVD lookup failed, throttled or short-paged ({cpe})",
+                  RETRY_NEXT_RUN: True}])
 
     hits, truncated = found
     if not hits:
@@ -351,6 +359,36 @@ def shlex_join(parts):
     return " ".join(shlex_quote(p) for p in parts)
 
 
+def wants_retry(row) -> bool:
+    """True when a cached row is an UNKNOWN that NVD failed to answer."""
+    try:
+        findings = json.loads(row["findings"] or "[]")
+    except (TypeError, ValueError):
+        return False
+    return any(isinstance(f, dict) and f.get(RETRY_NEXT_RUN) for f in findings)
+
+
+def split_todo(store, inv, everything, max_age):
+    """(fresh_todo, stale_todo). Fresh is new to the store; stale is cached but due.
+
+    The split is load-bearing: --fast runs fresh work inline when there is little
+    of it, and ALWAYS hands stale work to the background. A retry_next_run row is
+    stale from the moment it is written, so it never lands on the login path."""
+    fresh_todo, stale_todo = [], []
+    for name, version, revision, _raw in inv:
+        if everything:
+            fresh_todo.append((name, version, revision))
+            continue
+        row = store.known(SUBJECT, name, version, revision)
+        if row is None:
+            fresh_todo.append((name, version, revision))
+        elif wants_retry(row):
+            stale_todo.append((name, version, revision))
+        elif max_age and (time.time() - row["scanned_at"]) > max_age:
+            stale_todo.append((name, version, revision))
+    return fresh_todo, stale_todo
+
+
 def run_scan(store, args, announce):
     inv = inventory()
     if inv is None:
@@ -377,16 +415,7 @@ def run_scan(store, args, announce):
     # A negative value would make `not max_age` false and every comparison fail,
     # i.e. a silent alias for --full. Clamp rather than surprise.
     max_age = max(0, args.stale_days) * 86400
-    fresh_todo, stale_todo = [], []
-    for name, version, revision, _raw in inv:
-        if args.full or args.only:
-            fresh_todo.append((name, version, revision))
-            continue
-        row = store.known(SUBJECT, name, version, revision)
-        if row is None:
-            fresh_todo.append((name, version, revision))
-        elif max_age and (time.time() - row["scanned_at"]) > max_age:
-            stale_todo.append((name, version, revision))
+    fresh_todo, stale_todo = split_todo(store, inv, bool(args.full or args.only), max_age)
     todo = fresh_todo + stale_todo
 
     if args.limit:

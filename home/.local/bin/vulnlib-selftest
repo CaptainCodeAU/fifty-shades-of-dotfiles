@@ -33,6 +33,7 @@ read-only and skips itself if they are absent.
 """
 
 import atexit
+import importlib.machinery
 import importlib.util
 import os
 import re
@@ -762,6 +763,81 @@ check("control: a complete first reply is not retried", _sc.tries, 1)
 _sc = _SequenceClient([None, _pcre2_payload()])
 check("control: a failed _get is not retried here (throttle pacing is _get's job)",
       (_sc.cves_for("pcre", "pcre2", "10.47"), _sc.tries), (None, 1))
+
+
+section("vuln-scan: an UNKNOWN NVD did not answer is retried next run (W-20260925-A40)")
+
+# THE REAL vuln-scan, loaded from beside this file. The decision is only half the
+# fix; the other half is that run_scan sends the row to the BACKGROUND sweep, and
+# only split_todo shows that. A marker nothing reads would pass every arm above.
+VS = None
+for _dir in (os.path.dirname(os.path.abspath(__file__)),
+             os.path.dirname(os.path.realpath(__file__))):
+    _path = os.path.join(_dir, "vuln-scan")
+    if os.path.exists(_path):
+        _ldr = importlib.machinery.SourceFileLoader("vuln_scan", _path)
+        _spec = importlib.util.spec_from_loader("vuln_scan", _ldr)
+        VS = importlib.util.module_from_spec(_spec)
+        _ldr.exec_module(VS)
+        break
+if VS is None:
+    sys.exit("vulnlib-selftest: no vuln-scan beside %s (deploy both)" % sys.argv[0])
+
+_MARK = getattr(VS, "RETRY_NEXT_RUN", "missing")
+
+
+class _ScanClient(VS.V.NvdClient):
+    """scan_one's client with both NVD calls answered from the test."""
+
+    def __init__(self, cpe, cves):
+        super().__init__(None, timeout=1.0)
+        self.delay = 0.0
+        self._cpe, self._cves = cpe, cves
+
+    def resolve_cpe(self, name):
+        return self._cpe
+
+    def cves_for(self, vendor, product, version):
+        return self._cves
+
+
+def _marked(result):
+    return result[0], any(f.get(_MARK) for f in result[3])
+
+
+check("CPE lookup did not answer: UNKNOWN, marked for retry",
+      _marked(VS.scan_one(_ScanClient(None, None), "a40pkg", "1.0", 0)), ("unknown", True))
+check("CVE lookup did not answer: UNKNOWN, marked for retry",
+      _marked(VS.scan_one(_ScanClient(("v", "a40pkg"), None), "a40pkg", "1.0", 0)),
+      ("unknown", True))
+check("control: no CPE published is UNKNOWN but NOT marked (NVD answered, it is final)",
+      _marked(VS.scan_one(_ScanClient(False, None), "a40pkg", "1.0", 0)), ("unknown", False))
+check("control: a real clean answer is not marked",
+      _marked(VS.scan_one(_ScanClient(("v", "a40pkg"), ([], False)), "a40pkg", "1.0", 0)),
+      ("clean", False))
+
+_vsdb = os.path.join(_tempfile.mkdtemp(prefix="vulnlib-selftest-"), "vs.db")
+_vs = VS.V.ScanStore(_vsdb)
+for _name, _args in (
+        ("failed", ("v:failed", "unknown", None,
+                    [{"note": "NVD lookup failed", _MARK: True}])),
+        ("nocpe", (None, "unknown", None, [{"note": "no CPE published"}])),
+        ("clean", ("v:clean", "clean", None, []))):
+    _vs.record(VS.SUBJECT, _name, "1.0", 0, *_args)
+_vs.commit()
+_inv = [(n, "1.0", 0, "1.0") for n in ("failed", "nocpe", "clean", "new")]
+_split = getattr(VS, "split_todo", None)
+_week = 7 * 86400
+check("split_todo: the failed row is stale at once, so it goes to the background",
+      None if _split is None else _split(_vs, _inv, False, _week),
+      ([("new", "1.0", 0)], [("failed", "1.0", 0)]))
+check("split_todo: still retried with expiry switched off (--stale-days 0)",
+      None if _split is None else _split(_vs, _inv, False, 0),
+      ([("new", "1.0", 0)], [("failed", "1.0", 0)]))
+check("control: a fresh verdict and a final UNKNOWN stay cached (the cache still works)",
+      None if _split is None else sorted(n for n, _v, _r in sum(_split(_vs, _inv, False, _week), [])),
+      ["failed", "new"])
+_vs.close()
 
 
 print("\n%s%s%s  %d passed, %d failed, %d skipped"
