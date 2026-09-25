@@ -16,6 +16,13 @@
 #   servers, voice, permissions and the whole PAI hook set -- and an installer
 #   that can delete from it is an installer that can lose all of that.
 #
+#   TWO EXCEPTIONS (W-20260924-A76, 2026-09-25). First, an entry's own legacy_commands.
+#   When the manifest changes a command's shape, the exact old string is kept on
+#   the entry, and the sync replaces it IN PLACE instead of adding a second copy
+#   beside it. Second, the manifest's `retired` list: those exact strings are
+#   removed, so retiring a guard never leaves a line that denies every Bash call.
+#   Nothing that is not an exact string the manifest names is ever touched.
+#
 # WHY jq IS SAFE ON THAT FILE (measured, not assumed, 2026-09-05)
 #   `jq '.' ~/.claude/settings.json` came back BYTE-IDENTICAL: 44335 bytes in,
 #   44335 out, cmp silent, 51 keys both sides. It is strict JSON with no //
@@ -46,9 +53,10 @@
 #   which for an ALARM is indistinguishable from the alarm being happy.
 #
 # Exit codes:
-#   0  --check: nothing pending.  --install: succeeded (added, or nothing to do).
-#   1  --check: registrations are pending.  --install: a write failed.
-#   2  cannot run: no jq, no manifest, no settings file, or malformed settings.
+#   0  --check: nothing pending.  --install: succeeded (added, upgraded, or nothing to do).
+#   1  --check: registrations or upgrades are pending.  --install: a write failed.
+#   2  cannot run: no jq, no manifest, no settings file, malformed settings, or a
+#      manifest that breaks the class rule (a guard or advisory command with ||).
 
 set -uo pipefail
 
@@ -152,6 +160,29 @@ if ! jq empty "$MANIFEST" 2>/dev/null; then
     printf '%s! claude-hooks-sync: %s is not valid JSON.%s\n' "$R" "$MANIFEST" "$N" >&2
     exit 2
 fi
+# THE CLASS RULE (W-20260924-A76, D-20260925-A03). A guard or advisory command must
+# not contain `||`: the old `test -x P && P || true` shape turned a hook's exit 2 deny
+# into exit 0 before Claude Code saw it. An alarm keeps `|| true` on purpose (its
+# stdout reaches the model only on exit 0). Checked here, before any settings file
+# is read, so a bad manifest can never be half-applied. No class: an enforce-*
+# script is a guard, anything else an alarm.
+BAD_CLASS="$(jq -r '
+    .hooks[]
+    | (.class // (if (.script | startswith("enforce-")) then "guard" else "alarm" end)) as $c
+    | if ([$c] | inside(["guard", "advisory", "alarm"]) | not)
+      then "\(.script): unknown class \"\($c)\" (guard, advisory or alarm)"
+      elif $c != "alarm" and (.entry.command | contains("||"))
+      then "\(.script): class \($c), but its command contains || and would swallow the exit code"
+      elif $c == "guard" and .event != "PreToolUse"
+      then "\(.script): class guard on \(.event); a guard denies with exit 2, which only PreToolUse turns into a deny"
+      else empty end' "$MANIFEST" 2>/dev/null)" || BAD_CLASS="the class check itself failed to run (jq)"
+if [[ -n "$BAD_CLASS" ]]; then
+    printf '%s! claude-hooks-sync: the manifest breaks the class rule -- refusing.%s\n' "$R" "$N" >&2
+    printf '%s\n' "$BAD_CLASS" | sed 's/^/    /' >&2
+    printf '  %sSee _shape_note in %s.%s\n' "$D" "$MANIFEST" "$N" >&2
+    exit 2
+fi
+
 if [[ ! -f "$SETTINGS" ]]; then
     printf '%s! claude-hooks-sync: %s does not exist -- nothing to register into.%s\n' "$Y" "$SETTINGS" "$N" >&2
     printf '  %sStart Claude Code once to create it, then re-run.%s\n' "$D" "$N" >&2
@@ -202,8 +233,23 @@ manifest_rows() {
           ((.requires // []) | join(" ")),
           .entry.command,
           .why,
+          ((.legacy_commands // []) | tojson),
           (.entry | tojson)
         ] | join("\u001f")' "$MANIFEST"
+}
+
+# How many of an entry's legacy_commands are registered in its scope? Scope is the
+# same as is_registered's: (event, matcher), widened to the whole event when the
+# entry has no matcher.
+legacy_count() {
+    local ev="$1" m="$2" legacy="$3" n
+    n=$(jq --arg ev "$ev" --arg m "$m" --argjson L "$legacy" '
+          [ (.hooks // {})[$ev][]?
+            | select( if $m == "" then true else ((.matcher // "") == $m) end )
+            | .hooks[]?
+            | (.command // "") as $c
+            | select(any($L[]; . == $c)) ] | length' "$SETTINGS" 2>/dev/null) || n=0
+    printf '%s' "${n:-0}"
 }
 
 # Is (event, matcher, command) already present? Identity is the TRIPLE: the same
@@ -232,10 +278,29 @@ is_registered() {
 }
 
 PENDING=()      # rows we intend to add
+UPGRADE=()      # rows whose old command shape is registered and gets replaced in place
+RETIRE=()       # rows from the manifest's retired list that are still registered here
 SKIPPED=()      # human-readable "why not"
 ALREADY=0
 
-while IFS="$SEP" read -r ev matcher script script_path requires cmd why entry; do
+# RETIRED ENTRIES (Gavin, 2026-09-25). A guard whose file is missing denies every
+# Bash call, so retiring one by deleting the script would lock every session out.
+# Retiring is moving the entry to `retired`; its strings are removed from whichever
+# target this run syncs, whatever `targets` it had, because a line left behind in
+# either file is the lockout. No script or requires gate: a retired script is
+# expected to be gone.
+while IFS="$SEP" read -r ev matcher script strings; do
+    [[ -z "${ev:-}" ]] && continue
+    if [[ "$(legacy_count "$ev" "$matcher" "$strings")" != "0" ]]; then
+        RETIRE+=("$ev$SEP$matcher$SEP$script$SEP$strings")
+    fi
+done < <(jq -r '
+    (.retired // [])[]
+    | [ .event, (.matcher // ""), .script,
+        ([.entry.command] + (.legacy_commands // []) | map(select(. != null)) | tojson)
+      ] | join("\u001f")' "$MANIFEST")
+
+while IFS="$SEP" read -r ev matcher script script_path requires cmd why legacy entry; do
     [[ -z "${ev:-}" ]] && continue
 
     # Gate 1: the script must exist. Registering a hook whose file is missing
@@ -273,7 +338,12 @@ while IFS="$SEP" read -r ev matcher script script_path requires cmd why entry; d
         continue
     fi
 
-    if is_registered "$ev" "$matcher" "$cmd"; then
+    # A legacy string still registered means an UPGRADE, whether or not the new
+    # command is there too: a copy of the old shape left beside the new one would
+    # still swallow a deny.
+    if [[ "$(legacy_count "$ev" "$matcher" "$legacy")" != "0" ]]; then
+        UPGRADE+=("$ev$SEP$matcher$SEP$script$SEP$entry$SEP$legacy")
+    elif is_registered "$ev" "$matcher" "$cmd"; then
         ALREADY=$(( ALREADY + 1 ))
     else
         PENDING+=("$ev$SEP$matcher$SEP$script$SEP$entry$SEP$why")
@@ -288,19 +358,47 @@ report_skips() {
     done
 }
 
+report_retired() {   # $1 = the verb, "needs removal" or "would remove"
+    local row ev matcher script
+    for row in ${RETIRE+"${RETIRE[@]}"}; do
+        IFS="$SEP" read -r ev matcher script _strings <<<"$row"
+        printf '      %s%s%s  %s/%s  %s: retired in the manifest, still registered here%s\n' \
+               "$C" "$script" "$N" "$ev" "$matcher" "$D$1" "$N"
+    done
+}
+
+report_upgrades() {   # $1 = the verb, "needs upgrade" or "would upgrade"
+    local row ev matcher script
+    for row in ${UPGRADE+"${UPGRADE[@]}"}; do
+        IFS="$SEP" read -r ev matcher script _entry _legacy <<<"$row"
+        printf '      %s%s%s  %s/%s  %s: an old command shape is registered; it is replaced in place%s\n' \
+               "$C" "$script" "$N" "$ev" "$matcher" "$D$1" "$N"
+    done
+}
+
 if [[ "$MODE" == "check" ]]; then
-    if (( ${#PENDING[@]} == 0 )); then
+    if (( ${#PENDING[@]} == 0 && ${#UPGRADE[@]} == 0 && ${#RETIRE[@]} == 0 )); then
         printf '  %s+%s Claude hooks: %d registered' "$G" "$N" "$ALREADY"
         (( ${#SKIPPED[@]} > 0 )) && printf ', %d skipped' "${#SKIPPED[@]}"
         printf '\n'
         report_skips
         exit 0
     fi
-    printf '  %s!%s Claude hooks: %d NOT registered in %s\n' "$Y" "$N" "${#PENDING[@]}" "$SETTINGS"
-    for row in "${PENDING[@]}"; do
-        IFS="$SEP" read -r ev matcher script _entry why <<<"$row"
-        printf '      %s%s%s  %s/%s  %s%s%s\n' "$C" "$script" "$N" "$ev" "$matcher" "$D" "$why" "$N"
-    done
+    if (( ${#PENDING[@]} > 0 )); then
+        printf '  %s!%s Claude hooks: %d NOT registered in %s\n' "$Y" "$N" "${#PENDING[@]}" "$SETTINGS"
+        for row in "${PENDING[@]}"; do
+            IFS="$SEP" read -r ev matcher script _entry why <<<"$row"
+            printf '      %s%s%s  %s/%s  %s%s%s\n' "$C" "$script" "$N" "$ev" "$matcher" "$D" "$why" "$N"
+        done
+    fi
+    if (( ${#UPGRADE[@]} > 0 )); then
+        printf '  %s!%s Claude hooks: %d need an upgrade in %s\n' "$Y" "$N" "${#UPGRADE[@]}" "$SETTINGS"
+        report_upgrades "needs upgrade"
+    fi
+    if (( ${#RETIRE[@]} > 0 )); then
+        printf '  %s!%s Claude hooks: %d retired hook(s) still registered in %s\n' "$Y" "$N" "${#RETIRE[@]}" "$SETTINGS"
+        report_retired "needs removal"
+    fi
     report_skips
     printf '      %sFix: ./install.sh   (or: claude-hooks-sync --install)%s\n' "$D" "$N"
     exit 1
@@ -309,17 +407,20 @@ fi
 # --- Install -----------------------------------------------------------------
 report_skips
 
-if (( ${#PENDING[@]} == 0 )); then
+if (( ${#PENDING[@]} == 0 && ${#UPGRADE[@]} == 0 && ${#RETIRE[@]} == 0 )); then
     printf '  %s+%s Claude hooks: all %d already registered -- nothing to do.\n' "$G" "$N" "$ALREADY"
     exit 0
 fi
 
 if [[ "$DRY_RUN" == true ]]; then
-    printf '  %s[dry-run]%s would register %d Claude hook(s):\n' "$D" "$N" "${#PENDING[@]}"
-    for row in "${PENDING[@]}"; do
+    printf '  %s[dry-run]%s would register %d, upgrade %d and remove %d retired Claude hook(s):\n' \
+           "$D" "$N" "${#PENDING[@]}" "${#UPGRADE[@]}" "${#RETIRE[@]}"
+    for row in ${PENDING+"${PENDING[@]}"}; do
         IFS="$SEP" read -r ev matcher script _entry _why <<<"$row"
         printf '      + %s  ->  %s/%s\n' "$script" "$ev" "$matcher"
     done
+    report_upgrades "would upgrade"
+    report_retired "would remove"
     exit 0
 fi
 
@@ -370,8 +471,71 @@ JQ_ADD='
     end
 '
 
+# THE UPGRADE (W-20260924-A76). The one edit this add-only tool makes, and only to
+# strings the manifest names as its own old shape (legacy_commands), inside the
+# entry's own scope. In order:
+# The same program REMOVES a retired entry: called with replace=false, step 1 is
+# skipped and $L holds the retired entry's command plus its legacy strings.
+#   1. the new command is not there yet: the FIRST legacy hook becomes the manifest
+#      entry, at the same position (in place, never appended);
+#   2. every other legacy hook in scope is dropped, so no swallowing copy survives;
+#   3. a group that held a legacy hook and is now empty is dropped. A group that was
+#      empty before is not ours to judge and stays.
+# Anything whose command is not an exact legacy string is untouched.
+JQ_UPGRADE='
+  def inscope: if $m == "" then true else ((.matcher // "") == $m) end;
+  def islegacy: (.command // "") as $c | any($L[]; . == $c);
+  ( [ (.hooks[$ev] // [])[] | select(inscope) | .hooks[]?
+      | select((.command // "") == $entry.command) ] | length > 0 ) as $have
+  | ( [ (.hooks[$ev] // []) | to_entries[] | select(.value | inscope)
+        | select([.value.hooks[]? | islegacy] | any) | .key ] ) as $touched
+  | ( [ (.hooks[$ev] // []) | to_entries[] | select(.value | inscope) | .key as $g
+        | (.value.hooks // []) | to_entries[] | select(.value | islegacy) | [$g, .key] ]
+      | first ) as $pos
+  | (if $replace and ($have | not) and $pos != null
+     then .hooks[$ev][$pos[0]].hooks[$pos[1]] = $entry else . end)
+  | .hooks[$ev] |= map(if inscope then .hooks |= map(select(islegacy | not)) else . end)
+  | .hooks[$ev] |= [ to_entries[]
+                     | select(((.key as $k | any($touched[]; . == $k))
+                               and ((.value.hooks // []) | length == 0)) | not)
+                     | .value ]
+'
+
+upgraded=0
+for row in ${UPGRADE+"${UPGRADE[@]}"}; do
+    IFS="$SEP" read -r ev matcher script entry legacy <<<"$row"
+    if jq --arg ev "$ev" --arg m "$matcher" --argjson entry "$entry" --argjson L "$legacy" \
+          --argjson replace true "$JQ_UPGRADE" "$TMP" > "$TMP.next" 2>/dev/null \
+       && [[ -s "$TMP.next" ]] && jq empty "$TMP.next" 2>/dev/null; then
+        command mv "$TMP.next" "$TMP"
+        printf '  %s+%s upgraded %s%s%s  ->  %s/%s (old command shape replaced in place)\n' \
+               "$G" "$N" "$C" "$script" "$N" "$ev" "$matcher"
+        upgraded=$(( upgraded + 1 ))
+    else
+        command rm -f "$TMP.next"
+        printf '%s! claude-hooks-sync: failed to upgrade %s -- leaving the settings file unchanged.%s\n' "$R" "$script" "$N" >&2
+        exit 1
+    fi
+done
+
+retired=0
+for row in ${RETIRE+"${RETIRE[@]}"}; do
+    IFS="$SEP" read -r ev matcher script strings <<<"$row"
+    if jq --arg ev "$ev" --arg m "$matcher" --argjson entry '{}' --argjson L "$strings" \
+          --argjson replace false "$JQ_UPGRADE" "$TMP" > "$TMP.next" 2>/dev/null \
+       && [[ -s "$TMP.next" ]] && jq empty "$TMP.next" 2>/dev/null; then
+        command mv "$TMP.next" "$TMP"
+        printf '  %s+%s removed retired %s%s%s  from  %s/%s\n' "$G" "$N" "$C" "$script" "$N" "$ev" "$matcher"
+        retired=$(( retired + 1 ))
+    else
+        command rm -f "$TMP.next"
+        printf '%s! claude-hooks-sync: failed to remove retired %s -- leaving the settings file unchanged.%s\n' "$R" "$script" "$N" >&2
+        exit 1
+    fi
+done
+
 added=0
-for row in "${PENDING[@]}"; do
+for row in ${PENDING+"${PENDING[@]}"}; do
     IFS="$SEP" read -r ev matcher script entry why <<<"$row"
     if jq --arg ev "$ev" --arg m "$matcher" --argjson entry "$entry" "$JQ_ADD" "$TMP" > "$TMP.next" 2>/dev/null \
        && [[ -s "$TMP.next" ]] && jq empty "$TMP.next" 2>/dev/null; then
@@ -434,7 +598,8 @@ $(find "$(dirname "$SETTINGS")" -maxdepth 1 -name "$(basename "$SETTINGS").bak.*
 EOF
 fi
 
-printf '  %s+%s %d Claude hook(s) registered. Backup: %s%s%s\n' "$G" "$N" "$added" "$D" "$BACKUP" "$N"
+printf '  %s+%s %d Claude hook(s) registered, %d upgraded, %d retired removed. Backup: %s%s%s\n' \
+       "$G" "$N" "$added" "$upgraded" "$retired" "$D" "$BACKUP" "$N"
 if [ "$pruned" -gt 0 ]; then
     printf '      %spruned %d older backup(s); keeping the newest %d (KEEP_BACKUPS)%s\n' "$D" "$pruned" "${KEEP_BACKUPS:-3}" "$N"
 else
