@@ -345,6 +345,7 @@ EOF
   raw_arm deny  "truncated JSON that mentions a herdr launch"   "${GOOD:0:$((${#GOOD} - 40))}"
   raw_arm deny  "the command under the wrong key"               "$(printf '%s' "$GOOD" | jq -c '.tool_input = {cmd: .tool_input.command}')"
   raw_arm allow "truncated JSON with no herdr in it"            '{"tool_input":{"command":"ls -la'
+  raw_arm allow "the command under the wrong key, no herdr"     "$(conv_payload 'ls -la' | jq -c '.tool_input = {cmd: .tool_input.command}')"
   # A PATH holding only the tools the hook needs, jq left out. One fixed folder,
   # refreshed in place (ln -sf), so reruns do not pile up temp dirs.
   NOJQ="${TMPDIR:-/tmp}/pjw-selftest-nojq"; mkdir -p "$NOJQ"
