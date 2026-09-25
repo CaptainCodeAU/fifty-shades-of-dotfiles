@@ -267,7 +267,10 @@ EOF
   _lf top allow "broken lib (error at the top), no trigger: quiet"           'ls -la'
   _lf end deny  "broken lib (error at the end, functions defined): denied"  'rm -rf "$W" 2>/dev/null; mkdir -p "$W"'
   _lf end allow "broken lib (error at the end), no trigger: quiet"          'ls -la'
-  _lf noere allow "broken lib, both patterns EMPTY: quiet, never deny-all"  'rm -rf "$W" 2>/dev/null; mkdir -p "$W"'
+  # A PIN, not a check: it passes with the empty-pattern line removed too,
+  # because bash's =~ rejects an empty ERE (rc 2; 3.2.57 and 5.3.20). The line
+  # stays for a grep -E rewrite, where '' matches everything.
+  _lf noere allow "PIN: broken lib, both patterns EMPTY: quiet, never deny-all" 'rm -rf "$W" 2>/dev/null; mkdir -p "$W"'
   conv_selftest_end
 fi
 
