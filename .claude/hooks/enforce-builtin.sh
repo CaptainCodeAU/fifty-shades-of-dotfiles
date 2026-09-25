@@ -33,6 +33,11 @@ CONV_MODE_NAME=builtin
 CONV_LIB_DIR="$HOOKS_DIR/../../home/.claude/hooks"
 CONV_LOG_FILE="$HOOKS_DIR/security.log"
 CONV_FALLBACK_ERE='(^|[;&|(][[:space:]]*)builtin[[:space:]]'
+# An unreadable payload whose raw text has builtin as a word is DENIED by name
+# (D-20260925-A03).
+CONV_TRIGGER_ERE='(^|[^A-Za-z0-9_.-])builtin([^A-Za-z0-9_-]|$)'
+CONV_TRIGGER_WHAT='builtin'
+CONV_UNREADABLE=deny
 
 if [ ! -r "$CONV_LIB_DIR/conv-hooklib.sh" ]; then
   COMMAND=$(jq -r '.tool_input.command // empty' 2>/dev/null)
@@ -42,6 +47,33 @@ if [ ! -r "$CONV_LIB_DIR/conv-hooklib.sh" ]; then
   exit 0
 fi
 . "$CONV_LIB_DIR/conv-hooklib.sh"
+# conv-hooklib.sh FAILED TO LOAD (W-20260924-A76). One syntax error is enough;
+# then the library's functions are "command not found", rc 127, and the hook
+# fails open in silence. `.` returns non-zero on any syntax error (measured on
+# 3.2.57, even when the functions got defined), and an error at the TOP leaves
+# none defined; so check the status AND every function the hook needs at run
+# time. No lib function and no jq below. Same rule as an unreadable payload: a
+# guard denies, CONV_UNREADABLE=warn warns, and only when the raw text looks like
+# the trigger. The EREs are read with ${V-} (an unset one must not crash under
+# set -u), and with none set at all the hook stays quiet. bash's =~ already
+# refuses an empty ERE (rc 2, measured on 3.2.57 and 5.3.20), but grep -E ''
+# matches everything, so the check keeps "no ERE = no deny" true whichever
+# matcher this ever uses. (Snippet: a76-guardsa e21de08.)
+_conv_rc=$?
+if [ "$_conv_rc" -ne 0 ] || ! declare -F conv_hook_main conv_unreadable conv_scan conv_deny conv_log conv_json_str >/dev/null 2>&1; then
+  [ "${1:-}" = "--selftest" ] && { echo "FAIL  conv-hooklib.sh failed to load beside $0 (rc=$_conv_rc)"; exit 1; }
+  _raw=$(sed -e 's/\\[nrt]/ /g' -e 's/\\"/"/g')
+  _ere="${CONV_TRIGGER_ERE-}"; [ -n "$_ere" ] || _ere="${CONV_FALLBACK_ERE-}"
+  [ -n "$_ere" ] || exit 0
+  [[ $_raw =~ $_ere ]] || exit 0
+  _why="$CONV_TAG: conv-hooklib.sh failed to load (rc=$_conv_rc), so this command was not checked, and it mentions its trigger"
+  if [ "${CONV_UNREADABLE:-deny}" = warn ]; then
+    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"%s. It runs unchecked. Run /bin/bash -n on conv-hooklib.sh, then restow the dotfiles."}}\n' "$_why"
+  else
+    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s; denying. Run /bin/bash -n on conv-hooklib.sh, then restow the dotfiles."}}\n' "$_why"
+  fi
+  exit 0
+fi
 
 # ---------------------------------------------------------------- selftest
 if [ "${1:-}" = "--selftest" ]; then
@@ -97,6 +129,47 @@ if [ "${1:-}" = "--selftest" ]; then
   conv_arm deny  'scanner missing: builtin denied' 'builtin foo'
   conv_arm allow 'scanner missing: harmless ok'   'echo control-ok'
   unset CONV_SHSCAN
+  echo "=== UNREADABLE arms: jq gone, truncated JSON, a moved key (D-20260925-A03) ==="
+  conv_unreadable_arms deny 'builtin foo' 'echo mybuiltin builtins'
+  echo "=== LOAD-FAILURE arms: conv-hooklib.sh beside the hook does not parse ==="
+  # A copy of the hook under test beside a broken library: the error at the top
+  # (nothing defined), at the end (functions defined, the source still returns 1),
+  # and at the top with no ERE in the hook (must stay quiet, never deny all; a
+  # pin, not a check: bash's =~ fails on an empty ERE, so it passes today even
+  # without the [ -n "$_ere" ] line, measured 2026-09-25).
+  # One fixed folder per shape, refreshed in place, so reruns leave nothing new.
+  _lf() { # $1 top|end|noere, $2 deny|warn|allow, $3 label, $4 command
+    local d="${TMPDIR:-/tmp}/$CONV_TAG-brokenlib-$1" h out got ok=0
+    h="$d/.claude/hooks"
+    mkdir -p "$h" "$d/home/.claude/hooks"
+    if [ "$1" = noere ]; then
+      sed -e '/^CONV_TRIGGER_ERE=/d' -e '/^CONV_FALLBACK_ERE=/d' "$_st_hook" > "$h/hook.sh"
+    else
+      cp "$_st_hook" "$h/hook.sh"
+    fi
+    chmod +x "$h/hook.sh"
+    cp "$CONV_LIB_DIR/conv-shscan.awk" "$d/home/.claude/hooks/"
+    if [ "$1" = end ]; then
+      { cat "$CONV_LIB_DIR/conv-hooklib.sh"; echo 'broken() { if then; }'; } > "$d/home/.claude/hooks/conv-hooklib.sh"
+    else
+      { echo 'broken() { if then; }'; cat "$CONV_LIB_DIR/conv-hooklib.sh"; } > "$d/home/.claude/hooks/conv-hooklib.sh"
+    fi
+    _st_n=$((_st_n + 1))
+    out=$(conv_payload "$4" | jq -c . | CONV_HOOK_LOG=/dev/null "$h/hook.sh" 2>/dev/null)
+    got=$(printf '%s' "$out" | jq -r '.hookSpecificOutput | "\(.permissionDecision) \(.permissionDecisionReason // .additionalContext)"' 2>/dev/null)
+    case "$2" in
+      deny)  case "$got" in "deny $CONV_TAG: conv-hooklib.sh failed to load (rc="*) ok=1 ;; esac ;;
+      warn)  case "$got" in "null $CONV_TAG: conv-hooklib.sh failed to load (rc="*) ok=1 ;; esac ;;
+      allow) [ -z "$out" ] && ok=1 ;;
+    esac
+    if [ "$ok" -eq 1 ]; then printf 'ok    %-7s %s\n' "$2" "$3"
+    else printf 'FAIL  %-7s %s\n        got: %s\n' "$2" "$3" "${got:-${out:-<no output>}}"; _st_fails=$((_st_fails + 1)); fi
+  }
+  _lf top   deny "broken lib (error at the top), the trigger: deny by name" 'builtin foo'
+  _lf top   allow "broken lib (error at the top), no trigger: quiet" 'echo mybuiltin builtins'
+  _lf end   deny "broken lib (error at the end, functions defined), the trigger: deny" 'builtin foo'
+  _lf end   allow "broken lib (error at the end), no trigger: quiet" 'echo mybuiltin builtins'
+  _lf noere allow "broken lib, no ERE in the hook: quiet, not deny-all" 'builtin foo'
   conv_selftest_end
 fi
 

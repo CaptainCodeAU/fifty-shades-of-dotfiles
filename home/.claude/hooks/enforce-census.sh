@@ -51,8 +51,36 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 0
 fi
 
+# jq present is not jq able to read it. A TRUNCATED payload, or one where a Claude Code
+# update MOVED the command to another key, read as an empty command, and an empty command
+# exits 0: the same silence as a missing jq, one step later (W-20260924-A76, D-20260925-A03).
+# So when the raw text mentions a search (grep, rg or the Grep tool), shout the same way.
+# Without one, stay quiet as before: this hook is advisory, and a shout on every broken
+# payload would be wallpaper. A JSON \n or \t escape counts as a word boundary for rg.
+_raw_grep='[Gg]rep'
+_raw_rg='(^|[^A-Za-z0-9_.-])rg([^A-Za-z0-9_.-]|$)'
+_raw_search() {
+  local r="$payload"
+  r=${r//\\n/ }; r=${r//\\t/ }
+  [[ "$r" =~ $_raw_grep ]] || [[ "$r" =~ $_raw_rg ]]
+}
+_shout_unreadable() { # $1 reason (no double quotes, no backslashes)
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"%s"},"suppressOutput":true}\n' \
+    "🔴 THE CENSUS REMINDER IS BROKEN: $1, so this hook cannot read the tool payload, and the raw payload mentions a search. That search runs WITHOUT the census reminder. Corroborate any count, list or zero from it with census.py before trusting it. A payload this hook cannot read usually means a Claude Code update changed its shape; the hook needs fixing, and until then silence from it is not a clean bill of health."
+  exit 0
+}
+if ! printf '%s' "$payload" | jq -e 'type == "object"' >/dev/null 2>&1; then
+  _raw_search && _shout_unreadable "the payload is not valid JSON"
+  exit 0
+fi
+
 tool_name="$(printf '%s' "$payload" | jq -r '.tool_name // ""' 2>/dev/null || true)"
 cmd="$(printf '%s' "$payload" | jq -r '.tool_input.command // ""' 2>/dev/null || true)"
+# The Grep tool carries no command by design (its branch is below); anything else with no
+# command where one should be is a moved key.
+if [ -z "$cmd" ] && [ "$tool_name" != "Grep" ]; then
+  _raw_search && _shout_unreadable "the payload has no tool_input.command"
+fi
 
 # THE SHIFTED CONTROL (W-20260924-A48 item 6; Gavin 2026-09-25, option A of D-20260925-A02).
 # `census.py --control $CTL T1 T2` with CTL empty or unset: zsh drops the unquoted word, so

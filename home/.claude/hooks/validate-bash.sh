@@ -56,6 +56,34 @@ deny() {
   exit 0
 }
 
+# FAILS CLOSED ON A PAYLOAD IT CANNOT READ (W-20260924-A76, D-20260925-A03). A
+# missing jq, truncated JSON or a moved tool_input.command made this guard exit 0
+# in silence (measured 2026-09-25 on `ci x` and `git reset --hard`). Now, when the
+# RAW payload mentions any word a rule above denies on, it denies by name; with none
+# it exits 0 as before. The raw text is tested twice, as is and with every quote
+# character removed, so `r""m -rf /` (which _strip turns into rm) is still seen.
+# Words, one per rule: rm (root/home rm), git push|reset|clean and the bare words
+# push|reset|clean (force push, reset --hard, git clean -fd, also after a quoted
+# span is spliced out), brew (install|instal|reinstall|upgrade, or a subcommand in
+# a variable), ci cr ct cpr cd_ cskip (nested Claude), gpf (gpf!).
+VB_RAW_ERE='rm[[:space:]]|git[[:space:]]+(push|reset|clean)|(^|[^A-Za-z0-9_.-])(push|reset|clean|brew|ci|cr|ct|cpr|cd_|cskip|gpf)([^A-Za-z0-9_-]|$)'
+
+raw_mentions_trigger() {
+  local r="$1" q
+  r=${r//\\n/ }; r=${r//\\t/ }; r=${r//\\r/ }
+  [[ "$r" =~ $VB_RAW_ERE ]] && return 0
+  q=${r//\\\"/}; q=${q//\"/}; q=${q//\'/}
+  [[ "$q" =~ $VB_RAW_ERE ]]
+}
+
+# Deny without jq: a fixed string, so it cannot fail to build. The payload itself
+# is never logged: it can hold a secret.
+deny_unreadable() { # $1 reason (no double quotes, no backslashes), $2 payload size
+  log_blocked "unreadable payload: $1" "(payload not read, $2 bytes)" 2>/dev/null
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"validate-bash: cannot read the tool payload (%s); denying because it mentions a command this guard blocks (rm, git push/reset/clean, brew, or a nested-Claude or gpf! alias). Fix what reads the payload (jq, or a payload shape a Claude Code update changed), then retry."}}\n' "$1"
+  exit 0
+}
+
 # Strip heredoc bodies (keep the opening line), then $(...), "..." and '...'.
 _strip() {
   printf '%s\n' "$1" | awk '
@@ -298,6 +326,24 @@ if [ "${1:-}" = "--selftest" ]; then
   conv_arm deny  'scanner missing: brew install'   'brew install jq'
   conv_arm allow 'scanner missing: harmless ok'    'echo control-ok'
   unset CONV_SHSCAN
+  echo "=== UNREADABLE arms: jq gone, truncated JSON, a moved key (D-20260925-A03) ==="
+  conv_unreadable_arms deny 'git reset --hard' 'echo control-ok'
+  # Every other rule, truncated and with no jq: each must deny by name.
+  for _c in 'rm -rf /' 'rm -rf ~' 'git push --force origin main' 'git clean -fd' 'ci x' 'cskip' \
+            'gpf! origin main' 'brew install jq' 'brew $sub jq' 'x=$(cd_)'; do
+    _p=$(conv_payload "$_c" | jq -c .)
+    conv_arm_raw deny "unreadable, truncated JSON: $_c" "${_p%??????????}"
+    conv_arm_raw deny "unreadable, PATH without jq: $_c" "$_p" nojq
+  done
+  # A quoted span spliced out: _strip turns r""m into rm, so the raw test must too.
+  _p=$(conv_payload 'r""m -rf /' | jq -c .)
+  conv_arm_raw deny  "unreadable, truncated: r\"\"m -rf / (quote splice)" "${_p%??????????}"
+  _p=$(conv_payload 'git "x"push -f origin main' | jq -c .)
+  conv_arm_raw deny  "unreadable, truncated: git \"x\"push (quote splice)" "${_p%??????????}"
+  # The trigger words inside other words stay quiet.
+  _p=$(conv_payload 'echo cities pushover resetting cleanly brewery gpfx' | jq -c .)
+  conv_arm_raw allow "unreadable, truncated: trigger letters inside words" "${_p%??????????}"
+  conv_arm_raw allow "unreadable, PATH without jq: trigger letters inside words" "$_p" nojq
   echo
   echo "function arms: $_must_n, $((_must_n - fails)) passed, $fails failed"
   echo "payload arms:  $_st_n, $((_st_n - _st_fails)) passed, $_st_fails failed"
@@ -307,8 +353,21 @@ fi
 
 # ---------------------------------------------------------------- hook path
 INPUT=$(cat)
+if ! command -v jq >/dev/null 2>&1; then
+  raw_mentions_trigger "$INPUT" && deny_unreadable "jq is not on PATH" "${#INPUT}"
+  exit 0
+fi
+if ! printf '%s' "$INPUT" | jq -e 'type == "object"' >/dev/null 2>&1; then
+  raw_mentions_trigger "$INPUT" && deny_unreadable "the payload is not valid JSON" "${#INPUT}"
+  exit 0
+fi
 COMMAND=$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)
-[ -z "$COMMAND" ] && exit 0
+if [ -z "$COMMAND" ]; then
+  if ! printf '%s' "$INPUT" | jq -e '.tool_input | has("command")' >/dev/null 2>&1; then
+    raw_mentions_trigger "$INPUT" && deny_unreadable "the payload has no tool_input.command" "${#INPUT}"
+  fi
+  exit 0   # a real, empty command: nothing to check, as before
+fi
 
 REASON=$(_classify "$COMMAND")
 if [ -n "$REASON" ]; then
