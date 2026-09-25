@@ -73,21 +73,34 @@ WHAT IT SEARCHES, AND WHAT IT DOES NOT
     paths too and says so when the name is sitting in one; it does not add path hits to
     the count, because a filename and an occurrence are different facts.
 
-    Text, and UTF-16 when it carries a BOM. Everything else with a NUL byte in the first
-    8 KB is counted out as binary and named. `git ls-files -z` is used throughout, so a
+    Text, and UTF-16 or UTF-32 when it carries a byte-order mark, read by default. A
+    binary that merely opens with FF FE stays binary: the window must decode strictly and
+    hold no NUL character. UTF-16 WITHOUT a BOM is counted out as binary - nothing marks
+    it as text, and no tool measured beside census reads one either. Everything else with
+    a NUL byte in the first 8 KB is counted out as binary and named.
+
+    It counts OCCURRENCES, not lines. One line holding a word three times is 3 here and 1
+    under `grep -c` or `rg -c`; `rg --count-matches` is the grep-family equivalent. The
+    header states the unit on every run, and --json carries it as "unit".
+
+    CASE: the default is case-insensitive, and every result row ALSO carries the
+    exact-case count in a second column (--json: total_case_sensitive), so a figure like
+    37 can never be quoted without the 14 beside it that `rg` would have said. With
+    --case-sensitive there is only one count, and no second column. `git ls-files -z` is used throughout, so a
     filename with a space, a newline or non-ASCII characters is searched like any other;
     such a name is escaped when printed so a result row can never span two lines.
 
-    In GIT mode, symlinks are followed. One pointing outside the root is read and
+    In GIT mode, FILE symlinks are followed. One pointing outside the root is read and
     reported under its in-repo path, and a broken one is counted as unreadable rather
-    than skipped quietly.
+    than skipped quietly. A symlinked DIRECTORY is not followed in either mode.
 
-    In WALK mode, a symlinked DIRECTORY is NOT descended, so the tree behind it is not
-    in the population at all. Every walk therefore names how many such directories it
-    declined to enter, and which — positively, including when the answer is none. The
-    link is not followed on purpose: `os.walk(followlinks=True)` loops forever on a
-    self-referential link and this tool keeps no visited set. Re-run with the link's
-    target as `--root` to search behind one.
+    A symlinked DIRECTORY is NOT descended, so the tree behind it is not in the
+    population at all. Every run therefore names how many such directories it declined
+    to enter, and which — positively, including when the answer is none. In walk mode
+    os.walk hands them back; in git mode they arrive from ls-files as a single path
+    (git stores the link, never what is behind it). The link is not followed on purpose:
+    `os.walk(followlinks=True)` loops forever on a self-referential link and this tool
+    keeps no visited set. Re-run with the link's target as `--root` to search behind one.
 
 WHAT IT DOES NOT FIX
     It cannot tell you a hit is a DEFECT. Triage is a human reading, always. A real run
@@ -109,7 +122,8 @@ Usage
     --exclude PREFIX    drop this path and anything beneath it (repeatable). Both
                         filters print the number of files they moved.
     --regex             treat patterns as regular expressions instead of literals.
-    --case-sensitive    default is case-insensitive.
+    --case-sensitive    default is case-insensitive, with the exact-case count in a
+                        second column. Given, there is one count and no second column.
     --walk              force the filesystem walk even inside a git repo.
     --binary            also search binary files (default: skipped, and the count shown).
     --include-ignored   search the tracked files AND the hidden ones together.
@@ -133,7 +147,8 @@ SCOPE — the three populations partition the project
                         every fact the text carries. EVERY refusal is JSON too -
                         including argparse's own usage errors - so a script never has to
                         scrape prose to learn it was refused. Implies --no-color.
-                        Success: {ok:true, control, population, patterns[], total}
+                        Success: {ok:true, control, population, patterns[], total,
+                                  total_case_sensitive, unit:"occurrences"}
                         Refusal: {ok:false, refused:"<reason>", ...}  exit 2
     --no-color          never emit ANSI. NO_COLOR is honoured too, and colour is off
                         automatically whenever stdout is not a terminal.
@@ -154,6 +169,7 @@ Exit codes
 """
 
 import argparse
+import codecs
 import json
 import os
 import re
@@ -326,6 +342,39 @@ def to_prefix(given, root, raw_root):
     return None
 
 
+# Byte-order marks, longest first: the UTF-32LE mark BEGINS with the UTF-16LE one, so
+# testing FF FE first would read a UTF-32 file as UTF-16 and find nothing in it.
+BOMS = ((b"\xff\xfe\x00\x00", "utf-32"), (b"\x00\x00\xfe\xff", "utf-32"),
+        (b"\xff\xfe", "utf-16"), (b"\xfe\xff", "utf-16"))
+
+
+def bom_codec(head):
+    """The codec a leading byte-order mark names, or None. UTF-8 needs no entry: its BOM
+    carries no NUL, so the sniff already calls it text and the UTF-8 decoder reads it."""
+    for bom, codec in BOMS:
+        if head.startswith(bom):
+            return codec
+    return None
+
+
+def wide_text(head, codec):
+    """True when `head` really is UTF-16/32 text rather than a binary that happens to
+    open with FF FE or FE FF.
+
+    Two tests, and both must hold. The window decodes STRICTLY: random or compressed
+    bytes read as UTF-16 hit a lone surrogate within a few dozen code units, so noise
+    fails here. And the decoded text carries no U+0000: a structured binary (a Mach-O,
+    an image) is full of zero words, and a NUL CHARACTER is to wide text what a NUL
+    byte is to UTF-8. The decoder is incremental, so a character split at the 8 KB edge
+    is held back instead of being mistaken for corruption.
+    """
+    try:
+        s = codecs.getincrementaldecoder(codec)("strict").decode(head, final=False)
+    except UnicodeDecodeError:
+        return False
+    return "\x00" not in s
+
+
 def classify(path):
     """'text', 'binary' (NUL in the first 8 KB, the sniff git and grep use), or 'unreadable'.
 
@@ -333,12 +382,22 @@ def classify(path):
     readable, not triageable, and they inflate a number somebody will quote. Unreadable
     is kept SEPARATE from binary rather than folded into it — a permission-denied file is
     a hole in the population, and reporting it as "binary" would be its own quiet lie.
+
+    UTF-16 and UTF-32 WITH a byte-order mark are text. They are full of NUL bytes, so the
+    sniff alone dropped them as binary and count() - which can decode them - never saw
+    them: rg and ugrep read such a file by default and census did not (A48, 2026-09-25).
+    Without a BOM they stay binary: nothing marks them as text, and no tool measured in
+    A48 reads one either. The drop is still printed with the other binaries.
     """
     try:
         with open(path, "rb") as fh:
-            return "binary" if b"\x00" in fh.read(8192) else "text"
+            head = fh.read(8192)
     except OSError:
         return "unreadable"
+    if b"\x00" not in head:
+        return "text"
+    codec = bom_codec(head)
+    return "text" if codec and wide_text(head, codec) else "binary"
 
 
 def collect(root, unders, excludes, force_walk, include_binary=False, scope="tracked"):
@@ -385,6 +444,17 @@ def collect(root, unders, excludes, force_walk, include_binary=False, scope="tra
             note = ""
         filters.append(("--exclude", e, newly, "dropped", note, matched))
         files = [f for f in files if not inside(f, e)]
+
+    # git records a symlink as a blob, so a link to a DIRECTORY comes back from ls-files
+    # as one path. Opening it failed and it was reported as "unreadable (could not be
+    # opened)" - a hole, but not a named one (A48, P-git-linked-census). Take it out and
+    # name it the way the walk does. Done after the filters, so `--under the/link` names
+    # the link instead of calling the filter a typo, and only links in scope are listed.
+    if mode == "git":
+        linked = {f for f in files if os.path.islink(root / f) and os.path.isdir(root / f)}
+        if linked:
+            files = [f for f in files if f not in linked]
+            unfollowed = sorted(linked)
 
     kinds = {f: classify(root / f) for f in files}
     unreadable = [f for f in files if kinds[f] == "unreadable"]
@@ -444,28 +514,44 @@ def rx_of(pattern, use_regex=False, case_sensitive=False):
                       0 if case_sensitive else re.IGNORECASE)
 
 
-def count(root, files, pattern, use_regex, case_sensitive):
-    flags = 0 if case_sensitive else re.IGNORECASE
-    rx = re.compile(effective(pattern, use_regex), flags)
-    per_file, total = {}, 0
+def decoded(raw):
+    """File bytes as text: by the BOM when there is one, else UTF-8.
+
+    UTF-16 once reached count() only through --binary, and read_text(utf-8) then mangled
+    every character and the search found nothing. A flag that says "also search these"
+    and then cannot read them is a false promise, and a quiet zero inside a search the
+    caller explicitly asked for. classify() now admits a BOM'd file as text, so this is
+    the default path for one. UTF-32 is tested before UTF-16 (see BOMS).
+    """
+    return raw.decode(bom_codec(raw[:4]) or "utf-8", errors="replace")
+
+
+def count(root, files, pattern, use_regex, case_sensitive, exact_too=False):
+    """(total, per_file), plus (exact_total, exact_per_file) when `exact_too`.
+
+    `exact_too` is the case-sensitive count taken in the SAME pass over the same decoded
+    text, so the two columns can never be drawn from two different readings of a file.
+    """
+    rx = rx_of(pattern, use_regex, case_sensitive)
+    rx_exact = rx_of(pattern, use_regex, True) if exact_too else None
+    per_file, total, exact_per, exact_total = {}, 0, {}, 0
     for f in files:
         try:
             raw = (root / f).read_bytes()
         except (OSError, IsADirectoryError):
             continue
-        # UTF-16 is full of NUL bytes, so classify() calls it binary and --binary is the
-        # only way to reach it — at which point read_text(utf-8) mangled every character
-        # and the search found nothing. A flag that says "also search these" and then
-        # cannot read them is a false promise, and a quiet zero inside a search the
-        # caller explicitly asked for. Honour the BOM; everything else stays UTF-8.
-        if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
-            text = raw.decode("utf-16", errors="replace")
-        else:
-            text = raw.decode("utf-8", errors="replace")
+        text = decoded(raw)
         n = len(rx.findall(text))
         if n:
             per_file[f] = n
             total += n
+        if rx_exact is not None:
+            e = len(rx_exact.findall(text))
+            if e:
+                exact_per[f] = e
+                exact_total += e
+    if exact_too:
+        return total, per_file, exact_total, exact_per
     return total, per_file
 
 
@@ -494,6 +580,8 @@ refused (exit 2, and nothing is counted):
 always printed, so a count is never quoted bare:
   the population and how it was drawn (git ls-files, or an explicit walk)
   the matching mode, because literal-vs-regex and case are both silent defaults
+  the unit: OCCURRENCES, not lines (grep -c and rg -c count lines)
+  a second, exact-case count on every row, unless --case-sensitive is given
   what every filter removed, and what was never searched at all
 
 example:
@@ -552,7 +640,9 @@ def build_parser():
                     help="treat the control and patterns as regular expressions "
                          "(default: literal, so metacharacters are escaped)")
     ap.add_argument("--case-sensitive", action="store_true",
-                    help="match case exactly (default: case-insensitive)")
+                    help="match case exactly, and print one count per row (default: "
+                         "case-insensitive, with the exact-case count beside it in a "
+                         "second column)")
     ap.add_argument("--walk", action="store_true",
                     help="force the filesystem walk even inside a git repo. The walk is "
                          "NOT complete by construction and says so")
@@ -577,7 +667,9 @@ def build_parser():
                          "Implies --no-color")
     ap.add_argument("--binary", action="store_true",
                     help="also search binary files (default: skipped, and the count "
-                         "printed so the omission is never silent)")
+                         "printed so the omission is never silent). UTF-16/UTF-32 with "
+                         "a byte-order mark is text and needs no flag; without one it "
+                         "is binary")
     ap.add_argument("patterns", nargs="+", metavar="PATTERN",
                     help="one or more things to count. Passed as argv and never through "
                          "a shell variable, so they cannot collapse into one argument")
@@ -720,6 +812,23 @@ def main() -> int:
     # declining to mention that 30 binaries and 142 ignored files had been dropped is a
     # riddle, not a diagnosis. The message says "the file set is wrong, or both"; it must
     # therefore show the file set.
+    def show_unfollowed():
+        # A symlinked directory is not entered, and the files behind it are not in the
+        # count above either — they were never enumerated to be counted. State it
+        # POSITIVELY on every run, the way peek states completeness: a line that appears
+        # only when something is hidden leaves every quiet run ambiguous. Git mode says
+        # it too since A48: a tracked link to a directory used to surface only as one
+        # anonymous "unreadable" file.
+        if unfollowed:
+            print(f"{YELLOW}  NOT FOLLOWED: {len(unfollowed)} symlinked "
+                  f"director{'y' if len(unfollowed) == 1 else 'ies'} — the tree behind "
+                  f"each is absent from the count above, not counted as skipped:\n"
+                  f"    {', '.join(show_path(u) for u in unfollowed)}\n"
+                  f"    Re-run with the link's TARGET as --root to search it.{OFF}")
+        else:
+            print(f"{DIM}  not followed: 0 symlinked directories (nothing hidden "
+                  f"behind a link){OFF}")
+
     def show_population():
         print(f"{DIM}  population: {len(files)} file(s) via {mode.upper()}{OFF}")
         print(f"{DIM}  root: {root}{OFF}")
@@ -737,7 +846,14 @@ def main() -> int:
         # The two silent defaults, stated. A literal search that should have been a regex
         # returns 0 and looks exactly like a true finding; so does a case delta. Printing
         # the mode costs one line and removes the whole class.
-        print(f"{DIM}  matching: {matching_mode(a.regex, a.case_sensitive)}{OFF}")
+        # The second column is decoded HERE, beside the mode that makes it necessary, so
+        # a row reading `37   exact-case 14` never needs --help to be understood.
+        print(f"{DIM}  matching: {matching_mode(a.regex, a.case_sensitive)}"
+              f"{'' if a.case_sensitive else '  ·  second column: the exact-case count'}{OFF}")
+        # The unit, stated. grep -c and rg -c count LINES; census counts every match, so
+        # one 200 KB line holding a word 3 times is 1 there and 3 here (A48 section 6).
+        print(f"{DIM}  unit: OCCURRENCES, not lines (grep -c and rg -c count lines; "
+              f"rg --count-matches counts these){OFF}")
         if mode == "git":
             # Complete over TRACKED files, and mute about the rest. Say the size of the
             # blind spot every run: a population is only honest with its exclusions beside it.
@@ -760,6 +876,7 @@ def main() -> int:
                     print(f"{tone}  NOT searched: {ignored} ignored, {untracked} untracked"
                           f"{' — git mode covers tracked files only' if hidden else ''}"
                           f"{'  ·  --ignored-only searches just those, --include-ignored both' if hidden else ''}{OFF}")
+            show_unfollowed()
         if mode == "walk":
             # The COUNT first, then the names. A list of nineteen directory names is
             # scenery; "2 file(s) ... NOT searched" is a quantity, and a quantity is the
@@ -773,19 +890,7 @@ def main() -> int:
                 print(f"{tone}  NOT searched: {skipped} file(s) inside skipped directories"
                       f"{' — a hit could be in any of them' if skipped else ''}"
                       f"{'  ·  --ignored-only searches just those, --include-ignored both' if skipped else ''}{OFF}")
-            # A symlinked directory is not entered, and the files behind it are not in
-            # the count above either — they were never enumerated to be counted. State
-            # it POSITIVELY on every walk, the way peek states completeness: a line that
-            # appears only when something is hidden leaves every quiet run ambiguous.
-            if unfollowed:
-                print(f"{YELLOW}  NOT FOLLOWED: {len(unfollowed)} symlinked "
-                      f"director{'y' if len(unfollowed) == 1 else 'ies'} — the tree behind "
-                      f"each is absent from the count above, not counted as skipped:\n"
-                      f"    {', '.join(unfollowed)}\n"
-                      f"    Re-run with the link's TARGET as --root to search it.{OFF}")
-            else:
-                print(f"{DIM}  not followed: 0 symlinked directories (nothing hidden "
-                      f"behind a link){OFF}")
+            show_unfollowed()
             print(f"{YELLOW}  ⚠ WALK mode — not a git repo (or --walk forced). This population is NOT\n"
                   f"    complete by construction: it skips {', '.join(sorted(SKIP_DIRS))}.\n"
                   f"    State that limit alongside any number you quote from this run.{OFF}")
@@ -812,16 +917,17 @@ def main() -> int:
             "mode": mode,
             "scope": scope,
             "searched": len(files),
-            "matching": {"regex": bool(a.regex), "case_sensitive": bool(a.case_sensitive)},
+            "matching": {"regex": bool(a.regex), "case_sensitive": bool(a.case_sensitive),
+                         "unit": "occurrences"},
             "filters": [{"flag": f, "prefix": pre, "files": n, "action": verb,
                          "note": note or None, "matched": matched}
                         for f, pre, n, verb, note, matched in filters],
             "not_searched": gap,
-            # The symlinked directories the walk never entered, by path. Deliberately a
-            # LIST and not a count: the files behind a link were never enumerated, so
-            # any number here would be invented. `[]` means the walk hid nothing behind
-            # a link; `null` means the question does not apply (git mode).
-            "unfollowed_symlinked_dirs": unfollowed if mode == "walk" else None,
+            # The symlinked directories never entered, by path. Deliberately a LIST and
+            # not a count: the files behind a link were never enumerated, so any number
+            # here would be invented. `[]` means nothing was hidden behind a link. It was
+            # `null` in git mode until A48, when git mode began naming them too.
+            "unfollowed_symlinked_dirs": unfollowed,
         }
 
     # ── THE CONTROL, ASSERTED BEFORE ANY RESULT IS SHOWN ──────────────────────────
@@ -849,26 +955,62 @@ def main() -> int:
                   f"--include-ignored, which searches both and\n    accepts the "
                   f"control you already have.{OFF}")
         return 2
+    # Every pattern is measured ONCE, and the text and the JSON both render that one
+    # measurement, so the two outputs cannot drift apart on any field (A48 found the
+    # filename-only warning printed in text and missing from --json).
+    exact_too = not a.case_sensitive
+
+    def measure(p):
+        if exact_too:
+            total, per_file, e_total, e_per = count(root, files, p, a.regex, False,
+                                                    exact_too=True)
+        else:
+            (total, per_file), e_total, e_per = count(root, files, p, a.regex, True), None, None
+        # census reads CONTENTS, never paths. So a retired name surviving only in a
+        # FILENAME reports a clean zero — on the exact question the tool is most used
+        # for. Measured: `OLDNAME` returned 0 with OLDNAME_config.py sitting in the
+        # population. Checked only on a zero, where "gone" is about to be concluded, so a
+        # run that already found something stays quiet. Same mode as the content search:
+        # defaulting here would let the path check disagree with the count it comments on.
+        named = None
+        if total == 0:
+            rx = rx_of(p, a.regex, a.case_sensitive)
+            named = [f for f in files if rx.search(f)]
+        order = list(per_file) + [f for f in (e_per or {}) if f not in per_file]
+        order.sort(key=lambda f: -per_file.get(f, 0))
+        return total, per_file, e_total, e_per, named, order
+
     if a.json:
-        results, grand = [], 0
+        results, grand, grand_exact = [], 0, 0
         for p in a.patterns:
-            total, per_file = count(root, files, p, a.regex, a.case_sensitive)
+            total, per_file, e_total, e_per, named, order = measure(p)
             grand += total
+            grand_exact += e_total or 0
             results.append({
                 "pattern": p,
                 "compiled": effective(p, a.regex),
                 "total": total,
+                # The second column. null under --case-sensitive, where `total` already
+                # is the exact-case count and there is only one number to give.
+                "total_case_sensitive": e_total,
                 # The same caveat the text prints, as a field a script can branch on.
                 "literal_mode_zero_may_be_escaping":
                     total == 0 and not a.regex and looks_like_regex(p),
-                "files": dict(sorted(per_file.items(), key=lambda kv: -kv[1])),
+                # The filename-only warning. null = not checked (the count was not zero);
+                # [] = checked, no path holds it. Never truncated, unlike the text's 10.
+                "named_in_paths": named,
+                "files": {f: per_file[f] for f in order if f in per_file},
+                "files_case_sensitive":
+                    None if e_per is None else {f: e_per[f] for f in order if f in e_per},
             })
         print(json.dumps({
             "ok": True,
             "control": {"pattern": a.control, "hits": ctl_total, "files": len(ctl_files)},
             "population": population_report(),
             "patterns": results,
+            "unit": "occurrences",
             "total": grand,
+            "total_case_sensitive": grand_exact if exact_too else None,
         }, indent=2))
         return 0
 
@@ -877,42 +1019,39 @@ def main() -> int:
     show_population()
     print()
 
-    grand = 0
+    grand, grand_exact = 0, 0
     for p in a.patterns:
-        total, per_file = count(root, files, p, a.regex, a.case_sensitive)
+        total, per_file, e_total, e_per, named, order = measure(p)
         grand += total
+        grand_exact += e_total or 0
         colour = YELLOW if total else DIM
-        print(f"  {colour}{p:<28}{OFF} {total:>5}")
+        second = f"   exact-case {e_total}" if exact_too else ""
+        print(f"  {colour}{p:<28}{OFF} {total:>5}{second}")
+        if named:
+            print(f"      {YELLOW}⚠ 0 in file CONTENTS, but the name appears in "
+                  f"{len(named)} PATH(S):{OFF}")
+            for f in named[:10]:
+                print(f"          {YELLOW}{show_path(f)}{OFF}")
+            if len(named) > 10:
+                print(f"          {YELLOW}… and {len(named) - 10} more{OFF}")
+            print(f"        {DIM}census searches contents only. This is not gone.{OFF}")
         # A zero from a pattern carrying regex syntax in LITERAL mode is the one case
         # the control cannot catch: the control proves the FILES are reachable, never
         # that the QUESTION was asked. Fired only on a zero, so a run that produced an
         # answer stays quiet and this notice keeps its meaning.
-        # census reads CONTENTS, never paths. So a retired name surviving only in a
-        # FILENAME reports a clean zero — on the exact question the tool is most used
-        # for. Measured: `OLDNAME` returned 0 with OLDNAME_config.py sitting in the
-        # population. Fired only on a zero, where "gone" is about to be concluded, so a
-        # run that already found something stays quiet.
-        if total == 0:
-            # Same mode as the content search. Defaulting here would let the path
-            # check disagree with the count it is commenting on.
-            named = [f for f in files
-                     if rx_of(p, a.regex, a.case_sensitive).search(f)]
-            if named:
-                print(f"      {YELLOW}⚠ 0 in file CONTENTS, but the name appears in "
-                      f"{len(named)} PATH(S):{OFF}")
-                for f in named[:10]:
-                    print(f"          {YELLOW}{show_path(f)}{OFF}")
-                if len(named) > 10:
-                    print(f"          {YELLOW}… and {len(named) - 10} more{OFF}")
-                print(f"        {DIM}census searches contents only. This is not gone.{OFF}")
         if total == 0 and not a.regex and looks_like_regex(p):
             print(f"      {YELLOW}⚠ literal mode — compiled as  {effective(p, False)}\n"
                   f"        rather than as the regex  {p}\n"
                   f"        This zero may be the escaping, not a finding. "
                   f"Re-run with --regex.{OFF}")
-        for f, n in sorted(per_file.items(), key=lambda kv: -kv[1]):
-            print(f"      {DIM}{n:>4}  {show_path(f)}{OFF}")
-    print(f"\n  {DIM}{'-' * 34}{OFF}\n  {'TOTAL':<28} {grand:>5}"
+        for f in order:
+            n = per_file.get(f, 0)
+            if exact_too:
+                print(f"      {DIM}{n:>4} / {e_per.get(f, 0):<4} {show_path(f)}{OFF}")
+            else:
+                print(f"      {DIM}{n:>4}  {show_path(f)}{OFF}")
+    second = f"   exact-case {grand_exact}" if exact_too else ""
+    print(f"\n  {DIM}{'-' * 34}{OFF}\n  {'TOTAL':<28} {grand:>5}{second}"
           f"   {DIM}across {len(files)} file(s){OFF}")
     # The --help pointer rides on the EXISTING footer rather than adding a line of its
     # own. Measured 2026-09-04: a first-time session used census correctly and never ran

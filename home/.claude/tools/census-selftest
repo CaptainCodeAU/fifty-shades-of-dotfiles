@@ -81,6 +81,331 @@ def corpus(base):
     return base
 
 
+def jrun(root, *args):
+    """census --json. Returns (rc, doc or None, why) so a non-JSON answer FAILS an arm
+    instead of raising and taking every later arm down with it."""
+    rc, raw, _ = run(root, "--json", *args)
+    try:
+        return rc, json.loads(raw), ""
+    except Exception as e:
+        return rc, None, f"rc={rc} not JSON: {e}: {raw[:200]!r}"
+
+
+def pat(doc, p):
+    """The patterns[] entry for `p`, or {} when the run produced none."""
+    for r in (doc or {}).get("patterns", []):
+        if r.get("pattern") == p:
+            return r
+    return {}
+
+
+def binary_dropped(doc):
+    """How many files the binary filter dropped, from --json; None when it did not run."""
+    for f in ((doc or {}).get("population") or {}).get("filters", []):
+        if f.get("flag") == "binary":
+            return f.get("files")
+    return 0 if doc else None
+
+
+def a48_fixture(base):
+    """The A48 shapes (COMPARISON.md sections 3, 5, 6 and the side check), one file each.
+
+    Every wide-text file is written TWICE where a real tool can make it: once by iconv,
+    the encoder the A48 harness used, and once by Python with the BOM stated byte for
+    byte, so neither the tool's defaults nor this file's model of them decides the arm.
+    Returns (repo, clean, problems): `problems` lists every fixture property that did
+    not come out as intended, and each arm that leans on one fails with it named.
+    """
+    repo, clean = base / "repo", base / "clean"
+    outside, outside2 = base / "outside", base / "outside2"
+    for d in (repo, clean, outside, outside2):
+        d.mkdir(parents=True)
+    problems = []
+
+    (repo / "case.txt").write_text("CONTROL DONE done Done\nDONE\nEQUALTOK EQUALTOK\n")
+    (repo / "lines.txt").write_text("CONTROL a48occ a48occ a48occ\n")
+    (repo / "a48named_only.cfg").write_text("CONTROL but not the token itself\n")
+
+    def u16le(s):
+        return s.encode("utf-16-le")
+    (repo / "u16le_bom.txt").write_bytes(b"\xff\xfe" + u16le("CONTROL a48u16le\n"))
+    (repo / "u32le_bom.txt").write_bytes(
+        b"\xff\xfe\x00\x00" + "CONTROL a48u32le\n".encode("utf-32-le"))
+    for name, to, tok, want_bom in (
+            ("u16_iconv.txt", "UTF-16", "a48u16iconv", True),
+            ("u32_iconv.txt", "UTF-32", "a48u32iconv", True),
+            ("u16_nobom.txt", "UTF-16LE", "a48nobom", False)):
+        try:
+            out = subprocess.run(["iconv", "-f", "UTF-8", "-t", to],
+                                 input=f"CONTROL {tok}\n".encode(),
+                                 capture_output=True, check=True).stdout
+        except Exception as e:
+            problems.append(f"iconv -t {to} failed: {e}")
+            continue
+        (repo / name).write_bytes(out)
+        has_bom = out[:4] in (b"\xff\xfe\x00\x00", b"\x00\x00\xfe\xff") \
+            or out[:2] in (b"\xff\xfe", b"\xfe\xff")
+        if has_bom != want_bom:
+            problems.append(f"{name}: iconv -t {to} BOM present={has_bom}, wanted {want_bom}")
+
+    # A REAL binary that happens to open with FF FE: this interpreter's own executable,
+    # which exists wherever the suite can run. The token is appended as UTF-16LE on an
+    # even offset, so a rule that wrongly read the file as UTF-16 would FIND it.
+    blob = Path(sys.executable).resolve().read_bytes()[:65536]
+    blob = b"\xff\xfe" + blob + (b"\x00" if len(blob) % 2 else b"")
+    (repo / "ffbin.bin").write_bytes(blob + u16le(" a48ffbin CONTROL\n"))
+    # Each half of the rule in isolation, beside a twin that differs by one code unit:
+    #   iso_nul  decodes strictly but holds U+0000       -> only the NUL-char test drops it
+    #   iso_sur  holds no U+0000 but a lone low surrogate -> only strict decoding drops it
+    #   iso_ok   the same text with neither               -> text, found by default
+    (repo / "iso_nul.bin").write_bytes(
+        b"\xff\xfe" + u16le("CONTROL a48isonul ") + b"\x00\x00" + u16le("tail\n"))
+    (repo / "iso_sur.bin").write_bytes(
+        b"\xff\xfe" + u16le("CONTROL a48isosur ") + b"\x00\xdc" + u16le("tail\n"))
+    (repo / "iso_ok.txt").write_bytes(b"\xff\xfe" + u16le("CONTROL a48isook tail\n"))
+    try:
+        s = (repo / "iso_nul.bin").read_bytes()[2:].decode("utf-16-le")
+        if "\x00" not in s:
+            problems.append("iso_nul.bin: carries no U+0000")
+    except UnicodeDecodeError:
+        problems.append("iso_nul.bin: does not decode strictly, so it isolates nothing")
+    try:
+        (repo / "iso_sur.bin").read_bytes()[2:].decode("utf-16-le")
+        problems.append("iso_sur.bin: decodes strictly, so it isolates nothing")
+    except UnicodeDecodeError:
+        pass
+    if "\x00" in (repo / "iso_sur.bin").read_bytes()[2:].decode("utf-16-le", "replace"):
+        problems.append("iso_sur.bin: carries a U+0000, so it isolates nothing")
+
+    # Links: a tracked symlinked DIRECTORY, an untracked one, and a tracked FILE link.
+    (outside / "inner.txt").write_text("CONTROL a48behind\n")
+    (outside2 / "x.txt").write_text("CONTROL a48untrackedbehind\n")
+    (base / "outfile.txt").write_text("CONTROL a48filelink\n")
+    os.symlink("../outside", repo / "linkdir")
+    os.symlink("../outfile.txt", repo / "filelink.txt")
+    (clean / "only.txt").write_text("CONTROL a48clean\n")
+    for d in (repo, clean):
+        for cmd in (["init", "-q"], ["add", "-A"]):
+            subprocess.run(["git", "-C", str(d), *cmd], check=True, capture_output=True)
+    # Created AFTER `git add -A`, so it stays untracked and not ignored.
+    os.symlink("../outside2", repo / "untrackedlink")
+    return repo, clean, problems
+
+
+def a48_arms(base, walk_root):
+    """Arms 23-28: the census improvements ruled in D-20260925-A02 (A48).
+
+    Each arm is written to FAIL on the census before the ruling (commit 01055a9) and
+    pass after it, except those marked `guard`, which pin a property both must keep.
+    """
+    try:
+        repo, clean, problems = a48_fixture(base)
+    except Exception as e:
+        check("23-28 fixture: the A48 fixture could be built", False,
+              f"{e.__class__.__name__}: {e}")
+        return
+    check("23-28 fixture: every fixture property came out as intended",
+          not problems, "; ".join(problems))
+    C = ("--control", "CONTROL")
+
+    # ── 23 · case: the exact-case count rides beside the default one ─────────────────
+    # A48 section 5: census said 37 for DONE where every other tool said 12 or 14, and
+    # nothing on the row said why. Ruled 2026-09-25: keep the default, print both.
+    rc, _, plain = run(repo, *C, "DONE", "EQUALTOK")
+    m = re.search(r"^\s*DONE\s+(\d+)\s+exact-case\s+(\d+)\s*$", plain, re.M)
+    check("23a case: a row shows both counts when they DIFFER (4, exact-case 2)",
+          rc == 0 and bool(m) and (m.group(1), m.group(2)) == ("4", "2"),
+          f"rc={rc} row={m and m.group(0)!r}")
+    m = re.search(r"^\s*EQUALTOK\s+(\d+)\s+exact-case\s+(\d+)\s*$", plain, re.M)
+    check("23b case: a row shows both counts when they are EQUAL (2, exact-case 2)",
+          bool(m) and (m.group(1), m.group(2)) == ("2", "2"),
+          "an equal pair must still print both, or a missing column reads as equal")
+    check("23c case: the header says what the second column is",
+          "second column: the exact-case count" in plain,
+          "a bare second number needs --help to decode")
+    check("23d case: a per-file row carries both counts",
+          re.search(r"^\s*4 / 2\s+case\.txt\s*$", plain, re.M) is not None)
+    check("23e case: the TOTAL row carries both",
+          re.search(r"^\s*TOTAL\s+6\s+exact-case\s+4\s", plain, re.M) is not None)
+    rc, _, plain = run(repo, "--case-sensitive", *C, "DONE")
+    check("23f case (guard): --case-sensitive shows ONE count and no second column",
+          rc == 0 and re.search(r"^\s*DONE\s+2\s*$", plain, re.M) is not None
+          and "exact-case" not in plain and "second column" not in plain,
+          f"rc={rc}")
+    rc, d, why = jrun(repo, *C, "DONE", "EQUALTOK")
+    p = pat(d, "DONE")
+    check("23g case: --json carries total_case_sensitive per pattern, per file, overall",
+          d is not None and p.get("total") == 4 and p.get("total_case_sensitive") == 2
+          and p.get("files_case_sensitive") == {"case.txt": 2}
+          and d.get("total") == 6 and d.get("total_case_sensitive") == 4,
+          why or f"pattern={p} total={d.get('total')}/{d.get('total_case_sensitive')}")
+    rc, d, why = jrun(repo, "--case-sensitive", *C, "DONE")
+    p = pat(d, "DONE")
+    check("23h case: --json under --case-sensitive gives one count, second fields null",
+          d is not None and p.get("total") == 2 and p.get("total_case_sensitive") is None
+          and "total_case_sensitive" in p and p.get("files_case_sensitive") is None
+          and d.get("total_case_sensitive") is None and "total_case_sensitive" in d,
+          why or f"pattern={p}")
+
+    # ── 24 · the unit is stated: OCCURRENCES, not lines ───────────────────────────────
+    rc, _, plain = run(repo, *C, "a48occ")
+    check("24a unit: the header says OCCURRENCES, not lines",
+          rc == 0 and "unit: OCCURRENCES, not lines" in plain)
+    check("24b unit (guard): the stated unit is TRUE - 3 on one line counts 3",
+          re.search(r"^\s*a48occ\s+3\s", plain, re.M) is not None,
+          "the header would be lying")
+    rc, d, why = jrun(repo, *C, "a48occ")
+    check("24c unit: --json says unit=occurrences, top level and in matching",
+          d is not None and d.get("unit") == "occurrences"
+          and d["population"]["matching"].get("unit") == "occurrences", why)
+    rc, _, plain = run(repo, "--control", "ABSENT-TOKEN", "a48occ")
+    check("24d unit: stated on the CONTROL FAILED path too",
+          rc == 2 and "unit: OCCURRENCES" in plain, f"rc={rc}")
+
+    # ── 25 · UTF-16/32 with a BOM is text; everything else with a NUL stays binary ───
+    # A48 section 3: rg and ugrep read a BOM'd UTF-16 file by default; census dropped it
+    # on the NUL sniff before its decoder, which could read it, ever saw it.
+    rc, d, why = jrun(repo, *C, "a48u16le", "a48u16iconv", "a48u32le", "a48u32iconv",
+                      "a48nobom", "a48ffbin", "a48isonul", "a48isosur", "a48isook")
+    tot = lambda t: pat(d, t).get("total")
+    check("25a bom: UTF-16LE with a BOM is found by default (no --binary)",
+          tot("a48u16le") == 1, why or f"got {tot('a48u16le')}")
+    check("25b bom: iconv's UTF-16 (BOM included) is found by default",
+          tot("a48u16iconv") == 1, why or f"got {tot('a48u16iconv')}")
+    check("25c bom: UTF-32LE with a BOM is found, not misread as UTF-16",
+          tot("a48u32le") == 1, why or f"got {tot('a48u32le')}")
+    check("25d bom: iconv's UTF-32 (BOM included) is found by default",
+          tot("a48u32iconv") == 1, why or f"got {tot('a48u32iconv')}")
+    check("25e bom (guard): UTF-16 WITHOUT a BOM is still not read",
+          tot("a48nobom") == 0, why or f"got {tot('a48nobom')}")
+    check("25f bom (guard): a real binary opening with FF FE is NOT read as text",
+          tot("a48ffbin") == 0, why or f"got {tot('a48ffbin')}")
+    check("25g bom (guard): a U+0000 inside BOM'd text keeps it binary",
+          tot("a48isonul") == 0, why or f"got {tot('a48isonul')}")
+    check("25h bom (guard): a lone surrogate inside BOM'd text keeps it binary",
+          tot("a48isosur") == 0, why or f"got {tot('a48isosur')}")
+    check("25i bom: the one-unit-different twin of 25g/25h IS text",
+          tot("a48isook") == 1, why or f"got {tot('a48isook')}")
+    check("25j bom: exactly the 4 non-text files are dropped as binary, no more",
+          binary_dropped(d) == 4, f"binary dropped={binary_dropped(d)}")
+    # The drop is STATED, per file: --under one file, and the binary line counts it.
+    for f in ("u16_nobom.txt", "ffbin.bin"):
+        rc, _, plain = run(repo, "--under", f, *C, "a48nobom")
+        check(f"25k bom (guard): {f} is dropped AND the drop is printed",
+              rc == 2 and "binary (NUL byte in first 8 KB) → 1 file(s) dropped" in plain,
+              f"rc={rc}")
+    _, _, plain = run(repo, *C, "a48u16le")
+    check("25l bom: the text report names the BOM'd file like any other",
+          re.search(r"^\s*1 / 1\s+u16le_bom\.txt\s*$", plain, re.M) is not None)
+
+    # ── 26 · git mode names a symlinked DIRECTORY instead of calling it unreadable ────
+    # A48 P-git-linked-census: the link was listed by ls-files, failed to open, and was
+    # reported as `unreadable (could not be opened) -> 1 file(s) dropped`, unnamed.
+    rc, _, plain = run(repo, *C, "a48behind")
+    check("26a gitlink: a tracked symlinked directory is NAMED in git mode",
+          rc == 0 and "via GIT" in plain and "NOT FOLLOWED: 1 symlinked directory" in plain
+          and re.search(r"^\s+linkdir\s*$", plain, re.M) is not None, f"rc={rc}")
+    check("26b gitlink: it is no longer reported as unreadable",
+          "unreadable" not in plain)
+    check("26c gitlink (guard): the tree behind it is still not counted",
+          re.search(r"^\s*a48behind\s+0\s", plain, re.M) is not None)
+    rc, d, why = jrun(repo, *C, "a48behind")
+    check("26d gitlink: --json lists it in git mode (was null)",
+          d is not None and d["population"]["unfollowed_symlinked_dirs"] == ["linkdir"],
+          why or f"value={d['population'].get('unfollowed_symlinked_dirs')}")
+    rc, _, plain = run(clean, *C, "a48clean")
+    rc2, d, why = jrun(clean, *C, "a48clean")
+    check("26e gitlink: a link-free git repo says so POSITIVELY, text and JSON",
+          rc == 0 and "not followed: 0 symlinked directories" in plain
+          and d is not None and d["population"]["unfollowed_symlinked_dirs"] == [],
+          why or f"rc={rc}")
+    rc, d, why = jrun(repo, *C, "a48untrackedbehind")
+    ok_default = d is not None and d["population"]["unfollowed_symlinked_dirs"] == ["linkdir"]
+    rc, d, why2 = jrun(repo, "--include-ignored", *C, "a48untrackedbehind")
+    check("26f gitlink: an UNTRACKED symlinked dir is named under --include-ignored "
+          "(and only there)",
+          ok_default and d is not None
+          and d["population"]["unfollowed_symlinked_dirs"] == ["linkdir", "untrackedlink"],
+          why or why2 or f"value={d and d['population'].get('unfollowed_symlinked_dirs')}")
+    rc, _, plain = run(repo, "--include-ignored", *C, "a48behind")
+    check("26g gitlink: the text names the untracked one too",
+          "NOT FOLLOWED: 2 symlinked directories" in plain and "untrackedlink" in plain)
+    rc, d, why = jrun(repo, *C, "a48filelink")
+    check("26h gitlink (guard): a FILE symlink is still followed in git mode",
+          pat(d, "a48filelink").get("total") == 1, why or f"got {pat(d, 'a48filelink')}")
+    rc, _, plain = run(repo, "--under", "linkdir", *C, "a48behind")
+    check("26i gitlink: --under the link names it, and does not call the filter a typo",
+          "--under linkdir → 1 file(s) kept" in plain and "NOT FOLLOWED" in plain
+          and "check the spelling" not in plain, f"rc={rc}")
+    doc = ""
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("census_doc", CENSUS)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        doc = mod.__doc__ or ""
+    except Exception as e:
+        doc = f"<not importable: {e}>"
+    check("26j gitlink: the docstring no longer says git mode follows every symlink",
+          "In GIT mode, symlinks are followed" not in doc
+          and "In GIT mode, FILE symlinks are followed" in doc)
+
+    # ── 27 · --json carries the filename-only warning the text prints ─────────────────
+    # A48 raw/side-census-fn-text-vs-json.txt: text warned, JSON gave a bare 0.
+    rc, d, why = jrun(repo, *C, "a48named_only", "DONE", "a48nowhere")
+    check("27a fnjson: a zero whose name sits in a PATH lists that path in --json",
+          pat(d, "a48named_only").get("named_in_paths") == ["a48named_only.cfg"],
+          why or f"got {pat(d, 'a48named_only')}")
+    check("27b fnjson: null when the count was not zero (the check did not run)",
+          "named_in_paths" in pat(d, "DONE") and pat(d, "DONE")["named_in_paths"] is None,
+          f"got {pat(d, 'DONE')}")
+    check("27c fnjson: [] when it ran and no path holds the name",
+          pat(d, "a48nowhere").get("named_in_paths") == [],
+          f"got {pat(d, 'a48nowhere')}")
+    rc, d, why = jrun(repo, "--case-sensitive", *C, "A48NAMED_ONLY")
+    check("27d fnjson: the path check honours --case-sensitive in --json too",
+          pat(d, "A48NAMED_ONLY").get("named_in_paths") == [],
+          why or f"got {pat(d, 'A48NAMED_ONLY')}")
+    rc, d, why = jrun(walk_root, "--walk", *C, "NEEDLE_named_only")
+    check("27e fnjson: walk mode carries it as well",
+          pat(d, "NEEDLE_named_only").get("named_in_paths") == ["NEEDLE_named_only.cfg"],
+          why or f"got {pat(d, 'NEEDLE_named_only')}")
+
+    # ── 28 · text and --json agree on EVERY new field, from the same invocation ───────
+    args = ("--include-ignored", *C, "DONE", "EQUALTOK", "a48named_only", "a48u16le")
+    rc, _, plain = run(repo, *args)
+    rc2, d, why = jrun(repo, *args)
+    rows = {m.group(1): (int(m.group(2)), int(m.group(3))) for m in re.finditer(
+        r"^\s{2}(\S+)\s+(\d+)\s+exact-case\s+(\d+)\s*$", plain, re.M)}
+    jrows = {r.get("pattern"): (r.get("total"), r.get("total_case_sensitive"))
+             for r in (d or {}).get("patterns", [])}
+    check("28a agree: every row's two counts match --json",
+          rc == 0 and d is not None and len(jrows) == 4 and rows == jrows,
+          why or f"text={rows} json={jrows}")
+    m = re.search(r"^\s*TOTAL\s+(\d+)\s+exact-case\s+(\d+)\s", plain, re.M)
+    check("28b agree: TOTAL and its exact-case twin match --json",
+          bool(m) and d is not None
+          and (int(m.group(1)), int(m.group(2))) == (d.get("total"),
+                                                     d.get("total_case_sensitive")),
+          f"text={m and m.groups()} json={d and (d.get('total'), d.get('total_case_sensitive'))}")
+    m = re.search(r"NOT FOLLOWED: \d+ symlinked director(?:y|ies)[^\n]*\n\s+([^\n]+)\n",
+                  plain)
+    text_links = [s.strip() for s in m.group(1).split(",")] if m else None
+    # Pinned to the expected list, not just to each other: the pre-A48 census printed no
+    # line (None) and JSON null (None), and None == None passed this arm on that copy.
+    check("28c agree: the unfollowed directories match --json",
+          d is not None and text_links == ["linkdir", "untrackedlink"]
+          and text_links == d["population"]["unfollowed_symlinked_dirs"],
+          f"text={text_links} json={d and d['population']['unfollowed_symlinked_dirs']}")
+    m = re.search(r"PATH\(S\):\n((?:\s{10}\S[^\n]*\n)+)", plain)
+    text_named = [s.strip() for s in m.group(1).splitlines()] if m else None
+    check("28d agree: the filename-only paths match --json",
+          text_named == pat(d, "a48named_only").get("named_in_paths"),
+          f"text={text_named} json={pat(d, 'a48named_only').get('named_in_paths')}")
+    check("28e agree: both state the unit",
+          "unit: OCCURRENCES" in plain and d is not None and d.get("unit") == "occurrences")
+
+
 def main() -> int:
     if not CENSUS.is_file():
         print(f"{RED}census.py not found next to this script at {CENSUS}{OFF}")
@@ -92,13 +417,16 @@ def main() -> int:
     # the corpus and 21c failed, correctly, because the corpus was no longer link-free.
     # Two roots, so neither arm can contaminate the other.
     tmp_link = Path(tempfile.mkdtemp(prefix="census-selftest-link-"))
+    # Arms 23-28 (A48) get their own base too, for the same reason: they add files,
+    # links and a git repo that would move counts the older arms assert on.
+    tmp_a48 = Path(tempfile.mkdtemp(prefix="census-selftest-a48-"))
     try:
         root = corpus(tmp)
         W = ("--walk", "--control", "CONTROL")
 
         # ── HARNESS CONTROL — no assertion runs until census is proven callable ──────
         rc, _, plain = run(root, *W, "NEEDLE")
-        m = re.search(r"^\s*NEEDLE\s+(\d+)\s*$", plain, re.M)
+        m = re.search(r"^\s*NEEDLE\s+(\d+)(?:\s+exact-case\s+\d+)?\s*$", plain, re.M)
         if rc != 0 or not m or int(m.group(1)) == 0:
             print(f"{RED}✗ HARNESS CONTROL FAILED — census did not produce a known "
                   f"non-zero count (rc={rc}).{OFF}")
@@ -125,12 +453,12 @@ def main() -> int:
 
         # ── 2 · a zero caused by literal escaping is called out, not reported clean ──
         _, _, plain = run(root, *W, r"\.zshrc")
-        zero = re.search(r"^\s*\\\.zshrc\s+0\s*$", plain, re.M)
+        zero = re.search(r"^\s*\\\.zshrc\s+0(?:\s+exact-case\s+\d+)?\s*$", plain, re.M)
         check("2a control: literal-mode zero is flagged, not silent",
               bool(zero) and "literal mode" in plain and "--regex" in plain,
               "a regex pattern returned 0 with no warning")
         _, _, plain = run(root, "--regex", *W, r"\.zshrc")
-        m = re.search(r"^\s*\\\.zshrc\s+(\d+)\s*$", plain, re.M)
+        m = re.search(r"^\s*\\\.zshrc\s+(\d+)(?:\s+exact-case\s+\d+)?\s*$", plain, re.M)
         check("2b control: --regex finds what literal mode could not",
               bool(m) and int(m.group(1)) == 2, "expected 2 hits for .zshrc")
         _, _, plain = run(root, *W, "NEEDLE")
@@ -146,7 +474,7 @@ def main() -> int:
               "matching: regex, case-sensitive" in plain)
         _, _, ins = run(root, *W, "needle")
         _, _, sen = run(root, "--case-sensitive", *W, "needle")
-        gi = re.search(r"^\s*needle\s+(\d+)\s*$", ins, re.M)
+        gi = re.search(r"^\s*needle\s+(\d+)(?:\s+exact-case\s+\d+)?\s*$", ins, re.M)
         gs = re.search(r"^\s*needle\s+(\d+)\s*$", sen, re.M)
         check("4b case: the two modes really do differ",
               bool(gi) and bool(gs) and int(gi.group(1)) > int(gs.group(1)),
@@ -497,6 +825,15 @@ def main() -> int:
         check("22j abspath: an EMPTY filter is refused, not read as the whole root",
               rc == 2 and "is empty" in plain, f"rc={rc}")
 
+        # An exception inside the A48 arms must FAIL, not abort: an aborted suite skips
+        # every arm after it (8a-8c included) and reports nothing about them. Measured on
+        # this suite's first run against the pre-A48 census: a KeyError did exactly that.
+        try:
+            a48_arms(tmp_a48, root)
+        except Exception as e:
+            check("23-28 aborted: the A48 arms raised instead of reporting", False,
+                  f"{e.__class__.__name__}: {e}")
+
         # ── the original guarantee must still hold ──────────────────────────────────
         rc, _, plain = run(root, "--walk", "--control", "ABSENT-TOKEN", "NEEDLE")
         check("8a control still refuses: exit 2 when the control misses", rc == 2)
@@ -507,6 +844,7 @@ def main() -> int:
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
         shutil.rmtree(tmp_link, ignore_errors=True)
+        shutil.rmtree(tmp_a48, ignore_errors=True)
 
     print()
     if failures:
