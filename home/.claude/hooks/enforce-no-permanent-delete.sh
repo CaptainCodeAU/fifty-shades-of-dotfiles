@@ -94,7 +94,7 @@ BEGIN { US = sprintf("%c", 31); RSC = sprintf("%c", 30); OPM = sprintf("%c", 2);
         # of them, no alias, no SAFE_RM_OFF and no truncating redirection cannot be
         # denied, so it is not emitted: bash 3.2 costs ~0.15 ms per command it sees.
         # nofilter=1 emits everything; the selftest runs every arm both ways.
-        nt = split("sudo doas env command exec time repeat nice timeout gtimeout caffeinate stdbuf gstdbuf watch xargs gxargs eval sh bash zsh dash ksh mksh yash fish rm grm unlink gunlink shred gshred srm wipe truncate gtruncate dd gdd cp gcp find gfind fd fdfind git rsync rimraf del-cli docker podman docker-compose brew pnpm bun bunx npx pnpx uv node nodejs deno perl ruby osascript diskutil wipefs tmutil trash-empty trash-rm export declare typeset local readonly grhh gwipe gpristine", TL, " ")
+        nt = split("sudo doas env command exec time repeat nice timeout gtimeout caffeinate stdbuf gstdbuf watch xargs gxargs eval sh bash zsh dash ksh mksh yash fish rm grm unlink gunlink shred gshred srm wipe truncate gtruncate dd gdd cp gcp find gfind fd fdfind git rsync rimraf del-cli docker podman docker-compose brew pnpm bun bunx npx pnpx uv node nodejs deno perl ruby osascript diskutil wipefs tmutil trash-empty trash-rm export declare typeset local readonly unset hash grhh gwipe gpristine", TL, " ")
         for (k = 1; k <= nt; k++) TRIG[TL[k]] = 1
         hasal = 0
         if (snap != "") loadaliases() }
@@ -113,6 +113,7 @@ function loadaliases(   line, l, k, v) {
 }
 function trig(w,   b) {
   if (index(w, "SAFE_RM_OFF") == 1) return 1
+  if (w ~ /^(PATH|path)\+?=/) return 1   #M: prefilter: PATH assignment
   b = w; sub(/^=/, "", b); sub(/.*\//, "", b)
   if (b in TRIG) return 1
   if (b ~ /^(python|pypy)[0-9.]*$/ || b ~ /^mkfs/ || b ~ /^newfs/) return 1
@@ -352,6 +353,7 @@ If the banned words are DATA here (a message, a pattern, prose), put them inside
 _msg() { # $1 = rule id -> what it does, then the safe route
   case "$1" in
     rm-path)        echo "rm called by path runs the real deleter and skips the Trash. SAFE ROUTE: bare rm (it resolves to the Trash-routed wrapper)." ;;
+    rm-lookup)      echo "rm looked up through a changed PATH (env, env -i, a PATH= prefix, unset/export PATH, command -p, sudo -i, hash rm=) can resolve to /bin/rm and skip the Trash; env -i finds /bin tools with PATH wiped. SAFE ROUTE: bare rm, with PATH left alone." ;;
     rm-P)           echo "rm -P overwrites the bytes before unlinking; nothing recovers it. SAFE ROUTE: bare rm without -P." ;;
     safe-rm-off)    echo "SAFE_RM_OFF is the human-only bypass of the Trash wrapper. SAFE ROUTE: bare rm, or ask Gavin." ;;
     grm)            echo "grm is GNU rm; it bypasses the Trash shim. SAFE ROUTE: bare rm." ;;
@@ -401,6 +403,7 @@ RAW_TRIG_ID=(); RAW_TRIG_RE=()
 _rt() { RAW_TRIG_ID[${#RAW_TRIG_ID[@]}]="$1"; RAW_TRIG_RE[${#RAW_TRIG_RE[@]}]="$2"; }
 _rt safe-rm-off         'SAFE_RM_OFF'
 _rt rm-path             '(^|[^A-Za-z0-9_-])[A-Za-z0-9_./~-]*/g?rm([^A-Za-z0-9_.-]|$)'
+_rt rm-lookup           "${_RL}(env|command[[:space:]]+-[A-Za-z]*p[A-Za-z]*|sudo[[:space:]]([^|;&]*[[:space:]])?(-i|--login)|(PATH|path)\\+?=[^[:space:]]*)[[:space:]]([^|;&]*[[:space:]])?rm${_RR}|${_RL}hash[[:space:]][^|;&]*rm="
 _rt rm-P                "${_RL}g?rm([[:space:]]+-[A-Za-z]+)*[[:space:]]+-[A-Za-z]*P"
 _rt grm                 "${_RL}grm${_RR}"
 _rt unlink              "${_RL}g?unlink${_RR}"
@@ -445,6 +448,13 @@ SI_KIND=()        # SI_KIND[pid] = shell|code : an interpreter in that pipeline 
 AL_N=(); AL_V=(); ALIAS_VAL=""; SNAP_FILE=""; SNAP_DONE=0
 CWD=""            # the payload's cwd; used to tell a path from a branch name
 DEPTH=0
+# rm-lookup (W-20260925-A25). Bare rm is safe only because PATH finds the Trash
+# shim first. PATH_TOUCHED names an earlier statement in this command that changed
+# PATH (unset PATH; export PATH=..; PATH=/bin alone) and stays set for the rest of
+# it. RM_LOOKUP (a dynamic local in _argv) names a prefix that changes the lookup
+# of the command after it (env, PATH=.., command -p, sudo -i). Either one makes a
+# bare rm a deny.
+PATH_TOUCHED=""
 
 _deny() { # $1 = rule id, $2 = where it was found (optional)
   [ -n "$REASON_ID" ] && return 0
@@ -572,12 +582,16 @@ _is_assign() { [[ $1 =~ $RE_ASSIGN ]]; }
 _argv() {
   [ -n "$REASON_ID" ] && return 0
   local adepth="$1"; shift
+  local RM_LOOKUP="${RM_LOOKUP-}" pa=""
   # leading assignments: VAR=1 cmd
   while [ $# -gt 0 ] && [[ $1 == *=* ]] && _is_assign "$1"; do
     case "$1" in SAFE_RM_OFF=*|SAFE_RM_OFF+=*) _deny safe-rm-off "$1"; return 0 ;; esac   #M: SAFE_RM_OFF prefix
+    case "$1" in PATH=*|PATH+=*|path=*|path+=*) pa="$1" ;; esac
     shift
   done
+  [ -n "$pa" ] && RM_LOOKUP="$pa"                                                            #M: PATH= prefix
   if [ $# -eq 0 ]; then
+    [ -n "$pa" ] && PATH_TOUCHED="$pa"                                                       #M: bare PATH= statement
     [ -n "$TRUNC" ] && _deny redir-trunc "> $TRUNC"
     return 0
   fi
@@ -613,6 +627,7 @@ _argv() {
     command)
       while [ $# -gt 0 ]; do
         case "$1" in -v|-V) return 0 ;; esac   #M: command -v is a lookup
+        case "$1" in -*[vV]*) return 0 ;; -*p*) RM_LOOKUP="command $1" ;; esac                #M: command -p
         case "$1" in -*) shift ;; *) break ;; esac
       done
       [ $# -gt 0 ] && _argv "$adepth" "$@"; return 0 ;;
@@ -635,6 +650,7 @@ _argv() {
         case "$1" in
           --) shift; break ;;
           -u|-g|-h|-p|-C|-D|-r|-t|-T|-U|-c) shift 2 || set -- ;;
+          --login|-i*|-[!-]*i*) RM_LOOKUP="$base $1"; shift ;;                                 #M: sudo -i
           -*) shift ;;
           *) break ;;
         esac
@@ -642,6 +658,7 @@ _argv() {
       [ $# -gt 0 ] && _argv "$adepth" "$@"                                                   #M: sudo look-through
       return 0 ;;
     env)
+      RM_LOOKUP="env"                                                                        #M: env rm
       while [ $# -gt 0 ]; do
         case "$1" in
           --) shift; break ;;
@@ -661,6 +678,19 @@ _argv() {
       for w in "$@"; do
         :
         case "$w" in SAFE_RM_OFF=*|SAFE_RM_OFF) _deny safe-rm-off "$base $w"; return 0 ;; esac   #M: export SAFE_RM_OFF
+        case "$w" in PATH=*|PATH+=*|path=*|path+=*) PATH_TOUCHED="$base $w" ;; esac            #M: export PATH=
+      done
+      return 0 ;;
+    unset)
+      for w in "$@"; do
+        :
+        case "$w" in PATH|path) PATH_TOUCHED="unset $w" ;; esac                                  #M: unset PATH
+      done
+      return 0 ;;
+    hash)
+      for w in "$@"; do
+        :
+        case "$w" in rm=*|grm=*) _deny rm-lookup "hash $w"; return 0 ;; esac                  #M: hash rm=
       done
       return 0 ;;
     nice)
@@ -704,6 +734,7 @@ _argv() {
     # ---- the deleters themselves
     rm)
       if [[ $c == */* ]] && [[ $c != */.local/bin/rm ]]; then _deny rm-path "$c"; return 0; fi   #M: rm by path
+      if [[ $c != */* ]] && [ -n "$RM_LOOKUP$PATH_TOUCHED" ]; then _deny rm-lookup "${RM_LOOKUP:-$PATH_TOUCHED}, then rm"; return 0; fi   #M: rm after a lookup change
       for w in "$@"; do
         [ "$w" = "--" ] && break
         if [[ $w =~ $RE_RM_P ]]; then _deny rm-P "rm $w"; return 0; fi                           #M: rm -P
@@ -1039,7 +1070,7 @@ _git_cmd() {
 
 # Classify one whole command string. Sets REASON_ID / REASON / REASON_WHERE.
 _classify() { # $1 = command, $2 = cwd (optional)
-  REASON=""; REASON_ID=""; REASON_WHERE=""; PIDBASE=0; SI_KIND=(); DEPTH=0
+  REASON=""; REASON_ID=""; REASON_WHERE=""; PIDBASE=0; SI_KIND=(); DEPTH=0; PATH_TOUCHED=""
   AL_N=(); AL_V=(); LEXER_FAILED=0; CWD="${2:-}"; TRUNC=""; CUR_PID=0
   _shell_text "$1"
   return 0
@@ -1134,6 +1165,30 @@ SNAP
   _must rm-path             'quoted /bin/rm as command'       '"/bin/rm" x'
   _must rm-path             'backslashed /bin/rm'             '\/bin/rm x'
   _must rm-path             'env rm by path'                  'env /bin/rm x'
+  # rm-lookup (W-20260925-A25): each of these finds rm through a PATH that may
+  # not hold the Trash shim. env -i and command -p MEASURED to reach /bin/rm.
+  _must rm-lookup           'env rm'                          'env rm x'
+  _must rm-lookup           'env -i rm'                       'env -i rm -rf build'
+  _must rm-lookup           'env -u PATH rm'                  'env -u PATH rm x'
+  _must rm-lookup           'env PATH=/bin rm'                'env PATH=/bin rm x'
+  _must rm-lookup           'env -i xargs rm'                 'ls | env -i xargs rm'
+  _must rm-lookup           "env -i sh -c 'rm x'"             "env -i sh -c 'rm x'"
+  _must rm-lookup           'PATH= prefix'                    'PATH=/bin rm x'
+  _must rm-lookup           'path= prefix (zsh array)'        'path=/bin rm x'
+  _must rm-lookup           'PATH+= prefix'                   'PATH+=:/x rm x'
+  _must rm-lookup           'PATH= prefix, command rm'        'PATH=/usr/bin:/bin command rm x'
+  _must rm-lookup           'command -p rm'                   'command -p rm x'
+  _must rm-lookup           'command -p xargs rm'             'ls | command -p xargs rm'
+  _must rm-lookup           'sudo -i rm'                      'sudo -i rm -rf /opt/x'
+  _must rm-lookup           'sudo --login rm'                 'sudo --login rm x'
+  _must rm-lookup           'sudo -Hi rm'                     'sudo -Hi rm x'
+  _must rm-lookup           'unset PATH; rm'                  'unset PATH; rm x'
+  _must rm-lookup           'unset path && rm'                'unset path && rm x'
+  _must rm-lookup           'export PATH= then rm'            'export PATH=/bin && rm x'
+  _must rm-lookup           'typeset PATH= then rm'           'typeset PATH=/bin; rm x'
+  _must rm-lookup           'bare PATH= statement then rm'    'PATH=/bin; rm x'
+  _must rm-lookup           'hash rm='                        'hash rm=/bin/rm'
+  _must rm-lookup           'hash grm= then rm'               'hash grm=/bin/rm && rm x'
   _must rm-P                'rm -P'                           'rm -P secret.txt'
   _must rm-P                'rm -rfP cluster'                 'rm -rfP dir'
   _must safe-rm-off         'SAFE_RM_OFF=1 rm'                'SAFE_RM_OFF=1 rm x'
@@ -1266,6 +1321,19 @@ SNAP
   _must - 'rm -rf dir'                      'rm -rf build'
   _must - 'command rm'                      'command rm x'
   _must - '\rm'                             '\rm x'
+  _must - 'env ls (no rm)'                  'env -i ls'
+  _must - 'env FOO=1 git status'            'env FOO=1 git status'
+  _must - 'PATH= prefix, not rm'            'PATH=/bin ls'
+  _must - 'export PATH, no rm after'        'export PATH=/x:$PATH && ls'
+  _must - 'rm BEFORE export PATH'           'rm x; export PATH=/bin'
+  _must - 'command -p ls'                   'command -p ls'
+  _must - 'command -pv rm is a lookup'      'command -pv rm'
+  _must - 'sudo rm keeps PATH (shim)'       'sudo rm x'
+  _must - 'sudo -u root rm'                 'sudo -u root rm x'
+  _must - 'unset FOO; rm'                   'unset FOO; rm x'
+  _must - 'hash -r; rm'                     'hash -r; rm x'
+  _must - 'echo PATH=/bin rm (data)'        'echo "PATH=/bin rm x"'
+  _must - 'xargs rm (shim via PATH)'        'ls | xargs rm'
   _must - 'rm -r dir'                       'rm -r dir'
   _must - 'rm -- -P (a file named -P)'      'rm -- -P'
   _must - 'zsh glob qualifier rm *(.)'      'rm *(.)'
@@ -1534,6 +1602,7 @@ SNAP
   local cov ids id smp hit n_ids=0 missing=""
   cov='safe-rm-off|SAFE_RM_OFF=1 rm x
 rm-path|/bin/rm x
+rm-lookup|env -i rm x
 rm-P|rm -P x
 grm|grm -rf x
 unlink|unlink f
