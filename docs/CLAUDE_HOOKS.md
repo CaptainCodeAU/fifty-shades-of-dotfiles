@@ -192,11 +192,22 @@ guard would refuse; the convention hooks only insert `uv run`, `pnpm`,
 ~/.claude/hooks/enforce-pnpm.sh --selftest            # 56 arms
 .claude/hooks/enforce-no-cd.sh --selftest             # 64 arms (this repo only)
 .claude/hooks/enforce-builtin.sh --selftest           # 44 arms (this repo only)
+.claude/hooks/project-guards-selftest                 # 27 arms: a missing guard denies (this repo only)
 ~/.claude/hooks/validate-bash.sh --selftest           # 113 arms (29 function, 84 payload)
 CONV_HOOK_UNDER_TEST=<other copy> <hook> --selftest   # same arms, another copy
 VB_HOOK_UNDER_TEST=<other copy> validate-bash.sh --selftest
 CONV_PAYLOAD_FILE=<captured payload> <hook> --selftest   # arms on a real envelope
 ```
+
+This repo's three PreToolUse guards (`enforce-no-cd.sh`, `enforce-builtin.sh`,
+`protect-files.sh`) are registered in `.claude/settings.json` through the same
+`if [ -x "$h" ]` wrapper as the manifest guards (W-20260925-A28, 2026-09-25). Until
+then they were bare paths: a missing script exited 127, which Claude Code treats as a
+non-blocking error, so the guard stopped guarding without a word. Now a missing script,
+or an empty `CLAUDE_PROJECT_DIR`, denies every call it covers by name. The fix is a
+`git checkout` of the script from your own terminal. `project-guards-selftest` runs every
+PreToolUse command in that file under sh, bash and zsh. Against the old bare form it
+fails 18 of 27 arms.
 
 The three share `home/.claude/hooks/conv-shscan.awk` (a zsh command scanner:
 quotes, `$(...)`, heredocs, `|&`, `&!`, `=(...)`, glob qualifiers) and

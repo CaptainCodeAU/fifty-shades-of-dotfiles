@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# project-guards-selftest -- proves every PreToolUse hook this repo registers in its own
+# .claude/settings.json FAILS CLOSED when its script is missing (W-20260925-A28).
+# A bare-path registration exits 127 on a missing file, which Claude Code treats as a
+# non-blocking error, so the guard silently stops guarding. The A76 wrapper form denies by
+# name instead. For each PreToolUse command, under sh, bash and zsh:
+#   missing arm: CLAUDE_PROJECT_DIR is an empty fixture -> must print a HOOK MISSING deny
+#   unset arm:   CLAUDE_PROJECT_DIR is empty            -> must print a HOOK MISSING deny
+#   present arm: CLAUDE_PROJECT_DIR is this repo        -> must NOT print HOOK MISSING
+# The present arm is the control: a command that denies HOOK MISSING whatever the
+# directory would pass the missing arm and prove nothing.
+# Exit: 0 pass, 1 an arm failed, 2 nothing to test (no PreToolUse commands found).
+# Read this whole file before running any of it, so an edit saved mid-run cannot change
+# the run (W-20260923-A57). A crash under it exits 127 (unbound var) or 1 (bash 3.2 syntax
+# error); `selftest-whole-read --help` has the map. Do not move or reword these lines.
+[ -n "${SELFTEST_WHOLE_READ-}" ] || SELFTEST_WHOLE_READ=1 exec "$BASH" -c 'shopt -u sourcepath; . "$0"' "$0" "$@"
+unset SELFTEST_WHOLE_READ
+
+set -uo pipefail
+REPO="$(cd "$(dirname "$0")/../.." && pwd -P)"
+SETTINGS="${PROJECT_SETTINGS_UNDER_TEST:-$REPO/.claude/settings.json}"
+command -v jq >/dev/null || { echo "project-guards-selftest: needs jq"; exit 2; }
+FIX="$(mktemp -d "${TMPDIR:-/tmp}/project-guards-selftest.XXXXXX")" || exit 1
+mkdir -p "$FIX/.claude/hooks"
+PASS=0; FAIL=0
+ok(){ PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
+bad(){ FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1"; }
+
+N=$(jq '[.hooks.PreToolUse[]?.hooks[]?.command] | length' "$SETTINGS")
+[ "${N:-0}" -gt 0 ] || { echo "project-guards-selftest: no PreToolUse commands in $SETTINGS, nothing tested"; exit 2; }
+echo "settings: $SETTINGS ($N PreToolUse command(s))"
+
+PAYLOAD='{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git status"}}'
+denies_missing(){ printf '%s' "$1" | jq -e '.hookSpecificOutput.permissionDecision == "deny" and (.hookSpecificOutput.permissionDecisionReason | startswith("HOOK MISSING, DENYING"))' >/dev/null 2>&1; }
+
+i=0
+while [ "$i" -lt "$N" ]; do
+  cmd=$(jq -r "[.hooks.PreToolUse[]?.hooks[]?.command][$i]" "$SETTINGS")
+  name=$(printf '%s' "$cmd" | sed -E 's#.*\.claude/hooks/([^"; ]+).*#\1#' | head -1)
+  for sh in sh bash zsh; do
+    command -v "$sh" >/dev/null || { bad "$name [$sh]: shell not found"; continue; }
+    out=$(printf '%s' "$PAYLOAD" | CLAUDE_PROJECT_DIR="$FIX" "$sh" -c "$cmd" 2>/dev/null); rc=$?
+    if [ "$rc" = 0 ] && denies_missing "$out"; then ok "$name [$sh] missing script: denies by name"
+    else bad "$name [$sh] missing script: rc=$rc, no HOOK MISSING deny (fails open)"; fi
+    out=$(printf '%s' "$PAYLOAD" | CLAUDE_PROJECT_DIR="" "$sh" -c "$cmd" 2>/dev/null); rc=$?
+    if [ "$rc" = 0 ] && denies_missing "$out"; then ok "$name [$sh] CLAUDE_PROJECT_DIR empty: denies by name"
+    else bad "$name [$sh] CLAUDE_PROJECT_DIR empty: rc=$rc, no HOOK MISSING deny"; fi
+    out=$(printf '%s' "$PAYLOAD" | CLAUDE_PROJECT_DIR="$REPO" "$sh" -c "$cmd" 2>/dev/null)
+    if printf '%s' "$out" | grep -q 'HOOK MISSING'; then bad "$name [$sh] script present: still says HOOK MISSING (control)"
+    else ok "$name [$sh] script present: runs the real hook (control)"; fi
+  done
+  i=$((i+1))
+done
+
+echo "project-guards-selftest: $PASS passed, $FAIL failed (fixture: $FIX)"
+[ "$FAIL" -eq 0 ]

@@ -58,12 +58,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/enforce-no-cd.sh",
+            "command": "h=\"$CLAUDE_PROJECT_DIR/.claude/hooks/enforce-no-cd.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"HOOK MISSING, DENYING: enforce-no-cd.sh is registered in the dotfiles repo .claude/settings.json but .claude/hooks/enforce-no-cd.sh is missing or not executable, so every Bash call is denied until that is fixed. Fix it from your own terminal, where no Claude hook runs: git -C <dotfiles repo> checkout -- .claude/hooks/enforce-no-cd.sh (then chmod +x it), or delete this registration from .claude/settings.json (W-20260925-A28).\"}}'; fi",
             "timeout": 10
           },
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/enforce-builtin.sh",
+            "command": "h=\"$CLAUDE_PROJECT_DIR/.claude/hooks/enforce-builtin.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"HOOK MISSING, DENYING: enforce-builtin.sh is registered in the dotfiles repo .claude/settings.json but .claude/hooks/enforce-builtin.sh is missing or not executable, so every Bash call is denied until that is fixed. Fix it from your own terminal, where no Claude hook runs: git -C <dotfiles repo> checkout -- .claude/hooks/enforce-builtin.sh (then chmod +x it), or delete this registration from .claude/settings.json (W-20260925-A28).\"}}'; fi",
             "timeout": 10
           }
         ]
@@ -73,7 +73,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/protect-files.sh",
+            "command": "h=\"$CLAUDE_PROJECT_DIR/.claude/hooks/protect-files.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"HOOK MISSING, DENYING: protect-files.sh is registered in the dotfiles repo .claude/settings.json but .claude/hooks/protect-files.sh is missing or not executable, so every Edit/Write call is denied until that is fixed. Fix it from your own terminal, where no Claude hook runs: git -C <dotfiles repo> checkout -- .claude/hooks/protect-files.sh (then chmod +x it), or delete this registration from .claude/settings.json (W-20260925-A28).\"}}'; fi",
             "timeout": 10
           }
         ]
