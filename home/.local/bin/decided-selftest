@@ -125,6 +125,12 @@ run "$R1" --all juliet;  wantrc "--all reaches the legacy file" 0 "$RC"
 run "$R1" --all india;   wantrc "--all reaches another drawer" 0 "$RC"; want "  labelled by its project key" "[in drawer -other-project]" "$OUT"
 run "$R1" --list --all;  want "--all denominator counts every home" "6 decision(s) searched (machine-wide 3, project (drawer:decisions) 1, drawer -other-project 1, legacy file 1)" "$OUT"
 run "$R1" --all zulu;    want "control: --all miss states the same denominator" "6 decision(s) searched" "$OUT"
+# A48 item E in --all scope: the words sit in two different extra homes, so only --all finds
+# either, and the near misses name both homes. The default-scope run is the control.
+run "$R1" --all india juliet; wantrc "--all miss across two extra homes" 1 "$RC"; want "  counts cover every home" "in the 6 block(s) searched: india 1 (1 where it starts a word), juliet 1 (1)" "$OUT"
+want "  near miss in another drawer" "Other drawer thing   [drawer -other-project]  lacks: juliet" "$OUT"; want "  near miss in the legacy file" "Legacy thing   [legacy file]  lacks: india" "$OUT"
+want "  the command keeps --all" "lacking juliet (1): decided --all india" "$OUT"
+run "$R1" india juliet;       wantrc "control: the default scope misses too" 1 "$RC"; want "  with both counts 0 in its 4 blocks" "in the 4 block(s) searched: india 0 (0 where it starts a word), juliet 0 (0)" "$OUT"
 
 echo "-- add"
 run "$R1" add "No topic" --holds-in x --global; wantrc "add without --topic refuses" 2 "$RC"
@@ -253,6 +259,44 @@ run "$R1" --all --list --status withdrawn; wantrc "--all --list --status reaches
 # add has its OWN --status; the filter parser must leave it alone.
 frun add "Deferred probe" --topic dp --holds-in d --global --status deferred; wantrc "add keeps its own --status (written, outside dot-claude)" 3 "$RC"
 want "  and the block carries it" "status: deferred" "$(cat "$FH"/D-"$TODAY"-*-deferred-probe.md 2>/dev/null)"
+
+# W-20260924-A48 item E (D-20260925-A02): a word miss explains itself. Measured on the real
+# register: `decided stall watch done` missed D-20260924-A02, which `decided stall watch`
+# finds, and `stall` also hit every "install" block. Own home, run from outside any repo, so
+# no count above moves. Three blocks: the target (stall watch, no "done"), an install block
+# (stall only as a SUBSTRING), and a done block.
+echo "-- a word miss explains itself (W-20260924-A48, D-20260925-A02)"
+NH="$T/nearhome"; mkdir -p "$NH"
+printf '## D-20260924-A02 -- Stall watch ruling\n\ntopic: stall watch\nstatus: standing\n' > "$NH/D-20260924-A02-sw.md"
+printf '## D-20260901-A01 -- Install ruling\n\ntopic: pnpm install floor\nstatus: standing\n' > "$NH/D-20260901-A01-in.md"
+printf '## D-20260901-A02 -- Done ruling\n\ntopic: done means done\nstatus: standing\n' > "$NH/D-20260901-A02-dn.md"
+nrun(){ OUT="$( (builtin cd "$T" && DECIDED_GLOBAL_DIR="$NH" "$DECIDED" "$@") 2>&1)"; RC=$?; }
+# CONTROL FIRST: the two-word query finds the target, so the miss below is the third word's.
+nrun stall watch;      wantrc "control: stall watch hits" 0 "$RC"; want "  the target" "## D-20260924-A02 -- Stall watch ruling" "$OUT"
+wantnot "  a hit prints no per-word counts" "each word on its own" "$OUT"; wantnot "  a hit prints no near misses" "near misses" "$OUT"
+nrun stall watch done; wantrc "the measured miss still misses (exit 1)" 1 "$RC"
+want "  today's miss wording kept" 'NOT the same as "not decided"' "$OUT"; want "  and its denominator" "3 decision(s) searched (machine-wide 3)" "$OUT"
+want "  counts each word alone, stall honestly (2 by substring, 1 where it starts a word)" "in the 3 block(s) searched: stall 2 (1 where it starts a word), watch 1 (1), done 1 (1)" "$OUT"
+want "  names the target as a near miss" "D-20260924-A02 -- Stall watch ruling   [machine-wide]  lacks: done" "$OUT"
+want "  states how many it shows" "near misses, holding every word but one: 1, showing all 1." "$OUT"
+want "  and the command that finds it" "lacking done (1): decided stall watch" "$OUT"
+wantnot "  the install block is not a near miss (it holds one word of three)" "Install ruling   [" "$OUT"
+nrun zulu yankee;      wantrc "no word matches anything: still a miss" 1 "$RC"; want "  every count is 0" "zulu 0 (0 where it starts a word), yankee 0 (0)" "$OUT"
+want "  near misses stated as none" "near misses, holding every word but one: none." "$OUT"; want "  wording kept" 'NOT the same as "not decided"' "$OUT"
+nrun zulu;             wantrc "a single-word miss" 1 "$RC"; want "  its count" "in the 3 block(s) searched: zulu 0 (0 where it starts a word)" "$OUT"
+want "  near misses stated as not applicable" "near misses: not applicable to a one-word query." "$OUT"
+nrun stall;            wantrc "control: a substring hit is still a hit (install counts, as it always did)" 0 "$RC"; want "  the install block" "Install ruling" "$OUT"
+# The filter's pool is what the counts cover, and the command to widen carries the filter.
+frun --status withdrawn papa quebec; wantrc "a filtered miss" 1 "$RC"; want "  counts cover the filtered pool" "in the 1 block(s) searched: papa 1 (1 where it starts a word), quebec 0 (0)" "$OUT"
+want "  near miss inside the filter" "D-20260301-A02 -- Filter withdrawn   [machine-wide]  lacks: quebec" "$OUT"; want "  command keeps the filter" "lacking quebec (1): decided --status withdrawn papa" "$OUT"
+frun --since 2027-01-01 papa;        wantnot "a filter that passed nothing tests no words, so prints no counts" "each word on its own" "$OUT"; want "  and still blames the filter" "FILTER passed nothing" "$OUT"
+# More near misses than the cap: counted, capped, and never silently cut.
+CH="$T/caphome"; mkdir -p "$CH"
+for c in 01 02 03 04 05 06 07 08 09 10 11 12; do printf '## D-20260902-A%s -- Kilo block %s\n\ntopic: kilo\nstatus: standing\n' "$c" "$c" > "$CH/D-20260902-A$c-k.md"; done
+OUT="$( (builtin cd "$T" && DECIDED_GLOBAL_DIR="$CH" "$DECIDED" kilo lima) 2>&1)"; RC=$?
+wantrc "more near misses than the cap: still a miss" 1 "$RC"; want "  states the total, the shown and the rest" "near misses, holding every word but one: 12, showing 10, 2 more." "$OUT"
+nshown="$(printf '%s\n' "$OUT" | grep -c '  lacks: lima$')"; [ "$nshown" = 10 ] && ok "  exactly 10 near-miss lines printed" || bad "  printed $nshown near-miss lines" "$OUT"
+want "  and names the command that shows all 12" "lacking lima (12): decided kilo" "$OUT"
 
 # W-20260923-A55: an add flag given LAST spun forever. bash's `shift 2` with one argument
 # left fails WITHOUT shifting, so `while [ $# -gt 0 ]` saw the same flag again. Each arm runs

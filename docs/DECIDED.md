@@ -79,6 +79,47 @@ named as "declared store in an unsupported format, not searched". It is never si
 skipped and no parser for other projects' formats lives here; those projects keep their
 own tools (D-20260920-02).
 
+## A word miss explains itself (W-20260924-A48, D-20260925-A02, 2026-09-25)
+
+A word search needs EVERY word in one block. Measured 2026-09-25: `decided stall watch
+done` missed D-20260924-A02, which `decided stall watch` returns, so one extra word hid a
+standing ruling behind a miss that read like "not decided". A word miss now keeps its
+three lines and exit 1, and appends:
+
+```
+decided: each word on its own, in the 85 block(s) searched: stall 14 (3 where it starts a word), watch 11 (11), done 15 (14)
+decided: near misses, holding every word but one: 6, showing all 6.
+decided:   D-20260924-A02 -- Herdr workers plus SendMessage ...   [machine-wide]  lacks: done
+decided: a near miss may be the ruling; each command below shows its group in full:
+decided:   lacking done (3): decided stall watch
+```
+
+The counts cover the pool that was searched (after a filter, only what passed it). Near
+misses are capped at 10; past the cap the line says how many are hidden ("12, showing 10,
+2 more") and the per-word commands show every one. The commands keep `--all` and the
+filters. A one-word miss says near misses do not apply; a query where nothing holds all
+but one word says "none". A filter that passed nothing tests no words, so it prints no
+counts. Hits, ID lookups, `--list` and `--homes` are unchanged, byte for byte.
+
+### Why substring, not whole words
+
+Matching stays case-insensitive SUBSTRING. Measured 2026-09-25 over the 85 blocks in this
+project's default scope and 140 distinct `decided <words>` queries harvested from every
+transcript on the machine (A48 brief E; scripts and output in the drawer at
+`WORK/census-compare/reports/a48-build/decidede/measure/`):
+
+| Rule                                          | Queries whose hits change (of 140) | What it loses                                                                                                                      |
+| --------------------------------------------- | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| substring (kept)                              | 0                                  | nothing; the noise is shown instead                                                                                                |
+| word start (`stall` no longer hits `install`) | 12                                 | 11 only drop noise; 1 loses its target: `excludedCommands` hides D-20260922-A02 from "sandbox excluded commands template settings" |
+| whole word                                    | 27                                 | real inflections: `decline` finds 2 of the 9 "declined" blocks; spawned, scoped, watched, machines, exclusions, em-dashes          |
+
+Per word, substring / word start / whole word: stall 14/3/3, lock 25/3/2, here 33/13/11,
+watch 11/11/6. Word start is a trade-off, not a win: it drops camelCase and compound words
+(`SendMessage`, `symlink`, `changelog`, `gitignored`). So the miss prints the word-start
+count beside each substring count, which makes `stall` inside `install` visible without
+losing any hit. Substring kept by the A48 conductor session on these numbers, 2026-09-25.
+
 ## Writing
 
 `decided add "title" --topic "..." --holds-in "<doc>" --global|--project [--body ..]`
