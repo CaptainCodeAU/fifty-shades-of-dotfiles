@@ -1083,7 +1083,10 @@ check_session_caps() {
   fi
   out="$("$pjw" count --check --cwd "$PWD" 2>&1)"; rc=$?
   case $rc in
-    0) return 0 ;;
+    0) # a parked session (W-20260925-A46) is allowed, but said out loud with its clear-up line
+       local bgl
+       for bgl in ${(f)out}; do [[ "$bgl" == background:* ]] && print -u2 -r -- "pj: NOTE: $bgl"; done
+       return 0 ;;
     6) print -u2 -r -- "pj: REFUSED: a session cap is reached (4 per project, 8 on the machine; D-20260924-A08, A10). There is no override. Close a session first."
        print -u2 -r -- "$out"
        return 6 ;;

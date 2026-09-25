@@ -307,24 +307,47 @@ set_project() {
 # do_count <dir> -- fills C_* for the project <dir> belongs to and for the machine.
 # rc 0 measured, 2 not (C_ERR). The herdr half (rule b) may be unmeasured on its own:
 # C_WS says so, and `start` refuses on it.
-typeset -ga C_PROJ C_MACH C_PSONLY
+typeset -ga C_PROJ C_MACH C_PSONLY C_HELPER C_PARKED
 typeset -gA C_WHY C_PANE
+C_BG_CLEAR=""
 do_count() {
-  local pid p ws cwd sid kind
-  C_PROJ=(); C_MACH=(); C_PSONLY=(); C_WHY=(); C_PANE=(); C_ERR=""; C_WS="measured"
+  local pid p ws cwd sid kind cmd
+  C_PROJ=(); C_MACH=(); C_PSONLY=(); C_HELPER=(); C_PARKED=(); C_WHY=(); C_PANE=(); C_ERR=""; C_WS="measured"; C_BG_CLEAR=""
   set_project "$1"
   load_ps || { C_ERR="$PS_ERR"; return 2; }
   [[ -d "$SESS_DIR" ]] || { C_ERR="registry $SESS_DIR does not exist"; return 2; }
   load_registry
   for pid in $R_PIDS; do [[ -n "${R_LIVE[$pid]:-}" ]] && C_MACH+=("$pid"); done
+  # A `claude` the registry does not know is one of three things (W-20260925-A46, measured
+  # 2026-09-25 on 2.1.282). Claude Code's background service (`claude daemon run`) is not a
+  # session. A `--bg-pty-host` holds a PARKED session (or an idle spare): real, but not one
+  # pj launched, so it counts toward the machine cap and never raises the disagreement. Any
+  # other unregistered claude is unknown and still refuses. A command line that cannot be
+  # read stays unknown: the conservative arm.
   for pid in ${(k)PS_COMM}; do
     [[ "${PS_COMM[$pid]}" == claude && "${PS_UID[$pid]:-}" == "$MY_UID" ]] || continue
-    [[ -n "${R_LIVE[$pid]:-}" ]] || C_PSONLY+=("$pid")
+    [[ -n "${R_LIVE[$pid]:-}" ]] && continue
+    cmd="$("$PS_CMD" -ww -o command= -p "$pid" 2>/dev/null)" || cmd=""
+    case "$cmd" in
+      *" daemon run"*)    C_HELPER+=("$pid") ;;
+      *--bg-pty-host*)    C_PARKED+=("$pid") ;;
+      *)                  C_PSONLY+=("$pid") ;;
+    esac
   done
+  if (( ${#C_HELPER} + ${#C_PARKED} )); then
+    # the one line that clears them, for the config dir the helper (else a host) runs under
+    pid="${C_HELPER[1]:-${C_PARKED[1]}}"
+    if env_of "$pid" && [[ -n "$E_CCD" ]]; then
+      C_BG_CLEAR="CLAUDE_CONFIG_DIR=${E_CCD/#$HOME/~} command claude daemon stop --any"
+    else
+      C_BG_CLEAR="command claude daemon stop --any"
+    fi
+  fi
   C_MACH_REG=${#C_MACH}
   C_MACH_PS=$(( ${#C_MACH} + ${#C_PSONLY} ))
   # a live registry entry whose pid ps does not list as claude cannot exist (R_LIVE needs it)
   (( C_MACH_PS > C_MACH_REG )) && C_MACHINE=$C_MACH_PS || C_MACHINE=$C_MACH_REG
+  C_MACHINE=$(( C_MACHINE + ${#C_PARKED} ))
   # rule (a): cwd inside the project
   for pid in $C_MACH; do in_project "${R_CWD[$pid]}" && { C_PROJ+=("$pid"); C_WHY[$pid]="cwd"; }; done
   # rule (b): herdr panes in a workspace that holds the project
@@ -385,8 +408,10 @@ count_json() {
     --argjson mreg "$C_MACH_REG" --argjson mps "$C_MACH_PS" --argjson m "$C_MACHINE" --argjson mcap "$CAP_MACHINE" \
     --argjson psonly "[${(j:,:)C_PSONLY}]" --arg ws "$C_WS" --arg refuse "$C_REFUSE" --arg dis "$C_DISAGREE" \
     --argjson proj "[${(j:,:)proj}]" --argjson mach "[${(j:,:)mach}]" \
+    --argjson helper "[${(j:,:)C_HELPER}]" --argjson parked "[${(j:,:)C_PARKED}]" --arg bgclear "$C_BG_CLEAR" \
     '{project:{root:$root, key:$key, count:$pc, cap:$pcap, sessions:$proj},
-      machine:{registry:$mreg, ps:$mps, count:$m, cap:$mcap, disagree:($mreg != $mps), ps_only_pids:$psonly, sessions:$mach},
+      machine:{registry:$mreg, ps:$mps, count:$m, cap:$mcap, disagree:($mreg != $mps), ps_only_pids:$psonly, sessions:$mach,
+               background:{helper_pids:$helper, parked_pids:$parked, clear:(if $bgclear == "" then null else $bgclear end)}},
       account:{count:null, status:"not measured"},
       compared_with_machine_cap:$m, workspace_rule:$ws,
       start_allowed:($refuse == "" and $dis == "" and $ws == "measured"), refusal:(if $refuse == "" then null else $refuse end),
@@ -397,6 +422,7 @@ count_human() {
   print -r -- "project $PROJ_ROOT: $C_PROJECT of $CAP_PROJECT live (cap D-20260924-A08)"
   for k in $C_PROJ; do sess_line "$k"; done
   print -r -- "machine: $C_MACHINE of $CAP_MACHINE live (registry $C_MACH_REG, ps $C_MACH_PS$( (( C_MACH_REG != C_MACH_PS )) && print -r -- ", DISAGREE: the larger is compared; ps-only pids ${(j:, :)C_PSONLY}"))"
+  (( ${#C_HELPER} + ${#C_PARKED} )) && print -r -- "background: ${#C_PARKED} parked session host(s)${C_PARKED:+ (pids ${(j:, :)C_PARKED})} counted above, ${#C_HELPER} background helper(s)${C_HELPER:+ (pids ${(j:, :)C_HELPER})} not counted; to clear them: $C_BG_CLEAR"
   print -r -- "account: not measured (the machine figure alone is compared until it is)"
   print -r -- "workspace rule: $C_WS"
 }

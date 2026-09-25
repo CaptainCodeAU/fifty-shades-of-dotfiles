@@ -454,6 +454,25 @@ run count --cwd "$SWITCH" --check
 check "C5b count --check refuses when the two instruments disagree: rc 2, the ps-only pid named" '[ "$RC" -eq 2 ] && has "$ERR" "disagree" && has "$ERR" 60606'
 run count --cwd "$SWITCH" --json
 check "C5c --json says start is not allowed and why (unmeasured), with no cap refusal" '[ "$(j ".start_allowed, (.refusal|tostring)")" = "false null " ] && has "$(j .unmeasured)" "disagree"'
+# C5d-f. W-20260925-A46: Claude Code 2.1.282's background helper (`claude daemon run`) and a
+# parked-session host (`--bg-pty-host`) are not unknown sessions. Argv shapes copied from the
+# live processes of 2026-09-25 (pids 26962, 27038). C5f is the control: an unknown claude
+# beside them must still refuse, or the sorting has become a blanket pass.
+new_world; lists
+psrow 60607 claude "$T_W"
+printf '%s\n' "@H@/.local/bin/claude daemon run --origin transient" | fx > "$FAKE/ps/cmd.60607"
+printf '%s\n' "@H@/.local/bin/claude daemon run --origin transient HOME=@H@ CLAUDE_CONFIG_DIR=@H@/.claude-scratch" | fx > "$FAKE/ps/env.60607"
+psrow 60608 claude "$T_W"
+printf '%s\n' "@H@/.local/share/claude/ClaudeCode.app/Contents/MacOS/claude --bg-pty-host /tmp/cc-daemon-501/e7750fd8/pty/db414845.sock 423 113" | fx > "$FAKE/ps/cmd.60608"
+run count --cwd "$SWITCH" --json
+check "C5d a helper and a parked host: no disagreement, the host counted (6), the helper not" \
+  '[ "$(j ".machine.registry, .machine.ps, .machine.count, .machine.disagree, (.machine.background.helper_pids|join(\",\")), (.machine.background.parked_pids|join(\",\"))")" = "5 5 6 false 60607 60608 " ]'
+check "C5d the clear-up line names the helper's own config dir" 'has "$(j .machine.background.clear)" "CLAUDE_CONFIG_DIR=~/.claude-scratch command claude daemon stop --any"'
+run count --cwd "$SWITCH" --check
+check "C5e count --check allows the launch (rc 0) and prints the background line" '[ "$RC" -eq 0 ] && has "$OUT" "background: 1 parked session host(s) (pids 60608)"'
+psrow 60606 claude "$T_W"
+run count --cwd "$SWITCH" --check
+check "C5f an UNKNOWN claude beside them still refuses: rc 2, only it named as ps-only" '[ "$RC" -eq 2 ] && has "$ERR" "ps-only pids: 60606)"'
 # the conductor's `claude agents --json` trap (a background session, no process behind it):
 # its sessionId as a registry file whose pid is gone must not count, and claude is never run
 new_world; lists
