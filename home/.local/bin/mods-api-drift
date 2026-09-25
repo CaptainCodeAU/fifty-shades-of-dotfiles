@@ -132,6 +132,8 @@ report_json(){   # report_json: computed from the state dir, writes nothing
     s="$(surface_for "$newest")"
     if [ -n "$(empty_kinds "$s")" ]; then status=broken; detail="the extractor found no $(empty_kinds "$s") in $newest's declarations: a format change, not an empty API"
     elif [ -z "$inst" ]; then status=unknown; detail="claude --version gave no version, so the installed API was not compared"
+    elif ! printf '%s\n' "$vers" | grep -qx "$inst" && [ "$(cut -f1 "$STATE/.regen-failed" 2>/dev/null)" = "$inst" ]; then
+      status=broken; detail="the capture of Claude Code $inst FAILED ($(cut -f3 "$STATE/.regen-failed")) at $(cut -f2 "$STATE/.regen-failed"); log: $STATE/.last-regen-failure.out"
     elif [ "$inst" != "$newest" ] && ! printf '%s\n' "$vers" | grep -qx "$inst"; then status=behind; detail="Claude Code $inst is installed but the newest saved API is $newest"
     else status=ok; detail=""; fi
   fi
@@ -156,15 +158,35 @@ writable(){   # refuse by name when the state dir cannot be written (CONTRACT 2)
   command mv -f "$probe" "$STATE/.write-probe" 2>/dev/null   # keep one probe file rather than delete
 }
 
+regen_failed(){   # regen_failed <version> <scratch> <why>: record it, empty the scratch dir, exit 4
+  # A failed capture used to leave its scratch dir for diagnosis, one per session start, and
+  # the report then said "behind" as if nothing had been tried. Now the evidence goes to two
+  # fixed names (overwritten each time, so it never piles up), the empty dirs go, and a
+  # marker makes the report say BROKEN for that version until a capture of it succeeds.
+  local v="$1" tmp="$2" why="$3" x
+  command mv -f "$tmp/.out" "$STATE/.last-regen-failure.out" 2>/dev/null
+  for x in "$tmp"/.claude/types/claude-code*.d.ts; do
+    [ -e "$x" ] && command mv -f "$x" "$STATE/.last-regen-failure.$(basename "$x")"
+  done
+  find "$tmp" -depth -type d -exec rmdir {} \; 2>/dev/null
+  printf '%s\t%s\t%s\n' "$v" "$(now)" "$why" >"$STATE/.regen-failed"
+  local left=""; [ -e "$tmp" ] && left="; scratch left at $tmp (it still held files)"
+  die 4 "NOT MEASURED -- $why; log in $STATE/.last-regen-failure.out$left"
+}
+
 regenerate(){   # regenerate <version>: /plugin-types into a scratch dir, then into <version>/
   local v="$1" tmp f got
   tmp="$(mktemp -d "$STATE/.regen.XXXXXX" 2>/dev/null)" || die 3 "REFUSED -- cannot make a scratch dir under $STATE"
   local to=""; command -v timeout >/dev/null 2>&1 && to="timeout $REGEN_TIMEOUT"
-  ( builtin cd "$tmp" && MODS_API_DRIFT_ACTIVE=1 CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 $to "$CLAUDE_BIN" -p --setting-sources '' --strict-mcp-config '/plugin-types' >"$tmp/.out" 2>&1 )
+  # stdin from /dev/null (W-20260924-A58): as a SessionStart hook this runs with the hook
+  # payload on stdin, and `claude -p` appends piped stdin to the prompt, so '/plugin-types'
+  # stopped being a slash command. The capture was blind from 2026-09-24 12:02 and left one
+  # .regen.* dir per session start (39 by 2026-09-25).
+  ( builtin cd "$tmp" && MODS_API_DRIFT_ACTIVE=1 CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 $to "$CLAUDE_BIN" -p --setting-sources '' --strict-mcp-config '/plugin-types' >"$tmp/.out" 2>&1 </dev/null )
   f="$tmp/.claude/types/claude-code.d.ts"
-  [ -s "$f" ] || die 4 "NOT MEASURED -- /plugin-types wrote no declarations for $v (flag not honoured, or the command is gone); scratch left at $tmp"
+  [ -s "$f" ] || regen_failed "$v" "$tmp" "/plugin-types wrote no declarations for $v (flag not honoured, or the command is gone)"
   got="$(decl_version "$f")"
-  [ "$got" = "$v" ] || die 4 "NOT MEASURED -- the declarations name version '${got:-none}', not the installed $v; scratch left at $tmp"
+  [ "$got" = "$v" ] || regen_failed "$v" "$tmp" "the declarations name version '${got:-none}', not the installed $v"
   mkdir -p "$STATE/$v" || die 3 "REFUSED -- cannot create $STATE/$v"
   local x
   for x in "$tmp"/.claude/types/claude-code*.d.ts; do command mv -f "$x" "$STATE/$v/"; done
@@ -271,6 +293,10 @@ selftest(){
 case "\$1" in
   --version) [ -n "\${FAKE_VER:-}" ] && echo "\$FAKE_VER (Claude Code)"; exit 0 ;;
   -p) [ -n "\${FAKE_NOWRITE:-}" ] && exit 0
+      # The real claude -p appends piped stdin to the prompt, so '/plugin-types' stops being a
+      # slash command and nothing is written (W-20260924-A58, rt3). A SessionStart hook's
+      # stdin carries the hook payload, so that is exactly what the old regen inherited.
+      if [ ! -t 0 ] && IFS= read -r -t 1 _line; then exit 0; fi
       mkdir -p .claude/types; src="$T/decl/\${FAKE_SRC:-\$FAKE_VER}.d.ts"; [ -s "\$src" ] || exit 1
       cp "\$src" .claude/types/claude-code.d.ts; echo "// plugins" >.claude/types/claude-code-plugins.d.ts
       mkdir -p .claude/types/claude-code-plugins; echo "\$*" >"$T/last-argv"; exit 0 ;;
@@ -343,6 +369,7 @@ FAKE
   FAKE_VER=2.1.291 FAKE_SRC=2.1.280 mad >/dev/null 2>&1; rc=$?
   arm "declarations naming another version: rc 4" [ "$rc" -eq 4 ]
   arm "and nothing was saved for 2.1.291" [ ! -e "$S/mods-api/2.1.291/claude-code.d.ts" ]
+  arm "and its scratch dir was not left behind" [ -z "$(find "$S/mods-api" -maxdepth 1 -name '.regen.*' -print)" ]
 
   # 9. a broken extractor (a version whose file lost its blocks) is NOT MEASURED, not "no change"
   mkdir -p "$S/mods-api/2.1.300"; echo "// Written by Claude Code 2.1.300." >"$S/mods-api/2.1.300/claude-code.d.ts"
@@ -371,6 +398,30 @@ FAKE
   # 12. no claude version at all is NOT MEASURED
   FAKE_VER= mad >/dev/null 2>&1; rc=$?
   arm "no installed version: rc 4" [ "$rc" -eq 4 ]
+
+  # 13. W-20260924-A58: the SessionStart form. Its stdin is the hook payload, and a regen that
+  # inherits it captures nothing. Feed hook-shaped stdin the way the harness does.
+  local HOOKIN='{"hook_event_name":"SessionStart","session_id":"selftest","source":"startup"}'
+  sed '1s/2\.1\.280/2.1.311/' "$T/decl/2.1.280.d.ts" >"$T/decl/2.1.311.d.ts"
+  printf '%s\n' "$HOOKIN" | FAKE_VER=2.1.311 mad --hook
+  arm "hook-shaped stdin: --hook still captures the new version" [ -s "$S/mods-api/2.1.311/claude-code.d.ts" ]
+  arm "hook-shaped stdin: and leaves no .regen.* scratch dir" [ -z "$(find "$S/mods-api" -maxdepth 1 -name '.regen.*' -print)" ]
+
+  # 14. a FAILED capture: no scratch dir left behind, and the report says broken, not behind
+  FAKE_VER=2.1.312 FAKE_NOWRITE=1 mad >/dev/null 2>&1; rc=$?
+  arm "failed capture: rc 4 (NOT MEASURED)" [ "$rc" -eq 4 ]
+  arm "failed capture: no .regen.* scratch dir left behind" [ -z "$(find "$S/mods-api" -maxdepth 1 -name '.regen.*' -print)" ]
+  arm "failed capture: its log is kept in one named file" [ -e "$S/mods-api/.last-regen-failure.out" ]
+  out="$(FAKE_VER=2.1.312 mad --json --no-regen)"
+  arm "failed capture: report says broken, not behind" [ "$(jq -r .status <<<"$out")" = broken ]
+  arm "failed capture: the detail names the version" grep -q '2.1.312' <<<"$(jq -r .detail <<<"$out")"
+  arm "failed capture: the card names it" grep -q 'NOT MEASURED' <<<"$(FAKE_VER=2.1.312 mad --card)"
+  # control: a DIFFERENT newer version with no failed capture is still plain behind
+  arm "control: an uncaptured version with no failure is still behind" [ "$(FAKE_VER=2.1.313 mad --json --no-regen | jq -r .status)" = behind ]
+  # and a later successful capture of that same version clears the broken state
+  sed '1s/2\.1\.280/2.1.312/' "$T/decl/2.1.280.d.ts" >"$T/decl/2.1.312.d.ts"
+  FAKE_VER=2.1.312 mad >/dev/null 2>&1
+  arm "a later good capture of that version reports ok" [ "$(FAKE_VER=2.1.312 mad --json --no-regen | jq -r .status)" = ok ]
 
   echo "mods-api-drift selftest: $P passed, $F failed   (fixtures: $T)"
   [ "$F" -eq 0 ]
