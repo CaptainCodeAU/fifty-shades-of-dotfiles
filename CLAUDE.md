@@ -197,6 +197,8 @@ For port listing use the `ports` function (OS-aware: `lsof` on macOS, `ss`/`nets
 
 Before you state a COUNT or a "none anywhere", corroborate it with [`census`](home/.claude/tools/census.py) — `uv run python3 ~/.claude/tools/census.py --control <a-token-you-KNOW-is-present> PATTERN...` (`--help` for the rest; `--include-ignored` also searches gitignored files, `--ignored-only` searches just those, `--json` for scripts). It refuses to report anything unless the control hits first, always prints the denominator and how the population was drawn, and never truncates — none of which `grep` or `rg` do. Using a grep to LOCATE is fine; using one to CONCLUDE is what keeps going wrong.
 
+A census count is in OCCURRENCES, not lines: `grep -c` and `rg -c` count matching LINES, so `rg --count-matches` is the like-for-like. census ignores case by default and prints the case-sensitive count beside it on every row; compare that one with a plain grep or rg (D-20260925-A02).
+
 Deployed machine-globally by stow from `home/.claude/tools/`, so it is present in every project on this box but not on a machine without these dotfiles.
 
 Same division for reading output: `head` to GLANCE, [`peek`](home/.local/bin/peek) before you CONCLUDE. `<cmd> | peek [N]` (default 40, `--all` for no limit) prints the lines on stdout and the denominator on stderr, so `cmd | peek | jq` still works. Stowed the same way, from `home/.local/bin/`.
