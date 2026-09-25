@@ -53,9 +53,11 @@
 # the command once this hook passes its 5 s timeout, so a stall used to be an
 # allow (W-20260923-A54).
 #
-# FAILS OPEN on malformed JSON or an empty command (exit 0, no decision): a
-# crash here would block every Bash call. jq missing, or the lexer failing,
-# SHOUTS through additionalContext instead of going quiet.
+# AN UNREADABLE PAYLOAD (jq missing, malformed JSON, tool_input.command moved)
+# is DENIED by name when its raw text mentions a trigger, and passes otherwise
+# (D-20260925-A03, 2026-09-25; before that it always passed): denying every
+# call would block every Bash call. An empty command passes. jq missing, or the
+# lexer failing, still SHOUTS through additionalContext when nothing matched.
 #
 # `--selftest` proves every arm, deny AND allow. `--mutants [text]` removes each
 # `#M:` line (or only those whose tag holds text) in turn from a copy and shows
@@ -379,6 +381,61 @@ _msg() { # $1 = rule id -> what it does, then the safe route
     trash-empty)    echo "emptying the Trash (trash-empty, trash-rm, Finder empty trash) makes every earlier delete permanent. SAFE ROUTE: ask Gavin." ;;
     *)              echo "this command destroys data outside the Trash. SAFE ROUTE: ask Gavin." ;;
   esac
+}
+
+# ---------------------------------------------------------------- unreadable payload
+# D-20260925-A03 (W-20260924-A76). When the payload cannot be read (jq missing,
+# invalid JSON, no tool_input.command) nothing above can run, so a crude match
+# on the RAW text decides: one pattern per rule id, first hit wins, and a hit
+# DENIES naming that rule. No hit: exit 0 (or the no-jq shout) as before.
+# Deliberately NOT triggers, each with an arm: bare rm (the safe route; every
+# cleanup would be refused), a > redirection (in most commands, and the rule
+# needs the file on disk), `git checkout <branch-or-file>` (cannot tell which
+# unread). Aliases from the snapshot cannot be seen either, except the three
+# oh-my-zsh ones the lexer's word list already names (grhh gwipe gpristine).
+# The selftest's coverage arms hold every rule id in _msg to a sample here.
+_RL='(^|[^A-Za-z0-9_-])'                                   # a word starts
+_RR='([^A-Za-z0-9_-]|$)'                                   # a word ends
+_RG="${_RL}git([[:space:]]+-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+"   # git, -C/-c/... options
+RAW_TRIG_ID=(); RAW_TRIG_RE=()
+_rt() { RAW_TRIG_ID[${#RAW_TRIG_ID[@]}]="$1"; RAW_TRIG_RE[${#RAW_TRIG_RE[@]}]="$2"; }
+_rt safe-rm-off         'SAFE_RM_OFF'
+_rt rm-path             '(^|[^A-Za-z0-9_-])[A-Za-z0-9_./~-]*/g?rm([^A-Za-z0-9_.-]|$)'
+_rt rm-P                "${_RL}g?rm([[:space:]]+-[A-Za-z]+)*[[:space:]]+-[A-Za-z]*P"
+_rt grm                 "${_RL}grm${_RR}"
+_rt unlink              "${_RL}g?unlink${_RR}"
+_rt shred               "${_RL}(g?shred|srm|wipe)${_RR}"
+_rt truncate            "${_RL}g?truncate${_RR}"
+_rt dd-of               "${_RL}g?dd[[:space:]]([^|;&]*[[:space:]])?of="
+_rt find-delete         "[[:space:]]-delete${_RR}"
+_rt git-worktree-remove "${_RG}worktree[[:space:]]+remove${_RR}"
+_rt git-clean           "${_RG}clean${_RR}"
+_rt git-reset-hard      "${_RG}reset[[:space:]][^|;&]*--hard|${_RL}(grhh|gwipe|gpristine)${_RR}"
+_rt git-checkout-discard "${_RG}checkout[[:space:]]([^|;&]*[[:space:]])?(-f|--force|--|\\.)([[:space:]]|$)"
+_rt git-restore         "${_RG}restore${_RR}"
+_rt git-switch-discard  "${_RG}switch[[:space:]][^|;&]*(-f|--force|--discard-changes)${_RR}"
+_rt git-branch-force    "${_RG}branch[[:space:]][^|;&]*(-D|-M|-C|--force)${_RR}"
+_rt git-stash-drop      "${_RG}stash[[:space:]]+(drop|clear)${_RR}"
+_rt git-history-prune   "${_RG}(reflog[[:space:]]+(expire|delete)|prune|gc[[:space:]][^|;&]*--prune)"
+_rt rsync-delete        "${_RL}rsync[[:space:]][^|;&]*--(delete|remove-source-files)"
+_rt inline-code         '(os\.(remove|unlink|rmdir|removedirs)|shutil\.rmtree|\.unlink\(|unlinkSync|rmSync|rmdirSync|fs\.(rm|unlink|rmdir)|File\.delete|FileUtils\.rm)'
+_rt prune               "(docker|podman)[^|;&]*[[:space:]](prune|volume[[:space:]]+rm)|compose[^|;&]*[[:space:]]down[^|;&]*[[:space:]]-v|brew[[:space:]]+cleanup|--zap|store[[:space:]]+prune|uv[[:space:]]+cache[[:space:]]+(clean|prune)|pm[[:space:]]+cache[[:space:]]+rm"
+_rt rimraf              "${_RL}(rimraf|del-cli)${_RR}"
+_rt disk                "${_RL}(diskutil[[:space:]]+[A-Za-z]*([Ee]rase|[Pp]artition|[Zz]ero)|mkfs|newfs|wipefs)"
+_rt tmutil              "${_RL}tmutil[[:space:]]+delete"
+_rt trash-empty         "${_RL}(trash-empty|trash-rm)${_RR}|[Ee]mpty([[:space:]]+the)?[[:space:]]+[Tt]rash"
+
+_raw_trigger() { # $1 = raw payload -> RAW_HIT = the first rule id it mentions; 0 on a hit
+  local t r i=0
+  # undo the common JSON string escapes, crudely: \n \r \t to a space, \" to "
+  t="$(printf '%s' "$1" | sed -e 's/\\[nrt]/ /g' -e 's/\\"/"/g')"
+  RAW_HIT=""
+  while [ "$i" -lt "${#RAW_TRIG_RE[@]}" ]; do
+    r="${RAW_TRIG_RE[$i]}"
+    if [[ $t =~ $r ]]; then RAW_HIT="${RAW_TRIG_ID[$i]}"; return 0; fi
+    i=$((i + 1))
+  done
+  return 1
 }
 
 # ---------------------------------------------------------------- state
@@ -1423,6 +1480,100 @@ SNAP
   _hookb 'gwtrm ../wt' 0 3 DEL_GUARD_DEADLINE=1
   [ "$hb_d" = deny ] && [[ $hb_r == 'BLOCKED (git-worktree-remove)'* ]] && [[ $hb_r == *"Found: alias gwtrm='git worktree remove'"* ]]; _chk 'a rule verdict and its Found: line cross from the child intact' $?
 
+  echo "=== UNREADABLE arms: the payload cannot be read (D-20260925-A03) ==="
+  # These run the hook DEL_GUARD_UNDER_TEST names (default: this file), so the
+  # same arms can be pointed at another copy. A PATH with every tool in /bin
+  # and /usr/bin EXCEPT jq stands for a machine without jq (macOS ships
+  # /usr/bin/jq, so dropping Homebrew is not enough).
+  local hut="${DEL_GUARD_UNDER_TEST:-$self}" nojq="$fx/nojq" pu
+  echo "hook under test: $hut"
+  mkdir -p "$nojq"
+  set +f
+  for f in /bin/* /usr/bin/*; do
+    case "${f##*/}" in jq) continue ;; esac
+    [ -e "$nojq/${f##*/}" ] || ln -s "$f" "$nojq/${f##*/}"
+  done
+  set -f
+  ! PATH="$nojq" command -v jq >/dev/null 2>&1 && PATH="$nojq" command -v grep >/dev/null 2>&1
+  _chk 'control: the no-jq PATH has grep and no jq (else every no-jq arm is an invalid trial)' $?
+  _pl() { printf '%s' "$env_json" | jq -c --arg c "$1" --arg cwd "$fx/repo" '.tool_input.command = $c | .cwd = $cwd'; }
+  _mvk() { printf '%s' "$1" | jq -c '.tool_input.cmd = .tool_input.command | del(.tool_input.command)'; }
+  _hu() { # $1 = raw payload, [$2 = nojq] -> out, rc, hb_d, hb_r, hb_c
+    local path="$PATH"; [ "${2:-}" = nojq ] && path="$nojq"
+    out="$(printf '%s' "$1" | PATH="$path" DEL_GUARD_LOG="$logf" DEL_GUARD_SNAPSHOT_DIR="$fx/snap" "$hut" 2>/dev/null)"; rc=$?
+    hb_d="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)"
+    hb_r="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty' 2>/dev/null)"
+    hb_c="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null)"
+  }
+  _isu() { # $1 = rule id, $2 = the why: a deny naming both
+    [ "$rc" -eq 0 ] && [ "$hb_d" = deny ] && [[ $hb_r == "$HOOK_NAME: cannot read the tool payload ($2"*"mentions $1. "* ]]
+  }
+  _isq() { [ "$rc" -eq 0 ] && [ -z "$out" ]; }
+  _iss() { [ "$rc" -eq 0 ] && [ -z "$hb_d" ] && [[ $hb_c == 'THE DELETION GUARD IS BROKEN: jq is not on PATH'* ]]; }
+  local ut='git worktree remove ../wt' uo='git worktree list'
+  pu="$(_pl "$ut")"; _hu "${pu%??????????}";       _isu git-worktree-remove 'jq could not parse it'; _chk 'truncated JSON, with the trigger: denied, naming the rule' $?
+  [[ $hb_r == *'git worktree prune'* ]];                                                _chk 'that deny names the safe route' $?
+  pu="$(_pl "$uo")"; _hu "${pu%??????????}";       _isq; _chk 'truncated JSON, without the trigger: quiet' $?
+  _hu "$(_mvk "$(_pl "$ut")")";                    _isu git-worktree-remove 'it has no tool_input.command'; _chk 'command under another key, with the trigger: denied' $?
+  _hu "$(_mvk "$(_pl "$uo")")";                    _isq; _chk 'command under another key, without the trigger: quiet' $?
+  _hu "$(_pl "$ut")" nojq;                         _isu git-worktree-remove 'jq is not on PATH'; _chk 'PATH without jq, with the trigger: denied' $?
+  _hu "$(_pl "$uo")" nojq;                         _iss; _chk 'PATH without jq, without the trigger: the jq shout, as before' $?
+  _hu "$(_pl 'rm -r x')" nojq;                     _iss; _chk 'PATH without jq, bare rm -r x is NOT a trigger (the safe route)' $?
+  _hu "$(_pl 'echo hi > out.txt')" nojq;           _iss; _chk 'PATH without jq, a > redirection is NOT a trigger' $?
+  _hu "$(_pl 'git checkout main')" nojq;           _iss; _chk 'PATH without jq, git checkout <branch> is NOT a trigger' $?
+  _hu "$(_pl 'git commit -m "never git clean -fdx"')" nojq; _isu git-clean 'jq is not on PATH'; _chk 'PATH without jq, the words as prose are denied too: unread, they cannot be told apart' $?
+  pu="$(_pl $'cd /tmp\ngit clean -fdx')"; _hu "${pu%??????????}"; _isu git-clean 'jq could not parse it'; _chk 'truncated, the trigger after an escaped newline' $?
+  _hu "$(_pl '' | jq -c '.tool_input.description = "git clean -fdx"')"; _isq; _chk 'a real, EMPTY command stays quiet, trigger in the description' $?
+  _hu "$(_pl 'git clean -fdx') {broken"
+  [ "$rc" -eq 0 ] && [ "$hb_d" = deny ] && [[ $hb_r == 'BLOCKED (git-clean)'* ]]; _chk 'a good document then a broken one: the command is still checked (was exit 0)' $?
+  grep -q "BLOCKED $HOOK_NAME \"unreadable:git-clean\"" "$logf" 2>/dev/null; _chk 'an unreadable deny is logged, command not quoted' $?
+
+  echo "=== COVERAGE arms: every rule id in _msg has a raw trigger, or a stated exclusion ==="
+  # Each sample is first proved a real deny of its rule by _classify, then its
+  # payload must trip _raw_trigger on the SAME rule id.
+  local cov ids id smp hit n_ids=0 missing=""
+  cov='safe-rm-off|SAFE_RM_OFF=1 rm x
+rm-path|/bin/rm x
+rm-P|rm -P x
+grm|grm -rf x
+unlink|unlink f
+shred|shred -u f
+truncate|truncate -s0 f
+dd-of|dd if=/dev/zero of=f bs=1 count=1
+find-delete|find . -name x -delete
+git-worktree-remove|git -C ../r worktree remove ../wt
+git-clean|git clean -fdx
+git-reset-hard|git reset --hard HEAD
+git-checkout-discard|git checkout -- src/app.c
+git-restore|git restore src/app.c
+git-switch-discard|git switch -f main
+git-branch-force|git branch -D topic
+git-stash-drop|git stash drop
+git-history-prune|git reflog expire --expire=now --all
+rsync-delete|rsync -a --delete a/ b/
+inline-code|python3 -c '"'"'import os; os.remove("f")'"'"'
+prune|docker system prune -af
+rimraf|rimraf dist
+disk|diskutil eraseDisk APFS X disk4
+tmutil|tmutil deletelocalsnapshots /
+trash-empty|trash-empty'
+  SNAP_DIR="$fx/snap"; SNAP_DONE=0     # the fixture aliases, not this machine's (its grm is git rm)
+  while IFS='|' read -r id smp; do
+    _classify "$smp" "$fx/repo"; [ "$REASON_ID" = "$id" ]; _chk "sample is a real $id deny: $smp" $?
+    _raw_trigger "$(_pl "$smp")"; hit="$RAW_HIT"
+    [ "$hit" = "$id" ]; _chk "its raw payload trips the $id trigger (got ${hit:-none})" $?
+  done <<< "$cov"
+  SNAP_DIR="$save_snap"; SNAP_DONE=0
+  # the class: every rule id _msg knows, read from this file, is sampled above
+  # or excluded here; the count is the control (a scan that read nothing is 0)
+  ids="$(awk '/^_msg\(\)/ {m=1; next} m && /^}/ {m=0} m && match($0, /^    [a-z][a-zA-Z-]*\)/) {s=substr($0, RSTART+4, RLENGTH-5); print s}' "$self")"
+  for id in $ids; do
+    n_ids=$((n_ids + 1))
+    case "$id" in guard-timeout|guard-no-verdict|redir-trunc) continue ;; esac   # not a command shape / a > redirection
+    [[ $'\n'"$cov" == *$'\n'"$id|"* ]] || missing="$missing $id"
+  done
+  [ "$n_ids" -ge 25 ] && [ -z "$missing" ]; _chk "all $n_ids rule ids in _msg are covered or excluded (>= 25 read, the control)${missing:+; MISSING:$missing}" $?
+
   # The fixture dir is left in $TMPDIR on purpose: deleting it would go to the
   # Trash (or fail inside the sandbox), and the OS clears $TMPDIR.
   echo
@@ -1479,13 +1630,33 @@ esac
 payload="$(cat 2>/dev/null || true)"
 [ -n "$payload" ] || exit 0
 
+# The payload cannot be read. $1 = why. DENY naming the rule when the raw text
+# mentions a trigger (JSON built without jq, since jq may be the fault);
+# return otherwise, and the caller goes on exactly as before.
+_unreadable() {
+  _raw_trigger "$payload" || return 0                                           #M: unreadable: raw trigger
+  local r
+  r="$HOOK_NAME: cannot read the tool payload ($1); denying because it mentions $RAW_HIT. $(_msg "$RAW_HIT") Fix the input (install jq, or check the payload shape) and run enforce-no-permanent-delete.sh --selftest."
+  _log "unreadable:$RAW_HIT" "(payload not read, ${#payload} bytes)"
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\n' \
+    "$(printf '%s' "$r" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr '\n\t' '  ')"
+  exit 0
+}
+
 if ! command -v jq >/dev/null 2>&1; then
+  _unreadable "jq is not on PATH"                                               #M: unreadable: no jq
   printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"THE DELETION GUARD IS BROKEN: jq is not on PATH, so enforce-no-permanent-delete.sh cannot read the command. Nothing is being checked for permanent deletes. Install jq. Until then: bare rm only, and ask Gavin before any git clean / worktree remove / reset --hard."}}'
   exit 0
 fi
 
-cmd="$(printf '%s' "$payload" | jq -r '.tool_input.command // ""' 2>/dev/null)" || exit 0
-[ -n "$cmd" ] || exit 0
+cmd="$(printf '%s' "$payload" | jq -r '.tool_input.command // ""' 2>/dev/null)"; jrc=$?
+if [ -z "$cmd" ]; then
+  [ "$jrc" -ne 0 ] && _unreadable "jq could not parse it, rc=$jrc"               #M: unreadable: invalid JSON
+  printf '%s' "$payload" | jq -e '.tool_input | has("command")' >/dev/null 2>&1 || _unreadable "it has no tool_input.command"   #M: unreadable: moved key
+  exit 0   # a real, empty command: nothing to check, as before
+fi
+# jq failed yet printed a command (a second, broken document after a good
+# one): that command is checked below; before 2026-09-25 this exited 0.
 cwd="$(printf '%s' "$payload" | jq -r '.cwd // ""' 2>/dev/null)"
 
 # FAIL CLOSED ON A STALL. The harness gives this hook 5 s ("timeout": 5 in
