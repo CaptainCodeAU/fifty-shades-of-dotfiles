@@ -735,9 +735,19 @@ fixture_a76 '{"event":"UserPromptSubmit","matcher":null}' '{}'
 jq '.hooks[0] |= del(.matcher)' "$MANIFEST" > "$MANIFEST.t" && command mv "$MANIFEST.t" "$MANIFEST"
 out=$(run_tool --check); rc=$?
 if (( rc == 2 )) && [[ "$out" == *"class guard on UserPromptSubmit"* ]]; then
-    ok "A76 class: a guard on UserPromptSubmit is refused (exit 2 there erases prompts)"
-else bad "A76 class: a guard on UserPromptSubmit is refused (exit 2 there erases prompts)" "rc=$rc out=$out"; fi
+    ok "A76 class: a guard on UserPromptSubmit is refused (only PreToolUse reads a deny)"
+else bad "A76 class: a guard on UserPromptSubmit is refused (only PreToolUse reads a deny)" "rc=$rc out=$out"; fi
 cleanup
+# A quote or backslash in the path would break the hand-built HOOK MISSING JSON.
+# Every other fixture in this file has a plain path and is accepted: that is the control.
+for bad_path in 'g"q.sh' "g'q.sh" 'g\q.sh'; do
+    fixture_a76 "$(jq -cn --arg p "\$HOME/.claude/hooks/$bad_path" '{script_path: $p}')" '{}'
+    out=$(run_tool --check); rc=$?
+    if (( rc == 2 )) && [[ "$out" == *"a quote or backslash in script or script_path"* ]]; then
+        ok "A76 class: a script_path holding $bad_path is refused"
+    else bad "A76 class: a script_path holding $bad_path is refused" "rc=$rc out=$out"; fi
+    cleanup
+done
 
 # --- 34. THE UPGRADE: the old string is replaced in place, never duplicated ---
 fixture_a76 '{}' "{\"PreToolUse\":[{\"matcher\":\"Bash\",\"hooks\":[$FOREIGN]},{\"matcher\":\"Bash\",\"hooks\":[$OTHER,$LEGH]},{\"matcher\":\"Grep\",\"hooks\":[$LEGH]}]}"
@@ -851,7 +861,9 @@ fi
 #   guard, advisory: the exit code passes through untouched
 #   alarm:           exit 0 whatever the script says
 #   absent / not executable:
-#     guard   exit 2, stderr starts "HOOK MISSING, DENYING: <script>", stdout empty
+#     guard   exit 0, stdout one JSON object: PreToolUse permissionDecision "deny",
+#             reason starting "HOOK MISSING, DENYING: <script>" (the mechanism every
+#             guard here uses; exit 2 is not measured here, conductor 2026-09-25)
 #     others  exit 0, stdout one JSON object whose systemMessage starts
 #             "HOOK MISSING: <script>" (and names the event unless SessionEnd)
 shape_run() {   # shape_run <manifest> -> sets SP SF SHELLS
@@ -879,8 +891,12 @@ shape_run() {   # shape_run <manifest> -> sets SP SF SHELLS
                 if [[ "$mode" == absent ]]; then command mv "$f" "$f.gone"; else command mv "$f.gone" "$f"; chmod -x "$f"; fi
                 out=$(printf '{"x":1}' | HOME="$root" "$sh" -c "$cmd" 2>"$root/err"); rc=$?; err=$(cat "$root/err")
                 if [[ "$cls" == guard ]]; then
-                    if [[ "$rc" == 2 && -z "$out" && "$err" == "HOOK MISSING, DENYING: $s "* ]]; then SP=$((SP+1))
-                    else SF=$((SF+1)); printf '        %s %s %s: rc=%s err=%s\n' "$s" "$sh" "$mode" "$rc" "${err:0:60}"; fi
+                    if [[ "$rc" == 0 && -z "$err" ]] && printf '%s' "$out" | jq -e --arg s "$s" '
+                            .hookSpecificOutput.hookEventName == "PreToolUse"
+                            and .hookSpecificOutput.permissionDecision == "deny"
+                            and (.hookSpecificOutput.permissionDecisionReason | startswith("HOOK MISSING, DENYING: " + $s + " "))' >/dev/null 2>&1; then
+                        SP=$((SP+1))
+                    else SF=$((SF+1)); printf '        %s %s %s: rc=%s out=%s err=%s\n' "$s" "$sh" "$mode" "$rc" "${out:0:60}" "${err:0:40}"; fi
                 elif [[ "$rc" == 0 ]] && printf '%s' "$out" | jq -e --arg s "$s" --arg ev "$ev" '
                         (.systemMessage | startswith("HOOK MISSING: " + $s + " "))
                         and (if $ev == "SessionEnd" then true

@@ -163,7 +163,9 @@ fi
 # THE CLASS RULE (W-20260924-A76, D-20260925-A03). A guard or advisory command must
 # not contain `||`: the old `test -x P && P || true` shape turned a hook's exit 2 deny
 # into exit 0 before Claude Code saw it. An alarm keeps `|| true` on purpose (its
-# stdout reaches the model only on exit 0). Checked here, before any settings file
+# stdout reaches the model only on exit 0). A missing guard denies with the same
+# permissionDecision JSON every guard uses, printed by hand (jq may be what is
+# missing), so its path must hold no quote or backslash. Checked here, before any settings file
 # is read, so a bad manifest can never be half-applied. No class: an enforce-*
 # script is a guard, anything else an alarm.
 BAD_CLASS="$(jq -r '
@@ -174,7 +176,9 @@ BAD_CLASS="$(jq -r '
       elif $c != "alarm" and (.entry.command | contains("||"))
       then "\(.script): class \($c), but its command contains || and would swallow the exit code"
       elif $c == "guard" and .event != "PreToolUse"
-      then "\(.script): class guard on \(.event); a guard denies with exit 2, which only PreToolUse turns into a deny"
+      then "\(.script): class guard on \(.event); a guard denies with permissionDecision, which only PreToolUse reads"
+      elif ((.script + (.script_path // "")) | test("[\"\\\\\u0027]"))
+      then "\(.script): a quote or backslash in script or script_path would break the hand-built HOOK MISSING JSON"
       else empty end' "$MANIFEST" 2>/dev/null)" || BAD_CLASS="the class check itself failed to run (jq)"
 if [[ -n "$BAD_CLASS" ]]; then
     printf '%s! claude-hooks-sync: the manifest breaks the class rule -- refusing.%s\n' "$R" "$N" >&2

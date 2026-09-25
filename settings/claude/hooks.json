@@ -66,7 +66,7 @@
     "           advisory command containing `||`, because that swallows the exit code and a",
     "           guard's exit 2 deny never reaches Claude Code. Omitted: an enforce-* script",
     "           is a guard, anything else an alarm (W-20260924-A76, D-20260925-A03).",
-    "  class guard is PreToolUse only (exit 2 elsewhere erases prompts or does nothing).",
+    "  class guard is PreToolUse only (permissionDecision is read nowhere else).",
     "  legacy_commands  OPTIONAL. Exact command strings this entry used to register. When",
     "           one is found at the entry's event and matcher, the sync REPLACES it in place",
     "           instead of adding a second copy beside it, and --check reports it as needing",
@@ -88,7 +88,7 @@
       "targets": ["user", "project"],
       "entry": {
         "type": "command",
-        "command": "h=\"$HOME/.claude/hooks/enforce-secret-probe.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' 'HOOK MISSING, DENYING: enforce-secret-probe.sh is registered but ~/.claude/hooks/enforce-secret-probe.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it from your own terminal, where no Claude hook runs: restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command starts h=\"$HOME/.claude/hooks/enforce-secret-probe.sh\" from ~/.claude/settings.project.json and ~/.claude/settings.json.' >&2; exit 2; fi",
+        "command": "h=\"$HOME/.claude/hooks/enforce-secret-probe.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"HOOK MISSING, DENYING: enforce-secret-probe.sh is registered but ~/.claude/hooks/enforce-secret-probe.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it from your own terminal, where no Claude hook runs: restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command names $HOME/.claude/hooks/enforce-secret-probe.sh from ~/.claude/settings.project.json and ~/.claude/settings.json.\"}}'; fi",
         "timeout": 5
       },
       "why": "DENIES a Bash command that would print a credential-named variable into the transcript (the ${V:-word} probe, env dumps, bare echo). Was hand-wired into settings.json until 2026-09-20; this entry matches that command byte-for-byte",
@@ -102,7 +102,7 @@
       "targets": ["user", "project"],
       "entry": {
         "type": "command",
-        "command": "h=\"$HOME/.claude/hooks/enforce-no-permanent-delete.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' 'HOOK MISSING, DENYING: enforce-no-permanent-delete.sh is registered but ~/.claude/hooks/enforce-no-permanent-delete.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it from your own terminal, where no Claude hook runs: restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command starts h=\"$HOME/.claude/hooks/enforce-no-permanent-delete.sh\" from ~/.claude/settings.project.json and ~/.claude/settings.json.' >&2; exit 2; fi",
+        "command": "h=\"$HOME/.claude/hooks/enforce-no-permanent-delete.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"HOOK MISSING, DENYING: enforce-no-permanent-delete.sh is registered but ~/.claude/hooks/enforce-no-permanent-delete.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it from your own terminal, where no Claude hook runs: restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command names $HOME/.claude/hooks/enforce-no-permanent-delete.sh from ~/.claude/settings.project.json and ~/.claude/settings.json.\"}}'; fi",
         "timeout": 5
       },
       "why": "DENIES Bash commands that destroy data outside the Trash (git worktree remove, git clean without -n, reset --hard, checkout/restore discards, branch -D, stash drop/clear, find -delete, /bin/rm, rm -P, SAFE_RM_OFF, unlink, shred, truncate, dd of=, bare > f, rsync --delete, os.remove/fs.rm in inline code, prune/cleanup commands) and names the safe route. Ruled by Gavin 2026-09-23 (option A) after an agent came one step from git worktree remove, which no rm wrapper can see. Both targets: the Deletion rule is machine-wide. Lexes zsh, sees through prefixes and snapshot aliases; --selftest and --mutants prove every rule. The registration shape (_shape_note) passes its exit code through and denies by name when the script is absent",
@@ -118,7 +118,7 @@
       "targets": ["user", "project"],
       "entry": {
         "type": "command",
-        "command": "h=\"$HOME/.claude/hooks/enforce-no-reset-by-name.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' 'HOOK MISSING, DENYING: enforce-no-reset-by-name.sh is registered but ~/.claude/hooks/enforce-no-reset-by-name.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it from your own terminal, where no Claude hook runs: restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command starts h=\"$HOME/.claude/hooks/enforce-no-reset-by-name.sh\" from ~/.claude/settings.project.json and ~/.claude/settings.json.' >&2; exit 2; fi",
+        "command": "h=\"$HOME/.claude/hooks/enforce-no-reset-by-name.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"HOOK MISSING, DENYING: enforce-no-reset-by-name.sh is registered but ~/.claude/hooks/enforce-no-reset-by-name.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it from your own terminal, where no Claude hook runs: restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command names $HOME/.claude/hooks/enforce-no-reset-by-name.sh from ~/.claude/settings.project.json and ~/.claude/settings.json.\"}}'; fi",
         "timeout": 5
       },
       "why": "DENIES reset-by-name: a Bash command that removes a directory (rm -r, rmdir) and then reuses the same path (mkdir, cd, cp/mv/ln destination, tar -C, unzip -d, git init, > into it) without checking the remove worked. In the sandbox the Trash-routed rm fails and leaves the directory, 2>/dev/null hides it, and the reuse merges into stale files (the 2026-09-19 cp hang). Ruled by Gavin 2026-09-24 (W-20260924-A32 Stage 1): rm keeps failing loudly, a hook blocks the pattern in every project. Both targets. Deny only; scanner is conv-shscan.awk mode reset; --selftest proves every arm",
@@ -134,7 +134,7 @@
       "targets": ["user", "project"],
       "entry": {
         "type": "command",
-        "command": "h=\"$HOME/.claude/hooks/enforce-pj-workers.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' 'HOOK MISSING, DENYING: enforce-pj-workers.sh is registered but ~/.claude/hooks/enforce-pj-workers.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it from your own terminal, where no Claude hook runs: restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command starts h=\"$HOME/.claude/hooks/enforce-pj-workers.sh\" from ~/.claude/settings.project.json and ~/.claude/settings.json.' >&2; exit 2; fi",
+        "command": "h=\"$HOME/.claude/hooks/enforce-pj-workers.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"HOOK MISSING, DENYING: enforce-pj-workers.sh is registered but ~/.claude/hooks/enforce-pj-workers.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it from your own terminal, where no Claude hook runs: restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command names $HOME/.claude/hooks/enforce-pj-workers.sh from ~/.claude/settings.project.json and ~/.claude/settings.json.\"}}'; fi",
         "timeout": 5
       },
       "why": "DENIES a conductor starting a plain Claude worker in a herdr pane: herdr agent start --kind claude (or claude-code, Claude, an unreadable kind), and herdr pane run/send-text/send-keys whose text runs claude or a .zshrc launcher (cb cr ci cpr cd_ cskip ct lifeos claude-clean), seen through $(...), backticks, function bodies, bash -c, eval and ssh. The denial names pj-worker start (pj-worker start --cleanroom for the clean room). Rulings D-20260924-A04/A05 (W-20260924-A59). The EARLY honest-slip layer, not the floor: the claude() guard in the pane's zsh is. Both targets (a cb or lifeos conductor loads only the user target). Fails closed without jq or on a bad payload; one named override PJ_WORKERS_CONTROL=<item id>, logged. Scanner is conv-shscan.awk mode pjw; --selftest proves every arm",
@@ -178,7 +178,7 @@
       "targets": ["user", "project"],
       "entry": {
         "type": "command",
-        "command": "h=\"$HOME/.claude/hooks/enforce-herdr-skill.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' 'HOOK MISSING, DENYING: enforce-herdr-skill.sh is registered but ~/.claude/hooks/enforce-herdr-skill.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it from your own terminal, where no Claude hook runs: restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command starts h=\"$HOME/.claude/hooks/enforce-herdr-skill.sh\" from ~/.claude/settings.project.json and ~/.claude/settings.json.' >&2; exit 2; fi"
+        "command": "h=\"$HOME/.claude/hooks/enforce-herdr-skill.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"HOOK MISSING, DENYING: enforce-herdr-skill.sh is registered but ~/.claude/hooks/enforce-herdr-skill.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it from your own terminal, where no Claude hook runs: restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command names $HOME/.claude/hooks/enforce-herdr-skill.sh from ~/.claude/settings.project.json and ~/.claude/settings.json.\"}}'; fi"
       },
       "requires": ["$HOME/.claude/skills/herdr"],
       "why": "Blocks herdr commands until the herdr skill is read this session",
@@ -302,7 +302,7 @@
       "targets": ["project"],
       "entry": {
         "type": "command",
-        "command": "h=\"$HOME/.claude/hooks/validate-bash.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' 'HOOK MISSING, DENYING: validate-bash.sh is registered but ~/.claude/hooks/validate-bash.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it from your own terminal, where no Claude hook runs: restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command starts h=\"$HOME/.claude/hooks/validate-bash.sh\" from ~/.claude/settings.project.json and ~/.claude/settings.json.' >&2; exit 2; fi",
+        "command": "h=\"$HOME/.claude/hooks/validate-bash.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"HOOK MISSING, DENYING: validate-bash.sh is registered but ~/.claude/hooks/validate-bash.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it from your own terminal, where no Claude hook runs: restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command names $HOME/.claude/hooks/validate-bash.sh from ~/.claude/settings.project.json and ~/.claude/settings.json.\"}}'; fi",
         "timeout": 10
       },
       "why": "DENIES rm -rf / or ~, force push to main/master, bare git reset --hard, git clean -fd. Moved from the dotfiles project settings 2026-09-21 (P5.6): the rule is OPERATIONAL_RULES Deletion, machine-wide. Project target only: c sessions keep LifeOS's own set. Since 2026-09-23 (Gavin, proposals A B C) it also denies the six .zshrc aliases that launch a nested claude --dangerously-skip-permissions (ci cr ct cpr cd_ cskip), the oh-my-zsh gpf! (git push --force) and brew install/reinstall/upgrade, through the shared scanner conv-shscan.awk, which must be stowed beside it (it is, same directory). No new registration: the rules joined this entry, so the command string is unchanged",
@@ -351,7 +351,7 @@
       "targets": ["project"],
       "entry": {
         "type": "command",
-        "command": "h=\"$HOME/.claude/hooks/enforce-gh-ssh-only.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' 'HOOK MISSING, DENYING: enforce-gh-ssh-only.sh is registered but ~/.claude/hooks/enforce-gh-ssh-only.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it from your own terminal, where no Claude hook runs: restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command starts h=\"$HOME/.claude/hooks/enforce-gh-ssh-only.sh\" from ~/.claude/settings.project.json and ~/.claude/settings.json.' >&2; exit 2; fi",
+        "command": "h=\"$HOME/.claude/hooks/enforce-gh-ssh-only.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"HOOK MISSING, DENYING: enforce-gh-ssh-only.sh is registered but ~/.claude/hooks/enforce-gh-ssh-only.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it from your own terminal, where no Claude hook runs: restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command names $HOME/.claude/hooks/enforce-gh-ssh-only.sh from ~/.claude/settings.project.json and ~/.claude/settings.json.\"}}'; fi",
         "timeout": 5
       },
       "why": "DENIES gh auth login / setup-git / refresh, which re-add HTTPS credential helpers and break SSH-only auth (D-20260917-09). F1 travelled the census, secret-probe and herdr guards and MISSED this one: it was registered only in ~/.claude/settings.json (user, so c only) and in this repo's own .claude/settings.json (so pj only HERE). Under pj in any other project nothing registered it -- measured at P6b. script_path points at the EXISTING dot-claude file rather than stowing a copy: the two copies are byte-identical (verified 2026-09-21, sha 58a9712ed1c1, 4715 b), that path is already occupied so stow would conflict, and nothing in dot-claude is edited. Project target only, and this repo's own entry is removed in the same commit, so it fires ONCE per session, not twice",
@@ -497,12 +497,15 @@
     "  `test -x P && P || true` an exit 2 deny became exit 0. No hook here denies by exit 2 yet",
     "  (they deny with permissionDecision JSON under exit 0), so that fault was latent.",
     "alarm: KEEPS `|| true`. A SessionStart hook's stdout reaches the model only on exit 0, so",
-    "  a stray exit 1 from a watcher would silence its card.",
+    "  a stray exit 1 from a watcher would silence its card (AGENT-REPORTED from the hooks docs).",
     "missing or not executable (ruled by Gavin 2026-09-25):",
-    "  guard: DENIES every call it guards (exit 2, HOOK MISSING, DENYING on stderr), naming",
+    "  guard: DENIES every call it guards, the way every guard here denies: permissionDecision",
+    "    deny JSON on stdout, exit 0 (printf by hand, jq may be what is missing). No exit 2:",
+    "    that is the one deny path not measured here (conductor, 2026-09-25). It names",
     "    the file and the three fixes. The fix runs from Gavin's own terminal, where no Claude",
-    "    hook runs. A guard class is PreToolUse only; the sync refuses anything else, because",
-    "    exit 2 on UserPromptSubmit would erase every prompt.",
+    "    hook runs. A guard class is PreToolUse only, the one event that reads a",
+    "    permissionDecision; the sync refuses anything else. A script or script_path with a",
+    "    quote or backslash is refused too: it would break the hand-built JSON.",
     "  advisory, alarm: one HOOK MISSING line, as systemMessage (the user) and",
     "    additionalContext (the model), then exit 0.",
     "  It used to be silent (test -x form) or a bare 'command not found' (bare-path form).",
