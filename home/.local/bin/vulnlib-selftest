@@ -840,6 +840,87 @@ check("control: a fresh verdict and a final UNKNOWN stay cached (the cache still
 _vs.close()
 
 
+section("toolchain-cve-check honours vuln-scan acks, until they expire (W-20260925-A36)")
+
+# The start card's brew alert is toolchain-cve-check, and it never read the acks
+# table: 7 CVEs acked with evidence on 2026-09-25 kept the alert EXPOSED. The hook
+# greps its text for EXPOSED and reads exit 1, so "acked" must be neither.
+_read_acks = getattr(V, "read_acks", None)
+_ackdb = os.path.join(_tempfile.mkdtemp(prefix="vulnlib-selftest-"), "acks.db")
+_as = V.ScanStore(_ackdb)
+_as.ack("brew", "a36pkg", "CVE-2026-0001", 30, "live one")
+_as.ack("brew", "a36pkg", "CVE-2026-0002", -1, "expired yesterday")
+_as.ack("other", "a36pkg", "CVE-2026-0003", 30, "another subject")
+_as.close()
+_live = None if _read_acks is None else _read_acks("brew", _ackdb)
+check("read_acks: the live brew ack is read, the expired one and another subject's are not",
+      None if _live is None else sorted(_live), [("a36pkg", "CVE-2026-0001")])
+check("read_acks: no database yet means nothing acked, {}",
+      None if _read_acks is None else _read_acks("brew", _ackdb + ".missing"), {})
+_junk = _ackdb + ".junk"
+with open(_junk, "w") as _fh:
+    _fh.write("not a database")
+check("read_acks: an unreadable database is None, so the caller stays EXPOSED",
+      "missing" if _read_acks is None else _read_acks("brew", _junk), None)
+
+TC = None
+for _dir in (os.path.dirname(os.path.abspath(__file__)),
+             os.path.dirname(os.path.realpath(__file__))):
+    _path = os.path.join(_dir, "toolchain-cve-check")
+    if os.path.exists(_path):
+        _ldr = importlib.machinery.SourceFileLoader("toolchain_cve_check", _path)
+        TC = importlib.util.module_from_spec(importlib.util.spec_from_loader("toolchain_cve_check", _ldr))
+        _ldr.exec_module(TC)
+        break
+if TC is None:
+    sys.exit("vulnlib-selftest: no toolchain-cve-check beside %s (deploy both)" % sys.argv[0])
+TC.V = V                    # run_brew sets this global; the fixtures seed THIS module
+install(a36pkg=[])          # Homebrew answers, and has backported nothing
+
+
+class _BrewClient(V.NvdClient):
+    def __init__(self, ids):
+        super().__init__(None, timeout=1.0)
+        self.delay = 0.0
+        self.ids = ids
+
+    def cves_for(self, vendor, product, version):
+        return ([{"id": i, "unbounded": False, "fix_commit": None, "score": 7.5,
+                  "severity": "HIGH", "description": ""} for i in self.ids], False)
+
+
+def _brew(ids, acks):
+    import inspect
+    if "acks" not in inspect.signature(TC.check_brew).parameters:
+        return ("no acks parameter", [])
+    r = TC.check_brew(_BrewClient(ids), [("a36pkg", "1.0")],
+                      {"a36pkg": ["v", "a36pkg"]}, acks=acks)[0]
+    return (r.status, [a["cve"] for a in r.advisories])
+
+
+_one = ["CVE-2026-0001"]
+check("an acked CVE is ACKED, not EXPOSED", _brew(_one, _live or {}), ("acked", _one))
+check("an ack that expired puts it straight back to EXPOSED (read from the real table)",
+      _brew(["CVE-2026-0002"], _live or {}), ("exposed", ["CVE-2026-0002"]))
+check("one acked and one not: EXPOSED, listing only the unacked one",
+      _brew(["CVE-2026-0001", "CVE-2026-0009"], _live or {}),
+      ("exposed", ["CVE-2026-0009"]))
+check("control: no acks at all is EXPOSED", _brew(_one, {}), ("exposed", _one))
+check("control: unreadable acks (None) is EXPOSED", _brew(_one, None), ("exposed", _one))
+
+if _live:
+    _r = TC.check_brew(_BrewClient(_one), [("a36pkg", "1.0")],
+                       {"a36pkg": ["v", "a36pkg"]}, acks=_live)
+    import contextlib as _cl
+    import io as _io
+    _buf = _io.StringIO()
+    with _cl.redirect_stdout(_buf):
+        TC.print_table(_r, quiet=False)
+    _txt = _buf.getvalue()
+    check("the table says ACKED with the expiry date, and never the word EXPOSED",
+          ("ACKED" in _txt, "until 20" in _txt, "EXPOSED" in _txt), (True, True, False))
+
+
 print("\n%s%s%s  %d passed, %d failed, %d skipped"
       % (RED if FAILURES else GREEN, "FAIL" if FAILURES else "OK  ", OFF,
          PASS, len(FAILURES), SKIP))

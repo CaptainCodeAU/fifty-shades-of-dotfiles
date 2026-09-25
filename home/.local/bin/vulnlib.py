@@ -984,6 +984,35 @@ CREATE INDEX IF NOT EXISTS scanned_status ON scanned(status);
 # scan history a mismatch triggers a rebuild for (see ScanStore._connect).
 
 
+def read_acks(subject="brew", path=None):
+    """{(name, cve_id): until} for the UNEXPIRED acks in vuln-scan's store, read-only.
+
+    For toolchain-cve-check, which must honour a risk vuln-scan's human already
+    accepted (W-20260925-A36) but must not write: ScanStore's open runs schema
+    and invalidation writes. No database yet means nothing was acked, so {}.
+    Any other failure is None, and the caller keeps the finding EXPOSED: an
+    unreadable ack must fail towards the alarm, never away from it."""
+    if path is None:
+        d = state_dir()
+        if not d:
+            return None
+        path = os.path.join(d, "vuln-scan.db")
+    if not os.path.exists(path):
+        return {}
+    try:
+        conn = sqlite3.connect("file:%s?mode=ro" % urllib.parse.quote(path), uri=True,
+                               timeout=15.0)
+        try:
+            rows = conn.execute(
+                "SELECT name, cve_id, until FROM acks WHERE subject=? AND until > ?",
+                (subject, int(time.time()))).fetchall()
+        finally:
+            conn.close()
+    except (sqlite3.Error, OSError, ValueError):
+        return None
+    return {(name, cve.upper()): int(until) for name, cve, until in rows}
+
+
 class ScanStore:
     """Durable record of what has already been checked.
 
