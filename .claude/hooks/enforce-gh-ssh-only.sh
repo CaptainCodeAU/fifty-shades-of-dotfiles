@@ -33,9 +33,21 @@
 # ("$GHBIN" auth login) cannot be matched by any regex here, because the quote
 # stripping removes it and the literal command name never appears. This hook
 # raises the cost of an accidental bypass; it is not a sandbox.
+#
+# 2026-09-25, D-20260925-A03 (W-20260924-A76) -- AN UNREADABLE PAYLOAD. With jq
+# missing, invalid JSON, or tool_input.command moved, this hook exited 0 in
+# silence. Now, when the RAW payload mentions `gh auth login|setup-git|refresh`
+# anywhere (it cannot tell prose from a command unread), it DENIES by name,
+# JSON built without jq. Without that text: exit 0, as before.
+#
+# `--selftest` proves the arms, readable and unreadable, on stdin payloads;
+# GH_SSH_ONLY_UNDER_TEST=<path> runs them on another copy. It had none before.
 
 HOOKS_DIR="$(builtin cd "$(dirname "$0")" && pwd)"
-LOG_FILE="$HOOKS_DIR/security.log"
+LOG_FILE="${GH_SSH_ONLY_LOG:-$HOOKS_DIR/security.log}"
+
+# The crude match on the RAW payload, used only when it cannot be read.
+RAW_TRIGGER='(^|[^A-Za-z0-9_-])gh[[:space:]]+auth[[:space:]]+(login|setup-git|refresh)([^A-Za-z0-9_-]|$)'
 
 deny() {
   jq -n --arg r "$1" \
@@ -43,11 +55,91 @@ deny() {
   exit 0
 }
 
+# The payload cannot be read. $1 = why. DENY by name when the raw text mentions
+# the trigger (JSON escapes \n \r \t and \" undone first); return otherwise.
+unreadable() {
+  local raw
+  raw=$(printf '%s' "$INPUT" | sed -e 's/\\[nrt]/ /g' -e 's/\\"/"/g')
+  [[ $raw =~ $RAW_TRIGGER ]] || return 0
+  { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] BLOCKED enforce-gh-ssh-only unreadable payload ($1)" >> "$LOG_FILE"; } 2>/dev/null
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"enforce-gh-ssh-only: cannot read the tool payload (%s); denying because it mentions gh auth login, setup-git or refresh. Install jq or check the payload shape, then run .claude/hooks/enforce-gh-ssh-only.sh --selftest."}}\n' "$1"
+  exit 0
+}
+
+if [ "${1:-}" = "--selftest" ]; then
+  fails=0
+  _hook="${GH_SSH_ONLY_UNDER_TEST:-$0}"
+  echo "hook under test: $_hook"
+  _pl() { jq -nc --arg c "$1" '{session_id:"selftest", transcript_path:"/dev/null", cwd:"/tmp",
+    permission_mode:"default", hook_event_name:"PreToolUse", tool_name:"Bash",
+    tool_input:{command:$c, description:"selftest arm", timeout:120000}, tool_use_id:"toolu_selftest"}'; }
+  _mv() { printf '%s' "$1" | jq -c '.tool_input.cmd = .tool_input.command | del(.tool_input.command)'; }
+  # A PATH with every tool in /bin and /usr/bin EXCEPT jq (macOS ships /usr/bin/jq).
+  _nojq="$(mktemp -d "${TMPDIR:-/tmp}/gh-ssh-only-nojq.XXXXXX")"
+  for f in /bin/* /usr/bin/*; do
+    case "${f##*/}" in jq) continue ;; esac
+    [ -e "$_nojq/${f##*/}" ] || ln -s "$f" "$_nojq/${f##*/}"
+  done
+  _hk() { # $1 blocked|unreadable|quiet, $2 label, $3 raw payload, [$4 nojq]
+    local out rc got ok=0 path="$PATH"
+    if [ "${4:-}" = nojq ]; then
+      if PATH="$_nojq" command -v jq >/dev/null 2>&1 || ! PATH="$_nojq" command -v grep >/dev/null 2>&1; then
+        printf 'FAIL  %s  (the no-jq PATH is not one: invalid trial)\n' "$2"; fails=$((fails+1)); return
+      fi
+      path="$_nojq"
+    fi
+    out=$(printf '%s' "$3" | PATH="$path" GH_SSH_ONLY_LOG=/dev/null "$_hook" 2>/dev/null); rc=$?
+    got=$(printf '%s' "$out" | jq -r '.hookSpecificOutput | "\(.permissionDecision) \(.permissionDecisionReason)"' 2>/dev/null)
+    case "$1" in
+      blocked)    case "$got" in "deny Blocked: 'gh auth login/setup-git/refresh'"*) ok=1 ;; esac ;;
+      unreadable) case "$got" in "deny enforce-gh-ssh-only: cannot read the tool payload"*) ok=1 ;; esac ;;
+      quiet)      [ -z "$out" ] && ok=1 ;;
+    esac
+    [ "$rc" -eq 0 ] || ok=0
+    if [ "$ok" -eq 1 ]; then printf 'ok    %-10s %s\n' "$1" "$2"
+    else printf 'FAIL  %-10s %s  (rc=%s, got: %s)\n' "$1" "$2" "$rc" "$(printf '%s' "${got:-$out}" | head -c 200)"; fails=$((fails+1)); fi
+  }
+  W_T='gh auth login'
+  W_O='gh auth status'
+  echo "=== controls: a readable payload behaves as before ==="
+  _hk blocked 'bare form'                              "$(_pl "$W_T")"
+  _hk blocked 'env prefix (defect 1)'                  "$(_pl 'env -u GH_TOKEN gh auth setup-git')"
+  _hk blocked 'sudo and an absolute path (defect 1)'   "$(_pl 'sudo /opt/homebrew/bin/gh auth refresh -s repo')"
+  _hk quiet   'gh auth status is allowed'              "$(_pl "$W_O")"
+  _hk quiet   'the name as an rg argument (defect 3)'  "$(_pl 'rg -n "gh auth login" docs/X.md')"
+  _hk quiet   'the name in a commit message'           "$(_pl 'git commit -m "never run gh auth login here"')"
+  _hk quiet   'the name as heredoc prose (defect 2)'   "$(_pl $'cat > notes.md <<EOF\ngh auth login breaks SSH\nEOF')"
+  echo "=== unreadable payload (D-20260925-A03) ==="
+  p=$(_pl "$W_T"); _hk unreadable 'truncated JSON, with the trigger'    "${p%??????????}"
+  p=$(_pl "$W_O"); _hk quiet      'truncated JSON, without the trigger' "${p%??????????}"
+  _hk unreadable 'command under another key, with the trigger'          "$(_mv "$(_pl "$W_T")")"
+  _hk quiet      'command under another key, without the trigger'       "$(_mv "$(_pl "$W_O")")"
+  _hk unreadable 'PATH without jq, with the trigger'                    "$(_pl "$W_T")" nojq
+  _hk quiet      'PATH without jq, without the trigger'                 "$(_pl "$W_O")" nojq
+  p=$(_pl $'cd /tmp\ngh auth refresh'); _hk unreadable 'truncated, the trigger after an escaped newline' "${p%??????????}"
+  _hk unreadable 'PATH without jq, prose is denied too: unread, it cannot be told apart' \
+    "$(_pl 'git commit -m "never run gh auth login here"')" nojq
+  _hk quiet      'a real, EMPTY command stays quiet, trigger in the description' \
+    "$(_pl '' | jq -c '.tool_input.description = "gh auth login"')"
+  echo
+  [ "$fails" -eq 0 ] && { echo "ALL ARMS PASS"; exit 0; }
+  echo "$fails ARM(S) FAILED"; exit 1
+fi
+
 INPUT=$(cat)
-COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)
+if ! command -v jq >/dev/null 2>&1; then
+  unreadable "jq is not on PATH"
+  exit 0
+fi
+COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null); rc=$?
 
 if [ -z "$COMMAND" ]; then
-  exit 0
+  if [ "$rc" -ne 0 ]; then
+    unreadable "jq could not parse it, rc=$rc"
+  elif ! echo "$INPUT" | jq -e '.tool_input | has("command")' >/dev/null 2>&1; then
+    unreadable "it has no tool_input.command"
+  fi
+  exit 0   # a real, empty command: nothing to check, as before
 fi
 
 # Strip heredoc BODIES, keeping the line that opens them (that line is a real
