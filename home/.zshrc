@@ -1465,7 +1465,7 @@ yt() {
 --console-title
 
 # Default format: 1080p + best audio (fallback to best available)
--f "bestvideo[height<=1080]+bestaudio/best"
+-f "bestvideo[height<=1080]+bestaudio/best/bestvideo+bestaudio"
 
 # -----------------------------------------------------------------------------
 # Embedding (into video file)
@@ -1492,20 +1492,20 @@ yt() {
 # -----------------------------------------------------------------------------
 # Aliases: Video
 # -----------------------------------------------------------------------------
-# --video: 1080p preferred, fallback to 720p
---alias video "-f bestvideo[height<=1080][height>=720]+bestaudio/best[height<=1080][height>=720]"
+# --video: 1080p preferred, fallback to 720p, then best <=1080p, then best available
+--alias video "-f bestvideo[height<=1080][height>=720]+bestaudio/best[height<=1080][height>=720]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/bestvideo+bestaudio/best"
 
-# --video-low: Best quality below 1080p
---alias video-low "-f bestvideo[height<1080]+bestaudio/best[height<1080]"
+# --video-low: Best quality below 1080p, else best available
+--alias video-low "-f bestvideo[height<1080]+bestaudio/best[height<1080]/bestvideo+bestaudio/best"
 
-# --video-high: Next resolution above 1080p (e.g., 1440p)
---alias video-high "-f bestvideo[height>1080]+bestaudio/best[height>1080]"
+# --video-high: Next resolution above 1080p (e.g., 1440p), else best available
+--alias video-high "-f bestvideo[height>1080]+bestaudio/best[height>1080]/bestvideo+bestaudio/best"
 
 # --video-highest: Maximum available resolution
 --alias video-highest "-f bestvideo+bestaudio/best"
 
-# --best-video: Best mp4 video + m4a audio (no metadata extras)
---alias best-video "-f bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]"
+# --best-video: Best mp4 video + m4a audio (no metadata extras), else best available
+--alias best-video "-f bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/bestvideo+bestaudio/best"
 
 # -----------------------------------------------------------------------------
 # Aliases: Audio
@@ -1545,19 +1545,19 @@ yt() {
 # Aliases: Bundles (video/audio + all metadata)
 # -----------------------------------------------------------------------------
 # --bundle-video: Video + all metadata
---alias bundle-video "-f bestvideo[height<=1080][height>=720]+bestaudio/best[height<=1080][height>=720] --write-subs --sub-format srt/ass/vtt --write-auto-subs --write-comments --no-write-info-json --print-to-file %(comments)#j %(upload_date)s-%(title)s-[%(id)s].comments.json --sub-langs live_chat --write-description --write-thumbnail"
+--alias bundle-video "-f bestvideo[height<=1080][height>=720]+bestaudio/best[height<=1080][height>=720]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/bestvideo+bestaudio/best --write-subs --sub-format srt/ass/vtt --write-auto-subs --write-comments --no-write-info-json --print-to-file %(comments)#j %(upload_date)s-%(title)s-[%(id)s].comments.json --sub-langs live_chat --write-description --write-thumbnail"
 
 # --bundle-audio: Audio + all metadata
 --alias bundle-audio "-f bestaudio -x --write-subs --sub-format srt/ass/vtt --write-auto-subs --write-comments --no-write-info-json --print-to-file %(comments)#j %(upload_date)s-%(title)s-[%(id)s].comments.json --sub-langs live_chat --write-description --write-thumbnail"
 
 # --bundle: Video + all metadata (same as bundle-video)
---alias bundle "-f bestvideo[height<=1080][height>=720]+bestaudio/best[height<=1080][height>=720] --write-subs --sub-format srt/ass/vtt --write-auto-subs --write-comments --no-write-info-json --print-to-file %(comments)#j %(upload_date)s-%(title)s-[%(id)s].comments.json --sub-langs live_chat --write-description --write-thumbnail"
+--alias bundle "-f bestvideo[height<=1080][height>=720]+bestaudio/best[height<=1080][height>=720]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/bestvideo+bestaudio/best --write-subs --sub-format srt/ass/vtt --write-auto-subs --write-comments --no-write-info-json --print-to-file %(comments)#j %(upload_date)s-%(title)s-[%(id)s].comments.json --sub-langs live_chat --write-description --write-thumbnail"
 
 # --bundle-high: Highest video + all metadata
 --alias bundle-high "-f bestvideo+bestaudio/best --write-subs --sub-format srt/ass/vtt --write-auto-subs --write-comments --no-write-info-json --print-to-file %(comments)#j %(upload_date)s-%(title)s-[%(id)s].comments.json --sub-langs live_chat --write-description --write-thumbnail"
 
 # --best-bundle: Best mp4/m4a video + all metadata
---alias best-bundle "-f bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4] --write-subs --sub-format srt/ass/vtt --write-auto-subs --write-comments --no-write-info-json --print-to-file %(comments)#j %(upload_date)s-%(title)s-[%(id)s].comments.json --sub-langs live_chat --write-description --write-thumbnail"
+--alias best-bundle "-f bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/bestvideo+bestaudio/best --write-subs --sub-format srt/ass/vtt --write-auto-subs --write-comments --no-write-info-json --print-to-file %(comments)#j %(upload_date)s-%(title)s-[%(id)s].comments.json --sub-langs live_chat --write-description --write-thumbnail"
 
 # -----------------------------------------------------------------------------
 # Aliases: Modifiers
@@ -1576,7 +1576,7 @@ ${fg[yellow]}USAGE${reset_color}
   yt [OPTIONS] URL
 
 ${fg[yellow]}VIDEO${reset_color}
-  --video            1080p (fallback to 720p)
+  --video            1080p (fallback to 720p, then best available)
   --video-low        Below 1080p (next tier down)
   --video-high       Above 1080p (next tier up)
   --video-highest    Highest available resolution
@@ -1620,6 +1620,7 @@ ${fg[yellow]}EXAMPLES${reset_color}
 
 ${fg[yellow]}DEFAULTS${reset_color}
   ${fg[white]}•${reset_color} Format: 1080p video + best audio (fallback: best available)
+  ${fg[white]}•${reset_color} Every format option falls back to best available instead of erroring
   ${fg[white]}•${reset_color} Output: ${fg[cyan]}%(upload_date)s - %(title)s [%(id)s].%(ext)s${reset_color}
   ${fg[white]}•${reset_color} Embeds: thumbnail, chapters, metadata, info.json
   ${fg[white]}•${reset_color} Restricted filenames (safe characters only)
