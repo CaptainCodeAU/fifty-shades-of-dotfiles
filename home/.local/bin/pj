@@ -108,6 +108,9 @@
 #                           name@marketplace REFUSES the launch, like an unknown profile. A
 #                           declared mod that is not installed does NOT refuse: pj never
 #                           refuses over a missing file; pj-health's mods-installed row says it.
+#                           The overlay's enabledPlugins also repeats the settings file's
+#                           own, so a --settings that replaces the key drops nothing
+#                           (above mods_json).
 #
 # Refuses (exit 2, one line on stderr) when pj-prompt-file prints nothing: a launch
 # without the rules file is the failure this script exists to prevent, so it never
@@ -119,6 +122,7 @@
 #   PJ_PROMPT_OUT    honoured by pj-prompt-file (its own seam), so the dry run can be
 #                    pointed at a fixture cache
 #   PJ_PROFILE_DIR   the profiles folder (default ~/.config/pj/profiles)
+#   PJ_JQ            the jq that reads the settings file's enabledPlugins (default jq)
 set -u
 emulate -L zsh
 
@@ -396,9 +400,21 @@ label_herdr_pane() {
 # enables no mod. REFUSES (rc 2, one line on stderr) on an id that is not ASCII
 # name@marketplace: a typo would otherwise enable nothing, silently, and the id is spliced
 # into JSON, so only characters that need no quoting get through. LC_ALL=C makes the ranges
-# byte ranges: under a UTF-8 locale [a-z] can match an accented letter (arm 28c).
+# byte ranges: under a UTF-8 locale [a-z] can match an accented letter (arm 28d).
+#
+# THE BASE FILE'S OWN ENABLES RIDE ALONG (conductor, 2026-09-27). settings.project.json
+# already carries enabledPlugins (cc-capture and cc-skills true, the rest false), and the
+# F5b measurement above proved --settings merges per TOP-LEVEL key. Whether a nested object
+# is merged or REPLACED is unmeasured, and a replace would silently drop cc-capture and
+# cc-skills from every pj session. So the overlay's enabledPlugins is the file's own,
+# false entries included, plus the mods set true: correct in both worlds. A declared id
+# the file has as false becomes true in place (jq object addition keeps the order).
+# jq missing, the file unreadable, or not JSON: a NOTE, and the mods only. Never a refusal.
+# A settings file that does not exist has nothing to drop, so that is silent. PJ_JQ is the
+# selftest's seam for the no-jq arm.
 mods_json() {
-  local LC_ALL=C id out="" seen=" "
+  local LC_ALL=C id out="" seen=" " base="" merged="" why="" jq_="${PJ_JQ:-jq}"
+  local -a ids=()
   [[ -z "$P_MODS" || "$P_MODS" == none ]] && return 0
   for id in ${=P_MODS}; do
     if [[ ! "$id" =~ '^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-]*$' ]]; then
@@ -407,8 +423,23 @@ mods_json() {
     fi
     [[ "$seen" == *" $id "* ]] && continue
     seen="$seen$id "
+    ids+=("$id")
     out="$out\"$id\":true,"
   done
+  if [[ -e "$P_SETTINGS" ]]; then
+    if ! whence -p "$jq_" >/dev/null 2>&1; then
+      why="jq not found"
+    elif ! base="$("$jq_" -c '.enabledPlugins // {} | if type == "object" then . else error("not an object") end' "$P_SETTINGS" 2>/dev/null)" || [[ -z "$base" ]]; then
+      why="unreadable, not JSON, or its enabledPlugins is not an object"
+    elif ! merged="$(print -r -- "$base" | "$jq_" -c '. + (reduce $ARGS.positional[] as $i ({}; .[$i] = true))' --args "${ids[@]}" 2>/dev/null)" || [[ -z "$merged" ]]; then
+      why="jq could not merge the mods into it"
+    fi
+  fi
+  if [[ -n "$merged" ]]; then
+    print -r -- "\"enabledPlugins\":$merged"
+    return 0
+  fi
+  [[ -n "$why" ]] && print -u2 -r -- "pj: NOTE: could not read enabledPlugins from ${P_SETTINGS/#$HOME/~} ($why); the overlay enables the mods only, so that file's own enables may be dropped for this session"
   print -r -- "\"enabledPlugins\":{${out%,}}"
 }
 
@@ -1220,18 +1251,44 @@ selftest() {
   [[ "$out" != *no-such-plugin-27* ]] && grep -q 'no-such-plugin-27' "$root/err27" && ok "27 a full path missing on this box is skipped, with a NOTE" || bad "27 missing dir" "out=$out err=$(<"$root/err27")"
   # ---- 28: mods: installed mods enabled through the overlay (screen-switch, 2026-09-27) ----
   # 28a every id lands in ONE overlay, as JSON, duplicates once. The ids are fixtures that
-  #     exist nowhere: pj never looks for the install (28g), so the arm needs none.
-  printf 'mods: aa@mk b.b-2@mk_2 aa@mk\n' > "$pdir/twomods"
-  out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile twomods --dry-run 2>/dev/null)"
-  [[ "$out" == *$'\n--settings\n{"enabledPlugins":{"aa@mk":true,"b.b-2@mk_2":true}}\n'* ]] && ok "28a the overlay carries every declared id, once each" || bad "28a overlay ids" "$out"
+  #     exist nowhere: pj never looks for the install (28g), so the arm needs none. Every
+  #     28 profile names a FIXTURE settings file, so no arm reads the operator's own.
+  local b28="$root/base28.json"
+  printf '{"env":{"X":"1"},"enabledPlugins":{"keep@mk":true,"off@mk":false,"aa@mk":false}}\n' > "$b28"
+  printf 'settings: %s\nmods: aa@mk b.b-2@mk_2 aa@mk\n' "$b28" > "$pdir/twomods"
+  out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile twomods --dry-run 2>"$root/err28a")"
+  [[ "$out" == *$'\n--settings\n{"enabledPlugins":{"keep@mk":true,"off@mk":false,"aa@mk":true,"b.b-2@mk_2":true}}\n'* ]] && ok "28a the overlay carries every declared id once, after the settings file's own" || bad "28a overlay ids" "$out"
+  # 28h the BASE FILE'S enables survive in the overlay (conductor, 2026-09-27), the false
+  #     ones too, and a declared id the file has as false is flipped to true in place. So a
+  #     --settings that REPLACES enabledPlugins cannot drop keep@mk; the string above holds
+  #     both halves, this arm names them.
+  [[ "$out" == *'"keep@mk":true,"off@mk":false,'* && "$out" != *'"aa@mk":false'* ]] && ok "28h the settings file's enables survive (true AND false), a declared false flips to true" || bad "28h base survives" "$out"
+  [[ ! -s "$root/err28a" ]] && ok "28h a readable base file prints no NOTE" || bad "28h NOTE" "$(<"$root/err28a")"
   n=$(print -r -- "$out" | grep -c -- '^--settings$')
   [[ "$n" -eq 2 ]] && ok "28a the file --settings survives beside it (2 of them)" || bad "28a settings count" "got $n, wanted 2"
   if whence -p jq >/dev/null 2>&1; then
-    d="$(print -r -- "$out" | grep '^{' | jq -r '.enabledPlugins | keys | join(" ")' 2>/dev/null)"
-    [[ "$d" == "aa@mk b.b-2@mk_2" ]] && ok "28a the overlay parses as JSON (jq reads both ids)" || bad "28a JSON" "$d"
+    d="$(print -r -- "$out" | grep '^{' | jq -r '.enabledPlugins | to_entries | map(select(.value)) | map(.key) | join(" ")' 2>/dev/null)"
+    [[ "$d" == "keep@mk aa@mk b.b-2@mk_2" ]] && ok "28a the overlay parses as JSON (jq reads the three enabled)" || bad "28a JSON" "$d"
   fi
+  # 28i a settings file with NO enabledPlugins: the overlay is the mods alone, no NOTE.
+  printf '{"env":{"X":"1"}}\n' > "$root/base28-none.json"
+  printf 'settings: %s\nmods: aa@mk\n' "$root/base28-none.json" > "$pdir/basenone"
+  out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile basenone --dry-run 2>"$root/err28i")"; rc=$?
+  [[ $rc -eq 0 && "$out" == *$'\n--settings\n{"enabledPlugins":{"aa@mk":true}}\n'* && ! -s "$root/err28i" ]] && ok "28i a settings file without enabledPlugins: the mods alone, no NOTE" || bad "28i no base key" "rc=$rc $out $(<"$root/err28i")"
+  # 28j a settings file that does not exist has nothing to drop: the mods alone, silently.
+  printf 'settings: %s\nmods: aa@mk\n' "$root/no-such-settings.json" > "$pdir/basemissing"
+  out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile basemissing --dry-run 2>"$root/err28j")"; rc=$?
+  [[ $rc -eq 0 && "$out" == *$'\n{"enabledPlugins":{"aa@mk":true}}\n'* && ! -s "$root/err28j" ]] && ok "28j a missing settings file: the mods alone, no NOTE" || bad "28j missing base" "rc=$rc $(<"$root/err28j")"
+  # 28k no jq, and 28l a base file that is not JSON: still LAUNCHES (rc 0), the mods alone,
+  #     and a NOTE says the file's enables may be dropped. Never a refusal over it.
+  out="$(PJ_JQ="$root/no-such-jq" PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile twomods --dry-run 2>"$root/err28k")"; rc=$?
+  [[ $rc -eq 0 && "$out" == *$'\n{"enabledPlugins":{"aa@mk":true,"b.b-2@mk_2":true}}\n'* ]] && grep -q 'NOTE.*jq not found.*mods only' "$root/err28k" && ok "28k no jq: rc 0, the mods alone, a NOTE naming jq" || bad "28k no jq" "rc=$rc $(<"$root/err28k")"
+  printf 'not json {\n' > "$root/base28-bad.json"
+  printf 'settings: %s\nmods: aa@mk\n' "$root/base28-bad.json" > "$pdir/basebad"
+  out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile basebad --dry-run 2>"$root/err28l")"; rc=$?
+  [[ $rc -eq 0 && "$out" == *$'\n{"enabledPlugins":{"aa@mk":true}}\n'* ]] && grep -q 'NOTE.*not JSON' "$root/err28l" && ok "28l a settings file that is not JSON: rc 0, the mods alone, a NOTE" || bad "28l bad base" "rc=$rc $(<"$root/err28l")"
   # 28b with remote_control and voice set too: still ONE overlay, every key in it.
-  printf 'mods: aa@mk\nremote_control: on\nvoice: off\n' > "$pdir/modsplus"
+  printf 'settings: %s\nmods: aa@mk\nremote_control: on\nvoice: off\n' "$root/base28-none.json" > "$pdir/modsplus"
   out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile modsplus --dry-run 2>/dev/null)"
   [[ "$out" == *$'\n--settings\n{"remoteControlAtStartup":true,"voiceEnabled":false,"enabledPlugins":{"aa@mk":true}}\n'* ]] && ok "28b mods beside remote_control and voice: one overlay, all three keys" || bad "28b merged overlay" "$out"
   n=$(print -r -- "$out" | grep -c -- '^--settings$')
@@ -1266,7 +1323,7 @@ selftest() {
     }
     run_with_relaunch ) >/dev/null 2>&1
   if [[ -r "$rl" && "$(grep -c . "$rl")" == 2 ]]; then
-    n="$(grep -c '"enabledPlugins":{"aa@mk":true,"b.b-2@mk_2":true}' "$rl")"
+    n="$(grep -c '"enabledPlugins":{"keep@mk":true,"off@mk":false,"aa@mk":true,"b.b-2@mk_2":true}' "$rl")"
     [[ "$n" == 2 ]] && ok "28e the relaunch keeps the enable: both launches carry the overlay" || bad "28e relaunch overlay" "$(<"$rl")"
     [[ "$(tail -1 "$rl")" == *"--resume sess-26e"* ]] && ok "28e control: the second launch IS the relaunch (--resume)" || bad "28e second launch" "$(tail -1 "$rl")"
   else
@@ -1280,8 +1337,16 @@ selftest() {
   done
   [[ -z "$m28" ]] && ok "28f default, memory and scratch declare mods: $want28" || bad "28f profile mods" "missing or different in:$m28"
   grep -q '^plugins:.*cc-claude-mods/plugins/ui-gallery' "$ppk/scratch" && ok "28f scratch keeps its plugins: ui-gallery checkout" || bad "28f scratch plugins" "$(grep '^plugins:' "$ppk/scratch")"
+  #     The overlay must equal the profile's settings file's own enabledPlugins plus the mod,
+  #     whatever that file holds on this machine (read, never written; jq builds the want).
   out="$(PJ_PROFILE_DIR="$ppk" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --dry-run 2>/dev/null)"
-  [[ "$out" == *$'\n--settings\n{"enabledPlugins":{"'"$want28"$'":true}}\n'* ]] && ok "28f the repo default profile's dry-run enables it in the overlay" || bad "28f default overlay" "$out"
+  if whence -p jq >/dev/null 2>&1; then
+    local sf28="$(sed -n 's/^settings:[[:space:]]*//p' "$ppk/default")"; sf28="${sf28/#\~/$HOME}"
+    local w28="$(jq -c --arg m "$want28" '(.enabledPlugins // {}) + {($m): true}' "$sf28" 2>/dev/null || jq -nc --arg m "$want28" '{($m): true}')"
+    [[ "$out" == *$'\n--settings\n{"enabledPlugins":'"$w28"$'}\n'* ]] && ok "28f the repo default profile's overlay = its settings file's enables + $want28" || bad "28f default overlay" "want $w28 in: $out"
+  else
+    [[ "$out" == *'"'"$want28"'":true'* ]] && ok "28f the repo default profile's overlay enables $want28 (no jq here to build the whole want)" || bad "28f default overlay" "$out"
+  fi
   # 28g a declared mod that is NOT installed still LAUNCHES: pj never refuses over a missing
   #     file (pj-health's mods-installed row says it). A real launch through a fake launch
   #     file, as 24e; herdr, fetch and checks are switched off so nothing real is touched.
