@@ -3,6 +3,8 @@
 #
 # Usage:
 #   pj-start-card              print the card for the folder you are standing in
+#   pj-start-card --json       the same facts as ONE JSON object (schema 1, below), for the
+#                              start-card mod (W-20260923-A11, D-20260927-A13). Reads no stdin.
 #   pj-start-card --selftest   prove every arm (runs pj-start-card-selftest)
 #
 # Registered as a SessionStart hook for pj through settings/claude/hooks.json
@@ -44,10 +46,23 @@
 #
 # THE DECLARATION FILE  .claude/pj-homes  (D-20260920-06)
 #   key: value lines, # comments. Keys: handoff, tracker (may repeat), decisions,
-#   incidents, plans, records (repo|private), wrap-up. Defaults for a missing key:
+#   incidents, plans, records (repo|private), wrap-up, panel. Defaults for a missing key:
 #   handoff repo:OPENING-PROMPT.md, records repo, decisions/incidents/plans under
-#   repo:docs/ (or drawer: when records is private). The card reads handoff and
-#   tracker; the other keys are for later stages and `decided`.
+#   repo:docs/ (or drawer: when records is private). The card reads handoff, tracker
+#   and panel; the other keys are for later stages and `decided`.
+#
+#   panel: <names>   the start-card mod's /card panel sections, in this order (D-20260927-A13).
+#             Names separated by commas or spaces, from: items parked handoff rulings flags
+#             mods-api. `ci` is reserved: accepted, listed under unknown until it exists.
+#             Any other name is listed under unknown, never dropped, so the panel can say
+#             "unknown section: <name>". A name given twice counts once. No panel: line
+#             means AUTOMATIC: every section whose source has something (items when any
+#             are open, parked when any are parked, handoff when the file exists, flags
+#             when any, mods-api when a change is unseen). Automatic never picks rulings,
+#             because the card does not read `decided` (see rulings below). `panel:` with
+#             nothing after it is an explicitly empty panel. Written twice: the FIRST line
+#             is used, like every single-valued key here, and panel.duplicates counts the rest.
+#             Only the JSON carries it; the text card prints nothing for it.
 #
 # THE NO-WRAP-UP FLAG  (contract for the SessionEnd stage; the card only READS it)
 #   Location  ${XDG_STATE_HOME:-~/.local/state}/pj/no-wrap-up/<key>
@@ -77,11 +92,69 @@
 #             A file with no owed: line is silent. A file that exists but cannot be read
 #             prints one line saying so, without details, like the flag above.
 #
+# --json  (W-20260923-A11, D-20260927-A13; the start-card mod reads it)
+#   ONE computation: gather() reads everything once, then render_text() or render_json()
+#   prints it, so the two views cannot drift. The text card is byte-identical to what it was
+#   before --json existed (Claude's copy unchanged, Gavin's ruling). The CONTRACT above holds
+#   for --json too, except point 4 (a JSON object is not 20 lines) and point 5: on an internal
+#   error the object still parses and `errors` names what dropped out. No stdin is read, so a
+#   caller holding a pipe open cannot hang it. PJ_NO_CARD does not silence it; `no_card` says
+#   it is set and the mod decides. Built by bash and awk alone: jq is never called, and the
+#   whole object passes through `iconv -c` so it is valid UTF-8 even when a title is not.
+#   Every string from a drawer or a flag file is DATA: controls, DEL, bidi and zero-width
+#   marks become ?, exactly as the text card shows them.
+#
+#   SCHEMA 1 (a field is never missing; absent things are null, 0, false or []):
+#   {
+#     "schema": 1,
+#     "project": "<repo name>",          outside a repo: the folder name
+#     "in_repo": true | false,
+#     "no_card": true | false,           PJ_NO_CARD is set
+#     "wrap_up_warning": null | {"text": "<the WARNING line>", "records": N,
+#                                "ended": "<local time>" | null, "transcript": "~/..." | null},
+#     "items": null (outside a repo) | {
+#       "drawer": "present" | "none" | "unknown",   unknown = open-items broken or absent
+#       "open": N, "pinned": N, "parked": N,
+#       "list": [ {"id": "W-..." | null, "title": "...", "pinned": true | false,
+#                  "done_when": "..." | null, "when": "..." | null, "next": "..." | null} ]
+#     },                                 list = EVERY own open item in the card's order, pinned
+#                                        first, then ID order as open-items lists it (a byte
+#                                        sort until W-20260924-A102). A field written on two
+#                                        header lines is joined with one space. id and the
+#                                        three fields are null when the detail read failed
+#                                        (errors says so); titles and counts still come from
+#                                        the card's own read.
+#     "cross": {
+#       "watching" | "checks_owed" | "mandatory" | "moved_out" | "ignored":
+#           {"count": N, "line": "<header as open-items printed it>" | null,
+#            "titles": ["<up to 3, as printed, without the leading '   · '>"]},
+#       "inbox": N,                      unrouted items in the inbox
+#       "notes": ["<Cross-project: / Repo: / Uncommitted move lines>"]
+#     },
+#     "owed": [ {"command": "...", "since": "YYYY-MM-DD" | "an unknown date"} ],   every
+#                                        distinct command, uncapped, oldest since
+#     "owed_unreadable": true | false,
+#     "handoff": null | {"marker": "drawer:OPENING-PROMPT.md", "path": "/abs/path",
+#                        "size": "3.1 KB", "bytes": N, "date": "YYYY-MM-DD"},
+#                                        path is for the mod to read ON SCREEN only
+#     "trackers": ["<marker>"],
+#     "dot_claude_behind": N,            0 when level or not measurable
+#     "mods_api": null (outside a repo) | {"unseen": N, "measured": true | false},
+#     "flags": [ {"name": "no-wrap-up" | "owed" | "dot-claude-behind" | "mods-api",
+#                 "text": "<the card's own line>"} ],   the card's OWN signals only (F1)
+#     "panel": {"sections": ["items", ...], "source": "pj-homes" | "automatic",
+#               "unknown": ["<name>"], "duplicates": N},
+#     "errors": ["<section>: <what dropped out>"]
+#   }
+#   Rulings are NOT in schema 1: `decided --since <today>` took 469 to 602 ms here on
+#   2026-09-27 against a 200 ms allowance, so the mod runs it itself for the rulings section.
+#
 # Selftest: pj-start-card-selftest. Rulings: D-20260920-02, -03, -04, -06, -09.
 
 set -u
 
 [ "${1:-}" = "--selftest" ] && exec "$(dirname "$0")/pj-start-card-selftest"
+MODE=text; [ "${1:-}" = "--json" ] && MODE=json
 
 CAP=20
 TITLE_CAP=10
@@ -187,9 +260,11 @@ mods_line(){
 # and goes through the same clean() and cap() as open-items' cross-project titles (P7): one awk,
 # byte-wise under LC_ALL=C, so every awk and locale agrees. A blank or whitespace-only line ends
 # a record. A record without an owed: line is skipped, never guessed at.
-OWED_AWK='
+# clean() and cap(): the card's rule for text that is DATA (P7), shared by the owed lines, the
+# --json item detail and the panel names. clean() turns controls, DEL and the bidi and
+# zero-width marks into ?; cap() cuts at m characters and adds ... (byte-wise, LC_ALL=C).
+CLEAN_AWK='
   BEGIN {
-    n = 0; cmd = ""; since = ""
     BAD["\342\200\252"]; BAD["\342\200\253"]; BAD["\342\200\254"]; BAD["\342\200\255"]; BAD["\342\200\256"]
     BAD["\342\201\246"]; BAD["\342\201\247"]; BAD["\342\201\250"]; BAD["\342\201\251"]
     BAD["\342\200\213"]; BAD["\342\200\214"]; BAD["\342\200\215"]; BAD["\342\200\216"]; BAD["\342\200\217"]
@@ -213,6 +288,9 @@ OWED_AWK='
     }
     return s
   }
+'
+OWED_AWK="$CLEAN_AWK"'
+  BEGIN { n = 0; cmd = ""; since = "" }
   function val(s) { sub(/^[a-z]+:[ \t]*/, "", s); sub(/[ \t\r]+$/, "", s); return s }
   function flush() {
     if (cmd != "") {
@@ -227,62 +305,75 @@ OWED_AWK='
   /^[ \t\r]*$/ { flush(); next }
   /^owed:/  { if (cmd == "") cmd = val($0); next }
   /^since:/ { if (since == "") since = val($0); next }
-  END {
-    flush()
-    show = n; if (n > max) show = max - 1
-    for (i = 1; i <= show; i++)
-      printf "Owed: %s (since %s, declined at wrap-up). Run it, or %cpj-wrap owed --clear%c.\n", order[i], at[order[i]], 39, 39
-    if (n > max) printf "Owed: +%d more declined wrap-up command(s); %cpj-wrap owed%c lists them.\n", n - show, 39, 39
-  }
+  END { flush(); for (i = 1; i <= n; i++) printf "%s\t%s\n", order[i], at[order[i]] }
 '
-owed_lines(){   # owed_lines <owed-file>
+# DATA, not lines: one "command<TAB>since" per distinct command, every one of them (clean()
+# turned any tab in a command into ?). gather() renders the capped Owed: lines from it and
+# --json lists all of it, so the two cannot disagree. rc 3: the file exists but cannot be read.
+owed_data(){    # owed_data <owed-file>
   [ -e "$1" ] || return 0
-  if [ ! -f "$1" ] || [ ! -r "$1" ]; then
-    printf "Owed: a declined project wrap-up is recorded here but cannot be read; 'pj-wrap owed' lists it.\n"
-    return 0
-  fi
-  LC_ALL=C awk -v len="$OWED_CMD_LEN" -v max="$OWED_CAP" "$OWED_AWK" "$1" 2>/dev/null
+  { [ -f "$1" ] && [ -r "$1" ]; } || return 3
+  LC_ALL=C awk -v len="$OWED_CMD_LEN" "$OWED_AWK" "$1" 2>/dev/null
+  return 0
 }
 
+
 # --- the card ------------------------------------------------------------------
-card(){
-  local top="" name="" lines=() drawer="" decl="" wrc=0 where=""
-  local warn="" handoff="" trackers=() open_header="" titles=() parked="" n=0
+# THE ONE COMPUTATION (A11). gather() reads every source once into the C_* globals;
+# render_text() and render_json() only print them. A fact either view needs is gathered here
+# and never re-read by a renderer, so the text card and --json cannot drift. Two reads are
+# JSON-only and gated on MODE, because the text card has no use for them and pays for every
+# fork: the panel: line and the per-item detail (id, done-when, when, next).
+C_ERRORS=()
+err(){ C_ERRORS+=("$1"); }
 
-  top="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || top=""
-  [ -n "$top" ] && top="$(dirname "$top")"
+gather(){
+  local where="" wrc=0 sess="" src=0 line="" sec="" t od orc c s i show b
+  C_TOP=""; C_NAME=""; C_INREPO=0; C_DRAWER=""; C_DSTATE=unknown; C_DECL=""
+  C_WARN=""; C_WREC=0; C_WENDED=""; C_WTR=""
+  C_OPEN_HEADER=""; C_TITLES=(); C_PARKED=""; C_NPARKED=0; C_N=0; C_NPIN=""; C_HAVE_OWN=0
+  C_XH=(); C_XT=(); C_XS=(); C_XSINGLE=()
+  C_OWED=(); C_OWED_CMD=(); C_OWED_SINCE=(); C_OWED_UNREADABLE=0
+  C_HMARK=""; C_HPATH=""; C_HANDOFF=""; C_HSIZE=""; C_HDATE=""
+  C_TRACKERS=(); C_TRACKER_MARKS=()
+  C_SYNC=""; C_BEHIND=0; C_MODS=""; C_MODS_UNSEEN=0; C_MODS_MEASURED=0
+  C_PANEL_N=0; C_PANEL_VAL=""; C_DETAIL=()
 
-  if [ -z "$top" ]; then
-    printf 'pj start card: %s (not a git repo, so no project, no items)\n' "$(basename "$PWD")"
-    printf '%s\n' "$HELLO"
-    return 0
+  C_TOP="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || C_TOP=""
+  [ -n "$C_TOP" ] && C_TOP="$(dirname "$C_TOP")"
+  if [ -z "$C_TOP" ]; then C_NAME="$(basename "$PWD")"; return 0; fi
+  C_INREPO=1
+  C_NAME="$(basename "$C_TOP")"
+  C_DECL="$C_TOP/.claude/pj-homes"
+  if [ -e "$C_DECL" ] && { [ ! -f "$C_DECL" ] || [ ! -r "$C_DECL" ]; }; then
+    err "pj-homes: .claude/pj-homes exists but is not a readable file; defaults used"
   fi
-  name="$(basename "$top")"
-  decl="$top/.claude/pj-homes"
 
   # the drawer, through open-items so the key encoding lives in one place
   where="$(open-items --where 2>/dev/null)"; wrc=$?
   case "$wrc" in
-    0) drawer="$(dirname "$where")" ;;
-    1) drawer="" ;;              # this repo has no drawer yet
-    *) drawer=""; wrc=99 ;;      # open-items broken or absent: section drops out
+    0) C_DRAWER="$(dirname "$where")"; C_DSTATE=present ;;
+    1) C_DRAWER=""; C_DSTATE=none ;;          # this repo has no drawer yet
+    *) err "items: open-items --where exit $wrc; the items section dropped out"
+       C_DRAWER=""; wrc=99 ;;                 # open-items broken or absent: section drops out
   esac
 
   # the no-wrap-up flag
-  local flag="$STATE/no-wrap-up/$(encode_key "$top")" ended="" tr="" nrec=0
+  local flag="$STATE/no-wrap-up/$(encode_key "$C_TOP")"
   if [ -e "$flag" ]; then
-    ended="$(decl_get "$flag" ended)"; tr="$(decl_get "$flag" transcript)"
-    nrec="$(grep -c '^session:' "$flag" 2>/dev/null || true)"; nrec="${nrec:-0}"
-    if [ "$nrec" -gt 1 ]; then
-      warn="WARNING: the last $nrec sessions here ended without wrap-up"
-      [ -n "$ended" ] && warn="$warn (latest $ended)"
+    C_WENDED="$(decl_get "$flag" ended)"; C_WTR="$(decl_get "$flag" transcript)"
+    C_WREC="$(grep -c '^session:' "$flag" 2>/dev/null || true)"; C_WREC="${C_WREC:-0}"
+    [ -n "$C_WTR" ] && C_WTR="${C_WTR/#$HOME/\~}"
+    if [ "$C_WREC" -gt 1 ]; then
+      C_WARN="WARNING: the last $C_WREC sessions here ended without wrap-up"
+      [ -n "$C_WENDED" ] && C_WARN="$C_WARN (latest $C_WENDED)"
     else
-      warn="WARNING: the last session here ended without wrap-up"
-      [ -n "$ended" ] && warn="$warn ($ended)"
+      C_WARN="WARNING: the last session here ended without wrap-up"
+      [ -n "$C_WENDED" ] && C_WARN="$C_WARN ($C_WENDED)"
     fi
-    warn="$warn."
-    [ -n "$tr" ] && warn="$warn Transcript: ${tr/#$HOME/\~}"
-    [ "$nrec" -gt 1 ] && warn="$warn (pj-wrap status lists all)"
+    C_WARN="$C_WARN."
+    [ -n "$C_WTR" ] && C_WARN="$C_WARN Transcript: $C_WTR"
+    [ "$C_WREC" -gt 1 ] && C_WARN="$C_WARN (pj-wrap status lists all)"
   fi
 
   # open items, then (A16, W-20260923-A28) the cross-project sections open-items --session
@@ -290,76 +381,143 @@ card(){
   # header plus up to 3 titles, and single lines (Inbox, notes). Read even with NO drawer:
   # the inbox and mandatory lines are for every project. Parsed by SECTION, so a cross title
   # can never be counted as one of this project's own.
-  local sess="" line="" npin="" sec="" have_own=0
-  local xh=() xt=() xs=() xsingle=()
   if [ "$wrc" -eq 0 ] || [ "$wrc" -eq 1 ]; then
-    sess="$(open-items --session 2>/dev/null | strip_ansi)" || sess=""
+    sess="$(open-items --session 2>/dev/null | strip_ansi; exit "${PIPESTATUS[0]}")"; src=$?
+    [ "$src" -eq 0 ] || err "items: open-items --session exit $src"
     while IFS= read -r line; do
       case "$line" in
-        'Open items'*) have_own=1; sec=own
-                       n="$(printf '%s' "$line" | sed -n 's/^Open items (\([0-9]*\) in.*/\1/p')"
-                       npin="$(printf '%s' "$line" | sed -n 's/^Open items ([0-9]* in .*, \([0-9]*\) pinned -- .*/\1/p')" ;;
+        'Open items'*) C_HAVE_OWN=1; sec=own
+                       C_N="$(printf '%s' "$line" | sed -n 's/^Open items (\([0-9]*\) in.*/\1/p')"
+                       C_NPIN="$(printf '%s' "$line" | sed -n 's/^Open items ([0-9]* in .*, \([0-9]*\) pinned -- .*/\1/p')" ;;
         'Watching: '*|'Checks owed: '*|'Mandatory: '*|'Moved out: '*|'Ignored lines: '*)
-                       xh+=("$line"); sec=$(( ${#xh[@]} - 1 )) ;;
+                       C_XH+=("$line"); sec=$(( ${#C_XH[@]} - 1 )) ;;
         'Inbox: '*|'Cross-project: '*|'Repo: '*|'Uncommitted move '*)
-                       xsingle+=("$line"); sec=none ;;
-        '   · '*)      if [ "$sec" = own ]; then titles+=("$line")
-                       elif [ "$sec" != none ] && [ -n "$sec" ]; then xt+=("$line"); xs+=("$sec"); fi ;;
-        '   parked: '*) [ "$sec" = own ] && parked="${line#"${line%%[![:space:]]*}"}" ;;
+                       C_XSINGLE+=("$line"); sec=none ;;
+        '   · '*)      if [ "$sec" = own ]; then C_TITLES+=("$line")
+                       elif [ "$sec" != none ] && [ -n "$sec" ]; then C_XT+=("$line"); C_XS+=("$sec"); fi ;;
+        '   parked: '*) [ "$sec" = own ] && C_PARKED="${line#"${line%%[![:space:]]*}"}" ;;
       esac
     done <<<"$sess"
   fi
   if [ "$wrc" -eq 1 ]; then
-    open_header="Open items: no drawer for this project yet (\`open-items init\` creates one)"
+    C_OPEN_HEADER="Open items: no drawer for this project yet (\`open-items init\` creates one)"
   elif [ "$wrc" -eq 0 ]; then
-    if [ "$have_own" -eq 0 ]; then
-      open_header="Open items: none open (\`open-items add\` files one)"
+    if [ "$C_HAVE_OWN" -eq 0 ]; then
+      C_OPEN_HEADER="Open items: none open (\`open-items add\` files one)"
     else
-      [ -n "$n" ] || n="${#titles[@]}"
+      [ -n "$C_N" ] || C_N="${#C_TITLES[@]}"
       # W-20260923-A23: open-items --session lists pinned items (when: next session) FIRST,
       # so they survive the title cap below; the header says how many there are. Silent
       # when none are pinned, like every other exception line on this card.
-      local pin_note=""; [ -n "$npin" ] && pin_note=", $npin pinned for next session, listed first"
-      open_header="Open items: $n open$pin_note (\`open-items\` for detail; add/close/park/decline/reopen to change)"
+      local pin_note=""; [ -n "$C_NPIN" ] && pin_note=", $C_NPIN pinned for next session, listed first"
+      C_OPEN_HEADER="Open items: $C_N open$pin_note (\`open-items\` for detail; add/close/park/decline/reopen to change)"
     fi
   fi
+  [ -n "$C_N" ] || C_N=0
+  b="${C_PARKED#parked: }"; case "$b" in ''|*[!0-9]*) C_NPARKED=0 ;; *) C_NPARKED="$b" ;; esac
 
   # handoff: declared or default; a line only when the file exists
-  local hmark hpath
-  hmark="$(decl_get "$decl" handoff)"; [ -n "$hmark" ] || hmark="repo:OPENING-PROMPT.md"
-  if hpath="$(resolve "$hmark" "$top" "$drawer")" && [ -n "$hpath" ] && [ -f "$hpath" ]; then
-    handoff="Handoff: $hmark ($(file_size "$hpath"), $(file_date "$hpath")). Read on request, never print it."
+  C_HMARK="$(decl_get "$C_DECL" handoff)"; [ -n "$C_HMARK" ] || C_HMARK="repo:OPENING-PROMPT.md"
+  if C_HPATH="$(resolve "$C_HMARK" "$C_TOP" "$C_DRAWER")" && [ -n "$C_HPATH" ] && [ -f "$C_HPATH" ]; then
+    C_HSIZE="$(file_size "$C_HPATH")"; C_HDATE="$(file_date "$C_HPATH")"
+    C_HANDOFF="Handoff: $C_HMARK ($C_HSIZE, $C_HDATE). Read on request, never print it."
+  else
+    C_HPATH=""
   fi
 
   # trackers, one line each
-  local t
-  while IFS= read -r t; do [ -n "$t" ] && trackers+=("Tracker: $t"); done < <(decl_all "$decl" tracker)
+  while IFS= read -r t; do [ -n "$t" ] && { C_TRACKER_MARKS+=("$t"); C_TRACKERS+=("Tracker: $t"); }; done < <(decl_all "$C_DECL" tracker)
 
-  # owed project wrap-ups (W5), printed just above the handoff line
-  local owed=()
-  while IFS= read -r t; do [ -n "$t" ] && owed+=("$t"); done < <(owed_lines "$STATE/owed/$(encode_key "$top")")
+  # owed project wrap-ups (W5): the data, then the capped lines rendered from it
+  od="$(owed_data "$STATE/owed/$(encode_key "$C_TOP")")"; orc=$?
+  if [ "$orc" -eq 3 ]; then
+    C_OWED_UNREADABLE=1
+    C_OWED=("Owed: a declined project wrap-up is recorded here but cannot be read; 'pj-wrap owed' lists it.")
+  else
+    while IFS=$'\t' read -r c s; do [ -n "$c" ] && { C_OWED_CMD+=("$c"); C_OWED_SINCE+=("$s"); }; done <<<"$od"
+    show=${#C_OWED_CMD[@]}; [ "$show" -gt "$OWED_CAP" ] && show=$(( OWED_CAP - 1 ))
+    for ((i = 0; i < show; i++)); do
+      C_OWED+=("Owed: ${C_OWED_CMD[$i]} (since ${C_OWED_SINCE[$i]}, declined at wrap-up). Run it, or 'pj-wrap owed --clear'.")
+    done
+    [ "${#C_OWED_CMD[@]}" -gt "$OWED_CAP" ] \
+      && C_OWED+=("Owed: +$(( ${#C_OWED_CMD[@]} - show )) more declined wrap-up command(s); 'pj-wrap owed' lists them.")
+  fi
 
-  # assemble under the cap: fixed lines first, titles get what is left
-  lines+=("pj start card: $name")
-  [ -n "$warn" ] && lines+=("$warn")
-  [ -n "$open_header" ] && lines+=("$open_header")
-  local sync=""; sync="$(sync_line 2>/dev/null)" || sync=""
-  local mods=""; mods="$(mods_line 2>/dev/null)" || mods=""
-  local fixed=$(( ${#lines[@]} + ${#trackers[@]} + ${#owed[@]} + 1 ))   # +1 hello
-  [ -n "$parked" ] && fixed=$((fixed + 1))
-  [ -n "$handoff" ] && fixed=$((fixed + 1))
-  [ -n "$sync" ] && fixed=$((fixed + 1))
-  [ -n "$mods" ] && fixed=$((fixed + 1))
-  fixed=$(( fixed + ${#xh[@]} + ${#xsingle[@]} ))
+  C_SYNC="$(sync_line 2>/dev/null)" || C_SYNC=""
+  b="${C_SYNC#dot-claude: }"; b="${b%% *}"; case "$b" in ''|*[!0-9]*) C_BEHIND=0 ;; *) C_BEHIND="$b" ;; esac
+  C_MODS="$(mods_line 2>/dev/null)" || C_MODS=""
+  if [ -z "$C_MODS" ]; then
+    command -v "${PJ_MODS_API_DRIFT:-mods-api-drift}" >/dev/null 2>&1 && C_MODS_MEASURED=1
+  else
+    b="$(printf '%s' "$C_MODS" | sed -n 's/^Mods API: (\([0-9]*\)) unseen change.*/\1/p')"
+    [ -n "$b" ] && { C_MODS_UNSEEN="$b"; C_MODS_MEASURED=1; }
+  fi
+
+  [ "$MODE" = json ] || return 0
+  # --- JSON-only reads -------------------------------------------------------------
+  if [ -f "$C_DECL" ] && [ -r "$C_DECL" ]; then
+    b="$(awk 'sub(/^panel:[ \t]*/, "") { n++; if (n == 1) { sub(/[ \t\r]+$/, ""); v = $0 } }
+              END { printf "%d\t%s", n, v }' "$C_DECL" 2>/dev/null)" || b=""
+    C_PANEL_N="${b%%$'\t'*}"; C_PANEL_VAL="${b#*$'\t'}"
+    case "$C_PANEL_N" in ''|*[!0-9]*) C_PANEL_N=0; C_PANEL_VAL="" ;; esac
+  fi
+  # Every own item's id, done-when, when and next, from open-items --json. The titles and the
+  # order stay the card's own (the --session read above); this read is only accepted when it
+  # names the same titles in the same order, so a drawer written between the two reads, or a
+  # pin rule the two readers disagree on, is reported instead of shown wrong.
+  if [ "$C_DSTATE" = present ] && [ "${#C_TITLES[@]}" -gt 0 ]; then
+    od="$(open-items --json 2>/dev/null)"; orc=$?
+    if [ "$orc" -gt 1 ]; then
+      err "items: open-items --json exit $orc; id, done_when, when and next left out"
+    else
+      od="$(printf '%s\n' "$od" | LC_ALL=C awk "$DETAIL_AWK")"; orc=$?
+      while IFS= read -r line; do [ -n "$line" ] && C_DETAIL+=("$line"); done <<<"$od"
+      if [ "$orc" -ne 0 ]; then
+        err "items: open-items --json did not parse; id, done_when, when and next left out"; C_DETAIL=()
+      elif [ "${#C_DETAIL[@]}" -ne "${#C_TITLES[@]}" ]; then
+        err "items: open-items --json listed ${#C_DETAIL[@]} open, the card read ${#C_TITLES[@]}; id, done_when, when and next left out"; C_DETAIL=()
+      else
+        for ((i = 0; i < ${#C_TITLES[@]}; i++)); do
+          IFS=$'\037' read -r c s t b <<<"${C_DETAIL[$i]}"
+          [ "$s" = 1 ] && s='[pinned] ' || s=''
+          js "${C_TITLES[$i]}"
+          if [ "$REPLY" != "\"   · $s$t\"" ]; then
+            err "items: open-items --json disagrees with the card at item $((i + 1)); id, done_when, when and next left out"
+            C_DETAIL=(); break
+          fi
+        done
+      fi
+    fi
+  fi
+  return 0
+}
+
+# --- the text card: exactly what it printed before --json existed -----------------
+render_text(){
+  local lines=() n=0
+  if [ "$C_INREPO" -eq 0 ]; then
+    printf 'pj start card: %s (not a git repo, so no project, no items)\n' "$C_NAME"
+    printf '%s\n' "$HELLO"
+    return 0
+  fi
+  lines+=("pj start card: $C_NAME")
+  [ -n "$C_WARN" ] && lines+=("$C_WARN")
+  [ -n "$C_OPEN_HEADER" ] && lines+=("$C_OPEN_HEADER")
+  local fixed=$(( ${#lines[@]} + ${#C_TRACKERS[@]} + ${#C_OWED[@]} + 1 ))   # +1 hello
+  [ -n "$C_PARKED" ] && fixed=$((fixed + 1))
+  [ -n "$C_HANDOFF" ] && fixed=$((fixed + 1))
+  [ -n "$C_SYNC" ] && fixed=$((fixed + 1))
+  [ -n "$C_MODS" ] && fixed=$((fixed + 1))
+  fixed=$(( fixed + ${#C_XH[@]} + ${#C_XSINGLE[@]} ))
   # THE BUDGET (P8 rule 3). This project's own titles keep a floor of OWN_FLOOR before any
   # cross-project title is placed; cross sections then take one title each in turn (at most
   # 3 each, as --session already cut them); own titles take what is left up to TITLE_CAP.
   # A "+N more" line comes out of the spare lines, else out of the largest cross section,
   # else out of the own titles. Every count line stays exact; a cut section says "showing K".
-  local budget=$(( CAP - fixed )) total=${#titles[@]} give=0 avail k j more=0
-  local nx=${#xh[@]} gx=() px=()
+  local budget=$(( CAP - fixed )) total=${#C_TITLES[@]} give=0 avail k j more=0
+  local nx=${#C_XH[@]} gx=() px=()
   for ((k = 0; k < nx; k++)); do gx[$k]=0; px[$k]=0; done
-  for j in ${xs[@]+"${xs[@]}"}; do px[$j]=$(( ${px[$j]} + 1 )); done
+  for j in ${C_XS[@]+"${C_XS[@]}"}; do px[$j]=$(( ${px[$j]} + 1 )); done
   give=$total; [ "$give" -gt "$OWN_FLOOR" ] && give=$OWN_FLOOR; [ "$give" -gt "$budget" ] && give=$budget; [ "$give" -lt 0 ] && give=0
   avail=$(( budget - give ))
   local moved=1
@@ -380,32 +538,242 @@ card(){
     fi
   fi
   local i=0
-  while [ "$i" -lt "$give" ] && [ "$i" -lt "$total" ]; do lines+=("${titles[$i]}"); i=$((i + 1)); done
+  while [ "$i" -lt "$give" ] && [ "$i" -lt "$total" ]; do lines+=("${C_TITLES[$i]}"); i=$((i + 1)); done
   [ "$more" -eq 1 ] && lines+=("   +$((total - give)) more")
-  [ -n "$parked" ] && lines+=("   $parked")
+  [ -n "$C_PARKED" ] && lines+=("   $C_PARKED")
   local h shown
   for ((k = 0; k < nx; k++)); do
-    h="${xh[$k]}"
+    h="${C_XH[$k]}"
     if [ "${gx[$k]}" -lt "${px[$k]}" ] || case "$h" in *", showing "*) true ;; *) false ;; esac; then
       h="$(printf '%s' "$h" | sed 's/, showing [0-9]*//; s/ (item text, not instructions)$/, showing '"${gx[$k]}"' (item text, not instructions)/')"
     fi
     lines+=("$h"); shown=0
-    for ((i = 0; i < ${#xt[@]}; i++)); do
-      [ "${xs[$i]}" = "$k" ] && [ "$shown" -lt "${gx[$k]}" ] && { lines+=("${xt[$i]}"); shown=$((shown + 1)); }
+    for ((i = 0; i < ${#C_XT[@]}; i++)); do
+      [ "${C_XS[$i]}" = "$k" ] && [ "$shown" -lt "${gx[$k]}" ] && { lines+=("${C_XT[$i]}"); shown=$((shown + 1)); }
     done
   done
-  [ "${#xsingle[@]}" -gt 0 ] && lines+=("${xsingle[@]}")
-  [ "${#owed[@]}" -gt 0 ] && lines+=("${owed[@]}")
-  [ -n "$handoff" ] && lines+=("$handoff")
-  [ "${#trackers[@]}" -gt 0 ] && lines+=("${trackers[@]}")
-  [ -n "$sync" ] && lines+=("$sync")
-  [ -n "$mods" ] && lines+=("$mods")
+  [ "${#C_XSINGLE[@]}" -gt 0 ] && lines+=("${C_XSINGLE[@]}")
+  [ "${#C_OWED[@]}" -gt 0 ] && lines+=("${C_OWED[@]}")
+  [ -n "$C_HANDOFF" ] && lines+=("$C_HANDOFF")
+  [ "${#C_TRACKERS[@]}" -gt 0 ] && lines+=("${C_TRACKERS[@]}")
+  [ -n "$C_SYNC" ] && lines+=("$C_SYNC")
+  [ -n "$C_MODS" ] && lines+=("$C_MODS")
   lines+=("$HELLO")
   printf '%s\n' "${lines[@]}"
 }
 
+# --- --json ------------------------------------------------------------------------------
+# The per-item detail: one open-items --json item object per line in, one
+#   id US pinned US title US done_when US when US next
+# row out (fields split by the unit separator \037, never tab: bash read collapses empty
+# tab-separated fields), pinned rows first (the --session order). title stays JSON-escaped; the three fields
+# are whole JSON values (a string, or null). Every escape other than \\ and \" becomes ?, as do
+# DEL and the bidi and zero-width marks: the same text the card shows, and no tab can survive
+# into a row. Exit 3: a string never closed, so the input was not what open-items writes.
+DETAIL_AWK="$CLEAN_AWK"'
+  BEGIN { np = 0; nr = 0; US = "\037" }
+  function tok(s, p,   i, n, c, d, o) {
+    o = ""; n = length(s); i = p + 1
+    while (i <= n) {
+      c = substr(s, i, 1)
+      if (c == "\"") { TEND = i; return o }
+      if (c == "\\") {
+        d = substr(s, i + 1, 1)
+        if (d == "\\" || d == "\"") { o = o c d; i += 2; continue }
+        if (d == "/") { o = o "/"; i += 2; continue }
+        o = o "?"; i += (d == "u") ? 6 : 2; continue
+      }
+      if (c == "\177") { o = o "?"; i++; continue }
+      if ((c == "\342" || c == "\357") && (substr(s, i, 3) in BAD)) { o = o "?"; i += 3; continue }
+      o = o c; i++
+    }
+    TEND = n; BROKEN = 1; return o
+  }
+  function fld(s, key,   p, q, v, o, k) {
+    p = index(s, "\"" key "\":"); if (p == 0) return "null"
+    q = p + length(key) + 3
+    if (substr(s, q, 1) == "\"") { v = tok(s, q); if (key == "when" && tolower(v) ~ /^next session/) PIN = 1; return "\"" v "\"" }
+    if (substr(s, q, 1) != "[") return "null"
+    o = ""; k = 0; q++
+    while (substr(s, q, 1) == "\"") {
+      v = tok(s, q); if (key == "when" && tolower(v) ~ /^next session/) PIN = 1
+      o = o (k++ ? " " : "") v; q = TEND + 1; if (substr(s, q, 1) == ",") q++
+    }
+    return "\"" o "\""
+  }
+  /^\{"id":"/ {
+    id = tok($0, 7); rest = substr($0, TEND + 1)
+    p = index(rest, "\"title\":\""); title = (p ? tok(rest, p + 8) : "")
+    p = index(rest, "\"fields\":{"); f = (p ? substr(rest, p) : "")
+    PIN = 0
+    dw = fld(f, "done-when"); wh = fld(f, "when"); nx = fld(f, "next")
+    row = id US PIN US title US dw US wh US nx
+    if (PIN) P[++np] = row; else R[++nr] = row
+  }
+  END {
+    for (i = 1; i <= np; i++) print P[i]
+    for (i = 1; i <= nr; i++) print R[i]
+    if (BROKEN) exit 3
+  }
+'
+
+# js <string>: REPLY = the string as a JSON literal. Pure bash, no fork, no jq, identical on
+# bash 3.2 and 5.x: the pattern is quoted and the replacement is NOT (bash 3.2 keeps quotes in
+# a quoted replacement literally), and patsub_replacement is off (5.2+ would treat & in a
+# replacement as the match). Measured on /bin/bash 3.2.57 and bash 5.3 on 2026-09-27.
+JS_BS='\'; JS_Q='"'; JS_CC=(); JS_CE=()
+js_init(){
+  local i o
+  shopt -u patsub_replacement 2>/dev/null || true
+  for ((i = 1; i < 32; i++)); do
+    printf -v o '%03o' "$i"; printf -v JS_CC[$i] "\\$o"
+    case "$i" in 9) JS_CE[$i]="${JS_BS}t" ;; 10) JS_CE[$i]="${JS_BS}n" ;; 13) JS_CE[$i]="${JS_BS}r" ;;
+                 *) printf -v JS_CE[$i] '%su%04x' "$JS_BS" "$i" ;; esac
+  done
+}
+js(){
+  local LC_ALL=C s="$1" i
+  s="${s//"$JS_BS"/$JS_BS$JS_BS}"; s="${s//"$JS_Q"/$JS_BS$JS_Q}"
+  case "$s" in *[[:cntrl:]]*)
+    for ((i = 1; i < 32; i++)); do s="${s//"${JS_CC[$i]}"/${JS_CE[$i]}}"; done ;;
+  esac
+  REPLY="$JS_Q$s$JS_Q"
+}
+jsn(){ if [ -n "$1" ]; then js "$1"; else REPLY=null; fi; }   # empty -> null
+# jsa <string>...: REPLY = a JSON array of the strings
+jsa(){ local o="" x; for x in "$@"; do js "$x"; o="$o${o:+,}$REPLY"; done; REPLY="[$o]"; }
+bool(){ if [ "$1" = 1 ]; then REPLY=true; else REPLY=false; fi; }
+render_json(){
+  local o="" i t x k name key cnt line titles out clean
+  js_init
+  js "$C_NAME"; o="{\"schema\":1,\"project\":$REPLY"
+  bool "$C_INREPO"; o="$o,\"in_repo\":$REPLY"
+  [ -n "${PJ_NO_CARD:-}" ] && t=1 || t=0; bool "$t"; o="$o,\"no_card\":$REPLY"
+
+  if [ -n "$C_WARN" ]; then
+    js "$C_WARN"; t="{\"text\":$REPLY,\"records\":$C_WREC"
+    jsn "$C_WENDED"; t="$t,\"ended\":$REPLY"; jsn "$C_WTR"; t="$t,\"transcript\":$REPLY}"
+    o="$o,\"wrap_up_warning\":$t"
+  else o="$o,\"wrap_up_warning\":null"; fi
+
+  if [ "$C_INREPO" -eq 0 ]; then o="$o,\"items\":null"
+  else
+    t="{\"drawer\":\"$C_DSTATE\",\"open\":$C_N,\"pinned\":${C_NPIN:-0},\"parked\":$C_NPARKED,\"list\":["
+    for ((i = 0; i < ${#C_TITLES[@]}; i++)); do
+      [ "$i" -gt 0 ] && t="$t,"
+      if [ "${#C_DETAIL[@]}" -gt 0 ]; then
+        IFS=$'\037' read -r k x titles cnt line out <<<"${C_DETAIL[$i]}"
+        bool "$x"
+        t="$t{\"id\":\"$k\",\"title\":\"$titles\",\"pinned\":$REPLY,\"done_when\":$cnt,\"when\":$line,\"next\":$out}"
+      else
+        x="${C_TITLES[$i]#   · }"; k=0
+        case "$x" in '[pinned] '*) x="${x#\[pinned\] }"; k=1 ;; esac
+        js "$x"; titles="$REPLY"; bool "$k"
+        t="$t{\"id\":null,\"title\":$titles,\"pinned\":$REPLY,\"done_when\":null,\"when\":null,\"next\":null}"
+      fi
+    done
+    o="$o,\"items\":$t]}"
+  fi
+
+  # cross-project: the five header sections by name, then the inbox count and the notes
+  t=""
+  for key in watching:Watching checks_owed:'Checks owed' mandatory:Mandatory moved_out:'Moved out' ignored:'Ignored lines'; do
+    name="${key%%:*}"; key="${key#*:}"; cnt=0; line=null; titles=""
+    for ((k = 0; k < ${#C_XH[@]}; k++)); do
+      case "${C_XH[$k]}" in "$key: "*) ;; *) continue ;; esac
+      x="${C_XH[$k]#"$key: "}"; x="${x%%[!0-9]*}"; cnt="${x:-0}"
+      js "${C_XH[$k]}"; line="$REPLY"
+      for ((i = 0; i < ${#C_XT[@]}; i++)); do
+        [ "${C_XS[$i]}" = "$k" ] || continue
+        js "${C_XT[$i]#   · }"; titles="$titles${titles:+,}$REPLY"
+      done
+    done
+    t="$t${t:+,}\"$name\":{\"count\":$cnt,\"line\":$line,\"titles\":[$titles]}"
+  done
+  cnt=0; out=()
+  for x in ${C_XSINGLE[@]+"${C_XSINGLE[@]}"}; do
+    case "$x" in 'Inbox: '*) x="${x#Inbox: }"; x="${x%%[!0-9]*}"; cnt="${x:-0}" ;; *) out+=("$x") ;; esac
+  done
+  jsa ${out[@]+"${out[@]}"}
+  o="$o,\"cross\":{$t,\"inbox\":$cnt,\"notes\":$REPLY}"
+
+  t=""
+  for ((i = 0; i < ${#C_OWED_CMD[@]}; i++)); do
+    js "${C_OWED_CMD[$i]}"; x="$REPLY"; js "${C_OWED_SINCE[$i]}"
+    t="$t${t:+,}{\"command\":$x,\"since\":$REPLY}"
+  done
+  bool "$C_OWED_UNREADABLE"; o="$o,\"owed\":[$t],\"owed_unreadable\":$REPLY"
+
+  if [ -n "$C_HANDOFF" ]; then
+    x="$(stat -L -c %s "$C_HPATH" 2>/dev/null || stat -L -f %z "$C_HPATH" 2>/dev/null)"; case "$x" in ''|*[!0-9]*) x=null ;; esac
+    js "$C_HMARK"; t="{\"marker\":$REPLY"; js "$C_HPATH"; t="$t,\"path\":$REPLY"
+    js "$C_HSIZE"; t="$t,\"size\":$REPLY,\"bytes\":$x"; js "$C_HDATE"; t="$t,\"date\":$REPLY}"
+    o="$o,\"handoff\":$t"
+  else o="$o,\"handoff\":null"; fi
+
+  jsa ${C_TRACKER_MARKS[@]+"${C_TRACKER_MARKS[@]}"}; o="$o,\"trackers\":$REPLY"
+  o="$o,\"dot_claude_behind\":$C_BEHIND"
+  if [ "$C_INREPO" -eq 0 ]; then o="$o,\"mods_api\":null"
+  else bool "$C_MODS_MEASURED"; o="$o,\"mods_api\":{\"unseen\":$C_MODS_UNSEEN,\"measured\":$REPLY}"; fi
+
+  # flags (F1 in the design): the card's OWN signals, each with the card's own line
+  local fn=() ft=()
+  [ -n "$C_WARN" ] && { fn+=(no-wrap-up); ft+=("$C_WARN"); }
+  if [ "${#C_OWED[@]}" -eq 1 ]; then fn+=(owed); ft+=("${C_OWED[0]}")
+  elif [ "${#C_OWED[@]}" -gt 1 ]; then fn+=(owed); ft+=("Owed: ${#C_OWED_CMD[@]} declined project wrap-up command(s); 'pj-wrap owed' lists them."); fi
+  [ -n "$C_SYNC" ] && { fn+=(dot-claude-behind); ft+=("$C_SYNC"); }
+  [ -n "$C_MODS" ] && { fn+=(mods-api); ft+=("$C_MODS"); }
+  t=""
+  for ((i = 0; i < ${#fn[@]}; i++)); do js "${ft[$i]}"; t="$t${t:+,}{\"name\":\"${fn[$i]}\",\"text\":$REPLY}"; done
+  o="$o,\"flags\":[$t]"
+
+  # panel (D-20260927-A13): the pj-homes line, or automatic
+  local sections=() unknown=() src=automatic
+  if [ "$C_PANEL_N" -gt 0 ]; then
+    src=pj-homes
+    local words=(); IFS=$', \t' read -r -a words <<<"$C_PANEL_VAL"
+    for x in ${words[@]+"${words[@]}"}; do
+      [ -n "$x" ] || continue
+      case " items parked handoff rulings flags mods-api " in
+        *" $x "*) case " ${sections[*]-} " in *" $x "*) ;; *) sections+=("$x") ;; esac ;;
+        *) x="$(printf '%s\n' "$x" | LC_ALL=C awk "$CLEAN_AWK"'{ print cap(clean($0), 40) }' 2>/dev/null)"
+           case " ${unknown[*]-} " in *" $x "*) ;; *) [ -n "$x" ] && unknown+=("$x") ;; esac ;;
+      esac
+    done
+  elif [ "$C_INREPO" -eq 1 ]; then
+    [ "$C_N" -gt 0 ] && sections+=(items)
+    [ "$C_NPARKED" -gt 0 ] && sections+=(parked)
+    [ -n "$C_HANDOFF" ] && sections+=(handoff)
+    [ "${#fn[@]}" -gt 0 ] && sections+=(flags)
+    [ "$C_MODS_UNSEEN" -gt 0 ] && sections+=(mods-api)
+  fi
+  jsa ${sections[@]+"${sections[@]}"}; t="$REPLY"; jsa ${unknown[@]+"${unknown[@]}"}
+  x=$(( C_PANEL_N > 1 ? C_PANEL_N - 1 : 0 ))
+  o="$o,\"panel\":{\"sections\":$t,\"source\":\"$src\",\"unknown\":$REPLY,\"duplicates\":$x}"
+
+  # Valid UTF-8 whatever a title held: iconv -c drops a byte that is not, and says so below.
+  if command -v iconv >/dev/null 2>&1; then
+    clean="$(printf '%s' "$o" | iconv -f UTF-8 -t UTF-8 -c 2>/dev/null)"
+    if [ -n "$clean" ] && [ "$clean" != "$o" ]; then
+      o="$clean"; err "json: bytes that were not UTF-8 were dropped from a string"
+    fi
+  fi
+  jsa ${C_ERRORS[@]+"${C_ERRORS[@]}"}
+  printf '%s,"errors":%s}\n' "$o" "$REPLY"
+}
+
 main(){
   local src out
+  if [ "$MODE" = json ]; then
+    # --json reads no stdin and ignores PJ_NO_CARD (no_card reports it). A catastrophic
+    # failure still answers with an object that parses and says what happened.
+    out="$(gather 2>/dev/null; render_json 2>/dev/null)"
+    case "$out" in
+      '{"schema":1,'*'}') printf '%s\n' "$out" ;;
+      *) printf '{"schema":1,"project":null,"in_repo":false,"no_card":false,"wrap_up_warning":null,"items":null,"cross":{"watching":{"count":0,"line":null,"titles":[]},"checks_owed":{"count":0,"line":null,"titles":[]},"mandatory":{"count":0,"line":null,"titles":[]},"moved_out":{"count":0,"line":null,"titles":[]},"ignored":{"count":0,"line":null,"titles":[]},"inbox":0,"notes":[]},"owed":[],"owed_unreadable":false,"handoff":null,"trackers":[],"dot_claude_behind":0,"mods_api":null,"flags":[],"panel":{"sections":[],"source":"automatic","unknown":[],"duplicates":0},"errors":["card: internal error, nothing could be gathered"]}\n' ;;
+    esac
+    exit 0
+  fi
   # PJ_NO_CARD (F5a): a profile with `card: off` exports this, and pj exports it into the
   # session. It is how a profile drops the START CARD without dropping the HOOKS.
   # --safe-mode cannot make that distinction: it disables hooks, plugins, skills, output
@@ -415,7 +783,7 @@ main(){
   [ -n "${PJ_NO_CARD:-}" ] && exit 0
   src="$(source_of_hook)"
   [ "$src" = "compact" ] && exit 0
-  out="$(card 2>/dev/null)" || exit 0
+  out="$(gather 2>/dev/null; render_text 2>/dev/null)" || exit 0
   [ -n "$out" ] && printf '%s\n' "$out"
   exit 0
 }
