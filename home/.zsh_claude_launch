@@ -52,10 +52,10 @@ __claude_launch() {
   # the `security` call. Empty on non-macOS -> the sweep degrades to slow, never wrong.
   local nvd_key="$(security find-generic-password -a "$USER" -s nvd-api-key -w 2>/dev/null)"
   # The classic-renderer lock (CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN, set on the launch below):
-  # 1 for every launch, which is Gavin's June 2026 rejection of fullscreen's mouse capture.
-  # ONLY a pj profile with `renderer: fullscreen` lifts it, by exporting PJ_RENDERER=fullscreen
-  # (pj exports PJ_RENDERER on every launch, so it is never inherited). The `c` family never
-  # sets it and stays locked. W-20260923-A12: the lock outranks /tui and NO_FLICKER, so a
+  # 1 by default, from Gavin's June 2026 rejection of fullscreen's mouse capture. pj lifts it
+  # by exporting PJ_RENDERER=fullscreen, which it does for every session unless the profile,
+  # --classic or /classic asks for classic (D-20260927-A11; pj exports PJ_RENDERER on every
+  # launch, so it is never inherited). The `c` family never sets it and stays locked. W-20260923-A12: the lock outranks /tui and NO_FLICKER, so a
   # docked Mods pane needed a way past it.
   local _pj_alt_off=1
   [[ "${PJ_RENDERER-}" == fullscreen ]] && _pj_alt_off=0

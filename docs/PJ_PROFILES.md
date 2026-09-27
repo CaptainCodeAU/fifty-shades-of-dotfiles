@@ -61,7 +61,7 @@ It is tracked in a public repo, so nothing in it is ever a secret.
 | `prompt_out`      | `PJ_PROMPT_OUT`                           | the cache file that build writes. A branch profile MUST set its own (see below). Added P10                                                                                                                                                                                                                                                                                                                                                                                           |
 | `plugins_root`    | the `--plugin-dir` prefix                 | the dir the `plugins` names are joined to. Unset = `~/.claude`. `pj-launch-check` reads it too. Added P10                                                                                                                                                                                                                                                                                                                                                                            |
 | `function_hooks`  | `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`     | **on by default** in every profile (D-20260923-A08); only the literal `off` exports nothing, the negative-control lane for testing a mod. Remove once Claude Code ships mods without the flag. Added F8b                                                                                                                                                                                                                                                                             |
-| `renderer`        | `PJ_RENDERER`, `CLAUDE_CODE_NO_FLICKER=1` | **classic by default**: the launcher sets `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1` for every session (the June 2026 fullscreen rejection), which outranks `/tui`. Only the literal `fullscreen` lifts it for that profile, so a Mods pane can dock beside the transcript. No shipped profile sets it since 2026-09-27 (D-20260927-A03: start classic, `/fullscreen` on demand); `scratch` did from 2026-09-26, which made `c2` open fullscreen too. Added 2026-09-26, W-20260923-A12 |
+| `renderer`        | `PJ_RENDERER`, `CLAUDE_CODE_NO_FLICKER=1` | **fullscreen by default** since 2026-09-27 (D-20260927-A11, replacing A03's classic default): pj exports `PJ_RENDERER=fullscreen` and the launcher lifts its `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN` lock, so a Mods pane can dock beside the transcript. Only the literal `classic` opts a profile out (a typo keeps the default); `--classic` and `/classic` opt one launch out. No shipped profile sets it; `scratch` set `classic` until the flip, and `c2` follows scratch. The `c` family is untouched and stays classic. Added 2026-09-26, W-20260923-A12 |
 | `mods`            | `enabledPlugins` in the overlay           | INSTALLED mods to enable, space-separated `name@marketplace`, or `none`. Rides the same overlay `--settings` as `remote_control` and `voice`, which also repeats the settings file's own `enabledPlugins`. Inherited from `default` like every key. An id that is not ASCII `name@marketplace` REFUSES the launch; one that is not installed does not (pj-health says it). Added 2026-09-27, see below                                                                               |
 
 **Agent view is off in every pj session, and it is not a key.** pj always exports
@@ -82,13 +82,17 @@ session (the Mods notes say "fixed per session"), and a pj session refuses `/tui
 settings). So every session starts in its profile's renderer, and a switch is a relaunch
 of the same conversation.
 
-Why not simply "always fullscreen, clicks off" (`CLAUDE_CODE_DISABLE_MOUSE_CLICKS=1`),
-which would make the relaunch unnecessary? Raised by the contrarian review and ruled by
-Gavin on 2026-09-27: keep classic as the default and fullscreen on demand. Classic is his
-deliberate everyday choice (the June 2026 rejection of fullscreen's mouse capture, and
-on 2026-09-27, after trying both, "each one has their own strengths"); fullscreen with
-clicks off would also take the mouse away from the mod panes, the reason fullscreen is
-wanted at all. Not a technical gap: re-open it only if he asks.
+**The default flipped to fullscreen later on 2026-09-27** (D-20260927-A11). Gavin, after
+test-driving the gallery in fullscreen: "let's have full screen as the default mode and
+classic as opt in (via the slash command)... let's swap the two." So every pj session now
+starts fullscreen and `/classic` is the opt-in; the relaunch mechanism below is unchanged,
+only its default direction. The trade-off he accepted: fullscreen captures the mouse, so
+selecting conversation text needs Shift (Option in iTerm2, Fn in Terminal.app).
+
+Why not "always fullscreen, clicks off" (`CLAUDE_CODE_DISABLE_MOUSE_CLICKS=1`), which
+would make the relaunch unnecessary? Raised by the contrarian review on 2026-09-27: clicks
+off would take the mouse away from the mod panes, the reason fullscreen is wanted at all,
+and classic stays a real choice for some work ("each one has their own strengths").
 
 How it works:
 

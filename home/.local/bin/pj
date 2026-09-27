@@ -87,15 +87,14 @@
 #                           CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1. `off` exports nothing, which
 #                           is the negative-control lane for testing a mod. Remove the key
 #                           and the export once Claude Code ships mods without the flag.
-#   renderer: classic|fullscreen  CLASSIC by default: the launcher forces the classic
-#                           renderer for every session (CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1,
-#                           Gavin's June 2026 rejection of fullscreen's mouse capture).
-#                           `fullscreen` opts ONE profile out: pj exports
-#                           CLAUDE_CODE_NO_FLICKER=1 and the launcher sets the lock to 0.
-#                           It is the only way a Mods pane can dock beside the transcript
-#                           (W-20260923-A12). pj always exports PJ_RENDERER, so a nested
-#                           launch never inherits its parent's choice. Anything but the
-#                           literal `fullscreen` is classic.
+#   renderer: classic|fullscreen  FULLSCREEN by default since 2026-09-27 (D-20260927-A11,
+#                           replacing A03's classic default): pj exports
+#                           CLAUDE_CODE_NO_FLICKER=1 and the launcher sets the classic lock
+#                           (CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN) to 0, so a Mods pane can
+#                           dock beside the transcript (W-20260923-A12). `classic` opts ONE
+#                           profile out; --classic and /classic opt one launch out. pj always
+#                           exports PJ_RENDERER, so a nested launch never inherits its
+#                           parent's choice. Anything but the literal `classic` is fullscreen.
 #   (no key) agent view    OFF for every profile: pj exports CLAUDE_CODE_DISABLE_AGENT_VIEW=1
 #                           (Gavin, 2026-09-27), so the left arrow never parks a session.
 #   mods: <id> [<id>...]    INSTALLED mods to enable, as name@marketplace (2026-09-27, the
@@ -159,8 +158,8 @@ P_PROMPT_OUT=""
 P_PLUGINS_ROOT="$HOME/.claude"
 # D-20260923-A08: mods on by default until Claude Code ships them without the flag.
 P_FUNCTION_HOOKS="on"
-# W-20260923-A12: classic unless a profile opts in.
-P_RENDERER="classic"
+# D-20260927-A11: fullscreen unless a profile opts out.
+P_RENDERER="fullscreen"
 # The screen-switch build (2026-09-27): installed mods, enabled through the overlay. Empty
 # here on purpose, see the header: the stowed default profile names them.
 P_MODS=""
@@ -524,13 +523,13 @@ build_argv() {
   [[ "$P_CARD" == off ]] && PJ_ENV+=("PJ_NO_CARD=1")
   # Only the literal `off` switches it off: an unknown value keeps the documented default.
   [[ "$P_FUNCTION_HOOKS" != off ]] && PJ_ENV+=("CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1")
-  # Only the literal `fullscreen` opts in. PJ_RENDERER is exported on EVERY launch, so a pj
-  # started inside a fullscreen session resets it rather than inheriting it; the launcher
-  # reads it to decide CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN.
-  if [[ "$P_RENDERER" == fullscreen ]]; then
-    PJ_ENV+=("PJ_RENDERER=fullscreen" "CLAUDE_CODE_NO_FLICKER=1")
-  else
+  # Only the literal `classic` opts out (D-20260927-A11). PJ_RENDERER is exported on EVERY
+  # launch, so a pj started inside another session resets it rather than inheriting it; the
+  # launcher reads it to decide CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN.
+  if [[ "$P_RENDERER" == classic ]]; then
     PJ_ENV+=("PJ_RENDERER=classic")
+  else
+    PJ_ENV+=("PJ_RENDERER=fullscreen" "CLAUDE_CODE_NO_FLICKER=1")
   fi
   PJ_ENV+=("PJ_PROFILE=$PROFILE_NAME")
   # Agent view OFF for every pj session (Gavin, 2026-09-27, W-20260926-A01). In fullscreen a
@@ -836,16 +835,20 @@ selftest() {
   [[ "$out" == *"PJ_NO_CARD=1"* ]] && ok "14 card: off exports PJ_NO_CARD=1" || bad "14 card off" "$out"
   # 14c. function_hooks: off is the negative-control lane: no flag in the env at all.
   [[ "$out" != *FUNCTION_HOOKS* ]] && ok "14c function_hooks: off exports no flag" || bad "14c function hooks off" "$out"
-  # 14d. renderer (W-20260923-A12). Three arms from one breath: the default stays classic
-  #      and asks for no fullscreen; `fullscreen` exports both variables; a typo is classic.
+  # 14d. renderer (W-20260923-A12; fullscreen default since D-20260927-A11). Four arms from
+  #      one breath: the default is fullscreen; `classic` opts out and asks for no
+  #      fullscreen; `fullscreen` says so explicitly; a typo keeps the default.
   out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --dry-run-env 2>/dev/null)"
-  [[ "$out" == *"PJ_RENDERER=classic"* && "$out" != *NO_FLICKER* ]] && ok "14d default profile exports PJ_RENDERER=classic and no NO_FLICKER" || bad "14d renderer default" "$out"
+  [[ "$out" == *"PJ_RENDERER=fullscreen"* && "$out" == *"CLAUDE_CODE_NO_FLICKER=1"* ]] && ok "14d default profile exports PJ_RENDERER=fullscreen and CLAUDE_CODE_NO_FLICKER=1" || bad "14d renderer default" "$out"
+  printf 'renderer: classic\n' > "$pdir/classy"
+  out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile classy --dry-run-env 2>/dev/null)"
+  [[ "$out" == *"PJ_RENDERER=classic"* && "$out" != *NO_FLICKER* ]] && ok "14d renderer: classic exports PJ_RENDERER=classic and no NO_FLICKER" || bad "14d renderer classic" "$out"
   printf 'renderer: fullscreen\n' > "$pdir/fully"
   out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile fully --dry-run-env 2>/dev/null)"
   [[ "$out" == *"PJ_RENDERER=fullscreen"* && "$out" == *"CLAUDE_CODE_NO_FLICKER=1"* ]] && ok "14d renderer: fullscreen exports PJ_RENDERER=fullscreen and CLAUDE_CODE_NO_FLICKER=1" || bad "14d renderer fullscreen" "$out"
-  printf 'renderer: fulscreen\n' > "$pdir/typo"
+  printf 'renderer: clasic\n' > "$pdir/typo"
   out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile typo --dry-run-env 2>/dev/null)"
-  [[ "$out" == *"PJ_RENDERER=classic"* && "$out" != *NO_FLICKER* ]] && ok "14d a misspelt renderer stays classic" || bad "14d renderer typo" "$out"
+  [[ "$out" == *"PJ_RENDERER=fullscreen"* && "$out" == *"CLAUDE_CODE_NO_FLICKER=1"* ]] && ok "14d a misspelt renderer keeps the fullscreen default" || bad "14d renderer typo" "$out"
   # 14f. agent view is off for EVERY profile (Gavin, 2026-09-27): classic and fullscreen alike.
   out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --dry-run-env 2>/dev/null)"
   [[ "$out" == *"CLAUDE_CODE_DISABLE_AGENT_VIEW=1"* ]] && ok "14f default profile exports CLAUDE_CODE_DISABLE_AGENT_VIEW=1" || bad "14f agent view default" "$out"
@@ -1168,10 +1171,10 @@ selftest() {
   [[ $rc -eq 6 && ! -e "$root/launched" ]] && ok "24e a real launch at the cap exits 6 before __claude_launch" || bad "24e launch not stopped" "rc=$rc launched=$([[ -e $root/launched ]] && echo yes || echo no) $out"
   # ---- 26: switching screen mode on demand (Gavin, 2026-09-27) ----------------------
   # 26a/b. --fullscreen and --classic override the profile's renderer for one launch.
-  out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --fullscreen --dry-run-env 2>/dev/null)"
-  [[ "$out" == *"PJ_RENDERER=fullscreen"* && "$out" == *"CLAUDE_CODE_NO_FLICKER=1"* ]] && ok "26a --fullscreen turns the default profile fullscreen" || bad "26a --fullscreen" "$out"
-  out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile fully --classic --dry-run-env 2>/dev/null)"
-  [[ "$out" == *"PJ_RENDERER=classic"* && "$out" != *NO_FLICKER* ]] && ok "26b --classic turns a fullscreen profile classic" || bad "26b --classic" "$out"
+  out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --classic --dry-run-env 2>/dev/null)"
+  [[ "$out" == *"PJ_RENDERER=classic"* && "$out" != *NO_FLICKER* ]] && ok "26a --classic turns the default profile classic" || bad "26a --classic" "$out"
+  out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile classy --fullscreen --dry-run-env 2>/dev/null)"
+  [[ "$out" == *"PJ_RENDERER=fullscreen"* && "$out" == *"CLAUDE_CODE_NO_FLICKER=1"* ]] && ok "26b --fullscreen turns a classic profile fullscreen" || bad "26b --fullscreen" "$out"
   out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --fullscreen --dry-run 2>/dev/null)"
   # argv[0] first: on a pj without the flag this fell through to a real launch and printed
   # nothing, which an absence-only check read as a pass (measured 2026-09-27).
