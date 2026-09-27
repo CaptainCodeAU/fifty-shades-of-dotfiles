@@ -29,10 +29,10 @@
 # remote command's) is split three ways from its stderr:
 #
 #   PC off      timed out / host down / no route -- the box is asleep
-#   🔑 GPU key  "Permission denied" -- mlbox refused the key, or it is locked
-#   GPU ssh?    anything else -- read the message by running this by hand
+#   🔑 3090 key "Permission denied" -- mlbox refused the key, or it is locked
+#   3090 ssh?   anything else -- read the message by running this by hand
 #
-# "GPU ?" means ssh got through (or this is the box itself) but nvidia-smi
+# "3090 ?" means ssh got through (or this is the box itself) but nvidia-smi
 # returned no numbers.
 #
 # A truly-off box doesn't refuse the connection, it just goes silent until
@@ -83,7 +83,7 @@ if [ -x "$NVSMI" ]; then
   # Local branch: this IS the GPU box. No network, so no backoff file and no
   # "PC off" -- an empty result here means the driver, not the LAN.
   output=$({ "$NVSMI" $NVSMI_ARGS; free -m | grep '^Swap:'; } 2>/dev/null) || output=""
-  [ -n "$output" ] || { printf 'GPU ?'; exit 0; }
+  [ -n "$output" ] || { printf '3090 ?'; exit 0; }
 else
   if [ -f "$BACKOFF_FILE" ]; then
     last_fail=0 last_msg=""
@@ -102,8 +102,8 @@ else
   if [ "$rc" -eq 255 ]; then
     case $output in
       *'timed out'*|*'Host is down'*|*'No route to host'*) msg='PC off' ;;
-      *'Permission denied'*) msg='🔑 GPU key' ;;
-      *) msg='GPU ssh?' ;;
+      *'Permission denied'*) msg='🔑 3090 key' ;;
+      *) msg='3090 ssh?' ;;
     esac
     printf '%s %s\n' "$(date +%s)" "$msg" > "$BACKOFF_FILE" 2>/dev/null || true
     printf '%s' "$msg"
@@ -122,7 +122,7 @@ read -r util mem_used mem_total <<EOF
 $gpu_line
 EOF
 
-[ -n "${util:-}" ] || { printf 'GPU ?'; exit 0; }
+[ -n "${util:-}" ] || { printf '3090 ?'; exit 0; }
 
 swap_total=$(printf '%s' "$swap_line" | awk '{print $2}')
 swap_used=$(printf '%s' "$swap_line" | awk '{print $3}')
@@ -131,17 +131,38 @@ if [ -n "${swap_total:-}" ] && [ "$swap_total" -gt 0 ] 2>/dev/null; then
   swap_pct=$(awk -v u="$swap_used" -v t="$swap_total" 'BEGIN { printf "%.0f", (u/t)*100 }')
 fi
 
-title="GPU ${util}% | ${mem_used}M"
+# herdr's tab bar strips ANSI color codes (confirmed live 2026-08-28 -- a
+# colored escape sequence rendered as literal "[93m...[0m" text; the 0.9.1
+# CHANGELOG, #3001, strips them outright), so a colored circle emoji stands in
+# for real color. Since 2026-09-27 EVERY number carries one, matching
+# mac-status.sh beside it: green below 70%, yellow from 70, red from 90. VRAM's
+# dot is its share of total VRAM. No " | " inside the reading: herdr's
+# separator between this and the Mac reading is a bar.
+dot() {
+  if [ "$1" -ge 90 ] 2>/dev/null; then printf '🔴'
+  elif [ "$1" -ge 70 ] 2>/dev/null; then printf '🟡'
+  else printf '🟢'
+  fi
+}
+
+vram_pct=0
+if [ -n "${mem_total:-}" ] && [ "$mem_total" -gt 0 ] 2>/dev/null; then
+  vram_pct=$(awk -v u="$mem_used" -v t="$mem_total" 'BEGIN { printf "%.0f", (u/t)*100 }')
+fi
+if [ "$mem_used" -ge 1024 ] 2>/dev/null; then
+  vram=$(awk -v u="$mem_used" 'BEGIN { printf "%.1fG", u/1024 }')
+else
+  vram="${mem_used}M"
+fi
+
+title="3090 $(dot "$util")${util}% $(dot "$vram_pct")${vram}"
 
 # Swap is worth mentioning only once it's actually eating into real memory;
-# below 15% it's normal and adds noise. herdr's tab bar strips ANSI color
-# codes (confirmed live 2026-08-28 -- a colored escape sequence rendered as
-# literal "[93m...[0m" text), so a colored circle emoji stands in for real
-# color: yellow from 15-44%, red from 45% up.
+# below 15% it's normal and adds noise: yellow from 15-44%, red from 45% up.
 if [ "$swap_pct" -ge 45 ]; then
-  title="$title | 🔴 SWAP ${swap_pct}%"
+  title="$title 🔴SWAP ${swap_pct}%"
 elif [ "$swap_pct" -ge 15 ]; then
-  title="$title | 🟡 SWAP ${swap_pct}%"
+  title="$title 🟡SWAP ${swap_pct}%"
 fi
 
 printf '%s' "$title"

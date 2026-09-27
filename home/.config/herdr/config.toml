@@ -225,10 +225,19 @@ window_title = "{hostname}: {workspace}"
 # Resolves $HOME at runtime via the password database instead of a literal
 # path, both because herdr's daemon has no $HOME set (see gpu-status.sh) and
 # so this tracked file never has to hold a real username.
+#
+# The first entry (2026-09-27) is THIS Mac's own CPU/GPU/memory from
+# mac-status.sh, which prints nothing off macOS. Its command is guarded with
+# `[ ! -x ] ||` so a box that has pulled this config but not yet restowed the
+# new script exits 0 quietly instead of logging exit 127 every 5 seconds, the
+# 2026-09-06 failure above. The separator only ever falls between these two
+# entries, so it is the Mac / PC divider: a heavy bar, stronger than anything
+# inside either reading.
 tab_bar_right = [
+  { type = "command", command = "HOME=\"$(eval echo ~$(id -un))\"; f=\"$HOME/.config/herdr/mac-status.sh\"; [ ! -x \"$f\" ] || \"$f\"", interval_seconds = 5, timeout_seconds = 4 },
   { type = "command", command = "HOME=\"$(eval echo ~$(id -un))\"; \"$HOME/.config/herdr/gpu-status.sh\"", interval_seconds = 5, timeout_seconds = 4 },
 ]
-tab_bar_right_separator = " · "
+tab_bar_right_separator = " ┃ "
 
 # Size of the virtual terminal a headless server gives a pane when no client is
 # attached. Attached clients always use their own terminal size. 0.8.2 changed

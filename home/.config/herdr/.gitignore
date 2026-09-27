@@ -17,6 +17,7 @@
 !.gitignore
 !config.toml
 !gpu-status.sh
+!mac-status.sh
 !plugins/
 !plugins/window-title-fix/
 !plugins/window-title-fix/*
