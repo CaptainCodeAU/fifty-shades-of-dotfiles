@@ -352,6 +352,7 @@ do_count() {
   for pid in $C_MACH; do in_project "${R_CWD[$pid]}" && { C_PROJ+=("$pid"); C_WHY[$pid]="cwd"; }; done
   # rule (b): herdr panes in a workspace that holds the project
   local -A proj_ws sid2pid
+  local jp="" q=""
   for pid in $C_MACH; do sid2pid[${R_SID[$pid]}]="$pid"; done
   if ! hcall pane list; then
     C_WS="unmeasured: $( [[ $HKIND == err ]] && print -r -- "herdr pane list: $HCODE" || herdr_why )"
@@ -380,6 +381,16 @@ do_count() {
           # it as claude for seconds after it exits (2026-09-27). Only this unregistered
           # listing is skipped; a registered session in the pane counts above as ever.
           continue
+        elif hcall pane process-info --pane "$p" \
+          && jp="$(print -r -- "$HOUT" | jq -r '.result.process_info.foreground_processes[] | select(((.argv0 // "") | split("/") | last) == "claude") | .pid' 2>/dev/null \
+            | while read -r q; do (( ${C_MACH[(Ie)$q]} )) && { print -r -- "$q"; break; }; done)" \
+          && [[ -n "$jp" ]]; then
+          # herdr had no session id for this pane (agent_session null), but the pane's own
+          # foreground runs a pid the registry already holds: the SAME session, which
+          # counted twice before (project 5 of 4 with 4 on the machine, 2026-09-27; C8e).
+          # A pane herdr cannot describe still counts below, strict as ever.
+          C_PANE[$jp]="$p"
+          [[ -n "${C_WHY[$jp]:-}" ]] || { C_PROJ+=("$jp"); C_WHY[$jp]="workspace $ws"; }
         else
           n=$(( n + 1 )); C_PROJ+=("herdr:$p"); C_WHY[herdr:$p]="claude agent in workspace $ws with no live registry entry (session ${sid:-none yet})"
         fi

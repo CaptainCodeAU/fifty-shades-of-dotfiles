@@ -514,6 +514,14 @@ export PJ_CAP_REPLACING_PANE=w3X:p4Q
 run count --cwd "$REPO" --json
 check "C8d a REGISTERED session in the named pane still counts (only a stale listing is skipped)" '[ "$(j .project.count)" = "4 " ]'
 unset PJ_CAP_REPLACING_PANE
+# C8e, 2026-09-27: ONE live session counted TWICE (project 5 of 4 with 4 on the machine).
+# herdr listed Gavin's test pane with agent_session null, so the pane could not be joined
+# to the registered pid, which counted by cwd AND again as an unregistered agent. The pane's
+# own process-info names that pid, so it is the same session: counted once.
+process_info_json w3X:p50 36921 | resp pane_process-info_w3X:p50 1 0
+run count --cwd "$REPO" --json
+check "C8e an unregistered listing whose pane runs an already-counted pid is not counted twice" \
+  '[ "$(j .project.count)" = "3 " ] && [ "$(j "[.project.sessions[] | select(.pid==null)] | length")" = "0 " ]'
 new_world; touch "$FAKE/SANDBOX"
 run count --cwd "$REPO" --json
 check "C9 herdr refused: count still measures registry and ps (rc 0) and says the workspace rule is unmeasured" \
