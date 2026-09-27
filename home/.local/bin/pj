@@ -1377,24 +1377,19 @@ selftest() {
   else
     bad "28e" "wanted 2 launches, got: $([[ -r $rl ]] && cat "$rl" || echo none)"
   fi
-  # 28f THIS repo's profiles (as 1b reads them): default, memory and scratch enable
-  #     screen-switch; scratch keeps its ui-gallery checkout; the default dry-run carries it.
-  local want28='screen-switch@cc-claude-mods' m28=""
+  # 28f THIS repo's profiles (as 1b reads them) each pass EXACTLY ONE --settings.
+  #     Measured live 2026-09-27: a second --settings REPLACES the first file whole on
+  #     2.1.283, so the mods overlay silently dropped settings.project.json (its hooks, the
+  #     status line, the start card) from every pj session for about 15 minutes. The
+  #     profiles are at `mods: none` until pj passes one merged --settings; this arm is the
+  #     guard for that whole class, and must hold after the fix too.
+  local m28=""
   for f in default memory scratch; do
-    [[ "$(sed -n 's/^mods:[[:space:]]*//p' "$ppk/$f" 2>/dev/null)" == "$want28" ]] || m28="$m28 $f"
+    out="$(PJ_PROFILE_DIR="$ppk" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile "$f" --dry-run 2>/dev/null)"
+    [[ "${out%%$'\n'*}" == claude && "$(print -r -- "$out" | grep -cx -- '--settings')" == 1 ]] || m28="$m28 $f"
   done
-  [[ -z "$m28" ]] && ok "28f default, memory and scratch declare mods: $want28" || bad "28f profile mods" "missing or different in:$m28"
+  [[ -z "$m28" ]] && ok "28f default, memory and scratch each pass exactly ONE --settings (a real dry run each)" || bad "28f one --settings" "not exactly one in:$m28"
   grep -q '^plugins:.*cc-claude-mods/plugins/ui-gallery' "$ppk/scratch" && ok "28f scratch keeps its plugins: ui-gallery checkout" || bad "28f scratch plugins" "$(grep '^plugins:' "$ppk/scratch")"
-  #     The overlay must equal the profile's settings file's own enabledPlugins plus the mod,
-  #     whatever that file holds on this machine (read, never written; jq builds the want).
-  out="$(PJ_PROFILE_DIR="$ppk" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --dry-run 2>/dev/null)"
-  if whence -p jq >/dev/null 2>&1; then
-    local sf28="$(sed -n 's/^settings:[[:space:]]*//p' "$ppk/default")"; sf28="${sf28/#\~/$HOME}"
-    local w28="$(jq -c --arg m "$want28" '(.enabledPlugins // {}) + {($m): true}' "$sf28" 2>/dev/null || jq -nc --arg m "$want28" '{($m): true}')"
-    [[ "$out" == *$'\n--settings\n{"enabledPlugins":'"$w28"$'}\n'* ]] && ok "28f the repo default profile's overlay = its settings file's enables + $want28" || bad "28f default overlay" "want $w28 in: $out"
-  else
-    [[ "$out" == *'"'"$want28"'":true'* ]] && ok "28f the repo default profile's overlay enables $want28 (no jq here to build the whole want)" || bad "28f default overlay" "$out"
-  fi
   # 28g a declared mod that is NOT installed still LAUNCHES: pj never refuses over a missing
   #     file (pj-health's mods-installed row says it). A real launch through a fake launch
   #     file, as 24e; herdr, fetch and checks are switched off so nothing real is touched.
