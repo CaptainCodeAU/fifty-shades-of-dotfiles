@@ -86,8 +86,11 @@ of the same conversation:
 - In a session, the ui-gallery mod's `/fullscreen` (or `/classic`) records the wish. On
   `/exit` its `session.end` hook writes `<mode> <resume-id|new>` into `$PJ_RELAUNCH_FILE`
   (`$TMPDIR/pj-relaunch.<pj pid>`, exported by pj). Once claude returns, pj reads it,
-  overwrites it with `consumed`, and launches again in that mode with `--resume <id>`
-  (`new` when the conversation never ran a prompt, so there is no transcript to resume).
+  overwrites it with `consumed`, and launches again in that mode with `--resume <id>`,
+  or fresh when `<config_dir>/projects/*/<id>.jsonl` does not exist (nothing to resume).
+  pj judges that, not the mod: a just-resumed session counts 0 prompts of its own, and
+  when the mod judged by that count, `/classic` after a switch started fresh (measured
+  live 2026-09-27; selftest 26h).
   A fullscreen relaunch sets `PJ_OPEN_GALLERY=1` and the mod opens the gallery.
 - The relaunch keeps pj's own argv and any typed `--plugin-dir` pairs, and drops every
   other typed extra (a prompt, `--continue`), which must not run twice. The session caps

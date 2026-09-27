@@ -1100,8 +1100,11 @@ selftest() {
   # 26e/f/g. run_with_relaunch with a fake __claude_launch that records each launch and, on
   #     the first, asks for a switch the way the gallery mod does.
   local rl="$root/relaunch-e"
+  # a transcript for sess-26e, so the relaunch has something to resume (26h is the arm without)
+  mkdir -p "$root/cfg26/projects/-some-project" && : > "$root/cfg26/projects/-some-project/sess-26e.jsonl"
   ( PROFILE_DIR="$pdir"; export PJ_PROMPT_OUT="$root/prompt.md" PJ_WORKER_BIN="$fk/rc0"
     load_profile default >/dev/null 2>&1 && build_argv >/dev/null 2>&1 || exit 9
+    P_CONFIG_DIR="$root/cfg26"
     export PJ_RELAUNCH_FILE="$rf"; print -r -- "consumed" > "$rf"
     __claude_launch() {
       print -r -- "${PJ_RENDERER-}|${PJ_OPEN_GALLERY-}|${CLAUDE_CODE_NO_FLICKER-}|${*[-2,-1]}" >> "$rl"
@@ -1142,6 +1145,22 @@ selftest() {
     run_with_relaunch ) >/dev/null 2>&1
   out="$([[ -r $rl ]] && cat "$rl")"
   [[ "${out##*$'\n'}" == "classic|||"* && "${out##*$'\n'}" != *--resume* ]] && ok "26g /classic relaunches classic, drops NO_FLICKER and the gallery ask; 'new' resumes nothing" || bad "26g" "$out"
+  # 26h an id with NO transcript on disk starts fresh instead of a --resume that would fail.
+  #     Measured 2026-09-27: a just-resumed session counts 0 prompts, so the mod cannot be
+  #     the judge of "anything to resume"; the transcript file is.
+  rl="$root/relaunch-h"
+  ( PROFILE_DIR="$pdir"; export PJ_PROMPT_OUT="$root/prompt.md" PJ_WORKER_BIN="$fk/rc0"
+    load_profile default >/dev/null 2>&1 && build_argv >/dev/null 2>&1 || exit 9
+    P_CONFIG_DIR="$root/cfg26"
+    export PJ_RELAUNCH_FILE="$rf"; print -r -- "consumed" > "$rf"
+    __claude_launch() {
+      print -r -- "$*" >> "$rl"
+      [[ ! -e "$rl.asked" ]] && { : > "$rl.asked"; print -r -- "classic no-such-sess" > "$PJ_RELAUNCH_FILE"; }
+      return 0
+    }
+    run_with_relaunch ) >/dev/null 2>&1
+  out="$([[ -r $rl ]] && tail -1 "$rl")"
+  [[ -r "$rl" && "$(grep -c . "$rl")" == 2 && "$out" != *--resume* ]] && ok "26h no transcript for the id -> a fresh launch, no --resume" || bad "26h" "$([[ -r $rl ]] && cat "$rl")"
   print -- "pj selftest: $pass passed, $fail failed"
   [[ $fail -eq 0 ]]
 }
@@ -1221,6 +1240,15 @@ run_with_relaunch() {
     if [[ "$want" == fullscreen ]]; then export PJ_OPEN_GALLERY=1; fi
     # The old session has exited, so this counts what is left; a cap still refuses.
     check_session_caps || { rc=$?; break; }
+    # Resume only what left a transcript: a --resume of an id with none fails outright.
+    # pj judges this, not the mod: a just-resumed session counts 0 prompts of its own.
+    if [[ "$id" != new ]]; then
+      local -a tx=( "$(expand_tilde "$P_CONFIG_DIR")"/projects/*/"$id".jsonl(N) )
+      if (( ${#tx} == 0 )); then
+        print -u2 -r -- "pj: nothing to resume for $id (no transcript), so this starts fresh"
+        id=new
+      fi
+    fi
     print -u2 -r -- "pj: reopening this conversation in $want (asked for with /$want)"
     if [[ "$id" == new ]]; then
       __claude_launch "${PJ_ARGV[@]}" "${carry[@]}"
