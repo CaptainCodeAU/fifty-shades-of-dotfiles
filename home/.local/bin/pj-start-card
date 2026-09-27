@@ -116,7 +116,9 @@
 #       "drawer": "present" | "none" | "unknown",   unknown = open-items broken or absent
 #       "open": N, "pinned": N, "parked": N,
 #       "list": [ {"id": "W-..." | null, "title": "...", "pinned": true | false,
-#                  "done_when": "..." | null, "when": "..." | null, "next": "..." | null} ]
+#                  "done_when": "..." | null, "when": "..." | null, "next": "..." | null} ],
+#       "parked_list": [ {"id": "W-...", "title": "..."} ]   open-items' parked order; [] when
+#                                        none parked or the read failed (errors says which)
 #     },                                 list = EVERY own open item in the card's order, pinned
 #                                        first, then ID order as open-items lists it (a byte
 #                                        sort until W-20260924-A102). A field written on two
@@ -340,7 +342,7 @@ gather(){
   C_HMARK=""; C_HPATH=""; C_HANDOFF=""; C_HSIZE=""; C_HDATE=""
   C_TRACKERS=(); C_TRACKER_MARKS=()
   C_SYNC=""; C_BEHIND=0; C_MODS=""; C_MODS_UNSEEN=0; C_MODS_MEASURED=0
-  C_PANEL_N=0; C_PANEL_VAL=""; C_LIST=""
+  C_PANEL_N=0; C_PANEL_VAL=""; C_LIST=""; C_PLIST=""
   # Selftest seam: a crash in the middle of gathering, the one failure nothing else provokes.
   [ "${PJ_CARD_FAULT:-}" = crash ] && exit 3
 
@@ -486,6 +488,16 @@ gather(){
     esac
   fi
   [ "$C_DSTATE" = present ] && exec 9<&-
+  # Parked titles, JSON only and only when something is parked (about 90 ms, measured
+  # 2026-09-27). A failed read keeps the count and leaves the list empty, named in errors.
+  if [ "$MODE" = json ] && [ "$C_DSTATE" = present ] && [ "$C_NPARKED" -gt 0 ]; then
+    od="$(LC_ALL=C awk "$PARKED_AWK" < <({ open-items --status parked --json 2>/dev/null; printf '\036RC %s\n' "$?"; }) 2>/dev/null)"
+    case "$od" in
+      OK|OK$'\n'*) C_PLIST="${od#OK}"; C_PLIST="${C_PLIST#$'\n'}" ;;
+      ERR\ *)      err "parked: ${od#ERR }; titles left out" ;;
+      *)           err "parked: the read gave nothing; titles left out" ;;
+    esac
+  fi
   return 0
 }
 
@@ -567,15 +579,10 @@ render_text(){
 # drawer written between the two reads, or a pin rule the two readers disagree on, is reported
 # instead of shown wrong. Strings stay JSON-escaped from open-items; every escape other than \\
 # and \" becomes ?, as do DEL and the bidi and zero-width marks: the text the card shows.
-DETAIL_AWK="$CLEAN_AWK"'
-  BEGIN { np = 0; nr = 0; nt = 0; ORC = -1 }
-  function esc(s,   i, n, c, o) {       # a card title (already clean) as JSON string content
-    o = ""; n = length(s)
-    for (i = 1; i <= n; i++) { c = substr(s, i, 1); if (c == "\\" || c == "\"") o = o "\\"; o = o c }
-    return o
-  }
-  NR == FNR { T[++nt] = $0; next }
-  /^\036RC / { ORC = $2 + 0; next }
+# tok(s, p): the JSON string starting at the quote at p, its escapes kept, a control or
+# bidi mark turned into "?"; TEND = its closing quote, BROKEN = 1 when it never closes.
+# Shared by the detail read and the parked read.
+TOK_AWK='
   function tok(s, p,   i, n, c, d, o) {
     o = ""; n = length(s); i = p + 1
     while (i <= n) {
@@ -593,6 +600,36 @@ DETAIL_AWK="$CLEAN_AWK"'
     }
     TEND = n; BROKEN = 1; return o
   }
+'
+
+# The parked read (items.parked_list, for the start-card mod, 2026-09-27): open-items
+# --status parked --json on stdin, one {"id": ...} object per line, then "\036RC <exit>".
+# Prints OK and the list's objects, or ERR and why. Order is open-items' own.
+PARKED_AWK="$CLEAN_AWK$TOK_AWK"'
+  BEGIN { n = 0; out = ""; ORC = -1 }
+  /^\036RC / { ORC = $2 + 0; next }
+  /^\{"id":"/ {
+    id = tok($0, 7); rest = substr($0, TEND + 1)
+    p = index(rest, "\"title\":\""); t = (p ? tok(rest, p + 8) : "")
+    out = out (n++ ? "," : "") "{\"id\":\"" id "\",\"title\":\"" t "\"}"
+  }
+  END {
+    if (ORC > 1) { print "ERR open-items --status parked --json exit " ORC; exit }
+    if (ORC < 0) { print "ERR open-items --status parked --json did not finish"; exit }
+    if (BROKEN)  { print "ERR open-items --status parked --json did not parse"; exit }
+    print "OK"; print out
+  }
+'
+
+DETAIL_AWK="$CLEAN_AWK$TOK_AWK"'
+  BEGIN { np = 0; nr = 0; nt = 0; ORC = -1 }
+  function esc(s,   i, n, c, o) {       # a card title (already clean) as JSON string content
+    o = ""; n = length(s)
+    for (i = 1; i <= n; i++) { c = substr(s, i, 1); if (c == "\\" || c == "\"") o = o "\\"; o = o c }
+    return o
+  }
+  NR == FNR { T[++nt] = $0; next }
+  /^\036RC / { ORC = $2 + 0; next }
   function fld(s, key,   p, q, v, o, k) {
     p = index(s, "\"" key "\":"); if (p == 0) return "null"
     q = p + length(key) + 3
@@ -685,7 +722,7 @@ render_json(){
         t="$t{\"id\":null,\"title\":$titles,\"pinned\":$REPLY,\"done_when\":null,\"when\":null,\"next\":null}"
       done
     fi
-    o="$o,\"items\":$t]}"
+    o="$o,\"items\":$t],\"parked_list\":[$C_PLIST]}"
   fi
 
   # cross-project: the five header sections by name, then the inbox count and the notes

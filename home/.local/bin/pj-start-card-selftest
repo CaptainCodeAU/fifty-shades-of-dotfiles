@@ -547,6 +547,12 @@ check "T the drawer changed between the two reads: reported, never shown wrong" 
 printf '#!/bin/sh\n"%s" "$@"; [ "$1" = --session ] && exit 5; exit 0\n' "$REALOI" > "$FAKE/open-items"
 J="$( builtin cd "$B" && PATH="$FAKE:$PATH" "$CARD" --json </dev/null 2>/dev/null )"
 check "T open-items --session exiting 5: parses, errors names it" 'parses && jv ".errors[]" | grep -q "^items: open-items --session exit 5"'
+# items.parked_list (the start-card mod's parked titles, 2026-09-27): open-items' parked order.
+runj "$B"; check "T parked_list: B's 2 parked items, ids and titles, as many as .items.parked" 'parses && [ "$(jv "[.items.parked_list[] | .id + \"=\" + .title] | join(\",\")")" = "W-20260102-01=parked item 1,W-20260102-02=parked item 2" ] && [ "$(jv ".items.parked_list | length")" = "$(jv .items.parked)" ]'
+runj "$D"; check "T parked_list: none parked is an empty list, never null" 'parses && [ "$(jv ".items.parked_list | type")" = array ] && [ "$(jv ".items.parked_list | length")" -eq 0 ]'
+printf '#!/bin/sh\n[ "$1" = --status ] && { echo "{broken"; exit 3; }\nexec "%s" "$@"\n' "$REALOI" > "$FAKE/open-items"
+J="$( builtin cd "$B" && PATH="$FAKE:$PATH" "$CARD" --json </dev/null 2>/dev/null )"
+check "T parked read failing: parked count kept, parked_list empty, errors names it" 'parses && [ "$(jv .items.parked)" = 2 ] && [ "$(jv ".items.parked_list | length")" -eq 0 ] && jv ".errors[]" | grep -q "^parked: open-items --status parked --json exit 3"'
 PH="$B/.claude/pj-homes"; command mv "$PH" "$ROOT/ph-b.bak"; mkdir -p "$PH"
 runj "$B"; check "T pj-homes is a directory: parses, defaults used, errors says so" 'parses && jv ".errors[]" | grep -q "^pj-homes: " && [ "$(jv .panel.source)" = automatic ]'
 command mv "$PH" "$ROOT/ph-dir.gone"; printf 'panel: items\n' > "$PH"; chmod 000 "$PH"
