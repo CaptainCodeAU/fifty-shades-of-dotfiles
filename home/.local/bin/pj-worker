@@ -375,6 +375,11 @@ do_count() {
         [[ -n "${proj_ws[$ws]:-}" ]] || continue
         if [[ -n "$pid" ]]; then
           [[ -n "${C_WHY[$pid]:-}" ]] || { C_PROJ+=("$pid"); C_WHY[$pid]="workspace $ws"; }
+        elif [[ -n "${PJ_CAP_REPLACING_PANE-}" && "$p" == "$PJ_CAP_REPLACING_PANE" ]]; then
+          # pj's /fullscreen relaunch replaces the session in this pane, and herdr still lists
+          # it as claude for seconds after it exits (2026-09-27). Only this unregistered
+          # listing is skipped; a registered session in the pane counts above as ever.
+          continue
         else
           n=$(( n + 1 )); C_PROJ+=("herdr:$p"); C_WHY[herdr:$p]="claude agent in workspace $ws with no live registry entry (session ${sid:-none yet})"
         fi

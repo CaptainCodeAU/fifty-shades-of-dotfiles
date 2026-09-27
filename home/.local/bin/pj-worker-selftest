@@ -499,6 +499,21 @@ new_world room; lists '{"agent":"claude","agent_session":{"value":null},"agent_s
 run count --cwd "$REPO" --json
 check "C8 a claude herdr agent in the workspace with no registry entry yet COUNTS (unregistered)" \
   '[ "$(j .project.count)" = "4 " ] && [ "$(j "[.project.sessions[] | select(.pid==null)] | length")" = "1 " ]'
+# C8b-d, 2026-09-27: pj's /fullscreen relaunch was refused at the cap by its OWN pane, which
+# herdr still lists as claude for seconds after the old session exits (worker mods, arm 2b).
+# pj names the pane it is replacing in PJ_CAP_REPLACING_PANE, and only an UNREGISTERED
+# listing in exactly that pane is skipped.
+export PJ_CAP_REPLACING_PANE=w3X:p50
+run count --cwd "$REPO" --json
+check "C8b the pane pj is replacing: its unregistered listing is not counted" \
+  '[ "$(j .project.count)" = "3 " ] && [ "$(j "[.project.sessions[] | select(.pid==null)] | length")" = "0 " ]'
+export PJ_CAP_REPLACING_PANE=w3X:p99
+run count --cwd "$REPO" --json
+check "C8c control: naming ANOTHER pane exempts nothing" '[ "$(j .project.count)" = "4 " ]'
+export PJ_CAP_REPLACING_PANE=w3X:p4Q
+run count --cwd "$REPO" --json
+check "C8d a REGISTERED session in the named pane still counts (only a stale listing is skipped)" '[ "$(j .project.count)" = "4 " ]'
+unset PJ_CAP_REPLACING_PANE
 new_world; touch "$FAKE/SANDBOX"
 run count --cwd "$REPO" --json
 check "C9 herdr refused: count still measures registry and ps (rc 0) and says the workspace rule is unmeasured" \

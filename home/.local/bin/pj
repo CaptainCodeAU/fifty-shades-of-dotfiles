@@ -1434,8 +1434,13 @@ run_with_relaunch() {
     unset CLAUDE_CODE_NO_FLICKER PJ_OPEN_GALLERY
     for pv in "${PJ_ENV[@]}"; do export "${pv%%=*}=${pv#*=}"; done
     if [[ "$want" == fullscreen ]]; then export PJ_OPEN_GALLERY=1; fi
-    # The old session has exited, so this counts what is left; a cap still refuses.
-    check_session_caps || { rc=$?; break; }
+    # The old session has exited, so this counts what is left; a cap still refuses. herdr
+    # lists the exiting session's pane as claude for a few seconds more, which refused this
+    # relaunch at cap minus one (2026-09-27), so pj names the pane it is replacing and
+    # pj-worker skips only an UNREGISTERED listing there (its selftest C8b-d).
+    export PJ_CAP_REPLACING_PANE="${HERDR_PANE_ID-}"
+    check_session_caps || { rc=$?; unset PJ_CAP_REPLACING_PANE; break; }
+    unset PJ_CAP_REPLACING_PANE
     # Resume only what left a transcript: a --resume of an id with none fails outright.
     # pj judges this, not the mod: a just-resumed session counts 0 prompts of its own.
     if [[ "$id" != new ]]; then
