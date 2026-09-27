@@ -497,6 +497,10 @@ build_argv() {
   # last-one-wins, which would have silently dropped the whole settings.project.json.
   # The third arm is the one that decided it; the first two alone cannot tell the two
   # behaviours apart.
+  # CORRECTED 2026-09-27 on 2.1.283: env survives, HOOKS DO NOT. A second --settings of
+  # any content switched off settings.project.json's hooks (the deletion guard let a
+  # truncating command run). Those arms measured env only. So remote_control and voice
+  # below are a hazard until pj builds one settings source: W-20260927-A35.
   #
   # The overlay is emitted ONLY when a profile sets one of these keys, so a profile that
   # sets none passes exactly one --settings and its argv is unchanged. ONE overlay carries
@@ -1378,9 +1382,10 @@ selftest() {
     bad "28e" "wanted 2 launches, got: $([[ -r $rl ]] && cat "$rl" || echo none)"
   fi
   # 28f THIS repo's profiles (as 1b reads them) each pass EXACTLY ONE --settings.
-  #     Measured live 2026-09-27: a second --settings REPLACES the first file whole on
-  #     2.1.283, so the mods overlay silently dropped settings.project.json (its hooks, the
-  #     status line, the start card) from every pj session for about 15 minutes. The
+  #     Measured 2026-09-27 on 2.1.283: ANY second --settings switches off every hook
+  #     settings.project.json registers (guards, start card, watches) and its status line,
+  #     though its env survives (docs/PJ_PROFILES.md, corrected table). The mods overlay
+  #     did that to every pj session for about 15 minutes. The
   #     profiles are at `mods: none` until pj passes one merged --settings; this arm is the
   #     guard for that whole class, and must hold after the fix too.
   local m28=""

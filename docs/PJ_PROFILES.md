@@ -222,6 +222,28 @@ The third row is the one that decided it. Had the flag been last-one-wins, the o
 would have silently replaced the whole of `settings.project.json` — every hook, every
 env var — and the first two rows would have looked exactly the same.
 
+**CORRECTED 2026-09-27 on Claude Code 2.1.283: `env` survives a second `--settings`, the
+HOOKS DO NOT.** The table above measured `env` only. Headless `pj -p` arms, the
+deletion guard as the instrument (it lives in `settings.project.json`), same command:
+
+| Second `--settings`                                        | `API_TIMEOUT_MS` (file env)     | `: > "$TMPDIR/probe"`   |
+| ---------------------------------------------------------- | ------------------------------- | ----------------------- |
+| none (control)                                             | `1800000`                       | **BLOCKED** by the hook |
+| `{"env":{...}}`                                            | `1800000`, overlay env also set | not run                 |
+| `{"enabledPlugins":{"cc-skills@...":true}}`                | `1800000`                       | not run                 |
+| the file's own `enabledPlugins`, verbatim                  |                                 | **RAN**                 |
+| `{"enabledPlugins":{"screen-switch@cc-claude-mods":true}}` |                                 | **RAN**                 |
+| `{"remoteControlAtStartup":true}`                          |                                 | **RAN**                 |
+
+So ANY second `--settings` switches off every hook `settings.project.json` registers
+(the guards, the start card, the watches) and, seen live in Gavin's session, its status
+line, while its env values stay. It is why the `mods:` overlay was rolled back to
+`mods: none` the same day, and why `pj --selftest` arm 28f now requires every shipped
+profile to pass exactly ONE `--settings`. `remote_control` and `voice` travel the same
+way, so a profile that sets either one launches unguarded: W-20260927-A35. An earlier
+note (commits c7b744b, 6d2350a and the acceptance checklist's intro) said the second file
+"replaces the first whole"; that was an inference, and this table is the measurement.
+
 **Unset means emit NOTHING, never "emit the default value".** That is what keeps the
 default profile's argv byte-identical to the pre-profile launcher, which `pj --selftest`
 arm 1 checks and arm 19d guards from the other side.

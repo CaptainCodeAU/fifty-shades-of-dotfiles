@@ -53,6 +53,8 @@
 # appends a SECOND --settings carrying a JSON string. Measured 2026-09-21: --settings
 # REPEATS and MERGES (later wins per key, earlier keys survive), so the overlay does not
 # replace settings.project.json. pj --selftest arm 19c proves both halves in one run.
+# CORRECTED 2026-09-27 (2.1.283): that measured env only; a second --settings switches
+# off the file's HOOKS. Do not set remote_control or voice until W-20260927-A35 is done.
 #
 # ONE MORE KEY, and the second deliberate change to this profile's argv (2026-09-27, the
 # screen-switch build, D-20260927-A03):
@@ -76,7 +78,8 @@ mode:            normal
 card:            on
 # /fullscreen and /classic (D-20260927-A03). Installed into ~/.claude by cc-claude-mods'
 # install.sh; pj-health's mods-installed row says when it is not.
-# ROLLED BACK 2026-09-27 ~13:00: a second --settings REPLACES the whole first one on
-# 2.1.283 (measured live: a session with the mods overlay ran none of settings.project.json's
-# hooks and lost the status line). `none` until pj passes ONE merged --settings.
+# ROLLED BACK 2026-09-27 ~13:00: on 2.1.283 ANY second --settings switches off every
+# hook settings.project.json registers (and its status line), though its env survives
+# (docs/PJ_PROFILES.md, the corrected table). screen-switch is enabled inside
+# settings.project.json itself instead. `none` until pj builds one settings source (A35).
 mods:            none
