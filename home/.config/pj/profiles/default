@@ -76,4 +76,7 @@ mode:            normal
 card:            on
 # /fullscreen and /classic (D-20260927-A03). Installed into ~/.claude by cc-claude-mods'
 # install.sh; pj-health's mods-installed row says when it is not.
-mods:            screen-switch@cc-claude-mods
+# ROLLED BACK 2026-09-27 ~13:00: a second --settings REPLACES the whole first one on
+# 2.1.283 (measured live: a session with the mods overlay ran none of settings.project.json's
+# hooks and lost the status line). `none` until pj passes ONE merged --settings.
+mods:            none

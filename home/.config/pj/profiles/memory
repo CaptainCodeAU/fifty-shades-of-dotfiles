@@ -44,4 +44,5 @@ mode:            normal
 card:            on
 # /fullscreen and /classic (D-20260927-A03), from ~/.claude-memory's OWN install: an enable
 # only loads what that config dir's plugins/ holds. pj-health's mods-installed row checks it.
-mods:            screen-switch@cc-claude-mods
+# Rolled back 2026-09-27, see the default profile.
+mods:            none

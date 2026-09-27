@@ -33,7 +33,8 @@ prompt:          pj-prompt-file
 plugins:         ~/CODE/CaptainCodeAU/cc-claude-mods/plugins/ui-gallery
 # The screen switch, INSTALLED into ~/.claude-scratch by cc-claude-mods' install.sh and
 # enabled through pj's overlay (pj never reads that config dir's user settings).
-mods:            screen-switch@cc-claude-mods
+# Rolled back 2026-09-27, see the default profile.
+mods:            none
 mode:            normal
 card:            off
 # Classic again since 2026-09-27 (D-20260927-A03, closes W-20260926-A02): every session
