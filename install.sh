@@ -169,7 +169,8 @@ HERDR_COOLDOWN_DAYS="5"
 #
 # The gate is therefore the same one used everywhere else in this estate: pin
 # the exact artefact and assert it. These hashes were computed from the real
-# v0.8.0 assets. install.sh REFUSES to install on mismatch, so a silently
+# release assets (the dated note above HERDR_VERSION says which and how).
+# install.sh REFUSES to install on mismatch, so a silently
 # re-uploaded asset fails loudly instead of landing.
 #
 # This is trust-on-first-use, not upstream provenance -- it cannot tell you the
@@ -182,11 +183,21 @@ HERDR_COOLDOWN_DAYS="5"
 #   2. curl -fsSL -O https://github.com/herdrdev/herdr/releases/download/<tag>/herdr-linux-x86_64
 #      curl -fsSL -O https://github.com/herdrdev/herdr/releases/download/<tag>/herdr-linux-aarch64
 #   3. shasum -a 256 herdr-linux-*   (sha256sum on Linux)
+#      and compare with GitHub's own per-asset digest, which the release API
+#      now carries (GitHub computes it at upload; it is not an upstream
+#      signature): curl -fsS https://api.github.com/repos/herdrdev/herdr/releases/tags/<tag>
+#      | jq -r '.assets[] | "\(.name) \(.digest)"'. Do not take
+#      herdr-linux-pin-check's hash alone: on 2026-09-27 it printed a wrong
+#      x86_64 hash once, with no error (W-20260927-A32).
 #   4. update HERDR_VERSION + both hashes below in ONE commit
 #   5. push, pull on each box, re-run ./install.sh
-HERDR_VERSION="v0.8.2"
-HERDR_SHA256_LINUX_X86_64="976150a14d490c94b243ea2e1a7eb2dfb67f12e36b182db90936f6728e6aecf4"
-HERDR_SHA256_LINUX_AARCH64="f55610658e1c2e0d2aaef730b4b2ab885f7f8ba00285ab372bfb14f2e3d5b40d"
+#
+# v0.9.1 (2026-09-27): published 2026-09-16, past the 5-day cooldown. Both
+# hashes agree across a Mac download, GitHub's API digest, and (x86_64) an
+# independent download on the WSL box itself.
+HERDR_VERSION="v0.9.1"
+HERDR_SHA256_LINUX_X86_64="2a02fed16beb651ef006e1d43f048f652ca4dc58ad053cd2d44450563d5c54b7"
+HERDR_SHA256_LINUX_AARCH64="f4ccf4de745f2cb9a39a983e9ba3703dad50ec2a58dea83026ceab721bbd8d9e"
 
 # --- Helpers ---
 info()    { echo -e "${CYAN}ℹ️  $*${RESET}"; }
