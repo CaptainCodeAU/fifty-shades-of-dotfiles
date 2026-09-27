@@ -80,7 +80,17 @@ mod's `/fullscreen` and `/classic`** (Gavin, 2026-09-27; D-20260927-A03). Claude
 session (the Mods notes say "fixed per session"), and a pj session refuses `/tui`
 ("Cannot switch renderers in this session": pj's custom system prompt and restricted
 settings). So every session starts in its profile's renderer, and a switch is a relaunch
-of the same conversation:
+of the same conversation.
+
+Why not simply "always fullscreen, clicks off" (`CLAUDE_CODE_DISABLE_MOUSE_CLICKS=1`),
+which would make the relaunch unnecessary? Raised by the contrarian review and ruled by
+Gavin on 2026-09-27: keep classic as the default and fullscreen on demand. Classic is his
+deliberate everyday choice (the June 2026 rejection of fullscreen's mouse capture, and
+on 2026-09-27, after trying both, "each one has their own strengths"); fullscreen with
+clicks off would also take the mouse away from the mod panes, the reason fullscreen is
+wanted at all. Not a technical gap: re-open it only if he asks.
+
+How it works:
 
 - `pj [--profile NAME] --fullscreen` or `--classic` overrides the profile's `renderer` for
   that launch only. Leading position, after `--profile`; it never reaches claude's argv.
