@@ -58,7 +58,7 @@
 # needs no passphrase. The main mlbox key has one and is never used here;
 # IdentityAgent=none keeps the agent's keys out. The query is still sent so a
 # test against an unrestricted host works too. Setup and restart notes:
-# docs/HERDR.private.md (untracked, docs/*.private.md is gitignored).
+# the project drawer, gpu-readout/HERDR.private.md (private dot-claude repo, never this one).
 #
 # GPU_STATUS_HOST and GPU_STATUS_BACKOFF_FILE exist for testing each arm by
 # hand; herdr sets neither.
@@ -158,14 +158,14 @@ else
   vram="${mem_used}M"
 fi
 
-title="3090 $(dot "$util")${util}% $(dot "$vram_pct")${vram}"
+title="3090 $(dot "$util") ${util}% $(dot "$vram_pct") ${vram}"
 
 # Swap is worth mentioning only once it's actually eating into real memory;
 # below 15% it's normal and adds noise: yellow from 15-44%, red from 45% up.
 if [ "$swap_pct" -ge 45 ]; then
-  title="$title 🔴SWAP ${swap_pct}%"
+  title="$title 🔴 SWAP ${swap_pct}%"
 elif [ "$swap_pct" -ge 15 ]; then
-  title="$title 🟡SWAP ${swap_pct}%"
+  title="$title 🟡 SWAP ${swap_pct}%"
 fi
 
 printf '%s' "$title"

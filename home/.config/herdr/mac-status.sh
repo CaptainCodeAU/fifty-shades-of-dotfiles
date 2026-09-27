@@ -46,10 +46,10 @@ case $level in
 esac
 
 out="Mac"
-[ -n "$cpu" ] && out="$out CPU $(dot "$cpu")${cpu}%" || out="$out CPU ?"
-[ -n "$gpu" ] && out="$out GPU $(dot "$gpu")${gpu}%" || out="$out GPU ?"
+[ -n "$cpu" ] && out="$out CPU $(dot "$cpu") ${cpu}%" || out="$out CPU ?"
+[ -n "$gpu" ] && out="$out GPU $(dot "$gpu") ${gpu}%" || out="$out GPU ?"
 if [ -n "$free_pct" ]; then
-  out="$out MEM ${mem_dot}$((100 - free_pct))%"
+  out="$out MEM ${mem_dot:+$mem_dot }$((100 - free_pct))%"
 else
   out="$out MEM ?"
 fi
