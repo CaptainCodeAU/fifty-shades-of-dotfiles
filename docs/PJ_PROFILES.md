@@ -62,7 +62,7 @@ It is tracked in a public repo, so nothing in it is ever a secret.
 | `plugins_root`    | the `--plugin-dir` prefix                 | the dir the `plugins` names are joined to. Unset = `~/.claude`. `pj-launch-check` reads it too. Added P10                                                                                                                                                                                                                                                                                                                                                                            |
 | `function_hooks`  | `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`     | **on by default** in every profile (D-20260923-A08); only the literal `off` exports nothing, the negative-control lane for testing a mod. Remove once Claude Code ships mods without the flag. Added F8b                                                                                                                                                                                                                                                                             |
 | `renderer`        | `PJ_RENDERER`, `CLAUDE_CODE_NO_FLICKER=1` | **classic by default**: the launcher sets `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1` for every session (the June 2026 fullscreen rejection), which outranks `/tui`. Only the literal `fullscreen` lifts it for that profile, so a Mods pane can dock beside the transcript. No shipped profile sets it since 2026-09-27 (D-20260927-A03: start classic, `/fullscreen` on demand); `scratch` did from 2026-09-26, which made `c2` open fullscreen too. Added 2026-09-26, W-20260923-A12 |
-| `mods`            | `enabledPlugins` in the overlay           | INSTALLED mods to enable, space-separated `name@marketplace`, or `none`. Rides the same overlay `--settings` as `remote_control` and `voice`, which also repeats the settings file's own `enabledPlugins`. Inherited from `default` like every key. An id that is not ASCII `name@marketplace` REFUSES the launch; one that is not installed does not (pj-health says it). Added 2026-09-27, see below |
+| `mods`            | `enabledPlugins` in the overlay           | INSTALLED mods to enable, space-separated `name@marketplace`, or `none`. Rides the same overlay `--settings` as `remote_control` and `voice`, which also repeats the settings file's own `enabledPlugins`. Inherited from `default` like every key. An id that is not ASCII `name@marketplace` REFUSES the launch; one that is not installed does not (pj-health says it). Added 2026-09-27, see below                                                                               |
 
 **Agent view is off in every pj session, and it is not a key.** pj always exports
 `CLAUDE_CODE_DISABLE_AGENT_VIEW=1` (Gavin, 2026-09-27, W-20260926-A01). In fullscreen a
@@ -126,12 +126,27 @@ one overlay `--settings` pj already builds.
 
 **The overlay repeats the settings file's own `enabledPlugins`.** `settings.project.json`
 already enables `cc-capture` and `cc-skills` (and lists about fifteen more as `false`).
-F5b measured that a second `--settings` merges per **top-level** key; whether a nested
-object like `enabledPlugins` is merged or **replaced** is unmeasured, and a replace would
-drop those two from every pj session. So the overlay's `enabledPlugins` is the file's
-own, `false` entries included, plus each mod set `true`: correct in both worlds. With no
-`jq`, or a file that is unreadable or not JSON, pj still launches with the mods alone and
-a NOTE (selftest 28h-28l).
+F5b measured that a second `--settings` merges per **top-level** key, and on 2026-09-27
+worker mods measured that `enabledPlugins` is **replaced** whole: a typed `--settings`
+enabling only one plugin made `cc-skills` vanish from the session (`/cc-skills:` matched
+nothing), where the control launch without it listed 27 rows. So the overlay's
+`enabledPlugins` is the file's own, `false` entries included, plus each mod set `true`.
+With no `jq`, or a file that is unreadable or not JSON, pj still launches but adds NO
+`enabledPlugins` at all and a NOTE names the mods left off: a mods-only overlay would
+replace the file's list, and losing `/fullscreen` for a session is the smaller harm
+(red team, 2026-09-27; selftest 28h-28l).
+
+Consequences, measured or read from the code, not guessed:
+
+- The overlay is frozen at launch. Editing `enabledPlugins` in `settings.project.json`
+  reaches a session only when it (re)launches, and `/plugin` toggles are overridden by it.
+- A relaunch carries pj's own argv, typed `--plugin-dir` pairs, the session name and the
+  transcript; it does NOT carry `/add-dir` directories, session-only permission rules,
+  running background tasks, or other typed flags (`--model`, `--add-dir`, `-w`). The
+  screen-switch reply says so before `/exit`.
+- Relaunch request files are `mktemp` files in `$TMPDIR` (0600, unguessable), overwritten
+  with `consumed` when read and never deleted by pj; the OS clears `$TMPDIR`. A request
+  pj cannot mark consumed is refused rather than replayed (selftest 26i).
 
 **The install route is cc-claude-mods' `install.sh --config-dir <dir>`**, once per config
 dir that should have the mod: an enable only loads what THAT config dir's `plugins/`
@@ -142,12 +157,12 @@ exactly as he wrote it, so `install.sh` restores it and proves it by sha256.
 
 What checks what:
 
-| Where                          | What it says                                                                                                                         |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `pj`                           | a malformed id REFUSES (exit 2); a declared mod that is not installed still launches, because pj never refuses over a missing file  |
-| `pj-launch-check`              | every declared id is enabled in the running argv's overlay, and no enabled id is undeclared (ids the settings file enables excepted) |
-| pj-health `mods-installed`     | each profile's ids have a `user`-scope entry in that config dir's `installed_plugins.json` whose `installPath` exists                  |
-| pj-health `mod-validate`       | the installed copies are validated too, since that copy is what a session runs                                                      |
+| Where                      | What it says                                                                                                                         |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `pj`                       | a malformed id REFUSES (exit 2); a declared mod that is not installed still launches, because pj never refuses over a missing file   |
+| `pj-launch-check`          | every declared id is enabled in the running argv's overlay, and no enabled id is undeclared (ids the settings file enables excepted) |
+| pj-health `mods-installed` | each profile's ids have a `user`-scope entry in that config dir's `installed_plugins.json` whose `installPath` exists                |
+| pj-health `mod-validate`   | the installed copies are validated too, since that copy is what a session runs                                                       |
 
 `mods: none` (or no key anywhere) emits nothing. pj's built-in fallback has no mods, so a
 machine with no profiles stowed enables nothing it may not have installed; the stowed

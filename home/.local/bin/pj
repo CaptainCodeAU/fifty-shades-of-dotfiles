@@ -439,7 +439,14 @@ mods_json() {
     print -r -- "\"enabledPlugins\":$merged"
     return 0
   fi
-  [[ -n "$why" ]] && print -u2 -r -- "pj: NOTE: could not read enabledPlugins from ${P_SETTINGS/#$HOME/~} ($why); the overlay enables the mods only, so that file's own enables may be dropped for this session"
+  # Unreadable base: NO enabledPlugins at all. Measured 2026-09-27 (worker mods): a second
+  # --settings enabledPlugins REPLACES the file's, so a mods-only overlay would drop the
+  # file's own enables (cc-capture, cc-skills) from the session. Losing the mods is the
+  # smaller harm (red team, Linux boxes without jq; selftest 28k, 28l).
+  if [[ -n "$why" ]]; then
+    print -u2 -r -- "pj: NOTE: could not read enabledPlugins from ${P_SETTINGS/#$HOME/~} ($why), so the mods are NOT enabled this session (${ids[*]}); that file's own enables stay intact"
+    return 0
+  fi
   print -r -- "\"enabledPlugins\":{${out%,}}"
 }
 
@@ -1242,6 +1249,44 @@ selftest() {
     run_with_relaunch ) >/dev/null 2>&1
   out="$([[ -r $rl ]] && tail -1 "$rl")"
   [[ -r "$rl" && "$(grep -c . "$rl")" == 2 && "$out" != *--resume* ]] && ok "26h no transcript for the id -> a fresh launch, no --resume" || bad "26h" "$([[ -r $rl ]] && cat "$rl")"
+  # ---- 26i-k: red-team round, 2026-09-27 -----------------------------------------------
+  # 26i a request pj can READ but not mark consumed must not replay forever: refused, rc 1.
+  local rro="$root/relaunch-ro"; print -r -- "fullscreen 0a1b" > "$rro"; chmod 444 "$rro"
+  out="$(read_relaunch "$rro" 2>"$root/err26i")"; rc=$?
+  [[ $rc -eq 1 && -z "$out" ]] && grep -q 'could not mark' "$root/err26i" && ok "26i an unwritable request is refused, never replayed" || bad "26i" "rc=$rc out=$out err=$(<"$root/err26i")"
+  chmod 644 "$rro"
+  # 26j a relaunch keeps a name a human or stage CHOSE (pj's own export made the two
+  #     variables equal, which build_argv reads as inherited and recomputes).
+  rl="$root/relaunch-j"
+  ( PROFILE_DIR="$pdir"; export PJ_PROMPT_OUT="$root/prompt.md" PJ_WORKER_BIN="$fk/rc0"
+    export CLAUDE_CODE_SESSION_NAME=chosen-26j; unset PJ_SESSION_NAME
+    load_profile default >/dev/null 2>&1 && build_argv >/dev/null 2>&1 || exit 9
+    for _v in "${PJ_ENV[@]}"; do export "${_v%%=*}=${_v#*=}"; done
+    P_CONFIG_DIR="$root/cfg26"
+    export PJ_RELAUNCH_FILE="$rf"; print -r -- "consumed" > "$rf"
+    __claude_launch() {
+      print -r -- "${CLAUDE_CODE_SESSION_NAME-}" >> "$rl"
+      [[ ! -e "$rl.asked" ]] && { : > "$rl.asked"; print -r -- "fullscreen sess-26e" > "$PJ_RELAUNCH_FILE"; }
+      return 0
+    }
+    run_with_relaunch ) >/dev/null 2>&1
+  out="$([[ -r $rl ]] && cat "$rl")"
+  [[ "$out" == $'chosen-26j\nchosen-26j' ]] && ok "26j a chosen session name survives the relaunch" || bad "26j name" "$out"
+  # 26k the transcript is looked for where the session really ran: an INHERITED
+  #     CLAUDE_CONFIG_DIR on the default profile (which pj does not export over).
+  rl="$root/relaunch-k"; mkdir -p "$root/cfg26k/projects/-p" && : > "$root/cfg26k/projects/-p/sess-26k.jsonl"
+  ( PROFILE_DIR="$pdir"; export PJ_PROMPT_OUT="$root/prompt.md" PJ_WORKER_BIN="$fk/rc0"
+    load_profile default >/dev/null 2>&1 && build_argv >/dev/null 2>&1 || exit 9
+    export CLAUDE_CONFIG_DIR="$root/cfg26k"
+    export PJ_RELAUNCH_FILE="$rf"; print -r -- "consumed" > "$rf"
+    __claude_launch() {
+      print -r -- "$*" >> "$rl"
+      [[ ! -e "$rl.asked" ]] && { : > "$rl.asked"; print -r -- "classic sess-26k" > "$PJ_RELAUNCH_FILE"; }
+      return 0
+    }
+    run_with_relaunch ) >/dev/null 2>&1
+  out="$([[ -r $rl ]] && tail -1 "$rl")"
+  [[ "$out" == *"--resume sess-26k"* ]] && ok "26k an inherited CLAUDE_CONFIG_DIR is where the transcript is found" || bad "26k" "$out"
   # ---- 27: a full-path plugins entry (Gavin, 2026-09-27: the ui-gallery everywhere) ----
   mkdir -p "$root/extra-plugin"
   printf 'plugins: pj %s/extra-plugin ~/no-such-plugin-27\n' "$root" > "$pdir/abspath"
@@ -1279,14 +1324,17 @@ selftest() {
   printf 'settings: %s\nmods: aa@mk\n' "$root/no-such-settings.json" > "$pdir/basemissing"
   out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile basemissing --dry-run 2>"$root/err28j")"; rc=$?
   [[ $rc -eq 0 && "$out" == *$'\n{"enabledPlugins":{"aa@mk":true}}\n'* && ! -s "$root/err28j" ]] && ok "28j a missing settings file: the mods alone, no NOTE" || bad "28j missing base" "rc=$rc $(<"$root/err28j")"
-  # 28k no jq, and 28l a base file that is not JSON: still LAUNCHES (rc 0), the mods alone,
-  #     and a NOTE says the file's enables may be dropped. Never a refusal over it.
+  # 28k no jq, and 28l a base file that is not JSON: still LAUNCHES (rc 0), and the overlay
+  #     carries NO enabledPlugins at all. Measured 2026-09-27 (worker mods): a second
+  #     --settings enabledPlugins REPLACES the file's, so a mods-only overlay would drop
+  #     cc-capture and cc-skills from the session; losing the mods is the smaller harm
+  #     (red team, Linux boxes without jq). A NOTE names the mods left off.
   out="$(PJ_JQ="$root/no-such-jq" PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile twomods --dry-run 2>"$root/err28k")"; rc=$?
-  [[ $rc -eq 0 && "$out" == *$'\n{"enabledPlugins":{"aa@mk":true,"b.b-2@mk_2":true}}\n'* ]] && grep -q 'NOTE.*jq not found.*mods only' "$root/err28k" && ok "28k no jq: rc 0, the mods alone, a NOTE naming jq" || bad "28k no jq" "rc=$rc $(<"$root/err28k")"
+  [[ $rc -eq 0 && "$out" != *enabledPlugins* ]] && grep -q 'NOTE.*jq not found.*NOT enabled.*aa@mk' "$root/err28k" && ok "28k no jq: rc 0, no enabledPlugins in the overlay, a NOTE naming jq and the mods" || bad "28k no jq" "rc=$rc out=$out err=$(<"$root/err28k")"
   printf 'not json {\n' > "$root/base28-bad.json"
   printf 'settings: %s\nmods: aa@mk\n' "$root/base28-bad.json" > "$pdir/basebad"
   out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile basebad --dry-run 2>"$root/err28l")"; rc=$?
-  [[ $rc -eq 0 && "$out" == *$'\n{"enabledPlugins":{"aa@mk":true}}\n'* ]] && grep -q 'NOTE.*not JSON' "$root/err28l" && ok "28l a settings file that is not JSON: rc 0, the mods alone, a NOTE" || bad "28l bad base" "rc=$rc $(<"$root/err28l")"
+  [[ $rc -eq 0 && "$out" != *enabledPlugins* ]] && grep -q 'NOTE.*not JSON.*NOT enabled' "$root/err28l" && ok "28l a settings file that is not JSON: rc 0, no enabledPlugins, a NOTE" || bad "28l bad base" "rc=$rc out=$out err=$(<"$root/err28l")"
   # 28b with remote_control and voice set too: still ONE overlay, every key in it.
   printf 'settings: %s\nmods: aa@mk\nremote_control: on\nvoice: off\n' "$root/base28-none.json" > "$pdir/modsplus"
   out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile modsplus --dry-run 2>/dev/null)"
@@ -1409,7 +1457,12 @@ read_relaunch() {
   local f="$1" line want id
   [[ -r "$f" ]] || return 1
   line="$(<"$f")"
-  print -r -- consumed >| "$f"
+  # A request that cannot be marked consumed would replay on every /exit, so the person
+  # could never leave (red team, 2026-09-27): refuse it instead (selftest 26i).
+  if ! { print -r -- consumed >| "$f"; } 2>/dev/null; then
+    print -u2 -r -- "pj: REFUSED a relaunch: could not mark ${f/#$HOME/~} consumed, so it would replay; nothing relaunched"
+    return 1
+  fi
   want="${line%% *}"; id="${line#* }"
   [[ "$want" == fullscreen || "$want" == classic ]] || return 1
   [[ "$id" != "$line" && "$id" =~ '^[A-Za-z0-9-]+$' ]] || return 1
@@ -1430,6 +1483,10 @@ run_with_relaunch() {
   while req="$(read_relaunch "${PJ_RELAUNCH_FILE-}")"; do
     want="${req%% *}"; id="${req#* }"
     P_RENDERER="$want"
+    # The same session comes back, so its name does too. pj's own export made
+    # CLAUDE_CODE_SESSION_NAME and PJ_SESSION_NAME equal, which build_argv reads as
+    # inherited-from-a-parent and recomputes; dropping the marker keeps it (26j).
+    unset PJ_SESSION_NAME
     build_argv || { rc=$?; break; }
     unset CLAUDE_CODE_NO_FLICKER PJ_OPEN_GALLERY
     for pv in "${PJ_ENV[@]}"; do export "${pv%%=*}=${pv#*=}"; done
@@ -1444,7 +1501,9 @@ run_with_relaunch() {
     # Resume only what left a transcript: a --resume of an id with none fails outright.
     # pj judges this, not the mod: a just-resumed session counts 0 prompts of its own.
     if [[ "$id" != new ]]; then
-      local -a tx=( "$(expand_tilde "$P_CONFIG_DIR")"/projects/*/"$id".jsonl(N) )
+      # Where the session really ran: an inherited CLAUDE_CONFIG_DIR wins on the default
+      # profile, which pj does not export over (red team, 2026-09-27; selftest 26k).
+      local -a tx=( "$(expand_tilde "${CLAUDE_CONFIG_DIR:-$P_CONFIG_DIR}")"/projects/*/"$id".jsonl(N) )
       if (( ${#tx} == 0 )); then
         print -u2 -r -- "pj: nothing to resume for $id (no transcript), so this starts fresh"
         id=new
@@ -1529,7 +1588,11 @@ source "$LAUNCH_FILE"
 for _pv in "${PJ_ENV[@]}"; do export "${_pv%%=*}=${_pv#*=}"; done
 unset _pv PJ_OPEN_GALLERY
 # Per pj process, reset before the launch so a stale request from a reused pid cannot fire.
-PJ_RELAUNCH_FILE="${TMPDIR:-/tmp}/pj-relaunch.$$"
-print -r -- consumed >| "$PJ_RELAUNCH_FILE" 2>/dev/null
+# mktemp: an unpredictable name, created 0600 by this user. On Linux with TMPDIR unset the
+# old pj-relaunch.<pid> sat at a guessable path in the shared /tmp, where another user
+# could plant a request pj could read but not overwrite (red team, 2026-09-27). No file:
+# the variable is empty and the mod says /fullscreen needs pj, never a wrong relaunch.
+PJ_RELAUNCH_FILE="$(mktemp "${TMPDIR:-/tmp}/pj-relaunch.XXXXXXXX" 2>/dev/null)" || PJ_RELAUNCH_FILE=""
+[[ -n "$PJ_RELAUNCH_FILE" ]] && print -r -- consumed >| "$PJ_RELAUNCH_FILE" 2>/dev/null
 export PJ_RELAUNCH_FILE
 run_with_relaunch "$@"
