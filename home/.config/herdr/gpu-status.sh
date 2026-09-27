@@ -22,6 +22,19 @@
 # the entry -- that read as broken/no-signal, not "asleep." Does not wake
 # it -- that's the `wakeup` alias's job, run by hand when actually needed.
 #
+# "PC off" is printed ONLY on positive evidence of a sleeping box (a timeout,
+# "Host is down", "No route to host"). Until 2026-09-27 every ssh failure
+# printed it, so a refused key, a changed host key or a config ssh could not
+# find all read as "asleep". Now ssh's exit 255 (its own errors, never the
+# remote command's) is split three ways from its stderr:
+#
+#   PC off      timed out / host down / no route -- the box is asleep
+#   🔑 GPU key  "Permission denied" -- mlbox refused the key, or it is locked
+#   GPU ssh?    anything else -- read the message by running this by hand
+#
+# "GPU ?" means ssh got through (or this is the box itself) but nvidia-smi
+# returned no numbers.
+#
 # A truly-off box doesn't refuse the connection, it just goes silent until
 # the timeout fires -- confirmed by the `wakeup` alias's own probe log
 # ("Operation timed out", never "Connection refused"). That means there is
@@ -29,8 +42,25 @@
 # does. The real cost is paying that timeout on every single 5-second tick
 # while it's off, so BACKOFF_FILE caches "it was off" for BACKOFF_SECONDS
 # and skips the network entirely during that window, then tries again for
-# real -- most ticks become near-instant instead of ~1s each.
-BACKOFF_FILE=/tmp/.gpu-status-mlbox-backoff
+# real -- most ticks become near-instant instead of ~1s each. Every failure
+# backs off, not just a sleeping box, so a refused key does not hammer sshd
+# every 5 seconds. The file holds "<epoch> <message>" so the window repeats
+# the real reason; a bare "<epoch>" (the pre-2026-09-27 format) reads as
+# "PC off".
+#
+# mlbox-gpu is a Host alias in ~/.ssh/config.local for a key that can do
+# nothing but this query: its authorized_keys line on mlbox is
+# `restrict,command="<the nvidia-smi + free line below>"`, so mlbox runs that
+# whatever is asked (`ssh mlbox-gpu whoami` prints GPU numbers) and the key
+# needs no passphrase. The main mlbox key has one and is never used here;
+# IdentityAgent=none keeps the agent's keys out. The query is still sent so a
+# test against an unrestricted host works too. Setup and restart notes:
+# docs/HERDR.private.md (untracked, docs/*.private.md is gitignored).
+#
+# GPU_STATUS_HOST and GPU_STATUS_BACKOFF_FILE exist for testing each arm by
+# hand; herdr sets neither.
+GPU_HOST=${GPU_STATUS_HOST:-mlbox-gpu}
+BACKOFF_FILE=${GPU_STATUS_BACKOFF_FILE:-/tmp/.gpu-status-mlbox-backoff}
 BACKOFF_SECONDS=30
 #
 # herdr's server runs as a launchd/brew-services daemon with NO $HOME in
@@ -56,30 +86,43 @@ if [ -x "$NVSMI" ]; then
   [ -n "$output" ] || { printf 'GPU ?'; exit 0; }
 else
   if [ -f "$BACKOFF_FILE" ]; then
-    last_fail=$(cat "$BACKOFF_FILE" 2>/dev/null || echo 0)
-    now=$(date +%s)
-    age=$((now - last_fail))
-    if [ "$age" -lt "$BACKOFF_SECONDS" ]; then
-      printf 'PC off'
+    last_fail=0 last_msg=""
+    { read -r last_fail last_msg < "$BACKOFF_FILE"; } 2>/dev/null || true
+    case $last_fail in ''|*[!0-9]*) last_fail=0 ;; esac
+    if [ $(( $(date +%s) - last_fail )) -lt "$BACKOFF_SECONDS" ]; then
+      printf '%s' "${last_msg:-PC off}"
       exit 0
     fi
   fi
 
-  output=$(ssh -o ConnectTimeout=1 -o BatchMode=yes mlbox-ubuntu \
-    "$NVSMI $NVSMI_ARGS; free -m | grep '^Swap:'" 2>/dev/null) || output=""
-  [ -n "$output" ] || { date +%s > "$BACKOFF_FILE" 2>/dev/null || true; printf 'PC off'; exit 0; }
+  rc=0
+  output=$(ssh -o ConnectTimeout=1 -o BatchMode=yes -o IdentityAgent=none "$GPU_HOST" \
+    "$NVSMI $NVSMI_ARGS; free -m | grep '^Swap:'" 2>&1) || rc=$?
+
+  if [ "$rc" -eq 255 ]; then
+    case $output in
+      *'timed out'*|*'Host is down'*|*'No route to host'*) msg='PC off' ;;
+      *'Permission denied'*) msg='🔑 GPU key' ;;
+      *) msg='GPU ssh?' ;;
+    esac
+    printf '%s %s\n' "$(date +%s)" "$msg" > "$BACKOFF_FILE" 2>/dev/null || true
+    printf '%s' "$msg"
+    exit 0
+  fi
 
   [ -e "$BACKOFF_FILE" ] && { rm -f "$BACKOFF_FILE" 2>/dev/null || true; }
 fi
 
-gpu_line=$(printf '%s\n' "$output" | sed -n '1p' | tr -d ',')
-swap_line=$(printf '%s\n' "$output" | sed -n '2p')
+# Pick the two lines by shape, not position: stderr is merged above so it can
+# be classified, and a success can still carry an ssh warning line first.
+gpu_line=$(printf '%s\n' "$output" | grep -E '^ *[0-9]+, *[0-9]+, *[0-9]+ *$' | head -n 1 | tr -d ',')
+swap_line=$(printf '%s\n' "$output" | grep '^Swap:' | head -n 1)
 
 read -r util mem_used mem_total <<EOF
 $gpu_line
 EOF
 
-[ -n "${util:-}" ] || exit 0
+[ -n "${util:-}" ] || { printf 'GPU ?'; exit 0; }
 
 swap_total=$(printf '%s' "$swap_line" | awk '{print $2}')
 swap_used=$(printf '%s' "$swap_line" | awk '{print $3}')
