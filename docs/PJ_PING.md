@@ -17,16 +17,22 @@ pj-ping --selftest          # runs pj-ping-selftest beside it; fake afplay and i
 Sounds first (`afplay` Ping, Glass, Glass, Glass), then:
 
 ```
-1: <icon> PJ <KIND> #<id> <HH:MM:SS> | <session> | <summary>
-2: <icon> #<id> 2/2 | <action> | pane <HERDR_PANE_ID or ->
+1: <icon> <project> <pane> · <kind>: <summary> #<id>
+2: <icon> <project> <pane> · <action> #<id>
 ```
 
 For example:
 
 ```
-❓ PJ QUESTION #K3F9 17:30:41 | fifty-shades-of-dotfiles-main | Pick a delivery route
-❓ #K3F9 2/2 | answer the popup | pane w1-p2
+❓ dotfiles 6H · question: Pick a delivery route #K3F9
+❓ dotfiles 6H · answer the popup #K3F9
 ```
+
+**Every text stands alone** (Gavin, 2026-09-27). Pings from several sessions
+interleave on the phone, and the old message 2 (`❓ #P4GY 2/2 | answer the
+popup | pane w3X:p6H`) did not say whose it was. Both texts now open with the
+same project and pane. The id moved to the end, because it is for looking a
+ping up, not for reading. The time is in the log only.
 
 | Kind       | Icon | Default action                          |
 | ---------- | ---- | --------------------------------------- |
@@ -39,9 +45,14 @@ For example:
   no 0, O, 1, I or L, so it survives being read aloud or typed on a phone. It
   is printed on stdout as `#K3F9`, and an id already in the log is never
   handed out again.
-- **The time** is local time at the call.
-- **The session** is `$CLAUDE_CODE_SESSION_NAME`, else the basename of the
-  git toplevel of the current directory.
+- **The project** is the main repo's `session-alias:` from its
+  `.claude/pj-homes`, the same key `pj` names sessions with, else the main
+  repo's basename. A linked worktree adds `/<worktree>`, for example
+  `dotfiles/card-json`. Outside git it is the directory's basename.
+- **The pane** is `$HERDR_PANE_ID` cut short: `w3X:p6H` becomes `6H`. Any
+  other shape is kept whole, and with no pane the part is left out.
+- **The log's session column** is unchanged: `$CLAUDE_CODE_SESSION_NAME`,
+  else the basename of the git toplevel of the current directory.
 - **Each message is sent twice** (Gavin, 2026-09-23): message 1, one second,
   message 1 again, a pause of at least 5 seconds, message 2, one second,
   message 2 again. Four texts per ping. `PJ_PING_PAIR_GAP` can lengthen the
@@ -84,11 +95,11 @@ names what was missing.
 
 ## Untrusted text
 
-Summary, action, session name and pane id are cleaned before they reach a
-message. Control characters (C0, DEL, C1) and bidi or zero-width characters
+Summary, action, project name and pane id are cleaned before they reach a
+message; the session name is cleaned before it reaches the log. Control characters (C0, DEL, C1) and bidi or zero-width characters
 become a space. Token-shaped strings (`ghp_`, `github_pat_`, `sk-`, `xox?-`,
 `AKIA`, `glpat-`) become `[redacted]`. Whitespace is squeezed, and each part
-is capped: session 40, summary 80, action 80, pane 40 characters. This code
+is capped: project 40, session 40, summary 80, action 80, pane 40 characters. This code
 used to live in `pj-question-ping.sh` and now exists only in `pj-ping`.
 
 ## `--detach`
@@ -109,7 +120,7 @@ sandbox lifted. Hooks run outside the sandbox.
 
 ## Selftest
 
-`pj-ping-selftest` (41 arms) uses fake `afplay` and `imsg` only: every arm
+`pj-ping-selftest` (52 arms) uses fake `afplay` and `imsg` only: every arm
 pins `PJ_PING_AFPLAY` and `PJ_PING_IMSG` to fakes or to a missing path, and
 the fakes are first on `PATH`. `PJ_PING_TOOL=<path>` tests another copy.
 `PJ_PING_ALPHABET` narrows the id alphabet so the never-reuse rule can be

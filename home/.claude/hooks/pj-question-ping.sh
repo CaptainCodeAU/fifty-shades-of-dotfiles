@@ -14,8 +14,8 @@
 # session's: this hook decides, then runs
 #   pj-ping question "<first question's header, or its text>" --detach
 # from the payload's cwd. pj-ping plays the four sounds, sends the two
-# numbered imsg messages one second apart, sanitises the text, names the
-# session, and logs the id (see `pj-ping --help`). --detach makes pj-ping
+# numbered imsg messages (each twice), sanitises the text, opens both with the
+# project and short pane, and logs the id (see `pj-ping --help`). --detach makes pj-ping
 # return in well under a second and do the work in a detached process, so the
 # popup is never delayed.
 #
@@ -137,8 +137,9 @@ EOF
     t1=$(perl -e "printf '%.3f', $(now) - $t0")
   }
   line() { sed -n "${1}p" "$PJ_PING_FAKE_LOG" | cut -d' ' -f3-; }
-  # summary_of <msg1>: the text after the second " | "
-  summary_of() { printf '%s' "$1" | awk -F' [|] ' '{print $3}'; }
+  # summary_of <msg1>: the text between "question: " and the closing " #<id>"
+  summary_of() { printf '%s' "$1" | perl -CSD -ne 'print $1 if /\x{00B7} question: (.*) #[A-Z2-9]{4}$/'; }
+  DOT=$'\xc2\xb7'; PROJ=$(basename "$root")   # the payload cwd is $root, outside git
   Q='The message to cc-warehouse-6c expired undelivered. How should I get those five questions to them?'
   QI=$'\xe2\x9d\x93'
 
@@ -151,11 +152,11 @@ EOF
   got=$(awk '{print $2, $3}' "$PJ_PING_FAKE_LOG" | sed "s#/System/Library/Sounds/##" | tr '\n' '|')
   [ "$got" = "afplay Ping.aiff|afplay Glass.aiff|afplay Glass.aiff|afplay Glass.aiff|imsg $QI|imsg $QI|imsg $QI|imsg $QI|" ] \
     && ok "3 four sounds Ping Glass Glass Glass, then four imsg (each message twice), in that order" || bad "3 order" "$got"
-  m1=$(line 5); id=$(printf '%s' "$m1" | awk '{print $4}')
-  printf '%s' "$m1" | grep -Eqx "$QI PJ QUESTION #[A-Z2-9]{4} [0-9:]{8} \| st-sess \| Delivery" \
-    && ok "4 imsg 1 is pj-ping's: PJ QUESTION, id, time, session, header" || bad "4 imsg 1 text" "$m1"
+  m1=$(line 5); id=$(printf '%s' "$m1" | awk '{print $NF}')
+  printf '%s' "$m1" | grep -Eqx "$QI $PROJ $DOT question: Delivery #[A-Z2-9]{4}" \
+    && ok "4 imsg 1 is pj-ping's: project, question, header, id" || bad "4 imsg 1 text" "$m1"
   got=$(line 7)
-  [ "$got" = "$QI $id 2/2 | answer the popup | pane -" ] && ok "5 imsg 2 carries the same id ($id) and says what to do" || bad "5 imsg 2 text" "$got"
+  [ "$got" = "$QI $PROJ $DOT answer the popup $id" ] && ok "5 imsg 2 stands alone, carries the same id ($id) and says what to do" || bad "5 imsg 2 text" "$got"
   got=$(awk 'NR==5{a=$1} NR==6{b=$1} END{printf "%.3f", b-a}' "$PJ_PING_FAKE_LOG")
   perl -e "exit !($got >= 1.0 && $got < 3.0)" && ok "6 gap between the messages ${got}s (>= 1 s)" || bad "6 gap" "${got}s"
   grep -q "pinged $id" "$PJ_PING_STATE_DIR/question-ping.log" 2>/dev/null \
@@ -231,13 +232,13 @@ EOF
   [ "$rc" -eq 0 ] && [ -z "$out" ] && [ ! -s "$PJ_PING_FAKE_LOG" ] && grep -q 'pj-ping missing' "$PJ_PING_STATE_DIR/question-ping.log" 2>/dev/null \
     && ok "13 pj-ping missing -> exit 0, nothing called, logged" || bad "13 pj-ping missing" "rc=$rc $(cat "$PJ_PING_STATE_DIR/question-ping.log" 2>/dev/null)"
 
-  # 14. Session name falls back to the repo basename when the variable is unset.
+  # 14. The project in the text is the repo of the payload cwd, not the hook's own cwd.
   arm name
   mkdir -p "$root/fixture-repo/sub" && git -C "$root/fixture-repo" init -q 2>/dev/null
   out="$(payload sid-name Delivery "$Q" | jq -c --arg c "$root/fixture-repo/sub" '.cwd = $c' \
     | env -u CLAUDE_CODE_SESSION_NAME "$hook")"; wait_lines 8
   got=$(line 5)
-  printf '%s' "$got" | grep -q ' | fixture-repo | Delivery$' && ok "14 no CLAUDE_CODE_SESSION_NAME -> git toplevel basename of the payload cwd" || bad "14 fallback name" "$got"
+  printf '%s' "$got" | grep -q "^$QI fixture-repo $DOT question: Delivery #" && ok "14 the payload cwd's repo names the project, from a subdirectory too" || bad "14 project name" "$got"
 
   # 15. Malformed stdin: exit 0, nothing called.
   arm bad

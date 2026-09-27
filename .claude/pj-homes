@@ -4,3 +4,4 @@
 records: private
 handoff: drawer:OPENING-PROMPT.md
 decisions: drawer:decisions/
+session-alias: dotfiles

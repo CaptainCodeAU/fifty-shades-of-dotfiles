@@ -278,12 +278,13 @@ there is one of those Ask User Question tool popups". Registered on
 **What it does.** It decides, then runs `pj-ping question "<header>" --detach`
 from the payload's `cwd` (the first question's header, or its text when the
 header is empty). Since 2026-09-23 the sounds, the two numbered messages, the
-sanitising and the session name all belong to `pj-ping`, so a popup's ping has
-the same format as every other ping (see `docs/PJ_PING.md`):
+sanitising and the project name all belong to `pj-ping`, so a popup's ping has
+the same format as every other ping (see `docs/PJ_PING.md`, format since
+2026-09-27):
 
 ```
-❓ PJ QUESTION #K3F9 17:30:41 | <session> | <header, capped at 80>
-❓ #K3F9 2/2 | answer the popup | pane <HERDR_PANE_ID or ->
+❓ <project> <pane> · question: <header, capped at 80> #K3F9
+❓ <project> <pane> · answer the popup #K3F9
 ```
 
 `pj-ping` is found as `$PJ_PING_BIN` when set, else `../../.local/bin/pj-ping`

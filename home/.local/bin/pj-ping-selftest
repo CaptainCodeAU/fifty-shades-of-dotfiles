@@ -6,7 +6,9 @@
 # THE CLAIM UNDER TEST is that Gavin and a session can tell WHICH ping arrived
 # and IN WHAT ORDER: both messages carry the same id, the id is never reused,
 # each message is sent twice one second apart, the pairs at least 5 s apart, and the log records
-# the id with its kind, session, time and rcs. Every "nothing happened" arm
+# the id with its kind, session, time and rcs. And that each text stands alone
+# (Gavin, 2026-09-27): both open with the same project and short pane, so a
+# message 2 that arrives between another session's texts still says whose it is. Every "nothing happened" arm
 # (kill switch, refusal) is twinned with an arm in the same harness that proves
 # the harness hears a call.
 #
@@ -26,6 +28,11 @@ TOOL="${PJ_PING_TOOL:-$(dirname "$0")/pj-ping}"
 ROOT="$(mktemp -d "${TMPDIR:-/tmp}/pj-ping-selftest.XXXXXX")" || {
   printf 'selftest: mktemp failed -- INVALID TRIAL, not a pass\n' >&2; exit 2; }
 FAKE="$ROOT/bin"; mkdir -p "$FAKE"
+# Every arm runs from inside a fixture repo, so the project name in the texts is
+# "st-proj" whatever directory the selftest was started from.
+mkdir -p "$ROOT/st-proj" && git -C "$ROOT/st-proj" init -q 2>/dev/null && builtin cd "$ROOT/st-proj" || {
+  printf 'selftest: could not set up the fixture repo -- INVALID TRIAL, not a pass\n' >&2; exit 2; }
+G=(git -c core.hooksPath=/dev/null -c user.name=selftest -c user.email=selftest@example.invalid)
 printf 'pj-ping-selftest -- testing %s in %s\n' "$TOOL" "$ROOT"
 
 PASS=0; FAIL=0
@@ -50,7 +57,7 @@ EOF
 chmod +x "$FAKE/afplay" "$FAKE/imsg"
 
 export PATH="$FAKE:$PATH" PJ_PING_AFPLAY="$FAKE/afplay" PJ_PING_IMSG="$FAKE/imsg" PJ_PING_PAIR_GAP=2
-export IMSG_TO="selftest@example.invalid" CLAUDE_CODE_SESSION_NAME="st-sess" HERDR_PANE_ID="w1-p2"
+export IMSG_TO="selftest@example.invalid" CLAUDE_CODE_SESSION_NAME="st-sess" HERDR_PANE_ID="w3X:p6H"
 unset PJ_NO_PING PJ_PING_LOG PJ_PING_ALPHABET PJ_PING_FAKE_IMSG_RC
 
 # arm <name>: fresh state dir, ping log and fake log for one arm
@@ -78,6 +85,11 @@ ncalls() { wc -l <"$PJ_PING_FAKE_LOG" | tr -d ' '; }
 
 IDRE='[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{4}'
 Q=$'\xe2\x9d\x93'; D=$'\xe2\x9c\x85'; W=$'\xe2\x8f\xb3'; L=$'\xf0\x9f\xa7\xaa'
+DOT=$'\xc2\xb7'
+HD="st-proj 6H $DOT"   # what follows the icon in every text of a default arm
+# summary_of <msg1> / action_of <msg2>: the text between the head and " #<id>"
+summary_of() { printf '%s' "$1" | perl -CSD -ne 'print $1 if /\x{00B7} [a-z]+: (.*) #[A-Z2-9]{4}$/'; }
+action_of() { printf '%s' "$1" | perl -CSD -ne 'print $1 if /\x{00B7} (.*) #[A-Z2-9]{4}$/'; }
 
 # 1-5. POSITIVE, one call: id on stdout, the whole signal, in order, same id.
 arm main
@@ -89,11 +101,11 @@ got=$(awk '{print $2, $3}' "$PJ_PING_FAKE_LOG" | sed "s#/System/Library/Sounds/#
 want="afplay Ping.aiff|afplay Glass.aiff|afplay Glass.aiff|afplay Glass.aiff|imsg $Q|imsg $Q|imsg $Q|imsg $Q|"
 [ "$got" = "$want" ] && ok "2 Ping Glass Glass Glass, then four imsg, in that order" || bad "2 order" "$got"
 got=$(fake_line 5)
-printf '%s' "$got" | grep -Eqx "$Q PJ QUESTION #$ID [0-2][0-9]:[0-5][0-9]:[0-5][0-9] \| st-sess \| Pick a delivery route" \
-  && ok "3 imsg 1: icon, PJ QUESTION, the same id, HH:MM:SS, session, summary" || bad "3 imsg 1" "$got"
+[ "$got" = "$Q $HD question: Pick a delivery route #$ID" ] \
+  && ok "3 imsg 1: icon, project, short pane, kind, summary, then the same id" || bad "3 imsg 1" "$got"
 [ "$(fake_line 6)" = "$(fake_line 5)" ] && [ "$(fake_line 8)" = "$(fake_line 7)" ] && ok "4 each message is sent twice, the repeat identical" || bad "4 repeats" "$(fake_line 5)|$(fake_line 6)|$(fake_line 7)|$(fake_line 8)"
 got=$(fake_line 7)
-[ "$got" = "$Q #$ID 2/2 | answer the popup | pane w1-p2" ] && ok "4 imsg 2: icon, same id, 2/2, default action, pane" || bad "4 imsg 2" "$got"
+[ "$got" = "$Q $HD answer the popup #$ID" ] && ok "4 imsg 2 stands alone: icon, project, short pane, default action, same id" || bad "4 imsg 2" "$got"
 g1=$(awk 'NR==5{a=$1} NR==6{b=$1} END{printf "%.3f", b-a}' "$PJ_PING_FAKE_LOG")
 g2=$(awk 'NR==6{a=$1} NR==7{b=$1} END{printf "%.3f", b-a}' "$PJ_PING_FAKE_LOG")
 g3=$(awk 'NR==7{a=$1} NR==8{b=$1} END{printf "%.3f", b-a}' "$PJ_PING_FAKE_LOG")
@@ -107,8 +119,9 @@ printf '%s' "$q" | grep -Eq "^20[0-9-]+T[0-9:]+[+-][0-9]{4}	$ID	question	st-sess
   && ok "6 log: queued line with time, id, kind, session, nothing missing" || bad "6 log queued" "$(cat "$LOG")"
 printf '%s' "$s" | grep -Eq "	$ID	question	st-sess	sent	afplay=0000 imsg=0,0,0,0$" \
   && ok "6 log: sent line with the four afplay rcs and all four imsg rcs" || bad "6 log sent" "$(cat "$LOG")"
-t_msg=$(fake_line 5 | awk '{print $5}'); t_log=$(printf '%s' "$q" | cut -f1 | cut -c12-19)
-[ "$t_msg" = "$t_log" ] && ok "6 the time in imsg 1 ($t_msg) matches the log" || bad "6 time match" "msg=$t_msg log=$t_log"
+printf '%s%s' "$(fake_line 5)" "$(fake_line 7)" | grep -Eq '[0-2][0-9]:[0-5][0-9]:[0-5][0-9]' \
+  && bad "6 a clock time is in a text (it belongs in the log)" "$(fake_line 5) / $(fake_line 7)" \
+  || ok "6 no clock time in either text; the log has it"
 grep -q 'delivery route' "$LOG" && bad "6 the log carries the summary text" "$(cat "$LOG")" || ok "6 the log never carries the summary text"
 
 # 7. Every kind: icon, KIND and default action. waiting uses its --action.
@@ -119,9 +132,9 @@ for k in done:"$D":DONE:"nothing needed" test:"$L":TEST:"confirm the id and orde
   if [ "$kind" = waiting ]; then run waiting "Blocked on sudo" --action "$act"; else run "$kind" "Blocked on sudo"; fi
   id="${OUT#\#}"
   m1=$(fake_line 5); m2=$(fake_line 7)
-  if [ "$RC" -eq 0 ] && printf '%s' "$m1" | grep -Eqx "$icon PJ $up #$id [0-9:]{8} \| st-sess \| Blocked on sudo" \
-     && [ "$m2" = "$icon #$id 2/2 | $act | pane w1-p2" ]; then
-    ok "7 kind $kind: $icon $up, action '$act'"
+  if [ "$RC" -eq 0 ] && [ "$m1" = "$icon $HD $kind: Blocked on sudo #$id" ] \
+     && [ "$m2" = "$icon $HD $act #$id" ]; then
+    ok "7 kind $kind: $icon $kind, action '$act'"
   else bad "7 kind $kind" "rc=$RC m1=$m1 m2=$m2"; fi
 done
 
@@ -139,7 +152,7 @@ run question "x" --action "  "; r5=$RC
 sleep 1.5
 [ "$(ncalls)" -eq 0 ] && [ ! -e "$LOG" ] && ok "8 no refusal called a fake or wrote the log" || bad "8 refusals had effects" "$(cat "$PJ_PING_FAKE_LOG" "$LOG" 2>/dev/null)"
 run question "-starts with a dash"
-[ "$RC" -eq 0 ] && fake_line 5 | grep -q -- '| -starts with a dash$' && ok "8 control: a summary starting with a dash is a summary" || bad "8 dash summary" "rc=$RC err=$ERR $(fake_line 5)"
+[ "$RC" -eq 0 ] && fake_line 5 | grep -q -- ': -starts with a dash #' && ok "8 control: a summary starting with a dash is a summary" || bad "8 dash summary" "rc=$RC err=$ERR $(fake_line 5)"
 
 # 9. Kill switch, in the same harness that just heard calls.
 arm kill
@@ -156,7 +169,7 @@ id="${OUT#\#}"
 perl -e "exit !($T < 0.3)" && ok "10 --detach returned in ${T}s (< 0.3 s) while the signal takes >= 2.2 s" || bad "10 detach blocked" "${T}s"
 wait_lines "$PJ_PING_FAKE_LOG" 8; wait_lines "$LOG" 2
 got=$(awk '{print $2}' "$PJ_PING_FAKE_LOG" | tr '\n' ' ')
-[ "$got" = "afplay afplay afplay afplay imsg imsg imsg imsg " ] && fake_line 8 | grep -q "#$id 2/2" \
+[ "$got" = "afplay afplay afplay afplay imsg imsg imsg imsg " ] && [ "$(fake_line 8)" = "$Q $HD answer the popup #$id" ] \
   && ok "10 the detached worker played four sounds then sent both messages with the id" || bad "10 detached worker" "$got"
 grep -q "	$id	question	st-sess	sent	afplay=0000 imsg=0,0,0,0" "$LOG" && ok "10 the detached worker logged the rcs" || bad "10 detached log" "$(cat "$LOG")"
 
@@ -192,24 +205,25 @@ printf '%s' "$OUT" | grep -Eqx "#$IDRE" && ok "12 a seam of only lookalikes is i
 # 13. Sanitising: controls, bidi and token shapes never reach imsg; caps hold.
 arm san
 tok="ghp_$(printf 'A%.0s' $(seq 36))"
-CLAUDE_CODE_SESSION_NAME=$'evil\033[2Jsess\xe2\x80\xae' HERDR_PANE_ID=$'p\x07ane' \
+CLAUDE_CODE_SESSION_NAME=$'evil\033[2Jsess\xe2\x80\xae' HERDR_PANE_ID=$'w3X:p\x07ane' \
   run question $'Hi\033[31mRED\xe2\x80\xaeevil\tx '"$tok" --action $'do\x01 it '"$tok"
 m1=$(fake_line 5); m2=$(fake_line 7)
 if printf '%s%s' "$m1" "$m2" | perl -CSD -ne 'exit(/[\x00-\x1F\x7F-\x9F\x{202A}-\x{202E}]/ ? 1 : 0)'; then
   ok "13 no control or bidi character reaches either message"
 else bad "13 control chars leaked" "$(printf '%s%s' "$m1" "$m2" | od -c | head -3)"; fi
 case "$m1$m2" in *ghp_*) bad "13 token leaked" "$m1 / $m2" ;; *) ok "13 token-shaped text never reaches a message" ;; esac
-printf '%s' "$m1" | grep -Eq "\| evil \[2Jsess \| Hi \[31mRED evil x \[redacted\]$" \
+[ "$(summary_of "$m1")" = "Hi [31mRED evil x [redacted]" ] \
   && ok "13 control: the printable text survives, token -> [redacted]" || bad "13 surviving text m1" "$m1"
-printf '%s' "$m2" | grep -Eq "2/2 \| do it \[redacted\] \| pane p ane$" \
+[ "$m2" = "$Q st-proj ane $DOT do it [redacted] #${OUT#\#}" ] \
   && ok "13 action and pane are cleaned the same way" || bad "13 surviving text m2" "$m2"
+case "$m1$m2" in *2Jsess*) bad "13 the session name reached a text" "$m1 / $m2" ;; *) ok "13 the session name stays in the log, never in a text" ;; esac
+awk -F'\t' '$5=="queued"{print $4}' "$LOG" | grep -qx 'evil \[2Jsess' && ok "13 the log's session column is cleaned too" || bad "13 log session" "$(cat "$LOG")"
 arm cap
-CLAUDE_CODE_SESSION_NAME="$(printf 's%.0s' $(seq 100))" run question "$(printf 'x%.0s' $(seq 300))" --action "$(printf 'a%.0s' $(seq 300))"
+HERDR_PANE_ID="w3X:p$(printf 'q%.0s' $(seq 100))" run question "$(printf 'x%.0s' $(seq 300))" --action "$(printf 'a%.0s' $(seq 300))"
 m1=$(fake_line 5); m2=$(fake_line 7)
-sess=$(printf '%s' "$m1" | awk -F' [|] ' '{print $2}'); summ=$(printf '%s' "$m1" | awk -F' [|] ' '{print $3}')
-act=$(printf '%s' "$m2" | awk -F' [|] ' '{print $2}')
-[ "${#sess}" -eq 40 ] && [ "${#summ}" -eq 80 ] && [ "${#act}" -eq 80 ] \
-  && ok "13 caps: session 40, summary 80, action 80" || bad "13 caps" "session ${#sess}, summary ${#summ}, action ${#act}"
+summ=$(summary_of "$m1"); act=$(action_of "$m2"); pane=$(printf '%s' "$m1" | awk '{print $3}')
+[ "${#summ}" -eq 80 ] && [ "${#act}" -eq 80 ] && [ "${#pane}" -eq 40 ] \
+  && ok "13 caps: summary 80, action 80, pane 40" || bad "13 caps" "summary ${#summ}, action ${#act}, pane ${#pane}"
 
 # 14. Missing tools: the rest is done, the log and stderr name what was missing, exit 1.
 arm noto
@@ -233,13 +247,39 @@ PJ_PING_FAKE_IMSG_RC=3 run done "Finished"
 [ "$RC" -eq 1 ] && grep -q 'sent	afplay=0000 imsg=3,3,3,3$' "$LOG" && [ "$(ncalls)" -eq 8 ] \
   && ok "14 imsg failing -> all four still tried, rcs 3,3,3,3 logged, exit 1" || bad "14 imsg fail" "rc=$RC $(cat "$LOG")"
 
-# 15. Session name: CLAUDE_CODE_SESSION_NAME unset -> the git toplevel's basename.
+# 15. The project and pane that open every text. Each shape is run from its
+#     own directory; the default arms above are the control for "st-proj 6H".
+lbl() { # lbl <dir> [env assignments...]: run a test ping from <dir>, set M1 and M2
+  local d="$1"; shift
+  ( builtin cd "$d" && env -u CLAUDE_CODE_SESSION_NAME "$@" "$TOOL" test "name" >/dev/null 2>&1 )
+  M1=$(tail -n 4 "$PJ_PING_FAKE_LOG" | sed -n 1p | cut -d' ' -f3-)
+  M2=$(tail -n 4 "$PJ_PING_FAKE_LOG" | sed -n 3p | cut -d' ' -f3-)
+}
 arm name
-mkdir -p "$ROOT/fixture-repo/sub" && git -C "$ROOT/fixture-repo" init -q 2>/dev/null
-( builtin cd "$ROOT/fixture-repo/sub" && env -u CLAUDE_CODE_SESSION_NAME -u HERDR_PANE_ID "$TOOL" test "name" >/dev/null 2>&1 )
-m1=$(fake_line 5); m2=$(fake_line 7)
-printf '%s' "$m1" | grep -q '| fixture-repo | name$' && ok "15 no session variable -> the git toplevel basename" || bad "15 fallback name" "$m1"
-printf '%s' "$m2" | grep -q '| pane -$' && ok "15 no HERDR_PANE_ID -> pane -" || bad "15 pane dash" "$m2"
+FX="$ROOT/fixture-repo"
+mkdir -p "$FX/sub" && git -C "$FX" init -q 2>/dev/null
+lbl "$FX/sub" -u HERDR_PANE_ID
+case "$M1" in "$L fixture-repo $DOT test: name #"*) ok "15 no alias -> the repo basename, from a subdirectory too" ;; *) bad "15 repo basename" "$M1" ;; esac
+case "$M2" in "$L fixture-repo $DOT confirm the id and order to the session #"*) ok "15 no HERDR_PANE_ID -> the pane part is left out" ;; *) bad "15 no pane" "$M2" ;; esac
+awk -F'\t' '$5=="queued"{s=$4} END{print s}' "$LOG" | grep -qx 'fixture-repo' && ok "15 the log's session column still falls back to the toplevel basename" || bad "15 log session" "$(cat "$LOG")"
+mkdir -p "$FX/.claude" && printf 'records: private\nsession-alias: fx  \n' >"$FX/.claude/pj-homes"
+lbl "$FX/sub" HERDR_PANE_ID="w1-p2"
+case "$M1" in "$L fx w1-p2 $DOT test: name #"*) ok "15 session-alias in .claude/pj-homes replaces the basename; a pane id without a colon is kept whole" ;; *) bad "15 alias" "$M1" ;; esac
+"${G[@]}" -C "$FX" commit -q --allow-empty -m init 2>/dev/null && "${G[@]}" -C "$FX" worktree add -q "$ROOT/wt-one" 2>/dev/null
+if [ -d "$ROOT/wt-one" ]; then
+  lbl "$ROOT/wt-one" HERDR_PANE_ID="w3X:p6H"
+  case "$M1" in "$L fx/wt-one 6H $DOT test: name #"*) ok "15 a linked worktree -> <alias>/<worktree>, alias read from the MAIN repo" ;; *) bad "15 worktree" "$M1" ;; esac
+else bad "15 INVALID TRIAL: could not create the worktree fixture" "$ROOT/wt-one missing"; fi
+mkdir -p "$ROOT/plain-dir"
+lbl "$ROOT/plain-dir" HERDR_PANE_ID="w3X:p6H"
+case "$M1" in "$L plain-dir 6H $DOT test: name #"*) ok "15 outside git -> the directory's basename" ;; *) bad "15 not git" "$M1" ;; esac
+printf 'session-alias: e\033[2Jvil\xe2\x80\xae%s\n' "$(printf 'z%.0s' $(seq 100))" >"$FX/.claude/pj-homes"
+lbl "$FX" HERDR_PANE_ID="w3X:p6H"
+proj=$(printf '%s' "$M1" | perl -CSD -ne 'print $1 if /^\S+ (.*) 6H \x{00B7} /')
+if printf '%s' "$M1" | perl -CSD -ne 'exit(/[\x00-\x1F\x7F-\x9F\x{202A}-\x{202E}]/ ? 1 : 0)' && [ "${#proj}" -eq 40 ] \
+   && printf '%s' "$M1" | grep -q '^'"$L"' e \[2Jvil '; then
+  ok "15 an alias from the file is cleaned and capped like any other text"
+else bad "15 alias cleaning" "$M1"; fi
 
 # 16. The log path can be overridden.
 arm logpath
