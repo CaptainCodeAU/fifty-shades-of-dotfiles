@@ -509,6 +509,27 @@ if [ -x /bin/bash ] && [ "$(/bin/bash -c 'echo ${BASH_VERSINFO[0]}')" != "$(bash
 else
   echo "  skip T bash 3.2 arm: /bin/bash is missing or the same major version as bash -- NOT MEASURED"
 fi
+# Gavin's shell is zsh (Gavin, 2026-09-27: "test under zsh too, keep bash"). The card stays
+# bash; what zsh can change is the environment it is started from. zsh -ic reads .zshrc, which
+# may move PATH, so the fixture PATH is set again inside it; .zshrc's own stderr is dropped.
+if command -v zsh >/dev/null 2>&1; then
+  ZDIFF=""
+  for dir in "$X" "$B" "$H"; do
+    for flag in '' --json; do
+      a="$( builtin cd "$dir" && "$CARD" $flag </dev/null 2>/dev/null )"
+      for zf in -c -ic; do
+        b="$(ZP="$PATH" ZD="$dir" ZC="$CARD" ZF="$flag" zsh $zf 'export PATH="$ZP"; builtin cd "$ZD" && "$ZC" ${=ZF} </dev/null' 2>/dev/null)"
+        [ "$a" = "$b" ] || ZDIFF="$ZDIFF $(basename "$dir")${flag:+ $flag}/zsh$zf"
+      done
+    done
+  done
+  check "T started from zsh -c and zsh -ic: the same bytes as from bash, text and --json (${ZDIFF:-no differences})" '[ -z "$ZDIFF" ]'
+  a="$( builtin cd "$B" && "$CARD" </dev/null 2>/dev/null )"
+  b="$(ZP="$PATH" ZD="$B" ZC="$CARD" zsh -c 'export PATH="$ZP" PJ_NO_CARD=1; builtin cd "$ZD" && "$ZC" </dev/null' 2>/dev/null)"
+  check "T CONTROL: the zsh comparison does see a difference (PJ_NO_CARD on the zsh side only)" '[ -n "$a" ] && [ "$a" != "$b" ]'
+else
+  echo "  skip T zsh arm: zsh is not on PATH -- NOT MEASURED"
+fi
 
 # T4. error paths: the JSON parses on every one and errors names what dropped out
 runj "$C"; check "T no drawer: parses, drawer none, no error" 'parses && [ "$(jv .items.drawer)" = none ] && [ "$(jv ".errors | length")" -eq 0 ]'
