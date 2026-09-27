@@ -397,6 +397,230 @@ check "S squeeze: all 3 Owed lines and every fixed line survived" '[ "$(printf "
 check "S squeeze: titles gave up the lines, the count stayed exact" '[ "$(( $(ntitles "$OUT") + $(printf "%s\n" "$OUT" | sed -n "s/^   +\([0-9]*\) more$/\1/p") ))" -eq 14 ]'
 command mv "$STATE/owed/$(encode_key "$B")" "$ROOT/owed-b.gone"
 
+# --- T: --json (W-20260923-A11, D-20260927-A13) ------------------------------------------------
+# The mod reads --json; the text card stays Claude's. So: the two agree on every count, the JSON
+# parses on every error path, panel: behaves, and the text card is byte-identical to master's.
+# jq is the INSTRUMENT here, never the card's: the card builds its JSON with bash and awk.
+JQ="$(command -v jq 2>/dev/null || true)"
+runj(){ ( builtin cd "$1" && "$CARD" --json </dev/null 2>"$ROOT/stderr" ) > "$ROOT/json"; RC=$?; J="$(cat "$ROOT/json")"; }
+jv(){ printf '%s' "$J" | "$JQ" -r "$1" 2>/dev/null; }                 # jv <filter>
+parses(){ printf '%s' "$J" | "$JQ" -e 'type == "object" and .schema == 1' >/dev/null 2>&1; }
+utf8(){ printf '%s' "$J" | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1; }
+# agree <dir>: AGREE = "" when the text card and --json agree on every count and every line the
+# text card prints from a fact; else the names of the facts that disagree. Titles are compared
+# as text for every one the card shows, in order.
+agree(){
+  local d="$1" T bad="" n p k m own lab key c
+  T="$( builtin cd "$d" && "$CARD" </dev/null 2>/dev/null )"; runj "$d"
+  parses || { AGREE="json does not parse"; return 0; }
+  if has "$T" "^Open items: no drawer"; then [ "$(jv .items.drawer)" = none ] && [ "$(jv .items.open)" = 0 ] || bad="$bad drawer"
+  elif has "$T" "^Open items: none open"; then [ "$(jv .items.drawer)" = present ] && [ "$(jv .items.open)" = 0 ] || bad="$bad none-open"
+  elif has "$T" "^Open items: "; then
+    n="$(printf '%s\n' "$T" | sed -n 's/^Open items: \([0-9]*\) open.*/\1/p')"
+    [ "$n" = "$(jv .items.open)" ] && [ "$n" = "$(jv '.items.list | length')" ] || bad="$bad open"
+    p="$(printf '%s\n' "$T" | sed -n 's/^Open items: [0-9]* open, \([0-9]*\) pinned.*/\1/p')"
+    [ "${p:-0}" = "$(jv .items.pinned)" ] && [ "${p:-0}" = "$(jv '[.items.list[] | select(.pinned)] | length')" ] || bad="$bad pinned"
+    own="$(printf '%s\n' "$T" | awk '/^Open items: /{f=1; next} f && /^   · /{print; next} f{exit}')"
+    k=0; [ -n "$own" ] && k="$(printf '%s\n' "$own" | grep -c '')"
+    [ "$own" = "$(jv ".items.list[:$k][] | \"   · \" + (if .pinned then \"[pinned] \" else \"\" end) + .title")" ] || bad="$bad titles"
+    m="$(printf '%s\n' "$T" | sed -n 's/^   +\([0-9]*\) more$/\1/p')"
+    [ $(( k + ${m:-0} )) -eq "$n" ] || bad="$bad more"
+  else [ "$(jv .items.drawer)" = unknown ] || bad="$bad items-missing"
+  fi
+  p="$(printf '%s\n' "$T" | sed -n 's/^   parked: \([0-9]*\)$/\1/p')"; [ "${p:-0}" = "$(jv '.items.parked // 0')" ] || bad="$bad parked"
+  for lab in Watching:watching 'Checks owed:checks_owed' Mandatory:mandatory 'Moved out:moved_out' 'Ignored lines:ignored'; do
+    key="${lab#*:}"; lab="${lab%:*}"
+    c="$(printf '%s\n' "$T" | sed -n "s/^$lab: \([0-9]*\).*/\1/p")"
+    [ "${c:-0}" = "$(jv ".cross.$key.count")" ] || bad="$bad $key"
+  done
+  c="$(printf '%s\n' "$T" | sed -n 's/^Inbox: \([0-9]*\) unrouted.*/\1/p')"; [ "${c:-0}" = "$(jv .cross.inbox)" ] || bad="$bad inbox"
+  c="$(printf '%s\n' "$T" | grep -c '^Owed: ' || true)"
+  if [ "$(jv .owed_unreadable)" = true ]; then m=1; else m="$(jv '.owed | length')"; [ "$m" -gt 3 ] && m=3; fi
+  [ "$c" -eq "$m" ] || bad="$bad owed"
+  [ "$(printf '%s\n' "$T" | grep '^Handoff: ' || true)" = "$(jv 'if .handoff then "Handoff: \(.handoff.marker) (\(.handoff.size), \(.handoff.date)). Read on request, never print it." else "" end')" ] || bad="$bad handoff"
+  [ "$(printf '%s\n' "$T" | sed -n 's/^Tracker: //p')" = "$(jv '.trackers[]')" ] || bad="$bad trackers"
+  c="$(printf '%s\n' "$T" | sed -n 's/^dot-claude: \([0-9]*\) commit.*/\1/p')"; [ "${c:-0}" = "$(jv .dot_claude_behind)" ] || bad="$bad dot-claude"
+  c="$(printf '%s\n' "$T" | sed -n 's/^Mods API: (\([0-9]*\)) unseen.*/\1/p')"; [ "${c:-0}" = "$(jv '.mods_api.unseen // 0')" ] || bad="$bad mods"
+  [ "$(printf '%s\n' "$T" | grep '^WARNING' || true)" = "$(jv '.wrap_up_warning.text // ""')" ] || bad="$bad warning"
+  AGREE="$bad"
+}
+
+if [ -z "$JQ" ]; then
+  echo "  skip T: jq is not on PATH, and it is the instrument these arms read the JSON with -- NOT MEASURED"
+else
+# T1. agreement on the fixtures, in whatever state the sections above left them
+printf 'when: next session\n' >> "$WQ/items/open/W-20260101-07.md"          # re-pin one in Q
+PJ_MODS_API_DRIFT="$ROOT/mods-unseen"; export PJ_MODS_API_DRIFT                 # B gets a mods line too
+for d in A B C D Q R S Y Z WZ; do
+  eval "dir=\$$d"; agree "$dir"
+  check "T agree: text and --json agree on every count in repo-$(printf %s "$d" | tr 'A-Z' 'a-z') (${AGREE:-all agree})" '[ -z "$AGREE" ]'
+done
+export PJ_MODS_API_DRIFT="$ROOT/mods-silent"
+runj "$Q"
+check "T Q: the pinned item is first in the list, with its id and when" '[ "$(jv ".items.list[0] | [.id, .pinned, .when] | @tsv")" = "$(printf "W-20260101-07\ttrue\tnext session")" ]'
+check "T Q: every one of 40 open items is listed, not only the 10 the card shows" '[ "$(jv ".items.list | length")" -eq 40 ] && [ "$(jv "[.items.list[].id] | unique | length")" -eq 40 ]'
+check "T Q: done_when carried for every item" '[ "$(jv "[.items.list[] | select(.done_when == \"x\")] | length")" -eq 40 ]'
+runj "$D"
+check "T 0 open items: open 0, list [], drawer present" '[ "$(jv "[.items.open, (.items.list | length), .items.drawer] | @tsv")" = "$(printf "0\t0\tpresent")" ]'
+runj "$S"
+check "T S: owed lists every distinct command with its since" '[ "$(jv ".owed[0] | [.command, .since] | @tsv")" = "$(printf "/wrap-up\t2026-09-25")" ] && [ "$(jv ".flags[] | select(.name == \"owed\") | .text")" = "Owed: /wrap-up (since 2026-09-25, declined at wrap-up). Run it, or '"'"'pj-wrap owed --clear'"'"'." ]'
+runj "$B"
+check "T B: flags are the card's own lines (no-wrap-up, dot-claude-behind)" '[ "$(jv "[.flags[].name] | join(\",\")")" = "no-wrap-up,dot-claude-behind" ] && [ "$(jv ".dot_claude_behind")" = 2 ]'
+check "T B: handoff has marker, absolute path, size, bytes and date" '[ "$(jv ".handoff | [.marker, .path, .size, .bytes] | @tsv")" = "$(printf "repo:OPENING-PROMPT.md\t%s\t2 B\t2" "$B/OPENING-PROMPT.md")" ] && jv .handoff.date | grep -q "^20[0-9][0-9]-"'
+check "T B: five trackers by marker" '[ "$(jv ".trackers | length")" -eq 5 ] && [ "$(jv ".trackers[0]")" = "repo:t1.md" ]'
+check "T B: mods_api measured, nothing unseen with the silent fake" '[ "$(jv ".mods_api | [.unseen, .measured] | @tsv")" = "$(printf "0\ttrue")" ]'
+PJ_MODS_API_DRIFT="$ROOT/no-such-tool" runj "$B"
+check "T mods-api-drift absent: measured false, not a silent zero" '[ "$(jv ".mods_api.measured")" = false ]'
+
+# T2. more than 100 open items: IDs past A99 (W-20260924-A102), all listed, same order as the card
+BIG="$ROOT/repo-big"; mkrepo "$BIG"; WBIG="$(mkdrawer "$BIG" 0 0)"
+for i in $(seq 1 105); do
+  hid="A$(printf %02d "$i")"
+  printf '## W-20260106-%s -- big item %s\n\nproject: repo-big\nstatus: open\nkind: do\ndone-when: x\n' "$hid" "$hid" > "$WBIG/items/open/W-20260106-$hid.md"
+done
+agree "$BIG"
+check "T 105 open items: text and --json agree (${AGREE:-all agree})" '[ -z "$AGREE" ]'
+check "T 105 open items: all 105 listed with unique ids, A100 to A105 among them" '[ "$(jv "[.items.list[].id] | unique | length")" -eq 105 ] && [ "$(jv "[.items.list[].id | select(test(\"-A10[0-5]$\"))] | length")" -eq 6 ]'
+
+# T3. data in titles and done-when: quotes, backslashes, a tab, non-ASCII, an ESC, a bidi mark
+X="$ROOT/repo-x"; mkrepo "$X"; WX="$(mkdrawer "$X" 0 0)"
+printf '## W-20260107-01 -- say "hi" back\\slash tab\there caf\303\251 \360\237\230\200 esc\033[31m bidi\342\200\256x\n\nproject: repo-x\nstatus: open\nkind: do\ndone-when: a "q" and \\ and\ttab \303\251\033]52;c;aGk=\a\nnext: n\\1\n' > "$WX/items/open/W-20260107-01.md"
+agree "$X"
+check "T awkward text: text and --json agree (${AGREE:-all agree})" '[ -z "$AGREE" ]'
+check "T awkward text: the JSON parses and is valid UTF-8" 'parses && utf8'
+check "T awkward text: the title decodes to the card's own neutralised text" '[ "$(jv ".items.list[0].title")" = "$(printf "say \"hi\" back\\\\slash tab?here caf\303\251 \360\237\230\200 esc?[31m bidi?x")" ]'
+check "T awkward text: done_when and next keep quotes and backslashes, lose the controls" '[ "$(jv ".items.list[0].done_when")" = "$(printf "a \"q\" and \\\\ and?tab \303\251?]52;c;aGk=?")" ] && [ "$(jv ".items.list[0].next")" = "n\\1" ]'
+check "T awkward text: no ESC byte anywhere in the raw JSON" '! printf "%s" "$J" | LC_ALL=C grep -q "$(printf "\033")"'
+# A byte that is not UTF-8. Not through an item: open-items itself drops such an item (its
+# sed and awk refuse the byte under a UTF-8 locale), and a pj-homes line goes the same way
+# through the card's own sed. The owed record is read by awk under LC_ALL=C, so its bytes
+# reach the card untouched: that is where the guard is proved.
+OWX="$STATE/owed/$(encode_key "$X")"; printf 'owed: /wrap\377up\nsince: 2026-09-25 14:02\n' > "$OWX"
+runj "$X"
+check "T a byte that is not UTF-8: the JSON is still valid UTF-8 and errors says a byte was dropped" 'utf8 && parses && jv ".errors[]" | grep -q "not UTF-8" && [ "$(jv ".owed[0].command")" = "/wrapup" ]'
+command mv "$OWX" "$ROOT/notutf8.gone"
+runj "$X"; check "T CONTROL: without that byte, errors is empty" 'utf8 && [ "$(jv ".errors | length")" -eq 0 ]'
+# The card's shebang finds whatever bash is first on PATH; a hook may get macOS's /bin/bash 3.2.
+# Same fixture (controls, quotes, backslashes, non-ASCII), same bytes, under both.
+if [ -x /bin/bash ] && [ "$(/bin/bash -c 'echo ${BASH_VERSINFO[0]}')" != "$(bash -c 'echo ${BASH_VERSINFO[0]}')" ]; then
+  J5="$( builtin cd "$X" && bash "$CARD" --json </dev/null 2>&1 )"; J3="$( builtin cd "$X" && /bin/bash "$CARD" --json </dev/null 2>&1 )"
+  check "T bash $(/bin/bash -c 'echo $BASH_VERSION') and bash $(bash -c 'echo $BASH_VERSION') give the same --json bytes, stderr included" '[ -n "$J3" ] && [ "$J3" = "$J5" ]'
+  J="$J3"; check "T ... and bash 3.2's escapes the controls (the title reads back neutralised)" 'parses && [ "$(jv ".items.list[0].id")" = W-20260107-01 ]'
+else
+  echo "  skip T bash 3.2 arm: /bin/bash is missing or the same major version as bash -- NOT MEASURED"
+fi
+
+# T4. error paths: the JSON parses on every one and errors names what dropped out
+runj "$C"; check "T no drawer: parses, drawer none, no error" 'parses && [ "$(jv .items.drawer)" = none ] && [ "$(jv ".errors | length")" -eq 0 ]'
+J="$( builtin cd "$B" && PATH="$BROKEN:$PATH" "$CARD" --json </dev/null 2>/dev/null )"; RC=$?
+check "T open-items broken: rc 0, parses, drawer unknown, errors names it" '[ "$RC" -eq 0 ] && parses && [ "$(jv .items.drawer)" = unknown ] && jv ".errors[]" | grep -q "^items: open-items --where exit 7"'
+J="$( builtin cd "$B" && PATH="$ROOT/nowhere:/usr/bin:/bin" "$CARD" --json </dev/null 2>/dev/null )"; RC=$?
+check "T open-items absent: rc 0, parses, errors names exit 127" '[ "$RC" -eq 0 ] && parses && jv ".errors[]" | grep -q "exit 127"'
+FAKE="$ROOT/fake-oi"; mkdir -p "$FAKE"; REALOI="$(dirname "$CARD")/open-items"
+printf '#!/bin/sh\n[ "$1" = --json ] && { echo "{broken"; exit 2; }\nexec "%s" "$@"\n' "$REALOI" > "$FAKE/open-items"; chmod +x "$FAKE/open-items"
+J="$( builtin cd "$B" && PATH="$FAKE:$PATH" "$CARD" --json </dev/null 2>/dev/null )"
+check "T open-items --json failing: counts and titles kept, ids null, errors names it" 'parses && [ "$(jv .items.open)" = 14 ] && [ "$(jv "[.items.list[] | select(.id == null)] | length")" -eq 14 ] && jv ".errors[]" | grep -q "^items: open-items --json exit 2"'
+printf '#!/bin/sh\nif [ "$1" = --json ]; then "%s" "$@" | grep -v "W-20260101-03"; exit 0; fi\nexec "%s" "$@"\n' "$REALOI" "$REALOI" > "$FAKE/open-items"
+J="$( builtin cd "$B" && PATH="$FAKE:$PATH" "$CARD" --json </dev/null 2>/dev/null )"
+check "T the drawer changed between the two reads: reported, never shown wrong" 'parses && [ "$(jv "[.items.list[] | select(.id == null)] | length")" -eq 14 ] && jv ".errors[]" | grep -q "listed 13 open, the card read 14"'
+printf '#!/bin/sh\n"%s" "$@"; [ "$1" = --session ] && exit 5; exit 0\n' "$REALOI" > "$FAKE/open-items"
+J="$( builtin cd "$B" && PATH="$FAKE:$PATH" "$CARD" --json </dev/null 2>/dev/null )"
+check "T open-items --session exiting 5: parses, errors names it" 'parses && jv ".errors[]" | grep -q "^items: open-items --session exit 5"'
+PH="$B/.claude/pj-homes"; command mv "$PH" "$ROOT/ph-b.bak"; mkdir -p "$PH"
+runj "$B"; check "T pj-homes is a directory: parses, defaults used, errors says so" 'parses && jv ".errors[]" | grep -q "^pj-homes: " && [ "$(jv .panel.source)" = automatic ]'
+command mv "$PH" "$ROOT/ph-dir.gone"; printf 'panel: items\n' > "$PH"; chmod 000 "$PH"
+runj "$B"
+if [ -r "$PH" ]; then echo "  skip T unreadable pj-homes: chmod 000 did not take -- NOT MEASURED"
+else check "T pj-homes unreadable: parses, errors says so" 'parses && jv ".errors[]" | grep -q "^pj-homes: "'; fi
+chmod 644 "$PH"; head -c 300 /bin/sh > "$PH"; printf '\npanel: items\n' >> "$PH"
+runj "$B"; check "T pj-homes full of binary garbage: parses and valid UTF-8" 'parses && utf8'
+command mv "$ROOT/ph-b.bak" "$PH"
+runj "$B"; check "T CONTROL: pj-homes restored, errors empty" 'parses && [ "$(jv ".errors | length")" -eq 0 ]'
+J="$( builtin cd "$B" && PJ_CARD_FAULT=crash "$CARD" --json </dev/null 2>/dev/null )"; RC=$?
+check "T a crash mid-gather: rc 0 and still an object that parses, naming the internal error" '[ "$RC" -eq 0 ] && parses && jv ".errors[]" | grep -q "internal error"'
+OUT="$( builtin cd "$B" && PJ_CARD_FAULT=crash "$CARD" </dev/null 2>/dev/null )"; RC=$?
+check "T the same crash in the text card: rc 0 and silent (CONTRACT 5)" '[ "$RC" -eq 0 ] && [ -z "$OUT" ]'
+J="$( builtin cd "$B" && env -u HOME "$CARD" --json </dev/null 2>/dev/null )"; RC=$?
+check "T HOME unset: rc 0 and an object that parses (master died with exit 1 here)" '[ "$RC" -eq 0 ] && parses'
+OUT="$( builtin cd "$B" && env -u HOME "$CARD" </dev/null 2>/dev/null )"; RC=$?
+check "T HOME unset, text card: rc 0 (CONTRACT 1)" '[ "$RC" -eq 0 ]'
+
+# T5. panel: absent, given, unknown, twice, empty, a glob, repeated names, an escape in a name
+runj "$A"; check "T panel absent: automatic, the sections that have something (dot-claude behind, so flags too)" '[ "$(jv ".panel | [.source, (.sections | join(\",\")), (.unknown | length), .duplicates] | @tsv")" = "$(printf "automatic\titems,parked,handoff,flags\t0\t0")" ]'
+OPEN_ITEMS_DOTCLAUDE="$ROOT/not-a-repo" runj "$A"
+check "T panel absent, TWIN with no flag: flags drops out of the automatic sections" '[ "$(jv ".panel.sections | join(\",\")")" = "items,parked,handoff" ]'
+PH="$A/.claude/pj-homes"; cp "$PH" "$ROOT/ph-a.bak"
+printf 'panel: handoff, items flags\n' >> "$PH"; runj "$A"
+check "T panel given: those sections in that order, source pj-homes" '[ "$(jv ".panel | [.source, (.sections | join(\",\"))] | @tsv")" = "$(printf "pj-homes\thandoff,items,flags")" ]'
+cp "$ROOT/ph-a.bak" "$PH"; printf 'panel: items, bogus ci,items\n' >> "$PH"; runj "$A"
+check "T panel with unknown names: listed under unknown, ci reserved there too, items once" '[ "$(jv ".panel | [(.sections | join(\",\")), (.unknown | join(\",\"))] | @tsv")" = "$(printf "items\tbogus,ci")" ]'
+cp "$ROOT/ph-a.bak" "$PH"; printf 'panel: parked\npanel: items\n' >> "$PH"; runj "$A"
+check "T panel written twice: the first line wins, duplicates 1" '[ "$(jv ".panel | [(.sections | join(\",\")), .duplicates] | @tsv")" = "$(printf "parked\t1")" ]'
+cp "$ROOT/ph-a.bak" "$PH"; printf 'panel:\n' >> "$PH"; runj "$A"
+check "T panel: with nothing after it is an explicit empty panel" '[ "$(jv ".panel | [.source, (.sections | length)] | @tsv")" = "$(printf "pj-homes\t0")" ]'
+cp "$ROOT/ph-a.bak" "$PH"; printf 'panel: * items\n' >> "$PH"; runj "$A"
+check "T panel: a glob is a name, never expanded to files" '[ "$(jv ".panel.unknown | join(\",\")")" = "*" ]'
+cp "$ROOT/ph-a.bak" "$PH"; printf 'panel: items x\033]52;c;aGk=\ay\n' >> "$PH"; runj "$A"
+check "T panel: an escape in an unknown name is neutralised" 'parses && ! printf "%s" "$J" | LC_ALL=C grep -q "$(printf "\033")" && [ "$(jv ".panel.unknown[0]")" = "x?]52;c;aGk=?y" ]'
+cp "$ROOT/ph-a.bak" "$PH"
+OUT="$( builtin cd "$A" && "$CARD" </dev/null 2>/dev/null )"
+check "T the text card never mentions the panel" '! has "$OUT" "panel"'
+
+# T6. outside a repo, stdin, PJ_NO_CARD, jq absent, timing
+runj "$H"
+check "T --json outside a git repo: rc 0, parses, in_repo false, items null, project named" '[ "$RC" -eq 0 ] && parses && [ "$(jv "[.in_repo, .items, .project] | @tsv")" = "$(printf "false\t\tplain-dir")" ]'
+S0="$(now)"; J="$( builtin cd "$B" && "$CARD" --json < <(sleep 4) 2>/dev/null )"; S1="$(now)"
+check "T --json never reads stdin: an open pipe does not hold it ($(awk -v a="$S0" -v b="$S1" 'BEGIN{printf "%.2f", b-a}')s)" 'parses && awk -v a="$S0" -v b="$S1" "BEGIN{exit !((b-a) < 3)}"'
+J="$( builtin cd "$B" && PJ_NO_CARD=1 "$CARD" --json </dev/null 2>/dev/null )"
+check "T PJ_NO_CARD: --json still answers and says no_card true" 'parses && [ "$(jv .no_card)" = true ]'
+OUT="$( builtin cd "$B" && PJ_NO_CARD=1 "$CARD" </dev/null 2>/dev/null )"
+check "T CONTROL: PJ_NO_CARD still silences the text card" '[ -z "$OUT" ]'
+NOJQ="$ROOT/nojq"; mkdir -p "$NOJQ"; printf '#!/bin/sh\necho "NOT JSON"\nexit 99\n' > "$NOJQ/jq"; chmod +x "$NOJQ/jq"
+J="$( builtin cd "$X" && PATH="$NOJQ:$PATH" "$CARD" --json </dev/null 2>/dev/null )"
+check "T a broken jq first on PATH changes nothing: the card never calls jq" 'parses && ! printf "%s" "$J" | grep -q "NOT JSON" && [ "$(jv ".items.open")" = 1 ]'
+SLOW=0
+for i in 1 2 3 4 5; do s="$(now)"; runj "$BIG"; e="$(now)"; awk -v s="$s" -v e="$e" 'BEGIN{exit !((e-s) < 1.0)}' || SLOW=$((SLOW+1)); done
+check "T --json on 105 items: each of 5 runs under 1 s (slow: $SLOW)" '[ "$SLOW" -eq 0 ]'
+STAMP2="$ROOT/stamp2"; touch "$STAMP2"; sleep 1
+runj "$A" >/dev/null; runj "$B" >/dev/null; runj "$BIG" >/dev/null; runj "$H" >/dev/null
+NEW="$(find "$ROOT" -type f -newer "$STAMP2" ! -name stderr ! -name json | wc -l | tr -d ' ')"
+check "T --json writes nothing: no file newer than the stamp after four runs ($NEW)" '[ "$NEW" -eq 0 ]'
+
+# T7. the real drawer, READ-ONLY: this repo's own card, text against --json
+REAL="$(dirname "$(readlink -f "$CARD" 2>/dev/null || printf '%s' "$CARD")")"
+REAL="$(git -C "$REAL" rev-parse --show-toplevel 2>/dev/null || true)"
+if [ -z "$REAL" ]; then echo "  skip T real drawer: the card is not inside a git checkout -- NOT MEASURED"
+else
+  realagree(){ ( unset OPEN_ITEMS_PROJECTS_DIR PJ_STATE_DIR OPEN_ITEMS_DOTCLAUDE PJ_MODS_API_DRIFT; agree "$REAL"; printf '%s' "$AGREE" ) ; }
+  AGREE="$(realagree)"
+  [ -n "$AGREE" ] && AGREE="$(realagree)"      # once more: another session may have filed an item in between
+  check "T the REAL drawer ($(basename "$REAL")): text and --json agree on every count (${AGREE:-all agree})" '[ -z "$AGREE" ]'
+fi
+
+# T8. the text card is byte-identical to master's on the same fixtures (Gavin: Claude's copy unchanged)
+BASE_REF="${PJ_CARD_BASELINE_REF:-master}"; MB="$ROOT/master-card"; mkdir -p "$MB"
+if [ -n "$REAL" ] && git -C "$REAL" show "$BASE_REF:home/.local/bin/pj-start-card" > "$MB/pj-start-card" 2>/dev/null; then
+  chmod +x "$MB/pj-start-card"; DIFFS=""; NCMP=0
+  # Pin the dot-claude fetch to 3 hours ago: "measured Nm ago" otherwise rolls over a minute
+  # between the two runs of a pair, and that difference is the clock, not the card.
+  perl -e '$t = time - 10800; utime($t, $t, $ARGV[0])' "$DCL/.git/FETCH_HEAD"
+  export PJ_MODS_API_DRIFT="$ROOT/mods-unseen"
+  printf 'ended: 2026-01-01 00:00\ntranscript: %s/.claude/x.jsonl\n' "$HOME" > "$STATE/no-wrap-up/$(encode_key "$A")"
+  for dir in "$A" "$B" "$C" "$D" "$H" "$Q" "$R" "$S" "$ROOT/repo-s-wt" "$X" "$Y" "$Z" "$WZ" "$BIG"; do
+    for src in '' '{"source":"resume"}' '{"source":"compact"}'; do
+      a="$( builtin cd "$dir" && printf '%s' "$src" | "$MB/pj-start-card" 2>&1 )"; ra=$?
+      b="$( builtin cd "$dir" && printf '%s' "$src" | "$CARD" 2>&1 )"; rb=$?
+      NCMP=$((NCMP + 1)); [ "$a" = "$b" ] && [ "$ra" = "$rb" ] || DIFFS="$DIFFS $(basename "$dir")${src:+/$src}"
+    done
+  done
+  export PJ_MODS_API_DRIFT="$ROOT/mods-silent"
+  command mv "$STATE/no-wrap-up/$(encode_key "$A")" "$ROOT/flag-a.gone"
+  check "T text card byte-identical to $BASE_REF's on $NCMP fixture runs (${DIFFS:-no differences})" '[ -z "$DIFFS" ]'
+else
+  echo "  skip T byte-identical: $BASE_REF's pj-start-card could not be read -- NOT MEASURED"
+fi
+fi
+
 # --- N: --selftest dispatch and syntax ------------------------------------------------------
 check "N bash -n clean" 'bash -n "$CARD"'
 
