@@ -86,7 +86,7 @@ set -u
 CAP=20
 TITLE_CAP=10
 OWN_FLOOR=5      # P8 rule 3: this project's own titles before any cross-project title
-HELLO='Hello rule: on a first message like hello or start, reply in two or three lines from this card, make no tool calls, name anything a start hook flagged for action once at the top, then ask what to work on.'
+HELLO='Hello rule: on a first message like hello or start, reply in two or three lines from this card, then ask what to work on. Anything a start hook flagged for action gets one read-only check that it still holds before you name it once at the top: a cached reading can predate the fix (D-20260927-A12).'
 STATE="${PJ_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/pj}"
 OWED_CAP=3       # Owed: lines at most, a "+N more" line included
 OWED_CMD_LEN=80

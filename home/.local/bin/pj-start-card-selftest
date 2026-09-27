@@ -147,6 +147,9 @@ check "H rc 0" '[ "$RC" -eq 0 ]'
 check "H exactly 2 lines" '[ "$(lines "$OUT")" -eq 2 ]'
 check "H header says not a git repo" 'has "$OUT" "^pj start card: plain-dir (not a git repo"'
 check "H hello rule present" 'has "$OUT" "^Hello rule:"'
+# D-20260927-A12: a flagged action is checked before it is named; a cached hook reading
+# told Gavin to upgrade an uninstalled formula under the old no-tool-calls wording.
+check "H hello rule checks a flagged action before naming it" 'has "$OUT" "gets one read-only check that it still holds" && ! has "$OUT" "make no tool calls"'
 
 # --- I: broken open-items first on PATH ----------------------------------------------
 BROKEN="$ROOT/broken"; mkdir -p "$BROKEN"
