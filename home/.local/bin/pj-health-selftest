@@ -31,7 +31,12 @@ arm(){   # arm "label" <shell test...>
 T="$(mktemp -d "${TMPDIR:-/tmp}/pj-health-selftest.XXXXXX")"; T="$(builtin cd "$T" && pwd -P)"
 mkdir -p "$T/gone"; GN=0
 gone(){ GN=$((GN+1)); command mv "$1" "$T/gone/$GN"; }   # never rm: the Trash wrapper refuses inside a sandbox
-REAL_HEALTH="$(readlink -f "$(command -v pj-health)" 2>/dev/null || command -v pj-health)"
+# The pj-health BESIDE this file, not the one on PATH: from a worktree the PATH copy is the
+# stowed master, and the suite would prove the old tool green (caught 2026-09-27, screen-switch).
+# Stowed, the sibling is the same file PATH finds.
+REAL_HEALTH="$(dirname "$0")/pj-health"
+[ -x "$REAL_HEALTH" ] || REAL_HEALTH="$(command -v pj-health)"
+REAL_HEALTH="$(readlink -f "$REAL_HEALTH" 2>/dev/null || printf '%s' "$REAL_HEALTH")"
 REAL_PROMPT="$(readlink -f "$(command -v pj-prompt-file)" 2>/dev/null || command -v pj-prompt-file)"
 [ -x "$REAL_HEALTH" ] || { echo "pj-health not on PATH"; exit 1; }
 
@@ -1008,6 +1013,92 @@ arm "mod-validate NOT MEASURED with no profiles dir" is mod-validate "$NM"
 mvprof m-good skills/plain; mvrun
 arm "mod-validate back to PASS (control)" is mod-validate PASS
 
+# ------------------------------------ mods-installed (screen-switch, 2026-09-27) ----
+# Hermetic: its own profiles dir and config dirs. installed_plugins.json is built in the
+# REAL file's shape, read from ~/.claude-scratch/plugins/installed_plugins.json on
+# 2026-09-27 (Claude Code 2.1.283): version 2, plugins = {id: [entry...]}, a user entry
+# carrying scope, installPath, version, installedAt, lastUpdated, gitCommitSha. The "local"
+# entry's extra projectPath is the shape ~/.claude's own file holds for
+# chrome-devtools-mcp. Only the paths and the id are the fixture's.
+MIP="$T/miprofiles"; MIA="$T/mi-cfg-a"; MIB="$T/mi-cfg-b"; SS='screen-switch@cc-claude-mods'
+mkdir -p "$MIP" "$MIA/plugins/cache/cc-claude-mods/screen-switch" "$MIB/plugins"
+mi_entry(){   # mi_entry <scope> <installPath> <version> [projectPath]
+  jq -nc --arg s "$1" --arg p "$2" --arg v "$3" --arg pp "${4-}" \
+    '{scope:$s, installPath:$p, version:$v, installedAt:"2026-09-27T01:47:48.289Z", lastUpdated:"2026-09-27T01:47:48.289Z", gitCommitSha:"2984f087f06a46554b955ad1b67f35ac6217b80c"} + (if $pp == "" then {} else {projectPath:$pp} end)'
+}
+mi_file(){   # mi_file <config-dir> <id> <entry-json>...   writes <config-dir>/plugins/installed_plugins.json
+  local cfg="$1" id="$2"; [ $# -ge 2 ] || return 1; shift 2
+  printf '%s\n' "$@" | jq -s --arg id "$id" '{version:2, plugins:{"cc-skills@captaincodeau":[{scope:"user",installPath:"/nowhere/cc-skills/1.4.0",version:"1.4.0",installedAt:"2026-09-21T11:11:12.613Z",lastUpdated:"2026-09-21T11:11:12.613Z",gitCommitSha:"f570445a2b7c3ed1620370750ccba81df647c8c4"}], ($id): .}}' >"$cfg/plugins/installed_plugins.json"
+}
+# an installed copy that is a real mod: validate's fake answers by the version folder's name
+MIV="$MIA/plugins/cache/cc-claude-mods/screen-switch"
+for v in 0.2.0 0.2.1 0.2.2; do
+  mkdir -p "$MIV/$v/.claude-plugin" "$MIV/$v/hooks"; echo '{"name":"screen-switch"}' >"$MIV/$v/.claude-plugin/plugin.json"
+  echo '{"modules":["./register.ts"]}' >"$MIV/$v/hooks/hooks.json"; echo 'export const register = () => {}' >"$MIV/$v/hooks/register.ts"
+done
+cp "$MVC/json/m-good.json" "$MVC/json/0.2.0.json"; cp "$MVC/json/m-broken.json" "$MVC/json/0.2.1.json"; cp "$MVC/json/m-good.json" "$MVC/json/0.2.2.json"
+ln -s "$MIV/0.2.0/hooks/register.ts" "$MIV/0.2.2/hooks/linked.ts"
+miprof(){   # miprof <name> <config_dir> [mods]   (no mods arg = no mods: line, so it inherits)
+  { printf 'plugins: none\nconfig_dir: %s\n' "$2"; [ $# -ge 3 ] && printf 'mods: %s\n' "$3"; } >"$MIP/$1"
+}
+mirun(){ PJ_PROFILE_DIR="$MIP" run; }
+# MI1 PASS: declared and installed (user scope, the dir exists), in THAT profile's config dir
+miprof default "$MIA" "$SS"; mi_file "$MIA" "$SS" "$(mi_entry user "$MIV/0.2.0" 0.2.0)"; mirun
+arm "mods-installed PASS when the declared mod is installed in the profile's config dir" is mods-installed PASS
+arm "  and names the id, the version and the config dir" has mods-installed "$SS 0.2.0 in $MIA"
+# MI2 mod-validate validates the INSTALLED copy, labelled by id rather than its version folder
+arm "mod-validate validates the installed copy too" has mod-validate "$SS 0.2.0 ($MIA) (1 module(s))"
+arm "  and it passes" is mod-validate PASS
+mi_file "$MIA" "$SS" "$(mi_entry user "$MIV/0.2.1" 0.2.1)"; mirun
+arm "an installed copy that does not parse FAILs mod-validate" is mod-validate FAIL
+arm "  while mods-installed still PASSes (installed is not the same fact as valid)" is mods-installed PASS
+mi_file "$MIA" "$SS" "$(mi_entry user "$MIV/0.2.2" 0.2.2)"; mirun
+arm "a symlink inside the installed copy FAILs mod-validate (D-20260923-A05)" has mod-validate "linked.ts ->"
+# MI3 FAIL: installed_plugins.json lists other plugins but not this one
+mi_file "$MIA" "other@mk" "$(mi_entry user "$MIV/0.2.0" 0.2.0)"; mirun
+arm "mods-installed FAIL when the declared mod is not installed" is mods-installed FAIL
+arm "  says declared, not installed, and where" has mods-installed "$SS (profile default) is declared, not installed in $MIA"
+arm "  and names the install.sh fix for that config dir" has mods-installed "cc-claude-mods/install.sh --config-dir $MIA"
+arm "  and the not-installed mod is NOT handed to mod-validate" not_has mod-validate "$SS"
+# MI4 FAIL: the config dir exists but has no installed_plugins.json at all
+miprof default "$MIB" "$SS"; mirun
+arm "mods-installed FAIL when the config dir has no installed_plugins.json" is mods-installed FAIL
+arm "  and names the file it looked for" has mods-installed "$MIB/plugins/installed_plugins.json does not exist"
+# MI5 FAIL: installed only at local scope, for one project
+miprof default "$MIA" "$SS"; mi_file "$MIA" "$SS" "$(mi_entry local "$MIV/0.2.0" 0.2.0 /some/project)"; mirun
+arm "mods-installed FAIL when the mod is installed only for one project" is mods-installed FAIL
+arm "  and says which scope and project" has mods-installed "only scope local for /some/project"
+# MI6 FAIL: a user entry whose installPath is gone
+mi_file "$MIA" "$SS" "$(mi_entry user "$MIV/9.9.9" 9.9.9)"; mirun
+arm "mods-installed FAIL when the user install's files are gone" has mods-installed "user install at $MIV/9.9.9 is gone"
+# MI7 NOT MEASURED: the declared config dir does not exist yet (the profile row owns that)
+miprof default "$T/mi-cfg-none" "$SS"; mirun
+arm "mods-installed NOT MEASURED when the config dir does not exist yet" is mods-installed "$NM"
+# MI8 NOT MEASURED: installed_plugins.json is not JSON
+miprof default "$MIA" "$SS"; printf 'not json {\n' >"$MIA/plugins/installed_plugins.json"; mirun
+arm "mods-installed NOT MEASURED when installed_plugins.json does not parse" is mods-installed "$NM"
+# MI9 FAIL: an id pj would refuse
+miprof default "$MIA" 'justname'; mirun
+arm "mods-installed FAIL on an id pj REFUSES" has mods-installed "is not a plugin id, so pj REFUSES to launch it"
+# MI10 inheritance and none: a profile with no mods: line inherits the default's and is
+#      checked in ITS OWN config dir; `mods: none` contributes nothing.
+miprof default "$MIA" "$SS"; mi_file "$MIA" "$SS" "$(mi_entry user "$MIV/0.2.0" 0.2.0)"
+miprof inherits "$MIB"; mirun
+arm "a profile with no mods: line inherits the default's and is checked in its own config dir" has mods-installed "$SS (profile inherits) is not installed: $MIB/plugins/installed_plugins.json does not exist"
+miprof inherits "$MIB" none; mirun
+arm "mods: none contributes nothing (back to PASS)" is mods-installed PASS
+# MI11 the same (config dir, id) from two profiles is counted once
+miprof twin "$MIA"; mirun
+arm "the same mod in the same config dir from two profiles is counted once" has mods-installed "1 declared mod(s) installed"
+# MI12 nothing declared anywhere is a PASS that says so; no profiles dir is NOT MEASURED
+miprof default "$MIA" none; command mv "$MIP/twin" "$T/gone/mi-twin"; mirun
+arm "no mod declared: PASS, and it says there is nothing to look for" has mods-installed "no profile declares a mod"
+PJ_PROFILE_DIR="$T/no-such-profiles" run
+arm "mods-installed NOT MEASURED with no profiles dir" is mods-installed "$NM"
+# control: the arms above were fixtures, not a broken row
+miprof default "$MIA" "$SS"; mirun
+arm "mods-installed back to PASS (control)" is mods-installed PASS
+
 # output shape, exit codes, quiet, line cap
 run; arm "exit 0 when no FAIL" [ "$RC" -eq 0 ]
 arm "json exit field 0" [ "$(jq -r .exit <<<"$OUT")" = 0 ]
@@ -1019,9 +1110,10 @@ arm "--quiet hides PASS rows" bash -c '! grep -q "^PASS" <<<"$1"' _ "$QOUT"
 arm "--quiet keeps the summary line" grep -q '^pj-health: .* FAIL, ' <<<"$QOUT"
 write_settings
 FOUT="$( (builtin cd "$PROJ" && PATH="$BIN:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" PJ_HOME="$H" PJ_BIN_DIR="$BIN" PJ_DOTFILES="$DF" PJ_LAUNCHER="$BIN/pj" PJ_TYPE_OUT="$T/type-out" DRYRUN_FILE="$T/dryrun" PJ_PS_OUT="$T/ps" PJ_ZSHRC_MTIME="$ZMT" PJ_TRANSCRIPTS_DIR="$H/projects" PJ_STATE_DIR="$STATE" PJ_MACHINE_FILE="$T/machine" PJ_PROMPT_SOURCES="$OR:$RULES" PJ_PROMPT_OUT="$T/cache/prompt.md" OI_WHERE_FILE="$T/oi-where" DECIDED_LIST_FILE="$T/decided-list" DECIDED_LIST_RC="$T/decided-list-rc" DECIDED_HOMES_FILE="$T/decided-homes" RENDER_OUT_FILE="$T/render-out" RENDER_RC_FILE="$T/render-rc" SYNC_OUT_FILE="$T/sync-out" pj-health 2>/dev/null) )"
-# 43, not 41, since D-20260925-A01 added the owed and bare-wrap rows (40 rows + header + summary).
-arm "normal output under 43 lines ($(wc -l <<<"$FOUT" | tr -d ' '))" [ "$(wc -l <<<"$FOUT" | tr -d ' ')" -lt 43 ]
-arm "normal output has one row per check (40)" [ "$(grep -cE '^(PASS|WARN|FAIL|NOT MEASURED) ' <<<"$FOUT")" -eq 40 ]
+# 43, not 41, since D-20260925-A01 added the owed and bare-wrap rows (40 rows + header + summary);
+# 44 since the mods-installed row (2026-09-27, screen-switch).
+arm "normal output under 44 lines ($(wc -l <<<"$FOUT" | tr -d ' '))" [ "$(wc -l <<<"$FOUT" | tr -d ' ')" -lt 44 ]
+arm "normal output has one row per check (41)" [ "$(grep -cE '^(PASS|WARN|FAIL|NOT MEASURED) ' <<<"$FOUT")" -eq 41 ]
 arm "unknown arg REFUSED rc 2" bash -c 'PATH="$1:$PATH" pj-health --bogus >/dev/null 2>&1; [ $? -eq 2 ]' _ "$BIN"
 arm "--help exits 0" bash -c 'PATH="$1:$PATH" pj-health --help >/dev/null 2>&1' _ "$BIN"
 

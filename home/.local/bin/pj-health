@@ -887,6 +887,85 @@ else
   row NOTM mods-api "mods-api-drift is not on PATH, so the mods API was not compared; fix: stow -R the dotfiles"
 fi
 
+# --- mods-installed: is every mod a profile enables installed where it loads? (2026-09-27) ----
+# A profile's `mods:` ids reach the session only as an enable in pj's --settings overlay,
+# and an enable loads nothing unless THAT profile's config dir holds the install: Claude
+# Code reads <config_dir>/plugins/installed_plugins.json. pj never checks (it never refuses
+# over a missing file), so this row is where "declared, not installed" is said.
+# Inheritance follows pj: the profile's mods: line, else the default profile's, else none;
+# config_dir likewise, else ~/.claude (PJ_HOME). An id counts as installed when a
+# scope "user" entry names an installPath that is a directory: a "local" or "project"
+# entry holds only for its projectPath, and pj sessions run everywhere. The same
+# (config dir, id) declared by two profiles is counted once. The installed copies' paths
+# are handed to mod-validate below, so what runs is what gets validated.
+#   PASS  every declared id is installed in its profile's config dir
+#   FAIL  declared, not installed (or only for one project, or its files are gone), or an
+#         id pj would REFUSE; fix: cc-claude-mods' install.sh --config-dir <dir>
+#   NOT MEASURED  no profiles dir; a config dir that does not exist yet (the profile row
+#         owns that); installed_plugins.json unreadable or not the {plugins:{}} shape
+MI_PATHS=""   # "<installPath>|<label>" per line, for mod-validate
+if [ ! -d "$PROFILE_DIR" ]; then
+  row NOTM mods-installed "no profiles dir at $(tilde "$PROFILE_DIR"), so no declared mod was read"
+else
+  mi_n=0; mi_ok=""; mi_fail=""; mi_notm=""; mi_seen=" "
+  mi_defmods="$(profile_key default mods)"; mi_defcd="$(profile_key default config_dir)"
+  for pf in "$PROFILE_DIR"/*; do
+    [ -f "$pf" ] || continue
+    pn="$(basename "$pf")"
+    ms="$(profile_key "$pn" mods)"; [ -n "$ms" ] || ms="$mi_defmods"
+    { [ -z "$ms" ] || [ "$ms" = none ]; } && continue
+    cd_="$(profile_key "$pn" config_dir)"; [ -n "$cd_" ] || cd_="$mi_defcd"
+    cd_="$(expand_tilde "$cd_")"; [ -n "$cd_" ] || cd_="$PJ_HOME"
+    ipj="$cd_/plugins/installed_plugins.json"
+    for id in $ms; do
+      case "$mi_seen" in *" $cd_|$id "*) continue ;; esac
+      mi_seen="$mi_seen$cd_|$id "; mi_n=$((mi_n+1))
+      if ! printf '%s' "$id" | LC_ALL=C grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-]*$'; then
+        mi_fail="${mi_fail:+$mi_fail | }profile $pn mods: '$(safe_name "$id")' is not a plugin id, so pj REFUSES to launch it; fix: name@marketplace in $(tilde "$pf")"
+        continue
+      fi
+      case "$id" in
+        *@cc-claude-mods) mi_fix="fix: ~/CODE/CaptainCodeAU/cc-claude-mods/install.sh --config-dir $(tilde "$cd_")" ;;
+        *) mi_fix="fix: install $id into $(tilde "$cd_") (CLAUDE_CONFIG_DIR=$(tilde "$cd_") claude plugin install $id), then restore settings.json" ;;
+      esac
+      if [ ! -d "$cd_" ]; then
+        mi_notm="${mi_notm:+$mi_notm | }profile $pn: config dir $(tilde "$cd_") does not exist yet (the profile row says what to do), so $id was not looked for"
+        continue
+      fi
+      if [ ! -e "$ipj" ]; then
+        mi_fail="${mi_fail:+$mi_fail | }$id (profile $pn) is not installed: $(tilde "$ipj") does not exist, so nothing is installed there; $mi_fix"
+        continue
+      fi
+      if ! jq -e '.plugins | type == "object"' "$ipj" >/dev/null 2>&1; then
+        mi_notm="${mi_notm:+$mi_notm | }$(tilde "$ipj") is unreadable or not the {plugins:{...}} shape, so $id was not looked for"
+        continue
+      fi
+      mi_hit=""; mi_other=""
+      while IFS='|' read -r sc ip ver pp; do
+        [ -n "$sc" ] || continue
+        if [ "$sc" = user ] && [ -d "$ip" ]; then mi_hit="$ip|$ver"; break; fi
+        if [ "$sc" = user ]; then mi_other="${mi_other:+$mi_other; }user install at $(tilde "$ip") is gone"
+        else mi_other="${mi_other:+$mi_other; }only scope $sc${pp:+ for $(tilde "$pp")}"; fi
+      done <<EOF
+$(jq -r --arg id "$id" '.plugins[$id][]? | "\(.scope // "")|\(.installPath // "")|\(.version // "?")|\(.projectPath // "")"' "$ipj" 2>/dev/null)
+EOF
+      if [ -n "$mi_hit" ]; then
+        mi_ok="${mi_ok:+$mi_ok, }$id ${mi_hit#*|} in $(tilde "$cd_")"
+        MI_PATHS="$MI_PATHS${mi_hit%%|*}|$id ${mi_hit#*|} ($(tilde "$cd_"))
+"
+      elif [ -n "$mi_other" ]; then
+        mi_fail="${mi_fail:+$mi_fail | }$id (profile $pn) is listed in $(tilde "$ipj") but not usable by pj: $mi_other; $mi_fix"
+      else
+        mi_fail="${mi_fail:+$mi_fail | }$id (profile $pn) is declared, not installed in $(tilde "$cd_"); $mi_fix"
+      fi
+    done
+  done
+  if [ -n "$mi_fail" ]; then row FAIL mods-installed "$mi_fail"
+  elif [ -n "$mi_notm" ]; then row NOTM mods-installed "$mi_notm"
+  elif [ "$mi_n" -eq 0 ]; then row PASS mods-installed "no profile declares a mod, so there is nothing to look for"
+  else row PASS mods-installed "$mi_n declared mod(s) installed where their profile loads them: $mi_ok"; fi
+fi
+
 # --- mod-validate: does every mod a profile declares parse? (F8b, W-20260922-A08) ----
 # A broken hooks module fails OPEN and leaves no trace in a `claude -p` run (F8a E3), and
 # `claude plugin validate` is the only instrument that sees it. Two traps, both measured
@@ -900,11 +979,14 @@ fi
 # Profiles are read from their FILES with profile_key, never from the launcher's dry run:
 # `pj --dry-run` does not see --profile (W-20260923-A03). A dir is a mod when its
 # hooks/hooks.json lists modules; the others are skills and styles and are only counted.
+# INSTALLED MODS TOO (2026-09-27): every installed copy the mods-installed row found is
+# validated as well, since that copy under <config_dir>/plugins/cache is what a session
+# runs; it is labelled "<id> <version> (<config dir>)" rather than by its version folder.
 PJ_HEALTH_CLAUDE="${PJ_HEALTH_CLAUDE:-claude}"
 if [ ! -d "$PROFILE_DIR" ]; then
   row NOTM mod-validate "no profiles dir at $(tilde "$PROFILE_DIR"), so no declared plugin dir was read"
 else
-  mv_dirs=0; mv_mods=0; mv_ok=""; mv_fail=""; mv_notm=""; mv_seen=" "
+  mv_dirs=0; mv_mods=0; mv_ok=""; mv_fail=""; mv_notm=""; mv_seen=" "; mv_list=""
   for pf in "$PROFILE_DIR"/*; do
     [ -f "$pf" ] || continue
     pn="$(basename "$pf")"
@@ -914,6 +996,13 @@ else
     for p in $pl; do
       # a full-path entry (/ or ~) is used as written, as pj and pj-launch-check do (2026-09-27)
       case "$p" in /*|"~"*) d="$(expand_tilde "$p")" ;; *) d="$pr/$p" ;; esac
+      mv_list="$mv_list$d|$(basename "$d")
+"
+    done
+  done
+  mv_list="$mv_list$MI_PATHS"
+  while IFS='|' read -r d mv_label; do
+      [ -n "$d" ] || continue
       case "$mv_seen" in *" $d "*) continue ;; esac
       mv_seen="$mv_seen$d "; mv_dirs=$((mv_dirs+1))
       hj="$d/hooks/hooks.json"
@@ -928,7 +1017,7 @@ else
       if ! command -v "$PJ_HEALTH_CLAUDE" >/dev/null 2>&1; then
         mv_notm="${mv_notm:+$mv_notm | }claude is not on PATH, so $(tilde "$d") was not validated"; continue
       fi
-      vj="$("$PJ_HEALTH_CLAUDE" plugin validate --json "$d" 2>/dev/null)"
+      vj="$("$PJ_HEALTH_CLAUDE" plugin validate --json "$d" 2>/dev/null </dev/null)"   # </dev/null: the loop reads its list on stdin
       if [ "$(printf '%s' "$vj" | jq -r 'has("success")' 2>/dev/null)" != true ]; then
         mv_notm="${mv_notm:+$mv_notm | }claude plugin validate gave no JSON for $(tilde "$d")"; continue
       fi
@@ -943,9 +1032,10 @@ else
       if [ "${nnote:-0}" -lt "$nmod" ]; then
         mv_notm="${mv_notm:+$mv_notm | }$(tilde "$d") lists $nmod module(s) but validate reported hooks for $nnote, so it did not read them all"; continue
       fi
-      mv_ok="${mv_ok:+$mv_ok, }$(basename "$d") ($nmod module(s))"
-    done
-  done
+      mv_ok="${mv_ok:+$mv_ok, }$mv_label ($nmod module(s))"
+  done <<MVEOF
+$mv_list
+MVEOF
   if [ -n "$mv_fail" ]; then row FAIL mod-validate "$mv_fail"
   elif [ -n "$mv_notm" ]; then row NOTM mod-validate "$mv_notm"
   elif [ "$mv_mods" -eq 0 ]; then row PASS mod-validate "0 of $mv_dirs declared plugin dir(s) carry a hooks module, so there is nothing to validate"
