@@ -1209,6 +1209,10 @@ else
           [ -n "$p" ] || continue
           case " items parked handoff rulings flags mods-api " in *" $p "*) ;; *) panelbad="$panelbad $p";; esac
         done;;
+      # W-20260927-A60. Keys other tools read, listed so a correct declaration is
+      # not a FAIL: session-alias (pj's session names and pj-ping's project label),
+      # group and items-to (open-items). Their values are those tools' to check.
+      session-alias|group|items-to) nkeys=$((nkeys+1));;
       handoff|tracker|decisions|incidents|plans)
         nkeys=$((nkeys+1)); p="$(resolve_marker "$val")"
         if [ -z "$p" ]; then unresolved="$unresolved $key"
@@ -1216,7 +1220,7 @@ else
       *) bad="$bad unknown-key='$key'";;
     esac
   done <"$TOPLEVEL/.claude/pj-homes"
-  if [ -n "$bad" ]; then row FAIL pj-homes ".claude/pj-homes:$bad; fix: keys handoff|tracker|decisions|incidents|plans|records|wrap-up|panel, records repo|private"
+  if [ -n "$bad" ]; then row FAIL pj-homes ".claude/pj-homes:$bad; fix: keys handoff|tracker|decisions|incidents|plans|records|wrap-up|panel|session-alias|group|items-to, records repo|private"
   elif [ -n "$missing" ]; then row FAIL pj-homes "declared store missing on disk:$missing; fix: create it or correct the line"
   elif [ -n "$unresolved" ]; then row WARN pj-homes "$nkeys keys; unresolvable marker on:$unresolved (repo:, drawer:, ~/ resolve)"
   elif [ -n "$panelbad" ]; then row WARN pj-homes "$nkeys keys; panel: names no section:$panelbad (items parked handoff rulings flags mods-api; ci is reserved)"

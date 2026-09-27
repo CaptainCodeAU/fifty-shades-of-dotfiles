@@ -628,6 +628,15 @@ gone "$BIN/a-tool-link"
 # P1 pj-homes
 cp "$PROJ/.claude/pj-homes" "$T/ph.bak"
 echo "bogus: 1" >>"$PROJ/.claude/pj-homes"; run; arm "pj-homes FAIL on an unknown key" is pj-homes FAIL; cp "$T/ph.bak" "$PROJ/.claude/pj-homes"
+# W-20260927-A60: keys other tools read are accepted, one arm each. The bogus
+# arm just above is the control: the same harness still FAILs a key nobody reads.
+for k in "session-alias: dotfiles" "group: pj" "items-to: other-project"; do
+  echo "$k" >>"$PROJ/.claude/pj-homes"; run; arm "pj-homes PASS with '${k%%:*}:'" is pj-homes PASS; cp "$T/ph.bak" "$PROJ/.claude/pj-homes"
+done
+printf 'session-alias: dotfiles\ngroup: pj\nbogus: 1\n' >>"$PROJ/.claude/pj-homes"; run
+arm "CONTROL: an unknown key beside the accepted ones still FAILs" is pj-homes FAIL
+arm "CONTROL: the FAIL names the unknown key" has pj-homes "unknown-key='bogus'"
+cp "$T/ph.bak" "$PROJ/.claude/pj-homes"
 sed -i.bak 's/^records: private/records: shared/' "$PROJ/.claude/pj-homes"; run; arm "pj-homes FAIL on a bad records value" is pj-homes FAIL; cp "$T/ph.bak" "$PROJ/.claude/pj-homes"
 mv "$PROJ/TRACK.md" "$T/track.bak"; run; arm "pj-homes FAIL when a declared tracker is missing" is pj-homes FAIL; arm "pj-homes names the key" has pj-homes "tracker"; mv "$T/track.bak" "$PROJ/TRACK.md"
 echo "plans: elsewhere:x" >>"$PROJ/.claude/pj-homes"; run; arm "pj-homes WARN on an unresolvable marker" is pj-homes WARN; cp "$T/ph.bak" "$PROJ/.claude/pj-homes"
