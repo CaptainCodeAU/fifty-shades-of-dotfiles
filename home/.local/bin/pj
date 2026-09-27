@@ -96,6 +96,8 @@
 #                           (W-20260923-A12). pj always exports PJ_RENDERER, so a nested
 #                           launch never inherits its parent's choice. Anything but the
 #                           literal `fullscreen` is classic.
+#   (no key) agent view    OFF for every profile: pj exports CLAUDE_CODE_DISABLE_AGENT_VIEW=1
+#                           (Gavin, 2026-09-27), so the left arrow never parks a session.
 #
 # Refuses (exit 2, one line on stderr) when pj-prompt-file prints nothing: a launch
 # without the rules file is the failure this script exists to prevent, so it never
@@ -437,6 +439,13 @@ build_argv() {
     PJ_ENV+=("PJ_RENDERER=classic")
   fi
   PJ_ENV+=("PJ_PROFILE=$PROFILE_NAME")
+  # Agent view OFF for every pj session (Gavin, 2026-09-27, W-20260926-A01). In fullscreen a
+  # bare left arrow at an empty prompt parked the session in the agents view, and /exit there
+  # left it running in the background. Claude Code's own switch (setting disableAgentView,
+  # not in the public docs on 2.1.283); it also turns off `claude agents`, --bg, /background
+  # and the on-demand daemon. Measured both arms in one tab: with it, no `<- for agents`
+  # hint, the left arrow did nothing, /exit exited; without it, the arrow parked the session.
+  PJ_ENV+=("CLAUDE_CODE_DISABLE_AGENT_VIEW=1")
   # ALREADY SET WINS, so a stage that opens a control pane exports its own name first and
   # pj leaves it alone. Note the asymmetry: `--name` typed after `pj` beats the variable
   # (measured), so a hand-typed name still wins over both.
@@ -743,6 +752,11 @@ selftest() {
   printf 'renderer: fulscreen\n' > "$pdir/typo"
   out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile typo --dry-run-env 2>/dev/null)"
   [[ "$out" == *"PJ_RENDERER=classic"* && "$out" != *NO_FLICKER* ]] && ok "14d a misspelt renderer stays classic" || bad "14d renderer typo" "$out"
+  # 14f. agent view is off for EVERY profile (Gavin, 2026-09-27): classic and fullscreen alike.
+  out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --dry-run-env 2>/dev/null)"
+  [[ "$out" == *"CLAUDE_CODE_DISABLE_AGENT_VIEW=1"* ]] && ok "14f default profile exports CLAUDE_CODE_DISABLE_AGENT_VIEW=1" || bad "14f agent view default" "$out"
+  out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile fully --dry-run-env 2>/dev/null)"
+  [[ "$out" == *"CLAUDE_CODE_DISABLE_AGENT_VIEW=1"* ]] && ok "14f a fullscreen profile exports it too" || bad "14f agent view fullscreen" "$out"
   # 14e. the launcher half: __claude_launch turns PJ_RENDERER into the lock's value. Its
   #      stub-free form needs ssh-add and a Keychain, so this reads the one line that
   #      decides it; the live proof is a docked pane (W-20260923-A12 notes).

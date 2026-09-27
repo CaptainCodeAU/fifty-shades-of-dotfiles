@@ -63,6 +63,17 @@ It is tracked in a public repo, so nothing in it is ever a secret.
 | `function_hooks`  | `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`     | **on by default** in every profile (D-20260923-A08); only the literal `off` exports nothing, the negative-control lane for testing a mod. Remove once Claude Code ships mods without the flag. Added F8b                                                                                                                                                     |
 | `renderer`        | `PJ_RENDERER`, `CLAUDE_CODE_NO_FLICKER=1` | **classic by default**: the launcher sets `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1` for every session (the June 2026 fullscreen rejection), which outranks `/tui`. Only the literal `fullscreen` lifts it for that profile, so a Mods pane can dock beside the transcript. `scratch` sets it (so `c2` opens fullscreen too). Added 2026-09-26, W-20260923-A12 |
 
+**Agent view is off in every pj session, and it is not a key.** pj always exports
+`CLAUDE_CODE_DISABLE_AGENT_VIEW=1` (Gavin, 2026-09-27, W-20260926-A01). In fullscreen a
+bare left arrow at an empty prompt opened Claude Code's agents view and parked the session,
+and `/exit` from there left it running in the background, where it counted against the
+session cap. The switch is Claude Code's own (the `disableAgentView` setting, whose schema
+text reads "Disable agent view (`claude agents`, `--bg`, /background, the on-demand
+daemon)"); it is absent from the public docs on 2.1.283 and was found in the binary.
+Measured in one tab, both arms: with it, no `<- for agents` hint, the left arrow did
+nothing and `/exit` exited; without it, the left arrow parked the session. Selftest 14f.
+The `c` family is untouched.
+
 ### A branch of dot-claude as the loaded one (P10)
 
 The three keys above exist for one job: checking dot-claude out a second time, on a
