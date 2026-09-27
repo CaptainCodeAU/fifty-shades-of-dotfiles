@@ -74,6 +74,27 @@ Measured in one tab, both arms: with it, no `<- for agents` hint, the left arrow
 nothing and `/exit` exited; without it, the left arrow parked the session. Selftest 14f.
 The `c` family is untouched.
 
+**Switching screen mode on demand: `--fullscreen`, `--classic`, and the gallery's
+`/fullscreen` and `/classic`** (Gavin, 2026-09-27). Claude Code fixes the renderer per
+session (the Mods notes say "fixed per session"), and a pj session refuses `/tui`
+("Cannot switch renderers in this session": pj's custom system prompt and restricted
+settings). So every session starts in its profile's renderer, and a switch is a relaunch
+of the same conversation:
+
+- `pj [--profile NAME] --fullscreen` or `--classic` overrides the profile's `renderer` for
+  that launch only. Leading position, after `--profile`; it never reaches claude's argv.
+- In a session, the ui-gallery mod's `/fullscreen` (or `/classic`) records the wish. On
+  `/exit` its `session.end` hook writes `<mode> <resume-id|new>` into `$PJ_RELAUNCH_FILE`
+  (`$TMPDIR/pj-relaunch.<pj pid>`, exported by pj). Once claude returns, pj reads it,
+  overwrites it with `consumed`, and launches again in that mode with `--resume <id>`
+  (`new` when the conversation never ran a prompt, so there is no transcript to resume).
+  A fullscreen relaunch sets `PJ_OPEN_GALLERY=1` and the mod opens the gallery.
+- The relaunch keeps pj's own argv and any typed `--plugin-dir` pairs, and drops every
+  other typed extra (a prompt, `--continue`), which must not run twice. The session caps
+  are checked again before it.
+- A `/clear` or a resume is not an exit: no request is written. Selftest 26a-26g; the
+  mod's own tests cover the request side.
+
 ### A branch of dot-claude as the loaded one (P10)
 
 The three keys above exist for one job: checking dot-claude out a second time, on a

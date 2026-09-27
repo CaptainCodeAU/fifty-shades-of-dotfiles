@@ -220,6 +220,8 @@ load_profile() {
   for t in ${=req_default}; do
     [[ " $P_REQUIRED " == *" $t "* ]] || P_REQUIRED="$P_REQUIRED $t"
   done
+  # --fullscreen / --classic beat the profile's renderer for this launch (see the parse).
+  if [[ -n "${RENDERER_OVERRIDE-}" ]]; then P_RENDERER="$RENDERER_OVERRIDE"; fi
   return 0
 }
 
@@ -1072,6 +1074,74 @@ selftest() {
   printf '__claude_launch() { : > "%s/launched"; }\n' "$root" > "$root/fake-launch"
   out="$(PJ_LAUNCH_FILE="$root/fake-launch" PJ_WORKER_BIN="$fk/rc6" PJ_PROFILE_DIR="$root/none-such" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" 2>&1)"; rc=$?
   [[ $rc -eq 6 && ! -e "$root/launched" ]] && ok "24e a real launch at the cap exits 6 before __claude_launch" || bad "24e launch not stopped" "rc=$rc launched=$([[ -e $root/launched ]] && echo yes || echo no) $out"
+  # ---- 26: switching screen mode on demand (Gavin, 2026-09-27) ----------------------
+  # 26a/b. --fullscreen and --classic override the profile's renderer for one launch.
+  out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --fullscreen --dry-run-env 2>/dev/null)"
+  [[ "$out" == *"PJ_RENDERER=fullscreen"* && "$out" == *"CLAUDE_CODE_NO_FLICKER=1"* ]] && ok "26a --fullscreen turns the default profile fullscreen" || bad "26a --fullscreen" "$out"
+  out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile fully --classic --dry-run-env 2>/dev/null)"
+  [[ "$out" == *"PJ_RENDERER=classic"* && "$out" != *NO_FLICKER* ]] && ok "26b --classic turns a fullscreen profile classic" || bad "26b --classic" "$out"
+  out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --fullscreen --dry-run 2>/dev/null)"
+  # argv[0] first: on a pj without the flag this fell through to a real launch and printed
+  # nothing, which an absence-only check read as a pass (measured 2026-09-27).
+  [[ "${out%%$'\n'*}" == claude && "$out" != *--fullscreen* ]] && ok "26b the flag is pj's own: a real dry run, and it never reaches claude's argv" || bad "26b flag leaked into argv" "$out"
+  # 26c/d. read_relaunch: a valid request prints once and is consumed; anything else refuses.
+  local rf="$root/relaunch"
+  print -r -- "fullscreen 0a1b-2c3d" > "$rf"
+  out="$(read_relaunch "$rf")"; rc=$?
+  [[ $rc -eq 0 && "$out" == "fullscreen 0a1b-2c3d" ]] && ok "26c a valid request is read" || bad "26c read" "rc=$rc $out"
+  read_relaunch "$rf" >/dev/null; rc=$?
+  [[ $rc -eq 1 ]] && ok "26c and consumed: a second read finds nothing" || bad "26c consumed" "rc=$rc $(<"$rf")"
+  n=0
+  for d in "sideways 0a1b" "fullscreen a b;rm -rf x" "fullscreen" ""; do
+    print -r -- "$d" > "$rf"; read_relaunch "$rf" >/dev/null && n=$((n + 1))
+  done
+  read_relaunch "$root/none-such" >/dev/null && n=$((n + 1))
+  [[ $n -eq 0 ]] && ok "26d a bad renderer, a bad id, no id, empty, or no file: all refused" || bad "26d refusals" "$n of 5 accepted"
+  # 26e/f/g. run_with_relaunch with a fake __claude_launch that records each launch and, on
+  #     the first, asks for a switch the way the gallery mod does.
+  local rl="$root/relaunch-e"
+  ( PROFILE_DIR="$pdir"; export PJ_PROMPT_OUT="$root/prompt.md" PJ_WORKER_BIN="$fk/rc0"
+    load_profile default >/dev/null 2>&1 && build_argv >/dev/null 2>&1 || exit 9
+    export PJ_RELAUNCH_FILE="$rf"; print -r -- "consumed" > "$rf"
+    __claude_launch() {
+      print -r -- "${PJ_RENDERER-}|${PJ_OPEN_GALLERY-}|${CLAUDE_CODE_NO_FLICKER-}|${*[-2,-1]}" >> "$rl"
+      print -r -- "$*" >> "$rl.argv"
+      [[ ! -e "$rl.asked" ]] && { : > "$rl.asked"; print -r -- "fullscreen sess-26e" > "$PJ_RELAUNCH_FILE"; }
+      return 0
+    }
+    run_with_relaunch --plugin-dir /x/ui-gallery "a typed prompt" ) >/dev/null 2>&1; rc=$?
+  if [[ -r "$rl" ]]; then
+    out="$(<"$rl")"
+    [[ "$(grep -c . "$rl")" == 2 ]] && ok "26e one switch request -> exactly two launches" || bad "26e launch count" "$out"
+    [[ "${out##*$'\n'}" == "fullscreen|1|1|--resume sess-26e" ]] && ok "26e the second resumes that conversation, fullscreen, gallery asked for" || bad "26e second launch" "$out"
+    out="$(tail -1 "$rl.argv")"
+    [[ "$out" == *"--plugin-dir /x/ui-gallery"* && "$out" != *"a typed prompt"* ]] && ok "26e the relaunch keeps --plugin-dir and drops the typed prompt" || bad "26e carried args" "$out"
+  else
+    bad "26e" "no launch recorded (rc=$rc)"
+  fi
+  # 26f CONTROL: no request -> exactly one launch. Without it 26e could pass on a loop that
+  #     always relaunches.
+  rl="$root/relaunch-f"
+  ( PROFILE_DIR="$pdir"; export PJ_PROMPT_OUT="$root/prompt.md" PJ_WORKER_BIN="$fk/rc0"
+    load_profile default >/dev/null 2>&1 && build_argv >/dev/null 2>&1 || exit 9
+    export PJ_RELAUNCH_FILE="$rf"; print -r -- "consumed" > "$rf"
+    __claude_launch() { print -r -- "${PJ_RENDERER-}|$*" >> "$rl"; return 0; }
+    run_with_relaunch ) >/dev/null 2>&1
+  [[ -r "$rl" && "$(grep -c . "$rl")" == 1 ]] && ok "26f control: no request -> exactly one launch" || bad "26f control" "$([[ -r $rl ]] && cat "$rl" || echo none)"
+  # 26g back to classic, and a conversation with nothing to resume starts fresh
+  rl="$root/relaunch-g"
+  ( PROFILE_DIR="$pdir"; export PJ_PROMPT_OUT="$root/prompt.md" PJ_WORKER_BIN="$fk/rc0"
+    load_profile fully >/dev/null 2>&1 && build_argv >/dev/null 2>&1 || exit 9
+    for _v in "${PJ_ENV[@]}"; do export "${_v%%=*}=${_v#*=}"; done
+    export PJ_RELAUNCH_FILE="$rf" PJ_OPEN_GALLERY=1; print -r -- "consumed" > "$rf"
+    __claude_launch() {
+      print -r -- "${PJ_RENDERER-}|${PJ_OPEN_GALLERY-}|${CLAUDE_CODE_NO_FLICKER-}|$*" >> "$rl"
+      [[ ! -e "$rl.asked" ]] && { : > "$rl.asked"; print -r -- "classic new" > "$PJ_RELAUNCH_FILE"; }
+      return 0
+    }
+    run_with_relaunch ) >/dev/null 2>&1
+  out="$([[ -r $rl ]] && cat "$rl")"
+  [[ "${out##*$'\n'}" == "classic|||"* && "${out##*$'\n'}" != *--resume* ]] && ok "26g /classic relaunches classic, drops NO_FLICKER and the gallery ask; 'new' resumes nothing" || bad "26g" "$out"
   print -- "pj selftest: $pass passed, $fail failed"
   [[ $fail -eq 0 ]]
 }
@@ -1110,6 +1180,58 @@ check_session_caps() {
   esac
 }
 
+# --- switching screen mode on demand (Gavin, 2026-09-27) ----------------------------
+# Claude Code fixes the renderer per session (the Mods notes: "fixed per session"), and a
+# pj session refuses /tui ("Cannot switch renderers in this session": pj's launch flags).
+# So a switch is a relaunch of the SAME conversation. The ui-gallery mod's /fullscreen and
+# /classic ask for one; when that session then ends with /exit, the mod writes
+# "<fullscreen|classic> <resume-id|new>" into $PJ_RELAUNCH_FILE, and pj, once claude has
+# returned, launches again in that mode with --resume <id> ("new": nothing to resume, the
+# session never ran a prompt). A fullscreen relaunch sets PJ_OPEN_GALLERY=1 so the mod
+# opens the gallery. The file is per pj process and never deleted: pj overwrites it with
+# "consumed" as it reads it, so a request can run at most once.
+read_relaunch() {
+  local f="$1" line want id
+  [[ -r "$f" ]] || return 1
+  line="$(<"$f")"
+  print -r -- consumed >| "$f"
+  want="${line%% *}"; id="${line#* }"
+  [[ "$want" == fullscreen || "$want" == classic ]] || return 1
+  [[ "$id" != "$line" && "$id" =~ '^[A-Za-z0-9-]+$' ]] || return 1
+  print -r -- "$want $id"
+}
+
+run_with_relaunch() {
+  local rc req want id pv i
+  # What a relaunch carries from the typed extras: --plugin-dir pairs only (the gallery
+  # itself arrives that way). A typed prompt or a --continue must not run twice.
+  local -a carry=()
+  for (( i = 1; i <= $#; i++ )); do
+    if [[ "${@[i]}" == --plugin-dir ]] && (( i < $# )); then carry+=(--plugin-dir "${@[i+1]}"); i=$((i + 1))
+    elif [[ "${@[i]}" == --plugin-dir=* ]]; then carry+=("${@[i]}"); fi
+  done
+  __claude_launch "${PJ_ARGV[@]}" "$@"
+  rc=$?
+  while req="$(read_relaunch "${PJ_RELAUNCH_FILE-}")"; do
+    want="${req%% *}"; id="${req#* }"
+    P_RENDERER="$want"
+    build_argv || { rc=$?; break; }
+    unset CLAUDE_CODE_NO_FLICKER PJ_OPEN_GALLERY
+    for pv in "${PJ_ENV[@]}"; do export "${pv%%=*}=${pv#*=}"; done
+    if [[ "$want" == fullscreen ]]; then export PJ_OPEN_GALLERY=1; fi
+    # The old session has exited, so this counts what is left; a cap still refuses.
+    check_session_caps || { rc=$?; break; }
+    print -u2 -r -- "pj: reopening this conversation in $want (asked for with /$want)"
+    if [[ "$id" == new ]]; then
+      __claude_launch "${PJ_ARGV[@]}" "${carry[@]}"
+    else
+      __claude_launch "${PJ_ARGV[@]}" "${carry[@]}" --resume "$id"
+    fi
+    rc=$?
+  done
+  return $rc
+}
+
 # --profile is read BEFORE --dry-run so `pj --profile scratch --dry-run` works, and only
 # in leading position so a later --profile passes through to claude untouched.
 WANT="${PJ_PROFILE:-default}"
@@ -1120,6 +1242,12 @@ if [[ "${1:-}" == --profile ]]; then
   fi
   WANT="$2"; shift 2   # shift-lint: ok one-shot leading --profile, the -z "${2:-}" refusal above guards it
 fi
+# --fullscreen / --classic (Gavin, 2026-09-27): this launch only, over the profile's
+# renderer. Leading position only (after --profile, if any), like --profile itself.
+RENDERER_OVERRIDE=""
+case "${1:-}" in
+  --fullscreen|--classic) RENDERER_OVERRIDE="${1#--}"; shift ;;
+esac
 
 case "${1:-}" in
   --dry-run)
@@ -1170,5 +1298,9 @@ source "$LAUNCH_FILE"
 # PJ_ENV never contains CLAUDE_CONFIG_DIR on the default profile, so the default launch
 # still runs with that variable UNSET rather than set to its own default.
 for _pv in "${PJ_ENV[@]}"; do export "${_pv%%=*}=${_pv#*=}"; done
-unset _pv
-__claude_launch "${PJ_ARGV[@]}" "$@"
+unset _pv PJ_OPEN_GALLERY
+# Per pj process, reset before the launch so a stale request from a reused pid cannot fire.
+PJ_RELAUNCH_FILE="${TMPDIR:-/tmp}/pj-relaunch.$$"
+print -r -- consumed >| "$PJ_RELAUNCH_FILE" 2>/dev/null
+export PJ_RELAUNCH_FILE
+run_with_relaunch "$@"
