@@ -39,6 +39,14 @@
 # was unset, which is not the same fact as it being set to ~/.claude.
 # Older lines carry neither field; every reader must tolerate their absence.
 #
+# MODS (2026-09-27, the screen-switch build). A profile's `mods:` ids reach the session as
+# "enabledPlugins": {"<id>": true} inside pj's overlay --settings JSON. Checked EXACTLY
+# like the plugin dirs, both directions: a declared id that is not enabled is stale
+# (`mod:<id>`), an enabled id the profile does not declare is stale too
+# (`mod-undeclared:<ids>`). The expectation follows pj's own inheritance: the profile's
+# mods: line, else the default profile's, else none (pj's built-in fallback has none).
+# Parsed without jq: pj writes the JSON with no spaces, so ps keeps it one token.
+#
 # HOW IT FINDS THE ARGV (measured 2026-09-21 with a scratch --settings hook under
 # `claude -p`, Claude Code 2.1.278): Claude Code exports CLAUDE_PID into the hook's env,
 # and with a bare-path command the hook's parent IS that pid. With the manifest's
@@ -104,8 +112,18 @@ load_profile_expectations(){
   # result=stale:rules-file and told the model to relaunch, for a launch that was correct.
   p="$(profile_key "$PROFILE" prompt_out)"
   [ -n "$p" ] && PROFILE_PROMPT_OUT="$(canon "$p")"
+  # mods inherit from the default profile, as pj reads default first and the named one on top
+  p="$(profile_key "$PROFILE" mods)"
+  [ -n "$p" ] || p="$(profile_key default mods)"
+  [ "$p" = none ] && p=""
+  MODS_EXPECTED="$p"
 }
 PROFILE_PROMPT_OUT=""
+MODS_EXPECTED=""
+# enabled_mods <json> -> the ids set true under "enabledPlugins", one per line
+enabled_mods(){
+  printf '%s' "$1" | sed -n 's/.*"enabledPlugins":{\([^}]*\)}.*/\1/p' | tr ',' '\n' | sed -n 's/^"\([^"]*\)":true$/\1/p'
+}
 
 usage(){ sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; }
 
@@ -210,12 +228,13 @@ shell_of(){   # first zsh/bash ancestor of <pid> that is not a -c one; prints it
 # --- the check ---------------------------------------------------------------------
 check(){   # sets REASONS (comma list) and PHRASES (for the warning) from ARGV_TEXT and EXPECTED
   REASONS=""; PHRASES=""
-  local prompt="" sources="" dirs="" tok prev="" d want got
+  local prompt="" sources="" dirs="" tok prev="" d want got mods=""
   for tok in $ARGV_TEXT; do
     case "$prev" in
       --append-system-prompt-file) prompt="$tok";;
       --plugin-dir) dirs="$dirs $tok";;
       --setting-sources) sources="$tok";;
+      --settings) case "$tok" in "{"*) mods="$mods $(enabled_mods "$tok" | tr '\n' ' ')";; esac;;
     esac
     prev="$tok"
   done
@@ -250,6 +269,22 @@ check(){   # sets REASONS (comma list) and PHRASES (for the warning) from ARGV_T
   if [ -n "$extra" ]; then
     REASONS="${REASONS:+$REASONS,}plugin-dir-undeclared:$(printf '%s' "$extra" | tr ' ' '+')"
     PHRASES="${PHRASES:+$PHRASES, }undeclared plugin dir(s) $extra (profile $PROFILE declares: $PLUGIN_DIRS_EXPECTED)"
+  fi
+  # mods, both directions, same shape as the dirs above
+  local m m2 hitm mextra=""
+  for m in $MODS_EXPECTED; do
+    hitm=0; for m2 in $mods; do [ "$m2" = "$m" ] && hitm=1; done
+    if [ "$hitm" -eq 0 ]; then
+      REASONS="${REASONS:+$REASONS,}mod:$m"; PHRASES="${PHRASES:+$PHRASES, }mod $m (not enabled in the --settings overlay)"
+    fi
+  done
+  for m2 in $mods; do
+    hitm=0; for m in $MODS_EXPECTED; do [ "$m2" = "$m" ] && hitm=1; done
+    [ "$hitm" -eq 0 ] && mextra="${mextra:+$mextra }$m2"
+  done
+  if [ -n "$mextra" ]; then
+    REASONS="${REASONS:+$REASONS,}mod-undeclared:$(printf '%s' "$mextra" | tr ' ' '+')"
+    PHRASES="${PHRASES:+$PHRASES, }undeclared mod(s) $mextra (profile $PROFILE declares: ${MODS_EXPECTED:-none})"
   fi
   if [ "$sources" != "$SETTING_SOURCES_EXPECTED" ]; then
     REASONS="${REASONS:+$REASONS,}setting-sources"; PHRASES="${PHRASES:+$PHRASES, }--setting-sources $SETTING_SOURCES_EXPECTED"
@@ -462,6 +497,45 @@ selftest(){
   # the tail only: canon resolves the macOS /var -> /private/var link, so $root is not the prefix
   case "$OUT" in *"missing plugin dir "*"/extra-plugin"*) ok "19f control: leaving the present full-path dir out is STALE";; *) bad "19f control" "$OUT";; esac
   case "$OUT" in *missing-plugin*) bad "19f the missing dir must never be demanded" "$OUT";; *) ok "19f the dir missing on this box is not demanded";; esac
+  # 23. MODS (screen-switch, 2026-09-27): the overlay's enabledPlugins against the profile's
+  #     mods:, both directions. Its OWN profiles dir, because a `default` fixture here is
+  #     inherited and would change every arm above. The overlay strings are the exact ones
+  #     pj --dry-run prints (pj --selftest arms 28a/28b pin that side).
+  local pm="$root/profiles-mods" ss='screen-switch@cc-claude-mods'
+  mkdir -p "$pm"
+  printf 'config_dir: ~/.claude\nmods: %s\n' "$ss" > "$pm/default"
+  printf 'config_dir: ~/.claude\n' > "$pm/inherits"
+  printf 'config_dir: ~/.claude\nmods: none\n' > "$pm/nomods"
+  printf 'config_dir: ~/.claude\nmods: %s other@mk\n' "$ss" > "$pm/twomods"
+  printf '%s --settings {"enabledPlugins":{"%s":true}}\n' "$argv_ok" "$ss" >"$root/argv.mod"
+  printf '%s --settings {"remoteControlAtStartup":true,"voiceEnabled":false,"enabledPlugins":{"%s":true}}\n' "$argv_ok" "$ss" >"$root/argv.modplus"
+  printf '%s --settings {"enabledPlugins":{"%s":true,"other@mk":true}}\n' "$argv_ok" "$ss" >"$root/argv.twomods"
+  RUN_PROFILE_DIR="$pm" run argv.mod
+  [ -z "$OUT" ] && ok "23a a declared mod enabled in the overlay is clean" || bad "23a clean" "$OUT"
+  RUN_PROFILE_DIR="$pm" run argv.modplus
+  [ -z "$OUT" ] && ok "23a and so is the overlay that also carries remote_control and voice" || bad "23a modplus" "$OUT"
+  RUN_PROFILE_DIR="$pm" run argv.ok
+  [ "$OUT" = "LAUNCH WARNING: stale launcher, missing mod $ss (not enabled in the --settings overlay). Open a new shell and relaunch pj." ] && ok "23b a declared mod MISSING from argv: exact warning" || bad "23b missing" "$OUT"
+  case "$(tail -1 "$root/state/launches.log")" in *" result=stale:mod:$ss") ok "23b log says stale:mod:<id>";; *) bad "23b log" "$(tail -1 "$root/state/launches.log")";; esac
+  RUN_PROFILE_DIR="$pm" RUN_PROFILE=nomods run argv.mod
+  case "$OUT" in *"undeclared mod(s) $ss (profile nomods declares: none)"*) ok "23c mods: none flags an enabled mod as UNDECLARED";; *) bad "23c undeclared" "$OUT";; esac
+  case "$(tail -1 "$root/state/launches.log")" in *" result=stale:mod-undeclared:$ss") ok "23c log says stale:mod-undeclared:<id>";; *) bad "23c log" "$(tail -1 "$root/state/launches.log")";; esac
+  RUN_PROFILE_DIR="$pm" RUN_PROFILE=nomods run argv.ok
+  [ -z "$OUT" ] && ok "23c control: mods: none with no overlay is clean" || bad "23c control" "$OUT"
+  RUN_PROFILE_DIR="$pm" RUN_PROFILE=inherits run argv.ok
+  case "$OUT" in *"missing mod $ss"*) ok "23d a profile with no mods: line inherits the default's (as pj does)";; *) bad "23d inherit" "$OUT";; esac
+  RUN_PROFILE_DIR="$pm" RUN_PROFILE=inherits run argv.mod
+  [ -z "$OUT" ] && ok "23d and the inherited mod enabled is clean" || bad "23d inherit clean" "$OUT"
+  RUN_PROFILE_DIR="$pm" RUN_PROFILE=twomods run argv.twomods
+  [ -z "$OUT" ] && ok "23e two declared, two enabled: clean" || bad "23e two clean" "$OUT"
+  RUN_PROFILE_DIR="$pm" RUN_PROFILE=twomods run argv.mod
+  case "$OUT" in *"missing mod other@mk"*) ok "23e one of two missing names the missing one";; *) bad "23e one missing" "$OUT";; esac
+  case "$OUT" in *"mod $ss"*) bad "23e the enabled one must not be named" "$OUT";; *) ok "23e and does not name the one that is enabled";; esac
+  # 23f CONTROL: arms 1-10 ran against an EMPTY profiles dir, so no mod is expected there
+  #     and the overlay argv reads as undeclared. Without it, 23a passes on a check that
+  #     never looks at the overlay at all.
+  run argv.mod
+  case "$OUT" in *"undeclared mod(s) $ss (profile default declares: none)"*) ok "23f control: with no profile file no mod is expected, so an enabled one is undeclared";; *) bad "23f control" "$OUT";; esac
 
   # ---- jq (A76) ---------------------------------------------------------------------
   # 19. A REAL PATH without jq: a folder of links to every command in the system bin
