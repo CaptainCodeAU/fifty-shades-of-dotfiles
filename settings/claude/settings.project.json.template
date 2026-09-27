@@ -131,6 +131,7 @@
     "cc-capture@cc-warehouse": true,
     "cc-skills@captaincodeau": true,
     "screen-switch@cc-claude-mods": true,
+    "start-card@cc-claude-mods": true,
     "chrome-devtools-mcp@claude-plugins-official": false,
     "imessage@claude-plugins-official": false,
     "design@synced": false,
