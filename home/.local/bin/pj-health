@@ -1177,7 +1177,7 @@ if [ "$IN_REPO" -eq 0 ]; then
 elif [ ! -r "$TOPLEVEL/.claude/pj-homes" ]; then
   row NOTM pj-homes "no .claude/pj-homes (D-20260920-06 defaults in use)"
 else
-  bad=""; unresolved=""; missing=""; nkeys=0; records=""
+  bad=""; unresolved=""; missing=""; nkeys=0; records=""; panelbad=""
   while IFS= read -r line; do
     case "$line" in ''|'#'*) continue;; esac
     key="${line%%:*}"; val="${line#*:}"; val="${val#"${val%%[![:space:]]*}"}"
@@ -1199,6 +1199,16 @@ else
         if [ "$p" = COMMAND ]; then :
         elif [ -z "$p" ]; then unresolved="$unresolved $key"
         elif [ ! -e "$p" ]; then missing="$missing $key"; fi;;
+      # D-20260927-A13. `panel` names the start-card mod's /card sections; pj-start-card
+      # reads it. A name outside the list is a WARN (the panel shows it as "unknown
+      # section"), never a FAIL: a typo there cannot break a session. `ci` is reserved.
+      panel)
+        nkeys=$((nkeys+1))
+        pw=(); IFS=$', \t' read -r -a pw <<<"$val"     # read -a, not $(...): a * must not glob
+        for p in ${pw[@]+"${pw[@]}"}; do
+          [ -n "$p" ] || continue
+          case " items parked handoff rulings flags mods-api " in *" $p "*) ;; *) panelbad="$panelbad $p";; esac
+        done;;
       handoff|tracker|decisions|incidents|plans)
         nkeys=$((nkeys+1)); p="$(resolve_marker "$val")"
         if [ -z "$p" ]; then unresolved="$unresolved $key"
@@ -1206,9 +1216,10 @@ else
       *) bad="$bad unknown-key='$key'";;
     esac
   done <"$TOPLEVEL/.claude/pj-homes"
-  if [ -n "$bad" ]; then row FAIL pj-homes ".claude/pj-homes:$bad; fix: keys handoff|tracker|decisions|incidents|plans|records|wrap-up, records repo|private"
+  if [ -n "$bad" ]; then row FAIL pj-homes ".claude/pj-homes:$bad; fix: keys handoff|tracker|decisions|incidents|plans|records|wrap-up|panel, records repo|private"
   elif [ -n "$missing" ]; then row FAIL pj-homes "declared store missing on disk:$missing; fix: create it or correct the line"
   elif [ -n "$unresolved" ]; then row WARN pj-homes "$nkeys keys; unresolvable marker on:$unresolved (repo:, drawer:, ~/ resolve)"
+  elif [ -n "$panelbad" ]; then row WARN pj-homes "$nkeys keys; panel: names no section:$panelbad (items parked handoff rulings flags mods-api; ci is reserved)"
   else row PASS pj-homes "$nkeys keys parse; records ${records:-repo (default)}; every declared store present"; fi
 fi
 

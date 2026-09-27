@@ -490,7 +490,7 @@ check "T awkward text: text and --json agree (${AGREE:-all agree})" '[ -z "$AGRE
 check "T awkward text: the JSON parses and is valid UTF-8" 'parses && utf8'
 check "T awkward text: the title decodes to the card's own neutralised text" '[ "$(jv ".items.list[0].title")" = "$(printf "say \"hi\" back\\\\slash tab?here caf\303\251 \360\237\230\200 esc?[31m bidi?x")" ]'
 check "T awkward text: done_when and next keep quotes and backslashes, lose the controls" '[ "$(jv ".items.list[0].done_when")" = "$(printf "a \"q\" and \\\\ and?tab \303\251?]52;c;aGk=?")" ] && [ "$(jv ".items.list[0].next")" = "n\\1" ]'
-check "T awkward text: no ESC byte anywhere in the raw JSON" '! printf "%s" "$J" | LC_ALL=C grep -q "$(printf "\033")"'
+check "T awkward text: no ESC byte anywhere in the raw JSON" 'parses && ! printf "%s" "$J" | LC_ALL=C grep -q "$(printf "\033")"'
 # A byte that is not UTF-8. Not through an item: open-items itself drops such an item (its
 # sed and awk refuse the byte under a UTF-8 locale), and a pj-homes line goes the same way
 # through the card's own sed. The owed record is read by awk under LC_ALL=C, so its bytes
@@ -504,7 +504,7 @@ runj "$X"; check "T CONTROL: without that byte, errors is empty" 'utf8 && [ "$(j
 # Same fixture (controls, quotes, backslashes, non-ASCII), same bytes, under both.
 if [ -x /bin/bash ] && [ "$(/bin/bash -c 'echo ${BASH_VERSINFO[0]}')" != "$(bash -c 'echo ${BASH_VERSINFO[0]}')" ]; then
   J5="$( builtin cd "$X" && bash "$CARD" --json </dev/null 2>&1 )"; J3="$( builtin cd "$X" && /bin/bash "$CARD" --json </dev/null 2>&1 )"
-  check "T bash $(/bin/bash -c 'echo $BASH_VERSION') and bash $(bash -c 'echo $BASH_VERSION') give the same --json bytes, stderr included" '[ -n "$J3" ] && [ "$J3" = "$J5" ]'
+  check "T bash $(/bin/bash -c 'echo $BASH_VERSION') and bash $(bash -c 'echo $BASH_VERSION') give the same --json bytes, stderr included" '[ -n "$J3" ] && [ "$J3" = "$J5" ] && printf "%s" "$J3" | "$JQ" -e .schema >/dev/null 2>&1'
   J="$J3"; check "T ... and bash 3.2's escapes the controls (the title reads back neutralised)" 'parses && [ "$(jv ".items.list[0].id")" = W-20260107-01 ]'
 else
   echo "  skip T bash 3.2 arm: /bin/bash is missing or the same major version as bash -- NOT MEASURED"
@@ -561,10 +561,11 @@ J="$( builtin cd "$B" && PJ_CARD_FAULT=crash "$CARD" --json </dev/null 2>/dev/nu
 check "T a crash mid-gather: rc 0 and still an object that parses, naming the internal error" '[ "$RC" -eq 0 ] && parses && jv ".errors[]" | grep -q "internal error"'
 OUT="$( builtin cd "$B" && PJ_CARD_FAULT=crash "$CARD" </dev/null 2>/dev/null )"; RC=$?
 check "T the same crash in the text card: rc 0 and silent (CONTRACT 5)" '[ "$RC" -eq 0 ] && [ -z "$OUT" ]'
-J="$( builtin cd "$B" && env -u HOME "$CARD" --json </dev/null 2>/dev/null )"; RC=$?
+# PJ_STATE_DIR too: the fixture sets it, and with it set the HOME read never happens.
+J="$( builtin cd "$B" && env -u HOME -u PJ_STATE_DIR -u XDG_STATE_HOME "$CARD" --json </dev/null 2>/dev/null )"; RC=$?
 check "T HOME unset: rc 0 and an object that parses (master died with exit 1 here)" '[ "$RC" -eq 0 ] && parses'
-OUT="$( builtin cd "$B" && env -u HOME "$CARD" </dev/null 2>/dev/null )"; RC=$?
-check "T HOME unset, text card: rc 0 (CONTRACT 1)" '[ "$RC" -eq 0 ]'
+OUT="$( builtin cd "$B" && env -u HOME -u PJ_STATE_DIR -u XDG_STATE_HOME "$CARD" </dev/null 2>/dev/null )"; RC=$?
+check "T HOME unset, text card: rc 0 and the card still prints (CONTRACT 1)" '[ "$RC" -eq 0 ] && has "$OUT" "^pj start card: repo-b$"'
 
 # T5. panel: absent, given, unknown, twice, empty, a glob, repeated names, an escape in a name
 runj "$A"; check "T panel absent: automatic, the sections that have something (dot-claude behind, so flags too)" '[ "$(jv ".panel | [.source, (.sections | join(\",\")), (.unknown | length), .duplicates] | @tsv")" = "$(printf "automatic\titems,parked,handoff,flags\t0\t0")" ]'
@@ -600,8 +601,8 @@ NOJQ="$ROOT/nojq"; mkdir -p "$NOJQ"; printf '#!/bin/sh\necho "NOT JSON"\nexit 99
 J="$( builtin cd "$X" && PATH="$NOJQ:$PATH" "$CARD" --json </dev/null 2>/dev/null )"
 check "T a broken jq first on PATH changes nothing: the card never calls jq" 'parses && ! printf "%s" "$J" | grep -q "NOT JSON" && [ "$(jv ".items.open")" = 1 ]'
 SLOW=0
-for i in 1 2 3 4 5; do s="$(now)"; runj "$BIG"; e="$(now)"; awk -v s="$s" -v e="$e" 'BEGIN{exit !((e-s) < 1.0)}' || SLOW=$((SLOW+1)); done
-check "T --json on 105 items: each of 5 runs under 1 s (slow: $SLOW)" '[ "$SLOW" -eq 0 ]'
+for i in 1 2 3 4 5; do s="$(now)"; runj "$BIG"; e="$(now)"; { parses && awk -v s="$s" -v e="$e" 'BEGIN{exit !((e-s) < 1.0)}'; } || SLOW=$((SLOW+1)); done
+check "T --json on 105 items: each of 5 runs under 1 s and parses (slow or not JSON: $SLOW)" '[ "$SLOW" -eq 0 ]'
 STAMP2="$ROOT/stamp2"; touch "$STAMP2"; sleep 1
 runj "$A" >/dev/null; runj "$B" >/dev/null; runj "$BIG" >/dev/null; runj "$H" >/dev/null
 NEW="$(find "$ROOT" -type f -newer "$STAMP2" ! -name stderr ! -name json | wc -l | tr -d ' ')"

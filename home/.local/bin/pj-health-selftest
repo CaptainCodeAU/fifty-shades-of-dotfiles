@@ -653,6 +653,18 @@ cp "$T/ph.bak" "$PROJ/.claude/pj-homes"
 echo "wrap-up: repo:no-such-wrapup.md" >>"$PROJ/.claude/pj-homes"; run
 arm "CONTROL: a missing wrap-up PATH still FAILs" is pj-homes FAIL
 cp "$T/ph.bak" "$PROJ/.claude/pj-homes"
+# D-20260927-A13: `panel:` names the start-card mod's sections. Known names PASS; an unknown
+# name WARNs (the panel shows it, so a typo cannot break a session); ci is reserved, so it WARNs
+# too until it exists; a * is a name, never a glob.
+echo "panel: items, parked handoff" >>"$PROJ/.claude/pj-homes"; run
+arm "pj-homes PASS with a panel: line of known sections" is pj-homes PASS
+cp "$T/ph.bak" "$PROJ/.claude/pj-homes"
+echo "panel: items, bogus ci" >>"$PROJ/.claude/pj-homes"; run
+arm "pj-homes WARN on an unknown panel section" is pj-homes WARN; arm "pj-homes names the unknown sections" has pj-homes "bogus ci"
+cp "$T/ph.bak" "$PROJ/.claude/pj-homes"
+echo "panel: *" >>"$PROJ/.claude/pj-homes"; run
+arm "pj-homes panel: * is a name, not a glob" has pj-homes "section: *"
+cp "$T/ph.bak" "$PROJ/.claude/pj-homes"
 
 # P2 drawer
 echo "# edited by hand" >>"$T/drawer/OPEN.md"; run; arm "drawer WARN on a stamp mismatch" is drawer WARN; arm "drawer WARN says regen" has drawer "regen"
