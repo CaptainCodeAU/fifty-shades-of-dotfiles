@@ -3881,11 +3881,36 @@ _render_project_settings() {
 # (`range: 01-49`) is rewritten, because pj-id refuses to read it and the box would silently
 # lose the ability to file an item. Every ID already claimed keeps its own text; the P8a
 # migration renamed them and both tools still resolve the old shape.
+# A GUESS, never a default (Gavin, 2026-09-27): the four machines differ today in facts
+# the box can see (Mac chip, WSL or not), so the prompt names the likely letter. The
+# letter is still TYPED; Enter alone writes nothing. A fifth machine sharing a shape with
+# one of these would get the same guess, which is exactly why the guess is not accepted
+# silently. The Mac chip comes from hw.optional.arm64, not `uname -m`: under Rosetta an
+# M-series Mac reports x86_64. WSL is detected the way home/.zshrc detects it.
+_pj_machine_letter_guess() {
+    # Prints "<letter>|<description>", or nothing when the shape matches no known machine.
+    case "$(uname -s)" in
+        Darwin)
+            if [[ "$(sysctl -n hw.optional.arm64 2>/dev/null)" == 1 ]]; then
+                printf 'A|M4 Mac mini'
+            else
+                printf 'B|Intel Mac laptop'
+            fi ;;
+        Linux)
+            if [[ "$(uname -r)" =~ [Ww][Ss][Ll] || -f /proc/sys/fs/binfmt_misc/WSLInterop ]]; then
+                printf 'C|PC, WSL2 Ubuntu'
+            else
+                printf 'D|Proxmox Linux VM'
+            fi ;;
+    esac
+}
 _pj_machine_letter_prompt() {
     # Prints ONE capital letter on stdout, or nothing when it could not ask.
-    local ans
+    local ans guess
     [[ -t 0 ]] || { printf ''; return 0; }
     echo -e "  ${DIM}A = M4 Mac mini (desktop)   B = Intel Mac laptop   C = PC/WSL2 Ubuntu   D = Proxmox Linux VM${RESET}" >&2
+    guess="$(_pj_machine_letter_guess)"
+    [[ -n "$guess" ]] && echo -e "  Looks like ${BOLD}${guess%%|*}${RESET} (${guess#*|}). Type the letter to confirm; Enter alone writes nothing." >&2
     read -rp "$(echo -e "${YELLOW}Which machine is this? [A/B/C/D]: ${RESET}")" ans || { printf ''; return 0; }
     ans="$(printf '%s' "$ans" | tr '[:lower:]' '[:upper:]' | tr -d '[:space:]')"
     case "$ans" in [A-Z]) printf '%s' "$ans" ;; *) printf '' ;; esac
@@ -3921,7 +3946,8 @@ _write_pj_machine_file() {
     fi
     [[ -n "${name:-}" ]] || name="$(hostname -s 2>/dev/null || hostname)"
     if [[ "$DRY_RUN" == true ]]; then
-        echo -e "  ${DIM}[dry-run] Would write $f (name: $name, letter: asked interactively -- A mini, B Intel laptop, C WSL, D Linux VM)${RESET}"
+        local _g; _g="$(_pj_machine_letter_guess)"
+        echo -e "  ${DIM}[dry-run] Would write $f (name: $name, letter: asked interactively -- A mini, B Intel laptop, C WSL, D Linux VM${_g:+; looks like ${_g%%|*}})${RESET}"
         return 0
     fi
     [[ -f "$f" ]] || warn "No pj machine file yet. Every W-/D- ID carries the letter of the machine that minted it, so two clones can never claim the same one."
