@@ -972,6 +972,11 @@ arm "mod-validate PASS with no mods" is mod-validate PASS
 mvprof m-good skills/plain; mvrun
 arm "mod-validate PASS on a mod that parses (real validate JSON)" is mod-validate PASS
 arm "mod-validate PASS names the mod and its module count" has mod-validate "1 of 2 declared plugin dir(s) carry a hooks module and all parse: m-good (1 module(s))"
+# A FULL-PATH entry (2026-09-27: scratch loads the ui-gallery from its checkout) is used as
+# written, not joined to plugins_root; before that it read as a dir with no hooks, "0 of 1".
+mkdir -p "$T/outside" && cp -R "$MVR/m-good" "$T/outside/m-good"
+mvprof "$T/outside/m-good"; mvrun
+arm "mod-validate finds and validates a full-path mod outside plugins_root" has mod-validate "1 of 1 declared plugin dir(s) carry a hooks module and all parse: m-good (1 module(s))"
 mvprof m-good m-broken; mvrun
 arm "mod-validate FAIL on a mod that does not parse" is mod-validate FAIL
 arm "mod-validate FAIL quotes the parse error" has mod-validate "does not parse: Unexpected end of file (line 6, column 19)"

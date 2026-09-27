@@ -398,7 +398,18 @@ build_argv() {
   PJ_ARGV=(claude --setting-sources "$P_SETTING_SOURCES" --settings "$P_SETTINGS"
         --append-system-prompt-file "$prompt")
   if [[ "$P_PLUGINS" != none ]]; then
-    for d in ${=P_PLUGINS}; do PJ_ARGV+=(--plugin-dir "$P_PLUGINS_ROOT/$d"); done
+    # A full-path entry (/ or ~) is used as written (the ui-gallery lives in cc-claude-mods,
+    # 2026-09-27); one missing on this box is skipped with a NOTE, never a refusal, since pj
+    # never refuses over a missing file. pj-launch-check applies the same rule.
+    for d in ${=P_PLUGINS}; do
+      if [[ "$d" == /* || "$d" == "~"* ]]; then
+        local fp="$(expand_tilde "$d")"
+        if [[ -d "$fp" ]]; then PJ_ARGV+=(--plugin-dir "$fp")
+        else print -u2 -r -- "pj: NOTE: plugin dir $d not found on this machine, not loaded"; fi
+      else
+        PJ_ARGV+=(--plugin-dir "$P_PLUGINS_ROOT/$d")
+      fi
+    done
   fi
   [[ "$P_MODE" == safe ]] && PJ_ARGV+=(--safe-mode)
   # F5b: the three per-profile keys. `model` has its own flag; the other two are
@@ -1161,6 +1172,13 @@ selftest() {
     run_with_relaunch ) >/dev/null 2>&1
   out="$([[ -r $rl ]] && tail -1 "$rl")"
   [[ -r "$rl" && "$(grep -c . "$rl")" == 2 && "$out" != *--resume* ]] && ok "26h no transcript for the id -> a fresh launch, no --resume" || bad "26h" "$([[ -r $rl ]] && cat "$rl")"
+  # ---- 27: a full-path plugins entry (Gavin, 2026-09-27: the ui-gallery everywhere) ----
+  mkdir -p "$root/extra-plugin"
+  printf 'plugins: pj %s/extra-plugin ~/no-such-plugin-27\n' "$root" > "$pdir/abspath"
+  out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile abspath --dry-run 2>"$root/err27")"
+  [[ "$out" == *$'\n--plugin-dir\n'"$root/extra-plugin"$'\n'* ]] && ok "27 a full-path entry is used as written" || bad "27 full path" "$out"
+  [[ "$out" == *$'\n--plugin-dir\n'"$HOME/.claude/pj"$'\n'* ]] && ok "27 control: a short entry is still joined to the root" || bad "27 short entry" "$out"
+  [[ "$out" != *no-such-plugin-27* ]] && grep -q 'no-such-plugin-27' "$root/err27" && ok "27 a full path missing on this box is skipped, with a NOTE" || bad "27 missing dir" "out=$out err=$(<"$root/err27")"
   print -- "pj selftest: $pass passed, $fail failed"
   [[ $fail -eq 0 ]]
 }

@@ -127,6 +127,10 @@ canon(){   # expand ~ and $HOME, follow links when the path exists
   if [ -e "$p" ]; then readlink -f "$p" 2>/dev/null || printf '%s' "$p"; else printf '%s' "$p"; fi
 }
 tilde(){ printf '%s' "${1/#$HOME/\~}"; }
+# A plugins entry is joined to the root, unless it is a full path (/ or ~), which is used
+# as written (the ui-gallery in cc-claude-mods, 2026-09-27). pj applies the same rule.
+is_full_path(){ case "$1" in /*|"~"*|'$HOME'*) return 0 ;; *) return 1 ;; esac; }
+plugin_path(){ if is_full_path "$1"; then canon "$1"; else canon "$PLUGINS_ROOT/$1"; fi; }
 
 # --- jq ----------------------------------------------------------------------------
 jq_fix(){   # the install command for this OS, or a plain sentence when unknown
@@ -219,13 +223,16 @@ check(){   # sets REASONS (comma list) and PHRASES (for the warning) from ARGV_T
   if [ -z "$got" ] || [ "$got" != "$want" ]; then
     REASONS="rules-file"; PHRASES="RULES.md (prompt file is not the pj-prompt-file cache)"
   fi
-  # declared but ABSENT
+  # declared but ABSENT. A full-path entry (/ or ~) is used as written, and one missing on
+  # this box is not demanded, because pj skips it rather than refusing (2026-09-27).
   if [ "$PLUGIN_DIRS_EXPECTED" != none ]; then
     for d in $PLUGIN_DIRS_EXPECTED; do
-      local hit=0 x
-      for x in $dirs; do [ "$(canon "$x")" = "$(canon "$PLUGINS_ROOT/$d")" ] && hit=1; done
+      local hit=0 x want_d
+      want_d="$(plugin_path "$d")"
+      if is_full_path "$d" && [ ! -d "$want_d" ]; then continue; fi
+      for x in $dirs; do [ "$(canon "$x")" = "$want_d" ] && hit=1; done
       if [ "$hit" -eq 0 ]; then
-        REASONS="${REASONS:+$REASONS,}plugin-dir:${d##*/}"; PHRASES="${PHRASES:+$PHRASES, }plugin dir $(tilde "$PLUGINS_ROOT")/$d"
+        REASONS="${REASONS:+$REASONS,}plugin-dir:${d##*/}"; PHRASES="${PHRASES:+$PHRASES, }plugin dir $(tilde "$want_d")"
       fi
     done
   fi
@@ -236,7 +243,7 @@ check(){   # sets REASONS (comma list) and PHRASES (for the warning) from ARGV_T
   for x in $dirs; do
     hit2=0
     if [ "$PLUGIN_DIRS_EXPECTED" != none ]; then
-      for d2 in $PLUGIN_DIRS_EXPECTED; do [ "$(canon "$x")" = "$(canon "$PLUGINS_ROOT/$d2")" ] && hit2=1; done
+      for d2 in $PLUGIN_DIRS_EXPECTED; do [ "$(canon "$x")" = "$(plugin_path "$d2")" ] && hit2=1; done
     fi
     [ "$hit2" -eq 0 ] && extra="${extra:+$extra }${x##*/}"
   done
@@ -443,6 +450,18 @@ selftest(){
   [ -z "$OUT" ] && ok "18 prompt_out: the profile's own cache path is clean" || bad "18 prompt_out clean" "$OUT"
   OUT="$(printf '{"session_id":"s18b","source":"startup","cwd":"%s"}' "$root" | PJ_LAUNCH_ARGV="$root/argv.ok" PJ_PROMPT_EXPECTED="" PJ_STATE_DIR="$root/state" PJ_PROFILE_DIR="$root/profiles" PJ_PROFILE=ownprompt PJ_LAUNCH_TTY=ttys099 PJ_LAUNCH_SHELL_START=0 "$0" 2>/dev/null)"
   case "$OUT" in *"RULES.md"*) ok "18 control: the default cache path is STALE under a prompt_out profile";; *) bad "18 control" "$OUT";; esac
+  # 19. a FULL-PATH plugins entry (Gavin, 2026-09-27: the ui-gallery in every profile) is
+  #     used as written, not joined to the root; one missing on this box is skipped, as pj
+  #     skips it. Clean arm, then the control where the present extra dir is left out.
+  mkdir -p "$root/extra-plugin"
+  printf 'plugins: skills/herdr skills/ISA pj-voice pj %s/extra-plugin %s/missing-plugin\nconfig_dir: ~/.claude\n' "$root" "$root" > "$root/profiles/abspath"
+  printf '%s\n' "claude --setting-sources project,local --settings $HOME/.claude/settings.project.json --append-system-prompt-file $exp --plugin-dir $HOME/.claude/skills/herdr --plugin-dir $HOME/.claude/skills/ISA --plugin-dir $HOME/.claude/pj-voice --plugin-dir $HOME/.claude/pj --plugin-dir $root/extra-plugin --dangerously-skip-permissions --effort high" >"$root/argv.abspath"
+  RUN_PROFILE=abspath run argv.abspath
+  [ -z "$OUT" ] && ok "19f a full-path entry is clean, and the missing one is skipped" || bad "19f full path clean" "$OUT"
+  RUN_PROFILE=abspath run argv.ok
+  # the tail only: canon resolves the macOS /var -> /private/var link, so $root is not the prefix
+  case "$OUT" in *"missing plugin dir "*"/extra-plugin"*) ok "19f control: leaving the present full-path dir out is STALE";; *) bad "19f control" "$OUT";; esac
+  case "$OUT" in *missing-plugin*) bad "19f the missing dir must never be demanded" "$OUT";; *) ok "19f the dir missing on this box is not demanded";; esac
 
   # ---- jq (A76) ---------------------------------------------------------------------
   # 19. A REAL PATH without jq: a folder of links to every command in the system bin

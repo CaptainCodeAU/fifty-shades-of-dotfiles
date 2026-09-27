@@ -25,10 +25,14 @@ config_dir:      ~/.claude-scratch
 setting_sources: project,local
 settings:        ~/.claude/settings.project.json
 prompt:          pj-prompt-file
-plugins:         none
+# Was `none` (F5a). Since 2026-09-27 scratch loads the ui-gallery from its checkout, the
+# dev loop D-20260923-A05 allows here only (every other profile waits for an installed
+# copy). It carries /fullscreen and /classic. A full path is used as written, and skipped
+# with a NOTE on a machine without cc-claude-mods.
+plugins:         ~/CODE/CaptainCodeAU/cc-claude-mods/plugins/ui-gallery
 mode:            normal
 card:            off
-# Fullscreen so a Mods pane can dock beside the transcript (W-20260923-A12, Gavin
-# 2026-09-26: "Profile switch"). Every other profile keeps the classic lock. c2 sessions
-# use this profile too, so they open fullscreen as well.
-renderer:        fullscreen
+# Classic again since 2026-09-27 (D-20260927-A03, closes W-20260926-A02): every session
+# starts classic and /fullscreen reopens it fullscreen on demand. It was `fullscreen`
+# from 2026-09-26 so a Mods pane could dock, which also made c2 open fullscreen.
+renderer:        classic

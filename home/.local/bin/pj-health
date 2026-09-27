@@ -912,7 +912,8 @@ else
     [ "$pl" = none ] && continue
     pr="$(expand_tilde "$(profile_key "$pn" plugins_root)")"; [ -n "$pr" ] || pr="$PJ_HOME"
     for p in $pl; do
-      d="$pr/$p"
+      # a full-path entry (/ or ~) is used as written, as pj and pj-launch-check do (2026-09-27)
+      case "$p" in /*|"~"*) d="$(expand_tilde "$p")" ;; *) d="$pr/$p" ;; esac
       case "$mv_seen" in *" $d "*) continue ;; esac
       mv_seen="$mv_seen$d "; mv_dirs=$((mv_dirs+1))
       hj="$d/hooks/hooks.json"
