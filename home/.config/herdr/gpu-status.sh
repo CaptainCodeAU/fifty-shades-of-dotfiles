@@ -28,7 +28,7 @@
 # find all read as "asleep". Now ssh's exit 255 (its own errors, never the
 # remote command's) is split three ways from its stderr:
 #
-#   ⚪PC off    timed out / host down / no route -- the box is asleep
+#   ⚪ PC off    timed out / host down / no route -- the box is asleep
 #   🔑 3090 key "Permission denied" -- mlbox refused the key, or it is locked
 #   3090 ssh?   anything else -- read the message by running this by hand
 #
@@ -93,7 +93,7 @@ else
     { read -r last_fail last_msg < "$BACKOFF_FILE"; } 2>/dev/null || true
     case $last_fail in ''|*[!0-9]*) last_fail=0 ;; esac
     if [ $(( $(date +%s) - last_fail )) -lt "$BACKOFF_SECONDS" ]; then
-      printf '%s' "${last_msg:-⚪PC off}"
+      printf '%s' "${last_msg:-⚪ PC off}"
       exit 0
     fi
   fi
@@ -104,7 +104,7 @@ else
 
   if [ "$rc" -eq 255 ]; then
     case $output in
-      *'timed out'*|*'Host is down'*|*'No route to host'*) msg='⚪PC off' ;;
+      *'timed out'*|*'Host is down'*|*'No route to host'*) msg='⚪ PC off' ;;
       *'Permission denied'*) msg='🔑 3090 key' ;;
       *) msg='3090 ssh?' ;;
     esac
