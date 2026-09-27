@@ -578,7 +578,11 @@ launchctl print "gui/$(id -u)/homebrew.mxcl.herdr" | grep -E 'state|runs|last ex
 brew services restart herdr    # not `herdr server stop`, not herdr's restart prompt
 ```
 
-That kills live panes and agents, so pick the moment. If you want herdr's own
+That kills live panes and agents, so pick the moment. Since 2026-09-27,
+`./install.sh` offers this itself when an upgrade leaves the old server running
+(`systemctl --user restart herdr.service` on Linux): it lists what runs inside
+herdr and restarts only on a typed `restart`, and never from inside a herdr
+pane. If you want herdr's own
 stop/restart to work again, hand the job back first with `brew services stop
 herdr` — and accept that you lose crash-restart and start-at-login with it.
 

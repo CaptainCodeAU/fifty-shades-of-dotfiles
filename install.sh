@@ -880,6 +880,106 @@ _herdr_server_restart_status() {
     fi
 }
 
+# --- Offering to restart a herdr server left behind by an upgrade ------------
+#
+# An upgrade swaps the binary but the running server keeps the old one, and from
+# 0.9.x a newer client refuses to talk to an older server at all
+# (protocol_mismatch), so `herdr plugin link` and every other command fail until
+# it restarts. Measured on mlbox 2026-09-27: 0.8.2 -> 0.9.1 left the server on
+# 0.8.2, `enable --now` (a no-op on an active unit) did not restart it, and the
+# plugin link failed with herdr's raw JSON error.
+#
+# Restarting ends every pane process, so the rule above still holds: NEVER
+# silently. Ruled by Gavin 2026-09-27: show what is running inside herdr, then
+# restart only on a TYPED "restart". Refused outright when this installer is
+# itself running in a herdr pane (HERDR_ENV=1): the restart would kill it
+# mid-run. Not interactive, or dry-run: print the command, never act.
+#
+# Usage: _herdr_offer_restart <restart command...>
+_herdr_server_pid() {
+    # systemd's MainPID on Linux; otherwise whoever holds herdr's socket. On macOS
+    # the 0.9.x server detaches (ppid 1), so launchd does not know its PID, and a
+    # `pgrep -f 'herdr server$'` found nothing on the Mac while `lsof -t` on the
+    # socket named the server and only the server (measured 2026-09-27).
+    local pid=""
+    if command -v systemctl &>/dev/null; then
+        pid=$(systemctl --user show -p MainPID --value herdr.service 2>/dev/null) || pid=""
+        [[ "$pid" == 0 ]] && pid=""
+    fi
+    if [[ -z "$pid" ]] && command -v lsof &>/dev/null; then
+        local p
+        for p in $(lsof -t "$HOME/.config/herdr/herdr.sock" 2>/dev/null || true); do
+            # Attached clients may hold the socket too; only the server's argv ends in "server".
+            if [[ "$(ps -o args= -p "$p" 2>/dev/null)" =~ herdr[[:space:]]+server[[:space:]]*$ ]]; then
+                pid=$p; break
+            fi
+        done
+    fi
+    printf '%s' "$pid"
+}
+_herdr_pane_processes() {
+    # "pid elapsed command" for everything under the server, minus the tab bar's
+    # own status commands (they run every few seconds and are not anyone's work).
+    local root queue=() all=() p kids k
+    root=$(_herdr_server_pid)
+    [[ -n "$root" ]] || return 0
+    queue=("$root")
+    while ((${#queue[@]})); do
+        p=${queue[0]}; queue=("${queue[@]:1}")
+        kids=$(pgrep -P "$p" 2>/dev/null) || kids=""
+        for k in $kids; do all+=("$k"); queue+=("$k"); done
+    done
+    ((${#all[@]})) || return 0
+    ps -o pid=,etime=,command= -p "$(IFS=,; echo "${all[*]}")" 2>/dev/null \
+        | grep -v -E 'gpu-status|mac-status|nvidia-smi|iostat|ioreg|sysctl -n' \
+        | cut -c1-110 || true
+}
+_herdr_offer_restart() {
+    local st have cmd_str="$*" procs ans i
+    st=$(_herdr_server_restart_status)
+    [[ "$st" == yes:* ]] || return 0
+    have=$(herdr --version 2>/dev/null | awk '{print $2}') || have=""
+    warn "The running herdr server is still ${st#yes:}; the installed herdr is ${have:-newer}. herdr commands (plugin link among them) fail until it restarts."
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[dry-run] Would list what runs inside herdr and offer to restart it: ${CYAN}${cmd_str}${RESET}"
+        return 0
+    fi
+    if [[ "${HERDR_ENV:-}" == 1 ]]; then
+        warn "This installer is running INSIDE a herdr pane, so restarting herdr would kill it mid-run. Not asking."
+        info "From a plain terminal, when nothing in herdr needs to survive: ${CYAN}${cmd_str}${RESET}"
+        return 0
+    fi
+    procs=$(_herdr_pane_processes)
+    if [[ -n "$procs" ]]; then
+        info "Running inside herdr now; a restart ends ALL of these:"
+        printf '%s\n' "$procs" | sed 's/^/      /'
+    else
+        info "Nothing runs inside herdr apart from its own tab-bar status commands."
+    fi
+    if [[ ! -t 0 ]]; then
+        info "Not interactive, so not asking. Restart it yourself: ${CYAN}${cmd_str}${RESET}"
+        return 0
+    fi
+    read -rp "$(echo -e "${YELLOW}Type 'restart' to restart herdr now; anything else skips: ${RESET}")" ans || ans=""
+    if [[ "$ans" != restart ]]; then
+        info "Skipped. Restart it later: ${CYAN}${cmd_str}${RESET}"
+        return 0
+    fi
+    if ! run_cmd "$@"; then
+        warn "Restart failed: ${CYAN}${cmd_str}${RESET}"
+        return 0
+    fi
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+        if [[ "$(_herdr_server_restart_status)" == no ]]; then
+            success "herdr server restarted and now matches the installed herdr ${have}."
+            return 0
+        fi
+        sleep 1
+    done
+    warn "herdr was restarted but does not report a matching server yet. Check: ${CYAN}herdr status server${RESET}"
+    return 0
+}
+
 _preflight_herdr_bump_check() {
     [[ "$SKIP_PREFLIGHT" == true ]] && return 0
     # macOS/Homebrew path only -- Linux/WSL bumps ship via _preflight_herdr_release_check.
@@ -961,14 +1061,8 @@ _preflight_herdr_bump_check() {
         if command -v herdr &>/dev/null; then
             success "herdr now $(herdr --version 2>/dev/null | awk '{print $2}') (pinned)"
         fi
-        if [[ "$DRY_RUN" != true ]]; then
-            local _restart_status
-            _restart_status=$(_herdr_server_restart_status)
-            if [[ "$_restart_status" == yes:* ]]; then
-                warn "The running herdr server is still on ${_restart_status#yes:} — every attached session (including this one) would drop if restarted now."
-                info "This never restarts automatically. Restart it yourself when it's a good time: ${CYAN}brew services restart herdr${RESET}"
-            fi
-        fi
+        # Never automatic; a typed "restart" at most (see _herdr_offer_restart).
+        _herdr_offer_restart brew services restart herdr
     else
         warn "brew unpin herdr failed — leaving the current pin in place."
     fi
@@ -1112,6 +1206,10 @@ _post_stow_herdr_systemd_service() {
     else
         warn "Could not enable linger — server will stop at your last logout. Run: ${CYAN}sudo loginctl enable-linger $USER${RESET}"
     fi
+
+    # `enable --now` never restarts an ACTIVE unit, so a server started before
+    # this run's herdr upgrade is still the old build. Offer, never force.
+    _herdr_offer_restart systemctl --user restart herdr.service
     return 0
 }
 
@@ -1154,6 +1252,13 @@ _post_stow_herdr_plugins_and_skill() {
         # `plugin list` is PLAIN TEXT, not JSON (docs/HERDR_PLUGINS.md) -- grep it.
         if herdr plugin list 2>/dev/null | grep -q "dotfiles.window-title-fix"; then
             verbose "herdr plugin dotfiles.window-title-fix already registered"
+        elif [[ "$(_herdr_server_restart_status)" == yes:* ]]; then
+            # A server older than the binary refuses every command (protocol_mismatch),
+            # so linking now would only print herdr's raw JSON error. Say why instead.
+            step "herdr plugin registration"
+            did_step=true
+            warn "Skipped: the running herdr server is older than the installed herdr, so it would refuse the link."
+            info "After restarting the server: ${CYAN}herdr plugin link $plugin_dir --enabled${RESET} (or re-run ./install.sh)"
         else
             step "herdr plugin registration"
             did_step=true

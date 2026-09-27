@@ -323,7 +323,16 @@ while IFS="$SEP" read -r ev matcher script script_path requires cmd why legacy e
         local_script_file="${local_script_file/#\~/$REQ_ROOT}"
     fi
     if [[ ! -e "$local_script_file" ]]; then
-        SKIPPED+=("$script -- not deployed to $(dirname "$local_script_file") (run ./install.sh --stow-only)")
+        # Stow can only deploy what this repo ships. risk-watch comes from the
+        # private dot-claude repo, and on mlbox (2026-09-27) the old advice sent
+        # Gavin to a --stow-only that could never produce it. Say which it is.
+        repo_copy=""
+        [[ -n "$MANIFEST" ]] && repo_copy="$(dirname "$MANIFEST")/../../home/${local_script_file#"$REQ_ROOT"/}"
+        if [[ -n "$repo_copy" && -e "$repo_copy" ]]; then
+            SKIPPED+=("$script -- not deployed to $(dirname "$local_script_file") (run ./install.sh --stow-only)")
+        else
+            SKIPPED+=("$script -- not deployed to $(dirname "$local_script_file"), and this repo does not ship it (it comes from another repo, e.g. dot-claude); stow cannot fix this")
+        fi
         continue
     fi
 
