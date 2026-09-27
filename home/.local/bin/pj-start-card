@@ -340,7 +340,7 @@ gather(){
   C_HMARK=""; C_HPATH=""; C_HANDOFF=""; C_HSIZE=""; C_HDATE=""
   C_TRACKERS=(); C_TRACKER_MARKS=()
   C_SYNC=""; C_BEHIND=0; C_MODS=""; C_MODS_UNSEEN=0; C_MODS_MEASURED=0
-  C_PANEL_N=0; C_PANEL_VAL=""; C_DETAIL=()
+  C_PANEL_N=0; C_PANEL_VAL=""; C_LIST=""
   # Selftest seam: a crash in the middle of gathering, the one failure nothing else provokes.
   [ "${PJ_CARD_FAULT:-}" = crash ] && exit 3
 
@@ -386,6 +386,9 @@ gather(){
   # header plus up to 3 titles, and single lines (Inbox, notes). Read even with NO drawer:
   # the inbox and mandatory lines are for every project. Parsed by SECTION, so a cross title
   # can never be counted as one of this project's own.
+  # --json: start the detail read NOW, on fd 9, so it runs beside --session instead of after
+  # it: 645 ms became 450 on a 185-item drawer (2026-09-27). Only when there is a drawer.
+  [ "$MODE" = json ] && [ "$wrc" -eq 0 ] && exec 9< <({ open-items --json 2>/dev/null; printf '\036RC %s\n' "$?"; })
   if [ "$wrc" -eq 0 ] || [ "$wrc" -eq 1 ]; then
     sess="$(open-items --session 2>/dev/null | strip_ansi; exit "${PIPESTATUS[0]}")"; src=$?
     [ "$src" -eq 0 ] || err "items: open-items --session exit $src"
@@ -470,30 +473,19 @@ gather(){
   # order stay the card's own (the --session read above); this read is only accepted when it
   # names the same titles in the same order, so a drawer written between the two reads, or a
   # pin rule the two readers disagree on, is reported instead of shown wrong.
+  # One awk pass does the reading, the check and the objects: bash loops over every item cost
+  # 420 ms on a 182-item drawer (measured 2026-09-27). The card's titles reach awk through a
+  # process substitution and open-items' output through fd 9 (opened above), so nothing is
+  # written. fd 9 is closed on every path, read or not.
   if [ "$C_DSTATE" = present ] && [ "${#C_TITLES[@]}" -gt 0 ]; then
-    od="$(open-items --json 2>/dev/null)"; orc=$?
-    if [ "$orc" -gt 1 ]; then
-      err "items: open-items --json exit $orc; id, done_when, when and next left out"
-    else
-      od="$(printf '%s\n' "$od" | LC_ALL=C awk "$DETAIL_AWK")"; orc=$?
-      while IFS= read -r line; do [ -n "$line" ] && C_DETAIL+=("$line"); done <<<"$od"
-      if [ "$orc" -ne 0 ]; then
-        err "items: open-items --json did not parse; id, done_when, when and next left out"; C_DETAIL=()
-      elif [ "${#C_DETAIL[@]}" -ne "${#C_TITLES[@]}" ]; then
-        err "items: open-items --json listed ${#C_DETAIL[@]} open, the card read ${#C_TITLES[@]}; id, done_when, when and next left out"; C_DETAIL=()
-      else
-        for ((i = 0; i < ${#C_TITLES[@]}; i++)); do
-          IFS=$'\037' read -r c s t b <<<"${C_DETAIL[$i]}"
-          [ "$s" = 1 ] && s='[pinned] ' || s=''
-          js "${C_TITLES[$i]}"
-          if [ "$REPLY" != "\"   · $s$t\"" ]; then
-            err "items: open-items --json disagrees with the card at item $((i + 1)); id, done_when, when and next left out"
-            C_DETAIL=(); break
-          fi
-        done
-      fi
-    fi
+    od="$(LC_ALL=C awk "$DETAIL_AWK" <(printf '%s\n' "${C_TITLES[@]}") - <&9 2>/dev/null)"
+    case "$od" in
+      OK$'\n'*) C_LIST="${od#OK$'\n'}" ;;
+      ERR\ *)   err "items: ${od#ERR }; id, done_when, when and next left out" ;;
+      *)        err "items: the detail read gave nothing; id, done_when, when and next left out" ;;
+    esac
   fi
+  [ "$C_DSTATE" = present ] && exec 9<&-
   return 0
 }
 
@@ -568,15 +560,22 @@ render_text(){
 }
 
 # --- --json ------------------------------------------------------------------------------
-# The per-item detail: one open-items --json item object per line in, one
-#   id US pinned US title US done_when US when US next
-# row out (fields split by the unit separator \037, never tab: bash read collapses empty
-# tab-separated fields), pinned rows first (the --session order). title stays JSON-escaped; the three fields
-# are whole JSON values (a string, or null). Every escape other than \\ and \" becomes ?, as do
-# DEL and the bidi and zero-width marks: the same text the card shows, and no tab can survive
-# into a row. Exit 3: a string never closed, so the input was not what open-items writes.
+# The per-item detail. Input 1: the card's own title lines, as --session printed them. Input 2:
+# open-items --json, then a \036RC <exit> line. Output: "OK" and, on the next line, every item as
+# a JSON object in the card's order (pinned first), joined by commas; or ONE line "ERR <why>".
+# The detail is only accepted when it names the same titles in the same order as the card, so a
+# drawer written between the two reads, or a pin rule the two readers disagree on, is reported
+# instead of shown wrong. Strings stay JSON-escaped from open-items; every escape other than \\
+# and \" becomes ?, as do DEL and the bidi and zero-width marks: the text the card shows.
 DETAIL_AWK="$CLEAN_AWK"'
-  BEGIN { np = 0; nr = 0; US = "\037" }
+  BEGIN { np = 0; nr = 0; nt = 0; ORC = -1 }
+  function esc(s,   i, n, c, o) {       # a card title (already clean) as JSON string content
+    o = ""; n = length(s)
+    for (i = 1; i <= n; i++) { c = substr(s, i, 1); if (c == "\\" || c == "\"") o = o "\\"; o = o c }
+    return o
+  }
+  NR == FNR { T[++nt] = $0; next }
+  /^\036RC / { ORC = $2 + 0; next }
   function tok(s, p,   i, n, c, d, o) {
     o = ""; n = length(s); i = p + 1
     while (i <= n) {
@@ -612,13 +611,25 @@ DETAIL_AWK="$CLEAN_AWK"'
     p = index(rest, "\"fields\":{"); f = (p ? substr(rest, p) : "")
     PIN = 0
     dw = fld(f, "done-when"); wh = fld(f, "when"); nx = fld(f, "next")
-    row = id US PIN US title US dw US wh US nx
-    if (PIN) P[++np] = row; else R[++nr] = row
+    k = PIN ? ++np : ++nr
+    if (PIN) { PI[k] = id; PT[k] = title; PD[k] = dw; PW[k] = wh; PX[k] = nx }
+    else     { RI[k] = id; RT[k] = title; RD[k] = dw; RW[k] = wh; RX[k] = nx }
   }
   END {
-    for (i = 1; i <= np; i++) print P[i]
-    for (i = 1; i <= nr; i++) print R[i]
-    if (BROKEN) exit 3
+    if (ORC > 1)  { print "ERR open-items --json exit " ORC; exit }
+    if (ORC < 0)  { print "ERR open-items --json did not finish"; exit }
+    if (BROKEN)   { print "ERR open-items --json did not parse"; exit }
+    if (np + nr != nt) { print "ERR open-items --json listed " (np + nr) " open, the card read " nt; exit }
+    out = ""
+    for (k = 1; k <= nt; k++) {
+      if (k <= np) { pin = 1; id = PI[k]; t = PT[k]; dw = PD[k]; wh = PW[k]; nx = PX[k] }
+      else { j = k - np; pin = 0; id = RI[j]; t = RT[j]; dw = RD[j]; wh = RW[j]; nx = RX[j] }
+      got = T[k]; sub(/^   [^ ]+ /, "", got)
+      if (esc(got) != (pin ? "[pinned] " : "") t) { print "ERR open-items --json disagrees with the card at item " k; exit }
+      out = out (k > 1 ? "," : "") "{\"id\":\"" id "\",\"title\":\"" t "\",\"pinned\":" (pin ? "true" : "false") \
+            ",\"done_when\":" dw ",\"when\":" wh ",\"next\":" nx "}"
+    }
+    print "OK"; print out
   }
 '
 
@@ -664,19 +675,16 @@ render_json(){
   if [ "$C_INREPO" -eq 0 ]; then o="$o,\"items\":null"
   else
     t="{\"drawer\":\"$C_DSTATE\",\"open\":$C_N,\"pinned\":${C_NPIN:-0},\"parked\":$C_NPARKED,\"list\":["
-    for ((i = 0; i < ${#C_TITLES[@]}; i++)); do
-      [ "$i" -gt 0 ] && t="$t,"
-      if [ "${#C_DETAIL[@]}" -gt 0 ]; then
-        IFS=$'\037' read -r k x titles cnt line out <<<"${C_DETAIL[$i]}"
-        bool "$x"
-        t="$t{\"id\":\"$k\",\"title\":\"$titles\",\"pinned\":$REPLY,\"done_when\":$cnt,\"when\":$line,\"next\":$out}"
-      else
+    if [ -n "$C_LIST" ]; then t="$t$C_LIST"
+    else                       # the detail read failed: the card's own titles, no ids
+      for ((i = 0; i < ${#C_TITLES[@]}; i++)); do
+        [ "$i" -gt 0 ] && t="$t,"
         x="${C_TITLES[$i]#   · }"; k=0
         case "$x" in '[pinned] '*) x="${x#\[pinned\] }"; k=1 ;; esac
         js "$x"; titles="$REPLY"; bool "$k"
         t="$t{\"id\":null,\"title\":$titles,\"pinned\":$REPLY,\"done_when\":null,\"when\":null,\"next\":null}"
-      fi
-    done
+      done
+    fi
     o="$o,\"items\":$t]}"
   fi
 
