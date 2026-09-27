@@ -62,6 +62,7 @@ It is tracked in a public repo, so nothing in it is ever a secret.
 | `plugins_root`    | the `--plugin-dir` prefix                 | the dir the `plugins` names are joined to. Unset = `~/.claude`. `pj-launch-check` reads it too. Added P10                                                                                                                                                                                                                                                                                                                                                                            |
 | `function_hooks`  | `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`     | **on by default** in every profile (D-20260923-A08); only the literal `off` exports nothing, the negative-control lane for testing a mod. Remove once Claude Code ships mods without the flag. Added F8b                                                                                                                                                                                                                                                                             |
 | `renderer`        | `PJ_RENDERER`, `CLAUDE_CODE_NO_FLICKER=1` | **classic by default**: the launcher sets `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1` for every session (the June 2026 fullscreen rejection), which outranks `/tui`. Only the literal `fullscreen` lifts it for that profile, so a Mods pane can dock beside the transcript. No shipped profile sets it since 2026-09-27 (D-20260927-A03: start classic, `/fullscreen` on demand); `scratch` did from 2026-09-26, which made `c2` open fullscreen too. Added 2026-09-26, W-20260923-A12 |
+| `mods`            | `enabledPlugins` in the overlay           | INSTALLED mods to enable, space-separated `name@marketplace`, or `none`. Rides the same overlay `--settings` as `remote_control` and `voice`, which also repeats the settings file's own `enabledPlugins`. Inherited from `default` like every key. An id that is not ASCII `name@marketplace` REFUSES the launch; one that is not installed does not (pj-health says it). Added 2026-09-27, see below |
 
 **Agent view is off in every pj session, and it is not a key.** pj always exports
 `CLAUDE_CODE_DISABLE_AGENT_VIEW=1` (Gavin, 2026-09-27, W-20260926-A01). In fullscreen a
@@ -74,8 +75,8 @@ Measured in one tab, both arms: with it, no `<- for agents` hint, the left arrow
 nothing and `/exit` exited; without it, the left arrow parked the session. Selftest 14f.
 The `c` family is untouched.
 
-**Switching screen mode on demand: `--fullscreen`, `--classic`, and the gallery's
-`/fullscreen` and `/classic`** (Gavin, 2026-09-27). Claude Code fixes the renderer per
+**Switching screen mode on demand: `--fullscreen`, `--classic`, and the screen-switch
+mod's `/fullscreen` and `/classic`** (Gavin, 2026-09-27; D-20260927-A03). Claude Code fixes the renderer per
 session (the Mods notes say "fixed per session"), and a pj session refuses `/tui`
 ("Cannot switch renderers in this session": pj's custom system prompt and restricted
 settings). So every session starts in its profile's renderer, and a switch is a relaunch
@@ -83,7 +84,8 @@ of the same conversation:
 
 - `pj [--profile NAME] --fullscreen` or `--classic` overrides the profile's `renderer` for
   that launch only. Leading position, after `--profile`; it never reaches claude's argv.
-- In a session, the ui-gallery mod's `/fullscreen` (or `/classic`) records the wish. On
+- In a session, the screen-switch mod's `/fullscreen` (or `/classic`) records the wish
+  (the ui-gallery carried them until the split later that day). On
   `/exit` its `session.end` hook writes `<mode> <resume-id|new>` into `$PJ_RELAUNCH_FILE`
   (`$TMPDIR/pj-relaunch.<pj pid>`, exported by pj). Once claude returns, pj reads it,
   overwrites it with `consumed`, and launches again in that mode with `--resume <id>`,
@@ -91,22 +93,65 @@ of the same conversation:
   pj judges that, not the mod: a just-resumed session counts 0 prompts of its own, and
   when the mod judged by that count, `/classic` after a switch started fresh (measured
   live 2026-09-27; selftest 26h).
-  A fullscreen relaunch sets `PJ_OPEN_GALLERY=1` and the mod opens the gallery.
+  A fullscreen relaunch sets `PJ_OPEN_GALLERY=1`; only the ui-gallery reads it, and only
+  where it is loaded (screen-switch opens nothing).
 - The relaunch keeps pj's own argv and any typed `--plugin-dir` pairs, and drops every
   other typed extra (a prompt, `--continue`), which must not run twice. The session caps
   are checked again before it.
 - A `/clear` or a resume is not an exit: no request is written. Selftest 26a-26h; the
   mod's own tests cover the request side.
-- Where it works: only in a profile that loads the ui-gallery. Today that is `scratch`,
-  from the cc-claude-mods checkout, the dev loop D-20260923-A05 allows. Every other
-  profile waits for an installed copy under `~/.claude/plugins`, because A05 forbids a
-  mod that resolves into a cwd-writable repo.
+- Where it works: in every profile whose `mods:` enables `screen-switch@cc-claude-mods`
+  (default, memory and scratch ship with it) AND whose config dir has it installed. See
+  "`mods`: installed mods, enabled by pj" below; pj-health's mods-installed row says
+  which config dirs still lack it.
 
 **A `plugins` entry may be a full path** (starts with `/` or `~`; 2026-09-27). It is used
 as written instead of being joined to `plugins_root`, and a full path missing on this
 machine is skipped with a NOTE, never a refusal. `pj`, `pj-launch-check` and pj-health's
 mod-validate row apply the same rule (pj selftest 27, pj-launch-check 19f, pj-health's
 full-path arm).
+
+### `mods`: installed mods, enabled by pj (2026-09-27)
+
+A mod reaches a pj session the way D-20260923-A05 requires: as an **installed copy** under
+`<config_dir>/plugins/cache/`, never as a `--plugin-dir` into a repo a session can write
+(the `scratch` profile's ui-gallery checkout is the one dev-loop exception A05 allows).
+`claude plugin install` makes that copy, and also records the enable in the config dir's
+**user** `settings.json` (`enabledPlugins`, `extraKnownMarketplaces`). **pj never reads
+user settings** (`--setting-sources project,local`), so under pj the installed mod did
+NOT load ("Unknown command: /fullscreen") until the enable was passed in an overlay
+`--settings` (measured by the conductor 2026-09-27, F8b-mods-early.md). So pj carries the
+enable itself: the profile's `mods:` ids become `"enabledPlugins": {"<id>": true}` in the
+one overlay `--settings` pj already builds.
+
+**The overlay repeats the settings file's own `enabledPlugins`.** `settings.project.json`
+already enables `cc-capture` and `cc-skills` (and lists about fifteen more as `false`).
+F5b measured that a second `--settings` merges per **top-level** key; whether a nested
+object like `enabledPlugins` is merged or **replaced** is unmeasured, and a replace would
+drop those two from every pj session. So the overlay's `enabledPlugins` is the file's
+own, `false` entries included, plus each mod set `true`: correct in both worlds. With no
+`jq`, or a file that is unreadable or not JSON, pj still launches with the mods alone and
+a NOTE (selftest 28h-28l).
+
+**The install route is cc-claude-mods' `install.sh --config-dir <dir>`**, once per config
+dir that should have the mod: an enable only loads what THAT config dir's `plugins/`
+holds, so `~/.claude`, `~/.claude-scratch` and `~/.claude-memory` each need their own
+install. `claude plugin install` writes the user `settings.json`; Gavin ruled
+(2026-09-27) that the hand-edited, committed `~/.claude/settings.json` must come out
+exactly as he wrote it, so `install.sh` restores it and proves it by sha256.
+
+What checks what:
+
+| Where                          | What it says                                                                                                                         |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `pj`                           | a malformed id REFUSES (exit 2); a declared mod that is not installed still launches, because pj never refuses over a missing file  |
+| `pj-launch-check`              | every declared id is enabled in the running argv's overlay, and no enabled id is undeclared (ids the settings file enables excepted) |
+| pj-health `mods-installed`     | each profile's ids have a `user`-scope entry in that config dir's `installed_plugins.json` whose `installPath` exists                  |
+| pj-health `mod-validate`       | the installed copies are validated too, since that copy is what a session runs                                                      |
+
+`mods: none` (or no key anywhere) emits nothing. pj's built-in fallback has no mods, so a
+machine with no profiles stowed enables nothing it may not have installed; the stowed
+`default` profile therefore prints two more argv lines than the fallback (20 against 18).
 
 ### A branch of dot-claude as the loaded one (P10)
 
