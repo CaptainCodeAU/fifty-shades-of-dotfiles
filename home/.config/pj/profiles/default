@@ -3,9 +3,11 @@
 # EVERY KEY HERE REPRODUCES TODAY'S LAUNCH EXACTLY. `pj --dry-run` with this file
 # present must print the same 18 lines, byte for byte, as it did before profiles
 # existed; that is hard constraint 1 of F5a and arm 1 of `pj --selftest`. ONE deliberate
-# change since: AgentRelay was PARKED on 2026-09-24 (D-20260924-A07), so the argv is now 16
-# lines with 4 plugin dirs. Its files stay in ~/.claude/skills/AgentRelay; to bring it back,
+# change since: AgentRelay was PARKED on 2026-09-24 (D-20260924-A07), so the argv has 4 plugin
+# dirs. Its files stay in ~/.claude/skills/AgentRelay; to bring it back,
 # add skills/AgentRelay here and in pj's fallback (pj --selftest arm 1b will then fail, by design).
+# A SECOND since 2026-09-27: `mods:` below adds one overlay --settings, so this profile prints
+# 20 lines where the built-in fallback prints 18 (measured 2026-09-27; see the mods key).
 #
 # key: value lines, # comments, one value per key. Same shape as ~/.config/pj/machine,
 # which install.sh already writes. PATHS ONLY -- never a secret, never a token, never
@@ -51,6 +53,19 @@
 # appends a SECOND --settings carrying a JSON string. Measured 2026-09-21: --settings
 # REPEATS and MERGES (later wins per key, earlier keys survive), so the overlay does not
 # replace settings.project.json. pj --selftest arm 19c proves both halves in one run.
+#
+# ONE MORE KEY, and the second deliberate change to this profile's argv (2026-09-27, the
+# screen-switch build, D-20260927-A03):
+#   mods             space-separated INSTALLED plugin ids, name@marketplace, or `none`.
+#                    pj adds "enabledPlugins": {"<id>": true} to the same overlay
+#                    --settings the two keys above use. pj never reads user settings,
+#                    which is where `claude plugin install` records the enable, so pj
+#                    has to carry it. The mod itself is installed by cc-claude-mods'
+#                    install.sh (a real copy under <config_dir>/plugins, D-20260923-A05).
+#                    Other profiles inherit this line unless they set their own; a
+#                    profile that wants none says `mods: none`. pj's built-in fallback
+#                    has NO mods, so this profile's argv is now the fallback's plus one
+#                    overlay --settings (pj --selftest arms 12 and 28c/28f).
 config_dir:      ~/.claude
 setting_sources: project,local
 settings:        ~/.claude/settings.project.json
@@ -59,3 +74,6 @@ plugins:         skills/herdr skills/ISA pj-voice pj
 required:        --dangerously-skip-permissions --effort high
 mode:            normal
 card:            on
+# /fullscreen and /classic (D-20260927-A03). Installed into ~/.claude by cc-claude-mods'
+# install.sh; pj-health's mods-installed row says when it is not.
+mods:            screen-switch@cc-claude-mods

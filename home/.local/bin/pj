@@ -98,6 +98,16 @@
 #                           literal `fullscreen` is classic.
 #   (no key) agent view    OFF for every profile: pj exports CLAUDE_CODE_DISABLE_AGENT_VIEW=1
 #                           (Gavin, 2026-09-27), so the left arrow never parks a session.
+#   mods: <id> [<id>...]    INSTALLED mods to enable, as name@marketplace (2026-09-27, the
+#                           screen-switch build). pj adds "enabledPlugins": {"<id>": true}
+#                           to the --settings overlay, because pj never reads user settings
+#                           (--setting-sources project,local), which is where `claude plugin
+#                           install` writes the enable. `none` or absent = nothing. EMPTY in
+#                           the built-in fallback, so a box with no profiles stowed enables
+#                           nothing it may not have installed. An id that is not ASCII
+#                           name@marketplace REFUSES the launch, like an unknown profile. A
+#                           declared mod that is not installed does NOT refuse: pj never
+#                           refuses over a missing file; pj-health's mods-installed row says it.
 #
 # Refuses (exit 2, one line on stderr) when pj-prompt-file prints nothing: a launch
 # without the rules file is the failure this script exists to prevent, so it never
@@ -147,6 +157,9 @@ P_PLUGINS_ROOT="$HOME/.claude"
 P_FUNCTION_HOOKS="on"
 # W-20260923-A12: classic unless a profile opts in.
 P_RENDERER="classic"
+# The screen-switch build (2026-09-27): installed mods, enabled through the overlay. Empty
+# here on purpose, see the header: the stowed default profile names them.
+P_MODS=""
 PROFILE_NAME="default"
 
 expand_tilde() { local p="$1"; print -r -- "${p/#\~/$HOME}"; }
@@ -195,6 +208,7 @@ read_profile() {
       plugins_root)    P_PLUGINS_ROOT="$(expand_tilde "$v")" ;;
       function_hooks)  P_FUNCTION_HOOKS="$v" ;;
       renderer)        P_RENDERER="$v" ;;
+      mods)            P_MODS="$v" ;;
     esac
   done < "$f"
 }
@@ -378,8 +392,30 @@ label_herdr_pane() {
   return 0
 }
 
+# mods_json -- the "enabledPlugins" member for the overlay, or nothing when the profile
+# enables no mod. REFUSES (rc 2, one line on stderr) on an id that is not ASCII
+# name@marketplace: a typo would otherwise enable nothing, silently, and the id is spliced
+# into JSON, so only characters that need no quoting get through. LC_ALL=C makes the ranges
+# byte ranges: under a UTF-8 locale [a-z] can match an accented letter (arm 28c).
+mods_json() {
+  local LC_ALL=C id out="" seen=" "
+  [[ -z "$P_MODS" || "$P_MODS" == none ]] && return 0
+  for id in ${=P_MODS}; do
+    if [[ ! "$id" =~ '^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9._-]*$' ]]; then
+      print -u2 -r -- "pj: REFUSED: profile '$PROFILE_NAME' mods: '$id' is not a plugin id (name@marketplace, ASCII letters, digits, . _ -); fix the mods: line in ${PROFILE_DIR/#$HOME/~}/$PROFILE_NAME"
+      return 2
+    fi
+    [[ "$seen" == *" $id "* ]] && continue
+    seen="$seen$id "
+    out="$out\"$id\":true,"
+  done
+  print -r -- "\"enabledPlugins\":{${out%,}}"
+}
+
 build_argv() {
-  local prompt d
+  local prompt d mj
+  # First, so a bad mods: line refuses before pj-prompt-file writes its cache.
+  mj="$(mods_json)" || return $?
   if [[ "$P_PROMPT" == pj-prompt-file ]]; then
     # P10: the two profile keys ride pj-prompt-file's OWN seams, set only when the profile
     # names them, so a profile without them leaves the tool's defaults (and a caller's
@@ -424,14 +460,17 @@ build_argv() {
   # The third arm is the one that decided it; the first two alone cannot tell the two
   # behaviours apart.
   #
-  # The overlay is emitted ONLY when a profile sets one of the two keys, so the default
-  # profile passes exactly one --settings and its argv is unchanged.
+  # The overlay is emitted ONLY when a profile sets one of these keys, so a profile that
+  # sets none passes exactly one --settings and its argv is unchanged. ONE overlay carries
+  # them all, mods included (2026-09-27): two JSON --settings would merge the same way, but
+  # one is what pj-launch-check reads.
   [[ -n "$P_MODEL" ]] && PJ_ARGV+=(--model "$P_MODEL")
   local ov=""
   [[ "$P_REMOTE_CONTROL" == on  ]] && ov="$ov\"remoteControlAtStartup\":true,"
   [[ "$P_REMOTE_CONTROL" == off ]] && ov="$ov\"remoteControlAtStartup\":false,"
   [[ "$P_VOICE" == on  ]] && ov="$ov\"voiceEnabled\":true,"
   [[ "$P_VOICE" == off ]] && ov="$ov\"voiceEnabled\":false,"
+  [[ -n "$mj" ]] && ov="$ov$mj,"
   [[ -n "$ov" ]] && PJ_ARGV+=(--settings "{${ov%,}}")
   # F5c's `--name` block lived here. It is GONE: the name now travels in the environment,
   # for every profile including the default one. See build_session_name above.
@@ -1109,7 +1148,7 @@ selftest() {
   read_relaunch "$root/none-such" >/dev/null && n=$((n + 1))
   [[ $n -eq 0 ]] && ok "26d a bad renderer, a bad id, no id, empty, or no file: all refused" || bad "26d refusals" "$n of 5 accepted"
   # 26e/f/g. run_with_relaunch with a fake __claude_launch that records each launch and, on
-  #     the first, asks for a switch the way the gallery mod does.
+  #     the first, asks for a switch the way the screen-switch mod does.
   local rl="$root/relaunch-e"
   # a transcript for sess-26e, so the relaunch has something to resume (26h is the arm without)
   mkdir -p "$root/cfg26/projects/-some-project" && : > "$root/cfg26/projects/-some-project/sess-26e.jsonl"
@@ -1179,6 +1218,77 @@ selftest() {
   [[ "$out" == *$'\n--plugin-dir\n'"$root/extra-plugin"$'\n'* ]] && ok "27 a full-path entry is used as written" || bad "27 full path" "$out"
   [[ "$out" == *$'\n--plugin-dir\n'"$HOME/.claude/pj"$'\n'* ]] && ok "27 control: a short entry is still joined to the root" || bad "27 short entry" "$out"
   [[ "$out" != *no-such-plugin-27* ]] && grep -q 'no-such-plugin-27' "$root/err27" && ok "27 a full path missing on this box is skipped, with a NOTE" || bad "27 missing dir" "out=$out err=$(<"$root/err27")"
+  # ---- 28: mods: installed mods enabled through the overlay (screen-switch, 2026-09-27) ----
+  # 28a every id lands in ONE overlay, as JSON, duplicates once. The ids are fixtures that
+  #     exist nowhere: pj never looks for the install (28g), so the arm needs none.
+  printf 'mods: aa@mk b.b-2@mk_2 aa@mk\n' > "$pdir/twomods"
+  out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile twomods --dry-run 2>/dev/null)"
+  [[ "$out" == *$'\n--settings\n{"enabledPlugins":{"aa@mk":true,"b.b-2@mk_2":true}}\n'* ]] && ok "28a the overlay carries every declared id, once each" || bad "28a overlay ids" "$out"
+  n=$(print -r -- "$out" | grep -c -- '^--settings$')
+  [[ "$n" -eq 2 ]] && ok "28a the file --settings survives beside it (2 of them)" || bad "28a settings count" "got $n, wanted 2"
+  if whence -p jq >/dev/null 2>&1; then
+    d="$(print -r -- "$out" | grep '^{' | jq -r '.enabledPlugins | keys | join(" ")' 2>/dev/null)"
+    [[ "$d" == "aa@mk b.b-2@mk_2" ]] && ok "28a the overlay parses as JSON (jq reads both ids)" || bad "28a JSON" "$d"
+  fi
+  # 28b with remote_control and voice set too: still ONE overlay, every key in it.
+  printf 'mods: aa@mk\nremote_control: on\nvoice: off\n' > "$pdir/modsplus"
+  out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile modsplus --dry-run 2>/dev/null)"
+  [[ "$out" == *$'\n--settings\n{"remoteControlAtStartup":true,"voiceEnabled":false,"enabledPlugins":{"aa@mk":true}}\n'* ]] && ok "28b mods beside remote_control and voice: one overlay, all three keys" || bad "28b merged overlay" "$out"
+  n=$(print -r -- "$out" | grep -c -- '^--settings$')
+  [[ "$n" -eq 2 ]] && ok "28b still exactly 2 --settings, not 3" || bad "28b settings count" "got $n, wanted 2"
+  # 28c `mods: none` adds nothing, and neither does no mods key at all. The positive arms
+  #     above are the control: the same fixture dir DOES emit an overlay when asked.
+  printf 'mods: none\n' > "$pdir/modsnone"
+  out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile modsnone --dry-run 2>/dev/null)"; rc=$?
+  n=$(print -r -- "$out" | grep -c -- '^--settings$')
+  [[ $rc -eq 0 && "$n" -eq 1 && "$out" != *enabledPlugins* ]] && ok "28c mods: none emits no overlay (one --settings)" || bad "28c none" "rc=$rc n=$n $out"
+  out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --dry-run 2>/dev/null)"
+  [[ "$out" != *enabledPlugins* && "$out" == "$base" ]] && ok "28c a profile with no mods key is unchanged, byte for byte (arm 12 still holds)" || bad "28c absent" "$out"
+  # 28d a bad id REFUSES rc 2 with no argv: no @, a non-ASCII letter, a JSON-breaking quote.
+  n=0
+  for d in 'mods: justname' $'mods: scr\xc3\xa9en@mk' 'mods: a"b@mk' 'mods: aa@mk @mk'; do
+    print -r -- "$d" > "$pdir/badmod"
+    out="$(PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile badmod --dry-run 2>"$root/err28")"; rc=$?
+    [[ $rc -eq 2 && -z "$out" ]] && grep -q 'REFUSED.*not a plugin id' "$root/err28" && n=$((n + 1))
+  done
+  [[ $n -eq 4 ]] && ok "28d no @, non-ASCII, a quote, a bare @mk: all REFUSED rc 2, no argv, said on stderr" || bad "28d refusals" "$n of 4 refused"
+  # 28e the RELAUNCH path (/fullscreen then /exit) rebuilds argv and keeps the enable. Same
+  #     fake __claude_launch shape as 26e.
+  rl="$root/relaunch-28e"
+  ( PROFILE_DIR="$pdir"; export PJ_PROMPT_OUT="$root/prompt.md" PJ_WORKER_BIN="$fk/rc0"
+    load_profile twomods >/dev/null 2>&1 && build_argv >/dev/null 2>&1 || exit 9
+    P_CONFIG_DIR="$root/cfg26"
+    export PJ_RELAUNCH_FILE="$rf"; print -r -- "consumed" > "$rf"
+    __claude_launch() {
+      print -r -- "$*" >> "$rl"
+      [[ ! -e "$rl.asked" ]] && { : > "$rl.asked"; print -r -- "fullscreen sess-26e" > "$PJ_RELAUNCH_FILE"; }
+      return 0
+    }
+    run_with_relaunch ) >/dev/null 2>&1
+  if [[ -r "$rl" && "$(grep -c . "$rl")" == 2 ]]; then
+    n="$(grep -c '"enabledPlugins":{"aa@mk":true,"b.b-2@mk_2":true}' "$rl")"
+    [[ "$n" == 2 ]] && ok "28e the relaunch keeps the enable: both launches carry the overlay" || bad "28e relaunch overlay" "$(<"$rl")"
+    [[ "$(tail -1 "$rl")" == *"--resume sess-26e"* ]] && ok "28e control: the second launch IS the relaunch (--resume)" || bad "28e second launch" "$(tail -1 "$rl")"
+  else
+    bad "28e" "wanted 2 launches, got: $([[ -r $rl ]] && cat "$rl" || echo none)"
+  fi
+  # 28f THIS repo's profiles (as 1b reads them): default, memory and scratch enable
+  #     screen-switch; scratch keeps its ui-gallery checkout; the default dry-run carries it.
+  local want28='screen-switch@cc-claude-mods' m28=""
+  for f in default memory scratch; do
+    [[ "$(sed -n 's/^mods:[[:space:]]*//p' "$ppk/$f" 2>/dev/null)" == "$want28" ]] || m28="$m28 $f"
+  done
+  [[ -z "$m28" ]] && ok "28f default, memory and scratch declare mods: $want28" || bad "28f profile mods" "missing or different in:$m28"
+  grep -q '^plugins:.*cc-claude-mods/plugins/ui-gallery' "$ppk/scratch" && ok "28f scratch keeps its plugins: ui-gallery checkout" || bad "28f scratch plugins" "$(grep '^plugins:' "$ppk/scratch")"
+  out="$(PJ_PROFILE_DIR="$ppk" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --dry-run 2>/dev/null)"
+  [[ "$out" == *$'\n--settings\n{"enabledPlugins":{"'"$want28"$'":true}}\n'* ]] && ok "28f the repo default profile's dry-run enables it in the overlay" || bad "28f default overlay" "$out"
+  # 28g a declared mod that is NOT installed still LAUNCHES: pj never refuses over a missing
+  #     file (pj-health's mods-installed row says it). A real launch through a fake launch
+  #     file, as 24e; herdr, fetch and checks are switched off so nothing real is touched.
+  printf '__claude_launch() { print -r -- "$*" > "%s/launched28"; }\n' "$root" > "$root/fake-launch28"
+  out="$(env -u HERDR_ENV PJ_NO_FETCH=1 PJ_NO_CHECKS=1 PJ_LAUNCH_FILE="$root/fake-launch28" PJ_WORKER_BIN="$fk/rc0" \
+         PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile twomods 2>&1)"; rc=$?
+  [[ $rc -eq 0 && -r "$root/launched28" ]] && grep -q 'enabledPlugins' "$root/launched28" && ok "28g an uninstalled mod still launches, with the enable in argv" || bad "28g launch" "rc=$rc $out"
   print -- "pj selftest: $pass passed, $fail failed"
   [[ $fail -eq 0 ]]
 }
@@ -1220,12 +1330,15 @@ check_session_caps() {
 # --- switching screen mode on demand (Gavin, 2026-09-27) ----------------------------
 # Claude Code fixes the renderer per session (the Mods notes: "fixed per session"), and a
 # pj session refuses /tui ("Cannot switch renderers in this session": pj's launch flags).
-# So a switch is a relaunch of the SAME conversation. The ui-gallery mod's /fullscreen and
-# /classic ask for one; when that session then ends with /exit, the mod writes
-# "<fullscreen|classic> <resume-id|new>" into $PJ_RELAUNCH_FILE, and pj, once claude has
-# returned, launches again in that mode with --resume <id> ("new": nothing to resume, the
-# session never ran a prompt). A fullscreen relaunch sets PJ_OPEN_GALLERY=1 so the mod
-# opens the gallery. The file is per pj process and never deleted: pj overwrites it with
+# So a switch is a relaunch of the SAME conversation. The screen-switch mod's /fullscreen
+# and /classic ask for one (they lived in the ui-gallery until 2026-09-27; the mod is now
+# installed and enabled through the profile's `mods:` key); when that session then ends
+# with /exit, the mod writes "<fullscreen|classic> <resume-id|new>" into
+# $PJ_RELAUNCH_FILE, and pj, once claude has returned, launches again in that mode with
+# --resume <id> ("new": nothing to resume, the session never ran a prompt). build_argv
+# runs again, so the enable rides the relaunch too (arm 28e). A fullscreen relaunch sets
+# PJ_OPEN_GALLERY=1, which only the ui-gallery reads (it opens itself where it is loaded;
+# screen-switch opens nothing). The file is per pj process and never deleted: pj overwrites it with
 # "consumed" as it reads it, so a request can run at most once.
 read_relaunch() {
   local f="$1" line want id

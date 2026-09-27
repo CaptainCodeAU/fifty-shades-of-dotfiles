@@ -27,9 +27,13 @@ settings:        ~/.claude/settings.project.json
 prompt:          pj-prompt-file
 # Was `none` (F5a). Since 2026-09-27 scratch loads the ui-gallery from its checkout, the
 # dev loop D-20260923-A05 allows here only (every other profile waits for an installed
-# copy). It carries /fullscreen and /classic. A full path is used as written, and skipped
-# with a NOTE on a machine without cc-claude-mods.
+# copy). A full path is used as written, and skipped with a NOTE on a machine without
+# cc-claude-mods. /fullscreen and /classic moved OUT of the gallery the same day, into the
+# screen-switch mod below, so the gallery here is the probe and nothing else (D-20260923-A07).
 plugins:         ~/CODE/CaptainCodeAU/cc-claude-mods/plugins/ui-gallery
+# The screen switch, INSTALLED into ~/.claude-scratch by cc-claude-mods' install.sh and
+# enabled through pj's overlay (pj never reads that config dir's user settings).
+mods:            screen-switch@cc-claude-mods
 mode:            normal
 card:            off
 # Classic again since 2026-09-27 (D-20260927-A03, closes W-20260926-A02): every session
