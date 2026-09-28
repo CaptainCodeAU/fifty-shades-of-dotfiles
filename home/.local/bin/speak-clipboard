@@ -141,9 +141,11 @@
 # read, not a live probe. `--voice` bypasses all of this and goes straight to
 # say2 with the given key, trusting an explicit override as-is.
 #
-# The toggle rule: press on the SAME text while it speaks = stop. Press with
-# NEW text while it speaks = stop the old one and speak the new one. Text
-# identity is a SHA-256 of the cleaned text, kept next to the pid file.
+# The toggle rule (v5, 2026-09-28, Gavin's call): ANY press while it speaks
+# = stop, whatever the clipboard holds; the next press speaks the current
+# selection. Until v5, a press with NEW text replaced the speech instead,
+# decided by comparing a SHA-256 of the cleaned text. That hash is still
+# computed and written next to the pid file, but no longer decides anything.
 #
 # PRIVACY: the text is never logged. It DOES pass on the command line as of
 # v4.1 above (a deliberate speed-over-privacy trade, see that note) -- it is
@@ -159,7 +161,7 @@
 #
 # USAGE
 #   speak-clipboard              speak the clipboard (replacing any current speech)
-#   speak-clipboard --toggle     same text: stop; new text: replace; idle: speak
+#   speak-clipboard --toggle     speaking: stop (any text); idle: speak
 #   speak-clipboard --stop       stop any speech in progress
 #   speak-clipboard --print      print what WOULD be spoken (no audio)
 #   speak-clipboard --stdin      read text from stdin instead of the clipboard
@@ -435,23 +437,24 @@ if [ "$mode" = "stop" ]; then
     exit 0
 fi
 
+# Toggle rule (v5): any press while speaking stops, whatever the clipboard
+# holds. Checked before the clipboard is read, so a stop costs no cleaner run.
+if [ "$mode" = "toggle" ] && speaker_alive; then
+    stop_speaker
+    trace "outcome=stopped"
+    exit 0
+fi
+
 { IFS= read -r hash; IFS= read -r truncated; IFS= read -r chars; IFS= read -r text; } < <(clean_input)
 if [ -z "${text:-}" ]; then
     trace "outcome=nothing"
     exit 1
 fi
 
-# Toggle rule. Same hash while speaking: stop. Different hash: replace.
-# Plain speak mode always replaces.
+# Plain speak mode always replaces whatever is speaking.
 outcome="started"
 if speaker_alive; then
-    old_hash=""
-    { read -r old_hash <"$_hash_file"; } 2>/dev/null || true
     stop_speaker
-    if [ "$mode" = "toggle" ] && [ "$old_hash" = "$hash" ]; then
-        trace "outcome=stopped chars=$chars"
-        exit 0
-    fi
     outcome="replaced"
 fi
 

@@ -865,13 +865,14 @@ which:
    default audio device. say2 streams internally, so speech starts almost
    immediately regardless of selection length (MEASURED 2026-09-10: a 16 s
    paragraph started talking with only ~0.65 s of overhead around it);
-3. applies the toggle rule: press on the **same** text while it speaks = stop;
-   press with **new** text while it speaks = stop the old, speak the new.
-   `speak-clipboard --stop` stops unconditionally. Text identity is a SHA-256
-   of the cleaned text kept in `~/.local/state/herdr/`. The text itself is
-   never logged and never passed on a command line; it reaches `say2` through
-   a pipe (say2's own documented stdin form), never on the command line, so it
-   never shows up in `ps` output either.
+3. applies the toggle rule: **any** press while it speaks = stop, whatever the
+   clipboard holds; the next press speaks the current selection (since
+   2026-09-28; before that, a press with new text replaced the speech).
+   `speak-clipboard --stop` stops unconditionally. The text itself is never
+   logged. It DOES reach `say2` as a command-line argument, so it is visible
+   in `ps` output while speaking: a deliberate speed-over-privacy trade made
+   2026-09-10 (the stdin form measured seconds slower). The script header's
+   v4.1 note has the measurements.
 
 Why one process per press and not a warm daemon: the daemon that briefly
 existed (2026-09-01 to 2026-09-03) saved about half a second per press, and in
