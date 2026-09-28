@@ -669,8 +669,9 @@ function nocd_check(    k, j, n, v, cnt, first, fj, dir, why, subcd) {
 # rules approved by Gavin 2026-09-23 from the conv-hooks survey:
 #   A. the six aliases that launch a NESTED Claude with --dangerously-skip-permissions
 #      (ci cr ct cpr cd_ cskip; cb launches one WITHOUT it and is left alone)
-#   B. gpf!, the oh-my-zsh alias for `git push --force` (gpf and gpsupf are
-#      --force-with-lease and are left alone)
+#   B. gpf!, the oh-my-zsh alias for `git push --force`. gpf and gpsupf are
+#      --force-with-lease and are not denied here: rule D below reads them since
+#      2026-09-29 (D-20260929-A08), deny on main, allow on a feature branch.
 #   C. brew install / instal / reinstall / upgrade: ask Gavin. The .zshrc brew()
 #      guard is [[ -o interactive ]] only, measured inert in agent Bash.
 # An alias expands only at command position: after assignments, time, nocorrect, !,
@@ -765,9 +766,10 @@ function guard_check(    k, j, n, a, w, b, s, i, t) {
 # Every earlier cd target is checked as well as the cwd, since a ( ) subshell may
 # have undone it: a false positive there costs naming the branch.
 #
-# Also read: the zsh aliases gp gpd gpu gpv gpsup ggpush (expanded here), commands
-# inside $(...), and a crude match on eval, backticks and sh/bash/zsh -c strings.
-# gpf and gpsupf (lease aliases) stay allowed by the 2026-09-23 ruling above.
+# Also read: the zsh aliases gp gpd gpu gpv gpsup ggpush gpf gpsupf (expanded here),
+# commands inside $(...), and a crude match on eval, backticks and sh/bash/zsh -c
+# strings. gpf and gpsupf are lease forces: since D-20260929-A08 they deny on main
+# like the long form and pass on a feature branch (until then, allowed everywhere).
 # NOT read: a flag held in a variable (git push $F), heredoc bodies fed to a shell,
 # scripts and other languages; a push that DELETES main (:main, --delete) is not a
 # force push and is out of this rule.
@@ -839,6 +841,8 @@ function fp_alias(w) {
     if (w == "gpv") return "push --verbose"
     if (w == "gpsup") return "push --set-upstream origin HEAD"
     if (w == "ggpush") return "push origin HEAD"
+    if (w == "gpf") return "push --force-with-lease --force-if-includes"
+    if (w == "gpsupf") return "push --set-upstream origin HEAD --force-with-lease --force-if-includes"
     return ""
 }
 
@@ -846,6 +850,8 @@ function fp_alias(w) {
 # anything that looks like a force: deny, and say why.
 function fp_crude(t) {
     gsub(/["'\\]/, "", t)
+    if (t ~ /(^|[^A-Za-z0-9_.-])(gpf|gpsupf)([ \t\n;&|)]|$)/)
+        return "the lease alias gpf or gpsupf (a force push) sits where validate-bash cannot parse it"
     if (t !~ /(^|[^A-Za-z0-9_.-])(push|gp|gpu|gpv|gpsup|ggpush)([ \t\n;&|)]|$)/) return ""
     if (t ~ /(^|[ \t\n])(-[A-Za-z0-9]*f[A-Za-z0-9]*|--f[a-z-]*|--m[a-z]*)([ \t\n=;&|)]|$)/ || t ~ /(^|[ \t\n])\+[^ \t\n]/)
         return "a git push that may force (a force flag, --mirror or a +refspec) sits where validate-bash cannot parse it"
