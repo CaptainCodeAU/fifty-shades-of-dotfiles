@@ -9,10 +9,16 @@
 #
 # Denies:
 #   rm -rf / (or ~, $HOME)            root or home deletion
-#   git push --force|-f ... main|master
+#   git push that FORCES main or master  in any spelling git accepts: -f in a
+#                                     cluster, +refspec, --mirror, lease, the flag
+#                                     after the branch, or no refspec while main is
+#                                     checked out in the payload's cwd (fails closed
+#                                     when that cannot be read). Parsed by the
+#                                     scanner, rule D; W-20260929-A31.
 #   git reset --hard                  with no ref
 #   git clean -fd / -f -d             untracked files and directories
-# and, through the shared scanner (conv-shscan.awk, mode guard), three rules Gavin
+# and, through the shared scanner (conv-shscan.awk, mode guard), the force-push
+# rule above and three rules Gavin
 # approved 2026-09-23 from the conv-hooks survey of live aliases:
 #   ci cr ct cpr cd_ cskip            .zshrc aliases launching a NESTED Claude with
 #                                     --dangerously-skip-permissions (cb does not
@@ -44,6 +50,9 @@ LOG_FILE="$STATE_DIR/hooks-security.log"
 HOOKS_DIR="$(builtin cd "$(dirname "$0")" && pwd)"
 SHSCAN="${CONV_SHSCAN:-$HOOKS_DIR/conv-shscan.awk}"
 GUARD_FALLBACK_ERE='(^|[;&|({`][[:space:]]*)(ci|cr|ct|cpr|cd_|cskip|gpf!)([[:space:];&|)]|$)|(^|[;&|({`][[:space:]]*)([^[:space:]]*/)?brew[[:space:]]+(install|instal|reinstall|upgrade)'
+# Scanner missing: a push word plus anything that looks like a force denies, crudely.
+PUSH_FALLBACK_ERE='(^|[^A-Za-z0-9_.-])(push|gp|gpu|gpv|gpsup|ggpush)([[:space:];&|)]|$)'
+FORCE_FALLBACK_ERE='(^|[[:space:]])(-[A-Za-z0-9]*f[A-Za-z0-9]*|--f[a-z-]*|--m[a-z]*|\+[^[:space:]]+)([[:space:]=;&|)]|$)'
 
 log_blocked() {
   mkdir -p "$STATE_DIR" 2>/dev/null
@@ -65,8 +74,9 @@ deny() {
 # Words, one per rule: rm (root/home rm), git push|reset|clean and the bare words
 # push|reset|clean (force push, reset --hard, git clean -fd, also after a quoted
 # span is spliced out), brew (install|instal|reinstall|upgrade, or a subcommand in
-# a variable), ci cr ct cpr cd_ cskip (nested Claude), gpf (gpf!).
-VB_RAW_ERE='rm[[:space:]]|git[[:space:]]+(push|reset|clean)|(^|[^A-Za-z0-9_.-])(push|reset|clean|brew|ci|cr|ct|cpr|cd_|cskip|gpf)([^A-Za-z0-9_-]|$)'
+# a variable), ci cr ct cpr cd_ cskip (nested Claude), gpf (gpf!), and the push
+# aliases gp gpu gpv gpsup ggpush (force push, 2026-09-29).
+VB_RAW_ERE='rm[[:space:]]|git[[:space:]]+(push|reset|clean)|(^|[^A-Za-z0-9_.-])(push|reset|clean|brew|ci|cr|ct|cpr|cd_|cskip|gpf|gp|gpu|gpv|gpsup|ggpush)([^A-Za-z0-9_-]|$)'
 
 raw_mentions_trigger() {
   local r="$1" q
@@ -107,16 +117,12 @@ _strip() {
 }
 
 # Prints the deny reason, or nothing when the command is allowed.
+# $1 the command, $2 the payload's cwd (the force-push rule reads the branch there).
 _classify() {
   local s
   s=$(_strip "$1")
   if echo "$s" | grep -qE 'rm\s+(-[a-zA-Z]*f[a-zA-Z]*\s+)?(/|~|\$HOME)\s*$'; then
     echo "Destructive rm command targeting root or home directory"; return
-  fi
-  if echo "$s" | grep -qE 'git\s+push\s+.*(--force|--force-with-lease).*\s+(main|master)' \
-     || echo "$s" | grep -qE 'git\s+push\s+.*\s+(main|master)\s+.*(--force|--force-with-lease)' \
-     || echo "$s" | grep -qE 'git\s+push\s+.*-[a-zA-Z]*f[a-zA-Z]*\s+.*(main|master)'; then
-    echo "Force push to main/master is not allowed"; return
   fi
   if echo "$s" | grep -qE 'git\s+reset\s+--hard\s*($|[;&|])'; then
     echo "git reset --hard without a ref: specify a commit"; return
@@ -155,7 +161,7 @@ _classify() {
       echo "git clean with -f and -d would remove untracked files and directories (add -n to dry-run it)"; return
     fi
   fi
-  _guard "$1"
+  _guard "$1" "${2:-}"
 }
 
 # The three scanner rules (nested-Claude aliases, gpf!, brew install). Prints the
@@ -163,11 +169,13 @@ _classify() {
 _guard() {
   local out rc=3 r
   if [ -r "$SHSCAN" ]; then
-    out=$(printf '%s' "$1" | CONV_MODE=guard LC_ALL=C awk -f "$SHSCAN" 2>/dev/null); rc=$?
+    out=$(printf '%s' "$1" | CONV_MODE=guard CONV_CWD="${2:-}" LC_ALL=C awk -f "$SHSCAN" 2>/dev/null); rc=$?
   fi
   if [ "$rc" -ne 0 ] || [ -z "$out" ]; then
-    if printf '%s' "$1" | command grep -qE "$GUARD_FALLBACK_ERE"; then
-      echo "validate-bash: its scanner conv-shscan.awk is missing or failed (rc=$rc), so it cannot tell a nested-Claude alias, gpf! or brew install from prose, and this command mentions one. Restow the dotfiles (home/.claude/hooks) or fix the scanner."
+    if printf '%s' "$1" | command grep -qE "$GUARD_FALLBACK_ERE" \
+       || { printf '%s' "$1" | command grep -qE "$PUSH_FALLBACK_ERE" \
+            && printf '%s' "$1" | command grep -qE "$FORCE_FALLBACK_ERE"; }; then
+      echo "validate-bash: its scanner conv-shscan.awk is missing or failed (rc=$rc), so it cannot tell a nested-Claude alias, gpf!, brew install or a force push from prose, and this command mentions one. Restow the dotfiles (home/.claude/hooks) or fix the scanner."
     fi
     return
   fi
@@ -497,7 +505,8 @@ if [ -z "$COMMAND" ]; then
   exit 0   # a real, empty command: nothing to check, as before
 fi
 
-REASON=$(_classify "$COMMAND")
+CWD=$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)
+REASON=$(_classify "$COMMAND" "$CWD")
 if [ -n "$REASON" ]; then
   log_blocked "$REASON" "$COMMAND"
   deny "$REASON"

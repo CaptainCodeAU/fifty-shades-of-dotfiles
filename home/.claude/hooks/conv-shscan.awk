@@ -737,6 +737,271 @@ function guard_check(    k, j, n, a, w, b, s, i, t) {
         s = g_crude(BT[i])
         if (s != "") { verdict("guard", "DENY", s " (inside backticks)"); return }
     }
+    s = fp_check()
+    if (s != "") { verdict("guard", "DENY", s); return }
+}
+
+# ------------------------------------------------------------------ guard: force push
+# Rule D of guard mode, W-20260929-A31 (red-team H1, 2026-09-28). A force push that
+# can update main or master is denied. Until 2026-09-29 validate-bash matched three
+# regexes that needed main or master typed as its own word beside the flag, so bare
+# `git push -f` on main, +main, HEAD:main --force, main -f and --mirror all passed,
+# and --no-verify was denied only because -[a-z]*f matched the f in "verify".
+#
+# Parsed like git parses it (git 2.55, measured): force is --force, -f in any short
+# cluster (-uf), --force-with-lease[=...], --force-if-includes (alone it does not
+# force; counted anyway, the conservative side), any unambiguous prefix of those
+# (--force-w works, --forc is an error), last of --force/--no-force wins, and a +
+# on one refspec forces that refspec only. --mirror always counts. -o takes a value
+# (-of is -o f). A refspec's destination is after the colon, or the source when
+# there is none; refs/heads/ and heads/ are dropped before comparing, so main-feature
+# and fix-main are not main.
+#
+# A force push whose destination is the CURRENT branch (no refspec, or HEAD, or @)
+# asks git in the payload's cwd, after any -C and any earlier cd in the same call.
+# It FAILS CLOSED: no cwd, not a repo, git failing, a detached HEAD, remote.*.push
+# configured, or -c/--git-dir/GIT_* changing what git reads all deny by name.
+# push.default=matching denies; so does an upstream of main (push.default=upstream).
+# Every earlier cd target is checked as well as the cwd, since a ( ) subshell may
+# have undone it: a false positive there costs naming the branch.
+#
+# Also read: the zsh aliases gp gpd gpu gpv gpsup ggpush (expanded here), commands
+# inside $(...), and a crude match on eval, backticks and sh/bash/zsh -c strings.
+# gpf and gpsupf (lease aliases) stay allowed by the 2026-09-23 ruling above.
+# NOT read: a flag held in a variable (git push $F), heredoc bodies fed to a shell,
+# scripts and other languages; a push that DELETES main (:main, --delete) is not a
+# force push and is out of this rule.
+
+function fp_msg(why) { return "Force push to main/master is not allowed: " why ". A force push to main is Gavin's call: ask him" }
+function fp_unk(why) { return "validate-bash cannot tell which branch this force push updates (" why "), so it is denied. Name the branch on the command line (git push --force origin <branch>), or ask Gavin" }
+function fp_is_main(b) { sub(/^refs\/heads\//, "", b); sub(/^heads\//, "", b); return b == "main" || b == "master" }
+
+# A single-quoted sh word, built without gsub (a backslash in its replacement
+# string differs between awks).
+function fp_shq(s,    out, i) {
+    out = ""
+    while ((i = index(s, "'")) > 0) { out = out substr(s, 1, i - 1) "'\\''"; s = substr(s, i + 1) }
+    return "'" out s "'"
+}
+
+# Path p resolved against directory b; "" when it cannot be known.
+function fp_join(b, p) {
+    if (p == "") return ""
+    if (p == "~") return ENVIRON["HOME"]
+    if (substr(p, 1, 2) == "~/") return ENVIRON["HOME"] substr(p, 2)
+    if (substr(p, 1, 1) == "~") return ""
+    if (substr(p, 1, 1) == "/") return p
+    if (b == "") return ""
+    return b "/" p
+}
+
+# What a push to "the current branch" means in directory d. Returns "ok",
+# "main:<why>" or "unk:<why>". One sh call per directory, cached.
+function fp_head(d,    cmd, line, norepo, ended, rc, head, pd, rp, up, r) {
+    if (d == "") return "unk:the working directory is not known"
+    if (d in FPH) return FPH[d]
+    cmd = "d=" fp_shq(d) "; git -C \"$d\" rev-parse --git-dir >/dev/null 2>&1 || { echo NOREPO; exit 0; }; " \
+          "b=$(git -C \"$d\" symbolic-ref -q --short HEAD 2>/dev/null); echo \"RC=$?\"; echo \"HEAD=$b\"; " \
+          "echo \"PD=$(git -C \"$d\" config --get push.default 2>/dev/null)\"; " \
+          "echo \"RP=$(git -C \"$d\" config --get-regexp '^remote[.].*[.]push$' 2>/dev/null | head -n 1)\"; " \
+          "[ -n \"$b\" ] && echo \"UP=$(git -C \"$d\" for-each-ref --format='%(upstream:remoteref)' \"refs/heads/$b\" 2>/dev/null)\"; " \
+          "echo END"
+    norepo = 0; ended = 0; rc = ""; head = ""; pd = ""; rp = ""; up = ""
+    while ((cmd | getline line) > 0) {
+        if (line == "NOREPO") norepo = 1
+        else if (line == "END") ended = 1
+        else if (line ~ /^RC=/) rc = substr(line, 4)
+        else if (line ~ /^HEAD=/) head = substr(line, 6)
+        else if (line ~ /^PD=/) pd = substr(line, 4)
+        else if (line ~ /^RP=/) rp = substr(line, 4)
+        else if (line ~ /^UP=/) up = substr(line, 4)
+    }
+    close(cmd)
+    if (norepo) r = "unk:" d " is not a git repository, or git could not read it"
+    else if (!ended) r = "unk:git failed while reading " d
+    else if (rc == "1") r = "unk:HEAD is detached in " d
+    else if (rc != "0" || head == "") r = "unk:git could not name the branch checked out in " d
+    else if (tolower(pd) == "matching") r = "main:push.default=matching in " d " pushes every matching branch, main included"
+    else if (rp != "") r = "unk:" d " has remote.*.push refspecs configured"
+    else if (fp_is_main(head)) r = "main:" d " has " head " checked out and the push names no other branch"
+    else if (fp_is_main(up)) r = "main:" head " in " d " tracks " up ", so a push with no refspec can land on it"
+    else r = "ok"
+    FPH[d] = r
+    return r
+}
+
+# The words typed after a zsh push alias stand in for its expansion.
+# $(git_current_branch) in gpsup and ggpush is the current branch: HEAD.
+function fp_alias(w) {
+    if (w == "gp") return "push"
+    if (w == "gpd") return "push --dry-run"
+    if (w == "gpu") return "push upstream"
+    if (w == "gpv") return "push --verbose"
+    if (w == "gpsup") return "push --set-upstream origin HEAD"
+    if (w == "ggpush") return "push origin HEAD"
+    return ""
+}
+
+# Crude, for text the scanner does not parse as commands. A push word plus
+# anything that looks like a force: deny, and say why.
+function fp_crude(t) {
+    gsub(/["'\\]/, "", t)
+    if (t !~ /(^|[^A-Za-z0-9_.-])(push|gp|gpu|gpv|gpsup|ggpush)([ \t\n;&|)]|$)/) return ""
+    if (t ~ /(^|[ \t\n])(-[A-Za-z0-9]*f[A-Za-z0-9]*|--f[a-z-]*|--m[a-z]*)([ \t\n=;&|)]|$)/ || t ~ /(^|[ \t\n])\+[^ \t\n]/)
+        return "a git push that may force (a force flag, --mirror or a +refspec) sits where validate-bash cannot parse it"
+    return ""
+}
+
+# Push arguments TV[1..tn] (TX[i] = 1: an expansion, value unknown). Needs the
+# candidate directories FC[1..FCN], the -C paths GC[1..GCN] and FPCFG.
+function fp_push(tn,    i, v, name, eq, c, ch, fF, fL, fI, mirror, all, endopt, repoopt, npos, nref, r, src, dst, cur, d, m, h, s) {
+    fF = 0; fL = 0; fI = 0; mirror = 0; all = 0; endopt = 0; repoopt = 0; npos = 0; nref = 0
+    for (i = 1; i <= tn; i++) {
+        v = TV[i]
+        if (TX[i]) { npos++; if (npos > 1 || repoopt) { nref++; RF[nref] = ""; RX[nref] = 1 }; continue }
+        if (!endopt && v == "--") { endopt = 1; continue }
+        if (!endopt && substr(v, 1, 2) == "--") {
+            name = substr(v, 3); eq = index(name, "=")
+            if (eq) name = substr(name, 1, eq - 1)
+            if (name == "no-force") fF = 0
+            else if (name == "no-force-with-lease") fL = 0
+            else if (name == "no-force-if-includes") fI = 0
+            else if (name != "" && index("force", name) == 1) fF = 1
+            else if (length(name) > 5 && index("force-with-lease", name) == 1) fL = 1
+            else if (length(name) > 5 && index("force-if-includes", name) == 1) fI = 1
+            else if (name != "" && index("mirror", name) == 1) mirror = 1
+            else if (length(name) >= 2 && (index("all", name) == 1 || index("branches", name) == 1)) all = 1
+            else if (!eq && length(name) >= 3 && (index("repo", name) == 1 || index("receive-pack", name) == 1 || index("exec", name) == 1 || index("push-option", name) == 1 || index("recurse-submodules", name) == 1)) {
+                if (index("repo", name) == 1) repoopt = 1
+                i++
+            }
+            else if (eq && length(name) >= 3 && index("repo", name) == 1) repoopt = 1
+            continue
+        }
+        if (!endopt && v ~ /^-./) {
+            for (c = 2; c <= length(v); c++) {
+                ch = substr(v, c, 1)
+                if (ch == "f") fF = 1
+                else if (ch == "o") { if (c == length(v)) i++; break }
+            }
+            continue
+        }
+        npos++
+        if (npos == 1 && !repoopt) continue            # the repository
+        nref++; RF[nref] = v; RX[nref] = 0
+    }
+    if (mirror) return fp_msg("--mirror force-pushes every ref, main included")
+    cur = 0
+    for (r = 1; r <= nref; r++) {
+        if (RX[r]) { if (fF || fL || fI) return fp_unk("a refspec is held in a variable or $(...)"); continue }
+        v = RF[r]
+        if (substr(v, 1, 1) == "+") v = substr(v, 2)
+        else if (!(fF || fL || fI)) continue
+        if (v == ":") return fp_msg("the refspec " RF[r] " force-pushes every matching branch, main included")
+        c = index(v, ":")
+        src = c ? substr(v, 1, c - 1) : v
+        dst = c ? substr(v, c + 1) : v
+        if (dst == "") continue
+        if (dst ~ /[*]/) return fp_msg("the glob refspec " RF[r] " can match main")
+        if (dst == "HEAD" || dst == "@") cur = 1
+        else if (fp_is_main(dst)) return fp_msg("the refspec " RF[r] " updates " dst)
+    }
+    if ((fF || fL || fI) && nref == 0) {
+        if (all) return fp_msg("--all force-pushes every branch, main included")
+        cur = 1
+    }
+    if (!cur) return ""
+    if (FPCFG != "") return fp_unk(FPCFG)
+    for (h = 1; h <= FCN; h++) {
+        d = FC[h]
+        for (m = 1; m <= GCN; m++) d = (GC[m] == "" ? "" : fp_join(d, GC[m]))
+        s = fp_head(d)
+        if (s ~ /^main:/) return fp_msg(substr(s, 6))
+        if (s ~ /^unk:/) return fp_unk(substr(s, 5))
+    }
+    return ""
+}
+
+function fp_check(    k, j, n, a, w, v, gi, tn, b, s, t, ex, i) {
+    FCN = 1; FC[1] = ENVIRON["CONV_CWD"]
+    for (k = 1; k <= NC; k++) {
+        j = eff(k); n = CNW[k]
+        if (j > n || EM ~ /probe/) continue
+        w = unq(WR[k, j])
+        # cd, pushd, popd: each new directory is one more candidate (see header).
+        if (base(w) == "cd" || w == "pushd" || w == "popd") {
+            for (a = j + 1; a <= n && WR[k, a] ~ /^-[A-Za-z]/; a++) ;
+            if (w == "popd") FC[++FCN] = ""
+            else if (a > n) FC[++FCN] = ENVIRON["HOME"]
+            else { v = unq(WR[k, a]); FC[FCN + 1] = (v == "" || v == "-" ? "" : fp_join(FC[FCN], v)); FCN++ }
+            continue
+        }
+        if (w == "eval" && !WQ[k, j]) {
+            t = ""
+            for (a = j + 1; a <= n; a++) t = t " " WR[k, a]
+            s = fp_crude(t)
+            if (s != "") return fp_msg(s " (inside eval)")
+        }
+        b = base(w)
+        if (b == "sh" || b == "bash" || b == "zsh" || b == "dash" || b == "ksh") {
+            for (a = j + 1; a <= n; a++) if (WR[k, a] ~ /^-[A-Za-z]*c[A-Za-z]*$/) {
+                s = fp_crude(WR[k, a + 1])
+                if (s != "") return fp_msg(s " (inside " b " -c)")
+            }
+        }
+        # Find git: the command word, or any word after a hard modifier (sudo -u x git).
+        gi = 0; tn = 0; FPCFG = ""
+        if (base(w) == "git") gi = j
+        else if (!WQ[k, j] && WR[k, j] !~ /^\\/ && fp_alias(WR[k, j]) != "") {
+            tn = split(fp_alias(WR[k, j]), ex, " ")
+            if (ex[1] == "push") {
+                for (i = 2; i <= tn; i++) { TV[i - 1] = ex[i]; TX[i - 1] = 0 }
+                tn--
+                for (a = j + 1; a <= n; a++) { tn++; TV[tn] = unq(WR[k, a]); TX[tn] = (TV[tn] == "" && WR[k, a] != "") }
+                GCN = 0
+                for (a = 1; a < j; a++) if (WR[k, a] ~ /^GIT_[A-Z_]*=/) FPCFG = "a GIT_ variable is set on the command"
+                s = fp_push(tn)
+                if (s != "") return s
+                continue
+            }
+        }
+        else if (EM ~ /hard:|envopt/) { for (a = j + 1; a <= n; a++) if (base(unq(WR[k, a])) == "git") { gi = a; break } }
+        if (!gi) continue
+        for (a = 1; a < gi; a++) if (WR[k, a] ~ /^GIT_[A-Z_]*=/) FPCFG = "a GIT_ variable is set on the command"
+        # git's own options before the subcommand.
+        GCN = 0; a = gi + 1
+        while (a <= n) {
+            v = unq(WR[k, a])
+            if (v == "-C") { GC[++GCN] = unq(WR[k, a + 1]); a += 2; continue }
+            if (v == "-c") {
+                if (tolower(unq(WR[k, a + 1])) ~ /^(push|remote|branch|include|includeif)\./ || unq(WR[k, a + 1]) == "")
+                    FPCFG = "git -c changes push, remote or branch config"
+                a += 2; continue
+            }
+            if (v ~ /^--(git-dir|work-tree|namespace|config-env)(=|$)/) {
+                FPCFG = "git " v " changes which repository or config git reads"
+                if (v !~ /=/) a++
+                a++; continue
+            }
+            if (v == "--super-prefix" || v == "--attr-source") { a += 2; continue }
+            if (v ~ /^-/) { a++; continue }
+            break
+        }
+        if (a > n || unq(WR[k, a]) != "push") continue
+        tn = 0
+        for (a = a + 1; a <= n; a++) { tn++; TV[tn] = unq(WR[k, a]); TX[tn] = (TV[tn] == "" && WR[k, a] != "") }
+        s = fp_push(tn)
+        if (s != "") return s
+    }
+    for (i = 1; i <= BTN; i++) {
+        s = fp_crude(BT[i])
+        if (s != "") return fp_msg(s " (inside backticks)")
+    }
+    if (UNSURE != "") {
+        s = fp_crude(S)
+        if (s != "") return fp_msg(s " (the command has a " UNSURE ")")
+    }
+    return ""
 }
 
 # ------------------------------------------------------------------ builtin
