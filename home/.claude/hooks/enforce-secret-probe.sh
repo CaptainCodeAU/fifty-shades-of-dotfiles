@@ -562,6 +562,28 @@ if [ "${1:-}" = "--selftest" ]; then
   _must 0 'E62 gh auth, other verb'        'gh auth switch'
   _must 0 'E63 env | cut -d "=" -f 1'      'env | cut -d "=" -f 1'
 
+  # D-20260929-A07 (Gavin, option C): a printer captured into an assignment or an env
+  # prefix passes; the captured NAME printed later in the same command is denied.
+  echo "=== CAPTURE arms (D-20260929-A07): into a variable passes, printed later denied ==="
+  _must 0 'C01 recipe: GH_TOKEN=$(security -w) ci-watch' 'GH_TOKEN="$(security find-generic-password -a "$USER" -s github-api-readonly -w)" ci-watch'
+  _must 0 'C02 recipe: T=$(security -w 2>/dev/null)'     'T=$(security find-generic-password -a "$USER" -s github-api-readonly -w 2>/dev/null)'
+  _must 0 'C03 recipe: credential fill, captured, trace to a file' \
+    $'printf \'protocol=https\\nhost=github.com\\nusername=x-access-token\\n\\n\' > "$TMPDIR/cred.req"\npw=$(GIT_TERMINAL_PROMPT=0 GIT_TRACE="$TMPDIR/cred.trace.$$" git credential fill < "$TMPDIR/cred.req" 2>/dev/null); unset pw\ngrep run_command "$TMPDIR/cred.trace.$$"'
+  _must 0 'C04 export T=$(...), then its length'         'export T="$(gh auth token)"; echo "len=${#T}"'
+  _must 0 'C05 captured, then fingerprinted'             'T=$(gh auth token); printf %s "$T" | shasum -a 256 | cut -c1-8'
+  _must 0 'C06 captured, then passed on'                 'T=$(gh auth token); GH_TOKEN="$T" gh api user --jq .login'
+  _must 1 'C07 E52 again: captured, then echoed'         'X="$(gh auth token)"; echo "$X"'
+  _must 1 'C08 captured, then printf'                    'T=$(security find-generic-password -s x -w); printf "%s\n" "$T"'
+  _must 1 'C09 captured, then ${T:-none}'                'T=$(gh auth token); echo ${T:-none}'
+  _must 1 'C10 captured, then printenv T'                'export T=$(printenv GH_TOKEN); printenv T'
+  _must 1 'C11 env prefix, then sh -c echoes it'         "T=\"\$(gh auth token)\" sh -c 'echo \$T'"
+  _must 1 'C12 echo "$(printer)"'                        'echo "$(gh auth token)"'
+  _must 1 'C13 printer as an argument'                   'curl -H "Authorization: token $(gh auth token)" https://api.github.com/user'
+  _must 1 'C14 capture of an echo of a printer'          'X=$(echo "$(gh auth token)")'
+  _must 1 'C15 <(printer) read by diff'                  'diff <(printenv GH_TOKEN) x'
+  _must 1 'C16 recipe line 100 still: gh auth status'    $'T=$(security find-generic-password -a "$USER" -s github-api-readonly -w 2>/dev/null)\nGH_TOKEN="$T" gh auth status'
+  _must 1 'C17 mixed: an argument $(...) beside it'      'GH_TOKEN="$(security find-generic-password -s x -w)" cmd "$(date)"'
+
   # The arms above test _classify in THIS file. These run the whole hook, payload
   # on stdin, so SECRET_PROBE_UNDER_TEST=<path> runs them on another copy.
   echo "=== HOOK arms: the payload read, or not (D-20260925-A03) ==="
@@ -592,6 +614,7 @@ if [ "${1:-}" = "--selftest" ]; then
       unreadable) [[ $got == "deny enforce-secret-probe: cannot read the tool payload"* ]] && ok=1 ;;
       shout)      [[ $got == "null null 🔴 THE SECRET-PROBE GUARD IS BROKEN"* ]] && ok=1 ;;
       halfbroken) [[ $got == "null null 🔴 THE SECRET-PROBE GUARD IS HALF BROKEN"* ]] && ok=1 ;;
+      rulefiles)  [[ $got == "deny 🔴 BLOCKED"*"pj: ~/.claude/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md"*"engage: ~/CODE/CaptainCodeAU/CaptainCodeAU-isolinear/rules/always.md"* ]] && ok=1 ;;
       unreadable_lexer) [[ $got == "deny 🔴 BLOCKED"*"the shell lexer could not be used"* ]] && ok=1 ;;
       quiet)      [ -z "$out" ] && ok=1 ;;
     esac
@@ -618,6 +641,7 @@ if [ "${1:-}" = "--selftest" ]; then
   _hk blocked    'H4 through the hook: printenv a credential'                   "$(_pl 'printenv GH_TOKEN')"
   _hk blocked    'H4 through the hook: bash -c body'                            "$(_pl "bash -c 'echo \$GH_TOKEN'")"
   _hk quiet      'H4 through the hook: a safe form stays quiet'                 "$(_pl 'env | cut -d= -f1')"
+  _hk rulefiles  'the deny names BOTH rule files (pj and engage)'               "$(_pl 'printenv GH_TOKEN')"
   # The lexer missing: the crude match denies by name, a harmless command SHOUTS.
   _lk() { SECRET_PROBE_LEXER_FROM=/nonexistent/enforce-no-permanent-delete.sh _hk "$@"; }
   _lk unreadable_lexer 'lexer missing: printenv a credential still denied'      "$(_pl 'printenv GH_TOKEN')"
