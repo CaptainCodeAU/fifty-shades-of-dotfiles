@@ -87,6 +87,9 @@ OPM=$'\002'  # marks a redirection operator word
 #                       here-string (<<<)
 #   E <maxpid>          last line, always; its absence means the lexer failed
 # <pid> numbers a pipeline: it changes at ; & && || newline, not at |.
+# enforce-secret-probe.sh reads this block from this file at run time, by its two
+# marker lines (`read -r -d '' LEXER <<'AWK'` and `AWK`). Keep both lines as they
+# are, and after changing the lexer run enforce-secret-probe.sh --selftest as well.
 read -r -d '' LEXER <<'AWK'
 BEGIN { US = sprintf("%c", 31); RSC = sprintf("%c", 30); OPM = sprintf("%c", 2); Q = sprintf("%c", 39)
         HEX = "0123456789abcdef"; buf = ""; first = 1
