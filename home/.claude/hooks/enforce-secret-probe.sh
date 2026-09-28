@@ -145,6 +145,84 @@ if [ "${1:-}" = "--selftest" ]; then
   _must 0 'secret passed, not printed'    'GH_TOKEN="$T" gh api user --jq .login'
   _must 0 'prose in a heredoc'            $'git commit -F - <<EOF\necho "${GH_TOKEN:-no}" is the bug\nEOF'
 
+  # W-20260929-A34 (red team 2026-09-28, section 1 "Secrets", row H4). S-numbers are
+  # that report's rows; E-numbers are edge cases from the worker brief.
+  echo "=== POSITIVE arms, H4: printers that name no \${...} at all ==="
+  _must 1 'S07 printenv a credential'      'printenv GH_TOKEN'
+  _must 1 'S05 bare env'                   'env'
+  _must 1 'S06 bare printenv'              'printenv'
+  _must 1 'S09 set | grep'                 'set | grep TOKEN'
+  _must 1 'S16 gh auth token'              'gh auth token'
+  _must 1 'S17 gh auth status'             'gh auth status'
+  _must 1 'S15 security -w'                'security find-generic-password -s infisical-gap-cc-high-value-shared -w'
+  _must 1 'S12 cat ~/.claude/.env'         'cat ~/.claude/.env'
+  _must 1 'S20 git credential fill'        "printf 'protocol=https\\nhost=github.com\\n' | git credential fill"
+  _must 1 'S24 bash -c single-quoted'      "bash -c 'echo \$GH_TOKEN'"
+  _must 1 'S10 export -p | grep'           'export -p | grep KEY'
+  _must 1 'S11 typeset -p a credential'    'typeset -p GITHUB_TOKEN'
+  _must 1 'S13 cat the PAI .env'           'cat ~/.config/PAI/.env'
+  _must 1 'S21 python print(os.environ)'   'uv run python -c "import os; print(os.environ)"'
+  _must 1 'S22 node process.env'           'node -e "console.log(process.env)"'
+  _must 1 'S26 declare -x'                 'declare -x'
+  _must 1 'S27 ps with environments'       'ps eww -A'
+  _must 1 'S28 cat a private key'          'cat ~/.ssh/id_ed25519'
+  _must 1 'S29 infisical export'           'infisical export --env prod'
+  _must 1 'E02 env | grep, as before'      'env | grep TOKEN'
+  _must 1 'E08 security -g'                'security find-generic-password -s some-item -g'
+  _must 1 'E10 cat .env.local'             'cat .env.local'
+  _must 1 'E13 bare git credential fill'   'git credential fill'
+  _must 1 'E15 bash -c double-quoted'      'bash -c "echo \$GH_TOKEN"'
+  _must 1 'E16 sh -c printenv'             "sh -c 'printenv GH_TOKEN'"
+  _must 1 'E17 zsh -c gh auth token'       "zsh -c 'gh auth token'"
+  _must 1 'E18 eval single-quoted'         "eval 'echo \$GH_TOKEN'"
+  _must 1 'E19 eval double-quoted'         'eval "printenv GITHUB_TOKEN"'
+  _must 1 'E20 gh auth status -t'          'gh auth status --show-token'
+  _must 1 'E21 gh by path, auth status'    '"$(whence -p gh)" auth status'
+  _must 1 'E22 heredoc fed to bash'        $'bash <<\'EOF\'\nprintenv GH_TOKEN\nEOF'
+  _must 1 'E23 echo piped to sh'           "echo 'gh auth token' | sh"
+  _must 1 'E24 sudo printenv'              'sudo printenv GH_TOKEN'
+  _must 1 'E25 env -u with no command'     'env -u GH_TOKEN'
+  _must 1 'E32 length then the value'      'echo "${#GH_TOKEN} $GH_TOKEN"'
+  _must 1 'E46 grep a .env'                'grep KEY .env'
+  _must 1 'E48 git -C x credential fill'   'git -C /tmp credential fill'
+  _must 1 'E52 token captured then echoed' 'X="$(gh auth token)"; echo "$X"'
+  _must 1 'E55 zsh print'                  'print -r -- $GH_TOKEN'
+  _must 1 'E57 security -gs bundled'       'security find-internet-password -gs github.com'
+  _must 1 'E59 printenv of a $variable'    'printenv "$name"'
+  _must 1 'E60 xargs printenv'             'echo GH_TOKEN | xargs printenv'
+  echo "=== NEGATIVE arms, H4: the safe forms and look-alikes ==="
+  _must 0 'S35 env names only'             'env | cut -d= -f1'
+  _must 0 'S31 length only, bare'          'echo ${#GH_TOKEN}'
+  _must 0 'S41 token passed via $(...)'    'GH_TOKEN="$(github-agent-token token)" gh api user --jq .login'
+  _must 0 'S42 token prefix only'          'github-agent-token token | cut -c1-4'
+  _must 0 'E03 env sets and runs'          'env FOO=1 somecmd --flag'
+  _must 0 'E04 env -u then a command'      'env -u GH_TOKEN -u GITHUB_TOKEN gh api user'
+  _must 0 'E05 printenv HOME'              'printenv HOME'
+  _must 0 'E06 printenv PATH'              'printenv PATH'
+  _must 0 'E07 security without -w/-g'     'security find-generic-password -s some-item'
+  _must 0 'E12 cat .env.example'           'cat .env.example'
+  _must 0 'E14 git credential-cache exit'  'git credential-cache exit'
+  _must 0 'E26 set -euo pipefail'          'set -euo pipefail'
+  _must 0 'E27 export an assignment'       'export FOO=bar'
+  _must 0 'E31 declare -p HOME'            'declare -p HOME'
+  _must 0 'E33 echo $PATH (PAT inside)'    'echo "$PATH"'
+  _must 0 'E34 the advised fingerprint'    'printf %s "$GH_TOKEN" | shasum -a 256 | cut -c1-8'
+  _must 0 'E37 os.environ.get'             "uv run python3 -c \"import os; print(os.environ.get('HOME'))\""
+  _must 0 'E38 the words in a message'     'git commit -m "block printenv GH_TOKEN and gh auth token"'
+  _must 0 'E39 the words in a pattern'     "rg -n 'printenv|gh auth token' docs/"
+  _must 0 'E41 ps -ef (macOS -e is -A)'    'ps -ef'
+  _must 0 'E44 cat a public key'           'cat ~/.ssh/id_ed25519.pub'
+  _must 0 'E45 .env names only'            'cut -d= -f1 ~/.claude/.env'
+  _must 0 'E47 credential helper erase'    'git credential-osxkeychain erase'
+  _must 0 'E51 gh by path, App token'      'GH_TOKEN="$(github-agent-token token)" "$(whence -p gh)" api /installation/repositories'
+  _must 0 'E53 env -i ... sh -c lookup'    "env -i PATH=\"\$PATH\" sh -c 'command -v gh'"
+  _must 0 'E54 the words in a heredoc'     $'git commit -F - <<\'EOF\'\nprintenv GH_TOKEN is now blocked\nEOF'
+  _must 0 'E56 security, other flags'      'security find-generic-password -s x -a me -l label'
+  _must 0 'E58 printenv names only'        'printenv | cut -d= -f1'
+  _must 0 'E61 typeset -f functions'       'typeset -f'
+  _must 0 'E62 gh auth, other verb'        'gh auth switch'
+  _must 0 'E63 env | cut -d "=" -f 1'      'env | cut -d "=" -f 1'
+
   # The arms above test _classify in THIS file. These run the whole hook, payload
   # on stdin, so SECRET_PROBE_UNDER_TEST=<path> runs them on another copy.
   echo "=== HOOK arms: the payload read, or not (D-20260925-A03) ==="
