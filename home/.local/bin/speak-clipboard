@@ -86,8 +86,20 @@
 # problem is real, but proof say2's own direct-play mode already solves it, so
 # building a second chunker on top of it would just be solving it twice.
 # So: one `say2` process per press, playing straight to the default audio
-# device. STOP is killing that process (MEASURED: kill-to-exit was ~15 ms in
-# testing -- audio stops with the process).
+# device. STOP is killing that process -- see stop_speaker for why a plain
+# SIGTERM is not enough.
+#
+# v4.2 (2026-09-28): the stop press did nothing once speech was audible.
+# say2 (at 7b8eeff) catches SIGTERM and turns it into "cancel synthesis"
+# (Sources/say2/main.swift), but by the time audio plays the whole utterance
+# is already rendered to a temp .wav, and its playback loop
+# (Application.swift, play()) never checks for cancel. So SIGTERM during
+# speech was silently ignored and the voice ran to the end. The old note here
+# ("kill-to-exit ~15 ms") was measured before say2 took this shape.
+# stop_speaker now sends SIGTERM, waits briefly, then SIGKILL. Cost of the
+# SIGKILL: say2's temp .wav in its $TMPDIR is left behind (macOS clears
+# $TMPDIR itself). The real fix belongs in say2's play() loop; once that
+# lands the SIGKILL simply never fires.
 #
 # v4.1 (2026-09-10, same day): two corrections after Gavin reported the real
 # hotkey taking 2-3 s to start speaking, which the numbers above did not
@@ -311,11 +323,21 @@ speaker_alive() {
     _speaker="$p"
 }
 
-# Returns 0 if something was actually stopped.
+# Returns 0 if something was actually stopped. SIGTERM first, so say2 can
+# cancel a render in progress and clean up; then SIGKILL after ~0.2 s,
+# because say2 ignores SIGTERM once playback has started (v4.2 note up top).
+# The pid is re-checked before the SIGKILL so a recycled pid is never hit.
 stop_speaker() {
-    local rc=1
+    local rc=1 i
     if speaker_alive; then
         kill "$_speaker" 2>/dev/null && rc=0
+        for i in 1 2 3 4 5 6 7 8 9 10; do
+            kill -0 "$_speaker" 2>/dev/null || break
+            sleep 0.02
+        done
+        if speaker_alive; then
+            kill -KILL "$_speaker" 2>/dev/null && rc=0
+        fi
     fi
     command rm -f "$_pid_file" "$_hash_file" 2>/dev/null
     return $rc

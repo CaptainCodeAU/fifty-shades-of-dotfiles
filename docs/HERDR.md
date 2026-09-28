@@ -884,6 +884,13 @@ also built a hand-rolled Swift chunker (`speak-render.swift`) to fake the same
 effect on top of the slower engine of the time; it was deleted once say2's own
 streaming was measured to make it redundant. With a per-press process, killing
 it is the entire stop mechanism and nothing runs between presses.
+
+That kill has to be a SIGKILL once speech is audible (found 2026-09-28).
+say2 catches SIGTERM as "cancel the render", but by the time audio plays the
+render is finished and its playback loop never checks for cancel, so a plain
+`kill` was ignored and the voice ran to the end. `speak-clipboard` now sends
+SIGTERM, waits about 0.2 s, then SIGKILL. The proper fix is in say2's own
+playback loop.
 `~/.local/state/herdr/speak-clipboard.log` keeps one metadata line per press
 (mode, outcome, character count): a new line means the key reached herdr; no
 line means the key or the spawn is at fault.
