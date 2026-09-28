@@ -139,28 +139,34 @@ inhd==0{
   # allowed, and so is `${V:+literal}` on its own, because neither can expand to the
   # value. So is a stage piped straight into a hash or a byte count: that is the
   # fingerprint this hook's own advice recommends, and it was denied until 2026-09-29.
-  if [ -z "$reason" ]; then
-    local echoes
-    local hashers='(shasum|sha1sum|sha256sum|sha512sum|md5|md5sum|b2sum|openssl[[:space:]]+dgst|wc[[:space:]]+-[cm])'
-    echoes="$(printf '%s' "$bare" | grep -oE '(^|[|;&(]|&&)[[:space:]]*(echo|printf|print)[^|;&]*(\|[[:space:]]*'"$hashers"')?' 2>/dev/null | grep -vE '\|[[:space:]]*'"$hashers"'$' || true)"
-    if [ -n "$echoes" ]; then
-      local stripped
-      stripped="$(printf '%s' "$echoes" | sed -E "s/\\\$\{#$SECRETY\}//g; s/\\\$\{$SECRETY:\+[^\}]*\}//g")"
-      if [[ "$stripped" =~ \$\{?$SECRETY$SECRET_END ]]; then
-        reason="RULE 3: a credential variable expanded inside echo/printf/print"
-      fi
-    fi
+  if [ -z "$reason" ] && _echo_leak "$bare" "$SECRETY"; then
+    reason="RULE 3: a credential variable expanded inside echo/printf/print"
   fi
 
   # RULES 4+ -- commands that print a secret without naming a ${...}: read by the lexer.
+  # CAPT holds the names a printer was captured into (D-20260929-A07); a nested
+  # sh -c / eval body inherits it, because it runs in a subshell of this one.
   if [ -z "$reason" ]; then
-    R=""
+    R=""; BARE="$bare"
+    [ "$depth" -eq 0 ] && CAPT=" "
     _lexed "$cmd" "$depth"
     reason="$R"
   fi
 
   printf '%s' "$reason"
 }
+
+# True when an echo/printf/print stage in $1 expands a variable whose name matches the
+# pattern $2 (SECRETY, or the captured names). Shared by RULE 3 and RULE 13.
+_echo_leak() {
+  local echoes stripped
+  local hashers='(shasum|sha1sum|sha256sum|sha512sum|md5|md5sum|b2sum|openssl[[:space:]]+dgst|wc[[:space:]]+-[cm])'
+  echoes="$(printf '%s' "$1" | grep -oE '(^|[|;&(]|&&)[[:space:]]*(echo|printf|print)[^|;&]*(\|[[:space:]]*'"$hashers"')?' 2>/dev/null | grep -vE '\|[[:space:]]*'"$hashers"'$' || true)"
+  [ -n "$echoes" ] || return 1
+  stripped="$(printf '%s' "$echoes" | sed -E "s/\\\$\{#$2\}//g; s/\\\$\{$2:\+[^\}]*\}//g")"
+  [[ "$stripped" =~ \$\{?$2$SECRET_END ]]
+}
+CAPT=" "; BARE=""
 
 # ---------------------------------------------------------------- lexer-based rules
 # Each sets R to the reason, which names the SAFE form, and returns.
@@ -186,31 +192,73 @@ _lexed() { # $1 = text, $2 = depth. Sets R.
     || { _crude "$text" "it exited non-zero"; return 0; }
   [[ $recs == *"E$US"* ]] || { _crude "$text" "it gave no end record"; return 0; }
   CUR_TEXT="$text"; STDIN_SH=" "
-  local -a hp=() hb=() words=() a=()
+  local -a kd=() pd=() rs=() hp=() hb=() words=() a=()
+  local i n
   while IFS= read -r line; do
     case "$line" in
-      C"$US"*)
-        rest="${line#C"$US"}"; CUR_PID="${rest%%"$US"*}"; rest="${rest#*"$US"}"
-        IFS="$US" read -r -a words <<< "$rest"
-        a=(); k=0
-        while [ "$k" -lt "${#words[@]}" ]; do
-          if [[ ${words[$k]} == "$OPM"* ]]; then k=$((k + 2)); continue; fi   # an operator and its target
-          a[${#a[@]}]="${words[$k]//$RSC/$'\n'}"; k=$((k + 1))
-        done
-        [ "${#a[@]}" -gt 0 ] && _argv "$depth" "${a[@]}" ;;
-      H"$US"*)
-        rest="${line#H"$US"}"; pid="${rest%%"$US"*}"
-        hp[${#hp[@]}]="$pid"; hb[${#hb[@]}]="${rest#*"$US"}" ;;
+      C"$US"*|H"$US"*)
+        kd[${#kd[@]}]="${line%%"$US"*}"; rest="${line#?"$US"}"
+        pd[${#pd[@]}]="${rest%%"$US"*}"; rs[${#rs[@]}]="${rest#*"$US"}" ;;
     esac
-    [ -n "$R" ] && return 0
   done <<< "$recs"
+  n=${#kd[@]}; i=0
+  while [ "$i" -lt "$n" ]; do
+    if [ "${kd[$i]}" = H ]; then
+      hp[${#hp[@]}]="${pd[$i]}"; hb[${#hb[@]}]="${rs[$i]}"; i=$((i + 1)); continue
+    fi
+    CUR_PID="${pd[$i]}"
+    IFS="$US" read -r -a words <<< "${rs[$i]}"
+    a=(); k=0
+    while [ "$k" -lt "${#words[@]}" ]; do
+      if [[ ${words[$k]} == "$OPM"* ]]; then k=$((k + 2)); continue; fi   # an operator and its target
+      a[${#a[@]}]="${words[$k]//$RSC/$'\n'}"; k=$((k + 1))
+    done
+    if [ "${#a[@]}" -gt 0 ]; then
+      _argv "$depth" "${a[@]}"
+      # D-20260929-A07: a printer whose output is captured into a variable passes,
+      # and that variable's name is remembered for RULE 13.
+      [ -n "$R" ] && _captured "$i" && R=""
+      [ -n "$R" ] && return 0
+    fi
+    i=$((i + 1))
+  done
   # stdin data (a heredoc, a here-string, echo piped in) read by a shell as commands
   k=0
   while [ -z "$R" ] && [ "$k" -lt "${#hp[@]}" ]; do
     case "$STDIN_SH" in *" ${hp[$k]} "*) _sub "$depth" "${hb[$k]//$RSC/$'\n'}" "a shell reading stdin" ;; esac
     k=$((k + 1))
   done
+  # RULE 13 -- a captured name printed later in this text (or in an sh -c inside it)
+  if [ -z "$R" ] && [ "$CAPT" != " " ]; then
+    local names="${CAPT# }"; names="${names% }"
+    if _echo_leak "$BARE" "(${names// /|})"; then
+      R="RULE 13: a variable that captured a secret from \$(...) (${names// /, }) is printed later in the same command. SAFE: print a fact about it, echo \"len=\${#NAME}\", or printf %s \"\$NAME\" | shasum -a 256 | cut -c1-8"
+    fi
+  fi
   return 0
+}
+
+# Record $1 (an index into kd/pd/rs of the caller) is a $(...) body when a LATER record
+# has a LOWER pipeline number: the lexer numbers a body after its parent but emits it
+# first (measured 2026-09-29). The first such record is the parent. True, with the names
+# added to CAPT, when the parent is a simple command whose every $(...) word is an
+# assignment (VAR=$(...), an env prefix, export VAR=$(...)). An echo parent (an H
+# record), an argument, or a mix of the two is not a capture: which body fills which
+# $(...) cannot be told apart, so a mix is refused rather than guessed.
+_captured() {
+  local i="$1" j=$(($1 + 1)) w nm got=""
+  local -a pw=()
+  while [ "$j" -lt "$n" ] && [ "${pd[$j]}" -ge "${pd[$i]}" ]; do j=$((j + 1)); done
+  [ "$j" -lt "$n" ] && [ "${kd[$j]}" = C ] || return 1
+  IFS="$US" read -r -a pw <<< "${rs[$j]}"
+  for w in "${pw[@]}"; do
+    case "$w" in "$OPM"*) continue ;; *'$(...)'*) ;; *) continue ;; esac
+    [[ $w =~ $RE_ASSIGN ]] || return 1
+    nm="${w%%=*}"; nm="${nm%+}"; nm="${nm%%\[*}"
+    got="$got$nm "
+  done
+  [ -n "$got" ] || return 1
+  CAPT="$CAPT$got"
 }
 
 _sub() { # $1 = depth, $2 = shell text, $3 = where it came from. Sets R.
@@ -348,6 +396,7 @@ _argv() { # $1 = depth, then one simple command's words. Sets R.
         if [[ $w =~ $RE_SECRET_NAME ]]; then
           R="RULE 5: printenv $w prints the value of a credential variable. SAFE: [ -n \"\${$w-}\" ] && echo \"$w: SET len=\${#$w}\" || echo \"$w: unset\""; return 0
         fi
+        case "$CAPT" in *" $w "*) R="RULE 13: printenv $w prints a variable that captured a secret from \$(...) earlier in this command. SAFE: echo \"len=\${#$w}\""; return 0 ;; esac
         case "$w" in *'$'*) R="RULE 5: printenv of a name held in a variable (${w}) cannot be judged here. SAFE: name the variable literally, or print its length: \${#NAME}"; return 0 ;; esac
       done
       [ "$names" -eq 0 ] && _dump "printenv with no name"
@@ -453,7 +502,9 @@ _advice='Print a FACT ABOUT the secret, never the secret:
 ${V:-word} returns the VALUE when V is set -- it is an expansion, not a redaction.
 Transcripts under ~/.claude/projects are append-only and gitignored, so git-leak-scan
 cannot see them: a secret printed here is a secret with no way back.
-Full rule: OPERATIONAL_RULES.md, "A shell probe written to CHECK whether a secret is set".'
+Full rule, by where this session loads its rules from:
+    pj: ~/.claude/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md, section "Security" (the ${V:-x} line)
+    engage: ~/CODE/CaptainCodeAU/CaptainCodeAU-isolinear/rules/always.md ("Test a secret only as")'
 
 # ---------------------------------------------------------------- selftest
 if [ "${1:-}" = "--selftest" ]; then
@@ -562,6 +613,28 @@ if [ "${1:-}" = "--selftest" ]; then
   _must 0 'E62 gh auth, other verb'        'gh auth switch'
   _must 0 'E63 env | cut -d "=" -f 1'      'env | cut -d "=" -f 1'
 
+  # D-20260929-A07 (Gavin, option C): a printer captured into an assignment or an env
+  # prefix passes; the captured NAME printed later in the same command is denied.
+  echo "=== CAPTURE arms (D-20260929-A07): into a variable passes, printed later denied ==="
+  _must 0 'C01 recipe: GH_TOKEN=$(security -w) ci-watch' 'GH_TOKEN="$(security find-generic-password -a "$USER" -s github-api-readonly -w)" ci-watch'
+  _must 0 'C02 recipe: T=$(security -w 2>/dev/null)'     'T=$(security find-generic-password -a "$USER" -s github-api-readonly -w 2>/dev/null)'
+  _must 0 'C03 recipe: credential fill, captured, trace to a file' \
+    $'printf \'protocol=https\\nhost=github.com\\nusername=x-access-token\\n\\n\' > "$TMPDIR/cred.req"\npw=$(GIT_TERMINAL_PROMPT=0 GIT_TRACE="$TMPDIR/cred.trace.$$" git credential fill < "$TMPDIR/cred.req" 2>/dev/null); unset pw\ngrep run_command "$TMPDIR/cred.trace.$$"'
+  _must 0 'C04 export T=$(...), then its length'         'export T="$(gh auth token)"; echo "len=${#T}"'
+  _must 0 'C05 captured, then fingerprinted'             'T=$(gh auth token); printf %s "$T" | shasum -a 256 | cut -c1-8'
+  _must 0 'C06 captured, then passed on'                 'T=$(gh auth token); GH_TOKEN="$T" gh api user --jq .login'
+  _must 1 'C07 E52 again: captured, then echoed'         'X="$(gh auth token)"; echo "$X"'
+  _must 1 'C08 captured, then printf'                    'T=$(security find-generic-password -s x -w); printf "%s\n" "$T"'
+  _must 1 'C09 captured, then ${T:-none}'                'T=$(gh auth token); echo ${T:-none}'
+  _must 1 'C10 captured, then printenv T'                'export T=$(printenv GH_TOKEN); printenv T'
+  _must 1 'C11 env prefix, then sh -c echoes it'         "T=\"\$(gh auth token)\" sh -c 'echo \$T'"
+  _must 1 'C12 echo "$(printer)"'                        'echo "$(gh auth token)"'
+  _must 1 'C13 printer as an argument'                   'curl -H "Authorization: token $(gh auth token)" https://api.github.com/user'
+  _must 1 'C14 capture of an echo of a printer'          'X=$(echo "$(gh auth token)")'
+  _must 1 'C15 <(printer) read by diff'                  'diff <(printenv GH_TOKEN) x'
+  _must 1 'C16 recipe line 100 still: gh auth status'    $'T=$(security find-generic-password -a "$USER" -s github-api-readonly -w 2>/dev/null)\nGH_TOKEN="$T" gh auth status'
+  _must 1 'C17 mixed: an argument $(...) beside it'      'GH_TOKEN="$(security find-generic-password -s x -w)" cmd "$(date)"'
+
   # The arms above test _classify in THIS file. These run the whole hook, payload
   # on stdin, so SECRET_PROBE_UNDER_TEST=<path> runs them on another copy.
   echo "=== HOOK arms: the payload read, or not (D-20260925-A03) ==="
@@ -592,6 +665,7 @@ if [ "${1:-}" = "--selftest" ]; then
       unreadable) [[ $got == "deny enforce-secret-probe: cannot read the tool payload"* ]] && ok=1 ;;
       shout)      [[ $got == "null null 🔴 THE SECRET-PROBE GUARD IS BROKEN"* ]] && ok=1 ;;
       halfbroken) [[ $got == "null null 🔴 THE SECRET-PROBE GUARD IS HALF BROKEN"* ]] && ok=1 ;;
+      rulefiles)  [[ $got == "deny 🔴 BLOCKED"*"pj: ~/.claude/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md"*"engage: ~/CODE/CaptainCodeAU/CaptainCodeAU-isolinear/rules/always.md"* ]] && ok=1 ;;
       unreadable_lexer) [[ $got == "deny 🔴 BLOCKED"*"the shell lexer could not be used"* ]] && ok=1 ;;
       quiet)      [ -z "$out" ] && ok=1 ;;
     esac
@@ -618,6 +692,7 @@ if [ "${1:-}" = "--selftest" ]; then
   _hk blocked    'H4 through the hook: printenv a credential'                   "$(_pl 'printenv GH_TOKEN')"
   _hk blocked    'H4 through the hook: bash -c body'                            "$(_pl "bash -c 'echo \$GH_TOKEN'")"
   _hk quiet      'H4 through the hook: a safe form stays quiet'                 "$(_pl 'env | cut -d= -f1')"
+  _hk rulefiles  'the deny names BOTH rule files (pj and engage)'               "$(_pl 'printenv GH_TOKEN')"
   # The lexer missing: the crude match denies by name, a harmless command SHOUTS.
   _lk() { SECRET_PROBE_LEXER_FROM=/nonexistent/enforce-no-permanent-delete.sh _hk "$@"; }
   _lk unreadable_lexer 'lexer missing: printenv a credential still denied'      "$(_pl 'printenv GH_TOKEN')"

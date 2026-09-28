@@ -125,9 +125,17 @@ Diagnose in this order:
 1. **Is the helper actually being called?**
 
    ```
-   printf 'protocol=https\nhost=github.com\nusername=x-access-token\n\n' \
-     | GIT_TERMINAL_PROMPT=0 GIT_TRACE=1 git credential fill 2>&1 | grep run_command
+   t=$(mktemp "${TMPDIR:-/tmp}/cred-trace.XXXXXX")
+   pw=$(printf 'protocol=https\nhost=github.com\nusername=x-access-token\n\n' \
+     | GIT_TERMINAL_PROMPT=0 GIT_TRACE="$t" git credential fill 2>/dev/null); unset pw
+   grep run_command "$t"
    ```
+
+   The password is captured into `pw` and dropped, never printed, and the trace goes to
+   a fresh file. The old one-liner piped `fill`'s stdout, password field included, into
+   the transcript; `enforce-secret-probe.sh` now denies that form and allows this one
+   (W-20260929-A34, D-20260929-A07). Measured 2026-09-29 with a fake helper: the trace
+   names the helper, and the password reaches neither stdout nor the trace file.
 
    You want a line running `github-agent-token get`. If it is absent, the helper
    is not in the effective list — check the config order below.
