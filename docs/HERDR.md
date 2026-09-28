@@ -867,8 +867,8 @@ which:
    audio 0.33 s, against 35.1 s of silence when say2 plays it itself, because
    its own playback renders everything first). Without `ffplay`, or with an
    explicit `--voice`, it falls back to say2's own slower playback. Speech
-   plays at 70 of 100 under the system volume (`--volume N`, streaming path
-   only; about -3 dB), so it can sit a little below everything else;
+   plays at 60 of 100 under the system volume (`--volume N`, streaming path
+   only; about -4.4 dB), so it can sit a little below everything else;
 3. applies the toggle rule: **any** press while it speaks = stop, whatever the
    clipboard holds; the next press speaks the current selection (since
    2026-09-28; before that, a press with new text replaced the speech).

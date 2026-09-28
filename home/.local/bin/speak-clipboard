@@ -57,11 +57,12 @@
 #
 # VOLUME
 # ------
-# Default 70 of 100 (2026-09-28, Gavin: speech a little quieter than
+# Default 60 of 100 (2026-09-28, Gavin: speech a little quieter than
 # everything else, without touching the system volume). It is applied by
 # ffplay's -volume on the streaming path, which scales the samples linearly:
-# 70 is about -3 dB, 50 about -6 dB. It sits UNDER the system volume, so it
-# can only make speech quieter, never louder. Re-tune by listening. The
+# 60 is about -4.4 dB, 50 about -6 dB (first set at 70, lowered by ear).
+# It sits UNDER the system volume, so it can only make speech quieter, never
+# louder. Re-tune by listening. The
 # fallback paths (no ffplay, or an explicit --voice) play at plain system
 # volume: say2's own --volume is a documented no-op on the siri engine.
 #
@@ -190,7 +191,7 @@
 #                                (for tests; combine with --print/--toggle)
 #   speak-clipboard --rate N     words per minute (default: 420)
 #   speak-clipboard --volume N   speech volume 0-100 under the system volume
-#                                (default: 70; streaming path only)
+#                                (default: 60; streaming path only)
 #   speak-clipboard --voice KEY  say2 voice asset key or display name -- bypasses
 #                                the Aaron/Simone/say fallback chain entirely
 #                                (default when omitted: en-US:natural:male:Aaron:premium:5030,
@@ -218,7 +219,7 @@ _default_voice="en-US:natural:male:Aaron:premium:5030"
 _secondary_voice="en-US:natural:female:Simone:premium:5029"
 _say_fallback_voice="Samantha"
 rate="420"
-volume="70"
+volume="60"
 voice=""
 mode="speak"
 from_stdin=0
