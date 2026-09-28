@@ -59,8 +59,10 @@ Steps run in this order; `pj-wrap done` is always last. Rulings and reasons:
    re-check every row, show the whole table again. Then ask each unanswered question and each open
    decide row as its own question (a project with no drawer: "create one?" is one of them).
 
-4. Apply the approved verdicts through the tools named in step 2 only. A project lesson: a memory
-   file (Edit an existing one, never Write over it). A machine-wide lesson:
+4. Apply the approved verdicts through the tools named in step 2 only. A project lesson: while
+   auto-memory is frozen (D-20260929-A01) write NO memory file; file it as an open item
+   (`--kind decide`, the lesson in its body) or carry it in the handoff. Once the freeze lifts, a
+   memory file again (Edit an existing one, never Write over it). A machine-wide lesson:
    `~/.claude/pj-global/notes/YYYYMMDD-slug.md` plus one line in `notes/INDEX.md` in its format.
    A new drawer, on a yes: `open-items init`.
 
