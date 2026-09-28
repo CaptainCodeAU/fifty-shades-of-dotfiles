@@ -23,8 +23,11 @@
 #   ci cr ct cpr cd_ cskip            .zshrc aliases launching a NESTED Claude with
 #                                     --dangerously-skip-permissions (cb does not
 #                                     skip permissions and is allowed)
-#   gpf!                              oh-my-zsh alias for git push --force; the
-#                                     lease forms gpf and gpsupf stay allowed
+#   gpf!                              oh-my-zsh alias for git push --force. The
+#                                     lease forms gpf and gpsupf were allowed
+#                                     everywhere until 2026-09-29; now the
+#                                     force-push rule reads them (deny on main,
+#                                     allow on a feature branch, D-20260929-A08)
 #   brew install|instal|reinstall|upgrade   ask Gavin; list/info/search/outdated
 #                                     stay allowed. The .zshrc brew() guard is
 #                                     interactive-only, measured inert here.
@@ -49,7 +52,7 @@ STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles"
 LOG_FILE="$STATE_DIR/hooks-security.log"
 HOOKS_DIR="$(builtin cd "$(dirname "$0")" && pwd)"
 SHSCAN="${CONV_SHSCAN:-$HOOKS_DIR/conv-shscan.awk}"
-GUARD_FALLBACK_ERE='(^|[;&|({`][[:space:]]*)(ci|cr|ct|cpr|cd_|cskip|gpf!)([[:space:];&|)]|$)|(^|[;&|({`][[:space:]]*)([^[:space:]]*/)?brew[[:space:]]+(install|instal|reinstall|upgrade)'
+GUARD_FALLBACK_ERE='(^|[;&|({`][[:space:]]*)(ci|cr|ct|cpr|cd_|cskip|gpf!|gpf|gpsupf)([[:space:];&|)]|$)|(^|[;&|({`][[:space:]]*)([^[:space:]]*/)?brew[[:space:]]+(install|instal|reinstall|upgrade)'
 # Scanner missing: a push word plus anything that looks like a force denies, crudely.
 PUSH_FALLBACK_ERE='(^|[^A-Za-z0-9_.-])(push|gp|gpu|gpv|gpsup|ggpush)([[:space:];&|)]|$)'
 FORCE_FALLBACK_ERE='(^|[[:space:]])(-[A-Za-z0-9]*f[A-Za-z0-9]*|--f[a-z-]*|--m[a-z]*|\+[^[:space:]]+)([[:space:]=;&|)]|$)'
