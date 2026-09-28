@@ -857,8 +857,11 @@ which:
 
 1. strips the terminal furniture before speaking — ANSI escapes, box drawing,
    Nerd Font glyphs, rule runs — and maps curly quotes, dashes, and accented
-   letters to ASCII instead of dropping them. The raw accessibility hotkey
-   cannot do any of this: it reads the screen, borders and all;
+   letters to ASCII instead of dropping them. Tables (box-drawn or markdown)
+   are read row by row with the column names, each its own sentence so the
+   voice pauses: "Row 1. Source. The record body... When. Any time...". The
+   raw accessibility hotkey cannot do any of this: it reads the screen,
+   borders and all;
 2. hands the cleaned text to one `say2` process per press
    (`say2`, <https://github.com/CaptainCodeAU/say2> -- a real Siri "natural" tier
    neural voice, Aaron by default). say2 streams raw audio to stdout as it

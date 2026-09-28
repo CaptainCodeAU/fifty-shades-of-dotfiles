@@ -23,6 +23,12 @@
 # WHAT THE CLEANER DOES (one perl pass, in this order, and why each)
 #   * ANSI/OSC escape sequences are removed -- colour and title codes, never
 #     spoken content
+#   * tables (box-drawn or markdown) are re-spoken row by row, "Row 1. Source.
+#     The record body... When. Any time...", every name and cell its own
+#     sentence so the voice pauses between them (v4.7, 2026-09-28, Gavin's
+#     call: a pause after "Row N" and after each column name). MEASURED on
+#     Aaron at 420 wpm: four pauses of 276-361 ms where the run-together
+#     form had none over 60 ms. See _tables in the cleaner.
 #   * typographic punctuation is MAPPED, not dropped: curly quotes -> straight,
 #     every Unicode dash -> hyphen, ellipsis -> "...", every space separator ->
 #     space. Accented letters are decomposed and their marks removed, so "cafe"
@@ -446,12 +452,128 @@ use Encode qw(decode);
 use Unicode::Normalize qw(NFD);
 use Digest::SHA qw(sha256_hex);
 my $max = $ARGV[0] || 8000;
+
+# --- Tables (v4.7) ---------------------------------------------------------
+# A box-drawn or markdown table is re-spoken row by row as
+#   "Row 1. Source. The record body... What it adds to a PADD. The detail..."
+# Every name and cell becomes its own sentence because the full stop is what
+# makes the voice pause; cells already hold commas, so a comma separator
+# would sound like one more list item. Cells split on the vertical bars, not
+# on column positions, so a table pasted with ragged indentation still
+# parses. Lines between two rules are one row (a cell wrapped onto several
+# lines is rejoined). A column empty in every row (an outer frame) is
+# dropped. No header divider -> cells are just joined with full stops.
+my $VB = qr/[\x{2502}\x{2503}\x{2551}]/;       # box verticals
+sub _is_rule { $_[0] =~ /^[\s\x{2500}-\x{257F}]*[\x{2500}\x{2501}\x{2550}]{3}[\s\x{2500}-\x{257F}]*$/ }
+sub _is_md_rule { $_[0] =~ /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/ }
+sub _is_md_row { my $l = shift; return 0 unless $l =~ /^\s*\|.*\|\s*$/; my $n = () = $l =~ /\|/g; return $n >= 3 }
+sub _vbars { my $n = () = $_[0] =~ /$VB/g; return $n }
+sub _cells {
+    my ($l, $md) = @_;
+    my @c = $md ? split(/\|/, $l, -1) : split(/$VB/, $l, -1);
+    s/^\s+|\s+$//g for @c;
+    return \@c;
+}
+sub _sentence {
+    my $s = shift // '';
+    $s =~ s/\s+/ /g; $s =~ s/^ | $//g;
+    return '' if $s eq '';
+    $s =~ s/[:;,]$//;
+    $s .= '.' unless $s =~ /[.!?]$/;
+    return $s;
+}
+sub _merge {                                    # lines of one row -> one cell list
+    my @m;
+    for my $line (@_) {
+        for my $i (0 .. $#$line) {
+            my $c = $line->[$i];
+            $m[$i] = (defined $m[$i] && $m[$i] ne '') ? ($c eq '' ? $m[$i] : "$m[$i] $c") : $c;
+        }
+    }
+    return \@m;
+}
+sub _speak_table {
+    my ($groups, $md) = @_;
+    my @rows;
+    if (@$groups == 2) {
+        # Header divider only: each line is a row, except that a line whose
+        # first NAMED column is empty continues the row above (a wrapped cell).
+        my $h = _merge(@{ $groups->[0] });
+        push @rows, $h;
+        my ($k) = grep { defined $h->[$_] && $h->[$_] ne '' } 0 .. $#$h;
+        my @pending;
+        for my $line (@{ $groups->[1] }) {
+            if (!$md && @pending && defined $k && ($line->[$k] // '') eq '') {
+                push @{ $pending[-1] }, $line;
+            } else {
+                push @pending, [$line];
+            }
+        }
+        push @rows, _merge(@$_) for @pending;
+    } else {
+        push @rows, _merge(@$_) for @$groups;
+    }
+    my $ncol = 0; for (@rows) { $ncol = @$_ if @$_ > $ncol }
+    my @keep = grep { my $j = $_; grep { defined $_->[$j] && $_->[$j] ne '' } @rows } 0 .. $ncol - 1;
+    my @out;
+    if (@$groups >= 2 && @rows >= 2) {
+        my $h = shift @rows;
+        my $n = 0;
+        for my $r (@rows) {
+            my @parts = ('Row ' . (++$n) . '.');
+            for my $j (@keep) {
+                my $c = _sentence($r->[$j]);
+                next if $c eq '';
+                push @parts, (_sentence($h->[$j]) || 'Column ' . ($j + 1) . '.'), $c;
+            }
+            push @out, join(' ', @parts);
+        }
+    } else {
+        for my $r (@rows) {
+            push @out, join(' ', grep { $_ ne '' } map { _sentence($r->[$_]) } @keep);
+        }
+    }
+    return @out;
+}
+sub _tables {
+    my @lines = split /\n/, $_[0], -1;
+    my @out;
+    my $i = 0;
+    while ($i < @lines) {
+        my $l = $lines[$i];
+        my $box = _is_rule($l) || _vbars($l) >= 2;
+        my $md = !$box && _is_md_row($l) && $i + 1 < @lines && _is_md_rule($lines[$i + 1]);
+        if (!$box && !$md) { push @out, $l; $i++; next }
+        my (@groups, @cur);
+        while ($i < @lines) {
+            my $x = $lines[$i];
+            if ($md ? _is_md_rule($x) : _is_rule($x)) {
+                if (@cur) { push @groups, [@cur]; @cur = () }
+                $i++; next;
+            }
+            last unless $md ? _is_md_row($x) : _vbars($x) >= 2;
+            push @cur, _cells($x, $md);
+            $i++;
+        }
+        push @groups, [@cur] if @cur;
+        if (@groups == 1 && @{ $groups[0] } > 1) {  # no rules at all: each line alone
+            @groups = map { [$_] } @{ $groups[0] };
+            push @out, _speak_table([$_], $md) for @groups;
+        } elsif (@groups) {
+            push @out, _speak_table(\@groups, $md);
+        }
+    }
+    return join("\n", @out);
+}
+# ---------------------------------------------------------------------------
+
 local $/;
 my $raw = <STDIN>;
 $raw = '' unless defined $raw;
 my $t = decode('UTF-8', $raw);                  # malformed bytes become U+FFFD, dropped below
 $t =~ s/\e\[[0-9;?]*[ -\/]*[@-~]//g;            # ANSI CSI
 $t =~ s/\e\][^\a]*(?:\a|\e\\)//g;               # OSC (titles, hyperlinks)
+$t = _tables($t);                               # tables -> "Row 1. Name. Cell." (v4.7)
 $t =~ s/[\x{2018}\x{2019}\x{201A}\x{2032}]/'/g; # single curly quotes, prime
 $t =~ s/[\x{201C}\x{201D}\x{201E}\x{2033}]/"/g; # double curly quotes, double prime
 $t =~ s/\p{Pd}/-/g;                             # every dash
