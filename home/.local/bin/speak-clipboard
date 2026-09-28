@@ -106,6 +106,19 @@
 # "0.2 s" wait was ~0.6 s of audible lag on every stop, for a SIGTERM say2
 # ignores anyway during playback. Gone; SIGKILL is immediate.
 #
+# v4.4 (same evening): the v4 claim above that say2 "already streams
+# internally" was WRONG for direct playback. say2's play path renders the
+# whole utterance to a .wav and only then plays it (Application.swift,
+# unchanged since 2026-09-08). The v4 test used a 16 s paragraph, which
+# renders too fast to tell the two apart. Gavin reported long selections
+# waiting over a minute. MEASURED with fresh text (3,360 chars, ~100 s of
+# speech): direct play 35.1 s of silence first; `--format pcm -o -` to stdout
+# gave its first audio bytes after 0.33 s, rendering ~3x faster than speech.
+# So start_speaker now pipes that stream into ffplay when it is available,
+# and keeps the direct-play path as the fallback. Once say2's own playback
+# streams (the say2 fix filed alongside the SIGTERM one), drop the ffplay
+# layer and call say2 directly again.
+#
 # v4.1 (2026-09-10, same day): two corrections after Gavin reported the real
 # hotkey taking 2-3 s to start speaking, which the numbers above did not
 # predict.
@@ -310,13 +323,16 @@ acquire_lock() {
     _have_lock=1
 }
 
-# Sets _speaker to the pid of the live speaker (say2 or its `say` fallback),
-# or clears stale state and returns 1. `kill -0` alone is not enough: pids are
-# recycled, so the process must also BE one of our two engines before anyone
-# sends it a signal.
+# Sets _speaker to the pid of the live speaker, or clears stale state and
+# returns 1. The pid file holds either a lone say2/say pid, or (streaming,
+# v4.4) the leader of a process group running say2 | ffplay; _speaker_group
+# is set to 1 in that case. `kill -0` alone is not enough: pids are recycled,
+# so the process must also BE one of our engines (or lead a group holding
+# one) before anyone sends it a signal.
 speaker_alive() {
     local p="" comm=""
     _speaker=""
+    _speaker_group=""
     [ -f "$_pid_file" ] || return 1
     { read -r p <"$_pid_file"; } 2>/dev/null || true
     case "$p" in
@@ -324,20 +340,29 @@ speaker_alive() {
     esac
     comm="$(ps -o comm= -p "$p" 2>/dev/null)"
     case "${comm##*/}" in
-        say2|say) ;;
-        *) command rm -f "$_pid_file" "$_hash_file" 2>/dev/null; return 1 ;;
+        say2|say) _speaker="$p"; return 0 ;;
     esac
-    _speaker="$p"
+    if [ -n "$comm" ] && [ -n "$(pgrep -g "$p" -x 'say2|ffplay' 2>/dev/null)" ]; then
+        _speaker="$p"; _speaker_group=1; return 0
+    fi
+    command rm -f "$_pid_file" "$_hash_file" 2>/dev/null
+    return 1
 }
 
 # Returns 0 if something was actually stopped. SIGKILL straight away: say2
 # ignores SIGTERM once playback has started (v4.2 note up top), and a
 # SIGTERM-then-wait cost ~0.6 s of audible lag (v4.3). speaker_alive has
-# already confirmed the pid is say2/say, so a recycled pid is never hit.
+# already confirmed the pid is ours, so a recycled pid is never hit. A
+# streaming speaker is killed as a whole group, so say2 does not keep
+# rendering into a dead pipe and hold up the next press.
 stop_speaker() {
     local rc=1
     if speaker_alive; then
-        kill -KILL "$_speaker" 2>/dev/null && rc=0
+        if [ -n "$_speaker_group" ]; then
+            kill -KILL -- "-$_speaker" 2>/dev/null && rc=0
+        else
+            kill -KILL "$_speaker" 2>/dev/null && rc=0
+        fi
     fi
     command rm -f "$_pid_file" "$_hash_file" 2>/dev/null
     return $rc
@@ -350,9 +375,25 @@ stop_speaker() {
 # the live process really is say2 or say before anyone signals it). say2 MUST
 # be invoked as the bare `say2 -v ... TEXT` form, never `say2 synthesize` --
 # synthesize is the slow path regardless of how text reaches it (MEASURED).
+#
+# Streaming (v4.4): with the default say2 voice and ffplay on PATH, say2
+# writes raw PCM to stdout as it renders and ffplay plays it, so speech starts
+# in ~0.3 s instead of after the whole render. `set -m` gives the pair its own
+# process group, whose leader pid goes in the pid file for stop_speaker. An
+# explicit --voice skips streaming, since it may name a non-Siri voice and
+# stdout streaming needs `--engine siri` stated.
 start_speaker() {
     resolve_engine
-    if [ "$_engine" = "say2" ]; then
+    if [ "$_engine" = "say2" ] && [ -z "$voice" ] && command -v ffplay >/dev/null 2>&1; then
+        set -m
+        ( trap '' HUP
+          say2 -v "$_engine_voice" -r "$rate" --engine siri --format pcm -o - "$text" \
+              2>>"$_render_log" |
+              ffplay -nodisp -autoexit -loglevel error \
+                  -f s16le -ar 48000 -ch_layout mono -i - >/dev/null 2>>"$_render_log"
+        ) >/dev/null 2>&1 &
+        set +m
+    elif [ "$_engine" = "say2" ]; then
         ( trap '' HUP; exec say2 -v "$_engine_voice" -r "$rate" "$text" ) \
             >/dev/null 2>>"$_render_log" &
     else

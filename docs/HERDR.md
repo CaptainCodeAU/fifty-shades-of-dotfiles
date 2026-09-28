@@ -859,12 +859,14 @@ which:
    Nerd Font glyphs, rule runs — and maps curly quotes, dashes, and accented
    letters to ASCII instead of dropping them. The raw accessibility hotkey
    cannot do any of this: it reads the screen, borders and all;
-2. hands the cleaned text to one `say2 synthesize` process per press
+2. hands the cleaned text to one `say2` process per press
    (`say2`, <https://github.com/CaptainCodeAU/say2> -- a real Siri "natural" tier
-   neural voice, Aaron by default), fed over a pipe and played straight to the
-   default audio device. say2 streams internally, so speech starts almost
-   immediately regardless of selection length (MEASURED 2026-09-10: a 16 s
-   paragraph started talking with only ~0.65 s of overhead around it);
+   neural voice, Aaron by default). say2 streams raw audio to stdout as it
+   renders (`--format pcm -o -`) and `ffplay` plays it, so speech starts in
+   about 0.3 s whatever the length (MEASURED 2026-09-28: 3,360 chars, first
+   audio 0.33 s, against 35.1 s of silence when say2 plays it itself, because
+   its own playback renders everything first). Without `ffplay`, or with an
+   explicit `--voice`, it falls back to say2's own slower playback;
 3. applies the toggle rule: **any** press while it speaks = stop, whatever the
    clipboard holds; the next press speaks the current selection (since
    2026-09-28; before that, a press with new text replaced the speech).
@@ -879,12 +881,14 @@ existed (2026-09-01 to 2026-09-03) saved about half a second per press, and in
 exchange rendered the whole selection before playing any of it — 10+ seconds of
 silence on a long selection, during which a second press was taken as "stop" —
 never exited, and held a power assertion that kept the Mac from idle-sleeping.
-That whole problem turned out to be specific to the old render engine: say2
-already streams playback on its own, so a 2026-09-03 through 2026-09-10 era
-also built a hand-rolled Swift chunker (`speak-render.swift`) to fake the same
-effect on top of the slower engine of the time; it was deleted once say2's own
-streaming was measured to make it redundant. With a per-press process, killing
-it is the entire stop mechanism and nothing runs between presses.
+A 2026-09-03 through 2026-09-10 era built a hand-rolled Swift chunker
+(`speak-render.swift`) that spoke the first sentence while rendering the rest.
+It was deleted on 2026-09-10 on the belief that say2 already streams its own
+playback. That belief was wrong (found 2026-09-28): the 16 s test paragraph
+rendered too fast to show the difference, and long selections then sat silent
+for over a minute. say2 does stream, but only to stdout, which is why the
+`ffplay` pipe above exists. With a per-press process group, killing it is the
+entire stop mechanism and nothing runs between presses.
 
 That kill has to be a SIGKILL once speech is audible (found 2026-09-28).
 say2 catches SIGTERM as "cancel the render", but by the time audio plays the
@@ -893,6 +897,7 @@ render is finished and its playback loop never checks for cancel, so a plain
 SIGKILL straight away (a SIGTERM-then-wait version cost ~0.6 s of lag per
 stop and was dropped the same evening). The proper fix is in say2's own
 playback loop.
+
 `~/.local/state/herdr/speak-clipboard.log` keeps one metadata line per press
 (mode, outcome, character count): a new line means the key reached herdr; no
 line means the key or the spawn is at fault.
