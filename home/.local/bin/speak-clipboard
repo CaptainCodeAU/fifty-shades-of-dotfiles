@@ -468,9 +468,38 @@ sub _is_rule { $_[0] =~ /^[\s\x{2500}-\x{257F}]*[\x{2500}\x{2501}\x{2550}]{3}[\s
 sub _is_md_rule { $_[0] =~ /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/ }
 sub _is_md_row { my $l = shift; return 0 unless $l =~ /^\s*\|.*\|\s*$/; my $n = () = $l =~ /\|/g; return $n >= 3 }
 sub _vbars { my $n = () = $_[0] =~ /$VB/g; return $n }
+# Cells of one row, WITHOUT the pieces outside the outermost bars. A box row
+# is cut at the junction positions of the nearest rule line (lined up on the
+# row's first bar, so ragged indentation is fine), which keeps a literal bar
+# INSIDE a cell as text (v4.9: "│ Check │ Result │ cafe" in a cell became
+# three extra columns). When the positions do not land on bars (wide
+# characters, a hand-drawn table) it falls back to splitting on every bar.
+sub _cut_by_rule {
+    my ($l, $r) = @_;
+    return undef unless defined $r;
+    my @rj;
+    while ($r =~ /[\x{2500}-\x{257F}]/g) {
+        my $p = pos($r) - 1;
+        push @rj, $p unless substr($r, $p, 1) =~ /[\x{2500}\x{2501}\x{2550}\x{2504}-\x{250B}\x{254C}\x{254D}]/;
+    }
+    return undef if @rj < 2 || $l !~ /$VB/;
+    my $shift = $-[0] - $rj[0];
+    my @b = map { $_ + $shift } @rj;
+    for my $p (@b) {
+        return undef if $p < 0 || $p >= length($l) || substr($l, $p, 1) !~ /$VB/;
+    }
+    my @c = map { substr($l, $b[$_] + 1, $b[$_ + 1] - $b[$_] - 1) } 0 .. $#b - 1;
+    s/^\s+|\s+$//g for @c;
+    return \@c;
+}
 sub _cells {
-    my ($l, $md) = @_;
+    my ($l, $md, $rule) = @_;
+    if (!$md) {
+        my $c = _cut_by_rule($l, $rule);
+        return $c if $c;
+    }
     my @c = $md ? split(/\|/, $l, -1) : split(/$VB/, $l, -1);
+    shift @c; pop @c;                           # outside the outermost bars
     s/^\s+|\s+$//g for @c;
     return \@c;
 }
@@ -544,15 +573,16 @@ sub _tables {
         my $box = _is_rule($l) || _vbars($l) >= 2;
         my $md = !$box && _is_md_row($l) && $i + 1 < @lines && _is_md_rule($lines[$i + 1]);
         if (!$box && !$md) { push @out, $l; $i++; next }
-        my (@groups, @cur);
+        my (@groups, @cur, $rule);
         while ($i < @lines) {
             my $x = $lines[$i];
             if ($md ? _is_md_rule($x) : _is_rule($x)) {
                 if (@cur) { push @groups, [@cur]; @cur = () }
+                $rule = $x unless $md;
                 $i++; next;
             }
             last unless $md ? _is_md_row($x) : _vbars($x) >= 2;
-            push @cur, _cells($x, $md);
+            push @cur, _cells($x, $md, $rule);
             $i++;
         }
         push @groups, [@cur] if @cur;
