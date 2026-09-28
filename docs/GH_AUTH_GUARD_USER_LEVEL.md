@@ -100,7 +100,7 @@ echo '{"tool_input":{"command":"gh run list"}}' | ~/.claude/hooks/enforce-gh-ssh
 
 # Verify the token itself works (read-only):
 T=$(security find-generic-password -a "$USER" -s github-api-readonly -w 2>/dev/null)
-GH_TOKEN="$T" gh auth status
+GH_TOKEN="$T" gh api user --jq .login   # names who answers; `gh auth status` prints part of the token, so the secret guard denies it
 GH_TOKEN="$T" gh issue list -R CaptainCodeAU/<some-repo>
 unset T
 ```

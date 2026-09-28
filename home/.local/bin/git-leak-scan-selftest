@@ -105,6 +105,16 @@ NOT_FICTION_E164="+6${_p:-}1390001234"   # real-shaped, unreserved -- must BLOCK
 DOC_AU_LOCAL="0491570156"           # ACMA reserved -- must NOT even warn
 LAN_IP="192.16${_p:-}8.1.50"
 REAL_AU_LOCAL="04${_p:-}12345678"   # not reserved -- must WARN, never block
+# W-20260929-A49: the shapes sk- missed, and the other token families. Every one
+# is obviously fake (FAKE, runs of A) and assembled, for the reason above.
+A35="${A36#A}"; A12="${A36:0:12}"
+ANT_KEY="sk${_p:-}-ant-api03-FAKE${A36}-FAKE_AA"
+PROJ_KEY="sk${_p:-}-proj-FAKE_${A36}-x"
+STRIPE_KEY="sk${_p:-}_live_FAKE${A36}"
+NPM_TOKEN="npm${_p:-}_${A36}"
+GOOGLE_KEY="AI${_p:-}za${A35}"
+JWT_TOKEN="ey${_p:-}JFAKE${A12}.ey${_p:-}JFAKE${A12}.FAKEsig${A12}"
+BEARER_WORD="Be${_p:-}arer"
 
 # ---------------------------------------------------------------------------
 # A throwaway git repo. core.hooksPath is pointed at an empty dir so the real
@@ -169,6 +179,36 @@ check_block "aws key"       "id = \"$AWS_KEY\""          "aws-access-key"
 check_block "slack token"   "hook = \"$SLACK_TOKEN\""    "slack-token"
 check_block "private key"   "$PEM_HEADER"                "private-key"
 check_block "E.164 phone"   "call $NOT_FICTION_E164 now" "phone-number"
+# W-20260929-A49, in the containers keys really arrive in: .env, JSON, YAML, a header.
+check_block "Anthropic key in .env"      "ANTHROPIC_API_KEY=$ANT_KEY"           "api-token"
+check_block "OpenAI project key in JSON" "{\"api_key\": \"$PROJ_KEY\"}"         "api-token"
+check_block "Stripe live key in YAML"    "stripe:
+  secret: $STRIPE_KEY"                                                          "stripe-key"
+check_block "npm token in .npmrc"        "//registry.npmjs.org/:_authToken=$NPM_TOKEN" "npm-token"
+check_block "Google API key in YAML"     "maps_key: $GOOGLE_KEY"                "google-key"
+check_block "JWT in JSON"                "{\"id_token\": \"$JWT_TOKEN\"}"       "jwt"
+check_block "Bearer token in a header"   "curl -H 'Authorization: $BEARER_WORD FAKE0000$A36' x" "bearer-token"
+
+# --- W-20260929-A49 near-misses: each must pass the gate (exit 0) ---------------
+check_pass() { # check_pass <label> <content>
+    fixture
+    stage "$2"
+    local rc; rc="$(scan_rc)"
+    if [[ "$rc" == "0" ]]; then ok "PASS: $1 exits 0"
+    else bad "PASS: $1 exits 0" "exit was $rc -- a false positive: $(scan)"; fi
+    cleanup
+}
+check_pass "sk- + 12 chars"                 "t = \"sk${_p:-}-${A12}\""
+check_pass "the word Bearer alone"          "Authorization: $BEARER_WORD"
+check_pass "Bearer \$VAR (a template)"      "curl -H \"Authorization: $BEARER_WORD \$GH_TOKEN\" x"
+check_pass "Bearer \${TOKEN} (a template)"  "Authorization: $BEARER_WORD \${TOKEN}"
+check_pass "Bearer placeholder, no digit"   "Authorization: $BEARER_WORD YOUR_ACCESS_TOKEN_GOES_HERE"
+check_pass "sk- inside a word or URL path"  "see /docs/risk-assessment${A12} and task-list-and-disk-usage"
+check_pass "a slug holding sk- (engage, real notes)" "see feedback_ask-before-reading-personal-data-and-more"
+check_pass "AIza + 34 chars"                "k: AI${_p:-}za${A35#A}"
+check_pass "npm_ + 35 chars"                "t = npm${_p:-}_${A35}"
+check_pass "a lone eyJ blob (base64 JSON)"  "data: ey${_p:-}JFAKE${A36}"
+check_pass "sk-ant- prefix alone, in prose" "Anthropic keys start sk${_p:-}-ant-api03-... and are secret"
 
 # --- 8. this machine's username inside a path blocks -------------------------
 # Built from id -un at runtime; no username literal is ever written to this file.
@@ -650,13 +690,22 @@ fixture
 out="$(scan --control)"
 if [[ "$(scan_rc --control)" == "0" ]]; then ok "control: all armed rules fire, exit 0"
 else bad "control: all armed rules fire, exit 0" "$out"; fi
-if grep -qE "tested 9 of 9 rules, 0 disarmed" <<<"$out"; then
-    ok "control: states its own scope (9 of 9, 0 disarmed)"
-else bad "control: states its own scope (9 of 9, 0 disarmed)" "$out"; fi
-for r in username-path github-token sk-token aws-key slack-token private-key phone lan-ip local-phone; do
-    if grep -qE "^ *ARMED +$r +FIRED" <<<"$out"; then ok "control: $r FIRED"
+if grep -qE "tested 14 of 14 rules, 0 disarmed" <<<"$out"; then
+    ok "control: states its own scope (14 of 14, 0 disarmed)"
+else bad "control: states its own scope (14 of 14, 0 disarmed)" "$out"; fi
+for r in username-path github-token sk-token stripe-key npm-token google-key aws-key slack-token private-key jwt bearer-token phone lan-ip local-phone; do
+    if grep -qE "^ *ARMED +$r +FIRED " <<<"$out"; then ok "control: $r FIRED"
     else bad "control: $r FIRED" "$out"; fi
 done
+# W-20260929-A49: every shape sk-token claims, and the near-misses it must not block.
+for s in "sk-ant-api03-" "sk-proj-"; do
+    if grep -qE "^ *ARMED +sk-token +FIRED +$s" <<<"$out"; then ok "control: sk-token FIRED on $s"
+    else bad "control: sk-token FIRED on $s" "$out"; fi
+done
+if ! grep -qE "DID NOT FIRE|FIRED WRONGLY" <<<"$out" && grep -qE "stayed quiet +the word Bearer alone" <<<"$out" \
+   && grep -qE "stayed quiet +sk- \+ 12 chars" <<<"$out"; then
+    ok "control: every quiet case stayed quiet (short sk-, Bearer alone, templates)"
+else bad "control: every quiet case stayed quiet (short sk-, Bearer alone, templates)" "$out"; fi
 cleanup
 
 # --- 40. a disarmed rule reads NOT TESTED, never ok and never nothing ------
@@ -667,7 +716,7 @@ git -C "$REPO" config leakscan.skip "username-path"
 out="$(scan --control)"
 if [[ "$(scan_rc --control)" == "0" ]]; then ok "control: still exit 0 with a rule disarmed"
 else bad "control: still exit 0 with a rule disarmed" "$out"; fi
-if grep -qE "tested 8 of 9 rules, 1 disarmed" <<<"$out"; then
+if grep -qE "tested 13 of 14 rules, 1 disarmed" <<<"$out"; then
     ok "control: the disarmed rule is counted out of scope"
 else bad "control: the disarmed rule is counted out of scope" "$out"; fi
 if grep -qE "^ *DISARMED +username-path +NOT TESTED" <<<"$out"; then
@@ -698,7 +747,7 @@ cleanup
 
 # --- 42. nothing armed means nothing to prove ------------------------------
 fixture
-git -C "$REPO" config leakscan.skip "username-path github-token sk-token aws-key slack-token private-key phone lan-ip local-phone"
+git -C "$REPO" config leakscan.skip "username-path github-token sk-token stripe-key npm-token google-key aws-key slack-token private-key jwt bearer-token phone lan-ip local-phone"
 if [[ "$(scan_rc --control)" == "2" ]]; then ok "control: every rule disarmed REFUSES (exit 2)"
 else bad "control: every rule disarmed REFUSES (exit 2)" "$(scan --control)"; fi
 cleanup

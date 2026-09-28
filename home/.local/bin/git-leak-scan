@@ -9,7 +9,9 @@
 #
 # BLOCK (exit 1 -- near-certain leak, rarely legitimate in a commit):
 #   - this machine's real username inside a /Users|/home path OR its -Users- encoding
-#   - API tokens: gh[pousr]_..., sk-..., AKIA..., xox[baprs]-...
+#   - API tokens: gh[pousr]_..., sk-... (sk-ant-, sk-proj- too), sk_live_...,
+#     npm_..., AIza..., AKIA..., xox[baprs]-..., a JWT, Bearer <token>
+#     (W-20260929-A49; each with a left boundary so a slug is not a key)
 #   - a PEM private-key header (-----BEGIN ... PRIVATE KEY-----)
 #   - phone numbers in E.164 form (+ then 8-15 digits), excluding the ranges
 #     reserved for documentation and drama
@@ -26,8 +28,8 @@
 #
 # RULE-SELECTIVE OPT-OUT (prefer this over the blunt one below):
 #   git config leakscan.skip "username-path"  # space-separated rule ids
-# Ids: username-path github-token sk-token aws-key slack-token private-key
-#      phone lan-ip local-phone
+# Ids: username-path github-token sk-token stripe-key npm-token google-key
+#      aws-key slack-token private-key jwt bearer-token phone lan-ip local-phone
 # Disarms ONLY the named rules; everything else stays armed, and the disarmed
 # list is announced every run. An unknown id fails SAFE (that rule stays armed)
 # and is called out, so a typo can never quietly disarm nothing -- or something
@@ -139,7 +141,7 @@ git rev-parse --git-dir >/dev/null 2>&1 || exit 0
 # An UNKNOWN id fails SAFE, meaning MORE strict: the rule list is untouched and
 # the typo is called out. A typo must never leave an operator believing they
 # disarmed one rule while they disarmed none -- or, worse, a different one.
-KNOWN_RULES="username-path github-token sk-token aws-key slack-token private-key phone lan-ip local-phone"
+KNOWN_RULES="username-path github-token sk-token stripe-key npm-token google-key aws-key slack-token private-key jwt bearer-token phone lan-ip local-phone"
 SKIP_RULES=""
 _requested_skip="$(git config --get leakscan.skip 2>/dev/null || true)"
 if [ -n "$_requested_skip" ]; then
@@ -162,10 +164,26 @@ user="$(id -un 2>/dev/null || echo "${USER:-}")"
 # a stray '.' would over-match slightly, which only makes the guard stricter.
 b_user="(/Users/${user}/|/home/${user}/|-Users-${user}-)"
 b_ghtok='gh[pousr]_[A-Za-z0-9]{20,}'
-b_sk='sk-[A-Za-z0-9]{20,}'
+# W-20260929-A49. sk- was 'sk-[A-Za-z0-9]{20,}', so the hyphen in sk-ant-api03-
+# and sk-proj- broke the run and both passed. The body now takes - and _ too,
+# which alone would flag slugs such as "ask-before-reading-personal-data"
+# (measured by engage on real notes), so every token shape gets a LEFT BOUNDARY:
+# no letter or digit may touch it. The same boundary guards the new shapes.
+_lb='(^|[^A-Za-z0-9])'
+b_sk="${_lb}sk-[A-Za-z0-9_-]{20,}"
+b_stripe="${_lb}[sr]k_(live|test)_[A-Za-z0-9]{20,}"
+b_npm="${_lb}npm_[A-Za-z0-9]{36}"
+b_google="${_lb}AIza[0-9A-Za-z_-]{35}"
 b_aws='AKIA[0-9A-Z]{16}'
 b_slack='xox[baprs]-[A-Za-z0-9-]{10,}'
 b_pkey='-----BEGIN [A-Z ]*PRIVATE KEY-----'
+# A JWT is three base64url parts; header and payload are JSON, so both start eyJ.
+# A lone eyJ blob is base64 JSON of any kind (configs, fixtures) and is NOT flagged.
+b_jwt="${_lb}eyJ[A-Za-z0-9_-]{10,}\\.eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}"
+# Bearer plus 20+ token characters, AND the token must hold a digit and a letter
+# (line_has_bearer): a template ($VAR, ${TOKEN}, <token>) never matches the
+# class, and a placeholder such as YOUR_TOKEN_HERE has no digit.
+b_bearer="${_lb}[Bb]earer[[:space:]]+([A-Za-z0-9._~+/=_-]{20,})"
 w_ip='(^|[^0-9.])(192\.168\.[0-9]{1,3}\.[0-9]{1,3}|10\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|172\.(1[6-9]|2[0-9]|3[01])\.[0-9]{1,3}\.[0-9]{1,3})([^0-9]|$)'
 
 # --- Phone numbers ----------------------------------------------------------
@@ -235,6 +253,18 @@ line_has_real_phone() {
     return 1
 }
 
+# Walks every Bearer match on the line, like line_has_real_phone, so a template
+# earlier on the line cannot mask a real token later on it.
+line_has_bearer() {
+    local _rest="$1" _m _t
+    while [ -n "$_rest" ] && [[ $_rest =~ $b_bearer ]]; do
+        _m="${BASH_REMATCH[0]}"; _t="${BASH_REMATCH[2]}"
+        [[ $_t =~ [0-9] ]] && [[ $_t =~ [A-Za-z] ]] && return 0
+        _rest="${_rest#*"$_m"}"
+    done
+    return 1
+}
+
 # Collect the diff FIRST, so its emptiness can be judged before it is scanned.
 # Reading it straight into the loop is what made "nothing to scan" and "nothing
 # found" the same observable outcome.
@@ -291,9 +321,14 @@ classify() { # classify <line>  -> sets CAT (block category, or empty) and WARN_
     if   ! rule_off username-path && [ -n "$user" ] && [[ $c =~ $b_user ]]; then CAT="username-in-path [username-path]"
     elif ! rule_off github-token && [[ $c =~ $b_ghtok ]]; then CAT="github-token [github-token]"
     elif ! rule_off sk-token     && [[ $c =~ $b_sk ]];    then CAT="api-token(sk-) [sk-token]"
+    elif ! rule_off stripe-key   && [[ $c =~ $b_stripe ]]; then CAT="stripe-key [stripe-key]"
+    elif ! rule_off npm-token    && [[ $c =~ $b_npm ]];   then CAT="npm-token [npm-token]"
+    elif ! rule_off google-key   && [[ $c =~ $b_google ]]; then CAT="google-api-key [google-key]"
     elif ! rule_off aws-key      && [[ $c =~ $b_aws ]];   then CAT="aws-access-key [aws-key]"
     elif ! rule_off slack-token  && [[ $c =~ $b_slack ]]; then CAT="slack-token [slack-token]"
     elif ! rule_off private-key  && [[ $c =~ $b_pkey ]];  then CAT="private-key [private-key]"
+    elif ! rule_off jwt          && [[ $c =~ $b_jwt ]];   then CAT="jwt [jwt]"
+    elif ! rule_off bearer-token && line_has_bearer "$c"; then CAT="bearer-token [bearer-token]"
     elif ! rule_off phone && line_has_real_phone "$c" "$b_phone"; then CAT="phone-number(E.164) [phone]"
     fi
     if ! rule_off lan-ip && [[ $c =~ $w_ip ]]; then
@@ -327,9 +362,41 @@ classify() { # classify <line>  -> sets CAT (block category, or empty) and WARN_
 # construction the most likely thing in this repo to fail to commit itself --
 # measured twice already, with a token and with a phone number. Do not tidy
 # these into literals; the tool will start blocking its own improvement.
+#
+# ONE RULE, SEVERAL SHAPES (W-20260929-A49). sk-token let `sk-ant-api03-...`
+# through for months because its only control value was `sk-` plus letters: the
+# hyphen in the Anthropic prefix broke the run, and a control of the old shape
+# kept firing. So each rule now plants every shape it claims to cover, and
+# QUIET cases plant the near-misses it must NOT block (a short `sk-`, the word
+# Bearer alone, a template). A widened rule that starts over-matching fails the
+# control the same way a dead one does.
+_ctl() { # _ctl fire|quiet <rule id> <label> <synthetic line> [expected category]
+    local kind="$1" rid="$2" label="$3" syn="$4" expect="${5:-}"
+    ncase=$(( ncase + 1 ))
+    classify "$syn"
+    if [ "$kind" = fire ]; then
+        case "$CAT
+$WARN_CATS" in
+            *"$expect"*) out="$out$(printf '  ARMED    %-14s FIRED         %s' "$rid" "$label")
+" ;;
+            *) failed=$(( failed + 1 ))
+               out="$out$(printf '  ARMED    %-14s DID NOT FIRE  %s' "$rid" "$label")
+" ;;
+        esac
+    else
+        nquiet=$(( nquiet + 1 ))
+        if [ -z "$CAT" ]; then out="$out$(printf '  ARMED    %-14s stayed quiet  %s' "$rid" "$label")
+"
+        else failed=$(( failed + 1 ))
+             out="$out$(printf '  ARMED    %-14s FIRED WRONGLY %s (%s)' "$rid" "$label" "$CAT")
+"
+        fi
+    fi
+}
 run_control() {
-    local rid syn expect got armed=0 disarmed=0 total=0 failed=0 out="" A36 u
+    local rid armed=0 disarmed=0 total=0 failed=0 ncase=0 nquiet=0 out="" A36 A35 A12 u
     A36="$(printf 'A%.0s' 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6)"
+    A35="${A36#A}"; A12="${A36:0:12}"
     u="$user"
     for rid in $KNOWN_RULES; do
         total=$(( total + 1 ))
@@ -339,40 +406,51 @@ run_control() {
 "
             continue
         fi
-        case "$rid" in
-            username-path) syn="path = \"/Users/$u/x\"";          expect="username-in-path" ;;
-            github-token)  syn="t = \"gh${_z:-}p_${A36}\"";       expect="github-token" ;;
-            sk-token)      syn="t = \"sk${_z:-}-${A36}\"";        expect="api-token(sk-)" ;;
-            aws-key)       syn="t = \"AK${_z:-}IA0123456789ABCDEF\""; expect="aws-access-key" ;;
-            slack-token)   syn="t = \"xo${_z:-}xb-0123456789-abcdefghij\""; expect="slack-token" ;;
-            private-key)   syn="$(printf -- '-----%s RSA PRIVATE KEY-----' 'BEGIN')"; expect="private-key" ;;
-            phone)         syn="call +6${_z:-}1390001234 now";      expect="phone-number(E.164)" ;;
-            lan-ip)        syn="host 192.16${_z:-}8.1.50";          expect="private-LAN-IP" ;;
-            local-phone)   syn="call 04${_z:-}12345678";            expect="local-format-phone" ;;
-        esac
-        # username-path cannot fire when the username is unknown; that is a real
-        # gap in the instrument on this machine, not a pass.
-        if [ "$rid" = "username-path" ] && [ -z "$u" ]; then
-            armed=$(( armed + 1 )); failed=$(( failed + 1 ))
-            out="$out$(printf '  ARMED    %-14s DID NOT FIRE (no username resolved)' "$rid")
-"
-            continue
-        fi
         armed=$(( armed + 1 ))
-        classify "$syn"
-        got="$CAT
-$WARN_CATS"
-        case "$got" in
-            *"$expect"*) out="$out$(printf '  ARMED    %-14s FIRED' "$rid")
-" ;;
-            *) failed=$(( failed + 1 ))
-               out="$out$(printf '  ARMED    %-14s DID NOT FIRE' "$rid")
-" ;;
+        case "$rid" in
+            username-path)
+                # cannot fire when the username is unknown; that is a real gap in
+                # the instrument on this machine, not a pass.
+                if [ -z "$u" ]; then
+                    ncase=$(( ncase + 1 )); failed=$(( failed + 1 ))
+                    out="$out$(printf '  ARMED    %-14s DID NOT FIRE  (no username resolved)' "$rid")
+"
+                else _ctl fire "$rid" "home path" "path = \"/Users/$u/x\"" "username-in-path"; fi ;;
+            github-token) _ctl fire "$rid" "ghp_"  "t = \"gh${_z:-}p_${A36}\"" "github-token" ;;
+            sk-token)
+                _ctl fire  "$rid" "sk-"            "t = \"sk${_z:-}-${A36}\""                     "api-token(sk-)"
+                _ctl fire  "$rid" "sk-ant-api03-"  "ANTHROPIC_API_KEY=sk${_z:-}-ant-api03-FAKE${A36}-FAKE_AA" "api-token(sk-)"
+                _ctl fire  "$rid" "sk-proj-"       "{\"key\": \"sk${_z:-}-proj-FAKE_${A36}-x\"}"  "api-token(sk-)"
+                _ctl quiet "$rid" "sk- + 12 chars" "t = \"sk${_z:-}-${A12}\""
+                _ctl quiet "$rid" "sk- inside a word" "see /docs/risk-assessment${A12} and task-list-and-disk-usage"
+                _ctl quiet "$rid" "a slug holding sk- (engage)" "see feedback_ask-before-reading-personal-data-and-more" ;;
+            stripe-key)   _ctl fire "$rid" "sk_live_"  "stripe: sk${_z:-}_live_FAKE${A36}" "stripe-key" ;;
+            npm-token)
+                _ctl fire  "$rid" "npm_ + 36"      "//registry.npmjs.org/:_authToken=npm${_z:-}_${A36}" "npm-token"
+                _ctl quiet "$rid" "npm_ + 35"      "t = npm${_z:-}_${A35}" ;;
+            google-key)
+                _ctl fire  "$rid" "AIza + 35"      "key: AI${_z:-}za${A35}" "google-key"
+                _ctl quiet "$rid" "AIza + 34"      "key: AI${_z:-}za${A35#A}" ;;
+            aws-key)      _ctl fire "$rid" "AKIA"  "t = \"AK${_z:-}IA0123456789ABCDEF\"" "aws-access-key" ;;
+            slack-token)  _ctl fire "$rid" "xoxb-" "t = \"xo${_z:-}xb-0123456789-abcdefghij\"" "slack-token" ;;
+            private-key)  _ctl fire "$rid" "PEM header" "$(printf -- '-----%s RSA PRIVATE KEY-----' 'BEGIN')" "private-key" ;;
+            jwt)
+                _ctl fire  "$rid" "header.payload.sig" "token=ey${_z:-}JFAKE${A12}.ey${_z:-}JFAKE${A12}.FAKEsig${A12}" "jwt"
+                _ctl quiet "$rid" "a lone eyJ blob"    "data: ey${_z:-}JFAKE${A36}" ;;
+            bearer-token)
+                _ctl fire  "$rid" "Bearer <token>"     "-H \"Authorization: Be${_z:-}arer FAKE0000${A36}\"" "bearer-token"
+                _ctl quiet "$rid" "the word Bearer alone" "Authorization: Be${_z:-}arer"
+                _ctl quiet "$rid" "Bearer \$VAR / \${TOKEN}" "Be${_z:-}arer \$GH_TOKEN and Be${_z:-}arer \${TOKEN}"
+                _ctl quiet "$rid" "Bearer placeholder, no digit" "Be${_z:-}arer YOUR_ACCESS_TOKEN_GOES_HERE" ;;
+            phone)        _ctl fire "$rid" "E.164" "call +6${_z:-}1390001234 now" "phone-number(E.164)" ;;
+            lan-ip)       _ctl fire "$rid" "192.168/16" "host 192.16${_z:-}8.1.50" "private-LAN-IP" ;;
+            local-phone)  _ctl fire "$rid" "04xx" "call 04${_z:-}12345678" "local-format-phone" ;;
         esac
     done
 
     printf 'git-leak-scan --control\n' >&2
-    printf '  tested %s of %s rules, %s disarmed\n' "$armed" "$total" "$disarmed" >&2
+    printf '  tested %s of %s rules, %s disarmed (%s cases: %s must fire, %s must stay quiet)\n' \
+        "$armed" "$total" "$disarmed" "$ncase" "$(( ncase - nquiet ))" "$nquiet" >&2
     printf '%s' "$out" >&2
 
     if [ "$armed" -eq 0 ]; then
@@ -380,11 +458,11 @@ $WARN_CATS"
         exit 2
     fi
     if [ "$failed" -gt 0 ]; then
-        printf '== %s of %s armed rules DID NOT FIRE -- THE TOOL IS BROKEN ==\n' "$failed" "$armed" >&2
+        printf '== %s of %s control cases FAILED (did not fire, or fired wrongly) -- THE TOOL IS BROKEN ==\n' "$failed" "$ncase" >&2
         printf '   Do not trust any recent clean verdict from it.\n' >&2
         exit 1
     fi
-    printf '== %s of %s armed rules fire ==\n' "$armed" "$armed" >&2
+    printf '== %s of %s armed rules fire, %s cases ==\n' "$armed" "$armed" "$ncase" >&2
     printf '   A green control proves the INSTRUMENT, not the SCOPE -- it says\n' >&2
     printf '   nothing about whether you pointed it at the right commits.\n' >&2
     exit 0
