@@ -890,7 +890,8 @@ That kill has to be a SIGKILL once speech is audible (found 2026-09-28).
 say2 catches SIGTERM as "cancel the render", but by the time audio plays the
 render is finished and its playback loop never checks for cancel, so a plain
 `kill` was ignored and the voice ran to the end. `speak-clipboard` now sends
-SIGTERM, waits about 0.2 s, then SIGKILL. The proper fix is in say2's own
+SIGKILL straight away (a SIGTERM-then-wait version cost ~0.6 s of lag per
+stop and was dropped the same evening). The proper fix is in say2's own
 playback loop.
 `~/.local/state/herdr/speak-clipboard.log` keeps one metadata line per press
 (mode, outcome, character count): a new line means the key reached herdr; no
