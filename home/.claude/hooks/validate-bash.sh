@@ -9,10 +9,16 @@
 #
 # Denies:
 #   rm -rf / (or ~, $HOME)            root or home deletion
-#   git push --force|-f ... main|master
+#   git push that FORCES main or master  in any spelling git accepts: -f in a
+#                                     cluster, +refspec, --mirror, lease, the flag
+#                                     after the branch, or no refspec while main is
+#                                     checked out in the payload's cwd (fails closed
+#                                     when that cannot be read). Parsed by the
+#                                     scanner, rule D; W-20260929-A31.
 #   git reset --hard                  with no ref
 #   git clean -fd / -f -d             untracked files and directories
-# and, through the shared scanner (conv-shscan.awk, mode guard), three rules Gavin
+# and, through the shared scanner (conv-shscan.awk, mode guard), the force-push
+# rule above and three rules Gavin
 # approved 2026-09-23 from the conv-hooks survey of live aliases:
 #   ci cr ct cpr cd_ cskip            .zshrc aliases launching a NESTED Claude with
 #                                     --dangerously-skip-permissions (cb does not
@@ -44,6 +50,9 @@ LOG_FILE="$STATE_DIR/hooks-security.log"
 HOOKS_DIR="$(builtin cd "$(dirname "$0")" && pwd)"
 SHSCAN="${CONV_SHSCAN:-$HOOKS_DIR/conv-shscan.awk}"
 GUARD_FALLBACK_ERE='(^|[;&|({`][[:space:]]*)(ci|cr|ct|cpr|cd_|cskip|gpf!)([[:space:];&|)]|$)|(^|[;&|({`][[:space:]]*)([^[:space:]]*/)?brew[[:space:]]+(install|instal|reinstall|upgrade)'
+# Scanner missing: a push word plus anything that looks like a force denies, crudely.
+PUSH_FALLBACK_ERE='(^|[^A-Za-z0-9_.-])(push|gp|gpu|gpv|gpsup|ggpush)([[:space:];&|)]|$)'
+FORCE_FALLBACK_ERE='(^|[[:space:]])(-[A-Za-z0-9]*f[A-Za-z0-9]*|--f[a-z-]*|--m[a-z]*|\+[^[:space:]]+)([[:space:]=;&|)]|$)'
 
 log_blocked() {
   mkdir -p "$STATE_DIR" 2>/dev/null
@@ -65,8 +74,9 @@ deny() {
 # Words, one per rule: rm (root/home rm), git push|reset|clean and the bare words
 # push|reset|clean (force push, reset --hard, git clean -fd, also after a quoted
 # span is spliced out), brew (install|instal|reinstall|upgrade, or a subcommand in
-# a variable), ci cr ct cpr cd_ cskip (nested Claude), gpf (gpf!).
-VB_RAW_ERE='rm[[:space:]]|git[[:space:]]+(push|reset|clean)|(^|[^A-Za-z0-9_.-])(push|reset|clean|brew|ci|cr|ct|cpr|cd_|cskip|gpf)([^A-Za-z0-9_-]|$)'
+# a variable), ci cr ct cpr cd_ cskip (nested Claude), gpf (gpf!), and the push
+# aliases gp gpu gpv gpsup ggpush (force push, 2026-09-29).
+VB_RAW_ERE='rm[[:space:]]|git[[:space:]]+(push|reset|clean)|(^|[^A-Za-z0-9_.-])(push|reset|clean|brew|ci|cr|ct|cpr|cd_|cskip|gpf|gp|gpu|gpv|gpsup|ggpush)([^A-Za-z0-9_-]|$)'
 
 raw_mentions_trigger() {
   local r="$1" q
@@ -107,16 +117,12 @@ _strip() {
 }
 
 # Prints the deny reason, or nothing when the command is allowed.
+# $1 the command, $2 the payload's cwd (the force-push rule reads the branch there).
 _classify() {
   local s
   s=$(_strip "$1")
   if echo "$s" | grep -qE 'rm\s+(-[a-zA-Z]*f[a-zA-Z]*\s+)?(/|~|\$HOME)\s*$'; then
     echo "Destructive rm command targeting root or home directory"; return
-  fi
-  if echo "$s" | grep -qE 'git\s+push\s+.*(--force|--force-with-lease).*\s+(main|master)' \
-     || echo "$s" | grep -qE 'git\s+push\s+.*\s+(main|master)\s+.*(--force|--force-with-lease)' \
-     || echo "$s" | grep -qE 'git\s+push\s+.*-[a-zA-Z]*f[a-zA-Z]*\s+.*(main|master)'; then
-    echo "Force push to main/master is not allowed"; return
   fi
   if echo "$s" | grep -qE 'git\s+reset\s+--hard\s*($|[;&|])'; then
     echo "git reset --hard without a ref: specify a commit"; return
@@ -155,7 +161,7 @@ _classify() {
       echo "git clean with -f and -d would remove untracked files and directories (add -n to dry-run it)"; return
     fi
   fi
-  _guard "$1"
+  _guard "$1" "${2:-}"
 }
 
 # The three scanner rules (nested-Claude aliases, gpf!, brew install). Prints the
@@ -163,11 +169,13 @@ _classify() {
 _guard() {
   local out rc=3 r
   if [ -r "$SHSCAN" ]; then
-    out=$(printf '%s' "$1" | CONV_MODE=guard LC_ALL=C awk -f "$SHSCAN" 2>/dev/null); rc=$?
+    out=$(printf '%s' "$1" | CONV_MODE=guard CONV_CWD="${2:-}" LC_ALL=C awk -f "$SHSCAN" 2>/dev/null); rc=$?
   fi
   if [ "$rc" -ne 0 ] || [ -z "$out" ]; then
-    if printf '%s' "$1" | command grep -qE "$GUARD_FALLBACK_ERE"; then
-      echo "validate-bash: its scanner conv-shscan.awk is missing or failed (rc=$rc), so it cannot tell a nested-Claude alias, gpf! or brew install from prose, and this command mentions one. Restow the dotfiles (home/.claude/hooks) or fix the scanner."
+    if printf '%s' "$1" | command grep -qE "$GUARD_FALLBACK_ERE" \
+       || { printf '%s' "$1" | command grep -qE "$PUSH_FALLBACK_ERE" \
+            && printf '%s' "$1" | command grep -qE "$FORCE_FALLBACK_ERE"; }; then
+      echo "validate-bash: its scanner conv-shscan.awk is missing or failed (rc=$rc), so it cannot tell a nested-Claude alias, gpf!, brew install or a force push from prose, and this command mentions one. Restow the dotfiles (home/.claude/hooks) or fix the scanner."
     fi
     return
   fi
@@ -181,8 +189,8 @@ _guard() {
 # ---------------------------------------------------------------- selftest
 if [ "${1:-}" = "--selftest" ]; then
   fails=0; _must_n=0
-  _must() { # $1 = expect-hit(1)/expect-miss(0), $2 = label, $3 = command
-    local got hit=0; _must_n=$((_must_n + 1)); got="$(_classify "$3")"; [ -n "$got" ] && hit=1
+  _must() { # $1 = expect-hit(1)/expect-miss(0), $2 = label, $3 = command, [$4 = cwd]
+    local got hit=0; _must_n=$((_must_n + 1)); got="$(_classify "$3" "${4:-}")"; [ -n "$got" ] && hit=1
     if [ "$hit" -eq "$1" ]; then printf 'ok    %s\n' "$2"
     else printf 'FAIL  %s  (expected hit=%s, got hit=%s)\n' "$2" "$1" "$hit"; fails=$((fails+1)); fi
   }
@@ -205,6 +213,9 @@ if [ "${1:-}" = "--selftest" ]; then
   _must 1 'git clean -d -f (separate)'      'git clean -d -f'
   _must 1 'git clean -xfd'                  'git clean -xfd'
   _must 1 'git clean -ffd'                  'git clean -ffd'
+  # W-20260929-A31: a bare force push names no branch, so the payload's cwd decides.
+  # With no cwd the branch cannot be read, and the rule fails closed.
+  _must 1 'bare force push, no cwd (fail closed)' 'git push -f'
   echo "=== NEGATIVE arms: these MUST be allowed ==="
   _must 0 'rm of a subdir'                  'rm -rf ./build'
   _must 0 'plain push'                      'git push origin master'
@@ -320,10 +331,135 @@ if [ "${1:-}" = "--selftest" ]; then
   conv_arm allow 'rg for the phrase'               "rg 'brew install' docs"
   conv_arm allow 'the word install after brew list' 'brew list install'
   conv_arm allow 'control: harmless'               'echo control-ok'
+  # W-20260929-A31 (red-team H1, rows P01-P28). Until 2026-09-29 the force-push rule
+  # was three regexes that needed main or master typed as its own word beside the
+  # flag: bare `git push -f` on main, +main, HEAD:main --force, main -f and --mirror
+  # all passed, and --no-verify was denied only because -[a-z]*f matched the f in
+  # "verify". Each arm runs in a fixture repo whose HEAD is the branch in its label.
+  echo "=== D. force push to main or master: DENY ==="
+  FX="${TMPDIR:-/tmp}/vb-selftest-repos"
+  _vb_repo() { # $1 dir name, $2 branch: a repo with one commit, HEAD on $2
+    local d="$FX/$1" t c
+    [ -d "$d/.git" ] || git init -q "$d" >/dev/null 2>&1 || return 1
+    git -C "$d" config push.default simple || return 1
+    t=$(git -C "$d" mktree </dev/null) || return 1
+    c=$(GIT_AUTHOR_NAME=vb GIT_AUTHOR_EMAIL=vb@selftest GIT_COMMITTER_NAME=vb GIT_COMMITTER_EMAIL=vb@selftest \
+        GIT_AUTHOR_DATE=2026-01-01T00:00:00Z GIT_COMMITTER_DATE=2026-01-01T00:00:00Z \
+        git -C "$d" commit-tree -m fixture "$t") || return 1
+    git -C "$d" update-ref "refs/heads/$2" "$c" && git -C "$d" symbolic-ref HEAD "refs/heads/$2"
+  }
+  mkdir -p "$FX/nonrepo"
+  _vb_repo main main; _vb_repo master master; _vb_repo feature feature
+  _vb_repo main-feature main-feature; _vb_repo fix-main fix-main
+  _vb_repo detached feature && git -C "$FX/detached" update-ref --no-deref HEAD refs/heads/feature
+  _vb_repo matching feature && git -C "$FX/matching" config push.default matching
+  _vb_repo rpush feature && git -C "$FX/rpush" config --replace-all remote.origin.push 'refs/heads/*:refs/heads/*'
+  _vb_repo upmain feature && git -C "$FX/upmain" config remote.origin.url /nonexistent \
+    && git -C "$FX/upmain" config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*' \
+    && git -C "$FX/upmain" config branch.feature.remote origin \
+    && git -C "$FX/upmain" config branch.feature.merge refs/heads/main \
+    && git -C "$FX/upmain" config push.default upstream
+  # The fixtures are the controls: each must BE what its arms assume, or every
+  # arm below is void. Read back with the same git the hook uses.
+  for _f in main:main master:master feature:feature main-feature:main-feature fix-main:fix-main \
+            matching:feature rpush:feature upmain:feature detached: nonrepo:; do
+    _got=$(git -C "$FX/${_f%%:*}" symbolic-ref -q --short HEAD 2>/dev/null); _st_n=$((_st_n + 1))
+    if [ "$_got" = "${_f#*:}" ]; then printf 'ok    fixture %s has HEAD [%s]\n' "${_f%%:*}" "$_got"
+    else printf 'FAIL  fixture %s has HEAD [%s], wanted [%s]: arms below are void\n' "${_f%%:*}" "$_got" "${_f#*:}"; _st_fails=$((_st_fails + 1)); fi
+  done
+  _st_n=$((_st_n + 1))
+  if git -C "$FX/nonrepo" rev-parse --git-dir >/dev/null 2>&1; then
+    echo "FAIL  fixture nonrepo is inside a git repo: its arm is void"; _st_fails=$((_st_fails + 1))
+  else echo "ok    fixture nonrepo is not a git repo"; fi
+  _st_n=$((_st_n + 1))
+  if git -C "$FX/detached" rev-parse -q --verify HEAD >/dev/null; then echo "ok    fixture detached has a commit at HEAD"
+  else echo "FAIL  fixture detached has no commit at HEAD"; _st_fails=$((_st_fails + 1)); fi
+  M="$FX/main" F="$FX/feature"
+  conv_arm deny  'P01 git push -f, on main'                   'git push -f'                         '' "$M"
+  conv_arm deny  'git push --force, on main'                  'git push --force'                    '' "$M"
+  conv_arm deny  'git push -f, on master'                     'git push -f'                         '' "$FX/master"
+  conv_arm deny  'git push -f origin (remote only), on main'  'git push -f origin'                  '' "$M"
+  conv_arm deny  'P04 git push origin +main, on feature'      'git push origin +main'               '' "$F"
+  conv_arm deny  'P05 git push origin +HEAD:main'             'git push origin +HEAD:main'          '' "$F"
+  conv_arm deny  '+refs/heads/main'                           'git push origin +refs/heads/main'    '' "$F"
+  conv_arm deny  '+master'                                    'git push origin +master'             '' "$F"
+  conv_arm deny  'quoted +main'                               "git push origin '+main'"             '' "$F"
+  conv_arm deny  'P22 git push origin main -f (flag last)'    'git push origin main -f'             '' "$F"
+  conv_arm deny  'P26 git push origin HEAD:main --force'      'git push origin HEAD:main --force'   '' "$F"
+  conv_arm deny  'P27 git push --force origin feature:main'   'git push --force origin feature:main' '' "$F"
+  conv_arm deny  'quoted main after -f'                       'git push -f origin "main"'           '' "$F"
+  conv_arm deny  'P06 --force-with-lease, on main'            'git push --force-with-lease'         '' "$M"
+  conv_arm deny  '--force-with-lease origin main'             'git push --force-with-lease origin main' '' "$F"
+  conv_arm deny  '--force-with-lease=main:<sha> origin main'  'git push --force-with-lease=main:abc123 origin main' '' "$F"
+  conv_arm deny  '--force-w (git abbreviation)'               'git push --force-w origin main'      '' "$F"
+  conv_arm deny  '--force-if-includes origin main (conservative)' 'git push --force-if-includes origin main' '' "$F"
+  conv_arm deny  'P07 git push --mirror'                      'git push --mirror'                   '' "$F"
+  conv_arm deny  '--m (abbreviates --mirror)'                 'git push --m origin'                 '' "$F"
+  conv_arm deny  '--all -f'                                   'git push --all -f origin'            '' "$F"
+  conv_arm deny  '-uf cluster, origin main'                   'git push -uf origin main'            '' "$F"
+  conv_arm deny  '-uf cluster, bare, on main'                 'git push -uf'                        '' "$M"
+  conv_arm deny  '--no-force then -f (last wins)'             'git push --no-force -f origin main'  '' "$F"
+  conv_arm deny  'P21 -u origin HEAD --force, on main'        'git push -u origin HEAD --force'     '' "$M"
+  conv_arm deny  'P25 --force origin HEAD, on main'           'git push --force origin HEAD'        '' "$M"
+  conv_arm deny  'force origin @, on main'                    'git push -f origin @'                '' "$M"
+  conv_arm deny  'refspec in a variable'                      'git push -f origin "$B"'             '' "$F"
+  conv_arm deny  'refspec from $(...)'                        'git push -f origin $(git_current_branch)' '' "$F"
+  conv_arm deny  'glob refspec'                               "git push -f origin 'refs/heads/*:refs/heads/*'" '' "$F"
+  conv_arm deny  '+: (matching branches)'                     'git push origin +:'                  '' "$F"
+  conv_arm deny  'git -C <main repo> push -f, cwd feature'    "git -C $M push -f"                   '' "$F"
+  conv_arm deny  'git -C relative, cwd is its parent'         'git -C main push -f'                 '' "$FX"
+  conv_arm deny  'git -c push.default=... (config unreadable)' 'git -c push.default=matching push -f' '' "$F"
+  conv_arm deny  'GIT_DIR= prefix (config unreadable)'        'GIT_DIR=/x/.git git push -f'         '' "$F"
+  conv_arm deny  'git --git-dir= (config unreadable)'         'git --git-dir=/x/.git push -f'       '' "$F"
+  conv_arm deny  'P28 commit --amend && push -f, on main'     'git commit --amend --no-edit && git push -f' '' "$M"
+  conv_arm deny  'cd <main repo> && push -f, cwd feature'     "cd $M && git push -f"                '' "$F"
+  conv_arm deny  'non-repo cwd, bare force (fail closed)'     'git push -f'                         '' "$FX/nonrepo"
+  conv_arm deny  'detached HEAD, bare force (fail closed)'    'git push -f'                         '' "$FX/detached"
+  conv_arm deny  'push.default=matching, on feature'          'git push -f'                         '' "$FX/matching"
+  conv_arm deny  'remote.origin.push configured, on feature'  'git push -f'                         '' "$FX/rpush"
+  conv_arm deny  'feature tracking main (push.default=upstream)' 'git push -f'                      '' "$FX/upmain"
+  conv_arm deny  '/usr/bin/git path'                          '/usr/bin/git push -f origin main'    '' "$F"
+  conv_arm deny  'command git'                                'command git push -f origin main'     '' "$F"
+  conv_arm deny  'env VAR=1 git'                              'env FOO=1 git push -f origin main'   '' "$F"
+  conv_arm deny  'inside $(...)'                              'x=$(git push -f origin main)'        '' "$F"
+  conv_arm deny  'inside eval'                                'eval "git push -f origin main"'      '' "$F"
+  conv_arm deny  'inside bash -c'                             "bash -c 'git push -f'"               '' "$F"
+  conv_arm deny  'alias gp -f, on main'                       'gp -f'                               '' "$M"
+  conv_arm deny  'alias gp origin +main'                      'gp origin +main'                     '' "$F"
+  conv_arm deny  'alias gpsup --force, on main'               'gpsup --force'                       '' "$M"
+  conv_arm deny  'control: the form denied before 2026-09-29' 'git push --force origin main'        '' "$F"
+  echo "=== D. force push elsewhere, and plain pushes: ALLOW ==="
+  conv_arm allow 'P02 git push -f origin feature, on main'    'git push -f origin feature'          '' "$M"
+  conv_arm allow 'git push -f, on feature'                    'git push -f'                         '' "$F"
+  conv_arm allow 'git push -f, on main-feature'               'git push -f'                         '' "$FX/main-feature"
+  conv_arm allow 'git push -f, on fix-main'                   'git push -f'                         '' "$FX/fix-main"
+  conv_arm allow '-f origin main-feature'                     'git push -f origin main-feature'     '' "$M"
+  conv_arm allow '-f origin fix-main'                         'git push -f origin fix-main'         '' "$M"
+  conv_arm allow '+feature, on main'                          'git push origin +feature'            '' "$M"
+  conv_arm allow '-f feature:feature2'                        'git push -f origin feature:feature2' '' "$M"
+  conv_arm allow '--force-with-lease origin feature'          'git push --force-with-lease origin feature' '' "$M"
+  conv_arm allow 'P08 --no-verify origin feature, on main'    'git push --no-verify origin feature' '' "$M"
+  conv_arm allow '--no-verify origin main (no rule of its own)' 'git push --no-verify origin main'  '' "$F"
+  conv_arm allow 'plain push origin main'                     'git push origin main'                '' "$M"
+  conv_arm allow 'plain push HEAD:main'                       'git push origin HEAD:main'           '' "$F"
+  conv_arm allow 'plain -u origin HEAD, on main'              'git push -u origin HEAD'             '' "$M"
+  conv_arm allow '-f then --no-force (last wins)'             'git push -f --no-force origin main'  '' "$F"
+  conv_arm allow '-o f is a push option, not -f'              'git push -o f origin main'           '' "$F"
+  conv_arm allow '-of is -o with value f'                     'git push -of origin main'            '' "$F"
+  conv_arm allow 'git -C <feature repo> push -f, cwd main'    "git -C $F push -f"                   '' "$M"
+  conv_arm allow 'git fetch -f origin main (not a push)'      'git fetch -f origin main'            '' "$M"
+  conv_arm allow 'git pull --force origin main (not a push)'  'git pull --force origin main'        '' "$M"
+  conv_arm allow 'prose in an echo'                           'echo "git push -f origin main"'      '' "$M"
+  conv_arm allow 'prose in a commit message'                  'git commit -m "never git push -f to main"' '' "$M"
+  conv_arm allow 'alias gp origin main'                       'gp origin main'                      '' "$M"
+  conv_arm allow 'alias gp -f, on feature'                    'gp -f'                               '' "$F"
   echo "=== FALLBACK arms: scanner missing, the rules still hold ==="
   export CONV_SHSCAN=/nonexistent/conv-shscan.awk
   conv_arm deny  'scanner missing: ci denied'      'ci x'
   conv_arm deny  'scanner missing: brew install'   'brew install jq'
+  conv_arm deny  'scanner missing: git push -f, on main' 'git push -f'                    '' "$M"
+  conv_arm deny  'scanner missing: +main'          'git push origin +main'                '' "$F"
+  conv_arm allow 'scanner missing: plain push ok'  'git push origin feature'              '' "$M"
   conv_arm allow 'scanner missing: harmless ok'    'echo control-ok'
   unset CONV_SHSCAN
   echo "=== UNREADABLE arms: jq gone, truncated JSON, a moved key (D-20260925-A03) ==="
@@ -369,7 +505,8 @@ if [ -z "$COMMAND" ]; then
   exit 0   # a real, empty command: nothing to check, as before
 fi
 
-REASON=$(_classify "$COMMAND")
+CWD=$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)
+REASON=$(_classify "$COMMAND" "$CWD")
 if [ -n "$REASON" ]; then
   log_blocked "$REASON" "$COMMAND"
   deny "$REASON"
