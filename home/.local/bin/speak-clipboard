@@ -167,8 +167,8 @@
 # The toggle rule (v5, 2026-09-28, Gavin's call): ANY press while it speaks
 # = stop, whatever the clipboard holds; the next press speaks the current
 # selection. Until v5, a press with NEW text replaced the speech instead,
-# decided by comparing a SHA-256 of the cleaned text. That hash is still
-# computed and written next to the pid file, but no longer decides anything.
+# decided by comparing a SHA-256 of the cleaned text. The cleaner still
+# computes that hash, but since v4.5 nothing stores or reads it.
 #
 # PRIVACY: the text is never logged. It DOES pass on the command line as of
 # v4.1 above (a deliberate speed-over-privacy trade, see that note) -- it is
@@ -177,10 +177,21 @@
 # avoided. Their stderr is still captured for diagnostics, never the text.
 #
 # CONCURRENCY: key auto-repeat or a double tap runs this script twice within
-# a few ms. An atomic mkdir lock serialises the check-stop-start section; the
-# loser records outcome=busy and exits 0 (never queues -- N repeats would mean
-# N toggles). The pid file is trusted only if that pid is a live say2/say
-# (pids are recycled; a stale file must never kill a stranger).
+# a few ms. A flock on speak-clipboard.flock (macOS `lockf` on fd 9)
+# serialises the check-stop-start section; the loser records outcome=busy and
+# exits 0 (never queues -- N repeats would mean N toggles). The kernel drops
+# the lock when the script exits, even on SIGKILL, so there is no stale-lock
+# case to handle. The pid file is trusted only if that pid is still the same
+# live process (pid plus start time) and is one of our engines: pids are
+# recycled, and a stale file must never kill a stranger.
+#
+# NOTHING IS EVER DELETED (v4.5, 2026-09-28, Gavin's call). Until v4.5 the
+# lock was a mkdir'd folder and the pid/hash files were removed after use.
+# In a script `command rm` is the ~/.local/bin/rm Trash shim, so every press
+# put 1-3 of these files in the Trash (verified with a probe) at ~95 ms each.
+# Now the lock file is never removed (a lock is the flock, not the file), the
+# pid file is overwritten in place and judged stale by its contents, and the
+# hash file is no longer written at all.
 #
 # USAGE
 #   speak-clipboard              speak the clipboard (replacing any current speech)
@@ -204,9 +215,11 @@
 # STATE (all under ~/.local/state/herdr/, nothing here ever contains text)
 #   speak-clipboard.log    one line per press: when, mode, ppid, outcome, chars
 #   speak-render.log       the speaker's stderr, for diagnostics only
-#   speak-render.pid/.hash the current speaker's pid and the hash of what it speaks
+#   speak-render.pid       the last speaker's pid (line 1) and start time (line 2)
 #   speak-engine.cache     resolve_engine()'s cached choice, refreshed daily
-#   speak-clipboard.lock/  the mkdir lock, held for one run of this script
+#   speak-clipboard.flock  empty; flock'd for one run of this script
+#   (speak-render.hash and a speak-clipboard.lock/ folder are pre-v4.5
+#    leftovers, no longer read or written)
 # ============================================================================
 set -uo pipefail
 
@@ -247,12 +260,10 @@ _state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/herdr"
 _trace_file="$_state_dir/speak-clipboard.log"
 _render_log="$_state_dir/speak-render.log"
 _pid_file="$_state_dir/speak-render.pid"
-_hash_file="$_state_dir/speak-render.hash"
-_lock_dir="$_state_dir/speak-clipboard.lock"
+_lock_file="$_state_dir/speak-clipboard.flock"
 _engine_cache="$_state_dir/speak-engine.cache"
 _engine_cache_ttl=86400
 _max_chars=8000
-_have_lock=""
 [ -d "$_state_dir" ] || mkdir -p "$_state_dir" 2>/dev/null
 
 # Decide which engine+voice a plain press actually uses, and cache the answer
@@ -301,7 +312,8 @@ trace() {
     printf '%s mode=%s ppid=%s %s\n' "$ts" "$mode" "${PPID:-?}" "$*" >>"$_trace_file" 2>/dev/null
 }
 
-# Log trimming and lock release run once, at exit, off the press path.
+# Log trimming runs once, at exit, off the press path. The lock needs no
+# release: it goes when fd 9 closes.
 _trim_log() {
     local f="$1" max="$2" n
     [ -f "$f" ] || return 0
@@ -310,48 +322,49 @@ _trim_log() {
     tail -n "$max" "$f" >"$f.tmp" 2>/dev/null && command mv -f "$f.tmp" "$f" 2>/dev/null
 }
 _on_exit() {
-    [ -n "$_have_lock" ] && command rm -rf "$_lock_dir" 2>/dev/null
     _trim_log "$_trace_file" 200
     _trim_log "$_render_log" 400
 }
 trap _on_exit EXIT
 
-# mkdir is atomic, so two presses cannot both win. A lock whose owner pid is
-# dead is stale (a killed script) and is taken over. A lock with no pid file
-# yet belongs to a winner that is between mkdir and its echo: if the directory
-# is under three seconds old it is live, not stale.
+# flock via macOS `lockf` on fd 9, opened for append so the file is created
+# if missing and never truncated. -t 0: fail at once if held (exit 75),
+# never queue. MEASURED 2026-09-28: a second taker gets 75 while the first
+# holds, 0 once it exits or is SIGKILLed; and a background child that
+# inherits fd 9 keeps the lock after the script exits, which is why every
+# speaker in start_speaker is launched with 9>&-.
 acquire_lock() {
-    local owner="" age=0
-    if ! mkdir "$_lock_dir" 2>/dev/null; then
-        { read -r owner <"$_lock_dir/pid"; } 2>/dev/null || true
-        if [ -n "$owner" ]; then
-            kill -0 "$owner" 2>/dev/null && return 1
-        else
-            age=$(( $(date +%s) - $(stat -f %m "$_lock_dir" 2>/dev/null || echo 0) ))
-            [ "$age" -lt 3 ] && return 1
-        fi
-        command rm -rf "$_lock_dir" 2>/dev/null
-        mkdir "$_lock_dir" 2>/dev/null || return 1
-    fi
-    echo $$ >"$_lock_dir/pid"
-    _have_lock=1
+    exec 9>>"$_lock_file" || return 1
+    lockf -s -t 0 9
 }
 
-# Sets _speaker to the pid of the live speaker, or clears stale state and
-# returns 1. The pid file holds either a lone say2/say pid, or (streaming,
-# v4.4) the leader of a process group running say2 | ffplay; _speaker_group
-# is set to 1 in that case. `kill -0` alone is not enough: pids are recycled,
-# so the process must also BE one of our engines (or lead a group holding
-# one) before anyone sends it a signal.
+# Sets _speaker to the pid of the live speaker, or returns 1. The pid file
+# holds a pid and that process's start time; it is never removed, only
+# overwritten by the next start, so a finished speaker leaves a stale file
+# that this check must reject. It holds either a lone say2/say pid, or
+# (streaming, v4.4) the leader of a process group running say2 | ffplay;
+# _speaker_group is set to 1 in that case. `kill -0` alone is not enough:
+# pids are recycled, so the process must have the same start time AND be one
+# of our engines (or lead a group holding one) before anyone signals it.
+# A process's start time with all whitespace removed. `ps -o lstart=` pads
+# its output with trailing spaces and `read` strips them, so the raw strings
+# never compare equal (MEASURED: that bug made every stop report idle).
+_start_of() {
+    local s
+    s="$(ps -o lstart= -p "$1" 2>/dev/null)"
+    printf '%s' "${s//[[:space:]]/}"
+}
+
 speaker_alive() {
-    local p="" comm=""
+    local p="" stamp="" comm=""
     _speaker=""
     _speaker_group=""
     [ -f "$_pid_file" ] || return 1
-    { read -r p <"$_pid_file"; } 2>/dev/null || true
+    { read -r p; read -r stamp; } <"$_pid_file" 2>/dev/null || true
     case "$p" in
-        ''|*[!0-9]*) command rm -f "$_pid_file" "$_hash_file" 2>/dev/null; return 1 ;;
+        ''|*[!0-9]*) return 1 ;;
     esac
+    [ -n "$stamp" ] && [ "$(_start_of "$p")" = "$stamp" ] || return 1
     comm="$(ps -o comm= -p "$p" 2>/dev/null)"
     case "${comm##*/}" in
         say2|say) _speaker="$p"; return 0 ;;
@@ -359,7 +372,6 @@ speaker_alive() {
     if [ -n "$comm" ] && [ -n "$(pgrep -g "$p" -x 'say2|ffplay' 2>/dev/null)" ]; then
         _speaker="$p"; _speaker_group=1; return 0
     fi
-    command rm -f "$_pid_file" "$_hash_file" 2>/dev/null
     return 1
 }
 
@@ -378,7 +390,6 @@ stop_speaker() {
             kill -KILL "$_speaker" 2>/dev/null && rc=0
         fi
     fi
-    command rm -f "$_pid_file" "$_hash_file" 2>/dev/null
     return $rc
 }
 
@@ -405,17 +416,17 @@ start_speaker() {
               2>>"$_render_log" |
               ffplay -nodisp -autoexit -loglevel error -volume "$volume" \
                   -f s16le -ar 48000 -ch_layout mono -i - >/dev/null 2>>"$_render_log"
-        ) >/dev/null 2>&1 &
+        ) >/dev/null 2>&1 9>&- &
         set +m
     elif [ "$_engine" = "say2" ]; then
         ( trap '' HUP; exec say2 -v "$_engine_voice" -r "$rate" "$text" ) \
-            >/dev/null 2>>"$_render_log" &
+            >/dev/null 2>>"$_render_log" 9>&- &
     else
         ( trap '' HUP; exec say -v "$_engine_voice" -r "$rate" "$text" ) \
-            >/dev/null 2>>"$_render_log" &
+            >/dev/null 2>>"$_render_log" 9>&- &
     fi
-    echo $! >"$_pid_file"
-    echo "$hash" >"$_hash_file"
+    local p=$!
+    printf '%s\n%s\n' "$p" "$(_start_of "$p")" >"$_pid_file"
 }
 
 # ---------------------------------------------------------------------------
