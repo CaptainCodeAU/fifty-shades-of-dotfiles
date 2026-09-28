@@ -139,28 +139,34 @@ inhd==0{
   # allowed, and so is `${V:+literal}` on its own, because neither can expand to the
   # value. So is a stage piped straight into a hash or a byte count: that is the
   # fingerprint this hook's own advice recommends, and it was denied until 2026-09-29.
-  if [ -z "$reason" ]; then
-    local echoes
-    local hashers='(shasum|sha1sum|sha256sum|sha512sum|md5|md5sum|b2sum|openssl[[:space:]]+dgst|wc[[:space:]]+-[cm])'
-    echoes="$(printf '%s' "$bare" | grep -oE '(^|[|;&(]|&&)[[:space:]]*(echo|printf|print)[^|;&]*(\|[[:space:]]*'"$hashers"')?' 2>/dev/null | grep -vE '\|[[:space:]]*'"$hashers"'$' || true)"
-    if [ -n "$echoes" ]; then
-      local stripped
-      stripped="$(printf '%s' "$echoes" | sed -E "s/\\\$\{#$SECRETY\}//g; s/\\\$\{$SECRETY:\+[^\}]*\}//g")"
-      if [[ "$stripped" =~ \$\{?$SECRETY$SECRET_END ]]; then
-        reason="RULE 3: a credential variable expanded inside echo/printf/print"
-      fi
-    fi
+  if [ -z "$reason" ] && _echo_leak "$bare" "$SECRETY"; then
+    reason="RULE 3: a credential variable expanded inside echo/printf/print"
   fi
 
   # RULES 4+ -- commands that print a secret without naming a ${...}: read by the lexer.
+  # CAPT holds the names a printer was captured into (D-20260929-A07); a nested
+  # sh -c / eval body inherits it, because it runs in a subshell of this one.
   if [ -z "$reason" ]; then
-    R=""
+    R=""; BARE="$bare"
+    [ "$depth" -eq 0 ] && CAPT=" "
     _lexed "$cmd" "$depth"
     reason="$R"
   fi
 
   printf '%s' "$reason"
 }
+
+# True when an echo/printf/print stage in $1 expands a variable whose name matches the
+# pattern $2 (SECRETY, or the captured names). Shared by RULE 3 and RULE 13.
+_echo_leak() {
+  local echoes stripped
+  local hashers='(shasum|sha1sum|sha256sum|sha512sum|md5|md5sum|b2sum|openssl[[:space:]]+dgst|wc[[:space:]]+-[cm])'
+  echoes="$(printf '%s' "$1" | grep -oE '(^|[|;&(]|&&)[[:space:]]*(echo|printf|print)[^|;&]*(\|[[:space:]]*'"$hashers"')?' 2>/dev/null | grep -vE '\|[[:space:]]*'"$hashers"'$' || true)"
+  [ -n "$echoes" ] || return 1
+  stripped="$(printf '%s' "$echoes" | sed -E "s/\\\$\{#$2\}//g; s/\\\$\{$2:\+[^\}]*\}//g")"
+  [[ "$stripped" =~ \$\{?$2$SECRET_END ]]
+}
+CAPT=" "; BARE=""
 
 # ---------------------------------------------------------------- lexer-based rules
 # Each sets R to the reason, which names the SAFE form, and returns.
@@ -186,31 +192,73 @@ _lexed() { # $1 = text, $2 = depth. Sets R.
     || { _crude "$text" "it exited non-zero"; return 0; }
   [[ $recs == *"E$US"* ]] || { _crude "$text" "it gave no end record"; return 0; }
   CUR_TEXT="$text"; STDIN_SH=" "
-  local -a hp=() hb=() words=() a=()
+  local -a kd=() pd=() rs=() hp=() hb=() words=() a=()
+  local i n
   while IFS= read -r line; do
     case "$line" in
-      C"$US"*)
-        rest="${line#C"$US"}"; CUR_PID="${rest%%"$US"*}"; rest="${rest#*"$US"}"
-        IFS="$US" read -r -a words <<< "$rest"
-        a=(); k=0
-        while [ "$k" -lt "${#words[@]}" ]; do
-          if [[ ${words[$k]} == "$OPM"* ]]; then k=$((k + 2)); continue; fi   # an operator and its target
-          a[${#a[@]}]="${words[$k]//$RSC/$'\n'}"; k=$((k + 1))
-        done
-        [ "${#a[@]}" -gt 0 ] && _argv "$depth" "${a[@]}" ;;
-      H"$US"*)
-        rest="${line#H"$US"}"; pid="${rest%%"$US"*}"
-        hp[${#hp[@]}]="$pid"; hb[${#hb[@]}]="${rest#*"$US"}" ;;
+      C"$US"*|H"$US"*)
+        kd[${#kd[@]}]="${line%%"$US"*}"; rest="${line#?"$US"}"
+        pd[${#pd[@]}]="${rest%%"$US"*}"; rs[${#rs[@]}]="${rest#*"$US"}" ;;
     esac
-    [ -n "$R" ] && return 0
   done <<< "$recs"
+  n=${#kd[@]}; i=0
+  while [ "$i" -lt "$n" ]; do
+    if [ "${kd[$i]}" = H ]; then
+      hp[${#hp[@]}]="${pd[$i]}"; hb[${#hb[@]}]="${rs[$i]}"; i=$((i + 1)); continue
+    fi
+    CUR_PID="${pd[$i]}"
+    IFS="$US" read -r -a words <<< "${rs[$i]}"
+    a=(); k=0
+    while [ "$k" -lt "${#words[@]}" ]; do
+      if [[ ${words[$k]} == "$OPM"* ]]; then k=$((k + 2)); continue; fi   # an operator and its target
+      a[${#a[@]}]="${words[$k]//$RSC/$'\n'}"; k=$((k + 1))
+    done
+    if [ "${#a[@]}" -gt 0 ]; then
+      _argv "$depth" "${a[@]}"
+      # D-20260929-A07: a printer whose output is captured into a variable passes,
+      # and that variable's name is remembered for RULE 13.
+      [ -n "$R" ] && _captured "$i" && R=""
+      [ -n "$R" ] && return 0
+    fi
+    i=$((i + 1))
+  done
   # stdin data (a heredoc, a here-string, echo piped in) read by a shell as commands
   k=0
   while [ -z "$R" ] && [ "$k" -lt "${#hp[@]}" ]; do
     case "$STDIN_SH" in *" ${hp[$k]} "*) _sub "$depth" "${hb[$k]//$RSC/$'\n'}" "a shell reading stdin" ;; esac
     k=$((k + 1))
   done
+  # RULE 13 -- a captured name printed later in this text (or in an sh -c inside it)
+  if [ -z "$R" ] && [ "$CAPT" != " " ]; then
+    local names="${CAPT# }"; names="${names% }"
+    if _echo_leak "$BARE" "(${names// /|})"; then
+      R="RULE 13: a variable that captured a secret from \$(...) (${names// /, }) is printed later in the same command. SAFE: print a fact about it, echo \"len=\${#NAME}\", or printf %s \"\$NAME\" | shasum -a 256 | cut -c1-8"
+    fi
+  fi
   return 0
+}
+
+# Record $1 (an index into kd/pd/rs of the caller) is a $(...) body when a LATER record
+# has a LOWER pipeline number: the lexer numbers a body after its parent but emits it
+# first (measured 2026-09-29). The first such record is the parent. True, with the names
+# added to CAPT, when the parent is a simple command whose every $(...) word is an
+# assignment (VAR=$(...), an env prefix, export VAR=$(...)). An echo parent (an H
+# record), an argument, or a mix of the two is not a capture: which body fills which
+# $(...) cannot be told apart, so a mix is refused rather than guessed.
+_captured() {
+  local i="$1" j=$(($1 + 1)) w nm got=""
+  local -a pw=()
+  while [ "$j" -lt "$n" ] && [ "${pd[$j]}" -ge "${pd[$i]}" ]; do j=$((j + 1)); done
+  [ "$j" -lt "$n" ] && [ "${kd[$j]}" = C ] || return 1
+  IFS="$US" read -r -a pw <<< "${rs[$j]}"
+  for w in "${pw[@]}"; do
+    case "$w" in "$OPM"*) continue ;; *'$(...)'*) ;; *) continue ;; esac
+    [[ $w =~ $RE_ASSIGN ]] || return 1
+    nm="${w%%=*}"; nm="${nm%+}"; nm="${nm%%\[*}"
+    got="$got$nm "
+  done
+  [ -n "$got" ] || return 1
+  CAPT="$CAPT$got"
 }
 
 _sub() { # $1 = depth, $2 = shell text, $3 = where it came from. Sets R.
@@ -348,6 +396,7 @@ _argv() { # $1 = depth, then one simple command's words. Sets R.
         if [[ $w =~ $RE_SECRET_NAME ]]; then
           R="RULE 5: printenv $w prints the value of a credential variable. SAFE: [ -n \"\${$w-}\" ] && echo \"$w: SET len=\${#$w}\" || echo \"$w: unset\""; return 0
         fi
+        case "$CAPT" in *" $w "*) R="RULE 13: printenv $w prints a variable that captured a secret from \$(...) earlier in this command. SAFE: echo \"len=\${#$w}\""; return 0 ;; esac
         case "$w" in *'$'*) R="RULE 5: printenv of a name held in a variable (${w}) cannot be judged here. SAFE: name the variable literally, or print its length: \${#NAME}"; return 0 ;; esac
       done
       [ "$names" -eq 0 ] && _dump "printenv with no name"
@@ -453,7 +502,9 @@ _advice='Print a FACT ABOUT the secret, never the secret:
 ${V:-word} returns the VALUE when V is set -- it is an expansion, not a redaction.
 Transcripts under ~/.claude/projects are append-only and gitignored, so git-leak-scan
 cannot see them: a secret printed here is a secret with no way back.
-Full rule: OPERATIONAL_RULES.md, "A shell probe written to CHECK whether a secret is set".'
+Full rule, by where this session loads its rules from:
+    pj: ~/.claude/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md, section "Security" (the ${V:-x} line)
+    engage: ~/CODE/CaptainCodeAU/CaptainCodeAU-isolinear/rules/always.md ("Test a secret only as")'
 
 # ---------------------------------------------------------------- selftest
 if [ "${1:-}" = "--selftest" ]; then
