@@ -882,6 +882,7 @@ _interp_cmd() { # $1 = python|node|perl|ruby, then args
           -m) return 0 ;;
           -W|-X) shift 2 || set --; continue ;;
           -[A-Za-z]*c) _code_deletes "${2:-}"; return 0 ;;   #M: python -Xc cluster (a GLOB: letter, anything, c)
+          -) SI_KIND[$CUR_PID]=code; return 0 ;;   #M: python - ARG: code on stdin, ARG is sys.argv (W-20260928-A35)
           -*) shift; continue ;;
           *) return 0 ;;                            # a script file: invisible
         esac ;;
@@ -890,6 +891,7 @@ _interp_cmd() { # $1 = python|node|perl|ruby, then args
           -e|--eval|-p|--print) _code_deletes "${2:-}"; return 0 ;;                  #M: node -e
           --eval=*|--print=*) _code_deletes "${w#*=}"; return 0 ;;
           -r|--require|--import|--loader) shift 2 || set --; continue ;;
+          -) SI_KIND[$CUR_PID]=code; return 0 ;;   #M: node - ARG: code on stdin (W-20260928-A35)
           -*) shift; continue ;;
           *) return 0 ;;
         esac ;;
@@ -1222,6 +1224,9 @@ SNAP
   _must inline-code         'perl -e unlink'                  "perl -e 'unlink \"f\"'"
   _must inline-code         'ruby -e FileUtils.rm_rf'         "ruby -e 'require \"fileutils\"; FileUtils.rm_rf(\"d\")'"
   _must inline-code         'python heredoc (uv run -)'       $'uv run python3 - <<\'EOF\'\nimport os\nos.remove("x")\nEOF'
+  _must inline-code         'python heredoc, arg after -'     $'uv run python3 - "$dir" <<\'EOF\'\nimport os\nos.remove("x")\nEOF'
+  _must inline-code         'python3 - two args heredoc'      $'python3 - a b <<\'EOF\'\nimport shutil; shutil.rmtree("d")\nEOF'
+  _must inline-code         'node heredoc, arg after -'       $'node - x <<\'EOF\'\nrequire("fs").rmSync("d")\nEOF'
   _must inline-code         'python3 heredoc no args'         $'python3 <<EOF\nimport shutil; shutil.rmtree("d")\nEOF'
   _must inline-code         'cat heredoc | python3'           $'cat <<EOF | python3\nimport os; os.remove("x")\nEOF'
   _must inline-code         'here-string to python3'          "python3 <<< 'import os; os.remove(\"x\")'"
@@ -1391,6 +1396,8 @@ SNAP
   _must - 'python3 -c reads only'           "python3 -c 'print(open(\"x\").read())'"
   _must - 'uv run python3 script.py'        'uv run python3 tools/census.py --control x y'
   _must - 'python heredoc reads only'       $'uv run python3 - <<\'EOF\'\nimport json; print(json.load(open("a")))\nEOF'
+  _must - 'python heredoc, arg after -, reads' $'uv run python3 - "$cur" <<\'EOF\'\nimport sys; print(sys.argv[1])\nEOF'
+  _must - 'python3 script.py arg (unread)'  'python3 tools/x.py - y'
   _must - 'python -m module'                'python3 -m http.server'
   _must - 'node -e harmless'                "node -e 'console.log(1)'"
   _must - 'cat heredoc (not an interpreter)' $'cat <<EOF\nimport os; os.remove("x")\nEOF'
