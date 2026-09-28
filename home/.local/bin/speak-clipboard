@@ -57,9 +57,13 @@
 #
 # VOLUME
 # ------
-# Not controlled here. Speech plays through the current output device at the
-# system volume. Use the volume keys or the menu-bar slider. (say2's own
-# --volume flag is a documented no-op on the siri engine anyway.)
+# Default 70 of 100 (2026-09-28, Gavin: speech a little quieter than
+# everything else, without touching the system volume). It is applied by
+# ffplay's -volume on the streaming path, which scales the samples linearly:
+# 70 is about -3 dB, 50 about -6 dB. It sits UNDER the system volume, so it
+# can only make speech quieter, never louder. Re-tune by listening. The
+# fallback paths (no ffplay, or an explicit --voice) play at plain system
+# volume: say2's own --volume is a documented no-op on the siri engine.
 #
 # ONE PROCESS PER PRESS, DIRECT TO say2 (v4, 2026-09-10)
 # --------------------------------------------------------
@@ -185,6 +189,8 @@
 #   speak-clipboard --stdin      read text from stdin instead of the clipboard
 #                                (for tests; combine with --print/--toggle)
 #   speak-clipboard --rate N     words per minute (default: 420)
+#   speak-clipboard --volume N   speech volume 0-100 under the system volume
+#                                (default: 70; streaming path only)
 #   speak-clipboard --voice KEY  say2 voice asset key or display name -- bypasses
 #                                the Aaron/Simone/say fallback chain entirely
 #                                (default when omitted: en-US:natural:male:Aaron:premium:5030,
@@ -212,6 +218,7 @@ _default_voice="en-US:natural:male:Aaron:premium:5030"
 _secondary_voice="en-US:natural:female:Simone:premium:5029"
 _say_fallback_voice="Samantha"
 rate="420"
+volume="70"
 voice=""
 mode="speak"
 from_stdin=0
@@ -223,11 +230,17 @@ while [ $# -gt 0 ]; do
         --toggle) mode="toggle"; shift ;;
         --stdin)  from_stdin=1;  shift ;;
         --rate)  [ $# -ge 2 ] || { echo "speak-clipboard: --rate needs a value" >&2; exit 1; }; rate="$2"; shift 2 ;;
+        --volume) [ $# -ge 2 ] || { echo "speak-clipboard: --volume needs a value" >&2; exit 1; }; volume="$2"; shift 2 ;;
         --voice) [ $# -ge 2 ] || { echo "speak-clipboard: --voice needs a value" >&2; exit 1; }; voice="$2"; shift 2 ;;
         -h|--help) sed -n '/^# USAGE/,/^# EXIT/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "speak-clipboard: unknown option '$1'" >&2; exit 1 ;;
     esac
 done
+
+case "$volume" in
+    ''|*[!0-9]*) echo "speak-clipboard: --volume takes a whole number 0-100" >&2; exit 1 ;;
+esac
+[ "$volume" -le 100 ] || { echo "speak-clipboard: --volume takes a whole number 0-100" >&2; exit 1; }
 
 _state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/herdr"
 _trace_file="$_state_dir/speak-clipboard.log"
@@ -389,7 +402,7 @@ start_speaker() {
         ( trap '' HUP
           say2 -v "$_engine_voice" -r "$rate" --engine siri --format pcm -o - "$text" \
               2>>"$_render_log" |
-              ffplay -nodisp -autoexit -loglevel error \
+              ffplay -nodisp -autoexit -loglevel error -volume "$volume" \
                   -f s16le -ar 48000 -ch_layout mono -i - >/dev/null 2>>"$_render_log"
         ) >/dev/null 2>&1 &
         set +m
