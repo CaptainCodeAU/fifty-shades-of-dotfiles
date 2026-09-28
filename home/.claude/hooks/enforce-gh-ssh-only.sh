@@ -66,9 +66,12 @@
 #
 # KNOWN LIMITS, stated rather than papered over. This hook raises the cost of an
 # accidental bypass; it is not a sandbox.
-#   - A command word built at run time: `x=g; ${x}h auth login`, `$(printf gh)`
-#     as the argv0 of a later word. A plain `NAME=value; $NAME ...` in the same
-#     command IS resolved (G16), and an unresolved `$VAR auth login` is denied.
+#   - An ARGUMENT held in a variable: `a=auth; gh $a login`. (A command WORD
+#     is covered: `NAME=value; $NAME ...` in the same command is resolved (G16),
+#     and any other $-word, `${x}h` or `$(printf gh)`, followed by `auth login`
+#     is denied.) Also `xargs gh auth < file`, where the verb comes from stdin.
+#   - Writing ~/.gitconfig as a FILE: `cat >> ~/.gitconfig <<EOF`, sed -i, the
+#     Edit/Write tools, or `git config include.path <file with a helper>`.
 #   - A script file, a Makefile, an alias from the shell snapshot, `source`.
 #   - Anything the interactive gh() wrapper or git itself does internally.
 #
