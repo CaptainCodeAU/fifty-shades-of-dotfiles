@@ -1,0 +1,179 @@
+#!/usr/bin/env bash
+# ============================================================================
+#  cmd-spy -- prove whether a program calls a command, and with what
+# ============================================================================
+#
+# WHY
+# ---
+# "Does this script call rm?" is a question reading the code answers badly: a
+# call can hide in a helper, a trap, a library, or a branch you did not think
+# to trace. cmd-spy answers it by running the program with a logging fake of
+# each named command placed FIRST on PATH, then reporting every call with its
+# exact arguments.
+#
+# Born 2026-09-28 fixing speak-clipboard, whose `command rm` calls were landing
+# in the Trash on every press. A hand-rolled fake counted 2 rm calls per press
+# in the old build and 0 in the new one, with no Trash clutter from the test
+# itself. Gavin asked for it to be kept as a tool.
+#
+# THE ZERO PROBLEM, and what this does about it
+# ---------------------------------------------
+# "0 calls" reads the same whether the program never called the command or the
+# fake was never reachable. So before running anything, cmd-spy checks that
+# `command -v NAME` under the spied PATH resolves to its own fake, and refuses
+# (exit 125) if it does not. Every report then states the count POSITIVELY,
+# zero included, next to that reachability fact.
+#
+# WHAT IT CANNOT SEE (a zero here is NOT proof of absence)
+#   * absolute paths:           /bin/rm, /usr/bin/env rm  (never consult PATH)
+#   * shell builtins:           echo, kill, printf, test, cd ... (refused up front)
+#   * functions and aliases the program defines itself, which win over PATH
+#   * a program that resets PATH (Homebrew, sudo, env -i, cron-style wrappers)
+#   * other ways to do the same thing (unlink, find -delete, os.remove ...)
+# Pair a zero with reading the code for those routes.
+#
+# FAKES
+#   default   log the call, do nothing, exit 0. Safe for destructive commands:
+#             nothing is deleted, moved or sent. The program may then behave
+#             differently (a lock never removed, say), so read later
+#             behaviour with that in mind.
+#   --pass    log the call, then exec the real command found on the original
+#             PATH. Behaviour unchanged; you only gain the log.
+#
+# USAGE
+#   cmd-spy [--pass] NAME[,NAME...] -- PROGRAM [ARGS...]
+#   cmd-spy --selftest
+#
+#   cmd-spy rm -- ~/.local/bin/speak-clipboard --stop
+#   cmd-spy --pass rm,mv -- make clean
+#
+# OUTPUT
+#   The program's stdin/stdout/stderr pass through untouched. The report goes
+#   to stderr afterwards, one block per NAME:
+#     cmd-spy: rm: 2 call(s)
+#     cmd-spy:   rm -rf /path/to/lock
+#   and a closing line naming the log file and the blind spots above.
+#
+# EXIT CODES
+#   the program's own exit code, or
+#   125  cmd-spy REFUSED: bad usage, a builtin name, a fake that is not
+#        reachable, or --pass for a command that does not exist. Nothing ran.
+#   (125 follows env(1) and xargs(1), which reserve 125+ for their own failure
+#   so it cannot be confused with the program's.)
+#
+# FILES
+#   Each run makes a directory under $TMPDIR (cmd-spy.XXXXXX) holding the
+#   fakes and calls.log. It is never deleted by this tool; macOS clears
+#   $TMPDIR on its own.
+# ============================================================================
+set -uo pipefail
+
+_refuse() { echo "cmd-spy: REFUSED -- $*" >&2; exit 125; }
+
+_usage() { sed -n '/^# USAGE/,/^# OUTPUT/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; }
+
+# Runs one spied program. Arguments: pass(0/1) names(comma list) program...
+_spy_run() {
+    [ $# -ge 3 ] || _refuse "internal: _spy_run needs pass, names and a program"; local pass="$1" names="$2"; shift 2
+    local orig_path="$PATH" dir log name real found rc n
+    local -a list=()
+
+    IFS=',' read -r -a list <<<"$names"
+    [ "${#list[@]}" -gt 0 ] || _refuse "no command names given"
+    for name in "${list[@]}"; do
+        case "$name" in
+            ''|*/*|*[!A-Za-z0-9._+-]*) _refuse "'$name' is not a plain command name" ;;
+        esac
+        case "$(type -t "$name" 2>/dev/null)" in
+            builtin|keyword) _refuse "'$name' is a shell builtin; a PATH fake can never see it" ;;
+        esac
+    done
+
+    dir="$(mktemp -d "${TMPDIR:-/tmp}/cmd-spy.XXXXXX")" || _refuse "could not create a work directory"
+    log="$dir/calls.log"
+    : >>"$log" || _refuse "could not create $log"
+
+    for name in "${list[@]}"; do
+        real="$(PATH="$orig_path" command -v "$name" 2>/dev/null || true)"
+        case "$real" in /*) ;; *) real="" ;; esac
+        if [ "$pass" = 1 ] && [ -z "$real" ]; then
+            _refuse "--pass needs a real '$name' on PATH, and there is none"
+        fi
+        {
+            echo '#!/usr/bin/env bash'
+            printf '{ printf %%s %q; for a in "$@"; do printf " %%q" "$a"; done; printf "\\n"; } >>%q\n' \
+                "$name" "$log"
+            if [ "$pass" = 1 ]; then
+                printf 'exec %q "$@"\n' "$real"
+            else
+                echo 'exit 0'
+            fi
+        } >"$dir/$name" || _refuse "could not write the fake for '$name'"
+        chmod +x "$dir/$name" || _refuse "could not make the fake for '$name' executable"
+        found="$(PATH="$dir:$orig_path" command -v "$name" 2>/dev/null || true)"
+        [ "$found" = "$dir/$name" ] || _refuse "the fake for '$name' is not what PATH finds ('$found')"
+    done
+
+    PATH="$dir:$orig_path" "$@"
+    rc=$?
+
+    for name in "${list[@]}"; do
+        n="$(awk -v c="$name" '$1 == c { k++ } END { print k + 0 }' "$log")"
+        echo "cmd-spy: $name: $n call(s) (fake verified first on PATH)" >&2
+        awk -v c="$name" '$1 == c { print "cmd-spy:   " $0 }' "$log" >&2
+    done
+    echo "cmd-spy: mode=$([ "$pass" = 1 ] && echo pass || echo fake) log=$log" >&2
+    echo "cmd-spy: blind to absolute paths, builtins, functions, and a PATH the program resets" >&2
+    return "$rc"
+}
+
+# Every arm uses a real run of this tool against a real program, and each arm
+# that expects a zero or a refusal is paired with one that must not be.
+_selftest() {
+    local self="$0" t fails=0 out rc
+    t="$(mktemp -d "${TMPDIR:-/tmp}/cmd-spy-selftest.XXXXXX")" || { echo "cmd-spy --selftest: no temp dir"; return 2; }
+    _arm() { if [ "$1" = ok ]; then echo "  pass  $2"; else echo "  FAIL  $2"; fails=$((fails + 1)); fi; }
+
+    : >>"$t/victim"
+    out="$("$self" rm -- bash -c 'rm -f "$1" "two words"' _ "$t/victim" 2>&1)"; rc=$?
+    { [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'rm: 1 call' &&
+      printf '%s' "$out" | grep -qF 'two\ words' && [ -e "$t/victim" ]; } && _arm ok "call counted, args quoted, fake deleted nothing" || _arm bad "call counted, args quoted, fake deleted nothing"
+
+    out="$("$self" rm -- bash -c 'true' 2>&1)"; rc=$?
+    { [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'rm: 0 call(s) (fake verified'; } && _arm ok "no call reported as a stated zero" || _arm bad "no call reported as a stated zero"
+
+    out="$("$self" --pass touch -- bash -c 'touch "$1"' _ "$t/made" 2>&1)"; rc=$?
+    { [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'touch: 1 call' && [ -e "$t/made" ]; } && _arm ok "--pass logs and runs the real command" || _arm bad "--pass logs and runs the real command"
+
+    out="$("$self" rm,touch -- bash -c 'touch "$1"; touch "$1"' _ "$t/never" 2>&1)"; rc=$?
+    { [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'touch: 2 call' &&
+      printf '%s' "$out" | grep -q 'rm: 0 call' && [ ! -e "$t/never" ]; } && _arm ok "several names counted apart" || _arm bad "several names counted apart"
+
+    out="$("$self" echo -- true 2>&1)"; rc=$?
+    { [ "$rc" = 125 ] && printf '%s' "$out" | grep -q 'builtin'; } && _arm ok "builtin refused with 125" || _arm bad "builtin refused with 125"
+
+    out="$("$self" --pass no-such-cmd-zz -- true 2>&1)"; rc=$?
+    { [ "$rc" = 125 ] && printf '%s' "$out" | grep -q 'none'; } && _arm ok "--pass on a missing command refused" || _arm bad "--pass on a missing command refused"
+
+    out="$("$self" ls -- bash -c '/bin/ls / >/dev/null' 2>&1)"; rc=$?
+    { [ "$rc" = 0 ] && printf '%s' "$out" | grep -q 'ls: 0 call'; } && _arm ok "absolute path is invisible, as documented" || _arm bad "absolute path is invisible, as documented"
+
+    "$self" rm -- bash -c 'exit 7' 2>/dev/null; rc=$?
+    [ "$rc" = 7 ] && _arm ok "program exit code passed through" || _arm bad "program exit code passed through (got $rc)"
+
+    if (( fails )); then echo "cmd-spy --selftest: $fails FAILURE(S) (fixtures in $t)"; return 2; fi
+    echo "cmd-spy --selftest: 8 of 8 arms pass (fixtures left in $t)"
+}
+
+pass=0
+case "${1:-}" in
+    --selftest) _selftest; exit $? ;;
+    -h|--help)  _usage; exit 0 ;;
+    --pass)     pass=1; shift ;;
+esac
+[ $# -ge 3 ] || { _usage >&2; _refuse "expected NAME[,NAME...] -- PROGRAM [ARGS...]"; }
+names="$1"; shift
+[ "$1" = "--" ] || _refuse "expected -- after the command names"
+shift
+_spy_run "$pass" "$names" "$@"
+exit $?
