@@ -2003,4 +2003,11 @@ fi
 
 # LifeOS launch command — without this, LifeOS Core is installed but launches
 # un-constituted (plain `claude`, no mode banner / verification / security layer).
-alias lifeos='bun "$HOME/.claude/LIFEOS/TOOLS/lifeos.ts" -s "$HOME/.claude/LIFEOS/LIFEOS_SYSTEM_PROMPT.md"'
+# LifeOS is PAUSED since 2026-09-28 (option D: switched off, every file kept, feature
+# review pending). Its hook registrations moved out of ~/.claude/settings.json into
+# ~/.claude/settings.lifeos.json, so plain `claude` runs without them and only this
+# launcher loads them (lifeos.ts forwards everything after a bare `--` to claude).
+# Its background service (com.lifeos.pulse) is disabled; for a full LifeOS session start it
+# first with: launchctl enable gui/$(id -u)/com.lifeos.pulse && launchctl bootstrap
+# gui/$(id -u) ~/Library/LaunchAgents/com.lifeos.pulse.plist
+alias lifeos='bun "$HOME/.claude/LIFEOS/TOOLS/lifeos.ts" -s "$HOME/.claude/LIFEOS/LIFEOS_SYSTEM_PROMPT.md" -- --settings "$HOME/.claude/settings.lifeos.json"'
