@@ -607,7 +607,15 @@ clean_input() {
     if [ "$from_stdin" = 1 ]; then
         perl -e "$_clean_pl" -- "$_max_chars" 2>/dev/null
     else
-        pbpaste 2>/dev/null | perl -e "$_clean_pl" -- "$_max_chars" 2>/dev/null
+        # LC_ALL is load-bearing (v4.8, 2026-09-28). pbpaste picks its output
+        # encoding from the locale, and herdr launches this with none, so
+        # every non-ASCII character came out as '?': box-drawn tables were
+        # never seen as tables, and curly quotes and accents were lost.
+        # MEASURED: Gavin's 5-row table logged 1255 chars from the hotkey;
+        # the same table with each non-ASCII char made '?' cleans to exactly
+        # 1255, intact UTF-8 to 451. `env -i pbpaste` printed "? Check ?",
+        # the same with LC_ALL=en_US.UTF-8 printed the box bars.
+        LC_ALL=en_US.UTF-8 pbpaste 2>/dev/null | perl -e "$_clean_pl" -- "$_max_chars" 2>/dev/null
     fi
 }
 
