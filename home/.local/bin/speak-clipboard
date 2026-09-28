@@ -614,8 +614,9 @@ clean_input() {
         # MEASURED: Gavin's 5-row table logged 1255 chars from the hotkey;
         # the same table with each non-ASCII char made '?' cleans to exactly
         # 1255, intact UTF-8 to 451. `env -i pbpaste` printed "? Check ?",
-        # the same with LC_ALL=en_US.UTF-8 printed the box bars.
-        LC_ALL=en_US.UTF-8 pbpaste 2>/dev/null | perl -e "$_clean_pl" -- "$_max_chars" 2>/dev/null
+        # the same with LC_ALL=en_US.UTF-8 or en_AU.UTF-8 printed the box bars.
+        # en_AU is Gavin's own locale (his call, 2-way tested).
+        LC_ALL=en_AU.UTF-8 pbpaste 2>/dev/null | perl -e "$_clean_pl" -- "$_max_chars" 2>/dev/null
     fi
 }
 
