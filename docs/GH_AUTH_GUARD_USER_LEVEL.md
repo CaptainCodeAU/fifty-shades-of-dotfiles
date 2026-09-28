@@ -59,9 +59,10 @@ Related pieces (all tracked in the dotfiles repo):
 Adjust the repo path if yours differs (dev Mac: `~/CODE/Scaffoldings/fifty-shades-of-dotfiles`).
 
 ```bash
-# 1. Copy the tracked hook script into the global Claude hooks dir
-cp ~/CODE/Scaffoldings/fifty-shades-of-dotfiles/.claude/hooks/enforce-gh-ssh-only.sh ~/.claude/hooks/
-chmod +x ~/.claude/hooks/enforce-gh-ssh-only.sh
+# 1. The hook is STOWED from the dotfiles repo since 2026-09-29 (D-20260929-A06):
+#    home/.claude/hooks/enforce-gh-ssh-only.sh -> ~/.claude/hooks/enforce-gh-ssh-only.sh
+#    Do not copy it: a copy is how two versions drifted 98 lines apart.
+( builtin cd ~/CODE/Scaffoldings/fifty-shades-of-dotfiles && ./install.sh --stow-only )
 
 # 2. Back up global settings, then register the hook (PreToolUse -> Bash)
 cp ~/.claude/settings.json ~/.claude/settings.json.bak.$(date +%Y%m%d_%H%M%S)
@@ -94,6 +95,8 @@ diff <(jq -S . "$BAK") <(jq -S . ~/.claude/settings.json)
 echo '{"tool_input":{"command":"gh auth login"}}' | ~/.claude/hooks/enforce-gh-ssh-only.sh
 # Hook behaves: should ALLOW (no output)
 echo '{"tool_input":{"command":"gh run list"}}' | ~/.claude/hooks/enforce-gh-ssh-only.sh
+# Every arm, deny and allow (116 as of 2026-09-29):
+~/.claude/hooks/enforce-gh-ssh-only.sh --selftest
 
 # Verify the token itself works (read-only):
 T=$(security find-generic-password -a "$USER" -s github-api-readonly -w 2>/dev/null)
@@ -112,8 +115,8 @@ prints `present`.
 # Restore the previous global settings
 cp "$(ls -t ~/.claude/settings.json.bak.* | head -1)" ~/.claude/settings.json
 
-# Remove the user-level hook script
-rm ~/.claude/hooks/enforce-gh-ssh-only.sh
+# The hook script is a stow link into the dotfiles repo (D-20260929-A06);
+# unregistering it above is the rollback. Leave the link to stow.
 ```
 
 The dotfiles-repo changes (project-level hook, `_claude_launch`, banner,
