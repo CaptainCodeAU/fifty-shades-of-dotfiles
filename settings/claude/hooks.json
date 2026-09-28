@@ -347,14 +347,13 @@
       "event": "PreToolUse",
       "matcher": "Bash",
       "script": "enforce-gh-ssh-only.sh",
-      "script_path": "$HOME/.claude/hooks/enforce-gh-ssh-only.sh",
       "targets": ["project"],
       "entry": {
         "type": "command",
         "command": "h=\"$HOME/.claude/hooks/enforce-gh-ssh-only.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"HOOK MISSING, DENYING: enforce-gh-ssh-only.sh is registered but ~/.claude/hooks/enforce-gh-ssh-only.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it from your own terminal, where no Claude hook runs: restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command names $HOME/.claude/hooks/enforce-gh-ssh-only.sh from ~/.claude/settings.project.json and ~/.claude/settings.json.\"}}'; fi",
         "timeout": 5
       },
-      "why": "DENIES gh auth login / setup-git / refresh, which re-add HTTPS credential helpers and break SSH-only auth (D-20260917-09). F1 travelled the census, secret-probe and herdr guards and MISSED this one: it was registered only in ~/.claude/settings.json (user, so c only) and in this repo's own .claude/settings.json (so pj only HERE). Under pj in any other project nothing registered it -- measured at P6b. script_path points at the EXISTING dot-claude file rather than stowing a copy: the two copies are byte-identical (verified 2026-09-21, sha 58a9712ed1c1, 4715 b), that path is already occupied so stow would conflict, and nothing in dot-claude is edited. Project target only, and this repo's own entry is removed in the same commit, so it fires ONCE per session, not twice",
+      "why": "DENIES gh auth login / setup-git / refresh (D-20260917-09) and, since H3 (W-20260929-A33), the same inside sh -c / eval / $() bodies, gh auth switch / logout / git-credential, gh git_protocol other than ssh, credential.*.helper and url.*.insteadOf writes, and a credential inside a git URL. Project target only (fires once per pj session; ~/.claude/settings.json registers it separately for c). ONE SOURCE since D-20260929-A06: home/.claude/hooks/enforce-gh-ssh-only.sh in this repo, stowed into ~/.claude/hooks. Until then script_path pointed at a separate real file in dot-claude, and the two copies had drifted by 98 diff lines (the running one lacked the A76 unreadable-payload arms). Until that real file is replaced by the stow link, pj-health stow-links reports it as a real file: that is the swap still to do, not a fault in this entry",
       "class": "guard",
       "legacy_commands": [
         "test -x \"$HOME/.claude/hooks/enforce-gh-ssh-only.sh\" && \"$HOME/.claude/hooks/enforce-gh-ssh-only.sh\" || true"

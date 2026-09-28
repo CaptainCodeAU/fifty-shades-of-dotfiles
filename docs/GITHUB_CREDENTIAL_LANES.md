@@ -131,7 +131,8 @@ Rejected, and why, so nobody re-proposes them cold:
   there would be silently clobbered.
 - **Swapping gh's stored token** via `gh auth login --with-token`. Not done.
   It needs a guard lift (`CLAUDE.md` line 345 and
-  `.claude/hooks/enforce-gh-ssh-only.sh` block it) and it touches
+  `home/.claude/hooks/enforce-gh-ssh-only.sh` block it; that path since
+  2026-09-29, D-20260929-A06) and it touches
   `git_protocol = ssh`, which **21 of the 94 repos on this machine still use**.
 - **Deleting the keyring token.** Not done, not authorised, and it would break
   every consumer until they self-fetch.
@@ -536,7 +537,8 @@ about the link. A refusal is legible; a correct answer to the wrong question is 
 
 Three hooks, three different storage shapes, which is why this was confusing:
 `enforce-gh-ssh-only.sh` is a REAL file in `dot-claude` AND a separate real file here
-(two copies, both needed fixing); `enforce-herdr-skill.sh` and
+(two copies, both needed fixing; since 2026-09-29 one file, stowed from
+here, D-20260929-A06); `enforce-herdr-skill.sh` and
 `enforce-secret-probe.sh` are symlinks from `dot-claude` into this repo (one copy).
 Never infer the shape from the directory.
 

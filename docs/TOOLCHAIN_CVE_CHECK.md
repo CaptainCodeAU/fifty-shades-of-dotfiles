@@ -86,7 +86,9 @@ This is the crux of the design, and it was verified against the live APIs, not a
 ### The `$GH_TOKEN` consequence
 
 `$GH_TOKEN` is present **only inside Claude Code sessions** (see
-`.claude/hooks/enforce-gh-ssh-only.sh`), not in plain interactive shells. So:
+`home/.claude/hooks/enforce-gh-ssh-only.sh`; NOTE 2026-09-29: the launcher
+stopped exporting it on 2026-09-18, so this section predates that), not in plain
+interactive shells. So:
 
 - **pnpm checks run anywhere** (OSV needs no auth).
 - **nvm checks need a token** — inside a Claude session they run; elsewhere they report
