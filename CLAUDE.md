@@ -213,12 +213,19 @@ variable into the transcript. It blocks three shapes, all measured in real leake
 transcripts on 2026-09-17: `${V:-word}` on a secret var, a piped `env`/`printenv`
 dump, and a bare secret var inside `echo`/`printf`.
 
+Since 2026-09-29 (W-20260929-A34) it also denies the printers that name no `${...}`:
+`printenv GH_TOKEN`, bare `env`/`printenv`/`set`, `gh auth token`, **`gh auth status`**
+(it prints part of a PAT; use `gh api user --jq .login`), `security ... -w`,
+`git credential fill`, reading a `.env` file, and the same inside `sh -c`, `eval` or
+`$(...)`. It reads the command with the lexer of `enforce-no-permanent-delete.sh`,
+loaded from that file, so the two must sit side by side.
+
 The one worth knowing is `echo "set? ${V:+yes}${V:-no}"`, which prints
 `yes<the whole token>`. `${V:-word}` means "use word only if V is empty", so when V
 is set it expands to the VALUE. It reads as a redaction and is an expansion.
 
 Print a fact about the secret instead: `${#V}` for length, a `shasum` prefix to
-compare two, or `env | cut -d= -f1` for names. `--selftest` proves all 14 arms,
+compare two, or `env | cut -d= -f1` for names. `--selftest` proves every arm,
 positive and negative. The reasoning lives in `OPERATIONAL_RULES.md`; this is a
 pointer, not a second copy.
 
