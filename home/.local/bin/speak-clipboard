@@ -407,6 +407,14 @@ stop_speaker() {
 # process group, whose leader pid goes in the pid file for stop_speaker. An
 # explicit --voice skips streaming, since it may name a non-Siri voice and
 # stdout streaming needs `--engine siri` stated.
+#
+# -infbuf is load-bearing (v4.6, 2026-09-28). Without it ffplay reads only
+# about a second ahead, say2's writes stall, and say2 ends the render early:
+# "Synthesis produced only 5.178 seconds of audio [exit 6]" on a 1,401-char
+# selection whose full audio is 39.6 s, cutting off mid-sentence. MEASURED
+# the same text three ways: fast reader 39.6 s; ffplay 5.2 s + that error;
+# ffplay -infbuf 40.1 s wall, no error. (A say2 bug too: a slow consumer
+# should slow it down, not truncate it. Filed with the other say2 items.)
 start_speaker() {
     resolve_engine
     if [ "$_engine" = "say2" ] && [ -z "$voice" ] && command -v ffplay >/dev/null 2>&1; then
@@ -414,7 +422,7 @@ start_speaker() {
         ( trap '' HUP
           say2 -v "$_engine_voice" -r "$rate" --engine siri --format pcm -o - "$text" \
               2>>"$_render_log" |
-              ffplay -nodisp -autoexit -loglevel error -volume "$volume" \
+              ffplay -nodisp -autoexit -infbuf -loglevel error -volume "$volume" \
                   -f s16le -ar 48000 -ch_layout mono -i - >/dev/null 2>>"$_render_log"
         ) >/dev/null 2>&1 9>&- &
         set +m
