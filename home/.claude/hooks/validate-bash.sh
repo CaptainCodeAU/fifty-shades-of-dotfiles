@@ -283,14 +283,14 @@ if [ "${1:-}" = "--selftest" ]; then
   conv_arm allow 'prose in a commit message'       $'git commit -m "note\n; ci x is denied\nend"'
   conv_arm allow 'words that start with ci'        'circleci x; cid=1; cd_x y'
   conv_arm allow 'zsh glob qualifier'              'print -l ci*(.)'
-  echo "=== B. gpf! (git push --force): DENY, lease forms ALLOW ==="
+  # The lease aliases gpf and gpsupf moved to section D on 2026-09-29
+  # (D-20260929-A08): they deny on main and pass on a feature branch, which needs
+  # the fixture repos built there.
+  echo "=== B. gpf! (git push --force): DENY ==="
   conv_arm deny  'gpf!'                            'gpf!'
   conv_arm deny  'gpf! origin main'                'gpf! origin main'
   conv_arm deny  'gpf! after &&'                   'git fetch && gpf!'
   conv_arm deny  'gpf! after an assignment'        'GIT_TRACE=1 gpf!'
-  conv_arm allow 'gpf (lease)'                     'gpf'
-  conv_arm allow 'gpf origin x (lease)'            'gpf origin x'
-  conv_arm allow 'gpsupf (lease)'                  'gpsupf'
   conv_arm allow 'echo gpf!'                       'echo gpf!'
   conv_arm allow 'git push --force-with-lease'     'git push --force-with-lease origin x'
   echo "=== C. brew install/reinstall/upgrade: DENY ==="
@@ -453,12 +453,33 @@ if [ "${1:-}" = "--selftest" ]; then
   conv_arm allow 'prose in a commit message'                  'git commit -m "never git push -f to main"' '' "$M"
   conv_arm allow 'alias gp origin main'                       'gp origin main'                      '' "$M"
   conv_arm allow 'alias gp -f, on feature'                    'gp -f'                               '' "$F"
+  # D-20260929-A08: the lease aliases deny on main like the long form, and pass on
+  # a feature branch. Until 2026-09-29 both were allowed everywhere (2026-09-23).
+  echo "=== D. lease aliases gpf and gpsupf: DENY on main, ALLOW on a feature branch ==="
+  conv_arm deny  'gpf, on main'                               'gpf'                                 '' "$M"
+  conv_arm deny  'gpf, on master'                             'gpf'                                 '' "$FX/master"
+  conv_arm deny  'gpsupf, on main'                            'gpsupf'                              '' "$M"
+  conv_arm deny  'gpsupf, on master'                          'gpsupf'                              '' "$FX/master"
+  conv_arm deny  'gpf origin main, on feature'                'gpf origin main'                     '' "$F"
+  conv_arm deny  'gpf after &&, on main'                      'git fetch && gpf'                    '' "$M"
+  conv_arm deny  'gpf inside $(...), on main'                 'x=$(gpf)'                            '' "$M"
+  conv_arm deny  'gpf inside eval (crude)'                    'eval "gpf"'                          '' "$F"
+  conv_arm deny  'gpf, non-repo cwd (fail closed)'            'gpf'                                 '' "$FX/nonrepo"
+  conv_arm deny  'gpf, feature tracking main'                 'gpf'                                 '' "$FX/upmain"
+  conv_arm allow 'gpf, on feature'                            'gpf'                                 '' "$F"
+  conv_arm allow 'gpsupf, on feature'                         'gpsupf'                              '' "$F"
+  conv_arm allow 'gpf, on main-feature'                       'gpf'                                 '' "$FX/main-feature"
+  conv_arm allow 'gpf origin feature, on main'                'gpf origin feature'                  '' "$M"
+  conv_arm allow 'gpf origin x, on main'                      'gpf origin x'                        '' "$M"
+  conv_arm allow 'echo gpf gpsupf'                            'echo gpf gpsupf'                     '' "$M"
+  conv_arm allow 'escaped \gpf (no alias expansion)'          '\gpf'                                '' "$M"
   echo "=== FALLBACK arms: scanner missing, the rules still hold ==="
   export CONV_SHSCAN=/nonexistent/conv-shscan.awk
   conv_arm deny  'scanner missing: ci denied'      'ci x'
   conv_arm deny  'scanner missing: brew install'   'brew install jq'
   conv_arm deny  'scanner missing: git push -f, on main' 'git push -f'                    '' "$M"
   conv_arm deny  'scanner missing: +main'          'git push origin +main'                '' "$F"
+  conv_arm deny  'scanner missing: gpf, on main'   'gpf'                                  '' "$M"
   conv_arm allow 'scanner missing: plain push ok'  'git push origin feature'              '' "$M"
   conv_arm allow 'scanner missing: harmless ok'    'echo control-ok'
   unset CONV_SHSCAN
