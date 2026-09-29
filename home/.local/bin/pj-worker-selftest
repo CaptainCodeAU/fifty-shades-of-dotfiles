@@ -465,6 +465,30 @@ run count --cwd "$SWITCH" --check
 check "C5b count --check refuses when the two instruments disagree: rc 2, the ps-only pid named" '[ "$RC" -eq 2 ] && has "$ERR" "disagree" && has "$ERR" 60606'
 run count --cwd "$SWITCH" --json
 check "C5c --json says start is not allowed and why (unmeasured), with no cap refusal" '[ "$(j ".start_allowed, (.refusal|tostring)")" = "false null " ] && has "$(j .unmeasured)" "disagree"'
+# L1. W-20260929-A149 / W-20260924-A93: Claude Code on Linux writes procStart as /proc/<pid>/stat
+# field 22 (clock ticks since boot; measured on mlbox 2026-09-29: "1040272" == field 22), not the
+# lstart string. The stat line below has a command name with a space, so the parser must count
+# from the LAST ')'. Before the fix, L1 failed: the Linux session read as ps-only and pj refused.
+linux_world(){  # linux_world <field22 in /proc> -- the live world plus one Linux-shaped session 70707
+  new_world; lists; export PJW_PROC_ROOT="$W/proc"; mkdir -p "$W/proc/70707"
+  mkdir -p "$ROOT/code/linux70707"; reg "$SESS" 70707 "00070707-aaaa-bbbb-cccc-000000000000" "$ROOT/code/linux70707" linux70707-main "1040272"
+  psrow 70707 claude "$T_W"
+  [ -n "$1" ] && printf '70707 (claude code) S 1 70707 70707 0 -1 4194560 100 0 0 0 5 3 0 0 20 0 12 0 %s 1000 200\n' "$1" > "$W/proc/70707/stat"
+  return 0
+}
+linux_world 1040272
+run count --cwd "$SWITCH" --json
+check "L1 a Linux procStart (ticks) matching /proc stat field 22 is LIVE: registry 6, ps 6, no disagreement" \
+  '[ "$(j ".machine.registry, .machine.ps, .machine.disagree")" = "6 6 false " ]'
+linux_world 999999
+run count --cwd "$SWITCH" --json
+check "L1b control: ticks that differ from field 22 are not live (pid reused), so the instruments disagree" \
+  '[ "$(j ".machine.registry, .machine.ps, .machine.disagree")" = "5 6 true " ]'
+linux_world ""
+run count --cwd "$SWITCH" --json
+check "L1c control: a digits procStart with no /proc stat to check is not live (fail closed)" \
+  '[ "$(j ".machine.registry, .machine.ps, .machine.disagree")" = "5 6 true " ]'
+unset PJW_PROC_ROOT
 # C5d-f. W-20260925-A46: Claude Code 2.1.282's background helper (`claude daemon run`) and a
 # parked-session host (`--bg-pty-host`) are not unknown sessions. Argv shapes copied from the
 # live processes of 2026-09-25 (pids 26962, 27038). C5f is the control: an unknown claude
