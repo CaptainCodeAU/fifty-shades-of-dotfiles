@@ -198,6 +198,26 @@
     "verbose: an absent restriction and a deliberate default look identical, and",
     "a security setting that is silently off looks exactly like one that is on."
   ],
+  "_a35_permissions_why": [
+    "W-20260929-A35 (red-team H5), ruled by Gavin 2026-09-29 (D-20260929-A14): a session",
+    "must not weaken the LIVE guards or config from inside. Edit(...) rules cover every",
+    "file-writing tool (Write, MultiEdit, NotebookEdit have no rules of their own) and the",
+    "Bash file commands Claude Code recognises (sed, tee, redirections). validate-bash rule E",
+    "covers the Bash write verbs it does not (perl -i, cp, mv, rm, git config --global).",
+    "MEASURED 2026-09-29 with claude -p --dangerously-skip-permissions: a deny rule held (file",
+    "unchanged) while the same edit without it went through; on a real folder of symlinks",
+    "into a repo, Edit through the symlink was refused, Edit of the repo target allowed, and",
+    "sed -n through the symlink allowed. So the dotfiles repo copies stay editable, which is",
+    "how a guard fix is meant to arrive: through the repo and a commit."
+  ],
+  "permissions": {
+    "deny": [
+      "Edit(~/.claude/hooks/**)",
+      "Edit(~/.gitconfig)",
+      "Edit(~/.claude/CLAUDE.md)",
+      "Edit(~/.claude/projects/*/memory/**)"
+    ]
+  },
   "allowedHttpHookUrls": [
     "http://localhost:31337/hooks/*"
   ],
