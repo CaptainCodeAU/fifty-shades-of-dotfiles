@@ -238,6 +238,14 @@ if [ "${1:-}" = "--selftest" ]; then
   _a 'A118 source <(a generator)'                    'source <(kubectl completion zsh)'
   _a 'A118 $(...) in QUOTED heredoc stays data'      $'cat <<\'EOF\'\n$(gh auth login)\nEOF'
   _a 'A118 . /dev/stdin <<< gh auth status'          ". /dev/stdin <<< 'gh auth status'"
+  # W-20260929-A134: the gh guard's last misses (lexer comparison S21 S46 S50 S69)
+  _d gh-auth     'A134 function f { ...; }; f (S21)' 'function f { gh auth login; }; f'
+  _d gh-auth     'A134 /usr/bin/env bash -c (S46)'   "/usr/bin/env bash -c 'gh auth login'"
+  _d gh-auth     'A134 cat <<EOF | bash (S50)'       $'cat <<\'EOF\' | bash\ngh auth login\nEOF'
+  _d gh-auth     'A134 eval "$(echo ...)" (S69)'     'eval "$(echo gh auth login)"'
+  _a 'A134 function f { gh auth status; }; f'        'function f { gh auth status; }; f'
+  _a 'A134 cat <<EOF | bash, gh auth status'         $'cat <<\'EOF\' | bash\ngh auth status\nEOF'
+  _a 'A134 eval "$(echo gh auth status)"'            'eval "$(echo gh auth status)"'
   _d gh-auth     'here-string fed to bash'           "bash <<< 'gh auth login'"
   _d gh-auth     'echo piped into sh'                "echo 'gh auth login' | sh"
   _d gh-auth     'quoted command word'               '"gh" auth login'
@@ -439,11 +447,13 @@ FSEP=$'\034'  # joins the nested bodies of one level
 read -r -d '' LEXER <<'AWK'
 BEGIN { US = sprintf("%c", 31); RSC = sprintf("%c", 30); Q = sprintf("%c", 39); ORS = RSC
         FSEP = sprintf("%c", 28); HX = "0123456789abcdef"; buf = ""; first = 1
-        nt = split("gh git eval script source . sh bash zsh dash ksh mksh yash fish echo printf env genv sudo doas command exec nohup time nice timeout gtimeout caffeinate stdbuf gstdbuf xargs gxargs watch export typeset declare local readonly integer", TL, " ")
+        nt = split("gh git eval script source . cat sh bash zsh dash ksh mksh yash fish echo printf env genv sudo doas command exec nohup time nice timeout gtimeout caffeinate stdbuf gstdbuf xargs gxargs watch export typeset declare local readonly integer", TL, " ")
         for (k = 1; k <= nt; k++) TRIG[TL[k]] = 1 }
 { if (first) { buf = $0; first = 0 } else buf = buf "\n" $0 }
 function enc(w) { gsub(RSC, "", w); gsub(US, "", w); return w }
 function emitS(b) { print "S" US enc(b) }
+# A134: a $( ) or backtick body handed to eval runs what it prints
+function emitSub(b) { if (nw > 0 && tolower(W[1]) == "eval") b = b " | sh"; emitS(b) }
 # A118: a command that runs the output of a <( ) it is given
 function runsout(w,   b) { b = tolower(w); sub(/.*\//, "", b); return b == "source" || b == "." || b ~ /^(sh|bash|zsh|dash|ksh|mksh|yash|fish)$/ }
 # A118: every $( ) (not $(( ))) and backtick span in t, lexed as a nested body
@@ -525,7 +535,7 @@ function mparen(k,   d, ch, q) {
 }
 function bq(k,   j) {
   j = k; while (j <= n && substr(s, j, 1) != "`") { if (substr(s, j, 1) == "\\") j++; j++ }
-  emitS(substr(s, k, j - k)); cur = cur "`...`"
+  emitSub(substr(s, k, j - k)); cur = cur "`...`"
   return j + 1
 }
 function dq(k,   ch, nx, j) {
@@ -538,7 +548,7 @@ function dq(k,   ch, nx, j) {
       if (nx == "$" || nx == "`" || nx == "\"" || nx == "\\") { cur = cur nx; k += 2; continue }
       cur = cur ch; k++; continue
     }
-    if (ch == "$" && substr(s, k + 1, 1) == "(") { j = mparen(k + 2); emitS(substr(s, k + 2, j - k - 2)); cur = cur "$(...)"; k = j + 1; continue }
+    if (ch == "$" && substr(s, k + 1, 1) == "(") { j = mparen(k + 2); emitSub(substr(s, k + 2, j - k - 2)); cur = cur "$(...)"; k = j + 1; continue }
     if (ch == "`") { k = bq(k + 1); continue }
     cur = cur ch; k++
   }
@@ -606,7 +616,7 @@ function lexone(txt,   i, c, nx, j) {
     if (c == "$" && substr(s, i + 1, 1) == Q) { inw = 1; wq = 1; i = ansic(i + 2); continue }
     if (c == "\"") { inw = 1; wq = 1; i = dq(i + 1); continue }
     if (c == "$" && substr(s, i + 1, 1) == "(") {
-      j = mparen(i + 2); emitS(substr(s, i + 2, j - i - 2)); cur = cur "$(...)"; inw = 1; i = j + 1; continue
+      j = mparen(i + 2); emitSub(substr(s, i + 2, j - i - 2)); cur = cur "$(...)"; inw = 1; i = j + 1; continue
     }
     if (c == "`") { inw = 1; i = bq(i + 1); continue }
     if ((c == "<" || c == ">" || c == "=") && !inw && substr(s, i + 1, 1) == "(") {
@@ -847,6 +857,7 @@ _argv() {
     case "$w" in
       [A-Za-z_]*=*) shift ;;
       '!'|'{'|'}'|if|then|else|elif|fi|do|done|while|until|coproc|noglob|nocorrect|-|builtin|nohup) shift ;;
+      function) shift; [ $# -gt 0 ] && shift; [ "${1:-}" = "()" ] && shift ;;   # A134: function NAME [()] { BODY
       time) shift; [ "${1:-}" = -p ] && shift ;;
       command)
         shift
@@ -864,7 +875,7 @@ _argv() {
             *) break ;;
           esac
         done ;;
-      env|genv)
+      env|genv|*/env|*/genv)   # A134: /usr/bin/env too
         shift
         while [ $# -gt 0 ]; do
           case "$1" in
@@ -976,7 +987,7 @@ _text() {
   [ -n "$REASON" ] && return 0
   if [ "$DEPTH" -ge "$MAX_DEPTH" ]; then TOO_DEEP=1; return 0; fi
   DEPTH=$((DEPTH + 1))
-  local recs line oldifs="$IFS" shells=" " prev_pl="" prev_data="" mine
+  local recs line oldifs="$IFS" shells=" " prev_pl="" prev_data="" mine catfeeds=" " prev_cat=""
   local -a lines f
   NEST=""
   recs="$(printf '%s' "$1" | LC_ALL=C awk "$LEXER" 2>/dev/null)"
@@ -993,9 +1004,12 @@ _text() {
         if [ "$STDIN_SHELL" -eq 1 ]; then
           shells="$shells${f[1]} "
           [ "${f[2]}" = "$prev_pl" ] && [ -n "$prev_data" ] && _nest "${prev_data//\\n/$'\n'}"
+          # A134: cat <<EOF | sh: the bare cat's heredoc (its H record comes later) is code
+          [ "${f[2]}" = "$prev_pl" ] && [ -n "$prev_cat" ] && catfeeds="$catfeeds$prev_cat "
         fi
+        prev_cat=""; [ ${#f[@]} -eq 4 ] && [ "${f[3]##*/}" = cat ] && prev_cat="${f[1]}"
         prev_pl="${f[2]}"; prev_data="$DATA" ;;
-      H) case "$shells" in *" ${f[1]} "*) _nest "${f[2]:-}" ;; esac ;;
+      H) case "$shells$catfeeds" in *" ${f[1]} "*) _nest "${f[2]:-}" ;; esac ;;
       S) _nest "${f[1]:-}" ;;
     esac
     [ -n "$REASON" ] && break
