@@ -129,6 +129,7 @@ function loadaliases(   line, l, k, v) {
 function trig(w,   b) {
   if (index(w, "SAFE_RM_OFF") == 1) return 1
   if (w ~ /^(PATH|path)\+?=/) return 1   #M: prefilter: PATH assignment
+  if (w ~ /^HOME\+?=/) return 1   #M: prefilter: HOME assignment (W-20260929-A171: ~/.local/bin after it is not the shim)
   b = w; sub(/^=/, "", b); sub(/.*\//, "", b)
   if (b in TRIG) return 1
   if (b ~ /^(python|pypy)[0-9.]*$/ || b ~ /^mkfs/ || b ~ /^newfs/) return 1
@@ -424,7 +425,7 @@ _msg() { # $1 = rule id -> what it does, then the safe route
     guard-timeout)  echo "the guard gave NO VERDICT within ${DEADLINE:-3} s (a timeout, not a match). SAFE ROUTE: split the command into smaller pieces, or ask Gavin." ;;
     guard-no-verdict) echo "the guard exited without a verdict (a crash, not a match). SAFE ROUTE: ask Gavin; the guard's --selftest shows what broke." ;;
     guard-broken) echo "the guard's classifier is broken (it no longer denies /bin/rm), so it cannot judge anything (not a match). SAFE ROUTE: ask Gavin; run the hook's --selftest, or revert the last change to it." ;;
-    trash-path)     echo "trash called by path (/usr/bin/trash), or through command/env, skips the trash guard (it refuses a blank argument, the current folder, ~, ~/CODE and repo roots; an empty trash '' moved a whole repo to the Trash on 2026-09-29). SAFE ROUTE: plain trash, which goes through the guard." ;;
+    trash-path)     echo "trash called by path (/usr/bin/trash, or a copy anywhere but ~/.local/bin), through command/env, or after a PATH change (PATH=..., export/unset PATH, hash trash=, sudo -i) skips the trash guard (it refuses a blank argument, the current folder, ~, ~/CODE and repo roots; an empty trash '' moved a whole repo to the Trash on 2026-09-29). SAFE ROUTE: plain trash, which goes through the guard." ;;
     trash-empty)    echo "emptying the Trash (trash-empty, trash-rm, Finder empty trash) makes every earlier delete permanent. SAFE ROUTE: ask Gavin." ;;
     *)              echo "this command destroys data outside the Trash. SAFE ROUTE: ask Gavin." ;;
   esac
@@ -502,8 +503,25 @@ DEPTH=0
 # PATH (unset PATH; export PATH=..; PATH=/bin alone) and stays set for the rest of
 # it. RM_LOOKUP (a dynamic local in _argv) names a prefix that changes the lookup
 # of the command after it (env, PATH=.., command -p, sudo -i). Either one makes a
-# bare rm a deny.
+# bare rm a deny. Since 2026-09-29 (W-20260929-A158) the same two make a bare
+# trash a deny too: the trash shim is found the same way, so the same holes applied.
 PATH_TOUCHED=""
+# HOME_TOUCHED names an earlier statement that changed HOME (HOME=x; export HOME=x;
+# unset HOME). After it, ~/.local/bin/rm and ~/.local/bin/trash no longer name the
+# shims, so by path they are denied like any other copy (W-20260929-A171). A prefix
+# (HOME=x ~/...) is left alone: the ~ there still expands to the old home.
+HOME_TOUCHED=""
+
+# The one place a Trash shim may be named by path: ~/.local/bin/<name> in this
+# account's home, spelled with ~, $HOME, ${HOME} or the home written out. Any
+# other folder called .local/bin (/tmp/x/.local/bin/trash) was allowed before
+# 2026-09-29 (W-20260929-A171); a copy there is not the shim.
+_home_shim() { # $1 = the command word as typed, $2 = rm | trash -> 0 when it IS the shim
+  [ -n "$HOME_TOUCHED" ] && return 1                                          #M: HOME changed, shim path distrusted
+  case "$1" in "~/.local/bin/$2"|'$HOME/.local/bin/'"$2"|'${HOME}/.local/bin/'"$2") return 0 ;; esac
+  [ -n "${HOME-}" ] && [ "$1" = "$HOME/.local/bin/$2" ] && return 0
+  return 1
+}
 
 _deny() { # $1 = rule id, $2 = where it was found (optional)
   [ -n "$REASON_ID" ] && return 0
@@ -639,17 +657,19 @@ _is_assign() { [[ $1 =~ $RE_ASSIGN ]]; }
 _argv() {
   [ -n "$REASON_ID" ] && return 0
   local adepth="$1"; shift
-  local RM_LOOKUP="${RM_LOOKUP-}" pa=""
+  local RM_LOOKUP="${RM_LOOKUP-}" pa="" ha=""
   local TRASH_VIA="${TRASH_VIA-}"   # command/env seen before a trash (trash-path, 2026-09-29)
   # leading assignments: VAR=1 cmd
   while [ $# -gt 0 ] && [[ $1 == *=* ]] && _is_assign "$1"; do
     case "$1" in SAFE_RM_OFF=*|SAFE_RM_OFF+=*) _deny safe-rm-off "$1"; return 0 ;; esac   #M: SAFE_RM_OFF prefix
     case "$1" in PATH=*|PATH+=*|path=*|path+=*) pa="$1" ;; esac
+    case "$1" in HOME=*|HOME+=*) ha="$1" ;; esac
     shift
   done
   [ -n "$pa" ] && RM_LOOKUP="$pa"                                                            #M: PATH= prefix
   if [ $# -eq 0 ]; then
     [ -n "$pa" ] && PATH_TOUCHED="$pa"                                                       #M: bare PATH= statement
+    [ -n "$ha" ] && HOME_TOUCHED="$ha"                                                       #M: bare HOME= statement
     [ -n "$TRUNC" ] && _deny redir-trunc "> $TRUNC"
     return 0
   fi
@@ -763,18 +783,21 @@ _argv() {
         :
         case "$w" in SAFE_RM_OFF=*|SAFE_RM_OFF) _deny safe-rm-off "$base $w"; return 0 ;; esac   #M: export SAFE_RM_OFF
         case "$w" in PATH=*|PATH+=*|path=*|path+=*) PATH_TOUCHED="$base $w" ;; esac            #M: export PATH=
+        case "$w" in HOME=*|HOME+=*) HOME_TOUCHED="$base $w" ;; esac                            #M: export HOME=
       done
       return 0 ;;
     unset)
       for w in "$@"; do
         :
         case "$w" in PATH|path) PATH_TOUCHED="unset $w" ;; esac                                  #M: unset PATH
+        case "$w" in HOME) HOME_TOUCHED="unset $w" ;; esac                                       #M: unset HOME
       done
       return 0 ;;
     hash)
       for w in "$@"; do
         :
         case "$w" in rm=*|grm=*) _deny rm-lookup "hash $w"; return 0 ;; esac                  #M: hash rm=
+        case "$w" in trash=*) _deny trash-path "hash $w"; return 0 ;; esac                     #M: hash trash=
       done
       return 0 ;;
     nice)
@@ -817,7 +840,7 @@ _argv() {
 
     # ---- the deleters themselves
     rm)
-      if [[ $c == */* ]] && [[ $c != */.local/bin/rm ]]; then _deny rm-path "$c"; return 0; fi   #M: rm by path
+      if [[ $c == */* ]] && ! _home_shim "$c" rm; then _deny rm-path "$c"; return 0; fi   #M: rm by path
       if [[ $c != */* ]] && [ -n "$RM_LOOKUP$PATH_TOUCHED" ]; then _deny rm-lookup "${RM_LOOKUP:-$PATH_TOUCHED}, then rm"; return 0; fi   #M: rm after a lookup change
       for w in "$@"; do
         [ "$w" = "--" ] && break
@@ -935,8 +958,9 @@ _argv() {
       return 0 ;;
     trash-empty|trash-rm) _deny trash-empty "$base"; return 0 ;;   #M: trash-empty
     trash)   # 2026-09-29: only the PATH shim runs trash-guard; a path or command/env skips it
-      if [[ $c == */* ]] && [[ $c != */.local/bin/trash ]]; then _deny trash-path "$c"; return 0; fi   #M: trash by path
+      if [[ $c == */* ]] && ! _home_shim "$c" trash; then _deny trash-path "$c"; return 0; fi   #M: trash by path
       [ -n "$TRASH_VIA" ] && { _deny trash-path "$TRASH_VIA trash"; return 0; }                       #M: command/env trash
+      if [[ $c != */* ]] && [ -n "$RM_LOOKUP$PATH_TOUCHED" ]; then _deny trash-path "${RM_LOOKUP:-$PATH_TOUCHED}, then trash"; return 0; fi   #M: trash after a lookup change
       return 0 ;;
     # oh-my-zsh aliases that hide a reset --hard, denied BY NAME as well (Gavin,
     # 2026-09-23). The snapshot's alias table normally denies them by their
@@ -1187,7 +1211,7 @@ _git_cmd() {
 
 # Classify one whole command string. Sets REASON_ID / REASON / REASON_WHERE.
 _classify() { # $1 = command, $2 = cwd (optional)
-  REASON=""; REASON_ID=""; REASON_WHERE=""; PIDBASE=0; SI_KIND=(); DEPTH=0; PATH_TOUCHED=""
+  REASON=""; REASON_ID=""; REASON_WHERE=""; PIDBASE=0; SI_KIND=(); DEPTH=0; PATH_TOUCHED=""; HOME_TOUCHED=""
   AL_N=(); AL_V=(); LEXER_FAILED=0; CWD="${2:-}"; TRUNC=""; CUR_PID=0
   _shell_text "$1"
   return 0
@@ -1296,6 +1320,24 @@ SNAP
   _must trash-path          '$(/usr/bin/trash)'               'echo "$(/usr/bin/trash x)"'
   _must trash-path          'xargs /usr/bin/trash'            'ls | xargs /usr/bin/trash'
   _must trash-path          'find -exec /usr/bin/trash'       'find . -name x -exec /usr/bin/trash {} +'
+  # W-20260929-A158: a PATH change in front of a bare trash reached /usr/bin/trash directly
+  # (the engage incident's own shape); rm had rm-lookup for exactly this, trash had nothing.
+  _must trash-path          'PATH= prefix before trash'       "PATH=/usr/bin trash ''"
+  _must trash-path          'export PATH, then trash'         'export PATH=/usr/bin; trash x'
+  _must trash-path          'path=() (zsh), then trash'       'path=(/usr/bin); trash x'
+  _must trash-path          'unset PATH, then trash'          'unset PATH; trash x'
+  _must trash-path          'hash trash='                     'hash trash=/usr/bin/trash; trash x'
+  _must trash-path          'sudo -i trash'                   "sudo -i trash ''"
+  _must trash-path          'sh -c PATH= trash'               "sh -c 'PATH=/usr/bin trash x'"
+  _must trash-path          'env PATH= trash'                 'env PATH=/usr/bin trash x'
+  # W-20260929-A171: any folder named .local/bin was trusted as the shim's; only ~/.local/bin is
+  _must trash-path          'a trash in another .local/bin'   '/tmp/x/.local/bin/trash x'
+  _must trash-path          './.local/bin/trash'              './.local/bin/trash x'
+  _must rm-path             'an rm in another .local/bin'     '/tmp/x/.local/bin/rm x'
+  _must trash-path          'HOME=; then ~/.local/bin/trash'  'HOME=/tmp/e; ~/.local/bin/trash x'
+  _must trash-path          'export HOME, then $HOME/...'     'export HOME=/tmp/e; $HOME/.local/bin/trash x'
+  _must rm-path             'unset HOME, then ~/.local/bin/rm' 'unset HOME; ~/.local/bin/rm x'
+  _must rm-path             'HOME= later in a chain'          'FOO=1; HOME=/tmp/e; ~/.local/bin/rm x'
   # rm-lookup (W-20260925-A25): each of these finds rm through a PATH that may
   # not hold the Trash shim. env -i and command -p MEASURED to reach /bin/rm.
   _must rm-lookup           'env rm'                          'env rm x'
@@ -1581,6 +1623,16 @@ SNAP
   _must - 'trash command'                   'trash notes.txt'
   _must - 'trash with options (the shim)'   'trash -v notes.txt'
   _must - 'the trash shim by path'          '~/.local/bin/trash notes.txt'
+  # every spelling of the real ~/.local/bin stays allowed (W-20260929-A171 narrowed the rest)
+  _must - '$HOME/.local/bin/trash'          '$HOME/.local/bin/trash x'
+  _must - 'quoted "$HOME/.local/bin/trash"' '"$HOME/.local/bin/trash" x'
+  _must - '${HOME}/.local/bin/trash'        '${HOME}/.local/bin/trash x'
+  _must - 'the home written out'            "$HOME/.local/bin/trash x"
+  _must - '~/.local/bin/rm by path'         '~/.local/bin/rm x'
+  _must - 'HOME= as a PREFIX (~ is still the old home)' 'HOME=/tmp/e ~/.local/bin/trash x'
+  _must - 'HOME= then a harmless command'   'HOME=/tmp/e; ls'
+  _must - 'PATH= then a harmless command'   'PATH=/usr/bin ls'
+  _must - 'plain trash'                     'trash x'
   _must - 'command -v trash (lookup)'       'command -v trash'
   _must - 'trash-guard --check'             'trash-guard --check -- notes.txt'
   _must - 'the trash words as data'         'echo "never /usr/bin/trash or command trash"'
