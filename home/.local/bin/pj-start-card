@@ -41,8 +41,11 @@
 #   then     Mods API: (N) unseen change(s) -- ONLY when a Claude Code update changed the
 #            mods API and Gavin has not said "seen" (`mods-api-drift --card`, read-only;
 #            D-20260923-A06). Also one line when the drift check itself is NOT MEASURED
+#   then     Rules copy edited on this machine: N path(s) in ~/repos/pj-rules (...) -- ONLY
+#            on a relay-fed machine whose copy has local edits (pj-health's rules-copy row
+#            holds the fix; 2026-09-29). Silent when clean, and on the Mac, which has no copy
 #   last     the hello rule
-#   Outside a git repo: line 1 and the hello rule only.
+#   Outside a git repo: line 1, the rules-copy line when it shows, and the hello rule.
 #
 # THE DECLARATION FILE  .claude/pj-homes  (D-20260920-06)
 #   key: value lines, # comments. Keys: handoff, tracker (may repeat), decisions,
@@ -142,7 +145,7 @@
 #     "trackers": ["<marker>"],
 #     "dot_claude_behind": N,            0 when level or not measurable
 #     "mods_api": null (outside a repo) | {"unseen": N, "measured": true | false},
-#     "flags": [ {"name": "no-wrap-up" | "owed" | "dot-claude-behind" | "mods-api",
+#     "flags": [ {"name": "no-wrap-up" | "owed" | "dot-claude-behind" | "mods-api" | "rules-copy",
 #                 "text": "<the card's own line>"} ],   the card's OWN signals only (F1)
 #     "panel": {"sections": ["items", ...], "source": "pj-homes" | "automatic",
 #               "unknown": ["<name>"], "duplicates": N},
@@ -251,6 +254,28 @@ sync_line(){
   printf 'dot-claude: %s commit(s) behind %s%s. Pull it yourself when convenient; pj fetches but never pulls.' "$behind" "$up" "$age"
 }
 
+# The rules-copy line (FOLLOWUP-BRIEF T1/T2, 2026-09-29). A relay-fed machine gets pj's rules in
+# ~/repos/pj-rules and links lead pj there, so an edit made THROUGH a link lands in the copy
+# unnoticed and pj loads it; the relay's next push (updateInstead) is then refused. The same
+# finding as pj-health's rules-copy row, which holds the fix. EXCEPTION-BASED like sync_line:
+# silent when clean, when there is no copy (the Mac), and when the copy is not its own repo
+# (pj-health says NOT MEASURED for that). --no-optional-locks keeps CONTRACT 2: a plain status
+# may rewrite the copy's index. Seam: PJ_RULES_COPY.
+rules_copy_line(){
+  local rc="${PJ_RULES_COPY:-${HOME-}/repos/pj-rules}" top real out n eg
+  [ -d "$rc" ] || return 0
+  top="$(git -C "$rc" rev-parse --show-toplevel 2>/dev/null)" || return 0
+  [ -n "$top" ] || return 0
+  top="$( (builtin cd "$top" 2>/dev/null && pwd -P) )"; real="$( (builtin cd "$rc" 2>/dev/null && pwd -P) )"
+  [ -n "$real" ] && [ "$top" = "$real" ] || return 0
+  out="$(git --no-optional-locks -C "$rc" status --porcelain --untracked-files=all 2>/dev/null)" || return 0
+  [ -n "$out" ] || return 0
+  n="$(printf '%s\n' "$out" | grep -c .)"
+  eg="$(printf '%s\n' "$out" | head -3 | cut -c4- | LC_ALL=C tr -d '\000-\037\177' | paste -sd, - | sed 's/,/, /g')"
+  [ "$n" -gt 3 ] && eg="$eg, +$((n - 3)) more"
+  printf "Rules copy edited on this machine: %s path(s) in %s (%s). pj loads them and the relay's next push is refused; 'pj-health' rules-copy row has the fix." "$n" "${rc/#${HOME-}/~}" "$eg"
+}
+
 # The mods API line (F8b, D-20260923-A06). mods-api-drift --card reads the saved reports and
 # prints one line only when a Claude Code update changed the mods API and nobody has said
 # "seen" yet. Read-only and local (it runs `claude --version`, 7 ms), so it keeps CONTRACT 2
@@ -341,10 +366,13 @@ gather(){
   C_OWED=(); C_OWED_CMD=(); C_OWED_SINCE=(); C_OWED_UNREADABLE=0
   C_HMARK=""; C_HPATH=""; C_HANDOFF=""; C_HSIZE=""; C_HDATE=""
   C_TRACKERS=(); C_TRACKER_MARKS=()
-  C_SYNC=""; C_BEHIND=0; C_MODS=""; C_MODS_UNSEEN=0; C_MODS_MEASURED=0
+  C_SYNC=""; C_BEHIND=0; C_MODS=""; C_MODS_UNSEEN=0; C_MODS_MEASURED=0; C_RCOPY=""
   C_PANEL_N=0; C_PANEL_VAL=""; C_LIST=""; C_PLIST=""
   # Selftest seam: a crash in the middle of gathering, the one failure nothing else provokes.
   [ "${PJ_CARD_FAULT:-}" = crash ] && exit 3
+
+  # machine-wide, so read before the outside-a-repo return: that card shows it too
+  C_RCOPY="$(rules_copy_line 2>/dev/null)" || C_RCOPY=""
 
   C_TOP="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || C_TOP=""
   [ -n "$C_TOP" ] && C_TOP="$(dirname "$C_TOP")"
@@ -506,6 +534,7 @@ render_text(){
   local lines=() n=0
   if [ "$C_INREPO" -eq 0 ]; then
     printf 'pj start card: %s (not a git repo, so no project, no items)\n' "$C_NAME"
+    [ -n "$C_RCOPY" ] && printf '%s\n' "$C_RCOPY"
     printf '%s\n' "$HELLO"
     return 0
   fi
@@ -517,6 +546,7 @@ render_text(){
   [ -n "$C_HANDOFF" ] && fixed=$((fixed + 1))
   [ -n "$C_SYNC" ] && fixed=$((fixed + 1))
   [ -n "$C_MODS" ] && fixed=$((fixed + 1))
+  [ -n "$C_RCOPY" ] && fixed=$((fixed + 1))
   fixed=$(( fixed + ${#C_XH[@]} + ${#C_XSINGLE[@]} ))
   # THE BUDGET (P8 rule 3). This project's own titles keep a floor of OWN_FLOOR before any
   # cross-project title is placed; cross sections then take one title each in turn (at most
@@ -567,6 +597,7 @@ render_text(){
   [ "${#C_TRACKERS[@]}" -gt 0 ] && lines+=("${C_TRACKERS[@]}")
   [ -n "$C_SYNC" ] && lines+=("$C_SYNC")
   [ -n "$C_MODS" ] && lines+=("$C_MODS")
+  [ -n "$C_RCOPY" ] && lines+=("$C_RCOPY")
   lines+=("$HELLO")
   printf '%s\n' "${lines[@]}"
 }
@@ -773,6 +804,7 @@ render_json(){
   elif [ "${#C_OWED[@]}" -gt 1 ]; then fn+=(owed); ft+=("Owed: ${#C_OWED_CMD[@]} declined project wrap-up command(s); 'pj-wrap owed' lists them."); fi
   [ -n "$C_SYNC" ] && { fn+=(dot-claude-behind); ft+=("$C_SYNC"); }
   [ -n "$C_MODS" ] && { fn+=(mods-api); ft+=("$C_MODS"); }
+  [ -n "$C_RCOPY" ] && { fn+=(rules-copy); ft+=("$C_RCOPY"); }
   t=""
   for ((i = 0; i < ${#fn[@]}; i++)); do js "${ft[$i]}"; t="$t${t:+,}{\"name\":\"${fn[$i]}\",\"text\":$REPLY}"; done
   o="$o,\"flags\":[$t]"

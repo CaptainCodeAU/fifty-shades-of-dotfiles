@@ -526,7 +526,7 @@ arm "rules-copy FAIL counts every path (a modified file and untracked ones insid
 arm "rules-copy FAIL names at most 3, then +N more" has rules-copy ", +2 more)"; arm "rules-copy FAIL names the edited tracked file" has rules-copy "pj-global/RULES.md"
 # no write (CONTRACT 1): a stat-dirty index is what a plain `git status` rewrites. Control: a plain status DOES change the hash.
 rc_hash(){ (builtin cd "$RCP" && find . -type f -print0 | sort -z | xargs -0 shasum -a 256 | shasum -a 256 | cut -c1-16); }
-echo "rules" >"$RCP/pj-global/RULES.md"; touch -t 203001010000 "$RCP/pj-global/RULES.md"   # committed bytes, new mtime: stat-dirty only
+echo "rules" >"$RCP/pj-global/RULES.md"; touch -t 200001010000 "$RCP/pj-global/RULES.md"   # committed bytes, new mtime: stat-dirty only
 rh1="$(rc_hash)"; PJ_RULES_COPY_FX="$RCP" run; rh2="$(rc_hash)"
 arm "rules-copy wrote nothing into the copy ($rh1)" [ "$rh1" = "$rh2" ]
 fxgit -C "$RCP" status --porcelain >/dev/null 2>&1; rh3="$(rc_hash)"; arm "control: a plain git status DOES rewrite the copy's index" [ "$rh3" != "$rh2" ]

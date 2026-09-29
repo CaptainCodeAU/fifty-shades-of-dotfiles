@@ -31,6 +31,9 @@ export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
 # would depend on whether this machine has an unseen mods API change today.
 printf '#!/bin/sh\nexit 0\n' > "$ROOT/mods-silent"; chmod +x "$ROOT/mods-silent"
 export PJ_MODS_API_DRIFT="$ROOT/mods-silent"
+# The rules-copy line (2026-09-29) reads ~/repos/pj-rules. Pin it to a folder that does not exist,
+# or on a relay-fed box every arm below would depend on the state of the real copy.
+export PJ_RULES_COPY="$ROOT/no-rules-copy"
 # The card calls `open-items` from PATH. Put the one BESIDE this card first, or a worktree's
 # selftest measures the stowed master copy and can never see a change to open-items --session
 # (found 2026-09-23 while building W-20260923-A23). PJ_CARD moves both together.
@@ -261,6 +264,47 @@ check "P tool absent: no line, card still fine" '! has "$OUT" "^Mods API:" && [ 
 PJ_MODS_API_DRIFT="$ROOT/mods-unseen" run "$B"
 check "P the cap squeeze still holds with the mods line ($(lines "$OUT") lines)" '[ "$(lines "$OUT")" -eq 20 ] && has "$OUT" "^Mods API:" && has "$OUT" "^Hello rule:"'
 check "P titles gave up the line, fixed lines did not" '[ "$(( $(ntitles "$OUT") + $(printf "%s\n" "$OUT" | sed -n "s/^   +\([0-9]*\) more$/\1/p") ))" -eq 14 ] && [ "$(printf "%s\n" "$OUT" | grep -c "^Tracker: ")" -eq 5 ]'
+
+# --- U: the rules-copy line (FOLLOWUP-BRIEF T2, 2026-09-29) ----------------------------------
+# Exception-based like O and P, so the silent half and the positive half are both asserted.
+# All of the positive arms FAIL with master's card, which has no such line.
+run "$A"
+check "U no rules copy (the Mac): NO rules-copy line (the silent half)" '! has "$OUT" "Rules copy"'
+RCP="$ROOT/rules-copy"; mkrepo "$RCP"; mkdir -p "$RCP/pj-global"; printf 'rules\n' > "$RCP/pj-global/RULES.md"
+git -C "$RCP" add -A; git -C "$RCP" commit -q -m init
+PJ_RULES_COPY="$RCP" run "$A"
+check "U a clean copy: still no line" '! has "$OUT" "Rules copy" && [ "$RC" -eq 0 ]'
+printf 'marker\n' > "$RCP/MARKER-untracked"
+PJ_RULES_COPY="$RCP" run "$A"
+check "U an untracked file in the copy: the line appears (positive control)" 'has "$OUT" "^Rules copy edited on this machine: 1 path(s) in "'
+check "U the line names the file" 'has "$OUT" "(MARKER-untracked)"'
+check "U it sits right before the hello rule" '[ "$(printf "%s\n" "$OUT" | tail -2 | head -1 | cut -c1-10)" = "Rules copy" ]'
+check "U exactly one such line" '[ "$(printf "%s\n" "$OUT" | grep -c "^Rules copy")" -eq 1 ]'
+PJ_RULES_COPY="$RCP" run "$H"
+check "U outside a repo the card shows it too (3 lines)" '[ "$(lines "$OUT")" -eq 3 ] && has "$OUT" "^Rules copy edited" && has "$OUT" "^Hello rule:"'
+( builtin cd "$A" && PJ_RULES_COPY="$RCP" "$CARD" --json </dev/null 2>/dev/null ) > "$ROOT/json-u"
+check "U --json carries it as a rules-copy flag" 'grep -q "{\"name\":\"rules-copy\",\"text\":\"Rules copy edited on this machine: 1 path(s)" "$ROOT/json-u"'
+printf 'edited\n' >> "$RCP/pj-global/RULES.md"; mkdir -p "$RCP/u"; for i in 1 2 3; do printf 'x\n' > "$RCP/u/f$i"; done
+PJ_RULES_COPY="$RCP" run "$A"
+check "U five changed paths: counted, three named, +2 more" 'has "$OUT" "5 path(s) in " && has "$OUT" ", +2 more)"'
+PJ_RULES_COPY="$RCP" run "$B"
+check "U the cap squeeze holds with the line ($(lines "$OUT") lines)" '[ "$(lines "$OUT")" -eq 20 ] && has "$OUT" "^Rules copy" && has "$OUT" "^Hello rule:"'
+# CONTRACT 2: the card writes nothing, not even the copy's index. A stat-dirty file is what a
+# plain `git status` refreshes, so the control below MUST change the hash.
+printf 'rules\n' > "$RCP/pj-global/RULES.md"; touch -t 200001010000 "$RCP/pj-global/RULES.md"
+rch(){ ( builtin cd "$RCP" && find . -type f -print0 | sort -z | xargs -0 shasum -a 256 | shasum -a 256 | cut -c1-16 ); }
+h1="$(rch)"; PJ_RULES_COPY="$RCP" run "$A"; h2="$(rch)"
+check "U the card wrote nothing into the copy ($h1)" '[ "$h1" = "$h2" ]'
+git -C "$RCP" status --porcelain >/dev/null 2>&1; h3="$(rch)"
+check "U control: a plain git status DOES rewrite the copy's index" '[ "$h3" != "$h2" ]'
+mkdir -p "$RCP/nested"
+PJ_RULES_COPY="$RCP/nested" run "$A"
+check "U a copy that is not its own repo (inside another): no line, card fine" '! has "$OUT" "Rules copy" && [ "$RC" -eq 0 ]'
+mkdir -p "$ROOT/rc-plain"; PJ_RULES_COPY="$ROOT/rc-plain" run "$A"
+check "U a copy that is no repo at all: no line, card fine" '! has "$OUT" "Rules copy" && [ "$RC" -eq 0 ]'
+command mv "$RCP/MARKER-untracked" "$RCP/u" "$ROOT/"
+PJ_RULES_COPY="$RCP" run "$A"
+check "U edits moved out: the line is gone again (control)" '! has "$OUT" "Rules copy"'
 
 # --- Q: a pinned item survives the title cap (W-20260923-A23) -----------------------------
 # A 40-item drawer whose NEWEST ID says `when: next session`. In ID order it is title 40 of
