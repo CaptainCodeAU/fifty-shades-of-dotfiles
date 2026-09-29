@@ -1162,7 +1162,10 @@ selftest() {
   out="$(PJ_WORKER_BIN="$fk/rc2" "$SELF" --check-caps 2>&1)"; rc=$?
   [[ $rc -eq 2 && "$out" == *"could not count"* ]] && ok "24c could not measure: REFUSED rc 2, never read as under the cap" || bad "24c unmeasured" "rc=$rc $out"
   out="$(PJ_WORKER_BIN="$root/none-such" "$SELF" --check-caps 2>&1)"; rc=$?
-  [[ $rc -eq 0 && "$out" == *"NOT checked"* ]] && ok "24d pj-worker absent: launches with a NOTE naming the unchecked caps" || bad "24d absent" "rc=$rc $out"
+  [[ $rc -eq 2 && "$out" == *"REFUSED: pj-worker not found"* && "$out" == *"stow"* ]] && ok "24d pj-worker absent: REFUSED rc 2, naming the fix (W-20260929-A40, D-20260929-A17)" || bad "24d absent" "rc=$rc $out"
+  printf '__claude_launch() { : > "%s/launched24f"; }\n' "$root" > "$root/fake-launch-24f"
+  out="$(PJ_LAUNCH_FILE="$root/fake-launch-24f" PJ_WORKER_BIN="$root/none-such" PJ_PROFILE_DIR="$root/none-such" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" 2>&1)"; rc=$?
+  [[ $rc -eq 2 && ! -e "$root/launched24f" ]] && ok "24f a real launch with no counter exits 2 before __claude_launch" || bad "24f launched without a counter" "rc=$rc $out"
   # 24e the REAL launch path refuses BEFORE launching: a fake launch file whose
   #     __claude_launch leaves a marker; with the cap reached the marker must not appear,
   #     and with the counter allowing it (control) the check alone must pass.
@@ -1418,15 +1421,16 @@ selftest() {
 #   2   REFUSED as well: a launch the counter cannot see is the case the cap exists for,
 #       and "could not count" must never read as "under the cap" (the sandbox blocks ps,
 #       so a sandboxed `pj -p` lands here; run it with the sandbox off).
-#   pj-worker absent: LAUNCHES with a NOTE. pj never refuses because a file is missing
-#       (header), and a machine without it has no counter to be wrong.
+#   pj-worker absent: REFUSED, rc 2 (W-20260929-A40, D-20260929-A17, Gavin 2026-09-29): a
+#       cap that cannot count is not a pass. The one exception to "pj never refuses
+#       because a file is missing" (header): pj and pj-worker are stowed together.
 # Seam: PJ_WORKER_BIN (the selftest points it at fakes).
 check_session_caps() {
   local pjw="${PJ_WORKER_BIN-}" out rc
   [[ -n "$pjw" ]] || pjw="$(whence -p pj-worker 2>/dev/null)"
   if [[ -z "$pjw" || ! -x "$pjw" ]]; then
-    print -u2 -- "pj: NOTE: pj-worker not found, so the session caps (4 per project, 12 on the machine) were NOT checked. stow -R the dotfiles."
-    return 0
+    print -u2 -- "pj: REFUSED: pj-worker not found, so the session caps (4 per project, 12 on the machine) cannot be checked, and a cap that cannot count is not a pass (D-20260929-A17). Fix: stow -R the dotfiles (home/.local/bin), then launch again."
+    return 2
   fi
   out="$("$pjw" count --check --cwd "$PWD" 2>&1)"; rc=$?
   case $rc in
