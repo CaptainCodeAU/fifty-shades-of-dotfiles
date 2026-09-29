@@ -211,6 +211,9 @@ if [ -x "$RM_SHIM" ]; then
 	mkdir -p "$d/bin"
 	cp "$SAFE_RM" "$d/bin/safe-rm"
 	cp "$RM_SHIM" "$d/bin/rm"
+	# safe-rm runs the trash-guard BESIDE it (2026-09-29) and refuses without one, so the
+	# copy needs its guard too. trash-guard-selftest proves the rules themselves.
+	cp "$here/trash-guard" "$d/bin/trash-guard"
 	mkdir -p "$d/tree/sub"; : > "$d/tree/f"
 
 	printf '#!/bin/bash\nrm -rf "$1"\n' > "$d/script.bash"
