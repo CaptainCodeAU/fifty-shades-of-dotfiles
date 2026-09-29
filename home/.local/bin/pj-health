@@ -1113,11 +1113,23 @@ lstart_epoch(){
 # ps laid the fields out (measured: positional $d2 $d3 read "21 Sep" on macOS, "Sep 21" on Linux).
 epoch_fmt(){ date -r "$1" "+$2" 2>/dev/null || date -d "@$1" "+$2" 2>/dev/null || printf '%s' "$1"; }
 zmt="${PJ_ZSHRC_MTIME:-$(mtime_of "$HOME/.zshrc")}"
-if [ -n "${PJ_PS_OUT:-}" ]; then ps_out="$(cat "$PJ_PS_OUT" 2>/dev/null)"; else ps_out="$(ps -axo pid=,ppid=,tty=,lstart=,command= -u "$USER" 2>/dev/null)"; fi
+# OS branch (W-20260921-A22, measured on mlbox 2026-09-29): Linux procps refuses `-x` mixed
+# with `-u` ("error: must set personality to get -x option", rc 1), and `-u` alone lists every
+# process of the user there. macOS keeps -ax: `-u` alone drops rows there (565 vs 867 measured).
+ps_err=""
+if [ -n "${PJ_PS_OUT:-}" ]; then ps_out="$(cat "$PJ_PS_OUT" 2>/dev/null)"
+else
+  case "$(uname -s)" in
+    Darwin) ps_out="$(ps -axo pid=,ppid=,tty=,lstart=,command= -u "$USER" 2>&1)" ;;
+    *)      ps_out="$(ps -o pid=,ppid=,tty=,lstart=,command= -u "$USER" 2>&1)" ;;
+  esac || { ps_err="${ps_out%%$'\n'*}"; ps_out=""; }
+fi
 if [ "$zmt" -eq 0 ]; then
   row NOTM stale-shells "cannot stat ~/.zshrc"
 elif [ -z "$ps_out" ]; then
-  row NOTM stale-shells "ps returned nothing (a sandbox refuses it); fix: run pj-health from a terminal"
+  # Name what ps actually said: a sandbox refusal reads "Operation not permitted"; anything
+  # else is a real ps problem, not the sandbox (the old text blamed the sandbox either way).
+  row NOTM stale-shells "ps returned nothing${ps_err:+ (ps said: ${ps_err})}; a sandbox refusal says 'Operation not permitted', so run pj-health from a terminal; anything else is a ps problem (W-20260921-A22)"
 else
   nsh=0; nold=0; oldlist=""
   while read -r pid ppid tty d1 d2 d3 d4 d5 cmd; do
