@@ -174,7 +174,7 @@ elif [ ! -x "$launcher" ]; then
 else
   dry="$(timeout 10 "$launcher" --dry-run 2>/dev/null)"; drc=$?
   if [ "$drc" -ne 0 ] || [ -z "$dry" ]; then
-    row FAIL launcher "pj --dry-run rc $drc, no argv; fix: pj --selftest, pj-prompt-file --selftest"
+    row FAIL launcher "pj --dry-run rc $drc, no argv; fix: run pj --dry-run and read its REFUSED line (it names a missing rules file); the selftests use fixtures and pass anyway"
   else
     missing=""
     { grep -qx -- '--setting-sources' <<<"$dry" && grep -qx -- 'project,local' <<<"$dry"; } || missing="$missing [--setting-sources project,local]"
@@ -229,7 +229,12 @@ else row FAIL plugin-dirs "$bad; fix: restore the folder in dot-claude or the do
 SOURCES="${PJ_PROMPT_SOURCES:-$PJ_HOME/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md:$PJ_HOME/pj-global/RULES.md}"
 miss=""; IFS=':' read -r -a srcs <<<"$SOURCES"
 for s in "${srcs[@]}"; do [ -r "$s" ] || miss="$miss $(tilde "$s")"; done
-if [ -n "$miss" ]; then
+# The relay's rules copy: its existence makes this a relay-fed machine (pj-prompt-file's strict
+# test, FOLLOWUP-BRIEF T3), and the rules-copy row below reads it. Seam: PJ_RULES_COPY.
+RULES_COPY="${PJ_RULES_COPY:-$HOME/repos/pj-rules}"
+if [ -n "$miss" ] && [ -d "$RULES_COPY" ]; then
+  row FAIL prompt-file "source missing:$miss on a relay-fed machine ($(tilde "$RULES_COPY") exists), so pj REFUSES to launch; fix: restore the file or its link into that copy"
+elif [ -n "$miss" ]; then
   row NOTM prompt-file "source missing:$miss; fix: restore it, then pj-prompt-file"
 elif ! command -v pj-prompt-file >/dev/null 2>&1; then
   row NOTM prompt-file "pj-prompt-file not on PATH; fix: stow -R the dotfiles"
@@ -481,6 +486,34 @@ else
   mw="$(printf '%s' "$dout" | grep -oE 'machine-wide [0-9]+' | tail -1 | awk '{print $2}')"
   if [ $drc -le 1 ] && [ -n "$mw" ]; then row PASS pj-global "RULES.md, decisions/, notes/INDEX.md present; decided --list outside a repo: machine-wide $mw"
   else row FAIL pj-global "files present but decided --list rc $drc outside a repo: $(printf '%s' "$dout" | tail -1 | cut -c1-80); fix: decided --selftest"; fi
+fi
+
+# M12b rules-copy (FOLLOWUP-BRIEF T1, 2026-09-29). On a relay-fed machine pj's rules arrive by
+# relay into ~/repos/pj-rules and links lead pj's default paths there, so an edit made THROUGH a
+# link lands in the copy unnoticed and pj loads it (pj-on-mlbox BUILD-REPORT section 7). The
+# relay pushes with updateInstead, which refuses a dirty tree, so the edit also stalls delivery.
+# The Mac, the relay's source, has no copy: a PASS that says "not applicable", the file's own
+# shape for a check with nothing to look at (as no-wrap-up). --no-optional-locks keeps
+# CONTRACT 1: a plain status may rewrite the copy's index.
+if [ ! -e "$RULES_COPY" ]; then
+  row PASS rules-copy "not applicable: no $(tilde "$RULES_COPY") (not a relay-fed machine)"
+else
+  rc_top="$(git -C "$RULES_COPY" rev-parse --show-toplevel 2>/dev/null)" || rc_top=""
+  rc_real="$( (builtin cd "$RULES_COPY" 2>/dev/null && pwd -P) )"
+  [ -n "$rc_top" ] && rc_top="$( (builtin cd "$rc_top" 2>/dev/null && pwd -P) )"   # cd "" would print the cwd
+  if [ -z "$rc_real" ] || [ "$rc_top" != "$rc_real" ]; then
+    # not its OWN repo: a parent repo answering would grade the wrong tree
+    row NOTM rules-copy "$(tilde "$RULES_COPY") exists but is not a git repo of its own, so its edits cannot be listed; fix: re-run the relay for this machine"
+  elif ! rc_out="$(git --no-optional-locks -C "$RULES_COPY" status --porcelain --untracked-files=all 2>&1)"; then
+    row NOTM rules-copy "git status failed in $(tilde "$RULES_COPY"): $(printf '%s\n' "$rc_out" | head -1 | cut -c1-80)"
+  elif [ -z "$rc_out" ]; then
+    row PASS rules-copy "$(tilde "$RULES_COPY") clean: no edits made on this machine"
+  else
+    rc_n="$(printf '%s\n' "$rc_out" | grep -c .)"
+    rc_eg="$(printf '%s\n' "$rc_out" | head -3 | cut -c4- | paste -sd, - | sed 's/,/, /g')"
+    [ "$rc_n" -gt 3 ] && rc_eg="$rc_eg, +$((rc_n - 3)) more"
+    row FAIL rules-copy "rules copy edited on this machine: $rc_n path(s) in $(tilde "$RULES_COPY") ($rc_eg); pj loads them and the relay's next push is refused; fix: make the change on the Mac's source, then undo it here (git -C $(tilde "$RULES_COPY") status)"
+  fi
 fi
 
 # M13 no-wrap-up records (informational)

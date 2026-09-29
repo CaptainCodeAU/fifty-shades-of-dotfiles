@@ -37,7 +37,10 @@ gone(){ GN=$((GN+1)); command mv "$1" "$T/gone/$GN"; }   # never rm: the Trash w
 REAL_HEALTH="$(dirname "$0")/pj-health"
 [ -x "$REAL_HEALTH" ] || REAL_HEALTH="$(command -v pj-health)"
 REAL_HEALTH="$(readlink -f "$REAL_HEALTH" 2>/dev/null || printf '%s' "$REAL_HEALTH")"
-REAL_PROMPT="$(readlink -f "$(command -v pj-prompt-file)" 2>/dev/null || command -v pj-prompt-file)"
+# pj-prompt-file too, for the same reason (2026-09-29): the PATH copy never had strict mode.
+REAL_PROMPT="$(dirname "$0")/pj-prompt-file"
+[ -x "$REAL_PROMPT" ] || REAL_PROMPT="$(command -v pj-prompt-file)"
+REAL_PROMPT="$(readlink -f "$REAL_PROMPT" 2>/dev/null || printf '%s' "$REAL_PROMPT")"
 [ -x "$REAL_HEALTH" ] || { echo "pj-health not on PATH"; exit 1; }
 
 # ----------------------------------------------------------------- fixture ----
@@ -307,7 +310,7 @@ run(){   # run [dir] [args...]  -> OUT holds the JSON; RC the exit code
       PJ_MACHINE_FILE="$T/machine" PJ_PROMPT_SOURCES="$OR:$RULES" PJ_PROMPT_OUT="$T/cache/prompt.md" \
       OI_WHERE_FILE="$T/oi-where" DECIDED_LIST_FILE="$T/decided-list" DECIDED_LIST_RC="$T/decided-list-rc" DECIDED_HOMES_FILE="$T/decided-homes" \
       RENDER_OUT_FILE="$T/render-out" RENDER_RC_FILE="$T/render-rc" SYNC_OUT_FILE="$T/sync-out" \
-      PJ_TRAILER_REPOS="$TR_SEAM" \
+      PJ_TRAILER_REPOS="$TR_SEAM" PJ_RULES_COPY="${PJ_RULES_COPY_FX:-$T/no-rules-copy}" \
       PJ_HEALTH_DRIFT="${PJ_HEALTH_DRIFT_FX:-$T/drift/pass}" \
       PJ_HEALTH_SKILL="${PJ_HEALTH_SKILL_FX:-$T/skill/under.md}" \
       PJ_HEALTH_MODS_DRIFT="${PJ_HEALTH_MODS_DRIFT_FX:-$T/modsdrift/pass}" \
@@ -334,7 +337,7 @@ arm "baseline parses as JSON" jq -e '.rows|length>0' <<<"$OUT" >/dev/null
 # ~/.config/pj/profiles and the suite's result would depend on the machine it runs on --
 # NOT MEASURED on a box with nothing stowed, WARN on a box with a profile pointing
 # somewhere unusual. They get hermetic arms of their own in the profiles section below.
-for n in launcher output-style plugin-dirs prompt-file rules-budget skill-budget settings-render hooks-sync pj-workers-hook hook-orphans hook-single-fire stow-links bin-strays machine-file pj-global no-wrap-up owed bare-wrap selftests launch-log stale-shells pj-homes drawer decided-store commit-trailer skill-upstream mods-api evidence-card evidence-ci-watch evidence-rules evidence-plugins evidence-tokens; do
+for n in launcher output-style plugin-dirs prompt-file rules-budget skill-budget settings-render hooks-sync pj-workers-hook hook-orphans hook-single-fire stow-links bin-strays machine-file pj-global rules-copy no-wrap-up owed bare-wrap selftests launch-log stale-shells pj-homes drawer decided-store commit-trailer skill-upstream mods-api evidence-card evidence-ci-watch evidence-rules evidence-plugins evidence-tokens; do
   arm "baseline $n PASS (got $(st "$n"): $(dt "$n" | cut -c1-80))" is "$n" PASS
 done
 arm "baseline live-probe NOT MEASURED without --live" is live-probe "$NM"
@@ -352,7 +355,9 @@ awk -v skip="$HOME/.claude/pj" '$0=="--plugin-dir"{getline v; if (v==skip) next;
 arm "launcher FAIL when a plugin-dir is missing from the dry-run" is launcher FAIL; arm "launcher FAIL names the dir" has launcher "plugin-dir ~/.claude/pj]"
 sed "s#$T/cache/prompt.md#$H/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md#" "$T/dryrun.ok" >"$T/dryrun"; run
 arm "launcher FAIL when the prompt file is not the cache (the pre-P5.4 shape)" is launcher FAIL; arm "launcher FAIL names the expected cache" has launcher "append-system-prompt-file"
-cp "$T/dryrun.ok" "$T/dryrun"; echo 2 >"$T/dryrun-rc"; run; arm "launcher FAIL when pj --dry-run refuses" has launcher "dry-run rc 2"; command mv "$T/dryrun-rc" "$T/gone/dryrun-rc"
+cp "$T/dryrun.ok" "$T/dryrun"; echo 2 >"$T/dryrun-rc"; run; arm "launcher FAIL when pj --dry-run refuses" has launcher "dry-run rc 2"
+# W-20260929-A96 class: the fix must point at pj's own REFUSED line, never at a selftest that passes on fixtures
+arm "launcher refusal FAIL points at pj --dry-run's REFUSED line" has launcher "read its REFUSED line"; command mv "$T/dryrun-rc" "$T/gone/dryrun-rc"
 printf 'pj: alias\npj: aliased to __claude_launch claude --old-form\n' >"$T/type-out"; run
 arm "launcher FAIL when pj is an alias in a fresh shell" is launcher FAIL; arm "launcher alias FAIL says it shadows the script" has launcher "shadows ~/.local/bin/pj"
 printf 'pj: function\n' >"$T/type-out"; run; arm "launcher FAIL when pj is a function" has launcher "resolves to a function"
@@ -432,7 +437,12 @@ mv "$H/settings.project.json" "$T/sp.bak"; run; arm "output-style NOT MEASURED w
 mv "$H/skills/ISA/SKILL.md" "$T/isa.bak"; run; arm "plugin-dirs FAIL on an empty plugin dir" is plugin-dirs FAIL; arm "plugin-dirs names it" has plugin-dirs "skills/ISA"; mv "$T/isa.bak" "$H/skills/ISA/SKILL.md"
 
 # 4. prompt file
-mv "$OR" "$T/or.bak"; run; arm "prompt-file NOT MEASURED when a source is missing" is prompt-file "$NM"; arm "rules-budget still PASS" is rules-budget PASS; mv "$T/or.bak" "$OR"
+mv "$OR" "$T/or.bak"; run; arm "prompt-file NOT MEASURED when a source is missing" is prompt-file "$NM"; arm "rules-budget still PASS" is rules-budget PASS
+# relay-fed (a rules copy exists): the same missing source is a FAIL, because pj refuses there (T3)
+mkdir -p "$T/rc-dir"; PJ_RULES_COPY_FX="$T/rc-dir" run
+arm "prompt-file FAIL when a source is missing on a relay-fed machine" is prompt-file FAIL; arm "prompt-file relay-fed FAIL says pj refuses" has prompt-file "pj REFUSES to launch"
+mv "$T/or.bak" "$OR"
+PJ_RULES_COPY_FX="$T/rc-dir" run; arm "prompt-file back to PASS on a relay-fed machine with both sources (control)" is prompt-file PASS
 fake "$DF/home/.local/bin/pj-prompt-file" 'printf "%s" "${PJ_PROMPT_SOURCES%%:*}"'; run; arm "prompt-file NOT MEASURED on the fallback-to-source path" is prompt-file "$NM"
 fake "$DF/home/.local/bin/pj-prompt-file" 'echo wrong >"$PJ_PROMPT_OUT"; echo "$PJ_PROMPT_OUT"'; run; arm "prompt-file FAIL when the cache differs" is prompt-file FAIL
 cp "$REAL_PROMPT" "$DF/home/.local/bin/pj-prompt-file"; chmod +x "$DF/home/.local/bin/pj-prompt-file"
@@ -500,6 +510,30 @@ mv "$H/pj-global/notes/INDEX.md" "$T/idx.bak"; run; arm "pj-global FAIL when IND
 echo 2 >"$T/decided-list-rc"; echo "decided: REFUSED" >"$T/decided-list"; run; arm "pj-global FAIL when decided refuses outside a repo" is pj-global FAIL
 echo 0 >"$T/decided-list-rc"; echo "decided: 1 decision(s) searched (machine-wide 1)." >"$T/decided-list"
 gone "$BIN/decided"; run; arm "pj-global NOT MEASURED when decided is absent" is pj-global "$NM"; arm "decided-store NOT MEASURED when decided is absent" is decided-store "$NM"; ln -s "$DF/home/.local/bin/decided" "$BIN/decided"
+
+# 12b. rules-copy (FOLLOWUP-BRIEF T1). Fixture repos are built with no global or system git
+# config and no hooks, so a signing key or a leak-scan hook on this box cannot change them.
+arm "rules-copy baseline is not applicable (no copy)" has rules-copy "not applicable"
+fxgit(){ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null git -c core.hooksPath=/dev/null -c user.email=t@t -c user.name=t "$@"; }
+RCP="$T/rules-copy"; mkdir -p "$RCP/pj-global"; fxgit -C "$RCP" init -q; echo "rules" >"$RCP/pj-global/RULES.md"
+fxgit -C "$RCP" add -A; fxgit -C "$RCP" commit -qm init
+PJ_RULES_COPY_FX="$RCP" run; arm "rules-copy PASS when the copy is clean" is rules-copy PASS; arm "rules-copy PASS says clean" has rules-copy "clean"
+echo marker >"$RCP/MARKER-untracked"; PJ_RULES_COPY_FX="$RCP" run
+arm "rules-copy FAIL on one untracked file" is rules-copy FAIL; arm "rules-copy FAIL says edited on this machine" has rules-copy "rules copy edited on this machine: 1 path(s)"
+arm "rules-copy FAIL names the file" has rules-copy "MARKER-untracked"; arm "rules-copy FAIL makes pj-health exit 1" [ "$RC" -eq 1 ]
+echo edited >>"$RCP/pj-global/RULES.md"; mkdir -p "$RCP/u"; for i in 1 2 3; do echo x >"$RCP/u/f$i"; done; PJ_RULES_COPY_FX="$RCP" run
+arm "rules-copy FAIL counts every path (a modified file and untracked ones inside a new folder)" has rules-copy "5 path(s)"
+arm "rules-copy FAIL names at most 3, then +N more" has rules-copy ", +2 more)"; arm "rules-copy FAIL names the edited tracked file" has rules-copy "pj-global/RULES.md"
+# no write (CONTRACT 1): a stat-dirty index is what a plain `git status` rewrites. Control: a plain status DOES change the hash.
+rc_hash(){ (builtin cd "$RCP" && find . -type f -print0 | sort -z | xargs -0 shasum -a 256 | shasum -a 256 | cut -c1-16); }
+echo "rules" >"$RCP/pj-global/RULES.md"; touch -t 203001010000 "$RCP/pj-global/RULES.md"   # committed bytes, new mtime: stat-dirty only
+rh1="$(rc_hash)"; PJ_RULES_COPY_FX="$RCP" run; rh2="$(rc_hash)"
+arm "rules-copy wrote nothing into the copy ($rh1)" [ "$rh1" = "$rh2" ]
+fxgit -C "$RCP" status --porcelain >/dev/null 2>&1; rh3="$(rc_hash)"; arm "control: a plain git status DOES rewrite the copy's index" [ "$rh3" != "$rh2" ]
+gone "$RCP/MARKER-untracked"; gone "$RCP/u"; PJ_RULES_COPY_FX="$RCP" run; arm "rules-copy back to PASS once the edits are moved out (control)" is rules-copy PASS
+# not a repo of its own: a plain folder, and a folder INSIDE another repo (git -C would answer for the parent)
+mkdir -p "$T/rc-plain"; PJ_RULES_COPY_FX="$T/rc-plain" run; arm "rules-copy NOT MEASURED when the copy is not a git repo" is rules-copy "$NM"
+mkdir -p "$RCP/nested"; PJ_RULES_COPY_FX="$RCP/nested" run; arm "rules-copy NOT MEASURED for a folder inside another repo (no parent answers)" is rules-copy "$NM"; gone "$RCP/nested"
 
 # 13. no-wrap-up
 mv "$STATE/no-wrap-up" "$T/nw.bak"; run; arm "no-wrap-up PASS with 0 when the folder does not exist" has no-wrap-up "0 projects"; mv "$T/nw.bak" "$STATE/no-wrap-up"
@@ -1124,17 +1158,17 @@ arm "mods-installed back to PASS (control)" is mods-installed PASS
 run; arm "exit 0 when no FAIL" [ "$RC" -eq 0 ]
 arm "json exit field 0" [ "$(jq -r .exit <<<"$OUT")" = 0 ]
 write_settings '.outputStyle="default"'; run; arm "exit 1 with a FAIL" [ "$RC" -eq 1 ]; arm "json exit field 1" [ "$(jq -r .exit <<<"$OUT")" = 1 ]
-QOUT="$( (builtin cd "$PROJ" && PATH="$BIN:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" PJ_HOME="$H" PJ_BIN_DIR="$BIN" PJ_DOTFILES="$DF" PJ_LAUNCHER="$BIN/pj" PJ_TYPE_OUT="$T/type-out" DRYRUN_FILE="$T/dryrun" PJ_PS_OUT="$T/ps" PJ_ZSHRC_MTIME="$ZMT" PJ_TRANSCRIPTS_DIR="$H/projects" PJ_STATE_DIR="$STATE" PJ_MACHINE_FILE="$T/machine" PJ_PROMPT_SOURCES="$OR:$RULES" PJ_PROMPT_OUT="$T/cache/prompt.md" OI_WHERE_FILE="$T/oi-where" DECIDED_LIST_FILE="$T/decided-list" DECIDED_LIST_RC="$T/decided-list-rc" DECIDED_HOMES_FILE="$T/decided-homes" RENDER_OUT_FILE="$T/render-out" RENDER_RC_FILE="$T/render-rc" SYNC_OUT_FILE="$T/sync-out" pj-health --quiet 2>/dev/null) )"
+QOUT="$( (builtin cd "$PROJ" && PATH="$BIN:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" PJ_HOME="$H" PJ_BIN_DIR="$BIN" PJ_DOTFILES="$DF" PJ_LAUNCHER="$BIN/pj" PJ_TYPE_OUT="$T/type-out" DRYRUN_FILE="$T/dryrun" PJ_PS_OUT="$T/ps" PJ_ZSHRC_MTIME="$ZMT" PJ_TRANSCRIPTS_DIR="$H/projects" PJ_STATE_DIR="$STATE" PJ_MACHINE_FILE="$T/machine" PJ_PROMPT_SOURCES="$OR:$RULES" PJ_PROMPT_OUT="$T/cache/prompt.md" OI_WHERE_FILE="$T/oi-where" DECIDED_LIST_FILE="$T/decided-list" DECIDED_LIST_RC="$T/decided-list-rc" DECIDED_HOMES_FILE="$T/decided-homes" RENDER_OUT_FILE="$T/render-out" RENDER_RC_FILE="$T/render-rc" SYNC_OUT_FILE="$T/sync-out" PJ_RULES_COPY="$T/no-rules-copy" pj-health --quiet 2>/dev/null) )"
 arm "--quiet prints the FAIL row" grep -q '^FAIL  *output-style' <<<"$QOUT"
 arm "--quiet prints the NOT MEASURED row" grep -q '^NOT MEASURED live-probe' <<<"$QOUT"
 arm "--quiet hides PASS rows" bash -c '! grep -q "^PASS" <<<"$1"' _ "$QOUT"
 arm "--quiet keeps the summary line" grep -q '^pj-health: .* FAIL, ' <<<"$QOUT"
 write_settings
-FOUT="$( (builtin cd "$PROJ" && PATH="$BIN:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" PJ_HOME="$H" PJ_BIN_DIR="$BIN" PJ_DOTFILES="$DF" PJ_LAUNCHER="$BIN/pj" PJ_TYPE_OUT="$T/type-out" DRYRUN_FILE="$T/dryrun" PJ_PS_OUT="$T/ps" PJ_ZSHRC_MTIME="$ZMT" PJ_TRANSCRIPTS_DIR="$H/projects" PJ_STATE_DIR="$STATE" PJ_MACHINE_FILE="$T/machine" PJ_PROMPT_SOURCES="$OR:$RULES" PJ_PROMPT_OUT="$T/cache/prompt.md" OI_WHERE_FILE="$T/oi-where" DECIDED_LIST_FILE="$T/decided-list" DECIDED_LIST_RC="$T/decided-list-rc" DECIDED_HOMES_FILE="$T/decided-homes" RENDER_OUT_FILE="$T/render-out" RENDER_RC_FILE="$T/render-rc" SYNC_OUT_FILE="$T/sync-out" pj-health 2>/dev/null) )"
+FOUT="$( (builtin cd "$PROJ" && PATH="$BIN:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" PJ_HOME="$H" PJ_BIN_DIR="$BIN" PJ_DOTFILES="$DF" PJ_LAUNCHER="$BIN/pj" PJ_TYPE_OUT="$T/type-out" DRYRUN_FILE="$T/dryrun" PJ_PS_OUT="$T/ps" PJ_ZSHRC_MTIME="$ZMT" PJ_TRANSCRIPTS_DIR="$H/projects" PJ_STATE_DIR="$STATE" PJ_MACHINE_FILE="$T/machine" PJ_PROMPT_SOURCES="$OR:$RULES" PJ_PROMPT_OUT="$T/cache/prompt.md" OI_WHERE_FILE="$T/oi-where" DECIDED_LIST_FILE="$T/decided-list" DECIDED_LIST_RC="$T/decided-list-rc" DECIDED_HOMES_FILE="$T/decided-homes" RENDER_OUT_FILE="$T/render-out" RENDER_RC_FILE="$T/render-rc" SYNC_OUT_FILE="$T/sync-out" PJ_RULES_COPY="$T/no-rules-copy" pj-health 2>/dev/null) )"
 # 43, not 41, since D-20260925-A01 added the owed and bare-wrap rows (40 rows + header + summary);
-# 44 since the mods-installed row (2026-09-27, screen-switch).
-arm "normal output under 44 lines ($(wc -l <<<"$FOUT" | tr -d ' '))" [ "$(wc -l <<<"$FOUT" | tr -d ' ')" -lt 44 ]
-arm "normal output has one row per check (41)" [ "$(grep -cE '^(PASS|WARN|FAIL|NOT MEASURED) ' <<<"$FOUT")" -eq 41 ]
+# 44 since the mods-installed row (2026-09-27, screen-switch); 45 since rules-copy (2026-09-29, T1).
+arm "normal output under 45 lines ($(wc -l <<<"$FOUT" | tr -d ' '))" [ "$(wc -l <<<"$FOUT" | tr -d ' ')" -lt 45 ]
+arm "normal output has one row per check (42)" [ "$(grep -cE '^(PASS|WARN|FAIL|NOT MEASURED) ' <<<"$FOUT")" -eq 42 ]
 arm "unknown arg REFUSED rc 2" bash -c 'PATH="$1:$PATH" pj-health --bogus >/dev/null 2>&1; [ $? -eq 2 ]' _ "$BIN"
 arm "--help exits 0" bash -c 'PATH="$1:$PATH" pj-health --help >/dev/null 2>&1' _ "$BIN"
 
