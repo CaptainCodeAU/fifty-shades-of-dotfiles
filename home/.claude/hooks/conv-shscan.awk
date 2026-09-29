@@ -1733,6 +1733,12 @@ function pj_scan(ctx, ov, where,    k, j, n, a, w, b, ovk, t, lab) {
             lab = pj_pane_claude(k, j)
             if (lab != "") { pj_hit("DENY", pj_msg_worker("`" lab "` " (where != "" ? where : "typed into a pane") ", which starts plain claude, not a pj session"), ovk); if (PV == "DENY") return }
         }
+        # W-20260929-A36 (red-team H6): a claude started from the Bash tool itself runs outside
+        # herdr, the pj rules and both session caps. Info forms (--version, mcp, agents ...) pass.
+        if (ctx == "bash") {
+            lab = pj_pane_claude(k, j)
+            if (lab != "") { pj_hit("DENY", pj_msg_worker("`" lab "` started from the Bash tool" (where != "" ? " (" where ")" : "") " runs outside herdr, the pj rules and both session caps (W-20260929-A36)"), ovk); if (PV == "DENY") return }
+        }
         if (b == "herdr") { pj_herdr(k, j, ovk, ctx, where); if (PV == "DENY") return; continue }
         if (b ~ /^(bash|sh|zsh|dash|ksh)$/) {
             for (a = j + 1; a <= n; a++) {
