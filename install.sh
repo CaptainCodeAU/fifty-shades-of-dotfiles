@@ -1509,6 +1509,41 @@ _iterm_profiles_sync() {
 # own detectors on every run. It is called from the REPO path, not ~/.local/bin
 # -- on a fresh box this function runs before stow has deployed anything, which
 # is precisely the situation it exists to report on.
+# --- rm reach: plain shells must reach the Trash-routed rm (W-20260929-A126) ---
+# Interactive shells put ~/.local/bin first, so `rm` is the Trash shim. Plain zsh
+# (`ssh host 'cmd'`, `zsh -c`) does not, and gets the REAL, permanent rm -- measured
+# 2026-09-29 on the Mac and on mlbox, the day a foreign `safe-rm` package nearly took
+# a permanent delete on mlbox (W-20260929-A125). Called from the REPO path (like
+# _check_deploy_parity) AFTER stow, so ~/.local/bin/rm exists for the probe. Adds the
+# marked ~/.zshenv block with consent, then runs the full check so the result is SHOWN
+# (the probe resolves rm in a plain zsh), never assumed. Foreign look-alikes are named
+# with their remove command; nothing is uninstalled here. cron, launchd and bash
+# scripts stay NOT covered, and the checker says so on every run.
+_check_rm_reach() {
+    local checker="$REPO_DIR/home/.local/bin/rm-reach-check" state
+    if [[ ! -x "$checker" ]]; then
+        echo -e "  ${YELLOW}~${RESET} rm reach — checker not found at $checker, skipped"
+        return 0
+    fi
+    step "rm reach (plain shells and the Trash)"
+    state=$("$checker" --zshenv-state 2>/dev/null)
+    case "$state" in
+        absent)
+            info "Plain zsh (ssh 'cmd', zsh -c) runs the REAL rm: ~/.local/bin is not on its PATH."
+            info "A marked 3-line block in ~/.zshenv fixes that; your existing lines stay."
+            if confirm "Add the ~/.local/bin block to ~/.zshenv?" "y"; then
+                "$checker" --fix-zshenv >/dev/null || warn "rm-reach-check --fix-zshenv failed; run it by hand to see why"
+            fi
+            ;;
+        broken)
+            warn "~/.zshenv has a half fifty-shades block (markers not one each); fix it by hand, then re-run."
+            ;;
+    esac
+    [[ "$DRY_RUN" == true ]] && { echo -e "  ${DIM}[dry-run] Would run: $checker${RESET}"; return 0; }
+    "$checker" || warn "rm reach has findings above; each line names its fix."
+    return 0
+}
+
 _check_deploy_parity() {
     local checker="$REPO_DIR/home/.local/bin/deploy-parity-check"
     if [[ ! -x "$checker" ]]; then
@@ -4442,6 +4477,10 @@ main() {
 
     # --- Post-install ---
     post_install
+
+    # --- rm reach: plain shells reach the Trash rm; foreign look-alikes named.
+    # Must run AFTER stow_home so ~/.local/bin/rm exists for the probe. ---
+    _check_rm_reach
 
     # --- herdr systemd user service (Linux/WSL): enable the unit stow just
     # placed. Must run AFTER stow_home; refuses to enable over a hand-started

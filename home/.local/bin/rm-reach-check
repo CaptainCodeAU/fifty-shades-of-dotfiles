@@ -1,0 +1,224 @@
+#!/usr/bin/env bash
+# rm-reach-check -- does a PLAIN shell on this machine reach the Trash-routed rm, and is any
+# foreign look-alike (safe-rm, trash) waiting to be picked up instead?
+#
+# WHY THIS EXISTS (W-20260929-A126, Gavin's request)
+#   The dotfiles route `rm` to the Trash through ~/.local/bin/rm, a command on PATH. But only
+#   interactive shells put ~/.local/bin on PATH. Measured 2026-09-29 on the Mac and on mlbox:
+#   `env -i ... zsh -c 'command -v rm'` and the same under bash both answered the REAL rm
+#   (/bin/rm, /usr/bin/rm), and `ssh mlbox 'cmd'` runs exactly such a zsh -c. The same day the
+#   rm shim, called by full path from that kind of shell, found Ubuntu's unrelated `safe-rm`
+#   package (a /bin/rm wrapper that deletes permanently) by PATH lookup (W-20260929-A125).
+#
+# WHAT IT CAN AND CANNOT FIX
+#   zsh reads ~/.zshenv in EVERY mode, so a marked block there reaches `zsh -c`, `ssh host
+#   'cmd'` and everything they start. It does NOT reach cron, launchd, or a bash script started
+#   from a non-zsh parent: those never read ~/.zshenv. This tool says so on every full run
+#   instead of implying more coverage than exists (same lesson as the uv cooldown in .zshrc).
+#
+# USAGE
+#   rm-reach-check               full check; prints every row; exit 0 ok, 1 findings, 2 cannot measure
+#   rm-reach-check --quick       no subprocess probe; SILENT when fine, one line per finding
+#                                (for the welcome banner); same exit codes
+#   rm-reach-check --fix-zshenv  add the marked block to ~/.zshenv if it is missing (idempotent;
+#                                refuses a half block); then exit like --quick
+#   rm-reach-check --zshenv-state  print present | absent | broken for the ~/.zshenv block
+#   rm-reach-check --selftest    prove every arm against fixtures under a throwaway HOME
+#   rm-reach-check --help
+set -u
+
+BEGIN_MARK='# >>> fifty-shades: ~/.local/bin for non-interactive zsh (W-20260929-A126) >>>'
+END_MARK='# <<< fifty-shades: ~/.local/bin for non-interactive zsh <<<'
+
+usage() { sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; }
+
+# Resolve our own directory (follow the stow link) so "ours" means the files beside this one.
+self=$(readlink -f "$0" 2>/dev/null) || self="$0"
+here=${self%/*}
+
+zshenv_file() { printf '%s/.zshenv' "$HOME"; }
+
+block_state() { # prints: present | absent | broken
+	local f b e
+	f=$(zshenv_file)
+	[ -f "$f" ] || { echo absent; return; }
+	b=$(grep -cxF "$BEGIN_MARK" "$f" 2>/dev/null)
+	e=$(grep -cxF "$END_MARK" "$f" 2>/dev/null)
+	if [ "$b" = 1 ] && [ "$e" = 1 ]; then echo present
+	elif [ "$b" = 0 ] && [ "$e" = 0 ]; then echo absent
+	else echo broken; fi
+}
+
+fix_zshenv() {
+	local f st
+	f=$(zshenv_file)
+	st=$(block_state)
+	case "$st" in
+		present) echo "rm-reach-check: ~/.zshenv already has the block; nothing to do"; return 0 ;;
+		broken)  echo "rm-reach-check: ~/.zshenv has a HALF block (begin/end markers not one each); refusing to edit. Fix it by hand." >&2; return 2 ;;
+	esac
+	{
+		[ -s "$f" ] && [ -n "$(tail -c1 "$f")" ] && printf '\n'
+		printf '%s\n' "$BEGIN_MARK"
+		printf '%s\n' '# zsh reads this file in EVERY mode, so `zsh -c` and `ssh host '"'"'cmd'"'"'` reach the Trash-routed rm.'
+		printf '%s\n' '# NOT covered: cron, launchd and bash scripts started from a non-zsh parent. Tool: rm-reach-check.'
+		printf '%s\n' 'if [ -d "$HOME/.local/bin" ]; then case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) PATH="$HOME/.local/bin:$PATH"; export PATH ;; esac; fi'
+		printf '%s\n' "$END_MARK"
+	} >> "$f" || { echo "rm-reach-check: could not write $f" >&2; return 2; }
+	echo "rm-reach-check: added the block to ~/.zshenv (existing lines kept)"
+	return 0
+}
+
+# Every executable named $1 in the PATH dirs plus the usual system dirs, one real path per line.
+find_all() {
+	local name="$1" d seen="" p rp
+	local IFS=':'
+	for d in $PATH /usr/local/bin /usr/bin /bin /usr/sbin /sbin /opt/homebrew/bin; do
+		[ -n "$d" ] || continue
+		p="$d/$name"
+		[ -x "$p" ] && [ ! -d "$p" ] || continue
+		rp=$(readlink -f "$p" 2>/dev/null) || rp="$p"
+		case ":$seen:" in *":$rp:"*) continue ;; esac
+		seen="$seen:$rp"
+		printf '%s\n' "$rp"
+	done
+}
+
+remove_hint() { # $1 = a foreign file; prints how to get rid of it
+	local p="$1" pkg
+	if command -v dpkg >/dev/null 2>&1 && pkg=$(dpkg -S "$p" 2>/dev/null | head -1 | cut -d: -f1) && [ -n "$pkg" ]; then
+		echo "sudo apt remove $pkg"
+	elif command -v brew >/dev/null 2>&1 && case "$p" in "$(brew --prefix 2>/dev/null)"/*) true ;; *) false ;; esac; then
+		echo "brew uninstall ${p##*/}   (or brew unlink)"
+	else
+		echo "remove or rename $p"
+	fi
+}
+
+findings=0
+say_ok()   { [ "$QUICK" = 1 ] || printf '  ok    %s\n' "$1"; }
+say_info() { [ "$QUICK" = 1 ] || printf '  info  %s\n' "$1"; }
+say_bad()  { findings=$((findings + 1)); printf '  %s  %s\n' "$( [ "$QUICK" = 1 ] && echo 'rm-reach:' || echo 'FIND ')" "$1"; }
+
+check() {
+	local st ours probe bprobe p trash_path pkg
+	# 1. the zshenv block
+	st=$(block_state)
+	case "$st" in
+		present) say_ok "~/.zshenv carries the ~/.local/bin block (zsh -c and ssh 'cmd' reach the Trash rm)" ;;
+		absent)  say_bad "~/.zshenv has no ~/.local/bin block: plain zsh (ssh 'cmd', zsh -c) runs the REAL rm. Fix: rm-reach-check --fix-zshenv" ;;
+		broken)  say_bad "~/.zshenv has a half block (markers not one each). Fix it by hand, then rm-reach-check --fix-zshenv" ;;
+	esac
+
+	# 2. foreign safe-rm: anything named safe-rm that is not the one beside this tool
+	ours=$(readlink -f "$here/safe-rm" 2>/dev/null) || ours="$here/safe-rm"
+	while IFS= read -r p; do
+		[ -n "$p" ] || continue
+		[ "$p" = "$ours" ] && continue
+		say_bad "a foreign safe-rm at $p (not the dotfiles one; Ubuntu's package deletes permanently). Fix: $(remove_hint "$p")"
+	done <<EOF
+$(find_all safe-rm)
+EOF
+	[ -x "$here/safe-rm" ] || say_bad "the dotfiles safe-rm is missing beside this tool ($here/safe-rm): every rm will refuse"
+
+	# 3. which Trash tool safe-rm will pick (it resolves trash, then trash-put, by PATH)
+	trash_path=$(command -v trash 2>/dev/null || command -v trash-put 2>/dev/null || true)
+	if [ -z "$trash_path" ]; then
+		say_bad "no trash tool on PATH: safe-rm refuses every delete. Fix: macOS ships /usr/bin/trash; Linux: sudo apt install trash-cli"
+	elif [ "$(uname -s)" = Darwin ]; then
+		[ "$trash_path" = /usr/bin/trash ] && say_ok "safe-rm will use Apple's /usr/bin/trash" \
+			|| say_bad "safe-rm will use $trash_path, not Apple's /usr/bin/trash. Fix: $(remove_hint "$trash_path")"
+	else
+		pkg=""
+		command -v dpkg >/dev/null 2>&1 && pkg=$(dpkg -S "$(readlink -f "$trash_path")" 2>/dev/null | head -1 | cut -d: -f1)
+		if [ "$pkg" = trash-cli ]; then say_ok "safe-rm will use $trash_path (trash-cli)"
+		elif [ -z "$pkg" ]; then say_info "safe-rm will use $trash_path (owner not measured: no dpkg record)"
+		else say_bad "safe-rm will use $trash_path from package $pkg, not trash-cli. Fix: $(remove_hint "$trash_path")"; fi
+	fi
+
+	[ "$QUICK" = 1 ] && return
+
+	# 4. the probe: what a plain zsh and a plain bash really resolve
+	if command -v zsh >/dev/null 2>&1; then
+		probe=$(env -i HOME="$HOME" PATH=/usr/bin:/bin zsh -c 'command -v rm' 2>/dev/null)
+		if [ "$probe" = "$HOME/.local/bin/rm" ]; then say_ok "plain zsh -c resolves rm to $probe"
+		elif [ -z "$probe" ]; then echo "  CANNOT MEASURE  plain zsh -c printed nothing"; return 2
+		else say_bad "plain zsh -c resolves rm to $probe (want $HOME/.local/bin/rm)"; fi
+	else
+		say_info "zsh not installed: the ~/.zshenv block cannot apply here"
+	fi
+	bprobe=$(env -i HOME="$HOME" PATH=/usr/bin:/bin bash -c 'command -v rm' 2>/dev/null)
+	say_info "plain bash -c resolves rm to ${bprobe:-nothing}: NOT covered by design (bash never reads ~/.zshenv; nor do cron or launchd)"
+}
+
+selftest() {
+	local root pass=0 fail=0 out rc H n
+	root=$(mktemp -d "${TMPDIR:-/tmp}/rm-reach-selftest.XXXXXX") || exit 2
+	root=$(readlink -f "$root" 2>/dev/null || printf '%s' "$root")   # macOS: /var is /private/var; the tool reports real paths
+	ok()  { pass=$((pass + 1)); printf '  ok   %s\n' "$1"; }
+	bad() { fail=$((fail + 1)); printf '  FAIL %s\n       got: %s\n' "$1" "$2"; }
+	# A fresh fake HOME per arm, each with a stub ~/.local/bin/rm, so no arm rewrites another
+	# arm's files. Fixtures are only ever created, never truncated or overwritten.
+	n=0
+	newhome() { n=$((n + 1)); H="$root/home$n"; mkdir -p "$H/.local/bin"; printf '#!/bin/sh\nexit 0\n' > "$H/.local/bin/rm"; chmod +x "$H/.local/bin/rm"; }
+	mkdir -p "$root/foreign"
+	echo "rm-reach-check selftest in $root"
+
+	# 1. no block: the probe finds the REAL rm and it is a finding (the control for arm 2)
+	newhome
+	out=$(HOME="$H" "$self" 2>&1); rc=$?
+	case "$out" in *"no ~/.local/bin block"*) ok "1 no block: reported" ;; *) bad "1 no block" "$out" ;; esac
+	case "$out" in *"plain zsh -c resolves rm to /"*"(want"*) ok "1 control: plain zsh finds the real rm" ;; *) bad "1 control probe" "$out" ;; esac
+	[ "$rc" = 1 ] && ok "1 exit 1 on findings" || bad "1 exit code" "$rc"
+
+	# 2. fix, keeping an existing line; then the probe finds OUR rm
+	newhome
+	printf '. "$HOME/.cargo/env"' > "$H/.zshenv"   # a new fixture file, no trailing newline, like mlbox
+	HOME="$H" "$self" --fix-zshenv >/dev/null 2>&1
+	grep -qxF '. "$HOME/.cargo/env"' "$H/.zshenv" && ok "2 existing line kept intact" || bad "2 existing line" "$(cat "$H/.zshenv")"
+	out=$(HOME="$H" "$self" 2>&1)
+	case "$out" in *"plain zsh -c resolves rm to $H/.local/bin/rm"*) ok "2 after fix: plain zsh -c finds ~/.local/bin/rm" ;; *) bad "2 probe after fix" "$out" ;; esac
+
+	# 3. idempotent
+	HOME="$H" "$self" --fix-zshenv >/dev/null 2>&1
+	[ "$(grep -cxF "$BEGIN_MARK" "$H/.zshenv")" = 1 ] && ok "3 second fix adds nothing" || bad "3 idempotent" "$(grep -cxF "$BEGIN_MARK" "$H/.zshenv")"
+
+	# 4. half block: refuse, file unchanged
+	newhome
+	printf '%s\n' "$BEGIN_MARK" > "$H/.zshenv"; printf '%s\n' "$BEGIN_MARK" > "$root/half-expected"
+	HOME="$H" "$self" --fix-zshenv >/dev/null 2>&1; rc=$?
+	cmp -s "$root/half-expected" "$H/.zshenv" && [ "$rc" = 2 ] && ok "4 half block: refused (exit 2), file unchanged" || bad "4 half block" "rc=$rc"
+
+	# 5. a foreign safe-rm on PATH is named; --quick is silent when fine and speaks when not
+	newhome
+	HOME="$H" "$self" --fix-zshenv >/dev/null 2>&1
+	printf '#!/bin/sh\nexit 0\n' > "$root/foreign/safe-rm"; chmod +x "$root/foreign/safe-rm"
+	out=$(HOME="$H" PATH="$root/foreign:$PATH" "$self" --quick 2>&1); rc=$?
+	case "$out" in *"foreign safe-rm at $root/foreign/safe-rm"*) ok "5 foreign safe-rm named" ;; *) bad "5 foreign safe-rm" "$out" ;; esac
+	[ "$rc" = 1 ] && ok "5 --quick exits 1 on a finding" || bad "5 quick exit" "$rc"
+	out=$(HOME="$H" "$self" --quick 2>&1); rc=$?
+	if [ -z "$out" ] && [ "$rc" = 0 ]; then ok "5 control: --quick silent and exit 0 when fine"
+	else bad "5 quick silent" "rc=$rc out=$out"; fi
+
+	# Clean up through the Trash shim beside this tool, never the real rm. If it cannot, say so.
+	if [ -x "$here/rm" ] && "$here/rm" -rf "$root" 2>/dev/null && [ ! -e "$root" ]; then :
+	else echo "  note fixtures left in $root (the Trash shim could not move them; safe to trash by hand)"; fi
+	printf 'rm-reach-check selftest: %d passed, %d failed\n' "$pass" "$fail"
+	[ "$fail" -eq 0 ]
+}
+
+QUICK=0
+case "${1:-}" in
+	--help | -h) usage; exit 0 ;;
+	--selftest) selftest; exit $? ;;
+	--quick) QUICK=1 ;;
+	--fix-zshenv) fix_zshenv || exit $?; QUICK=1 ;;
+	--zshenv-state) block_state; exit 0 ;;   # present | absent | broken (install.sh asks this)
+	"") ;;
+	*) echo "rm-reach-check: unknown argument $1" >&2; usage >&2; exit 2 ;;
+esac
+
+check; rc=$?
+[ "$rc" = 2 ] && exit 2
+[ "$findings" -eq 0 ] && exit 0
+exit 1

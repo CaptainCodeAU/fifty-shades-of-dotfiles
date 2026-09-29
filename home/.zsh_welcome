@@ -460,6 +460,18 @@ __show_welcome_full() {
         fi
     fi
 
+    # --- rm reach (EXCEPTION-ONLY: silent unless plain shells miss the Trash rm) ---
+    # W-20260929-A126. Interactive shells reach ~/.local/bin/rm; plain ones (ssh 'cmd',
+    # zsh -c) only do when ~/.zshenv carries the block, and a foreign safe-rm (Ubuntu's
+    # package deletes permanently) or a foreign trash tool can be picked up instead.
+    # `--quick` runs no subprocess probe, so this stays cheap; the full check with the
+    # probe is `rm-reach-check`. Silent when clean, like deploy parity above.
+    if [[ -x "$HOME/.local/bin/rm-reach-check" ]]; then
+        local _rr
+        _rr=$("$HOME/.local/bin/rm-reach-check" --quick 2>/dev/null)
+        [[ -n "$_rr" ]] && echo "$_rr" | sed "s|^ *rm-reach: *|    rm: ${err}|; s|\$|${done}|"
+    fi
+
     # --- Installed-package CVEs (EXCEPTION-ONLY: silent unless something is wrong) ---
     # `vuln-scan --fast` is built for exactly this spot. The ordinary case -- nothing
     # installed or upgraded since last login -- is one `brew list` and one SQLite

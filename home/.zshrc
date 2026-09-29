@@ -1209,13 +1209,15 @@ sudo() {
 				echo "${err}  No targets given — nothing done.${done}" >&2
 				return 1
 			fi
-			if ! command -v safe-rm &>/dev/null; then
-				echo "${err}❌  safe-rm not found on PATH — refusing to delete.${done}" >&2
+			# By path, never a PATH lookup: Ubuntu's unrelated safe-rm package deletes
+			# permanently (W-20260929-A125, W-20260929-A126).
+			if [[ ! -x "$HOME/.local/bin/safe-rm" ]]; then
+				echo "${err}❌  safe-rm not found at ~/.local/bin/safe-rm — refusing to delete.${done}" >&2
 				echo "${info}   It ships in this dotfiles repo at ~/.local/bin/safe-rm; run ./install.sh.${done}" >&2
 				return 1
 			fi
 			# safe-rm strips rm-style flags itself, so pass the tail through untouched.
-			if safe-rm "${_sudo_rest[@]}"; then
+			if "$HOME/.local/bin/safe-rm" "${_sudo_rest[@]}"; then
 				return 0
 			fi
 			echo
@@ -1260,13 +1262,14 @@ rm() {
 	# Delegate to safe-rm: ONE owner for "how do we move something to the Trash", shared with
 	# every script in this repo. A shell function only exists in an interactive zsh, so
 	# install.sh and the hooks could never have used this one -- see safe-rm's header.
-	# It strips rm-style flags itself, so pass "$@" through untouched.
-	if ! command -v safe-rm &>/dev/null; then
-		echo "${err}❌  safe-rm not found on PATH — refusing to delete.${done}" >&2
+	# It strips rm-style flags itself, so pass "$@" through untouched. Called BY PATH, never a
+	# PATH lookup: Ubuntu's unrelated safe-rm package deletes permanently (W-20260929-A125).
+	if [[ ! -x "$HOME/.local/bin/safe-rm" ]]; then
+		echo "${err}❌  safe-rm not found at ~/.local/bin/safe-rm — refusing to delete.${done}" >&2
 		echo "${info}   It ships in this dotfiles repo at ~/.local/bin/safe-rm; run ./install.sh.${done}" >&2
 		return 1
 	fi
-	safe-rm "$@"
+	"$HOME/.local/bin/safe-rm" "$@"
 }
 
 # rmdir sends empty directories to trash. Mirrors rm()'s symlink warning so that
@@ -1289,12 +1292,12 @@ rmdir() {
 		read "REPLY?${warn}   Proceed? [y/N] ${done}"
 		[[ "$REPLY" =~ ^[Yy]$ ]] || return 1
 	fi
-	if ! command -v safe-rm &>/dev/null; then
-		echo "${err}❌  safe-rm not found on PATH — refusing to delete.${done}" >&2
+	if [[ ! -x "$HOME/.local/bin/safe-rm" ]]; then   # by path, never a PATH lookup (W-20260929-A125)
+		echo "${err}❌  safe-rm not found at ~/.local/bin/safe-rm — refusing to delete.${done}" >&2
 		echo "${info}   It ships in this dotfiles repo at ~/.local/bin/safe-rm; run ./install.sh.${done}" >&2
 		return 1
 	fi
-	safe-rm "$@"
+	"$HOME/.local/bin/safe-rm" "$@"
 }
 
 # __cannot_prompt: true when nobody can answer a y/n prompt in this shell. That is an
