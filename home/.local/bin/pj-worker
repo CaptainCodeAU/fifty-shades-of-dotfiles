@@ -753,11 +753,14 @@ cmd_start() {
 
   # 5. launch
   local line
+  # PING-1 (Gavin 2026-09-29): the worker never pings; pj-ping reads this marker. Its value names
+  # the conductor, so a silent worker can be traced. engage-worker sets the same name.
+  local by="${PJ_SESSION_NAME:-${CLAUDE_CODE_SESSION_NAME:-unknown-conductor}}"
   if [[ -n "$clean" ]]; then
-    line=" builtin cd -- ${(q)cwd} && CLAUDE_CODE_SESSION_NAME=${(q)sname} command claude --setting-sources '' --strict-mcp-config"
+    line=" builtin cd -- ${(q)cwd} && PJ_LAUNCHED_BY=${(q)by} CLAUDE_CODE_SESSION_NAME=${(q)sname} command claude --setting-sources '' --strict-mcp-config"
     say "CLEAN ROOM in $cwd: this session is UNGUARDED BY DESIGN (no pj hooks, no rules, no settings, no MCP). It counts toward both caps."
   else
-    line=" builtin cd -- ${(q)cwd} && CLAUDE_CODE_SESSION_NAME=${(q)sname} pj --profile ${(q)profile}"
+    line=" builtin cd -- ${(q)cwd} && PJ_LAUNCHED_BY=${(q)by} CLAUDE_CODE_SESSION_NAME=${(q)sname} pj --profile ${(q)profile}"
   fi
   hcall pane run "$pane" "$line" || die 4 "pane run into $pane failed: ${HCODE:-$(herdr_why)}"
 
