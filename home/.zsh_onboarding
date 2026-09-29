@@ -842,8 +842,16 @@ run_onboarding() {
         __run_section "Essential" \
             "git"   "git"   "git" \
             "curl"  "curl"  "curl" \
-            "unzip" "unzip" "unzip" \
-            "trash" "trash" "trash"
+            "unzip" "unzip" "unzip"
+        # The real trash, asked the way safe-rm asks. Not `command -v trash`: that finds the
+        # dotfiles' own trash shim, and `brew install trash` (its old remedy) never lands on
+        # PATH and is a different tool (W-20260929-A170).
+        local _rt
+        if _rt=$("$HOME/.local/bin/trash-guard" --real-trash 2>/dev/null); then
+            printf "  ${ok}✓${done} %-18s %s\n" "Real trash" "$_rt"
+        else
+            printf "  ${warn}!${done} %-18s %s\n" "Real trash" "none: rm refuses every delete (macOS 15 and later ship /usr/bin/trash)"
+        fi
     else
         __run_section "Essential" \
             "git"       "git"       "git" \

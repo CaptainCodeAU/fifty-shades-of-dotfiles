@@ -41,7 +41,8 @@ REPO_DIR="$SCRIPT_DIR"
 # a permanent, unrecoverable delete. Use the repo copy by PATH rather than the command name:
 # on a fresh machine this script runs BEFORE stow has put anything in ~/.local/bin.
 # safe-rm refuses (exit 1) when no trash tool is present rather than falling back to rm, and
-# a trash tool is already a checked prerequisite -- see check_command trash / trash-put.
+# a real trash is already a checked prerequisite -- see the "real trash" check (trash-guard
+# --real-trash on macOS) and check_command trash-put on Linux.
 # A script's own mktemp scratch is deliberately NOT routed here; see safe-rm's header.
 SAFE_RM="$REPO_DIR/home/.local/bin/safe-rm"
 
@@ -1541,6 +1542,10 @@ _check_rm_reach() {
     esac
     [[ "$DRY_RUN" == true ]] && { echo -e "  ${DIM}[dry-run] Would run: $checker${RESET}"; return 0; }
     "$checker" || warn "rm reach has findings above; each line names its fix."
+    # zsh remembers where it found a command, so a terminal opened before this stow keeps
+    # running Apple's trash with no guard until `rehash` or a new terminal (measured
+    # 2026-09-29, W-20260929-A184). rm-reach-check cannot see another shell's memory.
+    info "Terminals that were already open keep the OLD rm and trash (no guard) until you open a new one or type: rehash"
     return 0
 }
 
@@ -1739,7 +1744,16 @@ check_prerequisites() {
     check_command lazygit  "lazygit"  || missing=$((missing+1))
     check_command lazydocker "lazydocker" || missing=$((missing+1))
     if [[ "$(check_os)" == "macos" ]]; then
-        check_command trash    "trash (macOS)"  || missing=$((missing+1))
+        # The question safe-rm asks, answered by the repo copy (this runs before stow). Not
+        # `command -v trash`: with the shim stowed that finds the shim, so it passed with no
+        # real trash at all (W-20260929-A170). macOS 15 and later ship /usr/bin/trash.
+        local _rt
+        if _rt=$("$REPO_DIR/home/.local/bin/trash-guard" --real-trash 2>/dev/null); then
+            echo -e "  ${GREEN}✓${RESET} real trash ($_rt)"
+        else
+            echo -e "  ${RED}✗${RESET} real trash — none (macOS 15 and later ship /usr/bin/trash; rm refuses every delete without it)"
+            missing=$((missing+1))
+        fi
     else
         check_command trash-put "trash-cli (Linux)" || missing=$((missing+1))
     fi
@@ -2680,7 +2694,10 @@ install_macos_prerequisites() {
     # vendor installer performs NO checksum or signature verification, so the
     # Linux path is deliberately left manual rather than automated around a
     # supply chain we would not otherwise accept. See docs/HERDR.md.
-    local -a formulae=(stow uv direnv jq fzf eza zoxide neovim tmux ripgrep fd gh git-lfs glow trash herdr aria2 ffmpeg)
+    # No `trash` formula (Gavin, 2026-09-29, W-20260929-A170): it is hasseg's tool, keg-only
+    # since macOS ships /usr/bin/trash, so it never lands on PATH, and its -e/-s mean "empty
+    # the Trash". The dotfiles use Apple's /usr/bin/trash only.
+    local -a formulae=(stow uv direnv jq fzf eza zoxide neovim tmux ripgrep fd gh git-lfs glow herdr aria2 ffmpeg)
     local to_install=()
 
     for formula in "${formulae[@]}"; do

@@ -84,11 +84,11 @@ The installer finds your package manager (Homebrew, apt, dnf, pacman or zypper),
 Rather install the Mac tools yourself first? This is the core set:
 
 ```bash
-brew install stow uv direnv jq zoxide eza fzf tmux ripgrep fd gh git-lfs neovim glow aria2 ffmpeg trash herdr lazygit lazydocker
+brew install stow uv direnv jq zoxide eza fzf tmux ripgrep fd gh git-lfs neovim glow aria2 ffmpeg herdr lazygit lazydocker
 brew install --cask font-symbols-only-nerd-font
 ```
 
-`trash` is the one you can't skip, because `rm` depends on it. `herdr` is the terminal multiplexer I use for coding agents. Optional extras: `brew install tree fastfetch yazi`.
+`rm` needs a real trash command: macOS 15 and later ship `/usr/bin/trash`, and that is the only one used (don't `brew install trash`, it's a different tool). On Linux, install `trash-cli`. `herdr` is the terminal multiplexer I use for coding agents. Optional extras: `brew install tree fastfetch yazi`.
 
 ### What it will ask you
 
