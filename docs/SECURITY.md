@@ -3,8 +3,8 @@
 This document captures _why_ the repo's SSH configuration uses a
 maximum-paranoia strict posture, what alternatives were considered,
 and the daily commands you'll actually use to live with it. It
-complements the four-layer defence-in-depth recap in
-[README.md §Security](../README.md#security).
+complements the short version in
+[README.md, GitHub: SSH by default](../README.md#github-ssh-by-default).
 
 ## Overview
 

@@ -7,7 +7,7 @@
 ![Claude Code](https://img.shields.io/badge/Claude-Code-blueviolet.svg?logo=anthropic&logoColor=white)
 ![OS Support](https://img.shields.io/badge/OS-macOS%20%7C%20Linux%20%7C%20WSL-blue.svg?logo=apple)
 
-A set of Zsh dotfiles that create a unified, automated development environment across **macOS, Linux, and Windows (via WSL)**. Built around a modern toolchain (`uv`, `pnpm`/`bun`, `direnv`, `stow`) that prioritizes speed, consistency, and developer experience.
+My Zsh dotfiles. One install gives you the same shell on **macOS, Linux and Windows (via WSL)**, built around `uv`, `pnpm`/`bun`, `direnv` and GNU Stow.
 
 ---
 
@@ -27,189 +27,51 @@ If you just want the shell functions without the full install, you can symlink i
 
 ---
 
-## Key Features
+## What you get
 
-- **💻 Cross-Platform by Design**: Works seamlessly on macOS, Linux, and WSL with OS-specific adaptations handled automatically.
-- **🚀 Automatic Onboarding**: On a fresh system (macOS, Linux, or WSL), the script detects missing tools and interactively prompts to install them. Run `run_onboarding` anytime to re-check.
-- **🤖 Automated Project Scaffolding**: Create complete, best-practice Python (`python_new_project`) or Node.js (`node_new_project`) projects with a single command.
-- **✨ Seamless Environment Management**:
-  - **`direnv`** for automatic activation/deactivation of Python virtual environments.
-  - **`nvm`** with automatic Node.js version switching via `.nvmrc` files.
-- **🐳 Integrated Docker Helpers**: Functions to quickly start, stop, and manage common development services like PostgreSQL, Qdrant, and Jupyter Lab.
-- **🖥️ Tmux Integration**: Powerful tmux session management with git-aware workflows and automatic window naming.
-- **🎨 Machine & Project Color Identity**: Automatic per-machine title bar/status bar colors via direnv (macOS ARM, Intel, WSL, Linux), plus a scaffolding script (`init-vscode-project-settings.sh`) to give each project its own visual identity. All colors come from 10 named profiles in `color-profiles.json`.
-- **📝 Editor Integration**: Automatic environment syncing between Cursor/VSCode terminals and tmux sessions.
-- **✍️ Zed Markdown Formatting**: On-demand `md-hardbreak` command (and Zed shortcuts `cmd-alt-b`/`cmd-alt-g`/`cmd-alt-u`) to render single-line breaks and paragraph gaps in Markdown preview without cluttering the source. See [`docs/ZED_MARKDOWN_FORMATTING.md`](docs/ZED_MARKDOWN_FORMATTING.md).
-- **🪪 Claude Commit Attribution**: Commits made inside a Claude Code session are auto-stamped with five trailers - `C-Sess-Id` (local session UUID), `C-Web-Id` (claude.ai URL, harvested; blank if absent), and `C-Branch` / `C-Worktree` / `C-Wt-Path` (commit context; path recorded `$HOME`-relative) - via a SessionStart identity hook plus the `_audit-chain` git chainer; global, idempotent, no per-repo setup. See [`docs/CLAUDE_SESSION_ATTRIBUTION.md`](docs/CLAUDE_SESSION_ATTRIBUTION.md).
-- **🎬 Media Tools**: Built-in `yt()` wrapper that runs yt-dlp on demand via `uvx` (nothing installed, always current), with auto-generated configuration and quality presets.
-- **🖲️ Portable iTerm2 Preferences**: `settings/iterm2/prefs/` captures and restores iTerm2's _entire_ settings domain in one file — profiles, colors, fonts, key bindings, pointer/ctrl-click bindings, the Hotkey Window, general prefs — not just color themes. `export.sh` sanitizes and refuses to write if anything secret-looking slips through; `restore.sh` backs up before importing, and is offered during `./install.sh` on macOS.
-- **🔒 Private Configuration**: A built-in pattern for managing your secret keys and machine-specific settings in a `.zshrc.private` file, which is kept out of version control.
-- **🗑️ Deletion Goes to the Trash — Everywhere**: `rm` is rerouted to the system Trash for your shell, your scripts, `xargs`, `make`, and `sudo`. This is the most opinionated thing in this repo. **[Read the section below before installing.](#-heads-up-this-repo-changes-what-rm-means)**
+- **One shell everywhere.** macOS, Linux and WSL, with the OS differences handled for you.
+- **Project scaffolding.** `python_new_project 3.13` gives you a working Python project, git and all. `node_new_project` does the same for TypeScript, minus the git.
+- **Environments that switch themselves.** direnv activates the Python venv when you `cd` in, and nvm follows `.nvmrc`.
+- **Guardrails.** `rm` goes to the Trash. `npm`, `pip` and bare `python` refuse and tell you the `pnpm` or `uv` command instead. `gh auth login` is blocked so it can't wreck SSH auth.
+- **Docker helpers.** One-liners for Postgres, Qdrant and Jupyter.
+- **Colour per machine.** VS Code and Cursor tint their title bar by machine, so you know which box you're on. The profiles are tuned to my machines, so expect to adjust them.
+- **Claude Code wiring.** Launchers, safety hooks and commit attribution for when an agent is doing the typing.
 
 ---
 
-## 🗑️ Heads up: this repo changes what `rm` means
+## Read this before you install: `rm` goes to the Trash
 
-**This is the most opinionated change in here, it affects your whole machine, and you should decide about it on purpose rather than discover it later.**
+This is the most opinionated thing in here and it touches your whole machine, so decide about it on purpose.
 
-On a normal Unix system `rm` unlinks a file and it is gone. On a machine running these dotfiles, `rm` moves it to the system Trash instead, and it is recoverable from Finder with **Put Back** (macOS) or `trash-restore` (Linux). That much is common enough.
+On a machine running these dotfiles, `rm` doesn't delete. It moves things to the Trash, and you get them back with **Put Back** in Finder (macOS) or `trash-restore` (Linux).
 
-What is unusual is the **coverage**. Most "safe rm" setups are a shell alias or function, which means they only protect what _you_ type into an interactive shell. Everything else on your machine — every `#!/bin/bash` script, every `make clean`, every `xargs rm`, every `sudo rm -rf` — sails straight past and deletes permanently. That gap is not theoretical; it was measured on this repo's own machine, and `xargs rm` destroyed a test file while the "protection" was fully installed.
+Most "safe rm" setups are a shell alias, which only covers what you type. Every script, every `make clean`, every `xargs rm` sails straight past and deletes for real. When I tested mine, `xargs rm` destroyed a test file while the "protection" was fully installed. So this one goes further:
 
-So this repo closes it properly, with two pieces:
+| Piece | Covers |
+| --- | --- |
+| `rm()` shell function | what you type |
+| `~/.local/bin/rm`, a real command ahead of `/bin` on `PATH` | scripts, `xargs`, `find -exec`, `make`, agent shells |
+| `sudo()` wrapper | `sudo rm`, re-run as you so it lands in *your* Trash |
 
-| Piece                                                             | Covers                                                                                                                                           |
-| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `rm()` / `rmdir()` shell functions in `.zshrc`                    | what you type interactively                                                                                                                      |
-| **`~/.local/bin/rm`** — a real command on `PATH`, ahead of `/bin` | **everything else**: bash and zsh scripts, `xargs`, `find -exec`, `make`, Homebrew formula post-install, Claude Code and other agent tool-shells |
+It still can't reach anything that calls `/bin/rm` by its full path, or runs with its own `PATH`, like cron jobs, launchd and Docker.
 
-Plus a `sudo()` wrapper that catches `sudo rm` and re-runs it **as you**, unprivileged, so a root delete lands in _your_ Trash where Finder can restore it — rather than in `/var/root/.Trash`, which you cannot see.
+All three end at [`safe-rm`](home/.local/bin/safe-rm). It never unlinks anything, and it needs a `trash` command to work. Without one it refuses every delete and exits non-zero, because quietly falling back to a real delete is the one thing a safety net must never do.
 
-Both routes end at [`safe-rm`](home/.local/bin/safe-rm), which never unlinks anything, and which **refuses and exits non-zero** if no trash tool is installed. It does not fall back to `rm`. A silent downgrade from recoverable to permanent is the one behaviour a safety command must not have.
+It also refuses deletes that nothing else refuses: your home folder, system folders, the folder you're standing in, any git repository outside a temp folder, and emptying `~/Downloads`, `~/Desktop`, `~/Documents` or `~/CODE` in one command. That git rule surprises people. `rm -rf oldproject` on a checkout gets refused.
 
-### The price, stated plainly
+**What it costs you.** Your Trash fills up with build output, and disk space doesn't come back until you empty it. Deleting a huge tree is slower too, because moving isn't the same as unlinking. I took that trade on purpose.
 
-A `PATH` shim cannot tell your files from a build tree. It has no idea whether `rm -rf` is aimed at your thesis or at `node_modules`. So:
+**Getting out of it.** `/bin/rm ...` deletes for real. `SAFE_RM_OFF=1` does too, but only through the `PATH` command, so in a script or as `SAFE_RM_OFF=1 command rm ...` at the prompt. Typed as plain `SAFE_RM_OFF=1 rm ...`, it still goes to the Trash. `command rm` and `\rm` on their own also go to the Trash.
 
-- **Your Trash will fill up with build output.** Every `"prebuild": "rm -rf dist"`, every `make clean`, every temp directory a script cleans up after itself. Expect thousands of entries.
-- **Disk space is not reclaimed until you empty the Trash.** If you run tight on free space, this will bite you. Empty it regularly, or do not install this part.
-- **Deleting is slower** on very large trees, because moving is not the same as unlinking.
+**Don't want it?** The installer has no switch for this, so leave `home/.local/bin/rm` out when you stow. You keep the Trash for what you type and for `sudo rm`, and scripts go back to deleting for real.
 
-This was a deliberate trade: total coverage over a quiet Trash. It even overrides an earlier rule in this very repo, which said a script's own scratch should use real `rm` — that rule is no longer enforceable once a shim owns every `rm`, and the trade was made knowingly rather than by accident.
+**What it isn't.** A backup. `> file`, `git clean`, `git reset --hard`, `rsync --delete` and a dying SSD never go near `rm`. Keep real backups.
 
-**If you do not want this, do not link `home/.local/bin/rm` into `~/.local/bin`.** Everything else in the repo works without it; you simply fall back to interactive-only protection.
-
-### It also refuses to delete things nothing else refuses
-
-Stock macOS will let you run `rm -rf ~` and it will do it. `/bin/rm` has no objection. On a
-nearly-full disk that is especially nasty: the move cannot complete, so you end up with a
-half-moved home directory _and_ no free space.
-
-`safe-rm` refuses a set of targets outright, before the trash tool is ever invoked:
-
-| Refused                | Examples                                                                                                                                                     |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Your home directory    | `~`, and any relative path or symlink that resolves to it                                                                                                    |
-| Its top-level folders  | `~/Documents`, `~/Desktop`, `~/Downloads`, `~/Library`, `~/Pictures`, `~/Movies`, `~/Music`, `~/Public`, `~/.ssh`, `~/.gnupg`                                |
-| Anyone's home          | `/Users/*`, `/home/*`                                                                                                                                        |
-| System directories     | `/`, `/Applications`, `/Library`, `/System`, `/usr`, `/etc`, `/var`, `/private`, `/bin`, `/sbin`, `/opt`, `/dev`, `/tmp`, `/root`, `/Volumes`, `/Network`, … |
-| A whole mounted volume | `/Volumes/*`, `/media/*`, `/mnt/*`                                                                                                                           |
-| `.` and `..`           | in every spelling: `.`, `./`, `..`, `../`, `sub/..`, `.//`                                                                                                   |
-
-For most of that list the rule is **containers, not contents**: the directory itself is refused,
-while `rm -rf /some/protected/dir/*` still works, because each child is a separate target. A
-guard that blocks ordinary work is one people learn to route around, and a routed-around guard
-protects nothing.
-
-**Four folders are the exception, and are also protected against being swept:**
-
-| Also refused           |                        |
-| ---------------------- | ---------------------- |
-| `rm -rf ~/Downloads/*` | `rm -rf ~/Documents/*` |
-| `rm -rf ~/Desktop/*`   | `rm -rf ~/CODE/*`      |
-
-Emptying one of those in a single command is the same loss as deleting the folder, just by a
-different route, so both are refused. Deleting from them deliberately is untouched:
-`rm ~/Downloads/installer.dmg` works, and so does `rm -rf ~/CODE/oldproject`. The line is drawn
-at **two or more children in one command** — one is how you delete something on purpose, several
-at once is the shape of a sweep.
-
-Worth knowing how this works, because it is not obvious: **the shell expands `*` before
-`safe-rm` ever runs**, so there is no glob to match on. What arrives is a plain list of files.
-The sweep is recognised from its shape instead — several direct children of a guarded folder in
-one call. That also means it catches `rm -rf ~/CODE/one ~/CODE/two` typed out by hand, which a
-glob-matching approach would miss entirely.
-
-Two details worth knowing, both of which cost a bug to learn:
-
-- **Comparison is on the resolved path, not the string.** A relative path that happens to land
-  on `$HOME`, and a directory symlink followed with a trailing slash (`link/`), are both caught.
-- **The literal path is checked too, not only the resolved one.** On macOS `/etc`, `/var` and
-  `/tmp` are _symlinks_. An earlier version skipped the guard for symlinks — reasoning that
-  removing a link is harmless, which is true for a link you made and catastrophically false for
-  `/etc`. The selftest caught it. A symlink you created yourself is still removable.
-
-### Getting out of it
-
-| Escape hatch             | Effect                                                                |
-| ------------------------ | --------------------------------------------------------------------- |
-| `SAFE_RM_OFF=1 rm …`     | one command, or `export` it for one shell — real `/bin/rm`, permanent |
-| `/bin/rm …`              | absolute path, permanent                                              |
-| `SAFE_RM_VERBOSE=1 rm …` | not an escape hatch; just prints what got trashed                     |
-
-Note that `command rm` and `\rm` are **not** escape hatches here. They bypass shell functions and aliases, not `PATH`, so they still go to the Trash. Only the two above are real doors.
-
-### What this does NOT protect you from
-
-This is a delete wrapper. It is not a backup, and it should not be mistaken for one. None of these go anywhere near `rm`, and none of them are covered:
-
-```
-> file            git clean -fdx      rsync --delete     brew cleanup
-truncate -s0      git reset --hard    tar over a file    pnpm store prune
-unlink            git stash drop      install / ginstall  docker system prune
-find -delete      Finder Shift-Delete Python os.remove   a dying SSD
-```
-
-`/bin/rm` itself is also uncoverable, and not for lack of trying: it carries the SIP `restricted` flag, so `chmod`, `chflags` and ACLs all return "Operation not permitted" even for root, and an absolute path never consults `PATH` anyway. Both facts are measured and written up in [`docs/DELETION_SAFETY.md`](docs/DELETION_SAFETY.md).
-
-### Why you should trust it more than you'd expect, and less than you'd like
-
-An adversarial review of this code found **five defects in a single sitting**, and every one belonged to the same family: _the code reported an outcome it had never verified._ Three were in the dangerous direction — a delete that had happened, reported as one that had not.
-
-The worst of them: `rm -rf .` moved an entire directory tree to the Trash while printing **"They are UNCHANGED. Nothing was deleted permanently."** Real `/bin/rm` refuses that command outright.
-
-All five are fixed. `safe-rm` now derives every message from re-checking the targets and does not trust the trash tool's exit code at all, because that tool has been caught lying in _both_ directions. And all five are pinned by [`safe-rm-selftest`](home/.local/bin/safe-rm-selftest) — 51 assertions you can run yourself, any time:
-
-```bash
-safe-rm-selftest        # 51 assertions; works in its own temp dir, touches nothing else
-```
-
-Run it after any change to `safe-rm`, to the shim, or to the `rm()`/`sudo()` wrappers.
-
-The honest summary: this is a well-tested seatbelt with a known list of things it does not do. Keep real backups.
+Run `safe-rm-selftest` after you change anything in the delete chain. The full story, including what was measured and what can't be covered, is in [`docs/DELETION_SAFETY.md`](docs/DELETION_SAFETY.md).
 
 ---
 
-## Prerequisites for Mac
-
-1. **Homebrew**: Ensure [Homebrew](https://brew.sh/) is installed on your macOS system.
-2. **Core Tools**: Install the essential technologies using Homebrew.
-
-   ```bash
-   brew install stow uv direnv jq zoxide eza fzf tmux ripgrep fd gh git-lfs neovim glow aria2 ffmpeg
-   ```
-
-   > **Note:** `stow` is used by the installer to symlink dotfiles from this repo into `~/`. `jq` is required by the direnv color profile system and the project settings scaffolding script, as well as Node.js scaffolding and onboarding checks. `zoxide` replaces `cd`, `eza` powers the `l`/`ll` aliases, `fzf` provides fuzzy finding, `tmux` powers session management, `ripgrep` (`rg`) enables fast code search, `fd` is a fast `find` alternative, `gh` is the GitHub CLI (for PRs, issues, and API; Git transport itself is SSH-only, not via gh), `git-lfs` enables Git Large File Storage, the `rm`/`rmdir` shell wrappers route deletions to the system Trash (recoverable via Finder / file manager), `neovim` is the default `$EDITOR` (with fallback to vim/vi), `glow` renders Markdown files beautifully in the terminal, and `aria2`/`ffmpeg` are used by the `yt()` media download wrapper (which runs yt-dlp itself on demand via `uvx` — nothing to install for yt-dlp).
-
-3. **Recommended Tools**: These are optional but enhance the experience significantly.
-
-   ```bash
-   brew install tree fastfetch lazygit lazydocker yazi imagemagick
-   ```
-
-   > **Note:** `lazygit`/`lazydocker` power the `lg`/`lzd` aliases. `yazi` is a terminal file manager used by the `y()` function; it runs on stock defaults (this repo archived its yazi config on 2026-05-06). `imagemagick` is a general image utility.
-
-4. **Nerd Font**: Required for Powerlevel10k icons and glyphs.
-
-   ```bash
-   brew install --cask font-symbols-only-nerd-font
-   ```
-
-5. **Post-install Setup**: Run these one-time setup commands after installing the tools above.
-
-   ```bash
-   git lfs install                    # One-time git-lfs setup (configures hooks)
-   ```
-
-   > **Note:** This system uses SSH-only authentication for GitHub — do **not** run `gh auth login` as it re-adds HTTPS credential helpers. Instead, configure your SSH keys in `~/.ssh/config` and add URL rewrites in `~/.gitconfig.private`. See [Customization & Private Settings](#customization--private-settings) for details.
-
----
-
-## Installation
-
-Setting up is designed to be as simple as possible. The included `install.sh` script handles everything interactively, or you can set things up manually.
-
-### Automated Install (Recommended)
+## Install
 
 ```bash
 git clone https://github.com/CaptainCodeAU/fifty-shades-of-dotfiles.git ~/fifty-shades-of-dotfiles
@@ -217,1302 +79,171 @@ cd ~/fifty-shades-of-dotfiles
 ./install.sh
 ```
 
-The installer will check prerequisites, install missing tools, set up Oh My Zsh plugins, survey your existing Python/Node setup and ask before taking either over (see [Will it also mess with my existing Python or Node setup?](#faq)), symlink dotfiles via GNU Stow, configure git identity, install TPM/nvm/pnpm/bun/Nerd Fonts, and more. Run `./install.sh --help` for all options including `--check`, `--dry-run`, `--update`, and `--force`.
+The installer finds your package manager (Homebrew, apt, dnf, pacman or zypper), installs Homebrew on a Mac if it's missing, and offers everything else. It sorts out the quirks too, like `fd` being called `fdfind` on Debian.
 
-#### If you also use the `pj` project launcher
+Rather install the Mac tools yourself first? This is the core set:
 
-`pj` is wired by this repo but its content lives in two PRIVATE repos the installer deliberately does not clone: `dot-claude` (into `~/.claude`) and `lifeos-private`. Clone `dot-claude` **before** running `install.sh`, and keep this checkout at **`~/CODE/Scaffoldings/fifty-shades-of-dotfiles`** — `dot-claude` tracks three plugin files as symlinks pointing at that exact path, so anywhere else leaves them dangling. The installer ends with a report naming anything missing, and `pj-health` checks the same things later; without them `pj` refuses to launch rather than starting half-loaded.
+```bash
+brew install stow uv direnv jq zoxide eza fzf tmux ripgrep fd gh git-lfs neovim glow aria2 ffmpeg trash herdr lazygit lazydocker
+brew install --cask font-symbols-only-nerd-font
+```
 
-It will also ask **which machine this is** (`A` Mac mini, `B` Intel laptop, `C` WSL, `D` Linux VM) and write the answer to `~/.config/pj/machine`. That letter goes into every work-item and decision ID minted here, so two machines can never claim the same one; there is no default, and skipping it leaves the ID allocator refusing.
+`trash` is the one you can't skip, because `rm` depends on it. `herdr` is the terminal multiplexer I use for coding agents. Optional extras: `brew install tree fastfetch yazi`.
 
-`pj --profile <name>` launches under a **profile** — a `key: value` file in `~/.config/pj/profiles/` naming the config dir, the settings, the prompt source, the plugin dirs and whether the start card prints. The point of a profile is that only the config dir moves: the drawer, the rulings and `pj-global` stay in `~/.claude` whatever `CLAUDE_CONFIG_DIR` says, so a second account or a throwaway session never forks the record. `c2 start <topic>` uses the `scratch` profile in a git worktree under `<repo>/.worktree/scratch/`, and `c2 done` refuses to tear it down while it holds uncommitted files or unmerged commits. A profile with a config dir of its own needs a one-time `/login` and folder trust that only a human can give; `pj-health --profile <name>` says so until it is done. A profile can also pin its own `model`, and switch `remote_control` and `voice` on or off — those three ride a second `--settings`, which Claude Code merges with the first rather than replacing it. Full reference: **[docs/PJ_PROFILES.md](docs/PJ_PROFILES.md)**.
+### What it will ask you
 
-`pj` passes `--setting-sources project,local`, so `~/.claude/settings.json` is never read and every key in it is dropped unless `settings/claude/settings.project.json.template` restores it by hand. That audit is finished: of the 47 keys still dropped, 10 are restored, 3 became profile keys and 34 are recorded as dropped on purpose. Two of the ten were **restrictions whose absence means no restriction** — `allowedHttpHookUrls` and `httpHookAllowedEnvVars` — so the launcher running with `--dangerously-skip-permissions` was also the one with no limit on which URLs a hook could reach or which environment variables could ride in its headers. Neither was a decision; both were lost when `pj` stopped reading the user settings file.
+It asks before most steps. A few you'll want to know about:
 
-### Manual Install
+- **Existing dotfiles.** Before Stow runs, it lists any files in the way and offers to move them into `~/dotfiles-backup/`. The default answer is yes. Say no and it stops, so you can deal with them yourself or re-run with `--force`.
+- **Your Python and Node setup.** If it finds one already (pyenv, conda, npm globals and so on), it tells you what it found, writes a report on which of your projects would be affected, and makes you type a real word before handing Python to `uv` or blocking `npm`. Say no and your existing `python` and `npm` keep working. The install carries on, and pnpm still gets installed alongside. On a machine with nothing of its own, it just goes ahead. See [`docs/TOOLCHAIN_TAKEOVER_CONSENT.md`](docs/TOOLCHAIN_TAKEOVER_CONSENT.md).
+- **"Which machine is this?"** That's for my four machines and my project tooling. Press Enter to skip it.
 
-1. **Prerequisites**:
-   - Ensure `git` and `zsh` are installed.
-   - Install **[Oh My Zsh](https://ohmy.zsh.sh/#install)**.
+On a machine without my private repos, the install finishes with a red "pj is not ready" banner and exit code 3. That's expected. See [Claude Code](#claude-code).
 
-2. **Clone the Repository**:
+| Command | Does |
+| --- | --- |
+| `./install.sh --check` | checks everything, changes nothing |
+| `./install.sh --update` | pulls and restows |
+| `./install.sh --stow-only` | just links the files, and registers any new Claude hooks |
+| `./install.sh --force` | adopts your existing files into the repo with `stow --adopt`, overwriting the repo's copies. Check `git diff` afterwards. |
+| `./install.sh --uninstall` | removes the symlinks only. Tools stay installed and nothing comes back from `~/dotfiles-backup/`. |
+| `./install.sh --dry-run` | shows what it would do (combine with anything) |
 
-   ```bash
-   git clone https://github.com/CaptainCodeAU/fifty-shades-of-dotfiles.git ~/fifty-shades-of-dotfiles
-   ```
-
-3. **Symlink Configuration (optional)**: Link the configuration files to your home directory using the one-to-one mapping structure.
-
-   ```bash
-   # WARNING: This will overwrite existing files. Backup yours first!
-   # Link main zsh configuration
-   ln -sf ~/fifty-shades-of-dotfiles/home/.zshrc ~/.zshrc
-
-   # Link zsh function files
-   ln -sf ~/fifty-shades-of-dotfiles/home/.zsh_python_functions ~/.zsh_python_functions
-   ln -sf ~/fifty-shades-of-dotfiles/home/.zsh_node_functions ~/.zsh_node_functions
-   ln -sf ~/fifty-shades-of-dotfiles/home/.zsh_docker_functions ~/.zsh_docker_functions
-   ln -sf ~/fifty-shades-of-dotfiles/home/.zsh_cursor_functions ~/.zsh_cursor_functions
-   ln -sf ~/fifty-shades-of-dotfiles/home/.zsh_tmux ~/.zsh_tmux
-   ln -sf ~/fifty-shades-of-dotfiles/home/.zsh_onboarding ~/.zsh_onboarding
-   ln -sf ~/fifty-shades-of-dotfiles/home/.zsh_welcome ~/.zsh_welcome
-
-   # Link git configuration
-   ln -sf ~/fifty-shades-of-dotfiles/home/.gitconfig ~/.gitconfig
-   ln -sf ~/fifty-shades-of-dotfiles/home/.gitignore_global ~/.gitignore_global
-
-   # Create private git identity (not committed to the repo)
-   cat > ~/.gitconfig.private << 'EOF'
-   [user]
-       name = Your Name
-       email = you@example.com
-   EOF
-
-   # Link other configuration files
-   ln -sf ~/fifty-shades-of-dotfiles/home/.tmux.conf ~/.tmux.conf
-   ln -sf ~/fifty-shades-of-dotfiles/home/.p10k.zsh ~/.p10k.zsh
-   ln -sf ~/fifty-shades-of-dotfiles/home/.vimrc ~/.vimrc
-
-   # Link .config directory files
-   mkdir -p ~/.config/direnv ~/.config/zshrc ~/.config/yt-dlp
-   ln -sf ~/fifty-shades-of-dotfiles/home/.config/direnv/direnvrc ~/.config/direnv/direnvrc
-   ln -sf ~/fifty-shades-of-dotfiles/home/.config/direnv/direnv.toml ~/.config/direnv/direnv.toml
-   ln -sf ~/fifty-shades-of-dotfiles/home/.config/zshrc/color-profiles.json ~/.config/zshrc/color-profiles.json
-   ln -sf ~/fifty-shades-of-dotfiles/home/.config/zshrc/init-vscode-project-settings.sh ~/.config/zshrc/init-vscode-project-settings.sh
-   ln -sf ~/fifty-shades-of-dotfiles/home/.config/yt-dlp/config ~/.config/yt-dlp/config
-
-   # Link platform-specific files (macOS only)
-   # mkdir -p ~/Library/Application\ Support/Cursor/User
-   # mkdir -p ~/Library/Application\ Support/Code/User
-   # ln -sf ~/fifty-shades-of-dotfiles/platforms/macos/Library/Application\ Support/Cursor/User/settings.json ~/Library/Application\ Support/Cursor/User/settings.json
-   # ln -sf ~/fifty-shades-of-dotfiles/platforms/macos/Library/Application\ Support/Code/User/settings.json ~/Library/Application\ Support/Code/User/settings.json
-   ```
-
-   > **Note**: The repository uses a one-to-one mapping structure where `home/` mirrors `~/` and `platforms/` contains platform-specific files. See [`docs/STRUCTURE.md`](docs/STRUCTURE.md) for details.
-
-4. **Node.js Ecosystem**: Install nvm, pnpm, and TPM for tmux plugins.
-
-   ```bash
-   # nvm (Node Version Manager)
-   curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.8/install.sh | bash
-
-   # pnpm (standalone install — used instead of Corepack)
-   curl -fsSL https://get.pnpm.io/install.sh | sh -
-
-   # bun (JavaScript runtime & toolkit)
-   # Pre-set BUN_INSTALL and PATH so the installer skips modifying .zshrc
-   export BUN_INSTALL="$HOME/.bun" && export PATH="$BUN_INSTALL/bin:$PATH" && curl -fsSL https://bun.sh/install | bash
-
-   # TPM (Tmux Plugin Manager) — required for tmux plugins in .tmux.conf
-   git clone https://github.com/tmux-plugins/tpm ~/.tmux/plugins/tpm
-   # After starting tmux, press prefix + I to install plugins
-   ```
-
-5. **Enable `direnv`**: The provided `.zshrc` already contains the hook for `direnv`. If you are merging with an existing file, ensure this line is present:
-
-   ```zsh
-   # In your .zshrc
-   if command -v direnv &> /dev/null; then eval "$(direnv hook zsh)"; fi
-   ```
-
-6. **Restart Your Shell**: Open a new terminal window or run `source ~/.zshrc`.
-   - **On any new system**, the onboarding script will run automatically and guide you through installing any missing dependencies.
-   - A welcome message will confirm the setup is active.
+Rather wire it up by hand? Every file in `home/` goes to the same place under `~/`, so `ln -s` works. You'll miss what the installer does after linking, like the platform files and the Claude hook registration. [`docs/STRUCTURE.md`](docs/STRUCTURE.md) has a longer map.
 
 ---
 
-## Onboarding & Dependency Management
+## Your private settings
 
-The shell includes an automatic onboarding system that checks for required tools and offers to install them.
+Secrets don't belong in this repo. Anything personal goes in files that stay on your machine.
 
-### Automatic Onboarding
+| File | For |
+| --- | --- |
+| `~/.zshrc.private` | aliases, `PATH` additions, anything machine-specific. Read last, so it wins. |
+| `~/.zshrc.private.early` | the few switches startup reads before the late file loads, like `_ONBOARDING_COMPLETE=true` |
+| `~/.gitconfig.private` | your git name and email, plus account routing |
 
-On first shell start (on a new machine), the onboarding script runs automatically and:
+`.gitignore_global` keeps `~/.zshrc.private` and `~/.gitconfig.private` out of commits.
 
-1. Detects your OS and package manager
-2. Checks for essential development tools
-3. Offers to install missing tools interactively
-
-### Manual Onboarding
-
-Re-run onboarding anytime to check for missing tools:
-
-```bash
-run_onboarding
-```
-
-### Supported Package Managers
-
-| OS            | Package Manager                     |
-| ------------- | ----------------------------------- |
-| macOS         | Homebrew (auto-installs if missing) |
-| Ubuntu/Debian | apt                                 |
-| Fedora        | dnf                                 |
-| Arch          | pacman                              |
-| openSUSE      | zypper                              |
-
-### Tools Checked
-
-| Category                 | Tools                                                 |
-| ------------------------ | ----------------------------------------------------- |
-| **Essential**            | git, curl, unzip, stow                                |
-| **User Experience**      | eza, fzf, jq, direnv, zoxide, fd, yazi, glow          |
-| **CLI Tools**            | ripgrep, neovim, tree, fastfetch, ffmpeg, aria2       |
-| **Git**                  | gh, git-lfs                                           |
-| **Development Managers** | nvm, uv, pnpm, bun                                    |
-| **Special**              | Docker (guidance only — requires manual installation) |
-
-### Skipping Onboarding
-
-To prevent auto-onboarding on a fresh shell:
-
-```bash
-export _ONBOARDING_COMPLETE=true
-```
+One thing I'd steer you away from: exporting API tokens here. Anything you export, every program you run can read.
 
 ---
 
-## Usage: Your Day-to-Day Python Workflow
+## GitHub: SSH by default
 
-### 1. Creating a New Python Project
+Git talks to GitHub over SSH. The shared `.gitconfig` wipes any credential helper it inherits, Xcode's keychain one for example, so a token can't get cached behind your back. Out of the box an HTTPS push has nothing to sign in with, and fails.
 
-This is the primary entry point. The function scaffolds everything you need.
+`gh auth login`, `gh auth setup-git` and `gh auth refresh` are blocked, because they quietly add an HTTPS helper back. `gh auth login --git-protocol ssh` still works.
 
-```bash
-# 1. Create and enter a directory for your new project
-mkdir my-awesome-app && cd my-awesome-app
-
-# 2. Run the new project command with the desired Python version
-python_new_project 3.12
-```
-
-This single command performs over a dozen steps, including `git init`, `uv venv`, `uv pip install`, and creating all necessary config files.
-
-### 2. Setting Up an Existing Project
-
-If you clone a project or need to reset your environment, use `python_setup`. This function intelligently installs default `dev` dependencies and any other optional extras you specify.
-
-```bash
-# 1. Clone a repo and enter it
-git clone <url> && cd <project-name>
-
-# 2. Set up the environment using a specific Python version
-# This will install base + 'dev' dependencies.
-python_setup 3.12
-
-# 3. Set up the environment and include additional optional dependencies
-# This will install base + 'dev' + 'api' + 'web' dependencies.
-python_setup 3.12 api web
-```
-
-### 3. Managing a Global Command-Line Tool
-
-If your `pyproject.toml` defines a script, you can install it as a system-wide command using `uv tool`. The install uses **editable mode** by default, so code changes are reflected immediately without reinstalling. These helpers require an active virtual environment to determine which Python version to use.
-
-```bash
-# Inside your project directory (with .venv active via direnv):
-
-# Install the tool for the first time with 'cli' extras (editable mode)
-uv_tool_install_current_project cli
-
-# Install with NO extras
-uv_tool_install_current_project --no-extras
-
-# Reinstall (only needed when pyproject.toml entry points change)
-uv_tool_reinstall_current_project cli
-
-# Check the installation status of the current project's tool
-uv_tool_check_current_project
-
-# Uninstall the tool
-uv_tool_uninstall_current_project
-
-# Run a tool once without installing (via uvx)
-uvx ruff check .
-```
-
-#### Editable vs frozen (`--frozen`)
-
-Editable is the right default while you are working on a project, but it is the wrong
-default when something _outside your control_ runs the command — a git hook, a cron
-job, a background capture. In editable mode those callers execute whatever is in your
-checkout at that instant, so a half-saved file or a mid-refactor tree breaks them.
-
-Pass `--frozen` to copy the project into the tool environment instead of linking back
-to the checkout:
-
-```bash
-# Snapshot install: the installed command is pinned to the code as it is right now
-uv_tool_install_current_project --frozen cli
-
-# Editing the checkout no longer changes what runs -- update it explicitly:
-uv_tool_reinstall_current_project --frozen cli
-```
-
-**The mode is not sticky.** Omitting `--frozen` on a reinstall returns the tool to
-editable, so pass the same flag you installed with. A reinstall that changes the mode
-warns before it does so. If a project must always be frozen, pin it (below) rather
-than relying on remembering the flag.
-
-##### Pinning the mode in `pyproject.toml`
-
-A flag lives in whoever typed the last command. It does not survive a fresh machine or
-a `uv tool uninstall`. When a project _requires_ one mode, declare it in the project:
-
-```toml
-[tool.uv-tool]
-install-mode = "frozen"   # or "editable"
-```
-
-Both install and reinstall then use that mode when no `--frozen` / `--editable` is
-given, and say so:
-
-```
-📌 pyproject.toml pins this project to frozen installs.
-```
-
-An explicit flag still wins — the pin is a safe default, not a lock — but overriding it
-is loud:
-
-```
-⚠️  OVERRIDE: pyproject.toml pins this project to frozen, installing editable anyway.
-   The pin exists because something outside this shell runs this command.
-```
-
-> **`uv` itself does not read `[tool.uv-tool]`.** The key is honoured only by the
-> `uv_tool_*_current_project` functions in `home/.zsh_python_functions`. An
-> unrecognised value warns and is ignored rather than failing the install.
-
-Because the difference is invisible at the call site, the mode is reported everywhere
-it matters — `uv_tool_check_current_project` prints it, and the `.envrc` banner shows
-it on every `cd` into the project:
-
-```
-│     Tool:    ✓ Installed via uv tool (v0.1.0)
-│     Mode:    FROZEN - edits here do NOT change what runs
-│               uv_tool_reinstall_current_project --frozen to update it
-```
-
-| Mode       | Meaning                                                   | When                                               |
-| :--------- | :-------------------------------------------------------- | :------------------------------------------------- |
-| `EDITABLE` | Live link to this checkout; edits take effect immediately | Normal development (default)                       |
-| `FROZEN`   | Snapshot copy; edits are ignored until you reinstall      | Anything a hook, cron job or other automation runs |
-| `REGISTRY` | Installed from PyPI, not from this checkout               | `uv tool install <name>`                           |
-
-##### Querying the mode from a script
-
-`uv_tool_mode` prints one word (`editable` / `frozen` / `registry` / `not-installed` /
-`unknown`) and nothing else, exiting 0 when it resolved a mode:
-
-```bash
-uv_tool_mode              # the project in $PWD
-uv_tool_mode ruff         # a named uv tool
-
-[[ "$(uv_tool_mode)" == frozen ]] || echo "refusing to run: not a frozen install"
-```
-
-Use it instead of re-deriving the answer. The underlying file is **four levels down**,
-at `<tool_env>/lib/python*/site-packages/<normalised-name>-*.dist-info/direct_url.json`
-— the name lowercased with `-` and `.` turned into `_`, and the `.dist-info` directory
-version-stamped. A shallow glob matches nothing, and "no match" reads as "no editable
-flag", which reports a **live install as frozen** — silently, and in exactly the place
-you were checking to avoid that assumption. Non-shell callers should replicate the full
-path pattern.
-
-### 4. Cleaning Up a Project
-
-To completely remove all generated artifacts and return the directory to a clean state, use `python_delete`. This is non-destructive to your source code.
-
-```bash
-# This will remove .venv, .envrc, caches, build artifacts, and uv.lock
-python_delete
-```
-
----
-
-## Python Workflow at a Glance
-
-This environment supercharges Python development using `uv` and `direnv`.
-
-### 1. New Project Scaffolding (`python_new_project`)
-
-```mermaid
-graph TD
-    subgraph "🚀 Initial Setup"
-        A["💻 User runs:<br><b>mkdir my-app && cd my-app</b>"] --> B
-        B["💻 User runs:<br><b>python_new_project 3.12</b>"]
-    end
-
-    subgraph "🤖 Automated Scaffolding"
-        B --> C{"⚙️ `uv init`"}
-        C --> D["📄 pyproject.toml<br>📄 .gitignore<br>📄 README.md"]
-        C --> E["📁 src/my_app/__init__.py<br>📁 tests/test_main.py"]
-        C --> F["🐍 `uv venv`<br>Creates .venv"]
-        F --> G["📦 `uv pip install -e .[dev]`<br>Installs dependencies"]
-        C --> H["🗝️ `direnv`<br>Creates .envrc for auto-activation"]
-        D & E & G & H --> J{"🔀 `git init` + initial commit"}
-    end
-
-    subgraph "✅ Result"
-        I["✨ A complete, ready-to-develop<br>Python project with one command."]
-    end
-
-    J --> I
-
-    classDef userAction fill:#3498db,stroke:#2980b9,stroke-width:2px,color:white;
-    classDef automation fill:#f1c40f,stroke:#f39c12,stroke-width:2px,color:black;
-    classDef artifact fill:#2ecc71,stroke:#27ae60,stroke-width:2px,color:white;
-    classDef result fill:#9b59b6,stroke:#8e44ad,stroke-width:2px,color:white;
-
-    class A,B userAction;
-    class C,F,G,H,J automation;
-    class D,E artifact;
-    class I result;
-```
-
-### 2. Existing Project Setup (`python_setup`)
-
-```mermaid
-graph TD
-    subgraph "🚀 Initial State"
-        A["📁 Existing Project<br>(e.g., after `git clone`)"]
-    end
-
-    subgraph "🤖 Automated Setup"
-        A --> B["💻 User runs:<br><b>python_setup 3.12 api</b>"]
-        B --> C["🗑️ Removes existing `.venv` folder"]
-        C --> D["🐍 Creates new `.venv` using<br>the specified Python version (3.12)"]
-        D --> E["📦 Installs dependencies from `pyproject.toml`<br>including `[dev]` and specified extras (`[api]`)"]
-        E --> F["🗝️ Ensures `.envrc` exists for `direnv`"]
-    end
-
-    subgraph "✅ Result"
-        G["✨ A clean, consistent, and<br>ready-to-use development environment."]
-    end
-
-    F --> G
-
-    classDef userAction fill:#3498db,stroke:#2980b9,stroke-width:2px,color:white;
-    classDef automation fill:#e67e22,stroke:#d35400,stroke-width:2px,color:white;
-    classDef initialState fill:#95a5a6,stroke:#7f8c8d,stroke-width:2px,color:white;
-    classDef result fill:#9b59b6,stroke:#8e44ad,stroke-width:2px,color:white;
-
-    class A initialState;
-    class B userAction;
-    class C,D,E,F automation;
-    class G result;
-```
-
-### 3. Global CLI Deployment (`uv_tool_*`)
-
-```mermaid
-graph TD
-    subgraph "🔄 Daily Development Cycle"
-        A["💻 `cd my-project`"] --> B
-        B["✨ `direnv` auto-activates<br>the `.venv` environment"]
-        B --> C["👨‍💻 Write code, run `pytest`, `ruff format`..."]
-    end
-
-    subgraph "🌍 Global CLI Deployment (Optional)"
-        C --> F["Run: `uv_tool_install_current_project cli`"]
-        F --> G["✅ `my-cli` is now available globally<br>(editable — code changes apply immediately)"]
-        G --> H["... make code changes ..."]
-        H --> I["Run: `uv_tool_reinstall_current_project cli`<br>(only if entry points change)"]
-    end
-```
-
-### 4. Daily Development & Deployment
-
-This diagram shows the seamless daily workflow enabled by `direnv` and the `uv tool` helper functions.
-
-```mermaid
-graph TD
-    subgraph "🔄 Daily Development Cycle"
-        A["💻 `cd my-project`"] --> B
-        B["✨ `direnv` auto-activates<br>the `.venv` environment"]
-        B --> C["👨‍💻 Write code, run `pytest`, `ruff format`..."]
-        C --> D["💻 `cd ..`"]
-        D --> E["✨ `direnv` auto-deactivates<br>the `.venv` environment"]
-    end
-
-    subgraph "🌍 Global CLI Deployment (Optional)"
-        C --> F["Run: `uv_tool_install_current_project cli`<br>to install with 'cli' extra (editable)"]
-        C --> K["Run: `uv_tool_install_current_project --frozen cli`<br>for a snapshot a hook or cron job can rely on"]
-        F --> G["✅ `my-cli` is now available globally"]
-        K --> G
-        G --> H["... make code changes ..."]
-        H --> I["Run: `uv_tool_reinstall_current_project cli`<br>editable: only if entry points change<br>frozen: after every change, with `--frozen`"]
-        I --> J["Run: `uv_tool_uninstall_current_project`<br>to remove the global command"]
-    end
-
-    classDef userAction fill:#3498db,stroke:#2980b9,stroke-width:2px,color:white;
-    classDef tool fill:#e67e22,stroke:#d35400,stroke-width:2px,color:white;
-    classDef devLoop fill:#1abc9c,stroke:#16a085,stroke-width:2px,color:white;
-    classDef result fill:#9b59b6,stroke:#8e44ad,stroke-width:2px,color:white;
-
-    class A,D,F,H,I,J,K userAction;
-    class B,E tool;
-    class C devLoop;
-    class G result;
-```
-
----
-
-## Node.js & Docker Workflows
-
-### Node.js (`node_*` functions)
-
-The setup provides similar automation for Node.js projects, standardizing on `nvm` with `pnpm` or `bun` as co-primary package managers. Projects scaffold with **TypeScript by default** (pass `--no-ts` for JavaScript) and integrate with **direnv** for automatic environment activation. When creating a new project, you choose your package manager — pnpm uses **Vitest** for testing, bun uses its **built-in test runner**.
-
-- **Create a new TypeScript project**: `mkdir my-node-app && cd my-node-app && node_new_project`
-  - Prompts for package manager (`pnpm` or `bun`), or pass `--pnpm`/`--bun` to skip the prompt. Scaffolds `src/index.ts`, `tests/index.test.ts`, `tsconfig.json`, `.nvmrc`, `.gitignore`, and a rich `.envrc` (if direnv is available). Installs TypeScript, ESLint, Prettier, and type definitions.
-- **Create a JavaScript project**: `node_new_project --no-ts` (or `node_new_project --no-ts --bun`)
-  - Same scaffold without TypeScript — creates `src/index.js` and `tests/index.test.js` instead.
-- **Set up an existing project**: `cd existing-project && node_setup`
-  - Switches to the Node version from `.nvmrc`, auto-detects the package manager from the lockfile (`bun.lockb` → bun, `pnpm-lock.yaml` → pnpm), installs dependencies, creates `.envrc` if missing, and displays available scripts.
-- **Quick project dashboard**: `node_info`
-  - Shows Node/pnpm/bun versions, `.nvmrc` status, package.json details, available scripts, and global link status.
-- **Clean up artifacts**: `node_clean`
-  - Removes `node_modules`, `dist`, `build`, `.next`, `.turbo`, `.tsbuildinfo`, coverage, caches, and lockfiles.
-
-#### Global Node.js Package Management
-
-For CLI tools you're developing, use `node_link` / `node_unlink` / `node_check_global` to manage global symlinks. For pnpm projects, `node_link` uses `pnpm install -g .` (not `pnpm link --global`, which is blocked due to a v11 shim layout bug). For bun projects, it uses `bun link --global`. Note that global links are tied to the current nvm Node version -- switching nvm versions will lose access to the linked binary. For one-off tool execution, use `pnpm dlx` or `bunx` -- neither requires global installation. (`npx` is intercepted and will suggest both alternatives.)
-
-### Docker (`docker_*` functions & aliases)
-
-Quickly manage common development services and stacks.
-
-- **Start a PostgreSQL container for development**: `pg_dev_start [db] [pw] [port]`
-- **Start a Qdrant vector database**: `qdrant_start [port]`
-- **Start a full AI/ML stack (Qdrant + Jupyter)**: `dev_stack_start ai`
-- **Start a web development stack**: `dev_stack_start web`
-- **Start a full stack (web + AI/ML)**: `dev_stack_start full`
-- **Check the status of all services**: `dev_stack_status`
-- **Clean up all unused Docker resources**: `dcleanup`
-- **View Docker overview**: `docker_overview`
-- **Get help**: `docker_help`
-
-### Tmux Workflows
-
-The configuration includes powerful tmux session management:
-
-- **Quick session access**: `ta mysession` (attach or create)
-- **Coding sessions**: `tc` (coding session), `tcc` (claudecode session)
-- **Development sessions**: `tdev myproject` (multi-window setup)
-- **Git-aware sessions**: `tgit myproject` (split panes for git and editing)
-- **Git integration**: All git branch operations automatically update tmux window names
-
-### Media Downloads
-
-Use the `yt()` wrapper for easy video/audio downloads:
-
-```bash
-yt https://youtube.com/watch?v=...              # Default: 1080p + best audio
-yt --video-highest https://youtube.com/watch?v=... # Maximum quality
-yt --audio-only https://youtube.com/watch?v=...    # Extract audio
-yt --bundle https://youtube.com/watch?v=...        # Video + all metadata
-yt --help                                          # Show all options
-```
-
----
-
-## Claude Code LSP Servers
-
-Claude Code supports LSP (Language Server Protocol) plugins for enhanced code intelligence. These servers need to be installed globally on the system so Claude Code can find them on `$PATH`.
-
-### LSP Server Setup
-
-```bash
-# Pyright (Python) — installed via uv tool
-uv tool install pyright
-
-# TypeScript Language Server — installed via pnpm or bun global
-pnpm add -g typescript-language-server typescript  # or: bun add -g typescript-language-server typescript
-
-# Swift (sourcekit-lsp) — ships with Xcode, no install needed
-# Verify with: /usr/bin/sourcekit-lsp --help
-```
-
-### Verification
-
-```bash
-pyright --version                    # Should show version (e.g., 1.1.408)
-typescript-language-server --version # Should show version (e.g., 5.1.3)
-which sourcekit-lsp                  # Should show /usr/bin/sourcekit-lsp
-```
-
----
-
-## Claude Code Configuration
-
-This repository includes a comprehensive [Claude Code](https://code.claude.com/) setup in the `.claude/` directory.
-
-### Installing Claude Code
-
-Claude Code is a CLI tool from Anthropic. Install it following the [official documentation](https://docs.anthropic.com/en/docs/claude-code/overview). Once installed, the shell launchers defined in `.zshrc` will work (`cb`, `cr`, `ci`, `ct`, `cd_`, `cskip`, and `c-legacy`; `c` itself now prints a signpost to `pj` / `c2` / `lifeos` and starts nothing).
-
-### Optional Tools for Hooks
-
-The Claude Code hooks in this repo benefit from these optional tools:
-
-```bash
-# markdownlint — used by pre-commit gate for markdown auto-fix
-brew install markdownlint-cli
-
-# dotenvx — used by session-checks.sh to verify .env encryption
-brew install dotenvx/brew/dotenvx
-# Homebrew's tap-trust feature ignores third-party taps until trusted;
-# trust just this one formula (not the whole tap):
-brew trust --formula dotenvx/brew/dotenvx
-```
-
-### Permissions (`.claude/settings.local.json`)
-
-The local settings file configures fine-grained permissions using the modern `Bash(command *)` wildcard syntax:
-
-- **`allow`**: Pre-approved commands for common shell utilities, git operations, Swift/Xcode tooling, package managers (uv, pnpm, brew, cargo, pip, pod), Docker, GitHub CLI, and more.
-- **`ask`**: Prompts before running destructive operations like `git push` and `git reset`.
-- **`deny`**: Blocks reading sensitive files — `.env` variants (except `.env.example`), private keys (`.pem`, `.key`, `.cert`), `~/.ssh/`, `~/.aws/`, `~/.gnupg/`, `secrets/`, `credentials/`, and password files.
-- **`WebFetch`**: Allowlisted domains for documentation lookups — GitHub, Anthropic docs, Apple Developer, Swift.org, npm, PyPI, Stack Overflow, and others.
-
-> **Note**: `.claude/settings.local.json` is gitignored by Claude Code. The version in this repo serves as a reference template.
-
-### Hooks (`.claude/hooks/`)
-
-Custom lifecycle hooks that run at various points during Claude Code sessions. See [`.claude/hooks/README.md`](.claude/hooks/README.md) for details.
-
-### Using in Other Projects
-
-To pull the `.claude` hooks folder into another project, use [gitpick](https://github.com/nrjdalal/gitpick):
-
-```bash
-pnpm dlx gitpick CaptainCodeAU/fifty-shades-of-dotfiles/tree/master/.claude  # or: bunx gitpick ...
-```
-
-Run this from the target project's root directory. It downloads just the `.claude` folder without cloning the full repository.
-
----
-
-## Customization & Private Settings
-
-To keep your main configuration portable and shareable, personal and machine-specific settings live in private files that are **never committed** to the repository. These are protected by `.gitignore_global`.
-
-### Git Identity (`~/.gitconfig.private`)
-
-The shared `.gitconfig` includes `~/.gitconfig.private` via `[include]`. This file is the central hub for git identity, multi-account routing, and SSH URL rewrites.
-
-For a single account, a minimal setup is:
+Two accounts work like this. Each one gets a key, an SSH host alias, and a small identity file:
 
 ```ini
-[user]
-    name = Your Name
-    email = you@example.com
-```
-
-The installer (`./install.sh`) will prompt you to create this file on a fresh machine. If the file already exists (e.g., with multi-account config), the installer skips creation to avoid overwriting it.
-
-> **Note:** The files `.gitconfig.local`, `.gitconfig.private`, `.gitconfig.private.local`, and `~/.ssh/gitconfig-*` are all protected by `.gitignore_global` to prevent accidental commits.
-
-#### SSH-Only Authentication
-
-This system enforces SSH-only authentication for GitHub. The shared `.gitconfig` has no credential helpers — instead, `~/.gitconfig.private` contains **scoped** URL rewrite rules that convert HTTPS URLs to SSH only for **your own** GitHub usernames. Third-party URLs (Homebrew taps, open-source repos) stay on HTTPS and work without authentication.
-
-```ini
-# ~/.gitconfig.private — URL rewrites (scoped per username)
-
-[url "<ssh-host-alias>:<YourGitHubUsername>/"]
-    insteadOf = https://github.com/<YourGitHubUsername>/
-[url "<ssh-host-alias>:"]
-    insteadOf = https://gist.github.com/<YourGitHubUsername>/
-```
-
-> **Important:** Do **not** use a blanket `insteadOf = https://github.com/` rule — this rewrites all GitHub URLs (including Homebrew taps and third-party repos) to SSH, which breaks `brew update` and any unauthenticated HTTPS clone.
-
-This is part of a defence-in-depth model:
-
-1. **SSH config hardening** — `AddKeysToAgent no`, `UseKeychain no`, `IdentitiesOnly yes` ensure every operation requires a passphrase
-2. **Scoped URL rewrites** — only your own GitHub repos are rewritten to SSH; third-party HTTPS URLs pass through untouched
-3. **No credential helpers** — the shared `.gitconfig` contains no `[credential]` sections, so even if a URL rewrite is bypassed, HTTPS auth fails rather than silently succeeding
-4. **Claude Code SSH isolation** — the `_claude_launch` wrapper spins up an **isolated SSH agent** scoped to the Claude Code process — the key is loaded only into this ephemeral agent and is never visible to other terminals or the system launchd agent. The agent dies when Claude Code exits; a 12-hour timeout is a safety net for abnormal termination (SIGKILL).
-5. **Per-host opt-in agent forwarding (local override)** — the stowed `~/.ssh/config` ends with `Include ~/.ssh/config.local`. Private host blocks (real hostnames, internal IPs, `ForwardAgent yes` for trusted LAN remotes) live in `~/.ssh/config.local`, which is never stowed and never committed. This lets VS Code / Cursor Remote-SSH (or plain `ssh`) reach back through the tunnel to the Mac's `ssh-agent` to authorise GitHub operations on the remote — without ever copying private keys onto the remote machine. `ForwardAgent` is set only on specific trusted `Host` blocks, never on `Host *`.
-
-**Local override pattern (`~/.ssh/config.local`, mode 0600, not in repo):**
-
-```ini
-Host trusted-lan-box
-    HostName <real-hostname-or-ip>
-    User <real-user>
-    IdentityFile ~/.ssh/<dedicated-host-key>
-    ForwardAgent yes
-    AddKeysToAgent no
-    IdentitiesOnly yes
-```
-
-Before SSHing to such a host, run `ssh-add ~/.ssh/<github-key>` once in the
-Mac terminal so the agent has the GitHub key loaded and ready to forward.
-
-> See [docs/SECURITY.md](docs/SECURITY.md) for full rationale, alternative postures considered, and daily SSH operations.
-
-> **Warning:** Running `gh auth login` or `gh auth setup-git` will silently re-add HTTPS credential helpers to `~/.gitconfig`. A `gh()` shell wrapper (in `.zshrc`) blocks these commands to prevent this.
-
-#### Multiple GitHub Accounts
-
-If you have multiple GitHub accounts, each account gets three things:
-
-1. **SSH host alias** in `~/.ssh/config` — maps a short name to `github.com` with the correct key
-2. **Git identity file** in `~/.ssh/gitconfig-<alias>` — sets `[user]` name/email and `core.sshCommand`
-3. **`includeIf` rule** in `~/.gitconfig.private` — loads the identity file based on repo directory
-
-**SSH config** (`~/.ssh/config`):
-
-```ini
-# Global defaults — strict key handling
-Host *
-    AddKeysToAgent no
-    UseKeychain no
-    IdentitiesOnly yes
-
-Host git-personal
-    HostName github.com
-    User git
-    IdentityFile ~/.ssh/personal
-
+# ~/.ssh/config.local (the shipped ~/.ssh/config includes it)
 Host git-work
     HostName github.com
     User git
     IdentityFile ~/.ssh/work
-```
 
-**Identity files** (co-located with SSH keys in `~/.ssh/`):
-
-```ini
-# ~/.ssh/gitconfig-personal
-[user]
-    name = PersonalHandle
-    email = personal@example.com
-[core]
-    sshCommand = ssh -i ~/.ssh/personal
-```
-
-```ini
 # ~/.ssh/gitconfig-work
 [user]
     name = Work Name
     email = you@company.com
 [core]
     sshCommand = ssh -i ~/.ssh/work
-```
 
-**Private config** (`~/.gitconfig.private`):
-
-```ini
-# Default identity (fallback for repos outside includeIf dirs)
+# ~/.gitconfig.private
 [user]
-    name = PersonalHandle
-    email = personal@example.com
-
-# Per-account identity overrides (last match wins)
-[includeIf "gitdir:~/CODE/"]
-    path = ~/.ssh/gitconfig-personal
+    name = Your Name
+    email = you@example.com
 [includeIf "gitdir:~/WORK/"]
     path = ~/.ssh/gitconfig-work
-
-# Scoped URL rewrites (only your repos → SSH)
-[url "git-personal:PersonalHandle/"]
-    insteadOf = https://github.com/PersonalHandle/
 [url "git-work:WorkOrg/"]
     insteadOf = https://github.com/WorkOrg/
 ```
 
-**Clone URLs** use the short SSH host aliases directly — no `git@` prefix needed since `User git` is defined in `~/.ssh/config`:
+Now a repo under `~/WORK/` commits as work-you with the work key, and everything else commits as you. `ssh -T git-work` should greet you by your work username.
 
-```bash
-git clone git-personal:PersonalHandle/my-repo
-git clone git-work:WorkOrg/my-repo
-```
+Keep the `insteadOf` rewrites scoped to your own accounts. A blanket rewrite of `https://github.com/` breaks `brew update` and every anonymous clone.
 
-The trailing `/` in `gitdir:~/WORK/` is important — it matches any repo inside that directory recursively (including nested subdirectories). The `includeIf` rules use last-match-wins ordering, so more specific directory rules should come after broader catch-all rules.
+There's one opt-in exception. `github-agent-flip` moves a single repo onto a GitHub App that hands out short-lived tokens. The wipe sits above the line that loads your private file, so a helper you add there on purpose survives it. Nothing moves over on its own. See [`docs/GITHUB_AGENT_USAGE.md`](docs/GITHUB_AGENT_USAGE.md).
 
-#### Adding a New Account
-
-1. Create SSH key: `ssh-keygen -t ed25519 -f ~/.ssh/<account>`
-2. Add SSH host alias: `Host git-<alias>` in `~/.ssh/config`
-3. Create identity file: `~/.ssh/gitconfig-<alias>` with `[user]` and `[core] sshCommand`
-4. Add `includeIf` rule in `~/.gitconfig.private`
-5. Add scoped URL rewrites in `~/.gitconfig.private`
-6. Add public key to the GitHub account
-7. Verify: `ssh -T git-<alias>` should show "Hi &lt;username&gt;!"
-
-### Shell Settings (`~/.zshrc.private`)
-
-Machine-specific shell settings, API keys, and personal aliases go in `~/.zshrc.private`:
-
-1. Create the file: `touch ~/.zshrc.private`
-2. Add your private settings to it.
-
-**Example `~/.zshrc.private`:**
-
-```zsh
-# Private and machine-specific settings for this computer.
-
-# Secret API Keys
-export OPENAI_API_KEY="<your-openai-key>"
-export GITHUB_TOKEN="<your-github-token>"
-
-# PATH for a tool installed in a non-standard location on this machine
-export PATH="/opt/custom-tool/bin:$PATH"
-
-# A personal alias
-alias my-server="ssh my-user@192.168.1.100"
-```
-
-#### `~/.zshrc.private.early` — for settings the startup guards read
-
-`~/.zshrc.private` is sourced at the **very end** of `.zshrc`, and that is deliberate: its
-contract is "private beats shared", which only holds while it is read last. But several
-guards run **during** startup and have already decided by then, so a switch set in the late
-file cannot reach them — silently, with no error. Anything in that category goes in
-`~/.zshrc.private.early` instead, which is sourced right after OS detection:
-
-| Setting                        | Read by                              | Effect                                                                         |
-| ------------------------------ | ------------------------------------ | ------------------------------------------------------------------------------ |
-| `NVM_ALLOW_CUSTOM_MIRROR`      | nvm mirror pin (section 7)           | Allows a custom Node mirror (e.g. a corporate proxy)                           |
-| `UV_EXCLUDE_NEWER`             | uv cooldown (section 6)              | Pins your own uv resolution cutoff; never overridden                           |
-| `UV_COOLDOWN_STALE_DAYS`       | uv cooldown staleness warning        | How old the stored cutoff may get before it warns (30)                         |
-| `_ONBOARDING_COMPLETE`         | onboarding (section 4)               | Skips the automatic first-run onboarding                                       |
-| `DOTFILES_ALLOW_NPM`           | npm/npx/yarn hijack                  | Written by install.sh's takeover gate on decline; disables the npm block       |
-| `DOTFILES_ALLOW_SYSTEM_PYTHON` | python/python3/pip/pipx/pyNNN hijack | Written by install.sh's takeover gate on decline; disables the Python takeover |
-
-```zsh
-# ~/.zshrc.private.early — read BEFORE the startup guards. Keep it small.
-export NVM_ALLOW_CUSTOM_MIRROR=1
-export _ONBOARDING_COMPLETE=true
-```
-
-Everything else — API keys, PATH additions, aliases, functions — belongs in the regular
-`~/.zshrc.private`. Both files are untracked and protected by `.gitignore_global`.
-
-> **`UV_NO_COOLDOWN` is the exception and needs neither file.** The `uv()` / `uvx()` wrappers
-> check it at call time, so `UV_NO_COOLDOWN=1 uv add <pkg>` works as a one-off prefix, and
-> setting it in either private file works too.
+SSH hardening and the reasoning behind it are in [`docs/SECURITY.md`](docs/SECURITY.md).
 
 ---
 
-## Additional macOS Tools
+## Day to day
 
-These are specialized tools that are not part of the core setup but may be useful depending on your workflow. Install them individually as needed:
+### Python
 
 ```bash
-# Swift / Xcode development
-brew install swiftlint xcodegen
+mkdir my-app && cd my-app
+python_new_project 3.13      # git, uv venv, pyproject, tests, .envrc (with direnv), first commit
 
-# Networking & security
-brew install cloudflared mkcert
-
-# Document & image processing
-brew install poppler imagemagick mpack
-
-# Other utilities
-brew install ripmine              # Redmine CLI
-brew install markdownlint-cli     # Markdown linting (also used by Claude Code hooks)
-brew install dotenvx/brew/dotenvx # .env encryption (also used by Claude Code hooks)
+python_setup 3.13 api        # existing project: fresh .venv, the project plus its dev and api extras
+python_delete                # .venv, .envrc, caches and build output go to the Trash; code and uv.lock stay
 ```
 
-> **Note:** These are macOS-specific Homebrew formulae. Equivalent packages may be available on Linux via apt/dnf/pacman but are not covered by the install script.
+The installer puts Python 3.13 on the machine. For another version, run `uv python install 3.12` first.
+
+If your project defines a command, `uv_tool_install_current_project --no-extras` (or name the extras you want) puts it on your `PATH`. Run it with the project's venv active. It's editable by default, so your edits show up straight away. Pass `--frozen` when a git hook or cron job runs the command, so a half-saved file can't break it, then reinstall with `--frozen` to pick up changes. A project can pin that choice in `pyproject.toml` with `[tool.uv-tool] install-mode = "frozen"`. Only these functions read it, not uv itself.
+
+### Node
+
+```bash
+node_new_project             # TypeScript, asks pnpm or bun (--pnpm / --bun to skip, --no-ts for JS)
+node_setup                   # existing project: .nvmrc's Node version, pnpm or bun from the lockfile, install
+node_info                    # versions, scripts, link status
+node_clean                   # node_modules, builds, caches and the lockfile go to the Trash
+```
+
+In your shell, `npm` and `yarn` refuse and tell you the pnpm or bun command, and `npx` points you at `pnpm dlx` or `bunx`. That's not because they're bad. Two package managers in one project fight over lockfiles and waste your afternoon. Scripts and Makefiles still reach the real tools.
+
+### Docker
+
+`pg_dev_start`, `qdrant_start`, `jupyter_start`, and `dev_stack_start web|ai|full` for the lot. `docker_help` lists everything else.
+
+### The small stuff
+
+- `yt <url>` downloads video or audio. It runs yt-dlp through `uvx`, so it's always current and never installed. `yt --help` shows the options.
+- `l` and `ll` are `eza` listings, `lg` is lazygit, and `cd` is zoxide.
+- `pip install` refuses and tells you the `uv add` command. Editable installs and read-only `pip` commands go through `uv pip`. Bare `python` refuses and points you at `uv run`.
+- `cp` and `mv` ask before overwriting.
+- The welcome banner shows everything by default. Set `ZSH_WELCOME=minimal` or `none` in `~/.zshrc.private` to shrink or hide it.
+- `~/.config/zshrc/init-vscode-project-settings.sh -r` (or `-p <name>`) gives a project its own VS Code colours, from ten profiles in `color-profiles.json`.
+- iTerm2 users: `settings/iterm2/prefs/` holds my entire iTerm2 setup in one sanitised file. On a Mac with iTerm2 the installer offers to restore it, and backs yours up first.
+- Zed users: `md-hardbreak` fixes line breaks in the Markdown preview by editing the source, and `--strip` undoes it. See [`docs/ZED_MARKDOWN_FORMATTING.md`](docs/ZED_MARKDOWN_FORMATTING.md).
 
 ---
 
-## Welcome Message & Verbosity Control
+## Claude Code
 
-The shell displays an environment overview on startup. You can control this behavior with environment variables.
+The dotfiles also carry some wiring for Claude Code. Most of it is built around my setup, so read it before you lean on it.
 
-### Verbosity Levels
+- **Launchers.** `cb`, `cr` (resume), `ci`, `ct`, `cpr`, `cd_` and `cskip` each start Claude Code with a throwaway SSH agent that holds my GitHub key (`~/.ssh/captaincodeau`) for that session only. Without that key file they start with no agent. All of them except `cb` skip Claude Code's permission prompts, and most point at a system prompt file from my private repo. Read `home/.zsh_claude_launch` first. `c` on its own starts nothing and prints a menu of my other launchers.
+- **Hooks.** `home/.claude/hooks/` has guards that block the common ways an agent's Bash commands could permanently delete files or print a secret into its transcript. When jq is installed and `~/.claude/settings.json` exists, the installer registers them there without asking, along with a few of my personal hooks. The list is in `settings/claude/hooks.json`, and [`docs/CLAUDE_HOOKS.md`](docs/CLAUDE_HOOKS.md) explains how it works.
+- **Commit attribution.** Turn on the global git hooks (the installer offers them as the pnpm-audit pre-push hook) and a commit made inside a Claude session gets stamped with the session it came from. See [`docs/CLAUDE_SESSION_ATTRIBUTION.md`](docs/CLAUDE_SESSION_ATTRIBUTION.md).
+- **Language servers.** `uv tool install pyright` and `pnpm add -g typescript-language-server typescript`, then enable the `pyright-lsp` and `typescript-lsp` plugins in Claude Code. The installer does neither.
 
-#### `ZSH_WELCOME` — Environment Overview
+The `.claude/` folder at the top of this repo is this repo's own setup, not something to copy into yours. Some of it only makes sense here.
 
-| Value     | Description                                              |
-| --------- | -------------------------------------------------------- |
-| `full`    | Complete multi-line overview (default for new terminals) |
-| `minimal` | Single-line compact status (default for SSH/tmux)        |
-| `none`    | No overview displayed                                    |
-| _(empty)_ | Auto-detect based on context (recommended)               |
-
-#### `ZSH_WELCOME_QUICKREF` — Quick Reference
-
-| Value     | Description                      |
-| --------- | -------------------------------- |
-| `full`    | Multi-line categorized reference |
-| `minimal` | Compact 2-line hints             |
-| `none`    | No quick reference displayed     |
-
-### Setting Verbosity
-
-```bash
-# In ~/.zshrc.private (or Section 2 of .zshrc)
-
-# Always show full banner
-export ZSH_WELCOME="full"
-export ZSH_WELCOME_QUICKREF="full"
-
-# Always show minimal
-export ZSH_WELCOME="minimal"
-export ZSH_WELCOME_QUICKREF="none"
-
-# Silence completely
-export ZSH_WELCOME="none"
-```
-
-### Auto-Detection
-
-When `ZSH_WELCOME` is empty (default), the welcome message automatically adjusts:
-
-| Context          | Auto Default | Rationale                                |
-| ---------------- | ------------ | ---------------------------------------- |
-| Regular terminal | `full`       | First shell of the day, show full info   |
-| SSH session      | `minimal`    | You're remoting in, you know your setup  |
-| Tmux pane        | `minimal`    | You've seen the banner in the first pane |
-
-To override auto-detection, set `ZSH_WELCOME` explicitly.
-
-### Disk Space Warning
-
-The welcome message shows disk usage and warns if space is low:
-
-```bash
-# Default threshold is 90%
-# To adjust (e.g., warn at 85%):
-export ZSH_WELCOME_DISK_WARN=85
-```
-
-### Examples
-
-```bash
-# Temporarily run with full verbosity
-ZSH_WELCOME=full zsh
-
-# Temporarily silence
-ZSH_WELCOME=none zsh
-
-# Test auto-detection (simulate SSH)
-SSH_CONNECTION="test" zsh -i -c exit
-
-# Test auto-detection (simulate tmux)
-TMUX="/tmp/test" zsh -i -c exit
-```
+If you've seen `pj` mentioned around the place, that's my project launcher. It needs two private repos you won't have, so you can ignore it, and the red banner at the end of the install. For future me, it's all in [`docs/PJ_PROFILES.md`](docs/PJ_PROFILES.md).
 
 ---
 
-## Repository Structure
-
-This repository uses a **one-to-one mapping** structure that mirrors actual deployment locations, making it clear where each file goes:
-
-> **`docs/STRUCTURE.md` is authoritative for the file map.** This tree is a
-> readable overview and is allowed to lag; when the two disagree, STRUCTURE.md
-> wins. Keeping two full maps in sync by hand is what let the herdr and lazygit
-> configs sit undocumented here after being added.
+## What's where
 
 ```text
 fifty-shades-of-dotfiles/
-├── install.sh                         # Interactive installer (./install.sh --help)
-├── home/                              # Files that go directly in ~/
-│   ├── .gitconfig                     # Git config template → ~/.gitconfig
-│   ├── .gitignore_global              # Global gitignore → ~/.gitignore_global
-│   ├── .zshrc                         # Main zsh config → ~/.zshrc
-│   ├── .zsh_python_functions          # Python helpers → ~/.zsh_python_functions
-│   ├── .zsh_node_functions            # Node.js helpers → ~/.zsh_node_functions
-│   ├── .zsh_docker_functions          # Docker helpers → ~/.zsh_docker_functions
-│   ├── .zsh_cursor_functions          # Cursor/VSCode integration → ~/.zsh_cursor_functions
-│   ├── .zsh_tmux                      # Tmux integration → ~/.zsh_tmux
-│   ├── .zsh_onboarding                # Cross-platform onboarding → ~/.zsh_onboarding
-│   ├── .zsh_welcome                   # Unified welcome script → ~/.zsh_welcome
-│   ├── .tmux.conf                     # Tmux config → ~/.tmux.conf
-│   ├── .p10k.zsh                      # Powerlevel10k config → ~/.p10k.zsh
-│   ├── .vimrc                        # Vim config → ~/.vimrc
-│   │
-│   └── .config/                       # Files that go in ~/.config/
-│       ├── direnv/                    # direnv configs → ~/.config/direnv/
-│       │   ├── direnv.toml
-│       │   └── direnvrc              # Machine color profiles + env hooks
-│       ├── zshrc/                     # Shared shell data → ~/.config/zshrc/
-│       │   ├── color-profiles.json   # 10 named color profiles (single source of truth)
-│       ├── uv/                        # uv user config → ~/.config/uv/
-│       │   └── uv.toml                # exclude-newer: the supply-chain cutoff uv reads itself
-│       │   └── init-vscode-project-settings.sh  # Project-level .vscode/settings.json scaffold
-│       ├── nvim/                       # Neovim config → ~/.config/nvim/
-│       │   └── init.vim               # Neovim initialization
-│       ├── zed/                        # Zed editor → ~/.config/zed/
-│       │   └── settings.json          # Zed editor settings
-│       ├── herdr/                     # herdr agent multiplexer → ~/.config/herdr/
-│       │   └── config.toml           # Keymap + phone-home guards (see docs/HERDR.md)
-│       ├── lazygit/                   # lazygit → ~/.config/lazygit/
-│       │   └── config.yml            # Theme + upstream version check disabled
-│       └── yt-dlp/                    # yt-dlp config → ~/.config/yt-dlp/
-│           └── config
-│   │
-│   └── .local/                        # User-level commands and shared script sources
-│       ├── bin/                       # Command entrypoints on PATH → ~/.local/bin/
-│       │   ├── safe-rm                # Delete to Trash; never unlinks (used by rm() + scripts)
-│       │   ├── dirdiff                # Wrapper command for directory diff script
-│       │   ├── sysinfo                # Wrapper command for system monitor script
-│       │   └── watch-history-sync     # Wrapper command for YouTube history exporter
-│       └── share/
-│           └── fifty-shades-of-dotfiles/
-│               └── scripts/           # Standalone script sources + local scripts README
-│                   ├── README.md
-│                   ├── dirdiff.sh
-│                   ├── sysinfo.sh
-│                   └── watch-history-sync.sh
-│
-├── .vscode/                           # VS Code workspace settings (not stowed)
-│   ├── settings.json                 # This repo's workspace colors
-│   └── tasks.json                    # Tasks: init project colors, list profiles
-│
-├── .claude/                           # Claude Code configuration
-│   ├── settings.json                  # Shared project settings (committed)
-│   ├── settings.local.json            # Local permissions & deny rules (gitignored)
-│   └── hooks/                         # Claude Code lifecycle hooks
-│       ├── config.yaml                # Hook configuration
-│       ├── hook_runner.py             # Main hook runner
-│       └── lib/                       # Hook handler modules
-│
-├── platforms/                         # Platform-specific locations
-│   └── macos/                         # macOS-specific paths
-│       └── Library/Application Support/
-│           ├── Cursor/User/settings.json
-│           └── Code/User/settings.json
-│
-├── settings/                         # Exported app configs (reference/import)
-│   ├── iterm2/                       # iTerm2 terminal emulator
-│   │   ├── prefs/                    # FULL settings domain (profiles, colors, fonts, key +
-│   │   │   │                         #   pointer bindings, Hotkey Window, general prefs).
-│   │   │   ├── com.googlecode.iterm2.plist  # sanitized snapshot, restore.sh imports this
-│   │   │   ├── export.sh             # dev Mac only, manual: capture + scrub + write
-│   │   │   ├── restore.sh            # standalone, or offered by ./install.sh (macOS)
-│   │   │   ├── sanitize_plist.py     # the scrub/audit gate export.sh calls
-│   │   │   └── NOTICE.md             # MIT attribution (adapted from steveli2026/iterm2-settings)
-│   │   └── DynamicProfiles/          # Auto-loaded, NOT imported - install.sh symlinks these
-│   │       │                         #   into ~/Library/Application Support/iTerm2/DynamicProfiles/
-│   │       │                         #   All four inherit "Captain Code (dark)" and override only
-│   │       │                         #   colours, so a tab can use any flavour (per-tab theming)
-│   │       ├── catppuccin-latte.json      # Latte (LIGHT)
-│   │       ├── catppuccin-frappe.json     # Frappe
-│   │       ├── catppuccin-macchiato.json  # Macchiato
-│   │       ├── catppuccin-mocha.json      # Mocha (darkest)
-│   │       │                              # --- deep-blue variants: canonical flavour with
-│   │       │                              #     ANSI 4 = #0525c8 (NOT upstream). Restores the
-│   │       │                              #     prompt DIR segment to 7.85:1 in all four; the
-│   │       │                              #     pastel ANSI 4 gave 1.66-3.86:1 under p10k's
-│   │       │                              #     light text. Verify: p10k-contrast-check
-│   │       ├── custom-latte-deep-blue.json
-│   │       ├── custom-frappe-deep-blue.json
-│   │       ├── custom-macchiato-deep-blue.json
-│   │       └── custom-mocha-deep-blue.json
-│   └── wezterm/                      # WezTerm terminal emulator
-│       └── wezterm.lua               # Full config (color scheme, keys, tabs, SSH detection)
-│
-└── docs/                              # Documentation
-    ├── CLAUDE_SESSION_ATTRIBUTION.md
-    ├── MEMENTO_vscode_machine_colors.md
-    ├── ZED_MARKDOWN_FORMATTING.md
-    └── reference/                     # Reference materials
-        ├── colors.md
-        ├── mermaid_examples.md
-        ├── tmux_cheatsheet.md
-        └── windows/                   # Historical Windows scripts (reference only)
-            ├── activate.v1.bat
-            ├── activate.v2.bat
-            └── run.cmd
+├── install.sh        the installer
+├── home/             mirrors ~/ exactly: .zshrc, the function files, .config/, .local/bin/, .claude/
+├── platforms/        per-OS files (Cursor and VS Code settings on macOS)
+├── settings/         app exports (iTerm2, WezTerm) and the Claude Code hook list
+├── docs/             the long versions of everything above
+├── .claude/          this repo's own Claude Code setup, not for copying
+└── CLAUDE.md         instructions for agents working in this repo
 ```
 
-### Key Files
-
-- **`install.sh`**: Interactive installer that handles prerequisites, tool installation, symlinks, and post-setup configuration. Supports `--check`, `--stow-only`, `--dry-run`, `--update`, `--force`, `--verbose`, and `--uninstall` modes.
-- **`home/.gitconfig`**: Public-safe git configuration template. Contains LFS filters, merge/diff settings, and sensible defaults. No credential helpers (SSH-only auth). Includes `~/.gitconfig.private` via `[include]` for personal identity, multi-account routing, and scoped URL rewrites — see [Customization & Private Settings](#customization--private-settings).
-- **`home/.gitignore_global`**: Global gitignore patterns for OS files, editor artifacts, environment/secret files, build outputs, and temporary files. Referenced by `.gitconfig` via `core.excludesfile`.
-- **`home/.zshrc`**: The main controller. It detects the OS, loads plugins, and sources all other function files. Also contains inline functions like `yt()` (yt-dlp wrapper), `rm()` (symlink-aware safe deletion wrapper), and various aliases.
-- **`home/.zsh_python_functions`**: Contains all Python-related helper functions (`python_new_project`, `uv_tool_*`, etc.).
-- **`home/.zsh_node_functions`**: Contains all Node.js helper functions (`node_new_project`, etc.).
-- **`home/.zsh_docker_functions`**: Contains all Docker helper functions and aliases (`pg_dev_start`, `dcleanup`, etc.).
-- **`home/.zsh_cursor_functions`**: Cursor/VSCode editor integration for automatic environment syncing with tmux sessions.
-- **`home/.zsh_tmux`**: Comprehensive tmux session management, git integration, and workflow functions.
-- **`home/.zsh_onboarding`**: Cross-platform onboarding script that detects missing tools and offers to install them on any OS.
-- **`home/.zsh_welcome`**: Unified cross-platform welcome script with verbosity controls, auto-detection for SSH/tmux, and environment overview.
-- **`home/.vimrc`**: Lightweight Vim configuration with line numbers, search highlighting, tab settings, and sensible defaults.
-- **`home/.config/direnv/`**: direnv configuration files. `direnvrc` reads color profiles from `color-profiles.json` via `jq` and applies machine-specific colors to VSCode/Cursor title bars, status bars, and borders.
-- **`home/.config/zshrc/color-profiles.json`**: 10 named color profiles (single source of truth). Used by both direnvrc (machine-level) and `init-vscode-project-settings.sh` (project-level).
-- **`home/.config/uv/uv.toml`**: uv's user config, holding `exclude-newer` — the uv half of the 3-day supply-chain cooldown. **uv reads this file itself**, with no shell involved, so the gate also applies under cron, CI, git hooks and agent tool-shells; an exported environment variable only ever reached an interactive shell, which meant unattended automation resolved with no gate at all. **Fixed, not rolling:** uv stamps the value into `uv.lock`, so a date that moves on its own makes every committed lock churn. Move it deliberately with `uv-cooldown-bump`, commit, then `uv lock` where a lock is tracked. The shell warns once the cutoff is older than `UV_COOLDOWN_STALE_DAYS` (default 30), and warns loudly if the key is missing entirely. Opt out for one command with `UV_NO_COOLDOWN=1` — the `uv()`/`uvx()` wrappers pass a far-future `UV_EXCLUDE_NEWER`, since env outranks user config.
-- **`home/.config/zshrc/init-vscode-project-settings.sh`**: Scaffolds `.vscode/settings.json` with a color profile and font settings. Supports `--profile`, `--random`, and `--list` flags.
-- **`home/.config/nvim/init.vim`**: Neovim initialization config, deployed to `~/.config/nvim/init.vim` via stow.
-- **`home/.config/zed/settings.json`**: Zed editor settings. Only `settings.json` is managed; `prompts/` and `themes/` remain user-local.
-- **`home/.local/bin/md-hardbreak`**: On-demand Markdown formatter (hard breaks / paragraph gaps / strip) for the Zed preview; run via `cmd-alt-b`/`cmd-alt-g`/`cmd-alt-u` or the CLI. See [`docs/ZED_MARKDOWN_FORMATTING.md`](docs/ZED_MARKDOWN_FORMATTING.md).
-- **`home/.config/herdr/config.toml`**: herdr keymap plus both phone-home guards (`version_check` / `manifest_check` false). Keybindings govern the machine running the CLIENT — see [`docs/HERDR.md`](docs/HERDR.md).
-- **`home/.config/lazygit/config.yml`**: lazygit theme, with the fortnightly upstream version check disabled (`update.method: never`).
-- **`home/.config/yt-dlp/config`**: yt-dlp configuration template (auto-generated by `yt()` function, but included as reference).
-- **`home/.local/share/fifty-shades-of-dotfiles/scripts/`**: Canonical source for standalone shell scripts that are exposed as commands via wrappers in `home/.local/bin/`. See `home/.local/share/fifty-shades-of-dotfiles/scripts/README.md` for architecture, conventions, and add-new-script workflow.
-- **`settings/iterm2/prefs/`**: Full portable iTerm2 preferences — every profile, color scheme, font, key binding, pointer/ctrl-click binding, the Hotkey Window, and general prefs — as one sanitized, public-safe file. `export.sh` (dev Mac only, manual) captures and sanitizes; it refuses to write if it finds anything secret-looking or an unstripped home path. `restore.sh` (standalone, or offered by `./install.sh` on macOS) backs up the current settings, then imports the repo's version. Adapted from [steveli2026/iterm2-settings](https://github.com/steveli2026/iterm2-settings) (MIT).
-- **`settings/wezterm/wezterm.lua`**: Archived WezTerm configuration with custom Coolnight color scheme, SSH-aware tab styling, and comprehensive keybindings.
-
-For detailed structure documentation, see [`docs/STRUCTURE.md`](docs/STRUCTURE.md).
-
----
-
-## Cursor Editor Integration
-
-The `.zsh_cursor_functions` file provides seamless integration between Cursor/VSCode terminals and tmux sessions. It automatically syncs environment variables (like `VSCODE_INJECTION`, `CURSOR_TRACE_ID`, etc.) from Cursor/VSCode terminals into tmux sessions.
-
-### How It Works
-
-- **Automatic Environment Capture**: When you're in a Cursor/VSCode terminal, the environment is automatically saved to `~/.cache/cursor_env.zsh`.
-- **Tmux Integration**: The `tmux` command is wrapped to automatically load the saved environment when attaching to sessions.
-- **New Pane Support**: New tmux panes automatically inherit the Cursor/VSCode environment variables.
-
-This ensures that tools and scripts that rely on editor-specific environment variables work correctly inside tmux sessions.
-
----
-
-## Tmux Functions & Git Integration
-
-The `.zsh_tmux` file provides powerful tmux session management and git workflow functions.
-
-### Tmux Session Management
-
-| Function            | Arguments    | Description                                                                        |
-| :------------------ | :----------- | :--------------------------------------------------------------------------------- |
-| `ta <session>`      | session name | Attach to tmux session or create if doesn't exist                                  |
-| `tc`                | none         | Attach to 'coding' session (create if needed)                                      |
-| `tcc`               | none         | Attach to 'claudecode' session (create if needed)                                  |
-| `tdev <project>`    | project name | Create multi-window development session with code, git, terminal, and logs windows |
-| `tgit <project>`    | project name | Create git-aware coding session with split panes for git status and editing        |
-| `tbranch <project>` | project name | Create tmux session for branch management workflows                                |
-| `tpull <project>`   | project name | Create session for pull/merge workflows                                            |
-| `tclean`            | none         | Clean up old coding-related tmux sessions                                          |
-| `tlast`             | none         | Quick attach to most recent session                                                |
-| `tls`               | none         | List sessions with detailed information                                            |
-
-### Git Integration Functions
-
-These functions integrate git workflows with tmux, automatically updating window names with branch information:
-
-| Function              | Arguments      | Description                                                                   |
-| :-------------------- | :------------- | :---------------------------------------------------------------------------- |
-| `gstatus`             | none           | Full git repository dashboard with branch info, changes, commits, and stashes |
-| `gs`                  | none           | Quick git status showing repo, branch, change count, and last commit          |
-| `gtree`               | none           | Visual git tree (uses git-tree or tig if available)                           |
-| `gwip2`               | none           | Show what you're working on (recently modified files)                         |
-| `gt <branch>`         | branch name    | Tmux-aware git switch (updates window name)                                   |
-| `gtc <branch>`        | branch name    | Tmux-aware branch creation (updates window name)                              |
-| `gswitch <branch>`    | branch name    | Switch branch and update tmux window name                                     |
-| `gfeature <name>`     | feature name   | Create feature branch following git flow and update tmux window               |
-| `gpr_quick <message>` | commit message | Quick PR workflow: add, commit, push                                          |
-
-### Usage Examples
-
-**Create a development session:**
-
-```bash
-tdev myproject
-# Creates a tmux session with:
-# - 'code' window (opens editor)
-# - 'git' window (shows git status)
-# - 'term' window (for running commands)
-# - 'logs' window (for monitoring)
-```
-
-**Git workflow with tmux:**
-
-```bash
-cd ~/CODE/Ideas/myproject
-gt feature/new-feature  # Switches branch and updates tmux window name
-# Window name becomes: "myproject:feature/new-feature"
-```
-
-**Quick git overview:**
-
-```bash
-gs        # Quick status
-gstatus   # Full dashboard
-```
-
----
-
-## Additional Aliases & Functions
-
-### yt-dlp Wrapper (`yt()`)
-
-A comprehensive wrapper function for `yt-dlp` that auto-generates configuration and provides a user-friendly interface. `yt-dlp` itself is never installed — the function runs it on demand via `uvx --prerelease allow yt-dlp`, so it is always the latest release:
-
-```bash
-# Basic usage (1080p + best audio, default)
-yt https://youtube.com/watch?v=dQw4w9WgXcQ
-
-# Quality presets
-yt --video https://youtube.com/watch?v=dQw4w9WgXcQ           # 1080p/720p
-yt --video-highest https://youtube.com/watch?v=dQw4w9WgXcQ   # Maximum resolution
-yt --best-video https://youtube.com/watch?v=dQw4w9WgXcQ      # Best mp4 video + m4a audio
-yt --audio-only https://youtube.com/watch?v=dQw4w9WgXcQ      # Extract audio
-
-# With subtitles
-yt --video --subs https://youtube.com/watch?v=dQw4w9WgXcQ
-
-# Metadata bundles
-yt --bundle https://youtube.com/watch?v=dQw4w9WgXcQ          # Video + all metadata
-yt --best-bundle https://youtube.com/watch?v=dQw4w9WgXcQ     # Best mp4/m4a + all metadata
-yt --thumbnail https://youtube.com/watch?v=dQw4w9WgXcQ       # Thumbnail only
-
-# Help
-yt --help
-```
-
-The function auto-generates a comprehensive `~/.config/yt-dlp/config` file on first use with sensible defaults (1080p video, aria2c downloader, embedded metadata, etc.). Requires `uv`, `ffmpeg`, and `aria2c` — all part of the core install.
-
-### Other Useful Aliases
-
-- **File Listing**: `l` and `ll` use `eza` for enhanced directory listings with git status
-- **Navigation**: `..`, `...`, `....`, `.....` for quick directory navigation
-- **Node.js**: `serve` (pnpm dlx http-server), `tsc` (pnpm dlx typescript) — also usable via `bunx`
-- **Docker**: `lzd` (lazydocker), `lzg`/`lg` (lazygit)
-- **Claude Code**: `c` is a **signpost since 2026-09-22**, not a launcher -- it prints the routes (`pj`, `c2 start <topic>`, `lifeos`) and exits 1; the former standard launch (`c-legacy`, kept for one day) was removed at P10 on 2026-09-22 because nothing needed it. The rest are `cb` (bare/full control), `cr` (resume), `ci` (non-interactive), `ct` (tmux agent teams), `cpr` (from PR), `cd_` (debug), `cskip` (skip end hooks). All aliases spin up an isolated ephemeral SSH agent scoped to the Claude Code process, so marketplace plugin refreshes and git operations work with SSH-only auth without leaking the key to other terminals.
-- **Zoxide**: `cd` command is replaced with `zoxide` for intelligent directory jumping
-
-### Standalone Script Commands
-
-Standalone shell scripts are managed through the dotfiles stow layout and exposed as commands on PATH:
-
-- Source scripts: `home/.local/share/fifty-shades-of-dotfiles/scripts/*.sh`
-- Command entrypoints: `home/.local/bin/<command>`
-- Current commands: `dirdiff`, `sysinfo`, `watch-history-sync`
-
-For the full architecture, conventions, migration policy, and add-new-script workflow, see:
-
-- [`home/.local/share/fifty-shades-of-dotfiles/scripts/README.md`](home/.local/share/fifty-shades-of-dotfiles/scripts/README.md)
-
-### Special Functions
-
-- **`rm()` wrapper**: Two-layer deletion safety net. First warns before deleting symlinks (shows link target, prompts for confirmation). Then hands off to **`safe-rm`** for the actual delete. There is deliberately no force/permanent mode — `rm -rf` still goes to the Trash, because the flags are stripped.
-- **`safe-rm` command**: the single owner of "how does this system delete something". Moves targets to the system Trash via `trash` (macOS) or `trash-put` (Linux) and **never unlinks**; if no trash tool is present it refuses and exits non-zero rather than falling back to `rm`, because a silent downgrade from recoverable to permanent is the one behaviour it must not have. It exists as a **command on `PATH`**, not a shell function, because a function only exists inside an interactive zsh — `install.sh` and the Claude hooks run under bash, never load `.zshrc`, and so were permanently deleting files (including your existing dotfiles, when resolving a stow conflict). Every message it prints is derived from re-checking the targets afterwards, never from the trash tool's exit code, which has been measured reporting success without acting _and_ reporting failure after acting. It refuses `.`, `..` and `/` exactly as `/bin/rm` does, rewrites a leading-dash target to `./NAME` so the trash tool cannot read it as a flag, and refuses outright rather than guessing when a target cannot be stat'ed through an unsearchable parent.
-- **`rm` PATH shim** (`home/.local/bin/rm`): what carries all of the above to scripts, `xargs`, `find -exec` and `make`. It preserves `rm`'s own rule that a directory needs `-r`, honours `SAFE_RM_OFF=1` as a deliberate bypass, and otherwise delegates. Note the consequence, which is intentional: a script's own `mktemp` scratch now reaches the Trash too, because a shim cannot tell scratch from your files. See [the heads-up section](#-heads-up-this-repo-changes-what-rm-means).
-- **`safe-rm-selftest`**: 51 assertions pinning all five defects an adversarial review found in this chain, plus ordinary behaviour. Run it after touching `safe-rm`, the shim, or the `rm()`/`sudo()` wrappers.
-- **`cp()`/`mv()` wrappers**: Default to interactive overwrite protection (`-i`) so you are prompted before clobbering existing files. Explicit force flags (`-f`, e.g. `-rf`) bypass prompts when you intentionally want non-interactive overwrite behavior.
-- **`sudo()` wrapper**: Prevents accidental `sudo claude` and `sudo pnpm` commands and redirects appropriately. Also intercepts **`sudo rm` / `sudo rmdir`** and re-runs the deletion **as you**, unprivileged, via `safe-rm` — moving a file needs write permission on its parent directory, not on the file, so this usually succeeds even on root-owned targets and lands them in _your_ `~/.Trash` where Finder's Put Back works. (`sudo safe-rm` would trash into `/var/root/.Trash`, mode 0750 and invisible to you: safe-looking, bad at recovering.) The command is located by scanning past sudo's own options rather than reading `$1`, so `sudo -u root rm -rf x` and the clustered form `sudo -nu root rm -rf x` are both caught. `sudo /bin/rm` is deliberately _not_ caught — that is the documented escape hatch.
-- **`pip()` wrapper**: Intercepts `pip install` → `uv add` and `pip uninstall` → `uv remove`; passes through editable installs and read-only subcommands via `uv pip`
-- **`pipx()` wrapper**: Intercepts `pipx` commands and shows the equivalent `uv tool` commands
-- **`npx()` wrapper**: Intercepts `npx` commands and shows the equivalent `pnpm dlx` commands
-- **`python()`/`python3()` wrapper**: Intercepts direct Python calls and redirects to `uv run`
-- **`py31X()` wrappers**: Intercepts version-specific Python calls (`py313`, `py312`, `py311`, `py310`) and redirects to `uv run --python`
-- **`ports()` function**: OS-specific port listing (macOS: `lsof`, Linux/WSL: `ss`/`netstat`)
-- **`y()` function**: Yazi file manager integration for visual directory navigation
-
----
-
-## Full Function & Alias Reference
-
-### Python Functions
-
-| Function                            | Arguments                               | Description                                                                                                                   |
-| :---------------------------------- | :-------------------------------------- | :---------------------------------------------------------------------------------------------------------------------------- |
-| `python_new_project`                | `<py_version>`                          | Scaffolds a complete new Python project in the current directory.                                                             |
-| `python_setup`                      | `<py_version> [extra1...]`              | Resets/creates the `.venv` and installs dependencies for an existing project.                                                 |
-| `python_delete`                     | `(none)`                                | Deletes the `.venv`, `.envrc`, caches, and build artifacts.                                                                   |
-| `uv_tool_install_current_project`   | `[--frozen] [extra1...] \| --no-extras` | Installs the current project as a global CLI tool via `uv tool`. Editable by default; `--frozen` installs a snapshot copy.    |
-| `uv_tool_reinstall_current_project` | `[--frozen] [extra1...] \| --no-extras` | Reinstalls the global CLI tool (needed when entry points change, or after every change when frozen). Warns if the mode flips. |
-| `uv_tool_uninstall_current_project` | `(none)`                                | Uninstalls the `uv tool`-managed CLI tool for the current project.                                                            |
-| `uv_tool_check_current_project`     | `(none)`                                | Checks if the current project is installed via `uv tool`, and reports EDITABLE / FROZEN / REGISTRY.                           |
-| `uv_tool_mode`                      | `[tool-name]`                           | Prints the install mode as one machine-readable word for scripts; exits 0 when resolved.                                      |
-
-### Node.js Functions
-
-| Function            | Arguments                         | Description                                                                                                                                      |
-| :------------------ | :-------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `node_new_project`  | `[--no-ts\|--js] [--pnpm\|--bun]` | Scaffolds a new Node.js project (TypeScript by default, `--no-ts` for JavaScript). Prompts for package manager or pass `--pnpm`/`--bun` to skip. |
-| `node_setup`        | `(none)`                          | Sets up an existing project: switches Node version, installs deps, creates `.envrc`.                                                             |
-| `node_clean`        | `(none)`                          | Deletes `node_modules`, build artifacts, caches, and lockfiles.                                                                                  |
-| `node_info`         | `(none)`                          | Displays project dashboard: versions, `.nvmrc` status, scripts, global link status.                                                              |
-| `node_link`         | `(none)`                          | Links current project globally (`pnpm install -g .` for pnpm, `bun link --global` for bun).                                                      |
-| `node_unlink`       | `(none)`                          | Unlinks current project from global scope.                                                                                                       |
-| `node_check_global` | `(none)`                          | Checks if current project is linked globally (returns 0/1).                                                                                      |
-| `create_node_envrc` | `(none)`                          | Creates a rich `.envrc` with nvm auto-switch and project info box.                                                                               |
-
-### Docker Functions
-
-#### Database Functions
-
-| Function         | Arguments                   | Description                                |
-| :--------------- | :-------------------------- | :----------------------------------------- |
-| `pg_dev_start`   | `[db] [pw] [port]`          | Starts a PostgreSQL development container. |
-| `pg_dev_stop`    | `(none)`                    | Stops PostgreSQL development container.    |
-| `pg_dev_connect` | `[db_name]`                 | Connect to PostgreSQL container.           |
-| `db_backup`      | `[container] [backup_name]` | Backup database from container.            |
-
-#### AI/ML Functions
-
-| Function        | Arguments           | Description                                |
-| :-------------- | :------------------ | :----------------------------------------- |
-| `qdrant_start`  | `[port]`            | Starts a Qdrant vector database container. |
-| `qdrant_stop`   | `(none)`            | Stops Qdrant container.                    |
-| `qdrant_backup` | `[backup_name]`     | Backup Qdrant data.                        |
-| `jupyter_start` | `[port] [work_dir]` | Starts a Jupyter Lab container.            |
-| `jupyter_stop`  | `(none)`            | Stops Jupyter Lab container.               |
-
-#### MCP Server Functions
-
-| Function    | Arguments          | Description                              |
-| :---------- | :----------------- | :--------------------------------------- |
-| `mcp_start` | `<service> [port]` | Start MCP service container.             |
-| `mcp_stop`  | `[service\|all]`   | Stop MCP service(s).                     |
-| `mcp_list`  | `(none)`           | List available and running MCP services. |
-
-#### Development Stack Functions
-
-| Function           | Arguments         | Description                                            |
-| :----------------- | :---------------- | :----------------------------------------------------- |
-| `dev_stack_start`  | `[web\|ai\|full]` | Starts a pre-configured stack of development services. |
-| `dev_stack_stop`   | `(none)`          | Stops all services managed by this script.             |
-| `dev_stack_status` | `(none)`          | Shows the running status of the dev stack services.    |
-
-#### Project Templates
-
-| Function             | Arguments               | Description                                            |
-| :------------------- | :---------------------- | :----------------------------------------------------- |
-| `create_web_project` | `<name> [node\|python]` | Create web project template with Docker Compose.       |
-| `create_ai_project`  | `<name>`                | Create AI/ML project template with Qdrant and Jupyter. |
-
-#### MLbox Integration (SSH)
-
-| Function       | Arguments                              | Description                   |
-| :------------- | :------------------------------------- | :---------------------------- |
-| `mlbox_tunnel` | `<local_port> <remote_port> [service]` | Create SSH tunnel to MLbox.   |
-| `mlbox_deploy` | `<image_name> [container_name]`        | Deploy Docker image to MLbox. |
-
-#### Utility Functions
-
-| Function             | Arguments                 | Description                        |
-| :------------------- | :------------------------ | :--------------------------------- |
-| `py_docker_dev`      | `[python_version] [port]` | Python development container.      |
-| `docker_maintenance` | `(none)`                  | Interactive Docker system cleanup. |
-| `docker_overview`    | `(none)`                  | Show Docker system overview.       |
-| `docker_help`        | `(none)`                  | Show all custom Docker functions.  |
-
-#### Docker Aliases
-
-| Alias         | Description                                         |
-| :------------ | :-------------------------------------------------- |
-| `dps`         | `docker ps`                                         |
-| `dpsa`        | `docker ps -a`                                      |
-| `di`          | `docker images`                                     |
-| `dlog`        | `docker logs -f`                                    |
-| `dexec`       | `docker exec -it`                                   |
-| `dstop`       | Stop all running containers                         |
-| `drm`         | Remove all stopped containers                       |
-| `drmi`        | Remove all images                                   |
-| `dcleanup`    | `docker system prune -af && docker volume prune -f` |
-| `dcleanbuild` | `docker builder prune -af`                          |
-| `dspace`      | `docker system df`                                  |
-| `dinfo`       | `docker info`                                       |
-| `dc`          | `docker-compose`                                    |
-| `dcup`        | `docker-compose up -d`                              |
-| `dcdown`      | `docker-compose down`                               |
-| `dclogs`      | `docker-compose logs -f`                            |
+[`docs/STRUCTURE.md`](docs/STRUCTURE.md) is a longer map. When anything here disagrees with the code, the code wins.
 
 ---
 
@@ -1524,11 +255,11 @@ Yeah. Each function file (`.zsh_python_functions`, `.zsh_node_functions`, etc.) 
 
 **Will this nuke my existing dotfiles?**
 
-No. The installer is fully interactive and asks before every step. But it goes further than that: before stow even runs, it scans your home directory for conflicts. If it finds a real file where it wants to place a symlink, it stops and gives you three options: auto-backup the conflicting files to `~/dotfiles-backup/`, force-adopt them into the repo with `--force` (which uses `stow --adopt`, then you review with `git diff`), or handle it yourself. Stow itself also refuses to overwrite a real file with a symlink, so there are two layers of protection before anything gets touched.
+No. Before Stow runs, the installer scans your home directory for clashes. If it finds a real file where it wants a symlink, it lists them and offers to move them into `~/dotfiles-backup/`. Say no and it stops, so you can sort them out yourself or re-run with `--force`, which adopts your versions into the repo. Stow itself also refuses to overwrite a real file, so that's two layers before anything gets touched.
 
 **Will it also mess with my existing Python or Node setup?**
 
-Not without asking, and not silently. This repo is opinionated: Python gets handed to `uv` and pnpm gets enforced (`npm`/`npx`/`yarn` are blocked). Before either of those lands, the installer surveys what's actually already on your machine (`toolchain-stocktake`) and scans your existing projects for what would actually break (`project-impact-scan`) — then, only if something real would be affected, it stops and asks. That confirmation requires typing a real word, not a bare Enter, and the two changes are asked about independently. Decline either one and it's a genuine opt-out, not just skipped for this run: `python`/`python3` or `npm`/`npx`/`yarn` keep working exactly as they did before. A clean machine (nothing foreign found) sees none of this — zero extra prompts. See [`docs/TOOLCHAIN_TAKEOVER_CONSENT.md`](docs/TOOLCHAIN_TAKEOVER_CONSENT.md).
+Not without asking. If the installer finds a Python or Node setup of your own, it tells you what it found, writes a report on which projects would be affected, and asks. You have to type a real word to say yes, and saying no keeps your existing `python` and `npm` working.
 
 **Why GNU Stow instead of chezmoi / yadm / a bare git repo?**
 
@@ -1536,16 +267,12 @@ Stow is dumb in the best way. It makes symlinks. That's it. No templating langua
 
 **Why uv? Why pnpm and bun? Why not [thing I'm already using]?**
 
-These are my opinions, not universal truths. `uv` is absurdly fast and replaces pip, pip-tools, virtualenv, and pyenv in one binary. pnpm and bun are both faster and stricter than npm, and bun doubles as a runtime. npm and yarn aren't blocked because they're bad, they're blocked because mixing package managers in the same project creates lockfile conflicts that waste your afternoon. If you disagree, the wrappers are easy to find and easier to delete.
+These are my opinions, not universal truths. `uv` is absurdly fast and replaces pip, pip-tools, virtualenv, and pyenv in one binary. pnpm and bun are both faster and stricter than npm, and bun doubles as a runtime. If you disagree, the wrappers are easy to find and easier to delete.
 
 **Does this work on my machine?**
 
-If you're running zsh on macOS, Ubuntu/Debian, Fedora, Arch, openSUSE, or WSL, probably yes. The installer detects your OS and package manager and adapts accordingly. On Linux it handles the quirks for you, like `fd` being packaged as `fdfind` on Debian/Ubuntu (it auto-symlinks), or `eza` and `gh` needing separate repos on apt-based systems. It does not support bash or fish. It's zsh all the way down, and converting it would be a different project entirely.
-
-**What about my API keys and private settings?**
-
-Nothing secret goes in this repo. There's a built-in pattern for private files that stay out of version control: `~/.zshrc.private` for shell secrets and machine-specific settings, `~/.gitconfig.private` for git identity and SSH routing. The installer will prompt you to create them on a fresh machine, but if `~/.gitconfig.private` already exists (say, with multi-account config), it won't touch it. The global `.gitignore` protects against accidentally committing them.
+If you're running zsh on macOS, Ubuntu/Debian, Fedora, Arch, openSUSE, or WSL, probably yes. It does not support bash or fish. It's zsh all the way down, and converting it would be a different project entirely.
 
 **How do I update after pulling new changes?**
 
-`./install.sh --update` will pull the latest and restow everything. Under the hood, stow `-R` unstows and restows in one pass, so it's not literally a no-op, but the end result is the same as a fresh install: any new files in the repo get symlinked, and existing links stay put. If you've modified a symlinked file locally, well, you've modified it in the repo too, because that's how symlinks work. Which is either a feature or a footgun depending on your perspective.
+`./install.sh --update` pulls and restows. New files get linked and existing links stay put. If a pull brings new Claude hooks, run `./install.sh --stow-only` as well, which registers them. If you've edited a symlinked file, you've edited it in the repo too, because that's how symlinks work. Which is either a feature or a footgun depending on your perspective.
