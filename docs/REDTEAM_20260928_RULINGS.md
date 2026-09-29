@@ -14,3 +14,15 @@ section 5 (H2, H5, H8, H9, H10, H11) and item W-20260929-A50.
 | W-20260929-A40 (H10) | When pj-worker is missing, pj launches with a NOTE and no cap check                                                        | Refuse the launch, naming the fix (restow the dotfiles). A cap that cannot count is not a pass                                                                                                                                                                                | Keep the NOTE and launch                                                                                     |
 | W-20260929-A41 (H11) | Posting as Gavin to third parties has no guard                                                                             | Text rules only, as now. No Bash guard                                                                                                                                                                                                                                        | Bash guard with a named override (recommended, not chosen)                                                   |
 | W-20260929-A50       | Three shell lexers                                                                                                         | Compare first: a read-only report of which cases each lexer gets wrong, then a ruling with that evidence                                                                                                                                                                      | Move every guard onto one lexer now; keep three                                                              |
+
+## Second round, W-20260929-A46 and A40 (2026-09-29)
+
+Ruled by Gavin in his own box in session dotfiles-doer, after he asked for the views of
+engage-main and factory_researcher-main. Both sessions' answers were shown to him side by side.
+
+| Item | Question | Ruling | Views |
+|---|---|---|---|
+| W-20260929-A46 (S18, S19) | `github-agent-token token` / `pat public-read` print a live token | The secret guard denies the printing forms; `GH_TOKEN="$(github-agent-token ...)"` and `... \| cut -c1-4` stay allowed. Gavin changes OPERATIONAL_RULES git-auth step 2 by hand to the 4-character form | Both sessions: same. engage uses only the allowed forms |
+| W-20260929-A46 (S23, S34, others) | Inline code reading a credential-named variable (python os.environ, node process.env, perl $ENV, ruby ENV), `security export`, `infisical secrets`, `${(P)name}`, DATABASE_URL / *_DSN names | Deny them all, each with a near-miss allow arm | Both sessions: same |
+| W-20260929-A46 (S14) | `rg -uuu API_KEY ~/.config` prints values | Deny a search only when it starts in a secret-bearing folder AND the pattern is credential-shaped; code searches in repos stay allowed; the denial offers `rg -l` | factory_researcher-main proposed this; engage-main preferred an accepted limit |
+| W-20260929-A40 | pj refuses when its counter is missing | Keep. engage now refuses the same way (engage d01d43f), so the launchers match | Both sessions: keep |
