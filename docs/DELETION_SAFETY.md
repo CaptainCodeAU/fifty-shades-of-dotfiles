@@ -18,7 +18,12 @@ scope. Both end at the same place.
 interactive zsh   rm() / rmdir()  (home/.zshrc)   ->  safe-rm      ->  /usr/bin/trash  ->  ~/.Trash
 everything else   ~/.local/bin/rm  (PATH shim)    ->  safe-rm -q   ->  trash-put       ->  XDG trash (Linux/WSL)
 sudo rm / rmdir   sudo() (home/.zshrc)            ->  safe-rm      (as the invoking user, NOT as root)
+bare trash        ~/.local/bin/trash  (PATH shim)  ->  trash-guard  ->  /usr/bin/trash  (since 2026-09-29)
 ```
+
+Since 2026-09-29 `safe-rm` and the `trash` shim both ask
+[`trash-guard`](../home/.local/bin/trash-guard) before anything moves; see
+[The trash guard](#the-trash-guard) below.
 
 A zsh function takes precedence over `PATH`, so an interactive `rm` uses the function (which
 prints what it trashed) and a script's `rm` uses the shim (quiet, so it does not corrupt stdout
@@ -33,25 +38,29 @@ behaviour a safety command must not have.
 
 Measured 2026-09-04 on macOS 25.6 (Darwin), SIP enabled. Every row was run, not inferred.
 
-| Call path                                    | Covered?          | Evidence                                                                                                                                                                                     |
-| -------------------------------------------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Interactive zsh, `rm -rf dir`                | yes               | trashed to `~/.Trash/rmtest-victim`; `test -e` confirmed                                                                                                                                     |
-| Claude Code Bash tool                        | yes               | `type rm` -> shell function from the session's shell snapshot                                                                                                                                |
-| `sudo rm` / `sudo rmdir`                     | yes               | 13-case behaviour test, below                                                                                                                                                                |
-| `sudo -u root rm -rf x`                      | yes               | option scanner finds the command past sudo's own flags                                                                                                                                       |
-| `#!/bin/bash` script, bare `rm`              | yes               | live: script's `rm -rf` landed in `~/.Trash/victim`                                                                                                                                          |
-| `#!/bin/zsh` script, bare `rm`               | yes               | dummy-shim test hit the shim                                                                                                                                                                 |
-| `xargs rm`                                   | yes               | live: `~/.Trash/xtarget.txt`                                                                                                                                                                 |
-| `make clean`                                 | yes               | live: `~/.Trash/junk.o`, and a missing target did not break the rule                                                                                                                         |
-| `find -exec rm`                              | yes               | same PATH lookup as `xargs`                                                                                                                                                                  |
-| `command rm`, `\rm`                          | yes               | these bypass functions and aliases, not `PATH`                                                                                                                                               |
-| `env -i rm`, `PATH=/bin rm`, `command -p rm` | **no**            | a PATH without `~/.local/bin` finds `/bin/rm` (measured 2026-09-25 for `env -i` and `command -p`; `PATH=/bin` is the same lookup, not run). The agent guard denies them (`rm-lookup`, below) |
-| Homebrew formula post-install                | yes               | `formula.rb:1662` restores the user's PATH for that phase                                                                                                                                    |
-| cron / launchd / CI                          | **no**            | minimal PATH; `~/.local/bin` absent                                                                                                                                                          |
-| Homebrew internals                           | **no**            | `bin/brew:308` hardcodes `PATH=/usr/bin:/bin:/usr/sbin:/sbin`                                                                                                                                |
-| Docker `RUN rm -rf`                          | **no**            | runs inside the image with its own `/bin/rm`                                                                                                                                                 |
-| `/bin/rm`                                    | **no, cannot be** | absolute path never consults PATH; SIP `restricted`, see below                                                                                                                               |
-| `SAFE_RM_OFF=1 rm ...`                       | **no, by design** | the deliberate "I really mean it" door                                                                                                                                                       |
+| Call path                                                         | Covered?          | Evidence                                                                                                                                                                                     |
+| ----------------------------------------------------------------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Interactive zsh, `rm -rf dir`                                     | yes               | trashed to `~/.Trash/rmtest-victim`; `test -e` confirmed                                                                                                                                     |
+| Claude Code Bash tool                                             | yes               | `type rm` -> shell function from the session's shell snapshot                                                                                                                                |
+| `sudo rm` / `sudo rmdir`                                          | yes               | 13-case behaviour test, below                                                                                                                                                                |
+| `sudo -u root rm -rf x`                                           | yes               | option scanner finds the command past sudo's own flags                                                                                                                                       |
+| `#!/bin/bash` script, bare `rm`                                   | yes               | live: script's `rm -rf` landed in `~/.Trash/victim`                                                                                                                                          |
+| `#!/bin/zsh` script, bare `rm`                                    | yes               | dummy-shim test hit the shim                                                                                                                                                                 |
+| `xargs rm`                                                        | yes               | live: `~/.Trash/xtarget.txt`                                                                                                                                                                 |
+| `make clean`                                                      | yes               | live: `~/.Trash/junk.o`, and a missing target did not break the rule                                                                                                                         |
+| `find -exec rm`                                                   | yes               | same PATH lookup as `xargs`                                                                                                                                                                  |
+| `command rm`, `\rm`                                               | yes               | these bypass functions and aliases, not `PATH`                                                                                                                                               |
+| `env -i rm`, `PATH=/bin rm`, `command -p rm`                      | **no**            | a PATH without `~/.local/bin` finds `/bin/rm` (measured 2026-09-25 for `env -i` and `command -p`; `PATH=/bin` is the same lookup, not run). The agent guard denies them (`rm-lookup`, below) |
+| Homebrew formula post-install                                     | yes               | `formula.rb:1662` restores the user's PATH for that phase                                                                                                                                    |
+| cron / launchd / CI                                               | **no**            | minimal PATH; `~/.local/bin` absent                                                                                                                                                          |
+| Homebrew internals                                                | **no**            | `bin/brew:308` hardcodes `PATH=/usr/bin:/bin:/usr/sbin:/sbin`                                                                                                                                |
+| Docker `RUN rm -rf`                                               | **no**            | runs inside the image with its own `/bin/rm`                                                                                                                                                 |
+| `/bin/rm`                                                         | **no, cannot be** | absolute path never consults PATH; SIP `restricted`, see below                                                                                                                               |
+| `SAFE_RM_OFF=1 rm ...`                                            | **no, by design** | the deliberate "I really mean it" door                                                                                                                                                       |
+| bare `trash X` (agent, script, terminal)                          | yes, guarded      | `~/.local/bin/trash` shim runs `trash-guard` first (2026-09-29); `trash-guard-selftest`. Needs the shim stowed; until then a bare `trash` is `/usr/bin/trash`                                |
+| `/usr/bin/trash`, `command trash`, `env trash` typed by an agent  | denied            | hook rule `trash-path` (2026-09-29), below                                                                                                                                                   |
+| `/usr/bin/trash X` in Gavin's own terminal                        | **no, by design** | the human's deliberate route around the shim                                                                                                                                                 |
+| `/usr/bin/trash X` inside a script, cron, launchd, brew internals | **no**            | an absolute path, or a PATH without `~/.local/bin`; the hook sees only an agent's typed command                                                                                              |
 
 ## The PATH shim
 
@@ -162,6 +171,102 @@ deleter in any form — `/bin/rm`, `/bin/rm -P`, `/usr/bin/rm`, `SAFE_RM_OFF=1`,
 data outside the Trash, and `-P` overwrites the bytes first so that no Trash, snapshot or backup
 can recover it. An agent that believes it needs a permanent delete must stop and ask; that call
 belongs to the operator. Since 2026-09-23 the agent guard below enforces this at the Bash tool.
+
+## The trash guard
+
+Added 2026-09-29. That evening (19:25, 19:31, 19:37) the engage repo went to the Trash three
+times: a cleanup ran `trash ''` with an empty variable, and **macOS `/usr/bin/trash ''` trashes
+the current folder**. Gavin recovered it each time with Put Back. The rm route already had
+`safe-rm`; a bare `trash` had nothing in front of it. Incident:
+`CaptainCodeAU-isolinear/workbench/records-system/2026-09-28/INCIDENT-20260929-engage-repo-trashed.md`;
+lesson: `~/.claude/pj-global/notes/20260929-cleanup-on-an-empty-path-trashes-the-folder.md`;
+brief with Gavin's rulings: [`docs/trash-guard/BRIEF.md`](trash-guard/BRIEF.md).
+
+One file holds the rules, [`home/.local/bin/trash-guard`](../home/.local/bin/trash-guard)
+(POSIX sh), and both routes ask it before anything moves, so `trash X` and `rm -r X` always get
+the same verdict (the selftest compares them on every case):
+
+```
+bare trash X        ~/.local/bin/trash (shim)       ->  trash-guard --check  ->  real trash (--real-trash)
+rm X, any route     zsh rm() / rm shim -> safe-rm   ->  trash-guard --check  ->  real trash (--real-trash)
+```
+
+Every target is RESOLVED first (trailing slashes, `./`, `..`, relative paths, symlinks on the
+way) and the resolved path is judged. One refusal refuses the whole call; nothing is trashed.
+The refusal names the argument, the resolved path and the rule id.
+
+| Rule id             | Refused                                                                            | Where                     |
+| ------------------- | ---------------------------------------------------------------------------------- | ------------------------- |
+| `blank`             | an empty or whitespace-only argument                                               | everywhere, temp included |
+| `cwd`               | `.`, or the current folder by any spelling                                         | everywhere, temp included |
+| `contains-cwd`      | a folder that contains the current folder (`..`, a parent by path)                 | everywhere, temp included |
+| `floor`             | `/`, `~`, `~/CODE`, `~/CODE/CaptainCodeAU` (one constant, `FLOOR_TAILS`)           | everywhere, temp included |
+| `repo-root`         | a folder holding `.git` (a directory or a file)                                    | outside the temp folders  |
+| `nested-repo`       | a folder with a git repo anywhere inside it (`~/CODE/Scaffoldings` is the example) | outside the temp folders  |
+| `search-timeout`    | the nested-repo search did not finish within 2 s. A timeout is never an allow      | outside the temp folders  |
+| `search-unreadable` | the search could not read everything inside. Unread is not absent                  | outside the temp folders  |
+| `unresolvable`      | a folder on the path cannot be entered, so the target cannot be judged             | everywhere                |
+
+**Allowed although it holds a `.git` file:** a linked worktree at `<repo>/.worktree/<name>` whose
+`.git` file points into `<repo>/.git/worktrees/`. That keeps the removal route the agent guard
+names for `git worktree remove` (`rm -r <dir>`, then `git worktree prune`). A worktree holding a
+nested repo is still refused, and so is a `.worktree/<name>` whose `.git` points anywhere else.
+
+**Temp folders** (rule 2 only): `$TMPDIR`, `/tmp` (`/private/tmp`) and
+`getconf DARWIN_USER_TEMP_DIR`, each resolved. Only a path strictly INSIDE one is exempt, never
+the root itself. `$TMPDIR` counts only when it resolves under `/private/tmp`, `/tmp` or
+`/private/var/folders/`, so `TMPDIR=$HOME` exempts nothing.
+
+**Files** are judged by rule 1 alone (a file cannot be a floor or hold the current folder).
+
+**A symlink named WITHOUT a trailing slash is the link itself**, and trashing it moves the link,
+not its target: `safe-rm-selftest` section 9 trashes a link to a fake home with the real trash and
+the home survives. So `rm link-to-repo` is allowed and `rm link-to-repo/` is refused as the repo.
+
+**The search** is one `find <every folder target> -mindepth 2 -name .git -print -quit` per call
+(depth 1 was judged already), under a 2 s watchdog that kills it. Measured 2026-09-29: 20,000
+folders in about 0.8 s; a real `node_modules` of 1,081 folders in 112 ms; `~/.nvm` refused as a
+repo root in 24 ms. The Claude sandbox's `.ssh` read deny does not trip `search-unreadable`:
+listing `home/.ssh` is allowed, only file contents are denied (find exit 0).
+
+**The real trash** is `trash-guard --real-trash`: the first `trash` on PATH that is not a copy of
+the shim (the shim carries a marker string; any file holding it is skipped, so the shim can never
+exec itself or another copy). None found: refuse. `safe-rm` uses the same answer, so the guard
+runs once per call, not twice.
+
+**Test seams** (every one can only make the guard more careful, or is fenced to a temp folder,
+because an agent can set an environment variable as easily as a test can):
+
+| Variable                        | Effect                                                                                    |
+| ------------------------------- | ----------------------------------------------------------------------------------------- |
+| `TRASH_GUARD_REAL_TRASH`        | the real trash; honoured only when it resolves inside a system temp folder, else refused  |
+| `TRASH_GUARD_TEMP_ROOTS`        | replaces the temp list; an entry is kept only when it is inside a real temp root          |
+| `TRASH_GUARD_TIMEOUT`           | search timeout; can only LOWER the 2 s                                                    |
+| `TRASH_GUARD_TEST_SEARCH_DELAY` | sleep before the search (a fake slow search); can only cause a timeout                    |
+| `HOME`                          | the floor list's home; the account's home from the user database stays on the list anyway |
+
+`trash-guard --show-config` prints the floors, the temp roots in force and the real trash.
+
+**Evidence** (2026-09-29, branch `trash-guard`):
+[`trash-guard-selftest`](../home/.local/bin/trash-guard-selftest) 161 passed, 0 failed (130 new
+arms, 31 controls). Against master's code: controls 31 passed, new arms 126 failed and 1 passed
+(the rm route's `-- -name`, which safe-rm already handled). `--mutants`: removing the blank check,
+the cwd check, the timeout refusal, the temp exemption, or the hook's `env trash` line is each
+caught. `--e2e` with the real `/usr/bin/trash`: the incident shape (`trash ''` from inside a temp
+folder) is refused with the folder intact, and a throwaway temp file goes to the Trash.
+
+**What it does not cover:**
+
+- `/usr/bin/trash` typed in Gavin's own terminal: by design, the human's route around the shim.
+- `/usr/bin/trash` inside a script, and any caller whose PATH lacks `~/.local/bin` (cron,
+  launchd, Homebrew internals). The hook sees only an agent's typed command.
+- A bare `trash` after a PATH change in the same agent command (`PATH=/usr/bin trash x`,
+  `export PATH=...; trash x`): not denied. The rm equivalent is (`rm-lookup`); trash has no
+  such rule yet.
+- `sudo trash`: not measured.
+- Finder "Move to Trash", AppleScript Finder deletes, Python `send2trash`: they never touch
+  either route.
+- Linux: the guard and shim are POSIX sh but measured on macOS only (mlbox is filed separately).
 
 ## sudo rm
 
@@ -284,13 +389,14 @@ inside `( )`, `{ }`, `$( )`, backticks, `<( )`, `=( )`, behind `VAR=1`, `sudo`, 
 | `git stash drop` / `clear`                                                                                                                                                                                                                                                                                                                                                                                                | **denied** | ask Gavin                                                        |
 | `git reflog expire/delete`, `git gc --prune=now/all`, `git prune`                                                                                                                                                                                                                                                                                                                                                         | **denied** | ask Gavin (they destroy the recovery trail)                      |
 | `/bin/rm`, `/usr/bin/rm`, any path to rm, `grm`                                                                                                                                                                                                                                                                                                                                                                           | **denied** | bare `rm`                                                        |
+| `trash-path` (2026-09-29): `/usr/bin/trash` or any path to trash except `*/.local/bin/trash`, `command trash`, `env trash` (also inside `sh -c`, `eval`, `$( )`, `xargs`, `find -exec`). They skip the trash guard, which only the PATH shim runs. Allowed: bare `trash`, `trash -v x`, `~/.local/bin/trash x`, `command -v trash`                                                                                        | **denied** | plain `trash`, which goes through the guard                      |
 | a bare `rm` whose lookup the same command changed (`rm-lookup`, W-20260925-A25): any `env` (`env rm`, `env -i`, `env -u PATH`, `env PATH=`), a `PATH=`/`path=`/`PATH+=` prefix, `command -p`, `sudo -i`/`--login`, an earlier `unset PATH`, `export`/`typeset PATH=` or bare `PATH=` statement, `hash rm=`. Measured 2026-09-25: `env -i` still finds `/bin` tools with PATH wiped, and `command -pv rm` prints `/bin/rm` | **denied** | bare `rm`, with PATH left alone                                  |
 | `rm -P` (any cluster), `SAFE_RM_OFF=...` (prefix, `env`, `export`)                                                                                                                                                                                                                                                                                                                                                        | **denied** | bare `rm`, or ask Gavin                                          |
 | `unlink`, `shred`, `srm`, `wipe`, `truncate`, `dd of=` (not `/dev/null`)                                                                                                                                                                                                                                                                                                                                                  | **denied** | bare `rm`, or move aside first                                   |
 | `> f`, `2> f`, `>! f`, `: > f`, `true >\| f`, `cat /dev/null > f`, `cp /dev/null f`                                                                                                                                                                                                                                                                                                                                       | **denied** | move the file aside first                                        |
 | `find -delete`; `find -exec` / `fd -x` with any denied command                                                                                                                                                                                                                                                                                                                                                            | **denied** | `find -print`, then `-exec rm {} +`                              |
 | `rsync --delete*`, `--del`, `--remove-source-files`                                                                                                                                                                                                                                                                                                                                                                       | **denied** | rsync without them, then bare `rm`                               |
-| inline code: `python -c`, `node -e`, `perl -e`, `ruby -e`, `deno eval`, `osascript -e`, and code on stdin (`python3 - <<EOF`, `python3 - ARG <<EOF` since 2026-09-28, `echo ... \| python3`) calling `os.remove`, `shutil.rmtree`, `Path.unlink`, `rmdir`, `fs.rm*`, `unlink*`, `/bin/rm`, `FileUtils.rm*`                                                                                                                                                        | **denied** | bare `rm` in the shell                                           |
+| inline code: `python -c`, `node -e`, `perl -e`, `ruby -e`, `deno eval`, `osascript -e`, and code on stdin (`python3 - <<EOF`, `python3 - ARG <<EOF` since 2026-09-28, `echo ... \| python3`) calling `os.remove`, `shutil.rmtree`, `Path.unlink`, `rmdir`, `fs.rm*`, `unlink*`, `/bin/rm`, `FileUtils.rm*`                                                                                                                | **denied** | bare `rm` in the shell                                           |
 | `docker`/`podman` `... prune`, `volume rm`, `compose down -v`; `brew cleanup`, `--zap`; `pnpm store prune`; `uv cache clean/prune`; `bun pm cache rm`; `rimraf`                                                                                                                                                                                                                                                           | **denied** | ask Gavin (`rimraf`: bare `rm -r`)                               |
 | `diskutil erase*`/`partitionDisk`/..., `mkfs*`, `newfs*`, `wipefs`, `tmutil delete*`, `trash-empty`, Finder "empty trash"                                                                                                                                                                                                                                                                                                 | **denied** | ask Gavin                                                        |
 | an alias from the shell snapshot whose expansion is any of the above                                                                                                                                                                                                                                                                                                                                                      | **denied** | (as the expansion)                                               |

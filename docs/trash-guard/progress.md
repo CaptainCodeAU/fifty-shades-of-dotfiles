@@ -4,3 +4,4 @@
 2026-09-29 20:09 trash-guard-selftest written; found+fixed _real_trash variable clobber; 161 passed 0 failed (sandboxed, fake trash)
 2026-09-29 20:13 master comparison: controls 31/0, new 1 pass/126 fail; mutants 5 caught of 5 (blank cwd timeout temp hook-env)
 2026-09-29 20:14 safe-rm-selftest: 2 fails were its section-7 copy lacking trash-guard (safe-rm failed closed); fixture fixed, 53 passed 0 failed (unsandboxed)
+2026-09-29 20:16 --e2e with real /usr/bin/trash 4/0 (unsandboxed); docs/DELETION_SAFETY.md: The trash guard section, coverage rows, hook row, gaps
