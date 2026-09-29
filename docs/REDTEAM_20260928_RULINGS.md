@@ -26,3 +26,16 @@ engage-main and factory_researcher-main. Both sessions' answers were shown to hi
 | W-20260929-A46 (S23, S34, others) | Inline code reading a credential-named variable (python os.environ, node process.env, perl $ENV, ruby ENV), `security export`, `infisical secrets`, `${(P)name}`, DATABASE_URL / *_DSN names | Deny them all, each with a near-miss allow arm | Both sessions: same |
 | W-20260929-A46 (S14) | `rg -uuu API_KEY ~/.config` prints values | Deny a search only when it starts in a secret-bearing folder AND the pattern is credential-shaped; code searches in repos stay allowed; the denial offers `rg -l` | factory_researcher-main proposed this; engage-main preferred an accepted limit |
 | W-20260929-A40 | pj refuses when its counter is missing | Keep. engage now refuses the same way (engage d01d43f), so the launchers match | Both sessions: keep |
+
+## Third round, W-20260929-A50 (2026-09-29)
+
+Ruled by Gavin in his own box in session dotfiles-doer, after factory_researcher-main's view.
+The evidence is the read-only comparison in docs/lexer-comparison/ (132 shapes through the 4
+real hooks). conv-shscan.awk, shared by 6 hooks, scored lowest: 17 missed denies and all 4
+wrong denies, because it does not read inside bash/sh/zsh -c, eval, backticks, shell-fed
+heredocs or case.
+
+| Question | Ruling | Rejected |
+|---|---|---|
+| Which way for the three lexers | B: teach conv-shscan.awk to read inside -c, eval, backticks and shell-fed heredocs, as the delete guard's lexer already does | A: fix only the named gaps per hook (the wrong denies stay); C: one shared awk lexer (engage's Go parser, internal/cmdclass, becomes the shared reader when pj retires) |
+| A shared test set | Keep the 132 shapes, each with its expected answer, as a test set in dotfiles, and give engage-main a copy for the Go parser, so parity is measured | No shared set |
