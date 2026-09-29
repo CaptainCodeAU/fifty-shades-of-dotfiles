@@ -744,6 +744,8 @@ function guard_check(    k, j, n, a, w, b, s, i, t) {
         s = g_crude(BT[i])
         if (s != "") { verdict("guard", "DENY", s " (inside backticks)"); return }
     }
+    s = rd_check()
+    if (s != "") { verdict("guard", "DENY", s); return }
     s = tu_check()
     if (s != "") { verdict("guard", "DENY", s); return }
     s = lk_check()
@@ -954,6 +956,54 @@ function tu_check(    k, j, n, a, b) {
         if (b != "curl" && b != "wget" && b != "http" && b != "https" && b != "xh" && b != "aria2c") continue
         for (a = j + 1; a <= n; a++) if (tu_cred(WR[k, a]))
             return "A token in a URL (W-20260929-A51): " b " would send the credential before the @ to that host. Use a credential helper, a -H header read from a file you do not print, or ask Gavin; the typed token is also now in this transcript, so rotate it if it was real"
+    }
+    return ""
+}
+
+# ------------------------------------------------------------------ guard: remote deletes
+# Rule H of guard mode, W-20260929-A37 (red-team H7, cases D27 D28 D37 D38 D39): a delete
+# on a remote has no Trash and no undo. Denied: git push --delete / -d (in any short
+# cluster), a refspec starting with : (git push origin :feature), the push aliases with
+# the same; gh repo delete, gh release delete / delete-asset, gh gist delete; gh api with
+# -X / --method DELETE. Allowed: every other push, gh api reads, git branch -d (local).
+# NOT read: a flag or method held in a variable, curl -X DELETE to an API.
+
+function rd_msg(what) { return "Remote delete (W-20260929-A37): " what ". A deleted remote branch, repo or release has no Trash and no undo, for everyone. Ask Gavin" }
+function rd_push(k, s,    a, v, c) {           # the words after push start at s
+    for (a = s; a <= CNW[k]; a++) {
+        v = unq(WR[k, a])
+        if (v == "--delete") return rd_msg("git push --delete")
+        if (v ~ /^-[A-Za-z]+$/) { for (c = 2; c <= length(v); c++) { if (substr(v, c, 1) == "d") return rd_msg("git push -d"); if (substr(v, c, 1) == "o") break } ; continue }
+        if (v ~ /^\+?:[^:]/) return rd_msg("git push " v " (an empty source deletes the remote ref)")
+    }
+    return ""
+}
+function rd_check(    k, j, n, a, b, w, s, x, m) {
+    for (k = 1; k <= NC; k++) {
+        j = eff(k); n = CNW[k]
+        if (j > n) continue
+        w = unq(WR[k, j]); b = base(w)
+        if (!WQ[k, j] && fp_alias(WR[k, j]) ~ /^push/) { s = rd_push(k, j + 1); if (s != "") return s; continue }
+        if (b == "git") {
+            for (a = j + 1; a <= n; a++) { x = unq(WR[k, a]); if (x == "-C" || x == "-c") { a++; continue }; if (x ~ /^-/) continue; break }
+            if (a <= n && unq(WR[k, a]) == "push") { s = rd_push(k, a + 1); if (s != "") return s }
+            continue
+        }
+        if (b != "gh") continue
+        for (a = j + 1; a <= n; a++) { x = unq(WR[k, a]); if (x == "-R" || x == "--repo") { a++; continue }; if (x ~ /^-/) continue; break }
+        if (a > n) continue
+        x = unq(WR[k, a])
+        if ((x == "repo" || x == "gist") && unq(WR[k, a + 1]) == "delete") return rd_msg("gh " x " delete")
+        if (x == "release" && (unq(WR[k, a + 1]) == "delete" || unq(WR[k, a + 1]) == "delete-asset")) return rd_msg("gh release " unq(WR[k, a + 1]))
+        if (x == "api") {
+            for (a++; a <= n; a++) {
+                w = unq(WR[k, a]); m = ""
+                if (w == "-X" || w == "--method") m = unq(WR[k, a + 1])
+                else if (w ~ /^-X./) m = substr(w, 3)
+                else if (w ~ /^--method=/) m = substr(w, 10)
+                if (toupper(m) == "DELETE") return rd_msg("gh api " w " DELETE")
+            }
+        }
     }
     return ""
 }
