@@ -19,6 +19,10 @@
 #   trust dialog screen     rt1's transcript (red team 1, 2026-09-24)
 #   claude agents --json    the conductor's transcript: a background session, no process
 #   pane guard refusal      the guard's own message, a59-paneguard commit de9e67b
+#   transcript records      (prompt, 2026-09-29, Claude Code 2.1.284) worker 20c00feb's first
+#                           user record and one SessionStart hook_success record, content
+#                           replaced per arm. agent_blocked's JSON is the measured herdr error
+#                           shape with upstream's documented code (ASSUMED: never captured live)
 # One substitution everywhere: the real home directory is written @H@ and becomes the arm's
 # fixture home, so the suite runs on any machine.
 #
@@ -72,6 +76,12 @@ if [ "$1 ${2:-}" = "pane run" ] && [ -d "$FAKE/stage" ] && [ ! -e "$FAKE/stage/d
     cp "$FAKE/stage/"*.json "$PJW_SESSIONS_DIR/"; cat "$FAKE/stage/A" >> "$FAKE/ps/A"; cat "$FAKE/stage/lstart" >> "$FAKE/ps/lstart"
     cat "$FAKE/stage/log" >> "$PJW_LAUNCH_LOG"; : > "$FAKE/stage/done" ;;
   esac
+fi
+# a prompt lands in the transcript after a delay, as Claude Code writes it once the SessionStart
+# batch ends: $FAKE/land holds "<seconds> <transcript path>", $FAKE/land.line the record(s)
+if [ "$1 ${2:-}" = "agent prompt" ] && [ -r "$FAKE/land" ]; then
+  read -r d t < "$FAKE/land"
+  ( sleep "$d"; mkdir -p "$(dirname "$t")"; cat "$FAKE/land.line" >> "$t" ) >/dev/null 2>&1 &
 fi
 if [ -z "$f" ]; then
   case "$1 ${2:-}" in "pane run"|"pane send-keys"|"agent rename"|"agent prompt"|"workspace close") exit 0 ;; esac
@@ -302,6 +312,7 @@ run(){
     PJW_SESSIONS_DIR="$SESS" PJW_STATE_DIR="$STATE" PJW_LAUNCH_LOG="$STATE/launches.log" \
     PJW_CLEAN_ROOT="$H/.cache/claude-clean" PJW_TMP="$W/tmp" PJW_UID=501 PJW_POLL=0 PJW_PREFLIGHT_WAIT=0 \
     PJW_ENDED_AFTER=0 PJW_VERIFY_RETRY=0 PJW_LOCK_WAIT="${PJW_LOCK_WAIT:-5}" PJ_PROFILE_DIR="$ROOT/profiles" \
+    PJW_PROJECTS_DIR="$H/.claude/projects" PJW_PROMPT_POLL=0.1 PJW_PROMPT_SAY=1 \
     HERDR_ENV="${RUN_HERDR_ENV-1}" HERDR_PANE_ID=w3X:p48 HERDR_WORKSPACE_ID=w3X \
     PJ_PROFILE=default PJ_SESSION_NAME=fifty-shades-of-dotfiles-main CLAUDE_CODE_SESSION_NAME=fifty-shades-of-dotfiles-main \
     CLAUDE_CONFIG_DIR="$H/.claude-conductor" \
@@ -682,6 +693,82 @@ new_world room; lists; run start Bad_Name
 check "S14 a name outside herdr's rule: rc 2" '[ "$RC" -eq 2 ] && has "$ERR" "herdr'"'"'s rule"'
 new_world room; lists; run start a59-pjworker --cwd
 check "S14b a value flag given last is refused, not a hang: rc 2" '[ "$RC" -eq 2 ] && has "$ERR" "needs a value"'
+
+# ================================================================== PROMPT
+# W-20260929-A90: send once, then confirm a NEW user turn in the worker's transcript.
+echo "--- prompt"
+cat > "$ROOT/user.tmpl" <<'EOF'
+{"parentUuid":"4d471ee2-a817-49cd-bfb5-ee356eaf9b9a","isSidechain":false,"promptId":"1f41e025-2e7c-49e1-a61e-d0b3ca6132c4","type":"user","message":{"role":"user","content":"@TEXT@"},"uuid":"9c321534-a908-4561-aa78-634a746cd11b","timestamp":"2026-09-29T01:45:19.710Z","permissionMode":"bypassPermissions","origin":{"kind":"human"},"promptSource":"typed","turnOrigin":"human","turnPosition":{"promptIndex":1,"turnIndex":1},"userType":"external","entrypoint":"cli","cwd":"@H@/CODE/CaptainCodeAU/cc-claude-mods","sessionId":"20c00feb-605c-4491-b756-d486afc32532","version":"2.1.284","gitBranch":"master"}
+EOF
+cat > "$ROOT/hook.line" <<'EOF'
+{"parentUuid":null,"isSidechain":false,"attachment":{"type":"hook_success","hookName":"SessionStart:startup","toolUseID":"6a1e43b5-9d01-493c-8937-36207df183b3","hookEvent":"SessionStart","content":"x","stdout":"x","stderr":"","exitCode":0,"command":"h=\"$HOME/.claude/hooks/risk-watch\"; if [ -x \"$h\" ]; then \"$h\" || true; fi","durationMs":567},"type":"attachment","uuid":"ece4de83-d184-4ae2-b695-84a829d613b0","timestamp":"2026-09-29T01:44:34.747Z","userType":"external","entrypoint":"cli","cwd":"@H@/CODE/CaptainCodeAU/cc-claude-mods","sessionId":"20c00feb-605c-4491-b756-d486afc32532","version":"2.1.284","gitBranch":"master"}
+EOF
+TXT="Read and carry out the brief at /tmp/p-brief.md, then report by SendMessage"
+urec(){ jq -c --arg t "$1" '.message.content = $t' "$ROOT/user.tmpl"; }   # urec <content> -> one real-shaped user record
+ptr(){ echo "$H/.claude/projects/-Users-someone-CODE-Scaffoldings-fifty-shades-of-dotfiles/$S_PW.jsonl"; }
+pworld(){  # pworld [sid|null] -- a fresh world; the target a59-pjworker is the worker in w3X:p4Q
+  new_world room; mkdir -p "$H/.claude/projects"
+  agent_get_json w3X:p4Q "${1:-$S_PW}" idle | resp agent_get_a59-pjworker 1 0
+  T="$(ptr)"
+}
+hooked(){ mkdir -p "$(dirname "$T")"; fx < "$ROOT/hook.line" > "$T"; }   # the transcript exists, SessionStart block only
+land(){ printf '%s %s\n' "$1" "$T" > "$FAKE/land"; }                     # land <seconds>: $FAKE/land.line arrives then
+
+pworld; hooked; urec "$TXT" > "$FAKE/land.line"; land 0
+run prompt a59-pjworker "$TXT"
+check "P1 a prompt that lands: rc 0, delivered, session and transcript named" '[ "$RC" -eq 0 ] && [ "$(j ".delivered, .session_id, .transcript")" = "true $S_PW $T " ]'
+check "P1b sent exactly once, to the pane herdr named" '[ "$(ncalls "^agent prompt w3X:p4Q ")" = 1 ]'
+check "P1c the delivery is logged in workers.log" 'grep -q "prompt target=a59-pjworker pane=w3X:p4Q sid=$S_PW result=delivered" "$STATE/workers.log"'
+
+pworld; urec "$TXT" > "$FAKE/land.line"; land 2
+run prompt a59-pjworker "$TXT"
+check "P2 no transcript yet, the prompt lands 2 s later (held by SessionStart): rc 0 after a NAMED wait" \
+  '[ "$RC" -eq 0 ] && [ "$(j .waited_s)" != "0 " ] && has "$ERR" "no transcript yet" && has "$ERR" "SessionStart hooks"'
+
+pworld; hooked
+run prompt a59-pjworker "$TXT" --timeout 1
+check "P3 never lands: rc 10, says NOT re-sent, and sent only once" '[ "$RC" -eq 10 ] && has "$ERR" "NOT re-sent" && [ "$(ncalls "^agent prompt ")" = 1 ]'
+check "P3b logged as not delivered" 'grep -q "sid=$S_PW result=not-delivered" "$STATE/workers.log"'
+
+pworld; hooked; urec "$TXT" >> "$T"
+run prompt a59-pjworker "$TXT" --timeout 1
+check "P4 the same words from an EARLIER turn do not pass for this one: rc 10" '[ "$RC" -eq 10 ]'
+pworld; hooked; urec "$TXT" >> "$T"; urec "$TXT" > "$FAKE/land.line"; land 0
+run prompt a59-pjworker "$TXT"
+check "P4b and a second copy landing does: rc 0" '[ "$RC" -eq 0 ]'
+
+pworld; hooked; urec "<cross-session-message from=\"uds:/tmp/cc-socks/1.sock\">$TXT</cross-session-message>" > "$FAKE/land.line"; land 0
+run prompt a59-pjworker "$TXT" --timeout 1
+check "P5 a peer message quoting the text is not the prompt: rc 10" '[ "$RC" -eq 10 ]'
+
+pworld null
+run prompt a59-pjworker "$TXT"
+check "P6 no session id yet: rc 2, said, and NOTHING sent" '[ "$RC" -eq 2 ] && has "$ERR" "no Claude session id yet" && [ "$(ncalls "^agent prompt")" = 0 ]'
+
+pworld; printf '%s\n' '{"error":{"code":"agent_blocked","message":"agent is waiting on a dialog"},"id":"cli:agent:prompt"}' | resp agent_prompt_w3X:p4Q 1 1
+run prompt a59-pjworker "$TXT"
+check "P7 the agent is at a dialog (agent_blocked): rc 3, named" '[ "$RC" -eq 3 ] && has "$ERR" agent_blocked'
+
+pworld; touch "$FAKE/SANDBOX"
+run prompt a59-pjworker "$TXT"
+check "P8 sandboxed herdr: rc 2, the sandbox named" '[ "$RC" -eq 2 ] && has "$ERR" sandbox'
+
+pworld; run prompt a59-pjworker
+check "P9 no text: rc 2 with the prompt usage" '[ "$RC" -eq 2 ] && has "$ERR" "prompt: usage"'
+pworld; run prompt a59-pjworker "   "
+check "P9b a blank text: rc 2, nothing asked of herdr" '[ "$RC" -eq 2 ] && has "$ERR" "text is empty" && [ "$(ncalls "^agent")" = 0 ]'
+pworld; urec "-x first word is a dash" > "$FAKE/land.line"; land 0
+run prompt a59-pjworker -- "-x first word is a dash"
+check "P9c a text starting with '-' goes after --: rc 0" '[ "$RC" -eq 0 ]'
+
+ML=$'\n   Step one: read the brief\nStep two: report'
+pworld; urec "$ML" > "$FAKE/land.line"; land 0
+run prompt a59-pjworker "$ML"
+check "P10 a multi-line text is matched on its first non-blank line: rc 0" '[ "$RC" -eq 0 ]'
+
+pworld; mkdir -p "$H/.claude-scratch/projects"; T="$H/.claude-scratch/projects/-x/$S_PW.jsonl"; urec "$TXT" > "$FAKE/land.line"; land 0
+run prompt a59-pjworker "$TXT"
+check "P11 a transcript under another profile's config dir (scratch) is found: rc 0" '[ "$RC" -eq 0 ] && [ "$(j .transcript)" = "$T " ]'
 
 # ================================================================== herdr-quick-task
 echo "--- herdr-quick-task"

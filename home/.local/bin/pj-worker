@@ -13,6 +13,7 @@
 #                          [--profile P] [--probe] [--timeout SECONDS]
 #   pj-worker start <name> --cleanroom [--direction right|down] [--timeout SECONDS]
 #   pj-worker verify <name|pane-id> [--profile P]
+#   pj-worker prompt <name|pane-id> <text> [--timeout SECONDS]
 #   pj-worker list  [--cwd DIR]
 #   pj-worker count [--cwd DIR] [--json] [--check]
 #
@@ -22,8 +23,10 @@
 #      but verify says it is not pj; it is LEFT RUNNING and named, close it yourself
 #   2  usage, or COULD NOT MEASURE (herdr or ps refused, sandbox on, not in herdr, no
 #      session id yet). Never read as "free" and never as "not pj"
-#   3  start: the new session sits at a dialog (trust, login); the dialog text is named
-#   4  start: a herdr action failed, or no agent appeared (the launch died or timed out)
+#   3  start: the new session sits at a dialog (trust, login); the dialog text is named.
+#      prompt: herdr refused because the agent is at a dialog (agent_blocked); nothing sent
+#   4  start: a herdr action failed, or no agent appeared (the launch died or timed out).
+#      prompt: herdr's agent prompt failed
 #   5  start: the pane never answered the ready handshake. Never retried into that pane:
 #      a half-typed line would be prefixed to the next command (rt1 H4)
 #   6  start, count --check: a cap is reached. Names the cap and every session counted.
@@ -31,6 +34,23 @@
 #   7  start: the name is taken (a live herdr agent, or a live session with that name)
 #   8  start --pane: preflight refused (the pane is busy or already hosts an agent)
 #   9  start --probe: the probe reply never arrived (login expired or prompt not delivered)
+#  10  prompt: sent, but no user turn holding it reached the transcript within --timeout.
+#      It is NOT re-sent: a resend after a held prompt lands puts it in twice
+#
+# HOW PROMPT CONFIRMS (W-20260929-A90; research drawer:pj-session-framework/reports/
+# 20260929-a90-worker-prompt/RESEARCH.md). `start` settles when herdr says idle with a session
+# id, but herdr learns that id FROM one of the SessionStart hooks, so it proves the hooks have
+# STARTED, never finished. Claude Code holds a prompt typed meanwhile until the whole batch
+# ends (5 of 44 worker starts, all behind ccw-freshness-check, 22-46 s; 0 of 1946 prompts
+# lost), and the pane reads as if the prompt vanished. Waiting on the hooks cannot work: a
+# hook that succeeds silently leaves no transcript record (0 of 16 sessions matched a count
+# from the config), and the transcript is created only when the first prompt is accepted.
+# So `prompt` sends once, then reads <config dir>/projects/*/<sid>.jsonl until a NEW user
+# record starting with the text's first line appears, saying every few seconds what it is
+# waiting for. "New" is counted against the records already there, so an earlier prompt with
+# the same words never passes for this one. The record format is Claude Code's own and is
+# undocumented; the selftest's fixture is a real record (2.1.284), so a change shows as a
+# failing arm. Default --timeout 120 s: the largest SessionStart hook timeout here is 100 s.
 #
 # THE CAPS, both checked by `start` before it touches anything, both printed by `list` and
 # `count`. One constant each, below, so the next change is one line.
@@ -117,8 +137,9 @@
 # Requires zsh, jq, git. Linux reads the pid's environment from /proc (ASSUMED, not measured).
 #
 # Seams, for the selftest only: PJW_HERDR, PJW_PS, PJW_PJ, PJW_PROMPT_FILE (commands);
-# PJW_SESSIONS_DIR, PJW_STATE_DIR, PJW_LAUNCH_LOG, PJW_CLEAN_ROOT, PJW_TMP (paths); PJW_UID;
-# PJW_POLL, PJW_PREFLIGHT_WAIT, PJW_ENDED_AFTER, PJW_VERIFY_RETRY, PJW_LOCK_WAIT (seconds); PJ_PROFILE_DIR (shared with pj).
+# PJW_SESSIONS_DIR, PJW_PROJECTS_DIR, PJW_STATE_DIR, PJW_LAUNCH_LOG, PJW_CLEAN_ROOT, PJW_TMP (paths); PJW_UID;
+# PJW_POLL, PJW_PREFLIGHT_WAIT, PJW_ENDED_AFTER, PJW_VERIFY_RETRY, PJW_LOCK_WAIT, PJW_PROMPT_POLL,
+# PJW_PROMPT_SAY (seconds); PJ_PROFILE_DIR (shared with pj).
 set -u
 emulate -L zsh
 setopt pipefail extended_glob
@@ -133,6 +154,7 @@ PS_CMD="${PJW_PS:-ps}"
 PJ_CMD="${PJW_PJ:-pj}"
 PROMPT_FILE_CMD="${PJW_PROMPT_FILE:-pj-prompt-file}"
 SESS_DIR="${PJW_SESSIONS_DIR:-$HOME/.claude/sessions}"
+PROJ_DIR="${PJW_PROJECTS_DIR:-$HOME/.claude/projects}"
 PROFILE_DIR="${PJ_PROFILE_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/pj/profiles}"
 STATE="${PJW_STATE_DIR:-${PJ_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/pj}}"
 LAUNCH_LOG="${PJW_LAUNCH_LOG:-$STATE/launches.log}"
@@ -145,6 +167,8 @@ PREFLIGHT_WAIT="${PJW_PREFLIGHT_WAIT:-15}"   # --pane: seconds to wait for a sta
 ENDED_AFTER="${PJW_ENDED_AFTER:-8}"         # settle: seconds before "back at a bare shell" means the launch died
 VERIFY_RETRY="${PJW_VERIFY_RETRY:-30}"      # start: seconds to retry a verify that could not measure yet
 LOCK_WAIT="${PJW_LOCK_WAIT:-180}"          # start: seconds to wait for another start to finish
+PROMPT_POLL="${PJW_PROMPT_POLL:-1}"        # prompt: seconds between transcript reads (fractions allowed)
+PROMPT_SAY="${PJW_PROMPT_SAY:-5}"          # prompt: seconds between "still waiting" lines
 
 say() { print -u2 -r -- "pj-worker: $*"; }
 die() { local c="$1"; shift; say "$*"; exit "$c"; }
@@ -826,6 +850,119 @@ cmd_start() {
   exit 0
 }
 
+# ------------------------------------------------------------------ prompt
+# proj_roots -- where transcripts live: PROJ_DIR plus each profile's config_dir/projects that
+# resolves somewhere else (the same rule as sess_dirs).
+typeset -ga PROJ_ROOTS
+proj_roots() {
+  local f v d
+  local -A seen
+  PROJ_ROOTS=()
+  [[ -d "$PROJ_DIR" ]] && { PROJ_ROOTS+=("$PROJ_DIR"); seen[${PROJ_DIR:A}]=1; }
+  for f in "$PROFILE_DIR"/*(N.); do
+    v="$(sed -n 's/^[[:space:]]*config_dir:[[:space:]]*//p' "$f" 2>/dev/null | head -1)"
+    v="${v%%[[:space:]]#}"; [[ -n "$v" ]] || continue
+    d="${v/#\~/$HOME}/projects"
+    [[ -d "$d" && -z "${seen[${d:A}]:-}" ]] || continue
+    PROJ_ROOTS+=("$d"); seen[${d:A}]=1
+  done
+}
+transcript_of() {  # <sid> -> the newest <root>/*/<sid>.jsonl; rc 1 when there is none yet
+  local r f best=""
+  for r in $PROJ_ROOTS; do
+    for f in "$r"/*/"$1".jsonl(N); do [[ -z "$best" || "$f" -nt "$best" ]] && best="$f"; done
+  done
+  [[ -n "$best" ]] || return 1
+  print -r -- "$best"
+}
+# count_turns <file> <needle> -- how many real user records (not meta, text content) start
+# with the needle. A torn last line is skipped (fromjson?), so a write in progress is not an error.
+count_turns() {
+  jq -nR --arg n "$2" '[inputs | fromjson? | select(.type == "user" and (.isMeta | not)
+    and ((.message.content | type) == "string")
+    and ((.message.content | sub("^\\s+"; "")) | startswith($n)))] | length' "$1" 2>/dev/null
+}
+
+cmd_prompt() {
+  local t="" text="" have_text="" timeout=120 line needle=""
+  while (( $# )); do
+    case "$1" in
+      --timeout) need "$1" $#; timeout="$2"; shift 2 ;;
+      --) shift; (( $# == 1 )) && [[ -n "$t" && -z "$have_text" ]] || die 2 "prompt: '--' takes exactly one text, after the target"; text="$1"; have_text=1; shift ;;
+      -*) die 2 "prompt: unknown option $1 (a text starting with '-' goes after --)" ;;
+      *) if [[ -z "$t" ]]; then t="$1"; elif [[ -z "$have_text" ]]; then text="$1"; have_text=1
+         else die 2 "prompt: one target and one text (quote the text)"; fi; shift ;;
+    esac
+  done
+  [[ -n "$t" && -n "$have_text" ]] || die 2 "prompt: usage: pj-worker prompt <name|pane-id> <text> [--timeout SECONDS]"
+  [[ "$timeout" == <1-> ]] || die 2 "prompt: --timeout is whole seconds"
+  for line in "${(@f)text}"; do
+    line="${line##[[:space:]]#}"; line="${line%%[[:space:]]#}"
+    [[ -n "$line" ]] && { needle="${line[1,80]}"; break; }
+  done
+  [[ -n "$needle" ]] || die 2 "prompt: the text is empty"
+  [[ "${HERDR_ENV:-}" == 1 ]] || die 2 "prompt: not inside a herdr pane (HERDR_ENV unset); refusing to drive the user's session from outside"
+  whence -p jq >/dev/null || die 2 "jq is required"
+
+  # 1. the target's pane and session id; nothing is sent without both
+  if ! hcall agent get "$t"; then
+    [[ "$HKIND" == err ]] && die 2 "prompt: herdr agent get $t: $HCODE; nothing was sent"
+    die 2 "prompt: $(herdr_why); nothing was sent"
+  fi
+  local pane sid
+  pane="$(print -r -- "$HOUT" | jq -r '.result.agent.pane_id // empty' 2>/dev/null)"
+  sid="$(print -r -- "$HOUT" | jq -r '.result.agent.agent_session.value // empty' 2>/dev/null)"
+  [[ -n "$pane" ]] || die 2 "prompt: herdr agent get $t: no pane id; nothing was sent"
+  [[ -n "$sid" ]] || die 2 "prompt: $pane: herdr has no Claude session id yet (a SessionStart hook supplies it); nothing was sent, retry in a few seconds"
+
+  # 2. where its transcript is (or will be), and how many matching turns it already holds
+  proj_roots
+  (( ${#PROJ_ROOTS} )) || die 2 "prompt: no transcript folder to read ($PROJ_DIR is missing); nothing was sent"
+  local tr="" before=0 n
+  if tr="$(transcript_of "$sid")"; then
+    n="$(count_turns "$tr" "$needle")"
+    [[ "$n" == <-> ]] || die 2 "prompt: cannot read $tr; nothing was sent"
+    before="$n"
+  else
+    tr=""
+  fi
+
+  # 3. send ONCE
+  if ! hcall agent prompt "$pane" "$text"; then
+    [[ "$HKIND" == err && "$HCODE" == agent_blocked ]] && die 3 "prompt: $pane is at a dialog (agent_blocked); nothing was sent. Screen: $(pane_tail "$pane")"
+    [[ "$HKIND" == err ]] && die 4 "prompt: herdr agent prompt $pane failed: $HCODE"
+    die 2 "prompt: $(herdr_why)"
+  fi
+
+  # 4. confirm: a NEW user turn starting with the text's first line
+  local t0=$EPOCHSECONDS said=$EPOCHSECONDS deadline=$(( EPOCHSECONDS + timeout )) why waited
+  while :; do
+    [[ -n "$tr" ]] || tr="$(transcript_of "$sid")" || tr=""
+    if [[ -n "$tr" ]]; then
+      n="$(count_turns "$tr" "$needle")"
+      if [[ "$n" == <-> ]] && (( n > before )); then
+        waited=$(( EPOCHSECONDS - t0 ))
+        log_worker "prompt target=$t pane=$pane sid=$sid result=delivered waited=${waited}s"
+        jq -cn --arg t "$t" --arg p "$pane" --arg s "$sid" --arg f "$tr" --argjson w "$waited" \
+          '{target:$t, pane_id:$p, session_id:$s, delivered:true, waited_s:$w, transcript:$f}'
+        exit 0
+      fi
+      why="its transcript has no new user turn starting with the text yet"
+    else
+      why="the session has no transcript yet (Claude Code writes it when it accepts the first prompt)"
+    fi
+    if (( EPOCHSECONDS >= deadline )); then
+      log_worker "prompt target=$t pane=$pane sid=$sid result=not-delivered timeout=${timeout}s"
+      die 10 "prompt: sent to $pane, but after ${timeout}s $why. NOT re-sent (a held prompt would land twice). Screen: $(pane_tail "$pane")"
+    fi
+    if (( EPOCHSECONDS - said >= PROMPT_SAY )); then
+      say "waiting $(( EPOCHSECONDS - t0 ))s for the prompt to land in $pane: $why. The usual cause is SessionStart hooks still running: Claude Code holds a prompt until they all finish"
+      said=$EPOCHSECONDS
+    fi
+    sleep "$PROMPT_POLL"
+  done
+}
+
 # ------------------------------------------------------------------ list / count
 parse_cwd_opt() {
   CWD_OPT="$PWD"; JSON=""; CHECK=""
@@ -870,9 +1007,10 @@ cmd_list() {
 case "${1:-}" in
   start) shift; cmd_start "$@" ;;
   verify) shift; cmd_verify "$@" ;;
+  prompt) shift; cmd_prompt "$@" ;;
   list) shift; cmd_list "$@" ;;
   count) shift; cmd_count "$@" ;;
   --selftest) exec "${SELF:h}/pj-worker-selftest" ;;
   -h|--help) sed -n '2,/^set -u$/p' "${0:A}" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
-  *) die 2 "usage: pj-worker start <name> [...] | verify <name|pane-id> | list | count [--json] [--check] | --help" ;;
+  *) die 2 "usage: pj-worker start <name> [...] | verify <name|pane-id> | prompt <name|pane-id> <text> | list | count [--json] [--check] | --help" ;;
 esac
