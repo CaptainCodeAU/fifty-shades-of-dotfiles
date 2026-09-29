@@ -192,6 +192,7 @@ function read_heredocs(    h, e, line, cmp) {  # P just after the newline
             if (HDD[h]) sub(/^\t+/, "", cmp)
             P = e + 1
             if (cmp == HD[h]) break
+            if (HDK[h] > 0) HBODY[HDK[h]] = HBODY[HDK[h]] "\n" line   # A47: kept for fp_check
         }
     }
     HDN = 0
@@ -201,12 +202,14 @@ function read_heredocs(    h, e, line, cmp) {  # P just after the newline
 function handle_redir(k,    c, ws, d) {
     c = C[P]
     if (c == "<" && C[P + 1] == "<" && C[P + 2] == "<") {
-        P += 3; skip_blanks(); parse_word()
+        P += 3; skip_blanks(); ws = P; parse_word()
+        if (k > 0) HBODY[k] = HBODY[k] "\n" substr(S, ws, P - ws)   # A47: a here-string's text
     } else if (c == "<" && C[P + 1] == "<") {
         P += 2; d = 0
         if (C[P] == "-") { d = 1; P++ }
         skip_blanks(); ws = P; parse_word()
         HDN++; HD[HDN] = unquote_delim(substr(S, ws, P - ws)); HDD[HDN] = d
+        HDK[HDN] = k                                  # A47: whose body this is
         if (HD[HDN] == "") unsure("here-document with no delimiter")
     } else if ((c == "<" || c == ">") && C[P + 1] == "(") {
         P += 2; parse_list(REC_NESTED, ")", 1, c "(")   # process substitution, an argument
@@ -776,8 +779,12 @@ function guard_check(    k, j, n, a, w, b, s, i, t) {
 # Function bodies are parsed commands like any other. Any other construct the
 # scanner is UNSURE of sends the whole text to the crude match; a function
 # definition does so only when some word is push or a push alias (W-20260929-A53).
-# NOT read: a flag held in a variable (git push $F), heredoc bodies fed to a shell,
-# scripts and other languages; a push that DELETES main (:main, --delete) is not a
+# A47 (2026-09-29): an expansion before -- in the repository slot, or with a plain word
+# anywhere beside a plain refspec, counts as a possible force flag (git push $F origin main,
+# git push origin main $F; -- says it is not),
+# and a here-document or here-string read by a shell (bash <<EOF, cat <<EOF | sh) gets
+# the crude match. NOT read: scripts and
+# other languages (python -c, a script file), a heredoc read by a non-shell; a push that DELETES main (:main, --delete) is not a
 # force push and is out of this rule.
 
 function fp_msg(why) { return "Force push to main/master is not allowed: " why ". A force push to main is Gavin's call: ask him" }
@@ -866,11 +873,16 @@ function fp_crude(t) {
 
 # Push arguments TV[1..tn] (TX[i] = 1: an expansion, value unknown). Needs the
 # candidate directories FC[1..FCN], the -C paths GC[1..GCN] and FPCFG.
-function fp_push(tn,    i, v, name, eq, c, ch, fF, fL, fI, mirror, all, endopt, repoopt, npos, nref, r, src, dst, cur, d, m, h, s) {
+function fp_push(tn,    i, v, name, eq, c, ch, fF, fL, fI, mirror, all, endopt, repoopt, npos, nref, r, src, dst, cur, d, m, h, s, fX, pendX) {
     fF = 0; fL = 0; fI = 0; mirror = 0; all = 0; endopt = 0; repoopt = 0; npos = 0; nref = 0
+    fX = 0; pendX = ""; FPXONLY = 0; FPXW = ""
     for (i = 1; i <= tn; i++) {
         v = TV[i]
-        if (TX[i]) { npos++; if (npos > 1 || repoopt) { nref++; RF[nref] = ""; RX[nref] = 1 }; continue }
+        if (TX[i]) { 
+            # A47: before --, an expansion in the repository slot, or with a plain word after
+            # it, may be a force flag (git push $F origin main).
+            if (!endopt) { if (npos == 0 && !repoopt) { fX = 1; FPXW = TW[i] } else if (pendX == "") pendX = TW[i] }
+            npos++; if (npos > 1 || repoopt) { nref++; RF[nref] = ""; RX[nref] = 1 }; continue }
         if (!endopt && v == "--") { endopt = 1; continue }
         if (!endopt && substr(v, 1, 2) == "--") {
             name = substr(v, 3); eq = index(name, "=")
@@ -902,7 +914,9 @@ function fp_push(tn,    i, v, name, eq, c, ch, fF, fL, fI, mirror, all, endopt, 
         if (npos == 1 && !repoopt) continue            # the repository
         nref++; RF[nref] = v; RX[nref] = 0
     }
+    if (!fX && pendX != "") for (r = 1; r <= nref; r++) if (!RX[r]) { fX = 1; FPXW = pendX; break }   # with a plain refspec
     if (mirror) return fp_msg("--mirror force-pushes every ref, main included")
+    if (fX && !(fF || fL || fI)) { FPXONLY = 1; fF = 1 }
     cur = 0
     for (r = 1; r <= nref; r++) {
         if (RX[r]) { if (fF || fL || fI) return fp_unk("a refspec is held in a variable or $(...)"); continue }
@@ -969,11 +983,11 @@ function fp_check(    k, j, n, a, w, v, gi, tn, b, s, t, ex, i) {
             if (ex[1] == "push") {
                 for (i = 2; i <= tn; i++) { TV[i - 1] = ex[i]; TX[i - 1] = 0 }
                 tn--
-                for (a = j + 1; a <= n; a++) { tn++; TV[tn] = unq(WR[k, a]); TX[tn] = (TV[tn] == "" && WR[k, a] != "") }
+                for (a = j + 1; a <= n; a++) { tn++; TV[tn] = unq(WR[k, a]); TW[tn] = WR[k, a]; TX[tn] = (TV[tn] == "" && WR[k, a] != "") }
                 GCN = 0
                 for (a = 1; a < j; a++) if (WR[k, a] ~ /^GIT_[A-Z_]*=/) FPCFG = "a GIT_ variable is set on the command"
                 s = fp_push(tn)
-                if (s != "") return s
+                if (s != "") return fp_xnote(s)
                 continue
             }
         }
@@ -1001,9 +1015,18 @@ function fp_check(    k, j, n, a, w, v, gi, tn, b, s, t, ex, i) {
         }
         if (a > n || unq(WR[k, a]) != "push") continue
         tn = 0
-        for (a = a + 1; a <= n; a++) { tn++; TV[tn] = unq(WR[k, a]); TX[tn] = (TV[tn] == "" && WR[k, a] != "") }
+        for (a = a + 1; a <= n; a++) { tn++; TV[tn] = unq(WR[k, a]); TW[tn] = WR[k, a]; TX[tn] = (TV[tn] == "" && WR[k, a] != "") }
         s = fp_push(tn)
-        if (s != "") return s
+        if (s != "") return fp_xnote(s)
+    }
+    # A47: a here-document or here-string whose reader is a shell (bash <<EOF, or
+    # cat <<EOF | sh): its text runs as commands, so it gets the crude match.
+    for (k = 1; k <= NC; k++) {
+        if (HBODY[k] == "") continue
+        b = fp_shell_of(k)
+        if (b == "") continue
+        s = fp_crude(HBODY[k])
+        if (s != "") return fp_msg(s " (inside a here-document fed to " b ")")
     }
     for (i = 1; i <= BTN; i++) {
         s = fp_crude(BT[i])
@@ -1017,6 +1040,23 @@ function fp_check(    k, j, n, a, w, v, gi, tn, b, s, t, ex, i) {
     if (UNSURE_NF != "" || (UNSURE != "" && fp_push_word())) {
         s = fp_crude(S)
         if (s != "") return fp_msg(s " (the command has a " (UNSURE_NF != "" ? UNSURE_NF : UNSURE) ")")
+    }
+    return ""
+}
+
+# A47: when the only possible force is a variable in a flag position, say so.
+function fp_xnote(s) {
+    if (!FPXONLY) return s
+    return s " (" FPXW " is held in a variable and sits where a force flag can go; if it is not a flag, put -- before the repository)"
+}
+
+# The shell that reads command k's here-document: k itself, or a later command in
+# the same pipeline. "" when no shell reads it.
+function fp_shell_of(k,    c, b) {
+    for (c = k; c <= NC; c++) {
+        b = base(unq(WR[c, eff(c)]))
+        if (b == "bash" || b == "sh" || b == "zsh" || b == "dash" || b == "ksh") return b
+        if (CSA[c] != "|" && CSA[c] != "|&") return ""
     }
     return ""
 }
@@ -1464,7 +1504,7 @@ function pj_scan(ctx, ov, where,    k, j, n, a, w, b, ovk, t, lab) {
     }
 }
 
-function pj_load(t) { S = t; N = split(S, C, ""); P = 1; NC = 0; HDN = 0; BG = 0; UNSURE = ""; UNSURE_NF = ""; SUBSH = 0; BTN = 0 }
+function pj_load(t) { S = t; N = split(S, C, ""); P = 1; NC = 0; HDN = 0; BG = 0; UNSURE = ""; UNSURE_NF = ""; SUBSH = 0; BTN = 0; split("", HBODY) }
 
 function pjw_main(    qi, i) {
     PV = ""; PM = ""; PO = ""; QN = 1; QT[1] = S; QX[1] = "bash"; QO[1] = ""; QW[1] = ""
@@ -1487,7 +1527,7 @@ function pjw_main(    qi, i) {
 END {
     N = split(S, C, "")
     mode = ENVIRON["CONV_MODE"]
-    P = 1; NC = 0; HDN = 0; BG = 0; UNSURE = ""; UNSURE_NF = ""; SUBSH = 0; BTN = 0
+    P = 1; NC = 0; HDN = 0; BG = 0; UNSURE = ""; UNSURE_NF = ""; SUBSH = 0; BTN = 0; split("", HBODY)
     REC_NESTED = (mode == "guard" || mode == "pjw")   # only these look inside $(...) and backticks
     if (mode == "pjw") pjw_main()
     parse_list(1, "", 0, "^")
