@@ -428,6 +428,24 @@ if [ "${1:-}" = "--selftest" ]; then
   conv_arm allow 'A118 . /dev/stdin <<<, feature push'          ". /dev/stdin <<< 'git push --force origin feature'"
   conv_arm allow 'A118 $(...) in a QUOTED heredoc stays data'   $'cat <<\'EOF\'\n$(git push --force origin main)\nEOF'
   conv_arm allow 'A118 unquoted heredoc, feature push inside'   $'cat <<EOF\n$(git push --force origin feature)\nEOF'
+  # W-20260929-A123: validate-bash's leftovers from the lexer comparison. Prefixes it did
+  # not look through, two word spellings, and three crude denies of harmless commands.
+  echo "=== K. prefixes, spellings and crude denies (A123) ==="
+  conv_arm deny  'A123 timeout 5 (S39)'                  'timeout 5 git push --force origin main'
+  conv_arm deny  'A123 timeout -s KILL 5'                'timeout -s KILL 5 git push --force origin main'
+  conv_arm deny  'A123 nice -n 5 (S40)'                  'nice -n 5 git push --force origin main'
+  conv_arm deny  'A123 time -p (S41)'                    'time -p git push --force origin main'
+  conv_arm deny  'A123 caffeinate -i (S43)'              'caffeinate -i git push --force origin main'
+  conv_arm deny  'A123 stdbuf -oL (S44)'                 'stdbuf -oL git push --force origin main'
+  conv_arm deny  'A123 watch -n 1 (S45)'                 'watch -n 1 git push --force origin main'
+  conv_arm deny  "A123 \$'git' command word (S58)"       "\$'git' push --force origin main"
+  conv_arm deny  'A123 continuation inside the word (S65)' $'gi\\\nt push --force origin main'
+  conv_arm allow 'A123 timeout 5, feature push'          'timeout 5 git push --force origin feature'
+  conv_arm allow 'A123 f() {...}; f, feature push (N20)' 'f() { git push --force origin feature; }; f'
+  conv_arm allow 'A123 function f {...}; f, feature (N21)' 'function f { git push --force origin feature; }; f'
+  conv_arm allow 'A123 case arm, feature push (N26)'     'case x in a) git push --force origin feature;; esac'
+  conv_arm deny  'A123 case arm, main push'              'case x in a) git push --force origin main;; esac'
+  conv_arm deny  'A123 f() { git push "$@"; }; f -f origin main (flags via args)' 'f() { git push "$@"; }; f -f origin main'
   echo "=== E. writes to protected live files: DENY; reads and repo edits: ALLOW ==="
   conv_arm deny  'A35 sed -i on the live validate-bash'        "sed -i '' 's/x/y/' ~/.claude/hooks/validate-bash.sh"
   conv_arm deny  'A35 $HOME spelling, in double quotes'        'sed -i "" s/a/b/ "$HOME/.claude/hooks/validate-bash.sh"'
