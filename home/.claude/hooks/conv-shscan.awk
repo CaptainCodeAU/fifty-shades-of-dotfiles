@@ -744,6 +744,8 @@ function guard_check(    k, j, n, a, w, b, s, i, t) {
         s = g_crude(BT[i])
         if (s != "") { verdict("guard", "DENY", s " (inside backticks)"); return }
     }
+    s = lk_check()
+    if (s != "") { verdict("guard", "DENY", s); return }
     s = pp_check()
     if (s != "") { verdict("guard", "DENY", s); return }
     s = fp_check()
@@ -843,6 +845,86 @@ function pp_check(    k, j, n, a, b, w, cwd, p, i, last, inpl, rd, v) {
                 if (w ~ /^--get/ || w == "--list" || w == "-l") rd = 1
             }
             if (v && !rd) return pp_msg(ENVIRON["HOME"] "/.gitconfig", "git config --global")
+        }
+    }
+    return ""
+}
+
+# ------------------------------------------------------------------ guard: leak-scan bypass
+# Rule F of guard mode, W-20260929-A32 (red-team H2), ruled by Gavin 2026-09-29
+# (D-20260929-A13): every way to skip the leak scan is denied. git push --no-verify
+# skips the pre-push scan (and the whole hook chain); git commit --no-verify or -n (in any
+# short cluster before a value-taking letter) skips the pre-commit one; so do
+# LEAK_SCAN_DISABLE=<value> (as a prefix, or export/typeset/declare), git config
+# leakscan.disable <truthy> and a git config or git -c that SETS core.hooksPath. Allowed:
+# leakscan.skip (the narrow, named knob), reading config, --unset, push -n (a dry run).
+# NOT read: a knob held in a variable, a script file, git aliases.
+
+function lk_msg(what) {
+    return "Leak-scan bypass (D-20260929-A13): " what ". A skipped scan is how a token reaches a public repo. Fix what the scan found, or silence one noisy rule with git config leakscan.skip <rule-id>, or ask Gavin"
+}
+function lk_truthy(v) { v = tolower(v); return v == "true" || v == "1" || v == "yes" || v == "on" }
+function lk_check(    k, j, n, a, w, b, sub_, key, val, rd, c, ch, ga) {
+    for (k = 1; k <= NC; k++) {
+        j = eff(k); n = CNW[k]
+        for (a = 1; a < j && a <= n; a++) {
+            w = unq(WR[k, a])
+            if (w ~ /^LEAK_SCAN_DISABLE=./) return lk_msg("LEAK_SCAN_DISABLE set on the command")
+        }
+        if (j > n) continue
+        b = base(unq(WR[k, j]))
+        if (b == "export" || b == "typeset" || b == "declare" || b == "local") {
+            for (a = j + 1; a <= n; a++) if (unq(WR[k, a]) ~ /^LEAK_SCAN_DISABLE=./) return lk_msg(b " LEAK_SCAN_DISABLE")
+            continue
+        }
+        if (b != "git") continue
+        for (a = j + 1; a <= n; a++) {
+            w = unq(WR[k, a])
+            if (w == "-c") {
+                val = unq(WR[k, a + 1]); key = tolower(val); sub(/=.*/, "", key)
+                if (key == "core.hookspath") return lk_msg("git -c core.hooksPath")
+                if (key == "leakscan.disable" && (val !~ /=/ || lk_truthy(substr(val, index(val, "=") + 1)))) return lk_msg("git -c leakscan.disable")
+                a++; continue
+            }
+            if (w == "-C" || w == "--git-dir" || w == "--work-tree" || w == "--namespace") { a++; continue }
+            if (w ~ /^-/) continue
+            break
+        }
+        if (a > n) continue
+        sub_ = unq(WR[k, a])
+        if (sub_ == "push") {
+            for (ga = a + 1; ga <= n; ga++) if (unq(WR[k, ga]) == "--no-verify") return lk_msg("git push --no-verify skips the pre-push leak scan")
+            continue
+        }
+        if (sub_ == "commit" || sub_ == "merge") {
+            for (ga = a + 1; ga <= n; ga++) {
+                w = unq(WR[k, ga])
+                if (w == "--no-verify") return lk_msg("git " sub_ " --no-verify skips the pre-commit leak scan")
+                if (w == "--") break
+                if (sub_ == "commit" && w ~ /^-[A-Za-z]+$/) {
+                    for (c = 2; c <= length(w); c++) {
+                        ch = substr(w, c, 1)
+                        if (ch == "n") return lk_msg("git commit -n (--no-verify) skips the pre-commit leak scan")
+                        if (index("mFcCtS", ch)) break
+                    }
+                    if (w ~ /^-[mFcCt]$/) ga++
+                }
+            }
+            continue
+        }
+        if (sub_ == "config") {
+            rd = 0; key = ""; val = ""
+            for (ga = a + 1; ga <= n; ga++) {
+                w = unq(WR[k, ga])
+                if (w ~ /^--(get|list|unset|remove-section|rename-section|show-origin|get-regexp|get-all|get-urlmatch|name-only)/ || w == "-l" || w == "--edit" || w == "-e") { if (w !~ /^--show-origin/ && w !~ /^--name-only/) rd = 1; continue }
+                if (w == "--file" || w == "-f" || w == "--blob" || w == "--type") { ga++; continue }
+                if (w ~ /^-/) continue
+                if (key == "") { key = tolower(w); continue }
+                if (val == "") { val = w; break }
+            }
+            if (rd || key == "" || val == "") continue
+            if (key == "core.hookspath") return lk_msg("git config core.hooksPath replaces every hook, the leak scan included")
+            if (key == "leakscan.disable" && lk_truthy(val)) return lk_msg("git config leakscan.disable")
         }
     }
     return ""

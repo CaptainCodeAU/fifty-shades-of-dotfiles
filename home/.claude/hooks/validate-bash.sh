@@ -336,6 +336,26 @@ if [ "${1:-}" = "--selftest" ]; then
   conv_arm allow 'control: harmless'               'echo control-ok'
   # W-20260929-A35 (D-20260929-A14): the live guards, ~/.gitconfig, ~/.claude/CLAUDE.md and
   # the memory folders are locked against write verbs; the repo copies stay editable.
+  # W-20260929-A32 (D-20260929-A13): the leak-scan bypass knobs. Until 2026-09-29 the two
+  # --no-verify pushes were ALLOW arms (P08); the ruling makes every skip of the scan a deny.
+  echo "=== F. leak-scan bypass knobs: DENY; honest forms: ALLOW ==="
+  conv_arm deny  'A32 git push --no-verify origin feature (was P08 allow)' 'git push --no-verify origin feature'
+  conv_arm deny  'A32 git push --no-verify origin main (was allow)' 'git push --no-verify origin main'
+  conv_arm deny  'A32 git commit --no-verify'                  'git commit --no-verify -m x'
+  conv_arm deny  'A32 git commit -n'                           'git commit -n -m x'
+  conv_arm deny  'A32 git commit -nm (cluster)'                'git commit -nm x'
+  conv_arm deny  'A32 LEAK_SCAN_DISABLE=1 on a commit'         'LEAK_SCAN_DISABLE=1 git commit -m x'
+  conv_arm deny  'A32 export LEAK_SCAN_DISABLE=1'              'export LEAK_SCAN_DISABLE=1'
+  conv_arm deny  'A32 git config leakscan.disable true'        'git config leakscan.disable true'
+  conv_arm deny  'A32 git config --local core.hooksPath'       'git config --local core.hooksPath /tmp/h'
+  conv_arm deny  'A32 git -c core.hooksPath= on a commit'      'git -c core.hooksPath=/dev/null commit -m x'
+  conv_arm deny  'A32 git -c leakscan.disable=true on a push'  'git -c leakscan.disable=true push origin feature'
+  conv_arm allow 'A32 git config leakscan.skip (the narrow knob)' 'git config leakscan.skip username-path'
+  conv_arm allow 'A32 git config --get core.hooksPath'         'git config --get core.hooksPath'
+  conv_arm allow 'A32 git config --unset leakscan.disable'     'git config --unset leakscan.disable'
+  conv_arm allow 'A32 git commit -mn (m takes "n" as its value)' 'git commit -mn'
+  conv_arm allow 'A32 a commit message naming --no-verify'     'git commit -m "never use --no-verify"'
+  conv_arm allow 'A32 git push -n (a dry run)'                 'git push -n origin feature'
   echo "=== E. writes to protected live files: DENY; reads and repo edits: ALLOW ==="
   conv_arm deny  'A35 sed -i on the live validate-bash'        "sed -i '' 's/x/y/' ~/.claude/hooks/validate-bash.sh"
   conv_arm deny  'A35 $HOME spelling, in double quotes'        'sed -i "" s/a/b/ "$HOME/.claude/hooks/validate-bash.sh"'
@@ -482,8 +502,6 @@ if [ "${1:-}" = "--selftest" ]; then
   conv_arm allow '+feature, on main'                          'git push origin +feature'            '' "$M"
   conv_arm allow '-f feature:feature2'                        'git push -f origin feature:feature2' '' "$M"
   conv_arm allow '--force-with-lease origin feature'          'git push --force-with-lease origin feature' '' "$M"
-  conv_arm allow 'P08 --no-verify origin feature, on main'    'git push --no-verify origin feature' '' "$M"
-  conv_arm allow '--no-verify origin main (no rule of its own)' 'git push --no-verify origin main'  '' "$F"
   conv_arm allow 'plain push origin main'                     'git push origin main'                '' "$M"
   conv_arm allow 'plain push HEAD:main'                       'git push origin HEAD:main'           '' "$F"
   conv_arm allow 'plain -u origin HEAD, on main'              'git push -u origin HEAD'             '' "$M"
