@@ -104,6 +104,11 @@ run "$R2" --homes; want "no declaration: default repo:docs/decisions is named" "
 run "$R2" zulu;    want "the miss names the missing default store" "not present, nothing to search" "$OUT"
 run "$R3" zulu;    want "unsupported format is named, not silently skipped" "declared store in an unsupported format, not searched" "$OUT"; want "  with its path" "ledger.jsonl" "$OUT"
 run "$R1" zulu;    wantnot "control: the private repo prints no unsupported line" "unsupported format" "$OUT"
+# A machine-wide store reached through a LINK (mlbox, 2026-09-29: ~/.claude/pj-global/decisions
+# links into the relay's copy). `find <link>` did not descend, so the store read as unsupported.
+ln -s "$G" "$T/glink"; OLDG="$DECIDED_GLOBAL_DIR"; export DECIDED_GLOBAL_DIR="$T/glink"
+run "$R2" alpha;   wantrc "a machine-wide store reached through a link is searched (mlbox shape)" 0 "$RC"; wantnot "  and is not called unsupported" "unsupported format" "$OUT"
+export DECIDED_GLOBAL_DIR="$OLDG"
 run "$R4" alpha;   want "a present but empty repo: store is searched as 0" "project (repo:docs/decisions) 0" "$OUT"
 run "$T" alpha;    wantrc "outside a repo: machine-wide still answers" 0 "$RC"; want "  and says machine-wide only" "not inside a git repo: machine-wide only" "$OUT"; wantnot "  and searched no project" "project (" "$OUT"
 

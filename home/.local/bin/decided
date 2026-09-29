@@ -61,7 +61,10 @@ kind_of(){        # kind_of <path> -> folder | file | missing | unsupported
   [ -e "$p" ] || { printf 'missing'; return; }
   if [ -d "$p" ]; then
     # a folder of D-*.md files, or an empty folder (a store just declared) -- readable
-    if [ -n "$(find "$p" -maxdepth 1 -name 'D-*.md' -print -quit 2>/dev/null)" ] || [ -z "$(ls -A "$p" 2>/dev/null)" ]; then printf 'folder'; else printf 'unsupported'; fi
+    # "$p/" with the slash: find does not descend into a store reached through a LINK
+    # (mlbox links pj-global/decisions into the relay's copy), and read it as unsupported
+    # (measured 2026-09-29; the same trap CLAUDE.md names for `find <symlinked dir>`).
+    if [ -n "$(find "$p/" -maxdepth 1 -name 'D-*.md' -print -quit 2>/dev/null)" ] || [ -z "$(ls -A "$p" 2>/dev/null)" ]; then printf 'folder'; else printf 'unsupported'; fi
   elif [ -f "$p" ]; then
     case "$p" in *.md) grep -q '^## D-' "$p" 2>/dev/null && printf 'file' || printf 'unsupported' ;; *) printf 'unsupported' ;; esac
   else printf 'unsupported'; fi
