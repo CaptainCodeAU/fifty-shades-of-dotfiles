@@ -815,7 +815,10 @@ function pp_protected(p,    h, r) {
     if (index(p, h "/.claude/hooks/") == 1) return 1
     if (index(p, h "/.claude/projects/") == 1) {
         r = substr(p, length(h "/.claude/projects/") + 1)
-        if (r ~ /^[^\/]+\/memory(\/|$)/) return 1
+        # the auto-memory: memory/ itself and its top-level entries; the open-items drawer in
+        # memory/WORK/ stays writable (D-20260929-A14 narrowed, Gavin 2026-09-29)
+        if (r ~ /^[^\/]+\/memory$/) return 1
+        if (r ~ /^[^\/]+\/memory\/[^\/]+$/ && r !~ /\/memory\/WORK$/) return 1
     }
     return 0
 }
