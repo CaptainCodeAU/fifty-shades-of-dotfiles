@@ -2192,7 +2192,7 @@ xp_session(){                   # xp_session <repo> <own-work>: the cross-projec
   # The inbox line: every card, only when not empty. Its absence is stated under --verbose.
   if [ -d "$XP_INBOX/items/open" ]; then
     n=0; for f in "$XP_INBOX/items/open"/W-*.md; do [ -f "$f" ] && n=$((n+1)); done
-    [ "$n" -gt 0 ] && printf 'Inbox: %s unrouted (Gavin routes)\n' "$n"
+    [ "$n" -gt 0 ] && printf 'Inbox: %s unrouted (any session routes with --why)\n' "$n"
     vsay "inbox $XP_INBOX: $n open"
   else
     vsay "inbox $XP_INBOX: missing (no items/open), so no line"

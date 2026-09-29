@@ -229,9 +229,9 @@ want "... and --verbose says it is empty, not missing" "pj-inbox: 0 open" "$OUT"
 printf '## W-20260101-I01 -- unrouted one\n\nproject: inbox\nstatus: open\nkind: do\ndone-when: x\n' > "$DC/pj-inbox/items/open/W-20260101-I01.md"
 printf '## W-20260101-I02 -- unrouted two\n\nproject: inbox\nstatus: open\nkind: do\ndone-when: x\n' > "$DC/pj-inbox/items/open/W-20260101-I02.md"
 rx "$R/quiet" --session
-want "two open inbox items: one line on the card (FAILS on master)" "Inbox: 2 unrouted (Gavin routes)" "$OUT"
+want "two open inbox items: one line on the card (FAILS on master)" "Inbox: 2 unrouted (any session routes with --why)" "$OUT"
 rx "$R/nodrawer" --session
-want "the inbox line shows even for a repo with NO drawer" "Inbox: 2 unrouted (Gavin routes)" "$OUT"
+want "the inbox line shows even for a repo with NO drawer" "Inbox: 2 unrouted (any session routes with --why)" "$OUT"
 command mv "$DC/pj-inbox/items/open/W-20260101-I01.md" "$DC/pj-inbox/items/closed/"
 command mv "$DC/pj-inbox/items/open/W-20260101-I02.md" "$DC/pj-inbox/items/closed/"
 
@@ -471,7 +471,7 @@ else
 
   re "$E/e-alpha" add "nobody owns this yet" --done-when x --inbox
   re "$E/e-beta" --session
-  want "E add --inbox shows on every card" "Inbox: 1 unrouted (Gavin routes)" "$OUT"
+  want "E add --inbox shows on every card" "Inbox: 1 unrouted (any session routes with --why)" "$OUT"
 
   re "$E/e-beta" add "belongs in alpha" --done-when x
   E3="$(eid)"
@@ -489,7 +489,7 @@ else
   if [ -x "$CARD" ]; then
     COUT="$(builtin cd "$E/e-alpha" && PATH="$DF/home/.local/bin:$PATH" OPEN_ITEMS_PROJECTS_DIR="$P2" OPEN_ITEMS_DOTCLAUDE="$DC2" PJ_STATE_DIR="$ST2" PJ_MODS_API_DRIFT=/nonexistent "$CARD" </dev/null 2>/dev/null)"
     want "E the start card shows the watched item the write tool filed" "Watching: 1 (1 changed)" "$COUT"
-    want "E the start card shows the inbox line" "Inbox: 1 unrouted (Gavin routes)" "$COUT"
+    want "E the start card shows the inbox line" "Inbox: 1 unrouted (any session routes with --why)" "$COUT"
     [ "$(printf '%s\n' "$COUT" | wc -l | tr -d ' ')" -le 20 ] && ok "E the card stays within 20 lines" || bad "E card lines" "<= 20" "$COUT"
   else
     printf '  SKIPPED the card half: no pj-start-card beside %s\n' "$SRC"
