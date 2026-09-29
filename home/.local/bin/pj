@@ -631,6 +631,28 @@ kick_checks_run() {
   return 0
 }
 
+# --- the temp sweep (W-20260929-A155, ruling T2; docs/PJ_TEMP_CLEANUP.md) -------------
+# Before a new session starts, `pj-temp sweep-dead` moves every pj-* temp folder whose
+# owners are all gone into the Trash. HERE and not in a start hook, because the launcher
+# runs outside the sandbox, where ps and the Trash both work. Once per pj invocation, never
+# in the relaunch loop below. The claude args ride along, so a --resume target is protected
+# and a --continue (target unknown) skips the sweep. The one-line summary reaches the start
+# card as PJ_TEMP_SWEPT; the details go to <state>/temp-sweep.log. It never blocks a
+# launch. PJ_NO_TEMP_SWEEP skips it (the selftest sets it for every real-launch arm);
+# PJ_TEMP names another pj-temp (selftest seam).
+temp_sweep_at_launch() {
+  unset PJ_TEMP_SWEPT
+  [[ -n "${PJ_NO_TEMP_SWEEP:-}" ]] && return 0
+  local t="${PJ_TEMP:-${SELF:h}/pj-temp}" st="${PJ_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/pj}" out
+  if [[ ! -x "$t" ]]; then
+    export PJ_TEMP_SWEPT="Temp sweep NOT RUN: pj-temp is missing beside pj (${t/#$HOME/~})."
+    return 0
+  fi
+  out="$("$t" sweep-dead --oneline --log "$st/temp-sweep.log" --claude-args "$@" </dev/null 2>/dev/null)"
+  [[ -n "$out" ]] && export PJ_TEMP_SWEPT="${out%%$'\n'*}"
+  return 0
+}
+
 # --- the shared session registry (F5c, gate Q1 option (a), 2026-09-22) ------------
 # Claude Code registers ONE `<pid>.json` plus one `<pid>.<hex>.key` per LIVE session under
 # `<config_dir>/sessions/`, and builds ListAgents by reading ONLY that folder. The socket
@@ -707,6 +729,8 @@ selftest() {
   bad() { fail=$((fail + 1)); print -- "  FAIL $1"; print -- "       got: $2"; }
   root="$(mktemp -d "${TMPDIR:-/tmp}/pj-selftest.XXXXXX")" || exit 1
   print -- "pj selftest in $root"
+  # Every real-launch arm below must never sweep the machine's real temp folders.
+  export PJ_NO_TEMP_SWEEP=1
   # 1. dry-run argv carries the cache prompt file and all five plugin dirs, first entry is claude
   out="$(PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --dry-run 2>"$root/err1")"; rc=$?
   [[ $rc -eq 0 ]] && ok "1 dry-run exits 0" || bad "1 dry-run rc" "$rc $(<"$root/err1")"
@@ -1430,6 +1454,24 @@ selftest() {
   out="$(env -u HERDR_ENV PJ_NO_FETCH=1 PJ_NO_CHECKS=1 PJ_LAUNCH_FILE="$root/fake-launch28" PJ_WORKER_BIN="$fk/rc0" \
          PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile twomods 2>&1)"; rc=$?
   [[ $rc -eq 0 && -r "$root/launched28" ]] && grep -q 'enabledPlugins' "$root/launched28" && ok "28g an uninstalled mod still launches, with the enable in argv" || bad "28g launch" "rc=$rc $out"
+  # 29 the temp sweep (W-20260929-A155): a stub pj-temp records its argv and answers one line.
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s/pjtemp.args"\necho "Temp sweep at launch: moved 1 path(s), 4 KB, to the Trash (stub)"\n' "$root" > "$root/stub-pj-temp"
+  chmod +x "$root/stub-pj-temp"
+  out="$(env -u PJ_NO_TEMP_SWEEP PJ_TEMP="$root/stub-pj-temp" PJ_STATE_DIR="$root/st29" "$SELF" --temp-sweep -r 11111111-2222-4333-8444-555555555555 2>&1)"
+  [[ "$out" == "Temp sweep at launch: moved 1 path(s), 4 KB, to the Trash (stub)" ]] && ok "29a the sweep's one line becomes PJ_TEMP_SWEPT" || bad "29a sweep line" "$out"
+  [[ "$(cat "$root/pjtemp.args" 2>/dev/null)" == "sweep-dead --oneline --log $root/st29/temp-sweep.log --claude-args -r 11111111-2222-4333-8444-555555555555" ]] \
+    && ok "29b pj-temp gets sweep-dead, the log path and the claude args (so --resume is protected)" || bad "29b argv" "$(cat "$root/pjtemp.args" 2>/dev/null)"
+  out="$(env -u PJ_NO_TEMP_SWEEP PJ_TEMP="$root/no-such-pj-temp" "$SELF" --temp-sweep 2>&1)"
+  [[ "$out" == "Temp sweep NOT RUN: pj-temp is missing beside pj"* ]] && ok "29c a missing pj-temp is said by name, never silent" || bad "29c missing" "$out"
+  : > "$root/pjtemp.args"
+  out="$(PJ_NO_TEMP_SWEEP=1 PJ_TEMP="$root/stub-pj-temp" "$SELF" --temp-sweep 2>&1)"
+  [[ -z "$out" && ! -s "$root/pjtemp.args" ]] && ok "29d PJ_NO_TEMP_SWEEP: pj-temp is not called" || bad "29d skip" "out=$out args=$(cat "$root/pjtemp.args")"
+  out="$(env -u PJ_NO_TEMP_SWEEP PJ_TEMP="$root/stub-pj-temp" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --dry-run 2>&1)"
+  [[ ! -s "$root/pjtemp.args" ]] && ok "29e a dry run never sweeps" || bad "29e dry run swept" "$(cat "$root/pjtemp.args")"
+  printf '__claude_launch() { print -r -- "${PJ_TEMP_SWEPT-unset}" > "%s/launched29"; }\n' "$root" > "$root/fake-launch29"
+  out="$(env -u HERDR_ENV -u PJ_NO_TEMP_SWEEP PJ_TEMP="$root/stub-pj-temp" PJ_STATE_DIR="$root/st29" PJ_NO_FETCH=1 PJ_NO_CHECKS=1 PJ_LAUNCH_FILE="$root/fake-launch29" PJ_WORKER_BIN="$fk/rc0" \
+         PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile twomods 2>&1)"; rc=$?
+  [[ $rc -eq 0 && "$(cat "$root/launched29" 2>/dev/null)" == "Temp sweep at launch: moved 1"* ]] && ok "29f a real launch sweeps first and hands claude PJ_TEMP_SWEPT" || bad "29f launch" "rc=$rc $(cat "$root/launched29" 2>/dev/null) $out"
   print -- "pj selftest: $pass passed, $fail failed"
   [[ $fail -eq 0 ]]
 }
@@ -1517,7 +1559,7 @@ run_with_relaunch() {
     # inherited-from-a-parent and recomputes; dropping the marker keeps it (26j).
     unset PJ_SESSION_NAME
     build_argv || { rc=$?; break; }
-    unset CLAUDE_CODE_NO_FLICKER PJ_OPEN_GALLERY
+    unset CLAUDE_CODE_NO_FLICKER PJ_OPEN_GALLERY PJ_TEMP_SWEPT
     for pv in "${PJ_ENV[@]}"; do export "${pv%%=*}=${pv#*=}"; done
     if [[ "$want" == fullscreen ]]; then export PJ_OPEN_GALLERY=1; fi
     # The old session has exited, so this counts what is left; a cap still refuses. herdr
@@ -1584,6 +1626,7 @@ case "${1:-}" in
     exit 0 ;;
   --selftest) selftest; exit $? ;;
   --check-caps) check_session_caps; exit $? ;;   # the cap check alone, for the selftest and a human
+  --temp-sweep) shift; temp_sweep_at_launch "$@"; print -r -- "${PJ_TEMP_SWEPT-}"; exit 0 ;;   # the sweep alone, likewise
 esac
 
 load_profile "$WANT" || exit $?
@@ -1595,6 +1638,7 @@ fi
 check_session_caps || exit $?
 kick_dotclaude_fetch
 kick_checks_run
+temp_sweep_at_launch "$@"
 # Only on a REAL launch, never on --dry-run or --dry-run-env: a dry run must not touch
 # the filesystem, which is the same contract arm 8 holds kick_dotclaude_fetch to.
 ensure_registry_link "$P_CONFIG_DIR"
