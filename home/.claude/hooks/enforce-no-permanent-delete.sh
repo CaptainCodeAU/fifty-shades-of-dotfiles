@@ -53,6 +53,15 @@
 # the command once this hook passes its 5 s timeout, so a stall used to be an
 # allow (W-20260923-A54).
 #
+# FAILS CLOSED WHEN ITS CLASSIFIER IS GUTTED (guard-broken, W-20260929-A186).
+# An empty verdict is an allow, so a classifier that still PARSES but no
+# longer recognises anything allowed /bin/rm x with exit 0 and no message
+# (measured 2026-09-29: a copy with the one call in _classify replaced by `:`).
+# So the child must first deny a canary, `/bin/rm x`, as rm-path before its
+# verdict on the real command counts. A SYNTAX error is already closed: bash
+# stops parsing the file and exits 2, which Claude Code treats as a block
+# (measured the same day on two broken copies; the selftest keeps that arm).
+#
 # AN UNREADABLE PAYLOAD (jq missing, malformed JSON, tool_input.command moved)
 # is DENIED by name when its raw text mentions a trigger, and passes otherwise
 # (D-20260925-A03, 2026-09-25; before that it always passed): denying every
@@ -414,6 +423,7 @@ _msg() { # $1 = rule id -> what it does, then the safe route
     tmutil)         echo "tmutil delete* removes backups or snapshots. SAFE ROUTE: ask Gavin." ;;
     guard-timeout)  echo "the guard gave NO VERDICT within ${DEADLINE:-3} s (a timeout, not a match). SAFE ROUTE: split the command into smaller pieces, or ask Gavin." ;;
     guard-no-verdict) echo "the guard exited without a verdict (a crash, not a match). SAFE ROUTE: ask Gavin; the guard's --selftest shows what broke." ;;
+    guard-broken) echo "the guard's classifier is broken (it no longer denies /bin/rm), so it cannot judge anything (not a match). SAFE ROUTE: ask Gavin; run the hook's --selftest, or revert the last change to it." ;;
     trash-path)     echo "trash called by path (/usr/bin/trash), or through command/env, skips the trash guard (it refuses a blank argument, the current folder, ~, ~/CODE and repo roots; an empty trash '' moved a whole repo to the Trash on 2026-09-29). SAFE ROUTE: plain trash, which goes through the guard." ;;
     trash-empty)    echo "emptying the Trash (trash-empty, trash-rm, Finder empty trash) makes every earlier delete permanent. SAFE ROUTE: ask Gavin." ;;
     *)              echo "this command destroys data outside the Trash. SAFE ROUTE: ask Gavin." ;;
@@ -1715,6 +1725,36 @@ SNAP
   [ "$hb_d" = deny ] && [[ $hb_r == 'BLOCKED (guard-timeout)'* ]] && [ "$hb_ms" -lt 4500 ]; _chk "DEL_GUARD_DEADLINE=99 is ignored: denied at the built-in deadline in ${hb_ms} ms (< 4500, harness gives 5000)" $?
   _hookb 'echo control-ok' 0 3 DEL_GUARD_TEST_CRASH=1
   [ "$hb_d" = deny ] && [[ $hb_r == 'BLOCKED (guard-no-verdict)'* ]] && [[ $hb_r == *'crash, not a match'* ]] && [ "$hb_ms" -lt 1000 ]; _chk "child exits before its verdict: denied as guard-no-verdict in ${hb_ms} ms" $?
+  echo "=== BROKEN-FILE arms: a gutted classifier is a DENY, a syntax error a block (W-20260929-A186) ==="
+  # Copies of this file with ONE fault each, both inside _classify. Before A186
+  # the gutted copy ALLOWED /bin/rm x, exit 0, no output. Each copy is first
+  # proved to carry exactly the intended fault, so an arm cannot pass on a copy
+  # the sed left unchanged.
+  _hookc() { # $1 = hook file, $2 = command -> out, rc, hb_d, hb_r
+    local pl; pl="$(printf '%s' "$env_json" | jq -c --arg c "$2" --arg cwd "$fx/repo" '.tool_input.command = $c | .cwd = $cwd')"
+    out="$(printf '%s' "$pl" | DEL_GUARD_LOG="$logf" DEL_GUARD_SNAPSHOT_DIR="$fx/snap" perl -e 'alarm shift; exec @ARGV' 4 "$1" 2>&1)"; rc=$?
+    hb_d="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)"
+    hb_r="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty' 2>/dev/null)"
+  }
+  cp "$self" "$fx/hook-same.sh"
+  sed '/^_classify() {/,/^}/ s/^  _shell_text "\$1"$/  if then fi/' "$self" > "$fx/hook-syntax.sh"
+  sed '/^_classify() {/,/^}/ s/^  _shell_text "\$1"$/  :/' "$self" > "$fx/hook-gutted.sh"
+  chmod +x "$fx/hook-same.sh" "$fx/hook-syntax.sh" "$fx/hook-gutted.sh"
+  ! /bin/bash -n "$fx/hook-syntax.sh" 2>/dev/null && /bin/bash -n "$fx/hook-gutted.sh" 2>/dev/null \
+    && [ "$(diff "$self" "$fx/hook-syntax.sh" | grep -c '^>')" -eq 1 ] && [ "$(diff "$self" "$fx/hook-gutted.sh" | grep -c '^>')" -eq 1 ]
+  _chk 'fault copies: each differs by one line; the syntax copy fails bash -n, the gutted copy parses' $?
+  _hookc "$fx/hook-same.sh" '/bin/rm x'
+  [ "$hb_d" = deny ] && [[ $hb_r == 'BLOCKED (rm-path)'* ]]; _chk 'control: an unmodified copy denies /bin/rm x as rm-path' $?
+  _hookc "$fx/hook-same.sh" 'echo control-ok'
+  [ "$rc" -eq 0 ] && [ -z "$out" ]; _chk 'control: an unmodified copy allows a harmless command, no output' $?
+  _hookc "$fx/hook-syntax.sh" '/bin/rm x'
+  [ "$rc" -eq 2 ] && [ -z "$hb_d" ]; _chk "syntax error: bash exits 2 before any verdict (Claude Code blocks on 2); got rc $rc" $?
+  _hookc "$fx/hook-gutted.sh" '/bin/rm x'
+  [ "$hb_d" = deny ] && [[ $hb_r == 'BLOCKED (guard-broken)'* ]]; _chk 'gutted classifier: /bin/rm x is denied as guard-broken (was an allow, exit 0, no output)' $?
+  _hookc "$fx/hook-gutted.sh" 'echo control-ok'
+  [ "$hb_d" = deny ] && [[ $hb_r == 'BLOCKED (guard-broken)'* ]] && [[ $hb_r == *'canary /bin/rm x came back allow'* ]]; _chk 'gutted classifier (parses fine): the canary refuses as guard-broken' $?
+  grep -q "BLOCKED $HOOK_NAME \"guard-broken\"" "$logf" 2>/dev/null; _chk 'the broken-guard deny is logged' $?
+
   # a verdict still crosses the child boundary intact: rule id and where
   _hookb 'gwtrm ../wt' 0 3 DEL_GUARD_DEADLINE=1
   [ "$hb_d" = deny ] && [[ $hb_r == 'BLOCKED (git-worktree-remove)'* ]] && [[ $hb_r == *"Found: alias gwtrm='git worktree remove'"* ]]; _chk 'a rule verdict and its Found: line cross from the child intact' $?
@@ -1813,7 +1853,7 @@ trash-path|/usr/bin/trash x'
   ids="$(awk '/^_msg\(\)/ {m=1; next} m && /^}/ {m=0} m && match($0, /^    [a-z][a-zA-Z-]*\)/) {s=substr($0, RSTART+4, RLENGTH-5); print s}' "$self")"
   for id in $ids; do
     n_ids=$((n_ids + 1))
-    case "$id" in guard-timeout|guard-no-verdict|redir-trunc) continue ;; esac   # not a command shape / a > redirection
+    case "$id" in guard-timeout|guard-no-verdict|guard-broken|redir-trunc) continue ;; esac   # not a command shape / a > redirection
     [[ $'\n'"$cov" == *$'\n'"$id|"* ]] || missing="$missing $id"
   done
   [ "$n_ids" -ge 25 ] && [ -z "$missing" ]; _chk "all $n_ids rule ids in _msg are covered or excluded (>= 25 read, the control)${missing:+; MISSING:$missing}" $?
@@ -1919,6 +1959,16 @@ _verdict_child() {
   # produce an allow, so a caller who sets them gains nothing but refusals.
   case "${DEL_GUARD_TEST_STALL:-}" in [1-9]) sleep "$DEL_GUARD_TEST_STALL" >/dev/null 2>&1 ;; esac
   [ "${DEL_GUARD_TEST_CRASH:-}" = 1 ] && exit 7
+  # The canary: a classifier that no longer denies /bin/rm cannot be trusted to
+  # allow anything else either (a function lost at run time, an arm gutted).
+  _classify '/bin/rm x' "$cwd"
+  local canary_ok=1
+  [ "$REASON_ID" = rm-path ] || canary_ok=0                                     #M: canary fails closed
+  if [ "$canary_ok" = 0 ]; then
+    trap - EXIT
+    printf 'B%s%s\n' "$US" "the canary /bin/rm x came back ${REASON_ID:-allow}, not rm-path"
+    return 0
+  fi
   _classify "$cmd" "$cwd"
   trap - EXIT
   printf 'V%s%s%s%s%s%s\n' "$US" "$REASON_ID" "$US" "${LEXER_FAILED:-0}" "$US" "${REASON_WHERE//$'\n'/$RSC}"
@@ -1933,6 +1983,9 @@ case "$vline" in
     [ -n "$REASON_ID" ] && REASON="$(_msg "$REASON_ID")" ;;
   X)
     _deny guard-no-verdict "the guard's child exited before its verdict"                        #M: crash fails closed
+    ;;
+  B"$US"*)
+    _deny guard-broken "${vline#B"$US"}"
     ;;
   *)
     # nothing within the deadline: the child is still working, or died too
@@ -1955,6 +2008,8 @@ fi
 
 _log "$REASON_ID" "$cmd"
 case "$REASON_ID" in
+  guard-broken) head="the deletion guard is broken, so this command is refused (fail closed). This is NOT a match: nothing in it was found to be a delete."
+           foot="A broken guard that allowed would switch off every permanent-delete check in every session with no message, so it refuses instead. Tell Gavin; run enforce-no-permanent-delete.sh --selftest." ;;
   guard-*) head="the deletion guard could not finish checking this command, so it is refused (fail closed). This is NOT a match: nothing in it was found to be a delete."
            foot="A guard that stalls would let the command through when the harness gives up on it, so it refuses instead. Tell Gavin if an ordinary command hits this; run enforce-no-permanent-delete.sh --selftest." ;;
   *)       head="this command deletes or destroys data outside the Trash."; foot="$FOOTER" ;;
