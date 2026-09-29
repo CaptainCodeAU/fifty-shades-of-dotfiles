@@ -1,5 +1,9 @@
 # Shell lexer comparison: the three lexers in home/.claude/hooks/
 
+> **Figures below predate the A134 guard fixes (7bbb212, 770ecbe).** The current run is
+> `cases.tsv` as of db39a8c (2026-09-29, dotfiles 5d5aaff): 164 rows, 0 MISS, 280 ok:deny,
+> 371 ok:allow, 1 FP:deny, 4 POLICY:deny. The 39 misses counted below are fixed.
+
 Item W-20260929-A50, ruling D-20260929-A19 (compare the three lexers before any
 consolidation), then D-20260929-A24 (option B; these shapes become a shared test set).
 Read-only research: no hook was changed. Everything here comes from `run.sh` in this
@@ -170,7 +174,7 @@ and `rm-path` ("rm called by path"): plain rm routed past the Trash wrapper, tha
 hook's stated policy. Counted neither as FP nor as correct reads (reasons VERIFIED;
 that this is intended policy is ASSUMED from the reason text).
 
-_*Deny reasons (VERIFIED, cases.tsv why_* columns)._* No deny came from a crude
+_\*Deny reasons (VERIFIED, cases.tsv why_* columns)._* No deny came from a crude
 text fallback:
 
 - del: `rm-P` in 66 S rows, `rm-lookup` in S32 S33 S46, `rm-path` in S63.
