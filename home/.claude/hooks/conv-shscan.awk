@@ -744,8 +744,108 @@ function guard_check(    k, j, n, a, w, b, s, i, t) {
         s = g_crude(BT[i])
         if (s != "") { verdict("guard", "DENY", s " (inside backticks)"); return }
     }
+    s = pp_check()
+    if (s != "") { verdict("guard", "DENY", s); return }
     s = fp_check()
     if (s != "") { verdict("guard", "DENY", s); return }
+}
+
+# ------------------------------------------------------------------ guard: protected live files
+# Rule E of guard mode, W-20260929-A35 (red-team H5), ruled by Gavin 2026-09-29
+# (D-20260929-A14): a session must not weaken the LIVE guards or config from inside.
+# Protected: ~/.claude/hooks (and below), ~/.gitconfig, ~/.claude/CLAUDE.md, and
+# ~/.claude/projects/<key>/memory (and below). The dotfiles repo copies stay editable,
+# so a guard fix goes through the repo and a commit.
+# Denied: an output redirection into one; sed/gsed -i, perl -i, tee, truncate, touch,
+# chmod, chown, rm, unlink, mv on one; cp, install, rsync, ditto or ln with one as the
+# destination; dd of=<one>; git config --global (or --file ~/.gitconfig) unless it only
+# reads (--get*, --list, -l). Paths: ~, $HOME and ${HOME} are expanded, a relative path
+# is joined to the payload's cwd or a cd earlier in the command.
+# NOT read: a path held in any other variable, .. inside a path, Python or other
+# languages, a script file. The Edit and Write tools are covered by the settings deny list.
+
+function pp_path(w, cwd,    h) {
+    if (w ~ /\$\(|`/) return ""
+    gsub(/["'\\]/, "", w)
+    h = ENVIRON["HOME"]
+    if (w == "~" || substr(w, 1, 2) == "~/") w = h substr(w, 2)
+    else if (substr(w, 1, 7) == "${HOME}") w = h substr(w, 8)
+    else if (substr(w, 1, 5) == "$HOME") w = h substr(w, 6)
+    if (w ~ /\$/ || w == "") return ""
+    if (substr(w, 1, 1) != "/") { if (cwd == "") return ""; w = cwd "/" w }
+    gsub(/\/\/+/, "/", w)
+    while (substr(w, length(w)) == "/" && length(w) > 1) w = substr(w, 1, length(w) - 1)
+    return w
+}
+function pp_protected(p,    h, r) {
+    if (p == "") return 0
+    h = ENVIRON["HOME"]
+    if (h == "") return 0
+    if (p == h "/.gitconfig" || p == h "/.claude/CLAUDE.md" || p == h "/.claude/hooks") return 1
+    if (index(p, h "/.claude/hooks/") == 1) return 1
+    if (index(p, h "/.claude/projects/") == 1) {
+        r = substr(p, length(h "/.claude/projects/") + 1)
+        if (r ~ /^[^\/]+\/memory(\/|$)/) return 1
+    }
+    return 0
+}
+function pp_msg(p, how) {
+    sub("^" ENVIRON["HOME"], "~", p)
+    return "Protected live file (D-20260929-A14): " how " would change " p ". The live guards, ~/.gitconfig, ~/.claude/CLAUDE.md and the memory folders are locked so a session cannot weaken them from inside. Edit the dotfiles repo copy and commit, or ask Gavin"
+}
+function pp_check(    k, j, n, a, b, w, cwd, p, i, last, inpl, rd, v) {
+    cwd = ENVIRON["CONV_CWD"]
+    for (k = 1; k <= NC; k++) {
+        for (i = 1; i <= RDN[k]; i++) { p = pp_path(RDT[k, i], cwd); if (pp_protected(p)) return pp_msg(p, "a > redirection") }
+        j = eff(k); n = CNW[k]
+        if (j > n) continue
+        b = base(unq(WR[k, j]))
+        if (b == "cd" || b == "pushd") {
+            for (a = j + 1; a <= n && WR[k, a] ~ /^-[A-Za-z]/; a++) ;
+            p = (a > n) ? ENVIRON["HOME"] : pp_path(WR[k, a], cwd)
+            cwd = p; continue
+        }
+        if (b == "sed" || b == "gsed" || b == "perl") {
+            inpl = 0
+            for (a = j + 1; a <= n; a++) { v = unq(WR[k, a]); if (v ~ /^--in-place/ || v ~ /^-[A-Za-z]*i/) inpl = 1 }
+            if (!inpl) continue
+            for (a = j + 1; a <= n; a++) { p = pp_path(WR[k, a], cwd); if (pp_protected(p)) return pp_msg(p, b " -i") }
+            continue
+        }
+        if (b == "tee" || b == "truncate" || b == "touch" || b == "chmod" || b == "chown" || b == "rm" || b == "grm" || b == "unlink" || b == "mv" || b == "gmv") {
+            for (a = j + 1; a <= n; a++) { p = pp_path(WR[k, a], cwd); if (pp_protected(p)) return pp_msg(p, b) }
+            continue
+        }
+        if (b == "cp" || b == "gcp" || b == "install" || b == "rsync" || b == "ditto" || b == "ln") {
+            last = ""
+            for (a = j + 1; a <= n; a++) {
+                w = WR[k, a]
+                if (w == "-t" || w == "--target-directory") { p = pp_path(WR[k, a + 1], cwd); if (pp_protected(p)) return pp_msg(p, b); a++; continue }
+                if (w ~ /^-/) continue
+                last = w
+            }
+            p = pp_path(last, cwd); if (pp_protected(p)) return pp_msg(p, b " into it")
+            continue
+        }
+        if (b == "dd") {
+            for (a = j + 1; a <= n; a++) { v = WR[k, a]; if (v ~ /^["']?of=/) { sub(/^["']?of=/, "", v); p = pp_path(v, cwd); if (pp_protected(p)) return pp_msg(p, "dd of=") } }
+            continue
+        }
+        if (b == "git") {
+            for (a = j + 1; a <= n && unq(WR[k, a]) ~ /^-/; a++) if (unq(WR[k, a]) == "-C" || unq(WR[k, a]) == "-c") a++
+            if (a > n || unq(WR[k, a]) != "config") continue
+            rd = 0; v = 0
+            for (i = a + 1; i <= n; i++) {
+                w = unq(WR[k, i])
+                if (w == "--global") v = 1
+                if ((w == "--file" || w == "-f") && pp_protected(pp_path(WR[k, i + 1], cwd))) v = 1
+                if (w ~ /^--file=/ && pp_protected(pp_path(substr(w, 8), cwd))) v = 1
+                if (w ~ /^--get/ || w == "--list" || w == "-l") rd = 1
+            }
+            if (v && !rd) return pp_msg(ENVIRON["HOME"] "/.gitconfig", "git config --global")
+        }
+    }
+    return ""
 }
 
 # ------------------------------------------------------------------ guard: force push
