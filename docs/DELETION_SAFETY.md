@@ -208,6 +208,14 @@ The refusal names the argument, the resolved path and the rule id.
 | `search-unreadable` | the search could not read everything inside. Unread is not absent                  | outside the temp folders  |
 | `unresolvable`      | a folder on the path cannot be entered, so the target cannot be judged             | everywhere                |
 
+**"By any spelling" means file identity, not text** (W-20260929-A182). This Mac's disk ignores
+case and Unicode form, `pwd -P` keeps the spelling as typed, and `/System/Volumes/Data/...` is a
+firmlink to the same folder. Before 2026-09-29 these rules compared strings, so `trash ../SUB`
+from inside `.../sub`, `../../PLAIN` above it and an NFD `café` all went through (measured with a
+logging stand-in). `cwd`, `contains-cwd` and `floor` now also compare with `-ef` (same device
+and inode) on folder targets. A symlink target is still judged as the link itself, so deleting
+a link that points at the current folder stays allowed (a control arm).
+
 **A blank argument differs by route** (Gavin, 2026-09-29, on the first report). `trash ''` is
 refused, because `/usr/bin/trash ''` moves the current folder. On the rm route (`safe-rm`, so
 the rm shim and the zsh `rm()` too) a blank is skipped as it was before the guard: nothing is

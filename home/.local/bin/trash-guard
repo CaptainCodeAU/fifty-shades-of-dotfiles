@@ -130,6 +130,29 @@ _init_floors() {
 	esac
 }
 
+# ---------------------------------------------------------------- one folder, many spellings
+# `cd -P; pwd -P` keeps the spelling AS TYPED, and APFS here ignores case and Unicode form, and
+# /System/Volumes/Data/... is a second name for the same folder (a firmlink). So a string
+# compare missed `trash ../SUB` from .../sub, and `../../PLAIN` above it (measured 2026-09-29,
+# W-20260929-A182). These compare FILE IDENTITY (`-ef`: same device and inode). They are used on
+# a directory target only: a symlink target is judged as the link itself, and -ef would follow it.
+_same_as_floor() { # $1 = physical dir -> 0 when it IS a floor by identity
+	_l=$FLOORS
+	while [ -n "$_l" ]; do
+		_e=${_l%%"$NL"*}; _l=${_l#*"$NL"}
+		[ -n "$_e" ] && [ -d "$_e" ] && [ "$1" -ef "$_e" ] && return 0
+	done
+	return 1
+}
+_holds_cwd() { # $1 = physical dir -> 0 when it IS an ancestor of the current folder by identity
+	_c=$CWD
+	while [ -n "$_c" ] && [ "$_c" != / ]; do
+		_c=${_c%/*}; [ -n "$_c" ] || _c=/
+		[ "$1" -ef "$_c" ] && return 0
+	done
+	return 1
+}
+
 # ---------------------------------------------------------------- the current folder (rule 1)
 _init_cwd() {
 	[ -n "$CWD_DONE" ] && return 0
@@ -319,10 +342,12 @@ _check() {
 		rp=$PD
 		_init_floors
 		if _has_line "$FLOORS" "$rp"; then _refuse "$a" "$rp" floor "a protected folder (/, ~, ~/CODE, ~/CODE/CaptainCodeAU)"; continue; fi
+		if _same_as_floor "$rp"; then _refuse "$a" "$rp" floor "a protected folder under another spelling (case, Unicode form or firmlink)"; continue; fi   #M: flooref
 		_init_cwd
 		if [ -z "$CWD" ]; then _refuse "$a" "$rp" cwd "the current folder cannot be resolved, so a folder target cannot be judged against it"; continue; fi
-		if [ "$rp" = "$CWD" ]; then _refuse "$a" "$rp" cwd "the current folder"; continue; fi   #M: cwd
+		if [ "$rp" = "$CWD" ] || [ "$rp" -ef "$CWD" ]; then _refuse "$a" "$rp" cwd "the current folder (in any spelling: case, Unicode form, firmlink)"; continue; fi   #M: cwd
 		case "$CWD" in "$rp"/*) _refuse "$a" "$rp" contains-cwd "contains the current folder ($CWD)"; continue ;; esac
+		if _holds_cwd "$rp"; then _refuse "$a" "$rp" contains-cwd "contains the current folder ($CWD) under another spelling"; continue; fi   #M: containsef
 
 		_init_temp
 		if _in_temp "$rp"; then continue; fi   #M: temp

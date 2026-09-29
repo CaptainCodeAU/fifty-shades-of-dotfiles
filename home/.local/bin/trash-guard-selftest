@@ -511,6 +511,69 @@ else
 fi
 
 # ---------------------------------------------------------------- the seams cannot widen anything
+# (inserted) spelling arms
+# ---------------------------------------------------------------- one folder, many spellings
+section "9b. A different spelling of the same folder is the same folder (W-20260929-A182)"
+# APFS here ignores case and Unicode form, and /System/Volumes/Data/... is a firmlink to the
+# same folder. Before A182 the guard compared strings, so these were allowed. Validity first:
+# the fixture disk must really ignore case, or every arm below is an invalid trial.
+mkdir -p "$FX/caseprobe"
+if [ -d "$FX/CASEPROBE" ]; then
+	CLASS=new
+	nfc=$(printf 'caf\303\251'); nfd=$(printf 'cafe\314\201')
+	c_spell() { # SPELL_CWD (under D), SPELL_ARG (@D@ = D), SPELL_WANT, SPELL_MK (folders to make)
+		local D; D=$(fresh "$FX/outside")
+		local m; for m in $SPELL_MK; do mkdir -p "$D/$m"; done
+		KEEP=("$D/${SPELL_CWD}")
+		run_route "$ROUTE" "$D/$SPELL_CWD" "${SPELL_ARG//@D@/$D}"
+		expect_refused "$SPELL_WANT"
+	}
+	SPELL_MK="plain/sub"; SPELL_CWD="plain/sub"
+	SPELL_ARG="../SUB"; SPELL_WANT=cwd
+	both new "../SUB from inside .../sub (a case variant of the current folder)" c_spell
+	SPELL_ARG="@D@/PLAIN"; SPELL_WANT=contains-cwd
+	both new "@D@/PLAIN from inside .../plain/sub (a case variant of a folder holding it)" c_spell
+	SPELL_MK="$nfc/sub"; SPELL_CWD="$nfc/sub"
+	SPELL_ARG="@D@/$nfd/sub"; SPELL_WANT=cwd
+	both new "the current folder typed in the other Unicode form (NFD)" c_spell
+	SPELL_ARG="@D@/$nfd"; SPELL_WANT=contains-cwd
+	both new "a folder holding the current one, typed in NFD" c_spell
+	# Floors: a fixture home with NO repo inside, so only the floor rule can refuse (the
+	# nested-repo rule rescued every floor probe before A182, which hid the gap).
+	FH2=$FX/spellhome; mkdir -p "$FH2/CODE/CaptainCodeAU/keep"
+	c_floor() { # FLOOR_ARG
+		KEEP=("$FH2/CODE/CaptainCodeAU/keep")
+		XENV=(HOME="$FH2")
+		run_route "$ROUTE" "$FX/outside" "$FLOOR_ARG"
+		XENV=()
+		expect_refused floor
+	}
+	FLOOR_ARG="$FH2/code"; both new "~/code, a case variant of the floor ~/CODE (no repo inside)" c_floor
+	FLOOR_ARG="/System/Volumes/Data$(cd -P "$FH2" && pwd -P)/CODE"
+	if [ -d "$FLOOR_ARG" ]; then both new "~/CODE through the /System/Volumes/Data firmlink" c_floor
+	else CLASS=new; bad "invalid trial: the firmlink path $FLOOR_ARG does not exist here"; fi
+	CLASS=control
+	FLOOR_ARG="$FH2/CODE"; both control "~/CODE spelled exactly (control)" c_floor
+	# Controls: identity must not over-reach. A sibling is still allowed, and a symlink TO the
+	# current folder (no trailing slash) is the link itself, which trash moves and may.
+	c_sibling() {
+		local D; D=$(fresh "$FX/outside"); mkdir -p "$D/plain/sub" "$D/Other"
+		KEEP=("$D/plain/sub")
+		run_route "$ROUTE" "$D/plain/sub" "$D/OTHER"
+		expect_allowed "CALL <$D/OTHER>"
+	}
+	both control "a DIFFERENT folder, typed in another case, is still allowed" c_sibling
+	c_linkcwd() {
+		local D; D=$(fresh "$FX/outside"); mkdir -p "$D/plain/sub"; ln -s "$D/plain/sub" "$D/tocwd"
+		KEEP=("$D/plain/sub")
+		run_route "$ROUTE" "$D/plain/sub" "$D/tocwd"
+		expect_allowed "CALL <$D/tocwd>"
+	}
+	both control "a symlink TO the current folder (no slash) is the link itself: allowed" c_linkcwd
+else
+	CLASS=new; bad "invalid trial: the fixture disk is case-sensitive, so the spelling arms cannot run here"
+fi
+
 section "10. The test seams can only make the guard more careful"
 CLASS=new
 if [ -x "$BIN/trash-guard" ]; then
@@ -665,7 +728,7 @@ if [ "$MODE" = mutants ]; then
 	caught=0; missed=0
 	# file:tag. trash-guard:blank is the one that proves `trash ''` is still refused;
 	# safe-rm:rm-blank-skip proves the rm route's quiet skip is really tested.
-	specs="trash-guard:blank trash-guard:cwd trash-guard:timeout trash-guard:temp trash-guard:noseam safe-rm:rm-blank-skip safe-rm:rm-blank-warn"
+	specs="trash-guard:blank trash-guard:cwd trash-guard:timeout trash-guard:temp trash-guard:noseam trash-guard:flooref trash-guard:containsef safe-rm:rm-blank-skip safe-rm:rm-blank-warn"
 	[ "$(uname -s)" = Darwin ] && specs="$specs safe-rm:mac-no-trash-put trash-guard:darwinpin"
 	for spec in $specs; do
 		mf=${spec%%:*}; m=${spec#*:}
