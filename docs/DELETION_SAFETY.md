@@ -241,20 +241,40 @@ listing `home/.ssh` is allowed, only file contents are denied (find exit 0).
 **The real trash** is `trash-guard --real-trash`: the first `trash` on PATH that is not a copy of
 the shim (the shim carries a marker string; any file holding it is skipped, so the shim can never
 exec itself or another copy). None found: refuse. `safe-rm` uses the same answer, so the guard
-runs once per call, not twice.
+runs once per call, not twice. On macOS `safe-rm` has no second answer: its `trash-put` PATH
+fallback is off there, because a `trash-put` planted earlier on PATH was run whenever
+`--real-trash` failed (measured 2026-09-29 with a logging stand-in). Linux keeps the fallback until
+the Linux rule is settled (W-20260929-A157). The PATH search itself is still open: a `trash` that
+is not a trash tool, placed ahead of `/usr/bin` on PATH, is run by both routes. Pinning macOS to
+`/usr/bin/trash` is W-20260929-A169 (batch two, after machine B's macOS version is measured).
 
 **Test seams** (every one can only make the guard more careful, or is fenced to a temp folder,
 because an agent can set an environment variable as easily as a test can):
 
 | Variable                        | Effect                                                                                    |
 | ------------------------------- | ----------------------------------------------------------------------------------------- |
-| `TRASH_GUARD_REAL_TRASH`        | the real trash; honoured only when it resolves inside a system temp folder, else refused  |
+| `TRASH_GUARD_REAL_TRASH`        | REMOVED 2026-09-29 (W-20260929-A185, Gavin's ruling): its folder-only fence let a temp link to `/bin/rm` through, and both routes ran it. Set at all, it now makes `--real-trash` REFUSE. Tests set the real trash by editing the `#P: real-trash` line in a COPY of `trash-guard` |
 | `TRASH_GUARD_TEMP_ROOTS`        | replaces the temp list; an entry is kept only when it is inside a real temp root          |
 | `TRASH_GUARD_TIMEOUT`           | search timeout; can only LOWER the 2 s                                                    |
 | `TRASH_GUARD_TEST_SEARCH_DELAY` | sleep before the search (a fake slow search); can only cause a timeout                    |
 | `HOME`                          | the floor list's home; the account's home from the user database stays on the list anyway |
 
 `trash-guard --show-config` prints the floors, the temp roots in force and the real trash.
+
+**`rm-reach-check` asks two questions about trash** (W-20260929-A168). Row 3a: does a bare `trash`
+reach the shim beside the tool (so trash-guard runs first), or does something sit ahead of it on
+PATH? Row 3b: what will `safe-rm` actually run, asked of `trash-guard --real-trash` exactly as
+`safe-rm` asks it? Before 2026-09-29 one row asked "is `command -v trash` Apple's?", which the
+shim made false on every run, and its advice told Gavin to remove the shim. The tool now never
+advises removing a file that resolves inside this repo; it says the finding is its own bug. A zsh
+that hashed `trash` before the shim was stowed is invisible to it (W-20260929-A184).
+
+**Evidence, batch one** (2026-09-29, branch `trash-batch1`): trash-guard-selftest 178/0 (master's
+code with the new arms: 6 failed, 40 controls passed); `--mutants` 9 caught, 0 missed, including
+`noseam` and `mac-no-trash-put`. rm-reach-check --selftest 17/0 (master with only the new
+selftest grafted in: 7 failed). safe-rm-selftest 52/0 unsandboxed, with no `/bin/rm` left in it
+(W-20260929-A160); its `SAFE_RM_OFF=1` arm now runs only from a terminal and says NOT RUN from an
+agent, because it is a permanent delete.
 
 **Evidence** (2026-09-29, branch `trash-guard`):
 [`trash-guard-selftest`](../home/.local/bin/trash-guard-selftest) 174 passed, 0 failed (134 new
@@ -439,6 +459,9 @@ computed in a child the hook waits on for at most **3 s**. What each way of goin
 | the classifier runs past 3 s                                                 | **denied** (`guard-timeout`)                                    | selftest DEADLINE arm, test seam                  |
 | the classifier exits before its verdict (an `exit`, a fatal shell error)     | **denied** (`guard-no-verdict`, via an EXIT trap)               | selftest DEADLINE arm, test seam                  |
 | the classifier is killed by a signal                                         | **denied** (`guard-no-verdict`)                                 | one manual run in a scratch copy, not in selftest |
+| the classifier parses but no longer recognises anything (a gutted function)  | **denied** (`guard-broken`: a canary `/bin/rm x` must come back `rm-path` first; before 2026-09-29 this was a silent allow, W-20260929-A186) | selftest BROKEN-FILE arms, mutant on the canary line |
+| a syntax error anywhere in the hook file                                     | **blocked**: bash stops parsing and exits 2, which Claude Code treats as a block (measured 2026-09-29) | selftest BROKEN-FILE arm (exit 2) |
+| the hook file loses its exec bit                                             | **allowed** (exit 126 is a non-blocking error to Claude Code; assumed from the hook docs, not measured) | none: open residual in W-20260929-A186 |
 | `DEL_GUARD_DEADLINE` set above 2                                             | ignored; the 3 s deadline holds                                 | selftest arm (99: denied under 4.5 s)             |
 | the lexer (awk) fails                                                        | allowed, `additionalContext` warning                            | unchanged                                         |
 | `jq` missing                                                                 | **denied** if the raw text names a trigger, else a warning      | selftest UNREADABLE arms (D-20260925-A03)         |
