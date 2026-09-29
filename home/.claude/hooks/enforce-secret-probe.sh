@@ -213,13 +213,14 @@ _lexed() { # $1 = text, $2 = depth. Sets R.
     || { _crude "$text" "it exited non-zero"; return 0; }
   [[ $recs == *"E$US"* ]] || { _crude "$text" "it gave no end record"; return 0; }
   CUR_TEXT="$text"; STDIN_SH=" "
-  local -a kd=() pd=() rs=() hp=() hb=() words=() a=()
+  local -a kd=() pd=() rs=() hp=() hb=() words=() a=() xs=()
   local i n
   while IFS= read -r line; do
     case "$line" in
       C"$US"*|H"$US"*)
         kd[${#kd[@]}]="${line%%"$US"*}"; rest="${line#?"$US"}"
         pd[${#pd[@]}]="${rest%%"$US"*}"; rs[${#rs[@]}]="${rest#*"$US"}" ;;
+      X"$US"*) rest="${line#?"$US"}"; xs[${#xs[@]}]="${rest#*"$US"}" ;;   # A118: text run as code
     esac
   done <<< "$recs"
   n=${#kd[@]}; i=0
@@ -247,6 +248,12 @@ _lexed() { # $1 = text, $2 = depth. Sets R.
   k=0
   while [ -z "$R" ] && [ "$k" -lt "${#hp[@]}" ]; do
     case "$STDIN_SH" in *" ${hp[$k]} "*) _sub "$depth" "${hb[$k]//$RSC/$'\n'}" "a shell reading stdin" ;; esac
+    k=$((k + 1))
+  done
+  # W-20260929-A118: a <( ) body given to source or a shell, and $( ) in an unquoted heredoc
+  k=0
+  while [ -z "$R" ] && [ "$k" -lt "${#xs[@]}" ]; do
+    _sub "$depth" "${xs[$k]//$RSC/$'\n'}" "text run as code"
     k=$((k + 1))
   done
   # RULE 13 -- a captured name printed later in this text (or in an sh -c inside it)
@@ -353,6 +360,21 @@ _argv() { # $1 = depth, then one simple command's words. Sets R.
       [ $# -gt 0 ] && _argv "$depth" "$@"; return 0 ;;
     eval)
       [ $# -gt 0 ] && _sub "$depth" "$*" "eval"; return 0 ;;
+    script)   # W-20260929-A118: script [opts] [file [cmd ...]] runs cmd; Linux: script -c CMD
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          -c|--command) [ $# -ge 2 ] && _sub "$depth" "$2" "script -c"; return 0 ;;
+          -F|-t|-T|-I|-O|-B|-E) shift 2 || set -- ;;
+          --) shift; break ;;
+          -*) shift ;;
+          *) break ;;
+        esac
+      done
+      [ $# -gt 0 ] && shift
+      [ $# -gt 0 ] && _argv "$depth" "$@"; return 0 ;;
+    source|.)   # W-20260929-A118: sourcing stdin reads it as shell code
+      for w in "$@"; do case "$w" in /dev/stdin|/dev/fd/0|-) STDIN_SH="$STDIN_SH$CUR_PID " ;; esac; done
+      return 0 ;;
     sh|bash|zsh|dash|ksh|mksh|yash|fish)
       local want=0 stdin=0
       while [ $# -gt 0 ]; do
@@ -735,6 +757,13 @@ if [ "${1:-}" = "--selftest" ]; then
   _must 0 'A46 rg API_KEY src/ (a code search)'             'rg API_KEY src/'
   _must 0 'A46 rg -l API_KEY ~/.config (names only)'        'rg -l API_KEY ~/.config'
   _must 0 'A46 rg theme ~/.config (not a credential word)'  'rg theme ~/.config'
+  # W-20260929-A118: the four shapes, through the secret guard's rules
+  _must 1 'A118 script -q /dev/null printenv GH_TOKEN'       'script -q /dev/null printenv GH_TOKEN'
+  _must 1 'A118 source <(echo printenv GH_TOKEN)'            "source <(echo 'printenv GH_TOKEN')"
+  _must 1 'A118 . /dev/stdin <<< printenv GH_TOKEN'          ". /dev/stdin <<< 'printenv GH_TOKEN'"
+  _must 1 'A118 $(printenv GH_TOKEN) in unquoted heredoc'    $'cat <<EOF\n$(printenv GH_TOKEN)\nEOF'
+  _must 0 'A118 source <(echo printenv HOME)'                "source <(echo 'printenv HOME')"
+  _must 0 'A118 script -q /dev/null ls'                      'script -q /dev/null ls'
   echo "=== CAPTURE arms (D-20260929-A07): into a variable passes, printed later denied ==="
   _must 0 'C01 recipe: GH_TOKEN=$(security -w) ci-watch' 'GH_TOKEN="$(security find-generic-password -a "$USER" -s github-api-readonly -w)" ci-watch'
   _must 0 'C02 recipe: T=$(security -w 2>/dev/null)'     'T=$(security find-generic-password -a "$USER" -s github-api-readonly -w 2>/dev/null)'

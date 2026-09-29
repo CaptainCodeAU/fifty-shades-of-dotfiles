@@ -83,6 +83,9 @@ OPM=$'\002'  # marks a redirection operator word
 # Input: the command on stdin. Output, one record per line, fields split by US:
 #   C <pid> <word>...   a simple command; redirection ops are OPM-prefixed words
 #                       followed by their target word
+#   X <pid> <text>      text that RUNS as shell code (A118): a <( ) body given to
+#                       source, . or a shell, or a $( ) / backtick span in an unquoted
+#                       heredoc body
 #   H <pid> <text>      stdin data for pipeline <pid>: a heredoc body or a
 #                       here-string (<<<)
 #   E <maxpid>          last line, always; its absence means the lexer failed
@@ -97,7 +100,7 @@ BEGIN { US = sprintf("%c", 31); RSC = sprintf("%c", 30); OPM = sprintf("%c", 2);
         # of them, no alias, no SAFE_RM_OFF and no truncating redirection cannot be
         # denied, so it is not emitted: bash 3.2 costs ~0.15 ms per command it sees.
         # nofilter=1 emits everything; the selftest runs every arm both ways.
-        nt = split("sudo doas env command exec time repeat nice timeout gtimeout caffeinate stdbuf gstdbuf watch xargs gxargs eval sh bash zsh dash ksh mksh yash fish rm grm unlink gunlink shred gshred srm wipe truncate gtruncate dd gdd cp gcp find gfind fd fdfind git rsync rimraf del-cli docker podman docker-compose brew pnpm bun bunx npx pnpx uv node nodejs deno perl ruby osascript diskutil wipefs tmutil trash-empty trash-rm crontab tee gtee export declare typeset local readonly unset hash grhh gwipe gpristine", TL, " ")
+        nt = split("sudo doas env command exec time repeat nice timeout gtimeout caffeinate stdbuf gstdbuf watch xargs gxargs eval sh bash zsh dash ksh mksh yash fish rm grm unlink gunlink shred gshred srm wipe truncate gtruncate dd gdd cp gcp find gfind fd fdfind git rsync rimraf del-cli docker podman docker-compose brew pnpm bun bunx npx pnpx uv node nodejs deno perl ruby osascript diskutil wipefs tmutil trash-empty trash-rm crontab tee gtee script source . export declare typeset local readonly unset hash grhh gwipe gpristine", TL, " ")
         for (k = 1; k <= nt; k++) TRIG[TL[k]] = 1
         hasal = 0
         if (snap != "") loadaliases() }
@@ -129,7 +132,7 @@ END {
   print "E" US maxp
 }
 function newstate() {
-  d++; nw[d] = 0; cur[d] = ""; inw[d] = 0; pd[d] = 0; hdp[d] = 0; hst[d] = 0; hsp[d] = 0
+  d++; nw[d] = 0; cur[d] = ""; inw[d] = 0; pd[d] = 0; hdp[d] = 0; hst[d] = 0; hsp[d] = 0; wq[d] = 0; ps[d] = ""
   P++; if (P > maxp) maxp = P; pid[d] = P
 }
 function newpipe() { P++; if (P > maxp) maxp = P; pid[d] = P }
@@ -137,10 +140,10 @@ function enc(x) { gsub(/\n/, RSC, x); return x }
 function flushword() {
   if (inw[d]) {
     nw[d]++; W[d, nw[d]] = cur[d]
-    if (hdp[d]) { hn++; HD[hn] = cur[d]; HT[hn] = hst[d]; HP[hn] = pid[d]; hdp[d] = 0 }
+    if (hdp[d]) { hn++; HD[hn] = cur[d]; HT[hn] = hst[d]; HP[hn] = pid[d]; HQ[hn] = wq[d]; hdp[d] = 0 }   # A118: HQ = quoted marker
     else if (hsp[d]) { hsp[d] = 0; print "H" US pid[d] US enc(cur[d]) }
   }
-  cur[d] = ""; inw[d] = 0
+  cur[d] = ""; inw[d] = 0; wq[d] = 0
 }
 function emitcmd(   k, out, w, op, intr, nop, fw, data, al, safe, trd) {
   flushword()
@@ -160,6 +163,8 @@ function emitcmd(   k, out, w, op, intr, nop, fw, data, al, safe, trd) {
       if (hasal && (w in AV)) { intr = 1; al = 1 }
     }
     if (nop == 0) intr = 1
+    if (ps[d] != "" && (fw == "source" || fw == "." || fw ~ /^(bash|sh|zsh|dash|ksh)$/)) print "X" US pid[d] US enc(ps[d] " | sh")   #M: A118 source <( ) body is code
+    ps[d] = ""
     # echo/printf/print is DATA: emitted as stdin for its pipeline, which only
     # matters when an interpreter reads it (echo code | python3)
     if (!al && (fw == "echo" || fw == "printf" || fw == "print") && !(fw in AV) && !trd) {
@@ -178,6 +183,25 @@ function emitcmd(   k, out, w, op, intr, nop, fw, data, al, safe, trd) {
   nw[d] = 0
 }
 function addop(op) { flushword(); nw[d]++; W[d, nw[d]] = OPM op }
+# A118: every $( ) (not $(( ))) and backtick span in t, sent as code (X records)
+function xsubs(t, p,   i, m, c, dd, st) {
+  m = length(t); i = 1
+  while (i <= m) {
+    c = substr(t, i, 1)
+    if (c == "\\") { i += 2; continue }
+    if (c == "$" && substr(t, i + 1, 1) == "(" && substr(t, i + 2, 1) != "(") {
+      dd = 1; st = i + 2; i += 2
+      while (i <= m && dd > 0) { c = substr(t, i, 1); if (c == "(") dd++; else if (c == ")") dd--; i++ }
+      print "X" US p US enc(substr(t, st, i - 1 - st)); continue
+    }
+    if (c == "`") {
+      st = i + 1; i++
+      while (i <= m && substr(t, i, 1) != "`") i++
+      print "X" US p US enc(substr(t, st, i - st)); i++; continue
+    }
+    i++
+  }
+}
 function readheredocs(i,   k, j, line, t, body, rest) {
   for (k = hstart; k <= hn; k++) {
     body = ""
@@ -189,6 +213,7 @@ function readheredocs(i,   k, j, line, t, body, rest) {
       body = body line "\n"
     }
     print "H" US HP[k] US enc(body)
+    if (!HQ[k]) xsubs(body, HP[k])   #M: A118 unquoted heredoc substitutions
   }
   hstart = hn + 1
   return i
@@ -272,14 +297,14 @@ function lex(i, term,   c, c2, j, op) {
     if (c == "\\") {
       c2 = substr(s, i + 1, 1)
       if (c2 == "\n") { i += 2; continue }
-      cur[d] = cur[d] c2; inw[d] = 1; i += 2; continue
+      cur[d] = cur[d] c2; inw[d] = 1; wq[d] = 1; i += 2; continue
     }
     if (c == "'") {
       j = index(substr(s, i + 1), "'")
-      if (j == 0) { cur[d] = cur[d] substr(s, i + 1); inw[d] = 1; i = n + 1; continue }
-      cur[d] = cur[d] substr(s, i + 1, j - 1); inw[d] = 1; i = i + j + 1; continue   #M: lexer: single quotes
+      if (j == 0) { cur[d] = cur[d] substr(s, i + 1); inw[d] = 1; wq[d] = 1; i = n + 1; continue }
+      cur[d] = cur[d] substr(s, i + 1, j - 1); inw[d] = 1; wq[d] = 1; i = i + j + 1; continue   #M: lexer: single quotes
     }
-    if (c == "\"") { inw[d] = 1; i = dq(i + 1); continue }   #M: lexer: double quotes
+    if (c == "\"") { inw[d] = 1; wq[d] = 1; i = dq(i + 1); continue }   #M: lexer: double quotes
     if (c == "$") {
       c2 = substr(s, i + 1, 1)
       if (c2 == "'") { inw[d] = 1; i = ansic(i + 2); continue }
@@ -293,7 +318,8 @@ function lex(i, term,   c, c2, j, op) {
     }
     if ((c == "<" || c == ">" || c == "=") && substr(s, i + 1, 1) == "(" && (c != "=" || !inw[d])) {
       if (c != "=") flushword()
-      i = lex(i + 2, ")"); cur[d] = cur[d] "$(...)"; inw[d] = 1; continue   #M: lexer: <( ) >( ) =( )
+      j = i + 2; i = lex(i + 2, ")"); if (c == "<") ps[d] = substr(s, j, i - 1 - j)   # A118: <( ) body
+      cur[d] = cur[d] "$(...)"; inw[d] = 1; continue   #M: lexer: <( ) >( ) =( )
     }
     if (c == " " || c == "\t") { flushword(); i++; continue }
     if (c == "\n") {
@@ -523,7 +549,7 @@ _shell_text() { # $1 = text
   if [ $rc -ne 0 ] || [[ $recs != *"E$US"* ]]; then
     LEXER_FAILED=1; DEPTH=$((DEPTH - 1)); return 0
   fi
-  local -a lines hpids hbodies
+  local -a lines hpids hbodies xcodes
   local line oldifs="$IFS"
   IFS=$'\n'; lines=($recs); IFS="$oldifs"
   local -a f
@@ -533,6 +559,7 @@ _shell_text() { # $1 = text
       C) CUR_PID="${f[1]}"; _simple "${f[@]:2}" ;;
       A) AL_N[${#AL_N[@]}]="${f[1]}"; AL_V[${#AL_V[@]}]="${f[2]//$RSC/$'\n'}" ;;   #M: alias records
       H) hpids[${#hpids[@]}]="${f[1]}"; hbodies[${#hbodies[@]}]="${f[2]:-}" ;;
+      X) xcodes[${#xcodes[@]}]="${f[2]:-}" ;;   # A118: text that runs as code
       E) [ "${f[1]}" -gt "$PIDBASE" ] 2>/dev/null && PIDBASE="${f[1]}" ;;
     esac
     [ -n "$REASON_ID" ] && break
@@ -545,6 +572,11 @@ _shell_text() { # $1 = text
       shell) _shell_text "${hbodies[$k]//$RSC/$'\n'}" ;;       #M: heredoc to a shell
       code)  _code_deletes "${hbodies[$k]}" ;;                  #M: heredoc to an interpreter
     esac
+    k=$((k + 1))
+  done
+  k=0
+  while [ -z "$REASON_ID" ] && [ $k -lt ${#xcodes[@]} ]; do
+    _shell_text "${xcodes[$k]//$RSC/$'\n'}"   #M: A118 text run as code
     k=$((k + 1))
   done
   DEPTH=$((DEPTH - 1))
@@ -632,6 +664,22 @@ _argv() {
       [ $# -gt 0 ] && _argv "$adepth" "$@"                                                   #M: reserved-word look-through
       return 0 ;;
     '[['|for|foreach|select|case|function|esac) return 0 ;;
+    script)   # W-20260929-A118: script [opts] [file [cmd ...]] runs cmd; Linux: script -c CMD
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          -c|--command) [ $# -ge 2 ] && _shell_text "$2"; return 0 ;;   #M: A118 script -c
+          -F|-t|-T|-I|-O|-B|-E) shift 2 || set -- ;;
+          --) shift; break ;;
+          -*) shift ;;
+          *) break ;;
+        esac
+      done
+      [ $# -gt 0 ] && shift   # the typescript file
+      [ $# -gt 0 ] && _argv "$adepth" "$@"   #M: A118 script CMD
+      return 0 ;;
+    source|.)   # W-20260929-A118: sourcing stdin reads it as shell code
+      for w in "$@"; do case "$w" in /dev/stdin|/dev/fd/0|-) SI_KIND[$CUR_PID]=shell ;; esac; done   #M: A118 source /dev/stdin
+      return 0 ;;
     -|nohup|noglob|nocorrect|builtin|unbuffer|chronic)
       [ $# -gt 0 ] && _argv "$adepth" "$@"                                                   #M: precommand look-through
       return 0 ;;
@@ -1263,6 +1311,18 @@ SNAP
   _must -                   'A37 git rm --cached f'           'git rm --cached notes.txt'
   _must -                   'A37 crontab -l'                  'crontab -l'
   _must -                   'A37 tee -a f < /dev/null'        'tee -a notes.txt < /dev/null'
+  # W-20260929-A118: four shapes that ran a command no guard saw (lexer comparison S47
+  # S54 S55 S57). The allow arms are the near-miss and data controls.
+  _must rm-P                'A118 script -q /dev/null CMD (S47)' 'script -q /dev/null rm -P x'
+  _must rm-P                'A118 script -q -c CMD file'      'script -q -c "rm -P x" /dev/null'
+  _must rm-P                'A118 source <(echo ...) (S54)'   "source <(echo 'rm -P x')"
+  _must rm-P                'A118 . <(printf ...)'            ". <(printf 'rm -P x')"
+  _must rm-P                'A118 . /dev/stdin <<< (S55)'     ". /dev/stdin <<< 'rm -P x'"
+  _must rm-P                'A118 $(...) in unquoted heredoc (S57)' $'cat <<EOF\n$(rm -P x)\nEOF'
+  _must -                   'A118 script -q /dev/null rm x'   'script -q /dev/null rm x'
+  _must -                   'A118 source <(a generator)'      'source <(kubectl completion zsh)'
+  _must -                   'A118 . /dev/stdin <<< rm x'      ". /dev/stdin <<< 'rm x'"
+  _must -                   'A118 $(...) in QUOTED heredoc stays data' $'cat <<\'EOF\'\n$(rm -P x)\nEOF'
   _must rsync-delete        'rsync --delete'                  'rsync -a --delete src/ dst/'
   _must rsync-delete        'rsync --delete-after'            'rsync -a --delete-after src/ dst/'
   _must rsync-delete        'rsync --del'                     'rsync -a --del src/ dst/'
