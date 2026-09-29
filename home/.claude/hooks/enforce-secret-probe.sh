@@ -45,10 +45,18 @@
 #
 # WHAT IT DELIBERATELY DOES NOT CATCH
 #   A printer hidden in a script, an alias or a function; a name held in a variable
-#   (`$cmd`); a subscript read in inline code (os.environ["GH_TOKEN"]); a recursive
-#   search for key names (rg API_KEY ~/.config); github-agent-token token, which the
-#   git-auth recovery rule tells the model to run. The ${...} rules still skip heredoc
-#   bodies, for the reason the sibling hooks do: prose must not fire a gate.
+#   (`$cmd`); a key-name search OUTSIDE the secret folders (rg API_KEY src/ is ordinary
+#   code search); inline code in a file rather than -c/-e. The ${...} rules still skip
+#   heredoc bodies, for the reason the sibling hooks do: prose must not fire a gate.
+#
+# SINCE 2026-09-29 (W-20260929-A46, Gavin's rulings D-20260929-A20, A21, A22) it also
+#   denies: github-agent-token token|pat printed (RULE 14; captured into NAME=$(...) or
+#   piped into a 4-to-8-character check or a hash passes); inline code reading ONE
+#   credential variable (os.environ["X"], os.getenv, process.env.X, perl $ENV{X} / %ENV,
+#   ruby ENV["X"] / ENV.to_h); security export; infisical secrets; ${(P)name} inside
+#   echo/printf/print (RULE 15); DATABASE_URL, *_DSN and connection-string names; and a
+#   grep/rg/ag rooted in ~/.config, ~/.aws, ~/.ssh, ~/.gnupg, ~/.netrc or the Keychains
+#   folder for a credential word, unless it prints file names only (RULE 16).
 #
 #   `--selftest` proves every arm, positive AND negative. A block rule with no negative
 #   arm cannot tell "correctly silent" from "broken and silent".
@@ -60,7 +68,9 @@ set -uo pipefail
 # PAT counts only as a whole _-separated part (GH_PAT, PAT_RO): until 2026-09-29 it
 # matched inside PATH, so `echo "$PATH"` was denied. Where the pattern is not followed
 # by a fixed character it is used with SECRET_END, so $PATH cannot match as $PAT + H.
-SECRETY='([A-Za-z0-9_]*(TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|APIKEY|_KEY|CREDENTIAL|PRIVKEY)[A-Za-z0-9_]*|([A-Za-z0-9]+_)*PAT(_[A-Za-z0-9]+)*)'
+SECRETY='([A-Za-z0-9_]*(TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|APIKEY|_KEY|CREDENTIAL|PRIVKEY)[A-Za-z0-9_]*|([A-Za-z0-9]+_)*PAT(_[A-Za-z0-9]+)*|[A-Za-z0-9_]*(DATABASE_URL|_DSN|DSN_|CONNECTION_STRING|CONN_STR|REDIS_URL|MONGO_URI|MONGODB_URI|POSTGRES_URL|POSTGRESQL_URL|AMQP_URL)[A-Za-z0-9_]*)'
+# W-20260929-A46 (S23): a DATABASE_URL, *_DSN or connection string carries a password in
+# its value although its name is not credential-shaped. A plain *_URL does not match.
 SECRET_END='([^A-Za-z0-9_]|$)'
 RE_SECRET_NAME="^${SECRETY}\$"
 
@@ -143,6 +153,13 @@ inhd==0{
     reason="RULE 3: a credential variable expanded inside echo/printf/print"
   fi
 
+  # RULE 15 (W-20260929-A46, S34) -- ${(P)name} expands the variable NAMED BY name, so the
+  # name this hook would judge is out of sight. Denied inside echo/printf/print.
+  RE_PFLAG='(^|[|;&(])[[:space:]]*(echo|printf|print)[^|;&]*[$][{][(][^)]*P[^)]*[)]'
+  if [ -z "$reason" ] && [[ "$bare" =~ $RE_PFLAG ]]; then
+    reason="RULE 15: \${(P)name} expands a variable chosen at run time, which this hook cannot judge. SAFE: name the variable literally, or print \${#name}"
+  fi
+
   # RULES 4+ -- commands that print a secret without naming a ${...}: read by the lexer.
   # CAPT holds the names a printer was captured into (D-20260929-A07); a nested
   # sh -c / eval body inherits it, because it runs in a subshell of this one.
@@ -173,6 +190,10 @@ CAPT=" "; BARE=""
 SAFE_NAMES='SAFE: names only, no values: env | cut -d= -f1 | grep -i token'
 RE_ASSIGN='^[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?\+?='
 RE_ENVDUMP='(os\.environ|process\.env)([^].[A-Za-z0-9_]|$)'
+# W-20260929-A46: inline code reading ONE credential-named variable, not just dumping all.
+RE_ENVREAD="(os\\.environ(\\.get)?[[:space:]]*[[(][[:space:]]*[\"']|os\\.getenv[[:space:]]*\\([[:space:]]*[\"']|process\\.env(\\.|\\[[[:space:]]*[\"']))$SECRETY$SECRET_END"
+# A search that prints matching lines, rooted in a folder that holds secrets (A22, S14).
+RE_CREDWORD='(key|token|secret|passw|dsn|credential|private|ghs_|ghp_|gho_|github_pat|sk-|akia)'
 MAX_DEPTH=4
 
 # The CRUDE stand-in, when the lexer is missing or failed on this text.
@@ -411,6 +432,29 @@ _argv() { # $1 = depth, then one simple command's words. Sets R.
       esac
       return 0 ;;
 
+    # ---- RULE 14 (W-20260929-A46, D-20260929-A20): github-agent-token prints a live token.
+    # Captured into $(...) it passes (_captured); piped into a 4-to-8-character check or a
+    # hash it passes; anything else that would show it is denied.
+    github-agent-token)
+      case "${1:-}" in
+        token|pat)
+          RE_GATCHECK='github-agent-token[[:space:]]+(token|pat)[^|;&]*[|][[:space:]]*(cut[[:space:]]+-c[[:space:]]*(1-)?[1-8]([^0-9]|$)|head[[:space:]]+-c[[:space:]]*[1-8]([^0-9]|$)|wc[[:space:]]+-[cm]|shasum|sha1sum|sha256sum|sha512sum|md5|md5sum|b2sum)'
+          [[ $CUR_TEXT =~ $RE_GATCHECK ]] && return 0
+          # Captured into NAME=$(...) passes when EVERY call in the command is one (the App-token
+          # form puts a second $(...) in the command word, which _captured will not guess at).
+          # The names join CAPT, so a later echo of them is still RULE 13.
+          RE_GATASSIGN='([A-Za-z_][A-Za-z0-9_]*)=["'"'"']?[$][(][[:space:]]*github-agent-token[[:space:]]+(token|pat)'
+          local g_all g_cap g_rest="$CUR_TEXT"
+          g_all="$(printf '%s' "$CUR_TEXT" | grep -oE 'github-agent-token[[:space:]]+(token|pat)' | wc -l | tr -d ' ')"
+          g_cap=0
+          while [[ $g_rest =~ $RE_GATASSIGN ]]; do
+            CAPT="$CAPT${BASH_REMATCH[1]} "; g_cap=$((g_cap + 1)); g_rest="${g_rest#*"${BASH_REMATCH[0]}"}"
+          done
+          [ "$g_cap" -ge "$g_all" ] && [ "$g_all" -gt 0 ] && return 0
+          R="RULE 14: github-agent-token $1 prints a live GitHub token. SAFE: pass it without printing, GH_TOKEN=\"\$(github-agent-token token)\" <cmd>; to check one comes back, github-agent-token token | cut -c1-4" ;;
+      esac
+      return 0 ;;
+
     # ---- RULE 7: the macOS keychain
     security)
       case "${1:-}" in
@@ -420,6 +464,8 @@ _argv() { # $1 = depth, then one simple command's words. Sets R.
               R="RULE 7: security $1 $w prints the keychain secret. SAFE: drop -w/-g to confirm the item exists (attributes only); let the tool that owns it read it (github-agent-token), or ask Gavin"; return 0
             fi
           done ;;
+        export)
+          R="RULE 7: security export writes keychain items, private keys included, out of the keychain. SAFE: ask Gavin"; return 0 ;;
         dump-keychain)
           for w in "$@"; do [[ $w =~ ^-[A-Za-z]*d ]] && { R="RULE 7: security dump-keychain -d prints every secret in the keychain. SAFE: drop -d, or ask Gavin"; return 0; }; done ;;
       esac
@@ -447,6 +493,25 @@ _argv() { # $1 = depth, then one simple command's words. Sets R.
           R="RULE 9: $base reads $w, a file that holds secrets. SAFE: cut -d= -f1 $w (names only), or [ -s $w ] && echo present"; return 0
         fi
       done
+      # RULE 16 (W-20260929-A46, D-20260929-A22, S14): a search rooted in a secret-bearing
+      # folder for a credential-shaped word prints the values. File names only (-l) passes.
+      case "$base" in
+        grep|egrep|fgrep|ggrep|rg|ag)
+          local s_root=0 s_word=0 s_names=0 lw sp
+          for w in "$@"; do
+            case "$w" in -l|-L|-c|--files-with-matches|--files-without-match|--count|--files|--count-matches) s_names=1; continue ;; esac
+            sp="$w"
+            case "$sp" in '~/'*) sp="$HOME/${sp#'~/'}" ;; '$HOME/'*) sp="$HOME/${sp#'$HOME/'}" ;; '${HOME}/'*) sp="$HOME/${sp#'${HOME}/'}" ;; esac
+            case "$sp" in
+              "$HOME"/.config|"$HOME"/.config/*|"$HOME"/.aws|"$HOME"/.aws/*|"$HOME"/.ssh|"$HOME"/.ssh/*|"$HOME"/.gnupg|"$HOME"/.gnupg/*|"$HOME"/.netrc|"$HOME"/Library/Keychains|"$HOME"/Library/Keychains/*) s_root=1 ;;
+            esac
+            lw="$(printf '%s' "$w" | tr '[:upper:]' '[:lower:]')"
+            [[ $lw =~ $RE_CREDWORD ]] && s_word=1
+          done
+          if [ "$s_root" -eq 1 ] && [ "$s_word" -eq 1 ] && [ "$s_names" -eq 0 ]; then
+            R="RULE 16: $base searches a folder that holds secrets for a credential word, and prints the matching lines, values included. SAFE: $base -l (file names only), then read a name with cut -d= -f1"; return 0
+          fi ;;
+      esac
       return 0 ;;
 
     # ---- RULE 10: other processes' environments, and secret managers
@@ -461,6 +526,7 @@ _argv() { # $1 = depth, then one simple command's words. Sets R.
       return 0 ;;
     infisical)
       [ "${1:-}" = export ] && R="RULE 10: infisical export prints every secret in the environment. SAFE: infisical run -- <cmd> passes them without printing"
+      [ "${1:-}" = secrets ] && R="RULE 10: infisical secrets prints the secrets it lists (W-20260929-A46). SAFE: infisical run -- <cmd> passes them without printing"
       return 0 ;;
 
     # ---- RULE 11: an interpreter dumping the whole environment
@@ -476,6 +542,22 @@ _argv() { # $1 = depth, then one simple command's words. Sets R.
         esac
       done
       [ $# -gt 0 ] && _argv "$depth" "$@"; return 0 ;;
+    perl|ruby)   # W-20260929-A46: $ENV{NAME} / %ENV and ENV["NAME"] / ENV.to_h in inline code
+      RE_RBDUMP='ENV[.](to_h|to_a|to_s|each|inspect|keys|values|map|select|sort)'
+      RE_PLREAD="ENV[{[][[:space:]]*[\"']?$SECRETY$SECRET_END"
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          -e|-E)
+            if [[ ${2:-} =~ %ENV ]] || [[ ${2:-} =~ $RE_RBDUMP ]]; then
+              R="RULE 11: $base $1 prints the whole environment, tokens included. $SAFE_NAMES"
+            elif [[ ${2:-} =~ $RE_PLREAD ]]; then
+              R="RULE 11: $base $1 reads a credential variable in inline code (W-20260929-A46). SAFE: [ -n \"\${NAME-}\" ] && echo \"SET len=\${#NAME}\""
+            fi
+            return 0 ;;
+        esac
+        shift
+      done
+      return 0 ;;
     python|python[0-9]*|pypy|pypy[0-9]*|node|nodejs|deno|bun)
       [ "$base" = deno ] && [ "${1:-}" = eval ] && shift && set -- -e "$@"
       while [ $# -gt 0 ]; do
@@ -483,6 +565,9 @@ _argv() { # $1 = depth, then one simple command's words. Sets R.
           -c|-e|-p|--eval|--print)
             if [[ ${2:-} =~ $RE_ENVDUMP ]]; then
               R="RULE 11: $base $1 prints the whole environment (os.environ / process.env), tokens included. $SAFE_NAMES"
+            fi
+            if [ -z "$R" ] && [[ ${2:-} =~ $RE_ENVREAD ]]; then
+              R="RULE 11: $base $1 reads a credential variable in inline code (W-20260929-A46). SAFE: let the tool that needs it read it; to check it is set, [ -n \"\${NAME-}\" ] && echo \"SET len=\${#NAME}\""
             fi
             return 0 ;;
         esac
@@ -615,6 +700,41 @@ if [ "${1:-}" = "--selftest" ]; then
 
   # D-20260929-A07 (Gavin, option C): a printer captured into an assignment or an env
   # prefix passes; the captured NAME printed later in the same command is denied.
+  echo "=== A46 arms (W-20260929-A46, Gavin 2026-09-29, D-20260929-A20/A21/A22) ==="
+  # A20: github-agent-token prints a live token; capture and a 4-character check pass
+  _must 1 'A46 github-agent-token token (S18)'              'github-agent-token token'
+  _must 1 'A46 github-agent-token pat public-read (S19)'    'github-agent-token pat public-read'
+  _must 1 'A46 github-agent-token token | cat'              'github-agent-token token | cat'
+  _must 0 'A46 GH_TOKEN="$(github-agent-token token)" gh'   'GH_TOKEN="$(github-agent-token token)" gh api user --jq .login'
+  _must 0 'A46 github-agent-token token | cut -c1-4'        'github-agent-token token | cut -c1-4'
+  _must 0 'A46 github-agent-token --help'                   'github-agent-token --help'
+  _must 1 'A46 a capture AND a bare print in one command'   'X="$(github-agent-token token)"; github-agent-token token'
+  _must 1 'A46 captured, then echoed (RULE 13)'             'T="$(github-agent-token token)"; echo "$T"'
+  # A21: inline code, keychain export, infisical secrets, ${(P)}, DATABASE_URL-style names
+  _must 1 'A46 python -c os.environ["GH_TOKEN"]'            "python3 -c 'import os; print(os.environ[\"GH_TOKEN\"])'"
+  _must 1 'A46 python -c os.getenv("API_KEY")'              "python3 -c 'import os; print(os.getenv(\"API_KEY\"))'"
+  _must 1 'A46 node -e process.env.GH_TOKEN'                "node -e 'console.log(process.env.GH_TOKEN)'"
+  _must 1 'A46 perl -e $ENV{GH_TOKEN}'                      "perl -e 'print \$ENV{GH_TOKEN}'"
+  _must 1 'A46 perl -e %ENV dump'                           "perl -e 'print \"\$_=\$ENV{\$_}\\n\" for keys %ENV'"
+  _must 1 'A46 ruby -e ENV["GH_TOKEN"]'                     "ruby -e 'puts ENV[\"GH_TOKEN\"]'"
+  _must 1 'A46 security export'                             'security export -k login.keychain -t allItems'
+  _must 1 'A46 infisical secrets'                           'infisical secrets --env=prod'
+  _must 1 'A46 echo ${(P)name} (S34)'                       'echo ${(P)name}'
+  _must 1 'A46 echo ${DATABASE_URL:-none} (S23)'            'echo ${DATABASE_URL:-none}'
+  _must 1 'A46 echo $SENTRY_DSN'                            'echo "$SENTRY_DSN"'
+  _must 0 'A46 python -c os.environ["HOME"] (near miss)'    "python3 -c 'import os; print(os.environ[\"HOME\"])'"
+  _must 0 'A46 node -e process.env.PATH (near miss)'        "node -e 'console.log(process.env.PATH)'"
+  _must 0 'A46 echo ${SITE_URL:-none} (a URL, no credential)' 'echo ${SITE_URL:-none}'
+  _must 0 'A46 echo ${(j: :)arr} (flags without P)'         'echo ${(j: :)arr}'
+  _must 0 'A46 security find-generic-password, no -w'       'security find-generic-password -s github-agent'
+  _must 0 'A46 infisical run -- cmd'                        'infisical run -- make test'
+  # A22: a credential-name search rooted in a secret folder prints values
+  _must 1 'A46 rg -uuu API_KEY ~/.config (S14)'             'rg -uuu API_KEY ~/.config'
+  _must 1 'A46 grep -r TOKEN ~/.aws'                        'grep -r TOKEN ~/.aws'
+  _must 1 'A46 rg -i password $HOME/.ssh'                   'rg -i password $HOME/.ssh'
+  _must 0 'A46 rg API_KEY src/ (a code search)'             'rg API_KEY src/'
+  _must 0 'A46 rg -l API_KEY ~/.config (names only)'        'rg -l API_KEY ~/.config'
+  _must 0 'A46 rg theme ~/.config (not a credential word)'  'rg theme ~/.config'
   echo "=== CAPTURE arms (D-20260929-A07): into a variable passes, printed later denied ==="
   _must 0 'C01 recipe: GH_TOKEN=$(security -w) ci-watch' 'GH_TOKEN="$(security find-generic-password -a "$USER" -s github-api-readonly -w)" ci-watch'
   _must 0 'C02 recipe: T=$(security -w 2>/dev/null)'     'T=$(security find-generic-password -a "$USER" -s github-api-readonly -w 2>/dev/null)'
