@@ -55,7 +55,10 @@ fi
 pass=0
 fail=0
 ROOT=$(mktemp -d "${TMPDIR:-/tmp}/safe-rm-selftest.XXXXXX") || exit 1
-cleanup() { chmod -R u+rwx "$ROOT" 2>/dev/null; /bin/rm -rf "$ROOT" 2>/dev/null; }
+# No /bin/rm anywhere in this file (W-20260929-A160; the BINDING no-real-deleter rule covers
+# every script an agent runs). Fixtures stay in $TMPDIR, which the OS clears; cleanup only
+# reopens anything a test locked, and every fixture folder is fresh, so nothing needs wiping.
+cleanup() { chmod -R u+rwx "$ROOT" 2>/dev/null; }
 trap cleanup EXIT INT TERM HUP
 
 ok()   { pass=$((pass + 1)); printf '  \033[32mok\033[0m   %s\n' "$1"; }
@@ -71,7 +74,7 @@ run() {
 	return 0
 }
 
-newdir() { local d="$ROOT/$1"; /bin/rm -rf "$d" 2>/dev/null; mkdir -p "$d"; printf '%s' "$d"; }
+newdir() { mktemp -d "$ROOT/$1.XXXXXX"; }   # fresh every call, so a repeated name never needs wiping
 
 echo "safe-rm-selftest"
 echo "  under test: $SAFE_RM"
@@ -259,11 +262,17 @@ if [ -x "$RM_SHIM" ]; then
 		&& ok "no sibling safe-rm: the shim refuses and runs nothing else" \
 		|| bad "no sibling safe-rm: exit=$ST target-left=$([ -e "$d/lonely.txt" ] && echo yes || echo no)"
 
-	# The documented escape hatch must still work, and must be permanent.
-	: > "$d/perm.txt"
-	PATH="$d/bin:/usr/bin:/bin" SAFE_RM_OFF=1 "$d/bin/rm" -f "$d/perm.txt" >/dev/null 2>&1
-	[ ! -e "$d/perm.txt" ] && ok "SAFE_RM_OFF=1 reaches the real rm" \
-	                       || bad "SAFE_RM_OFF=1 did not delete"
+	# The documented escape hatch must still work, and must be permanent. It IS a permanent
+	# delete, which an agent may never run (the BINDING rule), so it runs only from a terminal,
+	# i.e. Gavin's own hand. An agent run says NOT RUN out loud; it is not counted as a pass.
+	if [ -t 0 ] && [ -t 1 ]; then
+		: > "$d/perm.txt"
+		PATH="$d/bin:/usr/bin:/bin" SAFE_RM_OFF=1 "$d/bin/rm" -f "$d/perm.txt" >/dev/null 2>&1
+		[ ! -e "$d/perm.txt" ] && ok "SAFE_RM_OFF=1 reaches the real rm" \
+		                       || bad "SAFE_RM_OFF=1 did not delete"
+	else
+		echo "  NOT RUN  SAFE_RM_OFF=1 reaching the real rm: a permanent delete, run only from a terminal (no tty here)"
+	fi
 	echo
 fi
 
@@ -337,8 +346,7 @@ echo "9. Catastrophic targets must be refused, contents must stay deletable"
 # `rm -rf ~` is refused by nothing on stock macOS. These assertions run against a FAKE
 # \$HOME inside the temp directory -- never the real one -- so a regression in the guard
 # cannot destroy the machine while testing the guard.
-FH="$ROOT/fakehome"
-/bin/rm -rf "$FH" 2>/dev/null
+FH="$ROOT/fakehome"   # $ROOT is a fresh mktemp folder, so this never exists yet
 mkdir -p "$FH/Documents/keep" "$FH/CODE/proj/dist" "$FH/Downloads/folder"
 : > "$FH/Documents/keep/a.txt"
 : > "$FH/CODE/proj/dist/bundle.js"
@@ -400,7 +408,8 @@ echo "10. Sweeping a guarded folder must be refused; single deletes must not"
 # shape: two or more direct children of a guarded folder in one call.
 SH="$ROOT/sweephome"
 seed_sweep() {
-	/bin/rm -rf "$SH" 2>/dev/null
+	# Re-creates whatever an ALLOW sweep moved to the Trash; mkdir -p and : > are idempotent,
+	# and no arm adds files, so the tree after a reseed equals a fresh one without wiping it.
 	for sd in Downloads Desktop Documents CODE Pictures; do mkdir -p "$SH/$sd"; done
 	for sd in Downloads Desktop Documents CODE; do
 		for nm in one two three; do mkdir -p "$SH/$sd/$nm"; : > "$SH/$sd/$nm/data.txt"; done
