@@ -1,0 +1,82 @@
+#!/usr/bin/env sh
+# trash -- PATH shim in front of the real trash. Every target goes past trash-guard first.
+#
+# WHY THIS EXISTS
+# ---------------
+# 2026-09-29: a cleanup ran `trash ''` with an empty variable, three times, and macOS
+# /usr/bin/trash moved the CURRENT folder (the engage repo) to the Trash each time. The rm
+# route already had safe-rm in front of it; a bare `trash` had nothing. This file is that
+# missing layer. The rules live in trash-guard beside it, shared with safe-rm, so `trash X`
+# and `rm -r X` always get the same verdict. See docs/DELETION_SAFETY.md "The trash guard".
+#
+# WHAT IT DOES
+#   1. Splits argv: before `--`, an argument starting with `-` (but not `-` alone) is an
+#      option and passes through UNCHANGED (macOS trash: -h -s -v and their long forms).
+#      Everything else is a target. `--` itself is dropped, because /usr/bin/trash has no
+#      `--` convention, and a target after it that starts with `-` is passed as ./NAME, the
+#      same fix safe-rm uses (trash exits 0 on an option it does not know and skips it).
+#   2. Runs `trash-guard --check` on the targets. Any refusal: exit 1, nothing trashed.
+#   3. Execs the REAL trash: `trash-guard --real-trash`, the first `trash` on PATH that is
+#      not a copy of this shim. None found: refuse. It never recurses into itself.
+#
+# WHAT IT CANNOT COVER
+#   /usr/bin/trash typed by path, `command trash`, `env trash`: for an AGENT the Bash hook
+#   enforce-no-permanent-delete.sh denies those (rule trash-path). For Gavin's own terminal,
+#   /usr/bin/trash by path is his deliberate route and is left alone by design.
+#   A PATH without ~/.local/bin (cron, launchd, brew internals) reaches /usr/bin/trash direct.
+#
+# TRASH_GUARD_SHIM_7f3a  <- trash-guard --real-trash skips any file holding this string.
+
+set -u
+
+self=$(readlink -f "$0" 2>/dev/null) || self=""
+GUARD="${self%/*}/trash-guard"
+if [ -z "$self" ] || [ ! -x "$GUARD" ]; then
+	echo "trash: the trash-guard beside this shim was not found (${GUARD}) -- refusing to trash anything." >&2
+	echo "       It ships in the dotfiles repo at ~/.local/bin/trash-guard; run ./install.sh." >&2
+	exit 1
+fi
+
+real=$("$GUARD" --real-trash) || {
+	echo "trash: no real trash command found on PATH (other than this shim) -- refusing." >&2
+	exit 1
+}
+
+# Rewrite argv in place (POSIX sh has no arrays): shift each argument off the front and
+# re-append its final form, so "$@" ends as exactly what the real trash will receive.
+argc=$#
+i=0
+no_more_opts=0
+while [ "$i" -lt "$argc" ]; do
+	arg=$1
+	shift
+	i=$((i + 1))
+	if [ "$no_more_opts" -eq 0 ]; then
+		case "$arg" in
+			--) no_more_opts=1; continue ;;
+			-?*) set -- "$@" "$arg"; continue ;;
+			-) arg=./- ;;
+		esac
+	else
+		case "$arg" in -*) arg="./$arg" ;; esac
+	fi
+	set -- "$@" "$arg"
+done
+
+# The guard gets the targets only: every argument that does not start with `-`. After the
+# rewrite above, an option is exactly that (a `-` target became ./-, a `-x` target ./-x).
+check_targets() {
+	n=$#
+	j=0
+	while [ "$j" -lt "$n" ]; do
+		x=$1
+		shift
+		j=$((j + 1))
+		case "$x" in -?*) ;; *) set -- "$@" "$x" ;; esac
+	done
+	[ $# -eq 0 ] && return 0
+	"$GUARD" --check -- "$@"
+}
+check_targets "$@" || exit 1
+
+exec "$real" "$@"

@@ -1,0 +1,394 @@
+#!/usr/bin/env sh
+# trash-guard -- the ONE place that decides whether a path may go to the Trash.
+#
+# WHY THIS EXISTS
+# ---------------
+# 2026-09-29, 19:25, 19:31 and 19:37: the engage repo went to the Trash three times. A cleanup
+# ran `trash ''` / `trash ""` with an empty variable, and macOS /usr/bin/trash given an empty
+# argument trashes the CURRENT folder. Gavin recovered it each time with Put Back.
+# Incident: CaptainCodeAU-isolinear/workbench/records-system/2026-09-28/
+#           INCIDENT-20260929-engage-repo-trashed.md
+# Lesson:   ~/.claude/pj-global/notes/20260929-cleanup-on-an-empty-path-trashes-the-folder.md
+#
+# Two routes reach the Trash and both ask this file first:
+#   trash    home/.local/bin/trash, a PATH shim in front of /usr/bin/trash
+#   rm       home/.local/bin/rm -> safe-rm (and the zsh rm() function -> safe-rm)
+# One file holds the rules so the two routes cannot drift apart.
+#
+# USAGE
+#   trash-guard --check [--] PATH...   judge only; NEVER deletes anything.
+#                                      exit 0 every path allowed, 1 refused, 2 usage
+#   trash-guard --real-trash           print the real trash command: the first `trash` on
+#                                      PATH that is not a copy of the shim. exit 1 if none.
+#   trash-guard --show-config          print the floor list, temp roots and search timeout
+#
+# THE RULES (Gavin, 2026-09-29, in the conductor's boxes; docs/DELETION_SAFETY.md "The trash
+# guard"). Every target is resolved first and the RESOLVED path is judged. One refusal refuses
+# the whole call: the callers trash nothing unless every target is allowed.
+#   1  ALWAYS refused, temp folders included:
+#        [blank]         an empty or whitespace-only argument
+#        [cwd]           `.`, or the current folder by any spelling
+#        [contains-cwd]  a folder that contains the current folder
+#        [floor]         /, ~, ~/CODE, ~/CODE/CaptainCodeAU (FLOOR_TAILS below)
+#   2  Refused OUTSIDE the system temp folders (folders only; a file is judged by rule 1 alone):
+#        [repo-root]     a folder holding .git (a directory or a file)
+#        [nested-repo]   a folder with a git repo anywhere inside it. The search is bounded
+#                        by a 2 s wall clock; one that cannot finish REFUSES, saying so
+#                        ([search-timeout]), and so does one that cannot read everything
+#                        ([search-unreadable]). Never an allow on a timeout.
+#   3  ALLOWED although it holds a .git FILE: a linked worktree at <repo>/.worktree/<name>
+#      whose .git file points into <repo>/.git/worktrees/. It keeps the documented removal
+#      route (rm -r <dir>, then git worktree prune). A worktree holding a nested repo is still
+#      refused.
+#   4  Temp folders: $TMPDIR, /tmp (/private/tmp) and `getconf DARWIN_USER_TEMP_DIR`, each
+#      resolved. Only a path strictly INSIDE one is exempt from rule 2, never the root itself.
+#
+# A SYMLINK named as the target WITHOUT a trailing slash is the link itself, and trashing it
+# moves the link, not what it points to (safe-rm-selftest section 9 proves it on the real
+# trash: the fake home behind a trashed link survives). So a link is judged by rule 1 on its
+# own path. With a trailing slash (`link/`) it names the directory behind it and is judged as
+# that directory. Symlinks EARLIER in the path are always resolved.
+#
+# TEST SEAMS. Every one can only make the guard MORE cautious, or is fenced to a temp folder,
+# because an agent can set an environment variable as easily as a test can:
+#   TRASH_GUARD_REAL_TRASH         the real trash command. Honoured only when it resolves
+#                                  INSIDE a system temp folder (a fake there); anything else
+#                                  is refused, so it cannot point at /bin/rm.
+#   TRASH_GUARD_TEMP_ROOTS         colon-separated temp roots, REPLACING the list. An entry
+#                                  is kept only when it is, or is inside, a real temp root, so
+#                                  it can narrow the exemption and never widen it.
+#   TRASH_GUARD_TIMEOUT            search timeout in seconds; can only LOWER the 2 s.
+#   TRASH_GUARD_TEST_SEARCH_DELAY  sleep this long before the search starts (a fake slow
+#                                  search); can only make a timeout more likely.
+#   HOME                           the floor list's home. The account's home from the user
+#                                  database is ALWAYS on the floor list too, so changing or
+#                                  unsetting HOME never unprotects the real one.
+#
+# POSIX sh on purpose (Mac today; mlbox/Linux later). No arrays: target lists travel in "$@".
+# Tagged `#M:` lines are the ones trash-guard-selftest --mutants breaks one at a time.
+
+set -u
+
+# The shim carries this string; --real-trash skips any file holding it, so the shim never
+# resolves to itself or to another copy of itself.
+MARK=TRASH_GUARD_SHIM_7f3a
+FLOOR_TAILS='/CODE /CODE/CaptainCodeAU'
+TIMEOUT_MAX=2
+
+FLOORS=""; FLOORS_DONE=""
+CWD=""; CWD_DONE=""
+REAL_TEMP=""; TEMP_ROOTS=""; TEMP_DONE=""
+REFUSED=0
+NL='
+'
+
+_err() { printf '%s\n' "$*" >&2; }
+
+_pdir() { # $1 = a directory -> PD = its physical path (newline-safe); 1 when it cannot be entered
+	case "$1" in /*) _d=$1 ;; *) _d=./$1 ;; esac   # ./ so a name like "-" is never `cd -`
+	PD=$(CDPATH='' cd -P -- "$_d" 2>/dev/null && pwd -P && echo x) || { PD=""; return 1; }
+	PD=${PD%x}
+	PD=${PD%?}
+	[ -n "$PD" ]
+}
+
+_has_line() { # $1 = newline-separated list, $2 = a line -> 0 when present
+	case "$NL$1" in *"$NL$2$NL"*) return 0 ;; esac
+	return 1
+}
+
+# ---------------------------------------------------------------- the floor list (rule 1)
+_add_floor() {
+	case "$1" in /*) ;; *) return 0 ;; esac
+	_has_line "$FLOORS" "$1" || FLOORS="$FLOORS$1$NL"
+	if [ -d "$1" ] && _pdir "$1"; then _has_line "$FLOORS" "$PD" || FLOORS="$FLOORS$PD$NL"; fi
+	return 0
+}
+_add_home() { # $1 = a home directory: it and its FLOOR_TAILS go on the list, literal and resolved
+	_h=$1
+	case "$_h" in /*) ;; *) return 0 ;; esac
+	while [ "$_h" != / ] && [ "${_h%/}" != "$_h" ]; do _h=${_h%/}; done
+	_add_floor "$_h"
+	for _t in $FLOOR_TAILS; do
+		if [ "$_h" = / ]; then _add_floor "$_t"; else _add_floor "$_h$_t"; fi
+	done
+}
+_init_floors() {
+	[ -n "$FLOORS_DONE" ] && return 0
+	FLOORS_DONE=1
+	_add_floor /
+	[ -n "${HOME-}" ] && _add_home "$HOME"
+	_u=$(id -un 2>/dev/null) || _u=""
+	case "$_u" in
+		'' | *[!A-Za-z0-9._-]*) ;;
+		*) eval "_ph=~$_u"; _add_home "$_ph" ;;   # the user database's home, whatever HOME says
+	esac
+}
+
+# ---------------------------------------------------------------- the current folder (rule 1)
+_init_cwd() {
+	[ -n "$CWD_DONE" ] && return 0
+	CWD_DONE=1
+	if _pdir .; then CWD=$PD; else CWD=""; fi
+}
+
+# ---------------------------------------------------------------- temp roots (rule 4)
+_temp_base() { # $1 = physical path -> 0 when it is a system temp location
+	case "$1" in
+		/private/tmp | /private/tmp/* | /tmp | /tmp/* | /private/var/folders/?*) return 0 ;;
+	esac
+	return 1
+}
+_in_list() { # $1 = list, $2 = path -> 0 when path IS or is inside an entry
+	_l=$1
+	while [ -n "$_l" ]; do
+		_e=${_l%%"$NL"*}; _l=${_l#*"$NL"}
+		[ -n "$_e" ] || continue
+		[ "$2" = "$_e" ] && return 0
+		case "$2" in "$_e"/*) return 0 ;; esac
+	done
+	return 1
+}
+_init_temp() {
+	[ -n "$TEMP_DONE" ] && return 0
+	TEMP_DONE=1
+	for _c in /tmp /private/tmp; do
+		[ -d "$_c" ] && _pdir "$_c" && { _has_line "$REAL_TEMP" "$PD" || REAL_TEMP="$REAL_TEMP$PD$NL"; }
+	done
+	_c=$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null) || _c=""
+	# $TMPDIR and the user temp dir count only when they really are temp locations: TMPDIR is
+	# one assignment away for anyone, and TMPDIR=$HOME must not exempt every repo in it.
+	for _c in "$_c" "${TMPDIR-}"; do
+		[ -n "$_c" ] && [ -d "$_c" ] && _pdir "$_c" && _temp_base "$PD" \
+			&& { _has_line "$REAL_TEMP" "$PD" || REAL_TEMP="$REAL_TEMP$PD$NL"; }
+	done
+	if [ "${TRASH_GUARD_TEMP_ROOTS+set}" = set ]; then
+		_r="$TRASH_GUARD_TEMP_ROOTS:"
+		while [ -n "$_r" ]; do
+			_c=${_r%%:*}; _r=${_r#*:}
+			[ -n "$_c" ] && [ -d "$_c" ] && _pdir "$_c" && _in_list "$REAL_TEMP" "$PD" \
+				&& TEMP_ROOTS="$TEMP_ROOTS$PD$NL"
+		done
+	else
+		TEMP_ROOTS=$REAL_TEMP
+	fi
+}
+_in_temp() { # $1 = physical path -> 0 when strictly INSIDE a temp root
+	_l=$TEMP_ROOTS
+	while [ -n "$_l" ]; do
+		_e=${_l%%"$NL"*}; _l=${_l#*"$NL"}
+		[ -n "$_e" ] || continue
+		case "$1" in "$_e"/?*) return 0 ;; esac
+	done
+	return 1
+}
+
+# ---------------------------------------------------------------- a linked worktree (rule 3)
+_is_worktree() { # $1 = physical dir holding .git -> 0 when it is <repo>/.worktree/<name>
+	_p=${1%/*}
+	[ "${_p##*/}" = .worktree ] || return 1
+	{ [ -f "$1/.git" ] && [ ! -L "$1/.git" ]; } || return 1
+	_repo=${_p%/*}
+	{ [ -d "$_repo/.git" ] && [ ! -L "$_repo/.git" ]; } || return 1
+	_ln=""
+	IFS= read -r _ln < "$1/.git" 2>/dev/null
+	case "$_ln" in "gitdir: "?*) _gd=${_ln#gitdir: } ;; *) return 1 ;; esac
+	case "$_gd" in /*) ;; *) _gd="$1/$_gd" ;; esac
+	{ [ -d "$_gd" ] && _pdir "$_gd"; } || return 1
+	_g=$PD
+	_pdir "$_repo/.git" || return 1
+	case "$_g" in "$PD"/worktrees/?*) ;; *) return 1 ;; esac
+	case "${_g#"$PD"/worktrees/}" in */*) return 1 ;; esac
+	return 0
+}
+
+# ---------------------------------------------------------------- refusals
+_refuse() { # $1 = argument, $2 = resolved path, $3 = rule id, $4 = why
+	REFUSED=$((REFUSED + 1))
+	printf 'trash-guard: REFUSED "%s" -> %s\n             [%s] %s\n' "$1" "${2:-(could not resolve)}" "$3" "$4" >&2
+}
+_refuse_pairs() { # $1 = rule id, $2 = why, then pairs: argument resolved ...
+	_id=${1-}; _why=${2-}; shift 2 || set --
+	while [ $# -ge 2 ]; do _refuse "$1" "$2" "$_id" "$_why"; shift 2; done
+}
+
+_is_blank() { case "$1" in *[![:space:]]*) return 1 ;; esac; return 0; }
+
+# ---------------------------------------------------------------- the nested-repo search (rule 2)
+_timeout() {
+	TMO=$TIMEOUT_MAX
+	_v=${TRASH_GUARD_TIMEOUT-}
+	case "$_v" in '' | *[!0-9.]* | *.*.* | .) return 0 ;; esac
+	awk -v t="$_v" -v m="$TIMEOUT_MAX" 'BEGIN { exit !(t + 0 > 0 && t + 0 < m + 0) }' && TMO=$_v
+	return 0
+}
+_find_roots() { # pairs (argument resolved ...) -> one find over every resolved path; SOUT, FRC
+	_n=$#; _j=0
+	while [ "$_j" -lt "$_n" ]; do
+		_x=$1; shift; _j=$((_j + 1))
+		[ $((_j % 2)) -eq 0 ] && set -- "$@" "$_x"
+	done
+	_timeout
+	_dl=${TRASH_GUARD_TEST_SEARCH_DELAY-}
+	case "$_dl" in '' | *[!0-9.]*) _dl="" ;; esac
+	# depth 1 (each root's own .git) was judged already; a worktree's .git FILE lives there.
+	# The watchdog and the delay run with /dev/null for stdio so no leftover sleep can hold
+	# this capture open.
+	SOUT=$(
+		{ if [ -n "$_dl" ]; then sleep "$_dl" </dev/null >/dev/null 2>&1; fi
+		  exec find "$@" -mindepth 2 -name .git -print -quit; } 2>&1 &
+		_fp=$!
+		( sleep "$TMO"; kill "$_fp" ) </dev/null >/dev/null 2>&1 &
+		_wp=$!
+		wait "$_fp"; _frc=$?
+		kill "$_wp" 2>/dev/null
+		printf '\nrc=%s' "$_frc"
+	)
+	FRC=${SOUT##*"${NL}rc="}
+	SOUT=${SOUT%"${NL}rc="*}
+	case "$FRC" in '' | *[!0-9]*) FRC=255 ;; esac
+}
+_search() { # pairs (argument resolved ...)
+	_find_roots "$@"
+	MATCH=""; ERR1=""
+	_rest=$SOUT
+	while [ -n "$_rest" ]; do
+		_ln=${_rest%%"$NL"*}
+		case "$_rest" in *"$NL"*) _rest=${_rest#*"$NL"} ;; *) _rest="" ;; esac
+		case "$_ln" in
+			/*) [ -n "$MATCH" ] || MATCH=$_ln ;;
+			find:*) [ -n "$ERR1" ] || ERR1=$_ln ;;
+		esac
+	done
+	if [ "$FRC" -ge 128 ]; then
+		_refuse_pairs search-timeout "the search for a git repo inside did not finish within ${TMO} s. A timeout is never an allow. Delete smaller pieces, or ask Gavin." "$@"   #M: timeout
+	elif [ -n "$MATCH" ]; then
+		_hit=0
+		while [ $# -ge 2 ]; do
+			case "$MATCH" in "$2"/*) _refuse "$1" "$2" nested-repo "contains a git repo: ${MATCH%/.git} (outside the temp folders)"; _hit=1 ;; esac
+			shift 2
+		done
+		[ "$_hit" -eq 1 ] || { REFUSED=$((REFUSED + 1)); _err "trash-guard: REFUSED: a git repo was found inside one of the targets: $MATCH  [nested-repo]"; }
+	elif [ "$FRC" -ne 0 ]; then
+		_refuse_pairs search-unreadable "the search for a git repo inside could not read everything (${ERR1:-find exit $FRC}). Unread is not absent." "$@"
+	fi
+}
+
+# ---------------------------------------------------------------- --check
+_check() {
+	_argc=$#; _i=0
+	while [ "$_i" -lt "$_argc" ]; do
+		a=$1; shift; _i=$((_i + 1))
+		_is_blank "$a" && { _refuse "$a" "" blank "a blank argument: macOS trash '' moves the CURRENT folder to the Trash (engage, 2026-09-29)"; continue; }   #M: blank
+
+		s=$a; slash=0
+		while [ "$s" != / ] && [ "${s%/}" != "$s" ]; do s=${s%/}; slash=1; done
+		if [ "$slash" -eq 0 ] && [ -L "$s" ]; then kind=link
+		elif [ -d "$s" ]; then kind=dir
+		elif [ -e "$s" ]; then kind=file
+		else kind=none
+		fi
+
+		case "$kind" in
+			file)
+				continue ;;   # a file cannot be a floor, the current folder, or hold either
+			none | link)
+				case "$s" in */*) d=${s%/*}; [ -n "$d" ] || d=/ ;; *) d=. ;; esac
+				if ! _pdir "$d"; then
+					# Parent missing: nothing there to protect. Parent present but not
+					# enterable: cannot tell what this is, so refuse.
+					[ -d "$d" ] && _refuse "$a" "" unresolvable "a folder on this path cannot be entered, so it cannot be judged"
+					continue
+				fi
+				[ "$PD" = / ] && rp="/${s##*/}" || rp="$PD/${s##*/}"
+				_init_floors
+				_has_line "$FLOORS" "$rp" && _refuse "$a" "$rp" floor "a protected folder (/, ~, ~/CODE, ~/CODE/CaptainCodeAU)"
+				continue ;;
+		esac
+
+		# a directory
+		if ! _pdir "$s"; then
+			_refuse "$a" "" unresolvable "this folder cannot be entered, so it cannot be judged"
+			continue
+		fi
+		rp=$PD
+		_init_floors
+		if _has_line "$FLOORS" "$rp"; then _refuse "$a" "$rp" floor "a protected folder (/, ~, ~/CODE, ~/CODE/CaptainCodeAU)"; continue; fi
+		_init_cwd
+		if [ -z "$CWD" ]; then _refuse "$a" "$rp" cwd "the current folder cannot be resolved, so a folder target cannot be judged against it"; continue; fi
+		if [ "$rp" = "$CWD" ]; then _refuse "$a" "$rp" cwd "the current folder"; continue; fi   #M: cwd
+		case "$CWD" in "$rp"/*) _refuse "$a" "$rp" contains-cwd "contains the current folder ($CWD)"; continue ;; esac
+
+		_init_temp
+		if _in_temp "$rp"; then continue; fi   #M: temp
+		if [ -e "$rp/.git" ] || [ -L "$rp/.git" ]; then
+			_is_worktree "$rp" || { _refuse "$a" "$rp" repo-root "a git repo root (it holds .git) outside the temp folders"; continue; }
+		fi
+		set -- "$@" "$a" "$rp"   # queued for the one nested-repo search below
+	done
+	[ $# -gt 0 ] && _search "$@"
+	if [ "$REFUSED" -gt 0 ]; then
+		_err "trash-guard: $REFUSED refused. Nothing was trashed in this call (all or nothing)."
+		_err "             Rules: docs/DELETION_SAFETY.md \"The trash guard\". A refusal is Gavin's call to override, never an agent's."
+		return 1
+	fi
+	return 0
+}
+
+# ---------------------------------------------------------------- --real-trash
+_real_trash() {
+	if [ -n "${TRASH_GUARD_REAL_TRASH-}" ]; then
+		_c=$TRASH_GUARD_REAL_TRASH
+		case "$_c" in */*) _d=${_c%/*}; [ -n "$_d" ] || _d=/ ;; *) _d=. ;; esac
+		_init_temp
+		if [ -f "$_c" ] && [ -x "$_c" ] && _pdir "$_d" && _in_list "$REAL_TEMP" "$PD" && [ "$PD" != / ]; then
+			printf '%s\n' "$PD/${_c##*/}"
+			return 0
+		fi
+		_err "trash-guard: TRASH_GUARD_REAL_TRASH is a test seam and must name an executable inside a system temp folder; \"$_c\" is not. Refusing."
+		return 1
+	fi
+	_r="${PATH-}:"
+	while [ -n "$_r" ]; do
+		_d=${_r%%:*}; _r=${_r#*:}
+		case "$_d" in /*) ;; *) continue ;; esac   # empty and relative PATH entries are skipped
+		_c="$_d/trash"
+		{ [ -f "$_c" ] && [ -x "$_c" ]; } || continue
+		LC_ALL=C grep -q -F "$MARK" "$_c" 2>/dev/null
+		[ $? -eq 1 ] || continue   # 0: a shim copy; 2: unreadable, so unknown
+		printf '%s\n' "$_c"
+		return 0
+	done
+	return 1
+}
+
+case "${1-}" in
+	--check)
+		shift
+		[ "${1-}" = -- ] && shift
+		_check "$@"
+		exit $?
+		;;
+	--real-trash)
+		_real_trash
+		exit $?
+		;;
+	--show-config)
+		_init_floors; _init_temp; _timeout
+		printf 'floors:\n%s' "$FLOORS" | sed '2,$s/^/  /'
+		printf 'real temp roots:\n%s' "$REAL_TEMP" | sed '2,$s/^/  /'
+		printf 'temp roots in force:\n%s' "$TEMP_ROOTS" | sed '2,$s/^/  /'
+		printf 'search timeout: %s s\n' "$TMO"
+		_rt=$(_real_trash 2>&1) || _rt="NONE ($_rt)"
+		printf 'real trash: %s\n' "$_rt"
+		exit 0
+		;;
+	-h | --help)
+		sed -n '2,/^set -u/p' "$0" | sed '$d'
+		exit 0
+		;;
+	*)
+		_err "usage: trash-guard --check [--] PATH... | --real-trash | --show-config | --help"
+		exit 2
+		;;
+esac

@@ -75,10 +75,29 @@ if [ $# -eq 0 ]; then
 	exit 1
 fi
 
+# --- The shared trash guard (2026-09-29) ---------------------------------------------------
+# trash-guard holds the rules both Trash routes obey: a blank argument, the current folder or
+# anything containing it, the floor list (/, ~, ~/CODE, ~/CODE/CaptainCodeAU), and outside the
+# temp folders a repo root or a folder holding a repo. It runs FIRST, on the targets exactly as
+# given, because the checks below drop what does not exist and a blank argument is exactly
+# that: `trash ''` moved the whole engage repo to the Trash three times on 2026-09-29. It is
+# the copy BESIDE this file, never a PATH lookup, for the reason the rm shim gives (mlbox,
+# W-20260929-A125). Missing guard: refuse; a guard that cannot run must not become an allow.
+self=$(readlink -f "$0" 2>/dev/null) || self=""
+TRASH_GUARD="${self%/*}/trash-guard"
+if [ -z "$self" ] || [ ! -x "$TRASH_GUARD" ]; then
+	echo "safe-rm: the trash-guard beside this file was not found (${TRASH_GUARD}) -- refusing to delete." >&2
+	echo "         It ships in this dotfiles repo at ~/.local/bin/trash-guard; run ./install.sh." >&2
+	exit 1
+fi
+"$TRASH_GUARD" --check -- "$@" || exit 1
+
 # Resolve a trash tool once. macOS: `trash` (-> ~/.Trash, Finder "Put Back").
 # Linux/WSL: `trash-put` from trash-cli (-> XDG trash, restore with trash-restore).
-if command -v trash >/dev/null 2>&1; then
-	trash_cmd=trash
+# `trash` is the REAL one from trash-guard --real-trash, never the trash shim on PATH: the
+# guard has just run, and running it twice would double the repo search for nothing.
+if real_trash=$("$TRASH_GUARD" --real-trash 2>/dev/null) && [ -n "$real_trash" ]; then
+	trash_cmd=$real_trash
 	restore_hint="recover: Finder -> Put Back"
 elif command -v trash-put >/dev/null 2>&1; then
 	trash_cmd=trash-put
