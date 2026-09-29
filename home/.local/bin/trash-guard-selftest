@@ -320,8 +320,8 @@ both new "a .worktree/<name> whose .git file points into ANOTHER repo's worktree
 section "6. Inside a temp root, repos may go (rule 1 still holds there: see sections 1 and 2)"
 c_tmp_repo() { local D; D=$(fresh "$FX/tmproot"); mkrepo "$D/repo"; KEEP=(); run_route "$ROUTE" "$D" "$D/repo"; expect_allowed "CALL <$D/repo>"; }
 c_tmp_nested() { local D; D=$(fresh "$FX/tmproot"); mkrepo "$D/Scaff/r"; KEEP=(); run_route "$ROUTE" "$D" "$D/Scaff"; expect_allowed "CALL <$D/Scaff>"; }
-both new "a repo root inside a temp root" c_tmp_repo
-both new "a folder holding a repo inside a temp root" c_tmp_nested
+both control "a repo root inside a temp root goes (the exemption must not over-refuse)" c_tmp_repo
+both control "a folder holding a repo inside a temp root goes" c_tmp_nested
 
 # ---------------------------------------------------------------- the bounded search
 section "7. The nested-repo search: a timeout or an unread folder REFUSES"
@@ -330,8 +330,8 @@ c_slow() {
 	local t0 t1
 	t0=$(now_ms); c_plain_out; t1=$(now_ms)
 	expect_refused search-timeout
-	if [ $((t1 - t0)) -lt "$SLOW_MAX_MS" ]; then ok "$ROUTE: $LABEL -> answered in $((t1 - t0)) ms (< $SLOW_MAX_MS: it did not wait for the slow search)"
-	else bad "$ROUTE: $LABEL -> took $((t1 - t0)) ms (>= $SLOW_MAX_MS)"; fi
+	if [ "$VERDICT" = "REFUSED[search-timeout]" ] && [ $((t1 - t0)) -lt "$SLOW_MAX_MS" ]; then ok "$ROUTE: $LABEL -> answered in $((t1 - t0)) ms (< $SLOW_MAX_MS: it did not wait for the slow search)"
+	else bad "$ROUTE: $LABEL -> no timeout refusal answered in time ($((t1 - t0)) ms, limit $SLOW_MAX_MS, verdict $VERDICT)"; fi
 }
 SLOW_MAX_MS=2900
 XENV=(TRASH_GUARD_TEST_SEARCH_DELAY=3);                           both new "a search slower than 2 s (fake delay 3 s)" c_slow
