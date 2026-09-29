@@ -161,6 +161,19 @@ bypass it closes is a recoverable one); no change.
 **7d. Gavin's own tools live in dotfiles and are stowed; LifeOS upstream stays in dot-claude.**
 `stall_watch.sh` moved 2026-09-24 (D-20260920-A09); `flourish-check.py` moved the same day.
 
+**7e. Any session may route an inbox item when it gives a reason (ROUTE-1, 2026-09-29).**
+`open-items route <ID> --to <project> --why "<reason>"` routes with no terminal. The reason,
+with the session name, goes into the item's moved-from line and the inbox's moved-out record,
+the same history `move` writes. Without `--why`, `route --to` still needs Gavin at a terminal
+typing the ID back, and an empty `--why` is refused. `--file` (7c) is unchanged, and `close`
+stays scoped to the project you stand in. This AMENDS D-20260923-A09 and P11 rule 4 again.
+Gavin, 29 Sep 13:40 AEST in the design session's box (MAP.md ROUTE-1), confirmed in his own box
+in session dotfiles-doer: the terminal lock cost him three hand-steps that day for notes that
+were already finished, and the reason line plus the item history cover the original worry,
+sessions dumping notes into other projects.
+
+Rejected: keep the lock (every finished inbox note waits on Gavin at a terminal).
+
 ## Unique IDs (W-20260923-A22)
 
 Gavin: "all IDs should be unique ... maybe not adding the project's name because a repo name or a
@@ -211,7 +224,7 @@ lines, and a terminal escape in a title reached the start card intact.
 | P8  | `reach: mandatory` only from the dotfiles project or a human at a terminal; at most 5 watch and 5 check lines; 5 card lines kept for the project's own items |
 | P9  | Project names compared as exact tokens; a name shared by two drawers is refused; `inbox` and `none` reserved                                                 |
 | P10 | A `repo:` line counts only if it matches the drawer's own key and resolves; back-fill never overwrites                                                       |
-| P11 | The moved-out notice is built; groups read from committed `pj-homes`; no move back to a former owner; `route` needs a human at a terminal (unless 7c) |
+| P11 | The moved-out notice is built; groups read from committed `pj-homes`; no move back to a former owner; `route` needs a human at a terminal (unless 7c or 7e) |
 | P12 | Two-drawer writes lock in a fixed order, never overwrite a destination ID, commit both drawers together, and the inbox is committable                        |
 
 P3 changes WHEN a mandatory check is computed (by a runner after the card, read from cache),
