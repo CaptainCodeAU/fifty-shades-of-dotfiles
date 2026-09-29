@@ -8,3 +8,5 @@
 2026-09-29 20:17 REPORT.md written; leak scan since edf509f clean
 DONE
 2026-09-29 20:31 ruling (dotfiles-one, Gavin): rm route skips a blank with one stderr warning per call, exit 0; trash route still refuses. selftest 174/0; vs master controls 40/0, new 1 pass/130 fail; mutants 7/7
+2026-09-29 20:33 re-ran: hook 547/0, safe-rm-selftest 53/0, e2e 4/0; DELETION_SAFETY.md and REPORT.md addendum updated
+DONE

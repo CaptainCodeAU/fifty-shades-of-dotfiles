@@ -214,4 +214,46 @@ names used nowhere else; fixed before the first commit of the selftest. VERIFIED
 6. Two live sessions are both named `dotfiles-one` ([661bf1] and [42a009]); I addressed [661bf1]
    per the brief.
 
+## Addendum: the blank ruling (2026-09-29, Gavin via dotfiles-one [661bf1])
+
+**The ruling, in two messages.** On the rm route only (safe-rm, so the rm shim and the zsh `rm()`
+too), a blank argument (`''`, `""`, whitespace only) goes back to master's behaviour: nothing is
+trashed, the call exits 0 when nothing else is left, and other targets in the same call go ahead.
+It prints exactly one stderr line per call, not one per blank:
+`safe-rm: ignored a blank argument (empty variable?)`. The `trash` route is unchanged: `trash ''`
+is refused with exit 1. The rest of rule 1 stays refused on both routes. This supersedes choice 8
+and filing item 5 above.
+
+**What changed.** `safe-rm` drops blanks before it calls the guard and prints the warning once
+(two tagged lines, `#M: rm-blank-skip` and `#M: rm-blank-warn`). trash-guard itself is unchanged;
+only its header comment now says the blank rule is in practice the trash route's.
+
+A note on one corner: a blank is dropped, never passed on. On master, a file literally named
+`' '` in the cwd would have been trashed by `rm ' '`. Now it is skipped with the warning. I took
+"nothing trashed" in the ruling literally.
+
+**Selftest changes.** The six blank cases now expect the trash route to refuse `[blank]`, and the
+rm route to exit 0 with the cwd and a canary still there, the fake trash not called, and the
+warning on stderr exactly once. `a file and a blank` now expects the rm route to trash the file.
+New: `rm -r "" <tempdir>` (the rm route trashes the tempdir and ignores the blank; the trash route
+refuses both), and `rm -f "" ""` (exit 0, nothing trashed, warning once). The 8 blank cases are
+counted apart from the route-agreement check. Each must answer exactly REFUSED[blank] on the trash
+route and ALLOWED on the rm route. I first wrote that check as "the routes differ", and master
+passed it by accident, so I tightened it.
+
+**Counts after the ruling.** All VERIFIED, commands named.
+
+| Suite                                                  | Result                                                                                                                                               |
+| ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `trash-guard-selftest` (branch)                        | 174 passed, 0 failed (new 134/0, controls 40/0); routes agreed on 61 of 61; the 8 blank cases differed as ruled                                      |
+| `trash-guard-selftest --against` master                | 41 passed, 130 failed (new 1 passed, 130 failed; controls 40 passed, 0 failed); the 1 is still the rm route's `-- -name`                             |
+| `trash-guard-selftest --mutants`                       | 7 caught of 7: trash-guard blank (proves `trash ''` still refused), cwd, timeout, temp; safe-rm rm-blank-skip; safe-rm rm-blank-warn; hook env trash |
+| `enforce-no-permanent-delete.sh --selftest`            | 547 passed, 0 failed                                                                                                                                 |
+| `safe-rm-selftest` (unsandboxed)                       | 53 passed, 0 failed                                                                                                                                  |
+| `trash-guard-selftest --e2e` (unsandboxed, real trash) | 4 passed, 0 failed; `trash ''` still refused with the folder intact                                                                                  |
+
+The ruling's commit is 42a0f3c. The docs and this addendum come in the commit after it.
+`docs/DELETION_SAFETY.md` has the blank row changed to "the trash route only", a paragraph on the
+route difference, and the new evidence counts.
+
 status: DONE

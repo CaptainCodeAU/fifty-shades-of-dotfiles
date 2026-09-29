@@ -183,8 +183,9 @@ lesson: `~/.claude/pj-global/notes/20260929-cleanup-on-an-empty-path-trashes-the
 brief with Gavin's rulings: [`docs/trash-guard/BRIEF.md`](trash-guard/BRIEF.md).
 
 One file holds the rules, [`home/.local/bin/trash-guard`](../home/.local/bin/trash-guard)
-(POSIX sh), and both routes ask it before anything moves, so `trash X` and `rm -r X` always get
-the same verdict (the selftest compares them on every case):
+(POSIX sh), and both routes ask it before anything moves, so `trash X` and `rm -r X` get the
+same verdict (the selftest compares them on every case). The one ruled exception is a blank
+argument, below.
 
 ```
 bare trash X        ~/.local/bin/trash (shim)       ->  trash-guard --check  ->  real trash (--real-trash)
@@ -197,7 +198,7 @@ The refusal names the argument, the resolved path and the rule id.
 
 | Rule id             | Refused                                                                            | Where                     |
 | ------------------- | ---------------------------------------------------------------------------------- | ------------------------- |
-| `blank`             | an empty or whitespace-only argument                                               | everywhere, temp included |
+| `blank`             | an empty or whitespace-only argument                                               | the `trash` route only    |
 | `cwd`               | `.`, or the current folder by any spelling                                         | everywhere, temp included |
 | `contains-cwd`      | a folder that contains the current folder (`..`, a parent by path)                 | everywhere, temp included |
 | `floor`             | `/`, `~`, `~/CODE`, `~/CODE/CaptainCodeAU` (one constant, `FLOOR_TAILS`)           | everywhere, temp included |
@@ -206,6 +207,14 @@ The refusal names the argument, the resolved path and the rule id.
 | `search-timeout`    | the nested-repo search did not finish within 2 s. A timeout is never an allow      | outside the temp folders  |
 | `search-unreadable` | the search could not read everything inside. Unread is not absent                  | outside the temp folders  |
 | `unresolvable`      | a folder on the path cannot be entered, so the target cannot be judged             | everywhere                |
+
+**A blank argument differs by route** (Gavin, 2026-09-29, on the first report). `trash ''` is
+refused, because `/usr/bin/trash ''` moves the current folder. On the rm route (`safe-rm`, so
+the rm shim and the zsh `rm()` too) a blank is skipped as it was before the guard: nothing is
+trashed, the call exits 0 when nothing else is left, and other targets in the same call go ahead.
+It is not silent: exactly one line per call on stderr, however many blanks,
+`safe-rm: ignored a blank argument (empty variable?)`. `rm -f "$EMPTY"` in a script keeps
+working and still leaves a trace. The rest of rule 1 is refused on both routes.
 
 **Allowed although it holds a `.git` file:** a linked worktree at `<repo>/.worktree/<name>` whose
 `.git` file points into `<repo>/.git/worktrees/`. That keeps the removal route the agent guard
@@ -248,11 +257,11 @@ because an agent can set an environment variable as easily as a test can):
 `trash-guard --show-config` prints the floors, the temp roots in force and the real trash.
 
 **Evidence** (2026-09-29, branch `trash-guard`):
-[`trash-guard-selftest`](../home/.local/bin/trash-guard-selftest) 161 passed, 0 failed (130 new
-arms, 31 controls). Against master's code: controls 31 passed, new arms 126 failed and 1 passed
-(the rm route's `-- -name`, which safe-rm already handled). `--mutants`: removing the blank check,
-the cwd check, the timeout refusal, the temp exemption, or the hook's `env trash` line is each
-caught. `--e2e` with the real `/usr/bin/trash`: the incident shape (`trash ''` from inside a temp
+[`trash-guard-selftest`](../home/.local/bin/trash-guard-selftest) 174 passed, 0 failed (134 new
+arms, 40 controls; after the blank ruling). Against master's code: controls 40 passed, new arms
+130 failed and 1 passed (the rm route's `-- -name`, which safe-rm already handled). `--mutants`:
+removing the blank check, the cwd check, the timeout refusal, the temp exemption, safe-rm's
+blank skip, safe-rm's blank warning, or the hook's `env trash` line is each caught (7 of 7). `--e2e` with the real `/usr/bin/trash`: the incident shape (`trash ''` from inside a temp
 folder) is refused with the folder intact, and a throwaway temp file goes to the Trash.
 
 **What it does not cover:**
