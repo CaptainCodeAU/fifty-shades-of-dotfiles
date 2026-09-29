@@ -39,3 +39,10 @@ heredocs or case.
 |---|---|---|
 | Which way for the three lexers | B: teach conv-shscan.awk to read inside -c, eval, backticks and shell-fed heredocs, as the delete guard's lexer already does | A: fix only the named gaps per hook (the wrong denies stay); C: one shared awk lexer (engage's Go parser, internal/cmdclass, becomes the shared reader when pj retires) |
 | A shared test set | Keep the 132 shapes, each with its expected answer, as a test set in dotfiles, and give engage-main a copy for the Go parser, so parity is measured | No shared set |
+
+## Amendment, W-20260929-A35 (2026-09-29, afternoon)
+
+Gavin, in his own box in session dotfiles-doer during its wrap-up: the lock covers the
+auto-memory files at the top of `memory/`, not the open-items drawer in `memory/WORK/`. The
+morning's wording ("the memory folders") also denied the wrap-up's handoff write and drawer
+report moves. validate-bash rule E and the settings deny list (`memory/*`) now match that.
