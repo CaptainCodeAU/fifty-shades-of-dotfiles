@@ -1,0 +1,784 @@
+#!/usr/bin/env zsh
+# pj-temp -- every pj session gets its own temp folder, and empties it into the Trash.
+#
+# W-20260929-A155. Rulings T1-T4 and the design: docs/PJ_TEMP_CLEANUP.md. T1 as amended by
+# Gavin 2026-09-30: a SessionStart hook points $TMPDIR at /tmp/claude-<uid>/pj-<session id>
+# through CLAUDE_ENV_FILE. Not a PreToolUse rewrite: every Bash call would be rewritten, and
+# two hooks rewriting one call is non-deterministic (docs/CLAUDE_HOOKS.md, Rule 2).
+#
+# USAGE
+#   pj-temp session-start          the SessionStart hook (JSON on stdin). Creates or reuses the
+#                                  folder, records the owner, writes `export TMPDIR=...` into
+#                                  CLAUDE_ENV_FILE. Exit 0 on EVERY path; when it cannot give
+#                                  the session a folder it SAYS SO by name (systemMessage and
+#                                  additionalContext), never silently.
+#   pj-temp add PATH...            register a temp path OUTSIDE this session's folder
+#   pj-temp list                   this session's folder, owners, registered paths, sizes
+#   pj-temp sweep [--scratchpad DIR] [--dry-run]
+#                                  this session: the folder's contents, the registered paths,
+#                                  and the scratchpad's contents when named. The folder and its
+#                                  record stay while the session lives. Run with the sandbox off.
+#   pj-temp sweep-dead [--dry-run] [--oneline] [--log FILE] [--claude-args ARGS...]
+#                                  the launcher's sweep (T2): every pj-* folder whose owners are
+#                                  all gone, with its registered paths. --claude-args takes the
+#                                  rest of the line (what pj hands claude) and protects a folder
+#                                  that --resume/-r/--continue will reopen.
+#   pj-temp --selftest [--mutants] [--e2e]
+#
+# EXIT  0 nothing failed or refused; 1 something was refused, failed, or left unreadable;
+#       2 cannot run (not measured, bad usage, not in a pj folder).
+#
+# THE RECORD  <folder>/.pj-temp/owners, one line per SessionStart, tab-separated:
+#   <session id> <claude pid> <ps lstart, C locale, UTC> <source> <when>
+# A folder is LIVE when any owner pid is a live registry entry with the SAME start time
+# (pid reuse cannot pass), or any owner session id is held by a live registry entry, or this
+# launch resumes it. Why both: /clear gives a NEW session id and Bash keeps the OLD folder
+# (measured 2026-09-30, E3), so an id-only test would sweep a folder in use; --resume keeps
+# the id and changes the pid (E2), so a pid-only test would orphan a resumed folder.
+# The registry is read through `pj-worker count --json` (the sibling copy): when the registry
+# and ps disagree, or a parked session cannot be placed, NOTHING is swept. A count it cannot
+# take is a refusal. A folder whose record cannot be read is LEFT and reported, never swept.
+#
+# DELETION  Trash only. Every path goes through `trash-guard --check` (the sibling copy) and
+# then through the rm PATH shim (~/.local/bin/rm -> safe-rm -> /usr/bin/trash), resolved and
+# checked for the shim's marker before anything moves; then `test -e` on every path. A path
+# still there is FAILED by name (afpAccessDenied = the Bash sandbox), with a non-zero exit.
+# This file never names a permanent deleter; tests change the #P lines in a COPY instead of
+# using environment seams, the same pattern trash-guard uses (A185).
+#
+# REGISTERED PATHS are refused, at add AND at sweep, when: blank, relative, a newline in it,
+# a symlink, resolving OUTSIDE the temp folders (/private/tmp, /private/var/folders), a temp
+# root itself or an ancestor of one, a repo root, inside another session's pj-* folder, or
+# containing this session's folder. Then trash-guard judges it too.
+
+emulate -L zsh
+setopt pipefail extended_glob no_nomatch no_bg_nice
+SELF="${0:A}"   # here, not in a function: inside one, $0 is the function's name
+zmodload zsh/system 2>/dev/null
+zmodload zsh/datetime 2>/dev/null
+
+PJT_ROOT="/tmp/claude-$UID"                                    #P: root
+PJT_RM=""                                                      #P: rm (empty: the Trash shim)
+PJT_WORKER="${0:A:h}/pj-worker"                                #P: worker
+PJT_GUARD="${0:A:h}/trash-guard"                               #P: guard
+PJT_PS="ps"                                                    #P: ps
+PJT_CLAUDE_COMM="claude"                                       #P: comm
+PJT_SHIM="$HOME/.local/bin/rm"                                 #P: shim
+PJT_SHIM_MARK="PATH shim. Deletion goes to the Trash"
+STATE="${PJ_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/pj}"
+META=.pj-temp
+SID_RE='^[A-Za-z0-9][A-Za-z0-9-]{7,63}$'
+TAB=$'\t'
+
+say() { print -r -- "$*"; }
+err() { print -u2 -r -- "pj-temp: $*"; }
+norm_ws() { print -r -- "${(j: :)${=1}}"; }
+kb_h() {  # <KB> -> human
+  local k=$1
+  if (( k >= 1048576 )); then printf '%.1f GB' $(( k / 1048576.0 ))
+  elif (( k >= 1024 )); then printf '%.1f MB' $(( k / 1024.0 ))
+  else printf '%d KB' $k; fi
+}
+
+# ------------------------------------------------------------------ temp roots
+typeset -ga TEMP_ROOTS
+temp_roots() {
+  local d u
+  TEMP_ROOTS=(/private/tmp /private/var/folders "${PJT_ROOT:A}" "/private/tmp/claude-$UID")
+  u="$(getconf DARWIN_USER_TEMP_DIR 2>/dev/null)" && [[ -n "$u" ]] && TEMP_ROOTS+=("${u:A}")
+}
+inside_temp() {  # <resolved path> -> strictly inside /private/tmp or /private/var/folders
+  [[ "$1" == /private/tmp/?* || "$1" == /private/var/folders/?* ]]
+}
+
+# ------------------------------------------------------------------ owners
+# read_owners <folder> -> O_SID O_PID O_START O_SRC arrays; rc 1 with O_ERR when unreadable
+typeset -ga O_SID O_PID O_START O_SRC
+read_owners() {
+  local f="$1/$META/owners" line n=0
+  local -a p
+  O_SID=(); O_PID=(); O_START=(); O_SRC=(); O_ERR=""
+  [[ -r "$f" ]] || { O_ERR="no owner record ($META/owners missing: the hook never finished here)"; return 1; }
+  for line in "${(@f)$(<"$f")}"; do
+    n=$(( n + 1 ))
+    [[ -n "$line" ]] || continue
+    p=("${(@ps:\t:)line}")
+    if (( ${#p} < 4 )) || [[ ! "$p[1]" =~ $SID_RE || "$p[2]" != <-> || -z "$p[3]" ]]; then
+      O_ERR="owner record unreadable at line $n"; return 1
+    fi
+    O_SID+=("$p[1]"); O_PID+=("$p[2]"); O_START+=("$(norm_ws "$p[3]")"); O_SRC+=("$p[4]")
+  done
+  (( ${#O_SID} )) || { O_ERR="owner record is empty"; return 1; }
+  return 0
+}
+
+# my_folder -> REPLY: this session's folder, from $TMPDIR. rc 1 with a reason on stderr.
+my_folder() {
+  local t="${TMPDIR:-}" r="${PJT_ROOT:A}"
+  [[ -n "$t" ]] || { err "TMPDIR is not set, so this is not a pj session folder"; return 1; }
+  t="${t%/}"
+  if [[ "${t:A:h}" != "$r" || "${t:t}" != pj-* ]]; then
+    err "TMPDIR ($t) is not a pj session folder under $PJT_ROOT; this session has none (was it started by pj, and did the pj-temp hook run?)"
+    return 1
+  fi
+  [[ -d "$t" && ! -L "$t" ]] || { err "$t is not a folder"; return 1; }
+  read_owners "$t" || { err "$t: $O_ERR"; return 1; }
+  REPLY="${t:A}"
+}
+
+# ------------------------------------------------------------------ path rules
+# judge_path <path> [own folder] -> REPLY rule id, empty when allowed
+judge_path() {
+  local p="$1" own="${2:-}" rp t
+  REPLY=""
+  [[ -n "${p//[[:space:]]/}" ]] || { REPLY=blank; return; }
+  [[ "$p" != *$'\n'* ]] || { REPLY=newline; return; }
+  [[ "$p" == /* ]] || { REPLY=relative; return; }
+  [[ -L "$p" ]] && { REPLY=symlink; return; }                                       #M:symlink
+  rp="${p:A}"
+  [[ "$rp" == / ]] && { REPLY=floor; return; }                                       #M:floor
+  temp_roots
+  for t in $TEMP_ROOTS; do
+    [[ "$rp" == "$t" || "$t" == "$rp"/* ]] && { REPLY=temp-root; return; }
+  done
+  inside_temp "$rp" || { REPLY=outside-temp; return; }                               #M:outside-temp
+  [[ -e "$rp/.git" ]] && { REPLY=repo-root; return; }                                #M:repo-root
+  if [[ -n "$own" ]]; then
+    [[ "$own" == "$rp"/* ]] && { REPLY=contains-own-folder; return; }
+    [[ "$rp" == "$own" || "$rp" == "$own"/* ]] && { REPLY=inside-own-folder; return; }
+  fi
+  [[ "$rp" == "${PJT_ROOT:A}"/pj-* ]] && { REPLY=other-session; return; }
+  return 0
+}
+why_rule() {
+  case "$1" in
+    blank) print -r -- "blank path (an empty variable?)" ;;
+    newline) print -r -- "the path holds a newline" ;;
+    relative) print -r -- "not an absolute path" ;;
+    floor) print -r -- "the filesystem root" ;;
+    symlink) print -r -- "a symlink: register the real path, not a link to it" ;;
+    outside-temp) print -r -- "resolves outside the temp folders (/private/tmp, /private/var/folders)" ;;
+    temp-root) print -r -- "a temp root itself, or a folder containing one" ;;
+    repo-root) print -r -- "a repo root (holds .git)" ;;
+    contains-own-folder) print -r -- "contains this session's own folder" ;;
+    inside-own-folder) print -r -- "already inside this session's folder, which is swept anyway" ;;
+    other-session) print -r -- "inside another session's pj folder" ;;
+    *) print -r -- "$1" ;;
+  esac
+}
+
+# ------------------------------------------------------------------ the deleter
+RM_CMD=""
+resolve_rm() {
+  local r
+  if [[ -n "$PJT_RM" ]]; then RM_CMD="$PJT_RM"; return 0; fi
+  r="$(whence -p rm)" || r=""
+  if [[ -z "$r" || "${r:A}" != "${PJT_SHIM:A}" ]]; then
+    RM_ERR="rm on PATH is '${r:-nothing}', not the Trash shim ${PJT_SHIM/#$HOME/~}; nothing was moved"
+    return 1
+  fi
+  if ! command grep -qF "$PJT_SHIM_MARK" "$r" 2>/dev/null; then
+    RM_ERR="$r does not carry the Trash shim's marker; nothing was moved"
+    return 1
+  fi
+  RM_CMD="$r"
+}
+
+# sweep_path <path> <kind> <own folder or ''> -- one outcome line, counters updated
+integer N_MOVED N_REFUSED N_FAILED N_GONE KB_MOVED KB_SEEN
+typeset -ga OUT_LINES
+outcome() { OUT_LINES+=("$*"); }
+sweep_path() {
+  local p="$1" kind="$2" own="$3" kb=0 out rc first
+  if [[ ! -e "$p" && ! -L "$p" ]]; then N_GONE+=1; outcome "GONE     $p ($kind, already absent)"; return 0; fi
+  if [[ "$kind" == registered ]]; then
+    judge_path "$p" "$own"
+    if [[ -n "$REPLY" ]]; then N_REFUSED+=1; outcome "REFUSED  $p ($kind): [$REPLY] $(why_rule "$REPLY")"; return 1; fi
+  fi
+  kb="$(command du -sk -- "$p" 2>/dev/null | awk '{print $1}')"; [[ "$kb" == <-> ]] || kb=0
+  KB_SEEN+=kb
+  out="$("$PJT_GUARD" --check -- "$p" 2>&1)"; rc=$?                                   #M:guard
+  if (( rc != 0 )); then first="${${(f)out}[1]}"; N_REFUSED+=1; outcome "REFUSED  $p ($kind): trash guard said: ${first:-rc $rc}"; return 1; fi
+  if (( DRY )); then outcome "WOULD    $p ($kind, $(kb_h $kb))"; return 0; fi
+  out="$("$RM_CMD" -r -- "$p" 2>&1)"; rc=$?
+  local still=0
+  [[ -e "$p" || -L "$p" ]] && still=1                                                 #M:test-e
+  if (( still )); then
+    N_FAILED+=1
+    if [[ "$out" == *afpAccessDenied* ]]; then
+      outcome "FAILED   $p ($kind): the Trash refused it (afpAccessDenied): the Bash sandbox blocks the Trash here; run pj-temp with the sandbox off"
+    else
+      first="${${(f)out}[1]}"
+      outcome "FAILED   $p ($kind): still there after rm (rc $rc)${first:+: $first}"
+    fi
+    return 1
+  fi
+  N_MOVED+=1; KB_MOVED+=kb
+  outcome "MOVED    $p ($kind, $(kb_h $kb)) to the Trash"
+  return 0
+}
+
+registered_list() {  # <folder> -> reply array of registered paths
+  local f="$1/$META/registered"
+  reply=()
+  [[ -r "$f" ]] || return 0
+  reply=("${(@f)$(<"$f")}")
+  reply=(${reply:#})
+}
+
+# ------------------------------------------------------------------ session-start (hook)
+hook_say() {  # <message> -> systemMessage + additionalContext
+  jq -cn --arg m "$1" '{systemMessage:$m, hookSpecificOutput:{hookEventName:"SessionStart", additionalContext:$m}}' 2>/dev/null \
+    || print -r -- "$1"
+}
+hook_fail() {
+  hook_say "pj-temp: this session has NO per-session temp folder: $1. Its temp files go to the shared ${PJT_ROOT} as before, and nothing of this session's is swept."
+  exit 0
+}
+cmd_session_start() {
+  local in sid src pid comm start d f line found=""
+  in="$(cat 2>/dev/null)"
+  sid="$(print -r -- "$in" | jq -r '.session_id // empty' 2>/dev/null)"
+  src="$(print -r -- "$in" | jq -r '.source // empty' 2>/dev/null)"
+  [[ -n "${CLAUDE_ENV_FILE:-}" ]] || hook_fail "CLAUDE_ENV_FILE is not set, so the hook cannot hand Bash a TMPDIR"
+  [[ "$sid" =~ $SID_RE ]] || hook_fail "the hook got no usable session id"
+  pid="${CLAUDE_PID:-$PPID}"
+  [[ "$pid" == <-> ]] || hook_fail "the Claude process id is unreadable"
+  comm="$("$PJT_PS" -o comm= -p "$pid" 2>/dev/null)" || comm=""
+  [[ "${comm:t}" == "$PJT_CLAUDE_COMM" ]] || hook_fail "pid $pid is '${comm:-not running or unreadable}', not claude, so no owner can be recorded"
+  start="$(LC_ALL=C TZ=UTC "$PJT_PS" -o lstart= -p "$pid" 2>/dev/null)" || start=""
+  start="$(norm_ws "$start")"
+  [[ -n "$start" ]] || hook_fail "the start time of pid $pid is unreadable"
+  [[ -d "$PJT_ROOT" ]] || mkdir -p -m 700 "$PJT_ROOT" 2>/dev/null || hook_fail "cannot create $PJT_ROOT"
+  # /clear and /compact keep the process: the folder this pid already owns is reused.
+  for d in "$PJT_ROOT"/pj-*(N/); do
+    [[ -L "$d" ]] && continue
+    read_owners "$d" || continue
+    local i
+    for (( i = 1; i <= ${#O_PID}; i++ )); do
+      [[ "$O_PID[i]" == "$pid" && "$O_START[i]" == "$start" ]] && { found="$d"; break; }
+    done
+    [[ -n "$found" ]] && break
+  done
+  d="${found:-$PJT_ROOT/pj-$sid}"
+  if [[ ! -d "$d" ]]; then mkdir -m 700 "$d" 2>/dev/null || [[ -d "$d" ]] || hook_fail "cannot create $d"; fi
+  [[ ! -L "$d" && -O "$d" ]] || hook_fail "$d is a symlink or not owned by you"
+  mkdir -p -m 700 "$d/$META" 2>/dev/null || hook_fail "cannot create $d/$META"
+  { print -r -- "$sid$TAB$pid$TAB$start$TAB${src:-unknown}$TAB$(TZ=UTC strftime '%Y-%m-%dT%H:%M:%SZ' $EPOCHSECONDS)" >> "$d/$META/owners"; } 2>/dev/null \
+    || hook_fail "cannot write the owner record in $d"
+  line="export TMPDIR=${(q)d}"
+  { print -r -- "$line" >> "$CLAUDE_ENV_FILE"; } 2>/dev/null || hook_fail "CLAUDE_ENV_FILE ($CLAUDE_ENV_FILE) is not writable"
+  command grep -qxF -- "$line" "$CLAUDE_ENV_FILE" 2>/dev/null || hook_fail "the TMPDIR line did not reach CLAUDE_ENV_FILE"
+  if [[ "$src" != compact ]]; then
+    jq -cn --arg m "pj-temp: this session's temp folder is $d (\$TMPDIR in Bash, sandboxed or not). Register temp paths made outside it with: pj-temp add <path>. Bare 'mktemp -d' ignores TMPDIR on macOS; use mktemp -d \"\$TMPDIR/name.XXXXXX\"." \
+      '{hookSpecificOutput:{hookEventName:"SessionStart", additionalContext:$m}}' 2>/dev/null
+  fi
+  exit 0
+}
+
+# ------------------------------------------------------------------ add / list
+cmd_add() {
+  local own p rule bad=0
+  (( $# )) || { err "add needs a path"; return 2; }
+  my_folder || return 2
+  own="$REPLY"
+  local reg="$own/$META/registered"
+  registered_list "$own"
+  local -a have; have=("${reply[@]}")
+  for p in "$@"; do
+    judge_path "$p" "$own"
+    if [[ -n "$REPLY" ]]; then say "REFUSED  ${p:-<blank>}: [$REPLY] $(why_rule "$REPLY")"; bad=1; continue; fi
+    if (( ${have[(Ie)$p]} )); then say "ALREADY  $p"; continue; fi
+    { print -r -- "$p" >> "$reg"; } 2>/dev/null || { say "FAILED   $p: cannot write $reg"; bad=1; continue; }
+    have+=("$p"); say "ADDED    $p"
+  done
+  return $bad
+}
+cmd_list() {
+  local own p kb total=0 i
+  my_folder || return 2
+  own="$REPLY"
+  say "folder:  $own"
+  for (( i = 1; i <= ${#O_SID}; i++ )); do say "owner:   session $O_SID[i]  pid $O_PID[i]  started $O_START[i]  ($O_SRC[i])"; done
+  kb="$(command du -sk -- "$own" 2>/dev/null | awk '{print $1}')"; [[ "$kb" == <-> ]] || kb=0
+  total=$kb; say "size:    $(kb_h $kb) in the folder"
+  registered_list "$own"
+  if (( ${#reply} == 0 )); then say "registered: none"; fi
+  for p in "${reply[@]}"; do
+    if [[ -e "$p" || -L "$p" ]]; then
+      kb="$(command du -sk -- "$p" 2>/dev/null | awk '{print $1}')"; [[ "$kb" == <-> ]] || kb=0
+      total=$(( total + kb )); say "registered: $p ($(kb_h $kb))"
+    else say "registered: $p (absent)"; fi
+  done
+  say "total:   $(kb_h $total)"
+}
+
+# ------------------------------------------------------------------ report
+report_tail() {  # <what> -> the summary line, stated positively even when nothing moved
+  local what="$1"
+  print -r -- "$what: moved $N_MOVED path(s), $(kb_h $KB_MOVED), to the Trash; refused $N_REFUSED; failed $N_FAILED; already gone $N_GONE$( (( DRY )) && print -r -- ' (dry run: nothing moved)')"
+}
+
+# ------------------------------------------------------------------ sweep (this session)
+cmd_sweep() {
+  local own pad="" e rp i ok
+  while (( $# )); do
+    case "$1" in
+      --dry-run) DRY=1; shift ;;
+      --scratchpad) (( $# >= 2 )) || { err "--scratchpad needs a folder"; return 2; }; pad="$2"; shift 2 ;;
+      *) err "sweep: unknown argument '$1'"; return 2 ;;
+    esac
+  done
+  my_folder || return 2
+  own="$REPLY"
+  if (( ! DRY )); then resolve_rm || { err "$RM_ERR"; return 2; }; fi
+  [[ -x "$PJT_GUARD" ]] || { err "trash-guard is missing beside pj-temp ($PJT_GUARD); nothing was moved"; return 2; }
+  if [[ -n "$pad" ]]; then
+    rp="${pad:A}"; ok=0
+    for (( i = 1; i <= ${#O_SID}; i++ )); do
+      [[ "$rp" == "${PJT_ROOT:A}"/?*/"$O_SID[i]"/scratchpad ]] && ok=1
+    done
+    if (( ! ok )) || [[ -L "$pad" || ! -d "$rp" ]]; then
+      err "--scratchpad $pad is not this session's scratchpad (${PJT_ROOT}/<project>/<session id>/scratchpad for one of: ${(j:, :)O_SID}); nothing was moved"
+      return 2
+    fi
+  fi
+  for e in "$own"/*(DN); do
+    [[ "${e:t}" == "$META" ]] && continue
+    sweep_path "$e" content "$own"
+  done
+  registered_list "$own"
+  local -a keep; keep=()
+  for e in "${reply[@]}"; do
+    sweep_path "$e" registered "$own" || keep+=("$e")
+  done
+  if [[ -n "$pad" ]]; then
+    for e in "$rp"/*(DN); do sweep_path "$e" scratchpad "$own"; done
+  fi
+  if (( ! DRY )) && [[ -r "$own/$META/registered" ]]; then
+    { print -rl -- "${keep[@]}" > "$own/$META/registered.new" && command mv -f -- "$own/$META/registered.new" "$own/$META/registered"; } 2>/dev/null \
+      || err "could not rewrite the registered list; it still names what moved"
+  fi
+  print -rl -- "${OUT_LINES[@]}"
+  report_tail "pj-temp sweep of $own"
+  (( N_REFUSED + N_FAILED == 0 ))
+}
+
+# ------------------------------------------------------------------ sweep-dead (launcher)
+typeset -gA LIVE_PS LIVE_SID PROTECT_SID
+LIVE_ERR=""
+load_live() {
+  local out rc n line pid sid st k
+  LIVE_PS=(); LIVE_SID=(); LIVE_ERR=""
+  [[ -x "$PJT_WORKER" ]] || { LIVE_ERR="pj-worker is missing beside pj-temp ($PJT_WORKER)"; return 1; }
+  out="$("$PJT_WORKER" count --json 2>/dev/null)"; rc=$?
+  (( rc == 0 )) || { LIVE_ERR="pj-worker count failed (rc $rc)"; return 1; }
+  print -r -- "$out" | jq -e '.machine.sessions | type == "array"' >/dev/null 2>&1 || { LIVE_ERR="pj-worker count gave no machine session list"; return 1; }
+  [[ "$(print -r -- "$out" | jq -r '.machine.disagree')" == false ]] || { LIVE_ERR="the registry and ps disagree ($(print -r -- "$out" | jq -r '"registry \(.machine.registry), ps \(.machine.ps), ps-only pids \(.machine.ps_only_pids|join(","))"'))"; return 1; }   #M:disagree
+  n="$(print -r -- "$out" | jq -r '.machine.background.parked_pids // [] | length')"
+  [[ "$n" == 0 ]] || { LIVE_ERR="$n parked session(s) (claude --bg-pty-host) cannot be placed; $(print -r -- "$out" | jq -r '.machine.background.clear // "claude daemon stop --any"') clears them"; return 1; }   #M:parked
+  print -r -- "$out" | jq -e '[.machine.sessions[] | has("sid") and has("start")] | all' >/dev/null 2>&1 \
+    || { LIVE_ERR="pj-worker's session list carries no sid/start (an older pj-worker?)"; return 1; }
+  for line in "${(@f)$(print -r -- "$out" | jq -r '.machine.sessions[] | [(.pid|tostring), (.sid // ""), (.start // "")] | join("\t")')}"; do
+    [[ -n "$line" ]] || continue
+    pid="${line%%$TAB*}"; line="${line#*$TAB}"; sid="${line%%$TAB*}"; st="${line#*$TAB}"
+    k="$pid|$(norm_ws "$st")"; LIVE_PS[$k]=1
+    [[ -n "$sid" ]] && LIVE_SID[$sid]="$pid"
+  done
+  return 0
+}
+# judge_folder <folder> -> J_STATE live|dead|left, J_WHY
+judge_folder() {
+  local d="$1" i
+  J_STATE=left; J_WHY=""
+  [[ -L "$d" ]] && { J_WHY="is a symlink"; return; }
+  [[ -O "$d" ]] || { J_WHY="not owned by you"; return; }
+  read_owners "$d" || { J_WHY="$O_ERR"; return; }                                    #M:unreadable-left
+  for (( i = 1; i <= ${#O_SID}; i++ )); do
+    [[ -n "${LIVE_PS[$O_PID[i]|$O_START[i]]-}" ]] && { J_STATE=live; J_WHY="pid $O_PID[i] (session $O_SID[i]) is running"; return; }   #M:pid-live
+    [[ -n "${LIVE_SID[$O_SID[i]]-}" ]] && { J_STATE=live; J_WHY="session $O_SID[i] is live (pid ${LIVE_SID[$O_SID[i]]})"; return; }  #M:sid-live
+    [[ -n "${PROTECT_SID[$O_SID[i]]-}" ]] && { J_STATE=live; J_WHY="this launch resumes session $O_SID[i]"; return; }                   #M:resume
+  done
+  J_STATE=dead; J_WHY="every owner is gone (pids ${(j:, :)O_PID})"
+}
+# parse_claude_args ARGS... -> PROTECT_SID, or RESUME_UNKNOWN=1
+parse_claude_args() {
+  local i a
+  RESUME_UNKNOWN=0
+  for (( i = 1; i <= $#; i++ )); do
+    a="${@[i]}"
+    case "$a" in
+      --resume|-r)
+        if (( i < $# )) && [[ "${@[i+1]}" =~ $SID_RE ]]; then PROTECT_SID[${@[i+1]}]=1; i=$(( i + 1 ))
+        else RESUME_UNKNOWN=1; fi ;;
+      --resume=*) [[ "${a#*=}" =~ $SID_RE ]] && PROTECT_SID[${a#*=}]=1 || RESUME_UNKNOWN=1 ;;
+      --continue|-c) RESUME_UNKNOWN=1 ;;
+    esac
+  done
+}
+cmd_sweep_dead() {
+  local oneline=0 log="" d lockf summary
+  local -a args left_lines
+  while (( $# )); do
+    case "$1" in
+      --dry-run) DRY=1; shift ;;
+      --oneline) oneline=1; shift ;;
+      --log) (( $# >= 2 )) || { err "--log needs a file"; return 2; }; log="$2"; shift 2 ;;
+      --claude-args) shift; args=("$@"); break ;;
+      *) err "sweep-dead: unknown argument '$1'"; return 2 ;;
+    esac
+  done
+  parse_claude_args "${args[@]}"
+  local -a rep
+  finish() {  # <rc> <summary>
+    summary="$2"
+    rep=("${OUT_LINES[@]}" "$summary")
+    if [[ -n "$log" ]]; then
+      { mkdir -p "${log:h}" && print -rl -- "== $(strftime '%Y-%m-%d %H:%M:%S' $EPOCHSECONDS) pj-temp sweep-dead" "${rep[@]}" >> "$log"; } 2>/dev/null
+    fi
+    if (( oneline )); then
+      # one line for the start card: only when there is something to say
+      (( N_MOVED + N_REFUSED + N_FAILED + ${#left_lines} > 0 || $1 == 2 )) && print -r -- "$summary"
+    else
+      print -rl -- "${rep[@]}"
+    fi
+    return $1
+  }
+  if (( RESUME_UNKNOWN )); then
+    finish 0 "Temp sweep skipped at this launch: it resumes a session pj cannot name (--continue, or --resume without an id), so no folder is judged dead."
+    return
+  fi
+  [[ -d "$PJT_ROOT" ]] || { finish 0 "Temp sweep: nothing to sweep ($PJT_ROOT does not exist)."; return; }
+  lockf="$PJT_ROOT/.pj-temp-sweep.lock"
+  if ! { : >> "$lockf" && zsystem flock -t 0 "$lockf"; } 2>/dev/null; then
+    finish 0 "Temp sweep skipped: another launch holds the sweep lock."; return
+  fi
+  if (( ! DRY )); then resolve_rm || { finish 2 "Temp sweep refused, nothing swept: $RM_ERR."; return; }; fi
+  if ! load_live; then
+    finish 2 "Temp sweep NOT MEASURED, nothing swept: $LIVE_ERR."; return
+  fi
+  [[ -x "$PJT_GUARD" ]] || { finish 2 "Temp sweep refused, nothing swept: trash-guard is missing beside pj-temp."; return; }
+  integer n_live=0 n_dead=0
+  local p
+  for d in "$PJT_ROOT"/pj-*(DN); do
+    [[ -d "$d" || -L "$d" ]] || continue
+    judge_folder "$d"
+    case "$J_STATE" in
+      live) n_live+=1 ;;
+      left) left_lines+=("LEFT     $d: $J_WHY"); outcome "LEFT     $d: $J_WHY" ;;
+      dead)
+        n_dead+=1
+        registered_list "$d"
+        for p in "${reply[@]}"; do sweep_path "$p" registered "" ; done
+        sweep_path "$d" folder "" ;;
+    esac
+  done
+  local s
+  s="Temp sweep at launch: moved $N_MOVED path(s), $(kb_h $KB_MOVED), to the Trash from $n_dead dead session folder(s); $n_live live; left ${#left_lines} unreadable; refused $N_REFUSED; failed $N_FAILED$( (( DRY )) && print -r -- ' (dry run: nothing moved)')"
+  (( ${#left_lines} + N_FAILED + N_REFUSED )) && s="$s. Details: ${log:-pj-temp sweep-dead}"
+  finish $(( N_FAILED + N_REFUSED + ${#left_lines} > 0 ? 1 : 0 )) "$s."
+}
+
+# ------------------------------------------------------------------ selftest
+selftest() {
+  local self="${PJT_UNDER_TEST:-$SELF}" mut="" e2e=0
+  while (( $# )); do
+    case "$1" in
+      --mutants) mut=all; shift ;;
+      --e2e) e2e=1; shift ;;
+      --mutant) (( $# >= 2 )) || { err "--mutant needs a name"; return 2; }; mut="$2"; shift 2 ;;
+      *) err "selftest: unknown argument '$1'"; return 2 ;;
+    esac
+  done
+  if [[ "$mut" == all ]]; then run_mutants "$self"; return; fi
+  (( e2e )) && { run_e2e "$self"; return; }
+  run_arms "$self" "$mut"
+}
+
+# mk_copy <src> <fixture dir> [mutant] -- a copy of pj-temp with every #P line pointed at stubs
+mk_copy() {
+  local src="$1" F="$2" m="${3:-}"
+  mkdir -p "$F/bin" "$F/root" "$F/Trash" "$F/reg" "$F/state"
+  sed -e "s|^PJT_ROOT=.*#P: root\$|PJT_ROOT=\"$F/root\"|" \
+      -e "s|^PJT_RM=.*#P: rm.*\$|PJT_RM=\"$F/bin/stub-rm\"|" \
+      -e "s|^PJT_WORKER=.*#P: worker\$|PJT_WORKER=\"$F/bin/stub-worker\"|" \
+      -e "s|^PJT_GUARD=.*#P: guard\$|PJT_GUARD=\"$F/bin/trash-guard\"|" \
+      -e "s|^PJT_PS=.*#P: ps\$|PJT_PS=\"$F/bin/stub-ps\"|" \
+      -e "s|^PJT_SHIM=.*#P: shim\$|PJT_SHIM=\"$F/bin/rm\"|" \
+      "$src" > "$F/bin/pj-temp"
+  if [[ -n "$m" ]]; then
+    sed -i '' -e "/#M:$m\$/s/^.*\$/  : mutant $m/" "$F/bin/pj-temp"
+  fi
+  chmod +x "$F/bin/pj-temp"
+  # the real trash-guard beside the source under test: a read-only judge
+  ln -sf "${src:A:h}/trash-guard" "$F/bin/trash-guard"
+  cat > "$F/bin/stub-rm" <<'STUB'
+#!/bin/zsh
+# stub deleter for pj-temp's selftest: moves into $F/Trash; names containing FAILME are refused
+# the way the sandbox refuses the real Trash; a name containing STICKY survives with rc 0.
+F=${0:A:h:h}; rc=0
+for a in "$@"; do
+  case "$a" in -r|-f|-rf|--) continue ;; esac
+  case "${a:t}" in
+    *FAILME*) print -u2 "trash: Error Domain=NSOSStatusErrorDomain Code=-5000 \"afpAccessDenied\""; rc=1 ;;
+    *STICKY*) : ;;
+    *) mv -- "$a" "$F/Trash/${a:t}.$RANDOM" || rc=1 ;;
+  esac
+done
+print -r -- "$*" >> "$F/rm.log"
+exit $rc
+STUB
+  cat > "$F/bin/stub-worker" <<'STUB'
+#!/bin/zsh
+F=${0:A:h:h}
+[[ -r $F/worker.rc ]] && exit $(<$F/worker.rc)
+cat "$F/worker.json"
+STUB
+  cat > "$F/bin/stub-ps" <<'STUB'
+#!/bin/zsh
+# stub ps: -o comm= -p PID / -o lstart= -p PID from $F/ps.tbl (pid TAB comm TAB lstart)
+F=${0:A:h:h}; want="" pid=""
+while (( $# )); do case "$1" in -o) (( $# >= 2 )) || exit 2; want=$2; shift 2 ;; -p) (( $# >= 2 )) || exit 2; pid=$2; shift 2 ;; *) shift ;; esac; done
+line=$(awk -F'\t' -v p="$pid" '$1==p' "$F/ps.tbl" 2>/dev/null)
+[[ -n $line ]] || exit 1
+case $want in comm=) print -r -- "${${(@ps:\t:)line}[2]}" ;; lstart=) print -r -- "${${(@ps:\t:)line}[3]}" ;; esac
+STUB
+  chmod +x "$F/bin/stub-rm" "$F/bin/stub-worker" "$F/bin/stub-ps"
+}
+worker_json() {  # <F> <disagree> <parked count> [pid sid start]...
+  (( $# >= 3 )) || { err "worker_json needs 3 arguments"; return 2; }
+  local F="$1" dis="$2" pk="$3"; shift 3
+  local -a s; local pk_list="[]"
+  while (( $# >= 3 )); do s+=("$(jq -cn --arg p "$1" --arg i "$2" --arg t "$3" '{pid:($p|tonumber), name:"x", cwd:"/x", sid:$i, start:$t}')"); shift 3; done
+  (( pk > 0 )) && pk_list="[4242]"
+  jq -cn --argjson dis "$dis" --argjson s "[${(j:,:)s}]" --argjson pk "$pk_list" \
+    '{machine:{registry:1, ps:1, disagree:$dis, ps_only_pids:[], sessions:$s, background:{helper_pids:[], parked_pids:$pk, clear:null}}}' > "$F/worker.json"
+}
+mk_folder() {  # <F> <sid> <pid> <start> [registered...] -> a pj folder with one owner
+  (( $# >= 4 )) || { err "mk_folder needs 4 arguments"; return 2; }
+  local F="$1" sid="$2" pid="$3" st="$4"; shift 4
+  local d="$F/root/pj-$sid"
+  mkdir -p "$d/.pj-temp"
+  print -r -- "$sid$TAB$pid$TAB$st${TAB}startup${TAB}t" >> "$d/.pj-temp/owners"
+  print -r -- junk > "$d/some-temp-file"
+  local p; for p in "$@"; do print -r -- "$p" >> "$d/.pj-temp/registered"; done
+  print -r -- "$d"
+}
+
+integer T_PASS T_FAIL
+check() {  # <name> <cmd string>
+  if eval "$2"; then T_PASS+=1; (( QUIET )) || print -r -- "  ok    $1"
+  else T_FAIL+=1; print -r -- "  FAIL  $1"; fi
+}
+run_arms() {
+  local self="$1" mut="$2" F T out rc d d2 S1 S2 S3 ST1 ST2 envf
+  F="$(mktemp -d "${TMPDIR:-/tmp}/pjt-selftest.XXXXXX")" || { err "cannot make a fixture folder"; return 2; }
+  F="${F:A}"
+  mk_copy "$self" "$F" "$mut"
+  T="$F/bin/pj-temp"
+  S1=aaaaaaaa-1111-4111-8111-111111111111; S2=bbbbbbbb-2222-4222-8222-222222222222; S3=cccccccc-3333-4333-8333-333333333333
+  ST1="Tue Sep 29 10:00:00 2026"; ST2="Tue Sep 29 11:00:00 2026"
+  (( QUIET )) || print -r -- "pj-temp selftest: $self${mut:+ (mutant $mut)}  fixtures: $F"
+
+  # ---- the hook
+  print -r -- "501${TAB}claude${TAB}$ST1" > "$F/ps.tbl"
+  envf="$F/env1.sh"; : > "$envf"
+  out="$(print -r -- "{\"session_id\":\"$S1\",\"source\":\"startup\"}" | CLAUDE_ENV_FILE="$envf" CLAUDE_PID=501 "$T" session-start)"; rc=$?
+  check "H1 startup: exit 0, folder pj-<sid> made, owner recorded" "(( rc == 0 )) && [[ -d $F/root/pj-$S1 ]] && command grep -q '^$S1${TAB}501${TAB}$ST1${TAB}startup' $F/root/pj-$S1/.pj-temp/owners"
+  check "H2 startup: CLAUDE_ENV_FILE holds export TMPDIR=<folder>" "command grep -qxF 'export TMPDIR=$F/root/pj-$S1' $envf"
+  check "H3 startup: tells the model its folder" "[[ \$out == *'temp folder is $F/root/pj-$S1'* ]]"
+  envf="$F/env2.sh"; : > "$envf"
+  out="$(print -r -- "{\"session_id\":\"$S2\",\"source\":\"clear\"}" | CLAUDE_ENV_FILE="$envf" CLAUDE_PID=501 "$T" session-start)"
+  check "H4 /clear (same pid, new id): REUSES the folder, adds the new id as an owner" "[[ ! -d $F/root/pj-$S2 ]] && command grep -qxF 'export TMPDIR=$F/root/pj-$S1' $envf && command grep -q '^$S2${TAB}501' $F/root/pj-$S1/.pj-temp/owners"
+  print -r -- "777${TAB}claude${TAB}$ST2" >> "$F/ps.tbl"
+  envf="$F/env3.sh"; : > "$envf"
+  out="$(print -r -- "{\"session_id\":\"$S1\",\"source\":\"resume\"}" | CLAUDE_ENV_FILE="$envf" CLAUDE_PID=777 "$T" session-start)"
+  check "H5 --resume (same id, new pid): same folder, new pid recorded" "command grep -qxF 'export TMPDIR=$F/root/pj-$S1' $envf && command grep -q '^$S1${TAB}777${TAB}$ST2${TAB}resume' $F/root/pj-$S1/.pj-temp/owners"
+  out="$(print -r -- "{\"session_id\":\"$S3\",\"source\":\"startup\"}" | env -u CLAUDE_ENV_FILE CLAUDE_PID=501 "$T" session-start)"; rc=$?
+  check "H6 CLAUDE_ENV_FILE unset: exit 0 AND says by name there is no folder" "(( rc == 0 )) && [[ \$out == *'NO per-session temp folder'*'CLAUDE_ENV_FILE is not set'* ]] && [[ \$out == *systemMessage* ]]"
+  mkdir -p "$F/ro"; : > "$F/ro/env.sh"; chmod 400 "$F/ro/env.sh"
+  out="$(print -r -- "{\"session_id\":\"$S3\",\"source\":\"startup\"}" | CLAUDE_ENV_FILE="$F/ro/env.sh" CLAUDE_PID=501 "$T" session-start)"; rc=$?
+  check "H7 CLAUDE_ENV_FILE unwritable: exit 0 AND says so by name" "(( rc == 0 )) && [[ \$out == *'NO per-session temp folder'*'not writable'* ]]"
+  out="$(print -r -- "{\"session_id\":\"$S3\",\"source\":\"startup\"}" | CLAUDE_ENV_FILE="$F/env4.sh" CLAUDE_PID=999 "$T" session-start)"; rc=$?
+  check "H8 pid not a running claude: exit 0, says so, records nothing" "(( rc == 0 )) && [[ \$out == *'NO per-session temp folder'*'not claude'* ]] && [[ ! -d $F/root/pj-$S3 ]]"
+  out="$(print -r -- '{"source":"startup"}' | CLAUDE_ENV_FILE="$F/env5.sh" CLAUDE_PID=501 "$T" session-start)"; rc=$?
+  check "H9 no session id: exit 0, says so" "(( rc == 0 )) && [[ \$out == *'no usable session id'* ]]"
+  print -r -- "601${TAB}claude${TAB}$ST1" >> "$F/ps.tbl"; print -r -- "602${TAB}claude${TAB}$ST1" >> "$F/ps.tbl"
+  local SA=dddddddd-4444-4444-8444-444444444444 SB=eeeeeeee-5555-4555-8555-555555555555
+  print -r -- "{\"session_id\":\"$SA\",\"source\":\"startup\"}" | CLAUDE_ENV_FILE="$F/env6.sh" CLAUDE_PID=601 "$T" session-start >/dev/null &
+  print -r -- "{\"session_id\":\"$SB\",\"source\":\"startup\"}" | CLAUDE_ENV_FILE="$F/env7.sh" CLAUDE_PID=602 "$T" session-start >/dev/null &
+  wait
+  check "H10 two sessions started in the same second: two folders, one owner each" "[[ -d $F/root/pj-$SA && -d $F/root/pj-$SB ]] && [[ \$(wc -l < $F/root/pj-$SA/.pj-temp/owners) -eq 1 && \$(wc -l < $F/root/pj-$SB/.pj-temp/owners) -eq 1 ]]"
+  ln -s "$F/reg" "$F/root/pj-$S3"
+  out="$(print -r -- "{\"session_id\":\"$S3\",\"source\":\"startup\"}" | CLAUDE_ENV_FILE="$F/env8.sh" CLAUDE_PID=501 "$T" session-start)"
+  # pid 501 already owns pj-S1, so this reuses it; a fresh pid meets the planted link instead
+  print -r -- "603${TAB}claude${TAB}$ST1" >> "$F/ps.tbl"
+  out="$(print -r -- "{\"session_id\":\"$S3\",\"source\":\"startup\"}" | CLAUDE_ENV_FILE="$F/env9.sh" CLAUDE_PID=603 "$T" session-start)"; rc=$?
+  check "H11 a planted symlink at pj-<sid>: refused by name, nothing written through it" "(( rc == 0 )) && [[ \$out == *'symlink or not owned'* ]] && [[ ! -e $F/reg/.pj-temp ]]"
+  command mv "$F/root/pj-$S3" "$F/Trash/planted-link"
+
+  # ---- add / list / sweep (this session)
+  local own="$F/root/pj-$S1"
+  mkdir -p "$F/reg/out1" "$F/reg/repo/.git"; print -r -- x > "$F/reg/out1/f"; print -r -- x > "$F/reg/file2"
+  ln -s "$F/reg/out1" "$F/reg/link1"
+  out="$(TMPDIR="$own" "$T" add "$F/reg/out1" "$F/reg/file2" 2>&1)"; rc=$?
+  check "A1 add two temp paths: ADDED, exit 0" "(( rc == 0 )) && [[ \$out == *'ADDED    $F/reg/out1'* && \$out == *'ADDED    $F/reg/file2'* ]]"
+  out="$(TMPDIR="$own" "$T" add "$F/reg/out1" 2>&1)"
+  check "A2 add again: ALREADY, not doubled" "[[ \$out == *ALREADY* ]] && [[ \$(command grep -c 'out1' $own/.pj-temp/registered) -eq 1 ]]"
+  typeset -A want=(
+    "''" blank  "rel/path" relative  "$F/reg/link1" symlink  "$HOME" outside-temp  "/" floor
+    "$HOME/Library/Caches/x" outside-temp  "$F/reg/repo" repo-root  "/private/tmp" temp-root  "$F/root" temp-root
+    "$F/root/pj-$SA/x" other-session  "$F" temp-root  "$own/x" inside-own-folder  "/tmp/claude-$UID" temp-root
+  )
+  local k
+  for k in ${(k)want}; do
+    out="$(TMPDIR="$own" "$T" add "${(Q)k}" 2>&1)"; rc=$?
+    check "A3 add refuses ${(Q)k:-<blank>} as [${want[$k]}]" "(( rc == 1 )) && [[ \$out == *'[${want[$k]}]'* ]]"
+  done
+  out="$(TMPDIR="$F/reg" "$T" add "$F/reg/file2" 2>&1)"; rc=$?
+  check "A4 add outside a pj folder: refused, exit 2" "(( rc == 2 )) && [[ \$out == *'not a pj session folder'* ]]"
+  out="$(TMPDIR="$own" "$T" list 2>&1)"
+  check "A5 list names folder, both owners, registered paths, a total" "[[ \$out == *'folder:  $own'* && \$out == *'session $S1'* && \$out == *'session $S2'* && \$out == *'registered: $F/reg/out1'* && \$out == *'total:'* ]]"
+  mkdir -p "$F/root/proj/$S1/scratchpad"; print -r -- r > "$F/root/proj/$S1/scratchpad/report.md"
+  mkdir -p "$F/root/proj/$SA/scratchpad"
+  out="$(TMPDIR="$own" "$T" sweep --scratchpad "$F/root/proj/$SA/scratchpad" 2>&1)"; rc=$?
+  check "S1 sweep refuses another session's scratchpad, moves nothing" "(( rc == 2 )) && [[ \$out == *'not this session'* ]] && [[ -e $F/reg/file2 ]]"
+  print -r -- x > "$own/FAILME-sandboxed"
+  out="$(TMPDIR="$own" "$T" sweep --dry-run 2>&1)"; rc=$?
+  check "S2 dry run: WOULD lines, nothing moved, stated positively" "[[ \$out == *WOULD* && \$out == *'moved 0 path(s)'* && \$out == *'dry run'* ]] && [[ -e $F/reg/file2 ]]"
+  out="$(TMPDIR="$own" "$T" sweep --scratchpad "$F/root/proj/$S1/scratchpad" 2>&1)"; rc=$?
+  check "S3 sweep moves contents, registered paths, scratchpad contents; keeps the record" "[[ ! -e $F/reg/out1 && ! -e $F/reg/file2 && ! -e $F/root/proj/$S1/scratchpad/report.md ]] && [[ -d $F/root/proj/$S1/scratchpad && -r $own/.pj-temp/owners ]]"
+  check "S4 partial failure: the afpAccessDenied path is FAILED by name, exit non-zero, others MOVED" "(( rc == 1 )) && [[ \$out == *'FAILED   $own/FAILME-sandboxed'*afpAccessDenied* && \$out == *'MOVED    $F/reg/file2'* ]] && [[ -e $own/FAILME-sandboxed ]]"
+  check "S5 the summary states counts and size" "[[ \$out == *'moved '*'path(s)'*'to the Trash; refused 0; failed 1'* ]]"
+  check "S6 moved registered paths drop off the list (the list still exists)" "[[ -r $own/.pj-temp/registered ]] && ! command grep -q 'file2' $own/.pj-temp/registered"
+  print -r -- x > "$own/STICKY-file"
+  out="$(TMPDIR="$own" "$T" sweep 2>&1)"; rc=$?
+  check "S7 rm exits 0 but the file is still there: FAILED, never MOVED" "(( rc == 1 )) && [[ \$out == *'FAILED   $own/STICKY-file'*'still there'* ]]"
+  command mv "$own/STICKY-file" "$own/FAILME-sandboxed" "$F/Trash/" 2>/dev/null
+  out="$(TMPDIR="$own" "$T" sweep 2>&1)"; rc=$?
+  check "S8 nothing to sweep: exit 0, says 'moved 0' positively" "(( rc == 0 )) && [[ \$out == *'moved 0 path(s)'* ]]"
+  print -r -- "$F/reg/link1" >> "$own/.pj-temp/registered"
+  out="$(TMPDIR="$own" "$T" sweep 2>&1)"; rc=$?
+  check "S9 a registered path that became a symlink is REFUSED at sweep, link and target kept" "(( rc == 1 )) && [[ \$out == *'REFUSED  $F/reg/link1'*'[symlink]'* ]] && [[ -L $F/reg/link1 ]]"
+  command mv "$F/reg/link1" "$F/Trash/"; : > "$own/.pj-temp/registered"
+  mkdir -p "$own/cwdsub"
+  out="$( builtin cd "$own/cwdsub" && TMPDIR="$own" "$T" sweep 2>&1 )"; rc=$?
+  check "G1 trash-guard's own refusal (the folder holding the current folder): REFUSED, kept" "(( rc == 1 )) && [[ -d $own/cwdsub ]] && [[ \$out == *'REFUSED  $own/cwdsub'*'trash guard said'* ]]"
+  command mv "$own/cwdsub" "$F/Trash/"
+
+  # ---- sweep-dead (the launcher)
+  local dA dB dC dD dE dF dG
+  mkdir -p "$F/reg/deadreg"; print -r -- x > "$F/reg/deadreg/f"
+  local SC=ffffffff-6666-4666-8666-666666666666 SD=12345678-7777-4777-8777-777777777777 SE=87654321-8888-4888-8888-888888888888 SF=abcdef01-9999-4999-8999-999999999999 SG=abcdef02-aaaa-4aaa-8aaa-aaaaaaaaaaaa
+  dC="$(mk_folder "$F" "$SC" 1001 "$ST1" "$F/reg/deadreg")"               # dead: pid gone
+  dD="$(mk_folder "$F" "$SD" 1002 "$ST1")"                               # live by pid+start
+  dE="$(mk_folder "$F" "$SE" 1003 "$ST1")"                               # pid reused: same pid, other start
+  dF="$(mk_folder "$F" "$SF" 1004 "$ST1")"                               # live by sid (resumed, new pid)
+  dG="$(mk_folder "$F" "$SG" 1005 "$ST1")"; print -r -- garbage > "$dG/.pj-temp/owners"   # unreadable
+  mkdir -p "$F/root/pj-noowner0-0000-4000-8000-000000000000"             # no record
+  command mv "$F/root/pj-$SA" "$F/root/pj-$SB" "$F/Trash/"; command mv "$own" "$F/Trash/own"
+  # 1002 ran /clear: the registry now holds a NEW id for it (measured E3), so only pid + start keep dD
+  worker_json "$F" false 0  1002 "0c1ea500-0000-4000-8000-000000000000" "$ST1"  1003 "zzz" "$ST2"  2004 "$SF" "$ST2"
+  out="$("$T" sweep-dead 2>&1)"; rc=$?
+  check "D1 dead folder (pid gone) and its registered path: MOVED" "[[ ! -e $dC && ! -e $F/reg/deadreg ]] && [[ \$out == *'MOVED    $dC (folder'* ]]"
+  check "D2 after /clear (registry shows a new id): kept by pid + start time (and the sweep ran)" "[[ -d $dD ]] && [[ \$out == *'Temp sweep at launch'* ]]"
+  check "D3 pid reused by another process (same pid, other start): judged dead, swept" "[[ ! -e $dE ]]"
+  check "D4 resumed session (same id, new pid): kept while it lives (and the sweep ran)" "[[ -d $dF ]] && [[ \$out == *'Temp sweep at launch'* ]]"
+  check "D5 unreadable record: LEFT and reported, never swept" "[[ -d $dG ]] && [[ \$out == *'LEFT     $dG: owner record unreadable'* ]]"
+  check "D6 no record: LEFT and reported" "[[ -d $F/root/pj-noowner0-0000-4000-8000-000000000000 ]] && [[ \$out == *'no owner record'* ]]"
+  check "D7 summary counts, exit 1 because two were left" "(( rc == 1 )) && [[ \$out == *'from 2 dead session folder(s); 2 live; left 2 unreadable'* ]]"
+  dC="$(mk_folder "$F" "$SC" 1001 "$ST1")"
+  worker_json "$F" true 0
+  out="$("$T" sweep-dead 2>&1)"; rc=$?
+  check "D8 registry and ps disagree: NOT MEASURED, exit 2, nothing swept" "(( rc == 2 )) && [[ -d $dC ]] && [[ \$out == *'NOT MEASURED'*disagree* ]]"
+  worker_json "$F" false 1
+  out="$("$T" sweep-dead 2>&1)"; rc=$?
+  check "D9 a parked session that cannot be placed: NOT MEASURED, nothing swept" "(( rc == 2 )) && [[ -d $dC ]] && [[ \$out == *parked* ]]"
+  print -r -- 3 > "$F/worker.rc"
+  out="$("$T" sweep-dead 2>&1)"; rc=$?
+  check "D10 pj-worker count fails: NOT MEASURED, nothing swept" "(( rc == 2 )) && [[ -d $dC ]] && [[ \$out == *'count failed'* ]]"
+  command mv "$F/worker.rc" "$F/Trash/"
+  worker_json "$F" false 0 1002 "$SD" "$ST1"; jq -c '.machine.sessions |= map(del(.sid))' "$F/worker.json" > "$F/w2" && command mv "$F/w2" "$F/worker.json"
+  out="$("$T" sweep-dead 2>&1)"; rc=$?
+  check "D11 an older pj-worker without sid/start: NOT MEASURED, nothing swept" "(( rc == 2 )) && [[ -d $dC ]] && [[ \$out == *'no sid/start'* ]]"
+  worker_json "$F" false 0  1002 "$SD" "$ST1"  2004 "$SF" "$ST2"
+  out="$("$T" sweep-dead --claude-args --resume "$SC" 2>&1)"; rc=$?
+  check "D12 pj --resume <id>: that session's folder is protected at this launch (and the sweep ran)" "[[ -d $dC ]] && [[ \$out == *'Temp sweep at launch'* ]]"
+  out="$("$T" sweep-dead --claude-args --continue 2>&1)"; rc=$?
+  check "D13 pj --continue (id unknown): the whole sweep is skipped, said so" "(( rc == 0 )) && [[ -d $dC ]] && [[ \$out == *'skipped'* ]]"
+  out="$("$T" sweep-dead --claude-args -r 2>&1)"
+  check "D14 pj -r with no id (the picker): skipped" "[[ -d $dC ]] && [[ \$out == *'skipped'* ]]"
+  print -r -- "/private/tmp" >> "$dC/.pj-temp/registered"; print -r -- "$HOME" >> "$dC/.pj-temp/registered"
+  out="$("$T" sweep-dead --oneline --log "$F/state/sweep.log" 2>&1)"; rc=$?
+  check "D15 a dead folder's dangerous registered paths are REFUSED; the folder itself still goes" "[[ ! -e $dC ]] && [[ -d /private/tmp && -d $HOME ]] && command grep -q 'REFUSED  /private/tmp' $F/state/sweep.log"
+  check "D16 --oneline: exactly one summary line; the log holds the details" "[[ \$(print -r -- \$out | wc -l) -eq 1 && \$out == 'Temp sweep at launch: moved '* ]] && command grep -q 'MOVED' $F/state/sweep.log"
+  command mv "$dG" "$F/root/pj-noowner0-0000-4000-8000-000000000000" "$F/Trash/"
+  out="$("$T" sweep-dead --oneline --log "$F/state/sweep17.log" 2>&1)"; rc=$?
+  check "D17 --oneline with nothing to say prints nothing, exit 0 (the log shows it ran)" "[[ -z \$out ]] && (( rc == 0 )) && command grep -q 'moved 0 path' $F/state/sweep17.log"
+  # the root itself is never a target: only pj-* entries inside it are judged
+  print -r -- x > "$F/root/not-a-session-file"
+  out="$("$T" sweep-dead 2>&1)"
+  check "D18 the temp root and non-pj entries in it are never touched (and the sweep ran)" "[[ -d $F/root && -e $F/root/not-a-session-file ]] && [[ \$out == *'Temp sweep at launch'* ]]"
+  ln -s "$F/reg" "$F/root/pj-linkedaa-0000-4000-8000-000000000000"
+  out="$("$T" sweep-dead 2>&1)"
+  check "D19 a pj-* symlink in the root: LEFT, its target untouched" "[[ -d $F/reg ]] && [[ \$out == *'pj-linkedaa'*'is a symlink'* ]]"
+
+  # ---- the real deleter is resolved and checked, never assumed
+  local T2="$F/bin/pj-temp-realrm"
+  sed -e "s|^PJT_RM=.*\$|PJT_RM=\"\"|" "$T" > "$T2"; chmod +x "$T2"
+  dC="$(mk_folder "$F" "$SC" 1001 "$ST1")"
+  # zsh -f: ~/.zshenv would put ~/.local/bin back on PATH and hide the arm (measured)
+  out="$(PATH="/usr/bin:/bin" zsh -f "$T2" sweep-dead 2>&1)"; rc=$?
+  check "R1 rm on PATH is /bin/rm, not the shim: refused, nothing moved" "(( rc == 2 )) && [[ -d $dC ]] && [[ \$out == *\"rm on PATH is '/bin/rm'\"* ]]"
+  print -r -- '#!/bin/sh' > "$F/bin/rm"; chmod +x "$F/bin/rm"
+  out="$(PATH="$F/bin:/usr/bin:/bin" zsh -f "$T2" sweep-dead 2>&1)"; rc=$?
+  check "R2 an rm at the shim's path without its marker: refused" "(( rc == 2 )) && [[ -d $dC ]] && [[ \$out == *'marker'* ]]"
+
+  print -r -- "pj-temp selftest: $T_PASS passed, $T_FAIL failed${mut:+ (mutant $mut)}"
+  (( T_FAIL == 0 )) || print -r -- "fixtures kept for inspection: $F"
+  (( T_FAIL == 0 ))
+}
+run_mutants() {
+  local self="$1" m out caught=0 missed=0
+  local -a ms; ms=(${(f)"$(command grep -oE '#M:[a-z-]+$' "$self" | sed 's/#M://' | sort -u)"})
+  for m in $ms; do
+    out="$(QUIET=1 PJT_UNDER_TEST="$self" zsh "$self" --selftest --mutant "$m" 2>&1)"
+    if [[ "$out" == *' 0 failed'* ]]; then missed=$(( missed + 1 )); print -r -- "  MISSED  mutant $m (every arm still passed)"
+    else caught=$(( caught + 1 )); print -r -- "  caught  mutant $m ($(print -r -- "$out" | command grep -c '  FAIL') arm(s) failed)"; fi
+  done
+  print -r -- "pj-temp mutants: $caught caught, $missed missed of ${#ms}"
+  (( missed == 0 && ${#ms} > 0 ))
+}
+run_e2e() {  # the real Trash, a throwaway temp file; say which sandbox arm this is
+  local self="$1" F T f out rc
+  F="$(mktemp -d "${TMPDIR:-/tmp}/pjt-e2e.XXXXXX")" || return 2
+  F="${F:A}"; mk_copy "$self" "$F"
+  T="$F/bin/pj-temp"
+  sed -i '' -e "s|^PJT_RM=.*\$|PJT_RM=\"\"|" -e "s|^PJT_SHIM=.*\$|PJT_SHIM=\"$HOME/.local/bin/rm\"|" "$T"
+  local sid=e2e00000-0000-4000-8000-000000000000
+  mkdir -p "$F/root/pj-$sid/.pj-temp"; print -r -- "$sid${TAB}1${TAB}x${TAB}startup${TAB}t" > "$F/root/pj-$sid/.pj-temp/owners"
+  f="$F/root/pj-$sid/e2e-throwaway.txt"; print -r -- "pj-temp e2e $(date)" > "$f"
+  out="$(TMPDIR="$F/root/pj-$sid" "$T" sweep 2>&1)"; rc=$?
+  print -r -- "$out"
+  if [[ -e "$f" ]]; then
+    print -r -- "e2e: the file is STILL THERE, rc $rc (sandboxed arm expected: FAILED + afpAccessDenied + rc 1)"
+    [[ "$out" == *FAILED*afpAccessDenied* ]] && (( rc == 1 )) && { print -r -- "e2e: PASS (sandboxed arm)"; return 0; }
+    print -r -- "e2e: FAIL"; return 1
+  fi
+  print -r -- "e2e: the file is gone (test -e), rc $rc"
+  [[ "$out" == *MOVED* ]] && (( rc == 0 )) && { print -r -- "e2e: PASS (unsandboxed arm: moved to the real Trash)"; return 0; }
+  print -r -- "e2e: FAIL"; return 1
+}
+
+# ------------------------------------------------------------------ main
+integer DRY=0 QUIET=${QUIET:-0}
+case "${1:-}" in
+  session-start) shift; cmd_session_start "$@" ;;
+  add) shift; cmd_add "$@" ;;
+  list) shift; cmd_list "$@" ;;
+  sweep) shift; cmd_sweep "$@" ;;
+  sweep-dead) shift; cmd_sweep_dead "$@" ;;
+  --selftest) shift; selftest "$@" ;;
+  -h|--help|"") sed -n '2,/^$/p' "$SELF" | sed 's/^# \{0,1\}//'; [[ -n "${1:-}" ]] ;;
+  *) err "unknown command '$1' (session-start, add, list, sweep, sweep-dead, --selftest)"; exit 2 ;;
+esac
