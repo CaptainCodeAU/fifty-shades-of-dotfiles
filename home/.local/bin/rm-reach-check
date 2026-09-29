@@ -85,7 +85,15 @@ find_all() {
 }
 
 remove_hint() { # $1 = a foreign file; prints how to get rid of it
-	local p="$1" pkg
+	local p="$1" pkg rp repo
+	# Never advise removing a file of THIS repo: a finding about one is a bug in this tool
+	# (W-20260929-A168: it told Gavin to remove the trash shim added after the engage incident).
+	rp=$(readlink -f "$p" 2>/dev/null) || rp="$p"
+	case "$here" in */home/.local/bin) repo=${here%/home/.local/bin} ;; *) repo="" ;; esac
+	if [ -n "$repo" ] && case "$rp" in "$repo"/*) true ;; *) false ;; esac; then
+		echo "do NOT remove it: $rp is a dotfiles file, so this finding is a bug in rm-reach-check; report it"
+		return
+	fi
 	if command -v dpkg >/dev/null 2>&1 && pkg=$(dpkg -S "$p" 2>/dev/null | head -1 | cut -d: -f1) && [ -n "$pkg" ]; then
 		echo "sudo apt remove $pkg"
 	elif command -v brew >/dev/null 2>&1 && case "$p" in "$(brew --prefix 2>/dev/null)"/*) true ;; *) false ;; esac; then
@@ -101,7 +109,7 @@ say_info() { [ "$QUICK" = 1 ] || printf '  info  %s\n' "$1"; }
 say_bad()  { findings=$((findings + 1)); printf '  %s  %s\n' "$( [ "$QUICK" = 1 ] && echo 'rm-reach:' || echo 'FIND ')" "$1"; }
 
 check() {
-	local st ours probe bprobe p trash_path pkg
+	local st ours probe bprobe p trash_path pkg first_t ours_t why
 	# 1. the zshenv block
 	st=$(block_state)
 	case "$st" in
@@ -121,13 +129,39 @@ $(find_all safe-rm)
 EOF
 	[ -x "$here/safe-rm" ] || say_bad "the dotfiles safe-rm is missing beside this tool ($here/safe-rm): every rm will refuse"
 
-	# 3. which Trash tool safe-rm will pick (it resolves trash, then trash-put, by PATH)
-	trash_path=$(command -v trash 2>/dev/null || command -v trash-put 2>/dev/null || true)
-	if [ -z "$trash_path" ]; then
-		say_bad "no trash tool on PATH: safe-rm refuses every delete. Fix: macOS ships /usr/bin/trash; Linux: sudo apt install trash-cli"
+	# 3. Two questions since the trash shim (c851e08): they had one answer before it, and asking
+	#    the first as if it were the second told Gavin to delete the shim (W-20260929-A168).
+	# 3a. what a BARE `trash` reaches (scripts, agents, xargs): it must be the shim beside us,
+	#     so trash-guard runs first. A zsh that hashed trash before the stow is invisible here.
+	if [ -x "$here/trash" ]; then
+		first_t=$(command -v trash 2>/dev/null || true)
+		ours_t=$(readlink -f "$here/trash" 2>/dev/null) || ours_t="$here/trash"
+		if [ -z "$first_t" ]; then
+			say_bad "bare trash reaches nothing on this PATH: the trash shim's folder is not on it"
+		elif [ "$(readlink -f "$first_t" 2>/dev/null)" = "$ours_t" ]; then
+			say_ok "bare trash reaches the dotfiles trash shim ($first_t): trash-guard runs first"
+		elif LC_ALL=C grep -q -F TRASH_GUARD_SHIM_7f3a "$first_t" 2>/dev/null; then
+			say_bad "bare trash reaches a COPY of the trash shim at $first_t, not the one beside this tool (its rules may be stale). Fix: $(remove_hint "$first_t")"
+		else
+			say_bad "$first_t is ahead of the dotfiles trash shim on PATH: a bare trash skips the trash guard. Fix: $(remove_hint "$first_t")"
+		fi
+	else
+		say_info "no trash shim beside this tool ($here/trash): bare trash is not guarded here"
+	fi
+	# 3b. what safe-rm will RUN: the same question safe-rm asks, answered by the same file.
+	trash_path=""
+	[ -x "$here/trash-guard" ] && { trash_path=$("$here/trash-guard" --real-trash 2>/dev/null) || trash_path=""; }
+	if [ -z "$trash_path" ] && [ "$(uname -s)" != Darwin ]; then   # safe-rm's Linux fallback
+		trash_path=$(command -v trash-put 2>/dev/null || true)
+	fi
+	if [ ! -x "$here/trash-guard" ]; then
+		say_bad "trash-guard is missing beside this tool ($here/trash-guard): safe-rm refuses every delete"
+	elif [ -z "$trash_path" ]; then
+		why=$("$here/trash-guard" --real-trash 2>&1 >/dev/null)
+		say_bad "no real trash: safe-rm refuses every delete${why:+ ($why)}. Fix: macOS 15 and later ship /usr/bin/trash; Linux: sudo apt install trash-cli"
 	elif [ "$(uname -s)" = Darwin ]; then
-		[ "$trash_path" = /usr/bin/trash ] && say_ok "safe-rm will use Apple's /usr/bin/trash" \
-			|| say_bad "safe-rm will use $trash_path, not Apple's /usr/bin/trash. Fix: $(remove_hint "$trash_path")"
+		[ "$trash_path" = /usr/bin/trash ] && say_ok "safe-rm and the trash shim will use Apple's /usr/bin/trash" \
+			|| say_bad "safe-rm and the trash shim will run $trash_path, not Apple's /usr/bin/trash. Fix: $(remove_hint "$trash_path")"
 	else
 		pkg=""
 		command -v dpkg >/dev/null 2>&1 && pkg=$(dpkg -S "$(readlink -f "$trash_path")" 2>/dev/null | head -1 | cut -d: -f1)
@@ -196,9 +230,37 @@ selftest() {
 	out=$(HOME="$H" PATH="$root/foreign:$PATH" "$self" --quick 2>&1); rc=$?
 	case "$out" in *"foreign safe-rm at $root/foreign/safe-rm"*) ok "5 foreign safe-rm named" ;; *) bad "5 foreign safe-rm" "$out" ;; esac
 	[ "$rc" = 1 ] && ok "5 --quick exits 1 on a finding" || bad "5 quick exit" "$rc"
-	out=$(HOME="$H" "$self" --quick 2>&1); rc=$?
-	if [ -z "$out" ] && [ "$rc" = 0 ]; then ok "5 control: --quick silent and exit 0 when fine"
+	# The control runs a fixture COPY with PATH pinned: with the caller's PATH, what the host's
+	# trash resolves to decided this arm (it went red the moment the trash shim was stowed).
+	FXB="$root/fx/home/.local/bin"   # laid out like the repo, so "a dotfiles file" means inside $root/fx
+	mkdir -p "$FXB" "$root/foreign2" "$root/fx/zz"
+	for t in rm-reach-check trash trash-guard safe-rm; do [ -e "$here/$t" ] && cp "$here/$t" "$FXB/$t"; done
+	ln -s "$FXB/trash" "$H/.local/bin/trash"
+	PIN="$H/.local/bin:/usr/bin:/bin"
+	out=$(HOME="$H" PATH="$PIN" "$FXB/rm-reach-check" --quick 2>&1); rc=$?
+	if [ -z "$out" ] && [ "$rc" = 0 ]; then ok "5 control: --quick silent and exit 0 when fine (PATH pinned, shim linked)"
 	else bad "5 quick silent" "rc=$rc out=$out"; fi
+
+	# 6-10: the trash rows (W-20260929-A168). Judge-only: rm-reach-check never runs a trash, so
+	# the stubs below are only ever looked at. The expectations are macOS's (Apple's trash).
+	if [ "$(uname -s)" = Darwin ]; then
+		printf '#!/bin/sh\nexit 0\n' > "$root/foreign2/trash"; chmod +x "$root/foreign2/trash"
+		printf '#!/bin/sh\nexit 0\n' > "$root/fx/zz/trash"; chmod +x "$root/fx/zz/trash"
+		out=$(HOME="$H" PATH="$PIN" "$FXB/rm-reach-check" 2>&1)
+		case "$out" in *"bare trash reaches the dotfiles trash shim"*"will use Apple's /usr/bin/trash"*) ok "6 shim first: bare trash reaches the shim, safe-rm uses Apple's trash" ;; *) bad "6 shim first" "$out" ;; esac
+		case "$out" in *"remove or rename"*) bad "6 never advises removing anything when fine" "$out" ;; *) ok "6 no removal advice when fine" ;; esac
+		out=$(HOME="$H" PATH="$root/foreign2:$PIN" "$FXB/rm-reach-check" --quick 2>&1); rc=$?
+		case "$out" in *"$root/foreign2/trash is ahead of the dotfiles trash shim"*) ok "7 a trash AHEAD of the shim is named as skipping the guard" ;; *) bad "7 shadow" "$out" ;; esac
+		[ "$rc" = 1 ] && ok "7 exit 1" || bad "7 exit" "$rc"
+		out=$(HOME="$H" PATH="$H/.local/bin:$root/foreign2:/usr/bin:/bin" "$FXB/rm-reach-check" --quick 2>&1); rc=$?
+		case "$out" in *"ahead of"*) bad "8 behind the shim: 3a must stay quiet" "$out" ;; *"will run $root/foreign2/trash, not Apple's"*) ok "8 a trash BEHIND the shim: 3a quiet, 3b names what safe-rm will really run" ;; *) bad "8 behind" "$out" ;; esac
+		out=$(HOME="$H" PATH="$PIN" TRASH_GUARD_REAL_TRASH=/nonexistent "$FXB/rm-reach-check" --quick 2>&1); rc=$?
+		case "$out" in *"no real trash: safe-rm refuses every delete"*"TRASH_GUARD_REAL_TRASH was removed"*) ok "9 no real trash: named, with trash-guard's reason" ;; *) bad "9 no real trash" "$out" ;; esac
+		out=$(HOME="$H" PATH="$root/fx/zz:$PIN" "$FXB/rm-reach-check" --quick 2>&1); rc=$?
+		case "$out" in *"remove or rename"*) bad "10 a finding about a dotfiles file must not advise removing it" "$out" ;; *"do NOT remove it"*) ok "10 a dotfiles file in a finding: says do NOT remove it" ;; *) bad "10 repo invariant" "$out" ;; esac
+	else
+		echo "  skip 6-10: their expectations are macOS's (Apple's /usr/bin/trash); not measured on $(uname -s)"
+	fi
 
 	# Clean up through the Trash shim beside this tool, never the real rm. If it cannot, say so.
 	if [ -x "$here/rm" ] && "$here/rm" -rf "$root" 2>/dev/null && [ ! -e "$root" ]; then :
