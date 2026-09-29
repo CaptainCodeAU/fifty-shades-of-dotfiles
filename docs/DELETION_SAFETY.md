@@ -56,7 +56,7 @@ Measured 2026-09-04 on macOS 25.6 (Darwin), SIP enabled. Every row was run, not 
 | Homebrew internals                                                | **no**            | `bin/brew:308` hardcodes `PATH=/usr/bin:/bin:/usr/sbin:/sbin`                                                                                                                                |
 | Docker `RUN rm -rf`                                               | **no**            | runs inside the image with its own `/bin/rm`                                                                                                                                                 |
 | `/bin/rm`                                                         | **no, cannot be** | absolute path never consults PATH; SIP `restricted`, see below                                                                                                                               |
-| `SAFE_RM_OFF=1 rm ...`                                            | **no, by design** | the deliberate "I really mean it" door                                                                                                                                                       |
+| `SAFE_RM_OFF=1 rm ...`                                            | yes, guarded      | REMOVED 2026-09-29 (Gavin, W-20260929-A164): the shim ignores it, says so, and still goes to the Trash                                                                                              |
 | bare `trash X` (agent, script, terminal)                          | yes, guarded      | `~/.local/bin/trash` shim runs `trash-guard` first (2026-09-29); `trash-guard-selftest`. Needs the shim stowed; until then a bare `trash` is `/usr/bin/trash`                                |
 | `/usr/bin/trash`, `command trash`, `env trash` typed by an agent  | denied            | hook rule `trash-path` (2026-09-29), below                                                                                                                                                   |
 | `/usr/bin/trash X` in Gavin's own terminal                        | **no, by design** | the human's deliberate route around the shim                                                                                                                                                 |
@@ -68,8 +68,8 @@ Measured 2026-09-04 on macOS 25.6 (Darwin), SIP enabled. Every row was run, not 
 is `$path[1]`, ahead of `/usr/bin` and `/bin`, so a bare `rm` resolves there first. It does three
 things and then hands off to `safe-rm`:
 
-1. Honours `SAFE_RM_OFF=1` by exec'ing `/bin/rm`, checked first so it works even if `safe-rm` is
-   broken.
+1. Ignores `SAFE_RM_OFF` (it used to exec `/bin/rm`; Gavin removed that on 2026-09-29,
+   W-20260929-A164) and prints one line saying the delete still goes to the Trash.
 2. **Preserves rm's own directory rule.** Real `rm dir` refuses without `-r`; `trash` has no such
    rule and takes a directory happily. Without this check the shim would quietly REMOVE a safety
    net while claiming to add one, so a typo'd `rm build` would take the tree. Long options are
@@ -94,13 +94,13 @@ Consequences to live with:
 
 - **Empty the Trash regularly.** Space is not reclaimed until you do.
 - Repeated `dist`/`build`/`coverage` deletes become `dist 2`, `dist 3`, … in the Trash.
-- `SAFE_RM_OFF=1` before a big build if you do not want the churn.
+- There is no switch to turn the Trash off for a build (`SAFE_RM_OFF` was removed 2026-09-29).
 
 ### Environment variables
 
 | Variable            | Effect                                                             |
 | ------------------- | ------------------------------------------------------------------ |
-| `SAFE_RM_OFF=1`     | Total bypass — exec `/bin/rm`. Permanent. Per command or exported. |
+| `SAFE_RM_OFF`       | REMOVED 2026-09-29 (W-20260929-A164). Ignored, with one warning line. |
 | `SAFE_RM_VERBOSE=1` | Print each trashed path (drops `safe-rm -q`).                      |
 
 ## Catastrophic targets are refused outright
@@ -124,8 +124,8 @@ that logs instead of deleting: it was never called):
 **Containers, not contents** — with four named exceptions. For everything in the table above,
 the directory itself is refused while `dir/*` is not, because each child is a separate target.
 A guard that blocks ordinary work gets routed around, and a routed-around guard protects
-nothing. Override for a human who means it: `SAFE_RM_OFF=1` (permanent, no Trash). There is no
-second knob, on purpose.
+nothing. There is no override (`SAFE_RM_OFF=1` was one until 2026-09-29, when Gavin removed it);
+a person who means it trashes the folder in Finder.
 
 ### The sweep guard
 
@@ -163,10 +163,10 @@ Two implementation details, each of which cost a bug:
 2. **A symlink you created is still removable.** Its own absolute path is not on the list and it
    is not resolved, so `rm mylink` still just removes the link.
 
-### The escape hatches are for humans only
+### The escape hatch is for a human only
 
 `CLAUDE.md` makes it **binding** that no agent, subagent, script or hook invokes the real
-deleter in any form — `/bin/rm`, `/bin/rm -P`, `/usr/bin/rm`, `SAFE_RM_OFF=1`, `unlink`,
+deleter in any form — `/bin/rm`, `/bin/rm -P`, `/usr/bin/rm`, `unlink`,
 `find … -delete`, `truncate -s0`, `> file`, `shred`, `git worktree remove`. All of them destroy
 data outside the Trash, and `-P` overwrites the bytes first so that no Trash, snapshot or backup
 can recover it. An agent that believes it needs a permanent delete must stop and ask; that call
@@ -436,7 +436,7 @@ inside `( )`, `{ }`, `$( )`, backticks, `<( )`, `=( )`, behind `VAR=1`, `sudo`, 
 | a command name in a variable (`$RM x`, zsh `$=x`), git aliases, `ssh host 'rm ...'`                                                                                                                                                                                                                                                                                                                                       | invisible  |                                                                  |
 | `mv` / `cp` over an existing file, `sed -i`, `open(f, 'w')`                                                                                                                                                                                                                                                                                                                                                               | invisible  | cp/mv wrappers: prompt at a terminal, decline for agents (below) |
 | code piped from a file (`cat x.py \| python3`), heredoc `$( )` expansions                                                                                                                                                                                                                                                                                                                                                 | invisible  |                                                                  |
-| snapshot FUNCTIONS (their bodies are not expanded; `rm()` itself contains `/bin/rm` on its `SAFE_RM_OFF` branch)                                                                                                                                                                                                                                                                                                          | invisible  |                                                                  |
+| snapshot FUNCTIONS (their bodies are not expanded; a wrapper body may name `/bin/rm`)                                                                                                                                                                                                                                                                                                          | invisible  |                                                                  |
 
 **Aliases.** Agent shells source Claude Code's shell snapshot, and its aliases expand (measured
 2026-09-23: 311 aliases, `ll` ran `eza`). A hook sees the text before expansion, so the guard reads

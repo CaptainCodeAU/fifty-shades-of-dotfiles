@@ -27,7 +27,7 @@
 #
 # DO NOT "fix" that by reaching for /bin/rm. CLAUDE.md makes it BINDING that no agent, script
 # or hook calls the real deleter in any form -- /bin/rm, /bin/rm -P, unlink, find -delete,
-# SAFE_RM_OFF=1. Those exist for a human's deliberate choice only. A script that wants its
+# SAFE_RM_OFF (removed 2026-09-29, W-20260929-A164). /bin/rm by path is a human's deliberate choice only. A script that wants its
 # scratch gone quietly should put it under $TMPDIR and simply leave it: the OS reaps that
 # directory, no delete call needed. If a temp dir genuinely must be removed inside a script,
 # route it here like everything else and let the Trash carry the noise.
@@ -219,9 +219,9 @@ while [ "$i" -lt "$argc" ]; do
 	# with a trailing slash are all caught. A symlink itself is NOT resolved -- removing a
 	# link is harmless and must keep working -- hence the `! -L` test.
 	#
-	# Deliberate override for a human who really means it: SAFE_RM_OFF=1 (permanent, no
-	# Trash). No second knob, on purpose: one documented door is easier to reason about
-	# than two.
+	# There is NO override here. SAFE_RM_OFF=1 used to be one (a permanent delete); Gavin
+	# removed it on 2026-09-29 (W-20260929-A164). A person who means it moves the folder aside
+	# or trashes it in Finder; nothing in this file offers a permanent route.
 	# TWO paths get classified, and both are needed.
 	#
 	#   ap  the literal target made absolute, symlinks NOT resolved. This exists because on
@@ -273,7 +273,7 @@ while [ "$i" -lt "$argc" ]; do
 			echo "safe-rm: \"$t\" -> ${cand}" >&2
 			echo "         Refusing -- that is ${protected}." >&2
 			echo "         To empty it instead, target the contents: ${cand}/*" >&2
-			echo "         To override deliberately: SAFE_RM_OFF=1 rm ...  (PERMANENT, no Trash)" >&2
+			echo "         There is no override. If you mean it, trash it yourself in Finder." >&2
 			exit 1
 		fi
 	done
@@ -383,7 +383,7 @@ if [ -n "$sweep_dirs" ]; then
 			echo "safe-rm: refusing to remove ${n} items at once from ${g}" >&2
 			echo "         That folder is protected against being emptied in one command." >&2
 			echo "         Delete them individually if you mean it, or move the folder aside." >&2
-			echo "         To override deliberately: SAFE_RM_OFF=1 rm ...  (PERMANENT, no Trash)" >&2
+			echo "         There is no override. If you mean it, trash it yourself in Finder." >&2
 			exit 1
 		fi
 		IFS='

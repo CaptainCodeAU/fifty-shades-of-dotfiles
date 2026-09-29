@@ -350,7 +350,7 @@ No agent, subagent, script, hook, Makefile, or subprocess may EVER call the real
 
 - `/bin/rm` — and every variation: `/usr/bin/rm`, `env rm`, `xargs /bin/rm`, `sh -c '/bin/rm …'`, an absolute path built from a variable, or any other spelling that reaches the binary directly.
 - **`/bin/rm -P`** — the worst one. `-P` OVERWRITES the file's contents before unlinking. Nothing recovers it: not the Trash, not an APFS snapshot, not Time Machine unless the last backup predates the delete. Never type it, never generate it, never suggest it.
-- `SAFE_RM_OFF=1 rm …` — the documented bypass. Still permanent. Reserved for a human.
+- `SAFE_RM_OFF=1 rm …` — REMOVED by Gavin on 2026-09-29 (W-20260929-A164): it now does nothing and the delete still goes to the Trash. Typing it still shows an attempt to delete permanently, so the hook still denies it.
 - Any other route that destroys data without passing through the Trash: `unlink`, `find … -delete`, `truncate -s0`, `> file`, `dd of=…`, `shred`, `srm`, `git worktree remove`, `git clean` (without `-n`), `git reset --hard`, `rsync --delete`, `os.remove` in a `python3 -c`.
 
 Since 2026-09-23 [`enforce-no-permanent-delete.sh`](home/.claude/hooks/enforce-no-permanent-delete.sh) DENIES these at the Bash tool, in every project (user and project targets), and its denial names the safe route. Its coverage table, including what it cannot see, is in [`docs/DELETION_SAFETY.md`](docs/DELETION_SAFETY.md). A denial there is the rule working: change the command to the safe route or ask, never reword it to get past the guard.
@@ -359,7 +359,7 @@ Since 2026-09-23 [`enforce-no-permanent-delete.sh`](home/.claude/hooks/enforce-n
 
 **If you think you need a permanent delete, STOP and ask.** That decision belongs to the user, never to an agent. `/bin/rm` exists for a human's deliberate, informed choice — not for an agent's convenience, tidiness, or cleanup step. This rule outranks "it's only a temp file", "it's only build output", and "the disk is full".
 
-See [`docs/DELETION_SAFETY.md`](docs/DELETION_SAFETY.md) for the coverage table, the measured evidence, and the two escape hatches that exist for humans.
+See [`docs/DELETION_SAFETY.md`](docs/DELETION_SAFETY.md) for the coverage table, the measured evidence, and the one escape hatch that exists for a human (`/bin/rm` typed by path; `SAFE_RM_OFF` was removed on 2026-09-29).
 
 ### How the wrappers work
 

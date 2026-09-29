@@ -262,16 +262,25 @@ if [ -x "$RM_SHIM" ]; then
 		&& ok "no sibling safe-rm: the shim refuses and runs nothing else" \
 		|| bad "no sibling safe-rm: exit=$ST target-left=$([ -e "$d/lonely.txt" ] && echo yes || echo no)"
 
-	# The documented escape hatch must still work, and must be permanent. It IS a permanent
-	# delete, which an agent may never run (the BINDING rule), so it runs only from a terminal,
-	# i.e. Gavin's own hand. An agent run says NOT RUN out loud; it is not counted as a pass.
-	if [ -t 0 ] && [ -t 1 ]; then
-		: > "$d/perm.txt"
-		PATH="$d/bin:/usr/bin:/bin" SAFE_RM_OFF=1 "$d/bin/rm" -f "$d/perm.txt" >/dev/null 2>&1
-		[ ! -e "$d/perm.txt" ] && ok "SAFE_RM_OFF=1 reaches the real rm" \
-		                       || bad "SAFE_RM_OFF=1 did not delete"
+	# SAFE_RM_OFF is REMOVED (Gavin, 2026-09-29, W-20260929-A164): set, rm must still go to
+	# safe-rm, never /bin/rm. Checked in two steps so a regression can never run a permanent
+	# delete here: first the shim's CODE must hold no line that runs /bin/rm (comments aside);
+	# only then is it run, against a stub safe-rm that logs its call and deletes nothing.
+	# code lines only: comments and echo/printf messages may name /bin/rm; REAL_RM was its variable
+	realrm=$(grep -v -e '^[[:space:]]*#' -e '^[[:space:]]*\(echo\|printf\) ' "$RM_SHIM" | grep -c -e '/bin/rm' -e 'REAL_RM')
+	if [ "$realrm" -eq 0 ] && grep -q '^[[:space:]]*#.*/bin/rm' "$RM_SHIM"; then
+		ok "the shim's code runs no /bin/rm (control: its comments do mention /bin/rm)"
+		mkdir -p "$d/offbin"
+		cp "$RM_SHIM" "$d/offbin/rm"
+		printf '#!/bin/sh\nprintf "%%s\\n" "$@" > "%s/offbin/called"\nexit 0\n' "$d" > "$d/offbin/safe-rm"
+		chmod +x "$d/offbin/rm" "$d/offbin/safe-rm"
+		touch "$d/perm.txt"
+		OUT=$(PATH="$d/offbin:/usr/bin:/bin" SAFE_RM_OFF=1 "$d/offbin/rm" -f "$d/perm.txt" 2>&1); ST=$?
+		[ -e "$d/perm.txt" ] && grep -qx "$d/perm.txt" "$d/offbin/called" 2>/dev/null && [[ $OUT == *'SAFE_RM_OFF was removed'* ]] \
+			&& ok "SAFE_RM_OFF=1 is ignored: rm still hands the file to safe-rm, and says so" \
+			|| bad "SAFE_RM_OFF=1: file-present=$([ -e "$d/perm.txt" ] && echo yes || echo NO) safe-rm-called=$([ -e "$d/offbin/called" ] && echo yes || echo no) out=$OUT"
 	else
-		echo "  NOT RUN  SAFE_RM_OFF=1 reaching the real rm: a permanent delete, run only from a terminal (no tty here)"
+		bad "the shim's code runs /bin/rm on $realrm line(s): SAFE_RM_OFF or another bypass is back. NOT run, because it would be a permanent delete"
 	fi
 	echo
 fi

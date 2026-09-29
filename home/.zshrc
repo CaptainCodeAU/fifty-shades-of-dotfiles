@@ -1234,12 +1234,13 @@ sudo() {
 # Intercept rm: warn on symlinks (first layer), then send to trash (second layer).
 # Symlink warning prevents accidentally nuking files through directory symlinks
 # (e.g. rm ~/.config/direnv/file when ~/.config/direnv is a symlink into the repo).
-# Routes to OS-native trash (recoverable): macOS 'trash' → ~/.Trash; Linux 'trash-put' → XDG trash.
-# 'command trash' (not bare 'trash') bypasses shell functions — prevents infinite recursion.
+# Routes to the real trash through ~/.local/bin/safe-rm and its trash-guard (recoverable):
+# macOS /usr/bin/trash → ~/.Trash; Linux trash-put → XDG trash. This function never calls trash.
 # This function covers INTERACTIVE use only. Scripts are covered separately, by the PATH shim
 # at ~/.local/bin/rm -- a zsh function outranks PATH, so the two never collide: you get this
-# one (which prints what it trashed), a script gets the shim (quiet). Only `/bin/rm` and
-# `SAFE_RM_OFF=1` still delete permanently. See docs/DELETION_SAFETY.md.
+# one (which prints what it trashed), a script gets the shim (quiet). Only `/bin/rm`, typed by
+# path, deletes permanently. SAFE_RM_OFF was removed on 2026-09-29 (W-20260929-A164) and does
+# nothing. See docs/DELETION_SAFETY.md.
 rm() {
 	local symlinks=()
 	for arg in "$@"; do

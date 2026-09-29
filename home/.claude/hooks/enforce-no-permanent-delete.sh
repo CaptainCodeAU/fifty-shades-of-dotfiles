@@ -34,8 +34,8 @@
 # ~300 aliases that DO expand. A hook sees the text before expansion, so each
 # command word is looked up in the newest snapshot's alias table and the
 # expansion is classified too (recursively, as zsh does). Functions in the
-# snapshot are NOT expanded: the rm() wrapper's body contains /bin/rm on its
-# SAFE_RM_OFF branch, so expanding functions would deny every bare rm.
+# snapshot are NOT expanded: a wrapper's body may name /bin/rm (the selftest's
+# fixture rm() does), so expanding functions would deny every bare rm.
 #
 # WHAT STAYS INVISIBLE (docs/DELETION_SAFETY.md has the full table): a script
 # or Makefile target that deletes internally, a compiled program, a command
@@ -395,7 +395,7 @@ _msg() { # $1 = rule id -> what it does, then the safe route
     rm-path)        echo "rm called by path runs the real deleter and skips the Trash. SAFE ROUTE: bare rm (it resolves to the Trash-routed wrapper)." ;;
     rm-lookup)      echo "rm looked up through a changed PATH (env, env -i, a PATH= prefix, unset/export PATH, command -p, sudo -i, hash rm=) can resolve to /bin/rm and skip the Trash; env -i finds /bin tools with PATH wiped. SAFE ROUTE: bare rm, with PATH left alone." ;;
     rm-P)           echo "rm -P overwrites the bytes before unlinking; nothing recovers it. SAFE ROUTE: bare rm without -P." ;;
-    safe-rm-off)    echo "SAFE_RM_OFF is the human-only bypass of the Trash wrapper. SAFE ROUTE: bare rm, or ask Gavin." ;;
+    safe-rm-off)    echo "SAFE_RM_OFF was the bypass of the Trash wrapper; Gavin removed it on 2026-09-29 and it now does nothing, so setting it only shows an attempt to delete permanently. SAFE ROUTE: bare rm, or ask Gavin." ;;
     grm)            echo "grm is GNU rm; it bypasses the Trash shim. SAFE ROUTE: bare rm." ;;
     unlink)         echo "unlink deletes outside the Trash. SAFE ROUTE: bare rm." ;;
     shred)          echo "shred/srm/wipe overwrite and delete; nothing recovers it. SAFE ROUTE: bare rm, or ask Gavin." ;;

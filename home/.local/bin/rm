@@ -32,21 +32,21 @@
 # data, so installing this file knowingly overrides that scope decision in exchange for total
 # coverage. That trade was made deliberately on 2026-09-04 after the cost was measured
 # (install.sh trashes its own temp dirs in 7 places; every `"prebuild": "rm -rf dist"` lands in
-# the Trash). Empty the Trash regularly, or set SAFE_RM_OFF=1 for a build. Do not "simplify"
-# this back to a conditional shim without re-reading docs/DELETION_SAFETY.md first.
+# the Trash). Empty the Trash regularly. Do not "simplify" this back to a conditional shim
+# without re-reading docs/DELETION_SAFETY.md first.
 #
-# ESCAPE HATCHES -- FOR A HUMAN, DELIBERATELY, NEVER FOR AN AGENT OR A SCRIPT
-#   SAFE_RM_OFF=1 rm ...    real /bin/rm, permanent, for one command or one exported shell
+# THE ONE ESCAPE HATCH -- FOR A HUMAN, DELIBERATELY, NEVER FOR AN AGENT OR A SCRIPT
 #   /bin/rm ...             absolute path, permanent
+# SAFE_RM_OFF=1 was a second one until 2026-09-29, when Gavin removed it (W-20260929-A164).
 #
 # CLAUDE.md makes this BINDING: no agent, subagent, script or hook may invoke the real deleter
-# in any form. Both doors above are permanent and unrecoverable -- `/bin/rm -P` additionally
+# in any form. That door is permanent and unrecoverable -- `/bin/rm -P` additionally
 # OVERWRITES the bytes first, so no Trash, snapshot or backup can bring the file back. An agent
 # that thinks it needs one of these must stop and ask the user instead.
 #
 # NOTE that `command rm` and `\rm` are NO LONGER escape hatches. They bypass shell functions
-# and aliases, not PATH, so they now land here. That is intended; the documented doors are the
-# two above.
+# and aliases, not PATH, so they now land here. That is intended; the documented door is the
+# one above.
 #
 # OUTPUT is quiet by default (safe-rm -q). Scripts do not expect `rm` to print, and stdout
 # noise breaks callers that parse it. Set SAFE_RM_VERBOSE=1 to see each trashed path. An
@@ -55,11 +55,12 @@
 
 set -u
 
-REAL_RM=/bin/rm
-
-# Total bypass, checked before anything else so it also works when safe-rm is broken.
-if [ "${SAFE_RM_OFF:-}" = "1" ]; then
-	exec "$REAL_RM" "$@"
+# SAFE_RM_OFF is GONE (Gavin, 2026-09-29: "I don't want SAFE_RM_OFF at all!"; W-20260929-A164).
+# It used to exec /bin/rm here, so one environment variable turned every rm on the machine into
+# a permanent delete. Set now, it changes nothing: the delete still goes to the Trash, and one
+# line says so, so a person who expected a permanent delete is not misled.
+if [ -n "${SAFE_RM_OFF+set}" ]; then
+	echo "rm: SAFE_RM_OFF was removed (2026-09-29) and is ignored: this goes to the Trash. A permanent delete is /bin/rm by path, typed by you." >&2
 fi
 
 # Nothing to do. Match rm's own usage error rather than inventing one.
@@ -139,7 +140,7 @@ SAFE_RM="${self%/*}/safe-rm"
 if [ -z "$self" ] || [ ! -x "$SAFE_RM" ]; then
 	echo "rm: the safe-rm beside this shim was not found (${SAFE_RM}) -- refusing to delete." >&2
 	echo "    It ships in this dotfiles repo at ~/.local/bin/safe-rm; run ./install.sh." >&2
-	echo "    Deliberate permanent delete: SAFE_RM_OFF=1 rm ...   or   /bin/rm ..." >&2
+	echo "    Deliberate permanent delete (a person, never an agent or script): /bin/rm ..." >&2
 	exit 1
 fi
 

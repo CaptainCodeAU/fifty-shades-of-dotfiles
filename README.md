@@ -61,7 +61,7 @@ It also refuses deletes that nothing else refuses: your home folder, system fold
 
 **What it costs you.** Your Trash fills up with build output, and disk space doesn't come back until you empty it. Deleting a huge tree is slower too, because moving isn't the same as unlinking. I took that trade on purpose.
 
-**Getting out of it.** `/bin/rm ...` deletes for real. `SAFE_RM_OFF=1` does too, but only through the `PATH` command, so in a script or as `SAFE_RM_OFF=1 command rm ...` at the prompt. Typed as plain `SAFE_RM_OFF=1 rm ...`, it still goes to the Trash. `command rm` and `\rm` on their own also go to the Trash.
+**Getting out of it.** `/bin/rm ...`, typed by its full path, deletes for real. That is the only way: there is no environment switch (an older `SAFE_RM_OFF=1` was removed, and setting it now changes nothing). `command rm` and `\rm` also go to the Trash.
 
 **Don't want it?** The installer has no switch for this, so leave `home/.local/bin/rm` out when you stow. You keep the Trash for what you type and for `sudo rm`, and scripts go back to deleting for real.
 
