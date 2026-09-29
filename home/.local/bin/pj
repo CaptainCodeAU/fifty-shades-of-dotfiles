@@ -465,7 +465,16 @@ build_argv() {
     prompt="$(expand_tilde "$P_PROMPT")"
   fi
   if [[ -z "$prompt" ]]; then
-    print -u2 -- "pj: REFUSED: pj-prompt-file printed no system-prompt file; run pj-prompt-file --selftest"
+    # W-20260929-A96: the old hint "run pj-prompt-file --selftest" PASSES on a box missing its
+    # sources (the selftest uses fixtures), so it sent you to a green light. Name the files.
+    local -a gone=()
+    [[ "$P_PROMPT" == pj-prompt-file ]] && gone=("${(@f)$(env "${penv[@]}" pj-prompt-file --missing 2>/dev/null)}")
+    gone=("${(@)gone:#}")
+    if (( ${#gone} )); then
+      print -u2 -r -- "pj: REFUSED: no system-prompt file; missing: ${(j:, :)${gone[@]/#$HOME/~}}. Fix: restore each file or its link (a relay-fed box: the link into ~/repos/pj-rules; the Mac: the dot-claude or lifeos-private checkout), then pj --dry-run. pj-prompt-file --selftest does not check these files."
+    else
+      print -u2 -- "pj: REFUSED: pj-prompt-file printed no system-prompt file and names no missing source; run pj-prompt-file by hand and read its stderr"
+    fi
     return 2
   fi
   PJ_ARGV=(claude --setting-sources "$P_SETTING_SOURCES" --settings "$P_SETTINGS"
@@ -729,6 +738,19 @@ selftest() {
   out="$(PJ_PROMPT_SOURCES="$root/none-a:$root/none-b" PJ_PROMPT_OUT="$root/p2.md" "$SELF" --dry-run 2>"$root/err4")"; rc=$?
   [[ $rc -eq 2 && -z "$out" ]] && ok "4 no prompt source -> REFUSED rc 2, no argv" || bad "4 refusal" "rc=$rc out=$out"
   grep -q REFUSED "$root/err4" && ok "4 refusal is announced on stderr" || bad "4 stderr" "$(<"$root/err4")"
+  # 4b-4d (W-20260929-A96, FOLLOWUP-BRIEF T3). The pj-prompt-file BESIDE this pj, not the
+  # stowed one on PATH: from a worktree that is master's, which has no --missing and no strict.
+  local wpath="${SELF:h}:$PATH"
+  out="$(PATH="$wpath" PJ_RULES_COPY="$root/no-rules-copy" PJ_PROMPT_SOURCES="$root/none-a:$root/none-b" PJ_PROMPT_OUT="$root/p2.md" "$SELF" --dry-run 2>"$root/err4b")"; rc=$?
+  [[ $rc -eq 2 && -z "$out" ]] && grep -q "missing: $root/none-a, $root/none-b\. Fix:" "$root/err4b" && ! grep -q 'run pj-prompt-file --selftest' "$root/err4b" \
+    && ok "4b the refusal names both missing files and the fix, not the selftest" || bad "4b refusal names files" "rc=$rc $(<"$root/err4b")"
+  mkdir -p "$root/rules-copy"; print -r -- "rules" > "$root/present.md"
+  out="$(PATH="$wpath" PJ_RULES_COPY="$root/rules-copy" PJ_PROMPT_SOURCES="$root/present.md:$root/none-b" PJ_PROMPT_OUT="$root/p4c.md" "$SELF" --dry-run 2>"$root/err4c")"; rc=$?
+  [[ $rc -eq 2 && -z "$out" ]] && grep -q "pj: REFUSED: no system-prompt file; missing: $root/none-b\. Fix:" "$root/err4c" \
+    && ok "4c relay-fed (rules copy present): ONE missing source refuses the launch, named" || bad "4c strict via pj" "rc=$rc $(<"$root/err4c")"
+  out="$(PATH="$wpath" PJ_RULES_COPY="$root/no-rules-copy" PJ_PROMPT_SOURCES="$root/present.md:$root/none-b" PJ_PROMPT_OUT="$root/p4d.md" "$SELF" --dry-run 2>/dev/null)"; rc=$?
+  [[ $rc -eq 0 && "$out" == *$'\n--append-system-prompt-file\n'"$root/p4d.md"$'\n'* ]] \
+    && ok "4d control: the same missing source with no rules copy (the Mac) degrades and launches" || bad "4d Mac degrade" "rc=$rc"
   # 5. control: the launch file is found (the real launch path exists on this machine)
   [[ -r "$LAUNCH_FILE" ]] && ok "5 launch file readable: ${LAUNCH_FILE/#$HOME/~}" || bad "5 launch file" "$LAUNCH_FILE missing (stow?)"
   # 6. control: __claude_launch is defined by that file, in a clean zsh
