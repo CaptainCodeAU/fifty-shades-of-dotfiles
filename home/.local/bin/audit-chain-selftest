@@ -250,6 +250,62 @@ _baseline="$(val C-Sess-Id)"
   printf '%s' "$(val C-Sess-Id)" > "$ROOT/inherited" )
 wanteq '28 an exported CLAUDE_TRAILERS_DISABLE / CLAUDE_WEB_URL cannot change the verdict' "$_baseline" "$(cat "$ROOT/inherited")"
 
+# ------------------------------------------------ 30-37 pre-push leak scan ---
+# W-20260929-A32 (red-team H2), ruled by Gavin 2026-09-29 (D-20260929-A13): a push to a
+# public remote, or one whose visibility cannot be read, is leak-scanned, and the
+# leakscan.disable / LEAK_SCAN_DISABLE knobs do not switch that scan off. A push to a
+# repo GitHub reports private is left alone (the pre-commit scan still ran). The fetch
+# URL names a GitHub repo; the pushurl is a local bare repo; a fake curl answers the
+# visibility question, so nothing here touches the network.
+printf '\nPRE-PUSH LEAK SCAN\n'
+FAKE="$ROOT/fakebin"; mkdir -p "$FAKE" "$ROOT/pushhooks"
+printf '#!/bin/sh\ncase "${FAKE_CURL_CODE:-}" in fail) exit 7;; esac\nprintf "%%s" "${FAKE_CURL_CODE:-404}"\n' > "$FAKE/curl"
+printf '#!/bin/sh\ncat > "%s/pnpm.stdin"\nexit 0\n' "$ROOT" > "$FAKE/pnpm-audit-hook"
+chmod +x "$FAKE/curl" "$FAKE/pnpm-audit-hook"
+ln -sf "$TOOL" "$ROOT/pushhooks/pre-push"
+BARE="$ROOT/remote.git"; git init -q --bare "$BARE" >/dev/null 2>&1
+PREPO="$ROOT/home/work/push-repo"; mkdir -p "$PREPO"
+git -C "$PREPO" init -q -b main >/dev/null 2>&1
+git -C "$PREPO" config user.email selftest@example.invalid
+git -C "$PREPO" config user.name  selftest
+git -C "$PREPO" config core.hooksPath "$ROOT/pushhooks"
+git -C "$PREPO" remote add origin https://github.com/example/demo.git
+git -C "$PREPO" config remote.origin.pushurl "$BARE"
+printf 'seed\n' > "$PREPO/s.txt"; git -C "$PREPO" add s.txt
+git -C "$PREPO" -c core.hooksPath=/dev/null commit -q --no-verify -m seed >/dev/null 2>&1
+# The planted token is assembled at run time so this file never holds one.
+TOK="gh""p_abcdefghijklmnopqrstuvwxyz0123456789"
+# pp <arm-branch> <curl-code> <with-token 1|0> [env...] -- commit on a fresh branch, push it
+pp(){
+    [ $# -ge 3 ] || { bad "pp needs 3 arguments" "3" "$#"; return 2; }
+    local br="$1" code="$2" tok="$3"; shift 3
+    git -C "$PREPO" switch -q -c "$br" main >/dev/null 2>&1
+    if [ "$tok" = 1 ]; then printf 'key = %s\n' "$TOK" > "$PREPO/$br.txt"; else printf 'clean\n' > "$PREPO/$br.txt"; fi
+    git -C "$PREPO" add "$br.txt"; git -C "$PREPO" -c core.hooksPath=/dev/null commit -q --no-verify -m "$br" >/dev/null 2>&1
+    PPOUT="$(env PATH="$FAKE:$PATH" FAKE_CURL_CODE="$code" "$@" git -C "$PREPO" push -q origin "$br" 2>&1)"; PPRC=$?
+    git -C "$PREPO" switch -q main >/dev/null 2>&1
+}
+onremote(){ git -C "$BARE" rev-parse -q --verify "refs/heads/$1" >/dev/null 2>&1 && echo yes || echo no; }
+env PATH="$FAKE:$PATH" FAKE_CURL_CODE=404 git -C "$PREPO" push -q origin main >/dev/null 2>&1
+wanteq '30 setup: main reached the bare remote' yes "$(onremote main)"
+pp pub-tok 200 1
+wanteq '31 public remote, planted token: push REFUSED' "1 no" "$([ "$PPRC" -ne 0 ] && echo 1 || echo 0) $(onremote pub-tok)"
+want   '31   naming the leak scan' 'leak' "$PPOUT"
+pp pub-clean 200 0
+wanteq '32 public remote, clean commit: push passes (control)' "0 yes" "$PPRC $(onremote pub-clean)"
+git -C "$PREPO" config leakscan.disable true
+pp pub-knobs 200 1 LEAK_SCAN_DISABLE=1
+git -C "$PREPO" config --unset leakscan.disable
+wanteq '33 public, token, leakscan.disable true AND LEAK_SCAN_DISABLE=1: still REFUSED' "1 no" "$([ "$PPRC" -ne 0 ] && echo 1 || echo 0) $(onremote pub-knobs)"
+pp priv-tok 404 1
+wanteq '34 private remote (GitHub 404), planted token: left alone, push passes' "0 yes" "$PPRC $(onremote priv-tok)"
+pp unk-tok fail 1
+wanteq '35 visibility unreadable (curl fails), planted token: REFUSED' "1 no" "$([ "$PPRC" -ne 0 ] && echo 1 || echo 0) $(onremote unk-tok)"
+printf '#!/bin/sh\ncat > "%s/local.stdin"\n' "$ROOT" > "$PREPO/.git/hooks/pre-push"; chmod +x "$PREPO/.git/hooks/pre-push"
+pp stdin-check 200 0
+want '36 the repo'"'"'s own pre-push hook still gets the ref lines on stdin' 'refs/heads/stdin-check' "$(cat "$ROOT/local.stdin" 2>/dev/null)"
+want '37 so does pnpm-audit-hook' 'refs/heads/stdin-check' "$(cat "$ROOT/pnpm.stdin" 2>/dev/null)"
+
 printf '\nfixtures: %s\n' "$ROOT"
 printf 'tool: %s\n' "$TOOL"
 printf '%s passed, %s failed\n\n' "$PASS" "$FAIL"

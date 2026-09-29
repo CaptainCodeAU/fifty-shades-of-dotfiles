@@ -43,6 +43,13 @@ set -uo pipefail
 # so $0's basename is the hook name even though this file is reached via symlink.
 hook="$(basename "$0")"
 
+# pre-push: git hands the pushed refs on stdin ONCE. Read them here and replay them to
+# every step that reads them (the repo's own hook, pnpm-audit-hook, the leak scan 2d);
+# before 2026-09-29 the first consumer drained stdin and a later step saw nothing.
+push_in=""
+if [ "$hook" = "pre-push" ]; then push_in="$(cat)"; fi
+_feed() { [ -n "$push_in" ] && printf '%s\n' "$push_in"; return 0; }
+
 # 1. Delegate to the repo-local hook of the same name. core.hooksPath is global
 #    here, so resolve the repo's ACTUAL git dir explicitly rather than trusting
 #    the hooks dir git handed us.
@@ -63,13 +70,77 @@ if [ -n "$git_dir" ]; then
         fi
     fi
     if [ -x "$local_hook" ] && [ ! "$local_hook" -ef "$0" ]; then
-        "$local_hook" "$@" || exit $?
+        if [ "$hook" = "pre-push" ]; then _feed | "$local_hook" "$@" || exit $?; else "$local_hook" "$@" || exit $?; fi
     fi
 fi
 
 # 2. pnpm supply-chain audit -- pre-push only.
 if [ "$hook" = "pre-push" ] && command -v pnpm-audit-hook >/dev/null 2>&1; then
-    pnpm-audit-hook full || exit $?
+    _feed | pnpm-audit-hook full || exit $?
+fi
+
+# 2d. Leak scan at PUSH time -- pre-push only (W-20260929-A32, red-team H2, ruled by
+#     Gavin 2026-09-29, D-20260929-A13). The pre-commit scan (2b) can be skipped by
+#     --no-verify, LEAK_SCAN_DISABLE, leakscan.disable or a repo core.hooksPath; this is
+#     the last look before a commit leaves the machine. It scans every commit the push
+#     carries when the remote is PUBLIC or its visibility cannot be read, and it runs
+#     with leakscan.disable forced false and LEAK_SCAN_DISABLE cleared (leakscan.skip,
+#     the rule-selective knob, is still honoured). A repo GitHub reports private is left
+#     alone. Visibility: GitHub's API, unauthenticated, 200 = public, 404 = private,
+#     anything else (offline, rate limited, not GitHub) = unknown = scanned.
+#     Fails CLOSED for a push it should scan: no git-leak-scan, or a range it cannot
+#     read (fetch first), refuses the push. `git push --no-verify` skips this whole
+#     chain; validate-bash denies that form in Claude sessions.
+_push_visibility() { # $1 remote name -> public | private | unknown
+    local url host path code
+    url="$(git config --get "remote.$1.url" 2>/dev/null)"; [ -n "$url" ] || url="$1"
+    case "$url" in
+        https://*github.com/*|http://*github.com/*) path="${url#*github.com/}" ;;
+        ssh://*github.com*/*) path="${url#*github.com*/}" ;;
+        *@github.com:*) path="${url#*@github.com:}" ;;
+        *:*/*) host="${url%%:*}"; host="${host#*@}"
+               case "$(ssh -G "$host" 2>/dev/null | awk '$1 == "hostname" { print $2; exit }')" in
+                   github.com) path="${url#*:}" ;;
+                   *) echo unknown; return ;;
+               esac ;;
+        *) echo unknown; return ;;
+    esac
+    path="${path%.git}"; path="${path%/}"
+    case "$path" in */*/*|""|*" "*) echo unknown; return ;; esac
+    code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "https://api.github.com/repos/$path" 2>/dev/null)"
+    case "$code" in 200) echo public ;; 404) echo private ;; *) echo unknown ;; esac
+}
+if [ "$hook" = "pre-push" ] && [ -n "$push_in" ]; then
+    _vis="$(_push_visibility "${1:-}")"
+    if [ "$_vis" != private ]; then
+        command -v git-leak-scan >/dev/null 2>&1 \
+            || { echo "pre-push: REFUSED -- this push goes to a $_vis remote and git-leak-scan is not installed, so it cannot be scanned (W-20260929-A32). Restow the dotfiles." >&2; exit 1; }
+        _zero=0000000000000000000000000000000000000000
+        while read -r _lref _lsha _rref _rsha; do
+            [ -n "${_lsha:-}" ] || continue
+            case "$_lsha" in *[!0]*) ;; *) continue ;; esac            # a delete: nothing to scan
+            case "$_rsha" in
+                *[!0]*)
+                    git cat-file -e "$_rsha^{commit}" 2>/dev/null \
+                        || { echo "pre-push: REFUSED -- the remote's $_rref ($_rsha) is not in this repo, so what this push adds cannot be scanned. git fetch first (W-20260929-A32)." >&2; exit 1; }
+                    _range="$_rsha..$_lsha" ;;
+                *)  # a new branch: from the first commit no remote-tracking ref of this remote has
+                    _first="$(git rev-list --reverse "$_lsha" --not --remotes="${1:-}" 2>/dev/null | head -1)"
+                    [ -n "$_first" ] || continue
+                    if git cat-file -e "$_first^" 2>/dev/null; then _range="$_first^..$_lsha"; else _range="$_lsha"; fi ;;
+            esac
+            [ -n "$(git rev-list "$_range" 2>/dev/null | head -1)" ] || continue
+            env -u LEAK_SCAN_DISABLE GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=leakscan.disable GIT_CONFIG_VALUE_0=false \
+                git-leak-scan --range "$_range" >&2
+            _rc=$?
+            if [ "$_rc" -ne 0 ]; then
+                echo "pre-push: REFUSED -- the leak scan of $_rref ($_range) on a $_vis remote exited $_rc; nothing was pushed (W-20260929-A32). Remove the secret from those commits; a skipped scan is not a pass." >&2
+                exit 1
+            fi
+        done <<PUSHIN
+$push_in
+PUSHIN
+    fi
 fi
 
 # 2b. Identity / secret leak scan -- pre-commit only (sibling of the pre-push
