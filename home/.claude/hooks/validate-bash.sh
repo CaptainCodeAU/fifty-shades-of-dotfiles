@@ -431,7 +431,16 @@ if [ "${1:-}" = "--selftest" ]; then
   conv_arm deny  'alias gp origin +main'                      'gp origin +main'                     '' "$F"
   conv_arm deny  'alias gpsup --force, on main'               'gpsup --force'                       '' "$M"
   conv_arm deny  'control: the form denied before 2026-09-29' 'git push --force origin main'        '' "$F"
+  # W-20260929-A53: a function definition keeps the crude whole-text match only
+  # while some command word is a push; these must still deny.
+  conv_arm deny  'A53 fn body git push -f origin main'        'p() { git push -f origin main; }; p' '' "$F"
+  conv_arm deny  'A53 function kw, body --force, on main'     'function p { git push --force; }; p' '' "$M"
+  conv_arm deny  'A53 fn git push "$@", called -f main'       'p() { git push "$@"; }; p -f origin main' '' "$F"
+  conv_arm deny  'A53 fn runs "$@", called git push -f main'  'p() { "$@"; }; p git push -f origin main' '' "$F"
+  conv_arm deny  'A53 function with two names, body unread'   'function a b { git push -f origin main; }' '' "$F"
   echo "=== D. force push elsewhere, and plain pushes: ALLOW ==="
+  conv_arm allow 'A53 fn def, rg pattern naming force push'   "norm() { sed 's/x/y/' \"\$1\"; }; rg 'force push|git push -f' file" '' "$M"
+  conv_arm allow 'A53 function kw, rg pattern push --force'   "function norm { tr a b; }; rg -e 'push --force' README.md" '' "$M"
   conv_arm allow 'P02 git push -f origin feature, on main'    'git push -f origin feature'          '' "$M"
   conv_arm allow 'git push -f, on feature'                    'git push -f'                         '' "$F"
   conv_arm allow 'git push -f, on main-feature'               'git push -f'                         '' "$FX/main-feature"
