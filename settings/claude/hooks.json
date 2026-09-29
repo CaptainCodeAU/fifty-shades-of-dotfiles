@@ -98,6 +98,20 @@
     {
       "event": "PreToolUse",
       "matcher": "Bash",
+      "script": "enforce-go-build-output.sh",
+      "targets": ["user", "project"],
+      "entry": {
+        "type": "command",
+        "command": "h=\"$HOME/.claude/hooks/enforce-go-build-output.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"HOOK MISSING, DENYING: enforce-go-build-output.sh is registered but ~/.claude/hooks/enforce-go-build-output.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it from your own terminal, where no Claude hook runs: restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command names $HOME/.claude/hooks/enforce-go-build-output.sh from ~/.claude/settings.project.json and ~/.claude/settings.json.\"}}'; fi",
+        "timeout": 5
+      },
+      "why": "DENIES a go build of a single package, or go test -c, with no -o: Go writes the binary into the current folder (a 6.6 MB engage binary landed in the engage repo root, 2026-09-29). Every session, any folder (D-20260929-A31). SAFE: -o <path outside the repo>, a ./... pattern, or go vet.",
+      "class": "guard",
+      "legacy_commands": []
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "Bash",
       "script": "enforce-no-permanent-delete.sh",
       "targets": ["user", "project"],
       "entry": {

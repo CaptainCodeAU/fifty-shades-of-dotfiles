@@ -476,3 +476,39 @@ denied. 133 of them hold `--kind claude` and every one read was a live launch;
 the other 14 are real `claude`, `cb` or `lifeos` pane launches and redteam-3's
 kind probes. The first pass also denied 11 `herdr agent start --help` probes,
 which is how the `--help` rule got in. 27 one-fault mutants, 27 killed.
+
+## The Go build guard
+
+[`enforce-go-build-output.sh`](../home/.claude/hooks/enforce-go-build-output.sh), a guard in
+every session (user and project targets), any folder. Ruled D-20260929-A31, Gavin's own pick
+"Machine guard, dotfiles" relayed by engage-main, scope "everywhere" confirmed in
+dotfiles-one's box.
+
+**Why.** 2026-09-29 22:35: `go build ./cmd/engage/` with no `-o` wrote a 6.6 MB `engage`
+binary into the engage repo root, untracked. Gavin: "Make sure there are no such accidents
+like this again."
+
+**What Go writes** (measured 2026-09-29, go1.27.1, a throwaway module, one clean folder per
+reading):
+
+| Command | Writes into the current folder |
+| --- | --- |
+| `go build`, `go build .`, `go build ./cmd/app`, `go build main.go` | yes, the binary |
+| `go test -c ./lib` | yes, `lib.test` |
+| `go build ./...`, `go build ./cmd/...` (even matching ONE main package) | no |
+| `go build ./a ./b`, `go build ./lib` (not main), `go test`, `go vet` | no |
+
+**The rule.** DENY `go build` unless it has `-o`, a `...` pattern, or two or more packages;
+DENY `go test -c` without `-o`. A single library package is denied too, because the hook
+cannot tell main from library without reading the tree (false positives over misses; the fix
+is one flag). It looks past `VAR=` prefixes, `env`, `command`, `exec`, `nohup`, `time`,
+`nice`, `sudo`, `xargs`, `go -C dir`, and reads `sh/bash/zsh -c` and `eval` bodies and
+`$(...)`. It reuses the lexer of `enforce-no-permanent-delete.sh`, read at run time.
+
+**Fail closed.** Broken at run time (lexer missing, a helper gone): a command mentioning a
+go build/test is denied, every other command runs. A syntax error in the file: bash exits 2
+and Claude Code blocks EVERY Bash call until it is fixed from Gavin's terminal. Both are
+selftest arms (`enforce-go-build-output.sh --selftest`, 45 arms, 4 one-fault mutants).
+
+**Known gaps.** A command built at run time (`$cmd build`, a script file that calls go) is not
+seen; a heredoc fed to a shell is not read. Cost: about 10 ms per non-Go Bash call.
