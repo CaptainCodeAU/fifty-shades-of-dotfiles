@@ -128,14 +128,22 @@ fi
 # that do not exist (rm -f semantics -- `trash` itself exits 5 on a missing path, which would
 # break every `rm -f *.aux` in every Makefile), strips `--` (which `trash` mistakes for a
 # filename), accepts and ignores rm-style flags, and NEVER falls back to a permanent delete.
-if ! command -v safe-rm >/dev/null 2>&1; then
-	echo "rm: safe-rm not found on PATH -- refusing to delete." >&2
+#
+# OUR safe-rm is the file beside this shim, never whatever a PATH lookup finds. Ubuntu ships an
+# unrelated `safe-rm` package (/usr/bin/safe-rm, a /bin/rm wrapper that deletes PERMANENTLY).
+# On mlbox, 2026-09-29, this shim called by full path from a bash without ~/.local/bin on PATH
+# resolved `safe-rm` to that package; only the `-q` below, which GNU rm rejects, stopped a
+# permanent delete (W-20260929-A125). So: resolve our own path, and refuse if that fails.
+self=$(readlink -f "$0" 2>/dev/null) || self=""
+SAFE_RM="${self%/*}/safe-rm"
+if [ -z "$self" ] || [ ! -x "$SAFE_RM" ]; then
+	echo "rm: the safe-rm beside this shim was not found (${SAFE_RM}) -- refusing to delete." >&2
 	echo "    It ships in this dotfiles repo at ~/.local/bin/safe-rm; run ./install.sh." >&2
 	echo "    Deliberate permanent delete: SAFE_RM_OFF=1 rm ...   or   /bin/rm ..." >&2
 	exit 1
 fi
 
 if [ "${SAFE_RM_VERBOSE:-}" = "1" ]; then
-	exec safe-rm "$@"
+	exec "$SAFE_RM" "$@"
 fi
-exec safe-rm -q "$@"
+exec "$SAFE_RM" -q "$@"

@@ -233,6 +233,29 @@ if [ -x "$RM_SHIM" ]; then
 	[ -e "$d/keepme2" ] && ok "'--preserve-root' not mistaken for recursive" \
 	                    || bad "'--preserve-root' was read as recursive"
 
+	# W-20260929-A125: the shim must run the safe-rm BESIDE it, never a PATH lookup. Ubuntu's
+	# unrelated safe-rm package wraps /bin/rm and deletes permanently. Plant a fake safe-rm
+	# first on PATH, keep the shim's own dir OFF PATH (the mlbox case), call the shim by path.
+	mkdir -p "$d/foreign"
+	printf '#!/bin/sh\n: > "%s/foreign-ran"\nexit 0\n' "$d" > "$d/foreign/safe-rm"
+	chmod +x "$d/foreign/safe-rm"
+	: > "$d/planted.txt"
+	OUT=$(PATH="$d/foreign:/usr/bin:/bin" "$d/bin/rm" "$d/planted.txt" 2>&1); ST=$?
+	[ "$VERBOSE" -eq 1 ] && say "$OUT"
+	[ ! -e "$d/foreign-ran" ] && [ ! -e "$d/planted.txt" ] && [ "$ST" -eq 0 ] \
+		&& ok "a foreign safe-rm first on PATH is never run; the sibling trashed the file" \
+		|| bad "foreign safe-rm ran=$([ -e "$d/foreign-ran" ] && echo yes || echo no) target-left=$([ -e "$d/planted.txt" ] && echo yes || echo no) exit=$ST"
+
+	# And with NO sibling safe-rm, the shim must refuse, even though a safe-rm is on PATH.
+	mkdir -p "$d/lonely"
+	cp "$RM_SHIM" "$d/lonely/rm"
+	: > "$d/lonely.txt"
+	OUT=$(PATH="$d/foreign:/usr/bin:/bin" "$d/lonely/rm" "$d/lonely.txt" 2>&1); ST=$?
+	[ "$VERBOSE" -eq 1 ] && say "$OUT"
+	[ -e "$d/lonely.txt" ] && [ "$ST" -ne 0 ] && [ ! -e "$d/foreign-ran" ] \
+		&& ok "no sibling safe-rm: the shim refuses and runs nothing else" \
+		|| bad "no sibling safe-rm: exit=$ST target-left=$([ -e "$d/lonely.txt" ] && echo yes || echo no)"
+
 	# The documented escape hatch must still work, and must be permanent.
 	: > "$d/perm.txt"
 	PATH="$d/bin:/usr/bin:/bin" SAFE_RM_OFF=1 "$d/bin/rm" -f "$d/perm.txt" >/dev/null 2>&1
