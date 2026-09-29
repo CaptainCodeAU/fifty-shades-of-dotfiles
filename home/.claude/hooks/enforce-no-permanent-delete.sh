@@ -1477,6 +1477,10 @@ SNAP
   # Best of three, timed by bash's own clock around the hook process alone:
   # the payload is built before the clock starts. Other sessions share this
   # machine, so one slow run is load, three slow runs are the hook.
+  # BUDGETS (W-20260929-A48, re-measured 2026-09-29 with ~12 live sessions, load 10 to 13 on
+  # 10 cores): dense 81-113 ms, dense+deny 106-146 ms, heredoc 49-83 ms, sandboxed and not.
+  # 100 ms failed on ordinary load, so the two dense arms get 200 ms: above every reading,
+  # and a hook that doubles from the typical ~110 ms reading fails it. The heredoc arm keeps 100 ms.
   local tsnap="$save_snap" tlabel="real snapshot" best p1 p2 i secs
   set +f; ls "$tsnap"/snapshot-*.sh >/dev/null 2>&1 || { tsnap="$fx/snap"; tlabel="fixture snapshot"; }; set -f
   _time3() { # $1 = command -> sets best (ms) and rc/out of the last run
@@ -1491,9 +1495,9 @@ SNAP
   }
   big=""; while [ ${#big} -lt 5120 ]; do big="${big}git status && rg -n 'foo bar' src/ | head -5; echo \"done \$(date)\" >> out.log; "; done
   _time3 "$big"
-  [ "$rc" -eq 0 ] && [ -z "$out" ] && [ "$best" -lt 100 ]; _chk "5 KB dense command, $tlabel: best of 3 ${best} ms (< 100), allowed" $?
+  [ "$rc" -eq 0 ] && [ -z "$out" ] && [ "$best" -lt 200 ]; _chk "5 KB dense command, $tlabel: best of 3 ${best} ms (< 200), allowed" $?
   _time3 "${big}git clean -fdx"
-  [ "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision' 2>/dev/null)" = deny ] && [ "$best" -lt 100 ]; _chk "same 5 KB with a deny at the end: ${best} ms, denied" $?
+  [ "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision' 2>/dev/null)" = deny ] && [ "$best" -lt 200 ]; _chk "same 5 KB with a deny at the end: ${best} ms (< 200), denied" $?
   hd=$'git commit -F - <<\'EOF\'\n'; while [ ${#hd} -lt 5120 ]; do hd="${hd}prose that mentions git clean -fdx and /bin/rm -P and find . -delete"$'\n'; done; hd="${hd}EOF"
   _time3 "$hd"
   [ "$rc" -eq 0 ] && [ -z "$out" ] && [ "$best" -lt 100 ]; _chk "5 KB heredoc commit message: ${best} ms (< 100), allowed" $?
