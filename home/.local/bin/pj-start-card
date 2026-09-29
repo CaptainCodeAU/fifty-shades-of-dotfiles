@@ -44,6 +44,11 @@
 #   then     Rules copy edited on this machine: N path(s) in ~/repos/pj-rules (...) -- ONLY
 #            on a relay-fed machine whose copy has local edits (pj-health's rules-copy row
 #            holds the fix; 2026-09-29). Silent when clean, and on the Mac, which has no copy
+#   then     Temp sweep ... -- ONE line, only when pj's launcher swept, left or failed something
+#            at this launch (W-20260929-A155). pj runs `pj-temp sweep-dead` before claude starts
+#            and exports its one-line summary as PJ_TEMP_SWEPT; the card only reads that
+#            variable, so it still writes nothing. Printed on startup and resume, not on clear
+#            (the same process, so it would repeat), and not in --json yet
 #   last     the hello rule
 #   Outside a git repo: line 1, the rules-copy line when it shows, and the hello rule.
 #
@@ -538,12 +543,14 @@ render_text(){
   local lines=() n=0
   if [ "$C_INREPO" -eq 0 ]; then
     printf 'pj start card: %s (not a git repo, so no project, no items)\n' "$C_NAME"
+    [ -n "$C_TEMP" ] && printf '%s\n' "$C_TEMP"
     [ -n "$C_RCOPY" ] && printf '%s\n' "$C_RCOPY"
     printf '%s\n' "$HELLO"
     return 0
   fi
   lines+=("pj start card: $C_NAME")
   [ -n "$C_WARN" ] && lines+=("$C_WARN")
+  [ -n "$C_TEMP" ] && lines+=("$C_TEMP")
   [ -n "$C_OPEN_HEADER" ] && lines+=("$C_OPEN_HEADER")
   local fixed=$(( ${#lines[@]} + ${#C_TRACKERS[@]} + ${#C_OWED[@]} + 1 ))   # +1 hello
   [ -n "$C_PARKED" ] && fixed=$((fixed + 1))
@@ -872,6 +879,12 @@ main(){
   [ -n "${PJ_NO_CARD:-}" ] && exit 0
   src="$(source_of_hook)"
   [ "$src" = "compact" ] && exit 0
+  # pj's launch sweep (W-20260929-A155): one line, DATA, so cleaned and capped like a title
+  C_TEMP=""
+  case "$src" in
+    startup|resume)
+      [ -n "${PJ_TEMP_SWEPT:-}" ] && C_TEMP="$(printf '%s\n' "$PJ_TEMP_SWEPT" | head -1 | LC_ALL=C awk "$CLEAN_AWK"'{ print cap(clean($0), 240) }' 2>/dev/null)" ;;
+  esac
   out="$(gather 2>/dev/null; render_text 2>/dev/null)" || exit 0
   [ -n "$out" ] && printf '%s\n' "$out"
   exit 0

@@ -22,6 +22,7 @@ ROOT="$(mktemp -d "${TMPDIR:-/tmp}/pj-card-selftest.XXXXXX")" || exit 1
 ROOT="$(cd "$ROOT" && pwd -P)"   # /tmp is a symlink on macOS; git reports the real path
 PROJ="$ROOT/projects"; STATE="$ROOT/state"; mkdir -p "$PROJ" "$STATE/no-wrap-up"
 export OPEN_ITEMS_PROJECTS_DIR="$PROJ" PJ_STATE_DIR="$STATE"
+unset PJ_TEMP_SWEPT   # a pj session exports it; every arm but TS's must run without it
 # The dot-claude freshness line reads a git repo. Point it at a fixture, or every arm below
 # would depend on how far behind the REAL ~/.claude happens to be, and the card's "touches
 # nothing real" promise would be broken by its own test.
@@ -173,6 +174,18 @@ check "J resume -> card" 'has "$(src "{\"source\":\"resume\"}")" "^pj start card
 check "J startup -> card" 'has "$(src "{\"source\":\"startup\",\"cwd\":\"/x\"}")" "^pj start card"'
 check "J garbage stdin -> card" 'has "$(src "not json")" "^pj start card"'
 check "J empty stdin -> card" 'has "$(src "")" "^pj start card"'
+
+# --- TS: the launch sweep line (W-20260929-A155) -------------------------------------------
+tsrc(){ ( builtin cd "$B" && printf '%s' "$1" | PJ_TEMP_SWEPT="$2" "$CARD" 2>/dev/null ); }
+TSL="Temp sweep at launch: moved 2 path(s), 1.5 MB, to the Trash from 1 dead session folder(s); 3 live; left 0 unreadable; refused 0; failed 0."
+OUT="$(tsrc '{"source":"startup"}' "$TSL")"
+check "TS startup with PJ_TEMP_SWEPT: the line is printed once, right under the header" '[ "$(printf "%s\n" "$OUT" | sed -n 2p)" = "$TSL" ] && [ "$(printf "%s\n" "$OUT" | grep -cF "Temp sweep at launch")" -eq 1 ]'
+check "TS resume prints it too" 'has "$(tsrc "{\"source\":\"resume\"}" "$TSL")" "^Temp sweep at launch"'
+check "TS clear does not repeat it (same process)" '! has "$(tsrc "{\"source\":\"clear\"}" "$TSL")" "Temp sweep" && has "$(tsrc "{\"source\":\"clear\"}" "$TSL")" "^pj start card"'
+check "TS control: no PJ_TEMP_SWEPT, no line" '! has "$(tsrc "{\"source\":\"startup\"}" "")" "Temp sweep"'
+check "TS a control character in it is cleaned, and it is one line" '[ "$(tsrc "{\"source\":\"startup\"}" "$(printf "Temp sweep\033[31m red\nsecond")" | grep -c "Temp sweep")" -eq 1 ] && ! tsrc "{\"source\":\"startup\"}" "$(printf "Temp sweep\033[31m red\nsecond")" | grep -q "^second"'
+OUT="$( builtin cd "$ROOT" && mkdir -p plain-ts && builtin cd plain-ts && PJ_TEMP_SWEPT="$TSL" "$CARD" </dev/null 2>/dev/null )"
+check "TS outside a repo the line still shows" 'has "$OUT" "^Temp sweep at launch"'
 
 # --- K: cap squeeze: 14 items + flag + handoff + 5 trackers still fits in 20 -----------
 mkdir -p "$B/.claude"; { printf 'handoff: repo:OPENING-PROMPT.md\n'; for i in 1 2 3 4 5; do printf 'tracker: repo:t%s.md\n' "$i"; done; } > "$B/.claude/pj-homes"
