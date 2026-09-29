@@ -42,7 +42,7 @@
 
 function unsure(why) {
     if (UNSURE == "") UNSURE = why
-    if (why != "function definition" && UNSURE_NF == "") UNSURE_NF = why   # fp_check, W-20260929-A53
+    if (why != "function definition" && why != "zsh construct case" && UNSURE_NF == "") UNSURE_NF = why   # fp_check, W-20260929-A53, A123
 }
 
 function new_cmd(rec, depth, sep) {
@@ -267,11 +267,15 @@ function parse_list(rec, closer, depth, sep,    k, c, ws, raw, q) {
         if (c == "\n") { end_cmd(k, "nl"); k = 0; sep = "nl"; P++; if (HDN) read_heredocs(); continue }
         if (c == "#") { while (P <= N && C[P] != "\n") P++; continue }
         if (c == ")") {
+            if (CASEPAT) { CASEPAT = 0; end_cmd(k, "kw"); k = 0; sep = "kw"; P++; continue }   # A123: a case pattern ends
             if (closer == ")") { end_cmd(k, ")"); P++; return }
             unsure("unmatched )"); end_cmd(k, ")"); k = 0; sep = ")"; P++; continue
         }
         if (c == ";") {
-            if (C[P + 1] == ";" || C[P + 1] == "&" || C[P + 1] == "|") { unsure("case clause"); P += 2 } else P++
+            if (C[P + 1] == ";" || C[P + 1] == "&" || C[P + 1] == "|") {
+                if (CASEOPEN > 0) CASEPAT = 1; else unsure("case clause")   # A123: ;; inside a case is expected
+                P += 2
+            } else P++
             end_cmd(k, ";"); k = 0; sep = ";"; continue
         }
         if (c == "&") {
@@ -289,6 +293,7 @@ function parse_list(rec, closer, depth, sep,    k, c, ws, raw, q) {
         }
         if (c == "<" || c == ">") { handle_redir(k); continue }
         if (c == "(") {
+            if (k == 0 && CASEPAT) { P++; continue }   # A123: (pattern) in a case
             if (k == 0 && C[P + 1] == "(") {          # (( arithmetic ))
                 k = new_cmd(rec, depth, sep); ws = P; skip_parens(); add_word(k, ws, P - 1, 1); continue
             }
@@ -303,6 +308,7 @@ function parse_list(rec, closer, depth, sep,    k, c, ws, raw, q) {
         raw = substr(S, ws, P - ws)
         if (raw ~ /^[0-9]+$/ && (C[P] == "<" || C[P] == ">")) continue   # 2>file: the 2 is an fd
         if (k == 0) {
+            if (!q && raw == "esac" && CASEOPEN > 0) { CASEOPEN--; CASEPAT = 0 }   # A123
             if (!q && (raw == "if" || raw == "then" || raw == "elif" || raw == "else" || raw == "do" || raw == "while" || raw == "until" || raw == "!" || raw == "fi" || raw == "done" || raw == "esac")) { sep = "kw"; continue }
             if (!q && raw == "{") { parse_list(rec, "}", depth + 1, "{"); sep = "}"; continue }
             if (!q && raw == "}") { if (closer == "}") return; unsure("unmatched }"); continue }
@@ -316,9 +322,11 @@ function parse_list(rec, closer, depth, sep,    k, c, ws, raw, q) {
             }
             if (raw ~ /\(\)$/) { unsure("function definition"); sep = "kw"; continue }
             if (!q && (raw == "case" || raw == "coproc" || raw == "select" || raw == "foreach")) unsure("zsh construct " raw)
+            if (!q && raw == "case") { CASEOPEN++; CASEIN = 0 }   # A123
             k = new_cmd(rec, depth, sep)
         } else if (!q && raw == "}" && closer == "}") { end_cmd(k, "}"); return }
         add_word(k, ws, P - 1, q)
+        if (!q && raw == "in" && CASEOPEN > 0 && !CASEIN) { CASEIN = 1; CASEPAT = 1; end_cmd(k, "kw"); k = 0; sep = "kw" }   # A123
     }
     end_cmd(k, "$")
     if (closer != "") unsure("unterminated " (closer == ")" ? "(" : "{"))
@@ -328,7 +336,11 @@ function parse_list(rec, closer, depth, sep,    k, c, ws, raw, q) {
 
 function base(w) { sub(/.*\//, "", w); return w }
 # The text zsh would run for a word, or "" when it holds an expansion we cannot know.
-function unq(w) { if (w ~ /[$`]/) return ""; gsub(/["'\\]/, "", w); return w }
+function unq(w) {   # A123: \<newline> joins a word; $'...' is decoded
+    gsub(/\\\n/, "", w)
+    if (w ~ /^[$]'[^'$`]*'$/) return pj_dq(w)
+    if (w ~ /[$`]/) return ""; gsub(/["'\\]/, "", w); return w
+}
 function isopt(k, a) { return WR[k, a] ~ /^-/ }
 
 # Index of the effective command word of simple command k, after assignments and
@@ -336,6 +348,15 @@ function isopt(k, a) { return WR[k, a] ~ /^-/ }
 # " envopt", " time", " nohup", " noglob", " nocorrect", " hard:<name>", " probe".
 # A "hard" modifier (sudo doas exec xargs command builtin -) or an env option means
 # the words after it cannot be read reliably, so no hook rewrites past one.
+# A123: does option o of prefix command c take the next word as its value?
+function effval(c, o) {
+    if (c == "timeout" || c == "gtimeout") return o == "-s" || o == "-k" || o == "--signal" || o == "--kill-after"
+    if (c == "nice") return o == "-n" || o == "--adjustment"
+    if (c == "caffeinate") return o == "-t" || o == "-w"
+    if (c == "stdbuf" || c == "gstdbuf") return o == "-i" || o == "-o" || o == "-e"
+    if (c == "watch") return o == "-n" || o == "--interval" || o == "-q" || o == "--equexit"
+    return 0
+}
 function eff(k,    j, n, w) {
     EM = ""; n = CNW[k]; j = 1
     while (j <= n) {
@@ -350,7 +371,18 @@ function eff(k,    j, n, w) {
             }
             continue
         }
-        if (w == "time" || w == "nohup" || w == "noglob" || w == "nocorrect") { EM = EM " " w; j++; continue }
+        if (w == "time") { EM = EM " time"; j++; while (j <= n && WR[k, j] ~ /^-/) j++; continue }   # A123: time -p
+        if (w == "nohup" || w == "noglob" || w == "nocorrect") { EM = EM " " w; j++; continue }
+        # A123 (lexer comparison S39-S45): prefixes that run the command after their options
+        if (w == "timeout" || w == "gtimeout" || w == "nice" || w == "caffeinate" || w == "stdbuf" || w == "gstdbuf" || w == "watch") {
+            EM = EM " hard:" w; j++
+            while (j <= n && WR[k, j] ~ /^-/) {
+                if (effval(w, WR[k, j])) j++
+                j++
+            }
+            if (w == "timeout" || w == "gtimeout") j++   # the duration
+            continue
+        }
         if (w == "sudo" || w == "doas" || w == "exec" || w == "xargs" || w == "command" || w == "builtin" || w == "-") {
             EM = EM " hard:" w; j++
             while (j <= n && WR[k, j] ~ /^-/) {
@@ -1201,7 +1233,7 @@ function fp_push(tn,    i, v, name, eq, c, ch, fF, fL, fI, mirror, all, endopt, 
 }
 
 function fp_check(    k, j, n, a, w, v, gi, tn, b, s, t, ex, i) {
-    FCN = 1; FC[1] = ENVIRON["CONV_CWD"]
+    FCN = 1; FC[1] = ENVIRON["CONV_CWD"]; FPCLEAN = 0
     for (k = 1; k <= NC; k++) {
         j = eff(k); n = CNW[k]
         if (j > n || EM ~ /probe/) continue
@@ -1236,6 +1268,7 @@ function fp_check(    k, j, n, a, w, v, gi, tn, b, s, t, ex, i) {
                 for (a = 1; a < j; a++) if (WR[k, a] ~ /^GIT_[A-Z_]*=/) FPCFG = "a GIT_ variable is set on the command"
                 s = fp_push(tn)
                 if (s != "") return fp_xnote(s)
+                FPCLEAN += fp_clean(tn)   # A123
                 continue
             }
         }
@@ -1266,6 +1299,7 @@ function fp_check(    k, j, n, a, w, v, gi, tn, b, s, t, ex, i) {
         for (a = a + 1; a <= n; a++) { tn++; TV[tn] = unq(WR[k, a]); TW[tn] = WR[k, a]; TX[tn] = (TV[tn] == "" && WR[k, a] != "") }
         s = fp_push(tn)
         if (s != "") return fp_xnote(s)
+        FPCLEAN += fp_clean(tn)   # A123
     }
     # A47, then A50: here-documents and here-strings read by a shell, and backticks,
     # are re-read as commands by gd_main, with every rule.
@@ -1274,7 +1308,7 @@ function fp_check(    k, j, n, a, w, v, gi, tn, b, s, t, ex, i) {
     # commands and the loop above has read them. It still does when some word is
     # push or a push alias (git push "$@" in a body, or a call like p git push -f),
     # since then the flags may arrive through the function's arguments.
-    if (UNSURE_NF != "" || (UNSURE != "" && fp_push_word())) {
+    if (UNSURE_NF != "" || (UNSURE != "" && fp_push_word() > FPCLEAN)) {
         s = fp_crude(S)
         if (s != "") return fp_msg(s " (the command has a " (UNSURE_NF != "" ? UNSURE_NF : UNSURE) ")")
     }
@@ -1299,15 +1333,19 @@ function fp_shell_of(k,    c, b) {
     return ""
 }
 
-# 1 when any recorded word, quotes removed, is push or a push alias.
-function fp_push_word(    k, a, w) {
+# How many recorded words, quotes removed, are push or a push alias (A123: a count, so
+# fp_check can compare it with the pushes it read in full).
+function fp_push_word(    k, a, w, c) {
+    c = 0
     for (k = 1; k <= NC; k++)
         for (a = 1; a <= CNW[k]; a++) {
             w = WR[k, a]; gsub(/["'\\]/, "", w)
-            if (w == "push" || fp_alias(w) != "") return 1
+            if (w == "push" || fp_alias(w) != "") c++
         }
-    return 0
+    return c
 }
+# A123: 1 when push arguments TV[1..tn] held no expansion, so fp_push read them all
+function fp_clean(tn,    i) { for (i = 1; i <= tn; i++) if (TX[i]) return 0; return 1 }
 
 # ------------------------------------------------------------------ builtin
 # Used by this repo's .claude/hooks/enforce-builtin.sh (CONV_MODE=builtin), which
@@ -1841,7 +1879,7 @@ function gd_main(    qi) {
     if (GDOVER) verdict("guard", "DENY", "validate-bash: more than 64 nested shell texts (-c, eval, backticks, heredocs) to read; refusing rather than guessing")
 }
 
-function pj_load(t) { S = t; N = split(S, C, ""); P = 1; NC = 0; HDN = 0; BG = 0; UNSURE = ""; UNSURE_NF = ""; SUBSH = 0; BTN = 0; split("", HBODY); split("", UHB); split("", PSB) }
+function pj_load(t) { S = t; N = split(S, C, ""); P = 1; NC = 0; HDN = 0; BG = 0; UNSURE = ""; UNSURE_NF = ""; SUBSH = 0; BTN = 0; split("", HBODY); split("", UHB); split("", PSB); CASEOPEN = 0; CASEPAT = 0; CASEIN = 0 }
 
 function pjw_main(    qi, i) {
     PV = ""; PM = ""; PO = ""; QN = 1; QT[1] = S; QX[1] = "bash"; QO[1] = ""; QW[1] = ""
@@ -1864,7 +1902,7 @@ function pjw_main(    qi, i) {
 END {
     N = split(S, C, "")
     mode = ENVIRON["CONV_MODE"]
-    P = 1; NC = 0; HDN = 0; BG = 0; UNSURE = ""; UNSURE_NF = ""; SUBSH = 0; BTN = 0; split("", HBODY); split("", UHB); split("", PSB)
+    P = 1; NC = 0; HDN = 0; BG = 0; UNSURE = ""; UNSURE_NF = ""; SUBSH = 0; BTN = 0; split("", HBODY); split("", UHB); split("", PSB); CASEOPEN = 0; CASEPAT = 0; CASEIN = 0
     REC_NESTED = (mode == "guard" || mode == "pjw")   # only these look inside $(...) and backticks
     if (mode == "pjw") pjw_main()
     parse_list(1, "", 0, "^")
