@@ -278,6 +278,19 @@
       ]
     },
     {
+      "event": "SessionStart",
+      "script": "pj-temp",
+      "script_path": "$HOME/.local/bin/pj-temp",
+      "targets": ["project"],
+      "entry": {
+        "type": "command",
+        "command": "h=\"$HOME/.local/bin/pj-temp\"; if [ -x \"$h\" ]; then \"$h\" session-start || true; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: pj-temp is registered but ~/.local/bin/pj-temp is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"HOOK MISSING: pj-temp is registered but ~/.local/bin/pj-temp is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}}'; fi",
+        "timeout": 10
+      },
+      "why": "W-20260929-A155 (T1 as amended by Gavin 2026-09-30): gives each pj session its own temp folder /tmp/claude-<uid>/pj-<session id> by writing export TMPDIR into CLAUDE_ENV_FILE (sandboxed and unsandboxed Bash both read it; measured), and records the owner (session id, claude pid, start time) for the launcher's sweep. SessionStart, not a PreToolUse rewrite: CLAUDE_HOOKS.md Rule 2. Says by name when it cannot give a folder. Project target only",
+      "class": "alarm"
+    },
+    {
       "event": "SessionEnd",
       "script": "pj-session-end",
       "script_path": "$HOME/.local/bin/pj-session-end",
