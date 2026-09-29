@@ -117,7 +117,9 @@ fi
 PJ_DOTFILES="$(readlink -f "$PJ_DOTFILES" 2>/dev/null || printf '%s' "$PJ_DOTFILES")"   # /tmp is a symlink on macOS
 MANIFEST="${CLAUDE_HOOKS_MANIFEST:-$PJ_DOTFILES/settings/claude/hooks.json}"
 
-tilde(){ printf '%s' "${1/#$HOME/\~}"; }
+# A prefix strip, never ${1/#$HOME/~}: bash 3.2 keeps the backslash of \~ and bash 5 tilde-expands
+# a bare ~ back to $HOME (measured 2026-09-29: 3.2.57 and 5.3.20 disagree on both forms).
+tilde(){ case "$1" in "$HOME"|"$HOME"/*) printf '~%s' "${1#"$HOME"}" ;; *) printf '%s' "$1" ;; esac; }
 
 # ---------------------------------------------------------------- rows ----
 ROWS_JSON='[]'

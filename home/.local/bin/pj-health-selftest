@@ -534,6 +534,11 @@ gone "$RCP/MARKER-untracked"; gone "$RCP/u"; PJ_RULES_COPY_FX="$RCP" run; arm "r
 # not a repo of its own: a plain folder, and a folder INSIDE another repo (git -C would answer for the parent)
 mkdir -p "$T/rc-plain"; PJ_RULES_COPY_FX="$T/rc-plain" run; arm "rules-copy NOT MEASURED when the copy is not a git repo" is rules-copy "$NM"
 mkdir -p "$RCP/nested"; PJ_RULES_COPY_FX="$RCP/nested" run; arm "rules-copy NOT MEASURED for a folder inside another repo (no parent answers)" is rules-copy "$NM"; gone "$RCP/nested"
+# tilde(): a path under $HOME reads ~/..., with no backslash (bash 3.2) and not re-expanded (bash 5).
+# The path does not exist, so nothing under $HOME is created or read beyond one test -e.
+PJ_RULES_COPY_FX="$HOME/.pj-health-selftest-no-such-copy" run
+arm "tilde: a \$HOME path prints as ~/... ($(dt rules-copy | cut -c1-60))" has rules-copy "no ~/.pj-health-selftest-no-such-copy"
+arm "tilde: no backslash before the ~" not_has rules-copy '\~'
 
 # 13. no-wrap-up
 mv "$STATE/no-wrap-up" "$T/nw.bak"; run; arm "no-wrap-up PASS with 0 when the folder does not exist" has no-wrap-up "0 projects"; mv "$T/nw.bak" "$STATE/no-wrap-up"

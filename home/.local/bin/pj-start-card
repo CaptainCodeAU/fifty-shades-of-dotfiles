@@ -261,6 +261,10 @@ sync_line(){
 # silent when clean, when there is no copy (the Mac), and when the copy is not its own repo
 # (pj-health says NOT MEASURED for that). --no-optional-locks keeps CONTRACT 2: a plain status
 # may rewrite the copy's index. Seam: PJ_RULES_COPY.
+# tilde <path>: $HOME at the front becomes ~. A prefix strip, never ${p/#$HOME/~}: bash 3.2 keeps
+# the backslash of \~ and bash 5 tilde-expands a bare ~ back to $HOME (measured 2026-09-29).
+tilde(){ case "$1" in "${HOME-}"|"${HOME-}"/*) [ -n "${HOME-}" ] && { printf '~%s' "${1#"$HOME"}"; return; } ;; esac; printf '%s' "$1"; }
+
 rules_copy_line(){
   local rc="${PJ_RULES_COPY:-${HOME-}/repos/pj-rules}" top real out n eg
   [ -d "$rc" ] || return 0
@@ -273,7 +277,7 @@ rules_copy_line(){
   n="$(printf '%s\n' "$out" | grep -c .)"
   eg="$(printf '%s\n' "$out" | head -3 | cut -c4- | LC_ALL=C tr -d '\000-\037\177' | paste -sd, - | sed 's/,/, /g')"
   [ "$n" -gt 3 ] && eg="$eg, +$((n - 3)) more"
-  printf "Rules copy edited on this machine: %s path(s) in %s (%s). pj loads them and the relay's next push is refused; 'pj-health' rules-copy row has the fix." "$n" "${rc/#${HOME-}/~}" "$eg"
+  printf "Rules copy edited on this machine: %s path(s) in %s (%s). pj loads them and the relay's next push is refused; 'pj-health' rules-copy row has the fix." "$n" "$(tilde "$rc")" "$eg"
 }
 
 # The mods API line (F8b, D-20260923-A06). mods-api-drift --card reads the saved reports and
@@ -398,7 +402,7 @@ gather(){
   if [ -e "$flag" ]; then
     C_WENDED="$(decl_get "$flag" ended)"; C_WTR="$(decl_get "$flag" transcript)"
     C_WREC="$(grep -c '^session:' "$flag" 2>/dev/null || true)"; C_WREC="${C_WREC:-0}"
-    [ -n "$C_WTR" ] && C_WTR="${C_WTR/#$HOME/\~}"
+    [ -n "$C_WTR" ] && C_WTR="$(tilde "$C_WTR")"
     if [ "$C_WREC" -gt 1 ]; then
       C_WARN="WARNING: the last $C_WREC sessions here ended without wrap-up"
       [ -n "$C_WENDED" ] && C_WARN="$C_WARN (latest $C_WENDED)"
