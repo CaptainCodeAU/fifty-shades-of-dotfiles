@@ -30,6 +30,8 @@ Steps run in this order; `pj-wrap done` is always last. Rulings and reasons:
    - questions asked and never answered; verdicts given in passing ("leave it", "not now")
    - lessons about how the user wants things done (dedupe against RULES.md first)
    - items this session filed or closed (`open-items --session`), each with a verdict
+   - items this session routed out of the inbox (`open-items routed`: id, where it went, why;
+     nothing printed means none), each a row
    - things this session started: panes, worktrees, branches, background tasks, watches, crons,
      subagents; files in the scratchpad (it dies with the session)
    Before calling anything conversation-only, check `open-items --grep "<words>" --all`,

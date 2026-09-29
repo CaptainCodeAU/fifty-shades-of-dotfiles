@@ -2218,6 +2218,14 @@ runw "$D/alpha" add "route me with an empty reason" --done-when y --inbox; V_RE=
 runw "$D/alpha" route "$V_RE" --to beta --why "" < /dev/null
 wanteq "ROUTE-1: route --why \"\" from a pipe REFUSES (rc=2)" "2" "$RC"
 wanteq "ROUTE-1:   and the item is still in the inbox" "1" "$([ -f "$DC/pj-inbox/items/open/$V_RE.md" ] && echo 1)"
+# W-20260929-A94: `open-items routed` lists this session's inbox routings (id, to, why) from
+# the moved-out records, for /pj:wrap-up; a session that routed nothing prints nothing.
+runw "$D/alpha" routed < /dev/null
+wanteq "A94: routed, after this session routed one: rc 0" "0" "$RC"
+want   "A94:   names the item, where it went and why" "$V_RY -> beta: routed from the inbox: finished note, beta owns it" "$OUT"
+runw "$D/alpha" routed --by some-other-session < /dev/null
+wanteq "A94 CONTROL: a session that routed nothing: rc 1" "1" "$RC"
+wanteq "A94 CONTROL:   and prints nothing" "" "$OUT"
 runw "$D/alpha" move "$V_IN" --to beta --why "sneak"
 wanteq "P11: 'move' cannot take an item out of the inbox either (rc=2)" "2" "$RC"
 want   "P11:   pointing at route" "only by 'open-items route'" "$OUT"

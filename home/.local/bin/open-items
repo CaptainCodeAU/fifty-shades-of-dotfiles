@@ -2,7 +2,7 @@
 # open-items -- what is still open, scoped to the project you are standing in.
 # Usage:
 #   open-items [--all | --project <name>] [--closed | --status s] [--grep "words"] [--json]
-#   open-items --projects [--json] | --where | --session [--verbose] | seen <ID>..|--all | checks-run   (see --session in docs)
+#   open-items --projects [--json] | --where | --session [--verbose] | seen <ID>..|--all | checks-run | routed [--by <session>]   (see --session in docs)
 #   open-items show <W-ID> | open-items get <W-ID> <field>  [--project p]   any drawer
 #   open-items add "title" --done-when ".." [--kind do|decide] [--size small|medium|large]
 #       [--when ..] [--next ..] [--blocked-on ..] [--holds-in repo:..|drawer:..|~/..].. [--body ..]
@@ -1808,6 +1808,27 @@ cmd_route(){                    # route <W-ID> (--to <p> | --file <path>) [--why
   do_move "$INBOX" "$dw" "$to" "$why" "- -> $dg" "- -> $( [ -n "$dr" ] && head7 "$dr" || printf '?')" route "$pw"
 }
 
+# routed [--by <session>] (W-20260929-A94, ROUTE-1): the inbox items a session routed out,
+# one line each, `<ID> -> <to>: <why>`, read from the inbox's moved-out records (do_move
+# writes moved-by: <session>). For /pj:wrap-up. Exit 0 some, 1 none (prints nothing).
+cmd_routed(){
+  local by="" f id to why mb n=0
+  while [ $# -gt 0 ]; do case "$1" in
+    --by) [ $# -ge 2 ] || refuse "routed: --by needs a session name"; by="$2"; shift 2 ;;
+    *) refuse "routed: unknown argument $1 (try: open-items routed [--by <session>])" ;; esac; done
+  [ -n "$by" ] || by="$(session_name)"
+  for f in "$INBOX"/items/moved-out/*.md; do
+    [ -f "$f" ] || continue
+    mb="$(sed -n 's/^moved-by: //p' "$f" | head -1)"
+    [ "$mb" = "$by" ] || continue
+    id="$(head -1 "$f" | sed 's/^## \([^ ]*\) .*/\1/')"
+    to="$(sed -n 's/^moved-to: //p' "$f" | head -1)"
+    why="$(sed -n 's/^why: //p' "$f" | head -1)"
+    printf '%s -> %s: %s\n' "$id" "$to" "$why"; n=$((n + 1))
+  done
+  [ "$n" -gt 0 ]
+}
+
 # do_move <src work> <dst work> <dst name> <why> <groups> <heads> <verb>: the two-drawer write.
 # P12: both locks in sorted order; the destination ID must be free in open/, parked/ AND
 # closed/ (12 older IDs repeat across drawers, and an overwrite there would be silent);
@@ -2357,7 +2378,7 @@ flag_row(){
     --projects|show)              echo 'ok    no    no    no    note' ;;
     --session)                    echo 'note  note  note  note  ok'   ;;
     -h|--help|--selftest)         echo 'note  note  note  note  note' ;;
-    --where|get|seen|checks-run|add|close|decline|park|reopen|set|init|regen|migrate|supersede|watch|check|tick|pass|move|route)
+    --where|get|seen|checks-run|add|close|decline|park|reopen|set|init|regen|migrate|supersede|watch|check|tick|pass|move|route|routed)
                                   echo 'no    no    no    no    note' ;;
     *) return 1 ;;
   esac
@@ -2406,6 +2427,7 @@ case "${1:-}" in
   pass)     shift; need_root; cmd_pass "$@"; exit $? ;;
   move)     shift; need_root; cmd_move "$@"; exit $? ;;
   route)    shift; need_root; cmd_route "$@"; exit $? ;;
+  routed)   shift; cmd_routed "$@"; exit $? ;;
   seen)     shift; cmd_seen "$@"; exit $? ;;
   checks-run) shift; [ $# -eq 0 ] || refuse "checks-run takes no arguments"; cmd_checks_run; exit $? ;;
 esac
