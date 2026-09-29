@@ -317,7 +317,7 @@ OPEN_ITEMS_DOTCLAUDE="$IDC" run "$C"
 check "Z an empty inbox adds no line (silent)" '! has "$OUT" "^Inbox:"'
 printf '## W-20260105-01 -- unrouted\n\nproject: inbox\nstatus: open\nkind: do\ndone-when: x\n' > "$IDC/pj-inbox/items/open/W-20260105-01.md"
 OPEN_ITEMS_DOTCLAUDE="$IDC" run "$C"
-check "Z one unrouted inbox item: the line shows even with no drawer" 'has "$OUT" "^Inbox: 1 unrouted (Gavin routes)$"'
+check "Z one unrouted inbox item: the line shows even with no drawer" 'has "$OUT" "^Inbox: 1 unrouted (any session routes with --why)$"'
 check "Z ... and the no-drawer line is still there" 'has "$OUT" "^Open items: no drawer for this project yet"'
 
 # --- R: an ID past 99 in a day (W-20260924-A22): pj-id now mints -A100 ---------------------
