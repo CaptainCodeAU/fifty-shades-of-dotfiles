@@ -9,7 +9,12 @@
 # unaffected.
 #
 # To avoid silently disabling repos' existing hooks, every standard client-side
-# hook name is symlinked to THIS script. When invoked it:
+# hook name is symlinked to THIS script. NEVER link a receive-side hook here
+# (push-to-checkout, pre-receive, update, post-receive, proc-receive): a linked
+# push-to-checkout REPLACES git's own updateInstead step, and this script's
+# fall-through exit 0 then leaves the files stale and accepts a push into a dirty
+# tree. That link existed from 2026-06-18 (328faeb) to 2026-09-29 and did exactly
+# that on the Mac and mlbox (measured on a fixture, both arms). When invoked it:
 #   1. Delegates to the repo's real .git/hooks/<name> if present + executable
 #      (args + stdin forwarded), so existing per-repo hooks still run.
 #   2. On pre-push ONLY, additionally runs `pnpm-audit-hook full` (network scan:
