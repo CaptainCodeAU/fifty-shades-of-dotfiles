@@ -456,6 +456,11 @@ if [ "${1:-}" = "--selftest" ]; then
   conv_arm deny  'A35 tee -a into ~/.claude/CLAUDE.md'         'echo x | tee -a ~/.claude/CLAUDE.md'
   conv_arm deny  'A35 cp into a memory folder'                 'cp x.md ~/.claude/projects/-Users-x/memory/y.md'
   conv_arm deny  'A35 mv a live guard away'                    'mv ~/.claude/hooks/validate-bash.sh /tmp/x'
+  # D-20260929-A14 narrowed 2026-09-29 (Gavin's box, session dotfiles-doer): the lock covers the
+  # auto-memory files at the top of memory/, not the open-items drawer in memory/WORK/.
+  conv_arm deny  'A35 sed -i on a top-level memory file'       "sed -i '' s/a/b/ ~/.claude/projects/-Users-x/memory/MEMORY.md"
+  conv_arm allow 'A35 cp into the drawer handoff (memory/WORK)' 'cp new.md ~/.claude/projects/-Users-x/memory/WORK/OPENING-PROMPT.md'
+  conv_arm allow 'A35 cp into a drawer topic folder'          'cp r.md ~/.claude/projects/-Users-x/memory/WORK/topic/REPORT.md'
   conv_arm allow 'A35 read a live guard'                       'cat ~/.claude/hooks/validate-bash.sh'
   conv_arm allow 'A35 git config --global --get'               'git config --global --get user.email'
   conv_arm allow 'A35 git config --global --list'              'git config --global --list'
