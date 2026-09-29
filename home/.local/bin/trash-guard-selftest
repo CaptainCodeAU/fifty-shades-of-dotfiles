@@ -129,6 +129,7 @@ run_route() {
 	case "$route" in
 		trash) if [ -x "$BIN/trash" ]; then cmd=("$BIN/trash"); else cmd=("$FAKE"); fi ;;   # no shim: trash IS the real one
 		rm) cmd=("$BIN/rm" -r) ;;
+		rmf) cmd=("$BIN/rm" -f) ;;
 		check) cmd=("$BIN/trash-guard" --check --) ;;
 	esac
 	: > "$LOGF"
@@ -169,12 +170,21 @@ expect_allowed() { # $1 = the exact fake-trash log expected
 	fi
 }
 
-agree=0; cases=0; disagree=""
-both() { # $1 = new|control, $2 = label, $3 = case function (reads ROUTE)
-	CLASS=$1; LABEL=$2
+agree=0; cases=0; disagree=""; differ_ok=0; differ_cases=0; differ_bad=""
+both() { # $1 = new|control, $2 = label, $3 = case function (reads ROUTE), $4 = differ (optional)
+	# A case function may set CLASS for one route; it is reset before each. With $4 = differ the
+	# two routes are ruled to answer differently (a blank: trash refuses, rm skips it quietly,
+	# Gavin 2026-09-29), and the check is that they DID differ.
+	LABEL=$2
 	local vt vr
-	ROUTE=trash; "$3"; vt=$VERDICT
-	ROUTE=rm; "$3"; vr=$VERDICT
+	CLASS=$1; ROUTE=trash; "$3"; vt=$VERDICT
+	CLASS=$1; ROUTE=rm; "$3"; vr=$VERDICT
+	if [ "${4-}" = differ ]; then
+		differ_cases=$((differ_cases + 1))
+		if [ "$vt" = "REFUSED[blank]" ] && [ "$vr" = ALLOWED ]; then differ_ok=$((differ_ok + 1)); else differ_bad="$differ_bad
+    $LABEL: trash=$vt rm=$vr (want REFUSED[blank] and ALLOWED)"; fi
+		return 0
+	fi
 	cases=$((cases + 1))
 	if [ "$vt" = "$vr" ]; then agree=$((agree + 1)); else disagree="$disagree
     $LABEL: trash=$vt rm=$vr"; fi
@@ -196,15 +206,34 @@ c_world() {
 
 run_arms() {
 # ---------------------------------------------------------------- rule 1: blank
-section "1. A blank argument is refused everywhere (the incident: trash '' moves the current folder)"
-BASE=$FX/outside; CWDSUB=""; WANT=blank
-ARG='';            both new "blank '' (outside temp)" c_world
-ARG="";            both new 'blank "" (outside temp)' c_world
-ARG=' ';           both new "blank ' ' (outside temp)" c_world
-ARG=$'\t\n ';      both new "blank tab-newline-space" c_world
+section "1. A blank argument: trash REFUSES it everywhere; rm skips it quietly (Gavin, 2026-09-29)"
+# The incident: trash '' moves the current folder. The rm route never did (safe-rm dropped a
+# target that does not exist), scripts rely on rm -f "" succeeding, so there it goes back to
+# master's behaviour: exit 0, the cwd untouched, the fake trash NOT called.
+c_blank() {
+	local D; D=$(fresh "$BASE")
+	mkdir -p "$D/w"; : > "$D/w/canary"
+	KEEP=("$D/w" "$D/w/canary")
+	run_route "$ROUTE" "$D/w" "$ARG"
+	if [ "$ROUTE" = trash ]; then expect_refused blank; else CLASS=control; expect_allowed ""; warn_once; fi
+}
+BLANK_WARN='safe-rm: ignored a blank argument (empty variable?)'
+warn_once() { # the rm route's blank skip prints exactly one warning line per call (Gavin, 2026-09-29)
+	local n v=$VERDICT
+	n=$(printf '%s\n' "$ERR" | grep -c -x -F -- "$BLANK_WARN")
+	CLASS=new
+	if [ "$n" -eq 1 ]; then ok "$ROUTE: $LABEL -> stderr has the blank warning exactly once"
+	else bad "$ROUTE: $LABEL -> blank warning seen $n times (want 1); stderr: $(first_line "$ERR")"; VERDICT="WRONG(warn=$n)"; return; fi
+	VERDICT=$v
+}
+BASE=$FX/outside
+ARG='';            both new "blank '' (outside temp)" c_blank differ
+ARG="";            both new 'blank "" (outside temp)' c_blank differ
+ARG=' ';           both new "blank ' ' (outside temp)" c_blank differ
+ARG=$'\t\n ';      both new "blank tab-newline-space" c_blank differ
 BASE=$FX/tmproot
-ARG='';            both new "blank '' INSIDE a temp root" c_world
-ARG=' ';           both new "blank ' ' INSIDE a temp root" c_world
+ARG='';            both new "blank '' INSIDE a temp root" c_blank differ
+ARG=' ';           both new "blank ' ' INSIDE a temp root" c_blank differ
 
 # ---------------------------------------------------------------- rule 1: the current folder
 section "2. The current folder, by any spelling, and any folder holding it"
@@ -364,14 +393,30 @@ c_multi() {
 	run_route "$ROUTE" "$D" "$D/plain" "$D/repo"
 	expect_refused repo-root
 }
-c_multi_blank() {
+c_multi_blank() { # trash: refused, nothing trashed; rm: the blank is ignored, the file goes
 	local D; D=$(fresh "$FX/tmproot"); : > "$D/f"; mkdir -p "$D/w"
-	KEEP=("$D/f" "$D/w")
 	run_route "$ROUTE" "$D/w" "$D/f" ""
-	expect_refused blank
+	if [ "$ROUTE" = trash ]; then KEEP=("$D/f" "$D/w"); expect_refused blank
+	else CLASS=control; KEEP=("$D/w"); expect_allowed "CALL <$D/f>"; warn_once; fi
+}
+c_blank_dir() { # rm -r "" <tempdir>: the tempdir goes, the blank is ignored; trash refuses both
+	local D; D=$(fresh "$FX/tmproot"); mkdir -p "$D/t/sub" "$D/w"; : > "$D/t/sub/x"
+	run_route "$ROUTE" "$D/w" "" "$D/t"
+	if [ "$ROUTE" = trash ]; then KEEP=("$D/t/sub/x" "$D/w"); expect_refused blank
+	else CLASS=control; KEEP=("$D/w"); expect_allowed "CALL <$D/t>"; warn_once; fi
+}
+c_two_blanks() { # rm -f "" "": exit 0, nothing trashed, the warning ONCE per call, not per blank
+	local D; D=$(fresh "$FX/outside"); mkdir -p "$D/w"; : > "$D/w/canary"
+	KEEP=("$D/w" "$D/w/canary")
+	CLASS=control; ROUTE=rmf; LABEL='rm -f "" ""'
+	run_route rmf "$D/w" "" ""
+	expect_allowed ""
+	warn_once
 }
 both new "two targets, one refused: NOTHING is trashed" c_multi
-both new "a file and a blank: nothing is trashed" c_multi_blank
+both new "a file and a blank (trash: nothing trashed; rm: the file goes)" c_multi_blank differ
+both new "rm -r \"\" <tempdir> (rm: the tempdir goes, blank ignored; trash: refused)" c_blank_dir differ
+c_two_blanks
 c_dash_ok() {
 	local D; D=$(fresh "$FX/tmproot"); mkdir -p "$D/-dash"; KEEP=()
 	run_route "$ROUTE" "$D" -- -dash
@@ -565,11 +610,14 @@ fi
 if [ "$MODE" = mutants ]; then
 	echo "trash-guard-selftest --mutants: each copy breaks ONE rule; the suite must catch it"
 	caught=0; missed=0
-	for m in blank cwd timeout temp; do
+	# file:tag. trash-guard:blank is the one that proves `trash ''` is still refused;
+	# safe-rm:rm-blank-skip proves the rm route's quiet skip is really tested.
+	for spec in trash-guard:blank trash-guard:cwd trash-guard:timeout trash-guard:temp safe-rm:rm-blank-skip safe-rm:rm-blank-warn; do
+		mf=${spec%%:*}; m=${spec#*:}
 		MD=$FX/mut-$m; mkdir -p "$MD"
-		cp "$BIN/trash" "$BIN/safe-rm" "$BIN/rm" "$MD/"
-		sed "s/^.*#M: $m\$/:/" "$BIN/trash-guard" > "$MD/trash-guard"; chmod +x "$MD/trash-guard"
-		n0=$(grep -c "#M: $m\$" "$BIN/trash-guard"); n1=$(grep -c "#M: $m\$" "$MD/trash-guard")
+		cp "$BIN/trash" "$BIN/trash-guard" "$BIN/safe-rm" "$BIN/rm" "$MD/"
+		sed "s/^.*#M: $m\$/:/" "$BIN/$mf" > "$MD/$mf"; chmod +x "$MD/$mf"
+		n0=$(grep -c "#M: $m\$" "$BIN/$mf"); n1=$(grep -c "#M: $m\$" "$MD/$mf")
 		if [ "$n0" -ne 1 ] || [ "$n1" -ne 0 ]; then echo "  INVALID  $m: the tag matched $n0 line(s) in the original, $n1 in the copy"; missed=$((missed + 1)); continue; fi
 		t0=$(now_ms)
 		if TG_BIN="$MD" "$0" -q >"$FX/mut-$m.out" 2>&1; then echo "  MISSED   $m: the suite passed with the rule removed"; missed=$((missed + 1))
@@ -597,6 +645,8 @@ if [ "$HOOK_ONLY" -eq 0 ]; then
 	section "13. Both routes gave the same verdict"
 	if [ -z "$disagree" ]; then ok "trash X and rm -r X agreed on all $cases cases"
 	else bad "trash X and rm -r X disagreed on $((cases - agree)) of $cases:$disagree"; fi
+	if [ -z "$differ_bad" ]; then ok "the $differ_cases blank cases, ruled to differ (trash refuses, rm skips), did differ"
+	else bad "blank cases that should differ but did not ($((differ_cases - differ_ok)) of $differ_cases):$differ_bad"; fi
 fi
 
 echo

@@ -26,7 +26,9 @@
 # guard"). Every target is resolved first and the RESOLVED path is judged. One refusal refuses
 # the whole call: the callers trash nothing unless every target is allowed.
 #   1  ALWAYS refused, temp folders included:
-#        [blank]         an empty or whitespace-only argument
+#        [blank]         an empty or whitespace-only argument. In practice the TRASH route only:
+#                        safe-rm drops blanks quietly before asking (Gavin, 2026-09-29), so
+#                        `rm -f ""` stays a silent success as it was before this guard.
 #        [cwd]           `.`, or the current folder by any spelling
 #        [contains-cwd]  a folder that contains the current folder
 #        [floor]         /, ~, ~/CODE, ~/CODE/CaptainCodeAU (FLOOR_TAILS below)

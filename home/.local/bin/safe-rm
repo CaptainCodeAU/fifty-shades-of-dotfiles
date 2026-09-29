@@ -75,12 +75,34 @@ if [ $# -eq 0 ]; then
 	exit 1
 fi
 
+# --- A blank argument is skipped on THIS route, with one warning (Gavin, 2026-09-29) ----------
+# '', "" or whitespace only names nothing, so `rm -f ""` was a success before the trash guard
+# and scripts rely on that. Blanks are dropped here and never reach the guard or the trash;
+# when nothing else is left the call exits 0. It is not silent: ONE line on stderr per call,
+# however many blanks, because a blank is usually an empty variable someone should look at.
+# The `trash` route still REFUSES a blank, because /usr/bin/trash '' moves the current folder
+# (the engage repo, three times on 2026-09-29). Everything else in rule 1 (., the cwd, its
+# parents, the floors) stays refused on both routes.
+argc=$#
+i=0
+saw_blank=0
+while [ "$i" -lt "$argc" ]; do
+	arg="$1"
+	shift
+	i=$((i + 1))
+	is_blank=0
+	case "$arg" in *[![:space:]]*) ;; *) is_blank=1; saw_blank=1 ;; esac
+	[ "$is_blank" -eq 1 ] && continue   #M: rm-blank-skip
+	set -- "$@" "$arg"
+done
+[ "$saw_blank" -eq 1 ] && echo "safe-rm: ignored a blank argument (empty variable?)" >&2   #M: rm-blank-warn
+[ $# -eq 0 ] && exit 0
+
 # --- The shared trash guard (2026-09-29) ---------------------------------------------------
-# trash-guard holds the rules both Trash routes obey: a blank argument, the current folder or
-# anything containing it, the floor list (/, ~, ~/CODE, ~/CODE/CaptainCodeAU), and outside the
-# temp folders a repo root or a folder holding a repo. It runs FIRST, on the targets exactly as
-# given, because the checks below drop what does not exist and a blank argument is exactly
-# that: `trash ''` moved the whole engage repo to the Trash three times on 2026-09-29. It is
+# trash-guard holds the rules both Trash routes obey: the current folder or anything containing
+# it, the floor list (/, ~, ~/CODE, ~/CODE/CaptainCodeAU), and outside the temp folders a repo
+# root or a folder holding a repo (and a blank, which on this route never gets that far). It
+# runs FIRST, on the targets as given, because the checks below drop what does not exist. It is
 # the copy BESIDE this file, never a PATH lookup, for the reason the rm shim gives (mlbox,
 # W-20260929-A125). Missing guard: refuse; a guard that cannot run must not become an allow.
 self=$(readlink -f "$0" 2>/dev/null) || self=""

@@ -7,3 +7,4 @@
 2026-09-29 20:16 --e2e with real /usr/bin/trash 4/0 (unsandboxed); docs/DELETION_SAFETY.md: The trash guard section, coverage rows, hook row, gaps
 2026-09-29 20:17 REPORT.md written; leak scan since edf509f clean
 DONE
+2026-09-29 20:31 ruling (dotfiles-one, Gavin): rm route skips a blank with one stderr warning per call, exit 0; trash route still refuses. selftest 174/0; vs master controls 40/0, new 1 pass/130 fail; mutants 7/7
