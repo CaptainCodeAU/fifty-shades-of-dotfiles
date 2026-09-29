@@ -360,6 +360,22 @@ _argv() { # $1 = depth, then one simple command's words. Sets R.
       [ $# -gt 0 ] && _argv "$depth" "$@"; return 0 ;;
     eval)
       [ $# -gt 0 ] && _sub "$depth" "$*" "eval"; return 0 ;;
+    function)   # W-20260929-A134: function NAME [()] { BODY
+      [ $# -gt 0 ] && shift
+      [ "${1:-}" = "()" ] && shift
+      [ $# -gt 0 ] && _argv "$depth" "$@"; return 0 ;;
+    *'()')   # W-20260929-A134: NAME() { BODY
+      [ $# -gt 0 ] && _argv "$depth" "$@"; return 0 ;;
+    caffeinate|stdbuf|gstdbuf|watch)   # W-20260929-A134: prefixes that run the command after their options
+      while [ $# -gt 0 ]; do
+        case "$base:$1" in
+          caffeinate:-t|caffeinate:-w|stdbuf:-i|stdbuf:-o|stdbuf:-e|gstdbuf:-i|gstdbuf:-o|gstdbuf:-e|watch:-n|watch:--interval) shift 2 || set -- ;;
+          *:--) shift; break ;;
+          *:-*) shift ;;
+          *) break ;;
+        esac
+      done
+      [ $# -gt 0 ] && _argv "$depth" "$@"; return 0 ;;
     script)   # W-20260929-A118: script [opts] [file [cmd ...]] runs cmd; Linux: script -c CMD
       while [ $# -gt 0 ]; do
         case "$1" in
@@ -764,6 +780,15 @@ if [ "${1:-}" = "--selftest" ]; then
   _must 1 'A118 $(printenv GH_TOKEN) in unquoted heredoc'    $'cat <<EOF\n$(printenv GH_TOKEN)\nEOF'
   _must 0 'A118 source <(echo printenv HOME)'                "source <(echo 'printenv HOME')"
   _must 0 'A118 script -q /dev/null ls'                      'script -q /dev/null ls'
+  # W-20260929-A134: function bodies, eval of a substitution, and three prefixes
+  _must 1 'A134 f() { printenv GH_TOKEN; }; f (S20)'         'f() { printenv GH_TOKEN; }; f'
+  _must 1 'A134 function f { printenv GH_TOKEN; }; f (S21)'  'function f { printenv GH_TOKEN; }; f'
+  _must 1 'A134 eval "$(echo printenv GH_TOKEN)" (S69)'      'eval "$(echo printenv GH_TOKEN)"'
+  _must 1 'A134 caffeinate -i (S43)'                         'caffeinate -i printenv GH_TOKEN'
+  _must 1 'A134 stdbuf -oL (S44)'                            'stdbuf -oL printenv GH_TOKEN'
+  _must 1 'A134 watch -n 1 (S45)'                            'watch -n 1 printenv GH_TOKEN'
+  _must 0 'A134 f() { printenv HOME; }; f (near miss)'       'f() { printenv HOME; }; f'
+  _must 0 'A134 caffeinate -i printenv HOME (near miss)'     'caffeinate -i printenv HOME'
   echo "=== CAPTURE arms (D-20260929-A07): into a variable passes, printed later denied ==="
   _must 0 'C01 recipe: GH_TOKEN=$(security -w) ci-watch' 'GH_TOKEN="$(security find-generic-password -a "$USER" -s github-api-readonly -w)" ci-watch'
   _must 0 'C02 recipe: T=$(security -w 2>/dev/null)'     'T=$(security find-generic-password -a "$USER" -s github-api-readonly -w 2>/dev/null)'
