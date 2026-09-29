@@ -11,7 +11,7 @@
 #   open-items watch <W-ID> <p> | check <W-ID> <p> "done-when"   add a watcher / a check
 #   open-items tick | pass <W-ID> <p>   tick p's check | pass a mandatory item; ONLY from inside p
 #   open-items move <W-ID> --to <p> --why ".."   inside one group; across groups is Gavin's (TTY)
-#   open-items route <W-ID> --to <p> | --file <path>   out of the inbox; routing is Gavin's call (TTY), or --file: its owner
+#   open-items route <W-ID> --to <p> --why ".." | --file <path>   out of the inbox; any session with a reason (ROUTE-1), --file: its owner
 #   open-items close|decline|park|reopen <W-ID> ["note"]   close refuses while a check is open
 #   open-items supersede <old> <new> [--project p]   decline old pointing at new; ONE drawer
 #   open-items set [--add] <W-ID> <field> "value"   replace (WARNS on dropped text) | append
@@ -1769,14 +1769,15 @@ cmd_move(){                     # move <W-ID> --to <p> --why "..." [--project ow
 }
 
 cmd_route(){                    # route <W-ID> (--to <p> | --file <path>) [--why "..."]: inbox -> owner
-  local id="" to="" why="routed from the inbox" file="" x fw fo pw="" how dw dr dg rcg
+  local id="" to="" why="routed from the inbox" file="" x fw fo pw="" how dw dr dg rcg whyset=0
   while [ $# -gt 0 ]; do case "$1" in
     --to) [ $# -ge 2 ] || refuse "route: --to needs a project"; to="$2"; shift 2 ;;
     --file) [ $# -ge 2 ] || refuse "route: --file needs the path the item is about"; file="$2"; shift 2 ;;
-    --why) [ $# -ge 2 ] || refuse "route: --why needs the reason"; why="$2"; shift 2 ;;
+    --why) [ $# -ge 2 ] || refuse "route: --why needs the reason"; why="$2"; whyset=1; shift 2 ;;
     --*) refuse "route: unknown flag $1" ;;
     *) [ -z "$id" ] && id="$1" || refuse "route: one item only"; shift ;; esac; done
   [ -n "$id" ] && { [ -n "$to" ] || [ -n "$file" ]; } || refuse "route: usage: open-items route <W-ID> (--to <project> | --file <path>) [--why \"...\"]"
+  [ "$whyset" -eq 0 ] || [ -n "$why" ] || refuse "route: --why is empty; give the reason, it is recorded in the item's moved-from line. Nothing was changed."
   refuse_bad "route: --to" "$to"; refuse_bad "route: --why" "$why"; refuse_bad "route: --file" "$file"
   if [ -n "$file" ]; then
     # 7c (W-20260924-A53, amends P11 rule 4): the FILE's owner names the destination, so an
@@ -1787,10 +1788,15 @@ cmd_route(){                    # route <W-ID> (--to <p> | --file <path>) [--why
     [ -z "$to" ] || name_token_eq "$to" "$fo" \
       || refuse "route: $file belongs to $fo ($how), not $to. Route it to its owner, or without --file from a terminal. Nothing was changed."
     to="$fo"; why="$why by file owner: $file ($how)"
+  elif [ "$whyset" -eq 1 ]; then
+    # ROUTE-1 (Gavin 2026-09-29, 13:40 AEST): any session may route with a reason and no
+    # terminal. The reason, with the session name, goes into the moved-from line and the
+    # inbox's moved-out record (do_move). Without --why, the terminal rule below still holds.
+    why="routed from the inbox: $why"
   else
     # P11 rule 4, FIRST: routing is Gavin's call, so nothing else is looked at for an agent.
     human_confirm "$id" "routing $id out of the inbox to $to is Gavin's call. Type the item ID to confirm:" \
-      || refuse "route: routing out of the inbox is Gavin's call and needs a human at a terminal who types the ID back (D-20260923-A09 6b, P11); stdin is not a terminal (or the ID did not match). With --file <path>, the file's owner decides and no terminal is needed (doc section 7c). Nothing was changed."
+      || refuse "route: routing out of the inbox is Gavin's call and needs a human at a terminal who types the ID back (D-20260923-A09 6b, P11); stdin is not a terminal (or the ID did not match). With --why \"<reason>\" any session may route it (ROUTE-1). With --file <path>, the file's owner decides and no terminal is needed (doc section 7c). Nothing was changed."
   fi
   owner_item "$id" "" route; id="$(id_of_file "$OF")"
   [ "$(realdir "$OW")" = "$(realdir "$INBOX")" ] || refuse "route: $id is not in the inbox (it is in $(name_of "$OW")); between projects, use 'open-items move'"
