@@ -408,6 +408,34 @@
       ]
     },
     {
+      "event": "PreToolUse",
+      "matcher": "AskUserQuestion",
+      "script": "engage-question-autoanswer.sh",
+      "script_path": "$HOME/CODE/CaptainCodeAU/engage/hooks/engage-question-autoanswer.sh",
+      "targets": ["project"],
+      "entry": {
+        "type": "command",
+        "command": "h=\"$HOME/CODE/CaptainCodeAU/engage/hooks/engage-question-autoanswer.sh\"; if [ -x \"$h\" ]; then \"$h\" || true; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: engage-question-autoanswer.sh is registered but ~/CODE/CaptainCodeAU/engage/hooks/engage-question-autoanswer.sh is missing or not executable, so it did not run. Fix: restore the engage checkout or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"HOOK MISSING: engage-question-autoanswer.sh is registered but ~/CODE/CaptainCodeAU/engage/hooks/engage-question-autoanswer.sh is missing or not executable, so it did not run. Fix: restore the engage checkout or remove this registration.\"}}'; fi",
+        "timeout": 5
+      },
+      "why": "The 10-minute question timer (engage item EI-1, account rule gr:20, Gavin 2026-09-29): when a box waits 10 minutes unanswered, its first (Recommended) option is chosen. Acts only when every question carries the phrase 'recommended option applies if unanswered in 10 minutes', every first label ends (Recommended), none is multi-select, and the session is in a herdr pane; anything else is logged 'not eligible' and left alone. Prints nothing, exits 0, detached watcher. Called by path in the engage repo, never copied (one copy, as D-20260929-A06). ENGAGE_NO_AUTOANSWER=1 disables it. Project target only: pj sessions",
+      "class": "alarm"
+    },
+    {
+      "event": "PostToolUse",
+      "matcher": "AskUserQuestion",
+      "script": "engage-question-autoanswered.sh",
+      "script_path": "$HOME/CODE/CaptainCodeAU/engage/hooks/engage-question-autoanswered.sh",
+      "targets": ["project"],
+      "entry": {
+        "type": "command",
+        "command": "h=\"$HOME/CODE/CaptainCodeAU/engage/hooks/engage-question-autoanswered.sh\"; if [ -x \"$h\" ]; then \"$h\" || true; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: engage-question-autoanswered.sh is registered but ~/CODE/CaptainCodeAU/engage/hooks/engage-question-autoanswered.sh is missing or not executable, so it did not run. Fix: restore the engage checkout or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"HOOK MISSING: engage-question-autoanswered.sh is registered but ~/CODE/CaptainCodeAU/engage/hooks/engage-question-autoanswered.sh is missing or not executable, so it did not run. Fix: restore the engage checkout or remove this registration.\"}}'; fi",
+        "timeout": 5
+      },
+      "why": "Tells the session when the 10-minute timer, not Gavin, chose a box's answer (engage item EI-5): prints additionalContext only when the watcher's marker for this tool_use_id exists, else nothing; always exits 0. Pairs with engage-question-autoanswer.sh (same marker folder). Called by path in the engage repo, never copied. Project target only: pj sessions",
+      "class": "alarm"
+    },
+    {
       "event": "SessionStart",
       "script": "herdr-agent-state.sh",
       "script_path": "$HOME/.claude/hooks/herdr-agent-state.sh",
