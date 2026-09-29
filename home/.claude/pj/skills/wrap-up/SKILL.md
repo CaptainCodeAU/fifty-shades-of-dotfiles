@@ -86,6 +86,14 @@ Steps run in this order; `pj-wrap done` is always last. Rulings and reasons:
    a delivery row, never closed. Reply to every peer or worker this session worked with. Each
    scratchpad file that holds a measurement or is cited as a record: move it into the drawer's
    topic folder or the repo and `cmp` it; every other one is named in the report as discarded.
+   Then the temp sweep (W-20260929-A155), sandbox lifted, in this order: (a) each worker this
+   session launched runs `pj-temp sweep` in its own session and replies with the summary line;
+   check a sample of its paths with `test -e` yourself; a worker that already exited is swept by
+   the next `pj` launch, so name it as such. (b) Your own `pj-temp sweep`. (c) Only after every
+   record above is moved out: `pj-temp sweep --scratchpad <this session's scratchpad>`. Agent-tool
+   helpers share your folder and list, so (b) covers them. Read the exit code: 1 means a path was
+   refused or FAILED (afpAccessDenied = the sandbox was on); name each one in the report. A
+   session with no pj folder (`pj-temp list` exits 2) says so and skips (a) to (c).
 
 7. Delivery, measured now, not from memory. For every repo and worktree this session touched:
    uncommitted, unpushed, stashes, tags, files outside any repo. One table.
