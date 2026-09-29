@@ -211,7 +211,7 @@
     "how a guard fix is meant to arrive: through the repo and a commit.",
     "memory/* (not memory/**) since 2026-09-29: the lock covers the auto-memory files at the top",
     "of memory/, not the open-items drawer in memory/WORK/ (Gavin narrowed D-20260929-A14). That",
-    "* stops at a folder boundary is ASSUMED from the gitignore-style matching (W-20260929-A138)."
+    "* stops at a folder boundary is ASSUMED from the gitignore-style matching (W-20260929-A143)."
   ],
   "permissions": {
     "deny": [
