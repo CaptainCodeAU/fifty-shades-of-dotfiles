@@ -118,15 +118,23 @@ fi
 # Linux/WSL: `trash-put` from trash-cli (-> XDG trash, restore with trash-restore).
 # `trash` is the REAL one from trash-guard --real-trash, never the trash shim on PATH: the
 # guard has just run, and running it twice would double the repo search for nothing.
+# The `trash-put` fallback is a PATH lookup, so on macOS it is OFF (W-20260929-A185 batch,
+# measured 2026-09-29): whenever --real-trash failed, a `trash-put` planted earlier on PATH,
+# say a link to /bin/rm, was run on the targets. Linux keeps it until the Linux real-trash rule
+# is settled (W-20260929-A157).
+trash_put_ok=1
+[ "$(uname -s)" = Darwin ] && trash_put_ok=0   #M: mac-no-trash-put
 if real_trash=$("$TRASH_GUARD" --real-trash 2>/dev/null) && [ -n "$real_trash" ]; then
 	trash_cmd=$real_trash
 	restore_hint="recover: Finder -> Put Back"
-elif command -v trash-put >/dev/null 2>&1; then
+elif [ "$trash_put_ok" = 1 ] && command -v trash-put >/dev/null 2>&1; then
 	trash_cmd=trash-put
 	restore_hint="recover: trash-restore"
 else
 	echo "safe-rm: no trash tool found -- refusing to delete anything." >&2
-	echo "         macOS: brew install trash    Linux: apt install trash-cli" >&2
+	rt_why=$("$TRASH_GUARD" --real-trash 2>&1 >/dev/null)
+	[ -n "$rt_why" ] && echo "         $rt_why" >&2
+	echo "         macOS 15 and later ship /usr/bin/trash    Linux: apt install trash-cli" >&2
 	echo "         (safe-rm never falls back to rm: that would turn a recoverable" >&2
 	echo "          delete into a permanent one without saying so.)" >&2
 	exit 1

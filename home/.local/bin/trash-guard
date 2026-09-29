@@ -19,7 +19,8 @@
 #   trash-guard --check [--] PATH...   judge only; NEVER deletes anything.
 #                                      exit 0 every path allowed, 1 refused, 2 usage
 #   trash-guard --real-trash           print the real trash command: the first `trash` on
-#                                      PATH that is not a copy of the shim. exit 1 if none.
+#                                      PATH that is not a copy of the shim. exit 1 if none,
+#                                      or if TRASH_GUARD_REAL_TRASH is set (removed, A185).
 #   trash-guard --show-config          print the floor list, temp roots and search timeout
 #
 # THE RULES (Gavin, 2026-09-29, in the conductor's boxes; docs/DELETION_SAFETY.md "The trash
@@ -53,10 +54,11 @@
 #
 # TEST SEAMS. Every one can only make the guard MORE cautious, or is fenced to a temp folder,
 # because an agent can set an environment variable as easily as a test can:
-#   TRASH_GUARD_REAL_TRASH         the real trash command. Honoured only when it resolves
-#                                  INSIDE a system temp folder (a fake there); anything else
-#                                  is refused, so it cannot point at /bin/rm.
-#   TRASH_GUARD_TEMP_ROOTS         colon-separated temp roots, REPLACING the list. An entry
+#   TRASH_GUARD_REAL_TRASH         REMOVED 2026-09-29 (W-20260929-A185): its folder-only fence
+#                                  let a temp link to /bin/rm through. Set, it now REFUSES.
+#                                  Tests set the real trash by editing the `#P: real-trash`
+#                                  line in a COPY of this file, never through the environment.
+#   TRASH_GUARD_TEMP_ROOTS        colon-separated temp roots, REPLACING the list. An entry
 #                                  is kept only when it is, or is inside, a real temp root, so
 #                                  it can narrow the exemption and never widen it.
 #   TRASH_GUARD_TIMEOUT            search timeout in seconds; can only LOWER the 2 s.
@@ -340,17 +342,16 @@ _check() {
 # ---------------------------------------------------------------- --real-trash
 _real_trash() {
 	# POSIX sh has no locals: these names (rt_*) are used nowhere else in this file.
-	if [ -n "${TRASH_GUARD_REAL_TRASH-}" ]; then
-		_init_temp
-		rt_cmd=$TRASH_GUARD_REAL_TRASH
-		case "$rt_cmd" in */*) rt_dir=${rt_cmd%/*}; [ -n "$rt_dir" ] || rt_dir=/ ;; *) rt_dir=. ;; esac
-		if [ -f "$rt_cmd" ] && [ -x "$rt_cmd" ] && _pdir "$rt_dir" && _in_list "$REAL_TEMP" "$PD" && [ "$PD" != / ]; then
-			printf '%s\n' "$PD/${rt_cmd##*/}"
-			return 0
-		fi
-		_err "trash-guard: TRASH_GUARD_REAL_TRASH is a test seam and must name an executable inside a system temp folder; \"$rt_cmd\" is not. Refusing."
-		return 1
-	fi
+	# The TRASH_GUARD_REAL_TRASH variable that used to steer this is GONE (W-20260929-A185,
+	# Gavin 2026-09-29): it was fenced by FOLDER only, so a temp link or script pointing at
+	# /bin/rm passed the fence, and the shim and safe-rm (so every rm) ran it. Setting it now
+	# REFUSES, so a script that still sets it stops loudly instead of reaching the real trash.
+	rt_msg="trash-guard: TRASH_GUARD_REAL_TRASH was removed (W-20260929-A185) and is set here; refusing rather than guessing. Unset it; tests edit the #P: real-trash line in a COPY of this file."
+	[ -n "${TRASH_GUARD_REAL_TRASH+set}" ] && { _err "$rt_msg"; return 1; }   #M: noseam
+	# Tests only: selftests copy this file into their own temp folder and set this ONE line in
+	# the copy to their fake. Empty in every stowed copy; nothing in the environment reaches it.
+	rt_fixed=""                                                                           #P: real-trash
+	if [ -n "$rt_fixed" ]; then printf '%s\n' "$rt_fixed"; return 0; fi
 	rt_path="${PATH-}:"
 	while [ -n "$rt_path" ]; do
 		rt_dir=${rt_path%%:*}; rt_path=${rt_path#*:}

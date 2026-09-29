@@ -10,8 +10,9 @@
 # trash. This suite proves every rule, on both routes, with the verdicts compared.
 #
 # NOTHING HERE CAN REACH THE REAL TRASH OR A REAL FOLDER. Every destructive arm runs against
-# fixtures in its own mktemp directory, and the "real trash" is a FAKE (TRASH_GUARD_REAL_TRASH,
-# and first on PATH) that records each call and moves the targets into a fixture folder. Arms
+# fixtures in its own mktemp directory, and the "real trash" is a FAKE (set in a COPY of
+# trash-guard through its `#P: real-trash` line, checked before any arm runs, and first on
+# PATH) that records each call and moves the targets into a fixture folder. Arms
 # that name a real folder (the real home) use `trash-guard --check`, which never deletes. The
 # one exception is --e2e, which trashes a single throwaway temp file with the real trash and
 # must run outside the Claude sandbox (the sandbox denies the Trash).
@@ -108,6 +109,10 @@ done
 exit 0
 EOF
 chmod +x "$FAKE"
+# On macOS a `trash-put` first on PATH stands in for a planted one (a link to /bin/rm, say):
+# safe-rm must never fall back to it there (W-20260929-A185 batch). It logs like the fake, so
+# the seam arms in section 10 see it if it is ever run. Linux keeps the fallback (A157).
+[ "$(uname -s)" = Darwin ] && ln -sf "$FAKE" "$FX/fakebin/trash-put"
 
 g() { git -c user.name=tg -c user.email=tg@example.invalid -c core.hooksPath=/dev/null \
 	-c commit.gpgsign=false -c init.defaultBranch=main "$@" >/dev/null 2>&1; }
@@ -133,8 +138,8 @@ run_route() {
 		check) cmd=("$BIN/trash-guard" --check --) ;;
 	esac
 	: > "$LOGF"
-	ERR=$(cd "$cwd" 2>/dev/null && env HOME="$FHOME" PATH="$FX/fakebin:$PATH" \
-		TRASH_GUARD_REAL_TRASH="$FAKE" TRASH_GUARD_TEMP_ROOTS="$FX/tmproot" \
+	ERR=$(cd "$cwd" 2>/dev/null && env -u TRASH_GUARD_REAL_TRASH HOME="$FHOME" PATH="$FX/fakebin:$PATH" \
+		TRASH_GUARD_TEMP_ROOTS="$FX/tmproot" \
 		${XENV[@]+"${XENV[@]}"} "${cmd[@]}" "$@" 2>&1 >/dev/null)
 	RC=$?
 	LOG=$(cat "$LOGF")
@@ -517,28 +522,37 @@ if [ -x "$BIN/trash-guard" ]; then
 else
 	bad "no trash-guard in $BIN to ask for its config"
 fi
-c_seam_realtrash() {
+c_seam_realtrash() { # $SEAMVAL = what TRASH_GUARD_REAL_TRASH is set to
 	local D; D=$(fresh "$FX/tmproot"); mkdir -p "$D/plain"; KEEP=("$D/plain")
-	XENV=(TRASH_GUARD_REAL_TRASH=/usr/bin/true)
+	XENV=(TRASH_GUARD_REAL_TRASH="$SEAMVAL")
 	run_route "$ROUTE" "$D" "$D/plain"
 	XENV=()
 	local miss; miss=$(missing_keep)
 	if [ "$RC" -ne 0 ] && [ -z "$LOG" ] && [ -z "$miss" ]; then VERDICT=REFUSED; ok "$ROUTE: $LABEL -> refused, target in place"
 	else VERDICT=WRONG; bad "$ROUTE: $LABEL -> rc=$RC; fake calls: ${LOG:-none}; gone:${miss:- nothing}"; fi
 }
+SEAMVAL=/usr/bin/true
 both new "TRASH_GUARD_REAL_TRASH pointing outside temp (/usr/bin/true) is refused, not obeyed" c_seam_realtrash
+# W-20260929-A185: the seam's fence checked the FOLDER only, so a link INSIDE a temp folder to
+# any binary passed, and both routes ran it. The link here points at the FAKE, standing in for
+# /bin/rm; on master the fake gets the call (the hole), here the removed seam refuses.
+ln -sf "$FAKE" "$FX/tmproot/evil-trash"
+SEAMVAL=$FX/tmproot/evil-trash
+both new "TRASH_GUARD_REAL_TRASH at a temp LINK to another binary (the A185 hole) is refused, never run" c_seam_realtrash
+SEAMVAL=""
+both new "TRASH_GUARD_REAL_TRASH set but EMPTY still refuses (set is enough)" c_seam_realtrash
 
 # ---------------------------------------------------------------- the shim never recurses
 section "11. The shim finds the REAL trash: never itself, never another copy, refuses when none"
 CLASS=new
-if [ -x "$BIN/trash" ]; then
+if [ -x "$SRC_BIN/trash" ]; then
 	mkdir -p "$FX/shimlink" "$FX/shimcopy" "$FX/notrash"
-	ln -sf "$BIN/trash" "$FX/shimlink/trash"
-	cp "$BIN/trash" "$FX/shimcopy/trash"
+	ln -sf "$SRC_BIN/trash" "$FX/shimlink/trash"
+	cp "$SRC_BIN/trash" "$FX/shimcopy/trash"
 	D=$(fresh "$FX/tmproot"); mkdir -p "$D/plain"
 	: > "$LOGF"
 	ERR=$(cd "$D" && env -u TRASH_GUARD_REAL_TRASH HOME="$FHOME" TRASH_GUARD_TEMP_ROOTS="$FX/tmproot" \
-		PATH="$FX/shimlink:$FX/shimcopy:$BIN:$FX/fakebin:$PATH" perl -e 'alarm shift; exec @ARGV' 10 "$BIN/trash" "$D/plain" 2>&1 >/dev/null); RC=$?
+		PATH="$FX/shimlink:$FX/shimcopy:$SRC_BIN:$FX/fakebin:$PATH" perl -e 'alarm shift; exec @ARGV' 10 "$SRC_BIN/trash" "$D/plain" 2>&1 >/dev/null); RC=$?
 	LOG=$(cat "$LOGF")
 	if [ "$RC" -eq 0 ] && [ "$LOG" = "CALL <$D/plain>" ]; then ok "a symlink to the shim, a copy of it and the shim itself ahead on PATH: all skipped, the fake got the call"
 	else bad "shim resolution: rc=$RC; fake: ${LOG:-none}; $(first_line "$ERR")"; fi
@@ -550,13 +564,13 @@ if [ -x "$BIN/trash" ]; then
 	else bad "control: the no-trash PATH is wrong"; fi
 	for r in trash rm; do
 		D=$(fresh "$FX/tmproot"); mkdir -p "$D/plain"
-		if [ "$r" = trash ]; then c=("$BIN/trash"); else c=("$BIN/rm" -r); fi
-		ERR=$(cd "$D" && env -u TRASH_GUARD_REAL_TRASH HOME="$FHOME" PATH="$BIN:$FX/notrash" "${c[@]}" "$D/plain" 2>&1 >/dev/null); RC=$?
+		if [ "$r" = trash ]; then c=("$SRC_BIN/trash"); else c=("$SRC_BIN/rm" -r); fi
+		ERR=$(cd "$D" && env -u TRASH_GUARD_REAL_TRASH HOME="$FHOME" PATH="$SRC_BIN:$FX/notrash" "${c[@]}" "$D/plain" 2>&1 >/dev/null); RC=$?
 		if [ "$RC" -ne 0 ] && [ -e "$D/plain" ]; then ok "$r: no real trash anywhere on PATH -> refused, target in place ($(first_line "$ERR"))"
 		else bad "$r: no real trash on PATH -> rc=$RC, target present: $([ -e "$D/plain" ] && echo yes || echo NO)"; fi
 	done
 else
-	bad "no trash shim in $BIN"
+	bad "no trash shim in $SRC_BIN"
 fi
 }
 
@@ -612,7 +626,9 @@ if [ "$MODE" = mutants ]; then
 	caught=0; missed=0
 	# file:tag. trash-guard:blank is the one that proves `trash ''` is still refused;
 	# safe-rm:rm-blank-skip proves the rm route's quiet skip is really tested.
-	for spec in trash-guard:blank trash-guard:cwd trash-guard:timeout trash-guard:temp safe-rm:rm-blank-skip safe-rm:rm-blank-warn; do
+	specs="trash-guard:blank trash-guard:cwd trash-guard:timeout trash-guard:temp trash-guard:noseam safe-rm:rm-blank-skip safe-rm:rm-blank-warn"
+	[ "$(uname -s)" = Darwin ] && specs="$specs safe-rm:mac-no-trash-put"
+	for spec in $specs; do
 		mf=${spec%%:*}; m=${spec#*:}
 		MD=$FX/mut-$m; mkdir -p "$MD"
 		cp "$BIN/trash" "$BIN/trash-guard" "$BIN/safe-rm" "$BIN/rm" "$MD/"
@@ -633,7 +649,31 @@ if [ "$MODE" = mutants ]; then
 	[ "$missed" -eq 0 ]; exit $?
 fi
 
+# The tools under test run from COPIES in $FX/bin with trash-guard's one tagged line
+# (`#P: real-trash`) set to the FAKE: since W-20260929-A185 no environment variable can steer
+# the real trash, so an edited copy is the only way in. Section 11 tests the PATH lookup itself
+# and uses the untagged originals ($SRC_BIN). Before ANY arm runs, the copy must resolve to
+# the fake; otherwise an arm could exec the real trash on a fixture, so the suite stops.
+SRC_BIN=$BIN
+if [ "$HOOK_ONLY" -eq 0 ]; then
+	mkdir -p "$FX/bin"
+	for t in trash trash-guard safe-rm rm; do [ -e "$SRC_BIN/$t" ] && cp "$SRC_BIN/$t" "$FX/bin/$t"; done
+	if [ -e "$FX/bin/trash-guard" ]; then
+		awk -v f="$FAKE" '/#P: real-trash$/ { sub(/rt_fixed=""/, "rt_fixed=\"" f "\"") } { print }' "$SRC_BIN/trash-guard" > "$FX/bin/trash-guard"
+		chmod +x "$FX/bin/trash-guard"
+	fi
+	BIN=$FX/bin
+	if [ -x "$BIN/trash-guard" ]; then
+		rt=$(env -u TRASH_GUARD_REAL_TRASH PATH="$FX/fakebin:$PATH" "$BIN/trash-guard" --real-trash 2>&1)
+		if [ "$rt" != "$FAKE" ]; then
+			echo "trash-guard-selftest: STOPPED before any arm: the copy under test resolves the real trash to '$rt', not the fake. An arm could have run the real trash." >&2
+			exit 1
+		fi
+	fi
+fi
+
 echo "trash-guard-selftest"
+echo "  source:     $SRC_BIN"
 echo "  under test: $BIN"
 echo "  hook:       $HOOK"
 echo "  fixtures:   $FX"
