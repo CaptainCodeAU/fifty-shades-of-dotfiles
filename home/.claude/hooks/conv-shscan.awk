@@ -40,7 +40,10 @@
 
 # ------------------------------------------------------------------ scanner
 
-function unsure(why) { if (UNSURE == "") UNSURE = why }
+function unsure(why) {
+    if (UNSURE == "") UNSURE = why
+    if (why != "function definition" && UNSURE_NF == "") UNSURE_NF = why   # fp_check, W-20260929-A53
+}
 
 function new_cmd(rec, depth, sep) {
     if (!rec) return -1
@@ -770,6 +773,9 @@ function guard_check(    k, j, n, a, w, b, s, i, t) {
 # commands inside $(...), and a crude match on eval, backticks and sh/bash/zsh -c
 # strings. gpf and gpsupf are lease forces: since D-20260929-A08 they deny on main
 # like the long form and pass on a feature branch (until then, allowed everywhere).
+# Function bodies are parsed commands like any other. Any other construct the
+# scanner is UNSURE of sends the whole text to the crude match; a function
+# definition does so only when some word is push or a push alias (W-20260929-A53).
 # NOT read: a flag held in a variable (git push $F), heredoc bodies fed to a shell,
 # scripts and other languages; a push that DELETES main (:main, --delete) is not a
 # force push and is out of this rule.
@@ -1003,11 +1009,26 @@ function fp_check(    k, j, n, a, w, v, gi, tn, b, s, t, ex, i) {
         s = fp_crude(BT[i])
         if (s != "") return fp_msg(s " (inside backticks)")
     }
-    if (UNSURE != "") {
+    # W-20260929-A53: a function definition alone no longer sends the whole text
+    # to the crude match, because the scanner does record a function body's
+    # commands and the loop above has read them. It still does when some word is
+    # push or a push alias (git push "$@" in a body, or a call like p git push -f),
+    # since then the flags may arrive through the function's arguments.
+    if (UNSURE_NF != "" || (UNSURE != "" && fp_push_word())) {
         s = fp_crude(S)
-        if (s != "") return fp_msg(s " (the command has a " UNSURE ")")
+        if (s != "") return fp_msg(s " (the command has a " (UNSURE_NF != "" ? UNSURE_NF : UNSURE) ")")
     }
     return ""
+}
+
+# 1 when any recorded word, quotes removed, is push or a push alias.
+function fp_push_word(    k, a, w) {
+    for (k = 1; k <= NC; k++)
+        for (a = 1; a <= CNW[k]; a++) {
+            w = WR[k, a]; gsub(/["'\\]/, "", w)
+            if (w == "push" || fp_alias(w) != "") return 1
+        }
+    return 0
 }
 
 # ------------------------------------------------------------------ builtin
@@ -1443,7 +1464,7 @@ function pj_scan(ctx, ov, where,    k, j, n, a, w, b, ovk, t, lab) {
     }
 }
 
-function pj_load(t) { S = t; N = split(S, C, ""); P = 1; NC = 0; HDN = 0; BG = 0; UNSURE = ""; SUBSH = 0; BTN = 0 }
+function pj_load(t) { S = t; N = split(S, C, ""); P = 1; NC = 0; HDN = 0; BG = 0; UNSURE = ""; UNSURE_NF = ""; SUBSH = 0; BTN = 0 }
 
 function pjw_main(    qi, i) {
     PV = ""; PM = ""; PO = ""; QN = 1; QT[1] = S; QX[1] = "bash"; QO[1] = ""; QW[1] = ""
@@ -1466,7 +1487,7 @@ function pjw_main(    qi, i) {
 END {
     N = split(S, C, "")
     mode = ENVIRON["CONV_MODE"]
-    P = 1; NC = 0; HDN = 0; BG = 0; UNSURE = ""; SUBSH = 0; BTN = 0
+    P = 1; NC = 0; HDN = 0; BG = 0; UNSURE = ""; UNSURE_NF = ""; SUBSH = 0; BTN = 0
     REC_NESTED = (mode == "guard" || mode == "pjw")   # only these look inside $(...) and backticks
     if (mode == "pjw") pjw_main()
     parse_list(1, "", 0, "^")
