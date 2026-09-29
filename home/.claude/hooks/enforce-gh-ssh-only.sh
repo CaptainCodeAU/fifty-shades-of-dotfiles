@@ -227,6 +227,17 @@ if [ "${1:-}" = "--selftest" ]; then
   _d gh-auth     '$( ) inside double quotes'         'echo "$(gh auth login)"'
   _d gh-auth     'backticks'                         'echo `gh auth login`'
   _d gh-auth     'heredoc fed to bash'               $'bash <<EOF\ngh auth login\nEOF'
+  # W-20260929-A118: four shapes that ran a command no guard saw (S47 S54 S55 S57)
+  _d gh-auth     'A118 script -q /dev/null CMD (S47)' 'script -q /dev/null gh auth login'
+  _d gh-auth     'A118 script -q -c CMD file'        'script -q -c "gh auth login" /dev/null'
+  _d gh-auth     'A118 source <(echo ...) (S54)'     "source <(echo 'gh auth login')"
+  _d gh-auth     'A118 . <(printf ...)'              ". <(printf 'gh auth login')"
+  _d gh-auth     'A118 . /dev/stdin <<< (S55)'       ". /dev/stdin <<< 'gh auth login'"
+  _d gh-auth     'A118 $(...) in unquoted heredoc (S57)' $'cat <<EOF\n$(gh auth login)\nEOF'
+  _a 'A118 script -q /dev/null gh auth status'       'script -q /dev/null gh auth status'
+  _a 'A118 source <(a generator)'                    'source <(kubectl completion zsh)'
+  _a 'A118 $(...) in QUOTED heredoc stays data'      $'cat <<\'EOF\'\n$(gh auth login)\nEOF'
+  _a 'A118 . /dev/stdin <<< gh auth status'          ". /dev/stdin <<< 'gh auth status'"
   _d gh-auth     'here-string fed to bash'           "bash <<< 'gh auth login'"
   _d gh-auth     'echo piped into sh'                "echo 'gh auth login' | sh"
   _d gh-auth     'quoted command word'               '"gh" auth login'
@@ -428,18 +439,35 @@ FSEP=$'\034'  # joins the nested bodies of one level
 read -r -d '' LEXER <<'AWK'
 BEGIN { US = sprintf("%c", 31); RSC = sprintf("%c", 30); Q = sprintf("%c", 39); ORS = RSC
         FSEP = sprintf("%c", 28); HX = "0123456789abcdef"; buf = ""; first = 1
-        nt = split("gh git eval sh bash zsh dash ksh mksh yash fish echo printf env genv sudo doas command exec nohup time nice timeout gtimeout caffeinate stdbuf gstdbuf xargs gxargs watch export typeset declare local readonly integer", TL, " ")
+        nt = split("gh git eval script source . sh bash zsh dash ksh mksh yash fish echo printf env genv sudo doas command exec nohup time nice timeout gtimeout caffeinate stdbuf gstdbuf xargs gxargs watch export typeset declare local readonly integer", TL, " ")
         for (k = 1; k <= nt; k++) TRIG[TL[k]] = 1 }
 { if (first) { buf = $0; first = 0 } else buf = buf "\n" $0 }
 function enc(w) { gsub(RSC, "", w); gsub(US, "", w); return w }
 function emitS(b) { print "S" US enc(b) }
+# A118: a command that runs the output of a <( ) it is given
+function runsout(w,   b) { b = tolower(w); sub(/.*\//, "", b); return b == "source" || b == "." || b ~ /^(sh|bash|zsh|dash|ksh|mksh|yash|fish)$/ }
+# A118: every $( ) (not $(( ))) and backtick span in t, lexed as a nested body
+function xsubs(t,   i, m, c, dd, st) {
+  m = length(t); i = 1
+  while (i <= m) {
+    c = substr(t, i, 1)
+    if (c == "\\") { i += 2; continue }
+    if (c == "$" && substr(t, i + 1, 1) == "(" && substr(t, i + 2, 1) != "(") {
+      dd = 1; st = i + 2; i += 2
+      while (i <= m && dd > 0) { c = substr(t, i, 1); if (c == "(") dd++; else if (c == ")") dd--; i++ }
+      emitS(substr(t, st, i - 1 - st)); continue
+    }
+    if (c == "`") { st = i + 1; i++; while (i <= m && substr(t, i, 1) != "`") i++; emitS(substr(t, st, i - st)); i++; continue }
+    i++
+  }
+}
 function fw() {
   if (!inw) return
   if (expect == "t") expect = ""
   else if (expect == "hs") { HS[++nhs] = cur; expect = "" }
-  else if (expect == "hd") { HD[++nh] = cur; HC[nh] = cid; HT[nh] = hstrip; expect = "" }
+  else if (expect == "hd") { HD[++nh] = cur; HC[nh] = cid; HT[nh] = hstrip; HDQ[nh] = wq; expect = "" }   # A118: HDQ = quoted marker
   else W[++nw] = cur
-  cur = ""; inw = 0
+  cur = ""; inw = 0; wq = 0
 }
 # Only a command that could matter is emitted: bash 3.2 pays ~0.1 ms for each
 # record it reads, and a 2000-line script fed to bash was 20 s before this.
@@ -476,6 +504,7 @@ function hd(i,   k, b0, b1, line, e, t) {
     }
     if (i > n && b1 > n) b1 = n + 1
     print "H" US HC[k] US enc(substr(s, b0, b1 - b0))
+    if (!HDQ[k]) xsubs(substr(s, b0, b1 - b0))   # A118: an unquoted body runs its substitutions
   }
   hstart = nh + 1
   return i
@@ -569,19 +598,21 @@ function lexone(txt,   i, c, nx, j) {
   i = 1
   while (i <= n) {
     c = substr(s, i, 1)
-    if (c == "\\") { nx = substr(s, i + 1, 1); if (nx != "\n") { cur = cur nx; inw = 1 } i += 2; continue }
+    if (c == "\\") { nx = substr(s, i + 1, 1); if (nx != "\n") { cur = cur nx; inw = 1; wq = 1 } i += 2; continue }
     if (c == Q) {
       j = i + 1; while (j <= n && substr(s, j, 1) != Q) j++
-      cur = cur substr(s, i + 1, j - i - 1); inw = 1; i = j + 1; continue
+      cur = cur substr(s, i + 1, j - i - 1); inw = 1; wq = 1; i = j + 1; continue
     }
-    if (c == "$" && substr(s, i + 1, 1) == Q) { inw = 1; i = ansic(i + 2); continue }
-    if (c == "\"") { inw = 1; i = dq(i + 1); continue }
+    if (c == "$" && substr(s, i + 1, 1) == Q) { inw = 1; wq = 1; i = ansic(i + 2); continue }
+    if (c == "\"") { inw = 1; wq = 1; i = dq(i + 1); continue }
     if (c == "$" && substr(s, i + 1, 1) == "(") {
       j = mparen(i + 2); emitS(substr(s, i + 2, j - i - 2)); cur = cur "$(...)"; inw = 1; i = j + 1; continue
     }
     if (c == "`") { inw = 1; i = bq(i + 1); continue }
     if ((c == "<" || c == ">" || c == "=") && !inw && substr(s, i + 1, 1) == "(") {
-      j = mparen(i + 2); emitS(substr(s, i + 2, j - i - 2)); cur = "<(...)"; inw = 1; i = j + 1; continue
+      j = mparen(i + 2); pb = substr(s, i + 2, j - i - 2)
+      if (c == "<" && nw > 0 && runsout(W[1])) pb = pb " | sh"   # A118: source <( ) runs what it prints
+      emitS(pb); cur = "<(...)"; inw = 1; i = j + 1; continue
     }
     if (c == " " || c == "\t") { fw(); i++; continue }
     if (c == "\n") { fw(); ec(); pl++; i = hd(i + 1); continue }
@@ -847,6 +878,18 @@ _argv() {
             *) break ;;
           esac
         done ;;
+      script)   # W-20260929-A118: script [opts] [file [cmd ...]] runs cmd; Linux: script -c CMD
+        shift
+        while [ $# -gt 0 ]; do
+          case "$1" in
+            -c|--command) _nest "${2:-}"; STDIN_SHELL=0; DATA=""; return 0 ;;
+            -F|-t|-T|-I|-O|-B|-E) shift 2 || set -- ;;
+            --) shift; break ;;
+            -*) shift ;;
+            *) break ;;
+          esac
+        done
+        [ $# -gt 0 ] && shift ;;   # the typescript file
       nice)
         shift
         while [ $# -gt 0 ]; do case "$1" in -n) shift 2 || set -- ;; -*) shift ;; *) break ;; esac; done ;;
@@ -902,6 +945,7 @@ _argv() {
     eval) nb=eval ;;
     sh|bash|zsh|dash|ksh|mksh|yash|fish) nb=shell ;;
     echo|printf) nb=data ;;
+    source|.) nb=source ;;   # A118
   esac
   shopt -u nocasematch
   case "$nb" in
@@ -909,6 +953,8 @@ _argv() {
     git)   _git "$@" ;;
     eval)  [ $# -gt 0 ] && _nest "$*"; STDIN_SHELL=0; DATA="" ;;
     shell) _shell "$@" ;;
+    source)   # W-20260929-A118: sourcing stdin reads it as shell code
+      for v in "$@"; do case "$v" in /dev/stdin|/dev/fd/0|-) STDIN_SHELL=1 ;; esac; done ;;
     data)
       while [ $# -gt 0 ]; do case "$1" in -n|-e|-E|-ne|-en) shift ;; *) break ;; esac; done
       DATA="$*" ;;   # printf's \n is turned into a newline only if a shell reads it
