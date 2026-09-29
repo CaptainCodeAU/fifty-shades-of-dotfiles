@@ -238,15 +238,18 @@ folders in about 0.8 s; a real `node_modules` of 1,081 folders in 112 ms; `~/.nv
 repo root in 24 ms. The Claude sandbox's `.ssh` read deny does not trip `search-unreadable`:
 listing `home/.ssh` is allowed, only file contents are denied (find exit 0).
 
-**The real trash** is `trash-guard --real-trash`: the first `trash` on PATH that is not a copy of
-the shim (the shim carries a marker string; any file holding it is skipped, so the shim can never
-exec itself or another copy). None found: refuse. `safe-rm` uses the same answer, so the guard
-runs once per call, not twice. On macOS `safe-rm` has no second answer: its `trash-put` PATH
-fallback is off there, because a `trash-put` planted earlier on PATH was run whenever
-`--real-trash` failed (measured 2026-09-29 with a logging stand-in). Linux keeps the fallback until
-the Linux rule is settled (W-20260929-A157). The PATH search itself is still open: a `trash` that
-is not a trash tool, placed ahead of `/usr/bin` on PATH, is run by both routes. Pinning macOS to
-`/usr/bin/trash` is W-20260929-A169 (batch two, after machine B's macOS version is measured).
+**The real trash** is `trash-guard --real-trash`. **On macOS it is exactly `/usr/bin/trash`,
+never a PATH search** (W-20260929-A169, 2026-09-29, after both Macs were measured: A on 26.6.2, B
+on 15.7.4; macOS 15 and later ship it). The search it replaced took the first unmarked `trash` on
+PATH, so a link to `/bin/rm`, or a wrapper that calls `trash` again (a loop, measured at 15,686
+hops), placed ahead of `/usr/bin` was run by both routes. The OS is read with `uname` by absolute
+path, because a PATH without `uname` switched the pin off (caught while building it). Missing
+`/usr/bin/trash`: every `trash` and `rm` refuses, loudly. `safe-rm` uses the same answer, so the
+guard runs once per call, and on macOS it has no second answer: its `trash-put` PATH fallback is
+off there, because a planted `trash-put` was run whenever `--real-trash` failed (measured
+2026-09-29 with a logging stand-in). **On Linux** it is still the first `trash` on PATH that is
+not a copy of the shim (the shim carries a marker string; any file holding it is skipped), and
+`safe-rm` keeps the `trash-put` fallback, until the Linux rule is settled (W-20260929-A157).
 
 **Test seams** (every one can only make the guard more careful, or is fenced to a temp folder,
 because an agent can set an environment variable as easily as a test can):

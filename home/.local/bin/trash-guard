@@ -18,8 +18,9 @@
 # USAGE
 #   trash-guard --check [--] PATH...   judge only; NEVER deletes anything.
 #                                      exit 0 every path allowed, 1 refused, 2 usage
-#   trash-guard --real-trash           print the real trash command: the first `trash` on
-#                                      PATH that is not a copy of the shim. exit 1 if none,
+#   trash-guard --real-trash           print the real trash command. macOS: /usr/bin/trash,
+#                                      whatever PATH holds (A169). Linux: the first `trash`
+#                                      on PATH that is not a copy of the shim. exit 1 if none,
 #                                      or if TRASH_GUARD_REAL_TRASH is set (removed, A185).
 #   trash-guard --show-config          print the floor list, temp roots and search timeout
 #
@@ -352,6 +353,24 @@ _real_trash() {
 	# the copy to their fake. Empty in every stowed copy; nothing in the environment reaches it.
 	rt_fixed=""                                                                           #P: real-trash
 	if [ -n "$rt_fixed" ]; then printf '%s\n' "$rt_fixed"; return 0; fi
+	# macOS: the real trash is ONE fixed file, Apple's, never a PATH search (W-20260929-A169,
+	# 2026-09-29). The search took the first unmarked executable named trash, so a link to
+	# /bin/rm, or a wrapper that calls trash again (a loop), placed ahead of /usr/bin was run by
+	# the shim and by safe-rm. macOS 15 and later ship /usr/bin/trash (both Macs measured: 26.6.2
+	# and 15.7.4). Missing, it REFUSES: every rm and trash stops loudly rather than guess.
+	rt_darwin=/usr/bin/trash                                                              #P: darwin-trash
+	# uname by absolute path: found by PATH, `PATH=/elsewhere trash x` hid it, the pin switched
+	# off, and the search ran again (caught while building this, 2026-09-29).
+	rt_pin=0
+	rt_os=$(/usr/bin/uname -s 2>/dev/null || /bin/uname -s 2>/dev/null)
+	[ "$rt_os" = Darwin ] && rt_pin=1   #M: darwinpin
+	[ -z "$rt_os" ] && { _err "trash-guard: cannot tell the OS (no /usr/bin/uname or /bin/uname). Refusing."; return 1; }
+	if [ "$rt_pin" = 1 ]; then
+		{ [ -f "$rt_darwin" ] && [ -x "$rt_darwin" ]; } && { printf '%s\n' "$rt_darwin"; return 0; }
+		_err "trash-guard: no real trash: $rt_darwin is missing (macOS 15 and later ship it). Nothing on PATH is used on macOS. Refusing."
+		return 1
+	fi
+	# Linux keeps the PATH search until its rule is settled (W-20260929-A157).
 	rt_path="${PATH-}:"
 	while [ -n "$rt_path" ]; do
 		rt_dir=${rt_path%%:*}; rt_path=${rt_path#*:}

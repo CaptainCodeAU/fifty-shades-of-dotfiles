@@ -543,6 +543,44 @@ SEAMVAL=""
 both new "TRASH_GUARD_REAL_TRASH set but EMPTY still refuses (set is enough)" c_seam_realtrash
 
 # ---------------------------------------------------------------- the shim never recurses
+if [ "$(/usr/bin/uname -s 2>/dev/null)" = Darwin ]; then
+section "11. On macOS the real trash is /usr/bin/trash whatever PATH holds; missing, both routes refuse (A169)"
+CLASS=new
+# Judge-only arms first: --real-trash PRINTS its answer, nothing is run. A link to the FAKE
+# stands in for a link to /bin/rm; the wrapper would loop (exec trash) if it were ever chosen.
+mkdir -p "$FX/shimlink" "$FX/shimcopy" "$FX/evil" "$FX/wrapper" "$FX/pinbin"
+ln -sf "$SRC_BIN/trash" "$FX/shimlink/trash"
+cp "$SRC_BIN/trash" "$FX/shimcopy/trash"
+ln -sf "$FAKE" "$FX/evil/trash"
+printf '#!/bin/sh\nexec trash "$@"\n' > "$FX/wrapper/trash"; chmod +x "$FX/wrapper/trash"
+for pre in "$FX/shimlink:$FX/shimcopy:$FX/evil" "$FX/wrapper" "$FX/fakebin"; do
+	rt=$(env -u TRASH_GUARD_REAL_TRASH PATH="$pre:$PATH" "$SRC_BIN/trash-guard" --real-trash 2>&1)
+	if [ "$rt" = /usr/bin/trash ]; then ok "--real-trash is /usr/bin/trash with ${pre//$FX\//} first on PATH"
+	else bad "--real-trash with ${pre//$FX\//} first on PATH -> '$rt' (want /usr/bin/trash)"; fi
+done
+rt=$(env -u TRASH_GUARD_REAL_TRASH PATH="$FX/evil" /bin/sh "$SRC_BIN/trash-guard" --real-trash 2>&1)
+if [ "$rt" = /usr/bin/trash ]; then ok "--real-trash is /usr/bin/trash even when PATH holds only the stand-in (no uname on it)"
+else bad "--real-trash with PATH=evil only -> '$rt' (want /usr/bin/trash)"; fi
+# Exec arms: a COPY whose pinned file is missing (its '#P: darwin-trash' line edited), the
+# FAKE first on PATH. Both routes must refuse and never fall back to the fake. The copy is
+# proved not to resolve to /usr/bin/trash first, so no arm here can run the real trash.
+for t in trash trash-guard safe-rm rm; do [ -e "$SRC_BIN/$t" ] && cp "$SRC_BIN/$t" "$FX/pinbin/$t"; done
+awk -v f="$FX/nope/trash" '/#P: darwin-trash$/ { sub(/rt_darwin=\/usr\/bin\/trash/, "rt_darwin=" f) } { print }' "$SRC_BIN/trash-guard" > "$FX/pinbin/trash-guard"
+chmod +x "$FX/pinbin/trash-guard"
+rt=$(env -u TRASH_GUARD_REAL_TRASH PATH="$FX/fakebin:$PATH" "$FX/pinbin/trash-guard" --real-trash 2>/dev/null)
+if [ "$rt" = /usr/bin/trash ]; then
+	bad "INVALID TRIAL: the pin-missing copy still resolves to /usr/bin/trash (the edit missed); its exec arms were NOT run"
+else
+	for r in trash rm; do
+		D=$(fresh "$FX/tmproot"); mkdir -p "$D/plain"; : > "$LOGF"
+		if [ "$r" = trash ]; then c=("$FX/pinbin/trash"); else c=("$FX/pinbin/rm" -r); fi
+		ERR=$(cd "$D" && env -u TRASH_GUARD_REAL_TRASH HOME="$FHOME" TRASH_GUARD_TEMP_ROOTS="$FX/tmproot" PATH="$FX/fakebin:$PATH" "${c[@]}" "$D/plain" 2>&1 >/dev/null); RC=$?
+		LOG=$(cat "$LOGF")
+		if [ "$RC" -ne 0 ] && [ -e "$D/plain" ] && [ -z "$LOG" ]; then ok "$r: /usr/bin/trash missing -> refused, target in place, the fake on PATH never run ($(first_line "$ERR"))"
+		else bad "$r: pin missing -> rc=$RC, target present: $([ -e "$D/plain" ] && echo yes || echo NO), fake calls: ${LOG:-none}"; fi
+	done
+fi
+else
 section "11. The shim finds the REAL trash: never itself, never another copy, refuses when none"
 CLASS=new
 if [ -x "$SRC_BIN/trash" ]; then
@@ -571,6 +609,7 @@ if [ -x "$SRC_BIN/trash" ]; then
 	done
 else
 	bad "no trash shim in $SRC_BIN"
+fi
 fi
 }
 
@@ -627,7 +666,7 @@ if [ "$MODE" = mutants ]; then
 	# file:tag. trash-guard:blank is the one that proves `trash ''` is still refused;
 	# safe-rm:rm-blank-skip proves the rm route's quiet skip is really tested.
 	specs="trash-guard:blank trash-guard:cwd trash-guard:timeout trash-guard:temp trash-guard:noseam safe-rm:rm-blank-skip safe-rm:rm-blank-warn"
-	[ "$(uname -s)" = Darwin ] && specs="$specs safe-rm:mac-no-trash-put"
+	[ "$(uname -s)" = Darwin ] && specs="$specs safe-rm:mac-no-trash-put trash-guard:darwinpin"
 	for spec in $specs; do
 		mf=${spec%%:*}; m=${spec#*:}
 		MD=$FX/mut-$m; mkdir -p "$MD"

@@ -123,7 +123,9 @@ fi
 # say a link to /bin/rm, was run on the targets. Linux keeps it until the Linux real-trash rule
 # is settled (W-20260929-A157).
 trash_put_ok=1
-[ "$(uname -s)" = Darwin ] && trash_put_ok=0   #M: mac-no-trash-put
+os=$(/usr/bin/uname -s 2>/dev/null || /bin/uname -s 2>/dev/null)   # absolute: PATH must not decide
+[ "$os" = Darwin ] && trash_put_ok=0   #M: mac-no-trash-put
+[ -z "$os" ] && trash_put_ok=0   # an unknown OS gets no PATH fallback either
 if real_trash=$("$TRASH_GUARD" --real-trash 2>/dev/null) && [ -n "$real_trash" ]; then
 	trash_cmd=$real_trash
 	restore_hint="recover: Finder -> Put Back"

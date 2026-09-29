@@ -253,7 +253,10 @@ selftest() {
 		case "$out" in *"$root/foreign2/trash is ahead of the dotfiles trash shim"*) ok "7 a trash AHEAD of the shim is named as skipping the guard" ;; *) bad "7 shadow" "$out" ;; esac
 		[ "$rc" = 1 ] && ok "7 exit 1" || bad "7 exit" "$rc"
 		out=$(HOME="$H" PATH="$H/.local/bin:$root/foreign2:/usr/bin:/bin" "$FXB/rm-reach-check" --quick 2>&1); rc=$?
-		case "$out" in *"ahead of"*) bad "8 behind the shim: 3a must stay quiet" "$out" ;; *"will run $root/foreign2/trash, not Apple's"*) ok "8 a trash BEHIND the shim: 3a quiet, 3b names what safe-rm will really run" ;; *) bad "8 behind" "$out" ;; esac
+		# Since the macOS pin (W-20260929-A169) a trash BEHIND the shim is never run: safe-rm and
+		# the shim use /usr/bin/trash whatever PATH holds, so this layout is fine and silent.
+		if [ -z "$out" ] && [ "$rc" = 0 ]; then ok "8 a trash BEHIND the shim: silent, rc 0 (the pin means it is never run)"
+		else bad "8 behind the shim: want silent and rc 0 (rc=$rc)" "$out"; fi
 		out=$(HOME="$H" PATH="$PIN" TRASH_GUARD_REAL_TRASH=/nonexistent "$FXB/rm-reach-check" --quick 2>&1); rc=$?
 		case "$out" in *"no real trash: safe-rm refuses every delete"*"TRASH_GUARD_REAL_TRASH was removed"*) ok "9 no real trash: named, with trash-guard's reason" ;; *) bad "9 no real trash" "$out" ;; esac
 		out=$(HOME="$H" PATH="$root/fx/zz:$PIN" "$FXB/rm-reach-check" --quick 2>&1); rc=$?

@@ -46,11 +46,31 @@ SAFE_RM="$here/safe-rm"
 RM_SHIM="$here/rm"
 [ -x "$SAFE_RM" ] || { echo "safe-rm-selftest: no safe-rm next to $0" >&2; exit 1; }
 
-if ! command -v trash >/dev/null 2>&1 && ! command -v trash-put >/dev/null 2>&1; then
-	echo "safe-rm-selftest: no trash tool installed -- cannot test the real path." >&2
-	echo "  macOS: it ships at /usr/bin/trash.   Linux: apt install trash-cli" >&2
+# Ask the question safe-rm asks (trash-guard --real-trash, then trash-put on Linux), never
+# `command -v trash`: that finds the trash SHIM and passed with no real trash at all
+# (W-20260929-A170).
+if ! "$here/trash-guard" --real-trash >/dev/null 2>&1 \
+	&& { [ "$(uname -s)" = Darwin ] || ! command -v trash-put >/dev/null 2>&1; }; then
+	echo "safe-rm-selftest: no real trash -- cannot test the real path. $("$here/trash-guard" --real-trash 2>&1 >/dev/null)" >&2
+	echo "  macOS 15 and later ship /usr/bin/trash.   Linux: apt install trash-cli" >&2
 	exit 1
 fi
+
+# A COPY of safe-rm and its trash-guard whose real trash is a stub: trash-guard's tagged
+# `#P: real-trash` line is set in the copy. PATH no longer chooses the real trash on macOS
+# (W-20260929-A169), so a stub first on PATH would be ignored and the REAL trash would run.
+# The copy is proved to resolve to the stub before it is used; if not, the whole run stops.
+stubbed_pair() { # $1 = folder for the copies, $2 = the stub -> prints the copied safe-rm
+	mkdir -p "$1"
+	cp "$SAFE_RM" "$1/safe-rm"
+	awk -v f="$2" '/#P: real-trash$/ { sub(/rt_fixed=""/, "rt_fixed=\"" f "\"") } { print }' "$here/trash-guard" > "$1/trash-guard"
+	chmod +x "$1/safe-rm" "$1/trash-guard"
+	if [ "$("$1/trash-guard" --real-trash 2>/dev/null)" != "$2" ]; then
+		echo "safe-rm-selftest: STOPPED: the copy in $1 does not resolve to its stub; an arm could have run the real trash." >&2
+		exit 1
+	fi
+	printf '%s' "$1/safe-rm"
+}
 
 pass=0
 fail=0
@@ -182,8 +202,9 @@ d=$(newdir "liar")
 mkdir -p "$d/bin"
 printf '#!/bin/sh\nexit 0\n' > "$d/bin/trash"
 chmod +x "$d/bin/trash"
-: > "$d/x.txt"
-OUT=$( (CDPATH= cd -- "$d" && PATH="$d/bin:/usr/bin:/bin" "$SAFE_RM" x.txt) 2>&1 ); ST=$?
+liar_rm=$(stubbed_pair "$d/pair" "$d/bin/trash") || exit 1
+touch "$d/x.txt"
+OUT=$( (CDPATH= cd -- "$d" && PATH="$d/bin:/usr/bin:/bin" "$liar_rm" x.txt) 2>&1 ); ST=$?
 [ "$VERBOSE" -eq 1 ] && say "$OUT"
 if [ "$ST" -ne 0 ] && [ -e "$d/x.txt" ]; then
 	ok "caught a trash tool that exits 0 without acting"
@@ -397,10 +418,11 @@ fi
 mkdir -p "$ROOT/stubbin"
 printf '#!/bin/sh\necho called >> "%s/stub.log"\nexit 0\n' "$ROOT" > "$ROOT/stubbin/trash"
 chmod +x "$ROOT/stubbin/trash"
-: > "$ROOT/stub.log"
+touch "$ROOT/stub.log"
+stub_rm=$(stubbed_pair "$ROOT/stubpair" "$ROOT/stubbin/trash") || exit 1
 sysfail=""
 for p in / /Users /Applications /System /Library /usr /etc /var /Volumes; do
-	OUT=$(PATH="$ROOT/stubbin:/usr/bin:/bin" "$SAFE_RM" -rf "$p" 2>&1); ST=$?
+	OUT=$(PATH="$ROOT/stubbin:/usr/bin:/bin" "$stub_rm" -rf "$p" 2>&1); ST=$?
 	[ "$ST" -eq 0 ] && sysfail="${sysfail} $p"
 done
 if [ -z "$sysfail" ] && [ ! -s "$ROOT/stub.log" ]; then

@@ -16,8 +16,9 @@
 #      `--` convention, and a target after it that starts with `-` is passed as ./NAME, the
 #      same fix safe-rm uses (trash exits 0 on an option it does not know and skips it).
 #   2. Runs `trash-guard --check` on the targets. Any refusal: exit 1, nothing trashed.
-#   3. Execs the REAL trash: `trash-guard --real-trash`, the first `trash` on PATH that is
-#      not a copy of this shim. None found: refuse. It never recurses into itself.
+#   3. Execs the REAL trash: `trash-guard --real-trash`. macOS: /usr/bin/trash, never a PATH
+#      search (A169). Linux: the first `trash` on PATH that is not a copy of this shim. None
+#      found: refuse. It never recurses into itself.
 #
 # WHAT IT CANNOT COVER
 #   /usr/bin/trash typed by path, `command trash`, `env trash`: for an AGENT the Bash hook
