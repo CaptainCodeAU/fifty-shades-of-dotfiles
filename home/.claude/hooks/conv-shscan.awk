@@ -203,7 +203,7 @@ function handle_redir(k,    c, ws, d) {
     c = C[P]
     if (c == "<" && C[P + 1] == "<" && C[P + 2] == "<") {
         P += 3; skip_blanks(); ws = P; parse_word()
-        if (k > 0) HBODY[k] = HBODY[k] "\n" substr(S, ws, P - ws)   # A47: a here-string's text
+        if (k > 0) HBODY[k] = HBODY[k] "\n" pj_dq(substr(S, ws, P - ws))   # A47/A50: a here-string's text, unquoted
     } else if (c == "<" && C[P + 1] == "<") {
         P += 2; d = 0
         if (C[P] == "-") { d = 1; P++ }
@@ -732,17 +732,6 @@ function guard_check(    k, j, n, a, w, b, s, i, t) {
                 if (g_brew_sub(s)) { verdict("guard", "DENY", g_brew_msg(s)); return }
             }
         }
-        if (unq(w) == "eval" && !WQ[k, j]) {
-            t = ""
-            for (a = j + 1; a <= n; a++) t = t " " WR[k, a]
-            gsub(/["']/, "", t)
-            s = g_crude(t)
-            if (s != "") { verdict("guard", "DENY", s " (inside eval)"); return }
-        }
-    }
-    for (i = 1; i <= BTN; i++) {
-        s = g_crude(BT[i])
-        if (s != "") { verdict("guard", "DENY", s " (inside backticks)"); return }
     }
     s = rd_check()
     if (s != "") { verdict("guard", "DENY", s); return }
@@ -1222,19 +1211,15 @@ function fp_check(    k, j, n, a, w, v, gi, tn, b, s, t, ex, i) {
             else { v = unq(WR[k, a]); FC[FCN + 1] = (v == "" || v == "-" ? "" : fp_join(FC[FCN], v)); FCN++ }
             continue
         }
+        # A50: eval, sh -c and friends are re-read as commands by gd_main. eval of a
+        # command substitution cannot be read (its text exists only at run time), so it
+        # keeps the crude match.
         if (w == "eval" && !WQ[k, j]) {
             t = ""
             for (a = j + 1; a <= n; a++) t = t " " WR[k, a]
-            s = fp_crude(t)
-            if (s != "") return fp_msg(s " (inside eval)")
+            if (t ~ /\$\(|`/) { s = fp_crude(t); if (s != "") return fp_msg(s " (inside eval of a substitution)") }
         }
         b = base(w)
-        if (b == "sh" || b == "bash" || b == "zsh" || b == "dash" || b == "ksh") {
-            for (a = j + 1; a <= n; a++) if (WR[k, a] ~ /^-[A-Za-z]*c[A-Za-z]*$/) {
-                s = fp_crude(WR[k, a + 1])
-                if (s != "") return fp_msg(s " (inside " b " -c)")
-            }
-        }
         # Find git: the command word, or any word after a hard modifier (sudo -u x git).
         gi = 0; tn = 0; FPCFG = ""
         if (base(w) == "git") gi = j
@@ -1279,19 +1264,8 @@ function fp_check(    k, j, n, a, w, v, gi, tn, b, s, t, ex, i) {
         s = fp_push(tn)
         if (s != "") return fp_xnote(s)
     }
-    # A47: a here-document or here-string whose reader is a shell (bash <<EOF, or
-    # cat <<EOF | sh): its text runs as commands, so it gets the crude match.
-    for (k = 1; k <= NC; k++) {
-        if (HBODY[k] == "") continue
-        b = fp_shell_of(k)
-        if (b == "") continue
-        s = fp_crude(HBODY[k])
-        if (s != "") return fp_msg(s " (inside a here-document fed to " b ")")
-    }
-    for (i = 1; i <= BTN; i++) {
-        s = fp_crude(BT[i])
-        if (s != "") return fp_msg(s " (inside backticks)")
-    }
+    # A47, then A50: here-documents and here-strings read by a shell, and backticks,
+    # are re-read as commands by gd_main, with every rule.
     # W-20260929-A53: a function definition alone no longer sends the whole text
     # to the crude match, because the scanner does record a function body's
     # commands and the loop above has read them. It still does when some word is
@@ -1770,6 +1744,59 @@ function pj_scan(ctx, ov, where,    k, j, n, a, w, b, ovk, t, lab) {
     }
 }
 
+# ------------------------------------------------------------------ guard: nested text
+# W-20260929-A50 (D-20260929-A24, option B). The text of bash/sh/zsh/dash/ksh -c, eval,
+# backticks, a here-document or here-string read by a shell, and echo/printf piped into a
+# shell, is parsed again as commands and every guard rule runs on it, the way the delete
+# guard's lexer and enforce-pj-workers already do. Until then guard mode guessed from the
+# words of those texts, which denied harmless text (bash -c "echo '...force...'") and
+# missed echo '...' | bash. eval of a command substitution still gets fp_check's crude
+# match: its text exists only at run time. At most 64 texts; more is denied.
+
+function gd_enqueue(t, where) {
+    if (QN >= 64) { GDOVER = 1; return }
+    QN++; QT[QN] = t; QW[QN] = where
+}
+function gd_nested(pw,    k, j, n, a, w, b, b2, t, i, pre) {
+    pre = (pw != "" ? pw ", then " : "")
+    for (k = 1; k <= NC; k++) {
+        j = eff(k); n = CNW[k]
+        if (j <= n) {
+            b = base(unq(WR[k, j]))
+            if (b ~ /^(bash|sh|zsh|dash|ksh)$/) {
+                for (a = j + 1; a <= n; a++) {
+                    w = unq(WR[k, a])
+                    if (w ~ /^-[a-zA-Z]*c[a-zA-Z]*$/) { if (a < n) gd_enqueue(pj_dq(WR[k, a + 1]), pre b " -c"); break }
+                    if (w !~ /^[-+]/) break
+                }
+            } else if (b == "eval" && !WQ[k, j]) {
+                t = ""; for (a = j + 1; a <= n; a++) t = t (a > j + 1 ? " " : "") pj_dq(WR[k, a])
+                gd_enqueue(t, pre "eval")
+            } else if ((b == "echo" || b == "printf" || b == "print") && k < NC && (CSA[k] == "|" || CSA[k] == "|&") && (b2 = fp_shell_of(k + 1)) != "") {
+                t = ""
+                for (a = j + 1; a <= n; a++) {
+                    w = unq(WR[k, a])
+                    if (b != "printf" && t == "" && w ~ /^-[neE]+$/) continue
+                    t = t (t != "" ? " " : "") pj_dq(WR[k, a])
+                }
+                gd_enqueue(t, pre b " piped to " b2)
+            }
+        }
+        if (HBODY[k] != "" && (b2 = fp_shell_of(k)) != "") gd_enqueue(HBODY[k], pre "a here-document fed to " b2)
+    }
+    for (i = 1; i <= BTN; i++) gd_enqueue(BT[i], pre "backticks")
+}
+function gd_main(    qi) {
+    QN = 1; QT[1] = S; QW[1] = ""; GDOVER = 0
+    for (qi = 1; qi <= QN; qi++) {
+        if (qi > 1) { pj_load(QT[qi]); parse_list(1, "", 0, "^"); if (HDN) unsure("here-document with no body") }
+        guard_check()
+        if (V["guard"] == "DENY") { if (QW[qi] != "") M["guard"] = M["guard"] " (read inside " QW[qi] ")"; return }
+        gd_nested(QW[qi])
+    }
+    if (GDOVER) verdict("guard", "DENY", "validate-bash: more than 64 nested shell texts (-c, eval, backticks, heredocs) to read; refusing rather than guessing")
+}
+
 function pj_load(t) { S = t; N = split(S, C, ""); P = 1; NC = 0; HDN = 0; BG = 0; UNSURE = ""; UNSURE_NF = ""; SUBSH = 0; BTN = 0; split("", HBODY) }
 
 function pjw_main(    qi, i) {
@@ -1799,7 +1826,7 @@ END {
     parse_list(1, "", 0, "^")
     if (HDN) unsure("here-document with no body")
     if (mode == "guard" || mode == "builtin" || mode == "reset") {   # deny-only modes: never compose
-        if (mode == "guard") guard_check(); else if (mode == "builtin") builtin_check(); else reset_check()
+        if (mode == "guard") gd_main(); else if (mode == "builtin") builtin_check(); else reset_check()
         print V[mode]; print M[mode]; exit 0
     }
     if (mode == "uv")        { own = "uv";   uv_check(); pnpm_check(); others = "pnpm" }

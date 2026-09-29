@@ -382,6 +382,34 @@ if [ "${1:-}" = "--selftest" ]; then
   conv_arm allow 'A37 gh api GET'                              'gh api repos/o/r'
   conv_arm allow 'A37 gh release view'                         'gh release view v1.0'
   conv_arm allow 'A37 git branch -d local only'                'git branch -d feature'
+  # W-20260929-A50 (D-20260929-A24, option B): the scanner reads inside -c, eval, backticks
+  # and shell-fed heredocs / here-strings / pipes, instead of guessing from the words. The
+  # allow arms were wrong denies until then (the comparison's N rows); the deny arms now
+  # deny by reading the inner command. Shapes from docs/lexer-comparison/cases.tsv.
+  echo "=== I. nested shell text is read, not guessed (A50) ==="
+  conv_arm allow 'A50 bash -c, feature push (N12)'             "bash -c 'git push --force origin feature'"
+  conv_arm allow 'A50 sh -c, feature push (N13)'               'sh -c "git push --force origin feature"'
+  conv_arm allow 'A50 bash -lc, feature push (N15)'            "bash -lc 'git push --force origin feature'"
+  conv_arm allow 'A50 eval "...", feature push (N16)'          'eval "git push --force origin feature"'
+  conv_arm allow 'A50 eval words, feature push (N17)'          'eval git push --force origin feature'
+  conv_arm allow 'A50 backticks, feature push (N11)'           'echo `git push --force origin feature`'
+  conv_arm allow 'A50 /usr/bin/env bash -c, feature (N46)'     "/usr/bin/env bash -c 'git push --force origin feature'"
+  conv_arm allow 'A50 heredoc to bash, feature push (N48)'     $'bash <<\'EOF\'\ngit push --force origin feature\nEOF'
+  conv_arm allow 'A50 here-string, feature push (N51)'         "bash <<< 'git push --force origin feature'"
+  conv_arm allow 'A50 cat heredoc | bash, feature (N50)'       $'cat <<\'EOF\' | bash\ngit push --force origin feature\nEOF'
+  conv_arm allow 'A50 nested -c, feature push (N68)'           "bash -c \"bash -c 'git push --force origin feature'\""
+  conv_arm allow 'A50 prose inside bash -c'                    "bash -c \"echo 'git push --force origin main'\""
+  conv_arm allow 'A50 brew list inside bash -c'                "bash -c 'brew list'"
+  conv_arm deny  'A50 bash -c, main push'                      "bash -c 'git push --force origin main'"
+  conv_arm deny  'A50 eval, main push'                         'eval "git push --force origin main"'
+  conv_arm deny  'A50 backticks, main push'                    'echo `git push --force origin main`'
+  conv_arm deny  'A50 here-string, main push'                  "bash <<< 'git push --force origin main'"
+  conv_arm deny  'A50 echo ... | bash, main push (S52)'        "echo 'git push --force origin main' | bash"
+  conv_arm deny  'A50 printf ... | sh, main push (S53)'        "printf 'git push --force origin main' | sh"
+  conv_arm deny  'A50 nested -c, main push (S68)'              "bash -c \"bash -c 'git push --force origin main'\""
+  conv_arm deny  'A50 brew install inside bash -c'             "bash -c 'brew install jq'"
+  conv_arm deny  'A50 rule E inside bash -c'                   "bash -c \"sed -i '' s/a/b/ ~/.claude/hooks/validate-bash.sh\""
+  conv_arm deny  'A50 rule F inside eval'                      'eval "git commit --no-verify -m x"'
   echo "=== E. writes to protected live files: DENY; reads and repo edits: ALLOW ==="
   conv_arm deny  'A35 sed -i on the live validate-bash'        "sed -i '' 's/x/y/' ~/.claude/hooks/validate-bash.sh"
   conv_arm deny  'A35 $HOME spelling, in double quotes'        'sed -i "" s/a/b/ "$HOME/.claude/hooks/validate-bash.sh"'
@@ -490,7 +518,10 @@ if [ "${1:-}" = "--selftest" ]; then
   conv_arm deny  'env VAR=1 git'                              'env FOO=1 git push -f origin main'   '' "$F"
   conv_arm deny  'inside $(...)'                              'x=$(git push -f origin main)'        '' "$F"
   conv_arm deny  'inside eval'                                'eval "git push -f origin main"'      '' "$F"
-  conv_arm deny  'inside bash -c'                             "bash -c 'git push -f'"               '' "$F"
+  # A50: read, not guessed. On a feature branch a bare -f pushes the feature (allowed);
+  # the crude match denied it until 2026-09-29. On main it must still deny.
+  conv_arm allow 'inside bash -c, on feature (was a crude deny)' "bash -c 'git push -f'"               '' "$F"
+  conv_arm deny  'inside bash -c, on main'                    "bash -c 'git push -f'"               '' "$M"
   conv_arm deny  'alias gp -f, on main'                       'gp -f'                               '' "$M"
   conv_arm deny  'alias gp origin +main'                      'gp origin +main'                     '' "$F"
   conv_arm deny  'alias gpsup --force, on main'               'gpsup --force'                       '' "$M"
@@ -551,7 +582,8 @@ if [ "${1:-}" = "--selftest" ]; then
   conv_arm deny  'gpf origin main, on feature'                'gpf origin main'                     '' "$F"
   conv_arm deny  'gpf after &&, on main'                      'git fetch && gpf'                    '' "$M"
   conv_arm deny  'gpf inside $(...), on main'                 'x=$(gpf)'                            '' "$M"
-  conv_arm deny  'gpf inside eval (crude)'                    'eval "gpf"'                          '' "$F"
+  conv_arm allow 'gpf inside eval, on feature (was a crude deny)' 'eval "gpf"'                       '' "$F"
+  conv_arm deny  'gpf inside eval, on main'                   'eval "gpf"'                          '' "$M"
   conv_arm deny  'gpf, non-repo cwd (fail closed)'            'gpf'                                 '' "$FX/nonrepo"
   conv_arm deny  'gpf, feature tracking main'                 'gpf'                                 '' "$FX/upmain"
   conv_arm allow 'gpf, on feature'                            'gpf'                                 '' "$F"
