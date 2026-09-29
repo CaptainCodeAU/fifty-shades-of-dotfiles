@@ -1,0 +1,606 @@
+#!/usr/bin/env bash
+# trash-guard-selftest -- regression suite for the trash guard: both Trash routes and the hook.
+#
+# WHY THIS EXISTS
+# ---------------
+# 2026-09-29: a cleanup ran `trash ''` three times and macOS /usr/bin/trash moved the whole engage
+# repo to the Trash each time. trash-guard now stands in front of BOTH routes (the `trash` PATH
+# shim and safe-rm, which the rm shim and the zsh rm() function call), and the Bash hook
+# enforce-no-permanent-delete.sh denies an agent's typed /usr/bin/trash, command trash and env
+# trash. This suite proves every rule, on both routes, with the verdicts compared.
+#
+# NOTHING HERE CAN REACH THE REAL TRASH OR A REAL FOLDER. Every destructive arm runs against
+# fixtures in its own mktemp directory, and the "real trash" is a FAKE (TRASH_GUARD_REAL_TRASH,
+# and first on PATH) that records each call and moves the targets into a fixture folder. Arms
+# that name a real folder (the real home) use `trash-guard --check`, which never deletes. The
+# one exception is --e2e, which trashes a single throwaway temp file with the real trash and
+# must run outside the Claude sandbox (the sandbox denies the Trash).
+#
+# USAGE
+#   trash-guard-selftest                run every arm against the copies beside this file
+#   trash-guard-selftest --against DIR  run against another set (DIR holds safe-rm, rm, and
+#                                       enforce-no-permanent-delete.sh; trash and trash-guard
+#                                       may be missing, as on master before this change)
+#   trash-guard-selftest --mutants      break one rule at a time in a copy; each must be caught
+#   trash-guard-selftest --e2e          the real /usr/bin/trash on one throwaway temp file
+#   -q                                  print failures and the summary only
+#
+# A refusal arm passes only when ALL hold: exit non-zero, stderr names the rule id, the fake
+# trash was never called, and every target is still there (test -e / test -L). An allow arm
+# passes only when the fake trash got exactly the expected call. Arms are NEW (the behaviour
+# this change adds; they must fail against master) or CONTROL (must pass on both).
+#
+# The fixture directory is left in $TMPDIR on purpose: removing it would go to the Trash (or
+# fail in the sandbox), and the OS clears $TMPDIR. Mode-000 fixtures are opened again on exit.
+
+# Read this whole file before running any of it, so an edit saved mid-run cannot change
+# the run (W-20260923-A57). A crash under it exits 127 (unbound var) or 1 (bash 3.2 syntax
+# error); `selftest-whole-read --help` has the map. Do not move or reword these lines.
+[ -n "${SELFTEST_WHOLE_READ-}" ] || SELFTEST_WHOLE_READ=1 exec "$BASH" -c 'shopt -u sourcepath; . "$0"' "$0" "$@"
+unset SELFTEST_WHOLE_READ
+
+set -u
+
+here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+MODE=run
+QUIET=0
+AGAINST=""
+HOOK_ONLY=0
+while [ $# -gt 0 ]; do
+	case "$1" in
+		--against) AGAINST=${2-}; shift; [ $# -gt 0 ] && shift ;;
+		--mutants) MODE=mutants; shift ;;
+		--e2e) MODE=e2e; shift ;;
+		--hook-only) HOOK_ONLY=1; shift ;;
+		-q) QUIET=1; shift ;;
+		-h | --help) sed -n '2,/^# Read this whole file/p' "$0" | sed '$d'; exit 0 ;;
+		*) echo "trash-guard-selftest: unknown argument: $1" >&2; exit 2 ;;
+	esac
+done
+
+BIN=${TG_BIN:-$here}
+HOOK=${TG_HOOK:-$here/../../.claude/hooks/enforce-no-permanent-delete.sh}
+if [ -n "$AGAINST" ]; then
+	BIN=$AGAINST
+	HOOK=$AGAINST/enforce-no-permanent-delete.sh
+fi
+
+FX=$(mktemp -d "${TMPDIR:-/tmp}/trash-guard-selftest.XXXXXX") || { echo "cannot make a fixture dir" >&2; exit 1; }
+LOCKED=""
+reopen() { [ -n "$LOCKED" ] && chmod -R u+rwx $LOCKED 2>/dev/null; return 0; }
+trap reopen EXIT INT TERM HUP
+
+now_ms() { perl -MTime::HiRes=time -e 'printf "%d", time * 1000'; }
+
+pass=0; fail=0; pass_new=0; fail_new=0; pass_ctl=0; fail_ctl=0; bsafe=0; nrefuse=0
+CLASS=new
+ok() {
+	pass=$((pass + 1))
+	if [ "$CLASS" = new ]; then pass_new=$((pass_new + 1)); else pass_ctl=$((pass_ctl + 1)); fi
+	[ "$QUIET" -eq 1 ] || printf '  ok    [%s] %s\n' "$CLASS" "$1"
+}
+bad() {
+	fail=$((fail + 1))
+	if [ "$CLASS" = new ]; then fail_new=$((fail_new + 1)); else fail_ctl=$((fail_ctl + 1)); fi
+	printf '  FAIL  [%s] %s\n' "$CLASS" "$1"
+}
+section() { [ "$QUIET" -eq 1 ] || printf '\n%s\n' "$1"; }
+first_line() { printf '%s' "$1" | sed -n '1p'; }
+
+# ---------------------------------------------------------------- fixtures
+FAKE=$FX/fakebin/trash
+LOGF=$FX/trash.log
+FHOME=$FX/home
+mkdir -p "$FX/fakebin" "$FX/fake-Trash" "$FX/outside" "$FX/tmproot" "$FX/links" "$FHOME/CODE/CaptainCodeAU/keep"
+: > "$LOGF"
+cat > "$FAKE" <<EOF
+#!/bin/sh
+# FAKE real trash for trash-guard-selftest: logs every call, moves each target into a fixture
+# folder. It never touches the real Trash.
+{ printf 'CALL'; for a in "\$@"; do printf ' <%s>' "\$a"; done; printf '\n'; } >> "$LOGF"
+n=0
+for a in "\$@"; do
+	case "\$a" in -*) continue ;; esac
+	[ -e "\$a" ] || [ -L "\$a" ] || continue
+	n=\$((n + 1))
+	/bin/mv -- "\$a" "$FX/fake-Trash/\$\$.\$n" || exit 1
+done
+exit 0
+EOF
+chmod +x "$FAKE"
+
+g() { git -c user.name=tg -c user.email=tg@example.invalid -c core.hooksPath=/dev/null \
+	-c commit.gpgsign=false -c init.defaultBranch=main "$@" >/dev/null 2>&1; }
+mkrepo() { mkdir -p "$1" && g init -q "$1"; }
+mkwt() { # $1 = folder to hold main/ -> WT = a real linked worktree at main/.worktree/wt
+	mkrepo "$1/main" && : > "$1/main/f" && g -C "$1/main" add f && g -C "$1/main" commit -q -m init \
+		&& g -C "$1/main" worktree add -q -b wt "$1/main/.worktree/wt"
+	WT=$1/main/.worktree/wt
+}
+fresh() { mktemp -d "$1/c.XXXXXX"; }
+
+# ---------------------------------------------------------------- running a route
+# run_route ROUTE CWD ARG... -> RC, ERR, LOG. XENV (array) adds or overrides env for one run.
+XENV=()
+run_route() {
+	local route=$1 cwd=$2
+	shift 2 || set --
+	local -a cmd
+	case "$route" in
+		trash) if [ -x "$BIN/trash" ]; then cmd=("$BIN/trash"); else cmd=("$FAKE"); fi ;;   # no shim: trash IS the real one
+		rm) cmd=("$BIN/rm" -r) ;;
+		check) cmd=("$BIN/trash-guard" --check --) ;;
+	esac
+	: > "$LOGF"
+	ERR=$(cd "$cwd" 2>/dev/null && env HOME="$FHOME" PATH="$FX/fakebin:$PATH" \
+		TRASH_GUARD_REAL_TRASH="$FAKE" TRASH_GUARD_TEMP_ROOTS="$FX/tmproot" \
+		${XENV[@]+"${XENV[@]}"} "${cmd[@]}" "$@" 2>&1 >/dev/null)
+	RC=$?
+	LOG=$(cat "$LOGF")
+}
+
+KEEP=()
+VERDICT=""
+missing_keep() {
+	local p m=""
+	for p in ${KEEP[@]+"${KEEP[@]}"}; do [ -e "$p" ] || [ -L "$p" ] || m="$m $p"; done
+	printf '%s' "$m"
+}
+expect_refused() { # $1 = rule id
+	local miss; miss=$(missing_keep)
+	nrefuse=$((nrefuse + 1))
+	[ "$RC" -ne 0 ] && [ -z "$LOG" ] && [ -z "$miss" ] && bsafe=$((bsafe + 1))
+	if [ "$RC" -ne 0 ] && [[ $ERR == *"[$1]"* ]] && [ -z "$LOG" ] && [ -z "$miss" ]; then
+		VERDICT="REFUSED[$1]"
+		ok "$ROUTE: $LABEL -> refused [$1]; target in place; fake trash not called"
+	else
+		VERDICT="WRONG(rc=$RC)"
+		bad "$ROUTE: $LABEL -> want refused [$1]; rc=$RC; fake calls: ${LOG:-none}; gone:${miss:- nothing}; stderr: $(first_line "$ERR")"
+	fi
+}
+expect_allowed() { # $1 = the exact fake-trash log expected
+	local miss; miss=$(missing_keep)
+	if [ "$RC" -eq 0 ] && [ "$LOG" = "$1" ] && [[ $ERR != *REFUSED* ]] && [ -z "$miss" ]; then
+		VERDICT=ALLOWED
+		ok "$ROUTE: $LABEL -> allowed; fake trash got: ${LOG:-no call}"
+	else
+		VERDICT="WRONG(rc=$RC)"
+		bad "$ROUTE: $LABEL -> want allowed with [${1:-no call}]; rc=$RC; got [${LOG:-no call}]; gone:${miss:- nothing}; stderr: $(first_line "$ERR")"
+	fi
+}
+
+agree=0; cases=0; disagree=""
+both() { # $1 = new|control, $2 = label, $3 = case function (reads ROUTE)
+	CLASS=$1; LABEL=$2
+	local vt vr
+	ROUTE=trash; "$3"; vt=$VERDICT
+	ROUTE=rm; "$3"; vr=$VERDICT
+	cases=$((cases + 1))
+	if [ "$vt" = "$vr" ]; then agree=$((agree + 1)); else disagree="$disagree
+    $LABEL: trash=$vt rm=$vr"; fi
+}
+
+# A generic "world": D = a fresh folder under BASE, with D/w/sub and a canary at D/w/canary.
+# The cwd is D/w (or D/w/sub with CWDSUB=sub). ARG may say @W@ for D/w. WANT: a rule id.
+BASE=$FX/outside; CWDSUB=""; ARG=""; WANT=""
+c_world() {
+	local D; D=$(fresh "$BASE")
+	mkdir -p "$D/w/sub"; : > "$D/w/canary"
+	ln -s "$D/w" "$D/wlink"
+	KEEP=("$D/w/canary")
+	local t=${ARG//@W@/$D/w}
+	t=${t//@L@/$D/wlink}
+	run_route "$ROUTE" "$D/w${CWDSUB:+/$CWDSUB}" "$t"
+	expect_refused "$WANT"
+}
+
+run_arms() {
+# ---------------------------------------------------------------- rule 1: blank
+section "1. A blank argument is refused everywhere (the incident: trash '' moves the current folder)"
+BASE=$FX/outside; CWDSUB=""; WANT=blank
+ARG='';            both new "blank '' (outside temp)" c_world
+ARG="";            both new 'blank "" (outside temp)' c_world
+ARG=' ';           both new "blank ' ' (outside temp)" c_world
+ARG=$'\t\n ';      both new "blank tab-newline-space" c_world
+BASE=$FX/tmproot
+ARG='';            both new "blank '' INSIDE a temp root" c_world
+ARG=' ';           both new "blank ' ' INSIDE a temp root" c_world
+
+# ---------------------------------------------------------------- rule 1: the current folder
+section "2. The current folder, by any spelling, and any folder holding it"
+BASE=$FX/outside; CWDSUB=""; WANT=cwd
+ARG=.;             both new "'.'" c_world
+ARG=./;            both new "'./'" c_world
+ARG=.//;           both new "'.//'" c_world
+ARG=sub/..;        both new "'sub/..'" c_world
+ARG=@W@;           both new "the current folder by absolute path" c_world
+ARG=@W@/;          both new "the current folder by absolute path with /" c_world
+ARG=@L@/;          both new "the current folder through a symlink with /" c_world
+BASE=$FX/tmproot
+ARG=.;             both new "'.' INSIDE a temp root" c_world
+ARG=@W@;           both new "the current folder by path INSIDE a temp root" c_world
+BASE=$FX/outside; CWDSUB=sub; WANT=contains-cwd
+ARG=..;            both new "'..' (a parent of the cwd)" c_world
+ARG=@W@;           both new "a parent of the cwd by absolute path" c_world
+ARG=../..;         both new "'../..' (a grandparent of the cwd)" c_world
+BASE=$FX/tmproot
+ARG=..;            both new "'..' INSIDE a temp root" c_world
+CWDSUB=""
+
+# ---------------------------------------------------------------- rule 1: the floor list
+section "3. The floor list: /, ~, ~/CODE, ~/CODE/CaptainCodeAU (fixture HOME), every spelling"
+c_floor() {
+	mkdir -p "$FHOME/CODE/CaptainCodeAU/keep"
+	local D; D=$(fresh "$FX/outside")
+	KEEP=("$FHOME/CODE/CaptainCodeAU/keep")
+	local t=${ARG//@H@/$FHOME}
+	run_route "$ROUTE" "$D" "$t"
+	expect_refused floor
+}
+ARG=/;                               both new "'/'" c_floor
+ARG=@H@;                             both new "~ (fixture HOME)" c_floor
+ARG=@H@/;                            both new "~/ " c_floor
+ARG=@H@/.;                           both new "~/." c_floor
+ARG=../../home;                      both new "~ as a relative .. path" c_floor
+ARG=@H@/CODE;                        both new "~/CODE" c_floor
+ARG=@H@/CODE/;                       both new "~/CODE/" c_floor
+ARG=@H@/./CODE;                      both new "\$HOME/./CODE" c_floor
+ARG=../../home/CODE;                 both new "~/CODE as a relative .. path" c_floor
+ARG=@H@/CODE/CaptainCodeAU;          both new "~/CODE/CaptainCodeAU" c_floor
+ARG=@H@/CODE/CaptainCodeAU/;         both new "~/CODE/CaptainCodeAU/" c_floor
+ARG=@H@/CODE/./CaptainCodeAU;        both new "\$HOME/CODE/./CaptainCodeAU" c_floor
+ARG=../../home/CODE/CaptainCodeAU;   both new "~/CODE/CaptainCodeAU as a relative .. path" c_floor
+ln -s "$FHOME" "$FX/links/home"; ln -s "$FHOME/CODE" "$FX/links/code"; ln -s "$FHOME/CODE/CaptainCodeAU" "$FX/links/cau"
+ARG=$FX/links/home/;                 both new "~ through a symlink (link/)" c_floor
+ARG=$FX/links/code/;                 both new "~/CODE through a symlink (link/)" c_floor
+ARG=$FX/links/cau/;                  both new "~/CODE/CaptainCodeAU through a symlink (link/)" c_floor
+c_floor_link_itself() {
+	mkdir -p "$FHOME/CODE/CaptainCodeAU/keep"
+	local D; D=$(fresh "$FX/outside")
+	ln -s "$FHOME/CODE" "$D/codelink"
+	KEEP=("$FHOME/CODE/CaptainCodeAU/keep")
+	run_route "$ROUTE" "$D" "$D/codelink"
+	expect_allowed "CALL <$D/codelink>"
+	[ -L "$D/codelink" ] && bad "$ROUTE: the link itself should have moved to the fake trash"
+}
+both control "a symlink to ~/CODE, named WITHOUT a slash, is the link: removable, ~/CODE untouched" c_floor_link_itself
+
+# ---------------------------------------------------------------- rule 2: repos outside temp
+section "4. Outside the temp folders: a repo root, or a folder holding a repo"
+c_repo_root() { local D; D=$(fresh "$FX/outside"); mkrepo "$D/repo"; KEEP=("$D/repo/.git"); run_route "$ROUTE" "$D" "$D/repo"; expect_refused repo-root; }
+c_gitfile_root() { local D; D=$(fresh "$FX/outside"); mkdir -p "$D/sm"; echo "gitdir: $D/nowhere/.git/modules/sm" > "$D/sm/.git"; KEEP=("$D/sm/.git"); run_route "$ROUTE" "$D" "$D/sm"; expect_refused repo-root; }
+c_scaffoldings() {
+	local D; D=$(fresh "$FX/outside")
+	mkrepo "$D/Scaffoldings/fifty-shades-of-dotfiles"; mkdir -p "$D/Scaffoldings/notes"; : > "$D/Scaffoldings/notes/n.md"
+	KEEP=("$D/Scaffoldings/fifty-shades-of-dotfiles/.git" "$D/Scaffoldings/notes/n.md")
+	run_route "$ROUTE" "$D" "$D/Scaffoldings"
+	expect_refused nested-repo
+}
+c_deep_nested() { local D; D=$(fresh "$FX/outside"); mkrepo "$D/a/b/c/d/repo"; KEEP=("$D/a/b/c/d/repo/.git"); run_route "$ROUTE" "$D" "$D/a"; expect_refused nested-repo; }
+both new "a repo root (.git directory)" c_repo_root
+both new "a folder holding a .git FILE (submodule shape, not a worktree)" c_gitfile_root
+both new "a folder shaped like ~/CODE/Scaffoldings (holds fifty-shades-of-dotfiles)" c_scaffoldings
+both new "a repo four levels down" c_deep_nested
+
+# ---------------------------------------------------------------- rule 3: worktrees
+section "5. A linked worktree at <repo>/.worktree/<name> stays removable; one holding a repo does not"
+c_wt_ok() {
+	local D; D=$(fresh "$FX/outside"); mkwt "$D"
+	[ -f "$WT/.git" ] || { VERDICT=FIXTURE; bad "$ROUTE: fixture: git worktree add made no .git file at $WT"; return; }
+	KEEP=("$D/main/.git")
+	run_route "$ROUTE" "$D" "$WT"
+	expect_allowed "CALL <$WT>"
+}
+c_wt_nested() {
+	local D; D=$(fresh "$FX/outside"); mkwt "$D"; mkrepo "$WT/vendor/inner"
+	KEEP=("$WT/vendor/inner/.git" "$WT/.git")
+	run_route "$ROUTE" "$D" "$WT"
+	expect_refused nested-repo
+}
+c_wt_fake() {
+	local D; D=$(fresh "$FX/outside"); mkrepo "$D/main"; mkdir -p "$D/main/.worktree/x" "$D/elsewhere/.git/worktrees/x"
+	echo "gitdir: $D/elsewhere/.git/worktrees/x" > "$D/main/.worktree/x/.git"
+	KEEP=("$D/main/.worktree/x/.git")
+	run_route "$ROUTE" "$D" "$D/main/.worktree/x"
+	expect_refused repo-root
+}
+c_wt_foreign() {
+	local D; D=$(fresh "$FX/outside"); mkwt "$D/other"; mkrepo "$D/main"; mkdir -p "$D/main/.worktree/y"
+	echo "gitdir: $WT/../../.git/worktrees/wt" > "$D/main/.worktree/y/.git"
+	KEEP=("$D/main/.worktree/y/.git")
+	run_route "$ROUTE" "$D" "$D/main/.worktree/y"
+	expect_refused repo-root
+}
+both control "a real linked worktree (git worktree add) under .worktree/" c_wt_ok
+both new "a worktree that holds a nested repo" c_wt_nested
+both new "a .worktree/<name> whose .git file points outside its repo" c_wt_fake
+both new "a .worktree/<name> whose .git file points into ANOTHER repo's worktrees" c_wt_foreign
+
+# ---------------------------------------------------------------- rule 4: temp folders
+section "6. Inside a temp root, repos may go (rule 1 still holds there: see sections 1 and 2)"
+c_tmp_repo() { local D; D=$(fresh "$FX/tmproot"); mkrepo "$D/repo"; KEEP=(); run_route "$ROUTE" "$D" "$D/repo"; expect_allowed "CALL <$D/repo>"; }
+c_tmp_nested() { local D; D=$(fresh "$FX/tmproot"); mkrepo "$D/Scaff/r"; KEEP=(); run_route "$ROUTE" "$D" "$D/Scaff"; expect_allowed "CALL <$D/Scaff>"; }
+both new "a repo root inside a temp root" c_tmp_repo
+both new "a folder holding a repo inside a temp root" c_tmp_nested
+
+# ---------------------------------------------------------------- the bounded search
+section "7. The nested-repo search: a timeout or an unread folder REFUSES"
+c_plain_out() { local D; D=$(fresh "$FX/outside"); mkdir -p "$D/plain/x"; KEEP=("$D/plain/x"); run_route "$ROUTE" "$D" "$D/plain"; }
+c_slow() {
+	local t0 t1
+	t0=$(now_ms); c_plain_out; t1=$(now_ms)
+	expect_refused search-timeout
+	if [ $((t1 - t0)) -lt "$SLOW_MAX_MS" ]; then ok "$ROUTE: $LABEL -> answered in $((t1 - t0)) ms (< $SLOW_MAX_MS: it did not wait for the slow search)"
+	else bad "$ROUTE: $LABEL -> took $((t1 - t0)) ms (>= $SLOW_MAX_MS)"; fi
+}
+SLOW_MAX_MS=2900
+XENV=(TRASH_GUARD_TEST_SEARCH_DELAY=3);                           both new "a search slower than 2 s (fake delay 3 s)" c_slow
+XENV=(TRASH_GUARD_TEST_SEARCH_DELAY=3 TRASH_GUARD_TIMEOUT=9);      both new "TRASH_GUARD_TIMEOUT=9 cannot RAISE the 2 s limit" c_slow
+SLOW_MAX_MS=1500
+XENV=(TRASH_GUARD_TEST_SEARCH_DELAY=1 TRASH_GUARD_TIMEOUT=0.5);    both new "TRASH_GUARD_TIMEOUT=0.5 lowers it (fake delay 1 s)" c_slow
+c_nodelay() { local D; D=$(fresh "$FX/outside"); mkdir -p "$D/plain/x"; KEEP=(); run_route "$ROUTE" "$D" "$D/plain"; expect_allowed "CALL <$D/plain>"; }
+XENV=(TRASH_GUARD_TEST_SEARCH_DELAY=0);                           both control "the same folder with no delay goes" c_nodelay
+XENV=()
+c_unreadable() {
+	local D; D=$(fresh "$FX/outside"); mkdir -p "$D/plain/locked/deep"; : > "$D/plain/keep"
+	chmod 000 "$D/plain/locked"; LOCKED="$LOCKED $D/plain/locked"
+	KEEP=("$D/plain/keep")
+	run_route "$ROUTE" "$D" "$D/plain"
+	chmod 755 "$D/plain/locked"
+	expect_refused search-unreadable
+}
+both new "a folder the search cannot read (mode 000 inside)" c_unreadable
+
+# ---------------------------------------------------------------- controls and edge cases
+section "8. Controls and edge cases"
+c_plain_temp() { local D; D=$(fresh "$FX/tmproot"); mkdir -p "$D/plain"; KEEP=(); run_route "$ROUTE" "$D" "$D/plain"; expect_allowed "CALL <$D/plain>"; }
+c_file_out() { local D; D=$(fresh "$FX/outside"); : > "$D/f.txt"; KEEP=(); run_route "$ROUTE" "$D" "$D/f.txt"; expect_allowed "CALL <$D/f.txt>"; }
+both control "CONTROL: a plain temp folder with no .git goes, one fake call with its path" c_plain_temp
+both control "CONTROL: a plain folder outside temp with no repo goes" c_nodelay
+both control "CONTROL: a file outside temp goes" c_file_out
+c_multi() {
+	local D; D=$(fresh "$FX/outside"); mkdir -p "$D/plain"; : > "$D/plain/p"; mkrepo "$D/repo"
+	KEEP=("$D/plain/p" "$D/repo/.git")
+	run_route "$ROUTE" "$D" "$D/plain" "$D/repo"
+	expect_refused repo-root
+}
+c_multi_blank() {
+	local D; D=$(fresh "$FX/tmproot"); : > "$D/f"; mkdir -p "$D/w"
+	KEEP=("$D/f" "$D/w")
+	run_route "$ROUTE" "$D/w" "$D/f" ""
+	expect_refused blank
+}
+both new "two targets, one refused: NOTHING is trashed" c_multi
+both new "a file and a blank: nothing is trashed" c_multi_blank
+c_dash_ok() {
+	local D; D=$(fresh "$FX/tmproot"); mkdir -p "$D/-dash"; KEEP=()
+	run_route "$ROUTE" "$D" -- -dash
+	expect_allowed "CALL <./-dash>"
+}
+c_dash_refused() {
+	local D; D=$(fresh "$FX/outside"); mkrepo "$D/-repo"; KEEP=("$D/-repo/.git")
+	run_route "$ROUTE" "$D" -- -repo
+	expect_refused repo-root
+}
+both new "'--' then a -name target goes as ./-name" c_dash_ok
+both new "'--' then a -name repo root is judged, and refused" c_dash_refused
+c_opts() {
+	local D; D=$(fresh "$FX/tmproot"); mkdir -p "$D/plain"; KEEP=()
+	run_route "$ROUTE" "$D" -v "$D/plain"
+	if [ "$ROUTE" = trash ]; then expect_allowed "CALL <-v> <$D/plain>"; else expect_allowed "CALL <$D/plain>"; fi
+}
+both control "an option (-v) passes through to the real trash unchanged" c_opts
+c_missing() {
+	local D; D=$(fresh "$FX/outside"); KEEP=()
+	run_route "$ROUTE" "$D" "$D/not-there"
+	if [ "$ROUTE" = trash ]; then expect_allowed "CALL <$D/not-there>"; else expect_allowed ""; fi
+}
+both control "a target that does not exist is not refused (nothing to protect)" c_missing
+c_broken() {
+	local D; D=$(fresh "$FX/outside"); ln -s "$D/nowhere" "$D/broken"; KEEP=()
+	run_route "$ROUTE" "$D" "$D/broken"
+	expect_allowed "CALL <$D/broken>"
+}
+both control "a broken symlink goes" c_broken
+c_link_repo() {
+	local D; D=$(fresh "$FX/outside"); mkrepo "$D/repo"; ln -s "$D/repo" "$D/lnk"; KEEP=("$D/repo/.git")
+	run_route "$ROUTE" "$D" "$D/lnk"
+	expect_allowed "CALL <$D/lnk>"
+}
+c_link_repo_slash() {
+	local D; D=$(fresh "$FX/outside"); mkrepo "$D/repo"; ln -s "$D/repo" "$D/lnk"; KEEP=("$D/repo/.git" "$D/lnk")
+	run_route "$ROUTE" "$D" "$D/lnk/"
+	expect_refused repo-root
+}
+both control "a symlink TO a repo root, no slash: the link goes, the repo stays" c_link_repo
+both new "a symlink TO a repo root WITH a slash names the repo: refused" c_link_repo_slash
+c_space() { local D; D=$(fresh "$FX/outside"); mkrepo "$D/a b"; KEEP=("$D/a b/.git"); run_route "$ROUTE" "$D" "$D/a b"; expect_refused repo-root; }
+c_newline_ok() { local D; D=$(fresh "$FX/tmproot"); mkdir -p "$D/a"$'\n'"b"; KEEP=(); run_route "$ROUTE" "$D" "$D/a"$'\n'"b"; expect_allowed "CALL <$D/a"$'\n'"b>"; }
+c_newline_nested() {
+	local D; D=$(fresh "$FX/outside"); local N="$D/n"$'\n'"l"
+	mkrepo "$N/inner"; KEEP=("$N/inner/.git")
+	run_route "$ROUTE" "$D" "$N"
+	expect_refused nested-repo
+}
+both new "a repo root with a space in its name" c_space
+both control "a temp folder with a newline in its name goes, path exact" c_newline_ok
+both new "a folder with a newline in its name holding a repo" c_newline_nested
+
+c_big() { # 20,000 folders outside temp, no repo: a verdict inside the budget, never a late allow
+	local D t0 t1 ms i n
+	D=$(fresh "$FX/outside")
+	for i in {1..50}; do mkdir -p "$D"/big/$i/{1..50}/{1..8}; done
+	n=$(find "$D/big" -type d | wc -l | tr -d ' ')
+	[ "$n" -ge 20000 ] || { VERDICT=FIXTURE; bad "$ROUTE: fixture: only $n folders made (want >= 20000); invalid trial"; return; }
+	KEEP=()
+	t0=$(now_ms); run_route "$ROUTE" "$D" "$D/big"; t1=$(now_ms); ms=$((t1 - t0))
+	if [[ $ERR == *'[search-timeout]'* ]] && [ "$RC" -ne 0 ] && [ -z "$LOG" ]; then VERDICT=TIMEOUT; ok "$ROUTE: $LABEL -> refused as a timeout in $ms ms (the search could not finish)"
+	elif [ "$RC" -eq 0 ] && [ "$LOG" = "CALL <$D/big>" ] && [ "$ms" -lt 2600 ]; then VERDICT=ALLOWED; ok "$ROUTE: $LABEL -> searched and allowed in $ms ms"
+	else VERDICT=WRONG; bad "$ROUTE: $LABEL -> rc=$RC in $ms ms; fake: ${LOG:-none}; $(first_line "$ERR")"; fi
+}
+both control "a very large folder (20,000 folders, no repo): timed" c_big
+
+# ---------------------------------------------------------------- the real home, check mode only
+section "9. The real home stays on the floor list whatever HOME says (check mode: judges, never deletes)"
+REALHOME=""; u=$(id -un 2>/dev/null) && eval "REALHOME=~$u"
+c_check_real() { # $1 = label, $2 = path, then env args
+	local lbl=$1 p=$2
+	shift 2 || set --
+	CLASS=new
+	ERR=$(cd "$FX" && env "$@" "$BIN/trash-guard" --check -- "$p" 2>&1 >/dev/null); RC=$?
+	if [ "$RC" -eq 1 ] && [[ $ERR == *"[floor]"* ]]; then ok "check: $lbl -> refused [floor]"
+	else bad "check: $lbl -> want refused [floor]; rc=$RC; $(first_line "$ERR")"; fi
+}
+if [ -n "$REALHOME" ] && [ -d "$REALHOME" ]; then
+	c_check_real "HOME unset: the account's home" "$REALHOME" -u HOME
+	c_check_real "HOME unset: the account's ~/CODE" "$REALHOME/CODE" -u HOME
+	c_check_real "HOME set to a fixture: the real ~/CODE/CaptainCodeAU" "$REALHOME/CODE/CaptainCodeAU" HOME="$FHOME"
+	c_check_real "HOME=/nonexistent: the real home" "$REALHOME" HOME=/nonexistent
+else
+	CLASS=new; bad "could not find this account's home to test against (id -un: ${u:-none})"
+fi
+
+# ---------------------------------------------------------------- the seams cannot widen anything
+section "10. The test seams can only make the guard more careful"
+CLASS=new
+if [ -x "$BIN/trash-guard" ]; then
+	cfg=$(env TRASH_GUARD_TEMP_ROOTS="/Users:/:$REALHOME:$FX/tmproot" "$BIN/trash-guard" --show-config 2>&1)
+	inforce=$(printf '%s\n' "$cfg" | sed -n '/^temp roots in force:/,/^search timeout/p' | sed '1d;$d')
+	tr_phys=$(cd -P "$FX/tmproot" && pwd -P)
+	if [ "$(printf '%s' "$inforce" | sed 's/^ *//')" = "$tr_phys" ]; then ok "TRASH_GUARD_TEMP_ROOTS=/Users:/:~:<fixture>: only the fixture (inside a real temp root) is kept"
+	else bad "TRASH_GUARD_TEMP_ROOTS widened the exemption; in force: $(printf '%s' "$inforce" | tr '\n' ' ')"; fi
+else
+	bad "no trash-guard in $BIN to ask for its config"
+fi
+c_seam_realtrash() {
+	local D; D=$(fresh "$FX/tmproot"); mkdir -p "$D/plain"; KEEP=("$D/plain")
+	XENV=(TRASH_GUARD_REAL_TRASH=/usr/bin/true)
+	run_route "$ROUTE" "$D" "$D/plain"
+	XENV=()
+	local miss; miss=$(missing_keep)
+	if [ "$RC" -ne 0 ] && [ -z "$LOG" ] && [ -z "$miss" ]; then VERDICT=REFUSED; ok "$ROUTE: $LABEL -> refused, target in place"
+	else VERDICT=WRONG; bad "$ROUTE: $LABEL -> rc=$RC; fake calls: ${LOG:-none}; gone:${miss:- nothing}"; fi
+}
+both new "TRASH_GUARD_REAL_TRASH pointing outside temp (/usr/bin/true) is refused, not obeyed" c_seam_realtrash
+
+# ---------------------------------------------------------------- the shim never recurses
+section "11. The shim finds the REAL trash: never itself, never another copy, refuses when none"
+CLASS=new
+if [ -x "$BIN/trash" ]; then
+	mkdir -p "$FX/shimlink" "$FX/shimcopy" "$FX/notrash"
+	ln -sf "$BIN/trash" "$FX/shimlink/trash"
+	cp "$BIN/trash" "$FX/shimcopy/trash"
+	D=$(fresh "$FX/tmproot"); mkdir -p "$D/plain"
+	: > "$LOGF"
+	ERR=$(cd "$D" && env -u TRASH_GUARD_REAL_TRASH HOME="$FHOME" TRASH_GUARD_TEMP_ROOTS="$FX/tmproot" \
+		PATH="$FX/shimlink:$FX/shimcopy:$BIN:$FX/fakebin:$PATH" perl -e 'alarm shift; exec @ARGV' 10 "$BIN/trash" "$D/plain" 2>&1 >/dev/null); RC=$?
+	LOG=$(cat "$LOGF")
+	if [ "$RC" -eq 0 ] && [ "$LOG" = "CALL <$D/plain>" ]; then ok "a symlink to the shim, a copy of it and the shim itself ahead on PATH: all skipped, the fake got the call"
+	else bad "shim resolution: rc=$RC; fake: ${LOG:-none}; $(first_line "$ERR")"; fi
+	for f in /bin/* /usr/bin/*; do
+		case "${f##*/}" in trash | trash-put) continue ;; esac
+		[ -e "$FX/notrash/${f##*/}" ] || ln -s "$f" "$FX/notrash/${f##*/}"
+	done
+	if [ -e "$FX/notrash/sh" ] && [ ! -e "$FX/notrash/trash" ]; then ok "control: the no-trash PATH has sh and no trash (else the next arm is an invalid trial)"
+	else bad "control: the no-trash PATH is wrong"; fi
+	for r in trash rm; do
+		D=$(fresh "$FX/tmproot"); mkdir -p "$D/plain"
+		if [ "$r" = trash ]; then c=("$BIN/trash"); else c=("$BIN/rm" -r); fi
+		ERR=$(cd "$D" && env -u TRASH_GUARD_REAL_TRASH HOME="$FHOME" PATH="$BIN:$FX/notrash" "${c[@]}" "$D/plain" 2>&1 >/dev/null); RC=$?
+		if [ "$RC" -ne 0 ] && [ -e "$D/plain" ]; then ok "$r: no real trash anywhere on PATH -> refused, target in place ($(first_line "$ERR"))"
+		else bad "$r: no real trash on PATH -> rc=$RC, target present: $([ -e "$D/plain" ] && echo yes || echo NO)"; fi
+	done
+else
+	bad "no trash shim in $BIN"
+fi
+}
+
+# ---------------------------------------------------------------- the hook
+run_hook_arms() {
+section "12. The Bash hook denies the typed routes around the shim (trash-path), allows plain trash"
+CLASS=new
+if [ ! -x "$HOOK" ] || ! command -v jq >/dev/null 2>&1; then bad "hook arms need jq and an executable hook ($HOOK)"; return; fi
+mkdir -p "$FX/nosnap"
+hk() { # $1 = command -> HD (decision), HR (reason), HRC
+	local p out
+	p=$(jq -cn --arg c "$1" --arg cwd "$FX" '{hook_event_name:"PreToolUse",tool_name:"Bash",tool_input:{command:$c},cwd:$cwd}')
+	out=$(printf '%s' "$p" | DEL_GUARD_LOG="$FX/security.log" DEL_GUARD_SNAPSHOT_DIR="$FX/nosnap" "$HOOK" 2>/dev/null); HRC=$?
+	HD=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)
+	HR=$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty' 2>/dev/null)
+}
+local c
+for c in '/usr/bin/trash x' 'command trash x' 'env trash x' "sh -c '/usr/bin/trash x'" "eval 'command trash x'" 'echo $(env trash x)'; do
+	hk "$c"
+	if [ "$HD" = deny ] && [[ $HR == *'(trash-path)'* ]] && [[ $HR == *'plain trash'* ]]; then ok "hook denies: $c (names plain trash as the safe route)"
+	else bad "hook: $c -> decision '${HD:-none}' (rc $HRC); $(first_line "$HR")"; fi
+done
+CLASS=control
+for c in 'trash x' 'trash -v x' 'command -v trash'; do
+	hk "$c"
+	if [ -z "$HD" ] && [ "$HRC" -eq 0 ]; then ok "hook allows: $c"
+	else bad "hook: $c -> decision '$HD' (want no decision)"; fi
+done
+}
+
+# ---------------------------------------------------------------- modes
+if [ "$MODE" = e2e ]; then
+	echo "trash-guard-selftest --e2e: the REAL trash, on one throwaway temp file"
+	CLASS=new
+	E=$(mktemp -d "${TMPDIR:-/tmp}/trash-guard-e2e.XXXXXX") || exit 1
+	f="$E/trash-guard-e2e-throwaway.txt"
+	echo "throwaway, made by trash-guard-selftest --e2e" > "$f"
+	rt=$(env -u TRASH_GUARD_REAL_TRASH "$BIN/trash-guard" --real-trash 2>&1)
+	[ "$rt" = /usr/bin/trash ] && ok "the real trash resolves to /usr/bin/trash" || bad "real trash resolved to: $rt"
+	ERR=$(cd "$E" && env -u TRASH_GUARD_REAL_TRASH -u TRASH_GUARD_TEMP_ROOTS "$BIN/trash" '' 2>&1); RC=$?
+	if [ "$RC" -ne 0 ] && [ -d "$E" ] && [ -e "$f" ] && [[ $ERR == *'[blank]'* ]]; then ok "the incident shape, trash '' from inside the folder, real trash behind: refused, folder in place"
+	else bad "trash '' with the real trash: rc=$RC, folder present: $([ -d "$E" ] && echo yes || echo NO)"; fi
+	ERR=$(cd "$E" && env -u TRASH_GUARD_REAL_TRASH -u TRASH_GUARD_TEMP_ROOTS "$BIN/trash" "$f" 2>&1); RC=$?
+	if [ "$RC" -eq 0 ] && ! [ -e "$f" ]; then ok "the throwaway file went to the real Trash (test -e: gone)"
+	else bad "real trash on the throwaway file: rc=$RC, still there: $([ -e "$f" ] && echo YES || echo no); $(first_line "$ERR")"; fi
+	[ -d "$E" ] && ok "control: its folder is still there" || bad "its folder is gone"
+	printf '\ntrash-guard-selftest --e2e: %d passed, %d failed\n' "$pass" "$fail"
+	[ "$fail" -eq 0 ]; exit $?
+fi
+
+if [ "$MODE" = mutants ]; then
+	echo "trash-guard-selftest --mutants: each copy breaks ONE rule; the suite must catch it"
+	caught=0; missed=0
+	for m in blank cwd timeout temp; do
+		MD=$FX/mut-$m; mkdir -p "$MD"
+		cp "$BIN/trash" "$BIN/safe-rm" "$BIN/rm" "$MD/"
+		sed "s/^.*#M: $m\$/:/" "$BIN/trash-guard" > "$MD/trash-guard"; chmod +x "$MD/trash-guard"
+		n0=$(grep -c "#M: $m\$" "$BIN/trash-guard"); n1=$(grep -c "#M: $m\$" "$MD/trash-guard")
+		if [ "$n0" -ne 1 ] || [ "$n1" -ne 0 ]; then echo "  INVALID  $m: the tag matched $n0 line(s) in the original, $n1 in the copy"; missed=$((missed + 1)); continue; fi
+		t0=$(now_ms)
+		if TG_BIN="$MD" "$0" -q >"$FX/mut-$m.out" 2>&1; then echo "  MISSED   $m: the suite passed with the rule removed"; missed=$((missed + 1))
+		else echo "  caught   $m ($(grep -c 'FAIL' "$FX/mut-$m.out") arms failed, $(( ($(now_ms) - t0) / 1000 )) s)"; caught=$((caught + 1)); fi
+	done
+	MH=$FX/mut-hook; mkdir -p "$MH"
+	sed '/#M: env trash$/d' "$HOOK" > "$MH/enforce-no-permanent-delete.sh"; chmod +x "$MH/enforce-no-permanent-delete.sh"
+	n0=$(grep -c '#M: env trash$' "$HOOK"); n1=$(grep -c '#M: env trash$' "$MH/enforce-no-permanent-delete.sh")
+	if [ "$n0" -ne 1 ] || [ "$n1" -ne 0 ]; then echo "  INVALID  hook env trash: tag matched $n0 / $n1"; missed=$((missed + 1))
+	elif TG_HOOK="$MH/enforce-no-permanent-delete.sh" "$0" -q --hook-only >"$FX/mut-hook.out" 2>&1; then echo "  MISSED   hook env trash"; missed=$((missed + 1))
+	else echo "  caught   hook: env trash no longer denied ($(grep -c 'FAIL' "$FX/mut-hook.out") arms failed)"; caught=$((caught + 1)); fi
+	printf '\ntrash-guard-selftest --mutants: %d caught, %d missed (outputs in %s)\n' "$caught" "$missed" "$FX"
+	[ "$missed" -eq 0 ]; exit $?
+fi
+
+echo "trash-guard-selftest"
+echo "  under test: $BIN"
+echo "  hook:       $HOOK"
+echo "  fixtures:   $FX"
+[ "$HOOK_ONLY" -eq 1 ] || run_arms
+run_hook_arms
+
+CLASS=new
+if [ "$HOOK_ONLY" -eq 0 ]; then
+	section "13. Both routes gave the same verdict"
+	if [ -z "$disagree" ]; then ok "trash X and rm -r X agreed on all $cases cases"
+	else bad "trash X and rm -r X disagreed on $((cases - agree)) of $cases:$disagree"; fi
+fi
+
+echo
+printf 'trash-guard-selftest: %d passed, %d failed  (new arms: %d passed, %d failed; controls: %d passed, %d failed)\n' \
+	"$pass" "$fail" "$pass_new" "$fail_new" "$pass_ctl" "$fail_ctl"
+printf 'refusal arms that were behaviourally safe (non-zero, nothing trashed, target kept), rule id aside: %d of %d\n' "$bsafe" "$nrefuse"
+[ "$fail" -eq 0 ]

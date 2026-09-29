@@ -337,26 +337,27 @@ _check() {
 
 # ---------------------------------------------------------------- --real-trash
 _real_trash() {
+	# POSIX sh has no locals: these names (rt_*) are used nowhere else in this file.
 	if [ -n "${TRASH_GUARD_REAL_TRASH-}" ]; then
-		_c=$TRASH_GUARD_REAL_TRASH
-		case "$_c" in */*) _d=${_c%/*}; [ -n "$_d" ] || _d=/ ;; *) _d=. ;; esac
 		_init_temp
-		if [ -f "$_c" ] && [ -x "$_c" ] && _pdir "$_d" && _in_list "$REAL_TEMP" "$PD" && [ "$PD" != / ]; then
-			printf '%s\n' "$PD/${_c##*/}"
+		rt_cmd=$TRASH_GUARD_REAL_TRASH
+		case "$rt_cmd" in */*) rt_dir=${rt_cmd%/*}; [ -n "$rt_dir" ] || rt_dir=/ ;; *) rt_dir=. ;; esac
+		if [ -f "$rt_cmd" ] && [ -x "$rt_cmd" ] && _pdir "$rt_dir" && _in_list "$REAL_TEMP" "$PD" && [ "$PD" != / ]; then
+			printf '%s\n' "$PD/${rt_cmd##*/}"
 			return 0
 		fi
-		_err "trash-guard: TRASH_GUARD_REAL_TRASH is a test seam and must name an executable inside a system temp folder; \"$_c\" is not. Refusing."
+		_err "trash-guard: TRASH_GUARD_REAL_TRASH is a test seam and must name an executable inside a system temp folder; \"$rt_cmd\" is not. Refusing."
 		return 1
 	fi
-	_r="${PATH-}:"
-	while [ -n "$_r" ]; do
-		_d=${_r%%:*}; _r=${_r#*:}
-		case "$_d" in /*) ;; *) continue ;; esac   # empty and relative PATH entries are skipped
-		_c="$_d/trash"
-		{ [ -f "$_c" ] && [ -x "$_c" ]; } || continue
-		LC_ALL=C grep -q -F "$MARK" "$_c" 2>/dev/null
+	rt_path="${PATH-}:"
+	while [ -n "$rt_path" ]; do
+		rt_dir=${rt_path%%:*}; rt_path=${rt_path#*:}
+		case "$rt_dir" in /*) ;; *) continue ;; esac   # empty and relative PATH entries are skipped
+		rt_cmd="$rt_dir/trash"
+		{ [ -f "$rt_cmd" ] && [ -x "$rt_cmd" ]; } || continue
+		LC_ALL=C grep -q -F "$MARK" "$rt_cmd" 2>/dev/null
 		[ $? -eq 1 ] || continue   # 0: a shim copy; 2: unreadable, so unknown
-		printf '%s\n' "$_c"
+		printf '%s\n' "$rt_cmd"
 		return 0
 	done
 	return 1
