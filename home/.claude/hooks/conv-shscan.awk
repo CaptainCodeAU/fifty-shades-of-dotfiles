@@ -193,6 +193,7 @@ function read_heredocs(    h, e, line, cmp) {  # P just after the newline
             P = e + 1
             if (cmp == HD[h]) break
             if (HDK[h] > 0) HBODY[HDK[h]] = HBODY[HDK[h]] "\n" line   # A47: kept for fp_check
+            if (HDK[h] > 0 && !HDQ[h]) UHB[HDK[h]] = UHB[HDK[h]] "\n" line   # A118: $(...) here runs
         }
     }
     HDN = 0
@@ -210,9 +211,11 @@ function handle_redir(k,    c, ws, d) {
         skip_blanks(); ws = P; parse_word()
         HDN++; HD[HDN] = unquote_delim(substr(S, ws, P - ws)); HDD[HDN] = d
         HDK[HDN] = k                                  # A47: whose body this is
+        HDQ[HDN] = (substr(S, ws, P - ws) ~ /["'\\]/)  # A118: a quoted marker keeps the body literal
         if (HD[HDN] == "") unsure("here-document with no delimiter")
     } else if ((c == "<" || c == ">") && C[P + 1] == "(") {
-        P += 2; parse_list(REC_NESTED, ")", 1, c "(")   # process substitution, an argument
+        P += 2; ws = P; parse_list(REC_NESTED, ")", 1, c "(")   # process substitution, an argument
+        if (k > 0 && c == "<") PSB[k] = substr(S, ws, P - ws - 1)   # A118: source <(...) runs its output
     } else {
         if (c == "&") P++
         P++
@@ -1290,6 +1293,7 @@ function fp_shell_of(k,    c, b) {
     for (c = k; c <= NC; c++) {
         b = base(unq(WR[c, eff(c)]))
         if (b == "bash" || b == "sh" || b == "zsh" || b == "dash" || b == "ksh") return b
+        if ((b == "source" || b == ".") && gd_stdin_arg(c)) return b " /dev/stdin"   # A118
         if (CSA[c] != "|" && CSA[c] != "|&") return ""
     }
     return ""
@@ -1783,8 +1787,48 @@ function gd_nested(pw,    k, j, n, a, w, b, b2, t, i, pre) {
             }
         }
         if (HBODY[k] != "" && (b2 = fp_shell_of(k)) != "") gd_enqueue(HBODY[k], pre "a here-document fed to " b2)
+        # W-20260929-A118: script runs its command; source/. or a shell given <(...) runs
+        # what that body prints; an unquoted heredoc runs every $(...) and backtick in it.
+        if (j <= n && b == "script") gd_script(k, j, n, pre)
+        if (j <= n && PSB[k] != "" && (b == "source" || b == "." || b ~ /^(bash|sh|zsh|dash|ksh)$/)) gd_enqueue(PSB[k] " | sh", pre b " <(...)")
+        if (UHB[k] != "") gd_subs(UHB[k], pre "an unquoted here-document")
     }
     for (i = 1; i <= BTN; i++) gd_enqueue(BT[i], pre "backticks")
+}
+function gd_stdin_arg(k,    a) {
+    for (a = eff(k) + 1; a <= CNW[k]; a++) if (unq(WR[k, a]) ~ /^(\/dev\/stdin|\/dev\/fd\/0|\/proc\/self\/fd\/0|-)$/) return 1
+    return 0
+}
+function gd_script(k, j, n, pre,    a, w, t) {   # BSD: script [-adkpqr] [-F pipe] [-t n] [file [cmd ...]]; Linux: -c CMD
+    for (a = j + 1; a <= n; a++) {
+        w = unq(WR[k, a])
+        if (w == "-c" || w == "--command") { if (a < n) gd_enqueue(pj_dq(WR[k, a + 1]), pre "script -c"); return }
+        if (w ~ /^--command=/) { gd_enqueue(substr(w, 11), pre "script -c"); return }
+        if (w == "-F" || w == "-t" || w == "-T" || w == "-I" || w == "-O" || w == "-B" || w == "-E") { a++; continue }
+        if (w ~ /^-/) continue
+        break
+    }
+    t = ""
+    for (a++; a <= n; a++) t = t (t != "" ? " " : "") pj_dq(WR[k, a])   # the words after the file
+    if (t != "") gd_enqueue(t, pre "script")
+}
+function gd_subs(t, where,    i, n, c, d, st) {   # every $(...) and backtick span in t
+    n = length(t); i = 1
+    while (i <= n) {
+        c = substr(t, i, 1)
+        if (c == "\\") { i += 2; continue }
+        if (c == "$" && substr(t, i + 1, 1) == "(" && substr(t, i + 2, 1) != "(") {
+            d = 1; st = i + 2; i += 2
+            while (i <= n && d > 0) { c = substr(t, i, 1); if (c == "(") d++; else if (c == ")") d--; i++ }
+            gd_enqueue(substr(t, st, i - 1 - st), where); continue
+        }
+        if (c == "`") {
+            st = i + 1; i++
+            while (i <= n && substr(t, i, 1) != "`") i++
+            gd_enqueue(substr(t, st, i - st), where); i++; continue
+        }
+        i++
+    }
 }
 function gd_main(    qi) {
     QN = 1; QT[1] = S; QW[1] = ""; GDOVER = 0
@@ -1797,7 +1841,7 @@ function gd_main(    qi) {
     if (GDOVER) verdict("guard", "DENY", "validate-bash: more than 64 nested shell texts (-c, eval, backticks, heredocs) to read; refusing rather than guessing")
 }
 
-function pj_load(t) { S = t; N = split(S, C, ""); P = 1; NC = 0; HDN = 0; BG = 0; UNSURE = ""; UNSURE_NF = ""; SUBSH = 0; BTN = 0; split("", HBODY) }
+function pj_load(t) { S = t; N = split(S, C, ""); P = 1; NC = 0; HDN = 0; BG = 0; UNSURE = ""; UNSURE_NF = ""; SUBSH = 0; BTN = 0; split("", HBODY); split("", UHB); split("", PSB) }
 
 function pjw_main(    qi, i) {
     PV = ""; PM = ""; PO = ""; QN = 1; QT[1] = S; QX[1] = "bash"; QO[1] = ""; QW[1] = ""
@@ -1820,7 +1864,7 @@ function pjw_main(    qi, i) {
 END {
     N = split(S, C, "")
     mode = ENVIRON["CONV_MODE"]
-    P = 1; NC = 0; HDN = 0; BG = 0; UNSURE = ""; UNSURE_NF = ""; SUBSH = 0; BTN = 0; split("", HBODY)
+    P = 1; NC = 0; HDN = 0; BG = 0; UNSURE = ""; UNSURE_NF = ""; SUBSH = 0; BTN = 0; split("", HBODY); split("", UHB); split("", PSB)
     REC_NESTED = (mode == "guard" || mode == "pjw")   # only these look inside $(...) and backticks
     if (mode == "pjw") pjw_main()
     parse_list(1, "", 0, "^")
