@@ -1411,7 +1411,7 @@ selftest() {
 
 # --- the session caps (W-20260924-A79; D-20260924-A08 and A10) ---------------------
 # At most 4 live Claude sessions per project (the conductor and Gavin's own sessions
-# included) and 8 on the machine. pj-worker owns the counter (`pj-worker count --check`:
+# included) and 12 on the machine. pj-worker owns the counter (`pj-worker count --check`:
 # 0 allowed, 6 a cap is reached, 2 could not measure), so pj and pj-worker can never
 # disagree about a count. Checked on a REAL launch only, before any side effect.
 #   6   REFUSED, no override (Gavin's ruling).
@@ -1425,7 +1425,7 @@ check_session_caps() {
   local pjw="${PJ_WORKER_BIN-}" out rc
   [[ -n "$pjw" ]] || pjw="$(whence -p pj-worker 2>/dev/null)"
   if [[ -z "$pjw" || ! -x "$pjw" ]]; then
-    print -u2 -- "pj: NOTE: pj-worker not found, so the session caps (4 per project, 8 on the machine) were NOT checked. stow -R the dotfiles."
+    print -u2 -- "pj: NOTE: pj-worker not found, so the session caps (4 per project, 12 on the machine) were NOT checked. stow -R the dotfiles."
     return 0
   fi
   out="$("$pjw" count --check --cwd "$PWD" 2>&1)"; rc=$?
@@ -1434,7 +1434,7 @@ check_session_caps() {
        local bgl
        for bgl in ${(f)out}; do [[ "$bgl" == background:* ]] && print -u2 -r -- "pj: NOTE: $bgl"; done
        return 0 ;;
-    6) print -u2 -r -- "pj: REFUSED: a session cap is reached (4 per project, 8 on the machine; D-20260924-A08, A10). There is no override. Close a session first."
+    6) print -u2 -r -- "pj: REFUSED: a session cap is reached (4 per project, 12 on the machine; D-20260924-A08, A10). There is no override. Close a session first."
        print -u2 -r -- "$out"
        return 6 ;;
     *) print -u2 -r -- "pj: REFUSED: could not count the live sessions (pj-worker count exit $rc), so the caps cannot be checked. Inside the Claude sandbox, run it with the sandbox off."
