@@ -116,4 +116,5 @@ Steps run in this order; `pj-wrap done` is always last. Rulings and reasons:
     Then the report. Line 1, first that applies: a STOP from step 8; an owed project wrap-up; any
     other action for the user; "Done, nothing needed from you." End with the pending list and one
     line: "Kept working after this? Run /pj:wrap-up again." Last, as its own Bash call:
-    `pj-ping done "wrap-up <project>"`.
+    `pj-ping done "wrap-up <project>" --detach`. It returns at once (Gavin, 2026-09-29: the
+    blocking send cost about 10 s); a failed send is named only in the ping log, not here.
