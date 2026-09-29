@@ -744,6 +744,8 @@ function guard_check(    k, j, n, a, w, b, s, i, t) {
         s = g_crude(BT[i])
         if (s != "") { verdict("guard", "DENY", s " (inside backticks)"); return }
     }
+    s = tu_check()
+    if (s != "") { verdict("guard", "DENY", s); return }
     s = lk_check()
     if (s != "") { verdict("guard", "DENY", s); return }
     s = pp_check()
@@ -926,6 +928,32 @@ function lk_check(    k, j, n, a, w, b, sub_, key, val, rd, c, ch, ga) {
             if (key == "core.hookspath") return lk_msg("git config core.hooksPath replaces every hook, the leak scan included")
             if (key == "leakscan.disable" && lk_truthy(val)) return lk_msg("git config leakscan.disable")
         }
+    }
+    return ""
+}
+
+# ------------------------------------------------------------------ guard: token in a URL
+# Rule G of guard mode, W-20260929-A51: curl, wget, http/https (httpie), xh or aria2c
+# given a URL whose user part (before the @) holds a token-shaped string: gh[pousr]_,
+# github_pat_, sk-, xox?-, glpat-, npm_. The command sends the secret to that host, and
+# the typed line already put it in the transcript. git remotes with a token are
+# enforce-gh-ssh-only's; -u user (curl prompts) and x-access-token with no secret pass.
+# NOT read: a URL held in a variable, a token in a header or a --data body.
+
+function tu_cred(w,    ui) {
+    gsub(/["'\\]/, "", w)
+    if (w !~ /^[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\/]*@/) return 0
+    ui = w; sub(/^[A-Za-z][A-Za-z0-9+.-]*:\/\//, "", ui); sub(/@.*/, "", ui)
+    return ui ~ /(^|:)(gh[pousr]_|github_pat_|sk-|xox[a-z]-|glpat-|npm_)[A-Za-z0-9_-]/
+}
+function tu_check(    k, j, n, a, b) {
+    for (k = 1; k <= NC; k++) {
+        j = eff(k); n = CNW[k]
+        if (j > n) continue
+        b = base(unq(WR[k, j]))
+        if (b != "curl" && b != "wget" && b != "http" && b != "https" && b != "xh" && b != "aria2c") continue
+        for (a = j + 1; a <= n; a++) if (tu_cred(WR[k, a]))
+            return "A token in a URL (W-20260929-A51): " b " would send the credential before the @ to that host. Use a credential helper, a -H header read from a file you do not print, or ask Gavin; the typed token is also now in this transcript, so rotate it if it was real"
     }
     return ""
 }
