@@ -132,7 +132,7 @@ END {
   print "E" US maxp
 }
 function newstate() {
-  d++; nw[d] = 0; cur[d] = ""; inw[d] = 0; pd[d] = 0; hdp[d] = 0; hst[d] = 0; hsp[d] = 0; wq[d] = 0; ps[d] = ""
+  d++; nw[d] = 0; cur[d] = ""; inw[d] = 0; pd[d] = 0; hdp[d] = 0; hst[d] = 0; hsp[d] = 0; wq[d] = 0; ps[d] = ""; es[d] = ""
   P++; if (P > maxp) maxp = P; pid[d] = P
 }
 function newpipe() { P++; if (P > maxp) maxp = P; pid[d] = P }
@@ -165,6 +165,8 @@ function emitcmd(   k, out, w, op, intr, nop, fw, data, al, safe, trd) {
     if (nop == 0) intr = 1
     if (ps[d] != "" && (fw == "source" || fw == "." || fw ~ /^(bash|sh|zsh|dash|ksh)$/)) print "X" US pid[d] US enc(ps[d] " | sh")   #M: A118 source <( ) body is code
     ps[d] = ""
+    if (es[d] != "" && fw == "eval") print "X" US pid[d] US enc(es[d] " | sh")   #M: A134 eval of a substitution is code
+    es[d] = ""
     # echo/printf/print is DATA: emitted as stdin for its pipeline, which only
     # matters when an interpreter reads it (echo code | python3)
     if (!al && (fw == "echo" || fw == "printf" || fw == "print") && !(fw in AV) && !trd) {
@@ -277,9 +279,9 @@ function dq(i,   c, c2, j) {
       if (c2 == "\"" || c2 == "\\" || c2 == "$" || c2 == "`") { cur[d] = cur[d] c2; i += 2; continue }
       cur[d] = cur[d] c; i++; continue
     }
-    if (c == "$" && substr(s, i + 1, 1) == "(") { i = lex(i + 2, ")"); cur[d] = cur[d] "$(...)"; continue }   #M: lexer: $( ) inside double quotes
+    if (c == "$" && substr(s, i + 1, 1) == "(") { j = i + 2; i = lex(i + 2, ")"); es[d] = substr(s, j, i - 1 - j); cur[d] = cur[d] "$(...)"; continue }   #M: lexer: $( ) inside double quotes
     if (c == "$" && substr(s, i + 1, 1) == "{") { j = brace(i + 2); cur[d] = cur[d] substr(s, i, j - i); i = j; continue }
-    if (c == "`") { i = lex(i + 1, "`"); cur[d] = cur[d] "$(...)"; continue }   #M: lexer: backticks inside double quotes
+    if (c == "`") { j = i + 1; i = lex(i + 1, "`"); es[d] = substr(s, j, i - 1 - j); cur[d] = cur[d] "$(...)"; continue }   #M: lexer: backticks inside double quotes
     cur[d] = cur[d] c; i++
   }
   return i
@@ -308,13 +310,13 @@ function lex(i, term,   c, c2, j, op) {
     if (c == "$") {
       c2 = substr(s, i + 1, 1)
       if (c2 == "'") { inw[d] = 1; i = ansic(i + 2); continue }
-      if (c2 == "(") { i = lex(i + 2, ")"); cur[d] = cur[d] "$(...)"; inw[d] = 1; continue }   #M: lexer: $( ) unquoted
+      if (c2 == "(") { j = i + 2; i = lex(i + 2, ")"); es[d] = substr(s, j, i - 1 - j); cur[d] = cur[d] "$(...)"; inw[d] = 1; continue }   #M: lexer: $( ) unquoted
       if (c2 == "{") { j = brace(i + 2); cur[d] = cur[d] substr(s, i, j - i); inw[d] = 1; i = j; continue }
       cur[d] = cur[d] c; inw[d] = 1; i++; continue
     }
     if (c == "`") {
       if (term == "`") { emitcmd(); d--; return i + 1 }
-      i = lex(i + 1, "`"); cur[d] = cur[d] "$(...)"; inw[d] = 1; continue
+      j = i + 1; i = lex(i + 1, "`"); es[d] = substr(s, j, i - 1 - j); cur[d] = cur[d] "$(...)"; inw[d] = 1; continue
     }
     if ((c == "<" || c == ">" || c == "=") && substr(s, i + 1, 1) == "(" && (c != "=" || !inw[d])) {
       if (c != "=") flushword()
@@ -663,7 +665,15 @@ _argv() {
     '{'|'}'|'!'|if|then|else|elif|fi|do|done|while|until|end|always|coproc|']]')
       [ $# -gt 0 ] && _argv "$adepth" "$@"                                                   #M: reserved-word look-through
       return 0 ;;
-    '[['|for|foreach|select|case|function|esac) return 0 ;;
+    '[['|for|foreach|select|case|esac) return 0 ;;
+    function)   # W-20260929-A134: function NAME [()] { BODY: the body is a command
+      [ $# -gt 0 ] && shift
+      [ "${1:-}" = "()" ] && shift
+      [ $# -gt 0 ] && _argv "$adepth" "$@"   #M: A134 function body
+      return 0 ;;
+    *'()')   # W-20260929-A134: NAME() { BODY
+      [ $# -gt 0 ] && _argv "$adepth" "$@"   #M: A134 NAME() body
+      return 0 ;;
     script)   # W-20260929-A118: script [opts] [file [cmd ...]] runs cmd; Linux: script -c CMD
       while [ $# -gt 0 ]; do
         case "$1" in
@@ -1323,6 +1333,15 @@ SNAP
   _must -                   'A118 source <(a generator)'      'source <(kubectl completion zsh)'
   _must -                   'A118 . /dev/stdin <<< rm x'      ". /dev/stdin <<< 'rm x'"
   _must -                   'A118 $(...) in QUOTED heredoc stays data' $'cat <<\'EOF\'\n$(rm -P x)\nEOF'
+  # W-20260929-A134: function bodies and eval of a substitution (lexer comparison S20 S21 S69)
+  _must rm-P                'A134 f() { ...; }; f (S20)'      'f() { rm -P x; }; f'
+  _must rm-P                'A134 f () { ...; }'              'f () { rm -P x; }'
+  _must rm-P                'A134 function f { ...; }; f (S21)' 'function f { rm -P x; }; f'
+  _must rm-P                'A134 function f() { ...; }'      'function f() { rm -P x; }'
+  _must rm-P                'A134 eval "$(echo ...)" (S69)'   'eval "$(echo rm -P x)"'
+  _must rm-P                'A134 eval `echo ...`'            'eval `echo rm -P x`'
+  _must -                   'A134 f() { rm x; }; f (near miss)' 'f() { rm x; }; f'
+  _must -                   'A134 eval "$(echo rm x)" (near miss)' 'eval "$(echo rm x)"'
   _must rsync-delete        'rsync --delete'                  'rsync -a --delete src/ dst/'
   _must rsync-delete        'rsync --delete-after'            'rsync -a --delete-after src/ dst/'
   _must rsync-delete        'rsync --del'                     'rsync -a --del src/ dst/'
