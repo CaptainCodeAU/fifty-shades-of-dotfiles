@@ -445,6 +445,8 @@ check "C1c account is 'not measured' and null, never 0" '[ "$(j ".account.status
 check "C1d at 4 in the project start is not allowed, and the refusal names the project cap" '[ "$(j .start_allowed)" = "false " ] && has "$(j .refusal)" "project cap: 4 of 4"'
 check "C1e the machine cap alone would allow it (5 < 12)" '[ "$(j .machine.count)" = "5 " ] && ! has "$(j .refusal)" "machine cap"'
 check "C1f the three worktree sessions count toward their repo" '[ "$(j "[.project.sessions[] | select(.cwd | test(\"/.worktree/\"))] | length")" = "3 " ]'
+check "C1g machine sessions carry the session id and the registry start time (pj-temp reads them)" \
+  '[ "$(j ".machine.sessions[] | select(.pid==36921) | .sid, .start")" = "19e66748-5a52-430f-8fe7-30024dbbe95c Thu Sep 24 07:43:03 2026 " ]'
 run count --cwd "$REPO" --check
 check "C2 count --check at the project cap: rc 6" '[ "$RC" -eq 6 ]'
 run count --cwd "$SWITCH" --check

@@ -471,7 +471,9 @@ count_json() {
     if [[ "$k" == herdr:* ]]; then proj+=("$(jq -cn --arg p "${k#herdr:}" --arg w "${C_WHY[$k]}" '{pid:null, name:null, pane:$p, cwd:null, why:$w}')")
     else proj+=("$(jq -cn --arg pid "$k" --arg n "${R_NAME[$k]}" --arg p "${C_PANE[$k]:-}" --arg c "${R_CWD[$k]}" --arg w "${C_WHY[$k]}" '{pid:($pid|tonumber), name:$n, pane:(if $p=="" then null else $p end), cwd:$c, why:$w}')"); fi
   done
-  for k in $C_MACH; do mach+=("$(jq -cn --arg pid "$k" --arg n "${R_NAME[$k]}" --arg c "${R_CWD[$k]}" '{pid:($pid|tonumber), name:$n, cwd:$c}')"); done
+  # sid and start (the registry's procStart, spaces collapsed) are read by pj-temp sweep-dead,
+  # which keys a temp folder's liveness on them (W-20260929-A155).
+  for k in $C_MACH; do mach+=("$(jq -cn --arg pid "$k" --arg n "${R_NAME[$k]}" --arg c "${R_CWD[$k]}" --arg i "${R_SID[$k]}" --arg t "$(norm_ws "${R_START[$k]}")" '{pid:($pid|tonumber), name:$n, cwd:$c, sid:$i, start:$t}')"); done
   jq -cn --arg root "$PROJ_ROOT" --arg key "$PROJ_KEY" --argjson pc "$C_PROJECT" --argjson pcap "$CAP_PROJECT" \
     --argjson mreg "$C_MACH_REG" --argjson mps "$C_MACH_PS" --argjson m "$C_MACHINE" --argjson mcap "$CAP_MACHINE" \
     --argjson psonly "[${(j:,:)C_PSONLY}]" --arg ws "$C_WS" --arg refuse "$C_REFUSE" --arg dis "$C_DISAGREE" \
