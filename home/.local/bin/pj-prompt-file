@@ -14,33 +14,72 @@
 # scratch file under ~/.cache. The first source lands byte-for-byte as the prefix, which is
 # what the P5.4 prompt-snapshot check compares against.
 #
-# Degrades, never breaks the launch: a missing source is skipped with a warning on stderr;
-# an unwritable output falls back to printing the first readable source alone (today's
-# behaviour before RULES.md existed). Only when NO source is readable does it print nothing
-# and exit 1.
+# On the Mac it degrades, never breaks the launch: a missing source is skipped with a
+# warning on stderr; an unwritable output falls back to printing the first readable source
+# alone (today's behaviour before RULES.md existed). Only when NO source is readable does it
+# print nothing and exit 1.
+#
+# STRICT on a relay-fed machine (2026-09-29, FOLLOWUP-BRIEF T3): there a missing source is a
+# REFUSAL. It prints nothing on stdout, names every missing file on stderr, and exits 3. The
+# test is that the relay's rules copy (~/repos/pj-rules) is a directory: the relay creates it
+# on every box it feeds and the Mac, its source, has none (measured 2026-09-29). NOT "a source
+# resolves through a link into the copy": that is false exactly when the link was moved aside
+# or deleted, which is the case strict mode exists for. On such a box a skipped source means
+# pj launches without half its rules and nobody is told, because nobody reads the warning.
 #
 # Env: PJ_PROMPT_SOURCES  colon-separated source list (default: the two files above)
 #      PJ_PROMPT_OUT      output path (default: ${XDG_CACHE_HOME:-~/.cache}/dotfiles/pj-system-prompt.md)
+#      PJ_RULES_COPY      the relay's rules copy (default ~/repos/pj-rules); selftest seam
 # Flags: --path      print the output path only, no build, no write (F3: pj-launch-check reads it)
+#        --missing   print each unreadable source, one per line; exit 1 when any, else 0.
+#                    No build, no write. pj names these files when it refuses (W-20260929-A96)
 #        --selftest  prove every arm against throwaway fixtures; --help.
 set -u
 
 usage() {
-	sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'
+	sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//'
+}
+
+# readable <path>: the one test for "this source can be used", shared by build and --missing.
+# A dangling link fails it, so a link whose target was moved away counts as missing.
+readable() { [ -r "$1" ] && [ -f "$1" ]; }
+
+# missing <colon-list>: print each unreadable source, one per line; rc 1 when any.
+missing() {
+	local s rc=0
+	local IFS=':'
+	local -a sources
+	read -r -a sources <<<"$1"
+	unset IFS
+	for s in "${sources[@]}"; do
+		[ -n "$s" ] || continue
+		readable "$s" || { printf '%s\n' "$s"; rc=1; }
+	done
+	return "$rc"
 }
 
 build() {
-	local sources_str="$1" out="$2" tmp dir first="" n=0 s
+	local sources_str="$1" out="$2" tmp dir first="" n=0 s miss
 	local IFS=':'
 	local -a sources
 	read -r -a sources <<<"$sources_str"
 	unset IFS
+	if [ -d "$RULES_COPY" ]; then
+		miss="$(missing "$sources_str")"
+		if [ -n "$miss" ]; then
+			while IFS= read -r s; do
+				printf 'pj-prompt-file: REFUSED: source missing: %s\n' "$s" >&2
+			done <<<"$miss"
+			printf 'pj-prompt-file: strict because %s exists (a relay-fed machine): a missing source is a refusal here, not a skip. Fix: restore the file or its link into that copy, then run pj again.\n' "$RULES_COPY" >&2
+			return 3
+		fi
+	fi
 	dir="$(dirname "$out")"
 	mkdir -p "$dir" 2>/dev/null
 	tmp="$(mktemp "$dir/.pj-system-prompt.XXXXXX" 2>/dev/null)" || tmp=""
 	for s in "${sources[@]}"; do
 		[ -n "$s" ] || continue
-		if [ -r "$s" ] && [ -f "$s" ]; then
+		if readable "$s"; then
 			[ -n "$first" ] || first="$s"
 			if [ -n "$tmp" ]; then
 				[ "$n" -eq 0 ] || printf '\n' >>"$tmp"
@@ -66,8 +105,12 @@ build() {
 }
 
 selftest() {
-	local root a b out pass=0 fail=0 got rc err
+	local root a b out pass=0 fail=0 got rc err sut="${PJ_PROMPT_SUT:-$0}"
+	# PJ_PROMPT_SUT: run these arms against ANOTHER copy (master's, to show an arm fails there).
 	root="$(mktemp -d "${TMPDIR:-/tmp}/pj-prompt-file-selftest.XXXXXX")" || exit 1
+	# Every arm but the strict ones sees NO rules copy, so on a relay-fed box (where the real
+	# ~/repos/pj-rules exists) the degrade arms still measure the degrade path.
+	export PJ_RULES_COPY="$root/no-rules-copy"
 	a="$root/a.md"; b="$root/b.md"; out="$root/cache/combined.md"
 	printf 'alpha rules\nsecond line\n' >"$a"
 	printf 'beta rules\n' >"$b"
@@ -76,33 +119,63 @@ selftest() {
 	echo "pj-prompt-file selftest in $root"
 
 	# 1. both sources: combined == a + newline + b, path printed, rc 0
-	got="$(PJ_PROMPT_SOURCES="$a:$b" PJ_PROMPT_OUT="$out" "$0" 2>"$root/err1")"; rc=$?
+	got="$(PJ_PROMPT_SOURCES="$a:$b" PJ_PROMPT_OUT="$out" "$sut" 2>"$root/err1")"; rc=$?
 	if [ "$rc" -eq 0 ] && [ "$got" = "$out" ]; then ok "1 both sources -> prints the cache path, rc 0"; else bad "1 both sources" "rc=$rc got=$got"; fi
 	if cmp -s "$out" <(cat "$a"; printf '\n'; cat "$b"); then ok "1 combined == a + newline + b"; else bad "1 combined bytes" "$(cat "$out" | tr '\n' '|')"; fi
 	if cmp -s "$out" "$a"; then bad "1 control: combined must differ from a alone" "identical"; else ok "1 control: combined differs from a alone"; fi
 	if [ ! -s "$root/err1" ]; then ok "1 no warning on stderr"; else bad "1 stderr should be empty" "$(cat "$root/err1")"; fi
 
 	# 2. second source missing: warning names it, output == a, rc 0
-	got="$(PJ_PROMPT_SOURCES="$a:$root/nope.md" PJ_PROMPT_OUT="$out" "$0" 2>"$root/err2")"; rc=$?
+	got="$(PJ_PROMPT_SOURCES="$a:$root/nope.md" PJ_PROMPT_OUT="$out" "$sut" 2>"$root/err2")"; rc=$?
 	err="$(cat "$root/err2")"
 	if [ "$rc" -eq 0 ] && cmp -s "$out" "$a"; then ok "2 missing second source -> output == a, rc 0"; else bad "2 missing second" "rc=$rc"; fi
 	case "$err" in *"skipped: $root/nope.md"*) ok "2 warning names the missing file" ;; *) bad "2 warning" "$err" ;; esac
 
 	# 3. no readable source: prints nothing, rc 1
-	got="$(PJ_PROMPT_SOURCES="$root/x.md:$root/y.md" PJ_PROMPT_OUT="$out" "$0" 2>"$root/err3")"; rc=$?
+	got="$(PJ_PROMPT_SOURCES="$root/x.md:$root/y.md" PJ_PROMPT_OUT="$out" "$sut" 2>"$root/err3")"; rc=$?
 	if [ "$rc" -eq 1 ] && [ -z "$got" ]; then ok "3 no source -> nothing printed, rc 1"; else bad "3 no source" "rc=$rc got=$got"; fi
 
 	# 4. unwritable output: falls back to the first source's path, rc 0, warns
 	mkdir -p "$root/ro" && chmod 500 "$root/ro"
-	got="$(PJ_PROMPT_SOURCES="$a:$b" PJ_PROMPT_OUT="$root/ro/sub/combined.md" "$0" 2>"$root/err4")"; rc=$?
+	got="$(PJ_PROMPT_SOURCES="$a:$b" PJ_PROMPT_OUT="$root/ro/sub/combined.md" "$sut" 2>"$root/err4")"; rc=$?
 	err="$(cat "$root/err4")"
 	if [ "$rc" -eq 0 ] && [ "$got" = "$a" ]; then ok "4 unwritable output -> falls back to source a, rc 0"; else bad "4 fallback" "rc=$rc got=$got err=$err"; fi
 	case "$err" in *"falling back"*) ok "4 fallback is announced" ;; *) bad "4 fallback warning" "$err" ;; esac
 	chmod 700 "$root/ro"
 
 	# 4b. --path prints the output path without writing anything (F3)
-	got="$(PJ_PROMPT_SOURCES="$a:$b" PJ_PROMPT_OUT="$root/never/written.md" "$0" --path 2>"$root/err4b")"; rc=$?
+	got="$(PJ_PROMPT_SOURCES="$a:$b" PJ_PROMPT_OUT="$root/never/written.md" "$sut" --path 2>"$root/err4b")"; rc=$?
 	if [ "$rc" -eq 0 ] && [ "$got" = "$root/never/written.md" ] && [ ! -e "$root/never" ]; then ok "4b --path prints the cache path and creates nothing"; else bad "4b --path" "rc=$rc got=$got exists=$([ -e "$root/never" ] && echo yes || echo no)"; fi
+
+	# 6. STRICT on a relay-fed machine (the rules copy exists): a missing source is a REFUSAL.
+	local rc6="$root/rules-copy" o6="$root/cache6/combined.md"
+	mkdir -p "$rc6"
+	got="$(PJ_RULES_COPY="$rc6" PJ_PROMPT_SOURCES="$a:$root/nope.md" PJ_PROMPT_OUT="$o6" "$sut" 2>"$root/err6")"; rc=$?
+	err="$(cat "$root/err6")"
+	if [ "$rc" -eq 3 ] && [ -z "$got" ]; then ok "6 strict: one source missing -> nothing printed, rc 3"; else bad "6 strict refusal" "rc=$rc got=$got"; fi
+	case "$err" in *"REFUSED: source missing: $root/nope.md"*) ok "6 strict: stderr names the missing file" ;; *) bad "6 strict names it" "$err" ;; esac
+	case "$err" in *"strict because $rc6 exists"*) ok "6 strict: stderr says why it is strict" ;; *) bad "6 strict why" "$err" ;; esac
+	if [ ! -e "$o6" ]; then ok "6 strict: no output file written"; else bad "6 strict wrote" "$o6 exists"; fi
+	# 6b. every missing file is named, not only the first
+	got="$(PJ_RULES_COPY="$rc6" PJ_PROMPT_SOURCES="$root/m1.md:$a:$root/m2.md" PJ_PROMPT_OUT="$o6" "$sut" 2>"$root/err6b")"; rc=$?
+	err="$(cat "$root/err6b")"
+	case "$err" in *"missing: $root/m1.md"*"missing: $root/m2.md"*) ok "6b strict names every missing file" ;; *) bad "6b strict names all" "rc=$rc $err" ;; esac
+	# 6c. a dangling link is missing too (the link moved aside, or its target gone)
+	ln -s "$root/moved-away.md" "$root/dangling.md"
+	got="$(PJ_RULES_COPY="$rc6" PJ_PROMPT_SOURCES="$a:$root/dangling.md" PJ_PROMPT_OUT="$o6" "$sut" 2>"$root/err6c")"; rc=$?
+	if [ "$rc" -eq 3 ] && [ -z "$got" ] && grep -q "missing: $root/dangling.md" "$root/err6c"; then ok "6c strict: a dangling link is refused and named"; else bad "6c dangling" "rc=$rc $(cat "$root/err6c")"; fi
+	# 6d. CONTROL: strict with every source present builds exactly as the Mac does
+	got="$(PJ_RULES_COPY="$rc6" PJ_PROMPT_SOURCES="$a:$b" PJ_PROMPT_OUT="$o6" "$sut" 2>"$root/err6d")"; rc=$?
+	if [ "$rc" -eq 0 ] && [ "$got" = "$o6" ] && cmp -s "$o6" <(cat "$a"; printf '\n'; cat "$b") && [ ! -s "$root/err6d" ]; then ok "6d control: strict with both sources present builds, rc 0, silent"; else bad "6d strict healthy" "rc=$rc got=$got $(cat "$root/err6d")"; fi
+	# 6e. CONTROL: the same missing source with NO rules copy (the Mac) still degrades
+	got="$(PJ_PROMPT_SOURCES="$a:$root/nope.md" PJ_PROMPT_OUT="$root/cache6e/c.md" "$sut" 2>"$root/err6e")"; rc=$?
+	if [ "$rc" -eq 0 ] && [ "$got" = "$root/cache6e/c.md" ] && grep -q 'skipped' "$root/err6e"; then ok "6e control: no rules copy -> the Mac's degrade (skip, rc 0)"; else bad "6e degrade" "rc=$rc got=$got"; fi
+
+	# 7. --missing lists the unreadable sources (pj names them when it refuses, W-20260929-A96)
+	got="$(PJ_PROMPT_SOURCES="$root/m1.md:$a:$root/dangling.md" PJ_PROMPT_OUT="$root/never7/x.md" "$sut" --missing 2>"$root/err7")"; rc=$?
+	if [ "$rc" -eq 1 ] && [ "$got" = "$root/m1.md"$'\n'"$root/dangling.md" ] && [ ! -e "$root/never7" ]; then ok "7 --missing prints each missing source, rc 1, writes nothing"; else bad "7 --missing" "rc=$rc got=$got"; fi
+	got="$(PJ_PROMPT_SOURCES="$a:$b" "$sut" --missing 2>"$root/err7b")"; rc=$?
+	if [ "$rc" -eq 0 ] && [ -z "$got" ]; then ok "7 control: --missing with every source present prints nothing, rc 0"; else bad "7 --missing none" "rc=$rc got=$got"; fi
 
 	# 5. real defaults: the two shipped paths exist here (informational, not a failure elsewhere)
 	if [ -r "$HOME/.claude/pj-global/RULES.md" ] && [ -r "$HOME/.claude/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md" ]; then
@@ -117,11 +190,13 @@ selftest() {
 
 SOURCES="${PJ_PROMPT_SOURCES:-$HOME/.claude/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md:$HOME/.claude/pj-global/RULES.md}"
 OUT="${PJ_PROMPT_OUT:-${XDG_CACHE_HOME:-$HOME/.cache}/dotfiles/pj-system-prompt.md}"
+RULES_COPY="${PJ_RULES_COPY:-$HOME/repos/pj-rules}"
 
 case "${1:-}" in
 --help | -h) usage; exit 0 ;;
 --selftest) selftest; exit $? ;;
 --path) printf '%s\n' "$OUT"; exit 0 ;;   # the cache path WITHOUT building (pj-launch-check compares against it; F3)
+--missing) missing "$SOURCES"; exit $? ;;
 "") ;;
 *) printf 'pj-prompt-file: unknown argument %s\n' "$1" >&2; usage >&2; exit 2 ;;
 esac
