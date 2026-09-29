@@ -58,7 +58,7 @@ chmod +x "$FAKE/afplay" "$FAKE/imsg"
 
 export PATH="$FAKE:$PATH" PJ_PING_AFPLAY="$FAKE/afplay" PJ_PING_IMSG="$FAKE/imsg" PJ_PING_PAIR_GAP=2
 export IMSG_TO="selftest@example.invalid" CLAUDE_CODE_SESSION_NAME="st-sess" HERDR_PANE_ID="w3X:p6H"
-unset PJ_NO_PING PJ_PING_LOG PJ_PING_ALPHABET PJ_PING_FAKE_IMSG_RC
+unset PJ_NO_PING PJ_PING_LOG PJ_PING_ALPHABET PJ_PING_FAKE_IMSG_RC PJ_LAUNCHED_BY   # PJ_LAUNCHED_BY: this suite may run inside a worker
 
 # arm <name>: fresh state dir, ping log and fake log for one arm
 arm() {
@@ -160,6 +160,26 @@ OUT="$(PJ_NO_PING=1 "$TOOL" question "Pick a route" 2>/dev/null)"; RC=$?
 sleep 1.5
 [ "$RC" -eq 0 ] && [ -z "$OUT" ] && [ "$(ncalls)" -eq 0 ] && [ ! -e "$LOG" ] \
   && ok "9 PJ_NO_PING=1 -> exit 0, no id, nothing called, nothing logged" || bad "9 kill switch" "rc=$RC out=$OUT $(cat "$PJ_PING_FAKE_LOG")"
+
+# 9b-9e. PING-1 (Gavin 2026-09-29, 12:25 AEST): a session launched by another session
+# (PJ_LAUNCHED_BY set by pj-worker or engage-worker, inherited by subagents) never pings,
+# on a question or on finishing. One log line names the launcher; nothing is called.
+arm launched
+OUT="$(PJ_LAUNCHED_BY=conductor-x "$TOOL" question "Pick a route" 2>/dev/null)"; RC=$?
+sleep 1.5
+[ "$RC" -eq 0 ] && [ -z "$OUT" ] && [ "$(ncalls)" -eq 0 ] \
+  && ok "9b PJ_LAUNCHED_BY set, question -> exit 0, no id, nothing called" || bad "9b launched question" "rc=$RC out=$OUT $(cat "$PJ_PING_FAKE_LOG")"
+OUT="$(PJ_LAUNCHED_BY=conductor-x "$TOOL" done "Finished" --detach 2>/dev/null)"; RC=$?
+sleep 1.5
+[ "$RC" -eq 0 ] && [ -z "$OUT" ] && [ "$(ncalls)" -eq 0 ] \
+  && ok "9c PJ_LAUNCHED_BY set, done --detach -> exit 0, no id, nothing called" || bad "9c launched done" "rc=$RC out=$OUT $(cat "$PJ_PING_FAKE_LOG")"
+[ "$(grep -c 'silent	launched-by=conductor-x' "$LOG" 2>/dev/null)" -eq 2 ] \
+  && ok "9d both silent pings are logged, naming the launcher" || bad "9d silent log" "$(cat "$LOG" 2>/dev/null)"
+arm notlaunched
+OUT="$(PJ_LAUNCHED_BY= "$TOOL" question "Pick a route" 2>/dev/null)"; RC=$?
+wait_lines "$PJ_PING_FAKE_LOG" 1
+[ "$RC" -eq 0 ] && [ -n "$OUT" ] && [ "$(ncalls)" -gt 0 ] \
+  && ok "9e control: PJ_LAUNCHED_BY empty -> the ping goes out" || bad "9e control" "rc=$RC out=$OUT calls=$(ncalls)"
 
 # 10. --detach returns at once; the worker still does everything, in order.
 arm detach

@@ -564,8 +564,8 @@ new_world room; lists; start_happy; new_session
 run start a59-pjworker --cwd "$WT"
 check "S1 a clean split start: rc 0, verified pj" '[ "$RC" -eq 0 ] && [ "$(j .result)" = "pass " ]'
 check "S1b the name is READ from the registry, and not doubled (worktree a59-pjworker + name a59-pjworker)" '[ "$(j .session_name)" = "fifty-shades-of-dotfiles-main-a59-pjworker " ]'
-check "S1c the launch line: cd to --cwd, the chosen name, pj --profile default" \
-  'grep -qxF "pane run w3X:p4W  builtin cd -- $WT && CLAUDE_CODE_SESSION_NAME=fifty-shades-of-dotfiles-main-a59-pjworker pj --profile default" "$FAKE/calls"'
+check "S1c the launch line: cd to --cwd, PING-1 marker naming the conductor, the chosen name, pj --profile default" \
+  'grep -qxF "pane run w3X:p4W  builtin cd -- $WT && PJ_LAUNCHED_BY=fifty-shades-of-dotfiles-main CLAUDE_CODE_SESSION_NAME=fifty-shades-of-dotfiles-main-a59-pjworker pj --profile default" "$FAKE/calls"'
 check "S1d the handshake line never contains its own sentinel (only printf joins it)" \
   'l="$(grep "^pane run w3X:p4W .*PJWREADY" "$FAKE/calls")"; [ -n "$l" ] && ! has "$l" "PJWREADY-" && has "$l" "clear;"'
 check "S1e split, not --pane: one split of the CALLING pane, --no-focus, --cwd" \
@@ -672,7 +672,7 @@ check "S13b it launches command claude with no settings and no MCP, and NO bypas
 check "S13c it says UNGUARDED BY DESIGN" 'has "$ERR" "UNGUARDED BY DESIGN"'
 check "S13d a fresh folder under the clean root, and the start is logged as cleanroom" \
   'd="$(j .cwd)"; d="${d% }"; case "$d" in "$H/.cache/claude-clean/"*-cr) [ -d "$d" ];; *) false;; esac && grep -q "kind=cleanroom name=cr .*result=unguarded" "$STATE/workers.log"'
-check "S13e its session name is the caller's project, marked cleanroom" 'grep -q "CLAUDE_CODE_SESSION_NAME=fifty-shades-of-dotfiles-cleanroom-cr command claude" "$FAKE/calls"'
+check "S13e its session name is the caller's project, marked cleanroom" 'grep -q "PJ_LAUNCHED_BY=fifty-shades-of-dotfiles-main CLAUDE_CODE_SESSION_NAME=fifty-shades-of-dotfiles-cleanroom-cr command claude" "$FAKE/calls"'
 new_world; lists; start_happy
 run start cr --cleanroom
 check "S13f a clean room counts toward the caller's project cap: refused at 4, rc 6" '[ "$RC" -eq 6 ] && has "$ERR" "project cap: 4 of 4"'

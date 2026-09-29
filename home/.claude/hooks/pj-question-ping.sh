@@ -98,7 +98,7 @@ EOF
   # PATH, so no path through the hook or pj-ping can reach the real binaries.
   export PATH="$fake:$PATH" PJ_PING_AFPLAY="$fake/afplay" PJ_PING_IMSG="$fake/imsg"
   export IMSG_TO="selftest@example.invalid" CLAUDE_CODE_SESSION_NAME="st-sess" PJ_PING_PAIR_GAP=2
-  unset PJ_NO_PING PJ_PING_DEBOUNCE PJ_PING_LOG HERDR_PANE_ID PJ_PING_BIN
+  unset PJ_NO_PING PJ_PING_DEBOUNCE PJ_PING_LOG HERDR_PANE_ID PJ_PING_BIN PJ_LAUNCHED_BY   # PING-1: the suite may run inside a worker
   echo "pj-question-ping selftest of $hook in $root"
   echo "  pj-ping: $(f="$(dirname "$hook")/../../.local/bin/pj-ping"; [ -x "$f" ] && echo "$f" || command -v pj-ping || echo MISSING)"
 

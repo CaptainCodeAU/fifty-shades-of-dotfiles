@@ -267,6 +267,17 @@ fi
 
 [ "${PJ_NO_PING:-}" = "1" ] && { printf 'pj-ping: PJ_NO_PING=1, nothing sent\n' >&2; exit 0; }
 
+# PING-1 (Gavin 2026-09-29): a session launched by another session never pings. pj-worker
+# and engage-worker set PJ_LAUNCHED_BY to the launcher's name; subagents inherit it. Its
+# conductor, or the 10-minute timer, answers instead. One log line names the launcher.
+if [ -n "${PJ_LAUNCHED_BY:-}" ]; then
+  BY=$(printf '%s' "$PJ_LAUNCHED_BY" | clean 40); BY="${BY:-?}"
+  SESSION=$(session_name | clean 40)
+  log - "$KIND" "${SESSION:-pj}" silent "launched-by=$BY"
+  printf 'pj-ping: launched by %s (PJ_LAUNCHED_BY), nothing sent (PING-1)\n' "$BY" >&2
+  exit 0
+fi
+
 SESSION=$(session_name | clean 40); SESSION="${SESSION:-pj}"
 PROJECT=$(project_label | clean 40); PROJECT="${PROJECT:-pj}"
 PANE=$(short_pane | clean 40)
