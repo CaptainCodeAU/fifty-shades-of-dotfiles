@@ -97,7 +97,7 @@ BEGIN { US = sprintf("%c", 31); RSC = sprintf("%c", 30); OPM = sprintf("%c", 2);
         # of them, no alias, no SAFE_RM_OFF and no truncating redirection cannot be
         # denied, so it is not emitted: bash 3.2 costs ~0.15 ms per command it sees.
         # nofilter=1 emits everything; the selftest runs every arm both ways.
-        nt = split("sudo doas env command exec time repeat nice timeout gtimeout caffeinate stdbuf gstdbuf watch xargs gxargs eval sh bash zsh dash ksh mksh yash fish rm grm unlink gunlink shred gshred srm wipe truncate gtruncate dd gdd cp gcp find gfind fd fdfind git rsync rimraf del-cli docker podman docker-compose brew pnpm bun bunx npx pnpx uv node nodejs deno perl ruby osascript diskutil wipefs tmutil trash-empty trash-rm export declare typeset local readonly unset hash grhh gwipe gpristine", TL, " ")
+        nt = split("sudo doas env command exec time repeat nice timeout gtimeout caffeinate stdbuf gstdbuf watch xargs gxargs eval sh bash zsh dash ksh mksh yash fish rm grm unlink gunlink shred gshred srm wipe truncate gtruncate dd gdd cp gcp find gfind fd fdfind git rsync rimraf del-cli docker podman docker-compose brew pnpm bun bunx npx pnpx uv node nodejs deno perl ruby osascript diskutil wipefs tmutil trash-empty trash-rm crontab tee gtee export declare typeset local readonly unset hash grhh gwipe gpristine", TL, " ")
         for (k = 1; k <= nt; k++) TRIG[TL[k]] = 1
         hasal = 0
         if (snap != "") loadaliases() }
@@ -142,14 +142,14 @@ function flushword() {
   }
   cur[d] = ""; inw[d] = 0
 }
-function emitcmd(   k, out, w, op, intr, nop, fw, data, al, safe) {
+function emitcmd(   k, out, w, op, intr, nop, fw, data, al, safe, trd) {
   flushword()
   if (nw[d] > 0) {
-    intr = nofilter + 0; nop = 0; fw = ""; data = ""; al = 0; safe = 0
+    intr = nofilter + 0; nop = 0; fw = ""; data = ""; al = 0; safe = 0; trd = 0
     for (k = 1; k <= nw[d]; k++) {
       w = W[d, k]
       if (substr(w, 1, 1) == OPM) {
-        op = substr(w, 2); if (op == ">" || op == "&>" || op == ">&") intr = 1   #M: prefilter: truncating redirect
+        op = substr(w, 2); if (op == ">" || op == "&>" || op == ">&") { intr = 1; trd = 1 }   #M: prefilter: truncating redirect
         k++; continue
       }
       nop++
@@ -162,7 +162,7 @@ function emitcmd(   k, out, w, op, intr, nop, fw, data, al, safe) {
     if (nop == 0) intr = 1
     # echo/printf/print is DATA: emitted as stdin for its pipeline, which only
     # matters when an interpreter reads it (echo code | python3)
-    if (!al && (fw == "echo" || fw == "printf" || fw == "print") && !(fw in AV)) {
+    if (!al && (fw == "echo" || fw == "printf" || fw == "print") && !(fw in AV) && !trd) {
       if (!safe) { print "H" US pid[d] US enc(data); nw[d] = 0; return }   #M: echo is data for its pipeline
     }
     if (intr) {
@@ -374,6 +374,9 @@ _msg() { # $1 = rule id -> what it does, then the safe route
     git-switch-discard) echo "git switch -f / --discard-changes throws away uncommitted work. SAFE ROUTE: git stash push -u first, or ask Gavin." ;;
     git-branch-force) echo "git branch -D / --delete --force / -M / -C deletes or overwrites a branch even when unmerged. SAFE ROUTE: git branch -d (refuses unmerged work)." ;;
     git-stash-drop) echo "git stash drop / clear destroys stashed work. SAFE ROUTE: ask Gavin." ;;
+    git-rm-force)   echo "git rm -f removes files AND their uncommitted changes, which are in neither the Trash nor git. SAFE ROUTE: commit or stash first, git rm --cached to keep the file, or ask Gavin." ;;
+    git-filter-repo) echo "git filter-repo / filter-branch rewrites history; the old commits are gone once their refs expire. SAFE ROUTE: ask Gavin." ;;
+    crontab-remove) echo "crontab -r deletes the whole crontab with no copy. SAFE ROUTE: crontab -l > a backup file first, or ask Gavin." ;;
     git-history-prune) echo "git reflog expire/delete, git gc --prune=now and git prune destroy the recovery trail. SAFE ROUTE: ask Gavin." ;;
     rsync-delete)   echo "rsync --delete* / --remove-source-files deletes outside the Trash. SAFE ROUTE: rsync without them (-n to preview), then rm extras (bare rm), or ask Gavin." ;;
     inline-code)    echo "inline code deletes files (os.remove, shutil.rmtree, Path.unlink, fs.rm, unlink, /bin/rm...) outside the Trash. SAFE ROUTE: delete with bare rm in the shell, or ask Gavin." ;;
@@ -422,6 +425,9 @@ _rt git-restore         "${_RG}restore${_RR}"
 _rt git-switch-discard  "${_RG}switch[[:space:]][^|;&]*(-f|--force|--discard-changes)${_RR}"
 _rt git-branch-force    "${_RG}branch[[:space:]][^|;&]*(-D|-M|-C|--force)${_RR}"
 _rt git-stash-drop      "${_RG}stash[[:space:]]+(drop|clear)${_RR}"
+_rt git-rm-force        "${_RG}rm[[:space:]]([^|;&]*[[:space:]])?(-[A-Za-z]*f[A-Za-z]*|--force)${_RR}"
+_rt git-filter-repo     "${_RG}filter-(repo|branch)${_RR}"
+_rt crontab-remove      "${_RL}crontab[[:space:]]([^|;&]*[[:space:]])?-[A-Za-z]*r"
 _rt git-history-prune   "${_RG}(reflog[[:space:]]+(expire|delete)|prune|gc[[:space:]][^|;&]*--prune)"
 _rt rsync-delete        "${_RL}rsync[[:space:]][^|;&]*--(delete|remove-source-files)"
 _rt inline-code         '(os\.(remove|unlink|rmdir|removedirs)|shutil\.rmtree|\.unlink\(|unlinkSync|rmSync|rmdirSync|fs\.(rm|unlink|rmdir)|File\.delete|FileUtils\.rm)'
@@ -548,7 +554,7 @@ _shell_text() { # $1 = text
 _simple() {
   [ -n "$REASON_ID" ] && return 0
   local -a a=()
-  local w expect="" trunc=""
+  local w expect="" trunc="" devin=0
   for w in "$@"; do
     if [ -n "$expect" ]; then
       case "$expect" in
@@ -562,6 +568,7 @@ _simple() {
             [0-9]|-|/dev/null|/dev/stdout|/dev/stderr|/dev/tty|'$(...)'*) ;;
             *) trunc="$w" ;;
           esac ;;
+        '<') [ "$w" = /dev/null ] && devin=1 ;;   #M: stdin from /dev/null
       esac
       expect=""; continue
     fi
@@ -569,6 +576,7 @@ _simple() {
     a[${#a[@]}]="$w"
   done
   TRUNC="$trunc"
+  DEVIN="$devin"
   if [ ${#a[@]} -eq 0 ]; then
     [ -n "$TRUNC" ] && _deny redir-trunc "> $TRUNC"      #M: bare truncating redirection
     return 0
@@ -747,6 +755,27 @@ _argv() {
     unlink|gunlink) _deny unlink "$base"; return 0 ;;                                            #M: unlink
     shred|gshred|srm|wipe) _deny shred "$base"; return 0 ;;                                      #M: shred
     truncate|gtruncate) _deny truncate "$base"; return 0 ;;                                      #M: truncate
+    echo|print|printf)   # W-20260929-A37: an empty output into a truncating redirection
+      if [ -n "$TRUNC" ]; then
+        if [ "$base" = printf ]; then
+          [ $# -eq 1 ] && [ -z "$1" ] && _deny redir-trunc "printf '' > $TRUNC"   #M: printf '' truncation
+          return 0
+        fi
+        local e_n=0 e_out=0
+        for w in "$@"; do case "$w" in -n) e_n=1 ;; -e|-E|-r|-nE|-ne|-En|-en) case "$w" in *n*) e_n=1 ;; esac ;; '') ;; *) e_out=1 ;; esac; done
+        [ "$e_n" -eq 1 ] && [ "$e_out" -eq 0 ] && _deny redir-trunc "$base -n > $TRUNC"   #M: echo -n truncation
+      fi
+      return 0 ;;
+    tee|gtee)   # W-20260929-A37: tee f < /dev/null empties f
+      if [ "$DEVIN" = 1 ]; then
+        local t_ap=0
+        for w in "$@"; do case "$w" in --append|-a|-[A-Za-z]*a*) t_ap=1 ;; esac; done
+        [ "$t_ap" -eq 0 ] && _deny redir-trunc "$base < /dev/null"   #M: tee < /dev/null truncation
+      fi
+      return 0 ;;
+    crontab)   # W-20260929-A37: crontab -r deletes the whole table
+      for w in "$@"; do [[ $w =~ ^-[A-Za-z]*r[A-Za-z]*$ ]] && { _deny crontab-remove "crontab $w"; return 0; }; done   #M: crontab -r
+      return 0 ;;
     dd|gdd)
       for w in "$@"; do
         :
@@ -1014,6 +1043,12 @@ _git_cmd() {
     esac
   done
   case "$sub" in
+    rm)   # W-20260929-A37: -f also drops uncommitted changes; --cached keeps the file
+      if ! _o --cached && { _l f || _o --force; }; then _deny git-rm-force "git rm -f"; fi   #M: git rm -f
+      ;;
+    filter-repo|filter-branch)
+      _deny git-filter-repo "git $sub"   #M: git filter-repo
+      ;;
     worktree)
       [ "${args[0]:-}" = remove ] && _deny git-worktree-remove "git worktree remove"          #M: git worktree remove
       ;;
@@ -1212,6 +1247,22 @@ SNAP
   _must redir-trunc         'cat /dev/null > f'               'cat /dev/null > notes.txt'
   _must redir-trunc         'cp /dev/null f'                  'cp /dev/null notes.txt'
   _must redir-trunc         '2> f bare'                       '2> notes.txt'
+  # W-20260929-A37 (red-team H7): truncation by a command, git rm -f, history rewrites,
+  # crontab -r. The allow arms are the done-when's controls.
+  _must redir-trunc         'A37 echo -n > f (D11)'           'echo -n > notes.txt'
+  _must redir-trunc         "A37 printf '' > f (D12)"         "printf '' > notes.txt"
+  _must redir-trunc         'A37 tee f < /dev/null (D47)'     'tee notes.txt < /dev/null'
+  _must git-rm-force        'A37 git rm -rf src (D45)'        'git rm -rf src'
+  _must git-rm-force        'A37 git rm --force f'            'git rm --force notes.txt'
+  _must git-filter-repo     'A37 git filter-repo (D44)'       'git filter-repo --path secrets --invert-paths'
+  _must git-filter-repo     'A37 git filter-branch'           'git filter-branch --tree-filter true HEAD'
+  _must crontab-remove      'A37 crontab -r (D50)'            'crontab -r'
+  _must crontab-remove      'A37 crontab -ir'                 'crontab -ir'
+  _must -                   'A37 echo hi >> f (append)'       'echo hi >> notes.txt'
+  _must -                   'A37 echo hi > f (content, not an empty truncation)' 'echo hi > notes.txt'
+  _must -                   'A37 git rm --cached f'           'git rm --cached notes.txt'
+  _must -                   'A37 crontab -l'                  'crontab -l'
+  _must -                   'A37 tee -a f < /dev/null'        'tee -a notes.txt < /dev/null'
   _must rsync-delete        'rsync --delete'                  'rsync -a --delete src/ dst/'
   _must rsync-delete        'rsync --delete-after'            'rsync -a --delete-after src/ dst/'
   _must rsync-delete        'rsync --del'                     'rsync -a --del src/ dst/'
@@ -1381,7 +1432,6 @@ SNAP
   _must - '>> append bare'                  '>> notes.txt'
   _must - ': > /dev/null'                   ': > /dev/null'
   _must - 'exec > log (logging setup)'      'exec > run.log'
-  _must - 'echo -n > f (output)'            'echo -n > f'
   _must - 'rsync -a'                        'rsync -a src/ dst/'
   _must - 'rsync --delay-updates'           'rsync -a --delay-updates src/ dst/'
   _must - 'rsync --max-delete'              'rsync -a --max-delete=0 src/ dst/'
@@ -1632,6 +1682,9 @@ git-restore|git restore src/app.c
 git-switch-discard|git switch -f main
 git-branch-force|git branch -D topic
 git-stash-drop|git stash drop
+git-rm-force|git rm -rf src
+git-filter-repo|git filter-repo --path x --invert-paths
+crontab-remove|crontab -r
 git-history-prune|git reflog expire --expire=now --all
 rsync-delete|rsync -a --delete a/ b/
 inline-code|python3 -c '"'"'import os; os.remove("f")'"'"'
