@@ -100,7 +100,7 @@ BEGIN { US = sprintf("%c", 31); RSC = sprintf("%c", 30); OPM = sprintf("%c", 2);
         # of them, no alias, no SAFE_RM_OFF and no truncating redirection cannot be
         # denied, so it is not emitted: bash 3.2 costs ~0.15 ms per command it sees.
         # nofilter=1 emits everything; the selftest runs every arm both ways.
-        nt = split("sudo doas env command exec time repeat nice timeout gtimeout caffeinate stdbuf gstdbuf watch xargs gxargs eval sh bash zsh dash ksh mksh yash fish rm grm unlink gunlink shred gshred srm wipe truncate gtruncate dd gdd cp gcp find gfind fd fdfind git rsync rimraf del-cli docker podman docker-compose brew pnpm bun bunx npx pnpx uv node nodejs deno perl ruby osascript diskutil wipefs tmutil trash-empty trash-rm crontab tee gtee script source . export declare typeset local readonly unset hash grhh gwipe gpristine", TL, " ")
+        nt = split("sudo doas env command exec time repeat nice timeout gtimeout caffeinate stdbuf gstdbuf watch xargs gxargs eval sh bash zsh dash ksh mksh yash fish rm grm unlink gunlink shred gshred srm wipe truncate gtruncate dd gdd cp gcp find gfind fd fdfind git rsync rimraf del-cli docker podman docker-compose brew pnpm bun bunx npx pnpx uv node nodejs deno perl ruby osascript diskutil wipefs tmutil trash trash-empty trash-rm crontab tee gtee script source . export declare typeset local readonly unset hash grhh gwipe gpristine", TL, " ")
         for (k = 1; k <= nt; k++) TRIG[TL[k]] = 1
         hasal = 0
         if (snap != "") loadaliases() }
@@ -414,6 +414,7 @@ _msg() { # $1 = rule id -> what it does, then the safe route
     tmutil)         echo "tmutil delete* removes backups or snapshots. SAFE ROUTE: ask Gavin." ;;
     guard-timeout)  echo "the guard gave NO VERDICT within ${DEADLINE:-3} s (a timeout, not a match). SAFE ROUTE: split the command into smaller pieces, or ask Gavin." ;;
     guard-no-verdict) echo "the guard exited without a verdict (a crash, not a match). SAFE ROUTE: ask Gavin; the guard's --selftest shows what broke." ;;
+    trash-path)     echo "trash called by path (/usr/bin/trash), or through command/env, skips the trash guard (it refuses a blank argument, the current folder, ~, ~/CODE and repo roots; an empty trash '' moved a whole repo to the Trash on 2026-09-29). SAFE ROUTE: plain trash, which goes through the guard." ;;
     trash-empty)    echo "emptying the Trash (trash-empty, trash-rm, Finder empty trash) makes every earlier delete permanent. SAFE ROUTE: ask Gavin." ;;
     *)              echo "this command destroys data outside the Trash. SAFE ROUTE: ask Gavin." ;;
   esac
@@ -464,6 +465,7 @@ _rt rimraf              "${_RL}(rimraf|del-cli)${_RR}"
 _rt disk                "${_RL}(diskutil[[:space:]]+[A-Za-z]*([Ee]rase|[Pp]artition|[Zz]ero)|mkfs|newfs|wipefs)"
 _rt tmutil              "${_RL}tmutil[[:space:]]+delete"
 _rt trash-empty         "${_RL}(trash-empty|trash-rm)${_RR}|[Ee]mpty([[:space:]]+the)?[[:space:]]+[Tt]rash"
+_rt trash-path          "(^|[^A-Za-z0-9_-])[A-Za-z0-9_./~-]*/trash([^A-Za-z0-9_.-]|\$)|${_RL}(command|env)[[:space:]]([^|;&]*[[:space:]])?trash${_RR}"
 
 _raw_trigger() { # $1 = raw payload -> RAW_HIT = the first rule id it mentions; 0 on a hit
   local t r i=0
@@ -628,6 +630,7 @@ _argv() {
   [ -n "$REASON_ID" ] && return 0
   local adepth="$1"; shift
   local RM_LOOKUP="${RM_LOOKUP-}" pa=""
+  local TRASH_VIA="${TRASH_VIA-}"   # command/env seen before a trash (trash-path, 2026-09-29)
   # leading assignments: VAR=1 cmd
   while [ $# -gt 0 ] && [[ $1 == *=* ]] && _is_assign "$1"; do
     case "$1" in SAFE_RM_OFF=*|SAFE_RM_OFF+=*) _deny safe-rm-off "$1"; return 0 ;; esac   #M: SAFE_RM_OFF prefix
@@ -694,6 +697,7 @@ _argv() {
       [ $# -gt 0 ] && _argv "$adepth" "$@"                                                   #M: precommand look-through
       return 0 ;;
     command)
+      TRASH_VIA="command"                                                                    #M: command trash
       while [ $# -gt 0 ]; do
         case "$1" in -v|-V) return 0 ;; esac   #M: command -v is a lookup
         case "$1" in -*[vV]*) return 0 ;; -*p*) RM_LOOKUP="command $1" ;; esac                #M: command -p
@@ -728,6 +732,7 @@ _argv() {
       return 0 ;;
     env)
       RM_LOOKUP="env"                                                                        #M: env rm
+      TRASH_VIA="env"                                                                        #M: env trash
       while [ $# -gt 0 ]; do
         case "$1" in
           --) shift; break ;;
@@ -919,6 +924,10 @@ _argv() {
       case "${1:-}" in delete|deletelocalsnapshots|thinlocalsnapshots|deleteinprogress) _deny tmutil "tmutil $1"; return 0 ;; esac   #M: tmutil delete
       return 0 ;;
     trash-empty|trash-rm) _deny trash-empty "$base"; return 0 ;;   #M: trash-empty
+    trash)   # 2026-09-29: only the PATH shim runs trash-guard; a path or command/env skips it
+      if [[ $c == */* ]] && [[ $c != */.local/bin/trash ]]; then _deny trash-path "$c"; return 0; fi   #M: trash by path
+      [ -n "$TRASH_VIA" ] && { _deny trash-path "$TRASH_VIA trash"; return 0; }                       #M: command/env trash
+      return 0 ;;
     # oh-my-zsh aliases that hide a reset --hard, denied BY NAME as well (Gavin,
     # 2026-09-23). The snapshot's alias table normally denies them by their
     # expansion above; this arm covers a hook that cannot read the snapshot.
@@ -1263,6 +1272,20 @@ SNAP
   _must rm-path             'quoted /bin/rm as command'       '"/bin/rm" x'
   _must rm-path             'backslashed /bin/rm'             '\/bin/rm x'
   _must rm-path             'env rm by path'                  'env /bin/rm x'
+  # 2026-09-29: the trash guard lives in the PATH shim, so these skip it
+  _must trash-path          '/usr/bin/trash'                  '/usr/bin/trash x'
+  _must trash-path          'quoted /usr/bin/trash'           '"/usr/bin/trash" x'
+  _must trash-path          'command trash'                   'command trash x'
+  _must trash-path          'env trash'                       'env trash x'
+  _must trash-path          'env VAR=1 trash'                 'env FOO=1 trash x'
+  _must trash-path          'sh -c /usr/bin/trash'            "sh -c '/usr/bin/trash x'"
+  _must trash-path          'sh -c command trash'             "sh -c 'command trash x'"
+  _must trash-path          'eval command trash'              "eval 'command trash x'"
+  _must trash-path          'eval /usr/bin/trash'             'eval /usr/bin/trash x'
+  _must trash-path          '$(env trash)'                    'echo $(env trash x)'
+  _must trash-path          '$(/usr/bin/trash)'               'echo "$(/usr/bin/trash x)"'
+  _must trash-path          'xargs /usr/bin/trash'            'ls | xargs /usr/bin/trash'
+  _must trash-path          'find -exec /usr/bin/trash'       'find . -name x -exec /usr/bin/trash {} +'
   # rm-lookup (W-20260925-A25): each of these finds rm through a PATH that may
   # not hold the Trash shim. env -i and command -p MEASURED to reach /bin/rm.
   _must rm-lookup           'env rm'                          'env rm x'
@@ -1546,6 +1569,11 @@ SNAP
   _must - 'bash script.sh'                  'bash ./install.sh --check'
   _must - 'sh -c harmless'                  "sh -c 'ls -la'"
   _must - 'trash command'                   'trash notes.txt'
+  _must - 'trash with options (the shim)'   'trash -v notes.txt'
+  _must - 'the trash shim by path'          '~/.local/bin/trash notes.txt'
+  _must - 'command -v trash (lookup)'       'command -v trash'
+  _must - 'trash-guard --check'             'trash-guard --check -- notes.txt'
+  _must - 'the trash words as data'         'echo "never /usr/bin/trash or command trash"'
   _must - 'mv (not a deleter here)'         'command mv a b'
   _must - 'alias ll (harmless, fixture)'    'll -d /tmp'
   _must - 'self alias ls=ls -G'             'ls notes.txt'
@@ -1771,7 +1799,8 @@ prune|docker system prune -af
 rimraf|rimraf dist
 disk|diskutil eraseDisk APFS X disk4
 tmutil|tmutil deletelocalsnapshots /
-trash-empty|trash-empty'
+trash-empty|trash-empty
+trash-path|/usr/bin/trash x'
   SNAP_DIR="$fx/snap"; SNAP_DONE=0     # the fixture aliases, not this machine's (its grm is git rm)
   while IFS='|' read -r id smp; do
     _classify "$smp" "$fx/repo"; [ "$REASON_ID" = "$id" ]; _chk "sample is a real $id deny: $smp" $?
