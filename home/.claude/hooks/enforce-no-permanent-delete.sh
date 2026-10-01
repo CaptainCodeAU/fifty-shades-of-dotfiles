@@ -1110,10 +1110,12 @@ _find_cmd() { # find args: -delete, and -exec/-execdir/-ok/-okdir bodies
   # -exec body (rm, rmdir, trash, sh -c 'rm ...') still runs on EVERY file when no
   # test stands before it in its AND-chain (one starts after a -o, a , or a "(").
   # And -depth (BSD -d) switches -prune off, so a pruned folder is no longer kept.
-  # tst[d]: the current AND-chain at paren depth d has a test; grp[d]: the group
-  # at depth d holds one (a closed group counts as a test in the chain around it).
+  # tst[d]: the current AND-chain at paren depth d has a test. all[d]: every
+  # chain already closed by a -o in the group at depth d had one. A group is a
+  # test for the chain around it only when ALL its chains are: ( -name a -o -print )
+  # is true for every file.
   local adepth="$1"; shift
-  local -a tst=(0) grp=(0)
+  local -a tst=(0) all=(1)
   local d=0 k guarded lead=1 depth="" prune=0 deleter=""
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -1133,12 +1135,13 @@ _find_cmd() { # find args: -delete, and -exec/-execdir/-ok/-okdir bodies
           [ "$guarded" = 1 ] || { _deny find-exec-untested "find $deleter with no test before it"; return 0; }   #M: find-exec-untested
         fi
         ;;
-      '(') d=$((d + 1)); tst[$d]=0; grp[$d]=0 ;;                                       #M: find ( opens a chain
+      '(') d=$((d + 1)); tst[$d]=0; all[$d]=1 ;;                                       #M: find ( opens a chain
       ')') if [ $d -gt 0 ]; then
-             if [ "${grp[$d]}" = 1 ]; then tst[$((d - 1))]=1; grp[$((d - 1))]=1; fi    #M: find (group) counts as a test
+             [ "${all[$d]}" = 1 ] && [ "${tst[$d]}" = 1 ] && tst[$((d - 1))]=1          #M: find (group) counts as a test
              d=$((d - 1))
            fi ;;
-      -o|-or|,) tst[$d]=0 ;;                                                           #M: find -o starts a chain
+      -o|-or|,) [ "${tst[$d]}" = 1 ] || all[$d]=0                                      #M: find untested alternative opens the group
+                tst[$d]=0 ;;                                                           #M: find -o starts a chain
       '!'|-not|-a|-and|-true) ;;
       -depth|-d) depth="$1" ;;                                                         #M: find -depth seen
       -prune) prune=1 ;;                                                               #M: find -prune seen
@@ -1146,15 +1149,21 @@ _find_cmd() { # find args: -delete, and -exec/-execdir/-ok/-okdir bodies
       -fprintf) shift; [ $# -gt 0 ] && shift ;;
       -xdev|-mount|-follow|-noleaf|-ignore_readdir_race|-noignore_readdir_race|-warn|-nowarn|-daystart|-help|--help|-version|--version|-O*|-print|-print0|-ls|-quit) ;;
       -name|-iname|-path|-ipath|-wholename|-iwholename|-regex|-iregex|-lname|-ilname|-type|-xtype|-size|-user|-group|-uid|-gid|-perm|-newer|-anewer|-cnewer|-newer[a-zA-Z]*|-mtime|-atime|-ctime|-Btime|-mmin|-amin|-cmin|-Bmin|-links|-inum|-samefile|-fstype|-used|-context|-flags|-acl)
-        tst[$d]=1; grp[$d]=1; shift ;;                                                 #M: find test with an argument
+        tst[$d]=1                                                                      #M: find test with an argument
+        shift ;;
       -*) if [ "$lead" = 1 ] && [[ $1 =~ ^-[EXdsxHLP]+$ ]]; then                       # BSD/GNU leading options, before the path
+            :
             [[ $1 == *d* ]] && depth="$1"                                              #M: find leading -d
-          else tst[$d]=1; grp[$d]=1; fi ;;                                             #M: find test without an argument
+          else
+            :
+            tst[$d]=1                                                                  #M: find test without an argument
+          fi ;;
       *) lead=0 ;;                                                                     # a path, or a stray word
     esac
     [ $# -gt 0 ] && shift
   done
   if [ -n "$deleter" ] && [ -n "$depth" ] && [ "$prune" = 1 ]; then
+    :
     _deny find-depth-prune "find $depth ... -prune ... $deleter"                       #M: find-depth-prune
   fi
   return 0
@@ -1385,6 +1394,8 @@ SNAP
   _must find-depth-prune    'A72 -d primary and -prune'       'find . -d -path ./keep -prune -o -name "*.o" -exec rm {} +'
   _must find-depth-prune    'A72 -dx cluster and -prune'      'find -dx . -path ./keep -prune -o -name "*.o" -exec rm {} +'
   _must find-depth-prune    'A72 -prune before -depth'        'find . -path ./keep -prune -o -depth -name "*.o" -exec trash {} +'
+  _must find-exec-untested  'A72 a group true for every file' 'find . \( -name a -o -print \) -exec rm {} +'
+  _must find-exec-untested  'A72 nested untested alternative' 'find . \( -name a -o \( -type f -o -print \) \) -exec rm {} +'
   _must rm-path             '/bin/rm'                         '/bin/rm -rf build'
   _must rm-path             '/usr/bin/rm'                     '/usr/bin/rm x'
   _must rm-path             'quoted /bin/rm as command'       '"/bin/rm" x'
@@ -1682,6 +1693,7 @@ SNAP
   _must - 'A72 -E with -regex then rm'      "find -E . -regex '.*[.]o' -exec rm {} +"
   _must - 'A72 rm -d inside the body'       'find . -name x -type d -exec rm -d {} +'
   _must - 'A72 the words as data'           "rg -n -- '-exec rm {} +' docs/"
+  _must - 'A72 a test, then an open group'  "find . -name '*.o' \( -size +1k -o -print \) -exec rm {} +"
   _must - 'cmd > out.txt'                   'ls > out.txt'
   _must - 'cmd 2>&1 > out'                  'make 2>&1 > build.log'
   _must - '>> append bare'                  '>> notes.txt'
