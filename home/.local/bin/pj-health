@@ -375,12 +375,16 @@ fi
 # 644 the hook exited 126 and the call RAN. Exit 127 (missing file, missing interpreter, a
 # missing jq under set -e), a bad shebang and a timeout all let the call run too; only exit 2
 # blocks. The same 644 stub behind the manifest's guard shape (h=...; if [ -x "$h" ] ... else
-# <deny JSON>) was denied. So a guard is fail-closed only in that shape.
+# <deny JSON>) was denied. But that -x-only wrapper passes a started guard's crash exit (1, 126,
+# 127) straight through, so it still fails OPEN on a crash; since D-20261002-A01 a guard is
+# fail-closed only in the crash-deny shape (o=$("$h"); r=$?; ... HOOK CRASHED, DENYING ...).
 # This row reads every PreToolUse and PermissionRequest hook in every settings file a session
 # here can load (user, project, any other ~/.claude/settings*.json, each profile's settings:,
 # this repo's .claude/settings.json and settings.local.json) and names each one that:
-#   (a) is a guard in a fail-open shape: bare, the old `test -x P && P || true`, or the
-#       advisory wrapper that prints a message instead of denying;
+#   (a) is a guard in a fail-open shape: bare, the old `test -x P && P || true`, the
+#       advisory wrapper that prints a message instead of denying, or the -x-only deny wrapper
+#       with no crash branch (shape wrapped-nocrash, fails open on a crash; a FAIL whatever
+#       the class, because a deny wrapper says the hook guards);
 #   (b) points at a script that is missing or not executable (fail-open unless wrapped, and
 #       then it denies every call it guards, which is a fault too).
 # Guard means: class guard in the manifest (an omitted class on an enforce-* script is a
@@ -435,7 +439,8 @@ while IFS= read -r hf; do
     hfo_n=$((hfo_n+1))
     shape=bare; hp=""; direct=1
     case "$hcmd" in
-      'h="'*'if [ -x "$h" ]; then'*'"permissionDecision":"deny"'*) shape=wrapped; hp="$(printf '%s' "$hcmd" | sed -n 's/^h="\([^"]*\)".*/\1/p')" ;;
+      'h="'*'if [ -x "$h" ]; then o=$("$h"'*'r=$?'*'HOOK CRASHED, DENYING'*'"permissionDecision":"deny"'*) shape=wrapped; hp="$(printf '%s' "$hcmd" | sed -n 's/^h="\([^"]*\)".*/\1/p')" ;;
+      'h="'*'if [ -x "$h" ]; then'*'"permissionDecision":"deny"'*) shape=wrapped-nocrash; hp="$(printf '%s' "$hcmd" | sed -n 's/^h="\([^"]*\)".*/\1/p')" ;;
       'h="'*'if [ -x "$h" ]; then'*) shape=wrapped-nodeny; hp="$(printf '%s' "$hcmd" | sed -n 's/^h="\([^"]*\)".*/\1/p')" ;;
       'test -x '*'|| true') shape=legacy; hp="$(printf '%s' "$hcmd" | sed -n 's/^test -x "\{0,1\}\([^" ]*\).*/\1/p')" ;;
       *)
@@ -467,8 +472,10 @@ while IFS= read -r hf; do
     elif [ "$direct" -eq 1 ] && [ ! -x "$real" ]; then bad_file="not executable"
     fi
     if [ -n "$bad_file" ]; then
-      if [ "$shape" = wrapped ]; then hfo_fail="$hfo_fail"$'\n'"$lab $bad_file, so it DENIES every call it guards"
+      if [ "$shape" = wrapped ] || [ "$shape" = wrapped-nocrash ]; then hfo_fail="$hfo_fail"$'\n'"$lab $bad_file, so it DENIES every call it guards"
       else hfo_fail="$hfo_fail"$'\n'"$lab $bad_file, fails OPEN (exit 126/127, the call runs)"; fi
+    elif [ "$shape" = wrapped-nocrash ]; then   # a deny wrapper says guard, whatever the name
+      hfo_fail="$hfo_fail"$'\n'"$lab registered wrapped-nocrash (a deny wrapper with no crash branch), fails OPEN the day it crashes (exit 1/126/127; D-20261002-A01)"
     elif [ "$cls" = guard ] && [ "$shape" != wrapped ]; then
       hfo_fail="$hfo_fail"$'\n'"$lab guard registered $shape, fails OPEN the day it cannot run"
     elif [ "$cls" = unknown ] && [ "$shape" != wrapped ]; then

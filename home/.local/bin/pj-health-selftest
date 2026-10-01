@@ -300,13 +300,23 @@ mvprof(){   # mvprof <plugins...>   rewrite the one fixture profile
 
 # hook-fail-open fixtures (W-20260929-A192): one settings file per shape, scripts beside them.
 # enforce-ok.sh is 755, enforce-bad.sh 644, notify.sh 755 and of no known class, link.sh a
-# symlink (itself lrwx) to the 644 one. hfo_guard prints the manifest's fail-closed shape.
+# symlink (itself lrwx) to the 644 one. hfo_guard prints the manifest's fail-closed shape,
+# hfo_guard_nocrash the -x-only one it replaced (D-20261002-A01). Both are taken from the REAL
+# manifest beside this file (a guard's entry.command and its legacy_commands[0]) with only the
+# path swapped, so the fixture is the shape the sync actually writes, never a retyped copy.
 HFO="$T/hfo"; mkdir -p "$HFO"
 printf '#!/bin/sh\nexit 0\n' >"$HFO/enforce-ok.sh"; chmod 755 "$HFO/enforce-ok.sh"
 printf '#!/bin/sh\nexit 0\n' >"$HFO/enforce-bad.sh"; chmod 644 "$HFO/enforce-bad.sh"
 printf '#!/bin/sh\nexit 0\n' >"$HFO/notify.sh"; chmod 755 "$HFO/notify.sh"
 ln -s "$HFO/enforce-bad.sh" "$HFO/link-guard.sh"
-hfo_guard(){ printf 'h="%s"; if [ -x "$h" ]; then "$h"; else printf '"'"'%%s\\n'"'"' '"'"'{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"HOOK MISSING, DENYING"}}'"'"'; fi' "$1"; }
+HFO_REAL_MANIFEST="${PJ_HEALTH_REAL_MANIFEST:-$(dirname "$(dirname "$(dirname "$(dirname "$REAL_HEALTH")")")")/settings/claude/hooks.json}"
+HFO_NEW="$(jq -r '[.hooks[] | select(.script == "enforce-no-permanent-delete.sh")][0].entry.command // empty' "$HFO_REAL_MANIFEST" 2>/dev/null)"
+HFO_OLD="$(jq -r '[.hooks[] | select(.script == "enforce-no-permanent-delete.sh")][0].legacy_commands[0] // empty' "$HFO_REAL_MANIFEST" 2>/dev/null)"
+HFO_REALP='$HOME/.claude/hooks/enforce-no-permanent-delete.sh'
+case "$HFO_NEW" in *'HOOK CRASHED, DENYING'*) ;; *) echo "ABORT: no crash-deny guard command in $HFO_REAL_MANIFEST" >&2; exit 1 ;; esac
+case "$HFO_OLD" in 'h="'*'HOOK MISSING, DENYING'*) ;; *) echo "ABORT: no -x-only legacy guard command in $HFO_REAL_MANIFEST" >&2; exit 1 ;; esac
+hfo_guard(){ printf '%s' "${HFO_NEW//"$HFO_REALP"/$1}"; }
+hfo_guard_nocrash(){ printf '%s' "${HFO_OLD//"$HFO_REALP"/$1}"; }
 hfo_file(){   # hfo_file <name> <event> <command>...   one settings file, one group, those commands
   [ "$#" -ge 3 ] || { echo "hfo_file: needs a name, an event and a command" >&2; exit 1; }
   local n="$1" ev="$2"; shift 2
@@ -316,6 +326,9 @@ hfo_file clean     PreToolUse "$(hfo_guard "$HFO/enforce-ok.sh")" "echo inline-h
 hfo_file bare644   PreToolUse "$HFO/enforce-bad.sh"
 hfo_file bare755   PreToolUse "$HFO/enforce-ok.sh"
 hfo_file wrap644   PreToolUse "$(hfo_guard "$HFO/enforce-bad.sh")"
+hfo_file nocrash   PreToolUse "$(hfo_guard_nocrash "$HFO/enforce-ok.sh")"
+hfo_file nocr644   PreToolUse "$(hfo_guard_nocrash "$HFO/enforce-bad.sh")"
+hfo_file nocrunk   PreToolUse "$(hfo_guard_nocrash "$HFO/notify.sh")"
 hfo_file legacy    PreToolUse "test -x \"$HFO/enforce-ok.sh\" && \"$HFO/enforce-ok.sh\" || true"
 hfo_file unknown   PreToolUse "$HFO/notify.sh"
 hfo_file symlink   PreToolUse "$HFO/link-guard.sh"
@@ -521,6 +534,12 @@ hfo bare755; arm "hook-fail-open FAIL on a bare guard even while it is executabl
 arm "hook-fail-open names the bare shape" has hook-fail-open "enforce-ok.sh(PreToolUse) guard registered bare"
 hfo wrap644; arm "hook-fail-open FAIL on a wrapped 644 guard" is hook-fail-open FAIL
 arm "hook-fail-open says the wrapped one DENIES every call, not fails open" has hook-fail-open "so it DENIES every call it guards"
+hfo nocrash; arm "hook-fail-open FAIL on the -x-only guard wrapper (no crash branch, D-20261002-A01)" is hook-fail-open FAIL
+arm "hook-fail-open says the -x-only wrapper fails OPEN on a crash" has hook-fail-open "enforce-ok.sh(PreToolUse) registered wrapped-nocrash (a deny wrapper with no crash branch), fails OPEN the day it crashes"
+arm "the -x-only FAIL fails the run" [ "$RC" -eq 1 ]
+hfo nocr644; arm "hook-fail-open: an -x-only wrapper on a 644 guard still DENIES every call (missing branch)" has hook-fail-open "enforce-bad.sh(PreToolUse) not executable, so it DENIES every call it guards"
+hfo nocrunk; arm "hook-fail-open FAIL on an -x-only deny wrapper even when the name says nothing (the wrapper says guard)" is hook-fail-open FAIL; arm "hook-fail-open names it" has hook-fail-open "notify.sh(PreToolUse) registered wrapped-nocrash"
+arm "control: the clean fixture is the crash-deny shape, not the -x-only one" bash -c 'jq -r ".hooks.PreToolUse[0].hooks[0].command" "$1" | grep -q "HOOK CRASHED, DENYING"' _ "$HFO/clean.json"
 hfo legacy;  arm "hook-fail-open FAIL on the old test -x ... || true shape" is hook-fail-open FAIL; arm "hook-fail-open names it legacy" has hook-fail-open "registered legacy"
 hfo symlink; arm "hook-fail-open FAIL on a symlink whose TARGET is 644" is hook-fail-open FAIL; arm "hook-fail-open names the link" has hook-fail-open "link-guard.sh(PreToolUse) not executable"
 hfo interp;  arm "hook-fail-open FAIL on an interpreter hook whose script is missing" is hook-fail-open FAIL; arm "hook-fail-open names the missing script" has hook-fail-open "missing-guard.py(PermissionRequest) missing, fails OPEN"
