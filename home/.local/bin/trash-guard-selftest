@@ -430,6 +430,7 @@ c_slow() { # SLOW_BUDGET ms; SLOW_DELAY s (empty: set past the limit, so a wait 
 	local D t0 t1 ms d tmo how
 	calibrate "$ROUTE"; cal_limit "$SLOW_BUDGET"
 	if [ -n "$SLOW_DELAY" ]; then d=$SLOW_DELAY; else d=$((LIMIT / 1000 + 2)); fi
+	[ "$d" -le 30 ] || d=30   # only an INVALID TRIAL gets here (overhead > 8 s); no 300 s sleeps
 	tmo=$SLOW_TMO; [ "$tmo" = raise ] && tmo=$((d + 5))
 	XENV=(TRASH_GUARD_TEST_SEARCH_DELAY="$d")
 	[ -n "$tmo" ] && XENV+=(TRASH_GUARD_TIMEOUT="$tmo")
@@ -831,8 +832,37 @@ if [ "$MODE" = mutants ]; then
 		n0=$(grep -c "#M: $m\$" "$BIN/$mf"); n1=$(grep -c "#M: $m\$" "$MD/$mf")
 		if [ "$n0" -ne 1 ] || [ "$n1" -ne 0 ]; then echo "  INVALID  $m: the tag matched $n0 line(s) in the original, $n1 in the copy"; missed=$((missed + 1)); continue; fi
 		t0=$(now_ms)
-		if TG_BIN="$MD" "$0" -q >"$FX/mut-$m.out" 2>&1; then echo "  MISSED   $m: the suite passed with the rule removed"; missed=$((missed + 1))
+		TG_BIN="$MD" "$0" -q >"$FX/mut-$m.out" 2>&1; mrc=$?
+		if [ "$mrc" -eq 0 ]; then echo "  MISSED   $m: the suite passed with the rule removed"; missed=$((missed + 1))
+		elif [ "$mrc" -eq 3 ]; then echo "  INVALID  $m: the run was an INVALID TRIAL (exit 3), so it neither caught nor missed"; missed=$((missed + 1))
 		else echo "  caught   $m ($(grep -c 'FAIL' "$FX/mut-$m.out") arms failed, $(( ($(now_ms) - t0) / 1000 )) s)"; caught=$((caught + 1)); fi
+	done
+	# Timing faults (A188): the guard gives the RIGHT verdict LATE, so only a timing arm can
+	# catch it, and the catch must come from one. late: the fake slow search's sleep keeps the
+	# capture open, so the refusal waits for the whole search (measured: 5037 ms, not 2046).
+	MD=$FX/mut-late; mkdir -p "$MD"
+	cp "$BIN/trash" "$BIN/trash-guard" "$BIN/safe-rm" "$BIN/rm" "$MD/"
+	lt='sleep "$_dl" </dev/null >/dev/null 2>&1; fi'
+	sed 's|sleep "$_dl" </dev/null >/dev/null 2>&1; fi|sleep "$_dl"; fi|' "$BIN/trash-guard" > "$MD/trash-guard"; chmod +x "$MD/trash-guard"
+	n0=$(grep -c -F -- "$lt" "$BIN/trash-guard"); n1=$(grep -c -F -- "$lt" "$MD/trash-guard")
+	if [ "$n0" -ne 1 ] || [ "$n1" -ne 0 ]; then echo "  INVALID  late: the edit matched $n0 line(s) in the original, $n1 in the copy"; missed=$((missed + 1))
+	else
+		TG_BIN="$MD" "$0" -q >"$FX/mut-late.out" 2>&1; mrc=$?
+		nt=$(grep -c 'no timeout refusal answered in time' "$FX/mut-late.out")
+		if [ "$mrc" -eq 1 ] && [ "$nt" -ge 4 ]; then echo "  caught   late: a right verdict given late ($nt timing arms failed)"; caught=$((caught + 1))
+		else echo "  MISSED   late: rc $mrc, $nt timing arms failed (want rc 1 and the four 2 s timing arms)"; missed=$((missed + 1)); fi
+	fi
+	# Calibration faults: a copy of THIS suite whose measured overhead is forced. Huge must be
+	# an INVALID TRIAL (exit 3), never a pass; inflated under the absurd line must fail the
+	# start-up arm, the one arm the inflation cannot raise its own limit for.
+	for cm in 99999:3:INVALID 4000:1:'start-up is slow'; do
+		cv=${cm%%:*}; cw=${cm#*:}; cw=${cw%%:*}; cs=${cm#*:*:}
+		sed "s/^\(.*\)OV=\$(median \"\${x\[@\]}\")   #C: ov\$/\1OV=$cv/" "$0" > "$FX/mut-cal-$cv"
+		n0=$(grep -c '#C: ov$' "$0"); n1=$(grep -c '#C: ov$' "$FX/mut-cal-$cv")
+		if [ "$n0" -ne 1 ] || [ "$n1" -ne 0 ]; then echo "  INVALID  overhead forced to $cv: the edit matched $n0 / $n1"; missed=$((missed + 1)); continue; fi
+		TG_BIN="$BIN" TG_HOOK="$HOOK" bash "$FX/mut-cal-$cv" -q >"$FX/mut-cal-$cv.out" 2>&1; mrc=$?
+		if [ "$mrc" -eq "$cw" ] && grep -q -- "$cs" "$FX/mut-cal-$cv.out"; then echo "  caught   overhead forced to $cv ms: exit $mrc, '$cs' reported"; caught=$((caught + 1))
+		else echo "  MISSED   overhead forced to $cv ms: exit $mrc (want $cw with '$cs')"; missed=$((missed + 1)); fi
 	done
 	MH=$FX/mut-hook; mkdir -p "$MH"
 	sed '/#M: env trash$/d' "$HOOK" > "$MH/enforce-no-permanent-delete.sh"; chmod +x "$MH/enforce-no-permanent-delete.sh"
