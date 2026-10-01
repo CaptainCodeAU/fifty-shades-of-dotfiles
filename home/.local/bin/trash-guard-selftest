@@ -145,6 +145,53 @@ run_route() {
 	LOG=$(cat "$LOGF")
 }
 
+# ---------------------------------------------------------------- timing that calibrates itself
+# W-20260929-A188 (Gavin, 2026-10-02): fixed limits failed on load alone (2966 ms against 2900
+# at load 77, a correct allow in 2768 against 2600). Each timing arm now first times CAL_N
+# TRIVIAL calls through the same route (a file outside temp: every process in the chain and an
+# allow, but no folder search), takes the median, and allows its budget plus CAL_K times that.
+# Every limit is printed with its overhead, so a reader sees what was allowed.
+# CAL_K = 3, from the A188 measurements: under load 37-85 the non-search part of a timed call
+# ran up to 1.44 x the median trivial call, and one call ran up to 1.45 x its own median;
+# 1.44 x 1.45 is 2.1, rounded up. The median, not the best, so one fluke either way (the first
+# call of a run measured 1046 ms against 30 after it) moves nothing.
+# Calibration cannot be gamed by its own noise: an overhead above CAL_ABSURD_MS makes the arm an
+# INVALID TRIAL (exit 3), never a pass, and a guard that grows slower at START-UP (which raises
+# the overhead too, so calibration would hide it) fails the start-up arm in section 7, which
+# holds a trivial call to CAL_RATIO_MAX bare /bin/sh starts timed in the same breath.
+CAL_K=3; CAL_N=3; CAL_ABSURD_MS=5000; CAL_RATIO_MAX=40
+OV=0; OVS=""; BARE=0; CALOK=0; LIMIT=0; CALV=""; invalid=0
+median() { printf '%s\n' "$@" | sort -n | awk '{ a[NR] = $1 } END { print a[int((NR + 1) / 2)] }'; }
+calibrate() { # $1 = route -> OV (median ms), OVS (the samples), BARE (median ms of /bin/sh -c :), CALOK (0 = every call a clean allow)
+	local r=$1 i=0 D t0 t1
+	local -a x=() y=() sx=(${XENV[@]+"${XENV[@]}"})
+	XENV=(); CALOK=0
+	while [ "$i" -lt "$CAL_N" ]; do
+		D=$(fresh "$FX/outside"); : > "$D/f"; KEEP=()
+		t0=$(now_ms); run_route "$r" "$D" "$D/f"; t1=$(now_ms)
+		x+=($((t1 - t0)))
+		{ [ "$RC" -eq 0 ] && [ "$LOG" = "CALL <$D/f>" ]; } || CALOK=1
+		t0=$(now_ms); /bin/sh -c :; t1=$(now_ms)
+		y+=($((t1 - t0)))
+		i=$((i + 1))
+	done
+	XENV=(${sx[@]+"${sx[@]}"})
+	OV=$(median "${x[@]}")   #C: ov
+	OVS="${x[*]}"; BARE=$(median "${y[@]}")
+}
+cal_limit() { # $1 = budget ms -> LIMIT, CALV (why this trial cannot be judged, or empty), CALHOW (the sum, printed)
+	LIMIT=$(($1 + CAL_K * OV))
+	CALHOW="limit $LIMIT = $1 + $CAL_K x overhead $OV (median of $OVS)"
+	CALV=""
+	[ "$CALOK" -eq 0 ] || CALV="a trivial calibration call was not a clean allow, so the overhead measured something else"
+	[ "$OV" -le "$CAL_ABSURD_MS" ] || CALV="overhead $OV ms is above $CAL_ABSURD_MS ms: this machine is too loaded to time anything"
+	return 0
+}
+invalid_trial() {
+	invalid=$((invalid + 1))
+	printf '  INVALID TRIAL [%s] %s\n' "$CLASS" "$1"
+}
+
 KEEP=()
 VERDICT=""
 missing_keep() {
@@ -359,19 +406,55 @@ both control "a folder holding a repo inside a temp root goes" c_tmp_nested
 
 # ---------------------------------------------------------------- the bounded search
 section "7. The nested-repo search: a timeout or an unread folder REFUSES"
-c_plain_out() { local D; D=$(fresh "$FX/outside"); mkdir -p "$D/plain/x"; KEEP=("$D/plain/x"); run_route "$ROUTE" "$D" "$D/plain"; }
-c_slow() {
-	local t0 t1
-	t0=$(now_ms); c_plain_out; t1=$(now_ms)
+# Start-up first (A188): the timing arms below allow a multiple of a trivial call's cost, so a
+# guard that got slower to START would raise its own limits. A bare /bin/sh start timed in the
+# same breath does not run the guard, and the trivial call may cost at most CAL_RATIO_MAX of them.
+CLASS=control
+for ROUTE in trash rm; do
+	calibrate "$ROUTE"; cal_limit 0
+	b=$BARE; [ "$b" -ge 5 ] || b=5
+	how="a trivial call costs $OV ms (samples $OVS), a bare /bin/sh start $BARE ms, so $((OV / b)) x (at most $CAL_RATIO_MAX x)"
+	if [ -n "$CALV" ]; then invalid_trial "$ROUTE: start-up not judged: $CALV ($how)"
+	elif [ "$OV" -le $((CAL_RATIO_MAX * b)) ]; then ok "$ROUTE: start-up: $how"
+	else bad "$ROUTE: start-up is slow: $how"; fi
+done
+# The cut itself, without a clock: what the guard says it will use.
+for tv in "unset:2" "9:2" "0.5:0.5"; do
+	if [ "${tv%%:*}" = unset ]; then cfg=$(env -u TRASH_GUARD_TIMEOUT "$BIN/trash-guard" --show-config 2>&1)
+	else cfg=$(env TRASH_GUARD_TIMEOUT="${tv%%:*}" "$BIN/trash-guard" --show-config 2>&1); fi
+	got=$(printf '%s\n' "$cfg" | sed -n 's/^search timeout: \(.*\) s$/\1/p')
+	if [ "$got" = "${tv#*:}" ]; then ok "TRASH_GUARD_TIMEOUT ${tv%%:*}: --show-config says the search is cut at $got s"
+	else bad "TRASH_GUARD_TIMEOUT ${tv%%:*}: --show-config says '${got:-nothing}' (want ${tv#*:})"; fi
+done
+c_slow() { # SLOW_BUDGET ms; SLOW_DELAY s (empty: set past the limit, so a wait for it cannot pass); SLOW_TMO = TRASH_GUARD_TIMEOUT (raise = 5 s above the delay)
+	local D t0 t1 ms d tmo how
+	calibrate "$ROUTE"; cal_limit "$SLOW_BUDGET"
+	if [ -n "$SLOW_DELAY" ]; then d=$SLOW_DELAY; else d=$((LIMIT / 1000 + 2)); fi
+	tmo=$SLOW_TMO; [ "$tmo" = raise ] && tmo=$((d + 5))
+	XENV=(TRASH_GUARD_TEST_SEARCH_DELAY="$d")
+	[ -n "$tmo" ] && XENV+=(TRASH_GUARD_TIMEOUT="$tmo")
+	D=$(fresh "$FX/outside"); mkdir -p "$D/plain/x"; KEEP=("$D/plain/x")
+	t0=$(now_ms); run_route "$ROUTE" "$D" "$D/plain"; t1=$(now_ms); ms=$((t1 - t0))
+	XENV=()
 	expect_refused search-timeout
-	if [ "$VERDICT" = "REFUSED[search-timeout]" ] && [ $((t1 - t0)) -lt "$SLOW_MAX_MS" ]; then ok "$ROUTE: $LABEL -> answered in $((t1 - t0)) ms (< $SLOW_MAX_MS: it did not wait for the slow search)"
-	else bad "$ROUTE: $LABEL -> no timeout refusal answered in time ($((t1 - t0)) ms, limit $SLOW_MAX_MS, verdict $VERDICT)"; fi
+	how="$ms ms; $CALHOW; fake search $d s${tmo:+, TRASH_GUARD_TIMEOUT=$tmo}"
+	if [ -n "$CALV" ]; then invalid_trial "$ROUTE: $LABEL -> timing not judged: $CALV ($how)"
+	elif [ "$VERDICT" = "REFUSED[search-timeout]" ] && [ "$ms" -lt "$LIMIT" ]; then
+		if [ "$LIMIT" -lt $((d * 1000)) ]; then ok "$ROUTE: $LABEL -> answered in $how: it did not wait for the slow search"
+		else ok "$ROUTE: $LABEL -> answered in $how (at this load the limit is above the ${d} s fake search: this arm shows the verdict, the arms above show the wait is cut)"; fi
+	else bad "$ROUTE: $LABEL -> no timeout refusal answered in time ($how; verdict $VERDICT)"; fi
 }
-SLOW_MAX_MS=2900
-XENV=(TRASH_GUARD_TEST_SEARCH_DELAY=3);                           both new "a search slower than 2 s (fake delay 3 s)" c_slow
-XENV=(TRASH_GUARD_TEST_SEARCH_DELAY=3 TRASH_GUARD_TIMEOUT=9);      both new "TRASH_GUARD_TIMEOUT=9 cannot RAISE the 2 s limit" c_slow
-SLOW_MAX_MS=1500
-XENV=(TRASH_GUARD_TEST_SEARCH_DELAY=1 TRASH_GUARD_TIMEOUT=0.5);    both new "TRASH_GUARD_TIMEOUT=0.5 lowers it (fake delay 1 s)" c_slow
+# The 2 s cut: the fake search is set past the computed limit, so a guard that waits for it
+# fails whatever the load. With TRASH_GUARD_TIMEOUT above the delay, a guard that obeyed it
+# would let the search finish and allow, which the verdict catches.
+# Budgets: the cut, plus 200 ms for the watchdog's own sleep and kill, which a trivial call
+# does not start (20-60 ms measured idle).
+SLOW_BUDGET=2200; SLOW_DELAY=""; SLOW_TMO="";    both new "a search slower than 2 s (fake delay past the limit)" c_slow
+SLOW_TMO=raise;                                  both new "TRASH_GUARD_TIMEOUT above the delay cannot RAISE the 2 s limit" c_slow
+# 0.5 s: the fake search stays at 1 s, under 2 s, so a guard that ignored the 0.5 finishes it
+# and allows, and the verdict catches that at any load.
+SLOW_BUDGET=700; SLOW_DELAY=1; SLOW_TMO=0.5;     both new "TRASH_GUARD_TIMEOUT=0.5 lowers it (fake delay 1 s)" c_slow
+SLOW_DELAY=""; SLOW_TMO=""
 c_nodelay() { local D; D=$(fresh "$FX/outside"); mkdir -p "$D/plain/x"; KEEP=(); run_route "$ROUTE" "$D" "$D/plain"; expect_allowed "CALL <$D/plain>"; }
 XENV=(TRASH_GUARD_TEST_SEARCH_DELAY=0);                           both control "the same folder with no delay goes" c_nodelay
 XENV=()
@@ -477,17 +560,27 @@ both control "a temp folder with a newline in its name goes, path exact" c_newli
 both new "a folder with a newline in its name holding a repo" c_newline_nested
 
 c_big() { # 20,000 folders outside temp, no repo: a verdict inside the budget, never a late allow
-	local D t0 t1 ms i n
+	# The verdict and the clock are separate arms (A188, Gavin 2026-10-02): a correct answer that
+	# came late fails the timing arm only, and the route comparison sees the verdict. A timeout
+	# refusal and an allow are both correct here (which one depends on the machine's speed), so
+	# both compare as one verdict; only a wrong answer differs.
+	local D t0 t1 ms i n got
 	D=$(fresh "$FX/outside")
 	for i in {1..50}; do mkdir -p "$D"/big/$i/{1..50}/{1..8}; done
 	n=$(find "$D/big" -type d | wc -l | tr -d ' ')
 	[ "$n" -ge 20000 ] || { VERDICT=FIXTURE; bad "$ROUTE: fixture: only $n folders made (want >= 20000); invalid trial"; return; }
+	calibrate "$ROUTE"; cal_limit "$BIG_BUDGET"
 	KEEP=()
 	t0=$(now_ms); run_route "$ROUTE" "$D" "$D/big"; t1=$(now_ms); ms=$((t1 - t0))
-	if [[ $ERR == *'[search-timeout]'* ]] && [ "$RC" -ne 0 ] && [ -z "$LOG" ]; then VERDICT=TIMEOUT; ok "$ROUTE: $LABEL -> refused as a timeout in $ms ms (the search could not finish)"
-	elif [ "$RC" -eq 0 ] && [ "$LOG" = "CALL <$D/big>" ] && [ "$ms" -lt 2600 ]; then VERDICT=ALLOWED; ok "$ROUTE: $LABEL -> searched and allowed in $ms ms"
-	else VERDICT=WRONG; bad "$ROUTE: $LABEL -> rc=$RC in $ms ms; fake: ${LOG:-none}; $(first_line "$ERR")"; fi
+	if [[ $ERR == *'[search-timeout]'* ]] && [ "$RC" -ne 0 ] && [ -z "$LOG" ]; then VERDICT=ALLOWED-OR-TIMEOUT; got="refused as a timeout (the search could not finish)"
+	elif [ "$RC" -eq 0 ] && [ "$LOG" = "CALL <$D/big>" ]; then VERDICT=ALLOWED-OR-TIMEOUT; got="searched and allowed"
+	else VERDICT=WRONG; bad "$ROUTE: $LABEL -> rc=$RC in $ms ms; fake: ${LOG:-none}; $(first_line "$ERR")"; return; fi
+	ok "$ROUTE: $LABEL -> $got"
+	if [ -n "$CALV" ]; then invalid_trial "$ROUTE: $LABEL: timing not judged: $CALV ($ms ms; $CALHOW)"
+	elif [ "$ms" -lt "$LIMIT" ]; then ok "$ROUTE: $LABEL: answered in $ms ms; $CALHOW"
+	else bad "$ROUTE: $LABEL: answered LATE, $got in $ms ms; $CALHOW"; fi
 }
+BIG_BUDGET=2200   # the 2 s cut, plus 200 ms for the watchdog's sleep and kill
 both control "a very large folder (20,000 folders, no repo): timed" c_big
 
 # ---------------------------------------------------------------- the real home, check mode only
@@ -795,4 +888,8 @@ echo
 printf 'trash-guard-selftest: %d passed, %d failed  (new arms: %d passed, %d failed; controls: %d passed, %d failed)\n' \
 	"$pass" "$fail" "$pass_new" "$fail_new" "$pass_ctl" "$fail_ctl"
 printf 'refusal arms that were behaviourally safe (non-zero, nothing trashed, target kept), rule id aside: %d of %d\n' "$bsafe" "$nrefuse"
-[ "$fail" -eq 0 ]
+printf 'timing: each limit = budget + %d x the median of %d trivial calls through the same route, printed per arm; %d INVALID TRIAL(s)\n' "$CAL_K" "$CAL_N" "$invalid"
+# exit 1 on any failure; 3 when nothing failed but a timing arm could not be judged (not a pass)
+[ "$fail" -eq 0 ] || exit 1
+[ "$invalid" -eq 0 ] || { echo "trash-guard-selftest: NOT a pass: $invalid timing arm(s) were INVALID TRIALS (exit 3)"; exit 3; }
+exit 0
