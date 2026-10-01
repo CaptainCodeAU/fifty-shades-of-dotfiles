@@ -403,7 +403,9 @@ _msg() { # $1 = rule id -> what it does, then the safe route
     truncate)       echo "truncate empties a file in place; no Trash copy. SAFE ROUTE: move it aside first (command mv f f.bak) or ask Gavin." ;;
     dd-of)          echo "dd of= overwrites its target. SAFE ROUTE: write to a new file, or ask Gavin." ;;
     redir-trunc)    echo "a redirection with no command (> f, : > f, cat /dev/null > f) empties the file; no Trash copy. SAFE ROUTE: move it aside first, or ask Gavin." ;;
-    find-delete)    echo "find -delete unlinks outside the Trash. SAFE ROUTE: find ... -print to list, then find ... -exec rm {} + (bare rm)." ;;
+    find-delete)    echo "find -delete unlinks outside the Trash. SAFE ROUTE: find . -name PATTERN -print to list, then the same command with -exec rm {} + in place of -print (bare rm, a test such as -name before it, no -depth)." ;;
+    find-exec-untested) echo "find runs left to right, so an -exec rm (or rmdir, trash) with no test before it in its AND-chain runs on EVERY file find reaches: ahead of -name, or right after a -o, it sends the whole tree to the Trash. SAFE ROUTE: put a test such as -name before the action, and run the same command with -print in place of the action first." ;;
+    find-depth-prune) echo "find -depth (BSD -d) makes -prune do nothing, so a folder you pruned is no longer protected from the -exec rm. SAFE ROUTE: drop -depth (and -d) when using -prune; run the same command with -print in place of the action first." ;;
     git-worktree-remove) echo "git worktree remove unlinks the whole worktree outside the Trash. SAFE ROUTE: rm -r <dir> (Trash-routed), then git worktree prune." ;;
     git-clean)      echo "git clean deletes untracked files outside the Trash. SAFE ROUTE: git clean -n to list, then rm the files (bare rm)." ;;
     git-reset-hard) echo "git reset --hard discards uncommitted work. SAFE ROUTE: git stash push -u (recoverable), or ask Gavin." ;;
@@ -457,6 +459,9 @@ _rt shred               "${_RL}(g?shred|srm|wipe)${_RR}"
 _rt truncate            "${_RL}g?truncate${_RR}"
 _rt dd-of               "${_RL}g?dd[[:space:]]([^|;&]*[[:space:]])?of="
 _rt find-delete         "[[:space:]]-delete${_RR}"
+_FX="[[:space:]]+-(exec|execdir|ok|okdir)[[:space:]]+(command[[:space:]]+)?[\\\\]*(g?rm|rmdir|trash|safe-rm)${_RR}"   # an -exec of a Trash-routed deleter
+_rt find-exec-untested  "${_RL}g?find([[:space:]]+-[EXdsxHLP]+|[[:space:]]+[^-[:space:]][^[:space:]]*)*${_FX}"
+_rt find-depth-prune    "${_RL}g?find[[:space:]]([^|&]*[[:space:]])?-(depth|[EXsxHLP]*d[EXsxHLP]*)[[:space:]]([^|&]*[[:space:]])?-prune[[:space:]][^|&]*${_FX}|${_RL}g?find[[:space:]]([^|&]*[[:space:]])?-prune[[:space:]]([^|&]*[[:space:]])?-(depth|d)[[:space:]][^|&]*${_FX}"
 _rt git-worktree-remove "${_RG}worktree[[:space:]]+remove${_RR}"
 _rt git-clean           "${_RG}clean${_RR}"
 _rt git-reset-hard      "${_RG}reset[[:space:]][^|;&]*--hard|${_RL}(grhh|gwipe|gpristine)${_RR}"
@@ -511,6 +516,10 @@ PATH_TOUCHED=""
 # shims, so by path they are denied like any other copy (W-20260929-A171). A prefix
 # (HOME=x ~/...) is left alone: the ~ there still expands to the old home.
 HOME_TOUCHED=""
+# SAW_DELETER names the Trash-routed deleter (rm, rmdir, trash, safe-rm) the last
+# classified argv reached and ALLOWED. _find_cmd clears it before an -exec body and
+# reads it after, to hold that body to the find ordering rules (W-20261001-A72).
+SAW_DELETER=""
 
 # The one place a Trash shim may be named by path: ~/.local/bin/<name> in this
 # account's home, spelled with ~, $HOME, ${HOME} or the home written out. Any
@@ -846,6 +855,10 @@ _argv() {
         [ "$w" = "--" ] && break
         if [[ $w =~ $RE_RM_P ]]; then _deny rm-P "rm $w"; return 0; fi                           #M: rm -P
       done
+      SAW_DELETER="rm"                                                                       #M: an allowed rm is a deleter (find -exec order)
+      return 0 ;;
+    rmdir|grmdir|safe-rm)   # W-20261001-A72: allowed, but a deleter for the find -exec order check
+      SAW_DELETER="$base"                                                                    #M: rmdir is a deleter (find -exec order)
       return 0 ;;
     grm) _deny grm "grm"; return 0 ;;   #M: grm
     unlink|gunlink) _deny unlink "$base"; return 0 ;;                                            #M: unlink
@@ -961,6 +974,7 @@ _argv() {
       if [[ $c == */* ]] && ! _home_shim "$c" trash; then _deny trash-path "$c"; return 0; fi   #M: trash by path
       [ -n "$TRASH_VIA" ] && { _deny trash-path "$TRASH_VIA trash"; return 0; }                       #M: command/env trash
       if [[ $c != */* ]] && [ -n "$RM_LOOKUP$PATH_TOUCHED" ]; then _deny trash-path "${RM_LOOKUP:-$PATH_TOUCHED}, then trash"; return 0; fi   #M: trash after a lookup change
+      SAW_DELETER="trash"                                                                    #M: an allowed trash is a deleter (find -exec order)
       return 0 ;;
     # oh-my-zsh aliases that hide a reset --hard, denied BY NAME as well (Gavin,
     # 2026-09-23). The snapshot's alias table normally denies them by their
@@ -1092,20 +1106,57 @@ _container_cmd() { # docker|podman|docker-compose, then args
 }
 
 _find_cmd() { # find args: -delete, and -exec/-execdir/-ok/-okdir bodies
+  # W-20261001-A72: find evaluates left to right, so a Trash-routed deleter in an
+  # -exec body (rm, rmdir, trash, sh -c 'rm ...') still runs on EVERY file when no
+  # test stands before it in its AND-chain (one starts after a -o, a , or a "(").
+  # And -depth (BSD -d) switches -prune off, so a pruned folder is no longer kept.
+  # tst[d]: the current AND-chain at paren depth d has a test; grp[d]: the group
+  # at depth d holds one (a closed group counts as a test in the chain around it).
   local adepth="$1"; shift
+  local -a tst=(0) grp=(0)
+  local d=0 k guarded lead=1 depth="" prune=0 deleter=""
   while [ $# -gt 0 ]; do
     case "$1" in
       -delete) _deny find-delete "find -delete"; return 0 ;;                          #M: find -delete
       -exec|-execdir|-ok|-okdir)
+        local act="$1"
         shift
         local -a sub=()
         while [ $# -gt 0 ] && [ "$1" != ";" ] && [ "$1" != "+" ]; do sub[${#sub[@]}]="$1"; shift; done
+        SAW_DELETER=""
         [ ${#sub[@]} -gt 0 ] && _argv "$adepth" "${sub[@]}"                           #M: find -exec body
         [ -n "$REASON_ID" ] && { REASON_WHERE="find -exec ${REASON_WHERE}"; return 0; }
+        if [ -n "$SAW_DELETER" ]; then
+          deleter="$act $SAW_DELETER"
+          guarded=0; k=0
+          while [ $k -le $d ]; do [ "${tst[$k]}" = 1 ] && guarded=1; k=$((k + 1)); done
+          [ "$guarded" = 1 ] || { _deny find-exec-untested "find $deleter with no test before it"; return 0; }   #M: find-exec-untested
+        fi
         ;;
+      '(') d=$((d + 1)); tst[$d]=0; grp[$d]=0 ;;                                       #M: find ( opens a chain
+      ')') if [ $d -gt 0 ]; then
+             if [ "${grp[$d]}" = 1 ]; then tst[$((d - 1))]=1; grp[$((d - 1))]=1; fi    #M: find (group) counts as a test
+             d=$((d - 1))
+           fi ;;
+      -o|-or|,) tst[$d]=0 ;;                                                           #M: find -o starts a chain
+      '!'|-not|-a|-and|-true) ;;
+      -depth|-d) depth="$1" ;;                                                         #M: find -depth seen
+      -prune) prune=1 ;;                                                               #M: find -prune seen
+      -maxdepth|-mindepth|-f|-D|-regextype|-files0-from|-fprint|-fprint0|-fls|-printf) shift ;;
+      -fprintf) shift; [ $# -gt 0 ] && shift ;;
+      -xdev|-mount|-follow|-noleaf|-ignore_readdir_race|-noignore_readdir_race|-warn|-nowarn|-daystart|-help|--help|-version|--version|-O*|-print|-print0|-ls|-quit) ;;
+      -name|-iname|-path|-ipath|-wholename|-iwholename|-regex|-iregex|-lname|-ilname|-type|-xtype|-size|-user|-group|-uid|-gid|-perm|-newer|-anewer|-cnewer|-newer[a-zA-Z]*|-mtime|-atime|-ctime|-Btime|-mmin|-amin|-cmin|-Bmin|-links|-inum|-samefile|-fstype|-used|-context|-flags|-acl)
+        tst[$d]=1; grp[$d]=1; shift ;;                                                 #M: find test with an argument
+      -*) if [ "$lead" = 1 ] && [[ $1 =~ ^-[EXdsxHLP]+$ ]]; then                       # BSD/GNU leading options, before the path
+            [[ $1 == *d* ]] && depth="$1"                                              #M: find leading -d
+          else tst[$d]=1; grp[$d]=1; fi ;;                                             #M: find test without an argument
+      *) lead=0 ;;                                                                     # a path, or a stray word
     esac
     [ $# -gt 0 ] && shift
   done
+  if [ -n "$deleter" ] && [ -n "$depth" ] && [ "$prune" = 1 ]; then
+    _deny find-depth-prune "find $depth ... -prune ... $deleter"                       #M: find-depth-prune
+  fi
   return 0
 }
 
@@ -1211,7 +1262,7 @@ _git_cmd() {
 
 # Classify one whole command string. Sets REASON_ID / REASON / REASON_WHERE.
 _classify() { # $1 = command, $2 = cwd (optional)
-  REASON=""; REASON_ID=""; REASON_WHERE=""; PIDBASE=0; SI_KIND=(); DEPTH=0; PATH_TOUCHED=""; HOME_TOUCHED=""
+  REASON=""; REASON_ID=""; REASON_WHERE=""; PIDBASE=0; SI_KIND=(); DEPTH=0; PATH_TOUCHED=""; HOME_TOUCHED=""; SAW_DELETER=""
   AL_N=(); AL_V=(); LEXER_FAILED=0; CWD="${2:-}"; TRUNC=""; CUR_PID=0
   _shell_text "$1"
   return 0
@@ -1301,6 +1352,39 @@ SNAP
   _must rm-path             'find -exec /bin/rm'              'find . -name x -exec /bin/rm {} \;'
   _must unlink              'find -exec unlink'               'find . -type f -exec unlink {} +'
   _must rm-path             'fd -x /bin/rm'                   'fd -e tmp -x /bin/rm'
+  # W-20261001-A72: find runs left to right, so a Trash-routed deleter with no test
+  # before it in its AND-chain runs on every file; -depth/-d switches -prune off.
+  _must find-exec-untested  'A72 action first'                'find . -exec rm -rf {} + -name "*.tmp"'
+  _must find-exec-untested  'A72 action after -o, no test'    'find . -name x -o -exec rm {} +'
+  _must find-exec-untested  'A72 -exec rm -rf \;'             'find . -exec rm -rf {} \;'
+  _must find-exec-untested  'A72 -execdir rm'                 'find . -execdir rm {} +'
+  _must find-exec-untested  'A72 -ok rm'                      'find . -ok rm {} \;'
+  _must find-exec-untested  'A72 -okdir rm'                   'find . -okdir rm {} \;'
+  _must find-exec-untested  'A72 -exec command rm'            'find . -exec command rm {} +'
+  _must find-exec-untested  'A72 -exec \rm'                   'find . -exec \rm {} +'
+  _must find-exec-untested  'A72 -exec rmdir'                 'find . -exec rmdir {} +'
+  _must find-exec-untested  'A72 -exec trash'                 'find . -exec trash {} +'
+  _must find-exec-untested  'A72 -exec safe-rm'               'find . -exec safe-rm {} +'
+  _must find-exec-untested  "A72 -exec sh -c 'rm'"            "find . -exec sh -c 'rm \"\$@\"' _ {} +"
+  _must find-exec-untested  'A72 -prune is not a test'        'find . -prune -exec rm -rf {} +'
+  _must find-exec-untested  'A72 -print is not a test'        'find . -print -exec rm {} +'
+  _must find-exec-untested  'A72 -true is not a test'         'find . -true -exec rm {} +'
+  _must find-exec-untested  'A72 -maxdepth is not a test'     'find . -maxdepth 1 -exec rm {} +'
+  _must find-exec-untested  'A72 a grep -exec is not a test'  'find . -exec grep -q x {} \; -exec rm {} +'
+  _must find-exec-untested  'A72 -E leading flag'             'find -E . -exec rm {} +'
+  _must find-exec-untested  'A72 -x -L leading flags'         'find -x -L . -exec rm {} +'
+  _must find-exec-untested  'A72 a group with no test'        'find . \( -print \) -exec rm {} +'
+  _must find-exec-untested  'A72 in a group after -o'         'find . -name a -o \( -exec rm {} + \)'
+  _must find-exec-untested  'A72 GNU comma operator'          'find . -name a , -exec rm {} +'
+  _must find-exec-untested  'A72 sudo find'                   'sudo find . -exec rm {} +'
+  _must find-exec-untested  'A72 $(find)'                     'echo $(find . -exec rm {} +)'
+  _must find-exec-untested  "A72 sh -c 'find'"                "sh -c 'find . -exec rm {} +'"
+  _must find-exec-untested  'A72 xargs find'                  'echo . | xargs -I@ find @ -exec rm {} +'
+  _must find-depth-prune    'A72 -depth and -prune'           'find . -depth -path ./keep -prune -o -name "*.o" -exec rm {} +'
+  _must find-depth-prune    'A72 BSD -d leading and -prune'   'find -d . -path ./keep -prune -o -name "*.o" -exec rm {} +'
+  _must find-depth-prune    'A72 -d primary and -prune'       'find . -d -path ./keep -prune -o -name "*.o" -exec rm {} +'
+  _must find-depth-prune    'A72 -dx cluster and -prune'      'find -dx . -path ./keep -prune -o -name "*.o" -exec rm {} +'
+  _must find-depth-prune    'A72 -prune before -depth'        'find . -path ./keep -prune -o -depth -name "*.o" -exec trash {} +'
   _must rm-path             '/bin/rm'                         '/bin/rm -rf build'
   _must rm-path             '/usr/bin/rm'                     '/usr/bin/rm x'
   _must rm-path             'quoted /bin/rm as command'       '"/bin/rm" x'
@@ -1581,6 +1665,23 @@ SNAP
   _must - 'find -exec rm (bare)'            'find . -name "*.o" -exec rm {} +'
   _must - 'find -exec grep'                 'find . -exec grep -l delete {} \;'
   _must - 'fd -x rm (bare)'                 'fd -e tmp -x rm'
+  # W-20261001-A72 controls: a test before the deleter, or no deleter at all
+  _must - 'A72 find -name x -exec rm'       'find . -name x -exec rm {} +'
+  _must - 'A72 prune idiom'                 "find . -path ./keep -prune -o -name '*.o' -exec rm {} +"
+  _must - 'A72 ( -o ) group then rm'        'find . \( -name a -o -name b \) -exec rm {} +'
+  _must - 'A72 nested groups then rm'       'find . \( \( -name a -o -name b \) -type f \) -exec rm {} +'
+  _must - 'A72 non-deleter action first'    'find . -exec grep -l x {} +'
+  _must - 'A72 ! -name then rm'             'find . ! -name keep -exec rm {} \;'
+  _must - 'A72 -not -name then rm'          'find . -not -name keep -exec rm {} +'
+  _must - 'A72 -name -a -exec rm'           'find . -name a -a -exec rm {} \;'
+  _must - 'A72 -newermt then rm'            'find . -type f -newermt 2026-01-01 -exec rm {} +'
+  _must - 'A72 -maxdepth, -name then rm'    'find . -mindepth 1 -maxdepth 1 -name "*.log" -exec rm {} +'
+  _must - "A72 -name then sh -c 'rm'"       "find . -name x -exec sh -c 'rm \"\$@\"' _ {} +"
+  _must - 'A72 -depth without -prune'       'find . -depth -name "*.o" -exec rm {} +'
+  _must - 'A72 -d -prune, no deleter'       'find -d . -prune -o -print'
+  _must - 'A72 -E with -regex then rm'      "find -E . -regex '.*[.]o' -exec rm {} +"
+  _must - 'A72 rm -d inside the body'       'find . -name x -type d -exec rm -d {} +'
+  _must - 'A72 the words as data'           "rg -n -- '-exec rm {} +' docs/"
   _must - 'cmd > out.txt'                   'ls > out.txt'
   _must - 'cmd 2>&1 > out'                  'make 2>&1 > build.log'
   _must - '>> append bare'                  '>> notes.txt'
@@ -1873,6 +1974,8 @@ shred|shred -u f
 truncate|truncate -s0 f
 dd-of|dd if=/dev/zero of=f bs=1 count=1
 find-delete|find . -name x -delete
+find-exec-untested|find . -exec rm -rf {} + -name x
+find-depth-prune|find -d . -path ./keep -prune -o -name x -exec rm {} +
 git-worktree-remove|git -C ../r worktree remove ../wt
 git-clean|git clean -fdx
 git-reset-hard|git reset --hard HEAD
@@ -1899,6 +2002,9 @@ trash-path|/usr/bin/trash x'
     _raw_trigger "$(_pl "$smp")"; hit="$RAW_HIT"
     [ "$hit" = "$id" ]; _chk "its raw payload trips the $id trigger (got ${hit:-none})" $?
   done <<< "$cov"
+  # A72: the two find triggers are crude; their near-misses stay quiet
+  _raw_trigger "$(_pl 'find . -name x -exec rm {} +')"; [ -z "$RAW_HIT" ]; _chk "A72 raw: find -name x -exec rm trips nothing (got ${RAW_HIT:-none})" $?
+  _raw_trigger "$(_pl "find . -path ./keep -prune -o -name '*.o' -exec rm {} +")"; [ -z "$RAW_HIT" ]; _chk "A72 raw: the prune idiom trips nothing (got ${RAW_HIT:-none})" $?
   SNAP_DIR="$save_snap"; SNAP_DONE=0
   # the class: every rule id _msg knows, read from this file, is sampled above
   # or excluded here; the count is the control (a scan that read nothing is 0)
