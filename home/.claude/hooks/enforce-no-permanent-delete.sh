@@ -1834,10 +1834,14 @@ SNAP
   # an INVALID TRIAL, never a pass, and the run exits 3. A hook that got slower to START would
   # raise its own overhead and hide; the start-up arm holds a trivial call to CAL_RATIO_MAX
   # bare /bin/bash starts timed in the same breath, which do not run the hook.
-  local cal_k=3 cal_n=3 cal_absurd=5000 cal_ratio=40 ov=0 ovs="" bare=0 calok=0 lim=0 calv="" calhow="" invalid=0 samples=""
+  # CAL_K1 = 4 for a SINGLE-SHOT arm (shift, deadline, stall, crash): one timed call carries one
+  # more spike than a best of 3, and one needed 3.12 x at load 99 ('uv run -p' alone, 1977 ms
+  # against 1907). Idle, 4 x a ~45 ms overhead keeps the shift arms near 380 ms, under the old 1 s.
+  local cal_k=3 cal_k1=4 cal_n=3 cal_absurd=5000 cal_ratio=40 ov=0 ovs="" bare=0 calok=0 lim=0 calv="" calhow="" invalid=0 samples=""
   _median() { printf '%s\n' "$@" | sort -n | awk '{ a[NR] = $1 } END { print a[int((NR + 1) / 2)] }'; }
-  _limit() { # $1 = budget ms -> lim, calv (why the arm cannot be judged, or empty), calhow (the sum, printed)
-    lim=$(( $1 + cal_k * ov )); calhow="limit $lim = $1 + $cal_k x overhead $ov (median of $ovs)"; calv=""
+  _limit() { # $1 = budget ms, $2 = multiple (default cal_k) -> lim, calv (why the arm cannot be judged, or empty), calhow (the sum, printed)
+    local k=${2:-$cal_k}
+    lim=$(( $1 + k * ov )); calhow="limit $lim = $1 + $k x overhead $ov (median of $ovs)"; calv=""
     [ "$calok" -eq 0 ] || calv="a trivial calibration call was not a clean allow, so the overhead measured something else"
     [ "$ov" -le "$cal_absurd" ] || calv="overhead $ov ms is above $cal_absurd ms: this machine is too loaded to time anything"
     return 0
@@ -1923,7 +1927,7 @@ SNAP
            'caffeinate -t' 'stdbuf -o' 'watch -n' 'git -C' 'git -c' 'git --git-dir' \
            'python3 -W' 'python3 -X' 'node -r' 'node --require' 'perl -e' 'perl -ne' 'ruby -E' \
            'bash -o' 'zsh +o' 'sh -O' 'uv --project' 'uv -p' 'uv run --with' 'uv run -p' 'uv run --env-file'; do
-    if [ $(( SECONDS - cal_at )) -ge 5 ]; then _calb; _limit 200; _alarm; cal_at=$SECONDS; fi
+    if [ $(( SECONDS - cal_at )) -ge 5 ]; then _calb; _limit 200 "$cal_k1"; _alarm; cal_at=$SECONDS; fi
     _hookb "$f; unlink f" 0 "$al"
     [ "$hb_d" = deny ] && [[ $hb_r == *'(unlink)'* ]]; _tchk "'$f; unlink f': denied as unlink" $? "$hb_ms"
     _hookb "$f; unlink f" 1 "$al"
@@ -1952,10 +1956,10 @@ SNAP
   local dl st
   _stall() { st=$(( lim / 1000 + 1 )); al=$(( st + 1 )); [ "$st" -le 9 ] || { [ -n "$calv" ] || calv="the stall this load needs ($st s) is past the 9 s the seam allows"; st=9; al=10; }; }
   _calb; dl=1; [ "$ov" -le 400 ] || dl=2
-  _limit 200; _alarm
+  _limit 200 "$cal_k1"; _alarm
   _hookb 'echo control-ok' 0 "$al" DEL_GUARD_DEADLINE=$dl
   [ "$rc" -eq 0 ] && [ -z "$out" ]; _tchk "control: deadline $dl s, no stall: allowed (the deadline itself denies nothing)" $? "$hb_ms"
-  _calb; _limit $(( dl * 1000 + 200 )); _stall
+  _calb; _limit $(( dl * 1000 + 200 )) "$cal_k1"; _stall
   _hookb 'echo control-ok' 0 "$al" DEL_GUARD_DEADLINE=$dl DEL_GUARD_TEST_STALL=$st
   [ "$hb_d" = deny ] && [[ $hb_r == 'BLOCKED (guard-timeout)'* ]] && [[ $hb_r == *"within $dl s"* ]]; _tchk "stall $st s, deadline $dl s: denied as guard-timeout, the deny says 'within $dl s'" $? "$hb_ms"
   [[ $hb_r == *'NOT a match'* ]] && [[ $hb_r == *'timeout, not a match'* ]]; _chk 'the timeout deny says it was a timeout, not a match' $?
@@ -1963,12 +1967,12 @@ SNAP
   # the deadline can only be lowered: 99 is ignored and the built-in 3 s holds, under the
   # harness's 5 s (a stall past 5 s would be an allow). The 3 is read from the deny, so the
   # harness comparison needs no clock; the clock shows the deny did not wait for the stall.
-  _calb; _limit 3200; _stall
+  _calb; _limit 3200 "$cal_k1"; _stall
   _hookb 'echo control-ok' 0 "$al" DEL_GUARD_DEADLINE=99 DEL_GUARD_TEST_STALL=$st
   [ "$hb_d" = deny ] && [[ $hb_r == 'BLOCKED (guard-timeout)'* ]]; _tchk "DEL_GUARD_DEADLINE=99 is ignored, stall $st s: denied at the built-in deadline" $? "$hb_ms"
   local bd; bd="$(printf '%s' "$hb_r" | sed -n 's/.*no verdict within \([0-9][0-9]*\) s.*/\1/p' | sed -n '1p')"
   [ "$bd" = 3 ] && [ "$bd" -lt 5 ]; _chk "the deny names the built-in deadline: ${bd:-none} s (want 3, under the harness's 5 s)" $?
-  _calb; _limit 200; _alarm
+  _calb; _limit 200 "$cal_k1"; _alarm
   _hookb 'echo control-ok' 0 "$al" DEL_GUARD_TEST_CRASH=1
   [ "$hb_d" = deny ] && [[ $hb_r == 'BLOCKED (guard-no-verdict)'* ]] && [[ $hb_r == *'crash, not a match'* ]]; _tchk "child exits before its verdict: denied as guard-no-verdict" $? "$hb_ms"
   echo "=== BROKEN-FILE arms: a gutted classifier is a DENY, a syntax error a block (W-20260929-A186) ==="
@@ -2113,7 +2117,7 @@ trash-path|/usr/bin/trash x'
   # Trash (or fail inside the sandbox), and the OS clears $TMPDIR.
   echo
   echo "del-guard selftest: $passes passed, $fails failed (fixtures: $fx)"
-  echo "timing: each limit = budget + $cal_k x the median of $cal_n trivial calls through the same route, printed per arm; $invalid INVALID TRIAL(s)"
+  echo "timing: each limit = budget + $cal_k x (best-of-3 arm) or $cal_k1 x (single-shot arm) the median of $cal_n trivial calls through the same route, printed per arm; $invalid INVALID TRIAL(s)"
   # 1 on any failure; 3 when nothing failed but a timing arm could not be judged (not a pass)
   [ "$fails" -eq 0 ] || return 1
   [ "$invalid" -eq 0 ] || { echo "del-guard selftest: NOT a pass: $invalid timing arm(s) were INVALID TRIALS (exit 3)"; return 3; }

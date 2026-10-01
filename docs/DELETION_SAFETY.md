@@ -302,10 +302,10 @@ folder) is refused with the folder intact, and a throwaway temp file goes to the
 2026-10-02). Fixed limits failed on load alone: `trash-guard-selftest` at load 60-97 (2966 ms
 against 2900), and the hook's selftest under 60 CPU burners (48 arms, the 1 s shift arms
 included). In both suites every timed arm now first times 3 TRIVIAL calls through the same
-route, and its limit is its budget plus **3 x their median**, printed on the arm's line with the
-samples. The budget is only what the trivial call does not do: a cut or deadline on the wall
-clock (2 s, 0.5 s, the hook's 1-3 s) plus 200 ms for the watchdog, or the 5 KB parse. Rules that
-keep the arms honest:
+route, and its limit is its budget plus **3 x their median** for a best-of-3 arm and **4 x** for a
+single-shot hook arm, printed on the arm's line with the samples. The budget is only what the
+trivial call does not do: a cut or deadline on the wall clock (2 s, 0.5 s, the hook's 1-3 s)
+plus 200 ms for the watchdog, or the 5 KB parse. Rules that keep the arms honest:
 
 - A fake slow search or stall is set PAST the computed limit, so a guard that waits for it fails
   at any load. The cut's value is read without a clock: `trash-guard --show-config`, and the
@@ -320,11 +320,12 @@ keep the arms honest:
   overhead to 99999 ms (must be exit 3) and 4000 ms (must fail a start-up arm), and the trash
   suite adds `late`: a one-line fault whose refusal is right but waits for the whole search.
 
-Why 3 (measured 2026-10-02, 10 cores, load 6 to 103): in the trash suite the non-search part of
-a timed call ran up to 1.44 x the median trivial call, and one call up to 1.45 x its own median
-(1.44 x 1.45 = 2.1); in the hook suite the single-shot shift arms needed up to 2.58 x, because
-their work scales with the load as the trivial call does. The median, not the best: the first
-call of a run measured 1046 ms against 30 after it.
+Why 3 and 4 (measured 2026-10-02, 10 cores, load 6 to 103): in the trash suite the non-search
+part of a timed call ran up to 1.44 x the median trivial call, and one call up to 1.45 x its own
+median (1.44 x 1.45 = 2.1); the hook's best-of-3 5 KB arms needed about 1.9 x. A single-shot hook
+arm (shift, deadline, crash) carries one more spike: it needed up to 3.12 x at load 99 (1977 ms
+against a 3 x limit of 1907), so those take 4, which still sits under the old fixed 1 s at idle.
+The median, not the best: the first call of a run measured 1046 ms against 30 after it.
 
 **What it does not cover:**
 
