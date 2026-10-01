@@ -92,6 +92,68 @@ hook registered and no skill, **herdr is blocked permanently with no way to
 unlock it** -- and the laptop is precisely the box that drives herdr against the
 mini.
 
+## A guard that crashes denies (D-20261002-A01)
+
+Claude Code blocks a tool call only on a deny decision or exit 2. Exit 1, 126,
+127 and a timeout are "non-blocking errors": the call RUNS (measured on 2.1.286,
+W-20260929-A192). So every `class: guard` entry in the manifest runs its script
+inside this wrapper, which turns any other exit into a deny:
+
+```sh
+h="$HOME/.claude/hooks/X.sh"; if [ -x "$h" ]; then o=$("$h"); r=$?;
+  case $r in 0|2) if [ -n "$o" ]; then printf '%s\n' "$o"; fi; exit $r;; esac;
+  printf '%s\n' '<deny JSON: HOOK CRASHED, DENYING: X.sh exited '"$r"' ...>';
+else printf '%s\n' '<deny JSON: HOOK MISSING, DENYING: X.sh ...>'; fi
+```
+
+| The guard                               | The wrapper                                     | Result            |
+| --------------------------------------- | ----------------------------------------------- | ----------------- |
+| exits 0 (allow, its own deny, rewrite)  | passes stdout through, exits 0                  | as the guard said |
+| exits 2                                 | passes stdout through, exits 2; stderr as is    | blocked           |
+| exits anything else (1, 126, 127, kill) | drops its stdout, prints one deny with the code | denied            |
+| is missing or not executable            | prints the HOOK MISSING deny                    | denied            |
+| hangs past `timeout`                    | nothing: Claude Code cancels the hook           | RUNS (A17)        |
+
+Both deny messages name the guard and the fix, which runs from your own terminal
+where no Claude hook runs: `~/.claude/hooks/X.sh --selftest`, then restore,
+retire, or delete the entry. The accepted cost is that a broken guard blocks every
+call it guards until it is fixed. A hang is not covered (W-20261002-A17).
+
+Two details. The guard still reads the payload on stdin, because a command
+substitution inherits it. Trailing newlines on a passed-through stdout become
+exactly one.
+
+The full shape, per class, is `_shape_note` in `settings/claude/hooks.json`. Each
+guard's previous `-x`-only command is its `legacy_commands[0]`, so
+`claude-hooks-sync --install` replaces it in place. `pj-health`'s
+`hook-fail-open` row FAILs a guard still registered in the `-x`-only shape
+(`wrapped-nocrash`).
+
+Proof: `claude-hooks-sync-selftest` arm 40 runs every real guard under bash, sh
+and dash against each exit code, plus six one-fault mutants of the crash branch.
+End to end, headless `claude -p` on 2.1.286 (2026-10-02, W-20261002-A16), "ran"
+read from a marker file, never from the model's words:
+
+| Wrapper, guard                             | Call ran?                      |
+| ------------------------------------------ | ------------------------------ |
+| new, exits 127                             | no, HOOK CRASHED deny          |
+| old `-x`-only, exits 127                   | **yes** (the A192 fail-open)   |
+| new, prints an allow, then exits 1         | no; the old wrapper ran it     |
+| new, exits 2 with stderr                   | no, but see the trap below     |
+| new, script missing                        | no, HOOK MISSING deny          |
+| new, rewrite (`updatedInput`, no decision) | only the rewritten command ran |
+| new, real delete guard, `touch` / `: > f`  | yes / no, the guard's own deny |
+| no hook, `touch` / `: > f` (controls)      | yes / yes                      |
+
+**The exit 2 trap.** On exit 2 Claude Code tells the model
+`PreToolUse:Bash hook error: [<the whole command>]: <stderr>`. The command text
+holds both deny messages, so haiku answered that the hook was "missing or not
+executable" when it had run and blocked. The old shape has the same flaw with one
+message. No guard here denies by exit 2; a guard with a shell syntax error does.
+
+Cost: no difference measurable at load average 85 to 100. Around the real delete
+guard, 30 interleaved runs each, the median was 714 ms new against 701 ms old.
+
 ## Why add-only
 
 `claude-hooks-sync` never removes an entry and never edits one. A registration
@@ -200,8 +262,10 @@ CONV_PAYLOAD_FILE=<captured payload> <hook> --selftest   # arms on a real envelo
 ```
 
 This repo's three PreToolUse guards (`enforce-no-cd.sh`, `enforce-builtin.sh`,
-`protect-files.sh`) are registered in `.claude/settings.json` through the same
-`if [ -x "$h" ]` wrapper as the manifest guards (W-20260925-A28, 2026-09-25). Until
+`protect-files.sh`) are registered in `.claude/settings.json` through the
+`if [ -x "$h" ]` wrapper the manifest guards used before D-20261002-A01
+(W-20260925-A28, 2026-09-25). They have no crash branch yet, so one that starts and
+then crashes still fails open; `pj-health`'s `hook-fail-open` row names them. Until
 then they were bare paths: a missing script exited 127, which Claude Code treats as a
 non-blocking error, so the guard stopped guarding without a word. Now a missing script,
 or an empty `CLAUDE_PROJECT_DIR`, denies every call it covers by name. The fix is a
@@ -491,12 +555,12 @@ like this again."
 **What Go writes** (measured 2026-09-29, go1.27.1, a throwaway module, one clean folder per
 reading):
 
-| Command | Writes into the current folder |
-| --- | --- |
-| `go build`, `go build .`, `go build ./cmd/app`, `go build main.go` | yes, the binary |
-| `go test -c ./lib` | yes, `lib.test` |
-| `go build ./...`, `go build ./cmd/...` (even matching ONE main package) | no |
-| `go build ./a ./b`, `go build ./lib` (not main), `go test`, `go vet` | no |
+| Command                                                                 | Writes into the current folder |
+| ----------------------------------------------------------------------- | ------------------------------ |
+| `go build`, `go build .`, `go build ./cmd/app`, `go build main.go`      | yes, the binary                |
+| `go test -c ./lib`                                                      | yes, `lib.test`                |
+| `go build ./...`, `go build ./cmd/...` (even matching ONE main package) | no                             |
+| `go build ./a ./b`, `go build ./lib` (not main), `go test`, `go vet`    | no                             |
 
 **The rule.** DENY `go build` unless it has `-o`, a `...` pattern, or two or more packages;
 DENY `go test -c` without `-o`. A single library package is denied too, because the hook
