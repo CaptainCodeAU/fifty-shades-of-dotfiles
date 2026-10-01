@@ -298,6 +298,34 @@ removing the blank check, the cwd check, the timeout refusal, the temp exemption
 blank skip, safe-rm's blank warning, or the hook's `env trash` line is each caught (7 of 7). `--e2e` with the real `/usr/bin/trash`: the incident shape (`trash ''` from inside a temp
 folder) is refused with the folder intact, and a throwaway temp file goes to the Trash.
 
+**Timing arms calibrate themselves** (W-20260929-A188, W-20261002-A04; Gavin's ruling,
+2026-10-02). Fixed limits failed on load alone: `trash-guard-selftest` at load 60-97 (2966 ms
+against 2900), and the hook's selftest under 60 CPU burners (48 arms, the 1 s shift arms
+included). In both suites every timed arm now first times 3 TRIVIAL calls through the same
+route, and its limit is its budget plus **3 x their median**, printed on the arm's line with the
+samples. The budget is only what the trivial call does not do: a cut or deadline on the wall
+clock (2 s, 0.5 s, the hook's 1-3 s) plus 200 ms for the watchdog, or the 5 KB parse. Rules that
+keep the arms honest:
+
+- A fake slow search or stall is set PAST the computed limit, so a guard that waits for it fails
+  at any load. The cut's value is read without a clock: `trash-guard --show-config`, and the
+  hook's deny text ("no verdict within 3 s"), which also proves the 3 s is under the harness's 5.
+- Lateness is its own arm. A right answer given late fails its timing arm only, and the trash
+  suite's route comparison counts verdicts; a timeout refusal and an allow on the 20,000-folder
+  tree are both right, so they compare as one.
+- An overhead above 5 s is an **INVALID TRIAL**: the run says so and exits **3**, never 0. Both
+  `--mutants` modes count exit 3 (and the hook's alarm-ended exit 142) as not caught.
+- Calibration would hide a guard that got slower to START, so start-up arms hold a trivial call
+  to 40 bare `/bin/sh` (or `/bin/bash`) starts timed in the same breath. `--mutants` forces the
+  overhead to 99999 ms (must be exit 3) and 4000 ms (must fail a start-up arm), and the trash
+  suite adds `late`: a one-line fault whose refusal is right but waits for the whole search.
+
+Why 3 (measured 2026-10-02, 10 cores, load 6 to 103): in the trash suite the non-search part of
+a timed call ran up to 1.44 x the median trivial call, and one call up to 1.45 x its own median
+(1.44 x 1.45 = 2.1); in the hook suite the single-shot shift arms needed up to 2.58 x, because
+their work scales with the load as the trivial call does. The median, not the best: the first
+call of a run measured 1046 ms against 30 after it.
+
 **What it does not cover:**
 
 - `/usr/bin/trash` typed in Gavin's own terminal: by design, the human's route around the shim.
