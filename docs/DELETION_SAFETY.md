@@ -511,7 +511,8 @@ the Trash shim (Coverage, top). It still has two traps that send a whole tree to
    the same: `find . -name x -o -exec rm {} +` runs on every file NOT named `x`.
 2. **`-depth` switches `-prune` off.** `-delete` implies `-depth`, and with `-depth` (BSD `-d`)
    `-prune` does nothing, so `find -d . -path ./keep -prune -o -name '*.o' -exec rm {} +` reaches
-   into `keep` too.
+   into `keep` too. Measured 2026-10-02 with `-print` on both `bfs` and `/usr/bin/find`: with
+   `-depth`, `keep/a.o` was listed; without it, only the file outside `keep`.
 3. **Dry run first:** the same command with `-print` in place of the action. Read it, then swap
    the action back.
 
