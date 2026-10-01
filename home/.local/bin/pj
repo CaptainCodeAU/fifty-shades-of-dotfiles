@@ -1507,22 +1507,28 @@ selftest() {
   mk_eg mkill kill 'moved: proj30 (2026-10-02)'
   mk_eg mnox 0 'moved: proj30 (2026-10-02)'; chmod -x "$eg/mnox/engage-go"
   mkdir -p "$d30"; git -C "$d30" init -q 2>/dev/null
+  # ~/.zshenv puts ~/.local/bin FIRST in every zsh when PATH lacks it (W-20260929-A126), and the real
+  # engage-go lives there, so it shadowed every fake below (measured 2026-10-02: all of arm 30
+  # read the real one). An empty ZDOTDIR makes zsh skip ~/.zshenv: the PATH an arm sets is the
+  # PATH pj sees. 30a proves it the way pj sees it, through a child zsh.
+  mkdir -p "$root/zdot"
   # A PATH with NO engage-go at all: every folder holding one is dropped (the real one and
   # this selftest's own not-moved fake), and pj's own folder leads so pj-prompt-file resolves.
   for l30 in ${(s.:.)PATH}; do [[ -e "$l30/engage-go" ]] || noeg+=("$l30"); done
   noegp="${SELF:h}:${(j.:.)noeg}"
   eg_dry() {   # eg_dry <PATH> [pj args...]: a dry run from d30; sets out, rc, $root/err30
     local p="$1"; shift
-    out="$( builtin cd "$d30" && PATH="$p" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" "$@" 2>"$root/err30" )"; rc=$?
+    out="$( builtin cd "$d30" && ZDOTDIR="$root/zdot" PATH="$p" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" "$@" 2>"$root/err30" )"; rc=$?
   }
   eg_launch() {   # eg_launch <name> <PATH>: a REAL launch through a fake launch file, as 28g
     printf '__claude_launch() { : > "%s/launched30.%s"; }\n' "$root" "$1" > "$root/fake-launch30.$1"
-    out="$( builtin cd "$d30" && env -u HERDR_ENV PATH="$2" PJ_NO_FETCH=1 PJ_NO_CHECKS=1 PJ_LAUNCH_FILE="$root/fake-launch30.$1" \
+    out="$( builtin cd "$d30" && env -u HERDR_ENV ZDOTDIR="$root/zdot" PATH="$2" PJ_NO_FETCH=1 PJ_NO_CHECKS=1 PJ_LAUNCH_FILE="$root/fake-launch30.$1" \
             PJ_WORKER_BIN="$fk/rc0" PJ_PROFILE_DIR="$root/none-such" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" 2>&1 )"; rc=$?
   }
-  # 30a the absent arm is real: this selftest's PATH has an engage-go and noegp has none.
-  [[ -n "$(whence -p engage-go)" && -z "$(PATH="$noegp" whence -p engage-go)" ]] \
-    && ok "30a control: engage-go is on the selftest PATH and absent from the no-engage PATH" || bad "30a absent PATH" "with=$(whence -p engage-go) without=$(PATH="$noegp" whence -p engage-go)"
+  # 30a the fakes and the absent arm are real, read the way pj reads PATH (a child zsh).
+  local w30="$(ZDOTDIR="$root/zdot" PATH="$eg/m0:$noegp" zsh -c "whence -p engage-go")" wo30="$(ZDOTDIR="$root/zdot" PATH="$noegp" zsh -c "whence -p engage-go")"
+  [[ "$w30" == "$eg/m0/engage-go" && -z "$wo30" ]] \
+    && ok "30a control: a child zsh as pj runs finds the fake first, and no engage-go on the no-engage PATH" || bad "30a PATH as pj sees it" "with=$w30 without=$wo30"
   eg_dry "$noegp" --dry-run; base30="$out"; berr30="$(<"$root/err30")"
   [[ $rc -eq 0 && "${base30%%$'\n'*}" == claude ]] && ok "30b engage-go missing: the dry run is today's (rc 0, argv[0] claude)" || bad "30b missing" "rc=$rc $(<"$root/err30")"
   # 30c-e exit 0, moved: the exact line, alone on stderr, exit 1, no argv, nothing launched.
