@@ -48,7 +48,7 @@ Measured 2026-09-04 on macOS 25.6 (Darwin), SIP enabled. Every row was run, not 
 | `#!/bin/zsh` script, bare `rm`                                    | yes               | dummy-shim test hit the shim                                                                                                                                                                 |
 | `xargs rm`                                                        | yes               | live: `~/.Trash/xtarget.txt`                                                                                                                                                                 |
 | `make clean`                                                      | yes               | live: `~/.Trash/junk.o`, and a missing target did not break the rule                                                                                                                         |
-| `find -exec rm`                                                   | yes               | same PATH lookup as `xargs`                                                                                                                                                                  |
+| `find -exec rm`                                                   | yes               | 2026-10-01: sandboxed, `safe-rm: these paths still exist after the trash call` (the shim; `/bin/rm` cannot print it), file stayed; unsandboxed, in `~/.Trash`, `keeper` untouched            |
 | `command rm`, `\rm`                                               | yes               | these bypass functions and aliases, not `PATH`                                                                                                                                               |
 | `env -i rm`, `PATH=/bin rm`, `command -p rm`                      | **no**            | a PATH without `~/.local/bin` finds `/bin/rm` (measured 2026-09-25 for `env -i` and `command -p`; `PATH=/bin` is the same lookup, not run). The agent guard denies them (`rm-lookup`, below) |
 | Homebrew formula post-install                                     | yes               | `formula.rb:1662` restores the user's PATH for that phase                                                                                                                                    |
@@ -438,6 +438,7 @@ inside `( )`, `{ }`, `$( )`, backticks, `<( )`, `=( )`, behind `VAR=1`, `sudo`, 
 | `unlink`, `shred`, `srm`, `wipe`, `truncate`, `dd of=` (not `/dev/null`)                                                                                                                                                                                                                                                                                                                                                  | **denied** | bare `rm`, or move aside first                                   |
 | `> f`, `2> f`, `>! f`, `: > f`, `true >\| f`, `cat /dev/null > f`, `cp /dev/null f`                                                                                                                                                                                                                                                                                                                                       | **denied** | move the file aside first                                        |
 | `find -delete`; `find -exec` / `fd -x` with any denied command                                                                                                                                                                                                                                                                                                                                                            | **denied** | `find -print`, then `-exec rm {} +`                              |
+| `find -exec rm` (also `-execdir`, `-ok`, `-okdir`; `rmdir`, `trash`, `safe-rm`, `sh -c 'rm ...'`) with no test before it in its AND-chain: first, after `-o`, or after a group true for every file (`find-exec-untested`, W-20261001-A72); or with `-depth`/`-d` and `-prune` in one `find` (`find-depth-prune`). Not tests: `-maxdepth`, leading `-E -x -L`, `-print`, `-prune`, `-true`, an earlier `-exec`             | **denied** | a test such as `-name` first, `-print` dry run; no `-depth`      |
 | `rsync --delete*`, `--del`, `--remove-source-files`                                                                                                                                                                                                                                                                                                                                                                       | **denied** | rsync without them, then bare `rm`                               |
 | inline code: `python -c`, `node -e`, `perl -e`, `ruby -e`, `deno eval`, `osascript -e`, and code on stdin (`python3 - <<EOF`, `python3 - ARG <<EOF` since 2026-09-28, `echo ... \| python3`) calling `os.remove`, `shutil.rmtree`, `Path.unlink`, `rmdir`, `fs.rm*`, `unlink*`, `/bin/rm`, `FileUtils.rm*`                                                                                                                | **denied** | bare `rm` in the shell                                           |
 | `docker`/`podman` `... prune`, `volume rm`, `compose down -v`; `brew cleanup`, `--zap`; `pnpm store prune`; `uv cache clean/prune`; `bun pm cache rm`; `rimraf`                                                                                                                                                                                                                                                           | **denied** | ask Gavin (`rimraf`: bare `rm -r`)                               |
@@ -445,7 +446,7 @@ inside `( )`, `{ }`, `$( )`, backticks, `<( )`, `=( )`, behind `VAR=1`, `sudo`, 
 | an alias from the shell snapshot whose expansion is any of the above                                                                                                                                                                                                                                                                                                                                                      | **denied** | (as the expansion)                                               |
 | a wrapper's value flag given LAST with no value (`time -o`, `nice -n`, `exec -a`, `xargs -n`, `sudo -u`, `env -S`, `git -C`, `perl -e`, `uv run --with`, ...), then a denied command (`time -o; unlink f`)                                                                                                                                                                                                                | **denied** | (as the later command)                                           |
 | the guard itself gives no verdict within 3 s (`guard-timeout`), or its child exits without one (`guard-no-verdict`); the denial says it is NOT a match                                                                                                                                                                                                                                                                    | **denied** | split the command, or ask Gavin                                  |
-| bare `rm`, `command rm`, `\rm`, `rm *(.)`, `find -exec rm`, `git clean -n`, `git branch -d`, `git restore --staged`, `cmd > out`                                                                                                                                                                                                                                                                                          | allowed    |                                                                  |
+| bare `rm`, `command rm`, `\rm`, `rm *(.)`, `find . -name x -exec rm {} +`, `find . -path ./keep -prune -o -name x -exec rm {} +`, `git clean -n`, `git branch -d`, `git restore --staged`, `cmd > out`                                                                                                                                                                                                                    | allowed    |                                                                  |
 | a script or Makefile target that deletes internally, a compiled program                                                                                                                                                                                                                                                                                                                                                   | invisible  | the rm shim still covers a bare `rm` inside it                   |
 | a command name in a variable (`$RM x`, zsh `$=x`), git aliases, `ssh host 'rm ...'`                                                                                                                                                                                                                                                                                                                                       | invisible  |                                                                  |
 | `mv` / `cp` over an existing file, `sed -i`, `open(f, 'w')`                                                                                                                                                                                                                                                                                                                                                               | invisible  | cp/mv wrappers: prompt at a terminal, decline for agents (below) |
@@ -498,6 +499,42 @@ credential-named assignments redacted.
 ~/.claude/hooks/enforce-no-permanent-delete.sh --mutants    # removes each rule line; each must be caught
 ~/.claude/hooks/enforce-no-permanent-delete.sh --classify 'git clean -fdx'
 ```
+
+### `find`: order, `-depth`, and the dry run
+
+Added 2026-10-01 (W-20261001-A72; Gavin's box: doc, measure and guard, strictest form). The guard
+names `find ... -exec rm {} +` as the safe route for `find -delete`, and its bare `rm` does reach
+the Trash shim (Coverage, top). It still has two traps that send a whole tree to the Trash:
+
+1. **find evaluates left to right.** An action placed before the tests runs on every file:
+   `find . -exec rm -rf {} + -name '*.tmp'` trashes everything under `.`. Right after a `-o` is
+   the same: `find . -name x -o -exec rm {} +` runs on every file NOT named `x`.
+2. **`-depth` switches `-prune` off.** `-delete` implies `-depth`, and with `-depth` (BSD `-d`)
+   `-prune` does nothing, so `find -d . -path ./keep -prune -o -name '*.o' -exec rm {} +` reaches
+   into `keep` too.
+3. **Dry run first:** the same command with `-print` in place of the action. Read it, then swap
+   the action back.
+
+Sources: the GNU findutils manual, and BSD `man find` on this Mac ("Depth-first traversal
+processing is implied by this option" under `-delete`; "the -prune primary has no effect if the
+-d option was specified").
+
+The guard denies both (`find-exec-untested`, `find-depth-prune`) when an `-exec`, `-execdir`, `-ok`
+or `-okdir` body reaches a deleter it otherwise allows: `rm`, `command rm`, `\rm`, `rmdir`,
+`trash`, `safe-rm`, or any of them inside `sh -c`. An AND-chain starts at the front, after `-o`, `-or`
+or `,`, and inside `(`. A closed group is a test only when every alternative in it has one:
+`\( -name a -o -print \)` is true for every file. An earlier `-exec` is deliberately not a test,
+even `-exec grep -q`. The shape that passes:
+
+```sh
+find . -name '*.tmp' -print                                  # read the list
+find . -name '*.tmp' -exec rm {} +                           # same command, action swapped in
+find . -path ./keep -prune -o -name '*.o' -exec rm {} +      # prune idiom, never with -depth
+```
+
+An `-exec` body is lexed with the word filter off, so `sh -c 'rmdir "$@"'` is seen too (the lexer
+itself is shared with `enforce-secret-probe.sh` and was left alone). Not covered: `fd -x rm` /
+`fd -X rm` with no pattern, or the pattern `.`, matches everything and stays allowed.
 
 ## Agent shells never wait on a prompt, and a failed rm stops a reset
 
