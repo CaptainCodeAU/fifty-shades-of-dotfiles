@@ -858,7 +858,8 @@ fi
 # Claude Code runs a hook command through a shell: /bin/bash 3.2 on this Mac
 # (measured 2026-09-25), often dash as /bin/sh on Linux. For each entry: the
 # script present and exiting 0, 2 and 7; then absent; then not executable.
-#   guard, advisory: the exit code passes through untouched
+#   guard, advisory: the exit code passes through untouched (a guard's 0 and 2 only: since
+#                    D-20261002-A01 its exit 7 is a crash and denies; arm 40 has the rest)
 #   alarm:           exit 0 whatever the script says
 #   absent / not executable:
 #     guard   exit 0, stdout one JSON object: PreToolUse permissionDecision "deny",
@@ -884,7 +885,14 @@ shape_run() {   # shape_run <manifest> -> sets SP SF SHELLS
                 printf '#!/bin/sh\ncat >/dev/null\necho "ran:$*"\nexit %s\n' "$code" > "$f"; chmod +x "$f"
                 out=$(printf '{"x":1}' | HOME="$root" "$sh" -c "$cmd" 2>/dev/null); rc=$?
                 want=$code; [[ "$cls" == alarm ]] && want=0
-                if [[ "$rc" == "$want" && "$out" == "ran:${args# }" ]]; then SP=$((SP+1))
+                # D-20261002-A01: a guard that exits anything but 0 or 2 is a crash, and denies
+                if [[ "$cls" == guard && "$code" == 7 ]]; then
+                    if [[ "$rc" == 0 ]] && printf '%s' "$out" | jq -e --arg s "$s" '
+                            .hookSpecificOutput.permissionDecision == "deny"
+                            and (.hookSpecificOutput.permissionDecisionReason | startswith("HOOK CRASHED, DENYING: " + $s + " exited 7,"))' >/dev/null 2>&1
+                    then SP=$((SP+1))
+                    else SF=$((SF+1)); printf '        %s %s present exit 7: rc=%s out=%s\n' "$s" "$sh" "$rc" "${out:0:60}"; fi
+                elif [[ "$rc" == "$want" && "$out" == "ran:${args# }" ]]; then SP=$((SP+1))
                 else SF=$((SF+1)); printf '        %s %s present exit %s: rc=%s out=%s\n' "$s" "$sh" "$code" "$rc" "$out"; fi
             done
             for mode in absent noexec; do
@@ -924,6 +932,143 @@ if [[ -f "$REAL_MANIFEST" ]]; then
     command mv "${TMPDIR:-/tmp}/a76-legacy-$$.json" "${TMPDIR:-/tmp}/a76-legacy-$$.json.done" 2>/dev/null
     if (( SF > 0 )); then ok "A76 shape control: the old commands FAIL the same harness ($SF cases)"
     else bad "A76 shape control: the old commands FAIL the same harness" "the harness cannot fail"; fi
+fi
+
+# --- 40. D-20261002-A01: a guard that CRASHES must deny ---------------------
+# Measured 2026-10-02 on Claude Code 2.1.286 (A192): only a deny decision or exit 2 blocks
+# a call; exit 1, 126, 127 and a timeout let it RUN. So every guard's wrapper runs the
+# script with the payload on stdin, passes exit 0 and exit 2 through untouched, and turns
+# any other exit into ONE deny JSON naming the guard and the code, discarding the guard's
+# partial stdout. Each case runs every real guard under every shell in $SHELLS, with a
+# 5 KB payload. A case is one line here; its failures are printed under it. A hang past the
+# timeout is out of scope (W-20261002-A17).
+CD_BIG="$(printf 'x%.0s' $(seq 1 5000))"
+CD_PAYLOAD="$(jq -cn --arg c "echo \"it's\" && $CD_BIG" '{hook_event_name:"PreToolUse",tool_name:"Bash",tool_input:{command:$c}}')"
+CD_DENY='{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"fixture own deny"}}'
+CD_REWRITE='{"hookSpecificOutput":{"hookEventName":"PreToolUse","updatedInput":{"command":"(builtin cd /tmp && ls)"},"additionalContext":"rewritten"}}'
+CD_LARGE="$(jq -cn --arg r "$(printf 'y%.0s' $(seq 1 65536))" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}')"
+# crash_case <manifest> <body> <check> -> CF failures, CN runs. <body> is the guard script
+# (after #!/bin/sh); <check> is a function reading CD_S CD_RC CD_OUT CD_ERR CD_IN and returning 0
+# on a pass. Every guard gets the same body, so a pass is a property of the wrapper.
+crash_case() {
+    local m="$1" body="$2" check="$3" root n i s cmd sp f sh
+    CF=0; CN=0
+    root="$(mktemp -d "${TMPDIR:-/tmp}/claude-hooks-crash.XXXXXX")" || { CF=1; return; }
+    WORK="$root"
+    n=$(jq '.hooks | length' "$m")
+    for (( i = 0; i < n; i++ )); do
+        [[ "$(jq -r ".hooks[$i].class" "$m")" == guard ]] || continue
+        s=$(jq -r ".hooks[$i].script" "$m"); cmd=$(jq -r ".hooks[$i].entry.command" "$m")
+        sp=$(jq -r --arg s "$s" ".hooks[$i].script_path // (\"\$HOME/.claude/hooks/\" + \$s)" "$m")
+        f="${sp/\$HOME/$root}"; mkdir -p "$(dirname "$f")"
+        for sh in $SHELLS; do
+            printf '#!/bin/sh\n%s\n' "$body" > "$f"; chmod +x "$f"
+            printf '#!/bin/sh\nexit 0\n' > "$f.ne"; chmod 644 "$f.ne"
+            : > "$root/in"
+            printf '%s' "$CD_PAYLOAD" | CD_IN="$root/in" CD_DENY="$CD_DENY" CD_REWRITE="$CD_REWRITE" CD_LARGE="$CD_LARGE" \
+                HOME="$root" "$sh" -c "$cmd" > "$root/out" 2> "$root/err"; CD_RC=$?
+            CD_S="$s"; CD_OUT="$root/out"; CD_ERR="$root/err"; CD_IN="$root/in"
+            CN=$((CN+1))
+            if ! "$check"; then
+                CF=$((CF+1))
+                printf '        %s %s: rc=%s out=%s err=%s\n' "$s" "$sh" "$CD_RC" "$(head -c 70 "$root/out")" "$(head -c 40 "$root/err")"
+            fi
+        done
+        [[ "$cmd" == *'HOOK MISSING, DENYING'* ]] || { CF=$((CF+1)); printf '        %s: no HOOK MISSING branch\n' "$s"; }
+    done
+    cleanup
+}
+cd_bytes() { [[ "$(cat "$1"; printf .)" == "$2." ]]; }   # file $1 holds exactly $2 (trailing newlines kept)
+cd_named_deny() {   # $1 = the exit code the deny must name
+    [[ "$CD_RC" == 0 ]] && jq -e -s --arg s "$CD_S" --arg c "$1" '
+        length == 1 and (.[0].hookSpecificOutput.hookEventName == "PreToolUse")
+        and .[0].hookSpecificOutput.permissionDecision == "deny"
+        and (.[0].hookSpecificOutput.permissionDecisionReason
+             | startswith("HOOK CRASHED, DENYING: " + $s + " exited " + $c + ",")
+               and contains("D-20261002-A01") and contains("from your own terminal, where no Claude hook runs")
+               and contains("--selftest"))' "$CD_OUT" >/dev/null 2>&1
+}
+cdk_deny()     { [[ "$CD_RC" == 0 ]] && cd_bytes "$CD_OUT" "$CD_DENY"$'\n'; }
+cdk_allow()    { [[ "$CD_RC" == 0 && ! -s "$CD_OUT" ]]; }
+cdk_rewrite()  { [[ "$CD_RC" == 0 ]] && cd_bytes "$CD_OUT" "$CD_REWRITE"$'\n'; }
+cdk_exit2()    { [[ "$CD_RC" == 2 ]] && cd_bytes "$CD_ERR" "fixture blocks"$'\n' && cd_bytes "$CD_OUT" "partial"$'\n'; }
+cdk_stderr0()  { [[ "$CD_RC" == 0 && ! -s "$CD_OUT" ]] && cd_bytes "$CD_ERR" "a note"$'\n'; }
+cdk_large()    { [[ "$CD_RC" == 0 ]] && cd_bytes "$CD_OUT" "$CD_LARGE"$'\n'; }
+cdk_stdin()    { [[ "$CD_RC" == 0 ]] && cd_bytes "$CD_IN" "$CD_PAYLOAD"; }
+cdk_crash1()   { cd_named_deny 1; }
+cdk_crash127() { cd_named_deny 127; }
+cdk_crash126() { cd_named_deny 126; }
+cdk_crash137() { cd_named_deny 137; }
+cdk_partial()  { cd_named_deny 1; }
+cdk_denycrash(){ cd_named_deny 1; }
+# label | body | check. The 127 body is the A192 one (a missing tool under set -e); the 126 one
+# starts, then runs a file that is not executable; 137 is a SIGKILL.
+CD_CASES=(
+  "exit 0 + its own deny JSON passes through byte for byte|cat >/dev/null; printf '%s\n' \"\$CD_DENY\"; exit 0|cdk_deny"
+  "exit 0 + no output (allow) passes through as no output|cat >/dev/null; exit 0|cdk_allow"
+  "exit 0 + an updatedInput rewrite passes through byte for byte|cat >/dev/null; printf '%s\n' \"\$CD_REWRITE\"; exit 0|cdk_rewrite"
+  "exit 2 passes through: code, stderr and stdout unchanged|cat >/dev/null; echo partial; echo 'fixture blocks' >&2; exit 2|cdk_exit2"
+  "exit 0 + stderr only: allowed, stderr kept|cat >/dev/null; echo 'a note' >&2; exit 0|cdk_stderr0"
+  "exit 0 + 64 KB of stdout passes through byte for byte|cat >/dev/null; printf '%s\n' \"\$CD_LARGE\"; exit 0|cdk_large"
+  "the guard reads the whole 5 KB payload on stdin|cat > \"\$CD_IN\"; exit 0|cdk_stdin"
+  "exit 1 becomes the named deny|cat >/dev/null; exit 1|cdk_crash1"
+  "exit 127 (a missing tool under set -e) becomes the named deny|set -e; cat >/dev/null; no-such-tool-a01|cdk_crash127"
+  "exit 126 after it started becomes the named deny|cat >/dev/null; \"\$0.ne\"|cdk_crash126"
+  "SIGKILL (137) becomes the named deny|cat >/dev/null; kill -9 \$\$|cdk_crash137"
+  "partial stdout then a crash yields ONE valid JSON deny|cat >/dev/null; printf '{\"hookSpecificOutput\":{'; exit 1|cdk_partial"
+  "its own deny JSON then exit 1 still yields ONE deny, the crash one|cat >/dev/null; printf '%s\n' \"\$CD_DENY\"; exit 1|cdk_denycrash"
+)
+crash_suite() {   # crash_suite <manifest> [quiet] -> CS_FAIL total failures, one ok/bad per case unless quiet
+    local m="$1" quiet="${2:-}" row label body check
+    CS_FAIL=0
+    for row in "${CD_CASES[@]}"; do
+        label="${row%%|*}"; row="${row#*|}"; body="${row%|*}"; check="${row##*|}"
+        if [[ -n "$quiet" ]]; then crash_case "$m" "$body" "$check" >/dev/null
+        else crash_case "$m" "$body" "$check"; fi
+        CS_FAIL=$((CS_FAIL + CF))
+        [[ -n "$quiet" ]] && continue
+        if (( CF == 0 && CN > 0 )); then ok "A01 crash-deny: $label ($CN runs)"
+        else bad "A01 crash-deny: $label" "$CF of $CN runs failed"; fi
+    done
+}
+if [[ -f "$REAL_MANIFEST" ]]; then
+    n_guard=$(jq '[.hooks[] | select(.class == "guard")] | length' "$REAL_MANIFEST")
+    if (( n_guard > 0 )); then ok "A01 crash-deny: the real manifest has $n_guard guard(s) to test"
+    else bad "A01 crash-deny: the real manifest has guards to test" "none found"; fi
+    crash_suite "$REAL_MANIFEST"
+    # ONE-FAULT MUTANTS of the crash branch: each must be caught by the suite above. They run
+    # under the first shell only: the fault is in the wrapper text, not in a shell's reading of it.
+    SHELLS_ALL="$SHELLS"; SHELLS="${SHELLS# }"; SHELLS="${SHELLS%% *}"
+    CD_MUTANTS=(
+      'exit 1 let through|s/case \$r in 0|2)/case $r in 0|1|2)/'
+      'exit 2 swallowed to 0|s/exit \$r;;/exit 0;;/'
+      'stdin not passed to the guard|s/o=\$("\$h")/o=$("$h" <\/dev\/null)/'
+      'partial stdout leaks into the deny|s/; esac; printf/; esac; printf "%s" "$o"; printf/'
+      'an allow prints an empty line|s/if \[ -n "\$o" \]; then printf .%s\\n. "\$o"; fi;/printf "%s\\n" "$o";/'
+      'the exit code is not captured|s/r=\$?;/r=0;/'
+    )
+    for mrow in "${CD_MUTANTS[@]}"; do
+        mlabel="${mrow%%|*}"; mexpr="${mrow#*|}"
+        mfile="${TMPDIR:-/tmp}/a01-mutant-$$.json"
+        # the sed runs on each decoded guard command, and jq puts it back, so JSON quoting stays right
+        mutated=$(jq -c '.hooks[] | select(.class == "guard") | .entry.command' "$REAL_MANIFEST" \
+                  | while IFS= read -r c; do printf '%s' "$(printf '%s' "$c" | jq -r . | sed -e "$mexpr")" | jq -Rs .; done \
+                  | jq -s .)
+        jq --argjson m "$mutated" '
+            reduce (.hooks | to_entries[] | select(.value.class == "guard") | .key) as $k
+              ({doc: ., i: 0}; .doc.hooks[$k].entry.command = $m[.i] | .i += 1) | .doc' "$REAL_MANIFEST" > "$mfile"
+        nchanged=$(jq -n --slurpfile a "$REAL_MANIFEST" --slurpfile b "$mfile" '
+            [range(0; $a[0].hooks | length) | select($a[0].hooks[.].entry.command != $b[0].hooks[.].entry.command)] | length')
+        if [[ "$nchanged" != "$n_guard" ]]; then
+            bad "A01 mutant applies to every guard: $mlabel" "changed $nchanged of $n_guard, so the mutant proves nothing"
+        else
+            crash_suite "$mfile" quiet
+            if (( CS_FAIL > 0 )); then ok "A01 mutant caught: $mlabel ($CS_FAIL failing runs)"
+            else bad "A01 mutant caught: $mlabel" "the suite passed a broken wrapper"; fi
+        fi
+        command mv "$mfile" "$mfile.done" 2>/dev/null
+    done
+    SHELLS="$SHELLS_ALL"
 fi
 
 echo
