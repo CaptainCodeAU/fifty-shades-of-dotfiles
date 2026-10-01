@@ -1126,6 +1126,9 @@ _find_cmd() { # find args: -delete, and -exec/-execdir/-ok/-okdir bodies
         local -a sub=()
         while [ $# -gt 0 ] && [ "$1" != ";" ] && [ "$1" != "+" ]; do sub[${#sub[@]}]="$1"; shift; done
         SAW_DELETER=""
+        # the lexer's word filter drops rmdir and safe-rm, so an sh -c body would
+        # hide them; a body is lexed unfiltered (a local, so it ends with this find)
+        local DEL_GUARD_NOFILTER=1                                                     #M: find body lexed unfiltered
         [ ${#sub[@]} -gt 0 ] && _argv "$adepth" "${sub[@]}"                           #M: find -exec body
         [ -n "$REASON_ID" ] && { REASON_WHERE="find -exec ${REASON_WHERE}"; return 0; }
         if [ -n "$SAW_DELETER" ]; then
@@ -1399,6 +1402,8 @@ SNAP
   _must find-exec-untested  'A72 a group true for every file' 'find . \( -name a -o -print \) -exec rm {} +'
   _must find-exec-untested  'A72 nested untested alternative' 'find . \( -name a -o \( -type f -o -print \) \) -exec rm {} +'
   _must find-exec-untested  'A72 untested alternative first'  'find . \( -print -o -name a \) -exec rm {} +'
+  _must find-exec-untested  "A72 -exec sh -c 'rmdir'"         "find . -exec sh -c 'rmdir \"\$@\"' _ {} +"
+  _must find-exec-untested  "A72 -exec bash -c 'safe-rm'"     "find . -exec bash -c 'safe-rm \"\$1\"' _ {} \\;"
   _must rm-path             '/bin/rm'                         '/bin/rm -rf build'
   _must rm-path             '/usr/bin/rm'                     '/usr/bin/rm x'
   _must rm-path             'quoted /bin/rm as command'       '"/bin/rm" x'
