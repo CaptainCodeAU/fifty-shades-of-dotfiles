@@ -48,7 +48,7 @@ Measured 2026-09-04 on macOS 25.6 (Darwin), SIP enabled. Every row was run, not 
 | `#!/bin/zsh` script, bare `rm`                                    | yes               | dummy-shim test hit the shim                                                                                                                                                                 |
 | `xargs rm`                                                        | yes               | live: `~/.Trash/xtarget.txt`                                                                                                                                                                 |
 | `make clean`                                                      | yes               | live: `~/.Trash/junk.o`, and a missing target did not break the rule                                                                                                                         |
-| `find -exec rm`                                                   | yes               | 2026-10-01: sandboxed, `safe-rm: these paths still exist after the trash call` (the shim; `/bin/rm` cannot print it), file stayed; unsandboxed, in `~/.Trash`, `keeper` untouched            |
+| `find -exec rm`                                                   | yes               | 2026-10-01, both finds (an agent shell's `find` is Claude Code's built-in `bfs`; scripts get `/usr/bin/find`): sandboxed, each printed `safe-rm: these paths still exist after the trash call` (the shim; `/bin/rm` cannot print it), file stayed; `bfs` unsandboxed, in `~/.Trash`, `keeper` untouched |
 | `command rm`, `\rm`                                               | yes               | these bypass functions and aliases, not `PATH`                                                                                                                                               |
 | `env -i rm`, `PATH=/bin rm`, `command -p rm`                      | **no**            | a PATH without `~/.local/bin` finds `/bin/rm` (measured 2026-09-25 for `env -i` and `command -p`; `PATH=/bin` is the same lookup, not run). The agent guard denies them (`rm-lookup`, below) |
 | Homebrew formula post-install                                     | yes               | `formula.rb:1662` restores the user's PATH for that phase                                                                                                                                    |
@@ -535,6 +535,12 @@ find . -path ./keep -prune -o -name '*.o' -exec rm {} +      # prune idiom, neve
 An `-exec` body is lexed with the word filter off, so `sh -c 'rmdir "$@"'` is seen too (the lexer
 itself is shared with `enforce-secret-probe.sh` and was left alone). Not covered: `fd -x rm` /
 `fd -X rm` with no pattern, or the pattern `.`, matches everything and stays allowed.
+
+Which `find` runs: in an agent's Bash call, `find` is a shell function from Claude Code's snapshot
+that runs its built-in `bfs` (`type -a find`, measured 2026-10-01), the same way `grep` runs
+`ugrep`. Scripts, cron and Gavin's terminal get `/usr/bin/find`. The guard reads the typed text,
+so it covers both; a measurement taken in an agent shell measures `bfs` unless it says
+`command find`.
 
 ## Agent shells never wait on a prompt, and a failed rm stops a reset
 
