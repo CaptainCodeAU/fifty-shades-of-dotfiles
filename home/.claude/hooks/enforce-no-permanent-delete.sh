@@ -2148,6 +2148,8 @@ _mutants() {
       missed=$((missed + 1)); printf 'MISSED  line %-4s %s\n' "$ln" "$tag"
     elif [ "$mrc" -eq 3 ]; then   # an INVALID TRIAL (A04) neither caught nor missed it: count it against
       missed=$((missed + 1)); printf 'INVALID line %-4s %s (the timing could not be judged; re-run at lower load)\n' "$ln" "$tag"
+    elif [ "$mrc" -eq 142 ]; then   # the 300 s alarm, not a FAIL: a loaded full run takes 6-8 min (A04)
+      missed=$((missed + 1)); printf 'TIMEOUT line %-4s %s (the alarm ended the run, which is not a catch; re-run at lower load)\n' "$ln" "$tag"
     else
       caught=$((caught + 1)); printf 'caught  line %-4s %s\n' "$ln" "$tag"
     fi
@@ -2167,7 +2169,7 @@ _mutants() {
         if [ "$(grep -c "$ck$ct\$" "$self")" -ne 1 ] || [ "$cn" -ne 0 ]; then
           broken=$((broken + 1)); printf 'BROKEN  %s forced to %s (the edit missed)\n' "$ct" "$cv"; continue
         fi
-        perl -e 'alarm shift; exec @ARGV' 600 "$tmp/c.sh" --selftest > "$tmp/c.out" 2>&1; mrc=$?
+        perl -e 'alarm shift; exec @ARGV' 1800 "$tmp/c.sh" --selftest > "$tmp/c.out" 2>&1; mrc=$?
         if [ "$mrc" -eq "$cw" ] && grep 'FAIL\|INVALID' "$tmp/c.out" | grep -q "$cs"; then
           caught=$((caught + 1)); printf 'caught  %s forced to %s ms: exit %s, %s reported\n' "$ct" "$cv" "$mrc" "$cs"
         else
