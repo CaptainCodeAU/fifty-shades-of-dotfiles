@@ -2406,6 +2406,27 @@ check_flags(){                  # check_flags <mode>
 }
 check_flags "${1:-}"
 
+# W-20261001-A69. A project moved to engage takes no new writes here: an item filed by habit
+# would land in a drawer nobody reads (Gavin, 2 Oct, D-MIG-13). The same question pj asks
+# (W-20261001-A67; engage's docs/CUTOVER.md section 5, branch w29-cutover 7d637e8), in the
+# folder open-items was started from; open-items never reads the marker itself. Exit 0 and
+# 3 refuse every verb that writes, before it runs; exit 1, any other code, or no engage-go:
+# as today. Reads (the listing, --all, --project, show, get, --where, ...) never ask.
+engage_guard(){                 # engage_guard <verb>
+  local why rc
+  command -v engage-go >/dev/null 2>&1 || return 0
+  why="$(engage-go cutover check 2>/dev/null)"; rc=$?
+  case $rc in
+    0) refuse "this project moved to engage, so open-items $1 wrote nothing; record it in engage with engage add" ;;
+    3) refuse "this project has an engage move marker that is not valid: ${why#not valid: }. open-items $1 wrote nothing; run engage-go cutover check for details, and use engage add once the move is sound" ;;
+  esac
+  return 0
+}
+case "${1:-}" in
+  add|close|decline|park|reopen|set|init|regen|migrate|supersede|watch|check|tick|pass|move|route|seen|checks-run)
+    engage_guard "$1" ;;
+esac
+
 case "${1:-}" in
   -h|--help)  usage; exit 0 ;;
   --selftest) exec "$(dirname "$0")/$(basename "$0" | sed 's/^open-items/open-items-selftest/')" ;;

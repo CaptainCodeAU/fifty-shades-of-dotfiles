@@ -49,6 +49,13 @@ ROOT="$(mktemp -d "${TMPDIR:-/tmp}/open-items-selftest.XXXXXX")" || {
 # git prints the REAL path of a toplevel (macOS: /tmp -> /private/tmp), and the key
 # is computed from that, so the fixture must be keyed from the same resolved path.
 ROOT="$(cd "$ROOT" && pwd -P)"
+# Never the machine's real engage-go (W-20261001-A69): every arm runs as "not moved",
+# wherever the suite is started, so a moved project cannot fail the other sections.
+# Section EG puts its own fakes in front of this one.
+mkdir -p "$ROOT/engage-not-moved"
+printf '#!/bin/sh\necho "not moved: open-items selftest"\nexit 1\n' > "$ROOT/engage-not-moved/engage-go"
+chmod +x "$ROOT/engage-not-moved/engage-go"
+PATH="$ROOT/engage-not-moved:$PATH"; export PATH
 # The real dot-claude must never reach a fixture: since the inbox exists (2026-09-24) an unset
 # OPEN_ITEMS_DOTCLAUDE put ~/.claude/pj-inbox into every `run` as a third drawer, and 12 arms
 # failed on the machine, not the tool. runw and tty_run still point it at their own $DC.
@@ -2333,6 +2340,129 @@ runw "$ZETA" close "W-$TODAY-A100" "done"
 wanteq "close takes a 3-digit ID (rc=0)" "0" "$RC"
 wanteq "  the file moved to closed/" "1" "$([ -f "$ZW/items/closed/W-$TODAY-A100.md" ] && [ ! -e "$ZW/items/open/W-$TODAY-A100.md" ] && echo 1)"
 wanteq "  and -A10 is untouched in open/" "1" "$(grep -q '^status: open$' "$ZW/items/open/W-$TODAY-A10.md" && echo 1)"
+
+printf '\nEG  a project moved to engage: every write REFUSES, reads stay (W-20261001-A69)\n'
+# The check is engage's (docs/CUTOVER.md, branch w29-cutover 7d637e8): open-items asks
+# `engage-go cutover check` in the folder it was started from and reads no marker itself.
+# Exit 0 (moved) and 3 (a marker that is not valid) refuse every write with one line naming
+# engage add; exit 1, any other code, or no engage-go: as today. One fake per answer; each
+# records how and where it ran, prints its stdout lines, and adds stderr noise to throw away.
+mk_dotclaude
+export PJ_STATE_DIR="$D/state"   # seen and checks-run write here, never ~/.local/state
+runw "$ZETA" init
+mkrepo alpha
+runw "$ZETA" add "the item the engage arms aim at" --done-when x; EGID="$(lastid)"
+runw "$ZETA" add "the item it would be superseded by" --done-when x; EGID2="$(lastid)"
+EG="$D/eg"
+mk_eg(){   # mk_eg <name> <exit code|kill> [stdout line]...
+  [ $# -ge 2 ] || { bad "EG mk_eg needs a name and an exit" "$*"; return 1; }
+  local dir="$EG/$1" how="$2" last; shift 2
+  mkdir -p "$dir"
+  if [ $# -gt 0 ]; then printf '%s\n' "$@" > "$dir/out"; else printf '' > "$dir/out"; fi
+  if [ "$how" = kill ]; then last='kill -KILL $$'; else last="exit $how"; fi
+  cat > "$dir/engage-go" <<EOF
+#!/bin/sh
+printf '%s|%s\n' "\$*" "\$(pwd -P)" > "$dir/ran"
+echo "fake engage-go noise on stderr" >&2
+cat "$dir/out"
+$last
+EOF
+  chmod +x "$dir/engage-go"
+}
+mk_eg m0 0 'moved: zeta (2026-10-02)'
+mk_eg m1 1 'not moved: no companion'
+mk_eg m2 2
+mk_eg m3 3 'not valid: MOVED-TO-ENGAGE is not committed'
+mk_eg m3empty 3
+mk_eg m3multi 3 'not valid: first line' 'second line'
+mk_eg mkill kill 'moved: zeta (2026-10-02)'
+mk_eg mnox 0 'moved: zeta (2026-10-02)'; chmod -x "$EG/mnox/engage-go"
+# A PATH with NO engage-go: every folder holding one is dropped (the real one and this
+# suite's not-moved fake). The tool's own folder is first already, so pj-id still resolves.
+NOEG=""; IFS=: read -r -a EGP <<<"$PATH"
+for l in "${EGP[@]}"; do [ -e "$l/engage-go" ] || NOEG="$NOEG${NOEG:+:}$l"; done
+# egw <fake|none> <args>: open-items from inside zeta, with only that fake engage-go.
+egw(){ local f="$1" p; shift; if [ "$f" = none ]; then p="$NOEG"; else p="$EG/$f:$NOEG"; fi
+  OUT="$(cd "$ZETA" 2>/dev/null && PATH="$p" OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" CLAUDE_CODE_SESSION_ID=sess-test CLAUDE_SESSION_ID=sess-test "$TOOL" "$@" 2>&1)"; RC=$?; return 0; }
+# Everything a write could touch: every drawer and the inbox (the whole fixture dot-claude,
+# its HEAD and its status), the seen and check state, the ID claims, a migrate scratch dir.
+eg_state(){ { git -C "$DC" rev-parse HEAD; git -C "$DC" status --porcelain --untracked-files=all
+  find "$DC" "$D/state" "$PJ_ID_CLAIMS_DIR" "$D/mig" -path "$DC/.git" -prune -o -type f -print 2>/dev/null | LC_ALL=C sort | while IFS= read -r f; do shasum -a 256 "$f"; done
+  } 2>/dev/null | shasum -a 256 | cut -c1-16; }
+# Every verb that writes, read from the dispatcher: the drawer writers, then seen and
+# checks-run (they write state under PJ_STATE_DIR, not a drawer).
+EG_WRITES=(
+  "add 'filed by habit' --done-when x"
+  "close $EGID 'closed by habit'"
+  "decline $EGID 'declined by habit'"
+  "park $EGID 'parked by habit'"
+  "reopen $EGID"
+  "set $EGID next 'a next by habit'"
+  "set --add $EGID body 'more body by habit'"
+  "init"
+  "regen"
+  "migrate --dry-run --into '$D/mig'"
+  "supersede $EGID $EGID2"
+  "watch $EGID alpha"
+  "check $EGID alpha 'its own done-when'"
+  "tick $EGID zeta"
+  "pass $EGID zeta"
+  "move $EGID --to alpha --why 'by habit'"
+  "route $EGID --to alpha --why 'by habit'"
+  "seen --all"
+  "checks-run"
+)
+eg_writes(){   # eg_writes <fake> <text the one line must hold>: sets EGBAD
+  local c h0 h1 n; EGBAD=""
+  for c in "${EG_WRITES[@]}"; do
+    h0="$(eg_state)"; eval "egw $1 $c"; h1="$(eg_state)"
+    n="$(printf '%s\n' "$OUT" | grep -c .)"
+    case "$OUT" in *"engage add"*) ;; *) EGBAD="$EGBAD [${c%% *}: no 'engage add']" ;; esac
+    case "$OUT" in *"$2"*) ;; *) EGBAD="$EGBAD [${c%% *}: no '$2']" ;; esac
+    [ "$RC" -ne 0 ] || EGBAD="$EGBAD [${c%% *}: rc 0]"
+    [ "$n" = 1 ] || EGBAD="$EGBAD [${c%% *}: $n lines]"
+    [ "$h0" = "$h1" ] || EGBAD="$EGBAD [${c%% *}: WROTE, state $h0 -> $h1]"
+  done
+}
+H0="$(eg_state)"
+eg_writes m0 "moved to engage"
+wanteq "exit 0: all ${#EG_WRITES[@]} write verbs refuse, non-zero, one line naming engage add, nothing written" "" "$EGBAD"
+wanteq "  exit 0: engage-go was asked 'cutover check' in the folder open-items was started from" "cutover check|$ZETA" "$(cat "$EG/m0/ran" 2>/dev/null)"
+eg_writes m3 "not valid: MOVED-TO-ENGAGE is not committed"
+wanteq "exit 3: all ${#EG_WRITES[@]} write verbs refuse with the reader's reason, one line naming engage add, nothing written" "" "$EGBAD"
+egw m3empty add "filed by habit" --done-when x
+wanteq "exit 3 with no stdout still refuses (rc 2)" "2" "$RC"
+egw m3multi add "filed by habit" --done-when x
+wanteq "exit 3 with two stdout lines still refuses (rc 2)" "2" "$RC"
+wanteq "  and the whole fixture is byte-identical after every refusal above" "$H0" "$(eg_state)"
+# Reads: the same output and exit code in a moved project as in an unmoved one, and engage-go
+# is never even asked (a write asks it, the control).
+EGBAD=""
+for c in "" "--all" "--project zeta" "show $EGID" "get $EGID title" "--where" "--help" "--session" "--projects" "routed"; do
+  eval "egw m1 $c"; o1="$OUT"; r1="$RC"
+  printf "reset\n" > "$EG/m0/ran"; eval "egw m0 $c"
+  [ "$OUT" = "$o1" ] && [ "$RC" = "$r1" ] || EGBAD="$EGBAD [${c:-the listing}: rc $r1 -> $RC]"
+  [ "$(cat "$EG/m0/ran")" = reset ] || EGBAD="$EGBAD [${c:-the listing}: asked engage-go]"
+  eval "egw m3 $c"
+  [ "$OUT" = "$o1" ] && [ "$RC" = "$r1" ] || EGBAD="$EGBAD [${c:-the listing} under exit 3: rc $r1 -> $RC]"
+done
+wanteq "reads in a moved project: listing, --all, --project, show, get, --where, --help, --session, --projects, routed all as unmoved" "" "$EGBAD"
+egw m0 close "$EGID" x
+wanteq "  control: a write does ask engage-go (so the reads' 'never asked' measures something)" "cutover check|$ZETA" "$(cat "$EG/m0/ran")"
+# As today: exit 1, exit 2, killed by a signal, a non-executable engage-go, no engage-go.
+wanteq "control: the no-engage PATH really has none, the suite PATH really has one" "none one" \
+  "$(PATH="$NOEG" command -v engage-go >/dev/null 2>&1 && printf some || printf none) $(command -v engage-go >/dev/null 2>&1 && printf one || printf none)"
+EGBAD=""
+for f in m1 m2 mkill mnox none; do
+  h0="$(eg_state)"; egw "$f" add "as today under $f" --done-when x; h1="$(eg_state)"
+  [ "$RC" = 0 ] && [ "$h0" != "$h1" ] || EGBAD="$EGBAD [$f: rc $RC, state $([ "$h0" = "$h1" ] && printf unchanged || printf changed)]"
+  case "$OUT" in *engage*) EGBAD="$EGBAD [$f: says engage]" ;; esac
+done
+wanteq "exit 1, exit 2, a signal, not executable, absent: add writes as today (and the state hash sees it)" "" "$EGBAD"
+wanteq "  control: the exit-1 and the killed fakes really ran" "1 1" "$([ -e "$EG/m1/ran" ] && echo 1) $([ -e "$EG/mkill/ran" ] && echo 1)"
+egw m1 close "$EGID" "closed as today"
+wanteq "  exit 1: close moves the item as today" "1" "$([ "$RC" = 0 ] && [ -f "$ZW/items/closed/$EGID.md" ] && echo 1)"
+unset PJ_STATE_DIR
 
 # THE EXIT CODE FOR "NOT MEASURED" IS ITSELF MEASURED: a child run of this very suite with
 # the pty forced off must exit 3, never 0. The child does not recurse.
