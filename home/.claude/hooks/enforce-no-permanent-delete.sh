@@ -1140,8 +1140,10 @@ _find_cmd() { # find args: -delete, and -exec/-execdir/-ok/-okdir bodies
              [ "${all[$d]}" = 1 ] && [ "${tst[$d]}" = 1 ] && tst[$((d - 1))]=1          #M: find (group) counts as a test
              d=$((d - 1))
            fi ;;
-      -o|-or|,) [ "${tst[$d]}" = 1 ] || all[$d]=0                                      #M: find untested alternative opens the group
-                tst[$d]=0 ;;                                                           #M: find -o starts a chain
+      -o|-or|,)
+        [ "${tst[$d]}" = 1 ] || all[$d]=0                                              #M: find untested alternative opens the group
+        tst[$d]=0                                                                      #M: find -o starts a chain
+        ;;
       '!'|-not|-a|-and|-true) ;;
       -depth|-d) depth="$1" ;;                                                         #M: find -depth seen
       -prune) prune=1 ;;                                                               #M: find -prune seen
@@ -1396,6 +1398,7 @@ SNAP
   _must find-depth-prune    'A72 -prune before -depth'        'find . -path ./keep -prune -o -depth -name "*.o" -exec trash {} +'
   _must find-exec-untested  'A72 a group true for every file' 'find . \( -name a -o -print \) -exec rm {} +'
   _must find-exec-untested  'A72 nested untested alternative' 'find . \( -name a -o \( -type f -o -print \) \) -exec rm {} +'
+  _must find-exec-untested  'A72 untested alternative first'  'find . \( -print -o -name a \) -exec rm {} +'
   _must rm-path             '/bin/rm'                         '/bin/rm -rf build'
   _must rm-path             '/usr/bin/rm'                     '/usr/bin/rm x'
   _must rm-path             'quoted /bin/rm as command'       '"/bin/rm" x'
@@ -1694,6 +1697,8 @@ SNAP
   _must - 'A72 rm -d inside the body'       'find . -name x -type d -exec rm -d {} +'
   _must - 'A72 the words as data'           "rg -n -- '-exec rm {} +' docs/"
   _must - 'A72 a test, then an open group'  "find . -name '*.o' \( -size +1k -o -print \) -exec rm {} +"
+  _must - 'A72 -empty then rmdir'           'find . -type d -empty -exec rmdir {} +'
+  _must - 'A72 -empty alone then rmdir'     'find . -empty -exec rmdir {} +'
   _must - 'cmd > out.txt'                   'ls > out.txt'
   _must - 'cmd 2>&1 > out'                  'make 2>&1 > build.log'
   _must - '>> append bare'                  '>> notes.txt'
