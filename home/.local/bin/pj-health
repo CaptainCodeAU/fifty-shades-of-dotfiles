@@ -370,6 +370,130 @@ else
   row NOTM hook-orphans "$(tilde "$SETTINGS_PROJECT") unreadable"
 fi
 
+# M8b hook fail-open (W-20260929-A192). Measured 2026-10-02 on Claude Code 2.1.286, headless,
+# one stub hook that denies every Bash call: registered BARE with mode 755 it denied; with mode
+# 644 the hook exited 126 and the call RAN. Exit 127 (missing file, missing interpreter, a
+# missing jq under set -e), a bad shebang and a timeout all let the call run too; only exit 2
+# blocks. The same 644 stub behind the manifest's guard shape (h=...; if [ -x "$h" ] ... else
+# <deny JSON>) was denied. So a guard is fail-closed only in that shape.
+# This row reads every PreToolUse and PermissionRequest hook in every settings file a session
+# here can load (user, project, any other ~/.claude/settings*.json, each profile's settings:,
+# this repo's .claude/settings.json and settings.local.json) and names each one that:
+#   (a) is a guard in a fail-open shape: bare, the old `test -x P && P || true`, or the
+#       advisory wrapper that prints a message instead of denying;
+#   (b) points at a script that is missing or not executable (fail-open unless wrapped, and
+#       then it denies every call it guards, which is a fault too).
+# Guard means: class guard in the manifest (an omitted class on an enforce-* script is a
+# guard, the manifest's own rule), else a name containing enforce, validate, protect, guard
+# or safety. A bare hook of no known class is a WARN: it may guard, nothing here can tell.
+# Exec bits follow symlinks ([ -x ] reads the target), which is what /bin/sh does too.
+# Seam: PJ_HEALTH_HOOK_SETTINGS, a colon-separated file list that replaces the discovery.
+HFO_FILES=""
+hfo_add(){   # hfo_add <file>  add once, in fixture mode with $HOME/.claude mapped to PJ_HOME
+  local f="$1"; [ -n "$f" ] || return 0
+  [ -n "${PJ_LAUNCHER:-}" ] && f="${f/#$HOME\/.claude/$PJ_HOME}"
+  case $'\n'"$HFO_FILES"$'\n' in *$'\n'"$f"$'\n'*) return 0 ;; esac
+  HFO_FILES="$HFO_FILES${HFO_FILES:+$'\n'}$f"
+}
+WT_TOP="$(git rev-parse --show-toplevel 2>/dev/null || true)"   # a worktree loads ITS .claude, not the main repo's
+if [ -n "${PJ_HEALTH_HOOK_SETTINGS:-}" ]; then
+  _ifs="$IFS"; IFS=:; for f in $PJ_HEALTH_HOOK_SETTINGS; do hfo_add "$f"; done; IFS="$_ifs"
+else
+  hfo_add "$SETTINGS_USER"; hfo_add "$SETTINGS_PROJECT"
+  for f in "$PJ_HOME"/settings*.json; do [ -f "$f" ] && hfo_add "$f"; done
+  for p in "$PROFILE_DIR"/*; do
+    [ -f "$p" ] || continue
+    s="$(sed -n 's/^settings:[[:space:]]*//p' "$p" 2>/dev/null | sed 's/[[:space:]]*$//' | head -1)"
+    [ -n "$s" ] && hfo_add "$(expand_tilde "$s")"
+  done
+  for r in "$WT_TOP" "$TOPLEVEL"; do
+    [ -n "$r" ] || continue
+    for n in settings.json settings.local.json; do [ -f "$r/.claude/$n" ] && hfo_add "$r/.claude/$n"; done
+  done
+fi
+HFO_CLASSES="$(jq -r '.hooks[]? | "\(.script)\t\(.class // (if (.script|startswith("enforce-")) then "guard" else "alarm" end))"' "$MANIFEST" 2>/dev/null || true)"
+hfo_fail=""; hfo_warn=""; hfo_nfiles=0; hfo_unread=""; hfo_n=0; hfo_inline=0; hfo_unres=0
+while IFS= read -r hf; do
+  [ -n "$hf" ] || continue
+  hfo_nfiles=$((hfo_nfiles+1))
+  if [ ! -r "$hf" ]; then [ -e "$hf" ] && hfo_unread="$hfo_unread $(tilde "$hf")"; continue; fi
+  hlines="$(jq -r '.hooks // {} | to_entries[] | select(.key == "PreToolUse" or .key == "PermissionRequest") | .key as $e
+                   | .value[]? | .hooks[]? | select((.type // "command") == "command")
+                   | "\($e)\u001f\((.command // "") | gsub("[\n\t]"; " "))"' "$hf" 2>/dev/null)" \
+    || { hfo_unread="$hfo_unread $(tilde "$hf")(not JSON)"; continue; }
+  # $CLAUDE_PROJECT_DIR: the repo a project file sits in; for user files, the repo you stand in
+  case "$hf" in */.claude/settings*.json) proot="$(dirname "$(dirname "$hf")")" ;; *) proot="${WT_TOP:-$TOPLEVEL}" ;; esac
+  case "$hf" in "$PJ_HOME"/*) proot="${WT_TOP:-$TOPLEVEL}" ;; esac
+  # a label that tells ~/.claude/settings.json from <repo>/.claude/settings.json
+  case "$hf" in
+    "$PJ_HOME"/*) hfn="$(basename "$hf")" ;;
+    */.claude/settings*.json) hfn="$(basename "$proot")/.claude/$(basename "$hf")" ;;
+    *) hfn="$(tilde "$hf")" ;;
+  esac
+  while IFS=$'\037' read -r hev hcmd; do
+    [ -n "$hcmd" ] || continue
+    hfo_n=$((hfo_n+1))
+    shape=bare; hp=""; direct=1
+    case "$hcmd" in
+      'h="'*'if [ -x "$h" ]; then'*'"permissionDecision":"deny"'*) shape=wrapped; hp="$(printf '%s' "$hcmd" | sed -n 's/^h="\([^"]*\)".*/\1/p')" ;;
+      'h="'*'if [ -x "$h" ]; then'*) shape=wrapped-nodeny; hp="$(printf '%s' "$hcmd" | sed -n 's/^h="\([^"]*\)".*/\1/p')" ;;
+      'test -x '*'|| true') shape=legacy; hp="$(printf '%s' "$hcmd" | sed -n 's/^test -x "\{0,1\}\([^" ]*\).*/\1/p')" ;;
+      *)
+        set -f; set -- $hcmd; set +f
+        t0="$(printf '%s' "${1:-}" | tr -d "\"'")"
+        case "$(basename "$t0")" in
+          bash|sh|zsh|dash|bun|node|deno|python|python3|uv|env)
+            direct=0; shift
+            for w in "$@"; do w="$(printf '%s' "$w" | tr -d "\"'")"; case "$w" in */*) hp="$w"; break ;; esac; done ;;
+          *) case "$t0" in */*) hp="$t0" ;; esac ;;
+        esac ;;
+    esac
+    if [ -z "$hp" ]; then hfo_inline=$((hfo_inline+1)); continue; fi
+    real="$hp"
+    real="${real//\$\{HOME\}/$HOME}"; real="${real//\$HOME/$HOME}"; real="${real/#\~\//$HOME/}"
+    real="${real//\$\{CLAUDE_PROJECT_DIR\}/$proot}"; real="${real//\$CLAUDE_PROJECT_DIR/$proot}"
+    [ -n "${PJ_LAUNCHER:-}" ] && real="${real/#$HOME\/.claude/$PJ_HOME}"   # fixture mode
+    case "$real" in *'$'*) hfo_unres=$((hfo_unres+1)); continue ;; esac
+    base="$(basename "$real")"
+    cls="$(printf '%s\n' "$HFO_CLASSES" | awk -F'\t' -v s="$base" '$1 == s { print $2; exit }')"
+    if [ -z "$cls" ]; then
+      case "$(printf '%s' "$base" | tr '[:upper:]' '[:lower:]')" in
+        *enforce*|*validate*|*protect*|*guard*|*safety*) cls=guard ;; *) cls=unknown ;;
+      esac
+    fi
+    lab="$hfn:$base($hev)"
+    bad_file=""
+    if [ ! -e "$real" ]; then bad_file="missing"
+    elif [ "$direct" -eq 1 ] && [ ! -x "$real" ]; then bad_file="not executable"
+    fi
+    if [ -n "$bad_file" ]; then
+      if [ "$shape" = wrapped ]; then hfo_fail="$hfo_fail"$'\n'"$lab $bad_file, so it DENIES every call it guards"
+      else hfo_fail="$hfo_fail"$'\n'"$lab $bad_file, fails OPEN (exit 126/127, the call runs)"; fi
+    elif [ "$cls" = guard ] && [ "$shape" != wrapped ]; then
+      hfo_fail="$hfo_fail"$'\n'"$lab guard registered $shape, fails OPEN the day it cannot run"
+    elif [ "$cls" = unknown ] && [ "$shape" != wrapped ]; then
+      hfo_warn="$hfo_warn"$'\n'"$lab registered $shape, class unknown"
+    fi
+  done <<<"$hlines"
+done <<<"$HFO_FILES"
+hfo_list(){   # hfo_list <newline list>  -> "a; b; c, +N more" (unique, first 6)
+  local u n; u="$(printf '%s\n' "$1" | sed '/^$/d' | sort -u)"; n="$(printf '%s\n' "$u" | sed '/^$/d' | wc -l | tr -d ' ')"
+  printf '%s' "$(printf '%s\n' "$u" | head -6 | paste -sd ';' - | sed 's/;/; /g')"
+  [ "$n" -gt 6 ] && printf ', +%s more' "$((n-6))"
+}
+hfo_det="$hfo_n PreToolUse/PermissionRequest hook(s) in $hfo_nfiles file(s), $hfo_inline inline, $hfo_unres unresolved"
+if [ -n "$hfo_fail" ]; then
+  row FAIL hook-fail-open "$(hfo_list "$hfo_fail"); $hfo_det; fix: a manifest hook, claude-hooks-sync --target user|project --install (terminal); any other, register it in the guard shape (_shape_note in settings/claude/hooks.json) or chmod +x"
+elif [ -n "$hfo_unread" ]; then
+  row NOTM hook-fail-open "unreadable:$hfo_unread; the rest: $hfo_det"
+elif [ "$hfo_n" -eq 0 ]; then
+  row NOTM hook-fail-open "no PreToolUse or PermissionRequest hook found in $hfo_nfiles file(s), so nothing was checked"
+elif [ -n "$hfo_warn" ]; then
+  row WARN hook-fail-open "$(hfo_list "$hfo_warn"); $hfo_det; a bare hook of unknown class fails open, so if it guards, register it in the guard shape"
+else
+  row PASS hook-fail-open "$hfo_det: none fails open"
+fi
+
 # M9 single fire
 if [ "$IN_REPO" -eq 0 ]; then
   row NOTM hook-single-fire "not in a git repo"

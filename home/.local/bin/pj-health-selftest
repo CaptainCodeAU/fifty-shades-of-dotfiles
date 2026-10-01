@@ -298,6 +298,31 @@ mvprof(){   # mvprof <plugins...>   rewrite the one fixture profile
   printf 'plugins: %s\nplugins_root: %s\n' "$*" "$MVR" >"$MVP/mods"
 }
 
+# hook-fail-open fixtures (W-20260929-A192): one settings file per shape, scripts beside them.
+# enforce-ok.sh is 755, enforce-bad.sh 644, notify.sh 755 and of no known class, link.sh a
+# symlink (itself lrwx) to the 644 one. hfo_guard prints the manifest's fail-closed shape.
+HFO="$T/hfo"; mkdir -p "$HFO"
+printf '#!/bin/sh\nexit 0\n' >"$HFO/enforce-ok.sh"; chmod 755 "$HFO/enforce-ok.sh"
+printf '#!/bin/sh\nexit 0\n' >"$HFO/enforce-bad.sh"; chmod 644 "$HFO/enforce-bad.sh"
+printf '#!/bin/sh\nexit 0\n' >"$HFO/notify.sh"; chmod 755 "$HFO/notify.sh"
+ln -s "$HFO/enforce-bad.sh" "$HFO/link-guard.sh"
+hfo_guard(){ printf 'h="%s"; if [ -x "$h" ]; then "$h"; else printf '"'"'%%s\\n'"'"' '"'"'{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"HOOK MISSING, DENYING"}}'"'"'; fi' "$1"; }
+hfo_file(){   # hfo_file <name> <event> <command>...   one settings file, one group, those commands
+  [ "$#" -ge 3 ] || { echo "hfo_file: needs a name, an event and a command" >&2; exit 1; }
+  local n="$1" ev="$2"; shift 2
+  printf '%s\n' "$@" | jq -R . | jq -s --arg ev "$ev" '{hooks:{($ev):[{matcher:"Bash",hooks:map({type:"command",command:.})}]}}' >"$HFO/$n.json"
+}
+hfo_file clean     PreToolUse "$(hfo_guard "$HFO/enforce-ok.sh")" "echo inline-hook"
+hfo_file bare644   PreToolUse "$HFO/enforce-bad.sh"
+hfo_file bare755   PreToolUse "$HFO/enforce-ok.sh"
+hfo_file wrap644   PreToolUse "$(hfo_guard "$HFO/enforce-bad.sh")"
+hfo_file legacy    PreToolUse "test -x \"$HFO/enforce-ok.sh\" && \"$HFO/enforce-ok.sh\" || true"
+hfo_file unknown   PreToolUse "$HFO/notify.sh"
+hfo_file symlink   PreToolUse "$HFO/link-guard.sh"
+hfo_file interp    PermissionRequest "uv run \"$HFO/missing-guard.py\""
+hfo_file perm      PermissionRequest "$HFO/enforce-ok.sh"
+echo '{}' >"$HFO/empty.json"; echo '{not json' >"$HFO/broken.json"
+
 # ------------------------------------------------------------------ runner ----
 OUT=""
 run(){   # run [dir] [args...]  -> OUT holds the JSON; RC the exit code
@@ -306,6 +331,8 @@ run(){   # run [dir] [args...]  -> OUT holds the JSON; RC the exit code
   # so the row falls back to its own default (this repo + dot-claude) and the
   # outside-a-repo arm measures the code path a real run takes.
   local TR_SEAM="${PJ_TRAILER_REPOS_FX:-$TR_A $TR_B}"; [ "$TR_SEAM" = "-" ] && TR_SEAM=""
+  # hook-fail-open reads its own settings list; "-" leaves the seam EMPTY so the row discovers
+  local HFO_SEAM="${PJ_HEALTH_HOOK_SETTINGS_FX:-$HFO/clean.json}"; [ "$HFO_SEAM" = "-" ] && HFO_SEAM=""
   OUT="$( (builtin cd "$dir" && PATH="$BIN:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" PJ_HOME="$H" PJ_BIN_DIR="$BIN" PJ_DOTFILES="$DF" PJ_LAUNCHER="$BIN/pj" PJ_TYPE_OUT="$T/type-out" DRYRUN_FILE="$T/dryrun" DRYRUN_RC="$T/dryrun-rc" PJ_PS_OUT="$T/ps" PJ_ZSHRC_MTIME="$ZMT" PJ_TRANSCRIPTS_DIR="$H/projects" PJ_STATE_DIR="$STATE" \
       PJ_MACHINE_FILE="$T/machine" PJ_PROMPT_SOURCES="$OR:$RULES" PJ_PROMPT_OUT="$T/cache/prompt.md" \
       OI_WHERE_FILE="$T/oi-where" DECIDED_LIST_FILE="$T/decided-list" DECIDED_LIST_RC="$T/decided-list-rc" DECIDED_HOMES_FILE="$T/decided-homes" \
@@ -315,6 +342,7 @@ run(){   # run [dir] [args...]  -> OUT holds the JSON; RC the exit code
       PJ_HEALTH_SKILL="${PJ_HEALTH_SKILL_FX:-$T/skill/under.md}" \
       PJ_HEALTH_MODS_DRIFT="${PJ_HEALTH_MODS_DRIFT_FX:-$T/modsdrift/pass}" \
       PJ_HEALTH_CLAUDE="${PJ_HEALTH_CLAUDE_FX:-$MVC/claude}" \
+      PJ_HEALTH_HOOK_SETTINGS="$HFO_SEAM" \
       pj-health --json "$@" 2>"$T/stderr") )"; RC=$?
 }
 st(){ jq -r --arg n "$1" '.rows[] | select(.name==$n) | .state' <<<"$OUT"; }
@@ -337,7 +365,7 @@ arm "baseline parses as JSON" jq -e '.rows|length>0' <<<"$OUT" >/dev/null
 # ~/.config/pj/profiles and the suite's result would depend on the machine it runs on --
 # NOT MEASURED on a box with nothing stowed, WARN on a box with a profile pointing
 # somewhere unusual. They get hermetic arms of their own in the profiles section below.
-for n in launcher output-style plugin-dirs prompt-file rules-budget skill-budget settings-render hooks-sync pj-workers-hook hook-orphans hook-single-fire stow-links bin-strays machine-file pj-global rules-copy no-wrap-up owed bare-wrap selftests launch-log stale-shells pj-homes drawer decided-store commit-trailer skill-upstream mods-api evidence-card evidence-ci-watch evidence-rules evidence-plugins evidence-tokens; do
+for n in launcher output-style plugin-dirs prompt-file rules-budget skill-budget settings-render hooks-sync pj-workers-hook hook-orphans hook-fail-open hook-single-fire stow-links bin-strays machine-file pj-global rules-copy no-wrap-up owed bare-wrap selftests launch-log stale-shells pj-homes drawer decided-store commit-trailer skill-upstream mods-api evidence-card evidence-ci-watch evidence-rules evidence-plugins evidence-tokens; do
   arm "baseline $n PASS (got $(st "$n"): $(dt "$n" | cut -c1-80))" is "$n" PASS
 done
 arm "baseline live-probe NOT MEASURED without --live" is live-probe "$NM"
@@ -480,6 +508,37 @@ write_settings '.hooks.PreToolUse[0].hooks += [{type:"command",command:"test -x 
 arm "hook-orphans FAIL on a command whose script is gone" is hook-orphans FAIL; arm "hook-orphans names it" has hook-orphans "gone.sh"; arm "hook-orphans prints a jq del line" has hook-orphans "jq '(.hooks.\"PreToolUse\"[].hooks) |= map(select(.command != "
 arm "hook-orphans did not remove it (read-only)" jq -e '[.hooks.PreToolUse[0].hooks[].command] | index("test -x \"$HOME/.claude/hooks/gone.sh\" && \"$HOME/.claude/hooks/gone.sh\" || true")' "$H/settings.project.json" >/dev/null
 write_settings
+
+# 8b. hook fail-open (W-20260929-A192). The FAILING arm the done-when names is bare644: a
+# guard registered bare whose file is mode 644, measured to exit 126 and let the call run.
+hfo(){ PJ_HEALTH_HOOK_SETTINGS_FX="$HFO/$1.json" run; }
+hfo clean;   arm "hook-fail-open PASS on the wrapped guard shape" is hook-fail-open PASS
+arm "hook-fail-open PASS counts what it checked (2 hooks, 1 inline)" has hook-fail-open "2 PreToolUse/PermissionRequest hook(s) in 1 file(s), 1 inline"
+hfo bare644; arm "hook-fail-open FAIL on a bare 644 guard" is hook-fail-open FAIL
+arm "hook-fail-open says the 644 guard fails OPEN" has hook-fail-open "enforce-bad.sh(PreToolUse) not executable, fails OPEN"
+arm "a FAIL here fails the run" [ "$RC" -eq 1 ]
+hfo bare755; arm "hook-fail-open FAIL on a bare guard even while it is executable" is hook-fail-open FAIL
+arm "hook-fail-open names the bare shape" has hook-fail-open "enforce-ok.sh(PreToolUse) guard registered bare"
+hfo wrap644; arm "hook-fail-open FAIL on a wrapped 644 guard" is hook-fail-open FAIL
+arm "hook-fail-open says the wrapped one DENIES every call, not fails open" has hook-fail-open "so it DENIES every call it guards"
+hfo legacy;  arm "hook-fail-open FAIL on the old test -x ... || true shape" is hook-fail-open FAIL; arm "hook-fail-open names it legacy" has hook-fail-open "registered legacy"
+hfo symlink; arm "hook-fail-open FAIL on a symlink whose TARGET is 644" is hook-fail-open FAIL; arm "hook-fail-open names the link" has hook-fail-open "link-guard.sh(PreToolUse) not executable"
+hfo interp;  arm "hook-fail-open FAIL on an interpreter hook whose script is missing" is hook-fail-open FAIL; arm "hook-fail-open names the missing script" has hook-fail-open "missing-guard.py(PermissionRequest) missing, fails OPEN"
+hfo perm;    arm "hook-fail-open reads PermissionRequest too" is hook-fail-open FAIL; arm "hook-fail-open names the PermissionRequest guard" has hook-fail-open "enforce-ok.sh(PermissionRequest)"
+hfo unknown; arm "hook-fail-open WARN on a bare hook of no known class" is hook-fail-open WARN; arm "hook-fail-open names it" has hook-fail-open "notify.sh(PreToolUse) registered bare, class unknown"
+hfo empty;   arm "hook-fail-open NOT MEASURED when no hook was found (never a quiet PASS)" is hook-fail-open "$NM"
+hfo broken;  arm "hook-fail-open NOT MEASURED on a file that is not JSON" is hook-fail-open "$NM"; arm "hook-fail-open names it" has hook-fail-open "broken.json(not JSON)"
+PJ_HEALTH_HOOK_SETTINGS_FX="$HFO/clean.json:$HFO/bare644.json" run; arm "hook-fail-open FAIL when one of two files is bad" is hook-fail-open FAIL
+# discovery: the seam emptied, so the row finds the files itself: fixture ~/.claude/settings*.json,
+# a profile's settings:, the project's .claude/settings.json
+mkdir -p "$HFO/profiles"; printf 'settings: %s\n' "$HFO/bare644.json" >"$HFO/profiles/fx"
+PJ_HEALTH_HOOK_SETTINGS_FX=- PJ_PROFILE_DIR="$HFO/profiles" run
+arm "discovery: hook-fail-open finds the profile's settings file" has hook-fail-open "bare644.json:enforce-bad.sh"
+arm "discovery: hook-fail-open finds settings.project.json's bare guards (got: $(dt hook-fail-open | cut -c1-200))" has hook-fail-open "settings.project.json:enforce-census.sh(PreToolUse) guard registered bare"
+arm "discovery: hook-fail-open states what its cap hid" has hook-fail-open " more; "
+arm "discovery: a project file is labelled by its repo, not as a second settings.json" has hook-fail-open "proj/.claude/settings.json:"
+arm "discovery: hook-fail-open read the project .claude/settings.json" has hook-fail-open "in 4 file(s)"
+hfo clean;   arm "hook-fail-open back to PASS (control)" is hook-fail-open PASS
 
 # 9. single fire
 echo '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"$HOME/.claude/hooks/enforce-census.sh"}]}]}}' >"$PROJ/.claude/settings.json"; run
@@ -1171,9 +1230,10 @@ arm "--quiet keeps the summary line" grep -q '^pj-health: .* FAIL, ' <<<"$QOUT"
 write_settings
 FOUT="$( (builtin cd "$PROJ" && PATH="$BIN:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin" PJ_HOME="$H" PJ_BIN_DIR="$BIN" PJ_DOTFILES="$DF" PJ_LAUNCHER="$BIN/pj" PJ_TYPE_OUT="$T/type-out" DRYRUN_FILE="$T/dryrun" PJ_PS_OUT="$T/ps" PJ_ZSHRC_MTIME="$ZMT" PJ_TRANSCRIPTS_DIR="$H/projects" PJ_STATE_DIR="$STATE" PJ_MACHINE_FILE="$T/machine" PJ_PROMPT_SOURCES="$OR:$RULES" PJ_PROMPT_OUT="$T/cache/prompt.md" OI_WHERE_FILE="$T/oi-where" DECIDED_LIST_FILE="$T/decided-list" DECIDED_LIST_RC="$T/decided-list-rc" DECIDED_HOMES_FILE="$T/decided-homes" RENDER_OUT_FILE="$T/render-out" RENDER_RC_FILE="$T/render-rc" SYNC_OUT_FILE="$T/sync-out" PJ_RULES_COPY="$T/no-rules-copy" pj-health 2>/dev/null) )"
 # 43, not 41, since D-20260925-A01 added the owed and bare-wrap rows (40 rows + header + summary);
-# 44 since the mods-installed row (2026-09-27, screen-switch); 45 since rules-copy (2026-09-29, T1).
-arm "normal output under 45 lines ($(wc -l <<<"$FOUT" | tr -d ' '))" [ "$(wc -l <<<"$FOUT" | tr -d ' ')" -lt 45 ]
-arm "normal output has one row per check (42)" [ "$(grep -cE '^(PASS|WARN|FAIL|NOT MEASURED) ' <<<"$FOUT")" -eq 42 ]
+# 44 since the mods-installed row (2026-09-27, screen-switch); 45 since rules-copy (2026-09-29, T1);
+# 46 since hook-fail-open (W-20260929-A192).
+arm "normal output under 46 lines ($(wc -l <<<"$FOUT" | tr -d ' '))" [ "$(wc -l <<<"$FOUT" | tr -d ' ')" -lt 46 ]
+arm "normal output has one row per check (43)" [ "$(grep -cE '^(PASS|WARN|FAIL|NOT MEASURED) ' <<<"$FOUT")" -eq 43 ]
 arm "unknown arg REFUSED rc 2" bash -c 'PATH="$1:$PATH" pj-health --bogus >/dev/null 2>&1; [ $? -eq 2 ]' _ "$BIN"
 arm "--help exits 0" bash -c 'PATH="$1:$PATH" pj-health --help >/dev/null 2>&1' _ "$BIN"
 
