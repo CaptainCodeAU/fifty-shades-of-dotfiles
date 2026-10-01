@@ -731,6 +731,13 @@ selftest() {
   print -- "pj selftest in $root"
   # Every real-launch arm below must never sweep the machine's real temp folders.
   export PJ_NO_TEMP_SWEEP=1
+  # Nor ask the machine's real engage-go (W-20261001-A67): every arm runs as "not moved",
+  # wherever the selftest is started, so a moved project cannot fail arms 1-29. Arm 30
+  # puts its own fakes in front of this one.
+  mkdir -p "$root/engage-not-moved"
+  printf '#!/bin/sh\necho "not moved: pj selftest"\nexit 1\n' > "$root/engage-not-moved/engage-go"
+  chmod +x "$root/engage-not-moved/engage-go"
+  export PATH="$root/engage-not-moved:$PATH"
   # 1. dry-run argv carries the cache prompt file and all five plugin dirs, first entry is claude
   out="$(PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --dry-run 2>"$root/err1")"; rc=$?
   [[ $rc -eq 0 ]] && ok "1 dry-run exits 0" || bad "1 dry-run rc" "$rc $(<"$root/err1")"
@@ -1472,6 +1479,85 @@ selftest() {
   out="$(env -u HERDR_ENV -u PJ_NO_TEMP_SWEEP PJ_TEMP="$root/stub-pj-temp" PJ_STATE_DIR="$root/st29" PJ_NO_FETCH=1 PJ_NO_CHECKS=1 PJ_LAUNCH_FILE="$root/fake-launch29" PJ_WORKER_BIN="$fk/rc0" \
          PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --profile twomods 2>&1)"; rc=$?
   [[ $rc -eq 0 && "$(cat "$root/launched29" 2>/dev/null)" == "Temp sweep at launch: moved 1"* ]] && ok "29f a real launch sweeps first and hands claude PJ_TEMP_SWEPT" || bad "29f launch" "rc=$rc $(cat "$root/launched29" 2>/dev/null) $out"
+  # 30 THE ENGAGE MOVE CHECK (W-20261001-A67; the contract is engage's docs/CUTOVER.md
+  #    section 5, branch w29-cutover 7d637e8). pj asks `engage-go cutover check` in the folder
+  #    it was started from and never reads the marker itself. One fake engage-go per answer;
+  #    each records its arguments and folder, prints its stdout lines, and adds stderr noise
+  #    that pj must throw away.
+  local eg="$root/eg" d30="$root/proj30" base30 berr30 noegp m30="" l30
+  local -a noeg=()
+  mk_eg() {   # mk_eg <name> <exit code|kill> [stdout line]...
+    (( $# >= 2 )) || { bad "30 mk_eg needs a name and an exit" "$*"; return 1; }
+    local dir="$eg/$1" how="$2" l; shift 2
+    mkdir -p "$dir"
+    { print -r -- '#!/bin/sh'
+      print -r -- "printf '%s|%s\\n' \"\$*\" \"\$(pwd -P)\" > '$dir/ran'"
+      print -r -- 'echo "fake engage-go noise on stderr" >&2'
+      for l in "$@"; do print -r -- "printf '%s\\n' '$l'"; done
+      if [[ "$how" == kill ]]; then print -r -- 'kill -KILL $$'; else print -r -- "exit $how"; fi
+    } > "$dir/engage-go"
+    chmod +x "$dir/engage-go"
+  }
+  mk_eg m0 0 'moved: proj30 (2026-10-02)'
+  mk_eg m1 1 'not moved: no companion'
+  mk_eg m2 2
+  mk_eg m3 3 'not valid: MOVED-TO-ENGAGE is not committed'
+  mk_eg m3empty 3
+  mk_eg m3multi 3 'not valid: first line' 'second line'
+  mk_eg mkill kill 'moved: proj30 (2026-10-02)'
+  mk_eg mnox 0 'moved: proj30 (2026-10-02)'; chmod -x "$eg/mnox/engage-go"
+  mkdir -p "$d30"; git -C "$d30" init -q 2>/dev/null
+  # A PATH with NO engage-go at all: every folder holding one is dropped (the real one and
+  # this selftest's own not-moved fake), and pj's own folder leads so pj-prompt-file resolves.
+  for l30 in ${(s.:.)PATH}; do [[ -e "$l30/engage-go" ]] || noeg+=("$l30"); done
+  noegp="${SELF:h}:${(j.:.)noeg}"
+  eg_dry() {   # eg_dry <PATH> [pj args...]: a dry run from d30; sets out, rc, $root/err30
+    local p="$1"; shift
+    out="$( builtin cd "$d30" && PATH="$p" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" "$@" 2>"$root/err30" )"; rc=$?
+  }
+  eg_launch() {   # eg_launch <name> <PATH>: a REAL launch through a fake launch file, as 28g
+    printf '__claude_launch() { : > "%s/launched30.%s"; }\n' "$root" "$1" > "$root/fake-launch30.$1"
+    out="$( builtin cd "$d30" && env -u HERDR_ENV PATH="$2" PJ_NO_FETCH=1 PJ_NO_CHECKS=1 PJ_LAUNCH_FILE="$root/fake-launch30.$1" \
+            PJ_WORKER_BIN="$fk/rc0" PJ_PROFILE_DIR="$root/none-such" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" 2>&1 )"; rc=$?
+  }
+  # 30a the absent arm is real: this selftest's PATH has an engage-go and noegp has none.
+  [[ -n "$(whence -p engage-go)" && -z "$(PATH="$noegp" whence -p engage-go)" ]] \
+    && ok "30a control: engage-go is on the selftest PATH and absent from the no-engage PATH" || bad "30a absent PATH" "with=$(whence -p engage-go) without=$(PATH="$noegp" whence -p engage-go)"
+  eg_dry "$noegp" --dry-run; base30="$out"; berr30="$(<"$root/err30")"
+  [[ $rc -eq 0 && "${base30%%$'\n'*}" == claude ]] && ok "30b engage-go missing: the dry run is today's (rc 0, argv[0] claude)" || bad "30b missing" "rc=$rc $(<"$root/err30")"
+  # 30c-e exit 0, moved: the exact line, alone on stderr, exit 1, no argv, nothing launched.
+  eg_dry "$eg/m0:$noegp" --dry-run
+  [[ $rc -eq 1 && -z "$out" && "$(<"$root/err30")" == "This project moved to engage. Type engage." && "$(wc -l < "$root/err30" | tr -d ' ')" == 1 ]] \
+    && ok "30c exit 0: --dry-run prints exactly 'This project moved to engage. Type engage.' to stderr, rc 1, no argv" || bad "30c moved dry run" "rc=$rc out=${out:0:60} err=$(<"$root/err30")"
+  [[ "$(<"$eg/m0/ran")" == "cutover check|${d30:A}" ]] && ok "30d engage-go was asked 'cutover check' in the folder pj was started from" || bad "30d how it ran" "$(<"$eg/m0/ran")"
+  eg_launch m0 "$eg/m0:$noegp"
+  [[ $rc -eq 1 && ! -e "$root/launched30.m0" && "$out" == "This project moved to engage. Type engage." ]] && ok "30e exit 0: a real launch launches nothing, rc 1, the one line only" || bad "30e moved launch" "rc=$rc launched=$([[ -e "$root/launched30.m0" ]] && echo yes) $out"
+  for l30 in --dry-run-env "--profile x --dry-run" "--fullscreen --dry-run" --check-caps; do
+    eg_dry "$eg/m0:$noegp" ${(z)l30}
+    [[ $rc -eq 1 && -z "$out" && "$(<"$root/err30")" == "This project moved to engage. Type engage." ]] || m30="$m30 [$l30 rc=$rc]"
+  done
+  [[ -z "$m30" ]] && ok "30f exit 0 refuses before any other mode or flag: --dry-run-env, --profile, --fullscreen, --check-caps" || bad "30f other modes" "$m30"  # 30g-h exit 3, a marker that is not valid: refuse with the reason, prefix taken off.
+  eg_dry "$eg/m3:$noegp" --dry-run
+  [[ $rc -eq 1 && -z "$out" && "$(<"$root/err30")" == "This project has an engage move marker that is not valid: MOVED-TO-ENGAGE is not committed. Run engage-go cutover check for details." && "$(wc -l < "$root/err30" | tr -d ' ')" == 1 ]] \
+    && ok "30g exit 3: --dry-run prints the not-valid line with the reader's reason, rc 1, no argv" || bad "30g not valid dry run" "rc=$rc out=${out:0:60} err=$(<"$root/err30")"
+  eg_launch m3 "$eg/m3:$noegp"
+  [[ $rc -eq 1 && ! -e "$root/launched30.m3" ]] && ok "30h exit 3: a real launch launches nothing, rc 1" || bad "30h not valid launch" "rc=$rc $out"
+  # 30i-j a reader that breaks its own one-line promise on exit 3 still REFUSES (the text is
+  #     then not one line: pj passes on what it was given, no logic of its own).
+  eg_dry "$eg/m3empty:$noegp" --dry-run
+  [[ $rc -eq 1 && -z "$out" && "$(<"$root/err30")" == "This project has an engage move marker that is not valid: . Run engage-go cutover check for details." ]] && ok "30i exit 3 with no stdout still refuses, rc 1" || bad "30i empty reason" "rc=$rc err=$(<"$root/err30")"
+  eg_dry "$eg/m3multi:$noegp" --dry-run
+  [[ $rc -eq 1 && -z "$out" ]] && ok "30j exit 3 with two stdout lines still refuses, rc 1" || bad "30j two lines" "rc=$rc out=${out:0:60}"
+  # 30k-o every other answer is today's pj: the SAME argv and the SAME stderr as no engage-go.
+  m30=""
+  for l30 in m1 m2 mkill mnox; do
+    eg_dry "$eg/$l30:$noegp" --dry-run
+    [[ $rc -eq 0 && "$out" == "$base30" && "$(<"$root/err30")" == "$berr30" ]] || m30="$m30 [$l30 rc=$rc]"
+  done
+  [[ -z "$m30" ]] && ok "30k exit 1, exit 2, killed by a signal, and a non-executable engage-go: the dry run is byte-identical to no engage-go" || bad "30k as today" "$m30"
+  [[ -e "$eg/m1/ran" && -e "$eg/mkill/ran" ]] && ok "30l control: the exit-1 and the killed fakes really ran" || bad "30l fakes ran" "m1=$([[ -e "$eg/m1/ran" ]] && echo y) mkill=$([[ -e "$eg/mkill/ran" ]] && echo y)"
+  eg_launch m1 "$eg/m1:$noegp"
+  [[ $rc -eq 0 && -e "$root/launched30.m1" ]] && ok "30m control: exit 1 launches (the fake launch file works, so 30e and 30h measure something)" || bad "30m not moved launch" "rc=$rc $out"
   print -- "pj selftest: $pass passed, $fail failed"
   [[ $fail -eq 0 ]]
 }
@@ -1590,6 +1676,23 @@ run_with_relaunch() {
   done
   return $rc
 }
+
+# --- a project moved to engage (W-20261001-A67) ---------------------------------------
+# Before anything else pj does: engage's docs/CUTOVER.md section 5 (branch w29-cutover
+# 7d637e8), copied word for word. pj asks engage-go and never reads the marker itself, so
+# the logic lives in engage. Exit 0 moved and exit 3 a marker that is not valid both
+# refuse, one line on stderr, exit 1, nothing launched; exit 1, any other code, or no
+# engage-go: pj runs exactly as today. --selftest alone skips it: it answers every arm
+# with its own fake engage-go, so it runs the same in a moved project (selftest arm 30).
+if [[ "${1:-}" != --selftest ]]; then
+if command -v engage-go >/dev/null 2>&1; then
+  why="$(engage-go cutover check 2>/dev/null)"; rc=$?
+  case $rc in
+    0) print -u2 -r -- "This project moved to engage. Type engage."; exit 1 ;;
+    3) print -u2 -r -- "This project has an engage move marker that is not valid: ${why#not valid: }. Run engage-go cutover check for details."; exit 1 ;;
+  esac
+fi
+fi
 
 # --profile is read BEFORE --dry-run so `pj --profile scratch --dry-run` works, and only
 # in leading position so a later --profile passes through to claude untouched.
