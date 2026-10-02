@@ -1605,8 +1605,9 @@ selftest() {
   (( e31 >= 2.9 && e31 <= 5.0 )) && ok "31b   refused in $(printf %.2f $e31) s (bound 2.9 to 5.0)" || bad "31b hang time" "$(printf %.2f $e31) s"
   [[ "$n31" -ge 2 && "$l31" == 0 ]] && ok "31c   control: $n31 marked processes while it ran (parent and child), none left after" || bad "31c hang leftovers" "during=$n31 after=$l31"
   r31=(${=$(<"$eg/mhang/ran")}); me31="$(ps -o pgid= -p $$ | tr -d ' ')"
-  [[ ${#r31} == 3 && "$r31[1]" == "$r31[2]" && "$r31[2]" != "$r31[3]" && "$r31[3]" == "$me31" ]] \
-    && ok "31d engage-go leads its own process group ($r31[2]), never pj's ($r31[3])" || bad "31d process group" "ran=${r31[*]} pj group=$me31"
+  # perl leads the group and engage-go is its child, so the fake's parent shares its group.
+  [[ ${#r31} == 3 && "$r31[2]" != "$me31" && "$r31[2]" == "$r31[3]" ]] \
+    && ok "31d engage-go runs in a process group of its own ($r31[2], led by perl), never pj's ($me31)" || bad "31d process group" "ran=${r31[*]} pj group=$me31"
   eg_hang mtrap "$eg/mtrap:$noegp"
   [[ $rc -eq 1 && "$(<"$root/err31")" == "$tl31" && "$n31" -ge 2 && "$l31" == 0 ]] && (( e31 <= 5.0 )) \
     && ok "31e a fake that ignores TERM: refused in $(printf %.2f $e31) s, and KILL leaves none of its $n31 processes" || bad "31e TERM ignored" "rc=$rc t=$e31 during=$n31 after=$l31 $(<"$root/err31")"
@@ -1625,7 +1626,8 @@ selftest() {
   #     fallback kills the pid and its descendants; the refusal is the same.
   mkdir -p "$nop31"
   for d31 in ${(s.:.)noegp}; do
-    if [[ -n $d31/perl*(N[1]) ]]; then
+    all31=($d31/perl*(N))   # a glob, not [[ -n ]]: [[ ]] never expands one
+    if (( $#all31 )); then
       all31=($d31/*(N)); all31=(${all31:#*/perl*})
       mkdir -p "$nop31/${#nopl31}"; ln -s $all31 "$nop31/${#nopl31}/" 2>/dev/null
       nopl31+=("$nop31/${#nopl31}")

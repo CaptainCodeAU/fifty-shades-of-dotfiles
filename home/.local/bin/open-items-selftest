@@ -2498,8 +2498,9 @@ wanteq "EG2 a hang: add refuses (rc 2), one line naming the hang and engage add,
 wanteq "  refused within 2.9 to 5.0 s (measured ${EGT} ms)" "1" "$([ "$EGT" -ge 2900 ] && [ "$EGT" -le 5000 ] && echo 1)"
 wanteq "  control: $EGN marked processes while it ran (parent and child), none left after" "yes 0" "$([ "$EGN" -ge 2 ] && printf yes || printf no) $EGL"
 read -r EGP1 EGP2 EGP3 < "$EG/mhang/ran"; EGME="$(ps -o pgid= -p $$ | tr -d ' ')"
-wanteq "  engage-go leads its own process group, never open-items' (pid pgid parent-pgid; suite pgid $EGME)" "own other ours" \
-  "$([ "$EGP1" = "$EGP2" ] && printf own || printf shared) $([ "$EGP2" != "$EGP3" ] && printf other || printf same) $([ "$EGP3" = "$EGME" ] && printf ours || printf notours)"
+# perl leads the group and engage-go is its child, so the fake's parent shares its group.
+wanteq "  engage-go runs in a process group of its own, led by perl, never open-items' (fake $EGP1, group $EGP2, suite group $EGME)" "apart with-perl" \
+  "$([ "$EGP2" != "$EGME" ] && printf apart || printf SAME) $([ "$EGP2" = "$EGP3" ] && printf with-perl || printf other)"
 egw m3multi add "filed by habit" --done-when x
 wanteq "EG2 exit 3 with two stdout lines: the FIRST line only, one line (A49)" "first nosecond 1" \
   "$(case "$OUT" in *"not valid: first line."*) printf first;; *) printf nofirst;; esac) $(case "$OUT" in *"second line"*) printf second;; *) printf nosecond;; esac) $(printf '%s\n' "$OUT" | grep -c .)"
