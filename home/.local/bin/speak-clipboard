@@ -199,24 +199,6 @@
 # pid file is overwritten in place and judged stale by its contents, and the
 # hash file is no longer written at all.
 #
-# SELECTION (v6, 2026-10-02, Gavin's call)
-# ----------------------------------------
-# A highlight made with the mouse in a Claude Code pane belongs to Claude
-# Code, not herdr, so herdr cannot hand it over. With --from-pane, after the
-# stop check, speak-clipboard-grab (a JXA helper beside this script) does in
-# ONE process: snapshot every clipboard item and type, send Ctrl+Shift+C to
-# the pane (Claude Code's copy key when Copy on select is off), wait for the
-# clipboard to change, read the text, put the snapshot back, and only then
-# hand the text over, so the clipboard is restored before speech starts. No
-# change within --copy-timeout means nothing was highlighted: the clipboard
-# is spoken exactly as before, so "Ctrl+C, then the key" still works. The
-# herdr plugin dotfiles.speak-selection passes --from-pane only for a Claude
-# pane; a shell pane must never get Ctrl+Shift+C (it could arrive as ^C).
-# The log line gains source=selection|clipboard and the grab's timings.
-# SPEAK_CLIPBOARD_COPY_CMD replaces the send-keys with a shell command, for
-# the selftest only (speak-clipboard-selftest), since only a hand on the
-# mouse can make a real highlight.
-#
 # USAGE
 #   speak-clipboard              speak the clipboard (replacing any current speech)
 #   speak-clipboard --toggle     speaking: stop (any text); idle: speak
@@ -224,11 +206,6 @@
 #   speak-clipboard --print      print what WOULD be spoken (no audio)
 #   speak-clipboard --stdin      read text from stdin instead of the clipboard
 #                                (for tests; combine with --print/--toggle)
-#   speak-clipboard --toggle --from-pane ID
-#                                speak a Claude Code pane's mouse highlight: borrow
-#                                the clipboard (see SELECTION below), fall back to
-#                                the clipboard when nothing was highlighted
-#   speak-clipboard --copy-timeout MS  how long to wait for the copy (default 500)
 #   speak-clipboard --rate N     words per minute (default: 420)
 #   speak-clipboard --volume N   speech volume 0-100 under the system volume
 #                                (default: 60; streaming path only)
@@ -265,9 +242,6 @@ volume="60"
 voice=""
 mode="speak"
 from_stdin=0
-from_pane=""
-copy_timeout="500"
-_t_start="${EPOCHREALTIME:-}"
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -275,8 +249,6 @@ while [ $# -gt 0 ]; do
         --stop)   mode="stop";   shift ;;
         --toggle) mode="toggle"; shift ;;
         --stdin)  from_stdin=1;  shift ;;
-        --from-pane) [ $# -ge 2 ] || { echo "speak-clipboard: --from-pane needs a pane id" >&2; exit 1; }; from_pane="$2"; shift 2 ;;
-        --copy-timeout) [ $# -ge 2 ] || { echo "speak-clipboard: --copy-timeout needs a value" >&2; exit 1; }; copy_timeout="$2"; shift 2 ;;
         --rate)  [ $# -ge 2 ] || { echo "speak-clipboard: --rate needs a value" >&2; exit 1; }; rate="$2"; shift 2 ;;
         --volume) [ $# -ge 2 ] || { echo "speak-clipboard: --volume needs a value" >&2; exit 1; }; volume="$2"; shift 2 ;;
         --voice) [ $# -ge 2 ] || { echo "speak-clipboard: --voice needs a value" >&2; exit 1; }; voice="$2"; shift 2 ;;
@@ -289,13 +261,6 @@ case "$volume" in
     ''|*[!0-9]*) echo "speak-clipboard: --volume takes a whole number 0-100" >&2; exit 1 ;;
 esac
 [ "$volume" -le 100 ] || { echo "speak-clipboard: --volume takes a whole number 0-100" >&2; exit 1; }
-case "$copy_timeout" in
-    ''|*[!0-9]*) echo "speak-clipboard: --copy-timeout takes whole milliseconds" >&2; exit 1 ;;
-esac
-# A pane id goes on herdr's argv; refuse anything that is not id-shaped.
-case "$from_pane" in
-    *[!A-Za-z0-9:_-]*) echo "speak-clipboard: --from-pane '$from_pane' is not a pane id" >&2; exit 1 ;;
-esac
 
 _state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/herdr"
 _trace_file="$_state_dir/speak-clipboard.log"
@@ -685,68 +650,11 @@ clean_input() {
     fi
 }
 
-# The --from-pane input (SELECTION note up top). Prints the grab's metadata
-# line, then the cleaner's four lines. The helper prints the selection's raw
-# text after its metadata only when source=selection; for anything else
-# (unchanged, error, a missing helper) the clipboard is read as before,
-# after the helper has already put it back. 9>&-: the helper's guard can
-# outlive this script by --guard ms and must not hold the lock while it does.
-_grab="$(dirname "$0")/speak-clipboard-grab"
-grab_input() {
-    local herdr_bin cmd meta
-    if [ -n "${SPEAK_CLIPBOARD_COPY_CMD:-}" ]; then
-        cmd=(/bin/sh -c "$SPEAK_CLIPBOARD_COPY_CMD")
-    else
-        herdr_bin="${HERDR_BIN_PATH:-$(command -v herdr 2>/dev/null)}"
-        cmd=("${herdr_bin:-/nonexistent/herdr}" pane send-keys "$from_pane" ctrl+shift+c)
-    fi
-    {
-        IFS= read -r meta || true
-        case "$meta" in
-            source=selection*)
-                printf '%s\n' "$meta"
-                perl -e "$_clean_pl" -- "$_max_chars" 2>/dev/null
-                ;;
-            *)
-                printf '%s\n' "${meta:-source=error why=no-helper-output}"
-                cat >/dev/null
-                clean_input
-                ;;
-        esac
-    } < <(osascript -l JavaScript "$_grab" --timeout "$copy_timeout" \
-              --log "$_trace_file" --tag "$$" ${SPEAK_CLIPBOARD_GRAB_ARGS:-} -- "${cmd[@]}" \
-              2>>"$_render_log" 9>&-)
-}
-
-# Reads the input for this press into hash/truncated/chars/text, and sets
-# src_note to what the log line says about where the text came from.
-read_input() {
-    if [ -n "$from_pane" ]; then
-        { IFS= read -r grab_meta; IFS= read -r hash; IFS= read -r truncated; IFS= read -r chars; IFS= read -r text; } < <(grab_input)
-        case "$grab_meta" in
-            source=selection*) src_note="source=selection ${grab_meta#source=selection }" ;;
-            *) src_note="source=clipboard grab=${grab_meta#source=}" ;;
-        esac
-    else
-        { IFS= read -r hash; IFS= read -r truncated; IFS= read -r chars; IFS= read -r text; } < <(clean_input)
-        src_note="source=clipboard"
-    fi
-}
-
-# Milliseconds since this script started, for the log (bash 5's
-# EPOCHREALTIME; empty on an older bash, and then left out).
-_elapsed_ms() {
-    [ -n "$_t_start" ] && [ -n "${EPOCHREALTIME:-}" ] || return 0
-    local now="$EPOCHREALTIME"
-    printf ' press_ms=%s' "$(( (${now/./} - ${_t_start/./}) / 1000 ))"
-}
-
 # ---------------------------------------------------------------------------
 # Modes
 # ---------------------------------------------------------------------------
 if [ "$mode" = "print" ]; then
-    read_input
-    [ -n "$from_pane" ] && printf '%s\n' "$src_note" >&2
+    { IFS= read -r hash; IFS= read -r truncated; IFS= read -r chars; IFS= read -r text; } < <(clean_input)
     if [ -z "${text:-}" ]; then
         echo "(nothing to speak -- clipboard empty or all decoration)"
         exit 1
@@ -770,9 +678,9 @@ if [ "$mode" = "toggle" ] && speaker_alive; then
     exit 0
 fi
 
-read_input
+{ IFS= read -r hash; IFS= read -r truncated; IFS= read -r chars; IFS= read -r text; } < <(clean_input)
 if [ -z "${text:-}" ]; then
-    trace "outcome=nothing $src_note$(_elapsed_ms)"
+    trace "outcome=nothing"
     exit 1
 fi
 
@@ -784,5 +692,5 @@ if speaker_alive; then
 fi
 
 start_speaker
-trace "outcome=$outcome chars=$chars truncated=$truncated $src_note$(_elapsed_ms)"
+trace "outcome=$outcome chars=$chars truncated=$truncated"
 exit 0
