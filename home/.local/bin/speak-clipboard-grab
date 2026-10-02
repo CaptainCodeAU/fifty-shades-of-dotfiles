@@ -1,0 +1,342 @@
+#!/usr/bin/osascript -l JavaScript
+// ============================================================================
+//  speak-clipboard-grab -- borrow the clipboard to read a Claude Code highlight
+// ============================================================================
+//
+// WHY (2026-10-02, Gavin)
+// -----------------------
+// In a Claude Code pane the mouse highlight belongs to Claude Code, not herdr,
+// so herdr's plugin context carries no selected_text. The only way out is to
+// make Claude Code copy it (Ctrl+Shift+C, sent with `herdr pane send-keys`),
+// which overwrites the clipboard. This helper makes that a loan, not a loss:
+//
+//   1. snapshot EVERY pasteboard item and EVERY type on it (text, RTF, images,
+//      anything), as data, in this process's memory only -- never on disk
+//   2. run the copy command (argv after --)
+//   3. poll changeCount every --interval ms, up to --timeout ms
+//   4. read the new plain text
+//   5. restore the snapshot (in a finally: an error after step 1 still
+//      restores), then print the text and close stdout so speech can start
+//   6. GUARD for --guard ms: Claude Code 2.1.287 writes the clipboard TWICE,
+//      natively (pbcopy) AND as an OSC 52 escape that herdr forwards to the
+//      terminal (read from its bundled source, 2026-10-02: setClipboard calls
+//      the native copy, then returns the OSC 52 sequence to emit). The second
+//      write can land after step 5. So while guarding, a change whose text is
+//      EXACTLY the selection is our own late write and is restored again; any
+//      other change is someone's fresh copy and ends the guard untouched.
+//
+// One process does all of it so the swap window is as short as it can be;
+// the shell is never in the loop between the copy landing and the restore.
+//
+// GRAB OUTPUT (stdout): one metadata line, then (source=selection only) the
+// selection's raw UTF-8 text. The text is never logged.
+//   source=selection|unchanged|error  snap_ms wait_ms swap_ms total_ms ...
+//
+// USAGE
+//   speak-clipboard-grab [--timeout MS] [--interval MS] [--guard MS]
+//                        [--log FILE] [--tag T] -- CMD [ARGS...]
+//   speak-clipboard-grab --digest       changeCount, items, types, sha256 prefixes
+//   speak-clipboard-grab --hold         TEST ONLY: snapshot, wait for stdin EOF,
+//                                       restore, compare digests (exit 3 if not
+//                                       identical). Keeps the clipboard in memory.
+//   speak-clipboard-grab --fixture K    TEST ONLY: K = text|rich|image|multi|empty
+//   --fault                             TEST ONLY: throw right after the copy lands,
+//                                       to prove the restore runs anyway
+//
+// EXIT: 0 ran (read the source= field, not the code), 2 bad option,
+//       3 --hold restored but the digests differ, 4 pasteboard unreachable
+//
+// Run as `osascript -l JavaScript speak-clipboard-grab ...` or directly.
+// ============================================================================
+
+ObjC.import('AppKit');
+ObjC.import('Foundation');
+ObjC.import('stdlib');
+
+const pb = $.NSPasteboard.generalPasteboard;
+const UTF8 = 4; // NSUTF8StringEncoding
+
+// Inside Claude Code's Bash sandbox the pasteboard server is unreachable and
+// changeCount reads `undefined` (MEASURED 2026-10-02): every arm would then
+// look like "unchanged" and a snapshot like "empty". Refuse instead.
+// (JXA hands changeCount back as a STRING of digits, measured the same day.)
+function reachable() { return /^\d+$/.test(String(pb.changeCount)); }
+
+function now() { return $.NSProcessInfo.processInfo.systemUptime * 1000; }
+function ms(x) { return Math.round(x * 10) / 10; }
+function sleepMs(n) { $.NSThread.sleepForTimeInterval(n / 1000); }
+function out(s) {
+    $.NSFileHandle.fileHandleWithStandardOutput.writeData($(s).dataUsingEncoding(UTF8));
+}
+function err(s) {
+    $.NSFileHandle.fileHandleWithStandardError.writeData($(s + '\n').dataUsingEncoding(UTF8));
+}
+
+// Every item, every type, as [NSString type, NSData data] pairs.
+function snapshot() {
+    const snap = [];
+    const items = pb.pasteboardItems;
+    if (!items || items.isNil()) return snap;
+    for (let i = 0; i < items.count; i++) {
+        const it = items.objectAtIndex(i);
+        const types = it.types;
+        const entry = [];
+        for (let j = 0; j < types.count; j++) {
+            const t = types.objectAtIndex(j);
+            const d = it.dataForType(t);
+            if (d && !d.isNil()) entry.push([t, d]);
+        }
+        snap.push(entry);
+    }
+    return snap;
+}
+
+// clearContents alone when the snapshot was empty, so empty stays empty.
+function restore(snap) {
+    pb.clearContents;
+    if (snap.length === 0) return;
+    const arr = $.NSMutableArray.array;
+    for (const entry of snap) {
+        const ni = $.NSPasteboardItem.alloc.init;
+        for (const [t, d] of entry) ni.setDataForType(d, t);
+        arr.addObject(ni);
+    }
+    pb.writeObjects(arr);
+}
+
+function plainText() {
+    const s = pb.stringForType($.NSPasteboardTypeString);
+    if (!s || s.isNil()) return null;
+    return s.js;
+}
+
+function typeCount(snap) {
+    let n = 0;
+    for (const e of snap) n += e.length;
+    return n;
+}
+
+function appendLine(path, line) {
+    if (!path) return;
+    const fm = $.NSFileManager.defaultManager;
+    if (!fm.fileExistsAtPath(path)) fm.createFileAtPathContentsAttributes(path, $(), $());
+    const fh = $.NSFileHandle.fileHandleForWritingAtPath(path);
+    if (!fh || fh.isNil()) return;
+    fh.seekToEndOfFile;
+    fh.writeData($(line + '\n').dataUsingEncoding(UTF8));
+    fh.closeFile;
+}
+
+function utcStamp() {
+    const f = $.NSDateFormatter.alloc.init;
+    f.dateFormat = "yyyy-MM-dd'T'HH:mm:ss'Z'";
+    f.timeZone = $.NSTimeZone.timeZoneWithAbbreviation('UTC');
+    return f.stringFromDate($.NSDate.date).js;
+}
+
+// ---------------------------------------------------------------------------
+// grab
+// ---------------------------------------------------------------------------
+function grab(opt, cmd) {
+    const t0 = now();
+    let source = 'error', why = '', text = null;
+    let snap = null, c0 = -1, tSnap = 0, tChange = 0, tRestored = 0, restored = 0;
+    let rc = '', restoredCount = -1;
+    try {
+        c0 = pb.changeCount;
+        snap = snapshot();
+        tSnap = now();
+        if (cmd.length === 0) throw new Error('no copy command');
+        const task = $.NSTask.alloc.init;
+        task.launchPath = cmd[0];
+        task.arguments = cmd.slice(1);
+        task.standardOutput = $.NSFileHandle.fileHandleWithNullDevice;
+        task.standardInput = $.NSFileHandle.fileHandleWithNullDevice;
+        task.launch; // throws on a bad path; caught below
+        const deadline = tSnap + opt.timeout;
+        for (;;) {
+            if (pb.changeCount !== c0) {
+                if (!tChange) tChange = now();
+                // pbcopy clears, then writes: a change with no text yet is
+                // the gap between the two, so keep polling for the text.
+                text = plainText();
+                if (opt.fault) throw new Error('injected fault after the copy');
+                if (text !== null) { source = 'selection'; break; }
+            } else if (!task.isRunning && task.terminationStatus !== 0) {
+                why = 'copy-command-failed'; break;
+            }
+            if (now() >= deadline) {
+                if (tChange) why = 'changed-without-text';
+                else source = 'unchanged';
+                break;
+            }
+            sleepMs(opt.interval);
+        }
+        rc = task.isRunning ? 'running' : String(task.terminationStatus);
+    } catch (e) {
+        why = 'exception:' + String(e && e.message || e).replace(/\s+/g, '_').slice(0, 80);
+    } finally {
+        // Restore iff the pasteboard moved since the snapshot. A failed copy
+        // that wrote nothing leaves the original untouched (no restore).
+        if (snap !== null && pb.changeCount !== c0) {
+            restore(snap);
+            restored = 1;
+            restoredCount = pb.changeCount;
+            tRestored = now();
+        }
+    }
+    const meta = [
+        'source=' + source,
+        why ? 'why=' + why : '',
+        'snap_ms=' + ms(tSnap - t0),
+        'wait_ms=' + (tChange ? ms(tChange - tSnap) : 'none'),
+        'swap_ms=' + (tChange && tRestored ? ms(tRestored - tChange) : 'none'),
+        'total_ms=' + ms(now() - t0),
+        'items=' + (snap ? snap.length : 0),
+        'types=' + (snap ? typeCount(snap) : 0),
+        'restored=' + restored,
+        'copy_rc=' + (rc || 'none'),
+    ].filter(Boolean).join(' ');
+    out(meta + '\n');
+    if (source === 'selection') out(text);
+    $.NSFileHandle.fileHandleWithStandardOutput.closeFile;
+
+    // The guard (see the header): only after a real swap.
+    if (!restored || source !== 'selection' || opt.guard <= 0) return;
+    const gEnd = now() + opt.guard;
+    let hits = 0, foreign = 0, firstAfter = 0;
+    while (now() < gEnd) {
+        sleepMs(opt.interval);
+        if (pb.changeCount === restoredCount) continue;
+        const s = plainText();
+        // No text yet is the clear-then-write gap again (as in the main
+        // loop): decide on the next poll. Deciding here called our own late
+        // write "foreign" in 2 of 7 selftest runs (2026-10-02). A clipboard
+        // that stays empty to the end of the guard is left as it is.
+        if (s === null) continue;
+        if (s === text) {
+            if (!firstAfter) firstAfter = now() - tRestored;
+            restore(snap);
+            restoredCount = pb.changeCount;
+            hits++;
+        } else {
+            foreign = 1;
+            break;
+        }
+    }
+    if (hits || foreign) {
+        appendLine(opt.log, utcStamp() + ' mode=guard ppid=' + (opt.tag || '?') +
+            ' outcome=' + (hits ? 'late-write-restored' : 'foreign-copy-kept') +
+            ' late_writes=' + hits + (firstAfter ? ' first_after_ms=' + ms(firstAfter) : '') +
+            ' foreign=' + foreign);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// test-only modes
+// ---------------------------------------------------------------------------
+function sha256(data) {
+    const task = $.NSTask.alloc.init;
+    task.launchPath = '/usr/bin/shasum';
+    task.arguments = $(['-a', '256']);
+    const pin = $.NSPipe.pipe, pout = $.NSPipe.pipe;
+    task.standardInput = pin;
+    task.standardOutput = pout;
+    task.launch;
+    pin.fileHandleForWriting.writeData(data);
+    pin.fileHandleForWriting.closeFile;
+    const o = pout.fileHandleForReading.readDataToEndOfFile;
+    task.waitUntilExit;
+    return $.NSString.alloc.initWithDataEncoding(o, UTF8).js.slice(0, 12);
+}
+
+function digestOf(snap) {
+    const lines = ['items=' + snap.length];
+    snap.forEach((entry, i) => {
+        for (const [t, d] of entry) {
+            lines.push('item' + i + ' ' + t.js + ' len=' + d.length + ' sha=' + sha256(d));
+        }
+    });
+    return lines.join('\n');
+}
+
+function fixture(kind) {
+    pb.clearContents;
+    const mk = (pairs) => {
+        const it = $.NSPasteboardItem.alloc.init;
+        for (const [t, s] of pairs) it.setDataForType($(s).dataUsingEncoding(UTF8), $(t));
+        return it;
+    };
+    if (kind === 'empty') return;
+    if (kind === 'text') {
+        pb.writeObjects($([mk([['public.utf8-plain-text', 'fixture plain text ' + Date.now()]])]));
+    } else if (kind === 'rich') {
+        pb.writeObjects($([mk([
+            ['public.utf8-plain-text', 'fixture rich ' + Date.now()],
+            ['public.rtf', '{\\rtf1\\ansi{\\fonttbl\\f0 Helvetica;}\\f0\\b fixture rich bold\\b0}'],
+            ['public.html', '<b>fixture rich bold</b>'],
+        ])]));
+    } else if (kind === 'image') {
+        const img = $.NSImage.alloc.initWithSize($.NSMakeSize(8, 8));
+        img.lockFocus;
+        $.NSColor.colorWithSRGBRedGreenBlueAlpha(0.2, 0.5, 0.8, 1).setFill;
+        $.NSRectFill($.NSMakeRect(0, 0, 8, 8));
+        img.unlockFocus;
+        const tiff = img.TIFFRepresentation;
+        const it = $.NSPasteboardItem.alloc.init;
+        it.setDataForType(tiff, $('public.tiff'));
+        const rep = $.NSBitmapImageRep.imageRepWithData(tiff);
+        it.setDataForType(rep.representationUsingTypeProperties($.NSBitmapImageFileTypePNG, $({})), $('public.png'));
+        pb.writeObjects($([it]));
+    } else if (kind === 'multi') {
+        pb.writeObjects($([
+            mk([['public.utf8-plain-text', 'fixture item one']]),
+            mk([['public.utf8-plain-text', 'fixture item two'], ['public.html', '<i>two</i>']]),
+        ]));
+    } else {
+        throw new Error('unknown fixture ' + kind);
+    }
+}
+
+function hold() {
+    const snap = snapshot();
+    const before = digestOf(snap);
+    out('held items=' + snap.length + ' types=' + typeCount(snap) + '\n');
+    $.NSFileHandle.fileHandleWithStandardOutput.closeFile;
+    // Block until the caller closes our stdin (normal end OR crash).
+    $.NSFileHandle.fileHandleWithStandardInput.readDataToEndOfFile;
+    restore(snap);
+    const after = digestOf(snapshot());
+    const same = before === after;
+    err('hold: restored items=' + snap.length + ' types=' + typeCount(snap) +
+        ' digest_identical=' + (same ? 'yes' : 'NO'));
+    if (!same) { err('hold: before\n' + before); err('hold: after\n' + after); }
+    return same;
+}
+
+// ---------------------------------------------------------------------------
+function run(argv) {
+    const opt = { timeout: 500, interval: 10, guard: 1000, log: '', tag: '' };
+    const a = argv.slice();
+    if (!reachable()) {
+        out('source=error why=pasteboard-unreachable\n');
+        err('speak-clipboard-grab: the pasteboard is unreachable (sandboxed?); refusing');
+        $.exit(4);
+    }
+    while (a.length) {
+        const k = a.shift();
+        if (k === '--') break;
+        if (k === '--digest') { out('change_count=' + pb.changeCount + '\n' + digestOf(snapshot()) + '\n'); return; }
+        if (k === '--hold') { if (!hold()) $.exit(3); return; }
+        if (k === '--fixture') { fixture(a.shift()); return; }
+        if (k === '--timeout') { opt.timeout = Number(a.shift()); continue; }
+        if (k === '--interval') { opt.interval = Number(a.shift()); continue; }
+        if (k === '--guard') { opt.guard = Number(a.shift()); continue; }
+        if (k === '--log') { opt.log = a.shift(); continue; }
+        if (k === '--tag') { opt.tag = a.shift(); continue; }
+        if (k === '--fault') { opt.fault = true; continue; }
+        err('speak-clipboard-grab: unknown option ' + k);
+        $.exit(2);
+    }
+    grab(opt, a);
+}
