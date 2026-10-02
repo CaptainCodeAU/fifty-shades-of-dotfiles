@@ -1,15 +1,33 @@
 #!/usr/bin/env bash
 # project-guards-selftest -- proves every PreToolUse hook this repo registers in its own
-# .claude/settings.json FAILS CLOSED when its script is missing (W-20260925-A28).
-# A bare-path registration exits 127 on a missing file, which Claude Code treats as a
-# non-blocking error, so the guard silently stops guarding. The A76 wrapper form denies by
-# name instead. For each PreToolUse command, under sh, bash and zsh:
+# .claude/settings.json and .claude/settings.minimal.json DENIES when its script is missing
+# (W-20260925-A28) or crashes (W-20261002-A20, D-20261002-A01), and that the registered
+# string is the manifest's guard shape byte for byte.
+# A bare-path registration exits 127 on a missing file, and the -x-only wrapper passes a
+# started guard's exit 1/126/127 straight through; Claude Code treats both as a non-blocking
+# error, so the call RUNS. The crash-deny shape turns any exit other than 0 or 2 into one deny.
+# For each PreToolUse command, under sh, bash and zsh:
 #   missing arm: CLAUDE_PROJECT_DIR is an empty fixture -> must print a HOOK MISSING deny
 #   unset arm:   CLAUDE_PROJECT_DIR is empty            -> must print a HOOK MISSING deny
-#   present arm: CLAUDE_PROJECT_DIR is this repo        -> must NOT print HOOK MISSING
-# The present arm is the control: a command that denies HOOK MISSING whatever the
-# directory would pass the missing arm and prove nothing.
+#   present arm: CLAUDE_PROJECT_DIR is this repo        -> neither HOOK MISSING nor CRASHED
+#   crash arms:  a stub guard that exits 127, 1, or prints its own deny then exits 1
+#                -> exactly one HOOK CRASHED deny naming the guard and the code, rc 0
+#   pass arms:   a stub that exits 0 (allow, silent, its own deny) or 2 -> its stdout and
+#                its exit code pass through unchanged; the payload reaches it on stdin
+# The present arm is the control: a command that denies whatever the directory would pass
+# the missing and crash arms and prove nothing; the pass arms are the crash arms' control.
+# Parity arm, per command: render the manifest's guard shape (settings/claude/hooks.json,
+# the enforce-no-permanent-delete.sh entry) for that command's path and fix texts, and
+# compare byte for byte. Control: every class guard entry in the manifest passes the same
+# comparison, or the renderer is broken and the arm says so.
+# Mutant arms: one-fault copies of each crash-deny command (crash branch removed, exit
+# captured wrongly, ...) must each be caught by a behaviour arm under every shell, and by
+# the parity arm. A selftest that cannot catch them is not a check.
+# Seams: PROJECT_SETTINGS_UNDER_TEST=<file> tests that one file instead of the two;
+# PROJECT_GUARDS_MANIFEST=<file> renders from another manifest.
 # Exit: 0 pass, 1 an arm failed, 2 nothing to test (no PreToolUse commands found).
+# Not covered: a guard that hangs past its timeout; Claude Code cancels it and the call
+# RUNS (W-20261002-A17).
 # Read this whole file before running any of it, so an edit saved mid-run cannot change
 # the run (W-20260923-A57). A crash under it exits 127 (unbound var) or 1 (bash 3.2 syntax
 # error); `selftest-whole-read --help` has the map. Do not move or reword these lines.
@@ -18,39 +36,187 @@ unset SELFTEST_WHOLE_READ
 
 set -uo pipefail
 REPO="$(cd "$(dirname "$0")/../.." && pwd -P)"
-SETTINGS="${PROJECT_SETTINGS_UNDER_TEST:-$REPO/.claude/settings.json}"
+if [ -n "${PROJECT_SETTINGS_UNDER_TEST:-}" ]; then FILES=("$PROJECT_SETTINGS_UNDER_TEST")
+else FILES=("$REPO/.claude/settings.json" "$REPO/.claude/settings.minimal.json"); fi
+MANIFEST="${PROJECT_GUARDS_MANIFEST:-$REPO/settings/claude/hooks.json}"
 command -v jq >/dev/null || { echo "project-guards-selftest: needs jq"; exit 2; }
 FIX="$(mktemp -d "${TMPDIR:-/tmp}/project-guards-selftest.XXXXXX")" || exit 1
-mkdir -p "$FIX/.claude/hooks"
+mkdir -p "$FIX/missing/.claude/hooks"
 PASS=0; FAIL=0
-ok(){ PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
-bad(){ FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1"; }
+QUIET=0; QFAILS=0
+ok(){ [ "$QUIET" = 1 ] && return 0; PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
+bad(){ if [ "$QUIET" = 1 ]; then QFAILS=$((QFAILS+1)); return 0; fi; FAIL=$((FAIL+1)); printf '  FAIL %s\n' "$1"; }
 
-N=$(jq '[.hooks.PreToolUse[]?.hooks[]?.command] | length' "$SETTINGS")
-[ "${N:-0}" -gt 0 ] || { echo "project-guards-selftest: no PreToolUse commands in $SETTINGS, nothing tested"; exit 2; }
-echo "settings: $SETTINGS ($N PreToolUse command(s))"
+# The renderer. $ref is the manifest's reference guard command, $c the command under test.
+# Slots: the h="<path>" value, its basename, its display form ($HOME/ shown as ~/), and the
+# two fix texts after "where no Claude hook runs: ". Everything else must match byte for byte.
+RENDER=$(cat <<'JQ'
+def lit($a; $b): split($a) | join($b);
+def anchor: "where no Claude hook runs: ";
+def parts:
+  . as $x
+  | (first($x | capture("^h=\"(?<p>[^\"]*)\"").p) // null) as $p
+  | if $p == null then {err: "no h=\"<path>\" at the start"} else
+      {p: $p, n: ($p | split("/") | last),
+       s: ($p | if startswith("$HOME/") then "~/" + .[6:] else . end),
+       f: [ $x | match(anchor + "(?<f>[^\"]*)\"\\}\\}'"; "g") | .captures[0].string ]}
+    end;
+def template:
+  parts as $r
+  | if $r.err then error("reference: " + $r.err)
+    elif ($r.f | length) != 2 then error("reference: \($r.f | length) fix texts, want 2")
+    else gsub(anchor + "[^\"]*\"\\}\\}'"; anchor + "@F@\"}}'") | lit($r.p; "@P@") | lit($r.s; "@S@") | lit($r.n; "@N@") end
+  | if (contains("@P@") and contains("@S@") and contains("@N@")) then . else error("reference: a slot is missing") end;
+def render($t):
+  parts as $g
+  | if $g.err then $g.err
+    elif ($g.f | length) != 2 then "\($g.f | length) fix texts, want 2"
+    else $t | lit("@P@"; $g.p) | lit("@S@"; $g.s) | lit("@N@"; $g.n) | split("@F@")
+         | if length == 3 then .[0] + $g.f[0] + .[1] + $g.f[1] + .[2] else "template has \(length - 1) fix slots" end end;
+def firstdiff($a; $b):
+  first(range(0; ([$a | length, $b | length] | max)) | select($a[.:.+1] != $b[.:.+1])) // -1;
+($ref | template) as $t
+| $c | render($t) as $want
+| if $want == $c then "ok"
+  elif ($want | startswith("h=\"") | not) then "DIFF " + $want
+  else firstdiff($want; $c) as $i | ([$i - 20, 0] | max) as $a
+    | "DIFF at byte \($i): manifest shape gives [\($want[$a:$i+40])] registered has [\($c[$a:$i+40])]" end
+JQ
+)
+parity(){ jq -rn --arg ref "$REF" --arg c "$1" "$RENDER" 2>&1; }
 
-PAYLOAD='{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git status"}}'
+REF_SCRIPT=enforce-no-permanent-delete.sh
+REF=$(jq -r --arg s "$REF_SCRIPT" 'first(.hooks[]? | select(.script == $s) | .entry.command) // empty' "$MANIFEST" 2>/dev/null)
+echo "manifest: $MANIFEST (reference: $REF_SCRIPT)"
+PARITY_OK=1
+if [ -z "$REF" ]; then bad "parity control: $REF_SCRIPT has no entry.command in $MANIFEST"; PARITY_OK=0
+else
+  ng=0
+  while IFS= read -r s; do
+    [ -n "$s" ] || continue
+    ng=$((ng+1))
+    c=$(jq -r --arg s "$s" 'first(.hooks[] | select(.script == $s and .class == "guard")) | .entry.command' "$MANIFEST")
+    v=$(parity "$c")
+    if [ "$v" = ok ]; then ok "parity control: manifest guard $s renders byte for byte"
+    else bad "parity control: manifest guard $s: $v (the renderer, not the project, is broken)"; PARITY_OK=0; fi
+  done < <(jq -r '.hooks[]? | select(.class == "guard") | .script' "$MANIFEST")
+  [ "$ng" -gt 0 ] || { bad "parity control: no class guard entry in $MANIFEST"; PARITY_OK=0; }
+fi
+
+PAYLOAD_BASH='{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git status"}}'
+PAYLOAD_WRITE='{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_path":"'"$REPO"'/README.md","content":"x"}}'
+OWN_DENY='{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"STUB OWN DENY"}}'
 denies_missing(){ printf '%s' "$1" | jq -e '.hookSpecificOutput.permissionDecision == "deny" and (.hookSpecificOutput.permissionDecisionReason | startswith("HOOK MISSING, DENYING"))' >/dev/null 2>&1; }
+# exactly one JSON document, a deny, "HOOK CRASHED, DENYING: <name> exited <code>,"
+denies_crashed(){ printf '%s' "$1" | jq -se --arg n "$2" --arg r "$3" 'length == 1 and .[0].hookSpecificOutput.permissionDecision == "deny" and (.[0].hookSpecificOutput.permissionDecisionReason | startswith("HOOK CRASHED, DENYING: " + $n + " exited " + $r + ","))' >/dev/null 2>&1; }
 
-i=0
-while [ "$i" -lt "$N" ]; do
-  cmd=$(jq -r "[.hooks.PreToolUse[]?.hooks[]?.command][$i]" "$SETTINGS")
-  name=$(printf '%s' "$cmd" | sed -E 's#.*\.claude/hooks/([^"; ]+).*#\1#' | head -1)
-  for sh in sh bash zsh; do
-    command -v "$sh" >/dev/null || { bad "$name [$sh]: shell not found"; continue; }
-    out=$(printf '%s' "$PAYLOAD" | CLAUDE_PROJECT_DIR="$FIX" "$sh" -c "$cmd" 2>/dev/null); rc=$?
-    if [ "$rc" = 0 ] && denies_missing "$out"; then ok "$name [$sh] missing script: denies by name"
-    else bad "$name [$sh] missing script: rc=$rc, no HOOK MISSING deny (fails open)"; fi
-    out=$(printf '%s' "$PAYLOAD" | CLAUDE_PROJECT_DIR="" "$sh" -c "$cmd" 2>/dev/null); rc=$?
-    if [ "$rc" = 0 ] && denies_missing "$out"; then ok "$name [$sh] CLAUDE_PROJECT_DIR empty: denies by name"
-    else bad "$name [$sh] CLAUDE_PROJECT_DIR empty: rc=$rc, no HOOK MISSING deny"; fi
-    out=$(printf '%s' "$PAYLOAD" | CLAUDE_PROJECT_DIR="$REPO" "$sh" -c "$cmd" 2>/dev/null)
-    if printf '%s' "$out" | grep -q 'HOOK MISSING'; then bad "$name [$sh] script present: still says HOOK MISSING (control)"
-    else ok "$name [$sh] script present: runs the real hook (control)"; fi
+# stub guards, one fixture per behaviour, each holding every guard name
+mkstub(){   # mkstub <kind> <name> <body>
+  mkdir -p "$FIX/$1/.claude/hooks"
+  printf '#!/bin/sh\n%s\n' "$3" > "$FIX/$1/.claude/hooks/$2"; chmod +x "$FIX/$1/.claude/hooks/$2"
+}
+stubs_for(){   # stubs_for <name>
+  mkstub exit127  "$1" 'cat >/dev/null; exit 127'
+  mkstub exit1    "$1" 'cat >/dev/null; exit 1'
+  mkstub deny1    "$1" "cat >/dev/null; printf '%s\\n' '$OWN_DENY'; exit 1"
+  mkstub allow    "$1" 'p=$(cat); printf '"'"'{"stub":"allow","got":%s}\n'"'"' "$p"'
+  mkstub silent   "$1" 'cat >/dev/null; exit 0'
+  mkstub owndeny  "$1" "cat >/dev/null; printf '%s\\n' '$OWN_DENY'; exit 0"
+  mkstub exit2    "$1" 'cat >/dev/null; printf '"'"'{"stub":"two"}\n'"'"'; echo "stub blocked" >&2; exit 2'
+}
+
+# behaviour <cmd> <name> <sh> <payload> <label>: every crash and pass arm for one command
+behaviour(){
+  local cmd="$1" name="$2" sh="$3" pl="$4" lab="$5" out rc code err
+  for code in 127 1; do
+    out=$(printf '%s' "$pl" | CLAUDE_PROJECT_DIR="$FIX/exit$code" "$sh" -c "$cmd" 2>/dev/null); rc=$?
+    if [ "$rc" = 0 ] && denies_crashed "$out" "$name" "$code"; then ok "$lab [$sh] guard exits $code: one HOOK CRASHED deny"
+    else bad "$lab [$sh] guard exits $code: rc=$rc, no single HOOK CRASHED deny (fails open)"; fi
   done
-  i=$((i+1))
+  out=$(printf '%s' "$pl" | CLAUDE_PROJECT_DIR="$FIX/deny1" "$sh" -c "$cmd" 2>/dev/null); rc=$?
+  if [ "$rc" = 0 ] && denies_crashed "$out" "$name" 1 && ! printf '%s' "$out" | grep -q 'STUB OWN DENY'; then
+    ok "$lab [$sh] guard prints its own deny then exits 1: one HOOK CRASHED deny, its output dropped"
+  else bad "$lab [$sh] guard prints its own deny then exits 1: rc=$rc, not one clean HOOK CRASHED deny"; fi
+  out=$(printf '%s' "$pl" | CLAUDE_PROJECT_DIR="$FIX/allow" "$sh" -c "$cmd" 2>/dev/null); rc=$?
+  if [ "$rc" = 0 ] && [ "$out" = "{\"stub\":\"allow\",\"got\":$pl}" ]; then ok "$lab [$sh] guard exits 0: its stdout passes through, payload reached it on stdin"
+  else bad "$lab [$sh] guard exits 0: rc=$rc, stdout or stdin not passed through"; fi
+  out=$(printf '%s' "$pl" | CLAUDE_PROJECT_DIR="$FIX/silent" "$sh" -c "$cmd" 2>/dev/null); rc=$?
+  if [ "$rc" = 0 ] && [ -z "$out" ]; then ok "$lab [$sh] guard exits 0 silently: nothing printed"
+  else bad "$lab [$sh] guard exits 0 silently: rc=$rc, printed [${out:0:60}]"; fi
+  out=$(printf '%s' "$pl" | CLAUDE_PROJECT_DIR="$FIX/owndeny" "$sh" -c "$cmd" 2>/dev/null); rc=$?
+  if [ "$rc" = 0 ] && [ "$out" = "$OWN_DENY" ]; then ok "$lab [$sh] guard denies itself, exit 0: its deny passes through"
+  else bad "$lab [$sh] guard denies itself, exit 0: rc=$rc, its deny did not pass through unchanged"; fi
+  err=$(printf '%s' "$pl" | CLAUDE_PROJECT_DIR="$FIX/exit2" "$sh" -c "$cmd" 2>&1 >/dev/null)
+  out=$(printf '%s' "$pl" | CLAUDE_PROJECT_DIR="$FIX/exit2" "$sh" -c "$cmd" 2>/dev/null); rc=$?
+  if [ "$rc" = 2 ] && [ "$out" = '{"stub":"two"}' ] && [ "$err" = "stub blocked" ]; then ok "$lab [$sh] guard exits 2: exit 2, stdout and stderr pass through"
+  else bad "$lab [$sh] guard exits 2: rc=$rc, exit 2 or its output did not pass through"; fi
+}
+
+# one-fault mutants of the crash-deny shape: label, then a jq sub() program
+MUTANTS=(
+  "crash branch removed"        'sub("esac; printf '"'"'%s\\\\n'"'"' '"'"'\\{\"hookSpecificOutput\":[^}]*HOOK CRASHED.*?\\}\\}'"'"'; else"; "esac; else")'
+  "exit captured wrongly: r=0"  'sub("r=\\$\\?"; "r=0")'
+  "exit captured wrongly: || :" 'sub("o=\\$\\(\"\\$h\"\\); r="; "o=$(\"$h\") || :; r=")'
+  "exit 1 passed through"       'sub("case \\$r in 0\\|2\\)"; "case $r in 0|1|2)")'
+  "exit 2 turned into 0"        'sub("exit \\$r;;"; "exit 0;;")'
+  "payload not on stdin"        'sub("o=\\$\\(\"\\$h\"\\)"; "o=$(\"$h\" </dev/null)")'
+)
+
+total=0
+for SETTINGS in "${FILES[@]}"; do
+  N=$(jq '[.hooks.PreToolUse[]?.hooks[]?.command] | length' "$SETTINGS")
+  [ "${N:-0}" -gt 0 ] || { echo "project-guards-selftest: no PreToolUse commands in $SETTINGS, nothing tested"; exit 2; }
+  total=$((total+N))
+  echo "settings: $SETTINGS ($N PreToolUse command(s))"
+  i=0
+  while [ "$i" -lt "$N" ]; do
+    cmd=$(jq -r "[.hooks.PreToolUse[]?.hooks[]?.command][$i]" "$SETTINGS")
+    matcher=$(jq -r "[.hooks.PreToolUse[]? | .matcher as \$m | .hooks[]? | \$m][$i] // \"\"" "$SETTINGS")
+    name=$(printf '%s' "$cmd" | grep -oE '\.claude/hooks/[A-Za-z0-9._-]+' | head -1 | sed 's#.*/##')   # the first one: the fix texts name it again
+    case "$matcher" in Bash|'') PAYLOAD="$PAYLOAD_BASH" ;; *) PAYLOAD="$PAYLOAD_WRITE" ;; esac
+    lab="$(basename "$SETTINGS"):$name"
+    stubs_for "$name"
+    if [ "$PARITY_OK" = 1 ]; then
+      v=$(parity "$cmd")
+      if [ "$v" = ok ]; then ok "$lab parity: the manifest's guard shape, byte for byte"
+      else bad "$lab parity: $v"; fi
+    else bad "$lab parity: not tested, the parity control failed above"; fi
+    for sh in sh bash zsh; do
+      command -v "$sh" >/dev/null || { bad "$lab [$sh]: shell not found"; continue; }
+      out=$(printf '%s' "$PAYLOAD" | CLAUDE_PROJECT_DIR="$FIX/missing" "$sh" -c "$cmd" 2>/dev/null); rc=$?
+      if [ "$rc" = 0 ] && denies_missing "$out"; then ok "$lab [$sh] missing script: denies by name"
+      else bad "$lab [$sh] missing script: rc=$rc, no HOOK MISSING deny (fails open)"; fi
+      out=$(printf '%s' "$PAYLOAD" | CLAUDE_PROJECT_DIR="" "$sh" -c "$cmd" 2>/dev/null); rc=$?
+      if [ "$rc" = 0 ] && denies_missing "$out"; then ok "$lab [$sh] CLAUDE_PROJECT_DIR empty: denies by name"
+      else bad "$lab [$sh] CLAUDE_PROJECT_DIR empty: rc=$rc, no HOOK MISSING deny"; fi
+      out=$(printf '%s' "$PAYLOAD" | CLAUDE_PROJECT_DIR="$REPO" "$sh" -c "$cmd" 2>/dev/null)
+      if printf '%s' "$out" | grep -qE 'HOOK (MISSING|CRASHED)'; then bad "$lab [$sh] script present: the real hook did not run cleanly (control)"
+      else ok "$lab [$sh] script present: runs the real hook (control)"; fi
+      behaviour "$cmd" "$name" "$sh" "$PAYLOAD" "$lab"
+    done
+    # mutants: only for a command already in the crash-deny shape (a master string fails above)
+    case "$cmd" in
+      *'o=$("$h"); r=$?'*)
+        m=0
+        while [ "$m" -lt "${#MUTANTS[@]}" ]; do
+          mlab="${MUTANTS[$m]}"; prog="${MUTANTS[$((m+1))]}"; m=$((m+2))
+          mut=$(jq -rn --arg c "$cmd" "\$c | $prog" 2>/dev/null) || mut=""
+          if [ "$mut" = "$cmd" ] || [ -z "$mut" ]; then bad "$lab mutant '$mlab': the mutation did not apply, nothing tested"; continue; fi
+          for sh in sh bash zsh; do
+            QUIET=1; QFAILS=0
+            behaviour "$mut" "$name" "$sh" "$PAYLOAD" "$lab"
+            QUIET=0
+            if [ "$QFAILS" -gt 0 ]; then ok "$lab mutant '$mlab' [$sh]: caught by $QFAILS behaviour arm(s)"
+            else bad "$lab mutant '$mlab' [$sh]: no behaviour arm caught it"; fi
+          done
+          if [ "$PARITY_OK" != 1 ]; then bad "$lab mutant '$mlab': parity not tested, the parity control failed above"
+          elif [ "$(parity "$mut")" != ok ]; then ok "$lab mutant '$mlab': caught by the parity arm"
+          else bad "$lab mutant '$mlab': the parity arm passed it"; fi
+        done ;;
+    esac
+    i=$((i+1))
+  done
 done
 
-echo "project-guards-selftest: $PASS passed, $FAIL failed (fixture: $FIX)"
+echo "project-guards-selftest: $PASS passed, $FAIL failed, $total command(s) in ${#FILES[@]} file(s) (fixture: $FIX)"
 [ "$FAIL" -eq 0 ]
