@@ -1548,12 +1548,13 @@ selftest() {
     && ok "30g exit 3: --dry-run prints the not-valid line with the reader's reason, rc 1, no argv" || bad "30g not valid dry run" "rc=$rc out=${out:0:60} err=$(<"$root/err30")"
   eg_launch m3 "$eg/m3:$noegp"
   [[ $rc -eq 1 && ! -e "$root/launched30.m3" ]] && ok "30h exit 3: a real launch launches nothing, rc 1" || bad "30h not valid launch" "rc=$rc $out"
-  # 30i-j a reader that breaks its own one-line promise on exit 3 still REFUSES (the text is
-  #     then not one line: pj passes on what it was given, no logic of its own).
+  # 30i-j a reader that breaks its own one-line promise on exit 3 still REFUSES, and pj takes
+  #     the FIRST stdout line only (W-20261002-A49; contract 48eb3d1 section 5).
   eg_dry "$eg/m3empty:$noegp" --dry-run
   [[ $rc -eq 1 && -z "$out" && "$(<"$root/err30")" == "This project has an engage move marker that is not valid: . Run engage-go cutover check for details." ]] && ok "30i exit 3 with no stdout still refuses, rc 1" || bad "30i empty reason" "rc=$rc err=$(<"$root/err30")"
   eg_dry "$eg/m3multi:$noegp" --dry-run
-  [[ $rc -eq 1 && -z "$out" ]] && ok "30j exit 3 with two stdout lines still refuses, rc 1" || bad "30j two lines" "rc=$rc out=${out:0:60}"
+  [[ $rc -eq 1 && -z "$out" && "$(<"$root/err30")" == "This project has an engage move marker that is not valid: first line. Run engage-go cutover check for details." && "$(wc -l < "$root/err30" | tr -d ' ')" == 1 ]] \
+    && ok "30j exit 3 with two stdout lines refuses with the FIRST line only, one line, rc 1 (A49)" || bad "30j two lines" "rc=$rc out=${out:0:60} err=$(<"$root/err30")"
   # 30k-o every other answer is today's pj: the SAME argv and the SAME stderr as no engage-go.
   m30=""
   for l30 in m1 m2 mkill mnox; do
@@ -1564,6 +1565,91 @@ selftest() {
   [[ -e "$eg/m1/ran" && -e "$eg/mkill/ran" ]] && ok "30l control: the exit-1 and the killed fakes really ran" || bad "30l fakes ran" "m1=$([[ -e "$eg/m1/ran" ]] && echo y) mkill=$([[ -e "$eg/mkill/ran" ]] && echo y)"
   eg_launch m1 "$eg/m1:$noegp"
   [[ $rc -eq 0 && -e "$root/launched30.m1" ]] && ok "30m control: exit 1 launches (the fake launch file works, so 30e and 30h measure something)" || bad "30m not moved launch" "rc=$rc $out"
+  # 31 THE 3 S LIMIT (W-20261002-A48; contract 48eb3d1 "The time limit"). The fakes are bash, and
+  #    every process they leave behind carries a marker unique to this run in its argv (exec -a),
+  #    so pgrep counts only this selftest's. Each fake records "<pid> <pgid> <parent's pgid>".
+  zmodload zsh/datetime 2>/dev/null
+  local mk31="pjst${root:t}" tl31 e31 n31 l31 me31 nop31="$root/noperl" d31 noperlp perl31="$(whence -p perl)"
+  local -a r31 nopl31 all31
+  tl31='Could not check the engage move marker: engage-go did not answer in 3 s. Run `engage-go cutover check` to see why; `engage` and `c` still start.'
+  mk_eg31() {   # mk_eg31 <name> <bash line>...
+    (( $# >= 2 )) || { bad "31 mk_eg31 needs a name and a body" "$*"; return 1; }
+    local dir="$eg/$1"; shift
+    mkdir -p "$dir"
+    { print -r -- '#!/bin/bash'
+      print -r -- "echo \"\$\$ \$(ps -o pgid= -p \$\$ | tr -d ' ') \$(ps -o pgid= -p \$PPID | tr -d ' ')\" > '$dir/ran'"
+      print -rl -- "$@"
+    } > "$dir/engage-go"
+    chmod +x "$dir/engage-go"
+  }
+  mk_eg31 mhang "( exec -a ${mk31}-child sleep 30 ) &" "echo 'not moved: about to hang'" "exec -a ${mk31}-parent sleep 30"
+  mk_eg31 mtrap "trap '' TERM" "( exec -a ${mk31}-child sleep 30 ) &" "exec -a ${mk31}-parent sleep 30"
+  mk_eg31 mlate0 "sleep 2.5" "echo 'moved: proj30 (2026-10-02)'" "exit 0"
+  mk_eg31 mlate1 "sleep 2.5" "echo 'not moved: late'" "exit 1"
+  mk_eg31 mleave "( exec -a ${mk31}-child sleep 30 ) &" "echo 'not moved: leaves a child'" "exit 1"
+  eg_left() { pgrep -f "$mk31" 2>/dev/null | wc -l | tr -d ' '; }
+  eg_gone() { local i; for i in {1..20}; do [[ "$(eg_left)" == 0 ]] && break; sleep 0.05; done; eg_left; }
+  eg_hang() {   # eg_hang <fake> <PATH>: pj --dry-run in the background; sets rc e31 n31 l31
+    local t i; print -r -- none > "$eg/$1/ran"
+    t=$EPOCHREALTIME
+    ( builtin cd "$d30" && ZDOTDIR="$root/zdot" PATH="$2" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --dry-run >"$root/out31" 2>"$root/err31" ) &
+    local pj=$!
+    for i in {1..40}; do [[ "$(<"$eg/$1/ran")" != none ]] && break; sleep 0.05; done
+    sleep 0.3; n31="$(eg_left)"
+    wait $pj; rc=$?; e31=$(( EPOCHREALTIME - t ))
+    l31="$(eg_gone)"
+  }
+  eg_hang mhang "$eg/mhang:$noegp"
+  [[ $rc -eq 1 && ! -s "$root/out31" && "$(<"$root/err31")" == "$tl31" && "$(wc -l < "$root/err31" | tr -d ' ')" == 1 ]] \
+    && ok "31a a hang: the time-limit line, one line, rc 1, no argv" || bad "31a hang refusal" "rc=$rc err=$(<"$root/err31")"
+  (( e31 >= 2.9 && e31 <= 5.0 )) && ok "31b   refused in $(printf %.2f $e31) s (bound 2.9 to 5.0)" || bad "31b hang time" "$(printf %.2f $e31) s"
+  [[ "$n31" -ge 2 && "$l31" == 0 ]] && ok "31c   control: $n31 marked processes while it ran (parent and child), none left after" || bad "31c hang leftovers" "during=$n31 after=$l31"
+  r31=(${=$(<"$eg/mhang/ran")}); me31="$(ps -o pgid= -p $$ | tr -d ' ')"
+  [[ ${#r31} == 3 && "$r31[1]" == "$r31[2]" && "$r31[2]" != "$r31[3]" && "$r31[3]" == "$me31" ]] \
+    && ok "31d engage-go leads its own process group ($r31[2]), never pj's ($r31[3])" || bad "31d process group" "ran=${r31[*]} pj group=$me31"
+  eg_hang mtrap "$eg/mtrap:$noegp"
+  [[ $rc -eq 1 && "$(<"$root/err31")" == "$tl31" && "$n31" -ge 2 && "$l31" == 0 ]] && (( e31 <= 5.0 )) \
+    && ok "31e a fake that ignores TERM: refused in $(printf %.2f $e31) s, and KILL leaves none of its $n31 processes" || bad "31e TERM ignored" "rc=$rc t=$e31 during=$n31 after=$l31 $(<"$root/err31")"
+  # 31f a normal exit that leaves a child in engage-go's group: pj sweeps the group (only when
+  #     pgrep -g still finds members), so nothing is left. Control: run alone, the fake does leave one.
+  ( PATH="$noegp" "$eg/mleave/engage-go" cutover check >/dev/null 2>&1 ); sleep 0.3; n31="$(eg_left)"; pkill -KILL -f "$mk31" 2>/dev/null; l31="$(eg_gone)"
+  me31=$EPOCHREALTIME; eg_dry "$eg/mleave:$noegp" --dry-run; me31=$(( EPOCHREALTIME - me31 )); e31="$(eg_gone)"
+  [[ "$n31" -ge 1 && "$l31" == 0 && $rc -eq 0 && "$out" == "$base30" && "$e31" == 0 ]] && (( me31 < 2.5 )) \
+    && ok "31f exit 1 leaving a child: today's argv in $(printf %.2f $me31) s, its group swept (control: alone it leaves $n31)" || bad "31f leftover child" "alone=$n31 cleaned=$l31 rc=$rc after=$e31 t=$me31"
+  # 31g an answer at 2.5 s is an answer, not a timeout.
+  eg_dry "$eg/mlate0:$noegp" --dry-run
+  [[ $rc -eq 1 && "$(<"$root/err30")" == "This project moved to engage. Type engage." ]] && ok "31g exit 0 at 2.5 s: the moved line, not the time limit" || bad "31g late moved" "rc=$rc err=$(<"$root/err30")"
+  eg_dry "$eg/mlate1:$noegp" --dry-run
+  [[ $rc -eq 0 && "$out" == "$base30" ]] && ok "31h exit 1 at 2.5 s: today's argv" || bad "31h late not moved" "rc=$rc err=$(<"$root/err30")"
+  # 31i NO PERL: every PATH folder holding a perl is replaced by a copy of links without it. The
+  #     fallback kills the pid and its descendants; the refusal is the same.
+  mkdir -p "$nop31"
+  for d31 in ${(s.:.)noegp}; do
+    if [[ -n $d31/perl*(N[1]) ]]; then
+      all31=($d31/*(N)); all31=(${all31:#*/perl*})
+      mkdir -p "$nop31/${#nopl31}"; ln -s $all31 "$nop31/${#nopl31}/" 2>/dev/null
+      nopl31+=("$nop31/${#nopl31}")
+    else nopl31+=("$d31"); fi
+  done
+  noperlp="${(j.:.)nopl31}"
+  [[ -z "$(ZDOTDIR="$root/zdot" PATH="$noperlp" zsh -c 'whence -p perl')" && -n "$perl31" ]] \
+    && ok "31i control: the no-perl PATH has no perl, the selftest's has one" || bad "31i no-perl PATH" "$(ZDOTDIR="$root/zdot" PATH="$noperlp" zsh -c 'whence -p perl')"
+  eg_hang mhang "$eg/mhang:$noperlp"
+  [[ $rc -eq 1 && "$(<"$root/err31")" == "$tl31" && "$n31" -ge 2 && "$l31" == 0 ]] && (( e31 >= 2.9 && e31 <= 5.0 )) \
+    && ok "31j no perl: a hang still refuses, in $(printf %.2f $e31) s, none of its $n31 processes left" || bad "31j no perl hang" "rc=$rc t=$e31 during=$n31 after=$l31 $(<"$root/err31")"
+  # 31k Ctrl-C during the wait: INT to pj's whole foreground group, as a terminal sends it. pj
+  #     starts in a group of its own here, with INT restored (a background job ignores it).
+  print -r -- none > "$eg/mhang/ran"
+  ZDOTDIR="$root/zdot" PATH="$eg/mhang:$noegp" PJ_PROMPT_OUT="$root/prompt.md" \
+    "$perl31" -e 'chdir shift; $SIG{INT}="DEFAULT"; setpgrp(0,0); exec @ARGV' "$d30" "$SELF" --dry-run >"$root/out31" 2>"$root/err31" &
+  local pj31=$!
+  for d31 in {1..40}; do [[ "$(<"$eg/mhang/ran")" != none ]] && break; sleep 0.05; done
+  sleep 0.3; n31="$(eg_left)"
+  e31=$EPOCHREALTIME; kill -INT -- -$pj31 2>/dev/null; wait $pj31; rc=$?; e31=$(( EPOCHREALTIME - e31 ))
+  l31="$(eg_gone)"
+  [[ $rc -ne 0 && "$n31" -ge 2 && "$l31" == 0 ]] && (( e31 < 1.5 )) \
+    && ok "31k Ctrl-C during the wait: pj ends in $(printf %.2f $e31) s and none of the $n31 engage-go processes is left" || bad "31k Ctrl-C" "rc=$rc t=$e31 during=$n31 after=$l31"
+  pkill -KILL -f "$mk31" 2>/dev/null
   print -- "pj selftest: $pass passed, $fail failed"
   [[ $fail -eq 0 ]]
 }
@@ -1683,19 +1769,75 @@ run_with_relaunch() {
   return $rc
 }
 
-# --- a project moved to engage (W-20261001-A67) ---------------------------------------
-# Before anything else pj does: engage's docs/CUTOVER.md section 5 (branch w29-cutover
-# 7d637e8), copied word for word. pj asks engage-go and never reads the marker itself, so
-# the logic lives in engage. Exit 0 moved and exit 3 a marker that is not valid both
-# refuse, one line on stderr, exit 1, nothing launched; exit 1, any other code, or no
-# engage-go: pj runs exactly as today. --selftest alone skips it: it answers every arm
-# with its own fake engage-go, so it runs the same in a moved project (selftest arm 30).
+# --- a project moved to engage (W-20261001-A67, A48, A49) -----------------------------
+# Before anything else pj does: engage's docs/CUTOVER.md section 5 (engage master 48eb3d1).
+# pj asks engage-go and never reads the marker itself, so the logic lives in engage. Exit 0
+# moved and exit 3 a marker that is not valid both refuse, one line on stderr, exit 1,
+# nothing launched; exit 1, any other code, or no engage-go: pj runs exactly as today.
+# --selftest alone skips it: it answers every arm with its own fake engage-go, so it runs the
+# same in a moved project (selftest arms 30 and 31).
+#
+# THE 3 S LIMIT (A48, "The time limit"): a hung engage-go must never hang pj, so the call runs
+# in the background and is killed at 3 s, and a timeout REFUSES (fail closed) with a line that
+# names the way out. No GNU timeout here (macOS has none by default). A zsh script cannot
+# give a child a process group of its own (job control stays off without a terminal,
+# measured 2 Oct), so perl's setpgrp starts engage-go as the leader of a new group, and the
+# kill takes that whole group, never pj's (arm 31d). With no perl, the fallback kills the pid
+# and the descendants it can see, which a child that outlived its parent escapes; the refusal
+# is the same (arm 31j). Ctrl-C during the wait: the INT reaches pj's group, not engage-go's,
+# so the wait traps INT, TERM and HUP and kills engage-go's group first (arm 31k).
+# pj_engage_check prints engage-go's stdout and returns its exit code, or 124 past 3 s.
+pj_engage_check() {
+  setopt localoptions no_bg_nice no_notify
+  zmodload zsh/datetime zsh/zselect 2>/dev/null
+  local pid grp=0 t0="${EPOCHREALTIME-}" n=0 rc
+  if command -v perl >/dev/null 2>&1; then
+    perl -e 'setpgrp(0,0); exec @ARGV or exit 127' engage-go cutover check & pid=$!; grp=1
+  else
+    engage-go cutover check & pid=$!
+  fi
+  trap "_pj_engage_kill $pid $grp; exit 130" INT TERM HUP
+  while kill -0 $pid 2>/dev/null; do
+    if [[ -n "$t0" ]]; then (( EPOCHREALTIME - t0 >= 3 )) && break
+    else (( ++n > 300 )) && break; fi
+    zselect -t 1 2>/dev/null || sleep 0.01
+  done
+  if kill -0 $pid 2>/dev/null; then _pj_engage_kill $pid $grp; return 124; fi
+  wait $pid; rc=$?
+  # A child engage-go left behind in its group is swept too (arm 31f), but only while the
+  # group still has members (kill -0 on the group), so a free group number is never signalled.
+  (( grp )) && kill -0 -- -$pid 2>/dev/null && _pj_engage_kill $pid 1
+  return $rc
+}
+# _pj_engage_kill <pid> <1|0>: TERM, up to 0.3 s for it to go, then KILL; 1 = the pid's whole
+# process group, 0 = the pid and its descendants, listed BEFORE the TERM (a child whose parent
+# dies first moves to init, where pgrep -P no longer finds it) and listed again before the KILL.
+_pj_engage_kill() {
+  local sig i w; local -a k=($1)
+  for sig in TERM KILL; do
+    if (( $2 )); then
+      kill -0 -- -$1 2>/dev/null && kill -$sig -- -$1 2>/dev/null
+    else
+      i=1; while (( i <= $#k )); do k+=(${(f)"$(pgrep -P $k[i] 2>/dev/null)"}); i=$((i + 1)); done
+      kill -$sig $k 2>/dev/null
+    fi
+    [[ $sig == KILL ]] && break
+    for w in {1..30}; do
+      if (( $2 )); then kill -0 -- -$1 2>/dev/null || break; else kill -0 $k 2>/dev/null || break; fi
+      zselect -t 1 2>/dev/null || sleep 0.01
+    done
+  done
+}
 if [[ "${1:-}" != --selftest ]]; then
 if command -v engage-go >/dev/null 2>&1; then
-  why="$(engage-go cutover check 2>/dev/null)"; rc=$?
+  # pj runs this call under its 3 s limit; a timeout refuses (see "The time limit" below). This
+  # block is executed as written by cmd/engage/cutover_test.go, so it stays runnable zsh.
+  why="$(pj_engage_check 2>/dev/null)"; rc=$?
+  why="${why%%$'\n'*}"   # first line only (A49)
   case $rc in
     0) print -u2 -r -- "This project moved to engage. Type engage."; exit 1 ;;
     3) print -u2 -r -- "This project has an engage move marker that is not valid: ${why#not valid: }. Run engage-go cutover check for details."; exit 1 ;;
+    124) print -u2 -r -- 'Could not check the engage move marker: engage-go did not answer in 3 s. Run `engage-go cutover check` to see why; `engage` and `c` still start.'; exit 1 ;;
   esac
 fi
 fi
