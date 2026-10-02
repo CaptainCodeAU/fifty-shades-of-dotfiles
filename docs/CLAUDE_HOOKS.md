@@ -56,7 +56,10 @@ an unregistered hook fails the audit exactly like a missing symlink does.
 1. Put the script in `home/.claude/hooks/`.
 2. Add an entry to `settings/claude/hooks.json`.
 3. `./install.sh --stow-only`.
-4. Restart Claude Code (or open `/hooks`) so it re-reads settings.
+4. Restart each running session so it re-reads settings. Do not rely on `/hooks`: in a
+   pj session it lists the user file, not the `--settings` file pj loads, and a running
+   session does not re-read a changed `--settings` file (W-20261002-A70; engage W39 measured
+   it on 2.1.287). Check a pj session's file with `claude-hooks-sync --target project --check`.
 
 ```json
 {

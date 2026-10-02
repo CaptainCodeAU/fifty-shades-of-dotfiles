@@ -428,6 +428,27 @@ cc-claude-mods 112 to 190). Most of the dotfiles card is still the own-items lis
 variable assignments and no file, and awk then read stdin, so `--session` hung on any open
 stdin. Fixed, with an arm that feeds it a stdin that never closes.
 
+## In a project moved to engage, writes are refused (W-20261001-A69, 2026-10-02)
+
+Before any write verb, open-items asks `engage-go cutover check` in the folder it was started
+from (contract: engage `docs/CUTOVER.md`, sections 4, 5 and "The time limit"). The guarded verbs
+are `add close decline park reopen set init regen migrate supersede watch check tick pass move
+route seen checks-run`. Reads (the listing, `--all`, `--project`, `show`, `get`, `--where`,
+`--help`, `--selftest`) never ask and behave as before.
+
+| engage-go says                               | open-items                                                                                                           |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| exit 0, moved                                | refuses, exit 2: "...moved to engage, so open-items <verb> wrote nothing; record it in engage with engage add"       |
+| exit 3, marker not valid                     | refuses, exit 2, with the reader's reason (first line only, W-20261002-A49)                                          |
+| no answer in 3 s                             | refuses, exit 2: "...engage-go did not answer in 3 s..." (W-20261002-A48); engage-go's whole process group is killed |
+| exit 1, any other code, or engage-go missing | writes as before                                                                                                     |
+
+The check is fail-closed on a hang and on a bad marker, by the contract. Known gap: the check
+runs in the CURRENT folder, so a write aimed at another project's drawer (`add --for`,
+`--project` on watch/check/tick/move/supersede, `route --to`) is judged by where you stand,
+not by the target (W-20261002-A47). Proven end to end on a real marker on 2026-10-02
+(drawer: `engage-move/2026-10-02/E2E-REPORT.md`).
+
 ## The design point, borrowed from census and decided
 
 AN EMPTY RESULT IS THE ANSWER THAT LIES. "No open items" reads identically to "the drawer

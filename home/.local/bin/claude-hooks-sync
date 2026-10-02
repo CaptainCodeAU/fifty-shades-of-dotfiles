@@ -621,5 +621,5 @@ fi
 if [ "$stuck" -gt 0 ]; then
     printf '%s  ! %d backup(s) could NOT be removed and are still on disk (the trash call refused; this happens inside a sandbox). Prune them from a terminal.%s\n' "$Y" "$stuck" "$N" >&2
 fi
-printf '      %sRestart Claude Code (or open /hooks) to load them.%s\n' "$D" "$N"
+printf '      %sRestart each running session to load them (a running session does not re-read its settings; /hooks shows the wrong file in pj, W-20261002-A70).%s\n' "$D" "$N"
 exit 0
