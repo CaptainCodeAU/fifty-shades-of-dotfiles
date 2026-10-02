@@ -2423,7 +2423,7 @@ check_flags "${1:-}"
 # sleeps 10 x 10 ms then 58 x 50 ms (3.0 s of sleep, about 70 forks; measured 4.1 s at 300 x 10 ms).
 engage_kill(){                  # engage_kill <pid> <1: its group | 0: it and its descendants>
   local sig w i c
-  EG_K=("$1")
+  EG_K=( "$1" )
   for sig in TERM KILL; do
     if [ "$2" = 1 ]; then
       kill -0 -- "-$1" 2>/dev/null && kill -"$sig" -- "-$1" 2>/dev/null
