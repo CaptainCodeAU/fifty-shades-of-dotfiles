@@ -21,3 +21,5 @@
 !plugins/
 !plugins/window-title-fix/
 !plugins/window-title-fix/*
+!plugins/speak-selection/
+!plugins/speak-selection/*
