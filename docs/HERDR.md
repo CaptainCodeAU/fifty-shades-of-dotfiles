@@ -853,11 +853,55 @@ the OS is looking.
 The bridge is the clipboard. Since 2026-10-02 a drag no longer copies by itself:
 `copy_on_select = false` in herdr, and Claude Code's own **Copy on select** is
 off in `/config` (in a Claude pane the drag is Claude Code's selection, not
-herdr's, and only Claude Code's setting governs it). Copy with `Ctrl+C`, then
-press the key; `Cmd+C` goes to iTerm2's menu, which cannot see either selection
-and offers to disable mouse reporting (decline it). The bindings in `config.toml`
-(`ctrl+alt+backtick` and `prefix+backtick`) run `speak-clipboard --toggle`,
-which:
+herdr's, and only Claude Code's setting governs it). `Cmd+C` goes to iTerm2's
+menu, which cannot see either selection and offers to disable mouse reporting
+(decline it).
+
+**In a Claude pane, highlight and press the key; the clipboard survives**
+(since 2026-10-02). Both bindings in `config.toml` (`ctrl+alt+backtick` and
+`prefix+backtick`) are `type = "plugin_action"` running
+`dotfiles.speak-selection.speak` (`plugins/speak-selection/`). Only a plugin
+action is told which pane is focused and what runs in it
+(`HERDR_PLUGIN_CONTEXT_JSON`); herdr cannot hand over the text itself, because
+the highlight belongs to Claude Code (`selected_text` was absent in 4 of 4
+presses). So the plugin routes:
+
+```
+key press -> speak.sh reads the context
+   focused_pane_agent == "claude" -> speak-clipboard --toggle --from-pane <id>
+   anything else (or unreadable)  -> speak-clipboard --toggle   (no keys sent)
+
+speak-clipboard --toggle --from-pane <id>
+   1. speaking?  -> stop, nothing else (clipboard untouched)
+   2. speak-clipboard-grab, ONE process:
+        snapshot every clipboard item and type (in memory)
+        herdr pane send-keys <id> ctrl+shift+c   (Claude Code's copy key)
+        poll changeCount every 10 ms, up to 500 ms
+          changed   -> read text, RESTORE, hand text over
+          unchanged -> nothing highlighted: speak the clipboard as before
+        error after the snapshot -> restore anyway (finally)
+        guard 1 s: a late second write of the SAME text is restored again
+   3. clean and speak, exactly as below
+```
+
+The guard exists because Claude Code 2.1.287 writes the clipboard twice: with
+`pbcopy`, and with an OSC 52 escape that herdr forwards to iTerm2 (read in its
+bundled source, 2026-10-02). A later change to OTHER text is someone's fresh
+copy and is kept. Shell and other-agent panes never get `Ctrl+Shift+C`: it can
+arrive as `^C`. With nothing highlighted, copy with `Ctrl+C`, then press the key.
+
+MEASURED 2026-10-02, 8 silent presses each, key to speaker launch (first audio
+adds the same ~0.3 s for all three): today's clipboard path 29-32 ms; a
+selection, with an injected `pbcopy` standing in for Claude's copy, 100-121 ms;
+nothing highlighted 589-619 ms (it waits out the 500 ms timeout). The
+clipboard is swapped for 1.4-1.6 ms after the change is seen, plus up to one
+10 ms poll. Claude's own copy latency is not measured yet: the log's `wait_ms`
+records it on every press, and `--copy-timeout` should be tuned from it.
+`speak-clipboard-selftest` proves 15 arms (every clipboard kind restored, the
+error paths, the guard, stop-while-speaking, two fast presses) with Gavin's
+clipboard held in memory and digest-checked; run it outside the sandbox.
+
+`speak-clipboard --toggle` itself (every pane's path, and step 3 above):
 
 1. strips the terminal furniture before speaking — ANSI escapes, box drawing,
    Nerd Font glyphs, rule runs — and maps curly quotes, dashes, and accented
@@ -908,8 +952,12 @@ stop and was dropped the same evening). The proper fix is in say2's own
 playback loop.
 
 `~/.local/state/herdr/speak-clipboard.log` keeps one metadata line per press
-(mode, outcome, character count): a new line means the key reached herdr; no
-line means the key or the spawn is at fault.
+(mode, outcome, character count, `source=selection|clipboard`, and for a
+Claude pane the grab's `snap_ms wait_ms swap_ms total_ms` and `press_ms`): a
+new line means the key reached herdr; no line means the key or the spawn is at
+fault (`herdr plugin log list --plugin dotfiles.speak-selection` then says
+whether the action ran). A `mode=guard` line means a late second copy was
+caught and the clipboard restored again.
 
 Copy mode feeds it too — `prefix+[`, `v`, `y`, then speak — which matters when
 the text is a screen away from the pointer.
