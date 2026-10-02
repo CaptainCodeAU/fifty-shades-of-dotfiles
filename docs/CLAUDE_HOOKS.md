@@ -154,14 +154,29 @@ message. No guard here denies by exit 2; a guard with a shell syntax error does.
 Cost: no difference measurable at load average 85 to 100. Around the real delete
 guard, 30 interleaved runs each, the median was 714 ms new against 701 ms old.
 
-## Why add-only
+## What the sync may change
 
-`claude-hooks-sync` never removes an entry and never edits one. A registration
-pointing at a hook this repo has retired is left for a human.
+`claude-hooks-sync` adds missing entries, and it makes exactly two kinds of edit
+to an existing one (W-20260924-A76, 2026-09-25):
 
-The reason is blast radius. `settings.json` is not ours; an installer that can
-delete from it is an installer that can lose your MCP servers. Pruning was
-offered and deliberately declined on 2026-09-05.
+1. **Upgrade in place.** An entry whose command is one of a manifest entry's
+   `legacy_commands` is replaced by that entry's current `command`, in the same
+   event, group and position.
+2. **Remove a retired entry.** An entry whose command is in the manifest's
+   `retired` list is removed.
+
+**How it recognises its own entries:** by exact string. A command it touches
+must equal, byte for byte, a string the manifest names (a current `command`, a
+`legacy_commands` string or a `retired` string). Anything else is never edited
+and never removed, so an entry you add by hand is safe from it.
+`claude-hooks-sync-selftest` arm 6 ("the foreign group is left alone") pins
+that, and on 2026-10-02 a real install on a copy left a foreign entry
+byte-identical (W-20261002-A16).
+
+It never prunes an entry it does not know. The reason is blast radius.
+`settings.json` is not ours; an installer that can delete what it does not
+recognise is an installer that can lose your MCP servers. Pruning unknown
+entries was offered and deliberately declined on 2026-09-05.
 
 ## Why jq is safe here (measured, not assumed)
 
@@ -417,7 +432,7 @@ BOTH ways, so a filter that hid a deniable command fails an arm.
 any alias it meets; the rules classify that expansion as zsh would.
 
 ```sh
-~/.claude/hooks/enforce-no-permanent-delete.sh --selftest   # 268 arms, classifier arms run twice
+~/.claude/hooks/enforce-no-permanent-delete.sh --selftest   # last line prints the live count: "del-guard selftest: N passed, M failed"; classifier arms run twice
 ~/.claude/hooks/enforce-no-permanent-delete.sh --mutants    # about 8 min: removes each #M: line
 ~/.claude/hooks/enforce-no-permanent-delete.sh --classify '<command>' [cwd]
 ```
