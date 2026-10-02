@@ -269,7 +269,7 @@ guard would refuse; the convention hooks only insert `uv run`, `pnpm`,
 ~/.claude/hooks/enforce-pnpm.sh --selftest            # 56 arms
 .claude/hooks/enforce-no-cd.sh --selftest             # 64 arms (this repo only)
 .claude/hooks/enforce-builtin.sh --selftest           # 44 arms (this repo only)
-.claude/hooks/project-guards-selftest                 # 27 arms: a missing guard denies (this repo only)
+.claude/hooks/project-guards-selftest                 # missing, crash, parity, mutant arms (this repo only)
 ~/.claude/hooks/validate-bash.sh --selftest           # 113 arms (29 function, 84 payload)
 CONV_HOOK_UNDER_TEST=<other copy> <hook> --selftest   # same arms, another copy
 VB_HOOK_UNDER_TEST=<other copy> validate-bash.sh --selftest
@@ -277,16 +277,26 @@ CONV_PAYLOAD_FILE=<captured payload> <hook> --selftest   # arms on a real envelo
 ```
 
 This repo's three PreToolUse guards (`enforce-no-cd.sh`, `enforce-builtin.sh`,
-`protect-files.sh`) are registered in `.claude/settings.json` through the
-`if [ -x "$h" ]` wrapper the manifest guards used before D-20261002-A01
-(W-20260925-A28, 2026-09-25). They have no crash branch yet, so one that starts and
-then crashes still fails open; `pj-health`'s `hook-fail-open` row names them. Until
-then they were bare paths: a missing script exited 127, which Claude Code treats as a
-non-blocking error, so the guard stopped guarding without a word. Now a missing script,
-or an empty `CLAUDE_PROJECT_DIR`, denies every call it covers by name. The fix is a
-`git checkout` of the script from your own terminal. `project-guards-selftest` runs every
-PreToolUse command in that file under sh, bash and zsh. Against the old bare form it
-fails 18 of 27 arms.
+`protect-files.sh`) are registered in `.claude/settings.json` (and `protect-files.sh`
+in `.claude/settings.minimal.json`) in the manifest's crash-deny guard shape
+(D-20261002-A01, W-20261002-A20, 2026-10-02), with `$CLAUDE_PROJECT_DIR` in the path.
+A missing script, or an empty `CLAUDE_PROJECT_DIR`, denies every call it covers by
+name; a guard that starts and exits anything but 0 or 2 is one HOOK CRASHED deny. The
+fix is a `git checkout` of the script from your own terminal. A hang past the timeout
+is not covered (W-20261002-A17).
+
+Each string is a copy, not generated, so `project-guards-selftest` holds them to the
+manifest. For every PreToolUse command in both files, under sh, bash and zsh, it runs
+the missing and crash arms against stub guards and the real hook as the control, then
+a parity arm: the manifest's `enforce-no-permanent-delete.sh` command, rendered for the
+project path and fix texts, must equal the registered string byte for byte. Every class
+guard in the manifest passes the same comparison first, or the renderer is blamed, not
+the project. One-fault mutants of each string (crash branch removed, exit captured
+wrongly, exit 1 passed through, exit 2 turned into 0, stdin dropped) must each be
+caught. So when the manifest's guard shape changes, this selftest FAILS until the three
+strings are rendered again. `PROJECT_SETTINGS_UNDER_TEST=<file>` and
+`PROJECT_GUARDS_MANIFEST=<file>` point it at copies; against the old `-x`-only strings
+it fails the crash and parity arms.
 
 The three share `home/.claude/hooks/conv-shscan.awk` (a zsh command scanner:
 quotes, `$(...)`, heredocs, `|&`, `&!`, `=(...)`, glob qualifiers) and
