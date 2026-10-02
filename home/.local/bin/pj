@@ -1577,7 +1577,8 @@ selftest() {
     local dir="$eg/$1"; shift
     mkdir -p "$dir"
     { print -r -- '#!/bin/bash'
-      print -r -- "echo \"\$\$ \$(ps -o pgid= -p \$\$ | tr -d ' ') \$(ps -o pgid= -p \$PPID | tr -d ' ')\" > '$dir/ran'"
+      # in the background: two ps calls can take most of a second here, which a 2.5 s fake cannot spare
+      print -r -- "( echo \"\$\$ \$(ps -o pgid= -p \$\$ | tr -d ' ') \$(ps -o pgid= -p \$PPID | tr -d ' ')\" > '$dir/ran' ) &"
       print -rl -- "$@"
     } > "$dir/engage-go"
     chmod +x "$dir/engage-go"

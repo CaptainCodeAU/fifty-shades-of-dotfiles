@@ -2472,7 +2472,8 @@ mk_eg2(){   # mk_eg2 <name> <bash line>...
   [ $# -ge 2 ] || { bad "EG2 mk_eg2 needs a name and a body" "$*"; return 1; }
   local dir="$EG/$1"; shift; mkdir -p "$dir"
   { printf '#!/bin/bash\n'
-    printf 'echo "$$ $(ps -o pgid= -p $$ | tr -d " ") $(ps -o pgid= -p $PPID | tr -d " ")" > "%s/ran"\n' "$dir"
+    # in the background: two ps calls can take most of a second here, which a 2.5 s fake cannot spare
+    printf '( echo "$$ $(ps -o pgid= -p $$ | tr -d " ") $(ps -o pgid= -p $PPID | tr -d " ")" > "%s/ran" ) &\n' "$dir"
     printf '%s\n' "$@"; } > "$dir/engage-go"
   chmod +x "$dir/engage-go"
 }
