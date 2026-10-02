@@ -132,8 +132,12 @@ move_tab_next = "prefix+shift+right"
 #
 # The bridge is the clipboard. Since 2026-10-02 a drag no longer copies on its
 # own (copy_on_select = false below, and Claude Code's "Copy on select" is off
-# in /config), so copy first with Ctrl+C, then press the key. Copy mode works
-# identically: prefix+[ then v, y, then speak.
+# in /config). In a CLAUDE pane, highlight and press the key: the plugin
+# dotfiles.speak-selection borrows the clipboard (snapshot every item, send
+# Ctrl+Shift+C to that pane, read, restore before speaking), so the clipboard
+# you had is still there afterwards. With nothing highlighted, or in any
+# other pane, it speaks the clipboard as before: copy with Ctrl+C, then press
+# the key. Copy mode works identically: prefix+[ then v, y, then speak.
 #
 # FUNCTION KEYS, not ctrl+alt+letter. The first attempt used ctrl+alt+s and was
 # silent: 3 of the 5 iTerm2 profiles here set "Option Key Sends" to Normal, so
@@ -142,9 +146,12 @@ move_tab_next = "prefix+shift+right"
 # ... depend on your terminal" -- and names function keys among the most
 # reliable direct bindings. f9/f10 sidestep the whole question.
 #
-# `sh -c` is explicit so the pipeline inside the script is never at the mercy of
-# how herdr execs a command string, and "$HOME" is expanded by the shell rather
-# than hardcoded, so this config stays portable across machines.
+# type = "plugin_action" (since 2026-10-02; until then type = "shell" ran
+# speak-clipboard --toggle directly). Only a plugin action receives
+# HERDR_PLUGIN_CONTEXT_JSON, which names the focused pane and its agent, and
+# the pane id is what Ctrl+Shift+C must be sent to. The plugin's speak.sh
+# sends keys ONLY when that agent is "claude"; a shell could read Ctrl+Shift+C
+# as ^C. Routing and reasons: plugins/speak-selection/speak.sh.
 #
 # The script does the work: it strips ANSI escapes, box drawing, Nerd Font
 # glyphs and rule lines before speaking. That filtering is the whole reason to
@@ -167,18 +174,20 @@ move_tab_next = "prefix+shift+right"
 # case it ever regresses, not as an open problem.
 #
 # Check ~/.local/state/herdr/speak-clipboard.log after pressing it: a new
-# line means the key reached herdr; no new line means it never arrived.
-# prefix+backtick below still works regardless of the result.
+# line means the key reached herdr and says source=selection or
+# source=clipboard; no new line means it never arrived (then
+# `herdr plugin log list --plugin dotfiles.speak-selection` shows whether the
+# action ran). prefix+backtick below still works regardless of the result.
 
 [[keys.command]]
 key = "ctrl+alt+backtick"
-type = "shell"
-command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --toggle'"
+type = "plugin_action"
+command = "dotfiles.speak-selection.speak"
 
 [[keys.command]]
 key = "prefix+backtick"
-type = "shell"
-command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --toggle'"
+type = "plugin_action"
+command = "dotfiles.speak-selection.speak"
 
 [ui.toast]
 delivery = "system"
