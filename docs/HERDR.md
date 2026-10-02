@@ -850,8 +850,12 @@ stays enabled system-wide, finds an empty selection, and says nothing. It is the
 same root cause as `cmd+C` appearing to do nothing — the selection is not where
 the OS is looking.
 
-The bridge is the clipboard, since `copy_on_select` means a drag has already
-copied by the time you release it. The bindings in `config.toml`
+The bridge is the clipboard. Since 2026-10-02 a drag no longer copies by itself:
+`copy_on_select = false` in herdr, and Claude Code's own **Copy on select** is
+off in `/config` (in a Claude pane the drag is Claude Code's selection, not
+herdr's, and only Claude Code's setting governs it). Copy with `Ctrl+C`, then
+press the key; `Cmd+C` goes to iTerm2's menu, which cannot see either selection
+and offers to disable mouse reporting (decline it). The bindings in `config.toml`
 (`ctrl+alt+backtick` and `prefix+backtick`) run `speak-clipboard --toggle`,
 which:
 

@@ -130,9 +130,10 @@ move_tab_next = "prefix+shift+right"
 # still enabled system-wide -- it simply finds an empty selection and stays
 # quiet. Same root cause as cmd+C appearing to do nothing.
 #
-# The bridge is the clipboard. [ui] copy_on_select is true by default, so a
-# drag has ALREADY copied by the time you let go; these bindings just speak
-# what is there. Copy mode works identically: prefix+[ then v, y, then speak.
+# The bridge is the clipboard. Since 2026-10-02 a drag no longer copies on its
+# own (copy_on_select = false below, and Claude Code's "Copy on select" is off
+# in /config), so copy first with Ctrl+C, then press the key. Copy mode works
+# identically: prefix+[ then v, y, then speak.
 #
 # FUNCTION KEYS, not ctrl+alt+letter. The first attempt used ctrl+alt+s and was
 # silent: 3 of the 5 iTerm2 profiles here set "Option Key Sends" to Normal, so
@@ -188,6 +189,13 @@ pane_history = true
 
 [ui]
 agent_panel_sort = "priority"
+
+# A mouse drag selects but does NOT copy; Ctrl+C copies (Gavin, 2026-10-02).
+# herdr's own note: false retains the selection "until Ctrl+C, or Cmd+C when
+# the host forwards it, copies and clears it". The clipboard then changes only
+# when he asks. iTerm2's own "Copy to pasteboard on selection" was unticked the
+# same day, so an Option-drag does not copy either.
+copy_on_select = false
 
 # Agent state as distinct static SHAPES rather than dots that differ only by
 # colour (herdr 0.8.2, #2260). blocked / working / done / idle / unknown stay
