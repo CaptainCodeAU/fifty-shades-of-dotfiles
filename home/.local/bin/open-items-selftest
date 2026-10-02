@@ -2531,6 +2531,11 @@ mk_eg2 mdaemon "perl -MPOSIX -e 'fork and exit; POSIX::setsid(); exec {\"sleep\"
 t="$(lk_ms)"; egw mdaemon add "a daemon holds stdout" --done-when x; EGT=$(( $(lk_ms) - t )); EGN="$(eg_left)"
 wanteq "EG2 a setsid child holding stdout: add as today in ${EGT} ms, not after it (control: the escapee runs, $EGN)" "0 fast yes" \
   "$RC $([ "$EGT" -lt 2500 ] && printf fast || printf slow) $([ "$EGN" -ge 1 ] && printf yes || printf no)"
+# perl passes on one line only, so open-items' own first-line rule is a second copy: with no
+# perl it is the only one, and this arm is what holds it.
+OUT="$(cd "$ZETA" && PATH="$EG/m3multi:$NOPERL" OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" CLAUDE_CODE_SESSION_ID=sess-test CLAUDE_SESSION_ID=sess-test "$TOOL" add "filed by habit" --done-when x 2>&1)"; RC=$?
+wanteq "EG2 no perl: exit 3 with two stdout lines still gives the FIRST line only, one line" "2 first nosecond 1" \
+  "$RC $(case "$OUT" in *"not valid: first line."*) printf first;; *) printf nofirst;; esac) $(case "$OUT" in *"second line"*) printf second;; *) printf nosecond;; esac) $(printf '%s\n' "$OUT" | grep -c .)"
 pkill -KILL -f "$MK" 2>/dev/null
 unset PJ_STATE_DIR
 

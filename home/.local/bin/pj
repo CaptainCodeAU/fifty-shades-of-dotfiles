@@ -1655,6 +1655,11 @@ selftest() {
   me31=$EPOCHREALTIME; eg_dry "$eg/mdaemon:$noegp" --dry-run; me31=$(( EPOCHREALTIME - me31 )); n31="$(eg_left)"
   [[ $rc -eq 0 && "$out" == "$base30" && "$n31" -ge 1 ]] && (( me31 < 2.5 )) \
     && ok "31l a setsid child holding stdout: today's argv in $(printf %.2f $me31) s, not after it (control: the escapee runs, $n31)" || bad "31l escapee holds stdout" "rc=$rc t=$me31 escapee=$n31"
+  # 31m perl passes on one line only, so pj's own first-line rule is a second copy: with no
+  #     perl it is the only one, and this arm is what holds it.
+  eg_dry "$eg/m3multi:$noperlp" --dry-run
+  [[ $rc -eq 1 && "$(<"$root/err30")" == "This project has an engage move marker that is not valid: first line. Run engage-go cutover check for details." && "$(wc -l < "$root/err30" | tr -d ' ')" == 1 ]] \
+    && ok "31m no perl: exit 3 with two stdout lines still gives the FIRST line only, one line" || bad "31m no perl two lines" "rc=$rc err=$(<"$root/err30")"
   pkill -KILL -f "$mk31" 2>/dev/null
   print -- "pj selftest: $pass passed, $fail failed"
   [[ $fail -eq 0 ]]
