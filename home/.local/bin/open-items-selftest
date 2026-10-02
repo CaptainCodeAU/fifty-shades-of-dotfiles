@@ -2462,6 +2462,76 @@ wanteq "exit 1, exit 2, a signal, not executable, absent: add writes as today (a
 wanteq "  control: the exit-1 and the killed fakes really ran" "1 1" "$([ -e "$EG/m1/ran" ] && echo 1) $([ -e "$EG/mkill/ran" ] && echo 1)"
 egw m1 close "$EGID" "closed as today"
 wanteq "  exit 1: close moves the item as today" "1" "$([ "$RC" = 0 ] && [ -f "$ZW/items/closed/$EGID.md" ] && echo 1)"
+# EG2 the 3 s limit and the first line (W-20261002-A48, A49; contract engage master 48eb3d1).
+# A write's check runs under 3 s; a timeout refuses the write (fail closed), one line naming
+# the hang and engage add. The fakes are bash, and every process they leave carries a marker
+# unique to this run in its argv (exec -a), so pgrep counts only this suite's. Each fake
+# records "<pid> <pgid> <parent's pgid>".
+MK="oist$(basename "$ROOT")"
+mk_eg2(){   # mk_eg2 <name> <bash line>...
+  [ $# -ge 2 ] || { bad "EG2 mk_eg2 needs a name and a body" "$*"; return 1; }
+  local dir="$EG/$1"; shift; mkdir -p "$dir"
+  { printf '#!/bin/bash\n'
+    printf 'echo "$$ $(ps -o pgid= -p $$ | tr -d " ") $(ps -o pgid= -p $PPID | tr -d " ")" > "%s/ran"\n' "$dir"
+    printf '%s\n' "$@"; } > "$dir/engage-go"
+  chmod +x "$dir/engage-go"
+}
+mk_eg2 mhang "( exec -a $MK-child sleep 30 ) &" "echo 'not moved: about to hang'" "exec -a $MK-parent sleep 30"
+mk_eg2 mlate0 "sleep 2.5" "echo 'moved: zeta (2026-10-02)'" "exit 0"
+mk_eg2 mlate1 "sleep 2.5" "echo 'not moved: late'" "exit 1"
+mk_eg2 mleave "( exec -a $MK-child sleep 30 ) &" "echo 'not moved: leaves a child'" "exit 1"
+eg_left(){ pgrep -f "$MK" 2>/dev/null | wc -l | tr -d ' '; }
+eg_gone(){ local i; for i in $(seq 1 20); do [ "$(eg_left)" = 0 ] && break; sleep 0.05; done; eg_left; }
+# eg_hang <fake> <PATH> <args>: open-items in the background from zeta; sets RC OUT EGT(ms) EGN EGL EGH0 EGH1
+eg_hang(){ [ $# -ge 2 ] || { bad "EG2 eg_hang needs a fake and a PATH" "$*"; return 1; }
+  local f="$1" p="$2" t i pid; shift 2
+  echo none > "$EG/$f/ran"; EGH0="$(eg_state)"; t="$(lk_ms)"
+  ( cd "$ZETA" && PATH="$p" OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" CLAUDE_CODE_SESSION_ID=sess-test CLAUDE_SESSION_ID=sess-test "$TOOL" "$@" >"$D/eg2.out" 2>&1 ) &
+  pid=$!
+  for i in $(seq 1 40); do [ "$(cat "$EG/$f/ran")" != none ] && break; sleep 0.05; done
+  sleep 0.3; EGN="$(eg_left)"
+  wait "$pid"; RC=$?; EGT=$(( $(lk_ms) - t )); EGL="$(eg_gone)"; OUT="$(cat "$D/eg2.out")"; EGH1="$(eg_state)"
+}
+eg_hang mhang "$EG/mhang:$NOEG" add "filed during a hang" --done-when x
+wanteq "EG2 a hang: add refuses (rc 2), one line naming the hang and engage add, nothing written" "2 1 hang engage-add same" \
+  "$RC $(printf '%s\n' "$OUT" | grep -c .) $(case "$OUT" in *"did not answer in 3 s"*) printf hang;; *) printf no-hang;; esac) $(case "$OUT" in *"engage add"*) printf engage-add;; *) printf none;; esac) $([ "$EGH0" = "$EGH1" ] && printf same || printf WROTE)"
+wanteq "  refused within 2.9 to 5.0 s (measured ${EGT} ms)" "1" "$([ "$EGT" -ge 2900 ] && [ "$EGT" -le 5000 ] && echo 1)"
+wanteq "  control: $EGN marked processes while it ran (parent and child), none left after" "yes 0" "$([ "$EGN" -ge 2 ] && printf yes || printf no) $EGL"
+read -r EGP1 EGP2 EGP3 < "$EG/mhang/ran"; EGME="$(ps -o pgid= -p $$ | tr -d ' ')"
+wanteq "  engage-go leads its own process group, never open-items' (pid pgid parent-pgid; suite pgid $EGME)" "own other ours" \
+  "$([ "$EGP1" = "$EGP2" ] && printf own || printf shared) $([ "$EGP2" != "$EGP3" ] && printf other || printf same) $([ "$EGP3" = "$EGME" ] && printf ours || printf notours)"
+egw m3multi add "filed by habit" --done-when x
+wanteq "EG2 exit 3 with two stdout lines: the FIRST line only, one line (A49)" "first nosecond 1" \
+  "$(case "$OUT" in *"not valid: first line."*) printf first;; *) printf nofirst;; esac) $(case "$OUT" in *"second line"*) printf second;; *) printf nosecond;; esac) $(printf '%s\n' "$OUT" | grep -c .)"
+egw mlate0 add "filed by habit" --done-when x
+wanteq "EG2 exit 0 at 2.5 s: refused as moved, not as a hang" "2 moved" "$RC $(case "$OUT" in *"moved to engage"*) printf moved;; *"did not answer"*) printf HANG;; *) printf other;; esac)"
+h0="$(eg_state)"; egw mlate1 add "late but not moved" --done-when x; h1="$(eg_state)"
+wanteq "EG2 exit 1 at 2.5 s: add writes as today" "0 changed" "$RC $([ "$h0" != "$h1" ] && printf changed || printf unchanged)"
+( PATH="$NOEG" "$EG/mleave/engage-go" cutover check >/dev/null 2>&1 ); sleep 0.3; EGN="$(eg_left)"; pkill -KILL -f "$MK" 2>/dev/null; EGL="$(eg_gone)"
+t="$(lk_ms)"; egw mleave add "the fake leaves a child" --done-when x; EGT=$(( $(lk_ms) - t ))
+wanteq "EG2 exit 1 leaving a child: add as today in ${EGT} ms, its group swept (control: alone it leaves $EGN, cleaned $EGL)" "0 fast 0 yes" \
+  "$RC $([ "$EGT" -lt 2500 ] && printf fast || printf slow) $(eg_gone) $([ "$EGN" -ge 1 ] && [ "$EGL" = 0 ] && printf yes || printf no)"
+# NO PERL: every PATH folder holding a perl is replaced by a folder of links without it.
+NOPERL=""; i=0
+IFS=: read -r -a EGP <<<"$NOEG"
+for l in "${EGP[@]}"; do
+  if compgen -G "$l/perl*" >/dev/null; then
+    i=$((i+1)); mkdir -p "$D/noperl/$i"; EGALL=()
+    for f in "$l"/*; do case "${f##*/}" in perl*) ;; *) EGALL+=("$f") ;; esac; done
+    ln -s "${EGALL[@]}" "$D/noperl/$i/" 2>/dev/null
+    NOPERL="$NOPERL${NOPERL:+:}$D/noperl/$i"
+  else NOPERL="$NOPERL${NOPERL:+:}$l"; fi
+done
+wanteq "EG2 control: the no-perl PATH has no perl, the suite PATH has one" "none one" \
+  "$(PATH="$NOPERL" command -v perl >/dev/null 2>&1 && printf some || printf none) $(command -v perl >/dev/null 2>&1 && printf one || printf none)"
+eg_hang mhang "$EG/mhang:$NOPERL" add "filed during a hang, no perl" --done-when x
+wanteq "EG2 no perl: a hang still refuses (rc 2), nothing written, in ${EGT} ms, none of its $EGN processes left" "2 same in-time yes 0" \
+  "$RC $([ "$EGH0" = "$EGH1" ] && printf same || printf WROTE) $([ "$EGT" -ge 2900 ] && [ "$EGT" -le 5000 ] && printf in-time || printf off-time) $([ "$EGN" -ge 2 ] && printf yes || printf no) $EGL"
+mk_eg2 mdaemon "perl -MPOSIX -e 'fork and exit; POSIX::setsid(); exec {\"sleep\"} \"$MK-daemon\", 20'" "echo 'not moved: a daemon holds stdout'" "exit 1"
+t="$(lk_ms)"; egw mdaemon add "a daemon holds stdout" --done-when x; EGT=$(( $(lk_ms) - t )); EGN="$(eg_left)"
+wanteq "EG2 a setsid child holding stdout: add as today in ${EGT} ms, not after it (control: the escapee runs, $EGN)" "0 fast yes" \
+  "$RC $([ "$EGT" -lt 2500 ] && printf fast || printf slow) $([ "$EGN" -ge 1 ] && printf yes || printf no)"
+pkill -KILL -f "$MK" 2>/dev/null
 unset PJ_STATE_DIR
 
 # THE EXIT CODE FOR "NOT MEASURED" IS ITSELF MEASURED: a child run of this very suite with

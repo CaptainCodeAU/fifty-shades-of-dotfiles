@@ -2412,13 +2412,64 @@ check_flags "${1:-}"
 # folder open-items was started from; open-items never reads the marker itself. Exit 0 and
 # 3 refuse every verb that writes, before it runs; exit 1, any other code, or no engage-go:
 # as today. Reads (the listing, --all, --project, show, get, --where, ...) never ask.
+# W-20261002-A48, A49 (engage master 48eb3d1, "The time limit"): the check runs the way pj runs
+# it, under 3 s, and a timeout REFUSES the write (fail closed): engage-go starts as the leader
+# of its own process group (perl setpgrp; bash cannot make one without a terminal), the wait
+# polls, and past 3 s the whole group gets TERM, then KILL; with no perl, the pid and the
+# descendants it can see. Only the FIRST line of its stdout is read, and perl reads it: a child
+# that leaves the group (setsid) but keeps stdout open then holds perl's pipe, not this `$(...)`
+# (measured in pj: 20.4 s before, 83 ms after). Written for bash 3.2:
+# no coproc, and the clock is EPOCHREALTIME where bash has it (5.0+); bash 3.2 has none, so it
+# sleeps 10 x 10 ms then 58 x 50 ms (3.0 s of sleep, about 70 forks; measured 4.1 s at 300 x 10 ms).
+engage_kill(){                  # engage_kill <pid> <1: its group | 0: it and its descendants>
+  local sig w i c
+  EG_K=("$1")
+  for sig in TERM KILL; do
+    if [ "$2" = 1 ]; then
+      kill -0 -- "-$1" 2>/dev/null && kill -"$sig" -- "-$1" 2>/dev/null
+    else
+      # listed BEFORE the TERM: a child whose parent dies first moves to init, out of pgrep -P
+      i=0; while [ "$i" -lt "${#EG_K[@]}" ]; do
+        for c in $(pgrep -P "${EG_K[$i]}" 2>/dev/null); do EG_K+=("$c"); done; i=$((i+1)); done
+      kill -"$sig" "${EG_K[@]}" 2>/dev/null
+    fi
+    [ "$sig" = KILL ] && break
+    for w in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
+      if [ "$2" = 1 ]; then kill -0 -- "-$1" 2>/dev/null || break; else kill -0 "${EG_K[@]}" 2>/dev/null || break; fi
+      sleep 0.01
+    done
+  done
+}
+engage_check(){                 # prints engage-go's stdout; returns its exit code, or 124 past 3 s
+  local pid grp=0 n=0 rc t0="" now
+  if command -v perl >/dev/null 2>&1; then
+    perl -e 'setpgrp(0,0); open(my $f, "-|", @ARGV) or exit 127; my $l = <$f>; print $l if defined $l;
+      close $f; my $s = $?; exit($s & 127 ? 128 + ($s & 127) : $s >> 8)' engage-go cutover check & pid=$!; grp=1
+  else
+    engage-go cutover check & pid=$!
+  fi
+  trap "engage_kill $pid $grp; exit 130" INT TERM HUP
+  [ -n "${EPOCHREALTIME-}" ] && t0="${EPOCHREALTIME//[^0-9]/}"
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ -n "$t0" ]; then now="${EPOCHREALTIME//[^0-9]/}"; [ $((now - t0)) -ge 3000000 ] && break
+    else n=$((n+1)); [ "$n" -gt 68 ] && break; fi
+    if [ -n "$t0" ] || [ "$n" -le 10 ]; then sleep 0.01; else sleep 0.05; fi
+  done
+  if kill -0 "$pid" 2>/dev/null; then engage_kill "$pid" "$grp"; return 124; fi
+  wait "$pid"; rc=$?
+  # a child left behind in engage-go's group is swept too, only while the group has members
+  [ "$grp" = 1 ] && kill -0 -- "-$pid" 2>/dev/null && engage_kill "$pid" 1
+  return "$rc"
+}
 engage_guard(){                 # engage_guard <verb>
   local why rc
   command -v engage-go >/dev/null 2>&1 || return 0
-  why="$(engage-go cutover check 2>/dev/null)"; rc=$?
+  why="$(engage_check 2>/dev/null)"; rc=$?
+  why="${why%%$'\n'*}"           # first line only (A49)
   case $rc in
     0) refuse "this project moved to engage, so open-items $1 wrote nothing; record it in engage with engage add" ;;
     3) refuse "this project has an engage move marker that is not valid: ${why#not valid: }. open-items $1 wrote nothing; run engage-go cutover check for details, and use engage add once the move is sound" ;;
+    124) refuse "could not check the engage move marker: engage-go did not answer in 3 s, so open-items $1 wrote nothing; run engage-go cutover check to see why, and use engage add if this project has moved" ;;
   esac
   return 0
 }
