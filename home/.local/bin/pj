@@ -1649,6 +1649,12 @@ selftest() {
   l31="$(eg_gone)"
   [[ $rc -ne 0 && "$n31" -ge 2 && "$l31" == 0 ]] && (( e31 < 1.5 )) \
     && ok "31k Ctrl-C during the wait: pj ends in $(printf %.2f $e31) s and none of the $n31 engage-go processes is left" || bad "31k Ctrl-C" "rc=$rc t=$e31 during=$n31 after=$l31"
+  # 31l a child that leaves the group (setsid) but keeps stdout open: perl holds that pipe, not
+  #     pj's, so pj answers at once. The escapee itself survives (it left the group); killed here.
+  mk_eg31 mdaemon "perl -MPOSIX -e 'fork and exit; POSIX::setsid(); exec {\"sleep\"} \"${mk31}-daemon\", 20'" "echo 'not moved: a daemon holds stdout'" "exit 1"
+  me31=$EPOCHREALTIME; eg_dry "$eg/mdaemon:$noegp" --dry-run; me31=$(( EPOCHREALTIME - me31 )); n31="$(eg_left)"
+  [[ $rc -eq 0 && "$out" == "$base30" && "$n31" -ge 1 ]] && (( me31 < 2.5 )) \
+    && ok "31l a setsid child holding stdout: today's argv in $(printf %.2f $me31) s, not after it (control: the escapee runs, $n31)" || bad "31l escapee holds stdout" "rc=$rc t=$me31 escapee=$n31"
   pkill -KILL -f "$mk31" 2>/dev/null
   print -- "pj selftest: $pass passed, $fail failed"
   [[ $fail -eq 0 ]]
@@ -1786,13 +1792,19 @@ run_with_relaunch() {
 # and the descendants it can see, which a child that outlived its parent escapes; the refusal
 # is the same (arm 31j). Ctrl-C during the wait: the INT reaches pj's group, not engage-go's,
 # so the wait traps INT, TERM and HUP and kills engage-go's group first (arm 31k).
+# perl also READS engage-go's stdout (the first line) and waits for its exit: a process that
+# leaves the group (setsid) but keeps stdout open then holds perl's pipe, not pj's `$(...)`,
+# which would otherwise wait for it past any limit (measured 2 Oct: 20.4 s; arm 31l). Output
+# past the first line is not read, so more than a pipe buffer of it blocks engage-go until the
+# limit refuses (fail closed); the reader promises one line.
 # pj_engage_check prints engage-go's stdout and returns its exit code, or 124 past 3 s.
 pj_engage_check() {
   setopt localoptions no_bg_nice no_notify
   zmodload zsh/datetime zsh/zselect 2>/dev/null
   local pid grp=0 t0="${EPOCHREALTIME-}" n=0 rc
   if command -v perl >/dev/null 2>&1; then
-    perl -e 'setpgrp(0,0); exec @ARGV or exit 127' engage-go cutover check & pid=$!; grp=1
+    perl -e 'setpgrp(0,0); open(my $f, "-|", @ARGV) or exit 127; my $l = <$f>; print $l if defined $l;
+      close $f; my $s = $?; exit($s & 127 ? 128 + ($s & 127) : $s >> 8)' engage-go cutover check & pid=$!; grp=1
   else
     engage-go cutover check & pid=$!
   fi
