@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/protect-files.sh",
+            "command": "h=\"$CLAUDE_PROJECT_DIR/.claude/hooks/protect-files.sh\"; if [ -x \"$h\" ]; then o=$(\"$h\"); r=$?; case $r in 0|2) if [ -n \"$o\" ]; then printf '%s\\n' \"$o\"; fi; exit $r;; esac; printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"HOOK CRASHED, DENYING: protect-files.sh exited '\"$r\"', which is neither 0 (allow, or its own deny) nor 2 (block), so every call it guards is denied until that is fixed (D-20261002-A01). Fix it from your own terminal, where no Claude hook runs: run .claude/hooks/project-guards-selftest in the dotfiles repo to see what broke, then fix or restore it (git -C <dotfiles repo> checkout -- .claude/hooks/protect-files.sh, then chmod +x it), or delete this registration from .claude/settings.json and .claude/settings.minimal.json in that repo (W-20261002-A20).\"}}'; else printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"HOOK MISSING, DENYING: protect-files.sh is registered but $CLAUDE_PROJECT_DIR/.claude/hooks/protect-files.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it from your own terminal, where no Claude hook runs: restore it (git -C <dotfiles repo> checkout -- .claude/hooks/protect-files.sh, then chmod +x it), or delete this registration from .claude/settings.json and .claude/settings.minimal.json in that repo (W-20260925-A28).\"}}'; fi",
             "timeout": 10
           }
         ]
