@@ -729,6 +729,8 @@ selftest() {
   bad() { fail=$((fail + 1)); print -- "  FAIL $1"; print -- "       got: $2"; }
   root="$(mktemp -d "${TMPDIR:-/tmp}/pj-selftest.XXXXXX")" || exit 1
   print -- "pj selftest in $root"
+  # 32 (see the end) THE SELFTEST LEAVES NOTHING IN THE FOLDER IT WAS STARTED FROM. Read now.
+  local -a cwd32=( *(DN) ) new32
   # Every real-launch arm below must never sweep the machine's real temp folders.
   export PJ_NO_TEMP_SWEEP=1
   # Nor ask the machine's real engage-go (W-20261001-A67): every arm runs as "not moved",
@@ -1570,7 +1572,7 @@ selftest() {
   #    so pgrep counts only this selftest's. Each fake records "<pid> <pgid> <parent's pgid>".
   zmodload zsh/datetime 2>/dev/null
   local mk31="pjst${root:t}" tl31 e31 n31 l31 me31 nop31="$root/noperl" d31 noperlp perl31="$(whence -p perl)"
-  local -a r31 nopl31 all31
+  local -a r31 nopl31 all31 s31
   tl31='Could not check the engage move marker: engage-go did not answer in 3 s. Run `engage-go cutover check` to see why; `engage` and `c` still start.'
   mk_eg31() {   # mk_eg31 <name> <bash line>...
     (( $# >= 2 )) || { bad "31 mk_eg31 needs a name and a body" "$*"; return 1; }
@@ -1630,7 +1632,13 @@ selftest() {
     all31=($d31/perl*(N))   # a glob, not [[ -n ]]: [[ ]] never expands one
     if (( $#all31 )); then
       all31=($d31/*(N)); all31=(${all31:#*/perl*})
-      mkdir -p "$nop31/${#nopl31}"; ln -s $all31 "$nop31/${#nopl31}/" 2>/dev/null
+      mkdir -p "$nop31/${#nopl31}"
+      # NEVER ln with no targets: given one argument, ln makes a link in the CURRENT folder
+      # (2 Oct: 4 links in the worktree root, from the 4 PATH folders this Mac lacks, before
+      # this glob was fixed). -- ends options; the count proves every link landed here.
+      (( $#all31 )) && ln -s -- $all31 "$nop31/${#nopl31}/" 2>/dev/null
+      s31=("$nop31/${#nopl31}"/*(N@))
+      (( $#s31 == $#all31 )) || bad "31i shadow of $d31" "$#s31 links for $#all31 entries"
       nopl31+=("$nop31/${#nopl31}")
     else nopl31+=("$d31"); fi
   done
@@ -1664,6 +1672,11 @@ selftest() {
   [[ $rc -eq 1 && "$(<"$root/err30")" == "This project has an engage move marker that is not valid: first line. Run engage-go cutover check for details." && "$(wc -l < "$root/err30" | tr -d ' ')" == 1 ]] \
     && ok "31m no perl: exit 3 with two stdout lines still gives the FIRST line only, one line" || bad "31m no perl two lines" "rc=$rc err=$(<"$root/err30")"
   pkill -KILL -f "$mk31" 2>/dev/null
+  # 32 nothing new in the starting folder ($PWD), against the list read at the top. Control:
+  #    the same glob sees this run's own fixtures, so an empty answer is not a blind one.
+  new32=( *(DN) ); new32=( ${new32:|cwd32} ); local -a ctl32=( $root/*(DN) )
+  (( $#ctl32 > 0 )) && ok "32 control: the listing glob sees $#ctl32 entries in the fixtures" || bad "32 control" "the glob saw nothing in $root"
+  (( $#new32 == 0 )) && ok "32 the selftest left nothing new in the folder it started from ($PWD)" || bad "32 litter in $PWD" "${new32[*]}"
   print -- "pj selftest: $pass passed, $fail failed"
   [[ $fail -eq 0 ]]
 }

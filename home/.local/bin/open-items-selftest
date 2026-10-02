@@ -49,6 +49,8 @@ ROOT="$(mktemp -d "${TMPDIR:-/tmp}/open-items-selftest.XXXXXX")" || {
 # git prints the REAL path of a toplevel (macOS: /tmp -> /private/tmp), and the key
 # is computed from that, so the fixture must be keyed from the same resolved path.
 ROOT="$(cd "$ROOT" && pwd -P)"
+# THE SUITE LEAVES NOTHING IN THE FOLDER IT WAS STARTED FROM (checked at the end). Read now.
+CWD0="$(ls -A 2>/dev/null)"
 # Never the machine's real engage-go (W-20261001-A69): every arm runs as "not moved",
 # wherever the suite is started, so a moved project cannot fail the other sections.
 # Section EG puts its own fakes in front of this one.
@@ -2519,8 +2521,12 @@ IFS=: read -r -a EGP <<<"$NOEG"
 for l in "${EGP[@]}"; do
   if compgen -G "$l/perl*" >/dev/null; then
     i=$((i+1)); mkdir -p "$D/noperl/$i"; EGALL=()
-    for f in "$l"/*; do case "${f##*/}" in perl*) ;; *) EGALL+=("$f") ;; esac; done
-    ln -s "${EGALL[@]}" "$D/noperl/$i/" 2>/dev/null
+    for f in "$l"/*; do [ -e "$f" ] || [ -L "$f" ] || continue; case "${f##*/}" in perl*) ;; *) EGALL+=("$f") ;; esac; done
+    # NEVER ln with no targets: given one argument, ln makes a link in the CURRENT folder.
+    # -- ends options; the count proves every link landed in the fixture.
+    if [ "${#EGALL[@]}" -gt 0 ]; then ln -s -- "${EGALL[@]}" "$D/noperl/$i/" 2>/dev/null; fi
+    EGLN="$(find "$D/noperl/$i" -mindepth 1 -maxdepth 1 -type l | wc -l | tr -d ' ')"
+    [ "$EGLN" = "${#EGALL[@]}" ] || bad "EG2 shadow of $l" "${#EGALL[@]} links" "$EGLN links"
     NOPERL="$NOPERL${NOPERL:+:}$D/noperl/$i"
   else NOPERL="$NOPERL${NOPERL:+:}$l"; fi
 done
@@ -2566,6 +2572,11 @@ else
   bad "open-items-xp-selftest is missing beside this selftest" "$XPT" "absent"
 fi
 
+# Nothing new in the starting folder, against the list read at the top. Control: the same
+# listing sees this run's own fixtures, so an empty answer is not a blind one.
+CWD1="$(ls -A 2>/dev/null)"; CWDNEW="$(comm -13 <(printf '%s\n' "$CWD0" | LC_ALL=C sort) <(printf '%s\n' "$CWD1" | LC_ALL=C sort) | grep . || true)"
+wanteq "CWD control: the listing sees entries in the fixtures" "yes" "$([ -n "$(ls -A "$ROOT" 2>/dev/null)" ] && printf yes || printf no)"
+wanteq "the suite left nothing new in the folder it started from ($PWD)" "" "$CWDNEW"
 printf '\n%s passed, %s failed   (fixtures: %s)\n' "$PASS" "$FAIL" "$ROOT"
 [ "$FAIL" -eq 0 ] || { printf 'open-items-selftest: FAILURES above\n' >&2; exit 1; }
 if [ "${NM:-0}" -gt 0 ]; then
