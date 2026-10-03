@@ -280,6 +280,22 @@ Every value falls back to the constant the script carried before profiles existe
 machine with nothing stowed behaves exactly as it always did. That is a supported
 state, not a fault, and `install.sh` reports it as a note rather than a cross.
 
+### Option A: the default profile loads engage's one page (2026-10-03)
+
+Gavin chose option A on 2026-10-03 (ruling held in CaptainCodeAU-isolinear `rules/LOG.md`,
+commit `c172ffc`). The default profile sets `prompt_sources:` to engage's page
+(`CaptainCodeAU-isolinear/engine-room/prompt/engage-system-prompt.md`, generated and
+gitignored there) and drops `pj-voice` from `plugins:`. Eleven nudge hooks moved to `retired`
+in `settings/claude/hooks.json`, and `outputStyle` left `~/.claude/settings.project.json`.
+Dotfiles commit `c2aaf0e`.
+
+The built-in fallback is NOT changed, ruled by Gavin in the wrap-up box the same day: it still
+lists `pj-voice` and the two old rule files. Switching it would make `pj` refuse to launch on
+any machine without the isolinear checkout, because the page would be missing. Other machines
+move to option A through their own profile (mlbox: W-20261003-A41). So since this date the
+default profile and the fallback differ on purpose, and `pj --selftest` arms 1 and 4 to 4d set
+`PJ_PROFILE_DIR` to a missing folder so they test the fallback, not this profile.
+
 ---
 
 ## Before anything else: the engage move check (W-20261001-A67, 2026-10-02)
