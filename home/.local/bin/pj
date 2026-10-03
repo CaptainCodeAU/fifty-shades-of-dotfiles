@@ -741,7 +741,9 @@ selftest() {
   chmod +x "$root/engage-not-moved/engage-go"
   export PATH="$root/engage-not-moved:$PATH"
   # 1. dry-run argv carries the cache prompt file and all five plugin dirs, first entry is claude
-  out="$(PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --dry-run 2>"$root/err1")"; rc=$?
+  #    PJ_PROFILE_DIR=none-such: arms 1 and 4 test the BUILT-IN fallback. The real default profile
+  #    sets prompt_sources and its own plugins (option A, 2026-10-03), and a profile key beats the env.
+  out="$(PJ_PROFILE_DIR="$root/none-such" PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --dry-run 2>"$root/err1")"; rc=$?
   [[ $rc -eq 0 ]] && ok "1 dry-run exits 0" || bad "1 dry-run rc" "$rc $(<"$root/err1")"
   [[ "${out%%$'\n'*}" == claude ]] && ok "1 argv[0] is claude" || bad "1 argv[0]" "${out%%$'\n'*}"
   [[ "$out" == *$'\n--append-system-prompt-file\n'"$root/prompt.md"$'\n'* ]] && ok "1 carries the prompt cache path" || bad "1 prompt path" "$out"
@@ -768,20 +770,20 @@ selftest() {
   out="$(PJ_PROMPT_OUT="$root/prompt.md" "$SELF" --dry-run --resume --dry-run 2>/dev/null)"
   [[ "$out" == *$'\n--resume\n--dry-run' ]] && ok "3 a later --dry-run passes through as a claude arg" || bad "3 later flag" "$out"
   # 4. no prompt file: refuses with rc 2, prints nothing on stdout
-  out="$(PJ_PROMPT_SOURCES="$root/none-a:$root/none-b" PJ_PROMPT_OUT="$root/p2.md" "$SELF" --dry-run 2>"$root/err4")"; rc=$?
+  out="$(PJ_PROFILE_DIR="$root/none-such" PJ_PROMPT_SOURCES="$root/none-a:$root/none-b" PJ_PROMPT_OUT="$root/p2.md" "$SELF" --dry-run 2>"$root/err4")"; rc=$?
   [[ $rc -eq 2 && -z "$out" ]] && ok "4 no prompt source -> REFUSED rc 2, no argv" || bad "4 refusal" "rc=$rc out=$out"
   grep -q REFUSED "$root/err4" && ok "4 refusal is announced on stderr" || bad "4 stderr" "$(<"$root/err4")"
   # 4b-4d (W-20260929-A96, FOLLOWUP-BRIEF T3). The pj-prompt-file BESIDE this pj, not the
   # stowed one on PATH: from a worktree that is master's, which has no --missing and no strict.
   local wpath="${SELF:h}:$PATH"
-  out="$(PATH="$wpath" PJ_RULES_COPY="$root/no-rules-copy" PJ_PROMPT_SOURCES="$root/none-a:$root/none-b" PJ_PROMPT_OUT="$root/p2.md" "$SELF" --dry-run 2>"$root/err4b")"; rc=$?
+  out="$(PATH="$wpath" PJ_PROFILE_DIR="$root/none-such" PJ_RULES_COPY="$root/no-rules-copy" PJ_PROMPT_SOURCES="$root/none-a:$root/none-b" PJ_PROMPT_OUT="$root/p2.md" "$SELF" --dry-run 2>"$root/err4b")"; rc=$?
   [[ $rc -eq 2 && -z "$out" ]] && grep -q "missing: $root/none-a, $root/none-b\. Fix:" "$root/err4b" && ! grep -q 'run pj-prompt-file --selftest' "$root/err4b" \
     && ok "4b the refusal names both missing files and the fix, not the selftest" || bad "4b refusal names files" "rc=$rc $(<"$root/err4b")"
   mkdir -p "$root/rules-copy"; print -r -- "rules" > "$root/present.md"
-  out="$(PATH="$wpath" PJ_RULES_COPY="$root/rules-copy" PJ_PROMPT_SOURCES="$root/present.md:$root/none-b" PJ_PROMPT_OUT="$root/p4c.md" "$SELF" --dry-run 2>"$root/err4c")"; rc=$?
+  out="$(PATH="$wpath" PJ_PROFILE_DIR="$root/none-such" PJ_RULES_COPY="$root/rules-copy" PJ_PROMPT_SOURCES="$root/present.md:$root/none-b" PJ_PROMPT_OUT="$root/p4c.md" "$SELF" --dry-run 2>"$root/err4c")"; rc=$?
   [[ $rc -eq 2 && -z "$out" ]] && grep -q "pj: REFUSED: no system-prompt file; missing: $root/none-b\. Fix:" "$root/err4c" \
     && ok "4c relay-fed (rules copy present): ONE missing source refuses the launch, named" || bad "4c strict via pj" "rc=$rc $(<"$root/err4c")"
-  out="$(PATH="$wpath" PJ_RULES_COPY="$root/no-rules-copy" PJ_PROMPT_SOURCES="$root/present.md:$root/none-b" PJ_PROMPT_OUT="$root/p4d.md" "$SELF" --dry-run 2>/dev/null)"; rc=$?
+  out="$(PATH="$wpath" PJ_PROFILE_DIR="$root/none-such" PJ_RULES_COPY="$root/no-rules-copy" PJ_PROMPT_SOURCES="$root/present.md:$root/none-b" PJ_PROMPT_OUT="$root/p4d.md" "$SELF" --dry-run 2>/dev/null)"; rc=$?
   [[ $rc -eq 0 && "$out" == *$'\n--append-system-prompt-file\n'"$root/p4d.md"$'\n'* ]] \
     && ok "4d control: the same missing source with no rules copy (the Mac) degrades and launches" || bad "4d Mac degrade" "rc=$rc"
   # 5. control: the launch file is found (the real launch path exists on this machine)

@@ -101,22 +101,6 @@
     {
       "event": "PreToolUse",
       "matcher": "Bash",
-      "script": "enforce-go-build-output.sh",
-      "targets": ["user", "project"],
-      "entry": {
-        "type": "command",
-        "command": "h=\"$HOME/.claude/hooks/enforce-go-build-output.sh\"; if [ -x \"$h\" ]; then o=$(\"$h\"); r=$?; case $r in 0|2) if [ -n \"$o\" ]; then printf '%s\\n' \"$o\"; fi; exit $r;; esac; printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"HOOK CRASHED, DENYING: enforce-go-build-output.sh exited '\"$r\"', which is neither 0 (allow, or its own deny) nor 2 (block), so every call it guards is denied until that is fixed (D-20261002-A01). Fix it from your own terminal, where no Claude hook runs: run ~/.claude/hooks/enforce-go-build-output.sh --selftest to see what broke, then restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command names $HOME/.claude/hooks/enforce-go-build-output.sh from ~/.claude/settings.project.json and ~/.claude/settings.json.\"}}'; else printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"HOOK MISSING, DENYING: enforce-go-build-output.sh is registered but ~/.claude/hooks/enforce-go-build-output.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it from your own terminal, where no Claude hook runs: restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command names $HOME/.claude/hooks/enforce-go-build-output.sh from ~/.claude/settings.project.json and ~/.claude/settings.json.\"}}'; fi",
-        "timeout": 5
-      },
-      "why": "DENIES a go build of a single package, or go test -c, with no -o: Go writes the binary into the current folder (a 6.6 MB engage binary landed in the engage repo root, 2026-09-29). Every session, any folder (D-20260929-A31). SAFE: -o <path outside the repo>, a ./... pattern, or go vet.",
-      "class": "guard",
-      "legacy_commands": [
-        "h=\"$HOME/.claude/hooks/enforce-go-build-output.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"HOOK MISSING, DENYING: enforce-go-build-output.sh is registered but ~/.claude/hooks/enforce-go-build-output.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it from your own terminal, where no Claude hook runs: restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command names $HOME/.claude/hooks/enforce-go-build-output.sh from ~/.claude/settings.project.json and ~/.claude/settings.json.\"}}'; fi"
-      ]
-    },
-    {
-      "event": "PreToolUse",
-      "matcher": "Bash",
       "script": "enforce-no-permanent-delete.sh",
       "targets": ["user", "project"],
       "entry": {
@@ -164,65 +148,6 @@
         "h=\"$HOME/.claude/hooks/enforce-pj-workers.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"HOOK MISSING, DENYING: enforce-pj-workers.sh is registered but ~/.claude/hooks/enforce-pj-workers.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it from your own terminal, where no Claude hook runs: restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command names $HOME/.claude/hooks/enforce-pj-workers.sh from ~/.claude/settings.project.json and ~/.claude/settings.json.\"}}'; fi",
         "test -x \"$HOME/.claude/hooks/enforce-pj-workers.sh\" && \"$HOME/.claude/hooks/enforce-pj-workers.sh\" || true"
       ]
-    },
-    {
-      "event": "PreToolUse",
-      "matcher": "Bash",
-      "script": "enforce-census.sh",
-      "targets": ["user", "project"],
-      "entry": {
-        "type": "command",
-        "command": "h=\"$HOME/.claude/hooks/enforce-census.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: enforce-census.sh is registered but ~/.claude/hooks/enforce-census.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"HOOK MISSING: enforce-census.sh is registered but ~/.claude/hooks/enforce-census.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}}'; fi",
-        "timeout": 5
-      },
-      "why": "Shouts when a grep/rg is used to CONCLUDE instead of census.py",
-      "class": "advisory",
-      "legacy_commands": ["$HOME/.claude/hooks/enforce-census.sh"]
-    },
-    {
-      "event": "PreToolUse",
-      "matcher": "Grep",
-      "script": "enforce-census.sh",
-      "targets": ["user", "project"],
-      "entry": {
-        "type": "command",
-        "command": "h=\"$HOME/.claude/hooks/enforce-census.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: enforce-census.sh is registered but ~/.claude/hooks/enforce-census.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"HOOK MISSING: enforce-census.sh is registered but ~/.claude/hooks/enforce-census.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}}'; fi",
-        "timeout": 5
-      },
-      "why": "Same guard on the Grep tool, not just shell greps",
-      "class": "advisory",
-      "legacy_commands": ["$HOME/.claude/hooks/enforce-census.sh"]
-    },
-    {
-      "event": "PreToolUse",
-      "matcher": "Bash",
-      "script": "enforce-herdr-skill.sh",
-      "targets": ["user", "project"],
-      "entry": {
-        "type": "command",
-        "command": "h=\"$HOME/.claude/hooks/enforce-herdr-skill.sh\"; if [ -x \"$h\" ]; then o=$(\"$h\"); r=$?; case $r in 0|2) if [ -n \"$o\" ]; then printf '%s\\n' \"$o\"; fi; exit $r;; esac; printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"HOOK CRASHED, DENYING: enforce-herdr-skill.sh exited '\"$r\"', which is neither 0 (allow, or its own deny) nor 2 (block), so every call it guards is denied until that is fixed (D-20261002-A01). Fix it from your own terminal, where no Claude hook runs: run ~/.claude/hooks/enforce-herdr-skill.sh --selftest to see what broke, then restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command names $HOME/.claude/hooks/enforce-herdr-skill.sh from ~/.claude/settings.project.json and ~/.claude/settings.json.\"}}'; else printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"HOOK MISSING, DENYING: enforce-herdr-skill.sh is registered but ~/.claude/hooks/enforce-herdr-skill.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it from your own terminal, where no Claude hook runs: restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command names $HOME/.claude/hooks/enforce-herdr-skill.sh from ~/.claude/settings.project.json and ~/.claude/settings.json.\"}}'; fi"
-      },
-      "requires": ["$HOME/.claude/skills/herdr"],
-      "why": "Blocks herdr commands until the herdr skill is read this session",
-      "class": "guard",
-      "legacy_commands": [
-        "h=\"$HOME/.claude/hooks/enforce-herdr-skill.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"HOOK MISSING, DENYING: enforce-herdr-skill.sh is registered but ~/.claude/hooks/enforce-herdr-skill.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it from your own terminal, where no Claude hook runs: restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command names $HOME/.claude/hooks/enforce-herdr-skill.sh from ~/.claude/settings.project.json and ~/.claude/settings.json.\"}}'; fi",
-        "$HOME/.claude/hooks/enforce-herdr-skill.sh"
-      ]
-    },
-    {
-      "event": "PostToolUse",
-      "matcher": "Skill",
-      "script": "mark-herdr-skill-read.sh",
-      "targets": ["user", "project"],
-      "entry": {
-        "type": "command",
-        "command": "h=\"$HOME/.claude/hooks/mark-herdr-skill-read.sh\"; if [ -x \"$h\" ]; then \"$h\" || true; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: mark-herdr-skill-read.sh is registered but ~/.claude/hooks/mark-herdr-skill-read.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"HOOK MISSING: mark-herdr-skill-read.sh is registered but ~/.claude/hooks/mark-herdr-skill-read.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}}'; fi"
-      },
-      "requires": ["$HOME/.claude/skills/herdr"],
-      "why": "Lifts the block above; pointless without the skill it watches for",
-      "class": "alarm",
-      "legacy_commands": ["$HOME/.claude/hooks/mark-herdr-skill-read.sh"]
     },
     {
       "event": "SessionStart",
@@ -353,38 +278,6 @@
     {
       "event": "PreToolUse",
       "matcher": "Bash",
-      "script": "enforce-uv.sh",
-      "targets": ["project"],
-      "entry": {
-        "type": "command",
-        "command": "h=\"$HOME/.claude/hooks/enforce-uv.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: enforce-uv.sh is registered but ~/.claude/hooks/enforce-uv.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"HOOK MISSING: enforce-uv.sh is registered but ~/.claude/hooks/enforce-uv.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}}'; fi",
-        "timeout": 10
-      },
-      "why": "DENIES bare pip/python/pytest/ruff in favour of uv. Moved 2026-09-21 (P5.6): the rule is OPERATIONAL_RULES Environment and every project CLAUDE.md. 0 of 51 and 1 of 245 recent commands elsewhere would have been denied, the 1 correctly",
-      "class": "advisory",
-      "legacy_commands": [
-        "test -x \"$HOME/.claude/hooks/enforce-uv.sh\" && \"$HOME/.claude/hooks/enforce-uv.sh\" || true"
-      ]
-    },
-    {
-      "event": "PreToolUse",
-      "matcher": "Bash",
-      "script": "enforce-pnpm.sh",
-      "targets": ["project"],
-      "entry": {
-        "type": "command",
-        "command": "h=\"$HOME/.claude/hooks/enforce-pnpm.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: enforce-pnpm.sh is registered but ~/.claude/hooks/enforce-pnpm.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"HOOK MISSING: enforce-pnpm.sh is registered but ~/.claude/hooks/enforce-pnpm.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}}'; fi",
-        "timeout": 10
-      },
-      "why": "DENIES npm/yarn/npx in favour of pnpm or bun. Moved 2026-09-21 (P5.6): the package-manager policy is machine-wide (.zshrc wrappers block the same in every shell). 0 would-denies in 296 recent commands elsewhere",
-      "class": "advisory",
-      "legacy_commands": [
-        "test -x \"$HOME/.claude/hooks/enforce-pnpm.sh\" && \"$HOME/.claude/hooks/enforce-pnpm.sh\" || true"
-      ]
-    },
-    {
-      "event": "PreToolUse",
-      "matcher": "Bash",
       "script": "enforce-gh-ssh-only.sh",
       "targets": ["user", "project"],
       "entry": {
@@ -398,38 +291,6 @@
         "h=\"$HOME/.claude/hooks/enforce-gh-ssh-only.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"HOOK MISSING, DENYING: enforce-gh-ssh-only.sh is registered but ~/.claude/hooks/enforce-gh-ssh-only.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it from your own terminal, where no Claude hook runs: restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command names $HOME/.claude/hooks/enforce-gh-ssh-only.sh from ~/.claude/settings.project.json and ~/.claude/settings.json.\"}}'; fi",
         "test -x \"$HOME/.claude/hooks/enforce-gh-ssh-only.sh\" && \"$HOME/.claude/hooks/enforce-gh-ssh-only.sh\" || true",
         "$HOME/.claude/hooks/enforce-gh-ssh-only.sh"
-      ]
-    },
-    {
-      "event": "SessionStart",
-      "script": "MemoryRootGuard.sh",
-      "script_path": "$HOME/.claude/hooks/MemoryRootGuard.sh",
-      "targets": ["project"],
-      "entry": {
-        "type": "command",
-        "command": "h=\"$HOME/.claude/hooks/MemoryRootGuard.sh\"; if [ -x \"$h\" ]; then \"$h\" || true; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: MemoryRootGuard.sh is registered but ~/.claude/hooks/MemoryRootGuard.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"HOOK MISSING: MemoryRootGuard.sh is registered but ~/.claude/hooks/MemoryRootGuard.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}}'; fi",
-        "timeout": 10
-      },
-      "why": "WARNS when the session's cwd is a subdirectory of a hub root, so opening a subdir does not spawn a fresh empty memory store and re-scatter memory. Carried under pj at the P8b gate 2026-09-21: its HUB_ROOTS list holds exactly one path, and that path is a pj project, so the guard was aimed squarely at pj sessions and fired in none of them. LifeOS's file, reached by script_path, not copied. Never blocks: always exits 0",
-      "class": "alarm",
-      "legacy_commands": [
-        "test -x \"$HOME/.claude/hooks/MemoryRootGuard.sh\" && \"$HOME/.claude/hooks/MemoryRootGuard.sh\" || true"
-      ]
-    },
-    {
-      "event": "UserPromptSubmit",
-      "script": "pj-voice-contract.sh",
-      "script_path": "$HOME/.claude/hooks/pj-voice-contract.sh",
-      "targets": ["project"],
-      "entry": {
-        "type": "command",
-        "command": "h=\"$HOME/.claude/hooks/pj-voice-contract.sh\"; if [ -x \"$h\" ]; then \"$h\" || true; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: pj-voice-contract.sh is registered but ~/.claude/hooks/pj-voice-contract.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"HOOK MISSING: pj-voice-contract.sh is registered but ~/.claude/hooks/pj-voice-contract.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}}'; fi",
-        "timeout": 5
-      },
-      "why": "STATES the voice contract before the reply is written, names what the previous reply broke, and LOGS every measured turn to ${XDG_STATE_HOME:-~/.local/state}/pj/voice-drift.log as TSV (timestamp, session, turn, model, em dashes, prose chars). pj-voice V4 says zero em dashes; measured across 17 pj transcripts, 371 of them in 174,107 characters of prose, while every other voice rule was obeyed. THE DEFECT IS MODEL-SPECIFIC: split by model, claude-opus-5 has 371 in 157,774 prose chars (1 per 425) and claude-fable-5-1 has 0 in 15,725, same rules file and same style file -- which is why the log carries the model and why a count without one cannot be read. The wording is not the fault: DA_IDENTITY.md line 45 says almost the same words and the `c` family is clean. BE CAREFUL WITH THAT COMPARISON: 15,831 of the 19,505 characters in the `c` control set are Fable, which is clean under pj too, so the arm that actually compares is `c` on Opus, 3,674 characters, 0 observed against about 9 predicted. Real and thin. What IS solidly measured is that DriftReminder.hook.ts, the counter the `c` family runs, has never fired here: it is registered only in ~/.claude/settings.json and pj passes --setting-sources project,local, and its contract line appears twice in a `c` transcript and zero times in 35.3 MB of pj transcript. The inference that counting is WHY `c` is clean remains a hypothesis, and the log is how it gets settled (W-20260922-A13). UserPromptSubmit and not Stop, on DriftReminder's own recorded measurement: a Stop hook fires after the text is on screen, and FormatGate going observation-only took drift from 0% across 168 turns to 61-91% across 2,608. DriftReminder itself is NOT carried: its contract is hardcoded to a banner, a closer and max 2 em dashes, none of which pj has, and its only seam is LIFEOS_DIR. First UserPromptSubmit entry in this manifest. Project target only. Never blocks and never prints: every path exits 0, and an unwritable log is skipped in silence. Ruled by Gavin at the P9 gate 2026-09-22",
-      "class": "alarm",
-      "legacy_commands": [
-        "test -x \"$HOME/.claude/hooks/pj-voice-contract.sh\" && \"$HOME/.claude/hooks/pj-voice-contract.sh\" || true"
       ]
     },
     {
@@ -447,34 +308,6 @@
       "legacy_commands": [
         "test -x \"$HOME/.claude/hooks/pj-question-ping.sh\" && \"$HOME/.claude/hooks/pj-question-ping.sh\" || true"
       ]
-    },
-    {
-      "event": "PreToolUse",
-      "matcher": "AskUserQuestion",
-      "script": "engage-question-autoanswer.sh",
-      "script_path": "$HOME/CODE/CaptainCodeAU/engage/hooks/engage-question-autoanswer.sh",
-      "targets": ["project"],
-      "entry": {
-        "type": "command",
-        "command": "h=\"$HOME/CODE/CaptainCodeAU/engage/hooks/engage-question-autoanswer.sh\"; if [ -x \"$h\" ]; then \"$h\" || true; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: engage-question-autoanswer.sh is registered but ~/CODE/CaptainCodeAU/engage/hooks/engage-question-autoanswer.sh is missing or not executable, so it did not run. Fix: restore the engage checkout or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"HOOK MISSING: engage-question-autoanswer.sh is registered but ~/CODE/CaptainCodeAU/engage/hooks/engage-question-autoanswer.sh is missing or not executable, so it did not run. Fix: restore the engage checkout or remove this registration.\"}}'; fi",
-        "timeout": 5
-      },
-      "why": "The 10-minute question timer (engage item EI-1, account rule gr:20, Gavin 2026-09-29): when a box waits 10 minutes unanswered, its first (Recommended) option is chosen. Acts only when every question carries the phrase 'recommended option applies if unanswered in 10 minutes', every first label ends (Recommended), none is multi-select, and the session is in a herdr pane; anything else is logged 'not eligible' and left alone. Prints nothing, exits 0, detached watcher. Called by path in the engage repo, never copied (one copy, as D-20260929-A06). ENGAGE_NO_AUTOANSWER=1 disables it. Project target only: pj sessions",
-      "class": "alarm"
-    },
-    {
-      "event": "PostToolUse",
-      "matcher": "AskUserQuestion",
-      "script": "engage-question-autoanswered.sh",
-      "script_path": "$HOME/CODE/CaptainCodeAU/engage/hooks/engage-question-autoanswered.sh",
-      "targets": ["project"],
-      "entry": {
-        "type": "command",
-        "command": "h=\"$HOME/CODE/CaptainCodeAU/engage/hooks/engage-question-autoanswered.sh\"; if [ -x \"$h\" ]; then \"$h\" || true; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: engage-question-autoanswered.sh is registered but ~/CODE/CaptainCodeAU/engage/hooks/engage-question-autoanswered.sh is missing or not executable, so it did not run. Fix: restore the engage checkout or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"HOOK MISSING: engage-question-autoanswered.sh is registered but ~/CODE/CaptainCodeAU/engage/hooks/engage-question-autoanswered.sh is missing or not executable, so it did not run. Fix: restore the engage checkout or remove this registration.\"}}'; fi",
-        "timeout": 5
-      },
-      "why": "Tells the session when the 10-minute timer, not Gavin, chose a box's answer (engage item EI-5): prints additionalContext only when the watcher's marker for this tool_use_id exists, else nothing; always exits 0. Pairs with engage-question-autoanswer.sh (same marker folder). Called by path in the engage repo, never copied. Project target only: pj sessions",
-      "class": "alarm"
     },
     {
       "event": "SessionStart",
@@ -594,5 +427,183 @@
     "Each old string is kept in legacy_commands, so the sync upgrades a machine in place.",
     "Shape proof: claude-hooks-sync-selftest runs every real entry under bash, sh and dash."
   ],
-  "retired": []
+  "retired": [
+    {
+      "event": "PreToolUse",
+      "matcher": "Bash",
+      "script": "enforce-go-build-output.sh",
+      "targets": ["user", "project"],
+      "entry": {
+        "type": "command",
+        "command": "h=\"$HOME/.claude/hooks/enforce-go-build-output.sh\"; if [ -x \"$h\" ]; then o=$(\"$h\"); r=$?; case $r in 0|2) if [ -n \"$o\" ]; then printf '%s\\n' \"$o\"; fi; exit $r;; esac; printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"HOOK CRASHED, DENYING: enforce-go-build-output.sh exited '\"$r\"', which is neither 0 (allow, or its own deny) nor 2 (block), so every call it guards is denied until that is fixed (D-20261002-A01). Fix it from your own terminal, where no Claude hook runs: run ~/.claude/hooks/enforce-go-build-output.sh --selftest to see what broke, then restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command names $HOME/.claude/hooks/enforce-go-build-output.sh from ~/.claude/settings.project.json and ~/.claude/settings.json.\"}}'; else printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"HOOK MISSING, DENYING: enforce-go-build-output.sh is registered but ~/.claude/hooks/enforce-go-build-output.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it from your own terminal, where no Claude hook runs: restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command names $HOME/.claude/hooks/enforce-go-build-output.sh from ~/.claude/settings.project.json and ~/.claude/settings.json.\"}}'; fi",
+        "timeout": 5
+      },
+      "why": "DENIES a go build of a single package, or go test -c, with no -o: Go writes the binary into the current folder (a 6.6 MB engage binary landed in the engage repo root, 2026-09-29). Every session, any folder (D-20260929-A31). SAFE: -o <path outside the repo>, a ./... pattern, or go vet.",
+      "class": "guard",
+      "legacy_commands": [
+        "h=\"$HOME/.claude/hooks/enforce-go-build-output.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"HOOK MISSING, DENYING: enforce-go-build-output.sh is registered but ~/.claude/hooks/enforce-go-build-output.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it from your own terminal, where no Claude hook runs: restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command names $HOME/.claude/hooks/enforce-go-build-output.sh from ~/.claude/settings.project.json and ~/.claude/settings.json.\"}}'; fi"
+      ]
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "Bash",
+      "script": "enforce-census.sh",
+      "targets": ["user", "project"],
+      "entry": {
+        "type": "command",
+        "command": "h=\"$HOME/.claude/hooks/enforce-census.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: enforce-census.sh is registered but ~/.claude/hooks/enforce-census.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"HOOK MISSING: enforce-census.sh is registered but ~/.claude/hooks/enforce-census.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}}'; fi",
+        "timeout": 5
+      },
+      "why": "Shouts when a grep/rg is used to CONCLUDE instead of census.py",
+      "class": "advisory",
+      "legacy_commands": [
+        "$HOME/.claude/hooks/enforce-census.sh"
+      ]
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "Grep",
+      "script": "enforce-census.sh",
+      "targets": ["user", "project"],
+      "entry": {
+        "type": "command",
+        "command": "h=\"$HOME/.claude/hooks/enforce-census.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: enforce-census.sh is registered but ~/.claude/hooks/enforce-census.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"HOOK MISSING: enforce-census.sh is registered but ~/.claude/hooks/enforce-census.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}}'; fi",
+        "timeout": 5
+      },
+      "why": "Same guard on the Grep tool, not just shell greps",
+      "class": "advisory",
+      "legacy_commands": [
+        "$HOME/.claude/hooks/enforce-census.sh"
+      ]
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "Bash",
+      "script": "enforce-herdr-skill.sh",
+      "targets": ["user", "project"],
+      "entry": {
+        "type": "command",
+        "command": "h=\"$HOME/.claude/hooks/enforce-herdr-skill.sh\"; if [ -x \"$h\" ]; then o=$(\"$h\"); r=$?; case $r in 0|2) if [ -n \"$o\" ]; then printf '%s\\n' \"$o\"; fi; exit $r;; esac; printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"HOOK CRASHED, DENYING: enforce-herdr-skill.sh exited '\"$r\"', which is neither 0 (allow, or its own deny) nor 2 (block), so every call it guards is denied until that is fixed (D-20261002-A01). Fix it from your own terminal, where no Claude hook runs: run ~/.claude/hooks/enforce-herdr-skill.sh --selftest to see what broke, then restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command names $HOME/.claude/hooks/enforce-herdr-skill.sh from ~/.claude/settings.project.json and ~/.claude/settings.json.\"}}'; else printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"HOOK MISSING, DENYING: enforce-herdr-skill.sh is registered but ~/.claude/hooks/enforce-herdr-skill.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it from your own terminal, where no Claude hook runs: restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command names $HOME/.claude/hooks/enforce-herdr-skill.sh from ~/.claude/settings.project.json and ~/.claude/settings.json.\"}}'; fi"
+      },
+      "requires": [
+        "$HOME/.claude/skills/herdr"
+      ],
+      "why": "Blocks herdr commands until the herdr skill is read this session",
+      "class": "guard",
+      "legacy_commands": [
+        "h=\"$HOME/.claude/hooks/enforce-herdr-skill.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"HOOK MISSING, DENYING: enforce-herdr-skill.sh is registered but ~/.claude/hooks/enforce-herdr-skill.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it from your own terminal, where no Claude hook runs: restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command names $HOME/.claude/hooks/enforce-herdr-skill.sh from ~/.claude/settings.project.json and ~/.claude/settings.json.\"}}'; fi",
+        "$HOME/.claude/hooks/enforce-herdr-skill.sh"
+      ]
+    },
+    {
+      "event": "PostToolUse",
+      "matcher": "Skill",
+      "script": "mark-herdr-skill-read.sh",
+      "targets": ["user", "project"],
+      "entry": {
+        "type": "command",
+        "command": "h=\"$HOME/.claude/hooks/mark-herdr-skill-read.sh\"; if [ -x \"$h\" ]; then \"$h\" || true; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: mark-herdr-skill-read.sh is registered but ~/.claude/hooks/mark-herdr-skill-read.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"HOOK MISSING: mark-herdr-skill-read.sh is registered but ~/.claude/hooks/mark-herdr-skill-read.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}}'; fi"
+      },
+      "requires": [
+        "$HOME/.claude/skills/herdr"
+      ],
+      "why": "Lifts the block above; pointless without the skill it watches for",
+      "class": "alarm",
+      "legacy_commands": [
+        "$HOME/.claude/hooks/mark-herdr-skill-read.sh"
+      ]
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "Bash",
+      "script": "enforce-uv.sh",
+      "targets": ["project"],
+      "entry": {
+        "type": "command",
+        "command": "h=\"$HOME/.claude/hooks/enforce-uv.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: enforce-uv.sh is registered but ~/.claude/hooks/enforce-uv.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"HOOK MISSING: enforce-uv.sh is registered but ~/.claude/hooks/enforce-uv.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}}'; fi",
+        "timeout": 10
+      },
+      "why": "DENIES bare pip/python/pytest/ruff in favour of uv. Moved 2026-09-21 (P5.6): the rule is OPERATIONAL_RULES Environment and every project CLAUDE.md. 0 of 51 and 1 of 245 recent commands elsewhere would have been denied, the 1 correctly",
+      "class": "advisory",
+      "legacy_commands": [
+        "test -x \"$HOME/.claude/hooks/enforce-uv.sh\" && \"$HOME/.claude/hooks/enforce-uv.sh\" || true"
+      ]
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "Bash",
+      "script": "enforce-pnpm.sh",
+      "targets": ["project"],
+      "entry": {
+        "type": "command",
+        "command": "h=\"$HOME/.claude/hooks/enforce-pnpm.sh\"; if [ -x \"$h\" ]; then \"$h\"; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: enforce-pnpm.sh is registered but ~/.claude/hooks/enforce-pnpm.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"HOOK MISSING: enforce-pnpm.sh is registered but ~/.claude/hooks/enforce-pnpm.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}}'; fi",
+        "timeout": 10
+      },
+      "why": "DENIES npm/yarn/npx in favour of pnpm or bun. Moved 2026-09-21 (P5.6): the package-manager policy is machine-wide (.zshrc wrappers block the same in every shell). 0 would-denies in 296 recent commands elsewhere",
+      "class": "advisory",
+      "legacy_commands": [
+        "test -x \"$HOME/.claude/hooks/enforce-pnpm.sh\" && \"$HOME/.claude/hooks/enforce-pnpm.sh\" || true"
+      ]
+    },
+    {
+      "event": "SessionStart",
+      "script": "MemoryRootGuard.sh",
+      "script_path": "$HOME/.claude/hooks/MemoryRootGuard.sh",
+      "targets": ["project"],
+      "entry": {
+        "type": "command",
+        "command": "h=\"$HOME/.claude/hooks/MemoryRootGuard.sh\"; if [ -x \"$h\" ]; then \"$h\" || true; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: MemoryRootGuard.sh is registered but ~/.claude/hooks/MemoryRootGuard.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"HOOK MISSING: MemoryRootGuard.sh is registered but ~/.claude/hooks/MemoryRootGuard.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}}'; fi",
+        "timeout": 10
+      },
+      "why": "WARNS when the session's cwd is a subdirectory of a hub root, so opening a subdir does not spawn a fresh empty memory store and re-scatter memory. Carried under pj at the P8b gate 2026-09-21: its HUB_ROOTS list holds exactly one path, and that path is a pj project, so the guard was aimed squarely at pj sessions and fired in none of them. LifeOS's file, reached by script_path, not copied. Never blocks: always exits 0",
+      "class": "alarm",
+      "legacy_commands": [
+        "test -x \"$HOME/.claude/hooks/MemoryRootGuard.sh\" && \"$HOME/.claude/hooks/MemoryRootGuard.sh\" || true"
+      ]
+    },
+    {
+      "event": "UserPromptSubmit",
+      "script": "pj-voice-contract.sh",
+      "script_path": "$HOME/.claude/hooks/pj-voice-contract.sh",
+      "targets": ["project"],
+      "entry": {
+        "type": "command",
+        "command": "h=\"$HOME/.claude/hooks/pj-voice-contract.sh\"; if [ -x \"$h\" ]; then \"$h\" || true; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: pj-voice-contract.sh is registered but ~/.claude/hooks/pj-voice-contract.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"HOOK MISSING: pj-voice-contract.sh is registered but ~/.claude/hooks/pj-voice-contract.sh is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}}'; fi",
+        "timeout": 5
+      },
+      "why": "STATES the voice contract before the reply is written, names what the previous reply broke, and LOGS every measured turn to ${XDG_STATE_HOME:-~/.local/state}/pj/voice-drift.log as TSV (timestamp, session, turn, model, em dashes, prose chars). pj-voice V4 says zero em dashes; measured across 17 pj transcripts, 371 of them in 174,107 characters of prose, while every other voice rule was obeyed. THE DEFECT IS MODEL-SPECIFIC: split by model, claude-opus-5 has 371 in 157,774 prose chars (1 per 425) and claude-fable-5-1 has 0 in 15,725, same rules file and same style file -- which is why the log carries the model and why a count without one cannot be read. The wording is not the fault: DA_IDENTITY.md line 45 says almost the same words and the `c` family is clean. BE CAREFUL WITH THAT COMPARISON: 15,831 of the 19,505 characters in the `c` control set are Fable, which is clean under pj too, so the arm that actually compares is `c` on Opus, 3,674 characters, 0 observed against about 9 predicted. Real and thin. What IS solidly measured is that DriftReminder.hook.ts, the counter the `c` family runs, has never fired here: it is registered only in ~/.claude/settings.json and pj passes --setting-sources project,local, and its contract line appears twice in a `c` transcript and zero times in 35.3 MB of pj transcript. The inference that counting is WHY `c` is clean remains a hypothesis, and the log is how it gets settled (W-20260922-A13). UserPromptSubmit and not Stop, on DriftReminder's own recorded measurement: a Stop hook fires after the text is on screen, and FormatGate going observation-only took drift from 0% across 168 turns to 61-91% across 2,608. DriftReminder itself is NOT carried: its contract is hardcoded to a banner, a closer and max 2 em dashes, none of which pj has, and its only seam is LIFEOS_DIR. First UserPromptSubmit entry in this manifest. Project target only. Never blocks and never prints: every path exits 0, and an unwritable log is skipped in silence. Ruled by Gavin at the P9 gate 2026-09-22",
+      "class": "alarm",
+      "legacy_commands": [
+        "test -x \"$HOME/.claude/hooks/pj-voice-contract.sh\" && \"$HOME/.claude/hooks/pj-voice-contract.sh\" || true"
+      ]
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "AskUserQuestion",
+      "script": "engage-question-autoanswer.sh",
+      "script_path": "$HOME/CODE/CaptainCodeAU/engage/hooks/engage-question-autoanswer.sh",
+      "targets": ["project"],
+      "entry": {
+        "type": "command",
+        "command": "h=\"$HOME/CODE/CaptainCodeAU/engage/hooks/engage-question-autoanswer.sh\"; if [ -x \"$h\" ]; then \"$h\" || true; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: engage-question-autoanswer.sh is registered but ~/CODE/CaptainCodeAU/engage/hooks/engage-question-autoanswer.sh is missing or not executable, so it did not run. Fix: restore the engage checkout or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"HOOK MISSING: engage-question-autoanswer.sh is registered but ~/CODE/CaptainCodeAU/engage/hooks/engage-question-autoanswer.sh is missing or not executable, so it did not run. Fix: restore the engage checkout or remove this registration.\"}}'; fi",
+        "timeout": 5
+      },
+      "why": "The 10-minute question timer (engage item EI-1, account rule gr:20, Gavin 2026-09-29): when a box waits 10 minutes unanswered, its first (Recommended) option is chosen. Acts only when every question carries the phrase 'recommended option applies if unanswered in 10 minutes', every first label ends (Recommended), none is multi-select, and the session is in a herdr pane; anything else is logged 'not eligible' and left alone. Prints nothing, exits 0, detached watcher. Called by path in the engage repo, never copied (one copy, as D-20260929-A06). ENGAGE_NO_AUTOANSWER=1 disables it. Project target only: pj sessions",
+      "class": "alarm"
+    },
+    {
+      "event": "PostToolUse",
+      "matcher": "AskUserQuestion",
+      "script": "engage-question-autoanswered.sh",
+      "script_path": "$HOME/CODE/CaptainCodeAU/engage/hooks/engage-question-autoanswered.sh",
+      "targets": ["project"],
+      "entry": {
+        "type": "command",
+        "command": "h=\"$HOME/CODE/CaptainCodeAU/engage/hooks/engage-question-autoanswered.sh\"; if [ -x \"$h\" ]; then \"$h\" || true; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: engage-question-autoanswered.sh is registered but ~/CODE/CaptainCodeAU/engage/hooks/engage-question-autoanswered.sh is missing or not executable, so it did not run. Fix: restore the engage checkout or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"HOOK MISSING: engage-question-autoanswered.sh is registered but ~/CODE/CaptainCodeAU/engage/hooks/engage-question-autoanswered.sh is missing or not executable, so it did not run. Fix: restore the engage checkout or remove this registration.\"}}'; fi",
+        "timeout": 5
+      },
+      "why": "Tells the session when the 10-minute timer, not Gavin, chose a box's answer (engage item EI-5): prints additionalContext only when the watcher's marker for this tool_use_id exists, else nothing; always exits 0. Pairs with engage-question-autoanswer.sh (same marker folder). Called by path in the engage repo, never copied. Project target only: pj sessions",
+      "class": "alarm"
+    }
+  ]
 }
