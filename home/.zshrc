@@ -1117,11 +1117,11 @@ claude() {
             print -ru2 -- "claude: herdr pane guard OVERRIDDEN by PJ_WORKERS_CONTROL=$PJ_WORKERS_CONTROL (logged to $__cpg_log)"
             command claude "$@"; return
         fi
-        print -ru2 -- "claude: REFUSED in a herdr pane: PJ_WORKERS_CONTROL must be an item id like W-20260924-A59 and must log to $__cpg_log; one failed. Workers: pj-worker start. To run it anyway: command claude $__cpg_argv"
+        print -ru2 -- "claude: REFUSED in a herdr pane: PJ_WORKERS_CONTROL must be an item id like W-20260924-A59 and must log to $__cpg_log; one failed. Workers: engage-worker start. To run it anyway: command claude $__cpg_argv"
         return 1
     fi
     { mkdir -p "${__cpg_log:h}" && print -r -- "[$__cpg_ts] BLOCKED claude-paneguard \"no system-prompt file pane=${HERDR_PANE_ID-unknown}\" \"claude $__cpg_argv\"" >> "$__cpg_log"; } 2>/dev/null
-    print -ru2 -- "claude: REFUSED in a herdr pane: this session would carry no pj rules. Workers: pj-worker start. Yourself: pj. To run it anyway: command claude $__cpg_argv"
+    print -ru2 -- "claude: REFUSED in a herdr pane: this session would carry no rules. Workers: engage-worker start. Yourself: engage. To run it anyway: command claude $__cpg_argv"
     return 1
 }
 

@@ -87,7 +87,8 @@ pass() { # $1 label $2 command [$3 argv that must appear]
 }
 refuse() { # $1 label $2 command
     run "$2"
-    if (( RC == 1 )) && [[ "$OUT" != *STUB_ARGV:* ]] && [[ "$OUT" == *"pj-worker start"* ]] \
+    if (( RC == 1 )) && [[ "$OUT" != *STUB_ARGV:* ]] && [[ "$OUT" == *"engage-worker start"* ]] \
+       && [[ "$OUT" != *"Yourself: pj"* ]] \
        && [[ "$OUT" == *"command claude"* ]]; then res PASS "$1"
     else res FAIL "$1" "rc=$RC out=${OUT//$'\n'/ | }"; fi
 }
