@@ -413,6 +413,18 @@ check "K fixture: the undo moved the ledger aside" '[ ! -e "$STATE/wrap-batch/k-
 wrap done --skill
 check "K undone ledger -> no block and no undo line" '[ "$RC" -eq 0 ] && ! printf "%s" "$OUT" | grep -q "Filed and closed for you" && ! printf "%s" "$OUT" | grep -q "undo-wrap"'
 
+# W-20261005-A38: an item filed then closed in the same wrap has two ledger lines, and the
+# "filed" one records the open/ path the close moved it away from. Both lines must still show
+# the title. Control: a ledger line whose item exists nowhere still says it is missing.
+KB="$(CLAUDE_CODE_SESSION_ID=k-both oi add "k filed then closed" --done-when x --wrap 2>/dev/null)"
+CLAUDE_CODE_SESSION_ID=k-both oi close "$KB" "done: k both" --wrap >/dev/null 2>&1
+KW="$(cut -f2 "$STATE/wrap-batch/k-both.tsv" | head -1)"
+printf 'filed\t%s\tW-20990101-Z99\t%s/items/open/W-20990101-Z99.md\t0\n' "$KW" "$KW" >> "$STATE/wrap-batch/k-both.tsv"
+SID=k-both; wrap done --skill
+check "K filed then closed: the filed line shows the title" 'printf "%s\n" "$OUT" | grep -qE "^  filed +$KB +k filed then closed$"'
+check "K filed then closed: the closed line shows the title" 'printf "%s\n" "$OUT" | grep -qE "^  closed +$KB +k filed then closed$"'
+check "K control: an item that exists nowhere still says so" 'printf "%s\n" "$OUT" | grep -qE "^  filed +W-20990101-Z99 +\(no longer at its recorded place; open-items show W-20990101-Z99\)$"'
+
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 rm -r "$ROOT" 2>/dev/null || true
 [ "$FAIL" -eq 0 ]

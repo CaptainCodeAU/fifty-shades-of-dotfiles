@@ -250,10 +250,15 @@ cmd_done(){
 # line per ledger line, then the undo line. No ledger, an empty one, or one already undone
 # (moved to .undone.<time>): nothing at all.
 print_batch(){
-  local led="$STATE/wrap-batch/$SID.tsv" act w id f sha title n=0
+  local led="$STATE/wrap-batch/$SID.tsv" act w id f g sha title n=0
   [ -s "$led" ] || return 0
   while IFS=$'\t' read -r act w id f sha; do
     case "$act" in filed|closed|parked) ;; *) continue ;; esac
+    # W-20261005-A38: an item filed then closed in one wrap has left the open/ path its
+    # "filed" line records, so find it by id in the same drawer before calling it missing.
+    if [ ! -f "$f" ]; then
+      for g in "$w"/items/*/"$id".md; do [ -f "$g" ] && { f="$g"; break; }; done
+    fi
     title="$(sed -n '1s/^## [^ ]* -- //p' "$f" 2>/dev/null | LC_ALL=C tr -d '\000-\037\177')"
     [ -n "$title" ] || title="(no longer at its recorded place; open-items show $id)"
     [ "$n" -gt 0 ] || printf "\nFiled and closed for you (the session's choice, not yours):\n"
