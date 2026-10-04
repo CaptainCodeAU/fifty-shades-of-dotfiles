@@ -122,6 +122,12 @@
 #                    pointed at a fixture cache
 #   PJ_PROFILE_DIR   the profiles folder (default ~/.config/pj/profiles)
 #   PJ_JQ            the jq that reads the settings file's enabledPlugins (default jq)
+#
+# The whole script is ONE { ... } block that ends in exit, so zsh reads all of it before it runs
+# a line: pj keeps running for the whole session, and an edit made to this file in place
+# meanwhile can never run at exit (option 1 step 1, 4 Oct; Gavin saw `pj:1956: no matches
+# found` at exit, and sessions start again; selftest 33). Keep the closing brace the last line.
+{
 set -u
 emulate -L zsh
 
@@ -1674,6 +1680,58 @@ selftest() {
   [[ $rc -eq 1 && "$(<"$root/err30")" == "This project has an engage move marker that is not valid: first line. Run engage-go cutover check for details." && "$(wc -l < "$root/err30" | tr -d ' ')" == 1 ]] \
     && ok "31m no perl: exit 3 with two stdout lines still gives the FIRST line only, one line" || bad "31m no perl two lines" "rc=$rc err=$(<"$root/err30")"
   pkill -KILL -f "$mk31" 2>/dev/null
+  # 33 a running pj never runs text edited into its file (option 1 step 1, 4 Oct). pj stays
+  #    running for the whole session, and zsh reads a script as it goes, so an edit made in place
+  #    while a session ran used to run whatever new text sat at the old byte offset once the
+  #    session ended (Gavin saw `pj:1956: no matches found` at exit, and sessions start again).
+  #    A copy of this script launches through a fake launch file that waits; while it waits the
+  #    copy is rewritten in place (same file, no rename) with lines that each leave a marker.
+  #    zsh 5.9 reads a script in 8192-byte blocks and reads the file again only past the block
+  #    it holds (probed 4 Oct: a launch line ending on a 4096 edge kept the old text; on 8192,
+  #    16384 and 65536 edges the new text ran), so ewpad puts the byte after the launch line on
+  #    an edge.
+  local ew="$root/edit-while"
+  mkdir -p "$ew/bin" "$ew/ctl"
+  # ewpad SRC DEST: SRC with one comment line before its last launch line, made executable
+  ewpad() {
+    setopt localoptions nomultibyte
+    local body pre post l='run_with_relaunch "$@"'$'\n' p
+    body="$(<"$1")"$'\n'
+    pre="${body%$'\n'"$l"*}"$'\n'; post="${body#"$pre"}"
+    [[ "$post" == "$l"* ]] || return 1
+    p=$(( (8192 - (${#pre} + ${#l}) % 8192) % 8192 )); (( p < 2 )) && p=$((p + 8192))
+    print -rn -- "$pre#${(l:p-2::x:)}"$'\n'"$post" >> "$2" && chmod +x "$2"
+  }
+  # ewrun DIR FILE CMD...: run CMD (its launch waits for DIR/go), rewrite FILE in place with
+  # marker lines longer than it, let the launch return; DIR/ran-new-text exists if one ran
+  ewrun() {
+    (( $# >= 3 )) || return 2
+    local d="$1" f="$2" n="" i pid; shift 2
+    "$@" </dev/null >"$d/out" 2>&1 &
+    pid=$!
+    for i in {1..300}; do [[ -e "$d/started" ]] && break; sleep 0.1; done
+    while (( ${#n} <= $(wc -c < "$f") + 200 )); do n+=": > ${(q)d}/ran-new-text"$'\n'; done
+    print -rn -- "$n" 1<> "$f"
+    : > "$d/go"
+    wait $pid
+  }
+  local ewwait='local i; for i in {1..300}; do [[ -e '"${(q)ew}"'/%s/go ]] && return 0; sleep 0.1; done'
+  # 33a control: the old shape (top-level lines, the launch line last, on an edge) runs the new text
+  print -r -- '#!/usr/bin/env zsh' >> "$ew/ctl.src"
+  print -r -- "run_with_relaunch() { : > ${(q)ew}/ctl/started; ${ewwait//\%s/ctl}; }" >> "$ew/ctl.src"
+  print -r -- 'run_with_relaunch "$@"' >> "$ew/ctl.src"
+  ewpad "$ew/ctl.src" "$ew/ctl/run" && ewrun "$ew/ctl" "$ew/ctl/run" zsh "$ew/ctl/run"
+  [[ -e "$ew/ctl/started" && -e "$ew/ctl/ran-new-text" ]] && ok "33a control: a script of the old shape runs text edited into it while it runs" || bad "33a control did not hit" "$(<"$ew/ctl/out")"
+  # 33b a copy of this pj, launched for real through a fake launch file
+  print -r -- "__claude_launch() { : > ${(q)ew}/bin/started; ${ewwait//\%s/bin}; }" >> "$ew/fake-launch"
+  if ewpad "$SELF" "$ew/bin/pj"; then
+    ewrun "$ew/bin" "$ew/bin/pj" env -u HERDR_ENV PJ_NO_FETCH=1 PJ_NO_CHECKS=1 PJ_LAUNCH_FILE="$ew/fake-launch" PJ_WORKER_BIN="$fk/rc0" \
+      PJ_PROFILE_DIR="$pdir" PJ_PROMPT_OUT="$root/prompt.md" "$ew/bin/pj" --profile twomods
+    [[ -e "$ew/bin/started" ]] && ok "33b control: the copy reached its (fake) launch and waited there" || bad "33b launch not reached" "$(<"$ew/bin/out")"
+    [[ ! -e "$ew/bin/ran-new-text" ]] && ok "33b an in-place edit while pj runs: none of the new text runs at exit" || bad "33b new text ran at exit" "$(<"$ew/bin/out")"
+  else
+    bad "33b no top-level launch line" "run_with_relaunch \"\$@\" not found at the start of a line in $SELF"
+  fi
   # 32 nothing new in the starting folder ($PWD), against the list read at the top. Control:
   #    the same glob sees this run's own fixtures, so an empty answer is not a blind one.
   new32=( *(DN) ); new32=( ${new32:|cwd32} ); local -a ctl32=( $root/*(DN) )
@@ -1955,3 +2013,5 @@ PJ_RELAUNCH_FILE="$(mktemp "${TMPDIR:-/tmp}/pj-relaunch.XXXXXXXX" 2>/dev/null)" 
 [[ -n "$PJ_RELAUNCH_FILE" ]] && print -r -- consumed >| "$PJ_RELAUNCH_FILE" 2>/dev/null
 export PJ_RELAUNCH_FILE
 run_with_relaunch "$@"
+exit
+}
