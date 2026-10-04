@@ -175,7 +175,6 @@
     }
   },
   "disableClaudeAiConnectors": true,
-  "outputStyle": "pj-voice:pj-voice",
   "verbose": true,
 
   "_f5b_hook_security_why": [
