@@ -37,11 +37,6 @@ MENU_TEXT() {
     engage                THIS PROJECT, with the framework on: start card, open items,
                           rulings, /pj:wrap-up. This is the one you want almost always.
 
-    c2 start <topic>      A DISPOSABLE scratch worktree with its own config dir, for
-                          something you are willing to throw away.
-                          c2 done <topic>            tears it down, guarded
-                          c2 done <topic> --discard  throws the work away too
-
     lifeos                GLOBAL work, with the LifeOS constitution loaded.
 
 EOF
@@ -63,9 +58,11 @@ selftest() {
   # 2. every route Gavin named is present, each asserted by name rather than by counting
   #    lines -- a line count would pass on a menu that named the wrong things.
   local want
-  for want in 'engage' 'c2 start <topic>' 'c2 done <topic> --discard' 'lifeos'; do
+  for want in 'engage' 'lifeos'; do
     case "$out" in *"$want"*) ok "2 names $want";; *) bad "2 missing $want" "$out";; esac
   done
+  # 2c. c2 is retired (option 1 step 11, 4 Oct 2026): the menu must not send anyone to it.
+  case "$out" in *'c2 '*) bad "2c still names the retired c2" "$out";; *) ok "2c does not name the retired c2";; esac
   # 2a. pj is no longer offered as a route (option 1, 4 Oct 2026): engage is the launcher.
   case "$out" in *$'\n    pj '*) bad "2a still offers pj as a route" "$out";; *) ok "2a does not offer pj as a route";; esac
   # 2b. the retired route is NOT offered (P10, 2026-09-22): a menu naming a dead alias
@@ -83,7 +80,7 @@ selftest() {
   # 4. --help prints the SAME routes but exits 0: asking for help is not an error.
   out="$("$self" --help 2>&1)"; rc=$?
   [ "$rc" -eq 0 ] && ok "4 --help exits 0" || bad "4 --help exit" "rc=$rc"
-  case "$out" in *'c2 start <topic>'*) ok "4 --help carries the same routes";; *) bad "4 --help text" "$out";; esac
+  case "$out" in *'engage '*) ok "4 --help carries the same routes";; *) bad "4 --help text" "$out";; esac
 
   # 5. an unknown flag REFUSES with 2, distinct from both 0 and the signpost's 1.
   out="$("$self" --bogus 2>&1)"; rc=$?
