@@ -850,8 +850,9 @@ stays enabled system-wide, finds an empty selection, and says nothing. It is the
 same root cause as `cmd+C` appearing to do nothing — the selection is not where
 the OS is looking.
 
-The bridge is the clipboard, since `copy_on_select` means a drag has already
-copied by the time you release it. The bindings in `config.toml`
+The bridge is the clipboard, since a drag has already copied by the time you
+release it (which setting does the copying depends on the pane: see "Who copies
+on a drag" below). The bindings in `config.toml`
 (`ctrl+alt+backtick` and `prefix+backtick`) run `speak-clipboard --toggle`,
 which:
 
@@ -912,6 +913,32 @@ the text is a screen away from the pointer.
 
 Requires _"Applications in terminal may access clipboard"_ in iTerm2, without
 which the drag never reaches the clipboard and the key appears dead.
+
+**Who copies on a drag** (measured 2026-10-02 on herdr 0.9.1 and Claude Code
+2.1.287; these are behaviours, not settings this repo makes):
+
+- In a Claude pane the drag is Claude Code's own fullscreen selection, not
+  herdr's. Only Claude Code's `/config` **Copy on select** decides whether it
+  copies. herdr's `copy_on_select` covers shell panes only. Both were on when
+  checked 2026-10-04 (`copyOnSelect: true` in `~/.claude.json`; herdr's
+  default, unset in `config.toml`).
+- `Cmd+C` goes to iTerm2's menu, which cannot see either selection and offers
+  to disable mouse reporting. Decline it.
+- A key bound to a herdr `plugin_action` gets no `selected_text` for a Claude
+  highlight (absent in 4 of 4 presses), so a plugin cannot read it directly.
+- `herdr config check` passes a `plugin_action` name that does not exist
+  (`dotfiles.nope.speak` was ok); it checks the type only.
+- `herdr pane send-keys <pane> ctrl+shift+c` did not interrupt an idle Claude
+  pane, but in a shell it arrives as `0x03`, the same byte as `Ctrl+C`. Never
+  send it to a pane not known to be Claude.
+
+**So every drag overwrites what the clipboard held before**, and
+`speak-clipboard` cannot put it back: it only reads (`pbpaste`) and never sees
+the earlier contents. A borrow-and-restore version (no copy on drag; the speak
+key copies the highlight, reads it, restores the old clipboard, then speaks)
+was built on 2026-10-02 and reverted on 2026-10-03 at Gavin's choice.
+`git revert d11b782` brings it back; its measurements and the untested real
+arm are in the project drawer at `WORK/speak-selection/20261002/REPORT.md`.
 
 The no-config alternative is to hold **option while dragging**, producing a
 native terminal selection the real accessibility hotkey can read. Fine
