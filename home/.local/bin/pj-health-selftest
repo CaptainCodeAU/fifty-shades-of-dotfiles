@@ -46,7 +46,7 @@ REAL_PROMPT="$(readlink -f "$REAL_PROMPT" 2>/dev/null || printf '%s' "$REAL_PROM
 # ----------------------------------------------------------------- fixture ----
 DF="$T/dotfiles"; H="$T/home-claude"; BIN="$T/bin"; STATE="$T/state"; PROJ="$T/proj"
 mkdir -p "$DF/home/.local/bin" "$DF/home/.claude/hooks" "$DF/home/.claude/pj/.claude-plugin" "$DF/home/.claude/pj/skills/wrap-up" "$DF/settings/claude" \
-         "$H/pj-voice/output-styles" "$H/skills/herdr" "$H/skills/AgentRelay" "$H/skills/ISA" "$H/pj/.claude-plugin" "$H/pj/skills/wrap-up" "$H/hooks" \
+         "$H/skills/herdr" "$H/skills/AgentRelay" "$H/skills/ISA" "$H/pj/.claude-plugin" "$H/pj/skills/wrap-up" "$H/hooks" \
          "$H/pj-global/decisions" "$H/pj-global/notes" "$H/LIFEOS/USER/CONFIG" "$H/projects" "$BIN" "$STATE/no-wrap-up" "$PROJ/.claude" "$T/cache" "$T/drawer/items"
 
 fake(){   # fake <path> <body>   an executable that runs <body> with "$@"
@@ -85,7 +85,6 @@ done
 for h in enforce-secret-probe.sh enforce-census.sh enforce-herdr-skill.sh mark-herdr-skill-read.sh validate-bash.sh enforce-uv.sh enforce-pnpm.sh pj-voice-contract.sh enforce-pj-workers.sh; do ln -s "$DF/home/.claude/hooks/$h" "$H/hooks/$h"; done
 ln -s "$DF/home/.claude/pj/.claude-plugin/plugin.json" "$H/pj/.claude-plugin/plugin.json"
 ln -s "$DF/home/.claude/pj/skills/wrap-up/SKILL.md" "$H/pj/skills/wrap-up/SKILL.md"
-echo "# style" >"$H/pj-voice/output-styles/pj-voice.md"
 for s in herdr AgentRelay ISA; do echo "# $s" >"$H/skills/$s/SKILL.md"; done
 OR="$H/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md"; RULES="$H/pj-global/RULES.md"
 printf '# OPERATIONAL_RULES.md fixture\n- rule one\n' >"$OR"
@@ -95,7 +94,7 @@ printf 'name: fixture\nletter: A\n' >"$T/machine"
 printf 'project: p\nrepo: r\nended: t\nsession: s1\ntranscript: x\n\nproject: p\nrepo: r\nended: t\nsession: s2\ntranscript: y\n' >"$STATE/no-wrap-up/-tmp-proj"
 # the launcher fixtures (F3): a dry-run argv, what `whence -w pj; alias pj` prints, a ps listing, a .zshrc mtime
 printf '%s\n' claude --setting-sources project,local --settings "$HOME/.claude/settings.project.json" --append-system-prompt-file "$T/cache/prompt.md" \
-  --plugin-dir "$HOME/.claude/skills/herdr" --plugin-dir "$HOME/.claude/skills/ISA" --plugin-dir "$HOME/.claude/pj-voice" --plugin-dir "$HOME/.claude/pj" \
+  --plugin-dir "$HOME/.claude/skills/herdr" --plugin-dir "$HOME/.claude/skills/ISA" --plugin-dir "$HOME/.claude/pj" \
   --dangerously-skip-permissions --effort high >"$T/dryrun"; cp "$T/dryrun" "$T/dryrun.ok"
 printf 'pj: command\n' >"$T/type-out"; cp "$T/type-out" "$T/type-out.ok"
 ZMT="$(date -j -f '%Y-%m-%d %H:%M:%S' '2026-09-21 01:00:00' +%s 2>/dev/null || date -d '2026-09-21 01:00:00' +%s)"
@@ -124,7 +123,7 @@ cat >"$DF/settings/claude/hooks.json" <<'EOF'
 EOF
 # settings.project.json: $HOME paths point at the fixture hooks through the PJ_LAUNCHER fixture-mode rewrite
 write_settings(){   # write_settings [extra-jq-filter]
-  jq -n '{outputStyle:"pj-voice:pj-voice", hooks:{
+  jq -n '{hooks:{
     PreToolUse:[{matcher:"Bash",hooks:[{type:"command",command:"$HOME/.claude/hooks/enforce-secret-probe.sh"},{type:"command",command:"$HOME/.claude/hooks/enforce-census.sh"},{type:"command",command:"$HOME/.claude/hooks/enforce-herdr-skill.sh"},{type:"command",command:"test -x \"$HOME/.claude/hooks/validate-bash.sh\" && \"$HOME/.claude/hooks/validate-bash.sh\" || true"},{type:"command",command:"test -x \"$HOME/.claude/hooks/enforce-pj-workers.sh\" && \"$HOME/.claude/hooks/enforce-pj-workers.sh\" || true"}]},{matcher:"Grep",hooks:[{type:"command",command:"$HOME/.claude/hooks/enforce-census.sh"}]}],
     PostToolUse:[{matcher:"Skill",hooks:[{type:"command",command:"$HOME/.claude/hooks/mark-herdr-skill-read.sh"}]}],
     SessionStart:[{hooks:[{type:"command",command:"test -x \"$HOME/.local/bin/ci-watch\" && \"$HOME/.local/bin/ci-watch\" || true"},{type:"command",command:"test -x \"$HOME/.local/bin/pj-start-card\" && \"$HOME/.local/bin/pj-start-card\" || true"}]}],
@@ -392,7 +391,7 @@ arm "selftests present, not run" has selftests "not run"
 
 # 1. launcher (F3)
 arm "launcher PASS names the script and no alias" has launcher "is a command, no alias"
-arm "launcher PASS counts 4 plugin dirs" has launcher "4 plugin dirs"
+arm "launcher PASS counts 3 plugin dirs (pj-voice retired, option A)" has launcher "3 plugin dirs"
 awk -v skip="$HOME/.claude/pj" '$0=="--plugin-dir"{getline v; if (v==skip) next; print; print v; next} {print}' "$T/dryrun.ok" >"$T/dryrun"; run
 arm "launcher FAIL when a plugin-dir is missing from the dry-run" is launcher FAIL; arm "launcher FAIL names the dir" has launcher "plugin-dir ~/.claude/pj]"
 sed "s#$T/cache/prompt.md#$H/LIFEOS/USER/CONFIG/OPERATIONAL_RULES.md#" "$T/dryrun.ok" >"$T/dryrun"; run
@@ -472,7 +471,9 @@ cp "$T/ps.ok" "$T/ps"; run; arm "stale-shells back to PASS after the GNU fixture
 
 # 2. output style
 write_settings '.outputStyle="default"'; run; arm "output-style FAIL on wrong style" is output-style FAIL; write_settings
-mv "$H/pj-voice/output-styles/pj-voice.md" "$T/style.bak"; run; arm "output-style FAIL when the style file is missing" is output-style FAIL; mv "$T/style.bak" "$H/pj-voice/output-styles/pj-voice.md"
+# option A (3 Oct 2026) retired pj-voice: the style coming back is a FAIL, and its fix must not restore it
+write_settings '.outputStyle="pj-voice:pj-voice"'; run; arm "output-style FAIL when pj-voice comes back" is output-style FAIL
+arm "output-style fix never says restore pj-voice" bash -c '! grep -q "restore ~/.claude/pj-voice" <<<"$1"' _ "$OUT"; write_settings
 mv "$H/settings.project.json" "$T/sp.bak"; run; arm "output-style NOT MEASURED when settings file absent" is output-style "$NM"; arm "hooks-sync NOT MEASURED when settings file absent" is hooks-sync "$NM"; arm "hook-orphans NOT MEASURED when settings file absent" is hook-orphans "$NM"; mv "$T/sp.bak" "$H/settings.project.json"
 
 # 3. plugin dirs
