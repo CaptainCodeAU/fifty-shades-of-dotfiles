@@ -34,15 +34,20 @@ option read: wrap-up files loose ends for you with an undo, no approval table). 
 showed him approving wrap tables in 3 to 7 seconds, so the box was a stamp, not a check. This
 replaces the table pop-up of W4; every other question W4 kept is still asked.
 
-- The table is still shown in chat. No pop-up approves it.
+- The table is still shown, as a chat message of its own before anything is written. No pop-up
+  approves it.
 - Applied without asking: file here or for an owner, extend, close (the note names the
   evidence), park, drop, leave to a hook, save a lesson.
 - Still asked, one question each: open decide rows, "record the ruling", "record as declined"
   (only his own no declines anything), unanswered questions, "create a drawer?". No answer
   files the row as an item; it is never decided for him.
-- Every `open-items add`, `close` and `park` the wrap makes carries `--wrap`. The report has a
-  block "Filed and closed for you (the session's choice, not yours)", one row per verdict with
-  its id, and ends with the one undo line: `open-items undo-wrap <session-id>`, the real id.
+- Every `open-items add`, `close` and `park` the wrap makes carries `--wrap`. `pj-wrap done`
+  then PRINTS the block from that ledger itself: "Filed and closed for you (the session's choice,
+  not yours):", one line per record (filed, closed or parked, ID, title), and
+  `undo all: open-items undo-wrap <session-id>` with the real id. No ledger, or one already
+  undone: it prints nothing. The report copies the block verbatim. Added the same day after the
+  conductor's demo: a model-written block was left out of the demo report, and without the box
+  that block is the only place he sees what was done, so it must not rest on the model.
 - `undo-wrap` declines what the wrap filed (note "withdrawn: wrap-up undo") and reopens what it
   closed or parked. An item filed and then closed in the same wrap goes back to before the first
   write: declined. If any record changed after the wrap, it refuses, names each one, and changes
@@ -68,7 +73,7 @@ Nothing here is ever deleted; a cleared record is MOVED to a `handled/` folder w
 | `wrapped/<session-id>`                  | `pj-wrap done`                           | pj-session-end, pj-health         | `wrapped: <date>`, `project: <name>`, NEW `via: skill` or `via: bare`   |
 | `owed/<key>` (NEW, W5)                  | `pj-wrap done --owed "<command>"`        | pj-start-card, pj-health          | records separated by a blank line: `owed: <command>`, `project: <name>`, `session: <id>`, `since: YYYY-MM-DD HH:MM` |
 | `owed/handled/<key>.<YYYYmmdd-HHMMSS>`  | `pj-wrap owed --clear`, pj-session-end   | nobody (history)                  | the moved file                                                          |
-| `wrap-batch/<session-id>.tsv` (5 Oct 2026) | `open-items add/close/park --wrap`     | `open-items undo-wrap`            | one line per write: action, drawer, id, item file, sha256               |
+| `wrap-batch/<session-id>.tsv` (5 Oct 2026) | `open-items add/close/park --wrap`     | `open-items undo-wrap`, `pj-wrap done` | one line per write: action, drawer, id, item file, sha256          |
 | `wrap-batch/<session-id>.tsv.undone.<YYYYmmdd-HHMMSS>` | `open-items undo-wrap`                   | `open-items undo-wrap` (refuses a second undo) | the moved file                                              |
 
 `<key>` is the project's encoded main-repo path, the same key `no-wrap-up/` uses.

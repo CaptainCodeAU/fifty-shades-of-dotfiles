@@ -56,8 +56,9 @@ Steps run in this order; `pj-wrap done` is always last. Rulings and reasons:
    - drop: noise only (a typo, or already done AND recorded)
    Under the table, list unanswered questions and open decide rows. An empty table is fine.
 
-3. Show the table in chat; no pop-up approves it (he approved wrap tables in 3 to 7 seconds, so
-   the box was a stamp). Applied without asking, in step 4: file here or for an owner, extend,
+3. Send the table as a chat message of its own BEFORE step 4 writes anything (a short table is
+   fine; an empty one says so). No pop-up approves it (he approved wrap tables in 3 to 7 seconds,
+   so the box was a stamp). Applied without asking, in step 4: file here or for an owner, extend,
    close (the note names the evidence), park, drop, leave to a hook, save a lesson. Still asked,
    each as its own question: each open decide row, each "record the ruling", each
    "record as declined" (only the user's own no declines), each unanswered question, and for a
@@ -129,11 +130,11 @@ Steps run in this order; `pj-wrap done` is always last. Rulings and reasons:
     `test -e ~/.local/state/pj/wrapped/$CLAUDE_CODE_SESSION_ID`; missing means NOT marked, say so.
     In a worktree the records belong to the main checkout.
     Then the report. Line 1, first that applies: a STOP from step 8; an owed project wrap-up; any
-    other action for the user; "Done, nothing needed from you." Then "Filed and closed for you
-    (the session's choice, not yours)": one row per verdict step 4 applied, its id and plain words,
-    each extend and lesson with its own undo, and last the one undo line
-    `open-items undo-wrap <id>`, the id read from `$CLAUDE_CODE_SESSION_ID` in a Bash call, never
-    a placeholder (run it with the sandbox lifted). End with the pending list and one
+    other action for the user; "Done, nothing needed from you." Then copy VERBATIM the block
+    `pj-wrap done` printed ("Filed and closed for you (the session's choice, not yours):", one
+    line per record, ending `undo all: open-items undo-wrap <session-id>`; run that with the
+    sandbox lifted). It printed none: say "Nothing filed or closed for you." Under it, each extend
+    and lesson with its own undo. End with the pending list and one
     line: "Kept working after this? Run /pj:wrap-up again." Last, as its own Bash call:
     `pj-ping done "wrap-up <project>" --detach`. It returns at once (Gavin, 2026-09-29: the
     blocking send cost about 10 s); a failed send is named only in the ping log, not here.

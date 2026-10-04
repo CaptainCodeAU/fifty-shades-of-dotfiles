@@ -385,6 +385,33 @@ check "J step 3 holds no approval pop-up for the table" '! printf "%s" "$S3" | g
 check "J the header names no table-approval exception" '! grep -qi "exception is the table approval" "$SKILL"'
 check "J step 3 still asks each decide row, the ruling, the decline and the new drawer" 'printf "%s" "$S3" | grep -q "decide row" && printf "%s" "$S3" | grep -q "record the ruling" && printf "%s" "$S3" | grep -q "record as declined" && printf "%s" "$S3" | grep -q "create one?"'
 check "J the report carries the undo line" 'grep -q "open-items undo-wrap" "$SKILL"'
+check "J step 3 sends the table as a chat message before step 4 writes" 'printf "%s" "$S3" | grep -q "chat message of its own BEFORE step 4"'
+check "J the report copies the block pj-wrap done printed, verbatim" 'grep -q "copy VERBATIM the block" "$SKILL" && grep -q "\`pj-wrap done\` printed" "$SKILL"'
+
+# --- K: done prints the wrap batch itself (S4A follow-up, 5 Oct 2026) ------------------------
+# With no approval box, the "Filed and closed for you" block is the only place Gavin sees what
+# the session did, so it must not depend on the model writing it: `done` reads the session's
+# open-items ledger (wrap-batch/<sid>.tsv) and prints one line per record plus the undo line.
+# Controls: a session with no ledger prints no block; an undone ledger prints no block;
+# another session's ledger never leaks into this one's block.
+SID=k-none; wrap done --skill
+check "K control: no ledger -> done rc 0 and prints no block and no undo line" '[ "$RC" -eq 0 ] && ! printf "%s" "$OUT" | grep -q "Filed and closed for you" && ! printf "%s" "$OUT" | grep -q "undo-wrap"'
+KC="$(oi add "k item to close" --done-when x 2>/dev/null)"
+KF="$(CLAUDE_CODE_SESSION_ID=k-sess oi add "k filed by the wrap" --done-when x --wrap 2>/dev/null)"
+CLAUDE_CODE_SESSION_ID=k-sess oi close "$KC" "done: k evidence" --wrap >/dev/null 2>&1
+KO="$(CLAUDE_CODE_SESSION_ID=k-other oi add "k another session's" --done-when x --wrap 2>/dev/null)"
+OUT="$KC $KF $KO"; check "K fixture: three IDs from open-items, a ledger for k-sess" '[ "$(printf "%s\n" "$KC" "$KF" "$KO" | grep -c "^W-")" -eq 3 ] && [ -s "$STATE/wrap-batch/k-sess.tsv" ]'
+SID=k-sess; wrap done --skill
+check "K done rc 0 and prints the block header" '[ "$RC" -eq 0 ] && printf "%s" "$OUT" | grep -qx "Filed and closed for you (the session'"'"'s choice, not yours):"'
+check "K one line for the filed record: action, id, title" 'printf "%s\n" "$OUT" | grep -qE "^  filed +$KF +k filed by the wrap$"'
+check "K one line for the closed record: action, id, title" 'printf "%s\n" "$OUT" | grep -qE "^  closed +$KC +k item to close$"'
+check "K exactly two record lines (one per ledger line)" '[ "$(printf "%s\n" "$OUT" | grep -cE "^  (filed|closed|parked) ")" -eq 2 ]'
+check "K ends with the undo line carrying the real session id" '[ "$(printf "%s\n" "$OUT" | grep -x "undo all: open-items undo-wrap k-sess" | wc -l | tr -d " ")" -eq 1 ]'
+check "K a record from another session is not in this block" '! printf "%s" "$OUT" | grep -q "$KO"'
+oi undo-wrap k-sess >/dev/null 2>&1
+check "K fixture: the undo moved the ledger aside" '[ ! -e "$STATE/wrap-batch/k-sess.tsv" ] && ls "$STATE/wrap-batch/" | grep -q "^k-sess.tsv.undone."'
+wrap done --skill
+check "K undone ledger -> no block and no undo line" '[ "$RC" -eq 0 ] && ! printf "%s" "$OUT" | grep -q "Filed and closed for you" && ! printf "%s" "$OUT" | grep -q "undo-wrap"'
 
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 rm -r "$ROOT" 2>/dev/null || true

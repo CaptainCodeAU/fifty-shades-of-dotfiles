@@ -10,6 +10,8 @@
 #                                  --skill: the marker says via: skill (else via: bare, W6).
 #                                  --owed: the project's own wrap-up was declined; leave an
 #                                  owed record the start card shows until it runs (W5).
+#                                  Then prints this session's wrap batch (open-items --wrap
+#                                  ledger), one line per record, and the undo line.
 #   pj-wrap owed                   list this project's owed records (rc 1 when none)
 #   pj-wrap owed --clear [<command>]  move the owed records (or only that command's) to
 #                                  owed/handled/. Nothing is deleted.
@@ -69,7 +71,7 @@ SID="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
 refuse(){ printf 'pj-wrap: REFUSED -- %s\n' "$1" >&2; exit 2; }
 stop(){ printf 'pj-wrap: STOPPED -- %s\n' "$1" >&2; exit 3; }
 say(){ printf 'pj-wrap: %s\n' "$1"; }
-usage(){ sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; }
+usage(){ sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; }
 encode_key(){ printf '%s' "$1" | sed 's#[/._]#-#g'; }
 tilde(){ printf '%s' "${1/#$HOME/\~}"; }
 
@@ -237,7 +239,28 @@ cmd_done(){
   else
     say "no earlier-session flag to clear"
   fi
+  print_batch
   exit 0
+}
+
+# S4A follow-up, 5 Oct 2026. With no approval box, this block is the only place the user sees
+# what the wrap did, so the tool prints it and the report copies it verbatim; it never rests on
+# the model remembering to. Source: the ledger open-items --wrap writes for THIS session
+# (docs/OPEN_ITEMS.md "Undoing a wrap-up's batch": action, drawer, ID, item file, sha256). One
+# line per ledger line, then the undo line. No ledger, an empty one, or one already undone
+# (moved to .undone.<time>): nothing at all.
+print_batch(){
+  local led="$STATE/wrap-batch/$SID.tsv" act w id f sha title n=0
+  [ -s "$led" ] || return 0
+  while IFS=$'\t' read -r act w id f sha; do
+    case "$act" in filed|closed|parked) ;; *) continue ;; esac
+    title="$(sed -n '1s/^## [^ ]* -- //p' "$f" 2>/dev/null | LC_ALL=C tr -d '\000-\037\177')"
+    [ -n "$title" ] || title="(no longer at its recorded place; open-items show $id)"
+    [ "$n" -gt 0 ] || printf "\nFiled and closed for you (the session's choice, not yours):\n"
+    printf '  %-7s %s  %s\n' "$act" "$id" "$title"
+    n=$((n+1))
+  done < "$led"
+  [ "$n" -eq 0 ] || printf 'undo all: open-items undo-wrap %s\n' "$SID"
 }
 
 # ------------------------------------------------------- push: diagnosis ----
