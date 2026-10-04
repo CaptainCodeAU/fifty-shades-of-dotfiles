@@ -433,7 +433,7 @@ stdin. Fixed, with an arm that feeds it a stdin that never closes.
 Before any write verb, open-items asks `engage-go cutover check` in the folder it was started
 from (contract: engage `docs/CUTOVER.md`, sections 4, 5 and "The time limit"). The guarded verbs
 are `add close decline park reopen set init regen migrate supersede watch check tick pass move
-route seen checks-run`. Reads (the listing, `--all`, `--project`, `show`, `get`, `--where`,
+route seen checks-run undo-wrap`. Reads (the listing, `--all`, `--project`, `show`, `get`, `--where`,
 `--help`, `--selftest`) never ask and behave as before.
 
 | engage-go says                               | open-items                                                                                                           |
@@ -448,6 +448,39 @@ runs in the CURRENT folder, so a write aimed at another project's drawer (`add -
 `--project` on watch/check/tick/move/supersede, `route --to`) is judged by where you stand,
 not by the target (W-20261002-A47). Proven end to end on a real marker on 2026-10-02
 (drawer: `engage-move/2026-10-02/E2E-REPORT.md`).
+
+## Undoing a wrap-up's batch: `--wrap` and `undo-wrap` (S4A, 5 Oct 2026)
+
+Gavin's pick, 5 Oct 2026: /pj:wrap-up applies its own verdicts with no approval box, and one
+command undoes them (the reasoning is in docs/PJ_WRAP_UP.md, "No approval box").
+
+    open-items add "..." --done-when ".." --wrap     # also with --for <owner>
+    open-items close <W-ID> "note" --wrap
+    open-items park <W-ID> ["note"] --wrap
+    open-items undo-wrap <session-id>
+
+- `--wrap` needs a session id (`$CLAUDE_CODE_SESSION_ID`, else `$CLAUDE_SESSION_ID`). Without
+  one, or with an id that is not letters, digits, `.`, `_` and `-`, it REFUSES before writing:
+  a batch it cannot name could never be undone. `decline` and `reopen` refuse `--wrap`: only
+  Gavin's own no declines, and a wrap never reopens.
+- Each `--wrap` write appends one line to `wrap-batch/<session-id>.tsv` under the pj state
+  folder (`${PJ_STATE_DIR:-${XDG_STATE_HOME:-~/.local/state}/pj}`): the action (filed, closed,
+  parked), the drawer, the ID, the item's file and its sha256 after the write. The ledger is
+  checked writable BEFORE the item is written, so a refused ledger never leaves an unrecorded write.
+- Why a ledger and not the records already there: the `raised: ... (session X)` line only marks
+  what a session FILED (a close note names no session), and the dot-claude commit messages name no
+  session either. Scoping to `--wrap` keeps items filed earlier in the session, on purpose, out of
+  the undo.
+- `undo-wrap` takes every drawer's lock (sorted order, as move does), then checks every record:
+  the file is where the wrap left it and its sha256 matches the newest ledger line for it. Any
+  miss REFUSES (rc 2), naming each record and how it changed, and nothing is written. Otherwise
+  each item goes back to before its FIRST write in the batch: filed -> declined with the note
+  "withdrawn: wrap-up undo"; closed or parked -> reopened with the note "reopened: wrap-up undo".
+  One commit for all the drawers. The ledger then moves to `<session-id>.tsv.undone.<time>`, so a
+  second undo refuses with "already undone"; a session with no ledger refuses too, never a quiet
+  nothing. A session that wraps twice has one batch: the undo puts back both wraps' writes.
+- Not in the batch: `set` (an extend) and lessons. The wrap-up report gives each its own undo.
+- Like every write, it needs the sandbox lifted (the drawers and the state folder are outside it).
 
 ## The design point, borrowed from census and decided
 
@@ -470,5 +503,8 @@ legacy drawer, including the cross-drawer and not-this-repo supersede refusals.
 Section XP folds in `open-items-xp-selftest` (the cross-project read side, W-20260923-A28):
 it copies the tool into a fixture dotfiles repo so the check-script trust root is real, and
 proves Watching, seen, Checks owed, Mandatory, the runner, the trust checks, the cache key,
-Moved out, the inbox and the text cleaning, each with a control. Run it with
+Moved out, the inbox and the text cleaning, each with a control. Section UW (5 Oct 2026)
+proves `undo-wrap`: a batch of two filed and one closed undone in full, filed-then-closed
+going back to declined, another session's batch untouched, and a record edited since making
+the undo refuse, name it and change nothing. Run it with
 `OPEN_ITEMS_TOOL=<another copy>` to see which arms that copy fails.

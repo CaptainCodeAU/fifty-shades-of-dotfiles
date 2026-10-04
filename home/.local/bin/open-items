@@ -7,12 +7,12 @@
 #   open-items add "title" --done-when ".." [--kind do|decide] [--size small|medium|large]
 #       [--when ..] [--next ..] [--blocked-on ..] [--holds-in repo:..|drawer:..|~/..].. [--body ..]
 #       [--for <project|path/> | --inbox] [--watch p].. [--check p "done-when"]..   (max 5 each)
-#       [--reach machine | --reach mandatory [--check-script <name>]]
+#       [--reach machine | --reach mandatory [--check-script <name>]] [--wrap]
 #   open-items watch <W-ID> <p> | check <W-ID> <p> "done-when"   add a watcher / a check
 #   open-items tick | pass <W-ID> <p>   tick p's check | pass a mandatory item; ONLY from inside p
 #   open-items move <W-ID> --to <p> --why ".."   inside one group; across groups is Gavin's (TTY)
 #   open-items route <W-ID> --to <p> --why ".." | --file <path>   out of the inbox; any session with a reason (ROUTE-1), --file: its owner
-#   open-items close|decline|park|reopen <W-ID> ["note"]   close refuses while a check is open
+#   open-items close|decline|park|reopen <W-ID> ["note"] [--wrap] | undo-wrap <session-id>   close refuses while a check is open
 #   open-items supersede <old> <new> [--project p]   decline old pointing at new; ONE drawer
 #   open-items set [--add] <W-ID> <field> "value"   replace (WARNS on dropped text) | append
 #   open-items init [--name n] | regen | migrate [--dry-run --into <dir>] [--park W-ID,..]
@@ -954,7 +954,7 @@ need_val(){ [ "$3" -ge 2 ] || refuse "$1: $2 needs a value (it was given last, w
 
 cmd_add(){
   local title="" kind="do" size="" dw="" when="" next="" blocked="" holds=() body="" w f id h
-  local fors=() inbox=0 watches=() checks=() cdws=() reach="" script="" owner here sn x i j pw
+  local fors=() inbox=0 watches=() checks=() cdws=() reach="" script="" owner here sn x i j pw wrap=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --kind) need_val add "$1" $#; kind="$2"; shift 2 ;;
@@ -972,6 +972,7 @@ cmd_add(){
                checks+=("$2"); cdws+=("$3"); shift 3 ;;
       --reach) [ $# -ge 2 ] || refuse "add: --reach needs machine or mandatory"; reach="$2"; shift 2 ;;
       --check-script) [ $# -ge 2 ] || refuse "add: --check-script needs a script name"; script="$2"; shift 2 ;;
+      --wrap) wrap=1; shift ;;
       --*) refuse "add: unknown flag $1" ;;
       *) [ -z "$title" ] && title="$1" || refuse "add: one title only (quote it)"; shift ;;
     esac
@@ -1055,6 +1056,7 @@ cmd_add(){
       || refuse "add --reach mandatory: accepted only when the owner is the dotfiles project, or from a human at a terminal who types the owner's name back (P8). The owner here is $owner and stdin is not a terminal (or the name did not match). Nothing was written."
   fi
   here="$(here_name)"
+  [ "$wrap" -eq 0 ] || wrap_ready add
   lock_drawer "$w"
   f="$(next_id "$w")" || exit 2; id="$(id_of_file "$f")"
   {
@@ -1074,13 +1076,22 @@ cmd_add(){
     [ -n "$body" ] && printf '\n%s\n' "$body"
   } > "$f"
   printf '%s\n' "$id"
+  [ "$wrap" -eq 0 ] || wrap_note filed "$w" "$id" "$f"
   if [ "$owner" = "$here" ]; then finish_write "$w" "open-items: add $id -- $title"
   else finish_write "$w" "open-items: add $id for $owner (filed from $here) -- $title"; fi
 }
 
-cmd_status(){                   # cmd_status <new-status> <W-ID> [note]
-  local st="$1" id="${2:-}" note="${3:-}" w f dest x
+cmd_status(){                   # cmd_status <new-status> <W-ID> [note] [--wrap]
+  local st="$1" id note w f dest x a wrap=0 args=()
+  shift
+  for a in "$@"; do if [ "$a" = --wrap ]; then wrap=1; else args+=("$a"); fi; done
+  id="${args[0]:-}"; note="${args[1]:-}"
   [ -n "$id" ] || refuse "$st: which item? give a W-ID"
+  # S4A: only the session's own choices go in a wrap batch. A decline is Gavin's own no,
+  # never a wrap's verdict, and a wrap never reopens.
+  if [ "$wrap" -eq 1 ]; then
+    case "$st" in done|parked) ;; *) refuse "$(verb_of "$st") --wrap: a wrap-up batch holds only add, close and park; a decline needs the user's own no, and a reopen is never a wrap's verdict. Nothing was changed." ;; esac
+  fi
   w="$(writable_drawer)" || exit 2
   f="$(find_item "$w" "$id")" || { [ $? -eq 2 ] && exit 2; refuse "$st: no item $id in $(name_of "$w")"; }
   id="$(id_of_file "$f")"      # a legacy ID resolved to the letter form: move and report under the REAL id
@@ -1091,14 +1102,84 @@ cmd_status(){                   # cmd_status <new-status> <W-ID> [note]
     x="$(open_checks "$f")"
     [ -z "$x" ] || refuse "close: $id still has open checks: $x. It closes only when every check is done, and each check is ticked from inside that project ('open-items tick $id <project>' run in that project's repo; P2). Nothing was changed."
   fi
+  [ "$wrap" -eq 0 ] || wrap_ready "$(verb_of "$st")"
   lock_drawer "$w"
+  dest="$(apply_status "$w" "$f" "$id" "$st" "$note")"
+  printf '%s -> %s\n' "$id" "$st"
+  [ "$wrap" -eq 0 ] || wrap_note "$([ "$st" = done ] && printf closed || printf parked)" "$w" "$id" "$dest"
+  finish_write "$w" "open-items: $st $id -- $(title_of "$dest")"
+}
+verb_of(){ case "$1" in done) printf close ;; declined) printf decline ;; parked) printf park ;; open) printf reopen ;; *) printf '%s' "$1" ;; esac; }
+apply_status(){                 # apply_status <work> <file> <id> <status> <note> -> the item's new path; the caller holds the lock
+  local w="$1" f="$2" id="$3" st="$4" note="$5" dest
   set_field "$f" status "$st"
   if [ -n "$note" ]; then printf '\n**%s %s.** %s\n' "$(printf '%s' "$st" | tr '[:lower:]' '[:upper:]')" "$(today)" "$note" >> "$f"; fi
   dest="$w/items/$(folder_for_status "$st")/$id.md"
   mkdir -p "$(dirname "$dest")"
   [ "$f" = "$dest" ] || mv "$f" "$dest"
-  printf '%s -> %s\n' "$id" "$st"
-  finish_write "$w" "open-items: $st $id -- $(title_of "$dest")"
+  printf '%s' "$dest"
+}
+
+# ------------------------------------------- S4A: one undo for a wrap-up's batch ----
+# Gavin's pick, 5 Oct 2026: /pj:wrap-up applies its own verdicts with no approval box, and
+# one command puts them back (docs/OPEN_ITEMS.md, "Undoing a wrap-up's batch"). A --wrap
+# write appends action, drawer, ID, item file and its sha256 to a per-session ledger in pj
+# state; undo-wrap reads it. Neither the raised: line (a close names no session) nor the
+# dot-claude commits (no session in them) could find a session's closes, hence the ledger.
+WRAP_DIR="${PJ_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/pj}/wrap-batch"
+wrap_sid(){ printf '%s' "${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"; }
+valid_sid(){ case "$1" in ""|unknown|.*|*[!A-Za-z0-9._-]*) return 1 ;; *) return 0 ;; esac; }
+wrap_ready(){                   # wrap_ready <verb>: REFUSE before any write the ledger could not record
+  local s; s="$(wrap_sid)"
+  valid_sid "$s" || refuse "$1 --wrap: no usable session id (CLAUDE_CODE_SESSION_ID is ${s:-unset}; letters, digits, . _ - only), so undo-wrap could never find this write. Nothing was written."
+  { mkdir -p "$WRAP_DIR" && touch "$WRAP_DIR/$s.tsv" && [ -w "$WRAP_DIR/$s.tsv" ]; } 2>/dev/null \
+    || refuse "$1 --wrap: cannot write the batch ledger $WRAP_DIR/$s.tsv (inside the Claude Bash sandbox, lift it for this one call). Nothing was written."
+}
+wrap_note(){                    # wrap_note <filed|closed|parked> <work> <id> <item file>
+  printf '%s\t%s\t%s\t%s\t%s\n' "$1" "$2" "$3" "$4" "$(sha_of "$4")" >> "$WRAP_DIR/$(wrap_sid).tsv" \
+    || loud "WARNING: $3 was written but NOT recorded in the wrap-up batch $WRAP_DIR/$(wrap_sid).tsv; undo-wrap will not see it"
+}
+cmd_undo_wrap(){                # undo-wrap <session-id>
+  local s="${1:-}" led x act w id f sha i n k st note dest rc=0 bad=0 K=() A=() W=() I=() F=() S=() D=()
+  [ $# -le 1 ] || refuse "undo-wrap takes one session id. Nothing was changed."
+  valid_sid "$s" || refuse "undo-wrap: give the session id the wrap-up report printed (letters, digits, . _ -). Nothing was changed."
+  led="$WRAP_DIR/$s.tsv"
+  if [ ! -s "$led" ]; then
+    for x in "$led".undone.*; do [ -e "$x" ] && refuse "undo-wrap: the wrap-up batch of session $s was already undone ($x). Nothing was changed."; done
+    refuse "undo-wrap: no wrap-up batch for session $s at $led -- that session wrote nothing with --wrap, or the id is wrong. Nothing was changed."
+  fi
+  # One entry per item: its FIRST action decides the undo (filed then closed goes back to
+  # declined), its NEWEST line holds where the file must be and what it must hash to.
+  while IFS=$'\t' read -r act w id f sha; do
+    [ -n "$act" ] || continue
+    case "$act" in filed|closed|parked) ;; *) refuse "undo-wrap: $led holds a line that is not a ledger line ($act). Nothing was changed." ;; esac
+    k="$w|$id"; n=-1
+    for i in ${K[@]+"${!K[@]}"}; do [ "${K[$i]}" = "$k" ] && { n=$i; break; }; done
+    if [ "$n" -lt 0 ]; then K+=("$k"); A+=("$act"); W+=("$w"); I+=("$id"); F+=("$f"); S+=("$sha")
+    else F[$n]="$f"; S[$n]="$sha"; fi
+  done < "$led"
+  [ "${#K[@]}" -gt 0 ] || refuse "undo-wrap: the batch ledger $led holds no record. Nothing was changed."
+  # Every drawer's lock first, in sorted real-path order (P12 rule 1), then the checks, so
+  # nothing can change between the check and the write.
+  while IFS=$'\t' read -r x w; do [ -n "$w" ] && D+=("$w"); done < <(for w in "${W[@]}"; do printf '%s\t%s\n' "$(realdir "$w")" "$w"; done | LC_ALL=C sort -u -t $'\t' -k1,1)
+  for w in "${D[@]}"; do [ -d "$w/items" ] || refuse "undo-wrap: the drawer $w is gone or has no items/. Nothing was changed."; lock_drawer "$w"; done
+  for i in "${!K[@]}"; do
+    f="${F[$i]}"
+    if [ ! -f "$f" ]; then bad=$((bad+1)); loud "  ${I[$i]} ($(name_of "${W[$i]}")): no longer at ${f#"${W[$i]}/"}, its status changed since the wrap"
+    elif [ "$(sha_of "$f")" != "${S[$i]}" ]; then bad=$((bad+1)); loud "  ${I[$i]} ($(name_of "${W[$i]}")): edited since the wrap"; fi
+  done
+  [ "$bad" -eq 0 ] || refuse "undo-wrap: $bad record(s) above changed since the wrap-up of session $s, so NOTHING was undone. Deal with each one by hand (close, decline, reopen), or ask; the batch stays as it was. Nothing was changed."
+  for i in "${!K[@]}"; do
+    case "${A[$i]}" in filed) st=declined; note="withdrawn: wrap-up undo" ;; *) st=open; note="reopened: wrap-up undo" ;; esac
+    dest="$(apply_status "${W[$i]}" "${F[$i]}" "${I[$i]}" "$st" "$note")"
+    printf '%s -> %s  (%s)\n' "${I[$i]}" "$st" "$(title_of "$dest")"
+  done
+  for w in "${D[@]}"; do backfill_repo "$w"; regen_view "$w"; done
+  commit_drawers "open-items: undo-wrap $s -- ${#K[@]} item(s) put back" "${D[@]}" || rc=$?
+  x="$led.undone.$(date +%Y%m%d-%H%M%S)"
+  mv "$led" "$x" 2>/dev/null || { loud "WARNING: the undo is done but the ledger $led could not be moved aside; a second undo-wrap will refuse on the changed records"; [ "$rc" -ne 0 ] || rc=3; }
+  printf 'open-items: undo-wrap %s: %s item(s) put back; ledger kept at %s\n' "$s" "${#K[@]}" "$x" >&2
+  return "$rc"
 }
 
 # W-20260923-A20. `set` on a free-text field REPLACED it whole and said nothing, so a
@@ -2378,7 +2459,7 @@ flag_row(){
     --projects|show)              echo 'ok    no    no    no    note' ;;
     --session)                    echo 'note  note  note  note  ok'   ;;
     -h|--help|--selftest)         echo 'note  note  note  note  note' ;;
-    --where|get|seen|checks-run|add|close|decline|park|reopen|set|init|regen|migrate|supersede|watch|check|tick|pass|move|route|routed)
+    --where|get|seen|checks-run|add|close|decline|park|reopen|set|init|regen|migrate|supersede|watch|check|tick|pass|move|route|routed|undo-wrap)
                                   echo 'no    no    no    no    note' ;;
     *) return 1 ;;
   esac
@@ -2476,7 +2557,7 @@ engage_guard(){                 # engage_guard <verb>
   return 0
 }
 case "${1:-}" in
-  add|close|decline|park|reopen|set|init|regen|migrate|supersede|watch|check|tick|pass|move|route|seen|checks-run)
+  add|close|decline|park|reopen|set|init|regen|migrate|supersede|watch|check|tick|pass|move|route|seen|checks-run|undo-wrap)
     engage_guard "$1" ;;
 esac
 
@@ -2488,6 +2569,7 @@ case "${1:-}" in
   decline)  shift; cmd_status declined "$@"; exit $? ;;
   park)     shift; cmd_status parked "$@"; exit $? ;;
   reopen)   shift; cmd_status open "$@"; exit $? ;;
+  undo-wrap) shift; cmd_undo_wrap "$@"; exit $? ;;
   set)      shift; cmd_set "$@"; exit $? ;;
   init)     shift; cmd_init "$@"; exit $? ;;
   regen)    cmd_regen; exit $? ;;

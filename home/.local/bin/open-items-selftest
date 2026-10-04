@@ -2547,6 +2547,65 @@ wanteq "EG2 no perl: exit 3 with two stdout lines still gives the FIRST line onl
 pkill -KILL -f "$MK" 2>/dev/null
 unset PJ_STATE_DIR
 
+# ---- UW: one undo for a wrap-up's batch (S4A, Gavin's pick 5 Oct 2026). /pj:wrap-up applies its
+# verdicts without an approval box, writing with --wrap; `undo-wrap <session>` puts the batch back:
+# what it FILED is declined, what it CLOSED or PARKED is reopened. It refuses, naming each record,
+# when one changed since, and then changes nothing. Another session's batch is never touched.
+printf 'UW undo-wrap: one undo for a wrap-up batch\n'
+mk_dotclaude; runw "$ZETA" init
+export PJ_STATE_DIR="$D/state"
+runs(){ local s="$1"; shift; OUT="$(cd "$ZETA" && OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" CLAUDE_CODE_SESSION_ID="$s" CLAUDE_SESSION_ID="$s" "$TOOL" "$@" 2>&1)"; RC=$?; return 0; }
+loc(){ local f; for f in "$ZW/items"/*/"$1.md"; do [ -f "$f" ] && { printf '%s' "${f#"$ZW/items/"}"; return; }; done; printf missing; }
+st(){ sed -n 's/^status: //p' "$ZW/items/$(loc "$1")" 2>/dev/null | head -1; }
+runs sess-wrap add "already open before the wrap" --done-when x; UX="$(printf '%s' "$OUT" | grep -o 'W-[0-9]*-[A-Z][0-9]*' | head -1)"
+runs sess-other add "another session's wrap filed this" --done-when x --wrap; UO="$(printf '%s' "$OUT" | grep -o 'W-[0-9]*-[A-Z][0-9]*' | head -1)"
+wanteq "UW control: another session can file with --wrap (rc 0)" "0" "$RC"
+UOSHA="$(shasum -a 256 "$ZW/items/open/$UO.md" 2>/dev/null | cut -d' ' -f1)"
+runs sess-wrap add "filed by the wrap, one" --done-when x --wrap; U1="$(printf '%s' "$OUT" | grep -o 'W-[0-9]*-[A-Z][0-9]*' | head -1)"
+wanteq "UW add --wrap succeeds (rc 0)" "0" "$RC"
+runs sess-wrap add "filed by the wrap, two" --done-when x --wrap; U2="$(printf '%s' "$OUT" | grep -o 'W-[0-9]*-[A-Z][0-9]*' | head -1)"
+runs sess-wrap close "$UX" "done: the evidence is commit abc" --wrap
+wanteq "UW close --wrap succeeds (rc 0)" "0 closed/$UX.md" "$RC $(loc "$UX")"
+runs sess-wrap add "filed then closed by the same wrap" --done-when x --wrap; U3="$(printf '%s' "$OUT" | grep -o 'W-[0-9]*-[A-Z][0-9]*' | head -1)"
+runs sess-wrap close "$U3" "done in the same wrap" --wrap
+# Every arm below names an ID; an empty capture would make "contains $U2" match anything.
+wanteq "UW control: five IDs captured, all different" "5" "$(printf '%s\n' "$UX" "$U1" "$U2" "$U3" "$UO" | grep '^W-' | sort -u | wc -l | tr -d ' ')"
+runs sess-wrap decline "$U1" "no" --wrap
+wanteq "UW decline --wrap REFUSES (rc 2): only Gavin's own no declines, never a wrap's choice" "2 open" "$RC $(st "$U1")"
+runs "" add "no session id" --done-when x --wrap
+wanteq "UW --wrap with no session id REFUSES (rc 2): a batch it cannot name cannot be undone" "2" "$RC"
+want   "  and says why: no usable session id" "no usable session id" "$OUT"
+runs sess-wrap undo-wrap sess-wrap
+wanteq "UW undo-wrap applies the batch (rc 0)" "0" "$RC"
+wanteq "UW the 2 filed items are declined" "declined declined" "$(st "$U1") $(st "$U2")"
+want   "  with the note 'withdrawn: wrap-up undo'" "withdrawn: wrap-up undo" "$(cat "$ZW/items/$(loc "$U1")")"
+wanteq "UW the closed item is reopened, back in items/open" "open open/$UX.md" "$(st "$UX") $(loc "$UX")"
+wanteq "UW filed then closed in one wrap goes back to before the first write: declined" "declined" "$(st "$U3")"
+wanteq "UW control: another session's --wrap item is untouched, byte for byte" "open $UOSHA" "$(st "$UO") $(shasum -a 256 "$ZW/items/open/$UO.md" 2>/dev/null | cut -d' ' -f1)"
+wanteq "UW the undo is committed (drawer clean in the fixture dot-claude)" "" "$(git -C "$DC" status --porcelain 2>/dev/null)"
+want   "UW the undo names each record it changed" "$U2" "$OUT"
+runs sess-wrap undo-wrap sess-wrap
+wanteq "UW a second undo of the same batch REFUSES (rc 2)" "2" "$RC"
+want   "  and says it was already undone" "already undone" "$OUT"
+runs sess-wrap undo-wrap sess-never
+wanteq "UW undo of a session with no batch REFUSES (rc 2), never a quiet nothing" "2" "$RC"
+want   "  and says there is no batch for it" "no wrap-up batch for session sess-never" "$OUT"
+# Negative: a record edited after the wrap makes the whole undo refuse, name it, change nothing.
+runs sess-neg add "neg one" --done-when x --wrap; N1="$(printf '%s' "$OUT" | grep -o 'W-[0-9]*-[A-Z][0-9]*' | head -1)"
+runs sess-neg add "neg two" --done-when x --wrap; N2="$(printf '%s' "$OUT" | grep -o 'W-[0-9]*-[A-Z][0-9]*' | head -1)"
+runs sess-later set --add "$N2" next "someone worked on it after the wrap"
+wanteq "UW control: both negative-arm IDs captured, different" "2" "$(printf '%s\n' "$N1" "$N2" | grep '^W-' | sort -u | wc -l | tr -d ' ')"
+N1SHA="$(shasum -a 256 "$ZW/items/open/$N1.md" | cut -d' ' -f1)"; NHEAD="$(git -C "$DC" rev-parse HEAD)"
+runs sess-neg undo-wrap sess-neg
+wanteq "UW a record changed since the wrap: undo REFUSES (rc 2)" "2" "$RC"
+want    "  and names the changed record" "$N2" "$OUT"
+wantnot "  and does not blame the unchanged one" "$N1 " "$OUT"
+wanteq "  and changes nothing: the unchanged item is byte-identical, still open, no new commit" "open $N1SHA $NHEAD" \
+  "$(st "$N1") $(shasum -a 256 "$ZW/items/open/$N1.md" | cut -d' ' -f1) $(git -C "$DC" rev-parse HEAD)"
+runs sess-neg undo-wrap sess-neg
+wanteq "  and the batch is still there to retry once the change is dealt with (refuses the same way)" "2" "$RC"
+unset PJ_STATE_DIR
+
 # THE EXIT CODE FOR "NOT MEASURED" IS ITSELF MEASURED: a child run of this very suite with
 # the pty forced off must exit 3, never 0. The child does not recurse.
 if [ -z "${OPEN_ITEMS_SELFTEST_CHILD:-}" ]; then
