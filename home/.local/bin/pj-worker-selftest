@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# pj-worker-selftest -- proves every arm of pj-worker (and herdr-quick-task's claude route)
-# against fixtures taken from REAL output, with fake herdr, ps, pj and pj-prompt-file on the
+# pj-worker-selftest -- proves every arm of pj-worker (herdr-quick-task's arms left with it,
+# retired 4 Oct 2026, option 1 step 11) against fixtures taken from REAL output, with fake herdr, ps, pj and pj-prompt-file on the
 # seams. Nothing here touches herdr, ~/.claude, ~/.local/state or a real session, and it
 # deletes nothing: every arm gets a fresh world folder under the run's temp dir.
 #
@@ -36,7 +36,6 @@ unset SELFTEST_WHOLE_READ
 set -uo pipefail
 BIN="$(cd "$(dirname "$0")" && pwd -P)"
 PJW="${PJ_WORKER:-$BIN/pj-worker}"
-HQT="${HERDR_QUICK_TASK:-$BIN/herdr-quick-task}"
 [ -x "$PJW" ] || { echo "need pj-worker next to this selftest (or PJ_WORKER=<path>)"; exit 1; }
 command -v jq >/dev/null && command -v git >/dev/null && command -v zsh >/dev/null || { echo "need jq, git and zsh"; exit 1; }
 ROOT="$(mktemp -d "${TMPDIR:-/tmp}/pj-worker-selftest.XXXXXX")" || exit 1
@@ -795,40 +794,6 @@ check "P10 a multi-line text is matched on its first non-blank line: rc 0" '[ "$
 pworld; mkdir -p "$H/.claude-scratch/projects"; T="$H/.claude-scratch/projects/-x/$S_PW.jsonl"; urec "$TXT" > "$FAKE/land.line"; land 0
 run prompt a59-pjworker "$TXT"
 check "P11 a transcript under another profile's config dir (scratch) is found: rc 0" '[ "$RC" -eq 0 ] && [ "$(j .transcript)" = "$T " ]'
-
-# ================================================================== herdr-quick-task
-echo "--- herdr-quick-task"
-if [ -x "$HQT" ]; then
-  mkdir -p "$ROOT/hqbin"
-  cat > "$ROOT/hqbin/pj-worker" <<'EOF'
-#!/usr/bin/env bash
-printf 'pj-worker %s\n' "$*" >> "$FAKE/calls"
-case "${1:-}" in
-  count) [ -e "$FAKE/PJW_REFUSE" ] && { echo "pj-worker: REFUSED, project cap: 4 of 4" >&2; exit 6; }; exit 0 ;;
-  start) [ -e "$FAKE/PJW_REFUSE_START" ] && { echo "pj-worker: REFUSED, project cap: 4 of 4" >&2; exit 6; }
-         printf '{"name":"%s","pane_id":"wQ:p1","result":"pass"}\n' "$2" ;;
-esac
-EOF
-  chmod +x "$ROOT/hqbin/pj-worker"
-  hq(){ OUT="$(env PATH="$ROOT/hqbin:$FB:$PATH" FAKE="$FAKE" HERDR_ENV=1 "$HQT" "$@" 2>"$W/err")"; RC=$?; ERR="$(cat "$W/err")"; }
-  new_world; printf '%s\n' "$WS_CREATE" | resp workspace_create 1 0; agent_get_json wQ:p1 x idle | resp agent_get_x 1 0
-  hq "$REPO" "say hi"
-  check "Q1 kind claude goes through pj-worker start --pane <root> --cwd <dir> (ruling A05 #3)" 'grep -q "^pj-worker start [a-z0-9-]* --pane wQ:p1 --cwd $REPO\$" "$FAKE/calls"'
-  check "Q1b and never through herdr agent start --kind claude" '[ "$(ncalls "^agent start")" = 0 ]'
-  check "Q1c the task is prompted to the worker pj-worker started" 'grep -q "^agent prompt [a-z0-9-]* say hi --wait" "$FAKE/calls"'
-  check "Q1d the caps are checked BEFORE a workspace is made" '[ "$(grep -n "^pj-worker count" "$FAKE/calls" | cut -d: -f1)" -lt "$(grep -n "^workspace create" "$FAKE/calls" | cut -d: -f1)" ]'
-  new_world; printf '%s\n' "$WS_CREATE" | resp workspace_create 1 0
-  hq "$REPO" "say hi" codex
-  check "Q2 another kind (codex) still uses herdr agent start --kind codex, no pj-worker" 'grep -q "^agent start [a-z0-9-]* --kind codex --pane wQ:p1" "$FAKE/calls" && [ "$(ncalls "^pj-worker")" = 0 ]'
-  new_world; touch "$FAKE/PJW_REFUSE"; printf '%s\n' "$WS_CREATE" | resp workspace_create 1 0
-  hq "$REPO" "say hi"
-  check "Q3 at a cap: herdr-quick-task exits 6, makes no workspace, prompts nothing" '[ "$RC" -eq 6 ] && [ "$(ncalls "^workspace create")" = 0 ] && [ "$(ncalls "^agent prompt")" = 0 ]'
-  new_world; touch "$FAKE/PJW_REFUSE_START"; printf '%s\n' "$WS_CREATE" | resp workspace_create 1 0
-  hq "$REPO" "say hi"
-  check "Q3b refused at start (after the workspace): closes the workspace it made, prompts nothing" '[ "$RC" -eq 6 ] && grep -qx "workspace close wQ" "$FAKE/calls" && [ "$(ncalls "^agent prompt")" = 0 ]'
-else
-  bad "Q herdr-quick-task not found at $HQT"
-fi
 
 echo
 echo "pj-worker selftest: $PASS passed, $FAIL failed"
