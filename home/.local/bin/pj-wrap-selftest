@@ -374,6 +374,18 @@ check "I usage names --skill, --owed, owed --clear and ends at --selftest" 'prin
 check "I bash -n clean" 'bash -n "$WRAP"'
 check "I nothing personal: no \$HOME in printed status paths" '! printf "%s" "$(SID=x; cd "$ZETA" && "$WRAP" status 2>&1)" | grep -q "$HOME"'
 
+# --- J: the wrap-up skill text (S4A, Gavin's pick 5 Oct 2026) ------------------------------
+# Wrap-up applies its verdicts without an approval box. Step 3 must hold no pop-up that
+# approves the table, and the questions that stay his (decide rows, a ruling, a decline,
+# a new drawer) must still be asked. Control: the step was found and is not empty.
+SKILL="${PJ_WRAP_SKILL:-$BIN/../../.claude/pj/skills/wrap-up/SKILL.md}"
+S3="$(awk '/^3\. /{on=1} /^4\. /{on=0} on' "$SKILL" 2>/dev/null)"; OUT="$S3"
+check "J control: the skill is readable and step 3 is found" '[ -n "$S3" ]'
+check "J step 3 holds no approval pop-up for the table" '! printf "%s" "$S3" | grep -qiE "one pop-up approves|approve with changes|not yet, something first"'
+check "J the header names no table-approval exception" '! grep -qi "exception is the table approval" "$SKILL"'
+check "J step 3 still asks each decide row, the ruling, the decline and the new drawer" 'printf "%s" "$S3" | grep -q "decide row" && printf "%s" "$S3" | grep -q "record the ruling" && printf "%s" "$S3" | grep -q "record as declined" && printf "%s" "$S3" | grep -q "create one?"'
+check "J the report carries the undo line" 'grep -q "open-items undo-wrap" "$SKILL"'
+
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 rm -r "$ROOT" 2>/dev/null || true
 [ "$FAIL" -eq 0 ]

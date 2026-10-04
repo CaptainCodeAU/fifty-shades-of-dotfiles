@@ -17,7 +17,7 @@ drawer:pj-session-framework/reports/wrapup-audit-20260924/ (1-mechanics, 2-rulin
 | W1  | `pj-wrap push` publishes other sessions' dot-claude commits | Push, and name every commit whose `C-Sess-Id` is not this session, by session, in the output and the report                  | list and ask first; refuse unless all are ours   |
 | W2  | Handoff owner when pj-homes names a project `wrap-up`       | That command owns the handoff when the file has no generated marker. pj skips its rewrite and hands its lines to step 8      | a new `handoff-owner:` key; a second pj file     |
 | W3  | Handoff length                                              | 60 lines. `pj-wrap push` counts a generated handoff and warns above 60; detail moves into the records it points at          | about two screens; no cap                        |
-| W4  | How wrap-up asks                                            | One pop-up approves the table. Each open decision is then its own question. Step 8 is a pop-up too, so the ping hook fires | everything in one pop-up; as before              |
+| W4  | How wrap-up asks                                            | One pop-up approves the table. Each open decision is then its own question. Step 8 is a pop-up too, so the ping hook fires. **The table pop-up was removed on 5 Oct 2026; see below** | everything in one pop-up; as before              |
 | W5  | Step 8 declined                                             | `pj-wrap done --owed "<command>"` leaves an owed record the start card shows until that command runs                         | `done` does not run; as before (the owe is lost) |
 | W6  | Bare `pj-wrap done` (21 of 31 markers)                      | Allowed. The marker records `via: skill` or `via: bare`; pj-health lists bare ones                                           | refuse without the skill; as before              |
 | W7  | Panes, worktrees, watches the session opened                | Wrap-up closes its own once merged and verified (watches first). Unmerged, dirty or another session's: listed, not touched   | list only                                        |
@@ -26,6 +26,28 @@ drawer:pj-session-framework/reports/wrapup-audit-20260924/ (1-mechanics, 2-rulin
 Settled without asking, because a rule already covers it: this session's own unpushed project
 commits are pushed at wrap-up (pj-global RULES.md, pinned: "push once a remote exists"), and a
 tag the session created is pushed now, branch first (D-20260923-A12).
+
+## No approval box: the session applies its verdicts, one command undoes them (5 Oct 2026)
+
+Gavin's pick, 5 Oct 2026, in the S4 conductor session: "Only S4's fewer-boxes slice" (the
+option read: wrap-up files loose ends for you with an undo, no approval table). The record
+showed him approving wrap tables in 3 to 7 seconds, so the box was a stamp, not a check. This
+replaces the table pop-up of W4; every other question W4 kept is still asked.
+
+- The table is still shown in chat. No pop-up approves it.
+- Applied without asking: file here or for an owner, extend, close (the note names the
+  evidence), park, drop, leave to a hook, save a lesson.
+- Still asked, one question each: open decide rows, "record the ruling", "record as declined"
+  (only his own no declines anything), unanswered questions, "create a drawer?". No answer
+  files the row as an item; it is never decided for him.
+- Every `open-items add`, `close` and `park` the wrap makes carries `--wrap`. The report has a
+  block "Filed and closed for you (the session's choice, not yours)", one row per verdict with
+  its id, and ends with the one undo line: `open-items undo-wrap <session-id>`, the real id.
+- `undo-wrap` declines what the wrap filed (note "withdrawn: wrap-up undo") and reopens what it
+  closed or parked. An item filed and then closed in the same wrap goes back to before the first
+  write: declined. If any record changed after the wrap, it refuses, names each one, and changes
+  nothing. Extends and lessons are not in the batch; the report gives each its own undo.
+  Mechanics: docs/OPEN_ITEMS.md, "Undoing a wrap-up's batch".
 
 ## Step 8, why it offers and never runs unasked (moved here from the skill)
 
@@ -46,6 +68,8 @@ Nothing here is ever deleted; a cleared record is MOVED to a `handled/` folder w
 | `wrapped/<session-id>`                  | `pj-wrap done`                           | pj-session-end, pj-health         | `wrapped: <date>`, `project: <name>`, NEW `via: skill` or `via: bare`   |
 | `owed/<key>` (NEW, W5)                  | `pj-wrap done --owed "<command>"`        | pj-start-card, pj-health          | records separated by a blank line: `owed: <command>`, `project: <name>`, `session: <id>`, `since: YYYY-MM-DD HH:MM` |
 | `owed/handled/<key>.<YYYYmmdd-HHMMSS>`  | `pj-wrap owed --clear`, pj-session-end   | nobody (history)                  | the moved file                                                          |
+| `wrap-batch/<session-id>.tsv` (5 Oct 2026) | `open-items add/close/park --wrap`     | `open-items undo-wrap`            | one line per write: action, drawer, id, item file, sha256               |
+| `wrap-batch/<session-id>.tsv.undone.<YYYYmmdd-HHMMSS>` | `open-items undo-wrap`                   | `open-items undo-wrap` (refuses a second undo) | the moved file                                              |
 
 `<key>` is the project's encoded main-repo path, the same key `no-wrap-up/` uses.
 

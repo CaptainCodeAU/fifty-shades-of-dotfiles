@@ -10,7 +10,8 @@ Steps run in this order; `pj-wrap done` is always last. Rulings and reasons:
 `docs/PJ_WRAP_UP.md` in the dotfiles repo (D-20260925-A01, D-20260920-A03).
 
 - Every question is an AskUserQuestion, one question each, mirrored in chat first (question and
-  every option label). The one exception is the table approval in step 3, which is one pop-up.
+  every option label). No pop-up approves the table (Gavin's pick, 5 Oct 2026): the session applies
+  its own verdicts and the report lists each one with how to undo it.
 - Every write under `~/.claude` or `~/.local/state`, and every commit in dot-claude, runs with the
   sandbox lifted for that one call. Read the exit code: 2 = REFUSED (retry lifted, never reword),
   3 = written but NOT committed (say so).
@@ -55,13 +56,19 @@ Steps run in this order; `pj-wrap done` is always last. Rulings and reasons:
    - drop: noise only (a typo, or already done AND recorded)
    Under the table, list unanswered questions and open decide rows. An empty table is fine.
 
-3. One pop-up approves the table. Name each row by a short title with its verdict, never a bare
-   row number. Options: approve; approve with changes (the text field); not yet, something first.
-   Changes: re-show only the changed rows, one more pop-up, then apply. "Something first": do it,
-   re-check every row, show the whole table again. Then ask each unanswered question and each open
-   decide row as its own question (a project with no drawer: "create one?" is one of them).
+3. Show the table in chat; no pop-up approves it (he approved wrap tables in 3 to 7 seconds, so
+   the box was a stamp). Applied without asking, in step 4: file here or for an owner, extend,
+   close (the note names the evidence), park, drop, leave to a hook, save a lesson. Still asked,
+   each as its own question: each open decide row, each "record the ruling", each
+   "record as declined" (only the user's own no declines), each unanswered question, and for a
+   project with no drawer "create one?". No answer or "not now": the row is filed as an item,
+   never decided.
 
-4. Apply the approved verdicts through the tools named in step 2 only. A project lesson: while
+4. Apply the verdicts through the tools named in step 2 only. Every `open-items add`, `close` and
+   `park` here carries `--wrap`, so one `open-items undo-wrap <session-id>` puts the batch back
+   (filed: declined; closed or parked: reopened); `decline` never takes it. Note each extend's own
+   undo (`open-items set <ID> <field> "<value before>"`; a body paragraph cannot be taken back, say
+   so) and each lesson's (the file or line to remove) for the report. A project lesson: while
    auto-memory is frozen (D-20260929-A01) write NO memory file; file it as an open item
    (`--kind decide`, the lesson in its body) or carry it in the handoff. Once the freeze lifts, a
    memory file again (Edit an existing one, never Write over it). A machine-wide lesson:
@@ -122,7 +129,11 @@ Steps run in this order; `pj-wrap done` is always last. Rulings and reasons:
     `test -e ~/.local/state/pj/wrapped/$CLAUDE_CODE_SESSION_ID`; missing means NOT marked, say so.
     In a worktree the records belong to the main checkout.
     Then the report. Line 1, first that applies: a STOP from step 8; an owed project wrap-up; any
-    other action for the user; "Done, nothing needed from you." End with the pending list and one
+    other action for the user; "Done, nothing needed from you." Then "Filed and closed for you
+    (the session's choice, not yours)": one row per verdict step 4 applied, its id and plain words,
+    each extend and lesson with its own undo, and last the one undo line
+    `open-items undo-wrap <id>`, the id read from `$CLAUDE_CODE_SESSION_ID` in a Bash call, never
+    a placeholder (run it with the sandbox lifted). End with the pending list and one
     line: "Kept working after this? Run /pj:wrap-up again." Last, as its own Bash call:
     `pj-ping done "wrap-up <project>" --detach`. It returns at once (Gavin, 2026-09-29: the
     blocking send cost about 10 s); a failed send is named only in the ping log, not here.
