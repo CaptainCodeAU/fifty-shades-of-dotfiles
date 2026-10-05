@@ -84,6 +84,27 @@ Everything else is delegated deliberately. `safe-rm` already skips targets that 
 (`trash` itself exits 5 on a missing path, which would break every `rm -f *.aux` in every
 Makefile), strips `--` (which `trash` mistakes for a filename), and ignores rm-style flags.
 
+### The shim is a stow link, so it vanishes with the links (2026-10-05)
+
+`~/.local/bin/rm`, `safe-rm` and `trash-guard` are stow links into this repo, like everything
+else in `~/.local/bin`. On 2026-10-05 a failed restow removed every link for 6.5 minutes. In that
+window, a script's or a fresh terminal's `rm` fell through to `/bin/rm`, a PERMANENT delete. That
+included the terminal Gavin used to repair it (measured by the outage investigation; record in
+the drawer `WORK/outage-2026-10-05/`).
+
+What now covers that window:
+
+- the restow is all-or-nothing: `install.sh` refuses a conflict with nothing removed, and puts
+  back any link it removed if stow then fails (W-20261005-A48 and its follow-ups);
+- a new terminal says so: the `~/.zshenv` warning block prints "plain rm is the PERMANENT
+  /bin/rm here" when the links are gone;
+- one command puts them back from any terminal, with no hooks and no `rm`:
+  `sh ~/.local/state/dotfiles/links/restore` (it moves blocking files aside and deletes nothing);
+- `dotlinks-watch` notices a missing link within seconds.
+
+Moving the shims out of the stowed set, as a tested, copy-installed release, is phase 2 of the
+outage plan (W-20261005-A72, Gavin's decision).
+
 ### The cost, accepted knowingly
 
 `safe-rm`'s header says not to route a script's own `mktemp` scratch to the Trash, because a

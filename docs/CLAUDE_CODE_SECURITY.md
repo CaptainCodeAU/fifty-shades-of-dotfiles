@@ -9,6 +9,10 @@ v2.1.191, Opus 4.8 default). Marked **[official]** (Anthropic docs), **[verified
 (checked this machine/session), or **[inferred]**. Release cadence is ~daily; re-check
 `claude update` and the linked docs before trusting version-specific detail.
 
+**Not covered here:** Claude Code's built-in removal checks, this repo's PreToolUse guards, and how
+to tell from a refusal message which layer issued it. See [`WHO_DENIED_THIS.md`](./WHO_DENIED_THIS.md)
+(2026-10-05).
+
 ---
 
 ## 1. Permission modes [official]

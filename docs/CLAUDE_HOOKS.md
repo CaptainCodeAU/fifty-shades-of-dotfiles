@@ -157,6 +157,37 @@ message. No guard here denies by exit 2; a guard with a shell syntax error does.
 Cost: no difference measurable at load average 85 to 100. Around the real delete
 guard, 30 interleaved runs each, the median was 714 ms new against 701 ms old.
 
+### Since 2026-10-05: one retry, the restore named, Monitor guarded, engage cross-checked
+
+After the 5 Oct outage (every stowed link gone, every session's Bash denied with
+HOOK MISSING; record: drawer `WORK/outage-2026-10-05/`), four changes, in dotfiles
+`66d28eb` and engage `4deea29` / `a21892b`:
+
+- **One retry before HOOK MISSING.** Every guard command now opens with
+  `if [ ! -x "$h" ]; then sleep 0.005; fi; if [ -x "$h" ]; then ...`. A link being
+  swapped can read as missing for a moment (2.9% of lookups failed mid-swap, and
+  one 5 ms retry recovered all 84, measured). No `||`, because of the class rule.
+  A healthy guard pays nothing; a guard that appears during the retry still gets
+  its payload (tested).
+- **HOOK MISSING names the restore first:** "If the dotfiles links are gone, run in
+  any terminal: `sh ~/.local/state/dotfiles/links/restore`". That script is a real
+  file that `install.sh` writes after every good deploy; it needs no hooks, no
+  `.zshrc` and no `~/.local/bin`.
+- **Every Bash guard also has a Monitor row** (W-20260924-A71): the Monitor tool runs
+  shell commands and was guarded by nothing. The guards read
+  `tool_input.command`, which Monitor has too; each one decided Monitor input
+  exactly as Bash input (5 guards x 2 tools, measured).
+- **engage cross-check.** engage registers six of these guard files from its own
+  manifest (`engage/templates/settings/hooks.json`). `claude-hooks-sync --check`
+  now fails, naming the file, when engage names a guard this repo no longer ships
+  or has retired. Otherwise retiring or renaming a guard here would deny every
+  engage session. Hooks owned by another repo are counted, not flagged.
+
+The engage renderer writes the same guard shape byte for byte. Its R28 test holds
+that, and `engage-settings-check` accepts both openings. **Change the shape in both
+repos together**, or engage's install refuses. A running session keeps its old
+hooks until restarted. Who refused what, by message: [WHO_DENIED_THIS.md](WHO_DENIED_THIS.md).
+
 ## What the sync may change
 
 `claude-hooks-sync` adds missing entries, and it makes exactly two kinds of edit
