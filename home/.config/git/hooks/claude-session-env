@@ -16,7 +16,7 @@
 #      prepare-commit-msg step can stamp the five C-* trailers (C-Sess-Id, C-Web-Id,
 #      C-Branch, C-Worktree, C-Wt-Path).
 #   2. Injects an identity line into the model's context so the fork knows its
-#      own name/id (used on the CROSS-SESSION ANNOUNCEMENT `FROM:` line).
+#      own name/id (to give when another session asks who it is).
 #
 # Fail-open: never exits non-zero. Requires jq; degrades quietly if missing.
 # ============================================================================
@@ -43,9 +43,9 @@ fi
 #    back to plain stdout if jq is unavailable).
 if [ -n "$sid" ]; then
     if [ -n "$name" ]; then
-        ctx="Session identity: you are session \"$name\" (id: $sid). Use \"$name\" on your CROSS-SESSION ANNOUNCEMENT FROM: line. Commits you make are auto-stamped with C-Sess-Id: $sid plus C-Web-Id, C-Branch, C-Worktree, and C-Wt-Path (commit context). The hook fills C-Web-Id by harvesting the \"Claude-Session: <url>\" line the harness still has you append, so keep appending that line if asked -- but do NOT hand-add any C- trailer."
+        ctx="Session identity: you are session \"$name\" (id: $sid). Use \"$name\" when another session asks who you are. Commits you make are auto-stamped with C-Sess-Id: $sid plus C-Web-Id, C-Branch, C-Worktree, and C-Wt-Path (commit context). The hook fills C-Web-Id by harvesting the \"Claude-Session: <url>\" line the harness still has you append, so keep appending that line if asked -- but do NOT hand-add any C- trailer."
     else
-        ctx="Session identity: this session is unnamed (id: $sid). Use this id on your CROSS-SESSION ANNOUNCEMENT FROM: line. Commits you make are auto-stamped with C-Sess-Id: $sid plus C-Web-Id, C-Branch, C-Worktree, and C-Wt-Path (commit context). The hook fills C-Web-Id by harvesting the \"Claude-Session: <url>\" line the harness still has you append, so keep appending that line if asked -- but do NOT hand-add any C- trailer."
+        ctx="Session identity: this session is unnamed (id: $sid). Use this id when another session asks who you are. Commits you make are auto-stamped with C-Sess-Id: $sid plus C-Web-Id, C-Branch, C-Worktree, and C-Wt-Path (commit context). The hook fills C-Web-Id by harvesting the \"Claude-Session: <url>\" line the harness still has you append, so keep appending that line if asked -- but do NOT hand-add any C- trailer."
     fi
     if command -v jq >/dev/null 2>&1; then
         jq -n --arg c "$ctx" '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:$c}}'
