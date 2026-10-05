@@ -442,7 +442,7 @@ check "C1 the live world: project 4 (conductor + 3 worktree workers), machine 5"
 check "C1b registry and ps agree (5 and 5), no disagreement flagged" '[ "$(j ".machine.registry, .machine.ps, .machine.disagree")" = "5 5 false " ]'
 check "C1c account is 'not measured' and null, never 0" '[ "$(j ".account.status, (.account.count|tostring)")" = "not measured null " ]'
 check "C1d at 4 in the project start is not allowed, and the refusal names the project cap" '[ "$(j .start_allowed)" = "false " ] && has "$(j .refusal)" "project cap: 4 of 4"'
-check "C1e the machine cap alone would allow it (5 < 12)" '[ "$(j .machine.count)" = "5 " ] && ! has "$(j .refusal)" "machine cap"'
+check "C1e the machine cap alone would allow it (5 < 15)" '[ "$(j .machine.count)" = "5 " ] && ! has "$(j .refusal)" "machine cap"'
 check "C1f the three worktree sessions count toward their repo" '[ "$(j "[.project.sessions[] | select(.cwd | test(\"/.worktree/\"))] | length")" = "3 " ]'
 check "C1g machine sessions carry the session id and the registry start time (pj-temp reads them)" \
   '[ "$(j ".machine.sessions[] | select(.pid==36921) | .sid, .start")" = "19e66748-5a52-430f-8fe7-30024dbbe95c Thu Sep 24 07:43:03 2026 " ]'
@@ -451,13 +451,13 @@ check "C2 count --check at the project cap: rc 6" '[ "$RC" -eq 6 ]'
 run count --cwd "$SWITCH" --check
 check "C3 claude-switcher's project (1 live) with the machine at 5: rc 0" '[ "$RC" -eq 0 ]'
 new_world; lists
-for p in 50001 50002 50004 50005 50006 50007; do mkdir -p "$ROOT/code/other$p"; reg "$SESS" $p "0000$p-aaaa-bbbb-cccc-000000000000" "$ROOT/code/other$p" "other$p-main" "$T_W"; psrow $p claude "$T_W"; done
+for p in 50001 50002 50004 50005 50006 50007 50008 50009 50010; do mkdir -p "$ROOT/code/other$p"; reg "$SESS" $p "0000$p-aaaa-bbbb-cccc-000000000000" "$ROOT/code/other$p" "other$p-main" "$T_W"; psrow $p claude "$T_W"; done
 run count --cwd "$SWITCH" --json
-check "C4 machine 11 live: start allowed from a project with room" '[ "$(j ".machine.count, .start_allowed")" = "11 true " ]'
+check "C4 machine 14 live (one under the cap, 15 since 6 Oct): start allowed from a project with room" '[ "$(j ".machine.count, .start_allowed")" = "14 true " ]'
 mkdir -p "$ROOT/code/other50003"; reg "$SESS" 50003 "000050003-aaaa-bbbb-cccc-000000000000" "$ROOT/code/other50003" other50003-main "$T_W"; psrow 50003 claude "$T_W"
 run count --cwd "$SWITCH" --json
-check "C4b machine 12 live: refused by the MACHINE cap though the project has room" \
-  '[ "$(j ".machine.count, .project.count, .start_allowed")" = "12 1 false " ] && has "$(j .refusal)" "machine cap: 12 of 12"'
+check "C4b machine 15 live: refused by the MACHINE cap though the project has room" \
+  '[ "$(j ".machine.count, .project.count, .start_allowed")" = "15 1 false " ] && has "$(j .refusal)" "machine cap: 15 of 15"'
 new_world; lists; psrow 60606 claude "$T_W"
 run count --cwd "$SWITCH" --json
 check "C5 ps 6 vs registry 5: disagreement flagged, 6 compared, the ps-only pid named" \
@@ -575,7 +575,7 @@ run count --cwd "$REPO" --json
 check "C11b a LINKED sessions dir is not counted twice: machine 5" '[ "$(j .machine.count)" = "5 " ]'
 run list --cwd "$REPO"
 check "C12 list prints both counts, the account slot and every counted name" \
-  'has "$OUT" "4 of 4 live" && has "$OUT" "a59-paneguard  pid 36920" && has "$OUT" "machine: 5 of 12" && has "$OUT" "account: not measured"'
+  'has "$OUT" "4 of 4 live" && has "$OUT" "a59-paneguard  pid 36920" && has "$OUT" "machine: 5 of 15" && has "$OUT" "account: not measured"'
 
 # ================================================================== START
 echo "--- start"
@@ -626,9 +626,9 @@ check "S4b the refusal names the cap, No override, and EVERY session counted (na
   'has "$ERR" "project cap: 4 of 4" && has "$ERR" "No override" && has "$ERR" "fifty-shades-of-dotfiles-main  pid 1610" && has "$ERR" "a59-paneguard  pid 36920" && has "$ERR" "a59-pjworker  pid 36921" && has "$ERR" "a59-hook  pid 36922"'
 check "S4c the refusal is logged" 'grep -q "name=a59-pjworker result=refused-cap" "$STATE/workers.log"'
 new_world room; lists; start_happy
-for p in 50001 50002 50003 50004 50005 50006 50007 50008; do mkdir -p "$ROOT/code/other$p"; reg "$SESS" $p "0000$p-aaaa-bbbb-cccc-000000000000" "$ROOT/code/other$p" "other$p-main" "$T_W"; psrow $p claude "$T_W"; done
+for p in 50001 50002 50003 50004 50005 50006 50007 50008 50009 50010 50011; do mkdir -p "$ROOT/code/other$p"; reg "$SESS" $p "0000$p-aaaa-bbbb-cccc-000000000000" "$ROOT/code/other$p" "other$p-main" "$T_W"; psrow $p claude "$T_W"; done
 run start a59-pjworker --cwd "$WT"
-check "S4d machine at 12 (project 3): refused by the machine cap, rc 6, nothing typed" '[ "$RC" -eq 6 ] && has "$ERR" "machine cap: 12 of 12" && [ "$(ncalls "^pane [rs][ue]")" = 0 ]'
+check "S4d machine at 15 (project 3): refused by the machine cap, rc 6, nothing typed" '[ "$RC" -eq 6 ] && has "$ERR" "machine cap: 15 of 15" && [ "$(ncalls "^pane [rs][ue]")" = 0 ]'
 new_world room; lists; start_happy; touch "$FAKE/SANDBOX"
 run start a59-pjworker --cwd "$WT"
 check "S5 sandboxed herdr: rc 2, never 'free', nothing split" '[ "$RC" -eq 2 ] && [ "$(ncalls "^pane split")" = 0 ]'

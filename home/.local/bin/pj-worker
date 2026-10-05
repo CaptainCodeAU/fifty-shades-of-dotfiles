@@ -66,8 +66,10 @@
 #            A claude herdr agent in such a workspace with no live registry entry counts too.
 #   machine  at most CAP_MACHINE live Claude sessions on this machine (D-20260924-A10; A09's 6
 #            withdrawn). Raised 8 -> 12 on 2026-09-29: Gavin, "Let's increase from 8 to 12!"
-#            in engage-main's box, confirmed in his own box in session dotfiles-doer. engage-worker
-#            counts the same machine with its own CAP_MACHINE (12 since engage f523add); the two
+#            in engage-main's box, confirmed in his own box in session dotfiles-doer. Raised
+#            12 -> 15 on 2026-10-06: Gavin, "let's increase it to 15" (engage session cab6b782).
+#            engage-worker counts the same machine with its own CAP_MACHINE (15 since engage
+#            8cdd72f; 12 from f523add); the two
 #            must stay equal, or one launcher refuses while the other still starts sessions. Read twice: the live registry and a same-uid `ps` count of `claude`
 #            processes. They should agree; when they do not, BOTH are printed and the LARGER
 #            is compared, and `start` (and `count --check`) refuses with exit 2, because only
@@ -148,7 +150,7 @@ zmodload zsh/datetime
 
 # THE CAPS. One constant each; the next change is one line.
 CAP_PROJECT=4   # D-20260924-A08: live Claude sessions per project, conductor and Gavin's own included
-CAP_MACHINE=12  # D-20260924-A10, raised 8 -> 12 by Gavin 2026-09-29: live Claude sessions on this machine, all projects and profiles
+CAP_MACHINE=15  # D-20260924-A10, raised 8 -> 12 by Gavin 2026-09-29, 12 -> 15 by Gavin 2026-10-06 (engage session cab6b782): live Claude sessions on this machine, all projects and profiles
 
 HERDR="${PJW_HERDR:-herdr}"
 PS_CMD="${PJW_PS:-ps}"
