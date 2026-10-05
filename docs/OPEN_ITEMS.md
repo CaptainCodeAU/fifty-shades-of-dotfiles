@@ -443,11 +443,22 @@ route seen checks-run undo-wrap`. Reads (the listing, `--all`, `--project`, `sho
 | no answer in 3 s                             | refuses, exit 2: "...engage-go did not answer in 3 s..." (W-20261002-A48); engage-go's whole process group is killed |
 | exit 1, any other code, or engage-go missing | writes as before                                                                                                     |
 
-The check is fail-closed on a hang and on a bad marker, by the contract. Known gap: the check
-runs in the CURRENT folder, so a write aimed at another project's drawer (`add --for`,
-`--project` on watch/check/tick/move/supersede, `route --to`) is judged by where you stand,
-not by the target (W-20261002-A47). Proven end to end on a real marker on 2026-10-02
-(drawer: `engage-move/2026-10-02/E2E-REPORT.md`).
+The check is fail-closed on a hang and on a bad marker, by the contract. Proven end to end on
+a real marker on 2026-10-02 (drawer: `engage-move/2026-10-02/E2E-REPORT.md`).
+
+**The target project is asked too (D-20261005-A08, 5 Oct 2026; was the known gap W-20261002-A47).**
+The check above judges only the folder you stand in. Every write also takes the drawer lock
+of each drawer it writes, and `lock_drawer` first asks about THAT drawer's project:
+`engage-go cutover check --dir <repo>`, the repo its `items/.project` names (`repo_of_drawer`,
+P10). So `add --for <p>` (name or path), `watch`, `check`, `tick`, `pass`, `supersede`, `move
+--to`, `route --to` and `undo-wrap` all refuse when the drawer they would write belongs to a
+moved project: "<p> moved to engage, so open-items <verb> wrote nothing into its drawer
+(nobody reads it now); file it from <repo> with engage-go add, or drop it in the engage
+account inbox". Exit 3 and a hang refuse the same way, with the same 3 s limit. Not asked:
+your own drawer (already asked above) and the inbox (no project). A drawer whose repo is
+unknown (no valid `repo:` line) cannot be asked: the write goes ahead as before and one note
+on stderr says engage was not asked, so a pass is never read as "not moved". Section EG3 of
+the selftest proves six of them (add --for by name and by path, watch, check, move, route) against an unmoved twin; tick, pass, supersede and undo-wrap reach the same lock and are not run there.
 
 ## Undoing a wrap-up's batch: `--wrap` and `undo-wrap` (S4A, 5 Oct 2026)
 

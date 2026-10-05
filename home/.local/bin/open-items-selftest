@@ -2549,6 +2549,90 @@ OUT="$(cd "$ZETA" && PATH="$EG/m3multi:$NOPERL" OPEN_ITEMS_PROJECTS_DIR="$P" OPE
 wanteq "EG2 no perl: exit 3 with two stdout lines still gives the FIRST line only, one line" "2 first nosecond 1" \
   "$RC $(case "$OUT" in *"not valid: first line."*) printf first;; *) printf nofirst;; esac) $(case "$OUT" in *"second line"*) printf second;; *) printf nosecond;; esac) $(printf '%s\n' "$OUT" | grep -c .)"
 pkill -KILL -f "$MK" 2>/dev/null
+
+# EG3 the TARGET project's move (D-20261005-A08 Decision 8, 5 Oct 2026). Every write into
+# ANOTHER project's drawer asks `engage-go cutover check --dir <that repo>` (the repo its
+# items/.project names) and refuses when THAT project moved. One fake answers per folder:
+# moved for $D/moved, exit 3 for $D/badmark, a hang for $D/hangs, not moved for anything else.
+mk_dotclaude
+mkrepo alpha g; mkrepo moved g; mkrepo stay g; mkrepo badmark g; mkrepo hangs g
+MVW="$(wk moved)"; STW="$(wk stay)"
+runw "$D/moved" add "moved's own item" --done-when x; MID="$(lastid)"
+runw "$D/stay" add "stay's own item" --done-when x; SID="$(lastid)"
+runw "$D/alpha" add "alpha's item to move away" --done-when x; AID="$(lastid)"
+runw "$D/alpha" add "alpha's second item to move away" --done-when x; AID2="$(lastid)"
+runw "$D/alpha" add "inbox item one" --done-when x --inbox; IID="$(lastid)"
+runw "$D/alpha" add "inbox item two" --done-when x --inbox; IID2="$(lastid)"
+wanteq "EG3 control: six fixture IDs captured, all different" "6" \
+  "$(printf '%s\n' "$MID" "$SID" "$AID" "$AID2" "$IID" "$IID2" | grep '^W-' | sort -u | wc -l | tr -d ' ')"
+mkdir -p "$EG/mt"
+cat > "$EG/mt/engage-go" <<EOF
+#!/bin/bash
+printf '%s|%s\n' "\$*" "\$(pwd -P)" >> "$EG/mt/ran"
+echo "fake engage-go noise on stderr" >&2
+case "\$*" in
+  *"--dir $D/moved") echo 'moved: moved (2026-10-05)'; exit 0 ;;
+  *"--dir $D/badmark") echo 'not valid: MOVED-TO-ENGAGE is not committed'; exit 3 ;;
+  *"--dir $D/hangs") exec -a $MK-target sleep 30 ;;
+esac
+echo 'not moved: no companion'; exit 1
+EOF
+chmod +x "$EG/mt/engage-go"
+# egt <dir> <args>: open-items from <dir> with only the per-folder fake; the log starts empty.
+egt(){ local d="$1"; shift; printf '' > "$EG/mt/ran"
+  OUT="$(cd "$d" 2>/dev/null && PATH="$EG/mt:$NOEG" OPEN_ITEMS_PROJECTS_DIR="$P" OPEN_ITEMS_DOTCLAUDE="$DC" CLAUDE_CODE_SESSION_ID=sess-test CLAUDE_SESSION_ID=sess-test "$TOOL" "$@" 2>&1)"; RC=$?; return 0; }
+# The same six writes into another project's drawer, aimed at moved, then at stay (the control).
+eg3_list(){   # eg3_list <target name> <its item>
+  EG3=(
+    "add 'filed for $1 by habit' --done-when x --for $1"
+    "add 'filed for $1 by path' --done-when x --for '$D/$1/README'"
+    "watch $2 alpha"
+    "check $2 alpha 'its own done-when'"
+    "move $AID --to $1 --why 'by habit'"
+    "route $IID --to $1 --why 'by habit'"
+  )
+}
+eg3_list moved "$MID"; EGBAD=""
+for c in "${EG3[@]}"; do
+  h0="$(eg_state)"; eval "egt '$D/alpha' $c"; h1="$(eg_state)"
+  n="$(printf '%s\n' "$OUT" | grep -v '^open-items: --for .*: owner ' | grep -c .)"   # the path form names its owner first, as always
+  case "$OUT" in *"moved moved to engage"*) ;; *) EGBAD="$EGBAD [${c%% *}: no 'moved moved to engage']" ;; esac
+  case "$OUT" in *"engage-go add"*) ;; *) EGBAD="$EGBAD [${c%% *}: no 'engage-go add']" ;; esac
+  case "$OUT" in *"account inbox"*) ;; *) EGBAD="$EGBAD [${c%% *}: no 'account inbox']" ;; esac
+  [ "$RC" = 2 ] || EGBAD="$EGBAD [${c%% *}: rc $RC]"
+  [ "$n" = 1 ] || EGBAD="$EGBAD [${c%% *}: $n lines]"
+  [ "$h0" = "$h1" ] || EGBAD="$EGBAD [${c%% *}: WROTE]"
+  grep -qx "cutover check --dir $D/moved|$D/alpha" "$EG/mt/ran" || EGBAD="$EGBAD [${c%% *}: never asked about moved]"
+done
+wanteq "EG3 a moved TARGET: all ${#EG3[@]} writes into its drawer refuse (rc 2), one line naming engage-go add and the account inbox, nothing written, asked with --dir" "" "$EGBAD"
+want   "  and the refusal names the repo to file from" "file it from $D/moved with engage-go add" "$OUT"
+eg3_list stay "$SID"; EGBAD=""
+for c in "${EG3[@]}"; do
+  h0="$(eg_state)"; eval "egt '$D/alpha' $c"; h1="$(eg_state)"
+  [ "$RC" = 0 ] && [ "$h0" != "$h1" ] || EGBAD="$EGBAD [${c%% *}: rc $RC, state $([ "$h0" = "$h1" ] && printf unchanged || printf changed)]"
+  case "$OUT" in *engage*) EGBAD="$EGBAD [${c%% *}: says engage]" ;; esac
+  grep -qx "cutover check --dir $D/stay|$D/alpha" "$EG/mt/ran" || EGBAD="$EGBAD [${c%% *}: never asked about stay]"
+done
+wanteq "EG3 control, the same fake and the same six writes aimed at an UNMOVED target: all write (rc 0), each asked with --dir" "" "$EGBAD"
+wanteq "  the item moved and the item routed sit in stay now" "1 1" \
+  "$([ -n "$(ifile "$STW" "$AID")" ] && echo 1) $([ -n "$(ifile "$STW" "$IID")" ] && echo 1)"
+egt "$D/alpha" add "alpha's own item" --done-when x
+wanteq "EG3 the caller's own drawer: written, and asked only the old way (no --dir)" "0 cutover check|$D/alpha" "$RC $(cat "$EG/mt/ran")"
+egt "$D/alpha" add "into the inbox" --done-when x --inbox
+wanteq "EG3 the inbox is no project: written, never asked about with --dir" "0 cutover check|$D/alpha" "$RC $(cat "$EG/mt/ran")"
+h0="$(eg_state)"; egt "$D/alpha" add "for a bad marker" --done-when x --for badmark; h1="$(eg_state)"
+wanteq "EG3 a target whose marker is not valid (exit 3): refused (rc 2), one line with the reason, nothing written" "2 1 reason same" \
+  "$RC $(printf '%s\n' "$OUT" | grep -c .) $(case "$OUT" in *"not valid: MOVED-TO-ENGAGE is not committed"*) printf reason;; *) printf noreason;; esac) $([ "$h0" = "$h1" ] && printf same || printf WROTE)"
+h0="$(eg_state)"; t="$(lk_ms)"; egt "$D/alpha" add "for a hanging check" --done-when x --for hangs; EGT=$(( $(lk_ms) - t )); h1="$(eg_state)"
+wanteq "EG3 a target whose check hangs: refused (rc 2) in 2.9 to 5.0 s (${EGT} ms), nothing written, nothing left running" "2 hang same in-time 0" \
+  "$RC $(case "$OUT" in *"did not answer in 3 s"*) printf hang;; *) printf nohang;; esac) $([ "$h0" = "$h1" ] && printf same || printf WROTE) $([ "$EGT" -ge 2900 ] && [ "$EGT" -le 5000 ] && printf in-time || printf off-time) $(eg_gone)"
+# A drawer whose repo: line is gone cannot be asked: written as before, with ONE note saying so.
+# The note is the difference between "asked, not moved" and "never asked"; the arm above is its twin.
+printf 'stay\n' > "$STW/items/.project"
+h0="$(eg_state)"; egt "$D/alpha" add "for a drawer with no repo line" --done-when x --for stay; h1="$(eg_state)"
+wanteq "EG3 a target with no repo: line: written (rc 0) with one note that engage was not asked" "0 changed note" \
+  "$RC $([ "$h0" != "$h1" ] && printf changed || printf unchanged) $(case "$OUT" in *"could not ask engage whether stay has moved (repo unknown (no repo: line))"*) printf note;; *) printf nonote;; esac)"
+wanteq "  and engage-go was asked only about the caller's own folder" "cutover check|$D/alpha" "$(cat "$EG/mt/ran")"
 unset PJ_STATE_DIR
 
 # ---- UW: one undo for a wrap-up's batch (S4A, Gavin's pick 5 Oct 2026). /pj:wrap-up applies its

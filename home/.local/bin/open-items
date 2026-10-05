@@ -509,6 +509,7 @@ lock_sweep(){
 }
 lock_drawer(){
   local w="$1" pid err h k tries="${OPEN_ITEMS_TEST_LOCK_TRIES:-600}"   # the env var is a TEST seam: timing only
+  target_guard "$w"   # another project's drawer: has THAT project moved to engage? (D-20261005-A08)
   # THE WAIT (W-20260923-A60). Until A60 every waiter forked `ls` (and a subshell for kill)
   # and slept a fixed 0.1 s: 160 waiters made about 1600 polls a second, several forks each,
   # all competing with the one process doing real work. Now the lock is
@@ -783,6 +784,33 @@ repo_line_guard(){              # repo_line_guard <work> <current repo>
   v="$(sed -n '2,$s/^repo:[[:space:]]*//p' "$1/items/.project" | head -1)"
   [ -z "$v" ] || [ "$v" = "$2" ] \
     || refuse "this drawer's items/.project says repo: $v, but you are in $2. They share one drawer key (the encoding is lossy) or the repo moved; either way it is Gavin's call which repo owns $1 (P10). Nothing was written."
+  return 0
+}
+# D-20261005-A08 (Decision 8 of the cc-claude-mods move, workbench/cutover/2026-10-05 in the
+# cc-claude-mods companion). engage_guard, at the dispatch, asks only about the folder open-items was started
+# from, so `add --for <moved project>`, a watch or check on its item, or a move or route into it
+# still wrote into a drawer nobody reads. Every write takes the drawer's lock first, so
+# lock_drawer calls this for each drawer it locks: the caller's own drawer (engage_guard asked) and
+# the inbox (no project) pass; any other drawer is asked about through the repo its
+# items/.project names (repo_of_drawer, P10), with the same 3 s limit and the same answers.
+# A drawer whose repo is unknown cannot be asked: the write goes ahead as before, and one
+# note on stderr says so, so a pass is never mistaken for a "not moved".
+target_guard(){                 # target_guard <work>
+  local w="$1" repo own why rc nm
+  command -v engage-go >/dev/null 2>&1 || return 0
+  [ "$(realdir "$w")" != "$(realdir "$INBOX")" ] || return 0
+  own="$(current_repo)" && [ "$(realdir "$w")" = "$(realdir "$(work_for "$own")")" ] && return 0
+  nm="$(name_of "$w")"
+  repo="$(repo_of_drawer "$w")" || {
+    loud "note -- could not ask engage whether $nm has moved ($repo), so open-items ${OI_VERB:-write} wrote as before"
+    return 0; }
+  why="$(engage_check --dir "$repo" 2>/dev/null)"; rc=$?
+  why="${why%%$'\n'*}"
+  case $rc in
+    0) refuse "$nm moved to engage, so open-items ${OI_VERB:-write} wrote nothing into its drawer (nobody reads it now); file it from $repo with engage-go add, or drop it in the engage account inbox (the account repo's inbox/ folder)" ;;
+    3) refuse "$nm has an engage move marker that is not valid: ${why#not valid: }. open-items ${OI_VERB:-write} wrote nothing into its drawer; run engage-go cutover check --dir $repo for details, and use engage-go add there once the move is sound" ;;
+    124) refuse "could not check whether $nm moved to engage: engage-go did not answer in 3 s, so open-items ${OI_VERB:-write} wrote nothing into its drawer; run engage-go cutover check --dir $repo to see why" ;;
+  esac
   return 0
 }
 # P10 back-fill: a write from INSIDE the repo that owns the drawer adds the repo: line when it
@@ -2523,13 +2551,13 @@ engage_kill(){                  # engage_kill <pid> <1: its group | 0: it and it
     done
   done
 }
-engage_check(){                 # prints engage-go's stdout; returns its exit code, or 124 past 3 s
+engage_check(){                 # engage_check [--dir <repo>]: engage-go's stdout; its exit code, or 124 past 3 s
   local pid grp=0 n=0 rc t0="" now
   if command -v perl >/dev/null 2>&1; then
     perl -e 'setpgrp(0,0); open(my $f, "-|", @ARGV) or exit 127; my $l = <$f>; print $l if defined $l;
-      close $f; my $s = $?; exit($s & 127 ? 128 + ($s & 127) : $s >> 8)' engage-go cutover check & pid=$!; grp=1
+      close $f; my $s = $?; exit($s & 127 ? 128 + ($s & 127) : $s >> 8)' engage-go cutover check ${1+"$@"} & pid=$!; grp=1
   else
-    engage-go cutover check & pid=$!
+    engage-go cutover check ${1+"$@"} & pid=$!
   fi
   trap "engage_kill $pid $grp; exit 130" INT TERM HUP
   [ -n "${EPOCHREALTIME-}" ] && t0="${EPOCHREALTIME//[^0-9]/}"
@@ -2556,6 +2584,7 @@ engage_guard(){                 # engage_guard <verb>
   esac
   return 0
 }
+OI_VERB="${1:-}"
 case "${1:-}" in
   add|close|decline|park|reopen|set|init|regen|migrate|supersede|watch|check|tick|pass|move|route|seen|checks-run|undo-wrap)
     engage_guard "$1" ;;
