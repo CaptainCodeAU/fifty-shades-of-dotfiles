@@ -757,8 +757,9 @@ arm "CONTROL: an unknown key beside the accepted ones still FAILs" is pj-homes F
 arm "CONTROL: the FAIL names the unknown key" has pj-homes "unknown-key='bogus'"
 cp "$T/ph.bak" "$PROJ/.claude/pj-homes"
 sed -i.bak 's/^records: private/records: shared/' "$PROJ/.claude/pj-homes"; run; arm "pj-homes FAIL on a bad records value" is pj-homes FAIL; cp "$T/ph.bak" "$PROJ/.claude/pj-homes"
-# records: engage (engage decision #1036, the start card reads it). The FAIL just above is the control.
-sed -i.bak 's/^records: private/records: engage/' "$PROJ/.claude/pj-homes"; run; arm "pj-homes PASS with 'records: engage'" is pj-homes PASS; cp "$T/ph.bak" "$PROJ/.claude/pj-homes"
+# records: engage is retired (engage decision #1036 as amended): only the move marker says a
+# project moved, so a stale copy FAILs like any bad value. The PASS rows above are the control.
+sed -i.bak 's/^records: private/records: engage/' "$PROJ/.claude/pj-homes"; run; arm "pj-homes FAIL on the retired 'records: engage'" is pj-homes FAIL; arm "the FAIL names records='engage'" has pj-homes "records='engage'"; cp "$T/ph.bak" "$PROJ/.claude/pj-homes"
 mv "$PROJ/TRACK.md" "$T/track.bak"; run; arm "pj-homes FAIL when a declared tracker is missing" is pj-homes FAIL; arm "pj-homes names the key" has pj-homes "tracker"; mv "$T/track.bak" "$PROJ/TRACK.md"
 echo "plans: elsewhere:x" >>"$PROJ/.claude/pj-homes"; run; arm "pj-homes WARN on an unresolvable marker" is pj-homes WARN; cp "$T/ph.bak" "$PROJ/.claude/pj-homes"
 mv "$PROJ/.claude/pj-homes" "$T/ph2.bak"; run; arm "pj-homes NOT MEASURED without the file" is pj-homes "$NM"; arm "pj-homes absent says defaults" has pj-homes "defaults in use"; mv "$T/ph2.bak" "$PROJ/.claude/pj-homes"

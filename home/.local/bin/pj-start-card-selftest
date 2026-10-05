@@ -107,19 +107,21 @@ D="$ROOT/repo-d"; mkrepo "$D"; mkdrawer "$D" 0 0 >/dev/null
 run "$D"
 check "D empty drawer says none open" 'has "$OUT" "^Open items: none open"'
 
-# EN: records: engage in pj-homes (engage decision #1036). The project's items are engage
-# records, so the `open-items init` hint would start a second list; the card points at engage.
-# Controls: records: private with no drawer still gets the hint, and records: engage WITH a
-# drawer still shows the drawer, so the line keys on the declaration, not on a missing drawer.
+# EN: `records: engage` is retired (engage decision #1036 as amended, 5 Oct 2026): only the move
+# marker (`engage-go cutover check`, MV below) says a project moved. The card ignores the value,
+# so a pj-homes that still carries it gets the ordinary no-drawer line, and the old "kept as
+# engage records" line never prints. Controls: records: private with no drawer gets the same
+# line; records: engage with a drawer shows the drawer; with the moved fake (MV) the marker
+# alone decides. On the card before this change the first two arms FAIL.
 EN="$ROOT/repo-engage"; mkrepo "$EN"; mkdir -p "$EN/.claude"; printf '# items are engage records\nrecords: engage\n' > "$EN/.claude/pj-homes"
 run "$EN"
-check "EN records: engage, no drawer: rc 0, one line pointing at engage records" '[ "$RC" -eq 0 ] && has "$OUT" "^Open items: kept as engage records (engage-go questions lists what waits on you)$"'
-check "EN and no open-items init hint, no no-drawer line" '! has "$OUT" "open-items init" && ! has "$OUT" "no drawer"'
+check "EN records: engage, no drawer: rc 0, the ordinary no-drawer line" '[ "$RC" -eq 0 ] && has "$OUT" "^Open items: no drawer for this project yet"'
+check "EN the retired 'kept as engage records' line never prints" '! has "$OUT" "engage records" && ! has "$OUT" "moved to engage"'
 check "EN same shape as C: header, the one items line, hello rule (3 lines)" '[ "$(lines "$OUT")" -eq 3 ]'
 check "EN stderr empty" '[ ! -s "$ROOT/stderr" ]'
 EP="$ROOT/repo-private-nodrawer"; mkrepo "$EP"; mkdir -p "$EP/.claude"; printf 'records: private\n' > "$EP/.claude/pj-homes"
 run "$EP"
-check "EN control: records: private and no drawer still gets the init hint" 'has "$OUT" "^Open items: no drawer for this project yet" && ! has "$OUT" "engage records"'
+check "EN control: records: private and no drawer gets the same no-drawer line" 'has "$OUT" "^Open items: no drawer for this project yet" && ! has "$OUT" "engage records"'
 ED="$ROOT/repo-engage-drawer"; mkrepo "$ED"; mkdir -p "$ED/.claude"; printf 'records: engage\n' > "$ED/.claude/pj-homes"; mkdrawer "$ED" 2 0 >/dev/null
 run "$ED"
 check "EN control: records: engage WITH a drawer shows the drawer as usual" 'has "$OUT" "^Open items: 2 open" && ! has "$OUT" "engage records"'
@@ -153,6 +155,11 @@ check "MV exit 3 (marker not valid): the drawer as before" '[ "$RC" -eq 0 ] && h
 t0=$SECONDS; runp hang "$MV"; MVT=$((SECONDS - t0))
 check "MV a hang: rc 0, the drawer as before, in at most 4 s (${MVT} s)" '[ "$RC" -eq 0 ] && has "$OUT" "^Open items: 3 open" && [ "$MVT" -le 4 ]'
 check "MV a hang: the fake was killed, nothing left running" '! pgrep -f "mvhang$$" >/dev/null 2>&1'
+# The marker alone decides (EN above): records: engage moves nothing, and the marker moves it.
+runp stay "$EN"
+check "MV records: engage, not moved: the no-drawer line, no engage line" 'has "$OUT" "^Open items: no drawer for this project yet" && ! has "$OUT" "moved to engage" && ! has "$OUT" "engage records"'
+runp moved "$EN"
+check "MV control: records: engage, moved: the moved line" 'has "$OUT" "^Items moved to engage -- see the engage pane$" && ! has "$OUT" "no drawer"'
 
 # --- E: declaration absent -> default handoff repo:OPENING-PROMPT.md ---------------
 run "$A"; check "E default handoff absent -> no line" '! has "$OUT" "^Handoff:"'
@@ -522,7 +529,7 @@ agree(){
   local d="$1" T bad="" n p k m own lab key c
   T="$( builtin cd "$d" && "$CARD" </dev/null 2>/dev/null )"; runj "$d"
   parses || { AGREE="json does not parse"; return 0; }
-  if has "$T" "^Open items: no drawer" || has "$T" "^Open items: kept as engage records" || has "$T" "^Items moved to engage"; then [ "$(jv .items.drawer)" = none ] && [ "$(jv .items.open)" = 0 ] || bad="$bad drawer"
+  if has "$T" "^Open items: no drawer" || has "$T" "^Items moved to engage"; then [ "$(jv .items.drawer)" = none ] && [ "$(jv .items.open)" = 0 ] || bad="$bad drawer"
   elif has "$T" "^Open items: none open"; then [ "$(jv .items.drawer)" = present ] && [ "$(jv .items.open)" = 0 ] || bad="$bad none-open"
   elif has "$T" "^Open items: "; then
     n="$(printf '%s\n' "$T" | sed -n 's/^Open items: \([0-9]*\) open.*/\1/p')"
@@ -643,13 +650,13 @@ fi
 # T4. error paths: the JSON parses on every one and errors names what dropped out
 runj "$C"; check "T no drawer: parses, drawer none, no error" 'parses && [ "$(jv .items.drawer)" = none ] && [ "$(jv ".errors | length")" -eq 0 ]'
 KC="$(jv '[paths | map(tostring) | join(".")] | join(",")')"
-runj "$EN"; check "T records: engage: parses, drawer none, open 0, no error" 'parses && [ "$(jv .items.drawer)" = none ] && [ "$(jv .items.open)" = 0 ] && [ "$(jv ".errors | length")" -eq 0 ]'
-check "T records: engage: schema 1 unchanged, the same key paths as the no-drawer card" '[ -n "$KC" ] && [ "$(jv "[paths | map(tostring) | join(\".\")] | join(\",\")")" = "$KC" ]'
+runj "$EN"; check "T records: engage (retired, ignored): parses, drawer none, open 0, no error" 'parses && [ "$(jv .items.drawer)" = none ] && [ "$(jv .items.open)" = 0 ] && [ "$(jv ".errors | length")" -eq 0 ]'
+check "T records: engage: the same key paths as the no-drawer card" '[ -n "$KC" ] && [ "$(jv "[paths | map(tostring) | join(\".\")] | join(\",\")")" = "$KC" ]'
 agree "$EN"; check "T records: engage: text and --json agree (${AGREE:-all agree})" '[ -z "$AGREE" ]'
-KI="$(jv '[.items | paths | map(tostring) | join(".")] | join(",")')"   # J is the records: engage card's here
+KI="$(jv '[.items | paths | map(tostring) | join(".")] | join(",")')"   # J is EN's no-drawer card here
 PATH="$ROOT/eg-moved:$PATH" runj "$MV"
 check "T moved: parses, drawer none, open 0, list and parked_list empty, parked 0, no error" 'parses && [ "$(jv .items.drawer)" = none ] && [ "$(jv .items.open)" = 0 ] && [ "$(jv ".items.list | length")" = 0 ] && [ "$(jv ".items.parked_list | length")" = 0 ] && [ "$(jv .items.parked)" = 0 ] && [ "$(jv ".errors | length")" -eq 0 ]'
-check "T moved: schema 1 unchanged, items has the same key paths as the records: engage card" '[ -n "$KI" ] && [ "$(jv "[.items | paths | map(tostring) | join(\".\")] | join(\",\")")" = "$KI" ]'
+check "T moved: schema 1 unchanged, items has the same key paths as the no-drawer card" '[ -n "$KI" ] && [ "$(jv "[.items | paths | map(tostring) | join(\".\")] | join(\",\")")" = "$KI" ]'
 PATH="$ROOT/eg-moved:$PATH" agree "$MV"; check "T moved: text and --json agree (${AGREE:-all agree})" '[ -z "$AGREE" ]'
 PATH="$ROOT/eg-stay:$PATH" runj "$MV"
 check "T moved control, not moved: drawer present, open 3, parked 1" 'parses && [ "$(jv .items.drawer)" = present ] && [ "$(jv .items.open)" = 3 ] && [ "$(jv .items.parked)" = 1 ]'

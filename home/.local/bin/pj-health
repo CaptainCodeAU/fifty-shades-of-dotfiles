@@ -1358,9 +1358,10 @@ else
     case "$line" in ''|'#'*) continue;; esac
     key="${line%%:*}"; val="${line#*:}"; val="${val#"${val%%[![:space:]]*}"}"
     case "$key" in
-      # records: engage (engage decision #1036): the items are engage records; the start
-      # card reads it. A correct declaration, so not a FAIL.
-      records) records="$val"; nkeys=$((nkeys+1)); case "$val" in repo|private|engage) ;; *) bad="$bad records='$val'";; esac;;
+      # records: engage was retired the day it came (engage decision #1036 as amended, 5 Oct
+      # 2026): a project counts as moved ONLY by its move marker (engage-go cutover check), so
+      # the value is a bad one again and a stale copy FAILs here.
+      records) records="$val"; nkeys=$((nkeys+1)); case "$val" in repo|private) ;; *) bad="$bad records='$val'";; esac;;
       # W-20260921-A14. `wrap-up` holds a SLASH-COMMAND NAME, not a path: the P5.2
       # key shape is `/wrap-up` (Network_Plan) or `/vertical-wrap-up`
       # (win_go_app_test). resolve_marker cannot resolve one, so both projects sat
@@ -1398,7 +1399,7 @@ else
       *) bad="$bad unknown-key='$key'";;
     esac
   done <"$TOPLEVEL/.claude/pj-homes"
-  if [ -n "$bad" ]; then row FAIL pj-homes ".claude/pj-homes:$bad; fix: keys handoff|tracker|decisions|incidents|plans|records|wrap-up|panel|session-alias|group|items-to, records repo|private|engage"
+  if [ -n "$bad" ]; then row FAIL pj-homes ".claude/pj-homes:$bad; fix: keys handoff|tracker|decisions|incidents|plans|records|wrap-up|panel|session-alias|group|items-to, records repo|private"
   elif [ -n "$missing" ]; then row FAIL pj-homes "declared store missing on disk:$missing; fix: create it or correct the line"
   elif [ -n "$unresolved" ]; then row WARN pj-homes "$nkeys keys; unresolvable marker on:$unresolved (repo:, drawer:, ~/ resolve)"
   elif [ -n "$panelbad" ]; then row WARN pj-homes "$nkeys keys; panel: names no section:$panelbad (items parked handoff rulings flags mods-api; ci is reserved)"
