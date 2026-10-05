@@ -458,6 +458,18 @@ any alias it meets; the rules classify that expansion as zsh would.
 
 ---
 
+## `enforce-no-worktree-discard.sh`: the worktree delete that is not Bash
+
+Added 2026-10-05 on Gavin's yes (W-20261005-A42). Registered on `PreToolUse` with matcher
+`ExitWorktree` for both targets. Claude Code's own `ExitWorktree` with `action: "remove"`
+deletes the worktree folder and its branch outright, nothing in the Trash (measured on a demo
+worktree), and the delete guard cannot see it because it watches only Bash. The tool refuses
+unsaved work by itself unless `discard_changes: true`; this hook denies exactly that, and
+names the safe route: `ExitWorktree` keep, then `rm -r <the worktree>` (Trash-routed), then
+`git worktree prune`. A clean remove is allowed: every file it deletes is in git. An
+unreadable payload is denied when its raw text holds `"discard_changes": true`. `--selftest`
+proves every arm (11).
+
 ## `enforce-no-reset-by-name.sh`: remove a directory, then reuse the name
 
 Added 2026-09-24 for W-20260924-A32 (Stage 1), on Gavin's ruling: `rm` keeps

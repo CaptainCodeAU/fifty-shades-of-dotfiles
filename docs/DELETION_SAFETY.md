@@ -64,6 +64,7 @@ Measured 2026-09-04 on macOS 25.6 (Darwin), SIP enabled. Every row was run, not 
 | `/usr/bin/trash X` in Gavin's own terminal                        | **no, by design** | the human's deliberate route around the shim                                                                                                                                                 |
 | bare `trash` in a zsh opened BEFORE the shim was stowed           | **no**, until `rehash` | zsh remembers where it first found `trash` (measured 2026-09-29: the old one ran until `rehash`). `install.sh` says so after it stows; `rm-reach-check` cannot see another shell's memory (W-20260929-A184). Agent Bash calls start a fresh shell each time |
 | `/usr/bin/trash X` inside a script, cron, launchd, brew internals | **no**            | an absolute path, or a PATH without `~/.local/bin`; the hook sees only an agent's typed command                                                                                              |
+| Claude Code's `ExitWorktree` remove (not Bash: the delete guard never sees it) | discard denied | measured 2026-10-05: remove deletes the worktree and its branch outright, nothing in `~/.Trash`; it refuses unsaved work unless `discard_changes: true`, which `enforce-no-worktree-discard.sh` denies (W-20261005-A42). A clean remove still runs (it loses nothing); subagent worktree auto-cleanup is not a tool call and is not covered |
 
 ## The PATH shim
 

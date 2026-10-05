@@ -340,6 +340,19 @@
       "legacy_commands": [
         "test -x \"$HOME/.claude/hooks/risk-watch\" && \"$HOME/.claude/hooks/risk-watch\" || true"
       ]
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "ExitWorktree",
+      "script": "enforce-no-worktree-discard.sh",
+      "targets": ["user", "project"],
+      "entry": {
+        "type": "command",
+        "command": "h=\"$HOME/.claude/hooks/enforce-no-worktree-discard.sh\"; if [ -x \"$h\" ]; then o=$(\"$h\"); r=$?; case $r in 0|2) if [ -n \"$o\" ]; then printf '%s\\n' \"$o\"; fi; exit $r;; esac; printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"HOOK CRASHED, DENYING: enforce-no-worktree-discard.sh exited '\"$r\"', which is neither 0 (allow, or its own deny) nor 2 (block), so every call it guards is denied until that is fixed (D-20261002-A01). Fix it from your own terminal, where no Claude hook runs: run ~/.claude/hooks/enforce-no-worktree-discard.sh --selftest to see what broke, then restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command names $HOME/.claude/hooks/enforce-no-worktree-discard.sh from ~/.claude/settings.project.json and ~/.claude/settings.json.\"}}'; else printf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"HOOK MISSING, DENYING: enforce-no-worktree-discard.sh is registered but ~/.claude/hooks/enforce-no-worktree-discard.sh is missing or not executable, so every call it guards is denied until that is fixed. Fix it from your own terminal, where no Claude hook runs: restore it (./install.sh --stow-only in the dotfiles repo), or retire it (move its entry to retired in settings/claude/hooks.json, then claude-hooks-sync --install for each target), or delete the hook whose command names $HOME/.claude/hooks/enforce-no-worktree-discard.sh from ~/.claude/settings.project.json and ~/.claude/settings.json.\"}}'; fi",
+        "timeout": 5
+      },
+      "why": "DENIES ExitWorktree remove with discard_changes true: it deletes unsaved work outside the Trash, and the delete guard watches only Bash (measured 5 Oct: remove deleted the demo worktree and its branch, nothing in ~/.Trash). A clean remove is allowed (it loses nothing). Gavin's yes 5 Oct (W-20261005-A42). Both targets. Deny only; --selftest proves every arm",
+      "class": "guard"
     }
   ],
   "_traveller_note": [
