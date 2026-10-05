@@ -102,6 +102,23 @@ D="$ROOT/repo-d"; mkrepo "$D"; mkdrawer "$D" 0 0 >/dev/null
 run "$D"
 check "D empty drawer says none open" 'has "$OUT" "^Open items: none open"'
 
+# EN: records: engage in pj-homes (engage decision #1036). The project's items are engage
+# records, so the `open-items init` hint would start a second list; the card points at engage.
+# Controls: records: private with no drawer still gets the hint, and records: engage WITH a
+# drawer still shows the drawer, so the line keys on the declaration, not on a missing drawer.
+EN="$ROOT/repo-engage"; mkrepo "$EN"; mkdir -p "$EN/.claude"; printf '# items are engage records\nrecords: engage\n' > "$EN/.claude/pj-homes"
+run "$EN"
+check "EN records: engage, no drawer: rc 0, one line pointing at engage records" '[ "$RC" -eq 0 ] && has "$OUT" "^Open items: kept as engage records (engage-go questions lists what waits on you)$"'
+check "EN and no open-items init hint, no no-drawer line" '! has "$OUT" "open-items init" && ! has "$OUT" "no drawer"'
+check "EN same shape as C: header, the one items line, hello rule (3 lines)" '[ "$(lines "$OUT")" -eq 3 ]'
+check "EN stderr empty" '[ ! -s "$ROOT/stderr" ]'
+EP="$ROOT/repo-private-nodrawer"; mkrepo "$EP"; mkdir -p "$EP/.claude"; printf 'records: private\n' > "$EP/.claude/pj-homes"
+run "$EP"
+check "EN control: records: private and no drawer still gets the init hint" 'has "$OUT" "^Open items: no drawer for this project yet" && ! has "$OUT" "engage records"'
+ED="$ROOT/repo-engage-drawer"; mkrepo "$ED"; mkdir -p "$ED/.claude"; printf 'records: engage\n' > "$ED/.claude/pj-homes"; mkdrawer "$ED" 2 0 >/dev/null
+run "$ED"
+check "EN control: records: engage WITH a drawer shows the drawer as usual" 'has "$OUT" "^Open items: 2 open" && ! has "$OUT" "engage records"'
+
 # --- E: declaration absent -> default handoff repo:OPENING-PROMPT.md ---------------
 run "$A"; check "E default handoff absent -> no line" '! has "$OUT" "^Handoff:"'
 printf 'hand\n' > "$A/OPENING-PROMPT.md"
@@ -470,7 +487,7 @@ agree(){
   local d="$1" T bad="" n p k m own lab key c
   T="$( builtin cd "$d" && "$CARD" </dev/null 2>/dev/null )"; runj "$d"
   parses || { AGREE="json does not parse"; return 0; }
-  if has "$T" "^Open items: no drawer"; then [ "$(jv .items.drawer)" = none ] && [ "$(jv .items.open)" = 0 ] || bad="$bad drawer"
+  if has "$T" "^Open items: no drawer" || has "$T" "^Open items: kept as engage records"; then [ "$(jv .items.drawer)" = none ] && [ "$(jv .items.open)" = 0 ] || bad="$bad drawer"
   elif has "$T" "^Open items: none open"; then [ "$(jv .items.drawer)" = present ] && [ "$(jv .items.open)" = 0 ] || bad="$bad none-open"
   elif has "$T" "^Open items: "; then
     n="$(printf '%s\n' "$T" | sed -n 's/^Open items: \([0-9]*\) open.*/\1/p')"
@@ -590,6 +607,10 @@ fi
 
 # T4. error paths: the JSON parses on every one and errors names what dropped out
 runj "$C"; check "T no drawer: parses, drawer none, no error" 'parses && [ "$(jv .items.drawer)" = none ] && [ "$(jv ".errors | length")" -eq 0 ]'
+KC="$(jv '[paths | map(tostring) | join(".")] | join(",")')"
+runj "$EN"; check "T records: engage: parses, drawer none, open 0, no error" 'parses && [ "$(jv .items.drawer)" = none ] && [ "$(jv .items.open)" = 0 ] && [ "$(jv ".errors | length")" -eq 0 ]'
+check "T records: engage: schema 1 unchanged, the same key paths as the no-drawer card" '[ -n "$KC" ] && [ "$(jv "[paths | map(tostring) | join(\".\")] | join(\",\")")" = "$KC" ]'
+agree "$EN"; check "T records: engage: text and --json agree (${AGREE:-all agree})" '[ -z "$AGREE" ]'
 J="$( builtin cd "$B" && PATH="$BROKEN:$PATH" "$CARD" --json </dev/null 2>/dev/null )"; RC=$?
 check "T open-items broken: rc 0, parses, drawer unknown, errors names it" '[ "$RC" -eq 0 ] && parses && [ "$(jv .items.drawer)" = unknown ] && jv ".errors[]" | grep -q "^items: open-items --where exit 7"'
 J="$( builtin cd "$B" && PATH="$ROOT/nowhere:/usr/bin:/bin" "$CARD" --json </dev/null 2>/dev/null )"; RC=$?

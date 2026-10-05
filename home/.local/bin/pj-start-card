@@ -26,7 +26,8 @@
 #   line 2   WARNING when the last session here ended without wrap-up (flag below)
 #   then     open items from `open-items --session`: count (and "N pinned" when any item's
 #            when: begins "next session"), up to 10 titles with pinned ones FIRST,
-#            "+N more", "parked: N"; or one line saying there is no drawer
+#            "+N more", "parked: N"; or one line saying there is no drawer, or, when pj-homes
+#            says records: engage, one line pointing at engage instead
 #   then     the cross-project lines from the same call (A16, W-20260923-A28): Watching,
 #            Checks owed, Mandatory, Moved out, Ignored lines (each a count line plus up to
 #            3 titles), then Inbox and notes. Only when non-empty. Own titles keep a floor
@@ -54,10 +55,15 @@
 #
 # THE DECLARATION FILE  .claude/pj-homes  (D-20260920-06)
 #   key: value lines, # comments. Keys: handoff, tracker (may repeat), decisions,
-#   incidents, plans, records (repo|private), wrap-up, panel. Defaults for a missing key:
-#   handoff repo:OPENING-PROMPT.md, records repo, decisions/incidents/plans under
-#   repo:docs/ (or drawer: when records is private). The card reads handoff, tracker
-#   and panel; the other keys are for later stages and `decided`.
+#   incidents, plans, records (repo|private|engage), wrap-up, panel. Defaults for a
+#   missing key: handoff repo:OPENING-PROMPT.md, records repo, decisions/incidents/plans
+#   under repo:docs/ (or drawer: when records is private). The card reads handoff, tracker,
+#   panel and records; the other keys are for later stages and `decided`.
+#
+#   records: engage   the project's items are engage records (engage decision #1036), not
+#             a drawer. With no drawer the card prints "kept as engage records" instead of
+#             the `open-items init` hint, which would start a second list. A drawer that
+#             exists is still shown as usual. --json is unchanged: items.drawer is "none".
 #
 #   panel: <names>   the start-card mod's /card panel sections, in this order (D-20260927-A13).
 #             Names separated by commas or spaces, from: items parked handoff rulings flags
@@ -446,7 +452,9 @@ gather(){
       esac
     done <<<"$sess"
   fi
-  if [ "$wrc" -eq 1 ]; then
+  if [ "$wrc" -eq 1 ] && [ "$(decl_get "$C_DECL" records)" = engage ]; then
+    C_OPEN_HEADER="Open items: kept as engage records (engage-go questions lists what waits on you)"
+  elif [ "$wrc" -eq 1 ]; then
     C_OPEN_HEADER="Open items: no drawer for this project yet (\`open-items init\` creates one)"
   elif [ "$wrc" -eq 0 ]; then
     if [ "$C_HAVE_OWN" -eq 0 ]; then
