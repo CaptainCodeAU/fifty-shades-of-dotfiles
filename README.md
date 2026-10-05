@@ -103,11 +103,13 @@ On a machine without my private repos, the install finishes with a red "pj is no
 | Command | Does |
 | --- | --- |
 | `./install.sh --check` | checks everything, changes nothing |
-| `./install.sh --update` | pulls and restows |
+| `./install.sh --update` | pulls and restows. If a file is in the way it stops before removing any link, and if linking fails it puts the old links back |
 | `./install.sh --stow-only` | just links the files, and registers any new Claude hooks |
 | `./install.sh --force` | adopts your existing files into the repo with `stow --adopt`, overwriting the repo's copies. Check `git diff` afterwards. |
 | `./install.sh --uninstall` | removes the symlinks only. Tools stay installed and nothing comes back from `~/dotfiles-backup/`. |
 | `./install.sh --dry-run` | shows what it would do (combine with anything) |
+
+If your links ever vanish (an interrupted install, say), `sh ~/.local/state/dotfiles/links/restore` puts the last good set back from any terminal. It needs none of the dotfiles, moves anything in the way aside, and deletes nothing. `sh ~/.local/state/dotfiles/links/restore check` just reports. On macOS a small watcher also tells you within seconds when links go missing.
 
 Rather wire it up by hand? Every file in `home/` goes to the same place under `~/`, so `ln -s` works. You'll miss what the installer does after linking, like the platform files and the Claude hook registration. [`docs/STRUCTURE.md`](docs/STRUCTURE.md) has a longer map.
 
