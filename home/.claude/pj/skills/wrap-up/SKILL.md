@@ -223,12 +223,12 @@ Steps run in this order; `pj-wrap done` is always last. Rulings and reasons:
     `pj-wrap global add` printed under "Filed in the global area for you (undo: close it in the
     engage pane):", and each row it refused as an action for Gavin. Each decision record there
     (a ruling or a lesson, `--kind decision`) is `state: draft` until Gavin approves it: follow
-    its line with "in force once you run, in your own terminal:" and this command, both `<path>`
-    the full path from that `#<id> <path>` line (approve reads the record on stdin, so it is piped):
-    `engage-go record read <path> | sed 's/"key":"state","value":"draft"/"key":"state","value":"standing"/' | engage-go record approve <path>`
-    Items get no such line. Then say plainly: "A session cannot do this step: engage-go record
-    approve refuses inside a Claude session; only you, at your own terminal, put a ruling in
-    force." Under it, each extend and lesson with its own undo. End with the pending list and one
-    line: "Kept working after this? Run /pj:wrap-up again." Last, as its own Bash call:
+    its line with "in force once you run, in your own terminal:" and this command, `<path>` the
+    full path from that `#<id> <path>` line: `engage-go record approve-ruling <path>` (it shows
+    the ruling, takes the record number and his words, sets it standing with authority operator
+    and commits that one file). Items get no such line. Then say plainly: "A session cannot do
+    this step: engage-go record approve-ruling refuses inside a Claude session; only you, at your
+    own terminal, put a ruling in force." Under it, each extend and lesson with its own undo.
+    End with the pending list and one line: "Kept working after this? Run /pj:wrap-up again." Last, as its own Bash call:
     `pj-ping done "wrap-up <project>" --detach`. It returns at once (Gavin, 2026-09-29: the
     blocking send cost about 10 s); a failed send is named only in the ping log, not here.

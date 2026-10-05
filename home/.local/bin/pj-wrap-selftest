@@ -645,29 +645,37 @@ check "GL control: g_never also FAILS on the 2d13e0e wording" '! g_never "$OLDGL
 
 # GA: a global ruling or lesson stays `state: draft` until Gavin approves it at his own terminal
 # (engage: "a ruling only through `record approve` at his own terminal"; Gavin, 6 Oct 2026). Step
-# 10 follows each decision record line with the command that puts it in force, piped because
-# approve reads the record on stdin, and says a session cannot do it. Control: OLDGA, step 10 as
-# 4268796 wrote it, which named no way to put a ruling in force.
+# 10 follows each decision record line with the ONE command that puts it in force, engage-go
+# record approve-ruling (Gavin's pick, 6 Oct: one proper command, not a read | sed | approve
+# pipe), and says a session cannot do it. Controls: OLDGA, step 10 as 4268796 wrote it, which
+# named no way to put a ruling in force; OLDGP, the 6e465a9 pipe wording, which must now fail.
 g_approve(){ local b; b="$(block_of "$1" 10 | tr -s ' \n' '  ')"
   printf '%s' "$b" | grep -qF 'Each decision record there (a ruling or a lesson, `--kind decision`) is `state: draft` until Gavin approves it' \
     && printf '%s' "$b" | grep -qF '"in force once you run, in your own terminal:"' \
-    && printf '%s' "$b" | grep -qF "\`engage-go record read <path> | sed 's/\"key\":\"state\",\"value\":\"draft\"/\"key\":\"state\",\"value\":\"standing\"/' | engage-go record approve <path>\`" \
+    && printf '%s' "$b" | grep -qF '`engage-go record approve-ruling <path>`' \
+    && printf '%s' "$b" | grep -qF 'the full path from that `#<id> <path>` line' \
+    && ! printf '%s' "$b" | grep -qF 'engage-go record read <path> |' \
     && printf '%s' "$b" | grep -qF 'Items get no such line' \
-    && printf '%s' "$b" | grep -qF '"A session cannot do this step: engage-go record approve refuses inside a Claude session; only you, at your own terminal, put a ruling in force."'; }
+    && printf '%s' "$b" | grep -qF '"A session cannot do this step: engage-go record approve-ruling refuses inside a Claude session; only you, at your own terminal, put a ruling in force."'; }
 OLDGA="$ROOT/old-skill-4268796.md"
 printf '%s\n' '10. `pj-wrap done --skill`. In every project, list each `#<id> <path>` line' \
   '    `pj-wrap global add` printed under "Filed in the global area for you (undo: close it in the' \
   '    engage pane):", and each row it refused as an action for Gavin. Under it, each extend' \
   '    and lesson with its own undo.' > "$OLDGA"
-check "GA step 10: each global decision record gets the approve command for Gavin's own terminal" 'g_approve "$SKILL"'
+OLDGP="$ROOT/old-skill-6e465a9.md"
+printf '%s\n' '10. `pj-wrap done --skill`. In every project, list each `#<id> <path>` line' \
+  '    `pj-wrap global add` printed under "Filed in the global area for you (undo: close it in the' \
+  '    engage pane):", and each row it refused as an action for Gavin. Each decision record there' \
+  '    (a ruling or a lesson, `--kind decision`) is `state: draft` until Gavin approves it: follow' \
+  '    its line with "in force once you run, in your own terminal:" and this command, both `<path>`' \
+  '    the full path from that `#<id> <path>` line (approve reads the record on stdin, so it is piped):' \
+  "    \`engage-go record read <path> | sed 's/\"key\":\"state\",\"value\":\"draft\"/\"key\":\"state\",\"value\":\"standing\"/' | engage-go record approve <path>\`" \
+  '    Items get no such line. Then say plainly: "A session cannot do this step: engage-go record' \
+  '    approve refuses inside a Claude session; only you, at your own terminal, put a ruling in' \
+  '    force." Under it, each extend and lesson with its own undo.' > "$OLDGP"
+check "GA step 10: each global decision record gets engage-go record approve-ruling <path> for Gavin's own terminal" 'g_approve "$SKILL"'
 check "GA control: the 4268796 step 10 passes g_report and FAILS g_approve" 'g_report "$OLDGA" && ! g_approve "$OLDGA"'
-# The sed in the skill's command turns a draft record's JSON (as `engage-go record read` prints
-# it) into a standing one and touches nothing else, the body's quoted text included.
-GA_SED="$(block_of "$SKILL" 10 | sed -n "s/^.*engage-go record read <path> | sed '\\([^']*\\)' | engage-go record approve <path>.*\$/\\1/p")"
-GA_IN='{"header":[{"key":"id","value":"7001"},{"key":"kind","value":"decision"},{"key":"state","value":"draft"},{"key":"title","value":"T"}],"body":"says \"key\":\"state\",\"value\":\"draft\"\n"}'
-GA_OUT="$(printf '%s' "$GA_IN" | sed "$GA_SED" 2>/dev/null)"
-GA_WANT='{"header":[{"key":"id","value":"7001"},{"key":"kind","value":"decision"},{"key":"state","value":"standing"},{"key":"title","value":"T"}],"body":"says \"key\":\"state\",\"value\":\"draft\"\n"}'
-check "GA the skill's sed flips state draft to standing in record JSON, and only that" '[ -n "$GA_SED" ] && [ "$GA_OUT" = "$GA_WANT" ]'
+check "GA control: the 6e465a9 read | sed | approve pipe passes g_report and FAILS g_approve" 'g_report "$OLDGP" && ! g_approve "$OLDGP"'
 
 # --- M: one pj-homes for the skill and pj-wrap, also from a worktree (W-20261005-A66) --------
 # The skill read `.claude/pj-homes` from its own checkout while handoff_path read the main
