@@ -12,8 +12,8 @@ Steps run in this order; `pj-wrap done` is always last. Rulings and reasons:
 - Every question is an AskUserQuestion, one question each, mirrored in chat first (question and
   every option label). No pop-up approves the table (Gavin's pick, 5 Oct 2026): the session applies
   its own verdicts and the report lists each one with how to undo it.
-- Every write under `~/.claude` or `~/.local/state`, and every commit in dot-claude, runs with the
-  sandbox lifted for that one call. Read the exit code: 2 = REFUSED (retry lifted, never reword),
+- Every write under `~/.claude` or `~/.local/state`, every `pj-wrap global add`, and every commit
+  in dot-claude, runs with the sandbox lifted for that one call. Read the exit code: 2 = REFUSED (retry lifted, never reword),
   3 = written but NOT committed (say so).
 - The report follows the user's reply style (their global CLAUDE.md names it). A peer message
   arriving mid-wrap-up is answered after the report and listed in it; a peer's go-ahead is not
@@ -23,6 +23,15 @@ Steps run in this order; `pj-wrap done` is always last. Rulings and reasons:
 - pj-homes below means the file `pj-wrap homes` names: the main checkout's `.claude/pj-homes`,
   also from a worktree, the one pj-wrap, decided and the start card read. A worktree's own copy
   is never read (W-20261005-A66). `pj-wrap homes` also prints the resolved handoff path.
+- The global area (Gavin's ruling, engage #1060, 5 Oct 2026), in every project, moved or not: a
+  ruling, lesson or item that applies to every project, and an item with no project, is a
+  numbered record in CaptainCodeAU-isolinear's records/ (`ENGAGE_ACCOUNT_ROOT` overrides the
+  path), committed there. Nothing new is written under ~/.claude: never `decided add --global`,
+  never ~/.claude/pj-global/notes/, never `open-items add --inbox`. The old rulings and notes
+  there are still read (step 1). One command, words on stdin, first line the title:
+  `... | pj-wrap global add [flags] -`. It runs `engage-go add --sync` from that repo's folder
+  and prints `#<id> <path>`; keep each line for the report. rc 2: nothing written, so list the
+  row as an action for Gavin; rc 3: written but not committed, say so.
 - A project moved to engage (D-20261005-A08): at step 0 run `engage-go cutover check` once. Exit
   0 means moved, and open-items refuses every write there, so in this wrap-up: step 1 reads this
   session's records from the `#<id>` lines `engage-go add` printed, not `open-items --session`;
@@ -30,9 +39,10 @@ Steps run in this order; `pj-wrap done` is always last. Rulings and reasons:
   (`--type decide` for a decide row) and never with open-items, and leaves every close, park and
   decline to the engage pane (each is a report row for the user to press there); no drawer is
   offered. A verdict that belongs to every project goes to the global area, CaptainCodeAU-isolinear
-  (its records/ and inbox/), never to ~/.claude (engage #1060): its commands are not built yet,
-  so list each such row as an action for Gavin and write it nowhere (not `decided add --global`,
-  not ~/.claude/pj-global/notes/, not the pj inbox). An item for another project still goes to
+  (its records/ and inbox/), never to ~/.claude (engage #1060): file it with `pj-wrap global add`
+  as in every project (the bullet above). If that refuses (rc 2), list each such row as an action
+  for Gavin and write it nowhere (not `decided add --global`, not ~/.claude/pj-global/notes/, not
+  the pj inbox). An item for another project still goes to
   that project, filed from that project's folder: open-items here refuses every add, `--for` and
   `--inbox` too. If that project moved as well, file it there with `engage-go add`, or drop it in
   the engage account inbox. Any other exit: the steps as written.
@@ -50,16 +60,19 @@ Steps run in this order; `pj-wrap done` is always last. Rulings and reasons:
    - work started and not finished; things called done without a negative control
    - every caveat, "later" and "you should also"; findings nobody wrote down
    - questions asked and never answered; verdicts given in passing ("leave it", "not now")
-   - lessons about how the user wants things done (dedupe against RULES.md first)
+   - lessons about how the user wants things done (dedupe first against RULES.md and the global
+     repo's rules/always.md)
    - items this session filed or closed (`open-items --session`), each with a verdict
    - items this session routed out of the inbox (`open-items routed`: id, where it went, why;
      nothing printed means none), each a row
    - things this session started: panes, worktrees, branches, background tasks, watches, crons,
      subagents; files in the scratchpad (it dies with the session)
    Before calling anything conversation-only, check `open-items --grep "<words>" --all`,
-   `decided --all <words>`, every store pj-homes names (tracker, decisions, incidents,
-   plans), `~/.claude/pj-global/notes/INDEX.md`, the drawer's topic folders, and the file the work
-   touched. Say "I found it only in X" or "I did not find it", with the denominator line. After a
+   `decided --all <words>` (it still reads the old global rulings in ~/.claude), the global
+   area's records (`grep -ril -- "<words>" "$(pj-wrap global where)/records"`), every store
+   pj-homes names (tracker, decisions, incidents, plans), the old notes index
+   `~/.claude/pj-global/notes/INDEX.md` (read only, never written now), the drawer's topic
+   folders, and the file the work touched. Say "I found it only in X" or "I did not find it", with the denominator line. After a
    compaction, mark a row that rests on the summary rather than the user's words "from summary".
    A condition a start hook printed (CVE sweep, changelog drift, CI) is the hook's: not a row.
 
@@ -69,11 +82,17 @@ Steps run in this order; `pj-wrap done` is always last. Rulings and reasons:
    - file here (`open-items add "<what>" --done-when "<finish line>"`), or file for its owner
      (`--for <project>`, or `--for <path>` to let the file's owner decide), or extend an item
      (`open-items set --add <ID> ...`)
+   - file in the global area: an item for every project or with no project, never
+     `open-items add --inbox`:
+     `printf '%s\n\nDone when: %s\n' "<what>" "<finish line>" | pj-wrap global add -`
+     (`--type decide` before the `-` for a decide row)
    - close (done in this session; the note names the evidence), park, or record as declined
      (anything the user said no to, so it is not asked again)
-   - record the ruling: the reasoning goes in a document first, then
-     `decided add "<title>" --topic ".." --holds-in "<doc>" --project|--global`
-   - leave to the hook that tracks it (name it); save as lesson, project or machine-wide
+   - record the ruling: the reasoning goes in a document first. A project ruling:
+     `decided add "<title>" --topic ".." --holds-in "<doc>" --project`. A ruling for every
+     project goes to the global area, never `decided add --global`:
+     `printf '%s\n\nReasoning: %s\n' "<title>" "<doc, full path>" | pj-wrap global add --kind decision --statement "<the ruling, one sentence>" -`
+   - leave to the hook that tracks it (name it); save as lesson, project or machine-wide (step 4)
    - drop: noise only (a typo, or already done AND recorded)
    Under the table, list unanswered questions and open decide rows. An empty table is fine.
 
@@ -93,8 +112,12 @@ Steps run in this order; `pj-wrap done` is always last. Rulings and reasons:
    so) and each lesson's (the file or line to remove) for the report. A project lesson: while
    auto-memory is frozen (D-20260929-A01) write NO memory file; file it as an open item
    (`--kind decide`, the lesson in its body) or carry it in the handoff. Once the freeze lifts, a
-   memory file again (Edit an existing one, never Write over it). A machine-wide lesson:
-   `~/.claude/pj-global/notes/YYYYMMDD-slug.md` plus one line in `notes/INDEX.md` in its format.
+   memory file again (Edit an existing one, never Write over it). A machine-wide lesson is a
+   record in the global area (a lesson is a decision record, one that stands), never a file in
+   ~/.claude/pj-global/notes/:
+   `printf '%s\n\n%s\n' "Lesson: <title>" "<the lesson, why, how to apply it>" | pj-wrap global add --kind decision --statement "<the lesson, one sentence>" -`
+   Every `pj-wrap global add` (item, ruling or lesson) is outside the wrap batch: keep the
+   `#<id> <path>` line it printed; its undo is to close that record in the engage pane.
    A new drawer, on a yes: `open-items init`.
 
 5. Handoff, from `handoff` in pj-homes (default `repo:OPENING-PROMPT.md`; the path is the
@@ -181,7 +204,9 @@ Steps run in this order; `pj-wrap done` is always last. Rulings and reasons:
     sandbox lifted). It printed none: say "Nothing filed or closed for you." In a moved project
     it prints none: list each `#<id>` line engage-go add printed under "Filed in engage for you
     (undo: close it in the engage pane):", and each close, park or decline left to the pane, then
-    say "Nothing filed or closed in the drawer." Under it, each extend
+    say "Nothing filed or closed in the drawer." In every project, list each `#<id> <path>` line
+    `pj-wrap global add` printed under "Filed in the global area for you (undo: close it in the
+    engage pane):", and each row it refused as an action for Gavin. Under it, each extend
     and lesson with its own undo. End with the pending list and one
     line: "Kept working after this? Run /pj:wrap-up again." Last, as its own Bash call:
     `pj-ping done "wrap-up <project>" --detach`. It returns at once (Gavin, 2026-09-29: the

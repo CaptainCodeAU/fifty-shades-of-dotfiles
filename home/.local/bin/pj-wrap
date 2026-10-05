@@ -24,6 +24,14 @@
 #                                  this OS has none. Reads no secret, writes nothing.
 #   pj-wrap homes                  the .claude/pj-homes /pj:wrap-up reads and the handoff it
 #                                  names: the MAIN checkout's, also from a worktree (A66)
+#   pj-wrap global add [engage-go add flags] -   (words on stdin, first line the title)
+#                                  file one record in the GLOBAL area, CaptainCodeAU-isolinear
+#                                  (ENGAGE_ACCOUNT_ROOT overrides): `engage-go add --sync` run
+#                                  from that repo's folder, so it lands in its records/ and is
+#                                  committed there. Never ~/.claude (engage #1060). Prints
+#                                  engage-go's `#<id> <path>`. 2 = refused, nothing written;
+#                                  3 = written but NOT committed.
+#   pj-wrap global where           print the global repo's path (rc 2 when it is not one)
 #   pj-wrap --selftest             prove every arm (runs pj-wrap-selftest)
 #
 # STATE  ${XDG_STATE_HOME:-~/.local/state}/pj  (PJ_STATE_DIR overrides; test seam)
@@ -74,7 +82,7 @@ SID="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
 refuse(){ printf 'pj-wrap: REFUSED -- %s\n' "$1" >&2; exit 2; }
 stop(){ printf 'pj-wrap: STOPPED -- %s\n' "$1" >&2; exit 3; }
 say(){ printf 'pj-wrap: %s\n' "$1"; }
-usage(){ sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; }
+usage(){ sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//'; }
 encode_key(){ printf '%s' "$1" | sed 's#[/._]#-#g'; }
 tilde(){ printf '%s' "${1/#$HOME/\~}"; }
 
@@ -483,6 +491,43 @@ cmd_push(){
   stop "second push rejected: $(printf '%s' "$out" | tail -1). Not retrying. Look at $(tilde "$top") yourself."
 }
 
+# THE GLOBAL AREA (Gavin's ruling, engage #1060, 5 Oct 2026): a ruling, lesson or item for every
+# project, or an item with no project, is a record in CaptainCodeAU-isolinear, the engage account
+# repo, and nothing new goes into ~/.claude. engage-go add files into the account repo when its
+# cwd is that repo (capture.WriteStore), so this runs it from there: no storage code of its own.
+global_root(){                  # the global repo's top folder, or refuse
+  local a="${ENGAGE_ACCOUNT_ROOT:-$HOME/CODE/CaptainCodeAU/CaptainCodeAU-isolinear}" top real
+  [ -d "$a" ] || refuse "global: the global repo $(tilde "$a") is not there. Nothing written."
+  real="$(cd "$a" && pwd -P)"
+  top="$(git -C "$a" rev-parse --show-toplevel 2>/dev/null)" && top="$(cd "$top" && pwd -P)"
+  [ "$top" = "$real" ] || refuse "global: $(tilde "$a") is not the top of a git repo. Nothing written."
+  printf '%s\n' "$real"
+}
+cmd_global(){
+  local root out rc a
+  case "${1:-}" in
+    where) root="$(global_root)" || exit 2; printf '%s\n' "$root"; exit 0 ;;
+    add) shift ;;
+    *) refuse "global takes add or where: pj-wrap global add [engage-go add flags] - (words on stdin)" ;;
+  esac
+  [ $# -gt 0 ] || refuse "global add needs words, or - to read them from stdin"
+  for a in "$@"; do
+    case "$a" in
+      --) break ;;
+      --drain|--from-reply|--from-file) refuse "global add: $a is not this route (a record from words only). Nothing written." ;;
+    esac
+  done
+  root="$(global_root)" || exit 2
+  command -v engage-go >/dev/null 2>&1 || refuse "global add: engage-go is not on PATH. Nothing written."
+  out="$(cd "$root" && ENGAGE_ACCOUNT_ROOT="$root" engage-go add --sync "$@")"; rc=$?
+  [ -n "$out" ] && printf '%s\n' "$out"
+  [ "$rc" -eq 0 ] && exit 0
+  if printf '%s\n' "$out" | grep -qE '^#[0-9]+ '; then
+    stop "global add: engage-go wrote the record above but exited $rc, so it is NOT committed in $(tilde "$root"). Say so in the report."
+  fi
+  refuse "global add: engage-go refused (exit $rc; its reason is above). Nothing written."
+}
+
 case "${1:-}" in
   -h|--help|"") usage; [ -n "${1:-}" ] && exit 0 || exit 2 ;;
   --selftest) exec "$(dirname "$0")/pj-wrap-selftest" ;;
@@ -492,5 +537,6 @@ case "${1:-}" in
   push)   cmd_push ;;
   why-auth) auth_advice; printf '\n'; exit 0 ;;
   homes)  cmd_homes ;;
-  *) refuse "unknown command $1 (status | done | owed | push | why-auth | homes | --selftest)" ;;
+  global) shift; cmd_global "$@" ;;
+  *) refuse "unknown command $1 (status | done | owed | push | why-auth | homes | global | --selftest)" ;;
 esac

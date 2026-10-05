@@ -521,6 +521,99 @@ check "MV a moved project: another project's item is filed from its folder (open
 check "MV control: the 2d13e0e wording (~/.claude routes) FAILS both" '[ -n "$(head_of "$OLDGL")" ] && ! moved_global "$OLDGL" && ! moved_other "$OLDGL"'
 check "MV control: the old skill FAILS both" '! moved_global "$OLDSK" && ! moved_other "$OLDSK"'
 
+# --- GL: the global area, in every project (Gavin's ruling, engage #1060, 5 Oct 2026) ---------
+# A ruling, lesson or item for every project, and an item with no project, is a record in
+# CaptainCodeAU-isolinear (ENGAGE_ACCOUNT_ROOT overrides), filed by `pj-wrap global add`, which
+# runs `engage-go add --sync` from that repo's folder. Nothing new under ~/.claude, moved project
+# or not. First the tool, with a fake engage-go that logs its folder, env, args and stdin.
+FAKE="$ROOT/fake-eg"; mkdir -p "$FAKE"; GLOG="$ROOT/eg.log"
+cat > "$FAKE/engage-go" <<'FEG'
+#!/usr/bin/env bash
+{ printf 'cwd=%s\n' "$(pwd -P)"; printf 'acct=%s\n' "${ENGAGE_ACCOUNT_ROOT-}"; printf 'arg=%s\n' "$@"; printf 'stdin=%s\n' "$(cat)"; } > "$GLOG"
+case "${FAKE_EG:-ok}" in
+  ok) echo "#7001 $(pwd -P)/records/7000/7001.md" ;;
+  refuse) echo "engage-go: refused: fake" >&2; exit 1 ;;
+  nocommit) echo "#7002 $(pwd -P)/records/7000/7002.md"; echo "engage-go: kept, but the commit failed: fake" >&2; exit 1 ;;
+esac
+FEG
+chmod +x "$FAKE/engage-go"
+GACCT="$ROOT/global-isolinear"; mkdir -p "$GACCT/records" "$GACCT/inbox"; git -C "$GACCT" init -q
+gwrap(){ rm -f "$GLOG"; OUT="$(cd "$ZETA" && PATH="$FAKE:$PATH" GLOG="$GLOG" "$WRAP" global "$@" 2>&1)"; RC=$?; return 0; }
+OUT="$(printf 'what\n\nDone when: x\n' | (cd "$ZETA" && PATH="$FAKE:$PATH" GLOG="$GLOG" ENGAGE_ACCOUNT_ROOT="$GACCT" "$WRAP" global add --kind decision --statement "S one" - 2>&1))"; RC=$?
+check "GL global add from a project folder: rc 0, prints engage-go's kept line in the global repo" '[ "$RC" -eq 0 ] && printf "%s\n" "$OUT" | grep -qx "#7001 $GACCT/records/7000/7001.md"'
+check "GL engage-go ran IN the global repo (not the project), with ENGAGE_ACCOUNT_ROOT set to it" 'grep -qx "cwd=$GACCT" "$GLOG" && ! grep -qx "cwd=$ZETA" "$GLOG" && grep -qx "acct=$GACCT" "$GLOG"'
+check "GL as add --sync with the flags as given, and the words on stdin" '[ "$(grep "^arg=" "$GLOG" | tr "\n" "|")" = "arg=add|arg=--sync|arg=--kind|arg=decision|arg=--statement|arg=S one|arg=-|" ] && grep -q "^stdin=what" "$GLOG" && grep -qx "Done when: x" "$GLOG"'
+GHOME="$ROOT/ghome"; mkdir -p "$GHOME/CODE/CaptainCodeAU/CaptainCodeAU-isolinear"; git -C "$GHOME/CODE/CaptainCodeAU/CaptainCodeAU-isolinear" init -q
+rm -f "$GLOG"; OUT="$(echo w | (cd "$ZETA" && env -u ENGAGE_ACCOUNT_ROOT HOME="$GHOME" PATH="$FAKE:$PATH" GLOG="$GLOG" "$WRAP" global add - 2>&1))"; RC=$?
+check "GL no ENGAGE_ACCOUNT_ROOT: the default ~/CODE/CaptainCodeAU/CaptainCodeAU-isolinear" '[ "$RC" -eq 0 ] && grep -qx "cwd=$GHOME/CODE/CaptainCodeAU/CaptainCodeAU-isolinear" "$GLOG"'
+ENGAGE_ACCOUNT_ROOT="$ROOT/nope" gwrap add w
+check "GL a missing global repo REFUSES (rc 2) and engage-go never runs" '[ "$RC" -eq 2 ] && printf "%s" "$OUT" | grep -q "is not there. Nothing written." && [ ! -e "$GLOG" ]'
+mkdir -p "$ROOT/plain"; ENGAGE_ACCOUNT_ROOT="$ROOT/plain" gwrap add w
+check "GL a folder in no git repo REFUSES (rc 2), engage-go never runs" '[ "$RC" -eq 2 ] && [ ! -e "$GLOG" ]'
+ENGAGE_ACCOUNT_ROOT="$GACCT/records" gwrap add w
+check "GL a folder INSIDE a repo, not its top, REFUSES (rc 2), engage-go never runs" '[ "$RC" -eq 2 ] && printf "%s" "$OUT" | grep -q "not the top of a git repo" && [ ! -e "$GLOG" ]'
+ENGAGE_ACCOUNT_ROOT="$GACCT" gwrap add --drain
+check "GL --drain is not this route: REFUSED (rc 2), engage-go never runs" '[ "$RC" -eq 2 ] && [ ! -e "$GLOG" ]'
+ENGAGE_ACCOUNT_ROOT="$GACCT" FAKE_EG=refuse gwrap add w
+check "GL engage-go refuses: rc 2, says nothing written" '[ "$RC" -eq 2 ] && printf "%s" "$OUT" | grep -q "engage-go refused (exit 1" && printf "%s" "$OUT" | grep -q "Nothing written"'
+ENGAGE_ACCOUNT_ROOT="$GACCT" FAKE_EG=nocommit gwrap add w
+check "GL written but the commit failed: rc 3, the kept line still printed" '[ "$RC" -eq 3 ] && printf "%s\n" "$OUT" | grep -qx "#7002 $GACCT/records/7000/7002.md" && printf "%s" "$OUT" | grep -q "NOT committed"'
+ENGAGE_ACCOUNT_ROOT="$GACCT" gwrap where
+check "GL where prints the global repo (rc 0)" '[ "$RC" -eq 0 ] && [ "$OUT" = "$GACCT" ]'
+ENGAGE_ACCOUNT_ROOT="$ROOT/nope" gwrap where; check "GL where on a missing repo REFUSES (rc 2)" '[ "$RC" -eq 2 ]'
+gwrap bogus; check "GL global with no add or where REFUSES (rc 2)" '[ "$RC" -eq 2 ]'
+
+# The skill side. Each predicate must FAIL on OLDG, today's wording before #1060 was built
+# (steps 1, 2, 4 and 10 and the moved bullet as they read at 89cc1a9), and PASS on the skill.
+cl(){ tr -s ' \n' '  ' | sed 's/\([.;]\) /\1\n/g'; }
+g_rule(){ local h; h="$(head_of "$1")"
+  printf '%s' "$h" | grep -qF 'in every project, moved or not' && printf '%s' "$h" | grep -qF '`... | pj-wrap global add [flags] -`' \
+    && printf '%s' "$h" | grep -qF '`ENGAGE_ACCOUNT_ROOT` overrides' && printf '%s' "$h" | grep -qF 'Nothing new is written under ~/.claude'; }
+g_built(){ local h; h="$(head_of "$1")"; ! printf '%s' "$h" | grep -qF 'not built yet' && printf '%s' "$h" | grep -qF 'file it with `pj-wrap global add`'; }
+g_read(){ local b; b="$(block_of "$1" 1 | tr -s ' \n' '  ')"
+  printf '%s' "$b" | grep -qF '`decided --all <words>` (it still reads the old global rulings in ~/.claude)' \
+    && printf '%s' "$b" | grep -qF '"$(pj-wrap global where)/records"' && printf '%s' "$b" | grep -qF '(read only, never written now)'; }
+g_item(){ block_of "$1" 2 | tr -s ' \n' '  ' | grep -qF "\`printf '%s\\n\\nDone when: %s\\n' \"<what>\" \"<finish line>\" | pj-wrap global add -\`"; }
+g_ruling(){ local b; b="$(block_of "$1" 2 | tr -s ' \n' '  ')"
+  printf '%s' "$b" | grep -qF 'pj-wrap global add --kind decision --statement "<the ruling, one sentence>" -' \
+    && printf '%s' "$b" | grep -qF -- '--holds-in "<doc>" --project`' && ! printf '%s' "$b" | grep -qF -- '--project|--global'; }
+g_lesson(){ local b; b="$(block_of "$1" 4 | tr -s ' \n' '  ')"
+  printf '%s' "$b" | grep -qF '"Lesson: <title>"' && printf '%s' "$b" | grep -qF 'pj-wrap global add --kind decision --statement "<the lesson, one sentence>" -' \
+    && ! printf '%s' "$b" | grep -qF 'notes/YYYYMMDD' && ! printf '%s' "$b" | grep -qF 'one line in `notes/INDEX.md`'; }
+g_report(){ block_of "$1" 10 | tr -s ' \n' '  ' | grep -qF 'Filed in the global area for you (undo: close it in the engage pane):'; }
+# Never a new verdict into ~/.claude: every clause naming `decided add --global`, pj-global/notes,
+# `--inbox` or pj-inbox must be a "never", "not" or "refuses" clause (old ones are only read).
+g_never(){ ! cl < "$1" | grep -E -- 'add --global|--project\|--global|pj-global/notes|--inbox|pj-inbox' | grep -qvE 'never|not |refuses'; }
+OLDG="$ROOT/old-skill-89cc1a9.md"
+printf '%s\n' '- A project moved to engage (D-20261005-A08): at step 0 run `engage-go cutover check` once.' \
+  '  A verdict that belongs to every project goes to the global area, CaptainCodeAU-isolinear' \
+  '  (its records/ and inbox/), never to ~/.claude (engage #1060): its commands are not built yet,' \
+  '  so list each such row as an action for Gavin and write it nowhere (not `decided add --global`,' \
+  '  not ~/.claude/pj-global/notes/, not the pj inbox).' \
+  '0. Earlier sessions.' \
+  '1. Sweep this conversation. Before calling anything conversation-only, check `open-items --grep "<words>" --all`,' \
+  '   `decided --all <words>`, every store pj-homes names (tracker, decisions, incidents,' \
+  '   plans), `~/.claude/pj-global/notes/INDEX.md`, the drawer'"'"'s topic folders.' \
+  '2. One table. Verdicts:' \
+  '   - record the ruling: the reasoning goes in a document first, then' \
+  '     `decided add "<title>" --topic ".." --holds-in "<doc>" --project|--global`' \
+  '4. Apply the verdicts. A machine-wide lesson:' \
+  '   `~/.claude/pj-global/notes/YYYYMMDD-slug.md` plus one line in `notes/INDEX.md` in its format.' \
+  '10. `pj-wrap done --skill`. Under it, each extend and lesson with its own undo.' > "$OLDG"
+check "GL control: the old wording's header and steps 1, 2, 4, 10 are found" '[ -n "$(head_of "$OLDG")" ] && [ -n "$(block_of "$OLDG" 2)" ] && [ -n "$(block_of "$OLDG" 4)" ] && [ -n "$(block_of "$OLDG" 10)" ]'
+check "GL the header: the global area in every project, pj-wrap global add, ENGAGE_ACCOUNT_ROOT" 'g_rule "$SKILL"'
+check "GL the moved bullet files global rows with pj-wrap global add; no 'not built yet'" 'g_built "$SKILL"'
+check "GL step 1 also searches the global area's records; old ~/.claude stores read only" 'g_read "$SKILL"'
+check "GL step 2: an item for every project or none goes to the global area, finish line in the body" 'g_item "$SKILL"'
+check "GL step 2: a global ruling is a decision record there; decided add only --project" 'g_ruling "$SKILL"'
+check "GL step 4: a machine-wide lesson is a decision record there, no pj-global/notes file" 'g_lesson "$SKILL"'
+check "GL step 10: the report lists the global records with their undo" 'g_report "$SKILL"'
+check "GL the skill never tells the model to write decided --global, pj-global/notes or --inbox" 'g_never "$SKILL"'
+for p in g_rule g_built g_read g_item g_ruling g_lesson g_report g_never; do
+  check "GL control: $p FAILS on the old wording" "! $p \"\$OLDG\""
+done
+check "GL control: g_never also FAILS on the 2d13e0e wording" '! g_never "$OLDGL"'
+
 # --- M: one pj-homes for the skill and pj-wrap, also from a worktree (W-20261005-A66) --------
 # The skill read `.claude/pj-homes` from its own checkout while handoff_path read the main
 # checkout's, so a worktree whose copy differs got two different handoffs. Rule: the MAIN

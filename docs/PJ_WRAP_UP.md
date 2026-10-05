@@ -142,6 +142,64 @@ drift. A repo: handoff therefore lands in the main checkout's tree, as step 10's
 worktree the records belong to the main checkout" already said. pj-wrap-selftest section M
 builds a worktree whose pj-homes names a different handoff and checks both sides name main's.
 
+## Global verdicts go to CaptainCodeAU-isolinear, never ~/.claude (engage #1060, 6 Oct 2026)
+
+Gavin's ruling, 5 Oct 2026 (engage record #1060, in CaptainCodeAU-isolinear, bdfb8e4), his
+words: "CaptainCodeAU-isolinear is for global, engage-isolinear is for engage. Nothing should go
+into ~/.claude (now that we have isolinear folders... these are sibling private folders / repo
+sitting next to their projects)." Until this change /pj:wrap-up still wrote a global ruling with
+`decided add --global` (~/.claude/pj-global/decisions/), a machine-wide lesson as a file in
+~/.claude/pj-global/notes/ plus a line in its INDEX.md, and an item with no project with
+`open-items add --inbox` (~/.claude/pj-inbox/items/). In a moved project the skill already sent
+these to CaptainCodeAU-isolinear but had no command for it, so it listed them as actions for
+Gavin (906128f). Now, in every project, moved or not:
+
+| Verdict                                     | Route                                                                                                                         |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Item for every project, or with no project  | `printf '%s\n\nDone when: %s\n' "<what>" "<finish line>" \| pj-wrap global add -` (`--type decide` for a decide row)           |
+| Ruling for every project                    | reasoning document first, then `printf '%s\n\nReasoning: %s\n' "<title>" "<doc>" \| pj-wrap global add --kind decision --statement "<one sentence>" -` |
+| Machine-wide lesson                         | `printf '%s\n\n%s\n' "Lesson: <title>" "<the lesson>" \| pj-wrap global add --kind decision --statement "<one sentence>" -`      |
+| Project ruling                              | unchanged: `decided add ... --project`                                                                                        |
+
+Why these homes, from the global repo's own records:
+
+- **Items and rulings are records in its `records/`.** Its README: "Private records shared by
+  every CaptainCodeAU project: working rules, decisions, lessons, items". CAPTURE-SPEC section 2
+  (engage-isolinear workbench/layer1/CAPTURE-SPEC.md, LOCKED): "a drained or directly typed
+  no-project capture becomes a record in the account repo's own records/". So an item is filed
+  straight into `records/`, not dropped in `inbox/`: `inbox/` is the drop place `engage add
+  --drain` empties, its contents are untracked and stay on one machine, and a drop has no number.
+- **A lesson is a decision record.** terms.md (CaptainCodeAU-isolinear
+  workbench/records-system/2026-09-28/terms.md): "decision: A record that stands: a rule, lesson,
+  constraint, risk or term"; MAP.md, LOCKED: "new lessons go to the companion that matches their
+  scope (project -> <project>-isolinear; every project -> CaptainCodeAU-isolinear)". engage-go add
+  takes no `lesson` type (a capture lands `unsorted`; the type is set when it is sorted), so the
+  title starts "Lesson:". `rules/` is not the home: it holds the loaded always-on text, changed
+  one commit at a time with a LOG.md entry.
+- A decision record lands as `state: draft`, as engage-go add writes every decision; promoting it
+  is engage's step, not the wrap-up's.
+
+**The helper.** `pj-wrap global add [engage-go add flags] -` runs `engage-go add --sync` with
+its folder set to the global repo (`ENGAGE_ACCOUNT_ROOT`, default
+~/CODE/CaptainCodeAU/CaptainCodeAU-isolinear), because engage-go files into the account repo when
+run from it (capture.WriteStore); from a project folder it would file into that project's
+companion or refuse. No storage code of its own: number, path, format and the commit are
+engage-go's. It refuses (rc 2, nothing written) when that folder is missing or not the top of a
+git repo, for `--drain`, `--from-reply` and `--from-file`, and when engage-go refuses; it stops
+with rc 3 when engage-go printed a kept line but the commit failed. `pj-wrap global where` prints
+the folder; step 1 greps its `records/` alongside `decided --all`. Each record's undo is to close
+it in the engage pane; these records are not in open-items' wrap batch. `engage-go add
+--statement` is dropped on items (engage #1037), so an item's finish line goes in its body.
+
+**Old content stays readable.** `decided --all` still reads ~/.claude/pj-global/decisions/, and
+step 1 still reads notes/INDEX.md, read only. Moving what is already in ~/.claude is a separate
+step. A rc 2 refusal turns the row into an action for Gavin, written nowhere.
+
+pj-wrap-selftest section GL: the helper against a fake engage-go (run in the global repo, env,
+args, stdin, the default path, every refusal, rc 3), and eight skill-text predicates that FAIL on
+the wording at 89cc1a9, including one that every clause naming `decided add --global`,
+pj-global/notes, `--inbox` or pj-inbox is a "never", "not" or "refuses" clause.
+
 ## Before 5 Oct 2026: why the project step offered and never ran unasked (superseded)
 
 Ruled at the P8b gate 2026-09-21, superseded by the section above. Running the project's own
