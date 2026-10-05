@@ -2474,14 +2474,18 @@ mk_eg2(){   # mk_eg2 <name> <bash line>...
   [ $# -ge 2 ] || { bad "EG2 mk_eg2 needs a name and a body" "$*"; return 1; }
   local dir="$EG/$1"; shift; mkdir -p "$dir"
   { printf '#!/bin/bash\n'
-    # in the background: two ps calls can take most of a second here, which a 2.5 s fake cannot spare
+    # in the background: two ps calls can take most of a second here, which a late fake cannot spare
     printf '( echo "$$ $(ps -o pgid= -p $$ | tr -d " ") $(ps -o pgid= -p $PPID | tr -d " ")" > "%s/ran" ) &\n' "$dir"
     printf '%s\n' "$@"; } > "$dir/engage-go"
   chmod +x "$dir/engage-go"
 }
 mk_eg2 mhang "( exec -a $MK-child sleep 30 ) &" "echo 'not moved: about to hang'" "exec -a $MK-parent sleep 30"
-mk_eg2 mlate0 "sleep 2.5" "echo 'moved: zeta (2026-10-02)'" "exit 0"
-mk_eg2 mlate1 "sleep 2.5" "echo 'not moved: late'" "exit 1"
+# The late fakes answer at 1.5 s, not near the limit (W-20261005-A34): measured 5 Oct, a 2.5 s fake
+# answered at 2.53 s quiet but 2.69-2.88 s under load, and twice tipped into a hang refusal inside
+# section W. The hang arm above already pins the limit at >= 2.9 s, so these only need to prove a
+# slow answer is still read, and 1.5 s of margin survives a loaded machine.
+mk_eg2 mlate0 "sleep 1.5" "echo 'moved: zeta (2026-10-02)'" "exit 0"
+mk_eg2 mlate1 "sleep 1.5" "echo 'not moved: late'" "exit 1"
 mk_eg2 mleave "( exec -a $MK-child sleep 30 ) &" "echo 'not moved: leaves a child'" "exit 1"
 eg_left(){ pgrep -f "$MK" 2>/dev/null | wc -l | tr -d ' '; }
 eg_gone(){ local i; for i in $(seq 1 20); do [ "$(eg_left)" = 0 ] && break; sleep 0.05; done; eg_left; }
@@ -2508,9 +2512,9 @@ egw m3multi add "filed by habit" --done-when x
 wanteq "EG2 exit 3 with two stdout lines: the FIRST line only, one line (A49)" "first nosecond 1" \
   "$(case "$OUT" in *"not valid: first line."*) printf first;; *) printf nofirst;; esac) $(case "$OUT" in *"second line"*) printf second;; *) printf nosecond;; esac) $(printf '%s\n' "$OUT" | grep -c .)"
 egw mlate0 add "filed by habit" --done-when x
-wanteq "EG2 exit 0 at 2.5 s: refused as moved, not as a hang" "2 moved" "$RC $(case "$OUT" in *"moved to engage"*) printf moved;; *"did not answer"*) printf HANG;; *) printf other;; esac)"
+wanteq "EG2 exit 0 at 1.5 s: refused as moved, not as a hang" "2 moved" "$RC $(case "$OUT" in *"moved to engage"*) printf moved;; *"did not answer"*) printf HANG;; *) printf other;; esac)"
 h0="$(eg_state)"; egw mlate1 add "late but not moved" --done-when x; h1="$(eg_state)"
-wanteq "EG2 exit 1 at 2.5 s: add writes as today" "0 changed" "$RC $([ "$h0" != "$h1" ] && printf changed || printf unchanged)"
+wanteq "EG2 exit 1 at 1.5 s: add writes as today" "0 changed" "$RC $([ "$h0" != "$h1" ] && printf changed || printf unchanged)"
 ( PATH="$NOEG" "$EG/mleave/engage-go" cutover check >/dev/null 2>&1 ); sleep 0.3; EGN="$(eg_left)"; pkill -KILL -f "$MK" 2>/dev/null; EGL="$(eg_gone)"
 t="$(lk_ms)"; egw mleave add "the fake leaves a child" --done-when x; EGT=$(( $(lk_ms) - t ))
 wanteq "EG2 exit 1 leaving a child: add as today in ${EGT} ms, its group swept (control: alone it leaves $EGN, cleaned $EGL)" "0 fast 0 yes" \
