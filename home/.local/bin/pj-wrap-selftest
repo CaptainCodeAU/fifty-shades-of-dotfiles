@@ -482,6 +482,24 @@ SID=l-owe; wrap done --skill --owed "/wrap-up"; wrap owed
 check "L the owed listing says not finished, never declined" '[ "$RC" -eq 0 ] && printf "%s" "$OUT" | grep -q "(not finished in session l-owe)" && ! printf "%s" "$OUT" | grep -q "declined"'
 wrap owed --clear "/wrap-up"; check "L control: the owe clears (rc 0)" '[ "$RC" -eq 0 ]'
 
+# --- MV: a project moved to engage (D-20261005-A08, Decision 6, 5 Oct 2026) ------------------
+# There open-items refuses every write, so the wrap-up asks `engage-go cutover check` at step 0,
+# files new items with engage-go add, and leaves closing to the engage pane; done's open-items
+# block is then empty, so the report lists the engage records itself. The text is read with
+# its line breaks joined. Controls: the old skill (OLDSK above) FAILS both predicates.
+head_of(){ awk '/^0\. /{exit} {print}' "$1" | tr -s ' \n' '  '; }
+moved_rule(){ local h; h="$(head_of "$1")"
+  printf '%s' "$h" | grep -qF 'at step 0 run `engage-go cutover check` once' && printf '%s' "$h" | grep -qF '0 means moved' \
+    && printf '%s' "$h" | grep -qF 'files each new item with `engage-go add --sync' && printf '%s' "$h" | grep -qF 'never with open-items' \
+    && printf '%s' "$h" | grep -qF 'leaves every close, park and decline to the engage pane' && printf '%s' "$h" | grep -qF 'engage account inbox'; }
+moved_report(){ block_of "$1" 10 | tr -s ' \n' '  ' | grep -qF 'Filed in engage for you (undo: close it in the engage pane):'; }
+check "MV control: the skill's header is found and not empty" '[ -n "$(head_of "$SKILL")" ]'
+check "MV a moved project: step 0 asks engage-go cutover check; engage-go add files; the pane closes; never open-items" 'moved_rule "$SKILL"'
+check "MV control: the old skill FAILS the moved-project check" '! moved_rule "$OLDSK"'
+check "MV a moved project: the report lists the engage records with their undo" 'moved_report "$SKILL"'
+check "MV control: the old skill FAILS the report check" '! moved_report "$OLDSK"'
+check "MV the steps are still 0 to 10, the rule is a header line, not a step" '[ "$(awk "/^[0-9]+\\. /{printf \"%d \", \$1}" "$SKILL")" = "0 1 2 3 4 5 6 7 8 9 10 " ]'
+
 # --- M: one pj-homes for the skill and pj-wrap, also from a worktree (W-20261005-A66) --------
 # The skill read `.claude/pj-homes` from its own checkout while handoff_path read the main
 # checkout's, so a worktree whose copy differs got two different handoffs. Rule: the MAIN

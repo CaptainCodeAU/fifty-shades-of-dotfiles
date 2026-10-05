@@ -23,6 +23,14 @@ Steps run in this order; `pj-wrap done` is always last. Rulings and reasons:
 - pj-homes below means the file `pj-wrap homes` names: the main checkout's `.claude/pj-homes`,
   also from a worktree, the one pj-wrap, decided and the start card read. A worktree's own copy
   is never read (W-20261005-A66). `pj-wrap homes` also prints the resolved handoff path.
+- A project moved to engage (D-20261005-A08): at step 0 run `engage-go cutover check` once. Exit
+  0 means moved, and open-items refuses every write there, so in this wrap-up: step 1 reads this
+  session's records from the `#<id>` lines `engage-go add` printed, not `open-items --session`;
+  step 4 files each new item with `engage-go add --sync -- "<what> -- done when: <finish line>"`
+  (`--type decide` for a decide row) and never with open-items, and leaves every close, park and
+  decline to the engage pane (each is a report row for the user to press there); no drawer is
+  offered. An item for ANOTHER moved project is refused by open-items too: file it from that
+  project, or drop it in the engage account inbox. Any other exit: the steps as written.
 
 0. Earlier sessions. `pj-wrap status`: rc 1 none; rc 0 lists sessions that ended without
    wrap-up; rc 2 not a git repo: skip each step whose tool refuses for that reason, name it, and
@@ -165,7 +173,10 @@ Steps run in this order; `pj-wrap done` is always last. Rulings and reasons:
     for the user; "Done, nothing needed from you." Then copy VERBATIM the block
     `pj-wrap done` printed ("Filed and closed for you (the session's choice, not yours):", one
     line per record, ending `undo all: open-items undo-wrap <session-id>`; run that with the
-    sandbox lifted). It printed none: say "Nothing filed or closed for you." Under it, each extend
+    sandbox lifted). It printed none: say "Nothing filed or closed for you." In a moved project
+    it prints none: list each `#<id>` line engage-go add printed under "Filed in engage for you
+    (undo: close it in the engage pane):", and each close, park or decline left to the pane, then
+    say "Nothing filed or closed in the drawer." Under it, each extend
     and lesson with its own undo. End with the pending list and one
     line: "Kept working after this? Run /pj:wrap-up again." Last, as its own Bash call:
     `pj-ping done "wrap-up <project>" --detach`. It returns at once (Gavin, 2026-09-29: the
