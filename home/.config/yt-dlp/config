@@ -71,19 +71,19 @@
 --alias subs "--write-subs --sub-format srt/ass/vtt --write-auto-subs"
 
 # --subs-only: Download subtitles only, skip video
---alias subs-only "--write-subs --sub-format srt/ass/vtt --write-auto-subs --skip-download"
+--alias subs-only "--write-subs --sub-format srt/ass/vtt --write-auto-subs --no-embed-thumbnail --skip-download"
 
 # -----------------------------------------------------------------------------
 # Aliases: Metadata Only (standalone, skips video)
 # -----------------------------------------------------------------------------
 # --comments: Download comments only (to separate .comments.json)
---alias comments "--write-comments --no-write-info-json --skip-download --print-to-file %(comments)#j %(upload_date)s-%(title)s-[%(id)s].comments.json"
+--alias comments "--write-comments --no-write-info-json --no-embed-thumbnail --skip-download --print-to-file %(comments)#j %(upload_date)s-%(title)s-[%(id)s].comments.new.json"
 
 # --livechat: Download live chat only (for livestreams/premieres)
---alias livechat "--sub-langs live_chat --write-subs --skip-download"
+--alias livechat "--sub-langs live_chat --write-subs --no-embed-thumbnail --skip-download"
 
 # --description: Download video description only
---alias description "--write-description --skip-download"
+--alias description "--write-description --no-embed-thumbnail --skip-download"
 
 # --thumbnail: Download video thumbnail only
 --alias thumbnail "--write-thumbnail --skip-download"
@@ -96,19 +96,19 @@
 # Aliases: Bundles (video/audio + all metadata)
 # -----------------------------------------------------------------------------
 # --bundle-video: Video + all metadata
---alias bundle-video "-f bestvideo[height<=1080][height>=720]+bestaudio/best[height<=1080][height>=720]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/bestvideo+bestaudio/best --write-subs --sub-format srt/ass/vtt --write-auto-subs --write-comments --no-write-info-json --print-to-file %(comments)#j %(upload_date)s-%(title)s-[%(id)s].comments.json --sub-langs en,(?-i:en-[A-Z][A-Z]),live_chat --write-description --write-thumbnail"
+--alias bundle-video "-f bestvideo[height<=1080][height>=720]+bestaudio/best[height<=1080][height>=720]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/bestvideo+bestaudio/best --write-subs --sub-format srt/ass/vtt --write-auto-subs --write-comments --no-write-info-json --print-to-file %(comments)#j %(upload_date)s-%(title)s-[%(id)s].comments.new.json --sub-langs en,(?-i:en-[A-Z][A-Z]),live_chat --write-description --write-thumbnail"
 
 # --bundle-audio: Audio + all metadata
---alias bundle-audio "-f bestaudio -x --write-subs --sub-format srt/ass/vtt --write-auto-subs --write-comments --no-write-info-json --print-to-file %(comments)#j %(upload_date)s-%(title)s-[%(id)s].comments.json --sub-langs en,(?-i:en-[A-Z][A-Z]),live_chat --write-description --write-thumbnail"
+--alias bundle-audio "-f bestaudio -x --write-subs --sub-format srt/ass/vtt --write-auto-subs --write-comments --no-write-info-json --print-to-file %(comments)#j %(upload_date)s-%(title)s-[%(id)s].comments.new.json --sub-langs en,(?-i:en-[A-Z][A-Z]),live_chat --write-description --write-thumbnail"
 
 # --bundle: Video + all metadata (same as bundle-video)
---alias bundle "-f bestvideo[height<=1080][height>=720]+bestaudio/best[height<=1080][height>=720]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/bestvideo+bestaudio/best --write-subs --sub-format srt/ass/vtt --write-auto-subs --write-comments --no-write-info-json --print-to-file %(comments)#j %(upload_date)s-%(title)s-[%(id)s].comments.json --sub-langs en,(?-i:en-[A-Z][A-Z]),live_chat --write-description --write-thumbnail"
+--alias bundle "-f bestvideo[height<=1080][height>=720]+bestaudio/best[height<=1080][height>=720]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/bestvideo+bestaudio/best --write-subs --sub-format srt/ass/vtt --write-auto-subs --write-comments --no-write-info-json --print-to-file %(comments)#j %(upload_date)s-%(title)s-[%(id)s].comments.new.json --sub-langs en,(?-i:en-[A-Z][A-Z]),live_chat --write-description --write-thumbnail"
 
 # --bundle-high: Highest video + all metadata
---alias bundle-high "-f bestvideo+bestaudio/best --write-subs --sub-format srt/ass/vtt --write-auto-subs --write-comments --no-write-info-json --print-to-file %(comments)#j %(upload_date)s-%(title)s-[%(id)s].comments.json --sub-langs en,(?-i:en-[A-Z][A-Z]),live_chat --write-description --write-thumbnail"
+--alias bundle-high "-f bestvideo+bestaudio/best --write-subs --sub-format srt/ass/vtt --write-auto-subs --write-comments --no-write-info-json --print-to-file %(comments)#j %(upload_date)s-%(title)s-[%(id)s].comments.new.json --sub-langs en,(?-i:en-[A-Z][A-Z]),live_chat --write-description --write-thumbnail"
 
 # --best-bundle: Best mp4/m4a video + all metadata
---alias best-bundle "-f bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/bestvideo+bestaudio/best --write-subs --sub-format srt/ass/vtt --write-auto-subs --write-comments --no-write-info-json --print-to-file %(comments)#j %(upload_date)s-%(title)s-[%(id)s].comments.json --sub-langs en,(?-i:en-[A-Z][A-Z]),live_chat --write-description --write-thumbnail"
+--alias best-bundle "-f bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/bestvideo+bestaudio/best --write-subs --sub-format srt/ass/vtt --write-auto-subs --write-comments --no-write-info-json --print-to-file %(comments)#j %(upload_date)s-%(title)s-[%(id)s].comments.new.json --sub-langs en,(?-i:en-[A-Z][A-Z]),live_chat --write-description --write-thumbnail"
 
 # -----------------------------------------------------------------------------
 # Aliases: Modifiers

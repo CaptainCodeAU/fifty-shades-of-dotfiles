@@ -1445,131 +1445,14 @@ mv() {
 # --- yt-dlp Wrapper ---
 # Custom wrapper for yt-dlp with simplified aliases defined in ~/.config/yt-dlp/config
 yt() {
-  # Auto-generate yt-dlp config if it doesn't exist
-  local config_dir="$HOME/.config/yt-dlp"
-  local config_file="$config_dir/config"
-  if [[ ! -f "$config_file" ]]; then
-    mkdir -p "$config_dir"
-    cat > "$config_file" << 'YTCONFIG'
-# =============================================================================
-# yt-dlp Configuration
-# =============================================================================
-
-# -----------------------------------------------------------------------------
-# Output & Filename
-# -----------------------------------------------------------------------------
---output "%(upload_date)s - %(title)s [%(id)s].%(ext)s"
---restrict-filenames
-
-# -----------------------------------------------------------------------------
-# Default Behavior
-# -----------------------------------------------------------------------------
---no-overwrites
---no-keep-video
---console-title
-
-# Default format: 1080p + best audio (fallback to best available)
--f "bestvideo[height<=1080]+bestaudio/best/bestvideo+bestaudio"
-
-# -----------------------------------------------------------------------------
-# Embedding (into video file)
-# -----------------------------------------------------------------------------
---embed-thumbnail
---embed-chapters
---embed-metadata
---embed-info-json
---clean-info-json
-
-# -----------------------------------------------------------------------------
-# JavaScript Runtime (needed for YouTube's anti-scraping challenges)
-# -----------------------------------------------------------------------------
-# Node is already installed (via nvm, v22+) -- use it instead of the deno
-# default (not installed here) or bun (works, but deprecated upstream).
---js-runtimes node
-
-# -----------------------------------------------------------------------------
-# Downloader
-# -----------------------------------------------------------------------------
---downloader aria2c
---downloader "dash,m3u8:native"
-
-# -----------------------------------------------------------------------------
-# Aliases: Video
-# -----------------------------------------------------------------------------
-# --video: 1080p preferred, fallback to 720p, then best <=1080p, then best available
---alias video "-f bestvideo[height<=1080][height>=720]+bestaudio/best[height<=1080][height>=720]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/bestvideo+bestaudio/best"
-
-# --video-low: Best quality below 1080p, else best available
---alias video-low "-f bestvideo[height<1080]+bestaudio/best[height<1080]/bestvideo+bestaudio/best"
-
-# --video-high: Next resolution above 1080p (e.g., 1440p), else best available
---alias video-high "-f bestvideo[height>1080]+bestaudio/best[height>1080]/bestvideo+bestaudio/best"
-
-# --video-highest: Maximum available resolution
---alias video-highest "-f bestvideo+bestaudio/best"
-
-# --best-video: Best mp4 video + m4a audio (no metadata extras), else best available
---alias best-video "-f bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/bestvideo+bestaudio/best"
-
-# -----------------------------------------------------------------------------
-# Aliases: Audio
-# -----------------------------------------------------------------------------
-# --audio-only: Best audio, extracted to audio file
---alias audio-only "-f bestaudio -x"
-
-# -----------------------------------------------------------------------------
-# Aliases: Subtitles
-# -----------------------------------------------------------------------------
-# --subs: Download subtitles along with video
---alias subs "--write-subs --sub-format srt/ass/vtt --write-auto-subs"
-
-# --subs-only: Download subtitles only, skip video
---alias subs-only "--write-subs --sub-format srt/ass/vtt --write-auto-subs --skip-download"
-
-# -----------------------------------------------------------------------------
-# Aliases: Metadata Only (standalone, skips video)
-# -----------------------------------------------------------------------------
-# --comments: Download comments only (to separate .comments.json)
---alias comments "--write-comments --no-write-info-json --skip-download --print-to-file %(comments)#j %(upload_date)s-%(title)s-[%(id)s].comments.json"
-
-# --livechat: Download live chat only (for livestreams/premieres)
---alias livechat "--sub-langs live_chat --write-subs --skip-download"
-
-# --description: Download video description only
---alias description "--write-description --skip-download"
-
-# --thumbnail: Download video thumbnail only
---alias thumbnail "--write-thumbnail --skip-download"
-
-# --info / --formats: List available formats only, skip download (same as -F)
---alias info "-F"
---alias formats "-F"
-
-# -----------------------------------------------------------------------------
-# Aliases: Bundles (video/audio + all metadata)
-# -----------------------------------------------------------------------------
-# --bundle-video: Video + all metadata
---alias bundle-video "-f bestvideo[height<=1080][height>=720]+bestaudio/best[height<=1080][height>=720]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/bestvideo+bestaudio/best --write-subs --sub-format srt/ass/vtt --write-auto-subs --write-comments --no-write-info-json --print-to-file %(comments)#j %(upload_date)s-%(title)s-[%(id)s].comments.json --sub-langs en,(?-i:en-[A-Z][A-Z]),live_chat --write-description --write-thumbnail"
-
-# --bundle-audio: Audio + all metadata
---alias bundle-audio "-f bestaudio -x --write-subs --sub-format srt/ass/vtt --write-auto-subs --write-comments --no-write-info-json --print-to-file %(comments)#j %(upload_date)s-%(title)s-[%(id)s].comments.json --sub-langs en,(?-i:en-[A-Z][A-Z]),live_chat --write-description --write-thumbnail"
-
-# --bundle: Video + all metadata (same as bundle-video)
---alias bundle "-f bestvideo[height<=1080][height>=720]+bestaudio/best[height<=1080][height>=720]/bestvideo[height<=1080]+bestaudio/best[height<=1080]/bestvideo+bestaudio/best --write-subs --sub-format srt/ass/vtt --write-auto-subs --write-comments --no-write-info-json --print-to-file %(comments)#j %(upload_date)s-%(title)s-[%(id)s].comments.json --sub-langs en,(?-i:en-[A-Z][A-Z]),live_chat --write-description --write-thumbnail"
-
-# --bundle-high: Highest video + all metadata
---alias bundle-high "-f bestvideo+bestaudio/best --write-subs --sub-format srt/ass/vtt --write-auto-subs --write-comments --no-write-info-json --print-to-file %(comments)#j %(upload_date)s-%(title)s-[%(id)s].comments.json --sub-langs en,(?-i:en-[A-Z][A-Z]),live_chat --write-description --write-thumbnail"
-
-# --best-bundle: Best mp4/m4a video + all metadata
---alias best-bundle "-f bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/bestvideo+bestaudio/best --write-subs --sub-format srt/ass/vtt --write-auto-subs --write-comments --no-write-info-json --print-to-file %(comments)#j %(upload_date)s-%(title)s-[%(id)s].comments.json --sub-langs en,(?-i:en-[A-Z][A-Z]),live_chat --write-description --write-thumbnail"
-
-# -----------------------------------------------------------------------------
-# Aliases: Modifiers
-# -----------------------------------------------------------------------------
-# --overwrite: Force overwrite existing files
---alias overwrite "--force-overwrites"
-YTCONFIG
-    echo "${fg[green]}✓${reset_color} Created yt-dlp config at ${fg[cyan]}$config_file${reset_color}"
+  # The config is stowed from the repo (home/.config/yt-dlp/config); yt never
+  # writes it. It used to create it from a copy kept here whenever it was
+  # missing, and on 2026-10-05 that put a real file where a restow wanted its
+  # link while the links were down, so stow refused (W-20261005-A48).
+  local config_file="${XDG_CONFIG_HOME:-$HOME/.config}/yt-dlp/config"
+  if [[ ! -e "$config_file" ]]; then
+    print -ru2 -- "yt: $config_file is missing, so the --video/--bundle/... aliases do not exist. Restow the dotfiles: ./install.sh --stow-only"
+    [[ $# -eq 0 || "$1" == "--help" || "$1" == "-h" ]] || return 1
   fi
 
   if [[ $# -eq 0 || "$1" == "--help" || "$1" == "-h" ]]; then
@@ -1630,35 +1513,300 @@ ${fg[yellow]}DEFAULTS${reset_color}
   ${fg[white]}•${reset_color} Restricted filenames (safe characters only)
   ${fg[white]}•${reset_color} Intermediate files auto-deleted after merge
   ${fg[white]}•${reset_color} No overwrites (use --overwrite to force)
+  ${fg[white]}•${reset_color} In a pipe (yt URL | conv --mkv) stdout carries only finished file
+    paths, one per line; all progress goes to stderr. Options that print
+    their answer (-F/--info, -j, --print, -g, -o -) run plainly instead
+  ${fg[white]}•${reset_color} Comments re-fetch every run; the new file replaces the old only if it
+    has more unique comments. A damaged or stacked old file is never replaced
+    without asking; outside a terminal the new one waits as NAME.comments.pending.json
+  ${fg[white]}•${reset_color} URLs need no quotes (yt is aliased to 'noglob yt'), except a URL containing &
   ${fg[white]}•${reset_color} Runs via uvx — yt-dlp is never installed, always current
 
 ${fg[yellow]}REQUIRES${reset_color}
   ${fg[white]}•${reset_color} uv (runs yt-dlp via uvx)
   ${fg[white]}•${reset_color} ffmpeg (merges video + audio)
   ${fg[white]}•${reset_color} aria2c (for faster downloads)
+  ${fg[white]}•${reset_color} jq (counts comments to decide which comments file to keep)
 
 ${fg[yellow]}CONFIG${reset_color}
   ${fg[cyan]}$config_file${reset_color}
+  stowed from the dotfiles repo (home/.config/yt-dlp/config); yt never creates it
 EOF
   else
-    UV_EXCLUDE_NEWER=2999-01-01T00:00:00Z command uvx --prerelease allow 'yt-dlp[default]' "$@"
+    # Comments land in NAME.comments.new.json (see the aliases), because
+    # --print-to-file APPENDS: writing straight to NAME.comments.json stacked
+    # a full copy per run. Settle them in yt-dlp's output dirs: the current
+    # dir plus any home path given with -P/--paths, read the way yt-dlp reads it.
+    setopt localoptions extendedglob
+    local -a dirs=( ${PWD:A} )   # resolved like the -P values, so one folder is one entry
+    local i a v rest out rc plain=""
+    local types='home|temp|subtitle|thumbnail|description|annotation|infojson|link|pl_thumbnail|pl_description|pl_infojson|chapter|pl_video'
+    for (( i = 1; i <= $#; i++ )); do
+      a=${@[i]}
+      case $a in
+        # Options whose answer IS stdout: run yt-dlp plainly in a pipe too, so
+        # `yt -j URL | jq` and `yt -o - URL | mpv -` keep working.
+        # Long forms incl. yt-dlp's accepted abbreviations (--dump-j) and =VALUE;
+        # --print-to-file writes a file, so it is not one of them.
+        -F|--info|--formats|--list*|--dump*|--get*|--print|--print=*|-h|--he|--hel|--help|--vers*)
+          plain=1; continue ;;
+        -o|--output) (( i++ )); [[ ${@[i]-} == - ]] && plain=1; continue ;;
+        -o-|--output=-) plain=1; continue ;;
+        -P|--pat|--path|--paths) (( i++ )); a=${@[i]-} ;;
+        --pat=*|--path=*|--paths=*) a=${a#*=} ;;
+        -P?*) a=${a#-P} ;;
+        -[ofSarN]?*) continue ;;     # a short option with its value attached
+        # A cluster of yt-dlp's no-value short flags holding a printing one
+        # (-sj, -qe), or -O with its template attached (-OX). Only no-value
+        # letters count, so a value like -fbestvideo[height<=1080] never matches.
+        -[iwqsvUkxjJFgehc46]#[jJFgeh][iwqsvUkxjJFgehc46]#|-[iwqsvUkxjJFgehc46]#O*)
+          plain=1; continue ;;
+        --*) continue ;;
+        -[^-]#P*)
+          print -ru2 -- "yt: cannot tell the output folder from '$a'; comments written there will not be settled (give -P on its own)"
+          continue ;;
+        *) continue ;;
+      esac
+      # [TYPES:]PATH -- TYPES is case-insensitive and comma-separated; only
+      # "home" (or no type) is where the comments file goes.
+      if [[ $a == *:* && ${a%%:*} == (#i)(${~types})(,(${~types}))# ]]; then
+        [[ ,${(L)${a%%:*}}, == *,home,* ]] || continue
+        a=${a#*:}
+      fi
+      [[ -n $a ]] || continue
+      # yt-dlp expands ~ and $VAR in paths; do the same (no command substitution)
+      [[ $a == \~(/*|) ]] && a=$HOME${a#\~}
+      rest=$a out=""
+      while [[ $rest == (#b)(*)\$(\{[A-Za-z_][A-Za-z0-9_]#\}|[A-Za-z_][A-Za-z0-9_]#)(*) ]]; do
+        v=${match[2]#\{}; v=${v%\}}
+        if (( ${(P)+v} )); then out=${(P)v}${match[3]}$out; else out=\$${match[2]}${match[3]}$out; fi
+        rest=${match[1]}
+      done
+      a=$rest$out
+      dirs+=( ${a:A} )
+    done
+    dirs=( ${(u)dirs} )
+    __yt_settle_comments "${dirs[@]}"   # a leftover from an interrupted run
+    if [[ -t 1 || -n $plain ]]; then
+      UV_EXCLUDE_NEWER=2999-01-01T00:00:00Z command uvx --prerelease allow 'yt-dlp[default,curl-cffi]' "$@"
+      rc=$?
+    else
+      # In a pipe (yt URL | conv --mkv): yt-dlp's and aria2c's progress both
+      # write to stdout, so send all of it to stderr and put only each
+      # finished file's path on stdout, through fd 3. (Inside the Claude
+      # sandbox /dev/fd/3 cannot be opened: the file downloads, no path prints.)
+      UV_EXCLUDE_NEWER=2999-01-01T00:00:00Z command uvx --prerelease allow 'yt-dlp[default,curl-cffi]' \
+        --print-to-file after_move:filepath /dev/fd/3 "$@" 3>&1 1>&2
+      rc=$?
+    fi
+    __yt_settle_comments "${dirs[@]}"
+    return $rc
+  fi
+}
+# noglob: a pasted URL's ? and * reach yt as typed. With NULL_GLOB (set above),
+# an unquoted ...watch?v=X would otherwise vanish and yt would just print help.
+alias yt='noglob yt'
+
+# Keep the comments file with the most comments. yt-dlp writes each download to
+# NAME.comments.new.json; this settles it against NAME.comments.json.
+# - Counted with jq by unique comment id (a comment without one counts by its
+#   whole content); "NA" lines (comments disabled) are skipped, which also lets a
+#   file stacked by the old append bug be read.
+# - A new file with no comments never replaces anything. A clean old file is
+#   replaced only by a new one with MORE comments.
+# - An old file that is stacked (several lists) or cannot be read is never
+#   replaced without asking: in a terminal it reports and asks; anywhere else the
+#   new file is set aside as NAME.comments.pending.json (the richest one is kept)
+#   and the next yt run in a terminal asks. A file is never left as .new.json,
+#   because the next download would append to it.
+# - Whatever loses goes to the Trash (never a permanent delete), and every
+#   message goes to stderr so `yt URL | conv` carries only paths.
+__yt_settle_comments() {
+  setopt localoptions extendedglob
+  local d new old tag nl ne nu ol oe ou
+  for d in "$@"; do
+    [[ -d $d ]] || continue
+    # pending first, so a fresh download is compared against the result
+    # pending names end in exactly .pending.json or .pending-<date>-<time>-<pid>-<n>.json,
+    # so a title that merely contains ".comments.pending-" is not one
+    for new in "$d"/*.comments.pending(|-<->-<->-<->-<->).json(N) "$d"/*.comments.new.json(N); do
+      if [[ $new == *.comments.pending(|-<->-<->-<->-<->).json ]]; then
+        old=${new%.pending(|-<->-<->-<->-<->).json}.json tag=pending
+      else
+        old=${new%.new.json}.json tag=new
+      fi
+      if [[ -d $new || ! -r $new ]]; then
+        __yt_set_aside "$new" "$old" "it cannot be read"
+        continue
+      fi
+      if ! command -v jq >/dev/null; then
+        if [[ ! -e $old && ! -L $old ]]; then
+          command mv -- "$new" "$old" && __yt_say "saved ${old:t} (jq not found, not counted)"
+        else
+          __yt_set_aside "$new" "$old" "jq is not installed, so it cannot be counted"
+        fi
+        continue
+      fi
+      read -r nl ne nu <<< "$(__yt_count_comments "$new")"
+      if [[ ! -e $old && ! -L $old ]]; then
+        # Nothing to lose: anything countable becomes the comments file. A
+        # stacked one is then asked about when the next download arrives.
+        if (( nl >= 0 )); then
+          command mv -- "$new" "$old" &&
+            __yt_say "saved ${old:t} ($(__yt_n $nu)$( (( nl > 1 )) && print -n " in $nl stacked copies"))"
+        else
+          __yt_set_aside "$new" "$old" "$(__yt_what $nl $ne $nu)"
+        fi
+        continue
+      fi
+      if [[ -d $old ]]; then
+        __yt_set_aside "$new" "$old" "${old:t} is a directory, not touching it"
+        continue
+      fi
+      if (( nl < 0 )); then
+        __yt_set_aside "$new" "$old" "$(__yt_what $nl $ne $nu)"
+        continue
+      fi
+      if (( nu == 0 )); then
+        __yt_trash_new "$new" "$old" "the $tag download has no comments (disabled, or none yet)"
+        continue
+      fi
+      read -r ol oe ou <<< "$(__yt_count_comments "$old")"
+      if (( ol == 0 )); then
+        __yt_replace "$new" "$old" "had no comments -> $(__yt_n $nu)"
+      elif (( ol == 1 && nl == 1 )); then
+        if (( nu > ou )); then
+          __yt_replace "$new" "$old" "$ou -> $(__yt_n $nu)"
+        else
+          __yt_trash_new "$new" "$old" "kept $(__yt_n $ou); the $tag download has $nu, not more"
+        fi
+      else
+        # Old or new is stacked, or the old one cannot be read: show both, ask.
+        if (( ol > 1 )); then
+          __yt_say "${old:t} holds $ol stacked copies (the old append bug): $oe entries, $ou unique comments, $(( oe - ou )) duplicates"
+        elif (( ol == 1 )); then
+          __yt_say "${old:t} has $(__yt_n $ou)"
+        elif [[ -L $old && ! -e $old ]]; then
+          __yt_say "${old:t} is a broken link"
+        else
+          __yt_say "${old:t} cannot be read as comments (damaged or truncated?)"
+        fi
+        if (( nl > 1 )); then
+          __yt_say "  the $tag file holds $nl stacked copies: $ne entries, $nu unique comments$( (( ol >= 1 && nu < ou )) && print -n ", FEWER than ${old:t}'s $ou")"
+        else
+          __yt_say "  the $tag download has $(__yt_n $nu)$( (( ol >= 1 && nu < ou )) && print -n ", FEWER than ${old:t}'s $ou")"
+        fi
+        if [[ ! -t 0 || ! -t 2 ]]; then
+          __yt_set_aside "$new" "$old" "not a terminal, so not asking; the next yt run in a terminal asks"
+          continue
+        fi
+        # Throw away keys typed during the download, so a stray y or Enter
+        # cannot answer this question.
+        while read -t 0.05 -k 1 -s; do :; done
+        if read -q "?comments:   Replace ${old:t} with it? [y/N] "; then
+          print -u2
+          __yt_replace "$new" "$old" "you said yes"
+        else
+          print -u2
+          __yt_trash_new "$new" "$old" "you said no, kept ${old:t}"
+        fi
+      fi
+    done
+  done
+}
+
+__yt_say() { print -ru2 -- "comments: $1"; }
+__yt_n() { (( $1 == 1 )) && print -rn -- "1 comment" || print -rn -- "$1 comments"; }
+__yt_what() {   # describe a count that cannot simply be compared
+  if (( $1 < 0 )); then print -rn -- "it cannot be read as comments (damaged?)"
+  else print -rn -- "it holds $1 stacked copies ($2 entries, $3 unique comments)"; fi
+}
+
+# LISTS ENTRIES UNIQUE for a comments file. LISTS: 0 = only NA / empty (comments
+# disabled or none), 1 = one list, more = stacked, -1 = not comment JSON.
+__yt_count_comments() {
+  local s
+  # an unreadable file would reach jq as empty input and count as "no comments"
+  [[ -f $1 && -r $1 ]] || { print -r -- "-1 0 0"; return; }
+  s=$(command grep -vxE 'NA'$'\r''?' -- "$1" 2>/dev/null | jq -rs '
+        if length == 0 then "0\t0\t0"
+        elif all(type == "array") then
+          [length, (map(length) | add), ([.[][] | (.id // tojson)] | unique | length)] | @tsv
+        else empty end' 2>/dev/null)
+  [[ -n $s ]] && print -r -- "$s" || print -r -- "-1 0 0"
+}
+
+__yt_trash_new() {   # NEW OLD WHY
+  if __trash_path "$1"; then
+    __yt_say "${3}; ${1:t} trashed"
+  else
+    __yt_set_aside "$1" "$2" "${3}, but it could not be trashed"
   fi
 }
 
+__yt_replace() {     # NEW OLD WHY
+  if ! __trash_path "$2"; then
+    __yt_set_aside "$1" "$2" "could not trash ${2:t}, so it was not replaced"
+    return
+  fi
+  command mv -- "$1" "$2" && __yt_say "replaced ${2:t} ($3)"
+}
+
+# Move NEW out of the way as NAME.comments.pending.json so the next download
+# cannot append to it. Keep the richer of it and an existing pending file.
+__yt_set_aside() {   # NEW OLD WHY
+  local new=$1 pend=${2%.json}.pending.json pl pe pu nl ne nu
+  if [[ $new == $pend ]]; then
+    __yt_say "${new:t} left as it is: $3"
+    return
+  fi
+  if [[ -e $pend || -L $pend ]]; then
+    # Only ever trash a file that was READ and holds no more than the other;
+    # an unreadable one may be a damaged file full of comments, so keep both.
+    read -r pl pe pu <<< "$(__yt_count_comments "$pend")"
+    read -r nl ne nu <<< "$(__yt_count_comments "$new")"
+    if (( pl >= 0 && nl >= 0 && pu >= nu )) && __trash_path "$new"; then
+      __yt_say "${new:t} trashed: ${pend:t} already has as many comments ($3)"
+      return
+    fi
+    if ! (( pl >= 0 && nl >= 0 )) || ! __trash_path "$pend"; then
+      if [[ $new == *.comments.pending-<->-<->-<->-<->.json ]]; then
+        __yt_say "${new:t} left as it is: $3"
+        return
+      fi
+      # unique per process and call, so two set-asides in one second never meet
+      pend=${2%.json}.pending-$(date +%Y%m%d-%H%M%S)-$$-$RANDOM.json
+    fi
+  fi
+  # -n: never replace whatever is already there; then check it really moved
+  command mv -n -- "$new" "$pend" 2>/dev/null
+  if [[ -e $new || ! -e $pend ]]; then
+    __yt_say "COULD NOT set ${new:t} aside (${pend:t} exists or the folder is not writable); it stays as it is, and the next download would append to it: $3"
+    return 1
+  fi
+  __yt_say "${new:t} set aside as ${pend:t}: $3"
+}
+
 # --- ffmpeg Re-encode Wrapper ---
-# Re-encode a local video file to H.264 (default) or AV1, audio copied untouched.
+# Re-encode a local video file to H.264 (default) or AV1, audio copied untouched;
+# --mkv rewraps losslessly into Matroska instead. Pipe-friendly: with no INPUT it
+# reads paths from stdin, and when stdout is not a terminal it prints each
+# finished output path there (all status goes to stderr), so pieces chain:
+#   ls *.mp4 | conv --av1 | conv --mkv
 conv() {
-  if [[ $# -eq 0 || "$1" == "--help" || "$1" == "-h" ]]; then
+  if [[ "$1" == "--help" || "$1" == "-h" ]] || { [[ $# -eq 0 ]] && [[ -t 0 ]]; }; then
     cat << EOF
 ${fg[cyan]}conv${reset_color} - Re-encode video or audio with ffmpeg
 
 ${fg[yellow]}USAGE${reset_color}
-  conv [OPTIONS] INPUT
+  conv [OPTIONS] [--] INPUT...
+  ... | conv [OPTIONS]        (input paths read from stdin, one per line)
 
 ${fg[yellow]}AUTO-DETECTED${reset_color}
   A file with no real video stream (plain audio, or audio with an embedded
   thumbnail) converts to MP3 automatically -- no flags needed.
   A file with a real video stream converts to H.264 by default.
+  A file with no audio or video at all is refused before anything is written.
 
 ${fg[yellow]}VIDEO CODEC${reset_color}
   --h264             Encode to H.264 / libx264 (default for video files)
@@ -1669,8 +1817,30 @@ ${fg[yellow]}AUDIO${reset_color}
   --bitrate N        MP3 bitrate in kbps (default: matches the source's own
                       bitrate, so it never invents quality that wasn't there)
 
+${fg[yellow]}MKV (lossless rewrap, no re-encode)${reset_color}
+  --mkv              Copy every stream into Matroska (.mka if there is no real
+                      video). Embedded pictures (covers) become attachments.
+  --sidecars         With --mkv: also attach NAME.info.json and a NAME.webp/
+                      .jpg/.png thumbnail found next to the input (yt-dlp names)
+  --attach FILE      With --mkv and ONE input: attach any file (repeatable)
+
 ${fg[yellow]}OPTIONS${reset_color}
-  -o, --output PATH  Output file path (default: INPUT-CODEC.ext, same folder)
+  -o, --output PATH  Output file path (default: INPUT-CODEC.ext, same folder;
+                      one input only; never the input itself)
+  --                 End of options: everything after it is an input, so
+                      conv -- -odd-name.mp4 and conv -- * are safe
+
+${fg[yellow]}PIPES${reset_color}
+  With no INPUT, paths are read from stdin. When stdout is a pipe, each
+  finished output path (absolute) is printed there and everything else goes
+  to stderr.
+
+${fg[yellow]}WATCH OUT${reset_color}
+  ${fg[white]}•${reset_color} conv * also picks up conv's earlier outputs (x-h264.mp4 -> x-h264-h264.mp4)
+  ${fg[white]}•${reset_color} A file named like an option (e.g. --mkv) in the folder blocks typing
+    that option there; move the file, or use conv -- *
+  ${fg[white]}•${reset_color} With NULL_GLOB, a pattern that matches nothing (conv *.xyz) vanishes:
+    conv then shows this help, or reads stdin if something is piped in
 
 ${fg[yellow]}EXAMPLES${reset_color}
   ${fg[magenta]}conv movie.mp4${reset_color}                        # H.264, crf 18 -> movie-h264.mp4
@@ -1680,16 +1850,29 @@ ${fg[yellow]}EXAMPLES${reset_color}
   ${fg[magenta]}conv song.opus --bitrate 320${reset_color}          # force 320kbps mp3
   ${fg[magenta]}conv movie.mp4 -o clean.mp4${reset_color}           # custom output name
   ${fg[magenta]}conv movie.mp4 -o ~/Movies/clean.mp4${reset_color}  # custom output path (relative or full)
+  ${fg[magenta]}conv --mkv movie.mp4${reset_color}                  # lossless -> movie-mkv.mkv
+  ${fg[magenta]}conv --mkv --sidecars movie.mp4${reset_color}       # + movie.info.json, movie.webp inside
+  ${fg[magenta]}conv --mkv --attach notes.txt movie.mp4${reset_color}  # + any file inside
+  ${fg[magenta]}conv --av1 movie.mp4 | conv --mkv${reset_color}     # chain: encode, then rewrap the result
+  ${fg[magenta]}yt --best-bundle --write-info-json URL | conv --mkv --sidecars${reset_color}
 
 ${fg[yellow]}DEFAULTS${reset_color}
   ${fg[white]}•${reset_color} Video: audio stream copied untouched (-c:a copy)
-  ${fg[white]}•${reset_color} Video codec: H.264 unless --av1 is given
+  ${fg[white]}•${reset_color} Video codec: H.264 unless --av1 is given (a .webm input gives .mp4)
   ${fg[white]}•${reset_color} Video CRF: 18 (h264) / 30 (av1) unless --crf overrides it
   ${fg[white]}•${reset_color} Audio: MP3 bitrate matched to the source (clamped 32-320kbps),
     falls back to high-quality VBR if the source bitrate can't be read
   ${fg[white]}•${reset_color} A cover-art/thumbnail image embedded in an audio file does NOT
     count as video -- it's still treated as an audio conversion
+  ${fg[white]}•${reset_color} --mkv drops data streams (Matroska can't hold them) and turns
+    mp4 (mov_text) subtitles into srt; everything else is copied bit for bit
+  ${fg[white]}•${reset_color} --h264/--av1 keep video, audio and at most one subtitle track;
+    attachments are lost, so in a chain encode first and rewrap last
   ${fg[white]}•${reset_color} Output auto-named INPUT-CODEC.ext (or INPUT-mp3.mp3) next to the input
+  ${fg[white]}•${reset_color} ffmpeg writes to NAME.part-PID.ext and the result is moved into place
+    only on success; an existing output is asked about in a terminal (the old
+    one goes to the Trash) and refused inside a pipe
+  ${fg[white]}•${reset_color} The input is never changed or removed
 
 ${fg[yellow]}REQUIRES${reset_color}
   ${fg[white]}•${reset_color} ffmpeg
@@ -1699,77 +1882,222 @@ EOF
   fi
 
   if ! command -v ffmpeg &>/dev/null; then
-    echo "${err}conv: ffmpeg not found on PATH.${done}"
+    print -ru2 -- "${err}conv: ffmpeg not found on PATH.${done}"
     return 1
   fi
   if ! command -v ffprobe &>/dev/null; then
-    echo "${err}conv: ffprobe not found on PATH.${done}"
+    print -ru2 -- "${err}conv: ffprobe not found on PATH.${done}"
     return 1
   fi
 
-  local codec="" crf="" bitrate="" output="" input=""
+  local codec="" crf="" bitrate="" output="" mkv="" sidecars="" input f rc=0 n=0
+  local -a inputs attach
+  local -A seen
+  # every ffmpeg run gets -nostdin: conv never lets ffmpeg prompt or read the
+  # path list, and asks about an existing output itself
+  local -a nostdin=( -nostdin )
   while [[ $# -gt 0 ]]; do
+    # A word that is an option AND a file here is what `conv *` produces when a
+    # file is named like one: refuse rather than obey it.
+    if [[ $1 == -* && -e ./$1 && $1 != -- ]]; then
+      print -ru2 -- "${err}conv: '$1' looks like an option but is a file here; did * expand to it? Use: conv -- * (or ./NAME)${done}"
+      return 1
+    fi
     case "$1" in
-      --h264) codec="h264"; shift ;;
-      --av1)  codec="av1"; shift ;;
-      --crf)  [ $# -ge 2 ] || { echo "${err}conv: --crf needs a value${done}"; return 1; }; crf="$2"; shift 2 ;;
-      --bitrate) [ $# -ge 2 ] || { echo "${err}conv: --bitrate needs a value${done}"; return 1; }; bitrate="$2"; shift 2 ;;
-      -o|--output) [ $# -ge 2 ] || { echo "${err}conv: $1 needs a value${done}"; return 1; }; output="$2"; shift 2 ;;
+      --h264|--av1)
+        [[ -z $codec || $codec == ${1#--} ]] || { print -ru2 -- "${err}conv: choose one of --h264 / --av1${done}"; return 1; }
+        codec=${1#--}; shift ;;
+      --mkv)  mkv=1; shift ;;
+      --sidecars) sidecars=1; shift ;;
+      --attach) [ $# -ge 2 ] || { print -ru2 -- "${err}conv: --attach needs a file${done}"; return 1; }; attach+=("$2"); shift 2 ;;
+      --crf)
+        [ $# -ge 2 ] || { print -ru2 -- "${err}conv: --crf needs a value${done}"; return 1; }
+        [[ $2 == <-> ]] || { print -ru2 -- "${err}conv: --crf needs a whole number, e.g. --crf 24${done}"; return 1; }
+        crf="$2"; shift 2 ;;
+      --bitrate)
+        [ $# -ge 2 ] || { print -ru2 -- "${err}conv: --bitrate needs a value${done}"; return 1; }
+        [[ $2 == <-> ]] && (( $2 > 0 )) || { print -ru2 -- "${err}conv: --bitrate needs kbps as a whole number, e.g. --bitrate 192${done}"; return 1; }
+        bitrate="$2"; shift 2 ;;
+      -o|--output)
+        [ $# -ge 2 ] || { print -ru2 -- "${err}conv: $1 needs a value${done}"; return 1; }
+        [[ -z $output ]] || { print -ru2 -- "${err}conv: -o given twice${done}"; return 1; }
+        output="$2"; shift 2 ;;
+      --) shift; inputs+=("$@"); break ;;
       -*)
-        echo "${err}conv: unknown option '$1'${done}"
+        print -ru2 -- "${err}conv: unknown option '$1' (a file named like an option needs ./ or --)${done}"
         return 1
         ;;
-      *)
-        if [[ -n "$input" ]]; then
-          echo "${err}conv: unexpected extra argument '$1'${done}"
-          return 1
-        fi
-        input="$1"
-        shift
-        ;;
+      *) inputs+=("$1"); shift ;;
     esac
   done
 
-  if [[ -z "$input" ]]; then
-    echo "${err}conv: no input file given. Run 'conv --help' for usage.${done}"
+  if [[ -n "$mkv" && -n "$codec$crf$bitrate" ]]; then
+    print -ru2 -- "${err}conv: --mkv only rewraps; to re-encode as well, chain them: conv --av1 IN | conv --mkv${done}"
+    return 1
+  fi
+  if [[ -z "$mkv" && ( -n "$sidecars" || ${#attach} -gt 0 ) ]]; then
+    print -ru2 -- "${err}conv: --attach and --sidecars only work with --mkv${done}"
+    return 1
+  fi
+  for f in "${attach[@]}"; do
+    [[ -f "$f" ]] || { print -ru2 -- "${err}conv: attach file not found: '$f'${done}"; return 1; }
+  done
+  if (( ${#attach} && ${#inputs} > 1 )); then
+    print -ru2 -- "${err}conv: --attach goes with ONE input, got ${#inputs} (did a * after --attach expand to several files?)${done}"
+    return 1
+  fi
+  if [[ -n "$output" && ${#inputs} -gt 1 ]]; then
+    print -ru2 -- "${err}conv: -o takes one input, got ${#inputs}${done}"
+    return 1
+  fi
+  if [[ -n $output && -d $output ]]; then
+    print -ru2 -- "${err}conv: -o must name a file, '$output' is a directory${done}"
+    return 1
+  fi
+  if [[ -n $output && -z ${output:e} ]]; then
+    print -ru2 -- "${err}conv: -o needs a file extension (.mp4, .mkv, .mp3, ...) so ffmpeg knows the format${done}"
+    return 1
+  fi
+  if [[ -n $mkv && -n $output && ${output:e:l} != (mkv|mka) ]]; then
+    print -ru2 -- "${err}conv: --mkv writes Matroska, so -o must end in .mkv or .mka${done}"
+    return 1
+  fi
+
+  if (( ${#inputs} )); then
+    local r
+    for input in "${inputs[@]}"; do
+      __conv_one; r=$?
+      (( r == 130 )) && return 130     # Ctrl-C stops the whole run
+      (( r )) && rc=1
+    done
+    return $rc
+  fi
+  if [[ -t 0 ]]; then
+    print -ru2 -- "${err}conv: no input file given. Run 'conv --help' for usage.${done}"
+    return 1
+  fi
+  local r
+  # `|| [[ -n $input ]]` keeps a last line that has no newline (pbpaste, echo -n)
+  while IFS= read -r input || [[ -n $input ]]; do
+    input=${input%$'\r'}
+    [[ -z "$input" ]] && continue
+    if [[ $input == *$'\0'* ]]; then
+      print -ru2 -- "${err}conv: NUL-separated input is not supported; use find ... -print, one path per line${done}"
+      return 1
+    fi
+    if (( ++n > 1 )) && [[ -n "$output" || ${#attach} -gt 0 ]]; then
+      print -ru2 -- "${err}conv: -o / --attach take one input; stopping at '$input'${done}"
+      return 1
+    fi
+    __conv_one; r=$?
+    (( r == 130 )) && return 130
+    (( r )) && rc=1
+  done
+  (( n )) || { print -ru2 -- "${err}conv: no input paths arrived on stdin${done}"; return 1; }
+  return $rc
+}
+
+# One conv input ($input). Reads conv's locals (codec crf bitrate output mkv
+# attach sidecars nostdin seen) through zsh's dynamic scoping; prints the
+# output's absolute path on stdout when stdout is not a terminal.
+__conv_one() {
+  local output=$output codec=$codec crf=$crf
+  local in line key val f k
+  local -a vids auds pics picnames picmimes datas subcodecs
+  local -i nattach=0
+  local -A s
+  if [[ -d "$input" ]]; then
+    print -ru2 -- "${err}conv: '$input' is a folder, not a file${done}"
     return 1
   fi
   if [[ ! -f "$input" ]]; then
-    echo "${err}conv: input file not found: $input${done}"
+    print -ru2 -- "${err}conv: input file not found: '$input'${done}"
+    return 1
+  fi
+  if [[ ${input:t} == *.part-<->.* ]]; then
+    print -ru2 -- "${warn}conv: skipping '$input': it is a half-written conv temp file${done}"
+    return 0
+  fi
+  if [[ -n ${seen[${input:A}]} ]]; then
+    print -ru2 -- "${warn}conv: '$input' was already given; skipping the repeat${done}"
+    return 0
+  fi
+  seen[${input:A}]=1
+  for f in "${attach[@]}"; do
+    if [[ $f -ef $input ]]; then
+      print -ru2 -- "${err}conv: '$input' is also an --attach file; refusing (did * expand into the attach list?)${done}"
+      return 1
+    fi
+  done
+  # A relative name starting with - would be read by ffmpeg as an option, and
+  # one with a colon as a protocol (a:b.mp4): hand ffmpeg ./NAME instead.
+  in=$input
+  [[ $in == (/|./|../)* ]] || in=./$in
+
+  # One probe: every stream, with its type, codec, cover flag and tags.
+  local probe
+  # Fields split on \x1f with no escaping: compact's default "|" would cut a
+  # filename tag that contains one.
+  local us=$'\x1f'
+  if ! probe=$(ffprobe -v error -show_entries stream=index,codec_type,codec_name:stream_disposition=attached_pic:stream_tags=filename,mimetype -of "compact=p=1:e=none:s=$us" "$in" 2>&1); then
+    print -ru2 -- "${err}conv: ffprobe cannot read '$input' (${probe%%$'\n'*}); nothing written${done}"
+    return 1
+  fi
+  for line in ${(f)probe}; do
+    [[ $line == stream$us* ]] || continue     # skip program / stream-group lines
+    s=()
+    for f in "${(@ps:\x1f:)${line#stream$us}}"; do
+      key=${(L)f%%=*}; val=${f#*=}; s[$key]=$val
+    done
+    case ${s[codec_type]} in
+      video)
+        if [[ ${s[disposition:attached_pic]} == 1 ]]; then
+          pics+=( ${s[index]} ); picnames+=( "${s[tag:filename]-}" ); picmimes+=( "${s[tag:mimetype]-}" )
+        else
+          vids+=( ${s[index]} )
+        fi ;;
+      audio) auds+=( ${s[index]} ) ;;
+      subtitle) subcodecs+=( ${s[codec_name]} ) ;;
+      data) datas+=( ${s[index]} ) ;;
+      attachment) (( nattach++ )) ;;
+    esac
+  done
+  if (( ${#vids} + ${#auds} == 0 )); then
+    print -ru2 -- "${err}conv: '$input' has no audio or video stream; nothing written${done}"
     return 1
   fi
 
-  # Detect a REAL video stream -- excludes an embedded cover-art/thumbnail
-  # image, which ffprobe also reports as a "video" stream (disposition:
-  # attached_pic). Without this, an audio file with a thumbnail (e.g. from
-  # `yt --audio-only`) would be wrongly treated as a video file.
-  local vinfo line has_video=""
-  vinfo=$(ffprobe -v error -select_streams v -show_entries "stream=codec_type:stream_disposition=attached_pic" -of csv=p=0 "$input" 2>/dev/null)
-  for line in ${(f)vinfo}; do
-    [[ "$line" == "video,0" ]] && has_video=1
-  done
+  if [[ -n "$mkv" ]]; then
+    __conv_mkv || return $?
+    [[ -t 1 ]] || print -r -- "${output:A}"
+    return 0
+  fi
 
-  if [[ -z "$has_video" ]]; then
+  if (( ${#vids} == 0 )); then
     if [[ "$codec" == "h264" || "$codec" == "av1" ]]; then
-      echo "${err}conv: '$input' has no real video stream -- can't encode it as $codec.${done}"
+      print -ru2 -- "${err}conv: '$input' has no real video stream -- can't encode it as $codec.${done}"
       return 1
     fi
 
-    local dir base
-    dir="${input:h}"
-    base="${input:t:r}"
-    [[ -z "$output" ]] && output="${dir}/${base}-mp3.mp3"
+    [[ -z "$output" ]] && output="${input:h}/${input:t:r}-mp3.mp3"
+    [[ $output == (/|./|../)* ]] || output=./$output
+    __conv_check_output || return 1
 
+    [[ -n $crf ]] && print -ru2 -- "${warn}conv: --crf is for video; ignored for the audio file '$input'${done}"
     local abr
     if [[ -n "$bitrate" ]]; then
+      # libmp3lame takes 8-320 kbps; outside that it quietly picks its own
       abr="$bitrate"
+      (( abr < 8 )) && abr=8
+      (( abr > 320 )) && abr=320
+      (( abr != bitrate )) && print -ru2 -- "${warn}conv: --bitrate $bitrate is outside mp3's 8-320 kbps; using $abr${done}"
     else
       # Match the source's own bitrate so this never invents quality that
       # wasn't there. Stream-level bit_rate first, falling back to the
       # container's overall bit_rate when the stream doesn't report one.
       local raw
-      raw=$(ffprobe -v error -select_streams a:0 -show_entries stream=bit_rate -of default=noprint_wrappers=1:nokey=1 "$input" 2>/dev/null)
-      [[ -z "$raw" || "$raw" == "N/A" ]] && raw=$(ffprobe -v error -show_entries format=bit_rate -of default=noprint_wrappers=1:nokey=1 "$input" 2>/dev/null)
+      raw=$(ffprobe -v error -select_streams a:0 -show_entries stream=bit_rate -of default=noprint_wrappers=1:nokey=1 "$in" 2>/dev/null)
+      [[ -z "$raw" || "$raw" == "N/A" ]] && raw=$(ffprobe -v error -show_entries format=bit_rate -of default=noprint_wrappers=1:nokey=1 "$in" 2>/dev/null)
       if [[ "$raw" == <-> ]]; then
         abr=$(( raw / 1000 ))
         (( abr < 32 )) && abr=32
@@ -1778,15 +2106,17 @@ EOF
     fi
 
     if [[ -n "$abr" ]]; then
-      echo "${info}Encoding${done} ${fg[cyan]}$input${reset_color} ${info}->${done} ${fg[cyan]}$output${reset_color} ${info}(mp3, ${abr}kbps, matched to source)${done}"
-      ffmpeg -i "$input" -vn -c:a libmp3lame -b:a "${abr}k" "$output"
+      print -ru2 -- "${info}Encoding${done} ${fg[cyan]}$input${reset_color} ${info}->${done} ${fg[cyan]}$output${reset_color} ${info}(mp3, ${abr}kbps, $([[ -n $bitrate ]] && print -n as asked || print -n matched to source))${done}"
+      __conv_write -i "$in" -vn -c:a libmp3lame -b:a "${abr}k" || return $?
     else
-      echo "${info}Encoding${done} ${fg[cyan]}$input${reset_color} ${info}->${done} ${fg[cyan]}$output${reset_color} ${info}(mp3, VBR q2 -- source bitrate unreadable)${done}"
-      ffmpeg -i "$input" -vn -c:a libmp3lame -q:a 2 "$output"
+      print -ru2 -- "${info}Encoding${done} ${fg[cyan]}$input${reset_color} ${info}->${done} ${fg[cyan]}$output${reset_color} ${info}(mp3, VBR q2 -- source bitrate unreadable)${done}"
+      __conv_write -i "$in" -vn -c:a libmp3lame -q:a 2 || return $?
     fi
-    return
+    [[ -t 1 ]] || print -r -- "${output:A}"
+    return 0
   fi
 
+  [[ -n $bitrate ]] && print -ru2 -- "${warn}conv: --bitrate is for mp3 output; ignored for the video '$input'${done}"
   [[ -z "$codec" ]] && codec="h264"
   local vcodec crf_default
   if [[ "$codec" == "av1" ]]; then
@@ -1797,21 +2127,185 @@ EOF
     crf_default=18
   fi
   [[ -z "$crf" ]] && crf="$crf_default"
-
-  if [[ -z "$output" ]]; then
-    local dir base ext
-    dir="${input:h}"
-    base="${input:t:r}"
-    ext="${input:e}"
-    if [[ -n "$ext" ]]; then
-      output="${dir}/${base}-${codec}.${ext}"
-    else
-      output="${dir}/${base}-${codec}"
-    fi
+  # x264 takes 0-51, SVT-AV1 0-63; beyond that ffmpeg fails with a cryptic error
+  local crfmax=51
+  [[ $codec == av1 ]] && crfmax=63
+  if (( crf > crfmax )); then
+    print -ru2 -- "${err}conv: --crf $crf is out of range for $codec (0-$crfmax)${done}"
+    return 1
   fi
 
-  echo "${info}Encoding${done} ${fg[cyan]}$input${reset_color} ${info}->${done} ${fg[cyan]}$output${reset_color} ${info}(codec: $vcodec, crf: $crf)${done}"
-  ffmpeg -i "$input" -c:v "$vcodec" -crf "$crf" -c:a copy "$output"
+  if [[ -z "$output" ]]; then
+    local ext=${input:e}
+    # H.264 cannot go in WebM, and ffmpeg cannot pick a format with no extension
+    if [[ -z $ext ]]; then ext=mkv
+    elif [[ $codec == h264 && ${ext:l} == webm ]]; then ext=mp4
+    fi
+    output="${input:h}/${input:t:r}-${codec}.${ext}"
+  fi
+  [[ $output == (/|./|../)* ]] || output=./$output
+  __conv_check_output || return 1
+
+  print -ru2 -- "${info}Encoding${done} ${fg[cyan]}$input${reset_color} ${info}->${done} ${fg[cyan]}$output${reset_color} ${info}(codec: $vcodec, crf: $crf)${done}"
+  __conv_write -i "$in" -c:v "$vcodec" -crf "$crf" -c:a copy || return $?
+  [[ -t 1 ]] || print -r -- "${output:A}"
+}
+
+# Before writing $output: never the input itself under any spelling (./x,
+# absolute), never a directory; an existing file is asked about in a terminal
+# and refused in a pipe, where no one can answer.
+__conv_check_output() {
+  if [[ $output -ef $input ]]; then
+    print -ru2 -- "${err}conv: the output '$output' is the input file itself; refusing${done}"
+    return 1
+  fi
+  if [[ -d $output ]]; then
+    print -ru2 -- "${err}conv: the output '$output' is a directory; refusing${done}"
+    return 1
+  fi
+  [[ -e $output || -L $output ]] || return 0
+  if [[ -t 0 && -t 1 ]]; then
+    while read -t 0.05 -k 1 -s; do :; done     # drop keys typed earlier
+    if read -q "?conv: $output exists. Replace it (the old one goes to the Trash)? [y/N] "; then
+      print -u2
+      return 0
+    fi
+    print -u2
+    print -ru2 -- "${warn}conv: kept $output; nothing written for '$input'${done}"
+    return 1
+  fi
+  print -ru2 -- "${err}conv: $output already exists; not overwriting inside a pipe${done}"
+  return 1
+}
+
+# Run ffmpeg into NAME.part-PID.EXT and move the result onto $output only when
+# ffmpeg succeeded, so a failed or interrupted run never leaves a half-written
+# file under the real name. An existing $output (already agreed to by
+# __conv_check_output) goes to the Trash first.
+__conv_write() {
+  local tmp="${output:r}.part-$$.${output:e}"
+  # Ctrl-C: the trap only notes it (a `return` inside a trap that fires during
+  # `if ! ffmpeg` does not return, measured); ffmpeg stops on the same signal,
+  # then the half-written temp file is binned so a later `conv *` cannot pick
+  # it up, and 130 tells conv to stop the whole run.
+  local interrupted=""
+  setopt localoptions localtraps
+  trap 'interrupted=1' INT
+  if ! ffmpeg "${nostdin[@]}" -hide_banner -y "$@" "$tmp" || [[ -n $interrupted ]]; then
+    local how=failed
+    [[ -n $interrupted ]] && how="was interrupted"
+    if [[ -e $tmp ]] && ! __trash_path "$tmp"; then
+      print -ru2 -- "${err}conv: ffmpeg $how on '$input'; its partial output could not be trashed and is at $tmp${done}"
+    else
+      print -ru2 -- "${err}conv: ffmpeg $how on '$input'; nothing written${done}"
+    fi
+    [[ -n $interrupted ]] && return 130
+    return 1
+  fi
+  if [[ -e $output || -L $output ]] && ! __trash_path "$output"; then
+    print -ru2 -- "${err}conv: could not move the old $output to the Trash; the new one is $tmp${done}"
+    return 1
+  fi
+  command mv -- "$tmp" "$output"
+}
+
+# conv --mkv: rewrap every stream of $input losslessly into Matroska (.mka when
+# there is no real video). Uses the probe made by __conv_one. Every embedded
+# picture (an mp4/mp3 cover, or pictures attached to an mkv) is put back as an
+# attachment under its own filename and mimetype -- copied as-is it would become
+# an ordinary video track. Data streams (Matroska cannot hold them) are dropped,
+# mov_text subtitles become srt, and --sidecars / --attach files are attached.
+# The extracted pictures stay in $TMPDIR, which macOS clears on its own.
+__conv_mkv() {
+  local dir=${in:h} base=${input:t:r} tmpd="" ext mime name i k p
+  local -a drop subfix files names mimes att
+  local -A used
+  for i in "${datas[@]}"; do drop+=( -map -0:$i ); done
+  k=0
+  for p in "${subcodecs[@]}"; do
+    [[ $p == mov_text ]] && subfix+=( -c:s:$k srt )
+    (( k++ ))
+  done
+  for (( i = 1; i <= ${#pics}; i++ )); do
+    drop+=( -map -0:${pics[i]} )
+    # The name comes from inside the file, so it is untrusted: keep only its
+    # last part and no leading dots, or ../../X would be written outside tmpd.
+    name=${picnames[i]:t}
+    while [[ $name == .* ]]; do name=${name#.}; done
+    if [[ -z $name ]]; then
+      case $(ffprobe -v error -select_streams ${pics[i]} -show_entries stream=codec_name -of csv=p=0 "$in" 2>/dev/null) in
+        mjpeg) ext=jpg ;; png) ext=png ;; gif) ext=gif ;; bmp) ext=bmp ;; webp) ext=webp ;; tiff) ext=tiff ;; *) ext=img ;;
+      esac
+      name=cover.$ext
+    fi
+    while [[ -n ${used[$name]} ]]; do
+      if [[ -n ${name:e} ]]; then name=${name:r}-$i.${name:e}; else name=$name-$i; fi
+    done
+    used[$name]=1
+    [[ -n $tmpd ]] || tmpd=$(mktemp -d "${TMPDIR:-/tmp}/conv.XXXXXX") || return 1
+    mkdir -p "$tmpd/$i"
+    if ffmpeg -nostdin -v error -i "$in" -map 0:${pics[i]} -c copy -f image2 -update 1 "$tmpd/$i/$name"; then
+      files+=( "$tmpd/$i/$name" ); names+=( "$name" ); mimes+=( "${picmimes[i]}" )
+    else
+      print -ru2 -- "${warn}conv: could not keep the embedded picture '$name' from '$input'${done}"
+    fi
+  done
+
+  if [[ -n $sidecars ]]; then
+    [[ -f "$dir/$base.info.json" ]] && { files+=( "$dir/$base.info.json" ); names+=( info.json ); mimes+=( "" ); }
+    if (( ${#pics} == 0 )); then
+      for ext in webp jpg png; do
+        [[ -f "$dir/$base.$ext" ]] && { files+=( "$dir/$base.$ext" ); names+=( "cover.$ext" ); mimes+=( "" ); break; }
+      done
+    fi
+  fi
+  for p in "${attach[@]}"; do
+    [[ $p == (/|./|../)* ]] || p=./$p
+    files+=( "$p" ); names+=( "${p:t}" ); mimes+=( "" )
+  done
+
+  # -attach streams come after the copied ones, so number them from nattach
+  k=$nattach
+  for (( i = 1; i <= ${#files}; i++ )); do
+    mime=${mimes[i]}
+    if [[ -z $mime ]]; then
+      case ${${names[i]:e}:l} in
+        json) mime=application/json ;;
+        jpg|jpeg) mime=image/jpeg ;;
+        png) mime=image/png ;;
+        webp) mime=image/webp ;;
+        gif) mime=image/gif ;;
+        bmp) mime=image/bmp ;;
+        srt) mime=application/x-subrip ;;
+        vtt) mime=text/vtt ;;
+        txt) mime=text/plain ;;
+        ttf) mime=font/ttf ;;
+        otf) mime=font/otf ;;
+        *) mime=application/octet-stream ;;
+      esac
+    fi
+    att+=( -attach "${files[i]}" -metadata:s:t:$k "mimetype=$mime" -metadata:s:t:$k "filename=${names[i]}" )
+    (( k++ ))
+  done
+
+  ext=mka; (( ${#vids} )) && ext=mkv
+  [[ -z "$output" ]] && output="${input:h}/${base}-${ext}.${ext}"
+  [[ $output == (/|./|../)* ]] || output=./$output
+  __conv_check_output || return 1
+  print -ru2 -- "${info}Rewrapping${done} ${fg[cyan]}$input${reset_color} ${info}->${done} ${fg[cyan]}$output${reset_color} ${info}(lossless; attachments: ${${(j:, :)names}:-none})${done}"
+  __conv_write -i "$in" -map 0 "${drop[@]}" -c copy "${subfix[@]}" "${att[@]}" -f matroska
+}
+
+# Trash one path, never a permanent delete: the dotfiles' safe-rm if it is on
+# PATH, else macOS's own /usr/bin/trash, else nothing at all. Not `rm`: in an
+# interactive shell that is the rm() function, which also trashes directories
+# and prompts on symlinks without saying why. True only if the path is gone.
+__trash_path() {
+  local t
+  if t=$(whence -p safe-rm); then "$t" -q -- "$1" >/dev/null 2>&1
+  elif [[ -x /usr/bin/trash ]]; then /usr/bin/trash "$1" >/dev/null 2>&1
+  fi
+  [[ ! -e $1 && ! -L $1 ]]
 }
 
 
