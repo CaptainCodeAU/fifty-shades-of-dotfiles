@@ -1023,7 +1023,7 @@ fi
 # --- mods-api: has a Claude Code update changed the mods API? (F8b, D-20260923-A01/-A06) ----
 # Reads mods-api-drift's report with --no-regen, so this row never regenerates and never
 # writes (CONTRACT 1). The SessionStart hook `mods-api-drift --hook` does the work once
-# per Claude Code update; /plugin-types is local and free. WARN, never FAIL: an unseen API
+# per Claude Code update, reading the program file: local and free. WARN, never FAIL: an unseen API
 # change is news for Gavin, not a wiring fault, and it stays WARN until he says "seen".
 PJ_HEALTH_MODS_DRIFT="${PJ_HEALTH_MODS_DRIFT:-mods-api-drift}"
 if command -v "$PJ_HEALTH_MODS_DRIFT" >/dev/null 2>&1; then
@@ -1036,9 +1036,9 @@ if command -v "$PJ_HEALTH_MODS_DRIFT" >/dev/null 2>&1; then
   case "$ma_st" in
     "")      row NOTM mods-api "mods-api-drift returned no JSON report, so the mods API was not compared" ;;
     none)    row NOTM mods-api "no saved mods API declarations yet; run: mods-api-drift (local, 0 tokens)" ;;
-    broken)  row NOTM mods-api "$ma_det; fix the extractor in mods-api-drift, never read this as 'no change'" ;;
+    broken)  row NOTM mods-api "$ma_det; fix the capture or extractor in mods-api-drift, never read this as 'no change'" ;;
     unknown) row NOTM mods-api "$ma_det" ;;
-    behind)  row WARN mods-api "$ma_det; run: mods-api-drift (local, 0 tokens), or open a pj session and its hook will" ;;
+    behind)  row WARN mods-api "$ma_det; run: mods-api-drift (local, 0 tokens), or open an engage session and its hook will" ;;
     ok)
       if [ "${ma_un:-0}" -gt 0 ] 2>/dev/null; then
         row WARN mods-api "$ma_un unseen mods API change(s), newest $(printf '%s' "$ma_json" | jq -r '.unseen_steps[0] | "\(.id): \(.summary)"'); list: mods-api-drift list, clear: mods-api-drift seen --all"

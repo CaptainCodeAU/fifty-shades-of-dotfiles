@@ -195,7 +195,7 @@
         "command": "h=\"$HOME/.local/bin/mods-api-drift\"; if [ -x \"$h\" ]; then \"$h\" --hook || true; else printf '%s\\n' '{\"systemMessage\":\"HOOK MISSING: mods-api-drift is registered but ~/.local/bin/mods-api-drift is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\",\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"HOOK MISSING: mods-api-drift is registered but ~/.local/bin/mods-api-drift is missing or not executable, so it did not run. Fix: restore it (dotfiles: ./install.sh --stow-only) or remove this registration.\"}}'; fi",
         "timeout": 30
       },
-      "why": "Claude Mods API drift (F8b, D-20260923-A01/-A06): once per Claude Code update, saves the /plugin-types declarations (local, 0 tokens) and records what changed, which the start card then counts as unseen. Silent, exit 0 always. The card reads the result, so the first session after an update may show it one session late",
+      "why": "Claude Mods API drift (F8b, D-20260923-A01/-A06): once per Claude Code update, saves the mods API declarations, pulled out of the Claude Code program file (local, 0 tokens) and records what changed, which the start card then counts as unseen. Silent, exit 0 always. The card reads the result, so the first session after an update may show it one session late",
       "class": "alarm",
       "legacy_commands": [
         "test -x \"$HOME/.local/bin/mods-api-drift\" && \"$HOME/.local/bin/mods-api-drift\" --hook || true"

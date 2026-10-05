@@ -40,31 +40,31 @@ Never use `npm` or `yarn`. Use `pnpm` (or `bun`). Pick by lockfile:
 
 Emit only ASCII punctuation in source code: straight quotes (`"` `'`), straight apostrophes, and hyphen-minus (`-`). Never write Unicode smart quotes (`“ ” ‘ ’`), en/em dashes (`– —`), or other Unicode punctuation into code files — they pass type-checks but break the build at transform time (the JS/TS build rejects them), and hunting them down afterward wastes a session. Unicode is fine in comments, docs, and string literals meant for display; never in identifiers, keys, or code tokens.
 
-## `.claude/types/` is generated and is NEVER committed
+## Mods API declarations (`claude-code.d.ts`) are NEVER committed
 
-`/plugin-types` (Claude Mods / function hooks, early access) writes three TypeScript
-declaration files into **the folder you run it from**, not the config dir:
-`.claude/types/claude-code.d.ts` and two smaller siblings, about **504 KB**. Ruled by
-Gavin 2026-09-22 (F8a): **do not commit it, and do not gitignore it either.** It is
-generated from an API that changes between releases without notice, so a stale copy sitting
-in the repo is worse than none at all, and a gitignore entry would quietly bless keeping one.
+The TypeScript declarations for Claude Mods (function hooks, early access) are generated
+from an API that changes between releases without notice. Ruled by Gavin 2026-09-22 (F8a):
+**do not commit a copy, and do not gitignore one either.** A stale copy sitting in the repo
+is worse than none at all, and a gitignore entry would quietly bless keeping one. If one
+turns up in this repo, move it out (`command mv` to your scratchpad).
 
-Move it out (`command mv` to your scratchpad) and regenerate on demand:
+**`/plugin-types` no longer exists** (removed in Claude Code 2.1.287; measured 2026-10-05).
+Where the declarations come from now:
 
-```
-CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 pj --profile scratch -p '/plugin-types'
-```
+- **The saved copy for every version:** `~/.local/state/pj/mods-api/<version>/claude-code.d.ts`,
+  with a `SHA256SUMS`. `mods-api-drift` writes it, once per Claude Code update, by pulling
+  the text out of the program file in `~/.local/share/claude/versions/<version>`: no
+  session, 0 tokens, about a second. These copies are the only record of what changed in
+  the mods API, because the public changelog does not say. `mods-api-drift list --all`
+  shows the changes.
+- **Beside a mod:** Claude Code writes `<mod>/.claude-plugin/types/` (core, built-in tools,
+  MCP tools) at every load and reload, with its own `.gitignore` of `*`.
+- **In the `plugin-authoring` skill:** unpacked to `/tmp/claude-<uid>/bundled-skills/` when
+  the skill is used; macOS deletes it after about four days.
 
-The first line of the big file names the version that wrote it, so a copy you already have
-can always be checked against `claude --version`. Without the environment variable the
-command does not exist at all — measured, with the control session reporting it absent.
-
-It costs nothing: a local command, 0 turns, 0 USD, under a second, and it runs inside the
-Bash sandbox (measured 2026-09-23 on 2.1.280, F8b). **Since 2026-09-24 `pj` refuses inside the sandbox**: its
-session-cap check (4 per project, 12 on the machine; W-20260924-A79) needs `ps`, which the sandbox
-blocks, and a count it cannot take is a refusal, never a pass. Run this one with the sandbox off. Kept copies per version live in
-`~/.local/state/pj/mods-api/<version>/` with a `SHA256SUMS`, never in a repo; they are the
-only record of what changed in the mods API, because the public changelog does not say.
+The first line of a saved copy names the version (`// Written by Claude Code <v>.`), so
+any copy can be checked against `claude --version`. `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS` is
+no longer read by Claude Code (2.1.287 on); mods are gated by a server-side flag instead.
 
 ## Verifying: a COUNT or an ABSENCE needs a positive arm
 
