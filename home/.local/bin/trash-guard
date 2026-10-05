@@ -41,6 +41,7 @@
 #                        ([search-timeout]), and so does one that cannot read everything
 #                        ([search-unreadable]). Never an allow on a timeout.
 #   3  ALLOWED although it holds a .git FILE: a linked worktree at <repo>/.worktree/<name>
+#      or <repo>/.claude/worktrees/<name> (Claude Code's own; W-20261005-A49)
 #      whose .git file points into <repo>/.git/worktrees/. It keeps the documented removal
 #      route (rm -r <dir>, then git worktree prune). A worktree holding a nested repo is still
 #      refused.
@@ -213,10 +214,14 @@ _in_temp() { # $1 = physical path -> 0 when strictly INSIDE a temp root
 
 # ---------------------------------------------------------------- a linked worktree (rule 3)
 _is_worktree() { # $1 = physical dir holding .git -> 0 when it is <repo>/.worktree/<name>
+	# or <repo>/.claude/worktrees/<name>, Claude Code's own (EnterWorktree; W-20261005-A49)
 	_p=${1%/*}
-	[ "${_p##*/}" = .worktree ] || return 1
+	case "$_p" in
+	*/.worktree) _repo=${_p%/*} ;;
+	*/.claude/worktrees) _repo=${_p%/.claude/worktrees} ;;
+	*) return 1 ;;
+	esac
 	{ [ -f "$1/.git" ] && [ ! -L "$1/.git" ]; } || return 1
-	_repo=${_p%/*}
 	{ [ -d "$_repo/.git" ] && [ ! -L "$_repo/.git" ]; } || return 1
 	_ln=""
 	IFS= read -r _ln < "$1/.git" 2>/dev/null

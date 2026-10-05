@@ -397,6 +397,45 @@ both new "a worktree that holds a nested repo" c_wt_nested
 both new "a .worktree/<name> whose .git file points outside its repo" c_wt_fake
 both new "a .worktree/<name> whose .git file points into ANOTHER repo's worktrees" c_wt_foreign
 
+# W-20261005-A49: Claude Code's own worktrees (EnterWorktree) live at <repo>/.claude/worktrees/<name>,
+# and the safe route enforce-no-worktree-discard.sh names (rm -r, then git worktree prune) must work
+# there too. Same proof as .worktree/; a look-alike parent folder is still refused.
+mkcwt() { # $1 = folder to hold main/, $2 = parent path inside main -> WT = a real linked worktree
+	mkrepo "$1/main" && : > "$1/main/f" && g -C "$1/main" add f && g -C "$1/main" commit -q -m init \
+		&& mkdir -p "$1/main/$2" && g -C "$1/main" worktree add -q -b wt "$1/main/$2/wt"
+	WT=$1/main/$2/wt
+}
+c_cwt_ok() {
+	local D; D=$(fresh "$FX/outside"); mkcwt "$D" .claude/worktrees
+	[ -f "$WT/.git" ] || { VERDICT=FIXTURE; bad "$ROUTE: fixture: git worktree add made no .git file at $WT"; return; }
+	KEEP=("$D/main/.git")
+	run_route "$ROUTE" "$D" "$WT"
+	expect_allowed "CALL <$WT>"
+}
+c_cwt_nested() {
+	local D; D=$(fresh "$FX/outside"); mkcwt "$D" .claude/worktrees; mkrepo "$WT/vendor/inner"
+	KEEP=("$WT/vendor/inner/.git" "$WT/.git")
+	run_route "$ROUTE" "$D" "$WT"
+	expect_refused nested-repo
+}
+c_cwt_fake() {
+	local D; D=$(fresh "$FX/outside"); mkrepo "$D/main"; mkdir -p "$D/main/.claude/worktrees/x" "$D/elsewhere/.git/worktrees/x"
+	echo "gitdir: $D/elsewhere/.git/worktrees/x" > "$D/main/.claude/worktrees/x/.git"
+	KEEP=("$D/main/.claude/worktrees/x/.git")
+	run_route "$ROUTE" "$D" "$D/main/.claude/worktrees/x"
+	expect_refused repo-root
+}
+c_cwt_lookalike() {
+	local D; D=$(fresh "$FX/outside"); mkcwt "$D" other/worktrees
+	KEEP=("$WT/.git")
+	run_route "$ROUTE" "$D" "$WT"
+	expect_refused repo-root
+}
+both control "a real linked worktree (git worktree add) under .claude/worktrees/" c_cwt_ok
+both new "a .claude/worktrees/<name> worktree that holds a nested repo" c_cwt_nested
+both new "a .claude/worktrees/<name> whose .git file points outside its repo" c_cwt_fake
+both new "a real linked worktree under a look-alike other/worktrees/" c_cwt_lookalike
+
 # ---------------------------------------------------------------- rule 4: temp folders
 section "6. Inside a temp root, repos may go (rule 1 still holds there: see sections 1 and 2)"
 c_tmp_repo() { local D; D=$(fresh "$FX/tmproot"); mkrepo "$D/repo"; KEEP=(); run_route "$ROUTE" "$D" "$D/repo"; expect_allowed "CALL <$D/repo>"; }

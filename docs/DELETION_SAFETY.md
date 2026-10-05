@@ -228,9 +228,11 @@ It is not silent: exactly one line per call on stderr, however many blanks,
 `safe-rm: ignored a blank argument (empty variable?)`. `rm -f "$EMPTY"` in a script keeps
 working and still leaves a trace. The rest of rule 1 is refused on both routes.
 
-**Allowed although it holds a `.git` file:** a linked worktree at `<repo>/.worktree/<name>` whose
-`.git` file points into `<repo>/.git/worktrees/`. That keeps the removal route the agent guard
-names for `git worktree remove` (`rm -r <dir>`, then `git worktree prune`). A worktree holding a
+**Allowed although it holds a `.git` file:** a linked worktree at `<repo>/.worktree/<name>`, or at
+`<repo>/.claude/worktrees/<name>` where Claude Code's `EnterWorktree` puts its own (W-20261005-A49),
+whose `.git` file points into `<repo>/.git/worktrees/`. That keeps the removal route the agent guards
+name for `git worktree remove` and for an `ExitWorktree` discard (`rm -r <dir>`, then
+`git worktree prune`). A look-alike parent (`other/worktrees/<name>`) is refused. A worktree holding a
 nested repo is still refused, and so is a `.worktree/<name>` whose `.git` points anywhere else.
 
 **Temp folders** (rule 2 only): `$TMPDIR`, `/tmp` (`/private/tmp`) and
