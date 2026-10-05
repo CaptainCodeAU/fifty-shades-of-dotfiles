@@ -2375,8 +2375,9 @@ cmd_seen(){
   return 0
 }
 
-# checks-run: the ONLY place a check-script ever runs (P3). pj starts it detached after
-# launch; the card reads what it leaves. For the repo you stand in, every open reach:
+# checks-run: the ONLY place a check-script ever runs (P3). pj started it detached after
+# launch; engage dropped that kick (step 0.5, 29 Sep 2026), so it now runs only when typed.
+# The card reads what it leaves. For the repo you stand in, every open reach:
 # mandatory item with a trusted script (P4) whose cache record is not already a pass or a
 # fail gets one run: clean environment, cwd the repo root, stdin /dev/null, output to a
 # file never a pipe, a hard timeout with a kill after it (P5.4, P3.3). No timeout binary
@@ -2524,6 +2525,9 @@ check_flags "${1:-}"
 # W-20261005-A96: `seen` is not guarded either. It writes only this project's seen state
 # (<state>/seen/<project>), never a drawer, so it files nothing by habit; guarded, the card's
 # Watching and Moved out lines named a route a moved project refused, and stayed there.
+# W-20261006-A02: `checks-run` is not guarded either. It writes only the check cache
+# (<state>/mandatory-cache), never a drawer, so it files nothing by habit; guarded, a moved
+# project's scripted Mandatory items could never pass from there.
 # W-20261002-A48, A49 (engage master 48eb3d1, "The time limit"): the check runs the way pj runs
 # it, under 3 s, and a timeout REFUSES the write (fail closed): engage-go starts as the leader
 # of its own process group (perl setpgrp; bash cannot make one without a terminal), the wait
@@ -2589,7 +2593,7 @@ engage_guard(){                 # engage_guard <verb>
 }
 OI_VERB="${1:-}"
 case "${1:-}" in
-  add|close|decline|park|reopen|set|init|regen|migrate|supersede|watch|check|tick|pass|move|route|checks-run|undo-wrap)
+  add|close|decline|park|reopen|set|init|regen|migrate|supersede|watch|check|tick|pass|move|route|undo-wrap)
     engage_guard "$1" ;;
 esac
 

@@ -2391,9 +2391,9 @@ egw(){ local f="$1" p; shift; if [ "$f" = none ]; then p="$NOEG"; else p="$EG/$f
 eg_state(){ { git -C "$DC" rev-parse HEAD; git -C "$DC" status --porcelain --untracked-files=all
   find "$DC" "$D/state" "$PJ_ID_CLAIMS_DIR" "$D/mig" -path "$DC/.git" -prune -o -type f -print 2>/dev/null | LC_ALL=C sort | while IFS= read -r f; do shasum -a 256 "$f"; done
   } 2>/dev/null | shasum -a 256 | cut -c1-16; }
-# Every verb that writes, read from the dispatcher: the drawer writers, then checks-run (it
-# writes state under PJ_STATE_DIR, not a drawer). `seen` is not here: it is let through
-# (W-20261005-A96), proved by section EG1 below.
+# Every verb that writes a drawer, read from the dispatcher. `seen` and `checks-run` are not
+# here: they write only state under PJ_STATE_DIR, never a drawer, and are let through
+# (W-20261005-A96, W-20261006-A02), proved by sections EG1 and EG1b below.
 EG_WRITES=(
   "add 'filed by habit' --done-when x"
   "close $EGID 'closed by habit'"
@@ -2412,7 +2412,6 @@ EG_WRITES=(
   "pass $EGID zeta"
   "move $EGID --to alpha --why 'by habit'"
   "route $EGID --to alpha --why 'by habit'"
-  "checks-run"
 )
 eg_writes(){   # eg_writes <fake> <text the one line must hold>: sets EGBAD
   local c h0 h1 n; EGBAD=""
@@ -2492,8 +2491,24 @@ for f in m0 m3; do
 done
 egw m0 seen "$EGAW"
 wanteq "EG1 m0: seen <ID> goes through too (rc 0)" "0" "$RC"
-egw m0 checks-run
-wanteq "EG1 control: checks-run is still refused in a moved project (rc 2)" "2" "$RC"
+# EG1b `checks-run` in a moved project (W-20261006-A02). It writes only <state>/mandatory-cache,
+# never a drawer, so it goes through under exit 0 and 3 exactly as in an unmoved project, and
+# engage-go is not asked. Measured 6 Oct 2026: nothing starts it now (engage dropped pj's
+# launch kick at step 0.5), so it runs only when typed. Control: add is still refused (m0).
+egw m1 checks-run; o1="$OUT"; r1="$RC"
+wanteq "EG1b control: checks-run in an unmoved project runs (rc 0, its summary line)" "0 yes" \
+  "$r1 $(case "$o1" in *"checks-run: "*" ran, "*" cached, "*" not run, for "*) printf yes;; *) printf no;; esac)"
+for f in m0 m3; do
+  printf "reset\n" > "$EG/$f/ran"; h0="$(eg_drawers)"
+  egw "$f" checks-run
+  wanteq "EG1b $f: checks-run goes through, same output and rc as unmoved" "$r1|$o1" "$RC|$OUT"
+  wantnot "EG1b $f:   with no engage refusal" "engage add" "$OUT"
+  wanteq "EG1b $f:   the check cache is there" "yes" "$([ -d "$D/state/mandatory-cache" ] && printf yes || printf no)"
+  wanteq "EG1b $f:   no drawer, inbox or commit changed" "$h0" "$(eg_drawers)"
+  wanteq "EG1b $f:   engage-go was not asked" "reset" "$(cat "$EG/$f/ran")"
+done
+h0="$(eg_drawers)"; egw m0 add "filed by habit" --done-when x
+wanteq "EG1b control: add is still refused in a moved project (rc 2), nothing written" "2 same" "$RC $([ "$h0" = "$(eg_drawers)" ] && printf same || printf WROTE)"
 # EG2 the 3 s limit and the first line (W-20261002-A48, A49; contract engage master 48eb3d1).
 # A write's check runs under 3 s; a timeout refuses the write (fail closed), one line naming
 # the hang and engage add. The fakes are bash, and every process they leave carries a marker

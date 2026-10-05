@@ -8,8 +8,8 @@ safety rules P3 to P6 in `docs/OPEN_ITEMS_CROSS_PROJECT_SAFETY.md` of the dotfil
 
 ## Where a script runs, and who runs it
 
-- ONLY `open-items checks-run` runs one. `pj` starts it detached at launch, in the repo it
-  launches in. The start card and `open-items --session` never run a script; they read the
+- ONLY `open-items checks-run` runs one, in the repo it is typed in. `pj` started it at
+  launch; engage does not (step 0.5, 29 Sep 2026), so nothing starts it on its own now. The start card and `open-items --session` never run a script; they read the
   cache the runner leaves (P3).
 - The runner trusts a name only when (P4): it matches `^[a-z0-9][a-z0-9-]{0,63}$`; its real
   path is a regular file directly inside THIS directory of the dotfiles repo that the running
