@@ -1348,7 +1348,12 @@ confirm() {
         no)  echo -e "  ${DIM}↳ ${prompt} → skipped${RESET}"; return 1 ;;
     esac
     if [[ "$DRY_RUN" == true ]]; then
-        echo -e "  ${DIM}[dry-run] Would ask: $prompt${RESET}"
+        # A dry run always declines (it must not wander into code that is not
+        # dry-run safe), but a real run with no terminal takes the DEFAULT -- say
+        # so, or the dry run silently previews a different run (red team, 2026-10-05).
+        local would="answer it at the prompt"
+        [[ -t 0 ]] || { [[ "$default" == "y" ]] && would="go ahead (default yes, no terminal)" || would="skip (default no, no terminal)"; }
+        echo -e "  ${DIM}[dry-run] Would ask: $prompt -- a real run would $would${RESET}"
         return 1
     fi
     local yn
@@ -3223,6 +3228,20 @@ _stow_preflight() {
 # real files is the point, and stow runs with --adopt instead of -R.
 # Run from $REPO_DIR.
 _restow_home() {
+    # Tell dotlinks-watch a deploy is under way (it holds its alarm while this pid
+    # lives: the restow removes links on purpose for a moment), and say "done" on
+    # every way out, so the rest of a long install is watched again.
+    local lstate="${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/links" rc
+    if [[ "$DRY_RUN" != true ]] && mkdir -p "$lstate" 2>/dev/null; then
+        printf '%s\n' "$$" > "$lstate/DEPLOYING" 2>/dev/null || true
+    fi
+    _restow_home_inner "$@"; rc=$?
+    [[ -e "$lstate/DEPLOYING" ]] && { printf 'done\n' > "$lstate/DEPLOYING" 2>/dev/null || true; }
+    return $rc
+}
+
+_restow_home_inner() {
+    _refuse_other_checkout || return 1
     local -a stow_args=(-R --no-folding -t "$HOME" home)
     if [[ "${1:-}" == --adopt ]]; then
         stow_args=(--adopt --no-folding -t "$HOME" home)
@@ -3253,7 +3272,16 @@ _restow_home() {
             printf '%s\n' "$plan" | sed 's/^/    /' >&2
             return 1
         fi
+        # Note where each one points first: if stow still refuses, or the real
+        # stow fails, they are put back exactly as they were. One of them can be
+        # a folded dir that works today (~/.claude/hooks, say), and losing it is
+        # the 2026-10-05 outage again in miniature.
+        RESTOW_REMOVED=() RESTOW_TARGETS=()
+        # Killed part-way (Ctrl-C, SIGTERM): put the removed links back first.
+        trap '_restow_put_back; trap - INT TERM; exit 130' INT TERM
         for rel in "${unowned[@]}"; do
+            RESTOW_REMOVED+=("$rel")
+            RESTOW_TARGETS+=("$(readlink "$HOME/$rel")")
             verbose "Removing stale link: ~/$rel → $(readlink "$HOME/$rel")"
             run_cmd "$SAFE_RM" "$HOME/$rel"
         done
@@ -3265,11 +3293,194 @@ _restow_home() {
         if [[ "$DRY_RUN" != true ]] && ! plan=$(stow -n "${stow_args[@]}" 2>&1); then
             error "stow's dry run still refused after removing those stale links; nothing was linked:"
             printf '%s\n' "$plan" | sed 's/^/    /' >&2
+            _restow_put_back
+            trap - INT TERM
             return 1
         fi
     fi
     [[ "$VERBOSE" == true ]] && stow_args=("${stow_args[0]}" -v "${stow_args[@]:1}")
-    run_cmd stow "${stow_args[@]}"
+    if ! run_cmd stow "${stow_args[@]}"; then
+        [[ "$DRY_RUN" != true ]] && _restow_put_back
+        trap - INT TERM
+        return 1
+    fi
+    trap - INT TERM
+}
+
+# Deploy only from the one checkout ~ already points at. Run from a linked
+# worktree or a second clone, stow would re-point every link in ~ into that copy
+# -- and when the copy is removed (worktree cleanup, the temp sweep) every link
+# dangles (red team, 2026-10-05, measured). A repo that was MOVED is fine: the
+# old path no longer exists. A temp-dir copy only warns: into an empty ~ (a
+# fresh machine, a test) there is nothing to re-point.
+_refuse_other_checkout() {
+    local gd cd here other
+    gd=$(git -C "$REPO_DIR" rev-parse --absolute-git-dir 2>/dev/null) || gd=""
+    cd=$(cd "$REPO_DIR" && git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || cd=""
+    if [[ -n "$gd" && -n "$cd" && "$gd" != "$cd" ]]; then
+        error "Refusing to deploy from a linked worktree ($(pretty_path "$REPO_DIR")): ~ would point into a copy that gets removed. Run install.sh from the main checkout."
+        return 1
+    fi
+    here=$(cd "$REPO_DIR" && pwd -P)
+    case "$here/" in
+        "${TMPDIR:-/nonexistent}"*|/tmp/*|/private/tmp/*|/private/var/folders/*)
+            warn "Deploying from a temporary copy ($here): every link in ~ will dangle once it is swept." ;;
+    esac
+    # Where does ~ point today? Follow ~/.zshrc (always stowed) to its repo.
+    if [[ -L "$HOME/.zshrc" ]]; then
+        other=$(cd "$(dirname "$HOME/.zshrc")" && cd "$(dirname "$(readlink "$HOME/.zshrc")")" 2>/dev/null && pwd -P) || other=""
+        other=${other%/home}
+        if [[ -n "$other" && "$other" != "$here" && -d "$other/home" ]]; then
+            error "Refusing: ~ is deployed from $other, not from $here. Run install.sh from there, or move one copy away first."
+            return 1
+        fi
+    fi
+    return 0
+}
+
+# After a good deploy, record every link (~/.local/state/dotfiles/links/current.tsv)
+# and keep a REAL-FILE copy of home/.local/bin/dotlinks beside it as `restore`, so
+#   sh ~/.local/state/dotfiles/links/restore
+# rebuilds ~ from any terminal even when every link is gone -- no hooks, no
+# .zshrc, no ~/.local/bin (W-20261005-A48 follow-up; the 5 Oct outage needed
+# archaeology instead). ~/.local/state holds nothing stowed, so a failed restow
+# cannot take this with it. Never records a broken state: every path stow would
+# link (every file under home/, minus what stow ignores) must be a link into
+# this repo, or the snapshot is refused and the last good one kept.
+_snapshot_links() {
+    local dir="${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/links"
+    local rel t lt n=0 good=0 tmp list
+    [[ "$DRY_RUN" == true ]] && { info "[dry-run] Would record the link manifest in $(pretty_path "$dir")"; return 0; }
+    mkdir -p "$dir" || { warn "Link manifest NOT written: cannot create $(pretty_path "$dir")"; return 0; }
+    # Every file stow would link: tracked AND untracked, gitignored ones included
+    # (stow reads .stow-local-ignore, not .gitignore -- a gitignored tool in
+    # ~/.local/bin is still linked, measured); stow's own ignores are dropped below.
+    if ! list=$(git -C "$REPO_DIR" ls-files -co -- home 2>/dev/null); then
+        warn "Link manifest NOT written: git could not list home/"
+        return 0
+    fi
+    tmp="$dir/current.tsv.tmp.$$"
+    : > "$tmp" || { warn "Link manifest NOT written: $(pretty_path "$dir") is not writable"; return 0; }
+    while IFS= read -r rel; do
+        rel=${rel#home/}
+        [[ -n "$rel" ]] || continue
+        _conflict_check_ignored "$rel" && continue
+        n=$((n+1))
+        t="$HOME/$rel"
+        if [[ -L "$t" ]] && lt=$(readlink "$t") && [[ "$lt" == *"fifty-shades-of-dotfiles/home/$rel" ]]; then
+            printf '%s\t%s\n' "$rel" "$lt" >> "$tmp"
+            good=$((good+1))
+        else
+            warn "  not a repo link: ~/$rel"
+        fi
+    done <<< "$list"
+    if (( n == 0 || good != n )); then
+        mv -f "$tmp" "$dir/rejected.tsv"
+        warn "Link manifest NOT updated: $good of $n paths are repo links, so this deploy is not recorded as good (kept the last good one; this attempt is in $(pretty_path "$dir/rejected.tsv"))"
+        return 0
+    fi
+    [[ -f "$dir/current.tsv" ]] && mv -f "$dir/current.tsv" "$dir/previous.tsv"
+    mv -f "$tmp" "$dir/current.tsv"
+    if cp "$REPO_DIR/home/.local/bin/dotlinks" "$dir/restore.tmp.$$" && chmod 755 "$dir/restore.tmp.$$" \
+        && mv -f "$dir/restore.tmp.$$" "$dir/restore"; then
+        info "Link manifest: $good of $n paths recorded. If links ever go missing: ${CYAN}sh $(pretty_path "$dir/restore")${RESET}"
+    else
+        warn "Link manifest written, but the restore script copy failed"
+    fi
+    _install_links_watch "$dir"
+    _zshenv_links_warning
+}
+
+# A marked block in the REAL ~/.zshenv (not stowed, so it survives a failed
+# restow) that speaks up in a new interactive shell when the links are gone:
+# on 2026-10-05 a new terminal just opened without .zshrc, silently, with plain
+# `rm` falling through to the permanent /bin/rm. Two -L tests per shell; silent
+# when healthy. Added with consent, written by temp + rename, kept if present.
+_zshenv_links_warning() {
+    local f="$HOME/.zshenv" begin="# >>> fifty-shades links-warning >>>" end="# <<< fifty-shades links-warning <<<"
+    local nb ne
+    nb=$(grep -cxF "$begin" "$f" 2>/dev/null) || nb=0
+    ne=$(grep -cxF "$end" "$f" 2>/dev/null) || ne=0
+    if [[ "$nb" == 1 && "$ne" == 1 ]]; then verbose "~/.zshenv links-warning block present"; return 0; fi
+    if [[ "$nb" != 0 || "$ne" != 0 ]]; then
+        warn "~/.zshenv has a half links-warning block (markers not one each); fix it by hand, then re-run."
+        return 0
+    fi
+    if [[ -L "$f" ]]; then warn "~/.zshenv is a symlink; not adding the links-warning block to it."; return 0; fi
+    info "A marked block in ~/.zshenv warns a new terminal when the dotfiles links are gone, and names the one-command restore."
+    confirm "Add the links-warning block to ~/.zshenv?" "y" || return 0
+    {
+        [[ -f "$f" ]] && cat "$f"
+        cat <<'BLOCK'
+# >>> fifty-shades links-warning >>>
+# Added by fifty-shades-of-dotfiles install.sh (outage of 2026-10-05). Silent when the
+# links are healthy. Remove the whole block (both marker lines) to opt out.
+if [[ -o interactive && -f "${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/links/current.tsv" ]] \
+   && { [[ ! -L "$HOME/.zshrc" ]] || [[ ! -L "$HOME/.claude/hooks/validate-bash.sh" ]]; }; then
+  print -u2 -- "DOTFILES LINKS MISSING: this shell has no dotfiles setup, Claude sessions are blocked, and plain rm is the PERMANENT /bin/rm here."
+  print -u2 -- "  Restore (no hooks or dotfiles needed, deletes nothing, safe to run twice): sh ${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/links/restore"
+fi
+# <<< fifty-shades links-warning <<<
+BLOCK
+    } > "$f.tmp.$$" && mv -f "$f.tmp.$$" "$f" && success "links-warning block added to ~/.zshenv" \
+        || warn "could not write ~/.zshenv"
+}
+
+# Run dotlinks-watch as a launchd agent (macOS), from a REAL-FILE copy beside the
+# manifest -- never through the ~/.local/bin link, which the very outage it
+# reports would remove. The plist is a real file too. Reloaded only when either
+# changed, so a re-run is a no-op.
+_install_links_watch() {
+    local dir="$1" label="com.captaincodeau.dotlinks-watch" plist tmp changed=0 uid
+    [[ "$(check_os)" == "macos" ]] || { verbose "dotlinks-watch: launchd agent is macOS only (skipped)"; return 0; }
+    plist="$HOME/Library/LaunchAgents/$label.plist"
+    if ! cmp -s "$REPO_DIR/home/.local/bin/dotlinks-watch" "$dir/watch" 2>/dev/null; then
+        cp "$REPO_DIR/home/.local/bin/dotlinks-watch" "$dir/watch.tmp.$$" && chmod 755 "$dir/watch.tmp.$$" \
+            && mv -f "$dir/watch.tmp.$$" "$dir/watch" || { warn "dotlinks-watch NOT installed: could not copy it to $(pretty_path "$dir")"; return 0; }
+        changed=1
+    fi
+    mkdir -p "$HOME/Library/LaunchAgents" || return 0
+    tmp="$plist.tmp.$$"
+    cat > "$tmp" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$label</string>
+  <key>ProgramArguments</key><array><string>/bin/zsh</string><string>-f</string><string>$dir/watch</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardErrorPath</key><string>$dir/watch.err</string>
+</dict>
+</plist>
+PLIST
+    cmp -s "$tmp" "$plist" 2>/dev/null || changed=1
+    mv -f "$tmp" "$plist"   # identical bytes when unchanged; never a delete
+    uid=$(id -u)
+    if (( changed )) || ! launchctl print "gui/$uid/$label" >/dev/null 2>&1; then
+        launchctl bootout "gui/$uid/$label" >/dev/null 2>&1 || true
+        if launchctl bootstrap "gui/$uid" "$plist" 2>/dev/null; then
+            info "dotlinks-watch running (launchd $label): a broken link is reported within seconds"
+        else
+            warn "dotlinks-watch NOT started: launchctl bootstrap gui/$uid $plist failed (run it by hand to see why)"
+        fi
+    fi
+}
+
+# Recreate the links _restow_home removed (RESTOW_REMOVED / RESTOW_TARGETS),
+# each exactly as it pointed before, wherever nothing has taken its place.
+RESTOW_REMOVED=() RESTOW_TARGETS=()
+_restow_put_back() {
+    local i=0 n=0 p
+    while (( i < ${#RESTOW_REMOVED[@]} )); do
+        p="$HOME/${RESTOW_REMOVED[$i]}"
+        if [[ ! -e "$p" && ! -L "$p" ]] && ln -s "${RESTOW_TARGETS[$i]}" "$p"; then
+            n=$((n+1))
+        fi
+        i=$((i+1))
+    done
+    (( ${#RESTOW_REMOVED[@]} == 0 )) || warn "Put back $n of ${#RESTOW_REMOVED[@]} removed link(s) as they were."
 }
 
 # Mirrors home/.stow-local-ignore (the file stow itself reads) and
@@ -3298,6 +3509,22 @@ _conflict_check_ignored() {
         .Spotlight-V100|*/.Spotlight-V100|.Trashes|*/.Trashes) return 0 ;;
     esac
     return 1
+}
+
+# "orig|backup" for every real file check_conflicts moved aside, so a stow that
+# then fails can put them back (_restore_conflict_backups).
+CONFLICT_MOVED=()
+_restore_conflict_backups() {
+    local pair orig bak n=0
+    (( ${#CONFLICT_MOVED[@]} )) || return 0
+    [[ "$DRY_RUN" == true ]] && return 0
+    for pair in "${CONFLICT_MOVED[@]}"; do
+        orig=${pair%%|*} bak=${pair#*|}
+        if [[ ! -e "$orig" && ! -L "$orig" && -e "$bak" ]] && mv "$bak" "$orig"; then
+            n=$((n+1))
+        fi
+    done
+    warn "stow failed, so the $n of ${#CONFLICT_MOVED[@]} file(s) backed up for it were moved back into place."
 }
 
 check_conflicts() {
@@ -3364,6 +3591,7 @@ check_conflicts() {
                 local rel="${f#$HOME/}"
                 run_cmd mkdir -p "$backup_dir/$(dirname "$rel")"
                 run_cmd mv "$f" "$backup_dir/$rel"
+                CONFLICT_MOVED+=("$f|$backup_dir/$rel")
                 info "Backed up: ~/$rel → $(pretty_path "$backup_dir")/$rel"
             done
             success "Conflicts backed up to $(pretty_path "$backup_dir")"
@@ -3391,11 +3619,14 @@ stow_home() {
     # SUCCEEDED before trusting it; a truncated plan looks like a plan. See CLAUDE.md.
     if _restow_home; then
         success "home/ stowed successfully"
+        _snapshot_links
     else
-        error "stow did not run; your existing links were left in place."
-        echo -e "  ${CYAN}Re-install?${RESET}  Try ${CYAN}./install.sh --update${RESET}"
-        echo -e "  ${CYAN}Real files?${RESET}  Try ${CYAN}./install.sh --force${RESET}"
-        echo -e "  ${CYAN}Debug?${RESET}       Try ${CYAN}./install.sh --verbose${RESET}"
+        # Not "stow did not run": a stow that passed its dry run can still fail
+        # part-way, so say how to find out rather than guess.
+        error "stow did not complete."
+        echo -e "  ${CYAN}What is linked now?${RESET}  ${CYAN}sh ~/.local/state/dotfiles/links/restore check${RESET}" >&2
+        echo -e "  ${CYAN}Put the last good links back:${RESET}  ${CYAN}sh ~/.local/state/dotfiles/links/restore${RESET} (moves blocking files aside, deletes nothing)" >&2
+        echo -e "  ${CYAN}Details:${RESET}  ./install.sh --verbose --stow-only" >&2
         return 1
     fi
 
@@ -3773,6 +4004,15 @@ uninstall() {
         [[ "$VERBOSE" == true ]] && stow_args=(-D --no-folding -v -t "$HOME" home)
         if run_cmd stow "${stow_args[@]}"; then
             success "Symlinks removed"
+            # Retire the link manifest and stop the watcher, so nothing "restores" or
+            # alarms about a deliberate uninstall.
+            local lm="${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/links/current.tsv"
+            local wl="$HOME/Library/LaunchAgents/com.captaincodeau.dotlinks-watch.plist"
+            [[ -f "$lm" ]] && run_cmd mv -f "$lm" "${lm%.tsv}.retired-$(date +%Y%m%d-%H%M%S).tsv"
+            if [[ -f "$wl" ]]; then
+                run_cmd launchctl bootout "gui/$(id -u)/com.captaincodeau.dotlinks-watch" 2>/dev/null || true
+                run_cmd mv -f "$wl" "$wl.retired-$(date +%Y%m%d-%H%M%S)"
+            fi
         else
             error "stow -D failed"
             return 1
@@ -3825,9 +4065,10 @@ update() {
     info "Restowing home/ → ~/"
     # Same sandbox caveat as stow_home() -- see the note there before trusting a dry run.
     if ! _restow_home; then
-        error "Restow did not run; your existing links were left in place."
+        error "Restow did not complete; check the links with: ${CYAN}sh ~/.local/state/dotfiles/links/restore check${RESET}"
         return 1
     fi
+    _snapshot_links
 
     stow_platform
 
@@ -3847,14 +4088,27 @@ force_adopt() {
     warn "After adoption, use 'git diff' to review what changed."
     echo
 
+    # --adopt overwrites repo files in the working tree. With uncommitted edits
+    # under home/ (this session's, or another session's in the same checkout)
+    # those edits would be lost, and git cannot bring them back.
+    local dirty
+    dirty=$(git -C "$REPO_DIR" status --porcelain -- home 2>/dev/null)
+    if [[ -n "$dirty" ]]; then
+        error "Refusing --force: home/ has uncommitted changes that adoption would overwrite:"
+        printf '%s\n' "$dirty" | sed 's/^/    /' >&2
+        echo -e "  Commit them (or ask the session that owns them) first." >&2
+        return 1
+    fi
+
     if confirm "Proceed with stow --adopt?"; then
         # force_adopt also (re)applies the hijack functions -- same gate as
         # every other path that stows home/.zshrc.
         _gate_toolchain_takeover
         if ! _restow_home --adopt; then
-            error "Adoption did not run; your existing links were left in place."
+            error "Adoption did not complete; check the links with: ${CYAN}sh ~/.local/state/dotfiles/links/restore check${RESET}"
             return 1
         fi
+        _snapshot_links
         success "Adoption complete."
         echo
         info "Review changes with: ${CYAN}git diff${RESET}"
@@ -4178,7 +4432,8 @@ _write_pj_machine_file() {
                 echo -e "  ${DIM}[dry-run] Would drop the retired 'range: $existing_range' line from $f, keeping letter $existing_letter${RESET}"
                 return 0
             fi
-            printf 'name: %s\nletter: %s\n' "$name" "$existing_letter" > "$f" \
+            # temp + rename: a failed write must never leave a half-written file pj-id refuses
+            printf 'name: %s\nletter: %s\n' "$name" "$existing_letter" > "$f.tmp.$$" && mv -f "$f.tmp.$$" "$f" \
                 && success "pj machine file tidied: dropped the retired 'range:' line from $f (letter $existing_letter kept)" \
                 || warn "could not rewrite $f"
             return 0
@@ -4207,7 +4462,7 @@ _write_pj_machine_file() {
         return 0
     fi
     mkdir -p "$(dirname "$f")" || { warn "could not create $(dirname "$f"); pj-id will refuse to allocate IDs"; return 0; }
-    printf 'name: %s\nletter: %s\n' "$name" "$letter" > "$f" || { warn "could not write $f"; return 0; }
+    { printf 'name: %s\nletter: %s\n' "$name" "$letter" > "$f.tmp.$$" && mv -f "$f.tmp.$$" "$f"; } || { warn "could not write $f"; return 0; }
     success "pj machine file written: $f (name: $name, letter: $letter -- IDs here read X-YYYYMMDD-${letter}NN)"
 }
 
@@ -4576,7 +4831,12 @@ main() {
     _gate_toolchain_takeover
 
     # --- Stow ---
-    stow_home
+    # If stow fails, put back the real files check_conflicts moved into
+    # ~/dotfiles-backup/, rather than leaving those paths empty in ~.
+    if ! stow_home; then
+        _restore_conflict_backups
+        exit 1
+    fi
 
     # --- Platform files ---
     stow_platform

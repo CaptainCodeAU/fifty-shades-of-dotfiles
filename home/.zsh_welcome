@@ -449,11 +449,14 @@ __show_welcome_full() {
                     .DS_Store|*/.DS_Store|.stow-local-ignore|*/.stow-local-ignore) continue ;;
                     */__pycache__/*|*.pyc) continue ;;
                 esac
-                [[ -e "$HOME/$rel" || -L "$HOME/$rel" ]] || echo "$rel"
+                # Linked INTO THIS REPO, not merely present: a real file where the
+                # link belongs, a dangling link or a link elsewhere all count (they
+                # read as fine before 2026-10-05, when one real file stopped a restow).
+                [[ -L "$HOME/$rel" && "$HOME/$rel" -ef "$_dotrepo/home/$rel" ]] || echo "$rel"
             done)
             if [[ -n "$_undeployed" ]]; then
                 local _n=$(echo "$_undeployed" | wc -l | tr -d ' ')
-                echo "    deploy: ${err}${_n} tracked file(s) NOT linked into ~/ — run ./install.sh --stow-only${done}"
+                echo "    deploy: ${err}${_n} tracked file(s) NOT linked into ~/ (missing, a real file, or a wrong link) — run ./install.sh --stow-only, or with no hooks working: sh ~/.local/state/dotfiles/links/restore${done}"
                 echo "$_undeployed" | head -3 | sed "s|^|      ${err}✗${done} ~/|"
                 (( _n > 3 )) && echo "      ${info}...and $(( _n - 3 )) more (./install.sh --check lists all)${done}"
             fi

@@ -274,6 +274,11 @@ export ZSH="$HOME/.oh-my-zsh"
 
 # Powerlevel9k Instant Prompt (off by default)
 typeset -g POWERLEVEL9K_INSTANT_PROMPT=off
+# On purpose, not by accident: `p10k configure` replaces ~/.p10k.zsh (and can
+# mv a new ~/.zshrc over the link) with REAL files, which then block a restow
+# (2026-10-05 sweep). Until now only the line above kept the wizard from starting
+# on its own. Edit home/.p10k.zsh in the repo instead.
+typeset -g POWERLEVEL9K_DISABLE_CONFIGURATION_WIZARD=true
 
 # --- Powerlevel10k Instant Prompt (Load First) ---
 # Must be sourced before Zsh is initialized for speed.
@@ -388,6 +393,13 @@ uv-cooldown-bump() {
     target="${UV_COOLDOWN_FILE:-$HOME/.config/uv/uv.toml}"
     new=$(date -u -v-3d +%Y-%m-%dT00:00:00Z 2>/dev/null || date -u -d '3 days ago' +%Y-%m-%dT00:00:00Z 2>/dev/null)
     [[ -n "$new" ]] || { print -ru2 -- "uv-cooldown-bump: could not compute a date"; return 1 }
+    # The default path is stowed. With its link missing, writing here would plant a
+    # real file where stow wants the link -- what stopped the 2026-10-05 restow
+    # (W-20261005-A48, there via yt). Refuse and point at the restore instead.
+    if [[ -z "${UV_COOLDOWN_FILE-}" && ! -L "$target" ]]; then
+        print -ru2 -- "uv-cooldown-bump: $target is not the stowed link (missing, or a real file), so not writing it. Put the dotfiles links back first: sh ~/.local/state/dotfiles/links/restore"
+        return 1
+    fi
     # Writing THROUGH a stow symlink normally means you are polluting tracked source by
     # accident. Here it is the intent -- the cutoff is a committed fact -- so say so loudly
     # rather than let it look like the usual mistake.

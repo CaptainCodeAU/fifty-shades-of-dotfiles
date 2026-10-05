@@ -1,0 +1,75 @@
+#!/bin/sh
+# dotlinks -- check or restore every stowed dotfiles link from the manifest that
+# install.sh writes after each good deploy (~/.local/state/dotfiles/links/).
+#
+# BREAK-GLASS: install.sh also keeps a REAL-FILE copy of this script there, so
+#   sh ~/.local/state/dotfiles/links/restore
+# works from any terminal when every link is gone: no stow, no hooks, no
+# ~/.zshrc, no ~/.local/bin, no rm. Only /bin/sh, ln, mv, mkdir, readlink, cmp.
+# On 2026-10-05 a failed restow left ~ with no links and every Claude session's
+# Bash denied (W-20261005-A48); this is the one command that undoes that.
+#
+#   dotlinks [restore] [--report-only]   link what is missing, move shadowing files aside
+#   dotlinks check                       read-only; exit 0 only when every row is right
+#
+# restore, row by row:
+#   right already            left alone
+#   missing                  linked
+#   SHADOWED (a real file or a foreign link where the link belongs)
+#                            MOVED ASIDE into links/moved-aside/<time>/ (never deleted),
+#                            then linked; it says whether the file matched the repo copy.
+#                            --report-only reports it and leaves it.
+#   would dangle             REFUSED (the repo moved, or the file left the repo)
+# Safe to run twice: the second run changes nothing and says so.
+# Exit: 0 every row right afterwards, 1 rows left wrong, 2 cannot run.
+# Env: DOTLINKS_TARGET (default $HOME), DOTLINKS_MANIFEST (default <state>/current.tsv).
+
+state=${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/links
+target=${DOTLINKS_TARGET:-$HOME}
+man=${DOTLINKS_MANIFEST:-$state/current.tsv}
+cmd=restore report_only=
+for a in "$@"; do
+  case $a in
+    restore|check) cmd=$a ;;
+    --report-only) report_only=1 ;;
+    -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
+    *) echo "dotlinks: unknown argument '$a' (try --help)" >&2; exit 2 ;;
+  esac
+done
+TAB=$(printf '\t')
+[ -s "$man" ] || { echo "dotlinks: cannot run: manifest $man is missing or empty (it is written by install.sh after a good deploy)" >&2; exit 2; }
+[ -d "$target" ] || { echo "dotlinks: cannot run: target $target is not a directory" >&2; exit 2; }
+qdir="$state/moved-aside/$(date +%Y%m%d-%H%M%S)"
+
+rows=0 ok=0 linked=0 absent=0 shadow=0 moved=0 refused=0
+while IFS="$TAB" read -r rel lt; do
+  [ -n "$rel" ] || continue
+  rows=$((rows+1))
+  t="$target/$rel"; parent=$(dirname "$t")
+  if [ -L "$t" ] && [ "$(readlink "$t")" = "$lt" ]; then ok=$((ok+1)); continue; fi
+  # where the recorded link points, resolved from its own directory
+  case $lt in /*) dest=$lt ;; *) dest="$parent/$lt" ;; esac
+  if [ -e "$t" ] || [ -L "$t" ]; then
+    if [ "$cmd" = check ] || [ -n "$report_only" ]; then
+      shadow=$((shadow+1)); echo "  SHADOWED ~/$rel (a real file or another link sits where the repo link belongs)"; continue
+    fi
+    same="differs from the repo copy"
+    [ -f "$t" ] && [ ! -L "$t" ] && [ -e "$dest" ] && cmp -s "$t" "$dest" && same="identical to the repo copy"
+    if mkdir -p "$qdir/$(dirname "$rel")" && mv "$t" "$qdir/$rel"; then
+      moved=$((moved+1)); echo "  MOVED ASIDE ~/$rel -> $qdir/$rel ($same)"
+    else
+      shadow=$((shadow+1)); echo "  SHADOWED ~/$rel: could not move it aside, left as it is"; continue
+    fi
+  fi
+  if [ "$cmd" = check ]; then absent=$((absent+1)); echo "  MISSING ~/$rel"; continue; fi
+  if [ ! -e "$dest" ] && [ ! -L "$dest" ]; then refused=$((refused+1)); echo "  REFUSED ~/$rel: the link would dangle ($lt)"; continue; fi
+  if mkdir -p "$parent" && ln -s "$lt" "$t"; then linked=$((linked+1)); else refused=$((refused+1)); echo "  REFUSED ~/$rel: could not create the link"; fi
+done < "$man"
+
+if [ "$cmd" = check ]; then
+  echo "dotlinks check: $rows rows: $ok right, $absent missing, $shadow shadowed (manifest $man)"
+  [ "$ok" -eq "$rows" ] && exit 0 || exit 1
+fi
+echo "dotlinks restore: $rows rows: $ok already right, $linked linked, $moved moved aside, $shadow shadowed left, $refused refused"
+[ "$moved" -gt 0 ] && echo "  moved-aside files are in $qdir (nothing was deleted)"
+[ $((shadow+refused)) -eq 0 ] && exit 0 || exit 1

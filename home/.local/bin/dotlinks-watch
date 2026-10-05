@@ -1,0 +1,88 @@
+#!/bin/zsh -f
+# dotlinks-watch -- notice within seconds when the stowed dotfiles links break.
+#
+# On 2026-10-05 every link was gone for 6.5 minutes and nothing on the machine
+# noticed; Gavin heard because the session that caused it said so. This polls the
+# manifest install.sh writes after each good deploy (~/.local/state/dotfiles/links/
+# current.tsv) and acts only on a CHANGE of state, never per poll:
+#   broken  -> writes links/STATE starting "broken since ..." (what is wrong),
+#              one macOS notification with the restore command, one log line;
+#   healthy -> rewrites STATE as "healthy since ...", one log line.
+# Readers (the start card, the .zshenv warning) treat only a STATE that starts
+# with "broken" as the alarm.
+# While install.sh is deploying (links/DEPLOYING holds a LIVE pid) it holds its
+# alarm: a restow briefly removes links on purpose. A dead pid holds nothing.
+#
+# Run by launchd from a REAL-FILE copy (links/watch), installed by install.sh, so
+# a failed restow cannot take the watcher with it. zsh builtins only per poll
+# (zstat reads a link without a fork): ~1 ms for ~190 links.
+#
+#   dotlinks-watch            poll forever (what launchd runs)
+#   dotlinks-watch --once     one poll, print the verdict, exit 0 healthy / 1 broken / 2 cannot run
+# Env: DOTLINKS_WATCH_INTERVAL (s, default 2), DOTLINKS_TARGET (default $HOME),
+#      DOTLINKS_NOTIFY=0 to skip the notification (tests).
+zmodload zsh/stat zsh/datetime || exit 2
+state=${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/links
+target=${DOTLINKS_TARGET:-$HOME}
+man=$state/current.tsv out=$state/STATE log=$state/watch.log
+interval=${DOTLINKS_WATCH_INTERVAL:-2}
+once=0; [[ ${1-} == --once ]] && once=1
+
+poll() {   # sets bad=( "VERDICT rel" ... ); returns 2 when it cannot judge
+  local rel lt t; local -a cur
+  bad=()
+  [[ -s $man ]] || return 2
+  while IFS=$'\t' read -r rel lt; do
+    [[ -n $rel ]] || continue
+    t=$target/$rel
+    if [[ -L $t ]]; then
+      zstat -A cur -L +link -- $t 2>/dev/null && [[ ${cur[1]} == $lt ]] && continue
+      bad+=("WRONG LINK ~/$rel")
+    elif [[ -e $t ]]; then
+      zstat -A cur -F '%H:%M:%S' +mtime -- $t 2>/dev/null
+      bad+=("SHADOWED ~/$rel (a real file, modified ${cur[1]:-?})")
+    else
+      bad+=("MISSING ~/$rel")
+    fi
+  done < $man
+  return 0
+}
+
+deploying() { local p; [[ -s $state/DEPLOYING ]] && p=$(<$state/DEPLOYING) && [[ $p == <-> ]] && kill -0 $p 2>/dev/null; }
+
+restore_line="sh ${state/#$HOME/~}/restore"
+if (( once )); then
+  poll; rc=$?
+  (( rc == 2 )) && { print -u2 "dotlinks-watch: cannot judge: no manifest at $man"; exit 2; }
+  if (( ${#bad} )); then print -l -- "dotlinks-watch: ${#bad} link(s) wrong:" "${bad[@]}" "restore: $restore_line"; exit 1; fi
+  print -- "dotlinks-watch: every link in the manifest is right ($(grep -c . $man) checked)"; exit 0
+fi
+
+was=ok first=""
+while true; do
+  if deploying; then sleep $interval; continue; fi
+  poll
+  if (( ${#bad} )); then
+    now=$(strftime '%Y-%m-%d %H:%M:%S' $EPOCHSECONDS)
+    if [[ $was == ok ]]; then
+      first=$now
+      print -r -- "$now BROKEN ${#bad} link(s): ${bad[1]}${bad[2]:+, ${bad[2]}}" >> $log
+      if [[ ${DOTLINKS_NOTIFY:-1} != 0 ]]; then
+        /usr/bin/osascript -e "display notification \"${#bad} link(s) wrong, e.g. ${bad[1]//\"/}. Restore: $restore_line\" with title \"Dotfiles links broken\"" >/dev/null 2>&1
+      fi
+    fi
+    { print -r -- "broken since $first (last checked $now): ${#bad} link(s) wrong"
+      print -r -- "restore (no hooks or dotfiles needed, safe to run twice): $restore_line"
+      print -rl -- "${(@)bad[1,20]}"
+      if (( ${#bad} > 20 )); then print -r -- "...and $(( ${#bad} - 20 )) more"; fi
+    } > $out.tmp && mv -f $out.tmp $out   # (an `(( )) && print` last line made this group "fail" and skip the mv)
+    was=bad
+  elif [[ $was == bad ]]; then
+    now=$(strftime '%Y-%m-%d %H:%M:%S' $EPOCHSECONDS)
+    print -r -- "$now HEALTHY again (broken since $first)" >> $log
+    # rewritten, never truncated: readers take a STATE starting "broken" as the alarm
+    print -r -- "healthy since $now (was broken since $first)" > $out.tmp && mv -f $out.tmp $out
+    was=ok
+  fi
+  sleep $interval
+done

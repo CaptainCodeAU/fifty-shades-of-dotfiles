@@ -18,9 +18,12 @@
 #
 # The cause was not stow. Symlink birth times showed the bulk created
 # 2026-07-16 and each newer script linked individually on the day it was
-# written -- `stow -R` relinks EVERYTHING in one pass and would stamp them
-# identically. So deploying a new file is a manual step somebody has to
-# remember, it was forgotten twice, and there was no detector.
+# written. (This used to say `stow -R` relinks everything in one pass and would
+# stamp them identically. It does not: stow 2.4.1 leaves an unchanged link
+# alone, same inode and birth time -- measured 2026-10-05. The conclusion
+# stands on the individual birth times alone.) So deploying a new file is a
+# manual step somebody has to remember, it was forgotten twice, and there was
+# no detector.
 #
 # WHY IT IS A SCRIPT AND NOT THREE COPIES
 # ---------------------------------------
@@ -40,7 +43,8 @@
 #
 # EXIT CODES
 #   0  every tracked file is deployed (or the repo could not be located)
-#   1  something is MISSING or SHADOWED, or a detector assertion failed
+#   1  something is MISSING, SHADOWED or a WRONG link (dangling, or not into
+#      this repo), or a detector assertion failed
 # ============================================================================
 
 import os
@@ -63,13 +67,23 @@ def is_ignored(rel: str) -> bool:
     return "__pycache__" in parts or rel.endswith(".pyc")
 
 
-def classify(rel: str, target_root: Path) -> str:
-    """OK | MISSING | SHADOWED -- the one detector both callers and the
+def classify(rel: str, target_root: Path, repo_home: Path | None = None) -> str:
+    """OK | MISSING | SHADOWED | WRONG -- the one detector both callers and the
     self-test exercise. MISSING and SHADOWED need different fixes, so they
-    are never collapsed into one verdict."""
+    are never collapsed into one verdict. With repo_home, a link only counts
+    as OK when it resolves to repo_home/rel: a dangling link, or one into
+    another copy of the repo, is WRONG (it used to read OK -- found by the
+    2026-10-05 outage investigation)."""
     t = target_root / rel
     if t.is_symlink():
-        return "OK"
+        if repo_home is None:
+            return "OK"
+        try:
+            want = (repo_home / rel).resolve(strict=True)
+            got = t.resolve(strict=True)
+        except (OSError, RuntimeError):
+            return "WRONG"
+        return "OK" if got == want else "WRONG"
     if t.exists():
         return "SHADOWED"
     return "MISSING"
@@ -110,6 +124,23 @@ def self_test() -> list[str]:
         if classify("nothing/at/all", root) == "OK":
             failures.append("an entirely absent path scored OK -- the 2026-08-01 blind spot is back")
 
+        # With a repo: only a link that resolves to repo/home/rel is OK.
+        repo_home = root / "repo" / "home"
+        (repo_home / "sub").mkdir(parents=True)
+        (repo_home / "sub" / "a.txt").write_text("a")
+        (repo_home / "sub" / "b.txt").write_text("b")
+        tgt = root / "t"
+        (tgt / "sub").mkdir(parents=True)
+        (tgt / "sub" / "a.txt").symlink_to(repo_home / "sub" / "a.txt")
+        (tgt / "sub" / "b.txt").symlink_to(repo_home / "sub" / "a.txt")
+        (tgt / "sub" / "c.txt").symlink_to(root / "gone" / "c.txt")
+        if classify("sub/a.txt", tgt, repo_home) != "OK":
+            failures.append("a link to the right repo file did not read as OK")
+        if classify("sub/b.txt", tgt, repo_home) != "WRONG":
+            failures.append("a link to the WRONG file read as fine")
+        if classify("sub/c.txt", tgt, repo_home) != "WRONG":
+            failures.append("a DANGLING link read as fine -- the 2026-10-05 blind spot")
+
         if not is_ignored("some/__pycache__/x.pyc"):
             failures.append("__pycache__ was not treated as never-deployed")
         if not is_ignored(".stow-local-ignore"):
@@ -140,28 +171,33 @@ def main() -> int:
     if broken:
         print("  the parity result below cannot be trusted")
 
-    missing, shadowed = [], []
+    missing, shadowed, wrong = [], [], []
     for rel in tracked_files(repo_path):
         if is_ignored(rel):
             continue
-        verdict = classify(rel, target_root)
+        verdict = classify(rel, target_root, repo_path / "home")
         if verdict == "MISSING":
             missing.append(rel)
         elif verdict == "SHADOWED":
             shadowed.append(rel)
+        elif verdict == "WRONG":
+            wrong.append(rel)
 
-    if not missing and not shadowed and not broken:
-        print(f"  deploy parity OK - every tracked home/ file is linked ({len(tracked_files(repo_path))} checked)")
+    if not missing and not shadowed and not wrong and not broken:
+        print(f"  deploy parity OK - every tracked home/ file is linked into this repo ({len(tracked_files(repo_path))} checked)")
         return 0
 
     for rel in missing:
         print(f"  NOT DEPLOYED: ~/{rel}")
     for rel in shadowed:
         print(f"  SHADOWED (real file where a link belongs): ~/{rel}")
-    if missing:
-        print("  Fix: ./install.sh --stow-only")
+    for rel in wrong:
+        print(f"  WRONG LINK (dangling, or not into this repo): ~/{rel}")
+    if missing or wrong:
+        print("  Fix: ./install.sh --stow-only  (or, with no hooks working: sh ~/.local/state/dotfiles/links/restore)")
     if shadowed:
-        print("  Shadowed files need review first: ./install.sh --force adopts them into the repo.")
+        print("  Shadowed files: sh ~/.local/state/dotfiles/links/restore moves them aside (never deletes) and relinks;")
+        print("  check first whether one holds an edit that belongs in the repo.")
     return 1
 
 
