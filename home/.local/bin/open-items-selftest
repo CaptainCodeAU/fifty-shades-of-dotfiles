@@ -2391,8 +2391,9 @@ egw(){ local f="$1" p; shift; if [ "$f" = none ]; then p="$NOEG"; else p="$EG/$f
 eg_state(){ { git -C "$DC" rev-parse HEAD; git -C "$DC" status --porcelain --untracked-files=all
   find "$DC" "$D/state" "$PJ_ID_CLAIMS_DIR" "$D/mig" -path "$DC/.git" -prune -o -type f -print 2>/dev/null | LC_ALL=C sort | while IFS= read -r f; do shasum -a 256 "$f"; done
   } 2>/dev/null | shasum -a 256 | cut -c1-16; }
-# Every verb that writes, read from the dispatcher: the drawer writers, then seen and
-# checks-run (they write state under PJ_STATE_DIR, not a drawer).
+# Every verb that writes, read from the dispatcher: the drawer writers, then checks-run (it
+# writes state under PJ_STATE_DIR, not a drawer). `seen` is not here: it is let through
+# (W-20261005-A96), proved by section EG1 below.
 EG_WRITES=(
   "add 'filed by habit' --done-when x"
   "close $EGID 'closed by habit'"
@@ -2411,7 +2412,6 @@ EG_WRITES=(
   "pass $EGID zeta"
   "move $EGID --to alpha --why 'by habit'"
   "route $EGID --to alpha --why 'by habit'"
-  "seen --all"
   "checks-run"
 )
 eg_writes(){   # eg_writes <fake> <text the one line must hold>: sets EGBAD
@@ -2464,6 +2464,36 @@ wanteq "exit 1, exit 2, a signal, not executable, absent: add writes as today (a
 wanteq "  control: the exit-1 and the killed fakes really ran" "1 1" "$([ -e "$EG/m1/ran" ] && echo 1) $([ -e "$EG/mkill/ran" ] && echo 1)"
 egw m1 close "$EGID" "closed as today"
 wanteq "  exit 1: close moves the item as today" "1" "$([ "$RC" = 0 ] && [ -f "$ZW/items/closed/$EGID.md" ] && echo 1)"
+# EG1 `seen` in a moved project (W-20261005-A96). The card's Watching line says
+# "`open-items seen <ID>|--all` clears"; seen writes only <state>/seen/<project>, never a
+# drawer, so it goes through under exit 0 and 3 and engage-go is not asked. Measured in
+# cc-claude-mods on 5 Oct 2026: guarded, the line could not be cleared from there.
+runw "$D/alpha" add "alpha watches zeta" --done-when x; EGAW="$(lastid)"
+runw "$D/alpha" watch "$EGAW" zeta
+wanteq "EG1 control: alpha files an item that watches zeta (rc 0, an ID)" "0 yes" "$RC $([ -n "$EGAW" ] && printf yes || printf no)"
+eg_drawers(){ { git -C "$DC" rev-parse HEAD; git -C "$DC" status --porcelain --untracked-files=all
+  find "$DC" -path "$DC/.git" -prune -o -type f -print 2>/dev/null | LC_ALL=C sort | while IFS= read -r f; do shasum -a 256 "$f"; done
+  } 2>/dev/null | shasum -a 256 | cut -c1-16; }
+for f in m0 m3; do
+  egw "$f" --session
+  want "EG1 $f: --session shows the changed watch" "Watching: 1 (1 changed)" "$OUT"
+  want "EG1 $f:   and names the route" "\`open-items seen <ID>|--all\` clears" "$OUT"
+  printf "reset\n" > "$EG/$f/ran"; h0="$(eg_drawers)"
+  egw "$f" seen --all
+  wanteq "EG1 $f: seen --all goes through (rc 0)" "0" "$RC"
+  want "EG1 $f:   and names what it cleared" "seen: $EGAW [alpha]" "$OUT"
+  wantnot "EG1 $f:   with no engage refusal" "engage add" "$OUT"
+  want "EG1 $f:   the seen state holds the item" "alpha $EGAW " "$(cat "$D/state/seen/zeta" 2>/dev/null)"
+  wanteq "EG1 $f:   no drawer, inbox or commit changed" "$h0" "$(eg_drawers)"
+  wanteq "EG1 $f:   engage-go was not asked" "reset" "$(cat "$EG/$f/ran")"
+  egw "$f" --session
+  want "EG1 $f: --session after seen: 0 changed" "Watching: 1 (0 changed)" "$OUT"
+  runw "$D/alpha" set "$EGAW" next "a change for the $f arm"   # the owner edits: changed again
+done
+egw m0 seen "$EGAW"
+wanteq "EG1 m0: seen <ID> goes through too (rc 0)" "0" "$RC"
+egw m0 checks-run
+wanteq "EG1 control: checks-run is still refused in a moved project (rc 2)" "2" "$RC"
 # EG2 the 3 s limit and the first line (W-20261002-A48, A49; contract engage master 48eb3d1).
 # A write's check runs under 3 s; a timeout refuses the write (fail closed), one line naming
 # the hang and engage add. The fakes are bash, and every process they leave carries a marker

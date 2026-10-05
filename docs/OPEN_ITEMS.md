@@ -433,8 +433,14 @@ stdin. Fixed, with an arm that feeds it a stdin that never closes.
 Before any write verb, open-items asks `engage-go cutover check` in the folder it was started
 from (contract: engage `docs/CUTOVER.md`, sections 4, 5 and "The time limit"). The guarded verbs
 are `add close decline park reopen set init regen migrate supersede watch check tick pass move
-route seen checks-run undo-wrap`. Reads (the listing, `--all`, `--project`, `show`, `get`, `--where`,
+route checks-run undo-wrap`. Reads (the listing, `--all`, `--project`, `show`, `get`, `--where`,
 `--help`, `--selftest`) never ask and behave as before.
+
+`seen` is not guarded (W-20261005-A96, 6 Oct 2026). It writes only this project's seen state,
+`<state>/seen/<project>`, never a drawer, so it cannot file anything by habit. Guarded, the
+card's Watching and Moved out lines told a moved project to run `open-items seen`, which then
+refused, and the line could not be cleared from there (measured in cc-claude-mods, 5 Oct).
+Selftest section EG1 runs it under exit 0 and exit 3.
 
 | engage-go says                               | open-items                                                                                                           |
 | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |

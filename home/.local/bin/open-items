@@ -2521,6 +2521,9 @@ check_flags "${1:-}"
 # folder open-items was started from; open-items never reads the marker itself. Exit 0 and
 # 3 refuse every verb that writes, before it runs; exit 1, any other code, or no engage-go:
 # as today. Reads (the listing, --all, --project, show, get, --where, ...) never ask.
+# W-20261005-A96: `seen` is not guarded either. It writes only this project's seen state
+# (<state>/seen/<project>), never a drawer, so it files nothing by habit; guarded, the card's
+# Watching and Moved out lines named a route a moved project refused, and stayed there.
 # W-20261002-A48, A49 (engage master 48eb3d1, "The time limit"): the check runs the way pj runs
 # it, under 3 s, and a timeout REFUSES the write (fail closed): engage-go starts as the leader
 # of its own process group (perl setpgrp; bash cannot make one without a terminal), the wait
@@ -2586,7 +2589,7 @@ engage_guard(){                 # engage_guard <verb>
 }
 OI_VERB="${1:-}"
 case "${1:-}" in
-  add|close|decline|park|reopen|set|init|regen|migrate|supersede|watch|check|tick|pass|move|route|seen|checks-run|undo-wrap)
+  add|close|decline|park|reopen|set|init|regen|migrate|supersede|watch|check|tick|pass|move|route|checks-run|undo-wrap)
     engage_guard "$1" ;;
 esac
 
