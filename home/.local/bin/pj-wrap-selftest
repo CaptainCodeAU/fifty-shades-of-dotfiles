@@ -482,6 +482,45 @@ SID=l-owe; wrap done --skill --owed "/wrap-up"; wrap owed
 check "L the owed listing says not finished, never declined" '[ "$RC" -eq 0 ] && printf "%s" "$OUT" | grep -q "(not finished in session l-owe)" && ! printf "%s" "$OUT" | grep -q "declined"'
 wrap owed --clear "/wrap-up"; check "L control: the owe clears (rc 0)" '[ "$RC" -eq 0 ]'
 
+# --- M: one pj-homes for the skill and pj-wrap, also from a worktree (W-20261005-A66) --------
+# The skill read `.claude/pj-homes` from its own checkout while handoff_path read the main
+# checkout's, so a worktree whose copy differs got two different handoffs. Rule: the MAIN
+# checkout's, as decided, open-items and the start card. The skill asks `pj-wrap homes`.
+# The fixture's two copies DIFFER on purpose (MAIN-HANDOFF.md vs WT-HANDOFF.md), and both
+# handoffs are over the cap, so an arm that read the wrong file would name the wrong one.
+ZM="$ROOT/zmain"; mkdir -p "$ZM/.claude"; git -C "$ZM" init -q
+printf 'handoff: repo:MAIN-HANDOFF.md\n' > "$ZM/.claude/pj-homes"
+git -C "$ZM" add .claude/pj-homes; git -C "$ZM" commit -q -m seed
+ZW="$ROOT/zwt"; git -C "$ZM" worktree add -q -b m-wt "$ZW" 2>/dev/null
+printf 'handoff: repo:WT-HANDOFF.md\n' > "$ZW/.claude/pj-homes"; git -C "$ZW" commit -q -am "worktree's own pj-homes"
+gen 61 "$ZM/MAIN-HANDOFF.md" m; gen 70 "$ZW/WT-HANDOFF.md" w
+mwrap(){ OUT="$(cd "$1" && shift && OPEN_ITEMS_PROJECTS_DIR="$DC/projects" OPEN_ITEMS_DOTCLAUDE="$DC" CLAUDE_SESSION_ID= CLAUDE_CODE_SESSION_ID=m-sess "$WRAP" "$@" 2>&1)"; RC=$?; return 0; }
+OUT="$(cat "$ZW/.claude/pj-homes")"
+check "M fixture: the worktree's pj-homes differs from main's" '[ -d "$ZW" ] && ! cmp -s "$ZM/.claude/pj-homes" "$ZW/.claude/pj-homes"'
+mwrap "$ZW" homes; MH="$OUT"
+check "M homes from the worktree names the MAIN checkout's pj-homes" '[ "$RC" -eq 0 ] && printf "%s\n" "$OUT" | grep -qx "pj-wrap: pj-homes: $ZM/.claude/pj-homes"'
+check "M and says the worktree's own copy is not read" 'printf "%s" "$OUT" | grep -q "this is a worktree ($ZW): its own .claude/pj-homes is NOT read"'
+check "M and the handoff main's copy names" 'printf "%s\n" "$OUT" | grep -qx "pj-wrap: handoff: repo $ZM/MAIN-HANDOFF.md" && ! printf "%s" "$OUT" | grep -q "WT-HANDOFF"'
+mwrap "$ZW" push
+check "M pj-wrap's own handoff check from the worktree reads the same file" 'printf "%s" "$OUT" | grep -q "generated handoff $ZM/MAIN-HANDOFF.md is 61 lines" && ! printf "%s" "$OUT" | grep -q "WT-HANDOFF"'
+MA="$(printf "%s\n" "$MH" | sed -n "s/^pj-wrap: handoff: repo //p")"; MB="$(printf "%s\n" "$OUT" | sed -n "s/.*generated handoff \(.*\) is 61 lines.*/\1/p")"
+check "M the skill and pj-wrap name ONE handoff (both non-empty, equal)" '[ -n "$MA" ] && [ "$MA" = "$MB" ]'
+mwrap "$ZM" homes
+check "M control: from the main checkout, the same file and no worktree line" '[ "$RC" -eq 0 ] && printf "%s\n" "$OUT" | grep -qx "pj-wrap: pj-homes: $ZM/.claude/pj-homes" && ! printf "%s" "$OUT" | grep -q "this is a worktree"'
+mwrap "$ROOT" homes; check "M homes outside a repo REFUSES (rc 2)" '[ "$RC" -eq 2 ]'
+# The skill side: it must get pj-homes from `pj-wrap homes`, and no step may name the bare
+# `.claude/pj-homes` as the file it reads (that is the relative read that split them).
+# Control: both predicates fail on OLDSK2, the wording before this fix.
+skill_asks_wrap(){ grep -q '`pj-wrap homes`' "$1" && tr -s ' \n' '  ' < "$1" | grep -q "the main checkout's \`.claude/pj-homes\`, also from a worktree"; }
+skill_no_relative(){ ! grep -qE 'in `\.claude/pj-homes`|When `\.claude/pj-homes` names|every store `\.claude/pj-homes` names' "$1"; }
+OLDSK2="$ROOT/old-skill-a66.md"
+printf '%s\n' '5. Handoff, from `handoff` in `.claude/pj-homes` (default `repo:OPENING-PROMPT.md`).' '6. Project wrap-up. When `.claude/pj-homes` names one' > "$OLDSK2"
+OUT="$(cat "$SKILL" 2>/dev/null)"
+check "M the skill reads pj-homes through pj-wrap homes, the main checkout's" 'skill_asks_wrap "$SKILL"'
+check "M the skill names no relative .claude/pj-homes read" 'skill_no_relative "$SKILL"'
+check "M control: both skill predicates FAIL on the old wording" '! skill_asks_wrap "$OLDSK2" && ! skill_no_relative "$OLDSK2"'
+git -C "$ZM" worktree remove --force "$ZW" 2>/dev/null || true
+
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 rm -r "$ROOT" 2>/dev/null || true
 [ "$FAIL" -eq 0 ]

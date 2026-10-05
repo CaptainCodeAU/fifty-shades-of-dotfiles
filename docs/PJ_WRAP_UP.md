@@ -130,6 +130,18 @@ refuses in the same words. Nothing else changed: pj-session-end already writes n
 a repo, and the start card already says "not a git repo, so no project, no items", so no
 warning is lost and none is owed.
 
+## One pj-homes, the main checkout's, also from a worktree (W-20261005-A66, 5 Oct 2026)
+
+Inside a worktree the skill read `.claude/pj-homes` from that checkout, while `pj-wrap`'s
+handoff check (and `decided`, `open-items`, the start card) read the main checkout's through
+`--git-common-dir`. A worktree whose copy differed got one handoff written and another
+checked. The rule is the one the other tools already kept: the main checkout's file. The
+skill now takes it from `pj-wrap homes`, which prints that file, says when a worktree's own
+copy is being ignored, and prints the handoff path `pj-wrap push` checks, so the two cannot
+drift. A repo: handoff therefore lands in the main checkout's tree, as step 10's "in a
+worktree the records belong to the main checkout" already said. pj-wrap-selftest section M
+builds a worktree whose pj-homes names a different handoff and checks both sides name main's.
+
 ## Before 5 Oct 2026: why the project step offered and never ran unasked (superseded)
 
 Ruled at the P8b gate 2026-09-21, superseded by the section above. Running the project's own
