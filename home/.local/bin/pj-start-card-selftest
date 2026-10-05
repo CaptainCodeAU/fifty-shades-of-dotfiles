@@ -403,7 +403,7 @@ run "$S"
 check "S a record moved to owed/handled/ is history: still silent" '! has "$OUT" "^Owed:"'
 owedrec "/wrap-up" s1 "2026-09-25 14:02" > "$OWED"
 run "$S"
-check "S one record: the exact line" 'has "$OUT" "^Owed: /wrap-up (since 2026-09-25, declined at wrap-up). Run it, or '"'"'pj-wrap owed --clear'"'"'.$"'
+check "S one record: the exact line" 'has "$OUT" "^Owed: /wrap-up (since 2026-09-25, not finished at wrap-up). Run it, or '"'"'pj-wrap owed --clear'"'"'.$"'
 check "S the Owed line sits directly above the Handoff line" '[ "$(printf "%s\n" "$OUT" | grep -A1 "^Owed:" | tail -1 | cut -c1-8)" = "Handoff:" ]'
 check "S rc 0, at most 20 lines, hello rule last" '[ "$RC" -eq 0 ] && [ "$(lines "$OUT")" -le 20 ] && [ "$(printf "%s\n" "$OUT" | tail -1 | cut -c1-11)" = "Hello rule:" ]'
 check "S the card did not move or change the owed file" '[ "$(owedrec "/wrap-up" s1 "2026-09-25 14:02")" = "$(cat "$OWED")" ]'
@@ -417,7 +417,7 @@ check "S a whitespace-only line still separates two records" 'has "$OUT" "^Owed:
 { for c in a b c d e; do owedrec "/cmd-$c" "s$c" "2026-09-2$(printf %s "$c" | tr a-e 1-5) 10:00"; echo; done; } > "$OWED"
 run "$S"
 check "S five commands: at most 3 Owed lines" '[ "$(printf "%s\n" "$OUT" | grep -c "^Owed:")" -eq 3 ]'
-check "S ... two named, in file order, then +3 more" 'has "$OUT" "^Owed: /cmd-a (" && has "$OUT" "^Owed: /cmd-b (" && ! has "$OUT" "^Owed: /cmd-c (" && has "$OUT" "^Owed: +3 more declined wrap-up command(s); '"'"'pj-wrap owed'"'"' lists them.$"'
+check "S ... two named, in file order, then +3 more" 'has "$OUT" "^Owed: /cmd-a (" && has "$OUT" "^Owed: /cmd-b (" && ! has "$OUT" "^Owed: /cmd-c (" && has "$OUT" "^Owed: +3 more unfinished wrap-up command(s); '"'"'pj-wrap owed'"'"' lists them.$"'
 # P7: the command is data. An OSC 52 clipboard write, a bidi override and a zero-width space.
 printf 'owed: /wrap \033]52;c;aGk=\a up \342\200\256evil\342\200\213x\nsession: s1\nsince: 2026-09-25 14:02\n' > "$OWED"
 run "$S"
@@ -429,7 +429,7 @@ run "$S"
 check "S a 151-character command is capped at 80 characters plus ..." 'has "$OUT" "^Owed: /x\{79\}\.\.\. (since 2026-09-25,"'
 printf 'owed: /wrap-up\nsession: s1\nsince: yesterday-ish\n' > "$OWED"
 run "$S"
-check "S an unparsable since says so instead of printing it" 'has "$OUT" "^Owed: /wrap-up (since an unknown date, declined"'
+check "S an unparsable since says so instead of printing it" 'has "$OUT" "^Owed: /wrap-up (since an unknown date, not finished"'
 printf 'project: repo-s\nsession: s1\nsince: 2026-09-25 14:02\n\ngarbage\n' > "$OWED"
 run "$S"
 check "S a file with no owed: line is silent (nothing to run)" '! has "$OUT" "^Owed:"'
@@ -438,7 +438,7 @@ run "$S"
 if [ -r "$OWED" ]; then
   echo "  skip S unreadable arm: chmod 000 did not take (running as root?) -- NOT MEASURED"
 else
-  check "S an unreadable owed file: ONE line saying so, no details" '[ "$(printf "%s\n" "$OUT" | grep -c "^Owed:")" -eq 1 ] && has "$OUT" "^Owed: a declined project wrap-up is recorded here but cannot be read"'
+  check "S an unreadable owed file: ONE line saying so, no details" '[ "$(printf "%s\n" "$OUT" | grep -c "^Owed:")" -eq 1 ] && has "$OUT" "^Owed: an unfinished project wrap-up is recorded here but cannot be read"'
 fi
 chmod 644 "$OWED"; run "$S"
 check "S CONTROL: readable again, the real line returns" 'has "$OUT" "^Owed: /wrap-up (since 2026-09-25,"'
@@ -520,7 +520,7 @@ check "T Q: done_when carried for every item" '[ "$(jv "[.items.list[] | select(
 runj "$D"
 check "T 0 open items: open 0, list [], drawer present" '[ "$(jv "[.items.open, (.items.list | length), .items.drawer] | @tsv")" = "$(printf "0\t0\tpresent")" ]'
 runj "$S"
-check "T S: owed lists every distinct command with its since" '[ "$(jv ".owed[0] | [.command, .since] | @tsv")" = "$(printf "/wrap-up\t2026-09-25")" ] && [ "$(jv ".flags[] | select(.name == \"owed\") | .text")" = "Owed: /wrap-up (since 2026-09-25, declined at wrap-up). Run it, or '"'"'pj-wrap owed --clear'"'"'." ]'
+check "T S: owed lists every distinct command with its since" '[ "$(jv ".owed[0] | [.command, .since] | @tsv")" = "$(printf "/wrap-up\t2026-09-25")" ] && [ "$(jv ".flags[] | select(.name == \"owed\") | .text")" = "Owed: /wrap-up (since 2026-09-25, not finished at wrap-up). Run it, or '"'"'pj-wrap owed --clear'"'"'." ]'
 runj "$B"
 check "T B: flags are the card's own lines (no-wrap-up, dot-claude-behind)" '[ "$(jv "[.flags[].name] | join(\",\")")" = "no-wrap-up,dot-claude-behind" ] && [ "$(jv ".dot_claude_behind")" = 2 ]'
 check "T B: handoff has marker, absolute path, size, bytes and date" '[ "$(jv ".handoff | [.marker, .path, .size, .bytes] | @tsv")" = "$(printf "repo:OPENING-PROMPT.md\t%s\t2 B\t2" "$B/OPENING-PROMPT.md")" ] && jv .handoff.date | grep -q "^20[0-9][0-9]-"'

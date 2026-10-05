@@ -3,8 +3,10 @@
 The skill is `home/.claude/pj/skills/wrap-up/SKILL.md`; its helper is `home/.local/bin/pj-wrap`.
 The routine itself was ruled in D-20260920-A03 (one table, one pop-up) and D-20260920-A06
 (handoff). This document holds what came after: the eight rulings from the 2026-09-24 audit
-(W-20260924-A46, ruling D-20260925-A01), the step 8 reasoning that used to sit
-inside the skill, and the state files the tools share.
+(W-20260924-A46, ruling D-20260925-A01), the 5 Oct 2026 changes (no approval box; the
+project's own wrap-up runs inside /pj:wrap-up), and the state files the tools share. Step
+numbers in the 25 Sep table are that day's: the project step was step 8 then, 9 later, and
+is step 6 since 5 Oct 2026.
 
 Evidence: five audit reports in
 drawer:pj-session-framework/reports/wrapup-audit-20260924/ (1-mechanics, 2-rulings,
@@ -17,8 +19,8 @@ drawer:pj-session-framework/reports/wrapup-audit-20260924/ (1-mechanics, 2-rulin
 | W1  | `pj-wrap push` publishes other sessions' dot-claude commits | Push, and name every commit whose `C-Sess-Id` is not this session, by session, in the output and the report                  | list and ask first; refuse unless all are ours   |
 | W2  | Handoff owner when pj-homes names a project `wrap-up`       | That command owns the handoff when the file has no generated marker. pj skips its rewrite and hands its lines to step 8      | a new `handoff-owner:` key; a second pj file     |
 | W3  | Handoff length                                              | 60 lines. `pj-wrap push` counts a generated handoff and warns above 60; detail moves into the records it points at          | about two screens; no cap                        |
-| W4  | How wrap-up asks                                            | One pop-up approves the table. Each open decision is then its own question. Step 8 is a pop-up too, so the ping hook fires. **The table pop-up was removed on 5 Oct 2026; see below** | everything in one pop-up; as before              |
-| W5  | Step 8 declined                                             | `pj-wrap done --owed "<command>"` leaves an owed record the start card shows until that command runs                         | `done` does not run; as before (the owe is lost) |
+| W4  | How wrap-up asks                                            | One pop-up approves the table. Each open decision is then its own question. Step 8 is a pop-up too, so the ping hook fires. **The table pop-up and the step 8 pop-up were both removed on 5 Oct 2026; see below** | everything in one pop-up; as before              |
+| W5  | Step 8 declined (since 5 Oct 2026: stopped or failed)       | `pj-wrap done --owed "<command>"` leaves an owed record the start card shows until that command runs                         | `done` does not run; as before (the owe is lost) |
 | W6  | Bare `pj-wrap done` (21 of 31 markers)                      | Allowed. The marker records `via: skill` or `via: bare`; pj-health lists bare ones                                           | refuse without the skill; as before              |
 | W7  | Panes, worktrees, watches the session opened                | Wrap-up closes its own once merged and verified (watches first). Unmerged, dirty or another session's: listed, not touched   | list only                                        |
 | W8  | A standing "audit the process" step                         | No. Audit on request; the sweep's "how Gavin wants things done" row covers the rest                                          | offer in the pop-up; always run                  |
@@ -54,14 +56,88 @@ replaces the table pop-up of W4; every other question W4 kept is still asked.
   nothing. Extends and lessons are not in the batch; the report gives each its own undo.
   Mechanics: docs/OPEN_ITEMS.md, "Undoing a wrap-up's batch".
 
-## Step 8, why it offers and never runs unasked (moved here from the skill)
+## The project's own wrap-up runs inside /pj:wrap-up (5 Oct 2026, W46)
 
-Ruled at the P8b gate 2026-09-21. Running the project's own wrap-up unasked was rejected because
-it is that project's ritual and can commit, tag, push and edit a changelog, so `pj` would be
-deciding when another project's process runs. Handing it back silently was rejected because it
-is the last step of a long session and the easiest thing to lose. A slash command is executed by
-the MODEL, not a shell: "run it" means the model invokes it next, which the user can interrupt.
-Do not try to shell out to it. W4 makes the offer a pop-up and W5 makes a "no" durable.
+Gavin's picks, 5 Oct 2026, in the engage-main conductor session (engage record #1014; ruling
+D-20261005-A02 in the machine-wide register):
+
+- "Let it run them": /pj:wrap-up runs a project's own wrap-up itself, before it marks the
+  session wrapped. No question box, no typing. The project commands lose their manual-only
+  flag (`disable-model-invocation: true`).
+- Typed alone: "Hand over to /pj:wrap-up". A project wrap-up typed on its own hands over to
+  /pj:wrap-up, which then runs the project steps. One path, always marked.
+- Push: "Push all when green".
+- Non-git folder: "warn plainly".
+
+**The order.** The project step is now step 6: after the handoff (5), before tidy and the temp
+sweep (7), delivery (8), `pj-wrap push` (9) and `pj-wrap done` (10). It used to run after all
+of them, so the scratchpad was already swept before the project command could use it,
+`~/.claude` commits the project command made stayed unpushed, and the report described the
+state before the project wrap-up ran. Now every later step sees what it did.
+
+**The hand-over.** Step 6 first prints, on a line of its own, exactly
+`pj:wrap-up hands over to <command>` (for example `pj:wrap-up hands over to /wrap-up`). Then it
+runs the command: the Skill tool with the command's name and the args `from-pj-wrap-up`
+followed by step 5's handoff lines. If the Skill tool refuses (a command that still carries
+`disable-model-invocation: true`, or one the session does not list), it Reads
+`.claude/commands/<name>.md` (in a worktree: that checkout, then the main one) and follows
+every step. Never a shell: a slash command is run by the model.
+
+Three rules came from checking step 6 against real files on 5 Oct 2026 (W46 report):
+
+- **A command that predates the hand-over runs with no args.** win_go_app_test's
+  `/vertical-wrap-up` (out of this change's scope) reads its args as a vertical name and never
+  looks for `from-pj-wrap-up`. So a command whose file never mentions `from-pj-wrap-up` is run
+  with no args, as if typed, and gets step 5's lines in chat.
+- **The Read fallback is loud.** The real refusal for a manual-only command (measured in
+  Network_Plan af6f0a6e, v2.1.289) says "Do not replicate this skill's workflow by other
+  means". Gavin's pick is that his own commands run, so the fallback stays, but it is said in
+  chat and the report asks him to remove the flag. The fix is the flag coming off, not the
+  fallback.
+- **An interrupted command leaves the session unmarked.** Steps 7 to 10 have not run. On the
+  next message the skill asks one question: carry on at step 7 with the command owed, or leave
+  the wrap-up unfinished.
+
+**Typed alone (the project command's side, contract part 2, built in each project).** The
+project command's first step: if its args start with `from-pj-wrap-up`, or the hand-over line
+naming it appears after the user's last message, it carries on. Otherwise it says "Handing
+over to /pj:wrap-up; it runs these steps at its project step." and Reads
+`~/.claude/pj/skills/wrap-up/SKILL.md` and follows it from step 0. /pj:wrap-up stays
+manual-only, so the Skill tool cannot start it; reading it can. Read-only modes may run
+direct, and the command says which. The project command never runs `pj-wrap done`.
+
+**Owed.** There is no "run now or not now" question any more, so nothing is declined. It is
+owed (`pj-wrap done --owed "<command>"`) only when the project command stopped or failed: a
+step refused, a test failed, the user stopped it, or the file pj-homes names is missing. The
+report's first line says which step and why. Two consequences for clearing:
+
+- pj-session-end never clears an owed record in the session that WROTE it. That session's run
+  is the one that stopped, and it often lands in the same minute as the owe's `since:`, which
+  the at-or-after rule would have counted as a clearing run. Measured red first:
+  pj-session-end-selftest O10.
+- A later full run clears it through the skill: when step 6 ran the command to the end and
+  `pj-wrap owed` lists it, step 10 runs `pj-wrap owed --clear "<command>"`. This also covers the
+  Read route, which leaves no `<command-name>` or Skill result in the transcript for
+  pj-session-end to see.
+
+The start card's owed line now reads `(since <date>, not finished at wrap-up)`; it said
+"declined", which covers only the old records.
+
+**Non-git folder.** `pj-wrap status` and `pj-wrap done` refuse with rc 2 outside a git repo,
+because there is no project key to mark. The skill now makes the report's first line exactly
+"This folder is not a git repo, so this session cannot be marked wrapped.", and `pj-wrap done`
+refuses in the same words. Nothing else changed: pj-session-end already writes no flag outside
+a repo, and the start card already says "not a git repo, so no project, no items", so no
+warning is lost and none is owed.
+
+## Before 5 Oct 2026: why the project step offered and never ran unasked (superseded)
+
+Ruled at the P8b gate 2026-09-21, superseded by the section above. Running the project's own
+wrap-up unasked was rejected because it is that project's ritual and can commit, tag, push and
+edit a changelog, so `pj` would be deciding when another project's process runs. Handing it
+back silently was rejected because it is the last step of a long session and the easiest thing
+to lose. W4 made the offer a pop-up and W5 made a "no" durable. Gavin's 5 Oct pick answers the
+first worry directly: he chose to let it run, and the user can still interrupt it.
 
 ## State contract (all under `${PJ_STATE_DIR:-${XDG_STATE_HOME:-~/.local/state}/pj}`)
 
@@ -71,7 +147,7 @@ Nothing here is ever deleted; a cleared record is MOVED to a `handled/` folder w
 | --------------------------------------- | ---------------------------------------- | -------------------------------- | ----------------------------------------------------------------------- |
 | `no-wrap-up/<key>`                      | pj-session-end                           | pj-start-card, pj-wrap, pj-health | unchanged (pj-session-end header)                                       |
 | `wrapped/<session-id>`                  | `pj-wrap done`                           | pj-session-end, pj-health         | `wrapped: <date>`, `project: <name>`, NEW `via: skill` or `via: bare`   |
-| `owed/<key>` (NEW, W5)                  | `pj-wrap done --owed "<command>"`        | pj-start-card, pj-health          | records separated by a blank line: `owed: <command>`, `project: <name>`, `session: <id>`, `since: YYYY-MM-DD HH:MM` |
+| `owed/<key>` (NEW, W5)                  | `pj-wrap done --owed "<command>"` (the project command stopped or failed) | pj-start-card, pj-health          | records separated by a blank line: `owed: <command>`, `project: <name>`, `session: <id>`, `since: YYYY-MM-DD HH:MM` |
 | `owed/handled/<key>.<YYYYmmdd-HHMMSS>`  | `pj-wrap owed --clear`, pj-session-end   | nobody (history)                  | the moved file                                                          |
 | `wrap-batch/<session-id>.tsv` (5 Oct 2026) | `open-items add/close/park --wrap`     | `open-items undo-wrap`, `pj-wrap done` | one line per write: action, drawer, id, item file, sha256          |
 | `wrap-batch/<session-id>.tsv.undone.<YYYYmmdd-HHMMSS>` | `open-items undo-wrap`                   | `open-items undo-wrap` (refuses a second undo) | the moved file                                              |
@@ -91,11 +167,12 @@ Nothing here is ever deleted; a cleared record is MOVED to a `handled/` folder w
   "NAME"}`, and no `<command-name>` at all. Either route clears. The owed command's first word, one
   leading `/` dropped, must equal NAME exactly, so `pj:wrap-up` never clears `/wrap-up`. Only an
   invocation at or after the record's `since:` minute counts, so running the command early in the
-  session that then declines it does not clear the owe. `pj-wrap owed --clear <cmd>` compares the
+  session that then declines it does not clear the owe. And never in the session that wrote
+  the record (5 Oct 2026, above): its run is the stopped one. `pj-wrap owed --clear <cmd>` compares the
   whole command.
 - `pj-wrap owed` with no flag lists the project's owed records (rc 1 when none).
 - The start card prints one line per owed command while the record exists:
-  `Owed: <command> (since <date>, declined at wrap-up). Run it, or 'pj-wrap owed --clear'.`
+  `Owed: <command> (since <date>, not finished at wrap-up). Run it, or 'pj-wrap owed --clear'.`
 
 ## `pj-wrap` changes in the rewrite
 

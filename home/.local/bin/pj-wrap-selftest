@@ -425,6 +425,63 @@ check "K filed then closed: the filed line shows the title" 'printf "%s\n" "$OUT
 check "K filed then closed: the closed line shows the title" 'printf "%s\n" "$OUT" | grep -qE "^  closed +$KB +k filed then closed$"'
 check "K control: an item that exists nowhere still says so" 'printf "%s\n" "$OUT" | grep -qE "^  filed +W-20990101-Z99 +\(no longer at its recorded place; open-items show W-20990101-Z99\)$"'
 
+# --- L: /pj:wrap-up runs the project's own wrap-up itself (W46, Gavin's picks 5 Oct 2026) -----
+# "Let it run them": the project step comes after the handoff (5) and before tidy, delivery,
+# push and done, so they all see what the project command did. It prints the hand-over line,
+# runs the command through the Skill tool with from-pj-wrap-up (Read the file if refused),
+# asks no run-now question, and is owed only when the command stopped or failed.
+# Controls: every predicate below is also run against OLDSK, a skill in the old order with
+# the old box and the stale text, and must FAIL there, so a check that cannot fail is caught.
+step_of(){ awk -v re="$2" '/^[0-9]+\. /{n=$1+0; s=1} s && $0 ~ re {print n; exit}' "$1"; }
+block_of(){ awk -v n="$2" '/^[0-9]+\. /{on=($1+0==n)} on' "$1"; }
+order_ok(){ local f="$1" s5 pw td dl ps dn
+  s5="$(step_of "$f" '^5\. Handoff')"; pw="$(step_of "$f" 'hands over to')"
+  td="$(step_of "$f" 'Tidy what this session opened')"; dl="$(step_of "$f" 'Delivery, measured now')"
+  ps="$(step_of "$f" '^[0-9]+\. `pj-wrap push`')"; dn="$(step_of "$f" '^[0-9]+\. `pj-wrap done --skill`')"
+  [ -n "$s5" ] && [ -n "$pw" ] && [ -n "$td" ] && [ -n "$dl" ] && [ -n "$ps" ] && [ -n "$dn" ] \
+    && [ "$s5" -lt "$pw" ] && [ "$pw" -lt "$td" ] && [ "$td" -lt "$dl" ] && [ "$dl" -lt "$ps" ] && [ "$ps" -lt "$dn" ]; }
+no_box(){ local n b; n="$(step_of "$1" 'hands over to')"; b="$(block_of "$1" "${n:-x}")"
+  [ -n "$b" ] && ! printf '%s' "$b" | grep -qiE 'or not now|then ask|AskUserQuestion'; }
+no_stale(){ ! grep -qE 'pj-voice|next `pj` launch|for pj sessions' "$1"; }
+handover_line(){ block_of "$1" "$(step_of "$1" 'hands over to')" | grep -qF '`pj:wrap-up hands over to <command>`'; }
+OLDSK="$ROOT/old-skill.md"
+printf '%s\n' '- The report follows pj-voice.' '5. Handoff, from pj-homes. Carry your proposed lines to step 9.' \
+  '6. Tidy what this session opened (W7). Swept by the next `pj` launch.' '7. Delivery, measured now, not from memory.' \
+  '8. `pj-wrap push`, sandbox lifted.' '9. Project wrap-up. Print pj:wrap-up hands over to it. Then ask: run `<command>` now, or not now.' \
+  '10. `pj-wrap done --skill`, plus `--owed "<command>"` when step 9 was not run.' > "$OLDSK"
+OUT="$(cat "$SKILL" 2>/dev/null)"
+PW="$(step_of "$SKILL" 'hands over to')"; PS="$(block_of "$SKILL" "${PW:-x}")"
+check "L control: the skill is readable and the project step is found" '[ -n "$PW" ] && [ -n "$PS" ]'
+check "L steps are numbered 0 to 10 in order, no gap and no repeat" '[ "$(awk "/^[0-9]+\\. /{printf \"%d \", \$1}" "$SKILL")" = "0 1 2 3 4 5 6 7 8 9 10 " ]'
+check "L order: handoff, then the project step, then tidy, delivery, push and done" 'order_ok "$SKILL"'
+check "L control: the old order FAILS the order check" '! order_ok "$OLDSK"'
+check "L the hand-over line is printed exactly, on its own line" 'handover_line "$SKILL"'
+check "L control: a bare mention without the exact line FAILS" '! handover_line "$OLDSK"'
+check "L no run-now-or-not-now question at the project step" 'no_box "$SKILL"'
+check "L control: the old project step FAILS the no-box check" '! no_box "$OLDSK"'
+check "L the command runs through the Skill tool with from-pj-wrap-up and step 5's lines" 'printf "%s" "$PS" | grep -q "Skill tool" && printf "%s" "$PS" | grep -q "from-pj-wrap-up" && printf "%s" "$PS" | grep -q "step 5"'
+check "L fallback: Read .claude/commands/<name>.md and follow every step, never a shell" 'printf "%s" "$PS" | grep -qF ".claude/commands/<name>.md" && printf "%s" "$PS" | grep -q "follow every step" && printf "%s" "$PS" | grep -qi "never a shell"'
+check "L step 5 hands its lines to the project step by its real number" '[ -n "$PW" ] && block_of "$SKILL" 5 | grep -q "to step $PW\b"'
+check "L done is owed only when the project command stopped or failed" 'block_of "$SKILL" 10 | grep -q -- "--owed" && block_of "$SKILL" 10 | grep -q "stopped or failed"'
+check "L no stale text: pj-voice, the next pj launch, for pj sessions" 'no_stale "$SKILL"'
+check "L control: the old text FAILS the stale check" '! no_stale "$OLDSK"'
+check "L the tidy step names engage's launch sweep (pj-temp sweep-dead)" 'block_of "$SKILL" "$(step_of "$SKILL" "Tidy what this session opened")" | grep -q "sweep-dead"'
+check "L a command that never mentions from-pj-wrap-up runs with NO args (win_go_app_test reads args as a vertical)" 'printf "%s" "$PS" | grep -q "never mentions \`from-pj-wrap-up\`" && printf "%s" "$PS" | grep -q "with no args"'
+check "L the Read fallback is LOUD: said in chat, and removing the flag is an action in the report" 'printf "%s" "$PS" | grep -qi "say so in chat" && printf "%s" "$PS" | grep -q "remove the flag"'
+check "L an interrupted project command: the session is not marked, and the skill says how to go on" 'printf "%s" "$PS" | grep -qi "interrupt" && printf "%s" "$PS" | grep -q "not marked"'
+check "L non-git AND a stopped project step: the report still names the stopped step" 'block_of "$SKILL" 10 | tr -s " \n" "  " | grep -q "name the stopped step"'
+check "L a non-git folder: the report says so plainly, in the exact words" 'tr -s " \n" "  " < "$SKILL" | grep -qF "This folder is not a git repo, so this session cannot be marked wrapped."'
+# pj-wrap's own refusal says the same sentence, so a bare run hears it too. Control: the
+# same command inside the repo fixture is not refused (B above marks it wrapped).
+OUT="$(cd "$ROOT" && PJ_STATE_DIR="$STATE" CLAUDE_CODE_SESSION_ID=l-sess "$WRAP" done --skill 2>&1)"; RC=$?
+check "L done outside a git repo REFUSES (rc 2) in the plain words" '[ "$RC" -eq 2 ] && printf "%s" "$OUT" | grep -qF "This folder is not a git repo, so this session cannot be marked wrapped."'
+check "L and wrote no marker" '[ ! -e "$STATE/wrapped/l-sess" ]'
+SID=l-sess; wrap done --skill
+check "L control: the same done inside the repo marks it (rc 0)" '[ "$RC" -eq 0 ] && [ -f "$STATE/wrapped/l-sess" ]'
+SID=l-owe; wrap done --skill --owed "/wrap-up"; wrap owed
+check "L the owed listing says not finished, never declined" '[ "$RC" -eq 0 ] && printf "%s" "$OUT" | grep -q "(not finished in session l-owe)" && ! printf "%s" "$OUT" | grep -q "declined"'
+wrap owed --clear "/wrap-up"; check "L control: the owe clears (rc 0)" '[ "$RC" -eq 0 ]'
+
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 rm -r "$ROOT" 2>/dev/null || true
 [ "$FAIL" -eq 0 ]

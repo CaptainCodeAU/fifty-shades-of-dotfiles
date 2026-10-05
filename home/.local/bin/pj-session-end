@@ -46,7 +46,8 @@
 #              wrap-up and no transcript pointer is lost.
 #
 # OWED RECORDS  <state>/owed/<key>  (W5, dotfiles docs/PJ_WRAP_UP.md "State contract")
-#   `pj-wrap done --owed "<command>"` leaves one when the project's own wrap-up is declined.
+#   `pj-wrap done --owed "<command>"` leaves one when the project's own wrap-up stopped or
+#   failed at /pj:wrap-up (before 5 Oct 2026: when it was declined).
 #   This hook MOVES a record to owed/handled/<key>.<time> when the ending session ran that
 #   command, wrapped or not, above the threshold or not. Two routes, both measured in real
 #   transcripts on 2026-09-25:
@@ -57,7 +58,10 @@
 #   NAME is compared with the record's FIRST word, one leading / dropped, EXACTLY:
 #   pj:wrap-up never clears /wrap-up. Only an invocation at or after the record's since:
 #   minute counts, so a run earlier in the session that declined does not clear its owe.
-#   Other records stay. A since: or a timestamp that cannot be read clears nothing.
+#   A record whose session: is the ENDING session is never cleared here (W46): /pj:wrap-up
+#   runs the command and writes the owe only when it stopped, so that session's run IS the
+#   stopped one, often in the same minute. A later full run in that session clears it through
+#   the skill (`pj-wrap owed --clear`). Other records stay. A since: or a timestamp that cannot be read clears nothing.
 #
 # Outside a git repo, with no session id, with no transcript, when jq is missing, or when
 # jq cannot parse the transcript (a broken line): nothing is written. Silence over a guess. Selftest: pj-session-end-selftest. Rulings: D-20260920-03, -04.
@@ -100,23 +104,25 @@ invocations(){                  # invocations <transcript>
 }
 to_epoch(){ date -j -f '%Y-%m-%d %H:%M:%S' "$1:00" +%s 2>/dev/null || date -d "$1" +%s 2>/dev/null; }
 
-clear_owed(){                   # clear_owed <transcript> <key>
-  local owed="$STATE/owed/$2" inv idx=0 nh=0 hits=" " o since se name ep dest keep
+clear_owed(){                   # clear_owed <transcript> <key> <ending session id>
+  local owed="$STATE/owed/$2" inv idx=0 nh=0 hits=" " o since rs se name ep dest keep
   [ -f "$owed" ] || return 0
   inv="$(invocations "$1")" || return 0
   [ -n "$inv" ] || return 0
-  while IFS=$'\t' read -r o since; do
+  while IFS=$'\t' read -r o since rs; do
     idx=$((idx + 1))
     o="${o#/}"; [ -n "$o" ] || continue
+    [ "$rs" = "$3" ] && continue
     se="$(to_epoch "$since")"; [ -n "$se" ] || continue
     while IFS=$'\t' read -r name ep; do
       if [ "$name" = "$o" ] && [ "${ep%.*}" -ge "$se" ] 2>/dev/null; then hits="$hits$idx "; nh=$((nh + 1)); break; fi
     done <<<"$inv"
   done < <(awk 'BEGIN { RS = "" } {
-      o = ""; s = ""; n = split($0, L, "\n")
-      for (j = 1; j <= n; j++) { if (L[j] ~ /^owed: /) o = substr(L[j], 7); if (L[j] ~ /^since: /) s = substr(L[j], 8) }
+      o = ""; s = ""; r = ""; n = split($0, L, "\n")
+      for (j = 1; j <= n; j++) { if (L[j] ~ /^owed: /) o = substr(L[j], 7); if (L[j] ~ /^since: /) s = substr(L[j], 8)
+                                 if (L[j] ~ /^session: /) r = substr(L[j], 10) }
       sub(/^[ \t]+/, "", o); split(o, W, /[ \t]+/)
-      printf "%s\t%s\n", W[1], s }' "$owed")
+      printf "%s\t%s\t%s\n", W[1], s, r }' "$owed")
   [ "$nh" -gt 0 ] || return 0
   mkdir -p "$STATE/owed/handled" 2>/dev/null || return 0
   dest="$STATE/owed/handled/$2.$(date +%Y%m%d-%H%M%S)"
@@ -147,7 +153,7 @@ main(){
   top="$(git -C "$cwd" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 0
   top="$(dirname "$top")"
   key="$(encode_key "$top")"
-  clear_owed "$tp" "$key"         # before the wrapped check: a wrapped session clears too
+  clear_owed "$tp" "$key" "$sid"  # before the wrapped check: a wrapped session clears too
   [ -e "$STATE/wrapped/$sid" ] && return 0
 
   read -r m e < <(count_work "$tp") || return 0
