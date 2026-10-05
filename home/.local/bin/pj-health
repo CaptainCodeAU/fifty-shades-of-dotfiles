@@ -1440,7 +1440,7 @@ else
     # win_go_app_test (repo:edge-decisions.html) are correct declarations under
     # D-20260920-02. FAIL is for a broken machine, not for a store this tool has
     # not learned to read yet. The fix text names both routes.
-    unsupported) row WARN decided-store "$label declared but in a format decided cannot read; the declaration is correct, the reader is the gap. fix: point decisions: at a folder of D-*.md or a file of '## D-' blocks, or teach decided that format";;
+    unsupported) row WARN decided-store "$label declared but in a format decided cannot read; the declaration is correct, the reader is the gap. fix: point decisions: at a folder of D-*.md or a file of '## D-' or '### D-' blocks, or teach decided that format";;
     *) row NOTM decided-store "decided --homes printed no project line";;
   esac
 fi

@@ -112,6 +112,54 @@ export DECIDED_GLOBAL_DIR="$OLDG"
 run "$R4" alpha;   want "a present but empty repo: store is searched as 0" "project (repo:docs/decisions) 0" "$OUT"
 run "$T" alpha;    wantrc "outside a repo: machine-wide still answers" 0 "$RC"; want "  and says machine-wide only" "not inside a git repo: machine-wide only" "$OUT"; wantnot "  and searched no project" "project (" "$OUT"
 
+echo "-- a file register at either heading depth (W-20261005-A64)"
+# chorustic keeps 236 rulings as "### D-NNN - title" under "## Section" headings in one
+# file, and read as unsupported. Both depths are declared the same way and must both read
+# as `file`; the "##" arm is the control that the "###" change left the old shape alone.
+R6="$T/repo-h3"; mkrepo "$R6"; mkdir -p "$R6/.claude" "$R6/docs"; printf 'decisions: repo:docs/DECISIONS.md\n' > "$R6/.claude/pj-homes"
+cat > "$R6/docs/DECISIONS.md" <<'EOF'
+# Decisions
+
+Preamble naming papa, which is in no block.
+
+## Scope
+
+Section intro naming quebec, which is in no block.
+
+### D-001 - Fully local, no romeo. **Settled**
+
+Body naming uniform.
+
+```sh
+# a shell comment, not a heading: the block goes on
+echo victor
+```
+
+### D-002 - Batch only. **Settled**
+
+Body naming whiskey.
+
+## Shape
+
+### D-003 - Three tools. **Settled**
+
+Body naming xray.
+EOF
+R7="$T/repo-h2"; mkrepo "$R7"; mkdir -p "$R7/.claude" "$R7/docs"; printf 'decisions: repo:docs/DECISIONS.md\n' > "$R7/.claude/pj-homes"
+printf '# Decisions\n\n## D-001 - Two-hash ruling\n\nBody naming yankee.\n\n## D-002 - Another\n\nBody naming zebra.\n' > "$R7/docs/DECISIONS.md"
+run "$R6" --homes; want "a ### D- file reads as a file store" "project (repo:docs/DECISIONS.md) file" "$OUT"; wantnot "  not unsupported" "unsupported" "$OUT"
+run "$R7" --homes; want "control: a ## D- file still reads as a file store" "project (repo:docs/DECISIONS.md) file" "$OUT"
+run "$R6" xray;    wantrc "a ### block is found by a body word" 0 "$RC"; want "  its heading printed" "D-003 - Three tools" "$OUT"; want "  counted at three blocks" "project (repo:docs/DECISIONS.md) 3" "$OUT"
+run "$R6" --all whiskey; wantrc "--all finds a ### block in the project file" 0 "$RC"; want "  in the project home" "[in project (repo:docs/DECISIONS.md)]" "$OUT"
+run "$R7" zebra;   wantrc "control: a ## block is found the same way" 0 "$RC"; want "  counted at two blocks" "project (repo:docs/DECISIONS.md) 2" "$OUT"
+run "$R6" victor;  wantrc "a # comment inside a code fence does not end the block" 0 "$RC"; want "  the fenced line stays in D-001" "D-001 - Fully local" "$OUT"
+run "$R6" uniform victor; wantrc "  body text and the fenced line are one block" 0 "$RC"
+run "$R6" quebec;  wantrc "a ## section intro is in no block" 1 "$RC"
+run "$R6" whiskey shape; wantrc "a ## section heading does not join the block above it" 1 "$RC"
+run "$R6" papa;    wantrc "the preamble is in no block" 1 "$RC"
+run "$R6" --list;  want "--list shows a ### title with a slash in its label" "D-002 - Batch only. **Settled**   [project (repo:docs/DECISIONS.md)]" "$OUT"; wantnot "  and sed did not choke on the label" "bad flag" "$OUT"
+run "$R7" --list;  want "control: --list shows a ## title" "D-001 - Two-hash ruling   [project (repo:docs/DECISIONS.md)]" "$OUT"
+
 echo "-- ID form and --all"
 run "$R1" D-19990102-01; wantrc "ID form finds the project block" 0 "$RC"; want "  header match" "## D-19990102-01 -- A project thing" "$OUT"
 run "$R1" D-19990104-01; wantrc "an ID outside scope is still found" 0 "$RC"; want "  and says it is outside the default scope" "OUTSIDE this project's default scope" "$OUT"; want "  naming the legacy file" "[in legacy file" "$OUT"

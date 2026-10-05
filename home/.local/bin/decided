@@ -24,8 +24,8 @@
 #                 repo:docs/decisions/, or drawer:decisions/ when `records: private`
 #   --all         plus every drawer's decisions/ and the legacy single-file register
 #   outside a git repo: machine-wide only, and it says so.
-# A store it cannot read (not a folder of D-*.md files, not a file of "## D-" blocks)
-# is named as "unsupported format, not searched", never silently skipped.
+# A store it cannot read (not a folder of D-*.md files, not a file of "## D-" or
+# "### D-" blocks) is named as "unsupported format, not searched", never silently skipped.
 #
 # Exit: 0 match/written  ·  1 no match (not an error)  ·  2 REFUSED (no readable home,
 # bad args)  ·  3 written but NOT committed. A miss always prints the denominator: a
@@ -66,7 +66,7 @@ kind_of(){        # kind_of <path> -> folder | file | missing | unsupported
     # (measured 2026-09-29; the same trap CLAUDE.md names for `find <symlinked dir>`).
     if [ -n "$(find "$p/" -maxdepth 1 -name 'D-*.md' -print -quit 2>/dev/null)" ] || [ -z "$(ls -A "$p" 2>/dev/null)" ]; then printf 'folder'; else printf 'unsupported'; fi
   elif [ -f "$p" ]; then
-    case "$p" in *.md) grep -q '^## D-' "$p" 2>/dev/null && printf 'file' || printf 'unsupported' ;; *) printf 'unsupported' ;; esac
+    case "$p" in *.md) grep -Eq '^###? D-' "$p" 2>/dev/null && printf 'file' || printf 'unsupported' ;; *) printf 'unsupported' ;; esac
   else printf 'unsupported'; fi
 }
 add_home(){ HOMES+=("$1	$(kind_of "$3")	$3	$2"); }   # add_home <label> <marker-or-note> <path>
@@ -134,8 +134,25 @@ blocks_of(){
   local p="$1" k="$2" f
   case "$k" in
     folder) for f in "$p"/D-*.md; do [ -f "$f" ] && { cat "$f"; printf '\n'; }; done ;;
-    file)   cat "$p" ;;
+    file)   file_blocks "$p" ;;
   esac
+}
+# A file register may head its blocks "### D-NNN - title" under "## Section" headings
+# (chorustic docs/DECISIONS.md, 236 blocks; W-20261005-A64). Every reader below keys on
+# "## D-", so a "###" file is handed over one level up: "### D-" becomes "## D-", and a
+# shallower heading (a section) ends the block, so its title and intro are not searched
+# as part of the ruling above it. A "# comment" inside a ``` fence is code, not a heading.
+# The depth is the file's FIRST D heading; a "## D-" file passes through byte for byte.
+file_blocks(){
+  awk '
+    depth == 0 && /^###? D-/ { depth = (substr($0, 3, 1) == "#") ? 3 : 2 }
+    depth != 3 { print; next }
+    /^[ \t]*(```|~~~)/ { fence = !fence; if (inblock) print; next }
+    fence { if (inblock) print; next }
+    /^### D-/ { print substr($0, 2); inblock = 1; next }
+    /^##? / { inblock = 0; next }
+    inblock { print }
+  ' "$1"
 }
 count_in(){ blocks_of "$1" "$2" | grep -c '^## D-' 2>/dev/null || true; }
 
@@ -353,7 +370,8 @@ list_all(){       # list_all <all>
   for h in "${HOMES[@]}"; do
     IFS=$'\t' read -r label kind path _ <<<"$h"
     case "$kind" in folder|file) ;; *) continue ;; esac
-    fblocks_of "$path" "$kind" | grep '^## D-' | sed "s/^## /  /; s/\$/   [$label]/"
+    # awk, not sed: a label carries the store's marker, and repo:docs/DECISIONS.md has a "/"
+    fblocks_of "$path" "$kind" | awk -v l="$label" '/^## D-/ { print "  " substr($0, 4) "   [" l "]" }'
   done
   denominator; printf '\ndecided: %s.\n' "$DEN"
   print_home_notes

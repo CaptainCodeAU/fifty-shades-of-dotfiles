@@ -79,6 +79,15 @@ named as "declared store in an unsupported format, not searched". It is never si
 skipped and no parser for other projects' formats lives here; those projects keep their
 own tools (D-20260920-02).
 
+A single-file register may head its blocks `## D-...` or `### D-...` (W-20261005-A64,
+2026-10-05: chorustic's docs/DECISIONS.md holds 236 `### D-NNN - title` blocks under
+`## Section` headings and read as unsupported). The depth is set by the file's first D
+heading. In a `###` file a shallower heading ends the block, so a section's title and
+intro are never searched as part of the ruling above it, and a `# comment` inside a code
+fence is not taken for a heading. Hits print the heading one level up (`## D-001 ...`);
+the text is otherwise as written. That is the same block shape at another depth, not a
+new format, so D-20260920-02 still holds.
+
 ## A word miss explains itself (W-20260924-A48, D-20260925-A02, 2026-09-25)
 
 A word search needs EVERY word in one block. Measured 2026-09-25: `decided stall watch
