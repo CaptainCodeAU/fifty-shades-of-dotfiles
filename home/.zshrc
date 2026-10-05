@@ -1456,6 +1456,9 @@ mv() {
 
 # --- yt-dlp Wrapper ---
 # Custom wrapper for yt-dlp with simplified aliases defined in ~/.config/yt-dlp/config
+# The `noglob` alias below survives a re-source, and zsh would expand it inside
+# `yt() {` ("noglob yt() {": parse error, the rest of .zshrc unread). Drop it first.
+unalias yt 2>/dev/null
 yt() {
   # The config is stowed from the repo (home/.config/yt-dlp/config); yt never
   # writes it. It used to create it from a copy kept here whenever it was
