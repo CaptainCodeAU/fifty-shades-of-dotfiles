@@ -14,16 +14,16 @@ drawer:pj-session-framework/reports/wrapup-audit-20260924/ (1-mechanics, 2-rulin
 
 ## The eight rulings (Gavin, 2026-09-25, all recommendations taken)
 
-| #   | Question                                                    | Ruling                                                                                                                       | Rejected                                         |
-| --- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
-| W1  | `pj-wrap push` publishes other sessions' dot-claude commits | Push, and name every commit whose `C-Sess-Id` is not this session, by session, in the output and the report                  | list and ask first; refuse unless all are ours   |
-| W2  | Handoff owner when pj-homes names a project `wrap-up`       | That command owns the handoff when the file has no generated marker. pj skips its rewrite and hands its lines to step 8      | a new `handoff-owner:` key; a second pj file     |
-| W3  | Handoff length                                              | 60 lines. `pj-wrap push` counts a generated handoff and warns above 60; detail moves into the records it points at          | about two screens; no cap                        |
+| #   | Question                                                    | Ruling                                                                                                                                                                                                            | Rejected                                         |
+| --- | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| W1  | `pj-wrap push` publishes other sessions' dot-claude commits | Push, and name every commit whose `C-Sess-Id` is not this session, by session, in the output and the report                                                                                                       | list and ask first; refuse unless all are ours   |
+| W2  | Handoff owner when pj-homes names a project `wrap-up`       | That command owns the handoff when the file has no generated marker. pj skips its rewrite and hands its lines to step 8                                                                                           | a new `handoff-owner:` key; a second pj file     |
+| W3  | Handoff length                                              | 60 lines. `pj-wrap push` counts a generated handoff and warns above 60; detail moves into the records it points at                                                                                                | about two screens; no cap                        |
 | W4  | How wrap-up asks                                            | One pop-up approves the table. Each open decision is then its own question. Step 8 is a pop-up too, so the ping hook fires. **The table pop-up and the step 8 pop-up were both removed on 5 Oct 2026; see below** | everything in one pop-up; as before              |
-| W5  | Step 8 declined (since 5 Oct 2026: stopped or failed)       | `pj-wrap done --owed "<command>"` leaves an owed record the start card shows until that command runs                         | `done` does not run; as before (the owe is lost) |
-| W6  | Bare `pj-wrap done` (21 of 31 markers)                      | Allowed. The marker records `via: skill` or `via: bare`; pj-health lists bare ones                                           | refuse without the skill; as before              |
-| W7  | Panes, worktrees, watches the session opened                | Wrap-up closes its own once merged and verified (watches first). Unmerged, dirty or another session's: listed, not touched   | list only                                        |
-| W8  | A standing "audit the process" step                         | No. Audit on request; the sweep's "how Gavin wants things done" row covers the rest                                          | offer in the pop-up; always run                  |
+| W5  | Step 8 declined (since 5 Oct 2026: stopped or failed)       | `pj-wrap done --owed "<command>"` leaves an owed record the start card shows until that command runs                                                                                                              | `done` does not run; as before (the owe is lost) |
+| W6  | Bare `pj-wrap done` (21 of 31 markers)                      | Allowed. The marker records `via: skill` or `via: bare`; pj-health lists bare ones                                                                                                                                | refuse without the skill; as before              |
+| W7  | Panes, worktrees, watches the session opened                | Wrap-up closes its own once merged and verified (watches first). Unmerged, dirty or another session's: listed, not touched                                                                                        | list only                                        |
+| W8  | A standing "audit the process" step                         | No. Audit on request; the sweep's "how Gavin wants things done" row covers the rest                                                                                                                               | offer in the pop-up; always run                  |
 
 Settled without asking, because a rule already covers it: this session's own unpushed project
 commits are pushed at wrap-up (pj-global RULES.md, pinned: "push once a remote exists"), and a
@@ -142,6 +142,30 @@ drift. A repo: handoff therefore lands in the main checkout's tree, as step 10's
 worktree the records belong to the main checkout" already said. pj-wrap-selftest section M
 builds a worktree whose pj-homes names a different handoff and checks both sides name main's.
 
+## A moved project reads no pj-homes: the move marker is the only signal (6 Oct 2026)
+
+Gavin's ruling, 6 Oct 2026, 1:30 AM (in the engage conductor's session), after engage #1035 and
+#1036 put a `.claude/pj-homes` into the engage repo: "This is not good, fix it." He picked: the
+move marker is the only signal, following his 5 Oct pick "one signal" (D-20261005-A08). The
+engage repo holds code only; engage's records and settings live in its companion (D-HOME-01).
+
+So `pj-wrap homes` asks `engage-go cutover check --dir <main checkout>` first:
+
+| cutover check                    | what `pj-wrap homes` answers                                                                                                                                                                                                                                                                                                                    |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| exit 0, moved                    | reads no pj-homes. `wrap-up: /wrap-up` only when the main checkout has `.claude/commands/wrap-up.md`; `handoff: companion <top>-isolinear/captains-log/`, or the default `repo:OPENING-PROMPT.md` (said out loud) while that folder is absent; `items: engage records`. A pj-homes still there is named as a LEFTOVER to `git rm`.              |
+| exit 1, no engage-go             | exactly as before (one added line: `wrap-up: <command>` when pj-homes names one, so the skill takes both answers from one place)                                                                                                                                                                                                                |
+| no answer in 3 s, any other exit | as before, plus a `note:` line saying so                                                                                                                                                                                                                                                                                                        |
+| exit 3, marker not valid         | exit 3, `NOT VALID: <engage-go's reason>`, and no handoff and no wrap-up. Either guess could be wrong in a way that writes something: a handoff file into a moved code repo, or a captains-log entry for a project that has not moved. Writing nothing loses nothing: the skill puts the lines in the report and names the marker as an action. |
+
+Why the default while captains-log/ is absent: cc-claude-mods moved on 5 Oct with no project
+wrap-up command and no captains-log/, and its `OPENING-PROMPT.md` is the handoff it wrote at
+the move. Pointing it at a folder nothing writes would drop that handoff silently.
+`handoff_path` (and so `pj-wrap push`'s length warning and drawer commit) follows the same
+rule. The engage command `/wrap-up` writes the captains-log entry (`engage-go handoff write`).
+pj-wrap-selftest section HM proves each row, a worktree of a moved project, and a leftover
+pj-homes, with fake engage-go programs; run with `PJ_WRAP=<the older pj-wrap>` it fails 11 arms.
+
 ## Global verdicts go to CaptainCodeAU-isolinear, never ~/.claude (engage #1060, 6 Oct 2026)
 
 Gavin's ruling, 5 Oct 2026 (engage record #1060, in CaptainCodeAU-isolinear, bdfb8e4), his
@@ -154,12 +178,12 @@ sitting next to their projects)." Until this change /pj:wrap-up still wrote a gl
 these to CaptainCodeAU-isolinear but had no command for it, so it listed them as actions for
 Gavin (906128f). Now, in every project, moved or not:
 
-| Verdict                                     | Route                                                                                                                         |
-| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| Item for every project, or with no project  | `printf '%s\n\nDone when: %s\n' "<what>" "<finish line>" \| pj-wrap global add -` (`--type decide` for a decide row)           |
-| Ruling for every project                    | reasoning document first, then `printf '%s\n\nReasoning: %s\n' "<title>" "<doc>" \| pj-wrap global add --kind decision --statement "<one sentence>" -` |
-| Machine-wide lesson                         | `printf '%s\n\n%s\n' "Lesson: <title>" "<the lesson>" \| pj-wrap global add --kind decision --statement "<one sentence>" -`      |
-| Project ruling                              | unchanged: `decided add ... --project`                                                                                        |
+| Verdict                                    | Route                                                                                                                                                  |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Item for every project, or with no project | `printf '%s\n\nDone when: %s\n' "<what>" "<finish line>" \| pj-wrap global add -` (`--type decide` for a decide row)                                   |
+| Ruling for every project                   | reasoning document first, then `printf '%s\n\nReasoning: %s\n' "<title>" "<doc>" \| pj-wrap global add --kind decision --statement "<one sentence>" -` |
+| Machine-wide lesson                        | `printf '%s\n\n%s\n' "Lesson: <title>" "<the lesson>" \| pj-wrap global add --kind decision --statement "<one sentence>" -`                            |
+| Project ruling                             | unchanged: `decided add ... --project`                                                                                                                 |
 
 Why these homes, from the global repo's own records:
 
@@ -168,7 +192,7 @@ Why these homes, from the global repo's own records:
   (engage-isolinear workbench/layer1/CAPTURE-SPEC.md, LOCKED): "a drained or directly typed
   no-project capture becomes a record in the account repo's own records/". So an item is filed
   straight into `records/`, not dropped in `inbox/`: `inbox/` is the drop place `engage add
-  --drain` empties, its contents are untracked and stay on one machine, and a drop has no number.
+--drain` empties, its contents are untracked and stay on one machine, and a drop has no number.
 - **A lesson is a decision record.** terms.md (CaptainCodeAU-isolinear
   workbench/records-system/2026-09-28/terms.md): "decision: A record that stands: a rule, lesson,
   constraint, risk or term"; MAP.md, LOCKED: "new lessons go to the companion that matches their
@@ -213,14 +237,14 @@ first worry directly: he chose to let it run, and the user can still interrupt i
 
 Nothing here is ever deleted; a cleared record is MOVED to a `handled/` folder with a timestamp.
 
-| Path                                    | Written by                               | Read by                          | Format                                                                  |
-| --------------------------------------- | ---------------------------------------- | -------------------------------- | ----------------------------------------------------------------------- |
-| `no-wrap-up/<key>`                      | pj-session-end                           | pj-start-card, pj-wrap, pj-health | unchanged (pj-session-end header)                                       |
-| `wrapped/<session-id>`                  | `pj-wrap done`                           | pj-session-end, pj-health         | `wrapped: <date>`, `project: <name>`, NEW `via: skill` or `via: bare`   |
-| `owed/<key>` (NEW, W5)                  | `pj-wrap done --owed "<command>"` (the project command stopped or failed) | pj-start-card, pj-health          | records separated by a blank line: `owed: <command>`, `project: <name>`, `session: <id>`, `since: YYYY-MM-DD HH:MM` |
-| `owed/handled/<key>.<YYYYmmdd-HHMMSS>`  | `pj-wrap owed --clear`, pj-session-end   | nobody (history)                  | the moved file                                                          |
-| `wrap-batch/<session-id>.tsv` (5 Oct 2026) | `open-items add/close/park --wrap`     | `open-items undo-wrap`, `pj-wrap done` | one line per write: action, drawer, id, item file, sha256          |
-| `wrap-batch/<session-id>.tsv.undone.<YYYYmmdd-HHMMSS>` | `open-items undo-wrap`                   | `open-items undo-wrap` (refuses a second undo) | the moved file                                              |
+| Path                                                   | Written by                                                                | Read by                                        | Format                                                                                                              |
+| ------------------------------------------------------ | ------------------------------------------------------------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `no-wrap-up/<key>`                                     | pj-session-end                                                            | pj-start-card, pj-wrap, pj-health              | unchanged (pj-session-end header)                                                                                   |
+| `wrapped/<session-id>`                                 | `pj-wrap done`                                                            | pj-session-end, pj-health                      | `wrapped: <date>`, `project: <name>`, NEW `via: skill` or `via: bare`                                               |
+| `owed/<key>` (NEW, W5)                                 | `pj-wrap done --owed "<command>"` (the project command stopped or failed) | pj-start-card, pj-health                       | records separated by a blank line: `owed: <command>`, `project: <name>`, `session: <id>`, `since: YYYY-MM-DD HH:MM` |
+| `owed/handled/<key>.<YYYYmmdd-HHMMSS>`                 | `pj-wrap owed --clear`, pj-session-end                                    | nobody (history)                               | the moved file                                                                                                      |
+| `wrap-batch/<session-id>.tsv` (5 Oct 2026)             | `open-items add/close/park --wrap`                                        | `open-items undo-wrap`, `pj-wrap done`         | one line per write: action, drawer, id, item file, sha256                                                           |
+| `wrap-batch/<session-id>.tsv.undone.<YYYYmmdd-HHMMSS>` | `open-items undo-wrap`                                                    | `open-items undo-wrap` (refuses a second undo) | the moved file                                                                                                      |
 
 `<key>` is the project's encoded main-repo path, the same key `no-wrap-up/` uses.
 
@@ -234,7 +258,7 @@ Nothing here is ever deleted; a cleared record is MOVED to a `handled/` folder w
   wrap. Typed: a `user` line whose content is a string starting
   `<command-message>NAME</command-message>` then `<command-name>/NAME</command-name>`. Run by the
   model: a `Skill` tool call, then a `user` line with `toolUseResult: {success: true, commandName:
-  "NAME"}`, and no `<command-name>` at all. Either route clears. The owed command's first word, one
+"NAME"}`, and no `<command-name>` at all. Either route clears. The owed command's first word, one
   leading `/` dropped, must equal NAME exactly, so `pj:wrap-up` never clears `/wrap-up`. Only an
   invocation at or after the record's `since:` minute counts, so running the command early in the
   session that then declines it does not clear the owe. And never in the session that wrote
@@ -261,21 +285,21 @@ Nothing here is ever deleted; a cleared record is MOVED to a `handled/` folder w
 Every High finding in the five reports is fixed by the new skill text, the tools above, or
 declined here. Deferred ones are filed as items.
 
-| Finding                                                        | Where it is handled                                        |
-| -------------------------------------------------------------- | ---------------------------------------------------------- |
-| No `decided add` route for rulings (5:A7, 1:M3)                | skill step 4 verdict "record the ruling"                   |
-| repo: handoff written after the only commit step (5:A4, 1:M2)  | skill: handoff before delivery; delivery commits it        |
-| No leak scan before a push (5:B1)                              | skill delivery step                                        |
-| Several pop-ups vs one (5:A1, 2:F14)                           | W4                                                         |
-| Workers, panes, worktrees left open (2:F2, 3:F2)               | W7, skill tidy step                                        |
-| No finish ping (2:F3)                                          | skill: `pj-ping done` last                                 |
-| Scratchpad records die with the session (3:F1)                 | skill tidy step: move or name as discarded                 |
-| Sweep misses pop-up answers and queued messages (3:F5)         | skill step 1 names them                                    |
-| Owed project wrap-up is lost (4:H1)                            | W5                                                         |
-| Two writers on one handoff (4:H2, 2:F7)                        | W2                                                         |
-| Step 4 writes refused in the sandbox (1:M1)                    | skill: lift per call, read the exit code                   |
-| Session tags unpushed (2:F1)                                   | skill delivery step, D-20260923-A12                        |
-| `done` moves records written after step 0 (4:H13)              | deferred, filed                                            |
-| Concurrent wrap-ups clobber the handoff (5:E6)                 | deferred, filed                                            |
-| Pin clearing at wrap-up (2:F15)                                | declined: not chosen in W-20260923-A26                     |
-| open-items-selftest reads the real inbox (1:M17)               | fixed 2026-09-24, dotfiles 967014a                         |
+| Finding                                                       | Where it is handled                                 |
+| ------------------------------------------------------------- | --------------------------------------------------- |
+| No `decided add` route for rulings (5:A7, 1:M3)               | skill step 4 verdict "record the ruling"            |
+| repo: handoff written after the only commit step (5:A4, 1:M2) | skill: handoff before delivery; delivery commits it |
+| No leak scan before a push (5:B1)                             | skill delivery step                                 |
+| Several pop-ups vs one (5:A1, 2:F14)                          | W4                                                  |
+| Workers, panes, worktrees left open (2:F2, 3:F2)              | W7, skill tidy step                                 |
+| No finish ping (2:F3)                                         | skill: `pj-ping done` last                          |
+| Scratchpad records die with the session (3:F1)                | skill tidy step: move or name as discarded          |
+| Sweep misses pop-up answers and queued messages (3:F5)        | skill step 1 names them                             |
+| Owed project wrap-up is lost (4:H1)                           | W5                                                  |
+| Two writers on one handoff (4:H2, 2:F7)                       | W2                                                  |
+| Step 4 writes refused in the sandbox (1:M1)                   | skill: lift per call, read the exit code            |
+| Session tags unpushed (2:F1)                                  | skill delivery step, D-20260923-A12                 |
+| `done` moves records written after step 0 (4:H13)             | deferred, filed                                     |
+| Concurrent wrap-ups clobber the handoff (5:E6)                | deferred, filed                                     |
+| Pin clearing at wrap-up (2:F15)                               | declined: not chosen in W-20260923-A26              |
+| open-items-selftest reads the real inbox (1:M17)              | fixed 2026-09-24, dotfiles 967014a                  |

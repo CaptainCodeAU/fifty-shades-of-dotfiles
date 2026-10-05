@@ -31,6 +31,11 @@ printf 'name: selftest-fixture\nletter: Z\n' > "$ROOT/machine"; export PJ_MACHIN
 # A FIXTURE claim folder (D-20260923-A10). pj-id refuses a fixture machine file with the real
 # ~/.local/state/pj/ids, so without this every add here fails and the push arms find nothing.
 export PJ_ID_CLAIMS_DIR="$ROOT/claims"
+# Never the machine's real engage-go: every arm runs as "not moved" unless section HM puts
+# its own fake in (Gavin, 6 Oct 2026: homes asks the move marker first). mk_eg <name> <body>.
+mk_eg(){ mkdir -p "$ROOT/eg-$1"; printf '#!/bin/sh\nprintf "%%s\\n" "$*" > "%s/eg-%s/ran"\n%s\n' "$ROOT" "$1" "$2" > "$ROOT/eg-$1/engage-go"; chmod +x "$ROOT/eg-$1/engage-go"; }
+mk_eg stay 'echo "not moved: pj-wrap selftest"; exit 1'
+export PJ_WRAP_ENGAGE_GO="$ROOT/eg-stay/engage-go"
 PASS=0; FAIL=0
 ok(){ PASS=$((PASS+1)); printf '  ok   %s\n' "$1"; }
 bad(){ FAIL=$((FAIL+1)); printf '  FAIL %s\n       got: %s\n' "$1" "$(printf '%s' "${OUT:-}" | tr '\n' '|' | cut -c1-900)"; }
@@ -676,6 +681,69 @@ check "M the skill reads pj-homes through pj-wrap homes, the main checkout's" 's
 check "M the skill names no relative .claude/pj-homes read" 'skill_no_relative "$SKILL"'
 check "M control: both skill predicates FAIL on the old wording" '! skill_asks_wrap "$OLDSK2" && ! skill_no_relative "$OLDSK2"'
 git -C "$ZM" worktree remove --force "$ZW" 2>/dev/null || true
+
+# --- HM: the move marker is the only signal (Gavin, 6 Oct 2026; D-20261005-A08) --------------
+# A project `engage-go cutover check` calls moved (exit 0) reads no pj-homes: wrap-up is
+# /wrap-up when .claude/commands/wrap-up.md exists, the handoff is the companion's
+# captains-log/ (the default while it is absent), items are engage records. A pj-homes still
+# there is a LEFTOVER and loses. Exit 1, no engage-go, no answer: as before. Exit 3: rc 3, no
+# handoff, no wrap-up. The fixture's pj-homes names a DIFFERENT wrap-up and handoff, so an arm
+# that read it would print /other-wrap and LEFT.md. Negative control: run this file with
+# PJ_WRAP=<the pj-wrap before this change>; every HM arm but the controls fails.
+HP="$ROOT/hproj"; mkdir -p "$HP/.claude/commands"; git -C "$HP" init -q
+printf '# engage close\n' > "$HP/.claude/commands/wrap-up.md"
+git -C "$HP" add .claude; git -C "$HP" commit -q -m seed
+HW="$ROOT/hwt"; git -C "$HP" worktree add -q -b h-wt "$HW" 2>/dev/null
+mkdir -p "$HP-isolinear/captains-log"
+mk_eg moved 'echo "moved: hproj (2026-10-05)"; exit 0'
+mk_eg bad 'echo "not valid: MOVED-TO-ENGAGE is not committed"; exit 3'
+mk_eg slow 'sleep 5; echo "moved: too late"; exit 0'
+hwrap(){ [ $# -ge 2 ] || { OUT="hwrap needs <engage-go> <dir>"; RC=99; return 0; }; local eg="$1" d="$2"; shift 2; OUT="$(cd "$d" && PJ_WRAP_ENGAGE_GO="$eg" PJ_WRAP_CUTOVER_SECS="${SECS:-3}" OPEN_ITEMS_PROJECTS_DIR="$DC/projects" OPEN_ITEMS_DOTCLAUDE="$DC" "$WRAP" "$@" 2>&1)"; RC=$?; return 0; }
+has(){ printf '%s\n' "$OUT" | grep -qx -- "$1"; }
+hm_moved(){   # the moved answer, from $1 (the main checkout)
+  [ "$RC" -eq 0 ] && has "pj-wrap: pj-homes: not read: this project moved to engage (moved: hproj (2026-10-05)), and the move marker is the only signal (Gavin, 6 Oct 2026)" \
+    && has "pj-wrap: wrap-up: /wrap-up" && has "pj-wrap: handoff: companion $HP-isolinear/captains-log/" \
+    && has "pj-wrap: items: engage records (the move marker): engage-go add files them; open-items refuses every write here" \
+    && ! printf '%s' "$OUT" | grep -qE 'other-wrap|LEFT\.md'
+}
+EG_MOVED="$ROOT/eg-moved/engage-go"
+hwrap "$EG_MOVED" "$HP" homes
+check "HM moved, no pj-homes: wrap-up /wrap-up, companion captains-log, engage records" 'hm_moved'
+check "HM moved: no LEFTOVER line when there is no pj-homes" '! printf "%s" "$OUT" | grep -q LEFTOVER'
+check "HM moved: engage-go was asked about the main checkout, by --dir" '[ "$(cat "$ROOT/eg-moved/ran")" = "cutover check --dir $HP" ]'
+printf 'wrap-up: /other-wrap\nhandoff: repo:LEFT.md\n' > "$HP/.claude/pj-homes"; printf 'x\n' > "$HP/LEFT.md"
+hwrap "$EG_MOVED" "$HP" homes
+check "HM moved WITH a pj-homes: the marker wins (same answer, not /other-wrap or LEFT.md)" 'hm_moved'
+check "HM moved WITH a pj-homes: named as a LEFTOVER to git rm" 'has "pj-wrap: LEFTOVER: $HP/.claude/pj-homes is still here. The move marker wins and nothing reads it; take it out in a commit (git rm)."'
+hwrap "$EG_MOVED" "$HW" homes
+check "HM a worktree of a moved project: the same answer, asked about the MAIN checkout" 'hm_moved && [ "$(cat "$ROOT/eg-moved/ran")" = "cutover check --dir $HP" ]'
+check "HM a worktree: says the main checkout's answers count" 'has "pj-wrap: this is a worktree ($HW): the main checkout'"'"'s answers count"'
+hwrap "$ROOT/eg-stay/engage-go" "$HP" homes
+check "HM control, not moved (exit 1): pj-homes read as before, its wrap-up and handoff" '[ "$RC" -eq 0 ] && has "pj-wrap: pj-homes: $HP/.claude/pj-homes" && has "pj-wrap: wrap-up: /other-wrap" && has "pj-wrap: handoff: repo $HP/LEFT.md"'
+check "HM control, not moved: no moved, LEFTOVER, items or note line" '! printf "%s" "$OUT" | grep -qE "not read|LEFTOVER|items:|note:|companion"'
+NM="$OUT"
+hwrap "$ROOT/no-such/engage-go" "$HP" homes
+check "HM engage-go missing: exactly the not-moved answer" '[ "$RC" -eq 0 ] && [ "$OUT" = "$NM" ]'
+T0=$SECONDS; SECS=1 hwrap "$ROOT/eg-slow/engage-go" "$HP" homes; T1=$SECONDS
+check "HM no answer in time: killed, read as not moved, and said so" '[ "$RC" -eq 0 ] && has "pj-wrap: note: engage-go cutover check did not answer in 3 s, so this is read as not moved" && [ "$(printf "%s\n" "$OUT" | grep -v "^pj-wrap: note:")" = "$NM" ]'
+check "HM no answer in time: did not wait for the program (under 4 s)" '[ $((T1 - T0)) -lt 4 ]'
+hwrap "$ROOT/eg-bad/engage-go" "$HP" homes
+check "HM not valid (exit 3): rc 3, says NOT VALID with engage-go's reason" '[ "$RC" -eq 3 ] && printf "%s" "$OUT" | grep -q "^pj-wrap: NOT VALID: engage-go cutover check says '"'"'not valid: MOVED-TO-ENGAGE is not committed'"'"'"'
+check "HM not valid: no handoff and no wrap-up named (neither guess)" 'has "pj-wrap: handoff: none, while the move marker is not valid" && ! printf "%s" "$OUT" | grep -qE "wrap-up: |handoff: (repo|drawer|companion)"'
+command mv "$HP/.claude/pj-homes" "$ROOT/hproj-pj-homes.aside"; command mv "$HP/.claude/commands/wrap-up.md" "$ROOT/hproj-wrap-up.aside"
+command mv "$HP-isolinear/captains-log" "$ROOT/hproj-captains-log.aside"
+hwrap "$EG_MOVED" "$HP" homes
+check "HM moved, no wrap-up command, no captains-log/: no wrap-up line, the default handoff, said so" '[ "$RC" -eq 0 ] && ! printf "%s" "$OUT" | grep -q "wrap-up: " && has "pj-wrap: handoff: repo $HP/OPENING-PROMPT.md" && has "pj-wrap: the companion $HP-isolinear has no captains-log/ yet, so the handoff stays the default repo:OPENING-PROMPT.md"'
+# The skill takes wrap-up and handoff from pj-wrap homes, and writes no handoff on exit 3 or
+# into a companion folder that no wrap-up command writes. Control: the wording before.
+skill_moved(){ tr -s ' \n' '  ' < "$1" | grep -q 'In a project moved to engage it reads no pj-homes at all' \
+  && tr -s ' \n' '  ' < "$1" | grep -q 'When `pj-wrap homes` prints one (`wrap-up: <command>`)' \
+  && tr -s ' \n' '  ' < "$1" | grep -q 'A `companion` handoff (a moved project'"'"'s captains-log folder) with no `wrap-up:` line, or `pj-wrap homes` exit 3: write no handoff'; }
+OLDSK3="$ROOT/old-skill-hm.md"
+printf '%s\n' '5. Handoff, from `handoff` in pj-homes.' '6. Project wrap-up. When pj-homes names one' '   (`wrap-up: <command>`), it runs here' > "$OLDSK3"
+check "HM the skill takes wrap-up and handoff from pj-wrap homes, and writes none on exit 3" 'skill_moved "$SKILL"'
+check "HM control: the old wording FAILS the skill check" '! skill_moved "$OLDSK3"'
+git -C "$HP" worktree remove --force "$HW" 2>/dev/null || true
 
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 rm -r "$ROOT" 2>/dev/null || true

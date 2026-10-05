@@ -22,8 +22,11 @@
 #   pj-wrap why-auth               what a push failure here would be blamed on, measured
 #                                  now: the Keychain answers in this shell, does not, or
 #                                  this OS has none. Reads no secret, writes nothing.
-#   pj-wrap homes                  the .claude/pj-homes /pj:wrap-up reads and the handoff it
-#                                  names: the MAIN checkout's, also from a worktree (A66)
+#   pj-wrap homes                  the .claude/pj-homes /pj:wrap-up reads, the wrap-up and the
+#                                  handoff it names: the MAIN checkout's, also from a worktree
+#                                  (A66). A project moved to engage reads no pj-homes: the
+#                                  move marker answers (Gavin, 6 Oct 2026). rc 3 = the marker
+#                                  is not valid, so no handoff and no wrap-up are named.
 #   pj-wrap global add [engage-go add flags] -   (words on stdin, first line the title)
 #                                  file one record in the GLOBAL area, CaptainCodeAU-isolinear
 #                                  (ENGAGE_ACCOUNT_ROOT overrides): `engage-go add --sync` run
@@ -82,7 +85,7 @@ SID="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
 refuse(){ printf 'pj-wrap: REFUSED -- %s\n' "$1" >&2; exit 2; }
 stop(){ printf 'pj-wrap: STOPPED -- %s\n' "$1" >&2; exit 3; }
 say(){ printf 'pj-wrap: %s\n' "$1"; }
-usage(){ sed -n '2,35p' "$0" | sed 's/^# \{0,1\}//'; }
+usage(){ sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//'; }
 encode_key(){ printf '%s' "$1" | sed 's#[/._]#-#g'; }
 tilde(){ printf '%s' "${1/#$HOME/\~}"; }
 
@@ -332,12 +335,22 @@ generated_only(){   # every conflicted path is a generated view or its stamp
 }
 # The handoff the wrap-up writes lives in the drawer when pj-homes says drawer:. It is not
 # an item, so open-items never commits it; this does, by explicit path, before the push.
-# handoff_path -> "drawer <path>" or "repo <path>" for this project's handoff, or nothing.
-# pj-homes `handoff:` names it; a missing key means repo:OPENING-PROMPT.md (D-20260920-06).
-# Any other value (a project command that owns its handoff, W2) is not ours: nothing.
+# handoff_path [<cutover rc>] -> "drawer <path>", "repo <path>" or "companion <path>" for this
+# project's handoff, or nothing. pj-homes `handoff:` names it; a missing key means
+# repo:OPENING-PROMPT.md (D-20260920-06). Any other value (a project command that owns its
+# handoff, W2) is not ours: nothing. A moved project (cutover rc 0) reads no pj-homes: its
+# companion's captains-log/ when that folder exists, else the default. A marker that is not
+# valid (rc 3): nothing, so no handoff is written or committed on a guess.
 handoff_path(){
-  local rtop decl mark where
+  local rtop decl mark where st="${1-}"
   rtop="$(repo_top)" || return 0
+  [ -n "$st" ] || { cutover_state "$rtop" >/dev/null; st=$?; }
+  [ "$st" -eq 3 ] && return 0
+  if [ "$st" -eq 0 ]; then
+    if [ -d "$rtop-isolinear/captains-log" ]; then printf 'companion %s/' "$rtop-isolinear/captains-log"
+    else printf 'repo %s/OPENING-PROMPT.md' "$rtop"; fi
+    return 0
+  fi
   decl="$rtop/.claude/pj-homes"
   mark="$( [ -f "$decl" ] && sed -n 's/^handoff:[[:space:]]*//p' "$decl" | head -1 | sed 's/[[:space:]]*$//')"
   [ -n "$mark" ] || mark="repo:OPENING-PROMPT.md"
@@ -352,19 +365,80 @@ handoff_path(){
 # --git-common-dir; the skill read `.claude/pj-homes` relative to its own checkout, so in a
 # worktree whose copy differed it wrote one handoff while this checked another. The skill
 # now asks this command, so both sides come from the same file by construction.
+#
+# THE MOVE MARKER IS THE ONLY SIGNAL (Gavin, 6 Oct 2026, following D-20261005-A08 "one signal").
+# A project `engage-go cutover check` calls moved (exit 0) needs no pj-homes: engage's
+# conventions name its homes, and the engage repo holds code only (D-HOME-01). So homes reads
+# no pj-homes there; one still present is a leftover and is named as one.
+# cutover_state <main checkout>: prints engage-go's one line, returns its exit: 0 moved,
+# 1 not moved, 3 marker not valid, 124 no answer in 3 s (killed), 127 no engage-go. Asked
+# about the MAIN checkout, so a worktree gets its project's answer. Seams (the selftest sets
+# them; nobody else should): PJ_WRAP_ENGAGE_GO the program, PJ_WRAP_CUTOVER_SECS the limit.
+# perl runs it in a process group of its own and kills the whole group past the limit, as
+# open-items does: killing only the program would leave its children holding this pipe open.
+cutover_state(){
+  local eg="${PJ_WRAP_ENGAGE_GO:-engage-go}" secs="${PJ_WRAP_CUTOVER_SECS:-3}" res rc nl=$'\n'
+  command -v "$eg" >/dev/null 2>&1 || return 127
+  if command -v perl >/dev/null 2>&1; then
+    res="$(perl -e 'my $t = shift; pipe(my $r, my $w) or exit 127; my $pid = fork(); exit 127 unless defined $pid;
+      if (!$pid) { setpgrp(0, 0); close $r; open(STDOUT, ">&", $w); open(STDERR, ">", "/dev/null");
+                   open(STDIN, "<", "/dev/null"); exec(@ARGV) or exit 127 }
+      close $w; $SIG{ALRM} = sub { kill("KILL", -$pid); kill("KILL", $pid); exit 124 }; alarm $t;
+      my $l = <$r>; waitpid($pid, 0); my $s = $?; alarm 0; print $l if defined $l;
+      exit($s & 127 ? 128 + ($s & 127) : $s >> 8)' "$secs" "$eg" cutover check --dir "$1"; printf '\n%s' "$?")"
+  else
+    # no perl: the program alone is killed past the limit (stdout still has to close)
+    res="$( "$eg" cutover check --dir "$1" </dev/null 2>/dev/null & p=$!; n=0
+            while kill -0 "$p" 2>/dev/null; do
+              n=$((n + 1)); [ "$n" -gt $((secs * 50)) ] && { kill -KILL "$p" 2>/dev/null; wait "$p" 2>/dev/null; printf '\n124'; exit 0; }
+              sleep 0.02
+            done
+            wait "$p"; printf '\n%s' "$?" )"
+  fi
+  printf '%s\n' "${res%"$nl"*}" | LC_ALL=C tr -d '\000-\011\013-\037\177' | sed '/^$/d' | head -1
+  rc="${res##*"$nl"}"; case "$rc" in ''|*[!0-9]*) rc=1 ;; esac
+  return "$rc"
+}
 cmd_homes(){
-  local rtop here decl hp
+  local rtop here decl hp wu cut st=0
   rtop="$(repo_top)" || refuse "homes: not inside a git repo, so there is no .claude/pj-homes"
   decl="$rtop/.claude/pj-homes"
-  if [ -f "$decl" ]; then say "pj-homes: $(tilde "$decl")"
-  else say "pj-homes: none at $(tilde "$decl"); every key takes its default (D-20260920-06)"; fi
   here="$(git rev-parse --show-toplevel 2>/dev/null)"
-  if [ -n "$here" ] && [ "$(cd "$here" && pwd -P)" != "$(cd "$rtop" && pwd -P)" ]; then
-    say "this is a worktree ($(tilde "$here")): its own .claude/pj-homes is NOT read; the main checkout's is"
+  [ -n "$here" ] && [ "$(cd "$here" && pwd -P)" = "$(cd "$rtop" && pwd -P)" ] && here=""
+  cut="$(cutover_state "$rtop")"; st=$?
+  case "$st" in
+    0)  say "pj-homes: not read: this project moved to engage ($cut), and the move marker is the only signal (Gavin, 6 Oct 2026)"
+        [ -e "$decl" ] && say "LEFTOVER: $(tilde "$decl") is still here. The move marker wins and nothing reads it; take it out in a commit (git rm)."
+        [ -n "$here" ] && say "this is a worktree ($(tilde "$here")): the main checkout's answers count" ;;
+    3)  say "NOT VALID: engage-go cutover check says '$cut'. This project may have moved to engage but its move marker is not sound, so no handoff and no wrap-up are named (a guess could write a handoff into a moved code repo). Mend the marker (engage-go cutover check --dir $(tilde "$rtop")), then ask again."
+        if [ -e "$decl" ]; then say "pj-homes: $(tilde "$decl") (not used while the marker is not valid)"
+        else say "pj-homes: none at $(tilde "$decl")"; fi
+        say "handoff: none, while the move marker is not valid"
+        exit 3 ;;
+    *)  if [ -f "$decl" ]; then say "pj-homes: $(tilde "$decl")"
+        else say "pj-homes: none at $(tilde "$decl"); every key takes its default (D-20260920-06)"; fi
+        [ -n "$here" ] && say "this is a worktree ($(tilde "$here")): its own .claude/pj-homes is NOT read; the main checkout's is"
+        case "$st" in
+          1|127) ;;
+          124) say "note: engage-go cutover check did not answer in 3 s, so this is read as not moved" ;;
+          *)   say "note: engage-go cutover check exited $st${cut:+ ($cut)}, so this is read as not moved" ;;
+        esac ;;
+  esac
+  if [ "$st" -eq 0 ]; then
+    # engage's own close command, when this project has one (engage #1035)
+    [ -f "$rtop/.claude/commands/wrap-up.md" ] && say "wrap-up: /wrap-up"
+  else
+    wu="$( [ -f "$decl" ] && sed -n 's/^wrap-up:[[:space:]]*//p' "$decl" | head -1 | sed 's/[[:space:]]*$//')"
+    [ -n "$wu" ] && say "wrap-up: $wu"
   fi
-  hp="$(handoff_path)"
+  hp="$(handoff_path "$st")"
   if [ -n "$hp" ]; then say "handoff: ${hp%% *} $(tilde "${hp#* }")"
   else say "handoff: not a repo: or drawer: path, so not a file pj-wrap resolves"; fi
+  if [ "$st" -eq 0 ]; then
+    case "$hp" in repo\ *) say "the companion $(tilde "$rtop-isolinear") has no captains-log/ yet, so the handoff stays the default repo:OPENING-PROMPT.md" ;; esac
+    say "items: engage records (the move marker): engage-go add files them; open-items refuses every write here"
+  fi
+  return 0
 }
 # W3: a GENERATED handoff (first line is the marker) over 60 lines is warned about, with
 # the count. A handoff without the marker belongs to the project (W2) and is not counted.
