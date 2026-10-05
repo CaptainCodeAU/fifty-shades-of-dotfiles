@@ -225,6 +225,17 @@ two_owed; OS="$(shasum "$OWEDF")"
 P="$ROOT/repo-p"; mkrepo "$P"
 run s-o9 "$ROOT/t-o1.jsonl" "$P"
 check "O9 a session in ANOTHER project ran it -> the record here stays" '[ "$(shasum "$OWEDF")" = "$OS" ]'
+# W46 (5 Oct 2026): /pj:wrap-up now RUNS the project command and writes the owe only when it
+# stopped, so the session that wrote an owe always holds the stopped run, often in the same
+# minute. That run must never clear its own owe; a later full run in the same session clears
+# it through the skill (`pj-wrap owed --clear`). Control: O1 to O7 run as another session
+# (records say s-declined) and do clear.
+{ owedrec /wrap-up "2026-01-01 00:00" | sed 's/^session: s-declined$/session: s-o10/'; printf '\n'; owedrec "/release patch" "2026-01-01 00:00"; } > "$OWEDF"; OS="$(shasum "$OWEDF")"
+run s-o10 "$ROOT/t-o1.jsonl" "$O"
+check "O10 the session that WROTE the owe ran it (the stopped run) -> stays owed" '[ "$(grep -c "^owed: " "$OWEDF")" -eq 2 ] && [ "$(shasum "$OWEDF")" = "$OS" ]'
+two_owed
+run s-o10b "$ROOT/t-o1.jsonl" "$O"
+check "O10 control: the same transcript as another session -> cleared" '[ "$(grep -c "^owed: " "$OWEDF")" -eq 1 ] && grep -qx "owed: /release patch" "$OWEDF"'
 
 check "L bash -n clean" 'bash -n "$END"'
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"

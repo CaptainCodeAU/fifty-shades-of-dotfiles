@@ -31,7 +31,7 @@
 #            Checks owed, Mandatory, Moved out, Ignored lines (each a count line plus up to
 #            3 titles), then Inbox and notes. Only when non-empty. Own titles keep a floor
 #            of 5 before any cross title (P8). The card never runs a check-script (P3).
-#   then     Owed: <command> -- one line per project wrap-up command declined at /pj:wrap-up
+#   then     Owed: <command> -- one line per project wrap-up command not finished at /pj:wrap-up
 #            (W5, D-20260925-A01), only while owed/<key> holds a record; at most OWED_CAP
 #            lines, the last one "+N more" when there are more. See THE OWED RECORD below
 #   then     Handoff: <marker path> (size, date) -- only when the file exists
@@ -94,7 +94,7 @@
 #   Writer    pj-wrap done --owed. Clearers: pj-wrap owed --clear, pj-session-end (both
 #             MOVE the file to owed/handled/). This card never writes.
 #   Reader    one line per DISTINCT command, oldest since, in file order:
-#               Owed: <command> (since <date>, declined at wrap-up). Run it, or 'pj-wrap owed --clear'.
+#               Owed: <command> (since <date>, not finished at wrap-up). Run it, or 'pj-wrap owed --clear'.
 #             The command is DATA (P7): controls and bidi/zero-width marks become ?, and it is
 #             capped at OWED_CMD_LEN characters, the rule open-items applies to item titles.
 #             A file with no owed: line is silent. A file that exists but cannot be read
@@ -479,15 +479,15 @@ gather(){
   od="$(owed_data "$STATE/owed/$(encode_key "$C_TOP")")"; orc=$?
   if [ "$orc" -eq 3 ]; then
     C_OWED_UNREADABLE=1
-    C_OWED=("Owed: a declined project wrap-up is recorded here but cannot be read; 'pj-wrap owed' lists it.")
+    C_OWED=("Owed: an unfinished project wrap-up is recorded here but cannot be read; 'pj-wrap owed' lists it.")
   else
     while IFS=$'\t' read -r c s; do [ -n "$c" ] && { C_OWED_CMD+=("$c"); C_OWED_SINCE+=("$s"); }; done <<<"$od"
     show=${#C_OWED_CMD[@]}; [ "$show" -gt "$OWED_CAP" ] && show=$(( OWED_CAP - 1 ))
     for ((i = 0; i < show; i++)); do
-      C_OWED+=("Owed: ${C_OWED_CMD[$i]} (since ${C_OWED_SINCE[$i]}, declined at wrap-up). Run it, or 'pj-wrap owed --clear'.")
+      C_OWED+=("Owed: ${C_OWED_CMD[$i]} (since ${C_OWED_SINCE[$i]}, not finished at wrap-up). Run it, or 'pj-wrap owed --clear'.")
     done
     [ "${#C_OWED_CMD[@]}" -gt "$OWED_CAP" ] \
-      && C_OWED+=("Owed: +$(( ${#C_OWED_CMD[@]} - show )) more declined wrap-up command(s); 'pj-wrap owed' lists them.")
+      && C_OWED+=("Owed: +$(( ${#C_OWED_CMD[@]} - show )) more unfinished wrap-up command(s); 'pj-wrap owed' lists them.")
   fi
 
   C_SYNC="$(sync_line 2>/dev/null)" || C_SYNC=""
@@ -812,7 +812,7 @@ render_json(){
   local fn=() ft=()
   [ -n "$C_WARN" ] && { fn+=(no-wrap-up); ft+=("$C_WARN"); }
   if [ "${#C_OWED[@]}" -eq 1 ]; then fn+=(owed); ft+=("${C_OWED[0]}")
-  elif [ "${#C_OWED[@]}" -gt 1 ]; then fn+=(owed); ft+=("Owed: ${#C_OWED_CMD[@]} declined project wrap-up command(s); 'pj-wrap owed' lists them."); fi
+  elif [ "${#C_OWED[@]}" -gt 1 ]; then fn+=(owed); ft+=("Owed: ${#C_OWED_CMD[@]} unfinished project wrap-up command(s); 'pj-wrap owed' lists them."); fi
   [ -n "$C_SYNC" ] && { fn+=(dot-claude-behind); ft+=("$C_SYNC"); }
   [ -n "$C_MODS" ] && { fn+=(mods-api); ft+=("$C_MODS"); }
   [ -n "$C_RCOPY" ] && { fn+=(rules-copy); ft+=("$C_RCOPY"); }

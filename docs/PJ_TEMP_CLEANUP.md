@@ -33,7 +33,7 @@ W-20260929-A206 and is not this design's job.
 | --- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | T1  | How a session records its temp paths            | A per-session temp folder: pj points `TMPDIR` at a folder named for the session, so every tool writes there. Paths outside it are registered by hand.               | a hook diffing the shared folder (misattributes with 12 live sessions); agent registration only (misses every tool-made file)       |
 | T2  | Who sweeps a session that ended without wrap-up | The `pj` launcher, before the new session starts. It runs outside the sandbox, so it can check the old session is dead. The start card only reports what was swept. | a separate start hook (sandboxed, cannot check liveness); card lists, wrap-up sweeps (leftovers wait, which is how the disk filled) |
-| T3  | Does the sweep include the scratchpad           | Yes, after wrap-up step 6 has moved every record out of it                                                                                                          | recorded list only                                                                                                                  |
+| T3  | Does the sweep include the scratchpad           | Yes, after wrap-up's tidy step (6 then, 7 since 5 Oct 2026) has moved every record out of it                                                                                                          | recorded list only                                                                                                                  |
 | T4  | Anything else to rethink                        | No                                                                                                                                                                  |                                                                                                                                     |
 
 T2 exists because the start card's contract (`home/.local/bin/pj-start-card`, lines 14-17) says
@@ -104,7 +104,7 @@ claude starts ──> SessionStart: pj-temp session-start
                     └─ appends `export TMPDIR=<folder>` to CLAUDE_ENV_FILE
                   SessionStart: pj-start-card prints PJ_TEMP_SWEPT (startup, resume)
 work ──> Bash (sandboxed or not): TMPDIR=<folder>; `pj-temp add <path>` for anything outside it
-/pj:wrap-up step 6 ──> workers `pj-temp sweep`, then own, then `--scratchpad` after records move
+/pj:wrap-up step 7 ──> workers `pj-temp sweep`, then own, then `--scratchpad` after records move
 ```
 
 | Piece | What it does |
@@ -114,7 +114,7 @@ work ──> Bash (sandboxed or not): TMPDIR=<folder>; `pj-temp add <path>` for 
 | `home/.local/bin/pj` | `temp_sweep_at_launch`: once per invocation, after the cap check, never in the relaunch loop; `--temp-sweep` runs it alone; `PJ_NO_TEMP_SWEEP` skips it |
 | `home/.local/bin/pj-worker` | `count --json` machine rows carry `sid` and `start` (the registry's procStart) |
 | `home/.local/bin/pj-start-card` | one `Temp sweep ...` line from `PJ_TEMP_SWEPT`; still writes nothing |
-| wrap-up `SKILL.md` step 6, herdr `SKILL.md` rule 15 | the wrap-up order; reports go to the records home |
+| wrap-up `SKILL.md` step 7, herdr `SKILL.md` rule 15 | the wrap-up order; reports go to the records home |
 
 **Liveness.** A folder is LIVE when any owner pid is a live registry entry with the SAME start
 time (so a reused pid cannot pass), or any owner session id is held by a live registry entry, or

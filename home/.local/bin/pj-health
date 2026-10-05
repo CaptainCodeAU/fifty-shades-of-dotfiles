@@ -660,7 +660,7 @@ else
 fi
 
 # M13b owed project wrap-ups and M13c bare wrap-ups (W5, W6; D-20260925-A01; the state contract
-# is docs/PJ_WRAP_UP.md). Both informational: a declined step 8 and a bare `pj-wrap done` are
+# is docs/PJ_WRAP_UP.md). Both informational: an unfinished project wrap-up and a bare `pj-wrap done` are
 # allowed, so neither is ever a FAIL. Both state their denominator, and a folder or file that
 # cannot be read is NOT MEASURED, never a zero: an unreadable owed file is exactly the owe
 # this row exists to surface. Names are DATA from another session's write: anything outside

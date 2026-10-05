@@ -8,8 +8,9 @@
 #                                  mark this session wrapped; move this project's
 #                                  no-wrap-up flag aside (kept with --keep-earlier).
 #                                  --skill: the marker says via: skill (else via: bare, W6).
-#                                  --owed: the project's own wrap-up was declined; leave an
-#                                  owed record the start card shows until it runs (W5).
+#                                  --owed: the project's own wrap-up stopped or failed at
+#                                  /pj:wrap-up; leave an owed record the start card shows
+#                                  until it runs (W5, W46).
 #                                  Then prints this session's wrap batch (open-items --wrap
 #                                  ledger), one line per record, and the undo line.
 #   pj-wrap owed                   list this project's owed records (rc 1 when none)
@@ -88,8 +89,8 @@ norm_cmd(){ local s; s="$(trim "$1")"; printf '%s' "${s#/}"; }
 stamp_dest(){ local d="$1.$(date +%Y%m%d-%H%M%S)"; while [ -e "$d" ]; do d="$d.$RANDOM"; done; printf '%s' "$d"; }
 
 # ---------------------------------------------------------------- owed ----
-# The owed record (W5, docs/PJ_WRAP_UP.md): step 8 of the skill offered the project's own
-# wrap-up and it was declined. The record stays until that command runs (pj-session-end
+# The owed record (W5, docs/PJ_WRAP_UP.md): the skill ran the project's own wrap-up and it
+# stopped or failed (before 5 Oct 2026: the skill offered it and it was declined). The record stays until that command runs (pj-session-end
 # sees it in a later transcript) or `pj-wrap owed --clear`. Records are APPENDED, a blank
 # line between, and the write is checked by counting records before and after.
 write_owed(){                   # write_owed <command> <project>
@@ -214,6 +215,9 @@ cmd_done(){
     owed="$(trim "$owed")"
     [ -n "$owed" ] || refuse "done: --owed was given an empty command. Nothing written."
   fi
+  # A folder that is not a git repo has no project key, so no marker can be written (W46,
+  # Gavin 5 Oct 2026: "warn plainly"). The same words lead the /pj:wrap-up report.
+  repo_top >/dev/null || refuse "done: This folder is not a git repo, so this session cannot be marked wrapped. Nothing was written."
   flag="$(flag_path)" || exit 2
   proj="$(basename "$(repo_top)")"
   mkdir -p "$STATE/wrapped" 2>/dev/null || refuse "done: cannot create $(tilde "$STATE/wrapped"), so this session is NOT marked wrapped (a Claude sandbox refuses writes there: lift it for this one command)"
