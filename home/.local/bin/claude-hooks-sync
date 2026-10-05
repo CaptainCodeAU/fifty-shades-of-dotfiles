@@ -389,7 +389,53 @@ report_upgrades() {   # $1 = the verb, "needs upgrade" or "would upgrade"
     done
 }
 
+# --- engage cross-check (2026-10-05 outage follow-up) -------------------------
+# engage registers six of THESE guard files from its own manifest, and nothing
+# here read it: retiring or renaming a guard in this repo would leave every engage
+# session denying every call that guard covers (HOOK MISSING), with this tool
+# reporting all clear (red team, measured). So: every __HOME__/.claude/hooks/<name>
+# engage names must be a file this repo ships and has not retired. Said positively
+# on every run; the check fails on a miss. CLAUDE_ENGAGE_MANIFEST overrides the path.
+ENGAGE_MISSING=()
+engage_crosscheck() {
+    local em="${CLAUDE_ENGAGE_MANIFEST:-$HOME/CODE/CaptainCodeAU/engage/templates/settings/hooks.json}"
+    local repo_root repo_hooks name live lt n=0 ours=0 elsewhere=0
+    if [[ ! -r "$em" ]]; then
+        printf '  %s.%s engage cross-check: no engage manifest at %s (skipped)\n' "$D" "$N" "$em"
+        return 0
+    fi
+    repo_root="$(cd "$(dirname "$MANIFEST")/../.." && pwd)"
+    repo_hooks="$repo_root/home/.claude/hooks"
+    while IFS= read -r name; do
+        [[ -n "$name" ]] || continue
+        n=$((n+1))
+        live="$HOOKS_DIR/$name"
+        # Owned by another repo (dot-claude, herdr...): a live file that is not a link into
+        # this repo. Not ours to judge.
+        if [[ -e "$live" && ! -L "$live" ]] || { [[ -L "$live" ]] && lt=$(readlink "$live") && [[ "$lt" != *"$(basename "$repo_root")/home/.claude/hooks/"* ]]; }; then
+            elsewhere=$((elsewhere+1))
+            continue
+        fi
+        ours=$((ours+1))
+        if [[ ! -f "$repo_hooks/$name" ]] || jq -e --arg s "$name" '[.retired[]? | select(.script == $s)] | length > 0' "$MANIFEST" >/dev/null 2>&1; then
+            ENGAGE_MISSING+=("$name")
+        fi
+    done < <(jq -r '.hooks[]? | .script_path // empty | select(startswith("__HOME__/.claude/hooks/")) | sub("^__HOME__/.claude/hooks/"; "")' "$em" | sort -u)
+    if (( ${#ENGAGE_MISSING[@]} == 0 )); then
+        printf '  %s+%s engage cross-check: all %d of this repo'"'"'s hook file(s) engage names are shipped here (%d more come from other repos)\n' "$G" "$N" "$ours" "$elsewhere"
+    else
+        printf '  %s!%s engage cross-check: engage still names %d hook file(s) this repo does not ship or has retired:\n' "$R" "$N" "${#ENGAGE_MISSING[@]}"
+        for name in "${ENGAGE_MISSING[@]}"; do printf '      %s%s%s\n' "$C" "$name" "$N"; done
+        printf '      %sOnce deployed, every engage session denies every call those guard (HOOK MISSING). Remove the row from %s first.%s\n' "$D" "$em" "$N"
+    fi
+}
+engage_crosscheck
+
 if [[ "$MODE" == "check" ]]; then
+    if (( ${#PENDING[@]} == 0 && ${#UPGRADE[@]} == 0 && ${#RETIRE[@]} == 0 && ${#ENGAGE_MISSING[@]} > 0 )); then
+        report_skips
+        exit 1
+    fi
     if (( ${#PENDING[@]} == 0 && ${#UPGRADE[@]} == 0 && ${#RETIRE[@]} == 0 )); then
         printf '  %s+%s Claude hooks: %d registered' "$G" "$N" "$ALREADY"
         (( ${#SKIPPED[@]} > 0 )) && printf ', %d skipped' "${#SKIPPED[@]}"
