@@ -99,15 +99,21 @@ Steps run in this order; `pj-wrap done` is always last. Rulings and reasons:
    - First `open-items --grep "<command>" --all` and name any open item against it.
    - Print, on a line of its own, exactly: `pj:wrap-up hands over to <command>` (for example
      `pj:wrap-up hands over to /wrap-up`). The project command looks for that line.
-   - Run it, with no question first (the user can interrupt): the Skill tool with the command's
-     name (no leading `/`) and the args `from-pj-wrap-up` followed by step 5's handoff lines. If
-     the Skill tool refuses (the command still says `disable-model-invocation: true`, or is not
-     listed), Read `.claude/commands/<name>.md` (in a worktree: this checkout, then the main
-     one) and follow every step, with those args as its `$ARGUMENTS`. Never a shell: a slash
-     command is run by the model.
+   - Run it, with no question first: the Skill tool with the command's name (no leading `/`)
+     and the args `from-pj-wrap-up` followed by step 5's handoff lines. A command whose file
+     never mentions `from-pj-wrap-up` predates the hand-over: run it with no args (it may read
+     args as something else) and give it step 5's lines in chat.
+   - The Skill tool refuses (the command still says `disable-model-invocation: true`, or is not
+     listed): say so in chat, naming the command and the refusal, then Read
+     `.claude/commands/<name>.md` (in a worktree: this checkout, then the main one) and
+     follow every step, with those args as its `$ARGUMENTS`. Gavin chose this route for his
+     own commands; the report lists "remove the flag from <command>" as an action for him.
+     Never a shell: a slash command is run by the model.
    - When it ends, carry on at step 7. It never runs `pj-wrap done`; step 10 marks the session.
-     It stopped or failed (a step refused, a test failed, the user stopped it, the file is
-     missing): note which step and why; step 10 records it as owed.
+     It stopped or failed (a step refused, a test failed, the file is missing): note which step
+     and why; step 10 records it as owed. The user interrupts it: nothing after it has run and
+     the session is not marked. When they next write, ask (one question): carry on at step 7
+     with the command owed, or leave this wrap-up unfinished.
    No `wrap-up` key: say so in the report.
 
 7. Tidy what this session opened (W7). Stop its watches first (TaskStop), thank each worker, then
@@ -145,9 +151,11 @@ Steps run in this order; `pj-wrap done` is always last. Rulings and reasons:
 10. `pj-wrap done --skill`, sandbox lifted, plus `--keep-earlier` when step 0 chose later and
     `--owed "<command>"` when the project command in step 6 stopped or failed. When it ran to
     the end and `pj-wrap owed` lists it from an earlier stop, `pj-wrap owed --clear "<command>"`
-    (sandbox lifted). Then check the marker: `test -e ~/.local/state/pj/wrapped/${CLAUDE_CODE_SESSION_ID:-$CLAUDE_SESSION_ID}`;
-    missing means NOT marked, say so. Not a git repo: `done` refuses (rc 2) and nothing can be
-    marked. In a worktree the records belong to the main checkout.
+    (sandbox lifted). Then check the marker:
+    `test -e ~/.local/state/pj/wrapped/${CLAUDE_CODE_SESSION_ID:-$CLAUDE_SESSION_ID}`; missing
+    means NOT marked, say so. Not a git repo: `done` refuses (rc 2) and nothing can be marked or
+    owed; under line 1, name the stopped step if step 6 stopped. In a worktree the records
+    belong to the main checkout.
     Then the report. Line 1, first that applies: not a git repo (the sentence from step 0); a
     STOP from step 9; an owed project wrap-up (which step stopped, and why); any other action
     for the user; "Done, nothing needed from you." Then copy VERBATIM the block

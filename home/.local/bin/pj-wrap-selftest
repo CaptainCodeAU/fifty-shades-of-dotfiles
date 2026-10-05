@@ -466,6 +466,10 @@ check "L done is owed only when the project command stopped or failed" 'block_of
 check "L no stale text: pj-voice, the next pj launch, for pj sessions" 'no_stale "$SKILL"'
 check "L control: the old text FAILS the stale check" '! no_stale "$OLDSK"'
 check "L the tidy step names engage's launch sweep (pj-temp sweep-dead)" 'block_of "$SKILL" "$(step_of "$SKILL" "Tidy what this session opened")" | grep -q "sweep-dead"'
+check "L a command that never mentions from-pj-wrap-up runs with NO args (win_go_app_test reads args as a vertical)" 'printf "%s" "$PS" | grep -q "never mentions \`from-pj-wrap-up\`" && printf "%s" "$PS" | grep -q "with no args"'
+check "L the Read fallback is LOUD: said in chat, and removing the flag is an action in the report" 'printf "%s" "$PS" | grep -qi "say so in chat" && printf "%s" "$PS" | grep -q "remove the flag"'
+check "L an interrupted project command: the session is not marked, and the skill says how to go on" 'printf "%s" "$PS" | grep -qi "interrupt" && printf "%s" "$PS" | grep -q "not marked"'
+check "L non-git AND a stopped project step: the report still names the stopped step" 'block_of "$SKILL" 10 | tr -s " \n" "  " | grep -q "name the stopped step"'
 check "L a non-git folder: the report says so plainly, in the exact words" 'tr -s " \n" "  " < "$SKILL" | grep -qF "This folder is not a git repo, so this session cannot be marked wrapped."'
 # pj-wrap's own refusal says the same sentence, so a bare run hears it too. Control: the
 # same command inside the repo fixture is not refused (B above marks it wrapped).
@@ -474,6 +478,9 @@ check "L done outside a git repo REFUSES (rc 2) in the plain words" '[ "$RC" -eq
 check "L and wrote no marker" '[ ! -e "$STATE/wrapped/l-sess" ]'
 SID=l-sess; wrap done --skill
 check "L control: the same done inside the repo marks it (rc 0)" '[ "$RC" -eq 0 ] && [ -f "$STATE/wrapped/l-sess" ]'
+SID=l-owe; wrap done --skill --owed "/wrap-up"; wrap owed
+check "L the owed listing says not finished, never declined" '[ "$RC" -eq 0 ] && printf "%s" "$OUT" | grep -q "(not finished in session l-owe)" && ! printf "%s" "$OUT" | grep -q "declined"'
+wrap owed --clear "/wrap-up"; check "L control: the owe clears (rc 0)" '[ "$RC" -eq 0 ]'
 
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"
 rm -r "$ROOT" 2>/dev/null || true

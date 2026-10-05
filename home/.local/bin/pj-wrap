@@ -130,7 +130,7 @@ cmd_owed(){
         if (L[j] ~ /^since: /)   t = substr(L[j], 8)
       }
       if (o == "") next
-      printf "  %d. %s  since %s  (declined in session %s)\n", ++i, o, t, s
+      printf "  %d. %s  since %s  (not finished in session %s)\n", ++i, o, t, s
     }' "$f"
     exit 0
   fi
