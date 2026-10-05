@@ -27,7 +27,10 @@
 #   then     open items from `open-items --session`: count (and "N pinned" when any item's
 #            when: begins "next session"), up to 10 titles with pinned ones FIRST,
 #            "+N more", "parked: N"; or one line saying there is no drawer, or, when pj-homes
-#            says records: engage, one line pointing at engage instead
+#            says records: engage, one line pointing at engage instead; or, when
+#            `engage-go cutover check` says this project moved, the one line "Items moved to
+#            engage -- see the engage pane" instead of the frozen drawer (D-20261005-A08;
+#            --json then says drawer "none", open 0, like records: engage)
 #   then     the cross-project lines from the same call (A16, W-20260923-A28): Watching,
 #            Checks owed, Mandatory, Moved out, Ignored lines (each a count line plus up to
 #            3 titles), then Inbox and notes. Only when non-empty. Own titles keep a floor
@@ -372,11 +375,37 @@ owed_data(){    # owed_data <owed-file>
 C_ERRORS=()
 err(){ C_ERRORS+=("$1"); }
 
+# D-20261005-A08 (Decision 6 of the cc-claude-mods move). A project moved to engage keeps its
+# drawer only as history: open-items refuses every write there, and the engage pane holds the
+# live list, so the frozen titles would be a second list that disagrees with it. The question
+# is engage's (`engage-go cutover check`, exit 0 = moved), asked about the repo the card is
+# for. Only exit 0 counts: exit 1, any other code, no engage-go, or no answer in 2 s shows the
+# drawer as before (CONTRACT 1 and 3: the card never waits long and never blocks a session);
+# exit 3 and a timeout are named in errors. Output goes to /dev/null, so nothing it leaves
+# behind can hold the card's pipe open; it is killed past the limit.
+moved_to_engage(){              # moved_to_engage <repo>: rc 0 when engage says moved
+  local pid n=0 rc
+  command -v engage-go >/dev/null 2>&1 || return 1
+  engage-go cutover check --dir "$1" </dev/null >/dev/null 2>&1 & pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    n=$((n + 1))
+    if [ "$n" -gt 100 ]; then
+      kill -KILL "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+      err "items: engage-go cutover check did not answer in 2 s; the drawer is shown"
+      return 1
+    fi
+    sleep 0.02
+  done
+  wait "$pid"; rc=$?
+  [ "$rc" -eq 3 ] && err "items: engage-go cutover check says the move marker is not valid; the drawer is shown"
+  [ "$rc" -eq 0 ]
+}
+
 gather(){
   local where="" wrc=0 sess="" src=0 line="" sec="" t od orc c s i show b
   C_TOP=""; C_NAME=""; C_INREPO=0; C_DRAWER=""; C_DSTATE=unknown; C_DECL=""
   C_WARN=""; C_WREC=0; C_WENDED=""; C_WTR=""
-  C_OPEN_HEADER=""; C_TITLES=(); C_PARKED=""; C_NPARKED=0; C_N=0; C_NPIN=""; C_HAVE_OWN=0
+  C_OPEN_HEADER=""; C_TITLES=(); C_PARKED=""; C_NPARKED=0; C_N=0; C_NPIN=""; C_HAVE_OWN=0; C_MOVED=0
   C_XH=(); C_XT=(); C_XS=(); C_XSINGLE=()
   C_OWED=(); C_OWED_CMD=(); C_OWED_SINCE=(); C_OWED_UNREADABLE=0
   C_HMARK=""; C_HPATH=""; C_HANDOFF=""; C_HSIZE=""; C_HDATE=""
@@ -407,6 +436,9 @@ gather(){
     *) err "items: open-items --where exit $wrc; the items section dropped out"
        C_DRAWER=""; wrc=99 ;;                 # open-items broken or absent: section drops out
   esac
+  # moved to engage (A08): the own list becomes one line; the drawer still resolves drawer:
+  # markers (a handoff kept there), and the cross-project lines below are still read.
+  if [ "$wrc" -le 1 ] && moved_to_engage "$C_TOP"; then C_MOVED=1; C_DSTATE=none; fi
 
   # the no-wrap-up flag
   local flag="$STATE/no-wrap-up/$(encode_key "$C_TOP")"
@@ -433,7 +465,7 @@ gather(){
   # can never be counted as one of this project's own.
   # --json: start the detail read NOW, on fd 9, so it runs beside --session instead of after
   # it: 645 ms became 450 on a 185-item drawer (2026-09-27). Only when there is a drawer.
-  [ "$MODE" = json ] && [ "$wrc" -eq 0 ] && exec 9< <({ open-items --json 2>/dev/null; printf '\036RC %s\n' "$?"; })
+  [ "$MODE" = json ] && [ "$wrc" -eq 0 ] && [ "$C_MOVED" -eq 0 ] && exec 9< <({ open-items --json 2>/dev/null; printf '\036RC %s\n' "$?"; })
   if [ "$wrc" -eq 0 ] || [ "$wrc" -eq 1 ]; then
     sess="$(open-items --session 2>/dev/null | strip_ansi; exit "${PIPESTATUS[0]}")"; src=$?
     [ "$src" -eq 0 ] || err "items: open-items --session exit $src"
@@ -452,7 +484,10 @@ gather(){
       esac
     done <<<"$sess"
   fi
-  if [ "$wrc" -eq 1 ] && [ "$(decl_get "$C_DECL" records)" = engage ]; then
+  if [ "$C_MOVED" -eq 1 ]; then
+    C_TITLES=(); C_PARKED=""; C_N=0; C_NPIN=""; C_HAVE_OWN=0
+    C_OPEN_HEADER="Items moved to engage -- see the engage pane"
+  elif [ "$wrc" -eq 1 ] && [ "$(decl_get "$C_DECL" records)" = engage ]; then
     C_OPEN_HEADER="Open items: kept as engage records (engage-go questions lists what waits on you)"
   elif [ "$wrc" -eq 1 ]; then
     C_OPEN_HEADER="Open items: no drawer for this project yet (\`open-items init\` creates one)"

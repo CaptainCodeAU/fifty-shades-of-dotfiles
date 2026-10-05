@@ -38,6 +38,11 @@ export PJ_RULES_COPY="$ROOT/no-rules-copy"
 # The card calls `open-items` from PATH. Put the one BESIDE this card first, or a worktree's
 # selftest measures the stowed master copy and can never see a change to open-items --session
 # (found 2026-09-23 while building W-20260923-A23). PJ_CARD moves both together.
+# Never the machine's real engage-go (D-20261005-A08): every arm runs as "not moved", so a
+# moved project on this machine cannot change them. Section MV puts its own fakes in front.
+mkdir -p "$ROOT/eg-not-moved"
+printf '#!/bin/sh\necho "not moved: card selftest"\nexit 1\n' > "$ROOT/eg-not-moved/engage-go"; chmod +x "$ROOT/eg-not-moved/engage-go"
+export PATH="$ROOT/eg-not-moved:$PATH"
 export PATH="$(dirname "$CARD"):$PATH"
 
 PASS=0; FAIL=0
@@ -118,6 +123,36 @@ check "EN control: records: private and no drawer still gets the init hint" 'has
 ED="$ROOT/repo-engage-drawer"; mkrepo "$ED"; mkdir -p "$ED/.claude"; printf 'records: engage\n' > "$ED/.claude/pj-homes"; mkdrawer "$ED" 2 0 >/dev/null
 run "$ED"
 check "EN control: records: engage WITH a drawer shows the drawer as usual" 'has "$OUT" "^Open items: 2 open" && ! has "$OUT" "engage records"'
+
+# MV: a project moved to engage (D-20261005-A08, Decision 6). `engage-go cutover check` exit 0
+# turns the frozen drawer into ONE line; exit 1 (the control), exit 3 and a hang show the drawer
+# as before. Each fake logs its arguments; MV's drawer has 3 open and 1 parked, so the control
+# shows what the moved card leaves out.
+MV="$ROOT/repo-moved"; mkrepo "$MV"; mkdrawer "$MV" 3 1 >/dev/null; printf 'hand\n' > "$MV/OPENING-PROMPT.md"
+mk_egf(){   # mk_egf <name> <last line of the fake>
+  mkdir -p "$ROOT/eg-$1"
+  printf '#!/bin/bash\nprintf "%%s\\n" "$*" >> "%s/eg-%s/ran"\necho "fake noise" >&2\n%s\n' "$ROOT" "$1" "$2" > "$ROOT/eg-$1/engage-go"
+  chmod +x "$ROOT/eg-$1/engage-go"; : > "$ROOT/eg-$1/ran"
+}
+mk_egf moved 'echo "moved: repo-moved (2026-10-05)"; exit 0'
+mk_egf stay 'echo "not moved: no companion"; exit 1'
+mk_egf bad 'echo "not valid: MOVED-TO-ENGAGE is not committed"; exit 3'
+mk_egf hang "exec -a mvhang$$ sleep 30"
+runp(){ local o="$PATH"; PATH="$ROOT/eg-$1:$o"; run "$2"; PATH="$o"; }   # runp <fake> <dir>
+runp moved "$MV"
+check "MV moved: rc 0, the one line 'Items moved to engage -- see the engage pane'" '[ "$RC" -eq 0 ] && has "$OUT" "^Items moved to engage -- see the engage pane$"'
+check "MV moved: none of the frozen drawer (no Open items line, no titles, no parked line)" '! has "$OUT" "^Open items" && [ "$(ntitles "$OUT")" -eq 0 ] && ! has "$OUT" "parked:"'
+check "MV moved: the other lines stay (header, handoff, hello rule: 4 lines)" 'has "$OUT" "^pj start card: repo-moved$" && has "$OUT" "^Handoff: repo:OPENING-PROMPT.md" && [ "$(lines "$OUT")" -eq 4 ]'
+check "MV moved: engage-go was asked about this repo, by --dir" '[ "$(cat "$ROOT/eg-moved/ran")" = "cutover check --dir $MV" ]'
+check "MV moved: stderr empty (the fake's noise never reaches the card)" '[ ! -s "$ROOT/stderr" ]'
+runp stay "$MV"
+check "MV control, not moved (exit 1): the drawer as before, 3 open, 3 titles, parked 1" 'has "$OUT" "^Open items: 3 open" && [ "$(ntitles "$OUT")" -eq 3 ] && has "$OUT" "^   parked: 1$" && ! has "$OUT" "moved to engage"'
+check "MV control: the not-moved fake really ran" '[ "$(cat "$ROOT/eg-stay/ran")" = "cutover check --dir $MV" ]'
+runp bad "$MV"
+check "MV exit 3 (marker not valid): the drawer as before" '[ "$RC" -eq 0 ] && has "$OUT" "^Open items: 3 open" && ! has "$OUT" "moved to engage"'
+t0=$SECONDS; runp hang "$MV"; MVT=$((SECONDS - t0))
+check "MV a hang: rc 0, the drawer as before, in at most 4 s (${MVT} s)" '[ "$RC" -eq 0 ] && has "$OUT" "^Open items: 3 open" && [ "$MVT" -le 4 ]'
+check "MV a hang: the fake was killed, nothing left running" '! pgrep -f "mvhang$$" >/dev/null 2>&1'
 
 # --- E: declaration absent -> default handoff repo:OPENING-PROMPT.md ---------------
 run "$A"; check "E default handoff absent -> no line" '! has "$OUT" "^Handoff:"'
@@ -487,7 +522,7 @@ agree(){
   local d="$1" T bad="" n p k m own lab key c
   T="$( builtin cd "$d" && "$CARD" </dev/null 2>/dev/null )"; runj "$d"
   parses || { AGREE="json does not parse"; return 0; }
-  if has "$T" "^Open items: no drawer" || has "$T" "^Open items: kept as engage records"; then [ "$(jv .items.drawer)" = none ] && [ "$(jv .items.open)" = 0 ] || bad="$bad drawer"
+  if has "$T" "^Open items: no drawer" || has "$T" "^Open items: kept as engage records" || has "$T" "^Items moved to engage"; then [ "$(jv .items.drawer)" = none ] && [ "$(jv .items.open)" = 0 ] || bad="$bad drawer"
   elif has "$T" "^Open items: none open"; then [ "$(jv .items.drawer)" = present ] && [ "$(jv .items.open)" = 0 ] || bad="$bad none-open"
   elif has "$T" "^Open items: "; then
     n="$(printf '%s\n' "$T" | sed -n 's/^Open items: \([0-9]*\) open.*/\1/p')"
@@ -611,6 +646,17 @@ KC="$(jv '[paths | map(tostring) | join(".")] | join(",")')"
 runj "$EN"; check "T records: engage: parses, drawer none, open 0, no error" 'parses && [ "$(jv .items.drawer)" = none ] && [ "$(jv .items.open)" = 0 ] && [ "$(jv ".errors | length")" -eq 0 ]'
 check "T records: engage: schema 1 unchanged, the same key paths as the no-drawer card" '[ -n "$KC" ] && [ "$(jv "[paths | map(tostring) | join(\".\")] | join(\",\")")" = "$KC" ]'
 agree "$EN"; check "T records: engage: text and --json agree (${AGREE:-all agree})" '[ -z "$AGREE" ]'
+KI="$(jv '[.items | paths | map(tostring) | join(".")] | join(",")')"   # J is the records: engage card's here
+PATH="$ROOT/eg-moved:$PATH" runj "$MV"
+check "T moved: parses, drawer none, open 0, list and parked_list empty, parked 0, no error" 'parses && [ "$(jv .items.drawer)" = none ] && [ "$(jv .items.open)" = 0 ] && [ "$(jv ".items.list | length")" = 0 ] && [ "$(jv ".items.parked_list | length")" = 0 ] && [ "$(jv .items.parked)" = 0 ] && [ "$(jv ".errors | length")" -eq 0 ]'
+check "T moved: schema 1 unchanged, items has the same key paths as the records: engage card" '[ -n "$KI" ] && [ "$(jv "[.items | paths | map(tostring) | join(\".\")] | join(\",\")")" = "$KI" ]'
+PATH="$ROOT/eg-moved:$PATH" agree "$MV"; check "T moved: text and --json agree (${AGREE:-all agree})" '[ -z "$AGREE" ]'
+PATH="$ROOT/eg-stay:$PATH" runj "$MV"
+check "T moved control, not moved: drawer present, open 3, parked 1" 'parses && [ "$(jv .items.drawer)" = present ] && [ "$(jv .items.open)" = 3 ] && [ "$(jv .items.parked)" = 1 ]'
+PATH="$ROOT/eg-bad:$PATH" runj "$MV"
+check "T exit 3: drawer present, and errors names the marker" 'parses && [ "$(jv .items.drawer)" = present ] && jv ".errors[]" | grep -q "move marker is not valid"'
+PATH="$ROOT/eg-hang:$PATH" runj "$MV"
+check "T a hang: drawer present, and errors names the 2 s limit" 'parses && [ "$(jv .items.drawer)" = present ] && jv ".errors[]" | grep -q "did not answer in 2 s"'
 J="$( builtin cd "$B" && PATH="$BROKEN:$PATH" "$CARD" --json </dev/null 2>/dev/null )"; RC=$?
 check "T open-items broken: rc 0, parses, drawer unknown, errors names it" '[ "$RC" -eq 0 ] && parses && [ "$(jv .items.drawer)" = unknown ] && jv ".errors[]" | grep -q "^items: open-items --where exit 7"'
 J="$( builtin cd "$B" && PATH="$ROOT/nowhere:/usr/bin:/bin" "$CARD" --json </dev/null 2>/dev/null )"; RC=$?
