@@ -59,7 +59,7 @@ replaces the table pop-up of W4; every other question W4 kept is still asked.
 ## The project's own wrap-up runs inside /pj:wrap-up (5 Oct 2026, W46)
 
 Gavin's picks, 5 Oct 2026, in the engage-main conductor session (engage record #1014; ruling
-D-20261005 "pj:wrap-up runs the project wrap-up", in the machine-wide register):
+D-20261005-A02 in the machine-wide register):
 
 - "Let it run them": /pj:wrap-up runs a project's own wrap-up itself, before it marks the
   session wrapped. No question box, no typing. The project commands lose their manual-only
@@ -82,6 +82,21 @@ followed by step 5's handoff lines. If the Skill tool refuses (a command that st
 `disable-model-invocation: true`, or one the session does not list), it Reads
 `.claude/commands/<name>.md` (in a worktree: that checkout, then the main one) and follows
 every step. Never a shell: a slash command is run by the model.
+
+Three rules came from checking step 6 against real files on 5 Oct 2026 (W46 report):
+
+- **A command that predates the hand-over runs with no args.** win_go_app_test's
+  `/vertical-wrap-up` (out of this change's scope) reads its args as a vertical name and never
+  looks for `from-pj-wrap-up`. So a command whose file never mentions `from-pj-wrap-up` is run
+  with no args, as if typed, and gets step 5's lines in chat.
+- **The Read fallback is loud.** The real refusal for a manual-only command (measured in
+  Network_Plan af6f0a6e, v2.1.289) says "Do not replicate this skill's workflow by other
+  means". Gavin's pick is that his own commands run, so the fallback stays, but it is said in
+  chat and the report asks him to remove the flag. The fix is the flag coming off, not the
+  fallback.
+- **An interrupted command leaves the session unmarked.** Steps 7 to 10 have not run. On the
+  next message the skill asks one question: carry on at step 7 with the command owed, or leave
+  the wrap-up unfinished.
 
 **Typed alone (the project command's side, contract part 2, built in each project).** The
 project command's first step: if its args start with `from-pj-wrap-up`, or the hand-over line
