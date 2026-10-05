@@ -520,6 +520,30 @@ check "MV a moved project: global verdicts go to CaptainCodeAU-isolinear, never 
 check "MV a moved project: another project's item is filed from its folder (open-items refuses --for, --inbox)" 'moved_other "$SKILL"'
 check "MV control: the 2d13e0e wording (~/.claude routes) FAILS both" '[ -n "$(head_of "$OLDGL")" ] && ! moved_global "$OLDGL" && ! moved_other "$OLDGL"'
 check "MV control: the old skill FAILS both" '! moved_global "$OLDSK" && ! moved_other "$OLDSK"'
+# Exit 3, a move marker that is not valid (W-20261006-A01; engage cutover-1063 REPORT item 5).
+# open-items refuses every write on 3 as on 0, so "the steps as written" would file into a drawer
+# that refuses. The rule names the marker, files nothing here and lists the rows for Gavin.
+# Controls: the 35197ac wording (3 fell under "any other exit") FAILS; a wording that names exit
+# 3 but still sends it to the steps as written FAILS; OLDSK FAILS.
+moved_bad(){ local h; h="$(head_of "$1")"
+  printf '%s' "$h" | grep -qF 'Exit 3 means the move marker is not valid' && printf '%s' "$h" | grep -qF 'holds a `MOVED-TO-ENGAGE` file' \
+    && printf '%s' "$h" | grep -qF 'open-items refuses every write on 3 as on 0' \
+    && printf '%s' "$h" | grep -qF 'naming the file and the `not valid: <why>` line the check printed' \
+    && printf '%s' "$h" | grep -qF 'not with open-items and not with `engage-go add`; list each such row as an action for Gavin' \
+    && printf '%s' "$h" | grep -qF 'Exit 1, any other exit, or no engage-go: the steps as written' \
+    && ! printf '%s' "$h" | grep -qF 'Any other exit: the steps as written' \
+    && ! printf '%s' "$h" | grep -qiF 'exit 3 or any other exit'; }
+OLDX3="$ROOT/old-skill-35197ac.md"
+printf '%s\n' '- A project moved to engage: at step 0 run `engage-go cutover check` once. Exit 0 means moved.' \
+  '  the engage account inbox. Any other exit: the steps as written.' '0. Earlier sessions.' > "$OLDX3"
+BADX3="$ROOT/bad-skill-x3.md"
+printf '%s\n' '- Exit 3 means the move marker is not valid: the repo holds a `MOVED-TO-ENGAGE` file.' \
+  '  Exit 3 or any other exit: the steps as written.' '0. Earlier sessions.' > "$BADX3"
+check "MV exit 3: names the bad marker, files nothing here, lists the rows for Gavin" 'moved_bad "$SKILL"'
+check "MV control: the 35197ac wording (exit 3 under any other exit) FAILS" '[ -n "$(head_of "$OLDX3")" ] && ! moved_bad "$OLDX3"'
+check "MV control: a wording that names exit 3 but sends it to the steps as written FAILS" '[ -n "$(head_of "$BADX3")" ] && ! moved_bad "$BADX3"'
+check "MV control: the old skill FAILS the exit 3 check" '! moved_bad "$OLDSK"'
+check "MV exit 3: the exit 0 rule above still holds" 'moved_rule "$SKILL"'
 
 # --- GL: the global area, in every project (Gavin's ruling, engage #1060, 5 Oct 2026) ---------
 # A ruling, lesson or item for every project, and an item with no project, is a record in

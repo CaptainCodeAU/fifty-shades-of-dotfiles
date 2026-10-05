@@ -45,7 +45,13 @@ Steps run in this order; `pj-wrap done` is always last. Rulings and reasons:
   the pj inbox). An item for another project still goes to
   that project, filed from that project's folder: open-items here refuses every add, `--for` and
   `--inbox` too. If that project moved as well, file it there with `engage-go add`, or drop it in
-  the engage account inbox. Any other exit: the steps as written.
+  the engage account inbox. Exit 3 means the move marker is not valid (W-20261006-A01): the repo
+  holds a `MOVED-TO-ENGAGE` file that is not a sound move, and open-items refuses every write on
+  3 as on 0. Say so at the top of the report, naming the file and the `not valid: <why>` line the
+  check printed. File, close, park, decline and extend nothing here, not with open-items and not
+  with `engage-go add`; list each such row as an action for Gavin, to do once he mends the
+  marker. No drawer is offered. Reads still work (`open-items --session`), and global and
+  other-project rows go as above. Exit 1, any other exit, or no engage-go: the steps as written.
 
 0. Earlier sessions. `pj-wrap status`: rc 1 none; rc 0 lists sessions that ended without
    wrap-up; rc 2 not a git repo: skip each step whose tool refuses for that reason, name it, and
