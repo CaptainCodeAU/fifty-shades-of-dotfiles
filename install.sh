@@ -3141,6 +3141,11 @@ _is_stow_managed() {
     return 1
 }
 
+# Remove EVERY ~ symlink that points into any copy of this repo. Only uninstall
+# uses it now, where removing them all is the point. Restowing must NOT: this
+# ran before every stow, so stow's first conflict left ~ with no links at all
+# (all 171 gone on 2026-10-05, W-20261005-A48); _restow_home lets stow name the
+# links it does not own instead.
 _clean_stale_repo_links() {
     local home_dir="$REPO_DIR/home"
     local cleaned=0
@@ -3176,6 +3181,95 @@ _clean_stale_repo_links() {
     if (( cleaned > 0 )); then
         info "Removed $cleaned stale symlink(s) from previous install"
     fi
+}
+
+# Read-only. Name every path under ~ that stow could not take over: a real file
+# where the repo's link belongs (unless it sits inside a folded repo directory),
+# or a link to somewhere outside this repo. Returns 1 if there is any.
+_stow_preflight() {
+    local home_dir="$REPO_DIR/home"
+    local file relative target n=0
+    while IFS= read -r -d '' file; do
+        relative="${file#$home_dir/}"
+        _conflict_check_ignored "$relative" && continue
+        target="$HOME/$relative"
+        if [[ -L "$target" ]]; then
+            [[ "$(readlink "$target")" == *"fifty-shades-of-dotfiles"* ]] && continue
+            warn "Conflict: ~/$relative is a link to somewhere else: $(readlink "$target")"
+        elif [[ -e "$target" ]]; then
+            _is_stow_managed "$target" && continue
+            warn "Conflict: ~/$relative is a real file where the repo's link belongs"
+        else
+            continue
+        fi
+        n=$((n+1))
+    done < <(find "$home_dir" -type f ! -name '.DS_Store' -print0)
+    (( n == 0 )) && return 0
+    error "$n conflict(s). Nothing was removed or linked."
+    echo -e "  Move them aside (or adopt them with ${CYAN}./install.sh --force${RESET}), then re-run." >&2
+    return 1
+}
+
+# Restow home/ into ~ without ever leaving ~ half-linked (W-20261005-A48).
+# 1. Name every real conflict and stop, with nothing touched.
+# 2. Ask stow itself with `stow -n` (read-only, so it runs under --dry-run too).
+# 3. If stow's only objection is "existing target is not owned by stow" for links
+#    into some copy of this repo (a moved clone, an absolute link, a folded dir:
+#    the reason the old pre-clean existed, 9c3d485), remove exactly those links
+#    and ask stow again. Stow decides what it owns; a path comparison here could
+#    not (a folded dir link that resolves correctly is still "not owned").
+# 4. Any other objection stops with nothing removed. Only then stow.
+# With --adopt (./install.sh --force) step 1 is skipped, because adopting the
+# real files is the point, and stow runs with --adopt instead of -R.
+# Run from $REPO_DIR.
+_restow_home() {
+    local -a stow_args=(-R --no-folding -t "$HOME" home)
+    if [[ "${1:-}" == --adopt ]]; then
+        stow_args=(--adopt --no-folding -t "$HOME" home)
+    else
+        _stow_preflight || return 1
+    fi
+    local -a unowned=()
+    local plan line rel other=0
+    if ! plan=$(stow -n "${stow_args[@]}" 2>&1); then
+        while IFS= read -r line; do
+            case "$line" in
+                *"existing target is not owned by stow: "*)
+                    rel=${line##*existing target is not owned by stow: }
+                    if [[ -L "$HOME/$rel" && "$(readlink "$HOME/$rel")" == *"fifty-shades-of-dotfiles"* ]]; then
+                        unowned+=("$rel")
+                        continue
+                    fi
+                    ;;
+                # Any other listed conflict ("  * cannot stow ...") or error stops us.
+                *"* "*|*ERROR*) ;;
+                # stow's banner and notes, e.g. "Ignoring an absolute symlink: X"
+                *) continue ;;
+            esac
+            other=$((other+1))
+        done <<< "$plan"
+        if (( other > 0 || ${#unowned[@]} == 0 )); then
+            error "stow's dry run refused, so nothing was removed or linked:"
+            printf '%s\n' "$plan" | sed 's/^/    /' >&2
+            return 1
+        fi
+        for rel in "${unowned[@]}"; do
+            verbose "Removing stale link: ~/$rel → $(readlink "$HOME/$rel")"
+            run_cmd "$SAFE_RM" "$HOME/$rel"
+        done
+        if [[ "$DRY_RUN" == true ]]; then
+            info "Would remove ${#unowned[@]} stale link(s) stow does not own (an older or moved copy of the repo)"
+        else
+            info "Removed ${#unowned[@]} stale link(s) stow did not own (an older or moved copy of the repo)"
+        fi
+        if [[ "$DRY_RUN" != true ]] && ! plan=$(stow -n "${stow_args[@]}" 2>&1); then
+            error "stow's dry run still refused after removing those stale links; nothing was linked:"
+            printf '%s\n' "$plan" | sed 's/^/    /' >&2
+            return 1
+        fi
+    fi
+    [[ "$VERBOSE" == true ]] && stow_args=("${stow_args[0]}" -v "${stow_args[@]:1}")
+    run_cmd stow "${stow_args[@]}"
 }
 
 # Mirrors home/.stow-local-ignore (the file stow itself reads) and
@@ -3288,8 +3382,6 @@ stow_home() {
 
     cd "$REPO_DIR"
 
-    _clean_stale_repo_links
-
     # NOTE for anyone running stow by hand under a restricted sandbox (e.g. a Claude
     # Code session): reads under `home/.ssh` may be denied, and stow ABORTS there while
     # walking the tree. A simulated run (`stow -n -R -v --no-folding -t ~ home`) then
@@ -3297,13 +3389,10 @@ stow_home() {
     # LINK -- which reads as "tear down every stowed file and restore none". Unsandboxed
     # the same command returns a symmetric 70 UNLINK / 71 LINK. Verify a dry run
     # SUCCEEDED before trusting it; a truncated plan looks like a plan. See CLAUDE.md.
-    local -a stow_args=(-R --no-folding -t "$HOME" home)
-    [[ "$VERBOSE" == true ]] && stow_args=(-R --no-folding -v -t "$HOME" home)
-
-    if run_cmd stow "${stow_args[@]}"; then
+    if _restow_home; then
         success "home/ stowed successfully"
     else
-        error "stow failed to create symlinks."
+        error "stow did not run; your existing links were left in place."
         echo -e "  ${CYAN}Re-install?${RESET}  Try ${CYAN}./install.sh --update${RESET}"
         echo -e "  ${CYAN}Real files?${RESET}  Try ${CYAN}./install.sh --force${RESET}"
         echo -e "  ${CYAN}Debug?${RESET}       Try ${CYAN}./install.sh --verbose${RESET}"
@@ -3734,11 +3823,11 @@ update() {
     _gate_toolchain_takeover
 
     info "Restowing home/ → ~/"
-    _clean_stale_repo_links
     # Same sandbox caveat as stow_home() -- see the note there before trusting a dry run.
-    local -a stow_args=(-R --no-folding -t "$HOME" home)
-    [[ "$VERBOSE" == true ]] && stow_args=(-R --no-folding -v -t "$HOME" home)
-    run_cmd stow "${stow_args[@]}"
+    if ! _restow_home; then
+        error "Restow did not run; your existing links were left in place."
+        return 1
+    fi
 
     stow_platform
 
@@ -3762,10 +3851,10 @@ force_adopt() {
         # force_adopt also (re)applies the hijack functions -- same gate as
         # every other path that stows home/.zshrc.
         _gate_toolchain_takeover
-        _clean_stale_repo_links
-        local -a stow_args=(--adopt --no-folding -t "$HOME" home)
-        [[ "$VERBOSE" == true ]] && stow_args=(--adopt --no-folding -v -t "$HOME" home)
-        run_cmd stow "${stow_args[@]}"
+        if ! _restow_home --adopt; then
+            error "Adoption did not run; your existing links were left in place."
+            return 1
+        fi
         success "Adoption complete."
         echo
         info "Review changes with: ${CYAN}git diff${RESET}"
