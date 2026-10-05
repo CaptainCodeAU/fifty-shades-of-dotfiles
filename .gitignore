@@ -86,3 +86,6 @@ home/.local/bin/migrate-claude-projects
 home/.local/bin/.DS_Store
 home/.local/**/.DS_Store
 home/.local/share/fifty-shades-of-dotfiles/scripts/.DS_Store
+
+# git worktrees live at <repo>/.worktree/<name> (Gavin, 6 Oct 2026: always there)
+/.worktree/
