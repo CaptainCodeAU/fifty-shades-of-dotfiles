@@ -499,6 +499,27 @@ check "MV control: the old skill FAILS the moved-project check" '! moved_rule "$
 check "MV a moved project: the report lists the engage records with their undo" 'moved_report "$SKILL"'
 check "MV control: the old skill FAILS the report check" '! moved_report "$OLDSK"'
 check "MV the steps are still 0 to 10, the rule is a header line, not a step" '[ "$(awk "/^[0-9]+\\. /{printf \"%d \", \$1}" "$SKILL")" = "0 1 2 3 4 5 6 7 8 9 10 " ]'
+# Global and other-project verdicts in a moved project (engage #1060, CaptainCodeAU-isolinear
+# bdfb8e4, 5 Oct 2026): the global area is CaptainCodeAU-isolinear, never ~/.claude, and its
+# commands are not built, so those rows are actions for Gavin. open-items refuses every add in a
+# moved project, --for and --inbox too (measured, the dispatch guard), so an item for another
+# project is filed from that project's folder. Control: OLDGL, the wording of the abandoned
+# branch build-1036-step4 (2d13e0e), which kept the ~/.claude routes, FAILS; so does OLDSK.
+moved_global(){ local h; h="$(head_of "$1")"
+  printf '%s' "$h" | grep -qF 'goes to the global area, CaptainCodeAU-isolinear (its records/ and inbox/), never to ~/.claude' \
+    && printf '%s' "$h" | grep -qF 'list each such row as an action for Gavin and write it nowhere' \
+    && ! printf '%s' "$h" | grep -qF '(`~/.claude/pj-global/decisions/`)' \
+    && ! printf '%s' "$h" | grep -qF 'keep their routes'; }
+moved_other(){ head_of "$1" | grep -qF 'filed from that project'"'"'s folder: open-items here refuses every add, `--for` and `--inbox` too'; }
+OLDGL="$ROOT/old-skill-2d13e0e.md"
+printf '%s\n' '- A project moved to engage: step 4 files each new item with `engage-go add --sync`.' \
+  '  Global and other-scope verdicts keep their routes unchanged: a global ruling `decided add ... --global`' \
+  '  (`~/.claude/pj-global/decisions/`), a machine-wide lesson (`~/.claude/pj-global/notes/`), an item for' \
+  '  another project (`open-items add --for`) or the inbox (`open-items add --inbox`).' '0. Earlier sessions.' > "$OLDGL"
+check "MV a moved project: global verdicts go to CaptainCodeAU-isolinear, never ~/.claude; listed for Gavin" 'moved_global "$SKILL"'
+check "MV a moved project: another project's item is filed from its folder (open-items refuses --for, --inbox)" 'moved_other "$SKILL"'
+check "MV control: the 2d13e0e wording (~/.claude routes) FAILS both" '[ -n "$(head_of "$OLDGL")" ] && ! moved_global "$OLDGL" && ! moved_other "$OLDGL"'
+check "MV control: the old skill FAILS both" '! moved_global "$OLDSK" && ! moved_other "$OLDSK"'
 
 # --- M: one pj-homes for the skill and pj-wrap, also from a worktree (W-20261005-A66) --------
 # The skill read `.claude/pj-homes` from its own checkout while handoff_path read the main

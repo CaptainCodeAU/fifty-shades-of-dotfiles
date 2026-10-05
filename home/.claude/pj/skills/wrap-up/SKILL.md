@@ -29,8 +29,13 @@ Steps run in this order; `pj-wrap done` is always last. Rulings and reasons:
   step 4 files each new item with `engage-go add --sync -- "<what> -- done when: <finish line>"`
   (`--type decide` for a decide row) and never with open-items, and leaves every close, park and
   decline to the engage pane (each is a report row for the user to press there); no drawer is
-  offered. An item for ANOTHER moved project is refused by open-items too: file it from that
-  project, or drop it in the engage account inbox. Any other exit: the steps as written.
+  offered. A verdict that belongs to every project goes to the global area, CaptainCodeAU-isolinear
+  (its records/ and inbox/), never to ~/.claude (engage #1060): its commands are not built yet,
+  so list each such row as an action for Gavin and write it nowhere (not `decided add --global`,
+  not ~/.claude/pj-global/notes/, not the pj inbox). An item for another project still goes to
+  that project, filed from that project's folder: open-items here refuses every add, `--for` and
+  `--inbox` too. If that project moved as well, file it there with `engage-go add`, or drop it in
+  the engage account inbox. Any other exit: the steps as written.
 
 0. Earlier sessions. `pj-wrap status`: rc 1 none; rc 0 lists sessions that ended without
    wrap-up; rc 2 not a git repo: skip each step whose tool refuses for that reason, name it, and
