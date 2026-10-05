@@ -80,7 +80,12 @@
 # same arms on another copy, judged on the decision alone.
 
 HOOKS_DIR="$(builtin cd "$(dirname "$0")" && pwd)"
-LOG_FILE="${GH_SSH_ONLY_LOG:-$HOOKS_DIR/security.log}"
+# The same log every other guard uses, OUTSIDE the hooks dir. It used to be
+# $HOOKS_DIR/security.log: run from the repo (a test, a selftest), that wrote a
+# file into home/.claude/hooks, which stow then tried to link over the live log,
+# and the 2026-10-05 restow stopped on it.
+LOG_FILE="${GH_SSH_ONLY_LOG:-${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/hooks-security.log}"
+[ -n "${GH_SSH_ONLY_LOG:-}" ] || [ -d "${LOG_FILE%/*}" ] || mkdir -p "${LOG_FILE%/*}" 2>/dev/null
 
 # The crude match on the RAW payload, used only when it cannot be read.
 RAW_TRIGGER='(^|[^A-Za-z0-9_-])gh[[:space:]]+auth[[:space:]]+(login|setup-git|refresh|switch|logout|git-credential)([^A-Za-z0-9_-]|$)'
