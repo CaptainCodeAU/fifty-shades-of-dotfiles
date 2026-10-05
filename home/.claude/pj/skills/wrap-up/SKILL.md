@@ -221,8 +221,14 @@ Steps run in this order; `pj-wrap done` is always last. Rulings and reasons:
     (undo: close it in the engage pane):", and each close, park or decline left to the pane, then
     say "Nothing filed or closed in the drawer." In every project, list each `#<id> <path>` line
     `pj-wrap global add` printed under "Filed in the global area for you (undo: close it in the
-    engage pane):", and each row it refused as an action for Gavin. Under it, each extend
-    and lesson with its own undo. End with the pending list and one
+    engage pane):", and each row it refused as an action for Gavin. Each decision record there
+    (a ruling or a lesson, `--kind decision`) is `state: draft` until Gavin approves it: follow
+    its line with "in force once you run, in your own terminal:" and this command, both `<path>`
+    the full path from that `#<id> <path>` line (approve reads the record on stdin, so it is piped):
+    `engage-go record read <path> | sed 's/"key":"state","value":"draft"/"key":"state","value":"standing"/' | engage-go record approve <path>`
+    Items get no such line. Then say plainly: "A session cannot do this step: engage-go record
+    approve refuses inside a Claude session; only you, at your own terminal, put a ruling in
+    force." Under it, each extend and lesson with its own undo. End with the pending list and one
     line: "Kept working after this? Run /pj:wrap-up again." Last, as its own Bash call:
     `pj-ping done "wrap-up <project>" --detach`. It returns at once (Gavin, 2026-09-29: the
     blocking send cost about 10 s); a failed send is named only in the ping log, not here.
