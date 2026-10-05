@@ -87,7 +87,7 @@ yt-dlp configuration template.
 | -------- | -------------------- | ------------------------- |
 | `config` | yt-dlp configuration | `~/.config/yt-dlp/config` |
 
-**Note**: The `yt()` function in `.zshrc` auto-generates this config file if it doesn't exist. This file serves as a template/reference. `yt-dlp` itself is never installed — `yt()` runs it on demand via `uvx --prerelease allow yt-dlp`.
+**Note**: This config is stowed like every other file here, and `yt()` never writes it: when it is missing, `yt` says so and points at `./install.sh --stow-only` (D-20261005-A03; `yt` used to create it, and on 2026-10-05 that real file blocked a restow). `yt-dlp` itself is never installed — `yt()` runs it on demand via `uvx --prerelease allow 'yt-dlp[default,curl-cffi]'`.
 
 #### `home/.config/herdr/`
 
