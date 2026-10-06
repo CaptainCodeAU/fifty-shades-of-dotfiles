@@ -526,6 +526,43 @@ _argv() { # $1 = depth, then one simple command's words. Sets R.
         joined=" $* "
         [[ $joined =~ [[:space:]]-d[[:space:]]?=[[:space:]] ]] && [[ $joined =~ [[:space:]]-f[[:space:]]?1[[:space:]] ]] && return 0
       fi
+      if [ "$base" = jq ]; then
+        # W-20261006-A47: jq's first non-option word is the FILTER, so '.env' there is the
+        # JSON key "env", not a file. Later words are files, unless --args/--jsonargs made
+        # them strings. -f/--from-file reads the filter from a file (jq 1.8: the first
+        # word; jq 1.7: its value), so with it every word is a file. --slurpfile and
+        # --rawfile read their second value.
+        local jf=0 jprog=0 jstr=0 jend=0 jn=0
+        local -a jfiles=()
+        while [ $# -gt 0 ]; do
+          w="$1"; shift
+          if [ "$jend" -eq 0 ]; then
+            case "$w" in
+              --) jend=1; continue ;;
+              --arg|--argjson) shift 2 || set --; continue ;;
+              --slurpfile|--rawfile) [ $# -ge 2 ] && jfiles[${#jfiles[@]}]="$2"; shift 2 || set --; continue ;;
+              --indent|--library-path|-L) [ $# -gt 0 ] && shift; continue ;;
+              --from-file) jf=1; continue ;;
+              --from-file=*) jf=1; jfiles[${#jfiles[@]}]="${w#*=}"; continue ;;
+              --args|--jsonargs) jstr=1; continue ;;
+              --*|-L*) continue ;;
+              -?*) [[ $w == *f* ]] && jf=1; continue ;;
+            esac
+          fi
+          if [ "$jprog" -eq 0 ]; then
+            jprog=1; [ "$jf" -eq 1 ] && jfiles[${#jfiles[@]}]="$w"; continue
+          fi
+          [ "$jstr" -eq 1 ] || jfiles[${#jfiles[@]}]="$w"
+        done
+        while [ "$jn" -lt "${#jfiles[@]}" ]; do
+          if _secret_file "${jfiles[$jn]}"; then
+            w="${jfiles[$jn]}"
+            R="RULE 9: jq reads $w, a file that holds secrets. SAFE: cut -d= -f1 $w (names only), or [ -s $w ] && echo present"; return 0
+          fi
+          jn=$((jn + 1))
+        done
+        return 0
+      fi
       for w in "$@"; do
         if _secret_file "$w"; then
           R="RULE 9: $base reads $w, a file that holds secrets. SAFE: cut -d= -f1 $w (names only), or [ -s $w ] && echo present"; return 0
@@ -808,6 +845,32 @@ if [ "${1:-}" = "--selftest" ]; then
   _must 1 'C15 <(printer) read by diff'                  'diff <(printenv GH_TOKEN) x'
   _must 1 'C16 recipe line 100 still: gh auth status'    $'T=$(security find-generic-password -a "$USER" -s github-api-readonly -w 2>/dev/null)\nGH_TOKEN="$T" gh auth status'
   _must 1 'C17 mixed: an argument $(...) beside it'      'GH_TOKEN="$(security find-generic-password -s x -w)" cmd "$(date)"'
+  # W-20261006-A47: jq's first non-option word is a FILTER, so '.env' there is the JSON
+  # key "env", not a file. Only jq's file arguments are RULE 9 reads.
+  echo "=== JQ arms (W-20261006-A47): a .env filter is a key, a .env file is a read ==="
+  _must 0 'J01 jq -c .env settings.json'                 "jq -c '.env' settings.json"
+  _must 0 'J02 jq -r .env // {} | keys[]'                "jq -r '.env // {} | keys[]' f.json"
+  _must 0 'J03 jq del(.env)'                             "jq 'del(.env)' a.json"
+  _must 0 'J04 jq -r .permissions, .env'                 "jq -r '.permissions, .env' s.json"
+  _must 0 'J05 jq .env from stdin'                       'cat s.json | jq .env'
+  _must 0 'J06 jq -n --arg k .env'                       "jq -n --arg k .env '\$k'"
+  _must 0 'J07 jq --arg x .env.local .a f.json'          "jq --arg x .env.local '.a' f.json"
+  _must 0 'J08 jq --indent 2 .env f.json'                "jq --indent 2 '.env' f.json"
+  _must 0 'J21 jq .env|keys (no slash in the filter)'    "jq '.env|keys' f.json"
+  _must 0 'J22 jq -n --args (.env is a string)'          "jq -n --args '\$ARGS' .env"
+  _must 0 'J23 env -u X jq .env f.json'                  "env -u GH_TOKEN jq '.env' f.json"
+  _must 1 'J09 jq . .env'                                'jq . .env'
+  _must 1 'J10 jq -r .X ./.env.local'                    'jq -r .X ./.env.local'
+  _must 1 'J11 jq . ~/.env'                              "jq '.' ~/.env"
+  _must 1 'J12 cat .env (control)'                       'cat .env'
+  _must 1 'J13 jq -f prog.jq .env'                       'jq -f prog.jq .env'
+  _must 1 'J14 jq --from-file=p.jq .env'                 'jq --from-file=p.jq .env'
+  _must 1 'J15 jq -n --rawfile s .env'                   "jq -n --rawfile s .env '\$s'"
+  _must 1 'J16 jq --slurpfile s .env .'                  "jq --slurpfile s .env '.'"
+  _must 1 'J17 jq --args .a .env (filter, then a file)'  "jq '.a' .env --args x"
+  _must 1 'J18 xargs jq . .env'                          'echo x | xargs jq . .env'
+  _must 1 'J19 jq -- . .env'                             'jq -- . .env'
+  _must 1 'J20 jq -L lib . .env'                         'jq -L lib . .env'
 
   # The arms above test _classify in THIS file. These run the whole hook, payload
   # on stdin, so SECRET_PROBE_UNDER_TEST=<path> runs them on another copy.
