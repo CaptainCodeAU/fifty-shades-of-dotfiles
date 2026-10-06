@@ -247,12 +247,17 @@ _pnpm_standalone_home() {
     esac
 }
 
-# True (0) on Intel macOS, where pnpm's standalone executable is a Node.js SEA
-# binary that segfaults 100% of the time (upstream nodejs/node#62893 /
-# pnpm#11423). There, Homebrew is the supported pnpm provider instead of the
-# get.pnpm.io standalone installer. Apple Silicon / Linux / WSL use standalone.
+# Always false since 2026-10-06 (Gavin: "whatever you are doing on the M4, do the
+# same for the Intel Mac"; D-20261006-A08). It was true on Intel macOS, where pnpm
+# 11's standalone executable was a Node.js SEA binary that segfaulted (upstream
+# nodejs/node#62893 / pnpm#11423, both closed fixed in May). pnpm 12 ships a native
+# Intel build (@pnpm/exe.darwin-x64, a Mach-O x86_64; 12.9.0 ran under Rosetta), and
+# Homebrew pnpm skipped the cooldown, the deny list and the binary check. Kept as a
+# function so every caller reads the same answer; with it false, the pre-flight
+# plans the Homebrew pnpm's removal and holds it until the standalone one RUNS
+# (W-20261005-A75), so an Intel machine is never left without a pnpm.
 _pnpm_use_homebrew() {
-    [[ "$(check_os)" == "macos" && "$(uname -m)" == "x86_64" ]]
+    return 1
 }
 
 # True (0) if the active pnpm resolves to the standalone install (under its

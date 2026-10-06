@@ -903,3 +903,27 @@ wrote its lockfile, and the lock files appeared under the per-user dir. Live A/B
 session in a herdr tab gave the same two answers. The `OSStatus -26276` certificate failure that
 used to follow the cache fix is gone on 12.9.0. A hook that runs pnpm under `sh -c` does not see
 the zsh function.
+
+### 7.7 Intel Macs use the standalone pnpm too (2026-10-06)
+
+Gavin: "whatever you are doing on the current machine which is the silicon M4 mac mini, do the
+same for the Intel Mac (if the intel architecture allows that)". It does:
+
+- pnpm publishes a native Intel build, `@pnpm/exe.darwin-x64` (12.8.2 and 12.9.0 both present, a
+  `Mach-O 64-bit executable x86_64`). The reason Intel used Homebrew was pnpm 11's standalone
+  executable, a Node.js SEA binary that segfaulted on Intel (nodejs/node#62893, pnpm#11423), closed
+  fixed in May; pnpm 12's binary is native, not Node.
+- 12.9.0's Intel build ran on the M4 under Rosetta and printed `12.9.0` (exit 0); the arm64 build
+  forced to x86_64 refused with `Bad CPU type` (the control). Rosetta runs a subset of what real
+  Intel hardware does, so a binary that runs under it should run on machine B. Not yet run ON B.
+- Homebrew pnpm skipped the cooldown, the deny list and the binary check (it shipped 12.9.1 while
+  12.9.1 was still inside the 3-day wait).
+
+What changed: `_pnpm_use_homebrew` in `install.sh` is always false, so on B the pre-flight plans
+the Homebrew pnpm's removal and HOLDS it until the standalone pnpm runs (W-20261005-A75).
+`pnpm_update` and the onboarding prompt no longer run `brew upgrade pnpm`; while a Homebrew pnpm
+is still the one on PATH they point at `./install.sh` instead (`__pnpm_is_homebrew_bin`).
+
+```bash
+zsh-node-functions-selftest   # 38 checks; section 8 is the Intel path, brew stubbed to record
+```

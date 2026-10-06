@@ -349,6 +349,18 @@ __pnpm_get_eligible_binary() {
 }
 
 # Compare two semver-ish versions. Echoes -1 (a<b), 0 (==), or 1 (a>b).
+# True (0) when the pnpm on PATH is Homebrew's. Every Mac uses the standalone pnpm
+# since 2026-10-06 (D-20261006-A08), so a Homebrew one means install.sh has not run
+# here since; the callers point at install.sh instead of `brew upgrade`, which would
+# skip the cooldown, the deny list and the binary check. No brew, no answer: false.
+__pnpm_is_homebrew_bin() {
+    [[ "$IS_MAC" == true ]] || return 1
+    local bin prefix
+    bin=$(whence -p pnpm 2>/dev/null) || return 1
+    prefix=$(brew --prefix 2>/dev/null) || return 1
+    [[ -n "$prefix" && "$bin" == "$prefix"/* ]]
+}
+
 __pnpm_vercmp() {
     local a="$1" b="$2"
     [[ "$a" == "$b" ]] && { echo 0; return; }
@@ -655,20 +667,19 @@ __ensure_pnpm_current() {
 
     latest=$(__pnpm_get_latest 2>/dev/null)
     echo "${err}pnpm ${current} is below required minimum ${PNPM_MIN_VERSION}${latest:+ (latest: ${latest})}.${done}"
-    # Intel macOS: pnpm is Homebrew-managed (standalone SEA binary segfaults --
-    # nodejs/node#62893), so upgrade via brew, not pnpm self-update.
-    local upd_label="pnpm self-update"
-    [[ "$IS_MAC" == true && "$MAC_ARCH" == "x86_64" ]] && upd_label="brew upgrade pnpm"
-    read "REPLY?${info}    Run '${upd_label}' now? [y/N] ${done}"
+    # Every Mac uses the standalone pnpm (D-20261006-A08). A Homebrew pnpm still
+    # active means install.sh has not run here since: point there, never at brew.
+    if __pnpm_is_homebrew_bin; then
+        echo "${info}    This pnpm is Homebrew's. Run ./install.sh in the dotfiles repo to move to the standalone pnpm.${done}"
+        : > "$marker"
+        return 0
+    fi
+    read "REPLY?${info}    Run 'pnpm self-update' now? [y/N] ${done}"
     : > "$marker"  # mark prompted regardless of answer
     if [[ "$REPLY" =~ ^[Yy]$ ]]; then
         echo "${info}    Updating pnpm...${done}"
         local upd_ok=false
-        if [[ "$IS_MAC" == true && "$MAC_ARCH" == "x86_64" ]]; then
-            brew upgrade pnpm && upd_ok=true
-        else
-            pnpm self-update && upd_ok=true
-        fi
+        pnpm self-update && upd_ok=true
         if [[ "$upd_ok" == true ]]; then
             echo "${ok}    pnpm updated to $(pnpm -v 2>/dev/null).${done}"
         else

@@ -104,17 +104,15 @@ pnpm_update() {
         return 1
     fi
 
-    # Intel macOS: pnpm is Homebrew-managed (standalone SEA binary segfaults --
-    # nodejs/node#62893). Update via brew; the registry/self-update path below is
-    # for the standalone install (Apple Silicon / Linux / WSL).
-    if [[ "$IS_MAC" == true && "$MAC_ARCH" == "x86_64" ]]; then
-        echo "${info}Intel macOS -- pnpm is managed by Homebrew (current: $(pnpm -v 2>/dev/null)).${done}"
-        if brew list pnpm &>/dev/null; then
-            brew upgrade pnpm
-        else
-            brew install pnpm
-        fi
-        return $?
+    # Every Mac, Intel included, uses the standalone pnpm since 2026-10-06: pnpm 12's
+    # Intel build is a native binary, not the Node SEA that segfaulted on Intel
+    # (nodejs/node#62893, fixed May). D-20261006-A08. A Homebrew pnpm still active
+    # here means install.sh has not run since; `brew upgrade` would skip the
+    # cooldown, the deny list and the binary check, so say how to move instead.
+    if __pnpm_is_homebrew_bin; then
+        echo "${warn}pnpm here is Homebrew's ($(whence -p pnpm)). Every Mac now uses the standalone pnpm.${done}" >&2
+        echo "${info}    Run ./install.sh in the dotfiles repo to move; it removes the Homebrew one only after the new one runs.${done}" >&2
+        return 1
     fi
 
     # Inside a project that pins pnpm, `pnpm -v` reports (and downloads) the

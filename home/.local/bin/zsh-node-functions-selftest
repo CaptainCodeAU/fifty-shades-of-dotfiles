@@ -389,5 +389,26 @@ else
     bad "control: the file's own floors read back" "pnpm '$FILE_PNPM', nvm '$FILE_NVM' from $ONBOARD"
 fi
 
+# --- 8. Intel Macs use the standalone pnpm too (D-20261006-A08) -------------------
+# brew is stubbed to RECORD, so an older file that still calls brew cannot reach
+# the real Homebrew from this test. __pnpm_is_homebrew_bin lives in .zsh_onboarding
+# (not sourced here) and is stubbed per arm.
+brew() { print -r -- "brew $*" >> "$STUB_LOG"; return 0; }
+MAC_ARCH=x86_64
+__pnpm_is_homebrew_bin() { return 1; }
+run_update 12.6.0 12.8.2 12.8.2
+nb=$(count_in '^brew ' "$STUB_LOG")
+if (( RC == 0 && CALLS == 1 && nb == 0 )) && [[ "$(landed_from_log)" == 12.8.2 ]]; then
+    ok "Intel Mac, standalone pnpm: self-update to the checked 12.8.2, brew never called"
+else bad "Intel Mac, standalone pnpm: self-update, no brew" "rc=$RC self-update=$CALLS brew=$nb out: $OUT"; fi
+__pnpm_is_homebrew_bin() { return 0; }
+run_update 12.6.0 12.8.2 12.8.2
+nb=$(count_in '^brew ' "$STUB_LOG")
+if (( RC == 1 && CALLS == 0 && nb == 0 )) && [[ "$OUT" == *install.sh* ]]; then
+    ok "Homebrew pnpm still active: refused, points at install.sh, neither brew nor self-update ran"
+else bad "Homebrew pnpm still active: refused, points at install.sh" "rc=$RC self-update=$CALLS brew=$nb out: $OUT"; fi
+MAC_ARCH=arm64
+unfunction brew __pnpm_is_homebrew_bin
+
 echo; echo "  $PASS passed, $FAIL failed"
 (( FAIL == 0 ))
