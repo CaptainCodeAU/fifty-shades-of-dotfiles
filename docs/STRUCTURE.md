@@ -272,6 +272,7 @@ Each one drives its tool to pass and to fail on throwaway fixtures, and touches 
 | `pj-wrap-selftest`                        | Every arm of `pj-wrap`, including push conflicts                                           |
 | `zsh-claude-paneguard-selftest`           | `.zshrc`'s `claude()` herdr pane guard                                                     |
 | `zsh-node-functions-selftest`             | `pnpm_update`'s deny list refuses                                                          |
+| `pnpm-guide-selftest`                     | PNPM_SETUP_GUIDE.md still matches the machine: doctor block, floor, section 0 facts        |
 | `zsh-welcome-selftest`                    | The welcome banner's pnpm-vs-nvm PATH check fires                                          |
 
 ### `platforms/` - Platform-Specific Files

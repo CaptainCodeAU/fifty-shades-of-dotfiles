@@ -1,257 +1,385 @@
 # pnpm setup guide
 
 For AI coding agents and developers fixing or hardening pnpm installs in
-client projects. This guide assumes you're an LLM agent dropping into a
-machine with an unknown / partially broken / inherited pnpm setup, and you
-need to (a) diagnose what's wrong, (b) clean it up, and (c) leave behind a
-correct, reproducible install. Standalone — no external setup required.
+client projects. It assumes you are dropping into a machine with an unknown,
+partly broken or inherited pnpm setup and need to (a) find what is wrong,
+(b) clean it up, and (c) leave a correct, reproducible install. Standalone: no
+external setup required.
 
-Target: **pnpm 11.x** on macOS / Linux / WSL2.
+Target: **pnpm 12.x** on macOS / Linux / WSL2. Every fact below was measured on
+**pnpm 12.9.0 on 2026-10-06** and sits next to the command that proves it.
+**Run the command; do not trust the sentence.** pnpm changes behaviour inside a
+major (this guide was first written about 11.1.2 and went wrong one release at
+a time), so a fact you have not re-run on the installed version is a guess.
+Section 7 is the history of this box's upgrades and is not re-measured.
+
+> **How to probe safely.** Every probe below points pnpm at a scratch config,
+> never the real one, so it cannot change anything and cannot be masked by it:
+>
+> ```bash
+> S=$(mktemp -d "${TMPDIR:-/tmp}/pnpm-probe.XXXXXX"); mkdir -p "$S/home" "$S/cfg/pnpm"
+> p() { env -i PATH="$PATH" HOME="$S/home" XDG_CONFIG_HOME="$S/cfg" pnpm "$@"; }
+> printf 'fetchRetries: 7\n' > "$S/cfg/pnpm/config.yaml"; p config get fetchRetries   # 7
+> ```
+>
+> `env -i` matters: an exported `PNPM_CONFIG_*` variable overrides the file
+> (section 0), so a probe run in your normal shell can report the variable and
+> look like the file.
 
 ---
 
-## 0. Mental model — what pnpm 11 actually does
+## 0. Mental model: what pnpm 12 actually reads
 
-### Two config files in two locations
+### One settings file, one auth file
 
-pnpm 11 splits its global config across two sibling files. You will get
-confused if you don't internalise this:
+| File          | Format | Holds                                           | Key style     |
+| ------------- | ------ | ----------------------------------------------- | ------------- |
+| `config.yaml` | YAML   | Every setting, `registry` included              | **camelCase** |
+| `auth.ini`    | INI    | Auth tokens and registry overrides              | kebab-case    |
+| `rc`          | INI    | **Not read by pnpm 12.** pnpm 11 kept auth here | -             |
 
-| File          | Format | Purpose                                                                            | Key style      |
-| ------------- | ------ | ---------------------------------------------------------------------------------- | -------------- |
-| `config.yaml` | YAML   | Non-auth, non-registry settings (e.g. `minimumReleaseAge`, `verifyStoreIntegrity`) | **camelCase**  |
-| `rc`          | INI    | Auth tokens, registry overrides, `approve-builds=true`                             | **kebab-case** |
+All three live in the same config directory. Measured:
 
-The two coexist in the same directory. Editing one does not affect the
-other. **Putting kebab-case keys in `config.yaml` is the #1 silent-failure
-mode**: pnpm 11 reads the file but ignores keys it doesn't recognise — no
-warning, no error, settings just don't apply. Empirically verified against
-pnpm 11.1.2.
+```bash
+printf 'registry=https://rc.invalid/\n'      > "$S/cfg/pnpm/rc";       p config get registry  # https://registry.npmjs.org/ (ignored)
+printf 'registry=https://authini.invalid/\n' > "$S/cfg/pnpm/auth.ini"; p config get registry  # https://authini.invalid/
+```
 
-### Where pnpm reads from (THE confusing bit)
+`~/.npmrc` and a project `.npmrc` are still read.
 
-pnpm 11 looks up its config directory at runtime via this fallback chain
-(source: `pnpm.mjs` `getConfigDir()`):
+**Kebab-case keys in `config.yaml` are silently ignored**: no warning, no
+error, the setting just does not apply. This is the most common silent
+failure.
+
+```bash
+printf 'fetch-retries: 7\n' > "$S/cfg/pnpm/config.yaml"; p config get fetchRetries   # undefined
+printf 'fetchRetries: 7\n'  > "$S/cfg/pnpm/config.yaml"; p config get fetchRetries   # 7
+```
+
+**Unknown keys are silently accepted; known keys are typed.** So "no warning"
+proves nothing about a key, and a key that pnpm removed looks exactly like one
+it honours:
+
+```bash
+printf 'bogusKeyXyz: banana\n'                  > "$S/cfg/pnpm/config.yaml"; p --version   # 12.9.0, exit 0
+printf 'managePackageManagerVersions: banana\n' > "$S/cfg/pnpm/config.yaml"; p --version   # 12.9.0, exit 0 (removed key)
+printf 'blockExoticSubdeps: banana\n'           > "$S/cfg/pnpm/config.yaml"; p --version   # exit 1, "load configuration"
+```
+
+A wrong type fails **every** pnpm command, so a typo in a known key breaks the
+machine loudly. The parse error says "Failed to parse pnpm-workspace.yaml" even
+for the global `config.yaml`; it is the global file.
+
+### Environment variables beat the file
+
+`PNPM_CONFIG_<SNAKE_CASE>` (either case) overrides `config.yaml`.
+`npm_config_*` is **not** read by pnpm 12.
+
+```bash
+printf 'minimumReleaseAge: 99\n' > "$S/cfg/pnpm/config.yaml"
+env -i PATH="$PATH" HOME="$S/home" XDG_CONFIG_HOME="$S/cfg" PNPM_CONFIG_MINIMUM_RELEASE_AGE=4320 pnpm config get minimumReleaseAge  # 4320
+env -i PATH="$PATH" HOME="$S/home" XDG_CONFIG_HOME="$S/cfg" npm_config_fetch_retries=9 pnpm config get fetchRetries               # undefined
+```
+
+So on a machine that exports one, `pnpm config get` reports the variable and
+cannot tell you whether the file is being read.
+
+> **This box:** `home/.zshrc` exports `PNPM_CONFIG_MINIMUM_RELEASE_AGE` and
+> `PNPM_CONFIG_TRUST_POLICY` as a backup beside the same keys in `config.yaml`,
+> plus `PNPM_CONFIG_BLOCK_EXOTIC_SUBDEPS`, which the global file cannot pin (7.4).
+> Both layers stay (Gavin, 2026-10-06, D-20261006-A09); `pnpm-config-check` fails
+> when an export disagrees with the file, so a one-sided edit is caught.
+
+### Where pnpm looks for its config directory
 
 1. `$XDG_CONFIG_HOME/pnpm/` if `XDG_CONFIG_HOME` is set.
-2. **macOS**: `~/Library/Preferences/pnpm/` (when XDG unset).
-3. **Linux / other non-Windows**: `~/.config/pnpm/` (when XDG unset).
-4. **Windows**: `%LOCALAPPDATA%/pnpm/config/`.
+2. **macOS**: `~/Library/Preferences/pnpm/`.
+3. **Linux / WSL**: `~/.config/pnpm/`.
+4. **Windows**: `%LOCALAPPDATA%/pnpm/config/` (not measured here).
 
-If a Linux-shaped dotfiles setup (`~/.config/pnpm/config.yaml`) is rsynced
-or stowed to a Mac without setting `XDG_CONFIG_HOME`, **pnpm on that Mac
-won't find it** — it'll look at `~/Library/Preferences/pnpm/` instead.
-The config is silently dead.
+On macOS, `~/.config/pnpm/config.yaml` is **not read** unless
+`XDG_CONFIG_HOME` is set. A Linux-shaped dotfiles setup stowed to a Mac is
+silently dead:
 
-### PNPM_HOME (data dir) ≠ config dir
+```bash
+H=$(mktemp -d); mkdir -p "$H/.config/pnpm" "$H/Library/Preferences/pnpm"
+printf 'fetchRetries: 6\n' > "$H/.config/pnpm/config.yaml"
+env -i PATH="$PATH" HOME="$H" pnpm config get fetchRetries        # undefined on macOS
+printf 'fetchRetries: 5\n' > "$H/Library/Preferences/pnpm/config.yaml"
+env -i PATH="$PATH" HOME="$H" pnpm config get fetchRetries        # 5
+```
 
-`PNPM_HOME` is the **data** directory (binaries, store, global packages).
-Different fallback:
+### `pnpm config get` shows what is SET, never the default
 
-1. `$PNPM_HOME` env var if set.
-2. `$XDG_DATA_HOME/pnpm/` if `XDG_DATA_HOME` is set.
-3. **macOS**: `~/Library/pnpm/`.
-4. **Linux**: `~/.local/share/pnpm/`.
-5. **Windows**: `%LOCALAPPDATA%/pnpm/`.
+It reads `config.yaml` keys back (camelCase), but for a key nobody set it
+prints `undefined`, including keys whose default is on:
 
-The standalone installer (`curl get.pnpm.io/install.sh | sh -`) sets up
-PNPM_HOME and writes the `pnpm` binary inside it.
+```bash
+: > "$S/cfg/pnpm/config.yaml"
+for k in minimumReleaseAge verifyStoreIntegrity blockExoticSubdeps strictDepBuilds; do p config get "$k"; done   # undefined x4
+```
 
-### Store layout (v11 only)
+So `undefined` means "not set", not "off". Defaults come from the docs
+(<https://pnpm.io/settings>) or from a behaviour test (section 3). A few keys
+read back `undefined` even when set: on 12.9.0, `blockExoticSubdeps`,
+`supportedArchitectures`, `python` and `cargo`. Prove those by typed rejection
+(above) or by behaviour.
 
-pnpm 11 uses an SQLite-backed store at `$PNPM_HOME/store/v11/`. Global
-packages live in `$PNPM_HOME/global/v11/` with shims in `$PNPM_HOME/bin/`.
+### `PNPM_HOME` (data) is not the config dir
 
-The dotfiles enforce v11 exclusively — `$PNPM_HOME/bin` is the only pnpm
-PATH entry. Any v10 leftovers (`store/v10/`, `global/5/`, root-level shims)
-are detected by `install.sh` preflight checks and offered for deletion.
+`PNPM_HOME` holds the binaries, store and global packages:
 
-**Automatic root-shim cleanup:** `pnpm self-update` always regenerates shims
-at BOTH `$PNPM_HOME/` root and `$PNPM_HOME/bin/`. Root shims trigger the
-"Detected a pnpm v10 installation layout" warning on every subsequent update.
-Both `pnpm_update` and `install.sh` unconditionally remove root-level shims
-(`pnpm`, `pnpx`, `pn`, `pnx`) after any install or upgrade — only
-`$PNPM_HOME/bin/` remains. Never call `pnpm setup` (appends to stow-managed
-`.zshrc`).
+1. `$PNPM_HOME` if set.
+2. `$XDG_DATA_HOME/pnpm/` if set.
+3. **macOS**: `~/Library/pnpm/`. **Linux**: `~/.local/share/pnpm/`.
 
-**Global links:** `pnpm link --global` is **blocked by a shell wrapper** --
-it drops shims at `$PNPM_HOME/` root (v10 layout), not `$PNPM_HOME/bin/`
-(v11). Use `pnpm install -g .` to link a local project globally, or
-`pnpm install -g <pkg>` for published packages. The `node_link` helper
-handles this automatically.
+```bash
+env -i PATH="$PATH" HOME="$S/home" pnpm store path                        # $S/home/Library/pnpm/store/v11 on macOS
+env -i PATH="$PATH" HOME="$S/home" XDG_DATA_HOME="$S/d" pnpm store path   # $S/d/pnpm/store/v11
+```
+
+### Store layout
+
+pnpm 12 still uses the **v11** layout: store at `$PNPM_HOME/store/v11/`,
+global packages in `$PNPM_HOME/global/v11/`, shims in `$PNPM_HOME/bin/`. "v11"
+names the layout, not the pnpm version. pnpm 12 also keeps downloaded pnpm
+versions in `$PNPM_HOME/package-manager-store/v11/` (used when a project pins
+another pnpm version).
+
+Only `$PNPM_HOME/bin` belongs on PATH. pnpm 10 put shims in `$PNPM_HOME/`
+itself; pnpm 12's `self-update` no longer writes them there (observed
+12.6.0 -> 12.9.0), and since 12.8.0 `pnpm update --global` migrates pnpm 10
+globals out of `global/5` and removes its root shims.
+
+`pnpm link --global` no longer exists (`error: unexpected argument '--global'`).
+Use `pnpm add -g .` to install a local project globally.
+
+### pnpm runs as a native binary
+
+pnpm 12 is a native executable, not a Node script, so a pnpm-pinned Node
+version (`devEngines.runtime`) and nvm can both answer `node`. The
+`globalShims` setting decides whether pnpm puts its own `node`/`npm` shims in
+`$PNPM_HOME/bin`; section 7 explains why this box sets it `false`.
+
+### A project can pin another pnpm version
+
+A project's `devEngines.packageManager` (current form) or `packageManager`
+(which the pnpm docs now call legacy) can name a pnpm version. By default pnpm
+12 downloads that version into `package-manager-store/v11/` and runs it
+instead, silently, so a project pinned to an old 11.x runs 11.x and ignores
+every setting 11.x does not know. `pmOnFail` controls this (`ignore` = the old
+`managePackageManagerVersions: false`; `warn` = say so). It is typed and is
+honoured in the global `config.yaml`:
+
+```bash
+printf 'pmOnFail: banana\n' > "$S/cfg/pnpm/config.yaml"; p --version            # exit 1, typed
+printf 'pmOnFail: ignore\n' > "$S/cfg/pnpm/config.yaml"; p config get pmOnFail  # ignore
+```
+
+> **This box:** `pmOnFail: warn` is set in the global file (Gavin, 2026-10-06,
+> D-20261006-A02): a project pinned to another pnpm or package manager runs this
+> machine's pnpm with one warning line. Never export `PNPM_CONFIG_PM_ON_FAIL`: an
+> env value outranks a project's own `pmOnFail`. See 7.4.
 
 ### Shell completion
 
-pnpm provides zsh/bash/fish completion via `pnpm completion <shell>`,
-which prints the completion script to stdout. The standalone install
-does NOT install completion by default. Generate it manually:
-
 ```bash
-pnpm completion zsh > "$PNPM_HOME/_pnpm"
-# then in .zshrc:
+pnpm completion zsh > "$PNPM_HOME/_pnpm"     # 12.x script also covers `pn`
+# in a shell rc you own:
 [ -s "$PNPM_HOME/_pnpm" ] && source "$PNPM_HOME/_pnpm"
 ```
 
-### `pnpm setup` — handle with care
+Regenerate it after a major upgrade.
 
-`pnpm setup` is pnpm's "fix my shell rc for me" command. It appends a
-PNPM_HOME export block directly to your shell rc file. **Do not run it**
-in a dotfiles/stow-managed environment — it silently mutates a tracked
-file. Instead, wire PNPM_HOME by hand in your stowed rc.
+### `pnpm setup`: do not run it in a managed shell rc
+
+It appends a `PNPM_HOME` block to your shell rc. In a dotfiles or stow setup
+that silently edits a tracked file. Wire `PNPM_HOME` by hand (2.6).
 
 ---
 
-## 1. Detect — what's wrong with this install?
+## 1. Detect: what is wrong with this install?
 
-Paste this block into a terminal. It runs read-only, prints a checklist.
+Save as `pnpm-doctor.sh` and run `bash pnpm-doctor.sh`. Read-only; prints a
+checklist and counts FAIL lines. Every check has a fixture that makes it fire
+and a clean fixture that keeps it quiet (this repo's `pnpm-guide-selftest`
+extracts this block from this file and runs them, so the script cannot drift
+from what is proven).
+
+**Run it outside any sandbox.** A sandbox that denies a file reports it as
+missing (measured: Claude Code's sandbox denies `~/.npmrc`, and `ls` there says
+"No such file or directory" whether or not it exists), so a denied check reads
+as clean.
+
+<!-- pnpm-doctor:begin -->
 
 ```bash
 #!/usr/bin/env bash
-# pnpm-doctor.sh — read-only health check
+# pnpm-doctor.sh -- read-only health check for pnpm 12 (macOS / Linux / WSL)
 set +e
+MIN_MAJOR=12
 OS=$(uname -s)
 ISSUES=0
-report() { printf "  %-7s %s\n" "$1" "$2"; [[ "$1" == "FAIL" ]] && ((ISSUES++)); }
+report() { printf '  %-5s %s\n' "$1" "$2"; [[ "$1" == FAIL ]] && ISSUES=$((ISSUES + 1)); }
+indent() { sed 's/^/          /'; }
 echo "=== pnpm health check ==="
 
-# 1. pnpm exists + version
-if command -v pnpm &>/dev/null; then
+# 1. pnpm runs and prints a version (a binary-less release prints an error instead, see 3.5)
+if command -v pnpm >/dev/null 2>&1; then
     PNPM_VER=$(pnpm -v 2>/dev/null)
-    report "OK" "pnpm $PNPM_VER at $(command -v pnpm)"
-    [[ "${PNPM_VER%%.*}" -lt 11 ]] && report "WARN" "pnpm < 11 — many features in this guide need 11.x"
-else
-    report "FAIL" "pnpm not installed"
-fi
-
-# 2. Multiple pnpm binaries on PATH (a shell wrapper function named
-#    `pnpm` is fine and intentional -- only count real executable files,
-#    or `which -a`/`type -a` will misreport the wrapper's body as extra hits)
-if command -v pnpm &>/dev/null; then
-    PNPM_BINS=()
-    IFS=: read -ra PATH_DIRS <<< "$PATH"
-    for d in "${PATH_DIRS[@]}"; do
-        [[ -n "$d" && -x "$d/pnpm" && ! -d "$d/pnpm" ]] && PNPM_BINS+=("$d/pnpm")
-    done
-    N=$(printf '%s\n' "${PNPM_BINS[@]}" | sort -u | wc -l | tr -d ' ')
-    if (( N > 1 )); then
-        report "FAIL" "Multiple pnpm binaries on PATH — first match wins:"
-        printf '%s\n' "${PNPM_BINS[@]}" | sort -u | sed 's/^/         /'
+    if [[ "$PNPM_VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+        report OK "pnpm $PNPM_VER at $(command -v pnpm)"
+        (( ${PNPM_VER%%.*} < MIN_MAJOR )) && report WARN "pnpm major is below $MIN_MAJOR; this guide describes 12.x"
+    else
+        report FAIL "pnpm is on PATH but 'pnpm -v' prints no version (see 3.5, binary-less release)"
     fi
+else
+    report FAIL "pnpm not installed"
 fi
 
-# 3. PNPM_HOME set + bin on PATH
+# 2. More than one pnpm executable on PATH, and corepack shims. Only real files
+#    count: a shell function named pnpm is not seen by this non-interactive bash.
+PNPM_BINS=$(set -f; IFS=:; for d in $PATH; do
+    [[ -n "$d" && -x "$d/pnpm" && ! -d "$d/pnpm" ]] && printf '%s\n' "$d/pnpm"
+done | awk '!seen[$0]++')
+N=$(printf '%s\n' "$PNPM_BINS" | awk 'NF' | wc -l | tr -d ' ')
+if (( N > 1 )); then
+    report FAIL "$N pnpm executables on PATH; the first one wins:"
+    printf '%s\n' "$PNPM_BINS" | indent
+fi
+while IFS= read -r b; do
+    [[ -n "$b" ]] || continue
+    real=$(readlink -f "$b" 2>/dev/null || printf '%s' "$b")
+    case "$real" in
+        */corepack/*) report FAIL "corepack shim on PATH: $b -> $real (corepack disable pnpm)" ;;
+    esac
+done <<< "$PNPM_BINS"
+
+# 3. PNPM_HOME, and only its bin/ on PATH
 if [[ -n "${PNPM_HOME:-}" ]]; then
-    report "OK" "PNPM_HOME=$PNPM_HOME"
-    [[ ":$PATH:" == *":$PNPM_HOME/bin:"* ]] || report "FAIL" "\$PNPM_HOME/bin not on PATH"
+    report OK "PNPM_HOME=$PNPM_HOME"
+    [[ ":$PATH:" == *":$PNPM_HOME/bin:"* ]] || report FAIL '$PNPM_HOME/bin is not on PATH (global packages will not resolve)'
+    [[ ":$PATH:" == *":$PNPM_HOME:"* ]] && report WARN '$PNPM_HOME itself is on PATH (v10 layout); only $PNPM_HOME/bin belongs there'
 else
-    report "WARN" "PNPM_HOME unset (using default)"
+    report WARN "PNPM_HOME unset (pnpm uses its default data dir)"
 fi
 
-# 4. Config dir + config.yaml
-case "$OS" in
-    Darwin) CFG_DIR="$HOME/Library/Preferences/pnpm" ;;
-    Linux)  CFG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/pnpm" ;;
-esac
-[[ -n "${XDG_CONFIG_HOME:-}" ]] && CFG_DIR="$XDG_CONFIG_HOME/pnpm"
-if [[ -f "$CFG_DIR/config.yaml" ]]; then
-    report "OK" "config.yaml at $CFG_DIR"
-    # Detect silently-dead kebab keys
-    if grep -qE '^[a-z]+(-[a-z]+)+:' "$CFG_DIR/config.yaml" 2>/dev/null; then
-        report "FAIL" "kebab-case keys in config.yaml (silently ignored — must be camelCase):"
-        grep -nE '^[a-z]+(-[a-z]+)+:' "$CFG_DIR/config.yaml" | head -5 | sed 's/^/         /'
+# 4. The config dir pnpm actually reads, and what is in it
+if [[ -n "${XDG_CONFIG_HOME:-}" ]]; then CFG_DIR="$XDG_CONFIG_HOME/pnpm"
+elif [[ "$OS" == Darwin ]]; then CFG_DIR="$HOME/Library/Preferences/pnpm"
+else CFG_DIR="$HOME/.config/pnpm"; fi
+CFG="$CFG_DIR/config.yaml"
+if [[ -f "$CFG" ]]; then
+    report OK "config.yaml at $CFG_DIR"
+    KEBAB=$(grep -nE '^[a-z]+(-[a-z]+)+:' "$CFG")
+    if [[ -n "$KEBAB" ]]; then
+        report FAIL "kebab-case keys in config.yaml are silently ignored; use camelCase:"
+        printf '%s\n' "$KEBAB" | indent
     fi
+    grep -qE '^managePackageManagerVersions:' "$CFG" &&
+        report WARN "managePackageManagerVersions was removed in pnpm 11 and is ignored; the setting is now pmOnFail"
 else
-    report "WARN" "No config.yaml at $CFG_DIR — no global settings active"
+    report WARN "no config.yaml at $CFG_DIR, so no global settings are active"
+fi
+LINUX_CFG="$HOME/.config/pnpm/config.yaml"
+if [[ "$OS" == Darwin && -z "${XDG_CONFIG_HOME:-}" && -f "$LINUX_CFG" ]] && ! [[ "$LINUX_CFG" -ef "$CFG" ]]; then
+    report FAIL "$LINUX_CFG exists but pnpm on macOS reads $CFG; link one to the other"
+fi
+[[ -s "$CFG_DIR/rc" ]] && report WARN "$CFG_DIR/rc is not read by pnpm 12; auth and registry belong in $CFG_DIR/auth.ini"
+
+# 5. Environment variables override config.yaml (names only; values may be secrets)
+ENVS=$(env | cut -d= -f1 | grep -iE '^pnpm_config_')
+if [[ -n "$ENVS" ]]; then
+    report WARN "pnpm_config_* variables are set; each one overrides config.yaml:"
+    printf '%s\n' "$ENVS" | indent
 fi
 
-# 5. Conflicting install sources
-if [[ "$OS" == "Darwin" ]] && command -v brew &>/dev/null && brew list pnpm &>/dev/null; then
-    report "FAIL" "Homebrew pnpm installed — collides with standalone"
+# 6. Install sources that collide with the standalone install
+if [[ "$OS" == Darwin ]] && command -v brew >/dev/null 2>&1 && brew list pnpm >/dev/null 2>&1; then
+    report FAIL "Homebrew pnpm installed; collides with the standalone install"
 fi
-if command -v dpkg &>/dev/null && dpkg -l 2>/dev/null | grep -qE '^ii\s+pnpm\s'; then
-    report "FAIL" "apt pnpm installed — distro packages lag standalone"
-fi
-if command -v corepack &>/dev/null && corepack ls 2>/dev/null | grep -q pnpm; then
-    report "FAIL" "corepack has pnpm enabled — may shadow standalone"
+if command -v dpkg >/dev/null 2>&1 && dpkg -l 2>/dev/null | grep -qE '^ii[[:space:]]+pnpm[[:space:]]'; then
+    report FAIL "apt pnpm installed; distro packages lag the standalone install"
 fi
 
-# 6. v10 leftovers (unsupported — should be deleted)
-DATA_DIR="${PNPM_HOME:-$HOME/Library/pnpm}"
-[[ ! -d "$DATA_DIR" && -d "$HOME/.local/share/pnpm" ]] && DATA_DIR="$HOME/.local/share/pnpm"
-[[ -d "$DATA_DIR/store/v10" ]] && report "FAIL" "pnpm 10 store at $DATA_DIR/store/v10 — delete it"
-[[ -d "$DATA_DIR/global/5" ]] && report "FAIL" "pnpm 10 globals at $DATA_DIR/global/5 — delete it"
+# 7. pnpm 10 leftovers in the data dir
+if [[ -n "${PNPM_HOME:-}" ]]; then DATA_DIR="$PNPM_HOME"
+elif [[ -n "${XDG_DATA_HOME:-}" ]]; then DATA_DIR="$XDG_DATA_HOME/pnpm"
+elif [[ "$OS" == Darwin ]]; then DATA_DIR="$HOME/Library/pnpm"
+else DATA_DIR="$HOME/.local/share/pnpm"; fi
+for d in store/v10 global/5; do
+    [[ -d "$DATA_DIR/$d" ]] && report WARN "pnpm 10 leftover: $DATA_DIR/$d"
+done
+for s in pnpm pnpx pn pnx; do
+    [[ -e "$DATA_DIR/$s" && ! -d "$DATA_DIR/$s" ]] && report WARN "root-level shim $DATA_DIR/$s (v10 layout)"
+done
 
-# 7. ~/.npmrc with auth/registry
+# 8. ~/.npmrc is still read by pnpm 12, so a registry or auth line there applies
 if [[ -f "$HOME/.npmrc" ]] && grep -qE '^(registry=|//|_auth)' "$HOME/.npmrc" 2>/dev/null; then
-    report "WARN" "~/.npmrc has registry/auth — may shadow pnpm's expected default"
+    report WARN "~/.npmrc sets a registry or auth; pnpm 12 reads it"
 fi
 
 echo
-[[ $ISSUES -eq 0 ]] && echo "✅ no critical issues" || echo "❌ $ISSUES critical issue(s)"
+if (( ISSUES == 0 )); then echo "no critical issues"; else echo "$ISSUES critical issue(s)"; fi
 ```
+
+<!-- pnpm-doctor:end -->
 
 ---
 
-## 2. Fix — remediation recipes
+## 2. Fix: remediation recipes
 
-Apply in this order. Don't skip steps; each builds on the previous.
+Apply in order; each builds on the previous. **Look before you remove**, and
+back up instead of deleting.
 
 ### 2.1 Remove conflicting install sources
 
+Each one locks pnpm to a version it controls and cannot `self-update`.
+
 ```bash
 # Homebrew (macOS)
-brew list pnpm &>/dev/null && brew uninstall pnpm
-
-# Distro packages (Linux)
-command -v dpkg   &>/dev/null && dpkg -l    | grep -q pnpm && sudo apt remove pnpm
-command -v dnf    &>/dev/null && dnf list installed | grep -q pnpm && sudo dnf remove pnpm
-command -v pacman &>/dev/null && pacman -Qs '^pnpm$' &>/dev/null && sudo pacman -R pnpm
-command -v snap   &>/dev/null && snap list pnpm &>/dev/null && snap remove pnpm
-
-# Corepack
+brew list pnpm >/dev/null 2>&1 && brew uninstall pnpm
+# Distro packages (Linux): match the package name exactly
+dpkg -l 2>/dev/null | grep -qE '^ii[[:space:]]+pnpm[[:space:]]' && sudo apt remove pnpm
+command -v dnf    >/dev/null && dnf list installed pnpm >/dev/null 2>&1 && sudo dnf remove pnpm
+command -v pacman >/dev/null && pacman -Q pnpm >/dev/null 2>&1 && sudo pacman -R pnpm
+command -v snap   >/dev/null && snap list pnpm >/dev/null 2>&1 && sudo snap remove pnpm
+# Corepack shims
 corepack disable pnpm 2>/dev/null || true
-
-# npm-installed pnpm (rare — usually shadowed by standalone anyway)
+# npm-installed pnpm
 npm ls -g pnpm 2>/dev/null | grep -q pnpm && npm uninstall -g pnpm
 ```
 
-### 2.2 Back up stale configs (don't delete — back up)
+### 2.2 Back up stale configs
 
 ```bash
 TS=$(date +%Y%m%d-%H%M%S)
-
-# ~/.npmrc with stale settings
-[[ -f ~/.npmrc ]] && grep -qE '^(registry=|//|_auth)' ~/.npmrc && \
-    mv ~/.npmrc ~/.npmrc.pre-cleanup.$TS.bak
-
-# Stale config.yaml in either location
-for f in ~/.config/pnpm/config.yaml ~/Library/Preferences/pnpm/config.yaml; do
-    [[ -f "$f" && ! -L "$f" ]] && mv "$f" "$f.pre-cleanup.$TS.bak"
+[ -f ~/.npmrc ] && grep -qE '^(registry=|//|_auth)' ~/.npmrc && mv ~/.npmrc ~/.npmrc.pre-cleanup.$TS.bak
+for d in ~/.config/pnpm ~/Library/Preferences/pnpm; do
+    for f in "$d/config.yaml" "$d/rc"; do
+        [ -f "$f" ] && [ ! -L "$f" ] && mv "$f" "$f.pre-cleanup.$TS.bak"
+    done
 done
 ```
 
-### 2.3 Remove v10 leftovers
+An `rc` that holds a token: move the token to `auth.ini` in the same
+directory, never into `config.yaml` or a tracked file.
 
-pnpm v10 is unsupported by the dotfiles. Delete all v10 artifacts:
+### 2.3 pnpm 10 leftovers
 
 ```bash
-DATA_DIR="${PNPM_HOME:-$HOME/Library/pnpm}"
-[[ -d "$DATA_DIR" ]] || DATA_DIR="$HOME/.local/share/pnpm"
-rm -rf "$DATA_DIR/store/v10" "$DATA_DIR/global/5"
-pnpm store prune 2>/dev/null || true
+pnpm update --global   # 12.8.0+: moves global/5 packages to global/v11 and removes v10 root shims
+ls "$PNPM_HOME"        # then look before removing store/v10 by hand
 ```
-
-`install.sh` preflight checks detect and offer to delete these automatically.
 
 ### 2.4 Remove `pnpm setup` appends from shell rc
 
 ```bash
-# Inspect first
 grep -nE 'PNPM_HOME|pnpm completion' ~/.zshrc ~/.bashrc ~/.profile 2>/dev/null
-
-# If they're outside a tracked dotfiles file, edit the rc manually and remove
-# the auto-generated block (usually marked with a `# pnpm` comment).
 ```
+
+Edit the block out by hand (it is usually marked `# pnpm`). If the rc is
+tracked by dotfiles, edit the tracked copy.
 
 ### 2.5 Reinstall pnpm cleanly via standalone
 
@@ -259,305 +387,201 @@ grep -nE 'PNPM_HOME|pnpm completion' ~/.zshrc ~/.bashrc ~/.profile 2>/dev/null
 curl -fsSL https://get.pnpm.io/install.sh | sh -
 ```
 
-The installer creates `$PNPM_HOME` (e.g. `~/Library/pnpm` on macOS,
-`~/.local/share/pnpm` on Linux) and drops the `pnpm` binary inside it.
-It will also append to your shell rc — review and revert if your rc is
-dotfiles-managed (see §2.6).
+For 12.x the installer fetches `@pnpm/exe.<os>-<arch>` from the npm registry
+and checks its signature. It runs `pnpm setup --force`, so it **does append to
+your shell rc**: review and revert that (2.4) if the rc is managed.
 
-### 2.6 Wire PNPM_HOME and PATH by hand (preferred over `pnpm setup`)
-
-In your zsh rc (or bashrc):
+### 2.6 Wire `PNPM_HOME` and PATH by hand
 
 ```bash
 # macOS
 export PNPM_HOME="$HOME/Library/pnpm"
 # Linux/WSL
 # export PNPM_HOME="$HOME/.local/share/pnpm"
-
-# pnpm 11 global shims (v11-only — root dir is NOT on PATH)
-export PATH="$PNPM_HOME/bin:$PATH"
-
-# Shell completion (run once per machine to generate the file)
+export PATH="$PNPM_HOME/bin:$PATH"      # bin only; $PNPM_HOME itself is NOT on PATH
 [ -s "$PNPM_HOME/_pnpm" ] && source "$PNPM_HOME/_pnpm"
 ```
 
-Then in a fresh shell:
+If you use nvm, keep nvm's bin **before** `$PNPM_HOME/bin` on PATH (section 7).
+
+### 2.7 Create or fix `config.yaml` (camelCase)
 
 ```bash
-pnpm completion zsh > "$PNPM_HOME/_pnpm"
-```
-
-### 2.7 Create / fix `config.yaml` with camelCase keys
-
-On macOS:
-
-```bash
-mkdir -p ~/Library/Preferences/pnpm
-cat > ~/Library/Preferences/pnpm/config.yaml <<'YAML'
-# Refuse install of packages younger than N minutes. 4320 = 3 days.
-minimumReleaseAge: 4320
-
-# Block transitive deps that resolve from non-registry sources.
+case "$(uname -s)" in Darwin) D="$HOME/Library/Preferences/pnpm" ;; *) D="$HOME/.config/pnpm" ;; esac
+mkdir -p "$D" && cat > "$D/config.yaml" <<'YAML'
+minimumReleaseAge: 4320     # 3 days; see the Appendix
 blockExoticSubdeps: true
-
-# Validate store on each install.
 verifyStoreIntegrity: true
-
-# Refuse silent lockfile updates on `pnpm install`.
-preferFrozenLockfile: true
+trustPolicy: no-downgrade
+globalShims: false          # only if nvm (or another manager) owns `node`; section 7
 YAML
 ```
 
-On Linux:
+Sharing one file across macOS and Linux: keep it at `~/.config/pnpm/config.yaml`
+and link it on macOS (`ln -sfn ~/.config/pnpm/config.yaml
+~/Library/Preferences/pnpm/config.yaml`). Do not export `XDG_CONFIG_HOME`
+globally for this: helm, gh, kubectl, neovim and others move their config too.
+
+> **This box:** `supportedArchitectures` (and `python`, `cargo`) were removed from
+> the global file on 2026-10-06: pnpm 12 ignores them there, and the defaults are
+> what we wanted. Pin them per project in `pnpm-workspace.yaml` if one needs it.
+> `pnpm-config-check` names any key the global file holds that pnpm ignores. 7.4.
+
+### 2.8 Reinstall global packages
 
 ```bash
-mkdir -p ~/.config/pnpm
-# same content; substitute path
-```
-
-If you want a single-source setup across macOS and Linux (e.g. dotfiles
-that target both), keep the canonical file at `~/.config/pnpm/config.yaml`
-and symlink it on macOS:
-
-```bash
-mkdir -p ~/Library/Preferences/pnpm
-ln -sfn ~/.config/pnpm/config.yaml ~/Library/Preferences/pnpm/config.yaml
-```
-
-### 2.8 Reinstall any global packages
-
-Reinstall globals under pnpm 11. Shims go to `$PNPM_HOME/bin/`:
-
-```bash
-pnpm install -g <pkg1> <pkg2> ...
-```
-
-Then verify they resolve from the new location:
-
-```bash
+pnpm add -g <pkg1> <pkg2> ...
 ls "$PNPM_HOME/bin/"
-which <pkg-binary>
 ```
-
-If any package version was just published (< `minimumReleaseAge`), pnpm
-will refuse with `ERR_PNPM_NO_MATURE_MATCHING_VERSION`. Pin to an older
-mature version or wait.
 
 ---
 
-## 3. Verify — prove it actually works
+## 3. Verify: prove it works
 
-### 3.1 Check the config file is being read
+### 3.1 The config file is read
 
-```bash
-# These all surface the path pnpm is actually using:
-pnpm config list 2>&1 | head -5
-ls -la "$([[ $(uname) == Darwin ]] && echo ~/Library/Preferences/pnpm || echo ~/.config/pnpm)/config.yaml"
-```
-
-### 3.2 `pnpm config get` does NOT show YAML values
-
-This is a common pitfall: `pnpm config get` reads INI (`rc`, `.npmrc`)
-only. It surfaces `registry`, `userAgent`, and similar — but NOT
-`minimumReleaseAge` or other YAML keys. They return `undefined` even when
-active. **Don't trust this command for YAML verification.**
-
-### 3.3 Empirical enforcement test (the real verification)
+Set a harmless key in the real file, read it back with the environment
+cleared, then remove it:
 
 ```bash
-SCRATCH=$(mktemp -d)
-pnpm -C "$SCRATCH" init
-# Pick a package version that's < your minimumReleaseAge old.
-# Example: any recent canary release.
-pnpm -C "$SCRATCH" add next@latest-canary 2>&1 | grep -E 'ERR_PNPM_NO_MATURE_MATCHING_VERSION|released'
+env -i PATH="$PATH" HOME="$HOME" pnpm config get minimumReleaseAge
 ```
 
-If you see `ERR_PNPM_NO_MATURE_MATCHING_VERSION`, the setting is active.
-If the package installs cleanly, `minimumReleaseAge` is NOT enforcing —
-re-check your config file location and key case.
+A number means the file is read. `undefined` means the file is not where pnpm
+looks (section 0), or the key is spelt kebab-case. Without `env -i`, an exported
+`PNPM_CONFIG_*` answers instead and the check proves nothing.
 
-### 3.4 Global binary resolution
+### 3.2 The cooldown is enforced (two arms)
+
+`minimumReleaseAge` makes a **range** (`next@canary`, `^1.2.0`) quietly resolve
+to an older, mature version: no error, nothing to see. Only an **exact** pin
+of a too-young version fails. So test with an exact pin, and run the same
+install with the setting overridden as the control:
+
+```bash
+T=$(mktemp -d "${TMPDIR:-/tmp}/pnpm-cooldown.XXXXXX"); printf '{"name":"t","version":"1.0.0"}\n' > "$T/package.json"
+cp -R "$T" "$T-ctl"
+YOUNG=$(pnpm view next dist-tags.canary)           # next ships a canary most days
+pnpm -C "$T"     add "next@$YOUNG" --lockfile-only --ignore-scripts                              # expect ERR_PNPM_NO_MATURE_MATCHING_VERSION
+pnpm -C "$T-ctl" add "next@$YOUNG" --lockfile-only --ignore-scripts --config.minimumReleaseAge=0  # expect success
+```
+
+The error names the publish time and the cutoff. Both succeed: the canary is
+older than your window; pick another fast-moving package. Both fail: the
+problem is not the cooldown. Measured 2026-10-06: `next@16.4.0-canary.61`
+failed under 4320 and installed under the override, while `next@canary`
+resolved silently to `16.4.0-canary.58`. (`--config.<key>=<value>` applies
+every setting since 12.8.0.)
+
+### 3.3 Global binaries resolve
 
 ```bash
 ls "$PNPM_HOME/bin/"
-which <some-globally-installed-binary>  # should resolve to $PNPM_HOME/bin/
+command -v <some-global-binary>    # should be under $PNPM_HOME/bin/
 ```
 
-### 3.5 If install fails with `EBADF` / `ERR_PNPM_META_FETCH_FAIL` — check per-binary firewalls FIRST
+### 3.4 Install fails with `EBADF` / `ERR_PNPM_META_FETCH_FAIL`: check per-binary firewalls first
 
-Symptom:
+Not re-measured on 12.x; written against 11.x.
 
 ```
 [WARN] GET https://registry.npmjs.org/<pkg> error (EBADF). Will retry...
 [ERR_PNPM_META_FETCH_FAIL] GET https://registry.npmjs.org/<pkg>: fetch failed
 ```
 
-NODE_DEBUG=undici trace shows `connecting ... using https:undefined` →
-`connection ... errored -` (empty error message after the dash) — the
-socket FD was killed before TLS handshake started.
+**Most common cause on macOS: a per-binary firewall** (Little Snitch, LuLu,
+Murus) dropping pnpm's connections while letting `curl`, `node` and `bun`
+through. Rules key on the executable path, so a rule for `node` does not cover
+pnpm. Note pnpm 12 is a native binary, so its path is the `pnpm` executable
+under `$PNPM_HOME`, not `node`.
 
-**Most common cause on macOS: a per-binary firewall (Little Snitch, LuLu,
-Murus) is silently dropping pnpm's connections** while letting `curl`,
-`node`, and `bun` through. The firewall's rule is keyed on the
-executable path (`$PNPM_HOME/pnpm`), so a permissive rule for `node`
-does NOT cover `pnpm` (and vice versa).
-
-#### 4-probe diagnostic — isolates in under 30 seconds
+Four probes, in under 30 seconds:
 
 ```bash
 PKG='@scope/pkg-that-fails'
-
-# 1. curl (libcurl HTTP stack)
-curl -sI -m 5 "https://registry.npmjs.org/${PKG//\//%2F}" | head -3
-
-# 2. Node native fetch (Node's built-in undici)
-node -e "fetch('https://registry.npmjs.org/${PKG//\//%2F}').then(r=>console.log('node:',r.status)).catch(e=>console.error('node-fail:',e.code||e.cause?.code||e.message))"
-
-# 3. Bun (entirely different HTTP stack — not undici)
-bun add -g "$PKG"
-
-# 4. pnpm
-pnpm add -g "$PKG"
+curl -sI -m 5 "https://registry.npmjs.org/${PKG//\//%2F}" | sed -n 1p                 # 1. curl
+node -e "fetch('https://registry.npmjs.org/${PKG//\//%2F}').then(r=>console.log(r.status)).catch(e=>console.error(e.cause?.code||e.message))"  # 2. node
+bun add -g "$PKG"                                                                    # 3. bun
+pnpm add -g "$PKG"                                                                   # 4. pnpm
 ```
 
-**If 1–3 pass and only 4 fails → it's a per-binary firewall.** The
-network, DNS, IPv6, TLS, Node fetch, and Cloudflare are all fine on this
-exact machine at this exact instant. Only pnpm's binary identity is
-being blocked.
+1-3 pass and only 4 fails: a per-binary firewall. Allow pnpm to
+`*.npmjs.org` in the firewall's rules; check VPN split tunnels and corporate
+MDM allow-lists. Changing `userAgent`, network concurrency, DNS order, the
+store or the cooldown does **not** fix it (fetch fails before any policy runs).
 
-#### Fix
+### 3.5 `pnpm -v` prints an error instead of a version: a binary-less release
 
-1. **Little Snitch**: open Network Monitor → search rules for `pnpm` or
-   check the alert log for blocked connections to `registry.npmjs.org`.
-   Add an Allow rule for `pnpm` to `*.npmjs.org` (and probably
-   `*.cloudflare.com` for tarball CDN).
-2. **LuLu**: same pattern via its rules UI.
-3. **Tailscale exit node / Mullvad / WireGuard split-tunnel**: check
-   whether pnpm traffic is being routed through a tunnel that's not
-   reaching the registry.
-4. **Corporate MDM / Zscaler / Netskope**: contact IT; they typically
-   maintain per-binary allow-lists for development tools.
-
-#### Things that look like the cause but aren't
-
-The following will all FAIL to fix it (verified empirically) — don't
-waste time on them:
-
-- Changing `userAgent` via `pnpm_config_user_agent=...` — firewalls
-  match on binary, not UA
-- `pnpm_config_network_concurrency=1` — not a pool race
-- `NODE_OPTIONS='--dns-result-order=ipv4first --no-network-family-autoselection'`
-  — not Happy Eyeballs / IPv6
-- `sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder` — not
-  DNS cache
-- `exec zsh -l` for a fresh shell — not shell state
-- `pnpm store prune` — not local cache state
-- Disabling `minimumReleaseAge` or any other `config.yaml` setting —
-  policies run AFTER fetch; fetch is what's failing
-- `pnpm self-update` — also uses pnpm's HTTP stack, fails the same way
-
-If probes 1–3 also fail, the cause is genuinely network/DNS/registry
-side. Use standard network diagnostics. But if curl + node fetch + bun
-all succeed and pnpm specifically fails, **stop investigating other
-hypotheses and check your firewall.**
-
-### 3.6 If `pnpm -v` fails with `This: command not found` (exit 127) — a binary-less published release
-
-pnpm ships its native binary in a per-platform artifact package
-(`@pnpm/macos-arm64`, `@pnpm/linux-x64`, `@pnpm/linuxstatic-<arch>` for musl,
-`@pnpm/win-<arch>`, ...); `@pnpm/exe` hardlinks that binary over a placeholder
-at install time. Occasionally a release publishes the platform artifact
-WITHOUT its ~141 MB binary — a ~2 KB metadata-only tarball (observed:
-**11.12.0** and **11.13.0**, fixed in 11.13.1). Installing such a version
-leaves the 34-byte placeholder (`This file intentionally left blank`) in place,
-so every pnpm invocation execs a text file:
+pnpm ships its native binary in a per-platform package and swaps it over a
+placeholder at install time. Twice (11.12.0 and 11.13.0, fixed in 11.13.1) a
+release was published **without** the binary, leaving a 34-byte placeholder:
 
 ```text
-.../@pnpm/exe/pnpm: line 1: This: command not found   # exit 127
+.../pnpm: line 1: This: command not found   # exit 127
 ```
 
-`pnpm self-update` still exits 0 and prints "Successfully updated" — it
-faithfully installed a binary-less package — so the break is silent. The
-welcome banner then shows `pnpm: N/A` (the launcher is on PATH, but `pnpm -v`
-fails) rather than `Not Found`.
+`self-update` still printed "Successfully updated". The doctor (section 1)
+reports it as "prints no version".
 
-**This is an UPSTREAM bug, not a local misconfig.** Do not blame `config.yaml`,
-the store, or `strictDepBuilds`. Confirm with one cheap metadata GET (no tarball
-download) — a real binary is ~141 MB, a broken one ~2 KB:
+Check a version before taking it. The package name changed in 12.x:
+
+| pnpm | Platform package (macOS arm64 shown)                                              |
+| ---- | --------------------------------------------------------------------------------- |
+| 12.x | `@pnpm/exe.darwin-arm64` (also `linux-x64`, `linux-x64-musl`, `linux-arm64`, ...) |
+| 11.x | `@pnpm/macos-arm64` (also `linux-x64`, `linuxstatic-x64`, ...)                    |
 
 ```bash
-# substitute your platform pkg: macos-arm64 | linux-x64 | linuxstatic-x64 | ...
-curl -s https://registry.npmjs.org/@pnpm/macos-arm64/<version> \
-  | jq -r '.dist.unpackedSize'      # ~141421362 = ok ; ~1955 = binary-less
-# or list the tarball: a good one contains package/pnpm
-curl -s "$(curl -s https://registry.npmjs.org/@pnpm/macos-arm64/<version> | jq -r .dist.tarball)" \
-  | tar -tz | grep -q '^package/pnpm$' && echo HAS || echo MISSING
+curl -s https://registry.npmjs.org/@pnpm/exe.darwin-arm64/<version> | jq -r '.dist.unpackedSize'
 ```
 
-**Recover** — you cannot fix it by asking the broken pnpm to update itself
-(every `pnpm` call execs the placeholder):
+A real binary is tens of MB (12.4.2-12.9.1: about 36-45 MB; 11.x: about
+141 MB); a broken one is about 2 KB. Anything under 1 MB is broken. pnpm
+12.9.0's binary contains an `ERR_PNPM_BROKEN_PNPM_RELEASE` error code, which
+suggests pnpm now guards this itself; not tested.
 
-```bash
-# 1. Find a known-good binary already in the store (real Mach-O/ELF, not 34 bytes):
-find "$PNPM_HOME/store/v11/links/@pnpm/exe" -name pnpm -type f -exec sh -c \
-  'printf "%s %s\n" "$(wc -c <"$1")" "$1"' _ {} \; | sort -n | tail
-# 2. self-update to a KNOWN-GOOD version using that binary directly:
-"<path-to-good-store-binary>" self-update <good-version>
-# (self-update rebuilds $PNPM_HOME/bin/pnpm; note it may PRUNE older install dirs.)
-```
+**Recover**: the broken pnpm cannot update itself. Find a good binary already
+on disk (for 12.x: `$PNPM_HOME/global/v11/*/node_modules/pnpm/pnpm`, and older
+ones under `$PNPM_HOME/package-manager-store/v11/`), run its `self-update
+<good-version>` directly, or reinstall with the standalone installer (2.5).
 
-If no good binary is in the store, download the platform artifact tarball from
-npm (integrity-verify against `.dist.integrity`) and place its `pnpm` file, or
-reinstall via the standalone installer (recipe 2.5), which pulls from GitHub
-releases.
+> **This box:** `pnpm_update` runs this check against the version it then passes
+> to `pnpm self-update` by name, so the checked version is the installed one; if
+> pnpm lands anywhere else it exits 1 with the roll-back command (D-20261006-A01,
+> section 7.3).
 
-**Guarded automatically in this repo.** `pnpm_update` and the welcome banner now
-detect binary-less eligible versions (via the `dist.unpackedSize` check above)
-and REFUSE to update / flag `update ... held: published without a binary`
-instead of installing the dead release; `pnpm_update` also verifies that
-`pnpm -v` parses after any self-update. See `_pnpm_version_has_binary` in
-`home/.zsh_onboarding` and `pnpm_update` in `home/.zsh_node_functions`.
+### 3.6 Running pnpm inside a sandbox (Claude Code and similar)
+
+Reported by this round's sandbox investigation on 12.9.0, not re-measured
+here: installs and `dlx` fail at the store lock before any network call,
+because the lock is a fixed `/tmp/pnpm-store-operation-locks-<uid>/` that
+only `XDG_RUNTIME_DIR` (an existing directory) moves; `dlx` also needs
+`PNPM_CONFIG_CACHE_DIR`. The proxy certificate failure seen on 11.x/12.4
+(`OSStatus -26276`) no longer occurs on 12.9.
+
+> **This box:** the `pnpm()` function in `home/.zshrc` sets both, for that one
+> command, only when `/tmp` is not writable, pointing at one per-user directory
+> `/tmp/claude-$UID/pnpm-runtime` (D-20261006-A07). Measured in a fresh session:
+> `command pnpm dlx semver@7.6.3 1.2.3` exit 1, `pnpm dlx ...` exit 0. Section 7.6.
 
 ---
 
-## 4. Set up clean from scratch (no prior pnpm)
-
-For a fresh machine:
+## 4. Set up clean from scratch
 
 ```bash
-# 1. Install pnpm (standalone)
+# 1. Install (standalone). It appends to your shell rc; revert that if the rc is managed (2.4).
 curl -fsSL https://get.pnpm.io/install.sh | sh -
-
-# 2. In your shell rc (zsh/bash):
-case "$(uname -s)" in
-    Darwin)  PNPM_HOME="$HOME/Library/pnpm" ;;
-    *)       PNPM_HOME="$HOME/.local/share/pnpm" ;;
-esac
-export PNPM_HOME
-export PATH="$PNPM_HOME:$PNPM_HOME/bin:$PATH"
-
-# 3. Generate completion
+# 2. In a shell rc you own (or the tracked copy of it):
+#      export PNPM_HOME="$HOME/Library/pnpm"        # Linux: $HOME/.local/share/pnpm
+#      export PATH="$PNPM_HOME/bin:$PATH"
+#      [ -s "$PNPM_HOME/_pnpm" ] && source "$PNPM_HOME/_pnpm"
+# 3. Completion
 pnpm completion zsh > "$PNPM_HOME/_pnpm"
-echo '[ -s "$PNPM_HOME/_pnpm" ] && source "$PNPM_HOME/_pnpm"' >> ~/.zshrc
-
-# 4. Recommended config (camelCase!)
-case "$(uname -s)" in
-    Darwin) CFG_DIR="$HOME/Library/Preferences/pnpm" ;;
-    *)      CFG_DIR="$HOME/.config/pnpm" ;;
-esac
-mkdir -p "$CFG_DIR"
-cat > "$CFG_DIR/config.yaml" <<'YAML'
-minimumReleaseAge: 4320     # 3-day supply-chain delay
-blockExoticSubdeps: true
-verifyStoreIntegrity: true
-preferFrozenLockfile: true
-YAML
-
-# 5. Verify
-exec zsh   # fresh shell to pick up env
-pnpm -v    # should print version
-ls "$PNPM_HOME/bin/" 2>/dev/null   # ready for global installs
+# 4. Config: recipe 2.7
+# 5. Verify, in a fresh shell
+pnpm -v && bash pnpm-doctor.sh
 ```
+
+Then run 3.1 and 3.2.
 
 ---
 
@@ -565,106 +589,112 @@ ls "$PNPM_HOME/bin/" 2>/dev/null   # ready for global installs
 
 ### DO
 
-- **Install pnpm via the standalone installer** (`get.pnpm.io/install.sh`).
-  It's the only path that supports `pnpm self-update`.
-- **Use camelCase in `config.yaml`**. Kebab-case is for `.npmrc` / `rc`
-  (INI), not for YAML.
-- **Keep `rc` (auth/registry/`approve-builds=true`) separate from
-  `config.yaml`**. They live in the same directory but never overlap.
-- **Bridge the macOS path with a symlink** if you share dotfiles across
-  Mac + Linux: `~/Library/Preferences/pnpm/config.yaml ->
-~/.config/pnpm/config.yaml`.
-- **Verify settings empirically** by trying to install a package that
-  should fail (e.g. one published in the last hour with
-  `minimumReleaseAge: 4320` set). Don't trust `pnpm config get` for YAML
-  values.
-- **Add only `$PNPM_HOME/bin`** to PATH. pnpm 11 puts all global shims
-  there. The root `$PNPM_HOME/` is NOT on PATH (v10 layout unsupported).
+- **Install via the standalone installer.** It is the only source that
+  supports `pnpm self-update`.
+- **Use camelCase in `config.yaml`.** Kebab-case belongs in `auth.ini` and
+  `.npmrc`.
+- **Put auth tokens in `auth.ini`,** never in `config.yaml` or a tracked file.
+- **Verify by behaviour** (3.2), and read config back with `env -i` (3.1).
+- **Put only `$PNPM_HOME/bin` on PATH.**
+- **Bridge the macOS path with a symlink** if one file serves Mac and Linux.
 
 ### DON'T
 
-- **Don't run `pnpm setup`** if your shell rc is tracked by dotfiles or
-  Stow. It silently appends a PNPM_HOME block and breaks reproducibility.
-- **Don't trust `pnpm config get` for YAML settings.** The CLI only reads
-  INI files. YAML values return `undefined` even when active.
-- **Don't put kebab-case keys in `config.yaml`** — silently ignored,
-  produces zero warnings. The most common silent failure.
-- **Don't install pnpm via Homebrew, apt, dnf, pacman, snap, npm, or
-  Corepack**. Each one locks pnpm to a version it controls, can't
-  self-update, and conflicts with the standalone install if both are
-  present.
-- **Don't try to set `managePackageManagerVersions: false` in global
-  `config.yaml`.** pnpm 11 explicitly rejects this key from global config
-  with a warning. To stop pnpm from auto-installing itself + `@pnpm/exe`
-  into every new project, put `managePackageManagerVersions: false` in
-  each project's `pnpm-workspace.yaml`, or use pnpm 11 config
-  dependencies. There is no global escape.
-- **Don't keep `$PNPM_HOME/store/v10/`** — pnpm 10 is unsupported. Delete
-  it to reclaim disk. `install.sh` preflight offers to do this automatically.
-- **Don't export `XDG_CONFIG_HOME` globally just to unify pnpm's config
-  path on macOS.** Many other tools respect that variable (helm, gh,
-  kubectl, neovim, atuin, starship, zellij) and changing it shifts their
-  config-file lookups too. The symlink approach is contained.
+- **Don't run `pnpm setup`** in a managed shell rc.
+- **Don't read `undefined` from `pnpm config get` as "off".** It means "not
+  set" (section 0).
+- **Don't trust "no warning" for a key.** Unknown and removed keys are
+  silently accepted.
+- **Don't keep auth in `rc`.** pnpm 12 does not read it.
+- **Don't set `managePackageManagerVersions`.** It was removed in pnpm 11 and
+  is ignored. Its replacement is `pmOnFail` (`pmOnFail: ignore` = the old
+  `false`), typed and honoured on 12.9.0.
+- **Don't install pnpm via Homebrew, apt, dnf, pacman, snap, npm or Corepack.**
+- **Don't export `XDG_CONFIG_HOME` globally** to unify pnpm's path on macOS.
 
 ---
 
 ## 6. References
 
-- pnpm installation: <https://pnpm.io/installation>
-- pnpm settings reference: <https://pnpm.io/settings>
-- pnpm `.npmrc` / config: <https://pnpm.io/npmrc>
-- pnpm completion: <https://pnpm.io/completion>
-- pnpm config dependencies (sharing settings across projects):
-  <https://pnpm.io/config-dependencies>
-- pnpm `devEngines.packageManager` semantics:
-  <https://pnpm.io/package_json#devenginespackagemanager>
-- Source-code path resolution: in any pnpm 11.x install, see
-  `getConfigDir()` and `getDataDir()` in
-  `<PNPM_HOME>/.tools/@pnpm+exe/<ver>_tmp_*/node_modules/@pnpm/exe/dist/pnpm.mjs`.
-  Grepping the binary for `Library/Preferences` and `XDG_CONFIG_HOME`
-  reveals the platform fallback chain.
-- Binary-less-release bug (11.12.0 / 11.13.0 platform artifacts published
-  without their native binary; see section 3.6) — upstream issues:
-  <https://github.com/pnpm/pnpm/issues/12955> (11.12.0 fails to install
-  from tarball), <https://github.com/pnpm/pnpm/issues/12962> (self-update
-  leaves a placeholder), <https://github.com/pnpm/pnpm/issues/13067>
-  (11.13.0 recurrence). Fixed in 11.13.1.
+- Installation: <https://pnpm.io/installation>
+- Settings (defaults live here, not in `pnpm config get`): <https://pnpm.io/settings>
+- `pnpm self-update` (accepts `[VERSION]`; picks by the global
+  `minimumReleaseAge`): <https://pnpm.io/cli/self-update>
+- `pnpm config`: <https://pnpm.io/cli/config>
+- Completion: <https://pnpm.io/completion>
+- Release notes: <https://github.com/pnpm/pnpm/releases>
+- Binary-less-release bug (3.5), all closed 2026-07:
+  <https://github.com/pnpm/pnpm/issues/12955>,
+  <https://github.com/pnpm/pnpm/issues/12962>,
+  <https://github.com/pnpm/pnpm/issues/13067>.
 
 ---
 
-## Appendix — minimal `config.yaml` reference
+## Appendix: `config.yaml` reference
 
-Copy-paste, edit values to taste:
+Defaults from <https://pnpm.io/settings> (2026-10-06); `pnpm config get`
+cannot show them.
 
 ```yaml
-# Refuse install of packages younger than N minutes. 4320 = 3 days.
-# Widens the detection window for publish-and-grab supply-chain attacks.
-# Bypass per-package via minimumReleaseAgeExclude in pnpm-workspace.yaml.
-# Default: 1440 (1 day).
+# Refuse versions younger than N minutes. Default 1440 (1 day) since v11.
+# Exact pins fail; ranges quietly resolve older (3.2).
 minimumReleaseAge: 4320
 
-# Block transitive dependencies that resolve from non-registry sources
-# (git repos, direct tarballs). Top-level deps can still use exotic
-# sources — this only restricts subdeps. Default: true.
+# Refuse transitive deps from git or tarball URLs. Default true. Typed
+# (a bad value is rejected) but reads back undefined.
 blockExoticSubdeps: true
 
-# Validate the package store on each install. Catches corruption or
-# tampering of cached tarballs. Default: false.
+# Re-check store contents on install. Default true; pin it anyway.
 verifyStoreIntegrity: true
 
-# Refuse to update pnpm-lock.yaml on `pnpm install` unless explicitly
-# asked (--no-frozen-lockfile, pnpm update, pnpm add). Matches CI default.
-# Default: false in dev, true in CI.
-preferFrozenLockfile: true
+# Refuse a version whose publish trust is weaker than earlier ones. Default off.
+trustPolicy: no-downgrade
+
+# Keep pnpm's own node/npm shims out of $PNPM_HOME/bin when another manager owns node.
+globalShims: false
 ```
 
-Keys NOT to put here (will be rejected or silently ignored by pnpm 11):
+Not here:
 
-- `managePackageManagerVersions` — rejected from global config; use per-project `pnpm-workspace.yaml`.
-- Anything in kebab-case — silently ignored; use camelCase.
-- `registry`, auth tokens, `_auth`, `//` — those go in `rc` (INI), not here.
+- `preferFrozenLockfile`: default **true**; it means "skip resolution when the
+  lockfile already matches", not "refuse lockfile updates". Since 12.8.0 an
+  explicit `true` on CI fails on an outdated lockfile. Leave it unset unless
+  you mean that.
+- `managePackageManagerVersions`: removed; use `pmOnFail`.
+- Anything in kebab-case.
+- Auth tokens: `auth.ini`.
 
 ## 7. pnpm 12 on this box (2026-09-19, ruling D-20260919-06)
+
+> **7.0 Read this history against 12.9.0 (re-checked 2026-10-06).** Sections 7
+> to 7.2 are kept as written on 12.4.1, because six rulings (D-20260919-A06,
+> -A08 to -A11, D-20260920-A01) name them as where their reasoning lives. What
+> has moved since, so nobody acts on the old line:
+>
+> - **The box runs 12.9.0.** "12.4.2 is the next target" and "12.5.x not a
+>   target yet" are past.
+> - **Floor `12.8.2`** since 2026-10-06 (it was 12.3.2, below the 12.4.2 security
+>   patch), and a floor now only rises (section 7.5).
+> - **`blockExoticSubdeps`** reads back `undefined` because pnpm 12 IGNORES it in
+>   the global file (a global `false` still blocks). It is on by default, and is
+>   now pinned by `PNPM_CONFIG_BLOCK_EXOTIC_SUBDEPS=true` (section 7.4).
+> - **7.1 "Known keys are typed"** no longer covers `supportedArchitectures`:
+>   12.9.0 accepts `os: banana`. 12.9.0 also accepts the 12.5 list form. On
+>   12.9.0 the **global** pin did not change what installed; the same key in a
+>   project's `pnpm-workspace.yaml` did. Removed from the global file (section 7.4).
+> - **7.1 "`--config.engineStrict=true` did nothing"**: it works since 12.8.0.
+> - **7.1 "a mutant ... fails 3 of 10"** cannot be reproduced. Since 2026-10-06
+>   `zsh-node-functions-selftest` has 38 checks, passes inside and outside the
+>   sandbox, and refuses by name (exit 2) when it cannot make its temp dir.
+> - **7.1 "entry 1 versus entry 22"**: on 2026-10-06 nvm's bin was entry 18 and
+>   pnpm's entry 23. The order still holds; the numbers were never stable.
+> - **"Three class projects under ~/CODE pin engines"**: on 2026-10-06, 0 of
+>   124 `package.json` files used `devEngines.runtime` or `engines.runtime`
+>   (6 pin `engines.node` only, which does not switch Node).
+>   `globalShims: false` still stands on the one-owner-per-name argument.
+> - **7.2 has a third blind spot**: `pnpm_update` names one version and
+>   `self-update` lands on another (12.8.2 named, 12.9.0 installed on
+>   2026-10-06). Fixed the same day (section 7.3).
 
 The v12 jump was deliberately deferred on 2026-09-04 (11.25.0 taken, major skipped) until
 two prerequisites were met. On 2026-09-19 Gavin took **12.4.1** by hand with `pnpm_update`,

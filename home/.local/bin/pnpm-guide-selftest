@@ -1,0 +1,207 @@
+#!/usr/bin/env bash
+# pnpm-guide-selftest -- prove docs/PNPM_SETUP_GUIDE.md still matches the machine.
+#
+# The guide went stale one pnpm release at a time (written about 11.1.2, kept
+# through 12.x) because nothing re-ran what it claimed. This runs three kinds
+# of arm, each with a case that must fire and a case that must stay quiet:
+#
+#   doctor  the pnpm-doctor block is EXTRACTED from the guide by its markers and
+#           driven against fixtures, so the script readers copy is the tested one
+#   drift   the numbers the guide quotes that the code also holds (the version
+#           floor) agree with install.sh and home/.zsh_onboarding
+#   live    the section 0 facts re-measured on the installed pnpm, in a scratch
+#           HOME and config under $TMPDIR (never the real config)
+#
+# Usage: pnpm-guide-selftest            (GUIDE_OVERRIDE=<file> to test another copy)
+# Exit:  0 all passed | 1 something failed | 3 passed, but some arms NOT MEASURED
+#        (no pnpm on PATH, so the live arms did not run -- that is not a pass)
+
+set -u
+PASS=0; FAIL=0; SKIP=0
+
+_resolve_repo() {
+    local self="${BASH_SOURCE[0]}" dir target
+    dir="$(cd -- "$(dirname -- "$self")" && pwd)"
+    if [[ -L "$self" ]]; then
+        target="$(readlink "$self")"
+        [[ "$target" != /* ]] && target="$dir/$target"
+        dir="$(cd -- "$(dirname -- "$target")" && pwd)"
+    fi
+    (cd -- "$dir/../../.." && pwd)
+}
+REPO="$(_resolve_repo)"
+GUIDE="${GUIDE_OVERRIDE:-$REPO/docs/PNPM_SETUP_GUIDE.md}"
+
+ok()   { PASS=$((PASS + 1)); printf '  \033[32mPASS\033[0m  %s\n' "$1"; }
+bad()  { FAIL=$((FAIL + 1)); printf '  \033[31mFAIL\033[0m  %s\n' "$1"
+         [[ $# -gt 1 ]] && printf '%s\n' "$2" | sed 's/^/        | /'; }
+skip() { SKIP=$((SKIP + 1)); printf '  \033[33mNOT MEASURED\033[0m  %s\n' "$1"; }
+finish() {
+    echo; echo "  $PASS passed, $FAIL failed, $SKIP not measured"
+    (( FAIL > 0 )) && exit 1
+    (( SKIP > 0 )) && exit 3
+    exit 0
+}
+
+echo "pnpm-guide selftest ($GUIDE)"
+[[ -f "$GUIDE" ]] || { bad "guide found"; finish; }
+
+# A scratch dir that MUST exist: a bare mktemp ignores TMPDIR on macOS and is
+# refused inside a sandbox, and running on with an empty path reports results
+# for tests that never ran (W-20261006-A35).
+W=$(mktemp -d "${TMPDIR:-/tmp}/pnpm-guide-selftest.XXXXXX" 2>/dev/null)
+if [[ -z "$W" || ! -d "$W" ]]; then
+    echo "REFUSED: could not create a scratch dir under ${TMPDIR:-/tmp}; nothing was tested" >&2
+    exit 2
+fi
+
+# --- doctor: extract, then drive -------------------------------------------
+echo; echo "doctor block"
+DOCTOR="$W/doctor.sh"
+awk '/^<!-- pnpm-doctor:begin -->$/{m=1; next} /^<!-- pnpm-doctor:end -->$/{m=0}
+     m && !c && /^```bash$/{c=1; next} m && c && /^```$/{c=0; m=0; next} c' "$GUIDE" > "$DOCTOR"
+if [[ -s "$DOCTOR" ]] && head -n 1 "$DOCTOR" | grep -q '^#!/usr/bin/env bash$'; then
+    ok "doctor block extracted ($(wc -l < "$DOCTOR" | tr -d ' ') lines)"
+else
+    bad "doctor block extracted" "no <!-- pnpm-doctor:begin/end --> block holding a bash script"
+    finish
+fi
+if LC_ALL=C grep -q '[^ -~	]' "$DOCTOR"; then bad "doctor block is ASCII" "$(LC_ALL=C grep -n '[^ -~	]' "$DOCTOR")"
+else ok "doctor block is ASCII"; fi
+
+F="$W/fx"
+fakepnpm() { mkdir -p "$1"; printf '#!/bin/sh\necho %s\n' "$2" > "$1/pnpm"; chmod +x "$1/pnpm"; }
+fixture() {   # fixture <name> [noconfig]: HOME with a macOS-path config.yaml, PNPM_HOME/bin/pnpm 12.9.0
+    local H="$F/$1/home" PH="$F/$1/pnpmhome"
+    mkdir -p "$H/Library/Preferences/pnpm" "$H/.config/pnpm"
+    [[ "${2:-}" == noconfig ]] || printf 'minimumReleaseAge: 4320\n' > "$H/Library/Preferences/pnpm/config.yaml"
+    fakepnpm "$PH/bin" 12.9.0
+}
+drive() {     # drive <name> <PATH-prefix> [VAR=val ...]
+    [ $# -ge 2 ] || return 2; local n="$1" pre="$2"; shift 2
+    env -i HOME="$F/$n/home" PNPM_HOME="$F/$n/pnpmhome" \
+        PATH="${pre:+$pre:}$F/$n/pnpmhome/bin:/usr/bin:/bin" "$@" bash "$DOCTOR" 2>&1
+}
+fires() {     # fires <label> <output> <regex>
+    if printf '%s\n' "$2" | grep -qE "$3"; then ok "$1"; else bad "$1" "$2"; fi
+}
+quiet() {     # quiet <label> <output> <regex-that-must-NOT-match>
+    if printf '%s\n' "$2" | grep -qE "$3"; then bad "$1" "$2"; else ok "$1"; fi
+}
+
+if [[ "$(uname -s)" != Darwin ]]; then
+    skip "doctor fixtures are laid out for macOS config paths"
+else
+    fixture clean; out=$(drive clean "")
+    fires "clean: OK version line"        "$out" '^  OK    pnpm 12\.9\.0'
+    quiet "clean: no FAIL or WARN"        "$out" '^  (FAIL|WARN)'
+    fires "clean: no critical issues"     "$out" '^no critical issues$'
+
+    fixture two; fakepnpm "$F/two/other" 11.0.0
+    fires "two pnpm executables"          "$(drive two "$F/two/other")" 'FAIL  2 pnpm executables on PATH'
+
+    fixture cp; mkdir -p "$F/cp/node/lib/node_modules/corepack/dist" "$F/cp/node/bin"
+    printf '#!/bin/sh\necho 12.9.0\n' > "$F/cp/node/lib/node_modules/corepack/dist/pnpm.js"
+    chmod +x "$F/cp/node/lib/node_modules/corepack/dist/pnpm.js"
+    ln -s ../lib/node_modules/corepack/dist/pnpm.js "$F/cp/node/bin/pnpm"
+    fires "corepack shim"                 "$(drive cp "$F/cp/node/bin")" 'FAIL  corepack shim on PATH'
+
+    fixture kebab; printf 'minimum-release-age: 4320\n' > "$F/kebab/home/Library/Preferences/pnpm/config.yaml"
+    fires "kebab-case key"                "$(drive kebab "")" 'FAIL  kebab-case keys'
+
+    fixture mpmv; printf 'managePackageManagerVersions: false\n' >> "$F/mpmv/home/Library/Preferences/pnpm/config.yaml"
+    fires "removed key managePackageManagerVersions" "$(drive mpmv "")" 'WARN  managePackageManagerVersions was removed'
+
+    fixture rc; printf 'approve-builds=true\n' > "$F/rc/home/Library/Preferences/pnpm/rc"
+    fires "rc file is not read"           "$(drive rc "")" 'WARN  .*/rc is not read by pnpm 12'
+
+    fixture lin noconfig; printf 'minimumReleaseAge: 4320\n' > "$F/lin/home/.config/pnpm/config.yaml"
+    fires "Linux-shaped config dead on macOS" "$(drive lin "")" 'FAIL  .*\.config/pnpm/config\.yaml exists but pnpm on macOS reads'
+    fixture linok noconfig; printf 'minimumReleaseAge: 4320\n' > "$F/linok/home/.config/pnpm/config.yaml"
+    ln -s ../../../.config/pnpm/config.yaml "$F/linok/home/Library/Preferences/pnpm/config.yaml"
+    quiet "Linux-shaped config linked: quiet" "$(drive linok "")" 'exists but pnpm on macOS reads'
+
+    fixture root
+    fires "PNPM_HOME root on PATH"        "$(drive root "$F/root/pnpmhome")" 'WARN  \$PNPM_HOME itself is on PATH'
+    fixture nobin
+    out=$(env -i HOME="$F/nobin/home" PNPM_HOME="$F/nobin/pnpmhome" PATH="/usr/bin:/bin" bash "$DOCTOR" 2>&1)
+    fires "PNPM_HOME/bin not on PATH"     "$out" 'FAIL  \$PNPM_HOME/bin is not on PATH'
+
+    fixture broken; printf '#!/bin/sh\necho "This: command not found" >&2; exit 127\n' > "$F/broken/pnpmhome/bin/pnpm"
+    fires "pnpm prints no version"        "$(drive broken "")" "FAIL  pnpm is on PATH but 'pnpm -v' prints no version"
+    fixture old; fakepnpm "$F/old/pnpmhome/bin" 11.25.0
+    fires "major below 12"                "$(drive old "")" 'WARN  pnpm major is below 12'
+
+    fixture envv
+    fires "pnpm_config_ variable named"   "$(drive envv "" PNPM_CONFIG_MINIMUM_RELEASE_AGE=4320)" '^          PNPM_CONFIG_MINIMUM_RELEASE_AGE$'
+    quiet "pnpm_config_ value never printed" "$(drive envv "" PNPM_CONFIG_MINIMUM_RELEASE_AGE=4320)" '4320'
+
+    fixture v10; mkdir -p "$F/v10/pnpmhome/store/v10"
+    fires "pnpm 10 store leftover"        "$(drive v10 "")" 'WARN  pnpm 10 leftover: .*store/v10'
+    fixture shim; printf '#!/bin/sh\n' > "$F/shim/pnpmhome/pnpx"
+    fires "root-level shim"               "$(drive shim "")" 'WARN  root-level shim .*pnpx'
+    fixture npmrc; printf 'registry=https://example.invalid/\n' > "$F/npmrc/home/.npmrc"
+    fires "~/.npmrc registry"             "$(drive npmrc "")" 'WARN  ~/.npmrc sets a registry'
+
+    fixture count; printf 'minimum-release-age: 1\n' > "$F/count/home/Library/Preferences/pnpm/config.yaml"
+    fires "summary counts every FAIL"     "$(drive count "$F/two/other")" '^2 critical issue\(s\)$'
+fi
+
+# --- drift: numbers the guide quotes that the code holds --------------------
+echo; echo "drift"
+# install.sh assigns PNPM_MIN_VERSION="X"; .zsh_onboarding (since W-20260923-A51)
+# calls `__floor_keep_higher PNPM_MIN_VERSION X`. Either form, first match.
+floor_of() { sed -nE -e "s/^(export )?PNPM_MIN_VERSION=\"(\\\$\{PNPM_MIN_VERSION:-)?([0-9.]+)\}?\"/\3/p" \
+                     -e "s/^__floor_keep_higher PNPM_MIN_VERSION ([0-9.]+)\$/\1/p" "$1" | head -n 1; }
+f_install=$(floor_of "$REPO/install.sh")
+f_onboard=$(floor_of "$REPO/home/.zsh_onboarding")
+if [[ -n "$f_install" && "$f_install" == "$f_onboard" ]]; then ok "floor agrees in install.sh and .zsh_onboarding ($f_install)"
+else bad "floor agrees in install.sh and .zsh_onboarding" "install.sh='$f_install' .zsh_onboarding='$f_onboard'"; fi
+f_guide=$(sed -nE 's/^> - \*\*Floor `([0-9.]+)`\*\*.*/\1/p' "$GUIDE" | head -n 1)
+if [[ -n "$f_guide" && "$f_guide" == "$f_install" ]]; then ok "guide 7.0 quotes the same floor ($f_guide)"
+else bad "guide 7.0 quotes the same floor" "guide='$f_guide' code='$f_install'"; fi
+
+# --- live: section 0 facts on the installed pnpm ----------------------------
+echo; echo "live (installed pnpm, scratch config)"
+P=$(type -P pnpm)
+if [[ -z "$P" ]]; then
+    skip "no pnpm on PATH; section 0 facts not re-measured"
+else
+    L="$W/live"; n=0
+    probe() {   # probe <config.yaml-content|NONE> <extra-env...> -- <pnpm args...>
+        n=$((n + 1)); local H="$L/h$n" X="$L/x$n" yaml="$1"; shift
+        mkdir -p "$H" "$X/pnpm"
+        [[ "$yaml" == NONE ]] || printf '%s\n' "$yaml" > "$X/pnpm/config.yaml"
+        local envs=(); while [[ $# -gt 0 && "$1" != -- ]]; do envs+=("$1"); shift; done; shift
+        env -i PATH=/usr/bin:/bin HOME="$H" XDG_CONFIG_HOME="$X" "${envs[@]}" "$P" "$@" 2>&1
+    }
+    is() { if [[ "$2" == "$3" ]]; then ok "$1"; else bad "$1" "expected '$3', got '$2'"; fi; }
+    rc_of() { probe "$@" >/dev/null; echo $?; }
+    v=$(probe NONE -- --version); ok "pnpm $v"
+    is "camelCase key reads back"                "$(probe 'fetchRetries: 7' -- config get fetchRetries)" 7
+    is "kebab-case key is ignored"               "$(probe 'fetch-retries: 7' -- config get fetchRetries)" undefined
+    is "unset key reads undefined (not default)" "$(probe NONE -- config get verifyStoreIntegrity)" undefined
+    is "unknown key accepted"                    "$(rc_of 'bogusKeyXyz: banana' -- --version)" 0
+    is "known key typed (blockExoticSubdeps)"    "$(rc_of 'blockExoticSubdeps: banana' -- --version)" 1
+    is "removed key accepted silently"           "$(rc_of 'managePackageManagerVersions: banana' -- --version)" 0
+    is "pmOnFail typed"                          "$(rc_of 'pmOnFail: banana' -- --version)" 1
+    is "PNPM_CONFIG_* beats config.yaml"         "$(probe 'minimumReleaseAge: 99' PNPM_CONFIG_MINIMUM_RELEASE_AGE=4320 -- config get minimumReleaseAge)" 4320
+    is "npm_config_* not read"                   "$(probe NONE npm_config_fetch_retries=9 -- config get fetchRetries)" undefined
+    n=$((n + 1)); mkdir -p "$L/h$n" "$L/x$n/pnpm"; printf 'registry=https://rc.invalid/\n' > "$L/x$n/pnpm/rc"
+    is "rc is not read" "$(env -i PATH=/usr/bin:/bin HOME="$L/h$n" XDG_CONFIG_HOME="$L/x$n" "$P" config get registry 2>&1)" https://registry.npmjs.org/
+    n=$((n + 1)); mkdir -p "$L/h$n" "$L/x$n/pnpm"; printf 'registry=https://authini.invalid/\n' > "$L/x$n/pnpm/auth.ini"
+    is "auth.ini is read" "$(env -i PATH=/usr/bin:/bin HOME="$L/h$n" XDG_CONFIG_HOME="$L/x$n" "$P" config get registry 2>&1)" https://authini.invalid/
+    if [[ "$(uname -s)" == Darwin ]]; then
+        n=$((n + 1)); H="$L/h$n"; mkdir -p "$H/.config/pnpm" "$H/Library/Preferences/pnpm"
+        printf 'fetchRetries: 6\n' > "$H/.config/pnpm/config.yaml"
+        is "macOS ignores ~/.config/pnpm without XDG" "$(env -i PATH=/usr/bin:/bin HOME="$H" "$P" config get fetchRetries 2>&1)" undefined
+        printf 'fetchRetries: 5\n' > "$H/Library/Preferences/pnpm/config.yaml"
+        is "macOS reads ~/Library/Preferences/pnpm"  "$(env -i PATH=/usr/bin:/bin HOME="$H" "$P" config get fetchRetries 2>&1)" 5
+    fi
+    out=$(probe NONE -- link --global); rc=$?
+    if (( rc != 0 )) && printf '%s' "$out" | grep -q "unexpected argument '--global'"; then ok "link --global is gone"
+    else bad "link --global is gone" "rc=$rc $out"; fi
+    fires "self-update takes a VERSION"   "$(probe NONE -- self-update --help)" 'Usage: pnpm self-update \[OPTIONS\] \[VERSION\]'
+fi
+
+finish
