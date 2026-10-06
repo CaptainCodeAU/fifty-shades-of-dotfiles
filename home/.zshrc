@@ -724,29 +724,11 @@ yarn() {
     return 1
 }
 
-# Guard pnpm link --global — shims land at $PNPM_HOME root (v10 layout),
-# not $PNPM_HOME/bin/ (v11 layout). Linked binaries are invisible on PATH.
+# pnpm() only makes pnpm work inside the Claude Bash sandbox (below). It used to
+# block `pnpm link --global` too, whose v10-era shims landed at $PNPM_HOME root;
+# removed 2026-10-06 because pnpm 12 refuses that flag itself ("unexpected
+# argument '--global'", nothing linked). `pnpm install -g .` links a local project.
 pnpm() {
-    if [[ "$1" == "link" || "$1" == "ln" ]]; then
-        local arg
-        for arg in "${@:2}"; do
-            case "$arg" in
-                -g|--global)
-                    echo "${err}BLOCKED: pnpm link --global${done}"
-                    echo
-                    echo "  ${warn}pnpm link --global drops shims at \$PNPM_HOME/ root (v10 layout),${done}"
-                    echo "  ${warn}not \$PNPM_HOME/bin/ (v11). Linked binaries won't be found.${done}"
-                    echo
-                    echo "  Instead of:  ${err}pnpm link --global${done}"
-                    echo "  Run:         ${ok}pnpm install -g .${done}"
-                    return 1
-                    ;;
-                --)
-                    break
-                    ;;
-            esac
-        done
-    fi
     # Inside the Claude Bash sandbox /tmp is not writable, and pnpm 12 keeps its
     # store operation locks in a literal /tmp/pnpm-store-operation-locks-<uid>/
     # unless XDG_RUNTIME_DIR names an existing dir, so install and dlx died with
@@ -1120,7 +1102,7 @@ claude() {
 # dir, not root's -- sudo would silently operate on root's home instead
 # (pnpm 11.21+ already warns about this itself; a future major version
 # refuses it outright). Re-runs through the pnpm() wrapper above (not
-# `command pnpm`) so its own guards (e.g. link --global) still apply.
+# `command pnpm`) so its sandbox handling still applies.
 sudo() {
 	if [[ "$1" == "claude" ]]; then
 		echo "⚠️  Don't use sudo with claude commands!"
@@ -2410,7 +2392,7 @@ py310() {
 # ~/.zshrc.private.early (machine-local, untracked, sourced above at line 166
 # -- BEFORE every hijack this unsets is even defined) when the operator
 # DECLINES one of the two big changes. Read here, never set here. See
-# docs/TOOLCHAIN_TAKEOVER_CONSENT.md. pnpm() (the `pnpm link --global` guard,
+# docs/TOOLCHAIN_TAKEOVER_CONSENT.md. pnpm() (the sandbox store-lock fix,
 # defined earlier) is a correctness fix, not a takeover -- never unset it.
 if [[ -n "$DOTFILES_ALLOW_NPM" ]]; then
     unset -f npm npx yarn 2>/dev/null

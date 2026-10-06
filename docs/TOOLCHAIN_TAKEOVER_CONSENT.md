@@ -91,7 +91,7 @@ both places.
 Written automatically by the gate on decline. Set by hand only in
 `~/.zshrc.private.early` (never `~/.zshrc.private` -- that file is sourced
 at the very end of `.zshrc`, after the hijacks already decided; see that
-file's own guard-variable list). `pnpm()`'s `link --global` guard is a
+file's own guard-variable list). `pnpm()`'s sandbox store-lock fix is a
 correctness fix, not a takeover, and is never affected by either variable.
 
 ## Safety
