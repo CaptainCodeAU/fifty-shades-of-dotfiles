@@ -23,9 +23,14 @@
 #   * exotic         git / remote-tarball / file: sources (direct AND transitive;
 #                    blockExoticSubdeps only blocks transitive ones)
 #   * integrity      lockfile entries missing an integrity hash
-#   * pm-pin         packageManager pinned to a version younger than the cooldown
-#                    (the `pnpm self-update` bug: it writes raw-latest, ungated)
+#   * pm-pin         a pnpm pin (packageManager OR devEngines.packageManager) that is
+#                    younger than the cooldown (the `pnpm self-update` bug: it writes
+#                    raw-latest, ungated), below this box's PNPM_MIN_VERSION floor, or
+#                    in a published advisory range (OSV). A pin pnpm will not obey here
+#                    (pmOnFail warn/ignore) is reported low: it still bites elsewhere.
 #   * hygiene        no lockfile (unpinned); stray package-lock.json / yarn.lock
+#                    (repo policy, so downgraded to info in a clone of someone else's
+#                    repo when pnpmaudit.owner / PNPM_AUDIT_OWNERS names your owners)
 #
 # DEFERRED to pnpm's own install-time enforcement (documented in the report,
 # not reimplemented here): trust-downgrade detection (trustPolicy: no-downgrade)
@@ -38,9 +43,16 @@
 # NEVER mutates a scanned project. The "deep" resolve (for projects with no
 # lockfile, or a stale one) is performed on a COPY in a temp directory with
 # --ignore-scripts --lockfile-only, so the real project is untouched. The only
-# network calls are npm registry metadata + the advisory endpoint -- no code
-# from the audited packages is ever executed. The auditor cannot be turned
+# network calls are npm registry metadata, the advisory endpoint and OSV -- no
+# code from the audited packages is ever executed. The auditor cannot be turned
 # into an attack surface by a malicious package.
+#
+# Every pnpm it runs gets PNPM_CONFIG_PM_ON_FAIL=ignore (see _pnpm_env). Without
+# it, measured on 12.9.0 (W-20261006-A31): a project pinning pnpm made `pnpm
+# audit` RUN the pinned version (11.1.2, downloaded on demand), and a pin equal to
+# the running pnpm, or any devEngines.packageManager pin, made `pnpm audit` REWRITE
+# the scanned project's pnpm-lock.yaml. A project's manifest must not choose which
+# binary the auditor executes, and a read-only scan must not write.
 #
 # ZERO DEPENDENCIES
 # -----------------
@@ -57,25 +69,36 @@
 #                          PROMPTS for confirmation before scanning everything.
 #   --no-recursive         audit only FOLDER itself, do not walk subdirectories
 #   --deep / --no-deep     dry-run resolve missing/stale lockfiles on a temp copy
-#                          (default: deep on)
-#   --offline              skip all network checks (no cooldown, no advisories)
+#                          (default: deep on). A dry-resolved lockfile is NOT the
+#                          project's lockfile: the "no lockfile" finding always stands.
+#   --offline              no network at all: no cooldown, no advisories, no OSV, and the
+#                          deep resolve runs `pnpm install --offline` (local cache only;
+#                          what is not cached is reported, never fetched)
 #   --min-release-age MIN  override minimumReleaseAge minutes (default: from pnpm config)
 #   --audit-level LEVEL    low|moderate|high|critical advisory floor (default: low)
 #   --fail-on SEVERITY     exit non-zero if any finding >= SEVERITY (for hooks)
 #   --json PATH            also write a JSON report to PATH
 #   --md PATH              write the markdown report to PATH (default: a dated file
-#                          under ~/.cache/dotfiles/pnpm-audit/)
+#                          under ${XDG_CACHE_HOME:-~/.cache}/dotfiles/pnpm-audit/)
+#   --no-report            do not write the default markdown report (hooks / direnv)
 #   --quiet                minimal output (for direnv / hooks)
 #   --yes                  skip the default-root confirmation prompt (automation)
 #   --max-registry N       cap unique registry metadata lookups (default 2000)
 #
 # EXIT CODES
-#   0  no findings at/above --fail-on (or --fail-on unset)
-#   1  findings at/above --fail-on
-#   2  usage / environment error (no pnpm, bad folder, user declined prompt)
+#   0  no findings at/above --fail-on (or --fail-on unset), and every check ran
+#   1  findings at/above --fail-on. Under --quiet this ALWAYS prints the line
+#      "<n> finding(s); worst=<sev>" on stdout: pnpm-audit-hook treats an exit 1
+#      WITHOUT that line as a crash, never as findings (W-20261006-A30).
+#   2  usage / environment error (no pnpm, bad folder, user declined prompt), or an
+#      INTERNAL ERROR: any unhandled exception exits 2, never 1. Python's own exit
+#      for an uncaught exception is 1, which is exactly the "findings" code.
+#   3  INCOMPLETE (--fail-on only): nothing at/above --fail-on was found, but some
+#      lookups failed, so part of the tree is UNCHECKED. Not clean, not a finding.
 # ============================================================================
 
 import argparse
+import http.client
 import json
 import os
 import platform
@@ -92,8 +115,49 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 SEVERITY_ORDER = {"info": 0, "low": 1, "moderate": 2, "high": 3, "critical": 4}
-PRUNE_DIRS = {"node_modules", ".git", ".hg", ".svn", ".jj"}
+# .venv / site-packages: Python environments vendor JS (pyright ships a package.json in
+# its dist/), which is not a project; 3 of them read as "no lockfile" on 2026-10-06.
+PRUNE_DIRS = {"node_modules", ".git", ".hg", ".svn", ".jj", ".venv", "site-packages"}
 REGISTRY = "https://registry.npmjs.org"
+OSV_URL = "https://api.osv.dev/v1/query"
+DEP_FIELDS = ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies")
+
+
+def _pnpm_env() -> dict:
+    """Environment for every pnpm this tool runs.
+
+    PNPM_CONFIG_PM_ON_FAIL=ignore: the scanned project's pnpm pin must neither pick the
+    binary we execute nor make pnpm write packageManagerDependencies into its lockfile
+    (both measured on 12.9.0; the env var outranks every config file).
+    PNPM_CONFIG_MANAGE_PACKAGE_MANAGER_VERSIONS=false is the pnpm 11 spelling of the same
+    switch, for a box whose pnpm lags; pnpm 12 ignores it.
+    XDG_RUNTIME_DIR: pnpm >= 12.8.2 puts its store operation locks there, else in /tmp.
+    Inside the Claude Bash sandbox /tmp is not writable, the lock fails, and the deep
+    resolve used to come back as a false "no lockfile". Only set when the caller has
+    not chosen one AND /tmp refuses a write, so an ordinary shell is unchanged.
+    The probe is a real write, not os.access(): the sandbox denies the write while the
+    POSIX mode bits still say yes. Not a mkdir either: exist_ok on a dir made earlier
+    outside the sandbox succeeds without writing anything. It rewrites one fixed,
+    empty per-user file, so nothing is ever deleted."""
+    env = dict(os.environ)
+    env["PNPM_CONFIG_PM_ON_FAIL"] = "ignore"
+    env["PNPM_CONFIG_MANAGE_PACKAGE_MANAGER_VERSIONS"] = "false"
+    if not env.get("XDG_RUNTIME_DIR") and not _tmp_writable():
+        rt = Path(tempfile.gettempdir()) / f"pnpm-audit-runtime-{os.getuid()}"
+        try:
+            rt.mkdir(mode=0o700, exist_ok=True)
+            env["XDG_RUNTIME_DIR"] = str(rt)
+        except OSError:
+            pass
+    return env
+
+
+def _tmp_writable() -> bool:
+    try:
+        Path(f"/tmp/pnpm-audit-probe-{os.getuid()}").write_text("")
+        return True
+    except OSError:
+        return False
 
 
 # --------------------------------------------------------------------------- #
@@ -126,6 +190,7 @@ SEV_COLOR = {
     "moderate": C.yellow,
     "low": C.cyan,
     "info": C.dim,
+    "unknown": C.yellow,  # a coverage gap: a check that could not run
 }
 
 
@@ -139,7 +204,7 @@ def sev_label(sev: str) -> str:
 @dataclass
 class Finding:
     project: str
-    category: str  # advisory | cooldown | exotic | integrity | pm-pin | hygiene
+    category: str  # advisory | cooldown | exotic | integrity | pm-pin | hygiene | coverage
     severity: str
     package: str
     detail: str
@@ -193,6 +258,40 @@ def read_min_release_age() -> int:
     return 0
 
 
+def read_pnpm_floor() -> tuple[str | None, str]:
+    """This box's pnpm security floor and where it came from.
+
+    $PNPM_MIN_VERSION (exported by ~/.zsh_onboarding in every interactive shell), else
+    the export line in that stowed file (a hook or cron job may not have sourced it).
+    Deliberately NOT a third hardcoded copy: install.sh and .zsh_onboarding already
+    have to agree, and a constant here would drift silently."""
+    env = os.environ.get("PNPM_MIN_VERSION")
+    if env:
+        return env, "$PNPM_MIN_VERSION"
+    f = Path.home() / ".zsh_onboarding"
+    try:
+        m = re.search(r'^export PNPM_MIN_VERSION="\$\{PNPM_MIN_VERSION:-([0-9.]+)\}"', f.read_text(), re.M)
+    except OSError:
+        m = None
+    if m:
+        return m.group(1), "~/.zsh_onboarding"
+    return None, "not found ($PNPM_MIN_VERSION unset, no ~/.zsh_onboarding line)"
+
+
+def _yaml_scalar(path: Path, key: str) -> str | None:
+    """A top-level `key: value` scalar from a small YAML file (no PyYAML)."""
+    try:
+        m = re.search(rf"^{re.escape(key)}\s*:\s*['\"]?([A-Za-z0-9_.-]+)", path.read_text(), re.M)
+    except OSError:
+        return None
+    return m.group(1) if m else None
+
+
+def global_pm_on_fail() -> str | None:
+    cfg = pnpm_config_file()
+    return _yaml_scalar(cfg, "pmOnFail") if cfg else None
+
+
 def have_pnpm() -> bool:
     return shutil.which("pnpm") is not None
 
@@ -212,15 +311,56 @@ def discover_projects(root: Path, recursive: bool) -> list[Path]:
     return sorted(found)
 
 
-def nearest_lockfile(project: Path, scan_root: Path) -> Path | None:
-    """pnpm-lock.yaml in the project dir, else walk up to scan_root (workspace root)."""
-    cur = project
+def lockfile_importers(text: str) -> set[str]:
+    """Importer keys ('.', 'packages/a', ...) from every `importers:` block in a lockfile."""
+    out: set[str] = set()
+    for doc in split_lockfile_documents(text):
+        inside = False
+        for ln in doc.splitlines():
+            if re.match(r"^importers:\s*$", ln):
+                inside = True
+                continue
+            if inside and re.match(r"^\S", ln):
+                inside = False
+            if inside:
+                m = re.match(r"^ {2}(?! )('?[^:']+'?):", ln)
+                if m:
+                    out.add(m.group(1).strip("'\""))
+    return out
+
+
+def find_lockfile(project: Path) -> tuple[Path | None, str, str | None]:
+    """The pnpm-lock.yaml that actually governs `project`, as (path, role, note).
+
+    role: 'own'    -- pnpm-lock.yaml in the project dir.
+          'member' -- an ancestor's lockfile LISTS this dir as one of its importers, i.e.
+                      the project is a workspace member and that lockfile pins it.
+          'none'   -- nothing pins it.
+    The walk goes past the scan root on purpose: direnv and --no-recursive scan a member
+    dir on its own, and that member IS pinned by the root's lockfile. It is safe to walk
+    because an ancestor lockfile only counts when its importers name this project: the
+    old walk-up borrowed the nearest ancestor lockfile for ANY nested package.json, so a
+    nested non-member (a tools/ script, a vendored file: target) read as pinned and
+    inherited the parent's findings (W-20261006-A31). The first lockfile met decides:
+    pnpm itself never looks past the nearest workspace root."""
+    own = project / "pnpm-lock.yaml"
+    if own.is_file():
+        return own, "own", None
+    cur = project.parent
     while True:
         lf = cur / "pnpm-lock.yaml"
         if lf.is_file():
-            return lf
-        if cur == scan_root or cur == cur.parent:
-            return None
+            rel = project.relative_to(cur).as_posix()
+            try:
+                importers = lockfile_importers(lf.read_text())
+            except OSError:
+                return None, "none", f"ancestor lockfile {lf} unreadable"
+            if rel in importers:
+                return lf, "member", None
+            return None, "none", (f"under {lf} but not one of its importers, "
+                                  "so that lockfile does not pin this project")
+        if cur == cur.parent:
+            return None, "none", None
         cur = cur.parent
 
 
@@ -253,8 +393,10 @@ GIT_HOSTS = ("codeload.github.com", "github.com", "gitlab.com", "bitbucket.org")
 
 def _classify_resolution(res: str, key: str) -> tuple[bool, str]:
     """Return (has_integrity, source) for a resolution flow-map string.
-    source in {registry, git, tarball, file}. git-host tarballs count as git
-    (pnpm exempts git-host + file: tarballs from the integrity requirement)."""
+    source in {registry, git, tarball, file}. git-host tarballs count as git.
+    git and file: entries are exempt from the integrity check because older lockfiles
+    wrote none for them; pnpm 12.9 does write one for git (`gitHosted: true`), so the
+    exemption now only matters for lockfiles from earlier pnpm versions."""
     has_integrity = "integrity:" in res
     low = res.lower()
     keyl = key.lower()
@@ -270,10 +412,38 @@ def _classify_resolution(res: str, key: str) -> tuple[bool, str]:
     return has_integrity, "registry"
 
 
+def split_lockfile_documents(text: str) -> list[str]:
+    """A pnpm 12 lockfile can hold TWO YAML documents separated by `---`: the first pins
+    pnpm itself (importers.'.'.packageManagerDependencies, written for any project with
+    a devEngines.packageManager pin, which `pnpm init` adds by default on 12.9), the
+    second is the project's real dependency graph. Measured 2026-10-06: the old
+    single-document parse read only the first, so a fresh `pnpm init` project's real
+    dependencies were never checked for exotic sources, integrity or cooldown."""
+    docs = re.split(r"^---[ \t]*$", text, flags=re.M)
+    return [d for d in docs if d.strip()] or [text]
+
+
 def parse_lockfile(text: str) -> dict:
-    """Parse the subset we need. Returns:
-    {lockfile_version, packages: [Pkg...], direct_names: set[str], parsed: bool}
+    """Parse the subset we need from every document. Returns:
+    {lockfile_version, packages: [Pkg...], direct_names: set[str], parsed: bool, documents: int}
     """
+    docs = split_lockfile_documents(text)
+    merged = {"lockfile_version": None, "packages": [], "direct_names": set(), "parsed": True,
+              "documents": len(docs)}
+    seen = set()
+    for doc in docs:
+        one = _parse_lockfile_document(doc)
+        merged["lockfile_version"] = merged["lockfile_version"] or one["lockfile_version"]
+        merged["direct_names"] |= one["direct_names"]
+        merged["parsed"] = merged["parsed"] and one["parsed"]
+        for p in one["packages"]:
+            if p.raw_key not in seen:
+                seen.add(p.raw_key)
+                merged["packages"].append(p)
+    return merged
+
+
+def _parse_lockfile_document(text: str) -> dict:
     out = {"lockfile_version": None, "packages": [], "direct_names": set(), "parsed": False}
     m = re.search(r"^lockfileVersion:\s*'?([\d.]+)'?", text, re.M)
     if m:
@@ -298,7 +468,10 @@ def parse_lockfile(text: str) -> dict:
         if re.match(r"^\s{4}\S", ln) and not re.match(r"^\s{6}", ln):
             in_dep_block = False
         if in_dep_block:
-            dm = re.match(r"^\s{6}('?[^:]+?'?):\s*$", ln) or re.match(r"^\s{6}('?[^:]+?'?):\s", ln)
+            # Exactly six spaces: the v9 `specifier:` / `version:` lines under each name
+            # sit at eight, and `\s{6}` let them in as direct dependencies named
+            # "specifier" and "version".
+            dm = re.match(r"^ {6}(?! )('?[^:]+?'?):\s*$", ln) or re.match(r"^ {6}(?! )('?[^:]+?'?):\s", ln)
             if dm:
                 nm = dm.group(1).strip().strip("'\"")
                 if nm:
@@ -352,21 +525,64 @@ def _flush_pkg(out: dict, key: str, res: str) -> None:
 #  Registry publish-age (for cooldown), cached + threaded                     #
 # --------------------------------------------------------------------------- #
 class RegistryClient:
+    # A failed lookup is UNKNOWN, never clean. W-20261006-A30, two defects in one place:
+    #   1. http.client.IncompleteRead is an HTTPException, NOT an OSError, and a body
+    #      cut mid-UTF-8 raises UnicodeDecodeError, a ValueError that is not a
+    #      JSONDecodeError. Both slipped past this handler, the uncaught exception
+    #      exited 1 -- the "findings" code -- and pnpm-audit-hook blocked a push for
+    #      findings that did not exist. Measured 2026-10-06: the Claude Bash sandbox
+    #      proxy truncates urllib reads on 4 in 10 to 2 in 3 fetches, large and small
+    #      alike, while curl through the same proxy is clean 18/18. vulnlib.py met the
+    #      same pair on 2026-09-19; this client never got the fix.
+    #   2. The errors it DID catch returned {}, so the package read as "no publish
+    #      time" and the cooldown and pm-pin checks skipped it as if clean. A pnpm pin
+    #      inside the cooldown went unreported whenever the registry was unreachable.
+    # Now: a failure is retried when it is a mid-response abort, then recorded in
+    # self.failed, and every caller turns it into a named coverage gap.
+    _RETRY = 3  # attempts, for mid-response aborts only (see _transient)
+
     def __init__(self, timeout: float = 8.0, max_lookups: int = 2000):
-        self._cache: dict[str, dict] = {}  # name -> {version: epoch_published}
+        self._cache: dict[str, dict | None] = {}  # name -> {version: epoch} | None (lookup failed)
         self._timeout = timeout
         self._max = max_lookups
         self._count = 0
         self.capped = False
+        self.failed: dict[str, str] = {}  # name -> why the lookup failed
 
-    def _fetch(self, name: str) -> dict:
+    @staticmethod
+    def _transient(e: BaseException) -> bool:
+        # Retry only what a second try can plausibly fix: a response cut off in
+        # flight, or a server/rate-limit status. DNS failures and refusals are not
+        # retried, so a genuinely offline run stays as fast as it was.
+        if isinstance(e, urllib.error.HTTPError):
+            return e.code == 429 or e.code >= 500
+        return isinstance(e, (http.client.IncompleteRead, http.client.RemoteDisconnected,
+                              ConnectionResetError, UnicodeDecodeError, json.JSONDecodeError))
+
+    def _fetch(self, name: str) -> dict | None:
         url = f"{REGISTRY}/{name.replace('/', '%2F') if name.startswith('@') else name}"
-        req = urllib.request.Request(url, headers={"User-Agent": "pnpm-audit-tree"})
-        try:
-            with urllib.request.urlopen(req, timeout=self._timeout) as r:
-                data = json.loads(r.read().decode("utf-8"))
-        except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, TimeoutError, OSError):
-            return {}
+        data = None
+        for attempt in range(self._RETRY):
+            req = urllib.request.Request(url, headers={"User-Agent": "pnpm-audit-tree"})
+            try:
+                with urllib.request.urlopen(req, timeout=self._timeout) as r:
+                    data = json.loads(r.read().decode("utf-8"))
+                break
+            except (OSError, http.client.HTTPException, ValueError) as e:
+                # OSError covers URLError, HTTPError and TimeoutError; ValueError covers
+                # JSONDecodeError and UnicodeDecodeError. Deliberately NOT Exception: a
+                # programming error must reach main()'s guard and exit 2, not be filed
+                # here as one more failed lookup.
+                if not self._transient(e) or attempt == self._RETRY - 1:
+                    self.failed[name] = type(e).__name__
+                    return None
+                time.sleep(0.25 * (2 ** attempt))
+        # No `time` map means no publish dates to judge by -- the abbreviated
+        # (application/vnd.npm.install-v1+json) document has none, measured 2026-10-06.
+        # Unknown, not "nothing is young".
+        if not isinstance(data, dict) or not isinstance(data.get("time"), dict):
+            self.failed[name] = "no time map in payload"
+            return None
         times = {}
         for ver, iso in (data.get("time") or {}).items():
             if ver in ("created", "modified"):
@@ -383,7 +599,14 @@ class RegistryClient:
                 return None
             self._count += 1
             self._cache[name] = self._fetch(name)
-        return self._cache[name].get(version)
+        times = self._cache[name]
+        return None if times is None else times.get(version)
+
+    def lookup_failed(self, name: str) -> bool:
+        """True when `name` was looked up and the lookup FAILED -- unknown, not clean.
+        False for a successful lookup, a never-attempted one, or a capped one (the
+        cap has its own warning)."""
+        return name in self.failed
 
     def warm(self, names: list[str], workers: int = 16) -> None:
         todo = [n for n in dict.fromkeys(names) if n not in self._cache]
@@ -394,7 +617,50 @@ class RegistryClient:
         with ThreadPoolExecutor(max_workers=workers) as ex:
             futs = {ex.submit(self._fetch, n): n for n in todo}
             for fut in as_completed(futs):
+                # _fetch turns every network/parse failure into None + self.failed, so
+                # anything raised here is a bug and is left to reach main()'s guard.
                 self._cache[futs[fut]] = fut.result()
+
+
+class OsvClient:
+    """Published advisories for an exact npm package version, from OSV (the same source
+    and query shape as toolchain-cve-check). Cached per version. None means the lookup
+    did not run -- never "no advisories". Catches the same three families as
+    RegistryClient._fetch (a read cut short, http.client.IncompleteRead, is not an
+    OSError; an uncaught one used to exit 1, which a hook read as a supply-chain
+    finding, W-20261006-A30). Not bare Exception: a programming error must reach
+    main()'s guard and exit 2."""
+
+    def __init__(self, timeout: float = 8.0):
+        self._cache: dict[tuple[str, str], tuple[list | None, str | None]] = {}
+        self._timeout = timeout
+
+    def vulns(self, name: str, version: str) -> tuple[list | None, str | None]:
+        key = (name, version)
+        if key not in self._cache:
+            body = json.dumps({"package": {"name": name, "ecosystem": "npm"},
+                               "version": version}).encode("utf-8")
+            req = urllib.request.Request(OSV_URL, data=body, headers={
+                "Content-Type": "application/json", "User-Agent": "pnpm-audit-tree"})
+            try:
+                with urllib.request.urlopen(req, timeout=self._timeout) as r:
+                    data = json.loads(r.read().decode("utf-8"))
+                self._cache[key] = (data.get("vulns") or [], None)
+            except (OSError, http.client.HTTPException, ValueError) as e:
+                self._cache[key] = (None, f"OSV lookup did not run ({type(e).__name__})")
+        return self._cache[key]
+
+
+def _osv_severity(v: dict) -> str:
+    sev = ((v.get("database_specific") or {}).get("severity") or "").lower()
+    return {"critical": "critical", "high": "high", "moderate": "moderate", "medium": "moderate",
+            "low": "low"}.get(sev, "moderate")
+
+
+def _vtuple(v: str) -> tuple:
+    parts = re.findall(r"\d+", v or "")[:3]
+    parts += ["0"] * (3 - len(parts))
+    return tuple(int(x) for x in parts)
 
 
 def _iso_to_epoch(iso: str):
@@ -416,7 +682,7 @@ def run_pnpm_audit(project: Path, audit_level: str, timeout: float = 90.0):
     try:
         proc = subprocess.run(
             ["pnpm", "audit", "--json", "--audit-level", audit_level],
-            cwd=project, capture_output=True, text=True, timeout=timeout,
+            cwd=project, capture_output=True, text=True, timeout=timeout, env=_pnpm_env(),
         )
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
         return None, f"audit skipped ({type(e).__name__})"
@@ -458,11 +724,22 @@ def run_pnpm_audit(project: Path, audit_level: str, timeout: float = 90.0):
     return advisories, None
 
 
-def deep_resolve_lockfile(project: Path, timeout: float = 180.0) -> tuple[str | None, str | None]:
+def deep_resolve_lockfile(project: Path, offline: bool = False) -> tuple[str | None, str | None]:
     """Copy manifest to a temp dir and resolve a lockfile with --ignore-scripts
-    --lockfile-only. Returns (lockfile_text, note). Never touches the project."""
+    --lockfile-only. Returns (lockfile_text, note). Never touches the project.
+
+    offline=True adds pnpm's own --offline: resolve from the local metadata cache and
+    store only, never the network. Measured on 12.9.0: a cached tree resolves in 0.1 s;
+    anything uncached fails at once with ERR_PNPM_NO_OFFLINE_META. The online resolve
+    against an unreachable registry took 70 s to give up, which is what made a direnv
+    `cd` hang (W-20261006-A31). The offline timeout is short because nothing waits on a
+    socket."""
     if not have_pnpm():
         return None, "deep resolve skipped (no pnpm)"
+    cmd = ["pnpm", "install", "--lockfile-only", "--ignore-scripts", "--silent",
+           "--config.confirmModulesPurge=false"]
+    if offline:
+        cmd.append("--offline")
     try:
         with tempfile.TemporaryDirectory(prefix="pnpm-audit-") as td:
             tmp = Path(td)
@@ -471,26 +748,195 @@ def deep_resolve_lockfile(project: Path, timeout: float = 180.0) -> tuple[str | 
                 src = project / extra
                 if src.is_file():
                     shutil.copy2(src, tmp / extra)
-            proc = subprocess.run(
-                ["pnpm", "install", "--lockfile-only", "--ignore-scripts", "--silent",
-                 "--config.confirmModulesPurge=false"],
-                cwd=tmp, capture_output=True, text=True, timeout=timeout,
-            )
+            proc = subprocess.run(cmd, cwd=tmp, capture_output=True, text=True,
+                                  timeout=30.0 if offline else 180.0, env=_pnpm_env())
             lf = tmp / "pnpm-lock.yaml"
             if lf.is_file():
                 return lf.read_text(), None
+            if offline and "ERR_PNPM_NO_OFFLINE_META" in (proc.stderr + proc.stdout):
+                return None, ("deep resolve skipped offline: dependencies not in the local "
+                              "pnpm cache (run without --offline to resolve them)")
             return None, f"deep resolve produced no lockfile (rc={proc.returncode})"
     except (subprocess.TimeoutExpired, OSError) as e:
         return None, f"deep resolve failed ({type(e).__name__})"
 
 
 # --------------------------------------------------------------------------- #
+#  pnpm pins and the pmOnFail that decides whether they bite                  #
+# --------------------------------------------------------------------------- #
+def pnpm_pins(manifest: dict) -> list[tuple[str, str, str | None]]:
+    """Every pnpm pin as (field, version-spec, onFail). Both fields count: pnpm 12 obeys
+    `packageManager` AND `devEngines.packageManager` (object or array), and `pnpm init`
+    on 12.9 writes both. The old check read only `packageManager`."""
+    pins = []
+    pm = manifest.get("packageManager")
+    if isinstance(pm, str) and pm.startswith("pnpm@"):
+        pins.append(("packageManager", pm.split("@", 1)[1].split("+", 1)[0], None))
+    dev = (manifest.get("devEngines") or {}).get("packageManager") if isinstance(manifest.get("devEngines"), dict) else None
+    for ent in (dev if isinstance(dev, list) else [dev] if isinstance(dev, dict) else []):
+        if isinstance(ent, dict) and ent.get("name") == "pnpm" and isinstance(ent.get("version"), str):
+            pins.append(("devEngines.packageManager", ent["version"], ent.get("onFail")))
+    return pins
+
+
+def nearest_workspace_yaml(project: Path) -> Path | None:
+    cur = project
+    while True:
+        f = cur / "pnpm-workspace.yaml"
+        if f.is_file():
+            return f
+        if cur == cur.parent:
+            return None
+        cur = cur.parent
+
+
+def effective_pm_on_fail(project: Path, field_on_fail: str | None) -> tuple[str, str]:
+    """(value, source) of the pmOnFail pnpm will apply to this project ON THIS BOX.
+
+    Precedence measured on 12.9.0 with a pnpm@11.1.2 pin (the version that RAN is the
+    evidence): env PNPM_CONFIG_PM_ON_FAIL > the project's pnpm-workspace.yaml > the
+    global config.yaml > devEngines.packageManager.onFail > default `download`. A global
+    `warn` beats a devEngines `onFail: download`; a project `download` beats a global
+    `warn` (pnpm then warns the global one "was ignored", which is true only for that
+    project). Only `download` makes pnpm run the pinned version; warn/ignore run the
+    current pnpm and `error` refuses to run at all."""
+    env = os.environ.get("PNPM_CONFIG_PM_ON_FAIL")
+    if env:
+        return env, "$PNPM_CONFIG_PM_ON_FAIL"
+    ws = nearest_workspace_yaml(project)
+    if ws:
+        v = _yaml_scalar(ws, "pmOnFail")
+        if v:
+            return v, str(ws)
+    g = global_pm_on_fail()
+    if g:
+        return g, "global config.yaml"
+    if field_on_fail:
+        return field_on_fail, "devEngines onFail"
+    return "download", "pnpm default"
+
+
+def _range_upper(spec: str) -> tuple | None:
+    """Exclusive upper bound of a caret/tilde/exact pnpm spec, or None if unknown."""
+    m = re.match(r"^\s*([\^~]?)\s*(\d+)\.(\d+)\.(\d+)\s*$", spec)
+    if not m:
+        return None
+    op, ma, mi, pa = m.group(1), int(m.group(2)), int(m.group(3)), int(m.group(4))
+    if op == "^":
+        return (ma + 1, 0, 0) if ma > 0 else (0, mi + 1, 0)
+    if op == "~":
+        return (ma, mi + 1, 0)
+    return (ma, mi, pa + 1)
+
+
+def repo_owner(project: Path) -> str | None:
+    """Owner part of the project's git origin (git@h:o/r, alias:o/r, https://h/o/r)."""
+    try:
+        url = subprocess.run(["git", "-C", str(project), "config", "--get", "remote.origin.url"],
+                             capture_output=True, text=True, timeout=5).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    m = re.match(r"^(?:[a-z+]+://[^/]+/|[^:/]+:)([^/]+)/[^/]+?(?:\.git)?/?$", url)
+    return m.group(1) if m else None
+
+
+def configured_owners() -> set[str]:
+    """Your repo owners, for telling a clone of someone else's repo from your own. No
+    default on purpose: a name hardcoded here would be an identity in a public file."""
+    env = os.environ.get("PNPM_AUDIT_OWNERS")
+    if env:
+        return {o.strip().lower() for o in env.split(",") if o.strip()}
+    try:
+        out = subprocess.run(["git", "config", "--global", "--get-all", "pnpmaudit.owner"],
+                             capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return set()
+    return {o.strip().lower() for o in out.splitlines() if o.strip()}
+
+
+# --------------------------------------------------------------------------- #
 #  Per-project analysis                                                       #
 # --------------------------------------------------------------------------- #
+def check_pins(res: ProjectResult, project: Path, manifest: dict, args, reg: RegistryClient,
+               osv: "OsvClient", min_age_min: int, floor: tuple[str | None, str]) -> None:
+    """pm-pin findings for every pnpm pin. Severity follows whether pnpm will OBEY the pin
+    here: under pmOnFail download it runs the pinned binary (measured: a pnpm@11.1.2 pin
+    ran 11.1.2), so an old or vulnerable pin is a real exposure; under warn/ignore/error it
+    does not, so the same pin is reported low -- it still bites on a box without that
+    setting, and in CI."""
+    add = res.findings.append
+    floor_v, floor_src = floor
+    for field_name, spec, on_fail in pnpm_pins(manifest):
+        mode, mode_src = effective_pm_on_fail(project, on_fail)
+        obeyed = mode == "download"
+        tail = "" if obeyed else (f" [not obeyed on this box: pmOnFail={mode} from {mode_src}; "
+                                  "still enforced where that is not set]")
+        exact = re.fullmatch(r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?", spec.strip()) is not None
+        label = f"pnpm@{spec}"
+
+        def sev(s: str) -> str:
+            return s if obeyed else "low"
+
+        # cooldown (the self-update bypass) -- online, exact pins only
+        if exact and min_age_min > 0 and not args.offline:
+            ep = reg.published_epoch("pnpm", spec)
+            if ep is None and reg.lookup_failed("pnpm"):
+                add(Finding(res.path, "coverage", "unknown", label,
+                            f"{field_name} pin NOT checked against the cooldown: registry "
+                            f"lookup failed ({reg.failed['pnpm']}) -- unknown, not clean"))
+            if ep is not None:
+                age_min = (time.time() - ep) / 60.0
+                if age_min < min_age_min:
+                    add(Finding(res.path, "pm-pin", sev("high"), label,
+                                f"{field_name} pins pnpm {spec} published {age_min/1440:.1f}d ago "
+                                f"-- younger than your {min_age_min/1440:.1f}d cooldown "
+                                f"(self-update bypass){tail}"))
+        # below this box's security floor -- offline, exact pins and ^/~ ranges
+        if floor_v:
+            upper = _range_upper(spec)
+            if upper is not None and upper <= _vtuple(floor_v):
+                add(Finding(res.path, "pm-pin", sev("moderate"), label,
+                            f"{field_name} pins pnpm {spec}, below this box's security floor "
+                            f"{floor_v} ({floor_src}){tail}"))
+            elif upper is None:
+                res.notes.append(f"{field_name} pnpm spec {spec!r} not compared with the floor "
+                                 "(only exact, ^ and ~ specs are)")
+        else:
+            res.notes.append(f"pnpm floor not checked: {floor_src}")
+        # published advisories -- online, exact pins only
+        if not args.offline:
+            if not exact:
+                res.notes.append(f"{field_name} pnpm spec {spec!r} is a range; advisories are "
+                                 "checked for exact pins only")
+                continue
+            vulns, note = osv.vulns("pnpm", spec)
+            if vulns is None:
+                add(Finding(res.path, "coverage", "unknown", label,
+                            f"{field_name} pin NOT checked for advisories: {note} "
+                            f"-- unknown, not clean"))
+                continue
+            if vulns:
+                worst = max((_osv_severity(v) for v in vulns), key=severity_rank)
+                ids = ", ".join(sorted(v.get("id", "?") for v in vulns)[:4])
+                more = f" +{len(vulns) - 4} more" if len(vulns) > 4 else ""
+                add(Finding(res.path, "pm-pin", sev(worst), label,
+                            f"{field_name} pins pnpm {spec}, which has {len(vulns)} published "
+                            f"advisor{'y' if len(vulns) == 1 else 'ies'} ({ids}{more}){tail}"))
+
+
+def declares_deps(manifest: dict) -> bool:
+    return any(isinstance(manifest.get(f), dict) and manifest.get(f) for f in DEP_FIELDS)
+
+
 def analyze_project(project: Path, scan_root: Path, args, reg: RegistryClient,
-                    min_age_min: int) -> ProjectResult:
+                    min_age_min: int, osv: "OsvClient | None" = None,
+                    discovered: set | None = None, owners: set | None = None,
+                    floor: tuple[str | None, str] | None = None) -> ProjectResult:
     res = ProjectResult(path=str(project))
     add = res.findings.append
+    osv = osv or OsvClient()
+    discovered = discovered if discovered is not None else set()
+    floor = floor or read_pnpm_floor()
 
     # -- manifest --
     try:
@@ -500,46 +946,64 @@ def analyze_project(project: Path, scan_root: Path, args, reg: RegistryClient,
         return res
 
     # -- hygiene: wrong-PM lockfiles --
+    # Repo POLICY, so in a clone of someone else's repo it is info, not moderate: of 18
+    # stray package-lock.json on this box (2026-10-06) 15 were in other people's repos.
+    # Only the policy findings are downgraded -- a clone's security findings stand.
+    hyg_sev = "moderate"
+    if owners and ((project / "package-lock.json").is_file() or (project / "yarn.lock").is_file()):
+        owner = repo_owner(project)
+        if owner and owner.lower() not in owners:
+            hyg_sev = "info"
+            res.notes.append(f"clone of {owner}'s repo: repo-policy findings are info")
     if (project / "package-lock.json").is_file():
-        add(Finding(res.path, "hygiene", "moderate", "(npm)",
+        add(Finding(res.path, "hygiene", hyg_sev, "(npm)",
                     "package-lock.json present -- repo policy is pnpm/bun, not npm"))
     if (project / "yarn.lock").is_file():
-        add(Finding(res.path, "hygiene", "moderate", "(yarn)",
+        add(Finding(res.path, "hygiene", hyg_sev, "(yarn)",
                     "yarn.lock present -- repo policy is pnpm/bun, not yarn"))
 
-    # -- packageManager pin vs cooldown (the self-update bug) --
-    pm = manifest.get("packageManager")
-    if isinstance(pm, str) and pm.startswith("pnpm@") and min_age_min > 0 and not args.offline:
-        ver = pm.split("@", 1)[1].split("+", 1)[0]
-        ep = reg.published_epoch("pnpm", ver)
-        if ep is not None:
-            age_min = (time.time() - ep) / 60.0
-            if age_min < min_age_min:
-                add(Finding(res.path, "pm-pin", "high", f"pnpm@{ver}",
-                            f"packageManager pinned to pnpm {ver} published "
-                            f"{age_min/1440:.1f}d ago -- younger than your "
-                            f"{min_age_min/1440:.1f}d cooldown (self-update bypass)"))
+    # -- pnpm pins (packageManager and devEngines.packageManager) --
+    check_pins(res, project, manifest, args, reg, osv, min_age_min, floor)
 
     # -- lockfile --
-    lf = nearest_lockfile(project, scan_root)
+    lf, role, lf_note = find_lockfile(project)
+    if lf_note:
+        res.notes.append(lf_note)
     res.real_lockfile = lf is not None
+    if role == "member" and lf.parent in discovered:
+        # The workspace root is scanned in this same run and its lockfile covers every
+        # importer, this one included. Scanning it again here is what counted each
+        # finding once per member (W-20261006-A31).
+        res.notes.append(f"workspace member: dependencies are pinned and checked at {lf.parent}")
+        return res
+    if role == "member":
+        res.notes.append(f"workspace member: checking the workspace lockfile at {lf} "
+                         "(its root is not in this scan)")
     lock_text = None
     if lf:
         try:
             lock_text = lf.read_text()
         except OSError:
             res.notes.append("lockfile unreadable")
-    elif args.deep:
-        lock_text, note = deep_resolve_lockfile(project)
-        if note:
-            res.notes.append(note)
-        if lock_text:
-            res.notes.append("lockfile dry-resolved on a temp copy (project untouched)")
-
-    if not lock_text:
+    elif not declares_deps(manifest):
+        res.notes.append("declares no dependencies; nothing to pin")
+        return res
+    else:
+        # A dry-resolved lockfile is NOT the project's lockfile: whatever the resolve
+        # finds, the project itself is still unpinned. This finding used to be dropped
+        # whenever the resolve succeeded, so --offline (which skips the advisory gap
+        # finding) reported a no-lockfile project as CLEAN (W-20261006-A31).
         add(Finding(res.path, "hygiene", "moderate", "(lockfile)",
                     "no pnpm-lock.yaml -- dependencies are unpinned (no integrity floor)"))
-    else:
+        if args.deep:
+            lock_text, note = deep_resolve_lockfile(project, offline=args.offline)
+            if note:
+                res.notes.append(note)
+            if lock_text:
+                res.notes.append("lockfile dry-resolved on a temp copy (project untouched)"
+                                 + (" from the local cache only" if args.offline else ""))
+
+    if lock_text:
         lock = parse_lockfile(lock_text)
         if not lock["parsed"]:
             res.notes.append("lockfile present but packages block could not be parsed")
@@ -574,16 +1038,26 @@ def analyze_project(project: Path, scan_root: Path, args, reg: RegistryClient,
                         if p.source == "registry" and p.version and re.match(r"^\d", p.version)]
             reg.warm([n for n, _ in reg_pkgs])
             now = time.time()
+            unchecked = []
             for name, version in reg_pkgs:
                 clean = version.split("(", 1)[0]
                 ep = reg.published_epoch(name, clean)
                 if ep is None:
+                    if reg.lookup_failed(name):
+                        unchecked.append(f"{name}@{clean}")
                     continue
                 age_min = (now - ep) / 60.0
                 if age_min < min_age_min:
                     add(Finding(res.path, "cooldown", "high", f"{name}@{clean}",
                                 f"published {age_min/1440:.2f}d ago -- inside your "
                                 f"{min_age_min/1440:.1f}d cooldown window"))
+            if unchecked:
+                why = sorted({reg.failed[p.rsplit("@", 1)[0]] for p in unchecked})
+                shown = ", ".join(unchecked[:5]) + (f" (+{len(unchecked) - 5} more)" if len(unchecked) > 5 else "")
+                add(Finding(res.path, "coverage", "unknown", f"({len(unchecked)} packages)",
+                            f"cooldown NOT checked for {len(unchecked)} of {len(reg_pkgs)} "
+                            f"registry packages -- lookup failed ({', '.join(why)}): {shown}. "
+                            f"Unknown, not clean"))
 
     # -- advisories --
     if not args.offline and lf is None:
@@ -595,7 +1069,9 @@ def analyze_project(project: Path, scan_root: Path, args, reg: RegistryClient,
                     "no pnpm-lock.yaml -- pnpm audit cannot run, advisory coverage is zero"))
     elif not args.offline:
         res.net_advisory = True
-        advisories, note = run_pnpm_audit(project, args.audit_level)
+        # lf.parent, not project: a member scanned without its root audits the root's
+        # lockfile, which is the one pnpm audit reads.
+        advisories, note = run_pnpm_audit(lf.parent, args.audit_level)
         if advisories is None:
             # Coverage gap, not a clean result. Notes are dropped under --quiet
             # (the hook passes it), so this has to be a Finding to be visible.
@@ -724,7 +1200,8 @@ def build_markdown(results: list[ProjectResult], min_age_min: int, args, reg: Re
     lines.append("")
     lines.append("Implemented: advisory (pnpm audit), cooldown (minimumReleaseAge vs registry "
                  "publish-age), exotic sources (git/tarball/file, direct and transitive), "
-                 "missing integrity, packageManager pin vs cooldown, hygiene (no lockfile / "
+                 "missing integrity, pnpm pins (packageManager and devEngines.packageManager: "
+                 "cooldown, below the box floor, OSV advisories), hygiene (no lockfile / "
                  "wrong-PM lockfile).")
     lines.append("")
     lines.append("Deferred to pnpm install-time enforcement (NOT reimplemented here): "
@@ -823,16 +1300,23 @@ def main(argv) -> int:
         print(C.dim(f"Scanning {len(projects)} project(s) under {root} ..."))
 
     reg = RegistryClient(max_lookups=args.max_registry)
+    osv = OsvClient()
+    discovered = set(projects)
+    owners = configured_owners()
+    floor = read_pnpm_floor()
     results = []
     _t0 = time.time()
     for proj in projects:
-        results.append(analyze_project(proj, root, args, reg, min_age_min))
+        results.append(analyze_project(proj, root, args, reg, min_age_min, osv=osv,
+                                       discovered=discovered, owners=owners, floor=floor))
 
     # Always-on one-line summary, including on clean runs, printed to stderr so
     # it survives --quiet and --no-report (both of which the git hook passes).
     # It carries denominators and names which checks did NOT run, so a fast or
     # silent push is attributable rather than reassuring.
-    _f = all_findings(results)
+    _all = all_findings(results)
+    _f = [x for x in _all if x.category != "coverage"]
+    _gaps = len(_all) - len(_f)
     _worst = max((severity_rank(x.severity) for x in _f), default=0)
     _worst_name = next((k for k, v in SEVERITY_ORDER.items() if v == _worst), "none")
     _n = len(results)
@@ -841,7 +1325,9 @@ def main(argv) -> int:
         f"net cooldown {sum(1 for r in results if r.net_cooldown)}/{_n}, "
         f"advisories {sum(1 for r in results if r.net_advisory)}/{_n} | "
         f"{len(_f)} findings (worst: {_worst_name if _f else 'none'}) | "
-        f"{time.time() - _t0:.1f}s",
+        + (f"INCOMPLETE: {len(reg.failed)} registry lookup(s) FAILED, {_gaps} coverage gap(s) | "
+           if _gaps else "")
+        + f"{time.time() - _t0:.1f}s",
         file=sys.stderr,
     )
 
@@ -877,21 +1363,149 @@ def main(argv) -> int:
         except OSError as e:
             print(C.yellow(f"  could not write json report: {e}"), file=sys.stderr)
 
-    # exit code
-    findings = all_findings(results)
+    # exit code. Coverage gaps never count as findings and never raise exit 1: a check
+    # that could not run is not evidence of a problem. They raise exit 3 instead, so a
+    # caller can tell "clean" from "partly unchecked" without parsing text.
+    findings = [f for f in all_findings(results) if f.category != "coverage"]
+    gaps = [f for f in all_findings(results) if f.category == "coverage"]
     if args.fail_on:
         floor = severity_rank(args.fail_on)
         if any(severity_rank(f.severity) >= floor for f in findings):
             if args.quiet:
+                # pnpm-audit-hook keys on this exact line: exit 1 without it is a crash.
                 worst = max(findings, key=lambda f: severity_rank(f.severity))
                 print(f"{len(findings)} finding(s); worst={worst.severity}")
             return 1
+        if gaps:
+            if args.quiet:
+                print(f"INCOMPLETE: {len(gaps)} check(s) could not run -- unknown, not clean")
+            return 3
     return 0
 
 
-if __name__ == "__main__":
+def run_guarded(fn, argv) -> int:
+    """Run fn(argv) and map every way it can end to this tool's exit-code contract.
+    Python exits 1 on an uncaught exception, and 1 is this tool's "findings" code. A
+    crash must never read as a finding (W-20261006-A30), so every unhandled exception
+    is reported by name and returns 2, the "could not run" code. The traceback still
+    goes to stderr for whoever debugs it."""
     try:
-        sys.exit(main(sys.argv[1:]))
+        return fn(argv)
     except KeyboardInterrupt:
         print()
-        sys.exit(130)
+        return 130
+    except Exception as e:  # noqa: BLE001 -- the point is to catch everything
+        import traceback
+        traceback.print_exc()
+        print(f"pnpm-audit-tree: INTERNAL ERROR ({type(e).__name__}: {e}). The scan did "
+              f"not finish; this is NOT a finding and NOT a clean result.", file=sys.stderr)
+        return 2
+
+
+def selftest() -> int:
+    """--selftest: prove the exit-code contract against a FAKE registry, in process.
+    No network, no pnpm needed. The arm that matters most is `urlerror`: before
+    W-20261006-A30 an unreachable registry made a too-young pnpm pin read as CLEAN."""
+    import contextlib
+    import io
+
+    global run_pnpm_audit, have_pnpm
+    real_urlopen, real_sleep = urllib.request.urlopen, time.sleep
+    real_audit, real_have = run_pnpm_audit, have_pnpm
+    now = time.time()
+    iso = lambda days: time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(now - days * 86400))
+
+    class _Resp(io.BytesIO):
+        def __init__(self, body=b"", exc=None):
+            super().__init__(body)
+            self._exc = exc
+
+        def read(self, *a):
+            if self._exc:
+                raise self._exc
+            return super().read(*a)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    state = {"mode": "pass", "pin_age": 30, "calls": {}}
+
+    def fake_urlopen(req, *a, **kw):
+        url = req.full_url
+        n = state["calls"][url] = state["calls"].get(url, 0) + 1
+        mode = state["mode"]
+        if url == OSV_URL:  # advisories for the pnpm pin: answered unless the arm is about OSV
+            if mode == "osv-down":
+                raise urllib.error.URLError("selftest: OSV refused")
+            return _Resp(json.dumps({"vulns": []}).encode())
+        if mode == "urlerror" or (mode == "urlerror-pnpm" and url.endswith("/pnpm")):
+            raise urllib.error.URLError("selftest: refused")
+        if mode == "incomplete" or (mode == "flaky" and n == 1):
+            return _Resp(exc=http.client.IncompleteRead(b"x", 100))
+        if mode == "badutf8":
+            return _Resp(b'{"time": {"1.0.0": "caf\xc3')  # cut mid UTF-8 sequence
+        if mode == "bug":
+            raise RuntimeError("selftest: programming error")
+        name = url.rsplit("/", 1)[1]
+        ver, age = ("99.9.9", state["pin_age"]) if name == "pnpm" else ("7.0.0", 400)
+        return _Resp(json.dumps({"time": {ver: iso(age)}}).encode())
+
+    arms = [  # (mode, pnpm pin age in days, wanted rc, text wanted on stdout or None)
+        ("pass", 30, 0, None),
+        ("pass", 1, 1, "1 finding(s); worst=high"),
+        ("incomplete", 30, 3, "INCOMPLETE"),
+        ("urlerror", 1, 3, "INCOMPLETE"),    # the false all-clear arm
+        ("urlerror-pnpm", 1, 3, "INCOMPLETE"),  # only the pin's lookup fails; deps check fine
+        ("badutf8", 30, 3, "INCOMPLETE"),
+        ("flaky", 1, 1, "1 finding(s); worst=high"),
+        ("osv-down", 30, 3, "INCOMPLETE"),     # the pin's advisory lookup failed: unknown, not clean
+        ("bug", 30, 2, None),
+    ]
+    passed = failed = 0
+    with tempfile.TemporaryDirectory(prefix="pnpm-audit-selftest-") as td:
+        proj = Path(td)
+        (proj / "package.json").write_text(json.dumps(
+            {"name": "st", "version": "1.0.0", "packageManager": "pnpm@99.9.9",  # above any floor: one finding per arm
+             "dependencies": {"is-number": "7.0.0"}}))
+        (proj / "pnpm-lock.yaml").write_text(
+            "lockfileVersion: '9.0'\n\nimporters:\n\n  .:\n    dependencies:\n"
+            "      is-number:\n        specifier: 7.0.0\n        version: 7.0.0\n\n"
+            "packages:\n\n  is-number@7.0.0:\n"
+            "    resolution: {integrity: sha512-AAAA}\n\nsnapshots:\n\n  is-number@7.0.0: {}\n")
+        urllib.request.urlopen, time.sleep = fake_urlopen, (lambda s: None)
+        # Hermetic: pin severity follows the pmOnFail pnpm would apply on THIS box, and a
+        # global `pmOnFail: warn` (D-20261006-A02) makes every pin finding low. The env
+        # value outranks every other source, so the arms see `download` on any machine.
+        real_pm_env = os.environ.get("PNPM_CONFIG_PM_ON_FAIL")
+        os.environ["PNPM_CONFIG_PM_ON_FAIL"] = "download"
+        run_pnpm_audit = lambda project, level, timeout=90.0: ([], None)
+        have_pnpm = lambda: True
+        try:
+            for mode, age, want_rc, want_text in arms:
+                state.update(mode=mode, pin_age=age, calls={})
+                out, err = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    rc = run_guarded(main, [str(proj), "--no-recursive", "--quiet", "--no-report",
+                                            "--fail-on", "high", "--min-release-age", "4320"])
+                ok = rc == want_rc and (want_text is None or want_text in out.getvalue())
+                passed, failed = passed + ok, failed + (not ok)
+                print(f"  {'ok  ' if ok else 'FAIL'} {mode:<10} pin {age:>2}d -> rc {rc} (want {want_rc})"
+                      + ("" if ok else f"\n       stdout: {out.getvalue().strip()!r}"))
+        finally:
+            urllib.request.urlopen, time.sleep = real_urlopen, real_sleep
+            run_pnpm_audit, have_pnpm = real_audit, real_have
+            if real_pm_env is None:
+                os.environ.pop("PNPM_CONFIG_PM_ON_FAIL", None)
+            else:
+                os.environ["PNPM_CONFIG_PM_ON_FAIL"] = real_pm_env
+    print(f"pnpm-audit-tree selftest: {passed} passed, {failed} failed")
+    return 0 if failed == 0 else 1
+
+
+if __name__ == "__main__":
+    if sys.argv[1:2] == ["--selftest"]:
+        sys.exit(selftest())
+    sys.exit(run_guarded(main, sys.argv[1:]))

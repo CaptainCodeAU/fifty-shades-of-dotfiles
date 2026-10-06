@@ -34,8 +34,8 @@ set -uo pipefail
 if [ "${1:-}" = "--selftest" ]; then
     _st_pass=0; _st_fail=0
     _st_dir="$(mktemp -d "${TMPDIR:-/tmp}/pnpm-audit-hook-selftest.XXXXXX")" || exit 1
-    _st_arm() { # <scanner-exit> <want-hook-rc> <want-text-or-EMPTY>
-        printf '#!/bin/sh\nexit %s\n' "$1" > "$_st_dir/pnpm-audit-tree"
+    _st_arm() { # <scanner-exit> <want-hook-rc> <want-text-or-EMPTY> [scanner-stdout]
+        printf '#!/bin/sh\nprintf "%%s" "%s"\nexit %s\n' "${4:-}" "$1" > "$_st_dir/pnpm-audit-tree"
         chmod +x "$_st_dir/pnpm-audit-tree"
         _o="$(PATH="$_st_dir:$PATH" PNPM_AUDIT_DISABLE=0 "$0" full 2>&1)"; _r=$?
         if [ "$_r" -ne "$2" ]; then
@@ -53,8 +53,12 @@ if [ "${1:-}" = "--selftest" ]; then
     }
     printf 'pnpm-audit-hook selftest in %s\n' "$_st_dir"
     _st_arm 0   0 EMPTY
-    _st_arm 1   1 "supply-chain findings"
+    _st_arm 1   1 "supply-chain findings" "1 finding(s); worst=high"
+    # W-20261006-A30: exit 1 WITHOUT the findings line is a crash (Python's own exit 1).
+    _st_arm 1   0 "THE SCANNER CRASHED" "Traceback (most recent call last):"
     _st_arm 2   0 "THE SCAN DID NOT RUN"
+    _st_arm 3   0 "SCAN INCOMPLETE"
+    PNPM_AUDIT_ON_INCOMPLETE=block _st_arm 3 1 "PNPM_AUDIT_ON_INCOMPLETE=block"
     _st_arm 127 0 "THE SCAN DID NOT RUN"
     # The scanner missing entirely must still fail OPEN and say so (pre-existing arm).
     #
@@ -123,9 +127,44 @@ fi
 # for findings that did not exist. That is the worst member of the A38 class: a security
 # control raising a FALSE ALARM rather than admitting it never ran. A scanner that could
 # not start and a scanner that found something must not look the same.
-pnpm-audit-tree "$root" "${args[@]}"
+#
+# AND AN EXIT 1 IS NOT ENOUGH ON ITS OWN. Python exits 1 on any uncaught exception, so a
+# scanner that crashed mid-scan used to arrive here as "1" and block the push for findings
+# that did not exist -- measured 2026-10-06 (W-20261006-A30): a registry read cut off by
+# the Claude Bash sandbox proxy raised IncompleteRead, 3/3 runs blocked a clean repo.
+# pnpm-audit-tree now exits 2 on any exception it can catch, but a SyntaxError or an
+# import failure happens before its guard exists. So exit 1 counts as findings ONLY when
+# the scanner also printed its findings line ("<n> finding(s); worst=<sev>", which it
+# prints on exactly that path under --quiet). Output is captured to check it; under
+# --quiet it is one or two lines, so nothing is lost by not streaming it.
+out="$(pnpm-audit-tree "$root" "${args[@]}" 2>&1)"
 rc=$?
+[ -n "$out" ] && printf '%s\n' "$out" >&2
 if [ "$rc" -eq 0 ]; then
+    exit 0
+fi
+if [ "$rc" -eq 1 ] && ! printf '%s\n' "$out" | grep -qE '^[0-9]+ finding\(s\); worst=[a-z]+$'; then
+    echo "" >&2
+    echo "pnpm-audit-hook: THE SCANNER CRASHED (exit 1 without its findings line). This is" >&2
+    echo "  NOT a finding and NOT a clean result. Not blocking the ${mode} hook." >&2
+    echo "  Reproduce:  pnpm-audit-tree \"$root\" ${args[*]}" >&2
+    exit 0
+fi
+if [ "$rc" -eq 3 ]; then
+    # Part of the tree went unchecked (failed registry lookups), and nothing at the floor
+    # was found in the part that WAS checked. Whether that blocks is a policy choice:
+    # PNPM_AUDIT_ON_INCOMPLETE=block|warn, default warn -- the same fail-open posture as
+    # "did not run" below, for the same reason.
+    echo "" >&2
+    if [ "${PNPM_AUDIT_ON_INCOMPLETE:-warn}" = "block" ]; then
+        echo "pnpm-audit-hook: SCAN INCOMPLETE -- some checks could not run, and" >&2
+        echo "  PNPM_AUDIT_ON_INCOMPLETE=block. Blocking the ${mode} hook. NOT a finding." >&2
+        echo "  Retry, or bypass:  PNPM_AUDIT_DISABLE=1 <git cmd>" >&2
+        exit 1
+    fi
+    echo "pnpm-audit-hook: SCAN INCOMPLETE -- some checks could not run (see the lines" >&2
+    echo "  above). NOT a finding and NOT a clean result. Not blocking the ${mode} hook." >&2
+    echo "  Re-check:  pnpm-audit-tree \"$root\" ${args[*]}" >&2
     exit 0
 fi
 if [ "$rc" -eq 1 ]; then
