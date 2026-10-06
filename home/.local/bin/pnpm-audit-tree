@@ -143,12 +143,18 @@ def _pnpm_env() -> dict:
     env["PNPM_CONFIG_PM_ON_FAIL"] = "ignore"
     env["PNPM_CONFIG_MANAGE_PACKAGE_MANAGER_VERSIONS"] = "false"
     if not env.get("XDG_RUNTIME_DIR") and not _tmp_writable():
-        rt = Path(tempfile.gettempdir()) / f"pnpm-audit-runtime-{os.getuid()}"
-        try:
-            rt.mkdir(mode=0o700, exist_ok=True)
-            env["XDG_RUNTIME_DIR"] = str(rt)
-        except OSError:
-            pass
+        # ONE stable per-user dir, the same one the pnpm() shell wrapper uses
+        # (D-20261006-A07): a per-session dir under $TMPDIR would stop two sessions
+        # on the sandbox's shared fallback store from locking each other out.
+        # $TMPDIR stays as the fallback if that dir cannot be made.
+        for rt in (Path(f"/tmp/claude-{os.getuid()}/pnpm-runtime"),
+                   Path(tempfile.gettempdir()) / f"pnpm-audit-runtime-{os.getuid()}"):
+            try:
+                rt.mkdir(mode=0o700, parents=True, exist_ok=True)
+                env["XDG_RUNTIME_DIR"] = str(rt)
+                break
+            except OSError:
+                continue
     return env
 
 
