@@ -65,6 +65,9 @@ SAFE_RM="$REPO_DIR/home/.local/bin/safe-rm"
 
 # --- Mode flags ---
 DRY_RUN=false
+# pnpm cleanup steps held until the replacement pnpm runs; filled by
+# _preflight_pnpm_check, applied by _pnpm_deferred_cleanup. Declared for `set -u`.
+PNPM_DEFERRED_PLAN=(); PNPM_DEFERRED_ACT=()
 # Set by _preflight_cc_toolchain_check; read by _offer_brew_sweep, which must not
 # offer a source-build sweep to a machine that cannot compile C++. Declared here
 # so `set -u` cannot bite when the check is skipped (Linux, or --skip-preflight).
@@ -280,6 +283,39 @@ _pnpm_needs_install_or_upgrade() {
     v=$(pnpm -v 2>/dev/null) || return 0
     cmp=$(_vercmp "$v" "$PNPM_MIN_VERSION") || return 0
     [[ "$cmp" == "-1" ]]
+}
+
+# The pnpm the dotfiles mean to keep: Homebrew's on Intel macOS, the standalone one
+# everywhere else. Prints its path; it may not exist yet.
+_pnpm_supported_bin() {
+    if _pnpm_use_homebrew; then
+        echo "$(brew --prefix 2>/dev/null || echo /usr/local)/bin/pnpm"
+    else
+        echo "$(_pnpm_standalone_home)/bin/pnpm"
+    fi
+}
+
+# True (0) only when the pnpm we mean to keep RUNS and is at or above the floor.
+# "It exists" is not enough: a binary-less release leaves a 34-byte text file there
+# that execs as `This: command not found` (PNPM_SETUP_GUIDE 3.6). Used to hold back
+# every cleanup that would take away the pnpm a user has now (W-20261005-A75).
+_pnpm_replacement_verified() {
+    local bin v cmp
+    bin=$(_pnpm_supported_bin)
+    [[ -x "$bin" && ! -d "$bin" ]] || return 1
+    v=$("$bin" -v 2>/dev/null) || return 1
+    [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]] || return 1
+    cmp=$(_vercmp "$v" "$PNPM_MIN_VERSION") || return 1
+    [[ "$cmp" != "-1" ]]
+}
+
+# Cleanup actions that take away a pnpm (or the globals/launchers an old pnpm owns).
+# They run only once the replacement is verified; until then they are kept, not lost.
+_pnpm_action_removes_a_pnpm() {
+    case "${1%%|*}" in
+        corepack_disable|npm_global_rm|brew_rm_pnpm|apt_rm_pnpm|dnf_rm_pnpm|pacman_rm_pnpm|snap_rm_pnpm|rm_v10_globals|rm_root_launchers) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 # Installed nvm version (e.g. "0.40.5"), or empty if nvm isn't present. install.sh
@@ -638,10 +674,21 @@ _preflight_pnpm_check() {
     fi
 
     # --- EXECUTE (group-approved: apply all) ---------------------------------
-    local applied=0 failed=0
+    # A step that takes a pnpm away waits for the replacement to be verified. If it is
+    # not verified yet, the approved step is held in PNPM_DEFERRED_* and applied by
+    # _pnpm_deferred_cleanup after the install step (W-20261005-A75).
+    local applied=0 failed=0 held=0 have_replacement=false
+    _pnpm_replacement_verified && have_replacement=true
+    PNPM_DEFERRED_PLAN=(); PNPM_DEFERRED_ACT=()
     for i in "${!ACT[@]}"; do
         echo
         info "${PLAN[$i]}"
+        if [[ "$have_replacement" != true ]] && _pnpm_action_removes_a_pnpm "${ACT[$i]}"; then
+            PNPM_DEFERRED_PLAN+=("${PLAN[$i]}"); PNPM_DEFERRED_ACT+=("${ACT[$i]}")
+            held=$((held + 1))
+            info "  Held until the replacement pnpm is installed and runs (after the install step)."
+            continue
+        fi
         if _pnpm_apply_action "${ACT[$i]}"; then
             applied=$((applied + 1))
         else
@@ -655,7 +702,39 @@ _preflight_pnpm_check() {
     hash -r 2>/dev/null || true
 
     echo
-    success "pnpm cleanup complete: $applied applied, $failed failed."
+    success "pnpm cleanup complete: $applied applied, $failed failed, $held held until the replacement runs."
+    return 0
+}
+
+# Apply the steps _preflight_pnpm_check held back, now that the install step has run.
+# Applied only if the replacement pnpm runs and meets the floor; otherwise every held
+# step is named and left undone, so the pnpm the user has is never taken away for one
+# that does not work.
+_pnpm_deferred_cleanup() {
+    (( ${#PNPM_DEFERRED_ACT[@]} > 0 )) || return 0
+    hash -r 2>/dev/null || true
+    step "Held pnpm cleanup"
+    if ! _pnpm_replacement_verified; then
+        warn "The replacement pnpm ($(pretty_path "$(_pnpm_supported_bin)")) is missing, does not run, or is below ${PNPM_MIN_VERSION}."
+        warn "Kept, not applied (${#PNPM_DEFERRED_ACT[@]}):"
+        local p
+        for p in "${PNPM_DEFERRED_PLAN[@]}"; do echo -e "    ${DIM}- ${p}${RESET}"; done
+        info "Fix the pnpm install, then re-run ./install.sh."
+        return 0
+    fi
+    local i applied=0 failed=0
+    for i in "${!PNPM_DEFERRED_ACT[@]}"; do
+        echo
+        info "${PNPM_DEFERRED_PLAN[$i]}"
+        if _pnpm_apply_action "${PNPM_DEFERRED_ACT[$i]}"; then
+            applied=$((applied + 1))
+        else
+            failed=$((failed + 1))
+            warn "  Action reported a problem; continuing with the rest."
+        fi
+    done
+    hash -r 2>/dev/null || true
+    success "Held pnpm cleanup: $applied applied, $failed failed."
     return 0
 }
 
@@ -4830,6 +4909,9 @@ main() {
             warn "Continuing without all prerequisites. Some features may not work."
         fi
     fi
+
+    # --- pnpm cleanup steps held by the pre-flight until the replacement runs ---
+    _pnpm_deferred_cleanup
 
     # --- OMZ plugins & themes (always prompt, even if prereqs passed) ---
     if [[ -d "$HOME/.oh-my-zsh" ]]; then

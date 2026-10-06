@@ -454,6 +454,60 @@ if ! PATH="$hk_shim:$PATH" git config --type=path --get core.hooksPath >/dev/nul
 else bad "CONTROL: the old-git shim refuses --type" "the arm below would prove nothing"; fi
 hk_expect ACTIVE oldgit-tilde '~/.config/git/hooks' "$hk_shim"
 
+# --- pnpm cleanup waits for a replacement that RUNS (W-20261005-A75) ------------------
+# Drives the real _preflight_pnpm_check and _pnpm_deferred_cleanup in a throwaway HOME
+# with every action stubbed (it only prints APPLIED <name>). The plan always holds a
+# Homebrew pnpm to remove and v10 globals; the scenario decides what pnpm exists before
+# and after the install step. A removal before "---- install step ----" took a pnpm
+# away before its replacement was proven.
+a75_run() {   # a75_run <scenario>: prints the driven output
+    local sc=$1 H; H=$(mktemp -d "${TMPDIR:-/tmp}/a75.XXXXXX") || { echo "MKTEMP FAILED"; return; }
+    local PH="$H/Library/pnpm"
+    mkdir -p "$PH/global/5" "$PH/store/v10" "$PH/bin" "$H/stub"
+    printf '{"dependencies":{"wt":"1.0.0"}}\n' > "$PH/global/5/package.json"
+    [[ "$sc" == present ]] && { printf '#!/bin/sh\necho 99.0.0\n' > "$PH/bin/pnpm"; chmod +x "$PH/bin/pnpm"; }
+    printf '#!/bin/sh\ncase "$1 $2" in "list pnpm") exit 0;; esac\nexit 1\n' > "$H/stub/brew"; chmod +x "$H/stub/brew"
+    SC="$sc" PH="$PH" HOME="$H" PATH="$H/stub:/usr/bin:/bin" NVM_DIR="$H/nonvm" bash -c '
+        set -uo pipefail
+        SKIP_PREFLIGHT=false; DRY_RUN=false; VERBOSE=false
+        PNPM_MIN_VERSION=$(sed -n "s/^PNPM_MIN_VERSION=\"\(.*\)\"/\1/p" "$1")
+        PNPM_DEFERRED_PLAN=(); PNPM_DEFERRED_ACT=()
+        GREEN=""; RED=""; YELLOW=""; RESET=""; DIM=""; CYAN=""; BOLD=""; MAGENTA=""
+        info(){ echo "INFO $*"; }; success(){ echo "OK $*"; }; warn(){ echo "WARN $*"; }
+        error(){ echo "ERR $*"; }; step(){ echo "STEP $*"; }; verbose(){ :; }; confirm(){ return 0; }
+        for f in _vercmp pretty_path check_os _pnpm_standalone_home _pnpm_use_homebrew _pnpm_is_standalone \
+                 _pnpm_supported_bin _pnpm_replacement_verified _pnpm_action_removes_a_pnpm \
+                 _pnpm_node_bindirs _pnpm_is_corepack_shim _preflight_pnpm_check _pnpm_deferred_cleanup; do
+            src=$(sed -n "/^${f}() {/,/^}/p" "$1"); [[ -n "$src" ]] && eval "$src"
+        done
+        _pnpm_apply_action(){ echo "APPLIED ${1%%|*}"; }
+        pgrep(){ return 1; }
+        _preflight_pnpm_check
+        echo "---- install step ----"
+        case "$SC" in
+            appears)     printf "#!/bin/sh\necho 99.0.0\n" > "$PH/bin/pnpm"; chmod +x "$PH/bin/pnpm" ;;
+            placeholder) printf "This file intentionally left blank" > "$PH/bin/pnpm"; chmod +x "$PH/bin/pnpm" ;;
+            below-floor) printf "#!/bin/sh\necho 1.0.0\n" > "$PH/bin/pnpm"; chmod +x "$PH/bin/pnpm" ;;
+        esac
+        type _pnpm_deferred_cleanup >/dev/null 2>&1 && _pnpm_deferred_cleanup
+    ' _ "$INSTALL_SH" </dev/null 2>&1
+}
+a75_expect() {  # a75_expect <scenario> <removals-before: 0|2> <removals-after: 0|2> <must-say|"">
+    local out pre post nb na
+    out=$(a75_run "$1")
+    pre=${out%%---- install step ----*}; post=${out#*---- install step ----}
+    nb=$(printf '%s\n' "$pre"  | grep -cE '^APPLIED (brew_rm_pnpm|rm_v10_globals)$')
+    na=$(printf '%s\n' "$post" | grep -cE '^APPLIED (brew_rm_pnpm|rm_v10_globals)$')
+    if [[ "$nb" == "$2" && "$na" == "$3" && ( -z "$4" || "$out" == *"$4"* ) ]]; then
+        ok "pnpm cleanup, $1: $2 removal(s) before the install step, $3 after"
+    else bad "pnpm cleanup, $1: want $2 before / $3 after${4:+ and '$4'}" "got $nb before / $na after"; fi
+}
+a75_expect present     2 0 "0 held"            # control: a working pnpm already there, nothing held
+a75_expect none-ever   0 0 "Kept, not applied"
+a75_expect appears     0 2 "Held pnpm cleanup: 2 applied"
+a75_expect placeholder 0 0 "Kept, not applied"  # the binary-less 34-byte text file does not count
+a75_expect below-floor 0 0 "Kept, not applied"
+
 echo
 echo "  $PASS passed, $FAIL failed"
 (( FAIL == 0 ))
