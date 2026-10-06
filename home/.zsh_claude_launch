@@ -38,9 +38,10 @@ __claude_launch() {
   fi
 
   local key="$HOME/.ssh/captaincodeau"
-  # Read-only GitHub API token (macOS Keychain) -> exposed as $GH_TOKEN for this
-  # Claude session and its Bash tool only. Empty on non-macOS; harmless (gh just
-  # stays unauthenticated). gh reads GH_TOKEN; never run `gh auth login`.
+  # Read-only GitHub API token (macOS Keychain). Used ONLY by the status-cache curl
+  # below; it is NOT exported to the Claude session (GH_TOKEN removed 2026-09-18, see
+  # the note at the launch chain). Empty on non-macOS; the cache refresh then skips.
+  # Never run `gh auth login`.
   local gh_token="$(security find-generic-password -a "$USER" -s github-api-readonly -w 2>/dev/null)"
   # NVD API key (macOS Keychain) -> $NVD_API_KEY for this Claude session. UNLIKE
   # $GH_TOKEN this is NOT a credential: it grants no access to anything and only
