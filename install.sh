@@ -4705,8 +4705,20 @@ setup_pnpm_audit_hooks() {
     # or a stray override) would shadow the global state and mislead the decision below.
     # `--file "$priv"` reads only that file, immune to repo-local shadowing. (`--global
     # --get` is wrong here: it does NOT follow the [include] of ~/.gitconfig.private.)
+    # `--type=path` expands a leading `~/` the way git itself does when it USES the value;
+    # without it the literal "~/.config/git/hooks" never equals $hooks_dir and a hook path
+    # that is ours was reported as someone else's on every run (W-20261006-A32). git < 2.18
+    # has no --type, so fall back to the raw read rather than to empty: an empty answer here
+    # means "unset" and leads to the prompt that WRITES the key.
     local current
-    current=$(git config --file "$priv" --get core.hooksPath 2>/dev/null || true)
+    current=$(git config --file "$priv" --type=path --get core.hooksPath 2>/dev/null) \
+        || current=$(git config --file "$priv" --get core.hooksPath 2>/dev/null || true)
+    [[ "$current" == "~/"* ]] && current="$HOME/${current#\~/}"
+    # Same directory by another spelling (a symlink, a trailing slash) is still ours.
+    if [[ -n "$current" && -d "$current" && -d "$hooks_dir" ]] \
+        && [[ "$(cd -P -- "$current" && pwd)" == "$(cd -P -- "$hooks_dir" && pwd)" ]]; then
+        current="$hooks_dir"
+    fi
 
     if [[ "$current" == "$hooks_dir" ]]; then
         verbose "pnpm-audit git hooks already active (core.hooksPath -> $hooks_dir)."

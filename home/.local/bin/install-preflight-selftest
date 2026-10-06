@@ -415,6 +415,45 @@ else bad "the default action runs _finish" "$(grep -n '"")' "$INSTALL_SH" | head
 if grep -qE 'stow-only\).*_check_pj_prereqs; _finish ;;' "$INSTALL_SH"; then ok "--stow-only runs _finish"
 else bad "--stow-only runs _finish" "$(grep -n 'stow-only)' "$INSTALL_SH" | head -2)"; fi
 
+# --- setup_pnpm_audit_hooks: ~/.gitconfig.private may spell our hooks dir with a `~/`
+# (W-20261006-A32). Our dir by any spelling is "already active"; a foreign dir still
+# warns and an unset key still prompts, so the fix cannot pass by silencing everything.
+hk_drive() {   # hk_drive <label> <value|UNSET> [git-shim-dir] : print the first verdict word
+    local H="$WORK/hooks-$1"
+    mkdir -p "$H/.config/git/hooks" "$H/bin" "$H/other"
+    touch "$H/.config/git/hooks/pre-push"
+    printf '#!/bin/sh\nexit 0\n' > "$H/bin/pnpm-audit-hook"; chmod +x "$H/bin/pnpm-audit-hook"
+    ln -sfn "$H/.config/git/hooks" "$H/alias-hooks"
+    if [[ "$2" == UNSET ]]; then printf '' > "$H/.gitconfig.private"
+    else printf '[core]\n\thooksPath = %s\n' "${2//@H@/$H}" > "$H/.gitconfig.private"; fi
+    HOME="$H" PATH="${3:+$3:}$H/bin:$PATH" bash -c '
+        DRY_RUN=false; CYAN=""; RESET=""
+        info(){ :; }; success(){ :; }; warn(){ echo WARN; }; verbose(){ echo ACTIVE; }
+        confirm(){ echo PROMPT; return 1; }; run_cmd(){ echo RUN; }
+        source <(sed -n "/^setup_pnpm_audit_hooks() {/,/^}/p" "$1")
+        setup_pnpm_audit_hooks' _ "$INSTALL_SH" </dev/null 2>/dev/null | grep -m1 .
+}
+hk_expect() {  # hk_expect <want> <label> <value> [shim]
+    local got; got="$(hk_drive "$2" "$3" "${4:-}")"
+    if [[ "$got" == "$1" ]]; then ok "audit hooks: $2 -> $1"
+    else bad "audit hooks: $2 -> $1" "got '${got:-nothing}'"; fi
+}
+hk_expect ACTIVE tilde        '~/.config/git/hooks'
+hk_expect ACTIVE expanded     '@H@/.config/git/hooks'
+hk_expect ACTIVE symlink      '@H@/alias-hooks'
+hk_expect WARN   foreign      '@H@/other'
+hk_expect WARN   husky        '.husky'
+hk_expect PROMPT unset        UNSET
+# A git with no --type (< 2.18) must fall back to the raw read, never to "unset": unset
+# leads to the prompt that WRITES the key over a value someone set.
+hk_shim="$WORK/oldgit"; mkdir -p "$hk_shim"
+printf '#!/bin/sh\nfor a in "$@"; do case "$a" in --type=*) exit 129;; esac; done\nexec %s "$@"\n' \
+    "$(command -v git)" > "$hk_shim/git"; chmod +x "$hk_shim/git"
+if ! PATH="$hk_shim:$PATH" git config --type=path --get core.hooksPath >/dev/null 2>&1; then
+    ok "CONTROL: the old-git shim refuses --type"
+else bad "CONTROL: the old-git shim refuses --type" "the arm below would prove nothing"; fi
+hk_expect ACTIVE oldgit-tilde '~/.config/git/hooks' "$hk_shim"
+
 echo
 echo "  $PASS passed, $FAIL failed"
 (( FAIL == 0 ))
