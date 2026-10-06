@@ -105,8 +105,9 @@ GH_TOKEN="$T" gh issue list -R CaptainCodeAU/<some-repo>
 unset T
 ```
 
-Live check: open a new terminal (outside herdr), launch Claude with plain `claude`
-(the `cb` alias this line used to name was retired on 2026-10-06); in-session
+Live check: open a new terminal and launch Claude with `command claude` (the `cb` alias
+this line used to name was retired on 2026-10-06, and since the same day the `claude()`
+guard refuses a plain `claude` outside herdr too); in-session
 `gh auth login` is blocked and `gh run list` / `gh api ...` work. Since 2026-09-18 no
 launcher injects `GH_TOKEN`, so `[ -n "${GH_TOKEN-}" ] && echo present` now prints
 nothing; each `gh` consumer fetches its own credential.

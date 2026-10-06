@@ -106,3 +106,17 @@ others). Claude Code ignores them; LifeOS's notification system reads `notificat
 - `enforce-secret-probe.sh`: a jq filter selecting the key `.env` is not a `.env` file read
   (W-20261006-A47, `1258ce1`; report in
   `~/CODE/CaptainCodeAU/CaptainCodeAU-isolinear/workbench/dotfiles-secret-guard/2026-10-06/`).
+
+## Plain `claude` and `ci` are refused everywhere (Gavin Q10, 2026-10-06)
+
+The `claude()` function in `.zshrc` used to guard only herdr panes; outside herdr it passed
+everything through. Since `febfad6` it refuses a plain `claude` or `ci` in any interactive
+zsh, saying "REFUSED outside herdr" or "REFUSED in a herdr pane" and naming engage. Still
+allowed: `command claude` (the way round), `--version` and `--help`, every `claude`
+subcommand (`doctor`, `mcp`, `purge`, ...), a launch carrying a system-prompt file, the
+logged `PJ_WORKERS_CONTROL=<item id>` override, and every script (engage and lifeos run
+`claude` from PATH and never see the function). Selftest: `zsh-claude-paneguard-selftest
+--mutants` (72 arms, 4 mutants).
+
+So `~/.claude/settings.json` (user settings) now reaches only `command claude` and LifeOS
+sessions; engage sessions read their own settings file.
