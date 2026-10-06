@@ -200,7 +200,7 @@ function read_heredocs(    h, e, line, cmp) {  # P just after the newline
 }
 
 # A redirection starting at P (at <, > or the & of &>). Its target is not a word.
-function handle_redir(k,    c, ws, d) {
+function handle_redir(k,    c, ws, d, dup) {
     c = C[P]
     if (c == "<" && C[P + 1] == "<" && C[P + 2] == "<") {
         P += 3; skip_blanks(); ws = P; parse_word()
@@ -217,10 +217,11 @@ function handle_redir(k,    c, ws, d) {
         P += 2; ws = P; parse_list(REC_NESTED, ")", 1, c "(")   # process substitution, an argument
         if (k > 0 && c == "<") PSB[k] = substr(S, ws, P - ws - 1)   # A118: source <(...) runs its output
     } else {
+        dup = 0
         if (c == "&") P++
         P++
         while (P <= N && (C[P] == ">" || C[P] == "|" || C[P] == "!" || C[P] == "&")) {
-            if (C[P] == "&") { P++; break }
+            if (C[P] == "&") { P++; dup = 1; break }   # >& : fd duplication, or >&file
             P++
         }
         skip_blanks()
@@ -229,7 +230,9 @@ function handle_redir(k,    c, ws, d) {
             ws = P; parse_word()
             if (P == ws) unsure("redirection with no target")
             # reset mode reads where output goes: > >> &> >| >! and fd forms
-            else if (k > 0 && c != "<") { RDN[k]++; RDT[k, RDN[k]] = substr(S, ws, P - ws) }
+            # W-20261006-A45: >&N and >&- duplicate or close a descriptor and write no file,
+            # so a target of only digits or - is not recorded; >&file still is.
+            else if (k > 0 && c != "<" && !(dup && substr(S, ws, P - ws) ~ /^([0-9]+|-)$/)) { RDN[k]++; RDT[k, RDN[k]] = substr(S, ws, P - ws) }
         }
     }
     if (k > 0) CEND[k] = P - 1

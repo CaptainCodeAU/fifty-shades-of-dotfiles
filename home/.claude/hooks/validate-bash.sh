@@ -467,6 +467,16 @@ if [ "${1:-}" = "--selftest" ]; then
   conv_arm allow 'A35 cp FROM a live guard (a read)'           'cp ~/.claude/hooks/validate-bash.sh /tmp/vb.bak'
   conv_arm allow 'A35 sed -i on the repo copy'                 "sed -i '' 's/x/y/' home/.claude/hooks/validate-bash.sh"
   conv_arm allow 'A35 search a memory folder'                  'rg x ~/.claude/projects/k/memory'
+  # W-20261006-A45: >& and <& followed by a number or - duplicate or close a file
+  # descriptor; they write no file. Before the fix the word after >& was recorded as a
+  # target, so after a cd into a protected folder 2>&1 read as a write to <folder>/1.
+  conv_arm allow 'A45 2>&1 after cd into ~/.claude/hooks'      'cd ~/.claude/hooks && git log -1 2>&1'
+  conv_arm allow 'A45 >&2 after cd into a memory folder'       'cd ~/.claude/projects/-Users-x/memory && echo hi >&2'
+  conv_arm allow 'A45 >&- (close stdout) after cd'             'cd ~/.claude/hooks && ls >&-'
+  conv_arm allow 'A45 a multi-digit fd, 2>&10'                 'cd ~/.claude/hooks && ls 2>&10'
+  conv_arm deny  'A45 >&file is still a write'                 'cd ~/.claude/hooks && echo x >&notes.md'
+  conv_arm deny  'A45 > file after cd is still a write'        'cd ~/.claude/hooks && echo x > notes.md'
+  conv_arm deny  'A45 &>file is still a write'                 'cd ~/.claude/hooks && ls &>out.txt'
   # W-20260929-A31 (red-team H1, rows P01-P28). Until 2026-09-29 the force-push rule
   # was three regexes that needed main or master typed as its own word beside the
   # flag: bare `git push -f` on main, +main, HEAD:main --force, main -f and --mirror
