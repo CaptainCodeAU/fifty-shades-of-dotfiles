@@ -11,7 +11,8 @@
 # __claude_launch is replaced by `"$@"`, its last step, because the real one reads the Keychain
 # and starts an ssh-agent; the step under test is the word `claude` it runs at the end.
 #
-# Two shells: HERDR_ENV=1 (refuse and pass arms) and HERDR_ENV unset (everything passes). Plus a
+# Two shells: HERDR_ENV=1 and HERDR_ENV unset, both with refuse and pass arms (outside herdr
+# refuses too since Gavin's Q10, 2026-10-06; until then everything passed there). Plus a
 # drift arm: every subcommand the REAL `claude --help` lists must pass, so a new subcommand in a
 # Claude Code release turns this red instead of being refused in panes. The real binary is asked
 # for --help only, never started as a session.
@@ -148,16 +149,25 @@ if [[ "$CPG_MODE" == herdr ]]; then
     then res PASS "refusal logged as BLOCKED with pane id"
     else res FAIL "refusal logged as BLOCKED with pane id" "log: $(cat "$CONV_HOOK_LOG" 2>&1)"; fi
 else
-    # HERDR_ENV unset: exactly today's behaviour, every shape reaches claude
-    pass "unset: bare claude"                     'claude' 'STUB_ARGV:'
-    pass "unset: claude with a prompt"            'claude "fix the bug"' '[fix the bug]'
-    pass "unset: claude -p"                       'claude -p hi' '[-p] [hi]'
-    pass "unset: alias ci"                        'ci hi' '[--dangerously-skip-permissions] [-p] [hi]'
+    # HERDR_ENV unset (Gavin Q10, 2026-10-06): the same refusals as in a pane, saying "outside herdr"
+    refuse "unset: bare claude"                   'claude'
+    refuse "unset: claude with a prompt"          'claude "fix the bug"'
+    refuse "unset: claude -p"                     'claude -p hi'
+    refuse "unset: alias ci"                      'ci hi'
+    refuse "HERDR_ENV=0 is not herdr, still refused" 'HERDR_ENV=0 claude'
+    run 'claude'
+    if [[ "$OUT" == *"REFUSED outside herdr"* ]]; then res PASS "unset: the refusal says outside herdr"
+    else res FAIL "unset: the refusal says outside herdr" "out=${OUT//$'\n'/ | }"; fi
     pass "unset: claude --version"                'claude --version'
-    pass "HERDR_ENV=0 is not herdr"               'HERDR_ENV=0 claude' 'STUB_ARGV:'
+    pass "unset: a subcommand (claude doctor)"    'claude doctor' '[doctor]'
+    pass "unset: a prompt file passes"            'claude --append-system-prompt-file /p.md' '[--append-system-prompt-file] [/p.md]'
+    pass "unset: command claude (the escape)"     'command claude' 'STUB_ARGV:'
+    pass "unset: a script calling claude"         'cpg-script-caller' '[--from-a-script]'
+    pass "unset: PJ_WORKERS_CONTROL=<item id> passes" 'PJ_WORKERS_CONTROL=W-20260924-A59 claude --ovr' '[--ovr]'
     : > "$CONV_HOOK_LOG"; run 'claude --unset-probe'
-    if [[ ! -s "$CONV_HOOK_LOG" ]]; then res PASS "unset: nothing logged"
-    else res FAIL "unset: nothing logged" "$(cat "$CONV_HOOK_LOG")"; fi
+    if grep -q 'BLOCKED claude-paneguard "no system-prompt file pane=[^"]*" "claude --unset-probe"' "$CONV_HOOK_LOG" 2>/dev/null
+    then res PASS "unset: refusal logged as BLOCKED"
+    else res FAIL "unset: refusal logged as BLOCKED" "log: $(cat "$CONV_HOOK_LOG" 2>&1)"; fi
 fi
 print -r -- "CPG_DRIVER_DONE $n"
 EOF
@@ -212,8 +222,8 @@ if (( MUTANTS )) && [[ "$STATE" == ok ]]; then
     fi
     echo; echo "one-fault mutants (each must turn at least one arm red):"
     local -A MUT=(
-        m1-no-refusal-line      '/REFUSED in a herdr pane/d'
-        m2-guard-always-off     's/\[\[ "\$\{HERDR_ENV-\}" == 1 \]\] \|\|/false ||/'
+        m1-no-refusal-line      '/REFUSED \$__cpg_where/d'
+        m2-outside-passes-again 's/^(    local __cpg_where="outside herdr")/    [[ "$\{HERDR_ENV-\}" == 1 ]] || \{ command claude "$@"; return; \}\n\1/'
         m3-any-override-accepted 's/\^W-\[0-9\]\{8\}-\[A-Za-z0-9\]\+\$/./'
         m4-no-prompt-file-pass  's/--append-system-prompt-file\|--append-system-prompt-file=\*\|--system-prompt-file\|--system-prompt-file=\*\|//'
     )

@@ -1050,17 +1050,20 @@ alias ci='__claude_launch claude --dangerously-skip-permissions -p'             
 
 # claude() IS THE HERDR PANE GUARD (W-20260924-A59, ruled by Gavin 2026-09-24, D-20260924-A05).
 #
-# Outside herdr (HERDR_ENV unset) it is `command claude "$@"` and nothing else: there was no
-# claude function or alias before it (census 0, `whence -wa claude` said "command").
+# Since 2026-10-06 (Gavin, Q10) it guards OUTSIDE herdr too: a plain `claude` or `ci` typed in
+# any interactive zsh is refused, naming engage. Until then HERDR_ENV unset meant `command
+# claude "$@"` and nothing else. Scripts never see this function, and `command claude` is the
+# way round in both places. The refusal says where it happened ("in a herdr pane" or
+# "outside herdr").
 #
-# Inside a herdr pane it refuses to start a Claude session that carries no system-prompt file,
+# It refuses to start a Claude session that carries no system-prompt file,
 # i.e. one with none of pj's (or LifeOS's) rules. WHY A SHELL FUNCTION: herdr TYPES
 # `claude <args>` into the pane's interactive zsh for `agent start --kind claude`, `pane run`,
 # `send-text` and `send-keys` letter by letter, and every `c` alias ends in `claude` too
 # (measured with a decoy function, redteam-3 H1). A Bash PreToolUse hook sees none of the
 # indirect routes; the shell that finally runs the word sees them all.
 #
-# PASSES: HERDR_ENV unset; any argv holding --append-system-prompt-file or --system-prompt-file
+# PASSES (inside or outside herdr): any argv holding --append-system-prompt-file or --system-prompt-file
 # (pj, cb, cr, ct, cpr, cd_, cskip); --help/-h/--version/-v anywhere; a first word that is a
 # `claude --help` subcommand (the selftest diffs this list against the real CLI); and
 # PJ_WORKERS_CONTROL=<item id> in the environment, the one named override, which is logged with
@@ -1077,7 +1080,8 @@ alias ci='__claude_launch claude --dangerously-skip-permissions -p'             
 # set in every herdr-hosted session. Blind to: panes whose shell started before this landed,
 # a non-zsh pane shell, and a machine without these dotfiles. Proof: zsh-claude-paneguard-selftest.
 claude() {
-    [[ "${HERDR_ENV-}" == 1 ]] || { command claude "$@"; return; }
+    local __cpg_where="outside herdr"   # Gavin Q10, 2026-10-06: refuse outside herdr too
+    [[ "${HERDR_ENV-}" == 1 ]] && __cpg_where="in a herdr pane"
     local __cpg_a MATCH MBEGIN MEND   # =~ below sets MATCH; keep it out of the caller's shell
     local -a match mbegin mend
     for __cpg_a in "$@"; do
@@ -1098,11 +1102,11 @@ claude() {
             print -ru2 -- "claude: herdr pane guard OVERRIDDEN by PJ_WORKERS_CONTROL=$PJ_WORKERS_CONTROL (logged to $__cpg_log)"
             command claude "$@"; return
         fi
-        print -ru2 -- "claude: REFUSED in a herdr pane: PJ_WORKERS_CONTROL must be an item id like W-20260924-A59 and must log to $__cpg_log; one failed. Workers: engage-worker start. To run it anyway: command claude $__cpg_argv"
+        print -ru2 -- "claude: REFUSED $__cpg_where: PJ_WORKERS_CONTROL must be an item id like W-20260924-A59 and must log to $__cpg_log; one failed. Workers: engage-worker start. To run it anyway: command claude $__cpg_argv"
         return 1
     fi
     { mkdir -p "${__cpg_log:h}" && print -r -- "[$__cpg_ts] BLOCKED claude-paneguard \"no system-prompt file pane=${HERDR_PANE_ID-unknown}\" \"claude $__cpg_argv\"" >> "$__cpg_log"; } 2>/dev/null
-    print -ru2 -- "claude: REFUSED in a herdr pane: this session would carry no rules. Workers: engage-worker start. Yourself: engage. To run it anyway: command claude $__cpg_argv"
+    print -ru2 -- "claude: REFUSED $__cpg_where: this session would carry no rules. Workers: engage-worker start. Yourself: engage. To run it anyway: command claude $__cpg_argv"
     return 1
 }
 
