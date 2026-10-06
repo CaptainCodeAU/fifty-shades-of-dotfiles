@@ -2414,7 +2414,9 @@ fi
 # Use pnpm dlx (or bunx) to run commands without installing them globally.
 # This avoids having to reinstall them for every Node version with nvm.
 alias serve='pnpm dlx http-server'
-alias tsc='pnpm dlx -p typescript tsc'
+# No `tsc` alias: `pnpm dlx -p typescript tsc` exits 2 on pnpm 12 (dlx has no -p
+# short flag), and an alias would shadow a global TypeScript on PATH anyway
+# (`pnpm add -g typescript` puts tsc in $PNPM_HOME/bin). W-20261003-A31.
 
 # --- OS-Specific Functions & Aliases ---
 
