@@ -1744,7 +1744,9 @@ function pj_pane_claude(k, j,    n, a, v, w) {
 function pj_scan(ctx, ov, where,    k, j, n, a, w, b, ovk, t, lab) {
     for (k = 1; k <= NC; k++) {
         j = eff(k); n = CNW[k]
-        if (j > n) continue
+        # engage #1090: `command -v X` / `command -V X` only look X up (eff marks it probe),
+        # as the other rules already honour; `command X` and `command -p X` still launch.
+        if (j > n || EM ~ /probe/) continue
         ovk = ov
         for (a = 1; a < j; a++) if (WR[k, a] ~ /^PJ_WORKERS_CONTROL=/) {
             w = unq(WR[k, a]); sub(/^PJ_WORKERS_CONTROL=/, "", w)

@@ -331,6 +331,13 @@ EOF
   conv_arm allow "A36 claude mcp list (an info form)"           'claude mcp list'
   conv_arm allow "A8 claude agents --json, the agent's own Bash (AgentRelay skill)" 'claude agents --json 2>&1'
   conv_arm allow "A9 which claude; claude --version, the agent's own Bash"       'which claude 2>&1; claude --version 2>&1'
+  # engage #1090 (claude-switcher-main, 6 Oct): command -v / -V only LOOK a name up.
+  conv_arm allow "1090 command -v claude is a lookup"              'command -v claude'
+  conv_arm allow "1090 command -V lifeos is a lookup"              'command -V lifeos'
+  conv_arm allow "1090 readlink \$(command -v claude)"             'readlink $(command -v claude)'
+  conv_arm allow "1090 type claude is a lookup"                    'type claude'
+  conv_arm deny  "1090 command claude still launches"             'command claude'
+  conv_arm deny  "1090 command -p claude still launches"          'command -p claude'
   # d2df9205: the pattern as PROSE in an open-items title
   read -r -d '' F <<'EOF'
 r(){ out=$("$@" 2>&1); rc=$?; print -r -- "rc=$rc $(print -r -- "$out" | tail -1)"; }
