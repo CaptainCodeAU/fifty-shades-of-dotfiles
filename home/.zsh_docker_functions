@@ -310,14 +310,18 @@ EOF
     # Create basic Dockerfile based on framework
     case $framework in
         "node")
+            # pnpm, never npm (D-20261006-A10); node:24, since 18 is past end of
+            # life (below NODE_MIN_MAJOR). corepack ships with Node 24 and puts pnpm
+            # on PATH inside the image.
             cat > Dockerfile << EOF
-FROM node:18-alpine
+FROM node:24-alpine
+RUN corepack enable pnpm
 WORKDIR /app
-COPY package*.json ./
-RUN npm install
+COPY package.json pnpm-lock.yaml* ./
+RUN pnpm install
 COPY . .
 EXPOSE 3000
-CMD ["npm", "run", "dev"]
+CMD ["pnpm", "run", "dev"]
 EOF
             cat > package.json << EOF
 {
