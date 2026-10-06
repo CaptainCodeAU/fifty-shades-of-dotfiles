@@ -848,3 +848,33 @@ project's own `pmOnFail`.
 **`updateNotifier: false`.** pnpm's own "Update available" notice ignores `minimumReleaseAge` and
 points at a bare `self-update`. Measured with a fresh state dir: the notice printed once without the
 key and not at all with it. The welcome banner reports updates with the cooldown applied.
+
+### 7.5 The floor moves to 12.8.2, and only ever rises (2026-10-06, W-20261006-A36, W-20260923-A51)
+
+**Floor: `12.8.2`** (Gavin's pick), in `install.sh` and `home/.zsh_onboarding`, which must agree. It is
+the lowest v12 with every security fix that matters on these machines and none of the known
+regressions:
+
+| Version | Security fix | Regression |
+| ------- | ------------ | ---------- |
+| 12.4.2 | a dependency could take over another package's bin shim (not WSL) | -- |
+| 12.6.0 | the same shim fix for WSL (`cygpath`), which reaches mlbox | could hang on SIGTERM as PID 1 (fixed 12.8.2) |
+| 12.7.0 | env leak through a `userAgent` placeholder; `storeDir` inside the workspace skipped build approval; injected hard-link rewrite | forced full reinstall with injected workspace packages (fixed 12.8.2) |
+| 12.8.0 | -- | dropped the executable bit on `file:` deps (fixed 12.8.1) |
+
+None of these has a GHSA or CVE, so `toolchain-cve-check` reports 12.3.2 and 12.8.2 alike as clean;
+the floor follows the release notes, not the advisory feeds. Moving the floor with the installed
+version was rejected: a bare self-update can land below a floor that has not cleared the cooldown.
+
+**A floor only ever rises.** `home/.zsh_onboarding` used `${PNPM_MIN_VERSION:-12.3.2}`, so an older
+value inherited from a parent shell or a long-running session won silently (measured: an inherited
+12.3.2 stayed 12.3.2). It now keeps the HIGHER of the inherited value and the file's, numerically
+(`is-at-least`, so 12.10.0 beats 12.8.2), and an unparseable value loses. The same applies to
+`NVM_MIN_VERSION`. `install.sh` assigns its floor and never inherits one.
+
+```bash
+zsh-node-functions-selftest   # 36 checks; section 7 proves the floor only rises (old code fails 3)
+```
+
+A session started before this change still carries the old value in its environment until it is
+restarted; `toolchain-cve-check` reads the floor from there.

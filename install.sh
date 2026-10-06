@@ -99,7 +99,12 @@ SECTION_DECISION=ask
 # store. Prerequisites: globalShims:false in home/.config/pnpm/config.yaml (nvm
 # owns `node`), and the HTTPS->SSH url rewrites already in git config.
 # Ruling D-20260919-06; reasoning in docs/PNPM_SETUP_GUIDE.md section 7.
-PNPM_MIN_VERSION="12.3.2"
+# 12.8.2 (2026-10-06, Gavin's pick): every security fix that matters here (12.4.2
+# bin-shim takeover, 12.6.0 WSL shim fix, 12.7.0 userAgent env leak and storeDir
+# build-approval bypass) and none of the 12.6-12.8.0 regressions. Assigned, never
+# inherited, so an older value in the environment cannot lower it.
+# Ruling D-20261006-A06; reasoning in docs/PNPM_SETUP_GUIDE.md section 7.5.
+PNPM_MIN_VERSION="12.8.2"
 
 # --- nvm version policy ---
 # Minimum acceptable nvm. Three CVEs set this floor: CVE-2026-10796
