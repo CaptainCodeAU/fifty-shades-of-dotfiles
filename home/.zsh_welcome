@@ -83,6 +83,28 @@ __welcome_pnpm_path_check() {
     return 0
 }
 
+# npm and npx are refused on every route (npm-guard, D-20261006-A10), but a new
+# `nvm install` puts nvm's own links back for that version until install.sh or
+# `npm-guard --apply` runs again. Exception-based like the PATH check: silent when
+# every nvm Node version's npm and npx point at npm-guard, one red line naming the
+# versions that do not. Reads links only, no subprocess. Arg: nvm dir (default
+# $NVM_DIR or ~/.nvm). Returns 1 on a warning. Tested by zsh-welcome-selftest.
+__welcome_npm_guard_check() {
+    local root="${1:-${NVM_DIR:-$HOME/.nvm}}" d v n t
+    local -a open
+    for d in "$root"/versions/node/*/bin(N/); do
+        [[ -f "$d/../lib/node_modules/npm/bin/npm-cli.js" ]] || continue
+        v=${${d:h}:t}
+        for n in npm npx; do
+            t=$(readlink "$d/$n" 2>/dev/null)
+            [[ "$t" == */npm-guard ]] || { open+=("$v"); break; }
+        done
+    done
+    (( ${#open} )) || return 0
+    echo "    npm: ${err}not guarded in Node ${(j:, :)open}${done} ${err}(npm and npx run unrefused there. Run: npm-guard --apply)${done}"
+    return 1
+}
+
 # ------------------------------------------------------------------------------
 # Helper: Check GPU Availability (WSL/Linux only)
 # ------------------------------------------------------------------------------
@@ -251,6 +273,7 @@ __show_welcome_full() {
     # --- PATH order: nvm's bin must precede pnpm's (silent when right) ---
     if command -v nvm &>/dev/null; then
         __welcome_pnpm_path_check
+        __welcome_npm_guard_check
     fi
 
     # --- nvm (version floor; nvm <= 0.40.4 is vulnerable to CVE-2026-10796) ---

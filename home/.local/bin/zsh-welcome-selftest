@@ -99,5 +99,34 @@ OUT="$(__welcome_pnpm_path_check "$PNPM_HOME/bin:$NVM_BIN" 2>&1)"; RC=$?
 if (( RC == 1 )) && [[ "$OUT" == *"$PNPM_HOME/bin"* ]]; then ok "default pnpm bin is derived from PNPM_HOME"
 else bad "default pnpm bin is derived from PNPM_HOME" "rc=$RC out='$OUT'"; fi
 
+# --- 3. npm guard check (D-20261006-A10): the real function, a fixture nvm dir ---
+ng_src=$(sed -n '/^__welcome_npm_guard_check() {/,/^}/p' "$WELCOME")
+if [[ -n "$ng_src" ]]; then ok "__welcome_npm_guard_check is defined"; eval "$ng_src"
+else bad "__welcome_npm_guard_check is defined" "not found in $WELCOME"; fi
+if code_of "$full_src" | grep -qE '^[[:space:]]+__welcome_npm_guard_check$'; then ok "npm guard check is called from __show_welcome_full"
+else bad "npm guard check is called from __show_welcome_full" "defined but never invoked"; fi
+if [[ -n "$ng_src" ]]; then
+    NGT=$(mktemp -d "${TMPDIR:-/tmp}/zsh-welcome-ng.XXXXXX") || { bad "npm guard fixture" "mktemp failed -- INVALID"; NGT=""; }
+fi
+if [[ -n "${NGT:-}" ]]; then
+    ngv() {  # ngv <version> <guard|real|nonpm>
+        local b="$NGT/nvm/versions/node/$1/bin" l="$NGT/nvm/versions/node/$1/lib/node_modules/npm/bin" n
+        mkdir -p "$b"; [[ "$2" == nonpm ]] && return
+        mkdir -p "$l"; for n in npm npx; do : >| "$l/$n-cli.js"
+            if [[ "$2" == guard ]]; then ln -sfn "$HOME/.local/bin/npm-guard" "$b/$n"; else ln -sfn "../lib/node_modules/npm/bin/$n-cli.js" "$b/$n"; fi; done
+    }
+    ngv v1.0.0 guard; ngv v2.0.0 guard; ngv v3.0.0 nonpm
+    OUT="$(__welcome_npm_guard_check "$NGT/nvm" 2>&1)"; RC=$?
+    if (( RC == 0 )) && [[ -z "$OUT" ]]; then ok "every version guarded: silent"
+    else bad "every version guarded: silent" "rc=$RC out='$OUT'"; fi
+    ngv v4.0.0 real
+    OUT="$(__welcome_npm_guard_check "$NGT/nvm" 2>&1)"; RC=$?
+    if (( RC == 1 )) && [[ "$OUT" == *"v4.0.0"* && "$OUT" != *"v1.0.0"* && "$OUT" != *"v3.0.0"* ]]; then ok "an unguarded version is named, only that one"
+    else bad "an unguarded version is named, only that one" "rc=$RC out='$OUT'"; fi
+    OUT="$(__welcome_npm_guard_check "$NGT/none" 2>&1)"; RC=$?
+    if (( RC == 0 )) && [[ -z "$OUT" ]]; then ok "no nvm versions: silent"
+    else bad "no nvm versions: silent" "rc=$RC out='$OUT'"; fi
+fi
+
 echo; echo "  $PASS passed, $FAIL failed"
 (( FAIL == 0 ))
