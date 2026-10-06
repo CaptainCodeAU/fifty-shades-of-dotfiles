@@ -14,6 +14,14 @@
 # pnpm_config_* variable removed, because an env value outranks the file and
 # would make an ignored key look honoured.
 #
+# DRIFT (D-20261006-A09, Gavin's pick 2026-10-06): home/.zshrc exports
+# PNPM_CONFIG_MINIMUM_RELEASE_AGE and PNPM_CONFIG_TRUST_POLICY as a backup in case
+# config.yaml cannot be read, and an export outranks the file. So the check also
+# fails when an exported PNPM_CONFIG_* that names a key in the file disagrees with
+# it. Chosen over reading the values out of config.yaml at every shell start (a
+# parse on each start) and over dropping the backup (self-update would fall back to
+# pnpm's 1-day wait and trust checks off if the file were unreachable).
+#
 # Controls, both required or the run is INVALID (exit 2), never a pass:
 #   - a nonsense key must read `undefined` (else the instrument cannot see a miss)
 #   - at least one real key must read back a value (else nothing was read at all)
@@ -81,9 +89,10 @@ check() {
     [[ "$ctl" == undefined ]] || die2 "control: a nonsense key read back '$ctl', not undefined"
 
     local k v honoured=0 ignored=0
-    local -a bad=()
+    local -a bad=() vals=()
     for k in "${keys[@]}"; do
         v=$(clean_pnpm "$xdg" "$work/cwd" config get "$k" 2>&1) || die2 "pnpm config get $k failed: $v"
+        vals+=("$v")
         if [[ "$v" == undefined ]]; then
             bad+=("$k"); ignored=$((ignored + 1))
         else
@@ -92,13 +101,39 @@ check() {
     done
     (( honoured > 0 )) || die2 "control: none of ${#keys[@]} keys read back, so the file was not read"
 
-    local ver; ver=$(clean_pnpm "$xdg" "$work/cwd" --version 2>/dev/null)
+    # DRIFT: an exported PNPM_CONFIG_* outranks this file, so a value edited here but
+    # not in home/.zshrc would be silently overridden. Compare every exported one that
+    # names a key in the file (D-20261006-A09). Only those values are printed: they are
+    # settings from config.yaml, never auth (an auth-shaped env var names no key here).
+    local name camel i ev drift=0
+    local -a drifted=()
+    while IFS= read -r name; do
+        camel=$(printf '%s\n' "${name#PNPM_CONFIG_}" | awk -F_ '{ printf "%s", tolower($1)
+            for (i = 2; i <= NF; i++) printf "%s%s", toupper(substr($i, 1, 1)), tolower(substr($i, 2))
+            print "" }')
+        for i in "${!keys[@]}"; do
+            [[ "${keys[$i]}" == "$camel" ]] || continue
+            ev=${!name}
+            if [[ "${vals[$i]}" != undefined && "$ev" != "${vals[$i]}" ]]; then
+                drifted+=("$name=$ev, but $camel in the file reads ${vals[$i]}"); drift=$((drift + 1))
+            fi
+        done
+    done < <(env | cut -d= -f1 | grep -E '^PNPM_CONFIG_[A-Z0-9_]+$' | sort -u)
+
+    local ver rc=0; ver=$(clean_pnpm "$xdg" "$work/cwd" --version 2>/dev/null)
     if (( ignored )); then
         echo "pnpm-config-check: pnpm ${ver:-?} IGNORES ${ignored} of ${#keys[@]} keys in $file:" >&2
         printf '  %s\n' "${bad[@]}" >&2
         echo "  (each reads back undefined; pin it per project or via PNPM_CONFIG_*, see D-20261006-A02)" >&2
-        return 1
+        rc=1
     fi
+    if (( drift )); then
+        echo "pnpm-config-check: ${drift} exported value(s) DISAGREE with $file, and the export wins:" >&2
+        printf '  %s\n' "${drifted[@]}" >&2
+        echo "  (make home/.zshrc and config.yaml agree, D-20261006-A09)" >&2
+        rc=1
+    fi
+    (( rc )) && return 1
     (( quiet )) || echo "pnpm-config-check: pnpm ${ver:-?} honours all ${#keys[@]} keys in $file"
     return 0
 }
@@ -128,6 +163,10 @@ selftest() {
     arm "an ignored key fails and is named" 1 "blockExoticSubdeps" "$self" --file "$t/ignored.yaml"
     arm "an env value does not mask an ignored key" 1 "blockExoticSubdeps" \
         env PNPM_CONFIG_BLOCK_EXOTIC_SUBDEPS=true "$self" --file "$t/ignored.yaml"
+    arm "an export that agrees with the file passes" 0 "honours all 2 keys" \
+        env PNPM_CONFIG_MINIMUM_RELEASE_AGE=4320 "$self" --file "$t/clean.yaml"
+    arm "an export that disagrees with the file fails and is named" 1 "PNPM_CONFIG_MINIMUM_RELEASE_AGE=5" \
+        env PNPM_CONFIG_MINIMUM_RELEASE_AGE=5 "$self" --file "$t/clean.yaml"
     arm "no keys is INVALID, not a pass" 2 "INVALID" "$self" --file "$t/empty.yaml"
     arm "unreadable file is INVALID" 2 "INVALID" "$self" --file "$t/missing.yaml"
     arm "no pnpm on PATH is INVALID" 2 "INVALID" env PATH=/usr/bin:/bin "$self" --file "$t/clean.yaml"
