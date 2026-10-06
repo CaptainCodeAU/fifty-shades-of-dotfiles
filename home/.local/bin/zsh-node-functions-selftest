@@ -15,7 +15,7 @@
 # Written in zsh because the function is zsh (print -r, ${(@f)...}); the Bash
 # tool is zsh too but does not source .zshrc, so this file sources explicitly.
 #
-# Usage: zsh-node-functions-selftest      (exit 0 = all passed)
+# Usage: zsh-node-functions-selftest      (exit 0 = all passed, 2 = INVALID TRIAL)
 
 setopt no_unset pipe_fail 2>/dev/null
 
@@ -33,13 +33,39 @@ _resolve_repo() {
 }
 REPO="$(_resolve_repo)"
 FUNCS="${NODE_FUNCS_OVERRIDE:-$REPO/home/.zsh_node_functions}"
+ONBOARD="${ONBOARDING_OVERRIDE:-$REPO/home/.zsh_onboarding}"
 
 ok()  { PASS=$(( PASS + 1 )); printf '  \033[32mPASS\033[0m  %s\n' "$1"; }
 bad() { FAIL=$(( FAIL + 1 )); printf '  \033[31mFAIL\033[0m  %s\n' "$1"
         [[ $# -gt 1 ]] && printf '        %s\n' "$2"; }
 code_of() { grep -v '^[[:space:]]*#' <<<"$1"; }
 
-echo "zsh_node_functions selftest (pnpm_update deny list)"
+# One temp root per run, made with an explicit template: bare `mktemp` on macOS
+# ignores TMPDIR and writes under /var/folders, which the Claude sandbox refuses.
+# Before W-20261006-A35 that refusal left every log path EMPTY, the arms ran on
+# anyway, and "self-update never ran" PASSED with no log at all (an empty CALLS
+# compares equal to 0). Refuse by name instead. Each arm gets a FRESH file and
+# nothing is deleted mid-run: a sandboxed rm can refuse and leave a file behind
+# for the next arm to read (W-20260921-A33).
+T=$(mktemp -d "${TMPDIR:-/tmp}/zsh-node-functions-selftest.XXXXXX") \
+    || { echo "zsh-node-functions-selftest: mktemp failed -- INVALID TRIAL, not a pass" >&2; exit 2; }
+[[ -d "$T" && -w "$T" ]] \
+    || { echo "zsh-node-functions-selftest: temp root $T not writable -- INVALID TRIAL, not a pass" >&2; exit 2; }
+typeset -gi SEQ=0
+newfile() {   # a fresh, existing, empty file under $T; refuses by name otherwise
+    SEQ=$(( SEQ + 1 ))
+    local f="$T/$1.$SEQ"
+    : > "$f" 2>/dev/null && [[ -f "$f" ]] \
+        || { echo "zsh-node-functions-selftest: cannot create $f -- INVALID TRIAL, not a pass" >&2; exit 2; }
+    print -r -- "$f"
+}
+count_in() {  # count lines matching $1 in file $2; INVALID TRIAL if the file vanished
+    [[ -f "$2" ]] || { echo "zsh-node-functions-selftest: log $2 missing -- INVALID TRIAL, not a pass" >&2; exit 2; }
+    grep -c -- "$1" "$2" 2>/dev/null || true
+}
+
+echo "zsh_node_functions selftest (pnpm_update deny list, target, cache)"
+echo "  temp root: $T"
 echo
 
 if [[ ! -f "$FUNCS" ]]; then
@@ -59,21 +85,28 @@ else bad "pnpm_update consults the deny list at both landing points" "found $n c
 
 # --- 2. the real function, with the world stubbed ---------------------------
 # Colours empty, macOS arm64 (the standalone path, not the Homebrew one), no
-# an EMPTY PNPM_HOME so the shim cleanup finds nothing. The stub pnpm answers -v from
-# STUB_VER and records every self-update in STUB_LOG.
+# an EMPTY PNPM_HOME so the shim cleanup finds nothing. The stub pnpm answers -v
+# from STUB_VER and records every self-update, with its arguments and the
+# pmOnFail it was given, in STUB_LOG. A NAMED version lands there; a bare call
+# lands on STUB_AFTER, i.e. whatever pnpm would have picked on its own.
+# STUB_IGNORE_ARG=1 makes pnpm land on STUB_AFTER even when named (a surprise).
 export IS_MAC=true MAC_ARCH=arm64
-PNPM_HOME="$(mktemp -d)"   # empty: the root-shim cleanup finds nothing and stays quiet
+PNPM_HOME="$T/pnpm-home"; mkdir -p -- "$PNPM_HOME" \
+    || { echo "zsh-node-functions-selftest: cannot create $PNPM_HOME -- INVALID TRIAL, not a pass" >&2; exit 2; }
 compdef() { :; }           # the file registers completions; not under test
 # zsh keeps functions and variables in separate namespaces, so the colour
 # variable $ok and this file's ok() helper do not collide.
 ok=""; warn=""; err=""; info=""; done=""
 source "$FUNCS"
 
-typeset -g STUB_VER STUB_AFTER STUB_LOG
+typeset -g STUB_VER STUB_AFTER STUB_LOG STUB_IGNORE_ARG=0
 pnpm() {
     case "$1" in
         -v|--version) print -r -- "$STUB_VER" ;;
-        self-update)  print -r -- "self-update" >> "$STUB_LOG"; STUB_VER="$STUB_AFTER"; return 0 ;;
+        self-update)
+            print -r -- "self-update args=[${2-}] pmOnFail=[${PNPM_CONFIG_PM_ON_FAIL-}]" >> "$STUB_LOG"
+            if [[ -n "${2-}" && "$STUB_IGNORE_ARG" != 1 ]]; then STUB_VER="$2"; else STUB_VER="$STUB_AFTER"; fi
+            return 0 ;;
         *) return 0 ;;
     esac
 }
@@ -82,6 +115,9 @@ __pnpm_get_raw_eligible_at() { print -r -- ""; }
 __pnpm_version_has_binary()  { print -r -- ok; }
 __pnpm_live_dist_tag()      { print -r -- ""; }   # section 3 replaces this
 __pnpm_refresh_latest_sync() { :; }
+__pnpm_cache_file()         { print -r -- "/dev/null"; }
+typeset -g STUB_FRESH=0
+__pnpm_cache_fresh()        { return "$STUB_FRESH"; }
 __pnpm_vercmp() {
     local a="$1" b="$2"; [[ "$a" == "$b" ]] && { echo 0; return; }
     local lower; lower=$(printf '%s\n%s\n' "$a" "$b" | sort -V | head -1)
@@ -90,12 +126,19 @@ __pnpm_vercmp() {
 typeset -g STUB_ELIGIBLE
 __pnpm_get_latest() { print -r -- "$STUB_ELIGIBLE"; }
 
-run_update() {   # $1 current  $2 eligible  $3 version after self-update
+run_update() {   # $1 current  $2 eligible  $3 version pnpm picks on its own
     STUB_VER="$1"; STUB_ELIGIBLE="$2"; STUB_AFTER="$3"
-    STUB_LOG="$(mktemp)"
+    STUB_LOG="$(newfile calls)"
     OUT="$(pnpm_update 2>&1)"; RC=$?
-    CALLS=$(grep -c self-update "$STUB_LOG")   # prints 0 (and exits 1) on no match
-    rm -f -- "$STUB_LOG"
+    CALLS=$(count_in self-update "$STUB_LOG")
+}
+# pnpm_update runs in $(...), so STUB_VER changes inside it are lost; read the
+# landing back from the log instead.
+landed_from_log() {   # prints the version the last self-update landed on
+    local line; line=$(tail -1 "$STUB_LOG" 2>/dev/null)
+    [[ -n "$line" ]] || return
+    if [[ "$line" == *"args=[]"* || "$STUB_IGNORE_ARG" == 1 ]]; then print -r -- "$STUB_AFTER"
+    else print -r -- "${${line#*args=\[}%%\]*}"; fi
 }
 
 # 2a. the helper itself: denied prints the reason, allowed is silent (control)
@@ -109,34 +152,34 @@ else bad "helper control: 12.3.1 is not denied" "rc=$rc why='$why'"; fi
 # 2b. denied eligible version: refused, reason printed, self-update NOT called
 run_update 12.2.0 12.3.0 12.3.0
 if (( RC == 1 )) && [[ "$OUT" == *"Refusing to update pnpm 12.2.0 -> 12.3.0"* ]] \
-   && [[ "$OUT" == *"fixed in 12.3.1"* ]] && (( CALLS == 0 )); then
+   && [[ "$OUT" == *"fixed in 12.3.1"* ]] && [[ "$CALLS" == 0 ]]; then
     ok "denied version refused with the reason; self-update never ran"
 else bad "denied version refused with the reason; self-update never ran" "rc=$RC calls=$CALLS out='$OUT'"; fi
 
 # 2c. allowed version passes and self-update runs
 run_update 12.2.0 12.3.2 12.3.2
-if (( RC == 0 )) && (( CALLS == 1 )) && [[ "$OUT" == *"updated 12.2.0 -> 12.3.2"* ]]; then
+if (( RC == 0 )) && [[ "$CALLS" == 1 ]] && [[ "$OUT" == *"updated 12.2.0 -> 12.3.2"* ]]; then
     ok "allowed version passes; self-update ran once"
 else bad "allowed version passes; self-update ran once" "rc=$RC calls=$CALLS out='$OUT'"; fi
 
 # 2d. empty list denies nothing (the control for 2b)
 saved=("${PNPM_DENY_VERSIONS[@]}"); PNPM_DENY_VERSIONS=()
 run_update 12.2.0 12.3.0 12.3.0
-if (( RC == 0 )) && (( CALLS == 1 )) && [[ "$OUT" == *"updated 12.2.0 -> 12.3.0"* ]]; then
+if (( RC == 0 )) && [[ "$CALLS" == 1 ]] && [[ "$OUT" == *"updated 12.2.0 -> 12.3.0"* ]]; then
     ok "empty deny list: 12.3.0 passes (control)"
 else bad "empty deny list: 12.3.0 passes (control)" "rc=$RC calls=$CALLS out='$OUT'"; fi
 PNPM_DENY_VERSIONS=("${saved[@]}")
 
 # 2e. blind fallback (eligible unknown) lands on a denied version: loud, rc 1
 run_update 12.2.0 "" 12.3.0
-if (( RC == 1 )) && (( CALLS == 1 )) && [[ "$OUT" == *"landed on 12.3.0, a DENIED version"* ]] \
+if (( RC == 1 )) && [[ "$CALLS" == 1 ]] && [[ "$OUT" == *"landed on 12.3.0, a DENIED version"* ]] \
    && [[ "$OUT" == *"pnpm self-update 12.2.0"* ]]; then
     ok "fallback path: landing on a denied version is reported with the roll-back command"
 else bad "fallback path: landing on a denied version is reported" "rc=$RC calls=$CALLS out='$OUT'"; fi
 
 # 2f. blind fallback landing on an allowed version stays quiet (control for 2e)
 run_update 12.2.0 "" 12.3.2
-if (( RC == 0 )) && (( CALLS == 1 )) && [[ "$OUT" != *"DENIED"* ]]; then
+if (( RC == 0 )) && [[ "$CALLS" == 1 ]] && [[ "$OUT" != *"DENIED"* ]]; then
     ok "fallback path control: allowed landing passes"
 else bad "fallback path control: allowed landing passes" "rc=$RC calls=$CALLS out='$OUT'"; fi
 
@@ -145,15 +188,13 @@ else bad "fallback path control: allowed landing passes" "rc=$RC calls=$CALLS ou
 # the registry once per run and refresh in the foreground when they disagree.
 typeset -g STUB_LIVE STUB_RAW REFRESH_LOG
 __pnpm_live_dist_tag()     { print -r -- "$STUB_LIVE"; }
-__pnpm_cache_file()        { print -r -- "/dev/null"; }
 __pnpm_refresh_latest_sync() { print -r -- "refresh" >> "$REFRESH_LOG"; STUB_ELIGIBLE="$STUB_LIVE"; }
 run_gate() {   # $1 current  $2 cached raw/eligible  $3 live dist-tag
     STUB_VER="$1"; STUB_ELIGIBLE="$2"; STUB_AFTER="$3"; STUB_LIVE="$3"; STUB_RAW="$2"
     __pnpm_get_raw_latest() { print -r -- "$STUB_RAW"; }
-    REFRESH_LOG="$(mktemp)"; STUB_LOG="$(mktemp)"
+    REFRESH_LOG="$(newfile refresh)"; STUB_LOG="$(newfile calls)"
     OUT="$(pnpm_update 2>&1)"; RC=$?
-    REFRESHES=$(grep -c refresh "$REFRESH_LOG"); CALLS=$(grep -c self-update "$STUB_LOG")
-    rm -f -- "$REFRESH_LOG" "$STUB_LOG"
+    REFRESHES=$(count_in refresh "$REFRESH_LOG"); CALLS=$(count_in self-update "$STUB_LOG")
 }
 n=$(code_of "$body" | grep -c '__pnpm_live_dist_tag')
 if (( n >= 1 )); then ok "pnpm_update consults the live dist-tag"
@@ -161,26 +202,25 @@ else bad "pnpm_update consults the live dist-tag" "no call site in the function 
 
 # 3a. cache stale (says 12.4.1), registry says 12.4.2: refresh runs, then update
 run_gate 12.4.1 12.4.1 12.4.2
-if (( REFRESHES == 1 )) && (( CALLS == 1 )) && [[ "$OUT" == *"Registry latest is 12.4.2"* ]] \
+if [[ "$REFRESHES" == 1 && "$CALLS" == 1 ]] && [[ "$OUT" == *"Registry latest is 12.4.2"* ]] \
    && [[ "$OUT" == *"updated 12.4.1 -> 12.4.2"* ]]; then
     ok "stale cache: live dist-tag differs, foreground refresh, then the update runs"
 else bad "stale cache: live dist-tag differs, foreground refresh, then the update runs" "refreshes=$REFRESHES calls=$CALLS out='$OUT'"; fi
 
 # 3b. cache agrees with the registry: no refresh (control)
 run_gate 12.4.1 12.4.2 12.4.2
-if (( REFRESHES == 0 )) && (( CALLS == 1 )); then ok "cache agrees with registry: no refresh (control)"
+if [[ "$REFRESHES" == 0 && "$CALLS" == 1 ]]; then ok "cache agrees with registry: no refresh (control)"
 else bad "cache agrees with registry: no refresh (control)" "refreshes=$REFRESHES calls=$CALLS out='$OUT'"; fi
 
 # 3c. offline (empty dist-tag): no refresh, cache still used
 STUB_LIVE=""; run_gate 12.4.1 12.4.1 ""; STUB_LIVE=""
-if (( REFRESHES == 0 )) && [[ "$OUT" == *"is the latest eligible version"* ]]; then ok "offline: no refresh, cached answer stands"
+if [[ "$REFRESHES" == 0 ]] && [[ "$OUT" == *"is the latest eligible version"* ]]; then ok "offline: no refresh, cached answer stands"
 else bad "offline: no refresh, cached answer stands" "refreshes=$REFRESHES out='$OUT'"; fi
 
 # --- 4. platform artifact name follows the target major ---------------------
 # pnpm 12 renamed the per-platform packages; the old names 404 and the
 # binary-less guard failed open. The real helper is extracted from
 # ~/.zsh_onboarding by name and driven with a stubbed uname.
-ONBOARD="${ONBOARDING_OVERRIDE:-$REPO/home/.zsh_onboarding}"
 pp_src=$(sed -n '/^__pnpm_platform_pkg() {/,/^}/p' "$ONBOARD")
 if [[ -n "$pp_src" ]]; then
     eval "$pp_src"
@@ -202,6 +242,126 @@ else
     bad "__pnpm_platform_pkg extracted from .zsh_onboarding" "not found in $ONBOARD"
 fi
 
-rmdir -- "$PNPM_HOME" 2>/dev/null
+# --- 5. the checked version is the installed version (W-20261006-A29) -------
+# 2026-10-06: pnpm_update printed "Updating pnpm 12.6.0 -> 12.8.2", ran a bare
+# self-update, and pnpm picked 12.9.0 on its own. The deny list and the binary
+# guard had checked 12.8.2. Replayed here with the same three versions.
+__pnpm_live_dist_tag()       { print -r -- ""; }
+__pnpm_refresh_latest_sync() { :; }
+__pnpm_get_raw_latest()      { print -r -- ""; }
+
+# 5a. the replay: eligible 12.8.2, pnpm on its own would pick 12.9.0
+run_update 12.6.0 12.8.2 12.9.0
+L=$(landed_from_log)
+if (( RC == 0 )) && [[ "$L" == 12.8.2 ]] && [[ "$OUT" == *"updated 12.6.0 -> 12.8.2"* ]]; then
+    ok "6 Oct replay: self-update is told 12.8.2 and lands on the version that was checked"
+else bad "6 Oct replay: self-update lands on the version that was checked" "rc=$RC landed=$L log='$(cat "$STUB_LOG")' out='$OUT'"; fi
+
+# 5b. pnpm's own pick is DENIED, the checked target is fine: must not land there
+PNPM_DENY_VERSIONS+=("12.9.0|selftest: pretend 12.9.0 is broken")
+run_update 12.6.0 12.8.2 12.9.0
+L=$(landed_from_log)
+if [[ "$L" != 12.9.0 ]]; then
+    ok "a denied in-between version is never installed (landed on ${L:-nothing})"
+else bad "a denied in-between version is never installed" "rc=$RC landed=$L out='$OUT'"; fi
+PNPM_DENY_VERSIONS=("${saved[@]}")
+
+# 5c. landed somewhere other than the checked target anyway: loud, rc 1,
+#     both versions named, roll-back printed. Control: 5a's clean landing is quiet.
+STUB_IGNORE_ARG=1; run_update 12.6.0 12.8.2 12.9.0; STUB_IGNORE_ARG=0
+if (( RC == 1 )) && [[ "$OUT" == *"landed on 12.9.0, not the checked target 12.8.2"* ]] \
+   && [[ "$OUT" == *"pnpm self-update 12.6.0"* ]]; then
+    ok "landing != checked target is reported with the roll-back command"
+else bad "landing != checked target is reported" "rc=$RC out='$OUT'"; fi
+
+# 5d. a project pin cannot hijack the update: every pnpm call gets pmOnFail=ignore
+run_update 12.6.0 12.8.2 12.8.2
+if [[ "$(cat "$STUB_LOG")" == *"pmOnFail=[ignore]"* ]]; then
+    ok "self-update runs with pmOnFail=ignore (a pinned project cannot redirect it)"
+else bad "self-update runs with pmOnFail=ignore" "log='$(cat "$STUB_LOG")'"; fi
+if [[ -z "${PNPM_CONFIG_PM_ON_FAIL-}" ]]; then ok "pmOnFail=ignore does not leak out of pnpm_update (control)"
+else bad "pmOnFail=ignore does not leak out of pnpm_update" "caller now sees '${PNPM_CONFIG_PM_ON_FAIL}'"; fi
+
+# 5e. cache out of date but raw unchanged: pnpm_update refreshes in the foreground
+__pnpm_live_dist_tag()       { print -r -- "$STUB_LIVE"; }
+__pnpm_refresh_latest_sync() { print -r -- "refresh" >> "$REFRESH_LOG"; }
+STUB_FRESH=1; run_gate 12.6.0 12.9.1 12.9.1; STUB_FRESH=0
+if [[ "$REFRESHES" == 1 ]]; then ok "raw unchanged but cache out of date: foreground refresh"
+else bad "raw unchanged but cache out of date: foreground refresh" "refreshes=$REFRESHES out='$OUT'"; fi
+run_gate 12.6.0 12.9.1 12.9.1
+if [[ "$REFRESHES" == 0 ]]; then ok "raw unchanged and cache fresh: no refresh (control)"
+else bad "raw unchanged and cache fresh: no refresh (control)" "refreshes=$REFRESHES"; fi
+
+# --- 6. the cache itself (~/.zsh_onboarding helpers, extracted by name) ------
+# Publish times are the real ones for pnpm 12.8.2 / 12.9.0 / 12.9.1; 11.28.9 is
+# a made-up backport published last, which must not move eligible or the clock.
+for fn in __pnpm_cache_fresh __pnpm_eligible_compute __pnpm_min_release_age_min __pnpm_refresh_latest_body; do
+    src=$(sed -n "/^${fn}() {/,/^}/p" "$ONBOARD")
+    if [[ -n "$src" ]]; then eval "$src"
+    else bad "$fn extracted from .zsh_onboarding" "not found in $ONBOARD"; fi
+done
+PKG_JSON='{"time":{"created":"2016-01-01T00:00:00.000Z","modified":"2026-10-05T00:00:00.000Z",
+  "12.8.2":"2026-09-30T01:15:12.518Z","12.9.0":"2026-10-02T22:27:15.887Z",
+  "12.9.1":"2026-10-03T20:48:16.304Z","13.0.0-alpha.1":"2026-09-20T00:00:00.000Z",
+  "11.28.9":"2026-10-04T00:00:00.000Z"}}'
+T_CACHE=1791066678        # 2026-10-04 9:31 AM Melbourne, when the real cache was written
+T_RUN=1791250293          # 2026-10-06 12:31 PM, after 12.9.0 cleared the gate
+T_EARLY=1791230000        # 2026-10-06 6:53 AM, before it did
+T_90=1791239235           # 12.9.0 publish + 4320 min = 2026-10-06 9:27 AM
+
+if whence -w __pnpm_eligible_compute >/dev/null 2>&1 && command -v jq >/dev/null; then
+    got=$(print -r -- "$PKG_JSON" | __pnpm_eligible_compute "$T_CACHE" 4320)
+    if [[ "$got" == *"eligible=12.8.2"* && "$got" == *"next_eligible_at=$T_90"* ]]; then
+        ok "compute at cache time: eligible 12.8.2, next clears at 12.9.0's time (not 12.9.1's)"
+    else bad "compute at cache time" "got '$got'"; fi
+    got=$(print -r -- "$PKG_JSON" | __pnpm_eligible_compute "$T_RUN" 4320)
+    if [[ "$got" == *"eligible=12.9.0"* ]]; then ok "compute after 12.9.0 cleared: eligible 12.9.0 (prerelease and backport ignored)"
+    else bad "compute after 12.9.0 cleared" "got '$got'"; fi
+else
+    bad "__pnpm_eligible_compute runs" "function missing or no jq"
+fi
+
+if whence -w __pnpm_cache_fresh >/dev/null 2>&1; then
+    CF="$(newfile cache)"
+    printf 'raw=12.9.1\neligible=12.8.2\nraw_eligible_at=1791319696\nnext_eligible_at=%s\neligible_binary=ok\n' "$T_90" > "$CF"
+    touch -t 202610040931 "$CF"
+    typeset -g STUB_NOW
+    date() { if [[ "${1-}" == +%s ]]; then print -r -- "$STUB_NOW"; else command date "$@"; fi; }
+    PNPM_CHECK_TTL_DAYS=7
+    STUB_NOW=$T_RUN
+    if ! __pnpm_cache_fresh "$CF"; then ok "the 4 Oct cache is out of date at 12:31 PM on 6 Oct (12.9.0 cleared)"
+    else bad "the 4 Oct cache is out of date once 12.9.0 cleared" "cache read as fresh at $T_RUN"; fi
+    STUB_NOW=$T_EARLY
+    if __pnpm_cache_fresh "$CF"; then ok "the same cache is fresh at 6:53 AM, before 12.9.0 cleared (control)"
+    else bad "the same cache is fresh before 12.9.0 cleared (control)"; fi
+    unfunction date
+fi
+
+if whence -w __pnpm_min_release_age_min >/dev/null 2>&1; then
+    got=$(PNPM_CONFIG_MINIMUM_RELEASE_AGE=5 __pnpm_min_release_age_min)
+    if [[ "$got" == 5 ]]; then ok "release age: PNPM_CONFIG_MINIMUM_RELEASE_AGE wins, as it does for pnpm"
+    else bad "release age: env var wins" "got '$got'"; fi
+fi
+
+if whence -w __pnpm_refresh_latest_body >/dev/null 2>&1; then
+    # Packument unreachable while a gate is set: the cache must NOT be rewritten
+    # with eligible=raw (a version too young to install, now handed to self-update).
+    curl() { [[ "$*" == *"/pnpm/latest"* ]] && print -r -- '{"version":"12.9.1"}'; return 0; }
+    __pnpm_version_has_binary() { print -r -- ok; }
+    __pnpm_min_release_age_min() { print -r -- 4320; }
+    CF="$(newfile cache)"; print -r -- "raw=12.9.1"$'\n'"eligible=12.8.2" > "$CF"
+    __pnpm_refresh_latest_body "$CF"
+    if grep -q '^eligible=12.8.2$' "$CF"; then ok "packument unreachable: cache kept, eligible not set to the too-young raw"
+    else bad "packument unreachable: cache kept" "cache now: $(tr '\n' ' ' < "$CF")"; fi
+    # Control: packument reachable, the same call rewrites the cache.
+    curl() { if [[ "$*" == *"/pnpm/latest"* ]]; then print -r -- '{"version":"12.9.1"}'
+             else print -r -- "$PKG_JSON"; fi; return 0; }
+    CF="$(newfile cache)"; print -r -- "raw=12.9.1"$'\n'"eligible=12.8.2" > "$CF"
+    __pnpm_refresh_latest_body "$CF"
+    if grep -q '^next_eligible_at=' "$CF" && grep -q '^raw=12.9.1$' "$CF"; then ok "packument reachable: cache rewritten with next_eligible_at (control)"
+    else bad "packument reachable: cache rewritten (control)" "cache now: $(tr '\n' ' ' < "$CF")"; fi
+    unfunction curl
+fi
+
 echo; echo "  $PASS passed, $FAIL failed"
 (( FAIL == 0 ))

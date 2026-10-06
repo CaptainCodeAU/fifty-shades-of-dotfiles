@@ -117,6 +117,14 @@ pnpm_update() {
         return $?
     fi
 
+    # Inside a project that pins pnpm, `pnpm -v` reports (and downloads) the
+    # pinned version, and `pnpm self-update` only rewrites that project's
+    # packageManager field instead of updating the global pnpm (pnpm.io/cli/
+    # self-update). pmOnFail=ignore makes every pnpm call here act on the global
+    # install wherever it is run from (measured 2026-10-06 in a pinned fixture:
+    # -v printed 12.9.0 and wrote nothing; without it, a pnpm-lock.yaml appeared).
+    local -x PNPM_CONFIG_PM_ON_FAIL=ignore
+
     local current eligible raw raw_at now cmp current_major eligible_major post
     current=$(pnpm -v 2>/dev/null)
     # Live dist-tag check (Ruling D-20260920-01): the cache is trusted for
@@ -124,12 +132,20 @@ pnpm_update() {
     # written hours before it shipped. One cheap registry call; when it
     # disagrees with the cached raw, refresh in the FOREGROUND before choosing
     # a target. Offline (empty) changes nothing: the cache is still used.
-    local live_raw cached_raw
+    # Also refresh in the foreground when the cache is no longer fresh: a
+    # version between eligible and raw can clear the gate with raw unchanged
+    # (12.9.0 on 2026-10-06, W-20261006-A29), and __pnpm_get_latest would only
+    # start a BACKGROUND refresh and hand back the stale answer.
+    local live_raw cached_raw cache_file
+    cache_file=$(__pnpm_cache_file)
     live_raw=$(__pnpm_live_dist_tag 2>/dev/null)
     cached_raw=$(__pnpm_get_raw_latest 2>/dev/null)
     if [[ -n "$live_raw" && "$live_raw" != "$cached_raw" ]]; then
         echo "${info}Registry latest is ${live_raw}; cache said ${cached_raw:-nothing}. Refreshing...${done}"
-        __pnpm_refresh_latest_sync "$(__pnpm_cache_file)"
+        __pnpm_refresh_latest_sync "$cache_file"
+    elif [[ -n "$live_raw" ]] && ! __pnpm_cache_fresh "$cache_file"; then
+        echo "${info}Version cache is out of date. Refreshing...${done}"
+        __pnpm_refresh_latest_sync "$cache_file"
     fi
 
     eligible=$(__pnpm_get_latest 2>/dev/null)        # latest installable (age-gated)
@@ -227,7 +243,13 @@ pnpm_update() {
         echo "${info}Updating pnpm ${current} -> ${eligible}...${done}"
     fi
 
-    if pnpm self-update; then
+    # Name the target. A bare self-update lets pnpm pick its own version, and on
+    # 2026-10-06 it picked 12.9.0 while the deny list and the binary guard above
+    # had checked 12.8.2 (W-20261006-A29). pnpm still applies minimumReleaseAge
+    # to a named version. stdin from /dev/null so that, if the gate ever refused
+    # it, pnpm cannot offer its interactive "update anyway" (unmeasured: whether
+    # pnpm decides interactivity from stdin).
+    if pnpm self-update "$eligible" </dev/null; then
         # Verify the new binary actually RUNS -- self-update can exit 0 while
         # leaving a non-functional pnpm. Under strictDepBuilds, pnpm refuses to
         # run @pnpm/exe's `preinstall` build script, so the ~141MB native binary
@@ -244,8 +266,18 @@ pnpm_update() {
             echo "${info}    pnpm approve-builds -g   # trust @pnpm/exe's build script${done}" >&2
             echo "${info}    pnpm_update              # re-run this update${done}" >&2
             return 1
-        elif [[ "$post" != "$current" ]]; then
+        elif [[ "$post" == "$eligible" ]]; then
             echo "${ok}pnpm updated ${current} -> ${post}.${done}"
+        elif [[ "$post" != "$current" ]]; then
+            # Landed somewhere other than the version the gates checked. Check
+            # the landing too (Ruling D-20260919-10: both landing points).
+            local landed_why
+            echo "${err}pnpm self-update landed on ${post}, not the checked target ${eligible}.${done}" >&2
+            if landed_why=$(__pnpm_version_denied "$post"); then
+                echo "${err}${post} is a DENIED version: ${landed_why}${done}" >&2
+            fi
+            echo "${warn}Roll back now:  pnpm self-update ${current}${done}" >&2
+            return 1
         else
             echo "${warn}pnpm self-update reported success but the version is unchanged (${current}).${done}"
             echo "${warn}The target may be held by minimumReleaseAge or pinned elsewhere.${done}"

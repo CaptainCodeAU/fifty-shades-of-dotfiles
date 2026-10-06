@@ -792,3 +792,26 @@ The refresh body is now one function (`__pnpm_refresh_latest_body`) with a backg
 ```bash
 zsh-node-functions-selftest   # 17 checks: deny list, live dist-tag gate (stale / agrees / offline), platform names v12 vs v11
 ```
+
+### 7.3 A third blind spot: the target it named was not the version it installed (2026-10-06, W-20261006-A29)
+
+On 6 Oct `pnpm_update` printed `Updating pnpm 12.6.0 -> 12.8.2` and then installed 12.9.0. Two
+causes, both measured, both fixed the same day:
+
+| Cause | Fix |
+| ----- | --- |
+| It ran a bare `pnpm self-update`, so pnpm chose its own target (the newest version past the cooldown, 12.9.0). The deny list and the binary guard had checked 12.8.2. | It now runs `pnpm self-update "$eligible"`, so the version the gates check is the version that installs. pnpm still applies `minimumReleaseAge` to a named version. |
+| The cache went stale only when the NEWEST release cleared the cooldown (12.9.1, next day). 12.9.0 cleared it at 9:27 AM with the newest release unchanged, and nothing noticed. | The cache records `next_eligible_at`, the earliest moment ANY version newer than `eligible` clears the cooldown, and `pnpm_update` refreshes in the foreground once that passes. |
+
+**Ruled by Gavin 2026-10-06:** `pnpm_update` names the version it checked. If pnpm still lands on a
+different version, it FAILS (exit 1): it names both versions, checks the landed one against the deny
+list, and prints the roll-back command. It also sets `pmOnFail=ignore` for its own calls, so it always
+updates the machine's pnpm even when run inside a project that pins another version. The cooldown
+reader honours `PNPM_CONFIG_MINIMUM_RELEASE_AGE` before `config.yaml`, as pnpm does.
+
+```bash
+zsh-node-functions-selftest   # 31 checks; replays 6 Oct (12.6.0, eligible 12.8.2, pnpm's own pick 12.9.0)
+```
+
+Not yet measured: a real named `self-update`. The first one is the 12.9.1 update after it clears the
+cooldown at 7:48 AM Wed 7 Oct; it should print `Updating pnpm 12.9.0 -> 12.9.1`.
