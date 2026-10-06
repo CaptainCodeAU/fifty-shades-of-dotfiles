@@ -964,20 +964,17 @@ alias repomix='pnpm dlx repomix@1.16.1'
 # Use system ripgrep for Claude Code search (faster than bundled ripgrep).
 export USE_BUILTIN_RIPGREP=0
 
-# __claude_launch, the shared launch function, lives in ~/.zsh_claude_launch since F3
-# (2026-09-21) so the `pj` SCRIPT in ~/.local/bin can source the same definition. One
-# copy: edit it there, never paste it back here. The `c` family below still calls it.
+# __claude_launch, the shared launch function, lives in ~/.zsh_claude_launch so the
+# `engage` launcher (~/CODE/CaptainCodeAU/engage) sources the same definition. One copy:
+# edit it there, never paste it back here. `ci` below is the last alias that calls it.
 [[ -f ~/.zsh_claude_launch ]] && source ~/.zsh_claude_launch
 
-# LifeOS "Layer 2": the constitutional system prompt (output format, verification
-# gate, security protocol, ~/.claude privacy rule). Layer 1 -- global CLAUDE.md,
-# hooks, skills, memory -- loads in EVERY session regardless; this flag is the
-# only thing that adds the constitution, and only `lifeos` passed it before.
-# Array, not a scalar: zsh does NOT word-split an unquoted parameter, so
-# `claude $_LIFEOS_SP` would pass flag+path as ONE argv entry and fail.
-# Deliberately NOT applied to `ci` (piped -p: the banner format would pollute
-# script stdout) or `claude-clean` (unconstituted by design).
-_LIFEOS_SP=(--append-system-prompt-file "$HOME/.claude/LIFEOS/LIFEOS_SYSTEM_PROMPT.md")
+# THE c-FAMILY ALIASES ARE RETIRED (Gavin, 2026-10-06): cb, cr, ct, cpr, cd_ and cskip
+# were removed, and with them _LIFEOS_SP, the LifeOS system-prompt array only they used.
+# engage replaced them. `ci` stays because scripts may pipe into it. Two of them were
+# broken when they went: cd_ passed `--debug "filter"` (the filter only binds as
+# --debug=filter) and cr's "resume last session" was bare --resume, which opens a picker.
+# Restore any of them from git history (commit before this note) if one is ever needed.
 
 # `c` IS A SIGNPOST NOW, NOT A LAUNCHER (F5c, ruled by Gavin 2026-09-22).
 #
@@ -992,8 +989,7 @@ _LIFEOS_SP=(--append-system-prompt-file "$HOME/.claude/LIFEOS/LIFEOS_SYSTEM_PROM
 # programmatically either -- an alias is not visible to a script, a hook or a cron job --
 # so the only caller was a human at a prompt. `c-legacy` kept the original launch, unchanged,
 # from 2026-09-22 until P10 the same day, when Gavin ruled it out: nothing had needed it
-# (it was never the LifeOS launch; that is `lifeos`), and the `_LIFEOS_SP` prompt still
-# reaches `cb`, `cr`, `ct`, `cpr`, `cd_` and `cskip` below.
+# (it was never the LifeOS launch; that is `lifeos`).
 #
 # A FUNCTION, not an alias, because it has to EXIT 1: a signpost that exits 0 is
 # indistinguishable from a launcher that started something and printed nothing. The text
@@ -1001,7 +997,6 @@ _LIFEOS_SP=(--append-system-prompt-file "$HOME/.claude/LIFEOS/LIFEOS_SYSTEM_PROM
 # repo), which has a --selftest; an alias could not be tested at all, since a
 # non-interactive shell never sees one. Same reasoning that made `pj` a script in F3.
 c() { pj-launcher-menu; }
-alias ct='__claude_launch CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 claude "${_LIFEOS_SP[@]}" --dangerously-skip-permissions --permission-mode plan --teammate-mode tmux'  # Tmux agent teams
 
 # pj - light project launcher (TRIAL, added 2026-09-19; a SCRIPT since F3, 2026-09-21).
 # Claude Code + OPERATIONAL_RULES + the project's own CLAUDE.md and notes. No LifeOS prompt,
@@ -1076,12 +1071,7 @@ claude-clean() {
     echo "clean-room cwd: $dir" >&2
     ( builtin cd "$dir" && command claude --setting-sources '' --strict-mcp-config "$@" )
 }
-alias cb='__claude_launch claude "${_LIFEOS_SP[@]}"'                                          # Bare (full control)
-alias cr='__claude_launch claude "${_LIFEOS_SP[@]}" --dangerously-skip-permissions --resume'  # Resume last session
-alias ci='__claude_launch claude --dangerously-skip-permissions -p'                          # Non-interactive / piped (NO Layer 2: banner would pollute stdout)
-alias cpr='__claude_launch claude "${_LIFEOS_SP[@]}" --dangerously-skip-permissions --from-pr'  # Resume session from PR
-alias cd_='__claude_launch claude "${_LIFEOS_SP[@]}" --dangerously-skip-permissions --permission-mode plan --verbose --debug "api,hooks,mcp,statsig"'               # Debug (verbose logging)
-alias cskip='__claude_launch SKIP_SESSION_END_HOOK=1 claude "${_LIFEOS_SP[@]}" --dangerously-skip-permissions --permission-mode plan'  # Skip end hooks
+alias ci='__claude_launch claude --dangerously-skip-permissions -p'                          # Non-interactive / piped (no LifeOS prompt: its banner would pollute stdout)
 
 # claude() IS THE HERDR PANE GUARD (W-20260924-A59, ruled by Gavin 2026-09-24, D-20260924-A05).
 #
