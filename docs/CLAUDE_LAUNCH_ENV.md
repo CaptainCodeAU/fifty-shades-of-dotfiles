@@ -18,6 +18,9 @@ file). They must stay identical; a variable added to one belongs in both.
 | `NVD_API_KEY`                          | from the Keychain                         | Lifts NVD's rate limit for the CVE sweep. Not a credential to anything. Open item W-20261006-A44 (parked by Gavin) asks whether it should leave the session environment. |
 | `CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN` | `1`, or `0` when `PJ_RENDERER=fullscreen` | The classic-renderer lock; engage lifts it for full-screen sessions.                                                                                                     |
 | `CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY`  | `1`                                       | Clearing `DISABLE_TELEMETRY` re-enables the "How is Claude doing?" survey; this keeps it off. Added 2026-10-06.                                                          |
+| `CLAUDE_CODE_NONBLOCKING_STDOUT` | `1` | A terminal that stops reading (paused pane, stalled SSH) cannot freeze Claude. Added 2026-10-06 (Q15: 17); the freeze itself is untestable on demand. |
+| `CLAUDE_AUTO_BACKGROUND_TASKS` | `1` | Long subagents move to the background. Engage sessions already launch subagents async, so no visible effect here; kept on Gavin's pick (Q15.1: 2). |
+| `CLAUDE_CODE_WORKER_CHECKIN_SCHEDULE` | `600` | Reminds Claude every 10 minutes to check background work still running. Live test with 60: the check-in arrived at 60.0 s; none without it. |
 
 `GH_TOKEN` was removed from both chains on 2026-09-18; the note in the `if` branch says
 why and how to revert.
