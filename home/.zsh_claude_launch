@@ -123,6 +123,7 @@ __claude_launch() {
         NVD_API_KEY="$nvd_key" \
         CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN="$_pj_alt_off" \
         CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 \
+        CLAUDE_CODE_NONBLOCKING_STDOUT=1 \
         "$@"
     )
   else
@@ -133,6 +134,7 @@ __claude_launch() {
       NVD_API_KEY="$nvd_key" \
       CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN="$_pj_alt_off" \
       CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1 \
+      CLAUDE_CODE_NONBLOCKING_STDOUT=1 \
       "$@"
   fi
 }
