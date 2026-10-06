@@ -256,17 +256,20 @@ The prefixes that work, all proven with a passing arm in the same sandbox:
 
 ```
 UV_CACHE_DIR="$TMPDIR/uvcache" uv run python3 ...        # uv:   rc 2 -> rc 0
-XDG_CACHE_HOME="$TMPDIR/xdgcache" pnpm dlx <pkg> ...     # pnpm: ERR_PNPM_CLI_DLX_CACHE gone
+pnpm dlx <pkg> ... / pnpm install ...                    # pnpm: the pnpm() wrapper handles it (below)
 ```
 
 **Do NOT export `XDG_CACHE_HOME` for a whole session** to "fix them all at once". It also
 moves `$XDG_CACHE_HOME/dotfiles/`, which holds `pj-prompt-file`'s system-prompt cache and
 the welcome banner's 6-hour GitHub rate-limit cache. Set it per command.
 
-`pnpm dlx` has a second, unrelated failure after the cache is fixed: the sandbox's HTTPS
-proxy presents a certificate pnpm's Rust fetcher does not trust
-(`invalid peer certificate: OSStatus -26276`) while `curl` to the same URL returns 200.
-That is a network-trust problem, not a cache one, and it is unsolved.
+**pnpm needs no prefix in a session since 2026-10-06** (D-20261006-A07). pnpm 12 keeps its
+store lock in a literal `/tmp/pnpm-store-operation-locks-<uid>/`, which the sandbox refuses,
+and `dlx` also needs a writable cache. The `pnpm()` function in `home/.zshrc` points both at
+one per-user dir, `/tmp/claude-$UID/pnpm-runtime`, only when `/tmp` is not writable. Live A/B
+in a fresh session: `command pnpm dlx semver@7.6.3 1.2.3` rc 1, `pnpm dlx ...` rc 0. A hook or
+script that runs `pnpm` under `sh -c` never sees the function. The `OSStatus -26276`
+certificate failure that used to follow is gone on 12.9.0.
 
 **THE PART WORTH REMEMBERING IS NOT THE PREFIX.** In four of the five instances the
 denial arrived wearing a different hat, and each one is the all-cases-identical rule

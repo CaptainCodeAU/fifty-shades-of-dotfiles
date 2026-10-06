@@ -878,3 +878,28 @@ zsh-node-functions-selftest   # 36 checks; section 7 proves the floor only rises
 
 A session started before this change still carries the old value in its environment until it is
 restarted; `toolchain-cve-check` reads the floor from there.
+
+### 7.6 pnpm inside a sandboxed Claude session (2026-10-06, W-20260921-A41)
+
+Inside the Claude Bash sandbox, `pnpm install` and `pnpm dlx` died before any network call with
+`ERR_PNPM_STORE_DIR_OPEN_OPERATION_LOCK`. pnpm 12 keeps its store operation locks in a literal
+`/tmp/pnpm-store-operation-locks-<uid>/`, and the sandbox only lets a command write under
+`/tmp/claude*`. No pnpm setting or `PNPM_*` variable moves it; `--store-dir` and `--state-dir` do
+not. Only `XDG_RUNTIME_DIR` does, and it must name a directory that already exists. `dlx` then also
+needs a writable cache (`PNPM_CONFIG_CACHE_DIR`).
+
+**The fix (Gavin's pick):** the `pnpm()` function in `home/.zshrc` sets both, for that one command,
+only when `[[ -w /tmp ]]` is false (it is false sandboxed and true outside). They point at ONE
+stable per-user directory, `/tmp/claude-$UID/pnpm-runtime`, not a per-session one: two sessions
+sharing the sandbox's fallback store must still lock each other out. A terminal and an
+unsandboxed run are untouched. Rejected: exporting both from a SessionStart hook (it changes
+unsandboxed runs too, which would stop sharing the lock with the terminal on the real store), a
+sandbox `allowWrite` entry (does not fix `dlx`, and is tied to one machine's paths), and
+`excludedCommands` for pnpm (runs third-party `dlx` code with no sandbox).
+
+Measured 2026-10-06 on 12.9.0, sandboxed: `command pnpm dlx semver@7.6.3 1.2.3` exit 1 at the
+cache, the function exit 0 printing `1.2.3`; `pnpm install --lockfile-only` through the function
+wrote its lockfile, and the lock files appeared under the per-user dir. Live A/B in a fresh
+session in a herdr tab gave the same two answers. The `OSStatus -26276` certificate failure that
+used to follow the cache fix is gone on 12.9.0. A hook that runs pnpm under `sh -c` does not see
+the zsh function.

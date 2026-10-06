@@ -747,6 +747,23 @@ pnpm() {
             esac
         done
     fi
+    # Inside the Claude Bash sandbox /tmp is not writable, and pnpm 12 keeps its
+    # store operation locks in a literal /tmp/pnpm-store-operation-locks-<uid>/
+    # unless XDG_RUNTIME_DIR names an existing dir, so install and dlx died with
+    # ERR_PNPM_STORE_DIR_OPEN_OPERATION_LOCK; dlx also needs a writable cache.
+    # Only then, point both at ONE stable per-user dir: per-session dirs would stop
+    # two sessions on the same fallback store from locking each other out.
+    # `[[ -w /tmp ]]` is false sandboxed and true outside (measured 2026-10-06), so
+    # a terminal and an unsandboxed run are untouched. W-20260921-A41,
+    # Gavin's pick 2026-10-06 (D-20261006-A07; docs/PNPM_SETUP_GUIDE.md 7.6).
+    if [[ ! -w /tmp && -z "${XDG_RUNTIME_DIR-}" ]]; then
+        local rt="/tmp/claude-${UID}/pnpm-runtime"
+        if mkdir -p "$rt/cache" 2>/dev/null; then
+            XDG_RUNTIME_DIR="$rt" PNPM_CONFIG_CACHE_DIR="${PNPM_CONFIG_CACHE_DIR:-$rt/cache}" \
+                command pnpm "$@"
+            return
+        fi
+    fi
     command pnpm "$@"
 }
 
