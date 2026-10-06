@@ -55,13 +55,6 @@
       "Bash(lsof *)",
       "Bash(mkdir *)",
       "Bash(mv *)",
-      "Bash(npm install:*)",
-      "Bash(npm run build:*)",
-      "Bash(npm run dev:*)",
-      "Bash(npm uninstall:*)",
-      "Bash(npm view:*)",
-      "Bash(npx inngest-cli@latest dev)",
-      "Bash(npx supabase:*)",
       "Bash(nvm *)",
       "Bash(obsidian help:*)",
       "Bash(obsidian files:*)",
@@ -161,17 +154,12 @@
       "Read(**/passwords.txt)",
       "Read(**/secrets/**)"
     ],
-    "ask": [
-      "Bash(git reset *)"
-    ]
+    "ask": ["Bash(git reset *)"]
   },
   "sandbox": {
     "enabled": true,
     "filesystem": {
-      "allowWrite": [
-        "~/.claude/MEMORY",
-        "~/.config/herdr/herdr.sock"
-      ],
+      "allowWrite": ["~/.claude/MEMORY", "~/.config/herdr/herdr.sock"],
       "denyRead": [
         "~/.ssh",
         "~/Downloads",
