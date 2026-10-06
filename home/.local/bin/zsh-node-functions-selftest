@@ -363,5 +363,31 @@ if whence -w __pnpm_refresh_latest_body >/dev/null 2>&1; then
     unfunction curl
 fi
 
+# --- 7. a floor only rises: an inherited lower value loses (W-20260923-A51) ---
+# Sources the real onboarding file in a clean zsh with the variable inherited.
+floor_after() {  # $1 var, $2 inherited value ("" = unset)
+    if [[ -z "$2" ]]; then env -u "$1" zsh -f -c "source '$ONBOARD' >/dev/null 2>&1; print -r -- \$$1"
+    else env "$1=$2" zsh -f -c "source '$ONBOARD' >/dev/null 2>&1; print -r -- \$$1"; fi
+}
+FILE_PNPM=$(floor_after PNPM_MIN_VERSION "")
+FILE_NVM=$(floor_after NVM_MIN_VERSION "")
+if [[ "$FILE_PNPM" == <->.<->.<-> && "$FILE_NVM" == <->.<->.<-> ]]; then
+    ok "control: the file's own floors read back (pnpm $FILE_PNPM, nvm $FILE_NVM)"
+    got=$(floor_after PNPM_MIN_VERSION 1.0.0)
+    [[ "$got" == "$FILE_PNPM" ]] && ok "inherited lower pnpm floor 1.0.0 loses -> $got" \
+        || bad "inherited lower pnpm floor loses" "got $got, want $FILE_PNPM"
+    got=$(floor_after NVM_MIN_VERSION 0.40.6)
+    [[ "$got" == "$FILE_NVM" ]] && ok "inherited lower nvm floor 0.40.6 loses -> $got" \
+        || bad "inherited lower nvm floor loses" "got $got, want $FILE_NVM"
+    got=$(floor_after PNPM_MIN_VERSION 99.0.0)
+    [[ "$got" == 99.0.0 ]] && ok "an explicit higher floor still wins (99.0.0)" \
+        || bad "an explicit higher floor still wins" "got $got"
+    got=$(floor_after PNPM_MIN_VERSION banana)
+    [[ "$got" == "$FILE_PNPM" ]] && ok "an unparseable inherited floor loses -> $got" \
+        || bad "an unparseable inherited floor loses" "got $got"
+else
+    bad "control: the file's own floors read back" "pnpm '$FILE_PNPM', nvm '$FILE_NVM' from $ONBOARD"
+fi
+
 echo; echo "  $PASS passed, $FAIL failed"
 (( FAIL == 0 ))

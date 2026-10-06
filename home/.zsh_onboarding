@@ -42,7 +42,21 @@ fi
 # named-registry lockfile substitution fix + rebuild path-traversal fix (11.20.0,
 # namedRegistries unused here). Verified real binary at every version in range.
 # Skip 11.12.0/11.13.0 (binary-less).
-export PNPM_MIN_VERSION="${PNPM_MIN_VERSION:-12.3.2}"
+# A floor only ever RISES here. `${VAR:-default}` let an inherited lower value (a
+# parent shell or session started before a bump) win silently: measured
+# 2026-10-06, an inherited 12.3.2 stayed 12.3.2 (W-20260923-A51). Keep the higher
+# of the inherited value and this file's; an unparseable value loses.
+__floor_keep_higher() {  # $1 = variable name, $2 = this file's floor
+    autoload -Uz is-at-least
+    local cur=${(P)1-}
+    # <-> is zsh's "any number" and needs no extendedglob (## would).
+    if [[ "$cur" == <->.<->.<-> ]] && is-at-least "$2" "$cur"; then
+        typeset -gx "$1=$cur"
+    else
+        typeset -gx "$1=$2"
+    fi
+}
+__floor_keep_higher PNPM_MIN_VERSION 12.3.2
 # How often to re-check the npm registry for the latest pnpm release.
 export PNPM_CHECK_TTL_DAYS="${PNPM_CHECK_TTL_DAYS:-7}"
 
@@ -54,7 +68,7 @@ export PNPM_CHECK_TTL_DAYS="${PNPM_CHECK_TTL_DAYS:-7}"
 # via a malicious .nvmrc's alias path traversal on `nvm use`; affects <= 0.40.7,
 # fixed 0.40.8). Below this, the onboarding nudge + banner
 # flag it. Coordinate with install.sh.
-export NVM_MIN_VERSION="${NVM_MIN_VERSION:-0.40.8}"
+__floor_keep_higher NVM_MIN_VERSION 0.40.8
 # Lowest Node major still receiving security support: Node 20 reached EOL 2026-04;
 # 22 is Active LTS (EOL 2027-04). Below this, Node is flagged as end-of-life.
 # Coordinate with NODE_MIN_MAJOR in install.sh.
