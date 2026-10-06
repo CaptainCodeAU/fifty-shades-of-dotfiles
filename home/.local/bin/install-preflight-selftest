@@ -508,6 +508,37 @@ a75_expect appears     0 2 "Held pnpm cleanup: 2 applied"
 a75_expect placeholder 0 0 "Kept, not applied"  # the binary-less 34-byte text file does not count
 a75_expect below-floor 0 0 "Kept, not applied"
 
+# --- _apply_npm_guard: every nvm Node version's npm/npx end up guarded (D-20261006-A10) ---
+# A throwaway HOME with a copy of the real npm-guard and a fake nvm Node version.
+ng_home() {   # ng_home <dir> <with-guard:1|0> <with-nvm:1|0>
+    local H=$1; mkdir -p "$H/.local/bin"
+    [[ "$2" == 1 ]] && cp "$REPO/home/.local/bin/npm-guard" "$H/.local/bin/npm-guard"
+    if [[ "$3" == 1 ]]; then
+        local b="$H/.nvm/versions/node/v9.9.9/bin" l="$H/.nvm/versions/node/v9.9.9/lib/node_modules/npm/bin"
+        mkdir -p "$b" "$l"
+        for n in npm npx; do printf '#!/bin/sh\necho REAL\n' > "$l/$n-cli.js"; chmod +x "$l/$n-cli.js"; ln -sfn "../lib/node_modules/npm/bin/$n-cli.js" "$b/$n"; done
+    fi
+}
+ng_drive() {  # ng_drive <home> <dry-run true|false>: print the step's verdict lines
+    HOME="$1" NVM_DIR="$1/.nvm" DRY="$2" bash -c '
+        DRY_RUN=$DRY; step(){ :; }; info(){ echo "INFO $*"; }; success(){ echo "OK $*"; }; warn(){ echo "WARN $*"; }
+        pretty_path(){ echo "$1"; }
+        eval "$(sed -n "/^_apply_npm_guard() {/,/^}/p" "$1")"; _apply_npm_guard' _ "$INSTALL_SH" 2>&1
+}
+ng_expect() {  # ng_expect <label> <must-say> <home> <dry> [<link-must-be: guard|real>]
+    local out t; out=$(ng_drive "$3" "$4")
+    t=$(readlink "$3/.nvm/versions/node/v9.9.9/bin/npm" 2>/dev/null)
+    if [[ "$out" == *"$2"* ]] && { [[ -z "${5:-}" ]] || { [[ "$5" == guard && "$t" == */npm-guard ]] || [[ "$5" == real && "$t" == ../lib/* ]]; }; }; then
+        ok "npm guard step: $1"
+    else bad "npm guard step: $1" "out: $out | npm link: ${t:-none}"; fi
+}
+NG="$WORK/ng"; ng_home "$NG/fresh" 1 1; ng_home "$NG/dry" 1 1; ng_home "$NG/nonvm" 1 0; ng_home "$NG/noguard" 0 1
+ng_expect "dry run says what it would do and changes nothing" "Would run: npm-guard --apply" "$NG/dry" true real
+ng_expect "an unguarded version gets guarded"                  "now refuse on every route"     "$NG/fresh" false guard
+ng_expect "a second run sees it already guarded"               "already guarded"               "$NG/fresh" false guard
+ng_expect "no nvm Node yet: nothing to guard, said so"          "No nvm Node versions yet"      "$NG/nonvm" false
+ng_expect "no npm-guard on disk: warns NOT guarded"             "NOT guarded"                   "$NG/noguard" false real
+
 echo
 echo "  $PASS passed, $FAIL failed"
 (( FAIL == 0 ))

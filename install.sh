@@ -4778,6 +4778,37 @@ setup_vuln_scan() {
     fi
 }
 
+# npm and npx are refused on every route on this machine (D-20261006-A10): point each
+# nvm Node version's bin/npm and bin/npx at npm-guard, which refuses and names the pnpm
+# command. Re-run on every install.sh, because `nvm install` puts nvm's own links back
+# for the version it installs. DOTFILES_ALLOW_NPM=1 stays the escape.
+_apply_npm_guard() {
+    local g="$HOME/.local/bin/npm-guard"
+    step "npm guard (pnpm only)"
+    if [[ ! -x "$g" ]]; then
+        warn "npm-guard is not at $(pretty_path "$g"); npm and npx are NOT guarded."
+        return 0
+    fi
+    if [[ ! -d "${NVM_DIR:-$HOME/.nvm}/versions/node" ]]; then
+        info "No nvm Node versions yet; nothing to guard. Re-run ./install.sh after installing Node."
+        return 0
+    fi
+    if "$g" --status >/dev/null 2>&1; then
+        success "npm and npx are already guarded in every nvm Node version."
+        return 0
+    fi
+    if [[ "$DRY_RUN" == true ]]; then
+        "$g" --status 2>&1 | sed 's/^/  /'
+        info "[dry-run] Would run: npm-guard --apply"
+        return 0
+    fi
+    if "$g" --apply; then
+        success "npm and npx now refuse on every route (DOTFILES_ALLOW_NPM=1 is the escape)."
+    else
+        warn "npm-guard --apply reported a problem; run it by hand: npm-guard --apply"
+    fi
+}
+
 setup_pnpm_audit_hooks() {
     local hooks_dir="$HOME/.config/git/hooks"
     local priv="$HOME/.gitconfig.private"
@@ -4953,6 +4984,10 @@ main() {
     # --- rm reach: plain shells reach the Trash rm; foreign look-alikes named.
     # Must run AFTER stow_home so ~/.local/bin/rm exists for the probe. ---
     _check_rm_reach
+
+    # --- npm guard: every nvm Node version's npm/npx refuse. Must run AFTER
+    # stow_home so ~/.local/bin/npm-guard exists to link to. ---
+    _apply_npm_guard
 
     # --- herdr systemd user service (Linux/WSL): enable the unit stow just
     # placed. Must run AFTER stow_home; refuses to enable over a hand-started
