@@ -87,12 +87,12 @@ class C:
     cyan = staticmethod(lambda s: C._w("36", s))
 
 
-def _run(argv: list[str]) -> str | None:
+def _run(argv: list[str], env: dict | None = None) -> str | None:
     """Best-effort subprocess capture. Never raises, never hangs, never
     reaches a shell (no shell=True) -- so a hijacked npm/python3 shell
     function is never in the path; the real binary always is."""
     try:
-        out = subprocess.run(argv, capture_output=True, text=True, timeout=TIMEOUT_S)
+        out = subprocess.run(argv, capture_output=True, text=True, timeout=TIMEOUT_S, env=env)
     except (OSError, subprocess.TimeoutExpired):
         return None
     return out.stdout.strip() if out.returncode == 0 else None
@@ -292,10 +292,13 @@ def npmrc_registry() -> str | None:
 # (`npm ls -g --depth=0 --json` on this Mac's nvm-managed node): both show
 # up unconditionally. Neither is a "real npm usage" signal on its own.
 NPM_BUNDLED = {"npm", "corepack"}
+# npm-guard refuses npm on every route (D-20261006-A10); this read-only stocktake
+# is a caller that truly needs it, so it says so with the escape.
+NPM_ENV = {**os.environ, "DOTFILES_ALLOW_NPM": "1"}
 
 
 def npm_global_packages(npm_path: str) -> list[str]:
-    out = _run([npm_path, "ls", "-g", "--depth=0", "--json"])
+    out = _run([npm_path, "ls", "-g", "--depth=0", "--json"], env=NPM_ENV)
     if not out:
         return []
     try:
@@ -337,7 +340,7 @@ def assess_node() -> NodeVerdict:
 
     npm_path = shutil.which("npm")
     if npm_path:
-        v.npm_version = _run([npm_path, "-v"])
+        v.npm_version = _run([npm_path, "-v"], env=NPM_ENV)
         v.npm_global_packages = npm_global_packages(npm_path)
 
     v.yarn_present = shutil.which("yarn") is not None

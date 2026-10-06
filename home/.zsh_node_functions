@@ -823,7 +823,10 @@ node_info() {
 
     # Runtime versions
     echo "${info}  Node:     ${ok}$(node --version 2>/dev/null || echo 'not found')${done}"
-    echo "${info}  npm:      ${ok}$(npm --version 2>/dev/null || echo 'not found')${done}"
+    # npm is refused on this machine (npm-guard, D-20261006-A10); show the version
+    # bundled with Node, read through the escape, and say it is refused.
+    local _npmv; _npmv=$(DOTFILES_ALLOW_NPM=1 command npm --version 2>/dev/null)
+    echo "${info}  npm:      ${ok}${_npmv:-not found}${_npmv:+ (bundled with Node; refused by npm-guard, use pnpm)}${done}"
     echo "${info}  pnpm:     ${ok}$(pnpm --version 2>/dev/null || echo 'not found')${done}"
     echo "${info}  bun:      ${ok}$(bun --version 2>/dev/null || echo 'not found')${done}"
     if command -v corepack &>/dev/null; then

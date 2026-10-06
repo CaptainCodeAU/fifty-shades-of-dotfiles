@@ -397,10 +397,12 @@ _pnpm_apply_action() {
             true
             ;;
         npm_global_rm)
+            # The one place install.sh needs npm: removing an npm-installed pnpm.
+            # npm-guard refuses npm everywhere else, so say so (D-20261006-A10).
             if [[ -x "$arg/npm" ]]; then
-                run_cmd env PATH="$arg:$PATH" "$arg/npm" rm -g pnpm
+                run_cmd env DOTFILES_ALLOW_NPM=1 PATH="$arg:$PATH" "$arg/npm" rm -g pnpm
             elif command -v npm &>/dev/null; then
-                run_cmd npm rm -g pnpm
+                run_cmd env DOTFILES_ALLOW_NPM=1 npm rm -g pnpm
             else
                 run_cmd "$SAFE_RM" -rf "$arg/../lib/node_modules/pnpm"
             fi
