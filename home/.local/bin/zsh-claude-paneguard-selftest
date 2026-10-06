@@ -131,9 +131,8 @@ if [[ "$CPG_MODE" == herdr ]]; then
     pass "--append-system-prompt-file PATH"       'claude --append-system-prompt-file /p.md' '[--append-system-prompt-file] [/p.md]'
     pass "--append-system-prompt-file=PATH"       'claude --append-system-prompt-file=/p.md'
     pass "--system-prompt-file PATH"              'claude --system-prompt-file /p.md'
-    pass "alias cb (rt3 fixture argv)"            'cb --via-alias-cb' "[--append-system-prompt-file] [$LP] [--via-alias-cb]"
-    pass "alias cr"                               'cr' '[--resume]'
-    pass "alias cpr"                              'cpr 12' '[--from-pr] [12]'
+    # The cb, cr and cpr alias arms went with those aliases (retired 2026-10-06, cb3407d);
+    # `ci` is the one c alias left, and its refusal is armed above.
     # escapes and routes the function never sees
     pass "command claude (the human escape)"      'command claude' 'STUB_ARGV:'
     pass "sudo claude (its wrapper runs command claude)" 'sudo claude --x' '[--x]'
