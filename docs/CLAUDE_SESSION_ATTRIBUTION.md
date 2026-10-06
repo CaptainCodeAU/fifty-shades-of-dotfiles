@@ -129,12 +129,12 @@ _audit-chain step 3 (prepare-commit-msg only), when a session id is known OR a U
 `~/.claude/settings.json` and nowhere else. That file is loaded by the `c` family of
 launchers and by nothing else on this machine:
 
-| Launcher | Loads `~/.claude/settings.json`? | `CLAUDE_SESSION_ID` | Trailer before the fix |
-|---|---|---|---|
-| `c`, `cb`, `cr`, ... | yes | set | filled |
-| `pj` | no (`--setting-sources project,local` + `settings.project.json`) | unset | **present and EMPTY** |
-| Remote Control bridge session | no | unset | **present and EMPTY** |
-| `claude -p` headless | depends on its own flags | usually unset | **present and EMPTY** |
+| Launcher                                                             | Loads `~/.claude/settings.json`?                                 | `CLAUDE_SESSION_ID` | Trailer before the fix |
+| -------------------------------------------------------------------- | ---------------------------------------------------------------- | ------------------- | ---------------------- |
+| `cb`, `cr`, ... (retired 2026-10-06; `ci` and plain `claude` remain) | yes                                                              | set                 | filled                 |
+| `pj`                                                                 | no (`--setting-sources project,local` + `settings.project.json`) | unset               | **present and EMPTY**  |
+| Remote Control bridge session                                        | no                                                               | unset               | **present and EMPTY**  |
+| `claude -p` headless                                                 | depends on its own flags                                         | usually unset       | **present and EMPTY**  |
 
 An empty trailer is worse than an absent one: the stamp block still fires, because the
 harness-appended `Claude-Session:` URL is harvested, so the commit carries all five keys

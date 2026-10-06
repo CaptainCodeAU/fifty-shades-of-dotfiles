@@ -11,7 +11,7 @@
 # inside the function and their values are never printed.
 #
 # Every variable in the launch chain below is checked against Claude Code's env-var
-# reference and the installed program. Three that Claude Code
+# reference and the installed program (docs/CLAUDE_LAUNCH_ENV.md). Three that Claude Code
 # no longer reads were removed on 2026-10-06, each after a live A/B test in a herdr pane:
 # CLAUDE_CODE_HIDE_ACCOUNT_INFO, ENABLE_EXPERIMENTAL_MCP_CLI and ENABLE_TOOL_SEARCH=1.
 #

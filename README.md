@@ -47,11 +47,11 @@ On a machine running these dotfiles, `rm` doesn't delete. It moves things to the
 
 Most "safe rm" setups are a shell alias, which only covers what you type. Every script, every `make clean`, every `xargs rm` sails straight past and deletes for real. When I tested mine, `xargs rm` destroyed a test file while the "protection" was fully installed. So this one goes further:
 
-| Piece | Covers |
-| --- | --- |
-| `rm()` shell function | what you type |
+| Piece                                                       | Covers                                               |
+| ----------------------------------------------------------- | ---------------------------------------------------- |
+| `rm()` shell function                                       | what you type                                        |
 | `~/.local/bin/rm`, a real command ahead of `/bin` on `PATH` | scripts, `xargs`, `find -exec`, `make`, agent shells |
-| `sudo()` wrapper | `sudo rm`, re-run as you so it lands in *your* Trash |
+| `sudo()` wrapper                                            | `sudo rm`, re-run as you so it lands in _your_ Trash |
 
 It still can't reach anything that calls `/bin/rm` by its full path, or runs with its own `PATH`, like cron jobs, launchd and Docker.
 
@@ -100,14 +100,14 @@ It asks before most steps. A few you'll want to know about:
 
 On a machine without my private repos, the install finishes with a red "pj is not ready" banner and exit code 3. That's expected. See [Claude Code](#claude-code).
 
-| Command | Does |
-| --- | --- |
-| `./install.sh --check` | checks everything, changes nothing |
-| `./install.sh --update` | pulls and restows. If a file is in the way it stops before removing any link, and if linking fails it puts the old links back |
-| `./install.sh --stow-only` | just links the files, and registers any new Claude hooks |
-| `./install.sh --force` | adopts your existing files into the repo with `stow --adopt`, overwriting the repo's copies. Check `git diff` afterwards. |
-| `./install.sh --uninstall` | removes the symlinks only. Tools stay installed and nothing comes back from `~/dotfiles-backup/`. |
-| `./install.sh --dry-run` | shows what it would do (combine with anything) |
+| Command                    | Does                                                                                                                          |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `./install.sh --check`     | checks everything, changes nothing                                                                                            |
+| `./install.sh --update`    | pulls and restows. If a file is in the way it stops before removing any link, and if linking fails it puts the old links back |
+| `./install.sh --stow-only` | just links the files, and registers any new Claude hooks                                                                      |
+| `./install.sh --force`     | adopts your existing files into the repo with `stow --adopt`, overwriting the repo's copies. Check `git diff` afterwards.     |
+| `./install.sh --uninstall` | removes the symlinks only. Tools stay installed and nothing comes back from `~/dotfiles-backup/`.                             |
+| `./install.sh --dry-run`   | shows what it would do (combine with anything)                                                                                |
 
 If your links ever vanish (an interrupted install, say), `sh ~/.local/state/dotfiles/links/restore` puts the last good set back from any terminal. It needs none of the dotfiles, moves anything in the way aside, and deletes nothing. `sh ~/.local/state/dotfiles/links/restore check` just reports. On macOS a small watcher also tells you within seconds when links go missing.
 
@@ -119,11 +119,11 @@ Rather wire it up by hand? Every file in `home/` goes to the same place under `~
 
 Secrets don't belong in this repo. Anything personal goes in files that stay on your machine.
 
-| File | For |
-| --- | --- |
-| `~/.zshrc.private` | aliases, `PATH` additions, anything machine-specific. Read last, so it wins. |
+| File                     | For                                                                                         |
+| ------------------------ | ------------------------------------------------------------------------------------------- |
+| `~/.zshrc.private`       | aliases, `PATH` additions, anything machine-specific. Read last, so it wins.                |
 | `~/.zshrc.private.early` | the few switches startup reads before the late file loads, like `_ONBOARDING_COMPLETE=true` |
-| `~/.gitconfig.private` | your git name and email, plus account routing |
+| `~/.gitconfig.private`   | your git name and email, plus account routing                                               |
 
 `.gitignore_global` keeps `~/.zshrc.private` and `~/.gitconfig.private` out of commits.
 
@@ -221,7 +221,7 @@ In your shell, `npm` and `yarn` refuse and tell you the pnpm or bun command, and
 
 The dotfiles also carry some wiring for Claude Code. Most of it is built around my setup, so read it before you lean on it.
 
-- **Launchers.** `cb`, `cr` (resume), `ci`, `ct`, `cpr`, `cd_` and `cskip` each start Claude Code with a throwaway SSH agent that holds my GitHub key (`~/.ssh/captaincodeau`) for that session only. Without that key file they start with no agent. All of them except `cb` skip Claude Code's permission prompts, and most point at a system prompt file from my private repo. Read `home/.zsh_claude_launch` first. `c` on its own starts nothing and prints a menu of my other launchers.
+- **Launchers.** `home/.zsh_claude_launch` holds the one launch function. It starts Claude Code with a throwaway SSH agent that holds my GitHub key (`~/.ssh/captaincodeau`) for that session only, and sets a few environment variables for the `claude` process alone. Without that key file it starts with no agent. My `engage` launcher (a separate repo) and the `ci` alias (piped, non-interactive, skips permission prompts) both go through it. `c` on its own starts nothing and prints a menu of my other launchers. The other `c` aliases were retired on 2026-10-06. [`docs/CLAUDE_LAUNCH_ENV.md`](docs/CLAUDE_LAUNCH_ENV.md) lists every variable the launch sets and why.
 - **Hooks.** `home/.claude/hooks/` has guards that block the common ways an agent's Bash commands could permanently delete files or print a secret into its transcript. When jq is installed and `~/.claude/settings.json` exists, the installer registers them there without asking, along with a few of my personal hooks. The list is in `settings/claude/hooks.json`, and [`docs/CLAUDE_HOOKS.md`](docs/CLAUDE_HOOKS.md) explains how it works.
 - **Commit attribution.** Turn on the global git hooks (the installer offers them as the pnpm-audit pre-push hook) and a commit made inside a Claude session gets stamped with the session it came from. See [`docs/CLAUDE_SESSION_ATTRIBUTION.md`](docs/CLAUDE_SESSION_ATTRIBUTION.md).
 - **Language servers.** `uv tool install pyright` and `pnpm add -g typescript-language-server typescript`, then enable the `pyright-lsp` and `typescript-lsp` plugins in Claude Code. The installer does neither.
