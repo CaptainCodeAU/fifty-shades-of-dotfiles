@@ -317,6 +317,15 @@ source "$ZSH/oh-my-zsh.sh"
 # These commands often rely on the completion system already being initialized.
 command -v uv >/dev/null && eval "$(uv generate-shell-completion zsh)"
 [ -s "$BUN_INSTALL/_bun" ] && source "$BUN_INSTALL/_bun"
+# Rebuild pnpm's completion when pnpm itself is newer than it. Only install.sh
+# used to write it, so a pnpm_update left the old one in place (on 2026-10-06 it
+# still dated from 18 May, pnpm 11, and missed the `pn` alias pnpm 12 completes).
+# `-nt` is a stat, so an ordinary start costs nothing; the rebuild runs once after
+# an update, into a side file first so a failed run never leaves _pnpm empty.
+if [[ -x "$PNPM_HOME/bin/pnpm" && ( ! -s "$PNPM_HOME/_pnpm" || "$PNPM_HOME/bin/pnpm" -nt "$PNPM_HOME/_pnpm" ) ]]; then
+    command pnpm completion zsh >| "$PNPM_HOME/_pnpm.new" 2>/dev/null \
+        && [[ -s "$PNPM_HOME/_pnpm.new" ]] && command mv -f "$PNPM_HOME/_pnpm.new" "$PNPM_HOME/_pnpm"
+fi
 [ -s "$PNPM_HOME/_pnpm" ] && source "$PNPM_HOME/_pnpm"
 
 # --- uv supply-chain release-age cooldown (parity with pnpm + bun) ---
