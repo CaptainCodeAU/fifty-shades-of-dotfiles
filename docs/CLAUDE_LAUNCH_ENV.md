@@ -66,8 +66,43 @@ reported to him, and D-20261006-A04: one commit per fix, after its test.
   (`--setting-sources project,local`), so test with a plain `claude` in a pane through the
   logged control route: prefix both the herdr command and the in-pane launch with
   `PJ_WORKERS_CONTROL=<item id>`.
-- **This repo's hook guards:** a plain `claude` here runs them; an engage session runs
-  engage's own copies (`~/CODE/CaptainCodeAU/engage/hooks/`), which follow by a parity test.
+- **This repo's hook guards:** a plain `claude` here runs them. An engage session runs
+  engage's own copy of the worker guard and the shell scanner
+  (`~/CODE/CaptainCodeAU/engage/hooks/`, kept equal by a parity test), but the same stowed
+  `~/.claude/hooks/` files for the other guards, such as `enforce-secret-probe.sh`.
 - An arm needs a reading that would differ if the change worked. Where none exists (the
   feedback survey appears at random; voice state shows nowhere read-only), the test is
   reported as void rather than passed.
+
+## User settings changed the same day (`~/.claude/settings.json`, dot-claude repo)
+
+These reach plain `claude` and `ci`, not engage sessions (engage loads
+`--setting-sources project,local` plus its own `--settings` file; engage's copies of these
+keys are with engage-main, pending Gavin). Each was a separate commit after a plain-claude
+A/B in a herdr pane.
+
+| Change | Reading before → after |
+|---|---|
+| `modelSettings` `claude-opus-5-5` `effortLevel: high` (Opus 5.5 ignores a top-level `effortLevel`) | effort medium → high |
+| `voiceEnabled` → `voice.enabled` (deprecated key) | no change; voice state has no read-only surface (void) |
+| `leftArrowOpensAgents` dropped (global-config key, read only from `~/.claude.json`) | no change |
+| empty `mcpServers` dropped (not a settings key) | no change |
+| `timeFormat: 12-hour`, `timeZone: Australia/Melbourne` | "done 2:56 pm" → "done 2:55 pm": the Mac's locale already matched; pins it for other machines |
+| `maxProseWidth: 100` | widest prose line 184 → 102 columns |
+| `prefersReducedMotion: true`, `spinnerTipsEnabled: false` | spinner 6 cycling glyphs → 1 static; tips void |
+| `footerLinksRegexes` for W-/D- IDs → dot-claude code search | 0 → 2 footer badges |
+| `fallbackModel: ["claude-opus-5", "sonnet"]` | clean start both arms; the switch needs an overload (void) |
+| `sandbox.failIfUnavailable: true` | clean start both arms; the refusal needs a broken sandbox (void) |
+
+LifeOS keeps its own keys in this file (`notifications`, `max_tokens`, `principal` and
+others). Claude Code ignores them; LifeOS's notification system reads `notifications`.
+
+## Guard fixes the same day
+
+- `conv-shscan.awk`: `2>&1`, `>&2` and `>&-` are descriptor duplication, not a write to a
+  file named `1` (W-20261006-A45, `3ec9555`).
+- `conv-shscan.awk`: `command -v` and `command -V` are lookups, not launches (engage #1090,
+  `9117c64`).
+- `enforce-secret-probe.sh`: a jq filter selecting the key `.env` is not a `.env` file read
+  (W-20261006-A47, `1258ce1`; report in
+  `~/CODE/CaptainCodeAU/CaptainCodeAU-isolinear/workbench/dotfiles-secret-guard/2026-10-06/`).
