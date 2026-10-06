@@ -1,0 +1,177 @@
+#!/bin/sh
+# npm-guard -- npm and npx are not used on this machine; pnpm is.
+#
+# The npm()/npx() functions in home/.zshrc only reach an interactive zsh and a
+# Claude Bash call. Measured 2026-10-06: `sh -c`, `bash -c`, a #!/bin/sh script, a
+# Makefile, a git hook, a pnpm-run script, `env npm`, `command npm` and an absolute
+# path all ran the real npm, exit 0. nvm's bin is FIRST on PATH, so the guard lives
+# there: `npm-guard --apply` points each nvm Node version's bin/npm and bin/npx at
+# this file, and then every one of those routes reaches it.
+# Gavin, 2026-10-06: "npm must be replaced with pnpm!" Ruling D-20261006-A10.
+#
+# Usage:
+#   npm ... / npx ...          (through nvm's links) refuse and name the pnpm command
+#   npm-guard --apply          link every nvm version's npm/npx here (idempotent)
+#   npm-guard --status         one line per version: guarded / NOT guarded
+#   npm-guard --undo           restore nvm's own links (../lib/node_modules/npm/bin/*-cli.js)
+#   npm-guard --selftest       prove every arm against a scratch nvm dir
+#
+# Escape: DOTFILES_ALLOW_NPM=1 runs the real npm/npx. It is the same variable that
+# turns off the .zshrc npm functions (docs/TOOLCHAIN_TAKEOVER_CONSENT.md): a tool
+# that truly needs npm says so, out loud, at the call site.
+#
+# Exit: the guard 1 (refused); --apply/--undo 0 done, 2 refused; --status 0 every
+# version guarded, 1 some not, 2 could not measure.
+
+set -u
+NVM_ROOT=${NVM_DIR:-$HOME/.nvm}
+
+# The path this file was invoked as; for a call through nvm's link that is
+# .../versions/node/vX/bin/npm, whose ../lib holds the real npm.
+self_name=${0##*/}
+
+redact() {  # print the args, hiding any that look like a credential
+    out=""
+    for a in "$@"; do
+        case "$a" in
+            *[Tt][Oo][Kk][Ee][Nn]*|*_auth*|*[Pp][Aa][Ss][Ss][Ww]*|*://*:*@*) a="<hidden>" ;;
+        esac
+        out="${out:+$out }$a"
+    done
+    printf '%s' "$out"
+}
+
+guard() {
+    if [ "${DOTFILES_ALLOW_NPM:-}" = 1 ]; then
+        bindir=$(cd "$(dirname "$0")" && pwd)
+        exec "$bindir/node" "$bindir/../lib/node_modules/npm/bin/$self_name-cli.js" "$@"
+    fi
+    shown=$(redact "$@")
+    case "$self_name" in
+        npx) alt="pnpm dlx${shown:+ $shown}" ;;
+        *)
+            case "${1:-}" in
+                ci) alt="pnpm install --frozen-lockfile" ;;
+                i|install|add)
+                    shift
+                    rest=$(redact "$@")
+                    if [ -n "$rest" ]; then alt="pnpm add $rest"; else alt="pnpm install"; fi ;;
+                uninstall|remove|rm|un) shift; alt="pnpm remove $(redact "$@")" ;;
+                exec) shift; alt="pnpm dlx $(redact "$@")" ;;
+                "") alt="pnpm" ;;
+                *) alt="pnpm $shown" ;;
+            esac ;;
+    esac
+    printf 'npm-guard: %s is not used on this machine; use pnpm.\n' "$self_name" >&2
+    printf '  Instead of: %s%s\n' "$self_name" "${shown:+ $shown}" >&2
+    printf '  Run:        %s\n' "$alt" >&2
+    printf '  (a tool that truly needs npm: DOTFILES_ALLOW_NPM=1 %s ...)\n' "$self_name" >&2
+    exit 1
+}
+
+guard_path() {  # absolute path of this file, for the links to point at
+    case "$0" in /*) p=$0 ;; *) p="$(pwd)/$0" ;; esac
+    # Prefer the stable ~/.local/bin name when this file is reached through it.
+    if [ -e "$HOME/.local/bin/npm-guard" ]; then p="$HOME/.local/bin/npm-guard"; fi
+    printf '%s' "$p"
+}
+
+for_each_version() {  # call $1 <version-bin-dir> for every nvm Node version
+    found=0
+    for d in "$NVM_ROOT"/versions/node/*/bin; do
+        [ -d "$d" ] || continue
+        found=1
+        "$1" "$d"
+    done
+    [ "$found" = 1 ] || { echo "npm-guard: no nvm Node versions under $NVM_ROOT/versions/node" >&2; return 2; }
+}
+
+apply_one() {
+    v=$(basename "$(dirname "$1")")
+    if [ ! -f "$1/../lib/node_modules/npm/bin/npm-cli.js" ]; then
+        echo "  $v: no bundled npm, skipped"; return 0
+    fi
+    for n in npm npx; do ln -sfn "$G" "$1/$n" || { echo "  $v: could not link $n" >&2; RC=2; }; done
+    echo "  $v: guarded"
+}
+undo_one() {
+    v=$(basename "$(dirname "$1")")
+    [ -f "$1/../lib/node_modules/npm/bin/npm-cli.js" ] || { echo "  $v: no bundled npm, skipped"; return 0; }
+    for n in npm npx; do ln -sfn "../lib/node_modules/npm/bin/$n-cli.js" "$1/$n" || RC=2; done
+    echo "  $v: nvm's own npm restored"
+}
+status_one() {
+    v=$(basename "$(dirname "$1")")
+    [ -f "$1/../lib/node_modules/npm/bin/npm-cli.js" ] || { echo "  $v: no bundled npm"; return 0; }
+    ok=1
+    for n in npm npx; do
+        t=$(readlink "$1/$n" 2>/dev/null) || t=""
+        case "$t" in */npm-guard) ;; *) ok=0 ;; esac
+    done
+    if [ "$ok" = 1 ]; then echo "  $v: guarded"; else echo "  $v: NOT guarded"; RC=1; fi
+}
+
+selftest() {
+    pass=0; fail=0
+    t=$(mktemp -d "${TMPDIR:-/tmp}/npm-guard-selftest.XXXXXX") \
+        || { echo "npm-guard: mktemp failed -- INVALID TRIAL, not a pass" >&2; exit 2; }
+    me=$(cd "$(dirname "$0")" && pwd)/${0##*/}
+    mkv() {  # a fake nvm Node version: node runs its script with sh; npm-cli.js says REAL
+        b="$t/nvm/versions/node/$1/bin"; l="$t/nvm/versions/node/$1/lib/node_modules/npm/bin"
+        mkdir -p "$b" "$l"
+        printf '#!/bin/sh\nexec sh "$@"\n' > "$b/node"; chmod +x "$b/node"
+        for n in npm npx; do  # executable with a #! line, like the real npm-cli.js
+            printf '#!/bin/sh\necho "REAL %s $*"\n' "$n" > "$l/$n-cli.js"; chmod +x "$l/$n-cli.js"
+            ln -sfn "../lib/node_modules/npm/bin/$n-cli.js" "$b/$n"
+        done
+    }
+    mkv v1.0.0; mkv v2.0.0; mkdir -p "$t/nvm/versions/node/v3.0.0/bin"   # v3: no bundled npm
+    arm() {  # arm <label> <want-rc> <needle|""> <command...>
+        [ $# -ge 3 ] || return 2; label=$1; want=$2; needle=$3; shift 3
+        o=$("$@" 2>&1); r=$?
+        if [ "$r" = "$want" ] && { [ -z "$needle" ] || printf '%s' "$o" | grep -qF -- "$needle"; }; then
+            echo "  PASS  $label"; pass=$((pass + 1))
+        else
+            echo "  FAIL  $label (rc=$r, want $want)"; printf '%s\n' "$o" | sed 's/^/        /'; fail=$((fail + 1))
+        fi
+    }
+    B1="$t/nvm/versions/node/v1.0.0/bin"
+    export NVM_DIR="$t/nvm" HOME="$t/home"; mkdir -p "$HOME/.local/bin"; cp "$me" "$HOME/.local/bin/npm-guard"
+    G2="$HOME/.local/bin/npm-guard"
+    arm "control: before --apply, sh -c npm is the real npm" 0 "REAL npm" env PATH="$B1:/usr/bin:/bin" sh -c 'npm --version'
+    arm "status before: NOT guarded" 1 "v1.0.0: NOT guarded" "$G2" --status
+    arm "--apply guards v1 and v2, skips v3 by name" 0 "v3.0.0: no bundled npm, skipped" "$G2" --apply
+    arm "status after: every version guarded" 0 "v2.0.0: guarded" "$G2" --status
+    arm "--apply again is a no-op that still passes" 0 "v1.0.0: guarded" "$G2" --apply
+    arm "sh -c npm is refused" 1 "npm is not used on this machine" env PATH="$B1:/usr/bin:/bin" sh -c 'npm --version'
+    arm "a #!/bin/sh script is refused" 1 "use pnpm" env PATH="$B1:/usr/bin:/bin" sh -c 'printf "#!/bin/sh\nnpm run build\n" > "$TMPDIR/s.sh"; sh "$TMPDIR/s.sh"'
+    arm "env npm is refused" 1 "use pnpm" env PATH="$B1:/usr/bin:/bin" env npm ls
+    arm "npx X names pnpm dlx X" 1 "Run:        pnpm dlx cowsay hi" env PATH="$B1:/usr/bin:/bin" npx cowsay hi
+    arm "npm install X names pnpm add X" 1 "Run:        pnpm add left-pad" env PATH="$B1:/usr/bin:/bin" npm install left-pad
+    arm "bare npm install names pnpm install" 1 "Run:        pnpm install" env PATH="$B1:/usr/bin:/bin" npm install
+    arm "npm ci names a frozen install" 1 "pnpm install --frozen-lockfile" env PATH="$B1:/usr/bin:/bin" npm ci
+    arm "a token-shaped argument is hidden" 1 "<hidden>" env PATH="$B1:/usr/bin:/bin" npm config set //r/:_authToken=abc123
+    o=$(env PATH="$B1:/usr/bin:/bin" npm config set //r/:_authToken=abc123 2>&1)
+    if printf '%s' "$o" | grep -q abc123; then echo "  FAIL  the token value never appears"; fail=$((fail + 1)); else echo "  PASS  the token value never appears"; pass=$((pass + 1)); fi
+    arm "DOTFILES_ALLOW_NPM=1 runs the real npm" 0 "REAL npm --version" env PATH="$B1:/usr/bin:/bin" DOTFILES_ALLOW_NPM=1 npm --version
+    arm "DOTFILES_ALLOW_NPM=1 runs the real npx" 0 "REAL npx cowsay" env PATH="$B1:/usr/bin:/bin" DOTFILES_ALLOW_NPM=1 npx cowsay
+    arm "--undo restores nvm's own links" 0 "v1.0.0: nvm's own npm restored" "$G2" --undo
+    arm "after --undo, sh -c npm is the real npm again" 0 "REAL npm" env PATH="$B1:/usr/bin:/bin" sh -c 'npm --version'
+    arm "status after --undo: NOT guarded" 1 "NOT guarded" "$G2" --status
+    arm "no nvm versions: --status cannot measure (2)" 2 "no nvm Node versions" env NVM_DIR="$t/empty" "$G2" --status
+    echo; echo "  $pass passed, $fail failed"
+    [ "$fail" = 0 ]
+}
+
+RC=0
+case "$self_name" in
+    npm|npx) guard "$@" ;;
+esac
+case "${1:-}" in
+    --apply)    G=$(guard_path); for_each_version apply_one || exit 2; exit "$RC" ;;
+    --undo)     for_each_version undo_one || exit 2; exit "$RC" ;;
+    --status)   for_each_version status_one || exit 2; exit "$RC" ;;
+    --selftest) selftest ;;
+    -h|--help)  sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//' ;;
+    *)          echo "npm-guard: run as npm/npx through nvm's links, or --apply/--status/--undo/--selftest" >&2; exit 2 ;;
+esac

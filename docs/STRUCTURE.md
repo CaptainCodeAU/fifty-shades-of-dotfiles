@@ -238,6 +238,7 @@ Small instruments, most of them run at session start or at commit.
 | `ccw-watch`              | Session-start check that transcript capture is still happening (it once stopped for ten days unnoticed)       |
 | `bun-cooldown-check`     | Is a global bun package stuck behind the `minimumReleaseAge` supply-chain cooldown?                           |
 | `env-python-floor-check` | Proves every `#!/usr/bin/env python3` tool still runs on the oldest python3 that name can reach (macOS's 3.9) |
+| `npm-guard`              | nvm's npm and npx point here: every route is refused and told the pnpm command                                |
 | `pnpm-config-check`      | Does pnpm honour every key in the global `config.yaml`? pnpm 12 drops some silently; it names each one        |
 | `shift-lint`             | Finds every `shift N` (N >= 2) that a value flag given last can hang; runs on staged shell files at commit    |
 | `selftest-whole-read`    | Proves every bash selftest reads itself whole before running, so an edit made mid-run cannot change it        |
