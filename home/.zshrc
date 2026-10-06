@@ -1087,7 +1087,7 @@ claude() {
         esac
     done
     case "${1-}" in
-        agents|attach|auth|auto-mode|doctor|gateway|import|install|logs|mcp|plugin|plugins|project|respawn|rm|setup-token|stop|kill|ultrareview|update|upgrade)
+        agents|attach|auth|auto-mode|doctor|gateway|import|install|logs|mcp|plugin|plugins|project|purge|respawn|rm|setup-token|stop|kill|ultrareview|update|upgrade)
             command claude "$@"; return ;;
     esac
     local __cpg_log="${CONV_HOOK_LOG:-${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/hooks-security.log}"
