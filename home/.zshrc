@@ -260,6 +260,10 @@ fi
 # intentional given this repo's posture, but worth knowing.
 export PNPM_CONFIG_MINIMUM_RELEASE_AGE="4320"
 export PNPM_CONFIG_TRUST_POLICY="no-downgrade"
+# blockExoticSubdeps is IGNORED in the global config.yaml by pnpm 12 (a global
+# `false` still blocks, a project's `false` wins over a global `true`); the env
+# var is the pin that outranks a project (measured 2026-10-06, D-20261006-A02).
+export PNPM_CONFIG_BLOCK_EXOTIC_SUBDEPS="true"
 
 
 # ==============================================================================

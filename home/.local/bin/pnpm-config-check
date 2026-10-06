@@ -1,0 +1,144 @@
+#!/usr/bin/env bash
+# pnpm-config-check -- does pnpm actually honour every key in the global config.yaml?
+#
+# pnpm 12 silently drops some keys from the global config.yaml (measured
+# 2026-10-06 on 12.3.4, 12.6.0 and 12.9.0: blockExoticSubdeps,
+# supportedArchitectures, python, cargo). pnpm 11 warned; pnpm 12 says nothing,
+# and `pnpm --version` exits 0. So a hardening key can sit in the stowed file for
+# weeks doing nothing (D-20260919-A08 did). Ruling D-20261006-A02.
+#
+# THE SIGNAL: a key pnpm ignores in this file reads back as `undefined` from
+# `pnpm config get`; a key it honours reads back its value. That separated the
+# two sets on every key measured (5 proven honoured by behaviour, 2 proven
+# ignored by behaviour). Read-back is checked with EVERY PNPM_CONFIG_* /
+# pnpm_config_* variable removed, because an env value outranks the file and
+# would make an ignored key look honoured.
+#
+# Controls, both required or the run is INVALID (exit 2), never a pass:
+#   - a nonsense key must read `undefined` (else the instrument cannot see a miss)
+#   - at least one real key must read back a value (else nothing was read at all)
+#
+# Usage: pnpm-config-check [--file <config.yaml>] [--quiet]
+#        pnpm-config-check --selftest
+# Exit:  0 every key honoured · 1 some key ignored (named) · 2 INVALID / refused
+
+set -uo pipefail
+
+die2() { echo "pnpm-config-check: $* -- INVALID, not a pass" >&2; exit 2; }
+
+default_file() {
+    if [[ "$(uname -s)" == Darwin && -z "${XDG_CONFIG_HOME:-}" ]]; then
+        echo "$HOME/Library/Preferences/pnpm/config.yaml"
+    else
+        echo "${XDG_CONFIG_HOME:-$HOME/.config}/pnpm/config.yaml"
+    fi
+}
+
+# Run the real pnpm with no PNPM_CONFIG_* in the environment, from an empty
+# directory (so no project pnpm-workspace.yaml can answer instead of the file).
+# $1 = XDG_CONFIG_HOME to use ("" = the caller's own), $2 = scratch cwd, rest = args.
+clean_pnpm() {
+    [ $# -ge 2 ] || return 2; local xdg=$1 cwd=$2; shift 2
+    local -a keep=(HOME="$HOME" PATH="$PATH" TMPDIR="${TMPDIR:-/tmp}")
+    [[ -n "${XDG_RUNTIME_DIR:-}" ]] && keep+=(XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR")
+    if [[ -n "$xdg" ]]; then keep+=(XDG_CONFIG_HOME="$xdg")
+    elif [[ -n "${XDG_CONFIG_HOME:-}" ]]; then keep+=(XDG_CONFIG_HOME="$XDG_CONFIG_HOME"); fi
+    (builtin cd "$cwd" && env -i "${keep[@]}" "$PNPM_BIN" "$@")
+}
+
+check() {
+    local file="" quiet=0
+    while (( $# )); do
+        case "$1" in
+            --file) [[ $# -ge 2 ]] || die2 "--file needs a path"; file=$2; shift 2 ;;
+            --quiet) quiet=1; shift ;;
+            *) die2 "unknown argument: $1" ;;
+        esac
+    done
+
+    PNPM_BIN=$(type -P pnpm) || die2 "pnpm not found on PATH"
+    local work xdg=""
+    work=$(mktemp -d "${TMPDIR:-/tmp}/pnpm-config-check.XXXXXX") || die2 "mktemp failed"
+    if [[ -n "$file" ]]; then
+        [[ -r "$file" ]] || die2 "cannot read $file"
+        mkdir -p "$work/xdg/pnpm" && cp "$file" "$work/xdg/pnpm/config.yaml" || die2 "cannot stage $file"
+        xdg="$work/xdg"
+    else
+        file=$(default_file)
+        [[ -r "$file" ]] || die2 "cannot read $file (the file pnpm reads on this machine)"
+    fi
+    mkdir -p "$work/cwd" || die2 "cannot make $work/cwd"
+
+    local -a keys=()
+    local line
+    while IFS= read -r line; do keys+=("$line"); done \
+        < <(grep -oE '^[A-Za-z][A-Za-z0-9]*:' "$file" | tr -d ':')   # no mapfile: macOS bash 3.2
+    (( ${#keys[@]} )) || die2 "no top-level keys found in $file"
+
+    local ctl
+    ctl=$(clean_pnpm "$xdg" "$work/cwd" config get pnpmConfigCheckBogusKey 2>&1) \
+        || die2 "pnpm config get failed: $ctl"
+    [[ "$ctl" == undefined ]] || die2 "control: a nonsense key read back '$ctl', not undefined"
+
+    local k v honoured=0 ignored=0
+    local -a bad=()
+    for k in "${keys[@]}"; do
+        v=$(clean_pnpm "$xdg" "$work/cwd" config get "$k" 2>&1) || die2 "pnpm config get $k failed: $v"
+        if [[ "$v" == undefined ]]; then
+            bad+=("$k"); ignored=$((ignored + 1))
+        else
+            honoured=$((honoured + 1))
+        fi
+    done
+    (( honoured > 0 )) || die2 "control: none of ${#keys[@]} keys read back, so the file was not read"
+
+    local ver; ver=$(clean_pnpm "$xdg" "$work/cwd" --version 2>/dev/null)
+    if (( ignored )); then
+        echo "pnpm-config-check: pnpm ${ver:-?} IGNORES ${ignored} of ${#keys[@]} keys in $file:" >&2
+        printf '  %s\n' "${bad[@]}" >&2
+        echo "  (each reads back undefined; pin it per project or via PNPM_CONFIG_*, see D-20261006-A02)" >&2
+        return 1
+    fi
+    (( quiet )) || echo "pnpm-config-check: pnpm ${ver:-?} honours all ${#keys[@]} keys in $file"
+    return 0
+}
+
+selftest() {
+    local self pass=0 fail=0 t rc out
+    self=$(command -v "$0" 2>/dev/null || echo "$0")
+    t=$(mktemp -d "${TMPDIR:-/tmp}/pnpm-config-check-selftest.XXXXXX") \
+        || { echo "pnpm-config-check: mktemp failed -- INVALID TRIAL, not a pass" >&2; exit 2; }
+    type -P pnpm >/dev/null || { echo "pnpm-config-check: pnpm not on PATH -- INVALID TRIAL, not a pass" >&2; exit 2; }
+
+    arm() { # $1 label, $2 expected rc, $3 grep that must appear in output ("" = none), rest = command
+        [ $# -ge 3 ] || return 2; local label=$1 want=$2 needle=$3; shift 3
+        out=$("$@" 2>&1); rc=$?
+        if [[ $rc -eq $want && ( -z "$needle" || "$out" == *"$needle"* ) ]]; then
+            echo "  PASS  $label"; pass=$((pass + 1))
+        else
+            echo "  FAIL  $label (rc=$rc, want $want)"; printf '        %s\n' "$out"; fail=$((fail + 1))
+        fi
+    }
+
+    printf 'minimumReleaseAge: 4320\nengineStrict: true\n' > "$t/clean.yaml"
+    printf 'minimumReleaseAge: 4320\nblockExoticSubdeps: true\n' > "$t/ignored.yaml"
+    printf '# only a comment\n' > "$t/empty.yaml"
+
+    arm "honoured keys pass" 0 "honours all 2 keys" "$self" --file "$t/clean.yaml"
+    arm "an ignored key fails and is named" 1 "blockExoticSubdeps" "$self" --file "$t/ignored.yaml"
+    arm "an env value does not mask an ignored key" 1 "blockExoticSubdeps" \
+        env PNPM_CONFIG_BLOCK_EXOTIC_SUBDEPS=true "$self" --file "$t/ignored.yaml"
+    arm "no keys is INVALID, not a pass" 2 "INVALID" "$self" --file "$t/empty.yaml"
+    arm "unreadable file is INVALID" 2 "INVALID" "$self" --file "$t/missing.yaml"
+    arm "no pnpm on PATH is INVALID" 2 "INVALID" env PATH=/usr/bin:/bin "$self" --file "$t/clean.yaml"
+
+    echo
+    echo "  $pass passed, $fail failed"
+    (( fail == 0 ))
+}
+
+case "${1:-}" in
+    --selftest) selftest ;;
+    -h|--help) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//' ;;
+    *) check "$@" ;;
+esac

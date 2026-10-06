@@ -815,3 +815,36 @@ zsh-node-functions-selftest   # 31 checks; replays 6 Oct (12.6.0, eligible 12.8.
 
 Not yet measured: a real named `self-update`. The first one is the 12.9.1 update after it clears the
 cooldown at 7:48 AM Wed 7 Oct; it should print `Updating pnpm 12.9.0 -> 12.9.1`.
+
+### 7.4 Keys pnpm 12 ignores in the global config, and `pmOnFail` (2026-10-06, W-20261006-A33, A42)
+
+**pnpm 12 silently ignores some keys in the global `config.yaml`.** Measured on 12.3.4, 12.6.0 and
+12.9.0 against a scratch copy, with the `PNPM_CONFIG_*` variables removed:
+
+| Key | Evidence it is ignored globally | What we do now |
+| --- | ------------------------------- | -------------- |
+| `supportedArchitectures` | a global `os: [linux]` still installed `@esbuild/darwin-arm64`; the same pin in `pnpm-workspace.yaml` installed linux-x64 | removed; the default (`current`) is what we wanted |
+| `python.enabled`, `cargo.enabled` | read back `undefined`; 11.1.2 warns they "cannot be set in the global config file" | removed; the defaults (`false`) are what we wanted |
+| `blockExoticSubdeps` | a global `false` still blocks; a project's `false` wins over a global `true` | pinned by `PNPM_CONFIG_BLOCK_EXOTIC_SUBDEPS=true` in `home/.zshrc`, which outranks a project |
+
+So the 7.1 table's `supportedArchitectures`, `python.enabled` and `cargo.enabled` rows, and 7's
+"read-back gap, not a removed key" for `blockExoticSubdeps`, were wrong: the original arms were
+project pins, never the global file. **`undefined` from `pnpm config get` is the tell:** every key
+proven honoured by behaviour reads back its value, every key proven ignored reads `undefined`.
+
+```bash
+pnpm-config-check            # exit 0 = every key honoured; 1 = names each ignored key; 2 = INVALID
+pnpm-config-check --selftest # 6 arms, including "an env value does not mask an ignored key"
+```
+
+**`pmOnFail: warn` is set globally (Gavin's pick).** pnpm 12.9.0 honours it in the global file (the
+old note saying pnpm rejects it there was pnpm 11). Unset, a project pinned to `pnpm@11.1.2` downloaded
+and ran 11.1.2, which carries 17 advisories, ignores six of our keys and skips `pnpm_update`'s cooldown,
+deny list and floor. With `warn`, it runs the machine's pnpm and prints one line
+(`This project is configured to use 11.1.2 of pnpm`). Measured in a scratch project: 12.9.0, exit 0,
+no lockfile written. It is NOT exported as `PNPM_CONFIG_PM_ON_FAIL`, because an env value outranks a
+project's own `pmOnFail`.
+
+**`updateNotifier: false`.** pnpm's own "Update available" notice ignores `minimumReleaseAge` and
+points at a bare `self-update`. Measured with a fresh state dir: the notice printed once without the
+key and not at all with it. The welcome banner reports updates with the cooldown applied.
