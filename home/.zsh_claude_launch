@@ -1,14 +1,19 @@
 # ~/.zsh_claude_launch -- the shared Claude Code launch function, __claude_launch.
 #
-# Sourced by ~/.zshrc (for the `c` family of aliases: c, cb, cr, ct, ci, cpr, cd_, cskip)
-# AND by the `pj` script in ~/.local/bin (F3, 2026-09-21). It lived inside .zshrc until
-# then; it moved here so the pj SCRIPT can source one small file instead of all of
-# .zshrc, and so there is ONE definition of the launch steps. Edit it here, never copy
-# it back into .zshrc.
+# Sourced by the `engage` launcher (~/CODE/CaptainCodeAU/engage, every engage session)
+# and by ~/.zshrc for `ci`, the one c-family alias left (the rest retired 2026-10-06).
+# It lived inside .zshrc until F3 (2026-09-21), when it moved here so a launcher SCRIPT
+# (pj then, engage since pj retired on 4-5 Oct 2026) can source one small file instead of
+# all of .zshrc, and so there is ONE definition of the launch steps. Edit it here, never
+# copy it back into .zshrc.
 #
-# Nothing LifeOS-specific lives here: _LIFEOS_SP (the LifeOS system-prompt flag) stays in
-# .zshrc because only the `c` family uses it. Paths under ~ only; the two keychain reads
-# are inside the function and their values are never printed.
+# Nothing LifeOS-specific lives here. Paths under ~ only; the two keychain reads are
+# inside the function and their values are never printed.
+#
+# Every variable in the launch chain below is checked against Claude Code's env-var
+# reference and the installed program. Three that Claude Code
+# no longer reads were removed on 2026-10-06, each after a live A/B test in a herdr pane:
+# CLAUDE_CODE_HIDE_ACCOUNT_INFO, ENABLE_EXPERIMENTAL_MCP_CLI and ENABLE_TOOL_SEARCH=1.
 #
 # Listed in zsh-helper-namespace-check's FILES (D-20260917-06): the function is named
 # __double_underscore so Claude Code's shell snapshot keeps it.
@@ -22,8 +27,10 @@
 # for the claude process ONLY (the global shell stays opt-out for every other
 # tool) so GrowthBook feature flags evaluate and Remote Control can start.
 # OTEL metrics (CLAUDE_CODE_ENABLE_TELEMETRY=0) and error reporting stay off.
-# Pairs with settings.json remoteControlAtStartup:true; also requires a
-# full-scope token from `claude auth login`.
+# Pairs with remoteControlAtStartup:true, which engage sessions read from ~/.claude.json
+# (an older-version value Claude Code still honours: engage loads no user settings.json
+# and its template does not set the key); also requires a full-scope token from
+# `claude auth login`.
 __claude_launch() {
   # Print what the last commit touched, on screen, before Claude takes over the terminal.
   # WHY HERE AND NOT IN A HOOK: hooks/LastCommitFiles.sh is wired to SessionStart and feeds the
@@ -98,9 +105,10 @@ __claude_launch() {
       # The fallback keeps this portable: the flag is macOS-only, so a non-macOS box
       # fails the first form and runs the original.
       ssh-add --apple-use-keychain "$key" 2>/dev/null || ssh-add "$key"
-      # GH_TOKEN REMOVED 2026-09-18. It used to be injected here as:
+      # GH_TOKEN REMOVED 2026-09-18 from BOTH launch chains (this one and the else
+      # branch below). It used to be injected as:
       #     GH_TOKEN="$gh_token" \
-      # To revert, restore that line into the chain below (NOT as a comment inside it:
+      # To revert, restore that line into each chain (NOT as a comment inside it:
       # the chain is backslash-continued, so a '#' line would swallow the rest).
       # Why it went: every session started with a GitHub key in its environment, where
       # any command could read it and any transcript could record it. That is the route
@@ -117,18 +125,8 @@ __claude_launch() {
         "$@"
     )
   else
-    # GH_TOKEN REMOVED 2026-09-18. It used to be injected here as:
-    #     GH_TOKEN="$gh_token" \
-    # To revert, restore that line into the chain below (NOT as a comment inside it:
-    # the chain is backslash-continued, so a '#' line would swallow the rest).
-    # Why it went: every session started with a GitHub key in its environment, where
-    # any command could read it and any transcript could record it. That is the route
-    # by which tokens reached transcripts from June 2026. All consumers now fetch
-    # their own credential and fail closed (toolchain-cve-check, ci-watch,
-    # zed-version-check, and LifeOS's five), so nothing needed it here.
-    # $gh_token is still read above and still used for the local status-cache curl.
-    # Ordering rule D-20260917-03 is satisfied: the keyring was repointed at the
-    # narrow PAT and the old broad token revoked BEFORE this line was removed.
+    # No SSH key file: same chain, no ssh-agent. GH_TOKEN note: see the if branch above.
+    # Keep the two chains identical; a variable added to one belongs in both.
     DISABLE_TELEMETRY= \
       DO_NOT_TRACK= \
       NVD_API_KEY="$nvd_key" \

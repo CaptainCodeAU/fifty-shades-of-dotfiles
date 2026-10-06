@@ -998,45 +998,12 @@ export USE_BUILTIN_RIPGREP=0
 # non-interactive shell never sees one. Same reasoning that made `pj` a script in F3.
 c() { pj-launcher-menu; }
 
-# pj - light project launcher (TRIAL, added 2026-09-19; a SCRIPT since F3, 2026-09-21).
-# Claude Code + OPERATIONAL_RULES + the project's own CLAUDE.md and notes. No LifeOS prompt,
-# no global CLAUDE.md. Settings live in ~/.claude/settings.project.json.
-# herdr, ISA and pj-voice are loaded as single-skill plugins (AgentRelay parked 2026-09-24, D-20260924-A07).
-#
-# THERE IS NO `alias pj` HERE ON PURPOSE. `pj` is ~/.local/bin/pj, stowed from this repo
-# (home/.local/bin/pj). It sources ~/.zsh_claude_launch and hands __claude_launch the same
-# argv the alias used to build. Why it stopped being an alias: an alias is read ONCE when
-# the shell starts and shadows any PATH command of the same name, so every shell opened
-# before the alias changed kept launching the OLD form for as long as it lived. Herdr
-# keeps panes alive for days; four of the last seven pj sessions ran without
-# pj-global/RULES.md that way (P5.7, P6a reports; W-20260921-13). A script is read from
-# disk at every launch and cannot go stale. Adding an alias back here would shadow the
-# script and reintroduce the fault; pj-health's `launcher` row FAILs on one.
-# `pj --dry-run` prints the exact claude argv; `pj --selftest` proves it.
-#
-# HOOKS: --setting-sources project,local means ~/.claude/settings.json is never
-# read, so none of its 14 SessionStart hooks register here. That was silent until
-# 2026-09-19, when ci-watch -- the escalating CI-red alarm -- was found never to
-# run under the launcher used most, and a silent alarm looks exactly like a happy
-# one. ci-watch is now registered into settings.project.json as well, via the
-# `targets` field in settings/claude/hooks.json. So pj DOES have one global hook,
-# on purpose; it is not a leak. Add another by naming "project" in that manifest,
-# never by hand-editing settings.project.json. pj-launch-check (F3) is registered the
-# same way: it reads the running claude's argv at SessionStart and shouts one LAUNCH
-# WARNING line when the prompt file or a plugin dir is missing, and logs every launch
-# to ~/.local/state/pj/launches.log.
-# PLUGINS: ~/.claude/pj is the pj plugin (stowed from this repo, home/.claude/pj):
-# /pj:wrap-up, the end-of-session pass (D-20260920-03). A project's own /wrap-up
-# keeps the plain name; the pj: prefix always reaches this one (verified 2026-09-20).
-# It ships as a SKILL (skills/wrap-up/SKILL.md), not a command: the plugin command
-# loader ignores stow's file symlinks, the skill loader follows them (measured 2026-09-21).
-# SYSTEM PROMPT: two files must land there, OPERATIONAL_RULES.md (LifeOS) and
-# ~/.claude/pj-global/RULES.md (machine-wide pj rules, D-20260920-07). Claude Code keeps
-# only the LAST --append-system-prompt-file and refuses to mix it with the text flag
-# (both measured 2026-09-21), so `pj-prompt-file` (home/.local/bin) glues them into
-# ~/.cache/dotfiles/pj-system-prompt.md at every launch and the script passes that path.
-# The script carries paths only; the content stays in lifeos-private and dot-claude.
-# Remove home/.local/bin/pj and this block to end the trial.
+# pj IS RETIRED (4-5 Oct 2026). ~/.local/bin/pj now only prints "pj is retired. Type
+# engage." engage (~/CODE/CaptainCodeAU/engage) is the project launcher; it sources
+# ~/.zsh_claude_launch like pj did. pj's design notes (why a script and not an alias, the
+# --setting-sources hook gap, the glued system-prompt file) live in this file's git history
+# before 2026-10-06 and in docs/PJ_PROFILES.md. There is still NO `alias pj` here on
+# purpose: an alias would shadow the retirement message on PATH.
 
 # Clean-room Claude for measuring front-loaded context (CLAUDE.md, memory,
 # skills, MCP) one piece at a time. Measured 2026-09-06 (Claude Code 2.1.263):
@@ -1051,8 +1018,8 @@ c() { pj-launcher-menu; }
 #                       --mcp-config means zero MCP servers. A fresh session
 #                       launched this way reported: no PAI, no CLAUDE.md from
 #                       any path, no memory, 0 MCP tools.
-# Not routed through __claude_launch on purpose: that injects $GH_TOKEN and
-# $NVD_API_KEY, which is exactly the kind of ambient context this exists to
+# Not routed through __claude_launch on purpose: that injects $NVD_API_KEY (and
+# injected $GH_TOKEN until 2026-09-18), exactly the kind of ambient context this exists to
 # exclude. No permission flags either -- default mode prompts before acting,
 # which is the safe default for an untrusted-by-design scratch folder; add
 # --dangerously-skip-permissions yourself when a test needs to act.
