@@ -24,7 +24,9 @@ RE-RUN: the Linux systemd unit and the herdr() guard on Linux (no Linux box in
 this session), remote attach and the keymap-drift claims, the tmux comparison,
 and speak-selection; they keep their earlier evidence. The 0.9.2 CHANGELOG
 says two of those may have moved, so treat them as unconfirmed until re-run:
+
 # 4581 ("Ctrl+Shift+C no longer arrives as Ctrl+C" in panes without enhanced
+
 keyboard input), against the `send-keys ctrl+shift+c` -> `0x03` bullet under
 "Who copies on a drag"; and multiple prefix keys (#4653), against "herdr takes
 a single key per action" in the ported keymap. 0.9.3 itself only fixed
@@ -338,7 +340,20 @@ to troubleshoot a bump that didn't take:
 herdr-cooldown-check                                    # confirm ELIGIBLE, not HELD
 brew unpin herdr; HOMEBREW_NO_INSTALL_CLEANUP=1 brew upgrade herdr; brew pin herdr
 herdr-cooldown-check                                    # confirm the pin is back
+readlink -f "$(brew --prefix herdr)/bin/herdr"          # the path to re-grant (below)
 ```
+
+**Then re-grant Full Disk Access, by hand, every time.** macOS stores herdr's
+grant against the versioned path the symlink resolved to
+(`/opt/homebrew/Cellar/herdr/<v>/bin/herdr`) and the binary's code hash, so an
+upgrade drops it silently: every herdr-hosted session then gets EPERM on network
+volumes while Terminal and Finder still work. System Settings > Privacy &
+Security > Full Disk Access > +, add the new path, remove the old entries.
+`install.sh`'s auto-bump prints the exact path and, when
+`~/CODE/CaptainCodeAU/Network_Plan/tools/check-herdr-fda.py` is on the box, runs
+it. Measured 2026-10-07 on 0.9.3: the 0.9.1 grant was stale after the upgrade,
+the re-grant gave `check-herdr-fda.py --check` PASS, and no herdr restart was
+needed (W-20261007-A16).
 
 `;` rather than `&&` so the pin comes back even when the upgrade fails, and
 `HOMEBREW_NO_INSTALL_CLEANUP=1` because without it Homebrew deletes the old
@@ -415,18 +430,19 @@ Homebrew does these on its own:
 
 These are ours, and nothing upstream will do them for you:
 
-| #   | File                                                                                | Version-bound thing                                                         |
-| --- | ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| 1   | `install.sh`                                                                        | `HERDR_VERSION` (Linux pin)                                                 |
-| 2   | `install.sh`                                                                        | both `HERDR_SHA256_LINUX_*` hashes                                          |
-| 3   | `home/.claude/skills/herdr/UPSTREAM.md`                                             | the skill merge base -- 0.8.2 revised the bundled skill wholesale (#2847)   |
-| 4   | `home/.claude/skills/herdr/UPSTREAM.version`                                        | the tag that capture came from                                              |
-| 5   | `home/.claude/skills/herdr/SKILL.md`                                                | whatever the merge pulls in                                                 |
-| 6-9 | `docs/HERDR*.md`                                                                    | one `herdr-verified:` line each                                             |
-| 10  | `home/.config/herdr/config.toml`                                                    | only when a release retires or adds a key -- run `herdr config check`       |
-| 11  | `home/.config/herdr/plugins/*/herdr-plugin.toml`                                    | `min_herdr_version`, and the plugin API if it moved                         |
-| 12  | `home/.config/systemd/user/herdr.service`                                           | only if service flags change                                                |
-| 13  | `~/.claude/hooks/herdr-agent-state.sh` + its `~/.claude/settings.json` registration | **NOT rewritten by an upgrade**: `herdr integration status` says `outdated` |
+| #   | File                                                                                | Version-bound thing                                                          |
+| --- | ----------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| 1   | `install.sh`                                                                        | `HERDR_VERSION` (Linux pin)                                                  |
+| 2   | `install.sh`                                                                        | both `HERDR_SHA256_LINUX_*` hashes                                           |
+| 3   | `home/.claude/skills/herdr/UPSTREAM.md`                                             | the skill merge base -- 0.8.2 revised the bundled skill wholesale (#2847)    |
+| 4   | `home/.claude/skills/herdr/UPSTREAM.version`                                        | the tag that capture came from                                               |
+| 5   | `home/.claude/skills/herdr/SKILL.md`                                                | whatever the merge pulls in                                                  |
+| 6-9 | `docs/HERDR*.md`                                                                    | one `herdr-verified:` line each                                              |
+| 10  | `home/.config/herdr/config.toml`                                                    | only when a release retires or adds a key -- run `herdr config check`        |
+| 11  | `home/.config/herdr/plugins/*/herdr-plugin.toml`                                    | `min_herdr_version`, and the plugin API if it moved                          |
+| 12  | `home/.config/systemd/user/herdr.service`                                           | only if service flags change                                                 |
+| 13  | `~/.claude/hooks/herdr-agent-state.sh` + its `~/.claude/settings.json` registration | **NOT rewritten by an upgrade**: `herdr integration status` says `outdated`  |
+| 14  | macOS Full Disk Access (System Settings, not a file)                                | the grant names `Cellar/herdr/<v>/bin/herdr`: **re-grant by hand** (runbook) |
 
 Item 13 is the odd one. herdr installs a state-reporting hook into each agent
 CLI it finds, each file declaring itself "managed by herdr; reinstalling or
@@ -463,7 +479,7 @@ ruling was one hop away from where anyone stands when the question comes up.
 
 `herdr-skill-drift-check` reports 3, 4 and 6-9 with no thinking required: it
 compares the live `herdr --skill` to the stored snapshot, the snapshot's version
-to the binary, and every doc stamp to the binary. Items 1, 2, 10 and 11 are
+to the binary, and every doc stamp to the binary. Items 1, 2, 10, 11 and 14 are
 still a human's job. `herdr-linux-pin-check` covers 1 and 2.
 
 #### What install.sh does after stow

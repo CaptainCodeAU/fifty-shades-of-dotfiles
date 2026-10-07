@@ -149,6 +149,9 @@ BUN_MIN_VERSION="1.3.0"
 # you run. The commands below remain valid for a manual/ad-hoc check or bump:
 #   herdr-cooldown-check
 #   brew unpin herdr; HOMEBREW_NO_INSTALL_CLEANUP=1 brew upgrade herdr; brew pin herdr
+#   then re-grant Full Disk Access to the NEW /opt/homebrew/Cellar/herdr/<v>/bin/herdr
+#   (System Settings > Privacy & Security); the grant names the versioned path, so an
+#   upgrade drops it silently (W-20261007-A16, _herdr_fda_regrant_note)
 # Raised from 3 to 7 (2026-08-20) after checking herdr's actual disclosed-vuln
 # history: one real report took ~5.8 days to reach a shipped fix, and a second
 # was auto-closed by their triage bot in 8 seconds with no human ever seeing
@@ -1096,6 +1099,29 @@ _herdr_offer_restart() {
     return 0
 }
 
+# A herdr upgrade silently drops herdr's Full Disk Access (W-20261007-A16). macOS
+# stores the grant against the VERSIONED Cellar path the opt symlink resolved to
+# (plus the binary's code hash), so the new keg is not covered, and every
+# herdr-hosted session gets EPERM on network volumes while Terminal and Finder
+# still work. The grant is a System Settings click no script can make, so this
+# says it with the exact path, and runs Network_Plan's read-only checker when that
+# repo is on this box. Measured 2026-10-07 on 0.9.3: no herdr restart was needed.
+_herdr_fda_regrant_note() {
+    [[ "$(check_os)" == "macos" ]] || return 0
+    local bin=""
+    bin=$(readlink -f "$(brew --prefix herdr 2>/dev/null)/bin/herdr" 2>/dev/null) || bin=""
+    [[ -n "$bin" ]] || bin="$(brew --prefix 2>/dev/null)/Cellar/herdr/<version>/bin/herdr"
+    warn "herdr's Full Disk Access does not follow an upgrade: herdr-hosted sessions cannot read network volumes until it is re-granted."
+    info "System Settings > Privacy & Security > Full Disk Access > +, add: ${CYAN}${bin}${RESET}"
+    info "Then remove the old herdr entries. No herdr restart is needed."
+    local checker="$HOME/CODE/CaptainCodeAU/Network_Plan/tools/check-herdr-fda.py"
+    if [[ -f "$checker" ]] && command -v uv &>/dev/null; then
+        info "Checking the grant (${checker} --check):"
+        uv run "$checker" --check || true
+    fi
+    return 0
+}
+
 _preflight_herdr_bump_check() {
     [[ "$SKIP_PREFLIGHT" == true ]] && return 0
     # macOS/Homebrew path only -- Linux/WSL bumps ship via _preflight_herdr_release_check.
@@ -1174,9 +1200,12 @@ _preflight_herdr_bump_check() {
         fi
         run_cmd brew pin herdr
         hash -r 2>/dev/null || true
+        local now=""
         if command -v herdr &>/dev/null; then
-            success "herdr now $(herdr --version 2>/dev/null | awk '{print $2}') (pinned)"
+            now=$(herdr --version 2>/dev/null | awk '{print $2}')
+            success "herdr now ${now} (pinned)"
         fi
+        [[ -n "$now" && "$now" != "$have" ]] && _herdr_fda_regrant_note
         # Never automatic; a typed "restart" at most (see _herdr_offer_restart).
         _herdr_offer_restart --stop-only herdr server stop
     else
