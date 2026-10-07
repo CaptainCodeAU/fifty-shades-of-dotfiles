@@ -1,0 +1,436 @@
+#!/usr/bin/env python3
+r"""warn-zsh-word-split-selftest -- prove the zsh word-split warning fires on the shapes that
+go wrong, and ONLY on those.
+
+Sibling of enforce-census-selftest, same harness: the hook is run by its shebang
+interpreter (what settings.json runs), from a temp directory, with stdin as the payload.
+
+WHY THE HOOK EXISTS (#1110). The Bash tool runs zsh, where an unquoted `$c` is ONE word.
+On 2026-10-07 a probe ran `for c in "agent list" ...; do out=$(herdr $c --help 2>&1)`,
+herdr got "agent list" as one argument, and a wrong finding was committed (dotfiles
+c466be5, corrected in 09d4e57 with `${=c}`). That exact command is arm w01.
+
+    uv run python3 ~/.claude/tools/warn-zsh-word-split-selftest
+    uv run python3 ~/.claude/tools/warn-zsh-word-split-selftest --hook /path/to/copy
+    uv run python3 ~/.claude/tools/warn-zsh-word-split-selftest --mutants
+
+THE HARNESS PROVES ITSELF FIRST. c01 (the incident) must warn and c02 (`echo hi`) must be
+quiet before any arm counts, so a hook that crashed or printed nothing cannot pass every
+quiet arm for the wrong reason.
+
+--mutants proves the arms can FAIL. It writes broken copies of the hook (each a plausible
+bug: quotes read as bare, `${=v}` not seen, heredocs read, the jq shout dropped, ...),
+runs every arm against each, and fails unless EVERY arm goes red on at least one mutant
+and every mutant is caught by at least one arm. A mutant whose anchor text is missing from
+the hook is a failure too, so the list cannot rot quietly when the hook changes.
+
+Measured 2026-10-07, branch zsh-word-split-hook:
+
+    the hook, /bin/bash 3.2 (its shebang)          72 checks, 0 failures
+    the hook, bash 5.3 (copy with that shebang)    72 checks, 0 failures
+    --mutants                                       54 mutants, each caught; all 72 arms red
+                                                    on at least one
+
+(After brief 2 narrowed command output to for lists only: w08 to w10 and w12 became quiet
+arms q33 to q36, q37 holds a replay false alarm, w25/w26 keep command output in a for list
+warning, and q16/q19 now use a spaced value so mutants M11 and M14 still have an arm.)
+
+The first --mutants run found five arms that could not fail (three sat behind the hook's
+cheap exit, one needed a "warns on everything" mutant, one a bad shebang) and was red
+until they were fixed: the runner earning its keep. A replay of 1,996 real Bash commands
+from 60 recent transcripts found BSD awk dying on a box-drawing character in a UTF-8
+locale; the lexer now runs under LC_ALL=C, and u01/u02 with mutant M54 hold that.
+"""
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+HOOK = Path(__file__).resolve().parent.parent / "hooks" / "warn-zsh-word-split.sh"
+
+GREEN, RED, DIM, OFF = "\033[0;32m", "\033[1;31m", "\033[2m", "\033[0m"
+if not sys.stdout.isatty() or os.environ.get("NO_COLOR"):
+    GREEN = RED = DIM = OFF = ""
+
+TMP = Path(tempfile.mkdtemp(prefix="wzws-"))
+
+# The 2026-10-07 probe, verbatim from the transcript (line 560 of session e5d0418c).
+INCIDENT = (
+    'for c in "agent list" "pane split" "workspace close" "server stop" "plugin link" '
+    '"agent no-such-sub"; do out=$(herdr $c --help 2>&1); rc=$?; printf \'%-22s rc=%s '
+    'lines=%-3s sha=%s first: %s\\n\' "$c" $rc "$(printf \'%s\\n\' "$out" | wc -l | tr -d '
+    '\' \')" "$(printf \'%s\' "$out" | shasum | cut -c1-8)" "$(printf \'%s\\n\' "$out" | '
+    'head -1 | cut -c1-60)"; done; echo "== worker tools"; for t in engage-worker '
+    'pj-worker; do printf \'%-14s \' $t; command -v $t || echo "NOT FOUND"; done'
+)
+FIXED = INCIDENT.replace("herdr $c --help", "herdr ${=c} --help")
+
+
+def interpreter(hook):
+    first = Path(hook).read_text(errors="replace").splitlines()[:1]
+    if first and first[0].startswith("#!"):
+        return first[0][2:].split()
+    return ["bash"]
+
+
+def run(hook, stdin, path=None, extra_env=None):
+    """Feed raw stdin to the hook. Returns (rc, stdout, parsed-or-None)."""
+    env = dict(os.environ)
+    if path is not None:
+        env["PATH"] = path
+    if extra_env:
+        env.update(extra_env)
+    try:
+        p = subprocess.run(interpreter(hook) + [str(hook)], input=stdin, capture_output=True,
+                           text=True, cwd=str(TMP), env=env, timeout=20)
+    except (OSError, subprocess.TimeoutExpired) as e:   # a hook that cannot run is a red arm
+        return 127, f"<did not run: {e}>", None
+    out = p.stdout.strip()
+    try:
+        parsed = json.loads(out) if out else None
+    except Exception:
+        parsed = {"unparseable": out}
+    return p.returncode, out, parsed
+
+
+def bash(hook, cmd):
+    return run(hook, json.dumps({"tool_name": "Bash", "tool_input": {"command": cmd}}))
+
+
+def note(parsed):
+    try:
+        return parsed["hookSpecificOutput"]["additionalContext"]
+    except Exception:
+        return ""
+
+
+def warns(text):
+    return text.startswith("⚠️ zsh word-split:")
+
+
+def broken(text):
+    return "THE ZSH WORD-SPLIT WARNING IS BROKEN" in text
+
+
+def fakebin(name, tools):
+    """A PATH holding only the named tools (symlinked), to take jq or awk away."""
+    d = TMP / name
+    d.mkdir(exist_ok=True)
+    for t in tools:
+        src = shutil.which(t)
+        if src and not (d / t).exists():
+            (d / t).symlink_to(src)
+    return str(d)
+
+
+# ── arms ───────────────────────────────────────────────────────────────────────
+# Each warn arm names the variable the message must name (None: any warning will do).
+MUST_WARN = [
+    ("w01 the 09d4e57 probe: for c in quoted-with-space, herdr $c inside $( )", INCIDENT, "c"),
+    ("w02 for x in $v, v set outside the command", 'for x in $v; do echo "$x"; done', "v"),
+    ("w03 for x in ${v}", 'for x in ${v}; do echo "$x"; done', "v"),
+    ("w04 v=\"a b\"; for x in $v (the brief's control)", 'v="a b"; for x in $v; do echo "[$x]"; done', "v"),
+    ("w05 v=\"a b\" then $v as an argument", "v=\"a b\"; printf '[%s]\\n' $v", "v"),
+    ("w06 v='a b' (single-quoted value)", "v='a b'; ls $v", "v"),
+    ("w07 v=a\\ b (escaped space)", "v=a\\ b; ls $v", "v"),
+    ("w11 export v=\"a b\" then $v", 'export v="a b"; ls $v', "v"),
+    ("w13 $v inside $( ) inside double quotes", 'v="a b"; echo "n=$(ls $v | wc -l)"', "v"),
+    ("w14 $v inside backticks", 'v="a b"; echo `ls $v`', "v"),
+    ("w15 $v in command position", 'v="herdr agent list"; $v', "v"),
+    ("w16 x=$v copies the spaces", 'v="a b"; x=$v; ls $x', "x"),
+    ("w17 $v as an array-literal element", 'v="a b"; arr=($v); echo ${#arr}', "v"),
+    ("w18 zsh short for: for c (\"a b\" ...)", 'for c ("agent list" "pane split"); do herdr $c --help; done', "c"),
+    ("w19 a newline ends the command (eval does not run on)", 'v="a b"\neval true\nls $v', "v"),
+    ("w20 ${c} in braces", 'c="a b"; ls ${c}', "c"),
+    ("w21 ${v:-x} with a modifier", 'v="a b"; ls ${v:-x}', "v"),
+    ("w22 inside a case body", 'case "$1" in a) v="a b"; ls $v ;; esac', "v"),
+    ("w23 v=$'a\\tb' (ANSI-C quoted)", "v=$'a\\tb'; ls $v", "v"),
+    ("w24 a heredoc body ends; the command after it is read",
+     "cat <<EOF\nbody $v\nEOF\nv=\"a b\"; ls $v", "v"),
+    ("w25 v=$(cmd) then for x in $v (the replay's tr loop)",
+     "n=$(ls | tr '\\n' ' '); for l in $n; do echo \"$l\"; done", "n"),
+    ("w26 x=$v copies command output into a for list", 'v=$(ls); x=$v; for l in $x; do echo; done', "x"),
+]
+
+MUST_BE_QUIET = [
+    ("q01 the 09d4e57 fix: ${=c}", FIXED),
+    ("q02 \"$v\" quoted", 'v="a b"; ls "$v"'),
+    ("q03 ${=v}", 'v="a b"; for x in ${=v}; do ls ${=v}; done'),
+    ("q04 $=v", 'v="a b"; ls $=v'),
+    ("q05 ${(f)v}", 'v=$(ls); for x in ${(f)v}; do echo; done; ls ${(f)v}'),
+    ("q06 ${(s: :)v}", 'v="a b"; for x in ${(s: :)v}; do echo; done'),
+    ("q07 an array made in the command", 'arr=(a b); for x in $arr; do echo "$x"; done'),
+    ("q08 ${arr[@]}", 'for x in ${arr[@]}; do echo "$x"; done'),
+    ("q09 $@ and $*", 'for x in $@; do echo "$v"; done; for y in $*; do echo; done'),
+    ("q10 $(cmd) used directly (zsh splits it)", 'printf "[%s]\\n" $(echo "p q") "$HOME"'),
+    ("q11 for x in $(cmd)", 'for x in $(ls); do echo "$x"; done'),
+    ("q12 inside single quotes", "v=\"a b\"; echo 'ls $v'"),
+    ("q13 inside a heredoc body", 'v="a b"; cat <<EOF\nls $v\nEOF'),
+    ("q14 after a comment", 'v="a b"; ls # $v'),
+    ("q15 inside [[ ]]", 'v="a b"; [[ $v == x && -n $v ]] && echo y'),
+    ("q16 inside (( ))", 'n="1 2"; (( n = $n + 1 ))'),
+    ("q17 a case subject", 'v=$(uname); case $v in Darwin) echo mac ;; esac'),
+    ("q18 an assignment value", 'v="a b"; x=$v'),
+    ("q19 a redirect target", 'v="a b"; echo hi > $v; cat < $v'),
+    ("q20 eval re-parses, so it splits", 'v="ls -la"; eval $v'),
+    ("q21 a value with no spaces", 'v=abc; for x in $v; do echo; done'),
+    ("q22 for x in \"$v\"", 'v="a b"; for x in "$v"; do echo; done'),
+    ("q23 zsh's own arrays ($path)", 'for p in $path; do ls "$p"; done'),
+    ("q24 an unknown variable as a plain argument", 'ls $HOME $TMPDIR'),
+    ("q25 typeset -a", 'typeset -a arr; for x in $arr; do echo; done'),
+    ("q26 \"${v}\"", 'v="a b"; echo "${v}"'),
+    ("q27 ${#v} is a length", 'v="a b"; ls ${#v}'),
+    ("q28 a loop over plain words", "for t in engage-worker pj-worker; do printf '%s ' $t; done"),
+    ("q29 ordinary \"$f\" use", 'f=$(mktemp); cat "$f"; c=$(git log -1 --format=%h); echo "at $c"'),
+    ("q30 a here-string", 'v="a b"; cat <<< $v'),
+    ("q31 a subscript $arr[1]", 'for x in $arr[1]; do echo; done'),
+    ("q32 no dollar at all", "echo hi && ls -la"),
+    # Command output used as a plain word is quiet since brief 2 (#1110, Gavin's pick): the
+    # replay's warnings of that kind were one-token values. These four warned as w08 to w10
+    # and w12 before; q37 is a real false alarm from the replay.
+    ("q33 v=$(cmd) then $v (was w08)", 'v=$(echo "p q"); printf "%s\\n" $v'),
+    ("q34 v=`cmd` then $v (was w09)", 'v=`echo "r s"`; printf "%s\\n" $v'),
+    ("q35 v=\"$(cmd)\" then $v (was w10)", 'v="$(git status --short)"; ls $v'),
+    ("q36 local v=$(cmd) then $v (was w12)", "f() { local v=$(ls); wc -l $v; }"),
+    ("q37 d=$(mktemp -d ...); ls $d (a replay false alarm)", 'd=$(mktemp -d "$TMPDIR/x.XXXXXX"); ls $d'),
+]
+
+
+def arms(hook):
+    """Every arm as (label, ok, detail). Order is stable; ids are the first word."""
+    out = []
+    jq_ctx = None
+    advisory = []
+
+    def record(rc, raw, parsed):
+        advisory.append((rc, raw, parsed))
+
+    for label, cmd, var in MUST_WARN:
+        rc, raw, parsed = bash(hook, cmd)
+        record(rc, raw, parsed)
+        text = note(parsed)
+        ok = warns(text) and (var is None or f"${var}" in text)
+        out.append((label, ok, text[:140] or "(quiet)"))
+        if label.startswith("w01"):
+            jq_ctx = text
+
+    for label, cmd in MUST_BE_QUIET:
+        rc, raw, parsed = bash(hook, cmd)
+        record(rc, raw, parsed)
+        out.append((label, raw == "" and rc == 0, note(parsed)[:140] or raw[:140]))
+
+    utf8 = {"LC_ALL": "en_US.UTF-8", "LANG": "en_US.UTF-8"}
+    rc, raw, parsed = run(hook, json.dumps({"tool_name": "Bash", "tool_input": {"command":
+                          'v="a b"; echo "── $v ── ✓"; ls $v'}}), extra_env=utf8)
+    out.append(("u01 multi-byte text in a UTF-8 locale: still read, still warns",
+                warns(note(parsed)) and "$v" in note(parsed), raw[:160]))
+    rc, raw, parsed = run(hook, json.dumps({"tool_name": "Bash", "tool_input": {"command":
+                          'v="a b"; echo "── ✓ ──" "$v"'}}), extra_env=utf8)
+    out.append(("u02 multi-byte text, quoted use: quiet", rc == 0 and raw == "", raw[:160]))
+
+    text = jq_ctx or ""
+    out.append(("m01 the message names the variable and every fix",
+                 all(s in text for s in ("$c", "${=c}", "${(f)c}", '"$c"', "array")), text[:200]))
+    out.append(("m02 the message never claims the tool skips .zshrc",
+                 bool(text) and ".zshrc" not in text, text[:200]))
+    rc, raw, parsed = bash(hook, 'a="x y"; b=$(ls); for x in $b; do ls $a; done')
+    t = note(parsed)
+    out.append(("m03 two variables, both named", "$a" in t and "$b" in t, t[:200]))
+
+    # Payloads the hook cannot read: missing tools, empty, truncated, moved key.
+    nojq = fakebin("nojq", ["cat", "awk"])
+    noawk = fakebin("noawk", ["cat", "jq"])
+    payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": INCIDENT}})
+    rc, raw, parsed = run(hook, payload, path=nojq)
+    out.append(("p01 jq missing: shouts BROKEN, exit 0", rc == 0 and broken(note(parsed)), raw[:160]))
+    rc, raw, parsed = run(hook, payload, path=noawk)
+    out.append(("p02 awk missing: shouts BROKEN, exit 0", rc == 0 and broken(note(parsed)), raw[:160]))
+    rc, raw, parsed = run(hook, "")
+    out.append(("p03 empty payload: quiet, exit 0", rc == 0 and raw == "", raw[:160]))
+    rc, raw, parsed = run(hook, payload[: len(payload) // 2])
+    out.append(("p04 truncated payload naming a $var: shouts BROKEN", rc == 0 and broken(note(parsed)), raw[:160]))
+    rc, raw, parsed = run(hook, '{"tool_name":"Bash","tool_input":{"command":"echo hi')
+    out.append(("p05 truncated payload with no $var: quiet", rc == 0 and raw == "", raw[:160]))
+    rc, raw, parsed = run(hook, json.dumps({"tool_name": "Bash", "tool_input": {"cmd": INCIDENT}}))
+    out.append(("p06 command under a moved key: shouts BROKEN", rc == 0 and broken(note(parsed)), raw[:160]))
+    bad = [r for r in advisory if r[0] != 0 or (r[2] and (
+        "permissionDecision" in json.dumps(r[2]) or "updatedInput" in json.dumps(r[2])
+        or r[2].get("suppressOutput") is not True))]
+    out.append(("p07 every answer is advisory: exit 0, no decision, no rewrite, suppressOutput",
+                not bad, str(bad[:1])[:200]))
+    out.append(("h01 hook is run by its shebang interpreter", interpreter(hook)[0].startswith("/"),
+                str(interpreter(hook))))
+    return out
+
+
+# ── mutants: (id, what breaks, [(old, new), ...]) ──────────────────────────────
+MUTANTS = [
+    ("M01", "never warns", [('[ -n "$found" ] || exit 0', "exit 0")]),
+    ("M02", "double-quoted uses read as bare", [('if (DN != "") q = q " " DN', 'if (DN != "") u = u " " DN')]),
+    ("M03", "${=v} not seen as a split",
+     [('if (c == "=" || c == "(" || c == "#"', 'if (c == "(" || c == "#"'),
+      ('while (c == "^" || c == "~") { b', 'while (c == "^" || c == "~" || c == "=") { b')]),
+    ("M04", "$=v not seen as a split",
+     [('if (c == "=") { q = p + 2; if (isn1(substr(S, q, 1))) q = readname(q); return q }',
+       'if (c == "=") { p++; c = substr(S, p + 1, 1) }')]),
+    ("M05", "${(flags)v} not seen",
+     [('if (c == "=" || c == "(" || c == "#"', 'if (c == "(") { sub(/^\\([^)]*\\)/, "", b); c = substr(b, 1, 1) }\n  if (c == "=" || c == "#"')]),
+    ("M06", "arrays not trusted in a for list", [('if (t == "arr" || t == "lit") continue', 'if (t == "lit") continue')]),
+    ("M07", "single quotes not stripped", [('if (c == "\\047") { LWS = 0;', 'if (0) { LWS = 0;')]),
+    ("M08", "heredoc bodies read as commands", [("if (c == \"\\n\") { p++; if (NH) p = heredocs(p) }", "if (c == \"\\n\") { p++; NH = 0 }")]),
+    ("M09", "comments read as commands", [('if (c == "#") { while', 'if (0) { while')]),
+    ("M10", "[[ ]] read as arguments", [('if (W == "[[") {', 'if (0) {')]),
+    ("M11", "(( )) read as arguments", [('if (cmdst && substr(S, p + 1, 1) == "(") { p = skiparith(p)', 'if (0) { p = skiparith(p)')]),
+    ("M12", "a case subject read as an argument", [('if (W == "case") {', 'if (0) {')]),
+    ("M13", "an assignment value read as an argument", [('if (WASG != "") { assign(WASG, WARR); continue }', 'if (WASG != "") { assign(WASG, WARR); checkarg(WU); continue }')]),
+    ("M14", "a redirect target read as an argument", [('p++; while (substr(S, p, 1) ~ /[<>&|!]/) p++\n      quiet = 1; continue', 'p++; while (substr(S, p, 1) ~ /[<>&|!]/) p++\n      continue')]),
+    ("M15", "eval's arguments read", [('if (W == "eval") { ev = 1; continue }', '')]),
+    ("M16", "a no-space value not trusted in a for list", [('if (t == "arr" || t == "lit") continue', 'if (t == "arr") continue')]),
+    ("M17", "every for-loop variable treated as holding spaces",
+     [('if (mode == "flist" && fws) VT[fv] = "forws"; else if (mode == "flist") VT[fv] = "lit"', 'if (mode == "flist") VT[fv] = "forws"')]),
+    ("M18", "$(cmd) treated as a variable",
+     [('q = scan(p + 2, ")"); DN = ""; DCS = 1; return q', 'q = scan(p + 2, ")"); DN = "CMDSUBST"; DCS = 1; return q'),
+      ("N = length(S); NW = 0; NH = 0", 'N = length(S); NW = 0; NH = 0; VT["CMDSUBST"] = "cs"')]),
+    ("M19", "$@ and $* treated as variables", [("if (c ~ /^[@*#?$!0-9-]$/) return p + 2", "if (c ~ /^[@*#?$!0-9-]$/) { DN = c; return p + 2 }")]),
+    ("M20", "zsh's own arrays not exempt", [("if (zarray(a[i])) continue", "")]),
+    ("M21", "unknown variables warn as arguments", [('if (t == "ws" || t == "forws") warn(a[i], "arg", t)', 'if (t != "lit" && t != "arr") warn(a[i], "arg", t)')]),
+    ("M22", "subscripts not exempt",
+     [('if (substr(S, q, 1) != "[") DN = n', "DN = n"), ('if (substr(b, n, 1) == "[") return ""', "")]),
+    ("M23", "${#v} read as a use",
+     [('if (c == "=" || c == "(" || c == "#" ||', 'if (c == "=" || c == "(" ||'),
+      ('while (c == "^" || c == "~") { b', 'while (c == "^" || c == "~" || c == "#") { b')]),
+    ("M24", "a here-string read as an argument", [('if (substr(S, p, 3) == "<<<") { p += 3; quiet = 1; continue }', 'if (substr(S, p, 3) == "<<<") { p += 3; continue }')]),
+    ("M25", "$( ) bodies not scanned", [('q = scan(p + 2, ")"); DN = ""', 'q = skiparith(p + 1); DN = ""')]),
+    ("M26", "a for over quoted spaces not recorded", [("if (WWS) fws = 1", "if (0) fws = 1")]),
+    ("M27", "jq missing is silent", [('command -v jq >/dev/null 2>&1 || _shout "jq is not on PATH, so it cannot read the tool payload"', "command -v jq >/dev/null 2>&1 || exit 0")]),
+    ("M28", "awk missing is silent", [('command -v awk >/dev/null 2>&1 || _shout "awk is not on PATH, so it cannot read the command"', "command -v awk >/dev/null 2>&1 || exit 0")]),
+    ("M29", "a truncated payload is silent", [('[[ "$payload" =~ $_raw_dollar ]] && _shout "the payload is not valid JSON"', ":")]),
+    ("M30", "a moved key is silent", [('[[ "$payload" =~ $_raw_dollar ]] && _shout "the payload has no tool_input.command"', ":")]),
+    ("M31", "an empty payload shouts", [('[ -n "$payload" ] || exit 0', '[ -n "$payload" ] || { printf \'{"hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"BROKEN: empty"},"suppressOutput":true}\\n\'; exit 0; }')]),
+    ("M32", "every unreadable payload shouts", [('[[ "$payload" =~ $_raw_dollar ]] && _shout "the payload is not valid JSON"', '_shout "the payload is not valid JSON"')]),
+    ("M33", "it blocks instead of advising",
+     [("additionalContext: $ctx}, suppressOutput: true}'", "additionalContext: $ctx, permissionDecision: \"deny\"}, suppressOutput: true}'")]),
+    ("M34", "the message drops the variable's name from the fix", [("write \\${=$first}", "write \\${=var}")]),
+    ("M35", "the message claims the tool skips .zshrc", [("The Bash tool runs zsh,", "The Bash tool runs zsh and skips .zshrc,")]),
+    ("M36", "only the first variable is reported", [("if (name in WARNED) return", "if (NW > 0) return")]),
+    ("M37", "command output not tracked", [('if (WCS) t = "cs"; else if (WWS)', 'if (0) t = "cs"; else if (WWS)')]),
+    ("M38", "quoted spaces not tracked", [('else if (WWS) t = "ws"', 'else if (0) t = "ws"')]),
+    ("M39", "command position not checked", [("      cmdst = 0\n      if (W ~ /^(local", "      cmdst = 0; if (WU != \"\") continue\n      if (W ~ /^(local")]),
+    ("M40", "array-literal elements not checked", [("p = word(p); checkarg(WU)", "p = word(p)")]),
+    ("M41", "x=$v does not inherit the spaces", [('else t = inherit(WU " " WQ)', 'else t = ""')]),
+    ("M42", "local/export not read as assignments", [("{ decl = 1; darr = 0; continue }", "{ continue }")]),
+    ("M43", "a case body stays a pattern", [("if (cpat) { cpat = 0; cmdst = 1; continue }", "if (cpat) { continue }")]),
+    ("M44", "zsh short for form not read", [('if (mode == "fin") { mode = "flist"; fws = 0; p++; continue }', "")]),
+    ("M45", "a newline does not end a command",
+     [('if (c == "\\n" || c == ";" || c == "&" || c == "|") {', 'if (c == ";" || c == "&" || c == "|") {'),
+      ('if (c == " " || c == "\\t") { p++; continue }', 'if (c == " " || c == "\\t" || c == "\\n") { p++; continue }')]),
+    ("M46", "backticks not scanned", [('if (c == "`") { if (BQ) break; cs = 1; p = scan(p + 1, "`"); continue }\n    if (c == "$") {', 'if (c == "`") { if (BQ) break; cs = 1; p = index(substr(S, p + 1), "`") + p + 1; continue }\n    if (c == "$") {')]),
+    ("M47", "$'...' spaces not tracked", [("if (substr(S, a2, p - a2) ~ /[ \\t\\n]|\\\\[tn ]/) ws = 1", "if (0) ws = 1")]),
+    ("M48", "a heredoc never ends", [("if (t == HD[i]) break", "if (0) break")]),
+    ("M49", "${v:-x} with a modifier not read", [("return substr(b, 1, n - 1)\n}", "return (n - 1 == length(b) ? substr(b, 1, n - 1) : \"\")\n}")]),
+    ("M50", "${v} braces not read", [("{ q = brace(p + 1); DN = bracename(BR); return q }", "{ q = brace(p + 1); return q }")]),
+    ("M52", "warns on every command", [('[ -n "$found" ] || exit 0', 'found="${found:-v\targ\tws}"'),
+                                         ("case \"$cmd\" in *'$'[A-Za-z_{=~^]*) ;; *) exit 0 ;; esac", ":")]),
+    ("M53", "the shebang names no absolute interpreter", [("#!/bin/bash\n", "#!bash\n")]),
+    ("M54", "the lexer runs in the caller's locale", [("LC_ALL=C awk", "awk")]),
+    ("M51", "the cheap exit swallows everything", [("case \"$cmd\" in *'$'[A-Za-z_{=~^]*) ;; *) exit 0 ;; esac", "exit 0")]),
+]
+
+
+def report(results):
+    fails = []
+    for label, ok, detail in results:
+        tag = f"{GREEN}ok  {OFF}" if ok else f"{RED}FAIL{OFF}"
+        print(f"  {tag} {label}" + (f" {DIM}-- {detail}{OFF}" if not ok else ""))
+        if not ok:
+            fails.append(label.split()[0])
+    return fails
+
+
+def controls(hook):
+    _, _, parsed = bash(hook, INCIDENT)
+    c1 = warns(note(parsed))
+    rc, raw, _ = bash(hook, "echo hi")
+    c2 = rc == 0 and raw == ""
+    print(f"  {'ok  ' if c1 else 'FAIL'} c01 control: the incident warns")
+    print(f"  {'ok  ' if c2 else 'FAIL'} c02 control: echo hi is quiet")
+    return c1 and c2
+
+
+def mutants(hook):
+    src = Path(hook).read_text()
+    base = {label.split()[0]: ok for label, ok, _ in arms(hook)}
+    if not all(base.values()):
+        print(f"{RED}the unmutated hook fails its own arms; mutants mean nothing until it is green{OFF}")
+        return 1
+    killed_by = {k: [] for k in base}
+    problems = []
+    for mid, what, reps in MUTANTS:
+        text = src
+        for old, new in reps:
+            n = text.count(old)
+            if n != 1:
+                problems.append(f"{mid} anchor found {n} times: {old[:60]!r}")
+                break
+            text = text.replace(old, new)
+        else:
+            m = TMP / f"mutant-{mid}.sh"
+            m.write_text(text)
+            m.chmod(0o755)
+            red = [label.split()[0] for label, ok, _ in arms(m) if not ok]
+            for k in red:
+                killed_by[k].append(mid)
+            print(f"  {mid} {what:58s} {RED if red else ''}{len(red):2d} red{OFF} "
+                  f"{DIM}{' '.join(red[:8])}{' ...' if len(red) > 8 else ''}{OFF}")
+            if not red:
+                problems.append(f"{mid} ({what}) survived: no arm caught it")
+    for k, ms in killed_by.items():
+        if not ms:
+            problems.append(f"arm {k} never went red on any mutant: it cannot fail")
+    print()
+    if problems:
+        for p in problems:
+            print(f"  {RED}FAIL{OFF} {p}")
+        print(f"{RED}✗ {len(problems)} mutant problem(s){OFF}")
+        return 1
+    print(f"{GREEN}✓ {len(MUTANTS)} mutants each caught; all {len(killed_by)} arms go red on at "
+          f"least one{OFF}")
+    return 0
+
+
+def main():
+    args = sys.argv[1:]
+    hook = HOOK
+    if "--hook" in args:
+        hook = Path(args[args.index("--hook") + 1]).resolve()
+    if not hook.is_file():
+        print(f"{RED}no hook at {hook}{OFF}")
+        return 2
+    try:
+        print(f"hook: {hook}\n\nCONTROLS (the harness proves itself first)")
+        if not controls(hook):
+            print(f"{RED}✗ controls failed: the hook cannot be told apart from a silent one{OFF}")
+            return 1
+        if "--mutants" in args:
+            print("\nMUTANTS (each arm must go red on a broken copy)")
+            return mutants(hook)
+        print("\nARMS")
+        results = arms(hook)
+        fails = report(results)
+        print()
+        if fails:
+            print(f"{RED}✗ {len(fails)} of {len(results)} check(s) FAILED:{OFF} " + ", ".join(fails))
+            return 1
+        print(f"{GREEN}✓ all {len(results)} checks passed{OFF} {DIM}-- it warns on the shapes "
+              f"that go wrong in zsh, and on nothing else{OFF}")
+        return 0
+    finally:
+        shutil.rmtree(TMP, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
