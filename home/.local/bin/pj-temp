@@ -35,7 +35,8 @@
 # launch resumes it. Why both: /clear gives a NEW session id and Bash keeps the OLD folder
 # (measured 2026-09-30, E3), so an id-only test would sweep a folder in use; --resume keeps
 # the id and changes the pid (E2), so a pid-only test would orphan a resumed folder.
-# The registry is read through `pj-worker count --json` (the sibling copy): when the registry
+# The registry is read through `engage-worker count --json` (~/.local/bin; pj-worker until it
+# retired on 7 Oct, engage #1106): when the registry
 # and ps disagree, or a parked session cannot be placed, NOTHING is swept. A count it cannot
 # take is a refusal. A folder whose record cannot be read is LEFT and reported, never swept.
 #
@@ -59,7 +60,7 @@ zmodload zsh/datetime 2>/dev/null
 
 PJT_ROOT="/tmp/claude-$UID"                                    #P: root
 PJT_RM=""                                                      #P: rm (empty: the Trash shim)
-PJT_WORKER="${0:A:h}/pj-worker"                                #P: worker
+PJT_WORKER="$HOME/.local/bin/engage-worker"                    #P: worker
 PJT_GUARD="${0:A:h}/trash-guard"                               #P: guard
 PJT_PS="ps"                                                    #P: ps
 PJT_CLAUDE_COMM="claude"                                       #P: comm
@@ -370,15 +371,15 @@ LIVE_ERR=""
 load_live() {
   local out rc n line pid sid st k
   LIVE_PS=(); LIVE_SID=(); LIVE_ERR=""
-  [[ -x "$PJT_WORKER" ]] || { LIVE_ERR="pj-worker is missing beside pj-temp ($PJT_WORKER)"; return 1; }
+  [[ -x "$PJT_WORKER" ]] || { LIVE_ERR="engage-worker is missing ($PJT_WORKER)"; return 1; }
   out="$("$PJT_WORKER" count --json 2>/dev/null)"; rc=$?
-  (( rc == 0 )) || { LIVE_ERR="pj-worker count failed (rc $rc)"; return 1; }
-  print -r -- "$out" | jq -e '.machine.sessions | type == "array"' >/dev/null 2>&1 || { LIVE_ERR="pj-worker count gave no machine session list"; return 1; }
+  (( rc == 0 )) || { LIVE_ERR="engage-worker count failed (rc $rc)"; return 1; }
+  print -r -- "$out" | jq -e '.machine.sessions | type == "array"' >/dev/null 2>&1 || { LIVE_ERR="engage-worker count gave no machine session list"; return 1; }
   [[ "$(print -r -- "$out" | jq -r '.machine.disagree')" == false ]] || { LIVE_ERR="the registry and ps disagree ($(print -r -- "$out" | jq -r '"registry \(.machine.registry), ps \(.machine.ps), ps-only pids \(.machine.ps_only_pids|join(","))"'))"; return 1; }   #M:disagree
   n="$(print -r -- "$out" | jq -r '.machine.background.parked_pids // [] | length')"
   [[ "$n" == 0 ]] || { LIVE_ERR="$n parked session(s) (claude --bg-pty-host) cannot be placed; $(print -r -- "$out" | jq -r '.machine.background.clear // "claude daemon stop --any"') clears them"; return 1; }   #M:parked
   print -r -- "$out" | jq -e '[.machine.sessions[] | has("sid") and has("start")] | all' >/dev/null 2>&1 \
-    || { LIVE_ERR="pj-worker's session list carries no sid/start (an older pj-worker?)"; return 1; }
+    || { LIVE_ERR="engage-worker's session list carries no sid/start (an older engage-worker?)"; return 1; }
   for line in "${(@f)$(print -r -- "$out" | jq -r '.machine.sessions[] | [(.pid|tostring), (.sid // ""), (.start // "")] | join("\t")')}"; do
     [[ -n "$line" ]] || continue
     pid="${line%%$TAB*}"; line="${line#*$TAB}"; sid="${line%%$TAB*}"; st="${line#*$TAB}"
@@ -696,11 +697,12 @@ run_arms() {
   check "D9 a parked session that cannot be placed: NOT MEASURED, nothing swept" "(( rc == 2 )) && [[ -d $dC ]] && [[ \$out == *parked* ]]"
   print -r -- 3 > "$F/worker.rc"
   out="$("$T" sweep-dead 2>&1)"; rc=$?
-  check "D10 pj-worker count fails: NOT MEASURED, nothing swept" "(( rc == 2 )) && [[ -d $dC ]] && [[ \$out == *'count failed'* ]]"
+  check "D10 engage-worker count fails: NOT MEASURED, nothing swept" "(( rc == 2 )) && [[ -d $dC ]] && [[ \$out == *'count failed'* ]]"
   command mv "$F/worker.rc" "$F/Trash/"
   worker_json "$F" false 0 1002 "$SD" "$ST1"; jq -c '.machine.sessions |= map(del(.sid))' "$F/worker.json" > "$F/w2" && command mv "$F/w2" "$F/worker.json"
   out="$("$T" sweep-dead 2>&1)"; rc=$?
-  check "D11 an older pj-worker without sid/start: NOT MEASURED, nothing swept" "(( rc == 2 )) && [[ -d $dC ]] && [[ \$out == *'no sid/start'* ]]"
+  check "D11 an older engage-worker without sid/start: NOT MEASURED, nothing swept" "(( rc == 2 )) && [[ -d $dC ]] && [[ \$out == *'no sid/start'* ]]"
+  check "D11b the real counter is engage-worker in ~/.local/bin (pj-worker retired 7 Oct, engage #1106)" "grep -qxE 'PJT_WORKER=\"\\\$HOME/\\.local/bin/engage-worker\" +#P: worker' ${(q)SELF}"
   worker_json "$F" false 0  1002 "$SD" "$ST1"  2004 "$SF" "$ST2"
   out="$("$T" sweep-dead --claude-args --resume "$SC" 2>&1)"; rc=$?
   check "D12 pj --resume <id>: that session's folder is protected at this launch (and the sweep ran)" "[[ -d $dC ]] && [[ \$out == *'Temp sweep at launch'* ]]"
