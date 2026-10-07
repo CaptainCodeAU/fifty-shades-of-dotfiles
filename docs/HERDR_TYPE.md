@@ -180,13 +180,42 @@ value does not reach them.
 | busy | type (Enter queues it) | Delivered after the running command, obeyed |
 | question-single | press the number of the row labelled "Type something" (found **by label**; fallback second from last), type | With 2 options it is **3**; 4 is "Chat about this", which closes the box |
 | question-multi | `down` to that row, type; `--submit`: `down`, `enter`, `enter` (review → Submit answers) | Pressing its number only ticks the row; typed letters then act as keys |
-| permission | `--permission yes` (row 1) or `no` (row "No"), `tab`, type the note | Without `--permission`: exit 4. Yes + note: command runs, note reaches Claude as a separate text |
+| permission | `--permission no`: move to row "No", `tab`, type the reason. `--permission yes`: **refused** unless the switch in section 5.1 is set; then row 1, `tab`, type the note | Without `--permission`: exit 4. No + reason: command refused, reason delivered (LIVE) |
 | plan-approval | press "Tell Claude what to change", type | Claude revises the plan |
 | question-review, held-message, unknown | exit 4 with the reason | No text field there |
-| shell | exit 4 unless `--allow-shell` | Bracketed typing: zsh holds the lines, nothing runs |
+| shell | exit 4 unless `--allow-shell`; **never** with `--enter` (exit 4) | Bracketed typing: zsh holds the lines, nothing runs |
+| any, with `--raw` | type without routing; `--enter` only if a fresh read shows prompt-empty or prompt-draft (else exit 4) | For tests; typing alone is box-safe (engage-model Q9-b) |
 
-`--enter` presses Enter at the end; `--verify` then waits for the new transcript
-record and compares (exit 0 exact/contained, 5 nothing, 6 differs).
+**Every key, digit and Enter is preceded by a fresh read of the state** (engage-model
+Q9-a). Each step carries the state it was planned for; if the pane is anywhere else at
+that moment, `send` stops with exit 4 and says what changed and what was already done.
+Typing itself is not re-checked: a bracketed write cannot answer a box or run a shell
+line. `--enter` on `busy` stays (Enter while busy queues the prompt), but only when the
+read right before that Enter still shows busy with no dialog.
+
+`--enter` presses Enter at the end; `--verify` then looks for the text **only where its
+route lands** (engage-model Q9-g) and says where it found it:
+
+| Route | Where `--verify` looks |
+|---|---|
+| prompt (empty, draft, menu, busy, `--raw`) | a new user turn with `origin.kind == "human"`, or a `queued_command` attachment with origin human (sent while busy). A channel or peer turn holding the same text does not count |
+| question box answer | the `AskUserQuestion` tool_result |
+| permission no + reason | the rejected (`is_error`) tool_result of the tool that asked |
+| permission yes + note | the text block beside that tool's tool_result |
+| plan feedback | the `ExitPlanMode` tool_result |
+
+Exit 0 found, 5 nothing new, 6 something new arrived but not the text where it belongs.
+
+### 5.1 Permission approvals
+
+Approving a permission prompt is Gavin's to do: ruling **D-20260922-A01** is the rule.
+`--permission yes` is therefore refused (exit 4) unless `HERDR_TYPE_ALLOW_PERMISSION_YES=1`
+is set, a switch for Gavin to set in his own terminal (engage-model Q9-c). It is a
+**seatbelt, not a lock**: an agent could set the variable, or skip this tool and send
+raw herdr keys. It only stops the easy accident; the ruling is what binds.
+`--permission no` with a reason is always allowed: refusing leaves things as they were.
+Per-project rules (the target session's project deciding what is allowed) will come
+with engage #1121 / #1124; they are not built here.
 
 ---
 
@@ -213,6 +242,18 @@ bidi, tag characters) dropped, because Claude Code strips them on Enter and want
 second Enter (SOURCE); ZWJ and variation selectors kept (emoji sequences arrived intact,
 LIVE). Every change is reported on stderr.
 
+**Blocked characters** (engage-model Q9-h): a text holding a direction override or isolate
+(U+202A to U+202E, U+2066 to U+2069) or any tag character (U+E0000 to U+E007F) is refused
+whole with **exit 7**, before anything is read from or written to herdr. Emoji joiners
+(U+200D, U+FE0E, U+FE0F) and skin-tone modifiers stay allowed, so normal emoji work;
+subdivision flags (England, Scotland, Wales) use tag characters and are therefore refused.
+The self-test proves each blocked range stops with zero herdr calls (a mocked sender).
+
+**Source files carry no invisible characters** (engage-model Q9-e): every invisible, bidi or
+tag character in `herdr-type` and `herdr-type-livetest` is written as a `\u` escape, and
+`--selftest` fails if either file holds one literally. It caught real ones on its first
+run: an editor had written escapes as literal characters.
+
 **What typed text can do** (it is the user typing): a whole prompt starting with `!` runs a
 shell command with no permission prompt and outside the sandbox; one starting with `/`
 runs a slash command (LIVE). `herdr-type` warns but does not block: a prompt library may
@@ -220,8 +261,9 @@ hold commands on purpose. An endpoint that accepts text from anywhere other than
 person themselves must decide this policy.
 
 **Races**: the state is read, then acted on. If a box opens between the two, the
-bracketed writes cannot answer it (box safety above), but a following `--enter` would
-press Enter in the box. Use `--verify` when it matters.
+bracketed writes cannot answer it (box safety above), and the fresh read before every
+key, digit and Enter (section 5) stops the run before a key lands in the wrong place.
+A box opening in the few milliseconds between that read and the key is still possible.
 
 ---
 
@@ -242,8 +284,11 @@ press Enter in the box. Use `--verify` when it matters.
 
 ## 8. Re-check after an upgrade
 
-Run `herdr-type --selftest` (offline) and `herdr-type-livetest <throwaway pane>` (live;
-`engage-worker tab <purpose>` makes one on this estate). Re-measure: the 800-character
+Run `herdr-type --selftest` (offline, no tokens, well under a second) and
+`herdr-type-livetest` (live). The live test starts its own fresh session with
+`engage-worker tab <purpose>`, drives only that session, checks before every scenario
+that the pane still holds it (by session id, never by name: sessions get renamed), and
+closes its tab when it exits (engage-model Q9-d). It no longer accepts a pane. Re-measure: the 800-character
 paste threshold and the 3-line rule; box safety of a single bracketed character; the
 screen phrases in section 4; the inbox line format and its hold/accept wording; the
 herdr key names and `pane.read` shape.
@@ -256,10 +301,13 @@ herdr-type send engage-main "Review the diff and list risks"            # types,
 herdr-type send engage-main - --enter --verify < prompt.md              # sends and checks
 herdr-type send w48:p4D "a mango" --where answer --enter                # answer an open box
 herdr-type send engage-main "use goodbye" --enter                       # plan feedback, if a plan is up
-herdr-type send engage-main "fine, go on" --permission yes --enter      # approve with a note
+herdr-type send engage-main "not now, explain first" --permission no --enter  # refuse with a reason
 herdr-type send engage-main "text" --dry-run                            # show the steps only
 ```
 
+There is deliberately no approve example: approving is Gavin's (D-20260922-A01; section 5.1).
+
 Exit codes: 0 done/verified, 1 herdr or I/O error, 2 usage, 3 target not found or
-ambiguous, 4 nowhere to put the text without a choice, 5 verify saw nothing new,
-6 verify saw a different text.
+ambiguous, 4 nowhere to put the text without a choice (or the state changed under a
+step, or `--permission yes` without the switch), 5 verify found nothing new, 6 verify
+found something new but not the text where its route lands, 7 blocked characters.

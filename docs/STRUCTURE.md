@@ -228,7 +228,7 @@ Helpers for the herdr agent multiplexer (see `docs/HERDR.md`).
 | `herdr-pane-read`         | A `herdr pane read` that cannot land in the blank region below a short program's output   |
 | `herdr-skill-drift-check` | Has a herdr upgrade moved the upstream agent skill under our locally annotated copy?      |
 | `herdr-type`              | Types text into a Claude Code session in a pane, routed by where its cursor is (prompt, question box, permission, plan); see `docs/HERDR_TYPE.md` |
-| `herdr-type-livetest`     | Drives a throwaway Claude Code session through every `herdr-type` scenario and logs the results |
+| `herdr-type-livetest`     | Starts its own throwaway Claude Code session, drives it through every `herdr-type` scenario, logs the results, closes it |
 
 #### Checks and watchers
 
