@@ -1,0 +1,716 @@
+#!/usr/bin/env -S uv run python3
+# /// script
+# requires-python = ">=3.10"
+# dependencies = []
+# ///
+# ============================================================================
+#  herdr-type -- put text into a Claude Code session running in a herdr pane,
+#                as if typed, wherever its cursor is
+# ============================================================================
+#
+# WHY
+# ---
+# Copy-pasting prompts into a session is slow, and the obvious automations are
+# each wrong somewhere (measured 2026-10-07, Claude Code 2.1.292, herdr 0.9.3;
+# evidence: engage-isolinear workbench/channels-vs-herdr/2026-10-07/):
+#   - `herdr pane send-text` with a big text in ONE write: Claude Code reads the
+#     PTY 1,024 bytes at a time, marks each read over 800 characters as a paste
+#     (`<pasted_content>`, which Claude treats as "not instructions"), and loses
+#     text in two cases (an identical repeated read; 1-2 KB writes close together).
+#   - one plain character per write: exact, but a lone digit ANSWERS an open
+#     question box ("2" picked option 2).
+#   - `herdr agent prompt`: whole text, but marked as pasted when long, and its
+#     Enter answered an open question box while herdr said the agent was `done`.
+# What works: every write is its OWN bracketed paste (ESC[200~ ... ESC[201~),
+# at most 256 characters and at most 2 newlines (a bracketed paste of more than
+# 3 lines is marked). Measured: 28,931 characters exact and unmarked in 1.2 s at
+# 8 per write, 0.3 s at 32; identical repeated chunks kept; an open question box
+# ignores a bracketed write; zsh holds bracketed newlines instead of running them.
+#
+# WHAT IT DOES
+#   herdr-type state <target>         where the cursor is, as JSON
+#   herdr-type send <target> [TEXT]   clean the text, route it, type it
+#   herdr-type resolve <target>       which pane a name means
+#   herdr-type --selftest             offline arms (no herdr, no Claude)
+#
+#   <target> is a pane id (w48:p4D), a herdr agent name, or a pane label /
+#   session name (engage-main). Ambiguity is refused, never guessed.
+#
+#   send routes by state instead of refusing:
+#     prompt (empty or draft)  type at the end (ctrl+e) or --at start (ctrl+a)
+#     prompt with / or @ menu  esc, a space, then type
+#     busy                     type; Enter (if asked) queues it
+#     question, single choice  press the "Type something" row's number (found
+#                              BY LABEL; with 2 options it is 3, not 4), type
+#     question, multi-select   move down to "Type something", type
+#     permission prompt        --permission yes|no, Tab to amend, type the note
+#     plan approval            "Tell Claude what to change", type the feedback
+#     plain shell, no agent    refused unless --allow-shell (bracketed: lines
+#                              are held, not run)
+#   It never presses Enter unless --enter (or --submit for multi-select).
+#
+# USAGE
+#   herdr-type send <target> [TEXT | -f FILE | -] [--enter] [--verify]
+#       [--at end|start] [--where auto|prompt|answer] [--permission yes|no]
+#       [--submit] [--allow-shell] [--raw] [--mode bracket|chunk|char] [--size N]
+#       [--delay-ms N] [--timeout S] [--dry-run] [--json]
+#   herdr-type state <target> [--screen]
+#
+# EXIT CODES
+#   0 done (and verified, with --verify)       4 nowhere to put the text here
+#   1 herdr or I/O error                          (review screen, a dialog with no
+#   2 usage                                        text field, --permission missing,
+#   3 target not found, or ambiguous               shell without --allow-shell)
+#   5 --verify: nothing new in the transcript   6 --verify: arrived but differs
+#
+# Every herdr call goes to its socket ($HERDR_SOCKET_PATH, else
+# ~/.config/herdr/herdr.sock). Claude Code's Bash sandbox blocks that socket, so
+# a Claude session runs this with the sandbox off for the call.
+# ============================================================================
+import argparse
+import glob
+import json
+import os
+import re
+import socket
+import sys
+import time
+import unicodedata
+
+PROG = "herdr-type"
+MAX_CHUNK = 256          # characters per write; a paste over 800 is marked
+MAX_NEWLINES = 2         # per write; a bracketed paste of > 3 lines is marked
+PASTE_START, PASTE_END = "\x1b[200~", "\x1b[201~"
+
+
+def say(msg):
+    print(f"{PROG}: {msg}", file=sys.stderr)
+
+
+# ---------------------------------------------------------------- herdr socket
+class HerdrError(Exception):
+    pass
+
+
+def sock_path():
+    return os.environ.get("HERDR_SOCKET_PATH") or os.path.expanduser("~/.config/herdr/herdr.sock")
+
+
+_req = 0
+
+
+def herdr(method, params):
+    """One JSON line in, one JSON line out, on its own connection."""
+    global _req
+    _req += 1
+    line = json.dumps({"id": f"{PROG}:{_req}", "method": method, "params": params}) + "\n"
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.connect(sock_path())
+            s.sendall(line.encode())
+            buf = b""
+            while not buf.endswith(b"\n"):
+                part = s.recv(1 << 20)
+                if not part:
+                    break
+                buf += part
+    except OSError as e:
+        raise HerdrError(f"cannot reach herdr at {sock_path()}: {e} "
+                         "(inside Claude Code, run with the sandbox off)") from e
+    out = json.loads(buf or b"{}")
+    if "error" in out:
+        raise HerdrError(f"{method}: {out['error'].get('code')}: {out['error'].get('message')}")
+    return out.get("result", {})
+
+
+def send_text(pane, text):
+    herdr("pane.send_text", {"pane_id": pane, "text": text})
+
+
+def send_keys(pane, *keys):
+    herdr("pane.send_keys", {"pane_id": pane, "keys": list(keys)})
+
+
+def read_screen(pane, ansi=False, lines=200):
+    r = herdr("pane.read", {"pane_id": pane, "source": "visible", "lines": lines,
+                            "format": "ansi" if ansi else "text", "strip_ansi": not ansi})
+    return r.get("read", {}).get("text", "")
+
+
+# ---------------------------------------------------------------- targets
+PANE_ID = re.compile(r"^w\w+:p\w+$")
+
+
+def resolve(target):
+    """Return pane info (pane.get) for a pane id, agent name or pane label."""
+    if PANE_ID.match(target):
+        return herdr("pane.get", {"pane_id": target})["pane"]
+    try:
+        a = herdr("agent.get", {"target": target})["agent"]
+        return herdr("pane.get", {"pane_id": a["pane_id"]})["pane"]
+    except HerdrError:
+        pass
+    panes = herdr("pane.list", {}).get("panes", [])
+    hits = [p for p in panes if target in (p.get("label"), p.get("terminal_title_stripped"))]
+    if len(hits) == 1:
+        return hits[0]
+    if not hits:
+        raise LookupError(f"no pane, agent or label named '{target}'")
+    raise LookupError(f"'{target}' is ambiguous: " + ", ".join(p["pane_id"] for p in hits))
+
+
+def transcript_path(pane):
+    """Claude Code writes <config>/projects/<cwd slug>/<session id>.jsonl."""
+    sess = (pane.get("agent_session") or {}).get("value")
+    if not sess or (pane.get("agent_session") or {}).get("kind") != "id":
+        return None
+    roots = [os.environ.get("CLAUDE_CONFIG_DIR") or "", os.path.expanduser("~/.claude")]
+    for root in filter(None, roots):
+        hits = glob.glob(os.path.join(root, "projects", "*", f"{sess}.jsonl"))
+        if hits:
+            return hits[0]
+    return None
+
+
+def tail_records(path, nbytes=2_000_000):
+    if not path or not os.path.exists(path):
+        return []
+    with open(path, "rb") as f:
+        f.seek(0, 2)
+        size = f.tell()
+        f.seek(max(0, size - nbytes))
+        data = f.read().decode("utf-8", "replace")
+    lines = data.splitlines()
+    if size > nbytes:
+        lines = lines[1:]  # the first line may be cut
+    out = []
+    for ln in lines:
+        try:
+            out.append(json.loads(ln))
+        except ValueError:
+            pass
+    return out
+
+
+def open_tool_calls(records):
+    """Tool calls with no tool_result yet, oldest first."""
+    used, done = [], set()
+    for r in records:
+        content = (r.get("message") or {}).get("content")
+        if not isinstance(content, list):
+            continue
+        for c in content:
+            if r.get("type") == "assistant" and c.get("type") == "tool_use":
+                used.append((c.get("id"), c.get("name")))
+            elif r.get("type") == "user" and c.get("type") == "tool_result":
+                done.add(c.get("tool_use_id"))
+    return [name for tid, name in used if tid not in done]
+
+
+# ---------------------------------------------------------------- text cleaning
+# Characters Claude Code strips on Enter (it then wants a second Enter): format
+# controls such as zero-width and bidi marks, and tag characters. ZWJ (U+200D)
+# and variation selectors stay: emoji sequences need them and arrived intact.
+KEEP_FORMAT = {"‍", "︎", "️"}
+
+
+def clean(text):
+    """Return (cleaned, notes). Notes say what changed, so nothing is silent."""
+    notes = []
+    if "\r" in text:
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        notes.append("CR or CRLF turned into LF (a CR would press Enter)")
+    if "\t" in text:
+        n = text.count("\t")
+        text = text.replace("\t", "    ")
+        notes.append(f"{n} tab(s) turned into 4 spaces (Claude Code drops a typed tab)")
+    out, dropped = [], {}
+    for ch in text:
+        cat = unicodedata.category(ch)
+        if ch == "\n" or ch in KEEP_FORMAT:
+            out.append(ch)
+        elif cat == "Cc" or (cat == "Cf") or 0xE0000 <= ord(ch) <= 0xE007F:
+            dropped[f"U+{ord(ch):04X}"] = dropped.get(f"U+{ord(ch):04X}", 0) + 1
+        else:
+            out.append(ch)
+    if dropped:
+        notes.append("dropped control/invisible characters: "
+                     + ", ".join(f"{k} x{v}" for k, v in sorted(dropped.items())))
+    return "".join(out), notes
+
+
+# ---------------------------------------------------------------- chunking
+def chunks(text, mode="bracket", size=MAX_CHUNK):
+    """Split into writes. bracket: each write its own paste, <= size chars and
+    <= MAX_NEWLINES newlines. chunk: plain writes of size N, never a lone last
+    character. char: one character per write (NOT box-safe)."""
+    if mode == "char":
+        return list(text)
+    size = max(2 if mode == "chunk" else 1, min(size, 799))
+    parts, cur, nl = [], "", 0
+    for ch in text:
+        if len(cur) >= size or (ch == "\n" and nl >= MAX_NEWLINES and mode == "bracket"):
+            parts.append(cur)
+            cur, nl = "", 0
+        cur += ch
+        nl += ch == "\n"
+    if cur:
+        parts.append(cur)
+    if mode == "chunk" and len(parts) > 1 and len(parts[-1]) == 1:
+        tail = parts.pop()  # a lone character could answer an open box
+        parts[-1] += tail
+    return parts
+
+
+def type_text(pane, text, mode="bracket", size=MAX_CHUNK, delay_ms=0.0):
+    parts = chunks(text, mode, size)
+    t0 = time.monotonic()
+    for p in parts:
+        send_text(pane, f"{PASTE_START}{p}{PASTE_END}" if mode == "bracket" else p)
+        if delay_ms:
+            time.sleep(delay_ms / 1000)
+    return len(parts), time.monotonic() - t0
+
+
+# ---------------------------------------------------------------- state
+ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+DIM = re.compile(r"\x1b\[2m.*?(?:\x1b\[(?:0|22)m|$)")
+RULE = re.compile(r"^\s*─{8,}")
+OPTION = re.compile(r"^\s*(❯)?\s*(\d+)\.\s+(\[[ ✔x]\]\s+)?(.*?)\s*$")
+
+
+def options(lines):
+    """Numbered rows of the LAST box on screen: [(number, label, highlighted, checkbox)].
+    A row numbered 1 starts a new list, so an earlier numbered list in the
+    conversation (or a plan's own steps) is dropped."""
+    rows = []
+    for ln in lines:
+        m = OPTION.match(ln)
+        if m:
+            if int(m.group(2)) == 1:
+                rows = []
+            rows.append((int(m.group(2)), m.group(4), bool(m.group(1)), bool(m.group(3))))
+    return rows
+
+
+def input_region(ansi_text):
+    """Text of the prompt input between the last two rules, dim suggestions removed."""
+    lines = ansi_text.splitlines()
+    rules = [i for i, ln in enumerate(lines) if RULE.match(ANSI.sub("", ln))]
+    if len(rules) < 2:
+        return None
+    body = lines[rules[-2] + 1:rules[-1]]
+    if not body or not ANSI.sub("", body[0]).lstrip().startswith("❯"):
+        return None
+    text = []
+    for ln in body:
+        ln = DIM.sub("", ln)
+        ln = ANSI.sub("", ln)
+        text.append(ln)
+    joined = "\n".join(text)
+    joined = re.sub(r"^\s*❯\s?", "", joined, count=1)
+    return "\n".join(x.rstrip() for x in joined.splitlines()).strip("\n")
+
+
+def classify(screen, ansi_screen, herdr_status, open_calls, is_agent):
+    """The state machine. Pure, so --selftest can drive it with fixtures."""
+    if not is_agent:
+        return "shell"
+    s = screen
+    tail = "\n".join(s.splitlines()[-60:])
+    if "Deliver this message to Claude" in tail:
+        return "held-message"
+    if re.search(r"Ready to submit your answers\?|Review your answers", tail):
+        return "question-review"
+    if "Enter to select" in tail and re.search(r"Type something|Chat about this", tail):
+        rows = options(tail.splitlines())
+        return "question-multi" if any(r[3] for r in rows) else "question-single"
+    if re.search(r"Would you like to proceed\?", tail) and "ready to execute" in tail:
+        return "plan-approval"
+    if re.search(r"^\s*Do you want to .*\?\s*$", tail, re.M) and re.search(r"Esc to cancel", tail):
+        return "permission"
+    region = input_region(ansi_screen)
+    if herdr_status == "working":
+        return "busy"
+    if region is None:
+        return "unknown"  # no input box on screen: never guess
+    last_token = region.split("\n")[-1].split(" ")[-1]
+    if re.match(r"^/\S*$", region) or re.match(r"^@\S*$", last_token):
+        return "prompt-menu"  # a slash command being typed, or an @ file picker
+    return "prompt-draft" if region.strip() else "prompt-empty"
+
+
+def state(target):
+    pane = resolve(target)
+    pid = pane["pane_id"]
+    screen = read_screen(pid)
+    ansi_screen = read_screen(pid, ansi=True)
+    tpath = transcript_path(pane)
+    calls = open_tool_calls(tail_records(tpath)) if tpath else []
+    st = classify(screen, ansi_screen, pane.get("agent_status"), calls, bool(pane.get("agent")))
+    tail = "\n".join(screen.splitlines()[-60:]).splitlines()
+    draft = input_region(ansi_screen) if st.startswith("prompt") else None
+    if draft and len(draft) > 240:  # only the visible part of a long draft is on screen anyway
+        draft = f"{draft[:100]} …[{len(draft)} visible characters]… {draft[-100:]}"
+    return {
+        "pane": pid, "label": pane.get("label"), "agent": pane.get("agent"),
+        "herdr_status": pane.get("agent_status"), "state": st,
+        "open_tool_calls": calls, "transcript": tpath,
+        "draft": draft,
+        "options": [{"n": n, "label": lab, "highlighted": hi, "checkbox": cb}
+                    for n, lab, hi, cb in options(tail)] if st in (
+                        "question-single", "question-multi", "permission", "plan-approval") else [],
+    }, pane, screen
+
+
+# ---------------------------------------------------------------- routing
+FREE_TEXT = re.compile(r"^Type something\.?$")
+
+
+def free_text_row(rows):
+    """'Type something' by label; fallback second from last (Gavin, 7 Oct)."""
+    for n, lab, hi, cb in rows:
+        if FREE_TEXT.match(lab):
+            return n
+    return rows[-2][0] if len(rows) >= 2 else None
+
+
+def plan(st, a):
+    """Return (steps, problem). A step is ('keys', [...]) | ('text', s) | ('digit', s)."""
+    s, rows = st["state"], [(o["n"], o["label"], o["highlighted"], o["checkbox"]) for o in st["options"]]
+    steps = []
+    where = a.where
+    if getattr(a, "raw", False):
+        if s == "shell" and not a.allow_shell:
+            return [], "the pane has no agent (a plain shell); pass --allow-shell to type there anyway"
+        return [("text", None)] + ([("keys", ["enter"])] if a.enter else []), None
+    if s == "shell":
+        if not a.allow_shell:
+            return [], "the pane has no agent (a plain shell); pass --allow-shell to type there anyway"
+        return [("text", None)], None
+    if s in ("held-message", "question-review", "unknown"):
+        return [], {"held-message": "a held cross-session message is waiting for Deliver/Deny",
+                    "question-review": "the review screen has no text field (Submit answers / Cancel)",
+                    "unknown": "cannot tell where the cursor is; look at the pane (herdr-type state --screen)"}[s]
+    if where == "prompt" and not s.startswith("prompt") and s != "busy":
+        return [], f"--where prompt, but the pane is in '{s}'"
+    if where == "answer" and (s.startswith("prompt") or s == "busy"):
+        return [], f"--where answer, but no box is open (state '{s}')"
+    if s in ("prompt-empty", "prompt-draft", "busy"):
+        if s == "prompt-draft":
+            steps.append(("keys", ["ctrl+a" if a.at == "start" else "ctrl+e"]))
+        steps.append(("text", None))
+        if a.enter:
+            steps.append(("keys", ["enter"]))
+    elif s == "prompt-menu":
+        steps += [("keys", ["esc"]), ("text-raw", " "), ("text", None)]
+        if a.enter:
+            steps.append(("keys", ["enter"]))
+    elif s == "question-single":
+        n = free_text_row(rows)
+        if n is None:
+            return [], "no 'Type something' row found in the box"
+        steps += [("digit", str(n)), ("text", None)]
+        if a.enter:
+            steps.append(("keys", ["enter"]))
+    elif s == "question-multi":
+        n = free_text_row(rows)
+        cur = next((r[0] for r in rows if r[2]), rows[0][0] if rows else 1)
+        if n is None:
+            return [], "no 'Type something' row found in the box"
+        moves = n - cur
+        if moves:
+            steps.append(("keys", ["down" if moves > 0 else "up"] * abs(moves)))
+        steps.append(("text", None))
+        if a.submit:
+            steps += [("keys", ["down"]), ("keys", ["enter"]), ("wait", 1.0), ("keys", ["enter"])]
+    elif s == "permission":
+        if a.permission not in ("yes", "no"):
+            return [], "a permission prompt is open: pass --permission yes or --permission no (the text becomes the note)"
+        cur = next((r[0] for r in rows if r[2]), 1)
+        target = 1 if a.permission == "yes" else next(
+            (r[0] for r in rows if re.match(r"^No\b", r[1])), rows[-1][0] if rows else 1)
+        if target != cur:
+            steps.append(("keys", ["down" if target > cur else "up"] * abs(target - cur)))
+        steps += [("keys", ["tab"]), ("text", None)]
+        if a.enter:
+            steps.append(("keys", ["enter"]))
+    elif s == "plan-approval":
+        n = next((r[0] for r in rows if r[1].startswith("Tell Claude what to change")), None)
+        if n is None:
+            return [], "no 'Tell Claude what to change' row found"
+        steps += [("digit", str(n)), ("text", None)]
+        if a.enter:
+            steps.append(("keys", ["enter"]))
+    return steps, None
+
+
+def run_steps(pane_id, steps, text, a):
+    writes, secs = 0, 0.0
+    for kind, val in steps:
+        if kind == "keys":
+            send_keys(pane_id, *val)
+            time.sleep(0.25)
+        elif kind == "digit":
+            send_text(pane_id, val)  # a deliberate single keypress
+            time.sleep(0.6)
+        elif kind == "text-raw":
+            send_text(pane_id, f"{PASTE_START}{val}{PASTE_END}")
+            time.sleep(0.1)
+        elif kind == "wait":
+            time.sleep(val)
+        elif kind == "text":
+            mode = "bracket" if a.state_name == "shell" else a.mode
+            w, t = type_text(pane_id, text, mode, a.size, a.delay_ms)
+            writes, secs = writes + w, secs + t
+            time.sleep(0.4)  # let the last write land before a following key
+    return writes, secs
+
+
+# ---------------------------------------------------------------- verify
+def record_texts(r):
+    c = (r.get("message") or {}).get("content")
+    if isinstance(c, str):
+        return [c]
+    out = []
+    for item in c or []:
+        if item.get("type") == "text":
+            out.append(item.get("text", ""))
+        elif item.get("type") == "tool_result":
+            tc = item.get("content")
+            out.append(tc if isinstance(tc, str) else json.dumps(tc))
+    return out
+
+
+def verify(tpath, since_iso, text, timeout):
+    """Wait for a new user record that carries the text. 0 exact, 6 differs, 5 none."""
+    want = text.strip()
+    deadline = time.monotonic() + timeout
+    seen_new = False
+    while time.monotonic() < deadline:
+        for r in tail_records(tpath):
+            if r.get("type") != "user" or (r.get("timestamp") or "") < since_iso:
+                continue
+            for t in record_texts(r):
+                seen_new = True
+                if t.strip() == want:
+                    return 0, "exact: the new user turn is the text"
+                if want in t:
+                    return 0, "contained: the new turn holds the text (a draft, an answer or a note around it)"
+        time.sleep(0.5)
+    return (6, "a new user record arrived but does not hold the text") if seen_new else (
+        5, f"nothing new in the transcript within {timeout:g} s")
+
+
+# ---------------------------------------------------------------- CLI
+def cmd_state(a):
+    st, _, screen = state(a.target)
+    if a.screen:
+        st["screen_tail"] = screen.splitlines()[-30:]
+    print(json.dumps(st, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_send(a):
+    if a.file:
+        raw = sys.stdin.read() if a.file == "-" else open(a.file, encoding="utf-8").read()
+    elif a.text == "-":
+        raw = sys.stdin.read()
+    elif a.text is not None:
+        raw = a.text
+    else:
+        say("no text: give TEXT, -f FILE or -")
+        return 2
+    text, notes = clean(raw)
+    for n in notes:
+        say(n)
+    if not text.strip():
+        say("nothing left to type after cleaning")
+        return 2
+    st, pane, _ = state(a.target)
+    a.state_name = st["state"]
+    steps, problem = plan(st, a)
+    report = {"pane": st["pane"], "label": st["label"], "state": st["state"], "chars": len(text),
+              "steps": [k if v is None else f"{k}:{v}" for k, v in steps], "notes": notes}
+    if problem:
+        report["problem"] = problem
+        say(f"{st['pane']} is in '{st['state']}': {problem}")
+        if a.json:
+            print(json.dumps(report, ensure_ascii=False))
+        return 4
+    if text.lstrip().startswith(("!", "/")) and st["state"].startswith("prompt-empty"):
+        say(f"note: the text starts with '{text.lstrip()[0]}', which Claude Code treats as "
+            "a shell command (!) or a slash command (/) when it is the whole prompt")
+    if a.dry_run:
+        print(json.dumps(report | {"dry_run": True}, ensure_ascii=False))
+        return 0
+    since = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(time.time() - 1))
+    writes, secs = run_steps(st["pane"], steps, text, a)
+    report |= {"writes": writes, "type_seconds": round(secs, 2)}
+    rc = 0
+    if a.verify:
+        if not (a.enter or a.submit):
+            say("--verify needs --enter (or --submit): nothing reaches the transcript before Enter")
+            rc = 2
+        elif not st["transcript"]:
+            say("--verify: no transcript found for this pane's session")
+            rc = 5
+        else:
+            rc, why = verify(st["transcript"], since, text, a.timeout)
+            report["verify"] = why
+            say(f"verify: {why}")
+    if a.json:
+        print(json.dumps(report, ensure_ascii=False))
+    else:
+        say(f"typed {len(text)} characters into {st['pane']} ({st['state']}) in {writes} writes, {secs:.2f} s")
+    return rc
+
+
+def cmd_resolve(a):
+    p = resolve(a.target)
+    print(json.dumps({k: p.get(k) for k in ("pane_id", "label", "agent", "agent_status", "cwd")}))
+    return 0
+
+
+# ---------------------------------------------------------------- selftest
+FIX_SINGLE = """ ☐ Fruit
+Pick a fruit
+❯ 1. Apple
+     Apple
+  2. Pear
+     Pear
+  3. Type something.
+  4. Chat about this
+Enter to select · ↑/↓ to navigate · Esc to cancel"""
+FIX_MULTI = """←  ☐ Toppings  ✔ Submit  →
+Pick toppings
+❯ 1. [ ] Cheese
+         Cheese
+  2. [ ] Olives
+  3. [ ] Basil
+  4. [ ] Type something
+     Submit
+  5. Chat about this
+Enter to select · ↑/↓ to navigate · Esc to cancel"""
+FIX_REVIEW = """Review your answers
+ ● Pick toppings
+   → Basil, Cheese
+Ready to submit your answers?
+❯ 1. Submit answers
+  2. Cancel"""
+FIX_PERM = """ Bash command
+ │ touch /tmp/x
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and always allow access to /tmp/
+   3. Yes, and switch to auto mode
+   4. No
+ Esc to cancel · Tab to amend"""
+FIX_PLAN = """   Claude has written up a plan and is ready to execute. Would you like to proceed?
+   ❯ 1. Yes, and switch to BYPASS PERMISSIONS (no further prompts) for this session
+     2. Yes, manually approve edits
+     3. Tell Claude what to change
+        shift+tab to approve with this feedback"""
+RULE_LINE = "─" * 40
+
+
+def _prompt(body):
+    return f"text\n{RULE_LINE} name ─\n{body}\n{RULE_LINE}\n  status line"
+
+
+def selftest():
+    fails, n = [], 0
+
+    def check(name, got, want):
+        nonlocal n
+        n += 1
+        if got != want:
+            fails.append(f"{name}: got {got!r}, want {want!r}")
+
+    t, notes = clean("a\tb\r\nc​d‮e\x07f\U000E0041g👨‍👩‍👧")
+    check("clean", t, "a    b\nc" + "d" + "e" + "f" + "g👨‍👩‍👧")
+    check("clean notes", len(notes), 3)
+    check("chunk sizes", [len(c) for c in chunks("x" * 600, "bracket", 256)], [256, 256, 88])
+    check("chunk newlines", [c.count("\n") for c in chunks("a\n" * 7, "bracket", 256)], [2, 2, 2, 1])
+    check("chunk no lone tail", [len(c) for c in chunks("abcde", "chunk", 2)], [2, 3])
+    check("char mode", chunks("ab", "char"), ["a", "b"])
+    check("single", classify(FIX_SINGLE, FIX_SINGLE, "done", ["AskUserQuestion"], True), "question-single")
+    check("single free row (2 options -> 3)", free_text_row([(n_, l, h, c) for n_, l, h, c in options(FIX_SINGLE.splitlines())]), 3)
+    check("multi", classify(FIX_MULTI, FIX_MULTI, "blocked", ["AskUserQuestion"], True), "question-multi")
+    check("multi free row", free_text_row(options(FIX_MULTI.splitlines())), 4)
+    check("review", classify(FIX_REVIEW, FIX_REVIEW, "blocked", [], True), "question-review")
+    check("permission", classify(FIX_PERM, FIX_PERM, "blocked", ["Bash"], True), "permission")
+    check("plan", classify(FIX_PLAN, FIX_PLAN, "blocked", [], True), "plan-approval")
+    check("shell", classify("$ ", "$ ", None, [], False), "shell")
+    empty_dim = _prompt("❯ \x1b[0m\x1b[2m/context\x1b[0m")
+    check("dim suggestion is empty", classify(empty_dim, empty_dim, "done", [], True), "prompt-empty")
+    draft = _prompt("❯ half typed")
+    check("draft", classify(draft, draft, "done", [], True), "prompt-draft")
+    check("draft text", input_region(draft), "half typed")
+    menu = _prompt("❯ /con")
+    check("menu", classify(menu, menu, "done", [], True), "prompt-menu")
+    check("busy", classify(_prompt("❯ "), _prompt("❯ "), "working", ["Bash"], True), "busy")
+
+    class A:
+        where, at, enter, submit, permission, allow_shell = "auto", "end", False, False, None, False
+
+    st = {"state": "question-single", "options": [{"n": n_, "label": l, "highlighted": h, "checkbox": c}
+                                                  for n_, l, h, c in options(FIX_SINGLE.splitlines())]}
+    check("plan single", plan(st, A)[0], [("digit", "3"), ("text", None)])
+    st_p = {"state": "permission", "options": [{"n": n_, "label": l, "highlighted": h, "checkbox": c}
+                                               for n_, l, h, c in options(FIX_PERM.splitlines())]}
+    check("permission needs a choice", plan(st_p, A)[1] is not None, True)
+    A.permission = "no"
+    check("permission no", plan(st_p, A)[0], [("keys", ["down"] * 3), ("keys", ["tab"]), ("text", None)])
+    check("shell refused", plan({"state": "shell", "options": []}, A)[1] is not None, True)
+    if fails:
+        for f in fails:
+            say(f"selftest FAIL {f}")
+        say(f"--selftest: {len(fails)} of {n} arms FAILED")
+        return 1
+    say(f"--selftest: all {n} arms passed")
+    return 0
+
+
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["--selftest"]:
+        return selftest()
+    ap = argparse.ArgumentParser(prog=PROG, description="Type text into a Claude Code session in a herdr pane.")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    s1 = sub.add_parser("state")
+    s1.add_argument("target")
+    s1.add_argument("--screen", action="store_true")
+    s2 = sub.add_parser("send")
+    s2.add_argument("target")
+    s2.add_argument("text", nargs="?")
+    s2.add_argument("-f", "--file")
+    s2.add_argument("--enter", action="store_true")
+    s2.add_argument("--verify", action="store_true")
+    s2.add_argument("--timeout", type=float, default=60)
+    s2.add_argument("--at", choices=["end", "start"], default="end")
+    s2.add_argument("--where", choices=["auto", "prompt", "answer"], default="auto")
+    s2.add_argument("--permission", choices=["yes", "no"])
+    s2.add_argument("--submit", action="store_true", help="multi-select: go on to Submit and confirm")
+    s2.add_argument("--allow-shell", action="store_true")
+    s2.add_argument("--raw", action="store_true", help="type without routing (tests; a box stays safe from the writes)")
+    s2.add_argument("--mode", choices=["bracket", "chunk", "char"], default="bracket")
+    s2.add_argument("--size", type=int, default=MAX_CHUNK)
+    s2.add_argument("--delay-ms", type=float, default=0.0)
+    s2.add_argument("--dry-run", action="store_true")
+    s2.add_argument("--json", action="store_true")
+    s3 = sub.add_parser("resolve")
+    s3.add_argument("target")
+    a = ap.parse_args(argv)
+    try:
+        return {"state": cmd_state, "send": cmd_send, "resolve": cmd_resolve}[a.cmd](a)
+    except LookupError as e:
+        say(str(e))
+        return 3
+    except HerdrError as e:
+        say(str(e))
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
