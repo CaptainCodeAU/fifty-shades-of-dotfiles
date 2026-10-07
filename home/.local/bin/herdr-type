@@ -426,6 +426,13 @@ def state(target):
     }, pane, screen
 
 
+def rechecker(st):
+    """The re-read before each key reads the pane the text goes to, by its id, never the target name
+    again: a name can move to another pane mid-send (dotfiles-main re-review, engage-model Q22)."""
+    pane = st["pane"]
+    return lambda: state(pane)[0]["state"]
+
+
 # ---------------------------------------------------------------- routing
 FREE_TEXT = re.compile(r"^Type something\.?$")
 PROMPT = {"prompt-empty", "prompt-draft", "prompt-menu"}
@@ -713,7 +720,7 @@ def cmd_send(a, raw=None):
         return 0
     since = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(time.time() - 1))
     try:
-        writes, secs = run_steps(st["pane"], steps, text, a, lambda: state(a.target)[0]["state"])
+        writes, secs = run_steps(st["pane"], steps, text, a, rechecker(st))
     except StepRefused as e:
         report["problem"] = str(e)
         say(f"stopped: {e}")
@@ -924,6 +931,19 @@ def selftest():
         check("Q9-a busy: a dialog appeared, no Enter", ("pane.send_keys" in sent, out.startswith("before")), (False, True))
         out, sent = run(busy_steps, ["prompt-draft"])
         check("Q9-a busy: finished meanwhile, no Enter", "pane.send_keys" in sent, False)
+
+        # ---- Q22: the re-read follows the pane id; the name may resolve elsewhere by now
+        real_state, asked = globals()["state"], []
+
+        def moved_name_state(target):  # the name now points at a quiet pane; w1:p1 has a box open
+            asked.append(target)
+            return {"state": "question-single" if target == "w1:p1" else "prompt-empty"}, None, ""
+        globals()["state"] = moved_name_state
+        try:
+            seen = rechecker({"pane": "w1:p1", "label": "engage-main"})()
+        finally:
+            globals()["state"] = real_state
+        check("Q22 re-read asks for the pane id, not the name", (asked, seen), (["w1:p1"], "question-single"))
 
         # ---- Q9-b: --raw with --enter only at the prompt
         check("Q9-b raw+enter refused in a box",
