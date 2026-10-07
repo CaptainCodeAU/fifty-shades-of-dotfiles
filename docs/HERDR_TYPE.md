@@ -7,6 +7,16 @@ the pieces talk, and the traps, with the measurements behind each claim. It does
 not ask you to build the optional local endpoint; it says how one must be built if
 a use case needs it.
 
+herdr-verified: 0.9.3
+
+Stamped 2026-10-07 (Gavin's dotfiles-main Q39: 1). What stands behind it: written by
+engage-model against herdr 0.9.3, whose live test of the tool passed 18 of 18 in a
+fresh session that day; reviewed twice by dotfiles-main against the code (eight
+findings fixed as engage-model Q9-a to Q9-h and Q22; selftest 70/70, then 73/73
+with the label change). NOT re-run for the stamp: the live test itself, and Linux.
+The `herdr-verified:` line is read by `herdr-skill-drift-check`; move it only after
+re-checking this doc against a new herdr.
+
 Measured on **Claude Code 2.1.292** and **herdr 0.9.3**, macOS, 7 Oct 2026.
 Labels: **LIVE** = measured in a real session; **SOURCE** = read in docs, source
 code or the Claude Code binary; **ASSUMED** = inference, not checked.
@@ -20,11 +30,11 @@ size and timing), `ROUND5-herdr-type.md` (this tool's build and live results),
 
 ## 1. The three paths, and which to use
 
-| Path | What it is | Use it for | Do not use it for |
-|---|---|---|---|
-| **A. herdr typing** (`herdr-type`) | Types into the pane's terminal, exactly as a person would | "Put this in my session" when the text should land where the cursor is, a person may review it, or a box/dialog may be open | Sessions not running inside herdr |
-| **B. Cross-session inbox** | Claude Code's own per-session Unix socket | "Send now": the session should act at once, no Enter, no typing | Placing text for review (it cannot stage text in the input box) |
-| **C. Channels** | An MCP server the session starts with a dev flag | An automatic event feed (CI, alerts) into a session launched for it | Anything a person triggers into an already-running session |
+| Path                               | What it is                                                | Use it for                                                                                                                  | Do not use it for                                               |
+| ---------------------------------- | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| **A. herdr typing** (`herdr-type`) | Types into the pane's terminal, exactly as a person would | "Put this in my session" when the text should land where the cursor is, a person may review it, or a box/dialog may be open | Sessions not running inside herdr                               |
+| **B. Cross-session inbox**         | Claude Code's own per-session Unix socket                 | "Send now": the session should act at once, no Enter, no typing                                                             | Placing text for review (it cannot stage text in the input box) |
+| **C. Channels**                    | An MCP server the session starts with a dev flag          | An automatic event feed (CI, alerts) into a session launched for it                                                         | Anything a person triggers into an already-running session      |
 
 Why C lost for button-style use (LIVE unless marked): it cannot reach a session
 already running (start-up flag only, with a confirmation dialog every launch); a
@@ -100,14 +110,14 @@ One JSON line per connection, one JSON line back. Socket: `$HERDR_SOCKET_PATH`, 
 `~/.config/herdr/herdr.sock` (mode 0600, owner only; no per-caller check in 0.9.3,
 SOURCE). The full schema: `herdr api schema --json`.
 
-| Request (`{"id":..,"method":..,"params":..}`) | Reply `result` | Used for |
-|---|---|---|
-| `pane.send_text {"pane_id","text"}` | `{"type":"ok"}`-like | Typing. Raw bytes; no Enter, no state check |
-| `pane.send_keys {"pane_id","keys":["enter","down","tab","esc","ctrl+e","ctrl+a","ctrl+u","ctrl+c","shift+tab"]}` | ok | Keys. `home` is **not** a key name (`invalid_key`) |
-| `pane.read {"pane_id","source":"visible","lines":N,"format":"text"|"ansi","strip_ansi":bool}` | `{"read":{"text":..,"truncated":..}}` | Screen for state detection; `ansi` shows dim (`ESC[2m`) suggestion text |
-| `pane.get {"pane_id"}` | `{"pane":{"label","agent","agent_status","agent_session":{"kind":"id","value":<session id>},"cwd",..}}` | Target resolution, status, transcript lookup |
-| `agent.get {"target"}` | `{"agent":{"name","pane_id",..}}` | Resolve a herdr agent name |
-| `pane.list {}` | `{"panes":[..]}` | Resolve a label / session name |
+| Request (`{"id":..,"method":..,"params":..}`)                                                                    | Reply `result`                                                                                          | Used for                                           |
+| ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| `pane.send_text {"pane_id","text"}`                                                                              | `{"type":"ok"}`-like                                                                                    | Typing. Raw bytes; no Enter, no state check        |
+| `pane.send_keys {"pane_id","keys":["enter","down","tab","esc","ctrl+e","ctrl+a","ctrl+u","ctrl+c","shift+tab"]}` | ok                                                                                                      | Keys. `home` is **not** a key name (`invalid_key`) |
+| `pane.read {"pane_id","source":"visible","lines":N,"format":"text"                                               | "ansi","strip_ansi":bool}`                                                                              | `{"read":{"text":..,"truncated":..}}`              | Screen for state detection; `ansi` shows dim (`ESC[2m`) suggestion text |
+| `pane.get {"pane_id"}`                                                                                           | `{"pane":{"label","agent","agent_status","agent_session":{"kind":"id","value":<session id>},"cwd",..}}` | Target resolution, status, transcript lookup       |
+| `agent.get {"target"}`                                                                                           | `{"agent":{"name","pane_id",..}}`                                                                       | Resolve a herdr agent name                         |
+| `pane.list {}`                                                                                                   | `{"panes":[..]}`                                                                                        | Resolve a label / session name                     |
 
 Errors: `{"error":{"code","message"}}`.
 
@@ -116,14 +126,14 @@ Errors: `{"error":{"code","message"}}`.
 Path: `<CLAUDE_CONFIG_DIR or ~/.claude>/projects/<cwd slug>/<session id>.jsonl`; the
 session id is `pane.get` → `agent_session.value`. Records used (LIVE):
 
-| Record | Meaning |
-|---|---|
-| `{"type":"user","origin":{"kind":"human"},"message":{"content":"<text>"}}` | A typed (or herdr-typed) prompt |
-| `{"type":"user","isMeta":true,"origin":{"kind":"channel","server":..}}` | A channel event (path C) |
-| `{"type":"user","isMeta":true,"origin":{"kind":"peer","verifiedPeerPid":..}}` | An inbox message (path B) |
+| Record                                                                              | Meaning                                                                                         |
+| ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `{"type":"user","origin":{"kind":"human"},"message":{"content":"<text>"}}`          | A typed (or herdr-typed) prompt                                                                 |
+| `{"type":"user","isMeta":true,"origin":{"kind":"channel","server":..}}`             | A channel event (path C)                                                                        |
+| `{"type":"user","isMeta":true,"origin":{"kind":"peer","verifiedPeerPid":..}}`       | An inbox message (path B)                                                                       |
 | `assistant` with `content[].type=="tool_use"` and no later `tool_result` of that id | An open tool call: `AskUserQuestion`, `ExitPlanMode`, `Bash` (also while a command simply runs) |
-| `user` with `content[].type=="tool_result"` (`"The user answered: ..."`) | A box answer, a permission result; a permission note arrives as an extra `text` item beside it |
-| `attachment.type=="queued_command"` | Text typed and sent while Claude was busy |
+| `user` with `content[].type=="tool_result"` (`"The user answered: ..."`)            | A box answer, a permission result; a permission note arrives as an extra `text` item beside it  |
+| `attachment.type=="queued_command"`                                                 | Text typed and sent while Claude was busy                                                       |
 
 ### 3.3 Claude Code inbox socket (path B, "Send now")
 
@@ -156,35 +166,35 @@ value does not reach them.
 
 `herdr-type state <target>` combines three signals, because none is right alone (LIVE):
 
-| State | Screen (last 60 lines) | Transcript open call | herdr status |
-|---|---|---|---|
-| `question-single` | "Enter to select" + ("Type something" or "Chat about this"), no `[ ]` rows | `AskUserQuestion` | `done` 4×, `blocked` 4× (unreliable) |
-| `question-multi` | same, with `[ ]`/`[✔]` rows | `AskUserQuestion` | |
-| `question-review` | "Review your answers" / "Ready to submit your answers?" | `AskUserQuestion` | |
-| `permission` | a line "Do you want to …?" + "Esc to cancel" | `Bash` (or the tool asking) | `blocked` |
-| `plan-approval` | "Would you like to proceed?" + "ready to execute" | **often none** (first round) | `blocked` |
-| `held-message` | "Deliver this message to Claude" | | |
-| `busy` | (no dialog) | `Bash` (same as a permission prompt!) | `working` |
-| `prompt-empty` / `prompt-draft` | the input box between the last two `────` rules; dim text is a suggestion, not a draft | | `idle`/`done` |
-| `prompt-menu` | the draft is a bare `/word`, or ends in `@word` | | |
-| `shell` | pane has no agent | | none |
-| `unknown` | no input box and no known dialog | | |
+| State                           | Screen (last 60 lines)                                                                 | Transcript open call                  | herdr status                         |
+| ------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------- | ------------------------------------ |
+| `question-single`               | "Enter to select" + ("Type something" or "Chat about this"), no `[ ]` rows             | `AskUserQuestion`                     | `done` 4×, `blocked` 4× (unreliable) |
+| `question-multi`                | same, with `[ ]`/`[✔]` rows                                                            | `AskUserQuestion`                     |                                      |
+| `question-review`               | "Review your answers" / "Ready to submit your answers?"                                | `AskUserQuestion`                     |                                      |
+| `permission`                    | a line "Do you want to …?" + "Esc to cancel"                                           | `Bash` (or the tool asking)           | `blocked`                            |
+| `plan-approval`                 | "Would you like to proceed?" + "ready to execute"                                      | **often none** (first round)          | `blocked`                            |
+| `held-message`                  | "Deliver this message to Claude"                                                       |                                       |                                      |
+| `busy`                          | (no dialog)                                                                            | `Bash` (same as a permission prompt!) | `working`                            |
+| `prompt-empty` / `prompt-draft` | the input box between the last two `────` rules; dim text is a suggestion, not a draft |                                       | `idle`/`done`                        |
+| `prompt-menu`                   | the draft is a bare `/word`, or ends in `@word`                                        |                                       |                                      |
+| `shell`                         | pane has no agent                                                                      |                                       | none                                 |
+| `unknown`                       | no input box and no known dialog                                                       |                                       |                                      |
 
 ## 5. Routing (what `send` does in each state)
 
-| State | Steps | Notes |
-|---|---|---|
-| prompt-empty | type | |
-| prompt-draft | `ctrl+e` (or `--at start`: `ctrl+a`), type | Text joins the draft; on a long wrapped draft `ctrl+e` reaches the end of the current line only |
-| prompt-menu | `esc`, a space, type | `/con` + text became `/con LT-menu text` (the text becomes the command's arguments) |
-| busy | type (Enter queues it) | Delivered after the running command, obeyed |
-| question-single | press the number of the row labelled "Type something" (found **by label**; fallback second from last), type | With 2 options it is **3**; 4 is "Chat about this", which closes the box |
-| question-multi | `down` to that row, type; `--submit`: `down`, `enter`, `enter` (review → Submit answers) | Pressing its number only ticks the row; typed letters then act as keys |
-| permission | `--permission no`: move to row "No", `tab`, type the reason. `--permission yes`: **refused** unless the switch in section 5.1 is set; then row 1, `tab`, type the note | Without `--permission`: exit 4. No + reason: command refused, reason delivered (LIVE) |
-| plan-approval | press "Tell Claude what to change", type | Claude revises the plan |
-| question-review, held-message, unknown | exit 4 with the reason | No text field there |
-| shell | exit 4 unless `--allow-shell`; **never** with `--enter` (exit 4) | Bracketed typing: zsh holds the lines, nothing runs |
-| any, with `--raw` | type without routing; `--enter` only if a fresh read shows prompt-empty or prompt-draft (else exit 4) | For tests; typing alone is box-safe (engage-model Q9-b) |
+| State                                  | Steps                                                                                                                                                                  | Notes                                                                                           |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| prompt-empty                           | type                                                                                                                                                                   |                                                                                                 |
+| prompt-draft                           | `ctrl+e` (or `--at start`: `ctrl+a`), type                                                                                                                             | Text joins the draft; on a long wrapped draft `ctrl+e` reaches the end of the current line only |
+| prompt-menu                            | `esc`, a space, type                                                                                                                                                   | `/con` + text became `/con LT-menu text` (the text becomes the command's arguments)             |
+| busy                                   | type (Enter queues it)                                                                                                                                                 | Delivered after the running command, obeyed                                                     |
+| question-single                        | press the number of the row labelled "Type something" (found **by label**; fallback second from last), type                                                            | With 2 options it is **3**; 4 is "Chat about this", which closes the box                        |
+| question-multi                         | `down` to that row, type; `--submit`: `down`, `enter`, `enter` (review → Submit answers)                                                                               | Pressing its number only ticks the row; typed letters then act as keys                          |
+| permission                             | `--permission no`: move to row "No", `tab`, type the reason. `--permission yes`: **refused** unless the switch in section 5.1 is set; then row 1, `tab`, type the note | Without `--permission`: exit 4. No + reason: command refused, reason delivered (LIVE)           |
+| plan-approval                          | press "Tell Claude what to change", type                                                                                                                               | Claude revises the plan                                                                         |
+| question-review, held-message, unknown | exit 4 with the reason                                                                                                                                                 | No text field there                                                                             |
+| shell                                  | exit 4 unless `--allow-shell`; **never** with `--enter` (exit 4)                                                                                                       | Bracketed typing: zsh holds the lines, nothing runs                                             |
+| any, with `--raw`                      | type without routing; `--enter` only if a fresh read shows prompt-empty or prompt-draft (else exit 4)                                                                  | For tests; typing alone is box-safe (engage-model Q9-b)                                         |
 
 **Every key, digit and Enter is preceded by a fresh read of the state** (engage-model
 Q9-a). Each step carries the state it was planned for; if the pane is anywhere else at
@@ -196,13 +206,13 @@ read right before that Enter still shows busy with no dialog.
 `--enter` presses Enter at the end; `--verify` then looks for the text **only where its
 route lands** (engage-model Q9-g) and says where it found it:
 
-| Route | Where `--verify` looks |
-|---|---|
+| Route                                      | Where `--verify` looks                                                                                                                                                           |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | prompt (empty, draft, menu, busy, `--raw`) | a new user turn with `origin.kind == "human"`, or a `queued_command` attachment with origin human (sent while busy). A channel or peer turn holding the same text does not count |
-| question box answer | the `AskUserQuestion` tool_result |
-| permission no + reason | the rejected (`is_error`) tool_result of the tool that asked |
-| permission yes + note | the text block beside that tool's tool_result |
-| plan feedback | the `ExitPlanMode` tool_result |
+| question box answer                        | the `AskUserQuestion` tool_result                                                                                                                                                |
+| permission no + reason                     | the rejected (`is_error`) tool_result of the tool that asked                                                                                                                     |
+| permission yes + note                      | the text block beside that tool's tool_result                                                                                                                                    |
+| plan feedback                              | the `ExitPlanMode` tool_result                                                                                                                                                   |
 
 Exit 0 found, 5 nothing new, 6 something new arrived but not the text where it belongs.
 
@@ -224,17 +234,17 @@ with engage #1121 / #1124; they are not built here.
 **Every write is its own bracketed paste** (`ESC[200~ … ESC[201~`), at most 256
 characters and at most 2 newlines.
 
-| Fact | Numbers | Label |
-|---|---|---|
-| Claude Code marks a burst over 800 characters as pasted (`<pasted_content>`; Claude follows instructions in it only where typed words ask) | 800 typed, 801 pasted, 3 of 3 each | LIVE (matrix) |
-| A bracketed paste of more than 3 lines is marked, whatever its size | 128-char chunks of a 200-line text: 14 placeholders; 8-char chunks: none | LIVE |
-| Plain big writes can lose text (matrix: identical consecutive 1,024-byte reads dropped; 1-2 KB writes close together lose about 2 KB) | round 1: 4,039 sent, 1,022 lost; one 35,334-char write kept only 586. The matrix's single writes of varied text were intact 21 of 21, so the round-1 loss is not fully explained | LIVE |
-| Bracketed chunks lose nothing, even identical ones | 6,000 `x` at 8/128/512 per write: all kept | LIVE |
-| Speed | 28,931 chars at 8/write in 1.2 s; 100,000 at 256/write accepted in 0.06 s (the screen catches up after); 250,051 typed, sent and verified exact in about 2 s | LIVE |
-| Box safety: an open question box answers only a write of exactly one plain character | `2` picked option 2; bracketed writes and plain writes of 2+ chars left it open | LIVE |
-| Invisible prefixes do not protect a box | U+200B before `2`: still picked option 2 | LIVE |
-| Shell safety: plain newlines run in zsh; bracketed ones are held | `echo SAFE_LINE_ONE_42` ran; bracketed lines sat unsent | LIVE |
-| Context is the real ceiling | a 250,051-character message took a session from 15% to 30%; the matrix session stood at 56% after its 250,049 run (with about 125 smaller runs before it) | LIVE |
+| Fact                                                                                                                                       | Numbers                                                                                                                                                                          | Label         |
+| ------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| Claude Code marks a burst over 800 characters as pasted (`<pasted_content>`; Claude follows instructions in it only where typed words ask) | 800 typed, 801 pasted, 3 of 3 each                                                                                                                                               | LIVE (matrix) |
+| A bracketed paste of more than 3 lines is marked, whatever its size                                                                        | 128-char chunks of a 200-line text: 14 placeholders; 8-char chunks: none                                                                                                         | LIVE          |
+| Plain big writes can lose text (matrix: identical consecutive 1,024-byte reads dropped; 1-2 KB writes close together lose about 2 KB)      | round 1: 4,039 sent, 1,022 lost; one 35,334-char write kept only 586. The matrix's single writes of varied text were intact 21 of 21, so the round-1 loss is not fully explained | LIVE          |
+| Bracketed chunks lose nothing, even identical ones                                                                                         | 6,000 `x` at 8/128/512 per write: all kept                                                                                                                                       | LIVE          |
+| Speed                                                                                                                                      | 28,931 chars at 8/write in 1.2 s; 100,000 at 256/write accepted in 0.06 s (the screen catches up after); 250,051 typed, sent and verified exact in about 2 s                     | LIVE          |
+| Box safety: an open question box answers only a write of exactly one plain character                                                       | `2` picked option 2; bracketed writes and plain writes of 2+ chars left it open                                                                                                  | LIVE          |
+| Invisible prefixes do not protect a box                                                                                                    | U+200B before `2`: still picked option 2                                                                                                                                         | LIVE          |
+| Shell safety: plain newlines run in zsh; bracketed ones are held                                                                           | `echo SAFE_LINE_ONE_42` ran; bracketed lines sat unsent                                                                                                                          | LIVE          |
+| Context is the real ceiling                                                                                                                | a 250,051-character message took a session from 15% to 30%; the matrix session stood at 56% after its 250,049 run (with about 125 smaller runs before it)                        | LIVE          |
 
 **Text cleaning** before typing: CR/CRLF → LF (a CR is Enter); tabs → 4 spaces (a typed
 tab is dropped, LIVE); control characters and invisible format characters (zero-width,
