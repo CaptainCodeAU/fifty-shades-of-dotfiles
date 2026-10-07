@@ -109,7 +109,7 @@ BEGIN { US = sprintf("%c", 31); RSC = sprintf("%c", 30); OPM = sprintf("%c", 2);
         # of them, no alias, no SAFE_RM_OFF and no truncating redirection cannot be
         # denied, so it is not emitted: bash 3.2 costs ~0.15 ms per command it sees.
         # nofilter=1 emits everything; the selftest runs every arm both ways.
-        nt = split("sudo doas env command exec time repeat nice timeout gtimeout caffeinate stdbuf gstdbuf watch xargs gxargs eval sh bash zsh dash ksh mksh yash fish rm grm unlink gunlink shred gshred srm wipe truncate gtruncate dd gdd cp gcp find gfind fd fdfind git rsync rimraf del-cli docker podman docker-compose brew pnpm bun bunx npx pnpx uv node nodejs deno perl ruby osascript diskutil wipefs tmutil trash trash-empty trash-rm crontab tee gtee script source . export declare typeset local readonly unset hash grhh gwipe gpristine", TL, " ")
+        nt = split("sudo doas env command exec time repeat nice timeout gtimeout caffeinate stdbuf gstdbuf watch xargs gxargs eval sh bash zsh dash ksh mksh yash fish rm grm unlink gunlink shred gshred srm wipe truncate gtruncate dd gdd cp gcp find gfind fd fdfind git rsync rimraf del-cli docker podman docker-compose brew pnpm bun bunx npx pnpx uv node nodejs deno perl ruby osascript diskutil wipefs tmutil trash trash-empty trash-rm herdr crontab tee gtee script source . export declare typeset local readonly unset hash grhh gwipe gpristine", TL, " ")
         for (k = 1; k <= nt; k++) TRIG[TL[k]] = 1
         hasal = 0
         if (snap != "") loadaliases() }
@@ -407,6 +407,7 @@ _msg() { # $1 = rule id -> what it does, then the safe route
     find-exec-untested) echo "find runs left to right, so an -exec rm (or rmdir, trash) with no test before it in its AND-chain runs on EVERY file find reaches: ahead of -name, or right after a -o, it sends the whole tree to the Trash. SAFE ROUTE: put a test such as -name before the action, and run the same command with -print in place of the action first." ;;
     find-depth-prune) echo "find -depth (BSD -d) makes -prune do nothing, so a folder you pruned is no longer protected from the -exec rm. SAFE ROUTE: drop -depth (and -d) when using -prune; run the same command with -print in place of the action first." ;;
     git-worktree-remove) echo "git worktree remove unlinks the whole worktree outside the Trash. SAFE ROUTE: rm -r <dir> (Trash-routed), then git worktree prune." ;;
+    herdr-worktree-remove) echo "herdr worktree remove deletes the git worktree AND its checkout folder outside the Trash. SAFE ROUTE: commit, rm -r <repo>/.worktree/<branch> (Trash-routed), then git -C <repo> worktree prune." ;;
     git-clean)      echo "git clean deletes untracked files outside the Trash. SAFE ROUTE: git clean -n to list, then rm the files (bare rm)." ;;
     git-reset-hard) echo "git reset --hard discards uncommitted work. SAFE ROUTE: git stash push -u (recoverable), or ask Gavin." ;;
     git-checkout-discard) echo "git checkout on paths (-- <path>, ., or a file) or with -f discards uncommitted work. SAFE ROUTE: git stash push -u (recoverable), or ask Gavin; for a branch use git switch <branch>." ;;
@@ -463,6 +464,7 @@ _FX="[[:space:]]+-(exec|execdir|ok|okdir)[[:space:]]+(command[[:space:]]+)?[\\\\
 _rt find-exec-untested  "${_RL}g?find([[:space:]]+-[EXdsxHLP]+|[[:space:]]+[^-[:space:]][^[:space:]]*)*${_FX}"
 _rt find-depth-prune    "${_RL}g?find[[:space:]]([^|&]*[[:space:]])?-(depth|[EXsxHLP]*d[EXsxHLP]*)[[:space:]]([^|&]*[[:space:]])?-prune[[:space:]][^|&]*${_FX}|${_RL}g?find[[:space:]]([^|&]*[[:space:]])?-prune[[:space:]]([^|&]*[[:space:]])?-(depth|d)[[:space:]][^|&]*${_FX}"
 _rt git-worktree-remove "${_RG}worktree[[:space:]]+remove${_RR}"
+_rt herdr-worktree-remove "${_RL}herdr([[:space:]]+-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+worktree[[:space:]]+remove${_RR}"
 _rt git-clean           "${_RG}clean${_RR}"
 _rt git-reset-hard      "${_RG}reset[[:space:]][^|;&]*--hard|${_RL}(grhh|gwipe|gpristine)${_RR}"
 _rt git-checkout-discard "${_RG}checkout[[:space:]]([^|;&]*[[:space:]])?(-f|--force|--|\\.)([[:space:]]|$)"
@@ -970,6 +972,13 @@ _argv() {
       case "${1:-}" in delete|deletelocalsnapshots|thinlocalsnapshots|deleteinprogress) _deny tmutil "tmutil $1"; return 0 ;; esac   #M: tmutil delete
       return 0 ;;
     trash-empty|trash-rm) _deny trash-empty "$base"; return 0 ;;   #M: trash-empty
+    herdr)   # W-20261007-A20: herdr worktree remove deletes the checkout folder for good
+      while [ $# -gt 0 ]; do case "$1" in --session|--machine|--remote) shift 2 || set -- ;; -*) shift ;; *) break ;; esac; done   #M: herdr global options
+      if [ "${1:-}" = worktree ] && [ "${2:-}" = remove ]; then
+        for w in "$@"; do case "$w" in -h|--help) return 0 ;; esac; done             #M: herdr worktree remove --help
+        _deny herdr-worktree-remove "herdr worktree remove"; return 0                 #M: herdr worktree remove
+      fi
+      return 0 ;;
     trash)   # 2026-09-29: only the PATH shim runs trash-guard; a path or command/env skips it
       if [[ $c == */* ]] && ! _home_shim "$c" trash; then _deny trash-path "$c"; return 0; fi   #M: trash by path
       [ -n "$TRASH_VIA" ] && { _deny trash-path "$TRASH_VIA trash"; return 0; }                       #M: command/env trash
@@ -1336,6 +1345,16 @@ SNAP
   echo "=== DENY arms: each must be refused by the named rule ==="
   _must git-worktree-remove 'git worktree remove'            'git worktree remove ../wt'
   _must git-worktree-remove 'worktree remove --force'        'git worktree remove --force .worktree/x'
+  # W-20261007-A20: herdr's own worktree remove deletes the checkout folder for good
+  _must herdr-worktree-remove 'herdr worktree remove'        'herdr worktree remove'
+  _must herdr-worktree-remove 'herdr ... --workspace ID'     'herdr worktree remove --workspace w12'
+  _must herdr-worktree-remove 'herdr ... --force'            'herdr worktree remove --force --workspace w12'
+  _must herdr-worktree-remove 'herdr --session s ...'        'herdr --session main worktree remove --workspace w12'
+  _must herdr-worktree-remove 'herdr --machine m ...'        'herdr --machine mini worktree remove --workspace w12'
+  _must herdr-worktree-remove 'herdr by path'                '/opt/homebrew/bin/herdr worktree remove --workspace w12'
+  _must herdr-worktree-remove 'command herdr'                'command herdr worktree remove'
+  _must herdr-worktree-remove 'inside $( )'                  'echo "$(herdr worktree remove --workspace w12)"'
+  _must herdr-worktree-remove 'after &&'                     'git status && herdr worktree remove --workspace w12'
   _must git-clean           'git clean -fdx'                  'git clean -fdx'
   _must git-clean           'git clean -f'                    'git clean -f'
   _must git-clean           'git clean -xfd -e keep'          'git clean -xfd -e keep'
@@ -1634,6 +1653,12 @@ SNAP
 
   echo "=== ALLOW arms: each must pass untouched ==="
   _must - 'bare rm'                         'rm notes.txt'
+  _must - 'A20 herdr worktree list'         'herdr worktree list'
+  _must - 'A20 herdr worktree create'       'herdr worktree create --branch topic'
+  _must - 'A20 herdr worktree open'         'herdr worktree open --workspace w12'
+  _must - 'A20 herdr worktree remove --help' 'herdr worktree remove --help'
+  _must - 'A20 herdr pane close'            'herdr pane close w12:p1'
+  _must - 'A20 the words as an echo arg'    'echo herdr worktree remove'
   _must - 'rm -rf dir'                      'rm -rf build'
   _must - 'command rm'                      'command rm x'
   _must - '\rm'                             '\rm x'
@@ -2074,6 +2099,7 @@ find-delete|find . -name x -delete
 find-exec-untested|find . -exec rm -rf {} + -name x
 find-depth-prune|find -d . -path ./keep -prune -o -name x -exec rm {} +
 git-worktree-remove|git -C ../r worktree remove ../wt
+herdr-worktree-remove|herdr --session main worktree remove --workspace w12
 git-clean|git clean -fdx
 git-reset-hard|git reset --hard HEAD
 git-checkout-discard|git checkout -- src/app.c
