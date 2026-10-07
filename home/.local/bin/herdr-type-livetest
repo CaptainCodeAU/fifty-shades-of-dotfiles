@@ -1,34 +1,52 @@
 #!/usr/bin/env zsh
 # ============================================================================
-#  herdr-type-livetest -- drive a THROWAWAY Claude Code session through every
-#                         herdr-type scenario and log what really happened
+#  herdr-type-livetest -- start a THROWAWAY Claude Code session, drive it through
+#                         every herdr-type scenario, log what really happened,
+#                         and close it again
 # ============================================================================
 #
-# Give it a pane that holds a fresh, disposable Claude Code session in bypass
-# mode (on this estate: `engage-worker tab <purpose>`). It types setup prompts
-# into that session (question boxes, a permission prompt, a plan), cycles its
-# permission mode with shift+tab and back, opens one plain shell pane beside it
-# and closes that pane again. It never touches any other pane.
+# It no longer takes a pane from the caller (engage-model Q9-d): it starts its own
+# fresh session with `engage-worker tab <purpose>`, drives ONLY that session,
+# checks before every scenario that the pane still holds that session (by SESSION
+# ID, never by name: sessions get renamed), and closes the tab when it exits,
+# whatever happens. Inside its own session it types setup prompts (question boxes,
+# a permission prompt, a plan), cycles the permission mode with shift+tab and back,
+# and opens one plain shell pane in its own tab.
 #
-# usage: herdr-type-livetest <pane-id> [--log FILE] [--only NAME,...] [--long N]
+# usage: herdr-type-livetest [--purpose NAME] [--log FILE] [--only NAME,...] [--long N]
+#   --purpose  the engage-worker tab purpose (default htlive; [a-z][a-z0-9_-]{0,31})
 #   --long N   characters for the long-text scenario (default 100000; it costs
-#              context: 250,049 characters took a session to 56%)
+#              context: a 250,051-character message took a session from 15% to 30%)
 # Output: one line per scenario, PASS/FAIL and the evidence; the same as TSV in
 # --log (default $TMPDIR/herdr-type-livetest.tsv). Exit 0 only if all passed.
 # ============================================================================
 emulate -L zsh
 setopt pipefail
 HT=${0:A:h}/herdr-type
-P=$1; shift || { print -u2 "usage: herdr-type-livetest <pane-id> [--log FILE] [--only a,b] [--long N]"; exit 2 }
-LOG=${TMPDIR:-/tmp}/herdr-type-livetest.tsv; ONLY=""; LONG=100000
+PURPOSE=htlive; LOG=${TMPDIR:-/tmp}/herdr-type-livetest.tsv; ONLY=""; LONG=100000
 while (( $# )); do
   case $1 in
+    --purpose) (( $# >= 2 )) || { print -u2 "--purpose needs a value"; exit 2 }; PURPOSE=$2; shift 2 ;;
     --log) (( $# >= 2 )) || { print -u2 "--log needs a value"; exit 2 }; LOG=$2; shift 2 ;;
     --only) (( $# >= 2 )) || { print -u2 "--only needs a value"; exit 2 }; ONLY=$2; shift 2 ;;
     --long) (( $# >= 2 )) || { print -u2 "--long needs a value"; exit 2 }; LONG=$2; shift 2 ;;
-    *) print -u2 "unknown option $1"; exit 2 ;;
+    -*) print -u2 "unknown option $1"; exit 2 ;;
+    *) print -u2 "herdr-type-livetest no longer takes a pane ($1): it starts, checks and closes its own session (engage-model Q9-d)"; exit 2 ;;
   esac
 done
+unset HERDR_TYPE_ALLOW_PERMISSION_YES  # the yes path must be refused here, as it is for an agent
+
+# ---- start its own session; close the tab on any exit
+out=$(engage-worker tab $PURPOSE --timeout 120 2>&1)
+line=${(M)${(f)out}:#*one name:*}
+P=${${line#*pane }%%,*}; TAB=${${line#*tab }%%\)*}
+[[ $P == w*:p* && $TAB == w*:t* ]] || { print -u2 "could not start a test session:"; print -u2 -r -- "$out"; exit 2 }
+trap 'herdr tab close $TAB >/dev/null 2>&1; print -u2 "herdr-type-livetest: closed tab $TAB"' EXIT
+sid_of() { herdr pane get $P 2>/dev/null | jq -r '.result.pane.agent_session.value // empty' }
+SID=$(sid_of)
+[[ -n $SID ]] || { print -u2 "no session id on $P"; exit 2 }
+print -r -- "herdr-type-livetest: session $SID in pane $P, tab $TAB"
+
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/herdr-type-livetest.XXXXXX")
 TX=$($HT state $P | jq -r .transcript)
 [[ -f $TX ]] || { print -u2 "no transcript for $P"; exit 2 }
@@ -42,7 +60,14 @@ result() {  # name PASS|FAIL evidence
   if [[ $2 == PASS ]]; then (( ++pass )); else (( ++fail )); fi
   return 0  # (( x++ )) is "false" when x was 0; never let a count decide a branch
 }
-want() { [[ -z $ONLY || ",$ONLY," == *",$1,"* ]] }
+same_session() {  # the pane must still hold the session this run started
+  local now=$(sid_of)
+  [[ $now == $SID ]] && return 0
+  result session-check FAIL "pane $P now holds '${now:-nothing}', not $SID; stopping"
+  print -r -- "herdr-type-livetest: $pass passed, $fail failed (log: $LOG)"
+  exit 1
+}
+want() { [[ -z $ONLY || ",$ONLY," == *",$1,"* ]] && same_session }
 st() { $HT state $P | jq -r .state }
 waitstate() {  # regex timeout-seconds -> 0 when the state matches
   local end=$(( SECONDS + $2 )) s
@@ -54,7 +79,7 @@ waitstate() {  # regex timeout-seconds -> 0 when the state matches
 idle() { waitstate '^prompt-(empty|draft)$' ${1:-90} }
 setup() { $HT send $P "$1" --enter >/dev/null 2>&1 }
 last_user() { jq -rs '[.[] | select(.type=="user") | .message.content | if type=="string" then . else (map(select(.type=="text") | .text) | join("\n")) end | select(length>0)] | last' $TX }
-last_result() { jq -rs '[.[] | select(.type=="user") | .message.content | if type=="array" then (map(select(.type=="tool_result") | (.content|tostring)) | join("\n")) else empty end | select(length>0)] | last' $TX }
+vfy() { print -r -- "$1" | jq -r '.verify // .problem // "no report"' 2>/dev/null }
 cycle_to() {  # mode label as shown on the status line: "manual mode", "plan mode", "bypass permissions"
   local i
   for i in 1 2 3 4 5 6; do
@@ -71,15 +96,15 @@ box() {  # open an AskUserQuestion box from a spec sentence
 idle 60 || { print -u2 "session is not idle at the prompt"; exit 2 }
 
 if want empty; then
-  out=$($HT send $P "LT-empty: reply with only the word ok1" --enter --verify --json 2>&1 | tail -1)
-  [[ $out == *'"verify": "exact'* ]] && result empty PASS "verified exact" || result empty FAIL "$out"
+  out=$($HT send $P "LT-empty: reply with only the word ok1" --enter --verify --json 2>/dev/null | tail -1)
+  [[ $(vfy $out) == "exact, in a new user turn (origin human)" ]] && result empty PASS "$(vfy $out)" || result empty FAIL "$out"
   idle
 fi
 
 if want draft-end; then
   herdr pane send-text $P 'DRAFTX ' >/dev/null; sleep 0.5
-  $HT send $P "LT-draft-end: reply with only the word ok2" --enter --verify >/dev/null 2>&1
-  u=$(last_user); [[ $u == "DRAFTX LT-draft-end"* ]] && result draft-end PASS "delivered: $u" || result draft-end FAIL "delivered: $u"
+  out=$($HT send $P "LT-draft-end: reply with only the word ok2" --enter --verify --json 2>/dev/null | tail -1)
+  u=$(last_user); [[ $u == "DRAFTX LT-draft-end"* && $(vfy $out) == contained* ]] && result draft-end PASS "delivered: $u ($(vfy $out))" || result draft-end FAIL "delivered: $u / $out"
   idle
 fi
 
@@ -96,58 +121,65 @@ if want slash-menu; then
   $HT send $P "LT-menu text" >/dev/null 2>&1; sleep 1
   d=$($HT state $P | jq -r .draft)
   [[ $s1 == prompt-menu && $d == "/con LT-menu text" ]] && result slash-menu PASS "state was $s1; box now '$d' (not sent)" || result slash-menu FAIL "state $s1; box '$d'"
-  herdr pane send-keys $P ctrl+e ctrl+u >/dev/null; sleep 0.5
+  herdr pane send-keys $P ctrl+c >/dev/null; sleep 0.5
 fi
 
 if want busy; then
   setup "LT-busy-setup: run this exact bash command in the foreground: perl -e 'select(undef,undef,undef,20)' ; then reply with only the word enod"
   waitstate '^busy$' 30
   s1=$(st)
-  $HT send $P "LT-busy: reply with only the word ysub" --enter >/dev/null 2>&1
-  sleep 30; idle
-  q=$(jq -rs '[.[] | select(.attachment.type=="queued_command") | .attachment.prompt | tostring] | last' $TX)
-  [[ $s1 == busy && $q == *"LT-busy"* ]] && result busy PASS "state was busy; queued and delivered: $q" || result busy FAIL "state $s1; queued: $q"
+  out=$($HT send $P "LT-busy: reply with only the word ysub" --enter --verify --timeout 60 --json 2>/dev/null | tail -1)
+  [[ $s1 == busy && $(vfy $out) == *"queued message"* ]] && result busy PASS "re-read before Enter still busy; $(vfy $out)" || result busy FAIL "state $s1 / $out"
+  idle
 fi
 
 if want multiline; then
   print -rn -- $'LT-multiline line 1: reply with only the number of lines in this message.\nline 2\nline 3\nline 4\nline 5' > $WORK/ml.txt
-  out=$($HT send $P -f $WORK/ml.txt --enter --verify --json 2>&1 | tail -1)
-  [[ $out == *'"verify": "exact'* ]] && result multiline PASS "5 lines, verified exact" || result multiline FAIL "$out"
+  out=$($HT send $P -f $WORK/ml.txt --enter --verify --json 2>/dev/null | tail -1)
+  [[ $(vfy $out) == exact* ]] && result multiline PASS "5 lines; $(vfy $out)" || result multiline FAIL "$out"
   idle
 fi
 
 if want unicode; then
-  print -rn -- $'LT-unicode: reply with only ok4. Café, naïve, 日本語, Ελληνικά, 🍕👍🏽, 🇦🇺, 👨‍👩‍👧, tab\there, zero​width.' > $WORK/uni.txt
-  out=$($HT send $P -f $WORK/uni.txt --enter --verify --json 2>&1 | tail -1)
+  print -rn -- $'LT-unicode: reply with only ok4. Café, naïve, 日本語, Ελληνικά, \U0001f355\U0001f44d\U0001f3fd, \U0001f1e6\U0001f1fa, \U0001f468\u200d\U0001f469\u200d\U0001f467, tab\there, zero\u200bwidth.' > $WORK/uni.txt
+  out=$($HT send $P -f $WORK/uni.txt --enter --verify --json 2>/dev/null | tail -1)
   u=$(last_user)
-  [[ $out == *'"verify": "exact'* && $u == *"tab    here"* && $u == *"zerowidth"* ]] && result unicode PASS "exact after cleaning (tab -> 4 spaces, U+200B dropped)" || result unicode FAIL "$out"
+  [[ $(vfy $out) == exact* && $u == *"tab    here"* && $u == *"zerowidth"* ]] && result unicode PASS "exact after cleaning (tab -> 4 spaces, U+200B dropped)" || result unicode FAIL "$out"
   idle
+fi
+
+if want blocked; then
+  print -rn -- $'LT-blocked: reply with ok \u202e reversed' > $WORK/bidi.txt
+  before=$(wc -c < $TX)
+  $HT send $P -f $WORK/bidi.txt --enter >/dev/null 2>&1; rc=$?
+  sleep 2; d=$($HT state $P | jq -r .draft); after=$(wc -c < $TX)
+  [[ $rc == 7 && -z $d ]] && result blocked PASS "U+202E: exit 7, input box still empty, nothing typed" || result blocked FAIL "rc $rc, box '$d'"
 fi
 
 if want box-safety; then
   box '"Pick a fruit" with options Apple, Pear, Plum.' && {
     $HT send $P "2 bananas" --raw >/dev/null 2>&1; sleep 2
     s2=$(st)
-    [[ $s2 == question-single ]] && result box-safety PASS "raw typing of '2 bananas' left the box open" || result box-safety FAIL "state after raw typing: $s2"
+    $HT send $P "2 bananas" --raw --enter >/dev/null 2>&1; rc=$?
+    sleep 1; s3=$(st)
+    [[ $s2 == question-single && $rc == 4 && $s3 == question-single ]] && result box-safety PASS "raw typing left the box open; --raw --enter in a box: exit 4, box still open" || result box-safety FAIL "after raw typing $s2; raw+enter rc $rc, then $s3"
     herdr pane send-keys $P esc >/dev/null; idle
   } || result box-safety FAIL "box did not open"
 fi
 
 if want question-single; then
   box '"Pick a fruit" with options Apple, Pear, Plum.' && {
-    out=$($HT send $P "a mango, typed by herdr-type" --enter --verify --json 2>&1 | tail -1)
-    r=$(last_result)
-    [[ $out == *'"verify": "contained'* && $r == *"a mango, typed by herdr-type"* ]] && result question-single PASS "answer: ${r[1,90]}" || result question-single FAIL "$out / $r"
+    out=$($HT send $P "a mango, typed by herdr-type" --enter --verify --json 2>/dev/null | tail -1)
+    [[ $(vfy $out) == "contained, in the AskUserQuestion tool_result" ]] && result question-single PASS "$(vfy $out)" || result question-single FAIL "$out"
     idle
   } || result question-single FAIL "box did not open"
 fi
 
 if want question-two-options; then
   box '"Pick a drink" with options Tea, Coffee (exactly two options).' && {
-    plan=$($HT send $P "a hot chocolate" --dry-run 2>&1 | tail -1)
-    out=$($HT send $P "a hot chocolate" --enter --verify --json 2>&1 | tail -1)
-    r=$(last_result)
-    [[ $plan == *'digit:3'* && $r == *"a hot chocolate"* ]] && result question-two-options PASS "pressed 3 (not 4), answer: ${r[1,80]}" || result question-two-options FAIL "plan $plan / $r"
+    plan=$($HT send $P "a hot chocolate" --dry-run 2>/dev/null | tail -1)
+    out=$($HT send $P "a hot chocolate" --enter --verify --json 2>/dev/null | tail -1)
+    [[ $plan == *'digit:3'* && $(vfy $out) == *AskUserQuestion* ]] && result question-two-options PASS "pressed 3 (not 4); $(vfy $out)" || result question-two-options FAIL "plan $plan / $out"
     idle
   } || result question-two-options FAIL "box did not open"
 fi
@@ -155,9 +187,8 @@ fi
 if want question-multi; then
   box 'with multiSelect true, "Pick toppings" with options Cheese, Olives, Basil.' && {
     s1=$(st)
-    out=$($HT send $P "extra chilli" --submit --verify --json 2>&1 | tail -1)
-    r=$(last_result)
-    [[ $s1 == question-multi && $r == *"extra chilli"* ]] && result question-multi PASS "answer: ${r[1,80]}" || result question-multi FAIL "state $s1 / $out / $r"
+    out=$($HT send $P "extra chilli" --submit --verify --json 2>/dev/null | tail -1)
+    [[ $s1 == question-multi && $(vfy $out) == *AskUserQuestion* ]] && result question-multi PASS "$(vfy $out)" || result question-multi FAIL "state $s1 / $out"
     idle
   } || result question-multi FAIL "box did not open"
 fi
@@ -168,7 +199,7 @@ if want question-two; then
     $HT send $P "a cold brew" --enter >/dev/null 2>&1; sleep 1.5
     s3=$(st)
     herdr pane send-keys $P enter >/dev/null; sleep 6
-    r=$(last_result)
+    r=$(jq -rs '[.[] | select(.type=="user") | .message.content | if type=="array" then (map(select(.type=="tool_result") | (.content|tostring)) | join("\n")) else empty end | select(length>0)] | last' $TX)
     [[ $s3 == question-review && $r == *"a ripe fig"* && $r == *"a cold brew"* ]] && result question-two PASS "review screen reached; answer: ${r[1,100]}" || result question-two FAIL "state before submit $s3 / $r"
     idle
   } || result question-two FAIL "box did not open"
@@ -178,26 +209,24 @@ if want where-prompt-esc; then
   box '"Pick a colour" with options Red, Blue.' && {
     $HT send $P "LT-esc" --where prompt >/dev/null 2>&1; rc=$?
     herdr pane send-keys $P esc >/dev/null; idle
-    out=$($HT send $P "LT-after-esc: reply with only the word ok5" --enter --verify --json 2>&1 | tail -1)
-    [[ $rc == 4 && $out == *'"verify": "exact'* ]] && result where-prompt-esc PASS "--where prompt refused in a box (exit 4); after Esc a prompt went through" || result where-prompt-esc FAIL "rc $rc / $out"
+    out=$($HT send $P "LT-after-esc: reply with only the word ok5" --enter --verify --json 2>/dev/null | tail -1)
+    [[ $rc == 4 && $(vfy $out) == exact* ]] && result where-prompt-esc PASS "--where prompt refused in a box (exit 4); after Esc: $(vfy $out)" || result where-prompt-esc FAIL "rc $rc / $out"
     idle
   } || result where-prompt-esc FAIL "box did not open"
 fi
 
 if want permission; then
   cycle_to "manual mode" && {
-    setup "LT-perm: run this bash command: touch $WORK/perm-yes.txt"
+    setup "LT-perm: run this bash command: touch $WORK/perm.txt"
     waitstate '^permission$' 60
-    $HT send $P "note from herdr-type: thanks" >/dev/null 2>&1; rc=$?
-    out=$($HT send $P "note from herdr-type: thanks" --permission yes --enter --verify --json 2>&1 | tail -1)
+    $HT send $P "note" >/dev/null 2>&1; rc0=$?
+    $HT send $P "fine, go on" --permission yes --enter >/dev/null 2>&1; rc1=$?
+    s1=$(st)
+    out=$($HT send $P "stop, the test is done" --permission no --enter --verify --json 2>/dev/null | tail -1)
     sleep 3
-    [[ $rc == 4 && -f $WORK/perm-yes.txt && $out == *(contained|exact)* ]] && result permission-yes PASS "no --permission: exit 4; yes + note: command ran, note delivered" || result permission-yes FAIL "rc $rc / file $([[ -f $WORK/perm-yes.txt ]] && echo yes || echo no) / $out"
-    idle 30
-    setup "LT-perm2: run this bash command: touch $WORK/perm-no.txt"
-    waitstate '^permission$' 60
-    out=$($HT send $P "stop, the test is done" --permission no --enter --verify --json 2>&1 | tail -1)
-    sleep 3
-    [[ ! -f $WORK/perm-no.txt && $out == *(contained|exact)* ]] && result permission-no PASS "refused, reason delivered" || result permission-no FAIL "file $([[ -f $WORK/perm-no.txt ]] && echo yes || echo no) / $out"
+    [[ $rc0 == 4 && $rc1 == 4 && $s1 == permission && ! -f $WORK/perm.txt && $(vfy $out) == "contained, in the rejected Bash tool_result" ]] \
+      && result permission PASS "no choice: exit 4; yes without the switch: exit 4, prompt still open; no + reason: $(vfy $out); nothing ran" \
+      || result permission FAIL "rc $rc0/$rc1, state $s1, file $([[ -f $WORK/perm.txt ]] && echo yes || echo no) / $out"
     idle 60
   } || result permission FAIL "could not reach manual mode"
   cycle_to "bypass permissions" || print -u2 "WARNING: could not return the session to bypass mode"
@@ -207,10 +236,10 @@ if want plan; then
   cycle_to "plan mode" && {
     setup "LT-plan: make a two-step plan to create the file $WORK/plan.txt containing hello, and present it for approval right away without exploring anything."
     waitstate '^plan-approval$' 90
-    out=$($HT send $P "use the word goodbye instead of hello" --enter --verify --json 2>&1 | tail -1)
+    out=$($HT send $P "use the word goodbye instead of hello" --enter --verify --json 2>/dev/null | tail -1)
     waitstate '^plan-approval$' 90
     scr=$(herdr pane read $P --source visible --lines 120 2>/dev/null)
-    [[ $out == *contained* && $scr == *goodbye* && ! -f $WORK/plan.txt ]] && result plan PASS "feedback delivered; revised plan says goodbye; nothing ran" || result plan FAIL "$out"
+    [[ $(vfy $out) == "contained, in the ExitPlanMode tool_result" && $scr == *goodbye* && ! -f $WORK/plan.txt ]] && result plan PASS "$(vfy $out); revised plan says goodbye; nothing ran" || result plan FAIL "$out"
     herdr pane send-keys $P esc >/dev/null; sleep 2
   } || result plan FAIL "could not reach plan mode"
   cycle_to "bypass permissions" || print -u2 "WARNING: could not return the session to bypass mode"
@@ -221,20 +250,22 @@ if want shell; then
   S=$(herdr pane split $P --direction down --cwd $WORK --no-focus | jq -r .result.pane.pane_id)
   herdr pane rename $S livetest-shell >/dev/null; sleep 4
   $HT send $S "echo SHOULD_NOT_RUN" >/dev/null 2>&1; rc=$?
+  $HT send $S "echo SHOULD_NOT_RUN" --allow-shell --enter >/dev/null 2>&1; rce=$?
   print -rn -- $'echo HELD_ONE_$((6*7))\necho HELD_TWO' > $WORK/sh.txt
   $HT send $S -f $WORK/sh.txt --allow-shell >/dev/null 2>&1; sleep 1
   scr=$(herdr pane read $S --source visible --lines 20 2>/dev/null)
-  [[ $rc == 4 && $scr != *HELD_ONE_42* && $scr == *"echo HELD_TWO"* ]] && result shell PASS "refused without --allow-shell (exit 4); with it, two lines held, nothing ran" || result shell FAIL "rc $rc / screen: ${scr[-200,-1]}"
+  [[ $rc == 4 && $rce == 4 && $scr != *HELD_ONE_42* && $scr == *"echo HELD_TWO"* && $scr != *SHOULD_NOT_RUN* ]] && result shell PASS "refused without --allow-shell, and with --enter (exit 4 each); with it, two lines held, nothing ran" || result shell FAIL "rc $rc/$rce / screen: ${scr[-200,-1]}"
   herdr pane send-keys $S ctrl+c >/dev/null; herdr pane close $S >/dev/null
 fi
 
 if want long; then
   uv run --no-project python3 -c "import sys; n=int(sys.argv[1]); w=' '.join(f'w{i}' for i in range(n)); print('LT-long: reply with only the word ok6. ' + w[:n] + ' END-LT-long', end='')" $LONG > $WORK/long.txt
   t0=$SECONDS
-  out=$($HT send $P -f $WORK/long.txt --enter --verify --timeout 120 --json 2>&1 | tail -1)
-  [[ $out == *'"verify": "exact'* ]] && result long PASS "$(wc -c < $WORK/long.txt | tr -d ' ') characters, verified exact, $(( SECONDS - t0 )) s with the reply" || result long FAIL "$out"
+  out=$($HT send $P -f $WORK/long.txt --enter --verify --timeout 120 --json 2>/dev/null | tail -1)
+  [[ $(vfy $out) == exact* ]] && result long PASS "$(wc -c < $WORK/long.txt | tr -d ' ') characters, $(vfy $out), $(( SECONDS - t0 )) s" || result long FAIL "$out"
   idle 120
 fi
 
+same_session
 print -r -- "herdr-type-livetest: $pass passed, $fail failed (log: $LOG)"
 (( fail == 0 ))
