@@ -1141,6 +1141,7 @@ verb_of(){ case "$1" in done) printf close ;; declined) printf decline ;; parked
 apply_status(){                 # apply_status <work> <file> <id> <status> <note> -> the item's new path; the caller holds the lock
   local w="$1" f="$2" id="$3" st="$4" note="$5" dest
   set_field "$f" status "$st"
+  [ -n "$note" ] && note="$(sid_stamp "$note")"   # A12
   if [ -n "$note" ]; then printf '\n**%s %s.** %s\n' "$(printf '%s' "$st" | tr '[:lower:]' '[:upper:]')" "$(today)" "$note" >> "$f"; fi
   dest="$w/items/$(folder_for_status "$st")/$id.md"
   mkdir -p "$(dirname "$dest")"
@@ -1217,6 +1218,16 @@ cmd_undo_wrap(){                # undo-wrap <session-id>
 # body is append-only: it also holds the **DONE date.** notes close/park/decline write, and a
 # replace would take those with it.
 TEXT_FIELDS="done-when when next blocked-on"
+# W-20261007-A12 (Gavin, 2026-10-07): every note added after filing names the session that
+# added it, as raised: does at filing, so its transcript can be found. At the END of the
+# note, so a reader keyed on its start (**DONE date.**) is unchanged; skipped when the note
+# already names that id (sessions typed it by hand before this).
+sid_stamp(){
+  local s="${CLAUDE_CODE_SESSION_ID:-${CLAUDE_SESSION_ID:-}}"
+  valid_sid "$s" || s=unknown
+  case "$s" in unknown) ;; *) case "$1" in *"$s"*) printf '%s' "$1"; return ;; esac ;; esac
+  printf '%s (session %s)' "$1" "$s"
+}
 is_text_field(){ case " $TEXT_FIELDS " in *" $1 "*) return 0;; *) return 1;; esac; }
 hdr_field_of(){                 # hdr_field_of <file> <field>: the HEADER value only, never a body line
   awk -v k="$1" 'NR == 1 || (NR == 2 && $0 == "") { next }
@@ -1254,6 +1265,7 @@ cmd_set(){
     finish_write "$w" "open-items: set $id $k"
     return
   fi
+  case "$mode:$k" in add:next|add:blocked-on|add:body) v="$(sid_stamp "$v")" ;; esac   # A12
   if [ "$k" = body ]; then
     [ -n "$(tail -c 1 "$f")" ] && printf '\n' >> "$f"     # a file saved without its last newline
     printf '\n%s\n' "$v" >> "$f"
