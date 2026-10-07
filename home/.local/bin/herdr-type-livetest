@@ -40,7 +40,13 @@ unset HERDR_TYPE_ALLOW_PERMISSION_YES  # the yes path must be refused here, as i
 out=$(engage-worker tab $PURPOSE --timeout 120 2>&1)
 line=${(M)${(f)out}:#*one name:*}
 P=${${line#*pane }%%,*}; TAB=${${line#*tab }%%\)*}
-[[ $P == w*:p* && $TAB == w*:t* ]] || { print -u2 "could not start a test session:"; print -u2 -r -- "$out"; exit 2 }
+if [[ $P != w*:p* || $TAB != w*:t* ]]; then
+  # a failed start can still have opened a tab (a dialog, a timeout): close it too
+  TAB=${${(M)out:#*tab w*}:+${${out#*tab }%%,*}}
+  [[ $TAB == w*:t* ]] && herdr tab close $TAB >/dev/null 2>&1 && print -u2 "herdr-type-livetest: closed the half-started tab $TAB"
+  print -u2 "could not start a test session (run it from a project folder Claude Code already trusts):"
+  print -u2 -r -- "$out"; exit 2
+fi
 trap 'herdr tab close $TAB >/dev/null 2>&1; print -u2 "herdr-type-livetest: closed tab $TAB"' EXIT
 sid_of() { herdr pane get $P 2>/dev/null | jq -r '.result.pane.agent_session.value // empty' }
 SID=$(sid_of)
