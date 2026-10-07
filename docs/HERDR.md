@@ -315,9 +315,15 @@ to troubleshoot a bump that didn't take:
 
 ```bash
 herdr-cooldown-check                                    # confirm ELIGIBLE, not HELD
-brew unpin herdr && brew upgrade herdr && brew pin herdr
+brew unpin herdr; HOMEBREW_NO_INSTALL_CLEANUP=1 brew upgrade herdr; brew pin herdr
 herdr-cooldown-check                                    # confirm the pin is back
 ```
+
+`;` rather than `&&` so the pin comes back even when the upgrade fails, and
+`HOMEBREW_NO_INSTALL_CLEANUP=1` because without it Homebrew deletes the old
+version and its cached bottle, which are the only way back. Measured 2026-10-07:
+the 0.9.1 to 0.9.3 upgrade was typed by hand without it, and cleanup removed both.
+`install.sh` has always set it; the hand-typed line printed here did not.
 
 Linux/WSL is unchanged — `_preflight_herdr_release_check` already applies pinned,
 hash-verified `HERDR_VERSION` bumps automatically; see the runbook above the
@@ -979,9 +985,10 @@ the binary itself.
 
 - **In scope:** age-gating the herdr binary, keeping the pin asserted, keeping the
   two phone-home paths closed, and reporting all three at session start.
-- **Not in scope:** installing or upgrading herdr. The checker prints commands; a
-  human runs them. Automatic adoption is precisely what the cooldown exists to
-  prevent.
+- **The checker never installs or upgrades.** It prints commands and stops.
+  Upgrading is `install.sh`'s job: `_preflight_herdr_bump_check` adopts a
+  release only once it has cleared the cooldown (see "The upgrade runbook").
+  Same-day adoption is what the cooldown exists to prevent.
 - **Not in scope:** the vendor's plugin marketplace. Plugins are a separate
   supply-chain surface and none of the cooldown machinery covers them. The
   standing rule is `herdr plugin link` against a locally authored directory,

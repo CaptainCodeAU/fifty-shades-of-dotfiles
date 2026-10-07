@@ -496,7 +496,7 @@ def main() -> int:
         else:
             actionable = True
             if method in ("brew", BREW_BROKEN):
-                fix = "brew unpin herdr && brew upgrade herdr && brew pin herdr"
+                fix = "brew unpin herdr; HOMEBREW_NO_INSTALL_CLEANUP=1 brew upgrade herdr; brew pin herdr"
             else:
                 fix = (f"download {tag} from github.com/{REPO}/releases "
                        f"(direct install — `herdr update` ignores the cooldown)")

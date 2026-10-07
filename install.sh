@@ -148,7 +148,7 @@ BUN_MIN_VERSION="1.3.0"
 # says ELIGIBLE -- no separate script to remember, install.sh is the one thing
 # you run. The commands below remain valid for a manual/ad-hoc check or bump:
 #   herdr-cooldown-check
-#   brew unpin herdr && brew upgrade herdr && brew pin herdr
+#   brew unpin herdr; HOMEBREW_NO_INSTALL_CLEANUP=1 brew upgrade herdr; brew pin herdr
 # Raised from 3 to 7 (2026-08-20) after checking herdr's actual disclosed-vuln
 # history: one real report took ~5.8 days to reach a shipped fix, and a second
 # was auto-closed by their triage bot in 8 seconds with no human ever seeing

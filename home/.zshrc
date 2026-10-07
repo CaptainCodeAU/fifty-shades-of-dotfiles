@@ -826,7 +826,7 @@ herdr() {
         echo
         echo "  Check state:  herdr-cooldown-check"
         echo "  Upgrade:      ./install.sh   (bumps automatically once the cooldown has elapsed)"
-        echo "  By hand:      brew unpin herdr && brew upgrade herdr && brew pin herdr"
+        echo "  By hand:      brew unpin herdr; HOMEBREW_NO_INSTALL_CLEANUP=1 brew upgrade herdr; brew pin herdr"
         return 1
     fi
     command herdr "$@"
