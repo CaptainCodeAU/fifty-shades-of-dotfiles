@@ -30,9 +30,10 @@
 #      variable this command made an array or set to text with no spaces, and not one of
 #      zsh's own arrays ($path, $fpath, $argv, ...).
 #   b. A variable set IN THIS COMMAND to text with whitespace (`v="a b"`, `v='a b'`,
-#      `v=a\ b`), to command output (`v=$(cmd)`, `` v=`cmd` ``), or as the loop variable
-#      of a `for` over quoted text with spaces (the 09d4e57 shape), then used unquoted as
-#      a word of a command, including inside `$( )`, backticks and array literals.
+#      `v=a\ b`), or as the loop variable of a `for` over quoted text with spaces (the
+#      09d4e57 shape), then used unquoted as a word of a command, including inside `$( )`,
+#      backticks and array literals. A variable set from command output (`v=$(cmd)`,
+#      `` v=`cmd` ``) warns only in a for list (shape a), not as a plain word: see below.
 #   Quiet: `"$var"`, `${=var}`, `$=var`, flags, arrays, `$(cmd)` itself, and any expansion
 #   inside single quotes, a heredoc body, a comment, `[[ ]]`, `(( ))`, a `case` subject or
 #   pattern, an assignment's value, a redirect target, or an `eval`'s arguments (eval
@@ -43,12 +44,13 @@
 #   the same `$c` is harmless inside "..." and the bug inside `$( )` inside "...".
 #
 #   HOW OFTEN IT SPEAKS, measured 2026-10-07 by replaying 1,996 Bash commands from 60
-#   recent transcripts: 35 warnings. Real catches among them, besides the incident:
+#   recent transcripts: 35 warnings as first written, 7 after the narrowing below. Real
+#   catches, all still caught, besides the incident:
 #   `G="git -C <path>"; $G status`, `for a in "link --global" ...; pnpm $a`, and
 #   `n=$(... | tr '\n' ' '); for l in $n`. Most of the rest are "set from command output"
-#   on values that are one token anyway (mktemp paths, pane ids, short hashes). Warning on
-#   `v=$(cmd)` only inside a for list would leave 7 warnings and every real catch; the
-#   brief asked for both, so both are here, and the narrowing is a decision for #1110.
+#   on values that are one token anyway (mktemp paths, pane ids, short hashes). So, Gavin's
+#   pick (#1110, engage-main Q16 option 1), `v=$(cmd)` warns only inside a for list, where
+#   the one real catch of that kind (the `tr` loop) sits; `v=$(cmd); ls $v` stays quiet.
 #   Selftest: ~/.claude/tools/warn-zsh-word-split-selftest (--mutants proves it can fail).
 #
 # 🔴 WHY IT SHOUTS INSTEAD OF GOING QUIET
@@ -107,7 +109,7 @@ function checkarg(list,   n, i, a, t) {
   n = split(list, a, " ")
   for (i = 1; i <= n; i++) {
     t = VT[a[i]]
-    if (t == "ws" || t == "cs" || t == "forws") warn(a[i], "arg", t)
+    if (t == "ws" || t == "forws") warn(a[i], "arg", t)
   }
 }
 function checkfor(list,   n, i, a, t) {
@@ -375,7 +377,6 @@ while IFS="$(printf '\t')" read -r v shape kind; do
   case "$shape:$kind" in
     for:*)     why="\$$v is used unquoted as a for-loop list" ;;
     arg:ws)    why="\$$v is used unquoted and was set to text with spaces" ;;
-    arg:cs)    why="\$$v is used unquoted and was set from command output" ;;
     arg:forws) why="\$$v is used unquoted and loops over quoted text with spaces" ;;
     *)         why="\$$v is used unquoted" ;;
   esac

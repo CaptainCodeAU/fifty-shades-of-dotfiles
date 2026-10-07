@@ -26,10 +26,14 @@ the hook is a failure too, so the list cannot rot quietly when the hook changes.
 
 Measured 2026-10-07, branch zsh-word-split-hook:
 
-    the hook, /bin/bash 3.2 (its shebang)          69 checks, 0 failures
-    the hook, bash 5.3 (copy with that shebang)    69 checks, 0 failures
-    --mutants                                       54 mutants, each caught; all 69 arms red
+    the hook, /bin/bash 3.2 (its shebang)          72 checks, 0 failures
+    the hook, bash 5.3 (copy with that shebang)    72 checks, 0 failures
+    --mutants                                       54 mutants, each caught; all 72 arms red
                                                     on at least one
+
+(After brief 2 narrowed command output to for lists only: w08 to w10 and w12 became quiet
+arms q33 to q36, q37 holds a replay false alarm, w25/w26 keep command output in a for list
+warning, and q16/q19 now use a spaced value so mutants M11 and M14 still have an arm.)
 
 The first --mutants run found five arms that could not fail (three sat behind the hook's
 cheap exit, one needed a "warns on everything" mutant, one a bad shebang) and was red
@@ -133,11 +137,7 @@ MUST_WARN = [
     ("w05 v=\"a b\" then $v as an argument", "v=\"a b\"; printf '[%s]\\n' $v", "v"),
     ("w06 v='a b' (single-quoted value)", "v='a b'; ls $v", "v"),
     ("w07 v=a\\ b (escaped space)", "v=a\\ b; ls $v", "v"),
-    ("w08 v=$(cmd) then $v", 'v=$(echo "p q"); printf "%s\\n" $v', "v"),
-    ("w09 v=`cmd` then $v", 'v=`echo "r s"`; printf "%s\\n" $v', "v"),
-    ("w10 v=\"$(cmd)\" then $v", 'v="$(git status --short)"; ls $v', "v"),
     ("w11 export v=\"a b\" then $v", 'export v="a b"; ls $v', "v"),
-    ("w12 local v=$(cmd) then $v", "f() { local v=$(ls); wc -l $v; }", "v"),
     ("w13 $v inside $( ) inside double quotes", 'v="a b"; echo "n=$(ls $v | wc -l)"', "v"),
     ("w14 $v inside backticks", 'v="a b"; echo `ls $v`', "v"),
     ("w15 $v in command position", 'v="herdr agent list"; $v', "v"),
@@ -151,6 +151,9 @@ MUST_WARN = [
     ("w23 v=$'a\\tb' (ANSI-C quoted)", "v=$'a\\tb'; ls $v", "v"),
     ("w24 a heredoc body ends; the command after it is read",
      "cat <<EOF\nbody $v\nEOF\nv=\"a b\"; ls $v", "v"),
+    ("w25 v=$(cmd) then for x in $v (the replay's tr loop)",
+     "n=$(ls | tr '\\n' ' '); for l in $n; do echo \"$l\"; done", "n"),
+    ("w26 x=$v copies command output into a for list", 'v=$(ls); x=$v; for l in $x; do echo; done', "x"),
 ]
 
 MUST_BE_QUIET = [
@@ -169,10 +172,10 @@ MUST_BE_QUIET = [
     ("q13 inside a heredoc body", 'v="a b"; cat <<EOF\nls $v\nEOF'),
     ("q14 after a comment", 'v="a b"; ls # $v'),
     ("q15 inside [[ ]]", 'v="a b"; [[ $v == x && -n $v ]] && echo y'),
-    ("q16 inside (( ))", 'n=$(wc -l < f); (( n = $n + 1 ))'),
+    ("q16 inside (( ))", 'n="1 2"; (( n = $n + 1 ))'),
     ("q17 a case subject", 'v=$(uname); case $v in Darwin) echo mac ;; esac'),
     ("q18 an assignment value", 'v="a b"; x=$v'),
-    ("q19 a redirect target", 'v=$(mktemp); echo hi > $v; cat < $v'),
+    ("q19 a redirect target", 'v="a b"; echo hi > $v; cat < $v'),
     ("q20 eval re-parses, so it splits", 'v="ls -la"; eval $v'),
     ("q21 a value with no spaces", 'v=abc; for x in $v; do echo; done'),
     ("q22 for x in \"$v\"", 'v="a b"; for x in "$v"; do echo; done'),
@@ -186,6 +189,14 @@ MUST_BE_QUIET = [
     ("q30 a here-string", 'v="a b"; cat <<< $v'),
     ("q31 a subscript $arr[1]", 'for x in $arr[1]; do echo; done'),
     ("q32 no dollar at all", "echo hi && ls -la"),
+    # Command output used as a plain word is quiet since brief 2 (#1110, Gavin's pick): the
+    # replay's warnings of that kind were one-token values. These four warned as w08 to w10
+    # and w12 before; q37 is a real false alarm from the replay.
+    ("q33 v=$(cmd) then $v (was w08)", 'v=$(echo "p q"); printf "%s\\n" $v'),
+    ("q34 v=`cmd` then $v (was w09)", 'v=`echo "r s"`; printf "%s\\n" $v'),
+    ("q35 v=\"$(cmd)\" then $v (was w10)", 'v="$(git status --short)"; ls $v'),
+    ("q36 local v=$(cmd) then $v (was w12)", "f() { local v=$(ls); wc -l $v; }"),
+    ("q37 d=$(mktemp -d ...); ls $d (a replay false alarm)", 'd=$(mktemp -d "$TMPDIR/x.XXXXXX"); ls $d'),
 ]
 
 
@@ -226,7 +237,7 @@ def arms(hook):
                  all(s in text for s in ("$c", "${=c}", "${(f)c}", '"$c"', "array")), text[:200]))
     out.append(("m02 the message never claims the tool skips .zshrc",
                  bool(text) and ".zshrc" not in text, text[:200]))
-    rc, raw, parsed = bash(hook, 'a="x y"; b=$(ls); ls $a $b')
+    rc, raw, parsed = bash(hook, 'a="x y"; b=$(ls); for x in $b; do ls $a; done')
     t = note(parsed)
     out.append(("m03 two variables, both named", "$a" in t and "$b" in t, t[:200]))
 
@@ -286,7 +297,7 @@ MUTANTS = [
       ("N = length(S); NW = 0; NH = 0", 'N = length(S); NW = 0; NH = 0; VT["CMDSUBST"] = "cs"')]),
     ("M19", "$@ and $* treated as variables", [("if (c ~ /^[@*#?$!0-9-]$/) return p + 2", "if (c ~ /^[@*#?$!0-9-]$/) { DN = c; return p + 2 }")]),
     ("M20", "zsh's own arrays not exempt", [("if (zarray(a[i])) continue", "")]),
-    ("M21", "unknown variables warn as arguments", [('if (t == "ws" || t == "cs" || t == "forws") warn(a[i], "arg", t)', 'if (t != "lit" && t != "arr") warn(a[i], "arg", t)')]),
+    ("M21", "unknown variables warn as arguments", [('if (t == "ws" || t == "forws") warn(a[i], "arg", t)', 'if (t != "lit" && t != "arr") warn(a[i], "arg", t)')]),
     ("M22", "subscripts not exempt",
      [('if (substr(S, q, 1) != "[") DN = n', "DN = n"), ('if (substr(b, n, 1) == "[") return ""', "")]),
     ("M23", "${#v} read as a use",
