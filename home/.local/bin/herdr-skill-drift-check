@@ -38,6 +38,13 @@
 #                    version mentions that went stale without anyone noticing.
 #   5. upstream-drift three CONTENT HASHES against upstream's own repo, which is
 #                    the subject checks 1-4 structurally cannot see (below).
+#   6. pane-flags    which `herdr pane` subcommands take --pane/--current, read
+#                    from each one's own --help, vs the one marker line in
+#                    SKILL.md: <!-- herdr-pane-target-flags: name name ... -->
+#                    The skill once gave three lists of these, all wrong
+#                    (W-20261007-A19). Differs => ACTION naming what herdr
+#                    added and dropped. No marker => ACTION. herdr not
+#                    askable => SKIPPED, never OK.
 #
 # WHY CHECK 5 EXISTS AT ALL -- checks 1-4 ARE ALL LOCAL
 #   Check 1 compares `herdr --skill` against UPSTREAM.md. Both come off THIS
@@ -69,11 +76,16 @@
 #   24h, so pj-health and the session hook run offline after the first fetch.
 #   `--live` forces a fetch. A fetch failure with no usable cache degrades to
 #   SKIPPED and says which ref could not be reached -- never to a false CLEAN.
+#   Check 6 keeps its own file beside it (herdr-pane-flags.json), keyed on the
+#   installed herdr version and the same 24h, so an upgrade always re-measures.
+#   Only a complete measurement is cached. `--live` bypasses it too.
 #
 # SAFETY
 #   Read-only, and deliberately so. It never merges, never writes a snapshot,
 #   never edits a doc, never runs a herdr subcommand that touches the socket.
-#   `herdr --skill` and `herdr --version` both print and exit. Any failure
+#   `herdr --skill`, `herdr --version` and `herdr pane <sub> --help` all print
+#   and exit (the last one measured 2026-10-07: it answers with HOME pointed
+#   at a folder with no socket, where `herdr pane list` fails). Any failure
 #   degrades to SKIPPED, never to a false OK -- same contract as its sibling
 #   herdr-cooldown-check, which acts on cooldown; this one only reports.
 #
@@ -322,6 +334,281 @@ def upstream_skill(ref: str, timeout: int) -> str | None:
                 timeout)
 
 
+# --- subject 6: which pane subcommands take --pane/--current ---------------
+# The skill once gave three different lists of these, all wrong (W-20261007-A19).
+# The truth is in each subcommand's own --help, so this measures it there and
+# compares it with ONE marker line the skill carries:
+#   <!-- herdr-pane-target-flags: current edges focus ... -->
+
+PANE_TARGET_FLAGS = ("--pane", "--current")
+PANE_MARKER_RE = re.compile(r"<!--\s*herdr-pane-target-flags:(.*?)-->")
+
+
+# A clap option line: indentation, an optional short form, then the long flag.
+# --source-pane and --target-pane are their own names, so they never read as
+# --pane; the lookahead stops --pane-x from reading as --pane too.
+OPTION_LINE_RE = re.compile(r"^[ \t]+(?:-[A-Za-z], )?(--[a-z][a-z0-9-]*)(?![a-z0-9-])", re.M)
+
+
+def parse_pane_subcommands(group_help: str) -> list[str] | None:
+    """PURE. The names under `Commands:` in `herdr pane --help`, in order.
+
+    None when the text is not that listing (no usage line, no Commands section,
+    or an empty one). A format we do not recognise must read as "not
+    measured", never as "herdr has no pane subcommands". Only lines indented by
+    exactly two spaces count, so a wrapped description line is not a name.
+    """
+    if not re.search(r"^Usage: herdr pane\b", group_help, re.M):
+        return None
+    m = re.search(r"^Commands:\n((?:[ \t]+\S.*\n?)+)", group_help, re.M)
+    if not m:
+        return None
+    names = [x.group(1) for x in re.finditer(r"^  (\S+)", m.group(1), re.M)]
+    names = [n for n in names if n != "help"]
+    return names or None
+
+
+def parse_sub_flags(sub: str, rc: int, help_text: str) -> frozenset[str] | None:
+    """PURE. Which of --pane/--current `herdr pane <sub> --help` lists as options.
+
+    None when the text is not <sub>'s OWN help: a non-zero exit, or output with
+    no `Usage: herdr pane <sub>` line. That matters because a bad subcommand
+    falls back to the group usage, which prints `[--pane ID|--current]` for
+    half the group and would otherwise read as a yes.
+    """
+    if rc != 0:
+        return None
+    if not re.search(rf"^Usage: herdr pane {re.escape(sub)}(?:\s|$)", help_text, re.M):
+        return None
+    listed = set(OPTION_LINE_RE.findall(help_text))
+    return frozenset(f for f in PANE_TARGET_FLAGS if f in listed)
+
+
+def measure_pane_flags(runner=run) -> tuple[dict | None, str]:
+    """Ask herdr: (sub -> flags, or None where its --help was unreadable), how.
+    (None, why) when herdr could not be asked at all. Every call is an argv
+    list, one word per argument. `runner` is injectable so the self-test can
+    drive this with captured output, including herdr being absent."""
+    rc, out = runner(["herdr", "pane", "--help"])
+    if rc == 127 and not out:
+        return None, "herdr did not run"
+    subs = parse_pane_subcommands(out) if rc == 0 else None
+    if subs is None:
+        return None, f"`herdr pane --help` exited {rc} with no subcommand listing this tool recognises"
+    return {s: parse_sub_flags(s, *runner(["herdr", "pane", s, "--help"])) for s in subs}, "live"
+
+
+def parse_pane_marker(skill_text: str) -> list[list[str]]:
+    """PURE. The names on every marker line. More than one line is a finding."""
+    return [m.group(1).split() for m in PANE_MARKER_RE.finditer(skill_text)]
+
+
+def pane_flags_row(measured: dict | None, why: str, markers: list[list[str]],
+                   version: str | None) -> tuple[str, str, str]:
+    """PURE. The whole pane-flags rule, so the self-test drives every verdict.
+
+    The marker is checked first because it needs no herdr: a missing or
+    doubled marker is a finding either way. After that, nothing measured is
+    SKIPPED by name and never OK.
+    """
+    subj = "pane-flags"
+    ver = version or "?"
+    both = frozenset(PANE_TARGET_FLAGS)
+    truth = (sorted(s for s, f in measured.items() if f == both)
+             if measured is not None else None)
+    said = (f"herdr {ver} says {len(truth)} of {len(measured)} take them: {' '.join(truth)}"
+            if truth is not None else f"herdr could not be asked either ({why})")
+
+    if len(markers) > 1:
+        return (subj, ACTION, f"SKILL.md has {len(markers)} `herdr-pane-target-flags` marker "
+                f"lines; keep exactly one. {said}")
+    if not markers:
+        return (subj, ACTION, "SKILL.md has no `<!-- herdr-pane-target-flags: ... -->` line, so "
+                "its list of pane subcommands that take --pane/--current cannot be checked. "
+                + said)
+    if measured is None:
+        return (subj, SKIP, f"herdr could not be asked ({why}), so the pane target flags were "
+                "NOT checked")
+
+    claimed = set(markers[0])
+    unread = sorted(s for s, f in measured.items() if f is None)
+    partial = sorted(s for s, f in measured.items() if f is not None and f and f != both)
+    added = sorted(set(truth) - claimed)
+    dropped = sorted(s for s in claimed & set(measured) if s not in truth and s not in unread)
+    unknown = sorted(claimed - set(measured))
+    problems = []
+    if added:
+        problems.append(f"herdr added: {' '.join(added)}")
+    if dropped:
+        problems.append(f"herdr dropped: {' '.join(dropped)}")
+    if unknown:
+        problems.append(f"not a herdr pane subcommand: {' '.join(unknown)}")
+    if partial:
+        problems.append("lists only one of the two flags: "
+                        + " ".join(f"{s} ({','.join(sorted(measured[s]))})" for s in partial))
+    if unread:
+        problems.append(f"--help unreadable, not compared: {' '.join(unread)}")
+    if added or dropped or unknown or partial:
+        return (subj, ACTION, f"the skill's pane target list is wrong for herdr {ver} -- "
+                + "; ".join(problems) + ". Fix the skill's table and its marker together")
+    if unread:
+        return (subj, SKIP, f"could not read --help for {' '.join(unread)}, so the pane target "
+                "flags were NOT fully checked")
+    return (subj, CLEAN, f"the skill's marker matches herdr {ver}: {len(truth)} of "
+            f"{len(measured)} pane subcommands take --pane/--current")
+
+
+def pane_cache_path() -> str:
+    return os.path.join(os.path.dirname(cache_path()), "herdr-pane-flags.json")
+
+
+def pane_cache_load(version: str | None, path: str | None = None,
+                    now: float | None = None) -> dict | None:
+    """The cached measurement, only for the SAME herdr version and inside the
+    24h TTL. An upgrade changes the version, so it always re-measures."""
+    if not version:
+        return None
+    data = cache_read(path or pane_cache_path(), now=now)
+    if not data or data.get("version") != version or not isinstance(data.get("subs"), dict):
+        return None
+    return {s: (frozenset(f) if f is not None else None) for s, f in data["subs"].items()}
+
+
+def pane_cache_save(version: str | None, measured: dict | None,
+                    path: str | None = None) -> bool:
+    """Only a complete measurement is cached; a gap would otherwise be served
+    for a day as if it had been measured."""
+    if not version or not measured or any(f is None for f in measured.values()):
+        return False
+    subs = {s: sorted(f) for s, f in measured.items()}
+    return cache_write({"stamp": time.time(), "version": version, "subs": subs},
+                       path or pane_cache_path())
+
+
+# Real output of herdr 0.9.3, captured 2026-10-07 (trailing spaces stripped).
+# Typed-from-memory fixtures are how the skill's three wrong lists happened.
+FIX_PANE_HELP = """\
+Control terminal panes
+
+Usage: herdr pane [COMMAND]
+
+Commands:
+  list                  List panes
+  current               Show the current pane
+  get                   Show a pane
+  layout                Show pane layout information
+  process-info          Show pane process information
+  neighbor              Find a pane neighbor
+  edges                 Show pane edge information
+  focus                 Focus a neighboring pane
+  resize                Resize a pane split
+  zoom                  Toggle or set pane zoom
+  read                  Read pane terminal output
+  rename                Rename a pane
+  input                 Set pane input routing
+  split                 Split a pane
+  swap                  Swap panes
+  move                  Move a pane
+  close                 Close a pane
+  send-text             Send literal text to a pane
+  send-keys             Send key presses to a pane
+  wait-output           Wait for matching pane output
+  run                   Run a command in a pane
+  report-agent          Report pane agent lifecycle state
+  report-agent-session  Report pane agent session identity
+  release-agent         Release pane agent lifecycle authority
+  report-metadata       Report display-only pane metadata
+
+Are you an AI? Use these resources ONLY IF your task specifically asks you to:
+  Help a human understand or set up Herdr for the first time:
+    https://herdr.dev/agent-guide.md
+  Debug or investigate a problem with Herdr:
+    https://herdr.dev/llms.txt
+  Control Herdr panes, agents, or workspaces:
+    SKIP if a Herdr skill is already in your context. Otherwise run: herdr --skill
+"""
+
+FIX_SWAP_HELP = """\
+Swap panes
+
+Usage: herdr pane swap [OPTIONS]
+
+Options:
+      --direction <DIRECTION>
+          [possible values: left, right, up, down]
+
+      --pane <ID>
+
+
+      --current
+
+
+      --source-pane <ID>
+
+
+      --target-pane <ID>
+"""
+
+FIX_MOVE_HELP = """\
+Move a pane
+
+Usage: herdr pane move [OPTIONS] <PANE_ID>
+
+Arguments:
+  <PANE_ID>
+
+
+Options:
+      --tab <TAB_ID>
+
+
+      --split <DIRECTION>
+          [possible values: right, down]
+
+      --target-pane <ID>
+
+
+      --ratio <FLOAT>
+
+
+      --new-tab
+
+
+      --workspace <ID>
+
+
+      --new-workspace
+
+
+      --label <TEXT>
+
+
+      --tab-label <TEXT>
+
+
+      --focus
+
+
+      --no-focus
+"""
+
+# `herdr pane nosuch --help` exits 2 and prints the group usage, first lines
+# only. It contains `--pane ID|--current`, which is why a fallback must not
+# count as a subcommand's own help.
+FIX_FALLBACK_HELP = """\
+herdr pane commands:
+  herdr pane list [--workspace <workspace_id>]
+  herdr pane current [--pane ID|--current]
+  herdr pane get <pane_id>
+  herdr pane layout [--pane ID|--current]
+"""
+
+# The 11 of 25 that list both flags in their own --help on herdr 0.9.3,
+# measured 2026-10-07 by running all 25.
+FIX_TRUE_093 = ("current layout process-info neighbor edges focus resize zoom "
+                "input split swap").split()
+
+
 def self_test() -> list[str]:
     """Prove the detectors still DETECT.
 
@@ -424,6 +711,102 @@ def self_test() -> list[str]:
         check("cache_read returns None for a corrupt file",
               cache_read(cp, now=1000.0), None)
 
+    # --- pane target flags: parsers on REAL herdr 0.9.3 output -------------
+    subs = parse_pane_subcommands(FIX_PANE_HELP) or []
+    check("pane listing yields all 25 subcommands", len(subs), 25)
+    check("pane listing keeps names with dashes", "report-agent-session" in subs, True)
+    check("pane listing stops at the blank line (no AI-resources words)",
+          "Help" in subs or "SKIP" in subs, False)
+    check("an unrecognised listing is None, not an empty list",
+          parse_pane_subcommands(FIX_FALLBACK_HELP), None)
+    check("swap lists both flags", parse_sub_flags("swap", 0, FIX_SWAP_HELP),
+          frozenset(PANE_TARGET_FLAGS))
+    check("move lists neither (--target-pane is not --pane)",
+          parse_sub_flags("move", 0, FIX_MOVE_HELP), frozenset())
+    check("a failed --help is unreadable, not 'no flags'",
+          parse_sub_flags("swap", 2, FIX_SWAP_HELP), None)
+    check("the group fallback is not zoom's own help, even at rc 0",
+          parse_sub_flags("zoom", 0, FIX_FALLBACK_HELP), None)
+    check("another subcommand's help is not this one's",
+          parse_sub_flags("zoom", 0, FIX_SWAP_HELP), None)
+    check("the marker is read, any order",
+          parse_pane_marker("x\n<!-- herdr-pane-target-flags: zoom current -->\ny\n"),
+          [["zoom", "current"]])
+    check("no marker reads as no markers", parse_pane_marker("# SKILL\n"), [])
+
+    # --- pane target flags: every verdict, on the real 0.9.3 truth ---------
+    both = frozenset(PANE_TARGET_FLAGS)
+    truth = {s: (both if s in FIX_TRUE_093 else frozenset()) for s in subs}
+    marker = [list(FIX_TRUE_093)]
+
+    def row(measured, markers, why="measured"):
+        return pane_flags_row(measured, why, markers, "0.9.3")
+
+    check("equal sets -> OK", row(truth, marker)[:2], ("pane-flags", CLEAN))
+    added = dict(truth, read=both)
+    r = row(added, marker)
+    check("herdr adds one -> ACTION", r[1], ACTION)
+    check("herdr adds one -> the row names it", "read" in r[2], True)
+    dropped = dict(truth, swap=frozenset())
+    r = row(dropped, marker)
+    check("herdr drops one -> ACTION", r[1], ACTION)
+    check("herdr drops one -> the row names it", "swap" in r[2], True)
+    check("marker missing -> ACTION", row(truth, [])[1], ACTION)
+    check("marker missing and herdr down -> still ACTION, never OK",
+          row(None, [], "herdr did not run")[1], ACTION)
+    check("herdr unavailable -> SKIPPED, never OK",
+          row(None, marker, "herdr did not run")[1], SKIP)
+    check("marker twice -> ACTION", row(truth, marker + marker)[1], ACTION)
+    r = row(truth, [marker[0] + ["frobnicate"]])
+    check("unknown name in marker -> ACTION naming it",
+          (r[1], "frobnicate" in r[2]), (ACTION, True))
+    r = row(dict(truth, zoom=None), marker)
+    check("one unreadable --help -> SKIPPED naming it, never OK",
+          (r[1], "zoom" in r[2]), (SKIP, True))
+    r = row(dict(truth, zoom=None, read=both), marker)
+    check("a real drift still shows past an unreadable --help", r[1], ACTION)
+    r = row(dict(truth, read=frozenset({"--pane"})), marker)
+    check("a subcommand with only one of the two flags -> ACTION naming it",
+          (r[1], "read" in r[2]), (ACTION, True))
+
+    # --- pane target flags: the measuring loop, driven by real text --------
+    def gone(argv):
+        return 127, ""
+    check("herdr not on PATH -> nothing measured",
+          measure_pane_flags(gone)[0], None)
+
+    def all_fallback(argv):
+        if argv == ["herdr", "pane", "--help"]:
+            return 0, FIX_PANE_HELP
+        return 2, FIX_FALLBACK_HELP
+    m = measure_pane_flags(all_fallback)[0] or {}
+    check("every --help falling back -> 25 unreadable, none counted",
+          (len(m), sum(1 for v in m.values() if v is None)), (25, 25))
+
+    def real(argv):
+        if argv == ["herdr", "pane", "--help"]:
+            return 0, FIX_PANE_HELP
+        sub = argv[2]
+        if sub in FIX_TRUE_093:
+            return 0, FIX_SWAP_HELP.replace("herdr pane swap", f"herdr pane {sub}")
+        return 0, FIX_MOVE_HELP.replace("herdr pane move", f"herdr pane {sub}")
+    m = measure_pane_flags(real)[0]
+    check("measuring argv lists finds the 11 of 25",
+          (len(m or {}), m == truth), (25, True))
+
+    # --- pane target flags: the cache is keyed on the herdr version --------
+    with tempfile.TemporaryDirectory(prefix="herdr-drift-pane-") as tmp:
+        cp = os.path.join(tmp, "pane.json")
+        check("a full measurement is cached", pane_cache_save("0.9.3", truth, path=cp), True)
+        check("same version reads it back",
+              pane_cache_load("0.9.3", path=cp, now=time.time()), truth)
+        check("a different herdr version is a MISS",
+              pane_cache_load("0.9.4", path=cp, now=time.time()), None)
+        check("no version is a MISS", pane_cache_load(None, path=cp, now=time.time()), None)
+        cp2 = os.path.join(tmp, "partial.json")
+        check("a measurement with an unreadable --help is NOT cached",
+              pane_cache_save("0.9.3", dict(truth, zoom=None), path=cp2), False)
+
     return fails
 
 
@@ -510,6 +893,31 @@ def main() -> int:
             elif not args.quiet:
                 rows.append((f"doc:{name}", CLEAN, f"verified against {stamp}"))
 
+    # --- subject 6: which pane subcommands take --pane/--current ----------
+    pane_info: dict = {"source": None, "take_flags": None}
+    skill_txt = None
+    if skill_dir:
+        try:
+            with open(os.path.join(skill_dir, "SKILL.md"), encoding="utf-8") as fh:
+                skill_txt = fh.read()
+        except OSError:
+            pass
+    if skill_txt is None:
+        rows.append(("pane-flags", SKIP, "could not read the skill's SKILL.md, so the pane "
+                     "target flags were NOT checked"))
+    else:
+        pane = None if args.live else pane_cache_load(have)
+        why = "cache"
+        if pane is None:
+            pane, why = measure_pane_flags()
+            if pane is not None:
+                pane_info["cached"] = pane_cache_save(have, pane)
+        pane_info["source"] = why if pane is not None else f"none ({why})"
+        if pane is not None:
+            pane_info["take_flags"] = sorted(s for s, f in pane.items()
+                                             if f == frozenset(PANE_TARGET_FLAGS))
+        rows.append(pane_flags_row(pane, why, parse_pane_marker(skill_txt), have))
+
     # --- subject 5: the three hashes against upstream's own repo -----------
     # Everything above this line is local, so it cannot see upstream moving
     # while the binary stays pinned. This is the only arm that can.
@@ -551,6 +959,7 @@ def main() -> int:
         "base_version": stored_ver,
         "drift": verdict,
         "upstream": up,
+        "pane_flags": pane_info,
         "repo": repo,
         "subjects": [{"subject": s, "state": st, "note": n} for s, st, n in rows],
     }
