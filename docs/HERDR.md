@@ -1,13 +1,34 @@
 # herdr — release cooldown, daemon persistence, and the tmux question
 
-herdr-verified: 0.9.1
+herdr-verified: 0.9.3
 
-Re-verified 2026-09-22 (F9b) against the installed 0.9.1 with a running server,
-and 2026-09-17 against 0.8.2. The `herdr-verified:` line is machine-read by
+Re-verified 2026-10-07 against the installed 0.9.3 with a running 0.9.3 server,
+2026-09-22 (F9b) against 0.9.1, and 2026-09-17 against 0.8.2. The `herdr-verified:` line is machine-read by
 `herdr-skill-drift-check`, which reports every `docs/HERDR*.md` that has fallen
 behind the binary. It replaced six hand-typed version mentions across four docs,
 all six of which had gone stale without anyone noticing. Move it only after
 actually re-checking.
+
+**WHAT THE 0.9.3 RE-VERIFY COVERED (2026-10-07).** RE-RUN: the cooldown and
+pin path end to end (`herdr-cooldown-check` ELIGIBLE at 7.2 days, the hand
+upgrade, pin back on, then 0 actions); `herdr status` still printing separate
+client and server blocks, both 0.9.3 on protocol 22; `herdr status server --json`
+reading `running: false` against an absent socket and `true` against the live
+one; `herdr config check` ok with both phone-home keys still `false`; and a real
+server stop and start, with the workspaces restored. That restart is what
+F9b could not do, and it found two things this document had wrong: Homebrew no
+longer ships a herdr service (the persistent-server section is rewritten), and
+an upgrade does not rewrite the Claude hook (item 13 and the hooks section are
+corrected). The Linux pin moved to v0.9.3 with three-way hash agreement. NOT
+RE-RUN: the Linux systemd unit and the herdr() guard on Linux (no Linux box in
+this session), remote attach and the keymap-drift claims, the tmux comparison,
+and speak-selection; they keep their earlier evidence. The 0.9.2 CHANGELOG
+says two of those may have moved, so treat them as unconfirmed until re-run:
+#4581 ("Ctrl+Shift+C no longer arrives as Ctrl+C" in panes without enhanced
+keyboard input), against the `send-keys ctrl+shift+c` -> `0x03` bullet under
+"Who copies on a drag"; and multiple prefix keys (#4653), against "herdr takes
+a single key per action" in the ported keymap. 0.9.3 itself only fixed
+Escape-prefixed keys (#4751).
 
 **WHAT THE 0.9.1 RE-VERIFY COVERED HERE.** This document is about the cooldown
 machinery, running herdr as a persistent server, and where it overlaps with
@@ -387,7 +408,7 @@ Homebrew does these on its own:
 
 | Path                                         | What happens                                                                                                 |
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `$(brew --prefix)/Cellar/herdr/<new>/`       | new tree: `bin/herdr`, `CHANGELOG.md`, `sbom.spdx.json`, the plist, `INSTALL_RECEIPT.json`, `.brew/herdr.rb` |
+| `$(brew --prefix)/Cellar/herdr/<new>/`       | new tree: `bin/herdr`, `CHANGELOG.md`, `sbom.spdx.json`, `INSTALL_RECEIPT.json`, `.brew/herdr.rb` |
 | `$(brew --prefix)/bin/herdr`, `opt/herdr`    | symlinks repointed                                                                                           |
 | `$(brew --prefix)/var/homebrew/pinned/herdr` | removed by `brew unpin`, recreated by `brew pin`                                                             |
 | the 6h cache in `$TMPDIR`                    | `herdr-cooldown-check`'s verdict goes stale                                                                  |
@@ -405,17 +426,19 @@ These are ours, and nothing upstream will do them for you:
 | 10  | `home/.config/herdr/config.toml`                                                    | only when a release retires or adds a key -- run `herdr config check`     |
 | 11  | `home/.config/herdr/plugins/*/herdr-plugin.toml`                                    | `min_herdr_version`, and the plugin API if it moved                       |
 | 12  | `home/.config/systemd/user/herdr.service`                                           | only if service flags change                                              |
-| 13  | `~/.claude/hooks/herdr-agent-state.sh` + its `~/.claude/settings.json` registration | **rewritten BY herdr on upgrade, not by you**                             |
+| 13  | `~/.claude/hooks/herdr-agent-state.sh` + its `~/.claude/settings.json` registration | **NOT rewritten by an upgrade**: `herdr integration status` says `outdated` |
 
-Item 13 is the odd one and the reason this table is not only a to-do list. herdr
-installs a state-reporting hook into each agent CLI it finds, each file declaring
-itself "managed by herdr; reinstalling or updating the integration overwrites
-this file". So a bump rewrites EXECUTABLE CODE inside your Claude config, in
-real files that are not stow symlinks and so are not restored by a restow.
-`herdr integration status` lists what is present. The section further down,
-"It installs hooks into your agent CLIs", has the full account; it is repeated
-here because a checklist that lists only what you must do hides the one thing
-that happens whether you act or not.
+Item 13 is the odd one. herdr installs a state-reporting hook into each agent
+CLI it finds, each file declaring itself "managed by herdr; reinstalling or
+updating the integration overwrites this file". This row used to say a bump
+rewrites it on its own. **Measured 2026-10-07, it does not:** the Claude hook
+was still `HERDR_INTEGRATION_VERSION=8`, dated 2026-09-06, after two upgrades
+(0.9.1 on 2026-09-22, 0.9.3 on 2026-10-07), and `herdr integration status`
+reported `claude: outdated (v8 < v10)`. The rewrite happens only on
+`herdr integration install claude`, so after a bump, check `herdr integration
+status` and decide. It is executable code in real files under `~/.claude`, not
+stow symlinks, so a restow does not restore them. The section further down,
+"It installs hooks into your agent CLIs", has the full account.
 
 (Since 2026-09-24 a Claude worker starts only through `pj-worker start`, and the plain
 `--kind claude` route below is refused in herdr panes; D-20260924-A05. Kept as history.)
@@ -468,14 +491,35 @@ between "stow put the files there" and "herdr actually works here":
 
 herdr is a server/client design: panes and agents live in a background server,
 clients attach and detach. `herdr server` is the documented headless entrypoint
-("use it for supervised or service-style setups"), and the Homebrew formula ships
-a service definition with `keep_alive` for it:
+("use it for supervised or service-style setups").
 
-```bash
-brew services start herdr
-```
+**On macOS there is no service any more.** Homebrew removed herdr's service
+definition on 2026-09-24 (homebrew-core `fe0006641fba`, "herdr: remove service
+definition"), so `brew services start|stop|restart herdr` no longer applies. The
+0.9.3 formula reports `service: null` and its keg ships 12 files where 0.9.1's
+shipped 14. herdr starts its own detached server when you attach, and that
+server's parent is PID 1 with no launchd job behind it (measured 2026-10-07:
+`launchctl list` had no herdr job; the server was PID 95343, PPID 1).
 
-That gives crash-restart and start-on-console-login.
+Measured on this Mac, 2026-10-07:
+
+| Command                        | What it does now                                                                                                                               |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `herdr server stop`            | Asks the server over its socket to save and exit. Every pane and agent ends. Nothing restarts it.                                              |
+| `herdr` (attach)               | Starts a fresh server from the installed binary and restores the saved workspaces (0.9.1 stopped at 11:27 AM, 0.9.3 up at 11:29 AM, 13 restored) |
+| `brew services restart herdr`  | Nothing to restart: the formula has no service. Not run.                                                                                       |
+| `brew services stop herdr`     | Only ever stopped a launchd job; it never touched a server herdr started itself.                                                               |
+
+So **to restart onto a new build: `herdr server stop`, then open `herdr`.**
+`./install.sh` offers exactly that after an upgrade (`_herdr_offer_restart
+--stop-only`): it lists what runs inside herdr and stops only on a typed
+`restart`, and never from inside a herdr pane. The server log shows the same
+clean cycle three times before this was written down (2026-09-30, and twice on
+2026-10-04), each one ending in `session restore evaluated ... workspaces=N`.
+
+What the Mac gave up: **crash-restart.** A crashed server stays down until the
+next attach. Start-at-login never mattered much, because attach starts it anyway.
+Linux keeps both through its systemd unit (below).
 
 ### The FileVault ceiling
 
@@ -497,7 +541,7 @@ What each control actually buys you:
 
 | Control                       | Covers                                            | Does not cover              |
 | ----------------------------- | ------------------------------------------------- | --------------------------- |
-| `brew services start herdr`   | herdr crashing; start at console login            | cold boot before login      |
+| first `herdr` attach          | starting the server after any boot or crash       | nothing runs until then     |
 | `sudo pmset -a autorestart 1` | powering back on after a power cut                | the FileVault unlock itself |
 | `sudo fdesetup authrestart`   | **planned** reboots — returns unlocked, `sshd` up | power cuts, panics          |
 
@@ -510,43 +554,18 @@ regular use with `sudo pmset -a destroyfvkeyonstandby 1`.
 **In practice this matters less than it first appears**, because herdr starts its
 own server on attach — upstream: _"connects over SSH, starts or attaches to the
 remote Herdr server."_ After any reboot, the first attach brings the server up.
-The service definition's real value is crash-restart, not cold start.
 
-Note also that `brew services start` without `sudo` installs a **LaunchAgent**,
-which loads in the GUI session at login. A LaunchDaemon would start earlier but is
-the wrong tool here: the server needs the user's `HOME`, `PATH`, ssh-agent and
-agent credentials.
+### A leftover LaunchAgent from before 2026-09-24
 
-#### Hand over to launchd on an idle server, not a busy one
+A Mac that ran `brew services start herdr` while the formula still had a service
+can still carry `~/Library/LaunchAgents/homebrew.mxcl.herdr.plist`. Removing the
+service from the formula does not unload it, so launchd keeps running herdr with
+the formula's old `keep_alive true`, and everything below still happens there.
+`./install.sh` reports the file and prints how to remove it; the `herdr()` guard
+refuses a hand start while it exists. Neither removes it, because that ends
+every pane.
 
-Enabling the service while a hand-started server is already running produces a
-**respawn loop**, and nothing warns you. A second server refuses the socket:
-
-```
-$ herdr server
-error: herdr server is already running
-$ echo $?
-1
-```
-
-The formula sets `keep_alive true`, which restarts the job regardless of exit
-code — so launchd will relaunch it, it will exit 1 again, forever, throttled to
-roughly one attempt every ten seconds.
-
-The handover therefore has to happen while nothing holds the socket, and it is a
-one-time cost:
-
-```bash
-herdr server stop          # kills running panes and agents -- pick your moment
-brew services start herdr  # launchd owns it from here on
-```
-
-After that it is automatic: crash-restart via `keep_alive`, and start at console
-login. There is no way to skip the stop — the socket can only have one owner.
-
-#### Once launchd owns it, nothing else can stop it
-
-`keep_alive true` is **unconditional** — launchd restarts the job on any exit,
+`keep_alive true` is **unconditional**: launchd restarts the job on any exit,
 including a clean one. So every stop request loses:
 
 ```
@@ -565,10 +584,14 @@ error: remote server stop failed: server did not stop within 15000ms; sockets ar
 
 Nothing in that output names launchd, which is what makes it expensive to
 diagnose. `herdr --remote` produces it too, so it reads as a _remote_ problem
-when the cause is entirely local to the server box.
+when the cause is entirely local to the server box. A hand-started second
+server is worse: it exits 1 on the socket, and `keep_alive` relaunches it
+forever, throttled to about one attempt every ten seconds.
 
-Confirm it in one command — `runs` climbing with `last exit code = 0` is the
-signature, and the running process will have PPID 1:
+**PPID 1 does NOT tell the two apart.** This section used to give a launchd
+server's PPID 1 as part of the signature, but a server herdr 0.9.x starts itself
+detaches to PPID 1 too (PID 95343, 2026-10-07, no launchd job). Only launchd can
+answer, and `runs` climbing with `last exit code = 0` is the signature:
 
 ```bash
 launchctl print "gui/$(id -u)/homebrew.mxcl.herdr" | grep -E 'state|runs|last exit|properties'
@@ -578,19 +601,13 @@ launchctl print "gui/$(id -u)/homebrew.mxcl.herdr" | grep -E 'state|runs|last ex
 #   properties = keepalive | runatload | inferred program
 ```
 
-**The rule: while the service is enabled, restart through its owner.**
+No such job (`Could not find service`) means there is no leftover. To remove
+one, when nothing in herdr needs to survive:
 
 ```bash
-brew services restart herdr    # not `herdr server stop`, not herdr's restart prompt
+launchctl bootout "gui/$(id -u)/homebrew.mxcl.herdr"   # ends the server and every pane
+rm ~/Library/LaunchAgents/homebrew.mxcl.herdr.plist      # bare rm goes to the Trash
 ```
-
-That kills live panes and agents, so pick the moment. Since 2026-09-27,
-`./install.sh` offers this itself when an upgrade leaves the old server running
-(`systemctl --user restart herdr.service` on Linux): it lists what runs inside
-herdr and restarts only on a typed `restart`, and never from inside a herdr
-pane. If you want herdr's own
-stop/restart to work again, hand the job back first with `brew services stop
-herdr` — and accept that you lose crash-restart and start-at-login with it.
 
 ### Two machines: keep the versions in step
 
@@ -676,7 +693,8 @@ re-made with `--remote-keybindings server`.
 
 ### Linux / WSL: the systemd user service
 
-Added 2026-09-06. The Linux counterpart of `brew services start herdr`.
+Added 2026-09-06. The Linux counterpart of what `brew services start herdr` was on
+macOS until Homebrew dropped herdr's service on 2026-09-24.
 `home/.config/systemd/user/herdr.service` is stowed like everything else (it
 lands on the Mac too, where it is inert: macOS has no systemd), and
 `install.sh` enables it in `_post_stow_herdr_systemd_service`, which runs after
@@ -693,7 +711,7 @@ What it does on a Linux/WSL box, in order:
    reporting `running: true` while the unit is not active means someone ran
    `herdr server` by hand and owns the socket. Enabling the unit then would
    start a second server that exits 1, and `Restart=` would retry it -- the
-   same respawn loop the Homebrew `keep_alive` section above describes. The
+   same respawn loop the leftover-LaunchAgent section above describes. The
    unit caps that at five tries in two minutes, but install.sh does not get
    there: it prints the two-command fix and leaves the running server alone.
 4. `daemon-reload`, then `enable --now`.
@@ -743,7 +761,7 @@ box with neither is untouched.
 
 | You type                                     | What happens                                                                                               | Why                                                                                                                                                                                                     |
 | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `herdr server`                               | **Refused.** Prints `systemctl --user start herdr.service` (Linux) or `brew services start herdr` (macOS). | A hand-started server inherits the shell's environment and dies with the session -- the whole reason the service exists. On the Mac it also exits 1 on the socket and `keep_alive` respawns it forever. |
+| `herdr server`                               | **Refused.** Prints `systemctl --user start herdr.service` (Linux), or on a Mac with a leftover LaunchAgent, how to remove it. | A hand-started server inherits the shell's environment and dies with the session -- the whole reason the service exists. With a leftover LaunchAgent it also exits 1 on the socket and `keep_alive` respawns it forever. A Mac without one is not guarded: herdr starts its own server there. |
 | `herdr server stop`, `reload-config`, ...    | Pass through.                                                                                              | Only the bare form starts a server.                                                                                                                                                                     |
 | `herdr update`                               | **Refused** (2026-09-17). Prints `herdr-cooldown-check` and `./install.sh`.                                | herdr ships its own updater. It downloads and installs a release directly, walking around Homebrew, `brew pin` and the whole `HERDR_COOLDOWN_DAYS` gate in one command.                                 |
 | `herdr channel set preview`                  | **Refused** (2026-09-17).                                                                                  | Same hole by another route: it repoints that updater at preview builds. `channel set stable` passes through.                                                                                            |
@@ -976,10 +994,11 @@ Two properties keep this defensible:
   here, not a stow symlink, so the edit did not reach the dotfiles tree.
 
 One property that deserves attention: each file declares _"managed by herdr;
-reinstalling or updating the integration overwrites this file."_ Upgrading herdr
-therefore rewrites executable code in your agent config directories. The release
-cooldown governs when that happens — which is a reason the pin matters beyond
-the binary itself.
+reinstalling or updating the integration overwrites this file."_ That overwrite
+happens on `herdr integration install <name>`, not on a binary upgrade (measured
+2026-10-07: v8 hook left in place across two upgrades, reported as `outdated
+(v8 < v10)`). So the newer hook is a separate, deliberate step, and the pin
+governs only when the newer hook becomes available, not when it lands.
 
 ## Scope (and deliberate non-scope)
 

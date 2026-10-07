@@ -948,9 +948,10 @@ _preflight_herdr_pin_check() {
 }
 
 # herdr is server/client: replacing the binary on disk never touches an already
-# running server process (Unix keeps the old inode mapped) or restarts the
-# launchd service -- Homebrew's own herdr formula requires a manual `brew
-# services restart herdr` after an upgrade, and never does it for you. That's
+# running server process (Unix keeps the old inode mapped) -- on macOS the
+# server has to be stopped (`herdr server stop`) and the next `herdr` starts
+# the new build; on Linux the systemd unit is restarted. Nothing does either
+# for you. That's
 # deliberate: nobody should auto-restart a server other live sessions are
 # attached to. This just makes the resulting skew VISIBLE instead of silent,
 # using herdr's own restart_needed field (it already tracks protocol
@@ -987,7 +988,13 @@ _herdr_server_restart_status() {
 # itself running in a herdr pane (HERDR_ENV=1): the restart would kill it
 # mid-run. Not interactive, or dry-run: print the command, never act.
 #
-# Usage: _herdr_offer_restart <restart command...>
+# --stop-only is the macOS form. Homebrew removed herdr's service definition
+# on 2026-09-24 (homebrew-core fe0006641fba), so there is no launchd job to
+# restart and herdr has no `server start`: the server is stopped, and the next
+# `herdr` starts the new build and restores the saved workspaces (measured
+# 2026-10-07: 0.9.1 stopped, 0.9.3 came up with all 13 workspaces).
+#
+# Usage: _herdr_offer_restart [--stop-only] <restart command...>
 _herdr_server_pid() {
     # systemd's MainPID on Linux; otherwise whoever holds herdr's socket. On macOS
     # the 0.9.x server detaches (ppid 1), so launchd does not know its PID, and a
@@ -1027,6 +1034,8 @@ _herdr_pane_processes() {
         | cut -c1-110 || true
 }
 _herdr_offer_restart() {
+    local stop_only=""
+    if [[ "${1:-}" == --stop-only ]]; then stop_only=1; shift; fi
     local st have cmd_str="$*" procs ans i
     st=$(_herdr_server_restart_status)
     [[ "$st" == yes:* ]] || return 0
@@ -1059,6 +1068,21 @@ _herdr_offer_restart() {
     fi
     if ! run_cmd "$@"; then
         warn "Restart failed: ${CYAN}${cmd_str}${RESET}"
+        return 0
+    fi
+    if [[ -n "$stop_only" ]]; then
+        # Only a positive "running": false counts as stopped. An empty or failed
+        # status call is not that answer, so it is reported as unconfirmed.
+        local running=""
+        for i in 1 2 3 4 5 6 7 8 9 10; do
+            running=$(herdr status server --json 2>/dev/null | jq -r '.running' 2>/dev/null) || running=""
+            if [[ "$running" == false ]]; then
+                success "herdr server stopped. Open ${CYAN}herdr${RESET} to start ${have} with your workspaces restored."
+                return 0
+            fi
+            sleep 1
+        done
+        warn "herdr server stop ran but a stopped server was not confirmed (running=${running:-no answer}). Check: ${CYAN}herdr status server${RESET}"
         return 0
     fi
     for i in 1 2 3 4 5 6 7 8 9 10; do
@@ -1154,58 +1178,34 @@ _preflight_herdr_bump_check() {
             success "herdr now $(herdr --version 2>/dev/null | awk '{print $2}') (pinned)"
         fi
         # Never automatic; a typed "restart" at most (see _herdr_offer_restart).
-        _herdr_offer_restart brew services restart herdr
+        _herdr_offer_restart --stop-only herdr server stop
     else
         warn "brew unpin herdr failed — leaving the current pin in place."
     fi
     return 0
 }
 
-# Distinct from _herdr_server_restart_status on purpose: that one guards an
-# ALREADY-running server (disruptive to touch, so it only ever warns). This
-# guards a server that is supposed to be running (its launchd plist exists)
-# but currently ISN'T -- a down server has no attached sessions to protect,
-# so starting it here is safe and needs no confirmation, same as any other
-# preflight fix in this script. Without this, a crashed-and-not-restarted
-# herdr (or one that didn't survive a reboot) shows a false green "server
-# managed by launchd" in the prerequisites summary and install.sh does
-# nothing to fix it -- confirmed live: the summary only checks the plist
-# FILE exists, never whether the service it describes is actually up.
+# Homebrew removed herdr's service definition on 2026-09-24 (homebrew-core
+# fe0006641fba: `herdr: remove service definition`), so `brew services` no
+# longer manages herdr and the server is started by herdr itself on attach.
+# A Mac that ran `brew services start herdr` BEFORE that date can still carry
+# the old LaunchAgent: launchd keeps running it with keep_alive, so
+# `herdr server stop` is undone within milliseconds (docs/HERDR.md, "A
+# leftover LaunchAgent"). This only reports it. Removing it ends every pane,
+# so the commands are printed, never run.
 _preflight_herdr_service_health_check() {
     [[ "$SKIP_PREFLIGHT" == true ]] && return 0
     [[ "$(check_os)" == "macos" ]] || return 0
     command -v herdr &>/dev/null || return 0
-    local _bh=0; _brew_health || _bh=$?
-    if [[ $_bh -eq 1 ]]; then return 0; fi
-    if [[ $_bh -eq 2 ]]; then
-        step "Pre-flight herdr service health check"
-        _warn_brew_unusable "herdr service health check"
-        return 0
-    fi
-    command -v jq &>/dev/null || return 0
-    # Only relevant once someone opted into launchd management at all -- a box
-    # that never ran `brew services start herdr` isn't broken, it's just
-    # unmanaged (see the "~ server not managed" note in check_prerequisites).
-    [[ -f "$HOME/Library/LaunchAgents/homebrew.mxcl.herdr.plist" ]] || return 0
+    local plist="$HOME/Library/LaunchAgents/homebrew.mxcl.herdr.plist"
+    [[ -e "$plist" ]] || return 0
 
-    local svc_json=""
-    svc_json=$(brew services info herdr --json 2>/dev/null) || true
-    [[ -n "$svc_json" ]] || return 0
-    local running
-    running=$(jq -r '.[0].running // false' <<<"$svc_json" 2>/dev/null) || return 0
-    [[ "$running" == "true" ]] && return 0
-
-    step "Pre-flight herdr service health check"
-    warn "herdr is supposed to be managed by launchd but isn't running — no attached sessions to protect, starting it."
-    if [[ "$DRY_RUN" == true ]]; then
-        info "[dry-run] No changes made. Re-run without --dry-run to start herdr."
-        return 0
-    fi
-    if run_cmd brew services restart herdr; then
-        success "herdr service restarted."
-    else
-        warn "brew services restart herdr failed — check ${CYAN}brew services info herdr${RESET} manually."
-    fi
+    step "Pre-flight herdr leftover LaunchAgent"
+    warn "Found ${plist} from before Homebrew dropped herdr's service (2026-09-24)."
+    info "launchd restarts herdr on every exit while it is loaded, so ${CYAN}herdr server stop${RESET} cannot stop it."
+    info "When nothing in herdr needs to survive, remove it yourself:"
+    info "  ${CYAN}launchctl bootout gui/\$(id -u)/homebrew.mxcl.herdr${RESET}"
+    info "  ${CYAN}rm ${plist}${RESET}   (goes to the Trash)"
     return 0
 }
 
@@ -1861,8 +1861,8 @@ check_prerequisites() {
     check_command herdr "herdr" || missing=$((missing+1))
     # Where herdr exists, its guards ARE the policy and must be observable:
     # the pin enforces the release cooldown, config.toml keeps the two
-    # phone-home paths closed, and the LaunchAgent is what makes the session
-    # server survive a crash. Report all three rather than assuming a past run
+    # phone-home paths closed, and on Linux the systemd unit is what makes the
+    # session server survive a crash. Report all three rather than assuming a past run
     # set them -- a lapsed pin looks identical to a healthy one until checked.
     if command -v herdr &>/dev/null; then
         if [[ "$(check_os)" == "macos" ]]; then
@@ -1887,31 +1887,18 @@ check_prerequisites() {
         else
             echo -e "      ${YELLOW}~${RESET} config.toml not stow-linked — re-run stow (phone-home may be live)"
         fi
-        if [[ -f "$HOME/Library/LaunchAgents/homebrew.mxcl.herdr.plist" ]]; then
-            # The plist existing only means launchd is SET UP to manage it, not that
-            # it's actually up right now (a crash, a reboot, or FileVault's pre-boot
-            # ceiling -- see docs/HERDR.md -- can all leave it down with the plist
-            # still present). _preflight_herdr_service_health_check runs earlier in
-            # this script and would already have restarted it if it were down and
-            # SKIP_PREFLIGHT wasn't set, but this line reports the real state rather
-            # than assume that ran.
-            local _herdr_svc_running=""
-            if command -v jq &>/dev/null; then
-                _herdr_svc_running=$(brew services info herdr --json 2>/dev/null \
-                    | jq -r '.[0].running // false' 2>/dev/null)
-            fi
-            if [[ "$_herdr_svc_running" == "true" ]]; then
-                echo -e "      ${GREEN}✓${RESET} server managed by launchd and running (crash-restart + start at login)"
-            elif [[ "$_herdr_svc_running" == "false" ]]; then
-                echo -e "      ${YELLOW}~${RESET} launchd plist present but server NOT running — ${CYAN}brew services restart herdr${RESET}"
+        if [[ "$(check_os)" == "macos" ]]; then
+            # No service manager on macOS since Homebrew dropped herdr's service
+            # (2026-09-24): herdr starts its own server on attach, and nothing
+            # restarts it after a crash. A leftover plist is the one wrong state.
+            if [[ -e "$HOME/Library/LaunchAgents/homebrew.mxcl.herdr.plist" ]]; then
+                echo -e "      ${YELLOW}~${RESET} leftover brew-services LaunchAgent — ${CYAN}herdr server stop${RESET} will respawn (see the pre-flight note)"
             else
-                echo -e "      ${GREEN}✓${RESET} server managed by launchd (crash-restart + start at login)"
+                echo -e "      ${GREEN}✓${RESET} server self-started on attach (no launchd job; no crash-restart)"
             fi
-        elif [[ "$(check_os)" == "macos" ]]; then
-            echo -e "      ${YELLOW}~${RESET} server not managed — ${CYAN}brew services start herdr${RESET} (stop any running server FIRST)"
         elif command -v systemctl &>/dev/null; then
             # Linux/WSL: the stowed user unit. Report the real state, not the
-            # file's presence -- same reasoning as the launchd branch above.
+            # file's presence: a stowed unit can still be down.
             local _unit_state
             _unit_state=$(_herdr_unit_state)
             if [[ "$_unit_state" == "active" ]]; then
@@ -1929,7 +1916,11 @@ check_prerequisites() {
         _herdr_restart_status=$(_herdr_server_restart_status)
         if [[ "$_herdr_restart_status" == yes:* ]]; then
             echo -e "      ${YELLOW}~${RESET} server still running ${_herdr_restart_status#yes:} (installed build is newer) — restart when convenient:"
-            echo -e "        ${CYAN}brew services restart herdr${RESET} (disrupts every attached session; never automatic)"
+            if [[ "$(check_os)" == "macos" ]]; then
+                echo -e "        ${CYAN}herdr server stop${RESET}, then open ${CYAN}herdr${RESET} (ends every pane; workspaces are restored; never automatic)"
+            else
+                echo -e "        ${CYAN}systemctl --user restart herdr.service${RESET} (disrupts every attached session; never automatic)"
+            fi
         elif [[ "$_herdr_restart_status" == "no" ]]; then
             echo -e "      ${GREEN}✓${RESET} server running the currently installed build"
         fi
@@ -4916,9 +4907,8 @@ main() {
     # read-only -- this just runs the same manual commands it recommends, automatically. ---
     _preflight_herdr_bump_check
 
-    # --- herdr service health (macOS): start it back up if launchd should be managing it
-    # but it's not actually running. Safe and unconditional -- a down server has no
-    # attached sessions to protect, unlike _herdr_server_restart_status above. ---
+    # --- herdr leftover LaunchAgent (macOS): report a pre-2026-09-24 brew-services
+    # plist, which would make `herdr server stop` respawn. Reports only. ---
     _preflight_herdr_service_health_check
 
     # --- herdr release pre-flight (Linux/WSL): re-apply a pin bump on a box that

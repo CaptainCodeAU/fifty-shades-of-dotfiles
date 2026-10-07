@@ -764,8 +764,11 @@ pnpm() {
 # the exported once-only banner flags from section 4 and 10, so every pane it
 # spawns skips the welcome banner -- and dies with the SSH session. On Linux
 # the server is a systemd --user unit (home/.config/systemd/user/herdr.service,
-# enabled by install.sh); on macOS it is a brew-services LaunchAgent. Both are
-# detected by the file they leave behind, so a box with no service is unaffected.
+# enabled by install.sh). On macOS there is no service since Homebrew dropped
+# herdr's (2026-09-24, homebrew-core fe0006641fba): herdr starts its own server
+# on attach. A LEFTOVER brew-services LaunchAgent from before then still respawns
+# herdr on every exit, so a hand start there is still refused. Both are detected
+# by the file they leave behind, so a box with no service is unaffected.
 #
 # Two vectors, both covered:
 #   1. `herdr server` with NO subcommand. Blocked; the service command is printed.
@@ -795,11 +798,13 @@ herdr() {
         elif [[ -f "$_plist" ]]; then
             echo "${err}BLOCKED: herdr server${done}"
             echo
-            echo "  herdr is managed by launchd (brew services) on this Mac. A second server"
-            echo "  ${warn}exits 1 on the socket and keep_alive respawns it forever.${done}"
+            echo "  A leftover brew-services LaunchAgent still runs herdr on this Mac. A second"
+            echo "  ${warn}server exits 1 on the socket and keep_alive respawns it forever.${done}"
+            echo "  Homebrew dropped herdr's service on 2026-09-24; remove the leftover when"
+            echo "  nothing in herdr needs to survive (it ends every pane):"
             echo
-            echo "  Use:   brew services start herdr"
-            echo "  State: brew services info herdr"
+            echo "    launchctl bootout gui/\$(id -u)/homebrew.mxcl.herdr"
+            echo "    rm $_plist"
             return 1
         fi
     fi
