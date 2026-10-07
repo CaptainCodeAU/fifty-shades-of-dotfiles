@@ -793,7 +793,7 @@ function guard_check(    k, j, n, a, w, b, s, i, t) {
 # ~/.claude/projects/<key>/memory (and below). The dotfiles repo copies stay editable,
 # so a guard fix goes through the repo and a commit.
 # Denied: an output redirection into one; sed/gsed -i, perl -i, tee, truncate, touch,
-# chmod, chown, rm, unlink, mv on one; cp, install, rsync, ditto or ln with one as the
+# mkdir, chmod, chown, rm, unlink, mv on one; cp, install, rsync, ditto or ln with one as the
 # destination; dd of=<one>; git config --global (or --file ~/.gitconfig) unless it only
 # reads (--get*, --list, -l). Paths: ~, $HOME and ${HOME} are expanded, a relative path
 # is joined to the payload's cwd or a cd earlier in the command.
@@ -851,7 +851,7 @@ function pp_check(    k, j, n, a, b, w, cwd, p, i, last, inpl, rd, v) {
             for (a = j + 1; a <= n; a++) { p = pp_path(WR[k, a], cwd); if (pp_protected(p)) return pp_msg(p, b " -i") }
             continue
         }
-        if (b == "tee" || b == "truncate" || b == "touch" || b == "chmod" || b == "chown" || b == "rm" || b == "grm" || b == "unlink" || b == "mv" || b == "gmv") {
+        if (b == "tee" || b == "truncate" || b == "touch" || b == "mkdir" || b == "gmkdir" || b == "chmod" || b == "chown" || b == "rm" || b == "grm" || b == "unlink" || b == "mv" || b == "gmv") {
             for (a = j + 1; a <= n; a++) { p = pp_path(WR[k, a], cwd); if (pp_protected(p)) return pp_msg(p, b) }
             continue
         }

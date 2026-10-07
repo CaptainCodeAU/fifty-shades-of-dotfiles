@@ -456,6 +456,27 @@ if [ "${1:-}" = "--selftest" ]; then
   conv_arm deny  'A35 tee -a into ~/.claude/CLAUDE.md'         'echo x | tee -a ~/.claude/CLAUDE.md'
   conv_arm deny  'A35 cp into a memory folder'                 'cp x.md ~/.claude/projects/-Users-x/memory/y.md'
   conv_arm deny  'A35 mv a live guard away'                    'mv ~/.claude/hooks/validate-bash.sh /tmp/x'
+  # W-20261007-A11: mkdir was not a write verb here; cp, mv, install, tee, ln, rsync already were.
+  # The 2026-10-07 cp got through because its path was in a variable (H=~/.claude/hooks), a stated limit.
+  conv_arm deny  'A11 command cp -f, literal path (denied before A11 too)' 'command cp -f x.sh ~/.claude/hooks/herdr-agent-state.sh'
+  conv_arm deny  'A11 cp -f into ~/.claude/hooks'              'cp -f x.sh ~/.claude/hooks/a.sh'
+  conv_arm deny  'A11 cp -R into the hooks folder itself'      'cp -R dir ~/.claude/hooks/'
+  conv_arm deny  'A11 cp -t ~/.claude/hooks'                   'cp -t ~/.claude/hooks x.sh'
+  conv_arm deny  'A11 mkdir -p under ~/.claude/hooks (the 2026-10-07 miss)' 'mkdir -p ~/.claude/hooks/upstream/herdr'
+  conv_arm deny  'A11 mkdir under ~/.claude/hooks'             'mkdir ~/.claude/hooks/new'
+  conv_arm deny  'A11 command mkdir -p'                        'command mkdir -p "$HOME/.claude/hooks/x"'
+  conv_arm deny  'A11 mkdir after cd'                          'cd ~/.claude/hooks && mkdir sub'
+  conv_arm deny  'A11 mv into ~/.claude/hooks'                 'mv x.sh ~/.claude/hooks/a.sh'
+  conv_arm deny  'A11 install into ~/.claude/hooks'            'install -m 755 x.sh ~/.claude/hooks/a.sh'
+  conv_arm deny  'A11 tee into ~/.claude/hooks'                'echo x | tee ~/.claude/hooks/a.sh'
+  conv_arm deny  'A11 ln -s into ~/.claude/hooks'              'ln -s /tmp/x.sh ~/.claude/hooks/a.sh'
+  conv_arm deny  'A11 rsync into ~/.claude/hooks'              'rsync -a x.sh ~/.claude/hooks/'
+  conv_arm deny  'A11 sudo cp into ~/.claude/hooks'            'sudo cp x.sh ~/.claude/hooks/a.sh'
+  conv_arm deny  'A11 env cp into ~/.claude/hooks'             'env cp x.sh ~/.claude/hooks/a.sh'
+  conv_arm allow 'A11 mkdir -p in the repo copy'               'mkdir -p home/.claude/hooks/upstream/herdr'
+  conv_arm allow 'A11 mkdir -p in $TMPDIR'                     'mkdir -p "$TMPDIR/x"'
+  conv_arm allow 'A11 command cp FROM a live guard'            'command cp -f ~/.claude/hooks/validate-bash.sh /tmp/vb.bak'
+  conv_arm allow 'A11 ls the hooks folder'                     'ls ~/.claude/hooks'
   # D-20260929-A14 narrowed 2026-09-29 (Gavin's box, session dotfiles-doer): the lock covers the
   # auto-memory files at the top of memory/, not the open-items drawer in memory/WORK/.
   conv_arm deny  'A35 sed -i on a top-level memory file'       "sed -i '' s/a/b/ ~/.claude/projects/-Users-x/memory/MEMORY.md"
