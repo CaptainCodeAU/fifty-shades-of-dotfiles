@@ -3,7 +3,25 @@
 **Audience: an AI coding agent, not a human.** This replaces reading
 <https://herdr.dev/docs/plugins/>.
 
-herdr-verified: 0.9.1
+herdr-verified: 0.9.3
+
+**THE 0.9.3 RE-VERIFY (2026-10-07)**, against a running 0.9.3 server. The 0.9.1
+to 0.9.3 delta touches plugins in two places, neither contradicting this
+document: 0.9.2 removed the herdr-specific pane graphics API (`pane.graphics.*`
+now `unknown_method`; nothing here used it) and `plugin install` now accepts
+options before the repository. RE-RUN: all eleven `plugin` subcommands are in
+0.9.3's group listing; `plugin list` prints text and `plugin list --json`
+prints JSON; `plugin config-dir dotfiles.window-title-fix` returns its path;
+`plugin action list --plugin dotfiles.window-title-fix` returns JSON with its
+one action, `toggle-host`; that plugin is still installed, enabled and linked
+to its in-repo path. OBSERVED: `herdr --help` does not list the `plugin` group,
+though `herdr plugin` prints its listing. The listing shows `plugin link <path>
+[--disabled]` only, but `herdr plugin link --help` lists both `--disabled`
+and `--enabled`, and `--enabled` parses: against a missing path it fails with
+`plugin_manifest_not_found` (exit 1), where a made-up flag fails with `unknown
+option` (exit 2). So the section 3 form and install.sh's call still work;
+nothing was linked to show it. NOT RE-RUN, same reason as
+0.9.1: the authoring, install, uninstall, link and unlink cycle.
 
 Re-verified against **herdr 0.9.1** on 2026-09-22 (F9b) and against **0.8.2** on
 2026-09-17, each time by re-probing every claim that the releases since the last

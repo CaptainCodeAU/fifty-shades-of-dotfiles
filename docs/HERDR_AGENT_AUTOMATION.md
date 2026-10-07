@@ -1,9 +1,28 @@
 # herdr: Agent Automation (Group B)
 
 **Audience: an AI coding agent, not a human.** This replaces reading
-https://herdr.dev/docs/preview/agent-automation/.
+<https://herdr.dev/docs/preview/agent-automation/>.
 
-herdr-verified: 0.9.1
+herdr-verified: 0.9.3
+
+**THE 0.9.3 RE-VERIFY (2026-10-07) WAS NARROW, and says so.** Against a running
+0.9.3 server, scope the 0.9.1 to 0.9.3 delta. RE-RUN and unchanged: every
+command in section 3 is in 0.9.3's group listings (an invented control
+misses); `agent list` still answers `{"result":{"agents":[...],"type":...}}`;
+the pane/tab/workspace create and close commands, in a throwaway workspace.
+OBSERVED: closing a workspace's LAST tab from the CLI (`tab close`) closes it
+with no prompt and removes the workspace; 0.9.2's new last-tab confirmation
+(#4379) is a TUI behaviour only. CHANGED: the Claude integration hook
+(section 2) is now reported `outdated (v8 < v10)` by `herdr integration
+status`; the 0.9.3 Homebrew upgrade did NOT rewrite it (file still dated 6 Sep).
+NOT RE-RUN: everything that needs a live agent (`agent start` /
+`agent_pane_busy`, `agent prompt`, `agent wait`, `agent get` key shape,
+`agent explain`). No agent was running (all 21 panes `agent_status: unknown`)
+and starting one is outside a re-verify (D-20260924-A05). The 0.9.2 changes
+that touch those claims are DOC only here: an agent's first task now counts as
+`done` even when started with a prompt (#3338), agents may self-report a resume
+command (#4687), and an event reader that falls behind gets `events_lost`
+instead of silently skipped events (#4178).
 
 Written against **herdr 0.7.5** on 2026-08-02 by executing every command.
 Reviewed against **0.8.2** on 2026-09-17. Re-verified against **0.9.1** on
@@ -100,7 +119,8 @@ Consequences:
 - `agent explain` outputs plain text; add `--json` for machine parsing.
 
 The Claude-side integration hook (`~/.claude/hooks/herdr-agent-state.sh`,
-`HERDR_INTEGRATION_VERSION=7`, wired as a `session` hook in `settings.json`)
+`HERDR_INTEGRATION_VERSION=8` on disk as of 2026-10-07, which herdr 0.9.3
+reports as `outdated (v8 < v10)`; wired as a `session` hook in `settings.json`)
 reports only **session identity**, not lifecycle state. Check with
 `herdr integration status`. The file is herdr-managed and is overwritten on
 reinstall -- add custom hooks beside it, never edit it.
@@ -308,7 +328,9 @@ agents your own automation started. Never point it at a human's session.
 3. Always pass `--timeout`. Unbounded waits hang the caller.
 4. Treat `unknown` as "no information", never as "finished".
 5. Verify effects by reading content, not by trusting a `--wait` return.
-6. Never `herdr server stop` / `brew services stop herdr` with live sessions.
+6. Never `herdr server stop` (macOS) / `systemctl --user stop herdr.service`
+   (Linux) with live sessions. (`brew services stop herdr` no longer applies:
+   Homebrew removed herdr's service definition on 2026-09-24.)
 
 Related: [`HERDR_AGENT_SKILL.md`](HERDR_AGENT_SKILL.md),
 [`HERDR_PLUGINS.md`](HERDR_PLUGINS.md), [`HERDR.md`](HERDR.md).

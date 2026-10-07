@@ -1,9 +1,29 @@
 # herdr: Agent Skill (Group A)
 
 **Audience: an AI coding agent, not a human.** Read this before issuing any
-`herdr` command. It replaces reading https://herdr.dev/docs/agent-skill/.
+`herdr` command. It replaces reading <https://herdr.dev/docs/agent-skill/>.
 
-herdr-verified: 0.9.1
+herdr-verified: 0.9.3
+
+**THE 0.9.3 RE-VERIFY (2026-10-07), against a running 0.9.3 server.** Scope: the
+0.9.1 to 0.9.3 delta (0.9.2 feature release, 0.9.3 escape-key hotfix). RE-RUN
+and unchanged: every subcommand the four HERDR docs name is in 0.9.3's group
+listings (42 of 42, with an invented control missing; `server stop`,
+`server reload-config` and `status [server|client]` from the top-level help,
+`server update-agent-manifests` from the binary's strings, with an invented
+control at 0); the output-format map (`pane split` JSON with
+`.result.pane.pane_id`, `pane run` empty at exit 0, `pane wait-output` JSON with
+`.result.read.text`, `pane read` plain text, `pane list` and `plugin list --json`
+JSON, `plugin list` text); a bad pane id answering exit 1 with a JSON error on
+stderr; a syntax error exiting 2. RE-MEASURED AND CHANGED: `<group> <sub> --help`
+now prints the identical top-level help for a real and an invented subcommand
+(same checksum), so the `--help` probe in section 4 separates nothing; see the
+0.9.3 note there. New panes now carry `TERM_PROGRAM=herdr` and
+`TERM_PROGRAM_VERSION=0.9.3` (section 2). NOT RE-RUN: `agent get` / `agent list`
+key shapes and `agent explain` need a live agent, and none was running (all 21
+panes `agent_status: unknown`); starting one is outside a re-verify
+(D-20260924-A05). Checked and found absent: this document makes no claim about
+the pane graphics API, which 0.9.2 removed.
 
 Re-verified against **herdr 0.9.1** (Homebrew, macOS arm64) on 2026-09-22 (F9b),
 against a RUNNING 0.9.1 server rather than the binary alone; against 0.8.2 on
@@ -118,6 +138,14 @@ control the focused herdr session from outside.
 OBSERVED: inside a pane you also get `HERDR_PANE_ID`, `HERDR_TAB_ID`,
 `HERDR_WORKSPACE_ID`, `HERDR_SOCKET_PATH`. Example: `wJ:p1`, `wJ:t1`, `wJ`.
 
+OBSERVED on 0.9.3 (2026-10-07): a new pane also has `TERM_PROGRAM=herdr` and
+`TERM_PROGRAM_VERSION=0.9.3` (0.9.2, #4104). The same release says panes no
+longer inherit Claude Code session markers from the terminal that started the
+server. The pane measured had `CLAUDE_CODE_SESSION_ID` length 0 (control: `HOME`
+length 17), but that server was started from a plain terminal, where the
+variable is absent either way, so the measurement does not prove the change.
+Treat it as DOC until a server started from a Claude shell is checked.
+
 ---
 
 ## 3. THE SANDBOX TRAP (read this first)
@@ -135,11 +163,14 @@ This is not a herdr fault and not a broken install. The socket lives at
 Two fixes:
 
 1. Add the socket to `allowWrite` in `.claude/settings.local.json`:
+
    ```json
    "allowWrite": ["~/.claude/MEMORY", "~/.config/herdr/herdr.sock"]
    ```
+
    OBSERVED: sandbox config is read at **session start**. Editing it mid-session
    does NOT take effect. Verify at the next session, not immediately.
+
 2. Per-call `dangerouslyDisableSandbox: true` on the Bash tool. Works
    immediately but lifts the whole sandbox for that call.
 
@@ -203,6 +234,18 @@ grep -qE '^ *herdr agent list\b'                /tmp/agent.txt   # must HIT
 grep -qE '^ *herdr agent no-such-subcommand\b'  /tmp/agent.txt   # must MISS
 ```
 
+**0.9.3 CHANGED THE `--help` HALF OF THIS (measured 2026-10-07).** `herdr agent
+no-such-subcommand --help`, `herdr agent list --help`, `herdr server stop --help`
+and `herdr server no-such-thing --help` now all print the SAME top-level help,
+68 lines, identical checksum, exit 0. The group listing no longer appears for
+an invented name, so `--help` cannot separate real from invented at all. The
+listing-membership grep above still works (a real name hits, the invented
+control misses). For `status` and `server`, read the top-level `herdr --help`
+instead: it names `server stop`, `server reload-config` and
+`status [server|client]`. Note that `herdr --help` does not list the `plugin`
+group at all, although `herdr plugin` prints its listing; do not read that
+absence as removal.
+
 That probe verified all 47 subcommands these four documents claim, against 0.9.1.
 Two caveats it also surfaced, both measured: `herdr status` prints status rather
 than a listing and `herdr server` bare is the one form the skill forbids, so
@@ -254,8 +297,11 @@ herdr pane read <pane> --source visible --lines 400
 herdr pane close <pane>
 ```
 
-**NEVER** run `herdr server stop`, `herdr server reload-config` casually, or
-`brew services stop herdr` while other agent sessions are live. Never run bare
+**NEVER** run `herdr server stop` (macOS) / `systemctl --user stop
+herdr.service` (Linux), or `herdr server reload-config` casually, while other
+agent sessions are live. (`brew services stop herdr` no longer applies: Homebrew
+removed herdr's service definition on 2026-09-24, homebrew-core `fe0006641fba`,
+and the Mac server is self-started by herdr with no launchd job.) Never run bare
 `herdr` for discovery: it launches or attaches the TUI. Never probe a mutating
 subcommand by omitting arguments; `herdr workspace create` executes on defaults.
 
