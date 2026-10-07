@@ -62,9 +62,11 @@ Three concrete escalation paths, all OBSERVED or structural:
 1. `herdr plugin install <owner>/<repo>` **clones a GitHub repo and executes its
    `[[build]]` commands at install time**, before you have run anything.
 2. `[[startup]]` commands run on **every herdr server start**, unattended,
-   inheriting the server's environment. Under a launchd-managed Homebrew
-   service that environment can include forwarded SSH agent sockets and any
-   exported API tokens.
+   inheriting the server's environment. On macOS the server is self-started by
+   the first `herdr` attach (Homebrew removed its service on 2026-09-24), so it
+   inherits that shell's whole environment; on Linux it is the systemd user
+   unit's. Either can include forwarded SSH agent sockets and any exported API
+   tokens.
 3. OBSERVED: a plugin action receives `HERDR_BIN_PATH` and `HERDR_SOCKET_PATH`
    and the full CLI works from inside it -- a plugin can enumerate, read and
    drive every agent on the machine.
