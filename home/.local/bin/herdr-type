@@ -187,7 +187,23 @@ def resolve(target):
         return hits[0]
     if not hits:
         raise LookupError(f"no pane, agent or label named '{target}'")
-    raise LookupError(f"'{target}' is ambiguous: " + ", ".join(p["pane_id"] for p in hits))
+    raise LookupError(f"'{target}' is ambiguous, it matches {len(hits)} panes: "
+                      + "; ".join(f"{pane_name(p)} (to aim at it: herdr-type send {p['pane_id']} ...)" for p in hits))
+
+
+def pane_name(p):
+    """The name Gavin sees on screen: the pane's label, else its tab's label. Plain messages use this,
+    never the pane id, which herdr does not show (engage-model Q24; his reply-style rule, Q23).
+    An id appears only inside a command he is asked to run; --json output keeps the id."""
+    if p.get("label"):
+        return p["label"]
+    tab = None
+    if p.get("tab_id"):
+        try:
+            tab = herdr("tab.get", {"tab_id": p["tab_id"]}).get("tab", {}).get("label")
+        except HerdrError:
+            pass
+    return f"an unlabelled pane in tab '{tab}'" if tab else "an unlabelled pane"
 
 
 def transcript_path(pane):
@@ -708,7 +724,7 @@ def cmd_send(a, raw=None):
               "steps": [describe(x) for x in steps], "notes": notes}
     if problem:
         report["problem"] = problem
-        say(f"{st['pane']} is in '{st['state']}': {problem}")
+        say(f"{pane_name(pane)} is in '{st['state']}': {problem}")
         if a.json:
             print(json.dumps(report, ensure_ascii=False))
         return 4
@@ -744,7 +760,7 @@ def cmd_send(a, raw=None):
     if a.json:
         print(json.dumps(report, ensure_ascii=False))
     else:
-        say(f"typed {len(text)} characters into {st['pane']} ({st['state']}) in {writes} writes, {secs:.2f} s")
+        say(f"typed {len(text)} characters into {pane_name(pane)} ({st['state']}) in {writes} writes, {secs:.2f} s")
     return rc
 
 
@@ -944,6 +960,35 @@ def selftest():
         finally:
             globals()["state"] = real_state
         check("Q22 re-read asks for the pane id, not the name", (asked, seen), (["w1:p1"], "question-single"))
+
+        # ---- Q24: plain messages name the pane by its visible label; ids only inside a command
+        real_herdr = globals()["herdr"]
+
+        def fake_herdr(method, params):
+            if method == "tab.get":
+                return {"tab": {"label": "scratch-tab"}}
+            if method == "agent.get":
+                raise HerdrError("agent.get: agent_not_found: no")
+            if method == "pane.list":
+                return {"panes": [{"pane_id": "w1:p1", "label": "twin"}, {"pane_id": "w1:p2", "label": "twin"}]}
+            raise HerdrError(f"{method}: unexpected in this arm")
+        globals()["herdr"] = fake_herdr
+        try:
+            check("Q24 labelled pane shows its label", pane_name({"pane_id": "w1:p9", "label": "engage-model"}),
+                  "engage-model")
+            check("Q24 unlabelled pane shows its tab", pane_name({"pane_id": "w1:p9", "tab_id": "w1:t1"}),
+                  "an unlabelled pane in tab 'scratch-tab'")
+            try:
+                resolve("twin")
+                msg = ""
+            except LookupError as e:
+                msg = str(e)
+            outside = re.sub(r"herdr-type send \S+", "", msg)  # ids may appear only inside the command
+            check("Q24 ambiguity names labels, ids only inside the command",
+                  ("twin" in msg, "herdr-type send w1:p2" in msg, bool(re.search(r"\bw\w+:p\w+\b", outside))),
+                  (True, True, False))
+        finally:
+            globals()["herdr"] = real_herdr
 
         # ---- Q9-b: --raw with --enter only at the prompt
         check("Q9-b raw+enter refused in a box",
