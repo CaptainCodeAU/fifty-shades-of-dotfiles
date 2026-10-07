@@ -16,9 +16,9 @@ control at 0); the output-format map (`pane split` JSON with
 `.result.read.text`, `pane read` plain text, `pane list` and `plugin list --json`
 JSON, `plugin list` text); a bad pane id answering exit 1 with a JSON error on
 stderr; a syntax error exiting 2. RE-MEASURED AND CHANGED: `<group> <sub> --help`
-now prints the identical top-level help for a real and an invented subcommand
-(same checksum), so the `--help` probe in section 4 separates nothing; see the
-0.9.3 note there. New panes now carry `TERM_PROGRAM=herdr` and
+now separates real from invented: a real subcommand prints its own help at exit
+0, an invented one prints the group listing at exit 2; see the 0.9.3 note in
+section 4. New panes now carry `TERM_PROGRAM=herdr` and
 `TERM_PROGRAM_VERSION=0.9.3` (section 2). NOT RE-RUN: `agent get` / `agent list`
 key shapes and `agent explain` need a live agent, and none was running (all 21
 panes `agent_status: unknown`); starting one is outside a re-verify
@@ -234,17 +234,28 @@ grep -qE '^ *herdr agent list\b'                /tmp/agent.txt   # must HIT
 grep -qE '^ *herdr agent no-such-subcommand\b'  /tmp/agent.txt   # must MISS
 ```
 
-**0.9.3 CHANGED THE `--help` HALF OF THIS (measured 2026-10-07).** `herdr agent
-no-such-subcommand --help`, `herdr agent list --help`, `herdr server stop --help`
-and `herdr server no-such-thing --help` now all print the SAME top-level help,
-68 lines, identical checksum, exit 0. The group listing no longer appears for
-an invented name, so `--help` cannot separate real from invented at all. The
-listing-membership grep above still works (a real name hits, the invented
-control misses). For `status` and `server`, read the top-level `herdr --help`
-instead: it names `server stop`, `server reload-config` and
-`status [server|client]`. Note that `herdr --help` does not list the `plugin`
-group at all, although `herdr plugin` prints its listing; do not read that
-absence as removal.
+**0.9.3 CHANGED THE `--help` HALF OF THIS (measured 2026-10-07), and fixed it.**
+A real subcommand now prints its OWN help at exit 0 (`herdr agent list --help`:
+"List agents", 3 lines; `herdr server stop --help`: "Stop the running server"),
+and an invented one prints the group listing at exit **2** (`herdr agent
+no-such-subcommand --help`, `herdr server no-such-thing --help`, `herdr status
+no-such-thing --help`). So the exit code answers the question. The
+listing-membership grep above still works too.
+
+**A correction, in the same commit's spirit.** The first write-up of this
+re-verify said the opposite: that every `<group> <sub> --help`, real or
+invented, printed the identical top-level help. That was the instrument, not
+herdr. In zsh an unquoted `$c` holding `"agent list"` is NOT split into words,
+so `herdr $c --help` passes one unknown argument and always gets the top-level
+help; `herdr ${=c} --help` splits it. Re-run 2026-10-07 both ways: the unsplit
+form gave one checksum for six commands, the split form six different answers.
+Same family as the truncated-listing caution above: when every arm, control
+included, answers identically, suspect the probe first. (Whether the 0.9.1
+observation above had the same cause cannot be re-checked; 0.9.1 is gone.)
+
+`herdr --help` does not list the `plugin` group at all (it does list `agent` and
+`pane`), although `herdr plugin` prints its listing; do not read that absence as
+removal.
 
 That probe verified all 47 subcommands these four documents claim, against 0.9.1.
 Two caveats it also surfaced, both measured: `herdr status` prints status rather
