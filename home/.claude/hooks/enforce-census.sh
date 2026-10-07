@@ -1,6 +1,9 @@
 #!/bin/bash
 # Fire at the MOMENT a grep is about to COUNT or LIST, and point the session at the census
-# tool. A plain locate stays quiet (D-20260925-A02; the second gate below). Runs on
+# tool. A plain locate stays quiet (D-20260925-A02; the second gate below). Since
+# 2026-10-07 (W-20261007-A13) it also adds one line, on any command, for a capped find
+# (-maxdepth, -mindepth, -prune, -quit), a search cut by head or tail, and git worktree
+# copies under a search's root; see "CAPPED SEARCHES" below. Runs on
 # PreToolUse for Bash. Sibling of enforce-uv / enforce-pnpm / enforce-gh-ssh-only:
 # it never blocks, never edits the command, and always exits 0.
 #
@@ -234,6 +237,291 @@ done
 if [ -n "$_inner" ]; then
   _bare="$_bare"$'\n'"$(printf '%s' "$_inner" | _strip)"
 fi
+
+# -- CAPPED SEARCHES, CUT LISTINGS, WORKTREE COPIES (W-20261007-A13, 2026-10-07) ----------
+# Three more shapes of the unproven zero, all from ONE search on 2026-10-07:
+#   `find ~/CODE -maxdepth 6 -name herdr-plugin.toml` printed NOTHING. The file sat 8 levels
+#   down, and nothing said the search had stopped looking. The deeper re-run then found a
+#   SECOND copy under .worktree/imsg-twice, a git worktree, which would have doubled a count.
+#   And a listing piped into `head` is cut without saying how much (peek states what it hid).
+# These are not counts or lists from grep, so they fire on ANY command, before the gates
+# below can exit; every later exit goes through _finish, which appends them. Each is one
+# line, advisory, exit 0. A hook's added context reaches the model in full at the moment of
+# the command (W-20261007-A04, check 02), which is why the warning lives here.
+#
+# Read from a SECOND stripped copy, _qn, not _bare: a quoted span becomes the word Q_q_Q
+# instead of vanishing, so `find "$d" -maxdepth 2` keeps an (unknown) root rather than none,
+# and a quoted span that is one plain path ("$HOME/CODE") keeps its text. A kept span may not
+# start with `-`, so `-maxdepth` or `head` inside quotes never fires. `$(...)` and backticks
+# are lifted out as lines of their own, so `find $(pwd) -maxdepth 1` stays one command, and
+# find's own `\(`, `\)`, `\;` and `{}` are blanked so they do not split it.
+_NL=$'\n'
+_Q='Q_q_Q'
+_extra=""
+_addx() { _extra="${_extra:+$_extra$_NL}$1"; }
+_finish() { # $1 = the census reminder, or empty. Adds the extra lines, prints, exits 0.
+  local ctx="$1"
+  [ -n "$_extra" ] && ctx="${ctx:+$ctx$_NL$_NL}$_extra"
+  [ -n "$ctx" ] || exit 0
+  jq -n --arg ctx "$ctx" \
+    '{hookSpecificOutput: {hookEventName: "PreToolUse", additionalContext: $ctx}, suppressOutput: true}'
+  exit 0
+}
+_isrunner() {
+  case "$1" in xargs|time|sudo|command|env|exec|nohup|-exec|-execdir) return 0 ;; esac
+  return 1
+}
+_pc='A-Za-z0-9_./~@:+,='
+_strq() {
+  sed -E -e 's/\$\{HOME\}/$HOME/g' \
+    -e "s%'([$_pc][$_pc-]*)'%\\1%g" -e "s/'[^']*'/ $_Q /g" \
+    -e "s%\"([\$$_pc{}][\$$_pc{}-]*)\"%\\1%g" -e "s/\"[^\"]*\"/ $_Q /g" \
+    -e "s/\\$\\{[^}]*\\}/$_Q/g" -e 's/#.*$//' \
+    -e 's/[0-9]*[<>]&[0-9-]*//g' -e 's/&>>?//g' -e 's/\|&/|/g' \
+    -e 's/\\[();!]/ /g' -e 's/\{\}/ /g'
+}
+_qn="$(printf '%s' "$_nohd" | _strq)"
+[ -n "$_inner" ] && _qn="$_qn$_NL$(printf '%s' "$_inner" | _strq)"
+_n=0
+_subre='\$\(([^()]*)\)'
+_btre='`([^`]*)`'
+while [ "$_n" -lt 20 ] && [[ "$_qn" =~ $_subre ]]; do
+  _qn="${_qn/"${BASH_REMATCH[0]}"/ $_Q }$_NL${BASH_REMATCH[1]}"; _n=$((_n + 1))
+done
+while [ "$_n" -lt 40 ] && [[ "$_qn" =~ $_btre ]]; do
+  _qn="${_qn/"${BASH_REMATCH[0]}"/ $_Q }$_NL${BASH_REMATCH[1]}"; _n=$((_n + 1))
+done
+_qn="${_qn//&&/$_NL}"
+_qn="${_qn//||/$_NL}"
+for _sep in ';' '&' '(' ')' '`' '{' '}'; do
+  _qn="${_qn//"$_sep"/$_NL}"
+done
+
+# The roots a search walks, when it can reach a worktree copy at all. Sets _rts (one root per
+# line, "." when none is typed) and returns 1 when it cannot: rg and fd skip hidden folders
+# unless told (--hidden, -., rg -uu, fd -H or -u), and .worktree and .claude are hidden; a
+# grep must be recursive; census reads git unless --walk or an ignored scope is given.
+_wtroots() { # $1 family, then the words after the command word
+  local fam="$1" t ch rest vl="" lv="" pat=1 npos=0 rec=0 hid=0 us=0 walk=0 dd=0
+  shift
+  _rts=""
+  case "$fam" in
+    find)
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          -H|-L|-P|-E|-X|-s|-x|-d) shift ;;
+          -f) shift; [ $# -gt 0 ] && { _rts="$_rts$1$_NL"; shift; } ;;
+          *) break ;;
+        esac
+      done
+      while [ $# -gt 0 ]; do
+        case "$1" in -*|'!') break ;; esac
+        _rts="$_rts$1$_NL"; shift
+      done
+      [ -n "$_rts" ] || _rts=".$_NL"
+      return 0 ;;
+    census)
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          --walk|--include-ignored|--ignored-only) walk=1 ;;
+          --root) [ $# -gt 1 ] && { _rts="$2$_NL"; shift; } ;;
+          --root=*) _rts="${1#--root=}$_NL" ;;
+        esac
+        shift
+      done
+      [ "$walk" -eq 1 ] || return 1
+      [ -n "$_rts" ] || _rts=".$_NL"
+      return 0 ;;
+    rg)   vl="ABCEefgjMmrTtd"
+          lv=" --regexp --file --glob --iglob --type --type-not --type-add --replace --max-count --after-context --before-context --context --max-depth --maxdepth --ignore-file --max-filesize --encoding --sort --sortr --color --colors --path-separator --threads --pre --pre-glob --engine --max-columns " ;;
+    grep) vl="ABCDdefm"
+          lv=" --regexp --file --include --exclude --exclude-dir --after-context --before-context --context --max-count --directories --devices --label --binary-files --max-depth " ;;
+    fd)   vl="dEtexXSjco"
+          lv=" --max-depth --min-depth --exact-depth --exclude --type --extension --exec --exec-batch --size --changed-within --changed-before --owner --threads --base-directory --path-separator --color --max-results --ignore-file --format --batch-size " ;;
+    *) return 1 ;;
+  esac
+  while [ $# -gt 0 ]; do
+    t="$1"; shift
+    if [ "$dd" -eq 0 ]; then
+      case "$t" in
+        --) dd=1; continue ;;
+        --hidden) hid=1; continue ;;
+        --unrestricted) us=$((us + 1)); continue ;;
+        --recursive|--dereference-recursive|--directories=recurse) rec=1; continue ;;
+        --files) [ "$fam" = rg ] && pat=0; continue ;;
+        --regexp=*|--file=*) [ "$fam" = fd ] || pat=0; continue ;;
+        --regexp|--file) [ "$fam" = fd ] || pat=0; [ $# -gt 0 ] && shift; continue ;;
+        --search-path=*) _rts="$_rts${t#*=}$_NL"; continue ;;
+        --search-path) [ $# -gt 0 ] && { _rts="$_rts$1$_NL"; shift; }; continue ;;
+        --*=*) continue ;;
+        --*) case "$lv" in *" $t "*) [ $# -gt 0 ] && shift ;; esac; continue ;;
+        -?*)
+          rest="${t#-}"
+          while [ -n "$rest" ]; do
+            ch="${rest:0:1}"; rest="${rest:1}"
+            case "$ch" in
+              r|R) [ "$fam" = grep ] && rec=1 ;;
+              u) us=$((us + 1)) ;;
+              .) hid=1 ;;
+              H) [ "$fam" = fd ] && hid=1 ;;
+              e|f) [ "$fam" = fd ] || pat=0 ;;
+            esac
+            case "$vl" in
+              *"$ch"*)
+                if [ -z "$rest" ] && [ $# -gt 0 ]; then
+                  [ "$fam$ch" = grepd ] && [ "$1" = recurse ] && rec=1
+                  shift
+                fi
+                break ;;
+            esac
+          done
+          continue ;;
+      esac
+    fi
+    npos=$((npos + 1))
+    [ "$pat" -eq 1 ] && [ "$npos" -eq 1 ] && continue
+    _rts="$_rts$t$_NL"
+  done
+  case "$fam" in
+    rg)   [ "$hid" -eq 1 ] || [ "$us" -ge 2 ] || return 1 ;;
+    fd)   [ "$hid" -eq 1 ] || [ "$us" -ge 1 ] || return 1 ;;
+    grep) [ "$rec" -eq 1 ] || return 1 ;;
+  esac
+  [ -n "$_rts" ] || _rts=".$_NL"
+  return 0
+}
+
+# Count the worktree copies under one root, CHEAPLY: a fixed-depth glob for .worktree/* and
+# .claude/worktrees/* at the root and one or two folders below it, never a walk. Measured
+# 2026-10-07 under /bin/bash 3.2: ~/CODE 0.00 s (23 copies), $HOME 0.02 s, /usr 0.11 s,
+# /tmp 0.19 s. `/` and the mount and device trees are never scanned; a root that is not a
+# directory, holds a glob, or names a variable other than HOME is unknown and skipped.
+# Relative roots resolve against the payload's cwd, or against the folder an earlier `cd` in
+# the same command moved to (`cd /tmp && find .` searches /tmp, not the session's folder).
+# A cd to somewhere unknown ($var, `-`) makes every later relative root unknown.
+_wtn=0; _wtex=""; _wtr=""; _wtseen=""; _pcwd=""; _pcwd_read=0; _cdbase=""
+_abspath() { # $1 = a path as typed. Sets _ap; returns 1 when it cannot be known here.
+  local r="$1"
+  case "$r" in *"$_Q"*|*'*'*|*'?'*|*'['*|-*) return 1 ;; esac
+  case "$r" in
+    '~') r="$HOME" ;;
+    '~/'*) r="$HOME/${r#??}" ;;
+    '$HOME') r="$HOME" ;;
+    '$HOME/'*) r="$HOME/${r#\$HOME/}" ;;
+    *'$'*|'~'*) return 1 ;;
+    /*) ;;
+    *)
+      [ "$_cdbase" = "?" ] && return 1
+      if [ -z "$_cdbase" ] && [ "$_pcwd_read" -eq 0 ]; then
+        _pcwd="$(printf '%s' "$payload" | jq -r '.cwd // ""' 2>/dev/null || true)"
+        [ -n "$_pcwd" ] || _pcwd="$PWD"
+        _pcwd_read=1
+      fi
+      r="${_cdbase:-$_pcwd}/$r" ;;
+  esac
+  while [ "$r" != "/" ] && [ "${r%/}" != "$r" ]; do r="${r%/}"; done
+  _ap="${r%/.}"
+  return 0
+}
+_wtscan() { # $1 = a root as typed
+  local r d n0="$_wtn"
+  _abspath "$1" || return 0
+  r="$_ap"
+  case "$r" in
+    ''|/|/Volumes|/Volumes/*|/System|/System/*|/dev|/dev/*|/net|/net/*|/Network|/Network/*) return 0 ;;
+  esac
+  [ -d "$r" ] || return 0
+  case "$_NL$_wtseen" in *"$_NL$r$_NL"*) return 0 ;; esac
+  _wtseen="$_wtseen$r$_NL"
+  shopt -s nullglob
+  for d in "$r"/.worktree/*/ "$r"/*/.worktree/*/ "$r"/*/*/.worktree/*/ \
+    "$r"/.claude/worktrees/*/ "$r"/*/.claude/worktrees/*/ "$r"/*/*/.claude/worktrees/*/; do
+    _wtn=$((_wtn + 1))
+    if [ "$_wtn" -le 2 ]; then d="${d%/}"; _wtex="${_wtex:+$_wtex, }${d#"$r"/}"; fi
+  done
+  shopt -u nullglob
+  [ "$_wtn" -gt "$n0" ] && _wtr="${_wtr:+$_wtr, }$1"
+  return 0
+}
+
+_capby=""; _cutby=""
+while IFS= read -r _line; do
+  IFS='|' read -ra _st <<< "$_line"
+  _prevsearch=""
+  for _c in ${_st[@]+"${_st[@]}"}; do
+    read -ra _w <<< "$_c"
+    [ "${#_w[@]}" -gt 0 ] || continue
+    # The command word: skip runners, `builtin` and NAME=value prefixes.
+    _i=0
+    while [ "$_i" -lt "${#_w[@]}" ]; do
+      if _isrunner "${_w[$_i]}" || [ "${_w[$_i]}" = builtin ] \
+        || [[ "${_w[$_i]}" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+        _i=$((_i + 1))
+      else
+        break
+      fi
+    done
+    [ "$_i" -lt "${#_w[@]}" ] || continue
+    _t="${_w[$_i]##*/}"; _fam=""
+    case "$_t" in
+      cd)
+        if _abspath "${_w[$((_i + 1))]:-~}"; then _cdbase="$_ap"; else _cdbase="?"; fi
+        continue ;;
+      find|gfind) _fam=find ;;
+      fd|fdfind) _fam=fd ;;
+      rg|ripgrep) _fam=rg ;;
+      ls|gls) _fam=ls ;;
+      git) [ "${_w[$((_i + 1))]:-}" = grep ] && { _fam=ggrep; _t="git grep"; _i=$((_i + 1)); } ;;
+      head|tail|ghead|gtail) _fam=cut ;;
+      peek) _fam=peek ;;
+      census|census.py) _fam=census ;;
+      *grep) [[ "$_t" =~ ^[A-Za-z]*grep$ ]] && _fam=grep ;;
+    esac
+    if [ -z "$_fam" ]; then
+      for _x in "${_w[@]}"; do [ "${_x##*/}" = census.py ] && _fam=census; done
+    fi
+    case "$_fam" in
+      cut) [ -n "$_prevsearch" ] && [ -z "$_cutby" ] && _cutby="$_prevsearch piped into $_t" ;;
+      find|fd|rg|grep|ggrep|ls) _prevsearch="$_t" ;;
+    esac
+    case "$_fam" in find|fd|rg|grep|census) ;; *) continue ;; esac
+    # A cap: find's own primaries; the depth flags of rg, fd and ugrep.
+    if [ -z "$_capby" ]; then
+      for _x in "${_w[@]:$((_i + 1))}"; do
+        case "$_fam:$_x" in
+          find:-maxdepth|find:-mindepth|find:-prune|find:-quit) _capby="$_t $_x" ;;
+          rg:--max-depth*|rg:--maxdepth*|fd:--max-depth*|fd:--min-depth*|fd:--exact-depth*|grep:--max-depth*) _capby="$_t ${_x%%=*}" ;;
+          rg:-d|rg:-d[0-9]*|fd:-d|fd:-d[0-9]*) _capby="$_t $_x" ;;
+        esac
+        [ -n "$_capby" ] && break
+      done
+    fi
+    # The worktree scan. A command that already names worktrees (an exclusion, or a root
+    # inside one) has made its choice, so it is left alone.
+    case "$_nohd" in *worktree*) continue ;; esac
+    if _wtroots "$_fam" "${_w[@]:$((_i + 1))}"; then
+      while IFS= read -r _r; do
+        [ -n "$_r" ] && _wtscan "$_r"
+      done <<< "$_rts"
+    fi
+  done
+done <<< "$_qn"
+
+if [ -n "$_capby" ]; then
+  _m="CAPPED SEARCH: this search stops early ($_capby), and nothing in its output says where it stopped. A miss proves nothing until something you KNOW is present (and at least as deep) appears in the same run. Drop the cap, or for a content search use census --walk, which has no depth cap."
+  [ -f "$TOOL" ] || _m="$_m (census.py is MISSING from this machine: re-run stow from the dotfiles repo.)"
+  _addx "$_m"
+fi
+if [ -n "$_cutby" ]; then
+  _m="CUT LISTING: $_cutby, which drops lines without saying how many, so a line that is not shown proves nothing. Pipe into peek instead (| peek 40): it prints the same lines, then states what it hid or that nothing was hidden."
+  [ -x "$HOME/.local/bin/peek" ] || command -v peek >/dev/null 2>&1 \
+    || _m="$_m (peek is NOT on this machine: re-run stow from the dotfiles repo; until then read the whole output.)"
+  _addx "$_m"
+fi
+if [ "$_wtn" -gt 0 ]; then
+  _addx "WORKTREE COPIES: the search root ($_wtr) holds $_wtn git worktree folder(s) under .worktree/ or .claude/worktrees/ (e.g. $_wtex). Each is a second checkout of a repo, so its hits double a count or a list. Exclude them (find: -not -path '*/.worktree/*' -not -path '*/.claude/worktrees/*') or count them separately."
+fi
+
 # A NEWLINE starts a command too, and leaving it out of the set below made the whole
 # reminder dead for multi-line commands — which is nearly all of them. Measured
 # 2026-09-04: `rg` on line 3 of a three-line command was SILENT while `grep` on line 3
@@ -283,7 +571,7 @@ elif [[ "$_bare" =~ $_greppos ]]; then
   _search=1
   _tool="${BASH_REMATCH[5]:-grep}"
 fi
-[ "$_search" -eq 1 ] || exit 0
+[ "$_search" -eq 1 ] || _finish ""
 
 # ── SECOND GATE: does the search COUNT or LIST? (D-20260925-A02, option D of W-20260924-A48)
 # The reminder fired on every rg and grep, including the ones that only LOCATE a line to
@@ -339,10 +627,7 @@ _countflag() {
   done
   return 1
 }
-_isrunner() {
-  case "$1" in xargs|time|sudo|command|env|exec|nohup|-exec|-execdir) return 0 ;; esac
-  return 1
-}
+# _isrunner is defined above, with the capped-search lines.
 _trigger="${_trigger:-}"
 if [ -z "$_trigger" ]; then
   _norm="$(printf '%s' "$_bare" | sed -E -e 's/[0-9]*[<>]&[0-9-]*//g' -e 's/&>>?//g' -e 's/\|&/|/g')"
@@ -389,7 +674,7 @@ if [ -z "$_trigger" ]; then
     done
   done <<< "$_norm"
 fi
-[ -n "$_trigger" ] || exit 0
+[ -n "$_trigger" ] || _finish ""
 
 # Why THIS instrument cannot be trusted for a zero. Set by the Grep-tool branch; this is the
 # shell-command wording.
@@ -400,8 +685,9 @@ fi
 
 # Already corroborating? Say nothing. A reminder that fires when it is not needed is how a
 # reminder gets ignored when it is. (Empty for the Grep tool, which carries no command and
-# cannot invoke census itself.)
-case "$cmd" in *census.py*) exit 0 ;; esac
+# cannot invoke census itself.) This and the stand-down below silence only the census
+# reminder; _finish still prints the capped, cut and worktree lines, which nothing else says.
+case "$cmd" in *census.py*) _finish "" ;; esac
 
 # STAND DOWN where a project already carries its own census reminder. Some repos are governed
 # by a standard that requires a project-level copy and byte-checks it; firing on top of that
@@ -416,7 +702,7 @@ case "$cmd" in *census.py*) exit 0 ;; esac
 _root="${CLAUDE_PROJECT_DIR:-}"
 [ -n "$_root" ] || _root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 if [ -n "$_root" ] && [ -f "$_root/.claude/hooks/grep-census-reminder.sh" ]; then
-  exit 0
+  _finish ""
 fi
 
 if [ -f "$TOOL" ]; then
@@ -474,6 +760,4 @@ with a grep or rg, which match case exactly unless given -i.
 Use the search to LOCATE; use census to CONCLUDE.$missing
 EOF
 
-jq -n --arg ctx "$NOTE" \
-  '{hookSpecificOutput: {hookEventName: "PreToolUse", additionalContext: $ctx}, suppressOutput: true}'
-exit 0
+_finish "$NOTE"

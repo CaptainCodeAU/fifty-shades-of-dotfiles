@@ -76,6 +76,20 @@ stays quiet, and every arm is advisory (exit 0, no permissionDecision).
 
     against the A76 hook                     142 checks, 0 failures
     against master's hook (7da4dfe)            4 failures (u01 u02 u04 u06), all new arms
+
+CAPPED, CUT AND WORKTREE LINES (W-20261007-A13, 2026-10-07). `find ~/CODE -maxdepth 6`
+printed nothing for a file 8 levels down, and the deeper re-run found a second copy under
+.worktree/. The k-arms (capped find), x-arms (search cut by head/tail; m17 moved to x10),
+w-arms (worktree copies under the root, fixture in its own temp dir so `find .` from the
+harness cwd stays clean) and z-arms (census or peek missing is said out loud) each assert
+their own marker. Every quoted-text arm puts the text AFTER a separator, because one behind
+`echo` passes even with the stripper broken (a sabotage run proved k20 could not fail).
+
+    against the A13 hook, /bin/bash 3.2 and bash 5     218 checks, 0 failures
+    against master's hook (d820e0c)                      41 failures, all new positive arms
+    six sabotaged copies (extras dropped; " or ' text   red every time (40, 3, 2, 3, 2, 3)
+    read as commands; scan at the root only; heredoc
+    read as commands; cd ignored)
 """
 
 import json
@@ -108,12 +122,14 @@ def interpreter(hook):
     return ["bash"]
 
 
-def fired(hook, cwd, payload, project_dir=None):
+def fired(hook, cwd, payload, project_dir=None, extra_env=None):
     """Feed one PreToolUse payload to the hook. Returns (fired?, tool named, stdout)."""
     env = dict(os.environ)
     env.pop("CLAUDE_PROJECT_DIR", None)
     if project_dir is not None:
         env["CLAUDE_PROJECT_DIR"] = str(project_dir)
+    if extra_env:
+        env.update(extra_env)
     p = subprocess.run(
         interpreter(hook) + [str(hook)],
         input=json.dumps(payload),
@@ -133,8 +149,11 @@ def fired(hook, cwd, payload, project_dir=None):
     return True, name, out
 
 
-def bash(hook, cwd, cmd, project_dir=None):
-    return fired(hook, cwd, {"tool_name": "Bash", "tool_input": {"command": cmd}}, project_dir)
+def bash(hook, cwd, cmd, project_dir=None, payload_cwd=None, extra_env=None):
+    payload = {"tool_name": "Bash", "tool_input": {"command": cmd}}
+    if payload_cwd is not None:
+        payload["cwd"] = str(payload_cwd)
+    return fired(hook, cwd, payload, project_dir, extra_env)
 
 
 def note(out):
@@ -261,7 +280,8 @@ LOCATES = [
     ("m14 grep -e takes -l as its pattern", f"{G} -e -l x"),
     ("m15 wc before the search",  "wc -l x ; rg foo"),
     ("m16 wc after && is not a pipe", "rg foo x && wc -l y"),
-    ("m17 -o piped to head",      "rg -o foo x | head"),
+    # m17 (`rg -o foo x | head`) moved to x10 on 2026-10-07: still no census reminder, but a
+    # search cut by head now gets the CUT LISTING line (W-20261007-A13).
     ("m18 redirect 2>&1 is not a separator", "rg foo x 2>&1"),
     ("m19 --regexp takes -c",     "rg --regexp -c x"),
     ("m20 context value then locate", f"{G} -A 3 foo x"),
@@ -294,6 +314,71 @@ MUST_BE_SILENT = [
      f"cat <<-END\n\t{G} here in the body\n\tEND"),
     ("s17 find -execdir with no grep at all",
      "find . -name '*.txt' -execdir echo {} \\;"),
+]
+
+# -- W-20261007-A13: capped searches, cut listings, worktree copies -----------------------
+# Measured 2026-10-07: `find ~/CODE -maxdepth 6 -name herdr-plugin.toml` printed NOTHING (the
+# file sat 8 levels down), and the deeper re-run found a second copy under .worktree/. These
+# lines fire on any command, counting or not; each arm asserts its own marker, never just
+# "something fired", so the census reminder cannot pass for one of them.
+CAP = "CAPPED SEARCH"
+CUT = "CUT LISTING"
+WT = "WORKTREE COPIES"
+
+CAPPED = [
+    ("k01 the incident: find -maxdepth", "find ~/CODE -maxdepth 6 -name herdr-plugin.toml", True),
+    ("k02 find -prune",              "find . -path ./node_modules -prune -o -name x -print", True),
+    ("k03 find -quit",               "find . -name x -print -quit", True),
+    ("k04 find -mindepth",           "find . -mindepth 2 -name x", True),
+    ("k05 find inside $( )",         "x=$(find . -maxdepth 1 -name x)", True),
+    ("k06 find after &&",            "ls && find . -maxdepth 1 -name x", True),
+    ("k07 find after ;",             "echo a; find . -maxdepth 1 -name x", True),
+    ("k08 find after |",             "true | find . -maxdepth 1 -name x", True),
+    ("k09 a $( ) root keeps the find whole", "find $(git rev-parse --show-toplevel) -maxdepth 2 -name x", True),
+    ("k10 escaped parens then -prune", "find . \\( -name a -o -name b \\) -prune", True),
+    ("k11 find inside bash -c",      "bash -c 'find . -maxdepth 1 -name x'", True),
+    ("k12 rg --max-depth",           "rg --max-depth 2 -n foo", True),
+    ("k13 fd -d",                    "fd -d 2 foo", True),
+    ("k14 sudo find",                "sudo find /etc -maxdepth 1 -name hosts", True),
+    ("k15 find in backticks",        "echo `find . -maxdepth 1`", True),
+    ("k20 -maxdepth in double quotes", 'echo "find . -maxdepth 2"', False),
+    ("k21 -maxdepth in single quotes", "echo 'find . -maxdepth 2'", False),
+    ("k22 -maxdepth in a heredoc body", "git commit -F - <<'EOF'\nfind . -maxdepth 2 -name x\nEOF", False),
+    ("k23 an uncapped find",         "find . -name x", False),
+    ("k24 -maxdepth quoted as a -name value", "find . -name '-maxdepth'", False),
+    ("k25 find not in command position", "echo -maxdepth find", False),
+    ("k26 -maxdepth after a comment", "cat notes.md # find . -maxdepth 1", False),
+    ("k27 grep -d is not a depth cap", f"{G} -d skip foo x", False),
+    # k20/k21 pass even with the quote stripper broken, because `echo` holds command
+    # position. These put the quoted find AFTER a separator, where a broken stripper would
+    # hand it command position (proven by a sabotage run, 2026-10-07).
+    ("k28 a find after ; inside double quotes", 'echo "a; find . -maxdepth 2"', False),
+    ("k29 a find after ; inside single quotes", "echo 'a; find . -maxdepth 2'", False),
+]
+
+CUTS = [
+    ("x01 find | head",              "find . -name '*.md' | head", True),
+    ("x02 find | head -n 5",         "find . | head -n 5", True),
+    ("x03 ls | head -20",            "ls -la | head -20", True),
+    ("x04 rg | tail -3",             "rg -n foo | tail -3", True),
+    ("x05 git grep | head",          f"git {G} -n foo | head", True),
+    ("x06 fd | head",                "fd foo | head -n 3", True),
+    ("x07 head later in the pipeline", f"{G} -rn foo . | sort | head", True),
+    ("x08 cut inside $( )",          "echo $(ls | head -1)", True),
+    ("x09 absolute /usr/bin/head",   "find . | /usr/bin/head -5", True),
+    ("x20 | peek is the fix",        "find . | peek", False),
+    ("x21 | peek 40 is the fix",     "find . | peek 40", False),
+    ("x22 head on a file",           "head file.txt", False),
+    ("x23 tail -f a log",            "tail -f log", False),
+    # Decided: `git log` is not a search, so cutting it is not a missing-line claim.
+    ("x24 git log | head (not a search)", "git log | head", False),
+    ("x25 | head inside quotes",     'echo "find . | head"', False),
+    ("x26 | head in a heredoc body", "cat <<EOF\nls | head\nEOF", False),
+    ("x27 head after ; is not fed by the search", "ls ; head file.txt", False),
+    ("x28 cat | head",               "cat x | head", False),
+    ("x29 head on a file the search wrote", "rg foo x > out.txt && head out.txt", False),
+    ("x30 ls | head after ; inside double quotes", 'echo "x; ls | head"', False),
+    ("x31 ls | head after ; inside single quotes", "echo 'x; ls | head'", False),
 ]
 
 
@@ -509,6 +594,116 @@ def main():
         did, name, out = bash(hook, tmp, f"{G} -c foo x")
         check("u11 a readable counting grep gets the normal reminder, not the broken one",
               did and "IS BROKEN" not in out and "permissionDecision" not in out, out[:160])
+
+        # -- W-20261007-A13: capped finds, cut listings, worktree copies -------------
+        def marks(cmd, marker, **kw):
+            _, name, out = bash(hook, tmp, cmd, **kw)
+            return marker in note(out), name, note(out)
+
+        print("\nCAPPED SEARCHES (a depth cap, -prune or -quit makes a miss unproven)")
+        for label, cmd, want in CAPPED:
+            got, _, text = marks(cmd, CAP)
+            check(label, got == want, f"capped line present={got}: {text[:120]!r}")
+
+        print("\nCUT LISTINGS (a search piped into head or tail; peek is the fix)")
+        for label, cmd, want in CUTS:
+            got, _, text = marks(cmd, CUT)
+            check(label, got == want, f"cut line present={got}: {text[:120]!r}")
+        # Was m17: a locate cut by head gets the cut line and still no census reminder.
+        got, name, text = marks("rg -o foo x | head", CUT)
+        check("x10 rg -o | head: cut line, no census reminder (was m17)",
+              got and name == "", f"cut={got} census named {name!r}")
+        # Both at once: a counting search cut by head carries the reminder AND the cut line.
+        got, name, text = marks("rg -c foo x | head", CUT)
+        check("x11 rg -c | head: census reminder first, cut line after",
+              got and name == "ripgrep" and text.index(CUT) > text.index("is about to run"),
+              f"cut={got} named {name!r}")
+
+        print("\nWORKTREE COPIES UNDER THE SEARCH ROOT (cheap scan, two levels deep)")
+        fx = Path(tempfile.mkdtemp(prefix="enforce-census-wt-"))
+        try:
+            W = fx / "wt"                       # W/repoA holds 3 worktree copies
+            for d in ("repoA/.worktree/x1", "repoA/.worktree/x2",
+                      "repoA/.claude/worktrees/agent-1"):
+                (W / d).mkdir(parents=True)
+            (W / "repoA" / "file.txt").write_text("foo\n")
+            deep = fx / "deep"                  # the incident shape: root/group/repo/.worktree
+            (deep / "group" / "repo" / ".worktree" / "y").mkdir(parents=True)
+            far = fx / "far"                    # three levels down: past the scan, pinned
+            (far / "a" / "b" / "c" / ".worktree" / "z").mkdir(parents=True)
+            plain = fx / "plain"                # the control: a tree with no worktrees
+            (plain / "repoB" / "src").mkdir(parents=True)
+            C = "uv run python3 $HOME/.claude/tools/census.py"
+            for label, cmd, kw, want in (
+                ("w01 find with an absolute root", f"find {W} -name x", {}, True),
+                ("w02 find . resolved against the payload cwd", "find . -name x",
+                 {"payload_cwd": W}, True),
+                ("w03 grep -r", f"{G} -rn foo {W}", {}, True),
+                ("w04 rg --hidden", f"rg --hidden -l foo {W}", {}, True),
+                ("w05 rg -uu", f"rg -uu foo {W}", {}, True),
+                ("w06 fd -H", f"fd -H foo {W}", {}, True),
+                ("w07 census --walk", f"{C} --walk --root {W} --control a b", {}, True),
+                ("w08 the incident shape, two levels down", f"find {deep} -name x", {}, True),
+                ("w09 a quoted plain path is still a root", f'find "{W}" -name x', {}, True),
+                ("w10 cd into the tree, then find .", f"cd {W} && find . -name x",
+                 {"payload_cwd": plain}, True),
+                ("w20 control: a root with no worktrees", f"find {plain} -name x", {}, False),
+                ("w32 cd away from the tree, then find .", f"cd {plain} && find . -name x",
+                 {"payload_cwd": W}, False),
+                ("w33 cd to an unknown place, then find .", 'cd "$D" && find . -name x',
+                 {"payload_cwd": W}, False),
+                ("w21 the copies already excluded",
+                 f"find {W} -name x -not -path '*/.worktree/*' -not -path '*/.claude/worktrees/*'",
+                 {}, False),
+                ("w22 rg skips hidden dirs by default", f"rg -l foo {W}", {}, False),
+                ("w23 a non-recursive grep", f"{G} -n foo {W}/repoA/file.txt", {}, False),
+                ("w24 a root that does not exist", "find /nonexistent/zz -name x", {}, False),
+                ("w25 git grep does not descend into worktrees", f"git {G} -l foo",
+                 {"payload_cwd": W}, False),
+                ("w26 an unknown root ($D) is not guessed", 'find "$D" -name x',
+                 {"payload_cwd": W}, False),
+                ("w27 the find is only quoted text", f'echo "a; find {W} -name x"', {}, False),
+                ("w28 three levels down is past the scan (pinned limit)",
+                 f"find {far} -name x", {}, False),
+                ("w29 census without --walk reads git, not the tree",
+                 f"{C} --root {W} --control a b", {}, False),
+            ):
+                got, _, text = marks(cmd, WT, **kw)
+                check(label, got == want, f"worktree line present={got}: {text[:160]!r}")
+            got, _, text = marks(f"find {W} -name x", WT)
+            check("w30 the line names the count", got and " 3 " in text, text[:200])
+            # `/` is never scanned: the arm must finish, carry the cap line, and no worktree line.
+            import time
+            t0 = time.monotonic()
+            _, _, out = bash(hook, tmp, "find / -maxdepth 1 -name x")
+            dt = time.monotonic() - t0
+            text = note(out)
+            check("w31 find / : capped line, no worktree scan, under 2 s",
+                  CAP in text and WT not in text and dt < 2, f"{dt:.2f}s {text[:120]!r}")
+        finally:
+            shutil.rmtree(fx, ignore_errors=True)
+
+        print("\nA MISSING FIX TOOL IS SAID OUT LOUD (census, peek)")
+        fakehome = tmp / "fakehome"
+        fakehome.mkdir()
+        nopeek = os.pathsep.join(p for p in os.environ.get("PATH", "").split(os.pathsep)
+                                 if p and not (Path(p) / "peek").exists())
+        check("z00 the no-peek PATH really holds no peek",
+              shutil.which("peek", path=nopeek) is None and shutil.which("jq", path=nopeek),
+              "a peek is reachable, or jq is not")
+        gone = {"HOME": str(fakehome), "PATH": nopeek}
+        _, _, out = bash(hook, tmp, "rg -c foo x", extra_env=gone)
+        check("z01 census missing: the count reminder still says DOES NOT EXIST",
+              "DOES NOT EXIST" in note(out), note(out)[:160])
+        _, _, out = bash(hook, tmp, "find . -maxdepth 1 -name x", extra_env=gone)
+        check("z02 census missing: the capped line says so", CAP in note(out)
+              and "MISSING" in note(out), note(out)[:200])
+        _, _, out = bash(hook, tmp, "find . | head", extra_env=gone)
+        check("z03 peek missing: the cut line says so", CUT in note(out)
+              and "peek is NOT" in note(out), note(out)[:200])
+        _, _, out = bash(hook, tmp, "find . | head")
+        check("z04 control: with peek present the cut line does not cry missing",
+              CUT in note(out) and "peek is NOT" not in note(out), note(out)[:200])
 
         # ── the interpreter: the suite runs what settings.json runs ────────────────
         check("h01 hook is run by its shebang interpreter",
