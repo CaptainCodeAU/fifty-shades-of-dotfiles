@@ -1,0 +1,495 @@
+#!/usr/bin/env python3
+r"""warn-install-telemetry-selftest -- prove the install telemetry reminder fires when a Bash
+command installs a new tool, and ONLY then.
+
+Sibling of warn-zsh-word-split-selftest, same harness: the hook is run by its shebang
+interpreter (what settings.json runs), from a temp directory, with stdin as the payload.
+The hook reads the command with conv-shscan.awk (CONV_MODE=install) from its own folder,
+so a --hook copy needs the scanner beside it.
+
+WHY THE HOOK EXISTS (#1110, engage-main Q13). Gavin's rule, dropped from every prompt on
+3 Oct: an install is done only when the tool's telemetry and update checks are verified
+off in the tool's own config; an environment variable is not coverage. This reminder
+fires after the install runs (PostToolUse).
+
+    uv run python3 ~/.claude/tools/warn-install-telemetry-selftest
+    uv run python3 ~/.claude/tools/warn-install-telemetry-selftest --hook /path/to/copy
+    uv run python3 ~/.claude/tools/warn-install-telemetry-selftest --mutants
+
+THE HARNESS PROVES ITSELF FIRST. c01 (`brew install jq`) must warn and c02 (`echo hi`)
+must be quiet before any arm counts, so a hook that crashed or printed nothing cannot pass
+every quiet arm for the wrong reason.
+
+Fixtures marked "real" are commands taken verbatim from Claude Code transcripts on this
+machine (140,693 Bash commands searched on 2026-10-07); a few long ones are trimmed and
+say so, and the user name in paths is replaced with `me`.
+
+--mutants proves the arms can FAIL. It writes broken copies of the hook AND of the
+scanner (each a plausible bug: reinstall read as install, --help not quiet, option values
+read as tool names, the jq shout dropped, ...), runs every arm against each, and fails
+unless EVERY arm goes red on at least one mutant and every mutant is caught by at least
+one arm. A mutant whose anchor text is missing is a failure too, so the list cannot rot
+quietly when the hook changes.
+
+Measured 2026-10-07, branch install-telemetry-hook:
+
+    the hook, /bin/bash 3.2 (its shebang)          88 checks, 0 failures
+    the hook, bash 5.3 (copy with that shebang)    88 checks, 0 failures
+    --mutants                                       42 mutants, each caught; all 88 arms red
+                                                    on at least one
+
+The first --mutants run had four survivors: two arms were missing (an unknown scanner
+answer, curl piped into a bare shasum) and two scanner checks did nothing (a -c test and
+a --list test that other rules already covered). The arms were added and the dead checks
+removed. A replay of all 140,693 Bash commands in this machine's transcripts gave 43
+reminders and no BROKEN shout; see the hook's header.
+"""
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+HOOK = Path(__file__).resolve().parent.parent / "hooks" / "warn-install-telemetry.sh"
+SCAN_NAME = "conv-shscan.awk"
+
+GREEN, RED, DIM, OFF = "\033[0;32m", "\033[1;31m", "\033[2m", "\033[0m"
+if not sys.stdout.isatty() or os.environ.get("NO_COLOR"):
+    GREEN = RED = DIM = OFF = ""
+
+TMP = Path(tempfile.mkdtemp(prefix="wit-"))
+
+# ── real commands (verbatim unless marked trimmed) ─────────────────────────────
+REAL_PIPX = (
+    "zsh -ic '\nif typeset -f pip >/dev/null && typeset -f pipx >/dev/null; then\n"
+    "  pip install requests    >/dev/null 2>&1; echo \"pip install   exit=$?\"\n"
+    "  pip uninstall requests  >/dev/null 2>&1; echo \"pip uninstall exit=$?\"\n"
+    "  pipx install black      >/dev/null 2>&1; echo \"pipx install  exit=$?\"\n"
+    "  pipx list               >/dev/null 2>&1; echo \"pipx list     exit=$?\"\n"
+    "else\n  echo \"WRAPPERS NOT LOADED - test skipped, nothing run\"\nfi' 2>/dev/null | tail -5"
+)
+REAL_ENV_I = (  # trimmed: the notify curl and the later checks are cut
+    "SP=/private/tmp/claude-501/-Users-me-CODE-CaptainCodeAU-cc-warehouse/"
+    "5ffa4a01-90f4-46c1-8199-72b718f1f594/scratchpad\n"
+    "echo \"--- install from PyPI in a clean env, no dotfiles, no cutoff ---\"\n"
+    "env -i HOME=$SP/fakehome PATH=$PATH sh -c 'mkdir -p '$SP'/fakehome && uv tool install "
+    "--force cc-warehouse 2>&1 | tail -3'\necho\n"
+    "env -i HOME=$SP/fakehome PATH=$PATH sh -c \"$SP/fakehome/.local/bin/ccw version\" 2>&1 | tail -1"
+)
+REAL_BREW_N = (
+    "zsh -n home/.zshrc && echo \"SYNTAX_OK\"\n"
+    "echo \"=== WARN path: brew install markdownlint-cli (deps on node, node not installed), answer N ===\"\n"
+    "printf 'N\\n' | HOMEBREW_NO_AUTO_UPDATE=1 zsh -ic 'brew install markdownlint-cli' 2>&1 | tail -10\n"
+    "echo \"=== passthrough: brew --version (should just work) ===\"\n"
+    "HOMEBREW_NO_AUTO_UPDATE=1 zsh -ic 'brew --version' 2>&1 | tail -2"
+)
+REAL_COMMIT = (  # trimmed: the middle of the commit message is cut
+    "git add install.sh && git commit -m \"$(cat <<'EOF'\n"
+    "fix(install): replace cargo install yazi with GitHub release download\n\n"
+    "The cargo install path was broken on yazi v26.5.6+:\n"
+    "- yazi-fm/yazi-cli build.rs guards reject `cargo install` and\n"
+    "  redirect to `cargo install --force yazi-build` (verified: panic\n"
+    "  at yazi-fm-26.5.6/build.rs:23).\nEOF\n)\""
+)
+REAL_SSH = (
+    "ssh -o BatchMode=yes -o ConnectTimeout=20 hermes-o 'set -o pipefail; curl -fsSL "
+    "https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash "
+    "2>&1 | tee ~/hermes-install.log | tail -55; echo \"INSTALL_EXIT=${PIPESTATUS[0]}\"' 2>&1 | tail -70"
+)
+
+# Each warn arm: (label, command, [text the message must hold], [text it must not hold]).
+MUST_WARN = [
+    ("f01 real: pnpm add -g typescript", "pnpm add -g typescript 2>&1", ["typescript (pnpm -g)"], []),
+    ("f02 real: uv tool install", "uv tool install cc-warehouse 2>&1 | tail -3", ["cc-warehouse (uv tool)"], []),
+    ("f03 real: uv tool install --from <path> <name>: the path is a value, not a tool",
+     "uv tool install --force --from /Users/me/CODE/CaptainCodeAU/cc-warehouse cc-warehouse 2>&1",
+     ["cc-warehouse (uv tool)"], ["/Users/"]),
+    ("f04 real: brew install a tapped formula", "brew install infisical/get-cli/infisical 2>&1 | tail -30",
+     ["infisical/get-cli/infisical (brew)"], []),
+    ("f05 real: brew install --cask", 'brew install --cask font-slabo-27px 2>&1 | tail -15; echo "=== exit: ${pipestatus[1]} ==="',
+     ["font-slabo-27px (brew --cask)"], []),
+    ("f06 real: command brew install", "command brew install opentofu 2>&1 | tail -5", ["opentofu (brew)"], []),
+    ("f07 real: pipx install inside zsh -ic, with pip lines around it", REAL_PIPX, ["black (pipx)"], ["requests"]),
+    ("f08 real: pnpm add -g inside zsh -ic '...'", "zsh -ic 'pnpm add -g markdownlint-cli repomix' 2>&1 | tail -30",
+     ["markdownlint-cli, repomix (pnpm -g)"], []),
+    ("f09 real: pnpm add -g inside $( )", "out=$(pnpm add -g @earendil-works/pi-coding-agent 2>&1 | tail -3)",
+     ["@earendil-works/pi-coding-agent (pnpm -g)"], []),
+    ("f10 real: an assignment before pnpm", "pnpm_config_minimum_release_age=0 pnpm add -g @earendil-works/pi-coding-agent 2>&1 | tail -10",
+     ["@earendil-works/pi-coding-agent (pnpm -g)"], []),
+    ("f11 real: pnpm install -g .", "COREPACK_ENABLE_PROJECT_SPEC=0 pnpm install -g . 2>&1 | tail -12", [". (pnpm -g)"], []),
+    ("f12 real: curl | bash -", "curl -fsSL https://deb.nodesource.com/setup_20.x | bash - >/dev/null 2>&1",
+     ["https://deb.nodesource.com/setup_20.x (a curl | sh installer)"], []),
+    ("f13 real (trimmed): uv tool install inside env -i ... sh -c", REAL_ENV_I, ["cc-warehouse (uv tool)"], []),
+    ("f14 real (trimmed): brew install inside zsh -ic after printf |", REAL_BREW_N, ["markdownlint-cli (brew)"], []),
+    ("f15 real: brew install jq", "brew install jq", ["jq (brew)"], []),
+    ("f16 npm i -g", "npm i -g typescript", ["typescript (npm -g)"], []),
+    ("f17 npm install --global", "npm install --global typescript", ["typescript (npm -g)"], []),
+    ("f18 npm --location global", "npm install --location global x", ["x (npm -g)"], []),
+    ("f19 cargo install", "cargo install ripgrep", ["ripgrep (cargo)"], []),
+    ("f20 cargo install --git <url>", "cargo install --git https://github.com/x/y", ["https://github.com/x/y (cargo)"], []),
+    ("f21 go install module@version", "go install golang.org/x/tools/gopls@latest", ["golang.org/x/tools/gopls@latest (go)"], []),
+    ("f22 gem install", "gem install bundler", ["bundler (gem)"], []),
+    ("f23 mas install", "mas install 497799835", ["497799835 (mas)"], []),
+    ("f24 curl | sh -s -- -y", "curl --proto '=https' -sSf https://sh.rustup.rs | sh -s -- -y",
+     ["https://sh.rustup.rs (a curl | sh installer)"], []),
+    ("f25 wget | tee | sudo bash", "wget -qO- https://x.io/i.sh | tee log | sudo bash", ["https://x.io/i.sh"], []),
+    ("f26 bash <(curl ...)", "bash <(curl -fsSL https://x.io/install.sh)", ["https://x.io/install.sh"], []),
+    ("f27 sh -c \"$(curl ...)\"", 'sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"',
+     ["ohmyzsh/master/tools/install.sh"], []),
+    ("f28 eval \"brew install jq\"", 'eval "brew install jq"', ["jq (brew)"], []),
+    ("f29 inside backticks", "echo `brew install jq`", ["jq (brew)"], []),
+    ("f30 text piped to bash", 'echo "brew install jq" | bash', ["jq (brew)"], []),
+    ("f31 sudo -u admin brew install", "sudo -u admin brew install jq", ["jq (brew)"], []),
+    ("f32 sudo -u x env ... bash -c \"curl | sh -\"",
+     'sudo -u r env HOME=/h PNPM_HOME=/h/p bash -c "curl -fsSL https://get.pnpm.io/install.sh | sh -"',
+     ["https://get.pnpm.io/install.sh"], []),
+    ("f33 bun add -g", "bun add -g cowsay", ["cowsay (bun -g)"], []),
+    ("f34 two installs, both named", "brew install jq && pnpm add -g a b", ["jq (brew)", "a, b (pnpm -g)"], []),
+    ("f35 uv tool install --python 3.14 ruff: the version is a value", "uv tool install --python 3.14 ruff",
+     ["ruff (uv tool)"], ["3.14"]),
+    ("f36 xargs brew install", "xargs brew install < list.txt", ["the names xargs reads (brew)"], []),
+]
+
+MUST_BE_QUIET = [
+    ("q01 real: uv tool install --reinstall (an upgrade)",
+     "source ~/.zshrc 2>/dev/null; uv tool install --force --reinstall --editable --python 3.13 . 2>&1 | tail -5"),
+    ("q02 real: grep for the words", 'grep -nE "(brew install|cask|--cask|libreoffice|Brewfile)" /Users/me/CODE/Scaffoldings/fifty-shades-of-dotfiles/install.sh | head -40'),
+    ("q03 real (trimmed): a commit message heredoc naming cargo install", REAL_COMMIT),
+    ("q04 real: echo naming pnpm add -g", 'echo "=== Test: pnpm add -g typescript with config DISABLED ==="'),
+    ("q05 real: uv tool install --help", "uv tool install --help 2>&1 | grep -A4 -- '--python' | head -12"),
+    ("q06 real: brew install --help", "/opt/homebrew/bin/brew install --help 2>&1 | grep -iE 'bottle|formula file|local' | head -12"),
+    ("q07 real: an install hint inside quotes", 'which SwitchAudioSource 2>&1 || echo "not installed (brew install switchaudio-osx)"'),
+    ("q08 real (trimmed): open-items add naming uv tool install",
+     "open-items add \"ccw-watch's fix line 'uv tool install --reinstall cc-warehouse==V' fails on any machine "
+     "whose uv.toml exclude-newer predates V's upload\" --done-when \"ccw-watch's fix line installs the floor version\""),
+    ("q09 real: test arms quoting pipx install", "conv_arm rewrite 'pipx install'                 'pipx install ruff'                    'uv tool install ruff'"),
+    ("q10 real: curl piped into shasum, not a shell", 'echo "  site.js over http: $(curl -s http://localhost:8000/js/site.js | shasum -a 256 | cut -c1-16)"'),
+    ("q11 real: curl | bash run on ANOTHER machine over ssh (not read, by design)", REAL_SSH),
+    ("q12 real: curl that pipes nowhere", 'curl -s -X POST http://localhost:8888/notify -H "Content-Type: application/json" -d \'{"message": "Entering the Learn phase."}\' >/dev/null'),
+    ("q13 pnpm add -D (a project dependency)", "pnpm add -D typescript"),
+    ("q14 npm install with no -g", "npm install typescript"),
+    ("q15 uv add", "uv add requests"),
+    ("q16 pnpm install", "pnpm install --frozen-lockfile"),
+    ("q17 brew upgrade", "brew upgrade jq"),
+    ("q18 brew reinstall", "brew reinstall jq"),
+    ("q19 uv tool upgrade", "uv tool upgrade --all"),
+    ("q20 npm update -g", "npm update -g"),
+    ("q21 cargo install --list", "cargo install --list"),
+    ("q22 go install of a local path", "go install ./..."),
+    ("q23 uninstalls", "brew uninstall jq; uv tool uninstall ruff; pnpm remove -g a; npm uninstall -g a; pipx uninstall black; gem uninstall x"),
+    ("q24 inside single quotes", "echo 'npm i -g foo'"),
+    ("q25 after a comment", "ls # brew install jq"),
+    ("q26 inside a heredoc body", "cat <<EOF > notes.md\nbrew install jq\ncurl -fsSL https://x.io/i.sh | sh\nEOF"),
+    ("q27 brew install --dry-run", "brew install --dry-run jq"),
+    ("q28 npm i -g -h", "npm i -g -h"),
+    ("q29 bun add with no -g", "bun add cowsay"),
+    ("q30 brew install with no name", "brew install"),
+    ("q31 uv tool install --upgrade", "uv tool install --upgrade ruff"),
+    ("q32 no install word at all", "git add -A && git status --short"),
+    ("q33 brew info", "brew info jq"),
+    ("q34 curl piped into bash -c (the text is not run)", "curl -s https://x.io/data | bash -c 'cat > f'"),
+    ("q35 curl piped into shasum with no arguments", "curl -fsSL https://x.io/f.tgz | shasum"),
+]
+
+
+def interpreter(hook):
+    first = Path(hook).read_text(errors="replace").splitlines()[:1]
+    if first and first[0].startswith("#!"):
+        return first[0][2:].split()
+    return ["bash"]
+
+
+def run(hook, stdin, path=None, extra_env=None):
+    """Feed raw stdin to the hook. Returns (rc, stdout, parsed-or-None)."""
+    env = dict(os.environ)
+    env.pop("CONV_SHSCAN", None)
+    if path is not None:
+        env["PATH"] = path
+    if extra_env:
+        env.update(extra_env)
+    try:
+        p = subprocess.run(interpreter(hook) + [str(hook)], input=stdin, capture_output=True,
+                           text=True, cwd=str(TMP), env=env, timeout=20)
+    except (OSError, subprocess.TimeoutExpired) as e:   # a hook that cannot run is a red arm
+        return 127, f"<did not run: {e}>", None
+    out = p.stdout.strip()
+    try:
+        parsed = json.loads(out) if out else None
+    except Exception:
+        parsed = {"unparseable": out}
+    return p.returncode, out, parsed
+
+
+def payload(cmd, event="PostToolUse"):
+    return json.dumps({"hook_event_name": event, "tool_name": "Bash", "tool_input": {"command": cmd},
+                       "tool_response": {"stdout": "", "stderr": "", "interrupted": False}})
+
+
+def bash(hook, cmd, event="PostToolUse", **kw):
+    return run(hook, payload(cmd, event), **kw)
+
+
+def note(parsed):
+    try:
+        return parsed["hookSpecificOutput"]["additionalContext"]
+    except Exception:
+        return ""
+
+
+def evname(parsed):
+    try:
+        return parsed["hookSpecificOutput"]["hookEventName"]
+    except Exception:
+        return ""
+
+
+def warns(text):
+    return text.startswith("⚠️ install telemetry:")
+
+
+def broken(text):
+    return "THE INSTALL TELEMETRY REMINDER IS BROKEN" in text
+
+
+def fakebin(name, tools):
+    """A PATH holding only the named tools (symlinked), to take jq or awk away."""
+    d = TMP / name
+    d.mkdir(exist_ok=True)
+    for t in tools:
+        src = shutil.which(t)
+        if src and not (d / t).exists():
+            (d / t).symlink_to(src)
+    return str(d)
+
+
+def arms(hook):
+    """Every arm as (label, ok, detail). Order is stable; ids are the first word."""
+    out = []
+    advisory = []
+
+    for label, cmd, must, mustnot in MUST_WARN:
+        rc, raw, parsed = bash(hook, cmd)
+        advisory.append((rc, raw, parsed))
+        text = note(parsed)
+        ok = warns(text) and all(s in text for s in must) and not any(s in text for s in mustnot)
+        out.append((label, ok, text[:160] or raw[:160] or "(quiet)"))
+
+    for label, cmd in MUST_BE_QUIET:
+        rc, raw, parsed = bash(hook, cmd)
+        advisory.append((rc, raw, parsed))
+        out.append((label, raw == "" and rc == 0, note(parsed)[:160] or raw[:160]))
+
+    # The message.
+    rc, raw, parsed = bash(hook, "pnpm add -g typescript")
+    t = note(parsed)
+    out.append(("m01 the message names the tool, says OWN config, read back, and that an env var does not count",
+                all(s in t for s in ("typescript (pnpm -g)", "OWN config", "read back", "brew analytics off",
+                                     "environment variable alone does not count")), t[:220]))
+    out.append(("m02 PostToolUse: answers as PostToolUse, says installed",
+                evname(parsed) == "PostToolUse" and "this command installed" in t, raw[:160]))
+    rc, raw, parsed = bash(hook, "brew install jq", event="PreToolUse")
+    out.append(("m03 PreToolUse payload: answers as PreToolUse, says installs",
+                evname(parsed) == "PreToolUse" and "this command installs jq" in note(parsed), raw[:160]))
+    rc, raw, parsed = bash(hook, "brew install jq", event="PostToolUseFailure")
+    out.append(("m04 PostToolUseFailure payload: answers under that name",
+                evname(parsed) == "PostToolUseFailure" and warns(note(parsed)), raw[:160]))
+    rc, raw, parsed = bash(hook, "brew install jq; brew install jq")
+    out.append(("m05 the same install twice is named once", note(parsed).count("jq (brew)") == 1, note(parsed)[:160]))
+
+    utf8 = {"LC_ALL": "en_US.UTF-8", "LANG": "en_US.UTF-8"}
+    rc, raw, parsed = run(hook, payload('echo "── install ✓ ──"; brew install jq'), extra_env=utf8)
+    out.append(("u01 multi-byte text in a UTF-8 locale: still read, still warns",
+                warns(note(parsed)) and "jq (brew)" in note(parsed), raw[:160]))
+
+    # Payloads and instruments the hook cannot use.
+    nojq = fakebin("nojq", ["cat", "awk", "dirname"])
+    noawk = fakebin("noawk", ["cat", "jq", "dirname"])
+    pl = payload("brew install jq")
+    rc, raw, parsed = run(hook, pl, path=nojq)
+    out.append(("p01 jq missing: shouts BROKEN, exit 0", rc == 0 and broken(note(parsed)), raw[:160]))
+    rc, raw, parsed = run(hook, pl, path=noawk)
+    out.append(("p02 awk missing: shouts BROKEN, exit 0", rc == 0 and broken(note(parsed)), raw[:160]))
+    rc, raw, parsed = run(hook, "")
+    out.append(("p03 empty payload: quiet, exit 0", rc == 0 and raw == "", raw[:160]))
+    rc, raw, parsed = run(hook, pl[: pl.index("jq") + 2])
+    out.append(("p04 truncated payload naming an install: shouts BROKEN", rc == 0 and broken(note(parsed)), raw[:160]))
+    rc, raw, parsed = run(hook, '{"tool_name":"Bash","tool_input":{"command":"echo hi')
+    out.append(("p05 truncated payload with no install word: quiet", rc == 0 and raw == "", raw[:160]))
+    rc, raw, parsed = run(hook, json.dumps({"tool_name": "Bash", "tool_input": {"cmd": "brew install jq"}}))
+    out.append(("p06 command under a moved key: shouts BROKEN", rc == 0 and broken(note(parsed)), raw[:160]))
+    rc, raw, parsed = run(hook, pl, extra_env={"CONV_SHSCAN": str(TMP / "no-such-scanner.awk")})
+    out.append(("p07 scanner missing: shouts BROKEN", rc == 0 and broken(note(parsed)), raw[:160]))
+    badscan = TMP / "bad-scanner.awk"
+    badscan.write_text("END { this is not awk (\n")
+    rc, raw, parsed = run(hook, pl, extra_env={"CONV_SHSCAN": str(badscan)})
+    out.append(("p08 scanner fails: shouts BROKEN", rc == 0 and broken(note(parsed)), raw[:160]))
+    oddscan = TMP / "odd-scanner.awk"
+    oddscan.write_text('END { print "DENY"; print "conv-shscan: unknown CONV_MODE" }\n')
+    rc, raw, parsed = run(hook, pl, extra_env={"CONV_SHSCAN": str(oddscan)})
+    out.append(("p10 scanner answers in an unknown form: shouts BROKEN", rc == 0 and broken(note(parsed)), raw[:160]))
+    bad = [r for r in advisory if r[0] != 0 or (r[2] and (
+        "permissionDecision" in json.dumps(r[2]) or "updatedInput" in json.dumps(r[2])
+        or r[2].get("suppressOutput") is not True))]
+    out.append(("p09 every answer is advisory: exit 0, no decision, no rewrite, suppressOutput",
+                not bad, str(bad[:1])[:200]))
+    out.append(("h01 hook is run by its shebang interpreter", interpreter(hook)[0].startswith("/"),
+                str(interpreter(hook))))
+    return out
+
+
+# ── mutants: (id, file, what breaks, [(old, new), ...]); file is "hook" or "scan" ──
+MUTANTS = [
+    ("H01", "hook", "never warns", [('[ -n "$found" ] || exit 0', "exit 0")]),
+    ("H02", "hook", "jq missing is silent", [('command -v jq >/dev/null 2>&1 || _shout "jq is not on PATH, so it cannot read the tool payload"', "command -v jq >/dev/null 2>&1 || exit 0")]),
+    ("H03", "hook", "awk missing is silent", [('command -v awk >/dev/null 2>&1 || _shout "awk is not on PATH, so it cannot read the command"', "command -v awk >/dev/null 2>&1 || exit 0")]),
+    ("H04", "hook", "a truncated payload is silent", [('[[ "$payload" =~ $_maybe ]] && _shout "the payload is not valid JSON"', ":")]),
+    ("H05", "hook", "a moved key is silent", [('[[ "$payload" =~ $_maybe ]] && _shout "the payload has no tool_input.command"', ":")]),
+    ("H06", "hook", "an empty payload shouts", [('[ -n "$payload" ] || exit 0', '[ -n "$payload" ] || { printf \'{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"BROKEN: empty"},"suppressOutput":true}\\n\'; exit 0; }')]),
+    ("H07", "hook", "every unreadable payload shouts", [('[[ "$payload" =~ $_maybe ]] && _shout "the payload is not valid JSON"', '_shout "the payload is not valid JSON"')]),
+    ("H08", "hook", "a missing scanner is silent", [('[ -r "$SHSCAN" ] || _shout', '[ -r "$SHSCAN" ] || exit 0; : _shout')]),
+    ("H09", "hook", "a failing scanner is silent", [('||\n  _shout "its scanner conv-shscan.awk failed on this command"', "|| exit 0")]),
+    ("H10", "hook", "it blocks instead of advising",
+     [("additionalContext: $ctx}, suppressOutput: true}'", "additionalContext: $ctx, permissionDecision: \"deny\"}, suppressOutput: true}'")]),
+    ("H11", "hook", "the message drops the tool names", [("this command $verb $seen.", "this command $verb a tool.")]),
+    ("H12", "hook", "the message drops the env-var line", [(" An environment variable alone does not count.\"", "\"")]),
+    ("H13", "hook", "the message drops read back", [("and read back to prove it", "and check it")]),
+    ("H14", "hook", "the payload's event name is ignored", [('PreToolUse|PostToolUse|PostToolUseFailure) event="$ev" ;;', 'none) event="$ev" ;;')]),
+    ("H15", "hook", "the cheap exit swallows everything", [('[[ "$cmd" =~ $_maybe ]] || exit 0', "exit 0")]),
+    ("H16", "hook", "warns on every command",
+     [('[ -n "$found" ] || exit 0', 'found="${found:-HIT\tbrew\tjq}"'), ('[[ "$cmd" =~ $_maybe ]] || exit 0', ":")]),
+    ("H17", "hook", "the shebang names no absolute interpreter", [("#!/bin/bash\n", "#!bash\n")]),
+    ("H18", "hook", "an unknown scanner answer is silent", [('[ -n "$seen" ] || _shout "its scanner answered in a form the hook does not know"', '[ -n "$seen" ] || exit 0')]),
+    ("S01", "scan", "$( ) bodies not recorded in install mode",
+     [('REC_NESTED = (mode == "guard" || mode == "pjw" || mode == "install")', 'REC_NESTED = (mode == "guard" || mode == "pjw")')]),
+    ("S02", "scan", "nested texts (sh -c, eval, backticks, piped text) not read",
+     [("        install_check()\n        gd_nested(QW[qi])", "        install_check()")]),
+    ("S03", "scan", "brew reinstall read as an install", [('if (s != "install" && s != "instal") return', 'if (s != "install" && s != "instal" && s != "reinstall") return')]),
+    ("S04", "scan", "--help, -h and --dry-run not quiet", [("function in_quiet() { return INOPT ~ / (--help|-h|--dry-run)( |=)/ }", "function in_quiet() { return 0 }")]),
+    ("S05", "scan", "a project dependency (no -g) fires", [("if (!in_global() || in_quiet()) return", "if (in_quiet()) return")]),
+    ("S06", "scan", "uv tool install --reinstall/--upgrade fires", [(' || INOPT ~ / (--reinstall|--upgrade|-U)( |=)/) return', ") return")]),
+    ("S07", "scan", "option values read as tool names", [("if (w !~ /=/ && in_val(m, w) && a < n)", "if (0)")]),
+    ("S08", "scan", "curl | sh not read", [('&& in_pipesh(k)) {', "&& 0) {")]),
+    ("S09", "scan", "any word starting sh counts as a shell (shasum)",
+     [("        if (w ~ /^(bash|sh|zsh|dash|ksh)$/) {\n            for (a = j + 1; a <= n; a++) {\n                w = unq(WR[c, a])",
+       "        if (w ~ /^(bash|sh|zsh|dash|ksh)/) {\n            for (a = j + 1; a <= n; a++) {\n                w = unq(WR[c, a])")]),
+    ("S11", "scan", "go install of a local path fires", [("if (w !~ /^-/ && w ~ /@/)", "if (w !~ /^-/)")]),
+    ("S12", "scan", "pipx/cargo/gem/mas fire with no tool named (cargo install --list)",
+     [('        if (t == "") return\n        in_hit(m, t); return', "        in_hit(m, t); return")]),
+    ("S13", "scan", "the command after sudo -u x is not found", [('if (EM !~ /hard:|envopt/) { in_one(k, j); continue }', "{ in_one(k, j); continue }")]),
+    ("S14", "scan", "a shell found after sudo is not read as text", [('if (a > j && b ~ /^(bash|sh|zsh|dash|ksh)$/) {', "if (0) {")]),
+    ("S15", "scan", "sh -c \"$(curl ...)\" not read", [('if (w ~ /^"?\\$\\([ \\t]*(curl|wget)[ \\t]/)', "if (0)")]),
+    ("S16", "scan", "the same install is not merged", [("    for (i = 1; i <= INN; i++) if (INM[i] == m && INT[i] == t) return\n", "")]),
+    ("S17", "scan", "only the first install is reported", [('for (i = 1; i <= INN; i++) print "HIT\\t"', 'for (i = 1; i <= (INN > 0); i++) print "HIT\\t"')]),
+    ("S18", "scan", "npm i (the short form) not read", [('if (m == "npm" && s !~ /^(i|in|ins|inst|insta|instal|install|isnt|isnta|isntal|isntall|add)$/) return', 'if (m == "npm" && s != "install") return')]),
+    ("S19", "scan", "a cask is not named as one", [('(INOPT ~ / --cask / ? "brew --cask" : "brew")', '"brew"')]),
+    ("S20", "scan", "mas, gem and pipx not read", [('if (m == "pipx" || m == "cargo" || m == "gem" || m == "mas") {', 'if (m == "cargo") {')]),
+    ("S21", "scan", "bun not read", [('if (m == "npm" || m == "pnpm" || m == "bun") {\n        for', 'if (m == "npm" || m == "pnpm") {\n        for')]),
+    ("S22", "scan", "install mode not dispatched", [('    if (mode == "install") { install_main(); exit 0 }   # advisory: HIT lines only\n', "")]),
+    ("S23", "scan", "xargs input not named", [('        if (t == "" && EM ~ /hard:xargs/) t = "the names xargs reads"\n', "")]),
+    ("S24", "scan", "a curl installer is not named by its URL", [('{ sub(/[?#].*/, "", w); return w }', '{ return "an install script" }')]),
+    ("S25", "scan", "cargo --git/--path not named", [('if (t == "" && m == "cargo" && match(INOPT, / --(git|path)=[^ ]+/))', "if (0)")]),
+]
+
+
+def report(results):
+    fails = []
+    for label, ok, detail in results:
+        tag = f"{GREEN}ok  {OFF}" if ok else f"{RED}FAIL{OFF}"
+        print(f"  {tag} {label}" + (f" {DIM}-- {detail}{OFF}" if not ok else ""))
+        if not ok:
+            fails.append(label.split()[0])
+    return fails
+
+
+def controls(hook):
+    _, _, parsed = bash(hook, "brew install jq")
+    c1 = warns(note(parsed))
+    rc, raw, _ = bash(hook, "echo hi")
+    c2 = rc == 0 and raw == ""
+    print(f"  {'ok  ' if c1 else 'FAIL'} c01 control: brew install jq warns")
+    print(f"  {'ok  ' if c2 else 'FAIL'} c02 control: echo hi is quiet")
+    return c1 and c2
+
+
+def mutants(hook):
+    srcs = {"hook": Path(hook).read_text(), "scan": (Path(hook).parent / SCAN_NAME).read_text()}
+    base = {label.split()[0]: ok for label, ok, _ in arms(hook)}
+    if not all(base.values()):
+        print(f"{RED}the unmutated hook fails its own arms; mutants mean nothing until it is green{OFF}")
+        return 1
+    killed_by = {k: [] for k in base}
+    problems = []
+    for mid, which, what, reps in MUTANTS:
+        texts = dict(srcs)
+        for old, new in reps:
+            n = texts[which].count(old)
+            if n != 1:
+                problems.append(f"{mid} anchor found {n} times in the {which}: {old[:60]!r}")
+                break
+            texts[which] = texts[which].replace(old, new)
+        else:
+            d = TMP / f"mutant-{mid}"
+            d.mkdir()
+            m = d / HOOK.name
+            m.write_text(texts["hook"])
+            m.chmod(0o755)
+            (d / SCAN_NAME).write_text(texts["scan"])
+            red = [label.split()[0] for label, ok, _ in arms(m) if not ok]
+            for k in red:
+                killed_by[k].append(mid)
+            print(f"  {mid} {what:58s} {RED if red else ''}{len(red):2d} red{OFF} "
+                  f"{DIM}{' '.join(red[:8])}{' ...' if len(red) > 8 else ''}{OFF}")
+            if not red:
+                problems.append(f"{mid} ({what}) survived: no arm caught it")
+    for k, ms in killed_by.items():
+        if not ms:
+            problems.append(f"arm {k} never went red on any mutant: it cannot fail")
+    print()
+    if problems:
+        for p in problems:
+            print(f"  {RED}FAIL{OFF} {p}")
+        print(f"{RED}✗ {len(problems)} mutant problem(s){OFF}")
+        return 1
+    print(f"{GREEN}✓ {len(MUTANTS)} mutants each caught; all {len(killed_by)} arms go red on at "
+          f"least one{OFF}")
+    return 0
+
+
+def main():
+    args = sys.argv[1:]
+    hook = HOOK
+    if "--hook" in args:
+        hook = Path(args[args.index("--hook") + 1]).resolve()
+    if not hook.is_file():
+        print(f"{RED}no hook at {hook}{OFF}")
+        return 2
+    if not (hook.parent / SCAN_NAME).is_file():
+        print(f"{RED}no {SCAN_NAME} beside {hook}: the hook reads commands with it{OFF}")
+        return 2
+    try:
+        print(f"hook: {hook}\n\nCONTROLS (the harness proves itself first)")
+        if not controls(hook):
+            print(f"{RED}✗ controls failed: the hook cannot be told apart from a silent one{OFF}")
+            return 1
+        if "--mutants" in args:
+            print("\nMUTANTS (each arm must go red on a broken copy)")
+            return mutants(hook)
+        print("\nARMS")
+        results = arms(hook)
+        fails = report(results)
+        print()
+        if fails:
+            print(f"{RED}✗ {len(fails)} of {len(results)} check(s) FAILED:{OFF} " + ", ".join(fails))
+            return 1
+        print(f"{GREEN}✓ all {len(results)} checks passed{OFF} {DIM}-- it reminds on installs of a new "
+              f"tool, and on nothing else{OFF}")
+        return 0
+    finally:
+        shutil.rmtree(TMP, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

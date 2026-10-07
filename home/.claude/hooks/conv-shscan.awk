@@ -3,7 +3,9 @@
 # Used by enforce-uv.sh and enforce-pnpm.sh (beside this file, stowed to
 # ~/.claude/hooks/) and by this repo's project-only .claude/hooks/enforce-no-cd.sh
 # (which reaches it through the repo path home/.claude/hooks/). NOT a hook itself:
-# nothing registers it, the three hooks run it with `awk -f`.
+# nothing registers it, the three hooks run it with `awk -f`. Also read by
+# validate-bash.sh, enforce-pj-workers.sh, enforce-no-reset-by-name.sh,
+# enforce-builtin.sh and warn-install-telemetry.sh (CONV_MODE=install, advisory).
 #
 # WHY A SCANNER AND NOT A REGEX. Until 2026-09-23 each hook stripped "$(...)",
 # "..." and '...' with sed and grepped what was left. A deny can live with that; a
@@ -30,7 +32,8 @@
 # Byte offsets: run with LC_ALL=C so every awk counts bytes the same way.
 #
 # Input:  the Bash tool's command on stdin.
-# Env:    CONV_MODE = uv | pnpm | nocd | guard | builtin | reset   (which hook is asking)
+# Env:    CONV_MODE = uv | pnpm | nocd | guard | builtin | reset | pjw | install
+#         (which hook is asking; install prints HIT lines instead, see its section)
 #         CONV_CWD  = the payload's cwd (npx looks for a local binary from here)
 # Output: line 1  ALLOW | DENY | REWRITE
 #         line 2  one-line message for the session (DENY reason or what changed)
@@ -1903,6 +1906,179 @@ function pjw_main(    qi, i) {
     print "ALLOW"; print ""; exit 0
 }
 
+# ------------------------------------------------------------------ install
+# Used by warn-install-telemetry.sh (CONV_MODE=install), #1110, engage-main Q13.
+# ADVISORY: never ALLOW/DENY. Prints one line per install of a new tool it reads,
+#   HIT<TAB><manager><TAB><tool>[, <tool>...]
+# and nothing at all when there is none. It reads the commands the scanner records,
+# plus every text guard mode reads as commands (gd_nested: $(...) and backtick
+# bodies, sh/bash/zsh -c, eval, text piped or fed to a shell), so prose inside
+# quotes, heredocs and comments stays quiet and `zsh -ic 'brew install x'` does not.
+#
+# Fires on: brew install/instal (and --cask); npm i/install/add -g (--global,
+# --location=global); pnpm add/install/i -g; bun add/install/i -g; uv tool install;
+# pipx install; cargo install; go install <module>@<version>; gem install;
+# mas install; curl/wget piped into a shell, bash <(curl ...), sh -c "$(curl ...)".
+# Quiet on: a project dependency (no -g), brew reinstall/upgrade, uv tool install
+# --reinstall/--upgrade, cargo install --list, go install of a local path, anything
+# with --help, -h or --dry-run, uninstalls, and an install with no tool named.
+# NOT read: a command run on another machine (ssh host '...'), a script file.
+
+function in_hit(m, t,    i) {
+    gsub(/[\t\n]/, " ", t)
+    for (i = 1; i <= INN; i++) if (INM[i] == m && INT[i] == t) return
+    INN++; INM[INN] = m; INT[INN] = t
+}
+# Does option o of manager m take the next word as its value? (an attached
+# --opt=value is one word and needs nothing)
+function in_val(m, o) {
+    if (m == "uv") return o ~ /^(-p|--python|-w|--with|--from|--with-requirements|--with-editable|--index|--index-url|--extra-index-url|--default-index|-f|--find-links|-c|--constraints|--overrides|--exclude-newer|--python-preference|--directory|--project|--config-file|--cache-dir|--color|--index-strategy|--keyring-provider|--resolution|--prerelease|--link-mode|--refresh-package|--reinstall-package|--upgrade-package|-P|--build-constraints|--no-build-package|--no-binary-package|--only-binary-package)$/
+    if (m == "pipx") return o ~ /^(--python|--pip-args|--suffix|--index-url|-i|--preinstall|--global-dir)$/
+    if (m == "cargo") return o ~ /^(--version|--vers|--git|--branch|--tag|--rev|--path|--root|--registry|--index|-F|--features|--target|--target-dir|--profile|-j|--jobs|--bin|--example|--config|-Z|--color)$/
+    if (m == "gem") return o ~ /^(-v|--version|-i|--install-dir|-n|--bindir|-s|--source|-P|--trust-policy|--platform|-g|--file)$/
+    if (m == "npm" || m == "pnpm" || m == "bun") return o ~ /^(--prefix|--registry|--location|-C|--dir|--filter|--store-dir|--cwd|--cache-dir|--config|--workspace|-w)$/
+    if (m == "brew") return o ~ /^(--appdir|--fontdir|--colorpickerdir|--prefpanedir|--qlplugindir|--mdimporterdir|--dictionarydir|--input-methoddir|--servicedir|--audio-unit-plugindir|--vst-plugindir|--vst3-plugindir|--screen-saverdir|--language|--cc)$/
+    return 0
+}
+# The tool words of command k from word s on, joined by ", ". Sets INOPT to the
+# options seen, space-separated and padded, so a caller can test " -g "; an option
+# that takes a value is stored as --opt=value.
+function in_names(k, s, m,    a, n, w, out) {
+    INOPT = " "; out = ""; n = CNW[k]
+    for (a = s; a <= n; a++) {
+        w = unq(WR[k, a])
+        if (w == "" && WR[k, a] ~ /^-/) w = WR[k, a]
+        if (w ~ /^-/) {
+            if (w !~ /=/ && in_val(m, w) && a < n) { a++; w = w "=" unq(WR[k, a]) }   # one word: --opt=value
+            INOPT = INOPT w " "
+            continue
+        }
+        if (w == "") w = WR[k, a]          # an expansion: name it as written
+        out = out (out != "" ? ", " : "") w
+    }
+    return out
+}
+function in_quiet() { return INOPT ~ / (--help|-h|--dry-run)( |=)/ }
+function in_global() { return INOPT ~ / (-g|--global|--location=global) / }
+function in_url(k, j,    a, n, w) {
+    n = CNW[k]
+    for (a = j + 1; a <= n; a++) {
+        w = unq(WR[k, a])
+        if (w ~ /^[A-Za-z][A-Za-z0-9+.-]*:\/\//) { sub(/[?#].*/, "", w); return w }
+    }
+    return "an install script"
+}
+# A shell given the piped text: no -c and no script file, or `-` / -s. (-c takes its
+# command as the next word, which reads as a script file here: either way the pipe is
+# not what runs.)
+function in_pipesh(k,    c, j, n, a, w) {
+    for (c = k + 1; c <= NC; c++) {
+        j = eff(c); n = CNW[c]
+        if (j > n) return 0
+        w = base(unq(WR[c, j]))
+        if (w ~ /^(bash|sh|zsh|dash|ksh)$/) {
+            for (a = j + 1; a <= n; a++) {
+                w = unq(WR[c, a])
+                if (w == "-" || w == "--") return 1
+                if (w !~ /^[-+]/) return 0          # a script file, or -c's command text
+            }
+            return 1
+        }
+        if (CSA[c - 1] != "|" && CSA[c - 1] != "|&") return 0
+        if (CSA[c] != "|" && CSA[c] != "|&") return 0
+    }
+    return 0
+}
+function in_one(k, j,    n, m, i, s, t, w) {
+    n = CNW[k]; m = base(unq(WR[k, j]))
+    if (m == "brew") {
+        for (i = j + 1; i <= n && isopt(k, i); i++) ;
+        if (i > n) return
+        s = unq(WR[k, i])
+        if (s != "install" && s != "instal") return
+        t = in_names(k, i + 1, m)
+        if (t == "" && EM ~ /hard:xargs/) t = "the names xargs reads"
+        if (in_quiet() || t == "") return
+        in_hit((INOPT ~ / --cask / ? "brew --cask" : "brew"), t); return
+    }
+    if (m == "npm" || m == "pnpm" || m == "bun") {
+        for (i = j + 1; i <= n && isopt(k, i); i++) ;
+        if (i > n) return
+        s = unq(WR[k, i])
+        if (m == "npm" && s !~ /^(i|in|ins|inst|insta|instal|install|isnt|isnta|isntal|isntall|add)$/) return
+        if (m != "npm" && s != "add" && s != "install" && s != "i") return
+        t = in_names(k, j + 1, m)
+        sub("^" s "(, |$)", "", t)
+        if (!in_global() || in_quiet()) return
+        in_hit(m " -g", (t == "" ? "the current folder" : t)); return
+    }
+    if (m == "uv") {
+        for (i = j + 1; i <= n && isopt(k, i); i++) ;
+        if (i + 1 > n || unq(WR[k, i]) != "tool" || unq(WR[k, i + 1]) != "install") return
+        t = in_names(k, i + 2, m)
+        if (in_quiet() || t == "" || INOPT ~ / (--reinstall|--upgrade|-U)( |=)/) return
+        in_hit("uv tool", t); return
+    }
+    if (m == "pipx" || m == "cargo" || m == "gem" || m == "mas") {
+        for (i = j + 1; i <= n && isopt(k, i); i++) ;
+        if (i > n || unq(WR[k, i]) != "install") return
+        t = in_names(k, i + 1, m)
+        if (in_quiet()) return
+        if (t == "" && m == "cargo" && match(INOPT, / --(git|path)=[^ ]+/)) { t = substr(INOPT, RSTART + 1, RLENGTH - 1); sub(/^[^=]*=/, "", t) }
+        if (t == "") return
+        in_hit(m, t); return
+    }
+    if (m == "go") {
+        for (i = j + 1; i <= n && isopt(k, i); i++) ;
+        if (i > n || unq(WR[k, i]) != "install") return
+        t = ""
+        for (i++; i <= n; i++) { w = unq(WR[k, i]); if (w !~ /^-/ && w ~ /@/) t = t (t != "" ? ", " : "") w }
+        if (t != "") in_hit("go", t)
+        return
+    }
+    if ((m == "curl" || m == "wget") && (CSA[k] == "|" || CSA[k] == "|&") && in_pipesh(k)) {
+        in_hit("a curl | sh installer", in_url(k, j)); return
+    }
+    # sh -c "$(curl ...)" and eval "$(curl ...)": the shell runs what curl fetched.
+    if (m ~ /^(bash|sh|zsh|dash|ksh|eval)$/) {
+        for (i = j + 1; i <= n; i++) {
+            w = WR[k, i]
+            if (w ~ /^"?\$\([ \t]*(curl|wget)[ \t]/) { in_hit("a curl | sh installer", (match(w, /[A-Za-z][A-Za-z0-9+.-]*:\/\/[^ \t")?#]+/) ? substr(w, RSTART, RLENGTH) : "an install script")); return }
+        }
+    }
+}
+function install_check(    k, j, n, a, b) {
+    for (k = 1; k <= NC; k++) {
+        j = eff(k); n = CNW[k]
+        if (j > n || EM ~ /probe/) continue
+        if (EM !~ /hard:|envopt/) { in_one(k, j); continue }
+        # After sudo -u x, xargs, command ... eff cannot be sure which word is the
+        # command (guard mode reads brew the same way), so take the first one that is
+        # a manager, a fetcher or a shell. A shell found this way is read as text too.
+        for (a = j; a <= n; a++) {
+            b = base(unq(WR[k, a]))
+            if (b ~ /^(brew|npm|pnpm|bun|uv|pipx|cargo|go|gem|mas|curl|wget|bash|sh|zsh|dash|ksh|eval)$/) break
+        }
+        if (a > n) continue
+        in_one(k, a)
+        if (a > j && b ~ /^(bash|sh|zsh|dash|ksh)$/) {
+            for (j = a + 1; j <= n; j++) {
+                if (unq(WR[k, j]) ~ /^-[a-zA-Z]*c[a-zA-Z]*$/) { if (j < n) gd_enqueue(pj_dq(WR[k, j + 1]), b " -c"); break }
+                if (unq(WR[k, j]) !~ /^[-+]/) break
+            }
+        }
+    }
+}
+function install_main(    qi, i) {
+    QN = 1; QT[1] = S; QW[1] = ""; GDOVER = 0; INN = 0
+    for (qi = 1; qi <= QN; qi++) {
+        if (qi > 1) { pj_load(QT[qi]); parse_list(1, "", 0, "^") }
+        install_check()
+        gd_nested(QW[qi])
+    }
+    for (i = 1; i <= INN; i++) print "HIT\t" INM[i] "\t" INT[i]
+}
+
 # ------------------------------------------------------------------ main
 
 { S = (NR > 1 ? S "\n" : "") $0 }
@@ -1911,10 +2087,11 @@ END {
     N = split(S, C, "")
     mode = ENVIRON["CONV_MODE"]
     P = 1; NC = 0; HDN = 0; BG = 0; UNSURE = ""; UNSURE_NF = ""; SUBSH = 0; BTN = 0; split("", HBODY); split("", UHB); split("", PSB); CASEOPEN = 0; CASEPAT = 0; CASEIN = 0
-    REC_NESTED = (mode == "guard" || mode == "pjw")   # only these look inside $(...) and backticks
+    REC_NESTED = (mode == "guard" || mode == "pjw" || mode == "install")   # only these look inside $(...) and backticks
     if (mode == "pjw") pjw_main()
     parse_list(1, "", 0, "^")
     if (HDN) unsure("here-document with no body")
+    if (mode == "install") { install_main(); exit 0 }   # advisory: HIT lines only
     if (mode == "guard" || mode == "builtin" || mode == "reset") {   # deny-only modes: never compose
         if (mode == "guard") gd_main(); else if (mode == "builtin") builtin_check(); else reset_check()
         print V[mode]; print M[mode]; exit 0
