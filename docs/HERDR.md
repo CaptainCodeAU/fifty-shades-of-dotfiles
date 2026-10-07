@@ -23,14 +23,12 @@ corrected). The Linux pin moved to v0.9.3 with three-way hash agreement. NOT
 RE-RUN: the Linux systemd unit and the herdr() guard on Linux (no Linux box in
 this session), remote attach and the keymap-drift claims, the tmux comparison,
 and speak-selection; they keep their earlier evidence. The 0.9.2 CHANGELOG
-says two of those may have moved, so treat them as unconfirmed until re-run:
-
-# 4581 ("Ctrl+Shift+C no longer arrives as Ctrl+C" in panes without enhanced
-
-keyboard input), against the `send-keys ctrl+shift+c` -> `0x03` bullet under
-"Who copies on a drag"; and multiple prefix keys (#4653), against "herdr takes
-a single key per action" in the ported keymap. 0.9.3 itself only fixed
-Escape-prefixed keys (#4751).
+said two of those may have moved, and both had (re-run 2026-10-08 on 0.9.3,
+W-20261007-A02): `send-keys ctrl+shift+c` into a shell no longer arrives as
+`0x03` (changelog #4581; "Who copies on a drag" is corrected), and an action
+now takes several keys, not one (the ported keymap's "single key per action"
+is corrected; #4653 is the related change that allows several prefix keys).
+0.9.3 itself only fixed Escape-prefixed keys (#4751).
 
 **WHAT THE 0.9.1 RE-VERIFY COVERED HERE.** This document is about the cooldown
 machinery, running herdr as a persistent server, and where it overlaps with
@@ -867,12 +865,20 @@ Scope is the whole session rather than the current workspace, and because
 `agent_panel_sort = "priority"` is set, they walk the sidebar's own order — next
 by which agent wants attention, not by position.
 
-The one structural difference: **herdr takes a single key per action**, where
-tmux allowed several. `.tmux.conf` bound the right-hand split four ways
-(`|`, `Right`, `%`, `h`); only one survives. The same constraint means
-Alt+Arrow pane switching and `prefix+h/j/k/l` cannot both exist — the config
-keeps the vim keys and documents the swap. Validate any change with
-`herdr config check`.
+The one structural difference, **as of 0.9.1: herdr took a single key per
+action**, where tmux allowed several. `.tmux.conf` bound the right-hand split
+four ways (`|`, `Right`, `%`, `h`); only one survived the port. The same
+constraint meant Alt+Arrow pane switching and `prefix+h/j/k/l` could not both
+exist, so the config keeps the vim keys and documents the swap.
+
+**That constraint is gone on 0.9.3** (measured 2026-10-08, W-20261007-A02): a key
+takes a list, `split_vertical = ["prefix+|", "prefix+right", "prefix+%", "prefix+h"]`
+passes `herdr config check`, a bad entry in the list is flagged by name
+(`invalid keybinding: keys.split_vertical = "prefix+nosuchkey"`), and
+`prefix = ["ctrl+space", "ctrl+s"]` passes too (#4653). Measured with a
+throwaway `HOME` and a known-bad key as the control; whether the running server
+then answers every entry was not tested, and the live config is unchanged.
+Validate any change with `herdr config check`.
 
 **Recommendation: do not nest them, and do not delete tmux either.** Stop
 launching tmux and drive herdr for a couple of weeks instead. The tmux config
@@ -969,8 +975,13 @@ which the drag never reaches the clipboard and the key appears dead.
 - `herdr config check` passes a `plugin_action` name that does not exist
   (`dotfiles.nope.speak` was ok); it checks the type only.
 - `herdr pane send-keys <pane> ctrl+shift+c` did not interrupt an idle Claude
-  pane, but in a shell it arrives as `0x03`, the same byte as `Ctrl+C`. Never
-  send it to a pane not known to be Claude.
+  pane. In a shell it arrived as `0x03`, the same byte as `Ctrl+C`, on 0.9.1.
+  **Since 0.9.2 it does not** (#4581): re-measured 2026-10-08 on 0.9.3 with a raw
+  byte reader in a throwaway shell tab, it arrives as `ESC [99;6u` (CSI-u for
+  Ctrl+Shift+C), twice, while the controls in the same tab gave `03` for
+  `ctrl+c` and `61` for `a`. A shell or program that does not decode CSI-u may
+  still act on that sequence, so the rule stays: never send it to a pane not
+  known to be Claude.
 
 **So every drag overwrites what the clipboard held before**, and
 `speak-clipboard` cannot put it back: it only reads (`pbpaste`) and never sees
