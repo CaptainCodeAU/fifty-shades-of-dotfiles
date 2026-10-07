@@ -24,7 +24,7 @@ RE-RUN: the Linux systemd unit and the herdr() guard on Linux (no Linux box in
 this session), remote attach and the keymap-drift claims, the tmux comparison,
 and speak-selection; they keep their earlier evidence. The 0.9.2 CHANGELOG
 says two of those may have moved, so treat them as unconfirmed until re-run:
-#4581 ("Ctrl+Shift+C no longer arrives as Ctrl+C" in panes without enhanced
+# 4581 ("Ctrl+Shift+C no longer arrives as Ctrl+C" in panes without enhanced
 keyboard input), against the `send-keys ctrl+shift+c` -> `0x03` bullet under
 "Who copies on a drag"; and multiple prefix keys (#4653), against "herdr takes
 a single key per action" in the ported keymap. 0.9.3 itself only fixed
@@ -406,26 +406,26 @@ not Homebrew's.
 
 Homebrew does these on its own:
 
-| Path                                         | What happens                                                                                                 |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Path                                         | What happens                                                                                      |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------- |
 | `$(brew --prefix)/Cellar/herdr/<new>/`       | new tree: `bin/herdr`, `CHANGELOG.md`, `sbom.spdx.json`, `INSTALL_RECEIPT.json`, `.brew/herdr.rb` |
-| `$(brew --prefix)/bin/herdr`, `opt/herdr`    | symlinks repointed                                                                                           |
-| `$(brew --prefix)/var/homebrew/pinned/herdr` | removed by `brew unpin`, recreated by `brew pin`                                                             |
-| the 6h cache in `$TMPDIR`                    | `herdr-cooldown-check`'s verdict goes stale                                                                  |
+| `$(brew --prefix)/bin/herdr`, `opt/herdr`    | symlinks repointed                                                                                |
+| `$(brew --prefix)/var/homebrew/pinned/herdr` | removed by `brew unpin`, recreated by `brew pin`                                                  |
+| the 6h cache in `$TMPDIR`                    | `herdr-cooldown-check`'s verdict goes stale                                                       |
 
 These are ours, and nothing upstream will do them for you:
 
-| #   | File                                                                                | Version-bound thing                                                       |
-| --- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| 1   | `install.sh`                                                                        | `HERDR_VERSION` (Linux pin)                                               |
-| 2   | `install.sh`                                                                        | both `HERDR_SHA256_LINUX_*` hashes                                        |
-| 3   | `home/.claude/skills/herdr/UPSTREAM.md`                                             | the skill merge base -- 0.8.2 revised the bundled skill wholesale (#2847) |
-| 4   | `home/.claude/skills/herdr/UPSTREAM.version`                                        | the tag that capture came from                                            |
-| 5   | `home/.claude/skills/herdr/SKILL.md`                                                | whatever the merge pulls in                                               |
-| 6-9 | `docs/HERDR*.md`                                                                    | one `herdr-verified:` line each                                           |
-| 10  | `home/.config/herdr/config.toml`                                                    | only when a release retires or adds a key -- run `herdr config check`     |
-| 11  | `home/.config/herdr/plugins/*/herdr-plugin.toml`                                    | `min_herdr_version`, and the plugin API if it moved                       |
-| 12  | `home/.config/systemd/user/herdr.service`                                           | only if service flags change                                              |
+| #   | File                                                                                | Version-bound thing                                                         |
+| --- | ----------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| 1   | `install.sh`                                                                        | `HERDR_VERSION` (Linux pin)                                                 |
+| 2   | `install.sh`                                                                        | both `HERDR_SHA256_LINUX_*` hashes                                          |
+| 3   | `home/.claude/skills/herdr/UPSTREAM.md`                                             | the skill merge base -- 0.8.2 revised the bundled skill wholesale (#2847)   |
+| 4   | `home/.claude/skills/herdr/UPSTREAM.version`                                        | the tag that capture came from                                              |
+| 5   | `home/.claude/skills/herdr/SKILL.md`                                                | whatever the merge pulls in                                                 |
+| 6-9 | `docs/HERDR*.md`                                                                    | one `herdr-verified:` line each                                             |
+| 10  | `home/.config/herdr/config.toml`                                                    | only when a release retires or adds a key -- run `herdr config check`       |
+| 11  | `home/.config/herdr/plugins/*/herdr-plugin.toml`                                    | `min_herdr_version`, and the plugin API if it moved                         |
+| 12  | `home/.config/systemd/user/herdr.service`                                           | only if service flags change                                                |
 | 13  | `~/.claude/hooks/herdr-agent-state.sh` + its `~/.claude/settings.json` registration | **NOT rewritten by an upgrade**: `herdr integration status` says `outdated` |
 
 Item 13 is the odd one. herdr installs a state-reporting hook into each agent
@@ -503,12 +503,12 @@ server's parent is PID 1 with no launchd job behind it (measured 2026-10-07:
 
 Measured on this Mac, 2026-10-07:
 
-| Command                        | What it does now                                                                                                                               |
-| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `herdr server stop`            | Asks the server over its socket to save and exit. Every pane and agent ends. Nothing restarts it.                                              |
-| `herdr` (attach)               | Starts a fresh server from the installed binary and restores the saved workspaces (0.9.1 stopped at 11:27 AM, 0.9.3 up at 11:29 AM, 13 restored) |
-| `brew services restart herdr`  | Nothing to restart: the formula has no service. Not run.                                                                                       |
-| `brew services stop herdr`     | Only ever stopped a launchd job; it never touched a server herdr started itself.                                                               |
+| Command                       | What it does now                                                                                                                                 |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `herdr server stop`           | Asks the server over its socket to save and exit. Every pane and agent ends. Nothing restarts it.                                                |
+| `herdr` (attach)              | Starts a fresh server from the installed binary and restores the saved workspaces (0.9.1 stopped at 11:27 AM, 0.9.3 up at 11:29 AM, 13 restored) |
+| `brew services restart herdr` | Nothing to restart: the formula has no service. Not run.                                                                                         |
+| `brew services stop herdr`    | Only ever stopped a launchd job; it never touched a server herdr started itself.                                                                 |
 
 So **to restart onto a new build: `herdr server stop`, then open `herdr`.**
 `./install.sh` offers exactly that after an upgrade (`_herdr_offer_restart
@@ -759,14 +759,14 @@ only where a service manages the server, detected by the file the service
 leaves behind: the stowed unit symlink on Linux, the brew plist on macOS. A
 box with neither is untouched.
 
-| You type                                     | What happens                                                                                               | Why                                                                                                                                                                                                     |
-| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| You type                                     | What happens                                                                                                                   | Why                                                                                                                                                                                                                                                                                           |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `herdr server`                               | **Refused.** Prints `systemctl --user start herdr.service` (Linux), or on a Mac with a leftover LaunchAgent, how to remove it. | A hand-started server inherits the shell's environment and dies with the session -- the whole reason the service exists. With a leftover LaunchAgent it also exits 1 on the socket and `keep_alive` respawns it forever. A Mac without one is not guarded: herdr starts its own server there. |
-| `herdr server stop`, `reload-config`, ...    | Pass through.                                                                                              | Only the bare form starts a server.                                                                                                                                                                     |
-| `herdr update`                               | **Refused** (2026-09-17). Prints `herdr-cooldown-check` and `./install.sh`.                                | herdr ships its own updater. It downloads and installs a release directly, walking around Homebrew, `brew pin` and the whole `HERDR_COOLDOWN_DAYS` gate in one command.                                 |
-| `herdr channel set preview`                  | **Refused** (2026-09-17).                                                                                  | Same hole by another route: it repoints that updater at preview builds. `channel set stable` passes through.                                                                                            |
-| `herdr` (attach), Linux, unit down           | Starts the unit first, then attaches.                                                                      | Upstream attach "starts or attaches to" a server: with the unit down it would spawn the same hand-started server with no visible command.                                                               |
-| Anything inside a herdr pane (`HERDR_ENV=1`) | No check at all.                                                                                           | The server is by definition running; agents call the CLI constantly and should pay nothing.                                                                                                             |
+| `herdr server stop`, `reload-config`, ...    | Pass through.                                                                                                                  | Only the bare form starts a server.                                                                                                                                                                                                                                                           |
+| `herdr update`                               | **Refused** (2026-09-17). Prints `herdr-cooldown-check` and `./install.sh`.                                                    | herdr ships its own updater. It downloads and installs a release directly, walking around Homebrew, `brew pin` and the whole `HERDR_COOLDOWN_DAYS` gate in one command.                                                                                                                       |
+| `herdr channel set preview`                  | **Refused** (2026-09-17).                                                                                                      | Same hole by another route: it repoints that updater at preview builds. `channel set stable` passes through.                                                                                                                                                                                  |
+| `herdr` (attach), Linux, unit down           | Starts the unit first, then attaches.                                                                                          | Upstream attach "starts or attaches to" a server: with the unit down it would spawn the same hand-started server with no visible command.                                                                                                                                                     |
+| Anything inside a herdr pane (`HERDR_ENV=1`) | No check at all.                                                                                                               | The server is by definition running; agents call the CLI constantly and should pay nothing.                                                                                                                                                                                                   |
 
 Its notices go to stderr, so `herdr status server --json | jq` keeps working
 (the first live test broke exactly that).
@@ -999,6 +999,49 @@ happens on `herdr integration install <name>`, not on a binary upgrade (measured
 2026-10-07: v8 hook left in place across two upgrades, reported as `outdated
 (v8 < v10)`). So the newer hook is a separate, deliberate step, and the pin
 governs only when the newer hook becomes available, not when it lands.
+
+### Updating the Claude hook: compare first, never install blind
+
+Gavin, 2026-10-07: herdr's changes are merged against what we have, never pasted
+over it. Two facts make that matter:
+
+- **`herdr integration install claude` rewrites `~/.claude/settings.json`,** which
+  holds about ten of our own SessionStart entries, to add an entry that is already
+  there. Do not run it against the real config.
+- **`~/.claude/hooks/` is locked** (D-20260929-A14): a session cannot change the live
+  hook. The update itself is Gavin's hand; a session prepares and compares.
+
+The reference copy is `docs/reference/herdr-agent-state.UPSTREAM.sh`: herdr's
+UNTOUCHED output for the version it names on its `HERDR_INTEGRATION_VERSION` line
+(v10, herdr 0.9.3, 2026-10-07). The steps:
+
+1. **Local edits?** `diff docs/reference/herdr-agent-state.UPSTREAM.sh
+~/.claude/hooks/herdr-agent-state.sh`. Empty means none; anything else is ours and
+   must be carried into the new version.
+2. **New herdr output, real files untouched:** install into a throwaway home.
+
+   ```bash
+   F=$(mktemp -d "$TMPDIR/herdr-fakehome.XXXXXX"); mkdir -p "$F/.claude"
+   echo '{}' > "$F/.claude/settings.json"
+   HOME="$F" herdr integration install claude
+   ```
+
+3. **What herdr changed:** `diff` the reference copy against
+   `$F/.claude/hooks/herdr-agent-state.sh`. Also compare the hook EVENTS in
+   `$F/.claude/settings.json` with ours and with engage's template
+   (`engage/templates/settings/hooks.json`, entry "Tells herdr which agent runs in
+   the pane"). A new event must be added to engage's template too, or engage sessions
+   never fire it.
+4. **Apply:** the session writes the merged file to a temp path and gives Gavin the
+   one copy-and-commit command for `~/.claude`; then it replaces the reference copy
+   here and commits the dotfiles repo.
+
+Measured 2026-10-07, v8 to v10: the live v8 had no local edits (one commit in
+`~/.claude`, byte-identical to herdr's output). v10 differs only in exiting on every
+event except SessionStart, skipping Cursor, and dropping a now-moot SubagentStop
+special case. User settings and engage's settings register SessionStart only, so the
+behaviour is the same here. After the update `herdr integration status` reads
+`claude: current (v10)`.
 
 ## Scope (and deliberate non-scope)
 

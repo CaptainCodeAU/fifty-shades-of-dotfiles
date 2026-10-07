@@ -119,11 +119,13 @@ Consequences:
 - `agent explain` outputs plain text; add `--json` for machine parsing.
 
 The Claude-side integration hook (`~/.claude/hooks/herdr-agent-state.sh`,
-`HERDR_INTEGRATION_VERSION=8` on disk as of 2026-10-07, which herdr 0.9.3
-reports as `outdated (v8 < v10)`; wired as a `session` hook in `settings.json`)
-reports only **session identity**, not lifecycle state. Check with
-`herdr integration status`. The file is herdr-managed and is overwritten on
-reinstall -- add custom hooks beside it, never edit it.
+`HERDR_INTEGRATION_VERSION=10` since 2026-10-07, `claude: current (v10)` on
+herdr 0.9.3; wired as a `session` hook in `settings.json`) reports only **session
+identity**, not lifecycle state: v10 exits on every event except SessionStart.
+Check with `herdr integration status`. The file is herdr-managed and is
+overwritten on reinstall -- add custom hooks beside it, never edit it. To update
+it, follow "Updating the Claude hook" in [`HERDR.md`](HERDR.md): compare against
+`docs/reference/herdr-agent-state.UPSTREAM.sh` first, never install blind.
 
 ---
 
@@ -177,7 +179,7 @@ shell pane" means at an interactive prompt with no foreground command.
 
 STILL REAL ON 0.8.2, but smaller. 0.8.2 made `agent start` wait for new pane
 shells and first-run agent prompts instead of racing them (#2410, #2537, #2773,
-#2774). It did not remove `agent_pane_busy`: a pane mid-startup still refuses,
+# 2774). It did not remove `agent_pane_busy`: a pane mid-startup still refuses,
 and `herdr-quick-task` in this repo keeps a bounded retry loop for exactly that.
 The retry below is still the right shape. NOT re-run on 0.8.2 -- reproducing it
 means starting real agents in a live session, so this is upstream's account plus
