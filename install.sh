@@ -201,12 +201,12 @@ HERDR_COOLDOWN_DAYS="5"
 #   4. update HERDR_VERSION + both hashes below in ONE commit
 #   5. push, pull on each box, re-run ./install.sh
 #
-# v0.9.1 (2026-09-27): published 2026-09-16, past the 5-day cooldown. Both
-# hashes agree across a Mac download, GitHub's API digest, and (x86_64) an
-# independent download on the WSL box itself.
-HERDR_VERSION="v0.9.1"
-HERDR_SHA256_LINUX_X86_64="2a02fed16beb651ef006e1d43f048f652ca4dc58ad053cd2d44450563d5c54b7"
-HERDR_SHA256_LINUX_AARCH64="f4ccf4de745f2cb9a39a983e9ba3703dad50ec2a58dea83026ceab721bbd8d9e"
+# v0.9.3 (2026-10-07): published 2026-09-29, 7.7 days old, past the 5-day
+# cooldown. Both hashes agree across herdr-linux-pin-check, an independent
+# Mac download, and GitHub's API digest. Not yet re-downloaded on the WSL box.
+HERDR_VERSION="v0.9.3"
+HERDR_SHA256_LINUX_X86_64="18a8dc65f1c2fa485884344356dea1cfd911c6f06cf46fa78e193f4087f4dba7"
+HERDR_SHA256_LINUX_AARCH64="4de7aa3e25678812e92960de64f7c2aaa1bca1f0f80a3c5e559837e231e1f5c0"
 
 # --- Helpers ---
 info()    { echo -e "${CYAN}ℹ️  $*${RESET}"; }
