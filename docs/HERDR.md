@@ -919,14 +919,25 @@ which:
    explicit `--voice`, it falls back to say2's own slower playback. Speech
    plays at 60 of 100 under the system volume (`--volume N`, streaming path
    only; about -4.4 dB), so it can sit a little below everything else.
-   Rate, volume and voice can be saved for every press, the hotkey included
-   (since 2026-10-08): `speak-clipboard --settings` shows them, `--get [KEY]` prints the bare values,
-   `--set rate|volume|voice V` and `--reset KEY` change them, `--voices`
-   lists the installed Siri voices by number. They live in
-   `~/.config/speak-clipboard/settings`, which any run writes with the
-   recommended values if it is missing. A bad or missing value, a voice that
-   is not installed, or a file that cannot be read still speaks, with the
-   recommended value, and exits 10, 11 or 12 (`--help` lists every code);
+   Rate, volume, voice and notify are saved for every press, the hotkey
+   included (since 2026-10-08), in `~/.config/speak-clipboard/settings`,
+   which any run writes with the default values if it is missing.
+   `speak-clipboard --settings` shows them in a box, each marked (default) or
+   (changed, default ...); `--get [KEY]` prints the bare values;
+   `--set rate|volume N` (or `+N`/`-N` to step), `--set voice N` (the
+   number from `--voices` only: names repeat across tiers) and
+   `--set notify on|off` change them, `--reset KEY|all` puts the defaults
+   back, and each shows a changed row as "old -> new". A bad or missing
+   value, a voice that is not installed, or a file that cannot be read
+   still speaks, with the default, and exits 10, 11 or 12 (`--help` lists
+   every code). More hotkeys in `config.toml` step them, each showing the
+   change as a macOS notification: `ctrl+alt+1`/`2` rate -20/+20,
+   `ctrl+alt+3`/`4` volume -10/+10, `ctrl+alt+0` all back to the defaults,
+   and `ctrl+alt+9` shows the current settings. Notifications follow the
+   notify setting (on by default; `--notify`/`--no-notify` override it for
+   one command; `ctrl+alt+9` always shows). They go through `osascript`,
+   not `herdr notification show`, which joins a multi-line body into one
+   line (measured 2026-10-08);
 3. applies the toggle rule: **any** press while it speaks = stop, whatever the
    clipboard holds; the next press speaks the current selection (since
    2026-09-28; before that, a press with new text replaced the speech).
