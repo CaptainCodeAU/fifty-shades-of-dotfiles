@@ -218,12 +218,12 @@
 #   speak-clipboard --get KEY           print one value alone: rate, volume or
 #                                       voice (its full key); with no KEY, all
 #                                       three as key=value lines
-#   speak-clipboard --set rate N        save words per minute (1-700; default 420)
-#   speak-clipboard --set volume N      save volume 0-100 (default 60)
+#   speak-clipboard --set rate N        save words per minute (1-700)
+#   speak-clipboard --set volume N      save volume 0-100
 #   speak-clipboard --set voice V       save a voice: its number or name from
 #                                       --voices, or its full key
-#                                       (default en-US:natural:male:Aaron:premium:5030)
-#   speak-clipboard --reset KEY         back to the default: rate, volume, voice, all
+#   speak-clipboard --reset KEY         back to the recommended value:
+#                                       rate, volume, voice, or all
 #   speak-clipboard --voices            list the installed Siri voices, numbered,
 #                                       with the one in use marked
 #
@@ -292,7 +292,7 @@ while [ $# -gt 0 ]; do
         --get)   mode="get"; set_key="${2:-all}"; shift; [ $# -eq 0 ] || shift ;;
         --set)   [ $# -ge 3 ] || { echo "speak-clipboard: --set needs a name and a value, e.g. --set rate 380" >&2; exit 1; }; mode="set"; set_key="$2"; set_value="$3"; shift 3 ;;
         --reset) [ $# -ge 2 ] || { echo "speak-clipboard: --reset needs rate, volume, voice or all" >&2; exit 1; }; mode="reset"; set_key="$2"; shift 2 ;;
-        -h|--help) sed -n '/^# USAGE/,/^# EXIT/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) mode="help"; shift ;;
         *) echo "speak-clipboard: unknown option '$1'" >&2; exit 1 ;;
     esac
 done
@@ -510,6 +510,21 @@ show_settings() {
     fi
     [ -z "$_bad_settings" ] || echo "ignored: saved $_bad_settings not valid, default used instead (fix with --set)"
     echo "file    $(_tilde "$_settings_file")"
+}
+
+# --help's middle section. Printed from the _default_* values, not typed into
+# the USAGE text, so the help can never disagree with what a press uses.
+show_recommended() {
+    local f='  %-8s %-31s %s\n' mark
+    echo "RECOMMENDED VALUES (the defaults, tuned by ear; --reset all returns to them)"
+    printf "$f" "" "recommended" "now"
+    mark=" (default)"; [ -n "$saved_rate" ] && mark=" (saved)"; [ -n "$cli_rate" ] && mark=" (this press)"
+    printf "$f" rate "$_default_rate wpm" "$rate wpm$mark"
+    mark=" (default)"; [ -n "$saved_volume" ] && mark=" (saved)"; [ -n "$cli_volume" ] && mark=" (this press)"
+    printf "$f" volume "$_default_volume of 100" "$volume of 100$mark"
+    mark=" (default)"; [ -n "$saved_voice" ] && mark=" (saved)"
+    printf "$f" voice "$(_voice_label "$_default_voice")" "$(_voice_label "$_preferred_voice")$mark"
+    echo
 }
 
 
@@ -863,6 +878,13 @@ clean_input() {
 # A --set or --reset re-runs this script as --settings, so what it prints is
 # read back from the file just written, not from memory.
 case "$mode" in
+    help)
+        # The USAGE text from the header, then the recommended values, then
+        # the exit codes. Each sed range drops its closing heading line.
+        sed -n '/^# USAGE/,/^# EXIT CODES/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
+        show_recommended
+        sed -n '/^# EXIT CODES/,/^# SETTINGS FILE/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
+        exit 0 ;;
     settings) show_settings; exit 0 ;;
     get)
         case "$set_key" in
