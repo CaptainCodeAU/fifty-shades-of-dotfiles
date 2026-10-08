@@ -353,6 +353,9 @@ elif [ -e "$_settings_file" ]; then
 else
     _file_state="missing"
 fi
+# o_* keep the values as read, for the WARNING lines: a --set or --reset
+# changes f_* before BEFORE is printed.
+o_rate="$f_rate"; o_volume="$f_volume"; o_voice="$f_voice"
 _bad_settings=""; _missing_settings=""
 saved_rate=""; saved_volume=""; saved_voice=""
 if [ "$_file_state" = "ok" ]; then
@@ -576,7 +579,7 @@ show_settings() {
         fi
     fi
     for k in ${_bad_settings//,/ }; do
-        eval "raw=\$f_$k"
+        eval "raw=\$o_$k"
         echo "WARNING $k=$raw in the file is not valid: the recommended value is used (exit 10). Fix: speak-clipboard --set $k ..."
     done
     case "$_file_note" in
