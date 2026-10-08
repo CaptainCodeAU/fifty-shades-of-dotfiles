@@ -730,37 +730,38 @@ _send_notification() {
         -e 'end run' "$1" "$2" >/dev/null 2>&1
 }
 
-# What a --set or --reset changed, one short notification: "Rate 420 -> 440
-# wpm". A step that hit a limit says so instead of reporting no change.
+# What a --set or --reset changed, as one notification: "Rate: 420 -> 440
+# wpm". A step that hit a limit says "No change" and names the limit.
 _notify_change() {
-    local b_rate="" b_volume="" b_voice="" b_notify="" body=""
+    local b_rate="" b_volume="" b_voice="" b_notify="" body="" nl=$'\n'
     [ -z "${_SPEAK_CLIPBOARD_BEFORE:-}" ] || IFS='|' read -r b_rate b_volume b_voice b_notify <<<"$_SPEAK_CLIPBOARD_BEFORE"
-    # Only ever called with notify on, so a change here means it was just
-    # turned on; turning it off sends nothing, by its own rule.
-    [ "$b_notify" = "$notify_saved" ] || body="notifications on"
-    [ "$b_rate" = "$rate" ] || body="${body:+$body, }rate $b_rate -> $rate wpm"
-    [ "$b_volume" = "$volume" ] || body="${body:+$body, }volume $b_volume -> $volume"
-    [ "$b_voice" = "$_preferred_voice" ] || body="${body:+$body, }voice $(_voice_name "$b_voice") -> $(_voice_name "$_preferred_voice")"
+    # One change per line (Gavin's ask, 2026-10-08). Only ever called with
+    # notify on, so a notify change here means it was just turned on;
+    # turning it off sends nothing, by its own rule.
+    [ "$b_rate" = "$rate" ] || body="Rate: $b_rate -> $rate wpm"
+    [ "$b_volume" = "$volume" ] || body="${body:+$body$nl}Volume: $b_volume -> $volume"
+    [ "$b_voice" = "$_preferred_voice" ] || body="${body:+$body$nl}Voice: $(_voice_name "$b_voice") -> $(_voice_name "$_preferred_voice")"
+    [ "$b_notify" = "$notify_saved" ] || body="${body:+$body$nl}Notifications: on"
     if [ -z "$body" ]; then
-        body="no change: rate $rate wpm, volume $volume"
-        case "$rate" in 1|700) body="$body (rate limit is 1-700)" ;; esac
-        case "$volume" in 0|100) body="$body (volume limit is 0-100)" ;; esac
+        body="No change"
+        case "$rate" in 1|700) body="$body${nl}Rate: $rate wpm (limit 1-700)" ;; esac
+        case "$volume" in 0|100) body="$body${nl}Volume: $volume (limit 0-100)" ;; esac
     fi
-    body="$(printf '%s' "${body:0:1}" | tr '[:lower:]' '[:upper:]')${body:1}"   # first letter up
     _send_notification "Speak clipboard" "$body"
 }
 
 # The current settings as one notification, for `--notify --settings`
-# (Gavin's ask, 2026-10-08: ctrl+alt+9 in herdr). It shows whatever the
-# notify setting says, because asking for it is the point. A problem the
-# --settings box would warn about is flagged, not spelled out.
+# (Gavin's ask, 2026-10-08: ctrl+alt+9 in herdr), one setting per line. It
+# shows whatever the notify setting says, because asking for it is the
+# point. A problem the --settings box would warn about is flagged, not
+# spelled out.
 _notify_summary() {
-    local body problem=""
-    body="Rate $rate wpm, volume $volume, voice $(_voice_name "$_preferred_voice"), notifications $notify_saved"
+    local body problem="" nl=$'\n'
+    body="Rate: $rate wpm${nl}Volume: $volume${nl}Voice: $(_voice_name "$_preferred_voice")${nl}Notifications: $notify_saved"
     [ -z "$_bad_settings" ] || problem="bad value in the file: $_bad_settings"
     [ "$_file_state" != "unusable" ] || problem="settings file unusable, defaults in use"
-    [ -z "$problem" ] || body="$body. Problem: $problem (run speak-clipboard --settings)"
-    _send_notification "Speak clipboard" "$body"
+    [ -z "$problem" ] || body="$body${nl}Problem: $problem (run speak-clipboard --settings)"
+    _send_notification "Speak clipboard settings" "$body"
 }
 
 _die_with_help() {
