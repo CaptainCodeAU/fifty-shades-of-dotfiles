@@ -223,8 +223,8 @@
 #   speak-clipboard --set voice V       save a voice: its number or name from
 #                                       --voices, or its full key
 #   speak-clipboard --reset KEY         back to the recommended value:
-#                                       rate, volume, voice, or all; prints
-#                                       the values before and after
+#                                       rate, volume, voice, or all
+#   (--set and --reset both print the values before and after)
 #   speak-clipboard --voices            list the installed Siri voices, numbered,
 #                                       with the one in use marked
 #
@@ -876,8 +876,20 @@ clean_input() {
 # ---------------------------------------------------------------------------
 # Modes
 # ---------------------------------------------------------------------------
-# A --set or --reset re-runs this script as --settings, so what it prints is
-# read back from the file just written, not from memory.
+# Every --set and --reset prints BEFORE, then saves, then AFTER (Gavin's ask,
+# 2026-10-08). BEFORE is the saved state, so a --rate or --volume on the same
+# command does not show in it. AFTER re-runs this script as --settings, so it
+# is read back from the file just written, not from memory.
+_save_showing_change() {
+    rate="${saved_rate:-$_default_rate}"; volume="${saved_volume:-$_default_volume}"
+    echo "BEFORE"
+    show_settings | sed '/^file /d'
+    echo
+    _write_settings || exit 1
+    echo "AFTER"
+    exec "$0" --settings
+}
+
 case "$mode" in
     help)
         # The USAGE text from the header, then the recommended values, then
@@ -907,8 +919,7 @@ case "$mode" in
                     f_voice="$_picked_voice" ;;
             *) echo "speak-clipboard: --set takes rate, volume or voice, not '$set_key'" >&2; exit 1 ;;
         esac
-        _write_settings || exit 1
-        exec "$0" --settings ;;
+        _save_showing_change ;;
     reset)
         case "$set_key" in
             rate)   f_rate="" ;;
@@ -917,15 +928,7 @@ case "$mode" in
             all)    f_rate=""; f_volume=""; f_voice="" ;;
             *) echo "speak-clipboard: --reset takes rate, volume, voice or all, not '$set_key'" >&2; exit 1 ;;
         esac
-        # Before, then after (Gavin's ask, 2026-10-08). "Before" is the saved
-        # state, so a --rate or --volume on the same command does not show.
-        rate="${saved_rate:-$_default_rate}"; volume="${saved_volume:-$_default_volume}"
-        echo "BEFORE"
-        show_settings | sed '/^file /d'
-        echo
-        _write_settings || exit 1
-        echo "AFTER"
-        exec "$0" --settings ;;
+        _save_showing_change ;;
 esac
 
 if [ "$mode" = "print" ]; then
