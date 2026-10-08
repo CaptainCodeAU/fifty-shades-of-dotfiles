@@ -234,7 +234,9 @@
 #   (--set and --reset show each value they change as "old -> new")
 #   --notify / --no-notify              add to a --set or --reset to show or
 #                                       skip the notification this once,
-#                                       whatever the notify setting says
+#                                       whatever the notify setting says;
+#   speak-clipboard --notify --settings also show the settings as a
+#                                       notification, whatever notify says
 #   speak-clipboard --voices            list the installed Siri voices, numbered,
 #                                       with the one in use marked
 #
@@ -748,6 +750,19 @@ _notify_change() {
     _send_notification "Speak clipboard" "$body"
 }
 
+# The current settings as one notification, for `--notify --settings`
+# (Gavin's ask, 2026-10-08: ctrl+alt+9 in herdr). It shows whatever the
+# notify setting says, because asking for it is the point. A problem the
+# --settings box would warn about is flagged, not spelled out.
+_notify_summary() {
+    local body problem=""
+    body="Rate $rate wpm, volume $volume, voice $(_voice_name "$_preferred_voice"), notifications $notify_saved"
+    [ -z "$_bad_settings" ] || problem="bad value in the file: $_bad_settings"
+    [ "$_file_state" != "unusable" ] || problem="settings file unusable, defaults in use"
+    [ -z "$problem" ] || body="$body. Problem: $problem (run speak-clipboard --settings)"
+    _send_notification "Speak clipboard" "$body"
+}
+
 _die_with_help() {
     { echo "speak-clipboard: $2"; echo; _print_help; } >&2
     exit "$1"
@@ -1120,7 +1135,14 @@ _ensure_settings_file
 
 case "$mode" in
     help) _print_help; exit 0 ;;
-    settings) show_settings; [ "$notify" != "on" ] || [ -z "${_SPEAK_CLIPBOARD_BEFORE:-}" ] || _notify_change; exit 0 ;;
+    settings)
+        show_settings
+        if [ -n "${_SPEAK_CLIPBOARD_BEFORE:-}" ]; then
+            [ "$notify" != "on" ] || _notify_change          # after a --set or --reset
+        elif [ "$cli_notify" = "on" ]; then
+            _notify_summary                                  # --notify --settings
+        fi
+        exit 0 ;;
     get)
         case "$set_key" in
             rate)   echo "$rate" ;;

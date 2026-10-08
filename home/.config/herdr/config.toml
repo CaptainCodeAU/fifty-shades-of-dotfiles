@@ -211,6 +211,13 @@ key = "ctrl+alt+4"
 type = "shell"
 command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --set volume +10'"
 
+# ctrl+alt+9: show the current settings as a notification, even with the
+# notify setting off (--notify overrides it for this one command).
+[[keys.command]]
+key = "ctrl+alt+9"
+type = "shell"
+command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --notify --settings'"
+
 [[keys.command]]
 key = "ctrl+alt+0"
 type = "shell"
