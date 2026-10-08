@@ -242,6 +242,7 @@
 #    4  the settings file could not be written
 #    5  voices not listed: say2 missing, or it cannot reach the speech
 #       service (it cannot inside a Claude Code sandbox)
+#
 #   Spoke, but with a fallback (the log line names every problem; the
 #   lowest code wins):
 #   10  a value in the file is bad or missing: the recommended one was used
