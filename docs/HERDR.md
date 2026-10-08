@@ -920,7 +920,7 @@ which:
    plays at 60 of 100 under the system volume (`--volume N`, streaming path
    only; about -4.4 dB), so it can sit a little below everything else.
    Rate, volume and voice can be saved for every press, the hotkey included
-   (since 2026-10-08): `speak-clipboard --settings` shows them,
+   (since 2026-10-08): `speak-clipboard --settings` shows them, `--get [KEY]` prints the bare values,
    `--set rate|volume|voice V` and `--reset KEY` change them, `--voices`
    lists the installed Siri voices by number. They live in
    `~/.config/speak-clipboard/settings`;
