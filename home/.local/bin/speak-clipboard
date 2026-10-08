@@ -223,7 +223,8 @@
 #   speak-clipboard --set voice V       save a voice: its number or name from
 #                                       --voices, or its full key
 #   speak-clipboard --reset KEY         back to the recommended value:
-#                                       rate, volume, voice, or all
+#                                       rate, volume, voice, or all; prints
+#                                       the values before and after
 #   speak-clipboard --voices            list the installed Siri voices, numbered,
 #                                       with the one in use marked
 #
@@ -916,7 +917,14 @@ case "$mode" in
             all)    f_rate=""; f_volume=""; f_voice="" ;;
             *) echo "speak-clipboard: --reset takes rate, volume, voice or all, not '$set_key'" >&2; exit 1 ;;
         esac
+        # Before, then after (Gavin's ask, 2026-10-08). "Before" is the saved
+        # state, so a --rate or --volume on the same command does not show.
+        rate="${saved_rate:-$_default_rate}"; volume="${saved_volume:-$_default_volume}"
+        echo "BEFORE"
+        show_settings | sed '/^file /d'
+        echo
         _write_settings || exit 1
+        echo "AFTER"
         exec "$0" --settings ;;
 esac
 
