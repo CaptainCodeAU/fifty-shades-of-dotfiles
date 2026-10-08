@@ -918,7 +918,12 @@ which:
    its own playback renders everything first). Without `ffplay`, or with an
    explicit `--voice`, it falls back to say2's own slower playback. Speech
    plays at 60 of 100 under the system volume (`--volume N`, streaming path
-   only; about -4.4 dB), so it can sit a little below everything else;
+   only; about -4.4 dB), so it can sit a little below everything else.
+   Rate, volume and voice can be saved for every press, the hotkey included
+   (since 2026-10-08): `speak-clipboard --settings` shows them,
+   `--set rate|volume|voice V` and `--reset KEY` change them, `--voices`
+   lists the installed Siri voices by number. They live in
+   `~/.config/speak-clipboard/settings`;
 3. applies the toggle rule: **any** press while it speaks = stop, whatever the
    clipboard holds; the next press speaks the current selection (since
    2026-09-28; before that, a press with new text replaced the speech).

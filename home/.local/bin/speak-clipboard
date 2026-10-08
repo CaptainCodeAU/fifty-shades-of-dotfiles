@@ -206,23 +206,51 @@
 #   speak-clipboard --print      print what WOULD be spoken (no audio)
 #   speak-clipboard --stdin      read text from stdin instead of the clipboard
 #                                (for tests; combine with --print/--toggle)
-#   speak-clipboard --rate N     words per minute (default: 420)
-#   speak-clipboard --volume N   speech volume 0-100 under the system volume
-#                                (default: 60; streaming path only)
-#   speak-clipboard --voice KEY  say2 voice asset key or display name -- bypasses
-#                                the Aaron/Simone/say fallback chain entirely
-#                                (default when omitted: en-US:natural:male:Aaron:premium:5030,
-#                                falling back through Simone to `say`/Samantha)
+#   speak-clipboard --rate N     words per minute, this press only (1-700)
+#   speak-clipboard --volume N   speech volume 0-100 under the system volume,
+#                                this press only (streaming path only)
+#   speak-clipboard --voice KEY  say2 voice asset key or display name, this press
+#                                only -- bypasses the fallback chain entirely
+#
+# SAVED SETTINGS (used by every press, the hotkey included)
+#   speak-clipboard --settings          show rate, volume and voice, and where
+#                                       each one comes from (saved or default)
+#   speak-clipboard --set rate N        save words per minute (1-700; default 420)
+#   speak-clipboard --set volume N      save volume 0-100 (default 60)
+#   speak-clipboard --set voice V       save a voice: its number or name from
+#                                       --voices, or its full key
+#                                       (default en-US:natural:male:Aaron:premium:5030)
+#   speak-clipboard --reset KEY         back to the default: rate, volume, voice, all
+#   speak-clipboard --voices            list the installed Siri voices, numbered,
+#                                       with the one in use marked
 #
 # EXIT CODES
-#   0  spoke, stopped, replaced, or printed (or lost the lock: busy)
-#   1  nothing to say (clipboard empty, or empty once cleaned)
+#   0  spoke, stopped, replaced, printed, or a settings command worked
+#      (or lost the lock: busy)
+#   1  nothing to say (clipboard empty, or empty once cleaned), a bad
+#      option or value, or say2 could not list its voices
+#
+# SETTINGS FILE (v6, 2026-10-08, Gavin's ask: change speed, volume and voice
+# without editing this script). ~/.config/speak-clipboard/settings holds
+# key=value lines for rate, volume and voice; a key that is absent uses the
+# default above. Only --set and --reset write it, and they check the value
+# first. A press reads it with shell builtins (no fork). A hand-edited value
+# that fails the same check is ignored for the default and noted in the log
+# (settings=bad:<key>), never a silent hotkey failure. A saved voice goes to
+# the FRONT of the fallback chain (saved, Aaron, Simone, `say`), so it keeps
+# streaming and still falls back if it disappears. Every installed Siri voice
+# streams the same 48 kHz mono 16-bit PCM (MEASURED 2026-10-08, all four
+# English voices), so ffplay's fixed -ar 48000 holds for any of them.
+# The 700 ceiling is say2's own: -r 875 exits 2, "between 0 and 700".
+# say2 lists NO voices inside a Claude sandbox (it cannot reach the speech
+# daemon), so --voices and --set voice refuse there instead of saying none.
 #
 # STATE (all under ~/.local/state/herdr/, nothing here ever contains text)
 #   speak-clipboard.log    one line per press: when, mode, ppid, outcome, chars
 #   speak-render.log       the speaker's stderr, for diagnostics only
 #   speak-render.pid       the last speaker's pid (line 1) and start time (line 2)
 #   speak-engine.cache     resolve_engine()'s cached choice, refreshed daily
+#                          or when the saved voice changes
 #   speak-clipboard.flock  empty; flock'd for one run of this script
 #   (speak-render.hash and a speak-clipboard.lock/ folder are pre-v4.5
 #    leftovers, no longer read or written)
@@ -237,11 +265,15 @@ set -uo pipefail
 _default_voice="en-US:natural:male:Aaron:premium:5030"
 _secondary_voice="en-US:natural:female:Simone:premium:5029"
 _say_fallback_voice="Samantha"
-rate="420"
-volume="60"
+_default_rate="420"
+_default_volume="60"
+cli_rate=""
+cli_volume=""
 voice=""
 mode="speak"
 from_stdin=0
+set_key=""
+set_value=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -249,18 +281,54 @@ while [ $# -gt 0 ]; do
         --stop)   mode="stop";   shift ;;
         --toggle) mode="toggle"; shift ;;
         --stdin)  from_stdin=1;  shift ;;
-        --rate)  [ $# -ge 2 ] || { echo "speak-clipboard: --rate needs a value" >&2; exit 1; }; rate="$2"; shift 2 ;;
-        --volume) [ $# -ge 2 ] || { echo "speak-clipboard: --volume needs a value" >&2; exit 1; }; volume="$2"; shift 2 ;;
+        --rate)  [ $# -ge 2 ] || { echo "speak-clipboard: --rate needs a value" >&2; exit 1; }; cli_rate="$2"; shift 2 ;;
+        --volume) [ $# -ge 2 ] || { echo "speak-clipboard: --volume needs a value" >&2; exit 1; }; cli_volume="$2"; shift 2 ;;
         --voice) [ $# -ge 2 ] || { echo "speak-clipboard: --voice needs a value" >&2; exit 1; }; voice="$2"; shift 2 ;;
+        --settings) mode="settings"; shift ;;
+        --voices)   mode="voices";   shift ;;
+        --set)   [ $# -ge 3 ] || { echo "speak-clipboard: --set needs a name and a value, e.g. --set rate 380" >&2; exit 1; }; mode="set"; set_key="$2"; set_value="$3"; shift 3 ;;
+        --reset) [ $# -ge 2 ] || { echo "speak-clipboard: --reset needs rate, volume, voice or all" >&2; exit 1; }; mode="reset"; set_key="$2"; shift 2 ;;
         -h|--help) sed -n '/^# USAGE/,/^# EXIT/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "speak-clipboard: unknown option '$1'" >&2; exit 1 ;;
     esac
 done
 
-case "$volume" in
-    ''|*[!0-9]*) echo "speak-clipboard: --volume takes a whole number 0-100" >&2; exit 1 ;;
-esac
-[ "$volume" -le 100 ] || { echo "speak-clipboard: --volume takes a whole number 0-100" >&2; exit 1; }
+# The same checks guard a --rate/--volume flag, a --set, and a value read
+# back from the settings file. Five digits or more is refused before `[`
+# sees it, so a huge number is "not a number", not a test error.
+_valid_rate()   { case "$1" in ''|*[!0-9]*|?????*) return 1 ;; esac; [ "$1" -ge 1 ] && [ "$1" -le 700 ]; }
+_valid_volume() { case "$1" in ''|*[!0-9]*|?????*) return 1 ;; esac; [ "$1" -le 100 ]; }
+_valid_voice()  { case "$1" in ''|*'|'*) return 1 ;; esac; }   # '|' would break the engine cache line
+
+if [ -n "$cli_rate" ] && ! _valid_rate "$cli_rate"; then
+    echo "speak-clipboard: --rate takes a whole number 1-700 (say2's own limit)" >&2; exit 1
+fi
+if [ -n "$cli_volume" ] && ! _valid_volume "$cli_volume"; then
+    echo "speak-clipboard: --volume takes a whole number 0-100" >&2; exit 1
+fi
+
+# Saved settings (v6). f_* hold the file's lines exactly as written, so a
+# --set of one key rewrites the others untouched; saved_* hold only the ones
+# that pass the checks, and a failing one is named in _bad_settings.
+_settings_file="${XDG_CONFIG_HOME:-$HOME/.config}/speak-clipboard/settings"
+f_rate=""; f_volume=""; f_voice=""
+if [ -f "$_settings_file" ]; then
+    while IFS='=' read -r _k _v || [ -n "$_k" ]; do
+        case "$_k" in
+            rate)   f_rate="$_v" ;;
+            volume) f_volume="$_v" ;;
+            voice)  f_voice="$_v" ;;
+        esac
+    done <"$_settings_file"
+fi
+_bad_settings=""
+saved_rate="";   if [ -n "$f_rate" ];   then if _valid_rate "$f_rate";     then saved_rate="$f_rate";     else _bad_settings="${_bad_settings:+$_bad_settings,}rate"; fi; fi
+saved_volume=""; if [ -n "$f_volume" ]; then if _valid_volume "$f_volume"; then saved_volume="$f_volume"; else _bad_settings="${_bad_settings:+$_bad_settings,}volume"; fi; fi
+saved_voice="";  if [ -n "$f_voice" ];  then if _valid_voice "$f_voice";   then saved_voice="$f_voice";   else _bad_settings="${_bad_settings:+$_bad_settings,}voice"; fi; fi
+
+rate="${cli_rate:-${saved_rate:-$_default_rate}}"
+volume="${cli_volume:-${saved_volume:-$_default_volume}}"
+_preferred_voice="${saved_voice:-$_default_voice}"
 
 _state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/herdr"
 _trace_file="$_state_dir/speak-clipboard.log"
@@ -279,16 +347,21 @@ _max_chars=8000
 # voice heals itself within a day instead of failing forever. Sets _engine
 # (say2 or say) and _engine_voice. Skipped entirely when --voice overrides the
 # default: an explicit voice is trusted as-is, straight to say2, no fallback.
+# The cache line's fourth field is the voice it was resolved FOR (v6): a
+# --set voice changes _preferred_voice, the fields no longer match, and the
+# next press probes again instead of waiting out the day. A pre-v6 line has
+# three fields, so it is re-probed once.
 resolve_engine() {
     if [ -n "$voice" ]; then
         _engine="say2"; _engine_voice="$voice"
         return
     fi
-    local now cached_at cached_engine cached_voice
+    local now cached_at cached_engine cached_voice cached_for
     now="$(date +%s)"
     if [ -f "$_engine_cache" ]; then
-        { IFS='|' read -r cached_at cached_engine cached_voice <"$_engine_cache"; } 2>/dev/null || true
-        if [ -n "${cached_at:-}" ] && [ $((now - cached_at)) -lt "$_engine_cache_ttl" ]; then
+        { IFS='|' read -r cached_at cached_engine cached_voice cached_for <"$_engine_cache"; } 2>/dev/null || true
+        if [ -n "${cached_at:-}" ] && [ "${cached_for:-}" = "$_preferred_voice" ] &&
+            [ $((now - cached_at)) -lt "$_engine_cache_ttl" ]; then
             _engine="$cached_engine"; _engine_voice="$cached_voice"
             return
         fi
@@ -296,15 +369,145 @@ resolve_engine() {
     _engine="say"; _engine_voice="$_say_fallback_voice"
     if command -v say2 >/dev/null 2>&1; then
         local v
-        for v in "$_default_voice" "$_secondary_voice"; do
+        for v in "$_preferred_voice" "$_default_voice" "$_secondary_voice"; do
             if say2 voices --status "$v" --json 2>/dev/null | grep -q '"state" *: *"installed"'; then
                 _engine="say2"; _engine_voice="$v"
                 break
             fi
         done
     fi
-    printf '%s|%s|%s\n' "$now" "$_engine" "$_engine_voice" >"$_engine_cache" 2>/dev/null || true
+    printf '%s|%s|%s|%s\n' "$now" "$_engine" "$_engine_voice" "$_preferred_voice" >"$_engine_cache" 2>/dev/null || true
 }
+
+# ---------------------------------------------------------------------------
+# Settings commands (v6). None of them takes the lock or touches speech.
+# ---------------------------------------------------------------------------
+
+# Fills _voice_keys with the full key of every installed Siri voice, in
+# say2's own order (that order is what the --voices numbers refer to). The
+# key is the last column of `say2 voices`; a line whose last word is not a
+# six-part key is a header or a message, and skipped.
+_load_voices() {
+    _voice_keys=()
+    if ! command -v say2 >/dev/null 2>&1; then
+        echo "speak-clipboard: say2 is not installed, so there are no Siri voices to list" >&2
+        return 1
+    fi
+    local line key
+    while IFS= read -r line; do
+        line="${line%"${line##*[![:space:]]}"}"
+        key="${line##* }"
+        case "$key" in *:*:*:*:*:*) _voice_keys+=("$key") ;; esac
+    done < <(say2 voices 2>/dev/null)
+    if [ ${#_voice_keys[@]} -eq 0 ]; then
+        echo "speak-clipboard: say2 listed no installed voices." >&2
+        echo "  Inside a Claude Code sandbox it cannot reach the speech daemon: run this in a normal terminal." >&2
+        echo "  In a normal terminal, it means no Siri voice is downloaded (System Settings > Accessibility > Spoken Content)." >&2
+        return 1
+    fi
+}
+
+# "Aaron (en-US, male, natural)" for a full key; anything else as it is.
+_voice_label() {
+    local lang tier gender name rest
+    case "$1" in
+        *:*:*:*:*:*) IFS=: read -r lang tier gender name rest <<<"$1"
+                     printf '%s (%s, %s, %s)' "$name" "$lang" "$gender" "$tier" ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+
+show_voices() {
+    _load_voices || return 1
+    local i=0 key lang tier gender name rest mark
+    printf '  %-3s %-8s %-9s %-7s %s\n' '#' NAME LANGUAGE GENDER TIER
+    for key in "${_voice_keys[@]}"; do
+        i=$((i + 1))
+        IFS=: read -r lang tier gender name rest <<<"$key"
+        mark=" "; [ "$key" = "$_preferred_voice" ] && mark="*"
+        printf '%s %-3s %-8s %-9s %-7s %s%s\n' "$mark" "$i" "$name" "$lang" "$gender" "$tier" \
+            "$([ "$mark" = "*" ] && printf '   (in use)')"
+    done
+    echo
+    echo "natural = the newer Siri voices (version 5000s); neuralAX = the older ones (1000s)."
+    echo "Change: speak-clipboard --set voice <number or name>"
+}
+
+# Turns a number, a name or a full key into a full key, in _picked_voice. A
+# name shared by two tiers (Aaron, Simone) picks the natural one.
+_pick_voice() {
+    local want="$1" key name first="" natural=""
+    _picked_voice=""
+    _load_voices || return 1
+    case "$want" in
+        ''|*[!0-9]*) ;;
+        *) if [ "$want" -ge 1 ] && [ "$want" -le ${#_voice_keys[@]} ]; then
+               _picked_voice="${_voice_keys[$((want - 1))]}"; return 0
+           fi
+           echo "speak-clipboard: no voice number $want; --voices lists 1-${#_voice_keys[@]}" >&2
+           return 1 ;;
+    esac
+    shopt -s nocasematch
+    for key in "${_voice_keys[@]}"; do
+        if [[ "$key" == "$want" ]]; then _picked_voice="$key"; break; fi
+        IFS=: read -r _ _ _ name _ <<<"$key"
+        if [[ "$name" == "$want" ]]; then
+            [ -z "$first" ] && first="$key"
+            case "$key" in *:natural:*) [ -z "$natural" ] && natural="$key" ;; esac
+        fi
+    done
+    shopt -u nocasematch
+    [ -z "$_picked_voice" ] && _picked_voice="${natural:-$first}"
+    if [ -z "$_picked_voice" ]; then
+        echo "speak-clipboard: no installed voice called '$want'; speak-clipboard --voices lists them" >&2
+        return 1
+    fi
+}
+
+# Rewrites the settings file from f_*. A temp file then a rename, so a
+# press never reads half a file; nothing is deleted (see NOTHING IS EVER
+# DELETED above).
+_write_settings() {
+    local tmp="$_settings_file.tmp"
+    mkdir -p "${_settings_file%/*}" 2>/dev/null
+    if {
+        echo "# speak-clipboard settings. Change with: speak-clipboard --set / --reset (--help)"
+        [ -n "$f_rate" ]   && echo "rate=$f_rate"
+        [ -n "$f_volume" ] && echo "volume=$f_volume"
+        [ -n "$f_voice" ]  && echo "voice=$f_voice"
+        true
+    } >"$tmp" 2>/dev/null && command mv -f "$tmp" "$_settings_file" 2>/dev/null; then
+        return 0
+    fi
+    echo "speak-clipboard: could not write $(_tilde "$_settings_file")" >&2
+    return 1
+}
+
+# A path with $HOME shown as ~ (a ~ in a ${x/..} replacement is
+# tilde-expanded straight back by bash).
+_tilde() {
+    case "$1" in
+        "$HOME"/*) printf '~/%s' "${1#"$HOME"/}" ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+
+# One line per setting: the value in use and where it came from.
+show_settings() {
+    local cached_at cached_engine cached_voice cached_for
+    printf 'rate    %-44s %s\n' "$rate wpm" "$([ -n "$saved_rate" ] && echo saved || echo default)"
+    printf 'volume  %-44s %s\n' "$volume of 100" "$([ -n "$saved_volume" ] && echo saved || echo default)"
+    printf 'voice   %-44s %s\n' "$(_voice_label "$_preferred_voice")" "$([ -n "$saved_voice" ] && echo saved || echo default)"
+    if [ -f "$_engine_cache" ]; then
+        { IFS='|' read -r cached_at cached_engine cached_voice cached_for <"$_engine_cache"; } 2>/dev/null || true
+        if [ "${cached_for:-}" = "$_preferred_voice" ] && [ "${cached_voice:-}" != "$_preferred_voice" ]; then
+            echo "        NOT INSTALLED: the last press fell back to $cached_engine, $(_voice_label "$cached_voice")"
+        fi
+    fi
+    [ -z "$_bad_settings" ] || echo "ignored: saved $_bad_settings not valid, default used instead (fix with --set)"
+    echo "file    $(_tilde "$_settings_file")"
+}
+
 
 # One line per press. A line here means the key reached herdr and this script
 # ran; no line means the key or the spawn is at fault. Never any text.
@@ -653,6 +856,35 @@ clean_input() {
 # ---------------------------------------------------------------------------
 # Modes
 # ---------------------------------------------------------------------------
+# A --set or --reset re-runs this script as --settings, so what it prints is
+# read back from the file just written, not from memory.
+case "$mode" in
+    settings) show_settings; exit 0 ;;
+    voices)   show_voices; exit $? ;;
+    set)
+        case "$set_key" in
+            rate)   _valid_rate "$set_value" || { echo "speak-clipboard: rate takes a whole number 1-700 (say2's own limit)" >&2; exit 1; }
+                    f_rate="$set_value" ;;
+            volume) _valid_volume "$set_value" || { echo "speak-clipboard: volume takes a whole number 0-100" >&2; exit 1; }
+                    f_volume="$set_value" ;;
+            voice)  _pick_voice "$set_value" || exit 1
+                    f_voice="$_picked_voice" ;;
+            *) echo "speak-clipboard: --set takes rate, volume or voice, not '$set_key'" >&2; exit 1 ;;
+        esac
+        _write_settings || exit 1
+        exec "$0" --settings ;;
+    reset)
+        case "$set_key" in
+            rate)   f_rate="" ;;
+            volume) f_volume="" ;;
+            voice)  f_voice="" ;;
+            all)    f_rate=""; f_volume=""; f_voice="" ;;
+            *) echo "speak-clipboard: --reset takes rate, volume, voice or all, not '$set_key'" >&2; exit 1 ;;
+        esac
+        _write_settings || exit 1
+        exec "$0" --settings ;;
+esac
+
 if [ "$mode" = "print" ]; then
     { IFS= read -r hash; IFS= read -r truncated; IFS= read -r chars; IFS= read -r text; } < <(clean_input)
     if [ -z "${text:-}" ]; then
@@ -692,5 +924,5 @@ if speaker_alive; then
 fi
 
 start_speaker
-trace "outcome=$outcome chars=$chars truncated=$truncated"
+trace "outcome=$outcome chars=$chars truncated=$truncated${_bad_settings:+ settings=bad:$_bad_settings}"
 exit 0
