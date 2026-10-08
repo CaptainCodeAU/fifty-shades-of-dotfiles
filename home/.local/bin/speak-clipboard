@@ -318,6 +318,20 @@ cli_notify="${_SPEAK_CLIPBOARD_NOTIFY:-}"     # on/off for this command only, or
 _usage_error=""; _usage_code=0
 _fail() { [ -n "$_usage_error" ] || { _usage_code="$1"; _usage_error="$2"; }; }
 
+# The message for a --set that is missing its value names what that setting
+# takes, with an example for it (Gavin, 2026-10-08: "--set voice" answered
+# with a rate example).
+_set_missing() {
+    case "${1:-}" in
+        rate)   echo "--set rate needs a number 1-700, or +N / -N to step, e.g. --set rate $_default_rate" ;;
+        volume) echo "--set volume needs a number 0-100, or +N / -N to step, e.g. --set volume $_default_volume" ;;
+        voice)  echo "--set voice needs a number from the list: run speak-clipboard --voices, then e.g. --set voice 6" ;;
+        notify) echo "--set notify needs on or off, e.g. --set notify off" ;;
+        '')     echo "--set needs a setting and a value: rate, volume, voice or notify, e.g. --set rate $_default_rate" ;;
+        *)      echo "--set takes rate, volume, voice or notify, not '$1'" ;;
+    esac
+}
+
 while [ $# -gt 0 ]; do
     case "$1" in
         --print)  mode="print";  shift ;;
@@ -332,7 +346,7 @@ while [ $# -gt 0 ]; do
         --no-notify) cli_notify="off"; shift ;;
         --voices)   mode="voices";   shift ;;
         --get)   mode="get"; set_key="${2:-all}"; shift; [ $# -eq 0 ] || shift ;;
-        --set)   [ $# -ge 3 ] || { _fail 2 "--set needs a name and a value, e.g. --set rate $_default_rate"; break; }; mode="set"; set_key="$2"; set_value="$3"; shift 3 ;;
+        --set)   [ $# -ge 3 ] || { _fail 2 "$(_set_missing "${2:-}")"; break; }; mode="set"; set_key="$2"; set_value="$3"; shift 3 ;;
         --reset) [ $# -ge 2 ] || { _fail 2 "--reset needs rate, volume, voice, notify or all"; break; }; mode="reset"; set_key="$2"; shift 2 ;;
         -h|--help) mode="help"; shift ;;
         *) _fail 2 "unknown option '$1'"; break ;;
