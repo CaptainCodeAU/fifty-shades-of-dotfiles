@@ -717,17 +717,21 @@ _step() {
     [ "$_stepped" -le "$4" ] || _stepped="$4"
 }
 
-# A notification, when notify is on (dotfiles-main Q7: 2). Through herdr when it
-# is running, which hands it to macOS ([ui.toast] delivery = "system" in
-# ~/.config/herdr/config.toml); otherwise straight to macOS. Text goes in as
-# osascript arguments, never pasted into the script, so a quote cannot break it.
+# A notification, when notify is on (dotfiles-main Q7: 2). Straight to macOS
+# through osascript, because herdr's `notification show` joins the lines of
+# the body into one: MEASURED 2026-10-08, the same four-line body arrived as
+# separate lines from osascript (newline or return, tests C and D) and as one
+# line through herdr (return or U+2028, tests A and B), dotfiles-main Q11.
+# herdr is the fallback if osascript fails. Text goes in as osascript
+# arguments, never pasted into the script, so a quote cannot break it.
+# macOS labels these "Script Editor".
 _send_notification() {
-    if command -v herdr >/dev/null 2>&1 &&
-        herdr notification show "$1" --body "$2" --sound none >/dev/null 2>&1; then
+    if osascript -e 'on run argv' -e 'display notification (item 2 of argv) with title (item 1 of argv)' \
+        -e 'end run' "$1" "$2" >/dev/null 2>&1; then
         return 0
     fi
-    osascript -e 'on run argv' -e 'display notification (item 2 of argv) with title (item 1 of argv)' \
-        -e 'end run' "$1" "$2" >/dev/null 2>&1
+    command -v herdr >/dev/null 2>&1 &&
+        herdr notification show "$1" --body "$2" --sound none >/dev/null 2>&1
 }
 
 # What a --set or --reset changed, as one notification: "Rate: 420 -> 440
