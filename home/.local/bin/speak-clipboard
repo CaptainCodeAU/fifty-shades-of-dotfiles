@@ -510,7 +510,11 @@ show_settings() {
         fi
     fi
     [ -z "$_bad_settings" ] || echo "ignored: saved $_bad_settings not valid, default used instead (fix with --set)"
-    echo "file    $(_tilde "$_settings_file")"
+    if [ -f "$_settings_file" ]; then
+        echo "file    $(_tilde "$_settings_file")"
+    else
+        echo "file    $(_tilde "$_settings_file")  (not created yet: nothing saved; the first --set makes it)"
+    fi
 }
 
 # --help's middle section. Printed from the _default_* values, not typed into
