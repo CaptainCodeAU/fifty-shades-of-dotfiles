@@ -218,8 +218,9 @@
 #                                       each is the recommended value, and any
 #                                       problem with the file
 #   speak-clipboard --get KEY           print one value alone: rate, volume or
-#                                       voice (its full key); with no KEY, all
-#                                       three as key=value lines
+#                                       voice (its full key); with no KEY or
+#                                       all, all three as key=value lines,
+#                                       then file= (the settings file)
 #   speak-clipboard --set rate N        save words per minute (1-700)
 #   speak-clipboard --set volume N      save volume 0-100
 #   speak-clipboard --set voice V       save a voice: its number or name from
@@ -986,7 +987,7 @@ case "$mode" in
             rate)   echo "$rate" ;;
             volume) echo "$volume" ;;
             voice)  echo "$_preferred_voice" ;;
-            all)    printf 'rate=%s\nvolume=%s\nvoice=%s\n' "$rate" "$volume" "$_preferred_voice" ;;
+            all)    printf 'rate=%s\nvolume=%s\nvoice=%s\nfile=%s\n' "$rate" "$volume" "$_preferred_voice" "$(_tilde "$_settings_file")" ;;
             *) echo "speak-clipboard: --get takes rate, volume or voice, not '$set_key'" >&2; exit 2 ;;
         esac
         exit 0 ;;
