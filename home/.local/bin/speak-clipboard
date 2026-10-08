@@ -224,8 +224,8 @@
 #                                       -N steps from the current value and
 #                                       stops at the limit (--set rate +20)
 #   speak-clipboard --set volume N      save volume 0-100; +N or -N steps
-#   speak-clipboard --set voice V       save a voice: its number or name from
-#                                       --voices, or its full key
+#   speak-clipboard --set voice N       save a voice by its number from
+#                                       --voices (names repeat, numbers do not)
 #   speak-clipboard --set notify on|off on: every --set and --reset also shows
 #                                       the change as a notification (what the
 #                                       herdr hotkeys rely on); off: never
@@ -248,7 +248,7 @@
 #    2  bad command: unknown option, missing value, or a wrong name after
 #       --set, --reset or --get
 #    3  bad value: rate not 1-700, volume not 0-100, notify not on/off, or
-#       no voice with that number or name
+#       no voice with that number
 #    4  the settings file could not be written
 #    5  voices not listed: say2 missing, or it cannot reach the speech
 #       service (it cannot inside a Claude Code sandbox)
@@ -506,39 +506,27 @@ show_voices() {
     done
     echo
     echo "${on}natural${off} = the newer, better Siri voices (version 5000s); neuralAX = the older ones (1000s)."
-    echo "Change: speak-clipboard --set voice <number or name>"
+    echo "Change: speak-clipboard --set voice <number>"
 }
 
-# Turns a number, a name or a full key into a full key, in _picked_voice. A
-# name shared by two tiers (Aaron, Simone) picks the natural one. Returns 3
-# for no such voice, 5 when say2 cannot list voices (the exit codes).
+# Turns a number from --voices into a full key, in _picked_voice. Numbers
+# only (Gavin's call, 2026-10-08): names repeat across tiers (two Aarons,
+# two Simones), so a name could pick the wrong one. Returns 3 for anything
+# else or a number not in the list, 5 when say2 cannot list voices.
 _pick_voice() {
-    local want="$1" key name first="" natural=""
+    local want="$1"
     _picked_voice=""
-    _load_voices || return 5
     case "$want" in
-        ''|*[!0-9]*) ;;
-        *) if [ "$want" -ge 1 ] && [ "$want" -le ${#_voice_keys[@]} ]; then
-               _picked_voice="${_voice_keys[$((want - 1))]}"; return 0
-           fi
-           echo "speak-clipboard: no voice number $want; --voices lists 1-${#_voice_keys[@]}" >&2
-           return 3 ;;
+        ''|*[!0-9]*|?????*)
+            echo "speak-clipboard: --set voice takes the number from speak-clipboard --voices, not '$want'" >&2
+            return 3 ;;
     esac
-    shopt -s nocasematch
-    for key in "${_voice_keys[@]}"; do
-        if [[ "$key" == "$want" ]]; then _picked_voice="$key"; break; fi
-        IFS=: read -r _ _ _ name _ <<<"$key"
-        if [[ "$name" == "$want" ]]; then
-            [ -z "$first" ] && first="$key"
-            case "$key" in *:natural:*) [ -z "$natural" ] && natural="$key" ;; esac
-        fi
-    done
-    shopt -u nocasematch
-    [ -z "$_picked_voice" ] && _picked_voice="${natural:-$first}"
-    if [ -z "$_picked_voice" ]; then
-        echo "speak-clipboard: no installed voice called '$want'; speak-clipboard --voices lists them" >&2
-        return 3
+    _load_voices || return 5
+    if [ "$want" -ge 1 ] && [ "$want" -le ${#_voice_keys[@]} ]; then
+        _picked_voice="${_voice_keys[$((want - 1))]}"; return 0
     fi
+    echo "speak-clipboard: no voice number $want; speak-clipboard --voices lists 1-${#_voice_keys[@]}" >&2
+    return 3
 }
 
 # Rewrites the settings file from f_*. A temp file then a rename, so a
