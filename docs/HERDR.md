@@ -923,7 +923,10 @@ which:
    (since 2026-10-08): `speak-clipboard --settings` shows them, `--get [KEY]` prints the bare values,
    `--set rate|volume|voice V` and `--reset KEY` change them, `--voices`
    lists the installed Siri voices by number. They live in
-   `~/.config/speak-clipboard/settings`;
+   `~/.config/speak-clipboard/settings`, which any run writes with the
+   recommended values if it is missing. A bad or missing value, a voice that
+   is not installed, or a file that cannot be read still speaks, with the
+   recommended value, and exits 10, 11 or 12 (`--help` lists every code);
 3. applies the toggle rule: **any** press while it speaks = stop, whatever the
    clipboard holds; the next press speaks the current selection (since
    2026-09-28; before that, a press with new text replaced the speech).
