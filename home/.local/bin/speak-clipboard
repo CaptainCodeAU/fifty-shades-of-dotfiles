@@ -470,19 +470,24 @@ _voice_label() {
     esac
 }
 
+# The natural tier (the better voices) is drawn in bold bright white
+# (Gavin's ask, 2026-10-08), only on a terminal and never with NO_COLOR set,
+# so a pipe or a script still gets plain text.
 show_voices() {
     _load_voices || return 5
-    local i=0 key lang tier gender name rest mark
+    local i=0 key lang tier gender name rest mark on="" off="" hi lo
+    if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then on=$'\e[1;97m'; off=$'\e[0m'; fi
     printf '  %-3s %-8s %-9s %-7s %s\n' '#' NAME LANGUAGE GENDER TIER
     for key in "${_voice_keys[@]}"; do
         i=$((i + 1))
         IFS=: read -r lang tier gender name rest <<<"$key"
         mark=" "; [ "$key" = "$_preferred_voice" ] && mark="*"
-        printf '%s %-3s %-8s %-9s %-7s %s%s\n' "$mark" "$i" "$name" "$lang" "$gender" "$tier" \
-            "$([ "$mark" = "*" ] && printf '   (in use)')"
+        hi=""; lo=""; [ "$tier" = "natural" ] && { hi="$on"; lo="$off"; }
+        printf '%s%s %-3s %-8s %-9s %-7s %s%s%s\n' "$hi" "$mark" "$i" "$name" "$lang" "$gender" "$tier" \
+            "$([ "$mark" = "*" ] && printf '   (in use)')" "$lo"
     done
     echo
-    echo "natural = the newer Siri voices (version 5000s); neuralAX = the older ones (1000s)."
+    echo "${on}natural${off} = the newer, better Siri voices (version 5000s); neuralAX = the older ones (1000s)."
     echo "Change: speak-clipboard --set voice <number or name>"
 }
 
