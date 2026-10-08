@@ -226,7 +226,7 @@
 #                                       --voices, or its full key
 #   speak-clipboard --reset KEY         write the default value back:
 #                                       rate, volume, voice, or all
-#   (--set and --reset both print the values before and after)
+#   (--set and --reset show each value they change as "old -> new")
 #   speak-clipboard --voices            list the installed Siri voices, numbered,
 #                                       with the one in use marked
 #
@@ -361,8 +361,8 @@ elif [ -e "$_settings_file" ]; then
 else
     _file_state="missing"
 fi
-# o_* keep the values as read, for the WARNING lines: a --set or --reset
-# changes f_* before BEFORE is printed.
+# o_* keep the values as read, for the WARNING lines, so they always show
+# the text that is in the file, never a value a --set or --reset put in f_*.
 o_rate="$f_rate"; o_volume="$f_volume"; o_voice="$f_voice"
 _bad_settings=""; _missing_settings=""
 saved_rate=""; saved_volume=""; saved_voice=""
@@ -575,26 +575,65 @@ _ensure_settings_file() {
     fi
 }
 
-# "(default)" when a value matches the built-in one, else "(changed)".
-_vs_default() { [ "$1" = "$2" ] && echo "(default)" || echo "(changed)"; }
+# "(default)" when a value matches the built-in one, else "(changed)"; with
+# a third argument, "(changed, default <it>)", so --settings says what the
+# default is (Gavin's pick, dotfiles-main Q6).
+_vs_default() {
+    if [ "$1" = "$2" ]; then echo "(default)"
+    elif [ -n "${3:-}" ]; then echo "(changed, default $3)"
+    else echo "(changed)"; fi
+}
 
-# The box's width: the three setting rows are this wide, and the top and
-# bottom rules are drawn to match (Gavin's layout, 2026-10-08).
+# The box is at least this wide; it grows to fit the longest row or the
+# file's path, and both rules are drawn to the same width (Gavin's layout,
+# 2026-10-08).
 _box_width=62
 
+# A voice key's display name alone ("Aaron"), or the value as it is.
+_voice_name() {
+    local name
+    case "$1" in
+        *:*:*:*:*:*) IFS=: read -r _ _ _ name _ <<<"$1"; printf '%s' "$name" ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+
 # The settings in a box: a top rule naming the file, one row per setting
-# with "(default)" or "(changed)", any problem each on its own line saying
-# what was used instead, then a bottom rule. $1, if given, goes after the
-# path: "before" and "after" for --set and --reset.
+# with "(default)" or "(changed, default ...)", any problem each on its own
+# line saying what was used instead, then a bottom rule. After a --set or
+# --reset, _SPEAK_CLIPBOARD_BEFORE holds the values before it
+# (rate|volume|voice), and a row that changed reads "old -> new" in bold
+# bright white (dotfiles-main Q6). The file's path is bold bright white too.
+# Colour only on a terminal and never with NO_COLOR set.
 show_settings() {
     local cached_at cached_engine cached_voice cached_for k raw top problems=""
-    top="__ Settings file: $(_tilde "$_settings_file")${1:+ ($1)} "
-    while [ ${#top} -lt $((_box_width - 3)) ]; do top="${top}_"; done
-    echo "${top}___"
+    local b_rate="" b_volume="" b_voice="" on="" off="" i w=44 width="$_box_width" n
+    local -a names=(rate volume voice) vals marks hot=("" "" "")
+    [ -z "${_SPEAK_CLIPBOARD_BEFORE:-}" ] || IFS='|' read -r b_rate b_volume b_voice <<<"$_SPEAK_CLIPBOARD_BEFORE"
+    if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then on=$'\e[1;97m'; off=$'\e[0m'; fi
+    vals[0]="$rate wpm";      marks[0]="$(_vs_default "$rate" "$_default_rate" "$_default_rate")"
+    vals[1]="$volume of 100"; marks[1]="$(_vs_default "$volume" "$_default_volume" "$_default_volume")"
+    vals[2]="$(_voice_label "$_preferred_voice")"
+    marks[2]="$(_vs_default "$_preferred_voice" "$_default_voice" "$(_voice_name "$_default_voice")")"
+    if [ -n "$b_rate" ] && [ "$b_rate" != "$rate" ]; then vals[0]="$b_rate -> $rate wpm"; hot[0]=1; fi
+    if [ -n "$b_volume" ] && [ "$b_volume" != "$volume" ]; then vals[1]="$b_volume -> $volume of 100"; hot[1]=1; fi
+    if [ -n "$b_voice" ] && [ "$b_voice" != "$_preferred_voice" ]; then
+        vals[2]="$(_voice_name "$b_voice") -> ${vals[2]}"; hot[2]=1
+    fi
+    for i in 0 1 2; do [ ${#vals[i]} -le "$w" ] || w=${#vals[i]}; done
+    for i in 0 1 2; do n=$((8 + w + 1 + ${#marks[i]})); [ "$n" -le "$width" ] || width=$n; done
+    top="__ Settings file: $(_tilde "$_settings_file") "
+    [ $((${#top} + 3)) -le "$width" ] || width=$((${#top} + 3))
+    printf '__ Settings file: %s%s%s %s\n' "$on" "$(_tilde "$_settings_file")" "$off" \
+        "$(printf '%*s' $((width - ${#top})) '' | tr ' ' _)"
     echo
-    printf 'rate    %-44s %s\n' "$rate wpm" "$(_vs_default "$rate" "$_default_rate")"
-    printf 'volume  %-44s %s\n' "$volume of 100" "$(_vs_default "$volume" "$_default_volume")"
-    printf 'voice   %-44s %s\n' "$(_voice_label "$_preferred_voice")" "$(_vs_default "$_preferred_voice" "$_default_voice")"
+    for i in 0 1 2; do
+        if [ -n "${hot[i]}" ]; then
+            printf '%s%-8s%-*s %s%s\n' "$on" "${names[i]}" "$w" "${vals[i]}" "${marks[i]}" "$off"
+        else
+            printf '%-8s%-*s %s\n' "${names[i]}" "$w" "${vals[i]}" "${marks[i]}"
+        fi
+    done
     if [ -f "$_engine_cache" ]; then
         { IFS='|' read -r cached_at cached_engine cached_voice cached_for <"$_engine_cache"; } 2>/dev/null || true
         if [ "${cached_for:-}" = "$_preferred_voice" ] && [ "${cached_voice:-}" != "$_preferred_voice" ]; then
@@ -613,7 +652,7 @@ show_settings() {
         problems="${problems}WARNING the file could not be read or created: default values used (exit 12)"$'\n'
     fi
     [ -z "$problems" ] || printf '\n%s' "$problems"
-    printf '%*s\n' "$_box_width" '' | tr ' ' _
+    printf '%*s\n' "$width" '' | tr ' ' _
     echo
 }
 
@@ -995,16 +1034,17 @@ clean_input() {
 # ---------------------------------------------------------------------------
 # Modes
 # ---------------------------------------------------------------------------
-# Every --set and --reset shows the settings box twice, "(before)" then
-# "(after)" (Gavin's ask, 2026-10-08). Before is the saved state, so a
-# --rate or --volume on the same command does not show in it. After re-runs
-# this script as --settings, so it is read back from the file just written,
-# not from memory; _SPEAK_CLIPBOARD_LABEL carries the word across the exec.
+# Every --set and --reset shows the values before and after (Gavin's ask,
+# 2026-10-08), as one box whose changed rows read "old -> new"
+# (dotfiles-main Q6). "Before" is the saved state, so a --rate or --volume
+# on the same command does not show in it. The box comes from re-running
+# this script as --settings, so "after" is read back from the file just
+# written, not from memory; _SPEAK_CLIPBOARD_BEFORE carries the old values
+# across the exec.
 _save_showing_change() {
-    rate="${saved_rate:-$_default_rate}"; volume="${saved_volume:-$_default_volume}"
-    show_settings before
+    local before="${saved_rate:-$_default_rate}|${saved_volume:-$_default_volume}|${saved_voice:-$_default_voice}"
     _write_settings || exit 4
-    _SPEAK_CLIPBOARD_LABEL=after exec "$0" --settings
+    _SPEAK_CLIPBOARD_BEFORE="$before" exec "$0" --settings
 }
 
 _ensure_settings_file
@@ -1013,7 +1053,7 @@ _ensure_settings_file
 
 case "$mode" in
     help) _print_help; exit 0 ;;
-    settings) show_settings "${_SPEAK_CLIPBOARD_LABEL:-}"; exit 0 ;;
+    settings) show_settings; exit 0 ;;
     get)
         case "$set_key" in
             rate)   echo "$rate" ;;
