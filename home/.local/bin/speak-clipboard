@@ -215,7 +215,7 @@
 # SAVED SETTINGS (~/.config/speak-clipboard/settings; every press, the hotkey
 # included, speaks with what it holds; any run writes it if it is missing)
 #   speak-clipboard --settings          show rate, volume and voice, whether
-#                                       each is the recommended value, and any
+#                                       each is the default value, and any
 #                                       problem with the file
 #   speak-clipboard --get KEY           print one value alone: rate, volume or
 #                                       voice (its full key); with no KEY or
@@ -225,7 +225,7 @@
 #   speak-clipboard --set volume N      save volume 0-100
 #   speak-clipboard --set voice V       save a voice: its number or name from
 #                                       --voices, or its full key
-#   speak-clipboard --reset KEY         write the recommended value back:
+#   speak-clipboard --reset KEY         write the default value back:
 #                                       rate, volume, voice, or all
 #   (--set and --reset both print the values before and after)
 #   speak-clipboard --voices            list the installed Siri voices, numbered,
@@ -246,21 +246,21 @@
 #
 #   Spoke, but with a fallback (the log line names every problem; the
 #   lowest code wins):
-#   10  a value in the file is bad or missing: the recommended one was used
+#   10  a value in the file is bad or missing: the default was used
 #   11  the saved voice is not installed: Aaron, Simone or Samantha was used
-#   12  the file could not be read or created: recommended values were used
+#   12  the file could not be read or created: default values were used
 #
 # SETTINGS FILE (v6, 2026-10-08, Gavin's ask: change speed, volume and voice
 # without editing this script; v7 the same day, dotfiles-main Q2 and Q3).
 # ~/.config/speak-clipboard/settings holds key=value lines for rate, volume
 # and voice, and is the one place a press takes them from. Any run writes it
-# with the recommended values if it is missing, and puts back a key that is
+# with the default values if it is missing, and puts back a key that is
 # absent; the _default_* values below exist only for that and as the safety
 # net. A press reads it with shell builtins (no fork). A hand-edited value
 # that fails its check is not used and not overwritten: the press speaks
-# with the recommended value, exits 10, logs settings=bad:<key>, and
+# with the default value, exits 10, logs settings=bad:<key>, and
 # --settings shows a WARNING line. Speech never stops because of the file:
-# a file that cannot be read or created means recommended values and exit
+# a file that cannot be read or created means default values and exit
 # 12, never a silent hotkey. A saved voice goes to
 # the FRONT of the fallback chain (saved, Aaron, Simone, `say`), so it keeps
 # streaming and still falls back if it disappears. Every installed Siri voice
@@ -300,22 +300,29 @@ from_stdin=0
 set_key=""
 set_value=""
 
+# A mistake in the command is recorded here, not reported: the message is
+# printed with the whole --help after it (Gavin's ask, 2026-10-08), and the
+# help needs the settings and functions loaded further down. _usage_error is
+# checked just before the modes run.
+_usage_error=""; _usage_code=0
+_fail() { [ -n "$_usage_error" ] || { _usage_code="$1"; _usage_error="$2"; }; }
+
 while [ $# -gt 0 ]; do
     case "$1" in
         --print)  mode="print";  shift ;;
         --stop)   mode="stop";   shift ;;
         --toggle) mode="toggle"; shift ;;
         --stdin)  from_stdin=1;  shift ;;
-        --rate)  [ $# -ge 2 ] || { echo "speak-clipboard: --rate needs a value" >&2; exit 2; }; cli_rate="$2"; shift 2 ;;
-        --volume) [ $# -ge 2 ] || { echo "speak-clipboard: --volume needs a value" >&2; exit 2; }; cli_volume="$2"; shift 2 ;;
-        --voice) [ $# -ge 2 ] || { echo "speak-clipboard: --voice needs a value" >&2; exit 2; }; voice="$2"; shift 2 ;;
+        --rate)  [ $# -ge 2 ] || { _fail 2 "--rate needs a value"; break; }; cli_rate="$2"; shift 2 ;;
+        --volume) [ $# -ge 2 ] || { _fail 2 "--volume needs a value"; break; }; cli_volume="$2"; shift 2 ;;
+        --voice) [ $# -ge 2 ] || { _fail 2 "--voice needs a value"; break; }; voice="$2"; shift 2 ;;
         --settings) mode="settings"; shift ;;
         --voices)   mode="voices";   shift ;;
         --get)   mode="get"; set_key="${2:-all}"; shift; [ $# -eq 0 ] || shift ;;
-        --set)   [ $# -ge 3 ] || { echo "speak-clipboard: --set needs a name and a value, e.g. --set rate 380" >&2; exit 2; }; mode="set"; set_key="$2"; set_value="$3"; shift 3 ;;
-        --reset) [ $# -ge 2 ] || { echo "speak-clipboard: --reset needs rate, volume, voice or all" >&2; exit 2; }; mode="reset"; set_key="$2"; shift 2 ;;
+        --set)   [ $# -ge 3 ] || { _fail 2 "--set needs a name and a value, e.g. --set rate $_default_rate"; break; }; mode="set"; set_key="$2"; set_value="$3"; shift 3 ;;
+        --reset) [ $# -ge 2 ] || { _fail 2 "--reset needs rate, volume, voice or all"; break; }; mode="reset"; set_key="$2"; shift 2 ;;
         -h|--help) mode="help"; shift ;;
-        *) echo "speak-clipboard: unknown option '$1'" >&2; exit 2 ;;
+        *) _fail 2 "unknown option '$1'"; break ;;
     esac
 done
 
@@ -327,10 +334,10 @@ _valid_volume() { case "$1" in ''|*[!0-9]*|?????*) return 1 ;; esac; [ "$1" -le 
 _valid_voice()  { case "$1" in ''|*'|'*) return 1 ;; esac; }   # '|' would break the engine cache line
 
 if [ -n "$cli_rate" ] && ! _valid_rate "$cli_rate"; then
-    echo "speak-clipboard: --rate takes a whole number 1-700 (say2's own limit)" >&2; exit 3
+    _fail 3 "--rate takes a whole number 1-700 (say2's own limit)"; cli_rate=""
 fi
 if [ -n "$cli_volume" ] && ! _valid_volume "$cli_volume"; then
-    echo "speak-clipboard: --volume takes a whole number 0-100" >&2; exit 3
+    _fail 3 "--volume takes a whole number 0-100"; cli_volume=""
 fi
 
 # The settings file (v7). f_* hold the file's lines exactly as written, so a
@@ -540,7 +547,7 @@ _tilde() {
     esac
 }
 
-# Writes a missing file with the recommended values, or puts back a key that
+# Writes a missing file with the default values, or puts back a key that
 # is absent from a readable one (v7, Gavin's call 2026-10-08, dotfiles-main
 # Q2: the file always holds all three). Runs once per invocation, before any
 # mode. A bad value is never overwritten here: f_* still hold it as typed.
@@ -564,49 +571,76 @@ _ensure_settings_file() {
     fi
 }
 
-# "(recommended)" when a value matches the built-in one, else "(changed)".
-_vs_recommended() { [ "$1" = "$2" ] && echo "(recommended)" || echo "(changed)"; }
+# "(default)" when a value matches the built-in one, else "(changed)".
+_vs_default() { [ "$1" = "$2" ] && echo "(default)" || echo "(changed)"; }
 
-# One line per setting: the value in use, and whether it is the recommended
-# one. Then one line per problem, each saying what was used instead.
+# The box's width: the three setting rows are this wide, and the top and
+# bottom rules are drawn to match (Gavin's layout, 2026-10-08).
+_box_width=62
+
+# The settings in a box: a top rule naming the file, one row per setting
+# with "(default)" or "(changed)", any problem each on its own line saying
+# what was used instead, then a bottom rule. $1, if given, goes after the
+# path: "before" and "after" for --set and --reset.
 show_settings() {
-    local cached_at cached_engine cached_voice cached_for k raw
-    printf 'rate    %-44s %s\n' "$rate wpm" "$(_vs_recommended "$rate" "$_default_rate")"
-    printf 'volume  %-44s %s\n' "$volume of 100" "$(_vs_recommended "$volume" "$_default_volume")"
-    printf 'voice   %-44s %s\n' "$(_voice_label "$_preferred_voice")" "$(_vs_recommended "$_preferred_voice" "$_default_voice")"
+    local cached_at cached_engine cached_voice cached_for k raw top problems=""
+    top="__ Settings file: $(_tilde "$_settings_file")${1:+ ($1)} "
+    while [ ${#top} -lt $((_box_width - 3)) ]; do top="${top}_"; done
+    echo "${top}___"
+    echo
+    printf 'rate    %-44s %s\n' "$rate wpm" "$(_vs_default "$rate" "$_default_rate")"
+    printf 'volume  %-44s %s\n' "$volume of 100" "$(_vs_default "$volume" "$_default_volume")"
+    printf 'voice   %-44s %s\n' "$(_voice_label "$_preferred_voice")" "$(_vs_default "$_preferred_voice" "$_default_voice")"
     if [ -f "$_engine_cache" ]; then
         { IFS='|' read -r cached_at cached_engine cached_voice cached_for <"$_engine_cache"; } 2>/dev/null || true
         if [ "${cached_for:-}" = "$_preferred_voice" ] && [ "${cached_voice:-}" != "$_preferred_voice" ]; then
-            echo "WARNING the voice is not installed: the last press used $cached_engine, $(_voice_label "$cached_voice") (exit 11)"
+            problems="${problems}WARNING the voice is not installed: the last press used $cached_engine, $(_voice_label "$cached_voice") (exit 11)"$'\n'
         fi
     fi
     for k in ${_bad_settings//,/ }; do
         eval "raw=\$o_$k"
-        echo "WARNING $k=$raw in the file is not valid: the recommended value is used (exit 10). Fix: speak-clipboard --set $k ..."
+        problems="${problems}WARNING $k=$raw in the file is not valid: the default is used (exit 10). Fix: speak-clipboard --set $k ..."$'\n'
     done
     case "$_file_note" in
-        created) echo "NOTE    the file did not exist: written now with the recommended values" ;;
-        added:*) echo "NOTE    missing from the file, put back with the recommended value: ${_file_note#added:}" ;;
+        created) problems="${problems}NOTE    the file did not exist: written now with the default values"$'\n' ;;
+        added:*) problems="${problems}NOTE    missing from the file, put back with the default value: ${_file_note#added:}"$'\n' ;;
     esac
     if [ "$_file_state" = "unusable" ]; then
-        echo "WARNING the file could not be read or created: recommended values used (exit 12)"
+        problems="${problems}WARNING the file could not be read or created: default values used (exit 12)"$'\n'
     fi
-    echo "file    $(_tilde "$_settings_file")"
+    [ -z "$problems" ] || printf '\n%s' "$problems"
+    printf '%*s\n' "$_box_width" '' | tr ' ' _
+    echo
 }
 
 # --help's middle section. Printed from the _default_* values, not typed into
 # the USAGE text, so the help can never disagree with what a press uses.
-show_recommended() {
+show_defaults() {
     local f='  %-8s %-31s %s\n' mark
-    echo "RECOMMENDED VALUES (built in; --reset all writes them back to the file)"
-    printf "$f" "" "recommended" "now"
-    mark=" $(_vs_recommended "$rate" "$_default_rate")"; [ -n "$cli_rate" ] && mark=" (this press)"
+    echo "DEFAULT VALUES (recommended, tuned by ear; --reset all writes them back)"
+    printf "$f" "" "default" "now"
+    mark=" $(_vs_default "$rate" "$_default_rate")"; [ -n "$cli_rate" ] && mark=" (this press)"
     printf "$f" rate "$_default_rate wpm" "$rate wpm$mark"
-    mark=" $(_vs_recommended "$volume" "$_default_volume")"; [ -n "$cli_volume" ] && mark=" (this press)"
+    mark=" $(_vs_default "$volume" "$_default_volume")"; [ -n "$cli_volume" ] && mark=" (this press)"
     printf "$f" volume "$_default_volume of 100" "$volume of 100$mark"
-    mark=" $(_vs_recommended "$_preferred_voice" "$_default_voice")"
+    mark=" $(_vs_default "$_preferred_voice" "$_default_voice")"
     printf "$f" voice "$(_voice_label "$_default_voice")" "$(_voice_label "$_preferred_voice")$mark"
     echo
+}
+
+# The whole --help: the USAGE text from the header, then the default values,
+# then the exit codes. Each sed range drops its closing heading line.
+_print_help() {
+    sed -n '/^# USAGE/,/^# EXIT CODES/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
+    show_defaults
+    sed -n '/^# EXIT CODES/,/^# SETTINGS FILE/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
+}
+
+# A mistake in the command (exit 2 or 3): the message, then the whole help,
+# so the usage is on screen without typing --help (Gavin's ask, 2026-10-08).
+_die_with_help() {
+    { echo "speak-clipboard: $2"; echo; _print_help; } >&2
+    exit "$1"
 }
 
 
@@ -957,50 +991,49 @@ clean_input() {
 # ---------------------------------------------------------------------------
 # Modes
 # ---------------------------------------------------------------------------
-# Every --set and --reset prints BEFORE, then saves, then AFTER (Gavin's ask,
-# 2026-10-08). BEFORE is the saved state, so a --rate or --volume on the same
-# command does not show in it. AFTER re-runs this script as --settings, so it
-# is read back from the file just written, not from memory.
+# Every --set and --reset shows the settings box twice, "(before)" then
+# "(after)" (Gavin's ask, 2026-10-08). Before is the saved state, so a
+# --rate or --volume on the same command does not show in it. After re-runs
+# this script as --settings, so it is read back from the file just written,
+# not from memory; _SPEAK_CLIPBOARD_LABEL carries the word across the exec.
 _save_showing_change() {
     rate="${saved_rate:-$_default_rate}"; volume="${saved_volume:-$_default_volume}"
-    echo "BEFORE"
-    show_settings | sed '/^file /d'
-    echo
+    show_settings before
     _write_settings || exit 4
-    echo "AFTER"
-    exec "$0" --settings
+    _SPEAK_CLIPBOARD_LABEL=after exec "$0" --settings
 }
 
 _ensure_settings_file
 
+[ -z "$_usage_error" ] || _die_with_help "$_usage_code" "$_usage_error"
+
 case "$mode" in
-    help)
-        # The USAGE text from the header, then the recommended values, then
-        # the exit codes. Each sed range drops its closing heading line.
-        sed -n '/^# USAGE/,/^# EXIT CODES/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
-        show_recommended
-        sed -n '/^# EXIT CODES/,/^# SETTINGS FILE/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
-        exit 0 ;;
-    settings) show_settings; exit 0 ;;
+    help) _print_help; exit 0 ;;
+    settings) show_settings "${_SPEAK_CLIPBOARD_LABEL:-}"; exit 0 ;;
     get)
         case "$set_key" in
             rate)   echo "$rate" ;;
             volume) echo "$volume" ;;
             voice)  echo "$_preferred_voice" ;;
             all)    printf 'rate=%s\nvolume=%s\nvoice=%s\nfile=%s\n' "$rate" "$volume" "$_preferred_voice" "$(_tilde "$_settings_file")" ;;
-            *) echo "speak-clipboard: --get takes rate, volume or voice, not '$set_key'" >&2; exit 2 ;;
+            *) _die_with_help 2 "--get takes rate, volume or voice, not '$set_key'" ;;
         esac
         exit 0 ;;
     voices)   show_voices; exit $? ;;
     set)
         case "$set_key" in
-            rate)   _valid_rate "$set_value" || { echo "speak-clipboard: rate takes a whole number 1-700 (say2's own limit)" >&2; exit 3; }
+            rate)   _valid_rate "$set_value" || _die_with_help 3 "rate takes a whole number 1-700 (say2's own limit)"
                     f_rate="$set_value" ;;
-            volume) _valid_volume "$set_value" || { echo "speak-clipboard: volume takes a whole number 0-100" >&2; exit 3; }
+            volume) _valid_volume "$set_value" || _die_with_help 3 "volume takes a whole number 0-100"
                     f_volume="$set_value" ;;
-            voice)  _pick_voice "$set_value" || exit $?
+            voice)  _pick_voice "$set_value"; rc=$?
+                    # 3 (no such voice) is a mistake in the command, so the
+                    # help follows _pick_voice's own message; 5 (say2 cannot
+                    # list voices) is not, and help would not fix it.
+                    if [ "$rc" -eq 3 ]; then { echo; _print_help; } >&2; fi
+                    [ "$rc" -eq 0 ] || exit "$rc"
                     f_voice="$_picked_voice" ;;
-            *) echo "speak-clipboard: --set takes rate, volume or voice, not '$set_key'" >&2; exit 2 ;;
+            *) _die_with_help 2 "--set takes rate, volume or voice, not '$set_key'" ;;
         esac
         _save_showing_change ;;
     reset)
@@ -1009,7 +1042,7 @@ case "$mode" in
             volume) f_volume="$_default_volume" ;;
             voice)  f_voice="$_default_voice" ;;
             all)    f_rate="$_default_rate"; f_volume="$_default_volume"; f_voice="$_default_voice" ;;
-            *) echo "speak-clipboard: --reset takes rate, volume, voice or all, not '$set_key'" >&2; exit 2 ;;
+            *) _die_with_help 2 "--reset takes rate, volume, voice or all, not '$set_key'" ;;
         esac
         _save_showing_change ;;
 esac
