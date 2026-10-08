@@ -183,7 +183,9 @@ command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --toggle'"
 # layout, 2026-10-08): 1 slower / 2 faster by 20 wpm, 3 quieter / 4 louder
 # by 10, 0 back to the defaults. Each saves to
 # ~/.config/speak-clipboard/settings and shows the change as a
-# notification (--notify), since a hotkey has no screen to print to. A new
+# notification, since a hotkey has no screen to print to; that follows the
+# notify setting (on by default; `speak-clipboard --set notify off` stops
+# it), so no --notify here, which would override an off. A new
 # rate or volume applies from the next speak press. Same Option-key caveat
 # as ctrl+alt+s above: if a digit shows no notification and
 # `speak-clipboard --settings` shows no change, the key never reached herdr;
@@ -192,27 +194,27 @@ command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --toggle'"
 [[keys.command]]
 key = "ctrl+alt+1"
 type = "shell"
-command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --notify --set rate -20'"
+command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --set rate -20'"
 
 [[keys.command]]
 key = "ctrl+alt+2"
 type = "shell"
-command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --notify --set rate +20'"
+command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --set rate +20'"
 
 [[keys.command]]
 key = "ctrl+alt+3"
 type = "shell"
-command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --notify --set volume -10'"
+command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --set volume -10'"
 
 [[keys.command]]
 key = "ctrl+alt+4"
 type = "shell"
-command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --notify --set volume +10'"
+command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --set volume +10'"
 
 [[keys.command]]
 key = "ctrl+alt+0"
 type = "shell"
-command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --notify --reset all'"
+command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --reset all'"
 
 [ui.toast]
 delivery = "system"

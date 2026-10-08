@@ -214,24 +214,27 @@
 #
 # SAVED SETTINGS (~/.config/speak-clipboard/settings; every press, the hotkey
 # included, speaks with what it holds; any run writes it if it is missing)
-#   speak-clipboard --settings          show rate, volume and voice, whether
-#                                       each is the default value, and any
+#   speak-clipboard --settings          show rate, volume, voice and notify,
+#                                       whether each is the default, and any
 #                                       problem with the file
-#   speak-clipboard --get KEY           print one value alone: rate, volume or
-#                                       voice (its full key); with no KEY or
-#                                       all, all three as key=value lines
+#   speak-clipboard --get KEY           print one value alone: rate, volume,
+#                                       voice (its full key) or notify; with
+#                                       no KEY or all, all four as key=value
 #   speak-clipboard --set rate N        save words per minute (1-700); +N or
 #                                       -N steps from the current value and
 #                                       stops at the limit (--set rate +20)
 #   speak-clipboard --set volume N      save volume 0-100; +N or -N steps
-#   speak-clipboard --notify ...        with --set or --reset: also show the
-#                                       change as a notification (for the
-#                                       herdr hotkeys, which have no screen)
 #   speak-clipboard --set voice V       save a voice: its number or name from
 #                                       --voices, or its full key
+#   speak-clipboard --set notify on|off on: every --set and --reset also shows
+#                                       the change as a notification (what the
+#                                       herdr hotkeys rely on); off: never
 #   speak-clipboard --reset KEY         write the default value back:
-#                                       rate, volume, voice, or all
+#                                       rate, volume, voice, notify, or all
 #   (--set and --reset show each value they change as "old -> new")
+#   --notify / --no-notify              add to a --set or --reset to show or
+#                                       skip the notification this once,
+#                                       whatever the notify setting says
 #   speak-clipboard --voices            list the installed Siri voices, numbered,
 #                                       with the one in use marked
 #
@@ -242,8 +245,8 @@
 #    1  nothing to say: clipboard empty, or empty once cleaned
 #    2  bad command: unknown option, missing value, or a wrong name after
 #       --set, --reset or --get
-#    3  bad value: rate not 1-700, volume not 0-100, or no voice with that
-#       number or name
+#    3  bad value: rate not 1-700, volume not 0-100, notify not on/off, or
+#       no voice with that number or name
 #    4  the settings file could not be written
 #    5  voices not listed: say2 missing, or it cannot reach the speech
 #       service (it cannot inside a Claude Code sandbox)
@@ -256,8 +259,8 @@
 #
 # SETTINGS FILE (v6, 2026-10-08, Gavin's ask: change speed, volume and voice
 # without editing this script; v7 the same day, dotfiles-main Q2 and Q3).
-# ~/.config/speak-clipboard/settings holds key=value lines for rate, volume
-# and voice, and is the one place a press takes them from. Any run writes it
+# ~/.config/speak-clipboard/settings holds key=value lines for rate, volume,
+# voice and notify, and is the one place they come from. Any run writes it
 # with the default values if it is missing, and puts back a key that is
 # absent; the _default_* values below exist only for that and as the safety
 # net. A press reads it with shell builtins (no fork). A hand-edited value
@@ -296,6 +299,7 @@ _secondary_voice="en-US:natural:female:Simone:premium:5029"
 _say_fallback_voice="Samantha"
 _default_rate="420"
 _default_volume="60"
+_default_notify="on"
 cli_rate=""
 cli_volume=""
 voice=""
@@ -303,7 +307,7 @@ mode="speak"
 from_stdin=0
 set_key=""
 set_value=""
-notify="${_SPEAK_CLIPBOARD_NOTIFY:-}"
+cli_notify="${_SPEAK_CLIPBOARD_NOTIFY:-}"     # on/off for this command only, or empty
 
 # A mistake in the command is recorded here, not reported: the message is
 # printed with the whole --help after it (Gavin's ask, 2026-10-08), and the
@@ -322,11 +326,12 @@ while [ $# -gt 0 ]; do
         --volume) [ $# -ge 2 ] || { _fail 2 "--volume needs a value"; break; }; cli_volume="$2"; shift 2 ;;
         --voice) [ $# -ge 2 ] || { _fail 2 "--voice needs a value"; break; }; voice="$2"; shift 2 ;;
         --settings) mode="settings"; shift ;;
-        --notify)   notify=1;        shift ;;
+        --notify)    cli_notify="on";  shift ;;
+        --no-notify) cli_notify="off"; shift ;;
         --voices)   mode="voices";   shift ;;
         --get)   mode="get"; set_key="${2:-all}"; shift; [ $# -eq 0 ] || shift ;;
         --set)   [ $# -ge 3 ] || { _fail 2 "--set needs a name and a value, e.g. --set rate $_default_rate"; break; }; mode="set"; set_key="$2"; set_value="$3"; shift 3 ;;
-        --reset) [ $# -ge 2 ] || { _fail 2 "--reset needs rate, volume, voice or all"; break; }; mode="reset"; set_key="$2"; shift 2 ;;
+        --reset) [ $# -ge 2 ] || { _fail 2 "--reset needs rate, volume, voice, notify or all"; break; }; mode="reset"; set_key="$2"; shift 2 ;;
         -h|--help) mode="help"; shift ;;
         *) _fail 2 "unknown option '$1'"; break ;;
     esac
@@ -338,6 +343,7 @@ done
 _valid_rate()   { case "$1" in ''|*[!0-9]*|?????*) return 1 ;; esac; [ "$1" -ge 1 ] && [ "$1" -le 700 ]; }
 _valid_volume() { case "$1" in ''|*[!0-9]*|?????*) return 1 ;; esac; [ "$1" -le 100 ]; }
 _valid_voice()  { case "$1" in ''|*'|'*) return 1 ;; esac; }   # '|' would break the engine cache line
+_valid_notify() { case "$1" in on|off) ;; *) return 1 ;; esac; }
 
 if [ -n "$cli_rate" ] && ! _valid_rate "$cli_rate"; then
     _fail 3 "--rate takes a whole number 1-700 (say2's own limit)"; cli_rate=""
@@ -353,7 +359,7 @@ fi
 # file with a key absent or empty names it in _missing_settings (put back
 # below); one with a value that fails its check names it in _bad_settings.
 _settings_file="${XDG_CONFIG_HOME:-$HOME/.config}/speak-clipboard/settings"
-f_rate=""; f_volume=""; f_voice=""
+f_rate=""; f_volume=""; f_voice=""; f_notify=""
 _file_state="ok"
 if [ -f "$_settings_file" ] && [ -r "$_settings_file" ]; then
     while IFS='=' read -r _k _v || [ -n "$_k" ]; do
@@ -361,6 +367,7 @@ if [ -f "$_settings_file" ] && [ -r "$_settings_file" ]; then
             rate)   f_rate="$_v" ;;
             volume) f_volume="$_v" ;;
             voice)  f_voice="$_v" ;;
+            notify) f_notify="$_v" ;;
         esac
     done <"$_settings_file"
 elif [ -e "$_settings_file" ]; then
@@ -370,11 +377,11 @@ else
 fi
 # o_* keep the values as read, for the WARNING lines, so they always show
 # the text that is in the file, never a value a --set or --reset put in f_*.
-o_rate="$f_rate"; o_volume="$f_volume"; o_voice="$f_voice"
+o_rate="$f_rate"; o_volume="$f_volume"; o_voice="$f_voice"; o_notify="$f_notify"
 _bad_settings=""; _missing_settings=""
-saved_rate=""; saved_volume=""; saved_voice=""
+saved_rate=""; saved_volume=""; saved_voice=""; saved_notify=""
 if [ "$_file_state" = "ok" ]; then
-    for _k in rate volume voice; do
+    for _k in rate volume voice notify; do
         eval "_v=\$f_$_k"
         if [ -z "$_v" ]; then
             _missing_settings="${_missing_settings:+$_missing_settings,}$_k"
@@ -389,6 +396,8 @@ fi
 rate="${cli_rate:-${saved_rate:-$_default_rate}}"
 volume="${cli_volume:-${saved_volume:-$_default_volume}}"
 _preferred_voice="${saved_voice:-$_default_voice}"
+notify_saved="${saved_notify:-$_default_notify}"     # the file's value, for display
+notify="${cli_notify:-$notify_saved}"                  # what this command does
 
 _state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/herdr"
 _trace_file="$_state_dir/speak-clipboard.log"
@@ -541,6 +550,7 @@ _write_settings() {
         [ -n "$f_rate" ]   && echo "rate=$f_rate"
         [ -n "$f_volume" ] && echo "volume=$f_volume"
         [ -n "$f_voice" ]  && echo "voice=$f_voice"
+        [ -n "$f_notify" ] && echo "notify=$f_notify"
         true
     } >"$tmp" 2>/dev/null && command mv -f "$tmp" "$_settings_file" 2>/dev/null; then
         return 0
@@ -560,7 +570,7 @@ _tilde() {
 
 # Writes a missing file with the default values, or puts back a key that
 # is absent from a readable one (v7, Gavin's call 2026-10-08, dotfiles-main
-# Q2: the file always holds all three). Runs once per invocation, before any
+# Q2: the file always holds every key). Runs once per invocation, before any
 # mode. A bad value is never overwritten here: f_* still hold it as typed.
 # Sets _file_note (created / added:<keys>) for --settings and the log, and
 # turns a missing file that cannot be written into _file_state=unusable.
@@ -570,10 +580,11 @@ _ensure_settings_file() {
     [ -n "$f_rate" ]   || f_rate="$_default_rate"
     [ -n "$f_volume" ] || f_volume="$_default_volume"
     [ -n "$f_voice" ]  || f_voice="$_default_voice"
+    [ -n "$f_notify" ] || f_notify="$_default_notify"
     if _write_settings 2>/dev/null; then
         if [ "$_file_state" = "missing" ]; then
             _file_state="ok"; _file_note="created"
-            saved_rate="$f_rate"; saved_volume="$f_volume"; saved_voice="$f_voice"
+            saved_rate="$f_rate"; saved_volume="$f_volume"; saved_voice="$f_voice"; saved_notify="$f_notify"
         else
             _file_note="added:$_missing_settings"
         fi
@@ -614,27 +625,29 @@ _voice_name() {
 # Colour only on a terminal and never with NO_COLOR set.
 show_settings() {
     local cached_at cached_engine cached_voice cached_for k raw top problems=""
-    local b_rate="" b_volume="" b_voice="" on="" off="" i w=44 width="$_box_width" n
-    local -a names=(rate volume voice) vals marks hot=("" "" "")
-    [ -z "${_SPEAK_CLIPBOARD_BEFORE:-}" ] || IFS='|' read -r b_rate b_volume b_voice <<<"$_SPEAK_CLIPBOARD_BEFORE"
+    local b_rate="" b_volume="" b_voice="" b_notify="" on="" off="" i w=44 width="$_box_width" n
+    local -a names=(rate volume voice notify) vals marks hot=("" "" "" "")
+    [ -z "${_SPEAK_CLIPBOARD_BEFORE:-}" ] || IFS='|' read -r b_rate b_volume b_voice b_notify <<<"$_SPEAK_CLIPBOARD_BEFORE"
     if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then on=$'\e[1;97m'; off=$'\e[0m'; fi
     vals[0]="$rate wpm";      marks[0]="$(_vs_default "$rate" "$_default_rate" "$_default_rate")"
     vals[1]="$volume of 100"; marks[1]="$(_vs_default "$volume" "$_default_volume" "$_default_volume")"
     vals[2]="$(_voice_label "$_preferred_voice")"
     marks[2]="$(_vs_default "$_preferred_voice" "$_default_voice" "$(_voice_name "$_default_voice")")"
+    vals[3]="$notify_saved";  marks[3]="$(_vs_default "$notify_saved" "$_default_notify" "$_default_notify")"
     if [ -n "$b_rate" ] && [ "$b_rate" != "$rate" ]; then vals[0]="$b_rate -> $rate wpm"; hot[0]=1; fi
     if [ -n "$b_volume" ] && [ "$b_volume" != "$volume" ]; then vals[1]="$b_volume -> $volume of 100"; hot[1]=1; fi
     if [ -n "$b_voice" ] && [ "$b_voice" != "$_preferred_voice" ]; then
         vals[2]="$(_voice_name "$b_voice") -> ${vals[2]}"; hot[2]=1
     fi
-    for i in 0 1 2; do [ ${#vals[i]} -le "$w" ] || w=${#vals[i]}; done
-    for i in 0 1 2; do n=$((8 + w + 1 + ${#marks[i]})); [ "$n" -le "$width" ] || width=$n; done
+    if [ -n "$b_notify" ] && [ "$b_notify" != "$notify_saved" ]; then vals[3]="$b_notify -> $notify_saved"; hot[3]=1; fi
+    for i in 0 1 2 3; do [ ${#vals[i]} -le "$w" ] || w=${#vals[i]}; done
+    for i in 0 1 2 3; do n=$((8 + w + 1 + ${#marks[i]})); [ "$n" -le "$width" ] || width=$n; done
     top="__ Settings file: $(_tilde "$_settings_file") "
     [ $((${#top} + 3)) -le "$width" ] || width=$((${#top} + 3))
     printf '__ Settings file: %s%s%s %s\n' "$on" "$(_tilde "$_settings_file")" "$off" \
         "$(printf '%*s' $((width - ${#top})) '' | tr ' ' _)"
     echo
-    for i in 0 1 2; do
+    for i in 0 1 2 3; do
         if [ -n "${hot[i]}" ]; then
             printf '%s%-8s%-*s %s%s\n' "$on" "${names[i]}" "$w" "${vals[i]}" "${marks[i]}" "$off"
         else
@@ -675,6 +688,8 @@ show_defaults() {
     printf "$f" volume "$_default_volume of 100" "$volume of 100$mark"
     mark=" $(_vs_default "$_preferred_voice" "$_default_voice")"
     printf "$f" voice "$(_voice_label "$_default_voice")" "$(_voice_label "$_preferred_voice")$mark"
+    mark=" $(_vs_default "$notify" "$_default_notify")"; [ -n "$cli_notify" ] && mark=" (this command)"
+    printf "$f" notify "$_default_notify" "$notify$mark"
     echo
 }
 
@@ -700,7 +715,7 @@ _step() {
     [ "$_stepped" -le "$4" ] || _stepped="$4"
 }
 
-# A notification, for --notify (dotfiles-main Q7: 2). Through herdr when it
+# A notification, when notify is on (dotfiles-main Q7: 2). Through herdr when it
 # is running, which hands it to macOS ([ui.toast] delivery = "system" in
 # ~/.config/herdr/config.toml); otherwise straight to macOS. Text goes in as
 # osascript arguments, never pasted into the script, so a quote cannot break it.
@@ -716,9 +731,12 @@ _send_notification() {
 # What a --set or --reset changed, one short notification: "Rate 420 -> 440
 # wpm". A step that hit a limit says so instead of reporting no change.
 _notify_change() {
-    local b_rate="" b_volume="" b_voice="" body=""
-    [ -z "${_SPEAK_CLIPBOARD_BEFORE:-}" ] || IFS='|' read -r b_rate b_volume b_voice <<<"$_SPEAK_CLIPBOARD_BEFORE"
-    [ "$b_rate" = "$rate" ] || body="rate $b_rate -> $rate wpm"
+    local b_rate="" b_volume="" b_voice="" b_notify="" body=""
+    [ -z "${_SPEAK_CLIPBOARD_BEFORE:-}" ] || IFS='|' read -r b_rate b_volume b_voice b_notify <<<"$_SPEAK_CLIPBOARD_BEFORE"
+    # Only ever called with notify on, so a change here means it was just
+    # turned on; turning it off sends nothing, by its own rule.
+    [ "$b_notify" = "$notify_saved" ] || body="notifications on"
+    [ "$b_rate" = "$rate" ] || body="${body:+$body, }rate $b_rate -> $rate wpm"
     [ "$b_volume" = "$volume" ] || body="${body:+$body, }volume $b_volume -> $volume"
     [ "$b_voice" = "$_preferred_voice" ] || body="${body:+$body, }voice $(_voice_name "$b_voice") -> $(_voice_name "$_preferred_voice")"
     if [ -z "$body" ]; then
@@ -1091,9 +1109,9 @@ clean_input() {
 # written, not from memory; _SPEAK_CLIPBOARD_BEFORE carries the old values
 # across the exec.
 _save_showing_change() {
-    local before="${saved_rate:-$_default_rate}|${saved_volume:-$_default_volume}|${saved_voice:-$_default_voice}"
-    _write_settings || { [ -z "$notify" ] || _send_notification "Speak clipboard" "Could not save $(_tilde "$_settings_file")"; exit 4; }
-    _SPEAK_CLIPBOARD_BEFORE="$before" _SPEAK_CLIPBOARD_NOTIFY="$notify" exec "$0" --settings
+    local before="${saved_rate:-$_default_rate}|${saved_volume:-$_default_volume}|${saved_voice:-$_default_voice}|${saved_notify:-$_default_notify}"
+    _write_settings || { [ "$notify" != "on" ] || _send_notification "Speak clipboard" "Could not save $(_tilde "$_settings_file")"; exit 4; }
+    _SPEAK_CLIPBOARD_BEFORE="$before" _SPEAK_CLIPBOARD_NOTIFY="$cli_notify" exec "$0" --settings
 }
 
 _ensure_settings_file
@@ -1102,14 +1120,15 @@ _ensure_settings_file
 
 case "$mode" in
     help) _print_help; exit 0 ;;
-    settings) show_settings; [ -z "$notify" ] || [ -z "${_SPEAK_CLIPBOARD_BEFORE:-}" ] || _notify_change; exit 0 ;;
+    settings) show_settings; [ "$notify" != "on" ] || [ -z "${_SPEAK_CLIPBOARD_BEFORE:-}" ] || _notify_change; exit 0 ;;
     get)
         case "$set_key" in
             rate)   echo "$rate" ;;
             volume) echo "$volume" ;;
             voice)  echo "$_preferred_voice" ;;
-            all)    printf 'rate=%s\nvolume=%s\nvoice=%s\n' "$rate" "$volume" "$_preferred_voice" ;;
-            *) _die_with_help 2 "--get takes rate, volume or voice, not '$set_key'" ;;
+            notify) echo "$notify" ;;
+            all)    printf 'rate=%s\nvolume=%s\nvoice=%s\nnotify=%s\n' "$rate" "$volume" "$_preferred_voice" "$notify" ;;
+            *) _die_with_help 2 "--get takes rate, volume, voice or notify, not '$set_key'" ;;
         esac
         exit 0 ;;
     voices)   show_voices; exit $? ;;
@@ -1128,7 +1147,9 @@ case "$mode" in
                     if [ "$rc" -eq 3 ]; then { echo; _print_help; } >&2; fi
                     [ "$rc" -eq 0 ] || exit "$rc"
                     f_voice="$_picked_voice" ;;
-            *) _die_with_help 2 "--set takes rate, volume or voice, not '$set_key'" ;;
+            notify) _valid_notify "$set_value" || _die_with_help 3 "notify takes on or off"
+                    f_notify="$set_value" ;;
+            *) _die_with_help 2 "--set takes rate, volume, voice or notify, not '$set_key'" ;;
         esac
         _save_showing_change ;;
     reset)
@@ -1136,8 +1157,9 @@ case "$mode" in
             rate)   f_rate="$_default_rate" ;;
             volume) f_volume="$_default_volume" ;;
             voice)  f_voice="$_default_voice" ;;
-            all)    f_rate="$_default_rate"; f_volume="$_default_volume"; f_voice="$_default_voice" ;;
-            *) _die_with_help 2 "--reset takes rate, volume, voice or all, not '$set_key'" ;;
+            notify) f_notify="$_default_notify" ;;
+            all)    f_rate="$_default_rate"; f_volume="$_default_volume"; f_voice="$_default_voice"; f_notify="$_default_notify" ;;
+            *) _die_with_help 2 "--reset takes rate, volume, voice, notify or all, not '$set_key'" ;;
         esac
         _save_showing_change ;;
 esac
