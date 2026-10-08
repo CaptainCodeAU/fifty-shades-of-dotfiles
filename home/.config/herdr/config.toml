@@ -179,6 +179,41 @@ key = "prefix+backtick"
 type = "shell"
 command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --toggle'"
 
+# Speech rate and volume, on the digits beside the speak key (Gavin's
+# layout, 2026-10-08): 1 slower / 2 faster by 20 wpm, 3 quieter / 4 louder
+# by 10, 0 back to the defaults. Each saves to
+# ~/.config/speak-clipboard/settings and shows the change as a
+# notification (--notify), since a hotkey has no screen to print to. A new
+# rate or volume applies from the next speak press. Same Option-key caveat
+# as ctrl+alt+s above: if a digit shows no notification and
+# `speak-clipboard --settings` shows no change, the key never reached herdr;
+# check the iTerm2 profile's "Option Key Sends".
+
+[[keys.command]]
+key = "ctrl+alt+1"
+type = "shell"
+command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --notify --set rate -20'"
+
+[[keys.command]]
+key = "ctrl+alt+2"
+type = "shell"
+command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --notify --set rate +20'"
+
+[[keys.command]]
+key = "ctrl+alt+3"
+type = "shell"
+command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --notify --set volume -10'"
+
+[[keys.command]]
+key = "ctrl+alt+4"
+type = "shell"
+command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --notify --set volume +10'"
+
+[[keys.command]]
+key = "ctrl+alt+0"
+type = "shell"
+command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --notify --reset all'"
+
 [ui.toast]
 delivery = "system"
 

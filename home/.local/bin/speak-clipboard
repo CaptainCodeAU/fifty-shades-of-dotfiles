@@ -220,8 +220,13 @@
 #   speak-clipboard --get KEY           print one value alone: rate, volume or
 #                                       voice (its full key); with no KEY or
 #                                       all, all three as key=value lines
-#   speak-clipboard --set rate N        save words per minute (1-700)
-#   speak-clipboard --set volume N      save volume 0-100
+#   speak-clipboard --set rate N        save words per minute (1-700); +N or
+#                                       -N steps from the current value and
+#                                       stops at the limit (--set rate +20)
+#   speak-clipboard --set volume N      save volume 0-100; +N or -N steps
+#   speak-clipboard --notify ...        with --set or --reset: also show the
+#                                       change as a notification (for the
+#                                       herdr hotkeys, which have no screen)
 #   speak-clipboard --set voice V       save a voice: its number or name from
 #                                       --voices, or its full key
 #   speak-clipboard --reset KEY         write the default value back:
@@ -298,6 +303,7 @@ mode="speak"
 from_stdin=0
 set_key=""
 set_value=""
+notify="${_SPEAK_CLIPBOARD_NOTIFY:-}"
 
 # A mistake in the command is recorded here, not reported: the message is
 # printed with the whole --help after it (Gavin's ask, 2026-10-08), and the
@@ -316,6 +322,7 @@ while [ $# -gt 0 ]; do
         --volume) [ $# -ge 2 ] || { _fail 2 "--volume needs a value"; break; }; cli_volume="$2"; shift 2 ;;
         --voice) [ $# -ge 2 ] || { _fail 2 "--voice needs a value"; break; }; voice="$2"; shift 2 ;;
         --settings) mode="settings"; shift ;;
+        --notify)   notify=1;        shift ;;
         --voices)   mode="voices";   shift ;;
         --get)   mode="get"; set_key="${2:-all}"; shift; [ $# -eq 0 ] || shift ;;
         --set)   [ $# -ge 3 ] || { _fail 2 "--set needs a name and a value, e.g. --set rate $_default_rate"; break; }; mode="set"; set_key="$2"; set_value="$3"; shift 3 ;;
@@ -681,6 +688,48 @@ _print_help() {
 
 # A mistake in the command (exit 2 or 3): the message, then the whole help,
 # so the usage is on screen without typing --help (Gavin's ask, 2026-10-08).
+# "+N" or "-N" applied to a current value and held inside min-max, in
+# _stepped (Gavin's ask, 2026-10-08: hotkeys that step the rate by 20 and the
+# volume by 10). Returns 1 if $1 is not a sign and up to four digits.
+_step() {
+    local d="${1#[+-]}"
+    case "$1" in [+-]*) ;; *) return 1 ;; esac
+    case "$d" in ''|*[!0-9]*|?????*) return 1 ;; esac
+    if [ "${1:0:1}" = "+" ]; then _stepped=$(($2 + 10#$d)); else _stepped=$(($2 - 10#$d)); fi
+    [ "$_stepped" -ge "$3" ] || _stepped="$3"
+    [ "$_stepped" -le "$4" ] || _stepped="$4"
+}
+
+# A notification, for --notify (dotfiles-main Q7: 2). Through herdr when it
+# is running, which hands it to macOS ([ui.toast] delivery = "system" in
+# ~/.config/herdr/config.toml); otherwise straight to macOS. Text goes in as
+# osascript arguments, never pasted into the script, so a quote cannot break it.
+_send_notification() {
+    if command -v herdr >/dev/null 2>&1 &&
+        herdr notification show "$1" --body "$2" --sound none >/dev/null 2>&1; then
+        return 0
+    fi
+    osascript -e 'on run argv' -e 'display notification (item 2 of argv) with title (item 1 of argv)' \
+        -e 'end run' "$1" "$2" >/dev/null 2>&1
+}
+
+# What a --set or --reset changed, one short notification: "Rate 420 -> 440
+# wpm". A step that hit a limit says so instead of reporting no change.
+_notify_change() {
+    local b_rate="" b_volume="" b_voice="" body=""
+    [ -z "${_SPEAK_CLIPBOARD_BEFORE:-}" ] || IFS='|' read -r b_rate b_volume b_voice <<<"$_SPEAK_CLIPBOARD_BEFORE"
+    [ "$b_rate" = "$rate" ] || body="rate $b_rate -> $rate wpm"
+    [ "$b_volume" = "$volume" ] || body="${body:+$body, }volume $b_volume -> $volume"
+    [ "$b_voice" = "$_preferred_voice" ] || body="${body:+$body, }voice $(_voice_name "$b_voice") -> $(_voice_name "$_preferred_voice")"
+    if [ -z "$body" ]; then
+        body="no change: rate $rate wpm, volume $volume"
+        case "$rate" in 1|700) body="$body (rate limit is 1-700)" ;; esac
+        case "$volume" in 0|100) body="$body (volume limit is 0-100)" ;; esac
+    fi
+    body="$(printf '%s' "${body:0:1}" | tr '[:lower:]' '[:upper:]')${body:1}"   # first letter up
+    _send_notification "Speak clipboard" "$body"
+}
+
 _die_with_help() {
     { echo "speak-clipboard: $2"; echo; _print_help; } >&2
     exit "$1"
@@ -1043,8 +1092,8 @@ clean_input() {
 # across the exec.
 _save_showing_change() {
     local before="${saved_rate:-$_default_rate}|${saved_volume:-$_default_volume}|${saved_voice:-$_default_voice}"
-    _write_settings || exit 4
-    _SPEAK_CLIPBOARD_BEFORE="$before" exec "$0" --settings
+    _write_settings || { [ -z "$notify" ] || _send_notification "Speak clipboard" "Could not save $(_tilde "$_settings_file")"; exit 4; }
+    _SPEAK_CLIPBOARD_BEFORE="$before" _SPEAK_CLIPBOARD_NOTIFY="$notify" exec "$0" --settings
 }
 
 _ensure_settings_file
@@ -1053,7 +1102,7 @@ _ensure_settings_file
 
 case "$mode" in
     help) _print_help; exit 0 ;;
-    settings) show_settings; exit 0 ;;
+    settings) show_settings; [ -z "$notify" ] || [ -z "${_SPEAK_CLIPBOARD_BEFORE:-}" ] || _notify_change; exit 0 ;;
     get)
         case "$set_key" in
             rate)   echo "$rate" ;;
@@ -1066,9 +1115,11 @@ case "$mode" in
     voices)   show_voices; exit $? ;;
     set)
         case "$set_key" in
-            rate)   _valid_rate "$set_value" || _die_with_help 3 "rate takes a whole number 1-700 (say2's own limit)"
+            rate)   if _step "$set_value" "${saved_rate:-$_default_rate}" 1 700; then set_value="$_stepped"; fi
+                    _valid_rate "$set_value" || _die_with_help 3 "rate takes a whole number 1-700 (say2's own limit), or +N / -N to step"
                     f_rate="$set_value" ;;
-            volume) _valid_volume "$set_value" || _die_with_help 3 "volume takes a whole number 0-100"
+            volume) if _step "$set_value" "${saved_volume:-$_default_volume}" 0 100; then set_value="$_stepped"; fi
+                    _valid_volume "$set_value" || _die_with_help 3 "volume takes a whole number 0-100, or +N / -N to step"
                     f_volume="$set_value" ;;
             voice)  _pick_voice "$set_value"; rc=$?
                     # 3 (no such voice) is a mistake in the command, so the
