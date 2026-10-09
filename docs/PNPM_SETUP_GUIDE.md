@@ -683,8 +683,9 @@ Not here:
 >
 > - **The box runs 12.10.0** (since 2026-10-10, section 7.3). "12.4.2 is the
 >   next target" and "12.5.x not a target yet" are past.
-> - **Floor `12.8.2`** since 2026-10-06 (it was 12.3.2, below the 12.4.2 security
->   patch), and a floor now only rises (section 7.5).
+> - **Floor `12.10.0`** since 2026-10-10 (section 7.8). Before that it was 12.8.2
+>   from 2026-10-06, and 12.3.2, below the 12.4.2 security patch. A floor only
+>   rises (section 7.5).
 > - **`blockExoticSubdeps`** reads back `undefined` because pnpm 12 IGNORES it in
 >   the global file (a global `false` still blocks). It is on by default, and is
 >   now pinned by `PNPM_CONFIG_BLOCK_EXOTIC_SUBDEPS=true` (section 7.4).
@@ -898,6 +899,9 @@ key and not at all with it. The welcome banner reports updates with the cooldown
 
 ### 7.5 The floor moves to 12.8.2, and only ever rises (2026-10-06, W-20261006-A36, W-20260923-A51)
 
+> **Superseded 2026-10-10:** the floor is now `12.10.0` (section 7.8). The rule below, that a floor
+> only rises, still stands.
+
 **Floor: `12.8.2`** (Gavin's pick), in `install.sh` and `home/.zsh_onboarding`, which must agree. It is
 the lowest v12 with every security fix that matters on these machines and none of the known
 regressions:
@@ -974,3 +978,31 @@ is still the one on PATH they point at `./install.sh` instead (`__pnpm_is_homebr
 ```bash
 zsh-node-functions-selftest   # 38 checks; section 8 is the Intel path, brew stubbed to record
 ```
+
+### 7.8 The floor moves to 12.10.0 (2026-10-10, ruling D-20261010-A02)
+
+**Floor: `12.10.0`** (Gavin's pick, 2026-10-10), in `install.sh` and `home/.zsh_onboarding`, which
+must agree. Same rule as 7.5: the lowest v12 with every security fix that matters and no known
+regression. The box took 12.10.0 the same morning (7.3). Security fixes in 12.10.0, from its
+release notes (none has a GHSA or CVE, so `toolchain-cve-check` cannot see them):
+
+- `pnpm install` stops a dependency version with path traversal from writing files outside the
+  global virtual store.
+- Locked config dependencies are checked against their registry, and must come from an npm
+  registry; the lockfile can no longer replace a pinned config dependency's integrity.
+- Tarballs inside a `variations` resolution are checked against the registry; an empty
+  `variations` resolution is rejected.
+- `pnpm audit signatures` checks against the integrity recorded in the lockfile.
+- Archive metadata over 64 MiB is rejected before it is read into memory.
+- Two URL or path dependencies that differ only in `+ # : ?` versus `/` no longer share a
+  virtual store directory.
+- The warning about an ignored project `.npmrc` registry setting no longer prints a URL-scoped
+  username and password.
+
+**No known regression.** 12.10.1 (published 4:37 AM Wed 7 Oct, clears the 3-day wait 4:37 AM
+Sat 10 Oct) fixes the experimental `nodeLinker: { type: loaded }`, which this box does not use,
+and bugs its notes do not say 12.10.0 introduced. One change to expect: the registry metadata
+cache moved to `<cache-dir>/v12/`, so the first install after the upgrade downloads metadata again.
+
+A machine below the floor is told to update at login. A shell or session started before the bump
+still carries 12.8.2 until it is restarted (7.5); `toolchain-cve-check` reads the floor from there.

@@ -47,6 +47,10 @@ fi
 # userAgent env leak and storeDir build-approval bypass -- and none of the
 # 12.6-12.8.0 regressions (all fixed by 12.8.2). Ruling D-20261006-A06; reasoning
 # in docs/PNPM_SETUP_GUIDE.md section 7.5.
+# 12.10.0 (2026-10-10, Gavin's pick): adds seven security fixes, among them a
+# dependency writing files outside pnpm's global virtual store (path traversal)
+# and locked config dependencies checked against the registry. No known
+# regression. Ruling D-20261010-A02; reasoning in docs/PNPM_SETUP_GUIDE.md section 7.8.
 #
 # A floor only ever RISES here. `${VAR:-default}` let an inherited lower value (a
 # parent shell or session started before a bump) win silently: measured
@@ -62,7 +66,7 @@ __floor_keep_higher() {  # $1 = variable name, $2 = this file's floor
         typeset -gx "$1=$2"
     fi
 }
-__floor_keep_higher PNPM_MIN_VERSION 12.8.2
+__floor_keep_higher PNPM_MIN_VERSION 12.10.0
 # How often to re-check the npm registry for the latest pnpm release.
 export PNPM_CHECK_TTL_DAYS="${PNPM_CHECK_TTL_DAYS:-7}"
 

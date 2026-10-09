@@ -107,7 +107,12 @@ SECTION_DECISION=ask
 # build-approval bypass) and none of the 12.6-12.8.0 regressions. Assigned, never
 # inherited, so an older value in the environment cannot lower it.
 # Ruling D-20261006-A06; reasoning in docs/PNPM_SETUP_GUIDE.md section 7.5.
-PNPM_MIN_VERSION="12.8.2"
+# 12.10.0 (2026-10-10, Gavin's pick): adds seven security fixes, among them a
+# dependency writing files outside pnpm's global virtual store (path traversal)
+# and locked config dependencies checked against the registry. No known
+# regression (12.10.1 fixes only the experimental `loaded` linker and older
+# bugs). Ruling D-20261010-A02; reasoning in docs/PNPM_SETUP_GUIDE.md section 7.8.
+PNPM_MIN_VERSION="12.10.0"
 
 # --- nvm version policy ---
 # Minimum acceptable nvm. Three CVEs set this floor: CVE-2026-10796
