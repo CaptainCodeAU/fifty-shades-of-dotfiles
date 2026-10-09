@@ -202,27 +202,40 @@
 # hash file is no longer written at all.
 #
 # USAGE
-#   speak-clipboard              speak the clipboard (replacing any current speech,
-#                                and clearing anything waiting in line)
+#   speak-clipboard              speak the clipboard, replacing any current speech
+#                                and clearing anything waiting in line
 #   speak-clipboard --toggle     speaking: stop (any text); idle: speak
-#   speak-clipboard --queue [MS] speaking: wait in line, then speak; idle: speak
-#                                now. MS (0-5000) is a gap in milliseconds
-#                                before this voice; not with --toggle
-#   speak-clipboard --stop       stop any speech and clear the line
-#   speak-clipboard --skip       stop the voice speaking now; the next in line plays
+#   speak-clipboard --queue [MS] speaking: wait in line behind it, then speak;
+#                                idle: speak now. MS (0-5000) is a silence in
+#                                milliseconds before this voice, only when it
+#                                waits. Not with --toggle. A clipboard --queue
+#                                press under 0.5 s after the last one is key
+#                                repeat (busy); a --stdin one never is. With no
+#                                line to join (an older speaker, or the say
+#                                fallback) it replaces the speech instead
+#   speak-clipboard --stop       stop all speech and clear the line; never
+#                                starts speech (idle: does nothing)
+#   speak-clipboard --skip       stop the voice speaking now; the next in line
+#                                plays (none waiting: same as --stop; idle:
+#                                does nothing)
 #   speak-clipboard --profile NAME
-#                                use profile NAME for this command (any
-#                                command below); without it, the first
-#                                profile in the file
+#                                use profile NAME for this command: a press,
+#                                --print, --settings, --get, --set, --reset or
+#                                --voices. Without it, the first profile in the
+#                                file. An unknown NAME is exit 6, never another
+#                                profile. --stop, --skip and --profiles ignore it
 #   speak-clipboard --print      print what WOULD be spoken (no audio)
-#   speak-clipboard --stdin      read text from stdin instead of the clipboard
-#                                (for tests; combine with --print/--toggle)
+#   speak-clipboard --stdin      read text from stdin instead of the clipboard:
+#                                how code and tests pass text (with a press,
+#                                --queue, --toggle or --print)
 #   speak-clipboard --rate N     words per minute, this press only (1-700)
 #   speak-clipboard --volume N   speech volume 0-100 under the system volume,
-#                                this press only (streaming path only)
-#   speak-clipboard --voice KEY  say2 voice asset key or display name, this press
-#                                only -- bypasses the fallback chain entirely
-#   speak-clipboard --selftest   run the automatic tests (stand-ins, no speech);
+#                                this press only (not on the say fallback)
+#   speak-clipboard --voice KEY  say2 voice asset key or display name (up to 100
+#                                characters), this press only -- bypasses the
+#                                fallback chain; it streams like any voice
+#   speak-clipboard --selftest   run the automatic tests (stand-ins, no speech;
+#                                needs a normal terminal, not a Claude sandbox);
 #                                exit 0 all passed, 1 a check failed or it
 #                                could not run (it says which)
 #   speak-clipboard -h, --help   this text
@@ -231,20 +244,25 @@
 # SAVED SETTINGS (~/.config/speak-clipboard/settings; every press, the hotkey
 # included, speaks with what it holds; any run writes it if it is missing).
 # The file holds profiles, one [name] block each with rate, volume, voice and
-# notify. Every command below acts on the first profile, or on --profile NAME.
-#   speak-clipboard --profiles          list the profiles and their settings
-#   speak-clipboard --new-profile NAME  add a profile, a copy of the first one
-#                                       (letters, digits, _ and - only)
+# notify. The commands below act on the first profile, or on --profile NAME.
+#   speak-clipboard --profiles          list the profiles and their settings,
+#                                       the first one marked
+#   speak-clipboard --new-profile NAME  add a profile, a copy of the first one;
+#                                       NAME: letters, digits, _ and -, not
+#                                       starting with -, not already used
 #   speak-clipboard --remove-profile NAME
-#                                       rename its heading to NAME_REMOVED: no
-#                                       longer listed or usable; deleting it
-#                                       is a hand edit
+#                                       rename its heading to NAME_REMOVED (then
+#                                       _REMOVED_2, ...): no longer listed or
+#                                       usable; deleting it is a hand edit. The
+#                                       last profile left cannot be removed
 #   speak-clipboard --settings          show rate, volume, voice and notify,
 #                                       whether each is the default, and any
 #                                       problem with the file
 #   speak-clipboard --get KEY           print one value alone: rate, volume,
 #                                       voice (its full key) or notify; with
-#                                       no KEY or all, all four as key=value
+#                                       no KEY or all, all four as key=value.
+#                                       It is the value this command would use:
+#                                       a --rate or --volume on it counts
 #   speak-clipboard --set rate N        save words per minute (1-700); +N or
 #                                       -N steps from the current value and
 #                                       stops at the limit (--set rate +20)
@@ -265,12 +283,26 @@
 #   speak-clipboard --voices            list the installed Siri voices, numbered,
 #                                       with the one in use marked
 #
+# THE FILE, BY HAND: a [name] line starts a profile; under it rate=, volume=,
+# voice= and notify= (spaces around = are fine). Lines starting # or ; are
+# comments, whole lines only. A flat file with no [name] line becomes a
+# [default] profile on the next run. A missing setting is put back with its
+# default. --settings warns about a setting above the first [name], one set
+# twice (the last counts), a name used twice, a [name] that is not a valid
+# name, and a line that is not a setting.
+#
+# LOGS (~/.local/state/herdr/, never any text): speak-clipboard.log has one
+# line per press (mode, outcome, profile, exit code, problems);
+# speak-render.log has what say2, ffplay and the line player said.
+#
 # EXIT CODES
-#    0  done: spoke, stopped, printed, or a settings command worked
-#       (also a press that lost the lock to key repeat: busy, not an error)
+#    0  done: spoke, queued, stopped, skipped, printed, or a settings command
+#       worked; also "busy": another press was still running, or a --queue
+#       key held down (key repeat). Busy is not an error
 #   Failed (nothing spoken or saved; a missing settings file may still be
 #   written, or a missing setting put back, as on every run):
-#    1  nothing to say: clipboard empty, or empty once cleaned
+#    1  nothing to say: clipboard empty, or empty once cleaned; or
+#       --selftest failed or could not run
 #    2  bad command: unknown option, missing or empty value, a wrong name
 #       after --set, --reset or --get, two commands at once, or --toggle
 #       with --queue
@@ -282,8 +314,9 @@
 #       held it for 5 s; a file that cannot be read is never written over
 #    5  voices not listed: say2 missing, or it cannot reach the speech
 #       service (it cannot inside a Claude Code sandbox)
-#    6  no such profile: nothing spoken or saved, never another profile
-#       instead (a notification names it)
+#    6  no such profile (--profile, or --remove-profile NAME): nothing
+#       spoken or saved, never another profile instead; a notification
+#       names it unless --no-notify
 #
 #   Spoke, but with a fallback (the log line names every problem; the
 #   lowest code wins):
