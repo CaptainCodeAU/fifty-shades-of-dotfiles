@@ -47,6 +47,7 @@
 #      this repo), or a detector assertion failed
 # ============================================================================
 
+import fnmatch
 import os
 import subprocess
 import sys
@@ -66,18 +67,23 @@ def is_ignored(rel: str) -> bool:
         return True
     if "__pycache__" in parts or rel.endswith(".pyc"):
         return True
-    # install.sh's skip flags (--skip-claude, --skip-ssh, ...) keep whole top-level
-    # names out of stow and hand them here as DOTFILES_STOW_SKIP, colon-separated,
-    # so the same run that skipped a tree does not then report it as not deployed.
-    # Unset: read what the last real stow on this box recorded (install.sh writes
-    # the same names to links/stow-skip). Set but empty: skip nothing, whatever the
-    # file says -- the caller's flags are the truth for that run.
+    # install.sh's skip flags (--skip-claude, --skip-ssh, ...) keep paths out of stow
+    # and hand them here as DOTFILES_STOW_SKIP: colon-separated shell globs relative
+    # to home/ (".claude", ".local/bin/pj-*"), each matching a file or a whole
+    # directory, so the same run that skipped a tree does not then report it as
+    # not deployed. Unset: read what the last real stow on this box recorded
+    # (install.sh writes the same globs to links/stow-skip). Set but empty: skip
+    # nothing, whatever the file says -- the caller's flags are the truth for
+    # that run.
     skip = os.environ.get("DOTFILES_STOW_SKIP")
     if skip is None:
         state = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
         f = state / "dotfiles" / "links" / "stow-skip"
         skip = ":".join(f.read_text().split()) if f.is_file() else ""
-    return bool(parts) and parts[0] in {s for s in skip.split(":") if s}
+    for pat in (s for s in skip.split(":") if s):
+        if fnmatch.fnmatchcase(rel, pat) or fnmatch.fnmatchcase(rel, pat + "/*"):
+            return True
+    return False
 
 
 def classify(rel: str, target_root: Path, repo_home: Path | None = None) -> str:
@@ -164,10 +170,12 @@ def self_test() -> list[str]:
         # sibling is not, and an empty variable skips nothing.
         saved = os.environ.get("DOTFILES_STOW_SKIP")
         try:
-            os.environ["DOTFILES_STOW_SKIP"] = ".claude:.ssh"
+            os.environ["DOTFILES_STOW_SKIP"] = ".claude:.ssh:.local/bin/pj-*:.config/pj"
             if not is_ignored(".claude/hooks/x.sh"):
                 failures.append("a tree named in DOTFILES_STOW_SKIP was not treated as skipped")
-            if is_ignored(".local/bin/ci-watch"):
+            if not is_ignored(".local/bin/pj-health") or not is_ignored(".config/pj/profiles/default"):
+                failures.append("a DOTFILES_STOW_SKIP glob or nested dir was not treated as skipped")
+            if is_ignored(".local/bin/ci-watch") or is_ignored(".local/bin/pj") or is_ignored(".config/pjx/y"):
                 failures.append("DOTFILES_STOW_SKIP leaked onto a path it does not name")
             os.environ["DOTFILES_STOW_SKIP"] = ""
             if is_ignored(".claude/hooks/x.sh"):

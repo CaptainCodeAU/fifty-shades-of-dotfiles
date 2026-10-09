@@ -1333,7 +1333,11 @@ _post_stow_herdr_systemd_service() {
     local os
     os=$(check_os)
     [[ "$os" == "linux" || "$os" == "wsl" ]] || return 0
-    command -v herdr &>/dev/null || return 0
+    if ! command -v herdr &>/dev/null; then
+        # A dry run never installs herdr, so say what the real run does after it.
+        [[ "$DRY_RUN" == true ]] && info "[dry-run] herdr not present yet; a real run enables the stowed herdr.service (systemctl --user enable --now) after installing it"
+        return 0
+    fi
     command -v systemctl &>/dev/null || return 0
 
     local unit="$HOME/.config/systemd/user/herdr.service"
@@ -1612,35 +1616,55 @@ run_cmd() {
     "$@"
 }
 
-# The home/ paths a skip flag keeps out of stow, one basename per line. Stow's
-# --ignore takes a Perl regex matched against the BASENAME (measured with stow 2.4.1,
-# 2026-10-10: `--ignore='^\.claude$'` dropped every LINK under .claude and never
-# descended into it; the slash-anchored `^/\.claude$` ignored nothing). The same
-# names drive _conflict_check_ignored, so the conflict check, the link manifest and
-# the parity check all agree with what stow was told.
+# The home/ paths a skip flag keeps out of stow: one shell glob per line, relative to
+# home/, matching a file or a whole directory. The same list drives
+# _conflict_check_ignored, the link manifest, deploy-parity-check and the welcome
+# banner, so all of them agree with what stow was told.
+#
+# HOW STOW'S --ignore READS IT, measured with stow 2.4.1 (2026-10-10) against a
+# scratch target with a control link in every run: the option's regex is matched
+# against the END of the path relative to the package (Stow.pm: `$target =~
+# m/$regex$/`), for directories before descending. So `^\.claude$` pruned the whole
+# .claude tree and `\.config/pj` pruned .config/pj, while `^pj$` (a basename) and
+# `^/\.config/pj$` (a leading slash) ignored nothing. _stow_ignore_args therefore
+# turns each glob into an anchored path regex.
 _stow_skip_names() {
-    [[ "$SKIP_CLAUDE" == true ]] && echo ".claude"
+    if [[ "$SKIP_CLAUDE" == true ]]; then
+        # Gavin's Claude and pj tooling, none of which belongs on a plain Claude Code
+        # box (codebox Q17): the hooks and skills, the pj profiles, the pj and Claude
+        # tools in ~/.local/bin (with their selftests) and the shared launch function.
+        echo ".claude"
+        echo ".config/pj"
+        echo ".zsh_claude_launch"
+        echo ".local/bin/pj"
+        echo ".local/bin/pj-*"
+        echo ".local/bin/claude-hooks-sync*"
+        echo ".local/bin/claude-project-settings-render*"
+        echo ".local/bin/ccw-watch*"
+    fi
     [[ "$SKIP_SSH" == true ]]    && echo ".ssh"
     [[ "$SKIP_TMUX" == true ]]   && { echo ".tmux.conf"; echo ".zsh_tmux"; }
     [[ "$SKIP_DOCKER" == true ]] && echo ".zsh_docker_functions"
     return 0
 }
 
-# `--ignore=...` arguments for stow, one per skipped name (empty when nothing is skipped).
+# `--ignore=...` arguments for stow, one per skipped glob (empty when nothing is
+# skipped): `.` escaped, `*` becomes `[^/]*`, anchored at both ends.
 _stow_ignore_args() {
     local n
     while IFS= read -r n; do
-        [[ -n "$n" ]] && printf -- '--ignore=^%s$\n' "$(printf '%s' "$n" | sed 's/\./\\./g')"
+        [[ -n "$n" ]] && printf -- '--ignore=^%s$\n' "$(printf '%s' "$n" | sed 's/\./\\./g; s/\*/[^\/]*/g')"
     done < <(_stow_skip_names)
     return 0
 }
 
-# True when a home/-relative path is under a skipped top-level name.
+# True when a home/-relative path matches a skipped glob, or lies under one.
 _stow_skipped_rel() {
     local rel="$1" n
     while IFS= read -r n; do
         [[ -n "$n" ]] || continue
-        [[ "$rel" == "$n" || "$rel" == "$n"/* ]] && return 0
+        # shellcheck disable=SC2053  # $n is a glob on purpose
+        [[ "$rel" == $n || "$rel" == $n/* ]] && return 0
     done < <(_stow_skip_names)
     return 1
 }
@@ -1984,19 +2008,27 @@ check_prerequisites() {
     echo -e "${BOLD}Core Tools:${RESET}"
     if [[ "$SKIP_UV" == true ]]; then check_command_optional uv "uv (--skip-uv)" || true
     else check_command uv "uv" || missing=$((missing+1)); fi
-    check_command direnv   "direnv"   || true
-    check_command fzf      "fzf"      || true
-    check_command eza      "eza"      || true
-    check_command zoxide   "zoxide"   || true
-    check_command tmux     "tmux"     || true
-    check_command rg       "ripgrep"  || true
-    check_command aria2c   "aria2c"   || true
-    check_command ffmpeg   "ffmpeg"   || true
+    # Tools that only a package manager installs here: under --skip-system-packages
+    # their absence is a choice, not a gap, so they read as optional, named as such.
+    local _pkg_note=""
+    [[ "$SKIP_SYSTEM_PACKAGES" == true ]] && _pkg_note=" (--skip-system-packages)"
+    _check_pkg_tool() {
+        if [[ "$SKIP_SYSTEM_PACKAGES" == true ]]; then check_command_optional "$1" "$2$_pkg_note" || true
+        else check_command "$1" "$2" || true; fi
+    }
+    _check_pkg_tool direnv   "direnv"
+    _check_pkg_tool fzf      "fzf"
+    _check_pkg_tool eza      "eza"
+    _check_pkg_tool zoxide   "zoxide"
+    _check_pkg_tool tmux     "tmux"
+    _check_pkg_tool rg       "ripgrep"
+    _check_pkg_tool aria2c   "aria2c"
+    _check_pkg_tool ffmpeg   "ffmpeg"
     if ! check_command fd "fd"; then
         check_command fdfind "fd (as fdfind)" || missing=$((missing+1))
     fi
     check_command gh       "GitHub CLI (gh)" || missing=$((missing+1))
-    check_command nvim     "neovim"   || true
+    _check_pkg_tool nvim     "neovim"
     check_command glow     "glow"     || true
     check_command lazygit  "lazygit"  || missing=$((missing+1))
     if [[ "$SKIP_DOCKER" == true ]]; then check_command_optional lazydocker "lazydocker (--skip-docker)" || true
@@ -2113,6 +2145,8 @@ check_prerequisites() {
     echo -e "${BOLD}Python (via uv):${RESET}"
     if [[ "$SKIP_UV" == true ]]; then
         echo -e "  ${DIM}-${RESET} Python 3.13 via uv — skipped (--skip-uv)"
+    elif ! command -v uv &>/dev/null; then
+        echo -e "  ${YELLOW}~${RESET} Python 3.13 via uv — uv is not installed yet (installed right after uv, in the same run)"
     elif command -v uv &>/dev/null; then
         local uv_python
         uv_python=$(uv python list 2>/dev/null | grep "cpython-3.13" | grep -v "download available" | awk '{print $1}' | head -1 || true)
@@ -5415,7 +5449,11 @@ main() {
     # --- Install prerequisites ---
     if ! check_prerequisites; then
         echo
-        if confirm "Install all missing prerequisites (Homebrew, core + optional tools, pnpm, Oh My Zsh)?" n y; then
+        # Homebrew is a macOS prerequisite only: install_linux_prerequisites never
+        # installs Homebrew or Linuxbrew, and nothing here ever will.
+        local _prereq_list="Homebrew, core + optional tools, uv, pnpm, Oh My Zsh"
+        [[ "$(check_os)" != "macos" ]] && _prereq_list="core + optional tools, uv, pnpm, herdr, Oh My Zsh; never Homebrew"
+        if confirm "Install all missing prerequisites (${_prereq_list})?" n y; then
             SECTION_DECISION=yes
             install_prerequisites
             SECTION_DECISION=ask
