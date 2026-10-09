@@ -442,6 +442,11 @@ fi
 if [ -n "$cli_volume" ] && ! _valid_volume "$cli_volume"; then
     _fail 3 "--volume takes a whole number 0-100"; cli_volume=""
 fi
+# A voice that starts with "-" is another option taken as its value
+# (W-20260923-A63: `--voice --print` spoke nothing and exited 0).
+if [ -n "$voice" ] && { case "$voice" in -*) true ;; *) ! _valid_voice "$voice" ;; esac; }; then
+    _fail 3 "--voice takes a voice key or name, not '$voice'"; voice=""
+fi
 if [ "$queue" = 1 ] && ! _valid_delay "$queue_delay"; then
     _fail 3 "--queue takes a gap in whole milliseconds 0-5000, or nothing (0), not '$queue_delay'"
 fi
@@ -2213,7 +2218,7 @@ notify=on" ]
     _ok "--notify --settings sends the settings"            _has "$(_notes)" "Speak clipboard settings: default|Rate: 700 wpm"
     _st --reset all >/dev/null 2>&1
     _ok "--reset all writes the defaults back"              [ "$(_st --get rate)" = 420 ]
-    for i in "--set volume abc:3" "--set notify maybe:3" "--set rate 0:3" "--set:2" "--set speed 3:2" "--bogus:2" "--get bogus:2" "--reset bogus:2" "--profile:2" "--set voice 9:3"; do
+    for i in "--set volume abc:3" "--set notify maybe:3" "--set rate 0:3" "--set:2" "--set speed 3:2" "--bogus:2" "--get bogus:2" "--reset bogus:2" "--profile:2" "--set voice 9:3" "--voice --print:3"; do
         _st ${i%:*} </dev/null >/dev/null 2>&1; rc=$?
         _ok "${i%:*} exits ${i##*:}"                        [ "$rc" = "${i##*:}" ]
     done
