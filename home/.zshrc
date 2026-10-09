@@ -313,10 +313,10 @@ source "$ZSH/oh-my-zsh.sh"
 # This should come after sourcing Oh My Zsh.
 [[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
 
-# --- claude-switch prompt piece (claude-switcher repo; loads only if present) ---
+# --- claude-switch prompt piece (installed by claude-switcher's install.zsh; loads only if present) ---
 # Shows a Claude login's deadline from 7 days out (the `claude_switch` p10k segment) and, at the
 # first prompt of the day, one line when something needs attention. Reads a cache; no Swift per prompt.
-[[ -r ~/CODE/CaptainCodeAU/claude-switcher/claude-switch/shell/claude-switch.zsh ]] && source ~/CODE/CaptainCodeAU/claude-switcher/claude-switch/shell/claude-switch.zsh
+[[ -r ~/.local/share/claude-switcher/claude-switch.zsh ]] && source ~/.local/share/claude-switcher/claude-switch.zsh
 
 # --- Source Other Completions AFTER Oh My Zsh ---
 # These commands often rely on the completion system already being initialized.
