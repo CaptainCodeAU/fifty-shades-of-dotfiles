@@ -12,6 +12,11 @@ the one specific trigger: wiring it globally as a `pre-push` hook.
 It is **dormant until you turn it on** -- nothing changes on your machine just by
 pulling these dotfiles.
 
+**The same switch turns on more than this audit.** The hook script it points git
+at also runs a leak scan before every commit and every push, and stamps session
+lines on commits made in a Claude session. Turning the switch off turns all of
+them off. The full list is in "How it works" below.
+
 ---
 
 ## TL;DR
@@ -24,10 +29,10 @@ git config --file ~/.gitconfig.private core.hooksPath ~/.config/git/hooks  # or 
 # Check it's on:
 git config --get core.hooksPath                # -> ~/.config/git/hooks
 
-# Bypass for ONE push:
-PNPM_AUDIT_DISABLE=1 git push        # or:  git push --no-verify
+# Bypass the audit for ONE push (the leak scan still runs):
+PNPM_AUDIT_DISABLE=1 git push
 
-# Turn OFF:
+# Turn OFF (also turns off the leak scans and session lines):
 git config --file ~/.gitconfig.private --unset core.hooksPath
 ```
 
@@ -44,9 +49,18 @@ advisories, plus the offline structural checks). If it finds anything at or abov
 the blocking severity (`high` by default), the push is **aborted** with a
 non-zero exit and a message telling you how to review or bypass.
 
-Only `pre-push` runs the audit. Commits, merges, checkouts, etc. are **not**
-audited by this feature -- they just pass through to your repo's own hooks
-unchanged (see "How it works").
+Only `pre-push` runs the audit. The other steps the hook script runs (a leak
+scan on commit and on push, session lines on commits) are listed in "How it
+works".
+
+What the audit's result does to the push:
+
+| Audit result                                                | Push                                                                                           |
+| ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| No findings at or above the blocking severity               | goes through                                                                                   |
+| Findings at or above it                                     | **blocked**                                                                                    |
+| Incomplete: some lookups failed, nothing at the floor found | goes through with a loud `SCAN INCOMPLETE` warning; `PNPM_AUDIT_ON_INCOMPLETE=block` blocks it |
+| The scan did not run (auditor missing, uv failed, a crash)  | goes through with `THE SCAN DID NOT RUN`; that is not a clean result                           |
 
 What it checks is exactly what `pnpm-audit-tree` checks (advisories, cooldown,
 exotic sources, missing integrity, the `packageManager` pin bypass, lockfile
@@ -118,12 +132,22 @@ commit-msg, ...).
 
 To avoid that, `~/.config/git/hooks/` contains a single chainer,
 `_audit-chain`, with a symlink for **every standard client-side hook name**
-pointing at it. When git runs any hook, the chainer:
+pointing at it. When git runs any hook, the chainer runs these steps in order
+(numbered as in the script):
 
-1. **Delegates first** to the repo's own `.git/hooks/<name>` if it exists and is
-   executable (forwarding arguments and stdin), so existing per-repo hooks still
-   run exactly as before.
-2. **On `pre-push` only**, additionally runs `pnpm-audit-hook full`.
+| Step | Hook               | What                                                                                          | Off switch                                   |
+| ---- | ------------------ | --------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| 1    | every              | the repo's own `.git/hooks/<name>` (main checkout's, in a worktree), args and stdin forwarded | --                                           |
+| 2    | pre-push           | `pnpm-audit-hook full`                                                                        | `PNPM_AUDIT_DISABLE=1`                       |
+| 2d   | pre-push           | `git-leak-scan` of every pushed commit to a public or unknown remote; fails CLOSED            | none (`leakscan.skip` rules still honoured)  |
+| 2b   | pre-commit         | `git-leak-scan` of the staged diff                                                            | `leakscan.skip` (prefer), `leakscan.disable` |
+| 2c   | pre-commit         | `shift-lint --staged`, opt-in                                                                 | on only with `shiftlint.enable true`         |
+| 3    | prepare-commit-msg | `C-*` session lines on commits made inside a Claude Code session                              | `trailers.disable true`                      |
+
+"Fails CLOSED" means the push is refused when the scan cannot run: `git-leak-scan`
+missing, or the remote's commit not in this repo (`git fetch` first). A repo GitHub
+reports as private is not scanned at push time. The same table is in
+[`PNPM_AUDIT_TREE.md`](./PNPM_AUDIT_TREE.md); keep the two in step.
 
 ```
 git push
@@ -131,9 +155,11 @@ git push
    v
 ~/.config/git/hooks/pre-push  (symlink -> _audit-chain)
    |
-   |-- 1. run <repo>/.git/hooks/pre-push  (if present)   <- your existing hook
+   |-- 1.  run <repo>/.git/hooks/pre-push  (if present)   <- your existing hook
    |
-   '-- 2. run pnpm-audit-hook full                       <- the supply-chain audit
+   |-- 2.  run pnpm-audit-hook full                       <- the supply-chain audit
+   |
+   '-- 2d. run git-leak-scan on the pushed commits        <- public or unknown remote only
 ```
 
 ### Repos that use husky / lefthook are unaffected
@@ -159,11 +185,12 @@ use the default `.git/hooks` (or no hooks at all).
 
 These are read from the environment at push time.
 
-| Variable             | Default | Effect                                                                                                                                |
-| -------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `PNPM_AUDIT_FAILON`  | `high`  | Minimum severity that blocks the push: `low`, `moderate`, `high`, `critical`.                                                         |
-| `PNPM_AUDIT_DISABLE` | (unset) | Set to `1` to skip the audit entirely for that command.                                                                               |
-| `PNPM_AUDIT_VERBOSE` | (unset) | Set to `1` to print the "No JS projects found" no-op confirmation on a push; suppressed by default for non-JS (Python/Rust/Go) repos. |
+| Variable                   | Default | Effect                                                                                                                                                                                       |
+| -------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PNPM_AUDIT_FAILON`        | `high`  | Minimum severity that blocks the push: `low`, `moderate`, `high`, `critical`.                                                                                                                |
+| `PNPM_AUDIT_DISABLE`       | (unset) | Set to `1` to skip the audit entirely for that command.                                                                                                                                      |
+| `PNPM_AUDIT_VERBOSE`       | (unset) | Set to `1` to print the "No JS projects found" no-op confirmation on a push; suppressed by default for non-JS (Python/Rust/Go) repos.                                                        |
+| `PNPM_AUDIT_ON_INCOMPLETE` | `warn`  | `block` refuses a push when the audit could not finish all its lookups and found nothing at the floor. `warn` lets it through with a loud warning (Gavin's pick 2026-10-06, D-20261006-A03). |
 
 Examples:
 
@@ -182,12 +209,15 @@ export PNPM_AUDIT_FAILON=moderate   # add to ~/.zshrc.private if you want it per
 When you have reviewed a finding and want to push anyway:
 
 ```sh
-PNPM_AUDIT_DISABLE=1 git push      # skips the auditor
-git push --no-verify               # skips ALL pre-push hooks (incl. your own)
+PNPM_AUDIT_DISABLE=1 git push      # skips the auditor only
+git push --no-verify               # skips the WHOLE chain, leak scan included
 ```
 
 Prefer `PNPM_AUDIT_DISABLE=1` -- it skips only the audit and still runs any
-repo-local pre-push hook. `--no-verify` skips everything.
+repo-local pre-push hook and the push-time leak scan. `--no-verify` skips
+everything, including the leak scan, which is the last look before a commit
+leaves the machine. Inside a Claude Code session, `git push --no-verify` and
+`git commit --no-verify` are refused (`validate-bash.sh`, W-20260929-A32).
 
 ---
 
@@ -197,7 +227,9 @@ repo-local pre-push hook. `--no-verify` skips everything.
 git config --file ~/.gitconfig.private --unset core.hooksPath
 ```
 
-Git immediately falls back to per-repo `.git/hooks` everywhere. The chainer files
+Git immediately falls back to per-repo `.git/hooks` everywhere. That also turns
+off the leak scans and the session lines, not just the audit. To stop only the
+audit, set `PNPM_AUDIT_DISABLE=1` in your shell instead. The chainer files
 remain stowed (harmless) and can be re-enabled anytime.
 
 ---

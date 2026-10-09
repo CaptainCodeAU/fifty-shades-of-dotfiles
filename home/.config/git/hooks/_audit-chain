@@ -19,6 +19,12 @@
 #      (args + stdin forwarded), so existing per-repo hooks still run.
 #   2. On pre-push ONLY, additionally runs `pnpm-audit-hook full` (network scan:
 #      cooldown + advisories) to block a push carrying supply-chain findings.
+#   2d. On pre-push, leak-scans every pushed commit going to a public or unknown
+#      remote; fails CLOSED.
+#   2b. On pre-commit, leak-scans the staged diff.
+#   2c. On pre-commit, `shift-lint --staged`, only where shiftlint.enable is true.
+#   3. On prepare-commit-msg, stamps the C-* session trailers in a Claude session.
+#   (docs/PNPM_AUDIT_PREPUSH_HOOK.md "How it works" has the same list; keep in step.)
 #
 # Fails open if pnpm-audit-hook is not installed. Bypass an audit block with:
 #   PNPM_AUDIT_DISABLE=1 git push ...      (or: git push --no-verify)

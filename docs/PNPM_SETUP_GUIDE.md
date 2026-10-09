@@ -8,6 +8,10 @@ external setup required.
 
 Target: **pnpm 12.x** on macOS / Linux / WSL2. Every fact below was measured on
 **pnpm 12.9.0 on 2026-10-06** and sits next to the command that proves it.
+On **2026-10-10** the box moved to **12.10.0**: `pnpm-guide-selftest` (40 checks,
+the section 0 probes and the doctor among them) passed on it, and the
+`preferFrozenLockfile` (Appendix) and `engineStrict` (7.0) facts were re-measured.
+A fact that still names 12.9.0 was not re-run on 12.10.0.
 **Run the command; do not trust the sentence.** pnpm changes behaviour inside a
 major (this guide was first written about 11.1.2 and went wrong one release at
 a time), so a fact you have not re-run on the installed version is a guess.
@@ -61,8 +65,8 @@ proves nothing about a key, and a key that pnpm removed looks exactly like one
 it honours:
 
 ```bash
-printf 'bogusKeyXyz: banana\n'                  > "$S/cfg/pnpm/config.yaml"; p --version   # 12.9.0, exit 0
-printf 'managePackageManagerVersions: banana\n' > "$S/cfg/pnpm/config.yaml"; p --version   # 12.9.0, exit 0 (removed key)
+printf 'bogusKeyXyz: banana\n'                  > "$S/cfg/pnpm/config.yaml"; p --version   # 12.10.0, exit 0
+printf 'managePackageManagerVersions: banana\n' > "$S/cfg/pnpm/config.yaml"; p --version   # 12.10.0, exit 0 (removed key)
 printf 'blockExoticSubdeps: banana\n'           > "$S/cfg/pnpm/config.yaml"; p --version   # exit 1, "load configuration"
 ```
 
@@ -534,8 +538,8 @@ Check a version before taking it. The package name changed in 12.x:
 curl -s https://registry.npmjs.org/@pnpm/exe.darwin-arm64/<version> | jq -r '.dist.unpackedSize'
 ```
 
-A real binary is tens of MB (12.4.2-12.9.1: about 36-45 MB; 11.x: about
-141 MB); a broken one is about 2 KB. Anything under 1 MB is broken. pnpm
+A real binary is tens of MB (12.4.2-12.10.0: about 36-45 MB, 12.10.0 is
+40.3 MB; 11.x: about 141 MB); a broken one is about 2 KB. Anything under 1 MB is broken. pnpm
 12.9.0's binary contains an `ERR_PNPM_BROKEN_PNPM_RELEASE` error code, which
 suggests pnpm now guards this itself; not tested.
 
@@ -657,9 +661,15 @@ globalShims: false
 Not here:
 
 - `preferFrozenLockfile`: default **true**; it means "skip resolution when the
-  lockfile already matches", not "refuse lockfile updates". Since 12.8.0 an
-  explicit `true` on CI fails on an outdated lockfile. Leave it unset unless
-  you mean that.
+  lockfile already matches", not "refuse lockfile updates". Measured on 12.10.0
+  (2026-10-10) with a `package.json` edited after the lockfile was written:
+  on a developer machine `true` and unset both rewrite the lockfile (exit 0);
+  with `CI=true` both fail `ERR_PNPM_OUTDATED_LOCKFILE`, and only `false` lets
+  CI rewrite it. So an explicit `true` is the same as the default. (Before
+  12.8.0 an explicit `true` let CI update the lockfile.) To refuse lockfile
+  changes on a developer machine, use `pnpm install --frozen-lockfile`.
+  > **This box:** the global file pins `true` like the other defaults it pins;
+  > its comment said it refused lockfile updates until 2026-10-10.
 - `managePackageManagerVersions`: removed; use `pmOnFail`.
 - Anything in kebab-case.
 - Auth tokens: `auth.ini`.
@@ -671,8 +681,8 @@ Not here:
 > -A08 to -A11, D-20260920-A01) name them as where their reasoning lives. What
 > has moved since, so nobody acts on the old line:
 >
-> - **The box runs 12.9.0.** "12.4.2 is the next target" and "12.5.x not a
->   target yet" are past.
+> - **The box runs 12.10.0** (since 2026-10-10, section 7.3). "12.4.2 is the
+>   next target" and "12.5.x not a target yet" are past.
 > - **Floor `12.8.2`** since 2026-10-06 (it was 12.3.2, below the 12.4.2 security
 >   patch), and a floor now only rises (section 7.5).
 > - **`blockExoticSubdeps`** reads back `undefined` because pnpm 12 IGNORES it in
@@ -683,6 +693,9 @@ Not here:
 >   12.9.0 the **global** pin did not change what installed; the same key in a
 >   project's `pnpm-workspace.yaml` did. Removed from the global file (section 7.4).
 > - **7.1 "`--config.engineStrict=true` did nothing"**: it works since 12.8.0.
+>   Re-measured on 12.10.0 (2026-10-10): the file key, `--engine-strict` and
+>   `--config.engineStrict=true` all fail the `engines.node: "<1"` probe with
+>   `ERR_PNPM_UNSUPPORTED_ENGINE`; unset, it installs.
 > - **7.1 "a mutant ... fails 3 of 10"** cannot be reproduced. Since 2026-10-06
 >   `zsh-node-functions-selftest` has 38 checks, passes inside and outside the
 >   sandbox, and refuses by name (exit 2) when it cannot make its temp dir.
@@ -748,16 +761,16 @@ acceptance. Two facts about the 12.x config parser that the probes turned up:
 - **Unknown keys are silently accepted** (`bogusKeyXyz: banana` -> `pnpm --version` exits 0).
   "No warning" therefore proves nothing about a key.
 - **Known keys are typed.** A wrong type fails EVERY pnpm command with `load configuration ...
-  invalid boolean` (or `did not match any variant of untagged enum`). A typed rejection is a
+invalid boolean` (or `did not match any variant of untagged enum`). A typed rejection is a
   positive arm: the schema knows the key.
 
 **Platform and ecosystem pins (D-20260919-08).**
 
-| Key                      | Value                     | Arm                                                                                                             |
-| ------------------------ | ------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Key                      | Value                      | Arm                                                                                                                                       |
+| ------------------------ | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | `supportedArchitectures` | `{os,cpu,libc: [current]}` | Typed (`os: banana` rejected); behaviour: os:[linux] pin installed `@esbuild/linux-x64` only, `current` installed `@esbuild/darwin-arm64` |
-| `python.enabled`         | `false`                   | Typed (`enabled: banana` -> invalid boolean) on 12.4.1, before the 12.5 Python ecosystem exists                  |
-| `cargo.enabled`          | `false`                   | Typed, same probe                                                                                                |
+| `python.enabled`         | `false`                    | Typed (`enabled: banana` -> invalid boolean) on 12.4.1, before the 12.5 Python ecosystem exists                                           |
+| `cargo.enabled`          | `false`                    | Typed, same probe                                                                                                                         |
 
 The 12.5.0 platform-list form (`- darwin-arm64`) is REJECTED by 12.4.1 at parse time and
 would break every pnpm command on this box, so the object form stays until the floor passes
@@ -765,12 +778,12 @@ would break every pnpm command on this box, so the object form stays until the f
 
 **Policy knobs (D-20260919-09).** All four read back through `pnpm config get`.
 
-| Key                       | Value                              | What changes for `pnpm install` in an existing project                                                                                  |
-| ------------------------- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `trustPolicyExcludePrune` | `true`                             | After a lockfile rewrite, `trustPolicyExclude` name@version entries no longer in the lockfile are dropped (`@scope/*` patterns kept). |
-| `audit.ignorePrune`       | `true`                             | Nothing on install; `pnpm audit --fix` drops `audit.ignore` entries no longer reported.                                                  |
-| `sideEffectsCache`        | `read: true, write: true, remote: null` | Nothing; local build cache as before, no pnpr server. `remote: false` is rejected by the parser, `null` accepted.                  |
-| `engineStrict`            | `true`                             | **Can fail.** A dependency whose `engines` excludes the running Node aborts with `ERR_PNPM_UNSUPPORTED_ENGINE` instead of a warning. Per-project relief: `engineStrict: false` in `pnpm-workspace.yaml`. |
+| Key                       | Value                                   | What changes for `pnpm install` in an existing project                                                                                                                                                   |
+| ------------------------- | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `trustPolicyExcludePrune` | `true`                                  | After a lockfile rewrite, `trustPolicyExclude` name@version entries no longer in the lockfile are dropped (`@scope/*` patterns kept).                                                                    |
+| `audit.ignorePrune`       | `true`                                  | Nothing on install; `pnpm audit --fix` drops `audit.ignore` entries no longer reported.                                                                                                                  |
+| `sideEffectsCache`        | `read: true, write: true, remote: null` | Nothing; local build cache as before, no pnpr server. `remote: false` is rejected by the parser, `null` accepted.                                                                                        |
+| `engineStrict`            | `true`                                  | **Can fail.** A dependency whose `engines` excludes the running Node aborts with `ERR_PNPM_UNSUPPORTED_ENGINE` instead of a warning. Per-project relief: `engineStrict: false` in `pnpm-workspace.yaml`. |
 
 The engineStrict behaviour arm: a `file:` dependency declaring `engines.node: "<1"` installed
 with the key unset and failed with the key set. `--config.engineStrict=true` on the command
@@ -804,17 +817,16 @@ zsh-welcome-selftest          # 8 checks: correct order silent, reversed warns, 
 It extracts the real function from the file by name (the file runs the banner at source time)
 and drives it with fixture PATH strings.
 
-
 ### 7.2 Two blind spots in `pnpm_update`, found taking 12.4.2 (2026-09-20, ruling D-20260920-01)
 
 `pnpm_update` said "12.4.1 is the latest eligible version" twice while 12.4.2, a security
 patch, had been on the registry for four days. Both causes were measured and fixed the same
 night; both have arms in `zsh-node-functions-selftest`.
 
-| Blind spot                                                                                                                                                                                                        | Fix                                                                                                                                                                                                                            |
-| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| The version cache (`~/.cache/dotfiles/pnpm_latest3`) is trusted for `PNPM_CHECK_TTL_DAYS` (7). It was written on 15 Sep, hours before 12.4.2 shipped, so nothing asked the registry again.                    | `pnpm_update` now calls `__pnpm_live_dist_tag` (one 5-second registry call) every run and, when it disagrees with the cached raw, runs `__pnpm_refresh_latest_sync` in the FOREGROUND before choosing a target. The banner keeps the cheap cached path. Offline: the cache still answers. |
-| `__pnpm_platform_pkg` returned the pnpm 11 artifact name (`@pnpm/macos-arm64`). pnpm 12 ships `@pnpm/exe.<os>-<arch>[-musl]`. The metadata GET 404'd, the guard answered `unknown`, and unknown fails OPEN. | The helper takes the target version and picks the naming by major: `@pnpm/exe.darwin-arm64` for 12.x, `@pnpm/macos-arm64` for 11.x (both verified live: binary=ok). Fail-open on `unknown` stays; offline must not block an update. |
+| Blind spot                                                                                                                                                                                                  | Fix                                                                                                                                                                                                                                                                                       |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The version cache (`~/.cache/dotfiles/pnpm_latest3`) is trusted for `PNPM_CHECK_TTL_DAYS` (7). It was written on 15 Sep, hours before 12.4.2 shipped, so nothing asked the registry again.                  | `pnpm_update` now calls `__pnpm_live_dist_tag` (one 5-second registry call) every run and, when it disagrees with the cached raw, runs `__pnpm_refresh_latest_sync` in the FOREGROUND before choosing a target. The banner keeps the cheap cached path. Offline: the cache still answers. |
+| `__pnpm_platform_pkg` returned the pnpm 11 artifact name (`@pnpm/macos-arm64`). pnpm 12 ships `@pnpm/exe.<os>-<arch>[-musl]`. The metadata GET 404'd, the guard answered `unknown`, and unknown fails OPEN. | The helper takes the target version and picks the naming by major: `@pnpm/exe.darwin-arm64` for 12.x, `@pnpm/macos-arm64` for 11.x (both verified live: binary=ok). Fail-open on `unknown` stays; offline must not block an update.                                                       |
 
 The refresh body is now one function (`__pnpm_refresh_latest_body`) with a background wrapper
 (`&!`) and a foreground wrapper, so the two paths cannot drift.
@@ -828,9 +840,9 @@ zsh-node-functions-selftest   # 17 checks: deny list, live dist-tag gate (stale 
 On 6 Oct `pnpm_update` printed `Updating pnpm 12.6.0 -> 12.8.2` and then installed 12.9.0. Two
 causes, both measured, both fixed the same day:
 
-| Cause | Fix |
-| ----- | --- |
-| It ran a bare `pnpm self-update`, so pnpm chose its own target (the newest version past the cooldown, 12.9.0). The deny list and the binary guard had checked 12.8.2. | It now runs `pnpm self-update "$eligible"`, so the version the gates check is the version that installs. pnpm still applies `minimumReleaseAge` to a named version. |
+| Cause                                                                                                                                                                           | Fix                                                                                                                                                                              |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| It ran a bare `pnpm self-update`, so pnpm chose its own target (the newest version past the cooldown, 12.9.0). The deny list and the binary guard had checked 12.8.2.           | It now runs `pnpm self-update "$eligible"`, so the version the gates check is the version that installs. pnpm still applies `minimumReleaseAge` to a named version.              |
 | The cache went stale only when the NEWEST release cleared the cooldown (12.9.1, next day). 12.9.0 cleared it at 9:27 AM with the newest release unchanged, and nothing noticed. | The cache records `next_eligible_at`, the earliest moment ANY version newer than `eligible` clears the cooldown, and `pnpm_update` refreshes in the foreground once that passes. |
 
 **Ruled by Gavin 2026-10-06:** `pnpm_update` names the version it checked. If pnpm still lands on a
@@ -843,19 +855,24 @@ reader honours `PNPM_CONFIG_MINIMUM_RELEASE_AGE` before `config.yaml`, as pnpm d
 zsh-node-functions-selftest   # 31 checks; replays 6 Oct (12.6.0, eligible 12.8.2, pnpm's own pick 12.9.0)
 ```
 
-Not yet measured: a real named `self-update`. The first one is the 12.9.1 update after it clears the
-cooldown at 7:48 AM Wed 7 Oct; it should print `Updating pnpm 12.9.0 -> 12.9.1`.
+**Measured 2026-10-10, the first real named `self-update`:** `pnpm_update` printed
+`Updating pnpm 12.9.0 -> 12.10.0`, pnpm printed `Switching pnpm from v12.9.0 to v12.10.0`, and
+`pnpm -v` then printed `12.10.0` (exit 0). The version it named is the version that installed. It
+skipped 12.9.1 because 12.10.0 (published 4:24 PM Tue 6 Oct) had also cleared the 3-day wait at
+4:24 PM Fri 9 Oct. The welcome banner seen just before the update still offered `↑12.9.1`. When
+that banner was drawn is not known, and the update rewrote the cache it read, so whether the banner
+was stale is not settled.
 
 ### 7.4 Keys pnpm 12 ignores in the global config, and `pmOnFail` (2026-10-06, W-20261006-A33, A42)
 
 **pnpm 12 silently ignores some keys in the global `config.yaml`.** Measured on 12.3.4, 12.6.0 and
 12.9.0 against a scratch copy, with the `PNPM_CONFIG_*` variables removed:
 
-| Key | Evidence it is ignored globally | What we do now |
-| --- | ------------------------------- | -------------- |
-| `supportedArchitectures` | a global `os: [linux]` still installed `@esbuild/darwin-arm64`; the same pin in `pnpm-workspace.yaml` installed linux-x64 | removed; the default (`current`) is what we wanted |
-| `python.enabled`, `cargo.enabled` | read back `undefined`; 11.1.2 warns they "cannot be set in the global config file" | removed; the defaults (`false`) are what we wanted |
-| `blockExoticSubdeps` | a global `false` still blocks; a project's `false` wins over a global `true` | pinned by `PNPM_CONFIG_BLOCK_EXOTIC_SUBDEPS=true` in `home/.zshrc`, which outranks a project |
+| Key                               | Evidence it is ignored globally                                                                                           | What we do now                                                                               |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `supportedArchitectures`          | a global `os: [linux]` still installed `@esbuild/darwin-arm64`; the same pin in `pnpm-workspace.yaml` installed linux-x64 | removed; the default (`current`) is what we wanted                                           |
+| `python.enabled`, `cargo.enabled` | read back `undefined`; 11.1.2 warns they "cannot be set in the global config file"                                        | removed; the defaults (`false`) are what we wanted                                           |
+| `blockExoticSubdeps`              | a global `false` still blocks; a project's `false` wins over a global `true`                                              | pinned by `PNPM_CONFIG_BLOCK_EXOTIC_SUBDEPS=true` in `home/.zshrc`, which outranks a project |
 
 So the 7.1 table's `supportedArchitectures`, `python.enabled` and `cargo.enabled` rows, and 7's
 "read-back gap, not a removed key" for `blockExoticSubdeps`, were wrong: the original arms were
@@ -885,12 +902,12 @@ key and not at all with it. The welcome banner reports updates with the cooldown
 the lowest v12 with every security fix that matters on these machines and none of the known
 regressions:
 
-| Version | Security fix | Regression |
-| ------- | ------------ | ---------- |
-| 12.4.2 | a dependency could take over another package's bin shim (not WSL) | -- |
-| 12.6.0 | the same shim fix for WSL (`cygpath`), which reaches mlbox | could hang on SIGTERM as PID 1 (fixed 12.8.2) |
-| 12.7.0 | env leak through a `userAgent` placeholder; `storeDir` inside the workspace skipped build approval; injected hard-link rewrite | forced full reinstall with injected workspace packages (fixed 12.8.2) |
-| 12.8.0 | -- | dropped the executable bit on `file:` deps (fixed 12.8.1) |
+| Version | Security fix                                                                                                                   | Regression                                                            |
+| ------- | ------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------- |
+| 12.4.2  | a dependency could take over another package's bin shim (not WSL)                                                              | --                                                                    |
+| 12.6.0  | the same shim fix for WSL (`cygpath`), which reaches mlbox                                                                     | could hang on SIGTERM as PID 1 (fixed 12.8.2)                         |
+| 12.7.0  | env leak through a `userAgent` placeholder; `storeDir` inside the workspace skipped build approval; injected hard-link rewrite | forced full reinstall with injected workspace packages (fixed 12.8.2) |
+| 12.8.0  | --                                                                                                                             | dropped the executable bit on `file:` deps (fixed 12.8.1)             |
 
 None of these has a GHSA or CVE, so `toolchain-cve-check` reports 12.3.2 and 12.8.2 alike as clean;
 the floor follows the release notes, not the advisory feeds. Moving the floor with the installed

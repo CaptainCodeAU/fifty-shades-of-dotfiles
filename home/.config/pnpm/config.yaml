@@ -61,11 +61,18 @@ minimumReleaseAgeStrict: true
 # pnpm 11 default: false.
 verifyStoreIntegrity: true
 
-# Refuse to update pnpm-lock.yaml during `pnpm install` unless explicitly
-# asked (via `--no-frozen-lockfile`, `pnpm update`, or `pnpm add`).
-# Matches CI default — dev and CI now agree on what counts as a lockfile
-# change. Prevents accidental drift after a manual package.json edit.
-# pnpm 11 default: false in dev, true in CI.
+# Skip dependency resolution when pnpm-lock.yaml already matches package.json.
+# It does NOT stop `pnpm install` from rewriting an outdated lockfile on a
+# developer machine; this comment said it did until 2026-10-10. Measured on
+# 12.10.0 with a package.json edited after the lockfile was written:
+#   developer machine, true or unset: the install rewrites the lockfile, exit 0
+#   CI=true, true or unset: ERR_PNPM_OUTDATED_LOCKFILE, lockfile untouched
+#   CI=true, false: the install rewrites the lockfile (the control)
+# So `true` is the default in both places. Since 12.8.0 an explicit `true` no
+# longer lets CI update the lockfile (it did before). Pinned like the keys below,
+# so a future default flip cannot change it quietly. To refuse lockfile changes
+# on a developer machine, use `pnpm install --frozen-lockfile`.
+# pnpm default: true.
 preferFrozenLockfile: true
 
 # Fail the install (non-zero exit) if any dependency ships unreviewed lifecycle
@@ -73,8 +80,7 @@ preferFrozenLockfile: true
 # vector (Rspack, nx, Shai-Hulud all used postinstall/preinstall). Approve
 # specific packages with `pnpm approve-builds`, which writes an `allowBuilds`
 # map into the project's pnpm-workspace.yaml.
-# Already the pnpm 11 default (true); pinned to survive future default flips --
-# same rationale as blockExoticSubdeps above.
+# Already the pnpm 11 default (true); pinned to survive future default flips.
 strictDepBuilds: true
 
 # Never auto-run ALL dependency build scripts. Setting this true reverts to the
@@ -190,8 +196,10 @@ sideEffectsCache:
 # version, or set `engineStrict: false` in that project's pnpm-workspace.yaml.
 # Behaviour arm (12.4.1, 2026-09-20): a file: dep with engines.node "<1"
 # installed with this unset and failed ERR_PNPM_UNSUPPORTED_ENGINE with it set.
-# `--config.engineStrict=true` on the command line did NOTHING in the probe;
-# `--engine-strict` and this key both work. Reads back. Ruling D-20260919-09.
+# On 12.4.1 `--config.engineStrict=true` on the command line did nothing; since
+# 12.8.0 it works (re-measured on 12.10.0, 2026-10-10: this key, `--engine-strict`
+# and `--config.engineStrict=true` all fail the same probe, unset installs).
+# Reads back. Ruling D-20260919-09.
 # pnpm 12 default: false.
 engineStrict: true
 
