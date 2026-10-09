@@ -123,9 +123,13 @@ user unit, applies the npm guard to the new Node, adds the two marked blocks to
 points at the docs), touch git's remote URLs (the SSH `insteadOf` rewrites live only in
 `~/.gitconfig.private`, which is never stowed), or run anything as root.
 
-**Known on codebox:** the stowed `~/.gitconfig` sets `core.editor = cursor --wait` and
-resets credential helpers to empty above its `[include]` of `~/.gitconfig.private`, so a
-helper or editor set in the private file wins; one set anywhere above it would be wiped.
+**Known on codebox:** the stowed `~/.gitconfig` resets credential helpers to empty above
+its `[include]` of `~/.gitconfig.private`, so a helper set in the private file survives;
+one set anywhere above it would be wiped. OPEN (W-20261010-A24): the `[include]` sits
+near the TOP of the stowed file, so `core.editor = cursor --wait` below it beats an
+editor set in the private file (git keeps the last value; found on codebox, a box with
+no Cursor). Moving the include to the end, below every default, is the fix; the file is
+Gavin's to edit. Until then set `GIT_EDITOR` in `~/.zshenv` on such a box.
 
 **First-shell noise on a box without sudo.** The onboarding check (`run_onboarding`, first
 interactive shell) used to offer `sudo apt-get install` for every missing optional tool
@@ -157,9 +161,13 @@ Node is never touched.
 Once stow has run, `~/.zshrc` is `home/.zshrc` in this repo, so an installer that
 appends to it pollutes tracked source. nvm's installer is run with `PROFILE=/dev/null`
 and uv's with `INSTALLER_NO_MODIFY_PATH=1`; the stowed `.zshrc` already sets PATH for
-both. bun and pnpm offer no such switch and look for their own lines first; after
-`post_install`, `_rc_pollution_check` reports any change to the repo's rc files rather
-than assuming. Reported, never reverted: the diff may be yours.
+both. bun and pnpm offer no such switch (measured on the codebox real run, 2026-10-10:
+bun appended seven lines through the link), so those two run between `_rc_guard_begin`
+and `_rc_guard_end`: if `home/.zshrc` was clean before the installer and dirty after,
+the whole diff is the installer's, so it is shown and moved into `git stash list` (never
+discarded: the repo's deletion rule), and the file returns to its committed text. A file
+that already held your own edits is never touched; `_rc_pollution_check` reports it at
+the end instead.
 
 ## What a dry run can and cannot show
 

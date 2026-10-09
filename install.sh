@@ -1470,7 +1470,11 @@ _post_stow_herdr_plugins_and_skill() {
                 warn "Backed up a real ~/.agents herdr skill — diff it against the repo copy before discarding."
             fi
             run_cmd ln -sfn "$skill_src" "$agents_skill"
-            success "Codex and Claude now read the same herdr skill"
+            if [[ "$SKIP_CLAUDE" == true ]]; then
+                success "Codex reads the repo's herdr skill via ~/.agents/skills/herdr (Claude's copy under ~/.claude is not stowed: --skip-claude)"
+            else
+                success "Codex and Claude now read the same herdr skill"
+            fi
         fi
     fi
 
@@ -3108,7 +3112,11 @@ install_macos_prerequisites() {
                 if _pnpm_is_standalone; then
                     run_cmd pnpm self-update
                 else
+                    # `pnpm setup` inside the installer edits the rc of $SHELL; guarded
+                    # like bun's (see _rc_guard_end), in case ~/.zshrc is already the link.
+                    _rc_guard_begin
                     run_cmd bash -c 'curl -fsSL https://get.pnpm.io/install.sh | sh -'
+                    _rc_guard_end "pnpm's installer"
                 fi
                 export PNPM_HOME="$HOME/Library/pnpm"
                 export PATH="$PNPM_HOME/bin:$PATH"
@@ -3338,7 +3346,11 @@ install_linux_prerequisites() {
             if _pnpm_is_standalone; then
                 run_cmd pnpm self-update
             else
+                # `pnpm setup` inside the installer edits the rc of $SHELL; guarded
+                # like bun's (see _rc_guard_end), in case ~/.zshrc is already the link.
+                _rc_guard_begin
                 run_cmd bash -c 'curl -fsSL https://get.pnpm.io/install.sh | sh -'
+                _rc_guard_end "pnpm's installer"
             fi
             export PNPM_HOME="$HOME/.local/share/pnpm"
             export PATH="$PNPM_HOME/bin:$PATH"
@@ -4366,7 +4378,11 @@ GITEOF"
         verbose "bun skipped (--skip-bun)"
     elif ! command -v bun &>/dev/null; then
         if confirm "bun not found. Install it?" n y; then
+            # bun's installer has no switch for its rc edits: it appends BUN_INSTALL,
+            # PATH and completion lines to ~/.zshrc, which is the stowed link by now.
+            _rc_guard_begin
             run_cmd bash -c 'curl -fsSL https://bun.sh/install | bash'
+            _rc_guard_end "bun's installer"
             # Activate in current session.
             export BUN_INSTALL="$HOME/.bun"
             export PATH="$BUN_INSTALL/bin:$PATH"
@@ -4508,8 +4524,36 @@ _ensure_default_node() {
 # The installers above (uv, nvm, pnpm, bun) each like to append lines to the shell
 # rc files they find. Once stow has run, ~/.zshrc IS home/.zshrc in this repo, so an
 # append lands in tracked source. Guards are passed where an installer offers one
-# (uv, nvm); this is the measurement for the rest: the repo's own rc files must be
-# unchanged by the install. Reported, never reverted -- the diff may be yours.
+# (uv, nvm). bun's and pnpm's offer none, so those two run between _rc_guard_begin
+# and _rc_guard_end, which put the file back ONLY when it was clean before the
+# installer ran (then the whole diff is the installer's: measured on codebox
+# 2026-10-10, bun appended 7 lines through the link). A file with your own edits in
+# it is never touched; _rc_pollution_check reports it at the end instead.
+RC_GUARD_CLEAN=false
+_rc_guard_begin() {
+    RC_GUARD_CLEAN=false
+    git -C "$REPO_DIR" diff --quiet -- home/.zshrc 2>/dev/null && RC_GUARD_CLEAN=true
+    return 0
+}
+_rc_guard_end() {   # $1 = who ran
+    [[ "$DRY_RUN" == true ]] && return 0
+    [[ "$RC_GUARD_CLEAN" == true ]] || return 0
+    git -C "$REPO_DIR" diff --quiet -- home/.zshrc 2>/dev/null && return 0
+    local n
+    n=$(git -C "$REPO_DIR" diff --numstat -- home/.zshrc 2>/dev/null | awk '{print $1}')
+    warn "${1} wrote ${n:-?} line(s) into the stowed ~/.zshrc (through the link, into this repo):"
+    git -C "$REPO_DIR" diff -- home/.zshrc 2>/dev/null | grep '^+[^+]' | sed 's/^+/      /'
+    # A stash, not a checkout: the lines go into `git stash list` (recoverable, the
+    # repo's deletion rule) and the file returns to its committed text. The only
+    # lines moved are the ones just shown, because the file was clean before.
+    if git -C "$REPO_DIR" stash push -q -m "install.sh: lines ${1} appended to home/.zshrc through the ~/.zshrc link" -- home/.zshrc 2>/dev/null; then
+        success "home/.zshrc put back as committed (the appended lines are in 'git stash list'); the stowed .zshrc already sets PATH for ${1%%\'*}."
+    else
+        warn "could not put home/.zshrc back; review with: git -C $(pretty_path "$REPO_DIR") diff -- home/.zshrc"
+    fi
+    return 0
+}
+
 _rc_pollution_check() {
     [[ "$DRY_RUN" == true ]] && return 0
     local dirty
