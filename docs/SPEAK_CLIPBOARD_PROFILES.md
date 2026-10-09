@@ -203,3 +203,6 @@ or where the build had to choose; each is a judgement call, open to change.
   cold first render of the second voice added about 1.4 s of silence once,
   when it was queued only 1 s into the first: rendering early hides a slow
   render only when there is time to hide it.
+- **Keys** (Gavin, 2026-10-10): none for the second profile or `--queue`;
+  those are run from code. By hand, in herdr: ctrl+alt+6 `--skip`, ctrl+alt+7
+  `--stop` (a stop that never starts speech, unlike the speak key).

@@ -223,6 +223,21 @@ key = "ctrl+alt+0"
 type = "shell"
 command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --reset all'"
 
+# Skip and stop by hand (Gavin, 2026-10-10). A second voice waits in line
+# behind the first (--queue, run from code, not a key). ctrl+alt+6 skips:
+# the voice speaking now stops and the next in line plays. ctrl+alt+7
+# stops: silence, and the line is cleared. Unlike the speak key above, 7
+# never starts speech: pressed when nothing is speaking, it does nothing.
+[[keys.command]]
+key = "ctrl+alt+6"
+type = "shell"
+command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --skip'"
+
+[[keys.command]]
+key = "ctrl+alt+7"
+type = "shell"
+command = "sh -c 'exec \"$HOME/.local/bin/speak-clipboard\" --stop'"
+
 [ui.toast]
 delivery = "system"
 
