@@ -206,3 +206,45 @@ or where the build had to choose; each is a judgement call, open to change.
 - **Keys** (Gavin, 2026-10-10): none for the second profile or `--queue`;
   those are run from code. By hand, in herdr: ctrl+alt+6 `--skip`, ctrl+alt+7
   `--stop` (a stop that never starts speech, unlike the speak key).
+
+## Review fixes (2026-10-10)
+
+Four reviewers (settings file, line player, command line, the selftest itself)
+found about 80 items; Gavin chose to fix all four groups. Each fix has a
+selftest check, and the new checks were run against the previous script
+(572ffa2): 49 of them fail there, 203 of 203 pass now (bash 5 and 3.2).
+
+- **Key repeat narrowed (Gavin, 2026-10-10, changing Q22; ruling D-20261010-A04):** the 0.5 s rule
+  counts only `--queue` presses that read the clipboard. A `--stdin` press is
+  code, and code may queue two voices in a row.
+- **Settings file:** a file that cannot be read is never written over (it used
+  to be replaced by `[default]`); writes take `speak-settings.flock` and read
+  the file again under it (six `--set rate +20` at once lost steps); one write
+  whose size is checked before the rename; a temp name of the run's own; CRLF
+  line ends, a byte-order mark and spaces around `=` or a heading are read; a
+  line that is not a setting is warned about.
+- **The line player:** a clock that stops for 5 s with audio waiting ends the
+  line with a note (it used to run for ever, and `--queue` voices went
+  nowhere); a say2 that sends nothing for 30 s is stopped; an ffplay that dies
+  takes only the voice it was playing, and the rest go on in a new one; "nan"
+  status lines mean nothing has played yet (a cold device); with no status
+  line, the wall-clock guess does not count silence; a failed voice leaves no
+  gap; the player always finishes under `speak-line.flock` and reads the pipe
+  while it waits for it; it starts before the first voice is written, so a
+  long message cannot block.
+- **Command line:** one command per run (exit 2); empty values and values that
+  are another option are refused; no leading zeros (`0440` was stepped as
+  octal); `--get` with no key before another option; `[[` cannot survive the
+  cleaner; link text between hyperlinks is kept; a corrupt engine cache line
+  is ignored; `--set` re-runs itself through `$BASH`, so a bare name or a
+  missing execute bit no longer fails after saving.
+- **The selftest:** its arms reach only stand-ins and a few linked system
+  tools (never the real `say`), run in a clean environment, never touch the
+  real state, stop every stand-in they started, and wait on conditions rather
+  than sleeps. The stand-ins can start cold, freeze, die, render slowly, fail
+  or hang. It reports a lost or added check against the expected count (203).
+- **Left as they are:** `--get` prints the value a command would use (flags
+  included); a `--queue` press that resolves to the `say` fallback (no
+  premium voice) replaces the line, since `say` cannot stream; the settings
+  file is written as a plain file, so a symlinked one would be replaced (it is
+  not symlinked on this machine).
