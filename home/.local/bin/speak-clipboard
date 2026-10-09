@@ -817,9 +817,15 @@ acquire_lock() {
 # A process's start time with all whitespace removed. `ps -o lstart=` pads
 # its output with trailing spaces and `read` strips them, so the raw strings
 # never compare equal (MEASURED: that bug made every stop report idle).
+# LC_ALL=C because lstart follows the locale (v4.11, 2026-10-10): en_AU
+# prints "Sat 10 Oct", C or no locale "Sat Oct 10". The herdr hotkey runs
+# with en_AU and the t33remap LaunchAgent with none, so a stamp written by
+# one never matched the other's check, and a toggle started a second voice
+# (found by button_bunny-main; write-up in button_bunny-isolinear workbench,
+# speak-clipboard-parallel-voices-2026-10-10.md).
 _start_of() {
     local s
-    s="$(ps -o lstart= -p "$1" 2>/dev/null)"
+    s="$(LC_ALL=C ps -o lstart= -p "$1" 2>/dev/null)"
     printf '%s' "${s//[[:space:]]/}"
 }
 
