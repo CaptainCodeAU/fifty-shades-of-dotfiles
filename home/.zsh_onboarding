@@ -455,6 +455,26 @@ __pnpm_store_maintenance() {
 _PKG_MANAGER_NAME=""
 _PKG_MANAGER_CMD=""
 _PKG_MANAGER_CHECK=""
+# Set when the detected package manager needs root and this user cannot get it
+# (not root, not in sudo/wheel/admin). The install prompts below then print the
+# command for an admin instead of asking a y/N that could only fail. A box like
+# codebox (Ubuntu, user without sudo) used to get a prompt per missing tool on
+# every first shell, and a scripted `zsh -lic exit` sat on that read for ever.
+# Decided by GROUP membership, deliberately: `sudo -n true` would answer for a
+# sudoers.d-only user too, but a denied `sudo -n` is logged as an auth failure (and
+# mailed to root where mail_badpass is on) on every first shell of every user
+# without sudo. A sudoers.d-only user not in those groups gets the admin hint
+# instead of the prompt; run the printed command yourself.
+_PKG_MANAGER_NEEDS_ROOT=""
+
+__user_can_sudo() {
+    [[ "$EUID" == 0 ]] && return 0
+    local g
+    for g in $(id -nG 2>/dev/null); do
+        case "$g" in sudo|wheel|admin|root) return 0 ;; esac
+    done
+    return 1
+}
 
 # ------------------------------------------------------------------------------
 # Package Manager Detection
@@ -493,6 +513,10 @@ __detect_package_manager() {
         echo "${warn}Could not detect package manager. Automatic installation disabled.${done}"
         _PKG_MANAGER_NAME=""
         _PKG_MANAGER_CMD=""
+    fi
+    _PKG_MANAGER_NEEDS_ROOT=""
+    if [[ "$_PKG_MANAGER_CMD" == sudo\ * ]] && ! __user_can_sudo; then
+        _PKG_MANAGER_NEEDS_ROOT=1
     fi
 }
 
@@ -561,7 +585,12 @@ __ensure_command() {
         return 0
     fi
 
-    # Command not found — offer to install
+    # Command not found — offer to install, unless the install needs a root this
+    # user does not have: then say what an admin should run and ask nothing.
+    if [[ -n "$_PKG_MANAGER_NEEDS_ROOT" ]]; then
+        echo "${warn}Tool missing: '$cmd_to_check'. Needs root here (you have no sudo); ask an admin for: ${_PKG_MANAGER_CMD#sudo } $pkg_name${done}"
+        return 0
+    fi
     if [[ -n "$_PKG_MANAGER_CMD" && -t 1 ]]; then
         echo "${warn}Tool missing: '$cmd_to_check' not found.${done}"
         read "REPLY?${info}    Install '$pkg_name' using ${_PKG_MANAGER_NAME}? [y/N] ${done}"

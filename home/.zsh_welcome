@@ -466,12 +466,21 @@ __show_welcome_full() {
         _dotrepo="${${_dotrc:A}:h:h}"
         if [[ -d "$_dotrepo/.git" ]]; then
             local _undeployed
+            # Trees install.sh left out on purpose (a profile's --skip-claude, say) are
+            # recorded by its last real stow in links/stow-skip; not gaps. Same list
+            # deploy-parity-check reads, so the two never disagree.
+            local -a _skipnames=()
+            local _skipf="${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/links/stow-skip" _s
+            [[ -r "$_skipf" ]] && _skipnames=( ${(f)"$(<"$_skipf")"} )
             _undeployed=$(git -C "$_dotrepo" ls-files home 2>/dev/null | sed 's#^home/##' | while read rel; do
                 case "$rel" in
                     .gitignore|*/.gitignore|.gitmodules|*/.gitmodules) continue ;;
                     .DS_Store|*/.DS_Store|.stow-local-ignore|*/.stow-local-ignore) continue ;;
                     */__pycache__/*|*.pyc) continue ;;
                 esac
+                for _s in "${_skipnames[@]}"; do
+                    [[ "$rel" == "$_s" || "$rel" == "$_s"/* ]] && continue 2
+                done
                 # Linked INTO THIS REPO, not merely present: a real file where the
                 # link belongs, a dangling link or a link elsewhere all count (they
                 # read as fine before 2026-10-05, when one real file stopped a restow).

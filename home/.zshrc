@@ -20,6 +20,13 @@ export PATH="$HOME/.local/bin:$HOME/.docker/bin:$PATH"
 # --- Cross-Platform Environment ---
 export LANG=en_AU.UTF-8
 export LC_ALL=en_AU.UTF-8
+# A Linux box does not always have en_AU generated (codebox: no sudo, so no
+# locale-gen), and an ungenerated LC_ALL makes every perl- or gettext-based tool
+# print "setlocale: LC_ALL: cannot change locale" on stderr. C.UTF-8 is always
+# there on glibc. macOS always has en_AU, so this is Linux only (one `locale -a`).
+if [[ "$(uname -s)" == Linux ]] && ! locale -a 2>/dev/null | grep -qiE '^en_AU\.utf-?8$'; then
+    export LANG=C.UTF-8 LC_ALL=C.UTF-8
+fi
 
 # --- Editor ---
 if command -v nvim &>/dev/null; then
@@ -2422,6 +2429,14 @@ if [[ -n "$DOTFILES_ALLOW_NPM" ]]; then
 fi
 if [[ -n "$DOTFILES_ALLOW_SYSTEM_PYTHON" ]]; then
     unset -f python python3 pip pipx py313 py312 py311 py310 2>/dev/null
+fi
+# DOTFILES_PLAIN_CLAUDE: written by `install.sh --skip-claude` (the codebox profile)
+# for a box with no ~/.claude, no engage and no pj. The claude() pane guard above
+# refuses a bare `claude` and names engage, which such a box cannot follow, and
+# `c` points at pj-launcher-menu for the same framework. Plain Claude Code is the
+# whole point there (codebox Q17), so both go. docs/INSTALL_PROFILES.md.
+if [[ -n "$DOTFILES_PLAIN_CLAUDE" ]]; then
+    unset -f claude c 2>/dev/null
 fi
 
 # --- Node.js 'pnpm dlx' / 'bunx' Aliases ---

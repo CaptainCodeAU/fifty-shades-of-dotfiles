@@ -16,6 +16,12 @@
 #  Modifiers (--verbose, --dry-run) can be combined with any action:
 #    ./install.sh --verbose --check
 #    ./install.sh --verbose --dry-run
+#
+#  Profiles, skip flags and the no-questions mode (docs/INSTALL_PROFILES.md):
+#    ./install.sh --profile codebox            # a named bundle of the flags below
+#    ./install.sh --no-questions               # every prompt takes its recorded answer
+#    ./install.sh --no-sudo                    # a step that needs sudo is named, never run
+#    ./install.sh --skip-claude --skip-ssh ... # leave one optional part out
 # ==============================================================================
 
 set -euo pipefail
@@ -55,7 +61,11 @@ SAFE_RM="$REPO_DIR/home/.local/bin/safe-rm"
 # shellenv runs from .zshrc/.zprofile, which this script does not source), so
 # `brew`/`stow`/etc. must be found even when install.sh is launched oddly.
 [[ -d "/opt/homebrew/bin" ]]             && export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:$PATH"
-[[ -d "$HOME/.local/bin" ]]              && export PATH="$HOME/.local/bin:$PATH"
+# ~/.local/bin unconditionally: on a fresh box it does not exist when this script
+# starts, and uv, herdr, lazygit and glow are installed INTO it during the run. With
+# the `-d` guard the other lines use, the re-check after installing them could not
+# see them and stopped at "still missing" (the codebox dry run, 2026-10-10).
+export PATH="$HOME/.local/bin:$PATH"
 [[ -d "$HOME/.local/share/pnpm" ]]       && export PATH="$HOME/.local/share/pnpm:$PATH"
 [[ -d "$HOME/.local/share/pnpm/bin" ]]   && export PATH="$HOME/.local/share/pnpm/bin:$PATH"
 [[ -d "$HOME/Library/pnpm" ]]            && export PATH="$HOME/Library/pnpm:$PATH"
@@ -78,6 +88,51 @@ CC_CLANG_MAJOR=""
 CC_SDK_VER=""
 VERBOSE=false
 SKIP_PREFLIGHT=false
+
+# --- Profiles, skip flags, no-questions, no-sudo (Gavin's design, Q24 of the codebox
+# build, 2026-10-10; docs/INSTALL_PROFILES.md) ---
+# Every OPTIONAL part of this installer has a skip flag; without it the part asks its
+# yes/no question as before. A profile is a named bundle of these flags, applied before
+# the flags typed on the command line, so a typed flag always wins. The first profile is
+# `codebox`: a throwaway Ubuntu box whose user has no sudo, no ~/.claude and no ~/.ssh.
+PROFILE=""
+# --no-questions: confirm() takes each prompt's RECORDED no-questions answer (its third
+# argument; the interactive default when none is recorded) and never reads stdin. A
+# typed gate (confirm_typed) is always DECLINED in this mode: nobody typed the word.
+NO_QUESTIONS=false
+# --no-sudo: run_cmd refuses any command that starts with `sudo`, prints it, and returns
+# 0 exactly like --dry-run does for that one command, so a step that needs root is
+# named in the output and in the closing summary instead of failing or hanging on a
+# password prompt. Nothing here ever escalates by another route.
+NO_SUDO=false
+NO_SUDO_SKIPPED=()
+# Skip flags. Each one leaves out ONE optional part; the part's own checks still gate
+# it when the flag is off. The stow skips (claude, ssh, tmux, docker) also keep the
+# matching home/ paths out of stow, the conflict check, the link manifest and parity.
+SKIP_CLAUDE=false            # home/.claude, Claude hook registration, pj settings and pj checks
+SKIP_SSH=false               # home/.ssh
+SKIP_SYSTEM_PACKAGES=false   # the package-manager (apt/dnf/pacman/zypper/brew) tool installs
+SKIP_TMUX=false              # home/.tmux.conf, home/.zsh_tmux, TPM
+SKIP_DOCKER=false            # home/.zsh_docker_functions, lazydocker
+SKIP_RUST=false              # rustup
+SKIP_YAZI=false              # yazi
+SKIP_FONTS=false             # Nerd Font
+SKIP_GIT_HOOKS=false         # the pnpm-audit pre-push hook (core.hooksPath)
+SKIP_NVM=false               # nvm and the default Node
+SKIP_PNPM=false              # pnpm (standalone)
+SKIP_BUN=false               # bun
+SKIP_UV=false                # uv and Python 3.13
+SKIP_HERDR=false             # herdr (install, pin, service, plugin)
+SKIP_OMZ=false               # Oh My Zsh, its plugins and Powerlevel10k
+SKIP_GIT_IDENTITY=false      # the user.name / user.email prompt
+
+# --- Node.js default version ---
+# nvm alone leaves a box with no Node at all (measured: install.sh installed nvm and
+# never a Node, so `node` was "command not found" until someone ran `nvm install` by
+# hand). After nvm is present, post_install installs this major and makes it the
+# default when nvm holds no Node yet. Node 24 is the Active LTS (since 2025-10); keep
+# it >= NODE_MIN_MAJOR. An existing Node is never replaced here.
+NODE_DEFAULT_VERSION="24"
 
 # Group-level confirm state. When a section is approved/declined as a whole, this
 # is set to "yes"/"no" so confirm() auto-answers the prompts inside it; "ask"
@@ -1065,8 +1120,8 @@ _herdr_offer_restart() {
     else
         info "Nothing runs inside herdr apart from its own tab-bar status commands."
     fi
-    if [[ ! -t 0 ]]; then
-        info "Not interactive, so not asking. Restart it yourself: ${CYAN}${cmd_str}${RESET}"
+    if [[ ! -t 0 || "$NO_QUESTIONS" == true ]]; then
+        info "Not asking (no terminal, or --no-questions). Restart it yourself: ${CYAN}${cmd_str}${RESET}"
         return 0
     fi
     read -rp "$(echo -e "${YELLOW}Type 'restart' to restart herdr now; anything else skips: ${RESET}")" ans || ans=""
@@ -1442,6 +1497,7 @@ _preflight_herdr_release_check() {
     # the old version despite the "re-run ./install.sh" hint in check_prerequisites.
     local os; os="$(check_os)"
     [[ "$os" == "linux" || "$os" == "wsl" ]] || return 0
+    [[ "$SKIP_HERDR" == true ]] && return 0
     command -v herdr &>/dev/null || return 0
 
     local have want
@@ -1463,9 +1519,17 @@ pretty_path() {
     echo "${1/#$HOME/~}"
 }
 
+# confirm PROMPT [DEFAULT] [NO_QUESTIONS_ANSWER]
+#   DEFAULT              y|n: what bare Enter means at the prompt (n when omitted).
+#   NO_QUESTIONS_ANSWER  y|n: what --no-questions answers (DEFAULT when omitted).
+# The third argument is where a prompt's unattended answer is RECORDED, next to the
+# question, so it can be read and reviewed in one place. The rule used when recording
+# them: an install the dotfiles depend on answers yes; anything that removes, replaces
+# or reaches outside this repo's remit keeps the safe no.
 confirm() {
     local prompt="$1"
     local default="${2:-n}"
+    local unattended="${3:-$default}"
     # Group-level auto-answer: a section approved/declined as a whole answers its
     # inner prompts here (echoed, so the user still sees what's covered).
     case "${SECTION_DECISION:-ask}" in
@@ -1477,9 +1541,21 @@ confirm() {
         # dry-run safe), but a real run with no terminal takes the DEFAULT -- say
         # so, or the dry run silently previews a different run (red team, 2026-10-05).
         local would="answer it at the prompt"
-        [[ -t 0 ]] || { [[ "$default" == "y" ]] && would="go ahead (default yes, no terminal)" || would="skip (default no, no terminal)"; }
+        if [[ "$NO_QUESTIONS" == true ]]; then
+            [[ "$unattended" == "y" ]] && would="go ahead (no-questions answer: yes)" || would="skip (no-questions answer: no)"
+        elif [[ ! -t 0 ]]; then
+            [[ "$default" == "y" ]] && would="go ahead (default yes, no terminal)" || would="skip (default no, no terminal)"
+        fi
         echo -e "  ${DIM}[dry-run] Would ask: $prompt -- a real run would $would${RESET}"
         return 1
+    fi
+    if [[ "$NO_QUESTIONS" == true ]]; then
+        # Echoed with the answer, so a log of an unattended run still shows every
+        # decision that was taken on the operator's behalf.
+        if [[ "$unattended" == "y" ]]; then
+            echo -e "  ${DIM}[no-questions] ${prompt} → yes${RESET}"; return 0
+        fi
+        echo -e "  ${DIM}[no-questions] ${prompt} → no${RESET}"; return 1
     fi
     local yn
     if [[ "$default" == "y" ]]; then
@@ -1503,6 +1579,11 @@ confirm() {
 # opt-out marker).
 confirm_typed() {
     local word="$1" prompt="$2" ans
+    if [[ "$NO_QUESTIONS" == true ]]; then
+        # Nobody typed the word. A no-questions run can never accept a typed gate.
+        warn "--no-questions -- '${prompt}' treated as DECLINED (a typed gate is never answered unattended)."
+        return 1
+    fi
     if [[ ! -t 0 ]]; then
         warn "Not interactive -- '${prompt}' treated as DECLINED."
         return 1
@@ -1517,8 +1598,51 @@ run_cmd() {
         echo -e "  ${DIM}[dry-run] Would run: $*${RESET}"
         return 0
     fi
+    # --no-sudo: the one place every `run_cmd sudo ...` in this file passes through.
+    # Treated exactly like --dry-run for that command (printed, return 0) rather than
+    # as a failure: this script runs under `set -e`, and a non-zero return from a bare
+    # `run_cmd sudo apt ...` would abort the whole install instead of skipping a step.
+    # The command is recorded so the closing summary can list what root still owes.
+    if [[ "$NO_SUDO" == true && "${1:-}" == sudo ]]; then
+        echo -e "  ${DIM}[no-sudo] NOT run (needs root): $*${RESET}"
+        NO_SUDO_SKIPPED+=("$*")
+        return 0
+    fi
     verbose "Running: $*"
     "$@"
+}
+
+# The home/ paths a skip flag keeps out of stow, one basename per line. Stow's
+# --ignore takes a Perl regex matched against the BASENAME (measured with stow 2.4.1,
+# 2026-10-10: `--ignore='^\.claude$'` dropped every LINK under .claude and never
+# descended into it; the slash-anchored `^/\.claude$` ignored nothing). The same
+# names drive _conflict_check_ignored, so the conflict check, the link manifest and
+# the parity check all agree with what stow was told.
+_stow_skip_names() {
+    [[ "$SKIP_CLAUDE" == true ]] && echo ".claude"
+    [[ "$SKIP_SSH" == true ]]    && echo ".ssh"
+    [[ "$SKIP_TMUX" == true ]]   && { echo ".tmux.conf"; echo ".zsh_tmux"; }
+    [[ "$SKIP_DOCKER" == true ]] && echo ".zsh_docker_functions"
+    return 0
+}
+
+# `--ignore=...` arguments for stow, one per skipped name (empty when nothing is skipped).
+_stow_ignore_args() {
+    local n
+    while IFS= read -r n; do
+        [[ -n "$n" ]] && printf -- '--ignore=^%s$\n' "$(printf '%s' "$n" | sed 's/\./\\./g')"
+    done < <(_stow_skip_names)
+    return 0
+}
+
+# True when a home/-relative path is under a skipped top-level name.
+_stow_skipped_rel() {
+    local rel="$1" n
+    while IFS= read -r n; do
+        [[ -n "$n" ]] || continue
+        [[ "$rel" == "$n" || "$rel" == "$n"/* ]] && return 0
+    done < <(_stow_skip_names)
+    return 1
 }
 
 # ==============================================================================
@@ -1689,7 +1813,9 @@ _check_deploy_parity() {
         echo -e "  ${YELLOW}~${RESET} deploy parity — uv not installed yet, skipped"
         return 0
     fi
-    DOTFILES_REPO="$REPO_DIR" "$checker"
+    # The checker is told the same skips stow was told (DOTFILES_STOW_SKIP, one
+    # basename per entry, colon-separated), so a skipped tree is not a parity gap.
+    DOTFILES_REPO="$REPO_DIR" DOTFILES_STOW_SKIP="$(_stow_skip_names | paste -sd ':' -)" "$checker"
 }
 
 # --- Toolchain takeover: survey, disclose, gate (must precede stow_home) ----
@@ -1856,7 +1982,8 @@ check_prerequisites() {
     echo
 
     echo -e "${BOLD}Core Tools:${RESET}"
-    check_command uv       "uv"       || missing=$((missing+1))
+    if [[ "$SKIP_UV" == true ]]; then check_command_optional uv "uv (--skip-uv)" || true
+    else check_command uv "uv" || missing=$((missing+1)); fi
     check_command direnv   "direnv"   || true
     check_command fzf      "fzf"      || true
     check_command eza      "eza"      || true
@@ -1872,7 +1999,8 @@ check_prerequisites() {
     check_command nvim     "neovim"   || true
     check_command glow     "glow"     || true
     check_command lazygit  "lazygit"  || missing=$((missing+1))
-    check_command lazydocker "lazydocker" || missing=$((missing+1))
+    if [[ "$SKIP_DOCKER" == true ]]; then check_command_optional lazydocker "lazydocker (--skip-docker)" || true
+    else check_command lazydocker "lazydocker" || missing=$((missing+1)); fi
     if [[ "$(check_os)" == "macos" ]]; then
         # The question safe-rm asks, answered by the repo copy (this runs before stow). Not
         # `command -v trash`: with the shim stowed that finds the shim, so it passed with no
@@ -1892,7 +2020,8 @@ check_prerequisites() {
     # release binary verified against HERDR_SHA256_* by install_herdr_release.
     # Both routes refuse an unverified artefact, so neither box is held to a
     # standard the other escapes.
-    check_command herdr "herdr" || missing=$((missing+1))
+    if [[ "$SKIP_HERDR" == true ]]; then check_command_optional herdr "herdr (--skip-herdr)" || true
+    else check_command herdr "herdr" || missing=$((missing+1)); fi
     # Where herdr exists, its guards ARE the policy and must be observable:
     # the pin enforces the release cooldown, config.toml keeps the two
     # phone-home paths closed, and on Linux the systemd unit is what makes the
@@ -1975,13 +2104,16 @@ check_prerequisites() {
     else
         echo -e "  ${YELLOW}~${RESET} nvm — not installed"
     fi
-    check_command pnpm     "pnpm"     || missing=$((missing+1))
+    if [[ "$SKIP_PNPM" == true ]]; then check_command_optional pnpm "pnpm (--skip-pnpm)" || true
+    else check_command pnpm "pnpm" || missing=$((missing+1)); fi
     check_command_optional node "node" || true
     check_command_optional bun  "bun"  || true
     echo
 
     echo -e "${BOLD}Python (via uv):${RESET}"
-    if command -v uv &>/dev/null; then
+    if [[ "$SKIP_UV" == true ]]; then
+        echo -e "  ${DIM}-${RESET} Python 3.13 via uv — skipped (--skip-uv)"
+    elif command -v uv &>/dev/null; then
         local uv_python
         uv_python=$(uv python list 2>/dev/null | grep "cpython-3.13" | grep -v "download available" | awk '{print $1}' | head -1 || true)
         if [[ -n "$uv_python" ]]; then
@@ -2055,8 +2187,12 @@ check_prerequisites() {
     # Same reporting path, for the same reason. Read-only; writes nothing.
     # The pj settings file is in the same class: present but out of date with the
     # repo is as undeployed as absent, and nothing else would ever say so.
-    _render_project_settings check || parity=1
-    _claude_hooks_sync check || parity=1
+    if [[ "$SKIP_CLAUDE" == true ]]; then
+        echo -e "  ${DIM}-${RESET} Claude hooks and pj settings — skipped (--skip-claude)"
+    else
+        _render_project_settings check || parity=1
+        _claude_hooks_sync check || parity=1
+    fi
     if (( parity )); then
         if [[ "$ACTION" == "check" ]]; then
             missing=$((missing+1))
@@ -2107,7 +2243,7 @@ _ensure_python_313() {
     local has_python
     has_python=$(uv python list 2>/dev/null | grep "cpython-3.13" | grep -v "download available" | head -1 || true)
     if [[ -z "$has_python" ]]; then
-        if confirm "Install Python 3.13 via uv?"; then
+        if confirm "Install Python 3.13 via uv?" n y; then
             run_cmd uv python install 3.13
         fi
     else
@@ -2538,7 +2674,7 @@ _offer_clt_install() {
     # Default YES. Opening a page is free and reversible, and it is what the
     # operator is going to do next anyway -- making them type 'y' to reach the
     # only remaining route is friction with no safety value.
-    if command -v open &>/dev/null && confirm "Open the download page now?" y; then
+    if command -v open &>/dev/null && confirm "Open the download page now?" y n; then
         run_cmd open "https://developer.apple.com/download/all/?q=command+line+tools" || true
     fi
     return 0
@@ -2821,7 +2957,14 @@ install_macos_prerequisites() {
     local -a formulae=(stow uv direnv jq fzf eza zoxide neovim tmux ripgrep fd gh git-lfs glow herdr aria2 ffmpeg)
     local to_install=()
 
-    for formula in "${formulae[@]}"; do
+    if [[ "$SKIP_SYSTEM_PACKAGES" == true ]]; then
+        info "Homebrew formula installs skipped (--skip-system-packages)."
+        formulae=()
+    fi
+    for formula in "${formulae[@]+"${formulae[@]}"}"; do
+        [[ "$SKIP_HERDR" == true && "$formula" == herdr ]] && continue
+        [[ "$SKIP_TMUX" == true && "$formula" == tmux ]] && continue
+        [[ "$SKIP_UV" == true && "$formula" == uv ]] && continue
         if ! brew list "$formula" &>/dev/null; then
             to_install+=("$formula")
         fi
@@ -2829,10 +2972,10 @@ install_macos_prerequisites() {
 
     if (( ${#to_install[@]} > 0 )); then
         info "Core tools to install: ${to_install[*]}"
-        if confirm "Install these core tools via Homebrew?"; then
+        if confirm "Install these core tools via Homebrew?" n y; then
             run_cmd brew install "${to_install[@]}"
         fi
-    else
+    elif [[ "$SKIP_SYSTEM_PACKAGES" != true ]]; then
         success "Core formulae already installed"
     fi
 
@@ -2844,22 +2987,26 @@ install_macos_prerequisites() {
 
     # --- Required CLI tools (lazygit, lazydocker — installed unconditionally) ---
     local -a required_cli=(lazygit lazydocker)
+    [[ "$SKIP_DOCKER" == true ]] && required_cli=(lazygit)
+    [[ "$SKIP_SYSTEM_PACKAGES" == true ]] && required_cli=()
     local req_install=()
-    for formula in "${required_cli[@]}"; do
+    for formula in "${required_cli[@]+"${required_cli[@]}"}"; do
         brew list "$formula" &>/dev/null || req_install+=("$formula")
     done
     if (( ${#req_install[@]} > 0 )); then
         info "Installing required CLI tools: ${req_install[*]}"
         run_cmd brew install "${req_install[@]}"
-    else
+    elif [[ "$SKIP_SYSTEM_PACKAGES" != true ]]; then
         success "lazygit + lazydocker already installed"
     fi
 
     # --- Optional CLI tools ---
     local -a optional=(tree fastfetch yazi)
+    [[ "$SKIP_YAZI" == true ]] && optional=(tree fastfetch)
+    [[ "$SKIP_SYSTEM_PACKAGES" == true ]] && optional=()
     local opt_install=()
 
-    for formula in "${optional[@]}"; do
+    for formula in "${optional[@]+"${optional[@]}"}"; do
         if ! brew list "$formula" &>/dev/null; then
             opt_install+=("$formula")
         fi
@@ -2879,9 +3026,12 @@ install_macos_prerequisites() {
     fi
 
     # --- pnpm ---
-    # macOS provider: standalone (get.pnpm.io) on Apple Silicon; Homebrew on
-    # Intel, where the standalone SEA binary segfaults (nodejs/node#62893).
-    if _pnpm_needs_install_or_upgrade; then
+    # macOS provider: the standalone pnpm (get.pnpm.io) on every Mac since
+    # 2026-10-06 (D-20261006-A08); _pnpm_use_homebrew is always false and its
+    # branch below is kept only so every caller reads one answer.
+    if [[ "$SKIP_PNPM" == true ]]; then
+        verbose "pnpm skipped (--skip-pnpm)"
+    elif _pnpm_needs_install_or_upgrade; then
         if _pnpm_use_homebrew; then
             # Intel macOS: Homebrew is the supported pnpm provider.
             local cur_pnpm=""
@@ -2918,7 +3068,7 @@ install_macos_prerequisites() {
             else
                 prompt="pnpm not found. Install it (standalone)?"
             fi
-            if confirm "$prompt"; then
+            if confirm "$prompt" n y; then
                 # self-update only works on a real standalone; for a corepack shim
                 # or npm-global pnpm it can't create $PNPM_HOME/bin — curl instead.
                 if _pnpm_is_standalone; then
@@ -2975,9 +3125,14 @@ install_macos_prerequisites() {
     # writes for auth/registry/approve-builds defaults. Leave it alone.
 
     # --- Oh My Zsh ---
-    if [[ ! -d "$HOME/.oh-my-zsh" ]]; then
+    if [[ "$SKIP_OMZ" == true ]]; then
+        verbose "Oh My Zsh skipped (--skip-omz)"
+    elif [[ ! -d "$HOME/.oh-my-zsh" ]]; then
         if confirm "Oh My Zsh not found. Install it?" "y"; then
-            run_cmd env RUNZSH=no KEEP_ZSHRC=yes sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
+            # CHSH=no: the installer otherwise runs chsh when $SHELL is not zsh, and chsh
+            # asks for a password -- a read no flag of ours can answer. Changing the
+            # login shell is root's (or the user's own) step, not this installer's.
+            run_cmd env RUNZSH=no CHSH=no KEEP_ZSHRC=yes sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
         fi
     fi
 }
@@ -2992,81 +3147,111 @@ install_linux_prerequisites() {
 
     if [[ -z "$pkg_mgr" ]]; then
         warn "Could not detect package manager. Install dependencies manually."
+    elif [[ "$SKIP_SYSTEM_PACKAGES" == true ]]; then
+        info "Package-manager installs skipped (--skip-system-packages): $pkg_mgr is not run. Anything still missing above is for root to add."
     else
         info "Detected package manager: $pkg_mgr"
 
         # --- Core tools ---
-        if confirm "Install core tools (stow, jq, fzf, direnv, eza, zoxide, tmux, ripgrep, fd, gh, git-lfs, trash-cli, neovim, glow, aria2, ffmpeg)?"; then
+        # glow is NOT on the apt line: it is not an Ubuntu 24.04 package, and apt
+        # fails the WHOLE command on one unknown name, so every core tool on this
+        # line went uninstalled on plain Ubuntu (found on the codebox build,
+        # 2026-10-10). Linux gets glow from its GitHub release instead, below.
+        if confirm "Install core tools (stow, jq, fzf, direnv, eza, zoxide, tmux, ripgrep, fd, gh, git-lfs, trash-cli, neovim, glow, aria2, ffmpeg)?" n y; then
             case "$pkg_mgr" in
                 apt)
                     run_cmd sudo apt update
-                    run_cmd sudo apt install -y stow jq fzf direnv zoxide tmux ripgrep fd-find git-lfs trash-cli glow neovim unzip aria2 ffmpeg
-                    # fd-find installs as fdfind on Debian/Ubuntu — symlink to fd
-                    if command -v fdfind &>/dev/null && ! command -v fd &>/dev/null; then
-                        run_cmd mkdir -p "$HOME/.local/bin"
-                        run_cmd ln -sf "$(command -v fdfind)" "$HOME/.local/bin/fd"
-                        info "Symlinked fdfind → ~/.local/bin/fd"
-                    fi
+                    run_cmd sudo apt install -y stow jq fzf direnv zoxide tmux ripgrep fd-find git-lfs trash-cli neovim unzip aria2 ffmpeg
+                    # (fd-find installs as fdfind; the ~/.local/bin/fd link is made below,
+                    # outside this branch, so it also happens when root did the apt step.)
                     # eza and gh need special repos on Ubuntu/Debian
                     if ! command -v eza &>/dev/null; then
                         info "eza requires a separate install on Debian/Ubuntu."
                         info "See: https://github.com/eza-community/eza#installation"
                     fi
                     if ! command -v gh &>/dev/null; then
-                        info "Installing GitHub CLI via official repo..."
-                        run_cmd sudo mkdir -p -m 755 /etc/apt/keyrings
-                        curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null
-                        echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
-                        run_cmd sudo apt update && run_cmd sudo apt install -y gh
+                        if [[ "$NO_SUDO" == true ]]; then
+                            warn "gh not installed: adding GitHub's apt repo needs root (--no-sudo). Ask root for: apt install gh (after adding https://cli.github.com/packages)."
+                        else
+                            info "Installing GitHub CLI via official repo..."
+                            run_cmd sudo mkdir -p -m 755 /etc/apt/keyrings
+                            curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg > /dev/null
+                            echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+                            run_cmd sudo apt update && run_cmd sudo apt install -y gh
+                        fi
                     fi
                     ;;
                 dnf)    run_cmd sudo dnf install -y stow jq fzf direnv eza zoxide tmux ripgrep fd-find gh git-lfs trash-cli glow neovim aria2 ffmpeg ;;
-                pacman) run_cmd sudo pacman -S --noconfirm stow jq fzf direnv eza zoxide tmux ripgrep fd github-cli git-lfs trash-cli glow neovim aria2 ffmpeg ;;
+                pacman) run_cmd sudo pacman -S --noconfirm stow jq fzf direnv zoxide tmux ripgrep fd github-cli git-lfs trash-cli glow neovim aria2 ffmpeg ;;
                 zypper) run_cmd sudo zypper install -y stow jq fzf direnv zoxide tmux ripgrep fd git-lfs trash-cli glow neovim aria2 ffmpeg ;;
             esac
         fi
+    fi
 
-        # --- lazygit (required — installed from latest GitHub release on all distros) ---
-        if command -v lazygit &>/dev/null; then
-            success "lazygit already installed"
+    # --- fd: Debian/Ubuntu ship it as fdfind. Linked here, outside the apt branch, so a
+    # root-installed fd-find gets its `fd` name under --skip-system-packages too. ---
+    if command -v fdfind &>/dev/null && ! command -v fd &>/dev/null; then
+        run_cmd mkdir -p "$HOME/.local/bin"
+        run_cmd ln -sf "$(command -v fdfind)" "$HOME/.local/bin/fd"
+        info "Symlinked fdfind → ~/.local/bin/fd"
+    fi
+
+    # --- glow (Linux: GitHub release to ~/.local/bin; no distro package on Ubuntu).
+    # User-level, so it is NOT gated on --skip-system-packages, like lazygit. ---
+    if ! command -v glow &>/dev/null; then
+        if confirm "Install glow (markdown viewer) from its GitHub release to ~/.local/bin?" y y; then
+            install_glow_release || warn "glow not installed — see https://github.com/charmbracelet/glow#installation"
+        fi
+    fi
+
+    # --- lazygit (required — latest GitHub release, to ~/.local/bin, no sudo) ---
+    # ~/.local/bin rather than /usr/local/bin: a user without sudo (the codebox
+    # profile) can still have it, and ~/.local/bin is first on PATH in every shell
+    # these dotfiles set up. A lazygit already at /usr/local/bin is left alone.
+    if command -v lazygit &>/dev/null; then
+        success "lazygit already installed"
+    else
+        info "Installing lazygit from GitHub release..."
+        local lg_arch=""
+        case "$(uname -m)" in
+            x86_64)  lg_arch="x86_64" ;;
+            aarch64) lg_arch="arm64"  ;;
+        esac
+        if [[ -z "$lg_arch" ]]; then
+            warn "Unsupported arch — see https://github.com/jesseduffield/lazygit#installation"
         else
-            info "Installing lazygit from GitHub release..."
-            local lg_arch=""
-            case "$(uname -m)" in
-                x86_64)  lg_arch="x86_64" ;;
-                aarch64) lg_arch="arm64"  ;;
-            esac
-            if [[ -z "$lg_arch" ]]; then
-                warn "Unsupported arch — see https://github.com/jesseduffield/lazygit#installation"
+            local lg_ver lg_tmp
+            lg_ver=$(curl -fsSL "https://api.github.com/repos/jesseduffield/lazygit/releases/latest" 2>/dev/null \
+                | grep -Po '"tag_name": "v\K[^"]*' || true)
+            if [[ -z "$lg_ver" ]]; then
+                warn "Could not detect lazygit latest version — see https://github.com/jesseduffield/lazygit#installation"
             else
-                local lg_ver lg_tmp
-                lg_ver=$(curl -fsSL "https://api.github.com/repos/jesseduffield/lazygit/releases/latest" 2>/dev/null \
-                    | grep -Po '"tag_name": "v\K[^"]*' || true)
-                if [[ -z "$lg_ver" ]]; then
-                    warn "Could not detect lazygit latest version — see https://github.com/jesseduffield/lazygit#installation"
+                lg_tmp=$(mktemp -d)
+                if run_cmd curl -fsSL -o "$lg_tmp/lazygit.tar.gz" \
+                    "https://github.com/jesseduffield/lazygit/releases/download/v${lg_ver}/lazygit_${lg_ver}_Linux_${lg_arch}.tar.gz"; then
+                    run_cmd tar -xf "$lg_tmp/lazygit.tar.gz" -C "$lg_tmp" lazygit
+                    run_cmd mkdir -p "$HOME/.local/bin"
+                    run_cmd install -m 755 "$lg_tmp/lazygit" "$HOME/.local/bin/lazygit"
+                    success "lazygit ${lg_ver} installed to ~/.local/bin"
                 else
-                    lg_tmp=$(mktemp -d)
-                    if run_cmd curl -fsSL -o "$lg_tmp/lazygit.tar.gz" \
-                        "https://github.com/jesseduffield/lazygit/releases/download/v${lg_ver}/lazygit_${lg_ver}_Linux_${lg_arch}.tar.gz"; then
-                        run_cmd tar -xf "$lg_tmp/lazygit.tar.gz" -C "$lg_tmp" lazygit
-                        run_cmd sudo install "$lg_tmp/lazygit" -D -t /usr/local/bin/
-                        success "lazygit ${lg_ver} installed to /usr/local/bin"
-                    else
-                        warn "lazygit release download failed — see https://github.com/jesseduffield/lazygit#installation"
-                    fi
-                    rm -rf "$lg_tmp"
+                    warn "lazygit release download failed — see https://github.com/jesseduffield/lazygit#installation"
                 fi
+                rm -rf "$lg_tmp"
             fi
         fi
+    fi
 
-        # --- lazydocker (required — official install script → ~/.local/bin on all distros) ---
-        if command -v lazydocker &>/dev/null; then
-            success "lazydocker already installed"
-        else
-            info "Installing lazydocker via official install script..."
-            run_cmd bash -c 'curl -fsSL https://raw.githubusercontent.com/jesseduffield/lazydocker/master/scripts/install_update_linux.sh | DIR="$HOME/.local/bin" bash'
-        fi
+    # --- lazydocker (required unless --skip-docker — official script → ~/.local/bin) ---
+    if [[ "$SKIP_DOCKER" == true ]]; then
+        verbose "lazydocker skipped (--skip-docker)"
+    elif command -v lazydocker &>/dev/null; then
+        success "lazydocker already installed"
+    else
+        info "Installing lazydocker via official install script..."
+        run_cmd bash -c 'curl -fsSL https://raw.githubusercontent.com/jesseduffield/lazydocker/master/scripts/install_update_linux.sh | DIR="$HOME/.local/bin" bash'
+    fi
 
+    if [[ -n "$pkg_mgr" && "$SKIP_SYSTEM_PACKAGES" != true ]]; then
         # --- Optional CLI tools ---
         if confirm "Install optional CLI tools (tree, fastfetch, yazi)?"; then
             # Non-fatal: a missing/renamed optional package must not abort the install.
@@ -3083,15 +3268,23 @@ install_linux_prerequisites() {
     fi
 
     # --- uv ---
-    if ! command -v uv &>/dev/null; then
-        if confirm "uv not found. Install it?"; then
-            run_cmd bash -c 'curl -LsSf https://astral.sh/uv/install.sh | sh'
+    # INSTALLER_NO_MODIFY_PATH: uv's installer otherwise appends a PATH line to the
+    # shell rc files it finds. ~/.zshrc is a stow link into this repo once stow has
+    # run, and the stowed .zshrc already puts ~/.local/bin first, so an appended
+    # line would be repo pollution with nothing to show for it.
+    if [[ "$SKIP_UV" == true ]]; then
+        verbose "uv skipped (--skip-uv)"
+    elif ! command -v uv &>/dev/null; then
+        if confirm "uv not found. Install it?" n y; then
+            run_cmd bash -c 'curl -LsSf https://astral.sh/uv/install.sh | INSTALLER_NO_MODIFY_PATH=1 sh'
             export PATH="$HOME/.local/bin:$PATH"
         fi
     fi
 
     # --- pnpm (standalone) ---
-    if _pnpm_needs_install_or_upgrade; then
+    if [[ "$SKIP_PNPM" == true ]]; then
+        verbose "pnpm skipped (--skip-pnpm)"
+    elif _pnpm_needs_install_or_upgrade; then
         local cur_pnpm="" prompt=""
         command -v pnpm &>/dev/null && cur_pnpm=$(pnpm -v 2>/dev/null || echo "unknown")
         if _pnpm_is_standalone; then
@@ -3105,7 +3298,7 @@ install_linux_prerequisites() {
         else
             prompt="pnpm not found. Install it (standalone)?"
         fi
-        if confirm "$prompt"; then
+        if confirm "$prompt" n y; then
             # self-update only works on a real standalone; for a corepack shim or
             # npm-global pnpm it can't create $PNPM_HOME/bin — curl-install instead.
             if _pnpm_is_standalone; then
@@ -3134,14 +3327,18 @@ install_linux_prerequisites() {
     fi
 
     # --- Rust toolchain (rustup) — optional ---
-    if ! command -v rustup &>/dev/null; then
+    if [[ "$SKIP_RUST" == true ]]; then
+        verbose "rustup skipped (--skip-rust)"
+    elif ! command -v rustup &>/dev/null; then
         if SECTION_DECISION=ask confirm "Install Rust toolchain (rustup)? Needed for cargo-binstall and other rust CLI tools."; then
             install_rust_toolchain
         fi
     fi
 
     # --- yazi (terminal file manager) via GitHub release zip ---
-    if ! command -v yazi &>/dev/null; then
+    if [[ "$SKIP_YAZI" == true ]]; then
+        verbose "yazi skipped (--skip-yazi)"
+    elif ! command -v yazi &>/dev/null; then
         if confirm "Install yazi (terminal file manager) from GitHub release?"; then
             install_yazi_release
         fi
@@ -3151,13 +3348,78 @@ install_linux_prerequisites() {
     # Not gated behind `command -v herdr` like yazi above: the function itself
     # compares the installed version against HERDR_VERSION, so re-running
     # install.sh after a deliberate version bump actually deploys the bump.
-    install_herdr_release || warn "herdr not installed — see docs/HERDR.md"
+    if [[ "$SKIP_HERDR" == true ]]; then
+        verbose "herdr skipped (--skip-herdr)"
+    else
+        install_herdr_release || warn "herdr not installed — see docs/HERDR.md"
+    fi
 
     # --- Oh My Zsh ---
-    if [[ ! -d "$HOME/.oh-my-zsh" ]]; then
+    if [[ "$SKIP_OMZ" == true ]]; then
+        verbose "Oh My Zsh skipped (--skip-omz)"
+    elif [[ ! -d "$HOME/.oh-my-zsh" ]]; then
         if confirm "Oh My Zsh not found. Install it?" "y"; then
-            run_cmd env RUNZSH=no KEEP_ZSHRC=yes sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
+            # CHSH=no: the installer otherwise runs chsh when $SHELL is not zsh, and chsh
+            # asks for a password -- a read no flag of ours can answer. Changing the
+            # login shell is root's (or the user's own) step, not this installer's.
+            run_cmd env RUNZSH=no CHSH=no KEEP_ZSHRC=yes sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
         fi
+    fi
+}
+
+# Install glow from its latest GitHub release into ~/.local/bin. Linux only; macOS
+# has the Homebrew formula. Same shape as install_yazi_release: resolve the tag
+# through the /releases/latest redirect, download, unpack, move one binary.
+install_glow_release() {
+    if command -v glow &>/dev/null; then
+        success "glow already installed ($(glow --version 2>/dev/null | head -1))"
+        return 0
+    fi
+    local arch
+    case "$(uname -m)" in
+        x86_64)         arch="x86_64" ;;
+        aarch64|arm64)  arch="arm64" ;;
+        *) warn "Unsupported architecture for glow release: $(uname -m)"; return 1 ;;
+    esac
+    local latest_url tag ver
+    latest_url=$(curl -fsSLI -o /dev/null -w '%{url_effective}' \
+        "https://github.com/charmbracelet/glow/releases/latest" 2>/dev/null || true)
+    tag="${latest_url##*/}"
+    if [[ -z "$tag" || "$tag" == "latest" ]]; then
+        warn "Could not resolve latest glow release tag from GitHub"
+        return 1
+    fi
+    ver="${tag#v}"
+    local asset="glow_${ver}_Linux_${arch}.tar.gz"
+    local url="https://github.com/charmbracelet/glow/releases/download/${tag}/${asset}"
+    local tmp_dir
+    tmp_dir=$(mktemp -d)
+    info "Downloading $asset..."
+    if ! run_cmd curl -fL --proto '=https' --tlsv1.2 -o "$tmp_dir/$asset" "$url"; then
+        warn "glow download failed from $url"
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+    if [[ "$DRY_RUN" == true ]]; then
+        info "[dry-run] Would unpack $asset and install glow to ~/.local/bin"
+        rm -rf "$tmp_dir"
+        return 0
+    fi
+    run_cmd tar -xzf "$tmp_dir/$asset" -C "$tmp_dir"
+    local bin
+    bin=$(find "$tmp_dir" -type f -name glow -perm -u+x 2>/dev/null | head -1)
+    if [[ -z "$bin" ]]; then
+        warn "glow binary not found inside $asset"
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+    mkdir -p "$HOME/.local/bin"
+    run_cmd install -m 755 "$bin" "$HOME/.local/bin/glow"
+    rm -rf "$tmp_dir"
+    if command -v glow &>/dev/null; then
+        success "glow installed: $(glow --version 2>/dev/null | head -1)"
+    else
+        warn "glow installed to ~/.local/bin but not on PATH — ensure ~/.local/bin is on PATH"
     fi
 }
 
@@ -3352,7 +3614,8 @@ _restow_home() {
         printf '%s\n' "$$" > "$lstate/DEPLOYING" 2>/dev/null || true
     fi
     _restow_home_inner "$@"; rc=$?
-    [[ -e "$lstate/DEPLOYING" ]] && { printf 'done\n' > "$lstate/DEPLOYING" 2>/dev/null || true; }
+    # Not under --dry-run: nothing was claimed above, and a dry run must write nothing.
+    [[ "$DRY_RUN" != true && -e "$lstate/DEPLOYING" ]] && { printf 'done\n' > "$lstate/DEPLOYING" 2>/dev/null || true; }
     return $rc
 }
 
@@ -3363,6 +3626,15 @@ _restow_home_inner() {
         stow_args=(--adopt --no-folding -t "$HOME" home)
     else
         _stow_preflight || return 1
+    fi
+    # Skip flags: the ignores go BEFORE the package name; stow reads options anywhere
+    # but a listing reads better with the package last.
+    local -a ign=()
+    local a
+    while IFS= read -r a; do [[ -n "$a" ]] && ign+=("$a"); done < <(_stow_ignore_args)
+    if (( ${#ign[@]} > 0 )); then
+        stow_args=("${stow_args[@]:0:${#stow_args[@]}-1}" "${ign[@]}" home)
+        info "stow skips: $(_stow_skip_names | paste -sd ' ' -)"
     fi
     local -a unowned=()
     local plan line rel other=0
@@ -3415,6 +3687,20 @@ _restow_home_inner() {
         fi
     fi
     [[ "$VERBOSE" == true ]] && stow_args=("${stow_args[0]}" -v "${stow_args[@]:1}")
+    if [[ "$DRY_RUN" == true ]]; then
+        # Show the plan itself, not just the command: `stow -n` prints NOTHING at
+        # default verbosity (CLAUDE.md, "stow -n PRINTS NOTHING"), so a dry run that
+        # only echoed the command could not tell an empty plan from a real one. -v2
+        # lists every LINK, UNLINK and MKDIR; the counts are summarised first.
+        local plan_out
+        plan_out=$(stow -n -v2 "${stow_args[@]}" 2>&1) || true
+        local n_link n_unlink n_mkdir
+        n_link=$(printf '%s\n' "$plan_out" | grep -c '^LINK: ' || true)
+        n_unlink=$(printf '%s\n' "$plan_out" | grep -c '^UNLINK: ' || true)
+        n_mkdir=$(printf '%s\n' "$plan_out" | grep -c '^MKDIR: ' || true)
+        info "[dry-run] stow plan: ${n_link} LINK, ${n_unlink} UNLINK, ${n_mkdir} MKDIR (LINK lines without '(reverts previous action)' are new):"
+        printf '%s\n' "$plan_out" | grep -E '^(LINK|UNLINK|MKDIR): ' | sed 's/^/      /'
+    fi
     if ! run_cmd stow "${stow_args[@]}"; then
         [[ "$DRY_RUN" != true ]] && _restow_put_back
         trap - INT TERM
@@ -3463,11 +3749,32 @@ _refuse_other_checkout() {
 # cannot take this with it. Never records a broken state: every path stow would
 # link (every file under home/, minus what stow ignores) must be a link into
 # this repo, or the snapshot is refused and the last good one kept.
+# Record, beside the link manifest, what this stow left out and which profile asked
+# for it: `stow-skip` (one basename per line) is read by the welcome banner's parity
+# line and by deploy-parity-check, so neither reports a skipped tree as a gap;
+# `profile` is what a later flag-less run re-applies. Written on every real stow,
+# so a run with no skips leaves both empty (an empty file is a positive "nothing
+# skipped", never an absent one). `profile` is only rewritten when a profile was
+# named (--profile X or --profile none): a run that typed bare skip flags keeps the
+# stored profile for next time.
+_write_stow_state() {
+    local dir="$1"
+    _stow_skip_names > "$dir/stow-skip.tmp.$$" && mv -f "$dir/stow-skip.tmp.$$" "$dir/stow-skip" \
+        || warn "could not write $(pretty_path "$dir/stow-skip")"
+    if [[ -n "$PROFILE" ]]; then
+        printf '%s\n' "$PROFILE" > "$dir/profile.tmp.$$" && mv -f "$dir/profile.tmp.$$" "$dir/profile" \
+            || warn "could not write $(pretty_path "$dir/profile")"
+        [[ "$PROFILE" == none ]] && verbose "stored profile cleared" || verbose "profile ${PROFILE} recorded for later flag-less runs"
+    fi
+    return 0
+}
+
 _snapshot_links() {
     local dir="${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/links"
     local rel t lt n=0 good=0 tmp list
-    [[ "$DRY_RUN" == true ]] && { info "[dry-run] Would record the link manifest in $(pretty_path "$dir")"; return 0; }
+    [[ "$DRY_RUN" == true ]] && { info "[dry-run] Would record the link manifest in $(pretty_path "$dir")${PROFILE:+ and the profile (${PROFILE})}"; return 0; }
     mkdir -p "$dir" || { warn "Link manifest NOT written: cannot create $(pretty_path "$dir")"; return 0; }
+    _write_stow_state "$dir"
     # Every file stow would link: tracked AND untracked, gitignored ones included
     # (stow reads .stow-local-ignore, not .gitignore -- a gitignored tool in
     # ~/.local/bin is still linked, measured); stow's own ignores are dropped below.
@@ -3532,7 +3839,7 @@ _zshenv_links_warning() {
 # Added by fifty-shades-of-dotfiles install.sh (outage of 2026-10-05). Silent when the
 # links are healthy. Remove the whole block (both marker lines) to opt out.
 if [[ -o interactive && -f "${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/links/current.tsv" ]] \
-   && { [[ ! -L "$HOME/.zshrc" ]] || [[ ! -L "$HOME/.claude/hooks/validate-bash.sh" ]]; }; then
+   && { [[ ! -L "$HOME/.zshrc" ]] || [[ ! -L "$HOME/.local/bin/rm" ]]; }; then
   print -u2 -- "DOTFILES LINKS MISSING: this shell has no dotfiles setup, Claude sessions are blocked, and plain rm is the PERMANENT /bin/rm here."
   print -u2 -- "  Restore (no hooks or dotfiles needed, deletes nothing, safe to run twice): sh ${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/links/restore"
 fi
@@ -3610,6 +3917,9 @@ _restow_put_back() {
 # decision, even though stow itself would have silently skipped it.
 _conflict_check_ignored() {
     local rel="$1"
+    # A skip flag's paths are not stowed, so they are not conflicts, not manifest
+    # entries and not parity gaps either (see _stow_skip_names).
+    _stow_skipped_rel "$rel" && return 0
     case "$rel" in
         *__pycache__*|*.pyc) return 0 ;;
         # .stow-local-ignore's own header: these are stow's built-in default
@@ -3915,7 +4225,9 @@ post_install() {
     local git_name git_email
     git_name=$(git config user.name 2>/dev/null || true)
     git_email=$(git config user.email 2>/dev/null || true)
-    if [[ -z "$git_name" || -z "$git_email" ]]; then
+    if [[ "$SKIP_GIT_IDENTITY" == true ]]; then
+        info "Git identity prompt skipped (--skip-git-identity); ~/.gitconfig.private is yours to write."
+    elif [[ -z "$git_name" || -z "$git_email" ]]; then
         if [[ -f "$git_private" ]]; then
             warn "Git identity not fully resolved, but $(pretty_path "$git_private") already exists."
             info "The file may contain includeIf rules, URL rewrites, or multi-account config."
@@ -3969,16 +4281,26 @@ GITEOF"
     fi
 
     # --- Python via uv ---
-    _ensure_python_313
+    if [[ "$SKIP_UV" == true ]]; then
+        verbose "Python 3.13 via uv skipped (--skip-uv)"
+    else
+        _ensure_python_313
+    fi
 
     # --- NVM ---
     # Pin the exact, audited tag (v${NVM_MIN_VERSION}); older nvm is affected by
     # CVE-2026-10796 (<= 0.40.4), CVE-2026-15921 (<= 0.40.5) and CVE-2026-94185
     # (<= 0.40.7). The official
     # installer is idempotent — re-running it upgrades an existing nvm in place.
-    if [[ ! -d "$HOME/.nvm" ]]; then
-        if confirm "nvm not found. Install it (v${NVM_MIN_VERSION}) for Node.js version management?"; then
-            run_cmd bash -c "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v${NVM_MIN_VERSION}/install.sh | bash"
+    # PROFILE=/dev/null: nvm's installer otherwise appends its source lines to the
+    # rc file of $SHELL. ~/.zshrc is a stow link into this repo by now and already
+    # sources nvm.sh, so the append would be repo pollution (and on a box whose
+    # login shell is still bash it would edit ~/.bashrc, which nothing here reads).
+    if [[ "$SKIP_NVM" == true ]]; then
+        verbose "nvm skipped (--skip-nvm)"
+    elif [[ ! -d "$HOME/.nvm" ]]; then
+        if confirm "nvm not found. Install it (v${NVM_MIN_VERSION}) for Node.js version management?" n y; then
+            run_cmd bash -c "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v${NVM_MIN_VERSION}/install.sh | PROFILE=/dev/null bash"
             # Activate in current session so subsequent steps and the user can
             # use nvm immediately without opening a new terminal.
             export NVM_DIR="$HOME/.nvm"
@@ -3989,8 +4311,8 @@ GITEOF"
         local cur_nvm
         cur_nvm=$(_nvm_installed_version)
         warn "nvm ${cur_nvm:-?} is below ${NVM_MIN_VERSION} (CVE-2026-10796 <= 0.40.4, CVE-2026-15921 <= 0.40.5, CVE-2026-94185 <= 0.40.7)."
-        if confirm "Upgrade nvm to v${NVM_MIN_VERSION}?"; then
-            run_cmd bash -c "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v${NVM_MIN_VERSION}/install.sh | bash"
+        if confirm "Upgrade nvm to v${NVM_MIN_VERSION}?" n y; then
+            run_cmd bash -c "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v${NVM_MIN_VERSION}/install.sh | PROFILE=/dev/null bash"
             export NVM_DIR="$HOME/.nvm"
             [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
             success "nvm upgraded to v${NVM_MIN_VERSION}"
@@ -3999,12 +4321,17 @@ GITEOF"
         success "nvm installed (v$(_nvm_installed_version))"
     fi
 
+    # --- Node (a default version under nvm) ---
+    _ensure_default_node
+
     # --- Bun ---
     # bun >= BUN_MIN_VERSION is required for the ~/.bunfig.toml minimumReleaseAge
     # cooldown to apply; below it, bun silently ignores the key. `bun upgrade`
     # moves to the latest stable (bun can't pin a version like nvm does).
-    if ! command -v bun &>/dev/null; then
-        if confirm "bun not found. Install it?"; then
+    if [[ "$SKIP_BUN" == true ]]; then
+        verbose "bun skipped (--skip-bun)"
+    elif ! command -v bun &>/dev/null; then
+        if confirm "bun not found. Install it?" n y; then
             run_cmd bash -c 'curl -fsSL https://bun.sh/install | bash'
             # Activate in current session.
             export BUN_INSTALL="$HOME/.bun"
@@ -4044,9 +4371,11 @@ GITEOF"
     fi
 
     # --- TPM (Tmux Plugin Manager) ---
-    if command -v tmux &>/dev/null; then
+    if [[ "$SKIP_TMUX" == true ]]; then
+        verbose "TPM skipped (--skip-tmux)"
+    elif command -v tmux &>/dev/null; then
         if [[ ! -d "$HOME/.tmux/plugins/tpm" ]]; then
-            if confirm "Install TPM (Tmux Plugin Manager)?"; then
+            if confirm "Install TPM (Tmux Plugin Manager)?" n y; then
                 run_cmd git clone https://github.com/tmux-plugins/tpm "$HOME/.tmux/plugins/tpm"
                 success "TPM installed"
                 info "Start tmux and press ${CYAN}prefix + I${RESET} to install plugins."
@@ -4072,7 +4401,9 @@ GITEOF"
         fi
     fi
 
-    if [[ "$has_nerd_font" == false ]]; then
+    if [[ "$SKIP_FONTS" == true ]]; then
+        verbose "Nerd Font skipped (--skip-fonts)"
+    elif [[ "$has_nerd_font" == false ]]; then
         if confirm "Install Nerd Font (Symbols Only) for Powerlevel10k icons?"; then
             if [[ "$os" == "macos" ]]; then
                 run_cmd brew install --cask font-symbols-only-nerd-font
@@ -4103,6 +4434,56 @@ GITEOF"
     else
         success "~/.zshrc.private exists"
     fi
+
+    _rc_pollution_check
+}
+
+# After nvm is present: install NODE_DEFAULT_VERSION and make it the default when nvm
+# holds no Node at all. An existing Node (any version) is never touched here; the
+# EOL pre-flight and the onboarding nudge own that conversation. The nvm mirror is
+# pinned for the install exactly as home/.zshrc pins it (CVE-2026-10796).
+_ensure_default_node() {
+    [[ "$SKIP_NVM" == true ]] && return 0
+    local nvm_dir="${NVM_DIR:-$HOME/.nvm}"
+    if [[ ! -s "$nvm_dir/nvm.sh" ]]; then
+        # A dry run never installs nvm, so say what the real run does after it.
+        [[ "$DRY_RUN" == true ]] && info "[dry-run] nvm not present yet; a real run installs Node ${NODE_DEFAULT_VERSION} and sets it as default right after nvm (no-questions answer: yes)"
+        return 0
+    fi
+    local have=""
+    have=$( export NVM_DIR="$nvm_dir"; \. "$nvm_dir/nvm.sh" --no-use >/dev/null 2>&1; nvm version default 2>/dev/null ) || have=""
+    if [[ -n "$have" && "$have" != "N/A" ]]; then
+        success "Node default under nvm: ${have}"
+        return 0
+    fi
+    local installed=""
+    installed=$(ls "$nvm_dir/versions/node" 2>/dev/null | paste -sd ' ' - || true)
+    if [[ -n "$installed" ]]; then
+        warn "nvm has Node (${installed}) but no default alias; set one: nvm alias default <version>"
+        return 0
+    fi
+    if confirm "nvm has no Node yet. Install Node ${NODE_DEFAULT_VERSION} and make it the default?" y y; then
+        if run_cmd bash -c "export NVM_DIR=\"$nvm_dir\" NVM_NODEJS_ORG_MIRROR=https://nodejs.org/dist; . \"\$NVM_DIR/nvm.sh\" --no-use >/dev/null && nvm install ${NODE_DEFAULT_VERSION} && nvm alias default ${NODE_DEFAULT_VERSION}"; then
+            success "Node ${NODE_DEFAULT_VERSION} installed and set as nvm's default"
+        else
+            warn "Node ${NODE_DEFAULT_VERSION} install failed; later: nvm install ${NODE_DEFAULT_VERSION} && nvm alias default ${NODE_DEFAULT_VERSION}"
+        fi
+    fi
+}
+
+# The installers above (uv, nvm, pnpm, bun) each like to append lines to the shell
+# rc files they find. Once stow has run, ~/.zshrc IS home/.zshrc in this repo, so an
+# append lands in tracked source. Guards are passed where an installer offers one
+# (uv, nvm); this is the measurement for the rest: the repo's own rc files must be
+# unchanged by the install. Reported, never reverted -- the diff may be yours.
+_rc_pollution_check() {
+    [[ "$DRY_RUN" == true ]] && return 0
+    local dirty
+    dirty=$(git -C "$REPO_DIR" diff --stat -- home/.zshrc home/.zshenv home/.zprofile home/.bashrc home/.profile 2>/dev/null || true)
+    [[ -n "$dirty" ]] || return 0
+    warn "A tracked shell rc file changed during this install (an installer appended to it through the stow link?):"
+    printf '%s\n' "$dirty" | sed 's/^/    /'
+    info "Review with: ${CYAN}git -C $(pretty_path "$REPO_DIR") diff -- home/.zshrc${RESET}  (the stowed .zshrc already sets PATH for every tool installed here)"
 }
 
 # ==============================================================================
@@ -4336,11 +4717,21 @@ ${CC_SDK_VER:+  ·  SDK ${CYAN}${CC_SDK_VER}${RESET}}"
         all_good=false
     fi
     if ! command -v claude &>/dev/null; then
-        echo -e "  ${YELLOW}~${RESET} Install Claude Code CLI: ${CYAN}https://docs.anthropic.com/en/docs/claude-code/overview${RESET}"
+        echo -e "  ${YELLOW}~${RESET} Install Claude Code CLI: ${CYAN}https://docs.anthropic.com/en/docs/claude-code/overview${RESET} ${DIM}(install.sh never installs it)${RESET}"
+        all_good=false
+    fi
+    if (( ${#NO_SUDO_SKIPPED[@]} > 0 )); then
+        echo -e "  ${YELLOW}~${RESET} ${#NO_SUDO_SKIPPED[@]} command(s) needed root and were NOT run (--no-sudo); for root to run:"
+        local _c
+        for _c in "${NO_SUDO_SKIPPED[@]}"; do echo -e "      ${CYAN}${_c}${RESET}"; done
         all_good=false
     fi
     if [[ "$all_good" == true ]]; then
         echo -e "  ${GREEN}✓${RESET} Everything looks good!"
+    fi
+    if [[ -n "$PROFILE" ]]; then
+        echo
+        echo -e "${BOLD}Profile ${PROFILE}:${RESET} the parts it leaves out are listed on the Mode line at the top; ${CYAN}docs/INSTALL_PROFILES.md${RESET} says why."
     fi
 
     echo
@@ -4377,6 +4768,18 @@ show_help() {
     echo -e "  --dry-run                 Preview what would be done (no changes)"
     echo -e "  --skip-preflight          Skip pnpm conflict-detection AND the toolchain-takeover"
     echo -e "                            re-survey (does NOT skip consent itself -- see below)"
+    echo
+    echo -e "${BOLD}Profiles, skip flags, unattended runs (docs/INSTALL_PROFILES.md):${RESET}"
+    echo -e "  --profile NAME            A named bundle of the flags below. Known: codebox"
+    echo -e "  --no-questions            Every yes/no prompt takes its recorded answer; typed gates decline"
+    echo -e "  --no-sudo                 A step that needs sudo is printed and skipped, never run"
+    echo -e "  --skip-claude             home/.claude, Claude hook registration, pj settings and checks"
+    echo -e "  --skip-ssh                home/.ssh"
+    echo -e "  --skip-system-packages    apt/dnf/pacman/zypper/brew tool installs"
+    echo -e "  --skip-tmux               .tmux.conf, .zsh_tmux, TPM"
+    echo -e "  --skip-docker             .zsh_docker_functions, lazydocker"
+    echo -e "  --skip-rust --skip-yazi --skip-fonts --skip-git-hooks --skip-git-identity"
+    echo -e "  --skip-nvm --skip-pnpm --skip-bun --skip-uv --skip-herdr --skip-omz"
     echo
     echo -e "${BOLD}What it does:${RESET}"
     echo -e "  1. Checks and installs prerequisites (Homebrew, stow, uv, etc.)"
@@ -4523,7 +4926,7 @@ _pj_machine_letter_guess() {
 _pj_machine_letter_prompt() {
     # Prints ONE capital letter on stdout, or nothing when it could not ask.
     local ans guess
-    [[ -t 0 ]] || { printf ''; return 0; }
+    [[ -t 0 && "$NO_QUESTIONS" != true ]] || { printf ''; return 0; }
     echo -e "  ${DIM}A = M4 Mac mini (desktop)   B = Intel Mac laptop   C = PC/WSL2 Ubuntu   D = Proxmox Linux VM${RESET}" >&2
     guess="$(_pj_machine_letter_guess)"
     [[ -n "$guess" ]] && echo -e "  Looks like ${BOLD}${guess%%|*}${RESET} (${guess#*|}). Type the letter to confirm; Enter alone writes nothing." >&2
@@ -4834,9 +5237,63 @@ _apply_npm_guard() {
     fi
 }
 
+# Everything post-stow that lives in ~/.claude: render the pj settings file, THEN
+# register hooks into it (the tool refuses to register a hook whose script is not on
+# disk, so this must follow stow_home; render first so a first-ever install ends with
+# the hook present), the pj machine letter, and the report on pj's prerequisites
+# outside this repo (stow places the plugin symlinks it checks). --skip-claude skips
+# the lot: home/.claude was not stowed, so there is nothing to register into and no
+# pj to report on, and PJ_PREREQS_OK stays 1 so _finish exits 0.
+_claude_post_stow() {
+    if [[ "$SKIP_CLAUDE" == true ]]; then
+        info "Claude hooks, pj settings, pj machine letter and pj checks skipped (--skip-claude)."
+        return 0
+    fi
+    _render_project_settings install
+    _claude_hooks_sync install
+    _write_pj_machine_file
+    _check_pj_prereqs
+}
+
+# ~/.zshrc.private.early is the machine-local file home/.zshrc reads BEFORE its
+# startup guards (section 3), the same file install.sh's takeover gate writes its
+# DOTFILES_ALLOW_* opt-outs to. A skip flag that changes what the stowed shell
+# should do on THIS machine records it here, once, as a marked line.
+#   --skip-claude  -> DOTFILES_PLAIN_CLAUDE=1: home/.zshrc's claude() guard refuses a
+#                     bare `claude` in every interactive zsh and names engage, which a
+#                     box without ~/.claude does not have. The flag leaves the guard
+#                     undefined so plain Claude Code works (codebox Q17).
+_write_early_optouts() {
+    local early="$HOME/.zshrc.private.early" line
+    local -a lines=()
+    [[ "$SKIP_CLAUDE" == true ]] && lines+=("export DOTFILES_PLAIN_CLAUDE=1  # written by install.sh --skip-claude: no claude() pane guard on this box; see docs/INSTALL_PROFILES.md")
+    (( ${#lines[@]} > 0 )) || return 0
+    for line in "${lines[@]}"; do
+        local key="${line%%=*}"
+        if [[ -f "$early" ]] && grep -q "^${key}=" "$early" 2>/dev/null; then
+            verbose "$(pretty_path "$early") already has ${key}"
+            continue
+        fi
+        if [[ "$DRY_RUN" == true ]]; then
+            echo -e "  ${DIM}[dry-run] Would append to $(pretty_path "$early"): ${key}=1${RESET}"
+            continue
+        fi
+        if printf '%s\n' "$line" >> "$early"; then
+            success "${key}=1 recorded in $(pretty_path "$early")"
+        else
+            warn "could not write $(pretty_path "$early"); add by hand: ${line}"
+        fi
+    done
+    return 0
+}
+
 setup_pnpm_audit_hooks() {
     local hooks_dir="$HOME/.config/git/hooks"
     local priv="$HOME/.gitconfig.private"
+    if [[ "$SKIP_GIT_HOOKS" == true ]]; then
+        verbose "pnpm-audit git hooks skipped (--skip-git-hooks)"
+        return 0
+    fi
     # Need the stowed chainer present, and the auditor on PATH to be useful.
     [[ -e "$hooks_dir/pre-push" ]] || return 0
     command -v pnpm-audit-hook >/dev/null 2>&1 || return 0
@@ -4958,7 +5415,7 @@ main() {
     # --- Install prerequisites ---
     if ! check_prerequisites; then
         echo
-        if confirm "Install all missing prerequisites (Homebrew, core + optional tools, pnpm, Oh My Zsh)?"; then
+        if confirm "Install all missing prerequisites (Homebrew, core + optional tools, pnpm, Oh My Zsh)?" n y; then
             SECTION_DECISION=yes
             install_prerequisites
             SECTION_DECISION=ask
@@ -4976,7 +5433,7 @@ main() {
     _pnpm_deferred_cleanup
 
     # --- OMZ plugins & themes (always prompt, even if prereqs passed) ---
-    if [[ -d "$HOME/.oh-my-zsh" ]]; then
+    if [[ -d "$HOME/.oh-my-zsh" && "$SKIP_OMZ" != true ]]; then
         install_omz_plugins
     fi
 
@@ -5002,6 +5459,9 @@ main() {
     # --- Platform files ---
     stow_platform
 
+    # --- Machine-local opt-outs a skip flag implies (~/.zshrc.private.early) ---
+    _write_early_optouts
+
     # --- Post-install ---
     post_install
 
@@ -5016,25 +5476,17 @@ main() {
     # --- herdr systemd user service (Linux/WSL): enable the unit stow just
     # placed. Must run AFTER stow_home; refuses to enable over a hand-started
     # server (respawn loop). The launchd equivalent is in preflight. ---
-    _post_stow_herdr_systemd_service
+    if [[ "$SKIP_HERDR" != true ]]; then
+        _post_stow_herdr_systemd_service
 
-    # --- herdr: register the plugin stow just placed, share the agent skill
-    # with Codex, and validate config.toml. Must run AFTER stow_home. ---
-    _post_stow_herdr_plugins_and_skill
+        # --- herdr: register the plugin stow just placed, share the agent skill
+        # with Codex, and validate config.toml. Must run AFTER stow_home. ---
+        _post_stow_herdr_plugins_and_skill
+    fi
 
-    # --- Render the pj settings file, THEN register hooks into it ---
-    # Must run AFTER stow_home: the tool refuses to register a hook whose script
-    # is not on disk, so running it earlier would skip every hook on a fresh box.
-    # Render first, so a first-ever install ends with the hook actually present.
-    _render_project_settings install
-    _claude_hooks_sync install
-
-    # --- pj: this machine's ID letter (written once; a retired range file is rewritten) ---
-    _write_pj_machine_file
-
-    # --- pj: report on the prerequisites that live outside this repo. Must run AFTER
-    # stow_home, because stow is what places the plugin symlinks it checks. ---
-    _check_pj_prereqs
+    # --- Claude and pj: settings render, hook registration, machine letter, pj
+    # prerequisites. All of it lives in ~/.claude, so --skip-claude skips all of it. ---
+    _claude_post_stow
 
     # --- Optional: pnpm-audit git hooks (confirm-gated) ---
     setup_pnpm_audit_hooks
@@ -5056,12 +5508,90 @@ main() {
 # Argument Handling
 # ==============================================================================
 
+# A profile is a named bundle of flags. Applied FIRST (see below), so a flag typed on
+# the command line can still add to it; nothing typed can take a profile's skip away,
+# because the flags are one-way switches, which keeps a profile's promises simple.
+_apply_profile() {
+    case "$1" in
+        none)
+            # Explicitly no profile. Also what clears a stored one (see _write_stow_state).
+            ;;
+        codebox)
+            # Gavin's throwaway Claude Code box (Ubuntu 24.04, user without sudo, no
+            # ~/.claude, no ~/.ssh, no tmux, no Docker; git over HTTPS only). The root
+            # side installs zsh, stow, jq, trash-cli, fzf, zoxide and direnv before this
+            # runs (Network_Plan boxes/codebox-vm-205/scripts/golden-system.sh). What
+            # this profile installs as the user: uv + Python 3.13, nvm + Node
+            # NODE_DEFAULT_VERSION, standalone pnpm, bun, herdr's pinned Linux release,
+            # Oh My Zsh + plugins + Powerlevel10k, lazygit. docs/INSTALL_PROFILES.md.
+            NO_QUESTIONS=true; NO_SUDO=true
+            SKIP_CLAUDE=true; SKIP_SSH=true; SKIP_SYSTEM_PACKAGES=true
+            SKIP_TMUX=true; SKIP_DOCKER=true; SKIP_RUST=true; SKIP_YAZI=true
+            SKIP_FONTS=true; SKIP_GIT_HOOKS=true
+            ;;
+        *)
+            error "Unknown profile: $1 (known: codebox, none)"
+            exit 1 ;;
+    esac
+}
+
+# A profile describes the BOX, not one run. Once a profiled stow has happened, a
+# later plain `./install.sh --update` or `--stow-only` here would otherwise stow
+# the very trees the profile left out (~/.claude on codebox). So a good stow records
+# the profile in ~/.local/state/dotfiles/links/profile, and a run with no profile and
+# no skip flags typed re-applies it, saying so. `--profile none` clears it. A run
+# that types skip flags but no profile uses only what it typed, for that run.
+_stored_profile_file() { echo "${XDG_STATE_HOME:-$HOME/.local/state}/dotfiles/links/profile"; }
+_stored_profile() {
+    local f; f=$(_stored_profile_file)
+    [[ -f "$f" ]] || return 0
+    head -1 "$f" 2>/dev/null | tr -d '[:space:]'
+}
+
 ACTION=""
+_CLI_PROFILE=""
+declare -a _CLI_REST=()
+# First pass: find the profile, so it is applied before any other flag.
+_args=("$@")
+_i=0
+while (( _i < ${#_args[@]} )); do
+    case "${_args[$_i]}" in
+        --profile)   _CLI_PROFILE="${_args[$((_i+1))]:-}"; [[ -n "$_CLI_PROFILE" ]] || { error "--profile needs a name"; exit 1; }; _i=$((_i+2)); continue ;;
+        --profile=*) _CLI_PROFILE="${_args[$_i]#--profile=}"; [[ -n "$_CLI_PROFILE" ]] || { error "--profile needs a name"; exit 1; }; _i=$((_i+1)); continue ;;
+    esac
+    _CLI_REST+=("${_args[$_i]}")
+    _i=$((_i+1))
+done
+if [[ -n "$_CLI_PROFILE" ]]; then
+    PROFILE="$_CLI_PROFILE"
+    _apply_profile "$PROFILE"
+fi
+set -- "${_CLI_REST[@]+"${_CLI_REST[@]}"}"
+
+_FLAGS_TYPED=false   # any --no-questions / --no-sudo / --skip-* on the command line
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --verbose|-v)  VERBOSE=true; shift ;;
         --dry-run)     DRY_RUN=true; shift ;;
         --skip-preflight) SKIP_PREFLIGHT=true; shift ;;
+        --no-questions) NO_QUESTIONS=true; _FLAGS_TYPED=true; shift ;;
+        --no-sudo)     NO_SUDO=true; _FLAGS_TYPED=true; shift ;;
+        --skip-claude)          SKIP_CLAUDE=true; _FLAGS_TYPED=true; shift ;;
+        --skip-ssh)             SKIP_SSH=true; _FLAGS_TYPED=true; shift ;;
+        --skip-system-packages) SKIP_SYSTEM_PACKAGES=true; _FLAGS_TYPED=true; shift ;;
+        --skip-tmux)            SKIP_TMUX=true; _FLAGS_TYPED=true; shift ;;
+        --skip-docker)          SKIP_DOCKER=true; _FLAGS_TYPED=true; shift ;;
+        --skip-rust)            SKIP_RUST=true; _FLAGS_TYPED=true; shift ;;
+        --skip-yazi)            SKIP_YAZI=true; _FLAGS_TYPED=true; shift ;;
+        --skip-fonts)           SKIP_FONTS=true; _FLAGS_TYPED=true; shift ;;
+        --skip-git-hooks)       SKIP_GIT_HOOKS=true; _FLAGS_TYPED=true; shift ;;
+        --skip-nvm)             SKIP_NVM=true; _FLAGS_TYPED=true; shift ;;
+        --skip-pnpm)            SKIP_PNPM=true; _FLAGS_TYPED=true; shift ;;
+        --skip-bun)             SKIP_BUN=true; _FLAGS_TYPED=true; shift ;;
+        --skip-uv)              SKIP_UV=true; _FLAGS_TYPED=true; shift ;;
+        --skip-herdr)           SKIP_HERDR=true; _FLAGS_TYPED=true; shift ;;
+        --skip-omz)             SKIP_OMZ=true; _FLAGS_TYPED=true; shift ;;
+        --skip-git-identity)    SKIP_GIT_IDENTITY=true; _FLAGS_TYPED=true; shift ;;
         --help|-h)     ACTION="help"; shift ;;
         --check)       ACTION="check"; shift ;;
         --stow-only)   ACTION="stow-only"; shift ;;
@@ -5071,6 +5601,34 @@ while [[ $# -gt 0 ]]; do
         *)             error "Unknown option: $1"; show_help; exit 1 ;;
     esac
 done
+
+# No profile and no flags typed: a profile recorded by an earlier stow on this box
+# still applies (see _stored_profile). Not for --help or --uninstall.
+if [[ -z "$PROFILE" && "$_FLAGS_TYPED" != true && "${ACTION:-}" != help && "${ACTION:-}" != uninstall ]]; then
+    _stored="$(_stored_profile)"
+    if [[ -n "$_stored" && "$_stored" != none ]]; then
+        PROFILE="$_stored"
+        _apply_profile "$PROFILE"
+        info "Profile ${PROFILE} re-applied from the last stow on this box ($(pretty_path "$(_stored_profile_file)")); ${CYAN}--profile none${RESET} drops it."
+    fi
+    unset _stored
+fi
+
+# Say what an unattended or profiled run is doing before it does it. One line, at
+# the top, so a log of the run can be read without knowing the command that made it.
+if [[ -n "$PROFILE" || "$NO_QUESTIONS" == true || "$NO_SUDO" == true || "$_FLAGS_TYPED" == true ]]; then
+    _mode=""
+    [[ -n "$PROFILE" ]] && _mode+=" profile=$PROFILE"
+    [[ "$NO_QUESTIONS" == true ]] && _mode+=" no-questions"
+    [[ "$NO_SUDO" == true ]] && _mode+=" no-sudo"
+    _skips=""
+    for _v in CLAUDE SSH SYSTEM_PACKAGES TMUX DOCKER RUST YAZI FONTS GIT_HOOKS NVM PNPM BUN UV HERDR OMZ GIT_IDENTITY; do
+        _n="SKIP_$_v"
+        [[ "${!_n}" == true ]] && _skips+=" $(printf '%s' "$_v" | tr 'A-Z_' 'a-z-')"
+    done
+    info "Mode:${_mode:- (no profile)}${_skips:+ · skipping:${_skips}}"
+    unset _mode _skips _v _n
+fi
 
 # W-20260921-A23: the two actions that run _check_pj_prereqs exit NON-ZERO when pj
 # cannot launch. Everything the installer owns has already been done by then; the
@@ -5085,7 +5643,7 @@ case "${ACTION:-}" in
     # register the hooks it just deployed -- otherwise the exact command the
     # welcome banner recommends leaves them stowed and inert, which is the
     # original bug wearing a different hat.
-    stow-only)  _gate_toolchain_takeover; stow_home; stow_platform; _render_project_settings install; _claude_hooks_sync install; _write_pj_machine_file; _check_pj_prereqs; _finish ;;
+    stow-only)  _gate_toolchain_takeover; stow_home; stow_platform; _write_early_optouts; _claude_post_stow; _finish ;;
     uninstall)  uninstall ;;
     update)     update ;;
     force)      force_adopt ;;

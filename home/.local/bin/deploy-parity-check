@@ -64,7 +64,20 @@ def is_ignored(rel: str) -> bool:
     parts = Path(rel).parts
     if any(p in SKIP_NAMES or p.startswith("._") for p in parts):
         return True
-    return "__pycache__" in parts or rel.endswith(".pyc")
+    if "__pycache__" in parts or rel.endswith(".pyc"):
+        return True
+    # install.sh's skip flags (--skip-claude, --skip-ssh, ...) keep whole top-level
+    # names out of stow and hand them here as DOTFILES_STOW_SKIP, colon-separated,
+    # so the same run that skipped a tree does not then report it as not deployed.
+    # Unset: read what the last real stow on this box recorded (install.sh writes
+    # the same names to links/stow-skip). Set but empty: skip nothing, whatever the
+    # file says -- the caller's flags are the truth for that run.
+    skip = os.environ.get("DOTFILES_STOW_SKIP")
+    if skip is None:
+        state = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
+        f = state / "dotfiles" / "links" / "stow-skip"
+        skip = ":".join(f.read_text().split()) if f.is_file() else ""
+    return bool(parts) and parts[0] in {s for s in skip.split(":") if s}
 
 
 def classify(rel: str, target_root: Path, repo_home: Path | None = None) -> str:
@@ -147,6 +160,23 @@ def self_test() -> list[str]:
             failures.append("stow's own control file was not treated as never-deployed")
         if is_ignored(".local/bin/ci-watch"):
             failures.append("an ordinary tracked file was wrongly treated as ignored")
+        # The install.sh skip flags, both arms: a skipped tree is ignored, a
+        # sibling is not, and an empty variable skips nothing.
+        saved = os.environ.get("DOTFILES_STOW_SKIP")
+        try:
+            os.environ["DOTFILES_STOW_SKIP"] = ".claude:.ssh"
+            if not is_ignored(".claude/hooks/x.sh"):
+                failures.append("a tree named in DOTFILES_STOW_SKIP was not treated as skipped")
+            if is_ignored(".local/bin/ci-watch"):
+                failures.append("DOTFILES_STOW_SKIP leaked onto a path it does not name")
+            os.environ["DOTFILES_STOW_SKIP"] = ""
+            if is_ignored(".claude/hooks/x.sh"):
+                failures.append("an empty DOTFILES_STOW_SKIP still skipped something")
+        finally:
+            if saved is None:
+                os.environ.pop("DOTFILES_STOW_SKIP", None)
+            else:
+                os.environ["DOTFILES_STOW_SKIP"] = saved
     return failures
 
 
