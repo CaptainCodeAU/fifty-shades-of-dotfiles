@@ -705,8 +705,6 @@ _print_help() {
     sed -n '/^# EXIT CODES/,/^# SETTINGS FILE/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
 }
 
-# A mistake in the command (exit 2 or 3): the message, then the whole help,
-# so the usage is on screen without typing --help (Gavin's ask, 2026-10-08).
 # "+N" or "-N" applied to a current value and held inside min-max, in
 # _stepped (Gavin's ask, 2026-10-08: hotkeys that step the rate by 20 and the
 # volume by 10). Returns 1 if $1 is not a sign and up to four digits.
@@ -770,6 +768,8 @@ _notify_summary() {
     _send_notification "Speak clipboard settings" "$body"
 }
 
+# A mistake in the command (exit 2 or 3): the message, then the whole help,
+# so the usage is on screen without typing --help (Gavin's ask, 2026-10-08).
 _die_with_help() {
     { echo "speak-clipboard: $2"; echo; _print_help; } >&2
     exit "$1"
@@ -814,14 +814,6 @@ acquire_lock() {
     lockf -s -t 0 9
 }
 
-# Sets _speaker to the pid of the live speaker, or returns 1. The pid file
-# holds a pid and that process's start time; it is never removed, only
-# overwritten by the next start, so a finished speaker leaves a stale file
-# that this check must reject. It holds either a lone say2/say pid, or
-# (streaming, v4.4) the leader of a process group running say2 | ffplay;
-# _speaker_group is set to 1 in that case. `kill -0` alone is not enough:
-# pids are recycled, so the process must have the same start time AND be one
-# of our engines (or lead a group holding one) before anyone signals it.
 # A process's start time with all whitespace removed. `ps -o lstart=` pads
 # its output with trailing spaces and `read` strips them, so the raw strings
 # never compare equal (MEASURED: that bug made every stop report idle).
@@ -831,6 +823,14 @@ _start_of() {
     printf '%s' "${s//[[:space:]]/}"
 }
 
+# Sets _speaker to the pid of the live speaker, or returns 1. The pid file
+# holds a pid and that process's start time; it is never removed, only
+# overwritten by the next start, so a finished speaker leaves a stale file
+# that this check must reject. It holds either a lone say2/say pid, or
+# (streaming, v4.4) the leader of a process group running say2 | ffplay;
+# _speaker_group is set to 1 in that case. `kill -0` alone is not enough:
+# pids are recycled, so the process must have the same start time AND be one
+# of our engines (or lead a group holding one) before anyone signals it.
 speaker_alive() {
     local p="" stamp="" comm=""
     _speaker=""
@@ -891,22 +891,27 @@ stop_speaker() {
 # the same text three ways: fast reader 39.6 s; ffplay 5.2 s + that error;
 # ffplay -infbuf 40.1 s wall, no error. (A say2 bug too: a slow consumer
 # should slow it down, not truncate it. Filed with the other say2 items.)
+#
+# `--` before the text (v4.10, 2026-10-09): without it, a selection that
+# starts with a dash is read as an option. MEASURED: clipboard "--help"
+# cleaned to "--help", and say2 printed its own help, exit 0, nothing spoken.
+# With `--`, say2 and say both take it as text.
 start_speaker() {
     resolve_engine
     if [ "$_engine" = "say2" ] && [ -z "$voice" ] && command -v ffplay >/dev/null 2>&1; then
         set -m
         ( trap '' HUP
-          say2 -v "$_engine_voice" -r "$rate" --engine siri --format pcm -o - "$text" \
+          say2 -v "$_engine_voice" -r "$rate" --engine siri --format pcm -o - -- "$text" \
               2>>"$_render_log" |
               ffplay -nodisp -autoexit -infbuf -loglevel error -volume "$volume" \
                   -f s16le -ar 48000 -ch_layout mono -i - >/dev/null 2>>"$_render_log"
         ) >/dev/null 2>&1 9>&- &
         set +m
     elif [ "$_engine" = "say2" ]; then
-        ( trap '' HUP; exec say2 -v "$_engine_voice" -r "$rate" "$text" ) \
+        ( trap '' HUP; exec say2 -v "$_engine_voice" -r "$rate" -- "$text" ) \
             >/dev/null 2>>"$_render_log" 9>&- &
     else
-        ( trap '' HUP; exec say -v "$_engine_voice" -r "$rate" "$text" ) \
+        ( trap '' HUP; exec say -v "$_engine_voice" -r "$rate" -- "$text" ) \
             >/dev/null 2>>"$_render_log" 9>&- &
     fi
     local p=$!
