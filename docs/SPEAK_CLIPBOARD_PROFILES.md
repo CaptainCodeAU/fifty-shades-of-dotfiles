@@ -142,7 +142,8 @@ the existing settings and exit-code behaviour. Closes W-20261008-A05.
 
 ## Evidence: the listening tests (2026-10-09/10)
 
-Throwaway script `try-back-to-back` (session scratchpad, not kept). Profile A:
+Prototype, kept as a record: `docs/reference/speak-clipboard-try-back-to-back.sh`
+(`1`-`6`, `--swap`, `--silent`; demo 6 holds the one-player volume step). Profile A:
 Aaron 440 wpm vol 70; B: Simone 380 wpm vol 60, unless stated.
 
 | Demo | What                                                 | Heard by Gavin                                                       | Measured                            |
