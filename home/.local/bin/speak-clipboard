@@ -64,12 +64,14 @@
 # VOLUME
 # ------
 # Default 60 of 100 (2026-09-28, Gavin: speech a little quieter than
-# everything else, without touching the system volume). It is applied by
-# ffplay's -volume on the streaming path, which scales the samples linearly:
-# 60 is about -4.4 dB, 50 about -6 dB (first set at 70, lowered by ear).
+# everything else, without touching the system volume). It scales the
+# samples linearly: 60 is about -4.4 dB, 50 about -6 dB (first set at 70,
+# lowered by ear). Until v8 ffplay's -volume did that; since v8 the line
+# player does it to each voice's samples (x volume/100, the same scale) and
+# ffplay runs at 100, so voices at different volumes share one player.
 # It sits UNDER the system volume, so it can only make speech quieter, never
 # louder. Re-tune by listening. The
-# fallback paths (no ffplay, or an explicit --voice) play at plain system
+# fallback paths (no ffplay, or no say2 voice) play at plain system
 # volume: say2's own --volume is a documented no-op on the siri engine.
 #
 # ONE PROCESS PER PRESS, DIRECT TO say2 (v4, 2026-09-10)
@@ -200,9 +202,18 @@
 # hash file is no longer written at all.
 #
 # USAGE
-#   speak-clipboard              speak the clipboard (replacing any current speech)
+#   speak-clipboard              speak the clipboard (replacing any current speech,
+#                                and clearing anything waiting in line)
 #   speak-clipboard --toggle     speaking: stop (any text); idle: speak
-#   speak-clipboard --stop       stop any speech in progress
+#   speak-clipboard --queue [MS] speaking: wait in line, then speak; idle: speak
+#                                now. MS (0-5000) is a gap in milliseconds
+#                                before this voice; not with --toggle
+#   speak-clipboard --stop       stop any speech and clear the line
+#   speak-clipboard --skip       stop the voice speaking now; the next in line plays
+#   speak-clipboard --profile NAME
+#                                use profile NAME for this command (any
+#                                command below); without it, the first
+#                                profile in the file
 #   speak-clipboard --print      print what WOULD be spoken (no audio)
 #   speak-clipboard --stdin      read text from stdin instead of the clipboard
 #                                (for tests; combine with --print/--toggle)
@@ -211,9 +222,19 @@
 #                                this press only (streaming path only)
 #   speak-clipboard --voice KEY  say2 voice asset key or display name, this press
 #                                only -- bypasses the fallback chain entirely
+#   speak-clipboard --selftest   run the automatic tests (stand-ins, no speech)
 #
 # SAVED SETTINGS (~/.config/speak-clipboard/settings; every press, the hotkey
-# included, speaks with what it holds; any run writes it if it is missing)
+# included, speaks with what it holds; any run writes it if it is missing).
+# The file holds profiles, one [name] block each with rate, volume, voice and
+# notify. Every command below acts on the first profile, or on --profile NAME.
+#   speak-clipboard --profiles          list the profiles and their settings
+#   speak-clipboard --new-profile NAME  add a profile, a copy of the first one
+#                                       (letters, digits, _ and - only)
+#   speak-clipboard --remove-profile NAME
+#                                       rename its heading to NAME_REMOVED: no
+#                                       longer listed or usable; deleting it
+#                                       is a hand edit
 #   speak-clipboard --settings          show rate, volume, voice and notify,
 #                                       whether each is the default, and any
 #                                       problem with the file
@@ -247,11 +268,14 @@
 #    1  nothing to say: clipboard empty, or empty once cleaned
 #    2  bad command: unknown option, missing value, or a wrong name after
 #       --set, --reset or --get
-#    3  bad value: rate not 1-700, volume not 0-100, notify not on/off, or
-#       no voice with that number
+#    3  bad value: rate not 1-700, volume not 0-100, notify not on/off, no
+#       voice with that number, --queue not 0-5000, or a profile name that
+#       is not allowed, already taken, or the last one left
 #    4  the settings file could not be written
 #    5  voices not listed: say2 missing, or it cannot reach the speech
 #       service (it cannot inside a Claude Code sandbox)
+#    6  no such profile: nothing spoken or saved, never another profile
+#       instead (a notification names it)
 #
 #   Spoke, but with a fallback (the log line names every problem; the
 #   lowest code wins):
@@ -279,12 +303,35 @@
 # say2 lists NO voices inside a Claude sandbox (it cannot reach the speech
 # daemon), so --voices and --set voice refuse there instead of saying none.
 #
+# PROFILES AND THE LINE (v8, 2026-10-10). Every rule and the question that
+# settled it: docs/SPEAK_CLIPBOARD_PROFILES.md (ruling D-20261010-A01).
+# The settings file holds [name] blocks; a press uses the first, or
+# --profile NAME, and an unknown name is refused (exit 6), never swapped
+# for another profile. A flat pre-v8 file is rewritten once into a
+# [default] block. Edits change the lines in place, so comments, order
+# and a typo stay where Gavin put them.
+# Speech now always goes through one long-lived player per line: a perl
+# process (_player_pl below) that owns ONE ffplay at -volume 100, renders
+# each voice with say2, scales its samples by that voice's own volume, and
+# writes it into the same stream. Two players gave a faint crackle at most
+# changeovers in the listening tests; one player gave none. A --queue
+# press hands its voice to the running player through a named pipe
+# (memory only, text never touches disk) instead of stopping it. The
+# player reads ffplay's own playback clock (-stats) so it knows which
+# voice is audible: that is what lets --skip drop only that one, and
+# what tells it the line is over.
+#
 # STATE (all under ~/.local/state/herdr/, nothing here ever contains text)
 #   speak-clipboard.log    one line per press: when, mode, ppid, outcome, chars
 #   speak-render.log       the speaker's stderr, for diagnostics only
-#   speak-render.pid       the last speaker's pid (line 1) and start time (line 2)
-#   speak-engine.cache     resolve_engine()'s cached choice, refreshed daily
-#                          or when the saved voice changes
+#   speak-render.pid       the last speaker's pid (line 1), start time (line 2)
+#                          and "line" (line 3) when it is the v8 player
+#   speak-engine.cache     resolve_engine()'s cached choices, one line per
+#                          voice, each refreshed daily
+#   speak-line.fifo        named pipe a --queue press writes its voice into
+#   speak-line.flock       empty; flock'd while a press hands a voice to the
+#                          player, or while the player decides to finish
+#   speak-queue.time       when the last --queue press ran (key repeat check)
 #   speak-clipboard.flock  empty; flock'd for one run of this script
 #   (speak-render.hash and a speak-clipboard.lock/ folder are pre-v4.5
 #    leftovers, no longer read or written)
@@ -302,6 +349,7 @@ _say_fallback_voice="Samantha"
 _default_rate="420"
 _default_volume="60"
 _default_notify="on"
+_default_profile="default"
 cli_rate=""
 cli_volume=""
 voice=""
@@ -310,6 +358,10 @@ from_stdin=0
 set_key=""
 set_value=""
 cli_notify="${_SPEAK_CLIPBOARD_NOTIFY:-}"     # on/off for this command only, or empty
+cli_profile=""
+queue=0
+queue_delay=0
+profile_arg=""                                # NAME for --new-profile / --remove-profile
 
 # A mistake in the command is recorded here, not reported: the message is
 # printed with the whole --help after it (Gavin's ask, 2026-10-08), and the
@@ -336,8 +388,21 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --print)  mode="print";  shift ;;
         --stop)   mode="stop";   shift ;;
+        --skip)   mode="skip";   shift ;;
         --toggle) mode="toggle"; shift ;;
         --stdin)  from_stdin=1;  shift ;;
+        # The gap is optional, so the next word is taken as it only when it
+        # is not another option; "-5" counts as a (bad) gap, not an option.
+        --queue) queue=1; shift
+                 case "${1:-}" in ''|--*|-h) ;; *) queue_delay="$1"; shift ;; esac ;;
+        --profile) [ $# -ge 2 ] || { _fail 2 "--profile needs a name: speak-clipboard --profiles lists them"; break; }
+                   cli_profile="$2"; shift 2 ;;
+        --profiles) mode="profiles"; shift ;;
+        --new-profile)    [ $# -ge 2 ] || { _fail 2 "--new-profile needs a name, e.g. --new-profile simone_fast"; break; }
+                          mode="new-profile"; profile_arg="$2"; shift 2 ;;
+        --remove-profile) [ $# -ge 2 ] || { _fail 2 "--remove-profile needs a name: speak-clipboard --profiles lists them"; break; }
+                          mode="remove-profile"; profile_arg="$2"; shift 2 ;;
+        --selftest) mode="selftest"; shift ;;
         --rate)  [ $# -ge 2 ] || { _fail 2 "--rate needs a value"; break; }; cli_rate="$2"; shift 2 ;;
         --volume) [ $# -ge 2 ] || { _fail 2 "--volume needs a value"; break; }; cli_volume="$2"; shift 2 ;;
         --voice) [ $# -ge 2 ] || { _fail 2 "--voice needs a value"; break; }; voice="$2"; shift 2 ;;
@@ -358,8 +423,18 @@ done
 # sees it, so a huge number is "not a number", not a test error.
 _valid_rate()   { case "$1" in ''|*[!0-9]*|?????*) return 1 ;; esac; [ "$1" -ge 1 ] && [ "$1" -le 700 ]; }
 _valid_volume() { case "$1" in ''|*[!0-9]*|?????*) return 1 ;; esac; [ "$1" -le 100 ]; }
-_valid_voice()  { case "$1" in ''|*'|'*) return 1 ;; esac; }   # '|' would break the engine cache line
+# '|' would break the engine cache line, a tab the message to the player.
+_valid_voice()  { case "$1" in ''|*'|'*|*$'\t'*) return 1 ;; esac; }
 _valid_notify() { case "$1" in on|off) ;; *) return 1 ;; esac; }
+_valid_delay()  { case "$1" in ''|*[!0-9]*|?????*) return 1 ;; esac; [ "$1" -le 5000 ]; }
+# Profile names: letters, digits, _ and - (Q14 v2: no spaces, every hotkey
+# would need quotes; no dots, ambiguous beside a key as in aaron_fast.rate).
+# Spelled out rather than A-Z, which follows the locale in bash 3.2.
+_valid_profile_name() {
+    case "$1" in ''|*[!abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-]*) return 1 ;; esac
+}
+# A heading renamed by --remove-profile (Q24): kept in the file, never used.
+_is_removed() { case "$1" in *_REMOVED|*_REMOVED_[0-9]*) return 0 ;; esac; return 1; }
 
 if [ -n "$cli_rate" ] && ! _valid_rate "$cli_rate"; then
     _fail 3 "--rate takes a whole number 1-700 (say2's own limit)"; cli_rate=""
@@ -367,53 +442,192 @@ fi
 if [ -n "$cli_volume" ] && ! _valid_volume "$cli_volume"; then
     _fail 3 "--volume takes a whole number 0-100"; cli_volume=""
 fi
+if [ "$queue" = 1 ] && ! _valid_delay "$queue_delay"; then
+    _fail 3 "--queue takes a gap in whole milliseconds 0-5000, or nothing (0), not '$queue_delay'"
+fi
+# Q21: a toggle press stops speech and a --queue press waits for it.
+if [ "$queue" = 1 ] && [ "$mode" = "toggle" ]; then
+    _fail 2 "--toggle and --queue contradict: a toggle press stops speech, a --queue press waits for it"
+fi
 
-# The settings file (v7). f_* hold the file's lines exactly as written, so a
-# rewrite keeps a typo for Gavin to see and fix; saved_* hold only values
-# that pass the checks. _file_state: ok, missing (written below, before the
-# modes run), or unusable (cannot be read, or cannot be created). A readable
-# file with a key absent or empty names it in _missing_settings (put back
-# below); one with a value that fails its check names it in _bad_settings.
+# The settings file (v8: profiles, see PROFILES AND THE LINE above). Read
+# with builtins only, in two passes: _lines holds the file as written, then
+# _parse_settings sorts each line into a profile. Per profile i: p_name,
+# p_head (its heading's line; -1 for a block not in the file yet, -2 for a
+# flat pre-v8 file, which gets a heading inserted), p_ins (the line a
+# put-back setting goes after), pr_<key> (the value as written, the last
+# one if a key is set twice) and pl_<key> (the line it came from, -1 if
+# none). l_owner says which profile a line belongs to (-1: none), so a
+# rewrite changes exactly the lines it means to and copies the rest.
+# _file_state: ok, missing (written before the modes run), or unusable
+# (cannot be read, or cannot be created).
 _settings_file="${XDG_CONFIG_HOME:-$HOME/.config}/speak-clipboard/settings"
-f_rate=""; f_volume=""; f_voice=""; f_notify=""
-_file_state="ok"
-if [ -f "$_settings_file" ] && [ -r "$_settings_file" ]; then
-    while IFS='=' read -r _k _v || [ -n "$_k" ]; do
-        case "$_k" in
-            rate)   f_rate="$_v" ;;
-            volume) f_volume="$_v" ;;
-            voice)  f_voice="$_v" ;;
-            notify) f_notify="$_v" ;;
-        esac
-    done <"$_settings_file"
-elif [ -e "$_settings_file" ]; then
-    _file_state="unusable"
-else
-    _file_state="missing"
-fi
-# o_* keep the values as read, for the WARNING lines, so they always show
-# the text that is in the file, never a value a --set or --reset put in f_*.
-o_rate="$f_rate"; o_volume="$f_volume"; o_voice="$f_voice"; o_notify="$f_notify"
-_bad_settings=""; _missing_settings=""
-saved_rate=""; saved_volume=""; saved_voice=""; saved_notify=""
-if [ "$_file_state" = "ok" ]; then
-    for _k in rate volume voice notify; do
-        eval "_v=\$f_$_k"
-        if [ -z "$_v" ]; then
-            _missing_settings="${_missing_settings:+$_missing_settings,}$_k"
-        elif "_valid_$_k" "$_v"; then
-            eval "saved_$_k=\$_v"
-        else
-            _bad_settings="${_bad_settings:+$_bad_settings,}$_k"
-        fi
-    done
-fi
+_read_settings_file() {
+    local l n=0
+    _lines=(); _file_state="ok"
+    if [ -f "$_settings_file" ] && [ -r "$_settings_file" ]; then
+        while IFS= read -r l || [ -n "$l" ]; do
+            _lines[n]="$l"; n=$((n + 1))
+        done <"$_settings_file"
+    elif [ -e "$_settings_file" ]; then
+        _file_state="unusable"
+    else
+        _file_state="missing"
+    fi
+}
 
-rate="${cli_rate:-${saved_rate:-$_default_rate}}"
-volume="${cli_volume:-${saved_volume:-$_default_volume}}"
-_preferred_voice="${saved_voice:-$_default_voice}"
-notify_saved="${saved_notify:-$_default_notify}"     # the file's value, for display
-notify="${cli_notify:-$notify_saved}"                  # what this command does
+# A line setting one of the four keys: sets _sk and _sv. Whole-line
+# comments only (Q14 v2), so a value is everything after the first "=".
+_setting_line() {
+    case "$1" in
+        rate=*|volume=*|voice=*|notify=*) _sk="${1%%=*}"; _sv="${1#*=}" ;;
+        *) return 1 ;;
+    esac
+}
+
+_new_profile_slot() {   # name, heading line; the new index in _np
+    _np=${#p_name[@]}
+    p_name[_np]="$1"; p_head[_np]="$2"; p_ins[_np]="$2"
+    pr_rate[_np]=""; pr_volume[_np]=""; pr_voice[_np]=""; pr_notify[_np]=""
+    pl_rate[_np]=-1; pl_volume[_np]=-1; pl_voice[_np]=-1; pl_notify[_np]=-1
+}
+
+# The warnings are there for the one way blocks under headings go wrong
+# (Q14 v2): a lost or mistyped heading quietly moves a block into the
+# profile above it. --settings shows them; a press logs _warn_log.
+_warn() {
+    _file_warnings="${_file_warnings}WARNING $1"$'\n'
+    _warn_log="${_warn_log:+$_warn_log,}$2"
+}
+
+_parse_settings() {
+    local n l cur=-1 j prev name nl=${#_lines[@]} has_heading=0
+    p_name=(); p_head=(); p_ins=(); l_owner=()
+    pr_rate=(); pr_volume=(); pr_voice=(); pr_notify=()
+    pl_rate=(); pl_volume=(); pl_voice=(); pl_notify=()
+    _file_warnings=""; _warn_log=""; _flat=-1
+    for ((n = 0; n < nl; n++)); do
+        case "${_lines[n]}" in '['*']') has_heading=1; break ;; esac
+    done
+    if [ "$has_heading" = 0 ]; then
+        # A flat pre-v8 file: its settings become one [default] block, the
+        # heading going in just above the first of them (written once, by
+        # _ensure_settings_file).
+        for ((n = 0; n < nl; n++)); do
+            if _setting_line "${_lines[n]}"; then
+                _new_profile_slot "$_default_profile" -2; cur=0; _flat=$n; break
+            fi
+        done
+    fi
+    for ((n = 0; n < nl; n++)); do
+        l="${_lines[n]}"; l_owner[n]=-1
+        case "$l" in
+            '#'*|';'*) continue ;;
+            '['*']')
+                name="${l#[}"; name="${name%]}"
+                if ! _valid_profile_name "$name"; then
+                    _warn "line $((n + 1)): [$name] is not a usable profile name (letters, digits, _ and - only): its settings are not used" "bad-heading:$((n + 1))"
+                    cur=-2; continue
+                fi
+                cur=-1
+                for ((j = 0; j < ${#p_name[@]}; j++)); do
+                    if [ "${p_name[j]}" = "$name" ]; then
+                        _warn "[$name] is a heading twice (lines $((p_head[j] + 1)) and $((n + 1))): both blocks count as one profile" "heading-twice:$name"
+                        cur=$j; break
+                    fi
+                done
+                if [ "$cur" -lt 0 ]; then _new_profile_slot "$name" "$n"; cur=$_np; fi
+                l_owner[n]=$cur ;;
+            *)
+                _setting_line "$l" || continue
+                if [ "$cur" -eq -1 ]; then
+                    _warn "line $((n + 1)): $l is above the first [heading]: not used" "above-heading:$((n + 1))"
+                    continue
+                fi
+                [ "$cur" -ge 0 ] || continue
+                eval "prev=\${pl_$_sk[cur]}"
+                if [ "$prev" -ge 0 ]; then
+                    _warn "[${p_name[cur]}] sets $_sk twice (lines $((prev + 1)) and $((n + 1))): line $((n + 1)) is used" "twice:${p_name[cur]}:$_sk"
+                fi
+                eval "pr_$_sk[cur]=\$_sv; pl_$_sk[cur]=\$n"
+                p_ins[cur]=$n; l_owner[n]=$cur ;;
+        esac
+    done
+}
+
+# Sets _fp to the usable profile named $1; a _REMOVED one never matches.
+_find_profile() {
+    local i
+    _is_removed "$1" && return 1
+    for ((i = 0; i < ${#p_name[@]}; i++)); do
+        if [ "${p_name[i]}" = "$1" ]; then _fp=$i; return 0; fi
+    done
+    return 1
+}
+# Sets _fp to the first usable profile: the one a press uses without
+# --profile (Q15: 1, no default= line, which would sit outside every block).
+_first_usable() {
+    local i
+    for ((i = 0; i < ${#p_name[@]}; i++)); do
+        _is_removed "${p_name[i]}" || { _fp=$i; return 0; }
+    done
+    return 1
+}
+
+_put_back=""; _file_note=""; _pi=-1
+_read_settings_file
+_parse_settings
+
+# Picks the profile this command uses (_pi, profile) and loads its values
+# the way v7 loaded the flat file: f_* hold the lines exactly as written, so
+# a rewrite keeps a typo for Gavin to see and fix; saved_* hold only values
+# that pass the checks. A key the profile lacked is named in
+# _missing_settings (_ensure_settings_file has put it back by now); one
+# that fails its check in _bad_settings. An unknown --profile sets
+# _profile_missing, which is exit 6, never another profile instead (Q16).
+# Runs after _ensure_settings_file, before the modes.
+_load_profile() {
+    local k v e IFS=$'\n'
+    _pi=-1; _profile_missing=""
+    if [ -n "$cli_profile" ]; then
+        if _find_profile "$cli_profile"; then _pi=$_fp
+        elif [ "$_file_state" != "unusable" ]; then _profile_missing="$cli_profile"; fi
+    elif _first_usable; then
+        _pi=$_fp
+    fi
+    profile="${cli_profile:-$_default_profile}"
+    f_rate=""; f_volume=""; f_voice=""; f_notify=""
+    if [ "$_pi" -ge 0 ]; then
+        profile="${p_name[_pi]}"
+        f_rate="${pr_rate[_pi]}"; f_volume="${pr_volume[_pi]}"
+        f_voice="${pr_voice[_pi]}"; f_notify="${pr_notify[_pi]}"
+    fi
+    # o_* keep the values as read, for the WARNING lines, so they always
+    # show the text in the file, never a value a --set or --reset put in f_*.
+    o_rate="$f_rate"; o_volume="$f_volume"; o_voice="$f_voice"; o_notify="$f_notify"
+    _bad_settings=""; _missing_settings=""
+    for e in $_put_back; do
+        [ "${e%%=*}" != "$profile" ] || _missing_settings="${e#*=}"
+    done
+    saved_rate=""; saved_volume=""; saved_voice=""; saved_notify=""
+    if [ "$_file_state" = "ok" ] && [ "$_pi" -ge 0 ]; then
+        for k in rate volume voice notify; do
+            eval "v=\$f_$k"
+            if [ -z "$v" ]; then
+                :
+            elif "_valid_$k" "$v"; then
+                eval "saved_$k=\$v"
+            else
+                _bad_settings="${_bad_settings:+$_bad_settings,}$k"
+            fi
+        done
+    fi
+    rate="${cli_rate:-${saved_rate:-$_default_rate}}"
+    volume="${cli_volume:-${saved_volume:-$_default_volume}}"
+    _preferred_voice="${saved_voice:-$_default_voice}"
+    notify_saved="${saved_notify:-$_default_notify}"     # the file's value, for display
+    notify="${cli_notify:-$notify_saved}"                  # what this command does
+}
 
 _state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/herdr"
 _trace_file="$_state_dir/speak-clipboard.log"
@@ -421,6 +635,9 @@ _render_log="$_state_dir/speak-render.log"
 _pid_file="$_state_dir/speak-render.pid"
 _lock_file="$_state_dir/speak-clipboard.flock"
 _engine_cache="$_state_dir/speak-engine.cache"
+_fifo="$_state_dir/speak-line.fifo"
+_line_lock="$_state_dir/speak-line.flock"
+_queue_time="$_state_dir/speak-queue.time"
 _engine_cache_ttl=86400
 _max_chars=8000
 [ -d "$_state_dir" ] || mkdir -p "$_state_dir" 2>/dev/null
@@ -432,24 +649,36 @@ _max_chars=8000
 # voice heals itself within a day instead of failing forever. Sets _engine
 # (say2 or say) and _engine_voice. Skipped entirely when --voice overrides the
 # default: an explicit voice is trusted as-is, straight to say2, no fallback.
-# The cache line's fourth field is the voice it was resolved FOR (v6): a
-# --set voice changes _preferred_voice, the fields no longer match, and the
-# next press probes again instead of waiting out the day. A pre-v6 line has
-# three fields, so it is re-probed once.
+# Each cache line's fourth field is the voice it was resolved FOR (v6). v8
+# keeps one line per voice, so two profiles with different voices do not
+# re-probe each other on every press; a line for another voice is kept
+# while it is fresh. A pre-v6 line has three fields, matches nothing, and
+# is dropped.
+_read_engine_cache() {   # sets _cache_hit (engine|voice) and _cache_keep
+    local now="$1" at eng v for
+    _cache_hit=""; _cache_keep=""
+    [ -f "$_engine_cache" ] || return 0
+    while IFS='|' read -r at eng v for; do
+        case "$at" in ''|*[!0-9]*) continue ;; esac
+        [ -n "$for" ] && [ $((now - at)) -lt "$_engine_cache_ttl" ] || continue
+        if [ "$for" = "$_preferred_voice" ]; then
+            _cache_hit="$eng|$v"
+        else
+            _cache_keep="$_cache_keep$at|$eng|$v|$for"$'\n'
+        fi
+    done <"$_engine_cache" 2>/dev/null
+}
 resolve_engine() {
     if [ -n "$voice" ]; then
         _engine="say2"; _engine_voice="$voice"
         return
     fi
-    local now cached_at cached_engine cached_voice cached_for
+    local now
     now="$(date +%s)"
-    if [ -f "$_engine_cache" ]; then
-        { IFS='|' read -r cached_at cached_engine cached_voice cached_for <"$_engine_cache"; } 2>/dev/null || true
-        if [ -n "${cached_at:-}" ] && [ "${cached_for:-}" = "$_preferred_voice" ] &&
-            [ $((now - cached_at)) -lt "$_engine_cache_ttl" ]; then
-            _engine="$cached_engine"; _engine_voice="$cached_voice"
-            return
-        fi
+    _read_engine_cache "$now"
+    if [ -n "$_cache_hit" ]; then
+        _engine="${_cache_hit%%|*}"; _engine_voice="${_cache_hit#*|}"
+        return
     fi
     _engine="say"; _engine_voice="$_say_fallback_voice"
     if command -v say2 >/dev/null 2>&1; then
@@ -461,7 +690,7 @@ resolve_engine() {
             fi
         done
     fi
-    printf '%s|%s|%s|%s\n' "$now" "$_engine" "$_engine_voice" "$_preferred_voice" >"$_engine_cache" 2>/dev/null || true
+    printf '%s%s|%s|%s|%s\n' "$_cache_keep" "$now" "$_engine" "$_engine_voice" "$_preferred_voice" >"$_engine_cache" 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------------------
@@ -543,24 +772,62 @@ _pick_voice() {
     return 3
 }
 
-# Rewrites the settings file from f_*. A temp file then a rename, so a
-# press never reads half a file; nothing is deleted (see NOTHING IS EVER
-# DELETED above).
+# Rewrites the settings file (v8). Every line is copied as it is, except: a
+# setting line a profile now holds another value for, a renamed heading, a
+# put-back setting (after its block's last setting), the [default] heading
+# a flat file gains, and a new profile's block at the end. A --set or
+# --reset for this command's profile goes in through f_*. So comments,
+# order and blank lines stay where Gavin put them. A temp file then a
+# rename, so a press never reads half a file; nothing is deleted (see
+# NOTHING IS EVER DELETED above). Reads the file back afterwards, so the
+# line numbers match the disk for any later step.
 _write_settings() {
     local tmp="$_settings_file.tmp"
+    if [ "$_pi" -ge 0 ]; then
+        pr_rate[_pi]="$f_rate"; pr_volume[_pi]="$f_volume"
+        pr_voice[_pi]="$f_voice"; pr_notify[_pi]="$f_notify"
+    fi
     mkdir -p "${_settings_file%/*}" 2>/dev/null
-    if {
-        echo "# speak-clipboard settings. Change with: speak-clipboard --set / --reset (--help)"
-        [ -n "$f_rate" ]   && echo "rate=$f_rate"
-        [ -n "$f_volume" ] && echo "volume=$f_volume"
-        [ -n "$f_voice" ]  && echo "voice=$f_voice"
-        [ -n "$f_notify" ] && echo "notify=$f_notify"
-        true
-    } >"$tmp" 2>/dev/null && command mv -f "$tmp" "$_settings_file" 2>/dev/null; then
+    if _emit_settings >"$tmp" 2>/dev/null && command mv -f "$tmp" "$_settings_file" 2>/dev/null; then
+        _read_settings_file; _parse_settings
         return 0
     fi
     echo "speak-clipboard: could not write $(_tilde "$_settings_file")" >&2
     return 1
+}
+
+_emit_settings() {
+    local n i u v l nl=${#_lines[@]} np=${#p_name[@]}
+    for ((n = 0; n < nl; n++)); do
+        [ "$n" -ne "$_flat" ] || printf '[%s]\n' "${p_name[0]}"
+        l="${_lines[n]}"; i="${l_owner[n]}"
+        if [ "$i" -lt 0 ]; then
+            printf '%s\n' "$l"
+        elif [ "${l:0:1}" = "[" ]; then
+            printf '[%s]\n' "${p_name[i]}"
+        else
+            _setting_line "$l"
+            eval "u=\${pl_$_sk[i]}; v=\${pr_$_sk[i]}"
+            if [ "$u" -eq "$n" ]; then printf '%s=%s\n' "$_sk" "$v"; else printf '%s\n' "$l"; fi
+        fi
+        for ((i = 0; i < np; i++)); do
+            [ "${p_ins[i]}" -ne "$n" ] || _emit_put_back "$i"
+        done
+    done
+    for ((i = 0; i < np; i++)); do
+        [ "${p_head[i]}" -eq -1 ] || continue
+        [ "$nl" -eq 0 ] || [ -z "${_lines[nl - 1]}" ] || echo
+        printf '[%s]\n' "${p_name[i]}"
+        _emit_put_back "$i"
+    done
+}
+
+_emit_put_back() {   # the settings profile $1 has no line for, in the usual order
+    local k u v
+    for k in rate volume voice notify; do
+        eval "u=\${pl_$k[$1]}; v=\${pr_$k[$1]}"
+        [ "$u" -ge 0 ] || [ -z "$v" ] || printf '%s=%s\n' "$k" "$v"
+    done
 }
 
 # A path with $HOME shown as ~ (a ~ in a ${x/..} replacement is
@@ -572,26 +839,45 @@ _tilde() {
     esac
 }
 
-# Writes a missing file with the default values, or puts back a key that
-# is absent from a readable one (v7, Gavin's call 2026-10-08, dotfiles-main
-# Q2: the file always holds every key). Runs once per invocation, before any
-# mode. A bad value is never overwritten here: f_* still hold it as typed.
-# Sets _file_note (created / added:<keys>) for --settings and the log, and
+# Makes the file hold every setting of every usable profile (v7, Gavin's
+# call 2026-10-08, dotfiles-main Q2; v8 per profile): writes a missing file
+# with one [default] block of default values, adds that block when no
+# usable profile is left, puts back a setting a profile lacks, and gives a
+# flat pre-v8 file its [default] heading. A bad value is never overwritten.
+# Runs once per invocation, before any mode. Sets _file_note (created,
+# migrated, added:default; comma-joined) for --settings and the log,
+# _put_back ("profile=keys" lines) for _load_profile and --settings, and
 # turns a missing file that cannot be written into _file_state=unusable.
 _ensure_settings_file() {
-    _file_note=""
-    [ "$_file_state" = "missing" ] || [ -n "$_missing_settings" ] || return 0
-    [ -n "$f_rate" ]   || f_rate="$_default_rate"
-    [ -n "$f_volume" ] || f_volume="$_default_volume"
-    [ -n "$f_voice" ]  || f_voice="$_default_voice"
-    [ -n "$f_notify" ] || f_notify="$_default_notify"
+    local i k v m changed=0 notes=""
+    [ "$_file_state" != "unusable" ] || return 0
+    if [ "$_file_state" = "missing" ]; then
+        _lines=("# speak-clipboard settings: one [profile] block each; a press uses the first,"
+                "# or --profile NAME. Change with: speak-clipboard --set / --reset (--help)")
+        _parse_settings
+        changed=1; notes="created"
+    fi
+    if ! _first_usable; then
+        _new_profile_slot "$_default_profile" -1
+        changed=1; notes="${notes:-added:$_default_profile}"
+    fi
+    if [ "$_flat" -ge 0 ]; then changed=1; notes="${notes:+$notes,}migrated"; fi
+    for ((i = 0; i < ${#p_name[@]}; i++)); do
+        ! _is_removed "${p_name[i]}" || continue
+        m=""
+        for k in rate volume voice notify; do
+            eval "v=\${pr_$k[i]}"
+            [ -z "$v" ] || continue
+            eval "pr_$k[i]=\$_default_$k"; m="${m:+$m,}$k"
+        done
+        [ -n "$m" ] || continue
+        changed=1
+        # A block written whole just now was never missing anything.
+        [ "${p_head[i]}" -eq -1 ] || _put_back="$_put_back${p_name[i]}=$m"$'\n'
+    done
+    [ "$changed" = 1 ] || return 0
     if _write_settings 2>/dev/null; then
-        if [ "$_file_state" = "missing" ]; then
-            _file_state="ok"; _file_note="created"
-            saved_rate="$f_rate"; saved_volume="$f_volume"; saved_voice="$f_voice"; saved_notify="$f_notify"
-        else
-            _file_note="added:$_missing_settings"
-        fi
+        _file_state="ok"; _file_note="$notes"
     elif [ "$_file_state" = "missing" ]; then
         _file_state="unusable"
     fi
@@ -628,7 +914,7 @@ _voice_name() {
 # bright white (dotfiles-main Q6). The file's path is bold bright white too.
 # Colour only on a terminal and never with NO_COLOR set.
 show_settings() {
-    local cached_at cached_engine cached_voice cached_for k raw top problems=""
+    local k raw top label problems="" e IFS_old
     local b_rate="" b_volume="" b_voice="" b_notify="" on="" off="" i w=44 width="$_box_width" n
     local -a names=(rate volume voice notify) vals marks hot=("" "" "" "")
     [ -z "${_SPEAK_CLIPBOARD_BEFORE:-}" ] || IFS='|' read -r b_rate b_volume b_voice b_notify <<<"$_SPEAK_CLIPBOARD_BEFORE"
@@ -646,9 +932,10 @@ show_settings() {
     if [ -n "$b_notify" ] && [ "$b_notify" != "$notify_saved" ]; then vals[3]="$b_notify -> $notify_saved"; hot[3]=1; fi
     for i in 0 1 2 3; do [ ${#vals[i]} -le "$w" ] || w=${#vals[i]}; done
     for i in 0 1 2 3; do n=$((8 + w + 1 + ${#marks[i]})); [ "$n" -le "$width" ] || width=$n; done
-    top="__ Settings file: $(_tilde "$_settings_file") "
+    label="$(_tilde "$_settings_file"), profile $profile"
+    top="__ Settings file: $label "
     [ $((${#top} + 3)) -le "$width" ] || width=$((${#top} + 3))
-    printf '__ Settings file: %s%s%s %s\n' "$on" "$(_tilde "$_settings_file")" "$off" \
+    printf '__ Settings file: %s%s%s %s\n' "$on" "$label" "$off" \
         "$(printf '%*s' $((width - ${#top})) '' | tr ' ' _)"
     echo
     for i in 0 1 2 3; do
@@ -658,20 +945,27 @@ show_settings() {
             printf '%-8s%-*s %s\n' "${names[i]}" "$w" "${vals[i]}" "${marks[i]}"
         fi
     done
-    if [ -f "$_engine_cache" ]; then
-        { IFS='|' read -r cached_at cached_engine cached_voice cached_for <"$_engine_cache"; } 2>/dev/null || true
-        if [ "${cached_for:-}" = "$_preferred_voice" ] && [ "${cached_voice:-}" != "$_preferred_voice" ]; then
-            problems="${problems}WARNING the voice is not installed: the last press used $cached_engine, $(_voice_label "$cached_voice") (exit 11)"$'\n'
-        fi
+    _read_engine_cache "$(date +%s)"
+    if [ -n "$_cache_hit" ] && [ "${_cache_hit#*|}" != "$_preferred_voice" ]; then
+        problems="${problems}WARNING the voice is not installed: the last press used ${_cache_hit%%|*}, $(_voice_label "${_cache_hit#*|}") (exit 11)"$'\n'
     fi
     for k in ${_bad_settings//,/ }; do
         eval "raw=\$o_$k"
         problems="${problems}WARNING $k=$raw in the file is not valid: the default is used (exit 10). Fix: speak-clipboard --set $k ..."$'\n'
     done
-    case "$_file_note" in
-        created) problems="${problems}NOTE    the file did not exist: written now with the default values"$'\n' ;;
-        added:*) problems="${problems}NOTE    missing from the file, put back with the default value: ${_file_note#added:}"$'\n' ;;
+    problems="$problems$_file_warnings"
+    case ",$_file_note," in
+        *,created,*) problems="${problems}NOTE    the file did not exist: written now with one [$_default_profile] profile of default values"$'\n' ;;
+        *,added:*) problems="${problems}NOTE    the file had no usable profile: a [$_default_profile] one of default values was added"$'\n' ;;
     esac
+    case ",$_file_note," in
+        *,migrated,*) problems="${problems}NOTE    the file had no [profile] headings: its settings are now the [$_default_profile] profile"$'\n' ;;
+    esac
+    IFS_old="$IFS"; IFS=$'\n'
+    for e in $_put_back; do
+        problems="${problems}NOTE    [${e%%=*}] was missing ${e#*=}: put back with the default value"$'\n'
+    done
+    IFS="$IFS_old"
     if [ "$_file_state" = "unusable" ]; then
         problems="${problems}WARNING the file could not be read or created: default values used (exit 12)"$'\n'
     fi
@@ -751,7 +1045,7 @@ _notify_change() {
         case "$rate" in 1|700) body="$body${nl}Rate: $rate wpm (limit 1-700)" ;; esac
         case "$volume" in 0|100) body="$body${nl}Volume: $volume (limit 0-100)" ;; esac
     fi
-    _send_notification "Speak clipboard" "$body"
+    _send_notification "Speak clipboard: $profile" "$body"
 }
 
 # The current settings as one notification, for `--notify --settings`
@@ -765,7 +1059,7 @@ _notify_summary() {
     [ -z "$_bad_settings" ] || problem="bad value in the file: $_bad_settings"
     [ "$_file_state" != "unusable" ] || problem="settings file unusable, defaults in use"
     [ -z "$problem" ] || body="$body${nl}Problem: $problem (run speak-clipboard --settings)"
-    _send_notification "Speak clipboard settings" "$body"
+    _send_notification "Speak clipboard settings: $profile" "$body"
 }
 
 # A mistake in the command (exit 2 or 3): the message, then the whole help,
@@ -832,17 +1126,19 @@ _start_of() {
 # Sets _speaker to the pid of the live speaker, or returns 1. The pid file
 # holds a pid and that process's start time; it is never removed, only
 # overwritten by the next start, so a finished speaker leaves a stale file
-# that this check must reject. It holds either a lone say2/say pid, or
-# (streaming, v4.4) the leader of a process group running say2 | ffplay;
-# _speaker_group is set to 1 in that case. `kill -0` alone is not enough:
-# pids are recycled, so the process must have the same start time AND be one
-# of our engines (or lead a group holding one) before anyone signals it.
+# that this check must reject. It holds the v8 line player (a perl process
+# leading its own group, "line" on the third line: _speaker_line=1), a
+# lone say2/say pid, or (v4.4-v7, still running across an update) the
+# leader of a group running say2 | ffplay; _speaker_group is set to 1 for a
+# group. `kill -0` alone is not enough: pids are recycled, so the process
+# must have the same start time AND be one of ours before anyone signals it.
 speaker_alive() {
-    local p="" stamp="" comm=""
+    local p="" stamp="" kind="" comm=""
     _speaker=""
     _speaker_group=""
+    _speaker_line=""
     [ -f "$_pid_file" ] || return 1
-    { read -r p; read -r stamp; } <"$_pid_file" 2>/dev/null || true
+    { read -r p; read -r stamp; read -r kind; } <"$_pid_file" 2>/dev/null || true
     case "$p" in
         ''|*[!0-9]*) return 1 ;;
     esac
@@ -850,6 +1146,8 @@ speaker_alive() {
     comm="$(ps -o comm= -p "$p" 2>/dev/null)"
     case "${comm##*/}" in
         say2|say) _speaker="$p"; return 0 ;;
+        perl|perl5*)
+            if [ "$kind" = "line" ]; then _speaker="$p"; _speaker_group=1; _speaker_line=1; return 0; fi ;;
     esac
     if [ -n "$comm" ] && [ -n "$(pgrep -g "$p" -x 'say2|ffplay' 2>/dev/null)" ]; then
         _speaker="$p"; _speaker_group=1; return 0
@@ -862,7 +1160,9 @@ speaker_alive() {
 # SIGTERM-then-wait cost ~0.6 s of audible lag (v4.3). speaker_alive has
 # already confirmed the pid is ours, so a recycled pid is never hit. A
 # streaming speaker is killed as a whole group, so say2 does not keep
-# rendering into a dead pipe and hold up the next press.
+# rendering into a dead pipe and hold up the next press; for the line
+# player that group is every voice in the line, which is what --stop
+# means (Q25: silence, and the line cleared).
 stop_speaker() {
     local rc=1
     if speaker_alive; then
@@ -875,20 +1175,40 @@ stop_speaker() {
     return $rc
 }
 
+# --skip (Q25): the line player drops the voice you can hear and goes on
+# with the next one (SIGUSR1, see _player_pl). A speaker with no line has
+# no next one, so skipping it is stopping it. Returns 1 when idle.
+skip_speaker() {
+    speaker_alive || return 1
+    if [ -n "$_speaker_line" ]; then
+        kill -USR1 "$_speaker" 2>/dev/null
+    else
+        stop_speaker
+    fi
+}
+
+# One message to the line player, on stdout: the gap in ms, then the voice,
+# rate, volume and text this press speaks with. Tab-separated on one line:
+# the cleaner leaves no tab or newline in the text, and _valid_voice
+# refuses a tab in a voice.
+_send_voice() {
+    printf 'V\t%s\t%s\t%s\t%s\t%s\n' "$1" "$_engine_voice" "$rate" "$volume" "$text"
+}
+
 # Text goes in as an argv element (2026-09-10, see the v4.1 note up top --
 # reversed from the original "never argv" design on purpose, traded away for
 # speed). `trap '' HUP; exec` replaces nohup: the speaker must outlive this
 # script, and exec keeps $! equal to its own pid (see speaker_alive: it checks
-# the live process really is say2 or say before anyone signals it). say2 MUST
-# be invoked as the bare `say2 -v ... TEXT` form, never `say2 synthesize` --
+# the live process really is ours before anyone signals it). say2 MUST be
+# invoked as the bare `say2 -v ... TEXT` form, never `say2 synthesize` --
 # synthesize is the slow path regardless of how text reaches it (MEASURED).
 #
-# Streaming (v4.4): with the default say2 voice and ffplay on PATH, say2
-# writes raw PCM to stdout as it renders and ffplay plays it, so speech starts
-# in ~0.3 s instead of after the whole render. `set -m` gives the pair its own
-# process group, whose leader pid goes in the pid file for stop_speaker. An
-# explicit --voice skips streaming, since it may name a non-Siri voice and
-# stdout streaming needs `--engine siri` stated.
+# Streaming (v4.4, every voice since v8): with say2 and ffplay on PATH, say2
+# writes raw PCM to stdout as it renders and ffplay plays it, so speech
+# starts in ~0.3 s instead of after the whole render (35 s of silence on
+# 3,360 chars, which is what an explicit --voice got until v8). Since v8
+# that pair lives inside the line player (start_line); `set -m` gives it
+# its own process group, whose leader pid goes in the pid file.
 #
 # -infbuf is load-bearing (v4.6, 2026-09-28). Without it ffplay reads only
 # about a second ahead, say2's writes stall, and say2 ends the render early:
@@ -897,6 +1217,7 @@ stop_speaker() {
 # the same text three ways: fast reader 39.6 s; ffplay 5.2 s + that error;
 # ffplay -infbuf 40.1 s wall, no error. (A say2 bug too: a slow consumer
 # should slow it down, not truncate it. Filed with the other say2 items.)
+# The line player also drains say2 into its own memory as fast as it comes.
 #
 # `--` before the text (v4.10, 2026-10-09): without it, a selection that
 # starts with a dash is read as an option. MEASURED: clipboard "--help"
@@ -904,15 +1225,8 @@ stop_speaker() {
 # With `--`, say2 and say both take it as text.
 start_speaker() {
     resolve_engine
-    if [ "$_engine" = "say2" ] && [ -z "$voice" ] && command -v ffplay >/dev/null 2>&1; then
-        set -m
-        ( trap '' HUP
-          say2 -v "$_engine_voice" -r "$rate" --engine siri --format pcm -o - -- "$text" \
-              2>>"$_render_log" |
-              ffplay -nodisp -autoexit -infbuf -loglevel error -volume "$volume" \
-                  -f s16le -ar 48000 -ch_layout mono -i - >/dev/null 2>>"$_render_log"
-        ) >/dev/null 2>&1 9>&- &
-        set +m
+    if [ "$_engine" = "say2" ] && command -v ffplay >/dev/null 2>&1 && start_line; then
+        return 0
     elif [ "$_engine" = "say2" ]; then
         ( trap '' HUP; exec say2 -v "$_engine_voice" -r "$rate" -- "$text" ) \
             >/dev/null 2>>"$_render_log" 9>&- &
@@ -922,6 +1236,60 @@ start_speaker() {
     fi
     local p=$!
     printf '%s\n%s\n' "$p" "$(_start_of "$p")" >"$_pid_file"
+}
+
+# A new line player with this press's voice first in it. The press opens
+# the named pipe read-write and writes the voice into it BEFORE the player
+# exists (the pipe holds it), then hands the pipe over as fd 3, so the
+# player's first read finds it. Written after the start, it raced the
+# player, which could find an empty line and finish before the voice came:
+# with the write moved back after the start, 9 selftest checks fail (the
+# --skip, --stop, clean-slate and --toggle arms), measured 2026-10-10. Read-write also means no open of
+# that pipe ever blocks. The player's program comes in on stdin, so its
+# command line is short in `ps`.
+start_line() {
+    [ -p "$_fifo" ] || mkfifo "$_fifo" 2>/dev/null || return 1
+    exec 7<>"$_fifo" || return 1
+    _send_voice 0 >&7
+    set -m
+    ( trap '' HUP; exec perl - speak-clipboard-line "$_line_lock" <<<"$_player_pl" ) \
+        3<&7 7<&- >/dev/null 2>>"$_render_log" 8>&- 9>&- &
+    set +m
+    local p=$!
+    printf '%s\n%s\nline\n' "$p" "$(_start_of "$p")" >"$_pid_file"
+    exec 7<&-
+}
+
+# A --queue press while a line plays (Q12): its voice goes to the running
+# player, which speaks it after the voices already waiting. Under
+# speak-line.flock, because the player decides the line is over only while
+# holding that lock: so it cannot finish between this check and this
+# write. Returns 1 when there is no line to join, and the press starts one.
+join_line() {
+    local rc=1
+    exec 8>>"$_line_lock" || return 1
+    if lockf -s -t 3 8; then
+        if speaker_alive && [ -n "$_speaker_line" ] && [ -p "$_fifo" ] && exec 7<>"$_fifo"; then
+            _send_voice "$queue_delay" >&7 && rc=0
+            exec 7<&-
+        fi
+    fi
+    exec 8>&-
+    return $rc
+}
+
+# Key repeat on a --queue key (Q22): presses under 0.5 s apart are one key
+# held down, not a line of them. speak-queue.time holds the last --queue
+# press in microseconds, overwritten in place and updated by every --queue
+# press, so a key held down counts once however long it is held.
+_queue_repeat() {
+    local now="${EPOCHREALTIME:-}" last=""
+    now="${now//[!0-9]/}"
+    [ -n "$now" ] || now="$(perl -MTime::HiRes=time -e 'printf "%d", time * 1e6')"
+    { read -r last <"$_queue_time"; } 2>/dev/null || true
+    printf '%s\n' "$now" >"$_queue_time" 2>/dev/null
+    case "$last" in ''|*[!0-9]*) return 1 ;; esac
+    [ $((now - last)) -lt 500000 ]
 }
 
 # ---------------------------------------------------------------------------
@@ -1132,6 +1500,764 @@ clean_input() {
 }
 
 # ---------------------------------------------------------------------------
+# The line player (v8): one per line of voices, started by start_line and
+# run as `perl - speak-clipboard-line <lock>` with this program on stdin.
+# See PROFILES AND THE LINE in the header for why one player.
+# ---------------------------------------------------------------------------
+read -r -d '' _player_pl <<'PERL' || true
+use strict; use warnings;
+use POSIX ();
+use Fcntl qw(:flock F_GETFL F_SETFL F_SETFD FD_CLOEXEC O_NONBLOCK);
+use Time::HiRes qw(time);
+
+# fd 3 is the line's named pipe, opened read-write by the press that
+# started this player, so it never reads end-of-file and no press blocks
+# opening it. One message per line:
+#   V <tab> gap-ms <tab> voice <tab> rate <tab> volume <tab> text
+my $lock_path = $ARGV[1];
+my $BPS     = 96000;   # 48 kHz mono s16le: bytes per second (96 per ms)
+my $LEAD    = 0.3;     # the next voice goes in when this much is left
+my $END     = 0.1;     # the line is over when this much is left
+my $RENDERS = 3;       # voices rendering at once: the current and the next two
+my @FFPLAY  = qw(ffplay -nodisp -autoexit -infbuf -stats -loglevel error -volume 100
+                 -f s16le -ar 48000 -ch_layout mono -i -);
+
+open(my $line, '<&=', 3) or die "speak-clipboard line: no pipe on fd 3: $!\n";
+fcntl($line, F_SETFD, FD_CLOEXEC);
+nonblock($line);
+my $skips = 0;
+$SIG{USR1} = sub { $skips++ };
+$SIG{PIPE} = 'IGNORE';
+$SIG{HUP}  = 'IGNORE';
+
+my @v;            # the voices in the order they came: see read_pipe
+my $cur = 0;      # the voice being written to ffplay
+my $msgs = '';    # a message read in part
+my %ff;           # the one ffplay: pid, in, err, ebuf, written, clock, t0
+my $end_lock;     # speak-line.flock, held from the decision to finish to exit
+
+sub nonblock { my $fh = shift; fcntl($fh, F_SETFL, fcntl($fh, F_GETFL, 0) | O_NONBLOCK) }
+sub note { print STDERR "speak-clipboard line: @_\n" }
+
+# Returns how many voices came in. The gap is written as silence at the
+# front of the voice: 96 bytes of zero samples per ms, exact to the sample.
+sub read_pipe {
+    my $new = 0;
+    while (1) {
+        my $n = sysread($line, my $b, 65536);
+        last unless $n;
+        $msgs .= $b;
+    }
+    while ($msgs =~ s/^([^\n]*)\n//) {
+        my ($tag, $gap, $voice, $rate, $vol, $text) = split /\t/, $1, 6;
+        next unless defined $text && $tag eq 'V';
+        push @v, { voice => $voice, rate => $rate, f => $vol / 100, text => $text,
+                   buf => "\0" x (96 * $gap), pos => 0, carry => '' };
+        $new++;
+    }
+    return $new;
+}
+
+sub start_render {
+    my $x = shift;
+    $x->{started} = 1;
+    my ($r, $w);
+    pipe($r, $w) or do { note("no pipe for say2: $!"); $x->{done} = 1; return };
+    my $pid = fork;
+    if (!defined $pid) { note("no fork for say2: $!"); $x->{done} = 1; return }
+    if ($pid == 0) {
+        open(STDIN, '<', '/dev/null'); open(STDOUT, '>&', $w);
+        { exec('say2', '-v', $x->{voice}, '-r', $x->{rate}, '--engine', 'siri',
+               '--format', 'pcm', '-o', '-', '--', $x->{text}) };
+        POSIX::_exit(127);
+    }
+    close $w; nonblock($r);
+    $x->{pid} = $pid; $x->{out} = $r;
+    delete $x->{text};
+}
+
+sub read_render {
+    my $x = shift;
+    my $n = sysread($x->{out}, my $b, 65536);
+    return if !defined $n && $!{EAGAIN};
+    if (!$n) { close $x->{out}; $x->{out} = undef; $x->{done} = 1; return }
+    $b = $x->{carry} . $b;
+    my $even = length($b) & ~1;
+    $x->{carry} = substr($b, $even);
+    $b = substr($b, 0, $even);
+    # The voice's own volume, in its samples (Q17, Q18): x volume/100, the
+    # linear scale ffplay -volume uses, so a profile sounds as loud as it
+    # did with a player of its own. ffplay itself runs at 100.
+    $b = pack('s<*', map { int($_ * $x->{f}) } unpack('s<*', $b)) if $x->{f} != 1;
+    $x->{buf} .= $b;
+}
+
+sub ff_start {
+    my ($r, $w, $er, $ew);
+    (pipe($r, $w) && pipe($er, $ew)) or do { note("no pipe for ffplay: $!"); return 0 };
+    my $pid = fork;
+    if (!defined $pid) { note("no fork for ffplay: $!"); return 0 }
+    if ($pid == 0) {
+        open(STDIN, '<&', $r); open(STDOUT, '>', '/dev/null'); open(STDERR, '>&', $ew);
+        { exec(@FFPLAY) };
+        POSIX::_exit(127);
+    }
+    close $r; close $ew; nonblock($w); nonblock($er);
+    %ff = (pid => $pid, in => $w, err => $er, ebuf => '', written => 0, clock => undef, t0 => undef);
+    return 1;
+}
+
+# ffplay's status line (-stats, on stderr even at -loglevel error) starts
+# with its clock: the seconds of audio it has played. Anything else it
+# says goes to the render log.
+sub ff_read_err {
+    my $n = sysread($ff{err}, my $b, 8192);
+    return if !defined $n && $!{EAGAIN};
+    if (!$n) { close $ff{err}; $ff{err} = undef; return }
+    $ff{ebuf} .= $b;
+    while ($ff{ebuf} =~ s/^([^\r\n]*)[\r\n]//) {
+        (my $l = $1) =~ s/\e\[[0-9;]*[A-Za-z]//g;
+        if ($l =~ /^\s*(-?\d+(?:\.\d+)?)\s+M-A:/) { $ff{clock} = $1 < 0 ? 0 : $1 }
+        elsif ($l =~ /\S/ && $l !~ /\bfd=\s*-?\d+\s+aq=/) { note("ffplay: $l") }
+    }
+}
+
+# Seconds played: ffplay's own clock; until its first one (or if a later
+# ffplay never prints one) a guess from the wall clock.
+sub ff_played {
+    return 0 unless $ff{pid} && defined $ff{t0};
+    return $ff{clock} if defined $ff{clock};
+    my $s = time - $ff{t0} - 0.5;
+    return $s < 0 ? 0 : $s;
+}
+sub ff_left {
+    return 0 unless $ff{pid};
+    my $s = $ff{written} / $BPS - ff_played();
+    return $s < 0 ? 0 : $s;
+}
+sub ff_kill {
+    return unless $ff{pid};
+    kill 'KILL', $ff{pid};
+    waitpid($ff{pid}, 0);
+    close $ff{in} if $ff{in};
+    close $ff{err} if $ff{err};
+    %ff = ();
+}
+
+# Writes the current voice into ffplay as it renders. A voice after the
+# first waits until the one before has less than $LEAD left, so the one
+# you hear is the only one in ffplay's buffer and --skip can take it alone.
+sub feed {
+    my $x = $v[$cur];
+    return unless $ff{in} && length($x->{buf}) > $x->{pos};
+    if (!defined $x->{start}) {
+        return if $ff{written} > 0 && ff_left() > $LEAD;
+        $x->{start} = $ff{written};
+    }
+    while ($x->{pos} < length $x->{buf}) {
+        my $n = syswrite($ff{in}, $x->{buf}, 65536, $x->{pos});
+        if (!defined $n) {
+            return if $!{EAGAIN};
+            note("ffplay stopped taking audio: $!");
+            finish(1);
+        }
+        $x->{pos} += $n; $ff{written} += $n;
+        $ff{t0} = time unless defined $ff{t0};
+    }
+}
+
+# A voice that has played to its end no longer needs its audio.
+sub free_played {
+    my $played = ff_played() * $BPS;
+    for my $x (@v[0 .. $cur - 1]) {
+        next unless defined $x->{start} && length $x->{buf};
+        $x->{buf} = '' if $played >= $x->{start} + length $x->{buf};
+    }
+}
+
+# --skip (Q25): drop the voice you can hear. It may be the voice being
+# written, or the one before it still playing out; with none audible, the
+# next to speak. Killing ffplay is the only way to take audio back out of
+# its buffer, so a voice after the dropped one already written into it is
+# rewound and written again into the next ffplay.
+sub skip {
+    my $played = ff_played() * $BPS;
+    my $p = $cur;
+    for my $i (0 .. $#v) {
+        my $x = $v[$i];
+        next if $x->{gone} || !defined $x->{start} || $x->{start} > $played;
+        if ($i == $cur || $played < $x->{start} + length $x->{buf}) { $p = $i; last }
+    }
+    return if $p > $#v;
+    my $x = $v[$p];
+    if (defined $x->{start}) {
+        ff_kill();
+        for my $y (@v[$p + 1 .. $#v]) { $y->{pos} = 0; delete $y->{start} }
+    }
+    if ($x->{out}) { kill 'KILL', $x->{pid} if $x->{pid}; close $x->{out}; $x->{out} = undef }
+    $x->{gone} = 1; $x->{done} = 1; $x->{buf} = ''; $x->{pos} = 0;
+    $cur = $p + 1;
+}
+
+sub reap {
+    while ((my $pid = waitpid(-1, POSIX::WNOHANG())) > 0) {
+        my $st = $? >> 8;
+        if ($ff{pid} && $pid == $ff{pid}) {
+            note("ffplay ended early (exit $st): the line ends here");
+            %ff = ();
+            finish(1);
+        }
+        for my $x (@v) {
+            next unless $x->{pid} && $x->{pid} == $pid;
+            note("say2 exit $st for a voice ($x->{voice})") if $st && !$x->{gone};
+            $x->{pid} = undef;
+        }
+    }
+}
+
+# Nothing is left to write. Under speak-line.flock, which a --queue press
+# holds while it checks for a live player and writes to it: a voice
+# written before the lock is in the pipe now, and none can come after it,
+# so a waiting voice is never lost. Returns 1 if one came in.
+sub more_waiting {
+    open(my $lk, '>>', $lock_path) or return 0;
+    flock($lk, LOCK_EX);
+    return 1 if read_pipe();
+    $end_lock = $lk;
+    return 0;
+}
+
+# The end of input lets ffplay play its last fraction of a second and
+# exit; it is then waited for (3 s at most), still holding the lock.
+sub finish {
+    my $rc = shift;
+    if ($ff{pid}) {
+        close $ff{in} if $ff{in};
+        my $until = time + 3;
+        while ($ff{err} && time < $until) {
+            my $rin = ''; vec($rin, fileno($ff{err}), 1) = 1;
+            select(my $rout = $rin, undef, undef, 0.05);
+            ff_read_err();
+        }
+        kill 'KILL', $ff{pid} if waitpid($ff{pid}, POSIX::WNOHANG()) == 0;
+        waitpid($ff{pid}, 0);
+    }
+    for my $x (@v) { kill 'KILL', $x->{pid} if $x->{pid} }
+    exit $rc;
+}
+
+# The first voice is in the pipe before this starts; 2 s is only a
+# backstop, so a player never sits idle for ever.
+my $wait_until = time + 2;
+until (read_pipe() || time > $wait_until) { select(undef, undef, undef, 0.02) }
+while (1) {
+    if ($skips) { $skips = 0; skip() }
+    read_pipe();
+    for my $i ($cur .. $#v) {
+        last if $i >= $cur + $RENDERS;
+        start_render($v[$i]) unless $v[$i]{started} || $v[$i]{gone};
+    }
+    while ($cur <= $#v && ($v[$cur]{gone} || ($v[$cur]{done} && $v[$cur]{pos} >= length $v[$cur]{buf}))) {
+        $cur++;
+    }
+    if ($cur <= $#v) {
+        if (!$ff{pid}) { ff_start() or finish(1) }
+        feed();
+    } elsif (!$ff{pid} || ff_left() <= $END) {
+        more_waiting() or finish(0);
+        next;
+    }
+    reap();
+    free_played();
+    my $rin = '';
+    vec($rin, fileno($line), 1) = 1;
+    for my $x (@v) { vec($rin, fileno($x->{out}), 1) = 1 if $x->{out} }
+    vec($rin, fileno($ff{err}), 1) = 1 if $ff{err};
+    select(my $rout = $rin, undef, undef, 0.03);
+    for my $x (@v) { read_render($x) if $x->{out} }
+    ff_read_err() if $ff{err};
+}
+PERL
+
+# ---------------------------------------------------------------------------
+# --selftest (W-20261008-A05, W-20261009-A03; Gavin: "make sure all the
+# tests are there and done"). Every arm runs this script as a separate
+# process in its own temp folder (XDG_CONFIG_HOME and XDG_STATE_HOME point
+# there), with stand-ins for say2, say, ffplay, osascript, herdr and pbpaste
+# first on a PATH that holds no Homebrew folder, so nothing is spoken, no
+# real notification shows, and the real settings and state are not read.
+# The ffplay stand-in keeps every byte it is sent and prints ffplay's own
+# status line, so an arm checks the exact samples a voice produced. Each
+# stand-in voice is one sample value (Aaron 10001, Simone -20001, any other
+# 3001), so the samples show whose voice it was and at what volume. Exits 1
+# if any arm fails, and refuses (exit 1, saying why) where ps cannot see
+# processes, as inside a Claude Code sandbox: a run that tested nothing is
+# not a pass.
+# ---------------------------------------------------------------------------
+run_selftest() {
+    local self T bin A out rc pass=0 fail=0 t1 t2 n1 n2 i t0 _st_unset=""
+    case "$0" in /*) self="$0" ;; *) self="$PWD/$0" ;; esac
+    if ! ps -o pid= -p $$ >/dev/null 2>&1; then
+        echo "speak-clipboard --selftest: REFUSED, nothing was tested: ps cannot list processes here" >&2
+        echo "  (a Claude Code sandbox blocks it). Run it in a normal terminal." >&2
+        return 1
+    fi
+    T="$(mktemp -d "${TMPDIR:-/tmp}/speak-clipboard-selftest.XXXXXX")" || {
+        echo "speak-clipboard --selftest: REFUSED, nothing was tested: could not make a temp folder" >&2; return 1; }
+    bin="$T/bin"; mkdir -p "$bin"
+    ln -s "$BASH" "$bin/bash"
+
+    cat >"$bin/say2" <<'STANDIN'
+#!/usr/bin/perl
+# Stand-in for say2 and say (speak-clipboard --selftest): never speaks.
+use strict; use warnings;
+my $d = $ENV{STANDIN_DIR} or die "STANDIN_DIR is not set\n";
+my @keys = split /,/, ($ENV{STANDIN_VOICES} // 'en-US:natural:male:Aaron:premium:5030,en-US:natural:female:Simone:premium:5029,en-US:neuralAX:male:Aaron:premium:1370');
+if (@ARGV && $ARGV[0] eq 'voices') {
+    if (@ARGV > 2 && $ARGV[1] eq '--status') {
+        my $k = $ARGV[2];
+        printf qq({\n  "identifier" : "%s",\n  "state" : "%s"\n}\n), $k, (grep { $_ eq $k } @keys) ? 'installed' : 'notInstalled';
+        exit 0;
+    }
+    print "NAME    LANGUAGE  VERSION  ENGINE  INSTALLED  ASSET KEY\n";
+    for (@keys) { my @f = split /:/; print "$f[3]  $f[0]  $f[5]  siri  yes  $_\n" }
+    exit 0;
+}
+my (%o, $text);
+while (@ARGV) {
+    my $a = shift @ARGV;
+    if ($a eq '--') { $text = join ' ', @ARGV; last }
+    $o{$a} = shift @ARGV if $a =~ /^(?:-v|-r|-o|--engine|--format)$/;
+}
+$text = '' unless defined $text;
+my $voice = $o{'-v'} // '';
+my ($me) = $0 =~ m{([^/]+)$};
+open my $log, '>>', "$d/say2.log" or die;
+print $log "$me voice=$voice rate=" . ($o{'-r'} // '') . " out=" . ($o{'-o'} // 'play') . " chars=" . length($text) . "\n";
+close $log;
+my $samples = int(($ENV{STANDIN_MS_PER_CHAR} // 20) * length($text) * 48);
+my $val = $voice =~ /natural:male:Aaron/ ? 10001 : $voice =~ /Simone/ ? -20001 : 3001;
+select(undef, undef, undef, $ENV{STANDIN_RENDER_DELAY}) if $ENV{STANDIN_RENDER_DELAY};
+if (($o{'-o'} // '') eq '-') {
+    my $b = pack('s<*', ($val) x $samples);
+    # Odd-sized writes, so the reader has to carry half a sample over.
+    for (my $p = 0; $p < length $b; $p += 9601) { syswrite(STDOUT, $b, 9601, $p) or exit 1 }
+    exit 0;
+}
+select(undef, undef, undef, $samples / 48000);   # direct play: as long as speech would take
+STANDIN
+    cp "$bin/say2" "$bin/say"
+
+    cat >"$bin/ffplay" <<'STANDIN'
+#!/usr/bin/perl
+# Stand-in for ffplay (speak-clipboard --selftest): never plays a sound. Keeps
+# every byte it is sent in ffplay.N.pcm, "plays" it in real time, and prints
+# ffplay's -stats status line (unless STANDIN_FFPLAY_QUIET) on stderr.
+use strict; use warnings; use Time::HiRes qw(time);
+my $d = $ENV{STANDIN_DIR} or die "STANDIN_DIR is not set\n";
+my $n = 1; $n++ while -e "$d/ffplay.$n.pcm";
+open my $cap, '>', "$d/ffplay.$n.pcm" or die; binmode $cap;
+open my $a, '>>', "$d/ffplay.args" or die; print $a "$n @ARGV\n"; close $a;
+my ($got, $played, $eof, $last) = (0, 0, 0, time);
+while (1) {
+    my $rin = ''; vec($rin, 0, 1) = 1 unless $eof;
+    select(my $r = $rin, undef, undef, 0.03);
+    if (!$eof && vec($r, 0, 1)) {
+        my $k = sysread(STDIN, my $b, 65536);
+        if (!$k) { $eof = 1 } else { syswrite($cap, $b); $got += $k }
+    }
+    my $now = time; $played += ($now - $last) * 96000; $last = $now;
+    $played = $got if $played > $got;
+    printf STDERR "%7.2f M-A:  0.000 fd=   0 aq=%5dKB vq=    0KB sq=    0B \r", $played / 96000, ($got - $played) / 1024
+        unless $ENV{STANDIN_FFPLAY_QUIET};
+    last if $eof && $played >= $got;
+}
+STANDIN
+
+    cat >"$bin/osascript" <<'STANDIN'
+#!/bin/sh
+# Stand-in for osascript (speak-clipboard --selftest): notes a notification's
+# title and body (its last two arguments; a newline in the body becomes ~).
+t=""; b=""
+for a in "$@"; do t="$b"; b="$a"; done
+{ printf '%s|' "$t"; printf '%s' "$b" | tr '\n' '~'; echo; } >>"$STANDIN_DIR/notify.log"
+STANDIN
+    printf '#!/bin/sh\necho "$*" >>"$STANDIN_DIR/herdr.log"\n' >"$bin/herdr"
+    printf '#!/bin/sh\necho "clipboard stand-in text"\n' >"$bin/pbpaste"
+    chmod +x "$bin"/*
+
+    # One arm's folder: settings in $A/cfg, state in $A/state, stand-in
+    # logs and captured audio in $A/standin.
+    _st_arm() { A="$T/$1"; mkdir -p "$A/standin" "$A/cfg/speak-clipboard"; }
+    _st_file() { printf '%s' "$1" >"$A/cfg/speak-clipboard/settings"; }
+    _st() {
+        env $_st_unset PATH="$bin:/usr/bin:/bin:/usr/sbin:/sbin" XDG_CONFIG_HOME="$A/cfg" \
+            XDG_STATE_HOME="$A/state" STANDIN_DIR="$A/standin" NO_COLOR=1 "$bin/bash" "$self" "$@"
+    }
+    _ok() {
+        local d="$1"; shift
+        if "$@"; then pass=$((pass + 1)); printf '  ok    %s\n' "$d"
+        else fail=$((fail + 1)); printf '  FAIL  %s\n' "$d"; fi
+    }
+    _has() { case "$1" in *"$2"*) return 0 ;; esac; return 1; }
+    _lacks() { ! _has "$1" "$2"; }
+    _log_last() { tail -n 1 "$A/state/herdr/speak-clipboard.log" 2>/dev/null; }
+    _say_log() { cat "$A/standin/say2.log" 2>/dev/null; }
+    _notes() { cat "$A/standin/notify.log" 2>/dev/null; }
+    _cfg() { cat "$A/cfg/speak-clipboard/settings" 2>/dev/null; }
+    # The samples in a captured .pcm as value*count runs: "7000*4800 0*7200".
+    _runs() {
+        [ -f "$A/standin/ffplay.$1.pcm" ] || { echo "(no ffplay.$1)"; return; }
+        perl -e 'local $/; my $b = <STDIN>; $b = "" unless defined $b; my @r;
+                 for (unpack "s<*", $b) { if (@r && $r[-1][0] == $_) { $r[-1][1]++ } else { push @r, [$_, 1] } }
+                 print join(" ", map { "$_->[0]*$_->[1]" } @r), "\n"' <"$A/standin/ffplay.$1.pcm"
+    }
+    # Until the arm's speaker is gone (10 s at most).
+    _st_idle() {
+        local p="" k=0
+        while [ $k -lt 200 ]; do
+            p=""; { read -r p <"$A/state/herdr/speak-render.pid"; } 2>/dev/null || true
+            [ -n "$p" ] && kill -0 "$p" 2>/dev/null || return 0
+            sleep 0.05; k=$((k + 1))
+        done
+        _st --stop >/dev/null 2>&1
+        return 1
+    }
+    _now_ms() { local t="${EPOCHREALTIME:-}"; t="${t//[!0-9]/}"; echo $(( ${t:-0} / 1000 )); }
+    # Samples a stand-in voice makes for text of $1 characters at $2 ms each.
+    _n() { echo $(($1 * $2 * 48)); }
+
+    local aaron="en-US:natural:male:Aaron:premium:5030" simone="en-US:natural:female:Simone:premium:5029"
+    local other="en-US:neuralAX:male:Aaron:premium:1370"
+    local P2="# test profiles
+; a semicolon comment
+[aaron_fast]
+rate=440
+volume=70
+voice=$aaron
+notify=off
+
+[simone_fast]
+rate=380
+volume=60
+voice=$simone
+notify=off
+
+[third]
+rate=300
+volume=50
+voice=$other
+notify=off
+"
+    echo "speak-clipboard --selftest (temp folder: $T)"
+
+    echo "File format and profile selection"
+    _st_arm format; _st_file "$P2"
+    _ok "no --profile reads the first profile"       [ "$(_st --get rate)" = 440 ]
+    _ok "--profile reads that profile"                [ "$(_st --get rate --profile simone_fast)" = 380 ]
+    _ok "--profile reads that profile's voice"        [ "$(_st --get voice --profile simone_fast)" = "$simone" ]
+    _ok "a file with nothing wrong is left as it was" [ "$(_cfg)" = "${P2%$'\n'}" ]
+    echo "hello world" | _st --stdin >/dev/null 2>&1; _st_idle
+    echo "hello world" | _st --stdin --profile simone_fast >/dev/null 2>&1; _st_idle
+    out="$(_say_log)"
+    _ok "a press uses the first profile's voice and rate" _has "$out" "say2 voice=$aaron rate=440 out=-"
+    _ok "--profile uses that profile's voice and rate"    _has "$out" "say2 voice=$simone rate=380 out=-"
+    _ok "first profile: its volume (70) in the samples"   [ "$(_runs 1)" = "7000*$(_n 11 20)" ]
+    _ok "--profile: its volume (60) in the samples"       [ "$(_runs 2)" = "-12000*$(_n 11 20)" ]
+    _ok "ffplay itself plays at -volume 100"              _has "$(cat "$A/standin/ffplay.args")" "-volume 100"
+
+    echo "Warnings in the file"
+    _st_arm warnings
+    _st_file "rate=300
+[aaron_fast]
+rate=440
+volume=70
+voice=$aaron
+notify=off
+rate=450
+[simone_fast]
+rate=380
+voice=$simone
+notify=off
+[bad name]
+rate=100
+"
+    echo "hello world" | _st --stdin --profile simone_fast >/dev/null 2>&1; rc=$?; _st_idle
+    _ok "a press on a profile missing a setting exits 10"   [ "$rc" = 10 ]
+    # Line 13, not 12: the put-back volume=60 now sits above [bad name].
+    out="$(_log_last)"
+    _ok "...and logs it"                                    _has "$out" "settings=missing:volume"
+    _ok "...and logs the file's warnings"                   _has "$out" "warn=above-heading:1,twice:aaron_fast:rate,bad-heading:13"
+    _ok "...using the default volume (60) for it"           [ "$(_runs 1)" = "-12000*$(_n 11 20)" ]
+    _ok "the missing setting is put back in its own block"  _has "$(_cfg)" "notify=off
+volume=60
+[bad name]"
+    out="$(_st --settings --profile aaron_fast 2>&1)"
+    _ok "--settings warns: a setting above the first heading" _has "$out" "line 1: rate=300 is above the first [heading]: not used"
+    _ok "--settings warns: a setting twice in one profile"   _has "$out" "[aaron_fast] sets rate twice (lines 3 and 7): line 7 is used"
+    _ok "--settings warns: a heading that is not a name"     _has "$out" "line 13: [bad name] is not a usable profile name"
+    _ok "the last of a setting set twice is the one used"    [ "$(_st --get rate)" = 450 ]
+    echo "hello world" | _st --stdin >/dev/null 2>&1; rc=$?; _st_idle
+    _ok "a press on a complete profile exits 0, warnings or not" [ "$rc" = 0 ]
+
+    echo "Unknown profile (exit 6)"
+    _st_arm unknown; _st_file "$P2"
+    echo "hello world" | _st --stdin --profile nope >/dev/null 2>&1; rc=$?
+    _ok "a press with an unknown profile exits 6"           [ "$rc" = 6 ]
+    _ok "...speaks nothing (no render at all)"              [ ! -e "$A/standin/say2.log" ]
+    _ok "...and a notification names the profile"          _has "$(_notes)" "No profile named 'nope'"
+    _st --set rate 300 --profile nope >/dev/null 2>&1; rc=$?
+    _ok "--set on an unknown profile exits 6"               [ "$rc" = 6 ]
+    _st --get rate --profile nope >/dev/null 2>&1; rc=$?
+    _ok "--get on an unknown profile exits 6"               [ "$rc" = 6 ]
+    _st --reset all --profile nope >/dev/null 2>&1; rc=$?
+    _ok "--reset on an unknown profile exits 6"             [ "$rc" = 6 ]
+    _st --settings --profile nope >/dev/null 2>&1; rc=$?
+    _ok "--settings on an unknown profile exits 6"          [ "$rc" = 6 ]
+    _ok "...and the file is untouched"                      [ "$(_cfg)" = "${P2%$'\n'}" ]
+
+    echo "--new-profile, --remove-profile, --profiles"
+    _st_arm manage; _st_file "$P2"
+    _st --new-profile extra >/dev/null 2>&1; rc=$?
+    _ok "--new-profile makes a profile"                     [ "$rc" = 0 ]
+    _ok "...a copy of the first profile"                    [ "$(_st --get all --profile extra)" = "rate=440
+volume=70
+voice=$aaron
+notify=off" ]
+    _ok "...as a block at the end of the file"              _has "$(_cfg)" "voice=$other
+notify=off
+
+[extra]
+rate=440"
+    _st --new-profile extra >/dev/null 2>&1; rc=$?
+    _ok "--new-profile refuses a name that exists (3)"      [ "$rc" = 3 ]
+    _st --new-profile "two words" >/dev/null 2>&1; rc=$?
+    _ok "--new-profile refuses a space (3)"                 [ "$rc" = 3 ]
+    _st --new-profile a.b >/dev/null 2>&1; rc=$?
+    _ok "--new-profile refuses a dot (3)"                   [ "$rc" = 3 ]
+    _st --set rate 300 --profile extr >/dev/null 2>&1; rc=$?
+    _ok "--set with a mistyped profile exits 6..."          [ "$rc" = 6 ]
+    _ok "...and makes no stray profile"                     _lacks "$(_cfg)" "[extr]"
+    _st --set rate 333 --profile extra >/dev/null 2>&1
+    _ok "--set --profile changes only that profile"         [ "$(_st --get rate --profile extra) $(_st --get rate)" = "333 440" ]
+    _st --remove-profile extra >/dev/null 2>&1; rc=$?
+    _ok "--remove-profile works"                            [ "$rc" = 0 ]
+    _ok "...renaming the heading to NAME_REMOVED"           _has "$(_cfg)" "[extra_REMOVED]
+rate=333"
+    _st --get rate --profile extra >/dev/null 2>&1; rc=$?
+    _ok "a removed profile is unusable by its name (6)"     [ "$rc" = 6 ]
+    _st --get rate --profile extra_REMOVED >/dev/null 2>&1; rc=$?
+    _ok "...and by its _REMOVED name (6)"                   [ "$rc" = 6 ]
+    _st --new-profile extra >/dev/null 2>&1; _st --remove-profile extra >/dev/null 2>&1
+    _ok "a second removal of the same name: NAME_REMOVED_2" _has "$(_cfg)" "[extra_REMOVED_2]"
+    out="$(_st --profiles 2>&1)"
+    _ok "--profiles marks the first profile"                _has "$out" "* aaron_fast "
+    _ok "--profiles lists the others"                       _has "$out" "  simone_fast "
+    _ok "--profiles hides removed ones..."                  _lacks "$out" "extra"
+    _ok "...and counts them"                                _has "$out" "2 removed"
+    _st_arm last; _st_file "[only]
+rate=440
+volume=70
+voice=$aaron
+notify=off
+"
+    _st --remove-profile only >/dev/null 2>&1; rc=$?
+    _ok "--remove-profile refuses the last profile (3)"     [ "$rc" = 3 ]
+    _ok "...and leaves it in place"                         _has "$(_cfg)" "[only]"
+
+    echo "Migration of a flat file"
+    _st_arm migrate; _st_file "# my old settings
+rate=400
+volume=50
+voice=$aaron
+notify=off
+"
+    out="$(_st --settings 2>&1)"
+    _ok "the run that migrates says so"                     _has "$out" "now the [default] profile"
+    _ok "a flat file becomes one [default] block, comment kept" [ "$(_cfg)" = "# my old settings
+[default]
+rate=400
+volume=50
+voice=$aaron
+notify=off" ]
+    _ok "...with the same values"                           [ "$(_st --get rate)" = 400 ]
+
+    echo "--queue"
+    t1="aaaa bbbb cccc"; t2="dd ee"; n1=$(_n 14 100); n2=$(_n 5 100)
+    _st_arm queue; _st_file "$P2"
+    export STANDIN_MS_PER_CHAR=100
+    echo "$t1" | _st --stdin >/dev/null 2>&1; sleep 0.6
+    echo "$t2" | _st --stdin --queue --profile simone_fast >/dev/null 2>&1; rc=$?
+    _ok "a --queue press while speaking exits 0"           [ "$rc" = 0 ]
+    _ok "...and is logged as queued"                        _has "$(_log_last)" "outcome=queued profile=simone_fast"
+    _st_idle
+    _ok "both voices, back to back, in ONE player"          [ "$(_runs 1)" = "7000*$n1 -12000*$n2" ]
+    _ok "...no second player was started"                  [ ! -e "$A/standin/ffplay.2.pcm" ]
+    _st_arm queue-gap; _st_file "$P2"
+    echo "$t1" | _st --stdin >/dev/null 2>&1; sleep 0.6
+    echo "$t2" | _st --stdin --queue 150 --profile simone_fast >/dev/null 2>&1
+    _st_idle
+    _ok "--queue 150: 7200 zero samples (14400 bytes) between" [ "$(_runs 1)" = "7000*$n1 0*7200 -12000*$n2" ]
+    _st_arm queue-idle; _st_file "$P2"
+    echo "$t2" | _st --stdin --queue 150 --profile simone_fast >/dev/null 2>&1
+    _ok "a --queue press with nothing playing speaks now"   _has "$(_log_last)" "outcome=started"
+    _st_idle
+    _ok "...with no gap in front"                           [ "$(_runs 1)" = "-12000*$n2" ]
+    for i in 5001 abc -5 1.5; do
+        _st --queue "$i" --print --stdin </dev/null >/dev/null 2>&1; rc=$?
+        _ok "--queue $i is refused (3)"                     [ "$rc" = 3 ]
+    done
+    echo "x" | _st --queue 5000 --print --stdin >/dev/null 2>&1; rc=$?
+    _ok "--queue 5000 is accepted"                          [ "$rc" = 0 ]
+    _st --toggle --queue </dev/null >/dev/null 2>&1; rc=$?
+    _ok "--toggle with --queue is refused (2)"              [ "$rc" = 2 ]
+
+    echo "Key repeat"
+    _st_arm repeat; _st_file "$P2"
+    echo "$t1" | _st --stdin >/dev/null 2>&1; sleep 0.6
+    echo "$t2" | _st --stdin --queue --profile simone_fast >/dev/null 2>&1
+    echo "$t2" | _st --stdin --queue --profile simone_fast >/dev/null 2>&1; rc=$?
+    _ok "a second --queue press under 0.5 s is busy, exit 0" [ "$rc" = 0 ]
+    _ok "...logged as key repeat"                           _has "$(_log_last)" "outcome=busy queue=key-repeat"
+    _st_idle
+    _ok "...and the voice waits in line once, not twice"    [ "$(_runs 1)" = "7000*$n1 -12000*$n2" ]
+
+    echo "Stopping: --skip, --stop, a plain press, --toggle"
+    t1="aaaa bbbb cccc dddd eeee"; n1=$(_n 24 100)
+    _st_arm skip; _st_file "$P2"
+    echo "$t1" | _st --stdin >/dev/null 2>&1; sleep 0.6
+    echo "$t2" | _st --stdin --queue --profile simone_fast >/dev/null 2>&1; sleep 0.3
+    t0=$(_now_ms); _st --skip >/dev/null 2>&1; rc=$?
+    [ "$rc" = 0 ] && _has "$(_log_last)" "outcome=skipped"; _ok "--skip exits 0, logged as skipped" [ $? = 0 ]
+    _st_idle
+    _ok "...the voice you heard was cut, the line ended early" [ $(( $(_now_ms) - t0 )) -lt 1500 ]
+    _ok "...its player held only that voice"                [ "$(_runs 1)" = "7000*$n1" ]
+    _ok "...and the next in line played whole"              [ "$(_runs 2)" = "-12000*$n2" ]
+    _st_arm stop; _st_file "$P2"
+    echo "$t1" | _st --stdin >/dev/null 2>&1; sleep 0.6
+    echo "$t2" | _st --stdin --queue --profile simone_fast >/dev/null 2>&1; sleep 0.3
+    _st --stop >/dev/null 2>&1
+    _ok "--stop is logged as stopped"                       _has "$(_log_last)" "outcome=stopped"
+    sleep 0.3
+    _ok "...and the player is gone at once"                 _st_idle
+    [ "$(_runs 1)" = "7000*$n1" ] && [ ! -e "$A/standin/ffplay.2.pcm" ]; _ok "...the voice playing was the only one ever played" [ $? = 0 ]
+    _st_arm slate; _st_file "$P2"
+    echo "$t1" | _st --stdin >/dev/null 2>&1; sleep 0.6
+    echo "$t2" | _st --stdin --queue --profile simone_fast >/dev/null 2>&1; sleep 0.3
+    echo "ff gg" | _st --stdin --profile third >/dev/null 2>&1
+    _ok "a press without --queue replaces the line"         _has "$(_log_last)" "outcome=replaced profile=third"
+    _st_idle
+    _ok "...the waiting voice never plays"                  [ "$(_runs 1)" = "7000*$n1" ]
+    _ok "...the new text plays alone (volume 50: 1500)"     [ "$(_runs 2)" = "1500*$(_n 5 100)" ]
+    _st_arm toggle; _st_file "$P2"
+    echo "$t1" | _st --stdin >/dev/null 2>&1; sleep 0.3
+    echo "$t2" | _st --stdin --toggle >/dev/null 2>&1
+    _ok "--toggle while speaking stops"                     _has "$(_log_last)" "outcome=stopped"
+    sleep 0.3
+    _ok "...at once"                                        _st_idle
+    _st_arm skip-idle; _st_file "$P2"
+    _st --skip >/dev/null 2>&1; rc=$?
+    [ "$rc" = 0 ] && _has "$(_log_last)" "outcome=idle"; _ok "--skip with nothing playing: idle, exit 0" [ $? = 0 ]
+    unset STANDIN_MS_PER_CHAR
+
+    echo "Locale (d78e8de: lstart follows the locale)"
+    export STANDIN_MS_PER_CHAR=100
+    _st_arm locale-1; _st_file "$P2"
+    echo "$t1" | LC_ALL=en_AU.UTF-8 _st --stdin >/dev/null 2>&1; sleep 0.3
+    _st_unset="-u LC_ALL -u LANG -u LC_TIME"
+    echo "$t1" | _st --stdin --toggle >/dev/null 2>&1
+    _st_unset=""
+    _ok "started under en_AU, a toggle with no locale stops it" _has "$(_log_last)" "outcome=stopped"
+    _ok "...leaving no voice"                               _st_idle
+    _st_arm locale-2; _st_file "$P2"
+    _st_unset="-u LC_ALL -u LANG -u LC_TIME"
+    echo "$t1" | _st --stdin >/dev/null 2>&1; sleep 0.3
+    _st_unset=""
+    echo "$t1" | LC_ALL=en_AU.UTF-8 _st --stdin --toggle >/dev/null 2>&1
+    _ok "started with no locale, a toggle under en_AU stops it" _has "$(_log_last)" "outcome=stopped"
+    _ok "...leaving no voice"                               _st_idle
+    unset STANDIN_MS_PER_CHAR
+
+    echo "Every voice streams"
+    _st_arm voice; _st_file "$P2"
+    echo "hello world" | _st --stdin --voice "$other" >/dev/null 2>&1; _st_idle
+    _ok "--voice streams through the player"                _has "$(_say_log)" "say2 voice=$other rate=440 out=-"
+    _ok "...at the profile's volume (70: 2100)"             [ "$(_runs 1)" = "2100*$(_n 11 20)" ]
+    echo "hello world" | _st --stdin --volume 33 >/dev/null 2>&1; _st_idle
+    echo "hello world" | _st --stdin --volume 100 >/dev/null 2>&1; _st_idle
+    _ok "the volume step is exact: 10001 x 33/100 = 3300"   [ "$(_runs 2)" = "3300*$(_n 11 20)" ]
+    _ok "...and 100 leaves the samples alone"               [ "$(_runs 3)" = "10001*$(_n 11 20)" ]
+    _st_arm quiet; _st_file "$P2"
+    echo "hello world" | STANDIN_FFPLAY_QUIET=1 _st --stdin >/dev/null 2>&1
+    _ok "an ffplay with no clock line: the line still ends" _st_idle
+    _ok "...having played everything"                      [ "$(_runs 1)" = "7000*$(_n 11 20)" ]
+
+    echo "Settings and exit codes (v6, v7)"
+    _st_arm settings
+    _ok "a missing file is written..."                      [ "$(_st --get all)" = "rate=420
+volume=60
+voice=$aaron
+notify=on" ]
+    _ok "...as a [default] profile"                         _has "$(_cfg)" "[default]"
+    _st --set rate 300 >/dev/null 2>&1
+    _ok "--set rate saves"                                  [ "$(_st --get rate)" = 300 ]
+    _ok "...with a notification (notify on)"                _has "$(_notes)" "Rate: 420 -> 300 wpm"
+    _st --set rate +20 >/dev/null 2>&1
+    _ok "--set rate +20 steps"                              [ "$(_st --get rate)" = 320 ]
+    _st --set rate +1000 >/dev/null 2>&1
+    _ok "--set rate +1000 stops at 700"                     [ "$(_st --get rate)" = 700 ]
+    i=$(wc -l <"$A/standin/notify.log")
+    _st --no-notify --set volume -10 >/dev/null 2>&1
+    [ "$(_st --get volume)" = 50 ] && [ "$(wc -l <"$A/standin/notify.log")" = "$i" ]; _ok "--no-notify --set: saved, no notification" [ $? = 0 ]
+    _st --notify --settings >/dev/null 2>&1
+    _ok "--notify --settings sends the settings"            _has "$(_notes)" "Speak clipboard settings: default|Rate: 700 wpm"
+    _st --reset all >/dev/null 2>&1
+    _ok "--reset all writes the defaults back"              [ "$(_st --get rate)" = 420 ]
+    for i in "--set volume abc:3" "--set notify maybe:3" "--set rate 0:3" "--set:2" "--set speed 3:2" "--bogus:2" "--get bogus:2" "--reset bogus:2" "--profile:2" "--set voice 9:3"; do
+        _st ${i%:*} </dev/null >/dev/null 2>&1; rc=$?
+        _ok "${i%:*} exits ${i##*:}"                        [ "$rc" = "${i##*:}" ]
+    done
+    out="$(_st --voices 2>&1)"
+    _has "$out" "* 1   Aaron" && _has "$out" "  2   Simone"; _ok "--voices lists the voices, the one in use marked" [ $? = 0 ]
+    _st --set voice 2 >/dev/null 2>&1
+    _ok "--set voice 2 saves that voice's key"              [ "$(_st --get voice)" = "$simone" ]
+    out="$(printf '%s\n' "- hello   world  " | _st --print --stdin)"
+    _ok "--print prints what would be spoken"               [ "$out" = "hello world" ]
+    printf '' | _st --stdin >/dev/null 2>&1; rc=$?
+    _ok "nothing to say exits 1"                            [ "$rc" = 1 ]
+    _st_arm bad-value; _st_file "[p]
+rate=fast
+volume=70
+voice=$aaron
+notify=off
+"
+    echo "hello world" | _st --stdin >/dev/null 2>&1; rc=$?; _st_idle
+    [ "$rc" = 10 ] && _has "$(_log_last)" "settings=bad:rate"; _ok "a bad value in the file: exit 10" [ $? = 0 ]
+    _ok "...spoken at the default rate"                     _has "$(_say_log)" "rate=420"
+    _ok "...and the bad value is kept for Gavin to fix"     _has "$(_cfg)" "rate=fast"
+    _st_arm not-installed; _st_file "$P2"
+    echo "hello world" | STANDIN_VOICES="$aaron" _st --stdin --profile simone_fast >/dev/null 2>&1; rc=$?; _st_idle
+    [ "$rc" = 11 ] && _has "$(_log_last)" "voice=fallback:$aaron"; _ok "the saved voice is not installed: exit 11" [ $? = 0 ]
+    _st_arm unusable; mkdir -p "$A/cfg/speak-clipboard/settings"
+    echo "hello world" | _st --stdin >/dev/null 2>&1; rc=$?; _st_idle
+    [ "$rc" = 12 ] && _has "$(_log_last)" "file=unusable"; _ok "the file cannot be read: exit 12" [ $? = 0 ]
+    _ok "...and it still spoke"                             _has "$(_say_log)" "say2 voice=$aaron"
+    _st_arm readonly; _st_file "$P2"; chmod a-w "$A/cfg/speak-clipboard"
+    _st --set rate 300 >/dev/null 2>&1; rc=$?
+    chmod u+w "$A/cfg/speak-clipboard"
+    _ok "the file cannot be written: exit 4"                [ "$rc" = 4 ]
+
+    echo
+    if [ "$fail" -eq 0 ]; then
+        echo "speak-clipboard --selftest: all $pass checks passed."
+    else
+        echo "speak-clipboard --selftest: $fail of $((pass + fail)) checks FAILED."
+    fi
+    echo "(temp folder left for macOS to clear: $T)"
+    [ "$fail" -eq 0 ]
+}
+
+# ---------------------------------------------------------------------------
 # Modes
 # ---------------------------------------------------------------------------
 # Every --set and --reset shows the values before and after (Gavin's ask,
@@ -1140,16 +2266,64 @@ clean_input() {
 # on the same command does not show in it. The box comes from re-running
 # this script as --settings, so "after" is read back from the file just
 # written, not from memory; _SPEAK_CLIPBOARD_BEFORE carries the old values
-# across the exec.
+# across the exec, and --profile goes along so it is the same profile.
 _save_showing_change() {
     local before="${saved_rate:-$_default_rate}|${saved_volume:-$_default_volume}|${saved_voice:-$_default_voice}|${saved_notify:-$_default_notify}"
-    _write_settings || { [ "$notify" != "on" ] || _send_notification "Speak clipboard" "Could not save $(_tilde "$_settings_file")"; exit 4; }
+    _write_settings || { [ "$notify" != "on" ] || _send_notification "Speak clipboard: $profile" "Could not save $(_tilde "$_settings_file")"; exit 4; }
+    if [ -n "$cli_profile" ]; then
+        _SPEAK_CLIPBOARD_BEFORE="$before" _SPEAK_CLIPBOARD_NOTIFY="$cli_notify" exec "$0" --settings --profile "$cli_profile"
+    fi
     _SPEAK_CLIPBOARD_BEFORE="$before" _SPEAK_CLIPBOARD_NOTIFY="$cli_notify" exec "$0" --settings
 }
 
+# Q16: an unknown profile is refused and never swapped for another one, or
+# a wrong voice would be hard to trace back ("it'll become difficult to
+# debug"). Nothing spoken or saved; a notification names it, because a
+# hotkey has no screen to print to (--no-notify skips it).
+_no_such_profile() {
+    echo "speak-clipboard: no profile named '$1'. speak-clipboard --profiles lists them." >&2
+    [ "$cli_notify" = "off" ] ||
+        _send_notification "Speak clipboard" "No profile named '$1'"$'\n'"Nothing spoken. speak-clipboard --profiles lists them."
+    trace "outcome=no-profile profile=$1 exit=6"
+    exit 6
+}
+
+# --profiles (Q24): every usable profile and its settings as written, the
+# first one marked. Removed ones are counted, not listed.
+show_profiles() {
+    local i w=7 removed=0 first=1 mark note
+    for ((i = 0; i < ${#p_name[@]}; i++)); do
+        [ ${#p_name[i]} -le "$w" ] || w=${#p_name[i]}
+    done
+    printf '  %-*s %-5s %-7s %-8s %s\n' "$w" PROFILE RATE VOLUME VOICE NOTIFY
+    for ((i = 0; i < ${#p_name[@]}; i++)); do
+        if _is_removed "${p_name[i]}"; then removed=$((removed + 1)); continue; fi
+        mark=" "; note=""
+        if [ "$first" = 1 ]; then mark="*"; note="   (first: used without --profile)"; first=0; fi
+        printf '%s %-*s %-5s %-7s %-8s %s%s\n' "$mark" "$w" "${p_name[i]}" "${pr_rate[i]}" "${pr_volume[i]}" \
+            "$(_voice_name "${pr_voice[i]}")" "${pr_notify[i]}" "$note"
+    done
+    echo
+    echo "Use one: speak-clipboard --profile NAME (any command). Settings: speak-clipboard --settings --profile NAME"
+    [ "$removed" -eq 0 ] || echo "$removed removed (NAME_REMOVED in $(_tilde "$_settings_file"), not listed; deleting one is a hand edit)"
+    [ -z "$_file_warnings" ] || printf '\n%s' "$_file_warnings"
+    [ "$_file_state" = "ok" ] || echo "WARNING the settings file could not be read or created: default values used (exit 12)"
+}
+
+if [ "$mode" = "selftest" ] && [ -z "$_usage_error" ]; then
+    run_selftest
+    exit $?
+fi
+
 _ensure_settings_file
+_load_profile
 
 [ -z "$_usage_error" ] || _die_with_help "$_usage_code" "$_usage_error"
+
+case "$mode" in
+    speak|toggle|print|set|reset|get|settings|voices)
+        [ -z "$_profile_missing" ] || _no_such_profile "$_profile_missing" ;;
+esac
 
 case "$mode" in
     help) _print_help; exit 0 ;;
@@ -1160,6 +2334,51 @@ case "$mode" in
         elif [ "$cli_notify" = "on" ]; then
             _notify_summary                                  # --notify --settings
         fi
+        exit 0 ;;
+    profiles) show_profiles; exit 0 ;;
+    new-profile)
+        # Q13 v3: always a copy of the first profile, no --from. Refused if
+        # the name is taken, so it never overwrites one.
+        _valid_profile_name "$profile_arg" ||
+            _die_with_help 3 "a profile name takes letters, digits, _ and - only, not '$profile_arg'"
+        ! _is_removed "$profile_arg" ||
+            _die_with_help 3 "'$profile_arg' ends the way a removed profile does (_REMOVED): pick another name"
+        [ "$_file_state" = "ok" ] || { echo "speak-clipboard: could not write $(_tilde "$_settings_file")" >&2; exit 4; }
+        for ((i = 0; i < ${#p_name[@]}; i++)); do
+            [ "${p_name[i]}" != "$profile_arg" ] || _die_with_help 3 "there is already a profile named '$profile_arg'"
+        done
+        _first_usable; src=$_fp
+        _new_profile_slot "$profile_arg" -1
+        pr_rate[_np]="${pr_rate[src]}"; pr_volume[_np]="${pr_volume[src]}"
+        pr_voice[_np]="${pr_voice[src]}"; pr_notify[_np]="${pr_notify[src]}"
+        src="${p_name[src]}"; _pi=-1
+        _write_settings || exit 4
+        echo "New profile [$profile_arg], a copy of [$src]. Change it: speak-clipboard --set rate N --profile $profile_arg"
+        echo
+        show_profiles
+        [ "$notify" != "on" ] || _send_notification "Speak clipboard" "New profile: $profile_arg"$'\n'"A copy of $src"
+        exit 0 ;;
+    remove-profile)
+        # Q24: the heading is renamed, never deleted; the last usable
+        # profile stays, because a press needs one.
+        [ "$_file_state" = "ok" ] || { echo "speak-clipboard: could not write $(_tilde "$_settings_file")" >&2; exit 4; }
+        _find_profile "$profile_arg" || _no_such_profile "$profile_arg"
+        target=$_fp; usable=0
+        for ((i = 0; i < ${#p_name[@]}; i++)); do _is_removed "${p_name[i]}" || usable=$((usable + 1)); done
+        [ "$usable" -gt 1 ] || _die_with_help 3 "'$profile_arg' is the last profile left, and a press needs one"
+        new="${profile_arg}_REMOVED"; n=2
+        while :; do
+            taken=0
+            for ((i = 0; i < ${#p_name[@]}; i++)); do [ "${p_name[i]}" != "$new" ] || taken=1; done
+            [ "$taken" = 1 ] || break
+            new="${profile_arg}_REMOVED_$n"; n=$((n + 1))
+        done
+        p_name[target]="$new"; _pi=-1
+        _write_settings || exit 4
+        echo "Removed [$profile_arg]: its heading is now [$new], so it is not listed or usable. Deleting it is a hand edit."
+        echo
+        show_profiles
+        [ "$notify" != "on" ] || _send_notification "Speak clipboard" "Removed profile: $profile_arg"
         exit 0 ;;
     get)
         case "$set_key" in
@@ -1221,11 +2440,21 @@ if [ "$mode" = "stop" ]; then
     exit 0
 fi
 
+if [ "$mode" = "skip" ]; then
+    if skip_speaker; then trace "outcome=skipped"; else trace "outcome=idle"; fi
+    exit 0
+fi
+
 # Toggle rule (v5): any press while speaking stops, whatever the clipboard
 # holds. Checked before the clipboard is read, so a stop costs no cleaner run.
 if [ "$mode" = "toggle" ] && speaker_alive; then
     stop_speaker
     trace "outcome=stopped"
+    exit 0
+fi
+
+if [ "$queue" = 1 ] && _queue_repeat; then
+    trace "outcome=busy queue=key-repeat"
     exit 0
 fi
 
@@ -1235,14 +2464,22 @@ if [ -z "${text:-}" ]; then
     exit 1
 fi
 
-# Plain speak mode always replaces whatever is speaking.
+# A --queue press joins a playing line (Q12). Anything else replaces
+# whatever is speaking, and that clears the line too (Q23 v2: a clean
+# slate). So does a --queue press that finds a pre-v8 speaker, which has
+# no line to join.
 outcome="started"
-if speaker_alive; then
-    stop_speaker
-    outcome="replaced"
+if [ "$queue" = 1 ] && speaker_alive && [ -n "$_speaker_line" ]; then
+    resolve_engine
+    if [ "$_engine" = "say2" ] && join_line; then outcome="queued"; fi
 fi
-
-start_speaker
+if [ "$outcome" != "queued" ]; then
+    if speaker_alive; then
+        stop_speaker
+        outcome="replaced"
+    fi
+    start_speaker
+fi
 
 # Spoke; now say whether a fallback was used (dotfiles-main Q3). Every
 # problem goes in the log line; the exit code is the lowest that applies:
@@ -1250,14 +2487,16 @@ start_speaker
 # installed, 12 the file could not be read or created.
 problems=""
 rc=0
+[ "$outcome" != "queued" ] || problems="$problems gap=$queue_delay"
 if [ -n "$_bad_settings" ]; then problems="$problems settings=bad:$_bad_settings"; rc=10; fi
 if [ -n "$_missing_settings" ]; then problems="$problems settings=missing:$_missing_settings"; rc=10; fi
 [ -z "$_file_note" ] || problems="$problems file=$_file_note"
+[ -z "$_warn_log" ] || problems="$problems warn=$_warn_log"
 if [ -z "$voice" ] && [ "$_engine_voice" != "$_preferred_voice" ]; then
     problems="$problems voice=fallback:$_engine_voice"; [ "$rc" -ne 0 ] || rc=11
 fi
 if [ "$_file_state" = "unusable" ]; then
     problems="$problems file=unusable"; [ "$rc" -ne 0 ] || rc=12
 fi
-trace "outcome=$outcome chars=$chars truncated=$truncated exit=$rc$problems"
+trace "outcome=$outcome profile=$profile chars=$chars truncated=$truncated exit=$rc$problems"
 exit $rc

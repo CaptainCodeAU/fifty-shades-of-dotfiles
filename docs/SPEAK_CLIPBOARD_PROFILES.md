@@ -1,9 +1,11 @@
-# speak-clipboard: profiles and `--queue` (plan, not built yet)
+# speak-clipboard: profiles and `--queue` (built 2026-10-10, v8)
 
 Designed 2026-10-09/10 in session dotfiles-main with Gavin, by listening tests
 (demos 1-6 below). Every rule here cites the question that settled it
 ("Q14" = dotfiles-main Q14). Open item: W-20261009-A03. Script:
-`home/.local/bin/speak-clipboard`.
+`home/.local/bin/speak-clipboard`. Built from this plan in the next session;
+where the build had to choose something the plan left open, "As built" at the
+end says what and why.
 
 ## Why
 
@@ -157,3 +159,47 @@ Aaron 440 wpm vol 70; B: Simone 380 wpm vol 60, unless stated.
 
 Voice switching costs nothing measurable: Aaron/Simone renders 0.10 s either
 way, and both render at once without loss (0.13 s each).
+
+## As built (2026-10-10)
+
+Everything above is built as written. These are the points the plan left open,
+or where the build had to choose; each is a judgement call, open to change.
+
+- **Who renders a waiting voice.** The plan has the waiting press render it in
+  its own memory. Built: the press hands its text to the line's player
+  through a named pipe (`speak-line.fifo`, kernel memory, never disk), and the
+  player renders it at once, while the current voice plays. Same effect (text
+  never on disk, slow renders hidden), one process doing the ordering.
+- **How the player knows what you hear.** It reads ffplay's own playback clock
+  (the `-stats` status line on stderr). The next voice goes into the stream when
+  the current one has 0.3 s left, so only the voice you hear is in ffplay's
+  buffer. That is what lets `--skip` drop exactly that voice: killing ffplay is
+  the only way to take audio back out, and the next voice starts in a fresh
+  ffplay. If ffplay ever stops printing that line, the player falls back to a
+  wall-clock guess (selftest arm "no clock line").
+- **The gap applies only when the voice waits.** A `--queue 150` press with
+  nothing playing speaks at once, with no silence in front.
+- **Key repeat (0.5 s) counts `--queue` presses only**, against the last
+  `--queue` press. A plain or toggle press keeps today's lock-only rule.
+- **Exit 6's notification is sent whatever `notify` says** (`--no-notify`
+  skips it): it is an error from a hotkey with no screen, not a settings change.
+- **Refusals:** `--new-profile` with a taken, bad or `_REMOVED` name, and
+  `--remove-profile` on the last usable profile, exit 3 (bad value);
+  `--remove-profile` on an unknown name exits 6.
+- **Two more file warnings** beyond the plan's three: a heading that is not a
+  valid name (its block is not used), and a heading that appears twice (both
+  blocks count as one profile). Line numbers in warnings are the file as it is
+  after any put-back.
+- **The file is edited in place**: a `--set` changes only its own line, so
+  comments, order and blank lines stay. A put-back setting goes after its
+  block's last setting.
+- **Engine cache**: one line per voice, so two profiles with different voices
+  do not re-probe say2 on alternate presses.
+- **A `--queue` press that finds a pre-v8 speaker** (one started before the
+  update) replaces it: there is no line to join.
+- **Measured with the real say2 and ffplay at volume 0** (silent): one press
+  2.37 s against 2.30 s for the v7 pipeline; two voices 3.7 s for 3.19 s of
+  audio; after `--skip`, the next voice plus a fresh ffplay start in 1.66 s. A
+  cold first render of the second voice added about 1.4 s of silence once,
+  when it was queued only 1 s into the first: rendering early hides a slow
+  render only when there is time to hide it.
