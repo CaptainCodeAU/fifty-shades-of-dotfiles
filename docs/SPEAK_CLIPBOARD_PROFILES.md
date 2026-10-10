@@ -247,4 +247,5 @@ selftest check, and the new checks were run against the previous script
   included); a `--queue` press that resolves to the `say` fallback (no
   premium voice) replaces the line, since `say` cannot stream; the settings
   file is written as a plain file, so a symlinked one would be replaced (it is
-  not symlinked on this machine).
+  not symlinked on this machine). Gavin ruled on 2026-10-10 that all three
+  stay as they are (W-20261010-A21).
