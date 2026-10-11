@@ -53,6 +53,21 @@ The tools themselves are `github-agent-create-app` and
 terminal, never by an agent, so a real private key never passes through an
 agent's process.
 
+**Permissions are fixed at creation.** `github-agent-create-app` always asks
+for the same three: Contents, Issues and Pull requests, read and write. An
+App that needs a different set gets it by hand, on the App's settings page
+on GitHub (Permissions & webhooks), **before** it is installed. GitHub
+reads a manifest only once, at creation, and has no API for changing an
+existing App's permissions; changing them after installing also makes the
+owner accept the new set. Ruled by Gavin 2026-10-11: the tool stays fixed
+rather than gaining a permissions flag, because new Apps are rare.
+
+**The receipt's closing steps assume this Mac uses the key.** Its "store
+the key in Infisical, verify, shred" steps fit the tier Apps. An App whose
+key goes somewhere else (for example to a token broker on another machine)
+follows that system's own plan instead, and its staged file is kept until
+the key has been handed over and checked.
+
 ## The 1-hour token expiry — how "renewal" actually works
 
 There is no renewal step and nothing runs in the background. A `git push`/`pull`
