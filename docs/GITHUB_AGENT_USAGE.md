@@ -284,9 +284,9 @@ the minting helper:
 
 ```
 [credential "https://github.com"]
- helper = cache --timeout=3000
- helper = !"$HOME"/.local/bin/github-agent-token
- useHttpPath = true
+	helper = cache --timeout=3000
+	helper = !"$HOME"/.local/bin/github-agent-token
+	useHttpPath = true
 ```
 
 Order is load-bearing. Git queries helpers in order and stops at the first
@@ -374,20 +374,20 @@ Filled in 2026-09-12. Structure, not values:
 
 ```
 [credential "https://github.com"]
- helper = !~/.local/bin/github-agent-token   # real config uses the absolute path
- useHttpPath = true
+	helper = !~/.local/bin/github-agent-token   # real config uses the absolute path
+	useHttpPath = true
 
 [githubagent]                          # ONLY the 3 values every profile shares
- infisicalBaseUrl = ...
- infisicalProjectSlug = ...
- infisicalEnvironment = ...
+	infisicalBaseUrl = ...
+	infisicalProjectSlug = ...
+	infisicalEnvironment = ...
 
 [githubagent "high-value"]             # x3 tiers: appId, clientId, secret path,
- appId = ...                        #   secret name, keychain service, description
- ...
+	appId = ...                        #   secret name, keychain service, description
+	...
 
 [githubagent "public-read"]            # x2 PATs: same minus appId
- ...
+	...
 ```
 
 The flat block is deliberately tiny. A secret path, client ID, App ID or
