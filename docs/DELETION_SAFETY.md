@@ -648,6 +648,10 @@ reaches the Trash. The Proxmox host, its containers and its VMs have no Trash, s
 - **Gavin empties attics**, nobody else.
 - **codebox is exempt.** It is a throwaway VM and a refresh wipes it anyway.
 - **A file holding a secret** is deleted by Gavin himself, permanently, by his own choice.
+  Agents do not move it to an attic either; they tell him. One exception: the four
+  `DELETION-BAN EXCEPTION` rotation scripts may destroy a secret file they created in the same
+  run, once it is used, naming the file and never its contents. Ruled by Gavin 2026-10-12 as
+  Network_Plan D-029, in `~/CODE/CaptainCodeAU/Network_Plan/common/source-control/decisions.md`.
 
 ## Related
 
