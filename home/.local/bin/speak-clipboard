@@ -187,7 +187,11 @@
 # CONCURRENCY: key auto-repeat or a double tap runs this script twice within
 # a few ms. A flock on speak-clipboard.flock (macOS `lockf` on fd 9)
 # serialises the check-stop-start section; the loser records outcome=busy and
-# exits 0 (never queues -- N repeats would mean N toggles). The kernel drops
+# exits 0 (never queues -- N repeats would mean N toggles). --stop and --skip
+# are the exception: they wait up to 6 s for the lock, longer than a --queue
+# press's 5 s wait to join the line, so Stop and Skip always win
+# (D-20261012-A07 Q19). A lock file that cannot be opened is not busy: exit 7,
+# a stderr line and a notification (Q18). The kernel drops
 # the lock when the script exits, even on SIGKILL, so there is no stale-lock
 # case to handle. The pid file is trusted only if that pid is still the same
 # live process (pid plus start time) and is one of our engines: pids are
@@ -214,10 +218,11 @@
 #                                line to join (an older speaker, or the say
 #                                fallback) it replaces the speech instead
 #   speak-clipboard --stop       stop all speech and clear the line; never
-#                                starts speech (idle: does nothing)
+#                                starts speech (idle: does nothing). Waits up
+#                                to 6 s for a press still running, never busy
 #   speak-clipboard --skip       stop the voice speaking now; the next in line
 #                                plays (none waiting: same as --stop; idle:
-#                                does nothing)
+#                                does nothing). Waits like --stop
 #   speak-clipboard --profile NAME
 #                                use profile NAME for this command: a press,
 #                                --print, --settings, --get, --set, --reset or
@@ -316,7 +321,12 @@
 #       service (it cannot inside a Claude Code sandbox)
 #    6  no such profile (--profile, or --remove-profile NAME): nothing
 #       spoken or saved, never another profile instead; a notification
-#       names it unless --no-notify
+#       names it unless --no-notify or --print. A bad value given with it
+#       on a press (--rate 900 --profile nosuch) is its own code, 2 or 3,
+#       not 6. --set checks the profile first (--set rate abc --profile
+#       nosuch is 6): a step (+20) or a voice number needs its values
+#    7  the lock file (~/.local/state/herdr/speak-clipboard.flock) could not
+#       be opened: nothing done; a notification names it unless --no-notify
 #
 #   Spoke, but with a fallback (the log line names every problem; the
 #   lowest code wins):
@@ -1240,14 +1250,16 @@ _on_exit() {
 trap _on_exit EXIT
 
 # flock via macOS `lockf` on fd 9, opened for append so the file is created
-# if missing and never truncated. -t 0: fail at once if held (exit 75),
-# never queue. MEASURED 2026-09-28: a second taker gets 75 while the first
+# if missing and never truncated. $1 is the wait: 0 fails at once if held
+# (lockf exit 75), never queue; --stop and --skip pass 6. Returns 0 locked,
+# 1 held (busy), 2 the file could not be opened (Q18: an error, not busy;
+# bash's own message is silenced because _lock_unopenable says it better). MEASURED 2026-09-28: a second taker gets 75 while the first
 # holds, 0 once it exits or is SIGKILLed; and a background child that
 # inherits fd 9 keeps the lock after the script exits, which is why every
 # speaker in start_speaker is launched with 9>&-.
 acquire_lock() {
-    exec 9>>"$_lock_file" || return 1
-    lockf -s -t 0 9
+    { exec 9>>"$_lock_file"; } 2>/dev/null || return 2
+    lockf -s -t "$1" 9 || return 1
 }
 
 # A process's start time with all whitespace removed. `ps -o lstart=` pads
@@ -2422,6 +2434,17 @@ rate=410
     i="$(_n_lines "$A/standin/notify.log")"
     _st --no-notify --get rate --profile nope >/dev/null 2>&1; rc=$?
     _ok "--no-notify: exit 6, no notification"              [ "$rc" = 6 ] && [ "$i" -ge 1 ] && [ "$(_n_lines "$A/standin/notify.log")" = "$i" ]
+    # D-20261012-A07 Q20 and Q21. One eval each, so _ok judges all of it.
+    echo "hello world" | _st --print --stdin --profile nope >/dev/null 2>&1; rc=$?
+    _ok "--print with an unknown profile: exit 6, no notification" eval '[ "$rc" = 6 ] && [ "$i" -ge 1 ] && [ "$(_n_lines "$A/standin/notify.log")" = "$i" ]'
+    _st --rate 900 --profile nope </dev/null >/dev/null 2>&1; rc=$?
+    _ok "a bad --rate and an unknown profile: the value's error (3)" [ "$rc" = 3 ]
+    # Q21 v2: --set checks the profile first, since a step or a voice
+    # number needs the profile's values. Control: the same bad value on a
+    # known profile is 3, so this arm cannot pass on any failure at all.
+    _st --set rate abc --profile nope </dev/null >/dev/null 2>&1; rc=$?
+    _st --set rate abc </dev/null >/dev/null 2>&1; rc2=$?
+    _ok "--set with a bad value and an unknown profile: 6 (known: 3)" eval '[ "$rc" = 6 ] && [ "$rc2" = 3 ]'
     _st --set rate 300 --profile nope >/dev/null 2>&1; rc=$?
     _ok "--set on an unknown profile exits 6"               [ "$rc" = 6 ]
     _st --reset all --profile nope >/dev/null 2>&1; rc=$?
@@ -2624,6 +2647,16 @@ notify=off
     echo "$t2" | _st --stdin >/dev/null 2>&1; rc=$?
     wait "$p"
     _ok "a press while another holds the lock: busy, exit 0" [ "$rc" = 0 ] && _has "$(_log_last)" "outcome=busy"
+    # D-20261012-A07 Q18: a lock file that cannot be opened is an error,
+    # never busy. Each check is one eval, so _ok judges all of it.
+    _st_arm lock-unopenable; _st_file "$P2"
+    mkdir -p "$A/state/herdr/speak-clipboard.flock"
+    echo "$t2" | _st --stdin >/dev/null 2>"$A/standin/err"; rc=$?
+    _ok "a lock file that cannot be opened: exit 7, logged"  eval '[ "$rc" = 7 ] && _has "$(_log_last)" "outcome=lock-unopenable"'
+    _ok "...its own error names the file"                   eval '_has "$(cat "$A/standin/err")" "could not open the lock file" && _has "$(cat "$A/standin/err")" "speak-clipboard.flock"'
+    _ok "...and a notification names it"                    eval '_has "$(_notes)" "speak-clipboard.flock"'
+    _st --no-notify --stop >/dev/null 2>&1; rc=$?
+    _ok "...--stop with --no-notify: exit 7, no notification" eval '[ "$rc" = 7 ] && [ "$(_n_lines "$A/standin/notify.log")" = 1 ]'
 
     echo "Stopping: --skip, --stop, a plain press, --toggle"
     t1="aaaa bbbb cccc dddd eeee"; n1=$(_n 24 100)
@@ -2686,6 +2719,22 @@ notify=off
     _st_arm skip-idle; _st_file "$P2"
     _st --skip >/dev/null 2>&1; rc=$?
     _ok "--skip with nothing playing: idle, exit 0"         [ "$rc" = 0 ] && _has "$(_log_last)" "outcome=idle"
+    # D-20261012-A07 Q19: --stop and --skip wait out a press that holds the
+    # lock (a --queue press can hold it 5 s while it joins the line).
+    _st_arm stop-waits; _st_file "$P2"; _hold
+    echo "$t1" | _st --stdin >/dev/null 2>&1; _wait_for 5 _size_is 1 $((n1 * 2))
+    lockf -s "$A/state/herdr/speak-clipboard.flock" sleep 2 &
+    p=$!; sleep 0.2
+    _st --stop >/dev/null 2>&1; rc=$?
+    wait "$p"; _release
+    _ok "--stop while a press holds the lock 2 s: waits, stops" eval '[ "$rc" = 0 ] && _has "$(_log_last)" "outcome=stopped" && _wait_for 1 _all_gone'
+    _st_arm skip-waits; _st_file "$P2"
+    mkdir -p "$A/state/herdr"
+    lockf -s "$A/state/herdr/speak-clipboard.flock" sleep 2 &
+    p=$!; sleep 0.2
+    _st --skip >/dev/null 2>&1; rc=$?
+    wait "$p"
+    _ok "--skip while a press holds the lock 2 s: waits, never busy" eval '[ "$rc" = 0 ] && _has "$(_log_last)" "outcome=idle"'
 
     echo "When the player's helpers fail"
     _st_arm freeze; _st_file "$P2"
@@ -2874,7 +2923,7 @@ notify=off
     _st_cleanup
     trap - EXIT INT TERM
     echo
-    local ran=$((pass + fail)) expected=203
+    local ran=$((pass + fail)) expected=212
     if [ "$fail" -eq 0 ] && [ $((ran + skipped)) -eq "$expected" ]; then
         if [ "$skipped" -eq 0 ]; then echo "speak-clipboard --selftest: all $pass checks passed.";
         else echo "speak-clipboard --selftest: all $pass checks passed, $skipped skipped (said above why)."; fi
@@ -2917,10 +2966,11 @@ _save_showing_change() {
 # Q16: an unknown profile is refused and never swapped for another one, or
 # a wrong voice would be hard to trace back ("it'll become difficult to
 # debug"). Nothing spoken or saved; a notification names it, because a
-# hotkey has no screen to print to (--no-notify skips it).
+# hotkey has no screen to print to (--no-notify skips it). --print is typed
+# in a terminal, so it gets the stderr line only (D-20261012-A07 Q20).
 _no_such_profile() {
     echo "speak-clipboard: no profile named '$1'. speak-clipboard --profiles lists them." >&2
-    [ "$cli_notify" = "off" ] ||
+    [ "$cli_notify" = "off" ] || [ "$mode" = "print" ] ||
         _send_notification "Speak clipboard" "No profile named '$1'"$'\n'"Nothing spoken. speak-clipboard --profiles lists them."
     trace "outcome=no-profile profile=$1 exit=6"
     exit 6
@@ -3079,7 +3129,22 @@ if [ "$mode" = "print" ]; then
     exit 0
 fi
 
-acquire_lock || { trace "outcome=busy"; exit 0; }
+# D-20261012-A07 Q18: a lock file that cannot be opened (a folder in its
+# place, a state folder that cannot be written) is an error, never busy.
+_lock_unopenable() {
+    echo "speak-clipboard: could not open the lock file $(_tilde "$_lock_file"), so nothing was done" >&2
+    [ "$cli_notify" = "off" ] ||
+        _send_notification "Speak clipboard" "Could not open the lock file"$'\n'"$(_tilde "$_lock_file")"
+    trace "outcome=lock-unopenable exit=7"
+    exit 7
+}
+case "$mode" in stop|skip) _lock_wait=6 ;; *) _lock_wait=0 ;; esac
+acquire_lock "$_lock_wait"
+case $? in
+    0) ;;
+    2) _lock_unopenable ;;
+    *) trace "outcome=busy"; exit 0 ;;
+esac
 
 if [ "$mode" = "stop" ]; then
     if stop_speaker; then trace "outcome=stopped"; else trace "outcome=idle"; fi

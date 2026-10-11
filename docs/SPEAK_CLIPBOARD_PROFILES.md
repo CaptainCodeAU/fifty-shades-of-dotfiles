@@ -61,7 +61,10 @@ heading, the mixed style rejected in Q14.
 `--profile NAME` naming no profile: nothing spoken, a notification naming the
 missing profile, **exit 6** (new: "no such profile"). Never falls back to
 another profile: "it'll become difficult to debug". The same for `--set`,
-`--get`, `--reset` with an unknown profile.
+`--get`, `--reset` with an unknown profile. `--print` gets the stderr line
+only, no notification (12 Oct Q20). A bad value given with an unknown profile:
+a press reports the value (2 or 3), `--set` reports the profile (6) (12 Oct
+Q21 v2). Both in "Lock and exit-code rulings" below.
 
 ### Commands
 
@@ -106,6 +109,8 @@ same, with Simone premium), as Gavin asked.
   meaning, so existing hotkeys keep working).
 - `--skip` (new): stop the current voice only; the next in line plays.
 - A `--toggle` press while speaking acts as `--stop`.
+- `--stop` and `--skip` always win: they wait up to 6 s for a press that is
+  still running, never "busy" (12 Oct Q19, below).
 
 ### How it plays: one player, volume inside the audio (Q17, Q18: 1)
 
@@ -249,3 +254,36 @@ selftest check, and the new checks were run against the previous script
   file is written as a plain file, so a symlinked one would be replaced (it is
   not symlinked on this machine). Gavin ruled on 2026-10-10 that all three
   stay as they are (W-20261010-A21).
+
+## Lock and exit-code rulings (2026-10-12, D-20261012-A07)
+
+Gavin answered four questions in session dotfiles-main on 12 Oct (numbered
+there Q18-Q21; not the Q18-Q21 of the 9-10 Oct design above). Open item:
+W-20261011-A05. Each has a selftest check, and each new check failed on the
+script before the fix, except Q21's, which proves behaviour that was already
+right. Selftest: 212 checks.
+
+- **A lock file that cannot be opened is an error, never busy (Q18).** Until
+  now a `speak-clipboard.flock` that could not be opened (a folder in its
+  place, a state folder that cannot be written) was reported as busy, exit 0,
+  so every press did nothing in silence. Now: **exit 7** (new), a stderr line
+  naming the file, a notification naming it unless `--no-notify`, and
+  `outcome=lock-unopenable` in the log. A lock that another press holds is
+  still busy, exit 0, quiet.
+- **Stop and Skip always win (Q19).** A `--queue` press holds the lock while it
+  waits up to 5 s to join the line, so a `--stop` or `--skip` in that window
+  used to be busy and do nothing. `--stop` and `--skip` now wait up to 6 s for
+  the lock, longer than that join wait. Every other press still gives up at
+  once (key repeat must stay busy).
+- **`--print` never notifies (Q20).** `--print` with an unknown profile prints
+  the error and exits 6, with no notification: it is typed in a terminal, so
+  the error is already on screen. A press with an unknown profile still
+  notifies, because a hotkey has no screen.
+- **A bad value with an unknown profile (Q21 v2).** On a press the value's
+  error wins: `--rate 900 --profile nosuch` is exit 3, because press options
+  are checked as they are read. `--set` checks the profile first:
+  `--set rate abc --profile nosuch` is exit 6, because a step (`+20`) or a
+  voice number needs the profile's values before it can be checked. Gavin
+  ruled to leave both as they are. Q21 v1 said the value error wins for `--set`
+  too, which was not true of the script; A07 replaces D-20261012-A06 for that
+  reason.
