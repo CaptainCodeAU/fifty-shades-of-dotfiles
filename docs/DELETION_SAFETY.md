@@ -641,7 +641,7 @@ GNU `cp -i` decline wording is handled but not measured. Automatic backups: W-20
 
 ## Machines with no Trash
 
-Ruled by Gavin 2026-10-12 (D-20261012-A04). Everything above is about this Mac, where `rm`
+Ruled by Gavin 2026-10-12 (global record #1378). Everything above is about this Mac, where `rm`
 reaches the Trash. The Proxmox host, its containers and its VMs have no Trash, so there:
 
 - **An agent never deletes.** It moves the file to a dated attic folder on that same machine.

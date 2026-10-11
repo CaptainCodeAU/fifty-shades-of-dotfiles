@@ -79,7 +79,7 @@ of its own, not a near-term step.
 
 Every repo carries two GitHub rulesets: its default branch and its tags can
 be neither deleted nor force-pushed. **Nobody skips them, Gavin included**
-(D-20261012-A02). That covers an agent pushing with Gavin's SSH key too.
+(global record #1376). That covers an agent pushing with Gavin's SSH key too.
 **In effect since 2026-10-12, by 2:35 AM:** Gavin re-ran Network_Plan's
 `tools/github-protect.sh --apply` with a one-day admin token (306 skips
 cleared, 0 failed), deleted this repo's older "Protect master branch"
@@ -92,7 +92,7 @@ back on, by hand.
 
 ## The SSH key stays
 
-The GitHub SSH key is not being retired (D-20261012-A03):
+The GitHub SSH key is not being retired (global record #1377):
 
 - **Repos not moved to an App** keep using it as their everyday route.
 - **An App repo** can fall back to it with one command if the App route
