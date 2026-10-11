@@ -80,6 +80,11 @@ of its own, not a near-term step.
 Every repo carries two GitHub rulesets: its default branch and its tags can
 be neither deleted nor force-pushed. **Nobody skips them, Gavin included**
 (D-20261012-A02). That covers an agent pushing with Gavin's SSH key too.
+**Not yet in effect:** the rulesets were first applied on 2026-10-11 with
+Gavin's admin role allowed to skip them. The skip goes only when Gavin
+re-runs Network_Plan's `tools/github-protect.sh --apply` without it (his
+step, with a one-day admin token). Until then an SSH push still counts as
+him and can skip the rules.
 
 The effect here: a force push to `master` is refused by GitHub, whichever
 route it takes. A real need to force-push (scrubbing a leaked secret, say)
@@ -279,9 +284,9 @@ the minting helper:
 
 ```
 [credential "https://github.com"]
-	helper = cache --timeout=3000
-	helper = !"$HOME"/.local/bin/github-agent-token
-	useHttpPath = true
+ helper = cache --timeout=3000
+ helper = !"$HOME"/.local/bin/github-agent-token
+ useHttpPath = true
 ```
 
 Order is load-bearing. Git queries helpers in order and stops at the first
@@ -369,20 +374,20 @@ Filled in 2026-09-12. Structure, not values:
 
 ```
 [credential "https://github.com"]
-	helper = !~/.local/bin/github-agent-token   # real config uses the absolute path
-	useHttpPath = true
+ helper = !~/.local/bin/github-agent-token   # real config uses the absolute path
+ useHttpPath = true
 
 [githubagent]                          # ONLY the 3 values every profile shares
-	infisicalBaseUrl = ...
-	infisicalProjectSlug = ...
-	infisicalEnvironment = ...
+ infisicalBaseUrl = ...
+ infisicalProjectSlug = ...
+ infisicalEnvironment = ...
 
 [githubagent "high-value"]             # x3 tiers: appId, clientId, secret path,
-	appId = ...                        #   secret name, keychain service, description
-	...
+ appId = ...                        #   secret name, keychain service, description
+ ...
 
 [githubagent "public-read"]            # x2 PATs: same minus appId
-	...
+ ...
 ```
 
 The flat block is deliberately tiny. A secret path, client ID, App ID or
