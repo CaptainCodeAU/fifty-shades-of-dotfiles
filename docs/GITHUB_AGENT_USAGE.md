@@ -16,7 +16,9 @@
 
 ## The shape of it
 
-Five credentials, in two families.
+Six credentials: four GitHub Apps and two Personal Access Tokens. Five of
+them are used from this Mac; the sixth belongs to codebox and never touches
+the Mac.
 
 **Three pooled GitHub Apps**, one per tier: `high-value`, `medium-value`,
 `low-value`. All three hold identical permissions (Contents, Issues, Pull
@@ -24,6 +26,14 @@ requests, read and write). The tier decides only which repos are pooled
 behind one App, so a compromise is contained to that pool rather than to
 everything. Each mints a fresh 1-hour, single-repo-scoped token on every
 single git or `gh` call, and GitHub itself enforces the expiry.
+
+**One dedicated App for codebox**, the throwaway VM where agents write code.
+Its key lives in Infisical and is read only by a token broker on another
+machine, which hands codebox a 1-hour token for one repo at a time. The Mac
+never holds that key and has no config block for that App; nothing in this
+repo's tools touches it. (A ruling to wire it on the Mac like a tier,
+D-20261011-A01, was withdrawn for exactly that reason.) See **Mac versus
+codebox** below.
 
 **Two Personal Access Tokens**, for public GitHub, where a repo-installed
 App cannot reach:
@@ -39,6 +49,55 @@ force it the way it does for the App tokens.
 A repo can also be promoted off the shared pool onto its own dedicated App
 later. It then carries the flat `[githubagent]` keys in its own local config
 and no tier at all; nothing in the code needs to know a repo's status.
+
+## Where the rules live
+
+This file explains how this repo's `github-agent-*` tools work. The
+source-control **rules** (who may push where, protection, the broker,
+codebox) live in one place: the source-control ledger in the Network_Plan
+repo, `common/source-control/` (`README.md` and `decisions.md`). That ledger
+links back here for the tools (D-20261012-A05).
+
+The private record of the 12 Oct 2026 sweep, where Gavin answered every open
+source-control point and overruled earlier rulings, is
+`docs/SOURCE_CONTROL_SWEEP_2026-10-12.md` in the private companion repo.
+
+## Mac versus codebox
+
+The two stay separate for GitHub (D-20261012-A01):
+
+- **The Mac** uses the three shared tier Apps itself, through
+  `github-agent-token` and the Keychain, as this file describes.
+- **codebox** holds no GitHub key at all. It asks the token broker for a
+  1-hour token scoped to one repo; the broker reads codebox's App key from
+  Infisical into memory only.
+
+Moving the Mac onto the broker as well is wanted, but it is a later project
+of its own, not a near-term step.
+
+## GitHub's protection rules
+
+Every repo carries two GitHub rulesets: its default branch and its tags can
+be neither deleted nor force-pushed. **Nobody skips them, Gavin included**
+(D-20261012-A02). That covers an agent pushing with Gavin's SSH key too.
+
+The effect here: a force push to `master` is refused by GitHub, whichever
+route it takes. A real need to force-push (scrubbing a leaked secret, say)
+means switching the rule off for that one repo, pushing, and switching it
+back on, by hand.
+
+## The SSH key stays
+
+The GitHub SSH key is not being retired (D-20261012-A03):
+
+- **Repos not moved to an App** keep using it as their everyday route.
+- **An App repo** can fall back to it with one command if the App route
+  breaks: switch `origin` back to the SSH address.
+- **A busy repo**, one agents work in often, moves to an App with
+  `github-agent-flip`. There is no bulk move.
+
+The key already reaches every repo whichever is chosen; moving a repo to an
+App only lowers its risk.
 
 ## Setting a new credential up
 
