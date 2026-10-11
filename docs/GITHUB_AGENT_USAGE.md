@@ -36,11 +36,9 @@ Unlike the App tokens these mint nothing: each is one fixed string stored in
 Infisical until its expiry date, so their rotation is manual. GitHub will not
 force it the way it does for the App tokens.
 
-A repo can also be moved off the shared pool onto its own single-repo App.
-That App gets a named block in `~/.gitconfig-githubagent`, exactly like a
-tier, and the repo is flipped onto it with `github-agent-flip --tier
-<app-name>`; nothing in the code needs to know a repo's status (ruled
-2026-10-11, see "A single-repo App" below).
+A repo can also be promoted off the shared pool onto its own dedicated App
+later. It then carries the flat `[githubagent]` keys in its own local config
+and no tier at all; nothing in the code needs to know a repo's status.
 
 ## Setting a new credential up
 
@@ -321,18 +319,7 @@ Nothing in that file is a secret. App IDs and Infisical Client IDs are
 identifiers; each identity's Client **Secret** lives only in the macOS
 Keychain.
 
-### A single-repo App
-
-Ruled by Gavin 2026-10-11, when the first one was made: a
-single-repo App gets its own named block in `~/.gitconfig-githubagent`,
-with the same keys as a tier block, and its repo is flipped with
-`github-agent-flip --tier <app-name>`. Both `github-agent-flip` and
-`github-agent-token` read the tier names from that file, so no code change
-is needed and every credential stays in one file.
-
-Not chosen: putting the flat keys (`appId`, `infisicalClientId`,
-`infisicalSecretPath`, `infisicalSecretName`, `keychainService`) in the
-repo's own `.git/config` with no tier. `github-agent-token` still accepts
-that shape, but `github-agent-flip` cannot write it, and it spreads
-credentials across repos. The real names and full steps are in the private
-companion document.
+A repo promoted off the shared pool onto its own dedicated App skips tiers
+entirely: it sets the flat keys (`appId`, `infisicalClientId`,
+`infisicalSecretPath`, `infisicalSecretName`, `keychainService`) in its own
+local config and no tier at all.
