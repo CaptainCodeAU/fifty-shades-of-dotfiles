@@ -639,6 +639,16 @@ gets the decline too (accepted). Overwrites that never reach a wrapper (`>`, `se
 writes, about 15 times more common than cp/mv) are out of scope. Linux (machines C and D, zsh):
 GNU `cp -i` decline wording is handled but not measured. Automatic backups: W-20260924-A37.
 
+## Machines with no Trash
+
+Ruled by Gavin 2026-10-12 (D-20261012-A04). Everything above is about this Mac, where `rm`
+reaches the Trash. The Proxmox host, its containers and its VMs have no Trash, so there:
+
+- **An agent never deletes.** It moves the file to a dated attic folder on that same machine.
+- **Gavin empties attics**, nobody else.
+- **codebox is exempt.** It is a throwaway VM and a refresh wipes it anyway.
+- **A file holding a secret** is deleted by Gavin himself, permanently, by his own choice.
+
 ## Related
 
 - [`home/.local/bin/safe-rm`](../home/.local/bin/safe-rm) — the single owner of "move to Trash"
