@@ -80,7 +80,7 @@ of its own, not a near-term step.
 Every repo carries two GitHub rulesets: its default branch and its tags can
 be neither deleted nor force-pushed. **Nobody skips them, Gavin included**
 (D-20261012-A02). That covers an agent pushing with Gavin's SSH key too.
-**In effect since 2026-10-12, about 2:40 AM:** Gavin re-ran Network_Plan's
+**In effect since 2026-10-12, by 2:35 AM:** Gavin re-ran Network_Plan's
 `tools/github-protect.sh --apply` with a one-day admin token (306 skips
 cleared, 0 failed), deleted this repo's older "Protect master branch"
 ruleset, and `--check` then read 0 bypass, 0 failed on all 153 repos.
