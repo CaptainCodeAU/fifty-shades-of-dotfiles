@@ -20,9 +20,23 @@ MIN_SIL = 0.04         # shortest silence counted, seconds
 TOL = 0.15             # a piece's end and a silence's start this close: a match
 
 
+def wait_for_speak_key():
+    # Never render while speak-clipboard's line player is speaking: both use
+    # the same Siri service, and the speak key must win.
+    import time
+    while subprocess.run(["pgrep", "-f", "perl - speak-clipboard-line"], capture_output=True).returncode == 0:
+        time.sleep(2)
+
+
 def render(text, voice, rate):
-    r = subprocess.run(["say2", "-v", voice, "-r", str(rate), "--engine", "siri",
-                        "--format", "pcm", "-o", "-", "--", text], capture_output=True)
+    wait_for_speak_key()
+    # say2 exit 5 (service busy) and 7 (timed out) are worth a retry: seen
+    # with several long renders at once.
+    for _ in range(3):
+        r = subprocess.run(["say2", "-v", voice, "-r", str(rate), "--engine", "siri",
+                            "--format", "pcm", "-o", "-", "--", text], capture_output=True)
+        if r.returncode not in (5, 7):
+            break
     if r.returncode != 0 or not r.stdout:
         sys.exit(f"say2 failed (exit {r.returncode}): {r.stderr.decode(errors='replace').strip()}")
     return r.stdout
@@ -77,11 +91,12 @@ def measure(sample, out, script, rate, voice):
     with wave.open(re.sub(r"\.json$", "", out) + ".wav", "wb") as w:   # to listen to
         w.setnchannels(1); w.setsampwidth(2); w.setframerate(48000); w.writeframes(full)
     sils, total = silences(full)
-    rows = []
-    for b in breaks(text):
-        piece = text[:b]
-        _, end = silences(render(piece, voice, rate))
-        rows.append({"at": round(end, 2), "after": key(piece), "ms": 0})
+    # One render at a time, never several: six at once (12 Oct 2026, about
+    # 9:31 PM) hung Siri renders for minutes and Gavin's speak key went
+    # silent. A long reply is slow this way; that is the price.
+    bs = breaks(text)
+    ends = [silences(render(text[:b], voice, rate))[1] for b in bs]
+    rows = [{"at": round(e, 2), "after": key(text[:b]), "ms": 0} for b, e in zip(bs, ends)]
     # Each silence goes to the one break whose end is nearest its start, so
     # two breaks close together cannot both claim it.
     claimed = set()
