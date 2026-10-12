@@ -1,0 +1,496 @@
+{
+ "script": "~/.local/bin/speak-clipboard",
+ "rate": 440,
+ "voice": "en-US:natural:male:Aaron:premium:5030",
+ "text": "**Where this sits:** The project [[slnc 150]] `fifty-shades-of-dotfiles` . The job [[slnc 150]] `speak-clipboard` , the key that reads the clipboard aloud. The step [[slnc 150]] saving the pause work and bringing its documentation up to date, now finished. **What it means for you:** everything behind today's pause changes is now in the repo, not in a temp folder that disappears. The follow-ups that wait on you or on later work are in open items. Three things done. Saved, not pushed. **Pause measurements saved.** done low risk. The before and after runs of the example, the punctuation table, the silence-command sweep, and the label and number trials are now in the repo. `chars.py` now holds the full silence-command sweep, from 0 to 1000 ms, so the table can be measured again. **Discovery.** The saved results held the full path of the script they measured, which includes your user name. The leak check stopped the commit, and those paths now start with `~` . **Note.** `pauses.py` now writes paths starting with `~` too. **Note.** The recordings (`.wav`) were not kept. Running `pauses.py` again makes a new one. **Proof.** No user name or temp path is left in those files, checked against a control word found 123 times. **Proof.** The leak scan over this session's two commits passed, after its own control passed. **Design doc updated.** done low risk. Its title now names the pauses and the lead-in, as well as profiles. It points to the saved results and says which result backs which ruling. A new \"Known limits\" part names four limits: - Only Aaron at 440 wpm was measured. - The measuring tool can mix up two pauses that are close together. - Its recordings have no lead-in. - The lead-in isn't heard yet. **Follow-ups filed.** done needed low risk. W-20261012-A12 (does the 300 ms lead-in stop the missing first words): waits on your ears. W-20261012-A13 (lines in the render log have no time): an old error can't be told from a new one. **Needed.** Press the speak key a few times after a quiet spell, on the Bose headphones, and listen for the first word. **How to undo it:** One command removes the saved results and the doc changes: ``` git -C ~/CODE/Scaffoldings/fifty-shades-of-dotfiles revert --no-edit 5b7523b. ``` **Left behind [[slnc 150]]** the two open items stay open until closed by hand. **Context:** **The saved results [[slnc 150]]** `~/CODE/Scaffoldings/fifty-shades-of-dotfiles/docs/reference/speak-clipboard-pauses/results/` , 19 small files, one per measuring run. **The design doc [[slnc 150]]** `~/CODE/Scaffoldings/fifty-shades-of-dotfiles/docs/SPEAK_CLIPBOARD_PROFILES.md` , sections \"Pauses (v9)\" and \"Known limits\". **`5b7523b` :** the commit for the saved results and the doc. `5b8b481` holds the script change itself. **`/pj:wrap-up` :** the end-of-session command. It writes the handoff that the next session reads first. **Type `/pj:wrap-up` when you're done for now, or press the speak key and tell me how the start sounds.**",
+ "seconds": 79.04,
+ "silences": 82,
+ "breaks": [
+  {
+   "at": 0.44,
+   "after": "Where this sits",
+   "ms": 200
+  },
+  {
+   "at": 0.86,
+   "after": "sits The project",
+   "ms": 120
+  },
+  {
+   "at": 1.68,
+   "after": "The project fifty-shades-of-dotfiles",
+   "ms": 280
+  },
+  {
+   "at": 2.14,
+   "after": "fifty-shades-of-dotfiles The job",
+   "ms": 100
+  },
+  {
+   "at": 2.64,
+   "after": "The job speak-clipboard",
+   "ms": 0
+  },
+  {
+   "at": 3.38,
+   "after": "the clipboard aloud",
+   "ms": 320
+  },
+  {
+   "at": 3.8,
+   "after": "aloud The step",
+   "ms": 110
+  },
+  {
+   "at": 5.26,
+   "after": "up to date",
+   "ms": 80
+  },
+  {
+   "at": 5.52,
+   "after": "date now finished",
+   "ms": 280
+  },
+  {
+   "at": 6.16,
+   "after": "means for you",
+   "ms": 190
+  },
+  {
+   "at": 7.56,
+   "after": "in the repo",
+   "ms": 80
+  },
+  {
+   "at": 8.44,
+   "after": "folder that disappears",
+   "ms": 360
+  },
+  {
+   "at": 10.12,
+   "after": "in open items",
+   "ms": 350
+  },
+  {
+   "at": 10.78,
+   "after": "Three things done",
+   "ms": 340
+  },
+  {
+   "at": 11.32,
+   "after": "things done Saved",
+   "ms": 0
+  },
+  {
+   "at": 11.66,
+   "after": "Saved not pushed",
+   "ms": 300
+  },
+  {
+   "at": 12.44,
+   "after": "Pause measurements saved",
+   "ms": 0
+  },
+  {
+   "at": 12.84,
+   "after": "done low risk",
+   "ms": 350
+  },
+  {
+   "at": 13.88,
+   "after": "of the example",
+   "ms": 50
+  },
+  {
+   "at": 14.38,
+   "after": "the punctuation table",
+   "ms": 0
+  },
+  {
+   "at": 14.96,
+   "after": "the silence-command sweep",
+   "ms": 70
+  },
+  {
+   "at": 16.04,
+   "after": "in the repo",
+   "ms": 0
+  },
+  {
+   "at": 17.32,
+   "after": "full silence-command sweep",
+   "ms": 330
+  },
+  {
+   "at": 18.12,
+   "after": "to 1000 ms",
+   "ms": 0
+  },
+  {
+   "at": 19.06,
+   "after": "be measured again",
+   "ms": 310
+  },
+  {
+   "at": 19.56,
+   "after": "measured again Discovery",
+   "ms": 260
+  },
+  {
+   "at": 21.06,
+   "after": "script they measured",
+   "ms": 80
+  },
+  {
+   "at": 21.6,
+   "after": "your user name",
+   "ms": 300
+  },
+  {
+   "at": 22.44,
+   "after": "stopped the commit",
+   "ms": 70
+  },
+  {
+   "at": 23.18,
+   "after": "now start with",
+   "ms": 280
+  },
+  {
+   "at": 23.6,
+   "after": "start with Note",
+   "ms": 0
+  },
+  {
+   "at": 24.52,
+   "after": "starting with too",
+   "ms": 320
+  },
+  {
+   "at": 24.96,
+   "after": "with too Note",
+   "ms": 260
+  },
+  {
+   "at": 26.44,
+   "after": "were not kept",
+   "ms": 250
+  },
+  {
+   "at": 27.58,
+   "after": "a new one",
+   "ms": 320
+  },
+  {
+   "at": 28.02,
+   "after": "new one Proof",
+   "ms": 250
+  },
+  {
+   "at": 29.4,
+   "after": "in those files",
+   "ms": 150
+  },
+  {
+   "at": 30.8,
+   "after": "found 123 times",
+   "ms": 310
+  },
+  {
+   "at": 31.26,
+   "after": "123 times Proof",
+   "ms": 320
+  },
+  {
+   "at": 32.62,
+   "after": "two commits passed",
+   "ms": 0
+  },
+  {
+   "at": 33.32,
+   "after": "own control passed",
+   "ms": 250
+  },
+  {
+   "at": 34.0,
+   "after": "Design doc updated",
+   "ms": 150
+  },
+  {
+   "at": 34.56,
+   "after": "done low risk",
+   "ms": 220
+  },
+  {
+   "at": 35.74,
+   "after": "and the lead-in",
+   "ms": 0
+  },
+  {
+   "at": 36.34,
+   "after": "well as profiles",
+   "ms": 230
+  },
+  {
+   "at": 37.92,
+   "after": "backs which ruling",
+   "ms": 330
+  },
+  {
+   "at": 39.2,
+   "after": "names four limits",
+   "ms": 210
+  },
+  {
+   "at": 40.66,
+   "after": "wpm was measured",
+   "ms": 0
+  },
+  {
+   "at": 42.26,
+   "after": "are close together",
+   "ms": 130
+  },
+  {
+   "at": 43.14,
+   "after": "have no lead-in",
+   "ms": 0
+  },
+  {
+   "at": 43.42,
+   "after": "isn't heard yet",
+   "ms": 320
+  },
+  {
+   "at": 44.16,
+   "after": "yet Follow-ups filed",
+   "ms": 0
+  },
+  {
+   "at": 44.66,
+   "after": "needed low risk",
+   "ms": 230
+  },
+  {
+   "at": 47.56,
+   "after": "missing first words",
+   "ms": 150
+  },
+  {
+   "at": 48.0,
+   "after": "on your ears",
+   "ms": 220
+  },
+  {
+   "at": 50.58,
+   "after": "have no time",
+   "ms": 210
+  },
+  {
+   "at": 51.66,
+   "after": "a new one",
+   "ms": 290
+  },
+  {
+   "at": 52.12,
+   "after": "new one Needed",
+   "ms": 290
+  },
+  {
+   "at": 53.42,
+   "after": "a quiet spell",
+   "ms": 0
+  },
+  {
+   "at": 53.96,
+   "after": "the Bose headphones",
+   "ms": 50
+  },
+  {
+   "at": 54.5,
+   "after": "the first word",
+   "ms": 330
+  },
+  {
+   "at": 55.24,
+   "after": "to undo it",
+   "ms": 190
+  },
+  {
+   "at": 56.6,
+   "after": "the doc changes",
+   "ms": 190
+  },
+  {
+   "at": 59.68,
+   "after": "revert --no-edit 5b7523b",
+   "ms": 250
+  },
+  {
+   "at": 60.18,
+   "after": "5b7523b Left behind",
+   "ms": 110
+  },
+  {
+   "at": 60.18,
+   "after": "5b7523b Left behind",
+   "ms": 0
+  },
+  {
+   "at": 61.5,
+   "after": "closed by hand",
+   "ms": 360
+  },
+  {
+   "at": 62.04,
+   "after": "by hand Context",
+   "ms": 50
+  },
+  {
+   "at": 62.48,
+   "after": "The saved results",
+   "ms": 220
+  },
+  {
+   "at": 62.48,
+   "after": "The saved results",
+   "ms": 0
+  },
+  {
+   "at": 65.14,
+   "after": "reference speak-clipboard-pauses results",
+   "ms": 120
+  },
+  {
+   "at": 65.86,
+   "after": "19 small files",
+   "ms": 0
+  },
+  {
+   "at": 66.34,
+   "after": "per measuring run",
+   "ms": 290
+  },
+  {
+   "at": 66.94,
+   "after": "The design doc",
+   "ms": 110
+  },
+  {
+   "at": 66.94,
+   "after": "The design doc",
+   "ms": 0
+  },
+  {
+   "at": 69.16,
+   "after": "CLIPBOARD PROFILES md",
+   "ms": 0
+  },
+  {
+   "at": 70.4,
+   "after": "and Known limits",
+   "ms": 0
+  },
+  {
+   "at": 71.44,
+   "after": "Known limits 5b7523b",
+   "ms": 310
+  },
+  {
+   "at": 72.66,
+   "after": "and the doc",
+   "ms": 150
+  },
+  {
+   "at": 74.2,
+   "after": "script change itself",
+   "ms": 220
+  },
+  {
+   "at": 74.74,
+   "after": "itself pj wrap-up",
+   "ms": 0
+  },
+  {
+   "at": 75.33,
+   "after": "the end-of-session command",
+   "ms": 250
+  },
+  {
+   "at": 76.65,
+   "after": "session reads first",
+   "ms": 250
+  },
+  {
+   "at": 77.82,
+   "after": "done for now",
+   "ms": 60
+  }
+ ],
+ "unclaimed": [
+  {
+   "start": 16.29,
+   "ms": 90
+  },
+  {
+   "start": 18.33,
+   "ms": 50
+  },
+  {
+   "start": 25.57,
+   "ms": 270
+  },
+  {
+   "start": 26.06,
+   "ms": 40
+  },
+  {
+   "start": 29.98,
+   "ms": 80
+  },
+  {
+   "start": 40.95,
+   "ms": 160
+  },
+  {
+   "start": 46.11,
+   "ms": 100
+  },
+  {
+   "start": 48.55,
+   "ms": 90
+  },
+  {
+   "start": 49.57,
+   "ms": 180
+  },
+  {
+   "start": 57.37,
+   "ms": 130
+  },
+  {
+   "start": 58.28,
+   "ms": 80
+  },
+  {
+   "start": 63.14,
+   "ms": 150
+  },
+  {
+   "start": 63.94,
+   "ms": 60
+  },
+  {
+   "start": 64.34,
+   "ms": 90
+  },
+  {
+   "start": 69.8,
+   "ms": 90
+  },
+  {
+   "start": 77.18,
+   "ms": 70
+  }
+ ]
+}

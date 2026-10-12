@@ -354,7 +354,7 @@ same pauses to the 10 ms.
 `docs/reference/speak-clipboard-pauses/`: `pauses.py` measures every pause in
 a text and labels it by the words before it, by rendering the text cut off
 at each break; `--compare A.json B.json` shows two runs side by side.
-`chars.py` is the table above. `sample.md` is Gavin's example. Both need
+`chars.py` is the table above. `frag.py` times single pieces (a path, a command, a status line) for the reply-format test; `reply-sample.md` is the reply measured, `results/reply-v9.json` its pauses before v10. `sample.md` is Gavin's example. Both need
 say2, so they run outside the Claude sandbox.
 `results/` holds the runs behind every number in this section: `before.json`
 and `before-2.json` (v8, two runs, identical), `after.json` (v9 defaults),
