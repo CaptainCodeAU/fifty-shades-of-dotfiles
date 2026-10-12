@@ -30,6 +30,9 @@
 #   * a path with two or more slashes is spoken as its last part (v10): a
 #     long one took 2.2 s, "results" alone 0.2 s. Not a URL, a date, or a
 #     word list like and/or/not
+#   * a path ending in / is "results sub-folder", and a slash command such
+#     as /copy is spoken as the "copy" slash command (v11); a top-level
+#     folder such as /tmp is not taken for one
 #   * tables (box-drawn or markdown) are re-spoken row by row, "Row 1. Source.
 #     The record body... When. Any time...", every name and cell its own
 #     sentence so the voice pauses between them (v4.7, 2026-09-28, Gavin's
@@ -1745,7 +1748,19 @@ sub _path_last {
     return $p . $end unless $p =~ m{^(?:~|\.{1,2})?/} || $p =~ m{\.[A-Za-z0-9]{1,6}/?$};
     (my $q = $p) =~ s{/+$}{};
     $q =~ s{.*/}{};
-    return ($q eq '' ? $p : $q) . $end;
+    return $p . $end if $q eq '';
+    # A path ending in / is a folder: "results sub-folder" (v11, Gavin).
+    return ($p =~ m{/$} ? "$q sub-folder" : $q) . $end;
+}
+# A slash command, one word after a / with no other /, is spoken as
+# the "copy" slash command (v11, Gavin). A top-level folder such as /tmp
+# or /etc is not one, and stays as it is.
+my %ROOT_DIRS = map { $_ => 1 } qw(tmp etc usr var opt bin sbin dev private Users Library
+                                    Applications Volumes System home root cores);
+sub _slash_command {
+    my $c = shift;
+    return "/$c" if $ROOT_DIRS{$c};
+    return "the \"$c\" slash command";
 }
 sub _pause_form {
     my ($v, $orig) = @_;
@@ -1814,6 +1829,7 @@ $t =~ s/^ | $//g;
 # rule above still sees the lines as they were. A URL (scheme://) and a
 # token with no letter (a date such as 12/10/2026) are left as they are.
 $t =~ s{(?<![^\s`"'(\[])((?:~|\.{1,2})?/?[\w.@+-]+(?:/[\w.@+-]*)+)(?=[\s`"')\],:;\x02-\x04]|$)}{_path_last($1)}ge;
+$t =~ s{(?<![^\s`"'(\[])/([A-Za-z][A-Za-z0-9_:-]*)(?=[\s`"')\],.;!?\x02-\x04]|$)}{_slash_command($1)}ge;
 $t = _pause_speak($t);                           # the marks become pauses (v9)
 my $orig = length $t;
 $t = substr($t, 0, $max) if $orig > $max;
@@ -3140,6 +3156,13 @@ lead_in=0
     _ok "...not a URL, a date, a word list or a bare folder (control)" \
         [ "$out" = 'See https://github.com/x/say2, on 12/10/2026, and/or/not, docs/reference/dir.' ]
 
+    out="$(printf 'See ~/CODE/a/results/ now.\n' | _st --print --stdin)"
+    _ok "a path ending in / is its last part and sub-folder (v11)" [ "$out" = 'See results sub-folder now.' ]
+    out="$(printf 'Type `/copy` or /pj:wrap-up.\n' | _st --print --stdin)"
+    _ok "a slash command is: the \"name\" slash command (v11)" [ "$out" = 'Type `the "copy" slash command` or the "pj:wrap-up" slash command.' ]
+    out="$(printf 'Files in /tmp and /etc, and ~/x.\n' | _st --print --stdin)"
+    _ok "...not a top-level folder, nor ~/x (control)"     [ "$out" = 'Files in /tmp and /etc, and ~/x.' ]
+
     echo "Settings and exit codes (v6, v7)"
     _st_arm settings
     _ok "a missing file is written..."                      [ "$(_st --get all)" = "rate=420
@@ -3210,7 +3233,7 @@ notify=off
     _st_cleanup
     trap - EXIT INT TERM
     echo
-    local ran=$((pass + fail)) expected=232
+    local ran=$((pass + fail)) expected=235
     if [ "$fail" -eq 0 ] && [ $((ran + skipped)) -eq "$expected" ]; then
         if [ "$skipped" -eq 0 ]; then echo "speak-clipboard --selftest: all $pass checks passed.";
         else echo "speak-clipboard --selftest: all $pass checks passed, $skipped skipped (said above why)."; fi

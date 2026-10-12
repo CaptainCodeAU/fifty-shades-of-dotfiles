@@ -404,6 +404,13 @@ Gavin chose (dotfiles-main-2 Q6-Q8):
 
 Item codes and commit hashes are still read in full; not asked.
 
+Added the same evening (v11, Gavin, after listening to v10): a path ending in
+`/` is spoken as its last part and "sub-folder" (`~/CODE/.../results/` is
+"results sub-folder"), and a slash command such as `/copy` is spoken as `the
+"copy" slash command`. One word after a `/` with no other `/` counts as a slash
+command, except a top-level folder name (`/tmp`, `/etc`, `/Users` and the like),
+which stays as it is.
+
 ### The measuring runs and the speak key
 
 At about 9:31 PM a `pauses.py` run with six Siri renders at once, while
