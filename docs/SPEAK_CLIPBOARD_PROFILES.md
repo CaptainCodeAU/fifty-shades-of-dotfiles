@@ -379,3 +379,36 @@ text, so a run can be repeated. Recordings (`.wav`) are not kept: run
 
 - Six presses at the same instant wiped `speak-clipboard.log` (each trims it
   through the same temp name at exit). W-20261012-A09.
+
+## The reply format, spoken (v10, 2026-10-12)
+
+Gavin's terminal replies follow his reply style
+(`~/CODE/CaptainCodeAU/CaptainCodeAU-isolinear/reference/reply-style/STYLE.md`).
+One whole reply, as an example, spoke for 79 s. Timed piece by piece (Aaron,
+440 wpm): the `❯` and `⋅` markers, backticks, a space before a full stop and a
+dash on a sub-bullet cost nothing; a status line "✓ done · ❕ low risk" ran
+together as "done low risk" (the cleaner dropped the `·`); a code block's
+command took 2.9 s; a long path 2.2 s against 0.2 s for its last part; an item
+code like W-20261012-A12 1.4 s and a commit hash about 1 s.
+
+Gavin chose (dotfiles-main-2 Q6-Q8):
+
+- Q6: a middle dot between words is a comma: "done, low risk".
+- Q7: a fenced code block is spoken as "Code block." and no more. An unclosed
+  fence is read as it is. A code block copied from the terminal, where Claude
+  Code draws it without the fences, is still read.
+- Q8: a path with two or more slashes is spoken as its last part. It counts
+  as a path only when it starts at `~`, `/` or `.`, or ends in a file name
+  with an extension, so a URL, a date and "and/or/not" are left alone. A
+  full stop ending the sentence stays.
+
+Item codes and commit hashes are still read in full; not asked.
+
+### The measuring runs and the speak key
+
+At about 9:31 PM a `pauses.py` run with six Siri renders at once, while
+Gavin's remote was queuing voices, hung renders for minutes; the remote went
+silent and its line player ended three lines. `button_bunny-main` reported
+it. `pauses.py` now renders one piece at a time, retries a timed-out render,
+and waits while speak-clipboard's line player runs. Run it only with Gavin's
+say-so in the session.

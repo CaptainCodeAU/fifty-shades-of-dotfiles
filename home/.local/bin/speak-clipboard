@@ -23,6 +23,13 @@
 # WHAT THE CLEANER DOES (one perl pass, in this order, and why each)
 #   * ANSI/OSC escape sequences are removed -- colour and title codes, never
 #     spoken content
+#   * a fenced code block (``` lines) becomes "Code block." (v10): read out,
+#     one command took 2.9 s of symbols
+#   * a middle dot between words becomes a comma (v10), so a status line
+#     "done, low risk" is not one run-together phrase
+#   * a path with two or more slashes is spoken as its last part (v10): a
+#     long one took 2.2 s, "results" alone 0.2 s. Not a URL, a date, or a
+#     word list like and/or/not
 #   * tables (box-drawn or markdown) are re-spoken row by row, "Row 1. Source.
 #     The record body... When. Any time...", every name and cell its own
 #     sentence so the voice pauses between them (v4.7, 2026-09-28, Gavin's
@@ -1725,6 +1732,21 @@ sub _pause_marks {
     }
     return join("\n", @l);
 }
+# The last part of a path with two or more slashes (v10, Q8); anything
+# else as it is.
+sub _path_last {
+    my $p = shift;
+    # A full stop ending the sentence is not part of the path.
+    my $end = $p =~ s{(\.+)$}{} ? $1 : '';
+    my $n = () = $p =~ m{/}g;
+    return $p . $end if $n < 2 || $p !~ /[A-Za-z]/;
+    # A path starts at ~, / or . , or ends in a file name with an extension;
+    # so "and/or/not" or "read/write/run" is not one.
+    return $p . $end unless $p =~ m{^(?:~|\.{1,2})?/} || $p =~ m{\.[A-Za-z0-9]{1,6}/?$};
+    (my $q = $p) =~ s{/+$}{};
+    $q =~ s{.*/}{};
+    return ($q eq '' ? $p : $q) . $end;
+}
 sub _pause_form {
     my ($v, $orig) = @_;
     return $orig if $v eq 'none';
@@ -1748,6 +1770,11 @@ $raw = '' unless defined $raw;
 my $t = decode('UTF-8', $raw);                  # malformed bytes become U+FFFD, dropped below
 $t =~ s/\e\[[0-9;?]*[ -\/]*[@-~]//g;            # ANSI CSI
 $t =~ s/\e\][^\a\e]*(?:\a|\e\\)//g;            # OSC (titles, hyperlinks), one at a time
+# A fenced code block (``` lines) is "Code block." and no more (v10, Q7): a
+# command read out symbol by symbol took 2.9 s and said nothing to listen
+# to. First, so a bar or a rule inside one is never taken for a table. An
+# unclosed fence is read as it is.
+$t =~ s/^[ \t]*```[^\n]*\n.*?^[ \t]*```[ \t]*$/Code block./msg;
 $t = _tables($t);                               # tables -> "Row 1. Name. Cell." (v4.7)
 $t =~ s/[\x{2018}\x{2019}\x{201A}\x{2032}]/'/g; # single curly quotes, prime
 $t =~ s/[\x{201C}\x{201D}\x{201E}\x{2033}]/"/g; # double curly quotes, double prime
@@ -1764,6 +1791,11 @@ $t =~ s/\x{0152}/OE/g; $t =~ s/\x{0153}/oe/g;   # ethel
 $t =~ s/\x{00DF}/ss/g;                          # eszett
 $t =~ s/\x{0110}/D/g; $t =~ s/\x{0111}/d/g;     # D-stroke
 $t =~ s/\x{00DE}/Th/g; $t =~ s/\x{00FE}/th/g;   # thorn
+# A middle dot between words, as in a status line "done \x{00B7} low risk", is a
+# comma (v10, Q6): dropped with the rest, the line ran together as one
+# phrase. Measured: "done, low risk" 0.46 s against 0.39 s run together.
+$t =~ s/[ \t]*\x{00B7}[ \t]*/, /g;
+$t =~ s/^[ \t]*, //mg;
 $t =~ s/[^\t\n\r\x20-\x7e]//g;                  # everything else outside printable ASCII
 # No embedded speech commands like [[slnc 60000]]: after the drop above,
 # so an invisible character between the brackets cannot hide a pair, and
@@ -1777,6 +1809,11 @@ $t =~ s/^ | $//mg;                              # trim each line
 $t =~ s/\n+/ /g;                                # join lines (drops blank lines)
 $t =~ s/ {2,}/ /g;
 $t =~ s/^ | $//g;
+# A path with two or more slashes is spoken as its last part (v10, Q8): a
+# long one took 2.2 s, its last part 0.2 s. After the join, so the title
+# rule above still sees the lines as they were. A URL (scheme://) and a
+# token with no letter (a date such as 12/10/2026) are left as they are.
+$t =~ s{(?<![^\s`"'(\[])((?:~|\.{1,2})?/?[\w.@+-]+(?:/[\w.@+-]*)+)(?=[\s`"')\],:;\x02-\x04]|$)}{_path_last($1)}ge;
 $t = _pause_speak($t);                           # the marks become pauses (v9)
 my $orig = length $t;
 $t = substr($t, 0, $max) if $orig > $max;
@@ -3089,6 +3126,20 @@ lead_in=0
     _release; _st_idle
     _ok "...only in front of a line, never a queued voice"  [ "$(_runs 1)" = "0*14400 7000*$n1 -9000*$n2" ]
 
+    echo "Code blocks, status dots and paths (v10)"
+    _st_arm v10; _st_file "$P2"
+    out="$(printf 'Before.\n```bash\nrm -rf x | y\n```\nAfter.\n' | _st --print --stdin)"
+    _ok "a fenced code block is spoken as Code block."      [ "$out" = 'Before. Code block. After.' ]
+    out="$(printf 'Before.\n```\nonly an opening fence\n' | _st --print --stdin)"
+    _ok "...an unclosed fence is read as it is (control)"   [ "$out" = 'Before. ``` only an opening fence' ]
+    out="$(printf '**Saved.** done \xc2\xb7 low risk.\n' | _st --print --stdin)"
+    _ok "a middle dot between words becomes a comma"        [ "$out" = '**Saved.** done, low risk.' ]
+    out="$(printf 'Open ~/CODE/a/b/notes.txt, then ../up/two/three and docs/reference/a.md.\n' | _st --print --stdin)"
+    _ok "a path is spoken as its last part"                 [ "$out" = 'Open notes.txt, then three and a.md.' ]
+    out="$(printf 'See https://github.com/x/say2, on 12/10/2026, and/or/not, docs/reference/dir.\n' | _st --print --stdin)"
+    _ok "...not a URL, a date, a word list or a bare folder (control)" \
+        [ "$out" = 'See https://github.com/x/say2, on 12/10/2026, and/or/not, docs/reference/dir.' ]
+
     echo "Settings and exit codes (v6, v7)"
     _st_arm settings
     _ok "a missing file is written..."                      [ "$(_st --get all)" = "rate=420
@@ -3159,7 +3210,7 @@ notify=off
     _st_cleanup
     trap - EXIT INT TERM
     echo
-    local ran=$((pass + fail)) expected=227
+    local ran=$((pass + fail)) expected=232
     if [ "$fail" -eq 0 ] && [ $((ran + skipped)) -eq "$expected" ]; then
         if [ "$skipped" -eq 0 ]; then echo "speak-clipboard --selftest: all $pass checks passed.";
         else echo "speak-clipboard --selftest: all $pass checks passed, $skipped skipped (said above why)."; fi
