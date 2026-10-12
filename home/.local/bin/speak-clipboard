@@ -248,8 +248,8 @@
 #
 # SAVED SETTINGS (~/.config/speak-clipboard/settings; every press, the hotkey
 # included, speaks with what it holds; any run writes it if it is missing).
-# The file holds profiles, one [name] block each with rate, volume, voice and
-# notify. The commands below act on the first profile, or on --profile NAME.
+# The file holds profiles, one [name] block each with rate, volume, voice,
+# notify, pause_title, pause_label, pause_number and lead_in. The commands below act on the first profile, or on --profile NAME.
 #   speak-clipboard --profiles          list the profiles and their settings,
 #                                       the first one marked
 #   speak-clipboard --new-profile NAME  add a profile, a copy of the first one;
@@ -260,12 +260,12 @@
 #                                       _REMOVED_2, ...): no longer listed or
 #                                       usable; deleting it is a hand edit. The
 #                                       last profile left cannot be removed
-#   speak-clipboard --settings          show rate, volume, voice and notify,
-#                                       whether each is the default, and any
-#                                       problem with the file
-#   speak-clipboard --get KEY           print one value alone: rate, volume,
-#                                       voice (its full key) or notify; with
-#                                       no KEY or all, all four as key=value.
+#   speak-clipboard --settings          show every setting, whether each is
+#                                       the default, and any problem with
+#                                       the file
+#   speak-clipboard --get KEY           print one value alone: any setting
+#                                       (voice as its full key); with no KEY
+#                                       or all, every one as key=value.
 #                                       It is the value this command would use:
 #                                       a --rate or --volume on it counts
 #   speak-clipboard --set rate N        save words per minute (1-700); +N or
@@ -277,8 +277,26 @@
 #   speak-clipboard --set notify on|off on: every --set and --reset also shows
 #                                       the change as a notification (what the
 #                                       herdr hotkeys rely on); off: never
-#   speak-clipboard --reset KEY         write the default value back:
-#                                       rate, volume, voice, notify, or all
+#   speak-clipboard --set pause_title P the pause after a heading or a list
+#                                       item's title (a line ending without
+#                                       punctuation, not a wrapped line)
+#   speak-clipboard --set pause_label P the pause after a label such as
+#                                       "Found:" starting a line
+#   speak-clipboard --set pause_number P
+#                                       the pause after a list number ("1.")
+#                                       P: none (the text as it is), short
+#                                       (about 150 ms; less after a number),
+#                                       sentence (a full stop, about 290 ms)
+#                                       or 500-5000 (that many ms, about 90
+#                                       more heard). The voice has no pause
+#                                       between 150 and 500 ms
+#   speak-clipboard --set lead_in N     silence in ms (0-2000) before speech
+#                                       starts, so Bluetooth headphones
+#                                       waking up lose silence, not words
+#   speak-clipboard --reset KEY         write the default value back: rate,
+#                                       volume, voice, notify, pause_title,
+#                                       pause_label, pause_number, lead_in,
+#                                       or all
 #   (--set and --reset show each value they change as "old -> new")
 #   --notify / --no-notify              add to a --set or --reset to show or
 #                                       skip the notification this once,
@@ -289,7 +307,7 @@
 #                                       with the one in use marked
 #
 # THE FILE, BY HAND: a [name] line starts a profile; under it rate=, volume=,
-# voice= and notify= (spaces around = are fine). Lines starting # or ; are
+# voice=, notify=, pause_title=, pause_label=, pause_number= and lead_in= (spaces around = are fine). Lines starting # or ; are
 # comments, whole lines only. A flat file with no [name] line becomes a
 # [default] profile on the next run. A missing setting is put back with its
 # default. --settings warns about a setting above the first [name], one set
@@ -312,7 +330,8 @@
 #       after --set, --reset or --get, two commands at once, or --toggle
 #       with --queue
 #    3  bad value: rate not 1-700, volume not 0-100 (no leading zeros),
-#       notify not on/off, no voice with that number, a --voice that is
+#       notify not on/off, a pause not none/short/sentence/500-5000,
+#       lead_in not 0-2000, no voice with that number, a --voice that is
 #       another option or over 100 characters, --queue not 0-5000, or a
 #       profile name that is not allowed, already taken, or the last one
 #    4  the settings file could not be read or written, or another command
@@ -372,6 +391,16 @@
 # voice is audible: that is what lets --skip drop only that one, and
 # what tells it the line is over.
 #
+# PAUSES (v9, 2026-10-12, dotfiles-main-2 Q2-Q5). The cleaner joins every
+# line into one, which took away the pause a heading or a list item title
+# had, and the voice paused unevenly after "Found:" or "2.". Measured, the
+# voice has only a few pause sizes (see Pauses in the cleaner), so
+# pause_title, pause_label and pause_number each pick one: none, short
+# ([[slnc 150]]), sentence (a full stop) or 500-5000 ms ([[slnc N]]).
+# lead_in (Q5) is silence in front of the first voice of a new line: the
+# Bluetooth headphones in use dropped the first word or two while they
+# woke. Write-up: docs/SPEAK_CLIPBOARD_PROFILES.md "Pauses (v9)".
+#
 # STATE (all under ~/.local/state/herdr/, nothing here ever contains text)
 #   speak-clipboard.log    one line per press: when, mode, ppid, outcome, chars
 #   speak-render.log       the speaker's stderr, for diagnostics only
@@ -400,6 +429,12 @@ _say_fallback_voice="Samantha"
 _default_rate="420"
 _default_volume="60"
 _default_notify="on"
+_default_pause_title="sentence"
+_default_pause_label="short"
+_default_pause_number="sentence"
+_default_lead_in="300"
+# Every saved setting, in the order the file and --settings show them.
+_keys=(rate volume voice notify pause_title pause_label pause_number lead_in)
 _default_profile="default"
 cli_rate=""
 cli_volume=""
@@ -434,8 +469,11 @@ _set_missing() {
         volume) echo "--set volume needs a number 0-100, or +N / -N to step, e.g. --set volume $_default_volume" ;;
         voice)  echo "--set voice needs a number from the list: run speak-clipboard --voices, then e.g. --set voice 6" ;;
         notify) echo "--set notify needs on or off, e.g. --set notify off" ;;
-        '')     echo "--set needs a setting and a value: rate, volume, voice or notify, e.g. --set rate $_default_rate" ;;
-        *)      echo "--set takes rate, volume, voice or notify, not '$1'" ;;
+        pause_title|pause_label|pause_number)
+                echo "--set $1 needs none, short, sentence or a number of ms 500-5000, e.g. --set $1 sentence" ;;
+        lead_in) echo "--set lead_in needs a number of ms 0-2000, e.g. --set lead_in $_default_lead_in" ;;
+        '')     echo "--set needs a setting and a value: rate, volume, voice, notify, pause_title, pause_label, pause_number or lead_in, e.g. --set rate $_default_rate" ;;
+        *)      echo "--set takes rate, volume, voice, notify, pause_title, pause_label, pause_number or lead_in, not '$1'" ;;
     esac
 }
 
@@ -485,7 +523,7 @@ while [ $# -gt 0 ]; do
                  case "${1:-}" in ''|-*) ;; *) set_key="$1"; shift ;; esac ;;
         --set)   _mode set --set
                  [ $# -ge 3 ] || { _fail 2 "$(_set_missing "${2:-}")"; break; }; set_key="$2"; set_value="$3"; shift 3 ;;
-        --reset) [ $# -ge 2 ] || { _fail 2 "--reset needs rate, volume, voice, notify or all"; break; }; _mode reset --reset; set_key="$2"; shift 2 ;;
+        --reset) [ $# -ge 2 ] || { _fail 2 "--reset needs rate, volume, voice, notify, pause_title, pause_label, pause_number, lead_in or all"; break; }; _mode reset --reset; set_key="$2"; shift 2 ;;
         -h|--help) _mode help --help; shift ;;
         *) _fail 2 "unknown option '$1'"; break ;;
     esac
@@ -506,6 +544,15 @@ _valid_voice()  {
     [ ${#1} -le 100 ]
 }
 _valid_notify() { case "$1" in on|off) ;; *) return 1 ;; esac; }
+# A pause (v9, see Pauses in the cleaner): none, short, sentence, or
+# 500-5000 ms (below 500 the voice gives the same short pause).
+_valid_pause()  { case "$1" in none|short|sentence) return 0 ;; ""|*[!0-9]*|?????*|0*) return 1 ;; esac; [ "$1" -ge 500 ] && [ "$1" -le 5000 ]; }
+_valid_pause_title()  { _valid_pause "$1"; }
+_valid_pause_label()  { _valid_pause "$1"; }
+_valid_pause_number() { _valid_pause "$1"; }
+# Silence before the first voice of a new line (v9), so Bluetooth headphones
+# waking from standby lose silence, not the first words: 0-2000 ms.
+_valid_lead_in() { case "$1" in ""|*[!0-9]*|?????*|0?*) return 1 ;; esac; [ "$1" -le 2000 ]; }
 _valid_delay()  { case "$1" in ''|*[!0-9]*|?????*|0?*) return 1 ;; esac; [ "$1" -le 5000 ]; }
 # Profile names: letters, digits, _ and - (Q14 v2: no spaces, every hotkey
 # would need quotes; no dots, ambiguous beside a key as in aaron_fast.rate),
@@ -586,14 +633,14 @@ _setting_line() {
     case "$1" in *=*) ;; *) return 1 ;; esac
     _trim "${1%%=*}"; _sk="$_tr"
     _trim "${1#*=}"; _sv="$_tr"
-    case "$_sk" in rate|volume|voice|notify) ;; *) return 1 ;; esac
+    case "$_sk" in rate|volume|voice|notify|pause_title|pause_label|pause_number|lead_in) ;; *) return 1 ;; esac
 }
 
 _new_profile_slot() {   # name, heading line; the new index in _np
     _np=${#p_name[@]}
     p_name[_np]="$1"; p_head[_np]="$2"; p_ins[_np]="$2"
-    pr_rate[_np]=""; pr_volume[_np]=""; pr_voice[_np]=""; pr_notify[_np]=""
-    pl_rate[_np]=-1; pl_volume[_np]=-1; pl_voice[_np]=-1; pl_notify[_np]=-1
+    local k
+    for k in "${_keys[@]}"; do eval "pr_$k[_np]=\"\"; pl_$k[_np]=-1"; done
 }
 
 # The warnings are there for the one way blocks under headings go wrong
@@ -607,8 +654,7 @@ _warn() {
 _parse_settings() {
     local n l cur=-1 j prev name nl=${#_lines[@]} has_heading=0
     p_name=(); p_head=(); p_ins=(); l_owner=(); l_kind=()
-    pr_rate=(); pr_volume=(); pr_voice=(); pr_notify=()
-    pl_rate=(); pl_volume=(); pl_voice=(); pl_notify=()
+    for j in "${_keys[@]}"; do eval "pr_$j=(); pl_$j=()"; done
     _file_warnings=""; _warn_log=""; _flat=-1
     for ((n = 0; n < nl; n++)); do
         _trim "${_lines[n]}"
@@ -708,22 +754,21 @@ _load_profile() {
         _pi=$_fp
     fi
     profile="${cli_profile:-$_default_profile}"
-    f_rate=""; f_volume=""; f_voice=""; f_notify=""
+    for k in "${_keys[@]}"; do eval "f_$k=\"\""; done
     if [ "$_pi" -ge 0 ]; then
         profile="${p_name[_pi]}"
-        f_rate="${pr_rate[_pi]}"; f_volume="${pr_volume[_pi]}"
-        f_voice="${pr_voice[_pi]}"; f_notify="${pr_notify[_pi]}"
+        for k in "${_keys[@]}"; do eval "f_$k=\"\${pr_$k[_pi]}\""; done
     fi
     # o_* keep the values as read, for the WARNING lines, so they always
     # show the text in the file, never a value a --set or --reset put in f_*.
-    o_rate="$f_rate"; o_volume="$f_volume"; o_voice="$f_voice"; o_notify="$f_notify"
+    for k in "${_keys[@]}"; do eval "o_$k=\"\$f_$k\""; done
     _bad_settings=""; _missing_settings=""
     for e in $_put_back; do
         [ "${e%%=*}" != "$profile" ] || _missing_settings="${e#*=}"
     done
-    saved_rate=""; saved_volume=""; saved_voice=""; saved_notify=""
+    for k in "${_keys[@]}"; do eval "saved_$k=\"\""; done
     if [ "$_file_state" = "ok" ] && [ "$_pi" -ge 0 ]; then
-        for k in rate volume voice notify; do
+        for k in "${_keys[@]}"; do
             eval "v=\$f_$k"
             if [ -z "$v" ]; then
                 :
@@ -739,6 +784,10 @@ _load_profile() {
     _preferred_voice="${saved_voice:-$_default_voice}"
     notify_saved="${saved_notify:-$_default_notify}"     # the file's value, for display
     notify="${cli_notify:-$notify_saved}"                  # what this command does
+    pause_title="${saved_pause_title:-$_default_pause_title}"
+    pause_label="${saved_pause_label:-$_default_pause_label}"
+    pause_number="${saved_pause_number:-$_default_pause_number}"
+    lead_in="${saved_lead_in:-$_default_lead_in}"
 }
 
 _state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/herdr"
@@ -901,10 +950,9 @@ _pick_voice() {
 # NOTHING IS EVER DELETED above). Reads the file back afterwards, so the
 # line numbers match the disk for any later step.
 _write_settings() {
-    local tmp="$_settings_file.tmp.$$" content n LC_ALL=C
+    local tmp="$_settings_file.tmp.$$" content n k LC_ALL=C
     if [ "$_pi" -ge 0 ]; then
-        pr_rate[_pi]="$f_rate"; pr_volume[_pi]="$f_volume"
-        pr_voice[_pi]="$f_voice"; pr_notify[_pi]="$f_notify"
+        for k in "${_keys[@]}"; do eval "pr_$k[_pi]=\"\$f_$k\""; done
     fi
     mkdir -p "${_settings_file%/*}" 2>/dev/null
     # The whole text first, then one write whose size is checked before the
@@ -967,7 +1015,7 @@ _emit_settings() {
 
 _emit_put_back() {   # the settings profile $1 has no line for, in the usual order
     local k u v
-    for k in rate volume voice notify; do
+    for k in "${_keys[@]}"; do
         eval "u=\${pl_$k[$1]}; v=\${pr_$k[$1]}"
         [ "$u" -ge 0 ] || [ -z "$v" ] || printf '%s=%s\n' "$k" "$v"
     done
@@ -1008,7 +1056,7 @@ _ensure_settings_file() {
     for ((i = 0; i < ${#p_name[@]}; i++)); do
         ! _is_removed "${p_name[i]}" || continue
         m=""
-        for k in rate volume voice notify; do
+        for k in "${_keys[@]}"; do
             eval "v=\${pr_$k[i]}"
             [ -z "$v" ] || continue
             eval "pr_$k[i]=\$_default_$k"; m="${m:+$m,}$k"
@@ -1044,6 +1092,16 @@ _vs_default() {
     else echo "(changed)"; fi
 }
 
+# A pause value as --settings shows it: "short (about 150 ms)".
+_pause_label() {
+    case "$1" in
+        none)     printf 'none (no pause added)' ;;
+        short)    printf 'short (about 150 ms)' ;;
+        sentence) printf 'sentence (a full stop, about 290 ms)' ;;
+        *)        printf '%s ms (about %s heard)' "$1" "$(($1 + 90))" ;;
+    esac
+}
+
 # The box is at least this wide; it grows to fit the longest row or the
 # file's path, and both rules are drawn to the same width (Gavin's layout,
 # 2026-10-08).
@@ -1062,39 +1120,49 @@ _voice_name() {
 # with "(default)" or "(changed, default ...)", any problem each on its own
 # line saying what was used instead, then a bottom rule. After a --set or
 # --reset, _SPEAK_CLIPBOARD_BEFORE holds the values before it
-# (rate|volume|voice), and a row that changed reads "old -> new" in bold
+# (one value per key in _keys, joined by |), and a row that changed reads "old -> new" in bold
 # bright white (dotfiles-main Q6). The file's path is bold bright white too.
 # Colour only on a terminal and never with NO_COLOR set.
 show_settings() {
     local k raw top label problems="" e IFS_old
-    local b_rate="" b_volume="" b_voice="" b_notify="" on="" off="" i w=44 width="$_box_width" n
-    local -a names=(rate volume voice notify) vals marks hot=("" "" "" "")
-    [ -z "${_SPEAK_CLIPBOARD_BEFORE:-}" ] || IFS='|' read -r b_rate b_volume b_voice b_notify <<<"$_SPEAK_CLIPBOARD_BEFORE"
+    local b_rate="" b_volume="" b_voice="" b_notify="" b_pause_title="" b_pause_label="" b_pause_number="" b_lead_in=""
+    local on="" off="" i w=44 width="$_box_width" n
+    local -a names=("${_keys[@]}") vals marks hot=("" "" "" "" "" "" "" "")
+    [ -z "${_SPEAK_CLIPBOARD_BEFORE:-}" ] ||
+        IFS='|' read -r b_rate b_volume b_voice b_notify b_pause_title b_pause_label b_pause_number b_lead_in <<<"$_SPEAK_CLIPBOARD_BEFORE"
     if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then on=$'\e[1;97m'; off=$'\e[0m'; fi
     vals[0]="$rate wpm";      marks[0]="$(_vs_default "$rate" "$_default_rate" "$_default_rate")"
     vals[1]="$volume of 100"; marks[1]="$(_vs_default "$volume" "$_default_volume" "$_default_volume")"
     vals[2]="$(_voice_label "$_preferred_voice")"
     marks[2]="$(_vs_default "$_preferred_voice" "$_default_voice" "$(_voice_name "$_default_voice")")"
     vals[3]="$notify_saved";  marks[3]="$(_vs_default "$notify_saved" "$_default_notify" "$_default_notify")"
+    vals[4]="$(_pause_label "$pause_title")";  marks[4]="$(_vs_default "$pause_title" "$_default_pause_title" "$_default_pause_title")"
+    vals[5]="$(_pause_label "$pause_label")";  marks[5]="$(_vs_default "$pause_label" "$_default_pause_label" "$_default_pause_label")"
+    vals[6]="$(_pause_label "$pause_number")"; marks[6]="$(_vs_default "$pause_number" "$_default_pause_number" "$_default_pause_number")"
+    vals[7]="$lead_in ms";    marks[7]="$(_vs_default "$lead_in" "$_default_lead_in" "$_default_lead_in")"
     if [ -n "$b_rate" ] && [ "$b_rate" != "$rate" ]; then vals[0]="$b_rate -> $rate wpm"; hot[0]=1; fi
     if [ -n "$b_volume" ] && [ "$b_volume" != "$volume" ]; then vals[1]="$b_volume -> $volume of 100"; hot[1]=1; fi
     if [ -n "$b_voice" ] && [ "$b_voice" != "$_preferred_voice" ]; then
         vals[2]="$(_voice_name "$b_voice") -> ${vals[2]}"; hot[2]=1
     fi
     if [ -n "$b_notify" ] && [ "$b_notify" != "$notify_saved" ]; then vals[3]="$b_notify -> $notify_saved"; hot[3]=1; fi
-    for i in 0 1 2 3; do [ ${#vals[i]} -le "$w" ] || w=${#vals[i]}; done
-    for i in 0 1 2 3; do n=$((8 + w + 1 + ${#marks[i]})); [ "$n" -le "$width" ] || width=$n; done
+    if [ -n "$b_pause_title" ] && [ "$b_pause_title" != "$pause_title" ]; then vals[4]="$b_pause_title -> ${vals[4]}"; hot[4]=1; fi
+    if [ -n "$b_pause_label" ] && [ "$b_pause_label" != "$pause_label" ]; then vals[5]="$b_pause_label -> ${vals[5]}"; hot[5]=1; fi
+    if [ -n "$b_pause_number" ] && [ "$b_pause_number" != "$pause_number" ]; then vals[6]="$b_pause_number -> ${vals[6]}"; hot[6]=1; fi
+    if [ -n "$b_lead_in" ] && [ "$b_lead_in" != "$lead_in" ]; then vals[7]="$b_lead_in -> $lead_in ms"; hot[7]=1; fi
+    for i in 0 1 2 3 4 5 6 7; do [ ${#vals[i]} -le "$w" ] || w=${#vals[i]}; done
+    for i in 0 1 2 3 4 5 6 7; do n=$((14 + w + 1 + ${#marks[i]})); [ "$n" -le "$width" ] || width=$n; done
     label="$(_tilde "$_settings_file"), profile $profile"
     top="__ Settings file: $label "
     [ $((${#top} + 3)) -le "$width" ] || width=$((${#top} + 3))
     printf '__ Settings file: %s%s%s %s\n' "$on" "$label" "$off" \
         "$(printf '%*s' $((width - ${#top})) '' | tr ' ' _)"
     echo
-    for i in 0 1 2 3; do
+    for i in 0 1 2 3 4 5 6 7; do
         if [ -n "${hot[i]}" ]; then
-            printf '%s%-8s%-*s %s%s\n' "$on" "${names[i]}" "$w" "${vals[i]}" "${marks[i]}" "$off"
+            printf '%s%-14s%-*s %s%s\n' "$on" "${names[i]}" "$w" "${vals[i]}" "${marks[i]}" "$off"
         else
-            printf '%-8s%-*s %s\n' "${names[i]}" "$w" "${vals[i]}" "${marks[i]}"
+            printf '%-14s%-*s %s\n' "${names[i]}" "$w" "${vals[i]}" "${marks[i]}"
         fi
     done
     _read_engine_cache "$(date +%s)"
@@ -1129,7 +1197,7 @@ show_settings() {
 # --help's middle section. Printed from the _default_* values, not typed into
 # the USAGE text, so the help can never disagree with what a press uses.
 show_defaults() {
-    local f='  %-8s %-31s %s\n' mark
+    local f='  %-13s %-31s %s\n' mark
     echo "DEFAULT VALUES (recommended, tuned by ear; --reset all writes them back)"
     printf "$f" "" "default" "now"
     mark=" $(_vs_default "$rate" "$_default_rate")"; [ -n "$cli_rate" ] && mark=" (this press)"
@@ -1140,6 +1208,10 @@ show_defaults() {
     printf "$f" voice "$(_voice_label "$_default_voice")" "$(_voice_label "$_preferred_voice")$mark"
     mark=" $(_vs_default "$notify" "$_default_notify")"; [ -n "$cli_notify" ] && mark=" (this command)"
     printf "$f" notify "$_default_notify" "$notify$mark"
+    printf "$f" pause_title "$_default_pause_title" "$pause_title $(_vs_default "$pause_title" "$_default_pause_title")"
+    printf "$f" pause_label "$_default_pause_label" "$pause_label $(_vs_default "$pause_label" "$_default_pause_label")"
+    printf "$f" pause_number "$_default_pause_number" "$pause_number $(_vs_default "$pause_number" "$_default_pause_number")"
+    printf "$f" lead_in "$_default_lead_in ms" "$lead_in ms $(_vs_default "$lead_in" "$_default_lead_in")"
     echo
 }
 
@@ -1184,13 +1256,19 @@ _send_notification() {
 # wpm". A step that hit a limit says "No change" and names the limit.
 _notify_change() {
     local b_rate="" b_volume="" b_voice="" b_notify="" body="" nl=$'\n'
-    [ -z "${_SPEAK_CLIPBOARD_BEFORE:-}" ] || IFS='|' read -r b_rate b_volume b_voice b_notify <<<"$_SPEAK_CLIPBOARD_BEFORE"
+    local b_pause_title="" b_pause_label="" b_pause_number="" b_lead_in=""
+    [ -z "${_SPEAK_CLIPBOARD_BEFORE:-}" ] ||
+        IFS='|' read -r b_rate b_volume b_voice b_notify b_pause_title b_pause_label b_pause_number b_lead_in <<<"$_SPEAK_CLIPBOARD_BEFORE"
     # One change per line (Gavin's ask, 2026-10-08). Notify itself shows
     # as old -> new: turning it off sends nothing unless --notify asks.
     [ "$b_rate" = "$rate" ] || body="Rate: $b_rate -> $rate wpm"
     [ "$b_volume" = "$volume" ] || body="${body:+$body$nl}Volume: $b_volume -> $volume"
     [ "$b_voice" = "$_preferred_voice" ] || body="${body:+$body$nl}Voice: $(_voice_name "$b_voice") -> $(_voice_name "$_preferred_voice")"
     [ "$b_notify" = "$notify_saved" ] || body="${body:+$body$nl}Notifications: $b_notify -> $notify_saved"
+    [ "$b_pause_title" = "$pause_title" ] || body="${body:+$body$nl}Title pause: $b_pause_title -> $pause_title"
+    [ "$b_pause_label" = "$pause_label" ] || body="${body:+$body$nl}Label pause: $b_pause_label -> $pause_label"
+    [ "$b_pause_number" = "$pause_number" ] || body="${body:+$body$nl}Number pause: $b_pause_number -> $pause_number"
+    [ "$b_lead_in" = "$lead_in" ] || body="${body:+$body$nl}Lead-in: $b_lead_in -> $lead_in ms"
     if [ -z "$body" ]; then
         body="No change"
         case "$rate" in 1|700) body="$body${nl}Rate: $rate wpm (limit 1-700)" ;; esac
@@ -1207,6 +1285,7 @@ _notify_change() {
 _notify_summary() {
     local body problem="" nl=$'\n'
     body="Rate: $rate wpm${nl}Volume: $volume${nl}Voice: $(_voice_name "$_preferred_voice")${nl}Notifications: $notify_saved"
+    body="$body${nl}Pauses: title $pause_title, label $pause_label, number $pause_number${nl}Lead-in: $lead_in ms"
     [ -z "$_bad_settings" ] || problem="bad value in the file: $_bad_settings"
     [ "$_file_state" != "unusable" ] || problem="settings file unusable, defaults in use"
     [ -z "$problem" ] || body="$body${nl}Problem: $problem (run speak-clipboard --settings)"
@@ -1412,7 +1491,7 @@ start_line() {
     set +m
     local p=$!
     printf '%s\n%s\nline\n' "$p" "$(_start_of "$p")" >"$_pid_file"
-    _send_voice 0 >&7
+    _send_voice "$lead_in" >&7
     exec 7<&-
 }
 
@@ -1602,6 +1681,65 @@ sub _tables {
     }
     return join("\n", @out);
 }
+
+# --- Pauses (v9) -------------------------------------------------------------
+# Joining every line into one (see the header) also took away the pause a
+# heading or a list item's title had, and the voice pauses unevenly after
+# "Found:" or "2.". MEASURED 2026-10-12 (Aaron, 440 wpm, three sentences
+# each): the voice has only a few pause sizes. None after a space, " / * #;
+# about 80 ms after , ... - dashes ) |; 110-130 ms, uneven, after ; :; about
+# 290 ms after . ! ? and after any line break. [[slnc N]] gives a steady
+# 150 ms for any N from 50 to 450, and N plus about 90 ms from 500 up.
+# So each kind of spot gets one of: none (the text as it was), short
+# ([[slnc 150]]), sentence (a full stop), or N ms from 500 ([[slnc N]]),
+# from the profile's pause_title, pause_label and pause_number. The spots
+# are marked here, while the lines are still apart, with \x02 (a list
+# number), \x03 (a label's colon) and \x04 (the end of a title), and turned
+# into speech by _pause_speak after the join. The clipboard cannot hold
+# these bytes (dropped above) or a [[ (split above), so every speech
+# command in the text is one this cleaner wrote.
+my ($P_TITLE, $P_LABEL, $P_NUMBER) = map { defined $_ && length $_ ? $_ : 'none' } @ARGV[1, 2, 3];
+sub _pause_marks {
+    my @l = split /\n/, $_[0], -1;
+    my $maxw = 0;
+    for (@l) { (my $x = $_) =~ s/\s+$//; $maxw = length $x if length $x > $maxw }
+    for my $i (0 .. $#l) {
+        next unless $l[$i] =~ /\S/;
+        # A label: one to three words and a colon at the start of a line,
+        # after any list number or bold, with more text after it.
+        $l[$i] =~ s/^(\s*(?:\d{1,3}[.)]\s+)?(?:\*\*|__)?[A-Za-z][A-Za-z0-9'_-]*(?: [A-Za-z0-9'_-]+){0,2}(?:\*\*|__)?):(?=(?:\*\*|__)?\s+\S)/$1\x03:/;
+        # A list number: "1." or "1)" starting a line.
+        $l[$i] =~ s/^(\s*\d{1,3})([.)])(?=\s+\S)/$1\x02$2/;
+        # A title: a line that ends without punctuation where the break
+        # was meant, not a wrap: a blank line follows, or the next line's
+        # first word would have fitted on this one (a wrapped line is full
+        # up to the widest line in the selection). The last line needs none.
+        (my $c = $l[$i]) =~ s/\s+$//;
+        (my $end = $c) =~ s/[*_"'`)\]]+$//;
+        next if $end =~ /[.!?:;,]$/ || $end eq '';
+        my $j = $i + 1;
+        $j++ while $j <= $#l && $l[$j] !~ /\S/;
+        next if $j > $#l;
+        my ($w) = $l[$j] =~ /^\s*(\S+)/;
+        $l[$i] = "$c\x04" if $j > $i + 1 || length($c) + 1 + length($w) <= $maxw;
+    }
+    return join("\n", @l);
+}
+sub _pause_form {
+    my ($v, $orig) = @_;
+    return $orig if $v eq 'none';
+    return '.' if $v eq 'sentence';
+    return ' [[slnc 150]]' if $v eq 'short';
+    return " [[slnc $v]]" if $v =~ /^\d+$/;
+    return $orig;
+}
+sub _pause_speak {
+    my $t = shift;
+    $t =~ s/\x02([.)])/_pause_form($P_NUMBER, $1)/ge;
+    $t =~ s/\x03:/_pause_form($P_LABEL, ':')/ge;
+    $t =~ s/\x04/_pause_form($P_TITLE, '')/ge;
+    return $t;
+}
 # ---------------------------------------------------------------------------
 
 local $/;
@@ -1633,11 +1771,13 @@ $t =~ s/[^\t\n\r\x20-\x7e]//g;                  # everything else outside printa
 1 while $t =~ s/\[\[/[ [/;
 $t =~ s/[-=_.~*#+]{4,}/ /g;                     # rule runs and padding
 $t =~ s/^[-*] +//mg;                            # list markers
+$t = _pause_marks($t);                          # titles, labels, list numbers (v9)
 $t =~ s/[ \t\r]+/ /g;                           # collapse spaces within lines
 $t =~ s/^ | $//mg;                              # trim each line
 $t =~ s/\n+/ /g;                                # join lines (drops blank lines)
 $t =~ s/ {2,}/ /g;
 $t =~ s/^ | $//g;
+$t = _pause_speak($t);                           # the marks become pauses (v9)
 my $orig = length $t;
 $t = substr($t, 0, $max) if $orig > $max;
 print sha256_hex($t), "\n", ($orig > $max ? 1 : 0), "\n", length($t), "\n", $t, "\n";
@@ -1645,7 +1785,7 @@ PERL
 
 clean_input() {
     if [ "$from_stdin" = 1 ]; then
-        perl -e "$_clean_pl" -- "$_max_chars" 2>/dev/null
+        perl -e "$_clean_pl" -- "$_max_chars" "$pause_title" "$pause_label" "$pause_number" 2>/dev/null
     else
         # LC_ALL is load-bearing (v4.8, 2026-09-28). pbpaste picks its output
         # encoding from the locale, and herdr launches this with none, so
@@ -1656,7 +1796,7 @@ clean_input() {
         # 1255, intact UTF-8 to 451. `env -i pbpaste` printed "? Check ?",
         # the same with LC_ALL=en_US.UTF-8 or en_AU.UTF-8 printed the box bars.
         # en_AU is Gavin's own locale (his call, 2-way tested).
-        LC_ALL=en_AU.UTF-8 pbpaste 2>/dev/null | perl -e "$_clean_pl" -- "$_max_chars" 2>/dev/null
+        LC_ALL=en_AU.UTF-8 pbpaste 2>/dev/null | perl -e "$_clean_pl" -- "$_max_chars" "$pause_title" "$pause_label" "$pause_number" 2>/dev/null
     fi
 }
 
@@ -2326,6 +2466,16 @@ STANDIN
 
     local aaron="en-US:natural:male:Aaron:premium:5030" simone="en-US:natural:female:Simone:premium:5029"
     local other="en-US:neuralAX:male:Aaron:premium:1370"
+    # The v9 settings. lead_in=0, so the samples the arms check start with
+    # the voice; the lead-in has arms of its own.
+    local NEWK="pause_title=sentence
+pause_label=short
+pause_number=sentence
+lead_in=0"
+    local NEWK_DEF="pause_title=sentence
+pause_label=short
+pause_number=sentence
+lead_in=300"
     # Simone's volume (45) and the first profile's notify (off) are not the
     # defaults, so a check cannot pass by reading a default instead.
     local P2="# test profiles
@@ -2335,18 +2485,21 @@ rate=440
 volume=70
 voice=$aaron
 notify=off
+$NEWK
 
 [simone_fast]
 rate=380
 volume=45
 voice=$simone
 notify=off
+$NEWK
 
 [third]
 rate=300
 volume=50
 voice=$other
 notify=off
+$NEWK
 "
     local FF="-nodisp -autoexit -infbuf -stats -loglevel error -volume 100 -f s16le -ar 48000 -ch_layout mono -i -"
     echo "speak-clipboard --selftest (temp folder: $T)"
@@ -2398,16 +2551,18 @@ rate=100
     _ok "a press on a profile missing a setting exits 10"   [ "$rc" = 10 ]
     out="$(_log_last)"
     _ok "...and logs it"                                    _has "$out" "settings=missing:volume"
-    # Line 13, not 12: the put-back volume=60 now sits above [bad name].
-    _ok "...and logs the file's warnings"                   _has "$out" "warn=above-heading:1,twice:aaron_fast:rate,bad-heading:13"
-    _ok "...using the default volume (60) for it"           [ "$(_runs 1)" = "-12000*$(_n 11 20)" ]
+    # Line 21, not 12: the put-back settings (volume=60 and the four v9
+    # ones in each block) now sit above [bad name].
+    _ok "...and logs the file's warnings"                   _has "$out" "warn=above-heading:1,twice:aaron_fast:rate,bad-heading:21"
+    _ok "...using the default volume (60) for it"           [ "$(_runs 1)" = "0*14400 -12000*$(_n 11 20)" ]
     _ok "the missing setting is put back in its own block"  _has "$(_cfg)" "notify=off
 volume=60
+$NEWK_DEF
 [bad name]"
     out="$(_st --settings --profile aaron_fast 2>&1)"
     _ok "--settings warns: a setting above the first heading" _has "$out" "line 1: rate=300 is above the first [heading]: not used"
     _ok "--settings warns: a setting twice in one profile"   _has "$out" "[aaron_fast] sets rate twice (lines 3 and 7): line 7 is used"
-    _ok "--settings warns: a heading that is not a name"     _has "$out" "line 13: [bad name] is not a usable profile name"
+    _ok "--settings warns: a heading that is not a name"     _has "$out" "line 21: [bad name] is not a usable profile name"
     _ok "the last of a setting set twice is the one used"    [ "$(_st --get rate)" = 450 ]
     echo "hello world" | _st --stdin >/dev/null 2>&1; rc=$?; _st_idle
     _ok "a press on a complete profile exits 0, warnings or not" [ "$rc" = 0 ]
@@ -2424,7 +2579,7 @@ rate=410
     out="$(_st --settings 2>&1)"
     _ok "--settings warns: a line that is not a setting"    _has "$out" "line 6: 'RATE=600' is not a setting"
     _ok "--settings warns: a heading used twice"            _has "$out" "[a] is a heading twice (lines 1 and 8)"
-    _st_arm crlf; printf '\xef\xbb\xbf[a]\r\nrate=440\r\nvolume=70\r\nvoice=%s\r\nnotify=off\r\n[b] \r\n rate = 380 \r\nvolume=45\r\nvoice=%s\r\nnotify=off\r\n' "$aaron" "$simone" >"$A/cfg/speak-clipboard/settings"
+    _st_arm crlf; printf '\xef\xbb\xbf[a]\r\nrate=440\r\nvolume=70\r\nvoice=%s\r\nnotify=off\r\npause_title=sentence\r\npause_label=short\r\npause_number=sentence\r\nlead_in=0\r\n[b] \r\n rate = 380 \r\nvolume=45\r\nvoice=%s\r\nnotify=off\r\npause_title=sentence\r\npause_label=short\r\npause_number=sentence\r\nlead_in=0\r\n' "$aaron" "$simone" >"$A/cfg/speak-clipboard/settings"
     old="$(cksum <"$A/cfg/speak-clipboard/settings")"
     _ok "Windows line ends, a BOM, spaces: both profiles read" [ "$(_st --get rate) $(_st --get rate --profile b)" = "440 380" ]
     _ok "...and a read leaves the file byte for byte"       [ "$(cksum <"$A/cfg/speak-clipboard/settings")" = "$old" ]
@@ -2466,9 +2621,11 @@ rate=410
     _ok "...a copy of the first profile"                    [ "$(_st --get all --profile extra)" = "rate=440
 volume=70
 voice=$aaron
-notify=off" ]
+notify=off
+$NEWK" ]
     _ok "...as a block at the end of the file"              _has "$(_cfg)" "voice=$other
 notify=off
+$NEWK
 
 [extra]
 rate=440"
@@ -2538,7 +2695,8 @@ notify=off
 rate=400
 volume=50
 voice=$aaron
-notify=off" ]
+notify=off
+$NEWK_DEF" ]
     _ok "...with the same values"                           [ "$(_st --get rate)" = 400 ]
     _ok "...and the next run does not migrate again"        _lacks "$(_st --settings 2>&1)" "now the [default] profile"
 
@@ -2867,12 +3025,77 @@ notify=off
     out="$(printf '%08001d' 0 | _st --print --stdin)"
     _ok "text over 8000 characters is cut to 8000"          [ ${#out} = 8000 ]
 
+    echo "Pauses and lead-in (v9)"
+    local PS='**Heading here**
+
+1. **First item**
+   Found: one thing was wrong.
+   Did: fixed it.'
+    _st_arm pauses; _st_file "$P2"
+    out="$(printf '%s\n' "$PS" | _st --print --stdin)"
+    _ok "defaults: a full stop after a title and a number, short after a label" \
+        [ "$out" = '**Heading here**. 1. **First item**. Found [[slnc 150]] one thing was wrong. Did [[slnc 150]] fixed it.' ]
+    _st_arm pauses-none; _st_file "[p]
+rate=440
+volume=70
+voice=$aaron
+notify=off
+pause_title=none
+pause_label=none
+pause_number=none
+lead_in=0
+"
+    out="$(printf '%s\n' "$PS" | _st --print --stdin)"
+    _ok "all three none: the text exactly as before v9 (control)" \
+        [ "$out" = '**Heading here** 1. **First item** Found: one thing was wrong. Did: fixed it.' ]
+    _st_arm pauses-ms; _st_file "[p]
+rate=440
+volume=70
+voice=$aaron
+notify=off
+pause_title=700
+pause_label=500
+pause_number=short
+lead_in=0
+"
+    out="$(printf '%s\n' "$PS" | _st --print --stdin)"
+    _ok "ms values and short: [[slnc N]] at each spot" \
+        [ "$out" = '**Heading here** [[slnc 700]] 1 [[slnc 150]] **First item** [[slnc 700]] Found [[slnc 500]] one thing was wrong. Did [[slnc 500]] fixed it.' ]
+    _st_arm pauses-wrap; _st_file "$P2"
+    out="$(printf 'aaaa bbbb cccc dddd eeee\nffff gggg hhhh iiii jjjj\nkkkk.\n' | _st --print --stdin)"
+    _ok "a wrapped paragraph (full lines) gets no title pause" [ "$out" = 'aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii jjjj kkkk.' ]
+    out="$(printf 'short line\naaaa bbbb cccc dddd eeee\nend.\n' | _st --print --stdin)"
+    _ok "...but a short line the next word fits on does (control)" [ "$out" = 'short line. aaaa bbbb cccc dddd eeee end.' ]
+    out="$(printf 'Found: [[slnc 9000]] here.\n' | _st --print --stdin)"
+    _ok "copied text still cannot add its own [[slnc]]"     [ "$out" = 'Found [[slnc 150]] [ [slnc 9000]] here.' ]
+    _st --set pause_label 400 >/dev/null 2>&1; rc=$?
+    _st --set pause_title loud >/dev/null 2>&1; rc2=$?
+    _ok "--set pause_label 400 (no such pause) and pause_title loud: 3" eval '[ "$rc" = 3 ] && [ "$rc2" = 3 ]'
+    _st --set lead_in 2001 >/dev/null 2>&1; rc=$?
+    _st --set lead_in 0300 >/dev/null 2>&1; rc2=$?
+    _ok "--set lead_in 2001 and 0300: 3"                    eval '[ "$rc" = 3 ] && [ "$rc2" = 3 ]'
+    _st --set pause_number 700 >/dev/null 2>&1; rc=$?
+    _ok "--set pause_number 700 saves it"                   eval '[ "$rc" = 0 ] && [ "$(_st --get pause_number)" = 700 ]'
+    _st --reset pause_number >/dev/null 2>&1
+    _ok "--reset pause_number writes sentence back"         [ "$(_st --get pause_number)" = sentence ]
+    out="$(_st --settings 2>&1)"
+    _ok "--settings shows the pauses and the lead-in"       eval '_has "$out" "pause_title   sentence (a full stop" && _has "$out" "lead_in       0 ms"'
+    _st_arm lead-in; _st_file "${P2/lead_in=0/lead_in=300}"
+    echo "hello world" | STANDIN_MS_PER_CHAR=20 _st --stdin >/dev/null 2>&1; _st_idle
+    _ok "lead_in=300: 14400 zero samples before the voice"  [ "$(_runs 1)" = "0*14400 7000*$(_n 11 20)" ]
+    _st_arm lead-in-queue; _st_file "${P2/lead_in=0/lead_in=300}"; _hold
+    echo "$t1" | STANDIN_MS_PER_CHAR=100 _st --stdin >/dev/null 2>&1; _wait_for 5 _size_is 1 $((n1 * 2 + 28800))
+    echo "$t2" | STANDIN_MS_PER_CHAR=100 _st --stdin --queue --profile simone_fast >/dev/null 2>&1
+    _release; _st_idle
+    _ok "...only in front of a line, never a queued voice"  [ "$(_runs 1)" = "0*14400 7000*$n1 -9000*$n2" ]
+
     echo "Settings and exit codes (v6, v7)"
     _st_arm settings
     _ok "a missing file is written..."                      [ "$(_st --get all)" = "rate=420
 volume=60
 voice=$aaron
-notify=on" ]
+notify=on
+$NEWK_DEF" ]
     _ok "...as a [default] profile"                         _has "$(_cfg)" "[default]"
     _st --set rate 300 >/dev/null 2>&1
     _ok "--set rate saves"                                  [ "$(_st --get rate)" = 300 ]
@@ -2936,7 +3159,7 @@ notify=off
     _st_cleanup
     trap - EXIT INT TERM
     echo
-    local ran=$((pass + fail)) expected=214
+    local ran=$((pass + fail)) expected=227
     if [ "$fail" -eq 0 ] && [ $((ran + skipped)) -eq "$expected" ]; then
         if [ "$skipped" -eq 0 ]; then echo "speak-clipboard --selftest: all $pass checks passed.";
         else echo "speak-clipboard --selftest: all $pass checks passed, $skipped skipped (said above why)."; fi
@@ -2962,6 +3185,8 @@ notify=off
 # across the exec, and --profile goes along so it is the same profile.
 _save_showing_change() {
     local before="${saved_rate:-$_default_rate}|${saved_volume:-$_default_volume}|${saved_voice:-$_default_voice}|${saved_notify:-$_default_notify}"
+    before="$before|${saved_pause_title:-$_default_pause_title}|${saved_pause_label:-$_default_pause_label}"
+    before="$before|${saved_pause_number:-$_default_pause_number}|${saved_lead_in:-$_default_lead_in}"
     # A file that cannot be read is never written over: with nothing read,
     # a --set used to replace both profiles with one [default] (2026-10-10
     # review). Same for a settings path that is a folder.
@@ -2996,13 +3221,14 @@ show_profiles() {
     for ((i = 0; i < ${#p_name[@]}; i++)); do
         [ ${#p_name[i]} -le "$w" ] || w=${#p_name[i]}
     done
-    printf '  %-*s %-5s %-7s %-8s %s\n' "$w" PROFILE RATE VOLUME VOICE NOTIFY
+    printf '  %-*s %-5s %-7s %-8s %-7s %-9s %-9s %-9s %s\n' "$w" PROFILE RATE VOLUME VOICE NOTIFY TITLE LABEL NUMBER LEAD_IN
     for ((i = 0; i < ${#p_name[@]}; i++)); do
         if _is_removed "${p_name[i]}"; then removed=$((removed + 1)); continue; fi
         mark=" "; note=""
         if [ "$first" = 1 ]; then mark="*"; note="   (first: used without --profile)"; first=0; fi
-        printf '%s %-*s %-5s %-7s %-8s %s%s\n' "$mark" "$w" "${p_name[i]}" "${pr_rate[i]}" "${pr_volume[i]}" \
-            "$(_voice_name "${pr_voice[i]}")" "${pr_notify[i]}" "$note"
+        printf '%s %-*s %-5s %-7s %-8s %-7s %-9s %-9s %-9s %s%s\n' "$mark" "$w" "${p_name[i]}" "${pr_rate[i]}" "${pr_volume[i]}" \
+            "$(_voice_name "${pr_voice[i]}")" "${pr_notify[i]}" "${pr_pause_title[i]}" "${pr_pause_label[i]}" \
+            "${pr_pause_number[i]}" "${pr_lead_in[i]}" "$note"
     done
     echo
     echo "Use one: speak-clipboard --profile NAME (any command). Settings: speak-clipboard --settings --profile NAME"
@@ -3058,8 +3284,7 @@ case "$mode" in
         done
         _first_usable; src=$_fp
         _new_profile_slot "$profile_arg" -1
-        pr_rate[_np]="${pr_rate[src]}"; pr_volume[_np]="${pr_volume[src]}"
-        pr_voice[_np]="${pr_voice[src]}"; pr_notify[_np]="${pr_notify[src]}"
+        for k in "${_keys[@]}"; do eval "pr_$k[_np]=\"\${pr_$k[src]}\""; done
         src="${p_name[src]}"; _pi=-1
         _write_settings || exit 4
         echo "New profile [$profile_arg], a copy of [$src]. Change it: speak-clipboard --set rate N --profile $profile_arg"
@@ -3095,8 +3320,13 @@ case "$mode" in
             volume) echo "$volume" ;;
             voice)  echo "$_preferred_voice" ;;
             notify) echo "$notify" ;;
-            all)    printf 'rate=%s\nvolume=%s\nvoice=%s\nnotify=%s\n' "$rate" "$volume" "$_preferred_voice" "$notify" ;;
-            *) _die_with_help 2 "--get takes rate, volume, voice or notify, not '$set_key'" ;;
+            pause_title)  echo "$pause_title" ;;
+            pause_label)  echo "$pause_label" ;;
+            pause_number) echo "$pause_number" ;;
+            lead_in)      echo "$lead_in" ;;
+            all)    printf 'rate=%s\nvolume=%s\nvoice=%s\nnotify=%s\npause_title=%s\npause_label=%s\npause_number=%s\nlead_in=%s\n' \
+                        "$rate" "$volume" "$_preferred_voice" "$notify" "$pause_title" "$pause_label" "$pause_number" "$lead_in" ;;
+            *) _die_with_help 2 "--get takes rate, volume, voice, notify, pause_title, pause_label, pause_number or lead_in, not '$set_key'" ;;
         esac
         exit 0 ;;
     voices)   show_voices; exit $? ;;
@@ -3117,7 +3347,12 @@ case "$mode" in
                     f_voice="$_picked_voice" ;;
             notify) _valid_notify "$set_value" || _die_with_help 3 "notify takes on or off"
                     f_notify="$set_value" ;;
-            *) _die_with_help 2 "--set takes rate, volume, voice or notify, not '$set_key'" ;;
+            pause_title|pause_label|pause_number)
+                    _valid_pause "$set_value" || _die_with_help 3 "$set_key takes none, short, sentence, or a whole number of ms 500-5000"
+                    eval "f_$set_key=\$set_value" ;;
+            lead_in) _valid_lead_in "$set_value" || _die_with_help 3 "lead_in takes a whole number of ms 0-2000 (no leading zeros)"
+                    f_lead_in="$set_value" ;;
+            *) _die_with_help 2 "--set takes rate, volume, voice, notify, pause_title, pause_label, pause_number or lead_in, not '$set_key'" ;;
         esac
         _save_showing_change ;;
     reset)
@@ -3126,8 +3361,13 @@ case "$mode" in
             volume) f_volume="$_default_volume" ;;
             voice)  f_voice="$_default_voice" ;;
             notify) f_notify="$_default_notify" ;;
-            all)    f_rate="$_default_rate"; f_volume="$_default_volume"; f_voice="$_default_voice"; f_notify="$_default_notify" ;;
-            *) _die_with_help 2 "--reset takes rate, volume, voice, notify or all, not '$set_key'" ;;
+            all)    f_rate="$_default_rate"; f_volume="$_default_volume"; f_voice="$_default_voice"; f_notify="$_default_notify"
+                    f_pause_title="$_default_pause_title"; f_pause_label="$_default_pause_label"; f_pause_number="$_default_pause_number"; f_lead_in="$_default_lead_in" ;;
+            pause_title)  f_pause_title="$_default_pause_title" ;;
+            pause_label)  f_pause_label="$_default_pause_label" ;;
+            pause_number) f_pause_number="$_default_pause_number" ;;
+            lead_in)      f_lead_in="$_default_lead_in" ;;
+            *) _die_with_help 2 "--reset takes rate, volume, voice, notify, pause_title, pause_label, pause_number, lead_in or all, not '$set_key'" ;;
         esac
         _save_showing_change ;;
 esac

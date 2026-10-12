@@ -287,3 +287,77 @@ right. Selftest: 212 checks.
   ruled to leave both as they are. Q21 v1 said the value error wins for `--set`
   too, which was not true of the script; A07 replaces D-20261012-A06 for that
   reason.
+
+## Pauses (v9, 2026-10-12)
+
+Asked in session dotfiles-main-2 (numbered there Q2-Q5) with Gavin's own
+example: a "Found and Did" summary with a heading, numbered items with bold
+titles, and "Found:" / "Did:" lines. Two problems: a heading or an item's
+title ran straight into the next words (the cleaner joins every line into
+one), and the pause after "Found:", "Did:" or "2." went anywhere from none
+to about 290 ms.
+
+### What the voice can do (measured, Aaron, 440 wpm)
+
+Each mark measured in three sentences (`chars.py`, below); the middle value:
+
+| Pause                         | After                                            |
+| ----------------------------- | ------------------------------------------------ |
+| none                          | a space, `"` `/` `*` `#`                         |
+| about 80 ms                   | `,` `...` `-` `--` dashes `)` `\|`               |
+| 110-130 ms, uneven            | `;` `:` `. . .`                                  |
+| 270-290 ms                    | `.` `!` `?` `..` and any line break              |
+| 150 ms, steady                | `[[slnc N]]` for any N from 50 to 450            |
+| N plus about 90 ms            | `[[slnc N]]` from 500 up (500 -> 590, 1000 -> 1090) |
+
+So there is no pause between about 150 and 500 ms, and no punctuation gives
+a short steady one; `[[slnc]]` does. After a list number, `[[slnc 150]]`
+measured only 70-100 ms and a full stop about 215 ms.
+
+### Settings (Q3 v2: the voice's own pauses)
+
+Per profile, each `none` (the text as it was), `short` (`[[slnc 150]]`),
+`sentence` (a full stop) or `500`-`5000` (`[[slnc N]]`):
+
+- `pause_title` (default `sentence`, Q2-a): after a line that ends without
+  punctuation where the break was meant: a blank line follows, or the next
+  line's first word would have fitted on it. A wrapped line is full up to the
+  widest line of the selection, so it gets none.
+- `pause_label` (default `short`, Q2-b): after one to three words and a colon
+  starting a line, as in `Found:`.
+- `pause_number` (default `sentence`, Q2-c and Q4): after `1.` or `1)`
+  starting a line.
+
+The cleaner marks the spots while the lines are still apart and writes the
+pauses after the join. Copied text still cannot add a speech command: `[[` is
+split before, and the mark bytes are dropped with the rest of non-ASCII.
+
+### lead_in (Q5)
+
+Gavin heard the first word or two go missing at times. Measured on 12 Oct:
+one player at a time, however fast the presses (six 0.3 s apart: started,
+then replaced x5; six at the same instant: one ran, five busy; nothing left
+after `--stop`). The output was Bose QC headphones over Bluetooth, which drop
+the start of sound while they wake. `lead_in` (ms, 0-2000, default 300) is
+silence written in front of the first voice of a new line only, never in
+front of a queued voice. Whether 300 is enough is for Gavin's ears.
+
+### Measured on the example (before -> after)
+
+Heading 0 -> 330 ms; item titles 0/190/0 -> 280/260/270 ms; `Found` 220/0/150
+-> 120/110/130 ms; `Did` 50/0/0 -> 150/120/180 ms; numbers about 215 ms
+either way. The renders are repeatable: two runs of the same text gave the
+same pauses to the 10 ms.
+
+### Tools
+
+`docs/reference/speak-clipboard-pauses/`: `pauses.py` measures every pause in
+a text and labels it by the words before it, by rendering the text cut off
+at each break; `--compare A.json B.json` shows two runs side by side.
+`chars.py` is the table above. `sample.md` is Gavin's example. Both need
+say2, so they run outside the Claude sandbox.
+
+### Also found
+
+- Six presses at the same instant wiped `speak-clipboard.log` (each trims it
+  through the same temp name at exit). W-20261012-A09.
