@@ -1,0 +1,56 @@
+{
+ "script": "none",
+ "rate": 440,
+ "voice": "en-US:natural:male:Aaron:premium:5030",
+ "text": "Secret files. Found; the deletion rules were missing the new ruling about secret files. Did; added it. Next one. Found; 31 tests could pass even when the program was wrong. Did; fixed all 31.",
+ "seconds": 5.81,
+ "silences": 8,
+ "breaks": [
+  {
+   "at": 0.47,
+   "after": "Secret files.",
+   "ms": 280
+  },
+  {
+   "at": 0.95,
+   "after": "Secret files. Found;",
+   "ms": 0
+  },
+  {
+   "at": 2.27,
+   "after": "ruling about secret files.",
+   "ms": 210
+  },
+  {
+   "at": 2.67,
+   "after": "about secret files. Did;",
+   "ms": 60
+  },
+  {
+   "at": 2.81,
+   "after": "files. Did; added it.",
+   "ms": 280
+  },
+  {
+   "at": 3.32,
+   "after": "added it. Next one.",
+   "ms": 250
+  },
+  {
+   "at": 3.76,
+   "after": "it. Next one. Found;",
+   "ms": 0
+  },
+  {
+   "at": 4.96,
+   "after": "the program was wrong.",
+   "ms": 300
+  },
+  {
+   "at": 5.39,
+   "after": "program was wrong. Did;",
+   "ms": 50
+  }
+ ],
+ "unclaimed": []
+}

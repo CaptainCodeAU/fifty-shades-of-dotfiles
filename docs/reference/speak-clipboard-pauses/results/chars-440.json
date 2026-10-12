@@ -1,0 +1,402 @@
+{
+ "rate": 440,
+ "voice": "en-US:natural:male:Aaron:premium:5030",
+ "rows": [
+  {
+   "label": "(no mark, baseline)",
+   "mark": "",
+   "ms": [
+    80,
+    0,
+    0
+   ],
+   "median": 0,
+   "added_ms": 0
+  },
+  {
+   "label": ",",
+   "mark": ",",
+   "ms": [
+    90,
+    80,
+    70
+   ],
+   "median": 80,
+   "added_ms": 60
+  },
+  {
+   "label": ";",
+   "mark": ";",
+   "ms": [
+    150,
+    0,
+    110
+   ],
+   "median": 110,
+   "added_ms": -20
+  },
+  {
+   "label": ":",
+   "mark": ":",
+   "ms": [
+    250,
+    110,
+    130
+   ],
+   "median": 130,
+   "added_ms": 80
+  },
+  {
+   "label": ".",
+   "mark": ".",
+   "ms": [
+    290,
+    200,
+    330
+   ],
+   "median": 290,
+   "added_ms": 160
+  },
+  {
+   "label": "!",
+   "mark": "!",
+   "ms": [
+    280,
+    190,
+    270
+   ],
+   "median": 270,
+   "added_ms": 120
+  },
+  {
+   "label": "?",
+   "mark": "?",
+   "ms": [
+    290,
+    160,
+    290
+   ],
+   "median": 290,
+   "added_ms": 100
+  },
+  {
+   "label": "?!",
+   "mark": "?!",
+   "ms": [
+    280,
+    190,
+    270
+   ],
+   "median": 270,
+   "added_ms": 120
+  },
+  {
+   "label": "..",
+   "mark": "..",
+   "ms": [
+    290,
+    200,
+    330
+   ],
+   "median": 290,
+   "added_ms": 160
+  },
+  {
+   "label": "...",
+   "mark": "...",
+   "ms": [
+    90,
+    80,
+    70
+   ],
+   "median": 80,
+   "added_ms": 60
+  },
+  {
+   "label": "... (unicode)",
+   "mark": "\u2026",
+   "ms": [
+    90,
+    80,
+    70
+   ],
+   "median": 80,
+   "added_ms": 60
+  },
+  {
+   "label": ". . .",
+   "mark": ". . .",
+   "ms": [
+    230,
+    80,
+    120
+   ],
+   "median": 120,
+   "added_ms": 60
+  },
+  {
+   "label": ". .",
+   "mark": ". .",
+   "ms": [
+    230,
+    80,
+    120
+   ],
+   "median": 120,
+   "added_ms": 60
+  },
+  {
+   "label": ". . . . .",
+   "mark": ". . . . .",
+   "ms": [
+    230,
+    80,
+    120
+   ],
+   "median": 120,
+   "added_ms": 60
+  },
+  {
+   "label": " -",
+   "mark": " -",
+   "ms": [
+    90,
+    80,
+    70
+   ],
+   "median": 80,
+   "added_ms": 60
+  },
+  {
+   "label": " --",
+   "mark": " --",
+   "ms": [
+    90,
+    80,
+    70
+   ],
+   "median": 80,
+   "added_ms": 60
+  },
+  {
+   "label": "em dash",
+   "mark": "\u2014",
+   "ms": [
+    90,
+    80,
+    70
+   ],
+   "median": 80,
+   "added_ms": 60
+  },
+  {
+   "label": " em dash ",
+   "mark": " \u2014",
+   "ms": [
+    90,
+    80,
+    70
+   ],
+   "median": 80,
+   "added_ms": 60
+  },
+  {
+   "label": "en dash",
+   "mark": " \u2013",
+   "ms": [
+    90,
+    80,
+    70
+   ],
+   "median": 80,
+   "added_ms": 60
+  },
+  {
+   "label": "( ... )",
+   "mark": " (aside)",
+   "ms": [
+    70,
+    50,
+    0
+   ],
+   "median": 50,
+   "added_ms": 240
+  },
+  {
+   "label": ")",
+   "mark": ")",
+   "ms": [
+    90,
+    80,
+    70
+   ],
+   "median": 80,
+   "added_ms": 60
+  },
+  {
+   "label": "\"",
+   "mark": "\"",
+   "ms": [
+    80,
+    0,
+    0
+   ],
+   "median": 0,
+   "added_ms": 0
+  },
+  {
+   "label": "/",
+   "mark": " /",
+   "ms": [
+    80,
+    0,
+    0
+   ],
+   "median": 0,
+   "added_ms": 0
+  },
+  {
+   "label": "|",
+   "mark": " |",
+   "ms": [
+    90,
+    80,
+    70
+   ],
+   "median": 80,
+   "added_ms": 60
+  },
+  {
+   "label": "*",
+   "mark": " *",
+   "ms": [
+    80,
+    0,
+    0
+   ],
+   "median": 0,
+   "added_ms": 0
+  },
+  {
+   "label": "#",
+   "mark": " #",
+   "ms": [
+    0,
+    0,
+    0
+   ],
+   "median": 0,
+   "added_ms": 100
+  },
+  {
+   "label": "newline",
+   "mark": "\n",
+   "ms": [
+    290,
+    200,
+    330
+   ],
+   "median": 290,
+   "added_ms": 160
+  },
+  {
+   "label": "two newlines",
+   "mark": "\n\n",
+   "ms": [
+    290,
+    200,
+    330
+   ],
+   "median": 290,
+   "added_ms": 160
+  },
+  {
+   "label": ". + newline",
+   "mark": ".\n",
+   "ms": [
+    290,
+    200,
+    330
+   ],
+   "median": 290,
+   "added_ms": 160
+  },
+  {
+   "label": ", + newline",
+   "mark": ",\n",
+   "ms": [
+    290,
+    200,
+    310
+   ],
+   "median": 290,
+   "added_ms": 160
+  },
+  {
+   "label": "[[slnc 100]]",
+   "mark": " [[slnc 100]]",
+   "ms": [
+    180,
+    150,
+    90
+   ],
+   "median": 150,
+   "added_ms": 106
+  },
+  {
+   "label": "[[slnc 200]]",
+   "mark": " [[slnc 200]]",
+   "ms": [
+    180,
+    150,
+    90
+   ],
+   "median": 150,
+   "added_ms": 106
+  },
+  {
+   "label": "[[slnc 300]]",
+   "mark": " [[slnc 300]]",
+   "ms": [
+    180,
+    150,
+    90
+   ],
+   "median": 150,
+   "added_ms": 120
+  },
+  {
+   "label": "[[slnc 500]]",
+   "mark": " [[slnc 500]]",
+   "ms": [
+    590,
+    500,
+    640
+   ],
+   "median": 590,
+   "added_ms": 448
+  },
+  {
+   "label": "[[slnc 1000]]",
+   "mark": " [[slnc 1000]]",
+   "ms": [
+    1090,
+    1000,
+    1130
+   ],
+   "median": 1090,
+   "added_ms": 960
+  },
+  {
+   "label": ". [[slnc 300]]",
+   "mark": ". [[slnc 300]]",
+   "ms": [
+    230,
+    80,
+    130
+   ],
+   "median": 130,
+   "added_ms": 48
+  }
+ ]
+}

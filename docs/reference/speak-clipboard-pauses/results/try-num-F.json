@@ -1,0 +1,131 @@
+{
+ "script": "none",
+ "rate": 440,
+ "voice": "en-US:natural:male:Aaron:premium:5030",
+ "text": "**Version I [[slnc 150]] Found and Did**. Four things done. All saved and on GitHub. 1 [[slnc 150]] [[slnc 150]] **Secret files**. Found [[slnc 150]] the deletion rules were missing the new ruling about secret files. Did [[slnc 150]] added it. 2 [[slnc 250]] [[slnc 250]] **speak-clipboard tests**. Found [[slnc 150]] 31 tests could pass even when the program was wrong. Did [[slnc 150]] fixed all 31. 3 [[slnc 350]] [[slnc 350]] **New test check**. Found [[slnc 150]] nothing stopped that kind of test being written again. Did [[slnc 150]] added a check that catches it.",
+ "seconds": 14.26,
+ "silences": 21,
+ "breaks": [
+  {
+   "at": 0.42,
+   "after": "Version I",
+   "ms": 110
+  },
+  {
+   "at": 0.94,
+   "after": "Found and Did",
+   "ms": 320
+  },
+  {
+   "at": 1.58,
+   "after": "Four things done",
+   "ms": 350
+  },
+  {
+   "at": 2.46,
+   "after": "and on GitHub",
+   "ms": 210
+  },
+  {
+   "at": 2.84,
+   "after": "on GitHub 1",
+   "ms": 620
+  },
+  {
+   "at": 2.98,
+   "after": "on GitHub 1",
+   "ms": 0
+  },
+  {
+   "at": 3.76,
+   "after": "1 Secret files",
+   "ms": 280
+  },
+  {
+   "at": 4.27,
+   "after": "Secret files Found",
+   "ms": 120
+  },
+  {
+   "at": 5.6,
+   "after": "about secret files",
+   "ms": 220
+  },
+  {
+   "at": 6.0,
+   "after": "secret files Did",
+   "ms": 130
+  },
+  {
+   "at": 6.25,
+   "after": "Did added it",
+   "ms": 770
+  },
+  {
+   "at": 6.65,
+   "after": "added it 2",
+   "ms": 0
+  },
+  {
+   "at": 6.9,
+   "after": "added it 2",
+   "ms": 0
+  },
+  {
+   "at": 7.64,
+   "after": "2 speak-clipboard tests",
+   "ms": 270
+  },
+  {
+   "at": 8.16,
+   "after": "speak-clipboard tests Found",
+   "ms": 120
+  },
+  {
+   "at": 9.41,
+   "after": "program was wrong",
+   "ms": 260
+  },
+  {
+   "at": 9.8,
+   "after": "was wrong Did",
+   "ms": 130
+  },
+  {
+   "at": 10.27,
+   "after": "fixed all 31",
+   "ms": 260
+  },
+  {
+   "at": 10.69,
+   "after": "all 31 3",
+   "ms": 760
+  },
+  {
+   "at": 11.04,
+   "after": "all 31 3",
+   "ms": 0
+  },
+  {
+   "at": 11.7,
+   "after": "New test check",
+   "ms": 270
+  },
+  {
+   "at": 12.21,
+   "after": "test check Found",
+   "ms": 120
+  },
+  {
+   "at": 13.17,
+   "after": "being written again",
+   "ms": 240
+  },
+  {
+   "at": 13.56,
+   "after": "written again Did",
+   "ms": 180
+  }
+ ],
+ "unclaimed": []
+}

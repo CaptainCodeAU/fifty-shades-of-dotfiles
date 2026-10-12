@@ -1,0 +1,171 @@
+{
+ "rate": 440,
+ "voice": "en-US:natural:male:Aaron:premium:5030",
+ "rows": [
+  {
+   "label": "(no mark, baseline)",
+   "mark": "",
+   "ms": [
+    80,
+    0,
+    0
+   ],
+   "median": 0,
+   "added_ms": 0
+  },
+  {
+   "label": "[[slnc 0]]",
+   "mark": " [[slnc 0]]",
+   "ms": [
+    90,
+    0,
+    0
+   ],
+   "median": 0,
+   "added_ms": -14
+  },
+  {
+   "label": "[[slnc 50]]",
+   "mark": " [[slnc 50]]",
+   "ms": [
+    180,
+    150,
+    90
+   ],
+   "median": 150,
+   "added_ms": 106
+  },
+  {
+   "label": "[[slnc 150]]",
+   "mark": " [[slnc 150]]",
+   "ms": [
+    180,
+    150,
+    90
+   ],
+   "median": 150,
+   "added_ms": 106
+  },
+  {
+   "label": "[[slnc 250]]",
+   "mark": " [[slnc 250]]",
+   "ms": [
+    180,
+    150,
+    90
+   ],
+   "median": 150,
+   "added_ms": 106
+  },
+  {
+   "label": "[[slnc 300]]",
+   "mark": " [[slnc 300]]",
+   "ms": [
+    180,
+    150,
+    90
+   ],
+   "median": 150,
+   "added_ms": 120
+  },
+  {
+   "label": "[[slnc 320]]",
+   "mark": " [[slnc 320]]",
+   "ms": [
+    180,
+    150,
+    90
+   ],
+   "median": 150,
+   "added_ms": 106
+  },
+  {
+   "label": "[[slnc 350]]",
+   "mark": " [[slnc 350]]",
+   "ms": [
+    180,
+    150,
+    90
+   ],
+   "median": 150,
+   "added_ms": 106
+  },
+  {
+   "label": "[[slnc 380]]",
+   "mark": " [[slnc 380]]",
+   "ms": [
+    180,
+    150,
+    90
+   ],
+   "median": 150,
+   "added_ms": 106
+  },
+  {
+   "label": "[[slnc 400]]",
+   "mark": " [[slnc 400]]",
+   "ms": [
+    180,
+    150,
+    90
+   ],
+   "median": 150,
+   "added_ms": 106
+  },
+  {
+   "label": "[[slnc 450]]",
+   "mark": " [[slnc 450]]",
+   "ms": [
+    180,
+    150,
+    90
+   ],
+   "median": 150,
+   "added_ms": 106
+  },
+  {
+   "label": "[[slnc 600]]",
+   "mark": " [[slnc 600]]",
+   "ms": [
+    690,
+    600,
+    740
+   ],
+   "median": 690,
+   "added_ms": 548
+  },
+  {
+   "label": "[[slnc 800]]",
+   "mark": " [[slnc 800]]",
+   "ms": [
+    890,
+    800,
+    940
+   ],
+   "median": 890,
+   "added_ms": 748
+  },
+  {
+   "label": "Found-style: . [[slnc 500]]",
+   "mark": ". [[slnc 500]]",
+   "ms": [
+    590,
+    500,
+    640
+   ],
+   "median": 590,
+   "added_ms": 448
+  },
+  {
+   "label": ", [[slnc 500]]",
+   "mark": ", [[slnc 500]]",
+   "ms": [
+    590,
+    500,
+    610
+   ],
+   "median": 590,
+   "added_ms": 448
+  }
+ ]
+}

@@ -1,0 +1,116 @@
+{
+ "script": "<session temp folder>/sc-wrap",
+ "rate": 440,
+ "voice": "en-US:natural:male:Aaron:premium:5030",
+ "text": "**Version I [[slnc 150]] Found and Did**. Four things done. All saved and on GitHub. 1. **Secret files**. Found [[slnc 150]] the deletion rules were missing the new ruling about secret files. Did [[slnc 150]] added it. 2. **speak-clipboard tests**. Found [[slnc 150]] 31 tests could pass even when the program was wrong. Did [[slnc 150]] fixed all 31. 3. **New test check**. Found [[slnc 150]] nothing stopped that kind of test being written again. Did [[slnc 150]] added a check that catches it.",
+ "seconds": 13.1,
+ "silences": 23,
+ "breaks": [
+  {
+   "at": 0.42,
+   "after": "Version I",
+   "ms": 110
+  },
+  {
+   "at": 0.94,
+   "after": "Found and Did",
+   "ms": 330
+  },
+  {
+   "at": 1.58,
+   "after": "Four things done",
+   "ms": 350
+  },
+  {
+   "at": 2.46,
+   "after": "and on GitHub",
+   "ms": 250
+  },
+  {
+   "at": 2.84,
+   "after": "on GitHub 1",
+   "ms": 220
+  },
+  {
+   "at": 3.42,
+   "after": "1 Secret files",
+   "ms": 280
+  },
+  {
+   "at": 3.92,
+   "after": "Secret files Found",
+   "ms": 120
+  },
+  {
+   "at": 5.24,
+   "after": "about secret files",
+   "ms": 220
+  },
+  {
+   "at": 5.64,
+   "after": "secret files Did",
+   "ms": 150
+  },
+  {
+   "at": 5.9,
+   "after": "Did added it",
+   "ms": 330
+  },
+  {
+   "at": 6.3,
+   "after": "added it 2",
+   "ms": 90
+  },
+  {
+   "at": 6.98,
+   "after": "2 speak-clipboard tests",
+   "ms": 260
+  },
+  {
+   "at": 7.48,
+   "after": "speak-clipboard tests Found",
+   "ms": 110
+  },
+  {
+   "at": 8.74,
+   "after": "program was wrong",
+   "ms": 250
+  },
+  {
+   "at": 9.12,
+   "after": "was wrong Did",
+   "ms": 120
+  },
+  {
+   "at": 9.6,
+   "after": "fixed all 31",
+   "ms": 310
+  },
+  {
+   "at": 10.02,
+   "after": "all 31 3",
+   "ms": 210
+  },
+  {
+   "at": 10.54,
+   "after": "New test check",
+   "ms": 270
+  },
+  {
+   "at": 11.06,
+   "after": "test check Found",
+   "ms": 130
+  },
+  {
+   "at": 12.02,
+   "after": "being written again",
+   "ms": 240
+  },
+  {
+   "at": 12.4,
+   "after": "written again Did",
+   "ms": 180
+  }
+ ],
+ "unclaimed": []
+}

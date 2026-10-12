@@ -1,4 +1,4 @@
-# speak-clipboard: profiles and `--queue` (built 2026-10-10, v8)
+# speak-clipboard: profiles and `--queue` (built 2026-10-10, v8); pauses and lead-in (2026-10-12, v9)
 
 Designed 2026-10-09/10 in session dotfiles-main with Gavin, by listening tests
 (demos 1-6 below). Every rule here cites the question that settled it
@@ -356,6 +356,24 @@ a text and labels it by the words before it, by rendering the text cut off
 at each break; `--compare A.json B.json` shows two runs side by side.
 `chars.py` is the table above. `sample.md` is Gavin's example. Both need
 say2, so they run outside the Claude sandbox.
+`results/` holds the runs behind every number in this section: `before.json`
+and `before-2.json` (v8, two runs, identical), `after.json` (v9 defaults),
+`chars-440.json` and `slnc-440.json` (the table), and `try-*.json` (the
+label and list-number trials that settled Q3 and Q4). Each holds the spoken
+text, so a run can be repeated. Recordings (`.wav`) are not kept: run
+`pauses.py` again to make one.
+
+### Known limits
+
+- Measured with Aaron at 440 wpm only. Simone, and other rates, may pause
+  for other lengths; `chars.py --rate N --voice KEY` measures them.
+- `pauses.py` gives a silence to the break whose cut-off piece ends nearest
+  to it. Two breaks under about 0.15 s apart can swap: "2." after "added it."
+  reads 40-90 ms in every trial, while "1." and "3." read about 215 ms.
+- A recording from `pauses.py` comes straight from say2, so it has no
+  lead-in; only the line player adds one.
+- Whether 300 ms of lead-in is enough for the Bluetooth headphones is not
+  measured: it needs Gavin to listen.
 
 ### Also found
 

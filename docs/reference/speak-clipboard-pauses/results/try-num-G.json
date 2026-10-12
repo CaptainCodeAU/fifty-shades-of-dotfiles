@@ -1,0 +1,121 @@
+{
+ "script": "none",
+ "rate": 440,
+ "voice": "en-US:natural:male:Aaron:premium:5030",
+ "text": "**Version I [[slnc 150]] Found and Did**. Four things done. All saved and on GitHub. 1 [[slnc 300]] **Secret files**. Found [[slnc 150]] the deletion rules were missing the new ruling about secret files. Did [[slnc 150]] added it. 2 [[slnc 300]] **speak-clipboard tests**. Found [[slnc 150]] 31 tests could pass even when the program was wrong. Did [[slnc 150]] fixed all 31. 3 [[slnc 300]] **New test check**. Found [[slnc 150]] nothing stopped that kind of test being written again. Did [[slnc 150]] added a check that catches it.",
+ "seconds": 12.78,
+ "silences": 22,
+ "breaks": [
+  {
+   "at": 0.42,
+   "after": "Version I",
+   "ms": 110
+  },
+  {
+   "at": 0.94,
+   "after": "Found and Did",
+   "ms": 320
+  },
+  {
+   "at": 1.58,
+   "after": "Four things done",
+   "ms": 350
+  },
+  {
+   "at": 2.46,
+   "after": "and on GitHub",
+   "ms": 290
+  },
+  {
+   "at": 2.84,
+   "after": "on GitHub 1",
+   "ms": 70
+  },
+  {
+   "at": 3.33,
+   "after": "1 Secret files",
+   "ms": 270
+  },
+  {
+   "at": 3.84,
+   "after": "Secret files Found",
+   "ms": 110
+  },
+  {
+   "at": 5.16,
+   "after": "about secret files",
+   "ms": 260
+  },
+  {
+   "at": 5.56,
+   "after": "secret files Did",
+   "ms": 200
+  },
+  {
+   "at": 5.82,
+   "after": "Did added it",
+   "ms": 0
+  },
+  {
+   "at": 6.21,
+   "after": "added it 2",
+   "ms": 40
+  },
+  {
+   "at": 6.75,
+   "after": "2 speak-clipboard tests",
+   "ms": 270
+  },
+  {
+   "at": 7.27,
+   "after": "speak-clipboard tests Found",
+   "ms": 120
+  },
+  {
+   "at": 8.52,
+   "after": "program was wrong",
+   "ms": 260
+  },
+  {
+   "at": 8.91,
+   "after": "was wrong Did",
+   "ms": 130
+  },
+  {
+   "at": 9.38,
+   "after": "fixed all 31",
+   "ms": 270
+  },
+  {
+   "at": 9.8,
+   "after": "all 31 3",
+   "ms": 100
+  },
+  {
+   "at": 10.23,
+   "after": "New test check",
+   "ms": 270
+  },
+  {
+   "at": 10.73,
+   "after": "test check Found",
+   "ms": 120
+  },
+  {
+   "at": 11.69,
+   "after": "being written again",
+   "ms": 240
+  },
+  {
+   "at": 12.08,
+   "after": "written again Did",
+   "ms": 180
+  }
+ ],
+ "unclaimed": [
+  {
+   "start": 6.01,
+   "ms": 150
+  }
+ ]
+}

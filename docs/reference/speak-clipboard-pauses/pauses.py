@@ -96,7 +96,7 @@ def measure(sample, out, script, rate, voice):
     tail = [i for i, (s, e) in enumerate(sils) if abs(e - total) < 0.011]
     other = [{"start": round(s, 2), "ms": round((e - s) * 1000)}
              for i, (s, e) in enumerate(sils) if i not in claimed and i not in lead + tail]
-    res = {"script": script, "rate": rate, "voice": voice, "text": text,
+    res = {"script": script.replace(__import__("os").path.expanduser("~"), "~"), "rate": rate, "voice": voice, "text": text,
            "seconds": round(total, 2), "silences": len(sils), "breaks": rows, "unclaimed": other}
     json.dump(res, open(out, "w"), indent=1)
     show(res)
