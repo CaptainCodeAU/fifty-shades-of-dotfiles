@@ -2433,7 +2433,7 @@ rate=410
     _ok "...control: a known profile in the same arm does render" [ -e "$A/standin/say2.log" ]
     i="$(_n_lines "$A/standin/notify.log")"
     _st --no-notify --get rate --profile nope >/dev/null 2>&1; rc=$?
-    _ok "--no-notify: exit 6, no notification"              [ "$rc" = 6 ] && [ "$i" -ge 1 ] && [ "$(_n_lines "$A/standin/notify.log")" = "$i" ]
+    _ok "--no-notify: exit 6, no notification"              eval '[ "$rc" = 6 ] && [ "$i" -ge 1 ] && [ "$(_n_lines "$A/standin/notify.log")" = "$i" ]'
     # D-20261012-A07 Q20 and Q21. One eval each, so _ok judges all of it.
     echo "hello world" | _st --print --stdin --profile nope >/dev/null 2>&1; rc=$?
     _ok "--print with an unknown profile: exit 6, no notification" eval '[ "$rc" = 6 ] && [ "$i" -ge 1 ] && [ "$(_n_lines "$A/standin/notify.log")" = "$i" ]'
@@ -2472,10 +2472,10 @@ rate=440"
     done
     _ok "...and no profile called --help appeared"         _lacks "$(_cfg)" "[--help]"
     _st --new-profile Fast-2 >/dev/null 2>&1; rc=$?
-    _ok "--new-profile Fast-2 (capitals, dash, digit) works" [ "$rc" = 0 ] && _has "$(_cfg)" "[Fast-2]"
+    _ok "--new-profile Fast-2 (capitals, dash, digit) works" eval '[ "$rc" = 0 ] && _has "$(_cfg)" "[Fast-2]"'
     _st --set rate 300 --profile extr >/dev/null 2>&1; rc=$?
     _ok "--set with a mistyped profile exits 6..."          [ "$rc" = 6 ]
-    _ok "...and makes no stray profile beside the real one" _lacks "$(_cfg)" "[extr]" && _has "$(_cfg)" "[extra]"
+    _ok "...and makes no stray profile beside the real one" eval '_lacks "$(_cfg)" "[extr]" && _has "$(_cfg)" "[extra]"'
     _st --set rate 333 --profile extra >/dev/null 2>&1
     _ok "--set --profile changes only that profile"         [ "$(_st --get rate --profile extra) $(_st --get rate)" = "333 440" ]
     _ok "...and its box names the profile"                  _has "$(_st --settings --profile extra)" "profile extra"
@@ -2558,7 +2558,7 @@ notify=off" ]
     _st_arm leftover-tmp; _st_file "$P2"
     printf 'x' >"$A/cfg/speak-clipboard/settings.tmp"; chmod 444 "$A/cfg/speak-clipboard/settings.tmp"
     _st --set rate 300 >/dev/null 2>&1; rc=$?
-    _ok "a leftover read-only settings.tmp does not block a --set" [ "$rc" = 0 ] && [ "$(_st --get rate)" = 300 ]
+    _ok "a leftover read-only settings.tmp does not block a --set" eval '[ "$rc" = 0 ] && [ "$(_st --get rate)" = 300 ]'
     _st_arm one-line; _st_file "$P2"; cp "$A/cfg/speak-clipboard/settings" "$A/before"
     _st --set volume 55 --profile simone_fast >/dev/null 2>&1
     _ok "--set changes exactly one line"                    [ "$(diff "$A/before" "$A/cfg/speak-clipboard/settings" | grep -c '^[<>]')" = 2 ]
@@ -2569,7 +2569,7 @@ voice=$aaron
 notify=off
 "
     echo "hello world" | _st --stdin >/dev/null 2>&1; rc=$?; _st_idle
-    _ok "rate=0440 in the file is a bad value (exit 10), not octal" [ "$rc" = 10 ] && _has "$(_log_last)" "settings=bad:rate"
+    _ok "rate=0440 in the file is a bad value (exit 10), not octal" eval '[ "$rc" = 10 ] && _has "$(_log_last)" "settings=bad:rate"'
     _st --set rate 0440 >/dev/null 2>&1; rc=$?
     _ok "--set rate 0440 is refused (3)"                    [ "$rc" = 3 ]
 
@@ -2584,7 +2584,7 @@ notify=off
     _ok "...and is logged as queued"                        _has "$(_log_last)" "outcome=queued profile=simone_fast"
     _release; _ok "...the line ends by itself" _st_idle
     _ok "both voices, back to back, in ONE player"          [ "$(_runs 1)" = "7000*$n1 -9000*$n2" ]
-    _ok "...no second player was started"                  [ -e "$A/standin/ffplay.1.exit" ] && [ ! -e "$A/standin/ffplay.2.pcm" ]
+    _ok "...no second player was started"                  eval '[ -e "$A/standin/ffplay.1.exit" ] && [ ! -e "$A/standin/ffplay.2.pcm" ]'
     _st_arm queue-gap; _st_file "$P2"; _hold
     echo "$t1" | _st --stdin >/dev/null 2>&1; _wait_for 5 _size_is 1 $((n1 * 2))
     echo "$t2" | _st --stdin --queue 150 --profile simone_fast >/dev/null 2>&1
@@ -2631,7 +2631,7 @@ notify=off
     echo "$t1" | _st --stdin >/dev/null 2>&1; _wait_for 5 _size_is 1 $((n1 * 2))
     echo $(( $(_now_us) - 100000 )) >"$A/state/herdr/speak-queue.time"
     _st --queue --profile simone_fast >/dev/null 2>&1; rc=$?
-    _ok "a clipboard --queue press 0.1 s after the last: busy, exit 0" [ "$rc" = 0 ] && _has "$(_log_last)" "outcome=busy queue=key-repeat"
+    _ok "a clipboard --queue press 0.1 s after the last: busy, exit 0" eval '[ "$rc" = 0 ] && _has "$(_log_last)" "outcome=busy queue=key-repeat"'
     echo $(( $(_now_us) - 600000 )) >"$A/state/herdr/speak-queue.time"
     _st --queue --profile simone_fast >/dev/null 2>&1
     _ok "...one 0.6 s after: queued"                        _has "$(_log_last)" "outcome=queued"
@@ -2646,7 +2646,7 @@ notify=off
     p=$!; sleep 0.2
     echo "$t2" | _st --stdin >/dev/null 2>&1; rc=$?
     wait "$p"
-    _ok "a press while another holds the lock: busy, exit 0" [ "$rc" = 0 ] && _has "$(_log_last)" "outcome=busy"
+    _ok "a press while another holds the lock: busy, exit 0" eval '[ "$rc" = 0 ] && _has "$(_log_last)" "outcome=busy"'
     # D-20261012-A07 Q18: a lock file that cannot be opened is an error,
     # never busy. Each check is one eval, so _ok judges all of it.
     _st_arm lock-unopenable; _st_file "$P2"
@@ -2664,11 +2664,11 @@ notify=off
     echo "$t1" | _st --stdin >/dev/null 2>&1; _wait_for 5 _size_is 1 $((n1 * 2))
     echo "$t2" | _st --stdin --queue --profile simone_fast >/dev/null 2>&1; _wait_for 5 _renders_are 2
     _st --skip >/dev/null 2>&1; rc=$?
-    _ok "--skip exits 0, logged as skipped"                 [ "$rc" = 0 ] && _has "$(_log_last)" "outcome=skipped"
+    _ok "--skip exits 0, logged as skipped"                 eval '[ "$rc" = 0 ] && _has "$(_log_last)" "outcome=skipped"'
     _wait_for 5 _size_is 2 $((n2 * 2)); _release; _st_idle
-    _ok "...the voice you heard was cut (its player killed)" [ -e "$A/standin/ffplay.1.pcm" ] && [ ! -e "$A/standin/ffplay.1.exit" ]
+    _ok "...the voice you heard was cut (its player killed)" eval '[ -e "$A/standin/ffplay.1.pcm" ] && [ ! -e "$A/standin/ffplay.1.exit" ]'
     _ok "...it was the only voice in that player"           [ "$(_runs 1)" = "7000*$n1" ]
-    _ok "...the next in line played whole, in a new player"  [ "$(_runs 2)" = "-9000*$n2" ] && [ -e "$A/standin/ffplay.2.exit" ]
+    _ok "...the next in line played whole, in a new player"  eval '[ "$(_runs 2)" = "-9000*$n2" ] && [ -e "$A/standin/ffplay.2.exit" ]'
     _ok "...and the two players never ran at once"          [ ! -e "$A/standin/ffplay.2.overlap" ]
     _st_arm skip-gap; _st_file "$P2"
     echo "$t2" | _st --stdin >/dev/null 2>&1
@@ -2677,13 +2677,13 @@ notify=off
     _wait_for 5 _size_is 1 $((n2 * 4 + 288000))
     sleep 0.6
     t0=$(_now_ms); _st --skip >/dev/null 2>&1; _st_idle
-    _ok "--skip during a 3 s gap drops the gap and its voice" [ "$(_runs 1)" = "7000*$n2 0*144000 -9000*$n2" ] && [ ! -e "$A/standin/ffplay.1.exit" ]
-    _ok "...the voice after it plays at once"              [ "$(_runs 2)" = "1500*$n3" ] && [ $(( $(_now_ms) - t0 )) -lt 2500 ]
+    _ok "--skip during a 3 s gap drops the gap and its voice" eval '[ "$(_runs 1)" = "7000*$n2 0*144000 -9000*$n2" ] && [ ! -e "$A/standin/ffplay.1.exit" ]'
+    _ok "...the voice after it plays at once"              eval '[ "$(_runs 2)" = "1500*$n3" ] && [ $(( $(_now_ms) - t0 )) -lt 2500 ]'
     _st_arm skip-last; _st_file "$P2"; _hold
     echo "$t1" | _st --stdin >/dev/null 2>&1; _wait_for 5 _size_is 1 $((n1 * 2))
     t0=$(_now_ms); _st --skip >/dev/null 2>&1; _release
     _ok "--skip on the last voice ends the line"            _st_idle
-    _ok "...at once"                                        [ $(( $(_now_ms) - t0 )) -lt 2000 ] && [ ! -e "$A/standin/ffplay.2.pcm" ]
+    _ok "...at once"                                        eval '[ $(( $(_now_ms) - t0 )) -lt 2000 ] && [ ! -e "$A/standin/ffplay.2.pcm" ]'
     _st_arm skip-twice; _st_file "$P2"; _hold
     echo "$t1" | _st --stdin >/dev/null 2>&1; _wait_for 5 _size_is 1 $((n1 * 2))
     echo "$t2" | _st --stdin --queue --profile simone_fast >/dev/null 2>&1
@@ -2698,7 +2698,7 @@ notify=off
     _ok "--stop is logged as stopped"                       _has "$(_log_last)" "outcome=stopped"
     _ok "...every player and render is gone within 1 s"     _wait_for 1 _all_gone
     _release
-    _ok "...the voice playing was the only one ever played" [ "$(_runs 1)" = "7000*$n1" ] && [ ! -e "$A/standin/ffplay.1.exit" ] && [ ! -e "$A/standin/ffplay.2.pcm" ]
+    _ok "...the voice playing was the only one ever played" eval '[ "$(_runs 1)" = "7000*$n1" ] && [ ! -e "$A/standin/ffplay.1.exit" ] && [ ! -e "$A/standin/ffplay.2.pcm" ]'
     _st_arm slate; _st_file "$P2"; _hold
     echo "$t1" | _st --stdin >/dev/null 2>&1; _wait_for 5 _size_is 1 $((n1 * 2))
     echo "$t2" | _st --stdin --queue --profile simone_fast >/dev/null 2>&1; _wait_for 5 _renders_are 2
@@ -2707,7 +2707,7 @@ notify=off
     _ok "a press without --queue replaces the line"         _has "$(_log_last)" "outcome=replaced profile=third"
     _ok "...the old player is gone"                         _wait_for 1 _gone "$old"
     _release; _st_idle
-    _ok "...the waiting voice never plays"                  [ "$(_runs 1)" = "7000*$n1" ] && [ ! -e "$A/standin/ffplay.3.pcm" ]
+    _ok "...the waiting voice never plays"                  eval '[ "$(_runs 1)" = "7000*$n1" ] && [ ! -e "$A/standin/ffplay.3.pcm" ]'
     _ok "...the new text plays alone (volume 50: 1500)"     [ "$(_runs 2)" = "1500*$(_n 5 100)" ]
     _st_arm toggle; _st_file "$P2"; _hold
     echo "$t1" | _st --stdin >/dev/null 2>&1; _wait_for 5 _size_is 1 $((n1 * 2))
@@ -2715,10 +2715,10 @@ notify=off
     _ok "--toggle while speaking stops"                     _has "$(_log_last)" "outcome=stopped"
     _ok "...every player and render gone within 1 s"        _wait_for 1 _all_gone
     _release
-    _ok "...and nothing new started"                        [ ! -e "$A/standin/ffplay.2.pcm" ] && [ ! -e "$A/standin/ffplay.1.exit" ]
+    _ok "...and nothing new started"                        eval '[ ! -e "$A/standin/ffplay.2.pcm" ] && [ ! -e "$A/standin/ffplay.1.exit" ]'
     _st_arm skip-idle; _st_file "$P2"
     _st --skip >/dev/null 2>&1; rc=$?
-    _ok "--skip with nothing playing: idle, exit 0"         [ "$rc" = 0 ] && _has "$(_log_last)" "outcome=idle"
+    _ok "--skip with nothing playing: idle, exit 0"         eval '[ "$rc" = 0 ] && _has "$(_log_last)" "outcome=idle"'
     # D-20261012-A07 Q19: --stop and --skip wait out a press that holds the
     # lock (a --queue press can hold it 5 s while it joins the line).
     _st_arm stop-waits; _st_file "$P2"; _hold
@@ -2756,13 +2756,13 @@ notify=off
     echo "$t2" | _st --stdin --queue --profile simone_fast >/dev/null 2>&1; _wait_for 5 _renders_are 2
     _release
     _ok "ffplay dying mid-voice: the line goes on"          _st_idle
-    _ok "...the waiting voice plays in a new player"        [ "$(_runs 2)" = "-9000*$n2" ] && [ -e "$A/standin/ffplay.2.exit" ]
+    _ok "...the waiting voice plays in a new player"        eval '[ "$(_runs 2)" = "-9000*$n2" ] && [ -e "$A/standin/ffplay.2.exit" ]'
     _ok "...with a note saying so"                          _has "$(_render_log)" "ffplay ended early (exit 9)"
     _st_arm cold; _st_file "$P2"
     echo "$t2" | STANDIN_FFPLAY_NAN=1.0 _st --stdin >/dev/null 2>&1
     echo "$t2" | _st --stdin --queue --profile simone_fast >/dev/null 2>&1
     _st_idle
-    _ok "a cold start (1 s of nan lines): nothing cut off"  [ "$(_runs 1)" = "7000*$n2 -9000*$n2" ] && [ -e "$A/standin/ffplay.1.exit" ]
+    _ok "a cold start (1 s of nan lines): nothing cut off"  eval '[ "$(_runs 1)" = "7000*$n2 -9000*$n2" ] && [ -e "$A/standin/ffplay.1.exit" ]'
     _st_arm quiet-slow; _st_file "$P2"
     echo "$t2" | STANDIN_FFPLAY_QUIET=1 STANDIN_SAY2_SLOW=Simone=1.2 _st --stdin >/dev/null 2>&1
     echo "$t2" | _st --stdin --queue --profile simone_fast >/dev/null 2>&1
@@ -2772,7 +2772,7 @@ notify=off
     _ok "...and ffplay ended by itself, not killed"          [ -e "$A/standin/ffplay.1.exit" ]
     _st_arm no-pipe; _st_file "$P2"; mkdir -p "$A/state/herdr"; printf 'x' >"$A/state/herdr/speak-line.fifo"
     echo "$t2" | _st --stdin >/dev/null 2>&1; _st_idle
-    _ok "the pipe path is a plain file: logged, and still spoken" _has "$(_log_last)" "line=no-pipe" && _has "$(_say_log)" "out=play"
+    _ok "the pipe path is a plain file: logged, and still spoken" eval '_has "$(_log_last)" "line=no-pipe" && _has "$(_say_log)" "out=play"'
     unset STANDIN_MS_PER_CHAR
 
     echo "Locale (d78e8de: lstart follows the locale)"
@@ -2783,12 +2783,12 @@ notify=off
         _st_arm locale-1; _st_file "$P2"; _hold
         echo "$t1" | LC_ALL=en_AU.UTF-8 _st --stdin >/dev/null 2>&1; _wait_for 5 _size_is 1 $((n1 * 2))
         echo "$t1" | _st --stdin --toggle >/dev/null 2>&1
-        _ok "started under en_AU, a toggle with no locale stops it" _has "$(_log_last)" "outcome=stopped" && _wait_for 1 _all_gone
+        _ok "started under en_AU, a toggle with no locale stops it" eval '_has "$(_log_last)" "outcome=stopped" && _wait_for 1 _all_gone'
         _release
         _st_arm locale-2; _st_file "$P2"; _hold
         echo "$t1" | _st --stdin >/dev/null 2>&1; _wait_for 5 _size_is 1 $((n1 * 2))
         echo "$t1" | LC_ALL=en_AU.UTF-8 _st --stdin --toggle >/dev/null 2>&1
-        _ok "started with no locale, a toggle under en_AU stops it" _has "$(_log_last)" "outcome=stopped" && _wait_for 1 _all_gone
+        _ok "started with no locale, a toggle under en_AU stops it" eval '_has "$(_log_last)" "outcome=stopped" && _wait_for 1 _all_gone'
         _release
         unset STANDIN_MS_PER_CHAR
     fi
@@ -2842,11 +2842,11 @@ notify=off
     _ok "a cache line with a leading zero is ignored (exit 0)" [ "$rc" = 0 ]
     printf '%s|say|Samantha|%s\n' "$(( $(date +%s) + 99999 ))" "$aaron" >"$A/state/herdr/speak-engine.cache"
     echo "hello world" | _st --stdin >/dev/null 2>&1; rc=$?; _st_idle
-    _ok "a cache line from the future is not trusted"       [ "$rc" = 0 ] && _has "$(_say_log)" "say2 voice=$aaron"
+    _ok "a cache line from the future is not trusted"       eval '[ "$rc" = 0 ] && _has "$(_say_log)" "say2 voice=$aaron"'
     _st_arm bare-name; _st_file "$P2"; mkdir -p "$A/copy"; cp "$self" "$A/copy/speak-clipboard"; chmod 644 "$A/copy/speak-clipboard"
     out="$(cd "$A/copy" && env -i HOME="$T/home" PATH="$bin:$T/sys" XDG_CONFIG_HOME="$A/cfg" XDG_STATE_HOME="$A/state" \
         STANDIN_DIR="$A/standin" NO_COLOR=1 "$bin/bash" speak-clipboard --set rate 350 2>&1)"; rc=$?
-    _ok "--set from a bare, non-executable script name shows its box" [ "$rc" = 0 ] && _has "$out" "350 wpm"
+    _ok "--set from a bare, non-executable script name shows its box" eval '[ "$rc" = 0 ] && _has "$out" "350 wpm"'
 
     echo "Cleaning the text"
     _st_arm clean
@@ -2877,13 +2877,13 @@ notify=on" ]
     _ok "--set rate +1000 stops at 700"                     [ "$(_st --get rate)" = 700 ]
     i="$(_n_lines "$A/standin/notify.log")"
     _st --no-notify --set volume -10 >/dev/null 2>&1
-    _ok "--no-notify --set: saved, no notification"         [ "$(_st --get volume)" = 50 ] && [ "$i" -ge 1 ] && [ "$(_n_lines "$A/standin/notify.log")" = "$i" ]
+    _ok "--no-notify --set: saved, no notification"         eval '[ "$(_st --get volume)" = 50 ] && [ "$i" -ge 1 ] && [ "$(_n_lines "$A/standin/notify.log")" = "$i" ]'
     _st --notify --settings >/dev/null 2>&1
     _ok "--notify --settings sends the settings"            _has "$(_notes)" "Speak clipboard settings: default|Rate: 700 wpm"
     _st --reset all >/dev/null 2>&1
     _ok "--reset all writes the defaults back"              [ "$(_st --get rate)" = 420 ]
     out="$(_st --voices 2>&1)"
-    _ok "--voices lists the voices, the one in use marked"  _has "$out" "* 1   Aaron" && _has "$out" "  2   Simone"
+    _ok "--voices lists the voices, the one in use marked"  eval '_has "$out" "* 1   Aaron" && _has "$out" "  2   Simone"'
     _st --set voice 2 >/dev/null 2>&1
     _ok "--set voice 2 saves that voice's key"              [ "$(_st --get voice)" = "$simone" ]
     STANDIN_VOICES="" _st --voices >/dev/null 2>&1; rc=$?
@@ -2899,18 +2899,18 @@ voice=$aaron
 notify=off
 "
     echo "hello world" | _st --stdin >/dev/null 2>&1; rc=$?; _st_idle
-    _ok "a bad value in the file: exit 10"                  [ "$rc" = 10 ] && _has "$(_log_last)" "settings=bad:rate"
+    _ok "a bad value in the file: exit 10"                  eval '[ "$rc" = 10 ] && _has "$(_log_last)" "settings=bad:rate"'
     _ok "...spoken at the default rate"                     _has "$(_say_log)" "rate=420"
     _ok "...and the bad value is kept for Gavin to fix"     _has "$(_cfg)" "rate=fast"
     _st_arm not-installed; _st_file "$P2"
     echo "hello world" | STANDIN_VOICES="$aaron" _st --stdin --profile simone_fast >/dev/null 2>&1; rc=$?; _st_idle
-    _ok "the saved voice is not installed: exit 11"         [ "$rc" = 11 ] && _has "$(_log_last)" "voice=fallback:$aaron"
+    _ok "the saved voice is not installed: exit 11"         eval '[ "$rc" = 11 ] && _has "$(_log_last)" "voice=fallback:$aaron"'
     _st_arm say-fallback; _st_file "$P2"
-    echo "hello world" | STANDIN_VOICES="$other" _st --stdin >/dev/null 2>&1; rc=$?
-    _ok "no premium voice: say with Samantha, exit 11"      [ "$rc" = 11 ] && _has "$(_say_log)" "say voice=Samantha"
+    echo "hello world" | STANDIN_VOICES="$other" _st --stdin >/dev/null 2>&1; rc=$?; _st_idle
+    _ok "no premium voice: say with Samantha, exit 11"      eval '[ "$rc" = 11 ] && _has "$(_say_log)" "say voice=Samantha"'
     _st_arm unusable; mkdir -p "$A/cfg/speak-clipboard/settings"
     echo "hello world" | _st --stdin >/dev/null 2>&1; rc=$?; _st_idle
-    _ok "the file cannot be read: exit 12"                  [ "$rc" = 12 ] && _has "$(_log_last)" "file=unusable"
+    _ok "the file cannot be read: exit 12"                  eval '[ "$rc" = 12 ] && _has "$(_log_last)" "file=unusable"'
     _ok "...and it still spoke"                             _has "$(_say_log)" "say2 voice=$aaron"
     _st_arm readonly; _st_file "$P2"; chmod a-w "$A/cfg/speak-clipboard"
     _st --set rate 300 >/dev/null 2>&1; rc=$?
