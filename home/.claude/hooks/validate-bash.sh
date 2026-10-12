@@ -477,6 +477,22 @@ if [ "${1:-}" = "--selftest" ]; then
   conv_arm allow 'A11 mkdir -p in $TMPDIR'                     'mkdir -p "$TMPDIR/x"'
   conv_arm allow 'A11 command cp FROM a live guard'            'command cp -f ~/.claude/hooks/validate-bash.sh /tmp/vb.bak'
   conv_arm allow 'A11 ls the hooks folder'                     'ls ~/.claude/hooks'
+  # W-20261007-A11, Gavin Q27 (dotfiles-main, 10 Oct): rule E reads VAR=<literal path> set
+  # earlier in the same command, bare or after export. A prefix assignment (H=x cmd) is not
+  # read, because the shell expands $H in cmd's words before that assignment applies.
+  conv_arm deny  'A11v the 2026-10-07 miss: H=...; command cp $H/x' 'H=~/.claude/hooks; command cp -f "$NEW" $H/herdr-agent-state.sh'
+  conv_arm deny  'A11v H="$HOME/..." && mkdir -p "$H/sub"'   'H="$HOME/.claude/hooks" && mkdir -p "$H/upstream"'
+  conv_arm deny  'A11v ${H} brace form'                      'H=~/.claude/hooks; cp x.sh "${H}/a.sh"'
+  conv_arm deny  'A11v export H=...; tee $H/x'               'export H=~/.claude/hooks; echo x | tee "$H/a.sh"'
+  conv_arm deny  'A11v one variable built from another'      'C=~/.claude; H=$C/hooks; cp x.sh $H/a.sh'
+  conv_arm deny  'A11v redirect into $H/x'                   'H=~/.claude/hooks; echo x > $H/a.sh'
+  conv_arm deny  'A11v relative value joined to the cd'      'cd ~/.claude && H=hooks && cp x.sh $H/a.sh'
+  conv_arm deny  'A11v sed -i on $F=~/.gitconfig'            "F=~/.gitconfig; sed -i '' s/a/b/ \"\$F\""
+  conv_arm allow 'A11v H= the repo copy'                     'H=home/.claude/hooks; cp x.sh $H/a.sh'
+  conv_arm allow 'A11v cp FROM $H (a read)'                  'H=~/.claude/hooks; cp $H/validate-bash.sh /tmp/vb.bak'
+  conv_arm allow 'A11v H reassigned to $(...): not known'    'H=~/.claude/hooks; H=$(mktemp -d); cp x.sh $H/a.sh'
+  conv_arm allow 'A11v prefix H=... cmd is not read'         'H=~/.claude/hooks cp x.sh $H/a.sh'
+  conv_arm allow 'A11v $H never set in this command'         'cp x.sh $H/a.sh'
   # D-20260929-A14 narrowed 2026-09-29 (Gavin's box, session dotfiles-doer): the lock covers the
   # auto-memory files at the top of memory/, not the open-items drawer in memory/WORK/.
   conv_arm deny  'A35 sed -i on a top-level memory file'       "sed -i '' s/a/b/ ~/.claude/projects/-Users-x/memory/MEMORY.md"

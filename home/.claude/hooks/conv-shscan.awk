@@ -796,9 +796,12 @@ function guard_check(    k, j, n, a, w, b, s, i, t) {
 # mkdir, chmod, chown, rm, unlink, mv on one; cp, install, rsync, ditto or ln with one as the
 # destination; dd of=<one>; git config --global (or --file ~/.gitconfig) unless it only
 # reads (--get*, --list, -l). Paths: ~, $HOME and ${HOME} are expanded, a relative path
-# is joined to the payload's cwd or a cd earlier in the command.
-# NOT read: a path held in any other variable, .. inside a path, Python or other
-# languages, a script file. The Edit and Write tools are covered by the settings deny list.
+# is joined to the payload's cwd or a cd earlier in the command. A variable set earlier
+# in the same command to a path these rules can read (H=~/.claude/hooks, bare or after
+# export) is read as that path in $H and ${H} (W-20261007-A11, Gavin Q27, 2026-10-10).
+# NOT read: any other variable (one set by $(...), +=, a prefix H=x cmd, or in an earlier
+# command), .. inside a path, Python or other languages, a script file. The Edit and
+# Write tools are covered by the settings deny list.
 
 function pp_path(w, cwd,    h) {
     if (w ~ /\$\(|`/) return ""
@@ -807,6 +810,8 @@ function pp_path(w, cwd,    h) {
     if (w == "~" || substr(w, 1, 2) == "~/") w = h substr(w, 2)
     else if (substr(w, 1, 7) == "${HOME}") w = h substr(w, 8)
     else if (substr(w, 1, 5) == "$HOME") w = h substr(w, 6)
+    else if (match(w, /^\$\{[A-Za-z_][A-Za-z0-9_]*\}/) && PPV[substr(w, 3, RLENGTH - 3)] != "") w = PPV[substr(w, 3, RLENGTH - 3)] substr(w, RLENGTH + 1)
+    else if (match(w, /^\$[A-Za-z_][A-Za-z0-9_]*/) && PPV[substr(w, 2, RLENGTH - 1)] != "") w = PPV[substr(w, 2, RLENGTH - 1)] substr(w, RLENGTH + 1)
     if (w ~ /\$/ || w == "") return ""
     if (substr(w, 1, 1) != "/") { if (cwd == "") return ""; w = cwd "/" w }
     gsub(/\/\/+/, "/", w)
@@ -828,17 +833,26 @@ function pp_protected(p,    h, r) {
     }
     return 0
 }
+# Records NAME=value for pp_path; a value it cannot read clears NAME (A11).
+function pp_assign(w, cwd,    nm, L) {
+    if (!match(w, /^[A-Za-z_][A-Za-z0-9_]*\+?=/)) return
+    L = RLENGTH; nm = substr(w, 1, L - 1)
+    if (sub(/\+$/, "", nm)) { PPV[nm] = ""; return }
+    PPV[nm] = pp_path(substr(w, L + 1), cwd)
+}
 function pp_msg(p, how) {
     sub("^" ENVIRON["HOME"], "~", p)
     return "Protected live file (D-20260929-A14): " how " would change " p ". The live guards, ~/.gitconfig, ~/.claude/CLAUDE.md and the memory folders are locked so a session cannot weaken them from inside. Edit the dotfiles repo copy and commit, or ask Gavin"
 }
 function pp_check(    k, j, n, a, b, w, cwd, p, i, last, inpl, rd, v) {
     cwd = ENVIRON["CONV_CWD"]
+    split("", PPV)
     for (k = 1; k <= NC; k++) {
         for (i = 1; i <= RDN[k]; i++) { p = pp_path(RDT[k, i], cwd); if (pp_protected(p)) return pp_msg(p, "a > redirection") }
         j = eff(k); n = CNW[k]
-        if (j > n) continue
+        if (j > n) { for (a = 1; a <= n; a++) pp_assign(WR[k, a], cwd); continue }
         b = base(unq(WR[k, j]))
+        if (b == "export") { for (a = j + 1; a <= n; a++) pp_assign(WR[k, a], cwd); continue }
         if (b == "cd" || b == "pushd") {
             for (a = j + 1; a <= n && WR[k, a] ~ /^-[A-Za-z]/; a++) ;
             p = (a > n) ? ENVIRON["HOME"] : pp_path(WR[k, a], cwd)
