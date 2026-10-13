@@ -495,3 +495,36 @@ silent and its line player ended three lines. `button_bunny-main` reported
 it. `pauses.py` now renders one piece at a time, retries a timed-out render,
 and waits while speak-clipboard's line player runs. Run it only with Gavin's
 say-so in the session.
+
+## When the sound began (Gavin, 13 Oct, Q8: 1)
+
+A press at 11:23 PM seemed to make no sound. The press log showed it started,
+and a second press stopped it 3 s later; nothing said whether any sound had
+come out. The text itself was fine: it cleaned to 1,417 characters and all
+three parts rendered with Aaron in 1.9-8.9 s, loud, with under 0.3 s of
+silence in front. Blank lines and extra spaces were ruled out too: the cleaner
+already trims both ends and squeezes runs of spaces and blank lines.
+
+So the press log now says when the sound began:
+
+- `mode=line pid=N outcome=sound after=0.69s fed=0.40s`: the player's own
+  line, once its first voice is heard (ffplay's clock past the lead-in).
+  `fed` is when the first audio reached ffplay.
+- `outcome=no-sound ran=10.2s fed=...`: a line that ended with nothing heard.
+- On a stop, toggle stop or replacing press: `sound=yes`, or
+  `sound=none ran=3.14s fed=0.40s`. A stop is SIGKILL, so the player cannot
+  log it; it keeps `~/.local/state/herdr/speak-line.sound` (pid, start, when
+  heard, when fed) for the stop to read.
+
+`fed` early and nothing heard means the audio was there and the device did not
+play it. `fed=no` means the voice was still rendering.
+
+**First readings, 11:36-11:40 PM.** Four presses were heard after 0.68-0.71 s.
+One, at 11:38 PM, was stopped after 3.14 s with nothing heard (it ran before
+`fed` existed). One more silent press, at 11:34 PM, ended itself after about
+10 s with "ffplay's clock has not moved for 5 s ... (a stuck audio device?)".
+So the silent presses look like the audio device not starting, not the text;
+likely, not yet proven.
+
+Tests: 14 checks (258 in all). A copy with the logging switched off fails the
+13 that need it; the 14th, a sound file left by another player, is a control.

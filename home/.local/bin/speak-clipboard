@@ -333,6 +333,10 @@
 #
 # LOGS (~/.local/state/herdr/, never any text): speak-clipboard.log has one
 # line per press (mode, outcome, profile, exit code, problems);
+# the player adds when its sound began ("mode=line ... outcome=sound
+# after=1.42s") or that none did ("outcome=no-sound"), and a stop says
+# whether the line it stopped had made any sound ("sound=none ran=3.02s
+# fed=0.40s": fed is when its first audio reached the player, "no" if never);
 # speak-render.log has what say2, ffplay and the line player said.
 #
 # EXIT CODES
@@ -428,6 +432,9 @@
 #   speak-line.fifo        named pipe a --queue press writes its voice into
 #   speak-line.flock       empty; flock'd while a press hands a voice to the
 #                          player, or while the player decides to finish
+#   speak-line.sound       the player's pid, start and when its sound began
+#                          and when its first audio went in ("-" until
+#                          then), for a stop to log (Q8)
 #   speak-queue.time       when the last --queue press ran (key repeat check)
 #   speak-clipboard.flock  empty; flock'd for one run of this script
 #   (speak-render.hash and a speak-clipboard.lock/ folder are pre-v4.5
@@ -816,6 +823,7 @@ _engine_cache="$_state_dir/speak-engine.cache"
 _settings_lock="$_state_dir/speak-settings.flock"
 _fifo="$_state_dir/speak-line.fifo"
 _line_lock="$_state_dir/speak-line.flock"
+_sound_file="$_state_dir/speak-line.sound"
 _queue_time="$_state_dir/speak-queue.time"
 _engine_cache_ttl=86400
 _max_chars=8000
@@ -1415,7 +1423,9 @@ speaker_alive() {
 # means (Q25: silence, and the line cleared).
 stop_speaker() {
     local rc=1
+    _stop_note=""
     if speaker_alive; then
+        [ -z "$_speaker_line" ] || _sound_note
         if [ -n "$_speaker_group" ]; then
             kill -KILL -- "-$_speaker" 2>/dev/null && rc=0
         else
@@ -1423,6 +1433,26 @@ stop_speaker() {
         fi
     fi
     return $rc
+}
+
+# Q8 (13 Oct): did the line being stopped make any sound? The player
+# writes speak-line.sound ("pid start began fed", "-" for a time not yet
+# come) at its start, when its first audio goes into ffplay (fed) and
+# when its first voice is heard (began), so a stop can say so in the
+# press log: "sound=yes", or for a line still silent "sound=none
+# ran=3.02s fed=0.40s" (the audio was there, the device did not play it)
+# or "fed=no" (the voice was still rendering). The player cannot log
+# that itself: a stop is SIGKILL. A file from another player (a stale
+# pid) says nothing.
+_sound_note() {
+    local p="" t0="" began="" fed=""
+    { read -r p t0 began fed <"$_sound_file"; } 2>/dev/null || return 0
+    [ "$p" = "$_speaker" ] || return 0
+    case "$began" in
+        -) _stop_note=" sound=none $(perl -MTime::HiRes=time -e 'printf "ran=%.2fs fed=%s", time - $ARGV[0],
+                   $ARGV[1] =~ /^[0-9.]+$/ ? sprintf("%.2fs", $ARGV[1] - $ARGV[0]) : "no"' "$t0" "${fed:--}")" ;;
+        ?*) _stop_note=" sound=yes" ;;
+    esac
 }
 
 # --skip (Q25): the line player drops the voice you can hear and goes on
@@ -1512,12 +1542,14 @@ start_speaker() {
 # before the voice came (seen in the selftest, 2026-10-10). Its program
 # comes in on stdin, so its command line is short in `ps`. The third
 # argument is the render timeout: _SPEAK_CLIPBOARD_RENDER_TIMEOUT exists
-# for the selftest only.
+# for the selftest only. The fourth and fifth are the press log and
+# speak-line.sound, where the player says when its sound began (Q8).
 start_line() {
     [ -p "$_fifo" ] || mkfifo "$_fifo" 2>/dev/null || { _line_note="line=no-pipe"; return 1; }
     exec 7<>"$_fifo" || { _line_note="line=no-pipe"; return 1; }
     set -m
-    ( trap '' HUP; exec perl - speak-clipboard-line "$_line_lock" "${_SPEAK_CLIPBOARD_RENDER_TIMEOUT:-30}" <<<"$_player_pl" ) \
+    ( trap '' HUP; exec perl - speak-clipboard-line "$_line_lock" "${_SPEAK_CLIPBOARD_RENDER_TIMEOUT:-30}" \
+        "$_trace_file" "$_sound_file" <<<"$_player_pl" ) \
         3<&7 7<&- >/dev/null 2>>"$_render_log" 8>&- 9>&- &
     set +m
     local p=$!
@@ -1931,8 +1963,11 @@ use Time::HiRes qw(time);
 #   V <tab> gap-ms <tab> voice <tab> rate <tab> volume <tab> text
 # Arguments: a name for ps, speak-line.flock, and how long a say2 may send
 # nothing before its voice is dropped.
-my ($lock_path, $render_timeout) = @ARGV[1, 2];
+my ($lock_path, $render_timeout, $trace_path, $sound_path) = @ARGV[1 .. 4];
 $render_timeout = 30 unless $render_timeout && $render_timeout =~ /^\d+$/;
+my $T0 = time;    # this player's start, for "after" and "ran" (Q8)
+my $began;        # when its first voice was heard; undef while silent
+my $fed;          # when its first audio went into ffplay; undef before
 my $BPS     = 96000;   # 48 kHz mono s16le: bytes per second (96 per ms)
 my $LEAD    = 0.3;     # the next voice goes in when this much is left
 my $END     = 0.1;     # the line is over when this much is left
@@ -1958,6 +1993,28 @@ my $ff_fails = 0; # ffplays in a row that ended early before playing anything
 
 sub nonblock { my $fh = shift; fcntl($fh, F_SETFL, fcntl($fh, F_GETFL, 0) | O_NONBLOCK) }
 sub note { print STDERR "speak-clipboard line: @_\n" }
+
+# Q8 (13 Oct): when the sound began, for a press that seemed to make none.
+# A line in the press log, in its own format, and speak-line.sound for a
+# stop to read ("pid start began fed", "-" for a time not yet come);
+# written whole and renamed into place, so a stop never reads half of
+# it. fed against began tells a slow voice (fed late) from an audio
+# device that will not start (fed early, never heard).
+sub press_log {
+    return unless $trace_path;
+    open(my $fh, '>>', $trace_path) or return;
+    print $fh POSIX::strftime('%Y-%m-%dT%H:%M:%SZ', gmtime), " mode=line pid=$$ @_\n";
+    close $fh;
+}
+sub sound_state {
+    return unless $sound_path;
+    my $tmp = "$sound_path.$$";
+    open(my $fh, '>', $tmp) or return;
+    printf $fh "%d %.6f %s %s\n", $$, $T0, map { defined $_ ? sprintf('%.6f', $_) : '-' } $began, $fed;
+    close $fh;
+    rename $tmp, $sound_path;
+}
+sound_state();
 
 # Returns how many voices came in. A voice's gap is silence at its front,
 # 96 bytes of zero samples per ms, exact to the sample; it goes in with
@@ -2113,6 +2170,19 @@ sub check_stall {
     finish(1);
 }
 
+# The first voice is heard when ffplay's clock passes the silence in front
+# of it: the clock moving means the audio device is taking samples. With
+# no status lines, ff_played's wall-clock guess is used, and the log says
+# so ("clock=guess").
+sub check_sound {
+    return if defined $began || !defined $ff{mark};
+    return unless ff_played() > $ff{mark};
+    $began = time;
+    sound_state();
+    press_log(sprintf('outcome=sound after=%.2fs fed=%.2fs', $began - $T0, $fed - $T0)
+              . (defined $ff{clock} ? '' : ' clock=guess'));
+}
+
 # Writes the current voice into ffplay as it renders. A voice after the
 # first waits until the one before has less than $LEAD left, so the one
 # you hear is the only one in ffplay's buffer and --skip can take it alone.
@@ -2122,6 +2192,9 @@ sub feed {
     if (!defined $x->{start}) {
         return if $ff{written} > 0 && ff_left() > $LEAD;
         $x->{start} = $ff{written};
+        # A voice first in this ffplay is heard once its gap (the lead-in)
+        # has played: see check_sound.
+        $ff{mark} = $x->{gap} / $BPS if $ff{written} == 0;
     }
     while ($x->{pos} < length $x->{buf}) {
         my $n = syswrite($ff{in}, $x->{buf}, 65536, $x->{pos});
@@ -2131,6 +2204,7 @@ sub feed {
         }
         $x->{pos} += $n; $ff{written} += $n;
         $ff{t0} = time unless defined $ff{t0};
+        if (!defined $fed) { $fed = time; sound_state() }
     }
 }
 
@@ -2242,6 +2316,8 @@ sub finish {
     read_pipe();
     my $lost = grep { !$_->{gone} && !($_->{done} && $_->{pos} >= length $_->{buf}) } @v[$cur .. $#v];
     note("$lost waiting voice(s) not spoken") if $rc && $lost;
+    press_log(sprintf('outcome=no-sound ran=%.2fs fed=%s', time - $T0,
+              defined $fed ? sprintf('%.2fs', $fed - $T0) : 'no')) if @v && !defined $began;
     if ($ff{pid} && !$rc && !$ff{dead}) {
         close $ff{in} if $ff{in};
         my $until = time + 3;
@@ -2282,6 +2358,7 @@ while (1) {
         more_waiting() or finish(0);
         next;
     }
+    check_sound();
     check_stall();
     free_played();
     my $rin = '';
@@ -2521,7 +2598,10 @@ STANDIN
     _skip() { skipped=$((skipped + $1)); printf '  skip  %s (%s checks)\n' "$2" "$1"; }
     _has() { case "$1" in *"$2"*) return 0 ;; esac; return 1; }
     _lacks() { ! _has "$1" "$2"; }
-    _log_last() { tail -n 1 "$A/state/herdr/speak-clipboard.log" 2>/dev/null; }
+    # The last PRESS line: the player writes its own lines (mode=line, Q8)
+    # at its own time, so they are left out here and read by _line_log.
+    _log_last() { command grep -v " mode=line " "$A/state/herdr/speak-clipboard.log" 2>/dev/null | tail -n 1; }
+    _line_log() { command grep " mode=line " "$A/state/herdr/speak-clipboard.log" 2>/dev/null; }
     _say_log() { cat "$A/standin/say2.log" 2>/dev/null; }
     _render_log() { cat "$A/state/herdr/speak-render.log" 2>/dev/null; }
     _notes() { cat "$A/standin/notify.log" 2>/dev/null; }
@@ -3051,6 +3131,50 @@ notify=off
     _st_arm no-pipe; _st_file "$P2"; mkdir -p "$A/state/herdr"; printf 'x' >"$A/state/herdr/speak-line.fifo"
     echo "$t2" | _st --stdin >/dev/null 2>&1; _st_idle
     _ok "the pipe path is a plain file: logged, and still spoken" eval '_has "$(_log_last)" "line=no-pipe" && _has "$(_say_log)" "out=play"'
+
+    echo "When the sound began (Q8)"
+    _after() { _line_log | sed -n 's/.*outcome=sound after=\([0-9.]*\)s.*/\1/p'; }
+    _st_arm sound; _st_file "$P2"
+    echo "$t2" | _st --stdin >/dev/null 2>&1; _st_idle
+    a0="$(_after)"
+    _ok "a voice that played: the player logs when it was heard" _has "$(_line_log)" "mode=line pid=$(_player) outcome=sound after="
+    _ok "...and when its audio reached the player"          _has "$(_line_log)" " fed="
+    _ok "...and logs no no-sound line"                      eval '[ -n "$a0" ] && _lacks "$(_line_log)" "outcome=no-sound"'
+    _ok "...under 1 s with a warm device (control)"         perl -e 'exit !($ARGV[0] < 1.0)' "${a0:-9}"
+    _st_arm sound-cold; _st_file "$P2"
+    echo "$t2" | STANDIN_FFPLAY_NAN=1.0 _st --stdin >/dev/null 2>&1; _st_idle
+    a1="$(_after)"
+    _ok "...1 s or more after a cold start of 1 s"          perl -e 'exit !($ARGV[0] >= 1.0)' "${a1:-0}"
+    _st_arm sound-none; _st_file "$P2"; _hold
+    echo "$t1" | _st --stdin >/dev/null 2>&1; _wait_for 5 _size_is 1 $((n1 * 2))
+    _st --stop >/dev/null 2>&1; _release
+    _ok "--stop before any sound: sound=none, and how long it ran" _has "$(_log_last)" "outcome=stopped sound=none ran="
+    _ok "...its audio was in the player: fed= a time, not no" eval '_has "$(_log_last)" " fed=" && _lacks "$(_log_last)" "fed=no"'
+    _st_arm sound-yes; _st_file "$P2"
+    echo "$t1" | _st --stdin >/dev/null 2>&1; _wait_for 5 eval '_has "$(_line_log)" "outcome=sound"'; _hold
+    _st --stop >/dev/null 2>&1; _release
+    _ok "--stop after the sound began: sound=yes"           _has "$(_log_last)" "outcome=stopped sound=yes"
+    _st_arm sound-toggle; _st_file "$P2"; _hold
+    echo "$t1" | _st --stdin >/dev/null 2>&1; _wait_for 5 _size_is 1 $((n1 * 2))
+    echo "$t1" | _st --stdin --toggle >/dev/null 2>&1; _release
+    _ok "a --toggle stop before any sound: sound=none"      _has "$(_log_last)" "outcome=stopped sound=none ran="
+    _st_arm sound-replace; _st_file "$P2"; _hold
+    echo "$t1" | _st --stdin >/dev/null 2>&1; _wait_for 5 _size_is 1 $((n1 * 2))
+    echo "$t2" | _st --stdin >/dev/null 2>&1; _release; _st_idle
+    _ok "a press replacing a silent line: sound=none"       eval '_has "$(_log_last)" "outcome=replaced" && _has "$(_log_last)" " sound=none ran="'
+    _st_arm sound-stale; _st_file "$P2"; _hold
+    echo "$t1" | _st --stdin >/dev/null 2>&1; _wait_for 5 _size_is 1 $((n1 * 2))
+    echo "1 0 - -" >"$A/state/herdr/speak-line.sound"
+    _st --stop >/dev/null 2>&1; _release
+    _ok "a sound file from another player adds nothing"     eval '_has "$(_log_last)" "outcome=stopped" && _lacks "$(_log_last)" "sound="'
+    _st_arm sound-never; _st_file "$P2"
+    echo "$t1" | STANDIN_FFPLAY_FREEZE_AT=0 _st --stdin >/dev/null 2>&1; _st_idle
+    _ok "a line that ends with no sound: no-sound, and how long it ran" _has "$(_line_log)" "outcome=no-sound ran="
+    _st_arm sound-render; _st_file "$P2"
+    echo "$t1" | STANDIN_SAY2_SLOW=Aaron=3 _st --stdin >/dev/null 2>&1; sleep 0.5
+    _st --stop >/dev/null 2>&1
+    _ok "--stop while the voice still renders: fed=no"      _has "$(_log_last)" "outcome=stopped sound=none ran=0."
+    _ok "...and fed=no"                                     _has "$(_log_last)" " fed=no"
     unset STANDIN_MS_PER_CHAR
 
     echo "Locale (d78e8de: lstart follows the locale)"
@@ -3321,7 +3445,7 @@ notify=off
     _st_cleanup
     trap - EXIT INT TERM
     echo
-    local ran=$((pass + fail)) expected=244
+    local ran=$((pass + fail)) expected=258
     if [ "$fail" -eq 0 ] && [ $((ran + skipped)) -eq "$expected" ]; then
         if [ "$skipped" -eq 0 ]; then echo "speak-clipboard --selftest: all $pass checks passed.";
         else echo "speak-clipboard --selftest: all $pass checks passed, $skipped skipped (said above why)."; fi
@@ -3565,7 +3689,7 @@ case $? in
 esac
 
 if [ "$mode" = "stop" ]; then
-    if stop_speaker; then trace "outcome=stopped"; else trace "outcome=idle"; fi
+    if stop_speaker; then trace "outcome=stopped$_stop_note"; else trace "outcome=idle"; fi
     exit 0
 fi
 
@@ -3578,7 +3702,7 @@ fi
 # holds. Checked before the clipboard is read, so a stop costs no cleaner run.
 if [ "$mode" = "toggle" ] && speaker_alive; then
     stop_speaker
-    trace "outcome=stopped"
+    trace "outcome=stopped$_stop_note"
     exit 0
 fi
 
@@ -3609,6 +3733,7 @@ if [ "$outcome" != "queued" ]; then
     if speaker_alive; then
         stop_speaker
         outcome="replaced"
+        _replaced_note="$_stop_note"
     fi
     start_speaker
 fi
@@ -3617,7 +3742,7 @@ fi
 # problem goes in the log line; the exit code is the lowest that applies:
 # 10 a bad or missing value in the file, 11 the saved voice is not
 # installed, 12 the file could not be read or created.
-problems=""
+problems="${_replaced_note:-}"
 rc=0
 [ "$outcome" != "queued" ] || problems="$problems gap=$queue_delay"
 if [ -n "$_bad_settings" ]; then problems="$problems settings=bad:$_bad_settings"; rc=10; fi
