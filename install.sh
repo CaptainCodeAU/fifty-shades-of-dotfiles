@@ -3861,6 +3861,7 @@ _snapshot_links() {
     _install_links_watch "$dir"
     _zshenv_links_warning
     _zshenv_colours_block
+    _zshenv_optouts_block
 }
 
 # A marked block in the REAL ~/.zshenv (not stowed, so it survives a failed
@@ -3930,6 +3931,41 @@ _zshenv_colours_block() {
 # <<< shell colours and pager (Q13) <<<
 BLOCK
     } > "$f.tmp.$$" && mv -f "$f.tmp.$$" "$f" && success "colours-and-pager block added to ~/.zshenv" \
+        || warn "could not write ~/.zshenv"
+}
+
+# The telemetry opt-outs block (Gavin, engage-main Q14: 1, 2026-10-14): DISABLE_TELEMETRY and
+# DO_NOT_TRACK set in the REAL ~/.zshenv, each only when empty or unset. A launch that clears
+# them for the claude process alone (engage's launch, makeitso's L7, so Remote Control works)
+# would otherwise hand every command Claude runs an empty value; every zsh reads this file, so
+# those commands get the opt-outs back. Same shape as _zshenv_colours_block; the text matches
+# the block engage-main wrote on 2026-10-14, so a machine that has it sees "present".
+_zshenv_optouts_block() {
+    local f="$HOME/.zshenv" begin="# >>> telemetry opt-outs for commands (Q14) >>>" end="# <<< telemetry opt-outs for commands (Q14) <<<"
+    local nb ne
+    nb=$(grep -cxF "$begin" "$f" 2>/dev/null) || nb=0
+    ne=$(grep -cxF "$end" "$f" 2>/dev/null) || ne=0
+    if [[ "$nb" == 1 && "$ne" == 1 ]]; then verbose "~/.zshenv telemetry opt-outs block present"; return 0; fi
+    if [[ "$nb" != 0 || "$ne" != 0 ]]; then
+        warn "~/.zshenv has a half telemetry opt-outs block (markers not one each); fix it by hand, then re-run."
+        return 0
+    fi
+    if [[ -L "$f" ]]; then warn "~/.zshenv is a symlink; not adding the telemetry opt-outs block to it."; return 0; fi
+    info "A marked block in ~/.zshenv gives every zsh, Claude's commands included, DISABLE_TELEMETRY and DO_NOT_TRACK when they arrive empty."
+    confirm "Add the telemetry opt-outs block to ~/.zshenv?" "y" || return 0
+    {
+        [[ -f "$f" ]] && cat "$f"
+        cat <<'BLOCK'
+# >>> telemetry opt-outs for commands (Q14) >>>
+# makeitso's L7 (and engage's launch) clears these two for the claude process only, so Remote
+# Control works; every command Claude runs would inherit them empty. Every zsh reads this file,
+# Claude's command shells included, so they get your opt-outs back (Gavin, Q14: 1, 14 Oct 2026).
+# Same values as ~/.zshrc; only when empty or unset. Claude's own process is not a zsh.
+[[ -n "${DISABLE_TELEMETRY-}" ]] || export DISABLE_TELEMETRY=true
+[[ -n "${DO_NOT_TRACK-}" ]] || export DO_NOT_TRACK=1
+# <<< telemetry opt-outs for commands (Q14) <<<
+BLOCK
+    } > "$f.tmp.$$" && mv -f "$f.tmp.$$" "$f" && success "telemetry opt-outs block added to ~/.zshenv" \
         || warn "could not write ~/.zshenv"
 }
 
