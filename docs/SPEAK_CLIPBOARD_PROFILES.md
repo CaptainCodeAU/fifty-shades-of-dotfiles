@@ -411,25 +411,59 @@ Added the same evening (v11, Gavin, after listening to v10): a path ending in
 command, except a top-level folder name (`/tmp`, `/etc`, `/Users` and the like),
 which stays as it is.
 
-Changed 13 Oct (v12, Gavin, dotfiles-main, D-20261013-A02): a fenced code block
-is spoken as "A code block. Comprising of N lines." (1 line, 0 lines), where N
-is the lines between the fences, then a pause of two full stops.
+Changed 13 Oct (v12, Gavin, dotfiles-main, D-20261013-A02, D-20261013-A03): a
+fenced code block is spoken as "A code block. Comprising of N lines." (1 line,
+0 lines), where N is the lines between the fences, with a breath before and
+after it. A breath also goes before every line that starts a section: one that
+starts with `**` (a bold label) or with the `❯` status mark (Q3: 1). Detail
+lines (`⋅`) and list items get none.
 
-Checked by ear the same evening, at Gavin's suggestion: each case rendered to a
-WAV with the remote's voice (Aaron, 460 wpm), timed, and written back to text
-with the Whisper model already on the Mac (`whisper-large-v3-turbo`).
+### Pause words (Gavin, 13 Oct, Q4 and Q5)
 
-- A full stop is a 0.21 s pause at this rate, so two are about 0.42 s. Typing
-  `..` adds no pause.
-- `[[slnc 500]]` is 0.51 s between two words but only 0.34 s at the end of the
-  text. Gavin's remote sends a reply in pieces, so a code block often ends one.
-  The cleaner now writes `[[slnc 680]]` at the end (0.50 s, measured) and
-  `[[slnc 500]]` elsewhere (0.51 s, measured).
-- Heard back: "Run this a code block, comprising of two lines, then check."
-  No pause command was spoken.
-- A reply that quotes a pause command in its text, such as `[[slnc 500]]` in
-  backticks, is read as "S L N C 500": the cleaner splits every `[[` so
-  copied text can never command the voice. Do not quote one in a reply.
+Between Gavin and the agents, a pause is written as a word in triple curly
+braces inside an example, such as `{{{breath}}}`. They are notes, never
+commands: the speak key does not obey them. `--print` shows a breath it will
+make the same way.
+
+- `{{{tick}}}`: a comma, about 0.1 s.
+- `{{{stop}}}`: a full stop, about 0.2-0.3 s.
+- `{{{breath}}}`: a full stop and a comma, about 0.35 s.
+- `{{{beat}}}`: two full stops, about 0.5 s.
+- `{{{hold}}}`: about 1 second.
+
+### How a breath is made
+
+Measured with the remote's voice (Aaron, 460 wpm), each case three times; the
+voice gave the same result every time.
+
+- In the middle of a text the voice pauses 0.24 s at a full stop, and a
+  `[[slnc]]` after a full stop adds nothing. Without one, `[[slnc N]]` is
+  0.08 s below 500 and 0.54 s at 500. Nothing in between, so a breath cannot
+  be made inside one voice.
+- So a breath inside the text is a cut: the press sends each part as its own
+  voice, with 200 ms of silence in front (the player's per-voice gap).
+- A breath at the start of a text counts only when the voice is queued after
+  another, as the remote's pieces are. The first line of a press gets none.
+- A breath at the end of a text is a full stop and `[[slnc 250]]`.
+- Typing `..` adds no pause.
+
+Tested by listening back, at Gavin's suggestion: a whole example reply was
+cleaned, cut, rendered, joined with the gaps exactly as the player does, timed,
+and written back to text with Whisper (`whisper-large-v3-turbo`, already on
+the Mac). As one press: breaths 0.31-0.41 s, every other pause 0.30 s or less
+(with a 110 ms gap the breaths were 0.20-0.32 s, no longer than a full stop).
+Sent in pieces, as the remote does: breaths 0.29-0.42 s. Whisper heard no code
+and no stray words.
+
+### Known limits (v12)
+
+- A code block copied from the terminal by mouse has no fence lines, so it is
+  still read out (W-20261013-A01). `/copy`, which copies the Markdown, works.
+- A terminal copy has no `**` either, so only `❯` lines get a section breath.
+- A reply that quotes a pause command, such as `[[slnc 500]]` in backticks, is
+  read as "S L N C 500": the cleaner splits every `[[` so copied text can
+  never command the voice. Do not quote one in a reply.
+- `--skip` skips one voice, so a press cut by breaths needs one skip per part.
 
 ### The measuring runs and the speak key
 
